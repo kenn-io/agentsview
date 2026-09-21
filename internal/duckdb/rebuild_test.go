@@ -3,7 +3,6 @@
 package duckdb
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -14,10 +13,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 func seedRebuildFixture(t *testing.T, local *db.DB) []string {
 	t.Helper()
+
 	ids := []string{"rebuild-a", "rebuild-b", "rebuild-c"}
 	writes := make([]db.SessionBatchWrite, 0, len(ids))
 	for i, id := range ids {
@@ -31,21 +32,21 @@ func seedRebuildFixture(t *testing.T, local *db.DB) []string {
 			ReplaceMessages: true,
 		})
 	}
-	_, err := local.WriteSessionBatchAtomic(writes)
+	_, err := local.WriteSessionBatchAtomic(t.Context(), writes)
 	require.NoError(t, err)
-	ok, err := local.StarSession(ids[0])
+	ok, err := local.StarSession(t.Context(), ids[0])
 	require.NoError(t, err)
 	require.True(t, ok)
 	return ids
 }
 
 func TestRebuildMirrorCreatesFreshMirrorWithFingerprintsAndMetadata(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
 	ids := seedRebuildFixture(t, local)
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
 
-	result, err := rebuildMirror(ctx, path, local, "test-machine", SyncOptions{}, nil)
+	result, err := rebuildMirror(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, len(ids), result.SessionsPushed)
@@ -60,11 +61,11 @@ func TestRebuildMirrorCreatesFreshMirrorWithFingerprintsAndMetadata(t *testing.T
 	assert.True(t, probe.ShapeOK)
 	assert.Equal(t, SchemaVersion, probe.SchemaVersion)
 	assert.Equal(t, db.CurrentDataVersion(), probe.DataVersion)
-	assert.Equal(t, "", probe.Scope)
+	assert.Empty(t, probe.Scope)
 	assert.NotEmpty(t, probe.LastPushCutoff)
 	assert.NotEmpty(t, probe.LastPushAt)
 
-	conn, err := Open(path)
+	conn, err := Open(ctx, path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, conn.Close()) })
 	assertDuckDBCount(t, conn, "sessions", len(ids))
@@ -91,12 +92,12 @@ func TestRebuildMirrorCreatesFreshMirrorWithFingerprintsAndMetadata(t *testing.T
 // Duration at all, leaving it to whichever caller actually spans the full
 // operation.
 func TestPushEverythingDoesNotSetDuration(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
 	seedRebuildFixture(t, local)
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
 
-	s := newTestSync(t, path, local, SyncOptions{})
+	s := newTestSync(t, path, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, s.DB()))
 
 	result, err := s.pushEverything(ctx, nil)
@@ -106,11 +107,11 @@ func TestPushEverythingDoesNotSetDuration(t *testing.T) {
 }
 
 func TestRebuildMirrorReplacesPreExistingTargetFileContent(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
 
-	stale := newTestSync(t, path, local, SyncOptions{})
+	stale := newTestSync(t, path, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, stale.DB()))
 	_, err := stale.DB().ExecContext(ctx, `
 		INSERT INTO sessions (id, project, machine, agent, created_at)
@@ -120,11 +121,11 @@ func TestRebuildMirrorReplacesPreExistingTargetFileContent(t *testing.T) {
 
 	seedRebuildFixture(t, local)
 
-	result, err := rebuildMirror(ctx, path, local, "test-machine", SyncOptions{}, nil)
+	result, err := rebuildMirror(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 3, result.SessionsPushed)
 
-	conn, err := Open(path)
+	conn, err := Open(ctx, path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, conn.Close()) })
 	assertDuckDBCountWhere(t, conn, "sessions", "id = ?", "stale-session", 0)
@@ -132,7 +133,7 @@ func TestRebuildMirrorReplacesPreExistingTargetFileContent(t *testing.T) {
 }
 
 func TestRebuildMirrorLeavesNoTempFilesOnSwapFailure(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
 	seedRebuildFixture(t, local)
 	dir := t.TempDir()
@@ -143,7 +144,7 @@ func TestRebuildMirrorLeavesNoTempFilesOnSwapFailure(t *testing.T) {
 	path := filepath.Join(dir, "mirror-as-dir.duckdb")
 	require.NoError(t, os.Mkdir(path, 0o755))
 
-	_, err := rebuildMirror(ctx, path, local, "test-machine", SyncOptions{}, nil)
+	_, err := rebuildMirror(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, nil)
 
 	require.Error(t, err)
 	assert.DirExists(t, path, "swap failure must leave the destination untouched")
@@ -175,9 +176,9 @@ func TestSwapMirrorFileRetriesThenFailsWithActionableError(t *testing.T) {
 }
 
 func TestRebuildMirrorScopesToProjectFilters(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
-	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{
 		{
 			Session:         syncSession("rebuild-scope-alpha", "alpha", "a", "2026-01-10T00:00:00.000Z", 1),
 			Messages:        []db.Message{syncMessage("rebuild-scope-alpha", 0, "user", "a", "2026-01-10T00:00:00.000Z")},
@@ -194,7 +195,7 @@ func TestRebuildMirrorScopesToProjectFilters(t *testing.T) {
 	require.NoError(t, err)
 	path := filepath.Join(t.TempDir(), "scoped.duckdb")
 
-	opts := SyncOptions{Projects: []string{"alpha"}}
+	opts := storage.MirrorPushOptions{Projects: []string{"alpha"}}
 	result, err := rebuildMirror(ctx, path, local, "test-machine", opts, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.SessionsPushed)
@@ -203,7 +204,7 @@ func TestRebuildMirrorScopesToProjectFilters(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, canonicalPushScope(opts.Projects, opts.ExcludeProjects), probe.Scope)
 
-	conn, err := Open(path)
+	conn, err := Open(ctx, path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, conn.Close()) })
 	assertDuckDBCountWhere(t, conn, "sessions", "id = ?", "rebuild-scope-alpha", 1)
@@ -211,7 +212,7 @@ func TestRebuildMirrorScopesToProjectFilters(t *testing.T) {
 }
 
 func TestValidateBuiltMirrorRejectsBadMirrors(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	tests := []struct {
 		name         string
 		setupMirror  func(t *testing.T, path string) int // returns actual session count written
@@ -222,7 +223,9 @@ func TestValidateBuiltMirrorRejectsBadMirrors(t *testing.T) {
 		{
 			name: "session count mismatch",
 			setupMirror: func(t *testing.T, path string) int {
-				conn, err := Open(path)
+				t.Helper()
+
+				conn, err := Open(ctx, path)
 				require.NoError(t, err)
 				require.NoError(t, createSchema(ctx, conn))
 				require.NoError(t, writeMirrorMetadata(ctx, conn, mirrorMetadata{
@@ -247,7 +250,9 @@ func TestValidateBuiltMirrorRejectsBadMirrors(t *testing.T) {
 		{
 			name: "missing metadata table",
 			setupMirror: func(t *testing.T, path string) int {
-				conn, err := Open(path)
+				t.Helper()
+
+				conn, err := Open(ctx, path)
 				require.NoError(t, err)
 				require.NoError(t, createSchema(ctx, conn))
 				_, err = conn.ExecContext(ctx, `DROP TABLE sync_metadata`)
@@ -262,7 +267,9 @@ func TestValidateBuiltMirrorRejectsBadMirrors(t *testing.T) {
 		{
 			name: "wrong schema version",
 			setupMirror: func(t *testing.T, path string) int {
-				conn, err := Open(path)
+				t.Helper()
+
+				conn, err := Open(ctx, path)
 				require.NoError(t, err)
 				require.NoError(t, createSchema(ctx, conn))
 				require.NoError(t, writeMirrorMetadata(ctx, conn, mirrorMetadata{
@@ -300,7 +307,7 @@ func TestValidateBuiltMirrorRejectsBadMirrors(t *testing.T) {
 
 			// For count mismatch case, verify file content unchanged
 			if tt.name == "session count mismatch" {
-				conn, err := Open(path)
+				conn, err := Open(ctx, path)
 				require.NoError(t, err)
 				assertDuckDBCount(t, conn, "sessions", actSessions)
 				require.NoError(t, conn.Close())
@@ -340,13 +347,13 @@ func TestValidateBuiltMirrorRejectsBadMirrors(t *testing.T) {
 // assertions below would fail under that ordering: PushedSessions.Total
 // would be 0 instead of 1, and DeletedStaleSessions would be 0 instead of 1.
 func TestRebuildMirrorSnapshotsStateBeforeSessionEnumeration(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
 	ids := seedRebuildFixture(t, local)
 	mutatedID, deletedID := ids[0], ids[1]
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
 
-	s := newTestSync(t, path, local, SyncOptions{})
+	s := newTestSync(t, path, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, s.DB()))
 
 	// Capture the snapshot BEFORE any mutation, exactly as buildMirrorInto
@@ -359,7 +366,7 @@ func TestRebuildMirrorSnapshotsStateBeforeSessionEnumeration(t *testing.T) {
 	// another gets hard-deleted (bumping the deletion journal revision).
 	// Both happen strictly after the snapshot was captured.
 	appendMessage(t, local, mutatedID)
-	require.NoError(t, local.DeleteSession(deletedID))
+	require.NoError(t, local.DeleteSession(ctx, deletedID))
 
 	// The rebuild's full push runs after the mutations, as it would once
 	// they land mid-enumeration in a real race, and since it reads local
@@ -382,7 +389,7 @@ func TestRebuildMirrorSnapshotsStateBeforeSessionEnumeration(t *testing.T) {
 	// a correctly pre-captured LastPushCutoff can still catch this.
 	mutateSessionContent(t, local, mutatedID)
 
-	res, err := Push(ctx, path, local, "test-machine", SyncOptions{}, false, nil)
+	res, err := Push(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.False(t, res.Diagnostics.Full,
 		"a valid mirror with fresh metadata must not force a rebuild")
@@ -401,9 +408,10 @@ func TestRebuildMirrorSnapshotsStateBeforeSessionEnumeration(t *testing.T) {
 // mirror runs incrementally.
 func pushCurationSnapshotFixture(t *testing.T, local *db.DB, path string) (*Sync, []string) {
 	t.Helper()
-	ctx := context.Background()
+
+	ctx := t.Context()
 	ids := seedRebuildFixture(t, local)
-	s := newTestSync(t, path, local, SyncOptions{})
+	s := newTestSync(t, path, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, s.DB()))
 
 	sessions, err := local.ListSessionsForMirrorWindow(ctx, "", nil, nil)
@@ -422,7 +430,8 @@ func pushCurationSnapshotFixture(t *testing.T, local *db.DB, path string) (*Sync
 // mirror exactly as a completed rebuild leaves it.
 func finishCurationSnapshotRebuild(t *testing.T, s *Sync, local *db.DB) {
 	t.Helper()
-	ctx := context.Background()
+
+	ctx := t.Context()
 	snapshot, err := captureRebuildSnapshot(ctx, local)
 	require.NoError(t, err)
 	identityRevision, err := s.syncProjectIdentityObservations(ctx, 0, true, nil)
@@ -443,7 +452,7 @@ func finishCurationSnapshotRebuild(t *testing.T, s *Sync, local *db.DB) {
 // while the fingerprint did not; now the copy must NOT include it, and
 // the next incremental push must detect the mismatch and refresh.
 func TestReplaceCurationWritesTheFingerprintedSnapshot(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
 	s, ids := pushCurationSnapshotFixture(t, local, path)
@@ -453,7 +462,7 @@ func TestReplaceCurationWritesTheFingerprintedSnapshot(t *testing.T) {
 
 	// A curation edit races the in-flight copy: it lands after the
 	// snapshot was taken but before replaceCuration runs.
-	ok, err := local.StarSession(ids[1])
+	ok, err := local.StarSession(ctx, ids[1])
 	require.NoError(t, err)
 	require.True(t, ok)
 
@@ -469,7 +478,7 @@ func TestReplaceCurationWritesTheFingerprintedSnapshot(t *testing.T) {
 	// the next push must refresh and deliver it.
 	assertMirrorTableCountWhere(t, path, "starred_sessions", "session_id = ?", ids[1], 0)
 
-	res, err := Push(ctx, path, local, "test-machine", SyncOptions{}, false, nil)
+	res, err := Push(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.False(t, res.Diagnostics.Full,
 		"a valid mirror with fresh metadata must not force a rebuild")
@@ -488,7 +497,7 @@ func TestReplaceCurationWritesTheFingerprintedSnapshot(t *testing.T) {
 // too: the next push may skip the refresh, and the mirror must hold the
 // reverted (snapshot) state.
 func TestCurationToggleRevertRaceLeavesMirrorConsistent(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
 	s, ids := pushCurationSnapshotFixture(t, local, path)
@@ -497,10 +506,10 @@ func TestCurationToggleRevertRaceLeavesMirrorConsistent(t *testing.T) {
 	require.NoError(t, err)
 
 	// The racing edit toggles and reverts before the copy runs.
-	ok, err := local.StarSession(ids[1])
+	ok, err := local.StarSession(ctx, ids[1])
 	require.NoError(t, err)
 	require.True(t, ok)
-	require.NoError(t, local.UnstarSession(ids[1]))
+	require.NoError(t, local.UnstarSession(ctx, ids[1]))
 
 	written, err := s.replaceCuration(ctx, snap)
 	require.NoError(t, err)
@@ -509,7 +518,7 @@ func TestCurationToggleRevertRaceLeavesMirrorConsistent(t *testing.T) {
 	))
 	finishCurationSnapshotRebuild(t, s, local)
 
-	res, err := Push(ctx, path, local, "test-machine", SyncOptions{}, false, nil)
+	res, err := Push(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.False(t, res.Diagnostics.Full,
 		"a valid mirror with fresh metadata must not force a rebuild")

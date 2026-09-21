@@ -1,14 +1,14 @@
 import { getLocale, setLocale as setParaglideLocale } from "../paraglide/runtime.js";
 
 export { m } from "../paraglide/messages.js";
-// Current BCP 47 tag (en / zh-CN / zh-TW / ko / fr / ja) for kit-ui components that
+// Current BCP 47 tag (en / zh-CN / zh-TW / ko / fr / ja / az / es) for kit-ui components that
 // take a `locale` prop, so their date/tooltip formatting follows the app
 // language setting instead of the browser locale.
 export { getLocale };
 
 export const DEFAULT_LOCALE = "en";
 export const LOCALE_STORAGE_KEY = "agentsview-locale";
-export const SUPPORTED_LOCALES = ["en", "zh-CN", "zh-TW", "ko", "fr", "ja"] as const;
+export const SUPPORTED_LOCALES = ["en", "zh-CN", "zh-TW", "ko", "fr", "ja", "az", "es"] as const;
 
 export type SupportedLocale = (typeof SUPPORTED_LOCALES)[number];
 
@@ -33,6 +33,8 @@ function matchingLocale(value: string | null | undefined): SupportedLocale | nul
   if (normalized === "ko" || normalized.startsWith("ko-")) return "ko";
   if (normalized === "fr" || normalized.startsWith("fr-")) return "fr";
   if (normalized === "ja" || normalized.startsWith("ja-")) return "ja";
+  if (normalized === "az" || normalized.startsWith("az-")) return "az";
+  if (normalized === "es" || normalized.startsWith("es-")) return "es";
   return null;
 }
 

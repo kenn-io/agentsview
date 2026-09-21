@@ -128,6 +128,7 @@ type pendingWatchBatch struct {
 	maxPathBytes   int
 	fullSync       bool
 	lostEvents     bool
+	immediate      bool // Keep control urgency with the batch it belongs to.
 	onOverflow     func(WatchBatchPromotionReason)
 }
 
@@ -294,6 +295,7 @@ func (p *pendingWatchBatch) merge(other *pendingWatchBatch) {
 	if other == nil {
 		return
 	}
+	p.immediate = p.immediate || other.immediate
 	if other.fullSync {
 		p.makeFullSync(other.lostEvents)
 	}
@@ -390,6 +392,7 @@ func (p *pendingWatchBatch) TakeWithRootAgents(
 	if p.Empty() {
 		return WatchBatch{}, false
 	}
+	p.immediate = false
 	if p.fullSync {
 		p.fullSync = false
 		lostEvents := p.lostEvents
@@ -554,6 +557,7 @@ func (s *watchEventSink) RetainAuthoritative(token backendLifecycleToken) {
 	batch := newPendingWatchBatch(s.pending.maxEntries, s.pending.maxPathBytes)
 	batch.AddFullSync()
 	batch.AddLifecycle(token)
+	batch.immediate = true
 	s.publishHandoff(batch)
 	s.signal()
 }
@@ -581,6 +585,24 @@ func (s *watchEventSink) RetainRetry(retry WatchBatch) {
 	defer s.mu.Unlock()
 	s.absorbHandoff()
 	retainWatchRetry(s.pending, retry)
+}
+
+func (s *watchEventSink) RetainRetryImmediate(retry WatchBatch) {
+	s.mu.Lock()
+	s.absorbHandoff()
+	retainWatchRetry(s.pending, retry)
+	s.pending.immediate = true
+	s.mu.Unlock()
+	s.signal()
+}
+
+func (s *watchEventSink) MarkImmediate() {
+	s.mu.Lock()
+	s.absorbHandoff()
+	if !s.pending.Empty() {
+		s.pending.immediate = true
+	}
+	s.mu.Unlock()
 }
 
 func (s *watchEventSink) publishHandoff(batch *pendingWatchBatch) {
@@ -622,6 +644,13 @@ func (s *watchEventSink) signal() {
 	case s.wake <- struct{}{}:
 	default:
 	}
+}
+
+func (s *watchEventSink) immediatePending() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.absorbHandoff()
+	return s.pending.immediate && !s.pending.Empty()
 }
 
 // Watcher schedules backend changes into serialized callbacks with short-burst
@@ -1010,8 +1039,7 @@ func (w *Watcher) QueueRetryBatch(batch WatchBatch) {
 		len(batch.Paths) == 0 {
 		return
 	}
-	w.eventSink.RetainRetry(batch)
-	w.eventSink.signal()
+	w.eventSink.RetainRetryImmediate(batch)
 }
 
 // OpenDispatch transitions a collecting watcher to callback dispatch. It is
@@ -1024,6 +1052,7 @@ func (w *Watcher) OpenDispatch() {
 	}
 	w.lifecycle = watcherDispatching
 	w.dispatchEnabled.Store(true)
+	w.eventSink.MarkImmediate()
 	w.eventSink.signal()
 }
 
@@ -1101,6 +1130,7 @@ func (w *Watcher) loop() {
 	var timer *time.Timer
 	var timerC <-chan time.Time
 	callbackBusy := false
+	immediatePending := false
 
 	stopTimer := func() {
 		if timer != nil {
@@ -1147,6 +1177,7 @@ func (w *Watcher) loop() {
 		}
 		firstPendingAt = time.Time{}
 		pendingDelay = w.batchDelay
+		immediatePending = false
 		callbackBusy = true
 		batches <- batch
 		return true
@@ -1180,15 +1211,20 @@ func (w *Watcher) loop() {
 			schedule()
 
 		case <-w.eventSink.wake:
+			immediate := w.eventSink.immediatePending()
+			immediatePending = immediatePending || immediate
 			if w.eventSink.Empty() {
 				continue
 			}
-			if firstPendingAt.IsZero() {
-				firstPendingAt = time.Now()
-			}
-			pendingDelay = 0
-			if timerC != nil {
-				stopTimer()
+			retryTimerActive := timerC != nil && consecutiveFailures > 0
+			if immediate || !retryTimerActive {
+				if firstPendingAt.IsZero() {
+					firstPendingAt = time.Now()
+				}
+				pendingDelay = 0
+				if timerC != nil {
+					stopTimer()
+				}
 			}
 			schedule()
 
@@ -1254,11 +1290,22 @@ func (w *Watcher) loop() {
 				if !retryRetained {
 					consecutiveFailures = 0
 				}
-				if wasEmpty && !w.eventSink.Empty() {
+				switch {
+				case retryRetained:
+					immediatePending = immediatePending ||
+						w.eventSink.immediatePending()
 					firstPendingAt = time.Now()
-					pendingDelay = watcherRetryDelay(
-						max(w.batchDelay, w.minInterval), consecutiveFailures,
-					)
+					if immediatePending {
+						pendingDelay = 0
+					} else {
+						// Concurrent events must not bypass the retained retry's backoff.
+						pendingDelay = watcherRetryDelay(
+							max(w.batchDelay, w.minInterval), consecutiveFailures,
+						)
+					}
+				case wasEmpty && !w.eventSink.Empty():
+					firstPendingAt = time.Now()
+					pendingDelay = 0
 				}
 			} else {
 				lastDispatch = result.startedAt
@@ -1335,8 +1382,8 @@ func (w *Watcher) accumulateBackendEvent(event backendEvent) {
 }
 
 func callbackRetryBatch(err error) (WatchBatch, bool) {
-	var retryErr WatchRetryError
-	if !errors.As(err, &retryErr) {
+	retryErr, hasRetryErr := errors.AsType[WatchRetryError](err)
+	if !hasRetryErr {
 		return WatchBatch{}, false
 	}
 	retry := retryErr.WatchRetryBatch()

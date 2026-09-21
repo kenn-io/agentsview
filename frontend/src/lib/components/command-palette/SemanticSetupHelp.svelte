@@ -28,7 +28,7 @@
   import { Button, CopyButton, Spinner } from "@kenn-io/kit-ui";
   import { getLocale, m } from "../../i18n/index.js";
   import { EmbeddingsService } from "../../api/generated/index.js";
-  import { ApiError, callGenerated, isAbortError } from "../../api/runtime.js";
+  import { ApiError, isAbortError } from "../../api/runtime.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
 
   interface Props {
@@ -123,9 +123,7 @@ endpoint = "http://localhost:11434/v1"`;
 
   async function probe(): Promise<void> {
     try {
-      const status = await callGenerated(() =>
-        EmbeddingsService.getApiV1EmbeddingsStatus({}),
-      );
+      const status = await EmbeddingsService.getApiV1EmbeddingsStatus({});
       if (disposed) return;
       if (status.running) {
         applyProgress(status.phase, status.done, status.total);
@@ -174,9 +172,7 @@ endpoint = "http://localhost:11434/v1"`;
     buildDone = 0;
     buildTotal = 0;
     try {
-      await callGenerated(() =>
-        EmbeddingsService.postApiV1EmbeddingsBuild({}),
-      );
+      await EmbeddingsService.postApiV1EmbeddingsBuild({});
     } catch (e) {
       if (disposed || isAbortError(e)) return;
       // 409 means a build is already running (started by the CLI or the
@@ -199,9 +195,7 @@ endpoint = "http://localhost:11434/v1"`;
 
   async function poll(): Promise<void> {
     try {
-      const status = await callGenerated(() =>
-        EmbeddingsService.getApiV1EmbeddingsStatus({}),
-      );
+      const status = await EmbeddingsService.getApiV1EmbeddingsStatus({});
       if (disposed) return;
       if (status.running) {
         applyProgress(status.phase, status.done, status.total);

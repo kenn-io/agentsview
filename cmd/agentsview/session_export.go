@@ -24,9 +24,7 @@ func newSessionExportCommand() *cobra.Command {
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if cmd.Flags().Changed("server") {
-				return fmt.Errorf(
-					"session export: local-only command; --server not supported",
-				)
+				return errors.New("session export: local-only command; --server not supported")
 			}
 			if err := rejectFormatFlags(
 				cmd, "session export", "raw bytes",
@@ -34,15 +32,16 @@ func newSessionExportCommand() *cobra.Command {
 				return err
 			}
 			if pgReadRequested(cmd) {
-				return fmt.Errorf(
-					"session export: local-only command; --pg not supported",
-				)
+				return errors.New("session export: local-only command; --pg not supported")
 			}
 			cfg, err := config.LoadPFlags(cmd.Flags())
 			if err != nil {
 				return fmt.Errorf("loading config: %w", err)
 			}
-			d, err := openReadOnlyDB(cfg)
+			if cfg.ArchiveContent.UsageOnly() {
+				return errors.New("session export is unavailable with archive_content=usage")
+			}
+			d, err := openReadOnlyDB(cmd.Context(), cfg)
 			if err != nil {
 				if errors.Is(err, os.ErrNotExist) {
 					return fmt.Errorf(
@@ -71,7 +70,7 @@ func newSessionExportCommand() *cobra.Command {
 					"session not in local archive: %s", args[0],
 				)
 			}
-			storedPath := d.GetSessionFilePath(id)
+			storedPath := d.GetSessionFilePath(cmd.Context(), id)
 			if storedPath == "" {
 				return fmt.Errorf(
 					"source file not found for session %s", id,
@@ -81,8 +80,7 @@ func newSessionExportCommand() *cobra.Command {
 			// with sessions keyed by a <history>#<idx> virtual path.
 			// Export only the selected run, not sibling runs from the
 			// same repository.
-			if historyPath, idx, ok :=
-				parser.ParseAiderVirtualPath(storedPath); ok {
+			if historyPath, idx, ok := parser.ParseAiderVirtualPath(storedPath); ok {
 				rawID, ok := rawAiderSessionID(id)
 				if !ok {
 					return fmt.Errorf(
@@ -123,8 +121,7 @@ func newSessionExportCommand() *cobra.Command {
 			// A Visual Studio Copilot trace file holds spans for several
 			// conversations, so streaming the whole file would disclose
 			// unrelated conversations. Filter to the requested conversation.
-			if tracePath, conversationID, ok :=
-				parser.SplitVisualStudioCopilotVirtualPath(storedPath); ok {
+			if tracePath, conversationID, ok := parser.SplitVisualStudioCopilotVirtualPath(storedPath); ok {
 				err := parser.WriteVisualStudioCopilotConversationJSONL(
 					cmd.OutOrStdout(), tracePath, conversationID,
 				)
@@ -150,7 +147,7 @@ func newSessionExportCommand() *cobra.Command {
 				}
 			case string(parser.AgentTrae):
 				if dbPath, sessionID, ok := parser.SplitTraeVirtualPath(storedPath); ok {
-					err := parser.WriteTraeSessionJSON(
+					err := parser.WriteTraeSessionJSON(cmd.Context(),
 						cmd.OutOrStdout(), dbPath, sessionID,
 					)
 					if errors.Is(err, os.ErrNotExist) {
@@ -161,16 +158,27 @@ func newSessionExportCommand() *cobra.Command {
 					return err
 				}
 			}
-			if session.Agent == string(parser.AgentHermes) &&
+			// Hermes and its Augure Desktop fork store state.db#<id>
+			// virtual paths; streaming the selected session's JSONL beats
+			// streaming the SQLite file. The fork keeps the raw
+			// (unprefixed) ID in SourceSessionID, so the same writer serves
+			// both agents.
+			agent := parser.AgentType(session.Agent)
+			if (agent == parser.AgentHermes ||
+				agent == parser.AgentAugureDesktop) &&
 				filepath.Base(parser.ResolveSourceFilePath(storedPath)) == "state.db" {
 				rawSessionID := session.SourceSessionID
 				if rawSessionID == "" {
-					rawSessionID, _ = rawHermesSessionID(id)
+					rawSessionID, _ = rawHermesSessionID(id, agent)
 				}
-				err := parser.WriteHermesSessionJSONL(
+				// Search only the session's own agent roots. The fork's raw
+				// IDs are a separate namespace from Hermes, so falling back
+				// to Hermes roots could export an unrelated session that
+				// happens to share the raw ID.
+				err := parser.WriteHermesSessionJSONL(cmd.Context(),
 					cmd.OutOrStdout(),
 					storedPath,
-					cfg.AgentDirs[parser.AgentHermes],
+					cfg.AgentDirs[agent],
 					rawSessionID,
 				)
 				if errors.Is(err, os.ErrNotExist) {
@@ -207,9 +215,9 @@ func rawAiderSessionID(sessionID string) (string, bool) {
 	return rawID, rawID != ""
 }
 
-func rawHermesSessionID(sessionID string) (string, bool) {
+func rawHermesSessionID(sessionID string, agent parser.AgentType) (string, bool) {
 	def, ok := parser.AgentByPrefix(sessionID)
-	if !ok || def.Type != parser.AgentHermes {
+	if !ok || def.Type != agent {
 		return "", false
 	}
 	_, rawID := parser.StripHostPrefix(sessionID)

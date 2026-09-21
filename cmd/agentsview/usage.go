@@ -8,13 +8,15 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
-	"strconv"
+	"os/signal"
 	"strings"
+	"sync/atomic"
 	"text/tabwriter"
 	"time"
 
+	"github.com/doordash-oss/oapi-codegen-dd/v3/pkg/runtime"
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
@@ -70,6 +72,11 @@ type UsageDailyConfig struct {
 	Offline   bool
 	NoSync    bool
 	Timezone  string
+}
+
+type usageDailyDocument struct {
+	db.DailyUsageResult
+	MachineLabels service.MachineLabelCatalog `json:"machine_labels,omitzero"`
 }
 
 // resolveUsageWindow resolves the raw --since/--until flags into concrete
@@ -131,6 +138,13 @@ func resolveUsageWindowPoint(
 }
 
 func runUsageDaily(cfg UsageDailyConfig) {
+	if err := runUsageDailyResult(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func runUsageDailyResult(cfg UsageDailyConfig) error {
 	tz := cfg.Timezone
 	if tz == "" {
 		tz = localTimezone()
@@ -138,14 +152,12 @@ func runUsageDaily(cfg UsageDailyConfig) {
 
 	loc, err := time.LoadLocation(tz)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: invalid --timezone: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("invalid --timezone: %w", err)
 	}
 
 	since, until, err := resolveUsageWindow(cfg.Since, cfg.Until, time.Now(), loc)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	filter := db.UsageFilter{
@@ -156,44 +168,59 @@ func runUsageDaily(cfg UsageDailyConfig) {
 	}
 	noDefaultRange := cfg.All || cfg.Since != "" || cfg.Until != ""
 
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
 	backend, cleanup, err := resolveArchiveQueryBackend(ctx, archiveQueryPolicy{
 		Offline:              cfg.Offline,
 		NoSync:               cfg.NoSync,
 		AutoStart:            true,
+		SkipInitialSync:      true,
 		ReadOnlyDaemon:       archiveQuerySkipReadOnlyDaemon,
 		DirectReadOnlyAction: "refresh usage directly",
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	defer closeArchiveQueryBackend(cleanup)
 
+	progress, finishProgress := newUsageProgressPrinter(os.Stderr)
 	result, err := backend.DailyUsage(ctx, dailyUsageQuery{
+		Progress:       progress,
 		Filter:         filter,
 		NoDefaultRange: noDefaultRange,
 		Breakdowns:     cfg.Breakdown,
 		SessionCounts:  cfg.JSON,
 	})
+	finishProgress()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	if cfg.JSON {
-		enc := jsontext.NewEncoder(os.Stdout, jsontext.WithIndent("  "))
-		if err := json.MarshalEncode(enc, result); err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
+		document := usageDailyDocument{DailyUsageResult: result}
+		if cfg.Breakdown {
+			keys := make(map[string]struct{})
+			for _, day := range result.Daily {
+				for _, breakdown := range day.MachineBreakdowns {
+					keys[breakdown.MachineName] = struct{}{}
+				}
+			}
+			document.MachineLabels = machineLabelsForKeys(machineLabelCatalog(
+				ctx, os.Stderr, backend.MachineLabels,
+			), keys)
 		}
-		return
+		enc := jsontext.NewEncoder(os.Stdout, jsontext.WithIndent("  "))
+		if err := json.MarshalEncode(enc, document); err != nil {
+			return err
+		}
+		return nil
 	}
 
 	printDailyTable(result, cfg.Breakdown)
 	if note := noTokenDataNote(cfg.Agent, result.Totals); note != "" {
 		fmt.Fprintln(os.Stderr, note)
 	}
+	return nil
 }
 
 // noTokenDataNote returns a one-line stderr note for a zero usage result when
@@ -246,6 +273,13 @@ func usageDateForTimezone(now time.Time, timezone string) string {
 }
 
 func runUsageStatusline(cfg UsageStatuslineConfig) {
+	if err := runUsageStatuslineResult(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func runUsageStatuslineResult(cfg UsageStatuslineConfig) error {
 	timezone := localTimezone()
 	today := usageDateForTimezone(time.Now(), timezone)
 	filter := db.UsageFilter{
@@ -255,7 +289,8 @@ func runUsageStatusline(cfg UsageStatuslineConfig) {
 		Timezone: timezone,
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	backend, cleanup, err := resolveArchiveQueryBackend(ctx, archiveQueryPolicy{
 		Offline:              cfg.Offline,
 		NoSync:               cfg.NoSync,
@@ -264,8 +299,7 @@ func runUsageStatusline(cfg UsageStatuslineConfig) {
 		DirectReadOnlyAction: "refresh usage directly",
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	defer closeArchiveQueryBackend(cleanup)
 
@@ -274,21 +308,20 @@ func runUsageStatusline(cfg UsageStatuslineConfig) {
 		NoDefaultRange: true,
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	if cfg.JSON {
-		printUsageStatuslineJSON(result, cfg.Agent, today)
-		return
+		return printUsageStatuslineJSON(result, cfg.Agent, today)
 	}
 
 	printUsageStatusline(result, cfg.Agent)
+	return nil
 }
 
 func printUsageStatuslineJSON(
 	result db.DailyUsageResult, agent, date string,
-) {
+) error {
 	enc := jsontext.NewEncoder(os.Stdout, jsontext.WithIndent("  "))
 	report := usageStatuslineReport{
 		Date:  date,
@@ -296,9 +329,9 @@ func printUsageStatuslineJSON(
 		Agent: agent,
 	}
 	if err := json.MarshalEncode(enc, report); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
+	return nil
 }
 
 func printUsageStatusline(result db.DailyUsageResult, agent string) {
@@ -352,13 +385,15 @@ func ensureFreshData(
 	defer log.SetOutput(origLog)
 
 	if database.NeedsResync() {
-		engine := sync.NewEngine(database, sync.EngineConfig{
+		engine := sync.NewEngine(ctx, database, sync.EngineConfig{
 			AgentDirs:          appCfg.AgentDirs,
 			SourceMachines:     appCfg.SourceMachines,
+			ProviderMetadata:   appCfg.ProviderMetadata,
 			DisabledAgents:     appCfg.DisabledAgents,
 			IncludeCwdPrefixes: appCfg.SyncIncludeCwdPrefixes,
 			ScanProtectedPaths: appCfg.ScanProtectedPaths,
-			Machine:            appCfg.LocalMachineName,
+			Machine:            appCfg.InstallationID,
+			ArchiveContent:     appCfg.ArchiveContent,
 		})
 		defer engine.Close()
 		fmt.Fprintln(os.Stderr,
@@ -379,17 +414,19 @@ func ensureFreshData(
 		return
 	}
 
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(ctx, database, sync.EngineConfig{
 		AgentDirs:          appCfg.AgentDirs,
 		SourceMachines:     appCfg.SourceMachines,
+		ProviderMetadata:   appCfg.ProviderMetadata,
 		DisabledAgents:     appCfg.DisabledAgents,
 		IncludeCwdPrefixes: appCfg.SyncIncludeCwdPrefixes,
 		ScanProtectedPaths: appCfg.ScanProtectedPaths,
-		Machine:            appCfg.LocalMachineName,
+		Machine:            appCfg.InstallationID,
+		ArchiveContent:     appCfg.ArchiveContent,
 	})
 	defer engine.Close()
 
-	since := engine.LastSyncStartedAt()
+	since := engine.LastSyncStartedAt(ctx)
 	if !since.IsZero() {
 		since = since.Add(-quickSyncMargin)
 	}
@@ -401,9 +438,12 @@ func ensureFreshData(
 // stderr so it does not pollute stdout-bound JSON or statusline output.
 func printSyncSummaryStderr(stats sync.SyncStats, t time.Time) {
 	summary := fmt.Sprintf(
-		"\nSync complete: %d sessions synced",
+		"Sync complete: %d sessions synced",
 		stats.Synced,
 	)
+	if isTerminalWriter(os.Stderr) {
+		summary = "\n" + summary
+	}
 	if stats.OrphanedCopied > 0 {
 		summary += fmt.Sprintf(
 			", %d archived sessions preserved",
@@ -435,7 +475,7 @@ func printSyncSummaryStderr(stats sync.SyncStats, t time.Time) {
 // databases without a resync.
 func seedPricing(
 	database *db.DB,
-	runner pricingRefreshExclusiveRunner,
+	runner remoteSyncExclusiveRunner,
 ) {
 	err := runPricingExclusive(runner, func() error {
 		return pricingrefresh.SeedFallback(database)
@@ -537,76 +577,157 @@ func fetchHTTPDailyUsage(
 	query dailyUsageQuery,
 ) (db.DailyUsageResult, error) {
 	filter := query.Filter
-	q := url.Values{}
-	q.Set("no_default_range", strconv.FormatBool(query.NoDefaultRange))
-	q.Set("breakdowns", strconv.FormatBool(query.Breakdowns))
-	q.Set("session_counts", strconv.FormatBool(query.SessionCounts))
-	setIfNotEmpty := func(k, v string) {
-		if v != "" {
-			q.Set(k, v)
+	q := apiclient.GetAPIV1UsageSummaryStreamQuery{
+		NoDefaultRange: new(query.NoDefaultRange), Breakdowns: new(query.Breakdowns), SessionCounts: new(query.SessionCounts),
+		IncludeOneShot: new(!filter.ExcludeOneShot), IncludeAutomated: new(!filter.ExcludeAutomated),
+	}
+	if filter.Timezone != "" {
+		q.Timezone = new(filter.Timezone)
+	}
+	if filter.Agent != "" {
+		q.Agent = new(filter.Agent)
+	}
+	if filter.Project != "" {
+		q.Project = new(filter.Project)
+	}
+	if filter.Machine != "" {
+		q.Machine = new(filter.Machine)
+	}
+	if filter.ExcludeProject != "" {
+		q.ExcludeProject = new(filter.ExcludeProject)
+	}
+	if filter.ExcludeAgent != "" {
+		q.ExcludeAgent = new(filter.ExcludeAgent)
+	}
+	if filter.ExcludeModel != "" {
+		q.ExcludeModel = new(filter.ExcludeModel)
+	}
+	if filter.Model != "" {
+		q.Model = new(filter.Model)
+	}
+	if filter.Termination != "" {
+		q.Termination = new(filter.Termination)
+	}
+	if filter.From != "" {
+		parsed, err := time.Parse(time.DateOnly, filter.From)
+		if err != nil {
+			return db.DailyUsageResult{}, err
 		}
+		q.From = &runtime.Date{Time: parsed}
 	}
-	setIfNotEmpty("from", filter.From)
-	setIfNotEmpty("to", filter.To)
-	setIfNotEmpty("timezone", filter.Timezone)
-	setIfNotEmpty("agent", filter.Agent)
-	setIfNotEmpty("project", filter.Project)
-	setIfNotEmpty("machine", filter.Machine)
-	setIfNotEmpty("exclude_project", filter.ExcludeProject)
-	setIfNotEmpty("exclude_agent", filter.ExcludeAgent)
-	setIfNotEmpty("exclude_model", filter.ExcludeModel)
-	setIfNotEmpty("model", filter.Model)
-	setIfNotEmpty("active_since", filter.ActiveSince)
-	setIfNotEmpty("termination", filter.Termination)
+	if filter.To != "" {
+		parsed, err := time.Parse(time.DateOnly, filter.To)
+		if err != nil {
+			return db.DailyUsageResult{}, err
+		}
+		q.To = &runtime.Date{Time: parsed}
+	}
+	if filter.ActiveSince != "" {
+		parsed, err := time.Parse(time.RFC3339, filter.ActiveSince)
+		if err != nil {
+			return db.DailyUsageResult{}, err
+		}
+		q.ActiveSince = &parsed
+	}
 	if filter.MinUserMessages > 0 {
-		q.Set("min_user_messages", fmt.Sprint(filter.MinUserMessages))
+		q.MinUserMessages = new(int64(filter.MinUserMessages))
 	}
-	q.Set("include_one_shot", strconv.FormatBool(!filter.ExcludeOneShot))
-	q.Set("include_automated", strconv.FormatBool(!filter.ExcludeAutomated))
-
-	endpoint := strings.TrimSuffix(tr.URL, "/") +
-		"/api/v1/usage/summary?" + q.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	api, err := apiclient.NewHTTPClient(tr.URL, authToken, &http.Client{Timeout: 0})
 	if err != nil {
 		return db.DailyUsageResult{}, err
 	}
-	if authToken != "" {
-		req.Header.Set("Authorization", "Bearer "+authToken)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return db.DailyUsageResult{}, err
+	var resp *http.Response
+	var payload []byte
+	var out apiclient.UsageSummaryResponse
+	var stream *runtime.Stream[[]byte]
+	if query.Progress != nil {
+		response, requestErr := api.GetAPIV1UsageSummaryStreamStreamWithResponse(ctx, &apiclient.GetAPIV1UsageSummaryStreamRequestOptions{Query: &q})
+		if response == nil {
+			return db.DailyUsageResult{}, requestErr
+		}
+		resp, payload, stream = response.HTTPResponse, response.Body, response.Stream200
+	} else {
+		bufferedQuery := apiclient.GetAPIV1UsageSummaryQuery(q)
+		response, requestErr := api.GetAPIV1UsageSummaryWithResponse(ctx, &apiclient.GetAPIV1UsageSummaryRequestOptions{Query: &bufferedQuery})
+		if response == nil {
+			return db.DailyUsageResult{}, requestErr
+		}
+		resp, payload = response.HTTPResponse, response.Body
+		if response.StatusCode == http.StatusOK {
+			if requestErr != nil {
+				return db.DailyUsageResult{}, requestErr
+			}
+			if len(response.Body) == 0 {
+				return db.DailyUsageResult{}, io.ErrUnexpectedEOF
+			}
+			out = *response.JSON200
+		}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body := payload
 		return db.DailyUsageResult{}, fmt.Errorf(
 			"usage summary: HTTP %d: %s",
 			resp.StatusCode, strings.TrimSpace(string(body)),
 		)
 	}
-	var out struct {
-		SchemaVersion int                               `json:"schema_version,omitempty"`
-		Pricing       *export.PricingBlock              `json:"pricing,omitempty"`
-		Projects      map[string]export.ProjectMapEntry `json:"projects,omitempty"`
-		Totals        db.UsageTotals                    `json:"totals"`
-		Daily         []db.DailyUsageEntry              `json:"daily"`
-		SessionCounts db.UsageSessionCounts             `json:"sessionCounts"`
-	}
-	if err := json.UnmarshalRead(resp.Body, &out); err != nil {
-		return db.DailyUsageResult{}, err
+	if query.Progress != nil {
+		if !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
+			return db.DailyUsageResult{}, fmt.Errorf("usage summary: expected a progress stream, received %q", resp.Header.Get("Content-Type"))
+		}
+		data, err := consumeDaemonPushEvents[apiclient.UsageSummaryResponse](stream, func(p struct {
+			Detail string `json:"detail"`
+		},
+		) {
+			query.Progress(p.Detail)
+		})
+		if err != nil {
+			return db.DailyUsageResult{}, fmt.Errorf("usage summary: %w", err)
+		}
+		out = data
 	}
 	if out.Projects == nil {
 		out.Projects = map[string]export.ProjectMapEntry{}
 	}
+	schemaVersion := 0
+	if out.SchemaVersion != nil {
+		schemaVersion = int(*out.SchemaVersion)
+	}
 	return db.DailyUsageResult{
-		SchemaVersion: out.SchemaVersion,
+		SchemaVersion: schemaVersion,
 		Pricing:       out.Pricing,
 		Projects:      out.Projects,
 		Daily:         out.Daily,
 		Totals:        out.Totals,
 		SessionCounts: out.SessionCounts,
 	}, nil
+}
+
+func newUsageProgressPrinter(w io.Writer) (func(string), func()) {
+	started := time.Now()
+	var phase atomic.Pointer[string]
+	phase.Store(new("Preparing usage report from the archive"))
+	stop, done := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		var lastPhase string
+		var lastPrinted time.Duration
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				current, elapsed := *phase.Load(), time.Since(started)
+				if current != lastPhase || elapsed-lastPrinted >= 5*time.Second {
+					fmt.Fprintf(w, "%s (%s)\n", current, elapsed.Round(time.Second))
+					lastPhase, lastPrinted = current, elapsed
+				}
+			}
+		}
+	}()
+	return func(current string) { phase.Store(&current) }, func() { close(stop); <-done }
 }
 
 func printDailyTable(

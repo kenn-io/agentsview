@@ -1,7 +1,6 @@
 package postgres
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -32,7 +31,7 @@ func pushWindowSessionIDs(sessions []db.Session) []string {
 
 func TestPushWindowSelectsFutureMarkerSession(t *testing.T) {
 	local := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	started := "2026-03-11T12:00:00Z"
 	// Truncate to milliseconds so the nanosecond value round-trips exactly
@@ -40,7 +39,7 @@ func TestPushWindowSelectsFutureMarkerSession(t *testing.T) {
 	futureMtime := time.Now().Add(48 * time.Hour).
 		Truncate(time.Millisecond).UTC()
 	futureNanos := futureMtime.UnixNano()
-	require.NoError(t, local.UpsertSession(db.Session{
+	require.NoError(t, local.UpsertSession(ctx, db.Session{
 		ID:           "sess-future",
 		Project:      "proj",
 		Machine:      "m",
@@ -74,7 +73,7 @@ func TestPushWindowSelectsFutureMarkerSession(t *testing.T) {
 	// marker keeps the session a candidate in every later window, so the
 	// changed fingerprint gets pushed instead of staying stale until wall
 	// time catches up.
-	require.NoError(t, local.UpsertSession(db.Session{
+	require.NoError(t, local.UpsertSession(ctx, db.Session{
 		ID:           "sess-future",
 		Project:      "proj",
 		Machine:      "m",
@@ -96,12 +95,12 @@ func TestPushWindowSelectsFutureMarkerSession(t *testing.T) {
 // when unchanged), while markers strictly below the watermark stay out.
 func TestPushWindowIncludesBoundaryEqualSession(t *testing.T) {
 	local := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	boundary := time.Now().Add(time.Hour).Truncate(time.Millisecond).UTC()
 	boundaryNanos := boundary.UnixNano()
 	started := "2026-03-11T12:00:00Z"
-	require.NoError(t, local.UpsertSession(db.Session{
+	require.NoError(t, local.UpsertSession(ctx, db.Session{
 		ID:           "sess-boundary",
 		Project:      "proj",
 		Machine:      "m",

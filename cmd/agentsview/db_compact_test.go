@@ -2,7 +2,13 @@ package main
 
 import (
 	"bytes"
+	"encoding/json/v2"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+
+	"go.kenn.io/agentsview/internal/db"
 
 	"github.com/stretchr/testify/require"
 )
@@ -70,4 +76,23 @@ func TestDBCompactJSONRequiresYes(t *testing.T) {
 	err := cmd.Execute()
 	require.EqualError(t, err, "--format json requires --yes for db compact")
 	require.Empty(t, stdout.String(), "JSON mode must not mix a prompt into stdout")
+}
+
+func TestDBCompactResultJSONNewline(t *testing.T) {
+	var output bytes.Buffer
+	require.NoError(t, writeDBCompactResult(&output, db.CompactResult{}, true))
+	var result db.CompactResult
+	require.NoError(t, json.Unmarshal(output.Bytes(), &result))
+	require.Equal(t, byte('\n'), output.Bytes()[output.Len()-1])
+}
+
+func TestRequestDBCompactRejectsEmptySuccess(t *testing.T) {
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer endpoint.Close()
+
+	_, err := requestDBCompact(t.Context(), transport{URL: endpoint.URL}, "", db.CompactOptions{})
+
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
 }

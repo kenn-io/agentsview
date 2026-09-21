@@ -190,7 +190,7 @@ func newSemanticTestEngine(
 ) *Engine {
 	t.Helper()
 	agent := provider.Definition().Type
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			agent: {root},
 		},
@@ -344,7 +344,7 @@ func TestOmnigentContainerSkipCacheEntryFreshWithoutStoredRow(t *testing.T) {
 		FingerprintHashRequiredForFreshness: true,
 	}
 
-	containerFresh, containerHashVerified := engine.providerSkipCacheEntryFreshInDB(
+	containerFresh, containerHashVerified := engine.providerSkipCacheEntryFreshInDB(t.Context(),
 		parser.DiscoveredFile{Path: container, Agent: parser.AgentOmnigent},
 		parser.SourceRef{
 			Provider: parser.AgentOmnigent, Key: container,
@@ -353,7 +353,7 @@ func TestOmnigentContainerSkipCacheEntryFreshWithoutStoredRow(t *testing.T) {
 		parser.SourceFingerprint{Key: container, Hash: "container-hash"},
 		providerSemantics,
 	)
-	memberFresh, _ := engine.providerSkipCacheEntryFreshInDB(
+	memberFresh, _ := engine.providerSkipCacheEntryFreshInDB(t.Context(),
 		parser.DiscoveredFile{Path: memberPath, Agent: parser.AgentOmnigent},
 		parser.SourceRef{
 			Provider: parser.AgentOmnigent, Key: memberPath,
@@ -442,7 +442,7 @@ func TestOmnigentCompleteResultOwnershipTombstonesAndRevivesMissingMember(
 			Machine: "", FilePath: &missingPath,
 		},
 	} {
-		require.NoError(t, database.UpsertSession(seed))
+		require.NoError(t, database.UpsertSession(t.Context(), seed))
 	}
 	require.NoError(t, database.BaselineActiveSessionSourcePaths(
 		t.Context(), "devbox", []db.SessionSourcePath{{
@@ -516,7 +516,7 @@ func TestCompleteResultOwnershipReadFailureAbortsWithoutCaching(
 	container := filepath.Join(root, "chat.db")
 	require.NoError(t, os.WriteFile(container, []byte("container"), 0o600))
 	memberPath := container + "#stored"
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "omnigent:stored", Agent: string(parser.AgentOmnigent),
 		Machine: "devbox", FilePath: &memberPath,
 	}))
@@ -530,7 +530,7 @@ func TestCompleteResultOwnershipReadFailureAbortsWithoutCaching(
 		},
 	)
 	provider.beforeParse = func() {
-		require.NoError(t, database.CloseConnections())
+		require.NoError(t, database.CloseConnections(t.Context()))
 	}
 	engine := newSemanticTestEngine(t, database, root, provider)
 	file := parser.DiscoveredFile{
@@ -551,12 +551,12 @@ func TestSyncSemanticsUnchangedResultPolicies(t *testing.T) {
 	size := int64(10)
 	mtime := int64(5678)
 	storedHash := "stored-hash"
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "semantic:member", Agent: string(semanticTestAgent),
 		Machine: "devbox", FilePath: &path, FileSize: &size,
 		FileMtime: &mtime, FileHash: &storedHash,
 	}))
-	require.NoError(t, database.SetSessionDataVersion(
+	require.NoError(t, database.SetSessionDataVersion(t.Context(),
 		"semantic:member", db.CurrentDataVersion(),
 	))
 	result := processFixtureResult(
@@ -569,15 +569,15 @@ func TestSyncSemanticsUnchangedResultPolicies(t *testing.T) {
 	engine := &Engine{db: database}
 	file := parser.DiscoveredFile{Agent: semanticTestAgent, Path: path}
 
-	mtimeOnly := engine.dropUnchangedSharedSQLiteResults(
+	mtimeOnly := engine.dropUnchangedSharedSQLiteResults(t.Context(),
 		file, []parser.ParseResult{result}, parser.UnchangedResultMTime,
 	)
-	mtimeAndHash := engine.dropUnchangedSharedSQLiteResults(
+	mtimeAndHash := engine.dropUnchangedSharedSQLiteResults(t.Context(),
 		file, []parser.ParseResult{result},
 		parser.UnchangedResultMTimeAndHash,
 	)
 	engine.forceFullParse = true
-	forced := engine.dropUnchangedSharedSQLiteResults(
+	forced := engine.dropUnchangedSharedSQLiteResults(t.Context(),
 		file, []parser.ParseResult{result}, parser.UnchangedResultMTime,
 	)
 
@@ -614,13 +614,13 @@ func TestOmnigentDependentSourceExpansionPreservesEngineIDPrefixing(
 		},
 	}
 	parentID := "remote~omnigent:root"
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID:       parentID,
 		Agent:    string(parser.AgentOmnigent),
 		Machine:  "",
 		FilePath: &rootPath,
 	}))
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID:              "remote~omnigent:child",
 		Agent:           string(parser.AgentOmnigent),
 		Machine:         "",
@@ -681,7 +681,7 @@ func testNonStreamedBaselineFailureRejectsCache(t *testing.T) {
 	t.Helper()
 	database := openTestDB(t)
 	path := filepath.Join(t.TempDir(), "chat.db")
-	engine := NewEngine(database, EngineConfig{Machine: "local"})
+	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local"})
 	t.Cleanup(engine.Close)
 	results := make(chan syncJob, 1)
 	results <- syncJob{
@@ -710,6 +710,7 @@ func testReconciliationBaselineFailureRejectsCache(
 	writtenResult bool,
 ) {
 	t.Helper()
+
 	database := openTestDB(t)
 	root := t.TempDir()
 	container := filepath.Join(root, "chat.db")
@@ -725,13 +726,13 @@ func testReconciliationBaselineFailureRejectsCache(
 		size := fingerprint.Size
 		mtime := fingerprint.MTimeNS
 		hash := fingerprint.Hash
-		require.NoError(t, database.UpsertSession(db.Session{
+		require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 			ID: "omnigent:unchanged", Agent: string(parser.AgentOmnigent),
 			Machine: "devbox", Project: "semantic-project",
 			FilePath: &memberPath, FileSize: &size, FileMtime: &mtime,
 			FileHash: &hash,
 		}))
-		require.NoError(t, database.SetSessionDataVersion(
+		require.NoError(t, database.SetSessionDataVersion(t.Context(),
 			"omnigent:unchanged", db.CurrentDataVersion(),
 		))
 		unchangedResult := semanticTestResult(
@@ -781,7 +782,7 @@ func testReconciliationBaselineFailureRejectsCache(
 func TestBaselineFailureKeepsRowlessCacheForOtherProviders(t *testing.T) {
 	database := openTestDB(t)
 	path := filepath.Join(t.TempDir(), "container.db")
-	engine := NewEngine(database, EngineConfig{Machine: "local"})
+	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local"})
 	t.Cleanup(engine.Close)
 	results := make(chan syncJob, 1)
 	results <- syncJob{

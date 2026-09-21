@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -51,7 +50,7 @@ func TestAiderPathRewriterSurvivesChangedAndParseDiffRoutes(t *testing.T) {
 	var configs []parser.ProviderConfig
 
 	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs:    map[parser.AgentType][]string{parser.AgentAider: {root}},
 		Machine:      "remote-host",
 		PathRewriter: rewriter,
@@ -65,7 +64,7 @@ func TestAiderPathRewriterSurvivesChangedAndParseDiffRoutes(t *testing.T) {
 
 	configs = nil
 	changed, err := engine.classifyProviderChangedPath(
-		context.Background(), path,
+		t.Context(), path,
 	)
 	require.NoError(t, err)
 	require.NotEmpty(t, changed)
@@ -75,7 +74,7 @@ func TestAiderPathRewriterSurvivesChangedAndParseDiffRoutes(t *testing.T) {
 
 	configs = nil
 	diffFiles, err := engine.parseDiffProviderSources(
-		context.Background(), parser.AgentAider,
+		t.Context(), parser.AgentAider,
 	)
 	require.NoError(t, err)
 	require.NotEmpty(t, diffFiles)

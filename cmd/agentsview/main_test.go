@@ -6,8 +6,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"os"
@@ -16,9 +18,11 @@ import (
 	"runtime"
 	"runtime/debug"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -30,6 +34,7 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/remotesync"
 	"go.kenn.io/agentsview/internal/server"
+	"go.kenn.io/agentsview/internal/storage"
 	agentsync "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
@@ -75,16 +80,16 @@ func TestServeStartsUsageCacheBackfill(t *testing.T) {
 		waited: make(chan struct{}),
 	}
 	idle := server.NewIdleTracker(time.Minute, func() {})
-	startDaemonUsageCacheBackfill(context.Background(), recorder, idle)
+	startDaemonUsageCacheBackfill(t.Context(), recorder, idle)
 	select {
 	case <-recorder.started:
 	case <-time.After(time.Second):
-		t.Fatal("usage cache backfill did not start")
+		require.FailNow(t, "usage cache backfill did not start")
 	}
 	select {
 	case <-recorder.waited:
 	case <-time.After(time.Second):
-		t.Fatal("usage cache backfill was not joined by tracked work")
+		require.FailNow(t, "usage cache backfill was not joined by tracked work")
 	}
 	close(recorder.release)
 }
@@ -96,16 +101,16 @@ func TestServeStartsUsageCacheBackfillWithoutIdleTracker(t *testing.T) {
 		started: make(chan struct{}), release: make(chan struct{}),
 		waited: make(chan struct{}),
 	}
-	startDaemonUsageCacheBackfill(context.Background(), recorder, nil)
+	startDaemonUsageCacheBackfill(t.Context(), recorder, nil)
 	select {
 	case <-recorder.started:
 	case <-time.After(time.Second):
-		t.Fatal("usage cache backfill did not start")
+		require.FailNow(t, "usage cache backfill did not start")
 	}
 	select {
 	case <-recorder.waited:
 	case <-time.After(time.Second):
-		t.Fatal("usage cache backfill was not awaited without an idle tracker")
+		require.FailNow(t, "usage cache backfill was not awaited without an idle tracker")
 	}
 	close(recorder.release)
 }
@@ -117,7 +122,7 @@ func (recorder *cursorSecretRecorder) SetCursorSecret(secret []byte) {
 func TestApplyRequiredCursorSecret(t *testing.T) {
 	recorder := &cursorSecretRecorder{}
 	err := applyRequiredCursorSecret(recorder, config.Config{})
-	assert.ErrorContains(t, err, "cursor secret is not configured")
+	require.ErrorContains(t, err, "cursor secret is not configured")
 
 	want := []byte("configured cursor secret")
 	err = applyRequiredCursorSecret(recorder, config.Config{
@@ -142,18 +147,52 @@ func TestRuntimeWarningHelper(t *testing.T) {
 	assert.Contains(t, logOutput.String(), "could not write daemon runtime record")
 }
 
-func TestServeRuntimeRecordWriteFailureWarnsVisibleAfterSlowStartup(t *testing.T) {
-	out, err := runServeRuntimeWarningHelper(t, true, 1200*time.Millisecond)
+func TestServeRuntimeRecordWriteFailureWarnsVisibleAfterStartupRelease(t *testing.T) {
+	out, err := runServeRuntimeWarningHelper(t, true)
 	require.NoError(t, err, string(out))
 	assert.Contains(t, string(out), "could not write daemon runtime record")
 	assert.Contains(t, string(out), "icacls <dir> /setowner <user>")
 }
 
 func TestServeRuntimeRecordWriteSuccessDoesNotWarnVisible(t *testing.T) {
-	out, err := runServeRuntimeWarningHelper(t, false, 0)
+	out, err := runServeRuntimeWarningHelper(t, false)
 	require.NoError(t, err, string(out))
 	assert.Contains(t, string(out), "runtime record write reached")
 	assert.NotContains(t, string(out), "could not write daemon runtime record")
+}
+
+func TestServeSkipInitialSyncStillReparsesStaleArchive(t *testing.T) {
+	cfg := testConfigWithClaudeFixture(t)
+	cfg.Host = "127.0.0.1"
+	database, err := db.Open(t.Context(), cfg.DBPath)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+	markArchiveStale(t, cfg.DBPath)
+	data, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	out, err := runRuntimeWarningHelperProcess(t, "serve", "TestServeStaleArchiveHelperProcess",
+		[]string{
+			"AGENTSVIEW_STALE_SERVE_CONFIG=" + string(data),
+			"AGENTSVIEW_STALE_SERVE_SOURCES=" + cfg.AgentDirs[parser.AgentClaude][0],
+		}, "listening at")
+	require.NoError(t, err, string(out))
+	stale, err := db.ArchiveNeedsResync(t.Context(), cfg.DBPath)
+	require.NoError(t, err)
+	assert.False(t, stale, "a direct serve must complete required reparse before publishing readiness")
+}
+
+func TestServeStaleArchiveHelperProcess(t *testing.T) {
+	data := os.Getenv("AGENTSVIEW_STALE_SERVE_CONFIG")
+	if data == "" {
+		return
+	}
+	var cfg config.Config
+	require.NoError(t, json.Unmarshal([]byte(data), &cfg))
+	cfg.DBPath = filepath.Join(cfg.DataDir, "sessions.db")
+	cfg.AgentDirs = map[parser.AgentType][]string{
+		parser.AgentClaude: {os.Getenv("AGENTSVIEW_STALE_SERVE_SOURCES")},
+	}
+	runServe(t.Context(), cfg, serveOptions{SkipInitialSync: true}, 0)
 }
 
 func TestPGServeRuntimeRecordWriteFailureWarnsVisible(t *testing.T) {
@@ -169,7 +208,7 @@ func TestDuckDBServeRuntimeRecordWriteFailureWarnsVisible(t *testing.T) {
 }
 
 func runServeRuntimeWarningHelper(
-	t *testing.T, failWrite bool, startupDelay time.Duration,
+	t *testing.T, failWrite bool,
 ) ([]byte, error) {
 	t.Helper()
 	dataDir := t.TempDir()
@@ -183,8 +222,7 @@ func runServeRuntimeWarningHelper(
 		t, "serve", "TestRunServeRuntimeWarningHelperProcess",
 		[]string{
 			"AGENTSVIEW_RUN_SERVE_RUNTIME_WARNING_HELPER=1",
-			"AGENTSVIEW_RUN_SERVE_RUNTIME_WARNING_FAIL=" + fmt.Sprint(failWrite),
-			"AGENTSVIEW_RUN_SERVE_RUNTIME_WARNING_DELAY=" + startupDelay.String(),
+			"AGENTSVIEW_RUN_SERVE_RUNTIME_WARNING_FAIL=" + strconv.FormatBool(failWrite),
 			"AGENTSVIEW_DATA_DIR=" + dataDir,
 		},
 		marker,
@@ -195,7 +233,7 @@ func runRuntimeWarningHelperProcess(
 	t *testing.T, helperName, testName string, env []string, marker string,
 ) ([]byte, error) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^"+testName+"$")
 	cmd.Env = append(os.Environ(), env...)
@@ -203,6 +241,11 @@ func runRuntimeWarningHelperProcess(
 	if err != nil {
 		return nil, fmt.Errorf("pipe %s helper stdout: %w", helperName, err)
 	}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("pipe %s helper stdin: %w", helperName, err)
+	}
+	defer stdin.Close()
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
@@ -217,6 +260,13 @@ func runRuntimeWarningHelperProcess(
 		line := scanner.Text()
 		stdoutOutput.WriteString(line)
 		stdoutOutput.WriteByte('\n')
+		if line == "runtime helper waiting for startup" {
+			if _, err := io.WriteString(stdin, "start\n"); err != nil {
+				stopErr = err
+				cancel()
+				break
+			}
+		}
 		if !observed && strings.Contains(line, marker) {
 			observed = true
 			stopErr = cmd.Cancel()
@@ -240,7 +290,7 @@ func runRuntimeWarningHelperProcess(
 				helperName, stopErr, combined,
 			)
 		}
-		if _, ok := waitErr.(*exec.ExitError); waitErr != nil && !ok {
+		if _, ok := errors.AsType[*exec.ExitError](waitErr); waitErr != nil && !ok {
 			return combined, fmt.Errorf(
 				"wait for stopped %s helper after stdout marker: %w\noutput:\n%s",
 				helperName, waitErr, combined,
@@ -278,18 +328,18 @@ func TestRunServeRuntimeWarningHelperProcess(t *testing.T) {
 	}
 	if os.Getenv("AGENTSVIEW_RUN_SERVE_RUNTIME_WARNING_FAIL") == "true" {
 		writeDaemonRuntimeWithAuthAndNoSync = func(
-			string, string, int, string, bool, bool, bool, ...int,
+			string, string, int, string, string, bool, bool, bool, *int, ...int,
 		) (string, error) {
 			return "", errors.New("forced runtime-record write failure")
 		}
 	} else {
 		original := writeDaemonRuntimeWithAuthAndNoSync
 		writeDaemonRuntimeWithAuthAndNoSync = func(
-			dataDir, host string, port int, version string, readOnly,
-			requireAuth, noSync bool, caddyPID ...int,
+			dataDir, host string, port int, version, browserURL string, readOnly,
+			requireAuth, noSync bool, explicitPort *int, caddyPID ...int,
 		) (string, error) {
 			path, err := original(
-				dataDir, host, port, version, readOnly, requireAuth, noSync,
+				dataDir, host, port, version, browserURL, readOnly, requireAuth, noSync, explicitPort,
 				caddyPID...,
 			)
 			fmt.Println("runtime record write reached")
@@ -298,22 +348,20 @@ func TestRunServeRuntimeWarningHelperProcess(t *testing.T) {
 	}
 	// This is only an orphan guard if the parent dies; normal completion is
 	// driven by the parent observing the expected output on stdout.
-	go func() {
-		time.Sleep(2 * time.Minute)
-		os.Exit(0)
-	}()
-	startupDelay, err := time.ParseDuration(
-		os.Getenv("AGENTSVIEW_RUN_SERVE_RUNTIME_WARNING_DELAY"),
-	)
+	time.AfterFunc(2*time.Minute, func() { os.Exit(0) })
+	fmt.Println("runtime helper waiting for startup")
+	var signal string
+	_, err := fmt.Fscanln(os.Stdin, &signal)
 	require.NoError(t, err)
-	time.Sleep(startupDelay)
-	runServe(config.Config{
+	require.Equal(t, "start", signal)
+	cfg := config.Config{
 		Host:    "127.0.0.1",
 		Port:    0,
 		DataDir: os.Getenv("AGENTSVIEW_DATA_DIR"),
 		DBPath:  filepath.Join(os.Getenv("AGENTSVIEW_DATA_DIR"), "sessions.db"),
 		NoSync:  true,
-	}, serveOptions{})
+	}
+	runServe(t.Context(), cfg, serveOptions{}, 0)
 }
 
 func runDuckDBRuntimeWarningHelper(t *testing.T) ([]byte, error) {
@@ -339,9 +387,10 @@ func runDuckDBRuntimeWarningHelper(t *testing.T) ([]byte, error) {
 // must seed a valid mirror first instead of relying on serve to create one.
 func buildEmptyDuckDBMirrorFixture(t *testing.T, path string) {
 	t.Helper()
-	conn, err := duckdbsync.Open(path)
+
+	conn, err := duckdbsync.Open(t.Context(), path)
 	require.NoError(t, err)
-	require.NoError(t, duckdbsync.EnsureSchema(context.Background(), conn))
+	require.NoError(t, duckdbsync.EnsureSchema(t.Context(), conn))
 	require.NoError(t, conn.Close())
 }
 
@@ -363,23 +412,23 @@ func TestRunPGRuntimeWarningHelperProcess(t *testing.T) {
 		return
 	}
 	writeDaemonRuntimeWithAuth = func(
-		string, string, int, string, bool, bool, ...int,
+		string, string, int, string, string, bool, bool, ...int,
 	) (string, error) {
 		return "", errors.New("forced runtime-record write failure")
 	}
 	database := dbtest.OpenTestDBAt(
 		t, filepath.Join(os.Getenv("AGENTSVIEW_DATA_DIR"), "pg.db"),
 	)
-	ctx, cancel := context.WithCancel(context.Background())
-	port, err := server.FindAvailablePort("127.0.0.1", 0)
+	ctx, cancel := context.WithCancel(t.Context())
+	port, err := server.FindAvailablePort(ctx, "127.0.0.1", 0)
 	require.NoError(t, err)
 	appCfg := config.Config{
 		Host:    "127.0.0.1",
 		Port:    port,
 		DataDir: os.Getenv("AGENTSVIEW_DATA_DIR"),
 	}
-	preparePGServe = func(config.Config, string) (pgServeStartup, error) {
-		return pgServeStartup{
+	prepareReplicaServe = func(storage.Replica, config.Config, string) (replicaServeStartup, error) {
+		return replicaServeStartup{
 			cfg: appCfg, ctx: ctx,
 			rtOpts: serveRuntimeOptions{
 				Mode: "pg-serve", RequestedPort: appCfg.Port,
@@ -393,11 +442,8 @@ func TestRunPGRuntimeWarningHelperProcess(t *testing.T) {
 	}
 	// This is only an orphan guard if the parent dies; normal completion is
 	// driven by the parent observing the warning on stdout.
-	go func() {
-		time.Sleep(2 * time.Minute)
-		os.Exit(0)
-	}()
-	runPGServe(appCfg, "")
+	time.AfterFunc(2*time.Minute, func() { os.Exit(0) })
+	runReplicaServe(pgReplica{}, appCfg, "")
 }
 
 func TestRunDuckDBRuntimeWarningHelperProcess(t *testing.T) {
@@ -405,16 +451,13 @@ func TestRunDuckDBRuntimeWarningHelperProcess(t *testing.T) {
 		return
 	}
 	writeDaemonRuntimeWithAuth = func(
-		string, string, int, string, bool, bool, ...int,
+		string, string, int, string, string, bool, bool, ...int,
 	) (string, error) {
 		return "", errors.New("forced runtime-record write failure")
 	}
 	// This is only an orphan guard if the parent dies; normal completion is
 	// driven by the parent observing the warning on stdout.
-	go func() {
-		time.Sleep(2 * time.Minute)
-		os.Exit(0)
-	}()
+	time.AfterFunc(2*time.Minute, func() { os.Exit(0) })
 	runDuckDBServe(config.Config{
 		Host:    "127.0.0.1",
 		Port:    0,
@@ -481,13 +524,15 @@ func TestMustLoadConfig(t *testing.T) {
 
 func TestPrepareServeRuntimeConfigPortZeroUsesAssignedPort(t *testing.T) {
 	cfg := config.Config{
-		Host: "127.0.0.1",
-		Port: 0,
+		DataDir:   t.TempDir(),
+		Host:      "127.0.0.1",
+		Port:      0,
+		PublicURL: "http://viewer.example:0",
 	}
 
 	var err error
 	out := captureStdout(t, func() {
-		cfg, err = prepareServeRuntimeConfig(
+		cfg, err = prepareServeRuntimeConfig(t.Context(),
 			cfg,
 			serveRuntimeOptions{
 				Mode:          "serve",
@@ -501,6 +546,15 @@ func TestPrepareServeRuntimeConfigPortZeroUsesAssignedPort(t *testing.T) {
 		"unexpected literal port 0 fallback message")
 	assert.Contains(t, out, "Using available port",
 		"missing ephemeral port message")
+	wantURL := fmt.Sprintf("http://viewer.example:%d", cfg.Port)
+	assert.Equal(t, wantURL, cfg.PublicURL)
+	require.True(t, writeReplicaServeRuntimeRecord("pg", &serveRuntime{
+		Cfg: cfg, PublicURL: browserURL(cfg),
+	}))
+	recordPath, err := runtimeStore(cfg.DataDir).Path(os.Getpid())
+	require.NoError(t, err)
+	rt := daemonRuntimeFromRecord(readRuntimeRecord(t, recordPath))
+	assert.Equal(t, wantURL, rt.BrowserURL)
 }
 
 func TestSetupLogFile(t *testing.T) {
@@ -735,8 +789,7 @@ func TestCollectWatchRootsPollsRecursiveSymlinkProviderRoot(t *testing.T) {
 	assert.False(t, roots[0].recursive)
 	assert.True(t, roots[0].exists)
 	assert.Equal(t, []watchScope{{agent: parser.AgentVSCopilot, syncDir: root}}, roots[0].scopes)
-	assert.Equal(
-		t,
+	assert.Equal(t,
 		filepath.Join(root, ".VS", "SampleApp", "copilot-chat", "thread", "sessions"),
 		roots[1].path,
 	)
@@ -754,27 +807,31 @@ type fakeEmitter struct {
 func (f *fakeEmitter) Emit(_ string) { f.count.Add(1) }
 
 func TestStartRemoteHostSync_EmitsAfterSuccess(t *testing.T) {
-	em := &fakeEmitter{}
-	syncFn := func() (int, error) { return 3, nil }
+	synctest.Test(t, func(t *testing.T) {
+		em := &fakeEmitter{}
+		syncFn := func() (int, error) { return 3, nil }
 
-	done := make(chan struct{})
-	exited := make(chan struct{})
-	interval := 10 * time.Millisecond
-	go func() {
-		runRemoteHostSyncLoop(context.Background(), "test-host", interval, syncFn, em, nil, done)
-		close(exited)
-	}()
+		done := make(chan struct{})
+		exited := make(chan struct{})
+		interval := 10 * time.Millisecond
+		go func() {
+			runRemoteHostSyncLoop(t.Context(), "test-host", interval, syncFn, em, nil, done)
+			close(exited)
+		}()
+		defer func() {
+			close(done)
+			synctest.Wait()
+			<-exited
+		}()
 
-	time.Sleep(3 * interval)
-	close(done)
-	<-exited
-
-	assert.Positive(t, em.count.Load(), "emitter should have been called at least once")
+		synctest.Sleep(3 * interval)
+		assert.Positive(t, em.count.Load(), "emitter should have been called at least once")
+	})
 }
 
 func TestRemoteHostSyncFuncSerializesWithEngineExclusiveLock(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
-	engine := agentsync.NewEngine(database, agentsync.EngineConfig{
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{},
 		Machine:   "local",
 	})
@@ -782,7 +839,7 @@ func TestRemoteHostSyncFuncSerializesWithEngineExclusiveLock(t *testing.T) {
 	remoteEntered := make(chan struct{})
 	releaseRemote := make(chan struct{})
 	syncFn := remoteHostSyncFunc(
-		context.Background(),
+		t.Context(),
 		config.Config{},
 		database,
 		engine,
@@ -852,14 +909,14 @@ func (r *scheduledLockOrderRunner) RunExclusive(work func() error) error {
 	return work()
 }
 
-type scheduledLockOrderCleanup struct {
+type scheduledLockOrderCleanupError struct {
 	runner  remoteSyncExclusiveRunner
 	retries int
 }
 
-func (c *scheduledLockOrderCleanup) Error() string { return "pending cleanup" }
+func (c *scheduledLockOrderCleanupError) Error() string { return "pending cleanup" }
 
-func (c *scheduledLockOrderCleanup) RetryCleanup() error {
+func (c *scheduledLockOrderCleanupError) RetryCleanup() error {
 	c.retries++
 	if c.retries == 1 {
 		return errors.New("retain pending cleanup")
@@ -872,7 +929,7 @@ func TestRemoteHostSyncFuncAcquiresHTTPCleanupBeforeEngine(t *testing.T) {
 	httpRemoteCleanupRegistry = new(remotesync.CleanupRegistry)
 	t.Cleanup(func() { httpRemoteCleanupRegistry = originalRegistry })
 	runner := &scheduledLockOrderRunner{}
-	owner := &scheduledLockOrderCleanup{runner: runner}
+	owner := &scheduledLockOrderCleanupError{runner: runner}
 	_, seedErr := httpRemoteCleanupRegistry.Run(
 		func() (remotesync.SyncStats, error) {
 			return remotesync.SyncStats{}, owner
@@ -890,7 +947,7 @@ func TestRemoteHostSyncFuncAcquiresHTTPCleanupBeforeEngine(t *testing.T) {
 	t.Cleanup(func() { runHTTPRemoteSync = originalHTTP })
 	database := dbtest.OpenTestDB(t)
 	syncFn := remoteHostSyncFunc(
-		context.Background(), config.Config{}, database, runner,
+		t.Context(), config.Config{}, database, runner,
 		config.RemoteHost{Host: "http-host", Transport: config.RemoteTransportHTTP},
 		func(
 			ctx context.Context, cfg config.Config, database *db.DB,
@@ -913,11 +970,11 @@ func TestRemoteHostSyncFuncAcquiresHTTPCleanupBeforeEngine(t *testing.T) {
 
 func TestRemoteHostSyncFuncUsesCallerContext(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
-	engine := agentsync.NewEngine(database, agentsync.EngineConfig{
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{},
 		Machine:   "local",
 	})
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	syncFn := remoteHostSyncFunc(
 		ctx,
@@ -940,7 +997,7 @@ func TestRemoteHostSyncFuncUsesCallerContext(t *testing.T) {
 
 func TestRemoteHostSyncFuncDispatchesHTTPTransport(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
-	engine := agentsync.NewEngine(database, agentsync.EngineConfig{
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{},
 		Machine:   "local",
 	})
@@ -956,7 +1013,7 @@ func TestRemoteHostSyncFuncDispatchesHTTPTransport(t *testing.T) {
 	})
 	defer restore()
 	syncFn := remoteHostSyncFunc(
-		context.Background(),
+		t.Context(),
 		config.Config{},
 		database,
 		engine,
@@ -984,28 +1041,28 @@ func TestRemoteHostSyncFuncDispatchesHTTPTransport(t *testing.T) {
 
 func TestRemoteHostSyncFuncForcesFullWhenDatabaseNeedsResync(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	database, err := db.Open(dbPath)
+	database, err := db.Open(t.Context(), dbPath)
 	require.NoError(t, err)
 	require.NoError(t, database.Close())
 
 	raw, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	_, err = raw.Exec("PRAGMA user_version = 0")
+	_, err = raw.ExecContext(t.Context(), "PRAGMA user_version = 0")
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
 
-	database, err = db.Open(dbPath)
+	database, err = db.Open(t.Context(), dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 	require.True(t, database.NeedsResync())
-	engine := agentsync.NewEngine(database, agentsync.EngineConfig{
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{},
 		Machine:   "local",
 	})
 
 	var gotFull bool
 	syncFn := remoteHostSyncFunc(
-		context.Background(),
+		t.Context(),
 		config.Config{},
 		database,
 		engine,
@@ -1073,7 +1130,7 @@ func TestStartRemoteHostSync_TracksRemoteWorkForIdleReaper(t *testing.T) {
 }
 
 func TestStartRemoteHostSync_ExitsOnContextCancel(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	exited := make(chan struct{})
 	syncCalled := make(chan struct{}, 1)
 	go func() {
@@ -1118,79 +1175,101 @@ func (e *scopedEmitter) Emit(scope string) {
 }
 
 func TestStartRemoteHostSync_EmitsSessionsScopeAfterSuccess(t *testing.T) {
-	em := &scopedEmitter{scopes: make(chan string, 1)}
-	syncFn := func() (int, error) { return 3, nil }
+	synctest.Test(t, func(t *testing.T) {
+		em := &scopedEmitter{scopes: make(chan string, 1)}
+		syncFn := func() (int, error) { return 3, nil }
 
-	done := make(chan struct{})
-	exited := make(chan struct{})
-	interval := 10 * time.Millisecond
-	go func() {
-		runRemoteHostSyncLoop(context.Background(), "test-host", interval, syncFn, em, nil, done)
-		close(exited)
-	}()
+		done := make(chan struct{})
+		exited := make(chan struct{})
+		interval := 10 * time.Millisecond
+		go func() {
+			runRemoteHostSyncLoop(t.Context(), "test-host", interval, syncFn, em, nil, done)
+			close(exited)
+		}()
+		defer func() {
+			close(done)
+			<-exited
+		}()
 
-	select {
-	case scope := <-em.scopes:
-		assert.Equal(t, "sessions", scope)
-	case <-time.After(3 * interval):
-		require.FailNow(t, "timed out waiting for remote sync event")
-	}
-	close(done)
-	<-exited
+		// Wait for the loop to start its ticker before advancing fake time.
+		synctest.Wait()
+		time.Sleep(interval)
+		synctest.Wait()
+
+		select {
+		case scope := <-em.scopes:
+			assert.Equal(t, "sessions", scope)
+		default:
+			require.FailNow(t, "remote sync did not emit after its first tick")
+		}
+	})
 }
 
 func TestStartRemoteHostSync_NoEmitOnZeroSynced(t *testing.T) {
-	em := &fakeEmitter{}
-	syncFn := func() (int, error) { return 0, nil }
+	synctest.Test(t, func(t *testing.T) {
+		em := &fakeEmitter{}
+		syncFn := func() (int, error) { return 0, nil }
 
-	done := make(chan struct{})
-	exited := make(chan struct{})
-	interval := 10 * time.Millisecond
-	go func() {
-		runRemoteHostSyncLoop(context.Background(), "test-host", interval, syncFn, em, nil, done)
-		close(exited)
-	}()
+		done := make(chan struct{})
+		exited := make(chan struct{})
+		interval := 10 * time.Millisecond
+		go func() {
+			runRemoteHostSyncLoop(t.Context(), "test-host", interval, syncFn, em, nil, done)
+			close(exited)
+		}()
+		defer func() {
+			close(done)
+			synctest.Wait()
+			<-exited
+		}()
 
-	time.Sleep(3 * interval)
-	close(done)
-	<-exited
-
-	assert.Zero(t, em.count.Load(), "emitter should not fire when no sessions synced")
+		synctest.Sleep(3 * interval)
+		assert.Zero(t, em.count.Load(), "emitter should not fire when no sessions synced")
+	})
 }
 
 func TestStartRemoteHostSync_NoEmitOnError(t *testing.T) {
-	em := &fakeEmitter{}
-	syncFn := func() (int, error) { return 0, errors.New("ssh failure") }
+	synctest.Test(t, func(t *testing.T) {
+		em := &fakeEmitter{}
+		syncFn := func() (int, error) { return 0, errors.New("ssh failure") }
 
-	done := make(chan struct{})
-	exited := make(chan struct{})
-	interval := 10 * time.Millisecond
-	go func() {
-		runRemoteHostSyncLoop(context.Background(), "test-host", interval, syncFn, em, nil, done)
-		close(exited)
-	}()
+		done := make(chan struct{})
+		exited := make(chan struct{})
+		interval := 10 * time.Millisecond
+		go func() {
+			runRemoteHostSyncLoop(t.Context(), "test-host", interval, syncFn, em, nil, done)
+			close(exited)
+		}()
+		defer func() {
+			close(done)
+			synctest.Wait()
+			<-exited
+		}()
 
-	time.Sleep(3 * interval)
-	close(done)
-	<-exited
-
-	assert.Zero(t, em.count.Load(), "emitter should not fire when sync fails")
+		synctest.Sleep(3 * interval)
+		assert.Zero(t, em.count.Load(), "emitter should not fire when sync fails")
+	})
 }
 
 func TestStartRemoteHostSync_NilEmitterSafe(t *testing.T) {
-	syncFn := func() (int, error) { return 1, nil }
+	synctest.Test(t, func(t *testing.T) {
+		syncFn := func() (int, error) { return 1, nil }
 
-	done := make(chan struct{})
-	exited := make(chan struct{})
-	interval := 10 * time.Millisecond
-	go func() {
-		runRemoteHostSyncLoop(context.Background(), "test-host", interval, syncFn, nil, nil, done)
-		close(exited)
-	}()
+		done := make(chan struct{})
+		exited := make(chan struct{})
+		interval := 10 * time.Millisecond
+		go func() {
+			runRemoteHostSyncLoop(t.Context(), "test-host", interval, syncFn, nil, nil, done)
+			close(exited)
+		}()
+		defer func() {
+			close(done)
+			synctest.Wait()
+			<-exited
+		}()
 
-	time.Sleep(2 * interval)
-	close(done)
-	<-exited
+		synctest.Sleep(2 * interval)
+	})
 }
 
 func TestCollectWatchRootsHermesSessionsWatchesStateDBParent(t *testing.T) {
@@ -1389,14 +1468,11 @@ func TestPathCoveredByAnyWatchRootCreationDoesNotTreatShallowAncestorAsRecursive
 	shallowRoots := []watchRoot{{path: root, recursive: false, exists: true}}
 	recursiveRoots := []watchRoot{{path: root, recursive: true, exists: true}}
 
-	assert.True(t,
-		pathCoveredByAnyWatchRootCreation(filepath.Join(root, "sessions"), shallowRoots),
+	assert.True(t, pathCoveredByAnyWatchRootCreation(filepath.Join(root, "sessions"), shallowRoots),
 		"shallow roots can observe immediate child creation")
-	assert.False(t,
-		pathCoveredByAnyWatchRootCreation(filepath.Join(root, "nested", "sessions"), shallowRoots),
+	assert.False(t, pathCoveredByAnyWatchRootCreation(filepath.Join(root, "nested", "sessions"), shallowRoots),
 		"shallow ancestors must not be treated like recursive watches")
-	assert.True(t,
-		pathCoveredByAnyWatchRootCreation(filepath.Join(root, "nested", "sessions"), recursiveRoots),
+	assert.True(t, pathCoveredByAnyWatchRootCreation(filepath.Join(root, "nested", "sessions"), recursiveRoots),
 		"recursive roots cover nested missing roots")
 }
 
@@ -1450,7 +1526,7 @@ func TestStartupReconciliationHandlerCheckpointsBeforeOpeningDispatch(t *testing
 func TestInitialSyncWatcherStartupOwnerReconciles(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
 	reconciled := make(chan agentsync.SyncStats, 1)
-	engine := agentsync.NewEngine(database, agentsync.EngineConfig{
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{
 		OnStartupReconciled: func(stats agentsync.SyncStats, err error) {
 			require.NoError(t, err)
 			reconciled <- stats
@@ -1480,7 +1556,7 @@ func TestInitialResyncWatcherStartupOwnerReportsFirstIncompleteAttempt(t *testin
 		err   error
 	}
 	reconciled := make(chan startupResult, 1)
-	engine := agentsync.NewEngine(database, agentsync.EngineConfig{
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{
 		OnStartupReconciled: func(stats agentsync.SyncStats, err error) {
 			reconciled <- startupResult{stats: stats, err: err}
 		},
@@ -1495,14 +1571,14 @@ func TestInitialResyncWatcherStartupOwnerReportsFirstIncompleteAttempt(t *testin
 	case got := <-reconciled:
 		assert.True(t, got.stats.Aborted,
 			"dispatch reports the first incomplete attempt without waiting for fallback")
-		assert.ErrorContains(t, got.err, "startup discovery incomplete")
+		require.ErrorContains(t, got.err, "startup discovery incomplete")
 	case <-time.After(time.Second):
 		require.FailNow(t, "incomplete startup attempt was not reported")
 	}
 }
 
 func TestStartupReconciliationHandlerKeepsDispatchClosedAfterCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	checkpointed := false
 	opened := false
@@ -2195,7 +2271,7 @@ type fakeSignalsBackfillMarker struct {
 	err   error
 }
 
-func (f *fakeSignalsBackfillMarker) MarkSignalsBackfillDone() error {
+func (f *fakeSignalsBackfillMarker) MarkSignalsBackfillDone(ctx context.Context) error {
 	f.calls++
 	return f.err
 }
@@ -2203,7 +2279,7 @@ func (f *fakeSignalsBackfillMarker) MarkSignalsBackfillDone() error {
 func TestFinishInitialResyncMarksCoveredSignals(t *testing.T) {
 	marker := &fakeSignalsBackfillMarker{}
 
-	finishInitialResync(marker, true)
+	finishInitialResync(t.Context(), marker, true)
 
 	assert.Equal(t, 1, marker.calls)
 }
@@ -2211,7 +2287,7 @@ func TestFinishInitialResyncMarksCoveredSignals(t *testing.T) {
 func TestFinishInitialResyncSkipsMarkerWhenSignalsNeedBackfill(t *testing.T) {
 	marker := &fakeSignalsBackfillMarker{}
 
-	finishInitialResync(marker, false)
+	finishInitialResync(t.Context(), marker, false)
 
 	assert.Equal(t, 0, marker.calls)
 }
@@ -2410,6 +2486,31 @@ func TestPrintSyncSummaryAnomalySection(t *testing.T) {
 	})
 }
 
+func TestOpenReadOnlyDBRejectsStaleArchive(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.db")
+	writer := dbtest.OpenTestDBAt(t, path)
+	require.NoError(t, writer.Close())
+	raw, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = raw.ExecContext(t.Context(), fmt.Sprintf("PRAGMA user_version = %d", db.CurrentDataVersion()-1))
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+
+	// Recovery must still be able to read the archive to build its replacement.
+	recovery, err := db.OpenReadOnly(t.Context(), path)
+	require.NoError(t, err)
+	assert.True(t, recovery.NeedsResync())
+	require.NoError(t, recovery.Close())
+
+	reader, err := openReadOnlyDB(t.Context(), config.Config{DBPath: path})
+	if reader != nil {
+		t.Cleanup(func() { reader.Close() })
+	}
+	require.Error(t, err)
+	assert.Nil(t, reader)
+	assert.Contains(t, err.Error(), "agentsview daemon restart")
+}
+
 func TestSchemaUpgradeHint(t *testing.T) {
 	t.Run("guides outdated-schema errors to a daemon restart", func(t *testing.T) {
 		base := &db.SchemaUpgradeRequiredError{
@@ -2419,7 +2520,7 @@ func TestSchemaUpgradeHint(t *testing.T) {
 		got := schemaUpgradeHint(base)
 		// The original error stays wrappable so logs keep the detail, and the
 		// hint names the command that actually runs the pending migration.
-		assert.ErrorIs(t, got, base)
+		require.ErrorIs(t, got, base)
 		assert.Contains(t, got.Error(), "agentsview daemon restart")
 	})
 
@@ -2484,7 +2585,7 @@ func (r *watchSyncRecorder) SyncPathsContext(ctx context.Context, paths []string
 	return r.pathErr
 }
 
-func (r *watchSyncRecorder) HasActiveSessionSourceBelow(agent, path string) (bool, error) {
+func (r *watchSyncRecorder) HasActiveSessionSourceBelow(ctx context.Context, agent, path string) (bool, error) {
 	r.lookupCalls = append(r.lookupCalls, [2]string{agent, path})
 	return r.lookupResults[agent+"\x00"+path], nil
 }
@@ -2521,7 +2622,7 @@ func (r *watchSyncRecorder) ReconcileWatchRootsAfterLostEvents(
 type watchSyncContextKey struct{}
 
 func TestSyncWatchBatch(t *testing.T) {
-	ctx := context.WithValue(context.Background(), watchSyncContextKey{}, "serve")
+	ctx := context.WithValue(t.Context(), watchSyncContextKey{}, "serve")
 	tempDir := t.TempDir()
 	filePath := filepath.Join(tempDir, "session.jsonl")
 	require.NoError(t, os.WriteFile(filePath, []byte("session"), 0o600))
@@ -2759,7 +2860,7 @@ func TestSyncWatchBatch(t *testing.T) {
 			ReconcileRoots: []string{"/sessions"},
 		}, staticFullRoots(probedRoot))
 
-		assert.ErrorContains(t, err, reconcileErr.Error())
+		require.ErrorContains(t, err, reconcileErr.Error())
 		assert.Equal(t, []watchReconcileCall{{roots: []string{"/sessions"}}}, recorder.reconcileCalls)
 	})
 
@@ -2772,7 +2873,7 @@ func TestSyncWatchBatch(t *testing.T) {
 			FullSync: true, LostEvents: true,
 		}, staticFullRoots(probedRoot))
 
-		assert.ErrorContains(t, err, reconcileErr.Error())
+		require.ErrorContains(t, err, reconcileErr.Error())
 		assert.Equal(t, agentsync.WatchBatch{
 			ReconcileRoots: []string{failedRoot},
 			LostEvents:     true,
@@ -2787,7 +2888,7 @@ func TestSyncWatchBatch(t *testing.T) {
 			FullSync: true, LostEvents: true,
 		}, staticFullRoots(probedRoot))
 
-		assert.ErrorContains(t, err, reconcileErr.Error())
+		require.ErrorContains(t, err, reconcileErr.Error())
 		assert.Equal(t, agentsync.WatchBatch{FullSync: true, LostEvents: true},
 			requireWatchRetryBatch(t, err),
 			"the retry must stay full so the recovery re-probes availability")
@@ -2816,7 +2917,7 @@ func TestSyncWatchBatch(t *testing.T) {
 			Paths: []string{"/sessions/a.jsonl", "/sessions/b.jsonl"},
 		}, staticFullRoots(probedRoot))
 
-		assert.ErrorIs(t, err, pathErr)
+		require.ErrorIs(t, err, pathErr)
 		assert.Equal(t, agentsync.WatchBatch{
 			Paths: []string{"/sessions/a.jsonl", "/sessions/b.jsonl"},
 		}, requireWatchRetryBatch(t, err))
@@ -2832,7 +2933,7 @@ func TestSyncWatchBatch(t *testing.T) {
 			ReconcileRoots: []string{"/sessions", "/sessions"},
 		}, staticFullRoots(probedRoot))
 
-		assert.ErrorIs(t, err, pathErr)
+		require.ErrorIs(t, err, pathErr)
 		assert.Equal(t, agentsync.WatchBatch{
 			Paths:          []string{"/sessions/a.jsonl"},
 			ReconcileRoots: []string{"/sessions"},
@@ -2851,7 +2952,7 @@ func TestSyncWatchBatch(t *testing.T) {
 			}},
 		}, staticFullRoots(probedRoot))
 
-		assert.ErrorIs(t, err, pathErr)
+		require.ErrorIs(t, err, pathErr)
 		assert.Equal(t, agentsync.WatchBatch{FullSync: true}, requireWatchRetryBatch(t, err))
 		assert.Empty(t, recorder.reconcileCalls)
 	})
@@ -2907,7 +3008,7 @@ func TestGapReconciliationRetryBatch(t *testing.T) {
 }
 
 func TestSyncWatchBatchReportsClassifiedReconciliationRetryScope(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	tempDir := t.TempDir()
 	filePath := filepath.Join(tempDir, "session.jsonl")
 	require.NoError(t, os.WriteFile(filePath, []byte("session"), 0o600))
@@ -2929,7 +3030,7 @@ func TestSyncWatchBatchReportsClassifiedReconciliationRetryScope(t *testing.T) {
 			ReconcileRoots: []string{root, root},
 		}, staticFullRoots(probedRoot))
 
-		assert.ErrorIs(t, err, reconcileErr)
+		require.ErrorIs(t, err, reconcileErr)
 		assert.Equal(t, agentsync.WatchBatch{
 			ReconcileRoots: []string{root},
 		}, requireWatchRetryBatch(t, err))
@@ -2948,7 +3049,7 @@ func TestSyncWatchBatchReportsClassifiedReconciliationRetryScope(t *testing.T) {
 			ReconcileRoots: []string{root, root},
 		}, staticFullRoots(probedRoot))
 
-		assert.ErrorIs(t, err, reconcileErr)
+		require.ErrorIs(t, err, reconcileErr)
 		assert.Equal(t, agentsync.WatchBatch{
 			ReconcileRoots: []string{root},
 		}, requireWatchRetryBatch(t, err))
@@ -2964,7 +3065,7 @@ func TestSyncWatchBatchReportsClassifiedReconciliationRetryScope(t *testing.T) {
 			ItemType: agentsync.ItemIsDir,
 		}}}, staticFullRoots(probedRoot))
 
-		assert.ErrorIs(t, err, reconcileErr)
+		require.ErrorIs(t, err, reconcileErr)
 		assert.Equal(t, agentsync.WatchBatch{FullSync: true}, requireWatchRetryBatch(t, err))
 		assert.Empty(t, recorder.pathCalls)
 		assert.Empty(t, recorder.lookupCalls)
@@ -2983,7 +3084,7 @@ func TestSyncWatchBatchReportsClassifiedReconciliationRetryScope(t *testing.T) {
 			ItemType: agentsync.ItemIsUnknown,
 		}}}, staticFullRoots(probedRoot))
 
-		assert.ErrorIs(t, err, reconcileErr)
+		require.ErrorIs(t, err, reconcileErr)
 		assert.Equal(t, agentsync.WatchBatch{FullSync: true}, requireWatchRetryBatch(t, err))
 		assert.Empty(t, recorder.pathCalls)
 		assert.Equal(t, [][2]string{{agent, missingPath}}, recorder.lookupCalls)
@@ -3213,18 +3314,18 @@ func TestSyncWatchBatchFullRecoveryDefersBrokenSymlinkRoot(t *testing.T) {
 	))
 
 	cfg := config.Config{
-		DataDir:          dataDir,
-		DBPath:           filepath.Join(dataDir, "sessions.db"),
-		LocalMachineName: "local",
+		DataDir:        dataDir,
+		DBPath:         filepath.Join(dataDir, "sessions.db"),
+		InstallationID: "local",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {claudeRoot},
 			parser.AgentCodex:  {codexRoot},
 		},
 	}
 	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
-	engine := agentsync.NewEngine(database, agentsync.EngineConfig{
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{
 		AgentDirs: cfg.AgentDirs,
-		Machine:   cfg.LocalMachineName,
+		Machine:   cfg.InstallationID,
 	})
 	t.Cleanup(engine.Close)
 
@@ -3312,18 +3413,18 @@ func TestSyncWatchBatchFullRecoveryDefersUnavailableRoots(t *testing.T) {
 	))
 
 	cfg := config.Config{
-		DataDir:          dataDir,
-		DBPath:           filepath.Join(dataDir, "sessions.db"),
-		LocalMachineName: "local",
+		DataDir:        dataDir,
+		DBPath:         filepath.Join(dataDir, "sessions.db"),
+		InstallationID: "local",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {claudeRoot},
 			parser.AgentCodex:  {codexRoot},
 		},
 	}
 	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
-	engine := agentsync.NewEngine(database, agentsync.EngineConfig{
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{
 		AgentDirs: cfg.AgentDirs,
-		Machine:   cfg.LocalMachineName,
+		Machine:   cfg.InstallationID,
 	})
 	t.Cleanup(engine.Close)
 
@@ -3398,17 +3499,17 @@ func TestSyncWatchBatchFullRecoveryDefersOverlappingUnavailableRoot(t *testing.T
 	))
 
 	cfg := config.Config{
-		DataDir:          dataDir,
-		DBPath:           filepath.Join(dataDir, "sessions.db"),
-		LocalMachineName: "local",
+		DataDir:        dataDir,
+		DBPath:         filepath.Join(dataDir, "sessions.db"),
+		InstallationID: "local",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {baseRoot, nestedRoot},
 		},
 	}
 	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
-	engine := agentsync.NewEngine(database, agentsync.EngineConfig{
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{
 		AgentDirs: cfg.AgentDirs,
-		Machine:   cfg.LocalMachineName,
+		Machine:   cfg.InstallationID,
 	})
 	t.Cleanup(engine.Close)
 
@@ -3471,17 +3572,17 @@ func TestSyncWatchBatchDirectoryRenameDefersUnavailableProviderRoots(t *testing.
 	writeCodexSession(rootB, uuidB)
 
 	cfg := config.Config{
-		DataDir:          dataDir,
-		DBPath:           filepath.Join(dataDir, "sessions.db"),
-		LocalMachineName: "local",
+		DataDir:        dataDir,
+		DBPath:         filepath.Join(dataDir, "sessions.db"),
+		InstallationID: "local",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {rootA, rootB},
 		},
 	}
 	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
-	engine := agentsync.NewEngine(database, agentsync.EngineConfig{
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{
 		AgentDirs: cfg.AgentDirs,
-		Machine:   cfg.LocalMachineName,
+		Machine:   cfg.InstallationID,
 	})
 	t.Cleanup(engine.Close)
 
@@ -3593,4 +3694,27 @@ func TestOpenCodeAbsentRootPollsTheConfiguredDir(t *testing.T) {
 	scopes := availableUnwatchedPollScopes(local)
 	assert.Equal(t, []string{root}, scopes[parser.AgentOpenCode],
 		"the dir must become pollable as soon as it appears")
+}
+
+func TestCollectWatchRootsWatchesAliasHomeIndexes(t *testing.T) {
+	base := t.TempDir()
+	primary := filepath.Join(base, "codex")
+	alias := filepath.Join(base, "codex-alt")
+	sessionsDir := filepath.Join(primary, "sessions")
+	require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
+	require.NoError(t, os.MkdirAll(alias, 0o755))
+	cfg := config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodex: {sessionsDir},
+		},
+		ProviderMetadata: map[parser.AgentType]map[string][]string{
+			parser.AgentCodex: {sessionsDir: {primary, alias}},
+		},
+	}
+
+	roots, _, _, _ := collectWatchRoots(cfg)
+
+	aliasRoot, ok := findCollectedWatchRoot(roots, alias)
+	require.True(t, ok, "the alias home must be watched for session_index.jsonl")
+	assert.False(t, aliasRoot.recursive)
 }

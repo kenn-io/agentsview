@@ -31,7 +31,7 @@ func TestCleanupRegistryRetriesBeforeReturningAndBeforeLaterWork(t *testing.T) {
 		return SyncStats{}, owner
 	})
 	require.Same(t, owner, err)
-	assert.ErrorIs(t, err, operationErr)
+	require.ErrorIs(t, err, operationErr)
 	assert.Equal(t, 1, owner.retryCount())
 	assert.Equal(t, 1, runs)
 
@@ -43,8 +43,8 @@ func TestCleanupRegistryRetriesBeforeReturningAndBeforeLaterWork(t *testing.T) {
 	require.ErrorAs(t, err, &pending)
 	assert.NotSame(t, owner, err)
 	assert.Same(t, owner, pending.Err)
-	assert.ErrorIs(t, err, owner)
-	assert.ErrorIs(t, err, operationErr)
+	require.ErrorIs(t, err, owner)
+	require.ErrorIs(t, err, operationErr)
 	assert.Equal(t, 2, owner.retryCount())
 	assert.Equal(t, 1, runs, "retained cleanup blocks new work")
 
@@ -53,7 +53,7 @@ func TestCleanupRegistryRetriesBeforeReturningAndBeforeLaterWork(t *testing.T) {
 		return SyncStats{}, nil
 	})
 	require.ErrorAs(t, err, &pending)
-	assert.ErrorIs(t, err, owner)
+	require.ErrorIs(t, err, owner)
 	assert.Equal(t, 3, owner.retryCount())
 	assert.Equal(t, 1, runs, "later calls remain explicitly blocked")
 
@@ -101,8 +101,8 @@ func TestCleanupRegistryRetriesEveryDistinctJoinedOwner(t *testing.T) {
 	})
 	var pending *PendingCleanupError
 	require.ErrorAs(t, err, &pending)
-	assert.ErrorIs(t, err, first.cause)
-	assert.ErrorIs(t, err, second.cause)
+	require.ErrorIs(t, err, first.cause)
+	require.ErrorIs(t, err, second.cause)
 	assert.Equal(t, 2, first.retryCount())
 	assert.Equal(t, 2, second.retryCount())
 	assert.Equal(t, 1, runs,

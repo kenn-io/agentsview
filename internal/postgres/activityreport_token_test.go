@@ -13,7 +13,7 @@ import (
 func TestActivityReportTokenRequiresConfiguredSecret(t *testing.T) {
 	store := &Store{}
 	_, err := store.EncodeActivityReportToken([]byte(`{"query":"month"}`))
-	assert.ErrorIs(t, err, db.ErrInvalidActivityReportToken)
+	require.ErrorIs(t, err, db.ErrInvalidActivityReportToken)
 
 	store.SetCursorSecret(bytes.Repeat([]byte{1}, 32))
 	token, err := store.EncodeActivityReportToken([]byte(`{"query":"month"}`))

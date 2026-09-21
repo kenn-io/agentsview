@@ -10,6 +10,7 @@
 node_modules/
 frontend/dist/
 frontend/src/lib/paraglide/
+frontend/.paraglide/
 frontend/test-results/
 test-results/
 frontend/playwright-report/
@@ -86,3 +87,4 @@ graphify-out/
 .kata.local.toml
 # roborev snapshots
 /.roborev/
+.env*

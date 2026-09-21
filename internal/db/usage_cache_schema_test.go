@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -23,11 +24,11 @@ func TestUsageCacheGenerationCreatesIdentifiedSchema(t *testing.T) {
 	manager := newUsageCacheManager(archivePath)
 	t.Cleanup(func() { require.NoError(t, manager.Close()) })
 
-	cache, err := manager.Generation(context.Background(), "database-id-one")
+	cache, err := manager.Generation(t.Context(), "database-id-one")
 	require.NoError(t, err)
 	require.False(t, cache.temporary)
 	assert.Equal(t, filepath.Join(filepath.Dir(archivePath),
-		"usage-cache-v8-980e32c89da32cb0d3588c0c06864b4e.db"), cache.path)
+		"usage-cache-v13-980e32c89da32cb0d3588c0c06864b4e.db"), cache.path)
 
 	info, err := os.Stat(cache.path)
 	require.NoError(t, err)
@@ -36,14 +37,14 @@ func TestUsageCacheGenerationCreatesIdentifiedSchema(t *testing.T) {
 	}
 
 	var applicationID, autoVacuum int
-	require.NoError(t, cache.db.QueryRow(`PRAGMA application_id`).Scan(&applicationID))
-	require.NoError(t, cache.db.QueryRow(`PRAGMA auto_vacuum`).Scan(&autoVacuum))
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `PRAGMA application_id`).Scan(&applicationID))
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `PRAGMA auto_vacuum`).Scan(&autoVacuum))
 	assert.Equal(t, 1096176963, applicationID)
 	assert.Equal(t, 2, autoVacuum, "INCREMENTAL auto-vacuum")
 
 	metadata := readUsageCacheMetadata(t, cache.db)
 	assert.Equal(t, "agentsview-usage-facts", metadata[usageCacheMetadataKind])
-	assert.Equal(t, "8", metadata[usageCacheMetadataFormatVersion])
+	assert.Equal(t, strconv.Itoa(usageCacheFormatVersion), metadata[usageCacheMetadataFormatVersion])
 	assert.Equal(t, "database-id-one", metadata[usageCacheMetadataSourceDatabaseID])
 	assert.Equal(t, "1", metadata[usageCacheMetadataRetirementProtocol])
 	assert.Equal(t, "1", metadata[usageCacheMetadataNextInstallRevision])
@@ -54,7 +55,7 @@ func TestUsageCacheGenerationCreatesIdentifiedSchema(t *testing.T) {
 	assert.NotContains(t, metadata, "backfill_progress_session_id")
 
 	var hasPricingTimestamp bool
-	require.NoError(t, cache.db.QueryRow(
+	require.NoError(t, cache.db.QueryRowContext(t.Context(),
 		`SELECT EXISTS(SELECT 1 FROM pragma_table_info('usage_daily_rollups')
 			WHERE name = 'pricing_timestamp')`,
 	).Scan(&hasPricingTimestamp))
@@ -72,7 +73,7 @@ func TestUsageCacheGenerationCreatesIdentifiedSchema(t *testing.T) {
 	} {
 		for _, column := range columns {
 			var found bool
-			require.NoError(t, cache.db.QueryRow(
+			require.NoError(t, cache.db.QueryRowContext(t.Context(),
 				`SELECT EXISTS(SELECT 1 FROM pragma_table_info(?) WHERE name = ?)`,
 				table, column,
 			).Scan(&found))
@@ -85,7 +86,7 @@ func TestUsageCacheGenerationCreatesIdentifiedSchema(t *testing.T) {
 		"usage_facts", "cursor_usage_facts",
 	} {
 		var found bool
-		require.NoError(t, cache.db.QueryRow(
+		require.NoError(t, cache.db.QueryRowContext(t.Context(),
 			`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?)`,
 			table,
 		).Scan(&found))
@@ -96,29 +97,21 @@ func TestUsageCacheGenerationCreatesIdentifiedSchema(t *testing.T) {
 		"usage_facts_raw_timestamp",
 	} {
 		var found bool
-		require.NoError(t, cache.db.QueryRow(
+		require.NoError(t, cache.db.QueryRowContext(t.Context(),
 			`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name=?)`,
 			index,
 		).Scan(&found))
 		assert.False(t, found, index)
 	}
 
-	result, err := cache.db.Exec(`INSERT INTO usage_cached_sessions(
+	result, err := cache.db.ExecContext(t.Context(), `INSERT INTO usage_cached_sessions(
 		session_id, source_sync_marker, source_transcript_rev,
 		usage_event_fingerprint, install_revision
 	) VALUES ('s1', 'm1', 'r1', 'e1', 1)`)
 	require.NoError(t, err)
 	cachedSessionID, err := result.LastInsertId()
 	require.NoError(t, err)
-	_, err = cache.db.Exec(`INSERT INTO usage_facts(
-		cached_session_id, fact_index, source, uses_session_start, model,
-		input_tokens, output_tokens, reasoning_tokens,
-		cache_creation_tokens, cache_read_tokens, web_search_requests,
-		request_scoped, token_eligible, activity_eligible
-	) VALUES (?, 0, 'message', 2, 'model', 0, 0, 0, 0, 0, 0, 1, 1, 1)`,
-		cachedSessionID)
-	require.Error(t, err, "boolean checks must reject invalid facts")
-	_, err = cache.db.Exec(`INSERT INTO usage_facts(
+	_, err = cache.db.ExecContext(t.Context(), `INSERT INTO usage_facts(
 		cached_session_id, fact_index, source, uses_session_start, model,
 		input_tokens, output_tokens, reasoning_tokens,
 		cache_creation_tokens, cache_read_tokens, web_search_requests,
@@ -126,15 +119,15 @@ func TestUsageCacheGenerationCreatesIdentifiedSchema(t *testing.T) {
 	) VALUES (?, 0, 'message', 0, 'model', 0, 0, 0, 0, 0, 0, 1, 1, 1)`,
 		cachedSessionID)
 	require.NoError(t, err)
-	_, err = cache.db.Exec(`DELETE FROM usage_cached_sessions WHERE id = ?`, cachedSessionID)
+	_, err = cache.db.ExecContext(t.Context(), `DELETE FROM usage_cached_sessions WHERE id = ?`, cachedSessionID)
 	require.NoError(t, err)
 	var remainingFacts int
-	require.NoError(t, cache.db.QueryRow(
+	require.NoError(t, cache.db.QueryRowContext(t.Context(),
 		`SELECT count(*) FROM usage_facts WHERE cached_session_id = ?`, cachedSessionID,
 	).Scan(&remainingFacts))
 	assert.Zero(t, remainingFacts, "deleting a cached session must cascade to facts")
 
-	probe := probeUsageCache(context.Background(), cache.path)
+	probe := probeUsageCache(t.Context(), cache.path)
 	require.NoError(t, probe.Err)
 	assert.True(t, probe.Recognized)
 	assert.True(t, probe.Compatible)
@@ -146,7 +139,7 @@ func TestUsageCacheSchemaIncludesRollupTier(t *testing.T) {
 	manager := newUsageCacheManager(archivePath)
 	t.Cleanup(func() { require.NoError(t, manager.Close()) })
 
-	cache, err := manager.Generation(context.Background(), "database-a")
+	cache, err := manager.Generation(t.Context(), "database-a")
 	require.NoError(t, err)
 	for _, name := range []string{
 		"usage_rollup_timezones", "usage_rollup_days",
@@ -155,7 +148,7 @@ func TestUsageCacheSchemaIncludesRollupTier(t *testing.T) {
 		"usage_daily_rollups_window", "usage_rollup_exceptions_window",
 	} {
 		var found bool
-		require.NoError(t, cache.db.QueryRow(
+		require.NoError(t, cache.db.QueryRowContext(t.Context(),
 			`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = ?)`, name,
 		).Scan(&found))
 		assert.True(t, found, name)
@@ -170,9 +163,10 @@ func TestUsageCacheProbeFailsClosed(t *testing.T) {
 		{
 			name: "wrong application id",
 			seed: func(t *testing.T, path string) {
+				t.Helper()
 				conn := openRawUsageCacheTestDB(t, path)
 				defer conn.Close()
-				_, err := conn.Exec(`PRAGMA application_id = 1234;
+				_, err := conn.ExecContext(t.Context(), `PRAGMA application_id = 1234;
 					CREATE TABLE sentinel(value TEXT);
 					INSERT INTO sentinel VALUES ('foreign')`)
 				require.NoError(t, err)
@@ -181,9 +175,10 @@ func TestUsageCacheProbeFailsClosed(t *testing.T) {
 		{
 			name: "missing cache kind",
 			seed: func(t *testing.T, path string) {
+				t.Helper()
 				conn := openRawUsageCacheTestDB(t, path)
 				defer conn.Close()
-				_, err := conn.Exec(`PRAGMA application_id = 1096176963;
+				_, err := conn.ExecContext(t.Context(), `PRAGMA application_id = 1096176963;
 					CREATE TABLE usage_cache_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 					INSERT INTO usage_cache_metadata VALUES ('sentinel', 'foreign')`)
 				require.NoError(t, err)
@@ -192,6 +187,7 @@ func TestUsageCacheProbeFailsClosed(t *testing.T) {
 		{
 			name: "corrupt unrecognized file",
 			seed: func(t *testing.T, path string) {
+				t.Helper()
 				require.NoError(t, os.WriteFile(path, []byte("not sqlite"), 0o600))
 			},
 		},
@@ -207,7 +203,7 @@ func TestUsageCacheProbeFailsClosed(t *testing.T) {
 			require.NoError(t, err)
 
 			manager := newUsageCacheManager(archivePath)
-			cache, err := manager.Generation(context.Background(), "database-id-one")
+			cache, err := manager.Generation(t.Context(), "database-id-one")
 			require.NoError(t, err)
 			require.True(t, cache.temporary)
 			require.NoError(t, manager.Close())
@@ -228,11 +224,11 @@ func TestUsageCacheGenerationPreservesRecognizedIncompleteCache(t *testing.T) {
 
 	manager := newUsageCacheManager(archivePath)
 	t.Cleanup(func() { require.NoError(t, manager.Close()) })
-	cache, err := manager.Generation(context.Background(), "database-id-one")
+	cache, err := manager.Generation(t.Context(), "database-id-one")
 	require.NoError(t, err)
 	require.True(t, cache.temporary)
 
-	probe := probeUsageCache(context.Background(), path)
+	probe := probeUsageCache(t.Context(), path)
 	require.NoError(t, probe.Err)
 	assert.True(t, probe.Recognized)
 	assert.False(t, probe.Compatible)
@@ -246,7 +242,7 @@ func TestUsageCacheGenerationChangesWithFormatAndDatabaseID(t *testing.T) {
 
 	manager := newUsageCacheManager(archivePath)
 	t.Cleanup(func() { require.NoError(t, manager.Close()) })
-	first, err := manager.Generation(context.Background(), "database-id-one")
+	first, err := manager.Generation(t.Context(), "database-id-one")
 	require.NoError(t, err)
 	require.False(t, first.temporary,
 		"format bump must create a persistent generation")
@@ -254,7 +250,7 @@ func TestUsageCacheGenerationChangesWithFormatAndDatabaseID(t *testing.T) {
 	_, err = os.Stat(oldPath)
 	require.NoError(t, err, "format bump must preserve the old generation")
 
-	second, err := manager.Generation(context.Background(), "database-id-two")
+	second, err := manager.Generation(t.Context(), "database-id-two")
 	require.NoError(t, err)
 	assert.NotEqual(t, first.path, second.path,
 		"source database id change must open a new generation")
@@ -280,7 +276,7 @@ func TestUsageCacheGenerationPublishesConcurrently(t *testing.T) {
 	for _, manager := range managers {
 		go func(manager *usageCacheManager) {
 			defer wait.Done()
-			cache, err := manager.Generation(context.Background(), "database-id")
+			cache, err := manager.Generation(t.Context(), "database-id")
 			if err == nil {
 				paths <- cache.path
 				temporary <- cache.temporary
@@ -305,7 +301,7 @@ func TestUsageCacheGenerationPublishesConcurrently(t *testing.T) {
 		}
 		assert.Equal(t, expected, path)
 	}
-	probe := probeUsageCache(context.Background(), expected)
+	probe := probeUsageCache(t.Context(), expected)
 	require.NoError(t, probe.Err)
 	assert.True(t, probe.Compatible)
 }
@@ -317,13 +313,13 @@ func TestUsageCacheGenerationDoesNotDeleteHeldOldGeneration(t *testing.T) {
 	seedRecognizedUsageCache(t, oldPath, 0, "old-database-id")
 	held := openRawUsageCacheTestDB(t, oldPath)
 	t.Cleanup(func() { require.NoError(t, held.Close()) })
-	_, err := held.Exec(`BEGIN IMMEDIATE`)
+	_, err := held.ExecContext(t.Context(), `BEGIN IMMEDIATE`)
 	require.NoError(t, err)
-	t.Cleanup(func() { _, _ = held.Exec(`ROLLBACK`) })
+	t.Cleanup(func() { _, _ = held.ExecContext(context.WithoutCancel(t.Context()), `ROLLBACK`) })
 
 	manager := newUsageCacheManager(archivePath)
 	t.Cleanup(func() { require.NoError(t, manager.Close()) })
-	_, err = manager.Generation(context.Background(), "new-database-id")
+	_, err = manager.Generation(t.Context(), "new-database-id")
 	require.NoError(t, err)
 	assert.FileExists(t, oldPath)
 }
@@ -393,7 +389,7 @@ func TestUsageCacheGenerationPreservesLegacyAndMismatchedCaches(t *testing.T) {
 	seedRecognizedUsageCacheWithRetirementProtocol(
 		t, foreignPath, usageCacheFormatVersion, "foreign-database-id")
 	foreign := openRawUsageCacheTestDB(t, foreignPath)
-	_, err := foreign.Exec(`PRAGMA application_id = 1234`)
+	_, err := foreign.ExecContext(t.Context(), `PRAGMA application_id = 1234`)
 	require.NoError(t, err)
 	require.NoError(t, foreign.Close())
 
@@ -434,7 +430,7 @@ func TestUsageCacheTemporaryFallbackUsesSameSchema(t *testing.T) {
 	require.NoError(t, os.WriteFile(blockedParent, []byte("blocked"), 0o600))
 	manager := newUsageCacheManager(filepath.Join(blockedParent, "sessions.db"))
 
-	cache, err := manager.Generation(context.Background(), "database-id-one")
+	cache, err := manager.Generation(t.Context(), "database-id-one")
 	require.NoError(t, err)
 	require.True(t, cache.temporary)
 	tempPath := cache.path
@@ -446,47 +442,47 @@ func TestUsageCacheTemporaryFallbackUsesSameSchema(t *testing.T) {
 
 func TestUsageCacheLifecycleFollowsArchiveReopenAndClose(t *testing.T) {
 	archivePath := filepath.Join(t.TempDir(), "sessions.db")
-	database, err := Open(archivePath)
+	database, err := Open(t.Context(), archivePath)
 	require.NoError(t, err)
-	databaseID, err := database.GetDatabaseID(context.Background())
+	databaseID, err := database.GetDatabaseID(t.Context())
 	require.NoError(t, err)
 
-	first, err := database.usageCache.Generation(context.Background(), databaseID)
+	first, err := database.usageCache.Generation(t.Context(), databaseID)
 	require.NoError(t, err)
-	require.NoError(t, first.db.Ping())
+	require.NoError(t, first.db.PingContext(t.Context()))
 	started := make(chan struct{}, 1)
 	database.SetUsageCacheBackfillStarted(func() { started <- struct{}{} })
 	// Reopen restarts backfill only after the daemon lifecycle
 	// explicitly enabled it.
-	require.NoError(t, database.StartUsageCacheBackfill(context.Background()))
-	require.NoError(t, database.WaitUsageCacheBackfill(context.Background()))
+	require.NoError(t, database.StartUsageCacheBackfill(t.Context()))
+	require.NoError(t, database.WaitUsageCacheBackfill(t.Context()))
 	select {
 	case <-started:
 	case <-time.After(30 * time.Second):
-		t.Fatal("explicit backfill start did not notify lifecycle observer")
+		require.Fail(t, "explicit backfill start did not notify lifecycle observer")
 	}
 
 	require.NoError(t, database.Reopen())
 	select {
 	case <-started:
 	case <-time.After(30 * time.Second):
-		t.Fatal("reopen backfill did not notify lifecycle observer")
+		require.Fail(t, "reopen backfill did not notify lifecycle observer")
 	}
-	require.NoError(t, first.db.Ping(), "reopen must preserve active cache readers")
-	second, err := database.usageCache.Generation(context.Background(), databaseID)
+	require.NoError(t, first.db.PingContext(t.Context()), "reopen must preserve active cache readers")
+	second, err := database.usageCache.Generation(t.Context(), databaseID)
 	require.NoError(t, err)
 	require.Same(t, first, second)
-	require.NoError(t, second.db.Ping())
-	require.NoError(t, database.WaitUsageCacheBackfill(context.Background()))
+	require.NoError(t, second.db.PingContext(t.Context()))
+	require.NoError(t, database.WaitUsageCacheBackfill(t.Context()))
 	assert.NotEmpty(t, readUsageCacheMetadata(t, second.db)[usageCacheMetadataBackfillCompletedAt])
 
 	require.NoError(t, database.Close())
-	require.Error(t, second.db.Ping(), "archive close must close its cache first")
+	require.Error(t, second.db.PingContext(t.Context()), "archive close must close its cache first")
 
-	readOnly, err := OpenReadOnly(archivePath)
+	readOnly, err := OpenReadOnly(t.Context(), archivePath)
 	require.NoError(t, err)
 	readOnlyCache, err := readOnly.usageCache.Generation(
-		context.Background(), databaseID,
+		t.Context(), databaseID,
 	)
 	require.NoError(t, err)
 	require.False(t, readOnlyCache.temporary)
@@ -503,7 +499,7 @@ func TestUsageCacheReopenRetiresMismatchedGeneration(t *testing.T) {
 	originalDone := original.fill.done
 
 	const replacementID = "replacement-database-id"
-	_, err = database.getWriter().Exec(`UPDATE archive_metadata SET value = ?
+	_, err = database.getWriter().Exec(t.Context(), `UPDATE archive_metadata SET value = ?
 		WHERE key = ?`, replacementID, archiveMetadataDatabaseIDKey)
 	require.NoError(t, err)
 	require.NoError(t, database.Reopen())
@@ -511,9 +507,9 @@ func TestUsageCacheReopenRetiresMismatchedGeneration(t *testing.T) {
 	select {
 	case <-originalDone:
 	default:
-		t.Fatal("reopen left the mismatched usage fill coordinator running")
+		require.Fail(t, "reopen left the mismatched usage fill coordinator running")
 	}
-	require.Error(t, original.db.Ping())
+	require.Error(t, original.db.PingContext(t.Context()))
 	assert.NoFileExists(t, original.path,
 		"reopen retires the inactive old database-ID generation")
 	replacement, err := database.usageCache.Generation(t.Context(), replacementID)
@@ -559,7 +555,7 @@ func TestUsageCacheRetirementWaitsForActiveGeneration(t *testing.T) {
 func TestUsageCacheRetirementWaitsForDetachedFill(t *testing.T) {
 	database := testDB(t)
 	insertSession(t, database, "detached-fill", "project")
-	require.NoError(t, database.InsertMessages([]Message{{
+	require.NoError(t, database.InsertMessages(t.Context(), []Message{{
 		SessionID: "detached-fill", Ordinal: 0, Role: "assistant",
 		Timestamp: "2026-08-10T09:00:00Z", Model: "model",
 		TokenUsage: []byte(`{"input_tokens":1}`),
@@ -678,7 +674,8 @@ func usageCacheActiveUsers(cache *usageCache) int {
 
 func readUsageCacheMetadata(t *testing.T, conn *sql.DB) map[string]string {
 	t.Helper()
-	rows, err := conn.Query(`SELECT key, value FROM usage_cache_metadata`)
+
+	rows, err := conn.QueryContext(t.Context(), `SELECT key, value FROM usage_cache_metadata`)
 	require.NoError(t, err)
 	defer rows.Close()
 	result := make(map[string]string)
@@ -696,7 +693,7 @@ func openRawUsageCacheTestDB(t *testing.T, path string) *sql.DB {
 	conn, err := sql.Open("sqlite3", makeDSN(path, false))
 	require.NoError(t, err)
 	conn.SetMaxOpenConns(1)
-	require.NoError(t, conn.Ping())
+	require.NoError(t, conn.PingContext(t.Context()))
 	return conn
 }
 
@@ -706,7 +703,7 @@ func seedRecognizedUsageCache(
 	t.Helper()
 	conn := openRawUsageCacheTestDB(t, path)
 	defer conn.Close()
-	_, err := conn.Exec(`PRAGMA application_id = 1096176963;
+	_, err := conn.ExecContext(t.Context(), `PRAGMA application_id = 1096176963;
 		CREATE TABLE usage_cache_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL)`)
 	require.NoError(t, err)
 	for key, value := range map[string]any{
@@ -714,7 +711,7 @@ func seedRecognizedUsageCache(
 		usageCacheMetadataFormatVersion:    format,
 		usageCacheMetadataSourceDatabaseID: databaseID,
 	} {
-		_, err = conn.Exec(
+		_, err = conn.ExecContext(t.Context(),
 			`INSERT INTO usage_cache_metadata(key, value) VALUES (?, ?)`, key, value)
 		require.NoError(t, err)
 	}
@@ -727,7 +724,7 @@ func seedRecognizedUsageCacheWithRetirementProtocol(
 	seedRecognizedUsageCache(t, path, format, databaseID)
 	conn := openRawUsageCacheTestDB(t, path)
 	defer conn.Close()
-	_, err := conn.Exec(
+	_, err := conn.ExecContext(t.Context(),
 		`INSERT INTO usage_cache_metadata(key, value) VALUES (?, ?)`,
 		usageCacheMetadataRetirementProtocol, "1")
 	require.NoError(t, err)

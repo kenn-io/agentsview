@@ -2,10 +2,12 @@ package artifact
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"io"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 var artifactBenchmarkSizes = []struct {
@@ -33,8 +35,8 @@ func BenchmarkWireEncode(b *testing.B) {
 				b.SetBytes(int64(len(body)))
 				b.ResetTimer()
 				for b.Loop() {
-					if err := EncodeWire(context.Background(), ref, bytes.NewReader(body), io.Discard); err != nil {
-						b.Fatal(err)
+					if err := EncodeWire(b.Context(), ref, bytes.NewReader(body), io.Discard); err != nil {
+						assert.NoError(b, err)
 					}
 				}
 			})
@@ -56,11 +58,11 @@ func BenchmarkWireDecode(b *testing.B) {
 				ref := benchmarkArtifactRef(b, codec.kind, body)
 				wire, err := ToWireRef(ref)
 				if err != nil {
-					b.Fatal(err)
+					require.NoError(b, err)
 				}
 				var encoded bytes.Buffer
-				if err := EncodeWire(context.Background(), ref, bytes.NewReader(body), &encoded); err != nil {
-					b.Fatal(err)
+				if err := EncodeWire(b.Context(), ref, bytes.NewReader(body), &encoded); err != nil {
+					assert.NoError(b, err)
 				}
 				limits := WireLimits{
 					MaxEncodedBytes: int64(encoded.Len()),
@@ -70,9 +72,9 @@ func BenchmarkWireDecode(b *testing.B) {
 				b.SetBytes(int64(len(body)))
 				b.ResetTimer()
 				for b.Loop() {
-					if err := DecodeWire(context.Background(), wire,
+					if err := DecodeWire(b.Context(), wire,
 						bytes.NewReader(encoded.Bytes()), io.Discard, limits); err != nil {
-						b.Fatal(err)
+						assert.NoError(b, err)
 					}
 				}
 			})
@@ -90,11 +92,11 @@ func benchmarkArtifactRef(b *testing.B, kind Kind, body []byte) Ref {
 		name += ".json"
 	case KindRaw:
 	default:
-		b.Fatalf("unsupported benchmark artifact kind %q", kind)
+		assert.Failf(b, "unsupported benchmark artifact kind", "unsupported benchmark artifact kind %q", kind)
 	}
 	ref, err := NewRef(contractOrigin, kind, name)
 	if err != nil {
-		b.Fatal(fmt.Errorf("creating benchmark ref: %w", err))
+		assert.NoError(b, fmt.Errorf("creating benchmark ref: %w", err))
 	}
 	return ref
 }

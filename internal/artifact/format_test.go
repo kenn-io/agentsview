@@ -221,13 +221,13 @@ func TestCanonicalMessageSegmentGolden(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t,
-		"{\"claude_message_id\":\"msg-1\",\"claude_request_id\":\"req-1\",\"content\":\"world\",\"content_length\":5,\"has_output_tokens\":true,\"has_tool_use\":true,\"model\":\"claude-test\",\"ordinal\":2,\"output_tokens\":2,\"role\":\"assistant\",\"source_parent_uuid\":\"uuid-parent\",\"source_subtype\":\"assistant\",\"source_type\":\"jsonl\",\"source_uuid\":\"uuid-msg-1\",\"timestamp\":\"2026-06-14T01:02:05Z\",\"token_usage\":{\"input\":1,\"output\":2},\"tool_calls\":[{\"call_index\":0,\"category\":\"file\",\"file_path\":\"README.md\",\"input_json\":\"{\\\"file_path\\\":\\\"README.md\\\"}\",\"result_content\":\"file content\",\"result_content_length\":12,\"result_events\":[{\"agent_id\":\"agent-1\",\"content\":\"done\",\"content_length\":4,\"event_index\":0,\"source\":\"tool_result\",\"status\":\"success\",\"subagent_session_id\":\"child-1\",\"timestamp\":\"2026-06-14T01:02:06Z\",\"tool_use_id\":\"tool-1\"}],\"subagent_session_id\":\"child-1\",\"tool_name\":\"Read\",\"tool_use_id\":\"tool-1\"}],\"v\":3}\n",
+		"{\"claude_message_id\":\"msg-1\",\"claude_request_id\":\"req-1\",\"content\":\"world\",\"content_length\":5,\"has_output_tokens\":true,\"has_tool_use\":true,\"model\":\"claude-test\",\"ordinal\":2,\"output_tokens\":2,\"role\":\"assistant\",\"source_parent_uuid\":\"uuid-parent\",\"source_subtype\":\"assistant\",\"source_type\":\"jsonl\",\"source_uuid\":\"uuid-msg-1\",\"timestamp\":\"2026-06-14T01:02:05Z\",\"token_usage\":{\"input\":1,\"output\":2},\"tool_calls\":[{\"call_index\":0,\"category\":\"file\",\"file_path\":\"README.md\",\"input_json\":\"{\\\"file_path\\\":\\\"README.md\\\"}\",\"result_content\":\"file content\",\"result_content_length\":12,\"result_events\":[{\"agent_id\":\"agent-1\",\"content\":\"done\",\"content_length\":4,\"event_index\":0,\"source\":\"tool_result\",\"status\":\"success\",\"subagent_session_id\":\"child-1\",\"timestamp\":\"2026-06-14T01:02:06Z\",\"tool_use_id\":\"tool-1\"}],\"subagent_session_id\":\"child-1\",\"tool_name\":\"Read\",\"tool_use_id\":\"tool-1\"}],\"v\":4}\n",
 		string(data),
 	)
 	assert.NotContains(t, string(data), `"id"`)
 	assert.NotContains(t, string(data), `"session_id"`)
 	assert.NotContains(t, string(data), `"message_id"`)
-	assert.Equal(t, "23cd262c5cf846513a0adfe80b11fc7a94d01976f51c6600ac282b2229a3ee7b", hashHex(data))
+	assert.Equal(t, "82e4eeade6fc98954138216965f85fe628f5d037ccf4ec3b4cfb7bfc71b4921a", hashHex(data))
 }
 
 func TestEncodeSegmentPreservesPromptSource(t *testing.T) {

@@ -4,6 +4,7 @@
 package parser
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -19,9 +20,10 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/tidwall/gjson"
-
 	"go.kenn.io/agentsview/internal/money"
 )
+
+const hermesIDPrefix = string(AgentHermes) + ":"
 
 type hermesStateSession struct {
 	id               string
@@ -105,13 +107,13 @@ func parseHermesToolCall(tc gjson.Result) (ParsedToolCall, bool) {
 // transcript-file parser. It owns the archive on-disk shape (state.db plus the
 // sessions transcript directory) for the Hermes provider; the package-level
 // entrypoint was folded onto the provider.
-func (p *hermesProvider) parseArchive(root, project, machine string) ([]ParseResult, error) {
+func (p *hermesProvider) parseArchive(ctx context.Context, root, project, machine string) ([]ParseResult, error) {
 	stateDB, sessionsDir, ok := hermesStatePaths(root)
 	if !ok {
 		return p.parseTranscriptArchive(root, project, machine)
 	}
 
-	results, err := p.parseStateDB(
+	results, err := p.parseStateDB(ctx,
 		stateDB, sessionsDir, project, machine,
 	)
 	if err == nil {
@@ -346,24 +348,27 @@ func parseHermesJSONLSession(path, project, machine string) (*ParsedSession, []P
 	fullID := "hermes:" + sessionID
 
 	// Derive project from the session platform or default.
+	projectSynthesized := false
 	if project == "" {
 		if sessionPlatform != "" {
 			project = "hermes-" + sessionPlatform
 		} else {
 			project = "hermes"
 		}
+		projectSynthesized = true
 	}
 
 	sess := &ParsedSession{
-		ID:               fullID,
-		Project:          project,
-		Machine:          machine,
-		Agent:            AgentHermes,
-		FirstMessage:     firstMsg,
-		StartedAt:        startedAt,
-		EndedAt:          endedAt,
-		MessageCount:     len(messages),
-		UserMessageCount: realUserCount,
+		ID:                         fullID,
+		Project:                    project,
+		projectSynthesizedByHermes: projectSynthesized,
+		Machine:                    machine,
+		Agent:                      AgentHermes,
+		FirstMessage:               firstMsg,
+		StartedAt:                  startedAt,
+		EndedAt:                    endedAt,
+		MessageCount:               len(messages),
+		UserMessageCount:           realUserCount,
 		File: FileInfo{
 			Path:  path,
 			Size:  info.Size(),
@@ -533,24 +538,27 @@ func parseHermesJSONSession(path, project, machine string) (*ParsedSession, []Pa
 
 	fullID := "hermes:" + sessionID
 
+	projectSynthesized := false
 	if project == "" {
 		if sessionPlatform != "" {
 			project = "hermes-" + sessionPlatform
 		} else {
 			project = "hermes"
 		}
+		projectSynthesized = true
 	}
 
 	sess := &ParsedSession{
-		ID:               fullID,
-		Project:          project,
-		Machine:          machine,
-		Agent:            AgentHermes,
-		FirstMessage:     firstMsg,
-		StartedAt:        startedAt,
-		EndedAt:          endedAt,
-		MessageCount:     len(messages),
-		UserMessageCount: realUserCount,
+		ID:                         fullID,
+		Project:                    project,
+		projectSynthesizedByHermes: projectSynthesized,
+		Machine:                    machine,
+		Agent:                      AgentHermes,
+		FirstMessage:               firstMsg,
+		StartedAt:                  startedAt,
+		EndedAt:                    endedAt,
+		MessageCount:               len(messages),
+		UserMessageCount:           realUserCount,
 		File: FileInfo{
 			Path:  path,
 			Size:  info.Size(),
@@ -584,20 +592,20 @@ func hermesStatePaths(root string) (stateDB, sessionsDir string, ok bool) {
 	return "", "", false
 }
 
-func (p *hermesProvider) parseStateDB(
+func (p *hermesProvider) parseStateDB(ctx context.Context,
 	stateDB, sessionsDir, project, machine string,
 ) ([]ParseResult, error) {
-	conn, err := sql.Open("sqlite3", "file:"+sqliteURIPath(stateDB)+"?mode=ro")
+	conn, err := openSQLiteReadOnly(stateDB, sqliteReadOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("open hermes state db: %w", err)
 	}
 	defer conn.Close()
 
-	sessions, err := readHermesStateSessions(conn)
+	sessions, err := readHermesStateSessions(ctx, conn)
 	if err != nil {
 		return nil, err
 	}
-	messages, err := readHermesStateMessages(conn)
+	messages, err := readHermesStateMessages(ctx, conn)
 	if err != nil {
 		return nil, err
 	}
@@ -636,10 +644,10 @@ func (p *hermesProvider) parseStateDB(
 	return results, nil
 }
 
-func readHermesStateSessions(
+func readHermesStateSessions(ctx context.Context,
 	conn *sql.DB,
 ) ([]hermesStateSession, error) {
-	rows, err := conn.Query(`
+	rows, err := conn.QueryContext(ctx, `
 		SELECT id, source, COALESCE(model, ''),
 			COALESCE(parent_session_id, ''), started_at,
 			COALESCE(ended_at, 0), COALESCE(message_count, 0),
@@ -679,10 +687,10 @@ func readHermesStateSessions(
 	return out, rows.Err()
 }
 
-func readHermesStateMessages(
+func readHermesStateMessages(ctx context.Context,
 	conn *sql.DB,
 ) (map[string][]hermesStateMessage, error) {
-	rows, err := conn.Query(`
+	rows, err := conn.QueryContext(ctx, `
 		SELECT session_id, role, COALESCE(content, ''),
 			COALESCE(tool_call_id, ''), COALESCE(tool_calls, ''),
 			timestamp, COALESCE(finish_reason, ''),
@@ -717,10 +725,10 @@ func readHermesStateMessages(
 	return out, rows.Err()
 }
 
-func readHermesStateSession(
+func readHermesStateSession(ctx context.Context,
 	conn *sql.DB, rawSessionID string,
 ) (hermesStateSession, bool, error) {
-	row := conn.QueryRow(`
+	row := conn.QueryRowContext(ctx, `
 		SELECT id, source, COALESCE(model, ''),
 			COALESCE(parent_session_id, ''), started_at,
 			COALESCE(ended_at, 0), COALESCE(message_count, 0),
@@ -758,10 +766,10 @@ func readHermesStateSession(
 	return ss, true, nil
 }
 
-func readHermesStateMessagesForSession(
+func readHermesStateMessagesForSession(ctx context.Context,
 	conn *sql.DB, rawSessionID string,
 ) ([]hermesStateMessage, error) {
-	rows, err := conn.Query(`
+	rows, err := conn.QueryContext(ctx, `
 		SELECT role, COALESCE(content, ''), COALESCE(tool_call_id, ''),
 			COALESCE(tool_calls, ''), timestamp,
 			COALESCE(finish_reason, ''), COALESCE(reasoning, ''),
@@ -801,10 +809,10 @@ func readHermesStateMessagesForSession(
 	return out, rows.Err()
 }
 
-func writeHermesStateSessionJSONL(
+func writeHermesStateSessionJSONL(ctx context.Context,
 	w io.Writer, stateDB, rawSessionID string,
 ) error {
-	ss, messages, selectedPath, err := readHermesStateSessionSource(
+	ss, messages, selectedPath, err := readHermesStateSessionSource(ctx,
 		stateDB, rawSessionID,
 	)
 	if err != nil {
@@ -816,26 +824,26 @@ func writeHermesStateSessionJSONL(
 	return encodeHermesStateSessionJSONL(w, ss, messages)
 }
 
-func readHermesStateSessionSource(
+func readHermesStateSessionSource(ctx context.Context,
 	stateDB, rawSessionID string,
 ) (hermesStateSession, []hermesStateMessage, string, error) {
-	conn, err := sql.Open("sqlite3", "file:"+sqliteURIPath(stateDB)+"?mode=ro")
+	conn, err := openSQLiteReadOnly(stateDB, sqliteReadOptions{})
 	if err != nil {
 		return hermesStateSession{}, nil, "", hermesStateLookupError{
 			err: fmt.Errorf("open hermes state db: %w", err),
 		}
 	}
 	defer conn.Close()
-	return readHermesStateSessionSourceConn(conn, stateDB, rawSessionID)
+	return readHermesStateSessionSourceConn(ctx, conn, stateDB, rawSessionID)
 }
 
 // readHermesStateSessionSourceConn is readHermesStateSessionSource on an
 // already-open connection, so per-pass callers can reuse one state.db open
 // across every member instead of opening the database per session.
-func readHermesStateSessionSourceConn(
+func readHermesStateSessionSourceConn(ctx context.Context,
 	conn *sql.DB, stateDB, rawSessionID string,
 ) (hermesStateSession, []hermesStateMessage, string, error) {
-	ss, found, err := readHermesStateSession(conn, rawSessionID)
+	ss, found, err := readHermesStateSession(ctx, conn, rawSessionID)
 	if err != nil {
 		return hermesStateSession{}, nil, "", hermesStateLookupError{err: err}
 	}
@@ -845,7 +853,7 @@ func readHermesStateSessionSourceConn(
 			rawSessionID, stateDB, os.ErrNotExist,
 		)
 	}
-	messages, err := readHermesStateMessagesForSession(conn, rawSessionID)
+	messages, err := readHermesStateMessagesForSession(ctx, conn, rawSessionID)
 	if err != nil {
 		return hermesStateSession{}, nil, "", hermesStateLookupError{err: err}
 	}
@@ -959,6 +967,13 @@ func buildHermesStateResult(
 	}
 
 	applyHermesStateMetadata(sess, ss, selectedPath, project)
+	// Match transcript parsing: advance stale or unset end times from messages.
+	// Both state.db readers sort by timestamp ASC, id ASC, so the last is newest.
+	if len(stateMessages) > 0 {
+		if latest := stateMessages[len(stateMessages)-1].timestamp; latest.After(sess.EndedAt) && latest.After(sess.StartedAt) {
+			sess.EndedAt = latest
+		}
+	}
 	return ParseResult{
 		Session:     *sess,
 		Messages:    msgs,
@@ -1000,13 +1015,15 @@ func applyHermesStateMetadata(
 		sess.Project = project
 	} else if ss.source != "" {
 		sess.Project = "hermes-" + ss.source
+		sess.projectSynthesizedByHermes = true
 	} else if sess.Project == "" {
 		sess.Project = "hermes"
+		sess.projectSynthesizedByHermes = true
 	}
 	if !ss.startedAt.IsZero() {
 		sess.StartedAt = ss.startedAt
 	}
-	if !ss.endedAt.IsZero() {
+	if ss.endedAt.After(sess.EndedAt) {
 		sess.EndedAt = ss.endedAt
 	}
 	if ss.parentSessionID != "" {
@@ -1395,7 +1412,7 @@ func parseHermesTimestamp(s string) time.Time {
 	// Try parsing with microseconds (Hermes default).
 	// Use ParseInLocation so naive timestamps are interpreted as local
 	// time rather than UTC — Hermes records local wall-clock time.
-	t, err := time.ParseInLocation("2006-01-02T15:04:05.999999", s, time.Local)
+	t, err := time.ParseInLocation("2006-01-02T15:04:05.999999", s, time.Local) //nolint:forbidigo // Hermes source timestamps omit the offset and represent local wall-clock time.
 	if err == nil {
 		return t
 	}
@@ -1405,7 +1422,7 @@ func parseHermesTimestamp(s string) time.Time {
 		return t
 	}
 	// Try without fractional seconds.
-	t, err = time.ParseInLocation("2006-01-02T15:04:05", s, time.Local)
+	t, err = time.ParseInLocation("2006-01-02T15:04:05", s, time.Local) //nolint:forbidigo // Hermes source timestamps omit the offset and represent local wall-clock time.
 	if err == nil {
 		return t
 	}

@@ -496,19 +496,7 @@ func pgToolInputCandidateBranch(
 ) string {
 	prefilter := pgPrefilterClause("tc.input_json", lit, pb)
 
-	return fmt.Sprintf(`
-		SELECT tc.session_id, s.project, s.agent, 'tool_input' AS location,
-			'assistant' AS role, tc.tool_name, tc.message_ordinal AS ordinal,
-			m.timestamp AS ts,
-			tc.input_json AS body, 1 AS src, tc.id AS row_id,
-			COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts
-		FROM tool_calls tc
-		JOIN sessions s ON s.id = tc.session_id
-		JOIN scoped sc ON sc.id = tc.session_id
-		JOIN messages m ON m.session_id = tc.session_id
-			AND m.ordinal = tc.message_ordinal
-		WHERE %s`,
-		prefilter)
+	return "\n\t\tSELECT tc.session_id, s.project, s.agent, 'tool_input' AS location,\n\t\t\t'assistant' AS role, tc.tool_name, tc.message_ordinal AS ordinal,\n\t\t\tm.timestamp AS ts,\n\t\t\ttc.input_json AS body, 1 AS src, tc.id AS row_id,\n\t\t\tCOALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts\n\t\tFROM tool_calls tc\n\t\tJOIN sessions s ON s.id = tc.session_id\n\t\tJOIN scoped sc ON sc.id = tc.session_id\n\t\tJOIN messages m ON m.session_id = tc.session_id\n\t\t\tAND m.ordinal = tc.message_ordinal\n\t\tWHERE " + prefilter
 }
 
 // pgToolResultContentCandidateBranch: candidate result_content rows (no events).
@@ -544,18 +532,7 @@ func pgToolResultEventsCandidateBranch(
 ) string {
 	prefilter := pgPrefilterClause("tre.content", lit, pb)
 
-	return fmt.Sprintf(`
-		SELECT tre.session_id, s.project, s.agent, 'tool_result' AS location,
-			'assistant' AS role, '' AS tool_name,
-			tre.tool_call_message_ordinal AS ordinal,
-			tre.timestamp AS ts,
-			tre.content AS body, 3 AS src, tre.id AS row_id,
-			COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts
-		FROM tool_result_events tre
-		JOIN sessions s ON s.id = tre.session_id
-		JOIN scoped sc ON sc.id = tre.session_id
-		WHERE %s`,
-		prefilter)
+	return "\n\t\tSELECT tre.session_id, s.project, s.agent, 'tool_result' AS location,\n\t\t\t'assistant' AS role, '' AS tool_name,\n\t\t\ttre.tool_call_message_ordinal AS ordinal,\n\t\t\ttre.timestamp AS ts,\n\t\t\ttre.content AS body, 3 AS src, tre.id AS row_id,\n\t\t\tCOALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts\n\t\tFROM tool_result_events tre\n\t\tJOIN sessions s ON s.id = tre.session_id\n\t\tJOIN scoped sc ON sc.id = tre.session_id\n\t\tWHERE " + prefilter
 }
 
 // pgSnippetBounds returns the rune-snapped byte window around [start,end),
@@ -585,15 +562,15 @@ func pgBuildSnippet(f db.ContentSearchFilter, body string, start, end int) strin
 
 // pgSubstringSnippet builds a substring-match snippet: it locates the
 // case-insensitive pattern (the ILIKE already matched, so it is present; fall
-// back to the start) and windows it. It uses db.CaseInsensitiveIndex so the
-// offset indexes body directly even when lowercasing would change byte length.
+// back to the start) and windows it. It uses db.CaseInsensitiveSpan so both
+// offsets index body directly even when lowercasing would change byte length.
 func pgSubstringSnippet(f db.ContentSearchFilter, body string) string {
 	if f.Mode == "fts" {
 		start, end := db.FTSSnippetRange(f.Pattern, body)
 		return pgBuildSnippet(f, body, start, end)
 	}
-	off := max(db.CaseInsensitiveIndex(body, f.Pattern), 0)
-	return pgBuildSnippet(f, body, off, min(off+len(f.Pattern), len(body)))
+	start, end, _ := db.CaseInsensitiveSpan(body, f.Pattern)
+	return pgBuildSnippet(f, body, start, end)
 }
 
 // literalPrefixPG returns the required literal prefix from a regex pattern,

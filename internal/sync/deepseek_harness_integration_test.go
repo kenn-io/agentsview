@@ -38,7 +38,7 @@ func TestDeepSeekHarnessSyncReplacesPartialResponseAndDeduplicatesSeedUsage(t *t
 			OutputPerMTok: money.MustParseDollars("2"),
 		},
 	}))
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentDeepSeekHarness: {root},
 		},
@@ -166,7 +166,7 @@ func TestDeepSeekHarnessSyncRetainsMixedEncodingSessionAndSwitchesAfterDeletion(
 
 	root := t.TempDir()
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentDeepSeekHarness: {root},
 		},
@@ -201,7 +201,7 @@ func TestDeepSeekHarnessSyncRetainsMixedEncodingSessionAndSwitchesAfterDeletion(
 	require.NoError(t, err)
 	require.Len(t, messages, 2)
 	assert.Equal(t, "plain transcript", messages[1].Content)
-	assert.Equal(t, plainPath, database.GetSessionFilePath(sessionID))
+	assert.Equal(t, plainPath, database.GetSessionFilePath(t.Context(), sessionID))
 }
 
 func harnessSyncWriteLog(
@@ -218,6 +218,7 @@ func harnessSyncWriteLogEncoding(
 	headerExtra map[string]any, events []any,
 ) string {
 	t.Helper()
+
 	dir := filepath.Join(root, "--workspace-example--", id)
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 	name := "session.jsonl"
@@ -270,6 +271,7 @@ func harnessSyncAppendFrame(t *testing.T, path string, events []any) {
 
 func harnessSyncWriteFrames(t *testing.T, path string, appendFile bool, frames ...[]any) {
 	t.Helper()
+
 	encoder, err := zstd.NewWriter(nil, zstd.WithEncoderCRC(true))
 	require.NoError(t, err)
 	defer encoder.Close()

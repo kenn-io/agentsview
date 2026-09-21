@@ -55,18 +55,96 @@ afterEach(() => {
   router.isRootPath = false;
   analytics.isPinned = false;
   analytics.windowDays = 365;
+  analytics.granularity = "day";
   analytics.from = "";
   analytics.to = "";
   analytics.selectedDate = null;
   analytics.selectedDow = null;
   analytics.selectedHour = null;
   sessions.filters.date = "";
+  sessions.loading = false;
   sessions.filters.dateFrom = "";
   sessions.filters.dateTo = "";
   yokedDates.setEnabled(false);
   analyticsPageDates.clear();
   ui.sidebarOpen = true;
   ui.isMobileViewport = false;
+});
+
+describe("AnalyticsPage initial load", () => {
+  async function start() {
+    vi.useFakeTimers();
+    vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+    const fetch = vi.spyOn(analytics, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    router.isRootPath = true;
+    sessions.loading = true;
+    component = mount(AnalyticsPage, { target: document.body });
+    await flushEffects();
+    return fetch;
+  }
+
+  it("withholds first load while the sidebar index is in flight", async () => {
+    analytics.granularity = "day";
+    const activity = vi.spyOn(analytics, "fetchActivity").mockResolvedValue("ok");
+    const fetch = await start();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(analytics.granularity).toBe("week");
+    expect(activity).not.toHaveBeenCalled();
+  });
+
+  it("releases exactly once after sidebar loading clears", async () => {
+    const fetch = await start();
+    sessions.loading = false;
+    await flushEffects();
+    expect(fetch).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    sessions.loading = true;
+    await flushEffects();
+    sessions.loading = false;
+    await flushEffects();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes immediately while deferred without a second fetch", async () => {
+    const fetch = await start();
+    document.querySelector<HTMLButtonElement>('button[aria-label="Refresh analytics"]')!.click();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    sessions.loading = false;
+    await flushEffects();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels the deferred load before a range change fetch", async () => {
+    const fetch = await start();
+    await selectRelativeRange(30);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails open at exactly 2000 ms", async () => {
+    const fetch = await start();
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(fetch).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([true, false])("unmount cancels pending load and reads with loading=%s", async (loading) => {
+    const fetch = await start();
+    const cancel = vi.spyOn(analytics, "cancelInFlightReads");
+    sessions.loading = loading;
+    await flushEffects();
+    await unmount(component!);
+    component = undefined;
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("AnalyticsPage sidebar controls", () => {
@@ -412,7 +490,7 @@ describe("AnalyticsPage refresh behavior", () => {
 
     expect(onMountBlock).not.toContain("analytics.fetchAll();");
     expect(source).toContain("const firstRun = !analyticsDateUrlInitRan");
-    expect(source).toContain("if (changed || firstRun)");
+    expect(source).toContain("if (changed || initialHydration)");
   });
 
   it("uses an Activity brush as a Sessions filter without replacing the chart window", async () => {

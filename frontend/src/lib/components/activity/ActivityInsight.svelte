@@ -3,7 +3,6 @@
   import { m } from "../../i18n/index.js";
   import { InsightsService, type DbInsight } from "../../api/generated/index";
   import {
-    callGenerated,
     isAbortError,
   } from "../../api/runtime.js";
   import {
@@ -13,7 +12,8 @@
   import { sync } from "../../stores/sync.svelte.js";
   import { insights } from "../../stores/insights.svelte.js";
   import { router } from "../../stores/router.svelte.js";
-  import { renderMarkdown } from "../../utils/markdown.js";
+  import { ui } from "../../stores/ui.svelte.js";
+  import { loadAssetImages, renderMarkdown } from "../../utils/markdown.js";
   import { highlightCodeFences } from "../../utils/highlight-fences.js";
   import type { AgentName } from "../../api/types.js";
   import { LightbulbIcon, PlusIcon } from "../../icons.js";
@@ -59,15 +59,15 @@
   }
 
   const insightGenerationAvailable = $derived(
-    sync.serverVersion?.insight_generation_available === true ||
-      sync.serverVersion?.read_only !== true,
+    sync.serverVersion?.insight_generation_available ??
+      (sync.serverVersion?.read_only !== true),
   );
   const generationUnavailable = $derived(
     sync.serverVersion === null || !insightGenerationAvailable,
   );
   const unavailableTitle = $derived(
     sync.serverVersion !== null && !insightGenerationAvailable
-      ? m.activity_insight_unavailable_read_only()
+      ? m.insights_page_generate_disabled()
       : sync.serverVersion === null
         ? m.activity_insight_waiting_server()
         : m.activity_insight_generate_insight(),
@@ -99,14 +99,11 @@
     generating = false;
     loading = true;
 
-    callGenerated(
-      (options) => InsightsService.getApiV1Insights({
+    InsightsService.getApiV1Insights({
         type: "daily_activity",
         date_from: from,
         date_to: to,
-      }, options),
-      signal,
-    )
+      }, { signal })
       .then((res) => {
         if (v !== fetchVersion || !insightListRead.isCurrent(signal)) return;
         // The list endpoint treats date_from/date_to as range BOUNDS, so a
@@ -240,8 +237,11 @@
     <article
       class="markdown-body"
       use:highlightCodeFences={{ content: insight.content }}
+      use:loadAssetImages={insight.content}
     >
-      {@html renderMarkdown(insight.content)}
+      {@html renderMarkdown(insight.content, {
+        renderUnknownXmlBlocksAsPreformatted: ui.renderUnknownXmlBlocksAsPreformatted,
+      })}
     </article>
   {:else}
     <EmptyState title={m.activity_insight_empty_text()}>
@@ -352,12 +352,12 @@
   }
 
   .generate-btn:active:not(:disabled) {
-    transform: scale(0.98);
+    transform: var(--press-transform);
     box-shadow: none;
   }
 
   .generate-btn:disabled {
-    opacity: 0.45;
+    opacity: var(--opacity-disabled);
     box-shadow: none;
     cursor: default;
   }
@@ -419,7 +419,7 @@
     border-radius: var(--radius-sm);
   }
 
-  .markdown-body :global(pre) {
+  .markdown-body :global(pre:not(.unknown-xml-block)) {
     background: var(--bg-inset);
     padding: 10px 14px;
     border-radius: var(--radius-md);

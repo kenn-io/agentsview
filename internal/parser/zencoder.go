@@ -182,10 +182,9 @@ func (b *zencoderSessionBuilder) handleUserMessage(
 func (b *zencoderSessionBuilder) handleAssistantMessage(
 	line string, ts time.Time,
 ) {
-	content, hasThinking, hasToolUse, tcs :=
-		extractZencoderAssistantContent(
-			gjson.Get(line, "content"),
-		)
+	content, hasThinking, hasToolUse, tcs := extractZencoderAssistantContent(
+		gjson.Get(line, "content"),
+	)
 
 	if strings.TrimSpace(content) == "" && !hasToolUse {
 		return
@@ -291,10 +290,13 @@ func (b *zencoderSessionBuilder) handleToolMessage(
 
 	if len(systemParts) > 0 {
 		sysContent := strings.Join(systemParts, "\n")
+		// These blocks arrive inside tool results, so storage policies that
+		// drop tool output treat the row as tool output.
 		b.messages = append(b.messages, ParsedMessage{
 			Ordinal:       b.ordinal,
 			Role:          RoleUser,
 			IsSystem:      true,
+			SourceSubtype: SourceSubtypeToolResult,
 			Content:       sysContent,
 			ContentLength: len(sysContent),
 			Timestamp:     ts,
@@ -383,7 +385,6 @@ func extractZencoderAssistantContent(
 				Category:  NormalizeToolCategory(name),
 				InputJSON: block.Get("input").Raw,
 			}
-			toolCalls = append(toolCalls, tc)
 			// Synthesize a Claude-compatible JSON block for
 			// formatToolUse, which expects "name" and "input".
 			synth := fmt.Sprintf(
@@ -391,8 +392,9 @@ func extractZencoderAssistantContent(
 				name,
 				orDefault(block.Get("input").Raw, "{}"),
 			)
-			parts = append(parts,
-				formatToolUse(gjson.Parse(synth)))
+			tc.Rendering = formatToolUse(gjson.Parse(synth))
+			toolCalls = append(toolCalls, tc)
+			parts = append(parts, tc.Rendering)
 		}
 		return true
 	})

@@ -123,7 +123,7 @@ func TestNewStore(t *testing.T) {
 	defer store.Close()
 
 	assert.True(t, store.ReadOnly())
-	assert.True(t, store.HasFTS())
+	assert.True(t, store.HasFTS(t.Context()))
 }
 
 func TestDetectInsightGenerationAvailability(t *testing.T) {
@@ -366,7 +366,7 @@ func TestStoreGetSidebarSessionIndexComputesIsTeammate(
 	assert.False(t, rows["normal"].IsTeammate, "normal IsTeammate")
 }
 
-func TestStoreGetSidebarSessionIndexReturnsDisplayName(
+func TestStoreGetSidebarSessionIndexReturnsDisplayNameAndProjectAssignment(
 	t *testing.T,
 ) {
 	pgURL := testPGURL(t)
@@ -379,6 +379,10 @@ func TestStoreGetSidebarSessionIndexReturnsDisplayName(
 	) {
 		s.displayName = &displayName
 	})
+	_, err := store.DB().Exec(
+		`UPDATE sessions SET project_assigned = TRUE WHERE id = $1`, "named",
+	)
+	require.NoError(t, err)
 
 	index, err := store.GetSidebarSessionIndex(
 		context.Background(), db.SessionFilter{},
@@ -388,6 +392,7 @@ func TestStoreGetSidebarSessionIndexReturnsDisplayName(
 	got := index.Sessions[0].DisplayName
 	require.NotNil(t, got)
 	assert.Equal(t, displayName, *got)
+	assert.True(t, index.Sessions[0].ProjectAssigned)
 }
 
 func TestStoreGetSidebarSessionIndexExcludeAutomated(
@@ -733,7 +738,7 @@ func TestStoreGetSidebarSessionIndexStarredIncludesStarredDescendantRoot(
 		s.relationshipType = "subagent"
 		s.endedAt = "2024-01-10T00:00:00Z"
 	})
-	ok, err := store.StarSession("starred-child")
+	ok, err := store.StarSession(t.Context(), "starred-child")
 	require.NoError(t, err, "StarSession")
 	require.True(t, ok, "starred-child should exist")
 
@@ -1498,7 +1503,7 @@ func TestStoreWriteSurfaceSplitByCapability(t *testing.T) {
 	emptyTrashID := "store-capability-003"
 	batchTrashID := "store-capability-004"
 
-	insightID, err := store.InsertInsight(db.Insight{
+	insightID, err := store.InsertInsight(ctx, db.Insight{
 		Type:     "dashboard",
 		DateFrom: "2026-03-12",
 		DateTo:   "2026-03-12",
@@ -1527,7 +1532,7 @@ func TestStoreWriteSurfaceSplitByCapability(t *testing.T) {
 	require.NotEmpty(t, listed)
 	assert.Equal(t, insightID, listed[0].ID)
 
-	require.NoError(t, store.DeleteInsight(insightID), "DeleteInsight")
+	require.NoError(t, store.DeleteInsight(ctx, insightID), "DeleteInsight")
 	insight, err = store.GetInsight(ctx, insightID)
 	require.NoError(t, err, "GetInsight after delete")
 	assert.Nil(t, insight)
@@ -1554,7 +1559,7 @@ func TestStoreWriteSurfaceSplitByCapability(t *testing.T) {
 	require.NoError(t, err, "inserting session rows")
 
 	renamed := "Capability renamed session"
-	require.NoError(t, store.RenameSession(sessionID, &renamed),
+	require.NoError(t, store.RenameSession(t.Context(), sessionID, &renamed),
 		"RenameSession")
 	sess, err := store.GetSession(ctx, sessionID)
 	require.NoError(t, err, "GetSession after rename")
@@ -1562,7 +1567,7 @@ func TestStoreWriteSurfaceSplitByCapability(t *testing.T) {
 	require.NotNil(t, sess.DisplayName)
 	assert.Equal(t, renamed, *sess.DisplayName)
 
-	require.NoError(t, store.SoftDeleteSession(sessionID),
+	require.NoError(t, store.SoftDeleteSession(t.Context(), sessionID),
 		"SoftDeleteSession")
 	sess, err = store.GetSession(ctx, sessionID)
 	require.NoError(t, err, "GetSession after soft delete")
@@ -1571,25 +1576,25 @@ func TestStoreWriteSurfaceSplitByCapability(t *testing.T) {
 	require.NoError(t, err, "ListTrashedSessions")
 	assert.Contains(t, sessionIDs(trashed), sessionID)
 
-	restored, err := store.RestoreSession(sessionID)
+	restored, err := store.RestoreSession(t.Context(), sessionID)
 	require.NoError(t, err, "RestoreSession")
 	assert.EqualValues(t, 1, restored)
 
-	require.NoError(t, store.SoftDeleteSession(trashedID),
+	require.NoError(t, store.SoftDeleteSession(t.Context(), trashedID),
 		"SoftDeleteSession trashedID")
-	deleted, err := store.DeleteSessionIfTrashed(trashedID)
+	deleted, err := store.DeleteSessionIfTrashed(t.Context(), trashedID)
 	require.NoError(t, err, "DeleteSessionIfTrashed")
 	assert.EqualValues(t, 1, deleted)
 	sess, err = store.GetSessionFull(ctx, trashedID)
 	require.NoError(t, err, "GetSessionFull after permanent delete")
 	assert.Nil(t, sess)
 
-	deletedCount, err := store.SoftDeleteSessions([]string{
+	deletedCount, err := store.SoftDeleteSessions(t.Context(), []string{
 		emptyTrashID, batchTrashID,
 	})
 	require.NoError(t, err, "SoftDeleteSessions")
 	assert.Equal(t, 2, deletedCount)
-	count, err := store.EmptyTrash()
+	count, err := store.EmptyTrash(t.Context())
 	require.NoError(t, err, "EmptyTrash")
 	assert.Equal(t, 2, count)
 	trashed, err = store.ListTrashedSessions(ctx)
@@ -1597,10 +1602,10 @@ func TestStoreWriteSurfaceSplitByCapability(t *testing.T) {
 	assert.NotContains(t, sessionIDs(trashed), emptyTrashID)
 	assert.NotContains(t, sessionIDs(trashed), batchTrashID)
 
-	assert.Equal(t, db.ErrReadOnly, store.UpsertSession(db.Session{}))
+	assert.Equal(t, db.ErrReadOnly, store.UpsertSession(ctx, db.Session{}))
 	assert.Equal(t, db.ErrReadOnly,
-		store.ReplaceSessionMessages("x", nil))
-	_, err = store.WriteSessionBatchAtomic(nil)
+		store.ReplaceSessionMessages(ctx, "x", nil))
+	_, err = store.WriteSessionBatchAtomic(ctx, nil)
 	assert.ErrorIs(t, err, db.ErrReadOnly)
 	_, err = store.RecordRecallQueryEvent(ctx, db.RecallQueryEvent{
 		Surface: db.RecallQuerySurfaceQuery,

@@ -12,6 +12,7 @@ import type { ExportPricingBlock } from "./exportPricingBlock.ts";
 export interface ActivityReport {
   /** @nullable */
   as_of: string | null;
+  automated_peak: ActivityPeak;
   bucket_count: number;
   bucket_seconds: number;
   bucket_unit: string;
@@ -22,6 +23,7 @@ export interface ActivityReport {
   by_session: ActivitySessionRow[];
   effective_end: string;
   elapsed_bucket_count: number;
+  interactive_peak: ActivityPeak;
   partial: boolean;
   peak: ActivityPeak;
   pricing?: ExportPricingBlock;
@@ -32,6 +34,7 @@ export interface ActivityReport {
   schema_version?: number;
   sessions_next_cursor?: string;
   sessions_total: number;
+  subagent_peak: ActivityPeak;
   timezone: string;
   totals: ActivityTotals;
 }

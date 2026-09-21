@@ -8,6 +8,7 @@
   } from "../../stores/activity.svelte.js";
   import type { ActivityReportProgress } from "../../api/activity-report.js";
   import { sync } from "../../stores/sync.svelte.js";
+  import { sessions } from "../../stores/sessions.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import {
     yokedDates,
@@ -148,18 +149,41 @@
       count: agent.session_count,
     })),
   ]);
-  const machineOptions = $derived.by((): TypeaheadOption[] => [
-    {
-      name: "",
-      label: m.activity_all_machines(),
-      displayLabel: m.activity_all_machines(),
-    },
-    ...activity.machines.map((machine) => ({
-      name: machine,
-      label: machine,
-      displayLabel: machine,
-    })),
-  ]);
+  // Machines sharing a friendly label get a short ID fragment so they stay
+  // distinguishable. Full IDs are non-shrinking meta and would squeeze the
+  // label to zero width in the compact menu, so unique labels get no meta.
+  function shortMachineId(machine: string, peers: string[]): string {
+    const head = machine.slice(0, 8);
+    if (peers.every((peer) => peer === machine || peer.slice(0, 8) !== head)) return head;
+    const tail = machine.slice(-8);
+    if (peers.every((peer) => peer === machine || peer.slice(-8) !== tail)) return `…${tail}`;
+    return machine;
+  }
+  const machineOptions = $derived.by((): TypeaheadOption[] => {
+    const byLabel = new Map<string, string[]>();
+    for (const machine of activity.machines) {
+      const label = sessions.machineLabel(machine);
+      byLabel.set(label, [...(byLabel.get(label) ?? []), machine]);
+    }
+    return [
+      {
+        name: "",
+        label: m.activity_all_machines(),
+        displayLabel: m.activity_all_machines(),
+      },
+      ...activity.machines.map((machine) => {
+        const label = sessions.machineLabel(machine);
+        const peers = byLabel.get(label) ?? [];
+        const shortId = peers.length > 1 ? shortMachineId(machine, peers) : undefined;
+        return {
+          name: machine,
+          label,
+          displayLabel: shortId ? `${label} (${shortId})` : label,
+          meta: shortId,
+        };
+      }),
+    ];
+  });
   const automationOptions: TypeaheadOption[] = $derived([
     {
       name: "all",

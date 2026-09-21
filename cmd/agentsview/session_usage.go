@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
@@ -23,15 +24,10 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/servicehttp"
 )
 
 var sessionUsageHTTPClient = &http.Client{Timeout: 30 * time.Second}
-
-type rawSessionIDResolver interface {
-	FindSessionIDsByRawSuffix(
-		ctx context.Context, raw string, limit int,
-	) ([]string, error)
-}
 
 func newSessionUsageCommand() *cobra.Command {
 	cmd := &cobra.Command{
@@ -48,6 +44,8 @@ func newSessionUsageCommand() *cobra.Command {
 			runSessionUsage(cmd, args[0], outputFormat(cmd))
 		},
 	}
+	cmd.Flags().Bool("no-sync", false,
+		"Use archived usage without synchronizing source transcripts")
 	cmd.Flags().Bool("own-only", false,
 		"Report only this session's own usage, excluding subagents")
 	return cmd
@@ -89,14 +87,15 @@ func sessionUsageDataForCommand(
 	}
 
 	ownOnly, _ := cmd.Flags().GetBool("own-only")
-	query := sessionUsageQuery{SessionID: sessionID, OwnOnly: ownOnly}
+	noSync, _ := cmd.Flags().GetBool("no-sync")
+	query := sessionUsageQuery{
+		SessionID: sessionID, OwnOnly: ownOnly, NoSync: noSync,
+	}
 
 	remote, _ := cmd.Flags().GetString("server")
 	if remote != "" {
 		if pgReadRequested(cmd) {
-			return nil, tokenUseExitErr, fmt.Errorf(
-				"--server and --pg are mutually exclusive",
-			)
+			return nil, tokenUseExitErr, errors.New("--server and --pg are mutually exclusive")
 		}
 		token, err := explicitServerToken(cmd)
 		if err != nil {
@@ -126,6 +125,7 @@ func sessionUsageDataForCommand(
 		ctx,
 		cfg,
 		archiveQueryPolicy{
+			NoSync:               noSync,
 			AutoStart:            true,
 			ReadOnlyDaemon:       archiveQueryUseReadOnlyDaemon,
 			DirectReadOnlyAction: "refresh session usage directly",
@@ -141,7 +141,7 @@ func sessionUsageDataForCommand(
 func requireRemoteSubagentUsageSupport(
 	ctx context.Context, baseURL, token string,
 ) error {
-	capabilities, err := service.ProbeHTTPServerCapabilities(
+	capabilities, err := servicehttp.ProbeHTTPServerCapabilities(
 		ctx, baseURL, token,
 	)
 	if err != nil {
@@ -177,17 +177,17 @@ func httpSessionUsageData(
 	}
 	sessionID := query.SessionID
 	resolvedID, err := resolveServiceSessionID(
-		ctx, service.NewHTTPBackend(baseURL, token, false), sessionID,
+		ctx, servicehttp.NewHTTPBackend(baseURL, token, false, ""), sessionID,
 	)
 	if err != nil {
-		if strings.HasPrefix(err.Error(), "session not found:") {
+		if errors.Is(err, errSessionNotFound) {
 			fmt.Fprintf(os.Stderr, "session not found: %s\n", sessionID)
 			return nil, tokenUseExitNotFound, nil
 		}
 		return nil, tokenUseExitErr, err
 	}
-	if !query.OwnOnly {
-		backend := service.NewHTTPBackend(baseURL, token, false)
+	if !query.OwnOnly && !query.NoSync {
+		backend := servicehttp.NewHTTPBackend(baseURL, token, false, "")
 		if _, syncErr := backend.Sync(ctx, service.SyncInput{
 			ID: resolvedID, Subagents: true,
 		}); syncErr != nil && !errors.Is(syncErr, db.ErrReadOnly) {
@@ -197,41 +197,55 @@ func httpSessionUsageData(
 	// Request the full breakdown so the remote path matches the
 	// shape returned by the direct store paths, and the same subagent
 	// attribution scope so --server and local agree field for field.
-	endpoint := strings.TrimSuffix(baseURL, "/") +
-		"/api/v1/sessions/" + url.PathEscape(resolvedID) +
-		"/usage?breakdown=true"
+	api, err := apiclient.NewHTTPClient(baseURL, token, sessionUsageHTTPClient)
+	if err != nil {
+		return nil, tokenUseExitErr, err
+	}
+	var subagents *bool
 	if !query.OwnOnly {
-		endpoint += "&subagents=true"
+		subagents = new(true)
 	}
-	req, err := http.NewRequestWithContext(
-		ctx, http.MethodGet, endpoint, nil,
-	)
-	if err != nil {
+	response, err := api.GetAPIV1SessionsIDUsageWithResponse(ctx, &apiclient.GetAPIV1SessionsIDUsageRequestOptions{
+		PathParams: &apiclient.GetAPIV1SessionsIDUsagePath{ID: url.PathEscape(resolvedID)},
+		Query:      &apiclient.GetAPIV1SessionsIDUsageQuery{Breakdown: new(true), Subagents: subagents},
+	})
+	if response == nil {
 		return nil, tokenUseExitErr, err
 	}
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-	resp, err := sessionUsageHTTPClient.Do(req)
-	if err != nil {
-		return nil, tokenUseExitErr, err
-	}
-	defer resp.Body.Close()
+	resp := response.HTTPResponse
 	if resp.StatusCode == http.StatusNotFound {
 		fmt.Fprintf(os.Stderr, "session not found: %s\n", sessionID)
 		return nil, tokenUseExitNotFound, nil
 	}
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body := response.Body
 		return nil, tokenUseExitErr, fmt.Errorf(
 			"usage: HTTP %d: %s", resp.StatusCode, body,
 		)
 	}
-	var out sessionUsageOutput
-	if err := json.UnmarshalRead(resp.Body, &out); err != nil {
+	if err != nil {
 		return nil, tokenUseExitErr, err
 	}
-	out.ServerRunning = true
+	if len(response.Body) == 0 {
+		return nil, tokenUseExitErr, io.ErrUnexpectedEOF
+	}
+	wire := response.JSON200
+	out := sessionUsageOutput{
+		SessionID: wire.SessionID, Agent: wire.Agent, Project: wire.Project,
+		TotalOutputTokens: int(wire.TotalOutputTokens), PeakContextTokens: int(wire.PeakContextTokens),
+		HasTokenData: wire.HasTokenData, Cost: wire.Cost, HasCost: wire.HasCost, CostUSD: wire.CostUsd,
+		Models: wire.Models, UnpricedModels: wire.UnpricedModels,
+		BreakdownCount: int(wire.BreakdownCount), Breakdown: wire.Breakdown, ServerRunning: true,
+	}
+	if wire.CostSource != nil {
+		out.CostSource = export.CostSource(*wire.CostSource)
+	}
+	if wire.AiCredits != nil {
+		out.AICredits = *wire.AiCredits
+	}
+	if wire.SubagentCount != nil {
+		out.SubagentCount = int(*wire.SubagentCount)
+	}
 	return &out, usageExitCode(&out.SessionUsage), nil
 }
 
@@ -267,7 +281,7 @@ func storeSessionUsageData(
 	sessionID := query.SessionID
 	resolvedID, err := resolveStoreSessionID(ctx, store, sessionID)
 	if err != nil {
-		if !strings.HasPrefix(err.Error(), "session not found:") {
+		if !errors.Is(err, errSessionNotFound) {
 			return nil, tokenUseExitErr,
 				fmt.Errorf("resolving %s session id: %w", storeName, err)
 		}
@@ -304,26 +318,24 @@ func storeSessionUsageData(
 func resolveStoreSessionID(
 	ctx context.Context, store db.Store, sessionID string,
 ) (string, error) {
-	if resolver, ok := store.(rawSessionIDResolver); ok {
-		matches, err := resolver.FindSessionIDsByRawSuffix(
-			ctx, sessionID, tokenUseResolveMatchLimit,
-		)
-		if err != nil {
-			return "", err
+	matches, err := store.FindSessionIDsByRawSuffix(
+		ctx, sessionID, tokenUseResolveMatchLimit,
+	)
+	if err != nil {
+		return "", err
+	}
+	if len(matches) > 0 {
+		if matches[0] == sessionID {
+			return sessionID, nil
 		}
-		if len(matches) > 0 {
-			if matches[0] == sessionID {
-				return sessionID, nil
-			}
-			if len(matches) > 1 {
-				fmt.Fprintf(os.Stderr,
-					"warning: ambiguous session id %q matches "+
-						"multiple sessions, using most recent (%s)\n",
-					sessionID, matches[0],
-				)
-			}
-			return matches[0], nil
+		if len(matches) > 1 {
+			fmt.Fprintf(os.Stderr,
+				"warning: ambiguous session id %q matches "+
+					"multiple sessions, using most recent (%s)\n",
+				sessionID, matches[0],
+			)
 		}
+		return matches[0], nil
 	}
 	return resolveServiceSessionID(
 		ctx, service.NewReadOnlyBackend(store), sessionID,

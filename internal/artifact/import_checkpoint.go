@@ -633,7 +633,7 @@ func decodeImportCheckpointSessionPage(
 			invalidImportCheckpointf("sessions decode cursor is invalid")
 	}
 
-	input := []byte(data)
+	input := data
 	var inputReader io.Reader = bytes.NewReader(input)
 	base := int64(0)
 	if offset > 0 {

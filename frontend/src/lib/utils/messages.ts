@@ -1,4 +1,4 @@
-import type { Message } from "../api/types.js";
+import type { DbMessage as Message } from "../api/generated/index.js";
 
 const SYSTEM_MSG_PREFIXES = [
   "This session is being continued",
@@ -12,6 +12,11 @@ const SYSTEM_MSG_PREFIXES = [
 
 const SYSTEM_REMINDER_OPEN_TAG = "<system-reminder>";
 const SYSTEM_REMINDER_CLOSE_TAG = "</system-reminder>";
+// Preview-only: matches the bare open tag and the attributed form
+// (`<system-reminder data-role="user-context">`) that clients write
+// when they inject per-turn context as the first user message. The
+// literal constants above stay the classification matcher.
+const SYSTEM_REMINDER_OPEN_TAG_RE = /^<system-reminder(?:\s[^>]*)?>/;
 
 const LEGACY_GOAL_CONTEXT_PREFIX = "<goal_context>";
 const CODEX_INTERNAL_CONTEXT_TAG_PREFIX = "<codex_internal_context";
@@ -79,6 +84,28 @@ function stripLeadingReminderBlocks(content: string): {
   return { remainder: rest, stripped };
 }
 
+/**
+ * Removes leading `<system-reminder>` envelopes from preview text,
+ * including the attributed form the literal matcher above misses.
+ * Returns `content` unchanged when nothing was stripped, when an
+ * envelope is unclosed, or when the envelopes are the whole message,
+ * so a truncated tag and a context-only message both keep a
+ * non-empty label instead of collapsing to "".
+ */
+function stripLeadingReminderEnvelopes(content: string): string {
+  let rest = content.trimStart();
+  let stripped = false;
+  for (;;) {
+    const open = SYSTEM_REMINDER_OPEN_TAG_RE.exec(rest);
+    if (!open) break;
+    const closeIdx = rest.indexOf(SYSTEM_REMINDER_CLOSE_TAG, open[0].length);
+    if (closeIdx < 0) return content;
+    rest = rest.slice(closeIdx + SYSTEM_REMINDER_CLOSE_TAG.length).trimStart();
+    stripped = true;
+  }
+  return stripped && rest.length > 0 ? rest : content;
+}
+
 function isGoalContextMessage(trimmedContent: string): boolean {
   if (trimmedContent.startsWith(LEGACY_GOAL_CONTEXT_PREFIX)) {
     return true;
@@ -95,7 +122,8 @@ function isGoalContextMessage(trimmedContent: string): boolean {
 }
 
 export interface MessagePreview {
-  /** Display text, with Claude Code shell-shortcut wrappers
+  /** Display text, with leading system-reminder envelopes removed and
+   *  Claude Code shell-shortcut wrappers
    *  replaced: `<bash-input>cmd</bash-input>` becomes `!cmd`,
    *  stdout/stderr are unwrapped. */
   text: string;
@@ -106,8 +134,9 @@ export interface MessagePreview {
 }
 
 /**
- * Build a one-line preview of a session's first message, replacing
- * Claude Code's shell-shortcut wrappers with the human-typed form
+ * Build a one-line preview of a session's first message.
+ * A leading `<system-reminder>` envelope, bare or attributed, is dropped first.
+ * Claude Code's shell-shortcut wrappers are replaced with the human-typed form
  * and flagging whether the original was a shell shortcut so the
  * caller can render the label as code.
  *
@@ -116,12 +145,22 @@ export interface MessagePreview {
  */
 export function previewMessage(text: string | null | undefined): MessagePreview {
   if (!text) return { text: "", isShell: false };
-  const isShell = /<bash-(?:input|stdout|stderr)>/.test(text);
-  const out = text
+  const source = stripLeadingReminderEnvelopes(text);
+  const isShell = /<bash-(?:input|stdout|stderr)>/.test(source);
+  const out = source
     .replace(/<bash-input>([\s\S]*?)<\/bash-input>/g, (_, cmd: string) => `!${cmd.trim()}`)
     .replace(/<bash-(?:stdout|stderr)>([\s\S]*?)<\/bash-(?:stdout|stderr)>/g, (_, body: string) =>
       body.trim(),
     );
+  if (source !== text && !out.trim()) {
+    const originalIsShell = /<bash-(?:input|stdout|stderr)>/.test(text);
+    const originalOut = text
+      .replace(/<bash-input>([\s\S]*?)<\/bash-input>/g, (_, cmd: string) => `!${cmd.trim()}`)
+      .replace(/<bash-(?:stdout|stderr)>([\s\S]*?)<\/bash-(?:stdout|stderr)>/g, (_, body: string) =>
+        body.trim(),
+      );
+    return { text: originalOut, isShell: originalIsShell };
+  }
   return { text: out, isShell };
 }
 

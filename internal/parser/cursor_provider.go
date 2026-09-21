@@ -4,39 +4,68 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+
+	"go.kenn.io/agentsview/internal/pathutil"
 )
 
-var _ Provider = (*cursorProvider)(nil)
-var _ S3Provider = (*cursorProvider)(nil)
+var (
+	_ Provider   = (*cursorProvider)(nil)
+	_ S3Provider = (*cursorProvider)(nil)
+)
 
 type cursorProviderFactory struct {
-	def AgentDef
+	def        AgentDef
+	storeIndex *cursorStoreIndex
 }
 
 func newCursorProviderFactory(def AgentDef) ProviderFactory {
-	return cursorProviderFactory{def: cloneAgentDef(def)}
+	return &cursorProviderFactory{
+		def:        cloneAgentDef(def),
+		storeIndex: newCursorStoreIndex(),
+	}
 }
 
-func (f cursorProviderFactory) Definition() AgentDef {
+func (f *cursorProviderFactory) Definition() AgentDef {
 	return cloneAgentDef(f.def)
 }
 
-func (f cursorProviderFactory) Capabilities() Capabilities {
+func (f *cursorProviderFactory) Capabilities() Capabilities {
 	return cursorProviderCapabilities()
 }
 
-func (f cursorProviderFactory) NewProvider(cfg ProviderConfig) Provider {
+func (f *cursorProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	cfg = cfg.Clone()
+	sources := newCursorSourceSetWithConfig(cfg)
+	sources.storeIndex = f.storeIndex
 	return &cursorProvider{
 		Def:               cloneAgentDef(f.def),
 		Caps:              cursorProviderCapabilities(),
 		Config:            cfg,
 		DefaultS3Provider: cursorS3Provider,
-		sources:           newCursorSourceSetWithConfig(cfg),
+		sources:           sources,
 	}
+}
+
+// ResolveMetadataDir returns the sibling .cursor/chats directory for a local
+// .cursor/projects root. Remote, rewritten and unrelated roots yield "".
+func (f *cursorProviderFactory) ResolveMetadataDir(path string) (string, error) {
+	root, err := pathutil.ResolveAbsolute(path)
+	if err != nil {
+		return "", err
+	}
+	key, err := pathutil.LocalComparisonKey(root)
+	if err != nil {
+		return "", err
+	}
+	if filepath.Base(key) != "projects" || filepath.Base(filepath.Dir(key)) != ".cursor" {
+		return "", nil
+	}
+	return pathutil.ResolveAbsolute(filepath.Join(filepath.Dir(root), "chats"))
 }
 
 type cursorProvider struct {
@@ -88,7 +117,7 @@ func (p *cursorProvider) Parse(
 	}
 	path, ok := p.sources.pathFromSource(req.Source)
 	if !ok {
-		return ParseOutcome{}, fmt.Errorf("cursor source path unavailable")
+		return ParseOutcome{}, errors.New("cursor source path unavailable")
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
 	cwd := ""
@@ -106,6 +135,39 @@ func (p *cursorProvider) Parse(
 			ResultSetComplete: true,
 			SkipReason:        SkipNoSession,
 		}, nil
+	}
+	storePath, agentID, enrichErr := p.sources.storePathForSource(req.Source, path)
+	if enrichErr == nil && storePath != "" {
+		enrichErr = enrichCursorSessionFromStore(
+			ctx, storePath, agentID, sess, msgs,
+		)
+		if errors.Is(enrichErr, context.Canceled) ||
+			errors.Is(enrichErr, context.DeadlineExceeded) {
+			return ParseOutcome{}, enrichErr
+		}
+		if enrichErr != nil {
+			enrichErr = fmt.Errorf("cursor store %s: %w", storePath, enrichErr)
+		}
+	}
+	if errors.Is(enrichErr, errCursorStoreFormat) {
+		log.Printf("warning: %v; using Cursor transcript only", enrichErr)
+	} else if enrichErr != nil {
+		return ParseOutcome{ //nolint:nilerr // The operational error is carried in ParseOutcome.SourceErrors for retry classification.
+			SourceErrors: []SourceError{{
+				SourceKey:   req.Source.Key,
+				DisplayPath: path,
+				SessionID:   sess.ID,
+				Err:         enrichErr,
+				Retryable:   true,
+			}},
+			ResultSetComplete: true,
+		}, nil
+	}
+	if req.Fingerprint.Size > 0 {
+		sess.File.Size = req.Fingerprint.Size
+	}
+	if req.Fingerprint.MTimeNS > 0 {
+		sess.File.Mtime = req.Fingerprint.MTimeNS
 	}
 	if req.Fingerprint.Hash != "" {
 		sess.File.Hash = req.Fingerprint.Hash
@@ -129,6 +191,8 @@ type cursorSource struct {
 
 type cursorSourceSet struct {
 	roots              []string
+	metadataDirs       map[string][]string
+	storeIndex         *cursorStoreIndex
 	resolver           func(string) string
 	resolutionResolver func(string, CursorResolveMode, string) SourceCwdResolution
 	remote             bool
@@ -138,12 +202,14 @@ type cursorSourceSet struct {
 func newCursorSourceSet(roots []string) cursorSourceSet {
 	return cursorSourceSet{
 		roots:       cleanJSONLRoots(roots),
+		storeIndex:  newCursorStoreIndex(),
 		remoteRoots: make(map[string]bool),
 	}
 }
 
 func newCursorSourceSetWithConfig(cfg ProviderConfig) cursorSourceSet {
 	s := newCursorSourceSet(cfg.Roots)
+	s.metadataDirs = cloneMetadataDirs(cfg.MetadataDirs)
 	s.remote = cfg.PathRewriter != nil
 	for root, machine := range cfg.SourceMachines {
 		if machine != "" && machine != cfg.Machine {
@@ -205,7 +271,7 @@ func (s cursorSourceSet) remoteRoot(root string) bool {
 
 var cursorS3Provider = DefaultS3Provider{
 	Agent:      AgentCursor,
-	IDPrefix:   "cursor:",
+	IDPrefix:   cursorSessionIDPrefix,
 	Extensions: []string{".jsonl", ".txt"},
 }
 
@@ -226,6 +292,9 @@ func (s cursorSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 				addJSONLSource(s3SourceRefFromDiscoveredFile(root, file), &sources, seen)
 			}
 			continue
+		}
+		for _, chats := range s.chatsDirs(root) {
+			s.storeIndex.refresh(chats)
 		}
 		for _, path := range s.discoverTranscriptPaths(root) {
 			source, ok := s.sourceRefWithCache(root, path, resolutionCache)
@@ -257,6 +326,9 @@ func (s cursorSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef)
 			}
 			continue
 		}
+		for _, chats := range s.chatsDirs(root) {
+			s.storeIndex.refresh(chats)
+		}
 		resolvedRoot, err := filepath.EvalSymlinks(root)
 		if err != nil {
 			if _, lstatErr := os.Lstat(root); errors.Is(lstatErr, os.ErrNotExist) {
@@ -282,42 +354,131 @@ func (s cursorSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef)
 			if !isContainedIn(resolvedDir, resolvedRoot) {
 				return nil
 			}
-			return streamDirectoryEntries(ctx, dir, func(entry os.DirEntry) error {
+			topLevel := make(map[string]struct{})
+			var sessionDirs []string
+			err := streamDirectoryEntries(ctx, dir, func(entry os.DirEntry) error {
+				if !entry.IsDir() {
+					if !IsCursorTranscriptExt(entry.Name()) {
+						return nil
+					}
+					if entry.Type().IsRegular() {
+						name := entry.Name()
+						topLevel[strings.TrimSuffix(name, filepath.Ext(name))] = struct{}{}
+					}
+					return s.yieldIfCanonical(
+						root, filepath.Join(dir, entry.Name()), resolutionCache, yield,
+					)
+				}
+				sessionDir := filepath.Join(dir, entry.Name())
+				sessionDirs = append(sessionDirs, sessionDir)
+				base := filepath.Join(sessionDir, entry.Name())
 				path := ""
-				if entry.IsDir() {
-					base := filepath.Join(dir, entry.Name(), entry.Name())
-					jsonl, statErr := streamingRegularFileCandidate(base + ".jsonl")
+				for _, ext := range []string{".jsonl", ".txt"} {
+					// Preserve broken-link errors without letting a symlink
+					// reserve the stem or outrank a regular file.
+					regular, statErr := streamingRegularFileCandidate(base + ext)
 					if statErr != nil {
-						return fmt.Errorf("stat cursor candidate %s: %w", base+".jsonl", statErr)
+						return fmt.Errorf("stat cursor candidate %s: %w", base+ext, statErr)
 					}
-					txt, statErr := streamingRegularFileCandidate(base + ".txt")
-					if statErr != nil {
-						return fmt.Errorf("stat cursor candidate %s: %w", base+".txt", statErr)
+					if regular && IsRegularFile(base+ext) {
+						path = base + ext
+						break
 					}
-					if jsonl {
-						path = base + ".jsonl"
-					} else if txt {
-						path = base + ".txt"
-					}
-				} else if IsCursorTranscriptExt(entry.Name()) {
-					path = filepath.Join(dir, entry.Name())
 				}
 				if path == "" {
 					return nil
 				}
-				source, ok, sourceErr := s.streamingSourceRefWithCache(
-					root, path, resolutionCache,
-				)
-				if sourceErr != nil {
-					return sourceErr
-				}
-				if ok {
-					return yield(source)
-				}
-				return nil
+				topLevel[entry.Name()] = struct{}{}
+				return s.yieldIfCanonical(root, path, resolutionCache, yield)
 			})
+			if err != nil {
+				return err
+			}
+			return s.streamSubagentTranscripts(
+				ctx, root, sessionDirs, topLevel, resolutionCache, yield,
+			)
 		})
 		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s cursorSourceSet) yieldIfCanonical(
+	root, path string,
+	resolutionCache cursorResolutionCache,
+	yield func(SourceRef) error,
+) error {
+	source, ok, err := s.streamingSourceRefWithCache(root, path, resolutionCache)
+	if err != nil {
+		return err
+	}
+	if ok {
+		return yield(source)
+	}
+	return nil
+}
+
+// streamSubagentTranscripts resolves a project's subagent files through the
+// same stem map as the batch walk, so a child stem under two parents yields
+// one source in both walks and a top-level transcript always shadows it. The
+// map holds one entry per child, so streaming stays bounded. A symlinked
+// subagents folder is skipped like a symlinked project directory, and each
+// folder is read with one ReadDir: it holds a handful of files, so the batched
+// streamer that guards huge flat archives costs more than it saves here.
+func (s cursorSourceSet) streamSubagentTranscripts(
+	ctx context.Context,
+	root string,
+	sessionDirs []string,
+	topLevel map[string]struct{},
+	resolutionCache cursorResolutionCache,
+	yield func(SourceRef) error,
+) error {
+	// The streamer reports entries in filesystem order; the batch walk's
+	// os.ReadDir sorts, so sort here too or "first parent wins" diverges.
+	sort.Strings(sessionDirs)
+	subagentSeen := make(map[string]string)
+	for _, sessionDir := range sessionDirs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		subagentsDir := filepath.Join(sessionDir, cursorSubagentsDirName)
+		info, err := os.Lstat(subagentsDir)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("stat cursor subagents %s: %w", subagentsDir, err)
+		}
+		if !info.IsDir() {
+			continue
+		}
+		entries, err := os.ReadDir(subagentsDir)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("read cursor subagents %s: %w", subagentsDir, err)
+		}
+		for _, entry := range entries {
+			if !entry.Type().IsRegular() || !IsCursorTranscriptExt(entry.Name()) {
+				continue
+			}
+			cursorAddSeen(subagentSeen, entry.Name(), filepath.Join(subagentsDir, entry.Name()))
+		}
+	}
+	stems := make([]string, 0, len(subagentSeen))
+	for stem := range subagentSeen {
+		if _, shadowed := topLevel[stem]; !shadowed {
+			stems = append(stems, stem)
+		}
+	}
+	sort.Strings(stems)
+	for _, stem := range stems {
+		if err := s.yieldIfCanonical(
+			root, subagentSeen[stem], resolutionCache, yield,
+		); err != nil {
 			return err
 		}
 	}
@@ -341,30 +502,27 @@ func (s cursorSourceSet) streamingSourceRefWithCache(
 	if !regular {
 		return SourceRef{}, false, nil
 	}
-	rawID, ok := cursorRawSessionIDFromPath(root, path)
+	loc, ok := cursorTranscriptLocationInRoot(root, path)
 	if !ok {
 		return SourceRef{}, false, nil
 	}
-	projectDir, ok := cursorProjectDirFromPath(root, path)
-	if !ok {
-		return SourceRef{}, false, nil
-	}
-	selected, err := cursorFindSourceFileInProjectStrict(root, projectDir, rawID)
+	selected, err := cursorFindSourceFileInProjectStrict(root, loc)
 	if err != nil {
 		return SourceRef{}, false, err
 	}
 	if selected == "" || !samePath(selected, path) {
 		return SourceRef{}, false, nil
 	}
-	project := DecodeCursorProjectDir(projectDir)
+	project := DecodeCursorProjectDir(loc.ProjectDir)
 	if project == "" {
 		project = "unknown"
 	}
+	s.storeIndex.rememberTranscript(root, path)
 	return SourceRef{
 		Provider: AgentCursor, Key: path, DisplayPath: path,
 		FingerprintKey: path, ProjectHint: project,
 		CwdResolution: s.resolveCwd(
-			root, projectDir, CursorResolvePassiveDiscovery, "", resolutionCache,
+			root, loc.ProjectDir, CursorResolvePassiveDiscovery, "", resolutionCache,
 		),
 		Opaque: cursorSource{
 			Root: root, Path: path,
@@ -373,39 +531,35 @@ func (s cursorSourceSet) streamingSourceRefWithCache(
 }
 
 func cursorFindSourceFileInProjectStrict(
-	root, projectDir, rawID string,
+	root string, loc cursorTranscriptLocation,
 ) (string, error) {
-	if root == "" || projectDir == "" || !IsValidSessionID(rawID) {
+	if root == "" || loc.ProjectDir == "" || !IsValidSessionID(loc.RawID) {
 		return "", nil
 	}
 	resolvedRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return "", fmt.Errorf("resolve cursor root %s: %w", root, err)
 	}
-	transcriptsDir := filepath.Join(root, projectDir, "agent-transcripts")
-	for _, ext := range []string{".jsonl", ".txt"} {
-		target := rawID + ext
-		for _, candidate := range []string{
-			filepath.Join(transcriptsDir, rawID, target),
-			filepath.Join(transcriptsDir, target),
-		} {
-			info, statErr := os.Stat(candidate)
-			if errors.Is(statErr, os.ErrNotExist) {
-				continue
-			}
-			if statErr != nil {
-				return "", fmt.Errorf("stat cursor transcript %s: %w", candidate, statErr)
-			}
-			if !info.Mode().IsRegular() {
-				continue
-			}
-			resolved, resolveErr := filepath.EvalSymlinks(candidate)
-			if resolveErr != nil {
-				return "", fmt.Errorf("resolve cursor transcript %s: %w", candidate, resolveErr)
-			}
-			if isContainedIn(resolved, resolvedRoot) {
-				return candidate, nil
-			}
+	transcriptsDir := filepath.Join(root, loc.ProjectDir, "agent-transcripts")
+	for _, candidate := range cursorTranscriptCandidates(transcriptsDir, loc) {
+		// Lstat so a symlinked transcript is skipped here as the batch walk
+		// and parseSession's O_NOFOLLOW open already skip it.
+		info, statErr := os.Lstat(candidate)
+		if errors.Is(statErr, os.ErrNotExist) {
+			continue
+		}
+		if statErr != nil {
+			return "", fmt.Errorf("stat cursor transcript %s: %w", candidate, statErr)
+		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
+		resolved, resolveErr := filepath.EvalSymlinks(candidate)
+		if resolveErr != nil {
+			return "", fmt.Errorf("resolve cursor transcript %s: %w", candidate, resolveErr)
+		}
+		if isContainedIn(resolved, resolvedRoot) {
+			return candidate, nil
 		}
 	}
 	return "", nil
@@ -414,9 +568,10 @@ func cursorFindSourceFileInProjectStrict(
 // discoverTranscriptPaths walks a Cursor projects root and returns the primary
 // transcript file paths. All paths resolve within the canonical root,
 // preventing symlink escapes. Symlinked project directory entries are rejected.
-// Cursor uses two layouts: flat (agent-transcripts/<uuid>.{txt,jsonl}) and
-// nested (agent-transcripts/<uuid>/<uuid>.{txt,jsonl}); when both .jsonl and
-// .txt exist for the same stem, .jsonl is preferred.
+// Cursor uses three layouts: flat (agent-transcripts/<uuid>.{txt,jsonl}),
+// nested (agent-transcripts/<uuid>/<uuid>.{txt,jsonl}), and subagent
+// (agent-transcripts/<parent>/subagents/<uuid>.{txt,jsonl}); when both .jsonl
+// and .txt exist for the same stem, .jsonl is preferred.
 func (s cursorSourceSet) discoverTranscriptPaths(projectsDir string) []string {
 	if projectsDir == "" {
 		return nil
@@ -465,11 +620,8 @@ func (s cursorSourceSet) discoverTranscriptPaths(projectsDir string) []string {
 		// Collect valid transcripts, deduping by basename
 		// stem. When both .jsonl and .txt exist for the
 		// same session, prefer .jsonl.
-		//
-		// Cursor uses two layouts:
-		//   flat:   agent-transcripts/<uuid>.{txt,jsonl}
-		//   nested: agent-transcripts/<uuid>/<uuid>.{txt,jsonl}
 		seen := make(map[string]string) // stem -> path
+		var subagentsDirs []string
 		for _, sf := range transcripts {
 			if !sf.IsDir() {
 				// Flat layout: file directly in
@@ -496,6 +648,13 @@ func (s cursorSourceSet) discoverTranscriptPaths(projectsDir string) []string {
 			dirName := sf.Name()
 			for _, sub := range subEntries {
 				if sub.IsDir() {
+					// A symlinked subagents entry reports IsDir false
+					// and is skipped with the other non-transcripts.
+					if sub.Name() == cursorSubagentsDirName {
+						subagentsDirs = append(
+							subagentsDirs, filepath.Join(subDir, sub.Name()),
+						)
+					}
 					continue
 				}
 				name := sub.Name()
@@ -516,11 +675,40 @@ func (s cursorSourceSet) discoverTranscriptPaths(projectsDir string) []string {
 				cursorAddSeen(seen, name, fullPath)
 			}
 		}
+		// A session's own transcript outranks a copy in another session's
+		// subagents directory regardless of extension, matching
+		// cursorTranscriptCandidates, so subagent files fill unseen stems only.
+		subagentSeen := make(map[string]string)
+		for _, subagentsDir := range subagentsDirs {
+			cursorCollectSubagentTranscripts(subagentSeen, subagentsDir)
+		}
+		for stem, path := range subagentSeen {
+			if _, ok := seen[stem]; !ok {
+				seen[stem] = path
+			}
+		}
 		for _, path := range seen {
 			paths = append(paths, path)
 		}
 	}
 	return paths
+}
+
+func cursorCollectSubagentTranscripts(seen map[string]string, subagentsDir string) {
+	entries, err := os.ReadDir(subagentsDir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !IsCursorTranscriptExt(entry.Name()) {
+			continue
+		}
+		fullPath := filepath.Join(subagentsDir, entry.Name())
+		if !IsRegularFile(fullPath) {
+			continue
+		}
+		cursorAddSeen(seen, entry.Name(), fullPath)
+	}
 }
 
 // cursorAddSeen inserts a transcript path into the seen map, preferring .jsonl
@@ -538,7 +726,8 @@ func cursorAddSeen(seen map[string]string, name, fullPath string) {
 }
 
 func (s cursorSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
-	roots := make([]WatchRoot, 0, len(s.roots))
+	roots := make([]WatchRoot, 0, len(s.roots)*2)
+	seenChats := make(map[string]struct{})
 	for _, root := range s.roots {
 		if isS3URI(root) {
 			continue
@@ -549,6 +738,18 @@ func (s cursorSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 			IncludeGlobs: []string{"*.jsonl", "*.txt"},
 			DebounceKey:  string(AgentCursor) + ":transcripts:" + root,
 		})
+		for _, chats := range s.chatsDirs(root) {
+			chats = filepath.Clean(chats)
+			if _, ok := seenChats[chats]; ok {
+				continue
+			}
+			seenChats[chats] = struct{}{}
+			roots = append(roots, WatchRoot{
+				Path:        chats,
+				Recursive:   true,
+				DebounceKey: string(AgentCursor) + ":store:" + chats,
+			})
+		}
 	}
 	return WatchPlan{Roots: roots}, nil
 }
@@ -561,20 +762,30 @@ func (s cursorSourceSet) SourcesForChangedPath(
 		return nil, err
 	}
 	if req.WatchRoot != "" {
-		root := filepath.Clean(req.WatchRoot)
-		if !s.hasRoot(root) {
-			return nil, nil
+		watchRoot := filepath.Clean(req.WatchRoot)
+		if s.hasRoot(watchRoot) {
+			source, ok := s.sourceForPathInRoot(watchRoot, req.Path)
+			if !ok {
+				return nil, nil
+			}
+			return []SourceRef{source}, nil
 		}
-		source, ok := s.sourceForPathInRoot(root, req.Path)
-		if !ok {
-			return nil, nil
+		if projectsRoot, ok := s.projectsRootForChats(watchRoot); ok {
+			return s.sourcesForStorePath(projectsRoot, req.Path)
 		}
-		return []SourceRef{source}, nil
+		return nil, nil
 	}
 	for _, root := range s.roots {
 		source, ok := s.sourceForPathInRoot(root, req.Path)
 		if ok {
 			return []SourceRef{source}, nil
+		}
+	}
+	for _, root := range s.roots {
+		if sources, err := s.sourcesForStorePath(root, req.Path); err != nil {
+			return nil, err
+		} else if len(sources) > 0 {
+			return sources, nil
 		}
 	}
 	return nil, nil
@@ -611,8 +822,9 @@ func (s cursorSourceSet) FindSource(
 }
 
 // cursorFindSourceFile finds a Cursor transcript file by session UUID across a
-// projects root, preferring .jsonl over .txt. Returns "" if no matching file
-// resolves within the canonical root.
+// projects root, preferring .jsonl over .txt. A top-level transcript wins over
+// one stored in another session's subagents directory. Returns "" if no
+// matching file resolves within the canonical root.
 func cursorFindSourceFile(projectsDir, sessionID string) string {
 	if projectsDir == "" || !IsValidSessionID(sessionID) {
 		return ""
@@ -634,37 +846,64 @@ func cursorFindSourceFile(projectsDir, sessionID string) string {
 			if !entry.IsDir() {
 				continue
 			}
+			transcriptsDir := filepath.Join(
+				projectsDir, entry.Name(), "agent-transcripts",
+			)
 			// Nested layout first (matches discovery
 			// precedence), then flat layout.
-			candidates := []string{
-				filepath.Join(
-					projectsDir, entry.Name(),
-					"agent-transcripts", sessionID, target,
-				),
-				filepath.Join(
-					projectsDir, entry.Name(),
-					"agent-transcripts", target,
-				),
+			for _, candidate := range []string{
+				filepath.Join(transcriptsDir, sessionID, target),
+				filepath.Join(transcriptsDir, target),
+			} {
+				if cursorTranscriptContained(candidate, resolvedRoot) {
+					return candidate
+				}
 			}
-			for _, candidate := range candidates {
-				if !IsRegularFile(candidate) {
-					continue
-				}
-				resolved, err := filepath.EvalSymlinks(candidate)
-				if err != nil {
-					continue
-				}
-				rel, err := filepath.Rel(resolvedRoot, resolved)
-				sep := string(filepath.Separator)
-				if err != nil || rel == ".." ||
-					strings.HasPrefix(rel, ".."+sep) {
-					continue
-				}
+		}
+	}
+
+	var subagentsDirs []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		transcriptsDir := filepath.Join(
+			projectsDir, entry.Name(), "agent-transcripts",
+		)
+		sessions, err := os.ReadDir(transcriptsDir)
+		if err != nil {
+			continue
+		}
+		for _, session := range sessions {
+			name := session.Name()
+			if !session.IsDir() || name == sessionID || !IsValidSessionID(name) {
+				continue
+			}
+			subagentsDirs = append(subagentsDirs, filepath.Join(
+				transcriptsDir, name, cursorSubagentsDirName,
+			))
+		}
+	}
+	for _, ext := range []string{".jsonl", ".txt"} {
+		for _, subagentsDir := range subagentsDirs {
+			candidate := filepath.Join(subagentsDir, sessionID+ext)
+			if cursorTranscriptContained(candidate, resolvedRoot) {
 				return candidate
 			}
 		}
 	}
 	return ""
+}
+
+func cursorTranscriptContained(candidate, resolvedRoot string) bool {
+	if !IsRegularFile(candidate) {
+		return false
+	}
+	resolved, err := filepath.EvalSymlinks(candidate)
+	if err != nil {
+		return false
+	}
+	return isContainedIn(resolved, resolvedRoot)
 }
 
 func (s cursorSourceSet) Fingerprint(
@@ -676,7 +915,7 @@ func (s cursorSourceSet) Fingerprint(
 	}
 	path, ok := s.pathFromSource(source)
 	if !ok {
-		return SourceFingerprint{}, fmt.Errorf("cursor source path unavailable")
+		return SourceFingerprint{}, errors.New("cursor source path unavailable")
 	}
 	info, err := os.Stat(path)
 	if err != nil {
@@ -692,10 +931,31 @@ func (s cursorSourceSet) Fingerprint(
 			return SourceFingerprint{}, err
 		}
 	}
+	mtime := info.ModTime().UnixNano()
+	storePath, _, err := s.storePathForSource(source, path)
+	if err != nil {
+		return SourceFingerprint{}, err
+	}
+	if storePath != "" {
+		if composite, err := sqliteDBCompositeMtime(
+			storePath, sqliteDBJournalSuffixes,
+		); err == nil && composite > mtime {
+			mtime = composite
+		}
+		stateHash, err := cursorIDESQLiteStateHash(storePath)
+		if err != nil {
+			return SourceFingerprint{}, fmt.Errorf("fingerprint Cursor store %s: %w", storePath, err)
+		}
+		if hash == "" {
+			hash = "store:" + stateHash
+		} else {
+			hash = hash + "|store:" + stateHash
+		}
+	}
 	return SourceFingerprint{
 		Key:     firstNonEmptyJSONLString(source.FingerprintKey, source.Key, path),
 		Size:    info.Size(),
-		MTimeNS: info.ModTime().UnixNano(),
+		MTimeNS: mtime,
 		Hash:    hash,
 	}, nil
 }
@@ -737,15 +997,37 @@ func (s cursorSourceSet) sourceForPathInRoot(
 	root string,
 	path string,
 ) (SourceRef, bool) {
-	rawID, ok := cursorRawSessionIDFromPath(root, path)
+	loc, ok := cursorTranscriptLocationInRoot(root, path)
 	if !ok {
 		return SourceRef{}, false
 	}
-	projectDir, ok := cursorProjectDirFromPath(root, path)
-	if !ok {
-		return SourceRef{}, false
+	// Changed and stored paths have not passed discovery's project-wide
+	// deduplication. Resolve only this stem across all parents.
+	loc.ParentRawID = ""
+	selected := cursorFindSourceFileInProject(root, loc)
+	if selected == "" {
+		transcriptsDir := filepath.Join(root, loc.ProjectDir, "agent-transcripts")
+		parents, err := os.ReadDir(transcriptsDir)
+		if err != nil {
+			return SourceRef{}, false
+		}
+		seen := make(map[string]string)
+		for _, parent := range parents {
+			if !parent.IsDir() || parent.Name() == loc.RawID || !IsValidSessionID(parent.Name()) {
+				continue
+			}
+			subagentsDir := filepath.Join(transcriptsDir, parent.Name(), cursorSubagentsDirName)
+			info, err := os.Lstat(subagentsDir)
+			if err != nil || !info.IsDir() {
+				continue
+			}
+			loc.ParentRawID = parent.Name()
+			if candidate := cursorFindSourceFileInProject(root, loc); candidate != "" {
+				cursorAddSeen(seen, filepath.Base(candidate), candidate)
+			}
+		}
+		selected = seen[loc.RawID]
 	}
-	selected := cursorFindSourceFileInProject(root, projectDir, rawID)
 	if selected == "" {
 		return SourceRef{}, false
 	}
@@ -764,22 +1046,19 @@ func (s cursorSourceSet) sourceRefWithCache(
 	if !IsRegularFile(path) {
 		return SourceRef{}, false
 	}
-	rawID, ok := cursorRawSessionIDFromPath(root, path)
+	loc, ok := cursorTranscriptLocationInRoot(root, path)
 	if !ok {
 		return SourceRef{}, false
 	}
-	projectDir, ok := cursorProjectDirFromPath(root, path)
-	if !ok {
-		return SourceRef{}, false
-	}
-	selected := cursorFindSourceFileInProject(root, projectDir, rawID)
+	selected := cursorFindSourceFileInProject(root, loc)
 	if selected == "" || !samePath(selected, path) {
 		return SourceRef{}, false
 	}
-	project := DecodeCursorProjectDir(projectDir)
+	project := DecodeCursorProjectDir(loc.ProjectDir)
 	if project == "" {
 		project = "unknown"
 	}
+	s.storeIndex.rememberTranscript(root, path)
 	return SourceRef{
 		Provider:       AgentCursor,
 		Key:            path,
@@ -787,7 +1066,7 @@ func (s cursorSourceSet) sourceRefWithCache(
 		FingerprintKey: path,
 		ProjectHint:    project,
 		CwdResolution: s.resolveCwd(
-			root, projectDir, CursorResolvePassiveDiscovery, "", resolutionCache,
+			root, loc.ProjectDir, CursorResolvePassiveDiscovery, "", resolutionCache,
 		),
 		Opaque: cursorSource{
 			Root: root,
@@ -805,68 +1084,125 @@ func (s cursorSourceSet) hasRoot(root string) bool {
 	return false
 }
 
-func cursorFindSourceFileInProject(root, projectDir, rawID string) string {
-	if root == "" || projectDir == "" || !IsValidSessionID(rawID) {
+func (s cursorSourceSet) chatsDirs(root string) []string {
+	if isS3URI(root) || s.remote || s.remoteRoot(root) {
+		return nil
+	}
+	clean := filepath.Clean(root)
+	if dirs := s.metadataDirs[clean]; len(dirs) > 0 {
+		return dirs
+	}
+	for configured, dirs := range s.metadataDirs {
+		if samePath(configured, clean) {
+			return dirs
+		}
+	}
+	return nil
+}
+
+func (s cursorSourceSet) projectsRootForChats(chatsRoot string) (string, bool) {
+	chatsRoot = filepath.Clean(chatsRoot)
+	for _, root := range s.roots {
+		for _, chats := range s.chatsDirs(root) {
+			if samePath(chats, chatsRoot) {
+				return root, true
+			}
+		}
+	}
+	return "", false
+}
+
+func (s cursorSourceSet) storePathForSource(
+	source SourceRef, path string,
+) (string, string, error) {
+	root := ""
+	switch src := source.Opaque.(type) {
+	case cursorSource:
+		root = src.Root
+	case *cursorSource:
+		if src != nil {
+			root = src.Root
+		}
+	}
+	if root == "" {
+		for _, candidate := range s.roots {
+			loc, ok := cursorTranscriptLocationInRoot(candidate, path)
+			if ok && IsValidSessionID(loc.RawID) {
+				root = candidate
+				break
+			}
+		}
+	}
+	if root == "" {
+		return "", "", nil
+	}
+	agentID := cursorRawIDFromTranscriptPath(path)
+	if !IsValidSessionID(agentID) {
+		return "", "", nil
+	}
+	storePath, err := s.storePathForRawID(root, agentID)
+	return storePath, agentID, err
+}
+
+func (s cursorSourceSet) storePathForRawID(root, agentID string) (string, error) {
+	for _, chats := range s.chatsDirs(root) {
+		if !s.storeIndex.initialized(chats) {
+			s.storeIndex.refresh(chats)
+		}
+		if path, err := s.storeIndex.path(chats, agentID); path != "" || err != nil {
+			return path, err
+		}
+	}
+	return "", nil
+}
+
+func (s cursorSourceSet) sourcesForStorePath(root, path string) ([]SourceRef, error) {
+	agentID, ok := cursorStoreAgentIDFromPath(path)
+	if !ok {
+		return nil, nil
+	}
+	underMetadata := false
+	matchingChats := ""
+	for _, chats := range s.chatsDirs(root) {
+		if !isContainedIn(filepath.Clean(path), filepath.Clean(chats)) {
+			continue
+		}
+		underMetadata = true
+		matchingChats = chats
+		break
+	}
+	if !underMetadata {
+		return nil, nil
+	}
+	s.storeIndex.remember(
+		matchingChats, agentID, filepath.Join(filepath.Dir(path), "store.db"),
+	)
+	transcript := s.storeIndex.transcriptPath(root, agentID)
+	if transcript == "" {
+		transcript = cursorFindSourceFile(root, agentID)
+	}
+	source, ok := s.sourceRef(root, transcript)
+	if !ok {
+		return nil, nil
+	}
+	return []SourceRef{source}, nil
+}
+
+func cursorFindSourceFileInProject(root string, loc cursorTranscriptLocation) string {
+	if root == "" || loc.ProjectDir == "" || !IsValidSessionID(loc.RawID) {
 		return ""
 	}
 	resolvedRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return ""
 	}
-	transcriptsDir := filepath.Join(root, projectDir, "agent-transcripts")
-	for _, ext := range []string{".jsonl", ".txt"} {
-		target := rawID + ext
-		candidates := []string{
-			filepath.Join(transcriptsDir, rawID, target),
-			filepath.Join(transcriptsDir, target),
-		}
-		for _, candidate := range candidates {
-			if !IsRegularFile(candidate) {
-				continue
-			}
-			resolved, err := filepath.EvalSymlinks(candidate)
-			if err != nil || !isContainedIn(resolved, resolvedRoot) {
-				continue
-			}
+	transcriptsDir := filepath.Join(root, loc.ProjectDir, "agent-transcripts")
+	for _, candidate := range cursorTranscriptCandidates(transcriptsDir, loc) {
+		if cursorTranscriptContained(candidate, resolvedRoot) {
 			return candidate
 		}
 	}
 	return ""
-}
-
-func cursorRawSessionIDFromPath(root, path string) (string, bool) {
-	rel, ok := cursorRelPath(root, path)
-	if !ok {
-		return "", false
-	}
-	parts := strings.Split(rel, string(filepath.Separator))
-	switch len(parts) {
-	case 3:
-		return strings.TrimSuffix(parts[2], filepath.Ext(parts[2])), true
-	case 4:
-		return parts[2], true
-	default:
-		return "", false
-	}
-}
-
-func cursorProjectDirFromPath(root, path string) (string, bool) {
-	rel, ok := cursorRelPath(root, path)
-	if !ok {
-		return "", false
-	}
-	return ParseCursorTranscriptRelPath(rel)
-}
-
-func cursorRelPath(root, path string) (string, bool) {
-	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
-	if err != nil {
-		return "", false
-	}
-	if _, ok := ParseCursorTranscriptRelPath(rel); !ok {
-		return "", false
-	}
-	return rel, true
 }
 
 func cursorProviderCapabilities() Capabilities {
@@ -885,10 +1221,15 @@ func cursorProviderCapabilities() Capabilities {
 			S3Discovery:          CapabilitySupported,
 		},
 		Content: ContentCapabilities{
-			FirstMessage: CapabilitySupported,
-			Thinking:     CapabilitySupported,
-			ToolCalls:    CapabilitySupported,
-			ToolResults:  CapabilitySupported,
+			FirstMessage:     CapabilitySupported,
+			Thinking:         CapabilitySupported,
+			ToolCalls:        CapabilitySupported,
+			ToolResults:      CapabilitySupported,
+			ToolResultEvents: CapabilitySupported,
+		},
+		Sync: ProviderSyncSemantics{
+			FingerprintHashInCacheKey:           true,
+			FingerprintHashRequiredForFreshness: true,
 		},
 	}
 }

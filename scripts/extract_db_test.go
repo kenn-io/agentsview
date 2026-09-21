@@ -33,7 +33,7 @@ func TestExtractDBBlocksTermsAcrossCoveredColumns(t *testing.T) {
 
 	// Build the source database with the real schema so the test never
 	// drifts from the production DDL (FTS table, triggers, all tables).
-	d, err := avdb.Open(srcPath)
+	d, err := avdb.Open(t.Context(), srcPath)
 	require.NoError(t, err)
 	require.NoError(t, d.Close())
 
@@ -45,7 +45,7 @@ func TestExtractDBBlocksTermsAcrossCoveredColumns(t *testing.T) {
 	// extract window (which spans 60 days back from the newest session).
 	const ts = "2026-06-01T12:00:00.000Z"
 	insertSession := func(id, branch, firstMsg string) {
-		_, err := conn.Exec(
+		_, err := conn.ExecContext(t.Context(),
 			`INSERT INTO sessions
 			   (id, project, created_at, started_at, message_count,
 			    user_message_count, git_branch, first_message)
@@ -55,7 +55,7 @@ func TestExtractDBBlocksTermsAcrossCoveredColumns(t *testing.T) {
 		require.NoError(t, err)
 	}
 	insertMessage := func(id int, sessionID, content string) {
-		_, err := conn.Exec(
+		_, err := conn.ExecContext(t.Context(),
 			`INSERT INTO messages (id, session_id, ordinal, role, content)
 			 VALUES (?, ?, 0, 'user', ?)`,
 			id, sessionID, content,
@@ -63,7 +63,7 @@ func TestExtractDBBlocksTermsAcrossCoveredColumns(t *testing.T) {
 		require.NoError(t, err)
 	}
 	insertToolCall := func(sessionID, filePath, skillName, inputJSON string) {
-		_, err := conn.Exec(
+		_, err := conn.ExecContext(t.Context(),
 			`INSERT INTO tool_calls
 			   (message_id, session_id, tool_name, category,
 			    file_path, skill_name, input_json)
@@ -96,13 +96,13 @@ func TestExtractDBBlocksTermsAcrossCoveredColumns(t *testing.T) {
 	insertToolCall("s_skill", "/tmp/clean.go", "blocklist-demo-service-deploy", `{"b":2}`)
 
 	// Flush the WAL so the sqlite3 CLI sees every committed row.
-	_, err = conn.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
+	_, err = conn.ExecContext(t.Context(), "PRAGMA wal_checkpoint(TRUNCATE)")
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 
 	outPath := filepath.Join(tempDir, "out.db")
 	scriptPath := filepath.Join("..", "docs", "screenshots", "extract-db.sh")
-	cmd := exec.Command("bash", scriptPath, srcPath, outPath)
+	cmd := exec.CommandContext(t.Context(), "bash", scriptPath, srcPath, outPath)
 	cmd.Env = append(
 		os.Environ(),
 		"SCREENSHOT_BLOCKED_TERMS=blocklist-demo-service",
@@ -117,7 +117,7 @@ func TestExtractDBBlocksTermsAcrossCoveredColumns(t *testing.T) {
 	require.NoError(t, err)
 	defer outConn.Close()
 
-	rows, err := outConn.Query("SELECT id FROM sessions ORDER BY id")
+	rows, err := outConn.QueryContext(t.Context(), "SELECT id FROM sessions ORDER BY id")
 	require.NoError(t, err)
 	defer rows.Close()
 	var ids []string
@@ -147,7 +147,7 @@ func TestExtractDBUsesPrivateTermsFileByDefault(t *testing.T) {
 
 	tempDir := t.TempDir()
 	srcPath := filepath.Join(tempDir, "source.db")
-	d, err := avdb.Open(srcPath)
+	d, err := avdb.Open(t.Context(), srcPath)
 	require.NoError(t, err)
 	require.NoError(t, d.Close())
 
@@ -157,7 +157,7 @@ func TestExtractDBUsesPrivateTermsFileByDefault(t *testing.T) {
 
 	const ts = "2026-06-01T12:00:00.000Z"
 	seed := func(id, content string) {
-		_, err := conn.Exec(
+		_, err := conn.ExecContext(t.Context(),
 			`INSERT INTO sessions
 			   (id, project, created_at, started_at, message_count,
 			    user_message_count)
@@ -165,7 +165,7 @@ func TestExtractDBUsesPrivateTermsFileByDefault(t *testing.T) {
 			id, ts,
 		)
 		require.NoError(t, err)
-		_, err = conn.Exec(
+		_, err = conn.ExecContext(t.Context(),
 			`INSERT INTO messages (session_id, ordinal, role, content)
 			 VALUES (?, 0, 'user', ?)`,
 			id, content,
@@ -175,7 +175,7 @@ func TestExtractDBUsesPrivateTermsFileByDefault(t *testing.T) {
 	seed("s_keep", "ordinary screenshot-safe notes")
 	seed("s_drop", "mentions blocklist-demo-service in the transcript")
 
-	_, err = conn.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
+	_, err = conn.ExecContext(t.Context(), "PRAGMA wal_checkpoint(TRUNCATE)")
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 
@@ -189,7 +189,7 @@ func TestExtractDBUsesPrivateTermsFileByDefault(t *testing.T) {
 
 	outPath := filepath.Join(tempDir, "out.db")
 	scriptPath := filepath.Join("..", "docs", "screenshots", "extract-db.sh")
-	cmd := exec.Command("bash", scriptPath, srcPath, outPath)
+	cmd := exec.CommandContext(t.Context(), "bash", scriptPath, srcPath, outPath)
 	cmd.Env = filteredEnv(
 		"SCREENSHOT_BLOCKED_TERMS_FILE",
 		"KENN_PRIVATE_TERMS_FILE",
@@ -205,7 +205,7 @@ func TestExtractDBUsesPrivateTermsFileByDefault(t *testing.T) {
 	outConn, err := sql.Open("sqlite3", outPath)
 	require.NoError(t, err)
 	defer outConn.Close()
-	rows, err := outConn.Query("SELECT id FROM sessions ORDER BY id")
+	rows, err := outConn.QueryContext(t.Context(), "SELECT id FROM sessions ORDER BY id")
 	require.NoError(t, err)
 	defer rows.Close()
 	var ids []string
@@ -229,7 +229,7 @@ func TestExtractDBRedactsHomePathByDefault(t *testing.T) {
 
 	tempDir := t.TempDir()
 	srcPath := filepath.Join(tempDir, "source.db")
-	d, err := avdb.Open(srcPath)
+	d, err := avdb.Open(t.Context(), srcPath)
 	require.NoError(t, err)
 	require.NoError(t, d.Close())
 
@@ -237,12 +237,11 @@ func TestExtractDBRedactsHomePathByDefault(t *testing.T) {
 	require.NoError(t, err)
 	defer conn.Close()
 
-	homePath := filepath.Join(tempDir, "home", "local-user")
-	require.NoError(t, os.MkdirAll(homePath, 0o700))
+	const homePath = "/home/local.user_name"
 
 	const ts = "2026-06-01T12:00:00.000Z"
 	seed := func(id, firstMessage, content string) {
-		_, err := conn.Exec(
+		_, err := conn.ExecContext(t.Context(),
 			`INSERT INTO sessions
 			   (id, project, created_at, started_at, message_count,
 			    user_message_count, first_message)
@@ -250,7 +249,7 @@ func TestExtractDBRedactsHomePathByDefault(t *testing.T) {
 			id, ts, firstMessage,
 		)
 		require.NoError(t, err)
-		_, err = conn.Exec(
+		_, err = conn.ExecContext(t.Context(),
 			`INSERT INTO messages (session_id, ordinal, role, content)
 			 VALUES (?, 0, 'user', ?)`,
 			id, content,
@@ -263,14 +262,19 @@ func TestExtractDBRedactsHomePathByDefault(t *testing.T) {
 		"Review work under "+filepath.Join(homePath, "code", "project-a"),
 		"Inspect "+filepath.Join(homePath, "code", "project-a", "main.go"),
 	)
+	seed(
+		"s_encoded",
+		"Open -home-local-user-name-code-project-a",
+		"Inspect ~/.claude/projects/-home-local-user-name-code-project-a/session.jsonl",
+	)
 
-	_, err = conn.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
+	_, err = conn.ExecContext(t.Context(), "PRAGMA wal_checkpoint(TRUNCATE)")
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 
 	outPath := filepath.Join(tempDir, "out.db")
 	scriptPath := filepath.Join("..", "docs", "screenshots", "extract-db.sh")
-	cmd := exec.Command("bash", scriptPath, srcPath, outPath)
+	cmd := exec.CommandContext(t.Context(), "bash", scriptPath, srcPath, outPath)
 	cmd.Env = append(
 		filteredEnv(
 			"SCREENSHOT_BLOCKED_TERMS_FILE",
@@ -287,7 +291,7 @@ func TestExtractDBRedactsHomePathByDefault(t *testing.T) {
 	outConn, err := sql.Open("sqlite3", outPath)
 	require.NoError(t, err)
 	defer outConn.Close()
-	rows, err := outConn.Query("SELECT id FROM sessions ORDER BY id")
+	rows, err := outConn.QueryContext(t.Context(), "SELECT id FROM sessions ORDER BY id")
 	require.NoError(t, err)
 	defer rows.Close()
 	var ids []string
@@ -298,10 +302,10 @@ func TestExtractDBRedactsHomePathByDefault(t *testing.T) {
 	}
 	require.NoError(t, rows.Err())
 
-	assert.Equal(t, []string{"s_keep", "s_redact"}, ids)
+	assert.Equal(t, []string{"s_encoded", "s_keep", "s_redact"}, ids)
 
 	var firstMessage, content string
-	require.NoError(t, outConn.QueryRow(
+	require.NoError(t, outConn.QueryRowContext(t.Context(),
 		`SELECT s.first_message, m.content
 		 FROM sessions s
 		 JOIN messages m ON m.session_id = s.id
@@ -311,6 +315,15 @@ func TestExtractDBRedactsHomePathByDefault(t *testing.T) {
 	assert.Equal(t, "Inspect ~/code/project-a/main.go", content)
 	assert.NotContains(t, firstMessage, homePath)
 	assert.NotContains(t, content, homePath)
+
+	require.NoError(t, outConn.QueryRowContext(t.Context(),
+		`SELECT s.first_message, m.content
+		 FROM sessions s
+		 JOIN messages m ON m.session_id = s.id
+		 WHERE s.id = 's_encoded'`,
+	).Scan(&firstMessage, &content))
+	assert.Equal(t, "Open -home-user-code-project-a", firstMessage)
+	assert.Equal(t, "Inspect ~/.claude/projects/-home-user-code-project-a/session.jsonl", content)
 }
 
 func TestExtractDBUsesPrivateTermsFileWithScreenshotFileOverride(t *testing.T) {
@@ -323,7 +336,7 @@ func TestExtractDBUsesPrivateTermsFileWithScreenshotFileOverride(t *testing.T) {
 
 	tempDir := t.TempDir()
 	srcPath := filepath.Join(tempDir, "source.db")
-	d, err := avdb.Open(srcPath)
+	d, err := avdb.Open(t.Context(), srcPath)
 	require.NoError(t, err)
 	require.NoError(t, d.Close())
 
@@ -333,7 +346,7 @@ func TestExtractDBUsesPrivateTermsFileWithScreenshotFileOverride(t *testing.T) {
 
 	const ts = "2026-06-01T12:00:00.000Z"
 	seed := func(id, content string) {
-		_, err := conn.Exec(
+		_, err := conn.ExecContext(t.Context(),
 			`INSERT INTO sessions
 			   (id, project, created_at, started_at, message_count,
 			    user_message_count)
@@ -341,7 +354,7 @@ func TestExtractDBUsesPrivateTermsFileWithScreenshotFileOverride(t *testing.T) {
 			id, ts,
 		)
 		require.NoError(t, err)
-		_, err = conn.Exec(
+		_, err = conn.ExecContext(t.Context(),
 			`INSERT INTO messages (session_id, ordinal, role, content)
 			 VALUES (?, 0, 'user', ?)`,
 			id, content,
@@ -352,7 +365,7 @@ func TestExtractDBUsesPrivateTermsFileWithScreenshotFileOverride(t *testing.T) {
 	seed("s_drop_private", "mentions private-only-demo in the transcript")
 	seed("s_drop_screenshot", "mentions screenshot-only-demo in the transcript")
 
-	_, err = conn.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
+	_, err = conn.ExecContext(t.Context(), "PRAGMA wal_checkpoint(TRUNCATE)")
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 
@@ -363,7 +376,7 @@ func TestExtractDBUsesPrivateTermsFileWithScreenshotFileOverride(t *testing.T) {
 
 	outPath := filepath.Join(tempDir, "out.db")
 	scriptPath := filepath.Join("..", "docs", "screenshots", "extract-db.sh")
-	cmd := exec.Command("bash", scriptPath, srcPath, outPath)
+	cmd := exec.CommandContext(t.Context(), "bash", scriptPath, srcPath, outPath)
 	cmd.Env = append(
 		filteredEnv("KENN_PRIVATE_TERMS_FILE"),
 		"SCREENSHOT_BLOCKED_TERMS=",
@@ -376,7 +389,7 @@ func TestExtractDBUsesPrivateTermsFileWithScreenshotFileOverride(t *testing.T) {
 	outConn, err := sql.Open("sqlite3", outPath)
 	require.NoError(t, err)
 	defer outConn.Close()
-	rows, err := outConn.Query("SELECT id FROM sessions ORDER BY id")
+	rows, err := outConn.QueryContext(t.Context(), "SELECT id FROM sessions ORDER BY id")
 	require.NoError(t, err)
 	defer rows.Close()
 	var ids []string
@@ -404,7 +417,7 @@ func TestExtractDBKeepsOnlyRootTrees(t *testing.T) {
 
 	tempDir := t.TempDir()
 	srcPath := filepath.Join(tempDir, "source.db")
-	d, err := avdb.Open(srcPath)
+	d, err := avdb.Open(t.Context(), srcPath)
 	require.NoError(t, err)
 	require.NoError(t, d.Close())
 
@@ -416,7 +429,7 @@ func TestExtractDBKeepsOnlyRootTrees(t *testing.T) {
 		id, parentID, relationship, createdAt string,
 		automated, messageCount, userMessageCount int,
 	) {
-		_, err := conn.Exec(
+		_, err := conn.ExecContext(t.Context(),
 			`INSERT INTO sessions
 			   (id, project, created_at, started_at, message_count,
 			    user_message_count, parent_session_id, relationship_type,
@@ -426,7 +439,7 @@ func TestExtractDBKeepsOnlyRootTrees(t *testing.T) {
 			parentID, relationship, automated, id+" prompt",
 		)
 		require.NoError(t, err)
-		_, err = conn.Exec(
+		_, err = conn.ExecContext(t.Context(),
 			`INSERT INTO messages (session_id, ordinal, role, content)
 			 VALUES (?, 0, 'user', ?)`,
 			id, id+" message",
@@ -447,11 +460,11 @@ func TestExtractDBKeepsOnlyRootTrees(t *testing.T) {
 	insertSession("old_root_drop", "", "", old, 0, 3, 2)
 	insertSession("old_thinking_keep", "", "", old, 0, 3, 2)
 	insertSession("automated_thinking_keep", "", "", recent, 1, 1, 1)
-	_, err = conn.Exec(
+	_, err = conn.ExecContext(t.Context(),
 		"UPDATE sessions SET machine = 'private-workstation'",
 	)
 	require.NoError(t, err)
-	_, err = conn.Exec(
+	_, err = conn.ExecContext(t.Context(),
 		`INSERT INTO project_identity_observations
 		   (session_id, project, machine, root_path, observed_at)
 		 VALUES
@@ -460,32 +473,32 @@ func TestExtractDBKeepsOnlyRootTrees(t *testing.T) {
 		recent,
 	)
 	require.NoError(t, err)
-	_, err = conn.Exec(
+	_, err = conn.ExecContext(t.Context(),
 		`UPDATE session_project_identity_snapshots
 		 SET machine = 'private-workstation', root_path = '/private/agentsview'
 		 WHERE session_id = 'root_keep'`,
 	)
 	require.NoError(t, err)
-	_, err = conn.Exec(
+	_, err = conn.ExecContext(t.Context(),
 		`INSERT INTO worktree_project_mappings
 		   (machine, path_prefix, project)
 		 VALUES ('private-workstation', '/private', 'agentsview')`,
 	)
 	require.NoError(t, err)
-	_, err = conn.Exec(
+	_, err = conn.ExecContext(t.Context(),
 		`UPDATE messages
 		 SET thinking_text = 'private reasoning', has_thinking = 1
 		 WHERE session_id IN ('old_thinking_keep', 'automated_thinking_keep')`,
 	)
 	require.NoError(t, err)
 
-	_, err = conn.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
+	_, err = conn.ExecContext(t.Context(), "PRAGMA wal_checkpoint(TRUNCATE)")
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 
 	outPath := filepath.Join(tempDir, "out.db")
 	scriptPath := filepath.Join("..", "docs", "screenshots", "extract-db.sh")
-	cmd := exec.Command("bash", scriptPath, srcPath, outPath)
+	cmd := exec.CommandContext(t.Context(), "bash", scriptPath, srcPath, outPath)
 	cmd.Env = append(
 		os.Environ(),
 		"SCREENSHOT_BLOCKED_TERMS=",
@@ -498,7 +511,7 @@ func TestExtractDBKeepsOnlyRootTrees(t *testing.T) {
 	require.NoError(t, err)
 	defer outConn.Close()
 
-	rows, err := outConn.Query("SELECT id FROM sessions ORDER BY id")
+	rows, err := outConn.QueryContext(t.Context(), "SELECT id FROM sessions ORDER BY id")
 	require.NoError(t, err)
 	defer rows.Close()
 	var ids []string
@@ -521,12 +534,12 @@ func TestExtractDBKeepsOnlyRootTrees(t *testing.T) {
 	}, ids)
 
 	var automatedCount int
-	require.NoError(t, outConn.QueryRow(
+	require.NoError(t, outConn.QueryRowContext(t.Context(),
 		"SELECT COUNT(*) FROM sessions WHERE is_automated = 1",
 	).Scan(&automatedCount))
 	assert.Equal(t, 3, automatedCount)
 
-	machineRows, err := outConn.Query(
+	machineRows, err := outConn.QueryContext(t.Context(),
 		`SELECT m.name
 		 FROM sqlite_master m
 		 JOIN pragma_table_info(m.name) p ON p.name = 'machine'
@@ -534,6 +547,7 @@ func TestExtractDBKeepsOnlyRootTrees(t *testing.T) {
 		 ORDER BY m.name`,
 	)
 	require.NoError(t, err)
+	defer machineRows.Close()
 	var machineTables []string
 	for machineRows.Next() {
 		var table string
@@ -545,7 +559,7 @@ func TestExtractDBKeepsOnlyRootTrees(t *testing.T) {
 	for _, table := range machineTables {
 		quoted := `"` + strings.ReplaceAll(table, `"`, `""`) + `"`
 		var unexpected int
-		require.NoError(t, outConn.QueryRow(
+		require.NoError(t, outConn.QueryRowContext(t.Context(),
 			"SELECT COUNT(*) FROM "+quoted+" WHERE machine != 'dev-laptop'",
 		).Scan(&unexpected))
 		assert.Zero(t, unexpected, table)
@@ -560,14 +574,14 @@ func TestExtractDBKeepsOnlyRootTrees(t *testing.T) {
 		"worktree_project_mapping_changes",
 	} {
 		var count int
-		require.NoError(t, outConn.QueryRow(
+		require.NoError(t, outConn.QueryRowContext(t.Context(),
 			"SELECT COUNT(*) FROM "+table,
 		).Scan(&count))
 		assert.Zero(t, count, table)
 	}
 
 	var orphanChildCount int
-	require.NoError(t, outConn.QueryRow(
+	require.NoError(t, outConn.QueryRowContext(t.Context(),
 		`SELECT COUNT(*)
 		 FROM sessions child
 		 WHERE child.relationship_type IN ('subagent', 'fork', 'continuation')
@@ -593,7 +607,7 @@ func TestExtractDBSupportsArchivesBeforeMappingChangeJournals(t *testing.T) {
 
 	tempDir := t.TempDir()
 	srcPath := filepath.Join(tempDir, "source.db")
-	d, err := avdb.Open(srcPath)
+	d, err := avdb.Open(t.Context(), srcPath)
 	require.NoError(t, err)
 	require.NoError(t, d.Close())
 
@@ -601,7 +615,7 @@ func TestExtractDBSupportsArchivesBeforeMappingChangeJournals(t *testing.T) {
 	require.NoError(t, err)
 	defer conn.Close()
 
-	_, err = conn.Exec(`
+	_, err = conn.ExecContext(t.Context(), `
 		DROP TRIGGER trg_worktree_project_mappings_revision_insert;
 		DROP TRIGGER trg_worktree_project_mappings_revision_update;
 		DROP TRIGGER trg_worktree_project_mappings_revision_delete;
@@ -618,7 +632,7 @@ func TestExtractDBSupportsArchivesBeforeMappingChangeJournals(t *testing.T) {
 		VALUES ('dev-laptop', '/workspace', 'agentsview');
 	`)
 	require.NoError(t, err)
-	_, err = conn.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
+	_, err = conn.ExecContext(t.Context(), "PRAGMA wal_checkpoint(TRUNCATE)")
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 	ftsSQL := `
@@ -630,12 +644,12 @@ func TestExtractDBSupportsArchivesBeforeMappingChangeJournals(t *testing.T) {
 		);
 		INSERT INTO messages_fts(messages_fts) VALUES('rebuild');
 	`
-	out, err := exec.Command("sqlite3", srcPath, ftsSQL).CombinedOutput()
+	out, err := exec.CommandContext(t.Context(), "sqlite3", srcPath, ftsSQL).CombinedOutput()
 	require.NoErrorf(t, err, "create FTS fixture: %s", out)
 
 	outPath := filepath.Join(tempDir, "out.db")
 	scriptPath := filepath.Join("..", "docs", "screenshots", "extract-db.sh")
-	cmd := exec.Command("bash", scriptPath, srcPath, outPath)
+	cmd := exec.CommandContext(t.Context(), "bash", scriptPath, srcPath, outPath)
 	cmd.Env = append(
 		os.Environ(),
 		"SCREENSHOT_BLOCKED_TERMS=",
@@ -649,7 +663,7 @@ func TestExtractDBSupportsArchivesBeforeMappingChangeJournals(t *testing.T) {
 	defer outConn.Close()
 
 	var sessionCount int
-	require.NoError(t, outConn.QueryRow(
+	require.NoError(t, outConn.QueryRowContext(t.Context(),
 		"SELECT COUNT(*) FROM sessions WHERE id = 's_keep'",
 	).Scan(&sessionCount))
 	assert.Equal(t, 1, sessionCount)
@@ -669,7 +683,7 @@ func TestExtractDBTermsFileSkipsCommentsAndBlanks(t *testing.T) {
 
 	tempDir := t.TempDir()
 	srcPath := filepath.Join(tempDir, "source.db")
-	d, err := avdb.Open(srcPath)
+	d, err := avdb.Open(t.Context(), srcPath)
 	require.NoError(t, err)
 	require.NoError(t, d.Close())
 
@@ -679,7 +693,7 @@ func TestExtractDBTermsFileSkipsCommentsAndBlanks(t *testing.T) {
 
 	const ts = "2026-06-01T12:00:00.000Z"
 	seed := func(id, content string) {
-		_, err := conn.Exec(
+		_, err := conn.ExecContext(t.Context(),
 			`INSERT INTO sessions
 			   (id, project, created_at, started_at, message_count,
 			    user_message_count)
@@ -687,7 +701,7 @@ func TestExtractDBTermsFileSkipsCommentsAndBlanks(t *testing.T) {
 			id, ts,
 		)
 		require.NoError(t, err)
-		_, err = conn.Exec(
+		_, err = conn.ExecContext(t.Context(),
 			`INSERT INTO messages (session_id, ordinal, role, content)
 			 VALUES (?, 0, 'user', ?)`,
 			id, content,
@@ -701,7 +715,7 @@ func TestExtractDBTermsFileSkipsCommentsAndBlanks(t *testing.T) {
 	// Session referencing the one real blocked term.
 	seed("s_drop", "spent the day on blocklist-demo-service internals")
 
-	_, err = conn.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
+	_, err = conn.ExecContext(t.Context(), "PRAGMA wal_checkpoint(TRUNCATE)")
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 
@@ -716,7 +730,7 @@ func TestExtractDBTermsFileSkipsCommentsAndBlanks(t *testing.T) {
 
 	outPath := filepath.Join(tempDir, "out.db")
 	scriptPath := filepath.Join("..", "docs", "screenshots", "extract-db.sh")
-	cmd := exec.Command("bash", scriptPath, srcPath, outPath)
+	cmd := exec.CommandContext(t.Context(), "bash", scriptPath, srcPath, outPath)
 	cmd.Env = append(
 		os.Environ(),
 		"SCREENSHOT_BLOCKED_TERMS=",
@@ -728,7 +742,7 @@ func TestExtractDBTermsFileSkipsCommentsAndBlanks(t *testing.T) {
 	outConn, err := sql.Open("sqlite3", outPath)
 	require.NoError(t, err)
 	defer outConn.Close()
-	rows, err := outConn.Query("SELECT id FROM sessions ORDER BY id")
+	rows, err := outConn.QueryContext(t.Context(), "SELECT id FROM sessions ORDER BY id")
 	require.NoError(t, err)
 	defer rows.Close()
 	var ids []string

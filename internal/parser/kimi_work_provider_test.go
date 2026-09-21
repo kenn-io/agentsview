@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -85,13 +84,13 @@ func TestKimiWorkProviderDiscoveryFiltersAuxSessions(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	plan, err := provider.WatchPlan(context.Background())
+	plan, err := provider.WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, root, plan.Roots[0].Path)
 	assert.True(t, plan.Roots[0].Recursive)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 3)
 	for _, source := range discovered {
@@ -150,7 +149,7 @@ func TestKimiWorkProviderFindSourceRoundTrip(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			found, ok, err := provider.FindSource(context.Background(), tt.req)
+			found, ok, err := provider.FindSource(t.Context(), tt.req)
 			require.NoError(t, err)
 			require.True(t, ok)
 			assert.Equal(t, tt.want, found.DisplayPath)
@@ -168,7 +167,7 @@ func TestKimiWorkProviderFindSourceRoundTrip(t *testing.T) {
 		wd + ":main:conv-000000000000000000000000",
 		"invalid",
 	} {
-		_, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		_, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 			RawSessionID: rawID,
 		})
 		require.NoError(t, err)
@@ -190,16 +189,16 @@ func TestKimiWorkProviderParse(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 
-	fp, err := provider.Fingerprint(context.Background(), sources[0])
+	fp, err := provider.Fingerprint(t.Context(), sources[0])
 	require.NoError(t, err)
 	assert.Equal(t, sourcePath, fp.Key)
 	assert.NotEmpty(t, fp.Hash)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      sources[0],
 		Fingerprint: fp,
 	})
@@ -239,10 +238,10 @@ func TestKimiWorkProviderParseRetainsProviderCwd(t *testing.T) {
 
 	provider, ok := NewProvider(AgentKimiWork, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
-	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
 	result := outcome.Results[0].Result
@@ -286,11 +285,11 @@ func TestKimiWorkProviderMissingModelUsesDateAmbiguousAlias(t *testing.T) {
 				Roots: []string{root},
 			})
 			require.True(t, ok)
-			sources, err := provider.Discover(context.Background())
+			sources, err := provider.Discover(t.Context())
 			require.NoError(t, err)
 			require.Len(t, sources, 1)
 
-			outcome, err := provider.Parse(context.Background(), ParseRequest{
+			outcome, err := provider.Parse(t.Context(), ParseRequest{
 				Source: sources[0],
 			})
 			require.NoError(t, err)
@@ -346,7 +345,7 @@ func TestKimiWorkProviderDiscoversSymlinkedWorkspaceDirectory(t *testing.T) {
 
 	provider, ok := NewProvider(AgentKimiWork, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, sourcePath, discovered[0].DisplayPath)

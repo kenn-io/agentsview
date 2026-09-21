@@ -3,13 +3,13 @@
 package duckdb
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // TestGetAllMessagesSkipsNegativeCallIndex guards against a panic when the
@@ -19,7 +19,7 @@ import (
 // message loading with "index out of range [-1]". The Postgres store already
 // guards callIndex < 0; the DuckDB store must behave the same way.
 func TestGetAllMessagesSkipsNegativeCallIndex(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, fixture := newSyncedStore(t)
 
 	// alpha message ordinal 1 has exactly one real tool call ("search").
@@ -60,15 +60,15 @@ func TestGetAllMessagesSkipsNegativeCallIndex(t *testing.T) {
 // CallIndex so GetMessages/GetAllMessages consumers see them at parity with
 // SQLite.
 func TestDuckMessageHydratesToolCallFilePathAndCallIndex(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
-	require.NoError(t, local.UpsertSession(db.Session{
+	require.NoError(t, local.UpsertSession(ctx, db.Session{
 		ID: "tc", Project: "p", Machine: "local", Agent: "claude",
 		MessageCount: 1, CreatedAt: "2026-01-01T00:00:00Z",
 	}), "upsert session")
 	// One assistant message with three tool calls; the write path numbers
 	// them positionally (0,1,2) and each carries a distinct file_path.
-	require.NoError(t, local.InsertMessages([]db.Message{{
+	require.NoError(t, local.InsertMessages(ctx, []db.Message{{
 		SessionID: "tc", Ordinal: 0, Role: "assistant", Content: "tools",
 		HasToolUse: true,
 		ToolCalls: []db.ToolCall{
@@ -78,7 +78,7 @@ func TestDuckMessageHydratesToolCallFilePathAndCallIndex(t *testing.T) {
 		},
 	}}), "insert messages")
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err := syncer.pushEverything(ctx, nil)
 	require.NoError(t, err, "push to duckdb mirror")

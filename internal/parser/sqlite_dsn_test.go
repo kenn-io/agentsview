@@ -43,7 +43,7 @@ func TestOpenSQLiteWithSpecialCharPath(t *testing.T) {
 
 	writer, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	_, err = writer.Exec("CREATE TABLE t (x INTEGER); INSERT INTO t VALUES (1)")
+	_, err = writer.ExecContext(t.Context(), "CREATE TABLE t (x INTEGER); INSERT INTO t VALUES (1)")
 	require.NoError(t, err)
 	require.NoError(t, writer.Close())
 
@@ -52,9 +52,35 @@ func TestOpenSQLiteWithSpecialCharPath(t *testing.T) {
 	defer db.Close()
 
 	var n int
-	require.NoError(t, db.QueryRow("SELECT count(*) FROM t").Scan(&n))
+	require.NoError(t, db.QueryRowContext(t.Context(), "SELECT count(*) FROM t").Scan(&n))
 	assert.Equal(t, 1, n)
 
-	_, err = db.Exec("INSERT INTO t VALUES (2)")
+	_, err = db.ExecContext(t.Context(), "INSERT INTO t VALUES (2)")
 	require.Error(t, err, "mode=ro must survive special characters in the path")
+}
+
+func TestOpenSQLiteReadOnlyStableSnapshot(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "snapshot.db")
+	writer, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = writer.ExecContext(t.Context(), `PRAGMA journal_mode=WAL;
+		CREATE TABLE messages (content TEXT);
+		INSERT INTO messages VALUES ('snapshot content')`)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	reader, err := openSQLiteReadOnly(dbPath, sqliteReadOptions{
+		stableSnapshot: true,
+		busyTimeoutMS:  3000,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reader.Close()) })
+	var content string
+	require.NoError(t, reader.QueryRowContext(t.Context(), "SELECT content FROM messages").Scan(&content))
+	assert.Equal(t, "snapshot content", content)
+	// Immutable archive copies must not create live WAL coordination files.
+	assert.NoFileExists(t, dbPath+"-wal")
+	assert.NoFileExists(t, dbPath+"-shm")
+	_, err = reader.ExecContext(t.Context(), "DELETE FROM messages")
+	require.Error(t, err)
 }

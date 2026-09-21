@@ -9,6 +9,8 @@ import (
 
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/rawsync"
+
+	"github.com/danielgtaylor/huma/v2"
 )
 
 const (
@@ -22,26 +24,52 @@ func (s *Server) registerRawSyncRoutes() {
 	if s.rawSyncDeviceAuth == nil && !s.rawSyncSchemaOnly {
 		return
 	}
-	group := newRouteGroup(s.api, "/api/v1/raw-sync", "RawSync")
-	group.register(
+	group := huma.NewGroup(s.api, "/api/v1/raw-sync")
+	configureRouteGroup(group, "RawSync")
+	registerRoute(group,
 		http.MethodPost, "/tokens", "Exchange a device credential",
 		s.humaRawSyncToken, s.humaTimeout(), maxBodyBytes(rawSyncTokenMaxBodyBytes),
 	)
+	if s.rawSyncStatus != nil || s.rawSyncSchemaOnly {
+		registerRoute(group,
+			http.MethodGet, "/status", "Read hosted raw sync status",
+			s.humaRawSyncStatus, s.humaTimeout(),
+		)
+	}
 	if s.rawSyncCustody == nil && !s.rawSyncSchemaOnly {
 		return
 	}
-	group.register(
+	registerRoute(group,
 		http.MethodPost, "/objects/missing", "Negotiate missing raw objects",
 		s.humaRawSyncMissingObjects, s.humaTimeout(),
 		maxBodyBytes(rawSyncControlMaxBodyBytes),
 	)
-	group.register(
+	registerRoute(group,
 		http.MethodPost, "/manifests", "Commit a raw manifest",
 		s.humaRawSyncManifest, s.humaTimeout(), maxBodyBytes(rawSyncControlMaxBodyBytes),
 	)
 	if s.rawSyncUploads != nil || s.rawSyncSchemaOnly {
 		s.registerRawUploadRoutes(group)
 	}
+}
+
+type rawSyncStatusInput struct {
+	Authorization string `header:"Authorization"`
+}
+
+func (s *Server) humaRawSyncStatus(
+	ctx context.Context,
+	_ *rawSyncStatusInput,
+) (*jsonOutput[rawsync.Status], error) {
+	identity, err := rawSyncIdentityFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	status, err := s.rawSyncStatus.ReadRawSyncStatus(ctx, identity)
+	if err != nil {
+		return nil, rawSyncHTTPError(err)
+	}
+	return &jsonOutput[rawsync.Status]{Body: status}, nil
 }
 
 type rawSyncTokenInput struct {
@@ -179,28 +207,28 @@ func rawSyncHTTPError(err error) error {
 	if err == nil {
 		return nil
 	}
-	var headConflict *rawsync.HeadConflictError
-	var offsetConflict *rawsync.UploadOffsetConflictError
-	var checksumMismatch *rawsync.UploadChecksumMismatchError
+	headConflict, hasHeadConflict := errors.AsType[*rawsync.HeadConflictError](err)
+	offsetConflict, hasOffsetConflict := errors.AsType[*rawsync.UploadOffsetConflictError](err)
+	checksumMismatch, hasChecksumMismatch := errors.AsType[*rawsync.UploadChecksumMismatchError](err)
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
 		return apiError(http.StatusGatewayTimeout, "gateway timeout")
 	case errors.Is(err, rawsync.ErrUnauthorized):
 		return apiErrorWithCode(http.StatusUnauthorized, "unauthorized", "Unauthorized")
-	case errors.As(err, &offsetConflict) && offsetConflict != nil:
+	case hasOffsetConflict && offsetConflict != nil:
 		offset := offsetConflict.CurrentOffset
-		return &apiErrorResponse{
+		return &apiResponseError{
 			Status: http.StatusConflict, Code: "upload_offset_conflict",
 			Message: "raw upload offset changed", CurrentUploadOffset: &offset,
 		}
-	case errors.As(err, &checksumMismatch) && checksumMismatch != nil:
+	case hasChecksumMismatch && checksumMismatch != nil:
 		offset := checksumMismatch.CurrentOffset
-		return &apiErrorResponse{
+		return &apiResponseError{
 			Status: http.StatusConflict, Code: "checksum_mismatch",
 			Message: "raw upload checksum did not match", CurrentUploadOffset: &offset,
 		}
-	case errors.As(err, &headConflict) && headConflict != nil:
-		return &apiErrorResponse{
+	case hasHeadConflict && headConflict != nil:
+		return &apiResponseError{
 			Status:            http.StatusConflict,
 			Code:              "head_conflict",
 			Message:           "raw source head changed",

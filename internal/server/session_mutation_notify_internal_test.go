@@ -32,7 +32,7 @@ func TestSessionMutationRoutesNotify(t *testing.T) {
 	dbPath := filepath.Join(dir, "test.db")
 	database := dbtest.OpenTestDBAt(t, dbPath)
 	var notified atomic.Int32
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {dir}},
 		Machine:   "test",
 	})
@@ -41,7 +41,7 @@ func TestSessionMutationRoutesNotify(t *testing.T) {
 	}, database, engine, WithSessionMutationNotifier(func() {
 		notified.Add(1)
 	}))
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "sess-1", Project: "proj", Machine: "local", Agent: "claude",
 	}))
 
@@ -51,7 +51,7 @@ func TestSessionMutationRoutesNotify(t *testing.T) {
 		if body != "" {
 			reader = strings.NewReader(body)
 		}
-		req := httptest.NewRequest(method, path, reader)
+		req := httptest.NewRequestWithContext(t.Context(), method, path, reader)
 		if body != "" {
 			req.Header.Set("Content-Type", "application/json")
 		}
@@ -86,7 +86,7 @@ func TestSessionMutationRoutesNotify(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	require.Equal(t, int32(5), notified.Load(), "emptying trash must notify")
 
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "sess-2", Project: "proj", Machine: "local", Agent: "claude",
 	}))
 	w = do(http.MethodDelete, "/api/v1/sessions/sess-2", "")
@@ -114,11 +114,11 @@ func TestSessionMutationRoutesFanOutToAllNotifiers(t *testing.T) {
 		WithSessionMutationNotifier(func() { extractionNotified.Add(1) }),
 		WithSessionMutationNotifier(func() { recallNotified.Add(1) }),
 	)
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "sess-1", Project: "proj", Machine: "local", Agent: "claude",
 	}))
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/sessions/sess-1", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodDelete, "/api/v1/sessions/sess-1", nil)
 	w := httptest.NewRecorder()
 	s.mux.ServeHTTP(w, req)
 
@@ -152,7 +152,7 @@ func TestSecretScanNotifiesOnPartialCommit(t *testing.T) {
 	dbPath := filepath.Join(dir, "test.db")
 	database := dbtest.OpenTestDBAt(t, dbPath)
 	var notified atomic.Int32
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {dir}},
 		Machine:   "test",
 	})
@@ -165,18 +165,18 @@ func TestSecretScanNotifiesOnPartialCommit(t *testing.T) {
 	// lands mid-scan with sessions still queued behind it.
 	for i := range 60 {
 		id := fmt.Sprintf("sess-%02d", i)
-		require.NoError(t, database.UpsertSession(db.Session{
+		require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 			ID: id, Project: "proj", Machine: "local", Agent: "claude",
 			MessageCount: 1,
 		}))
-		require.NoError(t, database.InsertMessages([]db.Message{{
+		require.NoError(t, database.InsertMessages(t.Context(), []db.Message{{
 			SessionID: id, Ordinal: 0, Role: "user", Content: "hello",
 		}}))
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	req := httptest.NewRequest(
+	req := httptest.NewRequestWithContext(ctx,
 		http.MethodPost, "/api/v1/secrets/scan?backfill=true", nil,
 	).WithContext(ctx)
 	w := &cancelOnProgressWriter{

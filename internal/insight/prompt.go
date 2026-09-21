@@ -7,6 +7,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 const maxSessions = 50
@@ -110,7 +111,7 @@ func BuildPrompt(
 			if s.FirstMessage != nil {
 				fmt.Fprintf(
 					&b, "- First message: %s\n",
-					truncateString(*s.FirstMessage, 200),
+					stringutil.TruncateRunes(*s.FirstMessage, 200, "..."),
 				)
 			}
 			b.WriteString("\n")
@@ -207,7 +208,7 @@ func buildSessionPrompt(
 				fmt.Fprintf(&b, "- Context tokens: %d\n", m.ContextTokens)
 				fmt.Fprintf(&b, "- Output tokens: %d\n", m.OutputTokens)
 			}
-			fmt.Fprintf(&b, "\n%s\n\n", truncateString(m.Content, 800))
+			fmt.Fprintf(&b, "\n%s\n\n", stringutil.TruncateRunes(m.Content, 800, "..."))
 		}
 	}
 	if req.Prompt != "" {
@@ -238,12 +239,4 @@ func writeSystemInstruction(b *strings.Builder, typ string) {
 				"projects are present.\n",
 		)
 	}
-}
-
-func truncateString(s string, max int) string {
-	runes := []rune(s)
-	if len(runes) <= max {
-		return s
-	}
-	return string(runes[:max]) + "..."
 }

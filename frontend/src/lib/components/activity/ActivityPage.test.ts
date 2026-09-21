@@ -2,7 +2,11 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { fireEvent, screen } from "@testing-library/svelte";
 import { mount, tick, unmount } from "svelte";
+vi.mock("../../feature-flags.js", () => ({
+  PROJECT_MAPPING_WORKSPACE_ENABLED: true,
+}));
 import { activity } from "../../stores/activity.svelte.js";
+import { sessions } from "../../stores/sessions.svelte.js";
 import { router } from "../../stores/router.svelte.js";
 import { yokedDates } from "../../stores/yokedDates.svelte.js";
 import source from "./ActivityPage.svelte?raw";
@@ -50,6 +54,9 @@ function projectReport(): Report {
     elapsed_bucket_count: 24,
     buckets: [],
     peak: { agents: 0, at: null },
+    interactive_peak: { agents: 0, at: null },
+    subagent_peak: { agents: 0, at: null },
+    automated_peak: { agents: 0, at: null },
     totals: {
       active_minutes: 0,
       idle_minutes: 0,
@@ -60,9 +67,12 @@ function projectReport(): Report {
       distinct_models: 0,
       output_tokens: 0,
       cost: testMoney(0),
+      subagent_agent_minutes: 0,
       automated_agent_minutes: 0,
+      subagent_cost: testMoney(0),
       automated_cost: testMoney(0),
       automated_sessions: 0,
+      subagent_sessions: 0,
       interactive_agent_minutes: 20,
       interactive_cost: testMoney(0),
       interactive_sessions: 1,
@@ -74,8 +84,10 @@ function projectReport(): Report {
         agent_minutes: 20,
         cost: testMoney(0),
         interactive_agent_minutes: 20,
+        subagent_agent_minutes: 0,
         automated_agent_minutes: 0,
         interactive_cost: testMoney(0),
+        subagent_cost: testMoney(0),
         automated_cost: testMoney(0),
       },
     ],
@@ -98,6 +110,81 @@ async function selectFirstActivityRange() {
   await fireEvent.pointerDown(target, { button: 0 });
   await fireEvent.pointerUp(window);
 }
+
+it("shows machine labels without full IDs crowding the menu and filters by ID", async () => {
+  stubActivityPageCollaborators();
+  const machine = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  activity.machines = [machine];
+  sessions.machineLabels = { [machine]: "Workstation" };
+  const component = mount(ActivityPage, { target: document.body });
+  try {
+    await flushEffects();
+    await fireEvent.click(screen.getByTitle("Filter by machine"));
+    const option = screen.getByRole("option", { name: "Workstation" });
+    await fireEvent.mouseDown(option);
+    expect(activity.machine).toBe(machine);
+  } finally {
+    unmount(component);
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    document.body.innerHTML = "";
+    activity.machines = [];
+    activity.setMachine("");
+    sessions.machineLabels = {};
+  }
+});
+
+it("distinguishes machines that share a label by a short ID and selects the right one", async () => {
+  stubActivityPageCollaborators();
+  const first = "aaaaaaaa111111111111111111111111";
+  const second = "bbbbbbbb222222222222222222222222";
+  const unique = "cccccccc333333333333333333333333";
+  activity.machines = [first, second, unique];
+  sessions.machineLabels = { [first]: "Workstation", [second]: "Workstation", [unique]: "Laptop" };
+  const component = mount(ActivityPage, { target: document.body });
+  try {
+    await flushEffects();
+    await fireEvent.click(screen.getByTitle("Filter by machine"));
+    expect(screen.getByRole("option", { name: "Workstation aaaaaaaa" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "Laptop" })).toBeTruthy();
+    await fireEvent.mouseDown(screen.getByRole("option", { name: "Workstation bbbbbbbb" }));
+    expect(activity.machine).toBe(second);
+    await flushEffects();
+    expect(screen.getByTitle("Filter by machine").textContent).toContain("Workstation (bbbbbbbb)");
+  } finally {
+    await unmount(component);
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    document.body.innerHTML = "";
+    activity.machines = [];
+    activity.setMachine("");
+    sessions.machineLabels = {};
+  }
+});
+
+it("falls back to the ID tail when same-label machines share an ID prefix", async () => {
+  stubActivityPageCollaborators();
+  const first = "host-prod-east-00000001";
+  const second = "host-prod-east-00000002";
+  activity.machines = [first, second];
+  sessions.machineLabels = { [first]: "Build box", [second]: "Build box" };
+  const component = mount(ActivityPage, { target: document.body });
+  try {
+    await flushEffects();
+    await fireEvent.click(screen.getByTitle("Filter by machine"));
+    expect(screen.getByRole("option", { name: "Build box …00000001" })).toBeTruthy();
+    await fireEvent.mouseDown(screen.getByRole("option", { name: "Build box …00000002" }));
+    expect(activity.machine).toBe(second);
+  } finally {
+    await unmount(component);
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    document.body.innerHTML = "";
+    activity.machines = [];
+    activity.setMachine("");
+    sessions.machineLabels = {};
+  }
+});
 
 describe("ActivityPage refresh control", () => {
   it("shows report progress in the refresh status instead of the report body", async () => {
@@ -190,6 +277,10 @@ describe("ActivityPage bucket drill-down", () => {
           start: "2026-07-01T00:00:00Z",
           end: "2026-07-01T01:00:00Z",
           max_agents: 1,
+          max_interactive_agents: 1,
+          max_subagent_agents: 0,
+          max_automated_agents: 0,
+          subagent_at_peak: 0,
           interactive_at_peak: 1,
           automated_at_peak: 0,
           agent_minutes: 20,
@@ -226,6 +317,10 @@ describe("ActivityPage bucket drill-down", () => {
           start: "2026-07-01T00:00:00Z",
           end: "2026-07-01T01:00:00Z",
           max_agents: 1,
+          max_interactive_agents: 1,
+          max_subagent_agents: 0,
+          max_automated_agents: 0,
+          subagent_at_peak: 0,
           interactive_at_peak: 1,
           automated_at_peak: 0,
           agent_minutes: 20,
@@ -260,6 +355,10 @@ describe("ActivityPage bucket drill-down", () => {
           start: "2026-07-01T00:00:00Z",
           end: "2026-07-01T01:00:00Z",
           max_agents: 1,
+          max_interactive_agents: 1,
+          max_subagent_agents: 0,
+          max_automated_agents: 0,
+          subagent_at_peak: 0,
           interactive_at_peak: 1,
           automated_at_peak: 0,
           agent_minutes: 20,
@@ -290,6 +389,10 @@ describe("ActivityPage bucket drill-down", () => {
           start: "2026-07-01T00:00:00Z",
           end: "2026-07-01T01:00:00Z",
           max_agents: 1,
+          max_interactive_agents: 1,
+          max_subagent_agents: 0,
+          max_automated_agents: 0,
+          subagent_at_peak: 0,
           interactive_at_peak: 1,
           automated_at_peak: 0,
           agent_minutes: 20,

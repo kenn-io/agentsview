@@ -3,7 +3,6 @@ package ssh
 import (
 	"archive/tar"
 	"bytes"
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,6 +25,7 @@ type tarEntry struct {
 // buildTestTar serializes entries into an in-memory tar archive.
 func buildTestTar(t *testing.T, entries []tarEntry) []byte {
 	t.Helper()
+
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
 	for _, e := range entries {
@@ -51,7 +51,7 @@ func buildTestTar(t *testing.T, entries []tarEntry) []byte {
 
 func extract(t *testing.T, data []byte, dst string) (int, error) {
 	t.Helper()
-	return extractTarStream(context.Background(), bytes.NewReader(data), dst)
+	return extractTarStream(t.Context(), bytes.NewReader(data), dst)
 }
 
 func TestExtractTarStreamSkipsSelfHardlink(t *testing.T) {
@@ -80,8 +80,8 @@ func TestExtractTarStreamSkipsSelfHardlink(t *testing.T) {
 	assert.Equal(t, "world", string(after))
 
 	_, statErr := os.Lstat(filepath.Join(dst, "home/wes/loop.jsonl"))
-	assert.True(
-		t, os.IsNotExist(statErr),
+	assert.True(t,
+		os.IsNotExist(statErr),
 		"self-referential hardlink should not be created",
 	)
 }
@@ -176,8 +176,8 @@ func TestExtractTarStreamSkipsSymlinks(t *testing.T) {
 		"home/link.txt", "home/rel-escape", "home/abs-escape",
 	} {
 		_, statErr := os.Lstat(filepath.Join(dst, name))
-		assert.True(
-			t, os.IsNotExist(statErr), "%s should be skipped", name,
+		assert.True(t,
+			os.IsNotExist(statErr), "%s should be skipped", name,
 		)
 	}
 }

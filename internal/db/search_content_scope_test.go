@@ -1,8 +1,6 @@
 package db
 
 import (
-	"context"
-	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -29,7 +27,7 @@ func seedSubagentSession(
 			Content: rc[1], Timestamp: "2026-05-20T12:00:0" + itoa(i) + "Z",
 		})
 	}
-	require.NoError(t, d.ReplaceSessionMessages(id, out), "ReplaceSessionMessages")
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), id, out), "ReplaceSessionMessages")
 }
 
 // seedScopeFixture seeds one top-level session ("top") and one subagent
@@ -44,10 +42,14 @@ func seedScopeFixture(t *testing.T, d *DB) *fakeVectorSearcher {
 		{"user", "zebra prompt inside the subagent"},
 	})
 	return &fakeVectorSearcher{hits: []VectorHit{
-		{SessionID: "sub", Ordinal: 0, Subordinate: true, Score: 0.9,
-			Snippet: "zebra prompt inside the subagent"},
-		{SessionID: "top", Ordinal: 0, Score: 0.5,
-			Snippet: "zebra question at top level"},
+		{
+			SessionID: "sub", Ordinal: 0, Subordinate: true, Score: 0.9,
+			Snippet: "zebra prompt inside the subagent",
+		},
+		{
+			SessionID: "top", Ordinal: 0, Score: 0.5,
+			Snippet: "zebra question at top level",
+		},
 	}}
 }
 
@@ -62,7 +64,7 @@ func matchSessionIDs(page ContentSearchPage) []string {
 // requireHybridReady skips hybrid-mode subtests when FTS5 is unavailable.
 func requireHybridReady(t *testing.T, d *DB, mode string) {
 	t.Helper()
-	if mode == "hybrid" && !d.HasFTS() {
+	if mode == "hybrid" && !d.HasFTS(t.Context()) {
 		t.Skip("fts5 not available")
 	}
 }
@@ -79,7 +81,7 @@ func TestSearchContentScopeDefaultAllIncludesSubordinate(t *testing.T) {
 			requireHybridReady(t, d, mode)
 			d.SetVectorSearcher(seedScopeFixture(t, d))
 
-			page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+			page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 				Pattern: "zebra", Mode: mode, Limit: 50,
 			})
 			require.NoError(t, err, "SearchContent")
@@ -100,7 +102,7 @@ func TestSearchContentScopeTopExcludesSubordinate(t *testing.T) {
 			requireHybridReady(t, d, mode)
 			d.SetVectorSearcher(seedScopeFixture(t, d))
 
-			page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+			page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 				Pattern: "zebra", Mode: mode, Scope: "top", Limit: 50,
 			})
 			require.NoError(t, err, "SearchContent")
@@ -118,7 +120,7 @@ func TestSearchContentScopeSubordinateOnly(t *testing.T) {
 			requireHybridReady(t, d, mode)
 			d.SetVectorSearcher(seedScopeFixture(t, d))
 
-			page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+			page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 				Pattern: "zebra", Mode: mode, Scope: "subordinate", Limit: 50,
 			})
 			require.NoError(t, err, "SearchContent")
@@ -136,11 +138,11 @@ func TestSearchContentScopeSupersedesIncludeChildren(t *testing.T) {
 	searcher := seedScopeFixture(t, d)
 	d.SetVectorSearcher(searcher)
 
-	withoutChildren, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	withoutChildren, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "zebra", Mode: "semantic", IncludeChildren: false, Limit: 50,
 	})
 	require.NoError(t, err, "SearchContent IncludeChildren=false")
-	withChildren, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	withChildren, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "zebra", Mode: "semantic", IncludeChildren: true, Limit: 50,
 	})
 	require.NoError(t, err, "SearchContent IncludeChildren=true")
@@ -156,6 +158,7 @@ func TestSearchContentScopeSupersedesIncludeChildren(t *testing.T) {
 func TestSearchContentScopeStillAppliesSessionFilters(t *testing.T) {
 	seedExtra := func(t *testing.T, d *DB) *fakeVectorSearcher {
 		t.Helper()
+
 		searcher := seedScopeFixture(t, d)
 		// ReplaceSessionMessages recomputes is_automated from the stored
 		// transcript, so the automated session must genuinely classify as
@@ -166,25 +169,31 @@ func TestSearchContentScopeStillAppliesSessionFilters(t *testing.T) {
 			s.UserMessageCount = 1
 			s.FirstMessage = Ptr(autoContent)
 		})
-		require.NoError(t, d.ReplaceSessionMessages("auto", []Message{
-			{SessionID: "auto", Ordinal: 0, Role: "user",
-				Content: autoContent, Timestamp: "2026-05-20T12:00:00Z"},
+		require.NoError(t, d.ReplaceSessionMessages(t.Context(), "auto", []Message{
+			{
+				SessionID: "auto", Ordinal: 0, Role: "user",
+				Content: autoContent, Timestamp: "2026-05-20T12:00:00Z",
+			},
 		}))
 		insertSession(t, d, "oneshot", "proj", func(s *Session) {
 			s.Agent = "claude"
 			s.UserMessageCount = 1
 		})
-		require.NoError(t, d.ReplaceSessionMessages("oneshot", []Message{
-			{SessionID: "oneshot", Ordinal: 0, Role: "user",
-				Content: "zebra one-shot", Timestamp: "2026-05-20T12:00:00Z"},
+		require.NoError(t, d.ReplaceSessionMessages(t.Context(), "oneshot", []Message{
+			{
+				SessionID: "oneshot", Ordinal: 0, Role: "user",
+				Content: "zebra one-shot", Timestamp: "2026-05-20T12:00:00Z",
+			},
 		}))
 		insertSession(t, d, "elsewhere", "otherproj", func(s *Session) {
 			s.Agent = "claude"
 			s.UserMessageCount = 2
 		})
-		require.NoError(t, d.ReplaceSessionMessages("elsewhere", []Message{
-			{SessionID: "elsewhere", Ordinal: 0, Role: "user",
-				Content: "zebra elsewhere", Timestamp: "2026-05-20T12:00:00Z"},
+		require.NoError(t, d.ReplaceSessionMessages(t.Context(), "elsewhere", []Message{
+			{
+				SessionID: "elsewhere", Ordinal: 0, Role: "user",
+				Content: "zebra elsewhere", Timestamp: "2026-05-20T12:00:00Z",
+			},
 		}))
 		searcher.hits = append(searcher.hits,
 			VectorHit{SessionID: "auto", Ordinal: 0, Score: 0.4, Snippet: "zebra from automation"},
@@ -197,7 +206,7 @@ func TestSearchContentScopeStillAppliesSessionFilters(t *testing.T) {
 	t.Run("defaults drop automated one-shot and other projects", func(t *testing.T) {
 		d := testDB(t)
 		d.SetVectorSearcher(seedExtra(t, d))
-		page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 			Pattern: "zebra", Mode: "semantic", Project: "proj", Limit: 50,
 		})
 		require.NoError(t, err, "SearchContent")
@@ -207,7 +216,7 @@ func TestSearchContentScopeStillAppliesSessionFilters(t *testing.T) {
 	t.Run("opt-ins restore automated and one-shot", func(t *testing.T) {
 		d := testDB(t)
 		d.SetVectorSearcher(seedExtra(t, d))
-		page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 			Pattern: "zebra", Mode: "semantic", Project: "proj",
 			IncludeAutomated: true, IncludeOneShot: true, Limit: 50,
 		})
@@ -223,7 +232,7 @@ func TestSearchContentScopeStillAppliesSessionFilters(t *testing.T) {
 // IncludeChildren=true.
 func TestSearchContentFTSModeIncludeChildrenUnchanged(t *testing.T) {
 	d := testDB(t)
-	if !d.HasFTS() {
+	if !d.HasFTS(t.Context()) {
 		t.Skip("fts5 not available")
 	}
 	d.SetVectorSearcher(seedScopeFixture(t, d))
@@ -231,13 +240,13 @@ func TestSearchContentFTSModeIncludeChildrenUnchanged(t *testing.T) {
 	base := ContentSearchFilter{
 		Pattern: "zebra", Mode: "fts", Sources: []string{"messages"}, Limit: 50,
 	}
-	page, err := d.SearchContent(context.Background(), base)
+	page, err := d.SearchContent(t.Context(), base)
 	require.NoError(t, err, "SearchContent fts default")
 	assert.Equal(t, []string{"top"}, matchSessionIDs(page),
 		"fts mode must keep excluding sidebar children by default")
 
 	base.IncludeChildren = true
-	page, err = d.SearchContent(context.Background(), base)
+	page, err = d.SearchContent(t.Context(), base)
 	require.NoError(t, err, "SearchContent fts include_children")
 	assert.ElementsMatch(t, []string{"top", "sub"}, matchSessionIDs(page))
 }
@@ -258,25 +267,35 @@ func seedOneShotSubagentFixture(t *testing.T, d *DB) *fakeVectorSearcher {
 		s.ParentSessionID = Ptr("top")
 		s.RelationshipType = "subagent"
 	})
-	require.NoError(t, d.ReplaceSessionMessages("sub1", []Message{
-		{SessionID: "sub1", Ordinal: 0, Role: "user",
-			Content: "zebra prompt for the subagent", Timestamp: "2026-05-20T12:00:00Z"},
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "sub1", []Message{
+		{
+			SessionID: "sub1", Ordinal: 0, Role: "user",
+			Content: "zebra prompt for the subagent", Timestamp: "2026-05-20T12:00:00Z",
+		},
 	}), "ReplaceSessionMessages sub1")
 	insertSession(t, d, "solo", "proj", func(s *Session) {
 		s.Agent = "claude"
 		s.UserMessageCount = 1
 	})
-	require.NoError(t, d.ReplaceSessionMessages("solo", []Message{
-		{SessionID: "solo", Ordinal: 0, Role: "user",
-			Content: "zebra one-shot at top level", Timestamp: "2026-05-20T12:00:00Z"},
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "solo", []Message{
+		{
+			SessionID: "solo", Ordinal: 0, Role: "user",
+			Content: "zebra one-shot at top level", Timestamp: "2026-05-20T12:00:00Z",
+		},
 	}), "ReplaceSessionMessages solo")
 	return &fakeVectorSearcher{hits: []VectorHit{
-		{SessionID: "sub1", Ordinal: 0, Subordinate: true, Score: 0.9,
-			Snippet: "zebra prompt for the subagent"},
-		{SessionID: "top", Ordinal: 0, Score: 0.5,
-			Snippet: "zebra question at top level"},
-		{SessionID: "solo", Ordinal: 0, Score: 0.4,
-			Snippet: "zebra one-shot at top level"},
+		{
+			SessionID: "sub1", Ordinal: 0, Subordinate: true, Score: 0.9,
+			Snippet: "zebra prompt for the subagent",
+		},
+		{
+			SessionID: "top", Ordinal: 0, Score: 0.5,
+			Snippet: "zebra question at top level",
+		},
+		{
+			SessionID: "solo", Ordinal: 0, Score: 0.4,
+			Snippet: "zebra one-shot at top level",
+		},
 	}}
 }
 
@@ -291,7 +310,7 @@ func TestSearchContentOneShotSubagentVisibleInSemanticModes(t *testing.T) {
 			requireHybridReady(t, d, mode)
 			d.SetVectorSearcher(seedOneShotSubagentFixture(t, d))
 
-			page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+			page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 				Pattern: "zebra", Mode: mode, Limit: 50,
 			})
 			require.NoError(t, err, "SearchContent")
@@ -310,12 +329,12 @@ func TestSearchContentOneShotSubagentVisibleInSemanticModes(t *testing.T) {
 // subagent session (both as a child and as a one-shot).
 func TestSearchContentFTSModeOneShotSubagentStillExcluded(t *testing.T) {
 	d := testDB(t)
-	if !d.HasFTS() {
+	if !d.HasFTS(t.Context()) {
 		t.Skip("fts5 not available")
 	}
 	d.SetVectorSearcher(seedOneShotSubagentFixture(t, d))
 
-	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "zebra", Mode: "fts", Sources: []string{"messages"}, Limit: 50,
 	})
 	require.NoError(t, err, "SearchContent fts")
@@ -331,12 +350,12 @@ func TestSearchContentScopeInvalidRejected(t *testing.T) {
 			d := testDB(t)
 			d.SetVectorSearcher(&fakeVectorSearcher{})
 
-			_, err := d.SearchContent(context.Background(), ContentSearchFilter{
+			_, err := d.SearchContent(t.Context(), ContentSearchFilter{
 				Pattern: "zebra", Mode: mode, Scope: "bogus",
 			})
 			require.Error(t, err)
 			var inputErr *SearchInputError
-			assert.True(t, errors.As(err, &inputErr),
+			assert.ErrorAs(t, err, &inputErr,
 				"expected *SearchInputError, got %T: %v", err, err)
 		})
 	}

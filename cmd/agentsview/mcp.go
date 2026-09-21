@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,6 +22,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	mcpserver "go.kenn.io/agentsview/internal/mcp"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/servicehttp"
 )
 
 func newMCPCommand() *cobra.Command {
@@ -96,6 +98,13 @@ Add to your MCP client config (e.g. Claude Desktop):
 					return err
 				}
 				opts.Token = token
+				opts.DiscoveryDirectory = filepath.Join(cfg.DataDir, "mcp")
+				opts.BackendURL, _ = cmd.Flags().GetString("server")
+				if opts.BackendURL == "" && !pgReadRequested(cmd) {
+					if runtime := FindDaemonRuntime(cfg.DataDir, cfg.AuthToken); runtime != nil {
+						opts.BackendURL = urlFromDaemonRuntime(runtime)
+					}
+				}
 				serveErr = mcpserver.ServeHTTP(ctx, opts, addr)
 			} else {
 				serveErr = mcpserver.ServeStdio(ctx, opts)
@@ -129,6 +138,7 @@ Add to your MCP client config (e.g. Claude Desktop):
 	cmd.Flags().Bool("pg", false,
 		"Read session data from configured PostgreSQL")
 
+	cmd.AddCommand(newMCPStatusCommand())
 	return cmd
 }
 
@@ -150,13 +160,13 @@ func resolveMCPService(
 		if err != nil {
 			return nil, nil, err
 		}
-		capabilities, err := service.ProbeHTTPServerCapabilities(
+		capabilities, err := servicehttp.ProbeHTTPServerCapabilities(
 			cmd.Context(), remote, token,
 		)
 		if err != nil {
 			return nil, nil, err
 		}
-		return service.NewHTTPBackendForServer(remote, token, capabilities),
+		return servicehttp.NewHTTPBackendForServer(remote, token, capabilities),
 			func() {}, nil
 	}
 	cfg, err := config.LoadPFlags(cmd.Flags())
@@ -209,7 +219,7 @@ func (s *mcpDaemonService) daemonService(
 		)
 	}
 	s.cfg.AuthToken = cfg.AuthToken
-	return service.NewHTTPBackend(tr.URL, cfg.AuthToken, tr.ReadOnly), nil
+	return servicehttp.NewHTTPBackend(tr.URL, cfg.AuthToken, tr.ReadOnly, tr.BrowserURL), nil
 }
 
 func (s *mcpDaemonService) Get(
@@ -230,6 +240,16 @@ func (s *mcpDaemonService) FindSessionIDsByPartial(
 		return nil, err
 	}
 	return svc.FindSessionIDsByPartial(ctx, partial, limit)
+}
+
+func (s *mcpDaemonService) FindSessionIDsByRawSuffix(
+	ctx context.Context, raw string, limit int,
+) ([]string, error) {
+	svc, err := s.daemonService(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return svc.FindSessionIDsByRawSuffix(ctx, raw, limit)
 }
 
 func (s *mcpDaemonService) List(

@@ -2,6 +2,7 @@ package pricing
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"go.kenn.io/agentsview/internal/pricing/catalog"
@@ -21,7 +22,7 @@ func NewGenAIDocument(
 	prices *GenAIPrices, sourceRef string,
 ) (GenAIDocument, error) {
 	if prices == nil {
-		return GenAIDocument{}, fmt.Errorf("missing GenAI Prices document")
+		return GenAIDocument{}, errors.New("missing GenAI Prices document")
 	}
 	return GenAIDocument{
 		Version: prices.Version(), SourceRef: sourceRef, Prices: prices,

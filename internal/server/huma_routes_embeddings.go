@@ -6,6 +6,8 @@ import (
 	"net/http"
 
 	"go.kenn.io/agentsview/internal/vector"
+
+	"github.com/danielgtaylor/huma/v2"
 )
 
 // EmbeddingsManager is the subset of *vector.Manager's API the embeddings
@@ -69,9 +71,11 @@ func (s *Server) embeddingsUnavailableError() error {
 }
 
 func (s *Server) registerEmbeddingsRoutes() {
-	group := newRouteGroup(s.api, "/api/v1/embeddings", "Embeddings")
+	group := huma.NewGroup(s.api, "/api/v1/embeddings")
+	configureRouteGroup(group, "Embeddings")
 
-	s.post(group, "/build", "Start an embeddings build", s.humaEmbeddingsBuild)
+	registerRoute(group, http.MethodPost, "/build", "Start an embeddings build", s.humaEmbeddingsBuild,
+		s.humaTimeout(), func(op *huma.Operation) { op.DefaultStatus = http.StatusAccepted })
 	s.get(group, "/status", "Embeddings build status", s.humaEmbeddingsStatus)
 	s.get(group, "/generations", "List embedding generations", s.humaEmbeddingsGenerations)
 	s.post(group, "/generations/{id}/activate", "Activate an embedding generation",

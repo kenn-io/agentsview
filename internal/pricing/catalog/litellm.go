@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -19,9 +20,11 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 )
 
-const litellmBaseURL = "https://raw.githubusercontent.com/BerriAI/litellm/"
-const litellmPricingFile = "model_prices_and_context_window.json"
-const litellmURL = litellmBaseURL + "main/" + litellmPricingFile
+const (
+	litellmBaseURL     = "https://raw.githubusercontent.com/BerriAI/litellm/"
+	litellmPricingFile = "model_prices_and_context_window.json"
+	litellmURL         = litellmBaseURL + "main/" + litellmPricingFile
+)
 
 // ModelPricing holds per-model token pricing in cost per million tokens.
 // CacheCreation1hPerMTok prices 1-hour-TTL cache writes; zero means the
@@ -269,7 +272,7 @@ func parseThreshold(raw string, thousands bool) (int, error) {
 		value *= 1000
 	}
 	if value == 0 {
-		return 0, fmt.Errorf("must be positive")
+		return 0, errors.New("must be positive")
 	}
 	converted, err := safecast.Convert[int](value)
 	if err != nil {
@@ -287,7 +290,7 @@ func parseOptionalRate(
 		return money.Money{}, false, nil
 	}
 	if raw.Kind() != jsontext.KindNumber {
-		return money.Money{}, false, fmt.Errorf("pricing rate is not a JSON number")
+		return money.Money{}, false, errors.New("pricing rate is not a JSON number")
 	}
 	rate, err := parsePerTokenRate(string(raw))
 	if err != nil {

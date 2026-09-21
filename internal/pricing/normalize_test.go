@@ -252,3 +252,28 @@ func TestResolveRejectsArbitrarySubstrings(t *testing.T) {
 	assert.False(t, ok,
 		"key inside an unrelated longer name must not match")
 }
+
+func TestOllamaCloudBaseModel(t *testing.T) {
+	cases := map[string]string{
+		"kimi-k2.7-code:cloud":        "kimi-k2.7-code",
+		"Kimi-K2.7-Code:CLOUD":        "Kimi-K2.7-Code",
+		"gpt-oss:120b-cloud":          "gpt-oss:120b",
+		"deepseek-v3.1:671b-cloud":    "deepseek-v3.1:671b",
+		"ollama/kimi-k2.7-code:cloud": "ollama/kimi-k2.7-code",
+		// Local Ollama tags name a locally served model with no per-token
+		// price and must be preserved.
+		"qwen3.8:27b-mlx": "qwen3.8:27b-mlx",
+		"qwen3.8:latest":  "qwen3.8:latest",
+		"gemma4:31b":      "gemma4:31b",
+		// "cloud" is only a marker when it ends the tag.
+		"gpt-oss:cloud-120b": "gpt-oss:cloud-120b",
+		"gpt-oss:-cloud":     "gpt-oss:-cloud",
+		// Bedrock version tags and untagged names are untouched.
+		"anthropic.claude-3-haiku-20240307-v1:0": "anthropic.claude-3-haiku-20240307-v1:0",
+		"kimi-k2.7-code":                         "kimi-k2.7-code",
+		":cloud":                                 ":cloud", // leading colon is not a separator
+	}
+	for in, want := range cases {
+		assert.Equal(t, want, OllamaCloudBaseModel(in), "input %q", in)
+	}
+}

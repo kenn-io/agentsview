@@ -13,8 +13,10 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-var ErrWorktreeMappingDuplicate = errors.New("worktree mapping already exists")
-var ErrWorktreeMappingInvalid = errors.New("invalid worktree mapping")
+var (
+	ErrWorktreeMappingDuplicate = errors.New("worktree mapping already exists")
+	ErrWorktreeMappingInvalid   = errors.New("invalid worktree mapping")
+)
 
 const (
 	WorktreeMappingLayoutExplicit         = "explicit"
@@ -657,6 +659,7 @@ type worktreeMappingSessionRow struct {
 	cwd      string
 	filePath string
 	matchCwd string
+	assigned bool
 }
 
 type worktreeMappingSessionUpdate struct {
@@ -1065,7 +1068,11 @@ func (db *DB) applyWorktreeProjectMappingsToSessionsByPath(
 	defer func() { _ = tx.Rollback() }()
 
 	rows, err := tx.QueryContext(ctx, `
-		SELECT id, machine, project, cwd, file_path
+		SELECT id, machine, project, cwd, file_path,
+			EXISTS (
+				SELECT 1 FROM session_project_assignments spa
+				WHERE spa.session_id = sessions.id
+			)
 		FROM sessions
 		WHERE file_path = ? AND deleted_at IS NULL`,
 		filePath,
@@ -1075,6 +1082,7 @@ func (db *DB) applyWorktreeProjectMappingsToSessionsByPath(
 			"querying sessions for worktree mapping path apply: %w", err,
 		)
 	}
+	defer rows.Close()
 
 	var sessions []worktreeMappingSessionRow
 	machines := map[string]bool{}
@@ -1083,6 +1091,7 @@ func (db *DB) applyWorktreeProjectMappingsToSessionsByPath(
 		var rowFilePath sql.NullString
 		if err := rows.Scan(
 			&row.id, &row.machine, &row.project, &row.cwd, &rowFilePath,
+			&row.assigned,
 		); err != nil {
 			rows.Close()
 			return ApplyWorktreeProjectMappingsResult{}, fmt.Errorf(
@@ -1131,6 +1140,9 @@ func (db *DB) applyWorktreeProjectMappingsToSessionsByPath(
 
 	var result ApplyWorktreeProjectMappingsResult
 	for _, session := range sessions {
+		if session.assigned {
+			continue
+		}
 		update, matched, shouldUpdate := applyMappingToSessionRow(
 			mappingsByMachine[session.machine],
 			session,
@@ -1167,7 +1179,7 @@ func (db *DB) applyWorktreeProjectMappingsToSessionsByPath(
 }
 
 func isSQLiteUniqueConstraint(err error) bool {
-	var sqliteErr sqlite3.Error
-	return errors.As(err, &sqliteErr) &&
+	sqliteErr, hasSqliteErr := errors.AsType[sqlite3.Error](err)
+	return hasSqliteErr &&
 		sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique
 }

@@ -86,7 +86,7 @@ func TestQuackDialAddress(t *testing.T) {
 // by opening and immediately closing a listener.
 func closedLoopbackPort(t *testing.T) string {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err, "allocate probe listener")
 	addr := ln.Addr().String()
 	require.NoError(t, ln.Close(), "close probe listener")
@@ -97,7 +97,7 @@ func closedLoopbackPort(t *testing.T) string {
 // writing a byte, simulating a server stuck in (for example) an SSL handshake.
 func unresponsiveListener(t *testing.T) net.Listener {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err, "start unresponsive listener")
 	var (
 		mu    sync.Mutex
@@ -130,7 +130,7 @@ func TestPreflightQuackDial(t *testing.T) {
 	t.Run("closed port fails fast", func(t *testing.T) {
 		addr := closedLoopbackPort(t)
 		start := time.Now()
-		err := preflightQuackDial("quack:"+addr, time.Second)
+		err := preflightQuackDial(t.Context(), "quack:"+addr, time.Second)
 		require.Error(t, err)
 		assert.Less(t, time.Since(start), time.Second)
 		assert.Contains(t, err.Error(), "connecting to quack endpoint")
@@ -138,13 +138,13 @@ func TestPreflightQuackDial(t *testing.T) {
 
 	t.Run("listening port passes", func(t *testing.T) {
 		ln := unresponsiveListener(t)
-		err := preflightQuackDial("quack:"+ln.Addr().String(), time.Second)
+		err := preflightQuackDial(t.Context(), "quack:"+ln.Addr().String(), time.Second)
 		assert.NoError(t, err)
 	})
 
 	t.Run("undeterminable address skips check", func(t *testing.T) {
 		// No port: no dial target can be derived, so preflight is a no-op.
-		assert.NoError(t, preflightQuackDial("quack:example.com", time.Second))
+		assert.NoError(t, preflightQuackDial(t.Context(), "quack:example.com", time.Second))
 	})
 }
 
@@ -158,7 +158,7 @@ func TestRunWithAttachTimeout(t *testing.T) {
 				// Faithfully reproduce the hang: connect (accepted) then
 				// block on a read that never returns because the server
 				// never responds.
-				conn, dialErr := net.Dial("tcp", ln.Addr().String())
+				conn, dialErr := (&net.Dialer{}).DialContext(t.Context(), "tcp", ln.Addr().String())
 				if dialErr != nil {
 					return dialErr
 				}
@@ -177,7 +177,7 @@ func TestRunWithAttachTimeout(t *testing.T) {
 	})
 
 	t.Run("returns attach result when it completes", func(t *testing.T) {
-		assert.NoError(t, runWithAttachTimeout("quack:host", time.Second, func() error {
+		require.NoError(t, runWithAttachTimeout("quack:host", time.Second, func() error {
 			return nil
 		}))
 		sentinel := errors.New("attach boom")
@@ -202,7 +202,7 @@ func TestOpenQuackClientPreflightFailsFast(t *testing.T) {
 	// instead of hanging.
 	addr := closedLoopbackPort(t)
 	start := time.Now()
-	client, err := openQuackClient(
+	client, err := openQuackClient(t.Context(),
 		"quack:"+addr, "token", false, 2*time.Second,
 	)
 	require.Error(t, err)

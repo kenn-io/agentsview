@@ -14,8 +14,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
-	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 func TestDuckDBLongRunningSignalsIncludeSIGTERM(t *testing.T) {
@@ -88,7 +89,7 @@ func TestArchiveWriteBackendDuckDBPushPostsToDaemon(t *testing.T) {
 		excludeProjects: []string{"b"},
 		path:            "",
 		machineName:     "workstation",
-	}, duckdbsync.PushResult{
+	}, storage.MirrorPushResult{
 		SessionsPushed: 2,
 		MessagesPushed: 3,
 		Duration:       time.Second,
@@ -98,7 +99,7 @@ func TestArchiveWriteBackendDuckDBPushPostsToDaemon(t *testing.T) {
 		config.Config{AuthToken: "secret"}, ts.URL,
 	)
 	result, err := backend.DuckDBPush(
-		context.Background(),
+		t.Context(),
 		config.DuckDBConfig{
 			Path:        absPath,
 			MachineName: "workstation",
@@ -119,11 +120,11 @@ func TestArchiveWriteBackendDuckDBPushPostsToDaemon(t *testing.T) {
 func TestArchiveWriteBackendDuckDBPushOmitsRelativeMirrorPath(t *testing.T) {
 	ts := duckDBPushDaemonServer(t, wantDuckDBDaemonPush{
 		path: "",
-	}, duckdbsync.PushResult{})
+	}, storage.MirrorPushResult{})
 
 	backend := newDaemonArchiveWriteBackendForTest(config.Config{}, ts.URL)
 	_, err := backend.DuckDBPush(
-		context.Background(),
+		t.Context(),
 		config.DuckDBConfig{Path: "relative.duckdb"},
 		DuckDBPushConfig{},
 		nil,
@@ -144,14 +145,14 @@ func TestArchiveWriteBackendDuckDBPushPostsRemoteURLToDaemon(t *testing.T) {
 	ts := pushRuntimeServer(t, "/api/v1/push/duckdb", func(
 		w http.ResponseWriter, r *http.Request,
 	) {
-		t.Fatal("daemon push route should not be called for a rejected remote target")
+		http.Error(w, "daemon push route should not be called for a rejected remote target", http.StatusInternalServerError)
 	})
 
 	backend := newDaemonArchiveWriteBackendForTest(
 		config.Config{AuthToken: "secret"}, ts.URL,
 	)
 	_, err := backend.DuckDBPush(
-		context.Background(),
+		t.Context(),
 		duckCfg,
 		DuckDBPushConfig{Full: true},
 		[]string{"a"},
@@ -165,21 +166,25 @@ func TestArchiveWriteBackendDuckDBPushPostsRemoteURLToDaemon(t *testing.T) {
 func TestArchiveWriteBackendDuckDBPushWatchReResolvesDaemon(t *testing.T) {
 	dataDir := t.TempDir()
 	mirrorPath := filepath.Join(t.TempDir(), "mirror.duckdb")
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	var startupPushes int
 	startup := pushRuntimeServer(t, "/api/v1/push/duckdb", func(
 		w http.ResponseWriter,
 		r *http.Request,
 	) {
 		startupPushes++
-		var req daemonPushRequest
-		require.NoError(t, json.UnmarshalRead(r.Body, &req))
-		require.NotNil(t, req.DuckDB)
-		assert.Empty(t, req.DuckDB.Path,
+		var req apiclient.DaemonPushRequest
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &req)) {
+			return
+		}
+		if !assert.NotNil(t, t, req.Duckdb) {
+			return
+		}
+		assert.Empty(t, req.Duckdb.Path,
 			"the CLI defers to the daemon's pinned mirror path")
-		assert.True(t, req.Automatic,
+		assert.Equal(t, new(true), req.Automatic,
 			"watch-mode daemon pushes must be marked automatic")
-		writeTestJSON(t, w, duckdbsync.PushResult{SessionsPushed: 1})
+		writeTestJSON(t, w, storage.MirrorPushResult{SessionsPushed: 1})
 	})
 	var resolvedPushes int
 	resolved := pushRuntimeServer(t, "/api/v1/push/duckdb", func(
@@ -188,14 +193,18 @@ func TestArchiveWriteBackendDuckDBPushWatchReResolvesDaemon(t *testing.T) {
 	) {
 		resolvedPushes++
 		cancel()
-		var req daemonPushRequest
-		require.NoError(t, json.UnmarshalRead(r.Body, &req))
-		require.NotNil(t, req.DuckDB)
-		assert.Empty(t, req.DuckDB.Path,
+		var req apiclient.DaemonPushRequest
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &req)) {
+			return
+		}
+		if !assert.NotNil(t, t, req.Duckdb) {
+			return
+		}
+		assert.Empty(t, req.Duckdb.Path,
 			"the CLI defers to the daemon's pinned mirror path")
-		assert.True(t, req.Automatic,
+		assert.Equal(t, new(true), req.Automatic,
 			"watch-mode daemon pushes must be marked automatic")
-		writeTestJSON(t, w, duckdbsync.PushResult{SessionsPushed: 1})
+		writeTestJSON(t, w, storage.MirrorPushResult{SessionsPushed: 1})
 	})
 	registerTestRuntime(t, dataDir, resolved.URL, false)
 
@@ -248,20 +257,20 @@ func TestWriteDuckDBPushPlanDescribesLocalTarget(t *testing.T) {
 func TestWriteDuckDBPushDiagnosticsIncludesAgentBreakdown(t *testing.T) {
 	var out bytes.Buffer
 
-	writeDuckDBPushDiagnostics(&out, duckdbsync.PushResult{
+	writeDuckDBPushDiagnostics(&out, storage.MirrorPushResult{
 		SessionsPushed: 3,
 		MessagesPushed: 7,
-		Diagnostics: duckdbsync.PushDiagnostics{
+		Diagnostics: storage.MirrorPushDiagnostics{
 			Cutoff:            "2026-07-01T12:00:00.000Z",
 			LocalSessionCount: 3,
-			CandidateSessions: duckdbsync.PushSessionCounts{
+			CandidateSessions: storage.MirrorSessionCounts{
 				Total:   3,
 				ByAgent: map[string]int{"codex": 1, "claude": 2},
 			},
-			SkippedUnchangedSessions: duckdbsync.PushSessionCounts{
+			SkippedUnchangedSessions: storage.MirrorSessionCounts{
 				Total: 0,
 			},
-			PushedSessions: duckdbsync.PushSessionCounts{
+			PushedSessions: storage.MirrorSessionCounts{
 				Total:   3,
 				ByAgent: map[string]int{"codex": 1, "claude": 2},
 			},
@@ -276,23 +285,23 @@ func TestWriteDuckDBPushDiagnosticsIncludesAgentBreakdown(t *testing.T) {
 
 // TestWriteDuckDBPushDiagnosticsOmitsSkippedLocalCount verifies the "local N"
 // figure is omitted when LocalSessionCount is 0: automatic pushes skip the
-// archive-scale scope count (see duckdbsync.SyncOptions.Automatic), so 0
+// archive-scale scope count (see storage.MirrorPushOptions.Automatic), so 0
 // means "not counted" and printing "local 0" would misreport the archive as
 // empty.
 func TestWriteDuckDBPushDiagnosticsOmitsSkippedLocalCount(t *testing.T) {
 	var out bytes.Buffer
 
-	writeDuckDBPushDiagnostics(&out, duckdbsync.PushResult{
+	writeDuckDBPushDiagnostics(&out, storage.MirrorPushResult{
 		SessionsPushed: 1,
 		MessagesPushed: 2,
-		Diagnostics: duckdbsync.PushDiagnostics{
+		Diagnostics: storage.MirrorPushDiagnostics{
 			Cutoff:            "2026-07-01T12:00:00.000Z",
 			LocalSessionCount: 0,
-			CandidateSessions: duckdbsync.PushSessionCounts{
+			CandidateSessions: storage.MirrorSessionCounts{
 				Total:   1,
 				ByAgent: map[string]int{"claude": 1},
 			},
-			PushedSessions: duckdbsync.PushSessionCounts{
+			PushedSessions: storage.MirrorSessionCounts{
 				Total:   1,
 				ByAgent: map[string]int{"claude": 1},
 			},
@@ -313,13 +322,13 @@ func TestWriteDuckDBPushDiagnosticsOmitsSkippedLocalCount(t *testing.T) {
 func TestWriteDuckDBPushDiagnosticsReportsRebuildMode(t *testing.T) {
 	var out bytes.Buffer
 
-	writeDuckDBPushDiagnostics(&out, duckdbsync.PushResult{
+	writeDuckDBPushDiagnostics(&out, storage.MirrorPushResult{
 		SessionsPushed: 2,
 		MessagesPushed: 5,
-		Diagnostics: duckdbsync.PushDiagnostics{
+		Diagnostics: storage.MirrorPushDiagnostics{
 			Full:          true,
 			RebuildReason: "missing file",
-			PushedSessions: duckdbsync.PushSessionCounts{
+			PushedSessions: storage.MirrorSessionCounts{
 				Total:   2,
 				ByAgent: map[string]int{"claude": 2},
 			},
@@ -335,14 +344,14 @@ func TestWriteDuckDBPushDiagnosticsReportsRebuildMode(t *testing.T) {
 
 // TestWriteDuckDBPushDiagnosticsReportsDeferredMode verifies a deferred
 // watch-mode push (mirror held by a live serve; see
-// duckdbsync.SyncOptions.Automatic) prints its mode and reason
+// storage.MirrorPushOptions.Automatic) prints its mode and reason
 // instead of the incremental or rebuild counters, none of which exist for
 // a push that touched nothing.
 func TestWriteDuckDBPushDiagnosticsReportsDeferredMode(t *testing.T) {
 	var out bytes.Buffer
 
-	writeDuckDBPushDiagnostics(&out, duckdbsync.PushResult{
-		Diagnostics: duckdbsync.PushDiagnostics{
+	writeDuckDBPushDiagnostics(&out, storage.MirrorPushResult{
+		Diagnostics: storage.MirrorPushDiagnostics{
 			Deferred:       true,
 			DeferredReason: "mirror is locked by a serving process; deferring until it is released",
 		},
@@ -384,7 +393,6 @@ type wantDuckDBDaemonPush struct {
 	token           string
 	machineName     string
 	allowInsecure   bool
-	syncStateTarget string
 }
 
 // duckDBPushDaemonServer starts a daemon test server on the DuckDB push route
@@ -392,7 +400,7 @@ type wantDuckDBDaemonPush struct {
 func duckDBPushDaemonServer(
 	t *testing.T,
 	want wantDuckDBDaemonPush,
-	result duckdbsync.PushResult,
+	result storage.MirrorPushResult,
 ) *httptest.Server {
 	t.Helper()
 	return duckDBPushDaemonServerAt(t, "/api/v1/push/duckdb", want, result)
@@ -402,7 +410,7 @@ func duckDBPushDaemonServerAt(
 	t *testing.T,
 	path string,
 	want wantDuckDBDaemonPush,
-	result duckdbsync.PushResult,
+	result storage.MirrorPushResult,
 ) *httptest.Server {
 	t.Helper()
 	return pushRuntimeServer(t, path, func(
@@ -410,18 +418,22 @@ func duckDBPushDaemonServerAt(
 		r *http.Request,
 	) {
 		assert.Equal(t, want.auth, r.Header.Get("Authorization"))
-		var req daemonPushRequest
-		require.NoError(t, json.UnmarshalRead(r.Body, &req))
+		var req apiclient.DaemonPushRequest
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &req)) {
+			return
+		}
 		assert.Equal(t, want.full, req.Full)
 		assert.Equal(t, want.projects, req.Projects)
 		assert.Equal(t, want.excludeProjects, req.ExcludeProjects)
-		require.NotNil(t, req.DuckDB)
-		assert.Equal(t, want.path, req.DuckDB.Path)
-		assert.Equal(t, want.url, req.DuckDB.URL)
-		assert.Equal(t, want.token, req.DuckDB.Token)
-		assert.Equal(t, want.machineName, req.DuckDB.MachineName)
-		assert.Equal(t, want.allowInsecure, req.DuckDB.AllowInsecure)
-		assert.Equal(t, want.syncStateTarget, req.SyncStateTarget)
+		if !assert.NotNil(t, req.Duckdb) {
+			return
+		}
+		assert.Equal(t, want.path, req.Duckdb.Path)
+		assert.Equal(t, want.url, req.Duckdb.URL)
+		assert.Equal(t, new(want.token), req.Duckdb.Token)
+		assert.Equal(t, want.machineName, req.Duckdb.MachineName)
+		assert.Equal(t, want.allowInsecure, req.Duckdb.AllowInsecure)
+		assert.Nil(t, req.SyncStateTarget)
 		writeTestJSON(t, w, result)
 	})
 }

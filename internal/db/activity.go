@@ -136,7 +136,7 @@ func getSessionActivitySQLite(
 	rows, err := d.getReader().QueryContext(ctx, fmt.Sprintf(`
 		SELECT
 			CAST(((julianday(m.timestamp) - 2440587.5) * 86400.0 - ?) / ? AS INTEGER) AS bucket_idx,
-			SUM(CASE WHEN m.role = 'user' THEN 1 ELSE 0 END) AS user_count,
+			SUM(CASE WHEN m.role = 'user' AND COALESCE(m.source_subtype, '') <> 'tool_result' THEN 1 ELSE 0 END) AS user_count,
 			SUM(CASE WHEN m.role = 'assistant' THEN 1 ELSE 0 END) AS asst_count,
 			MIN(m.ordinal) AS first_ordinal
 		FROM messages m

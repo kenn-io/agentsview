@@ -52,6 +52,7 @@ func (e *Engine) SyncChangedPathPlanWithOptionsContext(
 	options ChangedPathSyncOptions,
 	onProgress ProgressFunc,
 ) (ChangedPathSyncResult, error) {
+	ctx = e.parsePolicyContext(ctx)
 	result := ChangedPathSyncResult{
 		CachedSourceKeys:        make(map[string]struct{}),
 		CachedFallbackProviders: make(map[parser.AgentType]int),
@@ -132,6 +133,7 @@ func (e *Engine) SyncChangedPathPlanWithOptionsContext(
 	preContainerStates := e.captureSQLiteContainerStates(physicalPaths)
 	e.beginSQLiteContainerPass(files, preContainerStates)
 	processingCtx := context.WithValue(ctx, deferGlobalLinkContextKey{}, true)
+	processingCtx = parser.WithProjectRootMemo(processingCtx)
 	results := e.startWorkers(processingCtx, files)
 	affectedSessionIDs := make(map[string]struct{})
 	stats = e.collectAndBatchWithOptions(
@@ -175,11 +177,11 @@ func (e *Engine) SyncChangedPathPlanWithOptionsContext(
 			ids = append(ids, id)
 		}
 		slices.Sort(ids)
-		if err := e.db.LinkSubagentSessionsForSessions(ids); err != nil {
+		if err := e.db.LinkSubagentSessionsForSessions(ctx, ids); err != nil {
 			stats.RecordFailed()
 			processErr = errors.Join(processErr,
 				fmt.Errorf("link affected subagent sessions: %w", err))
-			if queueErr := e.db.QueueSubagentParentRepairs(ids); queueErr != nil {
+			if queueErr := e.db.QueueSubagentParentRepairs(ctx, ids); queueErr != nil {
 				processErr = errors.Join(processErr,
 					fmt.Errorf("queue affected subagent parent repairs: %w", queueErr))
 			}
@@ -194,7 +196,7 @@ func (e *Engine) SyncChangedPathPlanWithOptionsContext(
 	}
 	e.finishSQLiteContainerPass(true, false)
 	if !e.ephemeral {
-		e.persistSkipCache()
+		e.persistSkipCache(ctx)
 	}
 	e.mu.Lock()
 	e.lastSync = time.Now()

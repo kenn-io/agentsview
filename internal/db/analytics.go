@@ -12,6 +12,7 @@ import (
 	"unicode"
 
 	"go.kenn.io/agentsview/internal/signals"
+	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 // maxSQLVars is the maximum bind variables per IN clause to stay
@@ -222,6 +223,60 @@ func (f AnalyticsFilter) utcRange() (string, string) {
 		to = tTo.Add(14 * time.Hour).Format(time.RFC3339)
 	}
 	return from, to
+}
+
+func (f AnalyticsFilter) messageWindowBoundsUTC() (string, string) {
+	from, to := f.utcRange()
+	if f.From == "" {
+		from = ""
+	}
+	if f.To == "" {
+		to = ""
+	} else if f.To == "9999-12-31" {
+		to = ""
+	} else if t, err := time.Parse(time.RFC3339, to); err == nil {
+		to = t.Add(time.Second).Format(time.RFC3339)
+	}
+	return strings.TrimSuffix(from, "Z"), strings.TrimSuffix(to, "Z")
+}
+
+func analyticsMessageWindowPred(col, from, to string) (string, []any) {
+	var preds []string
+	var args []any
+	if from != "" {
+		preds = append(preds, col+" >= ?")
+		args = append(args, from)
+	}
+	if to != "" {
+		preds = append(preds, col+" < ?")
+		args = append(args, to)
+	}
+	if len(preds) == 0 {
+		return "", nil
+	}
+	return "(" + col + " IS NULL OR " + col + " = '' OR strftime('%Y', " + col + ") IS NULL OR (" + strings.Join(preds, " AND ") + "))", args
+}
+
+var analyticsQueryObserver func(string)
+
+func observeAnalyticsQuery(query string) {
+	if analyticsQueryObserver != nil {
+		analyticsQueryObserver(query)
+	}
+}
+
+func (f AnalyticsFilter) toolSessionWindowSQL(dateCol, sessionID string) (string, []any) {
+	from, to := f.messageWindowBoundsUTC()
+	sessionPred, args := analyticsMessageWindowPred(dateCol, from, to)
+	if sessionPred == "" {
+		return "", nil
+	}
+	messagePred, messageArgs := analyticsMessageWindowPred("wm.timestamp", from, to)
+	return "(" + sessionPred + " OR EXISTS (SELECT 1 FROM messages wm WHERE wm.session_id = " + sessionID + " AND " + messagePred + "))", append(args, messageArgs...)
+}
+
+func sqliteAnalyticsMinuteKey() string {
+	return "COALESCE(strftime('%Y-%m-%dT%H:%M', m.timestamp), m.timestamp, '')"
 }
 
 // buildWhere returns a WHERE clause and args for common
@@ -1056,6 +1111,7 @@ func (db *DB) GetAnalyticsSummary(
 		return AnalyticsSummary{},
 			fmt.Errorf("querying analytics summary: %w", err)
 	}
+	defer rows.Close()
 	s := AnalyticsSummary{
 		Agents: make(map[string]*AgentSummary),
 		Models: []string{},
@@ -1544,11 +1600,11 @@ func (db *DB) GetAnalyticsActivity(
 	}
 
 	query := `SELECT ` + dateCol + `, s.agent, s.id,
-		m.role, m.has_thinking, m.is_system, COUNT(*)
+		m.role, m.has_thinking, m.is_system, COALESCE(m.source_subtype, ''), COUNT(*)
 		FROM sessions s
 		LEFT JOIN messages m ON m.session_id = s.id
 		WHERE ` + where + `
-		GROUP BY s.id, m.role, m.has_thinking, m.is_system`
+		GROUP BY s.id, m.role, m.has_thinking, m.is_system, m.source_subtype`
 
 	rows, err := db.getReader().QueryContext(ctx, query, args...)
 	if err != nil {
@@ -1564,11 +1620,12 @@ func (db *DB) GetAnalyticsActivity(
 	for rows.Next() {
 		var ts, agent, sid string
 		var role *string
+		var sourceSubtype string
 		var hasThinking, isSystem *bool
 		var count int
 		if err := rows.Scan(
 			&ts, &agent, &sid, &role,
-			&hasThinking, &isSystem, &count,
+			&hasThinking, &isSystem, &sourceSubtype, &count,
 		); err != nil {
 			return ActivityResponse{},
 				fmt.Errorf("scanning activity row: %w", err)
@@ -1605,7 +1662,7 @@ func (db *DB) GetAnalyticsActivity(
 			entry.ByAgent[agent] += count
 			switch *role {
 			case "user":
-				if !sys {
+				if !sys && sourceSubtype != "tool_result" {
 					entry.UserMessages += count
 				}
 			case "assistant":
@@ -2549,6 +2606,7 @@ func (db *DB) queryAutonomyChunk(
 	ph, args := inPlaceholders(chunk)
 	q := `SELECT session_id,
 		SUM(CASE WHEN role='user' AND is_system=0
+			AND COALESCE(source_subtype, '') <> 'tool_result'
 			THEN 1 ELSE 0 END),
 		SUM(CASE WHEN role='assistant'
 			AND has_tool_use=1 THEN 1 ELSE 0 END)
@@ -3009,12 +3067,13 @@ func skillProjectBreakdowns(
 func analyticsToolsQuery(
 	placeholders string,
 	modelPred string,
+	windowPred string,
 	includeMessageMeta bool,
 ) string {
 	query := `SELECT tc.session_id, tc.category,
 			TRIM(COALESCE(tc.tool_name, '')), COUNT(*)`
 	if includeMessageMeta {
-		query += `, COALESCE(m.timestamp, '')`
+		query += `, MAX(COALESCE(m.timestamp, ''))`
 	}
 	query += `
 		FROM tool_calls tc`
@@ -3029,11 +3088,14 @@ func analyticsToolsQuery(
 		query += `
 			AND ` + modelPred
 	}
+	if windowPred != "" {
+		query += ` AND ` + windowPred
+	}
 	query += `
 		GROUP BY tc.session_id, tc.category,
 			TRIM(COALESCE(tc.tool_name, ''))`
 	if includeMessageMeta {
-		query += `, COALESCE(m.timestamp, '')`
+		query += `, ` + sqliteAnalyticsMinuteKey()
 	}
 	return query
 }
@@ -3041,6 +3103,7 @@ func analyticsToolsQuery(
 func analyticsSkillsQuery(
 	placeholders string,
 	modelPred string,
+	windowPred string,
 ) string {
 	query := `SELECT tc.session_id, TRIM(tc.skill_name), COUNT(*),
 			COALESCE(m.timestamp, '')
@@ -3052,6 +3115,9 @@ func analyticsSkillsQuery(
 	if modelPred != "" {
 		query += `
 			AND ` + modelPred
+	}
+	if windowPred != "" {
+		query += ` AND ` + windowPred
 	}
 	query += `
 		GROUP BY tc.session_id, TRIM(tc.skill_name),
@@ -3066,6 +3132,10 @@ func (db *DB) GetAnalyticsTools(
 ) (ToolsAnalyticsResponse, error) {
 	dateCol := "COALESCE(NULLIF(started_at, ''), created_at)"
 	where, args := f.buildWhereWithoutDate()
+	if pred, windowArgs := f.toolSessionWindowSQL(dateCol, "sessions.id"); pred != "" {
+		where += " AND " + pred
+		args = append(args, windowArgs...)
+	}
 
 	// Fetch filtered session IDs and their metadata.
 	sessQ := `SELECT id, ` + dateCol + `, agent
@@ -3120,7 +3190,11 @@ func (db *DB) GetAnalyticsTools(
 				"m.model", f.Model,
 			)
 			chunkArgs = append(chunkArgs, modelArgs...)
-			q := analyticsToolsQuery(ph, modelPred, true)
+			from, to := f.messageWindowBoundsUTC()
+			windowPred, windowArgs := analyticsMessageWindowPred("m.timestamp", from, to)
+			chunkArgs = append(chunkArgs, windowArgs...)
+			q := analyticsToolsQuery(ph, modelPred, windowPred, true)
+			observeAnalyticsQuery(q)
 			rows, qErr := db.getReader().QueryContext(
 				ctx, q, chunkArgs...,
 			)
@@ -3211,6 +3285,10 @@ func (db *DB) GetAnalyticsSkills(
 ) (SkillsAnalyticsResponse, error) {
 	dateCol := "COALESCE(NULLIF(started_at, ''), created_at)"
 	where, args := f.buildWhereWithoutDate()
+	if pred, windowArgs := f.toolSessionWindowSQL(dateCol, "sessions.id"); pred != "" {
+		where += " AND " + pred
+		args = append(args, windowArgs...)
+	}
 
 	sessQ := `SELECT id, ` + dateCol + `, agent, project
 		FROM sessions WHERE ` + where
@@ -3261,7 +3339,11 @@ func (db *DB) GetAnalyticsSkills(
 				"m.model", f.Model,
 			)
 			chunkArgs = append(chunkArgs, modelArgs...)
-			q := analyticsSkillsQuery(ph, modelPred)
+			from, to := f.messageWindowBoundsUTC()
+			windowPred, windowArgs := analyticsMessageWindowPred("m.timestamp", from, to)
+			chunkArgs = append(chunkArgs, windowArgs...)
+			q := analyticsSkillsQuery(ph, modelPred, windowPred)
+			observeAnalyticsQuery(q)
 			rows, qErr := db.getReader().QueryContext(
 				ctx, q, chunkArgs...,
 			)
@@ -3997,13 +4079,14 @@ type SignalSessionExample struct {
 }
 
 type SignalMessage struct {
-	SessionID  string
-	Ordinal    int
-	Role       string
-	Content    string
-	Timestamp  string
-	IsSystem   bool
-	HasToolUse bool
+	SourceSubtype string
+	SessionID     string
+	Ordinal       int
+	Role          string
+	Content       string
+	Timestamp     string
+	IsSystem      bool
+	HasToolUse    bool
 }
 
 // SignalsTrendBucket holds signal data for one date bucket.
@@ -4278,7 +4361,7 @@ func (db *DB) populateFrustrationMarkers(
 		ph, args := inPlaceholders(chunk)
 		q := `SELECT session_id, ordinal, content, is_system
 			FROM messages
-			WHERE role = 'user' AND session_id IN ` + ph
+			WHERE role = 'user' AND COALESCE(source_subtype, '') <> 'tool_result' AND session_id IN ` + ph
 		msgRows, err := db.getReader().QueryContext(ctx, q, args...)
 		if err != nil {
 			return fmt.Errorf(
@@ -4398,13 +4481,14 @@ func (db *DB) signalMessages(
 		for sessionID, scopedRows := range rowsBySession {
 			for _, row := range scopedRows {
 				out[sessionID] = append(out[sessionID], SignalMessage{
-					SessionID:  row.SessionID,
-					Ordinal:    row.Ordinal,
-					Role:       row.Role,
-					Content:    row.Content,
-					Timestamp:  row.Timestamp,
-					IsSystem:   row.IsSystem,
-					HasToolUse: row.HasToolUse,
+					SessionID:     row.SessionID,
+					Ordinal:       row.Ordinal,
+					Role:          row.Role,
+					SourceSubtype: row.SourceSubtype,
+					Content:       row.Content,
+					Timestamp:     row.Timestamp,
+					IsSystem:      row.IsSystem,
+					HasToolUse:    row.HasToolUse,
 				})
 			}
 		}
@@ -4414,7 +4498,7 @@ func (db *DB) signalMessages(
 	err := queryChunked(ids, func(chunk []string) error {
 		ph, args := inPlaceholders(chunk)
 		q := `SELECT session_id, ordinal, role, content,
-					COALESCE(timestamp, ''), is_system, has_tool_use
+					COALESCE(timestamp, ''), is_system, has_tool_use, COALESCE(source_subtype, '')
 				FROM messages
 				WHERE session_id IN ` + ph
 		if len(filterModels) == 1 {
@@ -4439,7 +4523,7 @@ func (db *DB) signalMessages(
 			if err := msgRows.Scan(
 				&m.SessionID, &m.Ordinal, &m.Role,
 				&m.Content, &m.Timestamp,
-				&m.IsSystem, &m.HasToolUse,
+				&m.IsSystem, &m.HasToolUse, &m.SourceSubtype,
 			); err != nil {
 				return fmt.Errorf(
 					"scanning signal message: %w", err,
@@ -4679,7 +4763,7 @@ func firstToolUseMessage(
 	messages []SignalMessage,
 ) (string, *int, bool) {
 	for _, m := range messages {
-		if m.IsSystem || !m.HasToolUse {
+		if m.IsSystem || m.SourceSubtype == "tool_result" || !m.HasToolUse {
 			continue
 		}
 		content, ordinal := messageEvidence(m)
@@ -4693,7 +4777,7 @@ func lastSessionMessage(
 ) (string, *int, bool) {
 	for _, v := range slices.Backward(messages) {
 		m := v
-		if m.IsSystem {
+		if m.IsSystem || m.SourceSubtype == "tool_result" {
 			continue
 		}
 		if !isSubstantiveEvidence(m.Content) && !m.HasToolUse {
@@ -4720,6 +4804,7 @@ func firstSubstantiveUserMessage(
 
 func isUserEvidenceMessage(m SignalMessage) bool {
 	return m.Role == "user" &&
+		m.SourceSubtype != "tool_result" &&
 		!m.IsSystem &&
 		isSubstantiveEvidence(m.Content)
 }
@@ -4832,15 +4917,15 @@ func normalizeEvidenceText(content string) string {
 	return spaceReplacer(lower)
 }
 
-func truncateExcerpt(s string, max int) string {
+func truncateExcerpt(s string, maximum int) string {
 	s = strings.TrimSpace(spaceReplacer(s))
-	if len(s) <= max {
+	if len(s) <= maximum {
 		return s
 	}
-	if max <= 3 {
-		return s[:max]
+	if maximum <= 3 {
+		return stringutil.SafeTruncate(s, maximum)
 	}
-	return s[:max-3] + "..."
+	return stringutil.SafeTruncate(s, maximum-3) + "..."
 }
 
 func spaceReplacer(s string) string {
@@ -4928,8 +5013,7 @@ func AggregateSignals(
 		resp.ContextHealth.AvgCompactionCount += float64(
 			r.CompactionCount,
 		)
-		resp.ContextHealth.MidTaskCompactionCount +=
-			r.MidTaskCompactionCount
+		resp.ContextHealth.MidTaskCompactionCount += r.MidTaskCompactionCount
 		if r.MidTaskCompactionCount > 0 {
 			resp.ContextHealth.SessionsWithMidTaskCompac++
 		}
@@ -5170,8 +5254,7 @@ func accumulateQualityHealth(
 		q.Totals.UnstructuredStart++
 		q.SessionsWithSignal.UnstructuredStart++
 	}
-	q.Totals.MissingSuccessCriteriaCount +=
-		r.MissingSuccessCriteriaCount
+	q.Totals.MissingSuccessCriteriaCount += r.MissingSuccessCriteriaCount
 	if r.MissingSuccessCriteriaCount > 0 {
 		q.SessionsWithSignal.MissingSuccessCriteriaCount++
 	}

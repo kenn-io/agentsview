@@ -2,7 +2,6 @@ package parser
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -49,7 +48,7 @@ func TestAiderStreamingDiscoveryReportsTraversalLimits(t *testing.T) {
 			var incomplete DiscoveryIncompleteError
 			require.ErrorAs(t, err, &incomplete)
 			assert.Contains(t, err.Error(), tc.want)
-			assert.False(t, errors.Is(err, context.Canceled))
+			assert.NotErrorIs(t, err, context.Canceled)
 		})
 	}
 }
@@ -82,10 +81,10 @@ func TestAiderProviderFindSourceUsesCanonicalIdentity(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: discovered[0],
 	})
 	require.NoError(t, err)
@@ -96,7 +95,7 @@ func TestAiderProviderFindSourceUsesCanonicalIdentity(t *testing.T) {
 	remoteVirtualPath := rewriter(localVirtualPath)
 
 	foundByRawID, ok, err := provider.FindSource(
-		context.Background(),
+		t.Context(),
 		FindSourceRequest{RawSessionID: rawID},
 	)
 	require.NoError(t, err)
@@ -104,7 +103,7 @@ func TestAiderProviderFindSourceUsesCanonicalIdentity(t *testing.T) {
 	assert.Equal(t, localVirtualPath, foundByRawID.DisplayPath)
 
 	foundByStoredPath, ok, err := provider.FindSource(
-		context.Background(),
+		t.Context(),
 		FindSourceRequest{StoredFilePath: remoteVirtualPath},
 	)
 	require.NoError(t, err)
@@ -112,7 +111,7 @@ func TestAiderProviderFindSourceUsesCanonicalIdentity(t *testing.T) {
 	assert.Equal(t, localVirtualPath, foundByStoredPath.DisplayPath)
 
 	foundByFingerprintKey, ok, err := provider.FindSource(
-		context.Background(),
+		t.Context(),
 		FindSourceRequest{FingerprintKey: remoteVirtualPath},
 	)
 	require.NoError(t, err)

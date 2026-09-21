@@ -469,7 +469,7 @@ func TestUnwatchedPollCooldownIsExactlyOneInterval(t *testing.T) {
 	select {
 	case <-passStarted:
 	case <-time.After(2 * time.Second):
-		t.Fatal("first pass did not start before timeout")
+		require.FailNow(t, "first pass did not start before timeout")
 	}
 
 	// Second tick arrives while the first pass is running.
@@ -488,7 +488,7 @@ func TestUnwatchedPollCooldownIsExactlyOneInterval(t *testing.T) {
 	select {
 	case <-firstCallDone:
 	case <-time.After(2 * time.Second):
-		t.Fatal("first pass did not complete before timeout")
+		require.FailNow(t, "first pass did not complete before timeout")
 	}
 
 	// The worker must call after() with exactly unwatchedPollInterval.
@@ -496,7 +496,7 @@ func TestUnwatchedPollCooldownIsExactlyOneInterval(t *testing.T) {
 	select {
 	case timerCh = <-afterTimers:
 	case <-time.After(2 * time.Second):
-		t.Fatal("after() was not called for the cooldown wait")
+		require.FailNow(t, "after() was not called for the cooldown wait")
 	}
 
 	afterMu.Lock()
@@ -520,7 +520,7 @@ func TestUnwatchedPollCooldownIsExactlyOneInterval(t *testing.T) {
 	select {
 	case <-passStarted:
 	case <-time.After(2 * time.Second):
-		t.Fatal("second reconcile did not start after the cooldown timer fired")
+		require.FailNow(t, "second reconcile did not start after the cooldown timer fired")
 	}
 
 	callMu.Lock()

@@ -137,7 +137,8 @@ func canonicalRawCaptureTestPath(t *testing.T, path string) string {
 
 func TestResolveRawCapturePlanLeavesUnsupportedProviderUntouched(t *testing.T) {
 	provider := &rawCaptureTestProvider{
-		Def: AgentDef{Type: AgentClaude}}
+		Def: AgentDef{Type: AgentClaude},
+	}
 
 	plan, ok, err := ResolveRawCapturePlan(t.Context(), provider, SourceRef{
 		Provider: AgentClaude,
@@ -153,7 +154,8 @@ func TestResolveRawCapturePlanLeavesUnsupportedProviderUntouched(t *testing.T) {
 func TestResolveRawCapturePlanRequiresDeclaredInterface(t *testing.T) {
 	provider := &rawCaptureUndeclaredProvider{
 		Def:  AgentDef{Type: AgentClaude},
-		Caps: rawCaptureTestCapabilities()}
+		Caps: rawCaptureTestCapabilities(),
+	}
 
 	_, ok, err := ResolveRawCapturePlan(t.Context(), provider, SourceRef{
 		Provider: AgentClaude,
@@ -439,6 +441,60 @@ func TestCodexProviderPlansTranscriptWithOptionalIndex(t *testing.T) {
 	require.True(t, supported)
 	require.Len(t, plan.Entries, 1)
 	assert.Equal(t, "sessions/2026/08/25/"+filepath.Base(sourcePath), plan.Entries[0].Path)
+	assert.True(t, plan.Entries[0].Appendable)
+}
+
+func TestCodexProviderPlansForkWithReplayParent(t *testing.T) {
+	t.Parallel()
+	root := filepath.Join(t.TempDir(), "sessions")
+	const childID = "22222222-2222-4222-8222-222222222222"
+	const parentID = "11111111-1111-4111-8111-111111111111"
+	parentPath := canonicalRawCaptureTestPath(t,
+		writeCodexProviderSession(t, root, parentID, "parent task"))
+	childPath := canonicalRawCaptureTestPath(t,
+		writeCodexProviderSessionContent(t, root, childID,
+			`{"type":"session_meta","payload":{"id":"`+childID+`","forked_from_id":"`+parentID+`"}}`+"\n",
+		))
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	child := requireCodexProviderSource(t, provider, childID)
+
+	plan, supported, err := ResolveRawCapturePlan(t.Context(), provider, child)
+
+	require.NoError(t, err)
+	require.True(t, supported)
+	require.Len(t, plan.Entries, 2)
+	entries := make(map[string]RawCaptureEntry, len(plan.Entries))
+	for _, entry := range plan.Entries {
+		entries[entry.LocalPath] = entry
+	}
+	require.Contains(t, entries, parentPath)
+	require.Contains(t, entries, childPath)
+	assert.False(t, entries[parentPath].Appendable,
+		"the parent is an immutable parse input for this child generation")
+	assert.True(t, entries[childPath].Appendable,
+		"only the primary child transcript may extend the generation")
+}
+
+func TestCodexProviderPlansForkCaptureWithoutReplayParent(t *testing.T) {
+	t.Parallel()
+	root := filepath.Join(t.TempDir(), "sessions")
+	const childID = "22222222-2222-4222-8222-222222222222"
+	const parentID = "11111111-1111-4111-8111-111111111111"
+	childPath := canonicalRawCaptureTestPath(t,
+		writeCodexProviderSessionContent(t, root, childID,
+			`{"type":"session_meta","payload":{"id":"`+childID+`","forked_from_id":"`+parentID+`"}}`+"\n",
+		))
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	child := requireCodexProviderSource(t, provider, childID)
+
+	plan, supported, err := ResolveRawCapturePlan(t.Context(), provider, child)
+
+	require.NoError(t, err)
+	require.True(t, supported)
+	require.Len(t, plan.Entries, 1)
+	assert.Equal(t, childPath, plan.Entries[0].LocalPath)
 	assert.True(t, plan.Entries[0].Appendable)
 }
 

@@ -6,12 +6,14 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
 
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/service"
 )
@@ -68,6 +70,8 @@ func newSessionGetCommand() *cobra.Command {
 	return cmd
 }
 
+var errSessionNotFound = errors.New("session not found")
+
 // resolveServiceSessionID returns the canonical session ID matching id,
 // accommodating bare UUIDs by retrying with each registered agent
 // prefix (codex:, copilot:, gemini:, ...) when the exact lookup
@@ -99,7 +103,7 @@ func resolveServiceSessionID(
 	// prefix is added, so an arbitrary colon is not enough to
 	// classify the input as canonical.
 	if isCanonicalServiceSessionID(id) {
-		return "", fmt.Errorf("session not found: %s", id)
+		return "", fmt.Errorf("%w: %s", errSessionNotFound, id)
 	}
 	for _, def := range parser.Registry {
 		if def.IDPrefix == "" {
@@ -114,7 +118,7 @@ func resolveServiceSessionID(
 			return candidate, nil
 		}
 	}
-	return "", fmt.Errorf("session not found: %s", id)
+	return "", fmt.Errorf("%w: %s", errSessionNotFound, id)
 }
 
 // resolveBareCodebuffID maps a bare on-disk Codebuff/Freebuff
@@ -133,8 +137,8 @@ func resolveServiceSessionID(
 // valid canonical ID.
 //
 // machineFilter is the user's --machine flag value. "" or "local"
-// defers to cfg.LocalMachineName (the local archive's identity,
-// runtime-derived from os.Hostname by config.LoadPFlags); "*"
+// defers to cfg.InstallationID (the local archive's identity,
+// persisted in the data directory); "*"
 // accepts any machine; any other non-empty string is matched
 // exactly against detail.Machine. The caller is responsible for
 // parsing the flag into one of these categories.
@@ -148,13 +152,17 @@ func resolveBareCodebuffID(
 	if cfg == nil {
 		return "", nil
 	}
-	localMachine := cfg.LocalMachineName
+	localMachine := cfg.InstallationID
 	locations := parser.FindCodebuffFreebuffMatches(
 		[]parser.CodebuffFamilyRoots{
-			{Agent: parser.AgentCodebuff,
-				Roots: cfg.ResolveDirs(parser.AgentCodebuff)},
-			{Agent: parser.AgentFreebuff,
-				Roots: cfg.ResolveDirs(parser.AgentFreebuff)},
+			{
+				Agent: parser.AgentCodebuff,
+				Roots: cfg.ResolveDirs(parser.AgentCodebuff),
+			},
+			{
+				Agent: parser.AgentFreebuff,
+				Roots: cfg.ResolveDirs(parser.AgentFreebuff),
+			},
 		},
 		rawID,
 	)
@@ -285,7 +293,7 @@ func resolveBareCodebuffID(
 
 // codebuffMachineMatches reports whether a row's machine column
 // passes the user's --machine filter. "" or "local" defers to
-// localMachine (cfg.LocalMachineName); "*" matches anything; any
+// localMachine (cfg.InstallationID); "*" matches anything; any
 // other non-empty value is matched exactly. This keeps the resolver
 // decoupled from cobra while still honouring the rule that
 // unspecified / "local" mean "this archive's own sessions".
@@ -347,6 +355,17 @@ func resolveCodebuffBareID(
 	}
 	cfg := mustLoadConfig(cmd)
 	machineFlag, _ := cmd.Flags().GetString("machine")
+	if machineFlag != "" && machineFlag != "local" && machineFlag != "*" {
+		database, err := openReadOnlyDB(cmd.Context(), cfg)
+		if err != nil {
+			return "", err
+		}
+		defer database.Close()
+		machineFlag, err = db.ResolveMachineFilter(cmd.Context(), database, machineFlag)
+		if err != nil {
+			return "", err
+		}
+	}
 	return resolveBareCodebuffID(
 		cmd.Context(), svc, &cfg, id, machineFlag,
 	)
@@ -370,6 +389,7 @@ func errBareCodebuffRemoteUnsupported(id string) error {
 		id,
 	)
 } // isCanonicalServiceSessionID reports whether id is already in the
+
 // canonical "agent:..." or "host~..." form that resolveServiceSessionID
 // can look up directly.
 //
@@ -403,7 +423,7 @@ func lookupSessionWithPrefixes(
 ) (*service.SessionDetail, error) {
 	resolved, err := resolveServiceSessionID(ctx, svc, id)
 	if err != nil {
-		if strings.HasPrefix(err.Error(), "session not found:") {
+		if errors.Is(err, errSessionNotFound) {
 			return nil, nil
 		}
 		return nil, err

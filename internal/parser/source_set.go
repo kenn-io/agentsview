@@ -98,6 +98,16 @@ func (p *SourceSetProvider) SourcesForChangedPath(
 	return p.sources.SourcesForChangedPath(ctx, req)
 }
 
+func (p *SourceSetProvider) ChangedPathRelevance(
+	ctx context.Context, req ChangedPathRequest,
+) (ChangedPathRelevance, error) {
+	resolver, ok := p.sources.(ChangedPathRelevanceProvider)
+	if !ok {
+		return ChangedPathUnclassified, nil
+	}
+	return resolver.ChangedPathRelevance(ctx, req)
+}
+
 // reconciliationContainerTopologyProvider is implemented by source sets whose
 // members are virtual children of a physical container. The provider-level
 // scope resolver widens a request naming the container, a sidecar, or one
@@ -172,6 +182,41 @@ func (p *SourceSetProvider) SourceForReconciliation(
 	return resolver.SourceForReconciliation(ctx, path, project)
 }
 
+func (p *SourceSetProvider) SourceForReconciliationWithState(
+	ctx context.Context, path, project string, state ReconciliationSourceState,
+) (SourceRef, bool, error) {
+	resolver, ok := p.sources.(ReconciliationSourceStateResolver)
+	if !ok {
+		return p.SourceForReconciliation(ctx, path, project)
+	}
+	return resolver.SourceForReconciliationWithState(ctx, path, project, state)
+}
+
+func (p *SourceSetProvider) ReconciliationSourceState(ctx context.Context,
+	source SourceRef,
+) (ReconciliationSourceState, bool) {
+	provider, ok := p.sources.(ReconciliationSourceStateProvider)
+	if !ok {
+		return ReconciliationSourceState{}, false
+	}
+	return provider.ReconciliationSourceState(ctx, source)
+}
+
+func (p *SourceSetProvider) ApplyReconciliationSourceState(ctx context.Context,
+	source *SourceRef, state ReconciliationSourceState,
+) error {
+	provider, ok := p.sources.(ReconciliationSourceStateProvider)
+	if !ok {
+		if state.Version == 0 {
+			return nil
+		}
+		return UnsupportedProviderFeatureError{
+			Provider: p.Def.Type, Feature: "reconciliation source state",
+		}
+	}
+	return provider.ApplyReconciliationSourceState(ctx, source, state)
+}
+
 func (p *SourceSetProvider) ReconciliationMemberIdentity(
 	fullSessionID string,
 ) string {
@@ -192,7 +237,7 @@ func (p *SourceSetProvider) PersistentArchiveSource(
 	return resolver.PersistentArchiveSource(path, fullSessionID)
 }
 
-// sourceSetFreshnessHasher is the optional inner-source-set shape of
+// MultiFileStatHasher is the optional inner-source-set shape of
 // parser.MultiFileStatHasher. A SourceSet-backed base that owns a
 // multi-file on-disk layout (currently codebuffSourceSet) implements
 // ComputeMultiFileStatHash on the inner SourceSet, and SourceSetProvider
@@ -201,9 +246,6 @@ func (p *SourceSetProvider) PersistentArchiveSource(
 // forwarding, the provider wrapping the hasher leaves the engine's
 // providerStatHashers cache empty and the per-component freshness
 // digest is never populated for any multi-file agent.
-type sourceSetFreshnessHasher interface {
-	ComputeMultiFileStatHash(chatPath string) uint64
-}
 
 // ComputeMultiFileStatHash implements parser.MultiFileStatHasher by
 // delegating to the wrapped SourceSet when it advertises the optional
@@ -211,7 +253,7 @@ type sourceSetFreshnessHasher interface {
 // (Claude, Codex, Roocode, ...) and the engine should keep using the
 // existing size/mtime composite freshness path.
 func (p *SourceSetProvider) ComputeMultiFileStatHash(chatPath string) uint64 {
-	hasher, ok := p.sources.(sourceSetFreshnessHasher)
+	hasher, ok := p.sources.(MultiFileStatHasher)
 	if !ok {
 		return 0
 	}

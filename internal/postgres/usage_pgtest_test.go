@@ -17,6 +17,7 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 func prepareUsageSchema(
@@ -73,6 +74,41 @@ func TestStoreGetDailyUsageUsesFallbackPricing(t *testing.T) {
 	require.NoError(t, err, "GetDailyUsage")
 	assert.Equal(t, money.MustParseDollars("4"), result.Totals.TotalCost)
 	assert.Len(t, result.Daily, 1)
+}
+
+func TestStoreGetDailyUsageCodexBedrockPricing(t *testing.T) {
+	_, store := prepareUsageSchema(t, "agentsview_usage_codex_bedrock_test")
+	for _, tt := range []struct{ model, date, cost string }{
+		{"openai.gpt-5.4", "2026-09-09", "1.925"},
+		{"openai.gpt-5.6-luna", "2026-07-29", "0.77"},
+		{"openai.gpt-5.6-luna", "2026-07-30", "0.154"},
+		{"openai.gpt-5.6-terra", "2026-07-29", "1.925"},
+		{"openai.gpt-5.6-terra", "2026-07-30", "1.54"},
+		{"openai.gpt-6-astra", "2026-09-09", "6.6"},
+	} {
+		t.Run(tt.model+"/"+tt.date, func(t *testing.T) {
+			id := tt.model + ":" + tt.date
+			ts := tt.date + "T12:00:00Z"
+			_, err := store.DB().ExecContext(t.Context(), `
+				INSERT INTO sessions (id, machine, project, agent, started_at, message_count)
+				VALUES ($1, 'test-machine', 'proj', 'codex', $2::timestamptz, 1)`, id, ts)
+			require.NoError(t, err)
+			_, err = store.DB().ExecContext(t.Context(), `
+				INSERT INTO messages (session_id, ordinal, role, content, timestamp, model, token_usage)
+				VALUES ($1, 0, 'assistant', 'hi', $2::timestamptz, $3,
+					'{"input_tokens":100000,"output_tokens":100000}')`, id, ts, tt.model)
+			require.NoError(t, err)
+			got, err := store.GetDailyUsage(t.Context(), db.UsageFilter{
+				From: tt.date, To: tt.date, Timezone: "UTC", Model: tt.model,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, money.MustParseDollars(tt.cost), got.Totals.TotalCost)
+			require.NotNil(t, got.Pricing)
+			resolutions := got.Pricing.Models[tt.model].Resolutions
+			require.Len(t, resolutions, 1)
+			assert.Equal(t, "bedrock_mantle/"+tt.model, resolutions[0].PricedModel)
+		})
+	}
 }
 
 func TestStoreGetDailyUsageReturnsAggregateCostOverflow(t *testing.T) {
@@ -1586,7 +1622,7 @@ func TestPushSyncsModelPricingToPostgres(t *testing.T) {
 		}},
 	}}), "UpsertModelPricing")
 
-	ps, err := New(pgURL, "agentsview", local, "test-machine", true, SyncOptions{})
+	ps, err := New(pgURL, "agentsview", local, "test-machine", true, storage.PusherOptions{})
 	require.NoError(t, err, "New")
 	defer ps.Close()
 
@@ -1696,7 +1732,7 @@ func TestPushRetiresOpenRouterPricingRows(t *testing.T) {
 			Value: `["minimax/minimax-m3"]`,
 		},
 	))
-	ps, err := New(pgURL, "agentsview", local, "test-machine", true, SyncOptions{})
+	ps, err := New(pgURL, "agentsview", local, "test-machine", true, storage.PusherOptions{})
 	require.NoError(t, err, "New")
 	defer ps.Close()
 	_, err = ps.Push(context.Background(), false, nil)
@@ -1753,7 +1789,7 @@ func TestPushFallsBackToBuiltinPricingWhenLocalTableEmpty(t *testing.T) {
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
 
 	local := testDB(t)
-	ps, err := New(pgURL, "agentsview", local, "test-machine", true, SyncOptions{})
+	ps, err := New(pgURL, "agentsview", local, "test-machine", true, storage.PusherOptions{})
 	require.NoError(t, err, "New")
 	defer ps.Close()
 

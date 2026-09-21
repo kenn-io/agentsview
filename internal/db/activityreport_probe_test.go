@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -13,7 +12,7 @@ import (
 
 func TestActivityReportSourceProbeChangesWithReportInputs(t *testing.T) {
 	database := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	initial, err := database.ActivityReportSourceProbe(ctx)
 	require.NoError(t, err)
 
@@ -28,7 +27,7 @@ func TestActivityReportSourceProbeChangesWithReportInputs(t *testing.T) {
 	require.NoError(t, err)
 	assert.Greater(t, afterMessage.MaxMessageID, afterSession.MaxMessageID)
 
-	_, err = database.getWriter().Exec(`INSERT INTO usage_events(
+	_, err = database.getWriter().Exec(ctx, `INSERT INTO usage_events(
 		session_id, source, model, output_tokens, occurred_at, dedup_key
 	) VALUES (?, 'test', 'model', 1, ?, 'probe')`,
 		"probe-session", "2026-07-01T00:00:01Z")
@@ -37,7 +36,7 @@ func TestActivityReportSourceProbeChangesWithReportInputs(t *testing.T) {
 	require.NoError(t, err)
 	assert.Greater(t, afterUsage.MaxUsageID, afterMessage.MaxUsageID)
 
-	_, err = database.getWriter().Exec(`INSERT INTO model_pricing(
+	_, err = database.getWriter().Exec(ctx, `INSERT INTO model_pricing(
 		model_pattern, updated_at
 	) VALUES ('probe-model', '2026-07-01T00:00:02Z')`)
 	require.NoError(t, err)

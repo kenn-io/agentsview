@@ -12,6 +12,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/servicehttp"
 )
 
 func TestPrepareFTSQuery(t *testing.T) {
@@ -47,7 +48,7 @@ type searchSpy struct {
 	filter db.SearchFilter
 }
 
-func (s *searchSpy) HasFTS() bool { return true }
+func (s *searchSpy) HasFTS(ctx context.Context) bool { return true }
 
 func (s *searchSpy) Search(
 	_ context.Context, f db.SearchFilter,
@@ -78,7 +79,7 @@ func TestHandleSearchSortParam(t *testing.T) {
 				mux:      http.NewServeMux(),
 			}
 			srv.routes()
-			req := httptest.NewRequest(
+			req := httptest.NewRequestWithContext(t.Context(),
 				http.MethodGet,
 				"/api/v1/search?"+tt.query, nil,
 			)
@@ -86,6 +87,48 @@ func TestHandleSearchSortParam(t *testing.T) {
 			srv.mux.ServeHTTP(w, req)
 			require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 			assert.Equal(t, tt.wantSort, spy.filter.Sort)
+		})
+	}
+}
+
+func TestSearchDateRangeHTTPTransport(t *testing.T) {
+	spy := &searchSpy{}
+	srv := &Server{
+		cfg: config.Config{Host: "127.0.0.1"}, db: spy,
+		sessions: service.NewReadOnlyBackend(spy), mux: http.NewServeMux(),
+	}
+	srv.routes()
+	httpServer := httptest.NewServer(srv.mux)
+	t.Cleanup(httpServer.Close)
+	client := servicehttp.NewHTTPBackend(httpServer.URL, "", true, "")
+	_, err := client.Search(t.Context(), service.SearchRequest{
+		Query: "hello", DateFrom: "2024-06-01", DateTo: "2024-06-02",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "2024-06-01", spy.filter.DateFrom)
+	assert.Equal(t, "2024-06-02", spy.filter.DateTo)
+}
+
+func TestSearchRejectsInvalidDateRange(t *testing.T) {
+	spy := &searchSpy{}
+	srv := &Server{
+		cfg: config.Config{Host: "127.0.0.1"}, db: spy,
+		sessions: service.NewReadOnlyBackend(spy), mux: http.NewServeMux(),
+	}
+	srv.routes()
+	for _, tc := range []struct {
+		name, params, message string
+	}{
+		{"reversed", "date_from=2024-06-03&date_to=2024-06-01", "date_from must not be after date_to"},
+		{"malformed from", "date_from=not-a-date", "date"},
+		{"malformed to", "date_to=2024-02-30", "date"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/search?q=hello&"+tc.params, nil)
+			srv.mux.ServeHTTP(w, req)
+			assert.Equal(t, http.StatusBadRequest, w.Code, "%s", w.Body.String())
+			assert.Contains(t, w.Body.String(), tc.message)
 		})
 	}
 }

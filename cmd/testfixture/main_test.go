@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 	"time"
@@ -13,7 +12,7 @@ import (
 )
 
 func TestCreateProjectReclassificationFixture(t *testing.T) {
-	database, err := db.Open(filepath.Join(t.TempDir(), "sessions.db"))
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "sessions.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 
@@ -30,7 +29,7 @@ func TestCreateProjectReclassificationFixture(t *testing.T) {
 		"test-session-project-reclassification-nested": worktreeRoot + "/cmd/server",
 	}
 	for sessionID, wantCwd := range wantCwds {
-		session, getErr := database.GetSession(context.Background(), sessionID)
+		session, getErr := database.GetSession(t.Context(), sessionID)
 		require.NoError(t, getErr)
 		require.NotNil(t, session)
 		assert.Equal(t, machine, session.Machine)
@@ -39,7 +38,7 @@ func TestCreateProjectReclassificationFixture(t *testing.T) {
 	}
 
 	snapshots, err := database.ListSessionProjectIdentitySnapshots(
-		context.Background(),
+		t.Context(),
 	)
 	require.NoError(t, err)
 	require.Len(t, snapshots, 2)

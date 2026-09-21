@@ -3,6 +3,7 @@ package rawclient
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"net/http"
@@ -55,7 +56,7 @@ func TestCommitManifestDecodesReceipt(t *testing.T) {
 		assert.Equal(t, http.MethodPost, r.Method)
 		assert.Equal(t, "/api/v1/raw-sync/manifests", r.URL.Path)
 		var sent rawsync.Manifest
-		if assert.NoError(t, jsonDecode(r.Body, &sent)) {
+		if assert.NoError(t, json.UnmarshalRead(r.Body, &sent)) {
 			assert.Equal(t, manifest, sent)
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -120,7 +121,7 @@ func TestCommitManifestRejectsInvalidResult(t *testing.T) {
 
 			result, err := client.CommitManifest(t.Context(), rawHTTPTestManifest())
 			require.Error(t, err)
-			assert.ErrorContains(t, err, tt.want)
+			require.ErrorContains(t, err, tt.want)
 			assert.Equal(t, rawsync.CommitResult{}, result)
 		})
 	}
@@ -183,6 +184,6 @@ func TestCommitManifestRejectsMissingReceipt(t *testing.T) {
 
 	result, err := client.CommitManifest(t.Context(), rawHTTPTestManifest())
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "missing receipt")
+	require.ErrorContains(t, err, "missing receipt")
 	assert.Equal(t, rawsync.CommitResult{}, result)
 }

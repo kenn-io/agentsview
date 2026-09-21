@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/stringutil"
 	kitvec "go.kenn.io/kit/vector"
 )
 
@@ -307,7 +308,7 @@ func resolveRunAnchor(
 	if lo >= hi {
 		lo, hi = memberStart, memberEnd
 	}
-	return offsets[member].Ordinal, truncateRunes(string(runes[lo:hi]), snippetMaxRunes)
+	return offsets[member].Ordinal, stringutil.TruncateRunes(string(runes[lo:hi]), snippetMaxRunes, "…")
 }
 
 // chunkWindow returns the [start, end) rune window of content's
@@ -364,6 +365,7 @@ SELECT doc_key, session_id, ordinal, ordinal_end, subordinate, offsets, content
 		if err != nil {
 			return fmt.Errorf("look up search hit documents: %w", err)
 		}
+		defer rows.Close()
 		for rows.Next() {
 			var key, offsets string
 			var doc mirrorDoc
@@ -413,21 +415,10 @@ func chunkSnippet(content string, chunkIndex int, split kitvec.SplitOptions) str
 	}
 	for _, chunk := range kitvec.Split(content, split) {
 		if chunk.Index == chunkIndex {
-			return truncateRunes(chunk.Text, snippetMaxRunes)
+			return stringutil.TruncateRunes(chunk.Text, snippetMaxRunes, "…")
 		}
 	}
 	return ""
-}
-
-// truncateRunes truncates s to at most maxRunes runes, appending an
-// ellipsis when truncation occurs. It measures in runes so multi-byte
-// characters are never torn apart.
-func truncateRunes(s string, maxRunes int) string {
-	runes := []rune(s)
-	if len(runes) <= maxRunes {
-		return s
-	}
-	return string(runes[:maxRunes]) + "…"
 }
 
 // ResolveMessageUnits maps each ref to the mirror unit containing it,

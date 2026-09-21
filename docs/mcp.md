@@ -21,6 +21,23 @@ Use the MCP server when you want a coding assistant to answer questions such as:
 The tools are read-only. They expose session history and usage data, but they do
 not mutate the archive or resync files directly.
 
+### Discover running HTTP listeners
+
+Run `agentsview mcp status --json` to list HTTP MCP listeners started by this
+version. The command reads local runtime records without starting a server. Each
+entry includes `transport`, `url`, `pid`, `backend_url` when known, and
+`token_path` when the listener requires a bearer token. Read the token from that
+private file; the status output does not print it.
+
+For wildcard binds, the URL uses loopback (`127.0.0.1` for IPv4 or `::1` for
+IPv6) so local clients can connect. Other bound addresses remain unchanged.
+
+The listener publishes its actual bound port after startup, including when
+started with port zero, and removes its record on orderly shutdown. Status omits
+records whose process has exited. Stdio sessions are not listening endpoints and
+do not appear. An empty JSON list means no HTTP listeners were found in this
+application's configured data directory.
+
 ## Quick Start
 
 For local desktop-style MCP clients, use stdio:
@@ -39,14 +56,53 @@ For local desktop-style MCP clients, use stdio:
 Restart or reload your MCP client after adding the server. Once connected, the
 client will see these tools:
 
-| Tool                   | Purpose                                                            |
-| ---------------------- | ------------------------------------------------------------------ |
-| `search_sessions`      | Full-text search across recorded sessions                          |
-| `list_sessions`        | List recent or filtered sessions                                   |
-| `get_session_overview` | Fetch metadata and a compact message preview                       |
-| `get_messages`         | Read paginated message bodies from one session                     |
-| `search_content`       | Substring, regex, semantic, or hybrid search over raw session text |
-| `get_usage_summary`    | Aggregate token and cost usage                                     |
+| Tool                   | Purpose                                                                  |
+| ---------------------- | ------------------------------------------------------------------------ |
+| `search_sessions`      | Full-text search across recorded sessions                                |
+| `list_sessions`        | List recent or filtered sessions                                         |
+| `get_session_overview` | Fetch metadata and a compact message preview                             |
+| `get_messages`         | Read paginated message bodies from one session                           |
+| `search_content`       | Substring, regex, semantic, or hybrid search over raw session text       |
+| `get_usage_summary`    | Aggregate token and cost usage                                           |
+| `query_recall`         | Search extracted Recall entries when the backend supports Recall queries |
+
+`search_sessions` accepts optional `date_from` and `date_to` bounds in
+`YYYY-MM-DD` format, just like `list_sessions` and `search_content`. Dates
+include sessions whose activity overlaps the requested days in UTC. Either bound
+can be omitted; omitting both preserves unrestricted date matching. Malformed
+dates and ranges where `date_from` is after `date_to` return an error.
+
+HTTP-backed session and search results include `web_url` when a browser address
+is available. Use that link when citing a session; it preserves the server's
+base path. Direct PostgreSQL reads omit it.
+
+Set `session_id` to a raw UUID or full stored session ID when you need one
+session. The lookup returns one metadata row, includes active sessions, ignores
+the other search arguments, and returns an error when the ID is missing or its
+raw suffix matches more than one session. A raw UUID matches an exact stored ID,
+an agent ID ending in `:<uuid>`, or a host ID ending in `~<uuid>`; the delimiter
+is part of the match, so a fork entry separated by `-` is not selected. The row
+has an empty `snippet`, `match_ordinal` set to `0`, and no `next_cursor`. Call
+`get_messages` with that ordinal to read the first message. For a known full ID,
+`get_session_overview` remains the way to get a compact message preview. Remote
+bare UUID lookup requires AgentsView 0.44.0 or later on the server. Use an exact
+full stored ID with an older server.
+
+`search_sessions` and `search_content` exclude sessions active in the last ten
+minutes by default, including the current conversation. Set
+`include_active: true` when you need that recent work.
+
+`search_content` also excludes one-shot and automated sessions by default. Set
+`include_one_shot: true` or `include_automated: true` to include those classes.
+An empty result can therefore omit a matching one-shot or automated session.
+
+When a vector search index is configured, prefer `search_content` with
+`mode: "hybrid"` or `mode: "semantic"` for questions about prior work,
+especially when the exact wording is unknown. Hybrid combines semantic
+similarity with keyword matching. Use `context` to include surrounding messages.
+If the index is unavailable, use `search_sessions` for keyword search, or
+`search_content` with substring/regex for exact errors, identifiers, and code
+fragments. The default search mode remains substring.
 
 `search_content` accepts a `mode` of `substring` (default), `regex`, `semantic`,
 or `hybrid`, plus a `scope` of `top`, `all` (default), or `subordinate` that is

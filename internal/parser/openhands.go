@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json/v2"
@@ -110,6 +111,7 @@ func OpenHandsSnapshot(path string) (FileInfo, error) {
 // parseSession parses a single OpenHands CLI conversation
 // directory into a session and messages.
 func (p *openHandsProvider) parseSession(
+	ctx context.Context,
 	path, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	sessionDir, err := normalizeOpenHandsSessionPath(path)
@@ -239,7 +241,7 @@ func (p *openHandsProvider) parseSession(
 
 	project := ""
 	if cwd != "" {
-		project = ExtractProjectFromCwd(cwd)
+		project = ExtractProjectFromCwdWithBranchContext(ctx, cwd, "")
 	}
 	if project == "" {
 		project = "openhands"
@@ -273,8 +275,7 @@ func parseOpenHandsMessageEvent(
 		return ParsedMessage{}, false, ""
 	}
 
-	content, _, _, _, toolCalls, toolResults :=
-		ExtractTextContent(llmMessage.Get("content"))
+	content, _, _, _, toolCalls, toolResults := ExtractTextContent(context.Background(), llmMessage.Get("content"))
 	content, hasThinking := openHandsAppendThinking(
 		content, ev,
 	)
@@ -325,12 +326,10 @@ func parseOpenHandsActionEvent(
 	}
 
 	content := openHandsText(ev.Get("thought"))
-	content = joinOpenHandsParts(
-		content,
-		formatOpenHandsAction(
-			toolName, action, ev.Get("summary").Str,
-		),
+	rendering := formatOpenHandsAction(
+		toolName, action, ev.Get("summary").Str,
 	)
+	content = joinOpenHandsParts(content, rendering)
 	content, hasThinking := openHandsAppendThinking(
 		content, ev,
 	)
@@ -353,6 +352,7 @@ func parseOpenHandsActionEvent(
 			ToolName:  toolName,
 			Category:  openHandsToolCategory(toolName, action),
 			InputJSON: inputJSON,
+			Rendering: strings.TrimSpace(rendering),
 		}},
 	}
 	return msg, true, openHandsActionCwd(toolName, action)
@@ -381,6 +381,7 @@ func parseOpenHandsObservationEvent(
 			Ordinal:       ordinal,
 			Role:          RoleUser,
 			Content:       display,
+			SourceSubtype: SourceSubtypeToolResult,
 			Timestamp:     ts,
 			ContentLength: len(display),
 		}, true, workingDir
@@ -429,7 +430,7 @@ func openHandsBaseStateCwd(base gjson.Result) string {
 }
 
 func openHandsText(content gjson.Result) string {
-	text, _, _, _, _, _ := ExtractTextContent(content)
+	text, _, _, _, _, _ := ExtractTextContent(context.Background(), content)
 	return strings.TrimSpace(text)
 }
 
@@ -501,7 +502,7 @@ func formatOpenHandsAction(
 				"[Bash: %s]\n$ %s", summary, cmd,
 			)
 		}
-		return fmt.Sprintf("[Bash]\n$ %s", cmd)
+		return "[Bash]\n$ " + cmd
 	case "file_editor":
 		path := action.Get("path").Str
 		switch action.Get("command").Str {

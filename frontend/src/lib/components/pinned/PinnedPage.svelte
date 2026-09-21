@@ -12,7 +12,7 @@
   import { router } from "../../stores/router.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { formatRelativeTime, truncate } from "../../utils/format.js";
-  import { renderMarkdown } from "../../utils/markdown.js";
+  import { loadAssetImages, renderMarkdown } from "../../utils/markdown.js";
   import { highlightCodeFences } from "../../utils/highlight-fences.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
   import { normalizeMessagePreview } from "../../utils/messages.js";
@@ -37,7 +37,7 @@
     router.navigateToSession(sessionId);
   }
 
-  function getSessionInfo(pin: import("../../api/types.js").PinnedMessage) {
+  function getSessionInfo(pin: import("../../api/generated/index.js").DbPinnedMessage) {
     // Use backend-provided session metadata (available for all-pins
     // query). Fall back to the sessions store for older data.
     if (pin.session_project || pin.session_agent) {
@@ -142,8 +142,11 @@
                 <div
                   class="pin-content-full markdown"
                   use:highlightCodeFences={{ content: pin.content }}
+                  use:loadAssetImages={pin.content}
                 >
-                  {@html renderMarkdown(pin.content)}
+                  {@html renderMarkdown(pin.content, {
+                    renderUnknownXmlBlocksAsPreformatted: ui.renderUnknownXmlBlocksAsPreformatted,
+                  })}
                 </div>
               {:else}
                 <div class="pin-content-preview">{preview}</div>
@@ -348,7 +351,7 @@
     border-radius: 4px;
     padding: 0.15em 0.4em;
   }
-  .pin-content-full :global(pre) {
+  .pin-content-full :global(pre:not(.unknown-xml-block)) {
     background: var(--code-bg);
     color: var(--code-text);
     border-radius: var(--radius-md);

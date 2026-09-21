@@ -1,7 +1,6 @@
 package sync_test
 
 import (
-	"context"
 	"database/sql"
 	"os"
 	"path/filepath"
@@ -22,7 +21,7 @@ func TestSyncAllAttributesHermesSiblingStateDBFromSessionsRoot(t *testing.T) {
 	require.NoError(t, os.MkdirAll(sessionsRoot, 0o755))
 	writeHermesSyncStateDB(t, root)
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentHermes: {sessionsRoot},
 		},
@@ -32,10 +31,10 @@ func TestSyncAllAttributesHermesSiblingStateDBFromSessionsRoot(t *testing.T) {
 		Machine: "localbox",
 	})
 
-	stats := engine.SyncAll(context.Background(), nil)
+	stats := engine.SyncAll(t.Context(), nil)
 
 	require.Equal(t, 1, stats.Synced)
-	sess, err := database.GetSessionFull(context.Background(), "hermes:child")
+	sess, err := database.GetSessionFull(t.Context(), "hermes:child")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Equal(t, "archivebox", sess.Machine)
@@ -49,7 +48,7 @@ func TestSyncPathsAttributesHermesSiblingStateDBFromSessionsRoot(t *testing.T) {
 	require.NoError(t, os.MkdirAll(sessionsRoot, 0o755))
 	stateDB := writeHermesSyncStateDB(t, root)
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentHermes: {sessionsRoot},
 		},
@@ -59,9 +58,9 @@ func TestSyncPathsAttributesHermesSiblingStateDBFromSessionsRoot(t *testing.T) {
 		Machine: "localbox",
 	})
 
-	engine.SyncPathsContext(context.Background(), []string{stateDB})
+	engine.SyncPathsContext(t.Context(), []string{stateDB})
 
-	sess, err := database.GetSessionFull(context.Background(), "hermes:child")
+	sess, err := database.GetSessionFull(t.Context(), "hermes:child")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Equal(t, "archivebox", sess.Machine)
@@ -75,7 +74,7 @@ func TestSyncSingleSessionAttributesHermesSiblingStateDBFromSessionsRoot(
 	require.NoError(t, os.MkdirAll(sessionsRoot, 0o755))
 	writeHermesSyncStateDB(t, root)
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentHermes: {sessionsRoot},
 		},
@@ -104,7 +103,7 @@ func TestSyncPathsHermesStateDBEventRefreshesArchive(t *testing.T) {
 	root := t.TempDir()
 	stateDB := writeHermesSyncStateDB(t, root)
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentHermes: {filepath.Join(root, "sessions")},
 		},
@@ -129,7 +128,7 @@ func TestSyncPathsHermesArchiveTranscriptEventRefreshesArchive(t *testing.T) {
 	root := t.TempDir()
 	stateDB := writeHermesSyncStateDB(t, root)
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentHermes: {filepath.Join(root, "sessions")},
 		},
@@ -165,7 +164,7 @@ func writeHermesSyncStateDB(t *testing.T, root string) string {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
 
-	_, err = conn.Exec(`
+	_, err = conn.ExecContext(t.Context(), `
 		CREATE TABLE sessions (
 			id TEXT PRIMARY KEY,
 			source TEXT NOT NULL,

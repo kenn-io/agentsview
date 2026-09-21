@@ -8,12 +8,11 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -51,37 +50,24 @@ func fetchHTTPProjects(
 	excludeOneShot bool,
 	excludeAutomated bool,
 ) ([]db.ProjectInfo, error) {
-	q := url.Values{}
-	q.Set("include_one_shot", strconv.FormatBool(!excludeOneShot))
-	q.Set("include_automated", strconv.FormatBool(!excludeAutomated))
-	endpoint := strings.TrimSuffix(tr.URL, "/") +
-		"/api/v1/projects?" + q.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	api, err := apiclient.NewHTTPClient(tr.URL, authToken, projectsHTTPClient)
 	if err != nil {
 		return nil, err
 	}
-	if authToken != "" {
-		req.Header.Set("Authorization", "Bearer "+authToken)
+	response, err := api.GetAPIV1ProjectsWithResponse(ctx, &apiclient.GetAPIV1ProjectsRequestOptions{Query: &apiclient.GetAPIV1ProjectsQuery{IncludeOneShot: new(!excludeOneShot), IncludeAutomated: new(!excludeAutomated)}})
+	if response == nil {
+		return nil, err
 	}
-	resp, err := projectsHTTPClient.Do(req)
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("projects: HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(response.Body)))
+	}
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf(
-			"projects: HTTP %d: %s",
-			resp.StatusCode, strings.TrimSpace(string(body)),
-		)
+	if len(response.Body) == 0 {
+		return nil, io.ErrUnexpectedEOF
 	}
-	var out struct {
-		Projects []db.ProjectInfo `json:"projects"`
-	}
-	if err := json.UnmarshalRead(resp.Body, &out); err != nil {
-		return nil, err
-	}
-	return out.Projects, nil
+	return response.JSON200.Projects, nil
 }
 
 func writeProjects(projects []db.ProjectInfo, jsonOutput bool) {

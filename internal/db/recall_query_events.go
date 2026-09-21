@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -56,6 +57,9 @@ func (db *DB) RecordRecallQueryEvent(
 	if err := db.requireWritable(); err != nil {
 		return "", err
 	}
+	if err := db.requireDerivedTextStorage("recall query events"); err != nil {
+		return "", err
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -63,7 +67,7 @@ func (db *DB) RecordRecallQueryEvent(
 	event.Surface = strings.TrimSpace(event.Surface)
 	event.ScorePolicyVersion = strings.TrimSpace(event.ScorePolicyVersion)
 	if event.Surface == "" {
-		return "", fmt.Errorf("recall query surface is required")
+		return "", errors.New("recall query surface is required")
 	}
 	if event.FiltersJSON == "" {
 		event.FiltersJSON = "{}"
@@ -190,7 +194,7 @@ func (db *DB) GetRecallQueryEvent(
 		&event.CreatedAt,
 	)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("getting recall query event %s: %w", queryID, err)

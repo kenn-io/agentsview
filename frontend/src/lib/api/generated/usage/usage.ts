@@ -7,12 +7,14 @@ import type {
   GetApiV1UsageComparisonParams,
   GetApiV1UsagePairwiseComparisonParams,
   GetApiV1UsageSummaryParams,
+  GetApiV1UsageSummaryStreamParams,
   GetApiV1UsageTopSessionsParams,
   ServiceUsagePairwiseComparisonResponse,
   UsageSummaryResponse,
 } from "../models";
 
 import { orvalFetch } from "../../runtime.ts";
+import { orvalRequest } from "../../runtime.ts";
 
 export const getGetApiV1UsageComparisonUrl = (params: GetApiV1UsageComparisonParams) => {
   const normalizedParams = new URLSearchParams();
@@ -101,6 +103,35 @@ export const getApiV1UsageSummary = async (
   options?: Parameters<typeof orvalFetch>[1],
 ): Promise<UsageSummaryResponse> => {
   return orvalFetch<UsageSummaryResponse>(getGetApiV1UsageSummaryUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetApiV1UsageSummaryStreamUrl = (params?: GetApiV1UsageSummaryStreamParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/v1/usage/summary/stream?${stringifiedParams}`
+    : `/api/v1/usage/summary/stream`;
+};
+
+/**
+ * @summary Get usage summary with progress
+ */
+export const getApiV1UsageSummaryStream = async (
+  params?: GetApiV1UsageSummaryStreamParams,
+  options?: Parameters<typeof orvalRequest>[1],
+): Promise<Response> => {
+  return orvalRequest<Response>(getGetApiV1UsageSummaryStreamUrl(params), {
     ...options,
     method: "GET",
   });

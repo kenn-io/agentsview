@@ -53,7 +53,7 @@ func exportTestSource() *fakeUnitSource {
 func newBuiltTestIndex(t *testing.T) (*Index, kitvec.Generation) {
 	t.Helper()
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	src := exportTestSource()
 	gen := fakeGeneration4Dim()
 
@@ -75,13 +75,13 @@ func fakeGeneration4Dim() kitvec.Generation {
 }
 
 func TestExportRoundTrip(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	ix, gen := newBuiltTestIndex(t)
 
 	exp, ok, err := ix.ActiveExport(ctx)
 	require.NoError(t, err)
 	require.True(t, ok)
-	assert.Equal(t, gen.Fingerprint(), exp.Fingerprint)
+	assert.Equal(t, exp.Fingerprint, gen.Fingerprint())
 	assert.Equal(t, 4, exp.Dimension)
 	assert.NotEmpty(t, exp.Model)
 
@@ -106,12 +106,12 @@ func TestExportRoundTrip(t *testing.T) {
 	noDocs, emptyHash, err := ix.ExportSessionDocs(ctx, exp.Ordinal, "absent")
 	require.NoError(t, err)
 	assert.Empty(t, noDocs)
-	assert.Equal(t, "", emptyHash,
+	assert.Empty(t, emptyHash,
 		"an empty export hashes to \"\", matching absence from the hash map")
 }
 
 func TestSessionEmbeddedDocHashesScoped(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	ix, _ := newBuiltTestIndex(t)
 
 	exp, ok, err := ix.ActiveExport(ctx)
@@ -144,7 +144,7 @@ func TestSessionEmbeddedDocHashesScoped(t *testing.T) {
 }
 
 func TestExportNoActiveGeneration(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	ix := newEmptyTestIndex(t)
 	_, ok, err := ix.ActiveExport(ctx)
 	require.NoError(t, err)
@@ -152,7 +152,7 @@ func TestExportNoActiveGeneration(t *testing.T) {
 }
 
 func TestVectorExportRebuildSnapshotConsistency(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	ix, gen := newBuiltTestIndex(t)
 	src := exportTestSource()
 
@@ -175,7 +175,7 @@ func TestVectorExportRebuildSnapshotConsistency(t *testing.T) {
 
 	_, ok, err = ix.BeginExport(ctx, nil)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrExportNotReady)
+	require.ErrorIs(t, err, ErrExportNotReady)
 	assert.False(t, ok)
 
 	gotHashes, err := old.SessionDocHashes(ctx, nil)
@@ -205,7 +205,7 @@ func TestVectorExportRebuildSnapshotConsistency(t *testing.T) {
 }
 
 func TestVectorExportHandleLifecycle(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	ix, _ := newBuiltTestIndex(t)
 	export, ok, err := ix.BeginExport(ctx, nil)
 	require.NoError(t, err)
@@ -213,20 +213,20 @@ func TestVectorExportHandleLifecycle(t *testing.T) {
 	require.NoError(t, export.Close())
 	require.NoError(t, export.Close())
 	_, err = export.SessionDocHashes(ctx, nil)
-	assert.Error(t, err)
+	require.Error(t, err)
 	_, _, err = export.SessionDocs(ctx, "session-1")
 	assert.Error(t, err)
 }
 
 func TestVectorExportTreatsParkedStampedDocsAsNotReady(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	ix, _ := newBuiltTestIndex(t)
 
 	exp, ok, err := ix.ActiveExport(ctx)
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	_, err = ix.db.Exec(`
+	_, err = ix.db.ExecContext(ctx, `
 UPDATE vector_messages
    SET ordinal = -1
  WHERE session_id = ? AND content = ?`, "session-1", "hello")
@@ -246,7 +246,7 @@ UPDATE vector_messages
 
 	_, ok, err = ix.BeginExport(ctx, nil)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrExportNotReady)
+	require.ErrorIs(t, err, ErrExportNotReady)
 	assert.False(t, ok)
 
 	scoped, ok, err := ix.BeginExport(ctx, []string{"session-2"})
@@ -263,7 +263,7 @@ UPDATE vector_messages
 // and stays embedded, so the session key survives with a changed hash);
 // session-2, untouched, keeps a stable hash.
 func TestSessionEmbeddedDocHashesChangesWithContent(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	ix := openTestIndex(t)
 	src := exportTestSource()
 	gen := fakeGeneration4Dim()
@@ -314,7 +314,7 @@ func TestSessionEmbeddedDocHashesChangesWithContent(t *testing.T) {
 // hash over only (doc_key, content_hash) would miss this and leave PG anchors
 // stale. session-2, untouched, keeps a stable hash.
 func TestSessionEmbeddedDocHashesChangesWithMetadata(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	ix := openTestIndex(t)
 	src := exportTestSource()
 	gen := fakeGeneration4Dim()
@@ -359,7 +359,7 @@ func TestSessionEmbeddedDocHashesChangesWithMetadata(t *testing.T) {
 // behavior Search and StaleActive apply, instead of exporting rows shaped by a
 // different schema.
 func TestExportVersionMismatchReturnsSentinel(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "vectors.db")
 	seedV2Mirror(t, path)
 
@@ -368,10 +368,10 @@ func TestExportVersionMismatchReturnsSentinel(t *testing.T) {
 	defer ro.Close()
 
 	_, _, err = ro.ActiveExport(ctx)
-	assert.ErrorIs(t, err, ErrMirrorVersionMismatch)
+	require.ErrorIs(t, err, ErrMirrorVersionMismatch)
 
 	_, err = ro.SessionEmbeddedDocHashes(ctx, 1, nil)
-	assert.ErrorIs(t, err, ErrMirrorVersionMismatch)
+	require.ErrorIs(t, err, ErrMirrorVersionMismatch)
 
 	_, _, err = ro.ExportSessionDocs(ctx, 1, "s1")
 	assert.ErrorIs(t, err, ErrMirrorVersionMismatch)

@@ -3,7 +3,7 @@ package capture
 import (
 	"bufio"
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -223,7 +223,7 @@ func codexMetaMatches(
 		return false, err
 	}
 	if decodeErr != nil {
-		return false, nil
+		return false, nil //nolint:nilerr // Malformed source metadata does not match the requested session.
 	}
 	return record.Type == "session_meta" && strings.EqualFold(record.Payload.ID, id), nil
 }
@@ -468,7 +468,7 @@ func openCaptureEngine(
 			disabled = append(disabled, def.Type)
 		}
 	}
-	engine := syncer.NewEngine(database, syncer.EngineConfig{
+	engine := syncer.NewEngine(ctx, database, syncer.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			agent: {state.capturedProviderRoot()},
 		},

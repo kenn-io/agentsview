@@ -1,7 +1,6 @@
 package sync_test
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -30,7 +29,7 @@ func TestSyncPathsAndSingleSession_KimiWork(t *testing.T) {
 
 	kimiWorkDir := t.TempDir()
 	testDB := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(testDB, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), testDB, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentKimiWork: {kimiWorkDir},
 		},
@@ -72,8 +71,8 @@ func TestSyncPathsAndSingleSession_KimiWork(t *testing.T) {
 	assert.Nil(t, auxSess, "aux daimon sessions must not be imported")
 
 	// Force a single-session resync; identity and project must hold.
-	require.NoError(t, testDB.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(
+	require.NoError(t, testDB.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(),
 			"UPDATE sessions SET file_mtime = NULL WHERE id = ?",
 			sessionID,
 		)
@@ -102,7 +101,7 @@ func TestSyncKimiWorkMissingModelPricesAcrossK3Cutoff(t *testing.T) {
 			CacheReadPerMTok: money.MustParseDollars("0.30"),
 		},
 	}))
-	engine := sync.NewEngine(testDB, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), testDB, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentKimiWork: {kimiWorkDir},
 		},
@@ -156,7 +155,7 @@ func TestSyncKimiWorkMissingModelPricesAcrossK3Cutoff(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result, err := testDB.GetDailyUsage(
-				context.Background(),
+				t.Context(),
 				db.UsageFilter{
 					From:     tt.day,
 					To:       tt.day,
@@ -168,8 +167,7 @@ func TestSyncKimiWorkMissingModelPricesAcrossK3Cutoff(t *testing.T) {
 			assert.Equal(t, tt.wantCost, result.Totals.TotalCost)
 			require.NotNil(t, result.Pricing)
 			require.Contains(t, result.Pricing.Models, "daimon-kimi-code")
-			resolutions :=
-				result.Pricing.Models["daimon-kimi-code"].Resolutions
+			resolutions := result.Pricing.Models["daimon-kimi-code"].Resolutions
 			require.Len(t, resolutions, 1)
 			assert.Equal(t, tt.wantPricedModel,
 				resolutions[0].PricedModel)

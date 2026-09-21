@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 // HealthConfig configures the `health` command.
@@ -339,7 +341,7 @@ func formatCompactions(total, midTask int) string {
 		return "0"
 	}
 	if midTask == 0 {
-		return fmt.Sprintf("%d", total)
+		return strconv.Itoa(total)
 	}
 	return fmt.Sprintf("%d (%d mid-task)", total, midTask)
 }
@@ -406,9 +408,9 @@ func truncate(s string, n int) string {
 		return s
 	}
 	if n <= 1 {
-		return s[:n]
+		return stringutil.SafeTruncate(s, n)
 	}
-	return s[:n-1] + "…"
+	return stringutil.SafeTruncate(s, n-1) + "…"
 }
 
 func shortID(id string) string {

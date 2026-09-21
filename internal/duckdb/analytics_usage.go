@@ -64,7 +64,7 @@ type duckAnalyticsSession struct {
 func (s *Store) analyticsSessions(
 	ctx context.Context, f db.AnalyticsFilter,
 ) ([]duckAnalyticsSession, error) {
-	return s.analyticsSessionsFiltered(ctx, f, true, true)
+	return s.analyticsSessionsFiltered(ctx, f, true, true, "", nil)
 }
 
 // analyticsSessionsFiltered loads candidate sessions, optionally applying
@@ -77,6 +77,7 @@ func (s *Store) analyticsSessions(
 func (s *Store) analyticsSessionsFiltered(
 	ctx context.Context, f db.AnalyticsFilter,
 	includeDate, includeTime bool,
+	extraPred string, extraArgs []any,
 ) ([]duckAnalyticsSession, error) {
 	if includeTime && f.HasTimeFilter() && strings.TrimSpace(f.Model) != "" {
 		return s.analyticsSessionsModelTimeFiltered(ctx, f, includeDate)
@@ -84,6 +85,10 @@ func (s *Store) analyticsSessionsFiltered(
 	where, args := duckBuildAnalyticsWhere(
 		f, "COALESCE(s.started_at, s.created_at)", "s.",
 		includeDate, includeTime)
+	if extraPred != "" {
+		where += " AND " + extraPred
+		args = append(args, extraArgs...)
+	}
 	rows, err := s.queryContext(ctx, `
 		SELECT id, project, machine, agent, first_message,
 			COALESCE(display_name, session_name) AS display_name,
@@ -143,7 +148,7 @@ func (s *Store) analyticsSessionsFiltered(
 func (s *Store) analyticsSessionsModelTimeFiltered(
 	ctx context.Context, f db.AnalyticsFilter, includeDate bool,
 ) ([]duckAnalyticsSession, error) {
-	sessions, err := s.analyticsSessionsFiltered(ctx, f, includeDate, false)
+	sessions, err := s.analyticsSessionsFiltered(ctx, f, includeDate, false, "", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -824,6 +829,7 @@ func (s *Store) GetAnalyticsSummary(
 	if err != nil {
 		return db.AnalyticsSummary{}, fmt.Errorf("querying duckdb analytics summary: %w", err)
 	}
+	defer rows.Close()
 	resp := db.AnalyticsSummary{Agents: map[string]*db.AgentSummary{}}
 	if !rows.Next() {
 		rows.Close()
@@ -1085,7 +1091,8 @@ func (s *Store) queryActivityBuckets(
 		message_rows AS (
 			SELECT `+bucketExpr+` AS bucket,
 				COUNT(*) AS messages,
-				COUNT(*) FILTER (WHERE m.role = 'user' AND m.is_system = FALSE) AS user_messages,
+				COUNT(*) FILTER (WHERE m.role = 'user' AND m.is_system = FALSE
+					AND COALESCE(m.source_subtype, '') != 'tool_result') AS user_messages,
 				COUNT(*) FILTER (WHERE m.role = 'assistant') AS assistant_messages,
 				COUNT(*) FILTER (WHERE m.has_thinking = TRUE) AS thinking_messages
 			FROM filtered_sessions fs
@@ -1562,7 +1569,7 @@ func (s *Store) GetAnalyticsHourOfWeek(
 func (s *Store) getAnalyticsHourOfWeekFilteredByModel(
 	ctx context.Context, f db.AnalyticsFilter,
 ) (db.HourOfWeekResponse, error) {
-	sessions, err := s.analyticsSessionsFiltered(ctx, f, true, false)
+	sessions, err := s.analyticsSessionsFiltered(ctx, f, true, false, "", nil)
 	if err != nil {
 		return db.HourOfWeekResponse{}, err
 	}
@@ -1738,7 +1745,8 @@ func (s *Store) analyticsAutonomyBuckets(
 	}
 	rows, err := s.queryContext(ctx, `
 		SELECT session_id,
-			SUM(CASE WHEN role = 'user' AND is_system = FALSE THEN 1 ELSE 0 END) AS user_count,
+			SUM(CASE WHEN role = 'user' AND is_system = FALSE
+				AND COALESCE(source_subtype, '') != 'tool_result' THEN 1 ELSE 0 END) AS user_count,
 			SUM(CASE WHEN role = 'assistant' AND has_tool_use = TRUE THEN 1 ELSE 0 END) AS tool_count
 		FROM messages
 		WHERE session_id IN (`+strings.Join(placeholders, ",")+`)
@@ -1789,8 +1797,9 @@ func duckQueryChunked(ids []string, fn func(chunk []string) error) error {
 func (s *Store) GetAnalyticsTools(
 	ctx context.Context, f db.AnalyticsFilter,
 ) (db.ToolsAnalyticsResponse, error) {
+	sessionPred, sessionArgs := duckAnalyticsToolSessionWindow(f)
 	sessions, err := s.analyticsSessionsFiltered(
-		ctx, f, false, false,
+		ctx, f, false, false, sessionPred, sessionArgs,
 	)
 	if err != nil {
 		return db.ToolsAnalyticsResponse{}, err
@@ -1809,9 +1818,12 @@ func (s *Store) GetAnalyticsTools(
 		ph, args := duckInPlaceholders(chunk)
 		modelPred, modelArgs := duckAnalyticsCSVPredicate("m.model", f.Model)
 		args = append(args, modelArgs...)
+		from, to := duckAnalyticsWindowBounds(f)
+		windowPred, windowArgs := duckAnalyticsMessageWindowPred("m.timestamp", from, to)
+		args = append(args, windowArgs...)
 		query := `SELECT tc.session_id, tc.category,
 				TRIM(COALESCE(tc.tool_name, '')), COUNT(*),
-				m.timestamp
+				MAX(m.timestamp)
 				FROM tool_calls tc
 				LEFT JOIN messages m
 					ON m.session_id = tc.session_id
@@ -1821,9 +1833,11 @@ func (s *Store) GetAnalyticsTools(
 			query += `
 				AND ` + modelPred
 		}
+		query += duckAnalyticsAndClause(windowPred)
 		query += `
 				GROUP BY tc.session_id, tc.category,
-					TRIM(COALESCE(tc.tool_name, '')), m.timestamp`
+					TRIM(COALESCE(tc.tool_name, '')), date_trunc('minute', m.timestamp)`
+		observeAnalyticsQuery(query)
 		rows, qErr := s.queryContext(ctx, query, args...)
 		if qErr != nil {
 			return qErr
@@ -1868,7 +1882,8 @@ func (s *Store) GetAnalyticsTools(
 func (s *Store) GetAnalyticsSkills(
 	ctx context.Context, f db.AnalyticsFilter, granularity string,
 ) (db.SkillsAnalyticsResponse, error) {
-	sessions, err := s.analyticsSessionsFiltered(ctx, f, false, false)
+	sessionPred, sessionArgs := duckAnalyticsToolSessionWindow(f)
+	sessions, err := s.analyticsSessionsFiltered(ctx, f, false, false, sessionPred, sessionArgs)
 	if err != nil {
 		return db.SkillsAnalyticsResponse{}, err
 	}
@@ -1889,18 +1904,21 @@ func (s *Store) GetAnalyticsSkills(
 		ph, args := duckInPlaceholders(chunk)
 		modelPred, modelArgs := duckAnalyticsCSVPredicate("m.model", f.Model)
 		args = append(args, modelArgs...)
+		from, to := duckAnalyticsWindowBounds(f)
+		windowPred, windowArgs := duckAnalyticsMessageWindowPred("m.timestamp", from, to)
+		args = append(args, windowArgs...)
 		rows, qErr := s.queryContext(ctx,
 			`SELECT tc.session_id, TRIM(COALESCE(tc.skill_name, '')),
-				COUNT(*), m.timestamp
+				COUNT(*), MAX(m.timestamp)
 				FROM tool_calls tc
 				LEFT JOIN messages m
 					ON m.session_id = tc.session_id
 					AND m.id = tc.message_id
 				WHERE tc.session_id IN `+ph+`
 					AND TRIM(COALESCE(tc.skill_name, '')) != ''
-					`+duckAnalyticsAndClause(modelPred)+`
+					`+duckAnalyticsAndClause(modelPred)+duckAnalyticsAndClause(windowPred)+`
 				GROUP BY tc.session_id, TRIM(COALESCE(tc.skill_name, '')),
-					m.timestamp`, args...)
+					date_trunc('minute', m.timestamp)`, args...)
 		if qErr != nil {
 			return qErr
 		}
@@ -2608,7 +2626,7 @@ func (s *Store) duckPopulateFrustrationMarkers(
 	}
 	q := `SELECT session_id, content, is_system
 		FROM messages
-		WHERE role = 'user' AND session_id IN (` +
+		WHERE role = 'user' AND COALESCE(source_subtype, '') <> 'tool_result' AND session_id IN (` +
 		strings.Join(placeholders, ",") + `)`
 	msgRows, err := s.queryContext(ctx, q, args...)
 	if err != nil {
@@ -2659,13 +2677,14 @@ func (s *Store) duckSignalMessages(
 			for sessionID, scopedRows := range scope.MessagesBySession() {
 				for _, row := range scopedRows {
 					out[sessionID] = append(out[sessionID], db.SignalMessage{
-						SessionID:  row.SessionID,
-						Ordinal:    row.Ordinal,
-						Role:       row.Role,
-						Content:    row.Content,
-						Timestamp:  row.Timestamp,
-						IsSystem:   row.IsSystem,
-						HasToolUse: row.HasToolUse,
+						SessionID:     row.SessionID,
+						Ordinal:       row.Ordinal,
+						Role:          row.Role,
+						SourceSubtype: row.SourceSubtype,
+						Content:       row.Content,
+						Timestamp:     row.Timestamp,
+						IsSystem:      row.IsSystem,
+						HasToolUse:    row.HasToolUse,
 					})
 				}
 			}
@@ -2673,14 +2692,14 @@ func (s *Store) duckSignalMessages(
 		return out, nil
 	}
 	placeholders := make([]string, len(rows))
-	args := make([]any, len(rows))
+	args := make([]any, 0, len(rows))
 	for i, r := range rows {
 		placeholders[i] = "?"
-		args[i] = r.ID
+		args = append(args, r.ID)
 	}
 	filterModels := duckAnalyticsCSVValues(f.Model)
 	q := `SELECT session_id, ordinal, role, content,
-			timestamp, is_system, has_tool_use
+			timestamp, is_system, has_tool_use, COALESCE(source_subtype, '')
 		FROM messages
 		WHERE session_id IN (` + strings.Join(placeholders, ",") + `)`
 	if len(filterModels) == 1 {
@@ -2707,7 +2726,7 @@ func (s *Store) duckSignalMessages(
 		if err := msgRows.Scan(
 			&m.SessionID, &m.Ordinal, &m.Role,
 			&m.Content, &ts,
-			&m.IsSystem, &m.HasToolUse,
+			&m.IsSystem, &m.HasToolUse, &m.SourceSubtype,
 		); err != nil {
 			return nil, fmt.Errorf("scanning duckdb signal message: %w", err)
 		}
@@ -3107,6 +3126,55 @@ func duckUsagePaddedUTCBound(ts string, hours int) string {
 	return t.Add(time.Duration(hours) * time.Hour).Format(time.RFC3339)
 }
 
+func duckAnalyticsWindowBounds(f db.AnalyticsFilter) (string, string) {
+	var from, to string
+	if f.From != "" {
+		from = duckUsagePaddedUTCBound(f.From+"T00:00:00Z", -14)
+	}
+	if f.To != "" {
+		to = duckUsagePaddedUTCBound(f.To+"T23:59:59Z", 14)
+		if t, err := time.Parse(time.RFC3339, to); err == nil {
+			to = t.Add(time.Second).Format(time.RFC3339)
+		}
+	}
+	return from, to
+}
+
+func duckAnalyticsMessageWindowPred(col, from, to string) (string, []any) {
+	var preds []string
+	var args []any
+	if from != "" {
+		preds = append(preds, col+" >= CAST(? AS TIMESTAMP)")
+		args = append(args, from)
+	}
+	if to != "" {
+		preds = append(preds, col+" < CAST(? AS TIMESTAMP)")
+		args = append(args, to)
+	}
+	if len(preds) == 0 {
+		return "", nil
+	}
+	return "(" + col + " IS NULL OR (" + strings.Join(preds, " AND ") + "))", args
+}
+
+var analyticsQueryObserver func(string)
+
+func observeAnalyticsQuery(query string) {
+	if analyticsQueryObserver != nil {
+		analyticsQueryObserver(query)
+	}
+}
+
+func duckAnalyticsToolSessionWindow(f db.AnalyticsFilter) (string, []any) {
+	from, to := duckAnalyticsWindowBounds(f)
+	sessionPred, args := duckAnalyticsMessageWindowPred("COALESCE(s.started_at, s.created_at)", from, to)
+	if sessionPred == "" {
+		return "", nil
+	}
+	messagePred, messageArgs := duckAnalyticsMessageWindowPred("wm.timestamp", from, to)
+	return "(" + sessionPred + " OR EXISTS (SELECT 1 FROM messages wm WHERE wm.session_id = s.id AND " + messagePred + "))", append(args, messageArgs...)
+}
+
 func duckUsageBoundsForFilter(f db.UsageFilter) duckUsageBounds {
 	var b duckUsageBounds
 	if f.From != "" {
@@ -3486,7 +3554,7 @@ func duckUsageLocalDateSQL(f db.UsageFilter) (string, any) {
 			ref = t
 		}
 	}
-	_, offset := ref.In(time.Local).Zone()
+	_, offset := ref.In(time.Local).Zone() //nolint:forbidigo // Usage report dates follow the local timezone when no timezone is selected.
 	return "COALESCE(strftime(ts + (? * INTERVAL 1 SECOND), '%Y-%m-%d'), '')", offset
 }
 
@@ -3505,33 +3573,46 @@ func duckUsageSnapshotInputFilter(f db.UsageFilter) db.UsageFilter {
 	return db.UsageFilter{From: f.From, To: f.To, Timezone: f.Timezone}
 }
 
-// duckPriceModelCaseSQL renders Kimi alias canonicalization as SQL so each
-// usage row carries the fixed or timestamp-selected model whose rates apply.
+// duckSQLString quotes a SQL string literal. Alias names come from the
+// curated pricing tables, not from stored session data.
+func duckSQLString(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
+// duckPriceModelCaseSQL renders runtime-alias canonicalization as SQL so
+// each usage row carries the fixed or timestamp-selected model whose
+// rates apply.
 func duckPriceModelCaseSQL() string {
-	fixedK26Aliases := pricingpkg.KimiK26Aliases()
-	fixedK26Quoted := make([]string, len(fixedK26Aliases))
-	for i, alias := range fixedK26Aliases {
-		fixedK26Quoted[i] = "'" + alias + "'"
+	var b strings.Builder
+	b.WriteString("CASE\n")
+	for _, alias := range pricingpkg.FixedPricingAliases() {
+		modelExpr := "regexp_replace(model, '^.*/', '')"
+		if alias.Exact {
+			modelExpr = "model"
+		}
+		fmt.Fprintf(&b,
+			"\t\tWHEN %s = %s THEN %s\n",
+			modelExpr, duckSQLString(alias.Name), duckSQLString(alias.Canonical),
+		)
 	}
 	aliases := pricingpkg.DateAliasedModels()
-	quoted := make([]string, len(aliases))
-	for i, alias := range aliases {
-		quoted[i] = "'" + alias + "'"
+	quoted := make([]string, 0, len(aliases))
+	for _, alias := range aliases {
+		quoted = append(quoted, duckSQLString(alias))
 	}
 	cutoff := pricingpkg.KimiModelEraCutoff.UTC().Format("2006-01-02 15:04:05")
-	return fmt.Sprintf(`CASE
+	fmt.Fprintf(&b, `		WHEN regexp_replace(model, '^.*/', '') IN (%[1]s)
+			AND (pricing_ts IS NULL OR pricing_ts >= TIMESTAMP '%[2]s')
+			THEN %[3]s
 		WHEN regexp_replace(model, '^.*/', '') IN (%[1]s)
-			THEN '%[2]s'
-		WHEN regexp_replace(model, '^.*/', '') IN (%[3]s)
-			AND (pricing_ts IS NULL OR pricing_ts >= TIMESTAMP '%[4]s')
-			THEN '%[5]s'
-		WHEN regexp_replace(model, '^.*/', '') IN (%[3]s)
-			THEN '%[2]s'
+			THEN %[4]s
 		ELSE model
 	END`,
-		strings.Join(fixedK26Quoted, ", "), pricingpkg.KimiK26Canonical,
-		strings.Join(quoted, ", "), cutoff, pricingpkg.KimiK3Canonical,
+		strings.Join(quoted, ", "), cutoff,
+		duckSQLString(pricingpkg.KimiK3Canonical),
+		duckSQLString(pricingpkg.KimiK26Canonical),
 	)
+	return b.String()
 }
 
 func duckUsageCTEFromRaw(

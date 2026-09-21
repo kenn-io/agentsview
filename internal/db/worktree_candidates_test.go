@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -15,7 +14,7 @@ import (
 
 func TestListArchiveWorktreeCandidatesFallsBackAndBoundsExamples(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	const raw = "branch-label"
 	for i := range 12 {
 		id := "aggregate-" + string(rune('a'+i))
@@ -28,7 +27,7 @@ func TestListArchiveWorktreeCandidatesFallsBackAndBoundsExamples(t *testing.T) {
 	seedCandidateSession(t, d, "unavailable", raw, "host.example", "",
 		"2025-06-02T10:00:00Z")
 	deleteCandidateSnapshot(t, d, "unavailable")
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(t, d.UpsertSession(ctx, Session{
 		ID: "zero-message", Project: raw, Machine: "host.example",
 		Agent: "codex",
 	}), "seed zero-message candidate session")
@@ -91,9 +90,50 @@ func TestBuildWorktreeCandidatesDoesNotSuggestFilesystemRoots(t *testing.T) {
 	}
 }
 
+func TestBuildWorktreeCandidatesCollapsesObservedPaths(t *testing.T) {
+	fixtures := []struct{ id, cwd string }{
+		{"claude-a", "/srv/repo/.claude/worktrees/run-a/src"},
+		{"claude-b", "/srv/repo/.claude/worktrees/run-b"},
+		{"t3-a", "/srv/.t3/worktrees/repo/run-a"},
+		{"t3-b", "/srv/.t3/worktrees/repo/run-b"},
+		{"drive-d-a", `D:\Repos\repo-feature-a`},
+		{"drive-d-b", `D:\Repos\repo-feature-b`},
+		{"drive-d-c", `D:\Repos\repo-feature-b`},
+		{"drive-c", `C:\Apps\repo`},
+		{"other", "/opt/single-checkout"},
+	}
+	sessions := make([]WorktreeCandidateSession, 0, len(fixtures))
+	for _, fixture := range fixtures {
+		sessions = append(sessions, WorktreeCandidateSession{
+			ID: fixture.id, Project: "selected", Machine: "host.example", Cwd: fixture.cwd,
+		})
+	}
+	// An unrelated observation is not another folder to suggest.
+	got := BuildWorktreeCandidates(sessions, []export.ProjectIdentityObservation{{
+		Project: "selected", Machine: "host.example", RootPath: "/invented/sibling",
+	}})
+	require.Len(t, got, 5)
+	assert.Equal(t, "D:/Repos", got[0].SuggestedPrefix,
+		"the largest observed session group is first, not drive C")
+	assert.Equal(t, 3, got[0].ContributingSessions)
+	assert.Equal(t, 2, got[0].DistinctCwds)
+	byPrefix := make(map[string]WorktreeReclassificationCandidate)
+	for _, candidate := range got {
+		byPrefix[candidate.SuggestedPrefix] = candidate
+		for _, example := range candidate.Examples {
+			assert.True(t, worktreePathMatches(candidate.SuggestedPrefix, example.Cwd),
+				"a suggested prefix must contain its actual recorded paths")
+		}
+	}
+	assert.Equal(t, "worktree", byPrefix["/srv/repo/.claude/worktrees"].EvidenceKind)
+	assert.Equal(t, 2, byPrefix["/srv/.t3/worktrees/repo"].ContributingSessions)
+	assert.Equal(t, 1, byPrefix["C:/Apps/repo"].ContributingSessions)
+	assert.Equal(t, 1, byPrefix["/opt/single-checkout"].ContributingSessions)
+}
+
 func TestListArchiveWorktreeCandidatesSelectsByProjectIdentity(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	const (
 		clickedRaw = "/private/example/repository"
 		otherRaw   = "/another/private/repository"
@@ -131,11 +171,11 @@ func TestListArchiveWorktreeCandidatesSelectsByProjectIdentity(t *testing.T) {
 	assert.Equal(t, "clicked", candidates[0].Examples[0].SessionID)
 }
 
-func TestListArchiveWorktreeCandidatesIncludesResolvedProjectAliases(
+func TestListArchiveWorktreeCandidatesExcludesDifferentProjectKeys(
 	t *testing.T,
 ) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	const (
 		primary = "current-project-name"
 		alias   = "historical-project-name"
@@ -183,14 +223,16 @@ func TestListArchiveWorktreeCandidatesIncludesResolvedProjectAliases(
 	)
 	require.NoError(t, err)
 	require.Len(t, candidates, 1)
-	assert.Equal(t, 2, candidates[0].ContributingSessions)
-	assert.Equal(t, "/srv/worktrees/repo/feature",
+	assert.Equal(t, 1, candidates[0].ContributingSessions)
+	require.Len(t, candidates[0].Examples, 1)
+	assert.Equal(t, "primary-session", candidates[0].Examples[0].SessionID)
+	assert.Equal(t, "/srv/worktrees/repo/feature/cmd",
 		candidates[0].SuggestedPrefix)
 }
 
 func TestListArchiveWorktreeCandidatesIgnoresDateRange(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	const raw = "date-spread-project"
 
 	seedCandidateSession(t, d, "old-session", raw, "host-a.example",
@@ -221,7 +263,7 @@ func TestListArchiveWorktreeCandidatesIgnoresDateRange(t *testing.T) {
 
 func TestListArchiveWorktreeCandidatesKeyMismatch(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	const raw = "mismatch-project"
 
 	seedCandidateSession(t, d, "session-a", raw, "host-a.example",
@@ -245,7 +287,7 @@ func TestListArchiveWorktreeCandidatesKeyMismatch(t *testing.T) {
 
 func TestListArchiveWorktreeCandidatesBoundsIdentityLookupToClickedLabel(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	const raw = "clicked-project"
 
 	seedCandidateSession(t, d, "clicked-a", raw, "host-a.example",
@@ -277,7 +319,7 @@ func TestListArchiveWorktreeCandidatesBoundsIdentityLookupToClickedLabel(t *test
 
 func TestListArchiveWorktreeCandidatesManyCollidingRawLabels(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	const clickedRaw = "/bulk/clicked-project"
 
 	seedCandidateSession(t, d, "clicked", clickedRaw, "host-a.example",
@@ -336,7 +378,7 @@ func seedBulkProjectSessions(t *testing.T, d *DB, n int, projectFormat string) {
 				fmt.Sprintf("bulk-session-%05d", i),
 				fmt.Sprintf(projectFormat, i))
 		}
-		_, err := d.getWriter().Exec(sb.String(), args...)
+		_, err := d.getWriter().Exec(t.Context(), sb.String(), args...)
 		require.NoError(t, err, "seed bulk sessions %d-%d", start, end)
 	}
 }
@@ -346,7 +388,7 @@ func seedCandidateSession(
 ) {
 	t.Helper()
 	ended := started
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(t, d.UpsertSession(t.Context(), Session{
 		ID: id, Project: project, Machine: machine, Agent: "codex", Cwd: cwd,
 		StartedAt: &started, EndedAt: &ended, MessageCount: 1,
 	}), "seed candidate session %s", id)
@@ -354,7 +396,7 @@ func seedCandidateSession(
 
 func deleteCandidateSnapshot(t *testing.T, d *DB, id string) {
 	t.Helper()
-	_, err := d.getWriter().Exec(
+	_, err := d.getWriter().Exec(t.Context(),
 		`DELETE FROM session_project_identity_snapshots WHERE session_id = ?`, id)
 	require.NoError(t, err)
 }
@@ -364,7 +406,7 @@ func setCandidateSnapshot(
 ) {
 	t.Helper()
 	deleteCandidateSnapshot(t, d, id)
-	_, err := d.getWriter().Exec(`
+	_, err := d.getWriter().Exec(t.Context(), `
 		INSERT INTO session_project_identity_snapshots (
 			session_id, project, machine, root_path, worktree_root_path, observed_at
 		) VALUES (?, ?, ?, ?, ?, ?)`,

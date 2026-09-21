@@ -12,10 +12,9 @@ import (
 // Compile-time check that launchdManager implements serviceManager.
 var _ serviceManager = (*launchdManager)(nil)
 
-const launchdLabel = "agentsview.pg-watch"
-
 // launchdManager manages a per-user launchd LaunchAgent.
 type launchdManager struct {
+	kind serviceKind
 	uid  int
 	home string
 	run  cmdRunner
@@ -23,7 +22,7 @@ type launchdManager struct {
 
 func (m *launchdManager) unitPath() string {
 	return filepath.Join(
-		m.home, "Library", "LaunchAgents", launchdLabel+".plist",
+		m.home, "Library", "LaunchAgents", m.kind.Label+".plist",
 	)
 }
 
@@ -32,7 +31,7 @@ func (m *launchdManager) domain() string {
 }
 
 func (m *launchdManager) target() string {
-	return fmt.Sprintf("gui/%d/%s", m.uid, launchdLabel)
+	return fmt.Sprintf("gui/%d/%s", m.uid, m.kind.Label)
 }
 
 func xmlEscape(s string) string {
@@ -47,6 +46,14 @@ func xmlEscape(s string) string {
 // (config removed, lock contention) will be retried ~every 10s by
 // launchd rather than staying down.
 func (m *launchdManager) render(spec serviceSpec) string {
+	kind := spec.Kind
+	if kind.Label == "" {
+		kind = m.kind
+	}
+	var args strings.Builder
+	for _, a := range kind.Args {
+		fmt.Fprintf(&args, "\t\t<string>%s</string>\n", xmlEscape(a))
+	}
 	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -56,10 +63,7 @@ func (m *launchdManager) render(spec serviceSpec) string {
 	<key>ProgramArguments</key>
 	<array>
 		<string>%s</string>
-		<string>pg</string>
-		<string>push</string>
-		<string>--watch</string>
-	</array>
+%s	</array>
 	<key>EnvironmentVariables</key>
 	<dict>
 		<key>AGENTSVIEW_DATA_DIR</key>
@@ -76,8 +80,9 @@ func (m *launchdManager) render(spec serviceSpec) string {
 </dict>
 </plist>
 `,
-		xmlEscape(launchdLabel),
+		xmlEscape(kind.Label),
 		xmlEscape(spec.BinPath),
+		args.String(),
 		xmlEscape(spec.DataDir),
 		xmlEscape(spec.LogPath),
 		xmlEscape(spec.LogPath),
@@ -100,7 +105,7 @@ func (m *launchdManager) install(
 	if out, err := m.run(
 		ctx, "launchctl", "bootstrap", m.domain(), m.unitPath(),
 	); err != nil {
-		return fmt.Errorf("launchctl bootstrap: %v: %s", err, out)
+		return fmt.Errorf("launchctl bootstrap: %w: %s", err, out)
 	}
 	return nil
 }
@@ -120,7 +125,7 @@ func (m *launchdManager) start(ctx context.Context) error {
 	if out, err := m.run(
 		ctx, "launchctl", "bootstrap", m.domain(), m.unitPath(),
 	); err != nil {
-		return fmt.Errorf("launchctl bootstrap: %v: %s", err, out)
+		return fmt.Errorf("launchctl bootstrap: %w: %s", err, out)
 	}
 	return nil
 }

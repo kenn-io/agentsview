@@ -242,7 +242,7 @@ func TestRefreshRawSyncRootsKeepsStillMissingRoot(t *testing.T) {
 	require.Len(t, pending, 1)
 	assert.Empty(t, registrar.roots)
 	_, statErr := os.Stat(rootPath)
-	assert.True(t, errors.Is(statErr, os.ErrNotExist))
+	assert.ErrorIs(t, statErr, os.ErrNotExist)
 }
 
 func TestRawSyncProvidersExcludeS3Roots(t *testing.T) {
@@ -296,4 +296,32 @@ func TestRawSyncProvidersNormalizeRelativeRootsForCapture(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, os.SameFile(watchedRoot, plannedRoot),
 		"capture plan must retain the normalized watched root")
+}
+
+func TestRawSyncProvidersWatchAliasHomeIndexes(t *testing.T) {
+	base := t.TempDir()
+	primary := filepath.Join(base, "codex")
+	alias := filepath.Join(base, "codex-alt")
+	require.NoError(t, os.MkdirAll(filepath.Join(primary, "sessions"), 0o700))
+	require.NoError(t, os.MkdirAll(alias, 0o700))
+	cfg := config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodex: {filepath.Join(primary, "sessions")},
+		},
+		ProviderMetadata: map[parser.AgentType]map[string][]string{
+			parser.AgentCodex: {
+				filepath.Join(primary, "sessions"): {primary, alias},
+			},
+		},
+	}
+
+	_, roots, err := rawSyncProvidersAndRoots(t.Context(), cfg)
+	require.NoError(t, err)
+
+	paths := make([]string, 0, len(roots))
+	for _, root := range roots {
+		paths = append(paths, root.Path)
+	}
+	assert.Contains(t, paths, alias,
+		"the alias home must be watched for its own session_index.jsonl")
 }

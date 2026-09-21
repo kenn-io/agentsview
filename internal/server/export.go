@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"html"
 	"html/template"
@@ -152,8 +153,8 @@ func validateGithubTokenWithURL(
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == 401 {
-		return "", fmt.Errorf("invalid GitHub token")
+	if resp.StatusCode == http.StatusUnauthorized {
+		return "", errors.New("invalid GitHub token")
 	}
 	if resp.StatusCode >= 400 {
 		return "", fmt.Errorf("GitHub API error: %d", resp.StatusCode)
@@ -877,10 +878,7 @@ func insightExportMarkdownFilename(insight *db.Insight) string {
 }
 
 func insightExportTitle(insight *db.Insight) string {
-	return fmt.Sprintf(
-		"%s Insight",
-		insightTypeLabel(insight.Type),
-	)
+	return insightTypeLabel(insight.Type) + " Insight"
 }
 
 func insightPublishDescription(insight *db.Insight) string {
@@ -928,7 +926,7 @@ func publishExportHTML(
 		return nil, err
 	}
 	if gist.ID == "" || gist.HTMLURL == "" {
-		return nil, fmt.Errorf("GitHub API returned incomplete gist data")
+		return nil, errors.New("GitHub API returned incomplete gist data")
 	}
 	encoded := urlPathEscape(filename)
 	rawURL := fmt.Sprintf(
@@ -948,17 +946,4 @@ func derefString(value *string) string {
 		return ""
 	}
 	return *value
-}
-
-func truncateStr(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	// Truncate at a valid rune boundary to avoid producing
-	// invalid UTF-8.
-	r := []rune(s)
-	if len(r) <= max {
-		return s
-	}
-	return string(r[:max]) + "..."
 }

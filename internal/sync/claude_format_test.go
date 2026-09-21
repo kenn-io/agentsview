@@ -204,7 +204,7 @@ func TestProtectedFileSessionCountDisabledIcodemate(t *testing.T) {
 			Agent: "claude", FilePath: &claudePath, MessageCount: 1,
 		},
 	} {
-		require.NoError(t, database.UpsertSession(sess))
+		require.NoError(t, database.UpsertSession(t.Context(), sess))
 	}
 
 	tests := []struct {
@@ -231,7 +231,7 @@ func TestProtectedFileSessionCountDisabledIcodemate(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			count, err := protectedFileSessionCount(
+			count, err := protectedFileSessionCount(t.Context(),
 				database, "local", "", tt.scoped, tt.preserveAgents,
 			)
 			require.NoError(t, err)

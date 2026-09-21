@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Bar, Chart, Layer } from "layerchart";
   import { scaleBand } from "d3-scale";
-  import type { SignalsTrendBucket } from "../../api/types/analytics.js";
+  import type { DbSignalsTrendBucket as SignalsTrendBucket } from "../../api/generated/index.js";
   import { getGradeStyle, scoreToGrade } from "../../utils/grade.js";
   import { m } from "../../i18n/index.js";
   import LargeChartFrame from "../shared/LargeChartFrame.svelte";
@@ -118,7 +118,7 @@
         class="tooltip"
         style="left: {tooltip.x}px; top: {tooltip.y}px;"
       >
-        {tooltip.text}
+        <span>{tooltip.text}</span>
       </div>
     {/if}
     <div class="chart-caption">

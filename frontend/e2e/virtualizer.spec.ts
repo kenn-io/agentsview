@@ -99,7 +99,7 @@ async function maxVerticalGap(rows: Locator) {
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
-  await expect(page.locator(LOC.sessionItem).first()).toBeVisible({ timeout: 5_000 });
+  await expect(page.locator(LOC.sessionItem).first()).toBeVisible();
 });
 
 test.describe("Virtualizer measurement", () => {

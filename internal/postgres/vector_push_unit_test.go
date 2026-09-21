@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"testing"
 
+	"go.kenn.io/agentsview/internal/storage"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -42,9 +44,9 @@ type notReadyVectorSource struct{}
 
 func (notReadyVectorSource) BeginExport(
 	context.Context, []string,
-) (VectorExport, bool, error) {
+) (storage.VectorExport, bool, error) {
 	return nil, false, fmt.Errorf(
-		"%w: 7 document(s) pending", ErrVectorSourceNotReady)
+		"%w: 7 document(s) pending", storage.ErrVectorSourceNotReady)
 }
 
 // TestPushVectorsSkipsWhenSourceNotReady pins that a not-ready source turns
@@ -53,7 +55,7 @@ func (notReadyVectorSource) BeginExport(
 func TestPushVectorsSkipsWhenSourceNotReady(t *testing.T) {
 	sync := &Sync{vectorSource: notReadyVectorSource{}}
 
-	res, err := sync.pushVectors(context.Background(), false, nil, 0, nil, nil)
+	res, err := sync.pushVectors(t.Context(), false, nil, 0, nil, nil)
 
 	require.NoError(t, err)
 	assert.True(t, res.Skipped)
@@ -65,8 +67,8 @@ func TestPushVectorsSkipsWhenSourceNotReady(t *testing.T) {
 // finish the vector phase without touching the source (or PG) at all.
 type spyVectorSource struct{ t *testing.T }
 
-func (s spyVectorSource) BeginExport(context.Context, []string) (VectorExport, bool, error) {
-	s.t.Fatal("BeginExport must not be called for an empty scope")
+func (s spyVectorSource) BeginExport(context.Context, []string) (storage.VectorExport, bool, error) {
+	require.FailNow(s.t, "BeginExport must not be called for an empty scope")
 	return nil, false, nil
 }
 
@@ -78,7 +80,7 @@ func TestPushVectorsEmptyScopeReadsNothing(t *testing.T) {
 	sync := &Sync{vectorSource: spyVectorSource{t: t}}
 
 	res, err := sync.pushVectors(
-		context.Background(), false, []string{}, 0, nil, nil,
+		t.Context(), false, []string{}, 0, nil, nil,
 	)
 
 	require.NoError(t, err)

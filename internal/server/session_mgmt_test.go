@@ -1,7 +1,6 @@
 package server_test
 
 import (
-	"context"
 	"net/http"
 	"testing"
 
@@ -69,7 +68,7 @@ func TestSessionManagementTrashRestoreAndPermanentDeleteHandlers(t *testing.T) {
 	w = te.del(t, "/api/v1/sessions/s1/permanent")
 	require.Equal(t, http.StatusNoContent, w.Code, "body: %s", w.Body.String())
 
-	got, err := te.db.GetSessionFull(context.Background(), "s1")
+	got, err := te.db.GetSessionFull(t.Context(), "s1")
 	require.NoError(t, err)
 	assert.Nil(t, got)
 }

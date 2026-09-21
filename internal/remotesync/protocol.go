@@ -16,7 +16,8 @@ func (e *IncompatibleProtocolError) Error() string {
 }
 
 const (
-	ProtocolVersion = 1
+	// Version 2 requires explicit Codex transcript-root/index associations.
+	ProtocolVersion = 2
 	ProtocolHeader  = "X-AgentsView-Remote-Sync-Version"
 )
 

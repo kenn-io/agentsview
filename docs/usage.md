@@ -152,9 +152,8 @@ are hours. Color intensity represents message volume.
 
 ### Activity Timeline
 
-A stacked chart showing messages, sessions, tool calls, and thinking blocks over
-time. Toggle between daily, weekly, and monthly granularity. Includes breakdown
-by agent.
+Compare message or session counts over time. Switch between Day, Week, and
+Month to change how the chart groups activity.
 
 ![Activity timeline](/docs/assets/generated/screenshots/activity-timeline.png)
 
@@ -351,8 +350,8 @@ Each session item shows:
 - **Agent-provided session names** — several agents record a session title
   themselves (Claude Code's `/rename`, Codex `session_index.jsonl` thread
   names, Claude.ai and ChatGPT conversation names, Forge, Hermes, Kiro,
-  Piebald, Cortex Code, and Command Code's `.meta.json` titles). As of 0.33.0,
-  the sidebar shows these titles automatically when present. Manual in-app
+  Piebald, Cortex Code, WorkBuddy, and Command Code's `.meta.json` titles). The
+  sidebar shows these titles automatically when present. Manual in-app
   renames always take precedence and are never overwritten by an
   agent-provided name. As of 0.34.0, Codex titles renamed by the agent are
   imported from `session_index.jsonl` for both current and archived sessions.
@@ -481,15 +480,28 @@ persisted to localStorage and serialized into the URL.
 
 ### Direct Session Links
 
-Each session has a shareable URL. Click the session ID in the detail header to
-copy the link, or use the URL bar directly:
+Click **Copy link to session** in the detail header to copy a shareable URL.
+Clicking the **Session ID** copies only the ID. Session links give the provider
+and native ID separate path segments, for example:
 
 ```
-/sessions/550e8400-e29b-41d4-a716-446655440000
+/sessions/codex/550e8400-e29b-41d4-a716-446655440000
 ```
+
+Older links with an encoded provider prefix still open. IDs without a provider
+prefix use a single segment after `/sessions/`.
 
 Session URLs work as bookmarks and can be shared with teammates when using
 [PostgreSQL sync](/docs/pg-sync/) for shared deployments.
+
+### Open a session by ID
+
+Press `Cmd+G` on macOS or `Ctrl+G` elsewhere. Paste a complete session ID or
+UUID, then press Enter. This opens the session without changing the sidebar
+filters. If the UUID matches more than one session, use its full ID with the
+provider prefix, such as `codex:550e8400-e29b-41d4-a716-446655440000`.
+
+![Open a session by ID or UUID](/docs/assets/generated/screenshots/open-session.png)
 
 ### URL Filters
 
@@ -533,6 +545,12 @@ The session detail header shows the session name, agent, project, a health grade
 badge, and a copyable **Session ID**. Click the ID to copy it to the clipboard
 for sharing or lookup. Click the grade badge to toggle the signal panel.
 
+The model badge shows the model used most often in assistant messages. For
+Claude Code and Codex, it also shows recorded reasoning effort, such as `high`,
+when that value is the most common effort for the displayed model. Effort is a
+model setting, not a measured token count. Upgrading resyncs existing sessions
+to populate it when the source files remain available.
+
 If a parser skipped malformed source lines while still recovering the session,
 the header shows a malformed-lines badge with the persisted count (for example
 "3 malformed lines"). For Antigravity IDE and CLI sessions decoded from an
@@ -565,6 +583,9 @@ Appearance:
 Focused mode strips intermediate tool calls, thinking blocks, and partial
 assistant messages, showing only user prompts and final assistant responses.
 This makes long sessions easier to read as a clean conversation transcript.
+Task notifications and stop hook feedback count as part of the turn they
+interrupt rather than as new prompts, so a session that waits on background
+agents still collapses to its prompts and final answers.
 
 ![Focused transcript mode](/docs/assets/generated/screenshots/focused-transcript.png)
 
@@ -701,6 +722,12 @@ toggles visibility of six content categories:
 | Code      | Code blocks               |
 | System    | System boundary cards     |
 
+Turning off **Code** collapses each fenced block into an inline placeholder
+showing its language and an **Expand** button. Expand or collapse individual
+blocks without changing the global filter. Messages containing only code keep
+their placeholder. Filtered code stays out of in-session search; turn **Code**
+back on to include it.
+
 System boundary cards are the compact rows that mark a session continuation or
 resume, an interrupted request, a task notification, or stop hook feedback.
 Hiding the category removes all of them; the rest of the transcript is
@@ -737,6 +764,23 @@ current position are shown in the search bar.
 Use the arrow buttons or `Enter` / `Shift+Enter` to jump between matches. The
 matching message scrolls into view and the search term is highlighted. Press
 `Esc` to close the search bar.
+
+Click **Show search results** to open matching snippets grouped by message.
+Select a snippet to jump to its occurrence. The overview rail beside the
+transcript shows where matches appear throughout the session.
+
+![In-session search results and overview rail](/docs/assets/generated/screenshots/in-session-search-results.png)
+
+Search follows the transcript's active scope. Block-type filters (see
+[Block-Type Filtering](#block-type-filtering)) and Focused mode both narrow what
+search can find: a hidden category contributes no matches, counts, badges, or
+highlights, and re-showing a category or returning to Normal mode makes that
+content searchable again without retyping the query. Folded content is still
+searched — collapsed tool output, thinking blocks, `<details>` sections, and
+rows that are not currently scrolled into view all match; only the current
+occurrence expands and scrolls into view. The match count, result list, and
+overview rail read the same filtered index, so they update immediately when a
+filter toggles during an active query.
 
 ### Token Usage
 
@@ -795,44 +839,56 @@ state instead of a score. See
 
 ### Session Vital Signs
 
-The right column of an open session shows a **Session Vital Signs** panel with
-timing data derived from the message timestamps. Toggle it from the session
-header.
+Open **Analysis** from the session header to see Session Vitals in the right
+column. It shows elapsed turn time and measured tool durations.
 
 ![Session Vital Signs in context](/docs/assets/generated/screenshots/session-vital-signs.png)
 
-It has five stacked sections when experimental Recall is available:
+The panel contains these sections, including experimental Recall when available:
 
 - **Session summary** — repository and worktree context recorded by the trace,
-  total wall-clock, turn count, tool call count, sub-agent count, and the
-  slowest call as a clickable link that scrolls the conversation to that call.
-  Live sessions show a `running …+` indicator that ticks forward.
+    total wall-clock, turn count, tool call count, sub-agent count, and the
+    slowest call as a clickable link that scrolls the conversation to that call.
+    Live sessions show a `running …+` indicator that ticks forward.
 - **Recall (experimental)** — provenance-linked entries whose evidence comes
-  from the current session. Evidence-range links jump to the supporting
-  transcript message. An empty state appears when the local archive has no
-  matching entries.
+    from the current session. Evidence-range links jump to the supporting
+    transcript message. An empty state appears when the local archive has no
+    matching entries.
+- **Turn activity** — each visible user prompt starts a window that ends at the
+    next prompt or the session boundary. Bars separate measured tool execution
+    from unattributed time, which has no measured phase boundaries. Thinking
+    and response generation are not measured. Click a row to jump to its prompt
+    in the transcript.
 - **Time spent** — per-category aggregate bars across the normalized taxonomy
-  (`Read`, `Edit`, `Write`, `Bash`, `Grep`, `Glob`, `Task`, `Tool`, `Other`,
-  plus a `Mixed` bucket for turns split across categories). Click a row to
-  filter the rest of the panel to that category.
+    (`Read`, `Edit`, `Write`, `Bash`, `Grep`, `Glob`, `Task`, `Tool`, `Other`,
+    and other provider categories). Click a row to filter the rest of the panel
+    to that category.
 - **Timeline** — turns lane plus per-category lanes plus an activity lane, with
-  a legend. Hover a turn segment to see its primary category and duration
-  (e.g. `Task · 2m`); click to scroll the conversation to that turn.
+    a legend. Hover a turn segment to see its primary category and duration
+    (e.g. `Task · 2m`); click to scroll the conversation to that turn.
 - **Calls** — chronological list of tool calls with horizontal duration bars.
-  Parallel `tool_use` runs are bracketed as a single group. Call details start
-  collapsed for quicker transcript navigation. Sub-agent rows expand inline to
-  show the child session's calls.
+    Parallel `tool_use` runs are bracketed as a single group. Call details start
+    collapsed for quicker transcript navigation. Sub-agent rows expand inline to
+    show the child session's calls.
 
 ![Vital Signs panel detail](/docs/assets/generated/screenshots/vital-signs-panel.png)
 
-Inline in the conversation column, each `ToolBlock` header gets a duration
-badge, and each assistant message gets a turn-summary line ("turn 2m 18s · 3
-calls"). Parallel non-sub-agent calls render with a striped bar and a
-`≤duration` upper bound — the JSONL source has only one timestamp per assistant
-message, so per-call precision inside parallel groups isn't recoverable for
-non-sub-agent calls. Tool labels are normalized across agents, so Codex's
-`exec_command` and Claude's `Bash` show up under the same "Bash" category in
-headers and in the Calls list.
+Tool durations come from paired execution events or a closed linked child
+session. A call without either source shows `unknown`; the summary and category
+totals show **Not measured** when no calls have measured durations. A measured
+zero remains `0ms`. Categories remain available as filters even without timing.
+An open child needs a completed execution interval before its call can show a
+duration; otherwise it stays unknown until the child closes.
+
+Session tool and category totals count only time within the session boundaries.
+Individual calls retain their full measured durations, including any time
+outside the parent session. Overlapping calls count once in the session total
+and once per category, so category totals can overlap each other.
+
+Inline in the conversation column, tool headers show measured durations when
+available, and assistant messages show turn-summary lines. Tool labels are
+normalized across agents, so Codex's `exec_command` and Claude's `Bash` show up
+under the same "Bash" category in headers and in the Calls list.
 
 Call duration bars in the Calls list are scaled relative to the longest call in
 scope, not total session wall-clock — so even in long sessions where any single
@@ -878,12 +934,14 @@ overlay.
 
 ### Recent Sessions
 
-With an empty or short query (under 3 characters), the palette shows your 10
-most recent sessions. Type to filter by project name or first message.
+With an empty query, the palette shows up to 10 recent sessions from the
+sidebar's current list. A short query filters that list by project, session
+name, or first message. Search begins at 3 characters, or 2 characters for
+Chinese, Japanese, and Korean text.
 
 ### Search Modes
 
-Type 3 or more characters to search in one of three modes:
+Search in one of three modes:
 
 - **Full text** searches indexed message content with FTS5. It also matches
   session display names and first messages.
@@ -933,6 +991,18 @@ Results use a compact row:
 
 Select a result to jump to that session and scroll directly to the matching
 message.
+
+### Project and date filters
+
+Once your query is long enough to search, the palette shows project and date
+controls. Search starts with the sidebar's selected project; choose another
+project or **All Projects** without changing the sidebar.
+
+Choose a relative period, calendar period, or custom dates. The filters apply
+to Full text, Semantic, and Hybrid searches. Closing the palette clears its date
+range; the next opening starts with the sidebar's current project again.
+
+![Command palette with project and date filters](/docs/assets/generated/screenshots/search-filters.png)
 
 ### Keyboard Navigation
 
@@ -989,14 +1059,25 @@ or copy the exact resume command. Cursor resume resolves the original workspace
 path and passes it as `--workspace` to `cursor agent --resume`. The same menu
 can copy the session directory and open it in detected editors or file browsers.
 
+Pi sessions use `pi --session` with the transcript path when available, or the
+native session ID. For Pi, **Copy command** includes the working directory so
+you can paste the complete command into a shell. Augure Code sessions use
+`augure resume`. Copying a session's directory path also works when that
+directory has been deleted.
+
 Local Codex sessions add **Open in Codex Desktop**, which deep-links to the
 stored thread. Local Claude sessions add **Open in Claude Code**, which opens a
 new Code session for the stored working directory; when the native Claude
 Desktop opener is detected, it remains available as a separate resume target.
-Desktop deep links are intentionally hidden for remote sessions because a local
-desktop app cannot open another machine's transcript or directory.
 
 ![Session resume menu](/docs/assets/generated/screenshots/session-resume-menu.png)
+
+For supported remote sessions, choose **Copy command** and paste the resume
+command into a shell on the machine that owns the transcript. Launching a
+terminal, opening an editor, and native agent desktop links are local-session
+actions.
+
+![Copy command in a remote session's Resume menu](/docs/assets/generated/screenshots/remote-resume-command.png)
 
 The `agentsview session list --resume` and `--active` CLI modes use the same
 recent-activity signal to produce a compact terminal table for picking up
@@ -1025,8 +1106,8 @@ ______________________________________________________________________
 
 Press `e` or open the export menu in the header to download the current session
 as a standalone HTML file. The exported file includes styled message rendering
-and works offline. As of 0.30.0, the export ships with a **Normal / Focused**
-radio toggle in the document header so the recipient can flip into
+and works offline. The export includes a **Normal / Focused** radio toggle in
+the document header so the recipient can flip into
 [focused mode](#focused-transcript-mode) — only user prompts and final assistant
 responses — without re-running the export.
 
@@ -1130,6 +1211,7 @@ Press `?` to see all shortcuts in a modal overlay.
 | Key       | Action                            |
 | --------- | --------------------------------- |
 | `Cmd+K`   | Open command palette              |
+| `Cmd+G`   | Open a session by ID or UUID       |
 | `Cmd+F`   | Search within current session     |
 | `Esc`     | Close modal / deselect session    |
 | `j` / `↓` | Next message                      |
@@ -1147,7 +1229,8 @@ Press `?` to see all shortcuts in a modal overlay.
 | `p`       | Publish to Gist                   |
 | `?`       | Show shortcuts                    |
 
-Shortcuts are disabled when typing in an input field. `Esc` always works.
+Use `Ctrl` in place of `Cmd` on Windows and Linux. Most shortcuts are disabled
+when typing in an input field. `Esc` always works.
 
 ______________________________________________________________________
 
@@ -1158,16 +1241,20 @@ organized into sections:
 
 ![Settings page](/docs/assets/generated/screenshots/settings.png)
 
-| Section           | What You Can Configure                                                                                                                                                                                    |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Language          | Interface language (English, French, Japanese, Korean, Simplified Chinese, or Traditional Chinese)                                                                                                        |
-| Appearance        | Theme (light/dark), high-contrast mode, chart colors, message layout, text size, block visibility, desktop zoom level                                                                                     |
-| Date ranges       | Browser-local checkbox for linking date selections across Sessions, Usage, Activity, Trends, and Quality                                                                                                  |
-| Agent Directories | Custom paths for each agent's session files. For Devin CLI, point at the local root that contains `cli/` (for example a redacted `.../Application Support/devin` path), not copied config or OAuth files. |
-| Terminal          | Default terminal emulator for session resume                                                                                                                                                              |
-| Embeddings        | Current semantic-index build phase, progress, throughput, ETA, last result, and local generations                                                                                                         |
-| GitHub            | Personal access token for Gist publishing                                                                                                                                                                 |
-| Remote Access     | Remote connections toggle, auth token, connect to remote server                                                                                                                                           |
+| Section            | What You Can Configure                                                                                   |
+| ------------------ | -------------------------------------------------------------------------------------------------------- |
+| Language           | Interface language (Azerbaijani, English, French, Japanese, Korean, Spanish, Simplified Chinese, or Traditional Chinese)       |
+| Appearance         | Theme (light/dark), high-contrast mode, chart colors, message layout, zoom, block visibility             |
+| Date ranges        | Browser-local checkbox for linking date selections across Sessions, Usage, Activity, Trends, and Quality |
+| Session Providers  | Enable session providers, inspect their session directories, and add alternate agent homes               |
+| Archive content    | Choose whether future imports keep, drop, or offload tool-result images                                  |
+| Tool-result images | Preview and remove images from stored tool results                                                       |
+| Terminal           | Default terminal emulator for session resume                                                             |
+| Embeddings         | Current semantic-index build phase, progress, throughput, ETA, last result, and local generations        |
+| GitHub             | Personal access token for Gist publishing                                                                |
+| Remote Access      | Remote connections toggle, auth token, connect to remote server                                          |
+
+Spanish is available in builds from `main` after version 0.44.0.
 
 ![Embedding build progress](/docs/assets/generated/screenshots/settings-embeddings.png)
 
@@ -1175,15 +1262,17 @@ organized into sections:
 
 ![Chart color palette setting](/docs/assets/generated/screenshots/settings-chart-colors.png)
 
-Language, theme, high contrast, message layout, text size, block visibility,
-desktop zoom, and Date ranges preferences are stored in the browser. **Chart
-colors** are the exception within Appearance: the selected palette is saved
-server-wide as `chart_palette` in `~/.agentsview/config.toml`. Agent directory
-overrides, terminal settings, the saved GitHub token, and the local server's
-remote-access authentication settings also use that file. Worktree mapping rules
-moved to the [Data page](/docs/data/#rules) and live in the local archive
-database. See [Remote Access](/docs/remote-access/) for details on the remote
-access settings.
+Language, theme, high contrast, message layout, zoom, block visibility, and
+Date ranges preferences use local storage in the current browser or desktop
+webview profile. Each profile keeps its own choices. The optional `zoom_level`
+setting supplies a default when no local zoom or text-size preference exists.
+
+Chart colors use the server-wide `chart_palette` setting in
+`~/.agentsview/config.toml`. Agent directory overrides, terminal settings, the
+saved GitHub token, and the local server's remote-access authentication
+settings also use that file. Worktree mapping rules moved to the
+[Data page](/docs/data/#rules) and live in the local archive database. See
+[Remote Access](/docs/remote-access/) for details on the remote access settings.
 
 ______________________________________________________________________
 
@@ -1197,12 +1286,23 @@ commit, and links to the changelog and GitHub repository.
 
 ______________________________________________________________________
 
-## Desktop Zoom
+## Zoom
 
-In the desktop app, use `Cmd+Plus` and `Cmd+Minus` (or `Ctrl+Plus` /
-`Ctrl+Minus` on Windows) to zoom in and out. `Cmd+0` resets to the default zoom
-level. The zoom level can also be set in the Settings page under the
-**Appearance** tab.
+Settings > Appearance has one Zoom setting for the whole interface in both the
+browser and desktop app. It offers 67%, 75%, 80%, 90%, 100%, 110%, 120%, 125%,
+130%, 150%, 175%, and 200%. Existing text-size preferences migrate to Zoom. A
+saved non-default zoom takes precedence. Otherwise, a saved non-default text
+size takes precedence over 100%.
+
+To set the default for clients without a local preference, edit
+`~/.agentsview/config.toml` and add `zoom_level = 120`. The field accepts the
+twelve values listed above. Restart the daemon and reload the client after a
+manual edit. Zoom changes in the interface stay local to that browser or
+desktop webview and do not write `config.toml`.
+
+The desktop status bar and shortcuts change the same local setting. Use
+`Cmd+Plus` and `Cmd+Minus`, or `Ctrl+Plus` and `Ctrl+Minus` on Windows, to zoom
+in and out. `Cmd+0`, or `Ctrl+0` on Windows, resets Zoom to 100%.
 
 ______________________________________________________________________
 
@@ -1217,8 +1317,7 @@ sessions.
 ![Dark theme](/docs/assets/generated/screenshots/theme-dark.png)
 
 Settings > Appearance also offers a **high-contrast** mode for greater
-legibility and a **text size** control (90–130%) that scales message and
-interface text. Both preferences are saved and persist across sessions.
+legibility. The theme and high-contrast preferences persist across sessions.
 
 The **Chart colors** control selects the categorical palette used by the
 dashboard skill trend, Trends, and Usage charts. Choose **Agentsview** for the

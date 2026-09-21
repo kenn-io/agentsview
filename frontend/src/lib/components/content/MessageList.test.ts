@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount, tick, unmount } from "svelte";
-import type { Message } from "../../api/types.js";
+import type { DbMessage as Message } from "../../api/generated/index.js";
 import { messages } from "../../stores/messages.svelte.js";
 import { readProgress } from "../../stores/read-progress.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
@@ -316,6 +316,31 @@ describe("MessageList follow cancellation", () => {
     await tick();
 
     expect(document.querySelector(".system-boundary")).toBeNull();
+  });
+
+  it("keeps a code-only message visible as a collapsed placeholder when Code is filtered", async () => {
+    const content = ["```latex", "\\subsection{Deployment Considerations}", "```"].join("\n");
+    messages.messages = [
+      {
+        ...makeMessage(0),
+        role: "assistant",
+        content,
+        content_length: content.length,
+      },
+    ];
+    messages.messageCount = 1;
+    ui.setBlockVisible("code", false);
+    setVirtualRows(1);
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+
+    const toggle = document.querySelector<HTMLButtonElement>(".code-fence-toggle");
+    expect(toggle).not.toBeNull();
+    expect(toggle?.textContent?.replace(/\s+/g, " ").trim()).toBe(
+      "Code block collapsed · latex · Expand",
+    );
+    expect(document.querySelector(".code-content")).toBeNull();
   });
 
   it("acknowledges traversal when a block filter hides the raw boundary", async () => {

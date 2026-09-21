@@ -4,6 +4,7 @@ package parser
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json/v2"
 	"fmt"
 	"hash/crc32"
@@ -82,7 +83,7 @@ func StatOpenCodeStorageSessionState(sessionPath string) (string, bool) {
 	msgEntries, err := os.ReadDir(messageDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Sprintf("%x", h.Sum(nil)), true
+			return hex.EncodeToString(h.Sum(nil)), true
 		}
 		return "", false
 	}
@@ -124,5 +125,5 @@ func StatOpenCodeStorageSessionState(sessionPath string) (string, bool) {
 			)
 		}
 	}
-	return fmt.Sprintf("%x", h.Sum(nil)), true
+	return hex.EncodeToString(h.Sum(nil)), true
 }

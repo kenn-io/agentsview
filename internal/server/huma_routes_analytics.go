@@ -8,10 +8,13 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/timeutil"
+
+	"github.com/danielgtaylor/huma/v2"
 )
 
 func (s *Server) registerAnalyticsRoutes() {
-	group := newRouteGroup(s.api, "/api/v1/analytics", "Analytics")
+	group := huma.NewGroup(s.api, "/api/v1/analytics")
+	configureRouteGroup(group, "Analytics")
 
 	s.get(group, "/summary", "Get analytics summary", s.humaAnalyticsSummary)
 	s.get(group, "/activity", "Get analytics activity", s.humaAnalyticsActivity)
@@ -78,7 +81,7 @@ type analyticsSignalSessionsInput struct {
 	Limit  int    `query:"limit" minimum:"0" maximum:"20" default:"10" doc:"Maximum number of session examples"`
 }
 
-func analyticsFilterFromInput(in AnalyticsFilterInput) (db.AnalyticsFilter, error) {
+func (s *Server) analyticsFilterFromInput(ctx context.Context, in AnalyticsFilterInput) (db.AnalyticsFilter, error) {
 	tz := in.Timezone
 	if tz == "" {
 		tz = "UTC"
@@ -96,10 +99,14 @@ func analyticsFilterFromInput(in AnalyticsFilterInput) (db.AnalyticsFilter, erro
 	if in.ActiveSince != "" && !timeutil.IsValidTimestamp(in.ActiveSince) {
 		return db.AnalyticsFilter{}, apiError(http.StatusBadRequest, "invalid active_since: use RFC3339 timestamp")
 	}
+	machine, err := db.ResolveMachineFilter(ctx, s.db, in.Machine)
+	if err != nil {
+		return db.AnalyticsFilter{}, serverError(err)
+	}
 	return db.AnalyticsFilter{
 		From:             from,
 		To:               to,
-		Machine:          in.Machine,
+		Machine:          machine,
 		Project:          in.Project,
 		GitBranch:        in.GitBranch,
 		Agent:            in.Agent,
@@ -120,7 +127,7 @@ func (s *Server) humaAnalyticsSummary(
 	ctx context.Context,
 	in *AnalyticsFilterInput,
 ) (*jsonOutput[db.AnalyticsSummary], error) {
-	f, err := analyticsFilterFromInput(*in)
+	f, err := s.analyticsFilterFromInput(ctx, *in)
 	if err != nil {
 		return nil, err
 	}
@@ -135,7 +142,7 @@ func (s *Server) humaAnalyticsActivity(
 	ctx context.Context,
 	in *analyticsActivityInput,
 ) (*jsonOutput[db.ActivityResponse], error) {
-	f, err := analyticsFilterFromInput(in.AnalyticsFilterInput)
+	f, err := s.analyticsFilterFromInput(ctx, in.AnalyticsFilterInput)
 	if err != nil {
 		return nil, err
 	}
@@ -150,7 +157,7 @@ func (s *Server) humaAnalyticsHeatmap(
 	ctx context.Context,
 	in *analyticsHeatmapInput,
 ) (*jsonOutput[db.HeatmapResponse], error) {
-	f, err := analyticsFilterFromInput(in.AnalyticsFilterInput)
+	f, err := s.analyticsFilterFromInput(ctx, in.AnalyticsFilterInput)
 	if err != nil {
 		return nil, err
 	}
@@ -165,7 +172,7 @@ func (s *Server) humaAnalyticsProjects(
 	ctx context.Context,
 	in *AnalyticsFilterInput,
 ) (*jsonOutput[db.ProjectsAnalyticsResponse], error) {
-	f, err := analyticsFilterFromInput(*in)
+	f, err := s.analyticsFilterFromInput(ctx, *in)
 	if err != nil {
 		return nil, err
 	}
@@ -180,7 +187,7 @@ func (s *Server) humaAnalyticsHourOfWeek(
 	ctx context.Context,
 	in *AnalyticsFilterInput,
 ) (*jsonOutput[db.HourOfWeekResponse], error) {
-	f, err := analyticsFilterFromInput(*in)
+	f, err := s.analyticsFilterFromInput(ctx, *in)
 	if err != nil {
 		return nil, err
 	}
@@ -195,7 +202,7 @@ func (s *Server) humaAnalyticsSessionShape(
 	ctx context.Context,
 	in *AnalyticsFilterInput,
 ) (*jsonOutput[db.SessionShapeResponse], error) {
-	f, err := analyticsFilterFromInput(*in)
+	f, err := s.analyticsFilterFromInput(ctx, *in)
 	if err != nil {
 		return nil, err
 	}
@@ -210,7 +217,7 @@ func (s *Server) humaAnalyticsVelocity(
 	ctx context.Context,
 	in *AnalyticsFilterInput,
 ) (*jsonOutput[db.VelocityResponse], error) {
-	f, err := analyticsFilterFromInput(*in)
+	f, err := s.analyticsFilterFromInput(ctx, *in)
 	if err != nil {
 		return nil, err
 	}
@@ -225,7 +232,7 @@ func (s *Server) humaAnalyticsTools(
 	ctx context.Context,
 	in *AnalyticsFilterInput,
 ) (*jsonOutput[db.ToolsAnalyticsResponse], error) {
-	f, err := analyticsFilterFromInput(*in)
+	f, err := s.analyticsFilterFromInput(ctx, *in)
 	if err != nil {
 		return nil, err
 	}
@@ -240,7 +247,7 @@ func (s *Server) humaAnalyticsSkills(
 	ctx context.Context,
 	in *analyticsSkillsInput,
 ) (*jsonOutput[db.SkillsAnalyticsResponse], error) {
-	f, err := analyticsFilterFromInput(in.AnalyticsFilterInput)
+	f, err := s.analyticsFilterFromInput(ctx, in.AnalyticsFilterInput)
 	if err != nil {
 		return nil, err
 	}
@@ -255,7 +262,7 @@ func (s *Server) humaAnalyticsTopSessions(
 	ctx context.Context,
 	in *analyticsTopSessionsInput,
 ) (*jsonOutput[db.TopSessionsResponse], error) {
-	f, err := analyticsFilterFromInput(in.AnalyticsFilterInput)
+	f, err := s.analyticsFilterFromInput(ctx, in.AnalyticsFilterInput)
 	if err != nil {
 		return nil, err
 	}
@@ -270,7 +277,7 @@ func (s *Server) humaAnalyticsSignals(
 	ctx context.Context,
 	in *AnalyticsFilterInput,
 ) (*jsonOutput[db.SignalsAnalyticsResponse], error) {
-	f, err := analyticsFilterFromInput(*in)
+	f, err := s.analyticsFilterFromInput(ctx, *in)
 	if err != nil {
 		return nil, err
 	}
@@ -285,7 +292,7 @@ func (s *Server) humaAnalyticsSignalSessions(
 	ctx context.Context,
 	in *analyticsSignalSessionsInput,
 ) (*jsonOutput[db.SignalSessionsResponse], error) {
-	f, err := analyticsFilterFromInput(in.AnalyticsFilterInput)
+	f, err := s.analyticsFilterFromInput(ctx, in.AnalyticsFilterInput)
 	if err != nil {
 		return nil, err
 	}

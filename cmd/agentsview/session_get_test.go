@@ -91,53 +91,74 @@ func (s *stubGetService) FindSessionIDsByPartial(
 	return s.partialIDs, nil
 }
 
+func (s *stubGetService) FindSessionIDsByRawSuffix(
+	context.Context, string, int,
+) ([]string, error) {
+	panic("FindSessionIDsByRawSuffix not expected")
+}
+
 // Stubs for the remaining SessionService methods — resolveBareCodebuffID
 // and resolveCodebuffBareID do not exercise them, so they panic.
 func (s *stubGetService) List(context.Context, service.ListFilter) (*service.SessionList, error) {
 	panic("List not expected")
 }
+
 func (s *stubGetService) Messages(context.Context, string, service.MessageFilter) (*service.MessageList, error) {
 	panic("Messages not expected")
 }
+
 func (s *stubGetService) ToolCalls(context.Context, string) (*service.ToolCallList, error) {
 	panic("ToolCalls not expected")
 }
+
 func (s *stubGetService) Sync(context.Context, service.SyncInput) (*service.SessionDetail, error) {
 	panic("Sync not expected")
 }
+
 func (s *stubGetService) Watch(context.Context, string) (<-chan service.Event, error) {
 	panic("Watch not expected")
 }
+
 func (s *stubGetService) Stats(context.Context, service.StatsFilter) (*service.SessionStats, error) {
 	panic("Stats not expected")
 }
+
 func (s *stubGetService) Search(context.Context, service.SearchRequest) (*service.SessionSearchResult, error) {
 	panic("Search not expected")
 }
+
 func (s *stubGetService) SearchContent(context.Context, service.ContentSearchRequest) (*service.ContentSearchResult, error) {
 	panic("SearchContent not expected")
 }
+
 func (s *stubGetService) UsageSummary(context.Context, service.UsageRequest) (*service.UsageSummaryResult, error) {
 	panic("UsageSummary not expected")
 }
+
 func (s *stubGetService) UsagePairwiseComparison(context.Context, service.UsagePairwiseComparisonRequest) (*service.UsagePairwiseComparisonResponse, error) {
 	panic("UsagePairwiseComparison not expected")
 }
+
 func (s *stubGetService) ListRecallEntries(context.Context, service.RecallFilter) (*service.RecallList, error) {
 	panic("ListRecallEntries not expected")
 }
+
 func (s *stubGetService) GetRecallEntry(context.Context, string) (*db.RecallEntry, error) {
 	panic("GetRecallEntry not expected")
 }
+
 func (s *stubGetService) QueryRecallEntries(context.Context, service.RecallQuery) (*service.RecallQueryResult, error) {
 	panic("QueryRecallEntries not expected")
 }
+
 func (s *stubGetService) ImportRecallEntries(context.Context, io.Reader, db.RecallImportOptions) (*db.RecallImportResult, error) {
 	panic("ImportRecallEntries not expected")
 }
+
 func (s *stubGetService) ListSecrets(context.Context, service.SecretListFilter) (*service.SecretFindingList, error) {
 	panic("ListSecrets not expected")
 }
+
 func (s *stubGetService) ScanSecrets(context.Context, service.SecretScanInput, func(service.SecretScanProgress)) (*service.SecretScanSummary, error) {
 	panic("ScanSecrets not expected")
 }
@@ -160,10 +181,10 @@ func TestResolveBareCodebuffID_LocalMachine_Match(t *testing.T) {
 	tmp := t.TempDir()
 	stageCodebuffSession(t, tmp, "myproject", "1704067200")
 	cfg := config.Config{
-		// cfg.LocalMachineName drives the --machine=local filter:
-		// a session whose detail.Machine equals cfg.LocalMachineName
+		// cfg.InstallationID drives the --machine=local filter:
+		// a session whose detail.Machine equals cfg.InstallationID
 		// passes the gate.
-		LocalMachineName: "test-machine",
+		InstallationID: "test-machine",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {tmp},
 		},
@@ -178,7 +199,7 @@ func TestResolveBareCodebuffID_LocalMachine_Match(t *testing.T) {
 		},
 	}
 	got, err := resolveBareCodebuffID(
-		context.Background(), svc, &cfg, "1704067200", "local",
+		t.Context(), svc, &cfg, "1704067200", "local",
 	)
 	require.NoError(t, err)
 	assert.Equal(t, candidate, got,
@@ -190,7 +211,7 @@ func TestResolveBareCodebuffID_LocalMachine_Mismatch(t *testing.T) {
 	tmp := t.TempDir()
 	stageCodebuffSession(t, tmp, "myproject", "1704067200")
 	cfg := config.Config{
-		LocalMachineName: "test-machine",
+		InstallationID: "test-machine",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {tmp},
 		},
@@ -207,7 +228,7 @@ func TestResolveBareCodebuffID_LocalMachine_Mismatch(t *testing.T) {
 		},
 	}
 	got, err := resolveBareCodebuffID(
-		context.Background(), svc, &cfg, "1704067200", "local",
+		t.Context(), svc, &cfg, "1704067200", "local",
 	)
 	require.NoError(t, err)
 	assert.Empty(t, got,
@@ -219,7 +240,7 @@ func TestResolveBareCodebuffID_WildcardMatch(t *testing.T) {
 	tmp := t.TempDir()
 	stageCodebuffSession(t, tmp, "myproject", "1704067200")
 	cfg := config.Config{
-		LocalMachineName: "test-machine",
+		InstallationID: "test-machine",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {tmp},
 		},
@@ -236,7 +257,7 @@ func TestResolveBareCodebuffID_WildcardMatch(t *testing.T) {
 		},
 	}
 	got, err := resolveBareCodebuffID(
-		context.Background(), svc, &cfg, "1704067200", "*",
+		t.Context(), svc, &cfg, "1704067200", "*",
 	)
 	require.NoError(t, err)
 	assert.Equal(t, candidate, got,
@@ -248,7 +269,7 @@ func TestResolveBareCodebuffID_SpecificMachineMatch(t *testing.T) {
 	tmp := t.TempDir()
 	stageCodebuffSession(t, tmp, "myproject", "1704067200")
 	cfg := config.Config{
-		LocalMachineName: "test-machine",
+		InstallationID: "test-machine",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {tmp},
 		},
@@ -263,7 +284,7 @@ func TestResolveBareCodebuffID_SpecificMachineMatch(t *testing.T) {
 		},
 	}
 	got, err := resolveBareCodebuffID(
-		context.Background(), svc, &cfg, "1704067200", "laptop",
+		t.Context(), svc, &cfg, "1704067200", "laptop",
 	)
 	require.NoError(t, err)
 	assert.Equal(t, candidate, got,
@@ -278,7 +299,7 @@ func TestResolveBareCodebuffID_SpecificMachineMismatch(t *testing.T) {
 	tmp := t.TempDir()
 	stageCodebuffSession(t, tmp, "myproject", "1704067200")
 	cfg := config.Config{
-		LocalMachineName: "test-machine",
+		InstallationID: "test-machine",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {tmp},
 		},
@@ -293,7 +314,7 @@ func TestResolveBareCodebuffID_SpecificMachineMismatch(t *testing.T) {
 		},
 	}
 	got, err := resolveBareCodebuffID(
-		context.Background(), svc, &cfg, "1704067200", "laptop",
+		t.Context(), svc, &cfg, "1704067200", "laptop",
 	)
 	require.NoError(t, err)
 	assert.Empty(t, got)
@@ -317,7 +338,7 @@ func TestResolveBareCodebuffID_FreebuffPrefixProbeFromCodebuffRoots(t *testing.T
 	tmp := t.TempDir()
 	stageCodebuffSession(t, tmp, "myproject", "1704067200")
 	cfg := config.Config{
-		LocalMachineName: "test-machine",
+		InstallationID: "test-machine",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {tmp},
 		},
@@ -334,7 +355,7 @@ func TestResolveBareCodebuffID_FreebuffPrefixProbeFromCodebuffRoots(t *testing.T
 		},
 	}
 	got, err := resolveBareCodebuffID(
-		context.Background(), svc, &cfg, "1704067200", "local",
+		t.Context(), svc, &cfg, "1704067200", "local",
 	)
 	require.NoError(t, err)
 	assert.Equal(t, freebuffID, got,
@@ -524,7 +545,7 @@ func TestResolveBareCodebuffID_RemoteHostPrefixedMatch(t *testing.T) {
 	tmp := t.TempDir()
 	stageCodebuffSession(t, tmp, "myproject", "1704067200")
 	cfg := config.Config{
-		LocalMachineName: "test-machine",
+		InstallationID: "test-machine",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {tmp},
 		},
@@ -549,7 +570,7 @@ func TestResolveBareCodebuffID_RemoteHostPrefixedMatch(t *testing.T) {
 		partialIDs: []string{remoteID},
 	}
 	got, err := resolveBareCodebuffID(
-		context.Background(), svc, &cfg, "1704067200", "laptop",
+		t.Context(), svc, &cfg, "1704067200", "laptop",
 	)
 	require.NoError(t, err)
 	assert.Equal(t, remoteID, got,
@@ -565,7 +586,7 @@ func TestResolveBareCodebuffID_RemoteAmbiguity(t *testing.T) {
 	tmp := t.TempDir()
 	stageCodebuffSession(t, tmp, "myproject", "1704067200")
 	cfg := config.Config{
-		LocalMachineName: "test-machine",
+		InstallationID: "test-machine",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {tmp},
 		},
@@ -589,7 +610,7 @@ func TestResolveBareCodebuffID_RemoteAmbiguity(t *testing.T) {
 		partialIDs: []string{remoteA, remoteB},
 	}
 	got, err := resolveBareCodebuffID(
-		context.Background(), svc, &cfg, "1704067200", "*",
+		t.Context(), svc, &cfg, "1704067200", "*",
 	)
 	require.Error(t, err)
 	assert.Empty(t, got)
@@ -611,7 +632,7 @@ func TestResolveBareCodebuffID_RemoteOnlyNoLocations(t *testing.T) {
 	// return without ever querying the database.
 	tmp := t.TempDir()
 	cfg := config.Config{
-		LocalMachineName: "test-machine",
+		InstallationID: "test-machine",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {tmp},
 		},
@@ -627,7 +648,7 @@ func TestResolveBareCodebuffID_RemoteOnlyNoLocations(t *testing.T) {
 		partialIDs: []string{remoteID},
 	}
 	got, err := resolveBareCodebuffID(
-		context.Background(), svc, &cfg, "1704067200", "*",
+		t.Context(), svc, &cfg, "1704067200", "*",
 	)
 	require.NoError(t, err)
 	assert.Equal(t, remoteID, got,
@@ -647,7 +668,7 @@ func TestResolveBareCodebuffID_FailClosedOnLookupError(t *testing.T) {
 	stageCodebuffSession(t, tmp, "myproject", "1704067200")
 	stageCodebuffSession(t, tmp, "otherproject", "1704067200")
 	cfg := config.Config{
-		LocalMachineName: "test-machine",
+		InstallationID: "test-machine",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {tmp},
 		},
@@ -666,7 +687,7 @@ func TestResolveBareCodebuffID_FailClosedOnLookupError(t *testing.T) {
 		},
 	}
 	got, err := resolveBareCodebuffID(
-		context.Background(), svc, &cfg, "1704067200", "local",
+		t.Context(), svc, &cfg, "1704067200", "local",
 	)
 	require.Error(t, err)
 	assert.Empty(t, got)
@@ -685,7 +706,7 @@ func TestResolveBareCodebuffID_ArchiveOnlyLocalMatch(t *testing.T) {
 	// tree is gone, so only the archive row can resolve the ID.
 	tmp := t.TempDir()
 	cfg := config.Config{
-		LocalMachineName: "test-machine",
+		InstallationID: "test-machine",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {tmp},
 		},
@@ -701,7 +722,7 @@ func TestResolveBareCodebuffID_ArchiveOnlyLocalMatch(t *testing.T) {
 		partialIDs: []string{archived},
 	}
 	got, err := resolveBareCodebuffID(
-		context.Background(), svc, &cfg, "1704067200", "local",
+		t.Context(), svc, &cfg, "1704067200", "local",
 	)
 	require.NoError(t, err)
 	assert.Equal(t, archived, got,
@@ -719,7 +740,7 @@ func TestResolveBareCodebuffID_ArchivedLocalAndRemoteTwinAmbiguous(t *testing.T)
 	// No on-disk session: the local row exists only in the archive.
 	tmp := t.TempDir()
 	cfg := config.Config{
-		LocalMachineName: "test-machine",
+		InstallationID: "test-machine",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {tmp},
 		},
@@ -740,7 +761,7 @@ func TestResolveBareCodebuffID_ArchivedLocalAndRemoteTwinAmbiguous(t *testing.T)
 		partialIDs: []string{localID, remoteID},
 	}
 	got, err := resolveBareCodebuffID(
-		context.Background(), svc, &cfg, "1704067200", "*",
+		t.Context(), svc, &cfg, "1704067200", "*",
 	)
 	require.Error(t, err,
 		"a local archive row plus a remote twin is ambiguous under "+
@@ -761,7 +782,7 @@ func TestResolveBareCodebuffID_OnDiskRowNotDoubleCounted(t *testing.T) {
 	tmp := t.TempDir()
 	stageCodebuffSession(t, tmp, "myproject", "1704067200")
 	cfg := config.Config{
-		LocalMachineName: "test-machine",
+		InstallationID: "test-machine",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {tmp},
 		},
@@ -779,7 +800,7 @@ func TestResolveBareCodebuffID_OnDiskRowNotDoubleCounted(t *testing.T) {
 		partialIDs: []string{candidate},
 	}
 	got, err := resolveBareCodebuffID(
-		context.Background(), svc, &cfg, "1704067200", "local",
+		t.Context(), svc, &cfg, "1704067200", "local",
 	)
 	require.NoError(t, err,
 		"a session's own archive row must not make it ambiguous")

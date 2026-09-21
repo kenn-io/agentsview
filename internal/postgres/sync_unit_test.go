@@ -2,17 +2,21 @@ package postgres
 
 import (
 	"errors"
+	"fmt"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 func testDB(t *testing.T) *db.DB {
 	t.Helper()
-	d, err := db.Open(t.TempDir() + "/test.db")
+	d, err := db.Open(t.Context(), t.TempDir()+"/test.db")
 	require.NoError(t, err, "opening test db")
 	t.Cleanup(func() { d.Close() })
 	return d
@@ -39,16 +43,13 @@ func TestIsUndefinedTable(t *testing.T) {
 		},
 		{
 			"SQLSTATE 42P01",
-			errors.New(
-				`ERROR: relation "sessions" ` +
-					`does not exist (SQLSTATE 42P01)`,
-			),
+			fmt.Errorf("query sessions: %w", &pgconn.PgError{Code: "42P01", Message: `relation "sessions" does not exist`}),
 			true,
 		},
 		{
 			"bare SQLSTATE",
 			errors.New("42P01"),
-			true,
+			false,
 		},
 	}
 	for _, tt := range tests {
@@ -61,26 +62,26 @@ func TestIsUndefinedTable(t *testing.T) {
 func TestScopedSyncStateStoreMigratesLegacyState(t *testing.T) {
 	local := testDB(t)
 
-	require.NoError(t, local.SetSyncState(
+	require.NoError(t, local.SetSyncState(t.Context(),
 		"last_push_at",
 		"2026-03-11T12:34:56.123Z",
 	))
-	require.NoError(t, local.SetSyncState(
+	require.NoError(t, local.SetSyncState(t.Context(),
 		lastPushBoundaryStateKey,
 		`{"cutoff":"2026-03-11T12:34:56.123Z"}`,
 	))
-	require.NoError(t, local.SetSyncState(
+	require.NoError(t, local.SetSyncState(t.Context(),
 		lastPushTargetFingerprintKey,
 		"fingerprint-a",
 	))
-	require.NoError(t, local.SetSyncState(
+	require.NoError(t, local.SetSyncState(t.Context(),
 		pushMarkerIDStateKey,
 		"marker-a",
 	))
 
 	store := newScopedSyncStateStore(local, "work", true)
 
-	lastPush, err := store.GetSyncState("last_push_at")
+	lastPush, err := store.GetSyncState(t.Context(), "last_push_at")
 	require.NoError(t, err)
 	assert.Equal(t, "2026-03-11T12:34:56.123Z", lastPush)
 
@@ -89,21 +90,21 @@ func TestScopedSyncStateStoreMigratesLegacyState(t *testing.T) {
 		lastPushBoundaryStateKey,
 		lastPushTargetFingerprintKey,
 	} {
-		legacyValue, err := local.GetSyncState(key)
+		legacyValue, err := local.GetSyncState(t.Context(), key)
 		require.NoError(t, err)
 		assert.Empty(t, legacyValue)
 
-		scopedValue, err := local.GetSyncState(key + ":work")
+		scopedValue, err := local.GetSyncState(t.Context(), key+":work")
 		require.NoError(t, err)
 		assert.NotEmpty(t, scopedValue)
 	}
 
-	legacyMarker, err := local.GetSyncState(pushMarkerIDStateKey)
+	legacyMarker, err := local.GetSyncState(t.Context(), pushMarkerIDStateKey)
 	require.NoError(t, err)
 	assert.Equal(t, "marker-a", legacyMarker)
 
-	scopedMarker, err := local.GetSyncState(
-		pushMarkerIDStateKey + ":work",
+	scopedMarker, err := local.GetSyncState(t.Context(),
+		pushMarkerIDStateKey+":work",
 	)
 	require.NoError(t, err)
 	assert.Empty(t, scopedMarker)
@@ -112,18 +113,18 @@ func TestScopedSyncStateStoreMigratesLegacyState(t *testing.T) {
 func TestScopedSyncStateStoreNonDefaultTargetDoesNotMigrateLegacyState(t *testing.T) {
 	local := testDB(t)
 
-	require.NoError(t, local.SetSyncState(
+	require.NoError(t, local.SetSyncState(t.Context(),
 		"last_push_at",
 		"2026-03-11T12:34:56.123Z",
 	))
 
 	store := newScopedSyncStateStore(local, "archive", false)
 
-	got, err := store.GetSyncState("last_push_at")
+	got, err := store.GetSyncState(t.Context(), "last_push_at")
 	require.NoError(t, err)
 	assert.Empty(t, got)
 
-	legacyValue, err := local.GetSyncState("last_push_at")
+	legacyValue, err := local.GetSyncState(t.Context(), "last_push_at")
 	require.NoError(t, err)
 	assert.Equal(t, "2026-03-11T12:34:56.123Z", legacyValue)
 }
@@ -132,18 +133,18 @@ func TestScopedSyncStateStoreLegacyModeUsesUnscopedKeys(t *testing.T) {
 	local := testDB(t)
 	store := newScopedSyncStateStore(local, "", false)
 
-	require.NoError(t, store.SetSyncState(
+	require.NoError(t, store.SetSyncState(t.Context(),
 		"last_push_at",
 		"2026-03-11T12:34:56.123Z",
 	))
 
-	got, err := local.GetSyncState("last_push_at")
+	got, err := local.GetSyncState(t.Context(), "last_push_at")
 	require.NoError(t, err)
 	assert.Equal(t, "2026-03-11T12:34:56.123Z", got)
 }
 
 func TestPushSyncStateScopeIncludesProjectFilters(t *testing.T) {
-	assert.Equal(t, "", pushSyncStateScope("", nil, nil))
+	assert.Empty(t, pushSyncStateScope("", nil, nil))
 	assert.Equal(t, "work", pushSyncStateScope("work", nil, nil))
 
 	includeAB := pushSyncStateScope(
@@ -190,7 +191,7 @@ func TestNewRejectsIncludeAndExcludeProjects(t *testing.T) {
 		local,
 		"test-machine",
 		true,
-		SyncOptions{
+		storage.PusherOptions{
 			Projects:        []string{"alpha"},
 			ExcludeProjects: []string{"beta"},
 		},
@@ -203,7 +204,7 @@ func TestNewRejectsIncludeAndExcludeProjects(t *testing.T) {
 func TestReadLastPushAtUsesProjectFilterScope(t *testing.T) {
 	local := testDB(t)
 
-	require.NoError(t, local.SetSyncState(
+	require.NoError(t, local.SetSyncState(t.Context(),
 		"last_push_at:work",
 		"2026-03-11T12:00:00.000Z",
 	))
@@ -212,12 +213,12 @@ func TestReadLastPushAtUsesProjectFilterScope(t *testing.T) {
 		[]string{"alpha", "beta"},
 		nil,
 	)
-	require.NoError(t, local.SetSyncState(
+	require.NoError(t, local.SetSyncState(t.Context(),
 		"last_push_at:"+filterScope,
 		"2026-03-11T13:00:00.000Z",
 	))
 
-	got, err := ReadLastPushAt(
+	got, err := ReadLastPushAt(t.Context(),
 		local,
 		"work",
 		[]string{"beta", "alpha"},
@@ -231,12 +232,12 @@ func TestReadLastPushAtUsesProjectFilterScope(t *testing.T) {
 func TestReadLastPushAtDoesNotMigrateLegacyStateForProjectFilter(t *testing.T) {
 	local := testDB(t)
 
-	require.NoError(t, local.SetSyncState(
+	require.NoError(t, local.SetSyncState(t.Context(),
 		"last_push_at",
 		"2026-03-11T12:00:00.000Z",
 	))
 
-	got, err := ReadLastPushAt(
+	got, err := ReadLastPushAt(t.Context(),
 		local,
 		"",
 		[]string{"alpha"},
@@ -246,7 +247,7 @@ func TestReadLastPushAtDoesNotMigrateLegacyStateForProjectFilter(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, got)
 
-	legacyValue, err := local.GetSyncState("last_push_at")
+	legacyValue, err := local.GetSyncState(t.Context(), "last_push_at")
 	require.NoError(t, err)
 	assert.Equal(t, "2026-03-11T12:00:00.000Z", legacyValue)
 }

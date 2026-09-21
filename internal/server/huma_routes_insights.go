@@ -18,15 +18,16 @@ import (
 )
 
 func (s *Server) registerInsightsRoutes() {
-	group := newRouteGroup(s.api, "/api/v1/insights", "Insights")
+	group := huma.NewGroup(s.api, "/api/v1")
+	configureRouteGroup(group, "Insights")
 
-	s.get(group, "", "List insights", s.humaListInsights)
-	s.get(group, "/{id}", "Get insight", s.humaGetInsight)
-	s.raw(group, http.MethodGet, "/{id}/export", "Export insight as HTML", s.humaExportInsight)
-	s.raw(group, http.MethodGet, "/{id}/md", "Export insight as Markdown", s.humaMarkdownInsight)
-	s.post(group, "/{id}/publish", "Publish insight", s.humaPublishInsight)
-	s.deleteRoute(group, "/{id}", "Delete insight", s.humaDeleteInsight)
-	s.stream(group, http.MethodPost, "/generate", "Generate insight", s.humaGenerateInsight)
+	s.get(group, "/insights", "List insights", s.humaListInsights)
+	s.get(group, "/insights/{id}", "Get insight", s.humaGetInsight)
+	s.raw(group, http.MethodGet, "/insights/{id}/export", "Export insight as HTML", "text/html", s.humaExportInsight)
+	s.raw(group, http.MethodGet, "/insights/{id}/md", "Export insight as Markdown", "text/markdown", s.humaMarkdownInsight)
+	s.post(group, "/insights/{id}/publish", "Publish insight", s.humaPublishInsight)
+	s.deleteRoute(group, "/insights/{id}", "Delete insight", s.humaDeleteInsight)
+	s.stream(group, http.MethodPost, "/insights/generate", "Generate insight", s.humaGenerateInsight)
 }
 
 type insightType string
@@ -59,11 +60,10 @@ func supportsInsightGeneration(store db.Store) bool {
 	if store == nil {
 		return false
 	}
-	if !store.ReadOnly() {
-		return true
+	if capable, ok := store.(insightGenerationCapableStore); ok {
+		return capable.InsightGenerationAvailable()
 	}
-	capable, ok := store.(insightGenerationCapableStore)
-	return ok && capable.InsightGenerationAvailable()
+	return !store.ReadOnly()
 }
 
 func (s *Server) humaListInsights(
@@ -181,7 +181,7 @@ func (s *Server) humaDeleteInsight(
 	if _, err := s.insightByID(ctx, in.ID); err != nil {
 		return nil, err
 	}
-	if err := s.db.DeleteInsight(in.ID); err != nil {
+	if err := s.db.DeleteInsight(ctx, in.ID); err != nil {
 		if handled := handleHumaReadOnly(err); handled != nil {
 			return nil, handled
 		}
@@ -196,7 +196,7 @@ func (s *Server) humaGenerateInsight(
 ) (*huma.StreamResponse, error) {
 	if !supportsInsightGeneration(s.db) {
 		return nil, apiError(http.StatusNotImplemented,
-			"insight generation is not available in read-only mode")
+			"insight generation is not available for this archive")
 	}
 	if err := s.rejectWriterClosedWrite(); err != nil {
 		return nil, err
@@ -211,7 +211,7 @@ func (s *Server) humaGenerateInsight(
 			"session_id is only supported for agent_analysis")
 	}
 	if req.Type == insight.CannedType {
-		return s.humaGenerateCannedInsight(req)
+		return s.humaGenerateCannedInsight(ctx, req)
 	}
 	if req.SessionID != "" {
 		session, err := s.db.GetSession(ctx, req.SessionID)
@@ -260,7 +260,7 @@ func (s *Server) humaGenerateInsight(
 		stream, ok := newHumaSSEStream(hctx)
 		if !ok {
 			writeHumaJSON(hctx, http.StatusInternalServerError,
-				apiErrorResponse{Message: "streaming not supported"})
+				apiResponseError{Message: "streaming not supported"})
 			return
 		}
 		var streamMu stdsync.Mutex
@@ -433,9 +433,9 @@ func (s *Server) humaGenerateInsight(
 			promptPtr = &req.Prompt
 		}
 		var id int64
-		err = s.serializeArchiveWrite(func() error {
+		err = s.serializeArchiveWrite(genCtx, func() error {
 			var insertErr error
-			id, insertErr = s.db.InsertInsight(db.Insight{
+			id, insertErr = s.db.InsertInsight(genCtx, db.Insight{
 				Type:     req.Type,
 				DateFrom: req.DateFrom,
 				DateTo:   req.DateTo,

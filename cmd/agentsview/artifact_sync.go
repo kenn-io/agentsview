@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/artifact"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -87,7 +88,7 @@ func dialLoopbackDaemon(
 
 func validateArtifactSyncConfig(cfg SyncConfig) error {
 	if cfg.Target != "" && cfg.Host != "" {
-		return fmt.Errorf("--target cannot be combined with --host")
+		return errors.New("--target cannot be combined with --host")
 	}
 	return nil
 }
@@ -156,29 +157,17 @@ func runDaemonArtifactExchange(
 	if err != nil {
 		return artifact.SyncResult{}, &daemonArtifactExchangeError{cause: err}
 	}
-	body, err := json.Marshal(server.ArtifactExchangeRequest{
-		Target: target,
-		Full:   full,
+	requestBaseURL := baseURL + daemonRequestBasePath(tr.URL)
+	response, err := apiclient.RawRequest(requestBaseURL, daemonArtifactExchangeHTTPClient, func(api *apiclient.Client) error {
+		_, err := api.PostAPIV1ArtifactsExchangeWithResponse(ctx, &apiclient.PostAPIV1ArtifactsExchangeRequestOptions{Body: &apiclient.ArtifactExchangeRequest{Target: target, Full: new(full)}})
+		return err
+	}, func(_ context.Context, req *http.Request) error {
+		req.Header.Set("Origin", daemonOriginURL(baseURL))
+		if authToken != "" {
+			req.Header.Set("Authorization", "Bearer "+authToken)
+		}
+		return nil
 	})
-	if err != nil {
-		return artifact.SyncResult{}, &daemonArtifactExchangeError{cause: err}
-	}
-	req, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodPost,
-		baseURL+"/api/v1/artifacts/exchange",
-		strings.NewReader(string(body)),
-	)
-	if err != nil {
-		return artifact.SyncResult{}, &daemonArtifactExchangeError{cause: err}
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Origin", baseURL)
-	if authToken != "" {
-		req.Header.Set("Authorization", "Bearer "+authToken)
-	}
-
-	response, err := daemonArtifactExchangeHTTPClient.Do(req)
 	if err != nil {
 		return artifact.SyncResult{}, &daemonArtifactExchangeError{cause: err}
 	}
@@ -208,7 +197,6 @@ func validatedLoopbackDaemonURL(rawURL string) (string, error) {
 	if parsed.Scheme != "http" ||
 		parsed.User != nil ||
 		parsed.Host == "" ||
-		(parsed.Path != "" && parsed.Path != "/") ||
 		parsed.RawQuery != "" ||
 		parsed.Fragment != "" {
 		return "", errors.New("unsafe daemon endpoint")
@@ -219,7 +207,15 @@ func validatedLoopbackDaemonURL(rawURL string) (string, error) {
 		(ip == nil || !ip.IsLoopback()) {
 		return "", errors.New("daemon endpoint is not loopback")
 	}
-	return strings.TrimSuffix(parsed.String(), "/"), nil
+	return daemonOriginURL(rawURL), nil
+}
+
+func daemonRequestBasePath(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimRight(parsed.EscapedPath(), "/")
 }
 
 func runLocalAndArtifactFolderSync(

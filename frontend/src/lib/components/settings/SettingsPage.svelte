@@ -1,15 +1,13 @@
 <script lang="ts">
   import {
     Button,
-    FlashBanner,
     SearchInput,
     SettingsLayout,
     SettingsSection,
-    showFlash,
     TextInput,
     type SettingsCategory,
   } from "@kenn-io/kit-ui";
-  import { onMount, untrack } from "svelte";
+  import { onMount } from "svelte";
   import { settings } from "../../stores/settings.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
@@ -20,7 +18,9 @@
   import AgentDirSettings from "./AgentDirSettings.svelte";
   import DateRangeSettings from "./DateRangeSettings.svelte";
   import TerminalSettings from "./TerminalSettings.svelte";
+  import ArchiveContentSettings from "./ArchiveContentSettings.svelte";
   import EmbeddingsSettings from "./EmbeddingsSettings.svelte";
+  import ToolImageCleanup from "./ToolImageCleanup.svelte";
   import GithubSettings from "./GithubSettings.svelte";
   import LanguageSettings from "./LanguageSettings.svelte";
   import RemoteSettings from "./RemoteSettings.svelte";
@@ -93,13 +93,6 @@
     if (scroller) scroller.scrollTop = 0;
   });
 
-  $effect(() => {
-    const saveError = settings.saveError;
-    if (saveError) {
-      untrack(() => showFlash(saveError, { tone: "danger" }));
-    }
-  });
-
   onMount(() => {
     authTokenInput = getAuthToken();
     settings.load();
@@ -118,7 +111,6 @@
   class:settings-no-results={noSearchResults}
   bind:this={pageElement}
 >
-  <FlashBanner toneLabels={{ danger: m.settings_save_error_label() }} />
   {#if settings.loading || !settings.loaded || settings.needsAuth || settings.error}
     <div class="settings-standalone">
       <div class="settings-header">
@@ -215,6 +207,8 @@
                 <TerminalSettings />
               {:else if meta.id === "agent-directories"}
                 <AgentDirSettings />
+              {:else if meta.id === "tool-result-images"}
+                <ToolImageCleanup />
               {:else if meta.id === "worktree-mappings"}
                 <Button
                   label={m.settings_worktree_moved_link()}
@@ -222,6 +216,8 @@
                 />
               {:else if meta.id === "embeddings"}
                 <EmbeddingsSettings />
+              {:else if meta.id === "archive-content"}
+                <ArchiveContentSettings />
               {:else if meta.id === "github"}
                 <GithubSettings />
               {:else if meta.id === "remote-access"}
@@ -372,7 +368,7 @@
   }
 
   .auth-btn:disabled {
-    opacity: 0.6;
+    opacity: var(--opacity-disabled);
     cursor: default;
   }
 

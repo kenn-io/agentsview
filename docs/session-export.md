@@ -3,10 +3,9 @@ title: Session Export
 description: Content-free session summary exports for scripting and analytics
 ---
 
-`agentsview export sessions` emits versioned, content-free session summaries
-from the local archive. It is intended for scripts, BI pipelines, and archive
-handoffs that need session metadata, usage totals, pricing provenance, and
-project identity without transcript text.
+Export session metadata and token and cost totals without transcript text. Use
+`agentsview export sessions` for reporting scripts that need pricing and project
+identity. JSON produces one document; NDJSON writes one JSON object per line.
 
 ## Commands
 
@@ -25,6 +24,7 @@ JSON output is one document:
 ```json
 {
   "schema_version": 6,
+  "archive_id": "00000000-0000-4000-8000-000000000002",
   "database_id": "00000000-0000-4000-8000-000000000001",
   "cursor": {
     "next": "opaque-cursor-or-empty"
@@ -80,6 +80,8 @@ JSON output is one document:
   "sessions": [
     {
       "id": "remote-current",
+      "transcript_revision": "1",
+      "local_modified_at": "2026-07-03T12:00:00.123Z",
       "project": {
         "project_key": "pl1:sha256:333e5f19bc8ed34f56fa89e51a9307bbc972d173498993ed02e564d32162196f",
         "display_label": "remote-project",
@@ -151,7 +153,7 @@ rows on subsequent lines. The metadata line has `"type": "meta"`; session rows
 do not add a `type` discriminator.
 
 ```json
-{"type":"meta","schema_version":6,"database_id":"00000000-0000-4000-8000-000000000001","cursor":{"next":"..."},"pricing":{},"projects":{}}
+{"type":"meta","schema_version":6,"archive_id":"00000000-0000-4000-8000-000000000002","database_id":"00000000-0000-4000-8000-000000000001","cursor":{"next":"..."},"pricing":{},"projects":{}}
 {"id":"path-current","agent":"claude","model_usage":{"models":["fixture-model-reported"],"input_tokens":300,"output_tokens":60,"cost":{"microdollars":12500},"has_cost":true}}
 ```
 
@@ -159,13 +161,75 @@ These snippets are abbreviated illustrations. Complete checked JSON and NDJSON
 outputs live in `testdata/golden/session_export_v6.json` and
 `testdata/golden/session_export_v6.ndjson`.
 
+### Archive and database identity
+
+`archive_id` identifies the logical archive and survives full resync. Within
+that archive, `(archive_id, session.id)` identifies a session across rebuilt
+database generations. `database_id` identifies the physical database generation
+and changes on full resync; pagination cursors remain tied to that generation.
+Both IDs come from the same read snapshot as the exported rows, including empty
+results and the NDJSON metadata line. Missing archive identity is an error, not
+a reason for the read-only export to create an identity.
+
+A changed database ID under the same archive ID means that the archive was
+rebuilt, not that every session is new. Restart pagination and reconcile the new
+snapshot. Neither ID is an ordered revision, and a cursor is not a durable
+change-feed checkpoint. These IDs do not establish which of two delayed exports
+is newer or turn absence from a filtered page into a deletion signal. Copied
+archives retain their logical identity; applications that ingest independent
+copies must define their source scope rather than assume the ID identifies a
+device or a single writer.
+
+### Revision evidence
+
+Schema v6 adds two fields to each session row, in JSON and NDJSON:
+
+- `transcript_revision` is the archive's per-session counter, exported as a
+  decimal string to preserve integer precision. Compare it numerically, not
+  lexicographically. Within one archive's writer lineage, an identical
+  transcript retains its counter through full resync; a changed transcript
+  advances the previous counter once. The comparison includes persisted
+  messages, tool calls, tool-result events, and message token usage. It does
+  not export any of that content.
+- `local_modified_at` is the stored local modification timestamp, or `null` when
+  unavailable. It is not session activity time or measured working time.
+  Transcript and standalone usage-event writes can update it while
+  `last_activity_at` stays unchanged. It is a wall-clock signal: equal values,
+  clock changes, and rebuilds prevent treating it as a monotonic revision.
+
+For a materialized session receipt, retain a tuple of independent version
+evidence: **transcript revision, project identity (or a digest of the complete
+exported `project` reference), and pricing timestamp plus digest**. Also retain
+`local_modified_at` for local metadata and standalone usage-event changes.
+Project evidence can change without a transcript edit. Pricing evidence remains
+page-level: `pricing.latest_row_updated_at` is the latest timestamp among the
+effective pricing rows, and `pricing.digest` identifies their contents. An edit
+to another pricing row need not advance that maximum, and removing the newest
+row can lower it. Keep the digest even when timestamps match or are unavailable.
+
+This is not a lexicographically ordered receipt version. A larger transcript
+counter orders transcript changes, not concurrent project or pricing changes;
+equal counters do not prove equal usage totals. Standalone `usage_events` and
+session metadata are outside transcript equality. Digests establish equality,
+not chronology. Do not use the transcript counter alone to reject or accept an
+entire receipt, or compare counters from independently modified archive copies.
+
+All fields are read with their session rows in the existing read transaction;
+`--all` uses one transaction for all pages. Ordinary cursor pages remain
+separate read transactions with the existing activity-based cursor checks, not a
+revision-pinned historical snapshot. This addition does not change cursor
+semantics or add a modified-since filter, durable checkpoint, or tombstones. A
+future incremental export must cover every export-affecting writer, project and
+pricing changes, cutoff ties, and journal resets before it can promise complete
+change discovery. `--active-since` filters activity time and does not discover
+all corrections to old sessions.
+
 ## Content Boundary
 
-Session summary export does not include message content. V1 intentionally omits
-transcript text, first-message text, thinking text, tool input, tool output, and
-raw transcript bytes. It may include metadata that came from sessions, such as
-sanitized project labels, branch names, model names, token totals, and cost
-totals. It does not emit raw working-directory paths.
+Session summary export omits transcript text, first-message text, thinking text,
+tool input, tool output, and raw transcript bytes. It may include metadata that
+came from sessions, such as sanitized project labels, branch names, model names,
+token totals, and cost totals. It does not emit raw working-directory paths.
 
 ## Project Evidence
 
@@ -289,16 +353,18 @@ exact microdollar money objects, and version 4 adds explicit
 reported-to-priced-model resolutions with complete request-pricing bands and
 application counts. Version 5 selects complete Claude snapshots before generic
 deduplication across pagination and session filters, retains earliest-session
-attribution, and includes the maximum observed web-search count in pricing. The
+attribution, and includes the maximum observed web-search count in pricing.
 Version 6 applies provider-specific billing identity to computed usage and
 preserves reported cost rows and custom pricing overrides. Costs from v5 and v6
-must not be compared as the same billing semantics. The two transitional
-releases must not be treated as v1-compatible. There is no flag to request an
-earlier output version. Additive fields do not require a bump, but row semantic
-changes, field type changes, sort order changes, cursor semantics changes,
-required-field meaning changes, field removal, pricing digest canonicalization
-changes, project key derivation changes, remote normalization changes, path
-fallback normalization changes, and new closed-enum values require a bump.
+must not be compared as the same billing semantics. Publishing `archive_id` is
+an additive v6 extension: existing session IDs, database IDs, usage, pricing,
+ordering, and cursor semantics are unchanged. The two transitional releases must
+not be treated as v1-compatible. There is no flag to request an earlier output
+version. Additive fields do not require a bump, but row semantic changes, field
+type changes, sort order changes, cursor semantics changes, required-field
+meaning changes, field removal, pricing digest canonicalization changes, project
+key derivation changes, remote normalization changes, path fallback
+normalization changes, and new closed-enum values require a bump.
 
 Consumers should require the expected `schema_version` and ignore unknown
 additive fields.

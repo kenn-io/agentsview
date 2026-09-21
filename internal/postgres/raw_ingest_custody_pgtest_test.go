@@ -124,13 +124,18 @@ func TestRawCustodyEndToEnd(t *testing.T) {
 	assert.Equal(t, "snapshot", storedKind)
 	assert.Equal(t, int64(2), storedGeneration)
 
-	var exactJobs int
+	var readyJobs, supersededJobs int
 	require.NoError(t, pg.QueryRowContext(t.Context(), `
-		SELECT count(*) FROM raw_ingest_jobs
-		WHERE stage = 'parse' AND state = 'ready'
-			AND processing_version = 'parser-data-17'`,
-	).Scan(&exactJobs))
-	assert.Equal(t, 2, exactJobs)
+		SELECT
+			COUNT(*) FILTER (WHERE state = 'ready'),
+			COUNT(*) FILTER (WHERE state = 'superseded')
+		FROM raw_ingest_jobs
+		WHERE stage = 'parse' AND processing_version = 'parser-data-17'`,
+	).Scan(&readyJobs, &supersededJobs))
+	assert.Equal(t, 1, readyJobs,
+		"only the current head's parse job stays ready")
+	assert.Equal(t, 1, supersededJobs,
+		"advancing the head retires the prior parse job immediately")
 
 	var storedPath, storedEntryType string
 	var storedLength int64

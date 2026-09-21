@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // TestStoreGetAnalyticsSessionShape_AutonomyExcludesSystemUsers
@@ -31,7 +32,7 @@ func TestStoreGetAnalyticsSessionShape_AutonomyExcludesSystemUsers(
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"autonomy-test-machine", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()
@@ -51,7 +52,7 @@ func TestStoreGetAnalyticsSessionShape_AutonomyExcludesSystemUsers(
 		StartedAt:    &started,
 		MessageCount: 8,
 	}
-	require.NoError(t, local.UpsertSession(sess), "upsert session")
+	require.NoError(t, local.UpsertSession(t.Context(), sess), "upsert session")
 
 	msgs := []db.Message{
 		{
@@ -83,7 +84,7 @@ func TestStoreGetAnalyticsSessionShape_AutonomyExcludesSystemUsers(
 			Content:    "tool call",
 		})
 	}
-	require.NoError(t, local.InsertMessages(msgs), "insert messages")
+	require.NoError(t, local.InsertMessages(t.Context(), msgs), "insert messages")
 
 	_, err = ps.Push(ctx, false, nil)
 	require.NoError(t, err, "push")

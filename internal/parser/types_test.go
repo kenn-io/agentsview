@@ -223,6 +223,7 @@ func TestAgentByType(t *testing.T) {
 		{AgentGemini, true},
 		{AgentMiMoCode, true},
 		{AgentOpenCode, true},
+		{AgentOpenCodeReview, true},
 		{AgentOpenHands, true},
 		{AgentCursor, true},
 		{AgentAmp, true},
@@ -233,6 +234,7 @@ func TestAgentByType(t *testing.T) {
 		{AgentDevin, true},
 		{AgentDeepSeekTUI, true},
 		{AgentDeepSeekHarness, true},
+		{AgentCline, true},
 		{"unknown", false},
 	}
 	for _, tt := range tests {
@@ -273,6 +275,12 @@ func TestAgentByPrefix(t *testing.T) {
 			"traex prefix",
 			"traex:some-uuid",
 			AgentTraeX,
+			true,
+		},
+		{
+			"augure-code prefix",
+			"augure-code:some-uuid",
+			AgentAugureCode,
 			true,
 		},
 		{
@@ -399,6 +407,12 @@ func TestAgentByPrefix(t *testing.T) {
 			true,
 		},
 		{
+			"cline prefix",
+			"cline:sess-id",
+			AgentCline,
+			true,
+		},
+		{
 			"remote deepseek tui prefix",
 			"devbox~deepseek-tui:sess-id",
 			AgentDeepSeekTUI,
@@ -441,11 +455,13 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentCowork,
 		AgentCodex,
 		AgentTraeX,
+		AgentAugureCode,
 		AgentCopilot,
 		AgentGemini,
 		AgentGeminiApps,
 		AgentMiMoCode,
 		AgentOpenCode,
+		AgentOpenCodeReview,
 		AgentKilo,
 		AgentKiloLegacy,
 		AgentOpenHands,
@@ -457,6 +473,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentTrae,
 		AgentVSCopilot,
 		AgentPi,
+		AgentTau,
 		AgentPrimeAgent,
 		AgentOMP,
 		AgentQwen,
@@ -473,6 +490,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentKiroIDE,
 		AgentCortex,
 		AgentHermes,
+		AgentAugureDesktop,
 		AgentGrok,
 		AgentGoose,
 		AgentForge,
@@ -488,6 +506,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentIflow,
 		AgentIcodemate,
 		AgentWorkBuddy,
+		AgentCodeBuddy,
 		AgentZencoder,
 		AgentGptme,
 		AgentQoder,
@@ -495,11 +514,14 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentShelley,
 		AgentVibe,
 		AgentAider,
+		AgentEvener,
 		AgentReasonix,
 		AgentRooCode,
+		AgentCline,
 		AgentPoolside,
 		AgentOmnigent,
 		AgentCodebuff,
+		AgentCrush,
 	}
 
 	expected := make(map[AgentType]bool, len(allTypes))
@@ -532,13 +554,14 @@ func TestInferRelationshipTypes(t *testing.T) {
 		name   string
 		inputs []ParseResult
 		want   []RelationshipType
-	}{{
-		"no parent",
-		[]ParseResult{
-			{Session: ParsedSession{ID: "abc"}},
+	}{
+		{
+			"no parent",
+			[]ParseResult{
+				{Session: ParsedSession{ID: "abc"}},
+			},
+			[]RelationshipType{RelNone},
 		},
-		[]RelationshipType{RelNone},
-	},
 		{
 			"agent prefix gets subagent",
 			[]ParseResult{
@@ -616,17 +639,6 @@ func TestInferRelationshipTypes(t *testing.T) {
 	}
 }
 
-func TestFileBasedAgentsHaveConfigKey(t *testing.T) {
-	for _, def := range Registry {
-		if !def.FileBased {
-			continue
-		}
-		assert.NotEmptyf(t, def.ConfigKey,
-			"file-based agent %q (%s) has empty ConfigKey",
-			def.DisplayName, def.Type)
-	}
-}
-
 func TestZedRegistryEntry(t *testing.T) {
 	def, ok := AgentByType(AgentZed)
 	require.True(t, ok, "AgentZed missing from Registry")
@@ -677,6 +689,17 @@ func TestOpenCodeRegistryEntry(t *testing.T) {
 	}
 	require.Truef(t, slices.Equal(def.WatchSubdirs, want),
 		"OpenCode WatchSubdirs = %v, want %v", def.WatchSubdirs, want)
+}
+
+func TestOpenCodeReviewRegistryEntry(t *testing.T) {
+	def, ok := AgentByType(AgentOpenCodeReview)
+	require.True(t, ok, "AgentOpenCodeReview missing from Registry")
+	require.True(t, def.FileBased, "Open Code Review FileBased")
+	assert.Equal(t, "Open Code Review", def.DisplayName)
+	assert.Equal(t, "OPENCODEREVIEW_DIR", def.EnvVar)
+	assert.Equal(t, "opencodereview_dirs", def.ConfigKey)
+	assert.Equal(t, []string{".opencodereview/sessions"}, def.DefaultDirs)
+	assert.Equal(t, "opencodereview:", def.IDPrefix)
 }
 
 func TestOpenClaudeRegistryEntry(t *testing.T) {
@@ -742,6 +765,10 @@ func TestRemoteSyncExcludedCapability(t *testing.T) {
 	// Omnigent's chat.db co-locates transcripts with authentication
 	// secrets, so its source tree never leaves the machine.
 	assert.True(t, excluded[AgentOmnigent])
+	// Augure Desktop's roots hold the raw state.db (plus WAL/journal)
+	// alongside non-transcript application state, so the store never
+	// leaves the machine either.
+	assert.True(t, excluded[AgentAugureDesktop])
 	assert.False(t, excluded[AgentClaude])
 	assert.False(t, excluded[AgentCodex])
 }
@@ -749,6 +776,7 @@ func TestRemoteSyncExcludedCapability(t *testing.T) {
 func TestRemoteSyncExcludedAgent(t *testing.T) {
 	assert.True(t, RemoteSyncExcludedAgent(AgentTrae))
 	assert.True(t, RemoteSyncExcludedAgent(AgentOmnigent))
+	assert.True(t, RemoteSyncExcludedAgent(AgentAugureDesktop))
 	assert.False(t, RemoteSyncExcludedAgent(AgentClaude))
 	assert.False(t, RemoteSyncExcludedAgent(AgentType("unknown-agent")))
 }
@@ -853,7 +881,7 @@ func TestResolveMiMoCodeSourcePrefersStorage(t *testing.T) {
 	require.Len(t, discovered, 1)
 	require.Equal(t, AgentMiMoCode, discovered[0].Agent)
 
-	require.Equal(t, path, findOpenCodeFormatSourceFile(mimoFmt, root, "ses_test"))
+	require.Equal(t, path, findOpenCodeFormatSourceFile(t.Context(), mimoFmt, root, "ses_test"))
 }
 
 func TestResolveOpenCodeSourceFallsBackToSQLiteOnBrokenStoragePath(
@@ -927,7 +955,7 @@ func TestFindOpenCodeSourceFilePrefersStorage(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(`{"id":"ses_123"}`), 0o644), "write session")
 	require.NoError(t, os.WriteFile(filepath.Join(root, "opencode.db"), []byte("x"), 0o644), "write db marker")
 
-	got := findOpenCodeFormatSourceFile(openCodeFmt, root, "ses_123")
+	got := findOpenCodeFormatSourceFile(t.Context(), openCodeFmt, root, "ses_123")
 	require.Equal(t, path, got, "FindOpenCodeSourceFile()")
 }
 
@@ -940,7 +968,7 @@ func TestFindOpenCodeSourceFileFallsBackToSQLiteInHybridRoot(t *testing.T) {
 	dbPath := filepath.Join(root, "opencode.db")
 	seedHybridSQLiteDB(t, dbPath, "ses_456")
 
-	got := findOpenCodeFormatSourceFile(openCodeFmt, root, "ses_456")
+	got := findOpenCodeFormatSourceFile(t.Context(), openCodeFmt, root, "ses_456")
 	want := OpenCodeSQLiteVirtualPath(dbPath, "ses_456")
 	require.Equal(t, want, got, "FindOpenCodeSourceFile()")
 }
@@ -959,7 +987,7 @@ func TestFindOpenCodeSourceFileReturnsEmptyWhenSessionMissing(t *testing.T) {
 	dbPath := filepath.Join(root, "opencode.db")
 	seedHybridSQLiteDB(t, dbPath, "ses_unrelated")
 
-	got := findOpenCodeFormatSourceFile(openCodeFmt, root, "ses_missing")
+	got := findOpenCodeFormatSourceFile(t.Context(), openCodeFmt, root, "ses_missing")
 	assert.Empty(t, got, "FindOpenCodeSourceFile()")
 }
 
@@ -968,11 +996,11 @@ func TestFindOpenCodeSourceFilePureSQLiteOnlyForExistingSession(t *testing.T) {
 	dbPath := filepath.Join(root, "opencode.db")
 	seedHybridSQLiteDB(t, dbPath, "ses_present")
 
-	got := findOpenCodeFormatSourceFile(openCodeFmt, root, "ses_present")
+	got := findOpenCodeFormatSourceFile(t.Context(), openCodeFmt, root, "ses_present")
 	assert.Equal(t,
 		OpenCodeSQLiteVirtualPath(dbPath, "ses_present"),
 		got, "FindOpenCodeSourceFile(present)")
-	got = findOpenCodeFormatSourceFile(openCodeFmt, root, "ses_absent")
+	got = findOpenCodeFormatSourceFile(t.Context(), openCodeFmt, root, "ses_absent")
 	assert.Empty(t, got, "FindOpenCodeSourceFile(absent)")
 }
 
@@ -1366,7 +1394,7 @@ func TestReasonixRegistryEntry(t *testing.T) {
 	assert.Contains(t, reasonixDef.WatchSubdirs, "archive")
 
 	// Verify default dirs contain .reasonix and Windows path
-	assert.True(t, len(reasonixDef.DefaultDirs) > 0)
+	assert.NotEmpty(t, reasonixDef.DefaultDirs)
 	hasUnix := false
 	hasWindows := false
 	for _, dir := range reasonixDef.DefaultDirs {

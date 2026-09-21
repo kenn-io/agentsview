@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // TestPushThinkingText_SanitizesNullAndInvalidUTF8 verifies that
@@ -27,7 +28,7 @@ func TestPushThinkingText_SanitizesNullAndInvalidUTF8(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"thinking-test-machine", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()
@@ -46,13 +47,13 @@ func TestPushThinkingText_SanitizesNullAndInvalidUTF8(t *testing.T) {
 		StartedAt:    &started,
 		MessageCount: 1,
 	}
-	require.NoError(t, local.UpsertSession(sess), "upsert")
+	require.NoError(t, local.UpsertSession(t.Context(), sess), "upsert")
 
 	// Message whose thinking_text contains a NUL byte and a
 	// truncated multi-byte UTF-8 sequence. Before the fix the
 	// insert would fail with "invalid byte sequence".
 	thinking := "plan\x00step\xe2"
-	require.NoError(t, local.InsertMessages([]db.Message{{
+	require.NoError(t, local.InsertMessages(t.Context(), []db.Message{{
 		SessionID:    "think-1",
 		Ordinal:      0,
 		Role:         "assistant",

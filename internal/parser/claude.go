@@ -21,6 +21,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/tidwall/gjson"
+	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 var (
@@ -125,6 +126,7 @@ func claudeParseFile(
 		cwd              string
 		gitBranch        string
 		displayName      string
+		renameSeen       bool
 		compatibleName   string
 		compatibleAI     string
 		compatibleCustom string
@@ -186,24 +188,27 @@ func claudeParseFile(
 		}
 
 		entryType := gjson.GetBytes(lineBytes, "type").Str
-		if opts.compatibleTitleEvents {
-			if compatibleName == "" {
+		if opts.compatibleTitleEvents || opts.aiTitleFallback {
+			if opts.compatibleTitleEvents && compatibleName == "" {
 				compatibleName = strings.Clone(strings.TrimSpace(
 					gjson.GetBytes(lineBytes, "sessionName").Str,
 				))
 			}
+			if entryType == "ai-title" {
+				if value := strings.TrimSpace(
+					gjson.GetBytes(lineBytes, "aiTitle").Str,
+				); value != "" {
+					compatibleAI = strings.Clone(value)
+				}
+			}
+		}
+		if opts.compatibleTitleEvents {
 			switch entryType {
 			case "custom-title":
 				if value := strings.TrimSpace(
 					gjson.GetBytes(lineBytes, "customTitle").Str,
 				); value != "" {
 					compatibleCustom = strings.Clone(value)
-				}
-			case "ai-title":
-				if value := strings.TrimSpace(
-					gjson.GetBytes(lineBytes, "aiTitle").Str,
-				); value != "" {
-					compatibleAI = strings.Clone(value)
 				}
 			}
 		}
@@ -296,6 +301,7 @@ func claudeParseFile(
 				gjson.GetBytes(lineBytes, "content").Str,
 			); ok {
 				displayName = strings.Clone(name)
+				renameSeen = true
 			}
 			continue
 		}
@@ -420,6 +426,8 @@ func claudeParseFile(
 		displayName = firstNonEmptyJSONLString(
 			compatibleCustom, compatibleAI, compatibleName, displayName,
 		)
+	} else if opts.aiTitleFallback && !renameSeen {
+		displayName = compatibleAI
 	}
 
 	meta := claudeSessionMeta{
@@ -545,13 +553,22 @@ type claudeCompactField struct {
 
 func compactClaudeEntry(line []byte) string {
 	topFields := []claudeCompactField{
-		{name: "uuid"}, {name: "parentUuid"}, {name: "timestamp"},
-		{name: "isCompactSummary"}, {name: "isSidechain"},
-		{name: "isMeta"}, {name: "requestId"}, {name: "promptSource"},
+		{name: "uuid"},
+		{name: "parentUuid"},
+		{name: "timestamp"},
+		{name: "isCompactSummary"},
+		{name: "isSidechain"},
+		{name: "isMeta"},
+		{name: "requestId"},
+		{name: "promptSource"},
+		{name: "effort"},
 	}
 	messageFields := []claudeCompactField{
-		{name: "content"}, {name: "id"}, {name: "stop_reason"},
-		{name: "model"}, {name: "usage"},
+		{name: "content"},
+		{name: "id"},
+		{name: "stop_reason"},
+		{name: "model"},
+		{name: "usage"},
 	}
 	snapshotFields := []claudeCompactField{
 		{name: "timestamp"},
@@ -560,7 +577,8 @@ func compactClaudeEntry(line []byte) string {
 	// WebSearch tool result performed; it is the only surviving record
 	// of them in a Claude Code transcript.
 	toolResultFields := []claudeCompactField{
-		{name: "agentId"}, {name: "persistedOutputPath"},
+		{name: "agentId"},
+		{name: "persistedOutputPath"},
 		{name: "searchCount"},
 	}
 
@@ -714,17 +732,12 @@ func lastAssistantStopReason(messages []ParsedMessage) string {
 // provider-owned incremental body; it carries no legacy entrypoint
 // naming so the provider can call it without shimming a Parse* free
 // function.
-var ErrDAGDetected = fmt.Errorf(
-	"incremental parse: DAG uuid detected",
-)
+var ErrDAGDetected = errors.New("incremental parse: DAG uuid detected")
 
 // ErrClaudeIncrementalNeedsFullParse signals that appended Claude
 // lines contain content the incremental path cannot stitch into
-// already-stored rows (renames, late identity fields, and subagent-map
-// repairs for tool calls outside the append).
-var ErrClaudeIncrementalNeedsFullParse = fmt.Errorf(
-	"incremental parse: appended Claude lines require full parse",
-)
+// already-stored rows (renames and late identity fields).
+var ErrClaudeIncrementalNeedsFullParse = errors.New("incremental parse: appended Claude lines require full parse")
 
 type ClaudeSubagentLink struct {
 	ToolUseID         string
@@ -768,6 +781,13 @@ type claudeIncrementalScan struct {
 	// continuation, so such appends stay incremental. nil keeps the
 	// conservative fallback.
 	storedTailClaudeMessageID *string
+	// storedSessionName is the session_name already persisted for this
+	// session ("" when the row carries none), or nil when the call site
+	// cannot supply it. An appended ai-title can only change the stored
+	// session while that name is still empty, so a session that already
+	// carries its title keeps repeated title records on the incremental
+	// path. nil keeps the append incremental.
+	storedSessionName *string
 }
 
 func claudeParseSessionFrom(
@@ -788,6 +808,7 @@ func claudeParseSessionFrom(
 		// messages are found.
 		latestTS               time.Time
 		sawRename              bool
+		sawAITitle             bool
 		sawSessionIdentityEdit bool
 	)
 
@@ -802,6 +823,10 @@ func claudeParseSessionFrom(
 			entryType := gjson.Get(line, "type").Str
 			if claudeSessionIdentityUpdate(line, stored) {
 				sawSessionIdentityEdit = true
+			}
+			if entryType == "ai-title" &&
+				strings.TrimSpace(gjson.Get(line, "aiTitle").Str) != "" {
+				sawAITitle = true
 			}
 			if entryType == "system" {
 				if _, ok := extractRenameName(
@@ -893,22 +918,33 @@ func claudeParseSessionFrom(
 	if sawRename {
 		return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
 	}
+	// An appended ai-title is not an entry either, so the same
+	// empty-entries early return would consume it and silently drop the
+	// generated title. Escalate only while the title could still fill an
+	// empty stored session_name: the producer repeats the record (mean
+	// 15.96 per transcript, maximum 454 for one distinct value), so a
+	// session that already carries its title must not force a replacing
+	// full parse on every later window.
+	if sawAITitle && scan.storedSessionName != nil &&
+		*scan.storedSessionName == "" {
+		return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
+	}
 	if sawSessionIdentityEdit {
 		return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
 	}
 
 	// Queue/progress events can repair subagent linkage on an already-stored
-	// tool call. If the mapped tool_use_id is not introduced in this append,
-	// incremental parsing would advance file_size without updating that row.
-	if needsClaudeFullParseForSubagentMap(entries, subagentMap) {
-		return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
-	}
+	// tool call. Carry those mappings through the existing atomic incremental
+	// link writer instead of re-parsing the whole transcript. Map-derived
+	// links come first so the database's first-non-empty-wins rule preserves
+	// the same precedence as the full parser.
+	links := claudeSubagentMapLinks(subagentMap)
 	if needsClaudeFullParseForWebSearchCounts(entries) {
 		return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
 	}
 
 	if len(entries) == 0 && len(queuedCommands) == 0 {
-		return nil, nil, latestTS, consumed, nil
+		return nil, links, latestTS, consumed, nil
 	}
 
 	// Fork detection only matters when the full parser would actually
@@ -943,7 +979,7 @@ func claudeParseSessionFrom(
 		return nil, nil, time.Time{}, 0, ErrDAGDetected
 	}
 
-	links := collectClaudeSubagentLinks(entries)
+	links = append(links, collectClaudeSubagentLinks(entries)...)
 	links = append(
 		links, collectClaudeUnmatchedToolResults(entries, links)...,
 	)
@@ -1005,9 +1041,12 @@ func claudeSessionIdentityUpdate(line string, stored claudeStoredIdentity) bool 
 // collectClaudeUnmatchedToolResults returns result links for appended
 // tool_result blocks whose tool_use lives outside the appended window.
 // In-append results pair at write time and agentId-linked results are
-// already carried by collectClaudeSubagentLinks. isMeta carriers are
-// skipped: the full parser drops those lines entirely, so their result
-// content never reaches the stored tool call there either. Results
+// already carried by collectClaudeSubagentLinks. Only result-bearing
+// links suppress a late result: a queue/progress mapping for the same
+// tool_use carries no content, so its result still has to be copied
+// here. isMeta carriers are skipped: the full parser drops those lines
+// entirely, so their result content never reaches the stored tool call
+// there either. Results
 // whose tool_use id is unknown to the store no-op at apply time,
 // matching the full parser's unpaired-result behavior.
 func collectClaudeUnmatchedToolResults(
@@ -1015,7 +1054,9 @@ func collectClaudeUnmatchedToolResults(
 ) []ClaudeSubagentLink {
 	linked := make(map[string]struct{}, len(agentLinks))
 	for _, l := range agentLinks {
-		linked[l.ToolUseID] = struct{}{}
+		if l.HasResult {
+			linked[l.ToolUseID] = struct{}{}
+		}
 	}
 	appendedToolUse := make(map[string]struct{})
 	var out []ClaudeSubagentLink
@@ -1089,20 +1130,23 @@ func collectClaudeSubagentLinks(entries []dagEntry) []ClaudeSubagentLink {
 	return links
 }
 
-func needsClaudeFullParseForSubagentMap(
-	entries []dagEntry, subagentMap map[string]string,
-) bool {
-	if len(subagentMap) == 0 {
-		return false
-	}
-
-	appendedToolUseIDs := claudeAppendedToolUseIDs(entries)
+func claudeSubagentMapLinks(
+	subagentMap map[string]string,
+) []ClaudeSubagentLink {
+	toolUseIDs := make([]string, 0, len(subagentMap))
 	for toolUseID := range subagentMap {
-		if _, ok := appendedToolUseIDs[toolUseID]; !ok {
-			return true
-		}
+		toolUseIDs = append(toolUseIDs, toolUseID)
 	}
-	return false
+	slices.Sort(toolUseIDs)
+
+	links := make([]ClaudeSubagentLink, 0, len(toolUseIDs))
+	for _, toolUseID := range toolUseIDs {
+		links = append(links, ClaudeSubagentLink{
+			ToolUseID:         toolUseID,
+			SubagentSessionID: subagentMap[toolUseID],
+		})
+	}
+	return links
 }
 
 func claudeAppendedToolUseIDs(entries []dagEntry) map[string]struct{} {
@@ -1237,8 +1281,7 @@ func extractMessagesFrom(
 		}
 
 		content := gjson.Get(e.line, "message.content")
-		text, thinkingText, hasThinking, hasToolUse, tcs, trs :=
-			ExtractTextContent(content)
+		text, thinkingText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(context.Background(), content)
 
 		// Convert command/skill invocation XML into readable
 		// text (e.g. "/roborev-fix 450"). If the content
@@ -1286,8 +1329,7 @@ func extractMessagesFrom(
 			// Split it into a hidden system-metadata message plus the
 			// real prompt, so first_message and the visible transcript
 			// show only the prompt.
-			if subtype, envelope, remainder, ok :=
-				splitClaudeIDEEnvelopePrompt(text); ok {
+			if subtype, envelope, remainder, ok := splitClaudeIDEEnvelopePrompt(text); ok {
 				hidden := claudeIDEEnvelopeMessage(e, ordinal, subtype, envelope)
 				if remainder == "" || isClaudeSystemMessage(remainder) {
 					// The remainder is discarded, so no visible
@@ -2249,16 +2291,16 @@ func resolveClaudePersistedToolResultsContext(
 
 	var top map[string]jsontext.Value
 	if err := json.Unmarshal([]byte(line), &top); err != nil || top == nil {
-		return line, nil
+		return line, nil //nolint:nilerr // Optional persisted-output enrichment preserves the original transcript on failure.
 	}
 
 	var msg map[string]jsontext.Value
 	if err := json.Unmarshal(top["message"], &msg); err != nil || msg == nil {
-		return line, nil
+		return line, nil //nolint:nilerr // Optional persisted-output enrichment preserves the original transcript on failure.
 	}
 	var blocks []jsontext.Value
 	if err := json.Unmarshal(msg["content"], &blocks); err != nil {
-		return line, nil
+		return line, nil //nolint:nilerr // Optional persisted-output enrichment preserves the original transcript on failure.
 	}
 
 	persistedPath := ""
@@ -2307,12 +2349,12 @@ func resolveClaudePersistedToolResultsContext(
 		}
 		contentData, err := json.Marshal(output)
 		if err != nil {
-			return line, nil
+			return line, nil //nolint:nilerr // Optional persisted-output enrichment preserves the original transcript on failure.
 		}
 		block["content"] = contentData
 		blocks[i], err = json.Marshal(block, json.Deterministic(true))
 		if err != nil {
-			return line, nil
+			return line, nil //nolint:nilerr // Optional persisted-output enrichment preserves the original transcript on failure.
 		}
 		changed = true
 	}
@@ -2322,17 +2364,17 @@ func resolveClaudePersistedToolResultsContext(
 
 	contentData, err := json.Marshal(blocks)
 	if err != nil {
-		return line, nil
+		return line, nil //nolint:nilerr // Optional persisted-output enrichment preserves the original transcript on failure.
 	}
 	msg["content"] = contentData
 	messageData, err := json.Marshal(msg, json.Deterministic(true))
 	if err != nil {
-		return line, nil
+		return line, nil //nolint:nilerr // Optional persisted-output enrichment preserves the original transcript on failure.
 	}
 	top["message"] = messageData
 	encoded, err := json.Marshal(top, json.Deterministic(true))
 	if err != nil {
-		return line, nil
+		return line, nil //nolint:nilerr // Optional persisted-output enrichment preserves the original transcript on failure.
 	}
 	return string(encoded), nil
 }
@@ -2390,7 +2432,7 @@ func readClaudePersistedToolResultContext(
 		}
 		f, err := os.Open(cleanResult)
 		if err != nil {
-			return "", false, nil
+			return "", false, nil //nolint:nilerr // Optional persisted-output enrichment preserves the original transcript on failure.
 		}
 		b, readErr := io.ReadAll(io.LimitReader(
 			checkedContextReader{ctx: ctx, reader: f}, maxPersistedToolResultSize+1,
@@ -2401,11 +2443,11 @@ func readClaudePersistedToolResultContext(
 			return "", false, readErr
 		}
 		if readErr != nil || closeErr != nil {
-			return "", false, nil
+			return "", false, nil //nolint:nilerr // Optional persisted-output enrichment preserves the original transcript on failure.
 		}
 		if len(b) > maxPersistedToolResultSize {
-			b = b[:maxPersistedToolResultSize]
-			b = append(b, "\n\n[agentsview: persisted tool result truncated at 16 MiB]"...)
+			return stringutil.SafeTruncate(string(b), maxPersistedToolResultSize) +
+				"\n\n[agentsview: persisted tool result truncated at 16 MiB]", true, nil
 		}
 		return string(b), true, nil
 	}
@@ -2460,7 +2502,7 @@ func countUserTurnsContext(
 		visited++
 		current := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
-		if isCountedClaudeUserTurn(entries[current]) {
+		if isCountedClaudeUserTurn(ctx, entries[current]) {
 			count++
 		}
 		stack = append(stack, children[entries[current].uuid]...)
@@ -2468,14 +2510,14 @@ func countUserTurnsContext(
 	return count, ctx.Err()
 }
 
-func isCountedClaudeUserTurn(entry dagEntry) bool {
+func isCountedClaudeUserTurn(ctx context.Context, entry dagEntry) bool {
 	if entry.entryType != "user" ||
 		gjson.Get(entry.line, "isMeta").Bool() ||
 		gjson.Get(entry.line, "isCompactSummary").Bool() {
 		return false
 	}
 	content := gjson.Get(entry.line, "message.content")
-	text, _, _, _, _, _ := ExtractTextContent(content)
+	text, _, _, _, _, _ := ExtractTextContent(ctx, content)
 	text, skip := preprocessClaudeUserText(text)
 	if skip || strings.TrimSpace(text) == "" {
 		return false
@@ -2546,8 +2588,7 @@ func extractMessagesContext(
 		}
 
 		content := gjson.Get(e.line, "message.content")
-		text, thinkingText, hasThinking, hasToolUse, tcs, trs :=
-			ExtractTextContent(content)
+		text, thinkingText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(ctx, content)
 
 		// Convert command/skill invocation XML into readable
 		// text (e.g. "/roborev-fix 450"). If the content
@@ -2595,8 +2636,7 @@ func extractMessagesContext(
 			// Split it into a hidden system-metadata message plus the
 			// real prompt, so first_message and the visible transcript
 			// show only the prompt.
-			if subtype, envelope, remainder, ok :=
-				splitClaudeIDEEnvelopePrompt(text); ok {
+			if subtype, envelope, remainder, ok := splitClaudeIDEEnvelopePrompt(text); ok {
 				hidden := claudeIDEEnvelopeMessage(e, ordinal, subtype, envelope)
 				if remainder == "" || isClaudeSystemMessage(remainder) {
 					// The remainder is discarded, so no visible
@@ -2663,6 +2703,7 @@ func extractMessagesContext(
 // Used by both full and incremental parsing paths.
 func extractClaudeTokenFields(msg *ParsedMessage, line string) {
 	msg.Model = gjson.Get(line, "message.model").String()
+	msg.ReasoningEffort = gjson.Get(line, "effort").Str
 	msg.ClaudeMessageID = gjson.Get(line, "message.id").String()
 	msg.ClaudeRequestID = gjson.Get(line, "requestId").String()
 
@@ -2840,17 +2881,7 @@ func ExtractCwdFromSession(path string) string {
 }
 
 func truncate(s string, maxLen int) string {
-	s = strings.TrimSpace(s)
-	if len(s) <= maxLen {
-		return s
-	}
-	// Truncate at a valid rune boundary to avoid producing
-	// invalid UTF-8.
-	r := []rune(s)
-	if len(r) <= maxLen {
-		return s
-	}
-	return string(r[:maxLen]) + "..."
+	return stringutil.TruncateRunes(strings.TrimSpace(s), maxLen, "...")
 }
 
 // extractRenameName returns the argument of a Claude Code /rename

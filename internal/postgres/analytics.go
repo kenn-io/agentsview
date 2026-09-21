@@ -91,6 +91,33 @@ func analyticsUTCRange(
 	return from, to
 }
 
+func pgAnalyticsMessageWindow(f db.AnalyticsFilter, col string, pb *paramBuilder) string {
+	from, to := analyticsUTCRange(f)
+	var preds []string
+	if f.From != "" {
+		preds = append(preds, col+" >= "+pb.add(from)+"::timestamptz")
+	}
+	if f.To != "" {
+		if t, err := time.Parse(time.RFC3339, to); err == nil {
+			to = t.Add(time.Second).Format(time.RFC3339)
+		}
+		preds = append(preds, col+" < "+pb.add(to)+"::timestamptz")
+	}
+	if len(preds) == 0 {
+		return ""
+	}
+	return "(" + col + " IS NULL OR (" + strings.Join(preds, " AND ") + "))"
+}
+
+func pgAnalyticsToolSessionWindow(f db.AnalyticsFilter, pb *paramBuilder) string {
+	sessionPred := pgAnalyticsMessageWindow(f, pgDateCol, pb)
+	if sessionPred == "" {
+		return ""
+	}
+	messagePred := pgAnalyticsMessageWindow(f, "wm.timestamp", pb)
+	return "(" + sessionPred + " OR EXISTS (SELECT 1 FROM messages wm WHERE wm.session_id = sessions.id AND " + messagePred + "))"
+}
+
 // buildAnalyticsWhere builds a WHERE clause with PG
 // placeholders. dateCol is the date expression.
 func buildAnalyticsWhere(
@@ -1058,12 +1085,12 @@ func (s *Store) GetAnalyticsActivity(
 	}
 
 	query := `SELECT ` + pgDateColS + `, s.agent, s.id,
-		m.role, m.has_thinking, COUNT(*)
+		m.role, m.has_thinking, COALESCE(m.source_subtype, ''), COUNT(*)
 		FROM sessions s
 		LEFT JOIN messages m ON m.session_id = s.id
 		WHERE ` + strings.Join(preds, " AND ") + `
 		GROUP BY s.id, ` + pgDateColS +
-		`, s.agent, m.role, m.has_thinking`
+		`, s.agent, m.role, m.has_thinking, m.source_subtype`
 
 	rows, err := s.pg.QueryContext(
 		ctx, query, pb.args...,
@@ -1084,11 +1111,12 @@ func (s *Store) GetAnalyticsActivity(
 		var tsVal *time.Time
 		var agent, sid string
 		var role *string
+		var sourceSubtype string
 		var hasThinking *bool
 		var count int
 		if err := rows.Scan(
 			&tsVal, &agent, &sid, &role,
-			&hasThinking, &count,
+			&hasThinking, &sourceSubtype, &count,
 		); err != nil {
 			return db.ActivityResponse{},
 				fmt.Errorf(
@@ -1125,7 +1153,9 @@ func (s *Store) GetAnalyticsActivity(
 			entry.ByAgent[agent] += count
 			switch *role {
 			case "user":
-				entry.UserMessages += count
+				if sourceSubtype != "tool_result" {
+					entry.UserMessages += count
+				}
 			case "assistant":
 				entry.AssistantMessages += count
 			}
@@ -2034,6 +2064,7 @@ func (s *Store) queryAutonomyChunk(
 	ph := pgInPlaceholders(chunk, pb)
 	q := `SELECT session_id,
 		SUM(CASE WHEN role='user' AND is_system=false
+			AND COALESCE(source_subtype, '') <> 'tool_result'
 			THEN 1 ELSE 0 END),
 		SUM(CASE WHEN role='assistant'
 			AND has_tool_use=true THEN 1 ELSE 0 END)
@@ -2074,6 +2105,9 @@ func (s *Store) GetAnalyticsTools(
 ) (db.ToolsAnalyticsResponse, error) {
 	pb := &paramBuilder{}
 	where := buildAnalyticsWhereWithoutDate(f, pb)
+	if pred := pgAnalyticsToolSessionWindow(f, pb); pred != "" {
+		where += " AND " + pred
+	}
 
 	sessQ := `SELECT id, ` + pgDateCol + `, agent
 		FROM sessions WHERE ` + where
@@ -2140,7 +2174,10 @@ func (s *Store) GetAnalyticsTools(
 			preds = appendPGAnalyticsCSVFilter(
 				preds, "m.model", f.Model, chunkPB,
 			)
-			msgTSExpr := `COALESCE(TO_CHAR(m.timestamp AT TIME ZONE 'UTC', ` +
+			if pred := pgAnalyticsMessageWindow(f, "m.timestamp", chunkPB); pred != "" {
+				preds = append(preds, pred)
+			}
+			msgTSExpr := `COALESCE(TO_CHAR(MAX(m.timestamp) AT TIME ZONE 'UTC', ` +
 				`'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '')`
 			q := `SELECT tc.session_id, tc.category,
 				TRIM(COALESCE(tc.tool_name, '')), COUNT(*),
@@ -2152,7 +2189,7 @@ func (s *Store) GetAnalyticsTools(
 			q += `
 				WHERE ` + strings.Join(preds, " AND ") + `
 				GROUP BY tc.session_id, tc.category,
-					TRIM(COALESCE(tc.tool_name, '')), ` + msgTSExpr
+					TRIM(COALESCE(tc.tool_name, '')), date_trunc('minute', m.timestamp)`
 			rows, qErr := s.pg.QueryContext(
 				ctx, q, chunkPB.args...,
 			)
@@ -2210,6 +2247,9 @@ func (s *Store) GetAnalyticsSkills(
 ) (db.SkillsAnalyticsResponse, error) {
 	pb := &paramBuilder{}
 	where := buildAnalyticsWhereWithoutDate(f, pb)
+	if pred := pgAnalyticsToolSessionWindow(f, pb); pred != "" {
+		where += " AND " + pred
+	}
 
 	sessQ := `SELECT id, ` + pgDateCol + `, agent, project
 		FROM sessions WHERE ` + where
@@ -2267,10 +2307,13 @@ func (s *Store) GetAnalyticsSkills(
 			preds = appendPGAnalyticsCSVFilter(
 				preds, "m.model", f.Model, chunkPB,
 			)
+			if pred := pgAnalyticsMessageWindow(f, "m.timestamp", chunkPB); pred != "" {
+				preds = append(preds, pred)
+			}
 			q := `SELECT tc.session_id,
 					TRIM(COALESCE(tc.skill_name, '')),
 					COUNT(*),
-					m.timestamp
+					MAX(m.timestamp)
 				FROM tool_calls tc
 				LEFT JOIN messages m
 					ON m.session_id = tc.session_id
@@ -2278,7 +2321,7 @@ func (s *Store) GetAnalyticsSkills(
 				WHERE ` + strings.Join(preds, " AND ") + `
 				GROUP BY tc.session_id,
 					TRIM(COALESCE(tc.skill_name, '')),
-					m.timestamp`
+					date_trunc('minute', m.timestamp)`
 			rows, qErr := s.pg.QueryContext(
 				ctx, q, chunkPB.args...,
 			)
@@ -3223,13 +3266,14 @@ func (s *Store) signalMessages(
 		for sessionID, scopedRows := range rowsBySession {
 			for _, row := range scopedRows {
 				out[sessionID] = append(out[sessionID], db.SignalMessage{
-					SessionID:  row.SessionID,
-					Ordinal:    row.Ordinal,
-					Role:       row.Role,
-					Content:    row.Content,
-					Timestamp:  row.Timestamp,
-					IsSystem:   row.IsSystem,
-					HasToolUse: row.HasToolUse,
+					SessionID:     row.SessionID,
+					Ordinal:       row.Ordinal,
+					Role:          row.Role,
+					SourceSubtype: row.SourceSubtype,
+					Content:       row.Content,
+					Timestamp:     row.Timestamp,
+					IsSystem:      row.IsSystem,
+					HasToolUse:    row.HasToolUse,
 				})
 			}
 		}
@@ -3245,7 +3289,7 @@ func (s *Store) signalMessages(
 		q := `SELECT session_id, ordinal, role, content,
 					COALESCE(to_char(timestamp AT TIME ZONE 'UTC',
 						'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'), ''),
-					is_system, has_tool_use
+					is_system, has_tool_use, COALESCE(source_subtype, '')
 				FROM messages
 				WHERE session_id IN (` + strings.Join(placeholders, ",") + `)`
 		if len(filterModels) == 1 {
@@ -3274,7 +3318,7 @@ func (s *Store) signalMessages(
 			if err := msgRows.Scan(
 				&m.SessionID, &m.Ordinal, &m.Role,
 				&m.Content, &m.Timestamp,
-				&m.IsSystem, &m.HasToolUse,
+				&m.IsSystem, &m.HasToolUse, &m.SourceSubtype,
 			); err != nil {
 				return fmt.Errorf(
 					"scanning signal message: %w", err,
@@ -3314,6 +3358,7 @@ func (s *Store) populateFrustrationMarkers(
 		q := `SELECT session_id, ordinal, content, is_system
 			FROM messages
 			WHERE role = 'user'
+			  AND COALESCE(source_subtype, '') <> 'tool_result'
 			  AND session_id IN (` + strings.Join(placeholders, ",") + `)`
 		msgRows, err := s.pg.QueryContext(ctx, q, pb.args...)
 		if err != nil {

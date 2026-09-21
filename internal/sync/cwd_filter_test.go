@@ -86,14 +86,14 @@ func exclusionGateJob(cwd string) syncJob {
 // replacement write is vetoed, so the delete would erase a session
 // the filter promises to preserve.
 func TestCollectAndBatchGatesParserExclusionsByCwdFilter(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	t.Run("filtered source keeps archived row", func(t *testing.T) {
 		database := openTestDB(t)
-		require.NoError(t, database.UpsertSession(db.Session{
+		require.NoError(t, database.UpsertSession(ctx, db.Session{
 			ID: "stale", Project: "proj", Machine: "local", Agent: "claude",
 		}))
-		e := NewEngine(database, EngineConfig{
+		e := NewEngine(ctx, database, EngineConfig{
 			Machine:            "local",
 			IncludeCwdPrefixes: []string{"/allowed"},
 		})
@@ -121,10 +121,10 @@ func TestCollectAndBatchGatesParserExclusionsByCwdFilter(t *testing.T) {
 
 	t.Run("allowed source deletes superseded row", func(t *testing.T) {
 		database := openTestDB(t)
-		require.NoError(t, database.UpsertSession(db.Session{
+		require.NoError(t, database.UpsertSession(ctx, db.Session{
 			ID: "stale", Project: "proj", Machine: "local", Agent: "claude",
 		}))
-		e := NewEngine(database, EngineConfig{
+		e := NewEngine(ctx, database, EngineConfig{
 			Machine:            "local",
 			IncludeCwdPrefixes: []string{"/allowed"},
 		})
@@ -151,7 +151,7 @@ func TestCollectAndBatchGatesParserExclusionsByCwdFilter(t *testing.T) {
 
 func TestCollectAndBatchKeepsAllowedSourceSiblingCurrent(t *testing.T) {
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		Machine:            "local",
 		IncludeCwdPrefixes: []string{"/allowed"},
 	})
@@ -175,17 +175,17 @@ func TestCollectAndBatchKeepsAllowedSourceSiblingCurrent(t *testing.T) {
 	close(results)
 
 	stats := engine.collectAndBatch(
-		context.Background(), results, 1, 1, nil, syncWriteDefault,
+		t.Context(), results, 1, 1, nil, syncWriteDefault,
 	)
 
 	assert.Equal(t, 1, stats.Synced)
 	assert.Equal(t, 1, stats.cwdFilteredSessions)
-	allowed, err := database.GetSession(context.Background(), "cowork:allowed")
+	allowed, err := database.GetSession(t.Context(), "cowork:allowed")
 	require.NoError(t, err)
 	require.NotNil(t, allowed)
 	assert.Equal(t, db.CurrentDataVersion(), allowed.DataVersion,
 		"a sibling's cwd veto must not leave the allowed session stale")
-	filtered, err := database.GetSession(context.Background(), "cowork:filtered")
+	filtered, err := database.GetSession(t.Context(), "cowork:filtered")
 	require.NoError(t, err)
 	assert.Nil(t, filtered)
 }
@@ -193,14 +193,14 @@ func TestCollectAndBatchKeepsAllowedSourceSiblingCurrent(t *testing.T) {
 func TestCollectAndBatchBaselinesAllowedMissingMemberForMixedCwdSource(
 	t *testing.T,
 ) {
-	ctx := context.Background()
+	ctx := t.Context()
 	database := openTestDB(t)
 	path := "/src/mixed.jsonl"
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(ctx, db.Session{
 		ID: "stale-allowed", Project: "proj", Machine: "local", Agent: "claude",
 		Cwd: "/allowed/stale", FilePath: &path,
 	}))
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(ctx, database, EngineConfig{
 		Machine:            "local",
 		IncludeCwdPrefixes: []string{"/allowed"},
 	})
@@ -238,7 +238,7 @@ func TestCollectAndBatchBaselinesAllowedMissingMemberForMixedCwdSource(
 	first := syncSource()
 	require.Zero(t, first.Failed)
 	var baselineCount int
-	require.NoError(t, database.Reader().QueryRow(`
+	require.NoError(t, database.Reader().QueryRow(t.Context(), `
 		SELECT count(*) FROM local_session_source_baselines
 		WHERE session_id = 'stale-allowed'`,
 	).Scan(&baselineCount))
@@ -264,19 +264,19 @@ func TestCollectAndBatchCancellationRevokesRejectedMissingMemberBaseline(
 		allowedID:  "/workspace/work/project",
 		rejectedID: "/workspace/personal/project",
 	} {
-		require.NoError(t, database.UpsertSession(db.Session{
+		require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 			ID: id, Project: "project", Machine: "local", Agent: "claude",
 			Cwd: cwd, ParentSessionID: &parentID, RelationshipType: "fork",
 			FilePath: &path,
 		}))
-		require.NoError(t, database.SetSessionDataVersion(id, 0))
+		require.NoError(t, database.SetSessionDataVersion(t.Context(), id, 0))
 	}
 	require.NoError(t, database.BaselineActiveSessionSourcePaths(
 		t.Context(), "local",
 		[]db.SessionSourcePath{{Agent: "claude", FilePath: path}},
 	))
 
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		Machine:            "local",
 		IncludeCwdPrefixes: []string{"/workspace/work"},
 	})
@@ -305,7 +305,7 @@ func TestCollectAndBatchCancellationRevokesRejectedMissingMemberBaseline(
 
 	assert.True(t, stats.Aborted)
 	var rejectedBaseline int
-	require.NoError(t, database.Reader().QueryRow(`
+	require.NoError(t, database.Reader().QueryRow(t.Context(), `
 		SELECT count(*) FROM local_session_source_baselines
 		WHERE session_id = ?`, rejectedID,
 	).Scan(&rejectedBaseline))
@@ -329,12 +329,12 @@ func TestCollectAndBatchFailureRevokesOnlyRejectedMissingMemberBaseline(
 		failingID:  "/workspace/work/project",
 		rejectedID: "/workspace/personal/project",
 	} {
-		require.NoError(t, database.UpsertSession(db.Session{
+		require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 			ID: id, Project: "project", Machine: "local", Agent: "claude",
 			Cwd: cwd, ParentSessionID: &parentID, RelationshipType: "fork",
 			FilePath: &path,
 		}))
-		require.NoError(t, database.SetSessionDataVersion(id, 0))
+		require.NoError(t, database.SetSessionDataVersion(t.Context(), id, 0))
 	}
 	require.NoError(t, database.BaselineActiveSessionSourceOwnerships(
 		t.Context(), []db.SessionSourceOwnership{
@@ -342,8 +342,8 @@ func TestCollectAndBatchFailureRevokesOnlyRejectedMissingMemberBaseline(
 			{ID: rejectedID, Machine: "local", Agent: "claude", FilePath: path},
 		},
 	))
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`
+	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `
 			CREATE TRIGGER fail_first_source_missing_mark
 			BEFORE UPDATE OF source_missing_at ON sessions
 			WHEN NEW.id = 'failed-mixed-11111111-2222-4333-8444-555555555555'
@@ -354,7 +354,7 @@ func TestCollectAndBatchFailureRevokesOnlyRejectedMissingMemberBaseline(
 		return err
 	}))
 
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		Machine:            "local",
 		IncludeCwdPrefixes: []string{"/workspace/work"},
 	})
@@ -375,11 +375,11 @@ func TestCollectAndBatchFailureRevokesOnlyRejectedMissingMemberBaseline(
 
 	assert.Equal(t, 1, stats.Failed)
 	var failingBaseline, rejectedBaseline int
-	require.NoError(t, database.Reader().QueryRow(`
+	require.NoError(t, database.Reader().QueryRow(t.Context(), `
 		SELECT count(*) FROM local_session_source_baselines
 		WHERE session_id = ?`, failingID,
 	).Scan(&failingBaseline))
-	require.NoError(t, database.Reader().QueryRow(`
+	require.NoError(t, database.Reader().QueryRow(t.Context(), `
 		SELECT count(*) FROM local_session_source_baselines
 		WHERE session_id = ?`, rejectedID,
 	).Scan(&rejectedBaseline))
@@ -393,14 +393,15 @@ func seedPartialSourceMissingFailure(
 	t *testing.T, database *db.DB, parentID, path string,
 ) (string, string) {
 	t.Helper()
+
 	firstID := "partial-success-a"
 	failingID := "partial-success-b"
 	for _, id := range []string{firstID, failingID} {
-		require.NoError(t, database.UpsertSession(db.Session{
+		require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 			ID: id, Project: "project", Machine: "local", Agent: "claude",
 			ParentSessionID: &parentID, RelationshipType: "fork", FilePath: &path,
 		}))
-		require.NoError(t, database.SetSessionDataVersion(id, 0))
+		require.NoError(t, database.SetSessionDataVersion(t.Context(), id, 0))
 	}
 	require.NoError(t, database.BaselineActiveSessionSourceOwnerships(
 		t.Context(), []db.SessionSourceOwnership{
@@ -408,8 +409,8 @@ func seedPartialSourceMissingFailure(
 			{ID: failingID, Machine: "local", Agent: "claude", FilePath: path},
 		},
 	))
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`
+	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `
 			CREATE TRIGGER fail_second_source_missing_mark
 			BEFORE UPDATE OF source_missing_at ON sessions
 			WHEN NEW.id = 'partial-success-b'
@@ -425,7 +426,7 @@ func seedPartialSourceMissingFailure(
 func TestSyncAllCountsAndEmitsPartialSourceMissingTombstones(t *testing.T) {
 	fx := newEngineFixture(t)
 	emitter := &fakeEmitter{}
-	fx.engineWithEmitter(emitter)
+	fx.engineWithEmitter(t.Context(), emitter)
 	path := fx.writeClaudeSession(t, "project", "partial-batch.jsonl", "first")
 	require.Equal(t, 1, fx.engine.SyncAll(t.Context(), nil).Synced)
 	emitter.mu.Lock()
@@ -454,7 +455,7 @@ func TestSyncAllCountsAndEmitsPartialSourceMissingTombstones(t *testing.T) {
 func TestSyncThenRunEmitsPartialSourceMissingTombstones(t *testing.T) {
 	fx := newEngineFixture(t)
 	emitter := &fakeEmitter{}
-	fx.engineWithEmitter(emitter)
+	fx.engineWithEmitter(t.Context(), emitter)
 	path := fx.writeClaudeSession(t, "project", "partial-coordinated.jsonl", "first")
 	require.Equal(t, 1, fx.engine.SyncAll(t.Context(), nil).Synced)
 	emitter.mu.Lock()
@@ -486,7 +487,7 @@ func TestSyncThenRunEmitsPartialSourceMissingTombstones(t *testing.T) {
 func TestSyncSingleSessionEmitsPartialSourceMissingTombstones(t *testing.T) {
 	fx := newEngineFixture(t)
 	emitter := &fakeEmitter{}
-	fx.engineWithEmitter(emitter)
+	fx.engineWithEmitter(t.Context(), emitter)
 	path := fx.writeClaudeSession(t, "project", "partial-single.jsonl", "first")
 	require.Equal(t, 1, fx.engine.SyncAll(t.Context(), nil).Synced)
 	emitter.mu.Lock()
@@ -520,8 +521,8 @@ func TestSyncSingleSessionRevokesRejectedBaselineOnLaterMemberFailure(
 	rejectedID, failingID := seedPartialSourceMissingFailure(
 		t, fx.db, fx.sessionIDFor(t, path), path,
 	)
-	require.NoError(t, fx.db.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`
+	require.NoError(t, fx.db.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `
 			UPDATE sessions
 			SET cwd = CASE id
 				WHEN ? THEN '/outside/project'
@@ -534,7 +535,7 @@ func TestSyncSingleSessionRevokesRejectedBaselineOnLaterMemberFailure(
 		return err
 	}))
 	fx.engine.Close()
-	fx.engine = NewEngine(fx.db, EngineConfig{
+	fx.engine = NewEngine(t.Context(), fx.db, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {fx.claudeDir},
 		},
@@ -548,14 +549,14 @@ func TestSyncSingleSessionRevokesRejectedBaselineOnLaterMemberFailure(
 
 	require.ErrorContains(t, err, "injected later-member tombstone failure")
 	var rejectedBaseline int
-	require.NoError(t, fx.db.Reader().QueryRow(`
+	require.NoError(t, fx.db.Reader().QueryRow(t.Context(), `
 		SELECT count(*) FROM local_session_source_baselines
 		WHERE session_id = ?`, rejectedID,
 	).Scan(&rejectedBaseline))
 	assert.Zero(t, rejectedBaseline,
 		"a later member failure must not retain deletion proof for a CWD-rejected fork")
 	var primaryBaseline int
-	require.NoError(t, fx.db.Reader().QueryRow(`
+	require.NoError(t, fx.db.Reader().QueryRow(t.Context(), `
 		SELECT count(*) FROM local_session_source_baselines
 		WHERE session_id = ?`, fx.sessionIDFor(t, path),
 	).Scan(&primaryBaseline))
@@ -582,8 +583,8 @@ func TestReconcileWatchRootsRevokesRejectedBaselineOnPageFailure(
 	rejectedID, failingID := seedPartialSourceMissingFailure(
 		t, fx.db, primaryID, path,
 	)
-	require.NoError(t, fx.db.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`
+	require.NoError(t, fx.db.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `
 			UPDATE sessions
 			SET cwd = CASE id
 				WHEN ? THEN '/outside/project'
@@ -595,8 +596,8 @@ func TestReconcileWatchRootsRevokesRejectedBaselineOnPageFailure(
 		)
 		return err
 	}))
-	require.NoError(t, fx.db.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(
+	require.NoError(t, fx.db.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(),
 			"UPDATE sessions SET cwd = '/outside/project' WHERE id = ?",
 			filteredID,
 		)
@@ -608,7 +609,7 @@ func TestReconcileWatchRootsRevokesRejectedBaselineOnPageFailure(
 		}},
 	))
 	fx.engine.Close()
-	fx.engine = NewEngine(fx.db, EngineConfig{
+	fx.engine = NewEngine(t.Context(), fx.db, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {fx.claudeDir},
 		},
@@ -624,21 +625,21 @@ func TestReconcileWatchRootsRevokesRejectedBaselineOnPageFailure(
 
 	require.ErrorContains(t, err, "failed processing page: 1 failures")
 	var rejectedBaseline int
-	require.NoError(t, fx.db.Reader().QueryRow(`
+	require.NoError(t, fx.db.Reader().QueryRow(t.Context(), `
 		SELECT count(*) FROM local_session_source_baselines
 		WHERE session_id = ?`, rejectedID,
 	).Scan(&rejectedBaseline))
 	assert.Zero(t, rejectedBaseline,
 		"a failed page must revoke proof from a CWD-rejected fork")
 	var primaryBaseline int
-	require.NoError(t, fx.db.Reader().QueryRow(`
+	require.NoError(t, fx.db.Reader().QueryRow(t.Context(), `
 		SELECT count(*) FROM local_session_source_baselines
 		WHERE session_id = ?`, primaryID,
 	).Scan(&primaryBaseline))
 	assert.Zero(t, primaryBaseline,
 		"failed-page cleanup must not grant new source proof")
 	var filteredBaseline int
-	require.NoError(t, fx.db.Reader().QueryRow(`
+	require.NoError(t, fx.db.Reader().QueryRow(t.Context(), `
 		SELECT count(*) FROM local_session_source_baselines
 		WHERE session_id = ?`, filteredID,
 	).Scan(&filteredBaseline))
@@ -649,8 +650,8 @@ func TestReconcileWatchRootsRevokesRejectedBaselineOnPageFailure(
 	assert.NotNil(t, rejected,
 		"the CWD-rejected stale fork must remain active")
 
-	require.NoError(t, fx.db.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec("DROP TRIGGER fail_second_source_missing_mark")
+	require.NoError(t, fx.db.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), "DROP TRIGGER fail_second_source_missing_mark")
 		return err
 	}))
 	require.NoError(t, os.Remove(filteredPath))
@@ -670,8 +671,8 @@ func TestReconcileWatchRootsRevokesSourceWideRejectedBaselineOnFinalizationFailu
 	path := fx.writeClaudeSession(t, "project", "finalize-filtered.jsonl", "first")
 	require.Equal(t, 1, fx.engine.SyncAll(t.Context(), nil).Synced)
 	primaryID := fx.sessionIDFor(t, path)
-	require.NoError(t, fx.db.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`
+	require.NoError(t, fx.db.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `
 			UPDATE sessions
 			SET cwd = '/outside/project', machine = 'legacy-machine'
 			WHERE id = ?`,
@@ -680,7 +681,7 @@ func TestReconcileWatchRootsRevokesSourceWideRejectedBaselineOnFinalizationFailu
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(`
+		_, err = tx.ExecContext(t.Context(), `
 			UPDATE local_session_source_baselines
 			SET machine = 'legacy-machine'
 			WHERE session_id = ?`,
@@ -689,7 +690,7 @@ func TestReconcileWatchRootsRevokesSourceWideRejectedBaselineOnFinalizationFailu
 		return err
 	}))
 	fx.engine.Close()
-	fx.engine = NewEngine(fx.db, EngineConfig{
+	fx.engine = NewEngine(t.Context(), fx.db, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {fx.claudeDir},
 		},
@@ -716,7 +717,7 @@ func TestReconcileWatchRootsRevokesSourceWideRejectedBaselineOnFinalizationFailu
 	require.ErrorIs(t, err, lookupErr)
 	assert.NotZero(t, lookupCalls)
 	var primaryBaseline int
-	require.NoError(t, fx.db.Reader().QueryRow(`
+	require.NoError(t, fx.db.Reader().QueryRow(t.Context(), `
 		SELECT count(*) FROM local_session_source_baselines
 		WHERE session_id = ?`, primaryID,
 	).Scan(&primaryBaseline))
@@ -750,19 +751,19 @@ func TestReconcileWatchRootsRevokesRejectedBaselineOnSpoolFailure(
 			require.Equal(t, 1, fx.engine.SyncAll(t.Context(), nil).Synced)
 			primaryID := fx.sessionIDFor(t, path)
 			rejectedID := primaryID + "-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
-			require.NoError(t, fx.db.UpsertSession(db.Session{
+			require.NoError(t, fx.db.UpsertSession(t.Context(), db.Session{
 				ID: rejectedID, Project: "project", Machine: "local", Agent: "claude",
 				Cwd: "/outside/project", ParentSessionID: &primaryID,
 				RelationshipType: "fork", FilePath: &path,
 			}))
-			require.NoError(t, fx.db.SetSessionDataVersion(rejectedID, 0))
+			require.NoError(t, fx.db.SetSessionDataVersion(t.Context(), rejectedID, 0))
 			require.NoError(t, fx.db.BaselineActiveSessionSourceOwnerships(
 				t.Context(), []db.SessionSourceOwnership{{
 					ID: rejectedID, Machine: "local", Agent: "claude", FilePath: path,
 				}},
 			))
 			fx.engine.Close()
-			fx.engine = NewEngine(fx.db, EngineConfig{
+			fx.engine = NewEngine(t.Context(), fx.db, EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{
 					parser.AgentClaude: {fx.claudeDir},
 				},
@@ -772,9 +773,9 @@ func TestReconcileWatchRootsRevokesRejectedBaselineOnSpoolFailure(
 			t.Cleanup(fx.engine.Close)
 			injected := errors.New("injected non-authoritative spool failure")
 			fx.engine.reconciliationSpoolFactory = func(
-				path string,
+				ctx context.Context, path string,
 			) (reconciliationSpoolStore, error) {
-				spool, err := newReconciliationSpool(path)
+				spool, err := newReconciliationSpool(ctx, path)
 				if err != nil {
 					return nil, err
 				}
@@ -792,7 +793,7 @@ func TestReconcileWatchRootsRevokesRejectedBaselineOnSpoolFailure(
 
 			require.ErrorIs(t, err, injected)
 			var rejectedBaseline int
-			require.NoError(t, fx.db.Reader().QueryRow(`
+			require.NoError(t, fx.db.Reader().QueryRow(t.Context(), `
 				SELECT count(*) FROM local_session_source_baselines
 				WHERE session_id = ?`, rejectedID,
 			).Scan(&rejectedBaseline))
@@ -823,15 +824,15 @@ func TestReconcileWatchRootsRevokesSourceWideRejectedBaselineOnSpoolFailure(
 			)
 			require.Equal(t, 1, fx.engine.SyncAll(t.Context(), nil).Synced)
 			sessionID := fx.sessionIDFor(t, path)
-			require.NoError(t, fx.db.Update(func(tx *sql.Tx) error {
-				_, err := tx.Exec(
+			require.NoError(t, fx.db.Update(t.Context(), func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(t.Context(),
 					"UPDATE sessions SET cwd = '/outside/project' WHERE id = ?",
 					sessionID,
 				)
 				return err
 			}))
 			fx.engine.Close()
-			fx.engine = NewEngine(fx.db, EngineConfig{
+			fx.engine = NewEngine(t.Context(), fx.db, EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{
 					parser.AgentClaude: {fx.claudeDir},
 				},
@@ -842,9 +843,9 @@ func TestReconcileWatchRootsRevokesSourceWideRejectedBaselineOnSpoolFailure(
 			defaultFactory := fx.engine.reconciliationSpoolFactory
 			injected := errors.New("injected non-authoritative spool failure")
 			fx.engine.reconciliationSpoolFactory = func(
-				path string,
+				ctx context.Context, path string,
 			) (reconciliationSpoolStore, error) {
-				spool, err := defaultFactory(path)
+				spool, err := defaultFactory(ctx, path)
 				if err != nil {
 					return nil, err
 				}
@@ -860,7 +861,7 @@ func TestReconcileWatchRootsRevokesSourceWideRejectedBaselineOnSpoolFailure(
 			)
 			require.ErrorIs(t, err, injected)
 			var baselineCount int
-			require.NoError(t, fx.db.Reader().QueryRow(`
+			require.NoError(t, fx.db.Reader().QueryRow(t.Context(), `
 				SELECT count(*) FROM local_session_source_baselines
 				WHERE session_id = ?`, sessionID,
 			).Scan(&baselineCount))

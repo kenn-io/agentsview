@@ -67,7 +67,7 @@ func (db *DB) resolveAnalyticsMessageScope(
 		reducer := NewScopeReducer(flt, emit)
 		ph, args := inPlaceholders(chunk)
 		rows, err := db.getReader().QueryContext(ctx, `
-			SELECT session_id, ordinal, role, is_system, COALESCE(model, ''),
+			SELECT session_id, ordinal, role, COALESCE(source_subtype, ''), is_system, COALESCE(model, ''),
 				has_thinking, has_tool_use, COALESCE(timestamp, ''),
 				output_tokens, has_output_tokens, content_length, `+contentExpr+`
 			FROM messages
@@ -82,12 +82,12 @@ func (db *DB) resolveAnalyticsMessageScope(
 
 		for rows.Next() {
 			var (
-				sessionID, role, model, ts, content                string
+				sessionID, role, sourceSubtype, model, ts, content string
 				ordinal, outputTokens, contentLength               int
 				isSystem, hasThinking, hasToolUse, hasOutputTokens bool
 			)
 			if err := rows.Scan(
-				&sessionID, &ordinal, &role, &isSystem, &model,
+				&sessionID, &ordinal, &role, &sourceSubtype, &isSystem, &model,
 				&hasThinking, &hasToolUse, &ts, &outputTokens,
 				&hasOutputTokens, &contentLength, &content,
 			); err != nil {
@@ -98,6 +98,7 @@ func (db *DB) resolveAnalyticsMessageScope(
 				SessionID:       sessionID,
 				Ordinal:         ordinal,
 				Role:            role,
+				SourceSubtype:   sourceSubtype,
 				Model:           model,
 				IsSystem:        isSystem,
 				Timestamp:       ts,

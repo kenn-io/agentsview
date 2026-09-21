@@ -1,6 +1,6 @@
 <script lang="ts">
   import { analytics } from "../../stores/analytics.svelte.js";
-  import type { ProjectAnalytics } from "../../api/types.js";
+  import type { DbProjectAnalytics as ProjectAnalytics } from "../../api/generated/index.js";
   import { m } from "../../i18n/index.js";
 
   const MAX_PROJECTS = 15;
@@ -151,7 +151,7 @@
         class="tooltip"
         style="left: {tooltip.x}px; top: {tooltip.y}px;"
       >
-        {tooltip.text}
+        <span>{tooltip.text}</span>
       </div>
     {/if}
   {:else}

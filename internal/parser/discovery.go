@@ -2,10 +2,10 @@ package parser
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json/v2"
-	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -254,7 +254,7 @@ func discoverOpenCodeFormatSessions(
 	return files
 }
 
-func findOpenCodeFormatSourceFile(
+func findOpenCodeFormatSourceFile(ctx context.Context,
 	f openCodeFormat, root, sessionID string,
 ) string {
 	if !IsValidSessionID(sessionID) {
@@ -280,14 +280,14 @@ func findOpenCodeFormatSourceFile(
 			}
 		}
 		for _, dbPath := range src.DBPaths {
-			if OpenCodeSQLiteSessionExists(dbPath, sessionID) {
+			if OpenCodeSQLiteSessionExists(ctx, dbPath, sessionID) {
 				return OpenCodeSQLiteVirtualPath(dbPath, sessionID)
 			}
 		}
 		return ""
 	case OpenCodeSourceSQLite:
 		for _, dbPath := range src.DBPaths {
-			if OpenCodeSQLiteSessionExists(dbPath, sessionID) {
+			if OpenCodeSQLiteSessionExists(ctx, dbPath, sessionID) {
 				return OpenCodeSQLiteVirtualPath(dbPath, sessionID)
 			}
 		}
@@ -349,6 +349,8 @@ func resolveOpenCodeFormatWatchRoots(
 		return []string{filepath.Join(root, "storage")}
 	case OpenCodeSourceSQLite:
 		return []string{root}
+	case OpenCodeSourceNone:
+		// Watch the logical root before the provider creates its storage.
 	}
 	if info, err := os.Stat(root); err == nil && info.IsDir() {
 		return []string{root}
@@ -492,7 +494,7 @@ func ResolveCodexShallowWatchRoots(root string) []string {
 // expansion. The name carries no legacy entrypoint verb so the
 // provider can call it without shimming a Discover* free function.
 func ClaudeProjectSessionFiles(projectsDir string) []DiscoveredFile {
-	return projectJSONLSessionFiles(projectsDir, AgentClaude, claudeS3Scanner)
+	return projectJSONLSessionFiles(projectsDir, AgentClaude, claudeS3Scanner, nil)
 }
 
 // IcodemateCLIProjectSessionFiles enumerates a terminal CLI projects root in
@@ -501,7 +503,20 @@ func ClaudeProjectSessionFiles(projectsDir string) []DiscoveredFile {
 // the icodemate provider segment (.../raw/icodemate) so machine metadata and
 // source labeling match the owning agent instead of Claude's.
 func IcodemateCLIProjectSessionFiles(projectsDir string) []DiscoveredFile {
-	return projectJSONLSessionFiles(projectsDir, AgentIcodemate, icodemateCLIS3Scanner)
+	return projectJSONLSessionFiles(projectsDir, AgentIcodemate, icodemateCLIS3Scanner, nil)
+}
+
+// ProjectJSONLSessionCandidates finds only the requested Claude-layout filename
+// stems. Root transcripts need one exact probe per project and ID; subagents
+// still require traversal because workflow directories do not encode their ID.
+func ProjectJSONLSessionCandidates(
+	root string, agent AgentType, ids map[string]struct{},
+) []DiscoveredFile {
+	scanner := claudeS3Scanner
+	if agent == AgentIcodemate {
+		scanner = icodemateCLIS3Scanner
+	}
+	return projectJSONLSessionFiles(root, agent, scanner, ids)
 }
 
 // projectJSONLSessionFiles walks one Claude-layout projects root
@@ -514,6 +529,7 @@ func projectJSONLSessionFiles(
 	projectsDir string,
 	agent AgentType,
 	scanner func() S3SessionScanner,
+	wanted map[string]struct{},
 ) []DiscoveredFile {
 	if strings.HasPrefix(projectsDir, "s3://") {
 		return s3PrefixScan(projectsDir, scanner())
@@ -523,6 +539,13 @@ func projectJSONLSessionFiles(
 		return nil
 	}
 
+	nested := wanted == nil
+	for id := range wanted {
+		if strings.HasPrefix(id, "agent-") {
+			nested = true
+			break
+		}
+	}
 	var files []DiscoveredFile
 	for _, entry := range entries {
 		if !isDirOrSymlink(entry, projectsDir) {
@@ -530,6 +553,16 @@ func projectJSONLSessionFiles(
 		}
 
 		projDir := filepath.Join(projectsDir, entry.Name())
+		if wanted != nil && !nested {
+			for id := range wanted {
+				path := filepath.Join(projDir, id+".jsonl")
+				info, err := os.Lstat(path)
+				if err == nil && !info.IsDir() {
+					files = append(files, DiscoveredFile{Path: path, Project: entry.Name(), Agent: agent})
+				}
+			}
+			continue
+		}
 		sessionFiles, err := os.ReadDir(projDir)
 		if err != nil {
 			continue
@@ -544,6 +577,11 @@ func projectJSONLSessionFiles(
 				continue
 			}
 			stem := strings.TrimSuffix(name, ".jsonl")
+			if wanted != nil {
+				if _, ok := wanted[stem]; !ok {
+					continue
+				}
+			}
 			if strings.HasPrefix(stem, "agent-") {
 				continue
 			}
@@ -570,12 +608,17 @@ func projectJSONLSessionFiles(
 				subagentsDir,
 				func(path string, sub os.DirEntry, err error) error {
 					if err != nil || sub.IsDir() {
-						return nil
+						return nil //nolint:nilerr // Unavailable optional subagent paths are skipped during discovery.
 					}
 					name := sub.Name()
 					if !strings.HasPrefix(name, "agent-") ||
 						!strings.HasSuffix(name, ".jsonl") {
 						return nil
+					}
+					if wanted != nil {
+						if _, ok := wanted[strings.TrimSuffix(name, ".jsonl")]; !ok {
+							return nil
+						}
 					}
 					files = append(files, DiscoveredFile{
 						Path:    path,
@@ -626,7 +669,7 @@ func ClaudeSubagentTranscriptPaths(sessionPath string) []string {
 		subagentsDir,
 		func(path string, entry os.DirEntry, err error) error {
 			if err != nil || entry.IsDir() {
-				return nil
+				return nil //nolint:nilerr // Unavailable optional subagent paths are skipped during discovery.
 			}
 			name := entry.Name()
 			if !strings.HasPrefix(name, "agent-") ||
@@ -712,7 +755,7 @@ func claudeFindSourceFile(
 					subagentsDir,
 					func(path string, d os.DirEntry, err error) error {
 						if err != nil || d.IsDir() || d.Name() != target {
-							return nil
+							return nil //nolint:nilerr // Unavailable optional subagent paths are skipped during discovery.
 						}
 						found = path
 						return filepath.SkipAll
@@ -1012,7 +1055,7 @@ func addProjectPaths(
 // matching Gemini CLI's project hash algorithm.
 func geminiPathHash(path string) string {
 	h := sha256.Sum256([]byte(path))
-	return fmt.Sprintf("%x", h)
+	return hex.EncodeToString(h[:])
 }
 
 // isHexHash reports whether s is a 64-character lowercase hex

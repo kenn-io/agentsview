@@ -1,8 +1,7 @@
 name: Desktop Artifacts
 
 # The PR dispatcher always calls the main-pinned workflow. That workflow
-# independently routes same-repository Linux jobs to the managed public fleet
-# and fork jobs to GitHub-hosted runners.
+# runs Linux AMD64 and Windows jobs on Namespace, including fork PRs.
 on:
   pull_request:
     branches: [main]

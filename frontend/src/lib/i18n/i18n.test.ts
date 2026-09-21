@@ -17,6 +17,8 @@ import zhTW from "../../../messages/zh-TW.json";
 import ko from "../../../messages/ko.json";
 import fr from "../../../messages/fr.json";
 import ja from "../../../messages/ja.json";
+import az from "../../../messages/az.json";
+import es from "../../../messages/es.json";
 
 describe("i18n locale selection", () => {
   beforeEach(() => {
@@ -40,6 +42,14 @@ describe("i18n locale selection", () => {
     expect(normalizeLocale("fr-CH")).toBe("fr");
     expect(normalizeLocale("ja")).toBe("ja");
     expect(normalizeLocale("ja-JP")).toBe("ja");
+    expect(normalizeLocale("az")).toBe("az");
+    expect(normalizeLocale("az-AZ")).toBe("az");
+    expect(normalizeLocale("az-Latn-AZ")).toBe("az");
+    expect(normalizeLocale("es")).toBe("es");
+    expect(normalizeLocale("es-ES")).toBe("es");
+    expect(normalizeLocale("es-MX")).toBe("es");
+    expect(normalizeLocale("es-419")).toBe("es");
+    expect(normalizeLocale("ES-AR")).toBe("es");
   });
 
   it("falls back to English for unsupported locales", () => {
@@ -85,7 +95,7 @@ describe("i18n locale selection", () => {
   });
 
   it("keeps the supported locale list explicit", () => {
-    expect(SUPPORTED_LOCALES).toEqual(["en", "zh-CN", "zh-TW", "ko", "fr", "ja"]);
+    expect(SUPPORTED_LOCALES).toEqual(["en", "zh-CN", "zh-TW", "ko", "fr", "ja", "az", "es"]);
   });
 
   it("keeps every translated locale's keys aligned with English", () => {
@@ -94,6 +104,8 @@ describe("i18n locale selection", () => {
     expect(Object.keys(ko).sort()).toEqual(Object.keys(en).sort());
     expect(Object.keys(fr).sort()).toEqual(Object.keys(en).sort());
     expect(Object.keys(ja).sort()).toEqual(Object.keys(en).sort());
+    expect(Object.keys(az).sort()).toEqual(Object.keys(en).sort());
+    expect(Object.keys(es).sort()).toEqual(Object.keys(en).sort());
   });
 
   it("points auth recovery at pre-auth token sources", () => {
@@ -153,6 +165,16 @@ describe("i18n locale selection", () => {
       }),
     ).toBe("12 sessions");
 
+    runtime.setLocale("es", { reload: false });
+    expect(m.nav_sessions()).toBe("Sesiones");
+    expect(
+      m.status_bar_sessions({
+        count: 12,
+        countLabel: "12",
+      }),
+    ).toBe("12 sesiones");
+    expect(m.settings_language_label()).toBe("Idioma de la interfaz");
+
     runtime.setLocale("ja", { reload: false });
     expect(m.nav_sessions()).toBe(ja.nav_sessions);
     expect(
@@ -166,6 +188,10 @@ describe("i18n locale selection", () => {
     expect(m.activity_untimed_count({ count: "3" })).toBe("3 件（時間情報なし）");
     expect(m.insights_page_no_generated_saved()).toBe("保存済みの生成分析はありません。");
     expect(m.activity_loading_usage()).toBe("使用状況を読み込み中…");
+
+    runtime.setLocale("az", { reload: false });
+    expect(m.nav_sessions()).toBe(az.nav_sessions);
+    expect(m.settings_language_azerbaijani()).toBe(az.settings_language_azerbaijani);
   });
 
   it("selects cardinal plural variants per locale", () => {
@@ -229,6 +255,15 @@ describe("i18n locale selection", () => {
     expect(m.tool_call_group_call_count({ count: 3 })).toBe("3 appels d'outil");
     expect(m.subagent_inline_message_count({ count: 1 })).toBe("1 message");
     expect(m.subagent_inline_message_count({ count: 5 })).toBe("5 messages");
+
+    // Spanish has one/other like English, and CLDR puts 0 in `other`, so zero
+    // takes the plural form unlike French.
+    runtime.setLocale("es", { reload: false });
+    expect(m.tool_call_group_call_count({ count: 0 })).toBe("0 llamadas a herramienta");
+    expect(m.tool_call_group_call_count({ count: 1 })).toBe("1 llamada a herramienta");
+    expect(m.tool_call_group_call_count({ count: 3 })).toBe("3 llamadas a herramienta");
+    expect(m.subagent_inline_message_count({ count: 1 })).toBe("1 mensaje");
+    expect(m.subagent_inline_message_count({ count: 5 })).toBe("5 mensajes");
   });
 
   it("formats dates with the active Paraglide locale", () => {

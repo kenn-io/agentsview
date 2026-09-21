@@ -4,7 +4,7 @@ import { mount, unmount, tick } from "svelte";
 import { createClassComponent } from "svelte/legacy";
 // @ts-ignore
 import SessionBreadcrumb from "./SessionBreadcrumb.svelte";
-import type { Message, Session } from "../../api/types.js";
+import type { Session } from "../../api/types.js";
 import { OpenersService, SessionsService } from "../../api/generated/index";
 import { messages } from "../../stores/messages.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
@@ -44,6 +44,8 @@ vi.mock("../../api/generated/index", async (importOriginal) => {
       getApiV1Openers: vi.fn(),
     },
     SessionsService: {
+      getApiV1SessionsById: vi.fn(),
+      getApiV1SessionsByIdMessages: vi.fn(),
       getApiV1SessionsByIdDirectory: vi.fn(),
       getApiV1SessionsByIdUsage: vi.fn(),
       postApiV1SessionsByIdResume: vi.fn(),
@@ -72,6 +74,19 @@ function makeSession(
   overrides: Partial<SessionWithTokenFlags> = {},
 ): SessionWithTokenFlags {
   return {
+    compaction_count: 0,
+    consecutive_failure_max: 0,
+    edit_churn_count: 0,
+    ended_with_role: "",
+    final_failure_streak: 0,
+    has_peak_context_tokens: false,
+    has_total_output_tokens: false,
+    mid_task_compaction_count: 0,
+    outcome: "",
+    outcome_confidence: "",
+    secret_leak_count: 0,
+    tool_failure_signal_count: 0,
+    tool_retry_count: 0,
     id: "run:123456789abcdef",
     project: "proj-a",
     machine: "mac",
@@ -153,7 +168,7 @@ async function openUsageBreakdown(): Promise<void> {
   await tick();
 }
 
-function makeAssistantMessage(model: string): Message {
+function makeAssistantMessage(model: string, reasoning_effort?: string) {
   return {
     id: 1,
     session_id: "run:123456789abcdef",
@@ -166,6 +181,7 @@ function makeAssistantMessage(model: string): Message {
     has_tool_use: false,
     content_length: 2,
     model,
+    reasoning_effort,
     token_usage: null,
     context_tokens: 0,
     output_tokens: 0,
@@ -322,6 +338,25 @@ describe("SessionBreadcrumb", () => {
     expect(document.body.textContent).toContain("重命名");
     expect(document.body.textContent).toContain("删除");
 
+    unmount(component);
+  });
+
+  it("renders the recorded effort beside the model", async () => {
+    sessionsService.getApiV1SessionsByIdUsage.mockResolvedValue(makeUsage());
+    messages.sessionId = "run:123456789abcdef";
+    messages.messages = [makeAssistantMessage("model-test", "high")];
+
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: {
+        session: makeSession("claude"),
+        onBack: () => {},
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(document.querySelector(".model-badge")?.textContent?.trim()).toBe("model-test high");
+    });
     unmount(component);
   });
 
@@ -511,15 +546,23 @@ describe("SessionBreadcrumb", () => {
 
   it("does not pin a reloading stable model in the resume fallback", async () => {
     vi.mocked(copyToClipboard).mockClear();
-    messages.sessionId = "run:123456789abcdef";
+    const session = makeSession("claude", { message_count: 1 });
+    vi.mocked(SessionsService.getApiV1SessionsById, { partial: true }).mockResolvedValueOnce({
+      id: session.id,
+      message_count: session.message_count,
+    });
+    vi.mocked(SessionsService.getApiV1SessionsByIdMessages).mockResolvedValueOnce({
+      messages: [makeAssistantMessage("claude sonnet")],
+      count: 1,
+    });
+    await messages.loadSession(session.id);
     messages.loading = true;
-    (messages as any)._stableMainModel = "claude sonnet";
     sessionsService.postApiV1SessionsByIdResume.mockRejectedValue(new Error("backend unavailable"));
 
     const component = mount(SessionBreadcrumb, {
       target: document.body,
       props: {
-        session: makeSession("claude", { message_count: 3001 }),
+        session,
         onBack: () => {},
       },
     });
@@ -1200,26 +1243,160 @@ describe("SessionBreadcrumb", () => {
     });
   });
 
-  it("hides local-only actions for remote sessions", async () => {
+  it.each([false, true])(
+    "copies remote commands with fallback=%s and excludes local actions",
+    async (fallback) => {
+      const resume = vi.mocked(SessionsService.postApiV1SessionsByIdResume);
+      const command = "cd '/home/user/project' && claude --resume abc-123";
+      if (fallback) resume.mockRejectedValueOnce(new Error("offline"));
+      else resume.mockResolvedValueOnce({ launched: false, command, cwd: "/home/user/project" });
+      openersService.getApiV1Openers.mockResolvedValue({
+        openers: [
+          { id: "kitty", name: "Kitty", kind: "terminal", bin: "kitty" },
+          { id: "code", name: "VS Code", kind: "editor", bin: "code" },
+          { id: "finder", name: "Finder", kind: "files", bin: "open" },
+          { id: "claude-desktop", name: "Claude Desktop", kind: "action", bin: "open" },
+        ],
+      });
+      const component = mount(SessionBreadcrumb, {
+        target: document.body,
+        props: {
+          session: makeSession("claude", {
+            id: "devbox1~claude:abc-123",
+            machine: "devbox1",
+            file_path: "/remote/session.jsonl",
+          }),
+          onBack: () => {},
+        },
+      });
+
+      try {
+        await flushPromises();
+        const trigger = document.querySelector<HTMLButtonElement>(".resume-btn");
+        expect(trigger).not.toBeNull();
+        trigger!.click();
+        await tick();
+        expect(
+          Array.from(document.querySelectorAll(".open-menu-name"), (el) => el.textContent),
+        ).toEqual(["Copy command"]);
+        expect(document.querySelector(".open-menu-divider")).toBeNull();
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "1" }));
+        await tick();
+        expect(resume).not.toHaveBeenCalled();
+        document.querySelector<HTMLButtonElement>(".open-menu-item")!.click();
+        await vi.waitFor(() =>
+          expect(copyToClipboard).toHaveBeenCalledWith(
+            fallback ? "claude --resume abc-123" : command,
+          ),
+        );
+        expect(resume).toHaveBeenCalledExactlyOnceWith(
+          { id: "devbox1~claude:abc-123" },
+          { command_only: true },
+        );
+        expect(SessionsService.postApiV1SessionsByIdOpen).not.toHaveBeenCalled();
+        expect(trigger!.textContent).toContain("Command copied!");
+      } finally {
+        await unmount(component);
+      }
+    },
+  );
+
+  it("hides the remote menu for unsupported agents", async () => {
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: { session: makeSession("unknown", { id: "devbox1~unsupported" }), onBack: () => {} },
+    });
+    await flushPromises();
+    expect(document.querySelector(".resume-btn")).toBeNull();
+    await unmount(component);
+  });
+
+  it("copies remote Kiro commands", async () => {
+    const resume = vi.mocked(SessionsService.postApiV1SessionsByIdResume);
+    resume.mockResolvedValueOnce({
+      launched: false,
+      command: "cd '/home/user/project' && kiro-cli chat --resume-id session-1",
+      cwd: "/home/user/project",
+    });
     const component = mount(SessionBreadcrumb, {
       target: document.body,
       props: {
-        session: makeSession("claude", {
-          id: "devbox1~abc-123",
+        session: makeSession("kiro", {
+          id: "devbox1~kiro:session-1",
           machine: "devbox1",
         }),
         onBack: () => {},
       },
     });
+    try {
+      await flushPromises();
+      document.querySelector<HTMLButtonElement>(".resume-btn")!.click();
+      await tick();
+      document.querySelector<HTMLButtonElement>(".open-menu-item")!.click();
+      await vi.waitFor(() =>
+        expect(copyToClipboard).toHaveBeenCalledWith(
+          "cd '/home/user/project' && kiro-cli chat --resume-id session-1",
+        ),
+      );
+      expect(resume).toHaveBeenCalledExactlyOnceWith(
+        {
+          id: "devbox1~kiro:session-1",
+        },
+        { command_only: true },
+      );
+    } finally {
+      await unmount(component);
+    }
+  });
 
-    await tick();
-
-    // The dropdown trigger (.resume-btn) should not appear
-    // for remote sessions (no resume, no copy-dir, no open-in).
-    const resumeBtn = document.querySelector(".resume-btn");
-    expect(resumeBtn).toBeNull();
-
-    unmount(component);
+  it("keeps local launch and file actions with remote-looking machine metadata", async () => {
+    openersService.getApiV1Openers.mockResolvedValue({
+      openers: [
+        { id: "kitty", name: "Kitty", kind: "terminal", bin: "kitty" },
+        { id: "code", name: "VS Code", kind: "editor", bin: "code" },
+        { id: "finder", name: "Finder", kind: "files", bin: "open" },
+        { id: "claude-desktop", name: "Claude Desktop", kind: "action", bin: "open" },
+      ],
+    });
+    vi.mocked(SessionsService.postApiV1SessionsByIdResume).mockResolvedValueOnce({
+      launched: true,
+      command: "claude --resume abc-123",
+    });
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: {
+        session: makeSession("claude", { id: "claude:abc-123", machine: "devbox1~remote" }),
+        onBack: () => {},
+      },
+    });
+    try {
+      await flushPromises();
+      document.querySelector<HTMLButtonElement>(".resume-btn")!.click();
+      await tick();
+      expect(
+        Array.from(document.querySelectorAll(".open-menu-name"), (el) => el.textContent),
+      ).toEqual([
+        "Kitty",
+        "Default terminal",
+        "Open in Claude Code",
+        "Copy command",
+        "Copy directory path",
+        "VS Code",
+        "Finder",
+        "Claude Desktop",
+      ]);
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "1" }));
+      await vi.waitFor(() =>
+        expect(SessionsService.postApiV1SessionsByIdResume).toHaveBeenCalledExactlyOnceWith(
+          {
+            id: "claude:abc-123",
+          },
+          { opener_id: "kitty" },
+        ),
+      );
+    } finally {
+      await unmount(component);
+    }
   });
 
   describe("cost badge", () => {

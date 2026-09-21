@@ -1,15 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vite-plus/test";
 import { findActiveBucketIndex, sessionActivity } from "./sessionActivity.svelte.js";
 import { SessionsService } from "../api/generated/index";
-import type { SessionActivityBucket } from "../api/types/session-activity.js";
-import type { SessionActivityResponse } from "../api/types/session-activity.js";
-
-const apiRuntimeMocks = vi.hoisted(() => ({
-  callGenerated: vi.fn((request: () => Promise<unknown>, _signal?: AbortSignal) => request()),
-}));
+import type { DbSessionActivityBucket as SessionActivityBucket } from "../api/generated/index.js";
+import type { DbSessionActivityResponse as SessionActivityResponse } from "../api/generated/index.js";
 
 vi.mock("../api/runtime.js", () => ({
-  callGenerated: apiRuntimeMocks.callGenerated,
   isAbortError: vi.fn(() => false),
 }));
 
@@ -67,17 +62,9 @@ describe("SessionActivityStore", () => {
   beforeEach(() => {
     sessionActivity.clear();
     vi.resetAllMocks();
-    apiRuntimeMocks.callGenerated.mockImplementation(
-      (request: () => Promise<unknown>, _signal?: AbortSignal) => request(),
-    );
   });
 
   it("aborts session activity when another session replaces it", async () => {
-    const signals: AbortSignal[] = [];
-    apiRuntimeMocks.callGenerated.mockImplementation((request, signal) => {
-      signals.push(signal as AbortSignal);
-      return request();
-    });
     sessionsService.getApiV1SessionsByIdActivity
       .mockImplementationOnce(() => new Promise(() => {}))
       .mockResolvedValueOnce(makeResponse(2));
@@ -86,15 +73,12 @@ describe("SessionActivityStore", () => {
     await Promise.resolve();
     await sessionActivity.load("s2");
 
-    expect(signals[0]?.aborted).toBe(true);
+    expect(
+      vi.mocked(SessionsService.getApiV1SessionsByIdActivity).mock.calls[0]?.[1]?.signal?.aborted,
+    ).toBe(true);
   });
 
   it("aborts session activity without clearing cached buckets", async () => {
-    const signals: AbortSignal[] = [];
-    apiRuntimeMocks.callGenerated.mockImplementation((request, signal) => {
-      signals.push(signal as AbortSignal);
-      return request();
-    });
     sessionsService.getApiV1SessionsByIdActivity.mockResolvedValueOnce(makeResponse(2));
     await sessionActivity.load("s1");
     sessionsService.getApiV1SessionsByIdActivity.mockImplementationOnce(
@@ -105,7 +89,12 @@ describe("SessionActivityStore", () => {
     await Promise.resolve();
     sessionActivity.cancelInFlight();
 
-    expect(signals.at(-1)?.aborted).toBe(true);
+    expect(
+      vi
+        .mocked(SessionsService.getApiV1SessionsByIdActivity)
+        .mock.calls.map((call) => call[1]?.signal)
+        .at(-1)?.aborted,
+    ).toBe(true);
     expect(sessionActivity.buckets).toHaveLength(2);
   });
 

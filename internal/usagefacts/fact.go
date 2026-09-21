@@ -3,7 +3,9 @@
 package usagefacts
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
+	"errors"
 	"strconv"
 	"strings"
 	"time"
@@ -291,7 +293,7 @@ func floorTokens(value int64) int64 {
 // posit-assistant-keepalive, posit-assistant-classifier) each record one
 // provider request, so the whole prefix is request-scoped.
 func SourceIsRequestScoped(source string) bool {
-	return source == "message" || source == "goose-request" ||
+	return source == "message" || source == "goose-request" || source == "session-store" ||
 		source == "deepseek-harness" ||
 		strings.HasPrefix(source, "posit-assistant-")
 }
@@ -417,7 +419,7 @@ func parseJSONString(input string, i int) (string, int, bool) {
 				return input[i+1 : j], j + 1, true
 			}
 			var value string
-			if err := json.Unmarshal([]byte(input[i:j+1]), &value); err != nil {
+			if err := json.Unmarshal([]byte(input[i:j+1]), &value, jsontext.AllowInvalidUTF8(true)); err != nil {
 				return "", j + 1, false
 			}
 			return value, j + 1, true
@@ -464,7 +466,7 @@ func parseTokenIntLiteral(value string) (int64, bool) {
 	if err == nil {
 		return parsed, true
 	}
-	if numErr, ok := err.(*strconv.NumError); ok && numErr.Err == strconv.ErrRange {
+	if errors.Is(err, strconv.ErrRange) {
 		if strings.HasPrefix(value, "-") {
 			return -1 << 63, true
 		}

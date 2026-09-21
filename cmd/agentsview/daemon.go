@@ -77,12 +77,12 @@ type daemonCommandDeps struct {
 	statusRecords              func(string, string) ([]daemon.RuntimeRecord, error)
 	isStarting                 func(string) bool
 	readStartupState           func(string) *startupState
-	startBackground            func(config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error)
+	startBackground            func(context.Context, config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error)
 	stopTargetConfirmed        func(daemon.RuntimeRecord, string) bool
 	stopProcess                func(daemon.RuntimeRecord, time.Duration) error
 	stopCaddy                  func(io.Writer, daemon.RuntimeRecord) error
 	validateConfig             func(config.Config) error
-	checkDataVersion           func(string) error
+	checkDataVersion           func(context.Context, string) error
 	probeRecord                func(daemon.RuntimeRecord, string) (daemon.PingInfo, bool)
 	writableRuntime            func(string, string) *DaemonRuntime
 	now                        func() time.Time
@@ -122,8 +122,15 @@ func newDaemonCommand() *cobra.Command {
 
 func newDaemonCommandWithDeps(deps daemonCommandDeps) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:          "daemon",
-		Short:        "Manage the background server",
+		Use:   "daemon",
+		Short: "Manage the background server",
+		Long: "Manage the writable server for the current data directory.\n\n" +
+			"The daemon is the same server as `agentsview serve`: it provides the\n" +
+			"web UI, API, session sync, and file watchers in one process.\n" +
+			"`daemon start` runs it in the background without opening a browser.\n" +
+			"Stopping it also stops the web UI and sync. These commands also manage\n" +
+			"a writable server started by `serve` or automatically by a CLI command.\n\n" +
+			"Read-only `pg serve` and `duckdb serve` processes are managed separately.",
 		GroupID:      groupCore,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
@@ -220,7 +227,7 @@ func runDaemonStart(ctx context.Context, w io.Writer, deps daemonCommandDeps) er
 		return daemonPersistentStartupError("daemon start", cfg.DataDir, deps.readStartupState(cfg.DataDir), deps.now())
 	}
 	progress := &daemonLaunchProgressWriter{w: w}
-	result, err := deps.startBackground(
+	result, err := deps.startBackground(ctx,
 		cfg, []string{"serve"}, serveReplacementOptions{},
 		backgroundLaunchPolicy{
 			ConfigOnly: true, Operation: "daemon start",
@@ -464,7 +471,7 @@ func writeDaemonStartResult(w io.Writer, result backgroundLaunchResult, restarte
 }
 
 func backgroundResultError(err error, result backgroundLaunchResult) error {
-	if result.LogPath != "" && !strings.Contains(err.Error(), result.LogPath) {
+	if result.LogPath != "" && !result.errorIncludesLogPath {
 		return fmt.Errorf("%w\nLogs: %s", err, result.LogPath)
 	}
 	return err
@@ -727,7 +734,7 @@ func runDaemonRestartWithPolicy(
 	if err := deps.validateConfig(cfg); err != nil {
 		return fmt.Errorf("daemon restart: invalid config: %w", err)
 	}
-	if err := deps.checkDataVersion(cfg.DBPath); err != nil {
+	if err := deps.checkDataVersion(ctx, cfg.DBPath); err != nil {
 		return fmt.Errorf("daemon restart: checking data version: %w", err)
 	}
 	records, err := deps.writableRecords(cfg.DataDir, cfg.AuthToken)
@@ -764,7 +771,7 @@ func runDaemonRestartWithPolicy(
 		policy.OnLaunch = progress.launch
 		policy.OnProgress = progress.progress
 	}
-	result, err := deps.startBackground(
+	result, err := deps.startBackground(ctx,
 		cfg, []string{"serve"}, serveReplacementOptions{},
 		policy,
 	)

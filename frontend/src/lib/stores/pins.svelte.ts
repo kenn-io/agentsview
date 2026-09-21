@@ -1,6 +1,6 @@
-import type { PinnedMessage } from "../api/types.js";
+import type { DbPinnedMessage as PinnedMessage } from "../api/generated/index.js";
 import { PinsService } from "../api/generated/index";
-import { callGenerated, isAbortError } from "../api/runtime.js";
+import { isAbortError } from "../api/runtime.js";
 import { LatestRead } from "../utils/latest-read.js";
 
 class PinsStore {
@@ -35,10 +35,7 @@ class PinsStore {
     const signal = this.#allPinsRead.begin();
     const mutVer = this.#mutationVersion;
     try {
-      const res = await callGenerated(
-        (options) => PinsService.getApiV1Pins({ project }, options),
-        signal,
-      );
+      const res = await PinsService.getApiV1Pins({ project }, { signal });
       // Apply only if this is the latest load AND no mutation
       // occurred since the request started (which would make
       // this response stale relative to the optimistic state).
@@ -72,10 +69,7 @@ class PinsStore {
       this.sessionPinIds = new Set();
     }
     try {
-      const res = await callGenerated(
-        (options) => PinsService.getApiV1SessionsByIdPins({ id: sessionId }, options),
-        signal,
-      );
+      const res = await PinsService.getApiV1SessionsByIdPins({ id: sessionId }, { signal });
       if (
         this.#sessionPinsRead.isCurrent(signal) &&
         this.#loadVersion === loadVer &&

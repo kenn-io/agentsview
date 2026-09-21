@@ -1,0 +1,16 @@
+{
+  "info": {
+    "id": "019f6000-0000-7000-8000-000000000014",
+    "cwd": "/workspace/project"
+  },
+  "session_summary": "Independent sibling",
+  "generated_title": "No spawn metadata",
+  "created_at": "2026-07-18T09:00:00Z",
+  "updated_at": "2026-07-18T09:01:00Z",
+  "num_messages": 1,
+  "num_chat_messages": 1,
+  "current_model_id": "grok-4.5",
+  "git_root_dir": "/workspace/project",
+  "head_branch": "main",
+  "agent_name": "grok-build"
+}

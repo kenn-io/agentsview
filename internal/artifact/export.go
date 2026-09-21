@@ -12,6 +12,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 
@@ -35,7 +36,7 @@ type artifactExportStore interface {
 	ApplyArtifactPublicationChanges(context.Context, string, []db.ArtifactPublicationChange) (int64, bool, error)
 	FinalizeArtifactExports(context.Context, []db.ArtifactExportOutcome) error
 	GetArtifactCheckpointHead(context.Context, string) (db.ArtifactCheckpointHead, bool, error)
-	ArtifactLocalMachineName(context.Context) (string, error)
+	ArtifactLocalMachines(context.Context) ([]string, error)
 	RecordArtifactCheckpointHeadOutcomes(
 		context.Context, db.ArtifactCheckpointHead, []db.ArtifactExportOutcome,
 	) error
@@ -106,9 +107,9 @@ func exportToStoreWithLimits(
 		)
 	}
 
-	localMachine, err := database.ArtifactLocalMachineName(ctx)
+	localMachines, err := database.ArtifactLocalMachines(ctx)
 	if err != nil {
-		return ExportResult{}, fmt.Errorf("reading artifact local machine: %w", err)
+		return ExportResult{}, fmt.Errorf("reading artifact local machines: %w", err)
 	}
 
 	var claims []db.ArtifactExportQueueItem
@@ -145,7 +146,7 @@ func exportToStoreWithLimits(
 		if err != nil {
 			return result, fmt.Errorf("loading artifact export session %s: %w", sessionID, err)
 		}
-		if sess == nil || !artifactMachineIsOwned(sess.Machine, localMachine) || sess.DeletedAt != nil {
+		if sess == nil || !slices.Contains(localMachines, sess.Machine) || sess.DeletedAt != nil {
 			if claimed {
 				changes = append(changes, db.ArtifactPublicationChange{
 					SessionID: sessionID, Generation: claim.Generation, Delete: true,
@@ -345,9 +346,9 @@ func exportFullToStoreWithDrainRoundsAndLimits(
 	drainRounds int,
 	limits artifactLimits,
 ) (ExportResult, error) {
-	localMachine, err := database.ArtifactLocalMachineName(ctx)
+	localMachines, err := database.ArtifactLocalMachines(ctx)
 	if err != nil {
-		return ExportResult{}, fmt.Errorf("reading artifact local machine: %w", err)
+		return ExportResult{}, fmt.Errorf("reading artifact local machines: %w", err)
 	}
 
 	result := ExportResult{}
@@ -406,7 +407,7 @@ func exportFullToStoreWithDrainRoundsAndLimits(
 		if err != nil {
 			return result, fmt.Errorf("loading full artifact export session %s: %w", sessionID, err)
 		}
-		if sess == nil || !artifactMachineIsOwned(sess.Machine, localMachine) || sess.DeletedAt != nil {
+		if sess == nil || !slices.Contains(localMachines, sess.Machine) || sess.DeletedAt != nil {
 			continue
 		}
 		if _, _, err := exportClaimedSessionToStore(
@@ -450,10 +451,6 @@ func exportFullToStoreWithDrainRoundsAndLimits(
 	return result, fmt.Errorf(
 		"%w after %d drain rounds", ErrArtifactExportUnsettled, drainRounds,
 	)
-}
-
-func artifactMachineIsOwned(machine, localMachine string) bool {
-	return machine == "local" || machine == localMachine
 }
 
 const maxArtifactExportBatchSize = 1024

@@ -11,7 +11,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 func TestBackfillIsAutomatedPGMatchingHashUsesBoundedEvidence(t *testing.T) {
@@ -23,7 +25,7 @@ func TestBackfillIsAutomatedPGMatchingHashUsesBoundedEvidence(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"automated-audit-machine", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()
@@ -70,10 +72,16 @@ func TestBackfillIsAutomatedPGMatchingHashUsesBoundedEvidence(t *testing.T) {
 	}
 	_, err = ps.DB().ExecContext(ctx,
 		`INSERT INTO messages (session_id, ordinal, role, content)
-		 VALUES ($1, 0, 'user', $2)`,
+		 VALUES ($1, 1, 'user', $2)`,
 		"prefix-first-user", largePrefix,
 	)
 	require.NoError(t, err, "insert prefix-matching first user message")
+	_, err = ps.DB().ExecContext(ctx,
+		`INSERT INTO messages (session_id, ordinal, role, content, source_subtype)
+		 VALUES ($1, 0, 'user', 'Finished successfully', 'tool_result')`,
+		"prefix-first-user",
+	)
+	require.NoError(t, err, "insert orphan result before the first prompt")
 	_, err = ps.DB().ExecContext(ctx,
 		`INSERT INTO sync_metadata (key, value) VALUES ($1, $2)
 		 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
@@ -113,7 +121,7 @@ func TestBackfillIsAutomatedPGPreservesDurableClassification(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"automation-metadata-machine", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()
@@ -160,7 +168,7 @@ func TestPushSessionTrustsLocalIsAutomated(t *testing.T) {
 	// sets is_automated=1 on the SQLite row.
 	db.SetUserAutomationPrefixes([]string{"You are analyzing an essay"})
 	fm := "You are analyzing an essay about epistemology."
-	require.NoError(t, local.UpsertSession(db.Session{
+	require.NoError(t, local.UpsertSession(t.Context(), db.Session{
 		ID:               "essay-1",
 		Project:          "proj",
 		Machine:          "local",
@@ -179,7 +187,7 @@ func TestPushSessionTrustsLocalIsAutomated(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"trust-test-machine", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()
@@ -214,7 +222,7 @@ func TestBackfillIsAutomatedPGRerunsOnHashChange(t *testing.T) {
 
 	local := testDB(t)
 	fm := "You are analyzing an essay about epistemology."
-	require.NoError(t, local.UpsertSession(db.Session{
+	require.NoError(t, local.UpsertSession(t.Context(), db.Session{
 		ID:               "essay-pg",
 		Project:          "proj",
 		Machine:          "local",
@@ -228,7 +236,7 @@ func TestBackfillIsAutomatedPGRerunsOnHashChange(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"backfill-test-machine", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()
@@ -265,4 +273,59 @@ func TestBackfillIsAutomatedPGRerunsOnHashChange(t *testing.T) {
 	).Scan(&got), "query post")
 	assert.True(t, got,
 		"PG row should be is_automated=true after backfill on hash change")
+}
+
+func TestBackfillIsAutomatedPGPreservesUsageOnlyClassification(t *testing.T) {
+	for _, hash := range []string{"old-classifier", db.ClassifierHash()} {
+		t.Run(hash, func(t *testing.T) {
+			pgURL := testPGURL(t)
+			cleanPGSchema(t, pgURL)
+			t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+			local := testDB(t)
+			local.SetArchiveContent(config.ArchiveContentUsage)
+			for _, tc := range []struct {
+				id, prompt string
+			}{
+				{"automated", "You are a code reviewer. Review this change."},
+				{"interactive", "Explain this function."},
+			} {
+				require.NoError(t, local.UpsertSession(t.Context(), db.Session{
+					ID: tc.id, Project: "project", Agent: "claude", Machine: "local",
+					FirstMessage: &tc.prompt, UserMessageCount: 1, MessageCount: 2,
+					CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+				}))
+				require.NoError(t, local.InsertMessages(t.Context(), []db.Message{
+					{SessionID: tc.id, Ordinal: 0, Role: "user", Content: tc.prompt},
+					{SessionID: tc.id, Ordinal: 1, Role: "assistant", Content: "Finished.", Model: "model-a"},
+				}))
+			}
+			ps, err := New(pgURL, "agentsview", local, "usage-audit-machine", true, storage.PusherOptions{})
+			require.NoError(t, err)
+			defer ps.Close()
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+			defer cancel()
+			require.NoError(t, ps.EnsureSchema(ctx))
+			_, err = ps.Push(ctx, false, nil)
+			require.NoError(t, err)
+			var before bool
+			require.NoError(t, ps.DB().QueryRowContext(ctx,
+				`SELECT is_automated FROM sessions WHERE id = 'automated'`,
+			).Scan(&before))
+			require.True(t, before)
+			_, err = ps.DB().ExecContext(ctx,
+				`UPDATE sync_metadata SET value = $1 WHERE key = $2`, hash, db.ClassifierHashKey)
+			require.NoError(t, err)
+			// Full-content rows lacking evidence must still have stale flags corrected.
+			_, err = ps.DB().ExecContext(ctx, `INSERT INTO sessions (id, machine, project, agent, user_message_count, is_automated) VALUES ('empty-full', 'other-machine', 'project', 'claude', 1, true)`)
+			require.NoError(t, err)
+			require.NoError(t, backfillIsAutomatedPG(ctx, ps.DB()))
+			for id, want := range map[string]bool{"automated": true, "interactive": false, "empty-full": false} {
+				var got bool
+				require.NoError(t, ps.DB().QueryRowContext(ctx,
+					`SELECT is_automated FROM sessions WHERE id = $1`, id,
+				).Scan(&got))
+				assert.Equal(t, want, got, id)
+			}
+		})
+	}
 }

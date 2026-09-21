@@ -25,7 +25,7 @@ func TestReconcileWatchRootsCommandCodeCompanionOnlyChangeReparsesOwner(t *testi
 	), 0o644))
 	require.NoError(t, os.WriteFile(meta, []byte(`{"title":"Original title"}`), 0o644))
 	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentCommandCode: {root}},
 		Machine:   "test-machine",
 	})

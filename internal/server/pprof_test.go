@@ -53,7 +53,7 @@ func TestPprofRequiresBearerAuthWhenAuthEnabled(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, w.Code,
 		"pprof must be gated like /api/ when require_auth is on")
 
-	req := httptest.NewRequest(
+	req := httptest.NewRequestWithContext(t.Context(),
 		http.MethodGet, "/debug/pprof/cmdline", nil,
 	)
 	req.Header.Set("Authorization", "Bearer pprof-secret")
@@ -70,7 +70,7 @@ func TestPprofRejectsUnexpectedHost(t *testing.T) {
 		t, []server.Option{server.WithPprof(true)},
 	)
 
-	req := httptest.NewRequest(
+	req := httptest.NewRequestWithContext(t.Context(),
 		http.MethodGet, "/debug/pprof/cmdline", nil,
 	)
 	req.Host = "attacker.example.net"

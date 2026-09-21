@@ -1,7 +1,7 @@
 package parser
 
 import (
-	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,18 +22,18 @@ func TestOMPProviderSourceMethods(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, AgentOMP, discovered[0].Provider)
 	assert.Equal(t, sourcePath, discovered[0].DisplayPath)
 
-	plan, err := provider.WatchPlan(context.Background())
+	plan, err := provider.WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, root, plan.Roots[0].Path)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~omp:session-123",
 	})
 	require.NoError(t, err)
@@ -41,7 +41,7 @@ func TestOMPProviderSourceMethods(t *testing.T) {
 	assert.Equal(t, AgentOMP, found.Provider)
 	assert.Equal(t, sourcePath, found.DisplayPath)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      discovered[0],
 		Fingerprint: SourceFingerprint{Key: sourcePath, Hash: "abc123"},
 	})
@@ -54,7 +54,7 @@ func TestOMPProviderSourceMethods(t *testing.T) {
 
 	require.NoError(t, os.Remove(sourcePath))
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: sourcePath, EventKind: "remove", WatchRoot: root},
 	)
 	require.NoError(t, err)
@@ -78,14 +78,14 @@ func TestOMPProviderFindsV1SessionByFilenameID(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~omp:v1-session",
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, sourcePath, found.DisplayPath)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: found})
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: found})
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
 	assert.Equal(t, "omp:v1-session", outcome.Results[0].Result.Session.ID)
@@ -110,13 +110,13 @@ func TestOMPProviderDiscoversTitleSlotSession(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1,
 		"OMP session with leading title slot must be discovered")
 	assert.Equal(t, sourcePath, discovered[0].DisplayPath)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: discovered[0],
 	})
 	require.NoError(t, err)
@@ -133,7 +133,8 @@ func TestPiProviderSourceMethods(t *testing.T) {
 	writeSourceFile(t, sourcePath, piProviderFixture("session-123"))
 	writeSourceFile(t, lookupOnlyPath, `{"type":"message"}`+"\n")
 	writeSourceFile(t, filepath.Join(root, "encoded-cwd", "notes.txt"), "{}\n")
-	writeSourceFile(t, filepath.Join(root, "root-session.jsonl"), piProviderFixture("root-session"))
+	rootPath := filepath.Join(root, "root-session.jsonl")
+	writeSourceFile(t, rootPath, piProviderFixture("root-session"))
 	writeSourceFile(t, filepath.Join(root, "encoded-cwd", "nested", "deep.jsonl"), piProviderFixture("deep"))
 
 	provider, ok := NewProvider(AgentPi, ProviderConfig{
@@ -142,37 +143,50 @@ func TestPiProviderSourceMethods(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
-	require.Len(t, discovered, 1)
-	assert.Equal(t, AgentPi, discovered[0].Provider)
-	assert.Equal(t, sourcePath, discovered[0].DisplayPath)
-	assert.Empty(t, discovered[0].ProjectHint)
+	require.Len(t, discovered, 2)
+	assert.ElementsMatch(t, []string{sourcePath, rootPath},
+		[]string{discovered[0].DisplayPath, discovered[1].DisplayPath})
 
-	plan, err := provider.WatchPlan(context.Background())
+	plan, err := provider.WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, root, plan.Roots[0].Path)
 	assert.True(t, plan.Roots[0].Recursive)
 	assert.Equal(t, []string{"*.jsonl"}, plan.Roots[0].IncludeGlobs)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~pi:session-123",
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, sourcePath, found.DisplayPath)
 
-	found, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "pi:lookup-only",
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, lookupOnlyPath, found.DisplayPath)
 
+	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
+		RawSessionID: "pi:root-session",
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, rootPath, found.DisplayPath)
+
+	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
+		Path: rootPath, EventKind: "write", WatchRoot: root,
+	})
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, rootPath, changed[0].DisplayPath)
+
 	require.NoError(t, os.Remove(sourcePath))
-	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+	changed, err = provider.SourcesForChangedPath(
+		t.Context(),
 		ChangedPathRequest{Path: sourcePath, EventKind: "remove", WatchRoot: root},
 	)
 	require.NoError(t, err)
@@ -191,19 +205,19 @@ func TestPiProviderDiscoveryAcceptsSessionHeaderInNonSessionIDFilename(t *testin
 	})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, sourcePath, discovered[0].DisplayPath)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: discovered[0],
 	})
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
 	assert.Equal(t, "pi:header-session-id", outcome.Results[0].Result.Session.ID)
 
-	_, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	_, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "2025.01.01",
 	})
 	require.NoError(t, err)
@@ -226,12 +240,12 @@ func TestPiProviderDiscoversSymlinkedCWDDirectory(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, sourcePath, discovered[0].DisplayPath)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~pi:session-123",
 	})
 	require.NoError(t, err)
@@ -249,11 +263,11 @@ func TestPiProviderParse(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      sources[0],
 		Fingerprint: SourceFingerprint{Key: sourcePath, Hash: "abc123"},
 	})
@@ -288,15 +302,15 @@ func TestPiProviderFingerprintIncludesContentHash(t *testing.T) {
 
 	provider, ok := NewProvider(AgentPi, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 
-	fp, err := provider.Fingerprint(context.Background(), sources[0])
+	fp, err := provider.Fingerprint(t.Context(), sources[0])
 	require.NoError(t, err)
 	require.NotEmpty(t, fp.Hash)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      sources[0],
 		Fingerprint: fp,
 	})
@@ -318,6 +332,84 @@ func ompSubagentFixture(id string) string {
 		`{"type":"session","version":3,"id":"` + id + `","timestamp":"2026-07-14T06:48:08.907Z","cwd":"/home/u/repos/x"}`,
 		`{"type":"message","id":"s1","timestamp":"2026-07-14T06:48:09Z","message":{"role":"user","content":"scout task"}}`,
 	}, "\n") + "\n"
+}
+
+// TestPiProviderDiscoversAndParsesNativeParentSession verifies that native Pi
+// parentSession resolves to the parent's header identity during discovery and
+// parsing, even when the normal timestamp_UUID filename does not contain it.
+func TestPiProviderDiscoversAndParsesNativeParentSession(t *testing.T) {
+	root := t.TempDir()
+	proj := filepath.Join(root, "encoded-cwd")
+	parentPath := filepath.Join(proj, "2026-07-14T06-45-53-798Z_parent-uuid.jsonl")
+	childPath := filepath.Join(proj, "2026-07-14T06-48-08-907Z_child-uuid.jsonl")
+	writeSourceFile(t, parentPath, strings.Join([]string{
+		`{"type":"session","version":3,"id":"actual-parent-header","timestamp":"2026-07-14T06:45:53.798Z","cwd":"/home/u/repos/x"}`,
+		`{"type":"message","id":"p1","timestamp":"2026-07-14T06:45:54Z","message":{"role":"user","content":"root"}}`,
+		"",
+	}, "\n"))
+	parentPathJSON, err := json.Marshal(parentPath)
+	require.NoError(t, err)
+	writeSourceFile(t, childPath, strings.Join([]string{
+		`{"type":"session","version":3,"id":"child-uuid","timestamp":"2026-07-14T06:48:08.907Z","cwd":"/home/u/repos/x","parentSession":` + string(parentPathJSON) + `}`,
+		`{"type":"message","id":"c1","timestamp":"2026-07-14T06:48:09Z","message":{"role":"user","content":"child"}}`,
+		"",
+	}, "\n"))
+
+	provider, ok := NewProvider(AgentPi, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	discovered, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, discovered, 2)
+
+	byPath := make(map[string]ParsedSession, len(discovered))
+	for _, source := range discovered {
+		outcome, err := provider.Parse(t.Context(), ParseRequest{Source: source})
+		require.NoError(t, err)
+		require.Len(t, outcome.Results, 1)
+		byPath[source.DisplayPath] = outcome.Results[0].Result.Session
+	}
+
+	parent := byPath[parentPath]
+	child := byPath[childPath]
+	assert.Equal(t, "pi:actual-parent-header", parent.ID)
+	assert.Equal(t, parent.ID, child.ParentSessionID)
+
+	// No-hint FindSource (no stored path or fingerprint) must fall back to
+	// scanning session headers: native filenames are timestamp-prefixed and do
+	// not contain the header UUID.
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
+		RawSessionID: "actual-parent-header",
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, parentPath, found.DisplayPath)
+	assert.NotEqual(t, childPath, found.DisplayPath)
+
+	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
+		RawSessionID: "child-uuid",
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, childPath, found.DisplayPath)
+	assert.NotEqual(t, parentPath, found.DisplayPath)
+
+	// A stored path hint is still honored ahead of header scanning.
+	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
+		StoredFilePath: childPath,
+		RawSessionID:   "actual-parent-header",
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, childPath, found.DisplayPath,
+		"stored path hints are preserved ahead of header lookup")
+
+	// An unknown header UUID yields not-found rather than a wrong source.
+	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
+		RawSessionID: "missing-header-id",
+	})
+	require.NoError(t, err)
+	assert.False(t, ok)
+	assert.Empty(t, found.DisplayPath)
 }
 
 // TestOMPProviderDiscoversNestedSubagents verifies that OMP subagent
@@ -345,7 +437,7 @@ func TestOMPProviderDiscoversNestedSubagents(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	paths := make([]string, len(discovered))
 	for i, d := range discovered {
@@ -355,7 +447,7 @@ func TestOMPProviderDiscoversNestedSubagents(t *testing.T) {
 
 	byPath := make(map[string]ParsedSession, len(discovered))
 	for _, d := range discovered {
-		outcome, err := provider.Parse(context.Background(), ParseRequest{
+		outcome, err := provider.Parse(t.Context(), ParseRequest{
 			Source:  d,
 			Machine: "devbox",
 		})
@@ -397,14 +489,14 @@ func TestOMPProviderFindSourceByNestedSubagentRawID(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "child-uuid",
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, subPath, found.DisplayPath)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: found,
 	})
 	require.NoError(t, err)
@@ -431,7 +523,7 @@ func TestOMPProviderMapsSubagentChangedPath(t *testing.T) {
 	require.True(t, ok)
 
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: subPath, EventKind: "write", WatchRoot: root},
 	)
 	require.NoError(t, err)
@@ -451,7 +543,7 @@ func TestPiProviderRejectsNestedSubagents(t *testing.T) {
 
 	provider, ok := NewProvider(AgentPi, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1, "pi ignores nested transcripts")
 	assert.Equal(t, filepath.Join(proj, stem+".jsonl"), discovered[0].DisplayPath)

@@ -85,7 +85,7 @@ func newPiebaldTestDB(t *testing.T) string {
 		)`,
 	}
 	for _, stmt := range stmts {
-		_, err := db.Exec(stmt)
+		_, err := db.ExecContext(t.Context(), stmt)
 		require.NoError(t, err, "exec schema")
 	}
 	return dbPath
@@ -96,16 +96,17 @@ func execPiebaldTestSQL(t *testing.T, dbPath, stmt string, args ...any) {
 	db, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err, "open test db")
 	defer db.Close()
-	_, err = db.Exec(stmt, args...)
+	_, err = db.ExecContext(t.Context(), stmt, args...)
 	require.NoError(t, err, "exec %q", stmt)
 }
 
 func withPiebaldTestTx(t *testing.T, dbPath string, fn func(*sql.Tx)) {
 	t.Helper()
+
 	db, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err, "open test db")
 	defer db.Close()
-	tx, err := db.Begin()
+	tx, err := db.BeginTx(t.Context(), nil)
 	require.NoError(t, err, "begin test tx")
 	defer tx.Rollback()
 	fn(tx)
@@ -114,7 +115,7 @@ func withPiebaldTestTx(t *testing.T, dbPath string, fn func(*sql.Tx)) {
 
 func execPiebaldTestTx(t *testing.T, tx *sql.Tx, stmt string, args ...any) {
 	t.Helper()
-	_, err := tx.Exec(stmt, args...)
+	_, err := tx.ExecContext(t.Context(), stmt, args...)
 	require.NoError(t, err, "exec %q", stmt)
 }
 
@@ -193,7 +194,7 @@ func parsePiebaldOneSession(
 	t *testing.T, dbPath, chatID, machine string,
 ) (*ParsedSession, []ParsedMessage) {
 	t.Helper()
-	results, err := parsePiebaldSessionResults(dbPath, chatID, machine)
+	results, err := parsePiebaldSessionResults(t.Context(), dbPath, chatID, machine, false)
 	require.NoError(t, err, "parsePiebaldSessionResults")
 	require.NotEmpty(t, results, "expected at least one parsed session")
 	return &results[0].Session, results[0].Messages
@@ -240,6 +241,105 @@ func TestParsePiebaldSessionBasic(t *testing.T) {
 	assert.Equal(t, int64(10), gjson.GetBytes(msgs[1].TokenUsage, "input_tokens").Int(), "input_tokens")
 	assert.Equal(t, int64(20), gjson.GetBytes(msgs[1].TokenUsage, "output_tokens").Int(), "output_tokens")
 	assert.Equal(t, int64(5), gjson.GetBytes(msgs[1].TokenUsage, "cache_read_input_tokens").Int(), "cache_read_input_tokens")
+}
+
+func removePiebaldCurrentDirectoryColumn(t *testing.T, dbPath string) {
+	t.Helper()
+	execPiebaldTestSQL(t, dbPath, `ALTER TABLE chats DROP COLUMN current_directory`)
+}
+
+func TestParsePiebaldLegacySchema(t *testing.T) {
+	dbPath := newPiebaldTestDB(t)
+	removePiebaldCurrentDirectoryColumn(t, dbPath)
+	execPiebaldTestSQL(t, dbPath,
+		`INSERT INTO projects (id, directory, name) VALUES (1, '/repo/project', 'project')`)
+	execPiebaldTestSQL(t, dbPath,
+		`INSERT INTO chats
+		 (id, title, created_at, updated_at, is_deleted, message_count, worktree_path, branch_name, project_id)
+		 VALUES (42, 'Legacy schema', '2026-05-01T10:00:00Z', '2026-05-01T10:05:00Z', 0, 2, '/repo/worktree', 'feature', 1)`)
+	execPiebaldTestSQL(t, dbPath,
+		`INSERT INTO messages
+		 (id, parent_chat_id, role, model, created_at, updated_at, status)
+		 VALUES (100, 42, 'user', '', '2026-05-01T10:00:01Z', '2026-05-01T10:00:01Z', 'completed')`)
+	seedPiebaldTextPart(t, dbPath, 200, 100, 0, "Read the legacy chat", false)
+	execPiebaldTestSQL(t, dbPath,
+		`INSERT INTO messages
+		 (id, parent_chat_id, role, model, created_at, updated_at, input_tokens, output_tokens, status)
+		 VALUES (101, 42, 'assistant', 'claude-test', '2026-05-01T10:00:02Z', '2026-05-01T10:00:03Z', 10, 20, 'completed')`)
+	seedPiebaldTextPart(t, dbPath, 201, 101, 0, "Imported", false)
+
+	sess, msgs := parsePiebaldOneSession(t, dbPath, "42", "machine")
+	require.NotNil(t, sess)
+	assert.Equal(t, "piebald:42", sess.ID)
+	assert.Equal(t, AgentPiebald, sess.Agent)
+	assert.Equal(t, "project", sess.Project)
+	assert.Equal(t, "/repo/worktree", sess.Cwd)
+	assert.Equal(t, "feature", sess.GitBranch)
+	assert.Equal(t, "42", sess.SourceSessionID)
+	assert.Equal(t, dbPath+"#42", sess.File.Path)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "Read the legacy chat", msgs[0].Content)
+	assert.Equal(t, "Imported", msgs[1].Content)
+	assert.Equal(t, 10, msgs[1].ContextTokens)
+	assert.Equal(t, 20, msgs[1].OutputTokens)
+}
+
+func TestParsePiebaldRequiredChatColumnStillFails(t *testing.T) {
+	dbPath := newPiebaldTestDB(t)
+	execPiebaldTestSQL(t, dbPath, `ALTER TABLE chats DROP COLUMN message_count`)
+
+	_, err := parsePiebaldSessionResults(t.Context(), dbPath, "42", "machine", false)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "no such column: c.message_count")
+}
+
+func TestParsePiebaldCurrentDirectoryNullKeepsFallbacks(t *testing.T) {
+	dbPath := newPiebaldTestDB(t)
+	execPiebaldTestSQL(t, dbPath,
+		`INSERT INTO projects (id, directory, name) VALUES (1, '/repo/project', 'project')`)
+	execPiebaldTestSQL(t, dbPath,
+		`INSERT INTO chats
+		 (id, title, created_at, updated_at, is_deleted, message_count, current_directory, worktree_path, project_id)
+		 VALUES (42, 'NULL directory', '2026-05-01T10:00:00Z', '2026-05-01T10:05:00Z', 0, 1, NULL, NULL, 1)`)
+	execPiebaldTestSQL(t, dbPath,
+		`INSERT INTO messages
+		 (id, parent_chat_id, role, created_at, updated_at, status)
+		 VALUES (100, 42, 'user', '2026-05-01T10:00:01Z', '2026-05-01T10:00:01Z', 'completed')`)
+	seedPiebaldTextPart(t, dbPath, 200, 100, 0, "Fallback", false)
+
+	sess, _ := parsePiebaldOneSession(t, dbPath, "42", "machine")
+	require.NotNil(t, sess)
+	assert.Equal(t, "project", sess.Project)
+	assert.Equal(t, "/repo/project", sess.Cwd)
+}
+
+func TestParsePiebaldCurrentDirectoryCaseInsensitive(t *testing.T) {
+	dbPath := newPiebaldTestDB(t)
+	execPiebaldTestSQL(t, dbPath,
+		`INSERT INTO projects (id, directory, name) VALUES (1, '/repo/project', 'project')`,
+	)
+	execPiebaldTestSQL(t, dbPath,
+		`ALTER TABLE chats RENAME COLUMN current_directory TO Current_Directory`,
+	)
+	execPiebaldTestSQL(t, dbPath,
+		`INSERT INTO chats
+			(id, title, created_at, updated_at, is_deleted, message_count,
+			 Current_Directory, worktree_path, branch_name, project_id)
+		 VALUES (42, 'Case variant', '2026-05-01T10:00:00Z',
+			 '2026-05-01T10:05:00Z', 0, 1, '/repo/current', '', 'main', 1)`,
+	)
+	execPiebaldTestSQL(t, dbPath,
+		`INSERT INTO messages
+			(id, parent_chat_id, role, created_at, updated_at, status)
+		 VALUES (100, 42, 'user', '2026-05-01T10:00:01Z',
+			 '2026-05-01T10:00:01Z', 'completed')`,
+	)
+	seedPiebaldTextPart(t, dbPath, 200, 100, 0, "Case variant", false)
+
+	sess, _ := parsePiebaldOneSession(t, dbPath, "42", "machine")
+	require.NotNil(t, sess)
+	assert.Equal(t, "/repo/current", sess.Cwd)
+	assert.Equal(t, "main", sess.GitBranch)
 }
 
 func TestParsePiebaldSessionToolCall(t *testing.T) {
@@ -307,7 +407,7 @@ func TestParsePiebaldSessionResultsSplitsForks(t *testing.T) {
 		piebaldTextPartSeed{2001, 201, 0, "fork answer", false},
 	)
 
-	results, err := parsePiebaldSessionResults(dbPath, "42", "machine")
+	results, err := parsePiebaldSessionResults(t.Context(), dbPath, "42", "machine", false)
 	require.NoError(t, err, "parsePiebaldSessionResults")
 	require.Len(t, results, 2)
 	main := results[0]
@@ -366,7 +466,7 @@ func TestParsePiebaldSessionResultsHandlesNestedForks(t *testing.T) {
 		piebaldTextPartSeed{1301, 301, 0, "nested fork answer", false},
 	)
 
-	results, err := parsePiebaldSessionResults(dbPath, "42", "machine")
+	results, err := parsePiebaldSessionResults(t.Context(), dbPath, "42", "machine", false)
 	require.NoError(t, err, "parsePiebaldSessionResults")
 	require.Len(t, results, 3, "main + outer fork + nested fork")
 

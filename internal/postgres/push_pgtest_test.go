@@ -16,6 +16,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 func TestPushPreservesLegacyOffsetTimestamps(t *testing.T) {
@@ -30,7 +31,7 @@ func TestPushPreservesLegacyOffsetTimestamps(t *testing.T) {
 	defer pg.Close()
 	require.NoError(t, EnsureSchema(ctx, pg, schema))
 
-	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
 	defer local.Close()
 
@@ -38,12 +39,12 @@ func TestPushPreservesLegacyOffsetTimestamps(t *testing.T) {
 	started := "2026-03-09 22:48:29.937+00"
 	ended := "2026-03-14 00:32:16.577+00"
 	created := "2026-04-14 04:09:28.922+00"
-	require.NoError(t, local.UpsertSession(db.Session{
+	require.NoError(t, local.UpsertSession(t.Context(), db.Session{
 		ID: sessionID, Project: "project", Machine: "machine", Agent: "claude",
 		StartedAt: &started, EndedAt: &ended, MessageCount: 1,
 		UserMessageCount: 1,
 	}))
-	require.NoError(t, local.InsertMessages([]db.Message{{
+	require.NoError(t, local.InsertMessages(t.Context(), []db.Message{{
 		SessionID: sessionID, Ordinal: 0, Role: "user", Content: "message",
 		ContentLength: len("message"), Timestamp: started,
 	}}))
@@ -85,7 +86,7 @@ func TestPushPreservesLegacyOffsetTimestamps(t *testing.T) {
 	_, err = pg.ExecContext(ctx,
 		`UPDATE messages SET timestamp = NULL WHERE session_id = $1`, sessionID)
 	require.NoError(t, err)
-	require.NoError(t, local.SetSyncState(timestampNormalizationBackfillStateKey, ""))
+	require.NoError(t, local.SetSyncState(t.Context(), timestampNormalizationBackfillStateKey, ""))
 
 	result, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
@@ -102,7 +103,7 @@ func TestPushPreservesLegacyOffsetTimestamps(t *testing.T) {
 	assert.Equal(t, "2026-03-09T22:48:29.937Z", FormatISO8601(gotStarted))
 	assert.Equal(t, "2026-03-14T00:32:16.577Z", FormatISO8601(gotEnded))
 	assert.Equal(t, "2026-03-09T22:48:29.937Z", FormatISO8601(gotMessage))
-	marker, err := local.GetSyncState(timestampNormalizationBackfillStateKey)
+	marker, err := local.GetSyncState(t.Context(), timestampNormalizationBackfillStateKey)
 	require.NoError(t, err)
 	assert.Equal(t, "1", marker)
 }
@@ -119,14 +120,14 @@ func TestPGUsageEventFingerprintsPreserveExactMicrodollars(t *testing.T) {
 	defer pg.Close()
 	require.NoError(t, EnsureSchema(ctx, pg, schema))
 
-	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
 	defer local.Close()
-	require.NoError(t, local.UpsertSession(db.Session{
+	require.NoError(t, local.UpsertSession(t.Context(), db.Session{
 		ID: "exact-money", Project: "project", Machine: "machine", Agent: "codex",
 	}))
 	cost := money.Money{Microdollars: 9_007_199_254_740_993}
-	require.NoError(t, local.ReplaceSessionUsageEvents("exact-money", []db.UsageEvent{{
+	require.NoError(t, local.ReplaceSessionUsageEvents(t.Context(), "exact-money", []db.UsageEvent{{
 		SessionID: "exact-money", Source: "provider", Model: "model",
 		InputTokens: 11, OutputTokens: 7, Cost: &cost,
 		CostStatus: "priced", CostSource: "provider",
@@ -175,10 +176,10 @@ func TestPushMirrorsSessionProjectIdentitySnapshotsByArchiveGeneration(
 	require.NoError(t, err)
 	require.NoError(t, EnsureSchema(ctx, pg, schema))
 
-	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
 	defer local.Close()
-	require.NoError(t, local.UpsertSession(db.Session{
+	require.NoError(t, local.UpsertSession(t.Context(), db.Session{
 		ID: "snapshot-session", Project: "app", Machine: "laptop", Agent: "codex",
 	}))
 	require.NoError(t, local.UpsertProjectIdentityObservation(ctx,
@@ -248,7 +249,7 @@ func TestPushMirrorsSessionProjectIdentitySnapshotsByArchiveGeneration(
 	assert.Equal(t, "https://github.com/acme/app.git", gotRemote,
 		"forced publication should rebuild PG identity rows")
 
-	require.NoError(t, local.DeleteSession("snapshot-session"))
+	require.NoError(t, local.DeleteSession(t.Context(), "snapshot-session"))
 	require.NoError(t, syncer.syncProjectIdentityObservations(ctx, false, nil))
 	var snapshotCount int
 	require.NoError(t, pg.QueryRowContext(ctx, `
@@ -270,7 +271,7 @@ func TestFilteredIdentityPublicationPreservesUnfilteredMetadata(t *testing.T) {
 	cleanNamedPGSchema(t, pgURL, schema)
 	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 	ctx := context.Background()
-	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, local.Close()) })
 	for _, fixture := range []struct {
@@ -281,7 +282,7 @@ func TestFilteredIdentityPublicationPreservesUnfilteredMetadata(t *testing.T) {
 		{includedSessionID, includedProject, "/workspace/included"},
 		{excludedSessionID, excludedProject, "/workspace/excluded"},
 	} {
-		require.NoError(t, local.UpsertSession(db.Session{
+		require.NoError(t, local.UpsertSession(t.Context(), db.Session{
 			ID: fixture.sessionID, Project: fixture.project,
 			Machine: "test-machine", Agent: "codex",
 		}))
@@ -298,13 +299,13 @@ func TestFilteredIdentityPublicationPreservesUnfilteredMetadata(t *testing.T) {
 	archiveID, err := local.GetArchiveID(ctx)
 	require.NoError(t, err)
 
-	unfiltered, err := New(pgURL, schema, local, "test-machine", true, SyncOptions{})
+	unfiltered, err := New(pgURL, schema, local, "test-machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	require.NoError(t, unfiltered.EnsureSchema(ctx))
 	require.NoError(t, unfiltered.syncProjectIdentityObservations(ctx, false, nil))
 	require.NoError(t, unfiltered.Close())
 
-	filtered, err := New(pgURL, schema, local, "test-machine", true, SyncOptions{
+	filtered, err := New(pgURL, schema, local, "test-machine", true, storage.PusherOptions{
 		Projects: []string{includedProject},
 	})
 	require.NoError(t, err)
@@ -344,7 +345,7 @@ func TestFilteredIdentityPublicationAdoptsLegacyOwnerlessScope(t *testing.T) {
 	cleanNamedPGSchema(t, pgURL, schema)
 	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 	ctx := context.Background()
-	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, local.Close()) })
 	for _, fixture := range []struct {
@@ -355,7 +356,7 @@ func TestFilteredIdentityPublicationAdoptsLegacyOwnerlessScope(t *testing.T) {
 		{excludedProject, "/workspace/excluded"},
 	} {
 		sessionID := "identity-" + fixture.project
-		require.NoError(t, local.UpsertSession(db.Session{
+		require.NoError(t, local.UpsertSession(t.Context(), db.Session{
 			ID: sessionID, Project: fixture.project,
 			Machine: "test-machine", Agent: "codex", Cwd: fixture.root,
 		}))
@@ -371,7 +372,7 @@ func TestFilteredIdentityPublicationAdoptsLegacyOwnerlessScope(t *testing.T) {
 	}
 
 	unfiltered, err := New(
-		pgURL, schema, local, "test-machine", true, SyncOptions{},
+		pgURL, schema, local, "test-machine", true, storage.PusherOptions{},
 	)
 	require.NoError(t, err)
 	require.NoError(t, unfiltered.EnsureSchema(ctx))
@@ -388,14 +389,14 @@ func TestFilteredIdentityPublicationAdoptsLegacyOwnerlessScope(t *testing.T) {
 
 	filtered, err := New(
 		pgURL, schema, local, "test-machine", true,
-		SyncOptions{Projects: []string{includedProject}},
+		storage.PusherOptions{Projects: []string{includedProject}},
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, filtered.Close()) })
 	require.NoError(t, filtered.EnsureSchema(ctx))
 	generation, err := local.GetDatabaseID(ctx)
 	require.NoError(t, err)
-	require.NoError(t, filtered.effectiveSyncState().SetSyncState(
+	require.NoError(t, filtered.effectiveSyncState().SetSyncState(t.Context(),
 		legacyProjectIdentityStateKey+":"+generation, "1",
 	))
 	_, err = local.CreateWorktreeProjectMapping(ctx, db.WorktreeProjectMapping{
@@ -438,12 +439,12 @@ func TestFilteredThenUnfilteredIdentityPublicationIncludesExcludedProject(
 	cleanNamedPGSchema(t, pgURL, schema)
 	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 	ctx := context.Background()
-	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, local.Close()) })
 	for _, project := range []string{"alpha", "beta"} {
 		sessionID := "identity-" + project
-		require.NoError(t, local.UpsertSession(db.Session{
+		require.NoError(t, local.UpsertSession(t.Context(), db.Session{
 			ID: sessionID, Project: project, Machine: "laptop", Agent: "codex",
 		}))
 		require.NoError(t, local.UpsertProjectIdentityObservation(ctx,
@@ -458,7 +459,7 @@ func TestFilteredThenUnfilteredIdentityPublicationIncludesExcludedProject(
 	}
 	filtered, err := New(
 		pgURL, schema, local, "laptop", true,
-		SyncOptions{Projects: []string{"alpha"}},
+		storage.PusherOptions{Projects: []string{"alpha"}},
 	)
 	require.NoError(t, err)
 	require.NoError(t, filtered.EnsureSchema(ctx))
@@ -488,7 +489,7 @@ func TestFilteredThenUnfilteredIdentityPublicationIncludesExcludedProject(
 	require.NoError(t, filtered.Close())
 
 	unfiltered, err := New(
-		pgURL, schema, local, "laptop", true, SyncOptions{},
+		pgURL, schema, local, "laptop", true, storage.PusherOptions{},
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, unfiltered.Close()) })
@@ -509,13 +510,13 @@ func TestAlternatingFilteredPublicationsPreserveEachScopesMetadata(
 	cleanNamedPGSchema(t, pgURL, schema)
 	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 	ctx := context.Background()
-	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, local.Close()) })
 
 	for _, project := range []string{"alpha", "beta"} {
 		sessionID := "identity-" + project
-		require.NoError(t, local.UpsertSession(db.Session{
+		require.NoError(t, local.UpsertSession(t.Context(), db.Session{
 			ID: sessionID, Project: project, Machine: "laptop", Agent: "codex",
 		}))
 		require.NoError(t, local.UpsertProjectIdentityObservation(ctx,
@@ -539,12 +540,12 @@ func TestAlternatingFilteredPublicationsPreserveEachScopesMetadata(
 	archiveID, err := local.GetArchiveID(ctx)
 	require.NoError(t, err)
 
-	alpha, err := New(pgURL, schema, local, "laptop", true, SyncOptions{
+	alpha, err := New(pgURL, schema, local, "laptop", true, storage.PusherOptions{
 		Projects: []string{"alpha"},
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, alpha.Close()) })
-	beta, err := New(pgURL, schema, local, "laptop", true, SyncOptions{
+	beta, err := New(pgURL, schema, local, "laptop", true, storage.PusherOptions{
 		Projects: []string{"beta"},
 	})
 	require.NoError(t, err)
@@ -614,18 +615,18 @@ func TestPushProjectMoveReconcilesFilteredScope(t *testing.T) {
 			cleanNamedPGSchema(t, pgURL, schema)
 			t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 			ctx := context.Background()
-			local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+			local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, local.Close()) })
 			startedAt := "2026-07-16T12:00:00.000Z"
 			localModifiedAt := startedAt
-			require.NoError(t, local.UpsertSession(db.Session{
+			require.NoError(t, local.UpsertSession(t.Context(), db.Session{
 				ID: sessionID, Project: sourceProject, Machine: "local",
 				Agent: "claude", Cwd: root, StartedAt: &startedAt,
 				LocalModifiedAt: &localModifiedAt, MessageCount: 1,
 				UserMessageCount: 1,
 			}))
-			require.NoError(t, local.InsertMessages([]db.Message{{
+			require.NoError(t, local.InsertMessages(t.Context(), []db.Message{{
 				SessionID: sessionID, Ordinal: 0, Role: "user",
 				Content: "project move", ContentLength: len("project move"),
 				Timestamp: startedAt,
@@ -637,7 +638,7 @@ func TestPushProjectMoveReconcilesFilteredScope(t *testing.T) {
 					ObservedAt: time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC),
 				},
 			))
-			syncer, err := New(pgURL, schema, local, "test-machine", true, SyncOptions{
+			syncer, err := New(pgURL, schema, local, "test-machine", true, storage.PusherOptions{
 				Projects: tc.projects, ExcludeProjects: tc.excludeProjects,
 			})
 			require.NoError(t, err)
@@ -709,7 +710,7 @@ func TestPushProjectMoveReconcilesFilteredScope(t *testing.T) {
 				WHERE project = $1`, targetProject).Scan(&count))
 			assert.Zero(t, count, "immutable snapshot must remain source-labelled")
 			if tc.wantSnapshot {
-				require.NoError(t, local.DeleteSession(sessionID))
+				require.NoError(t, local.DeleteSession(t.Context(), sessionID))
 				_, err = syncer.Push(ctx, false, nil)
 				require.NoError(t, err)
 				require.NoError(t, syncer.pg.QueryRowContext(ctx, `
@@ -731,13 +732,13 @@ func TestIdentityPublicationUpdatesOnlyChangedRowsAndAppliesTombstones(
 	cleanNamedPGSchema(t, pgURL, schema)
 	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 	ctx := context.Background()
-	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, local.Close()) })
 	observedAt := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)
 	for _, project := range []string{"alpha", "beta"} {
 		sessionID := "identity-" + project
-		require.NoError(t, local.UpsertSession(db.Session{
+		require.NoError(t, local.UpsertSession(t.Context(), db.Session{
 			ID: sessionID, Project: project, Machine: "laptop", Agent: "codex",
 		}))
 		require.NoError(t, local.UpsertProjectIdentityObservation(ctx,
@@ -751,7 +752,7 @@ func TestIdentityPublicationUpdatesOnlyChangedRowsAndAppliesTombstones(
 			},
 		))
 	}
-	require.NoError(t, local.UpsertSession(db.Session{
+	require.NoError(t, local.UpsertSession(t.Context(), db.Session{
 		ID: "identity-gamma", Project: "gamma", Machine: "laptop", Agent: "codex",
 	}))
 	require.NoError(t, local.UpsertProjectIdentityObservation(ctx,
@@ -763,7 +764,7 @@ func TestIdentityPublicationUpdatesOnlyChangedRowsAndAppliesTombstones(
 		},
 	))
 
-	syncer, err := New(pgURL, schema, local, "laptop", true, SyncOptions{})
+	syncer, err := New(pgURL, schema, local, "laptop", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 	require.NoError(t, syncer.EnsureSchema(ctx))
@@ -817,7 +818,7 @@ func TestIdentityPublicationUpdatesOnlyChangedRowsAndAppliesTombstones(
 	assert.Zero(t, gammaFallbacks)
 	assert.Equal(t, 1, gammaRemotes)
 
-	require.NoError(t, local.DeleteSession("identity-alpha"))
+	require.NoError(t, local.DeleteSession(t.Context(), "identity-alpha"))
 	require.NoError(t, syncer.syncProjectIdentityObservations(ctx, false, nil))
 	var snapshotCount int
 	require.NoError(t, syncer.pg.QueryRowContext(ctx, `
@@ -851,7 +852,7 @@ func TestPushSystemFingerprintCollisionRegression(t *testing.T) {
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	// Local SQLite DB.
-	localDB, err := db.Open(
+	localDB, err := db.Open(t.Context(),
 		filepath.Join(t.TempDir(), "local.db"),
 	)
 	require.NoError(t, err, "db.Open")
@@ -875,7 +876,7 @@ func TestPushSystemFingerprintCollisionRegression(t *testing.T) {
 		MessageCount: 7,
 		CreatedAt:    "2026-01-01T00:00:00Z",
 	}
-	require.NoError(t, localDB.UpsertSession(sess), "UpsertSession")
+	require.NoError(t, localDB.UpsertSession(t.Context(), sess), "UpsertSession")
 
 	// First set: system ordinals {0,4,5}.
 	firstSet := map[int]bool{0: true, 4: true, 5: true}
@@ -890,7 +891,7 @@ func TestPushSystemFingerprintCollisionRegression(t *testing.T) {
 			IsSystem:      firstSet[i],
 		}
 	}
-	require.NoError(t, localDB.InsertMessages(msgs), "InsertMessages (first set)")
+	require.NoError(t, localDB.InsertMessages(t.Context(), msgs), "InsertMessages (first set)")
 
 	// First push.
 	_, err = sync.Push(ctx, false, nil)
@@ -906,7 +907,7 @@ func TestPushSystemFingerprintCollisionRegression(t *testing.T) {
 	for i := range 7 {
 		msgs[i].IsSystem = secondSet[i]
 	}
-	require.NoError(t, localDB.ReplaceSessionMessages(sessID, msgs),
+	require.NoError(t, localDB.ReplaceSessionMessages(t.Context(), sessID, msgs),
 		"ReplaceSessionMessages (second set)")
 
 	// Force re-evaluation by clearing both the watermark and the cached
@@ -914,9 +915,9 @@ func TestPushSystemFingerprintCollisionRegression(t *testing.T) {
 	// does not include is_system flags (only metadata like MessageCount),
 	// so the boundary cache must be cleared for the incremental push to
 	// reach pushMessages and compare the message-level string fingerprint.
-	require.NoError(t, localDB.SetSyncState("last_push_at", ""),
+	require.NoError(t, localDB.SetSyncState(t.Context(), "last_push_at", ""),
 		"clearing last_push_at")
-	require.NoError(t, localDB.SetSyncState(lastPushBoundaryStateKey, ""),
+	require.NoError(t, localDB.SetSyncState(t.Context(), lastPushBoundaryStateKey, ""),
 		"clearing boundary state")
 
 	// Second push — must NOT skip due to fingerprint match.
@@ -940,7 +941,7 @@ func TestPushMessageContentHashRewriteRegression(t *testing.T) {
 	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
-	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
 	defer localDB.Close()
 
@@ -962,7 +963,7 @@ func TestPushMessageContentHashRewriteRegression(t *testing.T) {
 		UserMessageCount: 1,
 		CreatedAt:        "2026-01-01T00:00:00Z",
 	}
-	require.NoError(t, localDB.UpsertSession(sess), "UpsertSession")
+	require.NoError(t, localDB.UpsertSession(t.Context(), sess), "UpsertSession")
 	msgs := []db.Message{
 		{
 			SessionID:     sessID,
@@ -979,7 +980,7 @@ func TestPushMessageContentHashRewriteRegression(t *testing.T) {
 			ContentLength: len("answer aaaa"),
 		},
 	}
-	require.NoError(t, localDB.InsertMessages(msgs),
+	require.NoError(t, localDB.InsertMessages(t.Context(), msgs),
 		"InsertMessages first content")
 
 	_, err = sync.Push(ctx, false, nil)
@@ -988,11 +989,11 @@ func TestPushMessageContentHashRewriteRegression(t *testing.T) {
 
 	msgs[1].Content = "answer bbbb"
 	msgs[1].ContentLength = len("answer bbbb")
-	require.NoError(t, localDB.ReplaceSessionMessages(sessID, msgs),
+	require.NoError(t, localDB.ReplaceSessionMessages(t.Context(), sessID, msgs),
 		"ReplaceSessionMessages rewritten content")
-	require.NoError(t, localDB.SetSyncState("last_push_at", ""),
+	require.NoError(t, localDB.SetSyncState(t.Context(), "last_push_at", ""),
 		"clearing last_push_at")
-	require.NoError(t, localDB.SetSyncState(lastPushBoundaryStateKey, ""),
+	require.NoError(t, localDB.SetSyncState(t.Context(), lastPushBoundaryStateKey, ""),
 		"clearing boundary state")
 
 	_, err = sync.Push(ctx, false, nil)
@@ -1013,7 +1014,7 @@ func TestPushMessageFlagsRewriteRegression(t *testing.T) {
 	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
-	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
 	defer localDB.Close()
 
@@ -1035,7 +1036,7 @@ func TestPushMessageFlagsRewriteRegression(t *testing.T) {
 		UserMessageCount: 1,
 		CreatedAt:        "2026-01-01T00:00:00Z",
 	}
-	require.NoError(t, localDB.UpsertSession(sess), "UpsertSession")
+	require.NoError(t, localDB.UpsertSession(t.Context(), sess), "UpsertSession")
 	msgs := []db.Message{
 		{
 			SessionID:     sessID,
@@ -1052,7 +1053,7 @@ func TestPushMessageFlagsRewriteRegression(t *testing.T) {
 			ContentLength: len("answer"),
 		},
 	}
-	require.NoError(t, localDB.InsertMessages(msgs),
+	require.NoError(t, localDB.InsertMessages(t.Context(), msgs),
 		"InsertMessages first metadata")
 
 	_, err = sync.Push(ctx, false, nil)
@@ -1061,11 +1062,11 @@ func TestPushMessageFlagsRewriteRegression(t *testing.T) {
 
 	msgs[1].ThinkingText = "private chain of thought"
 	msgs[1].HasThinking = true
-	require.NoError(t, localDB.ReplaceSessionMessages(sessID, msgs),
+	require.NoError(t, localDB.ReplaceSessionMessages(t.Context(), sessID, msgs),
 		"ReplaceSessionMessages rewritten metadata")
-	require.NoError(t, localDB.SetSyncState("last_push_at", ""),
+	require.NoError(t, localDB.SetSyncState(t.Context(), "last_push_at", ""),
 		"clearing last_push_at")
-	require.NoError(t, localDB.SetSyncState(lastPushBoundaryStateKey, ""),
+	require.NoError(t, localDB.SetSyncState(t.Context(), lastPushBoundaryStateKey, ""),
 		"clearing boundary state")
 
 	_, err = sync.Push(ctx, false, nil)
@@ -1087,7 +1088,7 @@ func TestPushMessageNanosecondTimestampNoRewriteRegression(t *testing.T) {
 	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
-	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
 	defer localDB.Close()
 
@@ -1109,8 +1110,8 @@ func TestPushMessageNanosecondTimestampNoRewriteRegression(t *testing.T) {
 		UserMessageCount: 1,
 		CreatedAt:        "2026-01-01T00:00:00Z",
 	}
-	require.NoError(t, localDB.UpsertSession(sess), "UpsertSession")
-	require.NoError(t, localDB.InsertMessages([]db.Message{{
+	require.NoError(t, localDB.UpsertSession(t.Context(), sess), "UpsertSession")
+	require.NoError(t, localDB.InsertMessages(t.Context(), []db.Message{{
 		SessionID:     sessID,
 		Ordinal:       1,
 		Role:          "user",
@@ -1125,9 +1126,9 @@ func TestPushMessageNanosecondTimestampNoRewriteRegression(t *testing.T) {
 		"2026-01-01T00:00:00.123456Z")
 
 	ctidBefore := pgMessageCTID(t, pg, sessID, 1)
-	require.NoError(t, localDB.SetSyncState("last_push_at", ""),
+	require.NoError(t, localDB.SetSyncState(t.Context(), "last_push_at", ""),
 		"clearing last_push_at")
-	require.NoError(t, localDB.SetSyncState(lastPushBoundaryStateKey, ""),
+	require.NoError(t, localDB.SetSyncState(t.Context(), lastPushBoundaryStateKey, ""),
 		"clearing boundary state")
 
 	_, err = sync.Push(ctx, false, nil)
@@ -1153,7 +1154,7 @@ func TestPushSessionTerminationStatus(t *testing.T) {
 	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
-	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
 	defer localDB.Close()
 
@@ -1164,7 +1165,7 @@ func TestPushSessionTerminationStatus(t *testing.T) {
 		schema:     schema,
 		schemaDone: true,
 	}
-	markerID, err := sync.pushMarkerID()
+	markerID, err := sync.pushMarkerID(t.Context())
 	require.NoError(t, err, "pushMarkerID")
 
 	pending := "tool_call_pending"
@@ -1226,7 +1227,7 @@ func TestPushSessionPreservesSourceMachine(t *testing.T) {
 	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
-	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
 	defer localDB.Close()
 
@@ -1249,7 +1250,7 @@ func TestPushSessionPreservesSourceMachine(t *testing.T) {
 
 	tx, err := pg.BeginTx(ctx, nil)
 	require.NoError(t, err, "BeginTx")
-	markerID, err := sync.pushMarkerID()
+	markerID, err := sync.pushMarkerID(t.Context())
 	require.NoError(t, err, "pushMarkerID")
 	require.NoError(t, sync.pushSession(ctx, tx, remoteSession, markerID, nil), "pushSession")
 	require.NoError(t, tx.Commit(), "Commit")
@@ -1275,7 +1276,7 @@ func TestPushPreservesPGServeLocalCurationFields(t *testing.T) {
 	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
-	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
 	defer localDB.Close()
 
@@ -1299,8 +1300,8 @@ func TestPushPreservesPGServeLocalCurationFields(t *testing.T) {
 		UserMessageCount: 1,
 		CreatedAt:        "2026-01-01T00:00:00Z",
 	}
-	require.NoError(t, localDB.UpsertSession(sess), "UpsertSession")
-	require.NoError(t, localDB.InsertMessages([]db.Message{{
+	require.NoError(t, localDB.UpsertSession(t.Context(), sess), "UpsertSession")
+	require.NoError(t, localDB.InsertMessages(t.Context(), []db.Message{{
 		SessionID:     sessID,
 		Ordinal:       0,
 		Role:          "user",
@@ -1316,18 +1317,18 @@ func TestPushPreservesPGServeLocalCurationFields(t *testing.T) {
 	defer store.Close()
 
 	renamed := "Renamed in PG serve"
-	require.NoError(t, store.RenameSession(sessID, &renamed),
+	require.NoError(t, store.RenameSession(t.Context(), sessID, &renamed),
 		"RenameSession")
-	require.NoError(t, store.SoftDeleteSession(sessID),
+	require.NoError(t, store.SoftDeleteSession(t.Context(), sessID),
 		"SoftDeleteSession")
 
 	updatedFirstMessage := "source after"
 	sess.FirstMessage = &updatedFirstMessage
-	require.NoError(t, localDB.UpsertSession(sess),
+	require.NoError(t, localDB.UpsertSession(t.Context(), sess),
 		"UpsertSession updated source row")
-	require.NoError(t, localDB.SetSyncState("last_push_at", ""),
+	require.NoError(t, localDB.SetSyncState(t.Context(), "last_push_at", ""),
 		"clearing last_push_at")
-	require.NoError(t, localDB.SetSyncState(lastPushBoundaryStateKey, ""),
+	require.NoError(t, localDB.SetSyncState(t.Context(), lastPushBoundaryStateKey, ""),
 		"clearing boundary state")
 
 	_, err = sync.Push(ctx, false, nil)
@@ -1363,7 +1364,7 @@ func TestPushKeepsSourceAvailabilityLocalAndPreservesPGUserTrash(t *testing.T) {
 	})
 	require.NoError(t, EnsureSchema(t.Context(), pg, schema))
 
-	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
 	defer local.Close()
 	syncer := &Sync{
@@ -1377,7 +1378,7 @@ func TestPushKeepsSourceAvailabilityLocalAndPreservesPGUserTrash(t *testing.T) {
 		path := filepath.Join(t.TempDir(), id+".jsonl")
 		paths[id] = path
 		mtime := time.Now().UnixNano()
-		require.NoError(t, local.UpsertSession(db.Session{
+		require.NoError(t, local.UpsertSession(t.Context(), db.Session{
 			ID: id, Project: "project", Machine: "test-machine", Agent: "claude",
 			CreatedAt: "2026-07-14T00:00:00Z", FilePath: &path, FileMtime: &mtime,
 		}))
@@ -1389,7 +1390,7 @@ func TestPushKeepsSourceAvailabilityLocalAndPreservesPGUserTrash(t *testing.T) {
 	require.NoError(t, err)
 	defer store.Close()
 	for _, id := range []string{"user-delete", "user-empty"} {
-		require.NoError(t, store.SoftDeleteSession(id), "PG user trash %s", id)
+		require.NoError(t, store.SoftDeleteSession(t.Context(), id), "PG user trash %s", id)
 	}
 	sources := make([]db.SessionSourcePath, 0, len(paths))
 	for _, path := range paths {
@@ -1431,20 +1432,20 @@ func TestPushKeepsSourceAvailabilityLocalAndPreservesPGUserTrash(t *testing.T) {
 	assert.Contains(t, trashIDs, "user-delete")
 	assert.Contains(t, trashIDs, "user-empty")
 
-	restored, err := store.RestoreSession("source-protected")
+	restored, err := store.RestoreSession(t.Context(), "source-protected")
 	require.NoError(t, err)
 	assert.Zero(t, restored, "a visible session is not in user trash")
-	deleted, err := store.DeleteSessionIfTrashed("source-protected")
+	deleted, err := store.DeleteSessionIfTrashed(t.Context(), "source-protected")
 	require.NoError(t, err)
 	assert.Zero(t, deleted, "a visible session cannot be emptied from trash")
-	deleted, err = store.DeleteSessionIfTrashed("user-delete")
+	deleted, err = store.DeleteSessionIfTrashed(t.Context(), "user-delete")
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, deleted, "ordinary PG user trash remains deletable")
 
 	for _, id := range []string{"source-revive", "user-empty"} {
 		path := paths[id]
 		mtime := time.Now().UnixNano()
-		require.NoError(t, local.UpsertSession(db.Session{
+		require.NoError(t, local.UpsertSession(t.Context(), db.Session{
 			ID: id, Project: "project", Machine: "test-machine", Agent: "claude",
 			CreatedAt: "2026-07-14T00:00:00Z", FilePath: &path, FileMtime: &mtime,
 		}), "revive local source %s", id)
@@ -1468,7 +1469,7 @@ func TestPushKeepsSourceAvailabilityLocalAndPreservesPGUserTrash(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, sessionIDs(trashed), "user-empty",
 		"newer PG user trash must survive an older local revival")
-	emptied, err := store.EmptyTrash()
+	emptied, err := store.EmptyTrash(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, 1, emptied)
 	protected, err := store.GetSessionFull(t.Context(), "source-protected")
@@ -1490,7 +1491,7 @@ func TestPushPreservesPGServePermanentDeletes(t *testing.T) {
 	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
-	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
 	defer localDB.Close()
 
@@ -1525,9 +1526,9 @@ func TestPushPreservesPGServePermanentDeletes(t *testing.T) {
 		},
 	}
 	for _, sess := range sourceRows {
-		require.NoError(t, localDB.UpsertSession(sess),
+		require.NoError(t, localDB.UpsertSession(t.Context(), sess),
 			"UpsertSession "+sess.ID)
-		require.NoError(t, localDB.InsertMessages([]db.Message{{
+		require.NoError(t, localDB.InsertMessages(t.Context(), []db.Message{{
 			SessionID:     sess.ID,
 			Ordinal:       0,
 			Role:          "user",
@@ -1543,25 +1544,25 @@ func TestPushPreservesPGServePermanentDeletes(t *testing.T) {
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
-	require.NoError(t, store.SoftDeleteSession(deleteIfTrashedID),
+	require.NoError(t, store.SoftDeleteSession(t.Context(), deleteIfTrashedID),
 		"SoftDeleteSession deleteIfTrashedID")
-	deleted, err := store.DeleteSessionIfTrashed(deleteIfTrashedID)
+	deleted, err := store.DeleteSessionIfTrashed(t.Context(), deleteIfTrashedID)
 	require.NoError(t, err, "DeleteSessionIfTrashed")
 	assert.EqualValues(t, 1, deleted)
 
-	deletedCount, err := store.SoftDeleteSessions([]string{emptyTrashID})
+	deletedCount, err := store.SoftDeleteSessions(t.Context(), []string{emptyTrashID})
 	require.NoError(t, err, "SoftDeleteSessions")
 	assert.Equal(t, 1, deletedCount)
-	emptied, err := store.EmptyTrash()
+	emptied, err := store.EmptyTrash(t.Context())
 	require.NoError(t, err, "EmptyTrash")
 	assert.Equal(t, 1, emptied)
 
 	for _, sess := range sourceRows {
 		updated := sess
 		updated.MessageCount = 2
-		require.NoError(t, localDB.UpsertSession(updated),
+		require.NoError(t, localDB.UpsertSession(t.Context(), updated),
 			"UpsertSession updated "+sess.ID)
-		require.NoError(t, localDB.ReplaceSessionMessages(sess.ID, []db.Message{
+		require.NoError(t, localDB.ReplaceSessionMessages(t.Context(), sess.ID, []db.Message{
 			{
 				SessionID:     sess.ID,
 				Ordinal:       0,
@@ -1613,7 +1614,7 @@ func TestPushPurgesRowsForPGExcludedSessions(t *testing.T) {
 	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
-	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
 	defer localDB.Close()
 
@@ -1635,8 +1636,8 @@ func TestPushPurgesRowsForPGExcludedSessions(t *testing.T) {
 		UserMessageCount: 1,
 		CreatedAt:        "2026-01-01T00:00:00Z",
 	}
-	require.NoError(t, localDB.UpsertSession(sess), "UpsertSession")
-	require.NoError(t, localDB.InsertMessages([]db.Message{{
+	require.NoError(t, localDB.UpsertSession(t.Context(), sess), "UpsertSession")
+	require.NoError(t, localDB.InsertMessages(t.Context(), []db.Message{{
 		SessionID:     sessionID,
 		Ordinal:       0,
 		Role:          "user",
@@ -1655,8 +1656,8 @@ func TestPushPurgesRowsForPGExcludedSessions(t *testing.T) {
 
 	updated := sess
 	updated.MessageCount = 2
-	require.NoError(t, localDB.UpsertSession(updated), "update local session")
-	require.NoError(t, localDB.ReplaceSessionMessages(sessionID, []db.Message{
+	require.NoError(t, localDB.UpsertSession(t.Context(), updated), "update local session")
+	require.NoError(t, localDB.ReplaceSessionMessages(t.Context(), sessionID, []db.Message{
 		{
 			SessionID:     sessionID,
 			Ordinal:       0,
@@ -1698,7 +1699,7 @@ func TestPushSessionSkipsPGExcludedSession(t *testing.T) {
 	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
-	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
 	defer localDB.Close()
 
@@ -1719,7 +1720,7 @@ func TestPushSessionSkipsPGExcludedSession(t *testing.T) {
 
 	tx, err := pg.BeginTx(ctx, nil)
 	require.NoError(t, err, "BeginTx")
-	markerID, err := sync.pushMarkerID()
+	markerID, err := sync.pushMarkerID(t.Context())
 	require.NoError(t, err, "pushMarkerID")
 	err = sync.pushSession(ctx, tx, db.Session{
 		ID:        sessionID,
@@ -1752,7 +1753,7 @@ func TestPushUpdatesSourceCurationFieldsWithoutPGOverride(t *testing.T) {
 	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
-	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
 	defer localDB.Close()
 
@@ -1776,10 +1777,10 @@ func TestPushUpdatesSourceCurationFieldsWithoutPGOverride(t *testing.T) {
 		UserMessageCount: 1,
 		CreatedAt:        "2026-01-01T00:00:00Z",
 	}
-	require.NoError(t, localDB.UpsertSession(renamed), "UpsertSession renamed")
-	require.NoError(t, localDB.RenameSession(renamedID, &sourceNameOne),
+	require.NoError(t, localDB.UpsertSession(t.Context(), renamed), "UpsertSession renamed")
+	require.NoError(t, localDB.RenameSession(t.Context(), renamedID, &sourceNameOne),
 		"RenameSession renamed initial source name")
-	require.NoError(t, localDB.InsertMessages([]db.Message{{
+	require.NoError(t, localDB.InsertMessages(t.Context(), []db.Message{{
 		SessionID:     renamedID,
 		Ordinal:       0,
 		Role:          "user",
@@ -1797,23 +1798,23 @@ func TestPushUpdatesSourceCurationFieldsWithoutPGOverride(t *testing.T) {
 		UserMessageCount: 1,
 		CreatedAt:        "2026-01-01T00:00:01Z",
 	}
-	require.NoError(t, localDB.UpsertSession(restored), "UpsertSession restored")
-	require.NoError(t, localDB.InsertMessages([]db.Message{{
+	require.NoError(t, localDB.UpsertSession(t.Context(), restored), "UpsertSession restored")
+	require.NoError(t, localDB.InsertMessages(t.Context(), []db.Message{{
 		SessionID:     restoredID,
 		Ordinal:       0,
 		Role:          "user",
 		Content:       restoredID,
 		ContentLength: len(restoredID),
 	}}), "InsertMessages restored")
-	require.NoError(t, localDB.SoftDeleteSession(restoredID),
+	require.NoError(t, localDB.SoftDeleteSession(t.Context(), restoredID),
 		"SoftDeleteSession restored")
 
 	_, err = sync.Push(ctx, false, nil)
 	require.NoError(t, err, "Push initial source curation")
 
-	require.NoError(t, localDB.RenameSession(renamedID, &sourceNameTwo),
+	require.NoError(t, localDB.RenameSession(t.Context(), renamedID, &sourceNameTwo),
 		"RenameSession renamed source update")
-	restoredCount, err := localDB.RestoreSession(restoredID)
+	restoredCount, err := localDB.RestoreSession(t.Context(), restoredID)
 	require.NoError(t, err, "RestoreSession restoredID")
 	assert.EqualValues(t, 1, restoredCount)
 
@@ -1849,7 +1850,7 @@ func TestPushPreservesLegacyPGCurationWithoutSourceBaseline(t *testing.T) {
 	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
-	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
 	defer localDB.Close()
 
@@ -1873,10 +1874,10 @@ func TestPushPreservesLegacyPGCurationWithoutSourceBaseline(t *testing.T) {
 		UserMessageCount: 1,
 		CreatedAt:        "2026-01-01T00:00:00Z",
 	}
-	require.NoError(t, localDB.UpsertSession(renamed), "UpsertSession renamed")
-	require.NoError(t, localDB.RenameSession(renamedID, &sourceNameOne),
+	require.NoError(t, localDB.UpsertSession(t.Context(), renamed), "UpsertSession renamed")
+	require.NoError(t, localDB.RenameSession(t.Context(), renamedID, &sourceNameOne),
 		"RenameSession renamed initial source name")
-	require.NoError(t, localDB.InsertMessages([]db.Message{{
+	require.NoError(t, localDB.InsertMessages(t.Context(), []db.Message{{
 		SessionID:     renamedID,
 		Ordinal:       0,
 		Role:          "user",
@@ -1894,8 +1895,8 @@ func TestPushPreservesLegacyPGCurationWithoutSourceBaseline(t *testing.T) {
 		UserMessageCount: 1,
 		CreatedAt:        "2026-01-01T00:00:01Z",
 	}
-	require.NoError(t, localDB.UpsertSession(trashed), "UpsertSession trashed")
-	require.NoError(t, localDB.InsertMessages([]db.Message{{
+	require.NoError(t, localDB.UpsertSession(t.Context(), trashed), "UpsertSession trashed")
+	require.NoError(t, localDB.InsertMessages(t.Context(), []db.Message{{
 		SessionID:     trashedID,
 		Ordinal:       0,
 		Role:          "user",
@@ -1925,7 +1926,7 @@ func TestPushPreservesLegacyPGCurationWithoutSourceBaseline(t *testing.T) {
 	)
 	require.NoError(t, err, "simulate legacy PG trash")
 
-	require.NoError(t, localDB.RenameSession(renamedID, &sourceNameTwo),
+	require.NoError(t, localDB.RenameSession(t.Context(), renamedID, &sourceNameTwo),
 		"RenameSession renamed source update")
 
 	_, err = sync.Push(ctx, false, nil)
@@ -1980,7 +1981,7 @@ func TestPushSyncsUsageEventsForZeroMessageSession(t *testing.T) {
 	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
-	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
 	defer localDB.Close()
 
@@ -2005,10 +2006,10 @@ func TestPushSyncsUsageEventsForZeroMessageSession(t *testing.T) {
 		TotalOutputTokens:    500000,
 		HasTotalOutputTokens: true,
 	}
-	require.NoError(t, localDB.UpsertSession(sess), "UpsertSession")
+	require.NoError(t, localDB.UpsertSession(t.Context(), sess), "UpsertSession")
 
 	// gpt-5.5 usage event with NULL cost so it is priced from the catalog.
-	require.NoError(t, localDB.ReplaceSessionUsageEvents(sessID, []db.UsageEvent{{
+	require.NoError(t, localDB.ReplaceSessionUsageEvents(t.Context(), sessID, []db.UsageEvent{{
 		SessionID:    sessID,
 		Source:       "session",
 		Model:        "gpt-5.5",
@@ -2060,7 +2061,7 @@ func TestPushSyncsCursorUsageEventsIntoPGDailyUsage(t *testing.T) {
 	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
-	localDB, err := db.Open(filepath.Join(t.TempDir(), "sessions.db"))
+	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "sessions.db"))
 	require.NoError(t, err, "open local db")
 	defer localDB.Close()
 	require.NoError(t, localDB.UpsertModelPricing([]db.ModelPricing{{
@@ -2070,7 +2071,7 @@ func TestPushSyncsCursorUsageEventsIntoPGDailyUsage(t *testing.T) {
 		CacheCreationPerMTok: money.MustParseDollars("6.25"),
 		CacheReadPerMTok:     money.MustParseDollars("0.5"),
 	}}), "UpsertModelPricing")
-	require.NoError(t, localDB.InsertCursorUsageEvents([]db.CursorUsageEvent{{
+	require.NoError(t, localDB.InsertCursorUsageEvents(t.Context(), []db.CursorUsageEvent{{
 		OccurredAt:       "2026-05-14T10:05:00Z",
 		Model:            "claude-4.6-opus-high-thinking",
 		Kind:             "USAGE_EVENT_KIND_USAGE_BASED",
@@ -2174,10 +2175,10 @@ func TestPushCursorUsageEventsDedupsAfterLegacyMoneyMigration(t *testing.T) {
 	require.NoError(t, EnsureSchema(ctx, pg, schema),
 		"migrate legacy Cursor money")
 
-	localDB, err := db.Open(filepath.Join(t.TempDir(), "sessions.db"))
+	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "sessions.db"))
 	require.NoError(t, err, "open local db")
 	defer localDB.Close()
-	require.NoError(t, localDB.InsertCursorUsageEvents([]db.CursorUsageEvent{{
+	require.NoError(t, localDB.InsertCursorUsageEvents(t.Context(), []db.CursorUsageEvent{{
 		OccurredAt:       "2026-05-14T10:05:00.123456789Z",
 		Model:            "claude-4.6-opus-high-thinking",
 		Kind:             "USAGE_EVENT_KIND_USAGE_BASED",
@@ -2232,10 +2233,10 @@ func TestPushCursorUsageEventsPreservesRowsFromOtherMachines(t *testing.T) {
 		)`)
 	require.NoError(t, err, "seed existing pg row")
 
-	localDB, err := db.Open(filepath.Join(t.TempDir(), "sessions.db"))
+	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "sessions.db"))
 	require.NoError(t, err, "open local db")
 	defer localDB.Close()
-	require.NoError(t, localDB.InsertCursorUsageEvents([]db.CursorUsageEvent{{
+	require.NoError(t, localDB.InsertCursorUsageEvents(t.Context(), []db.CursorUsageEvent{{
 		OccurredAt:       "2026-05-14T10:05:00Z",
 		Model:            "claude-4.6-opus-high-thinking",
 		Kind:             "USAGE_EVENT_KIND_USAGE_BASED",
@@ -2395,7 +2396,7 @@ func TestPushMessagesSanitizesNULBytes(t *testing.T) {
 	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
-	localDB, err := db.Open(
+	localDB, err := db.Open(t.Context(),
 		filepath.Join(t.TempDir(), "local.db"),
 	)
 	require.NoError(t, err, "db.Open")
@@ -2425,7 +2426,7 @@ func TestPushMessagesSanitizesNULBytes(t *testing.T) {
 		Cwd:          "/tmp/with\x00nul",
 		GitBranch:    "main\x00",
 	}
-	require.NoError(t, localDB.UpsertSession(sess), "UpsertSession")
+	require.NoError(t, localDB.UpsertSession(t.Context(), sess), "UpsertSession")
 
 	msgs := []db.Message{{
 		SessionID:     sessID,
@@ -2436,7 +2437,7 @@ func TestPushMessagesSanitizesNULBytes(t *testing.T) {
 		Model:         badModel,
 		SourceUUID:    "uuid\x00tail",
 	}}
-	require.NoError(t, localDB.InsertMessages(msgs), "InsertMessages")
+	require.NoError(t, localDB.InsertMessages(t.Context(), msgs), "InsertMessages")
 
 	res, err := sync.Push(ctx, false, nil)
 	require.NoError(t, err, "Push")
@@ -2464,10 +2465,10 @@ func TestPushMessagesSanitizesNULBytes(t *testing.T) {
 		 WHERE session_id = $1 AND ordinal = 0`, sessID,
 	).Scan(&ctidBefore), "reading ctid before second push")
 
-	require.NoError(t, localDB.SetSyncState("last_push_at", ""),
+	require.NoError(t, localDB.SetSyncState(t.Context(), "last_push_at", ""),
 		"clearing last_push_at")
 	require.NoError(t,
-		localDB.SetSyncState(lastPushBoundaryStateKey, ""),
+		localDB.SetSyncState(t.Context(), lastPushBoundaryStateKey, ""),
 		"clearing boundary state")
 
 	res, err = sync.Push(ctx, false, nil)
@@ -2501,7 +2502,7 @@ func TestPushIncrementalWithOnlyForeignMachineSessions(t *testing.T) {
 	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
-	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
 	defer localDB.Close()
 
@@ -2522,8 +2523,8 @@ func TestPushIncrementalWithOnlyForeignMachineSessions(t *testing.T) {
 		MessageCount: 1,
 		CreatedAt:    "2026-01-01T00:00:00Z",
 	}
-	require.NoError(t, localDB.UpsertSession(sess), "UpsertSession")
-	require.NoError(t, localDB.InsertMessages([]db.Message{{
+	require.NoError(t, localDB.UpsertSession(t.Context(), sess), "UpsertSession")
+	require.NoError(t, localDB.InsertMessages(t.Context(), []db.Message{{
 		SessionID:     sessID,
 		Ordinal:       0,
 		Role:          "assistant",
@@ -2588,7 +2589,7 @@ func TestPushDetectsResetWhenCompetingMachineRowsExist(t *testing.T) {
 	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
-	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
 	defer localDB.Close()
 
@@ -2601,7 +2602,7 @@ func TestPushDetectsResetWhenCompetingMachineRowsExist(t *testing.T) {
 	}
 
 	const sessID = "remote-host~sess-1"
-	require.NoError(t, localDB.UpsertSession(db.Session{
+	require.NoError(t, localDB.UpsertSession(t.Context(), db.Session{
 		ID:           sessID,
 		Project:      "proj",
 		Machine:      "remote-host",
@@ -2609,7 +2610,7 @@ func TestPushDetectsResetWhenCompetingMachineRowsExist(t *testing.T) {
 		MessageCount: 1,
 		CreatedAt:    "2026-01-01T00:00:00Z",
 	}), "UpsertSession")
-	require.NoError(t, localDB.InsertMessages([]db.Message{{
+	require.NoError(t, localDB.InsertMessages(t.Context(), []db.Message{{
 		SessionID:     sessID,
 		Ordinal:       0,
 		Role:          "assistant",
@@ -2667,7 +2668,7 @@ func TestPushMarkerNotWrittenWhenResetRecoveryFails(t *testing.T) {
 	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
-	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
 	defer localDB.Close()
 
@@ -2680,7 +2681,7 @@ func TestPushMarkerNotWrittenWhenResetRecoveryFails(t *testing.T) {
 	}
 
 	const sessID = "reset-recovery-1"
-	require.NoError(t, localDB.UpsertSession(db.Session{
+	require.NoError(t, localDB.UpsertSession(t.Context(), db.Session{
 		ID:           sessID,
 		Project:      "proj",
 		Machine:      "this-host",
@@ -2688,7 +2689,7 @@ func TestPushMarkerNotWrittenWhenResetRecoveryFails(t *testing.T) {
 		MessageCount: 1,
 		CreatedAt:    "2026-01-01T00:00:00Z",
 	}), "UpsertSession")
-	require.NoError(t, localDB.InsertMessages([]db.Message{{
+	require.NoError(t, localDB.InsertMessages(t.Context(), []db.Message{{
 		SessionID:     sessID,
 		Ordinal:       0,
 		Role:          "assistant",
@@ -2773,7 +2774,7 @@ func TestPushUpdatesSentinelMachineWhenSyncMachineChanges(t *testing.T) {
 	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
-	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
 	defer localDB.Close()
 
@@ -2786,7 +2787,7 @@ func TestPushUpdatesSentinelMachineWhenSyncMachineChanges(t *testing.T) {
 	}
 
 	const sessID = "sentinel-machine-1"
-	require.NoError(t, localDB.UpsertSession(db.Session{
+	require.NoError(t, localDB.UpsertSession(t.Context(), db.Session{
 		ID:           sessID,
 		Project:      "proj",
 		Machine:      "local",
@@ -2794,7 +2795,7 @@ func TestPushUpdatesSentinelMachineWhenSyncMachineChanges(t *testing.T) {
 		MessageCount: 1,
 		CreatedAt:    "2026-01-01T00:00:00Z",
 	}), "UpsertSession")
-	require.NoError(t, localDB.InsertMessages([]db.Message{{
+	require.NoError(t, localDB.InsertMessages(t.Context(), []db.Message{{
 		SessionID:     sessID,
 		Ordinal:       0,
 		Role:          "assistant",
@@ -2818,7 +2819,7 @@ func TestPushUpdatesSentinelMachineWhenSyncMachineChanges(t *testing.T) {
 	// Rename: change the fallback machine and re-evaluate the session by
 	// clearing the watermark, mirroring any path that re-lists it.
 	sync.machine = "host-b"
-	require.NoError(t, localDB.SetSyncState("last_push_at", ""),
+	require.NoError(t, localDB.SetSyncState(t.Context(), "last_push_at", ""),
 		"clearing last_push_at")
 
 	res, err = sync.Push(ctx, false, nil)
@@ -2841,12 +2842,12 @@ func TestPushAdoptsOwnerlessRowsFromPreviousMarkerMachine(t *testing.T) {
 	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
-	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
 	defer localDB.Close()
 
 	const markerID = "legacy-marker-1"
-	require.NoError(t, localDB.SetSyncState("pg_push_marker_id", markerID),
+	require.NoError(t, localDB.SetSyncState(t.Context(), "pg_push_marker_id", markerID),
 		"seed local push marker")
 
 	sync := &Sync{
@@ -2858,7 +2859,7 @@ func TestPushAdoptsOwnerlessRowsFromPreviousMarkerMachine(t *testing.T) {
 	}
 
 	const sessID = "legacy-previous-machine-1"
-	require.NoError(t, localDB.UpsertSession(db.Session{
+	require.NoError(t, localDB.UpsertSession(t.Context(), db.Session{
 		ID:           sessID,
 		Project:      "proj",
 		Machine:      "host-b",
@@ -2866,7 +2867,7 @@ func TestPushAdoptsOwnerlessRowsFromPreviousMarkerMachine(t *testing.T) {
 		MessageCount: 1,
 		CreatedAt:    "2026-01-01T00:00:00Z",
 	}), "UpsertSession")
-	require.NoError(t, localDB.InsertMessages([]db.Message{{
+	require.NoError(t, localDB.InsertMessages(t.Context(), []db.Message{{
 		SessionID:     sessID,
 		Ordinal:       0,
 		Role:          "assistant",
@@ -2916,7 +2917,7 @@ func TestPushAdoptsOwnerlessRowsFromPreviousMarkerMachine(t *testing.T) {
 	assert.JSONEq(t, `["host-a"]`, aliases)
 
 	const laterSessID = "legacy-previous-machine-2"
-	require.NoError(t, localDB.UpsertSession(db.Session{
+	require.NoError(t, localDB.UpsertSession(t.Context(), db.Session{
 		ID:           laterSessID,
 		Project:      "proj",
 		Machine:      "host-b",
@@ -2924,7 +2925,7 @@ func TestPushAdoptsOwnerlessRowsFromPreviousMarkerMachine(t *testing.T) {
 		MessageCount: 1,
 		CreatedAt:    "2026-01-01T00:00:00Z",
 	}), "UpsertSession later legacy row")
-	require.NoError(t, localDB.InsertMessages([]db.Message{{
+	require.NoError(t, localDB.InsertMessages(t.Context(), []db.Message{{
 		SessionID:     laterSessID,
 		Ordinal:       0,
 		Role:          "assistant",
@@ -2965,12 +2966,12 @@ func TestFilteredPushAdoptsOwnerlessRowsFromLegacyUnscopedMarker(t *testing.T) {
 	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
-	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
 	defer localDB.Close()
 
 	const markerID = "legacy-marker-filtered-1"
-	require.NoError(t, localDB.SetSyncState("pg_push_marker_id", markerID),
+	require.NoError(t, localDB.SetSyncState(t.Context(), "pg_push_marker_id", markerID),
 		"seed local push marker")
 
 	projects := []string{"proj"}
@@ -2985,12 +2986,12 @@ func TestFilteredPushAdoptsOwnerlessRowsFromLegacyUnscopedMarker(t *testing.T) {
 		syncStateTarget: scope,
 		projects:        projects,
 	}
-	require.NoError(t, sync.effectiveSyncState().SetSyncState(
+	require.NoError(t, sync.effectiveSyncState().SetSyncState(t.Context(),
 		"last_push_at", "2025-12-31T00:00:00.000Z",
 	), "seed scoped local push state")
 
 	const sessID = "legacy-filtered-previous-machine-1"
-	require.NoError(t, localDB.UpsertSession(db.Session{
+	require.NoError(t, localDB.UpsertSession(t.Context(), db.Session{
 		ID:           sessID,
 		Project:      "proj",
 		Machine:      "host-b",
@@ -2998,7 +2999,7 @@ func TestFilteredPushAdoptsOwnerlessRowsFromLegacyUnscopedMarker(t *testing.T) {
 		MessageCount: 1,
 		CreatedAt:    "2026-01-01T00:00:00Z",
 	}), "UpsertSession")
-	require.NoError(t, localDB.InsertMessages([]db.Message{{
+	require.NoError(t, localDB.InsertMessages(t.Context(), []db.Message{{
 		SessionID:     sessID,
 		Ordinal:       0,
 		Role:          "assistant",
@@ -3063,7 +3064,7 @@ func TestPushReportsSkippedConflicts(t *testing.T) {
 	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
-	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
 	defer localDB.Close()
 
@@ -3076,7 +3077,7 @@ func TestPushReportsSkippedConflicts(t *testing.T) {
 	}
 
 	const sessID = "conflict-001"
-	require.NoError(t, localDB.UpsertSession(db.Session{
+	require.NoError(t, localDB.UpsertSession(t.Context(), db.Session{
 		ID:           sessID,
 		Project:      "proj",
 		Machine:      "machine-b",
@@ -3084,7 +3085,7 @@ func TestPushReportsSkippedConflicts(t *testing.T) {
 		MessageCount: 1,
 		CreatedAt:    "2026-01-01T00:00:00Z",
 	}), "UpsertSession")
-	require.NoError(t, localDB.InsertMessages([]db.Message{{
+	require.NoError(t, localDB.InsertMessages(t.Context(), []db.Message{{
 		SessionID:     sessID,
 		Ordinal:       0,
 		Role:          "assistant",
@@ -3103,7 +3104,7 @@ func TestPushReportsSkippedConflicts(t *testing.T) {
 	require.NoError(t, err, "Push")
 	assert.Zero(t, res.Errors, "push should not report failed sessions")
 	assert.Zero(t, res.SessionsPushed, "conflicting session should not be counted as pushed")
-	assert.Equal(t, 1, res.SkippedConflicts, "skipped conflicts should be observable in PushResult")
+	assert.Equal(t, 1, res.SkippedConflicts, "skipped conflicts should be observable in storage.PushResult")
 }
 
 // newSessionProvenancePushSync creates a fresh schema and a Sync wired to a
@@ -3122,7 +3123,7 @@ func newSessionProvenancePushSync(
 	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
-	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
 	t.Cleanup(func() { _ = localDB.Close() })
 
@@ -3153,8 +3154,8 @@ func seedProvenanceSession(
 	if filePath != "" {
 		sess.FilePath = &filePath
 	}
-	require.NoError(t, localDB.UpsertSession(sess), "UpsertSession")
-	require.NoError(t, localDB.InsertMessages([]db.Message{{
+	require.NoError(t, localDB.UpsertSession(t.Context(), sess), "UpsertSession")
+	require.NoError(t, localDB.InsertMessages(t.Context(), []db.Message{{
 		SessionID:     id,
 		Ordinal:       0,
 		Role:          "assistant",
@@ -3230,7 +3231,7 @@ func TestArchiveIdentityChangeRepublishesUnchangedSessions(t *testing.T) {
 
 	_, err = syncer.Push(ctx, false, nil)
 	require.ErrorContains(t, err, "archive salt mismatch")
-	persistedArchiveID, err := localDB.GetSyncState(lastPushSourceArchiveIDKey)
+	persistedArchiveID, err := localDB.GetSyncState(t.Context(), lastPushSourceArchiveIDKey)
 	require.NoError(t, err)
 	assert.Equal(t, oldArchiveID, persistedArchiveID,
 		"failed metadata publication must leave archive repair retryable")
@@ -3288,7 +3289,7 @@ func TestFilteredArchiveIdentityRepairPreservesOtherPublicationScope(
 	cleanNamedPGSchema(t, pgURL, schema)
 	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 	ctx := context.Background()
-	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, local.Close()) })
 	for _, project := range []string{"alpha", "beta"} {
@@ -3316,12 +3317,12 @@ func TestFilteredArchiveIdentityRepairPreservesOtherPublicationScope(
 		require.NoError(t, err)
 	}
 
-	alpha, err := New(pgURL, schema, local, "workstation", true, SyncOptions{
+	alpha, err := New(pgURL, schema, local, "workstation", true, storage.PusherOptions{
 		Projects: []string{"alpha"},
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, alpha.Close()) })
-	beta, err := New(pgURL, schema, local, "workstation", true, SyncOptions{
+	beta, err := New(pgURL, schema, local, "workstation", true, storage.PusherOptions{
 		Projects: []string{"beta"},
 	})
 	require.NoError(t, err)
@@ -3437,7 +3438,7 @@ func TestSessionProvenanceBackfillForcesOneFullPush(t *testing.T) {
 	// First push: marker absent -> full push forced, marker written after.
 	_, err := sync.Push(ctx, false, nil)
 	require.NoError(t, err, "first Push")
-	marker, err := localDB.GetSyncState(sessionProvenanceBackfillStateKey)
+	marker, err := localDB.GetSyncState(t.Context(), sessionProvenanceBackfillStateKey)
 	require.NoError(t, err, "GetSyncState")
 	assert.Equal(t, "1", marker)
 
@@ -3475,7 +3476,7 @@ func TestSessionProvenanceBackfillMarkerNotWrittenOnFailure(t *testing.T) {
 
 	_, err = sync.Push(ctx, false, nil)
 	require.Error(t, err, "push should fail at model pricing sync")
-	marker, err := localDB.GetSyncState(sessionProvenanceBackfillStateKey)
+	marker, err := localDB.GetSyncState(t.Context(), sessionProvenanceBackfillStateKey)
 	require.NoError(t, err, "GetSyncState")
 	assert.Equal(t, "", marker,
 		"failed push must not mark the provenance backfill done")
@@ -3519,7 +3520,7 @@ func TestSessionProvenanceBackfillCompletesPerFilterScope(t *testing.T) {
 		UPDATE sessions SET source_archive_id = ''
 		WHERE id = 'sess-in'`)
 	require.NoError(t, err, "clear filtered session provenance")
-	require.NoError(t, filtered.syncState.SetSyncState(
+	require.NoError(t, filtered.syncState.SetSyncState(t.Context(),
 		sessionProvenanceBackfillStateKey, "",
 	), "clear filter-scoped provenance marker")
 
@@ -3532,20 +3533,20 @@ func TestSessionProvenanceBackfillCompletesPerFilterScope(t *testing.T) {
 	).Scan(&archiveID), "read repaired filtered provenance")
 	assert.NotEmpty(t, archiveID,
 		"missing scoped marker must force the fingerprint-matched row to push")
-	scopedMarker, err := filtered.syncState.GetSyncState(
+	scopedMarker, err := filtered.syncState.GetSyncState(t.Context(),
 		sessionProvenanceBackfillStateKey,
 	)
 	require.NoError(t, err, "read filter-scoped provenance marker")
 	assert.Equal(t, "1", scopedMarker)
 
-	marker, err := localDB.GetSyncState(sessionProvenanceBackfillStateKey)
+	marker, err := localDB.GetSyncState(t.Context(), sessionProvenanceBackfillStateKey)
 	require.NoError(t, err, "read target-wide provenance marker")
 	assert.Empty(t, marker,
 		"filtered completion must not mark the unfiltered target complete")
 
 	_, err = unfiltered.Push(ctx, false, nil)
 	require.NoError(t, err, "unfiltered Push")
-	marker, err = localDB.GetSyncState(sessionProvenanceBackfillStateKey)
+	marker, err = localDB.GetSyncState(t.Context(), sessionProvenanceBackfillStateKey)
 	require.NoError(t, err, "GetSyncState after unfiltered push")
 	assert.Equal(t, "1", marker,
 		"unfiltered push must complete the provenance marker")

@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	stdsync "sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -17,10 +17,9 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
-	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/postgres"
+	"go.kenn.io/agentsview/internal/storage"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
@@ -29,24 +28,29 @@ import (
 // output: an immediate delegation announcement, elapsed-time heartbeats
 // while the blocking POST is in flight, and silence after stop.
 func TestDaemonPushHeartbeat(t *testing.T) {
-	orig := daemonPushHeartbeatInterval
-	daemonPushHeartbeatInterval = 5 * time.Millisecond
-	t.Cleanup(func() { daemonPushHeartbeatInterval = orig })
+	synctest.Test(t, func(t *testing.T) {
+		orig := daemonPushHeartbeatInterval
+		daemonPushHeartbeatInterval = 5 * time.Millisecond
+		t.Cleanup(func() { daemonPushHeartbeatInterval = orig })
 
-	var out syncBuffer
-	stop := startDaemonPushHeartbeatTo(&out, "PostgreSQL")
-	assert.Contains(t, out.String(),
-		"Pushing to PostgreSQL via the local daemon")
+		var out syncBuffer
+		stop := startDaemonPushHeartbeatTo(&out, "PostgreSQL")
+		var stopOnce stdsync.Once
+		stopHeartbeat := func() { stopOnce.Do(stop) }
+		t.Cleanup(stopHeartbeat)
+		assert.Contains(t, out.String(),
+			"Pushing to PostgreSQL via the local daemon")
 
-	require.Eventually(t, func() bool {
-		return strings.Contains(out.String(),
-			"still pushing to PostgreSQL via the daemon")
-	}, time.Second, time.Millisecond, "heartbeat line must appear")
+		synctest.Sleep(daemonPushHeartbeatInterval)
+		require.Contains(t, out.String(),
+			"still pushing to PostgreSQL via the daemon",
+			"heartbeat line must appear")
 
-	stop()
-	settled := out.String()
-	time.Sleep(20 * time.Millisecond)
-	assert.Equal(t, settled, out.String(), "no output after stop")
+		stopHeartbeat()
+		settled := out.String()
+		synctest.Sleep(20 * time.Millisecond)
+		assert.Equal(t, settled, out.String(), "no output after stop")
+	})
 }
 
 // TestDaemonPushProgressSilencesHeartbeat pins that the first streamed
@@ -54,17 +58,19 @@ func TestDaemonPushHeartbeat(t *testing.T) {
 // starts reporting real progress, heartbeat lines must not interleave with
 // the in-place progress line.
 func TestDaemonPushProgressSilencesHeartbeat(t *testing.T) {
-	orig := daemonPushHeartbeatInterval
-	daemonPushHeartbeatInterval = 50 * time.Millisecond
-	t.Cleanup(func() { daemonPushHeartbeatInterval = orig })
-
 	out := captureStdout(t, func() {
-		onProgress, finish := daemonPushProgress(
-			"PostgreSQL", newPGPushProgressPrinter(),
-		)
-		onProgress(postgres.PushProgress{SessionsDone: 1, SessionsTotal: 2})
-		time.Sleep(150 * time.Millisecond)
-		finish()
+		synctest.Test(t, func(t *testing.T) {
+			orig := daemonPushHeartbeatInterval
+			daemonPushHeartbeatInterval = 50 * time.Millisecond
+			t.Cleanup(func() { daemonPushHeartbeatInterval = orig })
+
+			onProgress, finish := daemonPushProgress(
+				"PostgreSQL", newReplicaPushProgressPrinter(),
+			)
+			onProgress(storage.PushProgress{SessionsDone: 1, SessionsTotal: 2})
+			synctest.Sleep(150 * time.Millisecond)
+			finish()
+		})
 	})
 
 	assert.Contains(t, out, "Pushing to PostgreSQL via the local daemon")
@@ -95,8 +101,8 @@ func (b *syncBuffer) String() string {
 func TestLocalArchiveWriteBackendPGPushStopsAfterCanceledLocalSync(t *testing.T) {
 	testLocalArchivePushStopsAfterCanceledSync(t,
 		func(backend *localArchiveWriteBackend, ctx context.Context) error {
-			_, err := backend.PGPush(
-				ctx, pgTargetSelection{}, PGPushConfig{}, nil, nil,
+			_, err := backend.ReplicaPush(
+				ctx, pgReplica{}, storage.ConfiguredReplica{}, ReplicaPushConfig{}, nil, nil,
 			)
 			return err
 		})
@@ -113,10 +119,10 @@ func TestLocalPGPushEnsuresPricingBeforeConnecting(t *testing.T) {
 		return nil
 	}
 
-	_, err := backend.PGPush(
-		context.Background(),
-		pgTargetSelection{PG: config.PGConfig{URL: unreachablePGURL}},
-		PGPushConfig{}, nil, nil,
+	_, err := backend.ReplicaPush(
+		t.Context(), pgReplica{},
+		storage.ConfiguredReplica{Target: storage.ReplicaTarget{URL: unreachablePGURL}},
+		ReplicaPushConfig{}, nil, nil,
 	)
 
 	require.Error(t, err)
@@ -135,13 +141,14 @@ func TestLocalPGWatchPusherUsesBackendPricingEnsure(t *testing.T) {
 		return nil
 	}
 	target := &fakeTarget{}
-	pusher := backend.newPGPusher(
+	pusher := backend.newReplicaPusher(
+		pgReplica{},
 		func(context.Context) error { return nil },
-		func() (pgTarget, error) { return target, nil },
+		func(context.Context) (storage.Pusher, error) { return target, nil },
 	)
 
 	require.NoError(t, pusher.push(
-		context.Background(), reasonChange, false,
+		t.Context(), reasonChange, false,
 	))
 	assert.Equal(t, 1, ensureCalls)
 	assert.Equal(t, 1, target.pushes)
@@ -165,7 +172,7 @@ func TestLocalArchiveWriteBackendDuckDBPushUsesConfiguredRemoteURL(t *testing.T)
 
 	captureStdout(t, func() {
 		_, err := backend.DuckDBPush(
-			context.Background(),
+			t.Context(),
 			config.DuckDBConfig{
 				URL:         "quack:https://duck.example.test",
 				MachineName: "workstation",
@@ -186,7 +193,7 @@ func TestLocalArchiveWriteBackendDuckDBPushValidatesRemoteBeforeLocalSync(t *tes
 	var err error
 	out := captureStdout(t, func() {
 		_, err = backend.DuckDBPush(
-			context.Background(),
+			t.Context(),
 			config.DuckDBConfig{
 				URL:         "quack:https://duck.example.test",
 				MachineName: "workstation",
@@ -231,7 +238,7 @@ func TestLocalArchiveWriteBackendDuckDBPushRejectsIncompleteDiscovery(t *testing
 	})
 
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "local sync discovery incomplete")
+	require.ErrorContains(t, err, "local sync discovery incomplete")
 	assert.NotContains(t, out, "Opening DuckDB mirror",
 		"an incomplete local archive must stop before mirror push")
 }
@@ -255,15 +262,15 @@ func TestLocalArchiveWriteBackendPGPushRejectsDeferredProcessing(t *testing.T) {
 
 	var err error
 	out := captureStdout(t, func() {
-		_, err = backend.PGPush(
-			t.Context(),
-			pgTargetSelection{PG: config.PGConfig{URL: unreachablePGURL}},
-			PGPushConfig{}, nil, nil,
+		_, err = backend.ReplicaPush(
+			t.Context(), pgReplica{},
+			storage.ConfiguredReplica{Target: storage.ReplicaTarget{URL: unreachablePGURL}},
+			ReplicaPushConfig{}, nil, nil,
 		)
 	})
 
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "local sync processing incomplete")
+	require.ErrorContains(t, err, "local sync processing incomplete")
 	assert.NotContains(t, out, "Connecting to PostgreSQL")
 }
 
@@ -274,10 +281,10 @@ func TestRunPGWatchStartupSyncFallsBackAfterAbortedResync(t *testing.T) {
 		func(s *db.Session) {
 			s.FilePath = &missingPath
 		})
-	engine := syncpkg.NewEngine(database, syncpkg.EngineConfig{})
+	engine := syncpkg.NewEngine(t.Context(), database, syncpkg.EngineConfig{})
 
 	didResync, err := runPGWatchStartupSync(
-		context.Background(), engine, true,
+		t.Context(), engine, true,
 	)
 
 	require.NoError(t, err)
@@ -325,7 +332,7 @@ func (p *startupDiscoveryFailureProvider) Parse(
 func TestRunPGWatchStartupSyncReportsIncompleteDiscovery(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
 	root := t.TempDir()
-	engine := syncpkg.NewEngine(database, syncpkg.EngineConfig{
+	engine := syncpkg.NewEngine(t.Context(), database, syncpkg.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentCowork: {root}},
 		ProviderFactories: []parser.ProviderFactory{
 			startupDiscoveryFailureFactory{err: errors.New("listing failed")},
@@ -345,10 +352,10 @@ func TestRunPGWatchStartupSyncReportsIncompleteDiscovery(t *testing.T) {
 func TestLocalArchiveWriteBackendPGPushWatchCanceledStartupIsClean(t *testing.T) {
 	backend := testLocalArchiveWriteBackend(t)
 
-	err := backend.PGPushWatch(
-		canceledContext(),
-		pgTargetSelection{},
-		PGPushConfig{},
+	err := backend.ReplicaPushWatch(
+		canceledContext(), pgReplica{},
+		storage.ConfiguredReplica{},
+		ReplicaPushConfig{},
 		nil,
 		nil,
 		time.Millisecond,
@@ -382,8 +389,8 @@ func pushWatchOwnerCases(t *testing.T) []pushWatchOwnerCase {
 		{
 			name: "daemon PostgreSQL",
 			run: func(ctx context.Context, hooks *archivePushWatchHooks) error {
-				return (daemonArchiveWriteBackend{watchHooks: hooks}).PGPushWatch(
-					ctx, pgTargetSelection{}, PGPushConfig{}, nil, nil,
+				return (daemonArchiveWriteBackend{watchHooks: hooks}).ReplicaPushWatch(
+					ctx, pgReplica{}, storage.ConfiguredReplica{}, ReplicaPushConfig{}, nil, nil,
 					time.Hour, time.Hour,
 				)
 			},
@@ -402,8 +409,8 @@ func pushWatchOwnerCases(t *testing.T) []pushWatchOwnerCase {
 			name: "local PostgreSQL",
 			run: func(ctx context.Context, hooks *archivePushWatchHooks) error {
 				localPostgreSQL.watchHooks = hooks
-				return localPostgreSQL.PGPushWatch(
-					ctx, pgTargetSelection{}, PGPushConfig{}, nil, nil,
+				return localPostgreSQL.ReplicaPushWatch(
+					ctx, pgReplica{}, storage.ConfiguredReplica{}, ReplicaPushConfig{}, nil, nil,
 					time.Hour, time.Hour,
 				)
 			},
@@ -420,12 +427,12 @@ func TestDaemonPGPushWatchSendsClaimedBatchAndProbesRecovery(t *testing.T) {
 		}},
 		watchHooks: h.hooks(),
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	done := make(chan error, 1)
 	go func() {
-		done <- backend.PGPushWatch(
-			ctx, pgTargetSelection{}, PGPushConfig{}, nil, nil,
+		done <- backend.ReplicaPushWatch(
+			ctx, pgReplica{}, storage.ConfiguredReplica{}, ReplicaPushConfig{}, nil, nil,
 			time.Hour, time.Hour,
 		)
 	}()
@@ -478,12 +485,12 @@ func TestDaemonPGPushWatchRenameProbesDeferredRecoveryAtExecution(t *testing.T) 
 		}},
 		watchHooks: h.hooks(),
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	done := make(chan error, 1)
 	go func() {
-		done <- backend.PGPushWatch(
-			ctx, pgTargetSelection{}, PGPushConfig{}, nil, nil,
+		done <- backend.ReplicaPushWatch(
+			ctx, pgReplica{}, storage.ConfiguredReplica{}, ReplicaPushConfig{}, nil, nil,
 			time.Hour, time.Hour,
 		)
 	}()
@@ -583,23 +590,23 @@ func (h *pushWatchOwnerHarness) hooks() *archivePushWatchHooks {
 		},
 		duckDBPush: func(
 			_ context.Context, reason pushReason, _ bool,
-		) (duckdbsync.PushResult, error) {
+		) (storage.MirrorPushResult, error) {
 			attempt, partial := h.nextAttempt(reason)
 			if partial {
-				return duckdbsync.PushResult{Errors: 1}, nil
+				return storage.MirrorPushResult{Errors: 1}, nil
 			}
-			return duckdbsync.PushResult{SessionsPushed: attempt}, nil
+			return storage.MirrorPushResult{SessionsPushed: attempt}, nil
 		},
-		pgPush: func(
-			_ context.Context, reason pushReason, cfg PGPushConfig,
-		) (postgres.PushResult, error) {
+		replicaPush: func(
+			_ context.Context, reason pushReason, cfg ReplicaPushConfig,
+		) (storage.PushResult, error) {
 			attempt, partial := h.nextPGWatchAttempt(reason, cfg)
 			if partial {
-				return postgres.PushResult{Errors: 1}, nil
+				return storage.PushResult{Errors: 1}, nil
 			}
-			return postgres.PushResult{SessionsPushed: attempt}, nil
+			return storage.PushResult{SessionsPushed: attempt}, nil
 		},
-		pgStartupSync: func(
+		replicaStartupSync: func(
 			context.Context, *syncpkg.Engine, bool,
 		) (bool, error) {
 			h.mu.Lock()
@@ -617,9 +624,9 @@ func (h *pushWatchOwnerHarness) hooks() *archivePushWatchHooks {
 			h.mu.Unlock()
 			return false, nil
 		},
-		newPGPusher: func(*syncpkg.Engine) *pgPusher {
+		newReplicaPusher: func(*syncpkg.Engine) *replicaPusher {
 			target := &pushWatchPGTarget{harness: h}
-			return &pgPusher{
+			return &replicaPusher{
 				localSync: func(context.Context) error {
 					h.mu.Lock()
 					h.localPushSyncs++
@@ -627,7 +634,7 @@ func (h *pushWatchOwnerHarness) hooks() *archivePushWatchHooks {
 					h.mu.Unlock()
 					return nil
 				},
-				connect: func() (pgTarget, error) { return target, nil },
+				connect: func(context.Context) (storage.Pusher, error) { return target, nil },
 			}
 		},
 		newDuckDBPusher: func(*syncpkg.Engine) *duckDBPusher {
@@ -641,12 +648,12 @@ func (h *pushWatchOwnerHarness) hooks() *archivePushWatchHooks {
 				},
 				mirrorPush: func(
 					_ context.Context, _ bool,
-				) (duckdbsync.PushResult, error) {
+				) (storage.MirrorPushResult, error) {
 					attempt, partial := h.nextAttempt("")
 					if partial {
-						return duckdbsync.PushResult{Errors: 1}, nil
+						return storage.MirrorPushResult{Errors: 1}, nil
 					}
-					return duckdbsync.PushResult{SessionsPushed: attempt}, nil
+					return storage.MirrorPushResult{SessionsPushed: attempt}, nil
 				},
 			}
 		},
@@ -672,7 +679,7 @@ func (h *pushWatchOwnerHarness) nextPGAttempt() (int, bool) {
 }
 
 func (h *pushWatchOwnerHarness) nextPGWatchAttempt(
-	reason pushReason, cfg PGPushConfig,
+	reason pushReason, cfg ReplicaPushConfig,
 ) (int, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -741,13 +748,13 @@ type pushWatchPGTarget struct {
 
 func (*pushWatchPGTarget) EnsureSchema(context.Context) error { return nil }
 func (t *pushWatchPGTarget) PushWithOptions(
-	_ context.Context, _ postgres.PushOptions, _ func(postgres.PushProgress),
-) (postgres.PushResult, error) {
+	_ context.Context, _ storage.PushOptions, _ func(storage.PushProgress),
+) (storage.PushResult, error) {
 	attempt, partial := t.harness.nextPGAttempt()
 	if partial {
-		return postgres.PushResult{Errors: 1}, nil
+		return storage.PushResult{Errors: 1}, nil
 	}
-	return postgres.PushResult{SessionsPushed: attempt}, nil
+	return storage.PushResult{SessionsPushed: attempt}, nil
 }
 func (*pushWatchPGTarget) Close() error { return nil }
 
@@ -760,58 +767,58 @@ func TestPushWatchProductionOwnersRetainPartialStartupUntilPeriodicSuccess(
 ) {
 	for _, owner := range pushWatchOwnerCases(t) {
 		t.Run(owner.name, func(t *testing.T) {
-			h := newPushWatchOwnerHarness(1)
-			ctx, cancel := context.WithCancel(context.Background())
-			t.Cleanup(cancel)
-			done := make(chan error, 1)
-			go func() { done <- owner.run(ctx, h.hooks()) }()
+			synctest.Test(t, func(t *testing.T) {
+				h := newPushWatchOwnerHarness(1)
+				ctx, cancel := context.WithCancel(t.Context())
+				t.Cleanup(cancel)
+				done := make(chan error, 1)
+				go func() { done <- owner.run(ctx, h.hooks()) }()
 
-			first := receiveArchiveTest(t, h.attempts)
-			require.Equal(t, 1, first.index)
-			if !isLocalEnginePushWatchOwner(owner.name) {
-				assert.Equal(t, reasonStartup, first.reason)
-			}
-			require.Eventually(t, func() bool {
+				first := receiveArchiveTest(t, h.attempts)
+				require.Equal(t, 1, first.index)
+				if !isLocalEnginePushWatchOwner(owner.name) {
+					assert.Equal(t, reasonStartup, first.reason)
+				}
+				synctest.Wait()
 				pending, waiters := h.pending()
-				return pending && waiters == 1
-			}, time.Second, time.Millisecond,
-				"partial startup must retain one dirty generation and waiter")
-			select {
-			case <-h.opened:
-				require.Fail(t, "partial startup opened watcher dispatch")
-			default:
-			}
+				require.True(t, pending && waiters == 1,
+					"partial startup must retain one dirty generation and waiter")
+				select {
+				case <-h.opened:
+					require.Fail(t, "partial startup opened watcher dispatch")
+				default:
+				}
 
-			h.floor <- time.Now()
-			second := receiveArchiveTest(t, h.attempts)
-			require.Equal(t, 2, second.index)
-			if !isLocalEnginePushWatchOwner(owner.name) {
-				assert.Equal(t, reasonInterval, second.reason)
-			}
-			receiveArchiveTest(t, h.opened)
-			require.Eventually(t, func() bool {
-				pending, waiters := h.pending()
-				return !pending && waiters == 0
-			}, time.Second, time.Millisecond,
-				"complete periodic push must drain startup work")
+				h.floor <- time.Now()
+				second := receiveArchiveTest(t, h.attempts)
+				require.Equal(t, 2, second.index)
+				if !isLocalEnginePushWatchOwner(owner.name) {
+					assert.Equal(t, reasonInterval, second.reason)
+				}
+				receiveArchiveTest(t, h.opened)
+				synctest.Wait()
+				pending, waiters = h.pending()
+				require.True(t, !pending && waiters == 0,
+					"complete periodic push must drain startup work")
 
-			events, opens, startupSyncs, localSyncs := h.snapshot()
-			require.NotEmpty(t, events)
-			assert.Equal(t, "collect", events[0],
-				"watcher collection must precede startup work")
-			assert.Equal(t, 1, opens)
-			if isLocalEnginePushWatchOwner(owner.name) {
-				assert.Equal(t, 1, startupSyncs)
-				assert.GreaterOrEqual(t, localSyncs, 2,
-					"initial and retry pushes each run local sync")
-				assert.Less(t, indexOfEvent(events, "startup-sync"),
-					indexOfEvent(events, "push"))
-				assert.Less(t, indexOfEvent(events, "local-sync"),
-					indexOfEvent(events, "push"))
-			}
+				events, opens, startupSyncs, localSyncs := h.snapshot()
+				require.NotEmpty(t, events)
+				assert.Equal(t, "collect", events[0],
+					"watcher collection must precede startup work")
+				assert.Equal(t, 1, opens)
+				if isLocalEnginePushWatchOwner(owner.name) {
+					assert.Equal(t, 1, startupSyncs)
+					assert.GreaterOrEqual(t, localSyncs, 2,
+						"initial and retry pushes each run local sync")
+					assert.Less(t, indexOfEvent(events, "startup-sync"),
+						indexOfEvent(events, "push"))
+					assert.Less(t, indexOfEvent(events, "local-sync"),
+						indexOfEvent(events, "push"))
+				}
 
-			cancel()
-			require.NoError(t, receiveArchiveTest(t, done))
+				cancel()
+				require.NoError(t, receiveArchiveTest(t, done))
+			})
 		})
 	}
 }
@@ -821,61 +828,60 @@ func TestPushWatchProductionOwnersRetryPartialAuthoritativeBatch(
 ) {
 	for _, owner := range pushWatchOwnerCases(t) {
 		t.Run(owner.name, func(t *testing.T) {
-			h := newPushWatchOwnerHarness(2)
-			ctx, cancel := context.WithCancel(context.Background())
-			t.Cleanup(cancel)
-			done := make(chan error, 1)
-			go func() { done <- owner.run(ctx, h.hooks()) }()
+			synctest.Test(t, func(t *testing.T) {
+				h := newPushWatchOwnerHarness(2)
+				ctx, cancel := context.WithCancel(t.Context())
+				t.Cleanup(cancel)
+				done := make(chan error, 1)
+				go func() { done <- owner.run(ctx, h.hooks()) }()
 
-			first := receiveArchiveTest(t, h.attempts)
-			require.Equal(t, 1, first.index)
-			if !isLocalEnginePushWatchOwner(owner.name) {
-				assert.Equal(t, reasonStartup, first.reason)
-			}
-			receiveArchiveTest(t, h.opened)
-			callback := h.watcherCallback()
-			require.NotNil(t, callback)
-			callbackDone := make(chan error, 1)
-			go func() {
-				callbackDone <- callback(ctx, syncpkg.WatchBatch{FullSync: true})
-			}()
-			require.Eventually(t, func() bool {
+				first := receiveArchiveTest(t, h.attempts)
+				require.Equal(t, 1, first.index)
+				if !isLocalEnginePushWatchOwner(owner.name) {
+					assert.Equal(t, reasonStartup, first.reason)
+				}
+				receiveArchiveTest(t, h.opened)
+				callback := h.watcherCallback()
+				require.NotNil(t, callback)
+				callbackDone := make(chan error, 1)
+				go func() {
+					callbackDone <- callback(ctx, syncpkg.WatchBatch{FullSync: true})
+				}()
+				synctest.Wait()
 				pending, waiters := h.pending()
-				return pending && waiters == 1
-			}, time.Second, time.Millisecond)
+				require.True(t, pending && waiters == 1)
 
-			h.floor <- time.Now()
-			second := receiveArchiveTest(t, h.attempts)
-			require.Equal(t, 2, second.index)
-			if !isLocalEnginePushWatchOwner(owner.name) {
-				assert.Equal(t, reasonInterval, second.reason)
-			}
-			select {
-			case err := <-callbackDone:
-				require.Fail(t, "partial runtime push acknowledged watcher batch", "%v", err)
-			case <-time.After(50 * time.Millisecond):
-			}
-			require.Eventually(t, func() bool {
-				pending, waiters := h.pending()
-				return pending && waiters == 1
-			}, time.Second, time.Millisecond)
+				h.floor <- time.Now()
+				second := receiveArchiveTest(t, h.attempts)
+				require.Equal(t, 2, second.index)
+				if !isLocalEnginePushWatchOwner(owner.name) {
+					assert.Equal(t, reasonInterval, second.reason)
+				}
+				synctest.Wait()
+				select {
+				case err := <-callbackDone:
+					require.Fail(t, "partial runtime push acknowledged watcher batch", "%v", err)
+				default:
+				}
+				pending, waiters = h.pending()
+				require.True(t, pending && waiters == 1)
 
-			h.floor <- time.Now()
-			third := receiveArchiveTest(t, h.attempts)
-			require.Equal(t, 3, third.index)
-			if !isLocalEnginePushWatchOwner(owner.name) {
-				assert.Equal(t, reasonInterval, third.reason)
-			}
-			require.NoError(t, receiveArchiveTest(t, callbackDone))
-			require.Eventually(t, func() bool {
-				pending, waiters := h.pending()
-				return !pending && waiters == 0
-			}, time.Second, time.Millisecond)
-			_, opens, _, _ := h.snapshot()
-			assert.Equal(t, 1, opens, "runtime retries must not reopen dispatch")
+				h.floor <- time.Now()
+				third := receiveArchiveTest(t, h.attempts)
+				require.Equal(t, 3, third.index)
+				if !isLocalEnginePushWatchOwner(owner.name) {
+					assert.Equal(t, reasonInterval, third.reason)
+				}
+				require.NoError(t, receiveArchiveTest(t, callbackDone))
+				synctest.Wait()
+				pending, waiters = h.pending()
+				require.True(t, !pending && waiters == 0)
+				_, opens, _, _ := h.snapshot()
+				assert.Equal(t, 1, opens, "runtime retries must not reopen dispatch")
 
-			cancel()
-			require.NoError(t, receiveArchiveTest(t, done))
+				cancel()
+				require.NoError(t, receiveArchiveTest(t, done))
+			})
 		})
 	}
 }
@@ -883,28 +889,30 @@ func TestPushWatchProductionOwnersRetryPartialAuthoritativeBatch(
 func TestPushWatchProductionOwnersFallbackUsesActiveIntervalFloor(t *testing.T) {
 	for _, owner := range pushWatchOwnerCases(t) {
 		t.Run(owner.name, func(t *testing.T) {
-			h := newPushWatchOwnerHarness()
-			ctx, cancel := context.WithCancel(context.Background())
-			done := make(chan error, 1)
-			go func() { done <- owner.run(ctx, h.hooks()) }()
+			synctest.Test(t, func(t *testing.T) {
+				h := newPushWatchOwnerHarness()
+				ctx, cancel := context.WithCancel(t.Context())
+				t.Cleanup(cancel)
+				done := make(chan error, 1)
+				go func() { done <- owner.run(ctx, h.hooks()) }()
 
-			receiveArchiveTest(t, h.attempts)
-			receiveArchiveTest(t, h.opened)
-			degraded := h.degradationCallback()
-			require.NotNil(t, degraded, "watcher collection receives a degradation owner")
-			require.NoError(t, degraded([]string{"/root-a", "/root-a", "/root-b"}))
-			require.Eventually(t, func() bool {
+				receiveArchiveTest(t, h.attempts)
+				receiveArchiveTest(t, h.opened)
+				degraded := h.degradationCallback()
+				require.NotNil(t, degraded, "watcher collection receives a degradation owner")
+				require.NoError(t, degraded([]string{"/root-a", "/root-a", "/root-b"}))
+				synctest.Wait()
 				pending, waiters := h.pending()
-				return pending && waiters == 0
-			}, time.Second, time.Millisecond)
+				require.True(t, pending && waiters == 0)
 
-			h.floor <- time.Now()
-			attempt := receiveArchiveTest(t, h.attempts)
-			if !isLocalEnginePushWatchOwner(owner.name) {
-				assert.Equal(t, reasonInterval, attempt.reason)
-			}
-			cancel()
-			require.NoError(t, receiveArchiveTest(t, done))
+				h.floor <- time.Now()
+				attempt := receiveArchiveTest(t, h.attempts)
+				if !isLocalEnginePushWatchOwner(owner.name) {
+					assert.Equal(t, reasonInterval, attempt.reason)
+				}
+				cancel()
+				require.NoError(t, receiveArchiveTest(t, done))
+			})
 		})
 	}
 }
@@ -949,7 +957,7 @@ func TestPushWatchCollectingCallbackAcknowledgesOnlyReconciliationBatches(t *tes
 		t.Context(), loop, syncpkg.WatchBatch{Paths: []string{"session.jsonl"}},
 	), "ordinary changes only enqueue non-blocking work")
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	err := notifyPushForWatchBatch(ctx, loop, syncpkg.WatchBatch{FullSync: true})
 	require.ErrorIs(t, err, context.Canceled,
@@ -1000,8 +1008,7 @@ func TestDaemonPGPushWatchRelevancePreservesExplicitCurrentDirectoryRoot(t *test
 		},
 	}
 	loop, _, _ := newTestLoop(func(context.Context, pushReason) error {
-		t.Fatal("explicit current-directory roots must suppress SHM-only batches")
-		return nil
+		return errors.New("explicit current-directory roots must suppress SHM-only batches")
 	})
 	require.NoError(t, notifyPushForWatchBatchWithConfig(
 		t.Context(), loop, cfg, syncpkg.WatchBatch{
@@ -1062,8 +1069,8 @@ func TestDaemonPushWatchOwnersSuppressOpenCodeSHMOnlyBatches(t *testing.T) {
 				backend := daemonArchiveWriteBackend{
 					appCfg: cfg, watchHooks: hooks,
 				}
-				return backend.PGPushWatch(
-					ctx, pgTargetSelection{}, PGPushConfig{}, nil, nil,
+				return backend.ReplicaPushWatch(
+					ctx, pgReplica{}, storage.ConfiguredReplica{}, ReplicaPushConfig{}, nil, nil,
 					time.Hour, time.Hour,
 				)
 			},
@@ -1072,7 +1079,7 @@ func TestDaemonPushWatchOwnersSuppressOpenCodeSHMOnlyBatches(t *testing.T) {
 	for _, owner := range owners {
 		t.Run(owner.name, func(t *testing.T) {
 			h := newPushWatchOwnerHarness()
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(t.Context())
 			t.Cleanup(cancel)
 			done := make(chan error, 1)
 			go func() { done <- owner.run(ctx, h.hooks()) }()
@@ -1134,8 +1141,7 @@ func TestDaemonPGPushWatchSuppressesNonDataOpenCodeWALBatches(t *testing.T) {
 				},
 			}
 			loop, _, _ := newTestLoop(func(context.Context, pushReason) error {
-				t.Fatal("non-data WAL batches must not schedule a push")
-				return nil
+				return errors.New("non-data WAL batches must not schedule a push")
 			})
 			require.NoError(t, notifyPushForWatchBatchWithConfig(
 				t.Context(), loop, cfg, syncpkg.WatchBatch{Paths: []string{walPath}},
@@ -1164,8 +1170,10 @@ func TestDaemonPGPushWatchRetainsDataBearingMixedBatches(t *testing.T) {
 	}{
 		{
 			name: "main database",
-			paths: []string{filepath.Join(root, "opencode.db-shm"),
-				filepath.Join(root, "opencode.db")},
+			paths: []string{
+				filepath.Join(root, "opencode.db-shm"),
+				filepath.Join(root, "opencode.db"),
+			},
 		},
 		{
 			name:  "framed WAL",
@@ -1173,8 +1181,10 @@ func TestDaemonPGPushWatchRetainsDataBearingMixedBatches(t *testing.T) {
 		},
 		{
 			name: "unknown sidecar",
-			paths: []string{filepath.Join(root, "opencode.db-shm"),
-				filepath.Join(root, "opencode.db-backup")},
+			paths: []string{
+				filepath.Join(root, "opencode.db-shm"),
+				filepath.Join(root, "opencode.db-backup"),
+			},
 		},
 		{
 			name:  "wrong root",
@@ -1238,8 +1248,7 @@ func TestDaemonPGPushWatchRelevanceDoesNotEnumerateSessions(t *testing.T) {
 		var err error
 		allocations := testing.AllocsPerRun(20, func() {
 			loop, _, _ := newTestLoop(func(context.Context, pushReason) error {
-				t.Fatal("bounded SHM classification must suppress the push")
-				return nil
+				return errors.New("bounded SHM classification must suppress the push")
 			})
 			err = notifyPushForWatchBatchWithConfig(
 				t.Context(), loop, cfg, syncpkg.WatchBatch{
@@ -1311,9 +1320,7 @@ func TestPushWatchRelevancePreservesAuthoritativeBatches(t *testing.T) {
 				require.NoError(t, <-done)
 				assert.Equal(t, reasonChange, <-pushed)
 			} else {
-				require.NoError(t,
-					notifyPushForWatchBatchWithConfig(t.Context(), loop, cfg, tc.batch),
-				)
+				require.NoError(t, notifyPushForWatchBatchWithConfig(t.Context(), loop, cfg, tc.batch))
 			}
 			if tc.waitForPush {
 				pending, _ := pushLoopPendingState(loop)
@@ -1351,13 +1358,13 @@ func TestResolveArchiveWriteBackendCopiesNoSyncRuntime(t *testing.T) {
 	dataDir := t.TempDir()
 	host, port := testPingServer(t)
 	_, err := WriteDaemonRuntimeWithAuthAndNoSync(
-		dataDir, host, port, "test", false, false, true,
+		dataDir, host, port, "test", "", false, false, true, nil,
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() { RemoveDaemonRuntime(dataDir) })
 
 	backend, cleanup, err := resolveArchiveWriteBackend(
-		context.Background(), config.Config{DataDir: dataDir},
+		t.Context(), config.Config{DataDir: dataDir},
 	)
 	require.NoError(t, err)
 	t.Cleanup(cleanup)
@@ -1396,9 +1403,9 @@ type noopPGTarget struct{}
 
 func (noopPGTarget) EnsureSchema(context.Context) error { return nil }
 func (noopPGTarget) PushWithOptions(
-	context.Context, postgres.PushOptions, func(postgres.PushProgress),
-) (postgres.PushResult, error) {
-	return postgres.PushResult{}, nil
+	context.Context, storage.PushOptions, func(storage.PushProgress),
+) (storage.PushResult, error) {
+	return storage.PushResult{}, nil
 }
 func (noopPGTarget) Close() error { return nil }
 
@@ -1421,9 +1428,9 @@ func TestLocalPGPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 
 	backend := &localArchiveWriteBackend{
 		appCfg: config.Config{
-			DataDir:          dataDir,
-			DBPath:           dbPath,
-			LocalMachineName: "local",
+			DataDir:        dataDir,
+			DBPath:         dbPath,
+			InstallationID: "local",
 			AgentDirs: map[parser.AgentType][]string{
 				parser.AgentCodex: {codexRoot},
 			},
@@ -1449,13 +1456,13 @@ func TestLocalPGPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 				label:    label,
 			}, func() {}
 		},
-		pgStartupSync: func(context.Context, *syncpkg.Engine, bool) (bool, error) {
+		replicaStartupSync: func(context.Context, *syncpkg.Engine, bool) (bool, error) {
 			return false, nil
 		},
-		newPGPusher: func(*syncpkg.Engine) *pgPusher {
-			return &pgPusher{
+		newReplicaPusher: func(*syncpkg.Engine) *replicaPusher {
+			return &replicaPusher{
 				localSync: func(context.Context) error { return nil },
-				connect:   func() (pgTarget, error) { return noopPGTarget{}, nil },
+				connect:   func(context.Context) (storage.Pusher, error) { return noopPGTarget{}, nil },
 			}
 		},
 		newUnwatchedPoller: func(
@@ -1470,12 +1477,12 @@ func TestLocalPGPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 		},
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	done := make(chan error, 1)
 	go func() {
-		done <- backend.PGPushWatch(
-			ctx, pgTargetSelection{}, PGPushConfig{}, nil, nil,
+		done <- backend.ReplicaPushWatch(
+			ctx, pgReplica{}, storage.ConfiguredReplica{}, ReplicaPushConfig{}, nil, nil,
 			time.Hour, time.Hour,
 		)
 	}()
@@ -1485,9 +1492,9 @@ func TestLocalPGPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 		assert.Contains(t, roots, codexRoot,
 			"the unwatchable root's polling obligation must reach the pg watch poller")
 	case err := <-done:
-		t.Fatalf("pg watch exited before registering obligations: %v", err)
+		require.FailNowf(t, "pg watch exited before registering obligations", "%v", err)
 	case <-time.After(10 * time.Second):
-		t.Fatal("no polling obligation was registered for the unwatchable root")
+		require.FailNow(t, "no polling obligation was registered for the unwatchable root")
 	}
 
 	// A session lands under the unwatched scope; only the poller's
@@ -1512,7 +1519,7 @@ func TestLocalPGPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 		case ticks <- time.Now():
 		default:
 		}
-		session, err := database.GetSession(context.Background(), "codex:"+uuid)
+		session, err := database.GetSession(t.Context(), "codex:"+uuid)
 		return err == nil && session != nil
 	}, 10*time.Second, 20*time.Millisecond,
 		"the returned root must be reconciled by the poller without watcher events or floor pushes")
@@ -1522,7 +1529,7 @@ func TestLocalPGPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 	case err := <-done:
 		require.NoError(t, err)
 	case <-time.After(30 * time.Second):
-		t.Fatal("pg watch did not shut down")
+		require.FailNow(t, "pg watch did not shut down")
 	}
 }
 
@@ -1536,9 +1543,9 @@ func TestLocalDuckDBPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 
 	backend := &localArchiveWriteBackend{
 		appCfg: config.Config{
-			DataDir:          dataDir,
-			DBPath:           dbPath,
-			LocalMachineName: "local",
+			DataDir:        dataDir,
+			DBPath:         dbPath,
+			InstallationID: "local",
 			AgentDirs: map[parser.AgentType][]string{
 				parser.AgentCodex: {codexRoot},
 			},
@@ -1570,8 +1577,8 @@ func TestLocalDuckDBPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 		newDuckDBPusher: func(*syncpkg.Engine) *duckDBPusher {
 			return &duckDBPusher{
 				localSync: func(context.Context) error { return nil },
-				mirrorPush: func(context.Context, bool) (duckdbsync.PushResult, error) {
-					return duckdbsync.PushResult{}, nil
+				mirrorPush: func(context.Context, bool) (storage.MirrorPushResult, error) {
+					return storage.MirrorPushResult{}, nil
 				},
 			}
 		},
@@ -1588,7 +1595,7 @@ func TestLocalDuckDBPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 		},
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	done := make(chan error, 1)
 	go func() {
@@ -1603,9 +1610,9 @@ func TestLocalDuckDBPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 		assert.Contains(t, roots, codexRoot,
 			"the unwatchable root's polling obligation must reach the duckdb watch poller")
 	case err := <-done:
-		t.Fatalf("duckdb watch exited before registering obligations: %v", err)
+		require.FailNowf(t, "duckdb watch exited before registering obligations", "%v", err)
 	case <-time.After(10 * time.Second):
-		t.Fatal("no polling obligation was registered for the unwatchable root")
+		require.FailNow(t, "no polling obligation was registered for the unwatchable root")
 	}
 
 	uuid := "e5f6a7b8-5555-4666-8777-888899990000"
@@ -1628,7 +1635,7 @@ func TestLocalDuckDBPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 		case ticks <- time.Now():
 		default:
 		}
-		session, err := database.GetSession(context.Background(), "codex:"+uuid)
+		session, err := database.GetSession(t.Context(), "codex:"+uuid)
 		return err == nil && session != nil
 	}, 10*time.Second, 20*time.Millisecond,
 		"the returned root must be reconciled by the poller without watcher events or floor pushes")
@@ -1638,7 +1645,7 @@ func TestLocalDuckDBPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 	case err := <-done:
 		require.NoError(t, err)
 	case <-time.After(30 * time.Second):
-		t.Fatal("duckdb watch did not shut down")
+		require.FailNow(t, "duckdb watch did not shut down")
 	}
 }
 

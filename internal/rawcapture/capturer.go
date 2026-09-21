@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"slices"
 	"time"
 
 	"go.kenn.io/agentsview/internal/parser"
@@ -150,6 +151,7 @@ func (c *Capturer) Capture(
 		finishPublication()
 	}()
 	snapshot := false
+	var snapshotSourceModTimeNS int64
 	observationRecorded := false
 	var removeSnapshot func() error
 	switch {
@@ -179,6 +181,7 @@ func (c *Capturer) Capture(
 		if len(sourceObserved) != 1 {
 			return Result{}, ErrSourceChanged
 		}
+		snapshotSourceModTimeNS = sourceObserved[0].info.ModTime().UnixNano()
 		sqliteSource, openErr := openSQLiteSnapshotSource(
 			ctx, sourcePath, sourceObserved[0].info,
 		)
@@ -346,7 +349,8 @@ func (c *Capturer) Capture(
 		planned := observed[i].planned
 		var entry rawcheckpoint.CapturedEntry
 		var newlyInstalled bool
-		if assessment.mode == captureAppend && planned.Appendable {
+		if assessment.mode == captureAppend && planned.Appendable &&
+			observed[i].info.Size() > assessment.appendBases[i].Length {
 			entry, newlyInstalled, err = c.captureAppendFile(
 				ctx, observed[i], assessment.appendBases[i],
 			)
@@ -363,11 +367,15 @@ func (c *Capturer) Capture(
 			return Result{}, err
 		}
 		capturedIdentity := entry.FileIdentity
+		capturedModTimeNS := entry.ModTimeNS
 		entry.FileIdentity = observed[i].checkpointIdentity
+		if snapshot {
+			entry.ModTimeNS = snapshotSourceModTimeNS
+		}
 		entries = append(entries, entry)
 		capturedFiles = append(capturedFiles, capturedFileState{
 			length:       entry.Length,
-			modTimeNS:    entry.ModTimeNS,
+			modTimeNS:    capturedModTimeNS,
 			fileIdentity: capturedIdentity,
 			prefixSHA256: entry.PrefixSHA256,
 		})
@@ -498,7 +506,7 @@ func (c *Capturer) observePlan(
 		pathInfo, err := c.files.stat(entry.planned.LocalPath)
 		if err != nil {
 			closeObservedEntries(observed)
-			if sourcePathChangedError(err) {
+			if errors.Is(err, os.ErrNotExist) {
 				return nil, 0, ErrSourceChanged
 			}
 			return nil, 0, fmt.Errorf(
@@ -510,10 +518,13 @@ func (c *Capturer) observePlan(
 			closeObservedEntries(observed)
 			return nil, 0, ErrSourceChanged
 		}
-		file, err := entry.root.Open(entry.relative)
+		file, err := c.files.openRoot(entry.root, entry.relative)
 		if err != nil {
 			closeObservedEntries(observed)
-			if sourcePathChangedError(err) {
+			// A path can be replaced between the rooted check and open. Check
+			// its identity again instead of classifying an upstream error by text.
+			currentInfo, statErr := entry.root.Lstat(entry.relative)
+			if errors.Is(err, os.ErrNotExist) || statErr != nil || !os.SameFile(rootedInfo, currentInfo) {
 				return nil, 0, ErrSourceChanged
 			}
 			return nil, 0, fmt.Errorf(
@@ -551,11 +562,6 @@ func (c *Capturer) observePlan(
 		})
 	}
 	return observed, sourceBytes, nil
-}
-
-func sourcePathChangedError(err error) bool {
-	return errors.Is(err, os.ErrNotExist) ||
-		sanitizeFilesystemError(err).Error() == "path escapes from parent"
 }
 
 func (c *Capturer) assessCapture(
@@ -671,7 +677,8 @@ func (c *Capturer) validateForUpload(
 	for _, entry := range entries {
 		manifestEntries = append(manifestEntries, rawsync.Entry{
 			Path: entry.Path, Type: "file", Length: entry.Length,
-			Objects: append([]rawsync.ObjectRef(nil), entry.Objects...),
+			ModTimeNS: entry.ModTimeNS,
+			Objects:   append([]rawsync.ObjectRef(nil), entry.Objects...),
 		})
 	}
 	return rawsync.ValidateManifestForUpload(rawsync.Manifest{
@@ -705,7 +712,8 @@ func cloneCapturedEntry(entry rawcheckpoint.CapturedEntry) rawcheckpoint.Capture
 
 func sameCapturePlan(a, b parser.RawCapturePlan) bool {
 	if a.ConfiguredRoot != b.ConfiguredRoot || a.CaptureRoot != b.CaptureRoot ||
-		a.SourceKey != b.SourceKey || len(a.Entries) != len(b.Entries) {
+		a.SourceKey != b.SourceKey || len(a.Entries) != len(b.Entries) ||
+		!slices.Equal(a.SidecarRoots, b.SidecarRoots) {
 		return false
 	}
 	for i := range a.Entries {

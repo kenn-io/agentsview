@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"crypto/sha256"
 	"fmt"
 	"os"
@@ -24,6 +23,7 @@ func TestWorkBuddyProviderCapabilities(t *testing.T) {
 	assert.Equal(t, CapabilitySupported, caps.Source.FindSource)
 	assert.Equal(t, CapabilitySupported, caps.Source.CompositeFingerprint)
 	assert.Equal(t, CapabilitySupported, caps.Content.FirstMessage)
+	assert.Equal(t, CapabilitySupported, caps.Content.SessionName)
 	assert.Equal(t, CapabilitySupported, caps.Content.Cwd)
 	assert.Equal(t, CapabilitySupported, caps.Content.Relationships)
 	assert.Equal(t, CapabilitySupported, caps.Content.Subagents)
@@ -67,56 +67,55 @@ func TestWorkBuddyProviderSourceMethods(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 3)
-	assert.Equal(
-		t,
+	assert.Equal(t,
 		[]string{sourcePath, nonIDSubagentPath, subagentPath},
 		sourceDisplayPaths(discovered),
 	)
 	assert.Equal(t, []string{"proj", "proj", "proj"}, sourceProjects(discovered))
 
-	plan, err := provider.WatchPlan(context.Background())
+	plan, err := provider.WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, root, plan.Roots[0].Path)
 	assert.True(t, plan.Roots[0].Recursive)
 	assert.Equal(t, []string{"*.jsonl"}, plan.Roots[0].IncludeGlobs)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~workbuddy:" + sessionID,
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, sourcePath, found.DisplayPath)
 
-	fingerprint, err := provider.Fingerprint(context.Background(), found)
+	fingerprint, err := provider.Fingerprint(t.Context(), found)
 	require.NoError(t, err)
 	assert.Equal(t, sourcePath, fingerprint.Key)
 	assert.NotZero(t, fingerprint.Size)
 	assert.NotZero(t, fingerprint.MTimeNS)
 
-	found, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: sessionID + ":subagent:" + subagentID,
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, subagentPath, found.DisplayPath)
 
-	_, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	_, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: sessionID + ":subagent:../agent-123",
 	})
 	require.NoError(t, err)
 	assert.False(t, ok)
 
-	_, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	_, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: sessionID + ":subagent:2025.01.01",
 	})
 	require.NoError(t, err)
 	assert.False(t, ok)
 
-	found, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: subagentPath,
 	})
 	require.NoError(t, err)
@@ -125,7 +124,7 @@ func TestWorkBuddyProviderSourceMethods(t *testing.T) {
 
 	require.NoError(t, os.Remove(subagentPath))
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: subagentPath, EventKind: "remove", WatchRoot: root},
 	)
 	require.NoError(t, err)
@@ -150,12 +149,12 @@ func TestWorkBuddyProviderDiscoversSymlinkedProjectDirectory(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, sourcePath, discovered[0].DisplayPath)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~workbuddy:" + sessionID,
 	})
 	require.NoError(t, err)
@@ -180,13 +179,13 @@ func TestWorkBuddyProviderParseMainAndSubagent(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 2)
 
-	mainFingerprint, err := provider.Fingerprint(context.Background(), sources[0])
+	mainFingerprint, err := provider.Fingerprint(t.Context(), sources[0])
 	require.NoError(t, err)
-	mainOutcome, err := provider.Parse(context.Background(), ParseRequest{
+	mainOutcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      sources[0],
 		Fingerprint: mainFingerprint,
 	})
@@ -197,17 +196,16 @@ func TestWorkBuddyProviderParseMainAndSubagent(t *testing.T) {
 	assert.Equal(t, DataVersionCurrent, mainResult.DataVersion)
 	assert.Equal(t, "workbuddy:"+sessionID, mainResult.Result.Session.ID)
 	assert.Equal(t, "devbox", mainResult.Result.Session.Machine)
-	assert.Equal(t,
-		fmt.Sprintf("%x", sha256.Sum256([]byte(mainContent))),
+	assert.Equal(t, fmt.Sprintf("%x", sha256.Sum256([]byte(mainContent))),
 		mainResult.Result.Session.File.Hash,
 	)
 	assert.Len(t, mainResult.Result.Messages, 3)
 	assert.Equal(t, "hello", mainResult.Result.Session.FirstMessage)
 	assert.True(t, mainResult.Result.Session.HasTotalOutputTokens)
 
-	subFingerprint, err := provider.Fingerprint(context.Background(), sources[1])
+	subFingerprint, err := provider.Fingerprint(t.Context(), sources[1])
 	require.NoError(t, err)
-	subOutcome, err := provider.Parse(context.Background(), ParseRequest{
+	subOutcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      sources[1],
 		Fingerprint: subFingerprint,
 	})
@@ -216,15 +214,13 @@ func TestWorkBuddyProviderParseMainAndSubagent(t *testing.T) {
 	require.Len(t, subOutcome.Results, 1)
 	subResult := subOutcome.Results[0]
 	assert.Equal(t, DataVersionCurrent, subResult.DataVersion)
-	assert.Equal(
-		t,
+	assert.Equal(t,
 		"workbuddy:"+sessionID+":subagent:"+subagentID,
 		subResult.Result.Session.ID,
 	)
 	assert.Equal(t, "workbuddy:"+sessionID, subResult.Result.Session.ParentSessionID)
 	assert.Equal(t, RelSubagent, subResult.Result.Session.RelationshipType)
-	assert.Equal(t,
-		fmt.Sprintf("%x", sha256.Sum256([]byte(subContent))),
+	assert.Equal(t, fmt.Sprintf("%x", sha256.Sum256([]byte(subContent))),
 		subResult.Result.Session.File.Hash,
 	)
 }

@@ -48,7 +48,7 @@ type cliLifecycleError struct{ err error }
 func (e *cliLifecycleError) Error() string { return "lifecycle: " + e.err.Error() }
 func (e *cliLifecycleError) Unwrap() error { return e.err }
 
-func (p *fakeCLIPreparedHTTPRebuild) BorrowRebuildOptions() (
+func (p *fakeCLIPreparedHTTPRebuild) BorrowRebuildOptions(ctx context.Context) (
 	agentsync.RebuildOptions, func(), error,
 ) {
 	return p.options, func() { p.released = true }, nil
@@ -74,8 +74,35 @@ func TestPreparedHTTPRebuildLeaseCLIForwardsCommitOnce(t *testing.T) {
 	assert.Zero(t, prepared.closed, "commit must not infer cleanup")
 }
 
+func TestStartupWorkerDoesNotAddBlankLineForNonTerminalProgress(t *testing.T) {
+	cfg := config.Config{DataDir: t.TempDir()}
+	restore := stubLaunchSyncWorker(t, func(
+		_ context.Context, _ config.Config, _ string, onLine func(workerLine),
+	) (workerResult, error) {
+		onLine(workerLine{Progress: &agentsync.Progress{
+			Phase:         agentsync.PhaseSyncing,
+			Detail:        "Syncing sessions",
+			SessionsDone:  1,
+			SessionsTotal: 1,
+		}})
+		return workerResult{}, errors.New("worker failed")
+	})
+	defer restore()
+
+	var err error
+	out := captureStdout(t, func() {
+		_, err = runStartupSyncViaWorker(
+			t.Context(), cfg, newStartupStateWriter(cfg.DataDir, time.Now),
+		)
+	})
+
+	require.Error(t, err)
+	assert.Equal(t, "Running initial sync...\n", out)
+}
+
 func newDirectSyncFixture(t *testing.T) (config.Config, *db.DB) {
 	t.Helper()
+
 	dataDir := t.TempDir()
 	localRoot := filepath.Join(dataDir, "local-claude")
 	require.NoError(t, os.MkdirAll(filepath.Join(localRoot, "project"), 0o755))
@@ -87,14 +114,14 @@ func newDirectSyncFixture(t *testing.T) (config.Config, *db.DB) {
 		0o600,
 	))
 	cfg := config.Config{
-		DataDir:          dataDir,
-		DBPath:           filepath.Join(dataDir, "sessions.db"),
-		LocalMachineName: "collector-host",
+		DataDir:        dataDir,
+		DBPath:         filepath.Join(dataDir, "sessions.db"),
+		InstallationID: "collector-host",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {localRoot},
 		},
 	}
-	database, err := db.Open(cfg.DBPath)
+	database, err := db.Open(t.Context(), cfg.DBPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 	return cfg, database
@@ -116,7 +143,7 @@ func TestRunRemoteSyncTransportWarnsOnceForDeprecatedSSH(t *testing.T) {
 
 	for range 2 {
 		_, err := runRemoteSyncTransport(
-			context.Background(), config.Config{}, nil,
+			t.Context(), config.Config{}, nil,
 			config.RemoteHost{Host: "legacy-host"}, false,
 		)
 		require.NoError(t, err)
@@ -181,7 +208,7 @@ func TestDoSyncConfiguredFullUsesUnifiedHTTPContributorBeforeSSH(t *testing.T) {
 	t.Cleanup(func() { runSSHRemoteSync = originalSSH })
 
 	didResync, failures, err := runConfiguredLocalAndRemotes(
-		context.Background(), cfg, database,
+		t.Context(), cfg, database,
 		[]config.RemoteHost{sshHost, httpHost}, true, nil,
 	)
 
@@ -202,7 +229,7 @@ func TestDoSyncConfiguredFullIgnoresSSHHistoryDuringUnifiedSafetyCheck(t *testin
 		}
 	}
 	missingPath := filepath.Join(t.TempDir(), "missing-ssh-session.jsonl")
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "preserved-ssh-session", Project: "archive", Machine: "ssh-box",
 		Agent: "claude", FilePath: &missingPath, MessageCount: 1,
 	}))
@@ -233,9 +260,12 @@ func TestDoSyncConfiguredFullIgnoresSSHHistoryDuringUnifiedSafetyCheck(t *testin
 		assert.Equal(t, "ssh-box", rh.Host)
 		assert.True(t, full)
 		preserved, err := database.GetSession(
-			context.Background(), "preserved-ssh-session",
+			t.Context(), "preserved-ssh-session",
 		)
 		require.NoError(t, err)
+		if err != nil {
+			return remotesync.SyncStats{}, err
+		}
 		assert.NotNil(t, preserved,
 			"SSH pass must observe its archived session after the unified swap")
 		return remotesync.SyncStats{}, nil
@@ -243,7 +273,7 @@ func TestDoSyncConfiguredFullIgnoresSSHHistoryDuringUnifiedSafetyCheck(t *testin
 	t.Cleanup(func() { runSSHRemoteSync = originalSSH })
 
 	didResync, failures, err := runConfiguredLocalAndRemotes(
-		context.Background(), cfg, database,
+		t.Context(), cfg, database,
 		[]config.RemoteHost{
 			{Host: "http-box", Transport: config.RemoteTransportHTTP, Token: "token"},
 			{Host: "ssh-box"},
@@ -265,7 +295,7 @@ func TestDoSyncConfiguredFullSSHOnlyFallsBackBeforeRemoteImport(t *testing.T) {
 		}
 	}
 	missingPath := filepath.Join(t.TempDir(), "missing-remote.jsonl")
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "preserved-ssh-session", Project: "archive", Machine: "ssh-box",
 		Agent: "claude", FilePath: &missingPath, MessageCount: 1,
 	}))
@@ -284,7 +314,7 @@ func TestDoSyncConfiguredFullSSHOnlyFallsBackBeforeRemoteImport(t *testing.T) {
 	t.Cleanup(func() { runSSHRemoteSync = originalSSH })
 
 	didResync, failures, err := runConfiguredLocalAndRemotes(
-		context.Background(), cfg, database,
+		t.Context(), cfg, database,
 		[]config.RemoteHost{sshHost}, true, nil,
 	)
 
@@ -293,7 +323,7 @@ func TestDoSyncConfiguredFullSSHOnlyFallsBackBeforeRemoteImport(t *testing.T) {
 	assert.Empty(t, failures)
 	assert.Equal(t, 1, sshCalls,
 		"SSH import must run after the legacy local fallback")
-	preserved, err := database.GetSession(context.Background(), "preserved-ssh-session")
+	preserved, err := database.GetSession(t.Context(), "preserved-ssh-session")
 	require.NoError(t, err)
 	assert.NotNil(t, preserved)
 }
@@ -303,10 +333,10 @@ func TestDoSyncAutomaticResyncUsesUnifiedHTTPContributor(t *testing.T) {
 	require.NoError(t, database.Close())
 	raw, err := sql.Open("sqlite3", cfg.DBPath)
 	require.NoError(t, err)
-	_, err = raw.Exec("PRAGMA user_version = 0")
+	_, err = raw.ExecContext(t.Context(), "PRAGMA user_version = 0")
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
-	database, err = db.Open(cfg.DBPath)
+	database, err = db.Open(t.Context(), cfg.DBPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 	require.True(t, database.NeedsResync())
@@ -325,7 +355,7 @@ func TestDoSyncAutomaticResyncUsesUnifiedHTTPContributor(t *testing.T) {
 	t.Cleanup(func() { prepareHTTPRebuildCLI = originalPrepare })
 
 	didResync, failures, err := runConfiguredLocalAndRemotes(
-		context.Background(), cfg, database,
+		t.Context(), cfg, database,
 		[]config.RemoteHost{{
 			Host: "http-box", Transport: config.RemoteTransportHTTP,
 			URL: "http://127.0.0.1:1", Token: "token",
@@ -341,7 +371,7 @@ func TestDoSyncAutomaticResyncUsesUnifiedHTTPContributor(t *testing.T) {
 
 func TestDoSyncPreparationFailureMapsRemoteAndSkipsSSH(t *testing.T) {
 	cfg, database := newDirectSyncFixture(t)
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "preserved", Project: "archive", Machine: "local", Agent: "codex",
 	}))
 	prepCause := errors.New("manifest unavailable")
@@ -366,9 +396,11 @@ func TestDoSyncPreparationFailureMapsRemoteAndSkipsSSH(t *testing.T) {
 	t.Cleanup(func() { runSSHRemoteSync = originalSSH })
 
 	didResync, failures, err := runConfiguredLocalAndRemotes(
-		context.Background(), cfg, database, []config.RemoteHost{
-			{Host: "http-box", Transport: config.RemoteTransportHTTP,
-				URL: "http://127.0.0.1:1", Token: "token"},
+		t.Context(), cfg, database, []config.RemoteHost{
+			{
+				Host: "http-box", Transport: config.RemoteTransportHTTP,
+				URL: "http://127.0.0.1:1", Token: "token",
+			},
 			{Host: "ssh-box"},
 		}, true, nil,
 	)
@@ -377,18 +409,18 @@ func TestDoSyncPreparationFailureMapsRemoteAndSkipsSSH(t *testing.T) {
 	assert.True(t, didResync)
 	require.Len(t, failures, 1)
 	assert.Equal(t, "http-box", failures[0].Host.Host)
-	assert.ErrorIs(t, failures[0].Err, prepCause)
+	require.ErrorIs(t, failures[0].Err, prepCause)
 	assert.Equal(t, 0, sshCalls)
 	assert.Equal(t, 1, prepared.closed,
 		"partial preparation ownership must be closed on failure")
-	preserved, getErr := database.GetSession(context.Background(), "preserved")
+	preserved, getErr := database.GetSession(t.Context(), "preserved")
 	require.NoError(t, getErr)
 	assert.NotNil(t, preserved, "failed preparation must not swap")
 }
 
 func TestDoSyncContributorFailureMapsRemotePreservesCauseAndSkipsSSH(t *testing.T) {
 	cfg, database := newDirectSyncFixture(t)
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "preserved", Project: "archive", Machine: "local", Agent: "codex",
 	}))
 	cause := errors.New("cache snapshot failed")
@@ -416,9 +448,11 @@ func TestDoSyncContributorFailureMapsRemotePreservesCauseAndSkipsSSH(t *testing.
 	t.Cleanup(func() { runSSHRemoteSync = originalSSH })
 
 	didResync, failures, err := runConfiguredLocalAndRemotes(
-		context.Background(), cfg, database, []config.RemoteHost{
-			{Host: "http-box", Transport: config.RemoteTransportHTTP,
-				URL: "http://127.0.0.1:1", Token: "token"},
+		t.Context(), cfg, database, []config.RemoteHost{
+			{
+				Host: "http-box", Transport: config.RemoteTransportHTTP,
+				URL: "http://127.0.0.1:1", Token: "token",
+			},
 			{Host: "ssh-box"},
 		}, true, nil,
 	)
@@ -427,9 +461,9 @@ func TestDoSyncContributorFailureMapsRemotePreservesCauseAndSkipsSSH(t *testing.
 	assert.True(t, didResync)
 	require.Len(t, failures, 1)
 	assert.Equal(t, "http-box", failures[0].Host.Host)
-	assert.ErrorIs(t, failures[0].Err, cause)
+	require.ErrorIs(t, failures[0].Err, cause)
 	assert.Equal(t, 0, sshCalls)
-	preserved, getErr := database.GetSession(context.Background(), "preserved")
+	preserved, getErr := database.GetSession(t.Context(), "preserved")
 	require.NoError(t, getErr)
 	assert.NotNil(t, preserved, "failed contributor must not swap")
 }
@@ -446,7 +480,7 @@ func TestDoSyncUnknownCoordinatorFailureRemainsLocalError(t *testing.T) {
 	t.Cleanup(func() { prepareHTTPRebuildCLI = originalPrepare })
 
 	_, failures, err := runConfiguredLocalAndRemotes(
-		context.Background(), cfg, database, []config.RemoteHost{{
+		t.Context(), cfg, database, []config.RemoteHost{{
 			Host: "http-box", Transport: config.RemoteTransportHTTP,
 			URL: "http://127.0.0.1:1", Token: "token",
 		}}, true, nil,
@@ -514,7 +548,7 @@ func TestConfiguredHTTPCoordinatorFailureUsesPrimaryOperationOnly(t *testing.T) 
 		t.Run(tt.name, func(t *testing.T) {
 			failure, ok := configuredHTTPCoordinatorFailure(hosts, tt.err)
 			assert.Equal(t, tt.wantMap, ok)
-			assert.ErrorIs(t, tt.err, tt.wantIs)
+			require.ErrorIs(t, tt.err, tt.wantIs)
 			if tt.wantMap {
 				assert.Equal(t, tt.wantHost, failure.Host.Host)
 				assert.ErrorIs(t, failure.Err, tt.wantIs)
@@ -540,7 +574,7 @@ func TestRunConfiguredLocalAndRemotesKeepsPendingCleanupBlocked(t *testing.T) {
 	t.Cleanup(func() { runLocalSyncWithRebuildCLI = originalRun })
 
 	_, failures, err := runConfiguredLocalAndRemotes(
-		context.Background(), cfg, database, []config.RemoteHost{{
+		t.Context(), cfg, database, []config.RemoteHost{{
 			Host: "http-box", Transport: config.RemoteTransportHTTP,
 			URL: "http://127.0.0.1:1", Token: "token",
 		}}, true, nil,
@@ -555,11 +589,11 @@ func TestRunConfiguredLocalAndRemotesKeepsPendingCleanupBlocked(t *testing.T) {
 func TestRunLocalSyncWithRebuildReturnsAbortedSentinelWithoutSummary(t *testing.T) {
 	dataDir := t.TempDir()
 	cfg := config.Config{DataDir: dataDir, DBPath: filepath.Join(dataDir, "sessions.db")}
-	database, err := db.Open(cfg.DBPath)
+	database, err := db.Open(t.Context(), cfg.DBPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 	missingPath := filepath.Join(dataDir, "missing.jsonl")
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "old-file-session", Agent: "claude", Machine: "local",
 		Project: "preserved", FilePath: &missingPath, MessageCount: 1,
 	}))
@@ -567,7 +601,7 @@ func TestRunLocalSyncWithRebuildReturnsAbortedSentinelWithoutSummary(t *testing.
 	var runErr error
 	out := captureStdout(t, func() {
 		_, runErr = runLocalSyncWithRebuild(
-			context.Background(), cfg, database, true, nil,
+			t.Context(), cfg, database, true, nil,
 			func() (agentsync.RebuildOptions, agentsync.RebuildCleanup, error) {
 				return agentsync.RebuildOptions{Contributors: []agentsync.RebuildContributor{{
 					Name: "http-box",
@@ -580,17 +614,17 @@ func TestRunLocalSyncWithRebuildReturnsAbortedSentinelWithoutSummary(t *testing.
 		)
 	})
 
-	assert.ErrorIs(t, runErr, errUnifiedRebuildAborted)
+	require.ErrorIs(t, runErr, errUnifiedRebuildAborted)
 	assert.Equal(t, 0, workCalls)
 	assert.NotContains(t, out, "Sync complete")
-	preserved, getErr := database.GetSession(context.Background(), "old-file-session")
+	preserved, getErr := database.GetSession(t.Context(), "old-file-session")
 	require.NoError(t, getErr)
 	assert.NotNil(t, preserved)
 }
 
 func TestRunLocalSyncWithRebuildCancellationPreservesContextError(t *testing.T) {
 	cfg, database := newDirectSyncFixture(t)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	var runErr error
 	out := captureStdout(t, func() {
@@ -605,27 +639,27 @@ func TestRunLocalSyncWithRebuildCancellationPreservesContextError(t *testing.T) 
 		)
 	})
 
-	assert.ErrorIs(t, runErr, context.Canceled)
-	assert.NotErrorIs(t, runErr, errUnifiedRebuildAborted)
+	require.ErrorIs(t, runErr, context.Canceled)
+	require.NotErrorIs(t, runErr, errUnifiedRebuildAborted)
 	assert.NotContains(t, out, "Sync complete")
 }
 
 func TestRunLocalSyncZeroContributorRetainsAbortFallback(t *testing.T) {
 	dataDir := t.TempDir()
 	cfg := config.Config{DataDir: dataDir, DBPath: filepath.Join(dataDir, "sessions.db")}
-	database, err := db.Open(cfg.DBPath)
+	database, err := db.Open(t.Context(), cfg.DBPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 	missingPath := filepath.Join(dataDir, "missing.jsonl")
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "old-file-session", Agent: "claude", Machine: "local",
 		Project: "preserved", FilePath: &missingPath, MessageCount: 1,
 	}))
 
-	didResync := runLocalSync(context.Background(), cfg, database, true)
+	didResync := runLocalSync(t.Context(), cfg, database, true)
 
 	assert.True(t, didResync)
-	preserved, getErr := database.GetSession(context.Background(), "old-file-session")
+	preserved, getErr := database.GetSession(t.Context(), "old-file-session")
 	require.NoError(t, getErr)
 	assert.NotNil(t, preserved,
 		"legacy zero-contributor fallback must keep the active archive")
@@ -662,7 +696,7 @@ func TestDoSyncConfiguredFullUnifiedHTTPUsesManifestDeltaAndOrderedProgress(
 				http.Error(w, "decode manifest request", http.StatusBadRequest)
 				return
 			}
-			manifest, err := remotesync.BuildManifest(requested)
+			manifest, err := remotesync.BuildManifest(r.Context(), requested)
 			if err != nil {
 				http.Error(w, "build manifest", http.StatusInternalServerError)
 				return
@@ -681,11 +715,11 @@ func TestDoSyncConfiguredFullUnifiedHTTPUsesManifestDeltaAndOrderedProgress(
 			w.Header().Set("Content-Type", "application/x-tar")
 			var err error
 			if requested.DeltaFiles != nil {
-				err = remotesync.WriteArchiveFiles(
+				err = remotesync.WriteArchiveFiles(r.Context(),
 					w, targets, requested.DeltaFiles,
 				)
 			} else {
-				err = remotesync.WriteArchive(w, requested.TargetSet)
+				err = remotesync.WriteArchive(r.Context(), w, requested.TargetSet)
 			}
 			if err != nil {
 				http.Error(w, "write archive", http.StatusInternalServerError)
@@ -708,7 +742,7 @@ func TestDoSyncConfiguredFullUnifiedHTTPUsesManifestDeltaAndOrderedProgress(
 	printer.w = &output
 
 	didResync, failures, err := runConfiguredLocalAndRemotes(
-		context.Background(), cfg, database, []config.RemoteHost{host},
+		t.Context(), cfg, database, []config.RemoteHost{host},
 		true, printer.Print,
 	)
 	printer.Finish()
@@ -716,7 +750,7 @@ func TestDoSyncConfiguredFullUnifiedHTTPUsesManifestDeltaAndOrderedProgress(
 	assert.True(t, didResync)
 	assert.Empty(t, failures)
 	assert.Equal(t, int32(1), archiveRequests.Load())
-	page, err := database.ListSessions(context.Background(), db.SessionFilter{Limit: 10})
+	page, err := database.ListSessions(t.Context(), db.SessionFilter{Limit: 10})
 	require.NoError(t, err)
 	assert.Len(t, page.Sessions, 2)
 
@@ -738,7 +772,7 @@ func TestDoSyncConfiguredFullUnifiedHTTPUsesManifestDeltaAndOrderedProgress(
 		"Swapping rebuilt database into place completed in")
 
 	_, failures, err = runConfiguredLocalAndRemotes(
-		context.Background(), cfg, database, []config.RemoteHost{host},
+		t.Context(), cfg, database, []config.RemoteHost{host},
 		true, nil,
 	)
 	require.NoError(t, err)
@@ -774,7 +808,7 @@ func TestDoSyncIncrementalKeepsOrdinaryRemotePath(t *testing.T) {
 	t.Cleanup(restore)
 
 	didResync, failures, err := runConfiguredLocalAndRemotes(
-		context.Background(), cfg, database, []config.RemoteHost{host}, false, nil,
+		t.Context(), cfg, database, []config.RemoteHost{host}, false, nil,
 	)
 
 	require.NoError(t, err)
@@ -800,7 +834,7 @@ func TestDoSyncIncrementalReportsSkippedOfflineHTTPHost(t *testing.T) {
 	printer := newRemoteProgressPrinter(&output, time.Now)
 
 	didResync, failures, err := runConfiguredLocalAndRemotes(
-		context.Background(), cfg, database, []config.RemoteHost{host}, false,
+		t.Context(), cfg, database, []config.RemoteHost{host}, false,
 		printer.Print,
 	)
 	printer.Finish()
@@ -882,7 +916,7 @@ func TestDoSyncAbortedUnifiedRebuildExitsNonZeroWithoutSuccessSummary(
 	t *testing.T,
 ) {
 	dataDir := t.TempDir()
-	cmd := exec.Command(
+	cmd := exec.CommandContext(t.Context(),
 		os.Args[0],
 		"-test.run=^TestDoSyncAbortedUnifiedRebuildHelperProcess$",
 	)
@@ -1024,7 +1058,7 @@ func TestRunRemoteHostsSkipsOfflineConfiguredHTTPHost(t *testing.T) {
 	assert.Equal(t, []string{"offline", "broken", "reachable"}, attempted)
 	require.Len(t, failures, 1)
 	assert.Equal(t, "broken", failures[0].Host.Host)
-	assert.ErrorIs(t, failures[0].Err, broken)
+	require.ErrorIs(t, failures[0].Err, broken)
 	assert.Contains(t, progress, agentsync.Progress{
 		Detail: "Skipped offline remote host offline",
 	})
@@ -1060,7 +1094,7 @@ func TestRunHTTPRemoteSyncRequiresExplicitHTTPToken(t *testing.T) {
 	t.Cleanup(ts.Close)
 
 	_, err := runHTTPRemoteSync(
-		context.Background(),
+		t.Context(),
 		config.Config{AuthToken: "collector-token"},
 		nil,
 		config.RemoteHost{
@@ -1120,7 +1154,7 @@ func TestRunRemoteSyncTransportRetainsFailedHTTPCleanupUntilReleased(t *testing.
 	rh := config.RemoteHost{Host: "alpha", Transport: config.RemoteTransportHTTP}
 
 	_, err := runRemoteSyncTransport(
-		context.Background(), config.Config{}, nil, rh, false,
+		t.Context(), config.Config{}, nil, rh, false,
 	)
 	require.Same(t, owner, err)
 	assert.Equal(t, 1, owner.retries,
@@ -1128,7 +1162,7 @@ func TestRunRemoteSyncTransportRetainsFailedHTTPCleanupUntilReleased(t *testing.
 	assert.Equal(t, 1, runs)
 
 	stats, err := runRemoteSyncTransport(
-		context.Background(), config.Config{}, nil, rh, false,
+		t.Context(), config.Config{}, nil, rh, false,
 	)
 	require.NoError(t, err)
 	assert.Equal(t, 1, stats.SessionsSynced)
@@ -1164,7 +1198,7 @@ func TestRunRemoteHostsStopsOnPendingHTTPCleanupWithoutMisattribution(t *testing
 	t.Cleanup(restore)
 	run := func(rh config.RemoteHost, full bool) error {
 		_, err := runRemoteSyncTransport(
-			context.Background(), config.Config{}, nil, rh, full,
+			t.Context(), config.Config{}, nil, rh, full,
 		)
 		return err
 	}
@@ -1180,7 +1214,7 @@ func TestRunRemoteHostsStopsOnPendingHTTPCleanupWithoutMisattribution(t *testing
 	assert.Same(t, owner, failures[0].Err)
 	var pending *remotesync.PendingCleanupError
 	require.ErrorAs(t, blocked, &pending)
-	assert.ErrorIs(t, blocked, owner)
+	require.ErrorIs(t, blocked, owner)
 	assert.Equal(t, []string{"alpha"}, callbacks,
 		"beta's callback is blocked and iteration stops before gamma")
 	assert.Equal(t, 2, owner.retries)
@@ -1282,7 +1316,7 @@ func TestParseDaemonSyncSSEAllowsLargeDoneEvent(t *testing.T) {
 		Warnings:      []string{largeWarning},
 	}
 
-	got, err := parseDaemonSyncSSE(doneSSE(t, want, true))
+	got, err := consumeDaemonSyncEvents(daemonEventStream(doneSSE(t, want, true)))
 	require.NoError(t, err)
 	assert.Equal(t, want.TotalSessions, got.TotalSessions)
 	assert.Equal(t, want.Synced, got.Synced)
@@ -1296,18 +1330,18 @@ func TestParseDaemonSyncSSEFlushesUnterminatedDoneEvent(t *testing.T) {
 		Synced:        3,
 	}
 
-	got, err := parseDaemonSyncSSE(doneSSE(t, want, false))
+	got, err := consumeDaemonSyncEvents(daemonEventStream(doneSSE(t, want, false)))
 	require.NoError(t, err)
 	assert.Equal(t, want.TotalSessions, got.TotalSessions)
 	assert.Equal(t, want.Synced, got.Synced)
 }
 
 func TestParseDaemonSyncSSEReportsErrorEventPayload(t *testing.T) {
-	_, err := parseDaemonSyncSSE(strings.NewReader(
+	_, err := consumeDaemonSyncEvents(daemonEventStream(strings.NewReader(
 		"event: error\n" +
 			"data: remote sync failed\n" +
 			"data: permission denied\n\n",
-	))
+	)))
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "daemon sync error")
@@ -1321,11 +1355,11 @@ func TestParseDaemonSyncSSEReportsProgressEvents(t *testing.T) {
 	}
 	var progress []agentsync.Progress
 
-	got, err := parseDaemonSyncSSE(strings.NewReader(
+	got, err := consumeDaemonSyncEvents(daemonEventStream(strings.NewReader(
 		"event: progress\n"+
 			"data: {\"phase\":\"rebuilding_search\",\"detail\":\"Rebuilding search index\",\"resync\":true}\n\n"+
 			sseString(t, doneSSE(t, want, true)),
-	), func(p agentsync.Progress) {
+	)), func(p agentsync.Progress) {
 		progress = append(progress, p)
 	})
 
@@ -1337,20 +1371,185 @@ func TestParseDaemonSyncSSEReportsProgressEvents(t *testing.T) {
 	assert.True(t, progress[0].Resync)
 }
 
-func TestPrintSyncProgressClearsShorterOverwrites(t *testing.T) {
-	out := captureStdout(t, func() {
-		printSyncProgress(agentsync.Progress{
-			Detail: "Rebuilding search index",
-			Hint:   "Rebuilding the search index may take a while on large archives.",
-		})
-		printSyncProgress(agentsync.Progress{
-			Detail: "Swapping rebuilt database into place",
-		})
+func TestWriteSyncProgressClearsShorterOverwritesInTerminalStyle(t *testing.T) {
+	var out bytes.Buffer
+	writeSyncProgress(&out, true, agentsync.Progress{
+		Detail: "Rebuilding search index",
+		Hint:   "Rebuilding the search index may take a while on large archives.",
+	})
+	writeSyncProgress(&out, true, agentsync.Progress{
+		Detail: "Swapping rebuilt database into place",
 	})
 
-	require.GreaterOrEqual(t, strings.Count(out, "\x1b[K"), 2,
+	outString := out.String()
+
+	require.GreaterOrEqual(t, strings.Count(outString, "\x1b[K"), 2,
 		"each carriage-return progress line must clear stale text")
-	assert.Contains(t, out, "\r  Swapping rebuilt database into place\x1b[K")
+	assert.Contains(t, outString, "\r  Swapping rebuilt database into place\x1b[K")
+}
+
+func TestPrintSyncProgressStaysCleanOnNonTerminalStdout(t *testing.T) {
+	out := captureStdout(t, func() {
+		printProgress := newSyncProgressPrinter(os.Stdout)
+		for _, progress := range []agentsync.Progress{
+			{Phase: agentsync.PhaseDiscovering, Detail: "Discovering sessions"},
+			{Phase: agentsync.PhaseSyncing, Detail: "Syncing sessions", SessionsTotal: 3},
+			{Phase: agentsync.PhaseSyncing, Detail: "Syncing sessions", SessionsTotal: 3, SessionsDone: 1},
+			{Phase: agentsync.PhaseSyncing, Detail: "Syncing sessions", SessionsTotal: 3, SessionsDone: 2},
+			{Phase: agentsync.PhaseSyncing, Detail: "Syncing sessions", SessionsTotal: 3, SessionsDone: 3},
+			{Phase: agentsync.PhaseSyncing, Detail: "Syncing sessions", SessionsTotal: 3, SessionsDone: 3, MessagesIndexed: 6},
+		} {
+			printProgress(progress)
+		}
+		printSyncSummary(agentsync.SyncStats{Synced: 3}, time.Now())
+	})
+
+	assert.NotContains(t, out, "\r")
+	assert.NotContains(t, out, "\x1b[K")
+	assert.True(t, strings.HasPrefix(out, "Sync complete: 3 sessions synced"),
+		"a redirected summary must not start with a blank line")
+}
+
+func TestResyncProgressPrinterStaysLineOrientedOnNonTerminalFile(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "resync-progress-*.txt")
+	require.NoError(t, err)
+	defer file.Close()
+
+	now := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
+	printer := newResyncProgressPrinter(file, func() time.Time { return now })
+	printer.Print(agentsync.Progress{
+		Phase: agentsync.PhasePreparingResync, Detail: "Preparing full resync", Resync: true,
+	})
+	printer.Print(agentsync.Progress{
+		Phase: agentsync.PhaseSyncing, Detail: "Syncing sessions", SessionsTotal: 3,
+		SessionsDone: 1, Resync: true,
+	})
+	printer.Print(agentsync.Progress{
+		Phase: agentsync.PhaseSyncing, Detail: "Syncing sessions", SessionsTotal: 3,
+		SessionsDone: 3, Resync: true,
+	})
+	printer.Print(agentsync.Progress{Phase: agentsync.PhaseDone, SessionsTotal: 3, Resync: true})
+	printer.Finish()
+	printer.Finish()
+	printer.Print(agentsync.Progress{Detail: "after finish"})
+	require.NoError(t, file.Close())
+
+	content, err := os.ReadFile(file.Name())
+	require.NoError(t, err)
+	out := string(content)
+	assert.NotContains(t, out, "\r")
+	assert.NotContains(t, out, "\x1b[K")
+	assert.Contains(t, out, "Preparing full resync...")
+	assert.Contains(t, out, "Syncing sessions...")
+	assert.Contains(t, out, "Syncing sessions completed in")
+	assert.NotContains(t, out, "after finish")
+}
+
+func TestRemoteProgressPrinterStaysLineOrientedOnNonTerminalFile(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "remote-progress-*.txt")
+	require.NoError(t, err)
+	defer file.Close()
+
+	now := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
+	printer := newRemoteProgressPrinter(file, func() time.Time { return now })
+	printer.Print(agentsync.Progress{
+		Detail: "Downloading session archive", BytesDone: 1, BytesTotal: 2,
+	})
+	printer.Print(agentsync.Progress{
+		Detail: "Downloading session archive", BytesDone: 2, BytesTotal: 2,
+	})
+	printer.Print(agentsync.Progress{
+		Phase: agentsync.PhaseSyncing, Detail: "Processing sessions", SessionsTotal: 2,
+		SessionsDone: 1,
+	})
+	printer.Print(agentsync.Progress{
+		Phase: agentsync.PhaseSyncing, Detail: "Processing sessions", SessionsTotal: 2,
+		SessionsDone: 2,
+	})
+	printer.Print(agentsync.Progress{Detail: "Synced 2 sessions"})
+	printer.Print(agentsync.Progress{Detail: "Skipped offline host"})
+	printer.Finish()
+	printer.Finish()
+	require.NoError(t, file.Close())
+
+	content, err := os.ReadFile(file.Name())
+	require.NoError(t, err)
+	out := string(content)
+	assert.NotContains(t, out, "\r")
+	assert.NotContains(t, out, "\x1b[K")
+	assert.Contains(t, out, "Downloading session archive...")
+	assert.Contains(t, out, "Processing sessions...")
+	assert.Contains(t, out, "Synced 2 sessions")
+	assert.Contains(t, out, "Skipped offline host")
+	assert.Contains(t, out, "Processing sessions completed in")
+}
+
+func TestIsTerminalWriterClassifiesDestinations(t *testing.T) {
+	assert.False(t, isTerminalWriter(&bytes.Buffer{}))
+
+	reader, writer, err := os.Pipe()
+	require.NoError(t, err)
+	assert.False(t, isTerminalWriter(reader))
+	assert.False(t, isTerminalWriter(writer))
+	require.NoError(t, reader.Close())
+	require.NoError(t, writer.Close())
+
+	file, err := os.CreateTemp(t.TempDir(), "terminal-classification-*.txt")
+	require.NoError(t, err)
+	assert.False(t, isTerminalWriter(file))
+	require.NoError(t, file.Close())
+	assert.False(t, isTerminalWriter(file))
+
+	null, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	require.NoError(t, err)
+	assert.False(t, isTerminalWriter(null))
+	require.NoError(t, null.Close())
+}
+
+func TestUsageResyncProgressStaysCleanOnNonTerminalStderr(t *testing.T) {
+	stdout := captureStdout(t, func() {
+		stderr := captureStderr(t, func() {
+			printer := newResyncProgressPrinter(os.Stderr, time.Now)
+			printer.Print(agentsync.Progress{
+				Phase: agentsync.PhasePreparingResync, Detail: "Preparing full resync",
+			})
+			printer.Print(agentsync.Progress{
+				Phase: agentsync.PhaseSyncing, Detail: "Syncing sessions", SessionsTotal: 1,
+				SessionsDone: 1,
+			})
+			printer.Print(agentsync.Progress{Phase: agentsync.PhaseDone, SessionsTotal: 1})
+			printer.Finish()
+			printSyncSummaryStderr(agentsync.SyncStats{Synced: 1}, time.Now())
+		})
+		assert.NotContains(t, stderr, "\r")
+		assert.NotContains(t, stderr, "\x1b[K")
+		assert.NotContains(t, stderr, "\n\n",
+			"a redirected summary must follow the completed phase without a blank line")
+		assert.Contains(t, stderr, "Sync complete: 1 sessions synced")
+	})
+
+	assert.Empty(t, stdout)
+}
+
+func TestNonTerminalProgressOutputIsBounded(t *testing.T) {
+	var out bytes.Buffer
+	now := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
+	printer := newRemoteProgressPrinter(&out, func() time.Time { return now })
+	for i := range 100 {
+		printer.Print(agentsync.Progress{
+			Phase: agentsync.PhaseSyncing, Detail: "Processing sessions", SessionsTotal: 10,
+			SessionsDone: i % 10,
+		})
+	}
+	printer.Finish()
+	printer.Finish()
+	printer.Print(agentsync.Progress{Detail: "after finish"})
+
+	assert.NotContains(t, out.String(), "\r")
+	assert.NotContains(t, out.String(), "\x1b[K")
+	assert.Equal(t, 1, strings.Count(out.String(), "Processing sessions..."))
+	assert.Equal(t, 1, strings.Count(out.String(), "Processing sessions completed in"))
+	assert.NotContains(t, out.String(), "after finish")
 }
 
 func TestResyncProgressPrinterWritesPhaseTimingsOnNewLines(t *testing.T) {
@@ -1358,6 +1557,7 @@ func TestResyncProgressPrinterWritesPhaseTimingsOnNewLines(t *testing.T) {
 	clock := func() time.Time { return now }
 	var out bytes.Buffer
 	printer := newResyncProgressPrinter(&out, clock)
+	printer.terminal = true
 
 	printer.Print(agentsync.Progress{
 		Phase:  agentsync.PhasePreparingResync,
@@ -1424,6 +1624,7 @@ func TestResyncProgressPrinterRendersDoneProgressBeforeCompletion(t *testing.T) 
 	clock := func() time.Time { return now }
 	var out bytes.Buffer
 	printer := newResyncProgressPrinter(&out, clock)
+	printer.terminal = true
 
 	printer.Print(agentsync.Progress{
 		Phase:           agentsync.PhaseSyncing,
@@ -1454,6 +1655,7 @@ func TestRemoteProgressPrinterWritesTimedStepLines(t *testing.T) {
 	clock := func() time.Time { return now }
 	var out bytes.Buffer
 	printer := newRemoteProgressPrinter(&out, clock)
+	printer.terminal = true
 
 	printer.Print(agentsync.Progress{
 		Detail: "Resolving agent directories on devbox",
@@ -1505,6 +1707,7 @@ func TestRemoteProgressPrinterRendersByteProgressInPlace(t *testing.T) {
 	clock := func() time.Time { return now }
 	var out bytes.Buffer
 	printer := newRemoteProgressPrinter(&out, clock)
+	printer.terminal = true
 
 	printer.Print(agentsync.Progress{
 		Detail:     "Downloading session archive from devbox",
@@ -1540,6 +1743,7 @@ func TestRemoteProgressPrinterRendersLocalSyncProgressWithoutDetail(t *testing.T
 	clock := func() time.Time { return now }
 	var out bytes.Buffer
 	printer := newRemoteProgressPrinter(&out, clock)
+	printer.terminal = true
 
 	printer.Print(agentsync.Progress{
 		Phase:           agentsync.PhaseSyncing,
@@ -1570,6 +1774,7 @@ func TestRemoteProgressPrinterKeepsResyncLabelOnDoneProgress(t *testing.T) {
 	clock := func() time.Time { return now }
 	var out bytes.Buffer
 	printer := newRemoteProgressPrinter(&out, clock)
+	printer.terminal = true
 
 	printer.Print(agentsync.Progress{
 		Phase:           agentsync.PhaseSyncing,
@@ -1597,22 +1802,22 @@ func TestRemoteProgressPrinterKeepsResyncLabelOnDoneProgress(t *testing.T) {
 func TestRunLocalSyncUsesCallerContextForResync(t *testing.T) {
 	dataDir := t.TempDir()
 	dbPath := filepath.Join(dataDir, "sessions.db")
-	database, err := db.Open(dbPath)
+	database, err := db.Open(t.Context(), dbPath)
 	require.NoError(t, err)
 	require.NoError(t, database.Close())
 
 	raw, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	_, err = raw.Exec("PRAGMA user_version = 0")
+	_, err = raw.ExecContext(t.Context(), "PRAGMA user_version = 0")
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
 
-	database, err = db.Open(dbPath)
+	database, err = db.Open(t.Context(), dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { database.Close() })
 	require.True(t, database.NeedsResync())
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	var didResync bool
 	captureStdout(t, func() {
@@ -1631,8 +1836,12 @@ func TestDoSyncUsesDaemonRouteWhenWritableDaemonRunning(t *testing.T) {
 
 	var syncCalled bool
 	ts := syncRouteTestServer(t, func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/v1/sync", r.URL.Path)
-		require.Equal(t, http.MethodPost, r.Method)
+		if !assert.Equal(t, "/api/v1/sync", r.URL.Path) {
+			return
+		}
+		if !assert.Equal(t, http.MethodPost, r.Method) {
+			return
+		}
 		syncCalled = true
 		writeDoneSSE(t, w, agentsync.SyncStats{Synced: 7})
 	})
@@ -1650,15 +1859,21 @@ func TestDoSyncFullUsesDaemonResyncRoute(t *testing.T) {
 
 	var resyncCalled bool
 	ts := syncRouteTestServer(t, func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/v1/resync", r.URL.Path)
-		require.Equal(t, http.MethodPost, r.Method)
+		if !assert.Equal(t, "/api/v1/resync", r.URL.Path) {
+			return
+		}
+		if !assert.Equal(t, http.MethodPost, r.Method) {
+			return
+		}
 		resyncCalled = true
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, err := io.WriteString(w,
 			"event: progress\n"+
 				"data: {\"phase\":\"rebuilding_search\",\"detail\":\"Rebuilding search index\",\"resync\":true}\n\n",
 		)
-		require.NoError(t, err)
+		if !assert.NoError(t, err) {
+			return
+		}
 		writeDoneSSE(t, w, agentsync.SyncStats{Synced: 9})
 	})
 
@@ -1677,7 +1892,9 @@ func TestDoSyncFullUsesDaemonResyncRoute(t *testing.T) {
 func TestDoSyncPrintsStatusBeforeWaitingForDaemonStartup(t *testing.T) {
 	env := newSyncCLIEnv(t)
 	ts := syncRouteTestServer(t, func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/v1/resync", r.URL.Path)
+		if !assert.Equal(t, "/api/v1/resync", r.URL.Path) {
+			return
+		}
 		writeDoneSSE(t, w, agentsync.SyncStats{})
 	})
 	endpoint := serverEndpoint(t, ts)
@@ -1728,7 +1945,9 @@ func TestDoSyncPrintsStatusBeforeWaitingForDaemonStartup(t *testing.T) {
 func TestDoSyncFullSkipsRedundantDaemonInitialSync(t *testing.T) {
 	env := newSyncCLIEnv(t)
 	ts := syncRouteTestServer(t, func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/v1/resync", r.URL.Path)
+		if !assert.Equal(t, "/api/v1/resync", r.URL.Path) {
+			return
+		}
 		writeDoneSSE(t, w, agentsync.SyncStats{})
 	})
 	endpoint := serverEndpoint(t, ts)
@@ -1750,7 +1969,9 @@ func TestDoSyncFullSkipsRedundantDaemonInitialSync(t *testing.T) {
 func TestDoSyncSkipsRedundantDaemonInitialSync(t *testing.T) {
 	env := newSyncCLIEnv(t)
 	ts := syncRouteTestServer(t, func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/v1/sync", r.URL.Path)
+		if !assert.Equal(t, "/api/v1/sync", r.URL.Path) {
+			return
+		}
 		writeDoneSSE(t, w, agentsync.SyncStats{})
 	})
 	endpoint := serverEndpoint(t, ts)
@@ -1795,14 +2016,18 @@ func TestDoSyncRemoteHostKeepsDaemonInitialLocalSync(t *testing.T) {
 func TestRunDaemonSyncTrimsBaseURLTrailingSlash(t *testing.T) {
 	var syncCalled bool
 	ts := syncRouteTestServer(t, func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/v1/sync", r.URL.Path)
-		require.Equal(t, strings.TrimSuffix(tsURL(t, r), "/"), r.Header.Get("Origin"))
+		if !assert.Equal(t, "/api/v1/sync", r.URL.Path) {
+			return
+		}
+		if !assert.Equal(t, strings.TrimSuffix(tsURL(t, r), "/"), r.Header.Get("Origin")) {
+			return
+		}
 		syncCalled = true
 		writeDoneSSE(t, w, agentsync.SyncStats{Synced: 7})
 	})
 
 	stats, err := runDaemonSync(
-		context.Background(),
+		t.Context(),
 		transport{URL: ts.URL + "/"},
 		"",
 		false,
@@ -1811,6 +2036,73 @@ func TestRunDaemonSyncTrimsBaseURLTrailingSlash(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, syncCalled)
 	assert.Equal(t, 7, stats.Synced)
+}
+
+func TestRunDaemonSyncWaitsForBusyEngine(t *testing.T) {
+	for _, cancelWait := range []bool{false, true} {
+		t.Run(strconv.FormatBool(cancelWait), func(t *testing.T) {
+			database := dbtest.OpenTestDB(t)
+			engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{})
+			t.Cleanup(engine.Close)
+			entered := make(chan struct{})
+			release := make(chan struct{})
+			done := make(chan error, 1)
+			var releaseOnce stdsync.Once
+			unblock := func() { releaseOnce.Do(func() { close(release) }) }
+			go func() {
+				done <- engine.RunExclusive(func() error {
+					close(entered)
+					<-release
+					return nil
+				})
+			}()
+			<-entered
+			defer func() {
+				unblock()
+				require.NoError(t, <-done)
+			}()
+
+			var runs atomic.Int32
+			ts := httptest.NewUnstartedServer(nil)
+			defer ts.Close()
+			cfg := config.Config{Host: "127.0.0.1", Port: ts.Listener.Addr().(*net.TCPAddr).Port}
+			srv := server.New(cfg, database, engine,
+				server.WithLocalSyncRunner(func(context.Context, func(agentsync.Progress)) (agentsync.SyncStats, error) {
+					err := engine.TryRunExclusive(func() error {
+						runs.Add(1)
+						return nil
+					})
+					return agentsync.SyncStats{Synced: 7}, err
+				}),
+			)
+			ts.Config.Handler = srv.Handler()
+			ts.Start()
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			var waiting bool
+			stats, err := runDaemonSync(ctx, transport{URL: ts.URL}, "", false,
+				func(p agentsync.Progress) {
+					waiting = true
+					assert.Contains(t, p.Detail, "Waiting")
+					assert.Zero(t, runs.Load(), "waiting must not run overlapping work")
+					if cancelWait {
+						cancel()
+					} else {
+						unblock()
+					}
+				},
+			)
+			assert.True(t, waiting, "the CLI must receive progress while the engine is busy")
+			if cancelWait {
+				require.ErrorIs(t, err, context.Canceled)
+				assert.Zero(t, runs.Load())
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, 7, stats.Synced)
+				assert.EqualValues(t, 1, runs.Load())
+			}
+		})
+	}
 }
 
 // TestRunDaemonSyncDetectsResyncRequired pins the stale-archive UX: only a
@@ -1839,7 +2131,7 @@ func TestRunDaemonSyncDetectsResyncRequired(t *testing.T) {
 			})
 
 			_, err := runDaemonSync(
-				context.Background(), transport{URL: ts.URL}, "", tt.full, nil,
+				t.Context(), transport{URL: ts.URL}, "", tt.full, nil,
 			)
 			require.Error(t, err)
 			assert.Equal(t, tt.wantResync,
@@ -1879,8 +2171,12 @@ func TestDoSyncRemoteHostPrintsDaemonProgress(t *testing.T) {
 	env := newSyncCLIEnv(t)
 
 	ts := remoteSyncRouteTestServer(t, func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/v1/sync/remotes", r.URL.Path)
-		require.Equal(t, http.MethodPost, r.Method)
+		if !assert.Equal(t, "/api/v1/sync/remotes", r.URL.Path) {
+			return
+		}
+		if !assert.Equal(t, http.MethodPost, r.Method) {
+			return
+		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, err := io.WriteString(w,
 			"event: progress\n"+
@@ -1888,7 +2184,9 @@ func TestDoSyncRemoteHostPrintsDaemonProgress(t *testing.T) {
 				"event: done\n"+
 				"data: {\"failures\":[]}\n\n",
 		)
-		require.NoError(t, err)
+		if !assert.NoError(t, err) {
+			return
+		}
 	})
 	registerSyncRouteTestRuntime(t, env.DataDir, ts.URL)
 
@@ -1906,14 +2204,18 @@ func TestDoSyncRemoteHostPrintsDaemonProgress(t *testing.T) {
 
 func TestRunDaemonRemoteSyncTrimsBaseURLTrailingSlash(t *testing.T) {
 	ts := remoteSyncRouteTestServer(t, func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/v1/sync/remotes", r.URL.Path)
-		require.Equal(t, strings.TrimSuffix(tsURL(t, r), "/"), r.Header.Get("Origin"))
+		if !assert.Equal(t, "/api/v1/sync/remotes", r.URL.Path) {
+			return
+		}
+		if !assert.Equal(t, strings.TrimSuffix(tsURL(t, r), "/"), r.Header.Get("Origin")) {
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"failures":[]}`)
 	})
 
 	failures, err := runDaemonRemoteSync(
-		context.Background(),
+		t.Context(),
 		transport{URL: ts.URL + "/"},
 		"",
 		[]config.RemoteHost{{Host: "devbox"}},
@@ -1927,7 +2229,9 @@ func TestRunDaemonRemoteSyncTrimsBaseURLTrailingSlash(t *testing.T) {
 
 func TestRunDaemonRemoteSyncReportsProgressEvents(t *testing.T) {
 	ts := remoteSyncRouteTestServer(t, func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/v1/sync/remotes", r.URL.Path)
+		if !assert.Equal(t, "/api/v1/sync/remotes", r.URL.Path) {
+			return
+		}
 		assert.Contains(t, r.Header.Get("Accept"), "text/event-stream")
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, err := io.WriteString(w,
@@ -1936,12 +2240,14 @@ func TestRunDaemonRemoteSyncReportsProgressEvents(t *testing.T) {
 				"event: done\n"+
 				"data: {\"failures\":[]}\n\n",
 		)
-		require.NoError(t, err)
+		if !assert.NoError(t, err) {
+			return
+		}
 	})
 	var progress []agentsync.Progress
 
 	failures, err := runDaemonRemoteSync(
-		context.Background(),
+		t.Context(),
 		transport{URL: ts.URL},
 		"",
 		[]config.RemoteHost{{Host: "devbox"}},
@@ -1966,11 +2272,13 @@ func TestRunDaemonRemoteSyncJSONReturnsTopLevelErrorWithEarlierFailures(t *testi
 			"failures":[{"host":{"host":"alpha"},"error":"alpha failed"}],
 			"error":"`+blocked+`"
 		}`)
-		require.NoError(t, err)
+		if !assert.NoError(t, err) {
+			return
+		}
 	})
 
 	failures, err := runDaemonRemoteSync(
-		context.Background(), transport{URL: ts.URL}, "",
+		t.Context(), transport{URL: ts.URL}, "",
 		[]config.RemoteHost{{Host: "alpha"}, {Host: "beta"}},
 		false, false, nil,
 	)
@@ -1989,11 +2297,13 @@ func TestRunDaemonRemoteSyncJSONRejectsAbortedUnifiedRebuild(t *testing.T) {
 			"failures":[],
 			"error":"`+agentsync.ErrUnifiedRebuildAborted.Error()+`"
 		}`)
-		require.NoError(t, err)
+		if !assert.NoError(t, err) {
+			return
+		}
 	})
 
 	failures, err := runDaemonRemoteSync(
-		context.Background(), transport{URL: ts.URL}, "",
+		t.Context(), transport{URL: ts.URL}, "",
 		[]config.RemoteHost{{Host: "alpha"}}, true, true, nil,
 	)
 
@@ -2010,11 +2320,13 @@ func TestRunDaemonRemoteSyncSSEReturnsTopLevelErrorWithEarlierFailures(t *testin
 				`data: {"failures":[{"host":{"host":"alpha"},"error":"alpha failed"}],"error":"`+blocked+`"}`+
 				"\n\n",
 		)
-		require.NoError(t, err)
+		if !assert.NoError(t, err) {
+			return
+		}
 	})
 
 	failures, err := runDaemonRemoteSync(
-		context.Background(), transport{URL: ts.URL}, "",
+		t.Context(), transport{URL: ts.URL}, "",
 		[]config.RemoteHost{{Host: "alpha"}, {Host: "beta"}},
 		false, false, nil,
 	)
@@ -2034,11 +2346,13 @@ func TestRunDaemonRemoteSyncSSERejectsAbortedUnifiedRebuild(t *testing.T) {
 				agentsync.ErrUnifiedRebuildAborted.Error()+`"}`+
 				"\n\n",
 		)
-		require.NoError(t, err)
+		if !assert.NoError(t, err) {
+			return
+		}
 	})
 
 	failures, err := runDaemonRemoteSync(
-		context.Background(), transport{URL: ts.URL}, "",
+		t.Context(), transport{URL: ts.URL}, "",
 		[]config.RemoteHost{{Host: "alpha"}}, true, true, nil,
 	)
 
@@ -2048,7 +2362,7 @@ func TestRunDaemonRemoteSyncSSERejectsAbortedUnifiedRebuild(t *testing.T) {
 
 func TestDoSyncDaemonAbortedUnifiedRebuildExitsNonZero(t *testing.T) {
 	dataDir := t.TempDir()
-	cmd := exec.Command(
+	cmd := exec.CommandContext(t.Context(),
 		os.Args[0],
 		"-test.run=^TestDoSyncDaemonAbortedUnifiedRebuildHelperProcess$",
 	)
@@ -2090,7 +2404,9 @@ token = "remote-token"
 				agentsync.ErrUnifiedRebuildAborted.Error()+`"}`+
 				"\n\n",
 		)
-		require.NoError(t, err)
+		if !assert.NoError(t, err) {
+			return
+		}
 	})
 	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
 
@@ -2164,8 +2480,12 @@ func captureRemoteSyncRequest(t *testing.T) (*remoteSyncRequest, http.HandlerFun
 	t.Helper()
 	got := &remoteSyncRequest{}
 	return got, func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, http.MethodPost, r.Method)
-		require.NoError(t, json.UnmarshalRead(r.Body, got))
+		if !assert.Equal(t, http.MethodPost, r.Method) {
+			return
+		}
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, got)) {
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"failures":[]}`)
 	}
@@ -2192,8 +2512,9 @@ func sseString(t *testing.T, r io.Reader) string {
 }
 
 // writeDoneSSE writes a terminated daemon sync "done" SSE event to w.
-func writeDoneSSE(t *testing.T, w io.Writer, stats agentsync.SyncStats) {
+func writeDoneSSE(t *testing.T, w http.ResponseWriter, stats agentsync.SyncStats) {
 	t.Helper()
+	w.Header().Set("Content-Type", "text/event-stream")
 	_, err := io.Copy(w, doneSSE(t, stats, true))
 	require.NoError(t, err)
 }
@@ -2253,6 +2574,7 @@ func registerSyncRouteTestRuntime(
 	dataDir string,
 	rawURL string,
 ) {
+	t.Helper()
 	registerTestRuntime(t, dataDir, rawURL, false)
 }
 
@@ -2263,6 +2585,7 @@ func registerTestRuntime(
 	readOnly bool,
 ) {
 	t.Helper()
+
 	u, err := url.Parse(rawURL)
 	require.NoError(t, err)
 	host, portText, err := net.SplitHostPort(u.Host)
@@ -2358,7 +2681,7 @@ func TestRunHTTPRemoteSyncReachesMirrorPath(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
 
 	_, err := runHTTPRemoteSync(
-		context.Background(),
+		t.Context(),
 		config.Config{DataDir: t.TempDir()},
 		database,
 		config.RemoteHost{

@@ -3,7 +3,6 @@ package db
 import (
 	"context"
 	"encoding/json/v2"
-	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -80,11 +79,11 @@ func TestSearchContentSemanticNoSearcherUnavailable(t *testing.T) {
 	d := testDB(t)
 	assert.False(t, d.HasSemantic(), "HasSemantic before wiring a searcher")
 
-	_, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	_, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "hello", Mode: "semantic",
 	})
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, ErrSemanticUnavailable),
+	assert.ErrorIs(t, err, ErrSemanticUnavailable,
 		"expected ErrSemanticUnavailable, got %v", err)
 }
 
@@ -114,7 +113,7 @@ func TestSearchContentSemanticRoutesAndPreservesRank(t *testing.T) {
 		{SessionID: "s1", Ordinal: 0, Score: 0.5, Snippet: "hello world foo"},
 	}})
 
-	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "hello", Mode: "semantic", Limit: 50,
 	})
 	require.NoError(t, err, "SearchContent")
@@ -144,7 +143,7 @@ func TestSearchContentSemanticProjectFilterDropsNonMatching(t *testing.T) {
 		{SessionID: "s2", Ordinal: 0, Score: 0.5, Snippet: "another message"},
 	}})
 
-	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "hello", Mode: "semantic", Limit: 50, Project: "alpha",
 	})
 	require.NoError(t, err, "SearchContent")
@@ -163,7 +162,7 @@ func TestSearchContentSemanticLimitTrims(t *testing.T) {
 		{SessionID: "s3", Ordinal: 0, Score: 0.7, Snippet: "c"},
 	}})
 
-	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "x", Mode: "semantic", Limit: 2,
 	})
 	require.NoError(t, err, "SearchContent")
@@ -176,12 +175,12 @@ func TestSearchContentSemanticCursorRejected(t *testing.T) {
 	d := testDB(t)
 	d.SetVectorSearcher(&fakeVectorSearcher{})
 
-	_, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	_, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "hello", Mode: "semantic", Cursor: 1,
 	})
 	require.Error(t, err)
 	var inputErr *SearchInputError
-	assert.True(t, errors.As(err, &inputErr),
+	assert.ErrorAs(t, err, &inputErr,
 		"expected *SearchInputError, got %T: %v", err, err)
 }
 
@@ -189,12 +188,12 @@ func TestSearchContentSemanticToolInputSourceRejected(t *testing.T) {
 	d := testDB(t)
 	d.SetVectorSearcher(&fakeVectorSearcher{})
 
-	_, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	_, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "hello", Mode: "semantic", Sources: []string{"tool_input"},
 	})
 	require.Error(t, err)
 	var inputErr *SearchInputError
-	assert.True(t, errors.As(err, &inputErr),
+	assert.ErrorAs(t, err, &inputErr,
 		"expected *SearchInputError, got %T: %v", err, err)
 }
 
@@ -205,7 +204,7 @@ func TestSearchContentSemanticMessagesSourceAllowed(t *testing.T) {
 		{SessionID: "s1", Ordinal: 0, Score: 0.9, Snippet: "hello"},
 	}})
 
-	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "hello", Mode: "semantic", Sources: []string{"messages"},
 	})
 	require.NoError(t, err, "SearchContent with explicit messages source")
@@ -226,24 +225,36 @@ func TestEnrichSemanticHitsCarriesLineage(t *testing.T) {
 		s.ParentSessionID = Ptr("parent")
 		s.RelationshipType = "subagent"
 	})
-	require.NoError(t, d.ReplaceSessionMessages("parent", []Message{
-		{SessionID: "parent", Ordinal: 0, Role: "user",
-			Content: "top-level question", Timestamp: "2026-05-20T12:00:00Z"},
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "parent", []Message{
+		{
+			SessionID: "parent", Ordinal: 0, Role: "user",
+			Content: "top-level question", Timestamp: "2026-05-20T12:00:00Z",
+		},
 	}))
-	require.NoError(t, d.ReplaceSessionMessages("child", []Message{
-		{SessionID: "child", Ordinal: 0, Role: "user",
-			Content: "subagent prompt", Timestamp: "2026-05-20T12:00:01Z"},
-		{SessionID: "child", Ordinal: 1, Role: "assistant", IsSidechain: true,
-			Content: "sidechain step one", Timestamp: "2026-05-20T12:00:02Z"},
-		{SessionID: "child", Ordinal: 2, Role: "assistant", IsSidechain: true,
-			Content: "sidechain step two", Timestamp: "2026-05-20T12:00:03Z"},
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "child", []Message{
+		{
+			SessionID: "child", Ordinal: 0, Role: "user",
+			Content: "subagent prompt", Timestamp: "2026-05-20T12:00:01Z",
+		},
+		{
+			SessionID: "child", Ordinal: 1, Role: "assistant", IsSidechain: true,
+			Content: "sidechain step one", Timestamp: "2026-05-20T12:00:02Z",
+		},
+		{
+			SessionID: "child", Ordinal: 2, Role: "assistant", IsSidechain: true,
+			Content: "sidechain step two", Timestamp: "2026-05-20T12:00:03Z",
+		},
 	}))
 
-	meta, err := d.enrichSemanticHits(context.Background(), []VectorHit{
-		{SessionID: "child", Ordinal: 1, OrdinalStart: 1, OrdinalEnd: 2,
-			Subordinate: true, Score: 0.9},
-		{SessionID: "parent", Ordinal: 0, OrdinalStart: 0, OrdinalEnd: 0,
-			Score: 0.5},
+	meta, err := d.enrichSemanticHits(t.Context(), []VectorHit{
+		{
+			SessionID: "child", Ordinal: 1, OrdinalStart: 1, OrdinalEnd: 2,
+			Subordinate: true, Score: 0.9,
+		},
+		{
+			SessionID: "parent", Ordinal: 0, OrdinalStart: 0, OrdinalEnd: 0,
+			Score: 0.5,
+		},
 	})
 	require.NoError(t, err)
 
@@ -273,11 +284,13 @@ func TestSearchContentSemanticAnchorOrdinalHit(t *testing.T) {
 		{"assistant", "second step of the answer"},
 	})
 	d.SetVectorSearcher(&fakeVectorSearcher{hits: []VectorHit{
-		{SessionID: "s1", Ordinal: 2, OrdinalStart: 1, OrdinalEnd: 2,
-			Score: 0.9, Snippet: "second step of the answer"},
+		{
+			SessionID: "s1", Ordinal: 2, OrdinalStart: 1, OrdinalEnd: 2,
+			Score: 0.9, Snippet: "second step of the answer",
+		},
 	}})
 
-	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "answer", Mode: "semantic", Limit: 50,
 	})
 	require.NoError(t, err, "SearchContent")
@@ -318,7 +331,7 @@ func TestSearchContentSemanticRedactsSecretPastChunkTruncation(t *testing.T) {
 		{SessionID: "s1", Ordinal: 0, Score: 0.9, Snippet: truncatedSnippet},
 	}})
 
-	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "attached key", Mode: "semantic", Limit: 50,
 	})
 	require.NoError(t, err, "SearchContent")
@@ -343,13 +356,17 @@ func TestSearchContentSemanticSubordinatePenaltyReorders(t *testing.T) {
 		{"user", "top-level question text"},
 	})
 	d.SetVectorSearcher(&fakeVectorSearcher{hits: []VectorHit{
-		{SessionID: "subchain", Ordinal: 0, Subordinate: true,
-			Score: 0.9, Snippet: "sidechain answer text"},
-		{SessionID: "toplevel", Ordinal: 0,
-			Score: 0.5, Snippet: "top-level question text"},
+		{
+			SessionID: "subchain", Ordinal: 0, Subordinate: true,
+			Score: 0.9, Snippet: "sidechain answer text",
+		},
+		{
+			SessionID: "toplevel", Ordinal: 0,
+			Score: 0.5, Snippet: "top-level question text",
+		},
 	}})
 
-	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "answer", Mode: "semantic", Limit: 50,
 	})
 	require.NoError(t, err, "SearchContent")
@@ -377,26 +394,38 @@ func TestSearchContentSemanticMatchCarriesUnitRangeAndLineage(t *testing.T) {
 		s.ParentSessionID = Ptr("parent")
 		s.RelationshipType = "subagent"
 	})
-	require.NoError(t, d.ReplaceSessionMessages("parent", []Message{
-		{SessionID: "parent", Ordinal: 0, Role: "user",
-			Content: "top-level step question", Timestamp: "2026-05-20T12:00:00Z"},
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "parent", []Message{
+		{
+			SessionID: "parent", Ordinal: 0, Role: "user",
+			Content: "top-level step question", Timestamp: "2026-05-20T12:00:00Z",
+		},
 	}))
-	require.NoError(t, d.ReplaceSessionMessages("child", []Message{
-		{SessionID: "child", Ordinal: 0, Role: "user",
-			Content: "subagent prompt", Timestamp: "2026-05-20T12:00:01Z"},
-		{SessionID: "child", Ordinal: 1, Role: "assistant", IsSidechain: true,
-			Content: "sidechain step one", Timestamp: "2026-05-20T12:00:02Z"},
-		{SessionID: "child", Ordinal: 2, Role: "assistant", IsSidechain: true,
-			Content: "sidechain step two", Timestamp: "2026-05-20T12:00:03Z"},
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "child", []Message{
+		{
+			SessionID: "child", Ordinal: 0, Role: "user",
+			Content: "subagent prompt", Timestamp: "2026-05-20T12:00:01Z",
+		},
+		{
+			SessionID: "child", Ordinal: 1, Role: "assistant", IsSidechain: true,
+			Content: "sidechain step one", Timestamp: "2026-05-20T12:00:02Z",
+		},
+		{
+			SessionID: "child", Ordinal: 2, Role: "assistant", IsSidechain: true,
+			Content: "sidechain step two", Timestamp: "2026-05-20T12:00:03Z",
+		},
 	}))
 	d.SetVectorSearcher(&fakeVectorSearcher{hits: []VectorHit{
-		{SessionID: "child", Ordinal: 1, OrdinalStart: 1, OrdinalEnd: 2,
-			Subordinate: true, Score: 0.9, Snippet: "sidechain step one"},
-		{SessionID: "parent", Ordinal: 0, OrdinalStart: 0, OrdinalEnd: 0,
-			Score: 0.5, Snippet: "top-level step question"},
+		{
+			SessionID: "child", Ordinal: 1, OrdinalStart: 1, OrdinalEnd: 2,
+			Subordinate: true, Score: 0.9, Snippet: "sidechain step one",
+		},
+		{
+			SessionID: "parent", Ordinal: 0, OrdinalStart: 0, OrdinalEnd: 0,
+			Score: 0.5, Snippet: "top-level step question",
+		},
 	}})
 
-	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "step", Mode: "semantic", Limit: 50,
 	})
 	require.NoError(t, err, "SearchContent")
@@ -445,7 +474,7 @@ func TestContentMatchJSONUnitFieldsOmittedForLexicalMatches(t *testing.T) {
 		{"user", "find the zebra here"},
 	})
 
-	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "zebra", Mode: "substring", Sources: []string{"messages"}, Limit: 50,
 	})
 	require.NoError(t, err, "SearchContent")

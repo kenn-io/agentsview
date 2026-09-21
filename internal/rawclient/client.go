@@ -4,7 +4,6 @@
 package rawclient
 
 import (
-	"bytes"
 	"context"
 	"encoding/json/v2"
 	"errors"
@@ -15,15 +14,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/doordash-oss/oapi-codegen-dd/v3/pkg/runtime"
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/rawsync"
 )
-
-// octetBody marks a raw pre-encoded request body. doOnce sends it verbatim
-// instead of JSON-encoding it, so octet-stream uploads reuse the same
-// authenticated retry path as JSON requests.
-type octetBody struct {
-	data []byte
-}
 
 // Error codes produced by the raw-sync HTTP surface.
 const (
@@ -77,30 +71,27 @@ func AsAPIError(err error, out *APIError) bool {
 	return false
 }
 
-// wireError mirrors the server's error response shape. The server always
-// sets "error", so an empty message means the body was not an API error.
-type wireError struct {
-	Code                string `json:"code,omitempty"`
-	Message             string `json:"error"`
-	CurrentManifestID   string `json:"current_manifest_id,omitempty"`
-	CurrentReceipt      string `json:"current_receipt,omitempty"`
-	CurrentGeneration   int64  `json:"current_generation,omitzero"`
-	CurrentUploadOffset *int64 `json:"upload_offset,omitempty"`
-}
-
 // decodeAPIError converts a non-2xx response body into an *APIError. Bodies
 // that do not decode as a wire error still report the status under
 // CodeInternal, so transport failures never vanish.
 func decodeAPIError(status int, body []byte) error {
 	apiErr := &APIError{Status: status}
-	var wire wireError
-	if err := json.Unmarshal(body, &wire); err == nil && wire.Message != "" {
-		apiErr.Code = wire.Code
-		apiErr.Message = wire.Message
-		apiErr.CurrentManifestID = wire.CurrentManifestID
-		apiErr.CurrentReceipt = wire.CurrentReceipt
-		apiErr.CurrentGeneration = wire.CurrentGeneration
-		apiErr.CurrentUploadOffset = wire.CurrentUploadOffset
+	var wire apiclient.APIErrorResponse
+	if err := json.Unmarshal(body, &wire); err == nil && wire.ErrorData != "" {
+		if wire.Code != nil {
+			apiErr.Code = *wire.Code
+		}
+		apiErr.Message = wire.ErrorData
+		if wire.CurrentManifestID != nil {
+			apiErr.CurrentManifestID = *wire.CurrentManifestID
+		}
+		if wire.CurrentReceipt != nil {
+			apiErr.CurrentReceipt = *wire.CurrentReceipt
+		}
+		if wire.CurrentGeneration != nil {
+			apiErr.CurrentGeneration = *wire.CurrentGeneration
+		}
+		apiErr.CurrentUploadOffset = wire.UploadOffset
 	} else {
 		apiErr.Code = CodeInternal
 		apiErr.Message = "raw sync request failed"
@@ -136,7 +127,7 @@ func NewClient(cfg Config) (*Client, error) {
 		return nil, fmt.Errorf("rawclient: invalid base URL %q", cfg.BaseURL)
 	}
 	if cfg.DeviceID == "" || cfg.Credential == "" {
-		return nil, fmt.Errorf("rawclient: device ID and credential are required")
+		return nil, errors.New("rawclient: device ID and credential are required")
 	}
 	httpClient := cfg.HTTPClient
 	if httpClient == nil {
@@ -175,103 +166,56 @@ func refuseRedirects(*http.Request, []*http.Request) error {
 	return http.ErrUseLastResponse
 }
 
-// do performs one authenticated JSON request, retrying exactly once with a
-// refreshed token after an unauthorized response. The request body, when
-// non-nil, is encoded with encoding/json/v2 semantics.
-func (c *Client) do(
-	ctx context.Context,
-	method string,
-	path string,
-	header http.Header,
-	body any,
-) (*http.Response, error) {
+// do invokes a generated operation, retrying once with a refreshed scoped
+// token after an unauthorized response.
+func (c *Client) do[T any](ctx context.Context, operation func(*apiclient.Client) (T, error)) (T, error) {
+	var zero T
 	for attempt := 0; ; attempt++ {
 		token, err := c.tokens.token(ctx)
 		if err != nil {
-			return nil, err
+			return zero, err
 		}
-		resp, err := c.doOnce(ctx, method, path, header, body, token)
+		resp, err := c.request(operation, token)
 		if err == nil {
 			return resp, nil
 		}
 		var apiErr APIError
-		if attempt >= 1 ||
-			!AsAPIError(err, &apiErr) || apiErr.Status != http.StatusUnauthorized {
-			return nil, err
+		if attempt >= 1 || !AsAPIError(err, &apiErr) || apiErr.Status != http.StatusUnauthorized {
+			return zero, err
 		}
 		c.tokens.invalidate()
 	}
 }
 
-// doOnce sends a single request with the given bearer token. It returns the
-// response for 2xx statuses; any other status becomes an *APIError decoded
-// from at most maxErrorBodyBytes of the body.
-func (c *Client) doOnce(
-	ctx context.Context,
-	method string,
-	path string,
-	header http.Header,
-	body any,
-	token string,
-) (*http.Response, error) {
-	var payload io.Reader
-	if body != nil {
-		// octetBody bypasses JSON encoding: the caller already serialized
-		// the payload and set its Content-Type header.
-		if raw, ok := body.(octetBody); ok {
-			payload = bytes.NewReader(raw.data)
-		} else {
-			data, err := json.Marshal(body)
-			if err != nil {
-				return nil, fmt.Errorf("rawclient: encoding request body: %w", err)
+func (c *Client) request[T any](operation func(*apiclient.Client) (T, error), token string) (T, error) {
+	var zero T
+	api, err := apiclient.NewDefaultClient(c.baseURL.String(),
+		runtime.WithHTTPClient(rawHTTPTransport{c.httpClient}),
+		runtime.WithRequestEditorFn(func(_ context.Context, req *http.Request) error {
+			if token != "" {
+				req.Header.Set("Authorization", "Bearer "+token)
 			}
-			payload = bytes.NewReader(data)
-		}
-	}
-	req, err := http.NewRequestWithContext(
-		ctx, method, c.baseURL.String()+path, payload,
-	)
+			return nil
+		}))
 	if err != nil {
-		return nil, err
+		return zero, err
 	}
-	for key, values := range header {
-		for _, value := range values {
-			req.Header.Add(key, value)
-		}
-	}
-	if body != nil && req.Header.Get("Content-Type") == "" {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-	resp, err := c.httpClient.Do(req)
+	return operation(api)
+}
+
+// Bound error reads before the generated runtime buffers the response. Successful
+// responses pass through to its generated JSON decoder.
+type rawHTTPTransport struct{ *http.Client }
+
+func (t rawHTTPTransport) Do(ctx context.Context, req *http.Request) (*http.Response, error) {
+	resp, err := t.Client.Do(req.WithContext(ctx))
 	if err != nil {
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
-		_ = resp.Body.Close()
-		return nil, decodeAPIError(resp.StatusCode, errBody)
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
+		return nil, decodeAPIError(resp.StatusCode, body)
 	}
 	return resp, nil
-}
-
-// rawRequest sends one JSON request without client-managed authentication:
-// the caller supplies its own Authorization header. The device-credential
-// token exchange uses this path so it never recurses through do's
-// scoped-token handling.
-func (c *Client) rawRequest(
-	ctx context.Context,
-	method string,
-	path string,
-	header http.Header,
-	body any,
-) (*http.Response, error) {
-	return c.doOnce(ctx, method, path, header, body, "")
-}
-
-// jsonDecode decodes a JSON response body into dst with encoding/json/v2.
-func jsonDecode(body io.Reader, dst any) error {
-	return json.UnmarshalRead(body, dst)
 }

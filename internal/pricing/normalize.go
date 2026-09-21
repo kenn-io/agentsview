@@ -281,3 +281,28 @@ func stripTrailingDate(s string) string {
 	}
 	return s[:i]
 }
+
+// OllamaCloudBaseModel removes the Ollama Cloud marker from a model tag.
+// Ollama names its hosted models with a ":cloud" tag ("kimi-k2.7-code:cloud")
+// or a "-cloud" suffix on a size tag ("gpt-oss:120b-cloud"). Both run the
+// same upstream model that Ollama bills per token at that model's own
+// published rate, so the catalog row for the untagged name is the right
+// estimate: "kimi-k2.7-code:cloud" -> "kimi-k2.7-code", "gpt-oss:120b-cloud"
+// -> "gpt-oss:120b". Local tags (":27b-mlx", ":latest", ":31b") are preserved
+// because a locally served model has no per-token price, and the size in a
+// tag is kept because size changes the rate. Comparison is case-insensitive.
+func OllamaCloudBaseModel(model string) string {
+	idx := strings.LastIndex(model, ":")
+	if idx <= 0 {
+		return model
+	}
+	const marker = "cloud"
+	tag := strings.ToLower(model[idx+1:])
+	switch {
+	case tag == marker:
+		return model[:idx]
+	case len(tag) > len(marker)+1 && strings.HasSuffix(tag, "-"+marker):
+		return model[:len(model)-len(marker)-1]
+	}
+	return model
+}

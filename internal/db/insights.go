@@ -3,7 +3,9 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -90,12 +92,21 @@ func buildInsightFilter(
 	return strings.Join(preds, " AND "), args
 }
 
+// InsightGenerationAvailable reports whether this archive can persist a
+// generated insight. Check before invoking an agent, not only when saving.
+func (db *DB) InsightGenerationAvailable() bool {
+	return !db.ReadOnly() && !db.usageOnlyStorage()
+}
+
 // InsertInsight inserts an insight and returns its ID.
-func (db *DB) InsertInsight(s Insight) (int64, error) {
+func (db *DB) InsertInsight(ctx context.Context, s Insight) (int64, error) {
+	if err := db.requireDerivedTextStorage("insights"); err != nil {
+		return 0, err
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	res, err := db.getWriter().Exec(`
+	res, err := db.getWriter().Exec(ctx, `
 		INSERT INTO insights (
 			type, date_from, date_to, project,
 			agent, model, prompt, content,
@@ -131,7 +142,7 @@ func (db *DB) GetCachedInsight(
 		cacheKey,
 	)
 	s, err := scanInsightRow(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -153,7 +164,7 @@ func (db *DB) ListInsights(
 	query := "SELECT " + insightBaseCols +
 		" FROM insights WHERE " + where +
 		" ORDER BY created_at DESC, id DESC" +
-		" LIMIT " + fmt.Sprintf("%d", maxInsights)
+		" LIMIT " + strconv.Itoa(maxInsights)
 
 	rows, err := db.getReader().QueryContext(ctx, query, args...)
 	if err != nil {
@@ -184,7 +195,7 @@ func (db *DB) GetInsight(
 		id,
 	)
 	s, err := scanInsightRow(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -198,6 +209,9 @@ func (db *DB) GetInsight(
 // CopyInsightsFrom copies all insights from the database at
 // sourcePath into this database using ATTACH/DETACH.
 func (db *DB) CopyInsightsFrom(sourcePath string) error {
+	if err := db.requireDerivedTextStorage("insights"); err != nil {
+		return err
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -268,10 +282,10 @@ func (db *DB) CopyInsightsFrom(sourcePath string) error {
 }
 
 // DeleteInsight removes an insight by ID.
-func (db *DB) DeleteInsight(id int64) error {
+func (db *DB) DeleteInsight(ctx context.Context, id int64) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	_, err := db.getWriter().Exec(
+	_, err := db.getWriter().Exec(ctx,
 		"DELETE FROM insights WHERE id = ?", id,
 	)
 	return err

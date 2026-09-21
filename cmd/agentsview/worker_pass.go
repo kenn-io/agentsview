@@ -109,8 +109,22 @@ func runWorkerWritePass(
 	mode string,
 	onLine func(workerLine),
 ) (workerResult, error) {
+	return runWorkerWritePassExclusive(ctx, recoveryCtx, cfg, engine, database, lock, mode, onLine, engine.RunExclusive)
+}
+
+func runWorkerWritePassExclusive(
+	ctx context.Context,
+	recoveryCtx context.Context,
+	cfg config.Config,
+	engine *sync.Engine,
+	database *db.DB,
+	lock *writeOwnerLock,
+	mode string,
+	onLine func(workerLine),
+	runExclusive func(func() error) error,
+) (workerResult, error) {
 	var result workerResult
-	err := engine.RunExclusive(func() error {
+	err := runExclusive(func() error {
 		engine.UpdateProgress(sync.Progress{
 			Phase:  sync.PhaseDiscovering,
 			Detail: "Starting " + mode + " worker",
@@ -290,7 +304,7 @@ func workerWritePassLocked(
 	// entries the worker removed. A spawn failure means no worker ran, so the
 	// in-memory state is kept as the freshest copy.
 	if !errors.Is(workerErr, errWorkerSpawn) {
-		if err := engine.ReloadSkipCache(); err != nil {
+		if err := engine.ReloadSkipCache(recoveryCtx); err != nil {
 			workerErr = errors.Join(workerErr, err)
 		}
 	}
@@ -371,7 +385,7 @@ func launchSyncWorkerProcess(
 	exe, err := os.Executable()
 	if err != nil {
 		return workerResult{}, fmt.Errorf(
-			"%w: finding executable: %v", errWorkerSpawn, err,
+			"%w: finding executable: %w", errWorkerSpawn, err,
 		)
 	}
 
@@ -389,12 +403,12 @@ func launchSyncWorkerProcess(
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return workerResult{}, fmt.Errorf(
-			"%w: stdout pipe: %v", errWorkerSpawn, err,
+			"%w: stdout pipe: %w", errWorkerSpawn, err,
 		)
 	}
 	if err := cmd.Start(); err != nil {
 		return workerResult{}, fmt.Errorf(
-			"%w: starting process: %v", errWorkerSpawn, err,
+			"%w: starting process: %w", errWorkerSpawn, err,
 		)
 	}
 

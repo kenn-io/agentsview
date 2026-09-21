@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json/v2"
 	"fmt"
 	"net"
@@ -344,7 +345,7 @@ func TestStopWritableDaemonsForUpdateStopsAllAndRestartsOne(t *testing.T) {
 
 	oldStop := stopDaemonRuntimeForUpgrade
 	var stopped []int
-	stopDaemonRuntimeForUpgrade = func(
+	stopDaemonRuntimeForUpgrade = func(ctx context.Context,
 		_ config.Config, rt *DaemonRuntime,
 	) error {
 		stopped = append(stopped, rt.Record.PID)
@@ -352,7 +353,7 @@ func TestStopWritableDaemonsForUpdateStopsAllAndRestartsOne(t *testing.T) {
 	}
 	t.Cleanup(func() { stopDaemonRuntimeForUpgrade = oldStop })
 
-	result, err := stopWritableDaemonsForUpdate(config.Config{DataDir: dir})
+	result, err := stopWritableDaemonsForUpdate(t.Context(), config.Config{DataDir: dir})
 	require.NoError(t, err)
 	assert.True(t, result.Stopped)
 	assert.Equal(t, "127.0.0.1", result.Host)
@@ -372,13 +373,13 @@ func TestStopWritableDaemonsForUpdateUsesStartupStateFallback(t *testing.T) {
 
 	oldStop := stopDaemonRuntimeForUpgrade
 	var stopped *DaemonRuntime
-	stopDaemonRuntimeForUpgrade = func(_ config.Config, rt *DaemonRuntime) error {
+	stopDaemonRuntimeForUpgrade = func(ctx context.Context, _ config.Config, rt *DaemonRuntime) error {
 		stopped = rt
 		return nil
 	}
 	t.Cleanup(func() { stopDaemonRuntimeForUpgrade = oldStop })
 
-	result, err := stopWritableDaemonsForUpdate(config.Config{DataDir: dir})
+	result, err := stopWritableDaemonsForUpdate(t.Context(), config.Config{DataDir: dir})
 	require.NoError(t, err)
 	assert.True(t, result.Stopped)
 	assert.Equal(t, host, result.Host)
@@ -405,6 +406,70 @@ func TestStopDaemonProcessTerminatesAndCleansRecord(t *testing.T) {
 	assert.False(t, daemon.ProcessAlive(pid))
 	assert.Empty(t, liveDaemonRecords(dir),
 		"runtime record must be removed after stop")
+}
+
+func TestStopDaemonRuntimeForUpgradeChecksExplicitPortBeforeStop(t *testing.T) {
+	requirePOSIXSignals(t, "uses a child process to observe replacement signals")
+	for _, tt := range []struct {
+		name        string
+		explicit    bool
+		ownEndpoint bool
+		wildcard    bool
+		host        string
+		otherHost   string
+		ephemeral   bool
+		wantError   bool
+	}{
+		{name: "occupied explicit port preserves incumbent", explicit: true, wantError: true},
+		{name: "incumbent endpoint can be replaced", explicit: true, ownEndpoint: true},
+		{name: "incumbent wildcard can narrow to loopback", explicit: true, ownEndpoint: true, wildcard: true},
+		{name: "same endpoint through localhost", explicit: true, ownEndpoint: true, host: "localhost"},
+		{name: "widening preserves incumbent on shared port", explicit: true, ownEndpoint: true, host: "0.0.0.0", otherHost: "127.0.0.2", wantError: true},
+		{name: "implicit port retains fallback"},
+		{name: "explicit zero retains automatic selection", explicit: true, ephemeral: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := runtimeTestDir(t)
+			pid, _ := startReapedSleepProcess(t)
+			endpoint := newPingDaemonWithPID(t, pid)
+			writeRuntimeRecordFixture(t, dir, runtimeRecordForEndpoint(
+				endpoint, withRuntimePID(pid),
+			))
+			rt := FindDaemonRuntime(dir)
+			require.NotNil(t, rt)
+			if tt.wildcard {
+				rt.Host = "0.0.0.0"
+			}
+			listener, port := heldLoopbackPort(t)
+			t.Cleanup(func() { listener.Close() })
+			if tt.ownEndpoint {
+				port = endpoint.Port
+			} else if tt.ephemeral {
+				port = 0
+			}
+			if tt.otherHost != "" {
+				other, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", net.JoinHostPort(tt.otherHost, strconv.Itoa(port)))
+				if err != nil {
+					t.Skipf("second loopback address unavailable: %v", err)
+				}
+				t.Cleanup(func() { other.Close() })
+			}
+			cfg := config.Config{DataDir: dir, Host: endpoint.Host, Port: port, PortExplicit: tt.explicit}
+			if tt.host != "" {
+				cfg.Host = tt.host
+			}
+			err := stopDaemonRuntimeForUpgradeImpl(t.Context(), cfg, rt)
+			if tt.wantError {
+				require.ErrorContains(t, err, "requested port")
+				assert.True(t, daemon.ProcessAlive(pid), "failed preflight must leave the incumbent running")
+				assert.FileExists(t, rt.Record.SourcePath)
+				return
+			}
+			require.NoError(t, err)
+			assert.False(t, daemon.ProcessAlive(pid))
+			assert.NoFileExists(t, rt.Record.SourcePath)
+		})
+	}
 }
 
 func TestStopDaemonProcessKeepsRecordWhenProcessSurvives(t *testing.T) {
@@ -456,8 +521,8 @@ func TestStopDaemonProcessDoesNotForceKillUnknownIdentity(t *testing.T) {
 			require.NoError(t, err)
 
 			err = stopDaemonProcess(onlyLiveRuntimeRecord(t, dir), 50*time.Millisecond)
-			assert.Error(t, err)
-			assert.ErrorContains(t, err, "identity")
+			require.Error(t, err)
+			require.ErrorContains(t, err, "identity")
 			assert.True(t, daemon.ProcessAlive(pid),
 				"unknown identity must not authorize SIGKILL")
 			select {
@@ -528,8 +593,8 @@ func TestStopDaemonProcessKeepsRecordWhenIdentityBecomesUnknownAfterForceKill(
 		rec, 50*time.Millisecond, identityState,
 	)
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "identity")
-	assert.ErrorContains(t, err, "after force kill")
+	require.ErrorContains(t, err, "identity")
+	require.ErrorContains(t, err, "after force kill")
 	assert.Equal(t, 2, identityCalls)
 	assert.FileExists(t, path,
 		"unknown post-kill identity must preserve the runtime record")
@@ -563,7 +628,7 @@ func TestStopDaemonProcessKeepsRecordWhenMatchedProcessSurvivesForceKill(
 		rec, 50*time.Millisecond, identityState,
 	)
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "still running after force kill")
+	require.ErrorContains(t, err, "still running after force kill")
 	assert.Equal(t, 2, identityCalls,
 		"identity must be confirmed before and after force kill")
 	assert.FileExists(t, path,
@@ -633,8 +698,7 @@ func TestWriteDaemonRuntimePersistsCaddyMetadata(t *testing.T) {
 	assert.Equal(t, strconv.Itoa(os.Getpid()), rec.Metadata[runtimeCaddyPID])
 	ct, ok := processCreateTimeMillis(os.Getpid())
 	require.True(t, ok)
-	assert.Equal(t,
-		strconv.FormatInt(ct, 10), rec.Metadata[runtimeCaddyCreateTime])
+	assert.Equal(t, strconv.FormatInt(ct, 10), rec.Metadata[runtimeCaddyCreateTime])
 }
 
 func TestWriteDaemonRuntimeOmitsCaddyMetadataWhenAbsent(t *testing.T) {

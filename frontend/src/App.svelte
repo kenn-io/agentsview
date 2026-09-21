@@ -38,6 +38,7 @@
 </script>
 
 <script lang="ts">
+  import { FlashBanner, showFlash } from "@kenn-io/kit-ui";
   import { onMount, untrack } from "svelte";
   import AppHeader from "./lib/components/layout/AppHeader.svelte";
   import ThreeColumnLayout from "./lib/components/layout/ThreeColumnLayout.svelte";
@@ -50,6 +51,7 @@
   import { sessionTiming } from "./lib/stores/sessionTiming.svelte.js";
   import CommandPalette from "./lib/components/command-palette/CommandPalette.svelte";
   import AboutModal from "./lib/components/modals/AboutModal.svelte";
+  import GoToSessionModal from "./lib/components/modals/GoToSessionModal.svelte";
   import ShortcutsModal from "./lib/components/modals/ShortcutsModal.svelte";
   import PublishModal from "./lib/components/modals/PublishModal.svelte";
   import ResyncModal from "./lib/components/modals/ResyncModal.svelte";
@@ -84,7 +86,7 @@
     type PanelDateState,
   } from "./lib/stores/yokedDates.svelte.js";
   import { m } from "./lib/i18n/index.js";
-  import { setAuthToken, getAuthToken, setServerUrl, getBase } from "./lib/api/runtime.js";
+  import { setAuthToken, getAuthToken, setServerUrl } from "./lib/api/runtime.js";
   import { setupVisibilityHealthCheck } from "./lib/utils/health.js";
   import { registerShortcuts } from "./lib/utils/keyboard.js";
   import { shouldAutoSwitchTranscriptModeToNormal } from "./lib/utils/transcript-mode.js";
@@ -525,6 +527,7 @@
       }
       sessions.loadProjects();
       sessions.loadAgents();
+      sessions.loadMachines();
     });
   });
 
@@ -727,6 +730,13 @@
     ui.activeModal = "about";
   }
 
+  $effect(() => {
+    const saveError = settings.saveError;
+    if (saveError) {
+      untrack(() => showFlash(saveError, { tone: "danger" }));
+    }
+  });
+
   onMount(() => {
     globalAuthToken = getAuthToken();
     settings.load();
@@ -737,7 +747,7 @@
     sync.checkForUpdate();
     sync.startPolling();
 
-    const healthCleanup = setupVisibilityHealthCheck(getBase, {
+    const healthCleanup = setupVisibilityHealthCheck({
       onBackendDegraded: () => sync.markBackendDegraded(),
     });
 
@@ -797,6 +807,8 @@
 
 <AppHeader />
 
+<FlashBanner toneLabels={{ danger: m.settings_save_error_label() }} />
+
 {#if router.route === "usage" || router.route === "token-usage"}
   <div class="page-scroll">
     <UsagePage />
@@ -830,7 +842,7 @@
     <RecentEditsPage />
   </div>
 {:else if router.route === "data"}
-  <div class="page-scroll">
+  <div class="page-scroll data-page-host">
     <DataPage />
   </div>
 {:else if router.route === "settings"}
@@ -884,6 +896,10 @@
 
 {#if ui.activeModal === "commandPalette"}
   <CommandPalette />
+{/if}
+
+{#if ui.activeModal === "goToSession"}
+  <GoToSessionModal />
 {/if}
 
 {#if ui.activeModal === "shortcuts"}
@@ -942,6 +958,11 @@
   }
 
   .settings-page-host {
+    display: flex;
+    overflow: hidden;
+  }
+
+  .data-page-host {
     display: flex;
     overflow: hidden;
   }
@@ -1059,7 +1080,7 @@
   }
 
   .auth-card-btn:disabled {
-    opacity: 0.6;
+    opacity: var(--opacity-disabled);
     cursor: default;
   }
 

@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -16,6 +17,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/postgres"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 func newPGVectorsCommand() *cobra.Command {
@@ -80,7 +82,7 @@ func newPGVectorsDropCommand() *cobra.Command {
 }
 
 // openPGVectorTarget resolves a single PG target the same way `pg status` does
-// (resolvePGTargetSelections + postgres.Open, no --all), opening a connection
+// (storage.SelectTargets + postgres.Open, no --all), opening a connection
 // to it. The returned cleanup closes the pool.
 func openPGVectorTarget(targetName string) (*sql.DB, func(), error) {
 	appCfg, err := config.LoadMinimal()
@@ -92,20 +94,21 @@ func openPGVectorTarget(targetName string) (*sql.DB, func(), error) {
 	}
 	setupLogFile(appCfg.DataDir)
 
-	targets, err := resolvePGTargetSelections(appCfg, targetName, false)
+	backend := pgReplica{}
+	refs, err := storage.SelectTargets(backend, appCfg, targetName, false)
 	if err != nil {
 		return nil, nil, err
 	}
-	target, err := resolvePGTargetConfig(appCfg, targets[0])
+	target, err := backend.ResolveTarget(appCfg, refs[0])
 	if err != nil {
 		return nil, nil, err
 	}
-	if target.PG.URL == "" {
-		return nil, nil, fmt.Errorf("url not configured")
+	if target.Target.URL == "" {
+		return nil, nil, errors.New("url not configured")
 	}
 	applyClassifierConfig(appCfg)
 	pg, err := postgres.Open(
-		target.PG.URL, target.PG.Schema, target.PG.AllowInsecure,
+		target.Target.URL, target.Target.Schema, target.Target.AllowInsecure,
 	)
 	if err != nil {
 		return nil, nil, err

@@ -1,0 +1,203 @@
+overlay: 1.0.0
+info:
+  title: Reuse AgentsView response models in the Go client
+  version: 1.0.0
+actions:
+  - target: $.components.schemas.ActivityReport
+    update:
+      x-go-type: activity.Report
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/activity
+        name: activity
+  - target: $.components.schemas.ActivitySessionRow
+    update:
+      x-go-type: activity.SessionRow
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/activity
+        name: activity
+  - target: $.components.schemas.DbCompactResult
+    update:
+      x-go-type: db.CompactResult
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/db
+        name: db
+  - target: $.components.schemas.DbProjectInfo
+    update:
+      x-go-type: db.ProjectInfo
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/db
+        name: db
+  - target: $.components.schemas.DbRecallEntry
+    update:
+      x-go-type: db.RecallEntry
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/db
+        name: db
+  - target: $.components.schemas.DbRecallImportResult
+    update:
+      x-go-type: db.RecallImportResult
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/db
+        name: db
+  - target: $.components.schemas.DbSearchResult
+    update:
+      x-go-type: db.SearchResult
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/db
+        name: db
+  - target: $.components.schemas.DbSessionStats
+    update:
+      x-go-type: db.SessionStats
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/db
+        name: db
+  - target: $.components.schemas.ServiceContentSearchResult
+    update:
+      x-go-type: service.ContentSearchResult
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/service
+        name: service
+  - target: $.components.schemas.ServiceMessageList
+    update:
+      x-go-type: service.MessageList
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/service
+        name: service
+  - target: $.components.schemas.ServiceRecallQueryResult
+    update:
+      x-go-type: service.RecallQueryResult
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/service
+        name: service
+  - target: $.components.schemas.ServiceSecretFindingList
+    update:
+      x-go-type: service.SecretFindingList
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/service
+        name: service
+  - target: $.components.schemas.ServiceSessionDetail
+    update:
+      x-go-type: service.SessionDetail
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/service
+        name: service
+  - target: $.components.schemas.ServiceSessionList
+    update:
+      x-go-type: service.SessionList
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/service
+        name: service
+  - target: $.components.schemas.ServiceToolCallList
+    update:
+      x-go-type: service.ToolCallList
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/service
+        name: service
+  - target: $.components.schemas.ServiceUsagePairwiseComparisonResponse
+    update:
+      x-go-type: service.UsagePairwiseComparisonResponse
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/service
+        name: service
+  - target: $.components.schemas.VectorBuildStatus
+    update:
+      x-go-type: vector.BuildStatus
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/vector
+        name: vector
+  - target: $.components.schemas.VectorGenerationInfo
+    update:
+      x-go-type: vector.GenerationInfo
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/vector
+        name: vector
+  - target: $.components.schemas.AgentTotal
+    update:
+      x-go-type: service.AgentTotal
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/service
+        name: service
+  - target: $.components.schemas.CacheStats
+    update:
+      x-go-type: service.CacheStats
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/service
+        name: service
+  - target: $.components.schemas.DbDailyUsageEntry
+    update:
+      x-go-type: db.DailyUsageEntry
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/db
+        name: db
+  - target: $.components.schemas.DbRecallResult
+    update:
+      x-go-type: db.RecallResult
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/db
+        name: db
+  - target: $.components.schemas.DbUsageSessionCounts
+    update:
+      x-go-type: db.UsageSessionCounts
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/db
+        name: db
+  - target: $.components.schemas.DbUsageTotals
+    update:
+      x-go-type: db.UsageTotals
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/db
+        name: db
+  - target: $.components.schemas.ExportPricingBlock
+    update:
+      x-go-type: export.PricingBlock
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/export
+        name: export
+  - target: $.components.schemas.ExportProjectMapEntry
+    update:
+      x-go-type: export.ProjectMapEntry
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/export
+        name: export
+  - target: $.components.schemas.ModelTotal
+    update:
+      x-go-type: service.ModelTotal
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/service
+        name: service
+  - target: $.components.schemas.ProjectTotal
+    update:
+      x-go-type: service.ProjectTotal
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/service
+        name: service
+  - target: $.components.schemas.UnsupportedUsage
+    update:
+      x-go-type: service.UnsupportedUsage
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/service
+        name: service
+  - target: $.components.schemas.MoneyMoney
+    update:
+      x-go-type: money.Money
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/money
+        name: money
+  - target: $.components.schemas.SessionUsageBreakdownResponse
+    update:
+      x-go-type: db.SessionUsageBreakdownEntry
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/db
+        name: db
+  - target: $.components.schemas.RawsyncManifest
+    update:
+      x-go-type: rawsync.Manifest
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/rawsync
+        name: rawsync
+  - target: $.components.schemas.RawsyncObjectRef
+    update:
+      x-go-type: rawsync.ObjectRef
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/rawsync
+        name: rawsync

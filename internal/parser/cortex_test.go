@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -155,6 +154,8 @@ func TestParseCortexSession_ToolUse(t *testing.T) {
 	require.NotNil(t, sess)
 
 	assertMessageCount(t, sess.MessageCount, 3)
+	assert.Equal(t, 1, sess.UserMessageCount)
+	assert.Equal(t, "Read main.go", sess.FirstMessage)
 	require.Len(t, msgs, 3)
 	assert.True(t, msgs[1].HasToolUse)
 	require.Len(t, msgs[1].ToolCalls, 1)
@@ -162,9 +163,10 @@ func TestParseCortexSession_ToolUse(t *testing.T) {
 	assert.Contains(t, msgs[1].Content, "/tmp/main.go")
 
 	// Tool result message carries ContentLength > 0.
+	assert.Equal(t, SourceSubtypeToolResult, msgs[2].SourceSubtype)
 	require.Len(t, msgs[2].ToolResults, 1)
 	assert.Equal(t, "tu1", msgs[2].ToolResults[0].ToolUseID)
-	assert.Greater(t, msgs[2].ToolResults[0].ContentLength, 0,
+	assert.Positive(t, msgs[2].ToolResults[0].ContentLength,
 		"tool result ContentLength must be populated")
 }
 
@@ -333,7 +335,7 @@ func TestDiscoverCortexSessions(t *testing.T) {
 
 	provider, ok := NewProvider(AgentCortex, ProviderConfig{Roots: []string{dir}})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 2)
 	assert.Equal(t, []string{
@@ -347,7 +349,7 @@ func TestDiscoverCortexSessions_EmptyDir(t *testing.T) {
 		Roots: []string{"", "/nonexistent"},
 	})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	assert.Empty(t, sources)
 }
@@ -376,7 +378,7 @@ func TestFindCortexSourceFile(t *testing.T) {
 			})
 			require.True(t, ok)
 			source, ok, err := provider.FindSource(
-				context.Background(),
+				t.Context(),
 				FindSourceRequest{RawSessionID: tt.sessionID},
 			)
 			require.NoError(t, err)

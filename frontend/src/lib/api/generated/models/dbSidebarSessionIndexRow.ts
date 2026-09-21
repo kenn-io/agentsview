@@ -17,6 +17,7 @@ export interface DbSidebarSessionIndexRow {
   message_count: number;
   parent_session_id?: string;
   project: string;
+  project_assigned?: boolean;
   relationship_type?: string;
   session_kind?: string;
   /** @nullable */

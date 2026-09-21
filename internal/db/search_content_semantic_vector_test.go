@@ -61,7 +61,7 @@ func (s vectorIndexSearcher) ResolveMessageUnits(
 // fell back to centering on the query pattern (absent here), i.e. the start
 // of the message — losing the matched region entirely.
 func TestSearchContentSemanticCrossMemberChunkCentersOnAnchorMessage(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	d := dbtest.OpenTestDB(t)
 
 	memberA := "a short first assistant step"

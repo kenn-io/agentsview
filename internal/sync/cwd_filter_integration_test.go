@@ -1,7 +1,6 @@
 package sync_test
 
 import (
-	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json/v2"
@@ -47,6 +46,7 @@ func encodeCursorProjectDir(path string) string {
 // fixtures must use that same user-facing path for filters and assertions.
 func cursorWorkspaceTempDir(t *testing.T) string {
 	t.Helper()
+
 	dir := t.TempDir()
 	if runtime.GOOS != "darwin" || !strings.HasPrefix(dir, "/private/") {
 		return dir
@@ -69,7 +69,7 @@ func setupClaudeEnvWithCwdPrefixes(
 		t.Skip("skipping integration test")
 	}
 	env := &testEnv{db: dbtest.OpenTestDB(t), claudeDir: t.TempDir()}
-	env.engine = sync.NewEngine(env.db, sync.EngineConfig{
+	env.engine = sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {env.claudeDir},
 		},
@@ -110,11 +110,11 @@ func TestSyncEngineCwdPrefixFilter(t *testing.T) {
 		"sibling-session.jsonl", sibling,
 	)
 
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	assertSessionProject(t, env.db, "inside-session", "my_app")
 	for _, id := range []string{"outside-session", "sibling-session"} {
-		sess, err := env.db.GetSession(context.Background(), id)
+		sess, err := env.db.GetSession(t.Context(), id)
 		require.NoError(t, err, "GetSession(%q)", id)
 		assert.Nil(t, sess,
 			"session %q outside the cwd allow-list must not be ingested", id)
@@ -138,7 +138,7 @@ func TestSyncEngineCursorCwdPrefixFilterAndProjectIdentity(t *testing.T) {
 	outsideDir := encodeCursorProjectDir(outsideWorkspace)
 	prefix := matchingWorkspace
 	env := &testEnv{db: dbtest.OpenTestDB(t)}
-	env.engine = sync.NewEngine(env.db, sync.EngineConfig{
+	env.engine = sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCursor: {root},
 		},
@@ -205,7 +205,7 @@ func TestSyncEngineCursorIssue1418ShapeRetainsMatchingSession(t *testing.T) {
 {"role":"assistant","message":{"content":[{"type":"tool_use","input":{"working_directory":`+string(recordedCwdJSON)+`}}]}}`+"\n",
 	), 0o644))
 	env := &testEnv{db: dbtest.OpenTestDB(t)}
-	env.engine = sync.NewEngine(env.db, sync.EngineConfig{
+	env.engine = sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCursor: {root},
 		},
@@ -235,7 +235,7 @@ func TestSyncEngineCursorCwdNegativeSpaceLeavesClaudeUnchanged(t *testing.T) {
 	root := t.TempDir()
 	claudeDir := t.TempDir()
 	env := &testEnv{db: dbtest.OpenTestDB(t), claudeDir: claudeDir}
-	env.engine = sync.NewEngine(env.db, sync.EngineConfig{
+	env.engine = sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCursor: {root},
 			parser.AgentClaude: {claudeDir},
@@ -292,7 +292,7 @@ func TestSyncEngineCursorCwdEmptyFilterKeepsLowConfidenceSession(
 		`{"role":"user","message":{"content":"low confidence"}}`+"\n",
 	), 0o644))
 	env := &testEnv{db: dbtest.OpenTestDB(t)}
-	env.engine = sync.NewEngine(env.db, sync.EngineConfig{
+	env.engine = sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCursor: {root},
 		},
@@ -331,7 +331,7 @@ func TestSyncEngineCursorCwdConsumerPaths(t *testing.T) {
 	t.Run("active mapping", func(t *testing.T) {
 		root := t.TempDir()
 		env := &testEnv{db: dbtest.OpenTestDB(t)}
-		env.engine = sync.NewEngine(env.db, sync.EngineConfig{
+		env.engine = sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
 			AgentDirs: map[parser.AgentType][]string{
 				parser.AgentCursor: {root},
 			},
@@ -359,7 +359,7 @@ func TestSyncEngineCursorCwdConsumerPaths(t *testing.T) {
 	t.Run("unavailable source preserves snapshot project", func(t *testing.T) {
 		root := t.TempDir()
 		env := &testEnv{db: dbtest.OpenTestDB(t)}
-		env.engine = sync.NewEngine(env.db, sync.EngineConfig{
+		env.engine = sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
 			AgentDirs: map[parser.AgentType][]string{
 				parser.AgentCursor: {root},
 			},
@@ -367,7 +367,7 @@ func TestSyncEngineCursorCwdConsumerPaths(t *testing.T) {
 		})
 		t.Cleanup(func() { env.engine.Close() })
 		const sessionID = "77777777-8888-4999-0000-111111111111"
-		require.NoError(t, env.db.UpsertSession(db.Session{
+		require.NoError(t, env.db.UpsertSession(t.Context(), db.Session{
 			ID: "cursor:" + sessionID, Project: "resolved_cursor",
 			Machine: "local", Agent: string(parser.AgentCursor), Cwd: cwd,
 		}))
@@ -419,10 +419,13 @@ func TestSyncEngineCursorCwdDataVersionRefresh(t *testing.T) {
 	path := filepath.Join(root, projectDir, "agent-transcripts", sessionID+".jsonl")
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 	require.NoError(t, os.WriteFile(path, []byte(
-		`{"role":"user","message":{"content":"refresh cursor cwd"}}`+"\n",
+		strings.Join([]string{
+			`{"role":"user","message":{"content":[{"type":"text","text":"<timestamp>Thursday, Jul 2, 2026, 11:11 AM (UTC-4)</timestamp>\n<user_query>refresh cursor cwd</user_query>"}]}}`,
+			`{"role":"assistant","message":{"content":[{"type":"text","text":"assistant reply"}]}}`,
+		}, "\n")+"\n",
 	), 0o644))
 	env := &testEnv{db: dbtest.OpenTestDB(t)}
-	env.engine = sync.NewEngine(env.db, sync.EngineConfig{
+	env.engine = sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCursor: {root},
 		},
@@ -438,16 +441,17 @@ func TestSyncEngineCursorCwdDataVersionRefresh(t *testing.T) {
 	})
 
 	oldCwd := filepath.Join(t.TempDir(), "old")
-	require.NoError(t, env.db.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec("UPDATE sessions SET cwd = ? WHERE id = ?", oldCwd, fullID)
+	require.NoError(t, env.db.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), "UPDATE sessions SET cwd = ? WHERE id = ?", oldCwd, fullID)
 		return err
 	}))
-	changed, err := env.db.UpdateSessionCwdByIdentity(
+	changed, err := env.db.UpdateSessionCwdByIdentity(t.Context(),
 		fullID, path, string(parser.AgentCursor), expectedCwd,
 	)
 	require.NoError(t, err)
 	assert.True(t, changed)
-	assert.Less(t, env.db.GetSessionDataVersion(fullID), db.CurrentDataVersion())
+	assert.Equal(t, db.CurrentDataVersion()-1, env.db.GetSessionDataVersion(t.Context(), fullID),
+		"cwd repair must mark the row stale by exactly one version")
 	stats := env.engine.SyncAllSince(
 		t.Context(), time.Now().Add(time.Hour), nil,
 	)
@@ -457,7 +461,22 @@ func TestSyncEngineCursorCwdDataVersionRefresh(t *testing.T) {
 		assert.Equal(t, expectedCwd, sess.Cwd,
 			"stale Cursor rows must be reparsed through the cutoff")
 	})
-	assert.Equal(t, db.CurrentDataVersion(), env.db.GetSessionDataVersion(fullID))
+	assert.Equal(t, db.CurrentDataVersion(), env.db.GetSessionDataVersion(t.Context(), fullID))
+
+	refreshed, err := env.db.GetSession(t.Context(), fullID)
+	require.NoError(t, err)
+	require.NotNil(t, refreshed)
+	require.NotNil(t, refreshed.StartedAt)
+	require.NotNil(t, refreshed.EndedAt)
+	assert.Equal(t, expectedCwd, refreshed.Cwd)
+	assert.Equal(t, "2026-07-02T15:11:00Z", *refreshed.StartedAt)
+	assert.Equal(t, "2026-07-02T15:11:00Z", *refreshed.EndedAt)
+
+	messages, err := env.db.GetMessages(t.Context(), fullID, 0, 10, true)
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	assert.Equal(t, "2026-07-02T15:11:00Z", messages[0].Timestamp)
+	assert.Empty(t, messages[1].Timestamp)
 }
 
 // A session archived before the cwd allow-list was configured must not
@@ -471,7 +490,7 @@ func TestSyncEngineCwdPrefixFilterBlocksIncrementalAppend(t *testing.T) {
 	// Archive the outside-prefix session with no filter configured,
 	// as if it was ingested before sync_include_cwd_prefixes was set.
 	env := &testEnv{db: dbtest.OpenTestDB(t), claudeDir: t.TempDir()}
-	env.engine = sync.NewEngine(env.db, sync.EngineConfig{
+	env.engine = sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {env.claudeDir},
 		},
@@ -486,11 +505,11 @@ func TestSyncEngineCwdPrefixFilterBlocksIncrementalAppend(t *testing.T) {
 		t, "/Users/alice/personal/blog",
 		"outside-append.jsonl", initial,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 	assertSessionMessageCount(t, env.db, "outside-append", 2)
 
 	// Turn the filter on and append to the archived session's file.
-	env.engine = sync.NewEngine(env.db, sync.EngineConfig{
+	env.engine = sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {env.claudeDir},
 		},
@@ -519,7 +538,7 @@ func TestReconcileWatchRootsCwdFilteredSourceRevokesDeletionProof(t *testing.T) 
 	}
 
 	env := &testEnv{db: dbtest.OpenTestDB(t), claudeDir: t.TempDir()}
-	env.engine = sync.NewEngine(env.db, sync.EngineConfig{
+	env.engine = sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {env.claudeDir},
 		},
@@ -541,12 +560,12 @@ func TestReconcileWatchRootsCwdFilteredSourceRevokesDeletionProof(t *testing.T) 
 	allowedPath := env.writeClaudeSessionForProject(
 		t, "/workspace/work/project", "inside-reconcile.jsonl", allowedContent,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 	assertSessionMessageCount(t, env.db, "outside-reconcile", 2)
 	assertSessionMessageCount(t, env.db, "inside-reconcile", 2)
 
 	ownership, err := env.db.ListActiveSessionSourceOwnershipScopesPage(
-		context.Background(), "local", string(parser.AgentClaude),
+		t.Context(), "local", string(parser.AgentClaude),
 		[]db.StoredSourcePathHintScope{{Path: env.claudeDir}},
 		db.SessionSourceCursor{},
 	)
@@ -562,7 +581,7 @@ func TestReconcileWatchRootsCwdFilteredSourceRevokesDeletionProof(t *testing.T) 
 	require.NoError(t, os.WriteFile(path, []byte(filtered), 0o644))
 
 	env.engine.Close()
-	env.engine = sync.NewEngine(env.db, sync.EngineConfig{
+	env.engine = sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {env.claudeDir},
 		},
@@ -570,11 +589,11 @@ func TestReconcileWatchRootsCwdFilteredSourceRevokesDeletionProof(t *testing.T) 
 		IncludeCwdPrefixes: []string{"/workspace/work"},
 	})
 	require.NoError(t, env.engine.ReconcileWatchRootsAfterLostEvents(
-		context.Background(), []string{env.claudeDir}, false,
+		t.Context(), []string{env.claudeDir}, false,
 	))
 
 	ownership, err = env.db.ListActiveSessionSourceOwnershipScopesPage(
-		context.Background(), "local", string(parser.AgentClaude),
+		t.Context(), "local", string(parser.AgentClaude),
 		[]db.StoredSourcePathHintScope{{Path: env.claudeDir}},
 		db.SessionSourceCursor{},
 	)
@@ -587,7 +606,7 @@ func TestReconcileWatchRootsCwdFilteredSourceRevokesDeletionProof(t *testing.T) 
 
 	require.NoError(t, os.Remove(path))
 	require.NoError(t, env.engine.ReconcileWatchRootsAfterLostEvents(
-		context.Background(), []string{env.claudeDir}, false,
+		t.Context(), []string{env.claudeDir}, false,
 	))
 	assertSessionMessageCount(t, env.db, "outside-reconcile", 2)
 	assertSessionMessageCount(t, env.db, "inside-reconcile", 2)
@@ -600,7 +619,7 @@ func TestSyncAllCwdFilterChangeRevokesSkippedSourceDeletionProof(t *testing.T) {
 
 	env := &testEnv{db: dbtest.OpenTestDB(t), claudeDir: t.TempDir()}
 	newEngine := func(sourceMachine string, prefixes []string) *sync.Engine {
-		return sync.NewEngine(env.db, sync.EngineConfig{
+		return sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
 			AgentDirs: map[parser.AgentType][]string{
 				parser.AgentClaude: {env.claudeDir},
 			},
@@ -677,7 +696,7 @@ func TestCwdFilterBaselinesOnlyAdmittedStaleClaudeForkAfterZeroResultParse(
 				allowedID:    "/workspace/work/project",
 				disallowedID: "/workspace/personal/project",
 			} {
-				require.NoError(t, env.db.UpsertSession(db.Session{
+				require.NoError(t, env.db.UpsertSession(t.Context(), db.Session{
 					ID:               id,
 					Project:          "project",
 					Machine:          "local",
@@ -690,7 +709,7 @@ func TestCwdFilterBaselinesOnlyAdmittedStaleClaudeForkAfterZeroResultParse(
 					FileMtime:        &fileMtime,
 					FileHash:         &fileHash,
 				}))
-				require.NoError(t, env.db.SetSessionDataVersion(id, 0))
+				require.NoError(t, env.db.SetSessionDataVersion(t.Context(), id, 0))
 			}
 			syncSource := func() {
 				if reconcile {
@@ -708,7 +727,7 @@ func TestCwdFilterBaselinesOnlyAdmittedStaleClaudeForkAfterZeroResultParse(
 				allowedID: 1, disallowedID: 0,
 			} {
 				var got int
-				require.NoError(t, env.db.Reader().QueryRow(`
+				require.NoError(t, env.db.Reader().QueryRow(t.Context(), `
 					SELECT count(*) FROM local_session_source_baselines
 					WHERE session_id = ?`, id,
 				).Scan(&got))
@@ -727,7 +746,7 @@ func TestCwdFilterBaselinesOnlyAdmittedStaleClaudeForkAfterZeroResultParse(
 
 			if !reconcile {
 				env.engine.Close()
-				env.engine = sync.NewEngine(env.db, sync.EngineConfig{
+				env.engine = sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
 					AgentDirs: map[parser.AgentType][]string{
 						parser.AgentClaude: {env.claudeDir},
 					},
@@ -740,7 +759,7 @@ func TestCwdFilterBaselinesOnlyAdmittedStaleClaudeForkAfterZeroResultParse(
 					"a persisted current-version rowless marker must restore source freshness")
 
 				env.engine.Close()
-				env.engine = sync.NewEngine(env.db, sync.EngineConfig{
+				env.engine = sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
 					AgentDirs: map[parser.AgentType][]string{
 						parser.AgentClaude: {env.claudeDir},
 					},
@@ -780,7 +799,7 @@ func TestSyncSingleSessionBaselinesOnlyAdmittedStaleClaudeFork(t *testing.T) {
 		allowedID:    "/workspace/work/project",
 		disallowedID: "/workspace/personal/project",
 	} {
-		require.NoError(t, env.db.UpsertSession(db.Session{
+		require.NoError(t, env.db.UpsertSession(t.Context(), db.Session{
 			ID:               id,
 			Project:          "project",
 			Machine:          "local",
@@ -790,7 +809,7 @@ func TestSyncSingleSessionBaselinesOnlyAdmittedStaleClaudeFork(t *testing.T) {
 			RelationshipType: "fork",
 			FilePath:         &path,
 		}))
-		require.NoError(t, env.db.SetSessionDataVersion(id, 0))
+		require.NoError(t, env.db.SetSessionDataVersion(t.Context(), id, 0))
 	}
 	require.NoError(t, env.db.ReplaceActiveSessionSourceBaselines(
 		t.Context(), "local",
@@ -800,7 +819,7 @@ func TestSyncSingleSessionBaselinesOnlyAdmittedStaleClaudeFork(t *testing.T) {
 	require.NoError(t, env.engine.SyncSingleSession(parentID))
 	for id, want := range map[string]int{allowedID: 1, disallowedID: 0} {
 		var got int
-		require.NoError(t, env.db.Reader().QueryRow(`
+		require.NoError(t, env.db.Reader().QueryRow(t.Context(), `
 			SELECT count(*) FROM local_session_source_baselines
 			WHERE session_id = ?`, id,
 		).Scan(&got))
@@ -823,7 +842,7 @@ func TestSyncSingleSessionEmitsSessionsForStaleClaudeForkTombstone(
 ) {
 	emitter := &fakeEmitter{}
 	env := &testEnv{db: dbtest.OpenTestDB(t), claudeDir: t.TempDir()}
-	env.engine = sync.NewEngine(env.db, sync.EngineConfig{
+	env.engine = sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {env.claudeDir},
 		},
@@ -844,7 +863,7 @@ func TestSyncSingleSessionEmitsSessionsForStaleClaudeForkTombstone(
 
 	parentID := "single-notify"
 	staleID := parentID + "-11111111-2222-4333-8444-555555555555"
-	require.NoError(t, env.db.UpsertSession(db.Session{
+	require.NoError(t, env.db.UpsertSession(t.Context(), db.Session{
 		ID:               staleID,
 		Project:          "project",
 		Machine:          "local",
@@ -853,7 +872,7 @@ func TestSyncSingleSessionEmitsSessionsForStaleClaudeForkTombstone(
 		RelationshipType: "fork",
 		FilePath:         &path,
 	}))
-	require.NoError(t, env.db.SetSessionDataVersion(staleID, 0))
+	require.NoError(t, env.db.SetSessionDataVersion(t.Context(), staleID, 0))
 	require.NoError(t, env.db.BaselineActiveSessionSourceOwnerships(
 		t.Context(), []db.SessionSourceOwnership{{
 			ID: staleID, Machine: "local", Agent: "claude", FilePath: path,
@@ -882,7 +901,7 @@ func TestSyncSingleSessionFreshnessSkipReconcilesNarrowedCwdBaselines(
 
 	parentID := "single-fresh-cwd"
 	rejectedID := parentID + "-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
-	require.NoError(t, env.db.UpsertSession(db.Session{
+	require.NoError(t, env.db.UpsertSession(t.Context(), db.Session{
 		ID:               rejectedID,
 		Project:          "project",
 		Machine:          "local",
@@ -892,14 +911,14 @@ func TestSyncSingleSessionFreshnessSkipReconcilesNarrowedCwdBaselines(
 		RelationshipType: "fork",
 		FilePath:         &path,
 	}))
-	require.NoError(t, env.db.SetSessionDataVersion(rejectedID, 0))
+	require.NoError(t, env.db.SetSessionDataVersion(t.Context(), rejectedID, 0))
 	require.NoError(t, env.db.BaselineActiveSessionSourcePaths(
 		t.Context(), "local",
 		[]db.SessionSourcePath{{Agent: "claude", FilePath: path}},
 	))
 
 	env.engine.Close()
-	env.engine = sync.NewEngine(env.db, sync.EngineConfig{
+	env.engine = sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {env.claudeDir},
 		},
@@ -944,7 +963,7 @@ func TestSyncAllCwdRejectedStaleClaudeForkReturnsToFreshnessSkip(
 		allowedID:    "/workspace/work/project",
 		disallowedID: "/workspace/personal/project",
 	} {
-		require.NoError(t, env.db.UpsertSession(db.Session{
+		require.NoError(t, env.db.UpsertSession(t.Context(), db.Session{
 			ID:               id,
 			Project:          "project",
 			Machine:          "local",
@@ -954,7 +973,7 @@ func TestSyncAllCwdRejectedStaleClaudeForkReturnsToFreshnessSkip(
 			RelationshipType: "fork",
 			FilePath:         &path,
 		}))
-		require.NoError(t, env.db.SetSessionDataVersion(id, 0))
+		require.NoError(t, env.db.SetSessionDataVersion(t.Context(), id, 0))
 	}
 
 	first := env.engine.SyncAll(t.Context(), nil)
@@ -1008,7 +1027,7 @@ func TestSyncAllParsesPrimaryBeforeTrustingPreservedClaudeForkFreshness(
 	fileHash := fmt.Sprintf("%x", sha256.Sum256([]byte(content)))
 	parentID := "upgrade-primary"
 	staleID := parentID + "-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
-	require.NoError(t, env.db.UpsertSession(db.Session{
+	require.NoError(t, env.db.UpsertSession(t.Context(), db.Session{
 		ID:               staleID,
 		Project:          "project",
 		Machine:          "local",
@@ -1021,7 +1040,7 @@ func TestSyncAllParsesPrimaryBeforeTrustingPreservedClaudeForkFreshness(
 		FileMtime:        &fileMtime,
 		FileHash:         &fileHash,
 	}))
-	require.NoError(t, env.db.SetSessionDataVersion(staleID, 0))
+	require.NoError(t, env.db.SetSessionDataVersion(t.Context(), staleID, 0))
 
 	stats := env.engine.SyncAll(t.Context(), nil)
 	require.Zero(t, stats.Failed)
@@ -1042,7 +1061,7 @@ func TestReconcileWatchRootsReportsSourceMissingClaudeForkTombstone(
 ) {
 	emitter := &fakeEmitter{}
 	env := &testEnv{db: dbtest.OpenTestDB(t), claudeDir: t.TempDir()}
-	env.engine = sync.NewEngine(env.db, sync.EngineConfig{
+	env.engine = sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {env.claudeDir},
 		},
@@ -1071,7 +1090,7 @@ func TestReconcileWatchRootsReportsSourceMissingClaudeForkTombstone(
 	emitter.mu.Unlock()
 	parentID := "audit-replay"
 	staleID := parentID + "-11111111-2222-4333-8444-555555555555"
-	require.NoError(t, env.db.UpsertSession(db.Session{
+	require.NoError(t, env.db.UpsertSession(t.Context(), db.Session{
 		ID:               staleID,
 		Project:          "project",
 		Machine:          "local",
@@ -1081,7 +1100,7 @@ func TestReconcileWatchRootsReportsSourceMissingClaudeForkTombstone(
 		RelationshipType: "fork",
 		FilePath:         &path,
 	}))
-	require.NoError(t, env.db.SetSessionDataVersion(staleID, 0))
+	require.NoError(t, env.db.SetSessionDataVersion(t.Context(), staleID, 0))
 	require.NoError(t, env.db.BaselineActiveSessionSourceOwnerships(
 		t.Context(), []db.SessionSourceOwnership{{
 			ID: staleID, Machine: "local", Agent: "claude", FilePath: path,
@@ -1119,7 +1138,7 @@ func TestWatchReconcilePreservesCwdRejectedForkAfterMixedSourceDeleted(
 
 	parentID := "deleted-mixed-cwd"
 	disallowedID := parentID + "-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
-	require.NoError(t, env.db.UpsertSession(db.Session{
+	require.NoError(t, env.db.UpsertSession(t.Context(), db.Session{
 		ID:               disallowedID,
 		Project:          "project",
 		Machine:          "local",
@@ -1129,7 +1148,7 @@ func TestWatchReconcilePreservesCwdRejectedForkAfterMixedSourceDeleted(
 		RelationshipType: "fork",
 		FilePath:         &path,
 	}))
-	require.NoError(t, env.db.SetSessionDataVersion(disallowedID, 0))
+	require.NoError(t, env.db.SetSessionDataVersion(t.Context(), disallowedID, 0))
 
 	changed := testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsEarly, "hello", "/workspace/work/project").
@@ -1167,7 +1186,7 @@ func TestResyncAllProceedsWhenAllSessionsCwdFiltered(t *testing.T) {
 
 	// Archive two sessions with no filter configured.
 	env := &testEnv{db: dbtest.OpenTestDB(t), claudeDir: t.TempDir()}
-	env.engine = sync.NewEngine(env.db, sync.EngineConfig{
+	env.engine = sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {env.claudeDir},
 		},
@@ -1190,19 +1209,19 @@ func TestResyncAllProceedsWhenAllSessionsCwdFiltered(t *testing.T) {
 		t, "/Users/alice/personal/notes",
 		"filtered-two.jsonl", second,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 	assertSessionMessageCount(t, env.db, "filtered-one", 2)
 	assertSessionMessageCount(t, env.db, "filtered-two", 2)
 
 	// Resync with an allow-list that excludes every session.
-	env.engine = sync.NewEngine(env.db, sync.EngineConfig{
+	env.engine = sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {env.claudeDir},
 		},
 		Machine:            "local",
 		IncludeCwdPrefixes: []string{"/Users/alice/work"},
 	})
-	stats := env.engine.ResyncAll(context.Background(), nil)
+	stats := env.engine.ResyncAll(t.Context(), nil)
 
 	require.False(t, stats.Aborted,
 		"all-filtered resync must not abort: %+v", stats.Warnings)
@@ -1233,7 +1252,7 @@ func TestSyncAllSourceMissingPrimaryWithRejectedForkReturnsToFreshnessSkip(
 
 	parentID := "missing-primary"
 	rejectedID := parentID + "-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
-	require.NoError(t, env.db.UpsertSession(db.Session{
+	require.NoError(t, env.db.UpsertSession(t.Context(), db.Session{
 		ID:       parentID,
 		Project:  "project",
 		Machine:  "local",
@@ -1251,7 +1270,7 @@ func TestSyncAllSourceMissingPrimaryWithRejectedForkReturnsToFreshnessSkip(
 	)
 	require.NoError(t, err)
 	require.True(t, tombstoned, "seed a source-missing canonical primary")
-	require.NoError(t, env.db.UpsertSession(db.Session{
+	require.NoError(t, env.db.UpsertSession(t.Context(), db.Session{
 		ID:               rejectedID,
 		Project:          "project",
 		Machine:          "local",
@@ -1261,7 +1280,7 @@ func TestSyncAllSourceMissingPrimaryWithRejectedForkReturnsToFreshnessSkip(
 		RelationshipType: "fork",
 		FilePath:         &path,
 	}))
-	require.NoError(t, env.db.SetSessionDataVersion(rejectedID, 0))
+	require.NoError(t, env.db.SetSessionDataVersion(t.Context(), rejectedID, 0))
 
 	first := env.engine.SyncAll(t.Context(), nil)
 	require.Zero(t, first.Failed)
@@ -1301,7 +1320,7 @@ func TestSyncEngineCursorCwdFilterRelaxationRefreshesStaleRows(t *testing.T) {
 	agentDirs := map[parser.AgentType][]string{parser.AgentCursor: {root}}
 	d := dbtest.OpenTestDB(t)
 
-	open := sync.NewEngine(d, sync.EngineConfig{
+	open := sync.NewEngine(t.Context(), d, sync.EngineConfig{
 		AgentDirs: agentDirs, Machine: "local",
 	})
 	open.SyncAll(t.Context(), nil)
@@ -1310,14 +1329,14 @@ func TestSyncEngineCursorCwdFilterRelaxationRefreshesStaleRows(t *testing.T) {
 	assertSessionState(t, d, fullID, func(sess *db.Session) {
 		assert.Equal(t, workspace, sess.Cwd)
 	})
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(),
 			"UPDATE sessions SET cwd = '' WHERE id = ?", fullID,
 		)
 		return err
 	}))
 
-	vetoing := sync.NewEngine(d, sync.EngineConfig{
+	vetoing := sync.NewEngine(t.Context(), d, sync.EngineConfig{
 		AgentDirs: agentDirs, Machine: "local",
 		IncludeCwdPrefixes: []string{otherRoot},
 	})
@@ -1326,15 +1345,15 @@ func TestSyncEngineCursorCwdFilterRelaxationRefreshesStaleRows(t *testing.T) {
 		assert.Equal(t, workspace, sess.Cwd,
 			"the vetoed parse must still reconcile the source-owned cwd")
 	})
-	require.Less(t, d.GetSessionDataVersion(fullID), db.CurrentDataVersion())
+	require.Less(t, d.GetSessionDataVersion(t.Context(), fullID), db.CurrentDataVersion())
 
 	stats := vetoing.SyncAllSince(t.Context(), time.Now().Add(time.Hour), nil)
 	vetoing.Close()
 	assert.Zero(t, stats.Failed)
-	assert.Less(t, d.GetSessionDataVersion(fullID), db.CurrentDataVersion(),
+	assert.Less(t, d.GetSessionDataVersion(t.Context(), fullID), db.CurrentDataVersion(),
 		"staleness must survive vetoed quick syncs until a parse is admitted")
 
-	relaxed := sync.NewEngine(d, sync.EngineConfig{
+	relaxed := sync.NewEngine(t.Context(), d, sync.EngineConfig{
 		AgentDirs: agentDirs, Machine: "local",
 		IncludeCwdPrefixes: []string{workspaceRoot},
 	})
@@ -1345,6 +1364,6 @@ func TestSyncEngineCursorCwdFilterRelaxationRefreshesStaleRows(t *testing.T) {
 	assertSessionState(t, d, fullID, func(sess *db.Session) {
 		assert.Equal(t, workspace, sess.Cwd)
 	})
-	assert.Equal(t, db.CurrentDataVersion(), d.GetSessionDataVersion(fullID),
+	assert.Equal(t, db.CurrentDataVersion(), d.GetSessionDataVersion(t.Context(), fullID),
 		"a relaxed filter must reparse the stale row through the cutoff")
 }

@@ -1,7 +1,6 @@
 package postgres
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -14,7 +13,7 @@ func TestPGFindSessionIDsByRawSuffixUsesExactFirstSuffixQuery(t *testing.T) {
 	store := &Store{pg: newUsageProbeDB(t, state)}
 
 	ids, err := store.FindSessionIDsByRawSuffix(
-		context.Background(), "project-hash:session-uuid", 2,
+		t.Context(), "project-hash:session-uuid", 2,
 	)
 	require.NoError(t, err)
 	assert.Equal(t, []string{
@@ -27,7 +26,7 @@ func TestPGFindSessionIDsByRawSuffixUsesExactFirstSuffixQuery(t *testing.T) {
 	query := strings.ToLower(state.queries[len(state.queries)-1])
 	state.mu.Unlock()
 
-	assert.Contains(t, query, "right(id, length($1) + 1) = ':' || $1")
+	assert.Contains(t, query, "right(id, length($1) + 1) in (':' || $1, '~' || $1)")
 	assert.Contains(t, query, "deleted_at is null")
 	assert.Contains(t, query, "order by (id = $1) desc")
 	assert.Contains(t, query, "coalesce(ended_at, started_at, created_at) desc")

@@ -28,6 +28,11 @@ auto-update support.
 On macOS, closing the desktop window hides it instead of quitting AgentsView.
 Use the AgentsView menu-bar status item to show the window again, open the logs
 folder, check for updates, or quit the desktop app and its managed backend.
+Clicking its Dock icon or selecting it with Cmd-Tab restores the hidden window.
+
+To keep AgentsView out of the Dock and Cmd-Tab while its window is closed, turn
+on **Hide from Dock and Cmd-Tab when window closed** in the menu-bar menu. This
+option is off by default and stays set across relaunches.
 
 ### pip / uvx
 
@@ -164,7 +169,8 @@ CLI users can start the web UI explicitly:
 agentsview serve
 ```
 
-Bare `agentsview serve` runs in the foreground until you press `Ctrl+C`.
+Bare `agentsview serve` runs in the foreground until you press `Ctrl+C`. If a
+compatible server is already running, it reports that server's URL and exits.
 
 This will:
 
@@ -175,8 +181,8 @@ This will:
 1. Launch the web UI at `http://127.0.0.1:8080`
 
 Open `http://127.0.0.1:8080` in your browser. Pass `--no-browser` to disable
-automatic browser launch. To keep the server running after your shell exits, use
-the canonical daemon lifecycle:
+automatic browser launch. Alternatively, start the same server in the background
+so it can keep running after your shell exits:
 
 ```bash
 agentsview daemon start
@@ -184,6 +190,11 @@ agentsview daemon status
 agentsview daemon restart
 agentsview daemon stop
 ```
+
+The daemon includes the web UI, API, session sync, and file watchers. You do not
+need to run `serve` after `daemon start`. Stopping it with `daemon stop` or
+`serve stop` shuts down the web UI and sync together. `serve stop` also stops
+read-only mirror servers for the same data directory.
 
 `daemon start` and `daemon restart` use the normal effective configuration from
 `config.toml` and supported environment variables. They do not accept
@@ -202,8 +213,11 @@ You do not need to keep a server running for every CLI command. Read-only
 commands attach to the daemon when it is warm, otherwise they read the local
 archive directly in read-only mode. Commands that need fresh data or need to
 write, including `sync`, `usage`, `token-use`, `pg push`, and `duckdb push`,
-auto-start the detached daemon when needed. Set `AGENTSVIEW_NO_DAEMON=1` for
-scripts or CI jobs that must never start a lingering background process.
+auto-start the detached daemon when needed. The server remains running after
+these commands finish. For scripts or CI jobs that must leave no background
+server, stop the daemon first, then run `AGENTSVIEW_NO_DAEMON=1 agentsview sync`.
+That setting disables auto-start; it does not stop a running daemon or bypass
+its archive lock.
 
 ## Customize
 
@@ -263,6 +277,7 @@ export VIBE_SESSIONS_DIR=~/custom/vibe/logs/session
 export OMP_DIR=~/custom/omp/sessions
 export OPENCLAW_DIR=~/custom/openclaw/agents
 export OPENCODE_DIR=~/custom/opencode
+export OPENCODEREVIEW_DIR=~/custom/opencodereview/sessions
 export OPENHANDS_CONVERSATIONS_DIR=~/custom/openhands
 export PI_DIR=~/custom/pi/sessions
 export PIEBALD_DIR=~/custom/piebald
@@ -290,9 +305,12 @@ agentsview serve
 For Claude, Codex, and Cursor, custom roots may also be `s3://` URIs:
 
 ```toml
-claude_project_dirs = ["s3://agent-archive/laptop/raw/claude"]
-codex_sessions_dirs = ["s3://agent-archive/laptop/raw/codex"]
-cursor_project_dirs = ["s3://agent-archive/laptop/raw/cursor"]
+[agents.claude]
+dirs = ["s3://agent-archive/laptop/raw/claude"]
+[agents.codex]
+dirs = ["s3://agent-archive/laptop/raw/codex"]
+[agents.cursor]
+dirs = ["s3://agent-archive/laptop/raw/cursor"]
 ```
 
 Set `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, and optionally
@@ -307,11 +325,16 @@ Once running, the web UI provides:
 - **Session list** with filtering by project, agent, date, and message count
 - **Message viewer** with full content, tool calls, and thinking blocks
 - **Session intelligence** with health grades, outcomes, and signal panels
-- **Full-text search** across all message content
+- **Full-text search** with project and date filters in `Ctrl/Cmd+K`
+- **Open session** by full ID or UUID with `Ctrl/Cmd+G`
 - **Analytics** including activity heatmaps, tool usage, and velocity charts
 - **Activity reporting** with concurrency, agent-minutes, cost, and session rows
 - **Session export** to standalone HTML, markdown export links for agent
   handoff, or GitHub Gist
+
+Use the [Usage Guide](/docs/usage/) for navigation and resume controls. To
+correct project assignments, see the [Data page](/docs/data/) and its opt-in
+project workspace.
 
 Beyond full-text search, opt-in semantic search lets
 `agentsview session search --semantic` (or `--hybrid`) match session content by

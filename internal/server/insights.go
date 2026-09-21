@@ -130,7 +130,7 @@ func insightGenerateClientMessage(
 	agent string, err error,
 ) string {
 	if err == nil {
-		return fmt.Sprintf("%s generation failed", agent)
+		return agent + " generation failed"
 	}
 	msg := err.Error()
 	// Strip stderr dump after newline for the short client message; full details
@@ -145,6 +145,7 @@ func insightGenerateClientMessage(
 }
 
 func (s *Server) humaGenerateCannedInsight(
+	ctx context.Context,
 	req generateInsightRequest,
 ) (*huma.StreamResponse, error) {
 	req.Prompt = strings.TrimSpace(req.Prompt)
@@ -189,11 +190,16 @@ func (s *Server) humaGenerateCannedInsight(
 	if !ok {
 		return nil, apiError(http.StatusBadRequest, message)
 	}
+	var err error
+	filters.Machine, err = db.ResolveMachineFilter(ctx, s.db, filters.Machine)
+	if err != nil {
+		return nil, serverError(err)
+	}
 	return &huma.StreamResponse{Body: func(hctx huma.Context) {
 		stream, ok := newHumaSSEStream(hctx)
 		if !ok {
 			writeHumaJSON(hctx, http.StatusInternalServerError,
-				apiErrorResponse{Message: "streaming not supported"})
+				apiResponseError{Message: "streaming not supported"})
 			return
 		}
 		s.generateCannedInsight(hctx.Context(), stream, kind, req, filters)
@@ -349,9 +355,9 @@ func (s *Server) generateCannedInsight(
 	}
 
 	var id int64
-	err = s.serializeArchiveWrite(func() error {
+	err = s.serializeArchiveWrite(ctx, func() error {
 		var insertErr error
-		id, insertErr = s.db.InsertInsight(db.Insight{
+		id, insertErr = s.db.InsertInsight(ctx, db.Insight{
 			Type:            insight.CannedType,
 			DateFrom:        req.DateFrom,
 			DateTo:          req.DateTo,

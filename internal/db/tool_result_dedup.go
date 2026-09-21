@@ -68,11 +68,14 @@ func ToolCallResultContentSQL(callAlias, ordinalExpr string) string {
 			THEN %[1]s.result_content
 		WHEN COALESCE(%[1]s.result_content_length, 0) = 0 THEN ''
 		ELSE COALESCE((
-			SELECT CASE WHEN COUNT(*) = 1 THEN MIN(tre_rc.content) END
-			FROM tool_result_events tre_rc
-			WHERE tre_rc.session_id = %[1]s.session_id
-			  AND tre_rc.tool_call_message_ordinal = %[2]s
-			  AND tre_rc.call_index = COALESCE(%[1]s.call_index, 0)
+			SELECT CASE WHEN COUNT(*) = 1 THEN MIN(sole_rc.content) END
+			FROM (
+				SELECT tre_rc.content FROM tool_result_events tre_rc
+				WHERE tre_rc.session_id = %[1]s.session_id
+				  AND tre_rc.tool_call_message_ordinal = %[2]s
+				  AND tre_rc.call_index = COALESCE(%[1]s.call_index, 0)
+				LIMIT 2
+			) sole_rc
 		), '')
 	END`, callAlias, ordinalExpr)
 }

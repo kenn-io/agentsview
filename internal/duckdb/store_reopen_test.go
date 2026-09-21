@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // countReopenAliasFiles counts the hardlink files openMirrorAlias creates
@@ -43,7 +44,7 @@ func buildMirrorFixture(t *testing.T, path, sessionID string) {
 	t.Helper()
 	local := newLocalDB(t)
 	ts := "2026-01-01T00:00:00.000Z"
-	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+	_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
 		Session: syncSession(sessionID, "alpha", sessionID+" first", ts, 1),
 		Messages: []db.Message{
 			syncMessage(sessionID, 0, "user", sessionID+" first", ts),
@@ -54,7 +55,7 @@ func buildMirrorFixture(t *testing.T, path, sessionID string) {
 	require.NoError(t, err)
 
 	_, err = rebuildMirror(
-		context.Background(), path, local, "test-machine", SyncOptions{}, nil,
+		t.Context(), path, local, "test-machine", storage.MirrorPushOptions{}, nil,
 	)
 	require.NoError(t, err)
 }
@@ -70,10 +71,11 @@ func buildMirrorFixtureAt(t *testing.T, path, sessionID string) {
 // fine but fails CheckSchemaCompat: it has none of the mirror tables.
 func buildIncompatibleMirrorFixture(t *testing.T, path string) {
 	t.Helper()
-	conn, err := Open(path)
+
+	conn, err := Open(t.Context(), path)
 	require.NoError(t, err)
 	_, err = conn.ExecContext(
-		context.Background(),
+		t.Context(),
 		`CREATE TABLE not_a_mirror_table (id TEXT)`,
 	)
 	require.NoError(t, err)
@@ -82,8 +84,9 @@ func buildIncompatibleMirrorFixture(t *testing.T, path string) {
 
 func listMirrorSessionIDs(t *testing.T, store *Store) []string {
 	t.Helper()
+
 	rows, err := store.queryContext(
-		context.Background(), "SELECT id FROM sessions ORDER BY id",
+		t.Context(), "SELECT id FROM sessions ORDER BY id",
 	)
 	require.NoError(t, err)
 	defer rows.Close()
@@ -110,7 +113,7 @@ func TestStoreReopensAfterMirrorReplacement(t *testing.T) {
 	path := filepath.Join(dir, "m.duckdb")
 	buildMirrorFixture(t, path, "old-session")
 
-	store, err := NewStore(path)
+	store, err := NewStore(t.Context(), path)
 	require.NoError(t, err)
 	defer store.Close()
 
@@ -135,7 +138,7 @@ func TestStoreKeepsOldHandleWhenReplacementIncompatible(t *testing.T) {
 	path := filepath.Join(dir, "m.duckdb")
 	buildMirrorFixture(t, path, "old-session")
 
-	store, err := NewStore(path)
+	store, err := NewStore(t.Context(), path)
 	require.NoError(t, err)
 	defer store.Close()
 
@@ -162,7 +165,7 @@ func TestStoreKeepsOldHandleWhenReplacementIncompatible(t *testing.T) {
 
 	mu.Lock()
 	for _, err := range events {
-		assert.Error(t, err)
+		require.Error(t, err)
 	}
 	mu.Unlock()
 
@@ -181,10 +184,10 @@ func TestStoreServesLatestAfterTwoConsecutiveMirrorReplacements(t *testing.T) {
 	path := filepath.Join(dir, "m.duckdb")
 	buildMirrorFixture(t, path, "gen-1")
 
-	store, err := NewStore(path)
+	store, err := NewStore(t.Context(), path)
 	require.NoError(t, err)
 
-	watchCtx, cancelWatch := context.WithCancel(context.Background())
+	watchCtx, cancelWatch := context.WithCancel(t.Context())
 	store.WatchMirrorReplacement(watchCtx, 20*time.Millisecond, nil)
 
 	assert.Equal(t, []string{"gen-1"}, listMirrorSessionIDs(t, store))
@@ -229,13 +232,13 @@ func TestStoreConcurrentReadsNeverFailAcrossMirrorReplacements(t *testing.T) {
 	path := filepath.Join(dir, "m.duckdb")
 	buildMirrorFixture(t, path, "gen-0")
 
-	store, err := NewStore(path)
+	store, err := NewStore(t.Context(), path)
 	require.NoError(t, err)
 	defer store.Close()
 
 	store.WatchMirrorReplacement(t.Context(), time.Millisecond, nil)
 
-	readerCtx, cancelReaders := context.WithCancel(context.Background())
+	readerCtx, cancelReaders := context.WithCancel(t.Context())
 	var readErrs atomic.Int32
 	var firstErr atomic.Pointer[string]
 	var wg sync.WaitGroup
@@ -243,7 +246,7 @@ func TestStoreConcurrentReadsNeverFailAcrossMirrorReplacements(t *testing.T) {
 		wg.Go(func() {
 			for readerCtx.Err() == nil {
 				if _, err := store.GetStats(
-					context.Background(), false, false,
+					t.Context(), false, false,
 				); err != nil {
 					readErrs.Add(1)
 					msg := err.Error()
@@ -296,10 +299,10 @@ func TestStoreCloseWaitsForInFlightReplacementCheck(t *testing.T) {
 	require.NoError(t, os.Link(srcA, path))
 
 	// Each iteration replaces path with the source it is not currently
-	// hardlinked to, so the check always sees a changed file identity.
+	// hardline to, so the check always sees a changed file identity.
 	sources := [2]string{srcB, srcA}
 	for i := range 25 {
-		store, err := NewStore(path)
+		store, err := NewStore(t.Context(), path)
 		require.NoError(t, err)
 
 		tmp := filepath.Join(dir, fmt.Sprintf("swap-%d.duckdb", i))
@@ -309,7 +312,7 @@ func TestStoreCloseWaitsForInFlightReplacementCheck(t *testing.T) {
 		checkDone := make(chan struct{})
 		go func() {
 			defer close(checkDone)
-			store.checkMirrorReplacement(context.Background(), nil)
+			store.checkMirrorReplacement(t.Context(), nil)
 		}()
 		runtime.Gosched()
 		require.NoError(t, store.Close())
@@ -332,7 +335,7 @@ func TestStoreAdoptsGoodMirrorAfterIncompatibleReplacement(t *testing.T) {
 	path := filepath.Join(dir, "m.duckdb")
 	buildMirrorFixture(t, path, "old-session")
 
-	store, err := NewStore(path)
+	store, err := NewStore(t.Context(), path)
 	require.NoError(t, err)
 	defer store.Close()
 

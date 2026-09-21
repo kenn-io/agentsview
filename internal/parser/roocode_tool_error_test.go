@@ -13,7 +13,7 @@ import (
 func TestParseRooCodeSessionMistakeLimitPairing(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-mistake")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-mistake",
@@ -28,7 +28,7 @@ func TestParseRooCodeSessionMistakeLimitPairing(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// Sequence: user task, command ask, mistake_limit_reached ask
@@ -57,7 +57,7 @@ func TestParseRooCodeSessionMistakeLimitPairing(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -78,7 +78,7 @@ func TestParseRooCodeSessionMistakeLimitPairing(t *testing.T) {
 func TestParseRooCodeSessionAPIReqFailedPairing(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-apifail")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-apifail",
@@ -93,7 +93,7 @@ func TestParseRooCodeSessionAPIReqFailedPairing(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// Sequence: user task, MCP tool call, api_req_failed ask
@@ -122,7 +122,7 @@ func TestParseRooCodeSessionAPIReqFailedPairing(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -166,7 +166,7 @@ func TestRooCodeIsToolErrorEvent(t *testing.T) {
 func TestParseRooCodeSessionErrorNotPairedToCompletedRead(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-err-completed")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-err-completed",
@@ -179,7 +179,7 @@ func TestParseRooCodeSessionErrorNotPairedToCompletedRead(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// The readFile call completes via its embedded content, so the
@@ -208,7 +208,7 @@ func TestParseRooCodeSessionErrorNotPairedToCompletedRead(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -231,7 +231,7 @@ func TestParseRooCodeSessionErrorNotPairedToCompletedRead(t *testing.T) {
 func TestParseRooCodeSessionErrorNotPairedAcrossNormalTurn(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-err-stale")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-err-stale",
@@ -244,7 +244,7 @@ func TestParseRooCodeSessionErrorNotPairedAcrossNormalTurn(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// A normal assistant message after the appliedDiff call ends
@@ -280,7 +280,7 @@ func TestParseRooCodeSessionErrorNotPairedAcrossNormalTurn(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -300,7 +300,7 @@ func TestParseRooCodeSessionErrorNotPairedAcrossNormalTurn(t *testing.T) {
 func TestParseRooCodeSessionErrorPairsMostRecentTool(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-err-recent")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-err-recent",
@@ -313,7 +313,7 @@ func TestParseRooCodeSessionErrorPairsMostRecentTool(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// A command is still pending (no output yet) when a later
@@ -349,7 +349,7 @@ func TestParseRooCodeSessionErrorPairsMostRecentTool(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	_, msgs, err := parseRooCodeSession(taskDir, "", "")

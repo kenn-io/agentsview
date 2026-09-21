@@ -160,14 +160,7 @@ func openStatsService(
 	if err != nil {
 		return nil, nil, err
 	}
-	if tr.Mode == transportHTTP && tr.ReadOnly {
-		d, err := openReadOnlyDB(cfg)
-		if err != nil {
-			return nil, nil, fmt.Errorf("opening db: %w", err)
-		}
-		return service.NewDirectBackend(d, nil), func() { d.Close() }, nil
-	}
-	return newService(cfg, tr)
+	return newService(cmd.Context(), cfg, tr)
 }
 
 // printStatsHuman renders a human-readable summary of a SessionStats
@@ -226,7 +219,7 @@ type errWriter struct {
 
 func (e *errWriter) Write(p []byte) (int, error) {
 	if e.err != nil {
-		return len(p), nil
+		return 0, e.err
 	}
 	n, err := e.w.Write(p)
 	if err != nil {

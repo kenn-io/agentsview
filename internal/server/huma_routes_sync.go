@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"reflect"
 	"strings"
 	"time"
 
@@ -19,13 +20,15 @@ import (
 )
 
 func (s *Server) registerSyncRoutes() {
-	group := newRouteGroup(s.api, "/api/v1", "Sync")
+	group := huma.NewGroup(s.api, "/api/v1")
+	configureRouteGroup(group, "Sync")
+	s.api.OpenAPI().Components.Schemas.Schema(reflect.TypeFor[remoteSyncResponse](), true, "")
 
 	s.stream(group, http.MethodPost, "/sync", "Trigger sync", s.humaTriggerSync)
 	s.stream(group, http.MethodPost, "/resync", "Trigger full resync", s.humaTriggerResync)
 	s.get(group, "/sync/status", "Get sync status", s.humaSyncStatus)
 	s.stream(group, http.MethodPost, "/sync/remotes",
-		"Sync remote hosts", s.humaSyncRemotes, streamJSONResponse(),
+		"Sync remote hosts", s.humaSyncRemotes, streamJSONResponseSchema("RemoteSyncResponse"),
 	)
 	s.postLong(group, "/sessions/sync", "Sync a session", s.humaSyncSession)
 }
@@ -38,6 +41,11 @@ type syncStatusResponse struct {
 
 type sessionSyncInput struct {
 	Body service.SyncInput
+}
+
+type syncInput struct {
+	Wait        bool `query:"wait" default:"false" doc:"Wait for an active sync or maintenance pass before starting this sync"`
+	StartupOnly bool `query:"startup_only" default:"false" doc:"Complete deferred startup ingestion without repeating a completed startup sync"`
 }
 
 type remoteSyncInput struct {
@@ -63,9 +71,11 @@ type remoteSyncFailure struct {
 }
 
 type remoteSyncResponse struct {
+	cause      error
 	LocalStats *syncpkg.SyncStats  `json:"local_stats,omitempty"`
 	Failures   []remoteSyncFailure `json:"failures,omitempty"`
 	Error      string              `json:"error,omitempty"`
+	ErrorCode  string              `json:"error_code,omitempty"`
 }
 
 var runRemoteSync = func(
@@ -108,7 +118,7 @@ var runHTTPRemoteSync = func(
 }
 
 type preparedHTTPRebuild interface {
-	BorrowRebuildOptions() (syncpkg.RebuildOptions, func(), error)
+	BorrowRebuildOptions(ctx context.Context) (syncpkg.RebuildOptions, func(), error)
 	Close() error
 }
 
@@ -187,7 +197,7 @@ func (s *Server) syncStatusEngine() *syncpkg.Engine {
 	return s.onDemandEngine
 }
 
-func (s *Server) syncEngineForRequest() (*syncpkg.Engine, error) {
+func (s *Server) syncEngineForRequest(ctx context.Context) (*syncpkg.Engine, error) {
 	if s.engine != nil {
 		return s.engine, nil
 	}
@@ -195,10 +205,10 @@ func (s *Server) syncEngineForRequest() (*syncpkg.Engine, error) {
 	if !ok {
 		return nil, apiError(http.StatusNotImplemented, "not available in remote mode")
 	}
-	return s.syncEngineForLocal(local), nil
+	return s.syncEngineForLocal(ctx, local), nil
 }
 
-func (s *Server) syncEngineForLocal(local *db.DB) *syncpkg.Engine {
+func (s *Server) syncEngineForLocal(ctx context.Context, local *db.DB) *syncpkg.Engine {
 	if s.engine != nil {
 		return s.engine
 	}
@@ -212,14 +222,21 @@ func (s *Server) syncEngineForLocal(local *db.DB) *syncpkg.Engine {
 	if s.broadcaster != nil {
 		emitter = s.broadcaster
 	}
-	s.onDemandEngine = syncpkg.NewEngine(local, syncpkg.EngineConfig{
+	// Initialization belongs to the cached engine, not its first request.
+	initCtx := s.baseCtx
+	if initCtx == nil {
+		initCtx = context.WithoutCancel(ctx)
+	}
+	s.onDemandEngine = syncpkg.NewEngine(initCtx, local, syncpkg.EngineConfig{
 		AgentDirs:               cfg.AgentDirs,
 		SourceMachines:          cfg.SourceMachines,
+		ProviderMetadata:        cfg.ProviderMetadata,
 		DisabledAgents:          cfg.DisabledAgents,
 		IncludeCwdPrefixes:      cfg.SyncIncludeCwdPrefixes,
 		ScanProtectedPaths:      cfg.ScanProtectedPaths,
-		Machine:                 cfg.LocalMachineName,
+		Machine:                 cfg.InstallationID,
 		BlockedResultCategories: cfg.ResultContentBlockedCategories,
+		ArchiveContent:          cfg.ArchiveContent,
 		Emitter:                 emitter,
 	})
 	return s.onDemandEngine
@@ -227,11 +244,15 @@ func (s *Server) syncEngineForLocal(local *db.DB) *syncpkg.Engine {
 
 func (s *Server) humaTriggerSync(
 	ctx context.Context,
-	_ *emptyInput,
+	in *syncInput,
 ) (*huma.StreamResponse, error) {
-	engine, err := s.syncEngineForRequest()
-	if err != nil {
-		return nil, err
+	engine := s.engine
+	if !in.StartupOnly {
+		var err error
+		engine, err = s.syncEngineForRequest(ctx)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if err := s.rejectStaleArchiveForSync(); err != nil {
 		return nil, err
@@ -239,16 +260,16 @@ func (s *Server) humaTriggerSync(
 	return &huma.StreamResponse{Body: func(hctx huma.Context) {
 		stream, ok := newHumaSSEStream(hctx)
 		if !ok {
-			stats, err := s.runSyncWithResyncFallback(ctx, engine, nil)
+			stats, err := s.runSyncWhenReady(ctx, engine, *in, nil)
 			if err != nil {
 				writeHumaJSON(hctx, http.StatusInternalServerError,
-					apiErrorResponse{Message: err.Error()})
+					apiResponseError{Message: err.Error()})
 				return
 			}
 			writeHumaJSON(hctx, http.StatusOK, stats)
 			return
 		}
-		stats, err := s.runSyncWithResyncFallback(ctx, engine, func(p syncpkg.Progress) {
+		stats, err := s.runSyncWhenReady(ctx, engine, *in, func(p syncpkg.Progress) {
 			stream.SendJSON("progress", p)
 		})
 		if err != nil {
@@ -257,6 +278,40 @@ func (s *Server) humaTriggerSync(
 		}
 		stream.SendJSON("done", stats)
 	}}, nil
+}
+
+// runSyncWhenReady lets CLI callers wait without changing the fail-fast
+// behavior for other clients. ErrSyncInProgress means the runner never acquired
+// the engine lock; retrying it cannot repeat a partially completed sync.
+func (s *Server) runSyncWhenReady(
+	ctx context.Context, engine *syncpkg.Engine, in syncInput,
+	progress func(syncpkg.Progress),
+) (syncpkg.SyncStats, error) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return syncpkg.SyncStats{}, err
+		}
+		if in.StartupOnly && (engine == nil || engine.StartupReconciled()) {
+			return syncpkg.SyncStats{}, nil
+		}
+		stats, err := s.runSyncWithResyncFallback(ctx, engine, progress)
+		if !in.Wait || !errors.Is(err, syncpkg.ErrSyncInProgress) {
+			return stats, err
+		}
+		if progress != nil {
+			progress(syncpkg.Progress{
+				Detail: "Waiting for the daemon's active sync or maintenance to finish",
+				Hint:   "Ctrl+C to cancel; agentsview daemon status to inspect",
+			})
+		}
+		timer := time.NewTimer(time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return syncpkg.SyncStats{}, ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 // ResyncRequiredHeader marks a /sync rejection that requires a full resync, so
@@ -301,7 +356,7 @@ func (s *Server) runSyncWithResyncFallback(
 		// the failed pass as a successful sync.
 		stats, err := s.localSyncRunner(ctx, progress)
 		if err != nil {
-			if ctx.Err() == nil {
+			if ctx.Err() == nil && !errors.Is(err, syncpkg.ErrSyncInProgress) {
 				log.Printf("foreground local sync: %v", err)
 			}
 			return stats, err
@@ -321,7 +376,7 @@ func (s *Server) humaTriggerResync(
 	ctx context.Context,
 	_ *emptyInput,
 ) (*huma.StreamResponse, error) {
-	engine, err := s.syncEngineForRequest()
+	engine, err := s.syncEngineForRequest(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -331,7 +386,7 @@ func (s *Server) humaTriggerResync(
 			stats, err := s.runResyncWithFallback(ctx, engine, nil)
 			if err != nil {
 				writeHumaJSON(hctx, http.StatusInternalServerError,
-					apiErrorResponse{Message: err.Error()})
+					apiResponseError{Message: err.Error()})
 				return
 			}
 			writeHumaJSON(hctx, http.StatusOK, stats)
@@ -383,7 +438,7 @@ func (s *Server) humaSyncRemotes(
 	if !ok {
 		return nil, apiError(http.StatusNotImplemented, "not available in remote mode")
 	}
-	engine := s.syncEngineForLocal(local)
+	engine := s.syncEngineForLocal(ctx, local)
 	hosts, err := s.resolveRemoteSyncHosts(ctx, in.Body.Hosts)
 	if err != nil {
 		return nil, err
@@ -559,7 +614,7 @@ func (s *Server) runRemoteSyncRequest(
 					if prepared == nil {
 						return syncpkg.RebuildOptions{}, nil, nil
 					}
-					options, release, err := prepared.BorrowRebuildOptions()
+					options, release, err := prepared.BorrowRebuildOptions(ctx)
 					if err != nil {
 						return syncpkg.RebuildOptions{}, prepared, err
 					}
@@ -656,6 +711,10 @@ func (s *Server) runRemoteSyncRequest(
 		LocalStats: localStats,
 		Failures:   failures,
 		Error:      remoteSyncTopLevelError(blocked),
+		cause:      blocked,
+	}
+	if errors.Is(blocked, syncpkg.ErrUnifiedRebuildAborted) {
+		response.ErrorCode = "unified_rebuild_aborted"
 	}
 	return response
 }
@@ -663,8 +722,8 @@ func (s *Server) runRemoteSyncRequest(
 func remoteSyncRequestLifecycleOutcome(
 	ctx context.Context, response remoteSyncResponse,
 ) string {
-	if ctx.Err() != nil || response.Error == context.Canceled.Error() ||
-		response.Error == context.DeadlineExceeded.Error() {
+	if ctx.Err() != nil || errors.Is(response.cause, context.Canceled) ||
+		errors.Is(response.cause, context.DeadlineExceeded) {
 		return "canceled"
 	}
 	if response.Error != "" || len(response.Failures) > 0 {
@@ -873,9 +932,13 @@ func primaryRemoteCoordinatorError(err error) error {
 			err = first
 			continue
 		}
-		switch err.(type) {
-		case *syncpkg.RebuildContributorError, *remotesync.HostError:
-			return err
+		{
+			_, hasErrCase0 := errors.AsType[*syncpkg.RebuildContributorError](err)
+			_, hasErrCase1 := errors.AsType[*remotesync.HostError](err)
+			switch {
+			case hasErrCase0, hasErrCase1:
+				return err
+			}
 		}
 		unwrapped := errors.Unwrap(err)
 		if unwrapped == nil {
@@ -897,8 +960,8 @@ func isHTTPRemoteCoordinatorError(err error) bool {
 	if _, ok := errors.AsType[*syncpkg.RebuildContributorError](primary); ok {
 		return true
 	}
-	var host *remotesync.HostError
-	return errors.As(primary, &host)
+	_, hasHost := errors.AsType[*remotesync.HostError](primary)
+	return hasHost
 }
 
 func (s *Server) runRemoteSyncHosts(
@@ -1021,8 +1084,10 @@ func (s *Server) runRemoteSyncHostsOwned(
 			)
 			if !acquireHTTPRegistry &&
 				rh.Transport == config.RemoteTransportHTTP {
-				var cleanup httpCleanupRetrier
-				if errors.As(err, &cleanup) {
+				if _, ok := errors.AsType[interface {
+					error
+					httpCleanupRetrier
+				}](err); ok {
 					return failures, totals, &remotesync.HostError{
 						Host: rh.Host, Operation: "sync", Err: err,
 					}
@@ -1097,11 +1162,11 @@ func (s *Server) emitRemoteSyncChanged(stats remotesync.SyncStats) {
 	s.broadcaster.Emit("sessions")
 }
 
-func (s *Server) sessionSyncService() service.SessionService {
+func (s *Server) sessionSyncService(ctx context.Context) service.SessionService {
 	if s.engine == nil {
 		if local, ok := s.db.(*db.DB); ok {
 			return service.NewDirectBackend(
-				local, s.syncEngineForLocal(local),
+				local, s.syncEngineForLocal(ctx, local),
 			)
 		}
 	}
@@ -1128,7 +1193,7 @@ func (s *Server) humaSyncSession(
 		}
 		return nil, apiError(http.StatusInternalServerError, err.Error())
 	}
-	detail, err := s.sessionSyncService().Sync(ctx, in.Body)
+	detail, err := s.sessionSyncService(ctx).Sync(ctx, in.Body)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return nil, nil
@@ -1153,7 +1218,7 @@ func (s *Server) resyncBeforeSessionSync(ctx context.Context) error {
 	if !ok || !local.NeedsResync() {
 		return nil
 	}
-	engine, err := s.syncEngineForRequest()
+	engine, err := s.syncEngineForRequest(ctx)
 	if err != nil {
 		return err
 	}

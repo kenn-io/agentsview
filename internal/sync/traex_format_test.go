@@ -104,7 +104,7 @@ func TestParseDiffLiveMtimeTraeXUsesTranscriptStat(t *testing.T) {
 	info, err := os.Stat(path)
 	require.NoError(t, err)
 
-	got, err := parseDiffLiveMtime(parser.AgentTraeX, path)
+	got, err := parseDiffLiveMtime(t.Context(), parser.AgentTraeX, path)
 	require.NoError(t, err)
 	assert.Equal(t, info.ModTime().UnixNano(), got)
 }
@@ -113,7 +113,7 @@ func TestParseDiffLiveMtimeTraeXUsesTranscriptStat(t *testing.T) {
 // skip scoped to the Codex format family.
 func TestShouldSkipProviderSourceByDBIgnoresNonCodexFormat(t *testing.T) {
 	e := &Engine{}
-	assert.False(t, e.shouldSkipProviderSourceByDB(
+	assert.False(t, e.shouldSkipProviderSourceByDB(t.Context(),
 		parser.DiscoveredFile{Agent: parser.AgentGemini, Path: "/tmp/x.jsonl"},
 		parser.SourceFingerprint{},
 		parser.ProviderSyncSemantics{},
@@ -123,19 +123,19 @@ func TestShouldSkipProviderSourceByDBIgnoresNonCodexFormat(t *testing.T) {
 func TestShouldSkipProviderSourceByDBScopesCodexFormatAgent(t *testing.T) {
 	database := openTestDB(t)
 	path := filepath.Join(t.TempDir(), "rollout.jsonl")
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID:        "codex:shared",
 		Agent:     string(parser.AgentCodex),
 		FilePath:  strPtr(path),
 		FileSize:  int64Ptr(128),
 		FileMtime: int64Ptr(456),
 	}))
-	require.NoError(t, database.SetSessionDataVersion(
+	require.NoError(t, database.SetSessionDataVersion(t.Context(),
 		"codex:shared", db.CurrentDataVersion(),
 	))
 
 	e := &Engine{db: database}
-	assert.False(t, e.shouldSkipProviderSourceByDB(
+	assert.False(t, e.shouldSkipProviderSourceByDB(t.Context(),
 		parser.DiscoveredFile{Agent: parser.AgentTraeX, Path: path},
 		parser.SourceFingerprint{Size: 128, MTimeNS: 456},
 		parser.ProviderSyncSemantics{},

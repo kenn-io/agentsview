@@ -16,7 +16,7 @@ The Markdown pages are canonical for machine readers; the HTML routes drop the
 - [Documentation overview](https://agentsview.io/docs/index.md): Mental model and documentation map.
 - [Quick Start](https://agentsview.io/docs/quickstart.md): Get AgentsView running in under a minute.
 - [Configuration](https://agentsview.io/docs/configuration.md): Config file, default paths, and runtime settings.
-- [Usage Guide](https://agentsview.io/docs/usage.md): Complete guide to the AgentsView web interface.
+- [Usage Guide](https://agentsview.io/docs/usage.md): Browse and resume sessions, search by project and date, open sessions by ID, and inspect session timing.
 - [CLI Reference](https://agentsview.io/docs/commands.md): All AgentsView commands, flags, and environment variables.
 
 ## Monitor and Account
@@ -35,19 +35,21 @@ The Markdown pages are canonical for machine readers; the HTML routes drop the
 - [Semantic Search Internals](https://agentsview.io/docs/semantic-search-internals.md): Architecture and invariants behind the vector index.
 - [Recall](https://agentsview.io/docs/recall.md): Experimental, provenance-linked durable knowledge over the local session archive.
 - [Recent Edits](https://agentsview.io/docs/recent-edits.md): Browse the files your agents edited most recently across every session.
-- [Data](https://agentsview.io/docs/data.md): Project inventory and worktree mapping rules.
+- [Data](https://agentsview.io/docs/data.md): Project mapping rules and an opt-in workspace for folder suggestions, session previews, and bulk corrections.
 
 ## Automate and Integrate
 
 - [MCP Server](https://agentsview.io/docs/mcp.md): Connect assistant clients to your session history with MCP.
 - [Session API](https://agentsview.io/docs/session-api.md): Programmatic access to session data via the CLI and REST endpoints.
 - [Session Export](https://agentsview.io/docs/session-export.md): Content-free session summary exports for scripting and analytics.
+- [Conversation Export](https://agentsview.io/docs/conversation-export.md): Visible user and assistant prose with incremental changes and revision-pinned reads.
 - [Chat Import](https://agentsview.io/docs/chat-import.md): Import Claude.ai, ChatGPT, and Gemini Apps conversations.
 
 ## Sync and Share
 
 - [PostgreSQL Sync](https://agentsview.io/docs/pg-sync.md): Push sync, an auto-push service, and a read-only server for teams.
 - [DuckDB Mirror](https://agentsview.io/docs/duckdb.md): Mirror the SQLite archive into DuckDB, locally or over the Quack remote protocol.
+- [ClickHouse Sync](https://agentsview.io/docs/clickhouse-sync.md): Push the SQLite archive into ClickHouse and serve a read-only web UI from it.
 - [Filesystem Session Sync](https://agentsview.io/docs/filesystem-sync.md): View sessions from multiple machines by transporting native session directories.
 - [Artifact Folder Sync](https://agentsview.io/docs/artifact-sync.md): Exchange normalized sessions between archives through a trusted folder.
 - [Hosted Raw Sync](https://agentsview.io/docs/hosted-raw-sync.md): Keep original provider files from several devices in one hosted archive with authenticated, resumable uploads.

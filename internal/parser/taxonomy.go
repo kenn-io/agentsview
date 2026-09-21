@@ -33,17 +33,17 @@ func NormalizeToolCategory(rawName string) string {
 		return "Read"
 	case "apply_patch":
 		return "Edit"
-	case "spawn_agent":
+	case "spawn_agent", "spawn_subagent":
 		return "Task"
 
 	// Gemini tools
-	case "read_file", "list_directory":
+	case "read_file", "read_files", "list_directory":
 		return "Read"
 	case "write_file":
 		return "Write"
 	case "edit_file", "replace":
 		return "Edit"
-	case "run_command", "execute_command", "run_shell_command":
+	case "run_command", "run_commands", "execute_command", "run_shell_command":
 		return "Bash"
 	case "search_files", "grep", "grep_search":
 		return "Grep"
@@ -75,6 +75,20 @@ func NormalizeToolCategory(rawName string) string {
 		"switchMode":
 		return "Tool"
 
+	// Cline tools (snake_case variants not already covered above:
+	// read_file→Read, execute_command→Bash, write_to_file→Write,
+	// search_files→Grep, list_files→Read, use_mcp_tool/switch_mode→Tool)
+	case "replace_in_file":
+		return "Edit"
+	case "list_code_definition_names":
+		return "Read"
+	case "browser_action", "access_mcp_resource",
+		"ask_followup_question", "attempt_completion":
+		return "Tool"
+	case "new_task", "team_spawn_teammate", "team_run_task", "team_task",
+		"team_shutdown_teammate":
+		return "Task"
+
 	// Antigravity tools
 	case "view_file", "read_url_content":
 		return "Read"
@@ -93,6 +107,8 @@ func NormalizeToolCategory(rawName string) string {
 	// Note: "grep" is handled above in the Gemini section.
 	case "read":
 		return "Read"
+	case "file_read", "file_read_diff":
+		return "Read"
 	case "edit":
 		return "Edit"
 	case "write":
@@ -101,6 +117,12 @@ func NormalizeToolCategory(rawName string) string {
 		return "Bash"
 	case "glob":
 		return "Glob"
+	case "file_find":
+		return "Glob"
+	case "code_search":
+		return "Grep"
+	case "code_comment":
+		return "Tool"
 	case "task":
 		return "Task"
 
@@ -121,6 +143,8 @@ func NormalizeToolCategory(rawName string) string {
 		return "Edit"
 	case "LS":
 		return "Read"
+	case "Subagent":
+		return "Task"
 
 	// Amp tools (not already covered above)
 	// Note: "create_file" is also used by Pi.
@@ -182,7 +206,10 @@ func NormalizeToolCategory(rawName string) string {
 	case "browser_navigate", "browser_snapshot", "browser_click",
 		"browser_type", "browser_scroll", "browser_press",
 		"browser_back", "browser_close", "browser_vision",
-		"browser_console", "browser_get_images":
+		"browser_console", "browser_get_images",
+		// Augure Desktop v3's browser automation step executes commands
+		// against a browser session; it is not a shell.
+		"browser_exec":
 		return "Tool"
 	case "vision_analyze":
 		return "Read"
@@ -261,9 +288,7 @@ func NormalizeToolCategory(rawName string) string {
 	case "explore":
 		return "Task"
 
-	// Warp tools
-	case "read_files":
-		return "Read"
+	// Warp tools (read_files handled in earlier section)
 	case "apply_file_diff":
 		return "Edit"
 	case "search_codebase":
@@ -284,6 +309,11 @@ func NormalizeToolCategory(rawName string) string {
 		return "Tool"
 	case "shell_kill", "shell_status", "shell_tail":
 		return "Bash"
+
+	// Charm Crush tools (only tools not already covered above:
+	// bash→Bash, view→Read, edit→Edit, write→Write)
+	case "todos":
+		return "Tool"
 
 	default:
 		// MCP tools may carry a server prefix (e.g.

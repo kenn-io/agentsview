@@ -1,7 +1,8 @@
 package parser
 
 import (
-	"context"
+	"encoding/json/v2"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -26,14 +27,14 @@ func TestOpenHandsProviderSourceMethods(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	plan, err := provider.WatchPlan(context.Background())
+	plan, err := provider.WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, root, plan.Roots[0].Path)
 	assert.False(t, plan.Roots[0].Recursive)
 	assert.NotEmpty(t, plan.Roots[0].DebounceKey)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, AgentOpenHands, discovered[0].Provider)
@@ -42,21 +43,21 @@ func TestOpenHandsProviderSourceMethods(t *testing.T) {
 	assert.Equal(t, sessionDir, discovered[0].FingerprintKey)
 	assert.Empty(t, discovered[0].ProjectHint)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "remote~openhands:" + sessionID,
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, sessionDir, found.DisplayPath)
 
-	found, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: dirName,
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, sessionDir, found.DisplayPath)
 
-	found, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: sessionDir,
 	})
 	require.NoError(t, err)
@@ -65,7 +66,7 @@ func TestOpenHandsProviderSourceMethods(t *testing.T) {
 
 	snapshot, err := OpenHandsSnapshot(sessionDir)
 	require.NoError(t, err)
-	fingerprint, err := provider.Fingerprint(context.Background(), found)
+	fingerprint, err := provider.Fingerprint(t.Context(), found)
 	require.NoError(t, err)
 	assert.Equal(t, sessionDir, fingerprint.Key)
 	assert.Equal(t, snapshot.Size, fingerprint.Size)
@@ -79,7 +80,7 @@ func TestOpenHandsProviderSourceMethods(t *testing.T) {
 		filepath.Join(sessionDir, "events", "event-00000-user.json"),
 	} {
 		changed, err := provider.SourcesForChangedPath(
-			context.Background(),
+			t.Context(),
 			ChangedPathRequest{Path: changedPath, EventKind: "write", WatchRoot: root},
 		)
 		require.NoError(t, err)
@@ -88,7 +89,7 @@ func TestOpenHandsProviderSourceMethods(t *testing.T) {
 	}
 
 	ignored, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{
 			Path:      filepath.Join(sessionDir, "events", "notes.txt"),
 			EventKind: "write",
@@ -99,7 +100,7 @@ func TestOpenHandsProviderSourceMethods(t *testing.T) {
 	assert.Empty(t, ignored)
 
 	wrongRoot, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{
 			Path:      sessionDir,
 			EventKind: "write",
@@ -121,13 +122,13 @@ func TestOpenHandsProviderParse(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
-	fingerprint, err := provider.Fingerprint(context.Background(), sources[0])
+	fingerprint, err := provider.Fingerprint(t.Context(), sources[0])
 	require.NoError(t, err)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      sources[0],
 		Fingerprint: fingerprint,
 	})
@@ -146,6 +147,59 @@ func TestOpenHandsProviderParse(t *testing.T) {
 	assert.Len(t, result.Result.Messages, 1)
 }
 
+func TestOpenHandsProviderProjectDiscoveryPolicy(t *testing.T) {
+	for _, disableDiscovery := range []bool{false, true} {
+		t.Run(fmt.Sprintf("disabled=%t", disableDiscovery), func(t *testing.T) {
+			root := t.TempDir()
+			repo := filepath.Join(t.TempDir(), "repository")
+			cwd := filepath.Join(repo, "nested")
+			require.NoError(t, os.MkdirAll(filepath.Join(repo, ".git"), 0o755))
+			require.NoError(t, os.MkdirAll(cwd, 0o755))
+			sessionDir := openHandsProviderWriteSession(t, root,
+				"086c7ecf6cb746b69fbcb900358d1247",
+				"086c7ecf-6cb7-46b6-9fbc-b900358d1247", "project question")
+			cwdJSON, err := json.Marshal(cwd)
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(filepath.Join(sessionDir, "events", "event-00001.json"),
+				[]byte(fmt.Sprintf(`{"id":"e1","timestamp":"2026-04-02T15:25:42","source":"environment",
+"observation":{"content":[{"type":"text","text":"terminal output"}],
+"metadata":{"working_dir":%s},"kind":"TerminalObservation"},"kind":"ObservationEvent"}`, cwdJSON)), 0o600))
+			provider, ok := NewProvider(AgentOpenHands, ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+			sources, err := provider.Discover(t.Context())
+			require.NoError(t, err)
+			require.Len(t, sources, 1)
+
+			originalStat := osStat
+			t.Cleanup(func() { osStat = originalStat })
+			probes := 0
+			osStat = func(path string) (os.FileInfo, error) {
+				if path == cwd {
+					probes++
+				}
+				return originalStat(path)
+			}
+			ctx := t.Context()
+			if disableDiscovery {
+				ctx = WithoutFilesystemProjectDiscovery(ctx)
+			}
+			outcome, err := provider.Parse(ctx, ParseRequest{Source: sources[0]})
+			require.NoError(t, err)
+			require.Len(t, outcome.Results, 1)
+			result := outcome.Results[0].Result
+			assert.Equal(t, cwd, result.Session.Cwd)
+			assert.Equal(t, "project question", result.Session.FirstMessage)
+			if disableDiscovery {
+				assert.Zero(t, probes, "recorded cwd must not be inspected")
+				assert.Equal(t, "nested", result.Session.Project)
+			} else {
+				assert.Positive(t, probes, "local Git discovery must still run")
+				assert.Equal(t, "repository", result.Session.Project)
+			}
+		})
+	}
+}
+
 func openHandsProviderWriteSession(
 	t *testing.T,
 	root string,
@@ -154,6 +208,7 @@ func openHandsProviderWriteSession(
 	firstMessage string,
 ) string {
 	t.Helper()
+
 	sessionDir := filepath.Join(root, dirName)
 	eventsDir := filepath.Join(sessionDir, "events")
 	require.NoError(t, os.MkdirAll(eventsDir, 0o755))

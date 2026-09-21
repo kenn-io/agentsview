@@ -1,10 +1,12 @@
 import { describe, it, expect } from "vite-plus/test";
 import { formatMessageForCopy } from "./copy-message.js";
-import type { Message } from "../api/types/core.js";
+import type { DbMessage as Message } from "../api/generated/index.js";
 
 describe("formatMessageForCopy", () => {
   it("includes tool call params", () => {
     const msg: Message = {
+      has_context_tokens: false,
+      has_output_tokens: false,
       id: 1,
       session_id: "s1",
       ordinal: 1,
@@ -41,6 +43,8 @@ describe("formatMessageForCopy", () => {
 
   it("includes Write content", () => {
     const msg: Message = {
+      has_context_tokens: false,
+      has_output_tokens: false,
       id: 2,
       session_id: "s1",
       ordinal: 2,
@@ -74,6 +78,8 @@ describe("formatMessageForCopy", () => {
 
   it("includes kiro-ide Edit with diff key", () => {
     const msg = {
+      has_context_tokens: false,
+      has_output_tokens: false,
       id: 3,
       session_id: "s1",
       ordinal: 3,
@@ -110,6 +116,8 @@ describe("formatMessageForCopy", () => {
     const path =
       "/workspace/packages/agentsview/frontend/src/lib/components/content/ToolBlock.svelte";
     const result = formatMessageForCopy({
+      has_context_tokens: false,
+      has_output_tokens: false,
       id: 4,
       session_id: "s1",
       ordinal: 4,

@@ -17,11 +17,11 @@ import (
 func TestOpenCursorAttributionDB_ReadOnly(t *testing.T) {
 	path := seedCursorAttributionDBTest(t)
 
-	conn, err := openCursorAttributionDB(path)
+	conn, err := openCursorAttributionDB(t.Context(), path)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
 
-	_, err = conn.Exec(
+	_, err = conn.ExecContext(t.Context(),
 		`INSERT INTO conversation_summaries (model, mode, updatedAt)
 		 VALUES ('m', 'tab', 0)`,
 	)
@@ -32,7 +32,7 @@ func TestOpenCursorAttributionDB_ReadOnly(t *testing.T) {
 func TestOpenCursorAttributionDB_DoesNotCreateMissingDB(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "missing.db")
 
-	conn, err := openCursorAttributionDB(missing)
+	conn, err := openCursorAttributionDB(t.Context(), missing)
 	if err == nil {
 		_ = conn.Close()
 	}
@@ -50,7 +50,7 @@ func TestLoadCursorAttribution_Happy(t *testing.T) {
 	from := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 	to := time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC)
 
-	got, status, err := LoadCursorAttribution(from, to)
+	got, status, err := LoadCursorAttribution(t.Context(), from, to)
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, CursorAttributionAvailable, status)
@@ -73,7 +73,7 @@ func TestLoadCursorAttribution_MissingDB(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "missing.db")
 	t.Setenv("AGENTSVIEW_CURSOR_ATTRIBUTION_DB", missing)
 
-	got, status, err := LoadCursorAttribution(
+	got, status, err := LoadCursorAttribution(t.Context(),
 		time.Unix(0, 0).UTC(),
 		time.Unix(0, 1).UTC(),
 	)
@@ -86,7 +86,7 @@ func TestLoadCursorAttribution_EmptyDB(t *testing.T) {
 	path := seedEmptyCursorAttributionDBTest(t)
 	t.Setenv("AGENTSVIEW_CURSOR_ATTRIBUTION_DB", path)
 
-	got, status, err := LoadCursorAttribution(
+	got, status, err := LoadCursorAttribution(t.Context(),
 		time.Unix(0, 0).UTC(),
 		time.Unix(0, 1).UTC(),
 	)
@@ -104,14 +104,14 @@ func TestLoadCursorAttribution_NormalizesEmptyConversationKeys(t *testing.T) {
 	t.Cleanup(func() { _ = conn.Close() })
 
 	ts := time.Date(2026, 6, 1, 14, 0, 0, 0, time.UTC).UnixMilli()
-	_, err = conn.Exec(`
+	_, err = conn.ExecContext(t.Context(), `
 		INSERT INTO conversation_summaries (model, mode, updatedAt) VALUES
 			(NULL, NULL, ?),
 			('', '', ?)
 	`, ts, ts)
 	require.NoError(t, err)
 
-	got, status, err := LoadCursorAttribution(
+	got, status, err := LoadCursorAttribution(t.Context(),
 		time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
 		time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC),
 	)
@@ -131,13 +131,14 @@ func TestLoadCursorAttribution_NormalizesEmptyConversationKeys(t *testing.T) {
 
 func seedCursorAttributionDBTest(t *testing.T) string {
 	t.Helper()
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ai-code-tracking.db")
 	conn, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
 
-	_, err = conn.Exec(`
+	_, err = conn.ExecContext(t.Context(), `
 		CREATE TABLE scored_commits (
 			commitHash TEXT PRIMARY KEY,
 			scoredAt INTEGER NOT NULL,
@@ -155,7 +156,7 @@ func seedCursorAttributionDBTest(t *testing.T) string {
 		)
 	`)
 	require.NoError(t, err)
-	_, err = conn.Exec(`
+	_, err = conn.ExecContext(t.Context(), `
 		CREATE TABLE conversation_summaries (
 			model TEXT,
 			mode TEXT,
@@ -173,7 +174,7 @@ func seedCursorAttributionDBTest(t *testing.T) string {
 	outside := time.Date(2026, 6, 1, 15, 0, 0, 0,
 		time.FixedZone("EDT", -4*60*60))
 
-	_, err = conn.Exec(`
+	_, err = conn.ExecContext(t.Context(), `
 		INSERT INTO scored_commits (
 			commitHash, scoredAt, commitDate,
 			linesAdded, linesDeleted,
@@ -194,7 +195,7 @@ func seedCursorAttributionDBTest(t *testing.T) string {
 		formatCursorCommitDate(outside),
 	)
 	require.NoError(t, err)
-	_, err = conn.Exec(`
+	_, err = conn.ExecContext(t.Context(), `
 		INSERT INTO conversation_summaries (model, mode, updatedAt) VALUES
 			('model-a', 'composer', ?),
 			('model-a', 'composer', ?),
@@ -207,13 +208,14 @@ func seedCursorAttributionDBTest(t *testing.T) string {
 
 func seedEmptyCursorAttributionDBTest(t *testing.T) string {
 	t.Helper()
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ai-code-tracking.db")
 	conn, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
 
-	_, err = conn.Exec(`
+	_, err = conn.ExecContext(t.Context(), `
 		CREATE TABLE scored_commits (
 			commitHash TEXT PRIMARY KEY,
 			scoredAt INTEGER NOT NULL,
@@ -231,7 +233,7 @@ func seedEmptyCursorAttributionDBTest(t *testing.T) string {
 		)
 	`)
 	require.NoError(t, err)
-	_, err = conn.Exec(`
+	_, err = conn.ExecContext(t.Context(), `
 		CREATE TABLE conversation_summaries (
 			model TEXT,
 			mode TEXT,

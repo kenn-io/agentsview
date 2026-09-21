@@ -3,10 +3,7 @@
   import { scalePoint } from "d3-scale";
   import LargeChartFrame from "../shared/LargeChartFrame.svelte";
   import { formatDateTime, getLocale, m } from "../../i18n/index.js";
-  import type {
-    TrendsBucket,
-    TrendsSeries,
-  } from "../../api/types.js";
+  import type { DbTrendBucket as TrendsBucket, DbTrendSeries as TrendsSeries } from "../../api/generated/index.js";
 
   interface Props {
     buckets: TrendsBucket[];
@@ -142,7 +139,7 @@
       </Layer>
     </Chart>
     {#if !hasData}
-      <div class="empty-svg">No occurrences in this range</div>
+      <div class="empty-svg">{m.trends_no_occurrences_in_range()}</div>
     {/if}
   {/if}
 </div>

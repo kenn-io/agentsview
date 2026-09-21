@@ -40,9 +40,9 @@ func testConfigWithClaudeFixture(t *testing.T) config.Config {
 		))
 	}
 	return config.Config{
-		DataDir:          dataDir,
-		DBPath:           filepath.Join(dataDir, "sessions.db"),
-		LocalMachineName: "local",
+		DataDir:        dataDir,
+		DBPath:         filepath.Join(dataDir, "sessions.db"),
+		InstallationID: "0123456789abcdef0123456789abcdef",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {claudeDir},
 		},
@@ -53,6 +53,7 @@ func testConfigWithClaudeFixture(t *testing.T) config.Config {
 // result, failing the test if the count is not exactly one.
 func decodeSingleResult(t *testing.T, out *bytes.Buffer) workerResult {
 	t.Helper()
+
 	var results []workerResult
 	sc := bufio.NewScanner(out)
 	for sc.Scan() {
@@ -132,10 +133,10 @@ func TestSyncWorkerStartupUsesConfiguredSourceMachine(t *testing.T) {
 	require.NoError(t, runSyncWorker(cfg, "startup", &out))
 	assert.Equal(t, "ok", decodeSingleResult(t, &out).Status)
 
-	database, err := db.OpenReadOnly(cfg.DBPath)
+	database, err := db.OpenReadOnly(t.Context(), cfg.DBPath)
 	require.NoError(t, err)
 	defer database.Close()
-	page, err := database.ListSessions(context.Background(), db.SessionFilter{})
+	page, err := database.ListSessions(t.Context(), db.SessionFilter{})
 	require.NoError(t, err)
 	require.Len(t, page.Sessions, 3)
 	for _, sess := range page.Sessions {
@@ -144,19 +145,39 @@ func TestSyncWorkerStartupUsesConfiguredSourceMachine(t *testing.T) {
 }
 
 func TestSyncWorkerReportsAbortAsFailure(t *testing.T) {
-	cfg := testConfigWithClaudeFixture(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // aborted before work starts
+	for _, mode := range []string{"startup", "resync-build"} {
+		t.Run(mode, func(t *testing.T) {
+			cfg := testConfigWithClaudeFixture(t)
+			database, err := openDB(t.Context(), cfg)
+			require.NoError(t, err)
+			require.NoError(t, database.Close())
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel() // aborted before work starts
+			var out bytes.Buffer
+			err = runSyncWorkerContext(ctx, cfg, mode, &out)
+			require.Error(t, err, "aborted work must not exit zero")
+			result := decodeSingleResult(t, &out)
+			assert.Equal(t, "aborted", result.Status)
+			assert.False(t, result.DiscoveryComplete)
+		})
+	}
+}
+
+func TestSyncWorkerResyncBuildReportsMissingArchive(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Config{
+		DataDir: dir, DBPath: filepath.Join(dir, "missing.db"),
+		InstallationID: "0123456789abcdef0123456789abcdef",
+	}
 	var out bytes.Buffer
-	err := runSyncWorkerContext(ctx, cfg, "startup", &out)
-	require.Error(t, err, "aborted work must not exit zero")
+	require.Error(t, runSyncWorkerContext(t.Context(), cfg, "resync-build", &out))
 	result := decodeSingleResult(t, &out)
-	assert.Equal(t, "aborted", result.Status)
+	assert.Equal(t, "failed", result.Status)
 	assert.False(t, result.DiscoveryComplete)
 }
 
 func TestWorkerResultPreservesTombstonesAcrossProtocol(t *testing.T) {
-	result := workerResultFromStats(context.Background(), sync.SyncStats{
+	result := workerResultFromStats(t.Context(), sync.SyncStats{
 		Tombstoned: 2,
 		Aborted:    true,
 	})
@@ -192,10 +213,10 @@ func TestSyncWorkerResyncBuildModeBuildsReplacement(t *testing.T) {
 	cfg := testConfigWithClaudeFixture(t)
 	// Seed the archive the worker rebuilds from, then close it so the worker
 	// opens it read-only exactly as it does under the daemon's write barrier.
-	database, err := db.Open(cfg.DBPath)
+	database, err := db.Open(t.Context(), cfg.DBPath)
 	require.NoError(t, err)
-	engine := sync.NewEngine(database, workerEngineConfig(cfg))
-	require.Equal(t, 3, engine.SyncAll(context.Background(), nil).Synced)
+	engine := sync.NewEngine(t.Context(), database, workerEngineConfig(cfg))
+	require.Equal(t, 3, engine.SyncAll(t.Context(), nil).Synced)
 	engine.Close()
 	require.NoError(t, database.Close())
 
@@ -207,6 +228,59 @@ func TestSyncWorkerResyncBuildModeBuildsReplacement(t *testing.T) {
 	assert.Equal(t, 3, result.Synced)
 	assert.FileExists(t, cfg.DBPath+"-resync",
 		"worker must leave the built replacement for the daemon to swap")
+}
+
+func TestSyncWorkerResyncBuildUsesConfiguredImagePolicy(t *testing.T) {
+	cfg := testConfigWithClaudeFixture(t)
+	claudeRoot := cfg.AgentDirs[parser.AgentClaude][0]
+	imageSession := filepath.Join(claudeRoot, "-home-proj0", "session0.jsonl")
+	imageContent := `[ {"type":"text","text":"before"},{"type":"input_image","image_url":"data:image/png;base64,AAEC"},{"type":"text","text":"after"} ]`
+	require.NoError(t, os.WriteFile(imageSession, []byte(
+		testjsonl.NewSessionBuilder().
+			AddClaudeUser("2026-01-01T00:00:00Z", "hello").
+			AddRaw(`{"type":"assistant","timestamp":"2026-01-01T00:00:01Z","message":{"content":[{"type":"tool_use","id":"call-image","name":"Read","input":{}}]}}`).
+			AddRaw(fmt.Sprintf(`{"type":"user","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"tool_result","tool_use_id":"call-image","content":%s}]}}`, imageContent)).
+			String(),
+	), 0o644))
+
+	seedCfg := cfg
+	seedCfg.ToolResultImages = config.ToolResultImagesKeep
+	database, err := db.Open(t.Context(), cfg.DBPath)
+	require.NoError(t, err)
+	engine := sync.NewEngine(t.Context(), database, workerEngineConfig(seedCfg))
+	require.Equal(t, 3, engine.SyncAll(t.Context(), nil).Synced)
+	engine.Close()
+	require.NoError(t, database.Close())
+
+	cfg.ToolResultImages = config.ToolResultImagesDrop
+	var out bytes.Buffer
+	require.NoError(t, runSyncWorker(cfg, "resync-build", &out))
+	require.Equal(t, "ok", decodeSingleResult(t, &out).Status)
+
+	replacement, err := db.Open(t.Context(), cfg.DBPath+"-resync")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, replacement.Close()) }()
+	page, err := replacement.ListSessions(t.Context(), db.SessionFilter{})
+	require.NoError(t, err)
+	var foundImageCall bool
+	for _, session := range page.Sessions {
+		messages, err := replacement.GetAllMessages(t.Context(), session.ID)
+		require.NoError(t, err)
+		for _, message := range messages {
+			for _, call := range message.ToolCalls {
+				if call.ToolUseID != "call-image" {
+					continue
+				}
+				foundImageCall = true
+				assert.NotContains(t, call.ResultContent, "input_image")
+				assert.NotContains(t, call.ResultContent, "data:image")
+				for _, event := range call.ResultEvents {
+					assert.NotContains(t, event.Content, "input_image")
+				}
+			}
+		}
+	}
+	assert.True(t, foundImageCall, "fixture must reach the normalized tool-result tables")
 }
 
 // TestSyncWorkerResyncBuildAppliesClassifierConfig pins the classifier wiring
@@ -224,10 +298,10 @@ func TestSyncWorkerResyncBuildAppliesClassifierConfig(t *testing.T) {
 	})
 
 	// Seed the archive with default patterns, so no session is automated.
-	database, err := db.Open(cfg.DBPath)
+	database, err := db.Open(t.Context(), cfg.DBPath)
 	require.NoError(t, err)
-	engine := sync.NewEngine(database, workerEngineConfig(cfg))
-	require.Equal(t, 3, engine.SyncAll(context.Background(), nil).Synced)
+	engine := sync.NewEngine(t.Context(), database, workerEngineConfig(cfg))
+	require.Equal(t, 3, engine.SyncAll(t.Context(), nil).Synced)
 	engine.Close()
 	require.NoError(t, database.Close())
 
@@ -239,7 +313,7 @@ func TestSyncWorkerResyncBuildAppliesClassifierConfig(t *testing.T) {
 	require.NoError(t, err)
 	defer conn.Close()
 	var automated int
-	require.NoError(t, conn.QueryRow(
+	require.NoError(t, conn.QueryRowContext(t.Context(),
 		"SELECT COUNT(*) FROM sessions WHERE is_automated = 1",
 	).Scan(&automated))
 	assert.Equal(t, 3, automated,
@@ -250,9 +324,10 @@ func TestSyncWorkerResyncBuildAppliesClassifierConfig(t *testing.T) {
 // NeedsResync, mimicking a parser data-version bump under a running daemon.
 func markArchiveStale(t *testing.T, dbPath string) {
 	t.Helper()
+
 	conn, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	_, err = conn.Exec("PRAGMA user_version = 0")
+	_, err = conn.ExecContext(t.Context(), "PRAGMA user_version = 0")
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 }
@@ -265,10 +340,10 @@ func TestSyncWorkerRefusesResyncForLiveArchiveModes(t *testing.T) {
 	for _, mode := range []string{"sync", "audit"} {
 		t.Run(mode, func(t *testing.T) {
 			cfg := testConfigWithClaudeFixture(t)
-			database, err := db.Open(cfg.DBPath)
+			database, err := db.Open(t.Context(), cfg.DBPath)
 			require.NoError(t, err)
-			engine := sync.NewEngine(database, workerEngineConfig(cfg))
-			require.Equal(t, 3, engine.SyncAll(context.Background(), nil).Synced)
+			engine := sync.NewEngine(t.Context(), database, workerEngineConfig(cfg))
+			require.Equal(t, 3, engine.SyncAll(t.Context(), nil).Synced)
 			engine.Close()
 			require.NoError(t, database.Close())
 			markArchiveStale(t, cfg.DBPath)
@@ -277,9 +352,9 @@ func TestSyncWorkerRefusesResyncForLiveArchiveModes(t *testing.T) {
 			require.NoError(t, err)
 
 			var out bytes.Buffer
-			err = runSyncWorkerContext(context.Background(), cfg, mode, &out)
+			err = runSyncWorkerContext(t.Context(), cfg, mode, &out)
 			require.Error(t, err, "a live-archive worker must refuse a stale archive")
-			assert.ErrorContains(t, err, "resync")
+			require.ErrorContains(t, err, "resync")
 
 			result := decodeSingleResult(t, &out)
 			assert.Equal(t, "failed", result.Status)
@@ -314,7 +389,7 @@ func (w *failOnResultWriter) Write(p []byte) (int, error) {
 func TestSyncWorkerNonZeroWhenTerminalResultWriteFails(t *testing.T) {
 	cfg := testConfigWithClaudeFixture(t)
 	w := &failOnResultWriter{}
-	err := runSyncWorkerContext(context.Background(), cfg, "startup", w)
+	err := runSyncWorkerContext(t.Context(), cfg, "startup", w)
 	require.Error(t, err, "a dropped terminal result must fail the worker")
 	assert.True(t, w.attempted, "the terminal result write was attempted")
 	assert.ErrorContains(t, err, "terminal result")
@@ -327,10 +402,10 @@ func TestSyncWorkerNonZeroWhenTerminalResultWriteFails(t *testing.T) {
 // archive must be preserved.
 func TestSyncWorkerStartupAbortedResyncFallsBackIncremental(t *testing.T) {
 	cfg := testConfigWithClaudeFixture(t)
-	database, err := db.Open(cfg.DBPath)
+	database, err := db.Open(t.Context(), cfg.DBPath)
 	require.NoError(t, err)
-	engine := sync.NewEngine(database, workerEngineConfig(cfg))
-	require.Equal(t, 3, engine.SyncAll(context.Background(), nil).Synced)
+	engine := sync.NewEngine(t.Context(), database, workerEngineConfig(cfg))
+	require.Equal(t, 3, engine.SyncAll(t.Context(), nil).Synced)
 	engine.Close()
 	require.NoError(t, database.Close())
 	markArchiveStale(t, cfg.DBPath)
@@ -351,11 +426,11 @@ func TestSyncWorkerStartupAbortedResyncFallsBackIncremental(t *testing.T) {
 		"a safety-aborted resync must fall back to the incremental sync")
 	assert.True(t, result.DiscoveryComplete)
 
-	database, err = db.Open(cfg.DBPath)
+	database, err = db.Open(t.Context(), cfg.DBPath)
 	require.NoError(t, err)
 	defer database.Close()
 	var total int
-	require.NoError(t, database.Reader().QueryRow(
+	require.NoError(t, database.Reader().QueryRow(t.Context(),
 		"SELECT COUNT(*) FROM sessions",
 	).Scan(&total))
 	assert.Equal(t, 3, total, "the aborted resync must leave the archive intact")
@@ -367,7 +442,7 @@ func TestSyncWorkerStartupAbortedResyncFallsBackIncremental(t *testing.T) {
 // minority of permanent parse failures is a valid replacement the daemon must
 // not discard.
 func TestResyncBuildResultFromStatsToleratesMinorityParseFailures(t *testing.T) {
-	cancelled, cancel := context.WithCancel(context.Background())
+	cancelled, cancel := context.WithCancel(t.Context())
 	cancel()
 	tests := []struct {
 		name       string
@@ -378,32 +453,32 @@ func TestResyncBuildResultFromStatsToleratesMinorityParseFailures(t *testing.T) 
 	}{
 		{
 			name:       "minority parse failures still ok",
-			ctx:        context.Background(),
+			ctx:        t.Context(),
 			stats:      sync.SyncStats{Synced: 10, Failed: 2},
 			wantStatus: "ok",
 		},
 		{
 			name:       "safety abort",
-			ctx:        context.Background(),
+			ctx:        t.Context(),
 			stats:      sync.SyncStats{Aborted: true},
 			wantStatus: "aborted",
 		},
 		{
 			name:       "deferred processing",
-			ctx:        context.Background(),
+			ctx:        t.Context(),
 			stats:      sync.SyncStats{Deferred: 1},
 			wantStatus: "failed",
 		},
 		{
 			name:       "build error",
-			ctx:        context.Background(),
+			ctx:        t.Context(),
 			stats:      sync.SyncStats{Synced: 10},
 			buildErr:   errors.New("build boom"),
 			wantStatus: "failed",
 		},
 		{
 			name:       "operational failure that also set aborted",
-			ctx:        context.Background(),
+			ctx:        t.Context(),
 			stats:      sync.SyncStats{Aborted: true},
 			buildErr:   errors.New("create resync temp db: boom"),
 			wantStatus: "failed",

@@ -8,10 +8,13 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/service"
+
+	"github.com/danielgtaylor/huma/v2"
 )
 
 func (s *Server) registerSearchRoutes() {
-	group := newRouteGroup(s.api, "/api/v1/search", "Search")
+	group := huma.NewGroup(s.api, "/api/v1/search")
+	configureRouteGroup(group, "Search")
 
 	s.get(group, "", "Search sessions", s.humaSearch)
 	s.getLong(group, "/content", "Search session content", s.humaSearchContent)
@@ -24,11 +27,13 @@ type contentSearchMode string
 type contentSearchScope string
 
 type searchInput struct {
-	Query   string     `query:"q" required:"true" doc:"Search query"`
-	Project string     `query:"project" doc:"Filter by project"`
-	Sort    searchSort `query:"sort" enum:"relevance,recency" default:"relevance" doc:"Sort order"`
-	Limit   int        `query:"limit" minimum:"0" doc:"Maximum number of results"`
-	Cursor  int        `query:"cursor" minimum:"0" doc:"Pagination cursor"`
+	DateFrom string     `query:"date_from" format:"date" doc:"Filter sessions active on or after this date"`
+	DateTo   string     `query:"date_to" format:"date" doc:"Filter sessions active on or before this date"`
+	Query    string     `query:"q" required:"true" doc:"Search query"`
+	Project  string     `query:"project" doc:"Filter by project"`
+	Sort     searchSort `query:"sort" enum:"relevance,recency" default:"relevance" doc:"Sort order"`
+	Limit    int        `query:"limit" minimum:"0" doc:"Maximum number of results"`
+	Cursor   int        `query:"cursor" minimum:"0" doc:"Pagination cursor"`
 }
 
 type contentSearchInput struct {
@@ -67,11 +72,13 @@ func (s *Server) humaSearch(
 		return nil, apiError(http.StatusBadRequest, "query required")
 	}
 	res, err := s.sessions.Search(ctx, service.SearchRequest{
-		Query:   query,
-		Project: in.Project,
-		Sort:    string(in.Sort),
-		Cursor:  in.Cursor,
-		Limit:   in.Limit,
+		DateFrom: in.DateFrom,
+		DateTo:   in.DateTo,
+		Query:    query,
+		Project:  in.Project,
+		Sort:     string(in.Sort),
+		Cursor:   in.Cursor,
+		Limit:    in.Limit,
 	})
 	if err != nil {
 		if errors.Is(err, service.ErrSearchUnavailable) {

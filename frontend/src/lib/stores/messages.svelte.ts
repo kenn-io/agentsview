@@ -1,8 +1,8 @@
 import { SessionsService } from "../api/generated/index";
-import type { Message } from "../api/types.js";
+import type { DbMessage as Message } from "../api/generated/index.js";
 import { isAbortError } from "../api/runtime.js";
 import { clearContentCaches } from "../utils/content-parser.js";
-import { computeMainModel } from "../utils/model.js";
+import { computeMainModelInfo, type ModelEffort } from "../utils/model.js";
 import { buildReadProgressToken, readProgress } from "./read-progress.svelte.js";
 import { sessions } from "./sessions.svelte.js";
 
@@ -16,7 +16,7 @@ interface FetchPageOptions {
   signal: AbortSignal;
 }
 
-class MessagesStore {
+export class MessagesStore {
   messages: Message[] = $state([]);
   loading: boolean = $state(false);
   sessionId: string | null = $state(null);
@@ -27,14 +27,14 @@ class MessagesStore {
   loadingOlder: boolean = $state(false);
   historyComplete: boolean = $state(false);
   private reloading: boolean = $state(false);
-  private _stableMainModel: string = $state("");
-  mainModel: string = $derived(
-    this.loading
-      ? this._stableMainModel
-      : this.messages.length > 0
-        ? computeMainModel(this.messages)
-        : "",
+  private _stableMainModelInfo: ModelEffort = $state({
+    model: "",
+    reasoningEffort: "",
+  });
+  mainModelInfo: ModelEffort = $derived(
+    this.loading ? this._stableMainModelInfo : computeMainModelInfo(this.messages),
   );
+  mainModel: string = $derived(this.mainModelInfo.model);
   private abortController: AbortController | null = null;
   private cancelledSessionId: string | null = null;
   // The session id alone cannot tell a stale load's late 404 apart
@@ -71,7 +71,6 @@ class MessagesStore {
     const readMarker = readProgress.get(id);
     if (!resumesCancelledLoad) {
       this.clear();
-      this._stableMainModel = "";
       this.activeSessionToken = null;
       this.activeSessionUnreadOrdinal = null;
     }
@@ -123,7 +122,7 @@ class MessagesStore {
     } finally {
       if (this.sessionId === id) {
         this.loading = false;
-        this._stableMainModel = this.messages.length > 0 ? computeMainModel(this.messages) : "";
+        this.updateStableMainModelInfo();
       }
     }
   }
@@ -164,7 +163,7 @@ class MessagesStore {
     this.sessionId = null;
     this.cancelledSessionId = null;
     this.loading = false;
-    this._stableMainModel = "";
+    this._stableMainModelInfo = { model: "", reasoningEffort: "" };
     this.messageCount = 0;
     this.activeSessionToken = null;
     this.activeSessionUnreadOrdinal = null;
@@ -236,6 +235,7 @@ class MessagesStore {
   }
 
   private async loadAllMessages(id: string, signal: AbortSignal, messageCountHint?: number) {
+    this.historyComplete = false;
     let from = 0;
     let loaded: Message[] = [];
     let complete = false;
@@ -315,6 +315,7 @@ class MessagesStore {
       const appended = pages.filter((m) => !existingOrdinals.has(m.ordinal));
       clearContentCaches();
       this.messages = [...this.messages.map((m) => updates.get(m.ordinal) ?? m), ...appended];
+      this.updateStableMainModelInfo();
     }
   }
 
@@ -403,6 +404,76 @@ class MessagesStore {
     });
     this.loadOlderPromise = p;
     return p;
+  }
+
+  /** Complete either a missing prefix or a failed forward load for session find. */
+  async ensureHistoryLoaded(): Promise<void> {
+    const id = this.sessionId;
+    const signal = this.abortController?.signal;
+    const current = () =>
+      this.sessionId === id && this.abortController?.signal === signal && !signal?.aborted;
+    if (!id || !signal || !current() || this.loading) return;
+    if (this.hasOlder) {
+      await this.ensureOrdinalLoaded(0);
+      if (!current() || this.hasOlder) return;
+    }
+    if (this.historyComplete) return;
+    if (this.loadOlderPromise) {
+      await this.loadOlderPromise;
+      if (!current() || this.historyComplete) return;
+    }
+    const pending = this.loadRemainingMessages(id, signal).finally(() => {
+      if (this.loadOlderPromise === pending) this.loadOlderPromise = null;
+    });
+    this.loadOlderPromise = pending;
+    await pending;
+  }
+
+  /** Resume the missing tail without removing already loaded rows or their cursor. */
+  private async loadRemainingMessages(id: string, signal: AbortSignal): Promise<void> {
+    const current = () =>
+      this.sessionId === id && this.abortController?.signal === signal && !signal.aborted;
+    this.loadingOlder = true;
+    try {
+      let from = (this.messages.at(-1)?.ordinal ?? -1) + 1;
+      for (;;) {
+        const res = await SessionsService.getApiV1SessionsByIdMessages(
+          { id },
+          { from, limit: MESSAGE_PAGE_SIZE, direction: "asc" },
+          { signal },
+        );
+        if (!current()) return;
+        if (res.messages.length === 0) {
+          this.historyComplete = !this.hasOlder;
+          break;
+        }
+        const nextFrom = res.messages.at(-1)!.ordinal + 1;
+        if (nextFrom <= from) throw new Error("Session history pagination made no progress");
+        // Concurrent SSE refreshes may already have appended some of this page.
+        // Preserve their objects and never introduce duplicate ordinals.
+        const existing = new Set(this.messages.map((message) => message.ordinal));
+        const added = res.messages.filter((message) => {
+          if (existing.has(message.ordinal)) return false;
+          existing.add(message.ordinal);
+          return true;
+        });
+        clearContentCaches();
+        this.messages = [...this.messages, ...added].sort((a, b) => a.ordinal - b.ordinal);
+        this.messageCount = Math.max(this.messageCount, this.messages.at(-1)!.ordinal + 1);
+        if (res.messages.length < MESSAGE_PAGE_SIZE) {
+          this.historyComplete = !this.hasOlder;
+          break;
+        }
+        from = nextFrom;
+      }
+      this.publishPendingSessionToken(id);
+    } catch (error) {
+      if (isAbortError(error) || !current()) return;
+      this.historyComplete = false;
+      console.warn("Failed to complete session history:", error);
+    } finally {
+      if (current()) this.loadingOlder = false;
+    }
   }
 
   private async doEnsureOrdinal(id: string, targetOrdinal: number) {
@@ -565,6 +636,7 @@ class MessagesStore {
     );
     clearContentCaches();
     this.messages = this.messages.map((m) => updates.get(m.ordinal) ?? m);
+    this.updateStableMainModelInfo();
     return true;
   }
 
@@ -580,9 +652,13 @@ class MessagesStore {
     } finally {
       if (this.sessionId === id) {
         this.loading = false;
-        this._stableMainModel = this.messages.length > 0 ? computeMainModel(this.messages) : "";
+        this.updateStableMainModelInfo();
       }
     }
+  }
+
+  private updateStableMainModelInfo() {
+    this._stableMainModelInfo = computeMainModelInfo(this.messages);
   }
 }
 
@@ -612,6 +688,7 @@ function transcriptMessageEqual(before: Message, after: Message): boolean {
     hasToolUse: message.has_tool_use,
     isSystem: message.is_system,
     model: message.model,
+    reasoningEffort: message.reasoning_effort ?? "",
     contextTokens: message.context_tokens,
     outputTokens: message.output_tokens,
     hasContextTokens: message.has_context_tokens ?? false,

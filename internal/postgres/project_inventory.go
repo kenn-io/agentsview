@@ -27,8 +27,8 @@ type projectInventoryAgg struct {
 // worktree-mapping-rule attribution. It mirrors internal/db.GetProjectInventory
 // (SQLite) with PG idioms: a source archive is only "in scope" for rule
 // attribution when it currently contributes at least one visible session.
-func (s *Store) GetProjectInventory(ctx context.Context) (db.ProjectInventory, error) {
-	agg, err := s.projectInventoryAggregate(ctx)
+func (s *Store) GetProjectInventory(ctx context.Context, filter db.ProjectDateFilter) (db.ProjectInventory, error) {
+	agg, err := s.projectInventoryAggregate(ctx, filter)
 	if err != nil {
 		return db.ProjectInventory{}, err
 	}
@@ -63,7 +63,9 @@ func (s *Store) GetProjectInventory(ctx context.Context) (db.ProjectInventory, e
 // governedness) does not depend on provenance.
 func (s *Store) projectInventoryAggregate(
 	ctx context.Context,
+	filter db.ProjectDateFilter,
 ) (map[string]projectInventoryAgg, error) {
+	where, args := db.BuildSessionBaseFilterSQL(filter.SessionFilter(), db.PostgresQueryDialect())
 	rows, err := s.pg.QueryContext(ctx, `
 		SELECT project,
 		       COUNT(*),
@@ -74,9 +76,9 @@ func (s *Store) projectInventoryAggregate(
 		       MIN(started_at),
 		       MAX(COALESCE(ended_at, started_at))
 		FROM sessions
-		WHERE deleted_at IS NULL
+		WHERE `+where+`
 		GROUP BY project
-		ORDER BY project`)
+		ORDER BY project`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("aggregating pg project inventory: %w", err)
 	}
@@ -315,7 +317,8 @@ func (s *Store) projectInventoryCandidateRows(
 	var err error
 	if machine == nil {
 		rows, err = s.pg.QueryContext(ctx, `
-			SELECT id, machine, project, cwd, COALESCE(file_path, ''), source_archive_id
+			SELECT id, machine, project, cwd, COALESCE(file_path, ''),
+				project_assigned, source_archive_id
 			FROM sessions
 			WHERE deleted_at IS NULL
 			  AND source_archive_id != ''
@@ -324,7 +327,8 @@ func (s *Store) projectInventoryCandidateRows(
 			       FROM source_worktree_project_mappings WHERE enabled)`)
 	} else {
 		rows, err = s.pg.QueryContext(ctx, `
-			SELECT id, machine, project, cwd, COALESCE(file_path, ''), source_archive_id
+			SELECT id, machine, project, cwd, COALESCE(file_path, ''),
+				project_assigned, source_archive_id
 			FROM sessions
 			WHERE deleted_at IS NULL
 			  AND source_archive_id != ''
@@ -345,7 +349,7 @@ func (s *Store) projectInventoryCandidateRows(
 		var row db.MappingEvaluationRow
 		if err := rows.Scan(
 			&row.SessionID, &row.Machine, &row.Project, &row.Cwd, &row.FilePath,
-			&row.SourceArchiveID,
+			&row.ProjectAssigned, &row.SourceArchiveID,
 		); err != nil {
 			return nil, fmt.Errorf(
 				"scanning pg project inventory candidate session: %w", err)

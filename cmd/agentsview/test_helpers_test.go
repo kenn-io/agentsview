@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"io"
 	"log"
@@ -33,7 +32,7 @@ func resolveTestArchiveQueryBackend(
 	t *testing.T, policy archiveQueryPolicy,
 ) archiveQueryBackend {
 	t.Helper()
-	backend, cleanup, err := resolveArchiveQueryBackend(context.Background(), policy)
+	backend, cleanup, err := resolveArchiveQueryBackend(t.Context(), policy)
 	require.NoError(t, err)
 	t.Cleanup(cleanup)
 	return backend

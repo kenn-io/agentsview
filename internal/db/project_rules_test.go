@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -10,7 +9,7 @@ import (
 
 func TestListProjectRulesGovernedCounts(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	_, err := d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 		Machine: "ws", PathPrefix: "/work", Layout: WorktreeMappingLayoutExplicit,
@@ -83,7 +82,7 @@ func TestListProjectRulesGovernedCounts(t *testing.T) {
 
 func TestListProjectRulesUnknownMachine(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	_, err := d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 		Machine: "ws", PathPrefix: "/work", Layout: WorktreeMappingLayoutExplicit,

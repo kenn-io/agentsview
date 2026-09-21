@@ -332,6 +332,46 @@ func TestWorkerFullSyncReportsOutboxBackpressure(t *testing.T) {
 	}
 }
 
+func TestWorkerFullSyncRetriesChangedSource(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "session.jsonl"), []byte("session\n"), 0o600))
+	base := t.TempDir()
+	store, err := rawcheckpoint.OpenWithOptions(
+		t.Context(), filepath.Join(base, "checkpoint.db"),
+		rawcheckpoint.Options{
+			SpoolDir: filepath.Join(base, "spool"), MaxOutboxBytes: 1 << 20,
+		},
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	provider := newAuditProvider(root)
+	provider.planErrorAt = 2 // Fail capture after discovery resolves the source identity.
+	provider.planError = rawcapture.ErrSourceChanged
+	capturer := rawcapture.New(store)
+	worker := NewWorker(
+		[]parser.Provider{provider}, capturer,
+		NewAuditor(store, capturer, 1), nil,
+	)
+
+	err = worker.HandleBatch(t.Context(), syncpkg.WatchBatch{FullSync: true})
+
+	require.ErrorIs(t, err, ErrFullSyncIncomplete)
+	configured, err := store.ResolveConfiguredRoot(t.Context(), parser.AgentClaude, root)
+	require.NoError(t, err)
+	identity := rawcheckpoint.SourceIdentity{
+		Provider: parser.AgentClaude, ConfiguredRootID: configured.ID, SourceKey: "session.jsonl",
+	}
+	_, ok, err := store.CaptureBase(t.Context(), identity)
+	require.NoError(t, err)
+	assert.False(t, ok, "the changed source must remain uncaptured")
+
+	require.NoError(t, worker.HandleBatch(t.Context(), syncpkg.WatchBatch{FullSync: true}))
+	capture, ok, err := store.CaptureBase(t.Context(), identity)
+	require.NoError(t, err)
+	require.True(t, ok, "the retry must capture the source")
+	assert.Equal(t, rawsync.ManifestSnapshot, capture.Kind)
+}
+
 func TestWorkerFullSyncReportsIncompleteDiscovery(t *testing.T) {
 	healthyRoot := t.TempDir()
 	healthyPath := filepath.Join(healthyRoot, "session.jsonl")

@@ -1,4 +1,33 @@
 {
+  "data_reclassify_session_preview_filtered_empty": "No sessions to preview. Automated sessions are hidden; use the filter button to include them.",
+  "data_batch_saving_progress": [
+    {
+      "declarations": [
+        "input saved",
+        "input count",
+        "local savedNumber = saved: number",
+        "local countNumber = count: number"
+      ],
+      "match": { "*": "Saving {savedNumber} of {countNumber}…" }
+    }
+  ],
+  "data_candidate_worktree_prefix": "Worktree prefix",
+  "data_candidate_common_parent": "Common parent",
+  "data_candidate_paths_sample": "Showing a sample of the recorded paths.",
+  "data_candidate_observed_paths": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} observed folder",
+        "countPlural=other": "{countNumber} observed folders"
+      }
+    }
+  ],
   "app_auth_title": "Authentication Required",
   "app_auth_description": "This server requires an auth token to access. Enter the auth_token from ~/.agentsview/config.toml or AGENTSVIEW_AUTH_TOKEN.",
   "app_auth_placeholder": "Paste auth token",
@@ -258,6 +287,10 @@
   "message_content_copy_message": "Copy message",
   "message_content_copied_message": "Copied message",
   "message_content_copied": "Copied!",
+  "message_content_code_collapsed_with_language": "Code block collapsed · {language} · Expand",
+  "message_content_code_collapsed": "Code block collapsed · Expand",
+  "message_content_code_expanded_with_language": "Code block expanded · {language} · Collapse",
+  "message_content_code_expanded": "Code block expanded · Collapse",
   "message_content_unpin_message": "Unpin message",
   "message_content_pin_message": "Pin message",
   "message_content_unpinned": "Unpinned",
@@ -308,7 +341,6 @@
       }
     }
   ],
-  "parallel_group_each_duration": "≤ {duration} each",
   "parallel_group_running": "running...",
   "subagent_inline_label": "Subagent session",
   "subagent_inline_message_count": [
@@ -324,6 +356,7 @@
   "subagent_inline_open_as_full_session": "Open as full session",
   "subagent_inline_open_session": "Open session",
   "subagent_inline_failed_to_load": "Failed to load",
+  "shared_failed_to_load": "Failed to load",
   "subagent_inline_loading": "Loading...",
   "subagent_inline_no_messages": "No messages",
   "skill_block_label": "Skill: {name}",
@@ -420,6 +453,7 @@
   "sidebar_row_rename": "Rename",
   "sidebar_row_open_in_new_tab": "Open in new tab",
   "sidebar_row_delete": "Delete",
+  "sidebar_row_change_project": "Change project…",
   "shared_all_projects": "All Projects",
   "shared_project_filter_placeholder": "Filter projects...",
   "shared_select_project": "Select project",
@@ -780,7 +814,7 @@
   "settings_search_empty": "No matching settings",
   "settings_search_clear": "Clear search",
   "settings_search_result": "Showing {category}",
-  "settings_search_keywords_appearance": "theme contrast layout text font blocks",
+  "settings_search_keywords_appearance": "theme contrast layout text font blocks zoom",
   "settings_search_keywords_language": "language locale translation",
   "settings_search_keywords_date_ranges": "date range linked pages",
   "settings_search_keywords_terminal": "terminal resume launch binary arguments clipboard",
@@ -791,6 +825,8 @@
   "settings_search_keywords_remote_access": "remote server connection auth token network",
   "settings_loading": "Loading settings...",
   "settings_save_error_label": "Error",
+  "settings_load_failed": "Failed to load settings",
+  "settings_save_failed": "Failed to save settings",
   "settings_date_ranges_title": "Date ranges",
   "settings_date_ranges_description": "Share date selections across Sessions, Usage, Activity, Trends, and Quality.",
   "settings_date_ranges_link": "Link date ranges across pages",
@@ -806,6 +842,8 @@
   "settings_language_korean": "한국어",
   "settings_language_french": "Français",
   "settings_language_japanese": "日本語",
+  "settings_language_azerbaijani": "Azərbaycanca",
+  "settings_language_spanish": "Español",
   "settings_language_no_results": "No languages found",
   "nav_recent_edits": "Recent Edits",
   "nav_data": "Data",
@@ -813,7 +851,7 @@
   "data_projects_heading": "Projects",
   "data_view_toggle_label": "Data view",
   "data_view_inventory": "Inventory",
-  "data_view_rules": "Rules",
+  "data_view_rules": "Project mapping rules",
   "data_summary_projects": [
     {
       "declarations": [
@@ -842,6 +880,34 @@
       }
     }
   ],
+  "data_summary_machines": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} machine",
+        "countPlural=other": "{countNumber} machines"
+      }
+    }
+  ],
+  "data_summary_folder_suggestions": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} folder suggestion",
+        "countPlural=other": "{countNumber} folder suggestions"
+      }
+    }
+  ],
   "data_summary_governed": [
     {
       "declarations": [
@@ -856,6 +922,76 @@
       }
     }
   ],
+  "data_selection_hint": "Click a project, then Shift-click to select a range.",
+  "data_selection_count": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} project selected",
+        "countPlural=other": "{countNumber} projects selected"
+      }
+    }
+  ],
+  "data_selection_clear": "Clear",
+  "data_batch_workspace_label": "Bulk project correction",
+  "data_batch_heading": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} project selected",
+        "countPlural=other": "{countNumber} projects selected"
+      }
+    }
+  ],
+  "data_batch_label": "Bulk",
+  "data_batch_folders_heading": "Selected folders",
+  "data_batch_folders_intro": "Observed folders grouped by project, then machine, with larger session groups first within each machine.",
+  "data_batch_outside_selection": "This correction also matches projects outside your selection. Confirm to save the rules for all matching sessions.",
+  "data_date_filter_scope": "Dates filter the project list, folder suggestions, and session previews. Folder corrections can also change sessions outside this range.",
+  "data_batch_correction_heading": "Bulk correction",
+  "data_batch_correction_intro": "All listed folders will receive the destination you choose.",
+  "data_batch_folder_count": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} folder",
+        "countPlural=other": "{countNumber} folders"
+      }
+    }
+  ],
+  "data_batch_target_project": "Map selected folders to",
+  "data_batch_saving": "Saving bulk correction…",
+  "data_batch_save": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "Save {countNumber} correction",
+        "countPlural=other": "Save {countNumber} corrections"
+      }
+    }
+  ],
+  "data_batch_partial_save": "Saved {saved} of {count}.",
+  "data_batch_saved": "Bulk correction saved to {project}",
   "data_filter_projects": "Filter projects",
   "data_col_project": "Project",
   "data_col_sessions": "Sessions",
@@ -890,8 +1026,15 @@
   "data_reclassify_candidates_failed": "Failed to find session folders",
   "data_reclassify_no_candidates": "No session folders were found for this project.",
   "data_reclassify_choose_worktree": "Choose a folder",
-  "data_mapping_observed_folders": "Observed folders",
-  "data_mapping_definition": "Mapping",
+  "data_mapping_observed_folders": "Folder suggestions",
+  "data_reclassify_suggestions_intro": "Paths suggested from sessions in this project.",
+  "data_mapping_definition": "Project correction",
+  "data_reclassify_use_for_project": "Use for this project",
+  "data_reclassify_evidence_snapshot": "Snapshot",
+  "data_reclassify_evidence_aggregate": "Aggregate",
+  "data_reclassify_evidence_exact_cwd": "Exact cwd",
+  "data_reclassify_evidence_unavailable": "No usable prefix",
+  "data_reclassify_evidence_suggestion": "Suggestion",
   "data_reclassify_candidate_sessions": [
     {
       "declarations": [
@@ -907,7 +1050,7 @@
     }
   ],
   "data_reclassify_cwd_unavailable": "This folder cannot be mapped safely because it is unavailable or represents a filesystem root.",
-  "data_reclassify_path_prefix": "Folder path",
+  "data_reclassify_path_prefix": "Path prefix",
   "data_reclassify_target_project": "Project",
   "data_reclassify_use_custom_project": "Use project \"{query}\"",
   "data_reclassify_path_unavailable": "Path unavailable",
@@ -972,18 +1115,64 @@
       }
     }
   ],
+  "data_reclassify_session_preview_count": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} session preview",
+        "countPlural=other": "{countNumber} session previews"
+      }
+    }
+  ],
+  "data_reclassify_session_preview_position": "{current} of {count}",
+  "data_reclassify_session_preview_previous": "Previous session",
+  "data_reclassify_session_preview_next": "Next session",
+  "data_reclassify_session_preview_loading": "Loading session preview…",
+  "data_reclassify_session_preview_failed": "Failed to load session preview",
+  "data_reclassify_session_preview_no_message": "No session message available",
+  "data_reclassify_session_preview_current_project": "Current project",
+  "data_reclassify_session_preview_next_project": "After correction",
+  "data_reclassify_session_preview_folder": "Session folder",
+  "data_session_assignment_heading": "Session project",
+  "data_session_assignment_intro": "Changes only this session. Its folder and folder rules stay unchanged.",
+  "data_session_assignment_target": "Move this session to",
+  "data_session_assignment_save": "Assign session",
+  "data_session_assignment_saving": "Assigning…",
+  "data_session_assignment_failed": "Failed to assign session",
+  "data_session_assignment_saved": "Session assigned to {project}",
+  "data_session_assignment_refresh_failed": "The session was assigned, but the project inventory could not refresh.",
+  "data_session_assignment_manual": "Manual override",
+  "data_session_assignment_automatic": "Automatic",
+  "data_session_assignment_use_automatic": "Use automatic",
+  "data_session_assignment_clearing": "Restoring…",
+  "data_session_assignment_cleared": "Session restored to {project}",
+  "data_session_assignment_clear_failed": "Failed to restore automatic project assignment",
   "data_reclassify_zero_matches": "This prefix matches no sessions in the archive.",
   "data_reclassify_conflict": "Mappings changed since the preview. The impact has been refreshed; review it before applying.",
-  "data_reclassify_apply": "Save and apply mapping",
-  "data_reclassify_applying": "Saving and applying…",
-  "data_reclassify_apply_failed": "Failed to save and apply mapping",
+  "data_reclassify_replaces_rule": "This correction replaces an existing project mapping rule.",
+  "data_reclassify_review_impact": "Review impact",
+  "data_reclassify_back": "Back",
+  "data_reclassify_confirm_save": "Confirm and save",
+  "data_reclassify_cancel": "Cancel",
+  "data_reclassify_apply": "Save correction",
+  "data_reclassify_applying": "Saving correction…",
+  "data_reclassify_apply_failed": "Failed to save correction",
+  "data_reclassify_saved": "Project correction saved for {project}",
+  "data_flash_success_label": "Success",
   "data_reclassify_applied_refresh_failed": "The mapping was saved, but the project inventory could not refresh. Retry only the refresh.",
   "data_reclassify_retry_refresh": "Retry refresh",
   "data_reclassify_refreshing": "Refreshing…",
-  "data_reclassify_read_only": "This store is read-only. Manage classification rules from the writable archive that ingests this machine's sessions.",
-  "data_reclassify_managed_in_rules": "Mappings created here can be edited in the Rules view.",
-  "data_reclassify_open_rules": "Open Rules",
+  "data_reclassify_read_only": "Changes are unavailable here. Open the Source Agents View to manage project mapping rules.",
+  "data_reclassify_managed_in_rules": "This correction will be saved as a project mapping rule.",
+  "data_reclassify_open_rules": "Open project mapping rules",
   "data_workspace_all_projects": "All projects",
+  "data_workspace_map_whole_project": "All folders",
+  "data_workspace_correct_one_folder": "One folder",
   "data_workspace_close": "Close project details",
   "data_workspace_activity": "Activity",
   "data_workspace_activity_range": "{first} – {last}",
@@ -1006,7 +1195,6 @@
   "recent_edits_refresh": "Refresh",
   "recent_edits_search_placeholder": "Filter by file path",
   "recent_edits_clear_search": "Clear file-path search",
-  "activity_insight_unavailable_read_only": "Unavailable in read-only remote mode",
   "activity_insight_waiting_server": "Waiting for server version",
   "activity_insight_generate_insight": "Generate insight",
   "activity_insight_generation_failed": "Generation failed",
@@ -1032,14 +1220,12 @@
   "activity_model": "Model",
   "activity_agent": "Agent",
   "activity_min_unit": " min",
-  "activity_int_auto_split": "int {int} / auto {auto}",
   "activity_breakdown": "Breakdown",
   "activity_view_in_data": "View {project} in Data",
   "activity_breakdown_metric": "Breakdown metric",
   "activity_agent_min": "Agent-min",
   "activity_cost": "Cost",
   "activity_none_lower": "none",
-  "activity_int_auto_short": "{int} int / {auto} auto",
   "activity_peak_label": "peak {count}",
   "activity_agent_min_value": "{value} agent-min",
   "activity_no_sessions_selected_range": "No sessions active in the selected time range.",
@@ -1053,6 +1239,15 @@
       }
     }
   ],
+  "activity_subagents": "Subagents",
+  "activity_subagent": "Subagent",
+  "activity_interactive_peak": "Interactive peak",
+  "activity_subagent_peak": "Subagent peak",
+  "activity_automated_peak": "Automated peak",
+  "activity_combined_peak": "Combined peak",
+  "activity_peak_at": "peak {count} at {time}",
+  "activity_all_sessions_overlay": "All-session overlay",
+  "activity_class_split": "int {int} / sub {sub} / auto {auto}",
   "activity_concurrency": "Concurrency",
   "activity_overlay": "Overlay",
   "activity_overlay_metric": "Concurrency overlay metric",
@@ -1068,6 +1263,22 @@
   "activity_session": "Session",
   "activity_automated_session": "Automated session",
   "activity_auto": "Auto",
+  "activity_session_kind_split": [
+    {
+      "declarations": [
+        "input interactive",
+        "input subagents",
+        "input subagentsLabel",
+        "input automated",
+        "local subagentPlural = subagents: plural"
+      ],
+      "selectors": ["subagentPlural"],
+      "match": {
+        "subagentPlural=one": "{interactive} interactive / {subagentsLabel} subagent / {automated} automated",
+        "subagentPlural=other": "{interactive} interactive / {subagentsLabel} subagents / {automated} automated"
+      }
+    }
+  ],
   "activity_interactive_automated_split": "{interactive} interactive / {automated} automated",
   "activity_untimed_count": "{count} untimed",
   "activity_peak_concurrency": "Peak Concurrency",
@@ -1322,7 +1533,6 @@
   "recall_page_generation_retire_message": "Retire {model} ({fingerprint})? Its automatic entries will remain archived.",
   "recall_page_generation_action_error": "Could not update the extraction generation: {error}",
   "session_vitals_title": "Analysis",
-  "session_vitals_subtitle": "Session vital signs",
   "session_vitals_close": "Close session analysis",
   "session_vitals_resize": "Resize session analysis panel",
   "session_vitals_session": "Session",
@@ -1340,9 +1550,15 @@
   "session_vitals_jump_to_call": "Jump to call",
   "session_vitals_turns": "turns",
   "session_vitals_subagents": "sub-agents",
+  "session_vitals_activity": "Turn activity",
+  "session_vitals_activity_tool": "Tool execution",
+  "session_vitals_activity_unattributed": "Unattributed",
+  "session_vitals_activity_turn": "Turn {ordinal} · {duration}",
+  "session_vitals_not_measured": "Not measured",
+  "session_vitals_activity_hint": "Time without measured phase boundaries is unattributed.",
   "session_vitals_time_spent": "Time spent",
   "session_vitals_clear_category_filter": "clear category filter",
-  "session_vitals_completed_turns_hint": "completed turns · click to highlight",
+  "session_vitals_completed_turns_hint": "measured tool time · click to highlight",
   "session_vitals_timeline": "Timeline",
   "session_vitals_click_marks_to_scroll": "click marks to scroll",
   "session_vitals_jump_to_turn": "Jump to {category} turn at {time}",
@@ -1591,7 +1807,7 @@
   "insights_page_no_matching_generators": "No matching generators",
   "insights_page_optional_focus": "Optional focus",
   "insights_page_focus_placeholder": "Narrow the recommendation without changing scored facts",
-  "insights_page_generate_disabled": "Generation is disabled in read-only mode",
+  "insights_page_generate_disabled": "Insight generation is unavailable for this archive",
   "insights_page_generate_title": "Generate quality recommendation",
   "insights_page_generate": "Generate",
   "insights_page_loading_archive": "Loading archive...",
@@ -1736,6 +1952,12 @@
   "settings_session_providers_disabled": "Disabled",
   "settings_session_providers_restart_notice": "Restart the AgentsView daemon and any separate push-watch process to apply these changes.",
   "settings_session_providers_save_failed": "Could not update session providers. Your previous selection is still active.",
+  "settings_session_providers_homes_title": "Alternate homes",
+  "settings_session_providers_homes_hint": "Add an agent home directory such as a custom {envVar}. AgentsView derives its session directories automatically.",
+  "settings_session_providers_homes_placeholder": "~/.{agent}-work",
+  "settings_session_providers_homes_add": "Add home",
+  "settings_session_providers_homes_input_aria": "New {provider} home directory",
+  "settings_session_providers_homes_remove_aria": "Remove {provider} home {home}",
   "appearance_layout_default": "Default",
   "appearance_layout_compact": "Compact",
   "appearance_layout_stream": "Stream",
@@ -1930,6 +2152,7 @@
   "trends_per1k_messages": "Per 1k messages",
   "trends_count": "Count",
   "trends_occurrences_per1k": "Occurrences / 1k messages",
+  "trends_no_occurrences_in_range": "No occurrences in this range",
   "trends_occurrences": "Occurrences",
   "trends_no_trend_data": "No trend data",
   "trends_chart_aria_normalized": "Term occurrence trends per 1,000 messages",
@@ -2022,8 +2245,95 @@
   "activity_finalizing_report": "Finalizing report…",
   "activity_next_sessions_page": "Next sessions",
   "activity_sessions_load_failed": "Failed to load activity sessions",
+  "activity_report_load_failed": "Failed to load activity report",
+  "session_activity_load_failed": "Failed to load activity",
   "appearance_high_contrast": "High contrast",
   "appearance_on": "On",
   "appearance_off": "Off",
-  "appearance_text_size": "Text size"
+  "appearance_zoom": "Zoom",
+  "settings_archive_content_title": "Archive content",
+  "settings_archive_content_description": "What ingestion stores from tool results.",
+  "settings_search_keywords_archive_content": "archive content images retention tool results placeholders storage size",
+  "settings_tool_result_images": "Tool-result images",
+  "settings_tool_result_images_keep": "Keep",
+  "settings_tool_result_images_drop": "Drop",
+  "settings_tool_result_images_offload": "Offload",
+  "settings_tool_result_images_hint": "Stored results keep the policy they were written under, and switching back to Keep cannot restore payloads already removed. Run agentsview db migrate --images to project existing rows.",
+  "settings_tool_result_images_restart_notice": "Restart the AgentsView daemon to apply this change to newly ingested sessions.",
+  "settings_tool_images_title": "Tool-result images",
+  "settings_tool_images_description": "Inline images stored inside tool results.",
+  "settings_search_keywords_tool_images": "images tool results strip cleanup payloads bytes storage",
+  "settings_image_cleanup_intro": "Preview which stored tool results still hold inline image payloads, then replace those payloads with readable placeholders.",
+  "settings_image_cleanup_project_label": "Project contains",
+  "settings_image_cleanup_project_placeholder": "All projects",
+  "settings_image_cleanup_before_label": "Ended before",
+  "settings_image_cleanup_before_placeholder": "YYYY-MM-DD",
+  "settings_image_cleanup_preview": "Preview",
+  "settings_image_cleanup_previewing": "Previewing…",
+  "settings_image_cleanup_preview_failed": "Preview failed.",
+  "settings_image_cleanup_unavailable": "Image removal runs only against a local archive on this machine.",
+  "settings_image_cleanup_proxy_denied": "Image removal must run with AgentsView open directly on this machine, not through a proxy or forwarded port.",
+  "settings_image_cleanup_read_only": "This archive is read-only, so stored rows cannot be changed.",
+  "settings_image_cleanup_empty": "No stored tool result in this selection holds an inline image payload.",
+  "settings_image_cleanup_sessions": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} session selected",
+        "countPlural=other": "{countLabel} sessions selected"
+      }
+    }
+  ],
+  "settings_image_cleanup_payloads": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} image payload",
+        "countPlural=other": "{countLabel} image payloads"
+      }
+    }
+  ],
+  "settings_image_cleanup_by_project": "By project",
+  "settings_image_cleanup_column_project": "Project",
+  "settings_image_cleanup_column_sessions": "Sessions",
+  "settings_image_cleanup_column_payloads": "Payloads",
+  "settings_image_cleanup_column_stored": "Stored",
+  "settings_image_cleanup_column_decoded": "Decoded",
+  "settings_image_cleanup_apply": "Remove image payloads",
+  "settings_image_cleanup_applying": "Removing…",
+  "settings_image_cleanup_apply_failed": "Image removal did not finish. Some sessions may already have changed. Preview again before retrying.",
+  "settings_image_cleanup_busy": "Another archive maintenance operation is already running. Try again once it finishes.",
+  "settings_image_cleanup_confirm_title": "Remove stored image payloads?",
+  "settings_image_cleanup_confirm_close": "Close",
+  "settings_image_cleanup_confirm_scope": "Cleanup covers every session matching these filters when it starts, so new matching content can join it after this preview.",
+  "settings_image_cleanup_confirm_body": "This rewrites the selected stored tool results in place and cannot be undone. Provider transcripts and standalone image files are not touched.",
+  "settings_image_cleanup_confirm_action": "Remove",
+  "settings_image_cleanup_cancel": "Cancel",
+  "settings_image_cleanup_applied": "Image removal completed.",
+  "settings_image_cleanup_changed": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} session changed",
+        "countPlural=other": "{countLabel} sessions changed"
+      }
+    }
+  ],
+  "settings_image_cleanup_compact_note": "Removing payloads rewrites the stored rows. The archive file keeps its size until you run agentsview db compact.",
+  "appearance_render_unknown_xml_blocks": "Render unknown XML blocks as preformatted text",
+  "go_to_session_title": "Go to session",
+  "go_to_session_input_label": "Session ID or UUID",
+  "go_to_session_placeholder": "Paste a session ID or UUID",
+  "go_to_session_submit": "Open session",
+  "go_to_session_close": "Close go to session",
+  "go_to_session_empty": "Enter a session ID or UUID.",
+  "go_to_session_invalid": "Enter a session ID or UUID.",
+  "go_to_session_not_found": "No session matches that ID or UUID.",
+  "go_to_session_ambiguous": "Multiple sessions match that ID or UUID. Open the desired session from an existing link.",
+  "go_to_session_capped": "Too many sessions match that ID or UUID. Open the desired session from an existing link.",
+  "go_to_session_failed": "Could not look up that session. Try again.",
+  "shortcuts_go_to_session": "Go to session when find is closed"
 }

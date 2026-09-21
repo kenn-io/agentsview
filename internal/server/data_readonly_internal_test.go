@@ -16,8 +16,13 @@ type readOnlyDataSpy struct {
 	db.Store
 }
 
+func (readOnlyDataSpy) GetMachineAliases(context.Context) (map[string]string, error) {
+	return map[string]string{}, nil
+}
+
 func (readOnlyDataSpy) GetProjectInventory(
 	_ context.Context,
+	_ db.ProjectDateFilter,
 ) (db.ProjectInventory, error) {
 	return db.ProjectInventory{}, db.ErrReadOnly
 }

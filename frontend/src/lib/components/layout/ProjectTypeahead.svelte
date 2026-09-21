@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Typeahead } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
-  import type { ProjectInfo } from "../../api/types/core.js";
+  import type { DbProjectInfo as ProjectInfo } from "../../api/generated/index.js";
 
   interface Props {
     projects: ProjectInfo[];
@@ -14,6 +14,7 @@
     placeholder?: string;
     title?: string;
     emptyLabel?: string;
+    disabled?: boolean;
   }
 
   let {
@@ -27,6 +28,7 @@
     placeholder = m.shared_project_filter_placeholder(),
     title = m.shared_select_project(),
     emptyLabel = m.shared_no_matching_projects(),
+    disabled = false,
   }: Props = $props();
 
   const allOption = {
@@ -59,6 +61,7 @@
 </script>
 
 <Typeahead
+  {disabled}
   {options}
   {value}
   fallbackLabel={displayValue}

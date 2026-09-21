@@ -4,8 +4,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -197,11 +199,11 @@ func runServeStatus(cfg config.Config) {
 // serveStatusLines renders the human-readable status of a discovered daemon.
 func serveStatusLines(rt *DaemonRuntime) []string {
 	lines := []string{
-		fmt.Sprintf("agentsview running at %s", urlFromDaemonRuntime(rt)),
+		"agentsview running at " + urlFromDaemonRuntime(rt),
 		fmt.Sprintf("  pid:     %d", rt.Record.PID),
 	}
 	if rt.Record.Version != "" {
-		lines = append(lines, fmt.Sprintf("  version: %s", rt.Record.Version))
+		lines = append(lines, "  version: "+rt.Record.Version)
 	}
 	if !rt.Record.StartedAt.IsZero() {
 		uptime := time.Since(rt.Record.StartedAt).Round(time.Second)
@@ -311,7 +313,7 @@ func runServeStop(cfg config.Config) {
 	}
 }
 
-func stopDaemonRuntimeForUpgradeImpl(
+func stopDaemonRuntimeForUpgradeImpl(ctx context.Context,
 	cfg config.Config, rt *DaemonRuntime,
 ) error {
 	if rt == nil {
@@ -323,6 +325,26 @@ func stopDaemonRuntimeForUpgradeImpl(
 			rt.Record.PID,
 		)
 	}
+	// Reject a known port collision before taking down the incumbent. Its
+	// own bind endpoint, including a wildcard bind, is replaceable.
+	if cfg.PortExplicit && cfg.Port != 0 {
+		reusesEndpoint := cfg.Port == rt.Port && cfg.Host == rt.Host
+		if cfg.Port == rt.Port && !reusesEndpoint {
+			port := strconv.Itoa(cfg.Port)
+			requested, requestedErr := net.ResolveTCPAddr("tcp", net.JoinHostPort(cfg.Host, port))
+			incumbent, incumbentErr := net.ResolveTCPAddr("tcp", net.JoinHostPort(rt.Host, port))
+			if requestedErr == nil && incumbentErr == nil {
+				reusesEndpoint = (requested.IP.Equal(incumbent.IP) && requested.Zone == incumbent.Zone) ||
+					len(incumbent.IP) == 0 || incumbent.IP.IsUnspecified()
+			}
+		}
+		// A wider bind may also overlap an unrelated listener on the same port.
+		if !reusesEndpoint {
+			if _, err := prepareServeRuntimeConfig(ctx, cfg, serveRuntimeOptions{}); err != nil {
+				return err
+			}
+		}
+	}
 	if err := stopDaemonProcess(rt.Record, serveStopGraceTimeout); err != nil {
 		return fmt.Errorf("stopping pid %d: %w", rt.Record.PID, err)
 	}
@@ -330,7 +352,7 @@ func stopDaemonRuntimeForUpgradeImpl(
 	return nil
 }
 
-func stopWritableDaemonsForUpdate(
+func stopWritableDaemonsForUpdate(ctx context.Context,
 	cfg config.Config,
 ) (updateDaemonStopResult, error) {
 	records, _ := localWritableDaemonRecordsWithFallback(
@@ -350,19 +372,18 @@ func stopWritableDaemonsForUpdate(
 		if !result.Stopped {
 			result.Host = rt.Host
 			result.Port = rt.Port
+			result.ExplicitPort = rt.ExplicitPort
 			result.RequireAuth = rt.RequireAuth
 			result.RequireAuthKnown = rt.RequireAuthKnown
 			result.NoSync = rt.NoSync
 		}
-		if err := stopDaemonRuntimeForUpgrade(cfg, rt); err != nil {
+		if err := stopDaemonRuntimeForUpgrade(ctx, cfg, rt); err != nil {
 			return result, err
 		}
 		result.Stopped = true
 	}
 	if !result.Stopped && IsDaemonStarting(cfg.DataDir) {
-		return result, fmt.Errorf(
-			"agentsview server is starting; retry the update once it is ready",
-		)
+		return result, errors.New("agentsview server is starting; retry the update once it is ready")
 	}
 	return result, nil
 }
@@ -448,7 +469,7 @@ func stopOrphanedCaddyChildWithWriter(
 	}
 	pid, err := strconv.Atoi(raw)
 	if err != nil || pid <= 0 {
-		return nil
+		return nil //nolint:nilerr // Invalid optional PID metadata cannot identify a process to stop.
 	}
 	if !daemon.ProcessAlive(pid) {
 		return nil

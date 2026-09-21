@@ -5,6 +5,7 @@ package postgres
 import (
 	"context"
 	"slices"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -39,6 +40,33 @@ func TestGetActiveProjectLabelsIncludesRelationshipSessions(t *testing.T) {
 	assert.Equal(t, []string{
 		"child-only", "fork-only", "test-project",
 	}, labels)
+}
+
+func TestSessionFilterIncludesEmptyForProjectMapping(t *testing.T) {
+	pgURL := testPGURL(t)
+	ensureStoreSchema(t, pgURL)
+	store, err := NewStore(pgURL, testSchema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { store.Close() })
+	_, err = store.DB().Exec(`INSERT INTO sessions (id, machine, project, agent, message_count)
+		VALUES ('empty', 'm', 'mapping', 'claude', 0), ('populated', 'm', 'mapping', 'claude', 2)`)
+	require.NoError(t, err)
+	for _, includeEmpty := range []bool{false, true} {
+		page, err := store.ListSessions(context.Background(), db.SessionFilter{
+			ProjectLabels: []string{"mapping"}, IncludeEmpty: includeEmpty,
+		})
+		require.NoError(t, err)
+		ids := make([]string, len(page.Sessions))
+		for i, session := range page.Sessions {
+			ids[i] = session.ID
+		}
+		want := []string{"populated"}
+		if includeEmpty {
+			want = append(want, "empty")
+		}
+		assert.ElementsMatch(t, want, ids)
+		assert.Equal(t, len(want), page.Total)
+	}
 }
 
 func TestListSessionsDateFilterIncludesOverlappingSessions(t *testing.T) {
@@ -458,7 +486,7 @@ func TestFindSessionIDsByPartialLiteralCaseSensitivePG(t *testing.T) {
 
 	local := testDB(t)
 	for _, id := range []string{"abc_def", "abcXdef", "abc%def", "ABCdef"} {
-		require.NoError(t, local.UpsertSession(db.Session{
+		require.NoError(t, local.UpsertSession(t.Context(), db.Session{
 			ID: id, Project: "proj", Machine: "local",
 			Agent: "claude", MessageCount: 1,
 		}), "upsert %q", id)
@@ -487,4 +515,72 @@ func TestFindSessionIDsByPartialLiteralCaseSensitivePG(t *testing.T) {
 	require.NoError(t, err, "case-sensitive lookup")
 	assert.ElementsMatch(t, []string{"abc_def", "abcXdef", "abc%def"}, got)
 	assert.NotContains(t, got, "ABCdef")
+}
+
+func TestFindSessionIDsByRawSuffixPG(t *testing.T) {
+	pgURL := testPGURL(t)
+	const schema = "agentsview_raw_suffix_test"
+
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	insert := func(id, ended string, deleted bool) {
+		deletedAt := any(nil)
+		if deleted {
+			deletedAt = "2024-01-01T00:00:00Z"
+		}
+		_, insertErr := pg.Exec(`
+			INSERT INTO sessions
+				(id, machine, project, agent, message_count, created_at, ended_at, deleted_at)
+			VALUES ($1, 'test', 'project', 'claude', 1, $2, $2, $3)`,
+			id, ended, deletedAt,
+		)
+		require.NoError(t, insertErr, "insert %q", id)
+	}
+	insert("remote~U", "2024-01-01T00:00:00Z", false)
+	for i := range 1000 {
+		insert("remote~U-E"+strconv.Itoa(i), "2025-01-01T00:00:00Z", false)
+	}
+	insert("host~P-E", "2024-01-02T00:00:00Z", false)
+	insert("codex:colon", "2024-01-02T00:00:00Z", false)
+	insert("host~wild_%_literal", "2024-01-03T00:00:00Z", false)
+	insert("host~trashed", "2024-01-04T00:00:00Z", true)
+	insert("plain-id", "2024-01-05T00:00:00Z", false)
+
+	store := &Store{pg: pg}
+	got, err := store.FindSessionIDsByRawSuffix(ctx, "U", 2)
+	require.NoError(t, err, "host suffix lookup")
+	assert.Equal(t, []string{"remote~U"}, got)
+	rootIDs := append([]string(nil), got...)
+
+	got, err = store.FindSessionIDsByRawSuffix(ctx, "colon", 2)
+	require.NoError(t, err, "colon suffix lookup")
+	assert.Equal(t, []string{"codex:colon"}, got)
+	colonIDs := append([]string(nil), got...)
+
+	got, err = store.FindSessionIDsByRawSuffix(ctx, "wild_%_literal", 2)
+	require.NoError(t, err, "literal wildcard lookup")
+	assert.Equal(t, []string{"host~wild_%_literal"}, got)
+	wildcardIDs := append([]string(nil), got...)
+
+	got, err = store.FindSessionIDsByRawSuffix(ctx, "trashed", 2)
+	require.NoError(t, err, "visibility lookup")
+	assert.Empty(t, got)
+	trashedIDs := append([]string(nil), got...)
+
+	got, err = store.FindSessionIDsByRawSuffix(ctx, "E", 2)
+	require.NoError(t, err, "fork entry lookup")
+	assert.Empty(t, got)
+	entryIDs := append([]string(nil), got...)
+
+	got, err = store.FindSessionIDsByRawSuffix(ctx, "plain-id", 2)
+	require.NoError(t, err, "exact lookup")
+	assert.Equal(t, []string{"plain-id"}, got)
+	t.Logf("head: postgres_root=%v colon=%v wildcard=%v trashed=%v entry=%v exact=%v", rootIDs, colonIDs, wildcardIDs, trashedIDs, entryIDs, got)
 }

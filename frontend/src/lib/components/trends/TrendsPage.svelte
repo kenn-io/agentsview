@@ -444,7 +444,7 @@
   }
 
   button:disabled {
-    opacity: 0.65;
+    opacity: var(--opacity-disabled);
     cursor: default;
   }
 

@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/rawderive"
 	"go.kenn.io/agentsview/internal/rawsync"
 )
 
@@ -138,6 +139,274 @@ func TestRawIngestStoreCommitIsAtomicFencedAndIdempotent(t *testing.T) {
 	assert.Equal(t, second.ManifestID, headManifest)
 	assert.Equal(t, second.Receipt, headReceipt)
 	assert.Equal(t, int64(2), generation)
+}
+
+func TestRawIngestStoreCommitSupersedesPriorHeadParseJob(t *testing.T) {
+	pg, store := newRawIngestTestStore(t)
+	identity := rawIngestIdentity(t, "tenant-a")
+	object := rawIngestObject(t, "a", 7)
+	require.NoError(t, store.RecordVerifiedObject(t.Context(), identity, object))
+	firstManifest := rawIngestManifest(
+		t, identity, "capture-a", "", rawIngestCapturedAt(), object,
+	)
+	first, err := store.CommitManifest(t.Context(), firstManifest, "parser-data-17")
+	require.NoError(t, err)
+	secondManifest := rawIngestManifest(
+		t, identity, "capture-b", first.Receipt,
+		rawIngestCapturedAt().Add(time.Minute), object,
+	)
+	second, err := store.CommitManifest(t.Context(), secondManifest, "parser-data-17")
+	require.NoError(t, err)
+
+	priorState, priorOwner, priorExpiry := readRawParseJob(
+		t, pg, identity.TenantID, firstManifest.ManifestID,
+	)
+	assert.Equal(t, "superseded", priorState,
+		"advancing a source head must retire its prior ready parse job in the commit itself")
+	assert.Empty(t, priorOwner)
+	assert.False(t, priorExpiry.Valid)
+	headState, _, _ := readRawParseJob(
+		t, pg, identity.TenantID, secondManifest.ManifestID,
+	)
+	assert.Equal(t, "ready", headState,
+		"the new current-head parse job must stay claimable")
+
+	// Terminal jobs must survive later head advances untouched.
+	lease := claimOneRawParseJob(t, store)
+	assert.Equal(t, secondManifest.ManifestID, lease.ManifestID)
+	require.NoError(t, store.CompleteRawParseJob(t.Context(), lease))
+	thirdManifest := rawIngestManifest(
+		t, identity, "capture-c", second.Receipt,
+		rawIngestCapturedAt().Add(2*time.Minute), object,
+	)
+	_, err = store.CommitManifest(t.Context(), thirdManifest, "parser-data-17")
+	require.NoError(t, err)
+	completedState, _, _ := readRawParseJob(
+		t, pg, identity.TenantID, secondManifest.ManifestID,
+	)
+	assert.Equal(t, "complete", completedState,
+		"a terminal prior job must never be rewritten by a later head advance")
+	thirdState, _, _ := readRawParseJob(
+		t, pg, identity.TenantID, thirdManifest.ManifestID,
+	)
+	assert.Equal(t, "ready", thirdState)
+}
+
+func TestRawIngestStoreCommitFencesLeasedPriorHeadParseJob(t *testing.T) {
+	pg, store := newRawIngestTestStore(t)
+	identity := rawIngestIdentity(t, "tenant-a")
+	object := rawIngestObject(t, "a", 7)
+	require.NoError(t, store.RecordVerifiedObject(t.Context(), identity, object))
+	firstManifest := rawIngestManifest(
+		t, identity, "capture-a", "", rawIngestCapturedAt(), object,
+	)
+	first, err := store.CommitManifest(t.Context(), firstManifest, "parser-data-17")
+	require.NoError(t, err)
+	lease := claimOneRawParseJob(t, store)
+
+	secondManifest := rawIngestManifest(
+		t, identity, "capture-b", first.Receipt,
+		rawIngestCapturedAt().Add(time.Minute), object,
+	)
+	_, err = store.CommitManifest(t.Context(), secondManifest, "parser-data-17")
+	require.NoError(t, err)
+
+	state, owner, expiry := readRawParseJob(
+		t, pg, identity.TenantID, firstManifest.ManifestID,
+	)
+	assert.Equal(t, "superseded", state,
+		"an advancing head must fence a leased prior job immediately")
+	assert.Empty(t, owner)
+	assert.False(t, expiry.Valid)
+	err = store.CompleteRawParseJob(t.Context(), lease)
+	assert.ErrorIs(t, err, rawderive.ErrLeaseLost)
+	err = store.RetryRawParseJob(
+		t.Context(), lease, time.Now().Add(time.Minute), "object_store", "fenced",
+	)
+	assert.ErrorIs(t, err, rawderive.ErrLeaseLost)
+}
+
+func TestRawIngestStoreCommitDoesNotOverwriteTerminalPriorHeadJobAfterWait(
+	t *testing.T,
+) {
+	for _, terminal := range []string{"complete", "failed"} {
+		t.Run(terminal, func(t *testing.T) {
+			pg, store := newRawIngestTestStore(t)
+			identity := rawIngestIdentity(t, "tenant-a")
+			object := rawIngestObject(t, "a", 7)
+			require.NoError(t, store.RecordVerifiedObject(t.Context(), identity, object))
+			firstManifest := rawIngestManifest(
+				t, identity, "capture-a", "", rawIngestCapturedAt(), object,
+			)
+			first, err := store.CommitManifest(t.Context(), firstManifest, "parser-data-17")
+			require.NoError(t, err)
+			lease := claimOneRawParseJob(t, store)
+
+			// A worker holds the leased prior-head job's row lock with the same
+			// guarded terminal transition CompleteRawParseJob and FailRawParseJob
+			// perform, but leaves it uncommitted so the commit below must wait.
+			worker, err := pg.BeginTx(t.Context(), nil)
+			require.NoError(t, err)
+			defer func() { _ = worker.Rollback() }()
+			_, err = worker.ExecContext(t.Context(), `
+				UPDATE raw_ingest_jobs AS job
+				SET state = $4, lease_owner = '', lease_expires_at = NULL,
+					updated_at = now()
+				WHERE job.id = $1 AND job.lease_owner = $2
+					AND job.attempt_count = $3
+					AND job.state = 'leased' AND job.lease_expires_at > now()
+					AND EXISTS (
+						SELECT 1
+						FROM raw_manifests AS manifest
+						JOIN raw_source_heads AS head
+							ON head.tenant_id = manifest.tenant_id
+							AND head.device_id = manifest.device_id
+							AND head.provider = manifest.provider
+							AND head.configured_root_id = manifest.configured_root_id
+							AND head.source_key_sha256 = manifest.source_key_sha256
+							AND head.manifest_id = manifest.manifest_id
+						WHERE manifest.tenant_id = job.tenant_id
+							AND manifest.manifest_id = job.manifest_id
+					)`,
+				lease.ID, lease.Owner, lease.Attempt, terminal,
+			)
+			require.NoError(t, err)
+
+			// The committing pool carries a distinct application name so the
+			// test can observe in pg_stat_activity exactly when its supersession
+			// statement starts waiting on the worker's row lock.
+			committerURL, err := appendConnParams(testPGURL(t), map[string]string{
+				"application_name": "raw-commit-supersession",
+			})
+			require.NoError(t, err)
+			committer, err := Open(committerURL, schemaTestSchema, true)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, committer.Close()) })
+			committerStore, err := NewRawIngestStore(committer)
+			require.NoError(t, err)
+
+			secondManifest := rawIngestManifest(
+				t, identity, "capture-b", first.Receipt,
+				rawIngestCapturedAt().Add(time.Minute), object,
+			)
+			commitDone := make(chan rawIngestOutcome, 1)
+			go func() {
+				result, err := committerStore.CommitManifest(
+					t.Context(), secondManifest, "parser-data-17",
+				)
+				commitDone <- rawIngestOutcome{result: result, err: err}
+			}()
+
+			// By the time the commit waits on a lock, its supersession statement
+			// has already qualified the leased prior-head row from its snapshot.
+			require.Eventually(t, func() bool {
+				var waiting int
+				err := pg.QueryRowContext(t.Context(), `
+					SELECT count(*)
+					FROM pg_stat_activity
+					WHERE application_name = 'raw-commit-supersession'
+					AND state = 'active' AND wait_event_type = 'Lock'`,
+				).Scan(&waiting)
+				return err == nil && waiting == 1
+			}, 10*time.Second, 10*time.Millisecond,
+				"commit supersession should wait behind the terminal prior-head update")
+
+			require.NoError(t, worker.Commit(), "releasing the terminal prior-head update")
+			var got rawIngestOutcome
+			select {
+			case got = <-commitDone:
+			case <-time.After(10 * time.Second):
+				t.Fatal("commit manifest never finished after the worker released the row")
+			}
+			require.NoError(t, got.err)
+			assert.True(t, got.result.Created)
+
+			state, owner, expiry := readRawParseJob(
+				t, pg, identity.TenantID, firstManifest.ManifestID,
+			)
+			assert.Equal(t, terminal, state,
+				"a job that reached a terminal state while the commit waited must never be rewritten as superseded")
+			assert.Empty(t, owner)
+			assert.False(t, expiry.Valid)
+			headState, _, _ := readRawParseJob(
+				t, pg, identity.TenantID, secondManifest.ManifestID,
+			)
+			assert.Equal(t, "ready", headState,
+				"the new current-head parse job must stay claimable")
+		})
+	}
+}
+
+func TestRawIngestStoreCommitSupersedesSingleLegacyPriorHeadJob(t *testing.T) {
+	pg, store := newRawIngestTestStore(t)
+	identity := rawIngestIdentity(t, "tenant-a")
+	object := rawIngestObject(t, "a", 7)
+	require.NoError(t, store.RecordVerifiedObject(t.Context(), identity, object))
+	firstManifest := rawIngestManifest(
+		t, identity, "capture-a", "", rawIngestCapturedAt(), object,
+	)
+	first, err := store.CommitManifest(t.Context(), firstManifest, "parser-data-17")
+	require.NoError(t, err)
+
+	// The job unique key is (tenant, manifest, stage, processing_version), so
+	// a prior deployment can leave several nonterminal parse jobs behind for
+	// the same head manifest.
+	for _, version := range []string{"legacy-1", "legacy-2", "legacy-3"} {
+		_, err := pg.ExecContext(t.Context(), `
+			INSERT INTO raw_ingest_jobs (
+				tenant_id, manifest_id, stage, processing_version, state
+			) VALUES ($1, $2, 'parse', $3, 'ready')`,
+			identity.TenantID, firstManifest.ManifestID, version,
+		)
+		require.NoError(t, err)
+	}
+
+	secondManifest := rawIngestManifest(
+		t, identity, "capture-b", first.Receipt,
+		rawIngestCapturedAt().Add(time.Minute), object,
+	)
+	_, err = store.CommitManifest(t.Context(), secondManifest, "parser-data-17")
+	require.NoError(t, err)
+
+	var superseded, nonterminal int
+	require.NoError(t, pg.QueryRowContext(t.Context(), `
+		SELECT
+			count(*) FILTER (WHERE state = 'superseded'),
+			count(*) FILTER (WHERE state IN ('ready', 'retrying', 'leased'))
+		FROM raw_ingest_jobs
+		WHERE tenant_id = $1 AND manifest_id = $2 AND stage = 'parse'`,
+		identity.TenantID, firstManifest.ManifestID,
+	).Scan(&superseded, &nonterminal))
+	assert.Equal(t, 1, superseded,
+		"a head advance must supersede exactly one prior-head job")
+	assert.Equal(t, 3, nonterminal,
+		"legacy duplicate prior-head jobs must stay nonterminal for the bounded fallback cleanup")
+
+	var supersededVersion string
+	require.NoError(t, pg.QueryRowContext(t.Context(), `
+		SELECT processing_version FROM raw_ingest_jobs
+		WHERE tenant_id = $1 AND manifest_id = $2 AND stage = 'parse'
+			AND state = 'superseded'`,
+		identity.TenantID, firstManifest.ManifestID,
+	).Scan(&supersededVersion))
+	assert.Equal(t, "parser-data-17", supersededVersion,
+		"the deterministic candidate must be the lowest-id prior-head job")
+}
+
+func readRawParseJob(
+	t *testing.T,
+	pg *sql.DB,
+	tenantID string,
+	manifestID string,
+) (state string, leaseOwner string, leaseExpiresAt sql.NullTime) {
+	t.Helper()
+	require.NoError(t, pg.QueryRowContext(t.Context(), `
+		SELECT state, lease_owner, lease_expires_at
+		FROM raw_ingest_jobs
+		WHERE tenant_id = $1 AND manifest_id = $2 AND stage = 'parse'`,
+		tenantID, manifestID,
+	).Scan(&state, &leaseOwner, &leaseExpiresAt))
+	return state, leaseOwner, leaseExpiresAt
 }
 
 func TestRawIngestStoreMissingObjectChangesNoAcceptanceState(t *testing.T) {

@@ -16,11 +16,15 @@ import { sync } from "./lib/stores/sync.svelte.js";
 import { ui } from "./lib/stores/ui.svelte.js";
 import { usage } from "./lib/stores/usage.svelte.js";
 import { yokedDates } from "./lib/stores/yokedDates.svelte.js";
-import type { Message } from "./lib/api/types.js";
+import type { DbMessage as Message } from "./lib/api/generated/index.js";
 import { hasVisibleSegments } from "./lib/utils/content-parser.js";
 import sourceRaw from "./App.svelte?raw";
 import { SESSION_FILTER_KEYS } from "./lib/stores/sessionRouteParams.js";
 import { SessionsService } from "./lib/api/generated/index.js";
+import { dismissFlash } from "@kenn-io/kit-ui";
+vi.mock("./lib/feature-flags.js", () => ({
+  PROJECT_MAPPING_WORKSPACE_ENABLED: true,
+}));
 // @ts-ignore
 import App, { findUserPromptOrdinal } from "./App.svelte";
 
@@ -115,6 +119,22 @@ afterEach(() => {
   settings.readOnly = false;
   settings.error = null;
   sync.serverVersion = null;
+  settings.saveError = null;
+  dismissFlash();
+});
+
+it("shows settings save errors through the app shell", async () => {
+  stubAppDependencies();
+  router.route = "settings";
+  settings.saveError = "settings endpoint unavailable";
+  component = mount(App, { target: document.body });
+  await flushEffects();
+
+  const flash = document.body.querySelector<HTMLElement>(
+    '.kit-flash-banner[data-kit-tone="danger"]',
+  );
+  expect(flash).not.toBeNull();
+  expect(flash?.textContent).toContain("settings endpoint unavailable");
 });
 
 function appSourceSlice(startMarker: string, endMarker: string): string {
@@ -124,6 +144,32 @@ function appSourceSlice(startMarker: string, endMarker: string): string {
   expect(end).toBeGreaterThan(start);
   return source.slice(start, end);
 }
+
+it("keeps the first analytics range for a window_days=90 deep link", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-06-20T12:00:00"));
+  stubAppDependencies();
+  vi.spyOn(sessions, "load").mockResolvedValue();
+  sessions.loading = true;
+  window.history.replaceState(null, "", "/sessions?window_days=90");
+  router.route = "sessions";
+  router.params = { window_days: "90" };
+  router.isRootPath = false;
+  const ranges: string[][] = [];
+  vi.mocked(analytics.fetchAll).mockImplementation(async () => {
+    ranges.push([analytics.from, analytics.to]);
+  });
+  component = mount(App, { target: document.body });
+  await flushEffects();
+  expect(analytics.fetchAll).not.toHaveBeenCalled();
+  sessions.loading = false;
+  await flushEffects();
+  await vi.advanceTimersByTimeAsync(0);
+  await flushEffects();
+  expect(ranges).toHaveLength(1);
+  expect(ranges[0]).toEqual(["2026-03-23", "2026-06-20"]);
+  expect(analytics.windowDays).toBe(90);
+});
 
 describe("App Recall availability", () => {
   it("opens Generated insights without querying the corpus on a read-only backend", async () => {
@@ -166,6 +212,9 @@ describe("App Recall availability", () => {
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
 
     sync.serverVersion = {
+      api_version: 1,
+      data_version: 1,
+      insight_generation_available: false,
       version: "dev",
       commit: "unknown",
       build_date: "",
@@ -440,6 +489,17 @@ describe("App session URL date state", () => {
 
     sessions.sessions = [
       {
+        compaction_count: 0,
+        consecutive_failure_max: 0,
+        edit_churn_count: 0,
+        ended_with_role: "",
+        final_failure_streak: 0,
+        mid_task_compaction_count: 0,
+        outcome: "",
+        outcome_confidence: "",
+        secret_leak_count: 0,
+        tool_failure_signal_count: 0,
+        tool_retry_count: 0,
         id: "session-1",
         project: "proj-a",
         machine: "local",

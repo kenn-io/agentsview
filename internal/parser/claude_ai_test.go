@@ -94,8 +94,7 @@ func TestParseClaudeAIExport(t *testing.T) {
 	assert.Equal(t, "Test Chat", s.SessionName)
 	assert.Equal(t, 2, s.MessageCount)
 	assert.Equal(t, 1, s.UserMessageCount)
-	assert.Equal(t,
-		"2026-01-15T10:00:00.000000Z",
+	assert.Equal(t, "2026-01-15T10:00:00.000000Z",
 		s.StartedAt.Format("2006-01-02T15:04:05.000000Z"),
 	)
 
@@ -269,13 +268,11 @@ func TestParseClaudeAIExport_AttachmentFallbackPaths(t *testing.T) {
 
 	msgs := results[0].Messages
 	require.Len(t, msgs, 2)
-	assert.Equal(
-		t,
+	assert.Equal(t,
 		"Top-level text survives.\n\nattachment with no filename",
 		msgs[0].Content,
 	)
-	assert.Equal(
-		t,
+	assert.Equal(t,
 		"Fallback text survives too.\n\nattachment after unsupported block",
 		msgs[1].Content,
 	)

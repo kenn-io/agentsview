@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -82,13 +81,17 @@ func TestSelfParentNeverPersists(t *testing.T) {
 		{
 			name: "UpsertSession",
 			write: func(t *testing.T, d *DB) string {
-				require.NoError(t, d.UpsertSession(selfParented("upsert-self")))
+				t.Helper()
+
+				require.NoError(t, d.UpsertSession(t.Context(), selfParented("upsert-self")))
 				return "upsert-self"
 			},
 		},
 		{
 			name: "WriteSessionBatch",
 			write: func(t *testing.T, d *DB) string {
+				t.Helper()
+
 				_, err := d.WriteSessionBatch([]SessionBatchWrite{{
 					Session:  selfParented("batch-self"),
 					Messages: []Message{spawnEdgeTo("batch-self", "batch-self", "self")},
@@ -100,9 +103,11 @@ func TestSelfParentNeverPersists(t *testing.T) {
 		{
 			name: "ApplyArtifactImportedSession",
 			write: func(t *testing.T, d *DB) string {
+				t.Helper()
+
 				gid := origin + "~import-self"
 				result, err := d.ApplyArtifactImportedSession(
-					context.Background(),
+					t.Context(),
 					ArtifactImportedSession{
 						Origin: origin, GID: gid,
 						ManifestHash:      strings.Repeat("b", 64),
@@ -123,7 +128,7 @@ func TestSelfParentNeverPersists(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
 			id := tc.write(t, d)
-			s, err := d.GetSession(context.Background(), id)
+			s, err := d.GetSession(t.Context(), id)
 			require.NoError(t, err)
 			require.NotNil(t, s)
 			assert.Nil(t, s.ParentSessionID)

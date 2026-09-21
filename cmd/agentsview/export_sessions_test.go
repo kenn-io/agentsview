@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"database/sql"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -10,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -27,6 +27,7 @@ import (
 type exportSessionsDocument struct {
 	Type          string                 `json:"type"`
 	SchemaVersion int                    `json:"schema_version"`
+	ArchiveID     string                 `json:"archive_id"`
 	DatabaseID    string                 `json:"database_id"`
 	Cursor        exportSessionsCursor   `json:"cursor"`
 	Pricing       map[string]any         `json:"pricing"`
@@ -39,6 +40,42 @@ type exportSessionsDocument struct {
 
 type exportSessionsCursor struct {
 	Next string `json:"next"`
+}
+
+func TestExportSessionsPublishesArchiveIdentity(t *testing.T) {
+	for _, format := range []string{"json", "ndjson"} {
+		for _, empty := range []bool{false, true} {
+			t.Run(format+"/empty="+strconv.FormatBool(empty), func(t *testing.T) {
+				database := seedExportSessionsArchive(t)
+				require.NoError(t, database.SetArchiveIdentityForTest(
+					t.Context(), "stable-archive", strings.Repeat("a", 64),
+				))
+				args := []string{"export", "sessions", "--format", format, "--limit", "1"}
+				if empty {
+					args = append(args, "--project", "absent")
+				}
+				stdout, stderr, err := executeExportSessionsCommand(newRootCommand(), args...)
+				require.NoError(t, err)
+				require.Empty(t, stderr)
+				if format == "ndjson" {
+					stdout, _, _ = strings.Cut(stdout, "\n")
+				}
+				doc := decodeExportSessionsDocument(t, stdout)
+				assert.Equal(t, "stable-archive", doc.ArchiveID)
+				assert.Equal(t, "export-sessions-test-db", doc.DatabaseID)
+				if !empty {
+					require.NotEmpty(t, doc.Cursor.Next)
+					stdout, stderr, err = executeExportSessionsCommand(newRootCommand(),
+						"export", "sessions", "--cursor", doc.Cursor.Next)
+					require.NoError(t, err)
+					require.Empty(t, stderr)
+					resumed := decodeExportSessionsDocument(t, stdout)
+					assert.Equal(t, "stable-archive", resumed.ArchiveID)
+					assert.Equal(t, doc.DatabaseID, resumed.DatabaseID)
+				}
+			})
+		}
+	}
 }
 
 func TestExportSessionsJSONEmitsOneDocument(t *testing.T) {
@@ -101,7 +138,7 @@ func TestExportSessionsJSONNoUsageKeepsClosedCostSource(t *testing.T) {
 
 	doc := decodeExportSessionsDocument(t, stdout)
 	assert.Equal(t, "computed", doc.Pricing["cost_source"])
-	assert.NotEqual(t, "", doc.Pricing["cost_source"])
+	assert.NotEmpty(t, doc.Pricing["cost_source"])
 }
 
 func TestExportSessionsNDJSONEmitsMetaThenRows(t *testing.T) {
@@ -174,7 +211,7 @@ func TestExportSessionsAllJSONPreservesCostOnlyReportedPricingAcrossPages(
 	dataDir := testDataDir(t)
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
 	require.NoError(t, database.SetDatabaseIDForTest(
-		context.Background(), "cost-only-reported-export-db"))
+		t.Context(), "cost-only-reported-export-db"))
 	require.NoError(t, database.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern: "computed-model", InputPerMTok: money.MustParseDollars("1"),
 	}}))
@@ -184,7 +221,7 @@ func TestExportSessionsAllJSONPreservesCostOnlyReportedPricingAcrossPages(
 		EndedAt:      dbtest.Ptr("2026-06-16T11:10:00Z"),
 		MessageCount: 2, UserMessageCount: 2,
 	})
-	require.NoError(t, database.InsertMessages([]db.Message{{
+	require.NoError(t, database.InsertMessages(t.Context(), []db.Message{{
 		SessionID: "computed", Ordinal: 0, Role: "assistant",
 		Timestamp: "2026-06-16T11:05:00Z", Model: "computed-model",
 		TokenUsage: jsontext.Value(`{"input_tokens":1000000}`),
@@ -196,7 +233,7 @@ func TestExportSessionsAllJSONPreservesCostOnlyReportedPricingAcrossPages(
 		MessageCount: 2, UserMessageCount: 2,
 	})
 	reportedCost := money.MustParseDollars("0.03")
-	require.NoError(t, database.ReplaceSessionUsageEvents(
+	require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(),
 		"cost-only-reported", []db.UsageEvent{{
 			Source: "shutdown", Model: "copilot-cost-only",
 			Cost: &reportedCost, CostStatus: "exact",
@@ -235,7 +272,7 @@ func TestBuildExportSessionsOutputMarksCrossPageProjectConflictAmbiguous(t *test
 		}}
 	}
 
-	got := buildExportSessionsOutput("database", []db.SessionExportResult{
+	got := buildExportSessionsOutput([]db.SessionExportResult{
 		page("p1:sha256:first"), page("p1:sha256:second"),
 	})
 
@@ -395,8 +432,7 @@ func TestExportSessionsInvalidCursorWritesStructuredResetError(t *testing.T) {
 	var got exportSessionsDocument
 	require.NoError(t, json.Unmarshal([]byte(stderr), &got))
 	assert.Equal(t, "cursor_reset", got.Error)
-	assert.Equal(t,
-		"session export cursor is no longer valid; restart the export",
+	assert.Equal(t, "session export cursor is no longer valid; restart the export",
 		got.Message,
 	)
 	assert.NotEmpty(t, got.DatabaseID)
@@ -410,7 +446,7 @@ func TestExportSessionsWrongDatabaseCursorWritesStructuredResetError(t *testing.
 	otherDir := t.TempDir()
 	other := seedExportSessionsArchiveAt(t, filepath.Join(otherDir, "sessions.db"))
 	require.NoError(t, other.SetDatabaseIDForTest(
-		context.Background(), "other-export-sessions-test-db"))
+		t.Context(), "other-export-sessions-test-db"))
 	t.Setenv("AGENTSVIEW_DATA_DIR", otherDir)
 
 	stdout, stderr, err := executeExportSessionsCommand(
@@ -423,8 +459,7 @@ func TestExportSessionsWrongDatabaseCursorWritesStructuredResetError(t *testing.
 	var got exportSessionsDocument
 	require.NoError(t, json.Unmarshal([]byte(stderr), &got))
 	assert.Equal(t, "cursor_reset", got.Error)
-	assert.Equal(t,
-		"session export cursor is no longer valid; restart the export",
+	assert.Equal(t, "session export cursor is no longer valid; restart the export",
 		got.Message,
 	)
 	assert.NotEmpty(t, got.DatabaseID)
@@ -434,7 +469,7 @@ func TestExportSessionsCursorResetMainStderrIsOnlyStructuredJSON(t *testing.T) {
 	dataDir := testDataDir(t)
 	seedExportSessionsArchiveAt(t, filepath.Join(dataDir, "sessions.db"))
 
-	cmd := exec.Command(
+	cmd := exec.CommandContext(t.Context(),
 		os.Args[0],
 		"-test.run=^TestExportSessionsCursorResetMainHelperProcess$",
 		"--",
@@ -457,8 +492,7 @@ func TestExportSessionsCursorResetMainStderrIsOnlyStructuredJSON(t *testing.T) {
 	var got exportSessionsDocument
 	require.NoError(t, json.Unmarshal([]byte(stderr), &got))
 	assert.Equal(t, "cursor_reset", got.Error)
-	assert.Equal(t,
-		"session export cursor is no longer valid; restart the export",
+	assert.Equal(t, "session export cursor is no longer valid; restart the export",
 		got.Message,
 	)
 	assert.NotEmpty(t, got.DatabaseID)
@@ -468,7 +502,7 @@ func TestExportSessionsMainStillPrintsFatalForNonCursorErrors(t *testing.T) {
 	dataDir := testDataDir(t)
 	seedExportSessionsArchiveAt(t, filepath.Join(dataDir, "sessions.db"))
 
-	cmd := exec.Command(
+	cmd := exec.CommandContext(t.Context(),
 		os.Args[0],
 		"-test.run=^TestExportSessionsCursorResetMainHelperProcess$",
 		"--",
@@ -500,7 +534,7 @@ func TestExportSessionsCursorResetMainHelperProcess(t *testing.T) {
 			return
 		}
 	}
-	t.Fatal("missing helper args")
+	require.FailNow(t, "missing helper args")
 }
 
 func TestExportSessionsExitCode4ReservedForCursorReset(t *testing.T) {
@@ -556,10 +590,10 @@ func TestExportSessionsRequiresExistingDatabaseID(t *testing.T) {
 	assert.Empty(t, stderr)
 	assert.Contains(t, err.Error(), "database id")
 
-	readonly, openErr := db.OpenReadOnly(dbPath)
+	readonly, openErr := db.OpenReadOnly(t.Context(), dbPath)
 	require.NoError(t, openErr)
 	t.Cleanup(func() { require.NoError(t, readonly.Close()) })
-	_, idErr := readonly.GetDatabaseID(context.Background())
+	_, idErr := readonly.GetDatabaseID(t.Context())
 	require.ErrorIs(t, idErr, db.ErrDatabaseIDMissing)
 }
 
@@ -575,7 +609,11 @@ func TestExportSessionsUpgradeRequiresBackgroundEvidenceBackfill(t *testing.T) {
 	require.NoError(t, database.Close())
 	raw, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	_, err = raw.Exec(`DROP TABLE session_project_identity_snapshots`)
+	_, err = raw.ExecContext(t.Context(), `
+		DROP TABLE session_project_identity_snapshots;
+		DROP TABLE conversation_messages;
+		DROP TABLE conversation_session_changes;
+	`)
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
 
@@ -599,13 +637,13 @@ func TestExportSessionsUpgradeRequiresBackgroundEvidenceBackfill(t *testing.T) {
 	require.NoError(t, err)
 	defer raw.Close()
 	var exists int
-	require.NoError(t, raw.QueryRow(`
+	require.NoError(t, raw.QueryRowContext(t.Context(), `
 		SELECT COUNT(*) FROM sqlite_master
 		WHERE type = 'table' AND name = 'session_project_identity_snapshots'
 	`).Scan(&exists))
 	assert.Equal(t, 1, exists)
 	var state string
-	require.NoError(t, raw.QueryRow(`
+	require.NoError(t, raw.QueryRowContext(t.Context(), `
 		SELECT state FROM background_migrations
 		WHERE name = 'session_project_identity_snapshots_v1'
 	`).Scan(&state))
@@ -618,7 +656,7 @@ func TestExportStatusReportsBackfillFailure(t *testing.T) {
 	database := dbtest.OpenTestDBAt(t, dbPath)
 	raw, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	_, err = raw.Exec(`
+	_, err = raw.ExecContext(t.Context(), `
 		INSERT INTO background_migrations (
 			name, state, total_items, completed_items, last_error
 		) VALUES (
@@ -635,9 +673,8 @@ func TestExportStatusReportsBackfillFailure(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Empty(t, stderr)
-	assert.Equal(t,
-		"project identity evidence: failed (1/3)\n"+
-			"last error: git metadata unavailable\n",
+	assert.Equal(t, "project identity evidence: failed (1/3)\n"+
+		"last error: git metadata unavailable\n",
 		stdout)
 }
 
@@ -664,7 +701,7 @@ func removeArchiveDatabaseIDForTest(t *testing.T, dbPath string) {
 	raw, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, raw.Close()) }()
-	_, err = raw.Exec(`DELETE FROM archive_metadata WHERE key = 'database_id'`)
+	_, err = raw.ExecContext(t.Context(), `DELETE FROM archive_metadata WHERE key = 'database_id'`)
 	require.NoError(t, err)
 }
 
@@ -774,6 +811,7 @@ func TestExportSessionsNDJSONGolden(t *testing.T) {
 
 func firstExportSessionsCursor(t *testing.T) string {
 	t.Helper()
+
 	stdout, stderr, err := executeExportSessionsCommand(
 		newRootCommand(), "export", "sessions", "--limit", "1",
 	)
@@ -788,7 +826,7 @@ func TestExportSessionsFallbackPricingOnUnseededArchive(t *testing.T) {
 	dataDir := testDataDir(t)
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
 	require.NoError(t, database.SetDatabaseIDForTest(
-		context.Background(), "fallback-pricing-test-db"))
+		t.Context(), "fallback-pricing-test-db"))
 
 	model := exactFallbackPricedModel(t)
 	insertExportSessionsTestSession(t, database, db.Session{
@@ -801,7 +839,7 @@ func TestExportSessionsFallbackPricingOnUnseededArchive(t *testing.T) {
 		MessageCount:     3,
 		UserMessageCount: 2,
 	})
-	require.NoError(t, database.InsertMessages([]db.Message{
+	require.NoError(t, database.InsertMessages(t.Context(), []db.Message{
 		{
 			SessionID: "fallback-priced", Ordinal: 0, Role: "user",
 			Content: "question", ContentLength: len("question"),
@@ -855,7 +893,7 @@ func exactFallbackPricedModel(t *testing.T) string {
 			return p.ModelPattern
 		}
 	}
-	t.Fatal("no exact fallback-priced model in embedded snapshot")
+	require.FailNow(t, "no exact fallback-priced model in embedded snapshot")
 	return ""
 }
 
@@ -881,7 +919,7 @@ func seedExportSessionsArchiveAt(t *testing.T, path string) *db.DB {
 	t.Helper()
 	database := dbtest.OpenTestDBAt(t, path)
 	require.NoError(t, database.SetDatabaseIDForTest(
-		context.Background(), "export-sessions-test-db"))
+		t.Context(), "export-sessions-test-db"))
 	insertExportSessionsTestSession(t, database, db.Session{
 		ID:               "alpha-new",
 		Project:          "alpha",
@@ -909,10 +947,10 @@ func insertExportSessionsTestSession(
 	t *testing.T, database *db.DB, session db.Session,
 ) {
 	t.Helper()
-	require.NoError(t, database.UpsertSession(session),
+	require.NoError(t, database.UpsertSession(t.Context(), session),
 		"upsert session %s", session.ID)
 	require.NoError(t, database.UpsertProjectIdentityObservation(
-		context.Background(), export.ProjectIdentityObservation{
+		t.Context(), export.ProjectIdentityObservation{
 			SessionID: session.ID, Project: session.Project,
 			Machine: session.Machine, RootPath: session.Cwd,
 			GitBranch: session.GitBranch, ObservedAt: time.Now().UTC(),

@@ -31,10 +31,10 @@ func TestStoreHasSemanticFalse(t *testing.T) {
 func TestStoreSearchContentSemanticModesUnavailable(t *testing.T) {
 	s := &Store{}
 	for _, mode := range []string{"semantic", "hybrid"} {
-		_, err := s.SearchContent(context.Background(),
+		_, err := s.SearchContent(t.Context(),
 			db.ContentSearchFilter{Pattern: "x", Mode: mode})
 		require.Error(t, err, "mode %q", mode)
-		assert.True(t, errors.Is(err, db.ErrSemanticUnavailable),
+		assert.ErrorIs(t, err, db.ErrSemanticUnavailable,
 			"mode %q: want ErrSemanticUnavailable, got %v", mode, err)
 	}
 }
@@ -61,12 +61,12 @@ func TestStoreSearchContentSemanticInvalidInputReturns400Before501(t *testing.T)
 			t.Run(mode+"/"+tc.name, func(t *testing.T) {
 				f := tc.f
 				f.Mode = mode
-				_, err := s.SearchContent(context.Background(), f)
+				_, err := s.SearchContent(t.Context(), f)
 				require.Error(t, err)
 				var inputErr *db.SearchInputError
-				assert.True(t, errors.As(err, &inputErr),
+				require.ErrorAs(t, err, &inputErr,
 					"expected *db.SearchInputError, got %T: %v", err, err)
-				assert.False(t, errors.Is(err, db.ErrSemanticUnavailable),
+				assert.NotErrorIs(t, err, db.ErrSemanticUnavailable,
 					"invalid input must not be masked as ErrSemanticUnavailable")
 			})
 		}
@@ -162,7 +162,7 @@ func TestMapPGWriteErrorKeepsNonReadOnlyCause(t *testing.T) {
 	err := mapPGWriteError("writing test row", cause)
 
 	require.ErrorIs(t, err, cause)
-	assert.False(t, errors.Is(err, db.ErrReadOnly))
+	require.NotErrorIs(t, err, db.ErrReadOnly)
 	assert.Contains(t, err.Error(), "writing test row")
 }
 
@@ -183,7 +183,7 @@ func TestEmptyTrashExcludesSameRowsItDeletes(t *testing.T) {
 	}
 	store := &Store{pg: newEmptyTrashProbeDB(t, state)}
 
-	count, err := store.EmptyTrash()
+	count, err := store.EmptyTrash(t.Context())
 
 	require.NoError(t, err, "EmptyTrash")
 	assert.Equal(t, 1, count)
@@ -211,7 +211,7 @@ func TestDeleteSessionIfTrashedExcludesRecordedAliases(t *testing.T) {
 	}
 	store := &Store{pg: newEmptyTrashProbeDB(t, state)}
 
-	count, err := store.DeleteSessionIfTrashed("trashed")
+	count, err := store.DeleteSessionIfTrashed(t.Context(), "trashed")
 
 	require.NoError(t, err, "DeleteSessionIfTrashed")
 	assert.EqualValues(t, 1, count)
@@ -235,7 +235,7 @@ func TestDeleteSessionIfTrashedExcludesReverseAliasCanonical(t *testing.T) {
 	}
 	store := &Store{pg: newEmptyTrashProbeDB(t, state)}
 
-	count, err := store.DeleteSessionIfTrashed("vibe:session_trashed")
+	count, err := store.DeleteSessionIfTrashed(t.Context(), "vibe:session_trashed")
 
 	require.NoError(t, err, "DeleteSessionIfTrashed")
 	assert.EqualValues(t, 1, count)

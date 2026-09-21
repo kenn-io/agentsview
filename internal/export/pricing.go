@@ -312,12 +312,71 @@ func (r *PricingResolver) Resolve(
 // model, then the timestamp-aware GenAI Prices document, then the existing
 // LiteLLM/OpenRouter rows. An exact custom rate for the reported model still
 // takes precedence over caller-supplied canonicalization.
+//
+// When that whole ladder finds nothing and the model carries an Ollama Cloud
+// tag ("kimi-k2.7-code:cloud", "gpt-oss:120b-cloud"), the ladder runs once
+// more on the untagged name. Ollama bills its cloud models per token at the
+// upstream model's own rate, so the untagged catalog row is the estimate.
+// This runs only after every exact, custom, historical, and canonical attempt
+// on the tagged name has failed, so a catalogued cloud row (LiteLLM's
+// ollama/gpt-oss:120b-cloud) or a custom rate for the tagged name is never
+// reduced. The tagged name stays the priced model; Pattern reports the row.
+//
+// An exception is a zero-rate Ollama Cloud catalog row (LiteLLM's real
+// ollama/gpt-oss:120b-cloud entry), which is treated as non-authoritative so
+// the upstream untagged rate is used instead. Explicit nonzero cloud rates
+// and custom rates still take precedence. If no untagged base row exists,
+// the placeholder is discarded and the lookup reports OK=false.
 func (r *PricingResolver) ResolveAt(
 	reportedModel, canonicalModel string, timestamp time.Time,
 ) (string, PricingLookup) {
 	if r == nil {
 		return reportedModel, PricingLookup{}
 	}
+	pricedModel, lookup := r.resolveAt(reportedModel, canonicalModel, timestamp)
+	if lookup.OK && !isPlaceholderOllamaCloudRate(lookup) {
+		return pricedModel, lookup
+	}
+	if isPlaceholderOllamaCloudRate(lookup) {
+		// A placeholder must never count as priced; only a real base row
+		// can replace it.
+		lookup = PricingLookup{}
+	}
+	base := pricingpkg.OllamaCloudBaseModel(pricedModel)
+	if base == pricedModel {
+		return pricedModel, lookup
+	}
+	if _, baseLookup := r.resolveAt(base, base, timestamp); baseLookup.OK {
+		return pricedModel, baseLookup
+	}
+	return pricedModel, lookup
+}
+
+// isPlaceholderOllamaCloudRate reports whether a lookup found only a zero-rate
+// Ollama Cloud row. LiteLLM publishes rows such as
+// "ollama/gpt-oss:120b-cloud" with all-zero rates because Ollama Cloud
+// passes through the upstream model price; those rows should not block the
+// fallback to the real upstream rate for the untagged base model name.
+// Explicit custom zero rates are never treated as placeholders, and neither
+// is a row whose flat rates are zero but which prices usage through bands.
+func isPlaceholderOllamaCloudRate(lookup PricingLookup) bool {
+	if !lookup.OK || lookup.Rates.Source == PricingRowSourceCustom {
+		return false
+	}
+	if pricingpkg.OllamaCloudBaseModel(lookup.Pattern) == lookup.Pattern {
+		return false
+	}
+	return len(lookup.Rates.Bands) == 0 &&
+		lookup.Rates.InputPerMTok.Microdollars == 0 &&
+		lookup.Rates.OutputPerMTok.Microdollars == 0 &&
+		lookup.Rates.CacheWritePerMTok.Microdollars == 0 &&
+		lookup.Rates.CacheWrite1hPerMTok.Microdollars == 0 &&
+		lookup.Rates.CacheReadPerMTok.Microdollars == 0
+}
+
+func (r *PricingResolver) resolveAt(
+	reportedModel, canonicalModel string, timestamp time.Time,
+) (string, PricingLookup) {
 	if rates, ok := r.byModel[reportedModel]; ok &&
 		rates.Source == PricingRowSourceCustom {
 		return reportedModel, PricingLookup{

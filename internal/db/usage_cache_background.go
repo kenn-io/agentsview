@@ -27,7 +27,7 @@ const (
 // naturally skips completed work.
 func (db *DB) StartUsageCacheBackfill(ctx context.Context) error {
 	if db.readOnly {
-		return fmt.Errorf("usage cache background backfill requires a writable archive")
+		return errors.New("usage cache background backfill requires a writable archive")
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -158,7 +158,7 @@ func (db *DB) runUsageCacheBackfillPass(
 	}
 	defer release()
 	if cache == nil || cache.fill == nil || cache.rollup == nil {
-		return fmt.Errorf("usage cache generation is not attached to the archive")
+		return errors.New("usage cache generation is not attached to the archive")
 	}
 	locations, err := usageBackfillLocations(ctx, cache, snapshot.location)
 	if err != nil {
@@ -473,7 +473,7 @@ func (cache *usageCache) incrementalVacuum(
 	ctx context.Context, threshold, pages int,
 ) (bool, error) {
 	if threshold < 0 || pages <= 0 {
-		return false, fmt.Errorf("invalid usage cache vacuum bounds")
+		return false, errors.New("invalid usage cache vacuum bounds")
 	}
 	var freelist int
 	if err := cache.db.QueryRowContext(ctx, `PRAGMA freelist_count`).Scan(&freelist); err != nil {

@@ -154,7 +154,7 @@
   }
 
   .text-btn:disabled {
-    opacity: 0.5;
+    opacity: var(--opacity-disabled);
   }
 
   .slow-strip {

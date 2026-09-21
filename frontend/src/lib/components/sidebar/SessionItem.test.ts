@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { flushSync, mount, unmount } from "svelte";
+import { createClassComponent } from "svelte/legacy";
 import SessionItem from "./SessionItem.svelte";
+import { sessions } from "../../stores/sessions.svelte.js";
 
 let component: ReturnType<typeof mount> | undefined;
 
@@ -9,57 +11,124 @@ afterEach(() => {
   if (component) unmount(component);
   component = undefined;
   document.body.innerHTML = "";
+  sessions.machineLabels = {};
 });
 
 describe("SessionItem identity", () => {
-  it("renders the session label and entrypoint badge", () => {
+  const baseSession = {
+    compaction_count: 0,
+    consecutive_failure_max: 0,
+    edit_churn_count: 0,
+    ended_with_role: "",
+    final_failure_streak: 0,
+    has_peak_context_tokens: false,
+    has_total_output_tokens: false,
+    mid_task_compaction_count: 0,
+    outcome: "",
+    outcome_confidence: "",
+    secret_leak_count: 0,
+    tool_failure_signal_count: 0,
+    tool_retry_count: 0,
+    id: "session",
+    project: "project",
+    machine: "local",
+    agent: "claude",
+    first_message: "Inspect the issue",
+    started_at: "2024-01-01T00:00:00Z",
+    ended_at: "2024-01-01T00:01:00Z",
+    created_at: "2024-01-01T00:00:00Z",
+    message_count: 1,
+    user_message_count: 1,
+  };
+
+  function mountSession(overrides: Record<string, unknown> = {}, props = {}) {
     component = mount(SessionItem, {
       target: document.body,
       props: {
-        session: {
-          id: "custom-label",
-          project: "project",
-          machine: "local",
-          agent: "claude",
-          agent_label: "Claude Triage",
-          entrypoint: "sdk-cli",
-          first_message: "Inspect the issue",
-          started_at: "2024-01-01T00:00:00Z",
-          ended_at: "2024-01-01T00:01:00Z",
-          created_at: "2024-01-01T00:00:00Z",
-          message_count: 1,
-          user_message_count: 1,
-        },
+        session: { ...baseSession, ...overrides },
+        ...props,
       },
     });
     flushSync();
+  }
 
-    expect(document.querySelector(".agent-tag")?.textContent).toBe("Claude Triage");
+  it("renders the session label and entrypoint badge", () => {
+    sessions.machineLabels = { "installation-a": "Workstation A" };
+    mountSession({
+      id: "custom-label",
+      display_name: "A session with a long title",
+      agent_label: "Claude Triage",
+      entrypoint: "sdk-cli",
+      machine: "installation-a",
+    });
+
+    const agentTag = document.querySelector<HTMLElement>(".agent-tag");
+    expect(agentTag?.textContent).toBe("Claude Triage");
+    expect(agentTag?.title).toBe("Claude Triage");
     expect(document.querySelector(".entrypoint-tag")?.textContent).toBe("sdk-cli");
+    expect(document.querySelector<HTMLElement>(".session-name")?.title).toBe(
+      "A session with a long title",
+    );
+    expect(document.querySelector<HTMLElement>(".session-project")?.title).toBe("project");
+    expect(document.querySelector<HTMLElement>(".entrypoint-tag")?.title).toBe("sdk-cli");
+    expect(document.querySelector(".machine-tag")?.textContent).toBe("Workstation A");
+  });
+
+  it("uses the registry label when no override exists", () => {
+    mountSession({ agent: "qwen" });
+
+    const agentTag = document.querySelector<HTMLElement>(".agent-tag");
+    expect(agentTag?.textContent).toBe("Qwen Code");
+    expect(agentTag?.title).toBe("Qwen Code");
+  });
+
+  it("uses the registry label for a whitespace-only override", () => {
+    mountSession({ agent: "qwen", agent_label: "   " });
+
+    const agentTag = document.querySelector<HTMLElement>(".agent-tag");
+    expect(agentTag?.textContent).toBe("Qwen Code");
+    expect(agentTag?.title).toBe("Qwen Code");
+  });
+
+  it("updates the visible label and title when the session prop changes", () => {
+    const session = { ...baseSession, agent: "qwen", agent_label: "Initial Label" };
+    const legacyComponent = createClassComponent({
+      component: SessionItem,
+      target: document.body,
+      props: { session },
+    });
+    component = legacyComponent as unknown as ReturnType<typeof mount>;
+    flushSync();
+
+    legacyComponent.$set({
+      session: { ...session, agent_label: "Updated Label" },
+    });
+    flushSync();
+
+    const agentTag = document.querySelector<HTMLElement>(".agent-tag");
+    expect(agentTag?.textContent).toBe("Updated Label");
+    expect(agentTag?.title).toBe("Updated Label");
   });
 
   it("suppresses the default cli entrypoint badge", () => {
-    component = mount(SessionItem, {
-      target: document.body,
-      props: {
-        session: {
-          id: "default-entrypoint",
-          project: "project",
-          machine: "local",
-          agent: "claude",
-          entrypoint: "cli",
-          first_message: "Inspect the issue",
-          started_at: "2024-01-01T00:00:00Z",
-          ended_at: "2024-01-01T00:01:00Z",
-          created_at: "2024-01-01T00:00:00Z",
-          message_count: 1,
-          user_message_count: 1,
-        },
-      },
-    });
-    flushSync();
+    mountSession({ id: "default-entrypoint", entrypoint: "cli" });
 
     expect(document.querySelector(".agent-tag")?.textContent).toBe("Claude");
     expect(document.querySelector(".entrypoint-tag")).toBeNull();
+  });
+
+  it("preserves compact and grouped metadata visibility", () => {
+    mountSession({ machine: "remote" }, { compact: true });
+    expect(document.querySelector(".agent-tag")).toBeNull();
+    expect(document.querySelector(".machine-tag")).toBeNull();
+    expect(document.querySelector(".session-item")?.classList.contains("compact")).toBe(true);
+
+    unmount(component!);
+    component = undefined;
+    document.body.innerHTML = "";
+
+    mountSession({ machine: "remote", agent_label: "Grouped Label" }, { hideAgent: true });
+    expect(document.querySelector(".agent-tag")).toBeNull();
+    expect(document.querySelector(".machine-tag")?.textContent).toBe("remote");
   });
 });

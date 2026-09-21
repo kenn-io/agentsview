@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -84,61 +85,130 @@ func deepSeekHarnessParseFile(
 	return []ParseResult{result}, nil, nil
 }
 
+func deepSeekHarnessPathVersion(path string) (int64, bool) {
+	name := filepath.Base(path)
+	name = strings.TrimSuffix(name, ".zstd")
+	if name == "session.jsonl" {
+		return 0, true
+	}
+	const prefix = "session.v"
+	if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, ".jsonl") {
+		return 0, false
+	}
+	digits := name[len(prefix) : len(name)-len(".jsonl")]
+	if digits == "" || digits[0] == '0' {
+		return 0, false
+	}
+	for index := range digits {
+		if digits[index] < '0' || digits[index] > '9' {
+			return 0, false
+		}
+	}
+	version, err := strconv.ParseInt(digits, 10, 64)
+	if err != nil || version <= 0 {
+		return 0, false
+	}
+	return version, true
+}
+
+// isSupportedDeepSeekHarnessFormatVersion keeps discovery inside the released
+// generations this build reads. A newer harness writes its own generation
+// alongside the ones already in a session directory, and every released bump so
+// far renamed required events or renumbered sequences, so an unread generation
+// cannot stand in for a supported one. Discovery ignores it and keeps reporting
+// the newest generation it can actually parse; an explicitly targeted log still
+// fails with the header's unsupported-version error.
+func isSupportedDeepSeekHarnessFormatVersion(version int64) bool {
+	return version >= deepSeekHarnessOldestFormatVersion &&
+		version <= deepSeekHarnessNewestFormatVersion
+}
+
 func deepSeekHarnessPathParts(root, path string) (
-	project, encodedID string, ok bool,
+	project, encodedID string, version int64, ok bool,
 ) {
 	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
 	if err != nil || rel == "." || rel == ".." ||
 		strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", "", false
+		return "", "", 0, false
 	}
 	parts := strings.Split(filepath.ToSlash(rel), "/")
-	if len(parts) != 3 ||
-		(parts[2] != "session.jsonl" && parts[2] != "session.jsonl.zstd") {
-		return "", "", false
+	if len(parts) != 3 {
+		return "", "", 0, false
+	}
+	version, ok = deepSeekHarnessPathVersion(parts[2])
+	if !ok || !isSupportedDeepSeekHarnessFormatVersion(version) {
+		return "", "", 0, false
 	}
 	if parts[0] != "_no-cwd" &&
 		(!strings.HasPrefix(parts[0], "--") || !strings.HasSuffix(parts[0], "--")) {
-		return "", "", false
+		return "", "", 0, false
 	}
 	if parts[1] == "" || parts[1] == "." || parts[1] == ".." {
-		return "", "", false
+		return "", "", 0, false
 	}
 	if _, err := decodeDeepSeekHarnessSegment(parts[1]); err != nil {
-		return "", "", false
+		return "", "", 0, false
 	}
-	return parts[0], parts[1], true
+	return parts[0], parts[1], version, true
 }
 
-func isDeepSeekHarnessSourcePath(root, path string) bool {
-	_, _, ok := deepSeekHarnessPathParts(root, path)
-	return ok
-}
-
-// isPreferredDeepSeekHarnessSourcePath keeps discovery deterministic if an
-// invalid session directory contains both physical encodings. Zstd is the
-// upstream default, so it owns the logical source while both paths exist; the
-// parse step still rejects the mixed directory instead of choosing either log.
+// isPreferredDeepSeekHarnessSourcePath keeps discovery deterministic when one
+// session directory retains multiple immutable generations or both physical
+// encodings. The numerically newest canonical generation wins; within that
+// generation zstd owns the logical source while both encodings exist. The parse
+// step still rejects a mixed-encoding directory instead of choosing either log.
 func isPreferredDeepSeekHarnessSourcePath(root, path string) bool {
-	if !isDeepSeekHarnessSourcePath(root, path) {
+	_, _, version, ok := deepSeekHarnessPathParts(root, path)
+	if !ok {
 		return false
 	}
-	if filepath.Base(path) == "session.jsonl.zstd" {
-		return true
+	pathIsZstd := strings.HasSuffix(filepath.Base(path), ".zstd")
+	highest := int64(-1)
+	zstdAtVersion := false
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			siblingVersion, siblingOK := deepSeekHarnessPathVersion(entry.Name())
+			if !siblingOK || !isSupportedDeepSeekHarnessFormatVersion(siblingVersion) {
+				continue
+			}
+			if siblingVersion > highest {
+				highest = siblingVersion
+			}
+			if siblingVersion == version && strings.HasSuffix(entry.Name(), ".zstd") {
+				zstdAtVersion = true
+			}
+		}
 	}
-	_, err := os.Lstat(path + ".zstd")
-	return errors.Is(err, os.ErrNotExist)
+	switch {
+	case version < highest:
+		return false
+	case version > highest:
+		// A missing newest generation is still the deletion event that should
+		// retire the session; only an existing older generation is shadowed.
+		return true
+	case pathIsZstd:
+		return true
+	default:
+		return !zstdAtVersion
+	}
 }
 
 func deepSeekHarnessAlternateSourcePath(path string) (string, bool) {
-	switch filepath.Base(path) {
-	case "session.jsonl":
-		return path + ".zstd", true
-	case "session.jsonl.zstd":
-		return strings.TrimSuffix(path, ".zstd"), true
-	default:
+	if strings.HasSuffix(filepath.Base(path), ".zstd") {
+		plain := strings.TrimSuffix(path, ".zstd")
+		if _, ok := deepSeekHarnessPathVersion(plain); ok {
+			return plain, true
+		}
 		return "", false
 	}
+	if _, ok := deepSeekHarnessPathVersion(path); ok {
+		return path + ".zstd", true
+	}
+	return "", false
 }
 
 func deepSeekHarnessAlternateSourceFiles(path string) []string {
@@ -157,8 +227,13 @@ func rejectMixedDeepSeekHarnessEncoding(path string) error {
 	_, err := os.Lstat(alternate)
 	switch {
 	case err == nil:
+		plain, compressed := path, alternate
+		if strings.HasSuffix(filepath.Base(path), ".zstd") {
+			plain, compressed = alternate, path
+		}
 		return fmt.Errorf(
-			"DeepSeek Harness session directory contains both session.jsonl and session.jsonl.zstd",
+			"DeepSeek Harness session directory contains both %s and %s",
+			filepath.Base(plain), filepath.Base(compressed),
 		)
 	case errors.Is(err, os.ErrNotExist):
 		return nil
@@ -185,7 +260,7 @@ func deepSeekHarnessCanonicalSessionID(rawID string) string {
 }
 
 func deepSeekHarnessSessionIDFromPath(root, path string) string {
-	_, encodedID, ok := deepSeekHarnessPathParts(root, path)
+	_, encodedID, _, ok := deepSeekHarnessPathParts(root, path)
 	if !ok {
 		return ""
 	}
@@ -197,7 +272,7 @@ func deepSeekHarnessSessionIDFromPath(root, path string) string {
 }
 
 func deepSeekHarnessProjectHint(root, path string) string {
-	project, _, ok := deepSeekHarnessPathParts(root, path)
+	project, _, _, ok := deepSeekHarnessPathParts(root, path)
 	if !ok || project == "_no-cwd" {
 		return ""
 	}

@@ -3,6 +3,7 @@
 package sync
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	gosync "sync"
@@ -87,7 +88,7 @@ func (o *vnodeObserver) Add(path string) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.closed {
-		return fmt.Errorf("vnode observer closed")
+		return errors.New("vnode observer closed")
 	}
 	if _, exists := o.fds[path]; exists {
 		return nil

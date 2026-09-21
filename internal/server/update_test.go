@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -14,7 +15,7 @@ import (
 func stubChecker(
 	info *update.UpdateInfo, err error,
 ) server.UpdateCheckFunc {
-	return func(string, bool, string) (*update.UpdateInfo, error) {
+	return func(context.Context, string, bool, string) (*update.UpdateInfo, error) {
 		return info, err
 	}
 }

@@ -26,7 +26,7 @@ func TestDisabledProviderPreservesArchivedSession(t *testing.T) {
 			"user", "2026-08-09T10:00:00Z", "do not import locally",
 		)},
 	)), 0o644))
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID:       "archived-gemini-session",
 		Project:  "archived-project",
 		Machine:  "test-machine",
@@ -34,7 +34,7 @@ func TestDisabledProviderPreservesArchivedSession(t *testing.T) {
 		FilePath: &source,
 	}))
 
-	engine := sessionsync.NewEngine(database, sessionsync.EngineConfig{
+	engine := sessionsync.NewEngine(t.Context(), database, sessionsync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentGemini: {root},
 		},
@@ -71,17 +71,17 @@ func TestDisabledProviderPreservesArchivedSessionAcrossRebuild(t *testing.T) {
 	)
 	require.NoError(t, os.MkdirAll(filepath.Dir(geminiSource), 0o755))
 	require.NoError(t, os.WriteFile(geminiSource, []byte(`{"sessionId":"old"}`), 0o644))
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "archived-gemini-rebuild", Project: "archived-project",
 		Machine: "test-machine", Agent: string(parser.AgentGemini),
 		FilePath: &geminiSource, MessageCount: 1, UserMessageCount: 1,
 	}))
-	require.NoError(t, database.InsertMessages([]db.Message{{
+	require.NoError(t, database.InsertMessages(t.Context(), []db.Message{{
 		SessionID: "archived-gemini-rebuild", Ordinal: 0,
 		Role: "user", Content: "preserve this archived message",
 	}}))
 
-	engine := sessionsync.NewEngine(database, sessionsync.EngineConfig{
+	engine := sessionsync.NewEngine(t.Context(), database, sessionsync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentGemini: {geminiRoot},
 		},
@@ -125,17 +125,17 @@ func TestDisabledCodebuffPreservesArchivedFreebuffAcrossRebuild(t *testing.T) {
 			)
 			require.NoError(t, os.MkdirAll(filepath.Dir(freebuffSource), 0o755))
 			require.NoError(t, os.WriteFile(freebuffSource, []byte(`[]`), 0o644))
-			require.NoError(t, database.UpsertSession(db.Session{
+			require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 				ID: "freebuff:project:session-existing", Project: "project",
 				Machine: "test-machine", Agent: string(parser.AgentFreebuff),
 				FilePath: &freebuffSource, MessageCount: 1, UserMessageCount: 1,
 			}))
-			require.NoError(t, database.InsertMessages([]db.Message{{
+			require.NoError(t, database.InsertMessages(t.Context(), []db.Message{{
 				SessionID: "freebuff:project:session-existing", Ordinal: 0,
 				Role: "user", Content: "preserve this Freebuff message",
 			}}))
 
-			engine := sessionsync.NewEngine(database, sessionsync.EngineConfig{
+			engine := sessionsync.NewEngine(t.Context(), database, sessionsync.EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{
 					parser.AgentCodebuff: {codebuffRoot},
 				},

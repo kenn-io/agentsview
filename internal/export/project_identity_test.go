@@ -360,8 +360,7 @@ func TestProjectIdentityKeysUseTypedSHA256Inputs(t *testing.T) {
 	remoteIdentity := BuildProjectIdentity(ProjectIdentityInput{
 		GitRemote: "git@github.com:Org/Repo.git",
 	})
-	assert.Equal(t,
-		"sha256:"+sha256Hex("git_remote\n"+"github.com/Org/Repo"),
+	assert.Equal(t, "sha256:"+sha256Hex("git_remote\n"+"github.com/Org/Repo"),
 		remoteIdentity.Key,
 	)
 	assert.Equal(t, "git_remote", remoteIdentity.KeySource)

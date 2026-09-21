@@ -1,3 +1,4 @@
+import { UsageService } from "../api/generated/index";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vite-plus/test";
 import type {
   Comparison,
@@ -143,7 +144,7 @@ const apiRuntimeMocks = vi.hoisted(() => {
   }
   return {
     ApiError,
-    callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
+
     isAbortError: vi.fn(() => false),
   };
 });
@@ -386,9 +387,7 @@ function usagePairwiseComparison(): ServiceUsagePairwiseComparisonResponse {
   };
 }
 
-afterEach(() => {
-  apiRuntimeMocks.callGenerated.mockImplementation((request: () => Promise<unknown>) => request());
-});
+afterEach(() => {});
 
 describe("UsageStore filter persistence", () => {
   beforeEach(() => {
@@ -403,12 +402,14 @@ describe("UsageStore filter persistence", () => {
     usage.excludedProjects = "proj-a";
     usage.excludedProjectKeys = "pl1:sha256:proj-a";
     usage.excludedAgents = "claude";
+    usage.excludedModels = "opus";
     await usage.fetchAll();
 
     const saved = JSON.parse(localStorage.getItem("usage-filters") ?? "{}");
     expect(saved.excludedProjects).toBe("proj-a");
     expect(saved.excludedProjectKeys).toBeUndefined();
     expect(saved.excludedAgents).toBe("claude");
+    expect(saved.excludedModels).toBe("opus");
   });
 
   it("restores usage filters from localStorage on load", async () => {
@@ -418,14 +419,12 @@ describe("UsageStore filter persistence", () => {
         excludedProjects: "saved-proj",
         excludedProjectKeys: "pl1:sha256:saved-proj",
         excludedModels: "opus",
-        selectedModels: "sonnet",
       }),
     );
     const { usage } = await loadStore();
     expect(usage.excludedProjects).toBe("saved-proj");
     expect(usage.excludedProjectKeys).toBe("");
-    expect(usage.excludedModels).toBe("");
-    expect(usage.selectedModels).toBe("sonnet");
+    expect(usage.excludedModels).toBe("opus");
     expect(usage.excludedAgents).toBe("");
   });
 
@@ -612,23 +611,20 @@ describe("UsageStore session filter params", () => {
   });
 
   it("aborts an in-flight ranking when the usage mode changes", async () => {
-    const signals: (AbortSignal | undefined)[] = [];
-    apiRuntimeMocks.callGenerated.mockImplementation(
-      (request: () => Promise<unknown>, signal?: AbortSignal) => {
-        signals.push(signal);
-        return request();
-      },
-    );
     usageServiceMocks.getApiV1UsageTopSessions.mockImplementationOnce(() => new Promise(() => {}));
     const { usage } = await loadStore();
 
     void usage.fetchTopSessions();
     await Promise.resolve();
-    expect(signals[0]?.aborted).toBe(false);
+    expect(
+      vi.mocked(UsageService.getApiV1UsageTopSessions).mock.calls[0]?.[1]?.signal?.aborted,
+    ).toBe(false);
 
     usage.setMode("token");
 
-    expect(signals[0]?.aborted).toBe(true);
+    expect(
+      vi.mocked(UsageService.getApiV1UsageTopSessions).mock.calls[0]?.[1]?.signal?.aborted,
+    ).toBe(true);
     expect(usage.topSessions).toBeNull();
   });
 
@@ -1006,13 +1002,6 @@ describe("UsageStore session filter params", () => {
   });
 
   it("aborts stale top sessions when a new full refresh starts", async () => {
-    const signals: (AbortSignal | undefined)[] = [];
-    apiRuntimeMocks.callGenerated.mockImplementation(
-      (request: () => Promise<unknown>, signal?: AbortSignal) => {
-        signals.push(signal);
-        return request();
-      },
-    );
     usageServiceMocks.getApiV1UsageTopSessions.mockImplementationOnce(() => new Promise(() => {}));
     usageServiceMocks.getApiV1UsageSummary.mockImplementationOnce(() => new Promise(() => {}));
 
@@ -1020,22 +1009,19 @@ describe("UsageStore session filter params", () => {
 
     void usage.fetchTopSessions();
     await Promise.resolve();
-    expect(signals[0]?.aborted).toBe(false);
+    expect(
+      vi.mocked(UsageService.getApiV1UsageTopSessions).mock.calls[0]?.[1]?.signal?.aborted,
+    ).toBe(false);
 
     void usage.fetchAll();
     await Promise.resolve();
 
-    expect(signals[0]?.aborted).toBe(true);
+    expect(
+      vi.mocked(UsageService.getApiV1UsageTopSessions).mock.calls[0]?.[1]?.signal?.aborted,
+    ).toBe(true);
   });
 
   it("aborts visible panel requests on teardown", async () => {
-    const signals: (AbortSignal | undefined)[] = [];
-    apiRuntimeMocks.callGenerated.mockImplementation(
-      (request: () => Promise<unknown>, signal?: AbortSignal) => {
-        signals.push(signal);
-        return request();
-      },
-    );
     usageServiceMocks.getApiV1UsageSummary.mockImplementationOnce(() => new Promise(() => {}));
     const { usage } = await loadStore();
 
@@ -1043,7 +1029,9 @@ describe("UsageStore session filter params", () => {
     await Promise.resolve();
     usage.cancelInFlightReads();
 
-    expect(signals[0]?.aborted).toBe(true);
+    expect(vi.mocked(UsageService.getApiV1UsageSummary).mock.calls[0]?.[1]?.signal?.aborted).toBe(
+      true,
+    );
   });
 
   it("reuses summary params for top sessions during full refresh", async () => {
@@ -1078,14 +1066,6 @@ describe("UsageStore session filter params", () => {
   });
 
   it("does not let stale comparison abort the current comparison", async () => {
-    const signals: (AbortSignal | undefined)[] = [];
-    apiRuntimeMocks.callGenerated.mockImplementation(
-      (request: () => Promise<unknown>, signal?: AbortSignal) => {
-        signals.push(signal);
-        return request();
-      },
-    );
-
     const { usage } = await loadStore();
     const loaded = await usage.fetchSummary({ loadComparison: false });
     expect(loaded).not.toBeNull();
@@ -1113,7 +1093,8 @@ describe("UsageStore session filter params", () => {
       loadedSummary.params,
     );
     await Promise.resolve();
-    const currentSignal = signals[1];
+    const currentSignal = vi.mocked(UsageService.getApiV1UsageComparison).mock.calls[0]?.[1]
+      ?.signal;
     expect(currentSignal).toBeDefined();
     expect(currentSignal?.aborted).toBe(false);
 
@@ -1131,14 +1112,6 @@ describe("UsageStore session filter params", () => {
   });
 
   it("aborts active comparison when a newer summary starts", async () => {
-    const signals: (AbortSignal | undefined)[] = [];
-    apiRuntimeMocks.callGenerated.mockImplementation(
-      (request: () => Promise<unknown>, signal?: AbortSignal) => {
-        signals.push(signal);
-        return request();
-      },
-    );
-
     const { usage } = await loadStore();
     const loaded = await usage.fetchSummary({ loadComparison: false });
     expect(loaded).not.toBeNull();
@@ -1159,7 +1132,8 @@ describe("UsageStore session filter params", () => {
       loadedSummary.params,
     );
     await Promise.resolve();
-    const comparisonSignal = signals[1];
+    const comparisonSignal = vi.mocked(UsageService.getApiV1UsageComparison).mock.calls[0]?.[1]
+      ?.signal;
     expect(comparisonSignal).toBeDefined();
     expect(comparisonSignal?.aborted).toBe(false);
 
@@ -1262,13 +1236,6 @@ describe("UsageStore session filter params", () => {
   });
 
   it("aborts stale summary requests when a newer fetch starts", async () => {
-    const signals: (AbortSignal | undefined)[] = [];
-    apiRuntimeMocks.callGenerated.mockImplementation(
-      (request: () => Promise<unknown>, signal?: AbortSignal) => {
-        signals.push(signal);
-        return request();
-      },
-    );
     usageServiceMocks.getApiV1UsageSummary
       .mockImplementationOnce(() => new Promise(() => {}))
       .mockResolvedValueOnce({
@@ -1307,8 +1274,10 @@ describe("UsageStore session filter params", () => {
     void usage.fetchSummary();
     await Promise.resolve();
 
-    expect(signals[0]).toBeDefined();
-    expect(signals[0]?.aborted).toBe(true);
+    expect(vi.mocked(UsageService.getApiV1UsageSummary).mock.calls[0]?.[1]?.signal).toBeDefined();
+    expect(vi.mocked(UsageService.getApiV1UsageSummary).mock.calls[0]?.[1]?.signal?.aborted).toBe(
+      true,
+    );
   });
 });
 
@@ -1675,7 +1644,7 @@ describe("UsageStore time-series range selection", () => {
 
     expect(usage.selectedTimeRange).toBeNull();
     expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
-      expect.objectContaining({ from: "2026-06-04", to: "2026-06-18", model: "model-a" }),
+      expect.objectContaining({ from: "2026-06-04", to: "2026-06-18", exclude_model: "model-a" }),
     );
   });
 
@@ -1765,12 +1734,11 @@ describe("buildUsageUrlParams", () => {
       excludedProjectKeys: "pk1",
       excludedAgents: "a1",
       excludedModels: "m1",
-      selectedModels: "m2",
     });
     expect(params).toEqual({
       exclude_project: "p1",
       exclude_agent: "a1",
-      model: "m2",
+      exclude_model: "m1",
     });
   });
 
@@ -1785,7 +1753,6 @@ describe("buildUsageUrlParams", () => {
       excludedProjectKeys: "",
       excludedAgents: "",
       excludedModels: "",
-      selectedModels: "",
     });
     expect(params).toEqual({
       from: "2026-01-01",
@@ -1804,7 +1771,6 @@ describe("buildUsageUrlParams", () => {
       excludedProjectKeys: "",
       excludedAgents: "",
       excludedModels: "",
-      selectedModels: "",
     });
     expect(params).toEqual({});
   });
@@ -1820,7 +1786,6 @@ describe("buildUsageUrlParams", () => {
       excludedProjectKeys: "",
       excludedAgents: "",
       excludedModels: "",
-      selectedModels: "",
     });
     expect(params).toEqual({});
   });
@@ -1836,7 +1801,6 @@ describe("buildUsageUrlParams", () => {
       excludedProjectKeys: "",
       excludedAgents: "",
       excludedModels: "",
-      selectedModels: "",
     });
     expect(params).toEqual({ window_days: "7" });
   });
@@ -1852,7 +1816,6 @@ describe("buildUsageUrlParams", () => {
       excludedProjectKeys: "",
       excludedAgents: "",
       excludedModels: "",
-      selectedModels: "",
     });
     expect(params).toEqual({
       from: "2026-01-01",

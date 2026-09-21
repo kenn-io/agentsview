@@ -7,10 +7,12 @@ import (
 	"html"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 type exportMarkdownOptions struct {
@@ -268,7 +270,7 @@ func renderMarkdownMessage(
 ) {
 	attrs := map[string]string{
 		"role":    msg.Role,
-		"ordinal": fmt.Sprintf("%d", msg.Ordinal),
+		"ordinal": strconv.Itoa(msg.Ordinal),
 	}
 	if msg.Timestamp != "" {
 		attrs["timestamp"] = msg.Timestamp
@@ -563,19 +565,19 @@ func firstString(params map[string]any, keys ...string) string {
 	return ""
 }
 
-func truncateMarkdownFallback(s string, max int) string {
-	if len(s) <= max {
+func truncateMarkdownFallback(s string, maximum int) string {
+	if len(s) <= maximum {
 		return s
 	}
-	return s[:max] + "…"
+	return stringutil.SafeTruncate(s, maximum) + "…"
 }
 
-func capLines(text string, max int) string {
+func capLines(text string, maximum int) string {
 	lines := strings.Split(text, "\n")
-	if len(lines) <= max {
+	if len(lines) <= maximum {
 		return text
 	}
-	return strings.Join(lines[:max], "\n") + fmt.Sprintf("\n... (%d lines total)", len(lines))
+	return strings.Join(lines[:maximum], "\n") + fmt.Sprintf("\n... (%d lines total)", len(lines))
 }
 
 func sortedJSONKeys(m map[string]any) []string {
@@ -606,7 +608,7 @@ func markdownSessionAttrs(s *db.Session, root bool) map[string]string {
 		attrs["ended_at"] = *s.EndedAt
 	}
 	if s.MessageCount > 0 {
-		attrs["message_count"] = fmt.Sprintf("%d", s.MessageCount)
+		attrs["message_count"] = strconv.Itoa(s.MessageCount)
 	}
 	return attrs
 }

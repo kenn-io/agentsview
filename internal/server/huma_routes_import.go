@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -17,15 +18,17 @@ import (
 )
 
 func (s *Server) registerImportRoutes() {
-	group := newRouteGroup(s.api, "/api/v1/import", "Import")
+	group := huma.NewGroup(s.api, "/api/v1/import")
+	configureRouteGroup(group, "Import")
+	s.api.OpenAPI().Components.Schemas.Schema(reflect.TypeFor[importer.ImportStats](), true, "")
 
 	s.stream(group, http.MethodPost, "/claude-ai",
 		"Import Claude.ai archive", s.humaImportClaudeAI,
-		streamJSONResponse(),
+		streamJSONResponseSchema("ImporterImportStats"),
 	)
 	s.stream(group, http.MethodPost, "/chatgpt",
 		"Import ChatGPT archive", s.humaImportChatGPT,
-		streamJSONResponse(),
+		streamJSONResponseSchema("ImporterImportStats"),
 	)
 }
 
@@ -65,7 +68,7 @@ func (s *Server) humaImportClaudeAI(
 		stream, ok := newHumaSSEStream(hctx)
 		if !ok {
 			writeHumaJSON(hctx, http.StatusInternalServerError,
-				apiErrorResponse{Message: "streaming not supported"})
+				apiResponseError{Message: "streaming not supported"})
 			return
 		}
 		stats, err := s.importClaudeAIFromFileWithCallbacks(hctx.Context(), file, &importer.ImportCallbacks{
@@ -102,7 +105,7 @@ func (s *Server) importClaudeAIFromFileWithCallbacks(
 	}
 	defer cleanup()
 	var stats importer.ImportStats
-	err = s.serializeArchiveWrite(func() error {
+	err = s.serializeArchiveWrite(ctx, func() error {
 		var importErr error
 		stats, importErr = importer.ImportClaudeAI(ctx, s.db, reader, cb)
 		return importErr
@@ -193,7 +196,7 @@ func (s *Server) humaImportChatGPT(
 		stream, ok := newHumaSSEStream(hctx)
 		if !ok {
 			writeHumaJSON(hctx, http.StatusInternalServerError,
-				apiErrorResponse{Message: "streaming not supported"})
+				apiResponseError{Message: "streaming not supported"})
 			return
 		}
 		stats, err := s.importChatGPTFromFile(hctx.Context(), file, &importer.ImportCallbacks{
@@ -237,7 +240,7 @@ func (s *Server) importChatGPTFromFile(
 	}
 	defer cleanup()
 	var stats importer.ImportStats
-	err = s.serializeArchiveWrite(func() error {
+	err = s.serializeArchiveWrite(ctx, func() error {
 		var importErr error
 		stats, importErr = importer.ImportChatGPT(ctx, s.db, dir,
 			filepath.Join(s.cfg.DataDir, "assets"), cb)

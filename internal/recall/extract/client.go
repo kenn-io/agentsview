@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 // ErrContextOverflow reports a prompt the server rejected as too large for
@@ -94,8 +95,8 @@ func endpointScopedRejection(err error) bool {
 		errors.Is(err, errRedirectRefused) {
 		return true
 	}
-	var rejection *requestStatusError
-	if !errors.As(err, &rejection) {
+	rejection, hasRejection := errors.AsType[*requestStatusError](err)
+	if !hasRejection {
 		return false
 	}
 	switch rejection.status {
@@ -339,8 +340,8 @@ func (c *Client) DistillWithRecovery(
 				ErrPersistentTruncation,
 			)
 		}
-		var transient *transientError
-		if !errors.As(err, &transient) {
+		transient, hasTransient := errors.AsType[*transientError](err)
+		if !hasTransient {
 			return nil, total, err
 		}
 		lastErr = err
@@ -558,7 +559,7 @@ func (c *Client) distill(
 	if len(parsed.Choices) == 0 {
 		// The body parsed, so its usage is real cost even without choices.
 		return nil, parsed.Usage, &transientError{
-			err: fmt.Errorf("distill response has no choices"),
+			err: errors.New("distill response has no choices"),
 		}
 	}
 	// From here the server reports token usage even when the attempt fails,
@@ -583,9 +584,8 @@ func (c *Client) distill(
 		// Empty content with a normal finish reason means the token budget
 		// went somewhere invisible (typically hidden reasoning the request
 		// shape should have disabled).
-		return nil, parsed.Usage, fmt.Errorf(
-			"distill response content is empty; check the model profile's " +
-				"request shape",
+		return nil, parsed.Usage, errors.New("distill response content is empty; check the model profile's " +
+			"request shape",
 		)
 	}
 	entries, err := parseEntries(choice.Message.Content)
@@ -691,15 +691,7 @@ func (c *Client) responseDetail(raw []byte) string {
 		return "(response body withheld: endpoint URL carries " +
 			"credential material)"
 	}
-	detail := stripControls(string(raw))
-	if len(detail) > 200 {
-		cut := 200
-		for cut > 0 && !utf8.RuneStart(detail[cut]) {
-			cut--
-		}
-		detail = detail[:cut]
-	}
-	return detail
+	return stringutil.SafeTruncate(stripControls(string(raw)), 200)
 }
 
 // transportErrorDetail prepares a transport-layer error's text for error
@@ -745,12 +737,7 @@ func stripControls(s string) string {
 // finish_reason or entry field can approach the transport limit, and these
 // errors persist into per-session failure rows.
 func boundedToken(value string, maxRunes int) string {
-	value = stripControls(value)
-	runes := []rune(value)
-	if len(runes) <= maxRunes {
-		return value
-	}
-	return string(runes[:maxRunes]) + "…(truncated)"
+	return stringutil.TruncateRunes(stripControls(value), maxRunes, "…(truncated)")
 }
 
 // parseEntries decodes and validates distilled content against the same
@@ -853,7 +840,7 @@ func strictObject(
 	data jsontext.Value, keys []string,
 ) (map[string]jsontext.Value, error) {
 	if isJSONNull(data) {
-		return nil, fmt.Errorf("expected an object, got null")
+		return nil, errors.New("expected an object, got null")
 	}
 	var object map[string]jsontext.Value
 	if err := json.Unmarshal(data, &object); err != nil {

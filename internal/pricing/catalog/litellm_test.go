@@ -178,11 +178,11 @@ func TestFetchLiteLLMPricingHonorsCanceledContext(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(server.Close)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	_, err := fetchLiteLLMPricing(ctx, server.Client(), server.URL)
 
-	assert.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, context.Canceled)
 	assert.False(t, requested.Load())
 }

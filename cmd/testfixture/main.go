@@ -8,12 +8,14 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
 	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 type sessionSpec struct {
@@ -30,8 +32,10 @@ var specs = []sessionSpec{
 	{"project-alpha", "small-2", 2, 2, "", "", ""},
 	{"project-alpha", "small-5", 5, 3, "", "", ""},
 	// One unclean session for e2e termination tests.
-	{"project-beta", "mixed-content-7", 7, 3, "", "",
-		"tool_call_pending"},
+	{
+		"project-beta", "mixed-content-7", 7, 3, "", "",
+		"tool_call_pending",
+	},
 	{"project-beta", "medium-8", 8, 4, "", "", ""},
 	{"project-beta", "medium-100", 100, 50, "", "", ""},
 	{"project-gamma", "large-200", 200, 100, "", "", ""},
@@ -40,34 +44,47 @@ var specs = []sessionSpec{
 
 	// Sub-agent and fork sessions: must NOT appear in session
 	// list, stats, or analytics summary counts.
-	{"project-alpha", "subagent-1", 12, 6,
-		"test-session-small-5", "subagent", ""},
-	{"project-alpha", "subagent-2", 8, 4,
-		"test-session-small-5", "subagent", ""},
-	{"project-beta", "fork-1", 15, 7,
-		"test-session-medium-8", "fork", ""},
+	{
+		"project-alpha", "subagent-1", 12, 6,
+		"test-session-small-5", "subagent", "",
+	},
+	{
+		"project-alpha", "subagent-2", 8, 4,
+		"test-session-small-5", "subagent", "",
+	},
+	{
+		"project-beta", "fork-1", 15, 7,
+		"test-session-medium-8", "fork", "",
+	},
 
 	// Empty session (0 messages): must also be excluded.
 	{"project-gamma", "empty-0", 0, 0, "", "", ""},
 }
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run() error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
 	out := flag.String("out", "", "output database path")
 	duckDBOut := flag.String("duckdb-out", "", "optional output DuckDB mirror path")
 	flag.Parse()
 	if *out == "" {
-		fmt.Fprintln(os.Stderr, "usage: testfixture -out <path>")
-		os.Exit(1)
+		return errors.New("usage: testfixture -out <path>")
 	}
 
 	if err := os.Remove(*out); err != nil &&
 		!errors.Is(err, os.ErrNotExist) {
-		log.Fatalf("removing existing db: %v", err)
+		return fmt.Errorf("removing existing db: %w", err)
 	}
 
-	database, err := db.Open(*out)
+	database, err := db.Open(ctx, *out)
 	if err != nil {
-		log.Fatalf("opening db: %v", err)
+		return fmt.Errorf("opening db: %w", err)
 	}
 	defer database.Close()
 
@@ -88,7 +105,7 @@ func main() {
 			CacheReadPerMTok:     money.Money{Microdollars: 1_500_000},
 		},
 	}); err != nil {
-		log.Fatalf("seeding model pricing: %v", err)
+		return fmt.Errorf("seeding model pricing: %w", err)
 	}
 
 	// Use a recent base date so fixture data stays within the
@@ -97,10 +114,10 @@ func main() {
 		Truncate(24 * time.Hour).Add(10 * time.Hour)
 
 	for i, spec := range specs {
-		if err := createSessionFixture(
+		if err := createSessionFixture(ctx,
 			database, spec, i, base,
 		); err != nil {
-			log.Fatalf("creating fixture %s: %v", spec.suffix, err)
+			return fmt.Errorf("creating fixture %s: %w", spec.suffix, err)
 		}
 		fmt.Printf(
 			"  test-session-%s: %d messages\n",
@@ -108,31 +125,32 @@ func main() {
 		)
 	}
 
-	if err := createDurationShowcaseFixture(
+	if err := createDurationShowcaseFixture(ctx,
 		database, base.Add(72*time.Hour),
 	); err != nil {
-		log.Fatalf("creating duration showcase: %v", err)
+		return fmt.Errorf("creating duration showcase: %w", err)
 	}
 
-	if err := createRecentEditsFixture(
+	if err := createRecentEditsFixture(ctx,
 		database, base.Add(96*time.Hour),
 	); err != nil {
-		log.Fatalf("creating recent-edits fixture: %v", err)
+		return fmt.Errorf("creating recent-edits fixture: %w", err)
 	}
 
 	if err := createProjectReclassificationFixture(
 		database, base.Add(120*time.Hour),
 	); err != nil {
-		log.Fatalf("creating project-reclassification fixture: %v", err)
+		return fmt.Errorf("creating project-reclassification fixture: %w", err)
 	}
 
 	fmt.Printf("Fixture DB written to %s\n", *out)
 	if *duckDBOut != "" {
 		if err := writeDuckDBMirror(database, *duckDBOut); err != nil {
-			log.Fatalf("writing DuckDB mirror: %v", err)
+			return fmt.Errorf("writing DuckDB mirror: %w", err)
 		}
 		fmt.Printf("Fixture DuckDB mirror written to %s\n", *duckDBOut)
 	}
+	return nil
 }
 
 func createProjectReclassificationFixture(
@@ -169,12 +187,12 @@ func createProjectReclassificationFixture(
 			FirstMessage:     new(firstMessage),
 			Cwd:              item.cwd,
 		}
-		if err := database.UpsertSession(session); err != nil {
+		if err := database.UpsertSession(ctx, session); err != nil {
 			return fmt.Errorf(
 				"upserting project-reclassification session: %w", err,
 			)
 		}
-		if err := database.InsertMessages(generateMessages(
+		if err := database.InsertMessages(ctx, generateMessages(
 			sessionID, session.MessageCount, startedAt, model,
 		)); err != nil {
 			return fmt.Errorf(
@@ -216,7 +234,7 @@ func writeDuckDBMirror(database *db.DB, path string) error {
 	}
 	ctx := context.Background()
 	result, err := duckdbsync.Push(
-		ctx, path, database, "test-machine", duckdbsync.SyncOptions{}, true, nil,
+		ctx, path, database, "test-machine", storage.MirrorPushOptions{}, true, nil,
 	)
 	if err != nil {
 		return err
@@ -227,11 +245,11 @@ func writeDuckDBMirror(database *db.DB, path string) error {
 	return nil
 }
 
-func createSessionFixture(
+func createSessionFixture(ctx context.Context,
 	database *db.DB, spec sessionSpec,
 	index int, base time.Time,
 ) error {
-	sessionID := fmt.Sprintf("test-session-%s", spec.suffix)
+	sessionID := "test-session-" + spec.suffix
 	startedAt := base.Add(
 		time.Duration(index) * 24 * time.Hour,
 	)
@@ -258,10 +276,10 @@ func createSessionFixture(
 	}
 	if spec.msgCount > 0 {
 		sess.FirstMessage = new(
-			fmt.Sprintf("First message for %s", spec.project),
+			"First message for " + spec.project,
 		)
 	}
-	if err := database.UpsertSession(sess); err != nil {
+	if err := database.UpsertSession(ctx, sess); err != nil {
 		return fmt.Errorf("upserting session: %w", err)
 	}
 
@@ -284,7 +302,7 @@ func createSessionFixture(
 			sessionID, spec.msgCount, startedAt, model,
 		)
 	}
-	if err := database.InsertMessages(msgs); err != nil {
+	if err := database.InsertMessages(ctx, msgs); err != nil {
 		return fmt.Errorf("inserting messages: %w", err)
 	}
 	return nil
@@ -453,27 +471,8 @@ func generateContent(role string, idx, total int) string {
 	)
 }
 
-// createDurationShowcaseFixture builds a parent session that
-// exercises every shape the Session Vital Signs UX renders:
-// solo tool call, parallel turn with a sub-agent, and a slow
-// solo Bash. Together with the linked sub-agent session it
-// gives the right-panel timing query stable data to display.
-//
-// Timeline (relative to start):
-//
-//	T+0:00  msg 0  user      "investigate auth"
-//	T+0:02  msg 1  assistant solo Read (tool_use)
-//	T+0:04  msg 2  user      tool_result for Read
-//	T+0:14  msg 3  assistant parallel: 2 Reads + 1 Task
-//	T+2:14  msg 4  user      tool_results for all 3
-//	T+2:24  msg 5  assistant solo Bash
-//	T+2:52  msg 6  user      tool_result for Bash
-//	T+2:55  session ends
-//
-// Per the timing spec, turn durations come from the gap to
-// the next message; sub-agent calls take their duration from
-// the linked child session's started_at/ended_at.
-func createDurationShowcaseFixture(
+// Copilot emits execution endpoints; the linked Task has a closed child interval.
+func createDurationShowcaseFixture(ctx context.Context,
 	database *db.DB, start time.Time,
 ) error {
 	const (
@@ -493,8 +492,7 @@ func createDurationShowcaseFixture(
 	t6 := start.Add(2*time.Minute + 52*time.Second)
 	endParent := start.Add(2*time.Minute + 55*time.Second)
 
-	// Sub-agent runs alongside the parallel turn so its
-	// duration covers the full ~2 minutes of that turn.
+	// Child bounds provide a closed completion interval for the linked Task call.
 	subStart := t3
 	subEnd := t4
 	subAgentMessages := buildDurationSubagentMessages(
@@ -505,7 +503,7 @@ func createDurationShowcaseFixture(
 		ID:               subagentID,
 		Project:          project,
 		Machine:          "test-machine",
-		Agent:            "claude",
+		Agent:            "copilot",
 		StartedAt:        new(subStart.Format(time.RFC3339Nano)),
 		EndedAt:          new(subEnd.Format(time.RFC3339Nano)),
 		MessageCount:     len(subAgentMessages),
@@ -516,12 +514,12 @@ func createDurationShowcaseFixture(
 			"Inspect middleware request flow",
 		),
 	}
-	if err := database.UpsertSession(subSess); err != nil {
+	if err := database.UpsertSession(ctx, subSess); err != nil {
 		return fmt.Errorf(
 			"upserting subagent session: %w", err,
 		)
 	}
-	if err := database.InsertMessages(
+	if err := database.InsertMessages(ctx,
 		subAgentMessages,
 	); err != nil {
 		return fmt.Errorf(
@@ -542,7 +540,7 @@ func createDurationShowcaseFixture(
 		ID:               parentID,
 		Project:          project,
 		Machine:          "test-machine",
-		Agent:            "claude",
+		Agent:            "copilot",
 		Cwd:              "/workspace/مشروع/.worktrees/שלוםfeaturewithalongcheckoutnamefortooltipwrappingwithoutbreakopportunities",
 		StartedAt:        new(t0.Format(time.RFC3339Nano)),
 		EndedAt:          new(endParent.Format(time.RFC3339Nano)),
@@ -552,12 +550,12 @@ func createDurationShowcaseFixture(
 			"Investigate auth middleware performance",
 		),
 	}
-	if err := database.UpsertSession(parentSess); err != nil {
+	if err := database.UpsertSession(ctx, parentSess); err != nil {
 		return fmt.Errorf(
 			"upserting showcase session: %w", err,
 		)
 	}
-	if err := database.InsertMessages(
+	if err := database.InsertMessages(ctx,
 		parentMessages,
 	); err != nil {
 		return fmt.Errorf(
@@ -621,6 +619,7 @@ func buildDurationShowcaseMessages(
 	msg3Content := "Fanning out: two reads plus a sub-agent " +
 		"to dig into the session helpers."
 	msg4Content := "[tool_results]"
+	promptContent := "Confirm the slow path with the auth tests."
 	msg5Content := "Running the auth test suite to confirm " +
 		"the slow path matches what I read."
 	msg6Content := "[tool_result]"
@@ -659,6 +658,7 @@ func buildDurationShowcaseMessages(
 			SessionID:     sessionID,
 			Ordinal:       2,
 			Role:          "user",
+			SourceSubtype: "tool_result",
 			Content:       msg2Content,
 			Timestamp:     t2.Format(time.RFC3339Nano),
 			ContentLength: len(msg2Content),
@@ -709,6 +709,7 @@ func buildDurationShowcaseMessages(
 			SessionID:     sessionID,
 			Ordinal:       4,
 			Role:          "user",
+			SourceSubtype: "tool_result",
 			Content:       msg4Content,
 			Timestamp:     t4.Format(time.RFC3339Nano),
 			ContentLength: len(msg4Content),
@@ -716,6 +717,14 @@ func buildDurationShowcaseMessages(
 		{
 			SessionID:     sessionID,
 			Ordinal:       5,
+			Role:          "user",
+			Content:       promptContent,
+			Timestamp:     t4.Add(5 * time.Second).Format(time.RFC3339Nano),
+			ContentLength: len(promptContent),
+		},
+		{
+			SessionID:     sessionID,
+			Ordinal:       6,
 			Role:          "assistant",
 			Content:       msg5Content,
 			Timestamp:     t5.Format(time.RFC3339Nano),
@@ -733,13 +742,30 @@ func buildDurationShowcaseMessages(
 						`"description":"rerun ` +
 						`auth tests"}`,
 					ResultContentLength: 940,
+					ResultEvents: []db.ToolResultEvent{
+						{
+							ToolUseID:  bashSlowID,
+							Source:     "tool_execution",
+							Status:     "started",
+							Timestamp:  t5.Add(3 * time.Second).Format(time.RFC3339Nano),
+							EventIndex: 0,
+						},
+						{
+							ToolUseID:  bashSlowID,
+							Source:     "tool_execution",
+							Status:     "completed",
+							Timestamp:  t6.Add(-5 * time.Second).Format(time.RFC3339Nano),
+							EventIndex: 1,
+						},
+					},
 				},
 			},
 		},
 		{
 			SessionID:     sessionID,
-			Ordinal:       6,
+			Ordinal:       7,
 			Role:          "user",
+			SourceSubtype: "tool_result",
 			Content:       msg6Content,
 			Timestamp:     t6.Format(time.RFC3339Nano),
 			ContentLength: len(msg6Content),
@@ -747,11 +773,7 @@ func buildDurationShowcaseMessages(
 	}
 }
 
-// buildDurationSubagentMessages builds a small but realistic
-// sub-agent transcript: a Read followed by a Grep, then a
-// final report. The exact gaps don't drive the parent timing
-// UI (that uses the child session's start/end window), so we
-// keep the messages evenly spaced for readability.
+// Child calls lack execution endpoints, so their durations remain unknown.
 func buildDurationSubagentMessages(
 	sessionID string, start time.Time,
 ) []db.Message {
@@ -873,7 +895,7 @@ func buildDurationSubagentMessages(
 // filters on category IN ('Edit','Write') AND file_path IS NOT NULL, so
 // FilePath must be set directly on the ToolCall — InputJSON alone does
 // not propagate to the file_path column.
-func createRecentEditsFixture(
+func createRecentEditsFixture(ctx context.Context,
 	database *db.DB, start time.Time,
 ) error {
 	const (
@@ -897,7 +919,7 @@ func createRecentEditsFixture(
 		UserMessageCount: 1,
 		FirstMessage:     new(firstMsg),
 	}
-	if err := database.UpsertSession(sess); err != nil {
+	if err := database.UpsertSession(ctx, sess); err != nil {
 		return fmt.Errorf("upserting recent-edits session: %w", err)
 	}
 
@@ -951,7 +973,7 @@ func createRecentEditsFixture(
 			ContentLength: 13,
 		},
 	}
-	if err := database.InsertMessages(msgs); err != nil {
+	if err := database.InsertMessages(ctx, msgs); err != nil {
 		return fmt.Errorf(
 			"inserting recent-edits messages: %w", err,
 		)

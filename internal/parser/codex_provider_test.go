@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -33,7 +34,7 @@ func TestCodexProviderSourceMethods(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	plan, err := provider.WatchPlan(context.Background())
+	plan, err := provider.WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 2)
 	assert.Equal(t, root, plan.Roots[0].Path)
@@ -43,7 +44,7 @@ func TestCodexProviderSourceMethods(t *testing.T) {
 	assert.False(t, plan.Roots[1].Recursive)
 	assert.Equal(t, []string{CodexSessionIndexFilename}, plan.Roots[1].IncludeGlobs)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	source := discovered[0]
@@ -51,7 +52,7 @@ func TestCodexProviderSourceMethods(t *testing.T) {
 	assert.Equal(t, sourcePath, source.DisplayPath)
 	assert.Equal(t, sourcePath, source.FingerprintKey)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~codex:" + uuid,
 	})
 	require.NoError(t, err)
@@ -60,7 +61,7 @@ func TestCodexProviderSourceMethods(t *testing.T) {
 
 	for _, path := range []string{sourcePath, indexPath} {
 		changed, err := provider.SourcesForChangedPath(
-			context.Background(),
+			t.Context(),
 			ChangedPathRequest{Path: path, EventKind: "write"},
 		)
 		require.NoError(t, err)
@@ -70,17 +71,17 @@ func TestCodexProviderSourceMethods(t *testing.T) {
 
 	info, err := os.Stat(sourcePath)
 	require.NoError(t, err)
-	fingerprint, err := provider.Fingerprint(context.Background(), found)
+	fingerprint, err := provider.Fingerprint(t.Context(), found)
 	require.NoError(t, err)
 	assert.Equal(t, sourcePath, fingerprint.Key)
 	assert.Equal(t, info.Size(), fingerprint.Size)
 	assert.Equal(t, newer.UnixNano(), fingerprint.MTimeNS)
-	wantInode, wantDevice := sourceFileIdentity(info)
+	wantInode, wantDevice := sourceFileIdentityForPath(sourcePath, info)
 	assert.Equal(t, wantInode, fingerprint.Inode)
 	assert.Equal(t, wantDevice, fingerprint.Device)
 	assert.NotEmpty(t, fingerprint.Hash)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      found,
 		Fingerprint: fingerprint,
 	})
@@ -134,34 +135,43 @@ func TestCodexProviderTurnlessParentResolvesWithoutRetry(t *testing.T) {
 	// parse as current instead of being marked for a retry that can never
 	// succeed. Whether the child carries a copied parent session_meta is
 	// not a signal: real forks replay parent history with and without it.
-	root := t.TempDir()
-	const childID = "22222222-2222-4222-8222-222222222222"
-	const parentID = "11111111-1111-4111-8111-111111111111"
-	writeCodexProviderSessionContent(t, root, parentID, testjsonl.JoinJSONL(
-		testjsonl.CodexSessionMetaJSON(parentID, "/workspace/project", "codex_cli_rs", tsEarly),
-	))
-	writeCodexProviderSessionContent(t, root, childID, testjsonl.JoinJSONL(
-		testjsonl.CodexForkedSessionMetaJSON(
-			childID, parentID, "/workspace/project", "codex_cli_rs", tsEarly,
-		),
-		testjsonl.CodexTurnContextWithIDJSON("gpt-5.4", "child-turn", tsEarlyS1),
-		testjsonl.CodexMsgJSON("user", "child task", tsEarlyS1),
-		testjsonl.CodexMsgJSON("assistant", "child answer", tsEarlyS5),
-	))
-	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
-	source := requireCodexProviderSource(t, provider, childID)
+	for _, copiedParentMeta := range []bool{false, true} {
+		t.Run(fmt.Sprintf("copied_parent_meta_%t", copiedParentMeta), func(t *testing.T) {
+			root := t.TempDir()
+			const childID = "22222222-2222-4222-8222-222222222222"
+			const parentID = "11111111-1111-4111-8111-111111111111"
+			writeCodexProviderSessionContent(t, root, parentID, testjsonl.JoinJSONL(
+				testjsonl.CodexSessionMetaJSON(parentID, "/workspace/project", "codex_cli_rs", tsEarly),
+			))
+			var copiedMeta string
+			if copiedParentMeta {
+				copiedMeta = testjsonl.CodexSessionMetaJSON(parentID, "/workspace/project", "codex_cli_rs", tsEarly)
+			}
+			writeCodexProviderSessionContent(t, root, childID, testjsonl.JoinJSONL(
+				testjsonl.CodexForkedSessionMetaJSON(
+					childID, parentID, "/workspace/project", "codex_cli_rs", tsEarly,
+				),
+				copiedMeta,
+				testjsonl.CodexTurnContextWithIDJSON("gpt-5.4", "child-turn", tsEarlyS1),
+				testjsonl.CodexMsgJSON("user", "child task", tsEarlyS1),
+				testjsonl.CodexMsgJSON("assistant", "child answer", tsEarlyS5),
+			))
+			provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+			source := requireCodexProviderSource(t, provider, childID)
 
-	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: source})
+			outcome, err := provider.Parse(t.Context(), ParseRequest{Source: source})
 
-	require.NoError(t, err)
-	require.Len(t, outcome.Results, 1)
-	result := outcome.Results[0]
-	assert.Equal(t, DataVersionCurrent, result.DataVersion)
-	assert.Empty(t, result.RetryReason)
-	require.Len(t, result.Result.Messages, 2)
-	assert.Equal(t, "child task", result.Result.Messages[0].Content)
-	assert.Equal(t, "child answer", result.Result.Messages[1].Content)
+			require.NoError(t, err)
+			require.Len(t, outcome.Results, 1)
+			result := outcome.Results[0]
+			assert.Equal(t, DataVersionCurrent, result.DataVersion)
+			assert.Empty(t, result.RetryReason)
+			require.Len(t, result.Result.Messages, 2)
+			assert.Equal(t, "child task", result.Result.Messages[0].Content)
+			assert.Equal(t, "child answer", result.Result.Messages[1].Content)
+		})
+	}
 }
 
 func TestCodexProviderUnresolvedParentWithoutFinalNewlineNeedsRetry(t *testing.T) {
@@ -278,9 +288,9 @@ func TestCodexProviderForceParseReloadsSameStatSessionIndex(t *testing.T) {
 	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 	source := requireCodexProviderSource(t, provider, uuid)
-	fingerprint, err := provider.Fingerprint(context.Background(), source)
+	fingerprint, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
-	first, err := provider.Parse(context.Background(), ParseRequest{
+	first, err := provider.Parse(t.Context(), ParseRequest{
 		Source: source, Fingerprint: fingerprint,
 	})
 	require.NoError(t, err)
@@ -296,7 +306,7 @@ func TestCodexProviderForceParseReloadsSameStatSessionIndex(t *testing.T) {
 	require.Equal(t, before.Size(), after.Size(), "index size must stay unchanged")
 	require.Equal(t, before.ModTime(), after.ModTime(), "index mtime must stay unchanged")
 
-	forced, err := provider.Parse(context.Background(), ParseRequest{
+	forced, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      source,
 		Fingerprint: fingerprint,
 		ForceParse:  true,
@@ -347,7 +357,7 @@ func TestCodexProviderFactoryScopesCursorCache(t *testing.T) {
 	require.NotNil(t, sess)
 	info, err := os.Stat(path)
 	require.NoError(t, err)
-	inode, device := sourceFileIdentity(info)
+	inode, device := sourceFileIdentityForPath(path, info)
 
 	_, siblingHit := siblingProvider.cursorCache.Get(
 		path, info.Size(), inode, device,
@@ -399,7 +409,7 @@ func TestCodexProviderFullParseSnapshotExcludesLaterGrowth(t *testing.T) {
 	require.Len(t, messages, 1)
 	assert.Equal(t, RoleUser, messages[0].Role)
 	assert.Equal(t, "captured request", messages[0].Content)
-	inode, device := sourceFileIdentity(capturedInfo)
+	inode, device := sourceFileIdentityForFile(snapshot, capturedInfo)
 	seed, seeded := concrete.cursorCache.Get(
 		path, int64(len(initial)), inode, device,
 	)
@@ -407,10 +417,10 @@ func TestCodexProviderFullParseSnapshotExcludesLaterGrowth(t *testing.T) {
 	assert.Equal(t, "gpt-5.4", seed.model)
 	assert.Equal(t, "task_complete", seed.lastTaskEvent)
 
-	currentFingerprint, err := provider.Fingerprint(context.Background(), source)
+	currentFingerprint, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 	outcome, status, err := provider.ParseIncremental(
-		context.Background(),
+		t.Context(),
 		IncrementalRequest{
 			Source:       source,
 			Fingerprint:  currentFingerprint,
@@ -483,14 +493,14 @@ func TestCodexProviderFullParseSnapshotKeepsDescriptorIdentityAfterReplacement(
 	defer snapshot.Close()
 	snapshotInfo, err := snapshot.Stat()
 	require.NoError(t, err)
-	oldInode, oldDevice := sourceFileIdentity(snapshotInfo)
+	oldInode, oldDevice := sourceFileIdentityForFile(snapshot, snapshotInfo)
 
 	replacementPath := path + ".replacement"
 	require.NoError(t, os.WriteFile(replacementPath, []byte(replacement), 0o644))
 	require.NoError(t, os.Rename(replacementPath, path))
 	currentInfo, err := os.Stat(path)
 	require.NoError(t, err)
-	newInode, newDevice := sourceFileIdentity(currentInfo)
+	newInode, newDevice := sourceFileIdentityForPath(path, currentInfo)
 
 	sess, messages, err := concrete.parseSessionSnapshot(
 		path, "local", false, snapshot, snapshotInfo,
@@ -532,9 +542,9 @@ func TestCodexProviderIncrementalSnapshotExcludesLaterGrowth(t *testing.T) {
 	concrete, ok := provider.(*codexProvider)
 	require.True(t, ok)
 	source := requireCodexProviderSource(t, provider, uuid)
-	prefixFingerprint, err := provider.Fingerprint(context.Background(), source)
+	prefixFingerprint, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
-	_, err = provider.Parse(context.Background(), ParseRequest{
+	_, err = provider.Parse(t.Context(), ParseRequest{
 		Source: source, Fingerprint: prefixFingerprint,
 	})
 	require.NoError(t, err)
@@ -543,7 +553,7 @@ func TestCodexProviderIncrementalSnapshotExcludesLaterGrowth(t *testing.T) {
 		testjsonl.CodexMsgJSON("assistant", "captured answer", "2024-01-01T10:00:03Z"),
 	)
 	appendCodexProviderContent(t, path, capturedTail)
-	capturedFingerprint, err := provider.Fingerprint(context.Background(), source)
+	capturedFingerprint, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 	laterTail := testjsonl.JoinJSONL(
 		testjsonl.CodexMsgJSON("assistant", "later answer", "2024-01-01T10:00:04Z"),
@@ -551,7 +561,7 @@ func TestCodexProviderIncrementalSnapshotExcludesLaterGrowth(t *testing.T) {
 	appendCodexProviderContent(t, path, laterTail)
 
 	first, status, err := provider.ParseIncremental(
-		context.Background(),
+		t.Context(),
 		IncrementalRequest{
 			Source:       source,
 			Fingerprint:  capturedFingerprint,
@@ -582,10 +592,10 @@ func TestCodexProviderIncrementalSnapshotExcludesLaterGrowth(t *testing.T) {
 	assert.True(t, capturedStaged)
 	assert.False(t, laterStaged)
 
-	currentFingerprint, err := provider.Fingerprint(context.Background(), source)
+	currentFingerprint, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 	second, status, err := provider.ParseIncremental(
-		context.Background(),
+		t.Context(),
 		IncrementalRequest{
 			Source:       source,
 			Fingerprint:  currentFingerprint,
@@ -623,7 +633,7 @@ func TestCodexProviderIncrementalSnapshotKeepsCapturedEOFConservative(t *testing
 	concrete, ok := provider.(*codexProvider)
 	require.True(t, ok)
 	source := requireCodexProviderSource(t, provider, uuid)
-	capturedFingerprint, err := provider.Fingerprint(context.Background(), source)
+	capturedFingerprint, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 	later := testjsonl.CodexMsgJSON(
 		"assistant", "later answer", tsLateS5,
@@ -631,7 +641,7 @@ func TestCodexProviderIncrementalSnapshotKeepsCapturedEOFConservative(t *testing
 	appendCodexProviderContent(t, path, "\n"+later)
 
 	outcome, status, err := provider.ParseIncremental(
-		context.Background(),
+		t.Context(),
 		IncrementalRequest{
 			Source:       source,
 			Fingerprint:  capturedFingerprint,
@@ -674,7 +684,7 @@ func TestCodexProviderIncrementalAppendedSessionMetaNeedsFullParse(t *testing.T)
 	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 	source := requireCodexProviderSource(t, provider, childID)
-	initialFingerprint, err := provider.Fingerprint(context.Background(), source)
+	initialFingerprint, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 
 	appendCodexProviderContent(t, path, testjsonl.JoinJSONL(
@@ -685,11 +695,11 @@ func TestCodexProviderIncrementalAppendedSessionMetaNeedsFullParse(t *testing.T)
 			"assistant", "replayed parent answer", tsEarlyS5,
 		),
 	))
-	currentFingerprint, err := provider.Fingerprint(context.Background(), source)
+	currentFingerprint, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 
 	outcome, status, err := provider.ParseIncremental(
-		context.Background(),
+		t.Context(),
 		IncrementalRequest{
 			Source:       source,
 			Fingerprint:  currentFingerprint,
@@ -721,7 +731,7 @@ func TestCodexProviderIncrementalRejectsFingerprintIdentityMismatch(t *testing.T
 	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 	source := requireCodexProviderSource(t, provider, uuid)
-	fingerprint, err := provider.Fingerprint(context.Background(), source)
+	fingerprint, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 	fingerprint.Inode++
 	if fingerprint.Inode == 0 {
@@ -729,7 +739,7 @@ func TestCodexProviderIncrementalRejectsFingerprintIdentityMismatch(t *testing.T
 	}
 
 	outcome, status, err := provider.ParseIncremental(
-		context.Background(),
+		t.Context(),
 		IncrementalRequest{
 			Source:       source,
 			Fingerprint:  fingerprint,
@@ -786,11 +796,11 @@ func TestCodexProviderIncrementalFirstGenuinePromptNeedsFullParse(t *testing.T) 
 
 			if mode == "warm" {
 				prefixFingerprint, err := provider.Fingerprint(
-					context.Background(), source,
+					t.Context(), source,
 				)
 				require.NoError(t, err)
 				full, err := provider.Parse(
-					context.Background(),
+					t.Context(),
 					ParseRequest{
 						Source: source, Fingerprint: prefixFingerprint,
 					},
@@ -799,15 +809,15 @@ func TestCodexProviderIncrementalFirstGenuinePromptNeedsFullParse(t *testing.T) 
 				require.Len(t, full.Results, 1)
 				assert.Empty(t, full.Results[0].Result.Session.FirstMessage)
 				require.Len(t, full.Results[0].Result.Messages, 1)
-				assert.Equal(
-					t, "Orphan task finished",
+				assert.Equal(t,
+					"Orphan task finished",
 					full.Results[0].Result.Messages[0].Content,
 				)
 				appendCodexProviderContent(t, path, tail)
 			}
 
 			fingerprint, err := provider.Fingerprint(
-				context.Background(), source,
+				t.Context(), source,
 			)
 			require.NoError(t, err)
 			inode, device := fingerprint.Inode, fingerprint.Device
@@ -817,7 +827,7 @@ func TestCodexProviderIncrementalFirstGenuinePromptNeedsFullParse(t *testing.T) 
 			)
 
 			outcome, status, err := provider.ParseIncremental(
-				context.Background(),
+				t.Context(),
 				IncrementalRequest{
 					Source:       source,
 					Fingerprint:  fingerprint,
@@ -844,18 +854,154 @@ func TestCodexProviderIncrementalFirstGenuinePromptNeedsFullParse(t *testing.T) 
 			}
 
 			full, err := provider.Parse(
-				context.Background(),
+				t.Context(),
 				ParseRequest{Source: source, Fingerprint: fingerprint},
 			)
 			require.NoError(t, err)
 			require.Len(t, full.Results, 1)
-			assert.Equal(
-				t, "first genuine request",
+			assert.Equal(t,
+				"first genuine request",
 				full.Results[0].Result.Session.FirstMessage,
 			)
 			require.Len(t, full.Results[0].Result.Messages, 2)
 		})
 	}
+}
+
+func TestCodexProviderIncrementalCustomToolOutputUpdatesStoredCall(t *testing.T) {
+	const (
+		uuid   = "019eb791-cf7d-75c1-8439-9ed74c1229f7"
+		call   = `{"timestamp":"2026-08-02T09:00:02Z","type":"response_item","payload":{"type":"custom_tool_call","name":"apply_patch","call_id":"call_patch","input":"*** Begin Patch\n*** End Patch"}}`
+		output = `{"timestamp":"2026-08-02T09:00:03Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_patch","output":"Success. Updated one file.","status":"completed"}}`
+	)
+	prefix := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			uuid, "/workspace/project-a", "codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexMsgJSON("user", "apply the patch", tsEarlyS1),
+		call,
+	)
+	tail := testjsonl.JoinJSONL(output)
+
+	for _, mode := range []string{"warm", "cold"} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			content := prefix
+			if mode == "cold" {
+				content += tail
+			}
+			path := writeCodexProviderSessionContent(
+				t, root, uuid, content,
+			)
+			provider, ok := NewProvider(
+				AgentCodex, ProviderConfig{Roots: []string{root}},
+			)
+			require.True(t, ok)
+			source := requireCodexProviderSource(t, provider, uuid)
+
+			if mode == "warm" {
+				fingerprint, err := provider.Fingerprint(
+					t.Context(), source,
+				)
+				require.NoError(t, err)
+				_, err = provider.Parse(t.Context(), ParseRequest{
+					Source: source, Fingerprint: fingerprint,
+				})
+				require.NoError(t, err)
+				appendCodexProviderContent(t, path, tail)
+			}
+
+			fingerprint, err := provider.Fingerprint(
+				t.Context(), source,
+			)
+			require.NoError(t, err)
+			outcome, status, err := provider.ParseIncremental(
+				t.Context(), IncrementalRequest{
+					Source:       source,
+					Fingerprint:  fingerprint,
+					SessionID:    "codex:" + uuid,
+					Offset:       int64(len(prefix)),
+					StartOrdinal: 2,
+				},
+			)
+
+			require.NoError(t, err)
+			assert.Equal(t, IncrementalApplied, status)
+			assert.Empty(t, outcome.Messages)
+			require.Len(t, outcome.ToolCallUpdates, 1)
+			assert.Equal(t, "call_patch", outcome.ToolCallUpdates[0].ToolUseID)
+			require.Len(t, outcome.ToolCallUpdates[0].ResultEvents, 1)
+			event := outcome.ToolCallUpdates[0].ResultEvents[0]
+			assert.Equal(t, "custom_tool_call_output", event.Source)
+			assert.Equal(t, "completed", event.Status)
+			assert.Equal(t, "Success. Updated one file.", event.Content)
+		})
+	}
+}
+
+func TestCodexProviderIncrementalLateOutputAttachesCommittedUsage(t *testing.T) {
+	const uuid = "019eb791-cf7d-75c1-8439-9ed74c1229f8"
+	prefix := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			uuid, "/workspace/project-a", "codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexTurnContextJSON("gpt-5.4", tsEarlyS1),
+		testjsonl.CodexMsgJSON("user", "inspect the repository", tsEarlyS1),
+		testjsonl.CodexFunctionCallWithCallIDJSON(
+			"shell", "call_late", map[string]any{"cmd": "git status"}, tsEarlyS5,
+		),
+	)
+	tail := testjsonl.JoinJSONL(
+		testjsonl.CodexFunctionCallOutputJSON(
+			"call_late", "working tree clean", tsLate,
+		),
+		testjsonl.CodexTokenCountJSON(tsLateS5, 100_000, 250, 64_000),
+	)
+
+	root := t.TempDir()
+	path := writeCodexProviderSessionContent(t, root, uuid, prefix)
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	source := requireCodexProviderSource(t, provider, uuid)
+	prefixFingerprint, err := provider.Fingerprint(t.Context(), source)
+	require.NoError(t, err)
+	full, err := provider.Parse(t.Context(), ParseRequest{
+		Source: source, Fingerprint: prefixFingerprint,
+	})
+	require.NoError(t, err)
+	require.Len(t, full.Results, 1)
+	require.Len(t, full.Results[0].Result.Messages, 2)
+	assert.Equal(t, RoleAssistant, full.Results[0].Result.Messages[1].Role)
+
+	appendCodexProviderContent(t, path, tail)
+	fingerprint, err := provider.Fingerprint(t.Context(), source)
+	require.NoError(t, err)
+	pendingUsageOrdinal := 1
+	outcome, status, err := provider.ParseIncremental(
+		t.Context(), IncrementalRequest{
+			Source:                    source,
+			Fingerprint:               fingerprint,
+			SessionID:                 "codex:" + uuid,
+			Offset:                    prefixFingerprint.Size,
+			StartOrdinal:              2,
+			StoredPendingUsageOrdinal: &pendingUsageOrdinal,
+		},
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, IncrementalApplied, status)
+	assert.False(t, outcome.ForceReplace)
+	assert.Empty(t, outcome.Messages)
+	require.Len(t, outcome.ToolCallUpdates, 1)
+	assert.Equal(t, "call_late", outcome.ToolCallUpdates[0].ToolUseID)
+	require.Len(t, outcome.MessageTokenUsageUpdates, 1)
+	usage := outcome.MessageTokenUsageUpdates[0]
+	assert.Equal(t, 1, usage.Ordinal)
+	assert.Equal(t, 100_000, usage.ContextTokens)
+	assert.Equal(t, 250, usage.OutputTokens)
+	assert.True(t, usage.HasContextTokens)
+	assert.True(t, usage.HasOutputTokens)
+	assert.NotEmpty(t, usage.TokenUsage)
 }
 
 func TestCodexProviderColdIncrementalStagesRetryCursorVersions(t *testing.T) {
@@ -880,7 +1026,7 @@ func TestCodexProviderColdIncrementalStagesRetryCursorVersions(t *testing.T) {
 	concrete, ok := provider.(*codexProvider)
 	require.True(t, ok)
 	source := requireCodexProviderSource(t, provider, uuid)
-	fingerprint, err := provider.Fingerprint(context.Background(), source)
+	fingerprint, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 	prefixOffset := int64(len(prefix))
 	_, oldBefore := concrete.cursorCache.Get(
@@ -899,7 +1045,7 @@ func TestCodexProviderColdIncrementalStagesRetryCursorVersions(t *testing.T) {
 		Offset:       prefixOffset,
 		StartOrdinal: 1,
 	}
-	first, status, err := provider.ParseIncremental(context.Background(), req)
+	first, status, err := provider.ParseIncremental(t.Context(), req)
 
 	require.NoError(t, err)
 	assert.Equal(t, IncrementalApplied, status)
@@ -924,7 +1070,7 @@ func TestCodexProviderColdIncrementalStagesRetryCursorVersions(t *testing.T) {
 	// Simulate a failed DB write: the persisted offset remains unchanged and
 	// the same tail is retried from the old cursor version.
 	retry, retryStatus, err := provider.ParseIncremental(
-		context.Background(), req,
+		t.Context(), req,
 	)
 
 	require.NoError(t, err)
@@ -947,9 +1093,9 @@ func TestCodexProviderParseIncrementalSuccess(t *testing.T) {
 	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 	source := requireCodexProviderSource(t, provider, uuid)
-	initialFingerprint, err := provider.Fingerprint(context.Background(), source)
+	initialFingerprint, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
-	full, err := provider.Parse(context.Background(), ParseRequest{
+	full, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      source,
 		Fingerprint: initialFingerprint,
 	})
@@ -966,11 +1112,11 @@ func TestCodexProviderParseIncrementalSuccess(t *testing.T) {
 		codexEventMsgJSON("task_complete", "2024-01-01T10:00:09Z"),
 	)
 	appendCodexProviderContent(t, path, tail)
-	currentFingerprint, err := provider.Fingerprint(context.Background(), source)
+	currentFingerprint, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 
 	outcome, status, err := provider.ParseIncremental(
-		context.Background(),
+		t.Context(),
 		IncrementalRequest{
 			Source:       source,
 			Fingerprint:  currentFingerprint,
@@ -1072,10 +1218,10 @@ func TestCodexProviderTokenCountCursorParity(t *testing.T) {
 			require.True(t, ok)
 			fullSource := requireCodexProviderSource(t, fullProvider, tc.uuid)
 			fullFingerprint, err := fullProvider.Fingerprint(
-				context.Background(), fullSource,
+				t.Context(), fullSource,
 			)
 			require.NoError(t, err)
-			full, err := fullProvider.Parse(context.Background(), ParseRequest{
+			full, err := fullProvider.Parse(t.Context(), ParseRequest{
 				Source: fullSource, Fingerprint: fullFingerprint,
 			})
 			require.NoError(t, err)
@@ -1105,21 +1251,21 @@ func TestCodexProviderTokenCountCursorParity(t *testing.T) {
 					source := requireCodexProviderSource(t, provider, tc.uuid)
 					if mode == "warm" {
 						prefixFingerprint, err := provider.Fingerprint(
-							context.Background(), source,
+							t.Context(), source,
 						)
 						require.NoError(t, err)
-						_, err = provider.Parse(context.Background(), ParseRequest{
+						_, err = provider.Parse(t.Context(), ParseRequest{
 							Source: source, Fingerprint: prefixFingerprint,
 						})
 						require.NoError(t, err)
 						appendCodexProviderContent(t, path, tail)
 					}
 					fingerprint, err := provider.Fingerprint(
-						context.Background(), source,
+						t.Context(), source,
 					)
 					require.NoError(t, err)
 					outcome, status, err := provider.ParseIncremental(
-						context.Background(),
+						t.Context(),
 						IncrementalRequest{
 							Source:       source,
 							Fingerprint:  fingerprint,
@@ -1169,10 +1315,10 @@ func TestCodexProviderParseIncrementalInboundAgentMessage(t *testing.T) {
 	require.True(t, ok)
 	source := requireCodexProviderSource(t, provider, uuid)
 	initialFingerprint, err := provider.Fingerprint(
-		context.Background(), source,
+		t.Context(), source,
 	)
 	require.NoError(t, err)
-	full, err := provider.Parse(context.Background(), ParseRequest{
+	full, err := provider.Parse(t.Context(), ParseRequest{
 		Source: source, Fingerprint: initialFingerprint,
 	})
 	require.NoError(t, err)
@@ -1185,12 +1331,12 @@ func TestCodexProviderParseIncrementalInboundAgentMessage(t *testing.T) {
 	) + "\n"
 	appendCodexProviderContent(t, path, tail)
 	currentFingerprint, err := provider.Fingerprint(
-		context.Background(), source,
+		t.Context(), source,
 	)
 	require.NoError(t, err)
 
 	outcome, status, err := provider.ParseIncremental(
-		context.Background(),
+		t.Context(),
 		IncrementalRequest{
 			Source: source, Fingerprint: currentFingerprint,
 			SessionID: "codex:" + uuid,
@@ -1213,9 +1359,9 @@ func TestCodexProviderParseIncrementalNoLifecycleMarker(t *testing.T) {
 	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 	source := requireCodexProviderSource(t, provider, uuid)
-	initialFingerprint, err := provider.Fingerprint(context.Background(), source)
+	initialFingerprint, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
-	_, err = provider.Parse(context.Background(), ParseRequest{
+	_, err = provider.Parse(t.Context(), ParseRequest{
 		Source: source, Fingerprint: initialFingerprint,
 	})
 	require.NoError(t, err)
@@ -1224,10 +1370,10 @@ func TestCodexProviderParseIncrementalNoLifecycleMarker(t *testing.T) {
 		testjsonl.CodexMsgJSON("assistant", "tail answer", tsLate),
 	)
 	appendCodexProviderContent(t, path, tail)
-	currentFingerprint, err := provider.Fingerprint(context.Background(), source)
+	currentFingerprint, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 	outcome, status, err := provider.ParseIncremental(
-		context.Background(),
+		t.Context(),
 		IncrementalRequest{
 			Source:       source,
 			Fingerprint:  currentFingerprint,
@@ -1251,9 +1397,9 @@ func TestCodexProviderParseIncrementalStagesCursorWithoutMessages(t *testing.T) 
 	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 	source := requireCodexProviderSource(t, provider, uuid)
-	initialFingerprint, err := provider.Fingerprint(context.Background(), source)
+	initialFingerprint, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
-	_, err = provider.Parse(context.Background(), ParseRequest{
+	_, err = provider.Parse(t.Context(), ParseRequest{
 		Source: source, Fingerprint: initialFingerprint,
 	})
 	require.NoError(t, err)
@@ -1263,10 +1409,10 @@ func TestCodexProviderParseIncrementalStagesCursorWithoutMessages(t *testing.T) 
 		codexEventMsgJSON("task_started", "2024-01-01T10:00:05Z"),
 	)
 	appendCodexProviderContent(t, path, tail)
-	currentFingerprint, err := provider.Fingerprint(context.Background(), source)
+	currentFingerprint, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 	outcome, status, err := provider.ParseIncremental(
-		context.Background(),
+		t.Context(),
 		IncrementalRequest{
 			Source:       source,
 			Fingerprint:  currentFingerprint,
@@ -1306,15 +1452,15 @@ func TestCodexProviderParseIncrementalNoDataAndTruncation(t *testing.T) {
 	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 	source := requireCodexProviderSource(t, provider, uuid)
-	fingerprint, err := provider.Fingerprint(context.Background(), source)
+	fingerprint, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
-	_, err = provider.Parse(context.Background(), ParseRequest{
+	_, err = provider.Parse(t.Context(), ParseRequest{
 		Source: source, Fingerprint: fingerprint,
 	})
 	require.NoError(t, err)
 
 	noData, status, err := provider.ParseIncremental(
-		context.Background(),
+		t.Context(),
 		IncrementalRequest{
 			Source:      source,
 			Fingerprint: fingerprint,
@@ -1327,7 +1473,7 @@ func TestCodexProviderParseIncrementalNoDataAndTruncation(t *testing.T) {
 	assert.Equal(t, IncrementalOutcome{}, noData)
 
 	truncated, status, err := provider.ParseIncremental(
-		context.Background(),
+		t.Context(),
 		IncrementalRequest{
 			Source:      source,
 			Fingerprint: fingerprint,
@@ -1355,9 +1501,9 @@ func TestCodexProviderParseIncrementalUnsafePartialOffset(t *testing.T) {
 	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 	source := requireCodexProviderSource(t, provider, uuid)
-	partialFingerprint, err := provider.Fingerprint(context.Background(), source)
+	partialFingerprint, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
-	initial, err := provider.Parse(context.Background(), ParseRequest{
+	initial, err := provider.Parse(t.Context(), ParseRequest{
 		Source: source, Fingerprint: partialFingerprint,
 	})
 	require.NoError(t, err)
@@ -1366,10 +1512,10 @@ func TestCodexProviderParseIncrementalUnsafePartialOffset(t *testing.T) {
 	assert.Equal(t, int64(len(partial)), initial.Results[0].Result.Session.File.Size)
 
 	appendCodexProviderContent(t, path, messageLine[cut:]+"\n")
-	completeFingerprint, err := provider.Fingerprint(context.Background(), source)
+	completeFingerprint, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 	outcome, status, err := provider.ParseIncremental(
-		context.Background(),
+		t.Context(),
 		IncrementalRequest{
 			Source:       source,
 			Fingerprint:  completeFingerprint,
@@ -1384,14 +1530,13 @@ func TestCodexProviderParseIncrementalUnsafePartialOffset(t *testing.T) {
 	assert.True(t, outcome.ForceReplace)
 	assert.Empty(t, outcome.Messages)
 
-	full, err := provider.Parse(context.Background(), ParseRequest{
+	full, err := provider.Parse(t.Context(), ParseRequest{
 		Source: source, Fingerprint: completeFingerprint,
 	})
 	require.NoError(t, err)
 	require.Len(t, full.Results, 1)
 	require.Len(t, full.Results[0].Result.Messages, 1)
-	assert.Equal(t,
-		"record completed after the first parse",
+	assert.Equal(t, "record completed after the first parse",
 		full.Results[0].Result.Messages[0].Content,
 	)
 }
@@ -1403,9 +1548,9 @@ func TestCodexProviderParseIncrementalStagesCompleteRecordsOnly(t *testing.T) {
 	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 	source := requireCodexProviderSource(t, provider, uuid)
-	initialFingerprint, err := provider.Fingerprint(context.Background(), source)
+	initialFingerprint, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
-	_, err = provider.Parse(context.Background(), ParseRequest{
+	_, err = provider.Parse(t.Context(), ParseRequest{
 		Source: source, Fingerprint: initialFingerprint,
 	})
 	require.NoError(t, err)
@@ -1420,10 +1565,10 @@ func TestCodexProviderParseIncrementalStagesCompleteRecordsOnly(t *testing.T) {
 	appendCodexProviderContent(
 		t, path, completeRecord+deferredRecord[:deferredCut],
 	)
-	unterminatedFingerprint, err := provider.Fingerprint(context.Background(), source)
+	unterminatedFingerprint, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 	outcome, status, err := provider.ParseIncremental(
-		context.Background(),
+		t.Context(),
 		IncrementalRequest{
 			Source:       source,
 			Fingerprint:  unterminatedFingerprint,
@@ -1458,10 +1603,10 @@ func TestCodexProviderParseIncrementalStagesCompleteRecordsOnly(t *testing.T) {
 	assert.False(t, eofOK)
 
 	appendCodexProviderContent(t, path, deferredRecord[deferredCut:]+"\n")
-	completeFingerprint, err := provider.Fingerprint(context.Background(), source)
+	completeFingerprint, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 	completed, status, err := provider.ParseIncremental(
-		context.Background(),
+		t.Context(),
 		IncrementalRequest{
 			Source:       source,
 			Fingerprint:  completeFingerprint,
@@ -1487,9 +1632,9 @@ func TestCodexProviderParseIncrementalValidEOFNeedsFullParse(t *testing.T) {
 	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 	source := requireCodexProviderSource(t, provider, uuid)
-	initialFingerprint, err := provider.Fingerprint(context.Background(), source)
+	initialFingerprint, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
-	_, err = provider.Parse(context.Background(), ParseRequest{
+	_, err = provider.Parse(t.Context(), ParseRequest{
 		Source: source, Fingerprint: initialFingerprint,
 	})
 	require.NoError(t, err)
@@ -1498,10 +1643,10 @@ func TestCodexProviderParseIncrementalValidEOFNeedsFullParse(t *testing.T) {
 		"assistant", "valid record without newline", tsLate,
 	)
 	appendCodexProviderContent(t, path, unterminatedRecord)
-	currentFingerprint, err := provider.Fingerprint(context.Background(), source)
+	currentFingerprint, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 	outcome, status, err := provider.ParseIncremental(
-		context.Background(),
+		t.Context(),
 		IncrementalRequest{
 			Source:       source,
 			Fingerprint:  currentFingerprint,
@@ -1524,14 +1669,13 @@ func TestCodexProviderParseIncrementalValidEOFNeedsFullParse(t *testing.T) {
 	)
 	assert.False(t, staged)
 
-	full, err := provider.Parse(context.Background(), ParseRequest{
+	full, err := provider.Parse(t.Context(), ParseRequest{
 		Source: source, Fingerprint: currentFingerprint,
 	})
 	require.NoError(t, err)
 	require.Len(t, full.Results, 1)
 	require.Len(t, full.Results[0].Result.Messages, 2)
-	assert.Equal(t,
-		"valid record without newline",
+	assert.Equal(t, "valid record without newline",
 		full.Results[0].Result.Messages[1].Content,
 	)
 }
@@ -1550,7 +1694,7 @@ func TestCodexProviderParseIncrementalFallbackDoesNotStage(t *testing.T) {
 	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 	source := requireCodexProviderSource(t, provider, uuid)
-	initialFingerprint, err := provider.Fingerprint(context.Background(), source)
+	initialFingerprint, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 	concrete, ok := provider.(*codexProvider)
 	require.True(t, ok)
@@ -1559,10 +1703,10 @@ func TestCodexProviderParseIncrementalFallbackDoesNotStage(t *testing.T) {
 		testjsonl.CodexTokenCountJSON(tsLateS5, 100_000, 250, 64_000),
 	)
 	appendCodexProviderContent(t, path, tail)
-	currentFingerprint, err := provider.Fingerprint(context.Background(), source)
+	currentFingerprint, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 	outcome, status, err := provider.ParseIncremental(
-		context.Background(),
+		t.Context(),
 		IncrementalRequest{
 			Source:       source,
 			Fingerprint:  currentFingerprint,
@@ -1609,12 +1753,12 @@ func TestCodexProviderColdSeedErrorDoesNotStage(t *testing.T) {
 	concrete, ok := provider.(*codexProvider)
 	require.True(t, ok)
 	source := requireCodexProviderSource(t, provider, uuid)
-	fingerprint, err := provider.Fingerprint(context.Background(), source)
+	fingerprint, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 	wantErr := errors.New("cold prefix failed")
 	tailReadCalled := false
 
-	result, err := concrete.parseSessionFromWithReaders(
+	result, err := concrete.parseSessionFromWithReaders(t.Context(),
 		path,
 		int64(len(prefix)),
 		1,
@@ -1623,7 +1767,7 @@ func TestCodexProviderColdSeedErrorDoesNotStage(t *testing.T) {
 			tailReadCalled = true
 			return int64(len(tail)), nil
 		},
-		func(string, int64) (codexIncrementalSeed, error) {
+		func(context.Context, string, int64) (codexIncrementalSeed, error) {
 			return codexIncrementalSeed{}, wantErr
 		},
 	)
@@ -1650,7 +1794,7 @@ func TestCodexProviderColdSeedErrorDoesNotStage(t *testing.T) {
 func TestCodexProviderParseIncrementalHonorsContext(t *testing.T) {
 	provider, ok := NewProvider(AgentCodex, ProviderConfig{})
 	require.True(t, ok)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	_, status, err := provider.ParseIncremental(ctx, IncrementalRequest{})
@@ -1683,7 +1827,7 @@ func TestCodexProviderRawDiscoveryKeepsLiveAndArchivedPhysicalSources(t *testing
 		Roots: []string{archivedRoot, liveRoot},
 	})
 	require.True(t, ok)
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, livePath, discovered[0].DisplayPath)
@@ -1834,7 +1978,7 @@ func TestCodexProviderFindSourcePinsExactArchivedDuplicate(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: archivedPath,
 		FullSessionID:  "codex:" + uuid,
 	})
@@ -1842,7 +1986,7 @@ func TestCodexProviderFindSourcePinsExactArchivedDuplicate(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, archivedPath, found.DisplayPath)
 
-	found, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "codex:" + uuid,
 	})
 	require.NoError(t, err)
@@ -1867,7 +2011,7 @@ func TestCodexProviderFindSourcePreferStoredSourceKeepsArchivedDuplicate(t *test
 
 	// PreferStoredSource pins the stored archived duplicate even when a fresh
 	// source is required, instead of canonicalizing to the live duplicate.
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath:     archivedPath,
 		FullSessionID:      "codex:" + uuid,
 		RequireFreshSource: true,
@@ -1880,7 +2024,7 @@ func TestCodexProviderFindSourcePreferStoredSourceKeepsArchivedDuplicate(t *test
 
 	// Without the hint, RequireFreshSource canonicalizes to the live duplicate,
 	// which is exactly the behavior PreferStoredSource opts out of.
-	found, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath:     archivedPath,
 		FullSessionID:      "codex:" + uuid,
 		RequireFreshSource: true,
@@ -1919,20 +2063,20 @@ func TestCodexProviderFindSourceAcceptsLegacyShapedStoredPath(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, sourcePath, discovered[0].DisplayPath)
 
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: sourcePath, EventKind: "write"},
 	)
 	require.NoError(t, err)
 	require.Len(t, changed, 1)
 	assert.Equal(t, sourcePath, changed[0].DisplayPath)
 
-	source, found, err := provider.FindSource(context.Background(), FindSourceRequest{
+	source, found, err := provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: sourcePath,
 		FingerprintKey: sourcePath,
 	})
@@ -1942,12 +2086,12 @@ func TestCodexProviderFindSourceAcceptsLegacyShapedStoredPath(t *testing.T) {
 	assert.Equal(t, sourcePath, source.DisplayPath)
 	assert.Equal(t, sourcePath, source.FingerprintKey)
 
-	fingerprint, err := provider.Fingerprint(context.Background(), source)
+	fingerprint, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 	assert.Equal(t, sourcePath, fingerprint.Key)
 	assert.NotEmpty(t, fingerprint.Hash)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      source,
 		Fingerprint: fingerprint,
 		Machine:     "devbox",
@@ -1978,7 +2122,7 @@ func TestCodexProviderChangedPathPinsArchivedDuplicate(t *testing.T) {
 	})
 	require.True(t, ok)
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: archivedPath, EventKind: "write"},
 	)
 	require.NoError(t, err)
@@ -2003,7 +2147,7 @@ func TestCodexProviderChangedPathClassifiesRemovedTranscript(t *testing.T) {
 	require.NoError(t, os.Remove(sourcePath))
 
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: sourcePath, EventKind: "remove"},
 	)
 	require.NoError(t, err)
@@ -2012,7 +2156,6 @@ func TestCodexProviderChangedPathClassifiesRemovedTranscript(t *testing.T) {
 }
 
 func TestCodexProviderIndexPathClassifiesAllSiblingSources(t *testing.T) {
-
 	base := t.TempDir()
 	root := filepath.Join(base, "sessions")
 	firstUUID := "019eb791-cf7d-75c1-8439-9ed74c1229e9"
@@ -2027,7 +2170,7 @@ func TestCodexProviderIndexPathClassifiesAllSiblingSources(t *testing.T) {
 	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: indexPath, EventKind: "write"},
 	)
 	require.NoError(t, err)
@@ -2109,7 +2252,7 @@ func requireCodexProviderSource(
 ) SourceRef {
 	t.Helper()
 	source, found, err := provider.FindSource(
-		context.Background(),
+		t.Context(),
 		FindSourceRequest{FullSessionID: "codex:" + uuid},
 	)
 	require.NoError(t, err)
@@ -2119,9 +2262,93 @@ func requireCodexProviderSource(
 
 func appendCodexProviderContent(t *testing.T, path, content string) {
 	t.Helper()
+
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
 	require.NoError(t, err)
 	_, err = f.WriteString(content)
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
+}
+
+func TestCodexProviderIncrementalUserBoundaryDoesNotBackfillCommittedUsage(t *testing.T) {
+	const uuid = "019eb791-cf7d-75c1-8439-9ed74c1229f9"
+	prefix := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			uuid, "/workspace/project-a", "codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexTurnContextJSON("gpt-5.4", tsEarlyS1),
+		testjsonl.CodexMsgJSON("user", "first request", tsEarlyS1),
+		testjsonl.CodexMsgJSON("assistant", "first response", tsEarlyS5),
+	)
+
+	t.Run("user without a new assistant blocks committed target", func(t *testing.T) {
+		root := t.TempDir()
+		path := writeCodexProviderSessionContent(t, root, uuid, prefix)
+		provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+		require.True(t, ok)
+		source := requireCodexProviderSource(t, provider, uuid)
+		prefixFingerprint, err := provider.Fingerprint(t.Context(), source)
+		require.NoError(t, err)
+
+		tail := testjsonl.JoinJSONL(
+			testjsonl.CodexMsgJSON("user", "second request", tsLate),
+			testjsonl.CodexTokenCountJSON(tsLateS5, 100_000, 250, 64_000),
+		)
+		appendCodexProviderContent(t, path, tail)
+		fingerprint, err := provider.Fingerprint(t.Context(), source)
+		require.NoError(t, err)
+		pendingUsageOrdinal := 1
+		outcome, status, err := provider.ParseIncremental(
+			t.Context(), IncrementalRequest{
+				Source:                    source,
+				Fingerprint:               fingerprint,
+				SessionID:                 "codex:" + uuid,
+				Offset:                    prefixFingerprint.Size,
+				StartOrdinal:              2,
+				StoredPendingUsageOrdinal: &pendingUsageOrdinal,
+			},
+		)
+		require.NoError(t, err)
+		assert.Equal(t, IncrementalApplied, status)
+		require.Len(t, outcome.Messages, 1)
+		assert.Equal(t, RoleUser, outcome.Messages[0].Role)
+		assert.Empty(t, outcome.MessageTokenUsageUpdates,
+			"usage after a real user boundary must not update the prior turn")
+	})
+
+	t.Run("new assistant after the user receives usage", func(t *testing.T) {
+		root := t.TempDir()
+		path := writeCodexProviderSessionContent(t, root, uuid, prefix)
+		provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+		require.True(t, ok)
+		source := requireCodexProviderSource(t, provider, uuid)
+		prefixFingerprint, err := provider.Fingerprint(t.Context(), source)
+		require.NoError(t, err)
+
+		tail := testjsonl.JoinJSONL(
+			testjsonl.CodexMsgJSON("user", "second request", tsLate),
+			testjsonl.CodexMsgJSON("assistant", "second response", tsLateS5),
+			testjsonl.CodexTokenCountJSON("2026-08-02T09:00:06Z", 100_000, 250, 64_000),
+		)
+		appendCodexProviderContent(t, path, tail)
+		fingerprint, err := provider.Fingerprint(t.Context(), source)
+		require.NoError(t, err)
+		pendingUsageOrdinal := 1
+		outcome, status, err := provider.ParseIncremental(
+			t.Context(), IncrementalRequest{
+				Source:                    source,
+				Fingerprint:               fingerprint,
+				SessionID:                 "codex:" + uuid,
+				Offset:                    prefixFingerprint.Size,
+				StartOrdinal:              2,
+				StoredPendingUsageOrdinal: &pendingUsageOrdinal,
+			},
+		)
+		require.NoError(t, err)
+		assert.Equal(t, IncrementalApplied, status)
+		require.Len(t, outcome.Messages, 2)
+		assert.Equal(t, RoleAssistant, outcome.Messages[1].Role)
+		assert.NotEmpty(t, outcome.Messages[1].TokenUsage)
+		assert.Empty(t, outcome.MessageTokenUsageUpdates)
+	})
 }

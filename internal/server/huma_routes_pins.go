@@ -5,10 +5,13 @@ import (
 	"net/http"
 
 	"go.kenn.io/agentsview/internal/db"
+
+	"github.com/danielgtaylor/huma/v2"
 )
 
 func (s *Server) registerPinRoutes() {
-	group := newRouteGroup(s.api, "/api/v1", "Pins")
+	group := huma.NewGroup(s.api, "/api/v1")
+	configureRouteGroup(group, "Pins")
 
 	s.get(group, "/pins", "List pins", s.humaListPins)
 	s.get(group, "/sessions/{id}/pins", "List session pins", s.humaListSessionPins)
@@ -62,11 +65,10 @@ func (s *Server) humaListSessionPins(
 	return &jsonOutput[pinsResponse]{Body: pinsResponse{Pins: pins}}, nil
 }
 
-func (s *Server) humaPinMessage(
-	_ context.Context,
+func (s *Server) humaPinMessage(ctx context.Context,
 	in *pinMessageInput,
 ) (*createdOutput[pinMessageResponse], error) {
-	id, err := s.db.PinMessage(in.ID, in.MessageID, in.Body.Note)
+	id, err := s.db.PinMessage(ctx, in.ID, in.MessageID, in.Body.Note)
 	if err != nil {
 		if handled := handleHumaReadOnly(err); handled != nil {
 			return nil, handled
@@ -83,11 +85,10 @@ func (s *Server) humaPinMessage(
 	}, nil
 }
 
-func (s *Server) humaUnpinMessage(
-	_ context.Context,
+func (s *Server) humaUnpinMessage(ctx context.Context,
 	in *messagePathInput,
 ) (*noContentOutput, error) {
-	if err := s.db.UnpinMessage(in.ID, in.MessageID); err != nil {
+	if err := s.db.UnpinMessage(ctx, in.ID, in.MessageID); err != nil {
 		if handled := handleHumaReadOnly(err); handled != nil {
 			return nil, handled
 		}

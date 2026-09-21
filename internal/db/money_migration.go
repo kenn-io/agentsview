@@ -1,7 +1,9 @@
 package db
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 )
 
@@ -9,7 +11,7 @@ import (
 // from floating-point dollars/cents to signed 64-bit microdollars. SQLite
 // cannot change column types in place, so each affected table is rebuilt while
 // preserving row IDs, constraints, and indexes.
-func migrateMoneyColumnsLocked(w *writerHandle) error {
+func migrateMoneyColumnsLocked(ctx context.Context, w *writerHandle) error {
 	tableStates := map[string]bool{}
 	for _, table := range []struct {
 		name   string
@@ -43,7 +45,7 @@ func migrateMoneyColumnsLocked(w *writerHandle) error {
 	} {
 		legacyCount, finalCount := 0, 0
 		for _, column := range table.legacy {
-			exists, err := sqliteColumnExists(w, table.name, column)
+			exists, err := sqliteColumnExists(ctx, w, table.name, column)
 			if err != nil {
 				return err
 			}
@@ -52,7 +54,7 @@ func migrateMoneyColumnsLocked(w *writerHandle) error {
 			}
 		}
 		for _, column := range table.final {
-			exists, err := sqliteColumnExists(w, table.name, column)
+			exists, err := sqliteColumnExists(ctx, w, table.name, column)
 			if err != nil {
 				return err
 			}
@@ -78,7 +80,7 @@ func migrateMoneyColumnsLocked(w *writerHandle) error {
 	if !legacy && !legacyCursor && !legacyPricing {
 		return nil
 	}
-	tx, err := w.Begin()
+	tx, err := w.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning microdollar migration: %w", err)
 	}
@@ -109,7 +111,7 @@ func migrateMoneyColumnsLocked(w *writerHandle) error {
 		)`, check.table, check.column, check.column,
 			check.column, check.column, check.max)
 		var invalid bool
-		if err := tx.QueryRow(query).Scan(&invalid); err != nil {
+		if err := tx.QueryRowContext(ctx, query).Scan(&invalid); err != nil {
 			return fmt.Errorf("validating legacy money column %s.%s: %w",
 				check.table, check.column, err)
 		}
@@ -120,20 +122,18 @@ func migrateMoneyColumnsLocked(w *writerHandle) error {
 	}
 	if legacyPricing {
 		var bandCount int
-		if err := tx.QueryRow(
+		if err := tx.QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM model_pricing_bands`,
 		).Scan(&bandCount); err != nil {
 			return fmt.Errorf("checking legacy pricing bands: %w", err)
 		}
 		if bandCount != 0 {
-			return fmt.Errorf(
-				"legacy model_pricing migration requires an empty model_pricing_bands table",
-			)
+			return errors.New("legacy model_pricing migration requires an empty model_pricing_bands table")
 		}
 		// schema.sql creates this child before the legacy parent is rebuilt.
 		// Keep its removal and recreation in the same transaction so a failed
 		// money migration cannot leave the archive without the band schema.
-		if _, err := tx.Exec(`DROP TABLE model_pricing_bands`); err != nil {
+		if _, err := tx.ExecContext(ctx, `DROP TABLE model_pricing_bands`); err != nil {
 			return fmt.Errorf("preparing legacy pricing bands: %w", err)
 		}
 	}
@@ -150,17 +150,17 @@ func migrateMoneyColumnsLocked(w *writerHandle) error {
 		if !migration.needed {
 			continue
 		}
-		if _, err := tx.Exec(migration.sql); err != nil {
+		if _, err := tx.ExecContext(ctx, migration.sql); err != nil {
 			return fmt.Errorf("migrating %s to microdollars: %w", migration.name, err)
 		}
 	}
 	if legacyPricing {
-		if _, err := tx.Exec(modelPricingBandsSchemaSQL); err != nil {
+		if _, err := tx.ExecContext(ctx, modelPricingBandsSchemaSQL); err != nil {
 			return fmt.Errorf("recreating pricing bands: %w", err)
 		}
 	}
 	if legacyCursor {
-		if err := rekeyMigratedCursorUsageEvents(tx); err != nil {
+		if err := rekeyMigratedCursorUsageEvents(ctx, tx); err != nil {
 			return err
 		}
 	}
@@ -170,14 +170,15 @@ func migrateMoneyColumnsLocked(w *writerHandle) error {
 	return nil
 }
 
-func rekeyMigratedCursorUsageEvents(tx *sql.Tx) error {
+func rekeyMigratedCursorUsageEvents(ctx context.Context, tx *sql.Tx) error {
 	type keyUpdate struct {
 		id  int64
 		key string
 	}
 	var lastID int64
 	for {
-		rows, err := tx.Query(`
+		updates, err := func() ([]keyUpdate, error) {
+			rows, err := tx.QueryContext(ctx, `
 			SELECT id, occurred_at, model, kind,
 				input_tokens, output_tokens, cache_write_tokens, cache_read_tokens,
 				charged_microdollars, cursor_token_fee_microdollars,
@@ -186,39 +187,45 @@ func rekeyMigratedCursorUsageEvents(tx *sql.Tx) error {
 			WHERE id > ?
 			ORDER BY id
 			LIMIT 1000`, lastID)
-		if err != nil {
-			return fmt.Errorf("querying migrated cursor usage keys: %w", err)
-		}
-		updates := make([]keyUpdate, 0, 1000)
-		for rows.Next() {
-			var id int64
-			var ev CursorUsageEvent
-			if err := rows.Scan(
-				&id, &ev.OccurredAt, &ev.Model, &ev.Kind,
-				&ev.InputTokens, &ev.OutputTokens,
-				&ev.CacheWriteTokens, &ev.CacheReadTokens,
-				&ev.Charged.Microdollars, &ev.CursorTokenFee.Microdollars,
-				&ev.UserID, &ev.UserEmail, &ev.IsHeadless,
-			); err != nil {
-				rows.Close()
-				return fmt.Errorf("scanning migrated cursor usage key: %w", err)
+			if err != nil {
+				return nil, fmt.Errorf("querying migrated cursor usage keys: %w", err)
 			}
-			updates = append(updates, keyUpdate{
-				id: id, key: CursorUsageEventDedupKey(ev),
-			})
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return fmt.Errorf("iterating migrated cursor usage keys: %w", err)
-		}
-		if err := rows.Close(); err != nil {
-			return fmt.Errorf("closing migrated cursor usage keys: %w", err)
+			defer rows.Close()
+			updates := make([]keyUpdate, 0, 1000)
+			for rows.Next() {
+				var id int64
+				var ev CursorUsageEvent
+				if err := rows.Scan(
+					&id, &ev.OccurredAt, &ev.Model, &ev.Kind,
+					&ev.InputTokens, &ev.OutputTokens,
+					&ev.CacheWriteTokens, &ev.CacheReadTokens,
+					&ev.Charged.Microdollars, &ev.CursorTokenFee.Microdollars,
+					&ev.UserID, &ev.UserEmail, &ev.IsHeadless,
+				); err != nil {
+					rows.Close()
+					return nil, fmt.Errorf("scanning migrated cursor usage key: %w", err)
+				}
+				updates = append(updates, keyUpdate{
+					id: id, key: CursorUsageEventDedupKey(ev),
+				})
+			}
+			if err := rows.Err(); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("iterating migrated cursor usage keys: %w", err)
+			}
+			if err := rows.Close(); err != nil {
+				return nil, fmt.Errorf("closing migrated cursor usage keys: %w", err)
+			}
+			return updates, nil
+		}()
+		if err != nil {
+			return err
 		}
 		if len(updates) == 0 {
 			break
 		}
 		for _, update := range updates {
-			if _, err := tx.Exec(
+			if _, err := tx.ExecContext(ctx,
 				`UPDATE cursor_usage_events SET dedup_key = ? WHERE id = ?`,
 				update.key, update.id,
 			); err != nil {
@@ -227,7 +234,7 @@ func rekeyMigratedCursorUsageEvents(tx *sql.Tx) error {
 		}
 		lastID = updates[len(updates)-1].id
 	}
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM cursor_usage_events
 		WHERE dedup_key != '' AND id NOT IN (
 			SELECT MIN(id) FROM cursor_usage_events
@@ -241,13 +248,13 @@ func rekeyMigratedCursorUsageEvents(tx *sql.Tx) error {
 	return nil
 }
 
-func sqliteColumnExists(w *writerHandle, table, column string) (bool, error) {
+func sqliteColumnExists(ctx context.Context, w *writerHandle, table, column string) (bool, error) {
 	var count int
 	query := fmt.Sprintf(
 		"SELECT count(*) FROM pragma_table_info('%s') WHERE name = ?",
 		table,
 	)
-	if err := w.QueryRow(query, column).Scan(&count); err != nil {
+	if err := w.QueryRow(ctx, query, column).Scan(&count); err != nil {
 		return false, fmt.Errorf("probing %s.%s: %w", table, column, err)
 	}
 	return count != 0, nil

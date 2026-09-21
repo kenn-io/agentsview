@@ -8,7 +8,9 @@
 package parser
 
 import (
+	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
@@ -543,6 +545,7 @@ func parseRooCodeMessages(
 					Content:       output,
 					Model:         model,
 					IsSystem:      true,
+					SourceSubtype: SourceSubtypeToolResult,
 					Timestamp:     ts,
 					ContentLength: len(output),
 					ToolResults:   toolResults,
@@ -586,6 +589,7 @@ func parseRooCodeMessages(
 					Content:       content,
 					Model:         model,
 					IsSystem:      true,
+					SourceSubtype: SourceSubtypeToolResult,
 					Timestamp:     ts,
 					ContentLength: len(content),
 				})
@@ -630,6 +634,7 @@ func parseRooCodeMessages(
 					Content:       content,
 					Model:         model,
 					IsSystem:      true,
+					SourceSubtype: SourceSubtypeToolResult,
 					Timestamp:     ts,
 					ContentLength: len(content),
 				})
@@ -733,13 +738,20 @@ func parseRooCodeMessages(
 				}
 			}
 
-			// Regular message.
+			// Regular message. A codebase_search_result is the raw
+			// result of an internal search tool, not model text, so
+			// storage policies that drop tool output can recognize it.
+			var subtype string
+			if msg.Say == "codebase_search_result" {
+				subtype = SourceSubtypeToolResult
+			}
 			parsedMessages = append(parsedMessages, ParsedMessage{
 				Ordinal:       ordinal,
 				Role:          role,
 				Content:       content,
 				Model:         model,
 				IsSystem:      role == RoleSystem,
+				SourceSubtype: subtype,
 				Timestamp:     ts,
 				ContentLength: len(content),
 			})
@@ -1355,7 +1367,7 @@ func parseRooCodeToolCall(text string, ordinal int) *ParsedToolCall {
 		// Infer skill name from readFile calls to SKILL.md files,
 		// matching how Cursor, Codex, Grok, Kimi, and ZCode detect
 		// skill usage from file reads.
-		tc.SkillName = inferToolSkillName(toolName, tc.InputJSON)
+		tc.SkillName = inferToolSkillName(context.Background(), toolName, tc.InputJSON)
 	}
 	return tc
 }
@@ -1404,7 +1416,7 @@ func rooCodeFingerprintSource(path string) (SourceFingerprint, error) {
 		}
 	}
 
-	fp.Hash = fmt.Sprintf("%x", h.Sum(nil))
+	fp.Hash = hex.EncodeToString(h.Sum(nil))
 	return fp, nil
 }
 

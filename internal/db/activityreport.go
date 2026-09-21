@@ -225,8 +225,7 @@ func (db *DB) GetSessionUsageRows(
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok :=
-			sqliteSessionUsageRowTokens(o.scan)
+		inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok := sqliteSessionUsageRowTokens(o.scan)
 		snapshotRows[i] = activity.UsageRow{
 			SessionID:           o.scan.sessionID,
 			Timestamp:           o.scan.ts,
@@ -251,13 +250,11 @@ func (db *DB) GetSessionUsageRows(
 			usageRowWebSearchRequests(o.scan.usageSource, o.scan.tokenJSON))
 		rawOutputTokensBySession[o.scan.sessionID] += outputTok
 	}
-	canonicalTokenCoverageBySession, err :=
-		activity.CanonicalSessionTokenCoverageContext(ctx, snapshotRows)
+	canonicalTokenCoverageBySession, err := activity.CanonicalSessionTokenCoverageContext(ctx, snapshotRows)
 	if err != nil {
 		return nil, err
 	}
-	snapshotMask, snapshotAttribution, snapshotWebSearchRequests, err :=
-		activity.ClaudeSnapshotSurvivorSelectionContext(ctx, snapshotRows)
+	snapshotMask, snapshotAttribution, snapshotWebSearchRequests, err := activity.ClaudeSnapshotSurvivorSelectionContext(ctx, snapshotRows)
 	if err != nil {
 		return nil, err
 	}
@@ -270,16 +267,14 @@ func (db *DB) GetSessionUsageRows(
 			return nil, err
 		}
 		if !snapshotMask[i] {
-			deduplicatedOutputTokens[o.scan.sessionID] +=
-				snapshotRows[i].OutputTokens
+			deduplicatedOutputTokens[o.scan.sessionID] += snapshotRows[i].OutputTokens
 			if rowContributes[i] {
 				discardedContributingSessions[o.scan.sessionID] = struct{}{}
 			}
 			continue
 		}
 		r := o.scan
-		inputTok, outputTok, cacheCrTok, cacheRdTok, _ :=
-			sqliteSessionUsageRowTokens(r)
+		inputTok, outputTok, cacheCrTok, cacheRdTok, _ := sqliteSessionUsageRowTokens(r)
 		attributionSessionID := snapshotAttribution[i]
 		if attributionSessionID != r.sessionID {
 			deduplicatedOutputTokens[r.sessionID] += outputTok
@@ -308,9 +303,8 @@ func (db *DB) GetSessionUsageRows(
 			costRow.cost = sql.NullInt64{}
 			rateResolver.RecordUnattributedReported()
 		}
-		cost, priced, contributes, priceErr :=
-			sessionRowCostWithWebSearchRequests(
-				costRow, snapshotWebSearchRequests[i], rateResolver)
+		cost, priced, contributes, priceErr := sessionRowCostWithWebSearchRequests(
+			costRow, snapshotWebSearchRequests[i], rateResolver)
 		if priceErr != nil {
 			return nil, priceErr
 		}
@@ -525,7 +519,8 @@ func (db *DB) activityReportSessionsFrom(
 		s.machine,
 		COALESCE(s.started_at, ''),
 		COALESCE(s.ended_at, ''),
-		COALESCE(s.is_automated, 0)
+		COALESCE(s.is_automated, 0),
+		s.relationship_type = 'subagent'
 	FROM sessions s
 	WHERE ` + where + `
 		AND (COALESCE(NULLIF(s.ended_at, ''),
@@ -557,7 +552,7 @@ func (db *DB) activityReportSessionsFrom(
 		var s activity.SessionMeta
 		if err := rows.Scan(
 			&s.SessionID, &s.Title, &s.Project, &s.Agent,
-			&s.Machine, &s.StartedAt, &s.EndedAt, &s.IsAutomated,
+			&s.Machine, &s.StartedAt, &s.EndedAt, &s.IsAutomated, &s.IsSubagent,
 		); err != nil {
 			return nil, nil, fmt.Errorf(
 				"scanning activity report session: %w", err)
@@ -906,6 +901,7 @@ func (db *DB) activityReportCandidateSource(
 		if err != nil {
 			return fmt.Errorf("querying activity report terminal candidates: %w", err)
 		}
+		defer terminalRows.Close()
 		var terminal []activity.IntervalCandidate
 		for terminalRows.Next() {
 			candidate, scanErr := scanCandidate(terminalRows)
@@ -981,7 +977,7 @@ func (db *DB) activityReportUsageFrom(
 	lowerBound, upperBound string,
 	q activity.Query,
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
-	candidates, rateResolver, err := db.loadActivityReportUsageCandidatesFrom(
+	candidates, _, rateResolver, err := db.loadActivityReportUsageCandidatesFrom(
 		ctx, source, ids, lowerBound, upperBound, false,
 	)
 	if err != nil {
@@ -996,10 +992,9 @@ func (db *DB) activityReportUsageFrom(
 			candidate.scan.usageSource, candidate.scan.tokenJSON)
 		baseRows[i] = row
 	}
-	mask, attribution, webSearchRequests :=
-		activity.UsageSurvivorSelectionForSessions(
-			q.RangeStart, q.RangeEnd, q.EffectiveEnd, baseRows, ids,
-		)
+	mask, attribution, webSearchRequests := activity.UsageSurvivorSelectionForSessions(
+		q.RangeStart, q.RangeEnd, q.EffectiveEnd, baseRows, ids,
+	)
 	return materializeActivityReportUsageCandidates(
 		candidates, mask, attribution, webSearchRequests, rateResolver,
 	)
@@ -1023,143 +1018,105 @@ func (db *DB) loadActivityReportUsageCandidatesFrom(
 	ids []string,
 	lowerBound, upperBound string,
 	restrictToIDs bool,
-) ([]activityReportUsageCandidate, *export.PricingResolver, error) {
+) ([]activityReportUsageCandidate, []export.EffectivePricingRow, *export.PricingResolver, error) {
 	pricing, err := db.loadPricingMapFrom(ctx, source)
 	if err != nil {
-		return nil, nil, fmt.Errorf("loading pricing: %w", err)
+		return nil, nil, nil, fmt.Errorf("loading pricing: %w", err)
 	}
 	rateResolver := export.NewPricingResolver(pricing)
 	if len(ids) == 0 {
-		return []activityReportUsageCandidate{}, rateResolver, nil
+		return []activityReportUsageCandidate{}, pricing, rateResolver, nil
 	}
+
+	// One bound JSON array names the candidate sessions, so the statement
+	// shape and bind count do not depend on how many sessions the report
+	// selected. Reporting export stops at the candidate rows because it
+	// combines multiple candidate sets before selecting usage. Ordinary
+	// reports also load the cross-session Claude peers whose snapshot keys
+	// match a candidate row inside the bounds; those keys are derived in the
+	// query instead of being round-tripped through Go.
+	encodedIDs, err := json.Marshal(ids)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf(
+			"encoding activity report session IDs: %w", err)
+	}
+	const candidateSessions = "(SELECT value FROM json_each(?))"
+	rowsSQL := dailyUsageRowsSQLWithWhere(
+		usageMessageEligibility+" AND m.session_id IN "+candidateSessions,
+		usageEventEligibility+" AND ue.session_id IN "+candidateSessions,
+	)
+	args := []any{string(encodedIDs), string(encodedIDs)}
+	if !restrictToIDs {
+		// Keep candidate and peer reads separate so each can use its index.
+		// Exclude candidate sessions here: UNION ALL must not load them twice.
+		peerWhere := usageMessageEligibility + `
+			AND m.session_id NOT IN ` + candidateSessions + `
+			AND m.claude_message_id != ''
+			AND m.claude_request_id != ''
+			AND (m.claude_message_id, m.claude_request_id) IN (
+				SELECT m.claude_message_id, m.claude_request_id
+				FROM messages m
+				JOIN sessions s ON s.id = m.session_id
+				WHERE ` + usageMessageEligibility + `
+					AND m.session_id IN ` + candidateSessions + `
+					AND m.claude_message_id != ''
+					AND m.claude_request_id != ''
+					AND COALESCE(NULLIF(m.timestamp, ''), s.started_at, '') >= ?
+					AND COALESCE(NULLIF(m.timestamp, ''), s.started_at, '') <= ?
+			)`
+		rowsSQL += "\nUNION ALL\n" + fmt.Sprintf(
+			dailyUsageMessageRowsSQLTemplate, "messages", peerWhere,
+		)
+		args = append(args, string(encodedIDs), string(encodedIDs), lowerBound, upperBound)
+	}
+	args = append(args, lowerBound, upperBound)
+	query := dailyUsageRowSelectFromRowsWithMachine(rowsSQL, true) + `
+			AND u.ts >= ? AND u.ts <= ?`
+
+	rows, err := source.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("querying activity report usage: %w", err)
+	}
+	defer rows.Close()
 
 	var candidates []activityReportUsageCandidate
-	loadRows := func(
-		rowsSQL string, args []any, skipSessionIDs map[string]struct{},
-	) error {
-		query := dailyUsageRowSelectFromRowsWithMachine(rowsSQL, true) + `
-			AND u.ts >= ? AND u.ts <= ?`
-		args = append(args, lowerBound, upperBound)
-
-		rows, err := source.QueryContext(ctx, query, args...)
-		if err != nil {
-			return fmt.Errorf("querying activity report usage: %w", err)
+	for rows.Next() {
+		r, scanErr := scanDailyUsageRowWithMachine(rows, true)
+		if scanErr != nil {
+			return nil, nil, nil, fmt.Errorf(
+				"scanning activity report usage: %w", scanErr)
 		}
-		defer rows.Close()
-
-		for rows.Next() {
-			r, scanErr := scanDailyUsageRowWithMachine(rows, true)
-			if scanErr != nil {
-				return fmt.Errorf(
-					"scanning activity report usage: %w", scanErr)
-			}
-			if _, skip := skipSessionIDs[r.sessionID]; skip {
-				continue
-			}
-			ord := int64(-1)
-			if r.messageOrdinal.Valid {
-				ord = r.messageOrdinal.Int64
-			}
-			parsedTS, tsErr := parseTimestamp(r.ts)
-			candidates = append(candidates, activityReportUsageCandidate{
-				ordinal: ord,
-				scan:    r,
-				ts:      parsedTS,
-				validTS: tsErr == nil,
-				row: activity.UsageRow{
-					SessionID:       r.sessionID,
-					Model:           r.model,
-					Timestamp:       r.ts,
-					Project:         r.project,
-					Machine:         r.machine,
-					MessageOrdinal:  ord,
-					UsageSource:     r.usageSource,
-					Agent:           r.agent,
-					ProviderID:      r.providerID,
-					ClaudeMessageID: r.claudeMessageID,
-					ClaudeRequestID: r.claudeRequestID,
-					SourceUUID:      r.sourceUUID,
-					UsageDedupKey:   r.usageDedupKey,
-				},
-			})
+		ord := int64(-1)
+		if r.messageOrdinal.Valid {
+			ord = r.messageOrdinal.Int64
 		}
-		return rows.Err()
+		parsedTS, tsErr := parseTimestamp(r.ts)
+		candidates = append(candidates, activityReportUsageCandidate{
+			ordinal: ord,
+			scan:    r,
+			ts:      parsedTS,
+			validTS: tsErr == nil,
+			row: activity.UsageRow{
+				SessionID:       r.sessionID,
+				Model:           r.model,
+				Timestamp:       r.ts,
+				Project:         r.project,
+				Machine:         r.machine,
+				MessageOrdinal:  ord,
+				UsageSource:     r.usageSource,
+				Agent:           r.agent,
+				ProviderID:      r.providerID,
+				ClaudeMessageID: r.claudeMessageID,
+				ClaudeRequestID: r.claudeRequestID,
+				SourceUUID:      r.sourceUUID,
+				UsageDedupKey:   r.usageDedupKey,
+			},
+		})
 	}
-
-	// Load only rows owned by candidate sessions first. Reporting export stops
-	// here because it combines multiple candidate sets before selecting usage.
-	// Ordinary reports then fetch only cross-session Claude peers needed to
-	// choose complete snapshots for those candidates.
-	const usageVarChunk = (maxSQLVars - 2) / 2
-	err = queryChunkedSize(ids, usageVarChunk, func(chunk []string) error {
-		ph, chunkArgs := inPlaceholders(chunk)
-		rowsSQL := dailyUsageRowsSQLWithWhere(
-			usageMessageEligibility+" AND m.session_id IN "+ph,
-			usageEventEligibility+" AND ue.session_id IN "+ph)
-		args := make([]any, 0, len(chunkArgs)*2)
-		args = append(args, chunkArgs...)
-		args = append(args, chunkArgs...)
-		return loadRows(rowsSQL, args, nil)
-	})
-	if err != nil {
-		return nil, nil, err
+	if err := rows.Err(); err != nil {
+		return nil, nil, nil, fmt.Errorf("iterating activity report usage: %w", err)
 	}
-	if restrictToIDs {
-		return candidates, rateResolver, nil
-	}
-
-	type snapshotKey struct {
-		messageID string
-		requestID string
-	}
-	keySet := make(map[snapshotKey]struct{})
-	for _, candidate := range candidates {
-		if candidate.row.ClaudeMessageID == "" || candidate.row.ClaudeRequestID == "" {
-			continue
-		}
-		keySet[snapshotKey{
-			messageID: candidate.row.ClaudeMessageID,
-			requestID: candidate.row.ClaudeRequestID,
-		}] = struct{}{}
-	}
-	keys := make([]snapshotKey, 0, len(keySet))
-	for key := range keySet {
-		keys = append(keys, key)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		if keys[i].messageID != keys[j].messageID {
-			return keys[i].messageID < keys[j].messageID
-		}
-		return keys[i].requestID < keys[j].requestID
-	})
-	candidateIDs := make(map[string]struct{}, len(ids))
-	for _, id := range ids {
-		candidateIDs[id] = struct{}{}
-	}
-	if len(keys) > 0 {
-		pairs := make([][2]string, len(keys))
-		for i, key := range keys {
-			pairs[i] = [2]string{key.messageID, key.requestID}
-		}
-		encodedPairs, marshalErr := json.Marshal(pairs)
-		if marshalErr != nil {
-			return nil, nil, fmt.Errorf(
-				"encoding activity report Claude snapshot keys: %w", marshalErr)
-		}
-		rowsSQL := dailyUsageRowsSQLWithWhere(
-			usageMessageEligibility+` AND m.claude_message_id != ''
-				AND m.claude_request_id != ''
-				AND (m.claude_message_id, m.claude_request_id) IN (
-					SELECT json_extract(peer.value, '$[0]'),
-					       json_extract(peer.value, '$[1]')
-					FROM json_each(?) AS peer
-				)`,
-			usageEventEligibility+" AND 1 = 0")
-		if err := loadRows(rowsSQL, []any{string(encodedPairs)}, candidateIDs); err != nil {
-			return nil, nil, err
-		}
-	}
-	return candidates, rateResolver, nil
+	return candidates, pricing, rateResolver, nil
 }
 
 func sortActivityReportUsageCandidates(
@@ -1189,31 +1146,6 @@ func sortActivityReportUsageCandidates(
 	})
 }
 
-// activityReportUsageCandidatesFrom returns normalized padded-range rows
-// without sorting or applying a survivor mask. Reporting export merges these
-// rows with standalone candidates before imposing either operation.
-func (db *DB) activityReportUsageCandidatesFrom(
-	ctx context.Context,
-	source sessionExportQuerier,
-	ids []string,
-	lowerBound, upperBound string,
-	includeWebSearch bool,
-) ([]activity.UsageRow, *export.PricingBlock, error) {
-	candidates, rateResolver, err := db.loadActivityReportUsageCandidatesFrom(
-		ctx, source, ids, lowerBound, upperBound, true,
-	)
-	if err != nil {
-		return nil, nil, err
-	}
-	var webSearchRequests []int
-	if !includeWebSearch {
-		webSearchRequests = make([]int, len(candidates))
-	}
-	return materializeActivityReportUsageCandidates(
-		candidates, nil, nil, webSearchRequests, rateResolver,
-	)
-}
-
 func materializeActivityReportUsageCandidates(
 	candidates []activityReportUsageCandidate,
 	mask []bool,
@@ -1226,8 +1158,7 @@ func materializeActivityReportUsageCandidates(
 		if mask != nil && !mask[i] {
 			continue
 		}
-		inputTok, outputTok, cacheCrTok, cacheRdTok, _ :=
-			dailyUsageRowTokens(candidate.scan)
+		inputTok, outputTok, cacheCrTok, cacheRdTok, _ := dailyUsageRowTokens(candidate.scan)
 		costRow := candidate.scan
 		var sessionCost *money.Money
 		if candidate.scan.costSource == CopilotReportedCostSource &&
@@ -1242,9 +1173,8 @@ func materializeActivityReportUsageCandidates(
 		if webSearchRequests != nil {
 			webSearches = webSearchRequests[i]
 		}
-		cost, priced, contributes, priceErr :=
-			sqliteActivityReportRowStatusWithWebSearchRequests(
-				costRow, webSearches, rateResolver)
+		cost, priced, contributes, priceErr := sqliteActivityReportRowStatusWithWebSearchRequests(
+			costRow, webSearches, rateResolver)
 		if priceErr != nil {
 			return nil, nil, priceErr
 		}
@@ -1333,8 +1263,7 @@ func sqliteActivityReportRowStatusWithWebSearchRequests(
 	var inTok, outTok, crTok, cr1hTok, rdTok int
 	reasoningTok := r.reasoningTokens
 	if r.usageSource == "message" {
-		inTok, outTok, crTok, rdTok, reasoningTok =
-			clampedUsageTokenCountersWithReasoning(r.tokenJSON)
+		inTok, outTok, crTok, rdTok, reasoningTok = clampedUsageTokenCountersWithReasoning(r.tokenJSON)
 		cr1hTok = clampedCacheCreation1hTokens(r.tokenJSON)
 	} else {
 		inTok, outTok, crTok, rdTok = usageEventRowTokens(

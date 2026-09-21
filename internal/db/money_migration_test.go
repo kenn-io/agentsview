@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"database/sql"
 	"testing"
 
@@ -45,11 +44,11 @@ CREATE TABLE model_pricing (
  output_per_mtok REAL NOT NULL DEFAULT 0, cache_creation_per_mtok REAL NOT NULL DEFAULT 0,
  cache_read_per_mtok REAL NOT NULL DEFAULT 0, updated_at TEXT NOT NULL
 );`
-	_, err := d.rawWriter().Exec(legacyDDL)
+	_, err := d.rawWriter().ExecContext(t.Context(), legacyDDL)
 	require.NoError(t, err)
 
 	insertSession(t, d, "money-migration", "project")
-	_, err = d.rawWriter().Exec(`
+	_, err = d.rawWriter().ExecContext(t.Context(), `
 INSERT INTO usage_events (id, session_id, source, model, cost_usd, dedup_key)
 VALUES (41, 'money-migration', 'provider', 'model', 0.0123456, 'usage-key'),
        (42, 'money-migration', 'provider', 'model', NULL, 'usage-null'),
@@ -63,7 +62,7 @@ INSERT INTO model_pricing (model_pattern, input_per_mtok, output_per_mtok, cache
 VALUES ('model', 3, 15, 3.75, 0.3, '2026-07-21T12:00:00Z');`)
 	require.NoError(t, err)
 
-	require.NoError(t, migrateMoneyColumnsLocked(d.getWriter()))
+	require.NoError(t, migrateMoneyColumnsLocked(t.Context(), d.getWriter()))
 
 	assertSQLiteMoneyColumn(t, d, "usage_events", "cost_microdollars", "INTEGER")
 	assertSQLiteMoneyColumn(t, d, "cursor_usage_events", "charged_microdollars", "INTEGER")
@@ -73,24 +72,24 @@ VALUES ('model', 3, 15, 3.75, 0.3, '2026-07-21T12:00:00Z');`)
 	assertSQLiteColumnAbsent(t, d, "model_pricing", "input_per_mtok")
 
 	var usageID, usageCost int64
-	require.NoError(t, d.rawWriter().QueryRow(
+	require.NoError(t, d.rawWriter().QueryRowContext(t.Context(),
 		`SELECT id, cost_microdollars FROM usage_events WHERE dedup_key = 'usage-key'`,
 	).Scan(&usageID, &usageCost))
 	assert.Equal(t, int64(41), usageID)
 	assert.Equal(t, int64(12_346), usageCost)
 	var halfCost int64
-	require.NoError(t, d.rawWriter().QueryRow(
+	require.NoError(t, d.rawWriter().QueryRowContext(t.Context(),
 		`SELECT cost_microdollars FROM usage_events WHERE dedup_key = 'usage-half'`,
 	).Scan(&halfCost))
 	assert.Equal(t, int64(1), halfCost)
 	var nullCount int
-	require.NoError(t, d.rawWriter().QueryRow(
+	require.NoError(t, d.rawWriter().QueryRowContext(t.Context(),
 		`SELECT count(*) FROM usage_events WHERE id = 42 AND cost_microdollars IS NULL`,
 	).Scan(&nullCount))
 	assert.Equal(t, 1, nullCount)
 
 	var cursorID, charged, fee int64
-	require.NoError(t, d.rawWriter().QueryRow(`
+	require.NoError(t, d.rawWriter().QueryRowContext(t.Context(), `
 SELECT id, charged_microdollars, cursor_token_fee_microdollars
 FROM cursor_usage_events
 WHERE dedup_key = '720d8f006c8bba8791ff4da76e520f1e7de38ffea7549e728fa351412187ba82'`,
@@ -99,7 +98,7 @@ WHERE dedup_key = '720d8f006c8bba8791ff4da76e520f1e7de38ffea7549e728fa351412187b
 	assert.Equal(t, int64(156_600), charged)
 	assert.Equal(t, int64(33_200), fee)
 
-	require.NoError(t, d.InsertCursorUsageEvents([]CursorUsageEvent{{
+	require.NoError(t, d.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{{
 		OccurredAt:     "2026-07-21T12:00:00Z",
 		Model:          "model",
 		Charged:        money.MustParseDollars("0.1566"),
@@ -109,21 +108,21 @@ WHERE dedup_key = '720d8f006c8bba8791ff4da76e520f1e7de38ffea7549e728fa351412187b
 	require.NoError(t, err)
 	fractionalFee, err := money.ParseCents("3.32001")
 	require.NoError(t, err)
-	require.NoError(t, d.InsertCursorUsageEvents([]CursorUsageEvent{{
+	require.NoError(t, d.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{{
 		OccurredAt:     "2026-07-21T12:01:00Z",
 		Model:          "model",
 		Charged:        fractionalCharged,
 		CursorTokenFee: fractionalFee,
 	}}))
 	var cursorCount int
-	require.NoError(t, d.rawWriter().QueryRow(
+	require.NoError(t, d.rawWriter().QueryRowContext(t.Context(),
 		`SELECT count(*) FROM cursor_usage_events`,
 	).Scan(&cursorCount))
 	assert.Equal(t, 2, cursorCount,
 		"refetched migrated events must deduplicate after cent quantization")
 
 	var input, output, creation, read int64
-	require.NoError(t, d.rawWriter().QueryRow(`
+	require.NoError(t, d.rawWriter().QueryRowContext(t.Context(), `
 SELECT input_microdollars_per_mtok, output_microdollars_per_mtok,
        cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok
 FROM model_pricing WHERE model_pattern = 'model'`,
@@ -134,13 +133,13 @@ FROM model_pricing WHERE model_pattern = 'model'`,
 	assert.Equal(t, int64(300_000), read)
 
 	// The migration is one-way and idempotent once the legacy columns are gone.
-	require.NoError(t, migrateMoneyColumnsLocked(d.getWriter()))
+	require.NoError(t, migrateMoneyColumnsLocked(t.Context(), d.getWriter()))
 }
 
 func TestOpenLegacyMoneySchemaCreatesUsablePricingBands(t *testing.T) {
 	d := testDB(t)
 	path := d.Path()
-	_, err := d.rawWriter().Exec(`
+	_, err := d.rawWriter().ExecContext(t.Context(), `
 DROP TABLE model_pricing_bands;
 DROP TABLE model_pricing;
 CREATE TABLE model_pricing (
@@ -156,7 +155,7 @@ INSERT INTO model_pricing (
 	require.NoError(t, err)
 	require.NoError(t, d.Close())
 
-	reopened, err := Open(path)
+	reopened, err := Open(t.Context(), path)
 	require.NoError(t, err)
 	defer reopened.Close()
 	require.NoError(t, reopened.UpsertModelPricing([]ModelPricing{{
@@ -174,7 +173,7 @@ INSERT INTO model_pricing (
 		}},
 	}}))
 
-	prices, err := reopened.ListModelPricing(context.Background())
+	prices, err := reopened.ListModelPricing(t.Context())
 	require.NoError(t, err)
 	require.Len(t, prices, 1)
 	require.Len(t, prices[0].Bands, 1)
@@ -185,7 +184,7 @@ func TestOpenLegacyMoneyFailurePreservesPricingBandSchema(t *testing.T) {
 	d := testDB(t)
 	path := d.Path()
 	insertSession(t, d, "invalid-open-money-migration", "project")
-	_, err := d.rawWriter().Exec(`
+	_, err := d.rawWriter().ExecContext(t.Context(), `
 DROP TABLE model_pricing_bands;
 DROP TABLE model_pricing;
 CREATE TABLE model_pricing (
@@ -213,7 +212,7 @@ VALUES ('invalid-open-money-migration', 'provider', 'model', -0.01);`)
 	require.NoError(t, err)
 	require.NoError(t, d.Close())
 
-	reopened, err := Open(path)
+	reopened, err := Open(t.Context(), path)
 	require.Error(t, err)
 	if reopened != nil {
 		require.NoError(t, reopened.Close())
@@ -223,20 +222,20 @@ VALUES ('invalid-open-money-migration', 'provider', 'model', -0.01);`)
 	require.NoError(t, err)
 	defer raw.Close()
 	var bandTableCount int
-	require.NoError(t, raw.QueryRow(`
+	require.NoError(t, raw.QueryRowContext(t.Context(), `
 SELECT COUNT(*) FROM sqlite_master
 WHERE type = 'table' AND name = 'model_pricing_bands'`).Scan(&bandTableCount))
 	assert.Equal(t, 1, bandTableCount)
 	var legacyPrice float64
-	require.NoError(t, raw.QueryRow(`
+	require.NoError(t, raw.QueryRowContext(t.Context(), `
 SELECT input_per_mtok FROM model_pricing WHERE model_pattern = 'legacy-model'`,
 	).Scan(&legacyPrice))
-	assert.Equal(t, 1.0, legacyPrice)
+	assert.InDelta(t, 1.0, legacyPrice, 0)
 }
 
 func TestMigrateMoneyColumnsRejectsInvalidLegacyValueWithoutChangingSchema(t *testing.T) {
 	d := testDB(t)
-	_, err := d.rawWriter().Exec(`
+	_, err := d.rawWriter().ExecContext(t.Context(), `
 DROP TABLE usage_events;
 CREATE TABLE usage_events (
  id INTEGER PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -249,12 +248,12 @@ CREATE TABLE usage_events (
 );`)
 	require.NoError(t, err)
 	insertSession(t, d, "invalid-money-migration", "project")
-	_, err = d.rawWriter().Exec(`
+	_, err = d.rawWriter().ExecContext(t.Context(), `
 INSERT INTO usage_events (session_id, source, model, cost_usd)
 VALUES ('invalid-money-migration', 'provider', 'model', -0.01)`)
 	require.NoError(t, err)
 
-	err = migrateMoneyColumnsLocked(d.getWriter())
+	err = migrateMoneyColumnsLocked(t.Context(), d.getWriter())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "usage_events.cost_usd")
 	assertSQLiteMoneyColumn(t, d, "usage_events", "cost_usd", "REAL")
@@ -266,7 +265,7 @@ func TestMigrateMoneyColumnsRejectsMixedSchemaWithoutDiscardingMicrodollars(
 ) {
 	d := testDB(t)
 	insertSession(t, d, "mixed-money-migration", "project")
-	_, err := d.rawWriter().Exec(`
+	_, err := d.rawWriter().ExecContext(t.Context(), `
 ALTER TABLE usage_events ADD COLUMN cost_usd REAL;
 INSERT INTO usage_events (
     session_id, source, model, cost_microdollars, cost_usd, dedup_key
@@ -275,12 +274,12 @@ INSERT INTO usage_events (
 )`)
 	require.NoError(t, err)
 
-	err = migrateMoneyColumnsLocked(d.getWriter())
+	err = migrateMoneyColumnsLocked(t.Context(), d.getWriter())
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ambiguous money schema for usage_events")
 	var cost int64
-	require.NoError(t, d.rawWriter().QueryRow(`
+	require.NoError(t, d.rawWriter().QueryRowContext(t.Context(), `
 SELECT cost_microdollars FROM usage_events WHERE dedup_key = 'mixed-money'`,
 	).Scan(&cost))
 	assert.Equal(t, int64(123), cost)
@@ -305,10 +304,10 @@ func TestMigrateMoneyColumnsRejectsPartialLegacyColumnSets(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d := testDB(t)
-			_, err := d.rawWriter().Exec(tt.alter)
+			_, err := d.rawWriter().ExecContext(t.Context(), tt.alter)
 			require.NoError(t, err)
 
-			err = migrateMoneyColumnsLocked(d.getWriter())
+			err = migrateMoneyColumnsLocked(t.Context(), d.getWriter())
 
 			require.Error(t, err)
 			assert.Contains(t, err.Error(),
@@ -320,7 +319,7 @@ func TestMigrateMoneyColumnsRejectsPartialLegacyColumnSets(t *testing.T) {
 func assertSQLiteMoneyColumn(t *testing.T, d *DB, table, column, wantType string) {
 	t.Helper()
 	var gotType string
-	err := d.rawWriter().QueryRow(
+	err := d.rawWriter().QueryRowContext(t.Context(),
 		`SELECT type FROM pragma_table_info(?) WHERE name = ?`, table, column,
 	).Scan(&gotType)
 	require.NoError(t, err)
@@ -330,7 +329,7 @@ func assertSQLiteMoneyColumn(t *testing.T, d *DB, table, column, wantType string
 func assertSQLiteColumnAbsent(t *testing.T, d *DB, table, column string) {
 	t.Helper()
 	var count int
-	require.NoError(t, d.rawWriter().QueryRow(
+	require.NoError(t, d.rawWriter().QueryRowContext(t.Context(),
 		`SELECT count(*) FROM pragma_table_info(?) WHERE name = ?`, table, column,
 	).Scan(&count))
 	assert.Zero(t, count)

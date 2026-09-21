@@ -1,0 +1,44 @@
+{
+  "session_find_whole_word": "단어 단위로 일치",
+  "session_find_loading_history": "이전 메시지를 불러오는 중…",
+  "session_find_announce_match": "검색 결과 {total}개 중 {current}번째",
+  "session_find_block_count": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "검색 결과 {count}개",
+        "countPlural=other": "검색 결과 {count}개"
+      }
+    }
+  ],
+  "session_find_results_group_count": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "검색 결과 {count}개",
+        "countPlural=other": "검색 결과 {count}개"
+      }
+    }
+  ],
+  "session_find_results_title": "검색 결과",
+  "session_find_results_empty": "이 세션에 검색 결과가 없습니다",
+  "session_find_toggle_results": "검색 결과 표시",
+  "session_find_hide_results": "검색 결과 숨기기",
+  "session_find_subagent_excluded": "인라인 하위 에이전트 메시지는 검색 대상에서 제외됩니다.",
+  "session_find_rail_label": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "이 세션의 검색 결과 {count}개",
+        "countPlural=other": "이 세션의 검색 결과 {count}개"
+      }
+    }
+  ],
+  "session_find_raw_output": "검색 중 원본 출력 표시",
+  "session_find_history_incomplete": "이전 메시지를 불러오지 못했습니다. 검색 결과가 일부만 표시됩니다.",
+  "session_find_retry_history": "이전 메시지 다시 불러오기",
+  "session_find_partial_results": "일부 결과"
+}

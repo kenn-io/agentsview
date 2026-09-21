@@ -218,6 +218,7 @@ func requireActivityBucketMembership(
 	bucketEnd time.Time,
 ) {
 	t.Helper()
+
 	query, err := activity.ResolveQuery(activity.QueryInput{
 		Preset:         "day",
 		Date:           now.Format(time.DateOnly),

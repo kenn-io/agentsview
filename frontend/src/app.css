@@ -7,6 +7,24 @@
   padding: 0;
 }
 
+/* Keep fixed overlay shells in viewport coordinates; scale their contents
+ * with the interface. kit-ui measures shell dimensions when positioning. */
+.kit-typeahead__panel,
+.kit-select-dropdown__list,
+.kit-filter-dropdown__panel,
+.kit-date-range-picker__panel,
+.kit-mention__menu,
+.context-menu,
+.tooltip {
+  zoom: var(--agentsview-zoom-compensation, 1);
+
+  /* ponytail: DateRangePicker fixes its shell at 360px; keep its current
+   * scale until kit-ui sizes and positions that shell for zoom. */
+  &:not(.kit-date-range-picker__panel) > * {
+    zoom: calc(1 / var(--agentsview-zoom-compensation, 1));
+  }
+}
+
 /*
  * Shared design tokens (backgrounds, text, borders, the core accent set,
  * shadows, radii, fonts, type scale, spacing ladder, chrome heights, and the
@@ -223,27 +241,23 @@ pre {
   word-wrap: break-word;
 }
 
+/* Literal XML uses the active app theme, independently of code fences. */
+pre.unknown-xml-block {
+  background: var(--bg-inset);
+  color: var(--text-primary);
+  border: 1px solid var(--border-muted);
+  border-radius: var(--radius-md);
+  padding: 12px 16px;
+  margin: 0.5em 0;
+  overflow-x: auto;
+}
+
 /* Mark tag (search highlights) */
 mark {
   background: var(--accent-amber);
   color: var(--text-primary);
   border-radius: 2px;
   padding: 0 2px;
-}
-
-/* In-session find highlights */
-mark.search-highlight {
-  background: color-mix(in srgb, var(--accent-amber) 35%, transparent);
-  color: inherit;
-  border-radius: 2px;
-  padding: 0 1px;
-}
-
-mark.search-highlight--current {
-  background: var(--accent-amber);
-  color: var(--text-primary);
-  outline: 1px solid color-mix(in srgb, var(--accent-amber) 80%, var(--text-primary));
-  outline-offset: 1px;
 }
 
 @keyframes duration-pulse {

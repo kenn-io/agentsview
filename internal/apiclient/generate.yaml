@@ -1,0 +1,64 @@
+package: apiclient
+generate:
+  client: false
+  client-with-response: true
+  client-streaming: true
+output:
+  directory: internal/apiclient
+  use-single-file: true
+  filename: client.gen.go
+filter:
+  include:
+    operation-ids:
+      - get-startup-probe
+      - get-api-v1-version
+      - get-api-v1-machines
+      - get-api-v1-sessions-id
+      - get-api-v1-session-ids-resolve
+      - get-api-v1-sessions
+      - get-api-v1-sessions-id-messages
+      - get-api-v1-sessions-id-tool-calls
+      - post-api-v1-sessions-sync
+      - get-api-v1-sessions-id-watch
+      - get-api-v1-session-stats
+      - get-api-v1-search
+      - get-api-v1-search-content
+      - get-api-v1-usage-summary
+      - get-api-v1-usage-pairwise-comparison
+      - get-api-v1-recall-entries
+      - get-api-v1-recall-entries-id
+      - post-api-v1-recall-query
+      - post-api-v1-recall-import
+      - get-api-v1-secrets
+      - post-api-v1-secrets-scan
+      - get-api-v1-projects
+      - get-api-v1-sessions-id-usage
+      - post-api-v1-data-compact
+      - post-api-v1-embeddings-build
+      - get-api-v1-embeddings-status
+      - get-api-v1-embeddings-generations
+      - post-api-v1-embeddings-generations-id-activate
+      - post-api-v1-embeddings-generations-id-retire
+      - get-api-v1-activity-report
+      - get-api-v1-activity-report-report-id-sessions
+      - get-api-v1-usage-summary-stream
+      - post-api-v1-sync
+      - post-api-v1-resync
+      - post-api-v1-sync-remotes
+      - post-api-v1-push-pg
+      - post-api-v1-push-duckdb
+      - post-api-v1-push-clickhouse
+      - post-api-v1-remote-sync-manifest
+      - post-api-v1-remote-sync-archive
+      - get-api-v1-remote-sync-targets
+      - post-api-v1-artifacts-exchange
+      - post-api-v1-raw-sync-tokens
+      - get-api-v1-raw-sync-status
+      - post-api-v1-raw-sync-objects-missing
+      - post-api-v1-raw-sync-uploads
+      - head-api-v1-raw-sync-uploads-upload-id
+      - patch-api-v1-raw-sync-uploads-upload-id
+      - post-api-v1-raw-sync-manifests
+overlay:
+  sources:
+    - internal/apiclient/models.overlay.yaml

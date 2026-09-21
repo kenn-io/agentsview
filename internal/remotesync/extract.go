@@ -49,7 +49,7 @@ func extractTarStream(
 				return skipped, fmt.Errorf("read tar trailer: %w", drainErr)
 			}
 			if trailerBytes < tarEndMarkerSize || !endMarkerReader.hasEndMarker() {
-				return skipped, fmt.Errorf("missing tar end marker")
+				return skipped, errors.New("missing tar end marker")
 			}
 			return skipped, nil
 		}

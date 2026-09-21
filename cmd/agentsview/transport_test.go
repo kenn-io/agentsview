@@ -6,16 +6,20 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/kit/daemon"
 )
 
@@ -28,7 +32,7 @@ func daemonRuntimeDir(t *testing.T) string {
 // listener (caller closes) and the port number.
 func freeTCPListener(t *testing.T) (net.Listener, int) {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	l, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	t.Cleanup(func() { l.Close() })
 	port := l.Addr().(*net.TCPAddr).Port
@@ -74,7 +78,7 @@ func TestDetectTransport_UsesStartupStateFallbackWithoutRuntimeRecord(t *testing
 	require.True(t, ok)
 	writeStartupFallbackFixture(t, dir, host, port, os.Getpid(), strconv.FormatInt(createTime, 10))
 
-	tr, err := detectTransportContext(context.Background(), dir, "", time.Second)
+	tr, err := detectTransportContext(t.Context(), dir, "", time.Second)
 	require.NoError(t, err)
 	assert.Equal(t, transportHTTP, tr.Mode)
 	assert.Equal(t, fmt.Sprintf("http://%s:%d", host, port), tr.URL)
@@ -102,7 +106,7 @@ func TestDetectTransport_UsesStartupStateFallbackWhileExternalLockRemainsHeld(t 
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(startupStatePath(dir), data, 0o600))
 
-	tr, err := detectTransportContext(context.Background(), dir, "", time.Second)
+	tr, err := detectTransportContext(t.Context(), dir, "", time.Second)
 	require.NoError(t, err)
 	assert.Equal(t, transportHTTP, tr.Mode)
 	assert.Equal(t, fmt.Sprintf("http://%s:%d", host, port), tr.URL)
@@ -167,6 +171,36 @@ func writeIncompatibleDaemonRuntime(
 	t.Cleanup(func() { RemoveDaemonRuntime(dir) })
 }
 
+// writeNewerDataVersionDaemonRuntime writes a runtime record for a daemon
+// that matches this client's API version but was already upgraded to a
+// newer data version than this binary knows about, simulating a client
+// (e.g. a long-running pg push --watch process) still running an older
+// binary after the daemon it talks to has been restarted post-upgrade.
+func writeNewerDataVersionDaemonRuntime(
+	t *testing.T, dir, host string, port int, daemonVersion string,
+) {
+	t.Helper()
+	meta := map[string]string{
+		runtimeHost:        host,
+		runtimePort:        strconv.Itoa(port),
+		runtimeReadOnly:    "false",
+		runtimeAPIVersion:  strconv.Itoa(daemonAPIVersion),
+		runtimeDataVersion: strconv.Itoa(db.CurrentDataVersion() + 1),
+	}
+	rec := daemon.RuntimeRecord{
+		PID:       os.Getpid(),
+		Network:   daemon.NetworkTCP,
+		Address:   net.JoinHostPort(host, strconv.Itoa(port)),
+		Service:   daemonService,
+		Version:   daemonVersion,
+		StartedAt: time.Now(),
+		Metadata:  meta,
+	}
+	_, err := writeRuntimeRecordForTest(dir, rec)
+	require.NoError(t, err)
+	t.Cleanup(func() { RemoveDaemonRuntime(dir) })
+}
+
 // setTestVersion overrides the package build version for the duration of
 // the test and restores it on cleanup.
 func setTestVersion(t *testing.T, value string) {
@@ -196,8 +230,7 @@ func forbidStartBackgroundServeForTransport(t *testing.T, msg string) {
 		context.Context, *config.Config, time.Duration,
 	) (*DaemonRuntime, error) {
 		t.Helper()
-		t.Fatal(msg)
-		return nil, nil
+		return nil, errors.New(msg)
 	})
 }
 
@@ -205,7 +238,7 @@ func forbidStartBackgroundServeForTransport(t *testing.T, msg string) {
 // test and restores the original on cleanup.
 func stubStopDaemonRuntimeForUpgrade(
 	t *testing.T,
-	fn func(config.Config, *DaemonRuntime) error,
+	fn func(context.Context, config.Config, *DaemonRuntime) error,
 ) {
 	t.Helper()
 	old := stopDaemonRuntimeForUpgrade
@@ -217,12 +250,11 @@ func stubStopDaemonRuntimeForUpgrade(
 // hook is invoked, with msg describing the violation.
 func forbidStopDaemonRuntimeForUpgrade(t *testing.T, msg string) {
 	t.Helper()
-	stubStopDaemonRuntimeForUpgrade(t, func(
+	stubStopDaemonRuntimeForUpgrade(t, func(context.Context,
 		config.Config, *DaemonRuntime,
 	) error {
 		t.Helper()
-		t.Fatal(msg)
-		return nil
+		return errors.New(msg)
 	})
 }
 
@@ -451,7 +483,7 @@ func TestEnsureTransport_ArchiveWriteRestartsOlderDaemon(t *testing.T) {
 	dir := daemonRuntimeDir(t)
 	host, port := testPingServer(t)
 	_, err := WriteDaemonRuntimeWithAuthAndNoSync(
-		dir, host, port, "1.0.0", false, false, true,
+		dir, host, port, "1.0.0", "", false, false, true, nil,
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() { RemoveDaemonRuntime(dir) })
@@ -484,7 +516,7 @@ func TestEnsureTransport_ReadIntentRestartsOlderDaemon(t *testing.T) {
 	dir := daemonRuntimeDir(t)
 	host, port := testPingServer(t)
 	_, err := WriteDaemonRuntimeWithAuthAndNoSync(
-		dir, host, port, "1.0.0", false, false, true,
+		dir, host, port, "1.0.0", "", false, false, true, nil,
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() { RemoveDaemonRuntime(dir) })
@@ -542,7 +574,7 @@ func TestEnsureTransport_ReadIntentPreservesExplicitNoSyncWhenRestartingOlderDae
 	dir := daemonRuntimeDir(t)
 	host, port := testPingServer(t)
 	_, err := WriteDaemonRuntimeWithAuthAndNoSync(
-		dir, host, port, "1.0.0", false, false, false,
+		dir, host, port, "1.0.0", "", false, false, false, nil,
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() { RemoveDaemonRuntime(dir) })
@@ -604,7 +636,7 @@ func TestEnsureTransport_ArchiveWriteStopsOlderDaemonUnderLaunchLock(
 
 	setTestVersion(t, "1.1.0")
 	stopErr := errors.New("stop after launch lock")
-	stubStopDaemonRuntimeForUpgrade(t, func(
+	stubStopDaemonRuntimeForUpgrade(t, func(context.Context,
 		config.Config, *DaemonRuntime,
 	) error {
 		launchLock, ok := acquireBackgroundLaunchLock(dir)
@@ -736,11 +768,10 @@ func TestEnsureTransport_ArchiveWriteRestartsIncompatibleDaemonAfterExternalStar
 	})
 
 	released := make(chan struct{})
-	go func() {
-		time.Sleep(2 * startProbeTick())
+	runAfterBackgroundProbe(t, func() {
 		unlockStart()
 		close(released)
-	}()
+	})
 
 	cfg := config.Config{DataDir: dir}
 	tr, err := ensureTransport(
@@ -791,6 +822,81 @@ func TestEnsureTransport_ArchiveWriteDoesNotDowngradeNewerDaemon(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, transportHTTP, tr.Mode)
 	assert.Equal(t, "http://"+net.JoinHostPort(host, strconv.Itoa(port)), tr.URL)
+}
+
+// TestEnsureTransport_ArchiveWriteNewerDaemonDataVersionHintsRestart covers a
+// long-running archive-write process (e.g. `pg push --watch`, installed as
+// `agentsview pg service`) that is still running an older binary after an
+// upgrade: it finds a live daemon already on a newer data version, correctly
+// refuses to replace it (that would downgrade the daemon), and must surface
+// the same actionable restart guidance the read-intent path already gives,
+// not the bare "data version ... incompatible" message.
+func TestEnsureTransport_ArchiveWriteNewerDaemonDataVersionHintsRestart(t *testing.T) {
+	dir := daemonRuntimeDir(t)
+	host, port := testPingServer(t)
+	writeNewerDataVersionDaemonRuntime(t, dir, host, port, "1.0.0")
+
+	setTestVersion(t, "1.1.0")
+	forbidStopDaemonRuntimeForUpgrade(t,
+		"a client with an older compiled data version must not replace a "+
+			"daemon already on a newer one")
+	forbidStartBackgroundServeForTransport(t,
+		"a client with an older compiled data version must not replace a "+
+			"daemon already on a newer one")
+
+	cfg := config.Config{DataDir: dir}
+	_, err := ensureTransport(
+		&cfg, transportIntentArchiveWrite, 100*time.Millisecond,
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "data version")
+	assert.Contains(t, err.Error(), "newer than this agentsview binary")
+	assert.Contains(t, err.Error(), "pg service")
+	assert.NotContains(t, err.Error(), "older agentsview version")
+}
+
+// TestEnsureTransport_ReadNewerDaemonDataVersionHintsClientUpgrade covers a
+// read command on an older binary that finds a daemon already on a newer
+// data version. It must not tell the user to restart the daemon, which is
+// the healthy side; it must point at upgrading the client.
+func TestEnsureTransport_ReadNewerDaemonDataVersionHintsClientUpgrade(t *testing.T) {
+	dir := daemonRuntimeDir(t)
+	host, port := testPingServer(t)
+	writeNewerDataVersionDaemonRuntime(t, dir, host, port, "1.0.0")
+
+	setTestVersion(t, "1.1.0")
+	forbidStopDaemonRuntimeForUpgrade(t,
+		"a read client must not replace a daemon on a newer data version")
+	forbidStartBackgroundServeForTransport(t,
+		"a read client must not replace a daemon on a newer data version")
+
+	cfg := config.Config{DataDir: dir}
+	_, err := ensureTransport(&cfg, transportIntentRead, 100*time.Millisecond)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "data version")
+	assert.Contains(t, err.Error(), "newer than this agentsview binary")
+	assert.NotContains(t, err.Error(), "older agentsview version")
+}
+
+// TestAppendDaemonCompatibilityHintPicksDirection pins the two hint
+// directions: an older daemon or archive keeps the daemon-restart guidance,
+// while a daemon that is ahead of the client gets the client-upgrade one.
+func TestAppendDaemonCompatibilityHintPicksDirection(t *testing.T) {
+	base := errors.New("daemon data version 1 is incompatible with client data version 2")
+
+	older := appendDaemonCompatibilityHint(transport{}, base)
+	require.ErrorIs(t, older, base)
+	assert.Contains(t, older.Error(), "older agentsview version")
+	assert.Contains(t, older.Error(), "agentsview daemon restart")
+	assert.NotContains(t, older.Error(), "newer than this agentsview binary")
+
+	ahead := appendDaemonCompatibilityHint(
+		transport{DirectDaemonAhead: true}, base,
+	)
+	require.ErrorIs(t, ahead, base)
+	assert.Contains(t, ahead.Error(), "newer than this agentsview binary")
+	assert.Contains(t, ahead.Error(), "pg push --watch")
+	assert.NotContains(t, ahead.Error(), "older agentsview version")
 }
 
 func TestShouldUpgradeDaemonRuntimeTreatsMissingDaemonVersionAsOlderRelease(t *testing.T) {
@@ -881,16 +987,15 @@ func TestDetectTransportWaitsForExternalStartLockBeforeReturningRuntime(
 
 	newHost, newPort := testPingServer(t)
 	published := make(chan error, 1)
-	go func() {
-		time.Sleep(2 * startProbeTick())
+	runAfterBackgroundProbe(t, func() {
 		RemoveDaemonRuntime(dir)
 		_, err := WriteDaemonRuntime(dir, newHost, newPort, "1.1.0", false)
 		unlockStart()
 		published <- err
-	}()
+	})
 
 	tr, err := detectTransportContext(
-		context.Background(), dir, "", time.Second,
+		t.Context(), dir, "", time.Second,
 	)
 
 	require.NoError(t, <-published)
@@ -915,15 +1020,14 @@ func TestEnsureTransportArchiveWriteWaitsForBackgroundReplacementLock(
 
 	newHost, newPort := testPingServer(t)
 	published := make(chan error, 1)
-	go func() {
-		time.Sleep(2 * startProbeTick())
+	runAfterBackgroundProbe(t, func() {
 		RemoveDaemonRuntime(dir)
 		_, err := WriteDaemonRuntime(dir, newHost, newPort, version, false)
 		if err == nil {
 			err = launchLock.Unlock()
 		}
 		published <- err
-	}()
+	})
 
 	cfg := config.Config{DataDir: dir}
 	tr, err := ensureTransport(
@@ -936,6 +1040,45 @@ func TestEnsureTransportArchiveWriteWaitsForBackgroundReplacementLock(
 	assert.Equal(t, "http://"+net.JoinHostPort(
 		newHost, strconv.Itoa(newPort),
 	), tr.URL)
+}
+
+func TestBackgroundLaunchWaitReportsProgressAndExtendsWhileWorking(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		setStartProbeTickForTest(t, 10*time.Millisecond)
+		dir := daemonRuntimeDir(t)
+		require.NoError(t, os.MkdirAll(dir, 0o700))
+		launchLock, ok := acquireBackgroundLaunchLock(dir)
+		require.True(t, ok)
+		t.Cleanup(func() { _ = launchLock.Unlock() })
+		MarkDaemonStarting(dir)
+		t.Cleanup(func() { UnmarkDaemonStarting(dir) })
+		state := newStartupStateWriter(dir, time.Now)
+		state.SetPhase("Opening archive")
+		released := make(chan error, 1)
+		go func() {
+			for i := range 5 {
+				time.Sleep(50 * time.Millisecond)
+				state.SetPhase(fmt.Sprintf("Preparing archive batch %d", i+1))
+			}
+			released <- launchLock.Unlock()
+		}()
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+		defer cancel()
+		stderr, err := os.Create(filepath.Join(t.TempDir(), "stderr"))
+		require.NoError(t, err)
+		originalStderr := os.Stderr
+		os.Stderr = stderr
+		defer func() { os.Stderr = originalStderr; _ = stderr.Close() }()
+
+		waited, err := waitForBackgroundLaunchBeforeArchiveWrite(ctx, dir, 150*time.Millisecond)
+		require.True(t, waited)
+		require.NoError(t, err, "advancing startup must extend the wait")
+		require.NoError(t, <-released)
+		output, err := os.ReadFile(stderr.Name())
+		require.NoError(t, err)
+		assert.Contains(t, string(output), "Opening archive")
+		assert.Contains(t, string(output), "Preparing archive batch")
+	})
 }
 
 func TestEnsureTransportArchiveWriteAdoptsAuthAfterBackgroundLaunchWait(
@@ -954,20 +1097,22 @@ func TestEnsureTransportArchiveWriteAdoptsAuthAfterBackgroundLaunchWait(
 	const token = "generated-token"
 	newHost, newPort := testAuthenticatedPingServer(t, token)
 	published := make(chan error, 1)
-	go func() {
-		time.Sleep(2 * startProbeTick())
-		writeTestConfig(t, dir, `require_auth = true
+	runAfterBackgroundProbe(t, func() {
+		if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(`require_auth = true
 auth_token = "generated-token"
-`)
+`), 0o600); err != nil {
+			published <- err
+			return
+		}
 		RemoveDaemonRuntime(dir)
 		_, err := WriteDaemonRuntimeWithAuth(
-			dir, newHost, newPort, version, false, true,
+			dir, newHost, newPort, version, "", false, true,
 		)
 		if err == nil {
 			err = launchLock.Unlock()
 		}
 		published <- err
-	}()
+	})
 
 	cfg := config.Config{DataDir: dir}
 	tr, err := ensureTransport(
@@ -994,17 +1139,19 @@ func TestEnsureTransportReadAdoptsAuthAfterDaemonStartupWait(t *testing.T) {
 	const token = "generated-token"
 	newHost, newPort := testAuthenticatedPingServer(t, token)
 	published := make(chan error, 1)
-	go func() {
-		time.Sleep(2 * startProbeTick())
-		writeTestConfig(t, dir, `require_auth = true
+	runAfterBackgroundProbe(t, func() {
+		if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(`require_auth = true
 auth_token = "generated-token"
-`)
+`), 0o600); err != nil {
+			published <- err
+			return
+		}
 		_, err := WriteDaemonRuntimeWithAuth(
-			dir, newHost, newPort, version, false, true,
+			dir, newHost, newPort, version, "", false, true,
 		)
 		unlockStart()
 		published <- err
-	}()
+	})
 
 	cfg := config.Config{DataDir: dir}
 	tr, err := ensureTransport(
@@ -1028,7 +1175,7 @@ func TestWaitForBackgroundLaunchBeforeArchiveWriteRejectsFileDataDir(
 	require.NoError(t, os.WriteFile(dataDir, []byte("not a dir"), 0o600))
 
 	waited, err := waitForBackgroundLaunchBeforeArchiveWrite(
-		context.Background(), dataDir, 10*time.Millisecond,
+		t.Context(), dataDir, 10*time.Millisecond,
 	)
 
 	require.Error(t, err)
@@ -1041,7 +1188,7 @@ func TestEnsureTransportContextCancelDuringStartupWait(t *testing.T) {
 	MarkDaemonStarting(dir)
 	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	stubWaitForDaemonStartupForTransport(t, func(
 		gotCtx context.Context,
 		dataDir string,
@@ -1063,6 +1210,33 @@ func TestEnsureTransportContextCancelDuringStartupWait(t *testing.T) {
 		ctx, &cfg, transportIntentArchiveWrite, 100*time.Millisecond,
 	)
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+// TestEnsureTransport_ArchiveWriteNoDaemonEnvNamesIncompatibleDaemon covers
+// a writer running with AGENTSVIEW_NO_DAEMON=1 that finds a live daemon on a
+// newer data version. The env var forbids replacing the daemon, so the write
+// must fail, and the error must name the data-version mismatch rather than
+// claim the daemon is not responding.
+func TestEnsureTransport_ArchiveWriteNoDaemonEnvNamesIncompatibleDaemon(t *testing.T) {
+	dir := daemonRuntimeDir(t)
+	host, port := testPingServer(t)
+	writeNewerDataVersionDaemonRuntime(t, dir, host, port, "1.0.0")
+
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
+	setTestVersion(t, "1.1.0")
+	forbidStopDaemonRuntimeForUpgrade(t,
+		"AGENTSVIEW_NO_DAEMON must not replace an incompatible daemon")
+	forbidStartBackgroundServeForTransport(t,
+		"AGENTSVIEW_NO_DAEMON must not start a replacement daemon")
+
+	cfg := config.Config{DataDir: dir}
+	_, err := ensureTransport(
+		&cfg, transportIntentArchiveWrite, 100*time.Millisecond,
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "data version")
+	assert.Contains(t, err.Error(), "refusing to write directly")
+	assert.NotContains(t, err.Error(), "not responding")
 }
 
 func TestEnsureTransport_ArchiveWriteNoDaemonEnvUsesDirect(t *testing.T) {
@@ -1117,7 +1291,7 @@ func TestNewService_HTTPMode(t *testing.T) {
 		Mode: transportHTTP,
 		URL:  "http://127.0.0.1:8080",
 	}
-	svc, cleanup, err := newService(config.Config{}, tr)
+	svc, cleanup, err := newService(t.Context(), config.Config{}, tr)
 	require.NoError(t, err)
 	require.NotNil(t, svc)
 	require.NotNil(t, cleanup)
@@ -1132,12 +1306,12 @@ func TestNewService_DirectMode(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "sessions.db")
-	seed, err := db.Open(dbPath)
+	seed, err := db.Open(t.Context(), dbPath)
 	require.NoError(t, err)
 	seed.Close()
 	cfg := config.Config{DBPath: dbPath}
 
-	svc, cleanup, err := newService(cfg, transport{Mode: transportDirect})
+	svc, cleanup, err := newService(t.Context(), cfg, transport{Mode: transportDirect})
 	require.NoError(t, err)
 	require.NotNil(t, svc)
 	require.NotNil(t, cleanup)
@@ -1150,12 +1324,12 @@ func TestNewService_DirectReadOnly(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "sessions.db")
-	seed, err := db.Open(dbPath)
+	seed, err := db.Open(t.Context(), dbPath)
 	require.NoError(t, err)
 	seed.Close()
 	cfg := config.Config{DBPath: dbPath}
 
-	svc, cleanup, err := newService(cfg, transport{
+	svc, cleanup, err := newService(t.Context(), cfg, transport{
 		Mode:           transportDirect,
 		DirectReadOnly: true,
 	})
@@ -1170,7 +1344,7 @@ func TestNewService_DirectIncompatibleRefusesWithoutOpeningDB(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "missing.db")
 	cfg := config.Config{DBPath: dbPath}
 
-	svc, cleanup, err := newService(cfg, transport{
+	svc, cleanup, err := newService(t.Context(), cfg, transport{
 		Mode:               transportDirect,
 		DirectReadOnly:     true,
 		DirectIncompatible: true,
@@ -1191,7 +1365,7 @@ func TestNewService_DirectModeMissingDBDoesNotCreate(t *testing.T) {
 	dbPath := filepath.Join(dir, "sessions.db")
 	cfg := config.Config{DBPath: dbPath}
 
-	svc, cleanup, err := newService(cfg, transport{Mode: transportDirect})
+	svc, cleanup, err := newService(t.Context(), cfg, transport{Mode: transportDirect})
 	require.Error(t, err)
 	assert.Nil(t, svc)
 	assert.Nil(t, cleanup)
@@ -1210,6 +1384,7 @@ func TestUrlFromDaemonRuntime_BindAllMapsToLoopback(t *testing.T) {
 		{"192.168.1.10", "http://192.168.1.10:8080"},
 	} {
 		t.Run(tc.host, func(t *testing.T) {
+			t.Parallel()
 			got := urlFromDaemonRuntime(&DaemonRuntime{
 				Host: tc.host,
 				Port: 8080,
@@ -1217,4 +1392,62 @@ func TestUrlFromDaemonRuntime_BindAllMapsToLoopback(t *testing.T) {
 			assert.Equal(t, tc.want, got)
 		})
 	}
+}
+
+func TestDaemonOriginURLStripsPathQueryFragmentAndCredentials(t *testing.T) {
+	assert.Equal(t, "https://viewer.example:8443",
+		daemonOriginURL("https://user:password@viewer.example:8443/viewer/?x=1#top"))
+}
+
+func TestServicesUseRunningDaemonBrowserURL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/base/api/v1/sessions/codex:session:42", r.URL.Path)
+		fmt.Fprint(w, `{"id":"codex:session:42"}`)
+	}))
+	defer server.Close()
+	host, port := splitTestServerURL(t, server.URL)
+	dir := t.TempDir()
+	path, err := WriteDaemonRuntimeWithAuthAndNoSync(dir, host, port, "test", "https://viewer.example/base", false, false, false, nil)
+	require.NoError(t, err)
+	rt := daemonRuntimeFromRecord(readRuntimeRecord(t, path))
+	tr := transportFromRuntime(rt)
+	// A separate client's config may predate startup or change after it.
+	cfg := config.Config{DataDir: t.TempDir(), PublicURL: "https://stale.example"}
+	stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration) (*DaemonRuntime, error) { return rt, nil })
+	for _, tc := range []struct {
+		name  string
+		build func(context.Context, config.Config, transport) (service.SessionService, func(), error)
+	}{
+		{"CLI", newService},
+		{"sync", syncService},
+		{"MCP", func(ctx context.Context, cfg config.Config, _ transport) (service.SessionService, func(), error) {
+			return newMCPDaemonService(cfg), func() {}, nil
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, cleanup, err := tc.build(t.Context(), cfg, tr)
+			require.NoError(t, err)
+			defer cleanup()
+			detail, err := svc.Get(t.Context(), "codex:session:42")
+			require.NoError(t, err)
+			assert.Equal(t, "https://viewer.example/base/sessions/codex/session:42", detail.WebURL)
+		})
+	}
+}
+
+func TestServicePreservesIPv6BrowserURL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/v1/sessions/codex:session:42", r.URL.Path)
+		fmt.Fprint(w, `{"id":"codex:session:42"}`)
+	}))
+	defer server.Close()
+	browser := browserURLWithPlatform(config.Config{Host: "::1", Port: 8080}, nil, nil)
+	svc, cleanup, err := newService(t.Context(), config.Config{}, transport{
+		Mode: transportHTTP, URL: server.URL, BrowserURL: browser,
+	})
+	require.NoError(t, err)
+	defer cleanup()
+	detail, err := svc.Get(t.Context(), "codex:session:42")
+	require.NoError(t, err)
+	assert.Equal(t, "http://[::1]:8080/sessions/codex/session:42", detail.WebURL)
 }

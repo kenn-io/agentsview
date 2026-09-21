@@ -878,3 +878,48 @@ func TestPGSearchContentExcludeSession(t *testing.T) {
 	require.Len(t, got.Matches, 1, "excluded id must not consume the page")
 	assert.Equal(t, "keep", got.Matches[0].SessionID)
 }
+
+func TestSearch_DateRange(t *testing.T) {
+	store := setupContentSearch(t)
+	fixtures := []struct{ id, start, end string }{
+		{"early", "2024-06-01T10:00:00Z", "2024-06-01T11:00:00Z"},
+		{"boundary", "2024-06-02T23:59:59Z", "2024-06-02T23:59:59Z"},
+		{"late", "2024-06-03T00:00:00Z", "2024-06-03T01:00:00Z"},
+		{"spanning", "2024-06-01T23:00:00Z", "2024-06-03T01:00:00Z"},
+	}
+	for _, f := range fixtures {
+		insertCSSession(t, store, f.id, "project-a", "codex", f.start, f.end)
+		insertCSMessage(t, store, f.id, 0, "user", "datefilter message", f.start, false)
+		_, err := store.DB().Exec("UPDATE sessions SET display_name = 'datefilter name' WHERE id = $1", f.id)
+		require.NoError(t, err)
+	}
+	for _, tc := range []struct {
+		name, from, to string
+		want           []string
+	}{
+		{"omitted", "", "", []string{"early", "boundary", "late", "spanning"}},
+		{"lower only", "2024-06-02", "", []string{"boundary", "late", "spanning"}},
+		{"upper only", "", "2024-06-02", []string{"early", "boundary", "spanning"}},
+		{"same day", "2024-06-02", "2024-06-02", []string{"boundary", "spanning"}},
+		{"no matches", "2024-06-04", "2024-06-04", []string{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, query := range []string{"message", "name"} {
+				filter := db.SearchFilter{Query: query, Project: "project-a", DateFrom: tc.from, DateTo: tc.to, Limit: 1}
+				var ids []string
+				for range len(fixtures) + 1 {
+					out, err := store.Search(context.Background(), filter)
+					require.NoError(t, err)
+					for _, hit := range out.Results {
+						ids = append(ids, hit.SessionID)
+					}
+					if out.NextCursor == 0 {
+						break
+					}
+					filter.Cursor = out.NextCursor
+				}
+				assert.ElementsMatch(t, tc.want, ids, "query %s", query)
+			}
+		})
+	}
+}

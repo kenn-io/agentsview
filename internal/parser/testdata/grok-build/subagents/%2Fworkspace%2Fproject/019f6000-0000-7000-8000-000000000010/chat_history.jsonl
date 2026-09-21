@@ -1,0 +1,3 @@
+{"type":"user","content":"Search the parser in parallel"}
+{"type":"assistant","content":"","tool_calls":[{"id":"call-spawn","name":"spawn_subagent","arguments":"{\"prompt\":\"Find how sessions are parented\",\"description\":\"Search the parser\",\"subagent_type\":\"explore\"}"}]}
+{"type":"tool_result","tool_call_id":"call-spawn","content":"Subagent started in background.\nsubagent_id: 019f6000-0000-7000-8000-000000000011\ntype: explore\ndescription: Search the parser"}

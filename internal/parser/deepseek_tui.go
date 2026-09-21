@@ -70,8 +70,7 @@ func parseDeepSeekTUISession(
 			}
 		}
 
-		content, thinking, hasThinking, hasToolUse, calls, results :=
-			extractDeepSeekTUIContent(msg.Get("content"))
+		content, thinking, hasThinking, hasToolUse, calls, results := extractDeepSeekTUIContent(msg.Get("content"))
 		if strings.TrimSpace(content) == "" && len(calls) == 0 &&
 			len(results) == 0 {
 			return true
@@ -207,8 +206,9 @@ func extractDeepSeekTUIContent(
 		case "tool_use", "server_tool_use":
 			if call, ok := deepSeekTUIToolCall(block); ok {
 				hasToolUse = true
+				call.Rendering = formatToolUse(block)
 				calls = append(calls, call)
-				parts = append(parts, formatToolUse(block))
+				parts = append(parts, call.Rendering)
 			}
 		case "tool_result", "tool_search_tool_result",
 			"code_execution_tool_result":

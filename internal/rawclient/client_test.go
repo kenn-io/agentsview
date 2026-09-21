@@ -1,11 +1,14 @@
 package rawclient
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -168,9 +171,34 @@ func TestClientRefusesCredentialRedirects(t *testing.T) {
 			})
 			require.NoError(t, err)
 			_, err = client.tokens.token(t.Context())
-			assert.Error(t, err)
+			require.Error(t, err)
 			assert.EqualValues(t, 0, redirected.Load(),
 				"redirect target must not receive the device credential")
 		})
 	}
+}
+
+func TestTokenExchangeBoundsErrorBody(t *testing.T) {
+	release := make(chan struct{})
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = io.WriteString(w, strings.Repeat("x", 64<<10))
+		w.(http.Flusher).Flush()
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	defer endpoint.Close()
+	defer close(release)
+	client := newTestClient(t, endpoint.URL, time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	_, err := client.tokens.token(ctx)
+
+	var apiErr *APIError
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, http.StatusServiceUnavailable, apiErr.Status)
+	assert.NoError(t, ctx.Err(), "error handling must finish without waiting for the rest of the body")
 }

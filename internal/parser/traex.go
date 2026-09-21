@@ -16,11 +16,14 @@ const (
 // relabelCodexResultAsTraeX rewrites a Codex-format parse result onto the
 // TraeX agent. sess is nil on the provider's incremental path, which keeps
 // the stored session ID and only needs the appended message rows relabeled.
-func relabelCodexResultAsTraeX(sess *ParsedSession, msgs []ParsedMessage) {
+func relabelCodexResultAsTraeX(
+	sess *ParsedSession, msgs []ParsedMessage, updates []ParsedToolCallUpdate,
+) {
 	if sess != nil {
 		relabelCodexSessionAsTraeX(sess)
 	}
 	relabelCodexMessagesAsTraeX(msgs)
+	relabelCodexToolCallUpdatesAsTraeX(updates)
 }
 
 func relabelCodexSessionAsTraeX(sess *ParsedSession) {
@@ -42,13 +45,29 @@ func relabelCodexMessagesAsTraeX(msgs []ParsedMessage) {
 		for j := range msgs[i].ToolCalls {
 			call := &msgs[i].ToolCalls[j]
 			call.SubagentSessionID = traeXSessionID(call.SubagentSessionID)
-			for k := range call.ResultEvents {
-				event := &call.ResultEvents[k]
-				event.SubagentSessionID = traeXSessionID(
-					event.SubagentSessionID,
-				)
-			}
+			relabelCodexResultEventsAsTraeX(call.ResultEvents)
 		}
+	}
+}
+
+// relabelCodexToolCallUpdatesAsTraeX applies the same subagent-link rewrite
+// to the incremental path's late tool-result updates, whose events never pass
+// through the message relabel. Skipping them leaves codex:-prefixed links on
+// freshly appended tool results.
+func relabelCodexToolCallUpdatesAsTraeX(
+	updates []ParsedToolCallUpdate,
+) {
+	for i := range updates {
+		relabelCodexResultEventsAsTraeX(updates[i].ResultEvents)
+	}
+}
+
+func relabelCodexResultEventsAsTraeX(events []ParsedToolResultEvent) {
+	for k := range events {
+		event := &events[k]
+		event.SubagentSessionID = traeXSessionID(
+			event.SubagentSessionID,
+		)
 	}
 }
 

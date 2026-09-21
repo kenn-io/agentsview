@@ -141,7 +141,7 @@ func TestResolveMCPServicePGFlagUsesPGReadStore(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(cleanup)
 
-	res, err := svc.List(context.Background(), service.ListFilter{Limit: 10})
+	res, err := svc.List(t.Context(), service.ListFilter{Limit: 10})
 	require.NoError(t, err)
 	require.Len(t, res.Sessions, 1)
 	assert.Equal(t, "pg-session", res.Sessions[0].ID)
@@ -181,12 +181,11 @@ func TestResolveMCPServiceExplicitServerUsesReportedCapabilities(
 					"read_only":   tt.readOnly,
 					"api_version": tt.apiVersion,
 				})
-
 			}))
 			t.Cleanup(srv.Close)
 
 			cmd := newMCPCommand()
-			cmd.SetContext(context.Background())
+			cmd.SetContext(t.Context())
 			require.NoError(t, cmd.ParseFlags([]string{
 				"--server", srv.URL,
 				"--server-token-file", tokenFile,
@@ -217,7 +216,6 @@ func TestMCPDaemonServiceStartsDaemonForEachOperation(t *testing.T) {
 			Sessions: []db.Session{{ID: "from-daemon", Agent: "codex"}},
 			Total:    1,
 		})
-
 	}))
 	t.Cleanup(ts.Close)
 	host, port := splitTestServerURL(t, ts.URL)
@@ -230,13 +228,43 @@ func TestMCPDaemonServiceStartsDaemonForEachOperation(t *testing.T) {
 
 	svc := newMCPDaemonService(cfg)
 	for range 2 {
-		res, err := svc.List(context.Background(), service.ListFilter{Limit: 7})
+		res, err := svc.List(t.Context(), service.ListFilter{Limit: 7})
 		require.NoError(t, err)
 		require.Len(t, res.Sessions, 1)
 		assert.Equal(t, "from-daemon", res.Sessions[0].ID)
 	}
 	assert.Equal(t, 2, starts)
 	assert.NoFileExists(t, cfg.DBPath)
+}
+
+func TestMCPDaemonServiceRawSuffixResolvesDaemonPerCall(t *testing.T) {
+	dataDir := t.TempDir()
+	cfg := config.Config{DataDir: dataDir, DBPath: filepath.Join(dataDir, "sessions.db")}
+	var starts, requests int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/v1/session-ids/resolve", r.URL.Path)
+		assert.Equal(t, fmt.Sprintf("uuid-%d", requests), r.URL.Query().Get("partial"))
+		assert.Equal(t, "2", r.URL.Query().Get("limit"))
+		assert.Equal(t, "true", r.URL.Query().Get("raw_suffix"))
+		requests++
+		_ = json.MarshalWrite(w, map[string]any{"ids": []string{"codex:from-daemon"}, "raw_suffix": true})
+	}))
+	t.Cleanup(srv.Close)
+	host, port := splitTestServerURL(t, srv.URL)
+	stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration) (*DaemonRuntime, error) {
+		starts++
+		return &DaemonRuntime{Host: host, Port: port}, nil
+	})
+	svc := newMCPDaemonService(cfg)
+	for i := range 2 {
+		ids, err := svc.FindSessionIDsByRawSuffix(t.Context(), fmt.Sprintf("uuid-%d", i), 2)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"codex:from-daemon"}, ids)
+	}
+	assert.Equal(t, 2, starts)
+	assert.Equal(t, 2, requests)
+	assert.NoFileExists(t, cfg.DBPath)
+	t.Logf("daemon_starts=%d requests=%d ids=[codex:from-daemon] archive_opened=false", starts, requests)
 }
 
 func TestMCPDaemonServiceRecallCapabilityFollowsResolvedRuntime(t *testing.T) {
@@ -312,7 +340,7 @@ func TestMCPDaemonService_UsagePairwiseComparisonForwardsToDaemon(t *testing.T) 
 
 	svc := newMCPDaemonService(cfg)
 	res, err := svc.UsagePairwiseComparison(
-		context.Background(),
+		t.Context(),
 		service.UsagePairwiseComparisonRequest{
 			From:            "2024-06-01",
 			To:              "2024-06-07",
@@ -335,7 +363,8 @@ func TestMCPDaemonService_UsagePairwiseComparisonForwardsToDaemon(t *testing.T) 
 
 func splitTestServerURL(t *testing.T, raw string) (string, int) {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodGet, raw, nil)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, raw, nil)
 	require.NoError(t, err)
 	host, portText, err := net.SplitHostPort(req.URL.Host)
 	require.NoError(t, err)

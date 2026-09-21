@@ -156,7 +156,7 @@ func TestListDevinSessionMetaMalformedSchema(t *testing.T) {
 	metas, err := ListDevinSessionMeta(dbPath)
 	assert.Nil(t, metas)
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "listing devin sessions")
+	require.ErrorContains(t, err, "listing devin sessions")
 	assert.NotContains(t, err.Error(), "top-secret-row-content")
 	assert.NotContains(t, err.Error(), "secret-session")
 }
@@ -171,15 +171,15 @@ func TestOpenDevinDBUsesReadOnlyMode(t *testing.T) {
 	defer db.Close()
 
 	var journalMode string
-	require.NoError(t, db.QueryRow(`PRAGMA journal_mode`).Scan(&journalMode))
+	require.NoError(t, db.QueryRowContext(t.Context(), `PRAGMA journal_mode`).Scan(&journalMode))
 
-	_, err = db.Exec(`INSERT INTO sessions (id) VALUES ('write-should-fail')`)
+	_, err = db.ExecContext(t.Context(), `INSERT INTO sessions (id) VALUES ('write-should-fail')`)
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "readonly")
-	assert.ErrorContains(t, err, "attempt to write")
+	require.ErrorContains(t, err, "readonly")
+	require.ErrorContains(t, err, "attempt to write")
 
 	var count int
-	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM sessions`).Scan(&count))
+	require.NoError(t, db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM sessions`).Scan(&count))
 	assert.Equal(t, 1, count)
 
 	metas, err := ListDevinSessionMeta(fixture.DBPath)
@@ -195,7 +195,7 @@ func TestOpenDevinDBWithSpecialCharPath(t *testing.T) {
 
 	writer, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	_, err = writer.Exec("CREATE TABLE sessions (id TEXT); INSERT INTO sessions VALUES ('session-1')")
+	_, err = writer.ExecContext(t.Context(), "CREATE TABLE sessions (id TEXT); INSERT INTO sessions VALUES ('session-1')")
 	require.NoError(t, err)
 	require.NoError(t, writer.Close())
 
@@ -204,10 +204,10 @@ func TestOpenDevinDBWithSpecialCharPath(t *testing.T) {
 	defer db.Close()
 
 	var count int
-	require.NoError(t, db.QueryRow("SELECT count(*) FROM sessions").Scan(&count))
+	require.NoError(t, db.QueryRowContext(t.Context(), "SELECT count(*) FROM sessions").Scan(&count))
 	assert.Equal(t, 1, count)
 
-	_, err = db.Exec("INSERT INTO sessions VALUES ('session-2')")
+	_, err = db.ExecContext(t.Context(), "INSERT INTO sessions VALUES ('session-2')")
 	require.Error(t, err, "mode=ro must survive special characters in the path")
 }
 
@@ -245,7 +245,7 @@ func TestParseDevinSession(t *testing.T) {
 		]
 	}`)
 
-	sess, msgs, err := parseDevinSession(dbPath, sessionID, "local")
+	sess, msgs, err := parseDevinSession(t.Context(), dbPath, sessionID, "local")
 	require.NoError(t, err)
 	assertSessionMeta(t, sess, "devin:"+sessionID, "my_app", AgentDevin)
 	require.Len(t, msgs, 5)
@@ -273,7 +273,7 @@ func TestParseDevinSession(t *testing.T) {
 
 	assert.Equal(t, RoleSystem, msgs[0].Role)
 	assert.True(t, msgs[0].IsSystem)
-	assert.Equal(t, "100", msgs[0].SourceUUID)
+	assert.Equal(t, "session-123:100", msgs[0].SourceUUID)
 
 	assert.Equal(t, RoleUser, msgs[1].Role)
 	assert.False(t, msgs[1].IsSystem)
@@ -291,9 +291,9 @@ func TestParseDevinSession(t *testing.T) {
 	assert.Contains(t, assistant.Content, "[Bash]\n$ ls -la")
 	assert.Contains(t, assistant.Content, "[Edit: main.go]")
 	require.Len(t, assistant.ToolCalls, 3)
-	assert.Equal(t, ParsedToolCall{ToolUseID: "tool-msg", ToolName: "read_file", Category: "Read", InputJSON: `{"file_path":"README.md"}`}, assistant.ToolCalls[0])
-	assert.Equal(t, ParsedToolCall{ToolUseID: "tool-top-1", ToolName: "shell_command", Category: "Bash", InputJSON: `{"command":"ls -la"}`}, assistant.ToolCalls[1])
-	assert.Equal(t, ParsedToolCall{ToolUseID: "tool-top-2", ToolName: "edit_file", Category: "Edit", InputJSON: `{"path":"main.go"}`}, assistant.ToolCalls[2])
+	assert.Equal(t, ParsedToolCall{ToolUseID: "tool-msg", ToolName: "read_file", Category: "Read", InputJSON: `{"file_path":"README.md"}`, Rendering: "[Read: README.md]"}, assistant.ToolCalls[0])
+	assert.Equal(t, ParsedToolCall{ToolUseID: "tool-top-1", ToolName: "shell_command", Category: "Bash", InputJSON: `{"command":"ls -la"}`, Rendering: "[Bash]\n$ ls -la"}, assistant.ToolCalls[1])
+	assert.Equal(t, ParsedToolCall{ToolUseID: "tool-top-2", ToolName: "edit_file", Category: "Edit", InputJSON: `{"path":"main.go"}`, Rendering: "[Edit: main.go]"}, assistant.ToolCalls[2])
 
 	carrier := msgs[3]
 	assert.Equal(t, RoleUser, carrier.Role)
@@ -331,7 +331,7 @@ func TestParseDevinSessionStepMetricsPopulateTokenUsage(t *testing.T) {
 		]
 	}`)
 
-	sess, msgs, err := parseDevinSession(dbPath, sessionID, "local")
+	sess, msgs, err := parseDevinSession(t.Context(), dbPath, sessionID, "local")
 	require.NoError(t, err)
 	require.Len(t, msgs, 3)
 
@@ -383,7 +383,7 @@ func TestParseDevinSessionFinalMetricsTotalKeys(t *testing.T) {
 		]
 	}`)
 
-	sess, msgs, err := parseDevinSession(dbPath, sessionID, "local")
+	sess, msgs, err := parseDevinSession(t.Context(), dbPath, sessionID, "local")
 	require.NoError(t, err)
 	require.Len(t, msgs, 2)
 	assert.Empty(t, msgs[1].TokenUsage)
@@ -418,7 +418,7 @@ func TestParseDevinSessionTranscriptFallbacks(t *testing.T) {
 		]
 	}`, worktree))
 
-	sess, msgs, err := parseDevinSession(dbPath, sessionID, "local")
+	sess, msgs, err := parseDevinSession(t.Context(), dbPath, sessionID, "local")
 	require.NoError(t, err)
 	require.Len(t, msgs, 2)
 	assert.Equal(t, "hi from fallback", sess.SessionName)
@@ -451,7 +451,7 @@ func TestParseDevinSessionAllowsMissingMetadataTimestamps(t *testing.T) {
 		]
 	}`)
 
-	sess, msgs, err := parseDevinSession(dbPath, sessionID, "local")
+	sess, msgs, err := parseDevinSession(t.Context(), dbPath, sessionID, "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	require.Len(t, msgs, 1)
@@ -477,7 +477,7 @@ func TestParseDevinSessionEmptyTranscriptUsesDBMetadata(t *testing.T) {
 		"steps":[]
 	}`)
 
-	sess, msgs, err := parseDevinSession(dbPath, sessionID, "local")
+	sess, msgs, err := parseDevinSession(t.Context(), dbPath, sessionID, "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Empty(t, msgs)
@@ -506,7 +506,7 @@ func TestParseDevinSessionMissingTranscriptFallsBackToMessageNodes(t *testing.T)
 		devinSyntheticMessageNodeRow{SessionID: sessionID, NodeID: 3, ChatMessage: `{"role":"tool","content":"package main\n","tool_call_id":"call-1"}`, CreatedAt: 1704103207},
 	)
 
-	sess, msgs, err := parseDevinSession(fixture.DBPath, sessionID, "local")
+	sess, msgs, err := parseDevinSession(t.Context(), fixture.DBPath, sessionID, "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	require.Len(t, msgs, 3)
@@ -523,7 +523,7 @@ func TestParseDevinSessionMissingTranscriptFallsBackToMessageNodes(t *testing.T)
 	assert.Contains(t, msgs[1].Content, "[Thinking]\nchecking message_nodes\n[/Thinking]")
 	assert.Contains(t, msgs[1].Content, "[Read: main.go]")
 	require.Len(t, msgs[1].ToolCalls, 1)
-	assert.Equal(t, ParsedToolCall{ToolUseID: "call-1", ToolName: "read_file", Category: "Read", InputJSON: `{"file_path":"main.go"}`}, msgs[1].ToolCalls[0])
+	assert.Equal(t, ParsedToolCall{ToolUseID: "call-1", ToolName: "read_file", Category: "Read", InputJSON: `{"file_path":"main.go"}`, Rendering: "[Read: main.go]"}, msgs[1].ToolCalls[0])
 	assert.Equal(t, RoleTool, msgs[2].Role)
 	require.Len(t, msgs[2].ToolResults, 1)
 	assert.Equal(t, ParsedToolResult{ToolUseID: "call-1", ContentLength: len("package main\n"), ContentRaw: `"package main\n"`}, msgs[2].ToolResults[0])
@@ -562,7 +562,7 @@ func TestParseDevinSessionSupportsSessionsTableWithoutMainChainID(t *testing.T) 
 
 			db, err := sql.Open("sqlite3", dbPath)
 			require.NoError(t, err)
-			_, err = db.Exec(`
+			_, err = db.ExecContext(t.Context(), `
 				CREATE TABLE sessions (
 					id TEXT PRIMARY KEY,
 					title TEXT,
@@ -590,7 +590,7 @@ func TestParseDevinSessionSupportsSessionsTableWithoutMainChainID(t *testing.T) 
 			`)
 			require.NoError(t, err)
 			if tt.transcript == "" {
-				_, err = db.Exec(`
+				_, err = db.ExecContext(t.Context(), `
 					INSERT INTO message_nodes (
 						session_id, node_id, chat_message, created_at
 					) VALUES
@@ -606,7 +606,7 @@ func TestParseDevinSessionSupportsSessionsTableWithoutMainChainID(t *testing.T) 
 			}
 			require.NoError(t, db.Close())
 
-			sess, msgs, err := parseDevinSession(dbPath, sessionID, "local")
+			sess, msgs, err := parseDevinSession(t.Context(), dbPath, sessionID, "local")
 			require.NoError(t, err)
 			require.NotNil(t, sess)
 			require.Len(t, msgs, 2)
@@ -635,7 +635,7 @@ func TestParseDevinSessionMessageNodesSumTokenMetricsAlongMainChain(t *testing.T
 		devinSyntheticMessageNodeRow{SessionID: sessionID, NodeID: 4, ParentNodeID: new(int64(2)), ChatMessage: `{"role":"assistant","content":"second answer","metadata":{"metrics":{"input_tokens":3,"output_tokens":7,"cache_read_tokens":null,"cache_creation_tokens":50}}}`, CreatedAt: 1704103207},
 	)
 
-	sess, msgs, err := parseDevinSession(fixture.DBPath, sessionID, "local")
+	sess, msgs, err := parseDevinSession(t.Context(), fixture.DBPath, sessionID, "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
@@ -695,13 +695,85 @@ func TestParseDevinSessionMessageNodesPreferGenerationModel(t *testing.T) {
 		devinSyntheticMessageNodeRow{SessionID: sessionID, NodeID: 2, ParentNodeID: new(int64(1)), ChatMessage: `{"role":"assistant","content":"answer","metadata":{"generation_model":"claude-opus-4-6-thinking","metrics":{"input_tokens":4,"output_tokens":6}}}`, CreatedAt: 1704103205},
 	)
 
-	_, msgs, err := parseDevinSession(fixture.DBPath, sessionID, "local")
+	_, msgs, err := parseDevinSession(t.Context(), fixture.DBPath, sessionID, "local")
 	require.NoError(t, err)
 	require.Len(t, msgs, 2)
 	// User node has no generation_model, so it falls back to the session model.
 	assert.Equal(t, "adaptive", msgs[0].Model)
 	// Assistant node's per-message generation_model wins over the session alias.
 	assert.Equal(t, "claude-opus-4-6-thinking", msgs[1].Model)
+}
+
+// Devin node_id is a per-session sequence (UNIQUE(session_id, node_id)), so
+// two sessions emit identical bare ids. Source identities must carry the
+// session prefix or cross-session usage deduplication would treat the second
+// session's messages as repeats of the first.
+func TestDevinMessageNodeSourceUUIDIsSessionScoped(t *testing.T) {
+	fixture := newDevinTestFixture(t,
+		devinSessionRow{
+			ID:               "sess-a",
+			Title:            "Session A",
+			WorkingDirectory: "/tmp/scope-a",
+			Model:            "model-a",
+			CreatedAt:        new(int64(1704103200)),
+			LastActivityAt:   new(int64(1704103209)),
+			MainChainID:      new(int64(2)),
+		},
+		devinSessionRow{
+			ID:               "sess-b",
+			Title:            "Session B",
+			WorkingDirectory: "/tmp/scope-b",
+			Model:            "model-b",
+			CreatedAt:        new(int64(1704103300)),
+			LastActivityAt:   new(int64(1704103309)),
+			MainChainID:      new(int64(2)),
+		},
+	)
+	fixture.insertMessageNodes(t,
+		devinSyntheticMessageNodeRow{SessionID: "sess-a", NodeID: 1, ChatMessage: `{"role":"user","content":"question a"}`, CreatedAt: 1704103201},
+		devinSyntheticMessageNodeRow{SessionID: "sess-a", NodeID: 2, ParentNodeID: new(int64(1)), ChatMessage: `{"role":"assistant","content":"answer a","metadata":{"metrics":{"input_tokens":4,"output_tokens":6}}}`, CreatedAt: 1704103205},
+		devinSyntheticMessageNodeRow{SessionID: "sess-b", NodeID: 1, ChatMessage: `{"role":"user","content":"question b"}`, CreatedAt: 1704103301},
+		devinSyntheticMessageNodeRow{SessionID: "sess-b", NodeID: 2, ParentNodeID: new(int64(1)), ChatMessage: `{"role":"assistant","content":"answer b","metadata":{"metrics":{"input_tokens":4,"output_tokens":6}}}`, CreatedAt: 1704103305},
+	)
+
+	_, msgsA, err := parseDevinSession(t.Context(), fixture.DBPath, "sess-a", "local")
+	require.NoError(t, err)
+	require.Len(t, msgsA, 2)
+	assert.Equal(t, "sess-a:1", msgsA[0].SourceUUID)
+	assert.Equal(t, "sess-a:2", msgsA[1].SourceUUID)
+	assert.Equal(t, "sess-a:1", msgsA[1].SourceParentUUID)
+
+	_, msgsB, err := parseDevinSession(t.Context(), fixture.DBPath, "sess-b", "local")
+	require.NoError(t, err)
+	require.Len(t, msgsB, 2)
+	assert.Equal(t, "sess-b:1", msgsB[0].SourceUUID)
+	assert.Equal(t, "sess-b:2", msgsB[1].SourceUUID)
+	assert.Equal(t, "sess-b:1", msgsB[1].SourceParentUUID)
+
+	assert.NotEqual(t, msgsA[1].SourceUUID, msgsB[1].SourceUUID)
+}
+
+func TestDevinTranscriptStepSourceUUIDIsSessionScoped(t *testing.T) {
+	const sessionID = "sess-step-uuid"
+	dbPath, _ := newDevinSessionFixture(t, devinSessionRow{
+		ID:               sessionID,
+		Title:            "Step source ids",
+		WorkingDirectory: "/tmp/step-uuid",
+		Model:            "model",
+		CreatedAt:        new(int64(1704103200)),
+		LastActivityAt:   new(int64(1704103209)),
+	}, `{
+		"steps":[
+			{"step_id":1,"source":"user","timestamp":"2024-01-01T10:00:01Z","message":"question"},
+			{"source":"agent","timestamp":"2024-01-01T10:00:05Z","message":"answer"}
+		]
+	}`)
+
+	_, msgs, err := parseDevinSession(t.Context(), dbPath, sessionID, "local")
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "sess-step-uuid:1", msgs[0].SourceUUID)
+	assert.Empty(t, msgs[1].SourceUUID)
 }
 
 func TestParseDevinSessionMessageNodesDanglingMainChainFallsBackToAllNodes(t *testing.T) {
@@ -722,7 +794,7 @@ func TestParseDevinSessionMessageNodesDanglingMainChainFallsBackToAllNodes(t *te
 		devinSyntheticMessageNodeRow{SessionID: sessionID, NodeID: 2, ParentNodeID: new(int64(1)), ChatMessage: `{"role":"assistant","content":"answer","metadata":{"metrics":{"input_tokens":4,"output_tokens":6}}}`, CreatedAt: 1704103205},
 	)
 
-	sess, msgs, err := parseDevinSession(fixture.DBPath, sessionID, "local")
+	sess, msgs, err := parseDevinSession(t.Context(), fixture.DBPath, sessionID, "local")
 	require.NoError(t, err)
 	require.Len(t, msgs, 2)
 	assert.True(t, sess.HasTotalOutputTokens)
@@ -748,7 +820,7 @@ func TestParseDevinSessionMessageNodesMissingParentFallsBackToAllNodes(t *testin
 		devinSyntheticMessageNodeRow{SessionID: sessionID, NodeID: 3, ParentNodeID: new(int64(9999)), ChatMessage: `{"role":"assistant","content":"orphaned leaf","metadata":{"metrics":{"input_tokens":7,"output_tokens":8}}}`, CreatedAt: 1704103207},
 	)
 
-	sess, msgs, err := parseDevinSession(fixture.DBPath, sessionID, "local")
+	sess, msgs, err := parseDevinSession(t.Context(), fixture.DBPath, sessionID, "local")
 	require.NoError(t, err)
 	require.Len(t, msgs, 3)
 	assert.Equal(t, "hi", msgs[0].Content)
@@ -780,7 +852,7 @@ func TestParseDevinSessionTranscriptStillWinsOverMessageNodes(t *testing.T) {
 		devinSyntheticMessageNodeRow{SessionID: sessionID, NodeID: 2, ChatMessage: `{"role":"assistant","content":"Fallback answer"}`, CreatedAt: 1704103205},
 	)
 
-	sess, msgs, err := parseDevinSession(fixture.DBPath, sessionID, "local")
+	sess, msgs, err := parseDevinSession(t.Context(), fixture.DBPath, sessionID, "local")
 	require.NoError(t, err)
 	require.Len(t, msgs, 2)
 	assert.Equal(t, "Use transcript", sess.FirstMessage)
@@ -800,13 +872,13 @@ func TestParseDevinSessionMissingTranscriptWithoutDBMessagesReturnsRedactedError
 		LastActivityAt:   new(int64(1704103209)),
 	})
 
-	sess, msgs, err := parseDevinSession(fixture.DBPath, sessionID, "local")
+	sess, msgs, err := parseDevinSession(t.Context(), fixture.DBPath, sessionID, "local")
 	require.Nil(t, sess)
 	assert.Nil(t, msgs)
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "missing devin transcript")
-	assert.ErrorContains(t, err, devinRedactedTranscriptPath())
-	assert.ErrorContains(t, err, devinRedactedSessionID())
+	require.ErrorContains(t, err, "missing devin transcript")
+	require.ErrorContains(t, err, devinRedactedTranscriptPath())
+	require.ErrorContains(t, err, devinRedactedSessionID())
 	assert.NotContains(t, err.Error(), sessionID)
 }
 
@@ -827,13 +899,13 @@ func TestParseDevinSessionFallbackErrorsStayRedacted(t *testing.T) {
 		devinSyntheticMessageNodeRow{SessionID: sessionID, NodeID: 1, ChatMessage: `{"content":"` + secretSentinel, CreatedAt: 1704103201},
 	)
 
-	sess, msgs, err := parseDevinSession(fixture.DBPath, sessionID, "local")
+	sess, msgs, err := parseDevinSession(t.Context(), fixture.DBPath, sessionID, "local")
 	require.Nil(t, sess)
 	assert.Nil(t, msgs)
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "missing devin transcript")
-	assert.ErrorContains(t, err, devinRedactedTranscriptPath())
-	assert.ErrorContains(t, err, devinRedactedSessionID())
+	require.ErrorContains(t, err, "missing devin transcript")
+	require.ErrorContains(t, err, devinRedactedTranscriptPath())
+	require.ErrorContains(t, err, devinRedactedSessionID())
 	assert.NotContains(t, err.Error(), sessionID)
 	assert.NotContains(t, err.Error(), secretSentinel)
 }
@@ -850,13 +922,13 @@ func TestParseDevinSessionCorruptTranscriptReturnsRedactedError(t *testing.T) {
 	}, `{"steps":[]}`)
 	require.NoError(t, os.WriteFile(transcriptPath, []byte(`{"apiKey":"secret-value","steps":[`), 0o644))
 
-	sess, msgs, err := parseDevinSession(dbPath, sessionID, "local")
+	sess, msgs, err := parseDevinSession(t.Context(), dbPath, sessionID, "local")
 	require.Nil(t, sess)
 	assert.Nil(t, msgs)
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "invalid devin transcript")
-	assert.ErrorContains(t, err, devinRedactedTranscriptPath())
-	assert.ErrorContains(t, err, devinRedactedSessionID())
+	require.ErrorContains(t, err, "invalid devin transcript")
+	require.ErrorContains(t, err, devinRedactedTranscriptPath())
+	require.ErrorContains(t, err, devinRedactedSessionID())
 	assert.NotContains(t, err.Error(), transcriptPath)
 	assert.NotContains(t, err.Error(), sessionID)
 	assert.NotContains(t, err.Error(), "secret-value")
@@ -873,10 +945,10 @@ func TestDevinTranscriptPathErrorStaysRedacted(t *testing.T) {
 	})
 
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "read devin transcript")
-	assert.ErrorContains(t, err, devinRedactedTranscriptPath())
-	assert.ErrorContains(t, err, devinRedactedSessionID())
-	assert.ErrorContains(t, err, "permission denied")
+	require.ErrorContains(t, err, "read devin transcript")
+	require.ErrorContains(t, err, devinRedactedTranscriptPath())
+	require.ErrorContains(t, err, devinRedactedSessionID())
+	require.ErrorContains(t, err, "permission denied")
 	assert.NotContains(t, err.Error(), secretPath)
 	assert.NotContains(t, err.Error(), sessionID)
 }
@@ -896,12 +968,12 @@ func TestParseDevinSessionRedactsCredentialPathsAndTokenLikeValues(t *testing.T)
 	require.NoError(t, os.Rename(fixture.Root, secretRoot))
 	dbPath := filepath.Join(secretRoot, "cli", devinDBFilename)
 
-	sess, msgs, err := parseDevinSession(dbPath, sessionID, "local")
+	sess, msgs, err := parseDevinSession(t.Context(), dbPath, sessionID, "local")
 	require.Nil(t, sess)
 	assert.Nil(t, msgs)
-	assert.ErrorContains(t, err, "invalid devin transcript")
-	assert.ErrorContains(t, err, devinRedactedTranscriptPath())
-	assert.ErrorContains(t, err, devinRedactedSessionID())
+	require.ErrorContains(t, err, "invalid devin transcript")
+	require.ErrorContains(t, err, devinRedactedTranscriptPath())
+	require.ErrorContains(t, err, devinRedactedSessionID())
 	assertDevinErrorRedacted(t, err,
 		secretSentinel,
 		"mcp/oauth",

@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/servicehttp"
 	"go.kenn.io/agentsview/internal/sync"
 )
 
@@ -62,24 +63,26 @@ func classifySyncArgForCommand(
 // actually write. The default newService path passes a nil engine
 // (reads don't need it), which would make Sync return
 // db.ErrReadOnly.
-func syncService(
+func syncService(ctx context.Context,
 	cfg config.Config, tr transport,
 ) (service.SessionService, func(), error) {
 	if tr.Mode == transportHTTP {
-		return service.NewHTTPBackend(tr.URL, cfg.AuthToken, tr.ReadOnly),
+		return servicehttp.NewHTTPBackend(tr.URL, cfg.AuthToken, tr.ReadOnly, tr.BrowserURL),
 			func() {}, nil
 	}
-	d, lock, err := openWriteDB(context.Background(), cfg)
+	d, lock, err := openWriteDB(ctx, cfg)
 	if err != nil {
 		return nil, nil, fmt.Errorf("opening db: %w", err)
 	}
-	engine := sync.NewEngine(d, sync.EngineConfig{
+	engine := sync.NewEngine(ctx, d, sync.EngineConfig{
 		AgentDirs:          cfg.AgentDirs,
 		SourceMachines:     cfg.SourceMachines,
+		ProviderMetadata:   cfg.ProviderMetadata,
 		DisabledAgents:     cfg.DisabledAgents,
 		IncludeCwdPrefixes: cfg.SyncIncludeCwdPrefixes,
 		ScanProtectedPaths: cfg.ScanProtectedPaths,
-		Machine:            cfg.LocalMachineName,
+		Machine:            cfg.InstallationID,
+		ArchiveContent:     cfg.ArchiveContent,
 	})
 	// Close the engine before the DB so pending debounced signal
 	// recomputes flush while the DB is still open.

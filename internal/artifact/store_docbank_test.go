@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -33,14 +32,13 @@ func TestDocbankStoreUsesCanonicalNamespaceAndMovesQuarantineNode(t *testing.T) 
 
 	require.NoError(t, store.Quarantine(t.Context(), ref, "semantic validation failed"))
 	_, err = vault.Stat(t.Context(), livePath)
-	assert.ErrorIs(t, err, docbank.ErrNotFound)
+	require.ErrorIs(t, err, docbank.ErrNotFound)
 
 	quarantined := walkDocbankTestEntries(t, vault, docbankQuarantineRoot)
 	require.Len(t, quarantined, 1)
 	assert.Equal(t, live.ID, quarantined[0].Node.ID, "quarantine must move the stable node")
 	assert.Equal(t, live.BlobHash, quarantined[0].Node.BlobHash, "quarantine must not copy content")
-	assert.Regexp(t,
-		regexp.MustCompile(`^/\.quarantine/v1/contract-a1b2c3/checkpoints/[0-9a-f]{32}-cp-0000000042\.json$`),
+	assert.Regexp(t, `^/\.quarantine/v1/contract-a1b2c3/checkpoints/[0-9a-f]{32}-cp-0000000042\.json$`,
 		quarantined[0].Path,
 	)
 
@@ -67,7 +65,7 @@ func TestDocbankStoreRejectsReferenceAndNodeIdentityMismatchBeforeRead(t *testin
 	require.NoError(t, err)
 
 	_, err = store.Stat(t.Context(), ref)
-	assert.ErrorIs(t, err, ErrArtifactCorrupt)
+	require.ErrorIs(t, err, ErrArtifactCorrupt)
 	_, reader, err := store.Open(t.Context(), ref)
 	assert.Nil(t, reader)
 	assert.ErrorIs(t, err, ErrArtifactCorrupt)
@@ -80,15 +78,15 @@ func TestDocbankStorePreservesTypedDocbankCauses(t *testing.T) {
 	ref := requireContractRef(t, contractOrigin, KindCheckpoints, "cp-0000000001.json")
 
 	_, err := store.Stat(t.Context(), ref)
-	assert.ErrorIs(t, err, ErrArtifactNotFound)
-	assert.ErrorIs(t, err, docbank.ErrNotFound)
+	require.ErrorIs(t, err, ErrArtifactNotFound)
+	require.ErrorIs(t, err, docbank.ErrNotFound)
 
 	body := []byte("actual bytes")
 	expected := identityForBytes(t, bytes.Repeat([]byte("x"), len(body)))
-	require.Equal(t, int64(len(body)), expected.Size)
+	require.Equal(t, expected.Size, int64(len(body)))
 	_, err = store.Create(t.Context(), ref, expected, "application/json", bytes.NewReader(body))
-	assert.ErrorIs(t, err, ErrArtifactInvalid)
-	assert.ErrorIs(t, err, docbank.ErrDigestMismatch)
+	require.ErrorIs(t, err, ErrArtifactInvalid)
+	require.ErrorIs(t, err, docbank.ErrDigestMismatch)
 
 	created := createContractArtifact(t, store, ref, body)
 	_, err = store.Create(t.Context(), ref, created.Entry.Identity,
@@ -108,9 +106,9 @@ func TestDocbankStoreClosedOperationsReturnErrClosed(t *testing.T) {
 
 	_, err := store.Create(t.Context(), ref, identityForBytes(t, body),
 		canonicalArtifactMediaType(ref.Kind), bytes.NewReader(body))
-	assert.ErrorIs(t, err, fs.ErrClosed)
+	require.ErrorIs(t, err, fs.ErrClosed)
 	_, err = store.Stat(t.Context(), ref)
-	assert.ErrorIs(t, err, fs.ErrClosed)
+	require.ErrorIs(t, err, fs.ErrClosed)
 	_, reader, err := store.Open(t.Context(), ref)
 	assert.Nil(t, reader)
 	assert.ErrorIs(t, err, fs.ErrClosed)
@@ -155,6 +153,8 @@ func TestDocbankIteratorClosesWalkerExactlyOnce(t *testing.T) {
 	t.Parallel()
 
 	t.Run("explicit close", func(t *testing.T) {
+		t.Parallel()
+
 		walker := &docbankWalkerStub{}
 		iterator := &docbankOriginIterator{
 			iterator: docbankIterator{
@@ -171,6 +171,7 @@ func TestDocbankIteratorClosesWalkerExactlyOnce(t *testing.T) {
 	})
 
 	t.Run("cancellation", func(t *testing.T) {
+		t.Parallel()
 		walker := &docbankWalkerStub{}
 		iterator := &docbankOriginIterator{
 			iterator: docbankIterator{
@@ -182,13 +183,15 @@ func TestDocbankIteratorClosesWalkerExactlyOnce(t *testing.T) {
 		cancel()
 
 		_, err := iterator.Next(ctx, 1)
-		assert.ErrorIs(t, err, context.Canceled)
+		require.ErrorIs(t, err, context.Canceled)
 		assert.Equal(t, 1, walker.closeCalls)
 		_, err = iterator.Next(t.Context(), 1)
 		assert.ErrorIs(t, err, fs.ErrClosed)
 	})
 
 	t.Run("end of iteration", func(t *testing.T) {
+		t.Parallel()
+
 		walker := &docbankWalkerStub{}
 		iterator := &docbankOriginIterator{
 			iterator: docbankIterator{
@@ -198,10 +201,10 @@ func TestDocbankIteratorClosesWalkerExactlyOnce(t *testing.T) {
 		}
 
 		_, err := iterator.Next(t.Context(), 1)
-		assert.ErrorIs(t, err, io.EOF)
+		require.ErrorIs(t, err, io.EOF)
 		assert.Equal(t, 1, walker.closeCalls)
 		_, err = iterator.Next(t.Context(), 1)
-		assert.ErrorIs(t, err, io.EOF)
+		require.ErrorIs(t, err, io.EOF)
 		assert.Equal(t, 1, walker.closeCalls)
 	})
 }

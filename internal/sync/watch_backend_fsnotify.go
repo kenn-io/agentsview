@@ -195,7 +195,7 @@ func (b *fsnotifyBackend) AddRecursive(root string, budget int) RecursiveWatchRe
 				// the result appearing fully watched — and keep walking the
 				// accessible remainder.
 				result.Unwatched++
-				return nil
+				return nil //nolint:nilerr // Unwatched subtrees are counted above so polling covers degraded native discovery.
 			}
 			if !d.IsDir() {
 				return nil
@@ -500,6 +500,14 @@ func (b *fsnotifyBackend) finish() {
 func (b *fsnotifyBackend) translateEvent(event fsnotify.Event) (backendEvent, bool) {
 	op := translateFSNotifyOp(event.Op)
 	if op == backendOpUnknown {
+		return backendEvent{}, false
+	}
+	// fsnotify still reports changes to files below a watched directory even
+	// when the file matched an exclusion during directory registration. Ignore
+	// those events here as well, otherwise transient lock-file renames can be
+	// mistaken for session changes while another process is replacing the
+	// lock.
+	if b.shouldExclude(event.Name) {
 		return backendEvent{}, false
 	}
 

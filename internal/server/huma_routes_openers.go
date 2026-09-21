@@ -1,9 +1,14 @@
 package server
 
-import "context"
+import (
+	"context"
+
+	"github.com/danielgtaylor/huma/v2"
+)
 
 func (s *Server) registerOpenersRoutes() {
-	group := newRouteGroup(s.api, "/api/v1/openers", "Openers")
+	group := huma.NewGroup(s.api, "/api/v1/openers")
+	configureRouteGroup(group, "Openers")
 
 	s.get(group, "", "List openers", s.humaListOpeners)
 }

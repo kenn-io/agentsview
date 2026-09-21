@@ -1,7 +1,6 @@
 package service_test
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -16,6 +15,7 @@ import (
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/secrets"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/servicehttp"
 )
 
 func TestHTTPBackendScanSecretsStream(t *testing.T) {
@@ -25,7 +25,7 @@ func TestHTTPBackendScanSecretsStream(t *testing.T) {
 			w.Header().Set("Content-Type", "text/event-stream")
 			f, ok := w.(http.Flusher)
 			if !ok {
-				t.Error("flusher unsupported")
+				assert.Fail(t, "flusher unsupported")
 				return
 			}
 			fmt.Fprint(w, "event: progress\ndata: {\"scanned\":1,\"total\":2}\n\n")
@@ -36,9 +36,9 @@ func TestHTTPBackendScanSecretsStream(t *testing.T) {
 			f.Flush()
 		}))
 	defer ts.Close()
-	svc := service.NewHTTPBackend(ts.URL, "", false)
+	svc := servicehttp.NewHTTPBackend(ts.URL, "", false, "")
 	var ticks []service.SecretScanProgress
-	sum, err := svc.ScanSecrets(context.Background(),
+	sum, err := svc.ScanSecrets(t.Context(),
 		service.SecretScanInput{Backfill: true},
 		func(p service.SecretScanProgress) { ticks = append(ticks, p) })
 	require.NoError(t, err)
@@ -63,16 +63,20 @@ func TestDirectListSecretsConfidenceDefault(t *testing.T) {
 		s.MessageCount = 1
 		s.UserMessageCount = 1
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
 		dbtest.UserMsg("x1", 0, "key AKIA7QHWN2DKR4FYPLJM tok=abc123def456ghi789jkl"),
 	}))
-	require.NoError(t, d.ReplaceSessionSecretFindings("x1", []db.SecretFinding{
-		{SessionID: "x1", RuleName: "aws-access-key", Confidence: "definite",
+	require.NoError(t, d.ReplaceSessionSecretFindings(t.Context(), "x1", []db.SecretFinding{
+		{
+			SessionID: "x1", RuleName: "aws-access-key", Confidence: "definite",
 			LocationKind: "message", MessageOrdinal: 0,
-			MatchStart: 4, MatchEnd: 24, MatchIndex: 0, RedactedMatch: "AKIA…MPLE"},
-		{SessionID: "x1", RuleName: "high-entropy-assignment", Confidence: "candidate",
+			MatchStart: 4, MatchEnd: 24, MatchIndex: 0, RedactedMatch: "AKIA…MPLE",
+		},
+		{
+			SessionID: "x1", RuleName: "high-entropy-assignment", Confidence: "candidate",
 			LocationKind: "message", MessageOrdinal: 0,
-			MatchStart: 29, MatchEnd: 50, MatchIndex: 1, RedactedMatch: "…789jkl"},
+			MatchStart: 29, MatchEnd: 50, MatchIndex: 1, RedactedMatch: "…789jkl",
+		},
 	}, 1, secrets.RulesVersion()))
 	be := service.NewDirectBackend(d, nil)
 
@@ -89,7 +93,8 @@ func TestDirectListSecretsConfidenceDefault(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			page, err := be.ListSecrets(context.Background(),
+			t.Parallel()
+			page, err := be.ListSecrets(t.Context(),
 				service.SecretListFilter{Confidence: tc.confidence, Limit: 50})
 			require.NoError(t, err)
 			require.Len(t, page.Findings, tc.want)
@@ -118,10 +123,10 @@ func TestDirectListSecretsHidesStaleRulesVersions(t *testing.T) {
 		s.MessageCount = 1
 		s.UserMessageCount = 1
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
 		dbtest.UserMsg("x1", 0, content),
 	}))
-	require.NoError(t, d.ReplaceSessionSecretFindings("x1", []db.SecretFinding{{
+	require.NoError(t, d.ReplaceSessionSecretFindings(t.Context(), "x1", []db.SecretFinding{{
 		SessionID: "x1", RuleName: "github-pat", Confidence: "definite",
 		LocationKind: "message", MessageOrdinal: 0,
 		MatchStart: start, MatchEnd: start + len(token),
@@ -129,7 +134,7 @@ func TestDirectListSecretsHidesStaleRulesVersions(t *testing.T) {
 	}}, 1, "old-rules"))
 	be := service.NewDirectBackend(d, nil)
 
-	page, err := be.ListSecrets(context.Background(),
+	page, err := be.ListSecrets(t.Context(),
 		service.SecretListFilter{Limit: 50})
 	require.NoError(t, err)
 	require.Empty(t, page.Findings)
@@ -139,10 +144,10 @@ func TestDirectScanSecretsReadOnly(t *testing.T) {
 	t.Parallel()
 	d := dbtest.OpenTestDB(t)
 	be := service.NewDirectBackend(d, nil) // nil engine => read-only
-	_, err := be.ScanSecrets(context.Background(),
+	_, err := be.ScanSecrets(t.Context(),
 		service.SecretScanInput{Backfill: true}, nil)
 	if !errors.Is(err, db.ErrReadOnly) {
-		t.Fatalf("ScanSecrets with nil engine = %v, want db.ErrReadOnly", err)
+		require.FailNowf(t, "test failed", "ScanSecrets with nil engine = %v, want db.ErrReadOnly", err)
 	}
 }
 
@@ -160,24 +165,28 @@ func TestDirectListSecretsReveal(t *testing.T) {
 		s.MessageCount = 2
 		s.UserMessageCount = 2
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
 		dbtest.UserMsg("x1", 0, content),
 	}))
-	require.NoError(t, d.ReplaceSessionSecretFindings("x1", []db.SecretFinding{
-		{SessionID: "x1", RuleName: "aws-access-key", Confidence: "definite",
+	require.NoError(t, d.ReplaceSessionSecretFindings(t.Context(), "x1", []db.SecretFinding{
+		{
+			SessionID: "x1", RuleName: "aws-access-key", Confidence: "definite",
 			LocationKind: "message", MessageOrdinal: 0,
 			MatchStart: start, MatchEnd: start + len(secret),
-			MatchIndex: 0, RedactedMatch: "AKIA…MPLE"},
+			MatchIndex: 0, RedactedMatch: "AKIA…MPLE",
+		},
 		// Stale: coordinates point at non-secret bytes, so Verify fails.
-		{SessionID: "x1", RuleName: "aws-access-key", Confidence: "definite",
+		{
+			SessionID: "x1", RuleName: "aws-access-key", Confidence: "definite",
 			LocationKind: "message", MessageOrdinal: 0,
 			MatchStart: 0, MatchEnd: 5,
-			MatchIndex: 0, RedactedMatch: "my ke"},
+			MatchIndex: 0, RedactedMatch: "my ke",
+		},
 	}, 1, secrets.RulesVersion()))
 	be := service.NewDirectBackend(d, nil)
 
 	// Default: never the full secret.
-	def, err := be.ListSecrets(context.Background(),
+	def, err := be.ListSecrets(t.Context(),
 		service.SecretListFilter{Limit: 50})
 	require.NoError(t, err)
 	require.Len(t, def.Findings, 2)
@@ -187,7 +196,7 @@ func TestDirectListSecretsReveal(t *testing.T) {
 	}
 
 	// Reveal: the valid finding shows the full secret; the stale one is marked.
-	rev, err := be.ListSecrets(context.Background(),
+	rev, err := be.ListSecrets(t.Context(),
 		service.SecretListFilter{Reveal: true, Limit: 50})
 	require.NoError(t, err)
 	require.Len(t, rev.Findings, 2)

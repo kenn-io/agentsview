@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"go.kenn.io/agentsview/internal/export"
@@ -22,9 +23,41 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestAllSessionExportKeepsTerminationCutoffAcrossPages(t *testing.T) {
+	d := testSessionExportDB(t)
+	synctest.Test(t, func(t *testing.T) {
+		// Keep the older activity timestamps within the valid 2000..2100 range.
+		time.Sleep(time.Hour)
+		for _, id := range []string{"active-a", "active-b"} {
+			ts := time.Now().UTC().Add(-9 * time.Minute).Format(time.RFC3339)
+			insertExportSession(t, d, Session{
+				ID: id, Project: "termination", StartedAt: &ts, EndedAt: &ts,
+			})
+		}
+		pages, err := d.exportAllSessionSummaries(t.Context(), SessionExportOptions{
+			Filter: SessionFilter{Project: "termination", Termination: "active"},
+			Limit:  1,
+		}, func(page int, _ *sql.Tx) error {
+			if page == 1 {
+				// Both sessions age out of the active window during the export.
+				time.Sleep(2 * time.Minute)
+			}
+			return nil
+		}, nil)
+		require.NoError(t, err)
+		var ids []string
+		for _, page := range pages {
+			for _, row := range page.Rows {
+				ids = append(ids, row.ID)
+			}
+		}
+		assert.Equal(t, []string{"active-a", "active-b"}, ids)
+	})
+}
+
 func TestSessionSummaryExportRowsAreContentFreeAndMetadataScoped(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedSessionExportPricing(t, d)
 	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
@@ -114,7 +147,7 @@ func TestSessionSummaryExportRowsAreContentFreeAndMetadataScoped(t *testing.T) {
 		Cwd:              "/repo/alpha/worktrees/feature/sub",
 	})
 	reported := money.MustParseDollars("0.0123")
-	require.NoError(t, d.ReplaceSessionUsageEvents("alpha-child", []UsageEvent{{
+	require.NoError(t, d.ReplaceSessionUsageEvents(ctx, "alpha-child", []UsageEvent{{
 		Source:          "provider",
 		Model:           "model-reported",
 		InputTokens:     200,
@@ -232,7 +265,7 @@ func TestSessionSummaryExportRowsAreContentFreeAndMetadataScoped(t *testing.T) {
 
 func TestSessionSummaryExportKeepsFirstConclusiveProjectIdentity(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	insertExportSession(t, d, Session{
 		ID:               "stable-project-session",
 		Project:          "/Users/alice/private/project",
@@ -301,7 +334,7 @@ func TestSessionSummaryExportCatalogMarksConflictingSessionIdentitiesAmbiguous(
 	t *testing.T,
 ) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	for i, remote := range []string{
 		"https://github.com/acme/first.git",
 		"https://github.com/acme/second.git",
@@ -341,7 +374,7 @@ func TestSessionSummaryExportCatalogMarksConflictingSessionIdentitiesAmbiguous(
 
 func TestSessionSummaryExportKeepsConclusiveMachineRootSnapshot(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	insertExportSession(t, d, Session{
 		ID: "machine-root-session", Project: "local-app", Machine: "laptop",
 		Agent: "codex", Cwd: "/workspace/local-app",
@@ -380,7 +413,7 @@ func TestSessionSummaryExportWithoutSnapshotDoesNotDeriveFromCWD(t *testing.T) {
 	})
 
 	result, err := d.ExportSessionSummaries(
-		context.Background(), SessionExportOptions{Limit: 10},
+		t.Context(), SessionExportOptions{Limit: 10},
 	)
 	require.NoError(t, err)
 	require.Len(t, result.Rows, 1)
@@ -391,7 +424,7 @@ func TestSessionSummaryExportWithoutSnapshotDoesNotDeriveFromCWD(t *testing.T) {
 
 func TestSessionSummaryExportIncludesReasoningOnlyUsageRows(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedSessionExportPricing(t, d)
 	insertExportSession(t, d, Session{
@@ -402,7 +435,7 @@ func TestSessionSummaryExportIncludesReasoningOnlyUsageRows(t *testing.T) {
 		StartedAt: Ptr("2026-05-01T10:00:00Z"),
 		EndedAt:   Ptr("2026-05-01T10:01:00Z"),
 	})
-	require.NoError(t, d.ReplaceSessionUsageEvents("reasoning-only", []UsageEvent{{
+	require.NoError(t, d.ReplaceSessionUsageEvents(ctx, "reasoning-only", []UsageEvent{{
 		Source:          "provider",
 		Model:           "model-computed",
 		ReasoningTokens: 25,
@@ -438,7 +471,7 @@ func TestSessionSummaryExportIncludesReasoningOnlyUsageRows(t *testing.T) {
 
 func TestSessionSummaryExportIncludesMessageReasoningTokens(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedSessionExportPricing(t, d)
 	insertExportSession(t, d, Session{
@@ -491,21 +524,458 @@ func TestSessionSummaryExportRequiresExistingDatabaseID(t *testing.T) {
 		MessageCount:     1,
 		UserMessageCount: 1,
 	})
-	_, err := d.rawWriter().Exec(`
+	_, err := d.rawWriter().ExecContext(t.Context(), `
 		DELETE FROM archive_metadata WHERE key = ?`,
 		archiveMetadataDatabaseIDKey,
 	)
 	require.NoError(t, err)
 
-	_, err = d.ExportSessionSummaries(context.Background(), SessionExportOptions{
+	_, err = d.ExportSessionSummaries(t.Context(), SessionExportOptions{
 		Limit: 10,
 	})
 	require.ErrorIs(t, err, ErrDatabaseIDMissing)
 }
 
+func TestSessionSummaryExportIdentitySurvivesRebuild(t *testing.T) {
+	ctx := t.Context()
+	source := testDB(t)
+	require.NoError(t, source.SetArchiveIdentityForTest(ctx, "archive-a", strings.Repeat("a", 64)))
+	require.NoError(t, source.SetDatabaseIDForTest(ctx, "generation-one"))
+	insertExportSession(t, source, Session{
+		ID: "retained-session", Project: "project-a", UserMessageCount: 1,
+		EndedAt: Ptr("2026-05-01T10:00:00Z"),
+	})
+	before, err := source.ExportSessionSummaries(ctx, SessionExportOptions{})
+	require.NoError(t, err)
+	require.Len(t, before.Rows, 1)
+	require.NoError(t, source.CloseConnections(ctx))
+
+	rebuilt := testDB(t)
+	require.NoError(t, rebuilt.SetDatabaseIDForTest(ctx, "generation-two"))
+	require.NoError(t, rebuilt.CopyArchiveIdentityFrom(source.Path()))
+	count, err := rebuilt.CopyOrphanedDataFrom(source.Path())
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+	require.NoError(t, rebuilt.CopySessionMetadataFrom(source.Path()))
+	after, err := rebuilt.ExportSessionSummaries(ctx, SessionExportOptions{})
+	require.NoError(t, err)
+	require.Len(t, after.Rows, 1)
+	assert.Equal(t, "archive-a", before.ArchiveID)
+	assert.Equal(t, "archive-a", after.ArchiveID)
+	assert.Equal(t, "generation-one", before.DatabaseID)
+	assert.Equal(t, "generation-two", after.DatabaseID)
+	assert.Equal(t, "retained-session", after.Rows[0].ID)
+	assert.Equal(t, before.Rows[0].ProjectReference.ProjectKey, after.Rows[0].ProjectReference.ProjectKey)
+}
+
+func TestSessionSummaryExportEmptyArchiveRequiresIdentity(t *testing.T) {
+	d := testDB(t)
+	_, err := d.rawWriter().ExecContext(t.Context(), `DELETE FROM archive_metadata WHERE key = ?`, archiveMetadataArchiveIDKey)
+	require.NoError(t, err)
+	_, err = d.ExportSessionSummaries(t.Context(), SessionExportOptions{})
+	require.ErrorIs(t, err, ErrArchiveIDMissing)
+	var count int
+	require.NoError(t, d.rawWriter().QueryRowContext(t.Context(), `SELECT count(*) FROM archive_metadata WHERE key = ?`,
+		archiveMetadataArchiveIDKey).Scan(&count))
+	assert.Zero(t, count, "export must not initialize missing identity")
+}
+
+func TestAllSessionExportIdentityUsesRowSnapshot(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	require.NoError(t, d.SetArchiveIdentityForTest(ctx, "archive-before", strings.Repeat("a", 64)))
+	require.NoError(t, d.SetDatabaseIDForTest(ctx, "generation-before"))
+	for _, id := range []string{"session-a", "session-b"} {
+		insertExportSession(t, d, Session{
+			ID: id, Project: "project-a", UserMessageCount: 1,
+			EndedAt: Ptr("2026-05-01T10:00:00Z"),
+		})
+	}
+	_, err := d.getWriter().Exec(ctx, `UPDATE sessions
+		SET transcript_revision = '7', local_modified_at = '2026-05-01T10:01:00Z'`)
+	require.NoError(t, err)
+	pages, err := d.exportAllSessionSummaries(ctx, SessionExportOptions{Limit: 1}, func(page int, _ *sql.Tx) error {
+		if page == 1 {
+			if _, err := d.getWriter().Exec(ctx, `UPDATE sessions
+				SET transcript_revision = '8', local_modified_at = '2026-05-01T10:02:00Z'`); err != nil {
+				return err
+			}
+			if err := d.SetArchiveIdentityForTest(ctx, "archive-after", strings.Repeat("b", 64)); err != nil {
+				return err
+			}
+			return d.SetDatabaseIDForTest(ctx, "generation-after")
+		}
+		return nil
+	}, nil)
+	require.NoError(t, err)
+	require.Len(t, pages, 2)
+	for _, page := range pages {
+		assert.Equal(t, "archive-before", page.ArchiveID)
+		assert.Equal(t, "generation-before", page.DatabaseID)
+		require.Len(t, page.Rows, 1)
+		assert.Equal(t, "7", page.Rows[0].TranscriptRevision)
+		require.NotNil(t, page.Rows[0].LocalModifiedAt)
+		assert.Equal(t, "2026-05-01T10:01:00Z", *page.Rows[0].LocalModifiedAt)
+	}
+	current, err := d.ExportSessionSummaries(ctx, SessionExportOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "archive-after", current.ArchiveID)
+	assert.Equal(t, "generation-after", current.DatabaseID)
+	for _, row := range current.Rows {
+		assert.Equal(t, "8", row.TranscriptRevision)
+		require.NotNil(t, row.LocalModifiedAt)
+		assert.Equal(t, "2026-05-01T10:02:00Z", *row.LocalModifiedAt)
+	}
+}
+
+func TestAllSessionExportMaterializesActivitySort(t *testing.T) {
+	d := testSessionExportDB(t)
+	ctx := t.Context()
+	d.rawReader().SetMaxOpenConns(1)
+	d.rawReader().SetMaxIdleConns(1)
+
+	project := "activity-cache"
+	rootID := "activity-a"
+	insertExportSession(t, d, Session{
+		ID:        "activity-a",
+		Project:   project,
+		StartedAt: Ptr("2026-05-01T09:00:00Z"),
+		EndedAt:   Ptr("2026-05-01T10:00:00-04:00"),
+	})
+	insertExportSession(t, d, Session{
+		ID:        "activity-b",
+		Project:   project,
+		StartedAt: Ptr("2026-05-01T09:00:00Z"),
+		EndedAt:   Ptr("2026-05-01T14:00:00Z"),
+	})
+	insertExportSession(t, d, Session{
+		ID:        "activity-missing-ended",
+		Project:   project,
+		StartedAt: Ptr("2026-05-01T09:00:00Z"),
+	})
+	insertMessages(t, d, Message{
+		SessionID: "activity-missing-ended",
+		Ordinal:   0,
+		Role:      "user",
+		Content:   "activity",
+		Timestamp: "2026-05-01T14:00:00+00:00",
+	})
+
+	for _, session := range []Session{
+		{
+			ID:               "child-subagent",
+			Project:          project,
+			StartedAt:        Ptr("2026-05-01T12:00:00Z"),
+			EndedAt:          Ptr("2026-05-01T13:00:00Z"),
+			ParentSessionID:  &rootID,
+			RelationshipType: "subagent",
+		},
+		{
+			ID:               "child-fork",
+			Project:          project,
+			StartedAt:        Ptr("2026-05-01T11:00:00Z"),
+			EndedAt:          Ptr("2026-05-01T12:00:00Z"),
+			ParentSessionID:  &rootID,
+			RelationshipType: "fork",
+		},
+		{
+			ID:               "child-continuation",
+			Project:          project,
+			StartedAt:        Ptr("2026-05-01T10:00:00Z"),
+			EndedAt:          Ptr("2026-05-01T11:00:00Z"),
+			ParentSessionID:  &rootID,
+			RelationshipType: "continuation",
+		},
+		{
+			ID:              "imported-migrated",
+			Project:         project,
+			StartedAt:       Ptr("2026-05-01T12:00:00Z"),
+			EndedAt:         Ptr("2026-05-01T12:30:00Z"),
+			SourceSessionID: "remote-session",
+			SourceVersion:   "remote-v1",
+		},
+		{
+			ID:        "source-missing",
+			Project:   project,
+			StartedAt: Ptr("2026-05-01T10:00:00Z"),
+			EndedAt:   Ptr("2026-05-01T11:30:00Z"),
+		},
+		{
+			ID:        "trashed",
+			Project:   project,
+			StartedAt: Ptr("2026-05-01T15:00:00Z"),
+			EndedAt:   Ptr("2026-05-01T16:00:00Z"),
+		},
+		{
+			ID:        "tombstoned",
+			Project:   project,
+			StartedAt: Ptr("2026-05-01T17:00:00Z"),
+			EndedAt:   Ptr("2026-05-01T18:00:00Z"),
+		},
+	} {
+		insertExportSession(t, d, session)
+	}
+	require.NoError(t, d.SoftDeleteSession(ctx, "trashed"), "soft-delete trashed session")
+	require.NoError(t, d.DeleteSession(ctx, "tombstoned"), "tombstone session")
+	_, err := d.getWriter().Exec(ctx,
+		`UPDATE sessions SET source_missing_at = ? WHERE id = ?`,
+		"2026-05-01T19:00:00Z", "source-missing",
+	)
+	require.NoError(t, err, "mark source-missing session")
+
+	filter := SessionFilter{Project: project, IncludeChildren: true}
+	expectedIDs := []string{
+		"activity-a",
+		"activity-b",
+		"activity-missing-ended",
+		"child-subagent",
+		"imported-migrated",
+		"child-fork",
+		"source-missing",
+		"child-continuation",
+	}
+	var tableSQL, indexSQL string
+	var populationCounts []int
+	var watermarkQuery, firstPageQuery, laterPageQuery string
+	var watermarkPlan, firstPagePlan, laterPagePlan []string
+	var observedQueries []struct {
+		query string
+		args  []any
+	}
+	// Observe executed SQL so the plan assertions cannot drift from production.
+	observe := func(query string, args []any) {
+		observedQueries = append(observedQueries, struct {
+			query string
+			args  []any
+		}{query: query, args: args})
+	}
+	explainPlan := func(tx *sql.Tx, query string, queryArgs []any) []string {
+		rows, err := tx.QueryContext(ctx, "EXPLAIN QUERY PLAN "+query, queryArgs...)
+		require.NoError(t, err, "explain session export query")
+		defer rows.Close()
+		var details []string
+		for rows.Next() {
+			var id, parent, notUsed int
+			var detail string
+			require.NoError(t, rows.Scan(&id, &parent, &notUsed, &detail),
+				"scan session export query plan")
+			details = append(details, detail)
+		}
+		require.NoError(t, rows.Err(), "iterate session export query plan")
+		return details
+	}
+	assertNoActivityTable := func() {
+		var count int
+		require.NoError(t, d.rawReader().QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM sqlite_temp_master
+			 WHERE type = 'table' AND name = ?`, sessionExportActivityTable,
+		).Scan(&count), "inspect reader temp schema after export")
+		assert.Zero(t, count, "activity table must not survive the export")
+	}
+
+	pages, err := d.exportAllSessionSummaries(ctx, SessionExportOptions{
+		Filter: filter,
+		Limit:  1,
+	}, func(page int, tx *sql.Tx) error {
+		var currentTableSQL, currentIndexSQL string
+		require.NoError(t, tx.QueryRowContext(ctx,
+			`SELECT sql FROM sqlite_temp_master
+			 WHERE type = 'table' AND name = ?`, sessionExportActivityTable,
+		).Scan(&currentTableSQL), "inspect activity table")
+		require.NoError(t, tx.QueryRowContext(ctx,
+			`SELECT sql FROM sqlite_temp_master
+			 WHERE type = 'index' AND name = ?`, sessionExportActivityIndex,
+		).Scan(&currentIndexSQL), "inspect activity index")
+		var population int
+		require.NoError(t, tx.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM `+sessionExportActivityTable,
+		).Scan(&population), "count materialized activity rows")
+		populationCounts = append(populationCounts, population)
+		if page == 1 {
+			tableSQL = currentTableSQL
+			indexSQL = currentIndexSQL
+			require.Len(t, observedQueries, 2,
+				"watermark and first page must be observed")
+			watermarkQuery = observedQueries[0].query
+			firstPageQuery = observedQueries[1].query
+			watermarkPlan = explainPlan(
+				tx, watermarkQuery, observedQueries[0].args,
+			)
+			firstPagePlan = explainPlan(
+				tx, firstPageQuery, observedQueries[1].args,
+			)
+		}
+		if page == 2 {
+			require.Len(t, observedQueries, 3,
+				"later page must be observed")
+			laterPageQuery = observedQueries[2].query
+			laterPagePlan = explainPlan(
+				tx, laterPageQuery, observedQueries[2].args,
+			)
+		}
+		require.Equal(t, len(expectedIDs), population,
+			"one populated activity table must serve every page")
+		require.Equal(t, tableSQL, currentTableSQL,
+			"all pages must use one temp table")
+		require.Equal(t, indexSQL, currentIndexSQL,
+			"all pages must use one temp index")
+		return nil
+	}, observe)
+	require.NoError(t, err, "materialized all-session export")
+	assertNoActivityTable()
+	require.Len(t, pages, len(expectedIDs), "one page per session")
+	var gotIDs []string
+	var gotActivities []string
+	for _, page := range pages {
+		gotIDs = append(gotIDs, sessionExportRowIDs(page.Rows)...)
+		for _, row := range page.Rows {
+			gotActivities = append(gotActivities, row.LastActivityAt)
+		}
+	}
+	assert.Equal(t, expectedIDs, gotIDs)
+	assert.Equal(t, []string{
+		"2026-05-01T10:00:00-04:00",
+		"2026-05-01T14:00:00Z",
+		"2026-05-01T14:00:00+00:00",
+		"2026-05-01T13:00:00Z",
+		"2026-05-01T12:30:00Z",
+		"2026-05-01T12:00:00Z",
+		"2026-05-01T11:30:00Z",
+		"2026-05-01T11:00:00Z",
+	}, gotActivities)
+	assert.Equal(t, []int{len(expectedIDs)}, slices.Compact(populationCounts))
+	require.Contains(t, tableSQL, sessionExportActivityTable)
+	require.Contains(t, tableSQL, "last_activity_at")
+	require.Contains(t, tableSQL, "last_activity_sort")
+	require.Contains(t, indexSQL, sessionExportActivityIndex)
+	require.Contains(t, indexSQL, "last_activity_sort DESC, id ASC")
+	for _, query := range []string{
+		watermarkQuery, firstPageQuery, laterPageQuery,
+	} {
+		require.Contains(t, query, sessionExportActivityTable)
+		require.Contains(t, query, sessionExportActivityIndex)
+		require.NotContains(t, query, sessionExportLastActivityExpr())
+		require.NotContains(t, query, sessionExportLastActivitySortExpr())
+	}
+	planText := func(details []string) string {
+		return strings.ToLower(strings.Join(details, " | "))
+	}
+	for _, plan := range [][]string{
+		watermarkPlan, firstPagePlan, laterPagePlan,
+	} {
+		require.Contains(t, planText(plan),
+			strings.ToLower("USING INDEX "+sessionExportActivityIndex),
+			"materialized query must use the activity sort index")
+	}
+	t.Logf("activity table SQL: %s", strings.Join(strings.Fields(tableSQL), " "))
+	t.Logf("activity index SQL: %s", strings.Join(strings.Fields(indexSQL), " "))
+	t.Logf("watermark SQL: %s", strings.Join(strings.Fields(watermarkQuery), " "))
+	t.Logf("watermark plan: %s", strings.Join(watermarkPlan, " | "))
+	t.Logf("first page SQL: %s", strings.Join(strings.Fields(firstPageQuery), " "))
+	t.Logf("first page plan: %s", strings.Join(firstPagePlan, " | "))
+	t.Logf("later page SQL: %s", strings.Join(strings.Fields(laterPageQuery), " "))
+	t.Logf("later page plan: %s", strings.Join(laterPagePlan, " | "))
+
+	expression, err := d.ExportSessionSummaries(ctx, SessionExportOptions{
+		Filter: filter,
+		Limit:  len(expectedIDs),
+	})
+	require.NoError(t, err, "expression-based single-page export")
+	assertNoActivityTable()
+	assert.Equal(t, expectedIDs, sessionExportRowIDs(expression.Rows))
+	for i, row := range expression.Rows {
+		assert.Equal(t, gotActivities[i], row.LastActivityAt)
+	}
+
+	firstCursor := pages[0].NextCursor
+	require.NotEmpty(t, firstCursor, "first page cursor")
+	resumed, err := d.ExportAllSessionSummaries(ctx, SessionExportOptions{
+		Cursor:          firstCursor,
+		UseCursorFilter: true,
+		Limit:           1,
+	})
+	require.NoError(t, err, "cursor-owned all-session export")
+	assertNoActivityTable()
+	var resumedIDs []string
+	for _, page := range resumed {
+		resumedIDs = append(resumedIDs, sessionExportRowIDs(page.Rows)...)
+	}
+	assert.Equal(t, expectedIDs[1:], resumedIDs)
+
+	filteredPages, err := d.exportAllSessionSummaries(ctx, SessionExportOptions{
+		Filter: filter,
+		Limit:  1,
+	}, func(page int, tx *sql.Tx) error {
+		if page == 1 {
+			var count int
+			require.NoError(t, tx.QueryRowContext(ctx,
+				`SELECT COUNT(*) FROM `+sessionExportActivityTable,
+			).Scan(&count), "count filtered activity rows")
+			require.Equal(t, len(expectedIDs), count)
+		}
+		return nil
+	}, nil)
+	require.NoError(t, err, "filtered all-session export")
+	assertNoActivityTable()
+	assert.Equal(t, expectedIDs, func() []string {
+		var ids []string
+		for _, page := range filteredPages {
+			ids = append(ids, sessionExportRowIDs(page.Rows)...)
+		}
+		return ids
+	}())
+
+	emptyPages, err := d.exportAllSessionSummaries(ctx, SessionExportOptions{
+		Filter: SessionFilter{Project: "no-such-project"},
+		Limit:  1,
+	}, func(page int, tx *sql.Tx) error {
+		require.Equal(t, 1, page)
+		var count int
+		require.NoError(t, tx.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM `+sessionExportActivityTable,
+		).Scan(&count), "count empty activity rows")
+		assert.Zero(t, count)
+		return nil
+	}, nil)
+	require.NoError(t, err, "empty all-session export")
+	assertNoActivityTable()
+	require.Len(t, emptyPages, 1)
+	assert.Empty(t, emptyPages[0].Rows)
+
+	callbackErr := errors.New("after-page callback failed")
+	_, err = d.exportAllSessionSummaries(ctx, SessionExportOptions{
+		Filter: filter,
+		Limit:  1,
+	}, func(int, *sql.Tx) error {
+		return callbackErr
+	}, nil)
+	require.ErrorIs(t, err, callbackErr)
+	assertNoActivityTable()
+
+	cancelCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	_, err = d.exportAllSessionSummaries(cancelCtx, SessionExportOptions{
+		Filter: filter,
+		Limit:  1,
+	}, func(page int, _ *sql.Tx) error {
+		if page == 1 {
+			cancel()
+		}
+		return nil
+	}, nil)
+	require.ErrorIs(t, err, context.Canceled)
+	// A cancelled reader must allow a fresh export to open cleanly.
+	_, err = d.ExportAllSessionSummaries(ctx, SessionExportOptions{
+		Filter: filter,
+		Limit:  1,
+	})
+	require.NoError(t, err, "export after cancelled transaction")
+	assertNoActivityTable()
+}
+
 func TestSessionSummaryExportUsesMessageActivityForOpenSessions(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertExportSession(t, d, Session{
 		ID:               "open-active",
@@ -568,7 +1038,7 @@ func TestSessionSummaryExportUsesMessageActivityForOpenSessions(t *testing.T) {
 
 func TestSessionSummaryExportOrdersLastActivityByParsedInstant(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertExportSession(t, d, Session{
 		ID:               "whole-second",
@@ -612,7 +1082,7 @@ func TestSessionSummaryExportOrdersLastActivityByParsedInstant(t *testing.T) {
 
 func TestSessionSummaryExportClosedSessionActivityPrefersEndedAt(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertExportSession(t, d, Session{
 		ID:               "closed-with-late-message",
@@ -653,7 +1123,7 @@ func TestSessionSummaryExportClosedSessionActivityPrefersEndedAt(t *testing.T) {
 
 func TestSessionSummaryExportActiveSinceUsesMessageAwareActivity(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertExportSession(t, d, Session{
 		ID:               "open-active-after-cutoff",
@@ -702,7 +1172,7 @@ func TestSessionSummaryExportActiveSinceUsesMessageAwareActivity(t *testing.T) {
 
 func TestSessionSummaryExportActiveSinceIncludeChildrenKeepsOlderChildrenOfActiveRoot(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertExportSession(t, d, Session{
 		ID:               "active-root",
@@ -755,7 +1225,7 @@ func TestSessionSummaryExportActiveSinceIncludeChildrenKeepsOlderChildrenOfActiv
 
 func TestSessionSummaryExportActiveSinceIncludeChildrenDoesNotPromoteActiveChildOfInactiveRoot(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertExportSession(t, d, Session{
 		ID:               "inactive-root",
@@ -806,7 +1276,7 @@ func TestSessionSummaryExportActiveSinceIncludeChildrenDoesNotPromoteActiveChild
 
 func TestSessionSummaryExportDoesNotFallbackWorktreeWithoutPathMatch(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
 			Project:          "alpha",
@@ -854,7 +1324,7 @@ func TestSessionSummaryExportDefaultLimitIsMaxSessionLimit(t *testing.T) {
 		})
 	}
 
-	result, err := d.ExportSessionSummaries(context.Background(), SessionExportOptions{})
+	result, err := d.ExportSessionSummaries(t.Context(), SessionExportOptions{})
 	require.NoError(t, err, "ExportSessionSummaries")
 	assert.Len(t, result.Rows, MaxSessionLimit)
 	assert.NotEmpty(t, result.NextCursor)
@@ -862,7 +1332,7 @@ func TestSessionSummaryExportDefaultLimitIsMaxSessionLimit(t *testing.T) {
 
 func TestSessionExportCursorEmbedsSnapshotAndPaginatesStably(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, d.SetDatabaseIDForTest(ctx, "cursor-db"),
 		"set database id")
 
@@ -955,13 +1425,13 @@ func TestSessionExportCursorEmbedsSnapshotAndPaginatesStably(t *testing.T) {
 		Format: "json",
 	})
 	require.Error(t, err, "changed watermarked set should reset cursor")
-	assert.True(t, errors.Is(err, ErrSessionExportCursorReset),
+	assert.ErrorIs(t, err, ErrSessionExportCursorReset,
 		"expected reset error, got %v", err)
 }
 
 func TestSessionExportCursorPrefixUsesSameSnapshotAsPageQuery(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	for _, row := range []struct {
 		id, ended string
@@ -982,15 +1452,21 @@ func TestSessionExportCursorPrefixUsesSameSnapshotAsPageQuery(t *testing.T) {
 		})
 	}
 
-	where, args := buildSessionExportFilter(SessionFilter{Project: "snapshot"})
+	where, args := buildSessionExportFilterForAlias(
+		SessionFilter{Project: "snapshot"}, "",
+	)
 	tx, err := d.getReader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	require.NoError(t, err, "begin read snapshot")
 	defer func() { require.NoError(t, tx.Rollback(), "rollback read snapshot") }()
 
-	_, watermarkSort, err := d.sessionExportWatermark(ctx, tx, where, args)
+	_, watermarkSort, err := d.sessionExportWatermarkFrom(
+		ctx, tx, where, args, sessionExportActivitySource{},
+	)
 	require.NoError(t, err, "snapshot watermark")
-	rows, err := d.querySessionExportRows(
-		ctx, tx, where, args, watermarkSort, sessionExportCursorPayload{}, 2)
+	rows, err := d.querySessionExportRowsFrom(
+		ctx, tx, where, args, watermarkSort, sessionExportCursorPayload{}, 2,
+		sessionExportActivitySource{},
+	)
 	require.NoError(t, err, "snapshot page")
 	require.Len(t, rows, 3, "page query returns limit plus one")
 	emittedRows := rows[:2]
@@ -1029,7 +1505,7 @@ func TestSessionExportCursorPrefixUsesSameSnapshotAsPageQuery(t *testing.T) {
 
 func TestSessionExportUsageUsesPageReadSnapshot(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	seedSessionExportPricing(t, d)
 	insertExportSession(t, d, Session{
 		ID: "usage-snapshot", Project: "alpha", Machine: "local",
@@ -1067,7 +1543,7 @@ func TestSessionExportUsageUsesPageReadSnapshot(t *testing.T) {
 
 func TestSessionSummaryExportSelectsCompleteClaudeSnapshotBeforeDedup(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	seedSessionExportPricing(t, d)
 	for _, session := range []Session{
 		{
@@ -1126,7 +1602,7 @@ func TestSessionSummaryExportSelectsCompleteClaudeSnapshotBeforeDedup(t *testing
 
 func TestSessionSummaryExportSelectsClaudeSnapshotFromExcludedSubagent(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	seedSessionExportPricing(t, d)
 	parentID := "snapshot-parent"
 	insertExportSession(t, d, Session{
@@ -1176,7 +1652,7 @@ func TestSessionSummaryExportSelectsClaudeSnapshotFromExcludedSubagent(t *testin
 
 func TestSessionSummaryExportSelectsClaudeSnapshotAcrossPages(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	seedSessionExportPricing(t, d)
 	for _, session := range []Session{
 		{
@@ -1235,9 +1711,128 @@ func TestSessionSummaryExportSelectsClaudeSnapshotAcrossPages(t *testing.T) {
 	assert.False(t, peerUsage.HasCost)
 }
 
+type capturedSessionExportQuery struct {
+	query string
+	args  []any
+}
+
+type sessionExportQueryCapture struct {
+	inner   sessionExportQuerier
+	queries []capturedSessionExportQuery
+}
+
+func (c *sessionExportQueryCapture) QueryContext(
+	ctx context.Context, query string, args ...any,
+) (*sql.Rows, error) {
+	c.queries = append(c.queries, capturedSessionExportQuery{
+		query: query,
+		args:  append([]any(nil), args...),
+	})
+	return c.inner.QueryContext(ctx, query, args...)
+}
+
+func (c *sessionExportQueryCapture) QueryRowContext(
+	ctx context.Context, query string, args ...any,
+) *sql.Row {
+	return c.inner.QueryRowContext(ctx, query, args...)
+}
+
+func TestSessionExportClaudeSnapshotPeersUsesSnapshotIndex(t *testing.T) {
+	d := testSessionExportDB(t)
+	ctx := t.Context()
+	const pairCount = maxSQLVars/2 + 1
+
+	pageRows := make([]usageScanRow, 0, pairCount)
+	for i := range pairCount {
+		pageRows = append(pageRows, usageScanRow{
+			sessionID:       fmt.Sprintf("page-%03d", i),
+			claudeMessageID: fmt.Sprintf("message-%03d", i),
+			claudeRequestID: fmt.Sprintf("request-%03d", i),
+		})
+	}
+	pageRows[0].sessionID = "page-owned"
+
+	for _, id := range []string{
+		"page-owned", "peer-first", "peer-last", "cross-pair", "unmatched",
+		"empty-message", "empty-request",
+	} {
+		insertExportSession(t, d, Session{
+			ID: id, Project: "snapshot-index", Machine: "local", Agent: "claude",
+			StartedAt: Ptr("2026-05-01T10:00:00Z"),
+			EndedAt:   Ptr("2026-05-01T10:01:00Z"),
+		})
+	}
+	message := func(sessionID, messageID, requestID string) Message {
+		return Message{
+			SessionID:       sessionID,
+			Ordinal:         0,
+			Role:            "assistant",
+			Timestamp:       "2026-05-01T10:00:00Z",
+			Model:           "model-computed",
+			ClaudeMessageID: messageID,
+			ClaudeRequestID: requestID,
+			TokenUsage:      jsontext.Value(`{"input_tokens":1,"output_tokens":1}`),
+		}
+	}
+	insertMessages(t, d,
+		message("page-owned", "message-000", "request-000"),
+		message("peer-first", "message-001", "request-001"),
+		message("peer-last", "message-250", "request-250"),
+		message("cross-pair", "message-001", "request-002"),
+		message("unmatched", "message-outside", "request-outside"),
+		message("empty-message", "", "request-001"),
+		message("empty-request", "message-001", ""),
+	)
+
+	capture := &sessionExportQueryCapture{inner: d.getReader()}
+	peers, err := sessionExportClaudeSnapshotPeers(
+		ctx, capture, pageRows, []string{"page-owned"},
+	)
+	require.NoError(t, err)
+	require.Len(t, capture.queries, 2)
+	require.Len(t, capture.queries[0].args, maxSQLVars)
+	require.Len(t, capture.queries[1].args, 2)
+
+	for i, captured := range capture.queries {
+		assert.Contains(t, captured.query, "m.claude_message_id != ''")
+		assert.Contains(t, captured.query, "m.claude_request_id != ''")
+		assert.Contains(t, captured.query,
+			"(m.claude_message_id, m.claude_request_id) IN (VALUES")
+
+		planRows, planErr := d.getReader().QueryContext(
+			ctx, "EXPLAIN QUERY PLAN "+captured.query, captured.args...,
+		)
+		require.NoError(t, planErr)
+		defer planRows.Close()
+		details := explainQueryPlanDetails(t, planRows)
+		plan := strings.Join(details, "\n")
+		t.Logf("captured production query %d: args=%d plan=%s",
+			i+1, len(captured.args), strings.Join(details, " | "))
+		assert.Contains(t, plan,
+			"SEARCH m USING INDEX idx_messages_claude_snapshot (claude_message_id=? AND claude_request_id=?)",
+			"query %d must use both Claude snapshot identity columns", i)
+	}
+
+	require.Len(t, peers, 2)
+	gotIDs := make([]string, 0, len(peers))
+	for _, peer := range peers {
+		gotIDs = append(gotIDs, peer.sessionID)
+	}
+	assert.Equal(t, []string{"peer-first", "peer-last"}, gotIDs)
+	assert.NotContains(t, gotIDs, "page-owned")
+	assert.NotContains(t, gotIDs, "cross-pair")
+	assert.NotContains(t, gotIDs, "empty-message")
+	assert.NotContains(t, gotIDs, "empty-request")
+	assert.NotContains(t, gotIDs, "unmatched")
+	assert.Equal(t, "message-001", peers[0].claudeMessageID)
+	assert.Equal(t, "request-001", peers[0].claudeRequestID)
+	assert.Equal(t, "message-250", peers[1].claudeMessageID)
+	assert.Equal(t, "request-250", peers[1].claudeRequestID)
+}
+
 func TestSessionExportCopilotReportedCostReplacesSessionEstimates(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, d.UpsertModelPricing([]ModelPricing{
 		{ModelPattern: "copilot-model-a", InputPerMTok: money.MustParseDollars("10")},
 		{ModelPattern: "copilot-model-b", InputPerMTok: money.MustParseDollars("20")},
@@ -1248,7 +1843,7 @@ func TestSessionExportCopilotReportedCostReplacesSessionEstimates(t *testing.T) 
 		EndedAt: Ptr("2026-06-16T10:10:00Z"), UserMessageCount: 1,
 	})
 	reportedCost := money.MustParseDollars("0.03")
-	require.NoError(t, d.ReplaceSessionUsageEvents(
+	require.NoError(t, d.ReplaceSessionUsageEvents(ctx,
 		"copilot:export-authoritative",
 		[]UsageEvent{
 			{
@@ -1293,7 +1888,7 @@ func TestSessionExportCopilotReportedCostReplacesSessionEstimates(t *testing.T) 
 
 func TestAllSessionExportKeepsOnePricingSnapshotAcrossPages(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
 		ModelPattern: "snapshot-model", InputPerMTok: money.MustParseDollars("1"),
 	}}))
@@ -1315,14 +1910,14 @@ func TestAllSessionExportKeepsOnePricingSnapshotAcrossPages(t *testing.T) {
 
 	pages, err := d.exportAllSessionSummaries(ctx, SessionExportOptions{
 		Limit: 1, Filter: SessionFilter{IncludeChildren: true},
-	}, func(page int) error {
+	}, func(page int, _ *sql.Tx) error {
 		if page != 1 {
 			return nil
 		}
 		return d.UpsertModelPricing([]ModelPricing{{
 			ModelPattern: "snapshot-model", InputPerMTok: money.MustParseDollars("99"),
 		}})
-	})
+	}, nil)
 	require.NoError(t, err)
 	require.Len(t, pages, 2)
 	require.NotEmpty(t, pages[0].NextCursor)
@@ -1344,7 +1939,7 @@ func TestAllSessionExportKeepsOnePricingSnapshotAcrossPages(t *testing.T) {
 
 func TestAllSessionExportHonorsCancellation(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	_, err := d.ExportAllSessionSummaries(ctx, SessionExportOptions{Limit: 1})
@@ -1354,7 +1949,7 @@ func TestAllSessionExportHonorsCancellation(t *testing.T) {
 
 func TestSessionExportCursorResetsWhenRowMovesBeforeCursor(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, d.SetDatabaseIDForTest(ctx, "cursor-db"),
 		"set database id")
 
@@ -1402,13 +1997,13 @@ func TestSessionExportCursorResetsWhenRowMovesBeforeCursor(t *testing.T) {
 		Format: "json",
 	})
 	require.Error(t, err, "moved row should reset cursor")
-	assert.True(t, errors.Is(err, ErrSessionExportCursorReset),
+	assert.ErrorIs(t, err, ErrSessionExportCursorReset,
 		"expected reset error, got %v", err)
 }
 
 func TestSessionExportCursorResetsWhenUnemittedRowMovesAboveWatermark(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, d.SetDatabaseIDForTest(ctx, "cursor-db"),
 		"set database id")
 
@@ -1452,12 +2047,12 @@ func TestSessionExportCursorResetsWhenUnemittedRowMovesAboveWatermark(t *testing
 		Format: "json",
 	})
 	require.Error(t, err, "moved suffix row should reset cursor")
-	assert.True(t, errors.Is(err, ErrSessionExportCursorReset),
+	assert.ErrorIs(t, err, ErrSessionExportCursorReset,
 		"expected reset error, got %v", err)
 }
 
 func TestSessionExportCursorRejectsWrongDatabaseAndChangedFilters(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	d1 := testDB(t)
 	d2 := testDB(t)
 	require.NoError(t, d1.SetDatabaseIDForTest(ctx, "db-one"), "set db one")
@@ -1505,7 +2100,7 @@ func TestSessionExportCursorRejectsWrongDatabaseAndChangedFilters(t *testing.T) 
 		Format: "json",
 	})
 	require.Error(t, err, "wrong database cursor")
-	assert.True(t, errors.Is(err, ErrSessionExportCursorReset),
+	require.ErrorIs(t, err, ErrSessionExportCursorReset,
 		"expected reset error, got %v", err)
 
 	_, err = d1.ExportSessionSummaries(ctx, SessionExportOptions{
@@ -1515,7 +2110,7 @@ func TestSessionExportCursorRejectsWrongDatabaseAndChangedFilters(t *testing.T) 
 		Format: "json",
 	})
 	require.Error(t, err, "changed filter cursor")
-	assert.True(t, errors.Is(err, ErrSessionExportCursorConflict),
+	require.ErrorIs(t, err, ErrSessionExportCursorConflict,
 		"expected conflict error, got %v", err)
 
 	formatChanged, err := d1.ExportSessionSummaries(ctx, SessionExportOptions{
@@ -1530,7 +2125,7 @@ func TestSessionExportCursorRejectsWrongDatabaseAndChangedFilters(t *testing.T) 
 
 func TestSessionExportCursorAllowsEquivalentFilters(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	for _, row := range []struct {
 		id, machine, outcome, ended string
 	}{
@@ -1549,7 +2144,7 @@ func TestSessionExportCursorAllowsEquivalentFilters(t *testing.T) {
 			Outcome:          row.outcome,
 			HealthGrade:      Ptr("A"),
 		})
-		require.NoError(t, d.UpdateSessionSignals(row.id, SessionSignalUpdate{
+		require.NoError(t, d.UpdateSessionSignals(ctx, row.id, SessionSignalUpdate{
 			Outcome:     row.outcome,
 			HealthGrade: Ptr("A"),
 		}), "update filter signals %s", row.id)
@@ -1585,7 +2180,7 @@ func TestSessionExportCursorAllowsEquivalentFilters(t *testing.T) {
 
 func TestSessionExportCursorPreservesTimezoneFilter(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	for _, row := range []struct {
 		id, started, ended string
 	}{
@@ -1661,7 +2256,7 @@ func TestSessionExportCursorPreservesTimezoneFilter(t *testing.T) {
 
 func TestSessionExportCursorTreatsDefaultAndExplicitUTCAsEquivalent(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	for _, row := range []struct {
 		id, started, ended string
 	}{
@@ -1695,7 +2290,7 @@ func TestSessionExportCursorTreatsDefaultAndExplicitUTCAsEquivalent(t *testing.T
 }
 
 func TestSessionExportCursorTamperingReturnsInvalidCursor(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	d := testSessionExportDB(t)
 	require.NoError(t, d.SetDatabaseIDForTest(ctx, "tamper-db"), "set database id")
 	for _, row := range []struct {
@@ -1727,14 +2322,14 @@ func TestSessionExportCursorTamperingReturnsInvalidCursor(t *testing.T) {
 		Limit:  1,
 	})
 	require.Error(t, err, "tampered cursor")
-	assert.True(t, errors.Is(err, ErrInvalidCursor),
+	require.ErrorIs(t, err, ErrInvalidCursor,
 		"expected invalid cursor, got %v", err)
-	assert.False(t, errors.Is(err, ErrSessionExportCursorReset),
+	assert.NotErrorIs(t, err, ErrSessionExportCursorReset,
 		"tampered cursor must not be treated as a valid wrong-database cursor")
 }
 
 func TestSessionExportCursorRejectsForgeryWithKnownKey(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	d := testSessionExportDB(t)
 	require.NoError(t, d.SetDatabaseIDForTest(ctx, "forge-db"), "set database id")
 	for _, row := range []struct {
@@ -1785,7 +2380,7 @@ func TestSessionExportCursorRejectsForgeryWithKnownKey(t *testing.T) {
 		Limit:           1,
 	})
 	require.Error(t, err, "forged cursor")
-	assert.True(t, errors.Is(err, ErrInvalidCursor),
+	assert.ErrorIs(t, err, ErrInvalidCursor,
 		"expected invalid cursor, got %v", err)
 }
 
@@ -1793,7 +2388,7 @@ func testSessionExportDB(t *testing.T) *DB {
 	t.Helper()
 	d := testDB(t)
 	require.NoError(t, d.SetDatabaseIDForTest(
-		context.Background(), "session-export-db"),
+		t.Context(), "session-export-db"),
 		"set session export database id")
 	return d
 }
@@ -1836,7 +2431,7 @@ func insertExportSession(t *testing.T, d *DB, s Session) {
 	if s.MessageCount == 0 {
 		s.MessageCount = 1
 	}
-	require.NoError(t, d.UpsertSession(s), "upsert export session %s", s.ID)
+	require.NoError(t, d.UpsertSession(t.Context(), s), "upsert export session %s", s.ID)
 }
 
 func sessionExportRowsByID(rows []SessionSummaryRow) map[string]SessionSummaryRow {
@@ -1868,6 +2463,7 @@ func tamperSessionExportCursorDatabaseID(
 	t *testing.T, cursor, databaseID string,
 ) string {
 	t.Helper()
+
 	parts := strings.Split(cursor, ".")
 	require.Len(t, parts, 2, "cursor parts")
 	data, err := base64.RawURLEncoding.DecodeString(parts[0])

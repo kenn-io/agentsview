@@ -168,12 +168,18 @@ func (a *Auditor) auditProviderBounded(
 		}
 		seenPhysical[physicalKey] = struct{}{}
 		capture, err := a.capturer.Capture(ctx, provider, event.source)
+		remaining--
+		result.Visited++
+		if errors.Is(err, rawcapture.ErrSourceChanged) {
+			if remaining == 0 {
+				return result, nil
+			}
+			continue
+		}
 		if err != nil {
 			a.stopDiscoveryScan(providerType)
 			return result, err
 		}
-		remaining--
-		result.Visited++
 		switch capture.Status {
 		case rawcapture.StatusCaptured:
 			result.Captured++
@@ -488,10 +494,15 @@ func (a *Auditor) auditProviderFull(
 	}
 	for _, item := range discovered {
 		capture, err := a.capturer.Capture(ctx, provider, item.source)
+		result.Visited++
+		if errors.Is(err, rawcapture.ErrSourceChanged) {
+			result.Degraded++
+			degradedRootIDs[item.rootID] = struct{}{}
+			continue
+		}
 		if err != nil {
 			return result, err
 		}
-		result.Visited++
 		switch capture.Status {
 		case rawcapture.StatusCaptured:
 			result.Captured++

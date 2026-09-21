@@ -1,4 +1,33 @@
 {
+  "data_reclassify_session_preview_filtered_empty": "미리 볼 세션이 없습니다. 자동 세션은 숨겨져 있습니다. 포함하려면 필터 버튼을 사용하세요.",
+  "data_batch_saving_progress": [
+    {
+      "declarations": [
+        "input saved",
+        "input count",
+        "local savedNumber = saved: number",
+        "local countNumber = count: number"
+      ],
+      "match": { "*": "{countNumber}개 중 {savedNumber}개 저장 중…" }
+    }
+  ],
+  "data_candidate_worktree_prefix": "워크트리 접두 경로",
+  "data_candidate_common_parent": "공통 상위 폴더",
+  "data_candidate_paths_sample": "기록된 경로의 일부를 표시합니다.",
+  "data_candidate_observed_paths": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "관찰된 폴더 {countNumber}개",
+        "countPlural=other": "관찰된 폴더 {countNumber}개"
+      }
+    }
+  ],
   "app_auth_title": "인증 필요",
   "app_auth_description": "이 서버는 접근하려면 인증 토큰이 필요합니다. ~/.agentsview/config.toml 또는 AGENTSVIEW_AUTH_TOKEN의 auth_token 값을 입력하세요.",
   "app_auth_placeholder": "인증 토큰 붙여넣기",
@@ -252,6 +281,10 @@
   "message_content_copy_message": "메시지 복사",
   "message_content_copied_message": "메시지가 복사되었습니다",
   "message_content_copied": "복사됨!",
+  "message_content_code_collapsed_with_language": "코드 블록 접힘 · {language} · 펼치기",
+  "message_content_code_collapsed": "코드 블록 접힘 · 펼치기",
+  "message_content_code_expanded_with_language": "코드 블록 펼침 · {language} · 접기",
+  "message_content_code_expanded": "코드 블록 펼침 · 접기",
   "message_content_unpin_message": "메시지 고정 해제",
   "message_content_pin_message": "메시지 고정",
   "message_content_unpinned": "고정 해제됨",
@@ -298,7 +331,6 @@
       }
     }
   ],
-  "parallel_group_each_duration": "각각 ≤ {duration}",
   "parallel_group_running": "실행 중...",
   "subagent_inline_label": "서브에이전트 세션",
   "subagent_inline_message_count": [
@@ -313,6 +345,7 @@
   "subagent_inline_open_as_full_session": "전체 세션으로 열기",
   "subagent_inline_open_session": "세션 열기",
   "subagent_inline_failed_to_load": "불러오기 실패",
+  "shared_failed_to_load": "불러오기 실패",
   "subagent_inline_loading": "불러오는 중...",
   "subagent_inline_no_messages": "메시지 없음",
   "skill_block_label": "스킬: {name}",
@@ -407,6 +440,7 @@
   "sidebar_row_rename": "이름 변경",
   "sidebar_row_open_in_new_tab": "새 탭에서 열기",
   "sidebar_row_delete": "삭제",
+  "sidebar_row_change_project": "프로젝트 변경…",
   "shared_all_projects": "모든 프로젝트",
   "shared_project_filter_placeholder": "프로젝트 필터링...",
   "shared_select_project": "프로젝트 선택",
@@ -755,7 +789,7 @@
   "settings_search_empty": "일치하는 설정 없음",
   "settings_search_clear": "검색 지우기",
   "settings_search_result": "{category} 표시 중",
-  "settings_search_keywords_appearance": "테마 대비 레이아웃 텍스트 글꼴 블록 theme contrast layout text font blocks",
+  "settings_search_keywords_appearance": "테마 대비 레이아웃 텍스트 글꼴 블록 theme contrast layout text font blocks 확대 축소 zoom",
   "settings_search_keywords_language": "언어 로캘 번역 language locale translation",
   "settings_search_keywords_date_ranges": "날짜 범위 연결 페이지 date range linked pages",
   "settings_search_keywords_terminal": "터미널 재개 실행 바이너리 인수 클립보드 terminal resume launch binary arguments clipboard",
@@ -766,6 +800,8 @@
   "settings_search_keywords_remote_access": "원격 서버 연결 인증 토큰 네트워크 remote server connection auth token network",
   "settings_loading": "설정을 불러오는 중...",
   "settings_save_error_label": "오류",
+  "settings_load_failed": "설정을 불러오지 못했습니다",
+  "settings_save_failed": "설정을 저장하지 못했습니다",
   "settings_date_ranges_title": "날짜 범위",
   "settings_date_ranges_description": "세션, 사용량, 활동, 트렌드, 품질 페이지에서 선택한 날짜 범위를 공유합니다.",
   "settings_date_ranges_link": "페이지 간 날짜 범위 연결",
@@ -781,6 +817,8 @@
   "settings_language_korean": "한국어",
   "settings_language_french": "Français",
   "settings_language_japanese": "日本語",
+  "settings_language_azerbaijani": "Azərbaycanca",
+  "settings_language_spanish": "Español",
   "settings_language_no_results": "언어를 찾을 수 없습니다",
   "nav_recent_edits": "최근 편집",
   "nav_data": "데이터",
@@ -788,7 +826,7 @@
   "data_projects_heading": "프로젝트",
   "data_view_toggle_label": "데이터 보기",
   "data_view_inventory": "인벤토리",
-  "data_view_rules": "규칙",
+  "data_view_rules": "프로젝트 매핑 규칙",
   "data_summary_projects": [
     {
       "declarations": [
@@ -811,6 +849,28 @@
       "match": { "countPlural=other": "세션 {countNumber}개" }
     }
   ],
+  "data_summary_machines": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "머신 {countNumber}대" }
+    }
+  ],
+  "data_summary_folder_suggestions": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "폴더 제안 {countNumber}개" }
+    }
+  ],
   "data_summary_governed": [
     {
       "declarations": [
@@ -822,6 +882,64 @@
       "match": { "countPlural=other": "규칙이 적용된 세션 {countNumber}개" }
     }
   ],
+  "data_selection_hint": "프로젝트를 클릭한 다음 Shift-클릭하여 범위를 선택하세요.",
+  "data_selection_count": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "프로젝트 {countNumber}개 선택됨" }
+    }
+  ],
+  "data_selection_clear": "지우기",
+  "data_batch_workspace_label": "프로젝트 일괄 수정",
+  "data_batch_heading": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "프로젝트 {countNumber}개 선택됨" }
+    }
+  ],
+  "data_batch_label": "일괄",
+  "data_batch_folders_heading": "선택한 폴더",
+  "data_batch_folders_intro": "관찰된 폴더를 프로젝트별, 머신별로 묶고 각 머신 안에서는 세션 수가 많은 그룹부터 표시합니다.",
+  "data_batch_outside_selection": "이 수정은 선택하지 않은 프로젝트에도 적용됩니다. 확인하면 일치하는 모든 세션에 대한 규칙을 저장합니다.",
+  "data_date_filter_scope": "날짜는 프로젝트 목록, 폴더 제안, 세션 미리보기를 필터링합니다. 폴더 수정은 이 기간 밖의 세션도 변경할 수 있습니다.",
+  "data_batch_correction_heading": "일괄 수정",
+  "data_batch_correction_intro": "목록의 모든 폴더에 선택한 대상을 적용합니다.",
+  "data_batch_folder_count": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "폴더 {countNumber}개" }
+    }
+  ],
+  "data_batch_target_project": "선택한 폴더를 매핑할 프로젝트",
+  "data_batch_saving": "일괄 수정 저장 중…",
+  "data_batch_save": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "수정 {countNumber}개 저장" }
+    }
+  ],
+  "data_batch_partial_save": "{count}개 중 {saved}개를 저장했습니다.",
+  "data_batch_saved": "일괄 수정을 {project}에 저장했습니다",
   "data_filter_projects": "프로젝트 필터링",
   "data_col_project": "프로젝트",
   "data_col_sessions": "세션",
@@ -853,8 +971,15 @@
   "data_reclassify_candidates_failed": "세션 폴더를 찾지 못했습니다",
   "data_reclassify_no_candidates": "이 프로젝트의 세션 폴더를 찾지 못했습니다.",
   "data_reclassify_choose_worktree": "폴더 선택",
-  "data_mapping_observed_folders": "확인된 폴더",
-  "data_mapping_definition": "매핑",
+  "data_mapping_observed_folders": "폴더 제안",
+  "data_reclassify_suggestions_intro": "이 프로젝트의 세션에서 제안된 경로입니다.",
+  "data_mapping_definition": "프로젝트 수정",
+  "data_reclassify_use_for_project": "이 프로젝트에 사용",
+  "data_reclassify_evidence_snapshot": "스냅샷",
+  "data_reclassify_evidence_aggregate": "집계",
+  "data_reclassify_evidence_exact_cwd": "정확한 cwd",
+  "data_reclassify_evidence_unavailable": "사용 가능한 접두사 없음",
+  "data_reclassify_evidence_suggestion": "제안",
   "data_reclassify_candidate_sessions": [
     {
       "declarations": [
@@ -867,7 +992,7 @@
     }
   ],
   "data_reclassify_cwd_unavailable": "이 폴더는 사용할 수 없거나 파일 시스템 루트를 나타내므로 안전하게 매핑할 수 없습니다.",
-  "data_reclassify_path_prefix": "폴더 경로",
+  "data_reclassify_path_prefix": "경로 접두사",
   "data_reclassify_target_project": "프로젝트",
   "data_reclassify_use_custom_project": "프로젝트 \"{query}\" 사용",
   "data_reclassify_path_unavailable": "경로를 사용할 수 없음",
@@ -920,18 +1045,64 @@
       "match": { "countPlural=other": "세션 {countNumber}개" }
     }
   ],
+  "data_reclassify_session_preview_count": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "세션 미리보기 {countNumber}개",
+        "countPlural=other": "세션 미리보기 {countNumber}개"
+      }
+    }
+  ],
+  "data_reclassify_session_preview_position": "{count}개 중 {current}번째",
+  "data_reclassify_session_preview_previous": "이전 세션",
+  "data_reclassify_session_preview_next": "다음 세션",
+  "data_reclassify_session_preview_loading": "세션 미리보기 불러오는 중…",
+  "data_reclassify_session_preview_failed": "세션 미리보기를 불러오지 못했습니다",
+  "data_reclassify_session_preview_no_message": "사용 가능한 세션 메시지가 없습니다",
+  "data_reclassify_session_preview_current_project": "현재 프로젝트",
+  "data_reclassify_session_preview_next_project": "수정 후",
+  "data_reclassify_session_preview_folder": "세션 폴더",
+  "data_session_assignment_heading": "세션 프로젝트",
+  "data_session_assignment_intro": "이 세션만 변경합니다. 폴더와 폴더 규칙은 변경되지 않습니다.",
+  "data_session_assignment_target": "이 세션을 이동할 프로젝트",
+  "data_session_assignment_save": "세션 할당",
+  "data_session_assignment_saving": "할당 중…",
+  "data_session_assignment_failed": "세션을 할당하지 못했습니다",
+  "data_session_assignment_saved": "세션을 {project}에 할당했습니다",
+  "data_session_assignment_refresh_failed": "세션은 할당되었지만 프로젝트 인벤토리를 새로 고치지 못했습니다.",
+  "data_session_assignment_manual": "수동 재정의",
+  "data_session_assignment_automatic": "자동",
+  "data_session_assignment_use_automatic": "자동 할당 사용",
+  "data_session_assignment_clearing": "복원 중…",
+  "data_session_assignment_cleared": "세션을 {project}(으)로 복원했습니다",
+  "data_session_assignment_clear_failed": "자동 프로젝트 할당을 복원하지 못했습니다",
   "data_reclassify_zero_matches": "이 접두사와 일치하는 아카이브 세션이 없습니다.",
   "data_reclassify_conflict": "미리 보기 이후 매핑이 변경되었습니다. 영향이 새로 고쳐졌으니 적용 전에 확인하세요.",
-  "data_reclassify_apply": "매핑 저장 및 적용",
-  "data_reclassify_applying": "저장 및 적용 중…",
-  "data_reclassify_apply_failed": "매핑을 저장하고 적용하지 못했습니다",
+  "data_reclassify_replaces_rule": "이 수정은 기존 프로젝트 매핑 규칙을 대체합니다.",
+  "data_reclassify_review_impact": "영향 검토",
+  "data_reclassify_back": "뒤로",
+  "data_reclassify_confirm_save": "확인 후 저장",
+  "data_reclassify_cancel": "취소",
+  "data_reclassify_apply": "수정 저장",
+  "data_reclassify_applying": "수정 저장 중…",
+  "data_reclassify_apply_failed": "수정 저장 실패",
+  "data_reclassify_saved": "{project}의 프로젝트 수정이 저장되었습니다",
+  "data_flash_success_label": "성공",
   "data_reclassify_applied_refresh_failed": "매핑은 저장되었지만 프로젝트 인벤토리를 새로 고치지 못했습니다. 새로 고침만 다시 시도하세요.",
   "data_reclassify_retry_refresh": "새로 고침 재시도",
   "data_reclassify_refreshing": "새로 고치는 중…",
-  "data_reclassify_read_only": "이 저장소는 읽기 전용입니다. 이 컴퓨터의 세션을 수집하는 쓰기 가능한 아카이브에서 분류 규칙을 관리하세요.",
-  "data_reclassify_managed_in_rules": "여기서 만든 매핑은 규칙 보기에서 편집할 수 있습니다.",
-  "data_reclassify_open_rules": "규칙 열기",
+  "data_reclassify_read_only": "여기에서는 변경할 수 없습니다. 소스 Agents View를 열어 프로젝트 매핑 규칙을 관리하세요.",
+  "data_reclassify_managed_in_rules": "이 수정은 프로젝트 매핑 규칙으로 저장됩니다.",
+  "data_reclassify_open_rules": "프로젝트 매핑 규칙 열기",
   "data_workspace_all_projects": "모든 프로젝트",
+  "data_workspace_map_whole_project": "모든 폴더",
+  "data_workspace_correct_one_folder": "폴더 하나",
   "data_workspace_close": "프로젝트 세부 정보 닫기",
   "data_workspace_activity": "활동",
   "data_workspace_activity_range": "{first} – {last}",
@@ -954,7 +1125,6 @@
   "recent_edits_refresh": "새로고침",
   "recent_edits_search_placeholder": "파일 경로로 필터링",
   "recent_edits_clear_search": "파일 경로 검색 지우기",
-  "activity_insight_unavailable_read_only": "읽기 전용 원격 모드에서는 사용할 수 없습니다",
   "activity_insight_waiting_server": "서버 버전을 기다리는 중",
   "activity_insight_generate_insight": "인사이트 생성",
   "activity_insight_generation_failed": "생성 실패",
@@ -980,14 +1150,12 @@
   "activity_model": "모델",
   "activity_agent": "에이전트",
   "activity_min_unit": " 분",
-  "activity_int_auto_split": "대화형 {int} / 자동 {auto}",
   "activity_breakdown": "세부 내역",
   "activity_view_in_data": "데이터에서 {project} 보기",
   "activity_breakdown_metric": "세부 내역 지표",
   "activity_agent_min": "에이전트-분",
   "activity_cost": "비용",
   "activity_none_lower": "없음",
-  "activity_int_auto_short": "{int} 대화형 / {auto} 자동화",
   "activity_peak_label": "최대 {count}",
   "activity_agent_min_value": "{value} 에이전트-분",
   "activity_no_sessions_selected_range": "선택한 시간 범위에 활성 세션이 없습니다.",
@@ -1000,6 +1168,15 @@
       }
     }
   ],
+  "activity_subagents": "하위 에이전트",
+  "activity_subagent": "하위 에이전트",
+  "activity_interactive_peak": "대화형 최대 동시 실행",
+  "activity_subagent_peak": "하위 에이전트 최대 동시 실행",
+  "activity_automated_peak": "자동화 최대 동시 실행",
+  "activity_combined_peak": "전체 최대 동시 실행",
+  "activity_peak_at": "{time}에 최대 {count}",
+  "activity_all_sessions_overlay": "전체 세션 오버레이",
+  "activity_class_split": "대화형 {int} / 하위 {sub} / 자동 {auto}",
   "activity_concurrency": "동시성",
   "activity_overlay": "오버레이",
   "activity_overlay_metric": "동시성 오버레이 지표",
@@ -1015,6 +1192,22 @@
   "activity_session": "세션",
   "activity_automated_session": "자동화된 세션",
   "activity_auto": "자동",
+  "activity_session_kind_split": [
+    {
+      "declarations": [
+        "input interactive",
+        "input subagents",
+        "input subagentsLabel",
+        "input automated",
+        "local subagentPlural = subagents: plural"
+      ],
+      "selectors": ["subagentPlural"],
+      "match": {
+        "subagentPlural=one": "{interactive} 대화형 / {subagentsLabel} 서브에이전트 / {automated} 자동화",
+        "subagentPlural=other": "{interactive} 대화형 / {subagentsLabel} 서브에이전트 / {automated} 자동화"
+      }
+    }
+  ],
   "activity_interactive_automated_split": "{interactive} 대화형 / {automated} 자동화",
   "activity_untimed_count": "{count}개 시간 미측정",
   "activity_peak_concurrency": "최대 동시성",
@@ -1265,7 +1458,6 @@
   "recall_page_generation_retire_message": "{model} ({fingerprint})을(를) 폐기하시겠습니까? 자동 항목은 보관 상태로 유지됩니다.",
   "recall_page_generation_action_error": "추출 세대를 업데이트할 수 없습니다: {error}",
   "session_vitals_title": "분석",
-  "session_vitals_subtitle": "세션 바이탈 사인",
   "session_vitals_close": "세션 분석 닫기",
   "session_vitals_resize": "세션 분석 패널 크기 조정",
   "session_vitals_session": "세션",
@@ -1283,9 +1475,15 @@
   "session_vitals_jump_to_call": "호출로 이동",
   "session_vitals_turns": "턴",
   "session_vitals_subagents": "서브에이전트",
+  "session_vitals_activity": "턴별 활동",
+  "session_vitals_activity_tool": "도구 실행",
+  "session_vitals_activity_unattributed": "미분류",
+  "session_vitals_activity_turn": "턴 {ordinal} · {duration}",
+  "session_vitals_not_measured": "측정되지 않음",
+  "session_vitals_activity_hint": "단계의 시작과 끝이 측정되지 않은 시간은 미분류로 표시됩니다.",
   "session_vitals_time_spent": "소요 시간",
   "session_vitals_clear_category_filter": "카테고리 필터 지우기",
-  "session_vitals_completed_turns_hint": "완료된 턴 · 클릭하여 강조 표시",
+  "session_vitals_completed_turns_hint": "측정된 도구 시간 · 클릭하여 강조",
   "session_vitals_timeline": "타임라인",
   "session_vitals_click_marks_to_scroll": "표시를 클릭하면 스크롤 이동",
   "session_vitals_jump_to_turn": "{time}의 {category} 턴으로 이동",
@@ -1529,7 +1727,7 @@
   "insights_page_no_matching_generators": "일치하는 생성기가 없습니다",
   "insights_page_optional_focus": "선택적 초점",
   "insights_page_focus_placeholder": "채점된 사실을 변경하지 않고 추천 범위를 좁히세요",
-  "insights_page_generate_disabled": "읽기 전용 모드에서는 생성이 비활성화됩니다",
+  "insights_page_generate_disabled": "이 아카이브에서는 인사이트를 생성할 수 없습니다",
   "insights_page_generate_title": "품질 추천 생성",
   "insights_page_generate": "생성",
   "insights_page_loading_archive": "아카이브 불러오는 중...",
@@ -1674,6 +1872,12 @@
   "settings_session_providers_disabled": "사용 안 함",
   "settings_session_providers_restart_notice": "변경 사항을 적용하려면 AgentsView 데몬과 별도의 푸시 감시 프로세스를 다시 시작하세요.",
   "settings_session_providers_save_failed": "세션 공급자를 업데이트하지 못했습니다. 이전 선택이 계속 적용됩니다.",
+  "settings_session_providers_homes_title": "대체 홈 디렉터리",
+  "settings_session_providers_homes_hint": "사용자 지정 {envVar}와 같은 에이전트 홈 디렉터리를 추가합니다. AgentsView가 세션 디렉터리를 자동으로 찾습니다.",
+  "settings_session_providers_homes_placeholder": "~/.{agent}-work",
+  "settings_session_providers_homes_add": "홈 추가",
+  "settings_session_providers_homes_input_aria": "새 {provider} 홈 디렉터리",
+  "settings_session_providers_homes_remove_aria": "{provider} 홈 {home} 제거",
   "appearance_layout_default": "기본",
   "appearance_layout_compact": "컴팩트",
   "appearance_layout_stream": "스트림",
@@ -1865,6 +2069,7 @@
   "trends_per1k_messages": "메시지 1,000건당",
   "trends_count": "개수",
   "trends_occurrences_per1k": "발생 횟수 / 메시지 1,000건",
+  "trends_no_occurrences_in_range": "이 범위에는 발생 항목이 없습니다",
   "trends_occurrences": "발생 횟수",
   "trends_no_trend_data": "트렌드 데이터 없음",
   "trends_chart_aria_normalized": "메시지 1,000건당 용어 발생 트렌드",
@@ -1957,8 +2162,95 @@
   "activity_finalizing_report": "보고서 마무리 중…",
   "activity_next_sessions_page": "다음 세션",
   "activity_sessions_load_failed": "활동 세션을 불러오지 못했습니다",
+  "activity_report_load_failed": "활동 보고서를 불러오지 못했습니다",
+  "session_activity_load_failed": "활동을 불러오지 못했습니다",
   "appearance_high_contrast": "고대비",
   "appearance_on": "켜짐",
   "appearance_off": "꺼짐",
-  "appearance_text_size": "텍스트 크기"
+  "appearance_zoom": "확대/축소",
+  "settings_archive_content_title": "아카이브 콘텐츠",
+  "settings_archive_content_description": "수집할 때 도구 결과에서 저장하는 내용입니다.",
+  "settings_search_keywords_archive_content": "아카이브 콘텐츠 이미지 보존 도구 결과 플레이스홀더 저장 archive content images retention tool results placeholders storage",
+  "settings_tool_result_images": "도구 결과 이미지",
+  "settings_tool_result_images_keep": "유지",
+  "settings_tool_result_images_drop": "삭제",
+  "settings_tool_result_images_offload": "별도 저장",
+  "settings_tool_result_images_hint": "이미 저장된 결과는 기록될 당시의 정책을 유지하며, 유지로 되돌려도 이미 삭제된 데이터는 복원되지 않습니다. 기존 행은 agentsview db migrate --images 로 처리합니다.",
+  "settings_tool_result_images_restart_notice": "이 변경을 새로 수집되는 세션에 적용하려면 AgentsView 데몬을 다시 시작하세요.",
+  "settings_tool_images_title": "도구 결과 이미지",
+  "settings_tool_images_description": "도구 결과 내에 저장된 인라인 이미지.",
+  "settings_search_keywords_tool_images": "이미지 도구 결과 제거 정리 페이로드 바이트 저장소",
+  "settings_image_cleanup_intro": "인라인 이미지 페이로드가 포함된 저장된 도구 결과를 미리 보고, 해당 페이로드를 읽기 쉬운 자리 표시자로 교체합니다.",
+  "settings_image_cleanup_project_label": "프로젝트 포함",
+  "settings_image_cleanup_project_placeholder": "모든 프로젝트",
+  "settings_image_cleanup_before_label": "종료 날짜 이전",
+  "settings_image_cleanup_before_placeholder": "YYYY-MM-DD",
+  "settings_image_cleanup_preview": "미리 보기",
+  "settings_image_cleanup_previewing": "미리 보는 중…",
+  "settings_image_cleanup_preview_failed": "미리 보기에 실패했습니다.",
+  "settings_image_cleanup_unavailable": "이미지 제거는 이 기기의 로컬 아카이브에 대해서만 실행됩니다.",
+  "settings_image_cleanup_proxy_denied": "이미지 제거는 프록시나 포트 포워딩이 아니라 이 컴퓨터에서 직접 연 AgentsView에서 실행해야 합니다.",
+  "settings_image_cleanup_read_only": "이 아카이브는 읽기 전용이므로 저장된 행을 변경할 수 없습니다.",
+  "settings_image_cleanup_empty": "이 선택 항목의 저장된 도구 결과에는 인라인 이미지 페이로드가 없습니다.",
+  "settings_image_cleanup_sessions": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel}개 세션 선택됨",
+        "countPlural=other": "{countLabel}개 세션 선택됨"
+      }
+    }
+  ],
+  "settings_image_cleanup_payloads": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "이미지 페이로드 {countLabel}개",
+        "countPlural=other": "이미지 페이로드 {countLabel}개"
+      }
+    }
+  ],
+  "settings_image_cleanup_by_project": "프로젝트별",
+  "settings_image_cleanup_column_project": "프로젝트",
+  "settings_image_cleanup_column_sessions": "세션",
+  "settings_image_cleanup_column_payloads": "페이로드",
+  "settings_image_cleanup_column_stored": "저장됨",
+  "settings_image_cleanup_column_decoded": "디코딩됨",
+  "settings_image_cleanup_apply": "이미지 페이로드 제거",
+  "settings_image_cleanup_applying": "제거 중…",
+  "settings_image_cleanup_apply_failed": "이미지 제거가 완료되지 않았습니다. 일부 세션이 이미 변경되었을 수 있습니다. 다시 시도하기 전에 미리 보기를 다시 실행하세요.",
+  "settings_image_cleanup_busy": "다른 아카이브 유지 관리 작업이 이미 실행 중입니다. 완료된 후 다시 시도하세요.",
+  "settings_image_cleanup_confirm_title": "저장된 이미지 페이로드를 제거하시겠습니까?",
+  "settings_image_cleanup_confirm_close": "닫기",
+  "settings_image_cleanup_confirm_scope": "정리는 시작 시 이 필터와 일치하는 모든 세션을 포함하므로 이 미리 보기 이후에 새로운 일치 콘텐츠가 추가될 수 있습니다.",
+  "settings_image_cleanup_confirm_body": "이 작업은 선택된 저장 도구 결과를 제자리에서 다시 쓰며 취소할 수 없습니다. 공급자 전사 및 독립 이미지 파일은 변경되지 않습니다.",
+  "settings_image_cleanup_confirm_action": "제거",
+  "settings_image_cleanup_cancel": "취소",
+  "settings_image_cleanup_applied": "이미지 제거가 완료되었습니다.",
+  "settings_image_cleanup_changed": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel}개 세션 변경됨",
+        "countPlural=other": "{countLabel}개 세션 변경됨"
+      }
+    }
+  ],
+  "settings_image_cleanup_compact_note": "페이로드를 제거하면 저장된 행이 다시 작성됩니다. agentsview db compact를 실행할 때까지 아카이브 파일 크기는 유지됩니다.",
+  "appearance_render_unknown_xml_blocks": "알 수 없는 XML 블록을 미리 서식이 지정된 텍스트로 표시",
+  "go_to_session_title": "세션으로 이동",
+  "go_to_session_input_label": "세션 ID 또는 UUID",
+  "go_to_session_placeholder": "세션 ID 또는 UUID 붙여넣기",
+  "go_to_session_submit": "세션 열기",
+  "go_to_session_close": "세션으로 이동 닫기",
+  "go_to_session_empty": "세션 ID 또는 UUID를 입력하세요.",
+  "go_to_session_invalid": "세션 ID 또는 UUID를 입력하세요.",
+  "go_to_session_not_found": "일치하는 세션 ID 또는 UUID가 없습니다.",
+  "go_to_session_ambiguous": "여러 세션 ID 또는 UUID가 일치합니다. 기존 링크에서 원하는 세션을 여세요.",
+  "go_to_session_capped": "일치하는 세션 ID 또는 UUID가 너무 많습니다. 기존 링크에서 원하는 세션을 여세요.",
+  "go_to_session_failed": "세션을 조회하지 못했습니다. 다시 시도하세요.",
+  "shortcuts_go_to_session": "찾기를 닫았을 때 세션으로 이동"
 }

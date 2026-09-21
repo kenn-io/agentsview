@@ -1,0 +1,166 @@
+[
+  {
+    "id": "msg_087646cec001ChLUf2s5e13cwb",
+    "type": "user",
+    "seq": 4,
+    "time_created": 1788977900935,
+    "time_updated": 1788977900936,
+    "data": {
+      "time": {
+        "created": 1788977900935
+      },
+      "text": "",
+      "files": [
+        {
+          "data": "YWxwaGEKYmV0YQpnYW1tYQo=",
+          "mime": "text/plain",
+          "source": {
+            "type": "inline"
+          },
+          "name": "input.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "msg_087646d910014EDmDn4tFlGAvz",
+    "type": "assistant",
+    "seq": 7,
+    "time_created": 1788977908898,
+    "time_updated": 1788977910074,
+    "data": {
+      "time": {
+        "created": 1788977908898,
+        "streamed": 1788977910068,
+        "completed": 1788977910073
+      },
+      "agent": "build",
+      "model": {
+        "id": "big-pickle",
+        "providerID": "opencode",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "reasoning",
+          "text": "The user mentions an attached file `input.txt` with some content. Let me read it to see what's there.",
+          "state": {
+            "reasoningField": "reasoning_content"
+          },
+          "time": {
+            "created": 1788977908900,
+            "completed": 1788977910064
+          }
+        },
+        {
+          "type": "tool",
+          "id": "call_31502d9df620438cad0c49c7",
+          "name": "read",
+          "executed": false,
+          "state": {
+            "status": "completed",
+            "input": {
+              "path": "/workspace/project-a/input.txt"
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "Read file /workspace/project-a/input.txt, lines 1-3\n1: alpha\n2: beta\n3: gamma"
+              }
+            ],
+            "metadata": {
+              "truncated": false
+            }
+          },
+          "time": {
+            "created": 1788977909397,
+            "ran": 1788977910066,
+            "completed": 1788977910072
+          }
+        }
+      ],
+      "finish": "tool-calls",
+      "rawFinish": "tool_calls",
+      "cost": 0,
+      "tokens": {
+        "input": 6879,
+        "output": 88,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    }
+  },
+  {
+    "id": "msg_0876491410019THNbj0ohVHX2E",
+    "type": "assistant",
+    "seq": 17,
+    "time_created": 1788977913534,
+    "time_updated": 1788977914494,
+    "data": {
+      "time": {
+        "created": 1788977913534,
+        "streamed": 1788977914493,
+        "completed": 1788977914493
+      },
+      "agent": "build",
+      "model": {
+        "id": "big-pickle",
+        "providerID": "opencode",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "reasoning",
+          "text": "The file contains three lines: \"alpha\", \"beta\", and \"gamma\". The user shared the file but hasn't asked me to do anything specific with it. Let me ask what they'd like me to do.",
+          "state": {
+            "reasoningField": "reasoning_content"
+          },
+          "time": {
+            "created": 1788977913536,
+            "completed": 1788977914490
+          }
+        },
+        {
+          "type": "text",
+          "text": "The file `input.txt` contains three lines:\n\n1. `alpha`\n2. `beta`\n3. `gamma`\n\nWhat would you like me to do with it?"
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "stop",
+      "cost": 0,
+      "tokens": {
+        "input": 196,
+        "output": 82,
+        "reasoning": 0,
+        "cache": {
+          "read": 6848,
+          "write": 0
+        }
+      }
+    }
+  },
+  {
+    "id": "msg_0876492bb001rciH4Bj1iAeb7Q",
+    "type": "compaction",
+    "seq": 25,
+    "time_created": 1788977914495,
+    "time_updated": 1788977918734,
+    "data": {
+      "time": {
+        "created": 1788977914495
+      },
+      "status": "completed",
+      "reason": "manual",
+      "model": {
+        "id": "big-pickle",
+        "providerID": "opencode",
+        "variant": "default"
+      },
+      "summary": "## Objective\n- The user shared a file `input.txt` containing three lines: `alpha`, `beta`, `gamma`. No specific task has been assigned yet.\n\n## Requirements\n- (none)\n\n## Decisions\n- (none)\n\n## Work State\n### Completed\n- Read and displayed the contents of `input.txt` (three lines: alpha, beta, gamma).\n\n### Active\n- (none)\n\n### Blocked\n- (none)\n\n## Next Move\n1. Await user instructions on what to do with `input.txt`.\n\n## Relevant Files\n- `input.txt`: Contains three lines \u2014 alpha, beta, gamma.\n\n## Important Context\n- The user was asked what they'd like done with the file but has not yet responded with a task.",
+      "recent": ""
+    }
+  }
+]

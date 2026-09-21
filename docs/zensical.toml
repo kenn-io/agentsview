@@ -28,6 +28,7 @@ nav = [
   {"Quality" = "quality.md"},
   {"CLI Reference" = "commands.md"},
   {"Session Export" = "session-export.md"},
+  {"Conversation Export" = "conversation-export.md"},
   {"Reporting Export" = "reporting-export.md"},
   {"Stats" = "stats.md"},
   {"Session API" = "session-api.md"},
@@ -40,6 +41,7 @@ nav = [
   {"PostgreSQL Sync" = "pg-sync.md"},
   {"Hosted Raw Sync" = "hosted-raw-sync.md"},
   {"DuckDB Mirror" = "duckdb.md"},
+  {"ClickHouse Sync" = "clickhouse-sync.md"},
 ]
 
 [project.extra]

@@ -3,7 +3,6 @@
 package duckdb
 
 import (
-	"context"
 	"fmt"
 	"testing"
 
@@ -11,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // newUnitsStore syncs the given SQLite session batch into a fresh in-memory
@@ -18,11 +18,12 @@ import (
 // sync-from-SQLite seeding path for conversation-unit derivation tests.
 func newUnitsStore(t *testing.T, writes []db.SessionBatchWrite) *Store {
 	t.Helper()
-	ctx := context.Background()
+
+	ctx := t.Context()
 	local := newLocalDB(t)
-	_, err := local.WriteSessionBatchAtomic(writes)
+	_, err := local.WriteSessionBatchAtomic(ctx, writes)
 	require.NoError(t, err)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -93,7 +94,7 @@ func TestDuckSearchContentSubstringDerivedRunRange(t *testing.T) {
 		ReplaceMessages: true,
 	}})
 
-	ctx := context.Background()
+	ctx := t.Context()
 	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "RUNHIT", Mode: "substring",
 		Sources: []string{"messages"}, IncludeOneShot: true, Limit: 50,
@@ -149,7 +150,7 @@ func TestDuckSearchContentSidechainRunSubordinate(t *testing.T) {
 		ReplaceMessages: true,
 	}})
 
-	ctx := context.Background()
+	ctx := t.Context()
 	side, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "SIDEHIT", Mode: "substring",
 		Sources: []string{"messages"}, IncludeOneShot: true, Limit: 50,
@@ -202,7 +203,7 @@ func TestDuckSearchContentSubagentLineage(t *testing.T) {
 		},
 	})
 
-	ctx := context.Background()
+	ctx := t.Context()
 	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "SUBHIT", Mode: "substring",
 		Sources: []string{"messages"}, IncludeChildren: true,
@@ -240,7 +241,7 @@ func TestDuckSearchContentToolDerivedRunRange(t *testing.T) {
 		ReplaceMessages: true,
 	}})
 
-	ctx := context.Background()
+	ctx := t.Context()
 	in, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "TOOLHIT", Mode: "substring",
 		Sources: []string{"tool_input"}, IncludeOneShot: true, Limit: 50,
@@ -311,7 +312,7 @@ func TestDuckSearchContentToolResultEventsDerived(t *testing.T) {
 		},
 	})
 	// Orphan: an event at ordinal 7 with no message row behind it.
-	_, err := store.DB().Exec(`
+	_, err := store.DB().ExecContext(t.Context(), `
 		INSERT INTO tool_result_events (
 			session_id, tool_call_message_ordinal, call_index,
 			tool_use_id, source, status, content, content_length, event_index
@@ -319,7 +320,7 @@ func TestDuckSearchContentToolResultEventsDerived(t *testing.T) {
 		"duck-ev-orph", "ORPHHIT event content", len("ORPHHIT event content"))
 	require.NoError(t, err, "insert orphan event")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	orph, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "ORPHHIT", Mode: "substring",
 		Sources: []string{"tool_result"}, IncludeChildren: true,
@@ -362,7 +363,7 @@ func TestDuckSearchContentRegexDerivedRange(t *testing.T) {
 		ReplaceMessages: true,
 	}})
 
-	ctx := context.Background()
+	ctx := t.Context()
 	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: `RXHIT [a-z]+`, Mode: "regex",
 		Sources: []string{"messages"}, IncludeOneShot: true, Limit: 50,
@@ -388,7 +389,7 @@ func TestDuckSearchContentFTSDerivedRange(t *testing.T) {
 		ReplaceMessages: true,
 	}})
 
-	ctx := context.Background()
+	ctx := t.Context()
 	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "ftshit", Mode: "fts",
 		Sources: []string{"messages"}, IncludeOneShot: true, Limit: 50,
@@ -447,7 +448,7 @@ func TestDuckSearchContentDenseFlowDerivedRanges(t *testing.T) {
 	require.GreaterOrEqual(t, anchorCount, db.UnitBoundsFlowFactor,
 		"single-session page must clear the dense-flow gate")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "DFHIT", Mode: "substring",
 		Sources: []string{"messages"}, IncludeOneShot: true,
@@ -494,7 +495,7 @@ func TestDuckSearchContentMultiRunReducerParity(t *testing.T) {
 		ReplaceMessages: true,
 	}})
 
-	ctx := context.Background()
+	ctx := t.Context()
 	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "PARHIT", Mode: "substring",
 		Sources: []string{"messages"}, IncludeOneShot: true, Limit: 50,

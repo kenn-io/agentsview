@@ -4,9 +4,11 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -59,7 +61,7 @@ type cachedCheck struct {
 
 // CheckForUpdate checks if a newer version is available.
 // Uses a 1-hour cache to avoid hitting the GitHub API often.
-func CheckForUpdate(
+func CheckForUpdate(ctx context.Context,
 	currentVersion string,
 	forceCheck bool,
 	cacheDir string,
@@ -75,7 +77,7 @@ func CheckForUpdate(
 		}
 	}
 
-	tag, err := resolveLatestTag(githubLatestReleaseURL)
+	tag, err := resolveLatestTag(ctx, githubLatestReleaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("check for updates: %w", err)
 	}
@@ -106,7 +108,7 @@ func CheckForUpdate(
 	// HEAD the asset to confirm it exists for this platform. The previous
 	// API-based code returned "no release asset for OS/ARCH" up front; now
 	// that we construct the URL ourselves, we have to verify it resolves.
-	size, err := fetchContentLength(downloadURL)
+	size, err := fetchContentLength(ctx, downloadURL)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"no release asset for %s/%s: %w",
@@ -114,7 +116,7 @@ func CheckForUpdate(
 		)
 	}
 
-	checksum, _ := fetchChecksumFromFile(checksumsURL, assetName)
+	checksum, _ := fetchChecksumFromFile(ctx, checksumsURL, assetName)
 
 	return &UpdateInfo{
 		CurrentVersion: currentVersion,
@@ -128,7 +130,7 @@ func CheckForUpdate(
 }
 
 // PerformUpdate downloads and installs the update.
-func PerformUpdate(
+func PerformUpdate(ctx context.Context,
 	info *UpdateInfo,
 	progressFn func(downloaded, total int64),
 ) error {
@@ -147,7 +149,7 @@ func PerformUpdate(
 	defer os.RemoveAll(tempDir)
 
 	archivePath := filepath.Join(tempDir, info.AssetName)
-	downloadChecksum, err := downloadFile(
+	downloadChecksum, err := downloadFile(ctx,
 		info.DownloadURL, archivePath, info.Size, progressFn,
 	)
 	if err != nil {
@@ -210,9 +212,7 @@ func installFromArchiveTo(
 	precomputedChecksum string,
 ) error {
 	if expectedChecksum == "" {
-		return fmt.Errorf(
-			"empty checksum - refusing unverified binary",
-		)
+		return errors.New("empty checksum - refusing unverified binary")
 	}
 
 	checksum := precomputedChecksum
@@ -309,7 +309,7 @@ func installBinaryTo(srcPath, dstPath string) error {
 		if movedAside {
 			if rbErr := os.Rename(backupPath, dstPath); rbErr != nil {
 				return fmt.Errorf(
-					"install: %w (rollback also failed: %v)",
+					"install: %w (rollback also failed: %w)",
 					err, rbErr,
 				)
 			}
@@ -327,7 +327,10 @@ func installBinaryTo(srcPath, dstPath string) error {
 // executable. Returns true if dstPath was moved.
 func movePreviousAside(dstPath, backupPath string) (bool, error) {
 	if _, err := os.Stat(dstPath); err != nil {
-		return false, nil
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("checking installed executable: %w", err)
 	}
 	if err := os.Rename(dstPath, backupPath); err != nil {
 		return false, fmt.Errorf("backup: %w", err)
@@ -338,14 +341,14 @@ func movePreviousAside(dstPath, backupPath string) (bool, error) {
 // resolveLatestTag follows the /releases/latest 302 redirect to
 // /releases/tag/<tag> and returns the tag. Using the HTML endpoint
 // avoids api.github.com's 60-req/hr unauthenticated rate limit.
-func resolveLatestTag(url string) (string, error) {
+func resolveLatestTag(ctx context.Context, url string) (string, error) {
 	client := &http.Client{
 		Timeout: 30 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 	}
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", err
 	}
@@ -387,9 +390,9 @@ func resolveLatestTag(url string) (string, error) {
 // fetchContentLength does a HEAD request and returns the Content-Length
 // of the eventual asset (following redirects to the S3 backend).
 // Returns 0 if the size can't be determined; callers degrade gracefully.
-func fetchContentLength(url string) (int64, error) {
+func fetchContentLength(ctx context.Context, url string) (int64, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
-	req, err := http.NewRequest("HEAD", url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -412,12 +415,17 @@ func fetchContentLength(url string) (int64, error) {
 	return resp.ContentLength, nil
 }
 
-func downloadFile(
+func downloadFile(ctx context.Context,
 	url, dest string,
 	totalSize int64,
 	progressFn func(downloaded, total int64),
 ) (string, error) {
-	resp, err := http.Get(url) //nolint:gosec
+	client := &http.Client{Timeout: 10 * time.Minute}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -539,18 +547,18 @@ func extractTarGz(archivePath, destDir string) error {
 // sanitizePath validates a path to prevent directory traversal.
 func sanitizePath(destDir, name string) (string, error) {
 	if strings.HasPrefix(name, "/") {
-		return "", fmt.Errorf("absolute path not allowed")
+		return "", errors.New("absolute path not allowed")
 	}
 
 	cleanName := filepath.Clean(name)
 	if filepath.IsAbs(cleanName) {
-		return "", fmt.Errorf("absolute path not allowed")
+		return "", errors.New("absolute path not allowed")
 	}
 	if strings.HasPrefix(cleanName, "..") ||
 		strings.Contains(
 			cleanName, string(filepath.Separator)+"..",
 		) {
-		return "", fmt.Errorf("path traversal not allowed")
+		return "", errors.New("path traversal not allowed")
 	}
 
 	target := filepath.Join(destDir, cleanName)
@@ -565,7 +573,7 @@ func sanitizePath(destDir, name string) (string, error) {
 	if !strings.HasPrefix(
 		absTarget, absDestDir+string(filepath.Separator),
 	) && absTarget != absDestDir {
-		return "", fmt.Errorf("path escapes destination directory")
+		return "", errors.New("path escapes destination directory")
 	}
 	return target, nil
 }
@@ -651,11 +659,15 @@ func copyFile(src, dst string) error {
 	return out.Close()
 }
 
-func fetchChecksumFromFile(
+func fetchChecksumFromFile(ctx context.Context,
 	url, assetName string,
 ) (string, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Get(url) //nolint:gosec
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}

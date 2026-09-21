@@ -1,7 +1,6 @@
 package git
 
 import (
-	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,7 +24,7 @@ func skipIfNoGit(t *testing.T) {
 // Env overrides let callers control author identity per commit.
 func gitRun(t *testing.T, repo string, env []string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	cmd := exec.CommandContext(t.Context(), "git", args...)
 	cmd.Dir = repo
 	cmd.Env = append(os.Environ(), env...)
 	out, err := cmd.CombinedOutput()
@@ -104,7 +103,7 @@ func TestAggregateLog_CountsCommitsLOCAndFiles(t *testing.T) {
 
 	// Use a wide window — all commits are "now".
 	got, err := AggregateLog(
-		context.Background(),
+		t.Context(),
 		repo, "test@example.com",
 		"1970-01-01T00:00:00Z", "2099-01-01T00:00:00Z",
 	)
@@ -135,7 +134,7 @@ func TestAggregateLog_EmptyWindowReturnsZero(t *testing.T) {
 
 	// Window in the distant past — no commits fall inside.
 	got, err := AggregateLog(
-		context.Background(),
+		t.Context(),
 		repo, "test@example.com",
 		"1970-01-01T00:00:00Z", "1970-01-02T00:00:00Z",
 	)
@@ -151,7 +150,7 @@ func TestAggregateLog_UnknownAuthorReturnsZero(t *testing.T) {
 	commitAs(t, repo, "test@example.com", "Test User", "c1")
 
 	got, err := AggregateLog(
-		context.Background(),
+		t.Context(),
 		repo, "nobody@example.invalid",
 		"1970-01-01T00:00:00Z", "2099-01-01T00:00:00Z",
 	)
@@ -165,7 +164,7 @@ func TestAggregateLog_BadRepoReturnsError(t *testing.T) {
 	notARepo := t.TempDir()
 
 	_, err := AggregateLog(
-		context.Background(),
+		t.Context(),
 		notARepo, "test@example.com",
 		"1970-01-01T00:00:00Z", "2099-01-01T00:00:00Z",
 	)
@@ -182,7 +181,7 @@ func TestAggregateLog_EmptyRepoReturnsZero(t *testing.T) {
 	repo := initRepo(t) // creates the repo but never commits
 
 	got, err := AggregateLog(
-		context.Background(),
+		t.Context(),
 		repo, "test@example.com",
 		"1970-01-01T00:00:00Z", "2099-01-01T00:00:00Z",
 	)
@@ -213,7 +212,7 @@ func TestAggregateLog_UsesGlobalGitConfig(t *testing.T) {
 	commitAs(t, repo, "test@example.com", "Test User", "c1")
 
 	got, err := AggregateLog(
-		context.Background(),
+		t.Context(),
 		repo, "test@example.com",
 		"1970-01-01T00:00:00Z", "2099-01-01T00:00:00Z",
 	)
@@ -232,7 +231,7 @@ func TestAuthorEmail_LocalConfig(t *testing.T) {
 	gitRun(t, repo, nil, "init", "-q", "-b", "main")
 	gitRun(t, repo, nil, "config", "user.email", "local@example.com")
 
-	got := AuthorEmail(context.Background(), repo)
+	got := AuthorEmail(t.Context(), repo)
 	assert.Equal(t, "local@example.com", got, "AuthorEmail")
 }
 
@@ -248,7 +247,7 @@ func TestAuthorEmail_FallsBackToGlobal(t *testing.T) {
 	t.Setenv("GIT_CONFIG_GLOBAL", globalCfg)
 
 	// Seed the global config with our expected email.
-	setGlobal := exec.Command("git", "config", "--global", "user.email", "global@example.com")
+	setGlobal := exec.CommandContext(t.Context(), "git", "config", "--global", "user.email", "global@example.com")
 	setGlobal.Env = append(os.Environ(),
 		"HOME="+home,
 		"XDG_CONFIG_HOME="+filepath.Join(home, ".config"),
@@ -259,7 +258,7 @@ func TestAuthorEmail_FallsBackToGlobal(t *testing.T) {
 
 	repo := t.TempDir()
 	// Init with no local user.email — `AuthorEmail` must fall through to global.
-	initCmd := exec.Command("git", "init", "-q", "-b", "main")
+	initCmd := exec.CommandContext(t.Context(), "git", "init", "-q", "-b", "main")
 	initCmd.Dir = repo
 	initCmd.Env = append(os.Environ(),
 		"HOME="+home,
@@ -269,7 +268,7 @@ func TestAuthorEmail_FallsBackToGlobal(t *testing.T) {
 	out, err = initCmd.CombinedOutput()
 	require.NoError(t, err, "git init: %s", out)
 
-	got := AuthorEmail(context.Background(), repo)
+	got := AuthorEmail(t.Context(), repo)
 	assert.Equal(t, "global@example.com", got, "AuthorEmail (global fallback)")
 }
 
@@ -299,7 +298,7 @@ func TestAuthorEmail_UsesIncludeIfGitdir(t *testing.T) {
 		0o644,
 	), "write global config")
 
-	got := AuthorEmail(context.Background(), repo)
+	got := AuthorEmail(t.Context(), repo)
 	assert.Equal(t, "includeif@example.com", got, "AuthorEmail (includeIf.gitdir)")
 }
 

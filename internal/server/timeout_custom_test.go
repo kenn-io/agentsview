@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -31,11 +32,13 @@ func TestWithTimeout(t *testing.T) {
 			operation: "GET /test",
 			timeout:   10 * time.Millisecond,
 			handler: func(w http.ResponseWriter, r *http.Request) {
-				time.Sleep(50 * time.Millisecond)
+				<-r.Context().Done()
 				w.WriteHeader(http.StatusOK)
 				w.Write([]byte("too slow"))
 			},
 			assertResponse: func(t *testing.T, resp *http.Response) {
+				t.Helper()
+
 				assertTimeoutResponse(
 					t, resp,
 					"GET /test",
@@ -63,32 +66,41 @@ func TestWithTimeout(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			s := newTestServerMinimal(t, tt.timeout)
-			wrapped := s.withTimeout(tt.operation, tt.handler)
+			// Virtual time keeps the deadline and handler delay independent of host scheduling.
+			synctest.Test(t, func(t *testing.T) {
+				s := newTestServerMinimal(t, tt.timeout)
+				handlerDone := make(chan struct{})
+				wrapped := s.withTimeout(tt.operation, func(w http.ResponseWriter, r *http.Request) {
+					defer close(handlerDone)
+					tt.handler(w, r)
+				})
+				// A timeout returns before the handler finishes; join it while time can still advance.
+				defer func() { <-handlerDone }()
 
-			req := httptest.NewRequest(http.MethodGet, "/", nil)
-			w := httptest.NewRecorder()
-			wrapped.ServeHTTP(w, req)
+				req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
+				w := httptest.NewRecorder()
+				wrapped.ServeHTTP(w, req)
 
-			resp := w.Result()
-			defer resp.Body.Close()
+				resp := w.Result()
+				defer resp.Body.Close()
 
-			if tt.assertResponse != nil {
-				tt.assertResponse(t, resp)
-				return
-			}
+				if tt.assertResponse != nil {
+					tt.assertResponse(t, resp)
+					return
+				}
 
-			assertRecorderStatus(t, w, tt.wantStatus)
+				assertRecorderStatus(t, w, tt.wantStatus)
 
-			if tt.wantHeaderKey != "" {
-				assert.Equal(t, tt.wantHeaderVal,
-					resp.Header.Get(tt.wantHeaderKey),
-					"header %s", tt.wantHeaderKey)
-			}
+				if tt.wantHeaderKey != "" {
+					assert.Equal(t, tt.wantHeaderVal,
+						resp.Header.Get(tt.wantHeaderKey),
+						"header %s", tt.wantHeaderKey)
+				}
 
-			body, err := io.ReadAll(resp.Body)
-			require.NoError(t, err)
-			assert.Equal(t, tt.wantBody, string(body))
+				body, err := io.ReadAll(resp.Body)
+				require.NoError(t, err)
+				assert.Equal(t, tt.wantBody, string(body))
+			})
 		})
 	}
 }

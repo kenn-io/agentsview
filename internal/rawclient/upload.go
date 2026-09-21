@@ -1,6 +1,7 @@
 package rawclient
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net/url"
 	"strconv"
 
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/rawsync"
 )
@@ -16,17 +18,6 @@ import (
 // maxUploadOffsetConflicts bounds consecutive offset-conflict recoveries so a
 // server that keeps rejecting cannot loop the client forever.
 const maxUploadOffsetConflicts = 8
-
-type uploadStartResponse struct {
-	UploadID string            `json:"upload_id,omitempty"`
-	Object   rawsync.ObjectRef `json:"object"`
-	Offset   int64             `json:"offset"`
-	Complete bool              `json:"complete"`
-}
-
-type uploadPatchResponse struct {
-	uploadStartResponse
-}
 
 // MissingObjects asks the server which of objects it does not already hold
 // for provider and returns that subset in request order.
@@ -40,7 +31,7 @@ func (c *Client) MissingObjects(
 	for _, object := range objects {
 		canonical, err := rawsync.NewObjectRef(object.SHA256, object.Length)
 		if err != nil || canonical != object {
-			return nil, fmt.Errorf("rawclient: invalid missing object request")
+			return nil, errors.New("rawclient: invalid missing object request")
 		}
 		if _, duplicate := positions[object]; duplicate {
 			continue
@@ -48,31 +39,28 @@ func (c *Client) MissingObjects(
 		positions[object] = len(unique)
 		unique = append(unique, object)
 	}
-	body := struct {
-		Provider parser.AgentType    `json:"provider"`
-		Objects  []rawsync.ObjectRef `json:"objects"`
-	}{Provider: provider, Objects: unique}
-	resp, err := c.do(ctx, http.MethodPost, "/api/v1/raw-sync/objects/missing", nil, body)
+	response, err := c.do(ctx, func(api *apiclient.Client) (*apiclient.PostAPIV1RawSyncObjectsMissingResp, error) {
+		return api.PostAPIV1RawSyncObjectsMissingWithResponse(ctx, &apiclient.PostAPIV1RawSyncObjectsMissingRequestOptions{Body: &apiclient.RawSyncMissingObjectsInputBody{Provider: string(provider), Objects: unique}})
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-	var out struct {
-		Missing []rawsync.ObjectRef `json:"missing"`
+	if len(response.Body) == 0 {
+		return nil, io.ErrUnexpectedEOF
 	}
-	if err := jsonDecode(resp.Body, &out); err != nil {
-		return nil, fmt.Errorf("rawclient: decode missing objects: %w", err)
-	}
+	out := response.JSON200
 	lastPosition := -1
+	missing := make([]rawsync.ObjectRef, 0, len(out.Missing))
 	for _, object := range out.Missing {
 		canonical, err := rawsync.NewObjectRef(object.SHA256, object.Length)
 		position, requested := positions[object]
 		if err != nil || canonical != object || !requested || position <= lastPosition {
-			return nil, fmt.Errorf("rawclient: invalid missing objects response")
+			return nil, errors.New("rawclient: invalid missing objects response")
 		}
 		lastPosition = position
+		missing = append(missing, object)
 	}
-	return out.Missing, nil
+	return missing, nil
 }
 
 // UploadObject transfers one immutable object through a resumable upload
@@ -89,21 +77,14 @@ func (c *Client) UploadObject(
 	object rawsync.ObjectRef,
 	content io.ReaderAt,
 ) error {
-	body := struct {
-		Provider parser.AgentType  `json:"provider"`
-		Object   rawsync.ObjectRef `json:"object"`
-	}{Provider: provider, Object: object}
-	resp, err := c.do(ctx, http.MethodPost, "/api/v1/raw-sync/uploads", nil, body)
+	response, err := c.do(ctx, func(api *apiclient.Client) (*apiclient.PostAPIV1RawSyncUploadsResp, error) {
+		return api.PostAPIV1RawSyncUploadsWithResponse(ctx, &apiclient.PostAPIV1RawSyncUploadsRequestOptions{Body: &apiclient.RawSyncUploadStartInputBody{Provider: string(provider), Object: object}})
+	})
 	if err != nil {
 		return err
 	}
-	var session uploadStartResponse
-	if err := jsonDecode(resp.Body, &session); err != nil {
-		resp.Body.Close()
-		return fmt.Errorf("rawclient: decode upload session: %w", err)
-	}
-	resp.Body.Close()
-	if err := validateUploadIdentity(session, object, ""); err != nil {
+	session := response.JSON200
+	if err := validateUploadIdentity(*session, object, ""); err != nil {
 		return err
 	}
 	if err := validateUploadProgress(session.Offset, session.Complete, object.Length); err != nil {
@@ -125,7 +106,7 @@ func (c *Client) UploadObject(
 			return fmt.Errorf("rawclient: read object bytes at %d: %w", offset, err)
 		}
 		next, complete, err := c.appendChunk(
-			ctx, session.UploadID, object, offset, chunk,
+			ctx, *session.UploadID, object, offset, chunk,
 		)
 		if err != nil {
 			if apiErr, ok := errors.AsType[*APIError](err); ok &&
@@ -162,7 +143,7 @@ func (c *Client) UploadObject(
 	// PATCH at the confirmed offset asks the server to finalize; custody is
 	// not accepted until it answers complete.
 	next, complete, err := c.appendChunk(
-		ctx, session.UploadID, object, offset, nil,
+		ctx, *session.UploadID, object, offset, nil,
 	)
 	if err != nil {
 		return err
@@ -184,24 +165,33 @@ func (c *Client) appendChunk(
 	offset int64,
 	chunk []byte,
 ) (int64, bool, error) {
-	resp, err := c.doOctet(ctx, http.MethodPatch,
-		"/api/v1/raw-sync/uploads/"+url.PathEscape(uploadID), offset, chunk)
+	if int64(len(chunk)) > c.chunkBytes {
+		return 0, false, fmt.Errorf("rawclient: chunk of %d bytes exceeds upload chunk size %d", len(chunk), c.chunkBytes)
+	}
+	response, err := c.do(ctx, func(api *apiclient.Client) (*apiclient.PatchAPIV1RawSyncUploadsUploadIDResp, error) {
+		return api.PatchAPIV1RawSyncUploadsUploadIDWithResponse(ctx, &apiclient.PatchAPIV1RawSyncUploadsUploadIDRequestOptions{
+			PathParams: &apiclient.PatchAPIV1RawSyncUploadsUploadIDPath{UploadID: url.PathEscape(uploadID)},
+		}, func(_ context.Context, req *http.Request) error {
+			req.Header.Set("Upload-Offset", strconv.FormatInt(offset, 10))
+			req.Header.Set("Content-Type", "application/octet-stream")
+			req.Body = io.NopCloser(bytes.NewReader(chunk))
+			req.ContentLength = int64(len(chunk))
+			req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(chunk)), nil }
+			return nil
+		})
+	})
 	if err != nil {
 		return 0, false, err
 	}
-	defer resp.Body.Close()
-	var out uploadPatchResponse
-	if err := jsonDecode(resp.Body, &out); err != nil {
-		return 0, false, fmt.Errorf("rawclient: decode upload append: %w", err)
-	}
-	if err := validateUploadIdentity(out.uploadStartResponse, object, uploadID); err != nil {
+	out := response.JSON200
+	if err := validateUploadIdentity(*out, object, uploadID); err != nil {
 		return 0, false, err
 	}
 	if err := validateUploadProgress(out.Offset, out.Complete, object.Length); err != nil {
 		return 0, false, err
 	}
 	next, complete := out.Offset, out.Complete
-	if headerOffset, headerComplete, ok := uploadProgress(resp.Header); ok {
+	if headerOffset, headerComplete, ok := uploadProgress(response.HTTPResponse.Header); ok {
 		next, complete = headerOffset, headerComplete
 	}
 	if err := validateUploadProgress(next, complete, object.Length); err != nil {
@@ -217,21 +207,21 @@ func (c *Client) appendChunk(
 }
 
 func validateUploadIdentity(
-	response uploadStartResponse,
+	response apiclient.RawSyncUploadResponse,
 	object rawsync.ObjectRef,
 	uploadID string,
 ) error {
-	if response.Object != object {
-		return fmt.Errorf("rawclient: upload response identifies a different object")
+	if response.Object.SHA256 != object.SHA256 || response.Object.Length != object.Length {
+		return errors.New("rawclient: upload response identifies a different object")
 	}
 	if uploadID != "" {
-		if response.UploadID != uploadID {
-			return fmt.Errorf("rawclient: upload response identifies a different upload ID")
+		if response.UploadID == nil || *response.UploadID != uploadID {
+			return errors.New("rawclient: upload response identifies a different upload ID")
 		}
 		return nil
 	}
-	if !response.Complete && response.UploadID == "" {
-		return fmt.Errorf("rawclient: incomplete upload response is missing upload ID")
+	if !response.Complete && (response.UploadID == nil || *response.UploadID == "") {
+		return errors.New("rawclient: incomplete upload response is missing upload ID")
 	}
 	return nil
 }
@@ -266,25 +256,4 @@ func uploadProgress(h http.Header) (offset int64, complete bool, ok bool) {
 		return 0, false, false
 	}
 	return offset, complete, true
-}
-
-// doOctet sends one authenticated octet-stream request carrying the
-// Upload-Offset header, sharing do's unauthorized-retry logic. The chunk must
-// not exceed the client's chunk size, which itself never exceeds
-// rawsync.DefaultUploadChunkBytes.
-func (c *Client) doOctet(
-	ctx context.Context,
-	method string,
-	path string,
-	offset int64,
-	chunk []byte,
-) (*http.Response, error) {
-	if int64(len(chunk)) > c.chunkBytes {
-		return nil, fmt.Errorf("rawclient: chunk of %d bytes exceeds upload chunk size %d",
-			len(chunk), c.chunkBytes)
-	}
-	header := http.Header{}
-	header.Set("Content-Type", "application/octet-stream")
-	header.Set("Upload-Offset", strconv.FormatInt(offset, 10))
-	return c.do(ctx, method, path, header, octetBody{data: chunk})
 }

@@ -120,6 +120,7 @@ func (p *gptmeProvider) parseSession(
 			messages = append(messages, ParsedMessage{
 				Ordinal:       ordinal,
 				Role:          RoleAssistant,
+				SourceSubtype: SourceSubtypeToolResult,
 				Content:       content,
 				Timestamp:     ts,
 				ContentLength: len(content),

@@ -1,7 +1,6 @@
 package remotesync
 
 import (
-	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/json/v2"
@@ -14,7 +13,9 @@ import (
 	"strings"
 	"sync"
 
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
@@ -143,22 +144,11 @@ func (hs HTTPSync) importRoot(
 func (hs HTTPSync) fetchManifest(
 	ctx context.Context, client *http.Client, targets TargetSet,
 ) (Manifest, bool, error) {
-	body, err := json.Marshal(targets)
-	if err != nil {
-		return Manifest{}, false, err
-	}
-	req, err := http.NewRequestWithContext(
-		ctx, http.MethodPost, hs.endpoint("/api/v1/remote-sync/manifest"),
-		bytes.NewReader(body),
-	)
-	if err != nil {
-		return Manifest{}, false, err
-	}
-	hs.authorize(req)
-	SetProtocolHeader(req.Header)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept-Encoding", "gzip")
-	resp, err := client.Do(req)
+	body := generatedTargets(targets)
+	resp, err := apiclient.RawRequest(hs.URL, client, func(api *apiclient.Client) error {
+		_, err := api.PostAPIV1RemoteSyncManifestWithResponse(ctx, &apiclient.PostAPIV1RemoteSyncManifestRequestOptions{Body: &body})
+		return err
+	}, hs.transferHeaders)
 	if err != nil {
 		return Manifest{}, false, err
 	}
@@ -214,27 +204,12 @@ func (hs HTTPSync) downloadIntoMirror(
 		"Extracting %d changed files from %s", len(fetch), hs.Host,
 	)
 	if full {
-		downloadLabel = fmt.Sprintf("Downloading session archive from %s", hs.Host)
-		extractLabel = fmt.Sprintf("Extracting session archive from %s", hs.Host)
+		downloadLabel = "Downloading session archive from " + hs.Host
+		extractLabel = "Extracting session archive from " + hs.Host
 	} else {
 		request.DeltaFiles = fetch
 	}
-	body, err := json.Marshal(request)
-	if err != nil {
-		return err
-	}
-	req, err := http.NewRequestWithContext(
-		ctx, http.MethodPost, hs.endpoint("/api/v1/remote-sync/archive"),
-		bytes.NewReader(body),
-	)
-	if err != nil {
-		return err
-	}
-	hs.authorize(req)
-	SetProtocolHeader(req.Header)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept-Encoding", "gzip")
-	resp, err := client.Do(req)
+	resp, err := hs.requestArchive(ctx, client, request)
 	if err != nil {
 		return err
 	}
@@ -286,15 +261,10 @@ func (hs HTTPSync) fetchTargets(
 	ctx context.Context,
 	client *http.Client,
 ) (TargetSet, error) {
-	req, err := http.NewRequestWithContext(
-		ctx, http.MethodGet, hs.endpoint("/api/v1/remote-sync/targets"), nil,
-	)
-	if err != nil {
-		return TargetSet{}, err
-	}
-	hs.authorize(req)
-	SetProtocolHeader(req.Header)
-	resp, err := client.Do(req)
+	resp, err := apiclient.RawRequest(hs.URL, client, func(api *apiclient.Client) error {
+		_, err := api.GetAPIV1RemoteSyncTargetsWithResponse(ctx, &apiclient.GetAPIV1RemoteSyncTargetsRequestOptions{})
+		return err
+	}, hs.transferHeaders)
 	if err != nil {
 		return TargetSet{}, err
 	}
@@ -321,21 +291,7 @@ func (hs HTTPSync) downloadAndExtract(
 	client *http.Client,
 	targets TargetSet,
 ) (root string, err error) {
-	body, err := json.Marshal(targets)
-	if err != nil {
-		return "", err
-	}
-	req, err := http.NewRequestWithContext(
-		ctx, http.MethodPost, hs.endpoint("/api/v1/remote-sync/archive"), bytes.NewReader(body),
-	)
-	if err != nil {
-		return "", err
-	}
-	hs.authorize(req)
-	SetProtocolHeader(req.Header)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept-Encoding", "gzip")
-	resp, err := client.Do(req)
+	resp, err := hs.requestArchive(ctx, client, ArchiveRequest{TargetSet: targets})
 	if err != nil {
 		return "", err
 	}
@@ -345,7 +301,7 @@ func (hs HTTPSync) downloadAndExtract(
 			return "", err
 		}
 	}
-	downloadLabel := fmt.Sprintf("Downloading session archive from %s", hs.Host)
+	downloadLabel := "Downloading session archive from " + hs.Host
 	archive, err := hs.downloadArchive(ctx, resp, downloadLabel, os.TempDir())
 	if err != nil {
 		return "", err
@@ -380,7 +336,7 @@ func (hs HTTPSync) downloadAndExtract(
 	if err != nil {
 		return "", fmt.Errorf("create temp dir: %w", err)
 	}
-	extractLabel := fmt.Sprintf("Extracting session archive from %s", hs.Host)
+	extractLabel := "Extracting session archive from " + hs.Host
 	if err := archive.extract(ctx, tmpDir, hs.Progress, extractLabel); err != nil {
 		return "", err
 	}
@@ -420,15 +376,46 @@ func (r *progressReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-func (hs HTTPSync) endpoint(path string) string {
-	return strings.TrimRight(hs.URL, "/") + path
+func (hs HTTPSync) transferHeaders(_ context.Context, req *http.Request) error {
+	if hs.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+hs.Token)
+	}
+	SetProtocolHeader(req.Header)
+	if req.Method == http.MethodPost {
+		req.Header.Set("Accept-Encoding", "gzip")
+	}
+	return nil
 }
 
-func (hs HTTPSync) authorize(req *http.Request) {
-	if hs.Token == "" {
-		return
+func generatedProviderPaths(paths map[parser.AgentType][]string) map[string][]string {
+	result := make(map[string][]string, len(paths))
+	for provider, paths := range paths {
+		result[string(provider)] = paths
 	}
-	req.Header.Set("Authorization", "Bearer "+hs.Token)
+	return result
+}
+
+func generatedTargets(targets TargetSet) apiclient.RemotesyncTargetSet {
+	return apiclient.RemotesyncTargetSet{
+		Dirs: generatedProviderPaths(targets.Dirs), Files: generatedProviderPaths(targets.Files),
+		ProviderExtraFiles: generatedProviderPaths(targets.ProviderExtraFiles), ExtraFiles: targets.ExtraFiles,
+		CodexIndexFiles: targets.CodexIndexFiles, ForbiddenRoots: targets.ForbiddenRoots,
+	}
+}
+
+func (hs HTTPSync) requestArchive(ctx context.Context, client *http.Client, request ArchiveRequest) (*http.Response, error) {
+	targets := generatedTargets(request.TargetSet)
+	body := apiclient.RemotesyncArchiveRequest{
+		Dirs: targets.Dirs, Files: targets.Files, ProviderExtraFiles: targets.ProviderExtraFiles,
+		ExtraFiles: targets.ExtraFiles, CodexIndexFiles: targets.CodexIndexFiles, ForbiddenRoots: targets.ForbiddenRoots,
+	}
+	if request.DeltaFiles != nil {
+		body.DeltaFiles = new(request.DeltaFiles)
+	}
+	return apiclient.RawRequest(hs.URL, client, func(api *apiclient.Client) error {
+		_, err := api.PostAPIV1RemoteSyncArchiveWithResponse(ctx, &apiclient.PostAPIV1RemoteSyncArchiveRequestOptions{Body: &body})
+		return err
+	}, hs.transferHeaders)
 }
 
 // StatusError reports a non-2xx response from a remote daemon's

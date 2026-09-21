@@ -14,12 +14,12 @@ func TestEnsureOriginPersists(t *testing.T) {
 
 	database := testDB(t)
 
-	first, err := EnsureOrigin(database)
+	first, err := EnsureOrigin(t.Context(), database)
 	require.NoError(t, err)
 	require.NotEmpty(t, first)
 	require.NotEqual(t, "local", first)
 
-	second, err := EnsureOrigin(database)
+	second, err := EnsureOrigin(t.Context(), database)
 	require.NoError(t, err)
 	assert.Equal(t, first, second)
 }
@@ -29,15 +29,15 @@ func TestAdoptOriginPersistsConfigOrigin(t *testing.T) {
 
 	database := testDB(t)
 
-	require.NoError(t, AdoptOrigin(database, "desk-a1b2c3"))
+	require.NoError(t, AdoptOrigin(t.Context(), database, "desk-a1b2c3"))
 
-	stored, err := StoredOrigin(database)
+	stored, err := StoredOrigin(t.Context(), database)
 	require.NoError(t, err)
 	assert.Equal(t, "desk-a1b2c3", stored)
 
 	// EnsureOrigin and its callers now agree with the adopted origin instead
 	// of generating a divergent DB-only value.
-	ensured, err := EnsureOrigin(database)
+	ensured, err := EnsureOrigin(t.Context(), database)
 	require.NoError(t, err)
 	assert.Equal(t, "desk-a1b2c3", ensured)
 }
@@ -47,10 +47,10 @@ func TestAdoptOriginIsIdempotent(t *testing.T) {
 
 	database := testDB(t)
 
-	require.NoError(t, AdoptOrigin(database, "desk-a1b2c3"))
-	require.NoError(t, AdoptOrigin(database, "desk-a1b2c3"))
+	require.NoError(t, AdoptOrigin(t.Context(), database, "desk-a1b2c3"))
+	require.NoError(t, AdoptOrigin(t.Context(), database, "desk-a1b2c3"))
 
-	stored, err := StoredOrigin(database)
+	stored, err := StoredOrigin(t.Context(), database)
 	require.NoError(t, err)
 	assert.Equal(t, "desk-a1b2c3", stored)
 }
@@ -62,13 +62,13 @@ func TestAdoptOriginOverwritesDivergentDBOrigin(t *testing.T) {
 
 	// Simulate the pre-fix state: the recorder generated a DB-only origin
 	// before the authoritative config origin existed.
-	stale, err := EnsureOrigin(database)
+	stale, err := EnsureOrigin(t.Context(), database)
 	require.NoError(t, err)
 	require.NotEqual(t, "desk-a1b2c3", stale)
 
-	require.NoError(t, AdoptOrigin(database, "desk-a1b2c3"))
+	require.NoError(t, AdoptOrigin(t.Context(), database, "desk-a1b2c3"))
 
-	stored, err := StoredOrigin(database)
+	stored, err := StoredOrigin(t.Context(), database)
 	require.NoError(t, err)
 	assert.Equal(t, "desk-a1b2c3", stored)
 }
@@ -77,11 +77,11 @@ func TestAdoptOriginRepairsInvalidPersistedOrigin(t *testing.T) {
 	t.Parallel()
 
 	database := testDB(t)
-	require.NoError(t, database.SetSyncState(originStateKey, "../outside"))
+	require.NoError(t, database.SetSyncState(t.Context(), originStateKey, "../outside"))
 
-	require.NoError(t, AdoptOrigin(database, "desk-a1b2c3"))
+	require.NoError(t, AdoptOrigin(t.Context(), database, "desk-a1b2c3"))
 
-	stored, err := StoredOrigin(database)
+	stored, err := StoredOrigin(t.Context(), database)
 	require.NoError(t, err)
 	assert.Equal(t, "desk-a1b2c3", stored)
 }
@@ -91,11 +91,11 @@ func TestAdoptOriginRejectsInvalidOrigin(t *testing.T) {
 
 	database := testDB(t)
 
-	err := AdoptOrigin(database, "../outside")
+	err := AdoptOrigin(t.Context(), database, "../outside")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "adopting artifact origin")
 
-	stored, err := StoredOrigin(database)
+	stored, err := StoredOrigin(t.Context(), database)
 	require.NoError(t, err)
 	assert.Empty(t, stored)
 }
@@ -104,9 +104,9 @@ func TestEnsureOriginRejectsInvalidPersistedOrigin(t *testing.T) {
 	t.Parallel()
 
 	database := testDB(t)
-	require.NoError(t, database.SetSyncState(originStateKey, "../outside"))
+	require.NoError(t, database.SetSyncState(t.Context(), originStateKey, "../outside"))
 
-	origin, err := EnsureOrigin(database)
+	origin, err := EnsureOrigin(t.Context(), database)
 	require.Error(t, err)
 	assert.Empty(t, origin)
 	assert.Contains(t, err.Error(), "stored artifact origin")
@@ -128,7 +128,7 @@ func TestEnsureOriginBootstrapsPreExistingLocalSessions(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, pending, "no origin yet: queue triggers stay gated")
 
-	origin, err := EnsureOrigin(database)
+	origin, err := EnsureOrigin(t.Context(), database)
 	require.NoError(t, err)
 	require.NotEmpty(t, origin)
 
@@ -149,7 +149,7 @@ func TestAdoptOriginRequeuesAllExportsOnDivergentAdoption(t *testing.T) {
 	t.Parallel()
 
 	database := testDB(t)
-	require.NoError(t, AdoptOrigin(database, "origin-a1b2c3"))
+	require.NoError(t, AdoptOrigin(t.Context(), database, "origin-a1b2c3"))
 	seedSession(t, database, "sess-1", "alpha")
 	seedSession(t, database, "sess-2", "alpha")
 
@@ -168,7 +168,7 @@ func TestAdoptOriginRequeuesAllExportsOnDivergentAdoption(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, drained)
 
-	require.NoError(t, AdoptOrigin(database, "origin-d4e5f6"))
+	require.NoError(t, AdoptOrigin(ctx, database, "origin-d4e5f6"))
 	pending, err = database.PendingArtifactExports(ctx, 10)
 	require.NoError(t, err)
 	require.Len(t, pending, 2, "divergent adoption re-verifies every owned session")
@@ -193,22 +193,22 @@ func TestAdoptOriginRemovesPublicationsThatBecameDeletedWhileOriginWasInactive(t
 		originA = "origin-a1b2c3"
 		originB = "origin-d4e5f6"
 	)
-	require.NoError(t, AdoptOrigin(database, originA))
+	require.NoError(t, AdoptOrigin(t.Context(), database, originA))
 	seedSession(t, database, "sess-1", "alpha")
 	_, err = ExportToStore(t.Context(), database, store, ExportOptions{Origin: originA})
 	require.NoError(t, err)
 	require.Contains(t, latestStoreCheckpointForTest(t, store, originA).Sessions,
 		originA+"~sess-1")
 
-	require.NoError(t, AdoptOrigin(database, originB))
-	require.NoError(t, database.SoftDeleteSession("sess-1"))
+	require.NoError(t, AdoptOrigin(t.Context(), database, originB))
+	require.NoError(t, database.SoftDeleteSession(t.Context(), "sess-1"))
 	_, err = ExportToStore(t.Context(), database, store, ExportOptions{Origin: originB})
 	require.NoError(t, err)
 	pending, err := database.PendingArtifactExports(t.Context(), 10)
 	require.NoError(t, err)
 	require.Empty(t, pending)
 
-	require.NoError(t, AdoptOrigin(database, originA))
+	require.NoError(t, AdoptOrigin(t.Context(), database, originA))
 	_, err = ExportToStore(t.Context(), database, store, ExportOptions{Origin: originA})
 	require.NoError(t, err)
 	assert.NotContains(t, latestStoreCheckpointForTest(t, store, originA).Sessions,
@@ -229,7 +229,7 @@ func TestOriginRejectionLifecycleRemovesRetriesAndRequeues(t *testing.T) {
 		sessionID  = "sess-1"
 		sessionGID = originA + "~" + sessionID
 	)
-	require.NoError(t, AdoptOrigin(database, originA))
+	require.NoError(t, AdoptOrigin(t.Context(), database, originA))
 	seedSession(t, database, sessionID, "alpha")
 	_, err = ExportToStore(t.Context(), database, store, ExportOptions{
 		Origin: originA,
@@ -238,7 +238,7 @@ func TestOriginRejectionLifecycleRemovesRetriesAndRequeues(t *testing.T) {
 	assert.Contains(t, latestStoreCheckpointForTest(t, store, originA).Sessions,
 		sessionGID)
 
-	require.NoError(t, database.ReplaceSessionMessages(sessionID, []db.Message{
+	require.NoError(t, database.ReplaceSessionMessages(t.Context(), sessionID, []db.Message{
 		{SessionID: sessionID, Ordinal: 0, Role: "user", Content: "one"},
 		{SessionID: sessionID, Ordinal: 1, Role: "assistant", Content: "two"},
 		{SessionID: sessionID, Ordinal: 2, Role: "user", Content: "three"},
@@ -257,7 +257,7 @@ func TestOriginRejectionLifecycleRemovesRetriesAndRequeues(t *testing.T) {
 	require.True(t, ok)
 	assert.Contains(t, rejection.Error, "message count exceeds 2")
 
-	require.NoError(t, database.ReplaceSessionMessages(sessionID, []db.Message{
+	require.NoError(t, database.ReplaceSessionMessages(t.Context(), sessionID, []db.Message{
 		{SessionID: sessionID, Ordinal: 0, Role: "user", Content: "fixed"},
 	}))
 	_, ok, err = database.GetArtifactExportRejection(t.Context(), sessionID)
@@ -271,7 +271,7 @@ func TestOriginRejectionLifecycleRemovesRetriesAndRequeues(t *testing.T) {
 	assert.Contains(t, latestStoreCheckpointForTest(t, store, originA).Sessions,
 		sessionGID)
 
-	require.NoError(t, AdoptOrigin(database, originB))
+	require.NoError(t, AdoptOrigin(t.Context(), database, originB))
 	pending, err := database.PendingArtifactExports(t.Context(), 10)
 	require.NoError(t, err)
 	require.Len(t, pending, 1)
@@ -299,7 +299,7 @@ func TestAdoptOriginBootstrapsPreExistingLocalSessions(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, pending, "no origin yet: queue triggers stay gated")
 
-	require.NoError(t, AdoptOrigin(database, "desk-a1b2c3"))
+	require.NoError(t, AdoptOrigin(t.Context(), database, "desk-a1b2c3"))
 
 	pending, err = database.PendingArtifactExports(t.Context(), 10)
 	require.NoError(t, err)
@@ -309,7 +309,7 @@ func TestAdoptOriginBootstrapsPreExistingLocalSessions(t *testing.T) {
 
 func testDB(t *testing.T) *db.DB {
 	t.Helper()
-	database, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "test.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { database.Close() })
 	return database
@@ -333,8 +333,8 @@ func seedSession(t *testing.T, database *db.DB, id, project string, opts ...func
 	for _, opt := range opts {
 		opt(&sess)
 	}
-	require.NoError(t, database.UpsertSession(sess))
-	require.NoError(t, database.ReplaceSessionMessages(id, []db.Message{
+	require.NoError(t, database.UpsertSession(t.Context(), sess))
+	require.NoError(t, database.ReplaceSessionMessages(t.Context(), id, []db.Message{
 		{SessionID: id, Ordinal: 0, Role: "user", Content: "hello", ContentLength: 5},
 		{SessionID: id, Ordinal: 1, Role: "assistant", Content: "world", ContentLength: 5},
 	}))

@@ -26,12 +26,12 @@ func TestActivityReportCacheExpiresWithoutAnotherCacheOperation(t *testing.T) {
 		},
 	))
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	serveDone := make(chan error, 1)
 	go func() { serveDone <- srv.Serve(listener) }()
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 		defer cancel()
 		require.NoError(t, srv.Shutdown(ctx))
 		require.ErrorIs(t, <-serveDone, http.ErrServerClosed)

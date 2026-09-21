@@ -89,7 +89,7 @@ func TestRankIdentifierBoostRequiresIdentifierShape(t *testing.T) {
 		Status: recall.StatusAccepted,
 	}}, recall.Query{Text: "configuration", Limit: 1})
 	require.Len(t, plain, 1)
-	assert.Equal(t, 0.0, plain[0].Breakdown.IdentifierBoost,
+	assert.InDelta(t, 0.0, plain[0].Breakdown.IdentifierBoost, 1e-9,
 		"plain word should not get identifier boost")
 
 	// An alphanumeric-mix token (utf8) signals a code identifier.
@@ -115,7 +115,7 @@ func TestRankFilenameEntityRequiresPunctuation(t *testing.T) {
 		Text: "where did entries go", Limit: 1,
 	})
 	require.Len(t, noDot, 1)
-	assert.Equal(t, 0.0, noDot[0].Breakdown.EntityBoost,
+	assert.InDelta(t, 0.0, noDot[0].Breakdown.EntityBoost, 1e-9,
 		"punctuation-free query should not match a filename entity")
 
 	// Under-match fix: a filename-only query matches the full-path entity
@@ -130,12 +130,18 @@ func TestRankFilenameEntityRequiresPunctuation(t *testing.T) {
 
 func TestRankAgoWindowUsesAdjacentNumber(t *testing.T) {
 	entries := []recall.Entry{
-		{ID: "anchor", Title: "Database setup", Body: "database setup notes",
-			Status: recall.StatusAccepted, UpdatedAt: "2024-03-15T12:00:00Z"},
-		{ID: "m-three", Title: "Database setup", Body: "database setup notes",
-			Status: recall.StatusAccepted, UpdatedAt: "2024-03-12T12:00:00Z"},
-		{ID: "m-ten", Title: "Database setup", Body: "database setup notes",
-			Status: recall.StatusAccepted, UpdatedAt: "2024-03-05T12:00:00Z"},
+		{
+			ID: "anchor", Title: "Database setup", Body: "database setup notes",
+			Status: recall.StatusAccepted, UpdatedAt: "2024-03-15T12:00:00Z",
+		},
+		{
+			ID: "m-three", Title: "Database setup", Body: "database setup notes",
+			Status: recall.StatusAccepted, UpdatedAt: "2024-03-12T12:00:00Z",
+		},
+		{
+			ID: "m-ten", Title: "Database setup", Body: "database setup notes",
+			Status: recall.StatusAccepted, UpdatedAt: "2024-03-05T12:00:00Z",
+		},
 	}
 
 	// "10 days ago" must anchor to 10 (adjacent to "days"), not the smaller
@@ -171,7 +177,7 @@ func TestRankReportsScoreBreakdown(t *testing.T) {
 	assert.Equal(t, 4, got[0].Breakdown.KeywordOverlap)
 	assert.Equal(t, []string{"cwd", "failure", "file", "read"}, got[0].MatchedTerms)
 	assert.InDelta(t, 0.08, got[0].Breakdown.ConfidenceBonus, 0.0001)
-	assert.Equal(t, got[0].Score, got[0].Breakdown.Total)
+	assert.InDelta(t, got[0].Score, got[0].Breakdown.Total, 1e-9)
 }
 
 func TestRankWeightsRareQueryTermsAboveCommonTerms(t *testing.T) {
@@ -231,7 +237,7 @@ func TestRankBoostsExactMultiTokenQueryPhrases(t *testing.T) {
 	require.Len(t, got, 2)
 	assert.Equal(t, "exact", got[0].Entry.ID)
 	assert.Greater(t, got[0].Breakdown.PhraseBoost, got[1].Breakdown.PhraseBoost)
-	assert.Equal(t, got[0].Score, got[0].Breakdown.Total)
+	assert.InDelta(t, got[0].Score, got[0].Breakdown.Total, 1e-9)
 }
 
 func TestRankDropsGenericStopwordsFromQuery(t *testing.T) {
@@ -473,7 +479,7 @@ func TestRankBoostsExactStructuredEntities(t *testing.T) {
 	require.Len(t, got, 2)
 	assert.Equal(t, "z-feature", got[0].Entry.ID)
 	assert.Greater(t, got[0].Breakdown.EntityBoost, got[1].Breakdown.EntityBoost)
-	assert.Equal(t, got[0].Score, got[0].Breakdown.Total)
+	assert.InDelta(t, got[0].Score, got[0].Breakdown.Total, 1e-9)
 }
 
 func TestRankBoostsGitBranchBasename(t *testing.T) {
@@ -658,7 +664,7 @@ func TestRankBoostsNewerEntriesForRecencyQueries(t *testing.T) {
 	require.Len(t, got, 2)
 	assert.Equal(t, "z-new", got[0].Entry.ID)
 	assert.Greater(t, got[0].Breakdown.TemporalBoost, got[1].Breakdown.TemporalBoost)
-	assert.Equal(t, got[0].Score, got[0].Breakdown.Total)
+	assert.InDelta(t, got[0].Score, got[0].Breakdown.Total, 1e-9)
 }
 
 func TestQueryUsesTemporalSignalsMatchesRankingSyntax(t *testing.T) {
@@ -1626,8 +1632,8 @@ func TestRankReportsBaseScoreForEmptyQuery(t *testing.T) {
 	})
 
 	require.Len(t, got, 1)
-	assert.Equal(t, 0.1, got[0].Breakdown.BaseScore)
-	assert.Equal(t, 0.1, got[0].Score)
+	assert.InDelta(t, 0.1, got[0].Breakdown.BaseScore, 1e-9)
+	assert.InDelta(t, 0.1, got[0].Score, 1e-9)
 }
 
 func TestRankThisWeekUsesCalendarWeekWindow(t *testing.T) {
@@ -1663,6 +1669,6 @@ func TestRankThisWeekUsesCalendarWeekWindow(t *testing.T) {
 	// 2024-02-09 (Friday) precedes the Monday (2024-02-12) that starts the
 	// calendar week containing the reference, so it falls outside a window that
 	// a rolling seven-day span would have included.
-	assert.Equal(t, 1.0, byID["m-thisweek"].Breakdown.TemporalBoost)
-	assert.Equal(t, 0.0, byID["m-lastweek"].Breakdown.TemporalBoost)
+	assert.InDelta(t, 1.0, byID["m-thisweek"].Breakdown.TemporalBoost, 1e-9)
+	assert.InDelta(t, 0.0, byID["m-lastweek"].Breakdown.TemporalBoost, 1e-9)
 }

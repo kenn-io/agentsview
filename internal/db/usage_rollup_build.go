@@ -349,8 +349,8 @@ func loadUsageRollupFacts(
 		f.cost_source, f.request_scoped, f.claude_message_id, f.claude_request_id,
 		f.source_uuid, f.usage_dedup_key, f.token_eligible, f.activity_eligible
 		FROM usage_rollup_build_sessions selected
-		JOIN usage_cached_sessions cs ON cs.session_id = selected.session_id
-		JOIN usage_facts f ON f.cached_session_id = cs.id
+		CROSS JOIN usage_cached_sessions cs ON cs.session_id = selected.session_id
+		CROSS JOIN usage_facts f ON f.cached_session_id = cs.id
 		ORDER BY cs.session_id, f.fact_index`)
 	if err != nil {
 		return nil, fmt.Errorf("loading rollup facts: %w", err)
@@ -483,7 +483,7 @@ func buildUsageRollupSessions(
 	cross usageDedupIdentitySet,
 ) ([]usageRollupBuild, error) {
 	if location == nil {
-		location = time.Local
+		location = time.Local //nolint:forbidigo // Report date buckets use the local calendar timezone; source timestamps remain UTC.
 	}
 	for index := range facts {
 		facts[index].LocalDate = usageRollupLocalDate(facts[index], location)
@@ -545,7 +545,8 @@ func usageRollupExceptionRows(facts []usageRollupFact) []usageExceptionRow {
 		} {
 			if group.key != "" {
 				rows = append(rows, usageExceptionRow{
-					GroupKind: group.kind, GroupKey: group.key, Fact: fact})
+					GroupKind: group.kind, GroupKey: group.key, Fact: fact,
+				})
 			}
 		}
 	}
@@ -577,7 +578,8 @@ func usageRollupActivityContributions(
 		result = append(result, usageActivityContribution{
 			AttributedSessionID: sessionID,
 			LocalDate:           item.date, Model: item.model,
-			UserMessageCount: counts[item]})
+			UserMessageCount: counts[item],
+		})
 	}
 	return result
 }
@@ -613,7 +615,8 @@ func compareUsageRollupFactIdentity(left, right usageRollupFact) int {
 func compareUsageDailyContribution(left, right usageDailyContribution) int {
 	for _, values := range [][2]string{
 		{left.AttributedSessionID, right.AttributedSessionID},
-		{left.LocalDate, right.LocalDate}, {left.ReportedModel, right.ReportedModel},
+		{left.LocalDate, right.LocalDate},
+		{left.ReportedModel, right.ReportedModel},
 		{left.ProviderID, right.ProviderID},
 		{left.RateHash, right.RateHash},
 	} {

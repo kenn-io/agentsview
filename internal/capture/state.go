@@ -4,7 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +15,8 @@ import (
 	"time"
 
 	"github.com/gofrs/flock"
+
+	"go.kenn.io/agentsview/internal/jsonutil"
 )
 
 const (
@@ -29,6 +32,7 @@ const (
 
 var errAttemptExists = errors.New("capture failure result already exists")
 
+//nolint:recvcheck // Value encoding and pointer decoding intentionally implement distinct interfaces.
 type Limits struct {
 	MaxOccurrenceBytes int           `json:"max_occurrence_bytes"`
 	MaxSources         int           `json:"max_sources"`
@@ -38,6 +42,22 @@ type Limits struct {
 	MaxResultBytes     int           `json:"max_result_bytes"`
 	FinalizationWait   time.Duration `json:"finalization_wait"`
 	Quiescence         time.Duration `json:"quiescence"`
+}
+
+// limitsJSON prevents the duration codec from recursively calling these methods.
+type limitsJSON Limits
+
+func (l Limits) MarshalJSONTo(out *jsontext.Encoder) error {
+	return jsonutil.MarshalDurationFields(out, limitsJSON(l))
+}
+
+func (l *Limits) UnmarshalJSONFrom(in *jsontext.Decoder) error {
+	var decoded limitsJSON
+	if err := jsonutil.UnmarshalDurationFields(in, &decoded); err != nil {
+		return err
+	}
+	*l = Limits(decoded)
+	return nil
 }
 
 func DefaultLimits() Limits {
@@ -441,9 +461,11 @@ func (s *captureState) sealedPath() string   { return filepath.Join(s.dir, seale
 func (s *captureState) sourcesPath(parts ...string) string {
 	return filepath.Join(append([]string{s.dir, sourcesDirName}, parts...)...)
 }
+
 func (s *captureState) bundlePath() string {
 	return s.sourcesPath(bundleFileName)
 }
+
 func (s *captureState) stagingPath() string {
 	return filepath.Join(s.dir, stagingDirName)
 }
@@ -461,7 +483,7 @@ func (s *captureState) saveManifestContext(ctx context.Context) error {
 }
 
 func encodeManifest(value manifest) ([]byte, error) {
-	data, err := json.MarshalIndent(value, "", "  ")
+	data, err := json.Marshal(value, jsontext.WithIndent("  "))
 	if err != nil {
 		return nil, fmt.Errorf("encoding capture manifest: %w", err)
 	}

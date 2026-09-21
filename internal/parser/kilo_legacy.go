@@ -20,7 +20,9 @@
 package parser
 
 import (
+	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
@@ -33,6 +35,7 @@ import (
 
 	"github.com/ccoveille/go-safecast/v2"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 // kiloLegacyDefaultDirs returns the platform-specific default
@@ -329,8 +332,7 @@ func parseKiloLegacySession(
 		parsedMessages, totalOutputTok, totalInputTok, peakContextTok,
 			totalCost, hasCost, totalRequests, requestsWithCost,
 			provider, minTS, maxTS,
-			totalCacheReads, totalCacheWrites, parseErr =
-			parseKiloLegacyMessages(msgsBytes, apiModels)
+			totalCacheReads, totalCacheWrites, parseErr = parseKiloLegacyMessages(msgsBytes, apiModels)
 		if parseErr != nil {
 			return nil, nil, fmt.Errorf(
 				"parsing ui_messages.json: %w", parseErr,
@@ -386,7 +388,7 @@ func parseKiloLegacySession(
 	}
 	sessionName := firstMsg
 	if len(sessionName) > 80 {
-		sessionName = sessionName[:77] + "..."
+		sessionName = stringutil.SafeTruncate(sessionName, 77) + "..."
 	}
 	if sessionName == "" {
 		sessionName = projectHint
@@ -593,8 +595,7 @@ func parseKiloLegacyMessages(
 		// accounting for peak context and aggregate totals.
 		if kiloIsMetadataSay(msg.Say) {
 			if msg.Say == "api_req_started" && msg.Text != "" {
-				ctx, in, out, cost, costPresent, prov, cr, cw, valid :=
-					kiloExtractAPIRequestStats(msg.Text)
+				ctx, in, out, cost, costPresent, prov, cr, cw, valid := kiloExtractAPIRequestStats(msg.Text)
 				if ctx > peakContext {
 					peakContext = ctx
 				}
@@ -725,6 +726,7 @@ func parseKiloLegacyMessages(
 					Role:          RoleUser,
 					Content:       output,
 					IsSystem:      true,
+					SourceSubtype: SourceSubtypeToolResult,
 					Timestamp:     ts,
 					ContentLength: len(output),
 					ToolResults:   toolResults,
@@ -763,6 +765,7 @@ func parseKiloLegacyMessages(
 					Role:          RoleSystem,
 					Content:       content,
 					IsSystem:      true,
+					SourceSubtype: SourceSubtypeToolResult,
 					Timestamp:     ts,
 					ContentLength: len(content),
 				})
@@ -802,6 +805,7 @@ func parseKiloLegacyMessages(
 					Role:          RoleSystem,
 					Content:       content,
 					IsSystem:      true,
+					SourceSubtype: SourceSubtypeToolResult,
 					Timestamp:     ts,
 					ContentLength: len(content),
 				})
@@ -843,6 +847,7 @@ func parseKiloLegacyMessages(
 					Role:          RoleSystem,
 					Content:       content,
 					IsSystem:      true,
+					SourceSubtype: SourceSubtypeToolResult,
 					Timestamp:     ts,
 					ContentLength: len(content),
 				})
@@ -1697,7 +1702,7 @@ func parseKiloLegacyToolCall(text string, ordinal int) *ParsedToolCall {
 			tc.SkillName, _ = toolData["name"].(string)
 		}
 	} else {
-		tc.SkillName = inferToolSkillName(toolName, tc.InputJSON)
+		tc.SkillName = inferToolSkillName(context.Background(), toolName, tc.InputJSON)
 	}
 	// FilePath is exposed from the payload when present so the
 	// frontend can route Edits / Writes to the right file even
@@ -1733,7 +1738,7 @@ func parseKiloLegacyMCPToolCall(
 		Category:  "MCP",
 		InputJSON: inputJSON,
 	}
-	tc.SkillName = inferToolSkillName(qualified, inputJSON)
+	tc.SkillName = inferToolSkillName(context.Background(), qualified, inputJSON)
 	return tc
 }
 
@@ -1833,6 +1838,6 @@ func kiloLegacyFingerprintSource(path string) (SourceFingerprint, error) {
 			return SourceFingerprint{}, err
 		}
 	}
-	fp.Hash = fmt.Sprintf("%x", h.Sum(nil))
+	fp.Hash = hex.EncodeToString(h.Sum(nil))
 	return fp, nil
 }

@@ -18,6 +18,8 @@ var (
 
 // Money is a signed count of microdollars. It is the sole machine-readable
 // representation of a monetary value.
+//
+//nolint:recvcheck // Value implements driver.Valuer; pointer Scan mutates the destination.
 type Money struct {
 	Microdollars int64 `json:"microdollars"`
 }

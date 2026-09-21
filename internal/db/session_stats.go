@@ -1133,8 +1133,7 @@ func addMessageToCacheTotals(
 	sessionID, model, tokenJSON, timestamp string,
 	pricing *export.PricingResolver,
 ) error {
-	inputTok, outputTok, cacheCrTok, cacheRdTok :=
-		clampedUsageTokenCounters(tokenJSON)
+	inputTok, outputTok, cacheCrTok, cacheRdTok := clampedUsageTokenCounters(tokenJSON)
 	cacheCr1hTok := clampedCacheCreation1hTokens(tokenJSON)
 
 	totals, ok := perSession[sessionID]
@@ -1269,6 +1268,7 @@ func (db *DB) accumulateHourlyUTC(
 		FROM messages m
 		WHERE m.session_id IN ` + ph + `
 			AND m.role = 'user'
+			AND COALESCE(m.source_subtype, '') <> 'tool_result'
 			AND m.timestamp IS NOT NULL
 			AND m.timestamp != ''
 			AND m.timestamp >= ?

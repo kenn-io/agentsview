@@ -5,7 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -177,7 +177,7 @@ func optionValue(args []string, name string) (string, error) {
 		if args[i] == "--" {
 			break
 		}
-		candidate := ""
+		var candidate string
 		switch {
 		case args[i] == name:
 			if i+1 >= len(args) {
@@ -339,7 +339,7 @@ func (m *threadMarker) result() (string, error) {
 	return m.threadID, nil
 }
 
-func runChild(
+func runChild(ctx context.Context,
 	argv, env []string,
 	dir string,
 	streams Streams,
@@ -353,7 +353,7 @@ func runChild(
 		outcome.CompletedAt = &completed
 		return outcome, 0, false, fmt.Errorf("starting producer: %w", err)
 	}
-	cmd := exec.Command(command, argv[1:]...)
+	cmd := exec.CommandContext(ctx, command, argv[1:]...)
 	cmd.Dir = dir
 	cmd.Env = env
 	cmd.Stdin = streams.Stdin
@@ -466,7 +466,7 @@ func encodeClaudeWorkDir(dir string) string {
 
 // scanFirstLine is used only for exact candidate validation. It stops before
 // allocating beyond the caller's JSONL line bound.
-func scanFirstLine(ctx context.Context, path string, max int) ([]byte, error) {
+func scanFirstLine(ctx context.Context, path string, maximum int) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -475,18 +475,18 @@ func scanFirstLine(ctx context.Context, path string, max int) ([]byte, error) {
 		return nil, err
 	}
 	defer f.Close()
-	return scanFirstLineReader(ctx, f, max)
+	return scanFirstLineReader(ctx, f, maximum)
 }
 
-func scanFirstLineReader(ctx context.Context, input io.Reader, max int) ([]byte, error) {
-	r := bufio.NewReaderSize(input, min(max, 64<<10))
-	line := make([]byte, 0, min(max, 64<<10))
+func scanFirstLineReader(ctx context.Context, input io.Reader, maximum int) ([]byte, error) {
+	r := bufio.NewReaderSize(input, min(maximum, 64<<10))
+	line := make([]byte, 0, min(maximum, 64<<10))
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		chunk, readErr := r.ReadSlice('\n')
-		if len(chunk) > max-len(line) {
+		if len(chunk) > maximum-len(line) {
 			return nil, errorWithReason(
 				ReasonSourceBytesLimit, "first JSONL line exceeds limit")
 		}

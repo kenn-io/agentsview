@@ -71,7 +71,7 @@ func TestRunArtifactFolderSyncPassesOnlyDistinctProtectedRoots(t *testing.T) {
 			parser.AgentGemini: {dataDir},
 		},
 	}
-	database, err := db.Open(filepath.Join(t.TempDir(), "sessions.db"))
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "sessions.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 
@@ -99,8 +99,7 @@ func TestRunArtifactFolderSyncPassesOnlyDistinctProtectedRoots(t *testing.T) {
 	assert.Equal(t, target, got.Target)
 	assert.Empty(t, got.Origin)
 	assert.True(t, got.Full)
-	assert.ElementsMatch(
-		t,
+	assert.ElementsMatch(t,
 		[]string{dataDir, providerA, providerB},
 		got.ForbiddenRoots,
 	)
@@ -256,26 +255,31 @@ func TestRunDaemonArtifactExchangeUsesAuthenticatedLoopbackEndpoint(
 ) {
 	target := filepath.Join(t.TempDir(), "archive")
 	var got server.ArtifactExchangeRequest
-	ts := httptest.NewServer(http.HandlerFunc(func(
+	var ts *httptest.Server
+	ts = httptest.NewServer(http.HandlerFunc(func(
 		w http.ResponseWriter,
 		r *http.Request,
 	) {
-		require.Equal(t, http.MethodPost, r.Method)
-		require.Equal(t, "/api/v1/artifacts/exchange", r.URL.Path)
-		require.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
-		require.Equal(t, tsURL(t, r), r.Header.Get("Origin"))
-		require.NoError(t, json.UnmarshalRead(r.Body, &got))
+		if !assert.Equal(t, http.MethodPost, r.Method) ||
+			!assert.Equal(t, "/viewer/api/v1/artifacts/exchange", r.URL.Path) ||
+			!assert.Equal(t, "Bearer test-token", r.Header.Get("Authorization")) ||
+			!assert.Equal(t, ts.URL, r.Header.Get("Origin")) ||
+			!assert.NoError(t, json.UnmarshalRead(r.Body, &got)) {
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.MarshalWrite(w, artifact.SyncResult{
+		if !assert.NoError(t, json.MarshalWrite(w, artifact.SyncResult{
 			Origin:             "node-a1b2c3",
 			PublishedArtifacts: 3,
-		}))
+		})) {
+			return
+		}
 	}))
 	t.Cleanup(ts.Close)
 
 	result, err := runDaemonArtifactExchange(
 		t.Context(),
-		transport{Mode: transportHTTP, URL: ts.URL + "/"},
+		transport{Mode: transportHTTP, URL: ts.URL + "/viewer"},
 		"test-token",
 		target,
 		true,
@@ -293,7 +297,7 @@ func TestRunDaemonArtifactExchangeUsesAuthenticatedLoopbackEndpoint(
 func TestDaemonArtifactExchangeNotifiesClientsAndSchedulersAfterImport(
 	t *testing.T,
 ) {
-	database, err := db.Open(filepath.Join(t.TempDir(), "sessions.db"))
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "sessions.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 
@@ -323,7 +327,7 @@ func TestDaemonArtifactExchangeNotifiesClientsAndSchedulersAfterImport(
 		},
 		true,
 	)
-	engine := agentsync.NewEngine(
+	engine := agentsync.NewEngine(t.Context(),
 		database,
 		agentsync.EngineConfig{Emitter: emitter},
 	)
@@ -378,10 +382,14 @@ func TestRunDaemonArtifactExchangeMakesRelativeTargetAbsolute(t *testing.T) {
 		w http.ResponseWriter,
 		r *http.Request,
 	) {
-		require.NoError(t, json.UnmarshalRead(r.Body, &got))
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &got)) {
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, err := io.WriteString(w, `{}`)
-		require.NoError(t, err)
+		if !assert.NoError(t, err) {
+			return
+		}
 	}))
 	t.Cleanup(ts.Close)
 
@@ -410,7 +418,9 @@ func TestRunDaemonArtifactExchangeAcceptsLocalhostEndpoint(t *testing.T) {
 		gotHost = r.Host
 		w.Header().Set("Content-Type", "application/json")
 		_, err := io.WriteString(w, `{}`)
-		require.NoError(t, err)
+		if !assert.NoError(t, err) {
+			return
+		}
 	}))
 	t.Cleanup(ts.Close)
 	endpoint, err := url.Parse(ts.URL)
@@ -430,7 +440,7 @@ func TestRunDaemonArtifactExchangeAcceptsLocalhostEndpoint(t *testing.T) {
 }
 
 func TestRunDaemonArtifactExchangeConnectsToIPv6LocalhostListener(t *testing.T) {
-	listener, err := net.Listen("tcp6", "[::1]:0")
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp6", "[::1]:0")
 	if err != nil {
 		t.Skipf("IPv6 loopback is unavailable: %v", err)
 	}
@@ -442,7 +452,9 @@ func TestRunDaemonArtifactExchangeConnectsToIPv6LocalhostListener(t *testing.T) 
 		gotHost = r.Host
 		w.Header().Set("Content-Type", "application/json")
 		_, writeErr := io.WriteString(w, `{}`)
-		require.NoError(t, writeErr)
+		if !assert.NoError(t, writeErr) {
+			return
+		}
 	}))
 	ts.Listener = listener
 	ts.Start()
@@ -464,7 +476,7 @@ func TestRunDaemonArtifactExchangeConnectsToIPv6LocalhostListener(t *testing.T) 
 }
 
 func TestRunLocalAndArtifactFolderSyncStopsAfterLocalFailure(t *testing.T) {
-	database, err := db.Open(filepath.Join(t.TempDir(), "sessions.db"))
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "sessions.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 	localFailure := errors.New("provider discovery failed")
@@ -602,14 +614,18 @@ func TestDoSyncDelegatesArtifactExchangeAfterDaemonSync(t *testing.T) {
 		) {
 			order = append(order, "artifact")
 			var request server.ArtifactExchangeRequest
-			require.NoError(t, json.UnmarshalRead(r.Body, &request))
+			if !assert.NoError(t, json.UnmarshalRead(r.Body, &request)) {
+				return
+			}
 			assert.Equal(t, target, request.Target)
 			w.Header().Set("Content-Type", "application/json")
 			_, err := io.WriteString(
 				w,
 				`{"origin":"node-a1b2c3","exported_sessions":1}`,
 			)
-			require.NoError(t, err)
+			if !assert.NoError(t, err) {
+				return
+			}
 		},
 	})
 	registerSyncRouteTestRuntime(t, env.DataDir, ts.URL)

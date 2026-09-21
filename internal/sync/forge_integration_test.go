@@ -43,7 +43,7 @@ func createForgeDB(t *testing.T, dir string) *forgeTestDB {
 			metrics TEXT
 		);
 	`
-	_, err = d.Exec(schema)
+	_, err = d.ExecContext(t.Context(), schema)
 	require.NoError(t, err, "creating forge schema")
 	return fixture
 }
@@ -56,7 +56,7 @@ func (f *forgeTestDB) close(t *testing.T) {
 
 func (f *forgeTestDB) mustExec(t *testing.T, msg, query string, args ...any) {
 	t.Helper()
-	_, err := f.db.Exec(query, args...)
+	_, err := f.db.ExecContext(t.Context(), query, args...)
 	require.NoError(t, err, msg)
 }
 
@@ -313,17 +313,17 @@ func TestSyncSingleSessionForge(t *testing.T) {
 	assertSessionProject(t, env.db, "forge:forge-sync-single", "agentsview")
 	assertSessionMessageCount(t, env.db, "forge:forge-sync-single", 3)
 
-	src := env.engine.FindSourceFile("forge:forge-sync-single")
+	src := env.engine.FindSourceFile(t.Context(), "forge:forge-sync-single")
 	// Forge is a provider-authoritative DB-backed provider: FindSourceFile
 	// resolves the per-session virtual <db>#<conversationID> path the
 	// provider parses, matching the stored session file_path.
 	wantSrc := filepath.Join(env.forgeDir, ".forge.db") + "#forge-sync-single"
 	assert.Equal(t, wantSrc, src)
 
-	mtime := env.engine.SourceMtime("forge:forge-sync-single")
+	mtime := env.engine.SourceMtime(t.Context(), "forge:forge-sync-single")
 	require.NotZero(t, mtime, "SourceMtime returned zero")
 
-	_, storedMtime, ok := env.db.GetSessionFileInfo("forge:forge-sync-single")
+	_, storedMtime, ok := env.db.GetSessionFileInfo(t.Context(), "forge:forge-sync-single")
 	require.True(t, ok, "session file info not found")
 	assert.Equal(t, mtime, storedMtime)
 
@@ -360,7 +360,7 @@ func TestSyncForgeMultiConversationIncremental(t *testing.T) {
 	assertSessionProject(t, env.db, "forge:multi-conv-B", "agentsview")
 
 	// Capture the stored mtime for A (should remain unchanged after the partial sync).
-	_, storedMtimeA, okA := env.db.GetSessionFileInfo("forge:multi-conv-A")
+	_, storedMtimeA, okA := env.db.GetSessionFileInfo(t.Context(), "forge:multi-conv-A")
 	require.True(t, okA, "session A file info not found after initial sync")
 
 	// Update only B's updated_at (and its context) to simulate a newer version.
@@ -374,12 +374,12 @@ func TestSyncForgeMultiConversationIncremental(t *testing.T) {
 	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 1, Synced: 1, Skipped: 0})
 
 	// A's stored mtime must be unchanged.
-	_, storedMtimeA2, okA2 := env.db.GetSessionFileInfo("forge:multi-conv-A")
+	_, storedMtimeA2, okA2 := env.db.GetSessionFileInfo(t.Context(), "forge:multi-conv-A")
 	require.True(t, okA2, "session A file info not found after partial sync")
 	assert.Equal(t, storedMtimeA, storedMtimeA2, "A's stored mtime changed")
 
 	// B's stored mtime must have advanced.
-	_, storedMtimeB2, okB2 := env.db.GetSessionFileInfo("forge:multi-conv-B")
+	_, storedMtimeB2, okB2 := env.db.GetSessionFileInfo(t.Context(), "forge:multi-conv-B")
 	require.True(t, okB2, "session B file info not found after partial sync")
 	assert.Greater(t, storedMtimeB2, storedMtimeA, "B's stored mtime did not advance")
 }
@@ -409,10 +409,10 @@ func TestSyncForgeMissingConversation(t *testing.T) {
 
 	// FindSourceFile still returns the db path (it's a directory-level lookup).
 	// SourceMtime returns 0 because the conversation row is gone.
-	mtime := env.engine.SourceMtime("forge:disappearing-conv")
+	mtime := env.engine.SourceMtime(t.Context(), "forge:disappearing-conv")
 	assert.Zero(t, mtime, "SourceMtime after delete")
 
-	src := env.engine.FindSourceFile("forge:disappearing-conv")
+	src := env.engine.FindSourceFile(t.Context(), "forge:disappearing-conv")
 	assert.Empty(t, src, "FindSourceFile after delete")
 
 	// SyncSingleSession must return an error indicating the conversation
@@ -499,7 +499,7 @@ func TestSyncForgeSubagentLinking(t *testing.T) {
 	// After SyncAll the tool_call row must already carry subagent_session_id.
 	// This is set by the parser before LinkSubagentSessions runs.
 	var subagentSessID sql.NullString
-	err := env.db.Reader().QueryRow(
+	err := env.db.Reader().QueryRow(t.Context(),
 		`SELECT subagent_session_id FROM tool_calls WHERE session_id = ? AND tool_name = 'task'`,
 		"forge:"+parentID,
 	).Scan(&subagentSessID)
@@ -512,7 +512,7 @@ func TestSyncForgeSubagentLinking(t *testing.T) {
 	// be set without any SyncSingleSession workaround.
 	var parentSessID sql.NullString
 	var relType sql.NullString
-	err = env.db.Reader().QueryRow(
+	err = env.db.Reader().QueryRow(t.Context(),
 		`SELECT parent_session_id, relationship_type FROM sessions WHERE id = ?`,
 		"forge:"+childID,
 	).Scan(&parentSessID, &relType)
@@ -556,7 +556,7 @@ func TestSyncForgeFailureIsolation(t *testing.T) {
 
 	// Broken session must not be in the DB.
 	var count int
-	err := env.db.Reader().QueryRow(
+	err := env.db.Reader().QueryRow(t.Context(),
 		"SELECT COUNT(*) FROM sessions WHERE id = 'forge:broken-conv'",
 	).Scan(&count)
 	require.NoError(t, err, "query broken session")

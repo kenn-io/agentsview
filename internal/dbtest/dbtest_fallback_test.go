@@ -24,7 +24,7 @@ func TestEnsureTestDBAtFallsBackWhenTemplateUnavailable(t *testing.T) {
 		return errors.New("template poisoned")
 	})
 
-	d, err := db.Open(path)
+	d, err := db.Open(t.Context(), path)
 	require.NoError(t, err, "opening fallback test db")
 	require.NoError(t, d.Close(), "closing fallback test db")
 }
@@ -40,7 +40,7 @@ func TestEnsureTestDBAtLeavesExistingFileIntact(t *testing.T) {
 	// A second call must not rebuild or replace the existing file,
 	// and must not consult the template at all.
 	ensureTestDBAtWith(t, path, func(string) error {
-		t.Fatal("copyTemplate must not run for an existing file")
+		require.Fail(t, "copyTemplate must not run for an existing file")
 		return nil
 	})
 	again, err := os.Stat(path)

@@ -988,3 +988,281 @@ func onlyPricingResolution(
 	require.Len(t, provenance.Resolutions, 1)
 	return provenance.Resolutions[0]
 }
+
+func TestPricingResolverPricesOllamaCloudTagAtBaseModelRate(t *testing.T) {
+	flat := []EffectivePricingRow{
+		{
+			ModelPattern: "kimi-k2.7-code",
+			Rates: ModelRates{
+				InputPerMTok:  money.MustParseDollars("0.95"),
+				OutputPerMTok: money.MustParseDollars("4"),
+				Source:        PricingRowSourceFetched,
+			},
+		},
+		{
+			ModelPattern: "gpt-oss:120b",
+			Rates: ModelRates{
+				InputPerMTok: money.MustParseDollars("5"),
+				Source:       PricingRowSourceFetched,
+			},
+		},
+		{
+			// A nonzero catalogued Ollama cloud row keeps its own rate.
+			ModelPattern: "ollama/gpt-oss:120b-cloud",
+			Rates: ModelRates{
+				InputPerMTok: money.MustParseDollars("2"),
+				Source:       PricingRowSourceFetched,
+			},
+		},
+		{
+			ModelPattern: "qwen3.8",
+			Rates: ModelRates{
+				InputPerMTok: money.MustParseDollars("1"),
+				Source:       PricingRowSourceFetched,
+			},
+		},
+	}
+	resolver := NewPricingResolver(flat)
+
+	cases := []struct {
+		name        string
+		model       string
+		wantOK      bool
+		wantPattern string
+		wantInput   money.Money
+	}{
+		{
+			name:        "cloud tag strips to the base catalog row",
+			model:       "kimi-k2.7-code:cloud",
+			wantOK:      true,
+			wantPattern: "kimi-k2.7-code",
+			wantInput:   money.MustParseDollars("0.95"),
+		},
+		{
+			name:        "nonzero catalogued cloud row matches before stripping",
+			model:       "gpt-oss:120b-cloud",
+			wantOK:      true,
+			wantPattern: "ollama/gpt-oss:120b-cloud",
+			wantInput:   money.MustParseDollars("2"),
+		},
+		{
+			name:   "local size tag is not reduced to a hosted rate",
+			model:  "qwen3.8:27b-mlx",
+			wantOK: false,
+		},
+		{
+			name:   "cloud tag on an unknown base stays unpriced",
+			model:  "unknown-model:cloud",
+			wantOK: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pricedModel, lookup := resolver.Resolve(tc.model, tc.model)
+			assert.Equal(t, tc.model, pricedModel,
+				"the reported name stays the priced model")
+			require.Equal(t, tc.wantOK, lookup.OK)
+			if !tc.wantOK {
+				return
+			}
+			assert.Equal(t, tc.wantPattern, lookup.Pattern)
+			assert.Equal(t, tc.wantInput, lookup.Rates.InputPerMTok)
+		})
+	}
+}
+
+func TestPricingResolverCustomCloudTagRateBeatsBaseFallback(t *testing.T) {
+	resolver := NewPricingResolver([]EffectivePricingRow{
+		{
+			ModelPattern: "kimi-k2.7-code",
+			Rates: ModelRates{
+				InputPerMTok: money.MustParseDollars("0.95"),
+				Source:       PricingRowSourceFetched,
+			},
+		},
+		{
+			ModelPattern: "kimi-k2.7-code:cloud",
+			Rates: ModelRates{
+				InputPerMTok: money.MustParseDollars("7"),
+				Source:       PricingRowSourceCustom,
+			},
+		},
+	})
+
+	pricedModel, lookup := resolver.Resolve(
+		"kimi-k2.7-code:cloud", "kimi-k2.7-code:cloud")
+
+	assert.Equal(t, "kimi-k2.7-code:cloud", pricedModel)
+	require.True(t, lookup.OK)
+	assert.Equal(t, "kimi-k2.7-code:cloud", lookup.Pattern)
+	assert.Equal(t, money.MustParseDollars("7"), lookup.Rates.InputPerMTok)
+}
+
+func TestPricingResolverUsesGenAIBaseForOllamaCloudTag(t *testing.T) {
+	genAI, err := pricingpkg.ParseGenAIPrices([]byte(`[
+		{
+			"id": "genai-only",
+			"name": "GenAI Only",
+			"api_pattern": "https://example.invalid",
+			"model_match": {"starts_with": "only-model"},
+			"models": [{
+				"id": "only-model",
+				"match": {"equals": "only-model"},
+				"prices": {"input_mtok": 2, "output_mtok": 8}
+			}]
+		}
+	]`))
+	require.NoError(t, err)
+	resolver := NewPricingResolver([]EffectivePricingRow{{
+		GenAI: genAI, GenAISource: PricingRowSourceEmbedded,
+	}})
+
+	pricedModel, lookup := resolver.ResolveAt(
+		"only-model:cloud", "only-model:cloud",
+		time.Date(2026, 9, 10, 0, 0, 0, 0, time.UTC),
+	)
+
+	assert.Equal(t, "only-model:cloud", pricedModel)
+	require.True(t, lookup.OK)
+	assert.Equal(t, "genai-only/only-model", lookup.Pattern)
+	assert.Equal(t, money.MustParseDollars("2"), lookup.Rates.InputPerMTok)
+	assert.Equal(t, money.MustParseDollars("8"), lookup.Rates.OutputPerMTok)
+}
+
+// LiteLLM publishes ollama/gpt-oss:120b-cloud with all-zero rates because
+// Ollama Cloud simply bills the upstream model price. The resolver should
+// treat that zero-rate cloud row as a placeholder and fall back to the real
+// gpt-oss:120b rate.
+func TestPricingResolverIgnoresZeroRateOllamaCloudRowAndFallsBackToBase(t *testing.T) {
+	flat := []EffectivePricingRow{
+		{
+			ModelPattern: "gpt-oss:120b",
+			Rates: ModelRates{
+				InputPerMTok:  money.MustParseDollars("5"),
+				OutputPerMTok: money.MustParseDollars("15"),
+				Source:        PricingRowSourceFetched,
+			},
+		},
+		{
+			// Real LiteLLM placeholder row: all-zero Ollama Cloud rate.
+			ModelPattern: "ollama/gpt-oss:120b-cloud",
+			Rates:        ModelRates{Source: PricingRowSourceFetched},
+		},
+	}
+	resolver := NewPricingResolver(flat)
+
+	pricedModel, lookup := resolver.Resolve("gpt-oss:120b-cloud", "gpt-oss:120b-cloud")
+
+	assert.Equal(t, "gpt-oss:120b-cloud", pricedModel)
+	require.True(t, lookup.OK)
+	assert.Equal(t, "gpt-oss:120b", lookup.Pattern)
+	assert.Equal(t, money.MustParseDollars("5"), lookup.Rates.InputPerMTok)
+	assert.Equal(t, money.MustParseDollars("15"), lookup.Rates.OutputPerMTok)
+}
+
+// When the only match is a zero-rate Ollama Cloud placeholder and no untagged
+// base row exists, the usage must stay unpriced rather than count as
+// successfully priced at zero.
+func TestPricingResolverLeavesZeroRateOllamaCloudRowUnresolvedWithoutBase(t *testing.T) {
+	flat := []EffectivePricingRow{
+		{
+			ModelPattern: "ollama/gpt-oss:120b-cloud",
+			Rates:        ModelRates{Source: PricingRowSourceFetched},
+		},
+	}
+	resolver := NewPricingResolver(flat)
+
+	pricedModel, lookup := resolver.Resolve("gpt-oss:120b-cloud", "gpt-oss:120b-cloud")
+
+	assert.Equal(t, "gpt-oss:120b-cloud", pricedModel)
+	assert.False(t, lookup.OK)
+	assert.Empty(t, lookup.Pattern)
+}
+
+// A user may deliberately price an Ollama Cloud tag at zero, for example to
+// model a free allowance. That explicit custom zero rate must win over the
+// nonzero base row instead of being mistaken for a LiteLLM placeholder.
+func TestPricingResolverKeepsCustomZeroRateForOllamaCloudTag(t *testing.T) {
+	resolver := NewPricingResolver([]EffectivePricingRow{
+		{
+			ModelPattern: "gpt-oss:120b",
+			Rates: ModelRates{
+				InputPerMTok:  money.MustParseDollars("5"),
+				OutputPerMTok: money.MustParseDollars("15"),
+				Source:        PricingRowSourceFetched,
+			},
+		},
+		{
+			ModelPattern: "gpt-oss:120b-cloud",
+			Rates:        ModelRates{Source: PricingRowSourceCustom},
+		},
+	})
+
+	pricedModel, lookup := resolver.Resolve("gpt-oss:120b-cloud", "gpt-oss:120b-cloud")
+
+	assert.Equal(t, "gpt-oss:120b-cloud", pricedModel)
+	require.True(t, lookup.OK)
+	assert.Equal(t, "gpt-oss:120b-cloud", lookup.Pattern)
+	assert.Equal(t, PricingRowSourceCustom, lookup.Rates.Source)
+	assert.Equal(t, money.Money{}, lookup.Rates.InputPerMTok)
+	assert.Equal(t, money.Money{}, lookup.Rates.OutputPerMTok)
+}
+
+// A cloud row whose flat rates are all zero but which carries pricing bands
+// is a real rate, not a placeholder, and must not be swapped for the base row.
+func TestPricingResolverKeepsBandedZeroFlatRateForOllamaCloudTag(t *testing.T) {
+	resolver := NewPricingResolver([]EffectivePricingRow{
+		{
+			ModelPattern: "gpt-oss:120b",
+			Rates: ModelRates{
+				InputPerMTok:  money.MustParseDollars("5"),
+				OutputPerMTok: money.MustParseDollars("15"),
+				Source:        PricingRowSourceFetched,
+			},
+		},
+		{
+			ModelPattern: "ollama/gpt-oss:120b-cloud",
+			Rates: ModelRates{
+				Source: PricingRowSourceFetched,
+				Bands: []PricingBand{{
+					AboveInputTokens: 200000,
+					InputPerMTok:     money.MustParseDollars("1"),
+					OutputPerMTok:    money.MustParseDollars("3"),
+				}},
+			},
+		},
+	})
+
+	pricedModel, lookup := resolver.Resolve("gpt-oss:120b-cloud", "gpt-oss:120b-cloud")
+
+	assert.Equal(t, "gpt-oss:120b-cloud", pricedModel)
+	require.True(t, lookup.OK)
+	assert.Equal(t, "ollama/gpt-oss:120b-cloud", lookup.Pattern)
+	assert.Equal(t, money.Money{}, lookup.Rates.InputPerMTok)
+	require.Len(t, lookup.Rates.Bands, 1)
+	assert.Equal(t, money.MustParseDollars("1"), lookup.Rates.Bands[0].InputPerMTok)
+}
+
+// OpenCode records the Ollama model tag verbatim, so a Kimi K2.7 Code turn
+// served through Ollama Cloud arrives as kimi-k2.7-code:cloud. Ollama bills
+// that model per token at the same rate Moonshot publishes, which is the
+// embedded GenAI Prices row for the untagged name.
+func TestPricingResolverPricesKimiK27CodeOllamaCloudFromEmbeddedCatalog(t *testing.T) {
+	embedded := pricingpkg.EmbeddedGenAIDocument()
+	resolver := NewPricingResolver([]EffectivePricingRow{{
+		GenAI: embedded.Prices, GenAIVersion: embedded.Version,
+		GenAISource: PricingRowSourceEmbedded,
+	}})
+
+	pricedModel, lookup := resolver.ResolveAt(
+		"kimi-k2.7-code:cloud", "kimi-k2.7-code:cloud",
+		time.Date(2026, 9, 10, 20, 13, 10, 0, time.UTC),
+	)
+
+	assert.Equal(t, "kimi-k2.7-code:cloud", pricedModel)
+	require.True(t, lookup.OK)
+	assert.Equal(t, "moonshotai/kimi-k2.7-code", lookup.Pattern)
+	assert.Equal(t, money.MustParseDollars("0.95"), lookup.Rates.InputPerMTok)
+	assert.Equal(t, money.MustParseDollars("4"), lookup.Rates.OutputPerMTok)
+	assert.Equal(t, money.MustParseDollars("0.19"), lookup.Rates.CacheReadPerMTok)
+}

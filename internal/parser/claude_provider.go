@@ -9,11 +9,13 @@ import (
 	"strings"
 )
 
-var _ Provider = (*claudeProvider)(nil)
-var _ S3Provider = (*claudeProvider)(nil)
-var _ RawCaptureProvider = (*claudeProvider)(nil)
-var _ RawCaptureSourceProvider = (*claudeProvider)(nil)
-var _ StreamingRawCaptureSourceProvider = (*claudeProvider)(nil)
+var (
+	_ Provider                          = (*claudeProvider)(nil)
+	_ S3Provider                        = (*claudeProvider)(nil)
+	_ RawCaptureProvider                = (*claudeProvider)(nil)
+	_ RawCaptureSourceProvider          = (*claudeProvider)(nil)
+	_ StreamingRawCaptureSourceProvider = (*claudeProvider)(nil)
+)
 
 type claudeProviderFactory struct {
 	def AgentDef
@@ -148,6 +150,27 @@ func (p *claudeProvider) PlanRawCapture(
 		LocalPath:  src.Path,
 		Appendable: true,
 	}}
+	// Background-fork lineage resolution reads sibling top-level project
+	// transcripts, so a project-level capture must carry them as appendable
+	// inputs. Provider ownership stays here: no hosted parser or classifier
+	// duplicates this set.
+	if claudeSourceIsProjectLevel(source, src.Path) {
+		siblings, err := claudeLineageCaptureSiblings(ctx, src.Path)
+		if err != nil {
+			return RawCapturePlan{}, err
+		}
+		for _, sibling := range siblings {
+			siblingRel, err := filepath.Rel(src.Root, sibling)
+			if err != nil {
+				return RawCapturePlan{}, invalidRawCapturePlan(
+					"resolve Claude lineage sibling: %s", rawCaptureFilesystemError(err),
+				)
+			}
+			entries = append(entries, RawCaptureEntry{
+				Path: filepath.ToSlash(siblingRel), LocalPath: sibling, Appendable: true,
+			})
+		}
+	}
 	sidecars, err := claudeLayoutSidecarFiles(ctx, src.Path)
 	if err != nil {
 		return RawCapturePlan{}, invalidRawCapturePlan(
@@ -194,13 +217,28 @@ func (p *claudeProvider) Parse(
 	}
 	path, ok := p.sources.pathFromSource(req.Source)
 	if !ok {
-		return ParseOutcome{}, fmt.Errorf("claude source path unavailable")
+		return ParseOutcome{}, errors.New("claude source path unavailable")
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
 	project := claudeProviderProject(ctx, req.Source.ProjectHint, path)
+	var persistedOutputPathResolver func(string) (string, bool)
+	if req.StoredPathResolver != nil {
+		// Stored companions can carry a canonical machine-qualified
+		// spelling (remote mirrors) or the raw recorded path (hosted raw
+		// materializations); try both before falling back to the on-disk
+		// layout, mirroring the shared Claude-layout provider contract.
+		persistedOutputPathResolver = func(path string) (string, bool) {
+			if local, ok := req.StoredPathResolver(path); ok {
+				return local, true
+			}
+			return req.StoredPathResolver(machine + ":" + path)
+		}
+	}
 	opts := claudeParseOptions{
-		ctx:            ctx,
-		siblingLineage: claudeSourceIsProjectLevel(req.Source, path),
+		ctx:                         ctx,
+		siblingLineage:              claudeSourceIsProjectLevel(req.Source, path),
+		persistedOutputPathResolver: persistedOutputPathResolver,
+		aiTitleFallback:             true,
 	}
 	results, excludedIDs, err := claudeParseFile(path, project, machine, opts)
 	if err != nil {
@@ -265,7 +303,7 @@ func (p *claudeProvider) ParseIncremental(
 	path, ok := p.sources.pathFromSource(req.Source)
 	if !ok {
 		return IncrementalOutcome{}, IncrementalUnsupported,
-			fmt.Errorf("claude source path unavailable")
+			errors.New("claude source path unavailable")
 	}
 	if req.Offset > 0 && req.Fingerprint.Size < req.Offset {
 		return IncrementalOutcome{ForceReplace: true},
@@ -287,6 +325,7 @@ func (p *claudeProvider) ParseIncremental(
 			},
 			storedLinearParse:         req.StoredClaudeLinearParse,
 			storedTailClaudeMessageID: req.StoredLastClaudeMessageID,
+			storedSessionName:         req.StoredSessionName,
 		},
 	)
 	if err != nil {
@@ -799,7 +838,7 @@ func claudeProviderProject(ctx context.Context, projectHint, path string) string
 }
 
 func errorsIsClaudeDAG(err error) bool {
-	return err == ErrDAGDetected
+	return errors.Is(err, ErrDAGDetected)
 }
 
 func claudeProviderUserMessageCount(msgs []ParsedMessage) int {
@@ -871,7 +910,7 @@ func claudeProviderCapabilities() Capabilities {
 		RawCapture: RawCaptureCapabilities{
 			Support:  CapabilitySupported,
 			Shape:    RawCaptureShapeFiles,
-			Append:   RawCaptureAppendOne,
+			Append:   RawCaptureAppendMany,
 			Snapshot: RawCaptureSnapshotNone,
 		},
 	}

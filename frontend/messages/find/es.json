@@ -1,0 +1,44 @@
+{
+  "session_find_whole_word": "Coincidir palabra completa",
+  "session_find_loading_history": "Cargando mensajes anteriores…",
+  "session_find_announce_match": "Coincidencia {current} de {total}",
+  "session_find_block_count": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{count} coincidencia",
+        "countPlural=other": "{count} coincidencias"
+      }
+    }
+  ],
+  "session_find_results_group_count": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{count} coincidencia",
+        "countPlural=other": "{count} coincidencias"
+      }
+    }
+  ],
+  "session_find_results_title": "Resultados de búsqueda",
+  "session_find_results_empty": "No hay coincidencias en esta sesión",
+  "session_find_toggle_results": "Mostrar resultados de búsqueda",
+  "session_find_hide_results": "Ocultar resultados de búsqueda",
+  "session_find_subagent_excluded": "Los mensajes de subagentes integrados quedan excluidos.",
+  "session_find_rail_label": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{count} coincidencia en esta sesión",
+        "countPlural=other": "{count} coincidencias en esta sesión"
+      }
+    }
+  ],
+  "session_find_raw_output": "Salida sin procesar durante la búsqueda",
+  "session_find_history_incomplete": "No se pudieron cargar los mensajes anteriores. Los resultados están incompletos.",
+  "session_find_retry_history": "Reintentar la carga del historial",
+  "session_find_partial_results": "Resultados parciales"
+}

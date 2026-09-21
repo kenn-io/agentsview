@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/sha256"
-	"database/sql"
+	"encoding/hex"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
@@ -122,7 +122,7 @@ func (p *antigravityCLIProvider) parseSessionWithStatus(
 	// is available, so SourceVersion is never fabricated.
 	var sourceVersion string
 	if ext == ".db" {
-		dbResult, dbErr := loadAntigravityCLIDBSteps(path)
+		dbResult, dbErr := loadAntigravityCLIDBSteps(ctx, path)
 		sourceVersion = dbResult.sourceVersion
 		hasGenMetadata = dbResult.hasGenMetadata
 		// gen_metadata token usage describes the session's actual
@@ -145,7 +145,9 @@ func (p *antigravityCLIProvider) parseSessionWithStatus(
 		// heuristic cannot decode -- so a partial sidecar is never persisted
 		// as a current transcript.
 		sidecarPath := strings.TrimSuffix(path, ".db") + ".trajectory.json"
-		tRes, tErr := parseAntigravityCLITrajectory(sidecarPath)
+		tRes, tErr := parseAntigravityCLITrajectory(
+			sidecarPath, dbResult.executors,
+		)
 		if tErr == nil {
 			parentCascadeID = tRes.parentCascadeID
 		}
@@ -193,7 +195,9 @@ func (p *antigravityCLIProvider) parseSessionWithStatus(
 		// .pb files are no longer produced, so their sidecars are final,
 		// and even a sidecar older than the .pb beats the fallbacks.
 		sidecarPath := strings.TrimSuffix(path, ".pb") + ".trajectory.json"
-		if tRes, err := parseAntigravityCLITrajectory(sidecarPath); err == nil {
+		if tRes, err := parseAntigravityCLITrajectory(
+			sidecarPath, nil,
+		); err == nil {
 			parentCascadeID = tRes.parentCascadeID
 			// Usage events flow whenever the sidecar parses, even when
 			// no message is displayable, matching the message-less
@@ -376,11 +380,10 @@ func normalizeAntigravityCLIWorkspace(workspace string) string {
 	return ""
 }
 
-func loadAntigravityCLIDBSteps(
+func loadAntigravityCLIDBSteps(ctx context.Context,
 	path string,
 ) (antigravityStepLoadResult, error) {
-	dsn := "file:" + sqliteURIPath(path) + "?mode=ro&immutable=0"
-	db, err := sql.Open("sqlite3", dsn)
+	db, err := openSQLiteReadOnly(path, sqliteReadOptions{})
 	if err != nil {
 		return antigravityStepLoadResult{}, fmt.Errorf(
 			"open antigravity cli db %s: %w", path, err,
@@ -393,8 +396,8 @@ func loadAntigravityCLIDBSteps(
 	// agy-schema marker even when the step query fails and the parser falls
 	// back to the trajectory sidecar (antigravitySourceVersion returns "" when
 	// the schema itself is unreadable, so an undecodable .db is never labeled).
-	sourceVersion := antigravitySourceVersion(db)
-	result, err := loadAntigravityStepsWithRawCount(db)
+	sourceVersion := antigravitySourceVersion(ctx, db)
+	result, err := loadAntigravityStepsWithRawCount(ctx, db)
 	result.sourceVersion = sourceVersion
 	if err != nil {
 		return result, err
@@ -938,7 +941,7 @@ func antigravityCompositeHashWithExtra(
 			return "", err
 		}
 	}
-	return fmt.Sprintf("%x", h.Sum(nil)), nil
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func antigravityCLICompositeHash(path, id, workspace string) (string, error) {
@@ -1150,7 +1153,7 @@ func (c *agyTokenCount) UnmarshalJSON(data []byte) error {
 	if err != nil || n < 0 {
 		// Negative counts are garbage too: emitting them would
 		// subtract from session and daily usage totals.
-		return nil
+		return nil //nolint:nilerr // Malformed optional token counts do not invalidate the transcript.
 	}
 	*c = agyTokenCount(n)
 	return nil
@@ -1452,7 +1455,9 @@ func canonicalAgyCascadeID(value string) string {
 
 // parseAntigravityCLITrajectory reads a <uuid>.trajectory.json sidecar
 // produced out-of-process by agy-reader and returns the decoded
-// transcript as ParsedMessages.
+// transcript as ParsedMessages. When the source database supplied executor
+// ranges, they qualify sidecar generation models using the same rules as the
+// SQLite gen_metadata path.
 //
 // Trust posture (see SECURITY.md, "Imports and new readers" row of the
 // Trust boundaries table): the sidecar is treated as untrusted
@@ -1462,6 +1467,7 @@ func canonicalAgyCascadeID(value string) string {
 // is executed or echoed back over any outbound channel.
 func parseAntigravityCLITrajectory(
 	trajectoryPath string,
+	executors []antigravityExecutorMetadata,
 ) (agyTrajectoryParseResult, error) {
 	f, err := os.Open(trajectoryPath)
 	if err != nil {
@@ -1553,6 +1559,9 @@ func parseAntigravityCLITrajectory(
 			content := pr.Response
 			if content == "" && len(toolHeaders) > 0 {
 				content = strings.Join(toolHeaders, "\n")
+				for i := range toolCalls {
+					toolCalls[i].Rendering = toolHeaders[i]
+				}
 			}
 
 			msg := ParsedMessage{
@@ -1614,7 +1623,7 @@ func parseAntigravityCLITrajectory(
 				}
 			case "CORTEX_STEP_TYPE_LIST_DIRECTORY":
 				if step.ListDirectory != nil {
-					resultText = fmt.Sprintf("List directory: %s", step.ListDirectory.DirectoryPathURI)
+					resultText = "List directory: " + step.ListDirectory.DirectoryPathURI
 				}
 			case "CORTEX_STEP_TYPE_ERROR_MESSAGE":
 				if step.ErrorMessage != nil {
@@ -1662,7 +1671,7 @@ func parseAntigravityCLITrajectory(
 			cp := step.Checkpoint
 			var parts []string
 			if len(cp.UserRequests) > 0 {
-				parts = append(parts, fmt.Sprintf("User Requests: %s", strings.Join(cp.UserRequests, ", ")))
+				parts = append(parts, "User Requests: "+strings.Join(cp.UserRequests, ", "))
 			}
 			if cp.SessionSummary != "" {
 				parts = append(parts, cp.SessionSummary)
@@ -1682,9 +1691,11 @@ func parseAntigravityCLITrajectory(
 
 	flushPendingResults()
 	return agyTrajectoryParseResult{
-		messages:        msgs,
-		rawSteps:        len(traj.Steps),
-		usageEvents:     extractAgyGeneratorUsage(traj, plannerMsgIdx, msgs),
+		messages: msgs,
+		rawSteps: len(traj.Steps),
+		usageEvents: extractAgyGeneratorUsage(
+			traj, plannerMsgIdx, msgs, executors,
+		),
 		parentCascadeID: parseAgyReaderParentCascadeID(traj.AgyReader),
 	}, nil
 }
@@ -1705,12 +1716,14 @@ func parseAntigravityCLITrajectory(
 // MessageOrdinal is left nil: ordinals are reassigned after the
 // timestamp re-sort and brain-doc merge in
 // ParseAntigravityCLISessionWithStatus, so any ordinal computed here
-// would be wrong. Cost fields stay zero/empty - MODEL_PLACEHOLDER_*
-// models are unpriced.
+// would be wrong. A generation's maximum step index selects the covering
+// executor range, matching SQLite gen_metadata attribution. Cost fields stay
+// zero/empty - MODEL_PLACEHOLDER_* models are unpriced.
 func extractAgyGeneratorUsage(
 	traj agyTrajectory,
 	plannerMsgIdx map[int]int,
 	msgs []ParsedMessage,
+	executors []antigravityExecutorMetadata,
 ) []ParsedUsageEvent {
 	var events []ParsedUsageEvent
 	for _, gen := range traj.GeneratorMetadata {
@@ -1735,6 +1748,11 @@ func extractAgyGeneratorUsage(
 		if model == "" {
 			model = usage.Model
 		}
+		executorModel := ""
+		if stepIndex, ok := maxAntigravityStepIndex(gen.StepIndices); ok {
+			executorModel = executorModelForStep(executors, stepIndex)
+		}
+		model = resolveAntigravityModelName(model, executorModel, false)
 
 		// Find the planner message this generation produced.
 		var targetMsg *ParsedMessage

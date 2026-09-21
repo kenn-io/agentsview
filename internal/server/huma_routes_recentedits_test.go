@@ -21,7 +21,7 @@ func seedRecentEdit(
 	filePath, ts string,
 ) {
 	t.Helper()
-	require.NoError(t, d.UpsertSession(db.Session{
+	require.NoError(t, d.UpsertSession(t.Context(), db.Session{
 		ID:           sessionID,
 		Project:      project,
 		Machine:      "test",
@@ -46,7 +46,7 @@ func seedRecentEdit(
 			},
 		},
 	}
-	require.NoError(t, d.InsertMessages([]db.Message{msg}),
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{msg}),
 		"seedRecentEdit: insert message %s/%d", sessionID, ordinal)
 }
 

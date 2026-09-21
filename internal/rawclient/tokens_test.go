@@ -1,7 +1,6 @@
 package rawclient
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -92,7 +91,7 @@ func TestTokenProviderSingleFlight(t *testing.T) {
 		go func() {
 			// assert, not require: the send must be unconditional so the
 			// result loop below always drains.
-			token, err := client.tokens.token(context.Background())
+			token, err := client.tokens.token(t.Context())
 			assert.NoError(t, err)
 			results <- token
 		}()
@@ -122,7 +121,7 @@ func TestDoRetriesWithRefreshedTokenAfterUnauthorized(t *testing.T) {
 				`"expires_at":%q}`, atomic.AddInt32(&exchanges, 1),
 				time.Now().Add(10*time.Minute).UTC().Format(time.RFC3339Nano))
 		case "/api/v1/raw-sync/objects/missing":
-			assert.Equal(t, http.MethodGet, r.Method)
+			assert.Equal(t, http.MethodPost, r.Method)
 			w.Header().Set("Content-Type", "application/json")
 			if atomic.AddInt32(&objectCalls, 1) == 1 {
 				assert.Equal(t, "Bearer avdt_1", r.Header.Get("Authorization"))
@@ -131,18 +130,16 @@ func TestDoRetriesWithRefreshedTokenAfterUnauthorized(t *testing.T) {
 				return
 			}
 			assert.Equal(t, "Bearer avdt_2", r.Header.Get("Authorization"))
-			fmt.Fprint(w, `{"stored":true}`)
+			fmt.Fprint(w, `{"missing":[]}`)
 		default:
-			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			assert.Failf(t, "test failed", "unexpected request %s %s", r.Method, r.URL.Path)
 		}
 	}))
 	t.Cleanup(server.Close)
 	client := newTestClient(t, server.URL, time.Minute)
 
-	resp, err := client.do(t.Context(), http.MethodGet, "/api/v1/raw-sync/objects/missing", nil, nil)
+	_, err := client.MissingObjects(t.Context(), "claude", nil)
 	require.NoError(t, err)
-	defer resp.Body.Close()
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.EqualValues(t, 2, atomic.LoadInt32(&exchanges))
 	assert.EqualValues(t, 2, atomic.LoadInt32(&objectCalls))
 }

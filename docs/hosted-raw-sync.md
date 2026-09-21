@@ -1,24 +1,27 @@
 ---
 title: Hosted Raw Sync
-description: Keep original session files in hosted custody with authenticated, resumable uploads
+description: Upload original session files to an operator-managed server and resume interrupted transfers
 ---
 
-Hosted raw sync keeps original agent session files from one or more machines in
-hosted custody. Each laptop captures supported local sources, authenticates as a
-provisioned device, resumes interrupted uploads, and remembers durable progress
-across restarts. `agentsview raw-sync watch` keeps the hosted copy current.
+Hosted raw sync uploads original agent session files from your machines to a
+server. An operator provides each device's credentials. The client resumes
+interrupted uploads and saves its progress across restarts. Run
+`agentsview raw-sync watch` to keep the hosted copy current.
 
 ```mermaid
 flowchart LR
-    Watcher["Laptop watcher"] -->|"authenticated raw upload"| Custody["Immutable raw custody"]
-    Custody -. "future" .-> Parser["Server parsing"]
-    Parser --> PostgreSQL["PostgreSQL projection"]
-    PostgreSQL --> Embeddings["Server embeddings"]
+    Files["Original agent files"] --> Client["raw-sync watch"]
+    Client -->|"authenticated upload"| Server["Hosted raw-sync server"]
+    Server --> Storage["Retained source files"]
+    Server -->|"commit receipt"| Client
+    Client --> Checkpoint["Local upload checkpoint"]
 ```
 
-The raw archive gives an operator the source material needed to rebuild derived
-data. Version 0.42.0 ships capture and upload; it does not yet parse accepted
-generations into hosted sessions or build server-owned embeddings.
+The hosted copy retains source files for later processing. Server startup does
+not yet run hosted parsing or embedding generation. Use the authenticated status
+route to inspect raw custody metadata, or use
+[`agentsview pg push`](/docs/pg-sync/) to make sessions browsable on a shared
+server.
 
 !!! note "You need provisioned device credentials"
 
@@ -34,16 +37,23 @@ generations into hosted sessions or build server-owned embeddings.
 The tracked delivery sequence and production acceptance criteria live in
 [GitHub issue #1352](https://github.com/kenn-io/agentsview/issues/1352).
 
-## Delivery status
+## What is available?
 
 | Layer                  | Status        | Current boundary                                                                                                             |
 | ---------------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | Raw custody            | Available     | Validated objects, canonical manifests, durable receipts, source-head fencing, and parse-job creation                        |
 | Device authentication  | Available     | Credential exchange, scoped short-lived tokens, server-derived identity, and revocation; enrollment remains operator-managed |
-| HTTP raw transport     | Available     | Missing-object negotiation, resumable upload, and manifest commit; status is local only                                      |
+| HTTP raw transport     | Available     | Missing-object negotiation, resumable upload, manifest commit, and authenticated status reporting                            |
 | Laptop capture         | Available     | Watching, bounded audits, safe SQLite snapshots, durable spooling, checkpoints, retries, and local status                    |
 | Server derivation      | Not available | Accepted generations are not yet parsed into PostgreSQL sessions or embeddings                                               |
 | Operations and cutover | Not available | Retention, garbage collection, disaster rebuilds, and migration from `pg push` remain future work                            |
+
+### Work still in development
+
+An internal worker library can claim parse jobs, reconstruct their source files,
+parse them, and retry failures. `pg serve` does not start this worker. The code
+that would save its parsed sessions to PostgreSQL is also unfinished. This
+library does not yet provide hosted browsing or embeddings.
 
 The broader delivery issue remains open because public enrollment, hosted
 session derivation, and production lifecycle controls are not finished.
@@ -79,13 +89,30 @@ doing so intentionally creates two watchers over the same provider roots.
 `agentsview pg serve` registers the raw-sync routes when its PostgreSQL role can
 write every raw-sync table and the ingest-job sequence. A read-only role keeps
 serving the normal PostgreSQL-backed UI and API without these runtime routes.
-There is no separate raw-sync configuration switch.
+There is no separate raw-sync configuration switch. When requirements are
+missing, startup logs `raw-sync routes disabled; missing requirements:` followed
+by the exact missing table privileges, sequence access, or read-only transaction
+setting.
+
+Upgrading a least-privilege raw-sync role now requires `SELECT` and `UPDATE` on
+`raw_ingest_jobs`, in addition to its existing `INSERT` and sequence `USAGE`.
+Manifest commits retire the previous source head's pending parse job. As the
+schema owner, grant the additional privileges and restart `pg serve`:
+
+```sql
+GRANT SELECT, UPDATE ON agentsview.raw_ingest_jobs TO raw_sync_runtime;
+```
+
+Replace `agentsview` and `raw_sync_runtime` with your schema and runtime role.
+Until these grants are applied, the normal session UI continues to work, but
+raw-sync HTTP routes are omitted.
 
 The implemented routes are:
 
 | Route                                   | Authentication                          | Operation                               |
 | --------------------------------------- | --------------------------------------- | --------------------------------------- |
 | `POST /api/v1/raw-sync/tokens`          | Device credential and device ID         | Issue a 15-minute scoped access token   |
+| `GET /api/v1/raw-sync/status`           | Access token with the `status` scope    | Read tenant-scoped raw custody metadata |
 | `POST /api/v1/raw-sync/objects/missing` | Access token with the `negotiate` scope | Return object references not in custody |
 | `POST /api/v1/raw-sync/uploads`         | Access token with the `upload` scope    | Start or resume an object upload        |
 | `HEAD /api/v1/raw-sync/uploads/{id}`    | Access token with the `upload` scope    | Read the accepted upload offset         |
@@ -95,8 +122,29 @@ The implemented routes are:
 These machine routes use their own device credentials and scoped tokens. They do
 not accept the shared bearer token that can protect the rest of a remote
 AgentsView server. The token endpoint accepts the fixed `negotiate`, `upload`,
-`commit`, and `status` scope names. There is not yet a remote status handler;
-the current status command reads the laptop checkpoint.
+`commit`, and `status` scope names. To read hosted status, request
+`{"scopes":["status"]}` from `POST /api/v1/raw-sync/tokens`, then send the
+returned token as `Authorization: Bearer <token>` to
+`GET /api/v1/raw-sync/status`.
+
+`GET /api/v1/raw-sync/status` returns five groups for the authenticated tenant:
+
+- `source_heads` lists each device, configured root, provider, source key,
+  generation, current manifest acceptance time, and independent parse-pending,
+  parse-leased, and parse-failed flags.
+- `parse_jobs` counts `ready`, `leased`, `retrying`, `complete`, `failed`, and
+  `superseded` parse jobs, including historical generations.
+- `active_device_count` and `devices` report unrevoked devices. Each device's
+  `last_seen_at` is its latest token issuance, or `null` when it has no token.
+- `uploads` reports stored-open upload count, remaining bytes, and the oldest
+  open upload. `oldest_open_session` is `null` when no stored-open upload
+  exists.
+
+Empty `source_heads` and `devices` values are `[]`. A generation-zero head has a
+`null` `last_accepted_at` and false parse flags. Status reads use one read-only
+PostgreSQL transaction and do not expire uploads, alter leases, or change any
+raw-sync state. `agentsview raw-sync status` remains a local command that reads
+the laptop checkpoint.
 
 PostgreSQL stores device, token, manifest, receipt, source-head, and parse-job
 metadata. The raw object repository is opened lazily under `raw-sync/` in the
@@ -132,7 +180,7 @@ The PostgreSQL acceptance transaction then:
 1. records the manifest, file entries, and ordered object references;
 1. assigns a monotonically increasing generation and durable receipt;
 1. creates the corresponding parse job; and
-1. advances the source head.
+1. advances the source head and retires its previous pending parse job.
 
 Repeating the same capture returns its existing receipt. Reusing a capture
 identity for different content or committing against a stale parent fails

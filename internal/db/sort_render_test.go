@@ -50,12 +50,11 @@ func TestCursorPredicate_MultiKey(t *testing.T) {
 
 	b := NewQueryBuilder(SQLiteQueryDialect(), 0)
 	gotSQLite := b.CursorPredicate(rs, SessionFilter{}, values, "sid")
-	assert.Equal(t,
-		"((message_count > ?) OR "+
-			"(message_count = ? AND "+
-			"COALESCE(NULLIF(started_at, ''), created_at) < ?) OR "+
-			"(message_count = ? AND "+
-			"COALESCE(NULLIF(started_at, ''), created_at) = ? AND id < ?))",
+	assert.Equal(t, "((message_count > ?) OR "+
+		"(message_count = ? AND "+
+		"COALESCE(NULLIF(started_at, ''), created_at) < ?) OR "+
+		"(message_count = ? AND "+
+		"COALESCE(NULLIF(started_at, ''), created_at) = ? AND id < ?))",
 		gotSQLite)
 	// Six bound params: one comparison at level 0, two at level 1, three at
 	// level 2 (the id tie-break being the last).
@@ -63,12 +62,11 @@ func TestCursorPredicate_MultiKey(t *testing.T) {
 
 	bpg := NewQueryBuilder(PostgresQueryDialect(), 0)
 	gotPG := bpg.CursorPredicate(rs, SessionFilter{}, values, "sid")
-	assert.Equal(t,
-		"((message_count > $1::bigint) OR "+
-			"(message_count = $2::bigint AND "+
-			"COALESCE(started_at, created_at) < $3::timestamptz) OR "+
-			"(message_count = $4::bigint AND "+
-			"COALESCE(started_at, created_at) = $5::timestamptz AND id < $6))",
+	assert.Equal(t, "((message_count > $1::bigint) OR "+
+		"(message_count = $2::bigint AND "+
+		"COALESCE(started_at, created_at) < $3::timestamptz) OR "+
+		"(message_count = $4::bigint AND "+
+		"COALESCE(started_at, created_at) = $5::timestamptz AND id < $6))",
 		gotPG)
 }
 

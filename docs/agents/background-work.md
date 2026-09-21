@@ -3,10 +3,27 @@
 Read this file before changing watchers, polling, sync scheduling, or other
 long-running background work. Also read it before investigating memory growth.
 
+## The internal/poller Scheduler
+
+Define interval-driven jobs against external APIs or shared resources as
+`poller.Job` values passed to `poller.Start` at daemon startup. Jobs cannot be
+added later. The scheduler owns jitter, cooldown recorded before attempts,
+capped failure backoff, `RetryAfterError`, and cancellation. Status is in memory
+only; `TriggerNow` bypasses cooldown.
+
+Pricing refresh uses the scheduler. Periodic session sync, vector embedding,
+and recall extraction still own their timing; migrating them is separate work.
+
+## Memory and Work Bounds
+
 - Keep passive daemon memory within a few hundred megabytes on macOS, Linux, and
   Windows. Treat sustained growth beyond that range as a regression.
+
 - Bound watcher, polling, and sync work by the changed batch, not the full
   archive. Do not scan or load every stored session for each filesystem event.
+- A rejected parser checkpoint forbids resuming from its cursor. It must not
+  force a transcript rewrite when the full source hash and stored metadata
+  still match. Filesystem device numbers can change across boots.
 - Declare costly scheduling inputs as provider capabilities. Compute them only
   for providers that use them, and default new capabilities to unsupported.
 - Add cardinality-scaling regressions for background paths. Compare small and
@@ -39,9 +56,9 @@ long-running background work. Also read it before investigating memory growth.
   cursor, are the authoritative coverage records.
 - A pass runs once and is never restarted because the archive was written while
   it ran. Each session's facts and source version come from one archive read
-  transaction, so they are always paired correctly, and a session written during
-  the pass is refilled by its own mutation notification. Do not reintroduce a
-  restart loop over a moving source fingerprint.
+  transaction, so they are always paired correctly, and a session written
+  during the pass is refilled by its own mutation notification. Do not
+  reintroduce a restart loop over a moving source fingerprint.
 - Sweep the archive deletion journal before and after the pass and between
   install batches. Queries also inner-join current archive sessions before
   ranking, so tombstone processing is hygiene rather than a correctness
@@ -51,6 +68,9 @@ long-running background work. Also read it before investigating memory growth.
 - Run `PRAGMA optimize` between substantial batches and after install-heavy
   foreground fills. Run full `ANALYZE` after generation creation and complete
   initial backfill, not after every batch.
+- Keep the selected session batch outermost in rollup fact and cross-session
+  identity queries. An identity index scan still reads the whole cache; verify
+  that query plans seek facts by selected session before checking identities.
 - Backfill logs aggregate counts and elapsed time only. Do not log session IDs,
   projects, paths, prompts, or fact contents.
 - Keep newest-first fact plus process-local-rollup coverage within 30 seconds

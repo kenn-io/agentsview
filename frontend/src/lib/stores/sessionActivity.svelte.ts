@@ -1,6 +1,7 @@
+import { m } from "../i18n/index.js";
 import { SessionsService } from "../api/generated/index";
-import { callGenerated, isAbortError } from "../api/runtime.js";
-import type { SessionActivityBucket } from "../api/types/session-activity.js";
+import { isAbortError } from "../api/runtime.js";
+import type { DbSessionActivityBucket as SessionActivityBucket } from "../api/generated/index.js";
 import { LatestRead } from "../utils/latest-read.js";
 
 export function findActiveBucketIndex(
@@ -55,9 +56,9 @@ class SessionActivityStore {
     this.error = null;
     this.firstVisibleTimestamp = null;
     try {
-      const resp = await callGenerated(
-        (options) => SessionsService.getApiV1SessionsByIdActivity({ id: sessionId }, options),
-        signal,
+      const resp = await SessionsService.getApiV1SessionsByIdActivity(
+        { id: sessionId },
+        { signal },
       );
       // Ignore stale responses from previous sessions.
       if (version !== this.loadVersion || !this.activityRead.isCurrent(signal)) return;
@@ -69,7 +70,7 @@ class SessionActivityStore {
     } catch (e) {
       if (isAbortError(e) || version !== this.loadVersion || !this.activityRead.isCurrent(signal))
         return;
-      this.error = e instanceof Error ? e.message : "Failed to load activity";
+      this.error = e instanceof Error ? e.message : m.session_activity_load_failed();
       this.buckets = [];
       this.cachedSessionId = sessionId;
       this.loaded = true;

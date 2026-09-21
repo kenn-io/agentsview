@@ -33,6 +33,7 @@ const {
       created_at: string;
     }>,
     filters: { project: "" },
+    projects: [{ name: "proj-a", session_count: 2 }],
     deselectSession: vi.fn(),
   },
   mockSearchStore: {
@@ -50,6 +51,9 @@ const {
     retry: vi.fn(),
     setMode: vi.fn(),
     setSort: vi.fn(),
+    range: { mode: "relative" as const, days: 0 },
+    setRange: vi.fn(),
+    resetRange: vi.fn(),
   },
   mockRouter: {
     navigateToSession: vi.fn(),
@@ -116,6 +120,19 @@ async function tickUntil(selector: string, maxTicks = 20): Promise<HTMLElement> 
 
 function makeSession(id: string, agent: string) {
   return {
+    compaction_count: 0,
+    consecutive_failure_max: 0,
+    edit_churn_count: 0,
+    ended_with_role: "",
+    final_failure_streak: 0,
+    has_peak_context_tokens: false,
+    has_total_output_tokens: false,
+    mid_task_compaction_count: 0,
+    outcome: "",
+    outcome_confidence: "",
+    secret_leak_count: 0,
+    tool_failure_signal_count: 0,
+    tool_retry_count: 0,
     id,
     project: "proj-a",
     machine: "mac",
@@ -357,6 +374,53 @@ describe("CommandPalette", () => {
     unmount(component);
   });
 
+  it.each([
+    { query: "消融", searches: true },
+    { query: "検索", searches: true },
+    { query: "검색", searches: true },
+    { query: "a消", searches: true },
+    { query: "abc", searches: true },
+    { query: "消", searches: false },
+    { query: "ab", searches: false },
+  ])("sends $query to the server: $searches", async ({ query, searches }) => {
+    mockSearchStore.results = [makeSearchResult({ snippet: "server hit" })];
+    const component = mount(CommandPalette, { target: document.body });
+    await tick();
+
+    await enterSearchQuery(query);
+
+    if (searches) {
+      expect(mockSearchStore.search).toHaveBeenCalledWith(query, "");
+      expect(mockSearchStore.clear).not.toHaveBeenCalled();
+    } else {
+      expect(mockSearchStore.search).not.toHaveBeenCalled();
+      expect(mockSearchStore.clear).toHaveBeenCalled();
+    }
+    const snippets = Array.from(document.querySelectorAll(".item-snippet")).map((el) =>
+      el.textContent?.trim(),
+    );
+    expect(snippets.includes("server hit")).toBe(searches);
+
+    unmount(component);
+  });
+
+  it("filters recent sessions locally for a single CJK character", async () => {
+    mockSessions.sessions = [
+      { ...makeSession("s1", "codex"), first_message: "消融实验的结果" },
+      { ...makeSession("s2", "codex"), first_message: "unrelated" },
+    ];
+    const component = mount(CommandPalette, { target: document.body });
+    await tick();
+
+    await enterSearchQuery("消");
+
+    const items = document.querySelectorAll(".palette-item");
+    expect(items).toHaveLength(1);
+    expect(items[0]?.textContent).toContain("消融实验的结果");
+
+    unmount(component);
+  });
+
   it("search result click navigates to the session route", async () => {
     mockSearchStore.results = [makeSearchResult()];
 
@@ -550,6 +614,76 @@ describe("CommandPalette", () => {
     expect(error?.querySelector("span")?.textContent).toBe("Search failed. Please try again.");
 
     unmount(component);
+  });
+
+  it("shows the inherited project and can search all projects without changing the sidebar", async () => {
+    mockSessions.filters.project = "proj-a";
+    const component = mount(CommandPalette, { target: document.body });
+    try {
+      await enterSearchQuery("configuration");
+      expect(mockSearchStore.search).toHaveBeenLastCalledWith("configuration", "proj-a");
+      const trigger = Array.from(
+        document.querySelectorAll<HTMLButtonElement>(".palette-controls button"),
+      ).find((button) => button.textContent?.trim() === "proj-a")!;
+      expect(trigger).toBeDefined();
+      trigger.click();
+      await tick();
+      const all = Array.from(document.querySelectorAll<HTMLElement>("[role='option']")).find(
+        (option) => option.textContent?.trim() === "All Projects",
+      )!;
+      all.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+      await tick();
+      expect(mockSearchStore.search).toHaveBeenLastCalledWith("configuration", "");
+      expect(mockSessions.filters.project).toBe("proj-a");
+      await enterSearchQuery("configuration details");
+      expect(mockSearchStore.search).toHaveBeenLastCalledWith("configuration details", "");
+      expect(document.querySelector(".palette-controls")?.textContent).toContain("All Projects");
+    } finally {
+      await unmount(component);
+    }
+  });
+
+  it("lets a search choose a date range without navigating or closing the palette", async () => {
+    mockSearchStore.mode = "semantic";
+    const cleanupShortcuts = registerShortcuts({
+      navigateMessage: vi.fn(),
+      navigateUserPrompt: vi.fn(),
+    });
+    const component = mount(CommandPalette, { target: document.body });
+    try {
+      await enterSearchQuery();
+
+      const trigger = document.querySelector<HTMLButtonElement>(
+        ".palette-controls button[aria-haspopup='dialog']",
+      )!;
+      expect(trigger.textContent).toContain("All time");
+      trigger.click();
+      await tick();
+      const preset = Array.from(
+        document.querySelectorAll<HTMLButtonElement>("[role='dialog'] button"),
+      ).find((button) => button.textContent?.trim() === "7d")!;
+      expect(preset).toBeDefined();
+      preset.click();
+      await tick();
+      expect(mockSearchStore.setRange).toHaveBeenCalledWith({ mode: "relative", days: 7 });
+      expect(mockRouter.navigateToSession).not.toHaveBeenCalled();
+      expect(mockUi.activeModal).toBe("commandPalette");
+
+      trigger.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+      );
+      await tick();
+      expect(document.querySelector("[role='dialog']")).toBeNull();
+      expect(mockUi.activeModal).toBe("commandPalette");
+      trigger.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+      );
+      expect(mockUi.activeModal).toBeNull();
+    } finally {
+      cleanupShortcuts();
+      await unmount(component);
+    }
+    expect(mockSearchStore.resetRange).toHaveBeenCalledOnce();
   });
 
   it("explains a semantic timeout and offers an explicit retry", async () => {

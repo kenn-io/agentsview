@@ -4,12 +4,17 @@
   import type { Report } from "../../api/types.js";
   import type { ActivityKeyMinutes } from "../../api/generated/index";
   import { formatMoney, moneyFromMicrodollars } from "../../money.js";
+  import { PROJECT_MAPPING_WORKSPACE_ENABLED } from "../../feature-flags.js";
 
   interface Props {
     report: Report;
+    projectWorkspaceEnabled?: boolean;
   }
 
-  let { report }: Props = $props();
+  let {
+    report,
+    projectWorkspaceEnabled = PROJECT_MAPPING_WORKSPACE_ENABLED,
+  }: Props = $props();
 
   type Metric = "minutes" | "cost";
   let metric = $state<Metric>("minutes");
@@ -24,12 +29,15 @@
     return metric === "cost" ? row.cost.microdollars : row.agent_minutes;
   }
 
-  // Per-row automation split for the active metric. Interactive + automated
-  // sum to rowValue, so the two bar segments stack to the full bar width.
+  // Each session belongs to one class, so the three segments sum to the row.
   function interactiveValue(row: ActivityKeyMinutes): number {
     return metric === "cost"
       ? row.interactive_cost.microdollars
       : row.interactive_agent_minutes;
+  }
+
+  function subagentValue(row: ActivityKeyMinutes): number {
+    return metric === "cost" ? row.subagent_cost.microdollars : row.subagent_agent_minutes;
   }
 
   function automatedValue(row: ActivityKeyMinutes): number {
@@ -122,7 +130,7 @@
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const pct = total > 0 ? Math.round((rowValue(row) / total) * 100) : 0;
     const unit = metric === "cost" ? "" : m.activity_min_unit();
-    const split = m.activity_int_auto_split({ int: fmtSeg(interactiveValue(row)), auto: fmtSeg(automatedValue(row)) });
+    const split = m.activity_class_split({ int: fmtSeg(interactiveValue(row)), sub: fmtSeg(subagentValue(row)), auto: fmtSeg(automatedValue(row)) });
     tooltip = {
       x: rect.left + rect.width / 2,
       y: rect.top - 4,
@@ -142,6 +150,9 @@
       <div class="legend" aria-hidden="true">
         <span class="legend-item">
           <span class="swatch interactive"></span>{m.activity_interactive()}
+        </span>
+        <span class="legend-item">
+          <span class="swatch subagent"></span>{m.activity_subagents()}
         </span>
         <span class="legend-item">
           <span class="swatch automated"></span>{m.activity_automated()}
@@ -185,7 +196,7 @@
                 onmouseenter={(e) => showTip(e, row, total)}
                 onmouseleave={hideTip}
               >
-                {#if panel.projectRows}
+                {#if panel.projectRows && projectWorkspaceEnabled}
                   <a
                     class="bar-label"
                     href={projectHref(row)}
@@ -203,6 +214,10 @@
                   <div
                     class="bar-seg interactive"
                     style="width: {barWidth(interactiveValue(row), max)}%"
+                  ></div>
+                  <div
+                    class="bar-seg subagent"
+                    style="width: {barWidth(subagentValue(row), max)}%"
                   ></div>
                   <div
                     class="bar-seg automated"
@@ -224,7 +239,7 @@
 
   {#if tooltip}
     <div class="tooltip" style="left: {tooltip.x}px; top: {tooltip.y}px;">
-      {tooltip.text}
+      <span>{tooltip.text}</span>
     </div>
   {/if}
 </div>
@@ -239,6 +254,8 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
     margin-bottom: 12px;
   }
 
@@ -251,12 +268,15 @@
   .panel-actions {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
+    min-width: 0;
     gap: 12px;
   }
 
   .legend {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: var(--space-5);
   }
 
@@ -276,6 +296,11 @@
 
   .swatch.interactive {
     background: var(--accent-blue);
+  }
+
+  .swatch.subagent,
+  .bar-seg.subagent {
+    background: var(--accent-violet);
   }
 
   .swatch.automated {

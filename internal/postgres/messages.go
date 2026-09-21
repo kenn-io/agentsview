@@ -57,7 +57,7 @@ func (s *Store) GetMessages(
 
 const pgMessageCols = `session_id, ordinal, role, content, thinking_text,
 	timestamp, has_thinking, has_tool_use,
-	content_length, is_system, model, token_usage,
+	content_length, is_system, model, reasoning_effort, token_usage,
 	context_tokens, output_tokens, provider_id,
 	has_context_tokens, has_output_tokens,
 	claude_message_id, claude_request_id,
@@ -313,7 +313,7 @@ func (s *Store) SearchSession(
 }
 
 // HasFTS returns true because ILIKE search is available.
-func (s *Store) HasFTS() bool { return true }
+func (s *Store) HasFTS(ctx context.Context) bool { return true }
 
 // HasSemantic reports whether a PG vector searcher was wired at startup
 // (pg serve found a generation matching its embeddings fingerprint). When
@@ -345,6 +345,7 @@ func (s *Store) Search(
 	// user query behaves identically across backends. An explicit exact phrase
 	// (user-supplied leading quote) collapses to a single term, preserving the
 	// exact-phrase opt-in.
+	f.Query = db.PrepareFTSQuery(f.Query)
 	plainTerm := db.StripFTSQuotes(f.Query)
 	terms := db.FTSTerms(f.Query)
 	if plainTerm == "" || len(terms) == 0 {
@@ -396,6 +397,18 @@ func (s *Store) Search(
 		args = append(args, f.Project)
 		argIdx++
 	}
+
+	dateBuilder := db.NewQueryBuilder(db.PostgresQueryDialect(), argIdx-1)
+	var msgProjectClauseSb402 strings.Builder
+	var nameProjectClauseSb402 strings.Builder
+	for _, pred := range dateBuilder.SessionDateRangePredicates(f.DateFrom, f.DateTo, "", func(col string) string { return "s." + col }) {
+		msgProjectClauseSb402.WriteString(" AND " + pred)
+		nameProjectClauseSb402.WriteString(" AND " + pred)
+	}
+	msgProjectClause += msgProjectClauseSb402.String()
+	nameProjectClause += nameProjectClauseSb402.String()
+	args = append(args, dateBuilder.Args()...)
+	argIdx += len(dateBuilder.Args())
 
 	query := fmt.Sprintf(`
 		WITH msg_matches AS (
@@ -737,7 +750,7 @@ func scanPGMessages(rows interface {
 			&m.SessionID, &m.Ordinal, &m.Role,
 			&m.Content, &m.ThinkingText, &ts, &m.HasThinking,
 			&m.HasToolUse, &m.ContentLength, &m.IsSystem,
-			&m.Model, &tokenUsage,
+			&m.Model, &m.ReasoningEffort, &tokenUsage,
 			&m.ContextTokens, &m.OutputTokens,
 			&m.ProviderID,
 			&m.HasContextTokens, &m.HasOutputTokens,
@@ -754,9 +767,12 @@ func scanPGMessages(rows interface {
 		if ts != nil {
 			m.Timestamp = FormatISO8601(*ts)
 		}
-		if tokenUsage != "" {
-			m.TokenUsage = []byte(tokenUsage)
-		}
+		// Shares one guard with the other backends so they cannot drift:
+		// "" must yield nil, since a zero-length jsontext.Value fails to
+		// marshal and pg serve reaches the same response encoder.
+		// Validation happens only here, on read (see
+		// db.DecodeStoredTokenUsage).
+		m.TokenUsage = db.DecodeStoredTokenUsage(tokenUsage)
 		msgs = append(msgs, m)
 	}
 	return msgs, rows.Err()

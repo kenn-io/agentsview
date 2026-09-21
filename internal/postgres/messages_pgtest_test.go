@@ -815,8 +815,8 @@ func TestGetMessagesIDPopulated(t *testing.T) {
 
 // TestPGSearchOperatorTokenNoError mirrors the SQLite FTS 500 regression on the
 // PostgreSQL/ILIKE backend: a single token containing operator characters
-// (hyphen, colon), prepared the way the HTTP handler does, must match content
-// and not error. ILIKE has no FTS-operator hazard, but this pins parity.
+// (hyphen, colon, embedded quote), whether raw or explicitly quoted, must match
+// content and not error. ILIKE has no FTS-operator hazard, but this pins parity.
 func TestPGSearchOperatorTokenNoError(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
@@ -839,8 +839,8 @@ func TestPGSearchOperatorTokenNoError(t *testing.T) {
 		INSERT INTO messages
 			(session_id, ordinal, role, content, timestamp, content_length)
 		VALUES
-			('optok-001', 0, 'user', 'hit error-401 from the api',
-			 '2026-03-20T10:00:00Z'::timestamptz, 26),
+			('optok-001', 0, 'user', 'hit error-401 from the api and say"hi',
+			 '2026-03-20T10:00:00Z'::timestamptz, 35),
 			('optok-001', 1, 'assistant', 'returned status:500 to client',
 			 '2026-03-20T10:00:01Z'::timestamptz, 30)
 		ON CONFLICT DO NOTHING`)
@@ -850,9 +850,9 @@ func TestPGSearchOperatorTokenNoError(t *testing.T) {
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
-	for _, raw := range []string{"error-401", "status:500"} {
+	for _, raw := range []string{"error-401", "status:500", `say"hi`, `"say""hi"`} {
 		page, err := store.Search(context.Background(), db.SearchFilter{
-			Query: db.PrepareFTSQuery(raw), Limit: 10,
+			Query: raw, Limit: 10,
 		})
 		require.NoError(t, err, "Search(%q)", raw)
 		require.Len(t, page.Results, 1, "results for %q", raw)

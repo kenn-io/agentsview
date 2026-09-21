@@ -4,15 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json/v2"
-	"sort"
 	"strings"
 	"time"
+
+	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 // SessionTiming is the payload of GET /api/v1/sessions/{id}/timing.
 // All durations are in milliseconds. *int64 fields are null when the
-// underlying value is unknown (running, missing timestamp, parallel
-// non-sub-agent call).
+// underlying execution interval is unknown or incomplete.
 type SessionTiming struct {
 	SessionID       string          `json:"session_id"`
 	TotalDurationMs int64           `json:"total_duration_ms"`
@@ -24,6 +24,8 @@ type SessionTiming struct {
 	ByCategory      []CategoryTotal `json:"by_category"`
 	Turns           []TurnTiming    `json:"turns"`
 	Running         bool            `json:"running"`
+	Activity        []TurnActivity  `json:"activity"`
+	ActivityTotals  ActivityTotals  `json:"activity_totals"`
 }
 
 type CategoryTotal struct {
@@ -56,15 +58,20 @@ type CallTiming struct {
 // query. Both SQLite and PG mirrors scan into this shape and pass slices
 // to AssembleTiming.
 type TurnRow struct {
-	MessageID  int64
-	Ordinal    int64
-	Timestamp  string
-	HasToolUse bool
-	DurationMs *int64
+	MessageID        int64
+	Ordinal          int64
+	Timestamp        string
+	HasToolUse       bool
+	DurationMs       *int64
+	Role             string
+	IsSystem         bool
+	IsSystemPrefixed bool
+	SourceSubtype    string
+	ContentLength    int
 }
 
 // CallRow is the per-tool_call row returned by the per-call SQL query.
-// Both backends populate this and pass slices to AssembleTiming.
+// All backends pass raw execution evidence to AssembleTiming.
 type CallRow struct {
 	MessageID         int64
 	ToolUseID         string
@@ -73,8 +80,10 @@ type CallRow struct {
 	SkillName         *string
 	SubagentSessionID *string
 	InputJSON         string
-	DurationMs        *int64
-	CompletedAt       string
+	ExecutionStart    string
+	ExecutionEnd      string
+	SubagentStart     string
+	SubagentEnd       string
 }
 
 // GetSessionTiming computes the per-session timing summary. Returns
@@ -112,10 +121,13 @@ func (db *DB) queryTurnRows(
 		    WHEN m2.has_tool_use = 0 THEN NULL
 		    WHEN m2.delta_ms < 0    THEN NULL
 		    ELSE m2.delta_ms
-		  END AS turn_duration_ms
+		  END AS turn_duration_ms,
+		  m2.role, m2.is_system, m2.is_system_prefixed,
+		  COALESCE(m2.source_subtype, ''), m2.content_length
 		FROM (
 		  SELECT
 		    m.*,
+		    CASE WHEN `+SystemPrefixSQL("m.content", "m.role")+` THEN 0 ELSE 1 END AS is_system_prefixed,
 		    CAST(
 		      ROUND(
 		        (julianday(
@@ -145,6 +157,7 @@ func (db *DB) queryTurnRows(
 		var dur sql.NullInt64
 		if err := rows.Scan(
 			&r.MessageID, &r.Ordinal, &ts, &hasFlag, &dur,
+			&r.Role, &r.IsSystem, &r.IsSystemPrefixed, &r.SourceSubtype, &r.ContentLength,
 		); err != nil {
 			return nil, err
 		}
@@ -164,7 +177,6 @@ func (db *DB) queryTurnRows(
 func (db *DB) queryCallRows(
 	ctx context.Context, sessionID string,
 ) ([]CallRow, error) {
-	now := time.Now().UTC().Format(time.RFC3339)
 	rows, err := db.getReader().QueryContext(ctx, `
 		SELECT
 		  tc.message_id,
@@ -197,25 +209,15 @@ func (db *DB) queryCallRows(
 		      AND NULLIF(tre.timestamp, '') IS NOT NULL
 		    ORDER BY tre.event_index DESC
 		    LIMIT 1
-		  ) AS execution_completed_at,
-		  CASE
-		    WHEN tc.subagent_session_id IS NOT NULL
-		         AND s_sub.started_at IS NOT NULL THEN
-		      CAST(
-		        ROUND(
-		          (julianday(COALESCE(s_sub.ended_at, ?))
-		           - julianday(s_sub.started_at)) * 86400000
-		        ) AS INTEGER
-		      )
-		    ELSE NULL
-		  END AS subagent_duration_ms
+		  ) AS execution_completed_at
+		  ,s_sub.started_at
+		  ,s_sub.ended_at
 		FROM tool_calls tc
 		JOIN messages m ON m.id = tc.message_id
-		LEFT JOIN sessions s_sub
-		  ON s_sub.id = tc.subagent_session_id
+		LEFT JOIN sessions s_sub ON s_sub.id = tc.subagent_session_id
 		WHERE tc.session_id = ?
 		ORDER BY tc.message_id, tc.id
-	`, now, sessionID)
+	`, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -225,12 +227,11 @@ func (db *DB) queryCallRows(
 	for rows.Next() {
 		var r CallRow
 		var toolUseID, inputJSON sql.NullString
-		var skill, sub, executionStarted, executionCompleted sql.NullString
-		var subDur sql.NullInt64
+		var skill, sub, executionStarted, executionCompleted, subagentStarted, subagentEnded sql.NullString
 		if err := rows.Scan(
 			&r.MessageID, &toolUseID, &r.ToolName, &r.Category,
 			&skill, &sub, &inputJSON, &executionStarted, &executionCompleted,
-			&subDur,
+			&subagentStarted, &subagentEnded,
 		); err != nil {
 			return nil, err
 		}
@@ -248,16 +249,10 @@ func (db *DB) queryCallRows(
 		if inputJSON.Valid {
 			r.InputJSON = inputJSON.String
 		}
-		if subDur.Valid {
-			v := subDur.Int64
-			r.DurationMs = &v
-		} else if executionStarted.Valid && executionCompleted.Valid {
-			v := millisBetween(executionStarted.String, executionCompleted.String)
-			if v >= 0 {
-				r.DurationMs = &v
-				r.CompletedAt = executionCompleted.String
-			}
-		}
+		r.ExecutionStart = executionStarted.String
+		r.ExecutionEnd = executionCompleted.String
+		r.SubagentStart = subagentStarted.String
+		r.SubagentEnd = subagentEnded.String
 		out = append(out, r)
 	}
 	return out, rows.Err()
@@ -292,23 +287,23 @@ func AssembleTiming(
 		)
 	}
 
-	// Group calls by message id.
+	intervals := assembleTurnActivity(out, sess, turns, calls, now)
 	callsByMsg := map[int64][]CallTiming{}
-	for _, r := range calls {
+	for i, r := range calls {
 		c := CallTiming{
 			ToolUseID:         r.ToolUseID,
 			ToolName:          r.ToolName,
 			Category:          r.Category,
 			SkillName:         r.SkillName,
 			SubagentSessionID: r.SubagentSessionID,
-			DurationMs:        r.DurationMs,
 			InputPreview:      makeInputPreview(r.Category, r.ToolName, r.InputJSON),
+		}
+		if interval := intervals[i]; interval != nil {
+			v := interval.end - interval.start
+			c.DurationMs = &v
 		}
 		callsByMsg[r.MessageID] = append(callsByMsg[r.MessageID], c)
 	}
-
-	categoryTotals := map[string]*CategoryTotal{}
-	var slowest *CallTiming
 
 	for _, t := range turns {
 		if !t.HasToolUse {
@@ -319,191 +314,65 @@ func AssembleTiming(
 		if turnCalls == nil {
 			turnCalls = []CallTiming{}
 		}
-
 		if completedAt, ok := completedCallBoundary(calls, t.MessageID); ok {
-			v := millisBetween(t.Timestamp, completedAt)
-			if v >= 0 {
+			if start, valid := timingTimestamp(t.Timestamp); valid && completedAt >= start {
+				v := completedAt - start
 				t.DurationMs = &v
 			}
 		}
-
 		for i := range turnCalls {
 			turnCalls[i].IsParallel = len(turnCalls) > 1
-			// Solo non-sub-agent: propagate the turn's duration to the
-			// call. Per spec: DurationMs is null only for parallel
-			// non-sub-agent siblings; solo calls and sub-agents always
-			// have a duration.
-			if !turnCalls[i].IsParallel &&
-				turnCalls[i].SubagentSessionID == nil &&
-				turnCalls[i].DurationMs == nil {
-				turnCalls[i].DurationMs = t.DurationMs
-			}
 			if turnCalls[i].SubagentSessionID != nil {
 				out.SubagentCount++
 			}
-			if turnCalls[i].DurationMs != nil {
-				if slowest == nil ||
-					*turnCalls[i].DurationMs > *slowest.DurationMs {
-					c := turnCalls[i]
-					slowest = &c
-				}
+			if turnCalls[i].DurationMs != nil && (out.SlowestCall == nil || *turnCalls[i].DurationMs > *out.SlowestCall.DurationMs) {
+				c := turnCalls[i]
+				out.SlowestCall = &c
 			}
 		}
 		out.ToolCallCount += len(turnCalls)
-
-		attribution := attributeTurnGo(t.DurationMs, turnCalls)
-		bucket(
-			categoryTotals,
-			attribution.PrimaryCategory,
-			attribution.RemainderMs,
-			len(turnCalls),
-		)
-		for _, sa := range attribution.SubagentDurations {
-			bucket(categoryTotals, "Task", sa, 1)
-		}
-
 		out.Turns = append(out.Turns, TurnTiming{
 			MessageID:       t.MessageID,
 			Ordinal:         int(t.Ordinal),
 			StartedAt:       t.Timestamp,
 			DurationMs:      t.DurationMs,
-			PrimaryCategory: attribution.PrimaryCategory,
+			PrimaryCategory: primaryTimingCategory(turnCalls),
 			Calls:           turnCalls,
 		})
-		if t.DurationMs != nil {
-			out.ToolDurationMs += *t.DurationMs
-		}
 	}
-	out.SlowestCall = slowest
-
-	for _, total := range categoryTotals {
-		out.ByCategory = append(out.ByCategory, *total)
-	}
-	sort.Slice(out.ByCategory, func(i, j int) bool {
-		return out.ByCategory[i].DurationMs >
-			out.ByCategory[j].DurationMs
-	})
-
 	return out
 }
 
-func completedCallBoundary(calls []CallRow, messageID int64) (string, bool) {
-	var boundary string
-	matched := 0
+func completedCallBoundary(calls []CallRow, messageID int64) (int64, bool) {
+	var boundary int64
+	matched := false
 	for _, call := range calls {
 		if call.MessageID != messageID {
 			continue
 		}
-		matched++
-		if call.CompletedAt == "" {
-			return "", false
+		interval, ok := executionInterval(call)
+		if !ok {
+			return 0, false
 		}
-		if boundary == "" || millisBetween(boundary, call.CompletedAt) > 0 {
-			boundary = call.CompletedAt
+		if !matched || interval.end > boundary {
+			boundary = interval.end
 		}
+		matched = true
 	}
-	return boundary, matched > 0
+	return boundary, matched
 }
 
-// turnAttribution is the result of attributeTurnGo. RemainderMs is the
-// portion of the turn's duration attributed to PrimaryCategory after
-// subtracting the union of any sub-agent durations. SubagentDurations
-// holds each sub-agent's exact duration so the caller can attribute
-// them individually to "Task".
-type turnAttribution struct {
-	PrimaryCategory   string
-	RemainderMs       int64
-	SubagentDurations []int64
-}
-
-// attributeTurnGo is a Go port of attributeTurn from
-// frontend/src/lib/utils/categoryAttribution.ts. It computes the
-// turn's primary non-sub-agent category and the remainder duration
-// after subtracting the union of sub-agent ranges.
-//
-// v1 approximation: the union of sub-agent ranges is computed as
-// max(durations) instead of an exact interval merge. This is exact
-// for the common case (one sub-agent per turn) and under-estimates
-// for rare parallel sub-agents that don't fully overlap. To get exact
-// union, extend the call query to return started_at/ended_at and
-// merge intervals; see the spec for context.
-func attributeTurnGo(
-	turnDur *int64, calls []CallTiming,
-) turnAttribution {
-	if turnDur == nil {
-		return turnAttribution{PrimaryCategory: "Mixed"}
-	}
-	var subTotals []int64
-	var nonSub []CallTiming
-	for _, c := range calls {
-		if c.SubagentSessionID != nil && c.DurationMs != nil {
-			subTotals = append(subTotals, *c.DurationMs)
-		} else {
-			nonSub = append(nonSub, c)
-		}
-	}
-
-	subUnion := int64(0)
-	for _, d := range subTotals {
-		if d > subUnion {
-			subUnion = d
-		}
-	}
-	remainder := max(*turnDur-subUnion, 0)
-	// When a sub-agent's wall time meets or exceeds whatever non-
-	// sub-agent work happened in the same turn, attribute the turn
-	// to "Task". The user's mental model is "the sub-agent did the
-	// work" — surfacing that on the turns lane is more honest than
-	// letting a couple of fast parallel siblings win the count vote.
-	if subUnion > 0 && subUnion >= remainder {
-		return turnAttribution{
-			PrimaryCategory:   "Task",
-			RemainderMs:       remainder,
-			SubagentDurations: subTotals,
-		}
-	}
-	if len(nonSub) == 0 {
-		return turnAttribution{
-			PrimaryCategory:   "Mixed",
-			RemainderMs:       remainder,
-			SubagentDurations: subTotals,
-		}
-	}
+func primaryTimingCategory(calls []CallTiming) string {
 	counts := map[string]int{}
-	for _, c := range nonSub {
-		counts[c.Category]++
+	for _, call := range calls {
+		counts[call.Category]++
 	}
-	primary := "Mixed"
-	for cat, n := range counts {
-		if n*2 > len(nonSub) {
-			primary = cat
-			break
+	for category, count := range counts {
+		if count*2 > len(calls) {
+			return category
 		}
 	}
-	return turnAttribution{
-		PrimaryCategory:   primary,
-		RemainderMs:       remainder,
-		SubagentDurations: subTotals,
-	}
-}
-
-// bucket adds duration and call count to a category total in m,
-// creating the entry on first use. Zero-or-negative durations are
-// dropped so empty turns don't produce a row.
-func bucket(
-	m map[string]*CategoryTotal,
-	cat string, dur int64, callCount int,
-) {
-	if dur <= 0 {
-		return
-	}
-	t, ok := m[cat]
-	if !ok {
-		t = &CategoryTotal{Category: cat}
-		m[cat] = t
-	}
-	t.DurationMs += dur
-	t.CallCount += callCount
+	return "Mixed"
 }
 
 // millisBetween parses two RFC3339 timestamps and returns
@@ -585,8 +454,5 @@ func makeInputPreview(category, toolName, inputJSON string) string {
 	}
 
 	const maxLen = 100
-	if r := []rune(raw); len(r) > maxLen {
-		raw = string(r[:maxLen]) + "…"
-	}
-	return raw
+	return stringutil.TruncateRunes(raw, maxLen, "…")
 }

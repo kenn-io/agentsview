@@ -1,21 +1,22 @@
+import { m } from "../i18n/index.js";
+import type { AutomatedScope } from "../api/types.js";
 import type {
-  AnalyticsSummary,
-  ActivityResponse,
-  ProjectsAnalyticsResponse,
-  HourOfWeekResponse,
-  SessionShapeResponse,
-  VelocityResponse,
-  ToolsAnalyticsResponse,
-  SkillsAnalyticsResponse,
-  SignalsAnalyticsResponse,
-  AutomatedScope,
-} from "../api/types.js";
+  DbAnalyticsSummary as AnalyticsSummary,
+  DbActivityResponse as ActivityResponse,
+  DbProjectsAnalyticsResponse as ProjectsAnalyticsResponse,
+  DbHourOfWeekResponse as HourOfWeekResponse,
+  DbSessionShapeResponse as SessionShapeResponse,
+  DbVelocityResponse as VelocityResponse,
+  DbToolsAnalyticsResponse as ToolsAnalyticsResponse,
+  DbSkillsAnalyticsResponse as SkillsAnalyticsResponse,
+  DbSignalsAnalyticsResponse as SignalsAnalyticsResponse,
+} from "../api/generated/index.js";
 import {
   AnalyticsService,
   type DbHeatmapResponse,
   type DbTopSessionsResponse,
 } from "../api/generated/index";
-import { callGenerated, isAbortError } from "../api/runtime.js";
+import { isAbortError } from "../api/runtime.js";
 import { sessions } from "./sessions.svelte.js";
 import { perf, type PerfEntryStatus } from "./perf.svelte.js";
 import { rollingRange, today } from "../utils/dates.js";
@@ -143,6 +144,7 @@ class AnalyticsStore {
   private fetchAllVersion = 0;
   private activityScope: string | null = null;
   private abortControllers: Partial<Record<Panel, AbortController>> = {};
+  private fetchStartHandler: (() => void) | undefined;
   // Scope key of the cached `signals`: the Analytics-only filters (model plus
   // the heatmap drill-down) the cached data was fetched with. Used to drop the
   // cache when a fetch crosses the Analytics / Quality boundary, where those
@@ -178,6 +180,10 @@ class AnalyticsStore {
   markNewData(): void {
     if (this.lastUpdatedAt === null) return;
     this.hasNewData = true;
+  }
+
+  setFetchStartHandler(handler: (() => void) | undefined): void {
+    this.fetchStartHandler = handler;
   }
 
   private get effectiveAutomatedScope(): AutomatedScope {
@@ -462,7 +468,7 @@ class AnalyticsStore {
     const started = performance.now();
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
     try {
-      const data = await callGenerated(fetchRequest, signal);
+      const data = await fetchRequest({ signal });
       if (this.versions[panel] === v) {
         onSuccess(data);
         this.errors[panel] = null;
@@ -480,7 +486,7 @@ class AnalyticsStore {
         // existing values stay visible instead of flipping to an
         // error state. First-load failures still surface.
         if (isFirstLoad) {
-          this.errors[panel] = e instanceof Error ? e.message : "Failed to load";
+          this.errors[panel] = e instanceof Error ? e.message : m.shared_failed_to_load();
         } else {
           console.warn(`analytics.${panel} refetch failed:`, e);
         }
@@ -538,6 +544,7 @@ class AnalyticsStore {
   }
 
   async fetchAll() {
+    this.fetchStartHandler?.();
     const fetchVersion = ++this.fetchAllVersion;
     this.rollDates();
     const results = await Promise.all([

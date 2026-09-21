@@ -102,7 +102,7 @@ func newEmbeddingsTestServer(t *testing.T, m EmbeddingsManager) *Server {
 }
 
 func TestEmbeddingsRoutesRegisteredWhenManagerNil(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/embeddings/status", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/embeddings/status", nil)
 
 	withoutManager := newEmbeddingsTestServer(t, nil)
 	_, patternWithout := withoutManager.mux.Handler(req)
@@ -240,10 +240,14 @@ func TestEmbeddingsBuildIncludeAutomatedDefaulting(t *testing.T) {
 	}{
 		{"omitted uses configured true", true, `{}`, true},
 		{"omitted uses configured false", false, `{}`, false},
-		{"explicit false overrides configured true", true,
-			`{"include_automated":false}`, false},
-		{"explicit true overrides configured false", false,
-			`{"include_automated":true}`, true},
+		{
+			"explicit false overrides configured true", true,
+			`{"include_automated":false}`, false,
+		},
+		{
+			"explicit true overrides configured false", false,
+			`{"include_automated":true}`, true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -253,7 +257,7 @@ func TestEmbeddingsBuildIncludeAutomatedDefaulting(t *testing.T) {
 				WithEmbeddingsIncludeAutomatedDefault(tt.configured),
 			)
 
-			req := httptest.NewRequest(http.MethodPost, "/api/v1/embeddings/build",
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/embeddings/build",
 				strings.NewReader(tt.body))
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
@@ -435,7 +439,7 @@ func TestEmbeddingsRetireRefusalReturnsConflict(t *testing.T) {
 	w := serveJSON(t, s.mux, http.MethodPost, "/api/v1/embeddings/generations/7/retire",
 		map[string]bool{"force": false})
 	assertRecorderStatus(t, w, http.StatusConflict)
-	assert.True(t, strings.Contains(w.Body.String(), "is active"))
+	assert.Contains(t, w.Body.String(), "is active")
 }
 
 func TestEmbeddingsRetireUnknownGenerationReturnsNotFound(t *testing.T) {

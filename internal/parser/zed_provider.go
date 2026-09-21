@@ -97,12 +97,12 @@ func zedClassifyPath(root, path string, allowMissing bool) (multiSessionMatch, b
 	)
 }
 
-func zedFindMember(root, rawID string) (multiSessionMatch, bool) {
+func zedFindMember(ctx context.Context, root, rawID string) (multiSessionMatch, bool) {
 	if root == "" || !IsValidSessionID(rawID) {
 		return multiSessionMatch{}, false
 	}
 	path := filepath.Join(root, zedThreadsDBRelPath)
-	if !ZedSQLiteSessionExists(path, rawID) {
+	if !ZedSQLiteSessionExists(ctx, path, rawID) {
 		return multiSessionMatch{}, false
 	}
 	return multiSessionMatch{
@@ -159,11 +159,11 @@ func zedFingerprintSource(ctx context.Context, src multiSessionSource) (SourceFi
 	}, nil
 }
 
-func zedMemberPresent(src multiSessionSource) bool {
+func zedMemberPresent(ctx context.Context, src multiSessionSource) bool {
 	if src.MemberID == "" {
 		return IsRegularFile(src.Container)
 	}
-	return ZedSQLiteSessionExists(src.Container, src.MemberID)
+	return ZedSQLiteSessionExists(ctx, src.Container, src.MemberID)
 }
 
 func zedParseMember(
@@ -242,33 +242,6 @@ func zedParseContainer(
 		results = append(results, *result)
 	}
 	return results, nil
-}
-
-// sqliteDBJournalSuffixes is the sibling-file suffix list for
-// sqliteDBCompositeMtime: the database file itself plus its WAL. The "-shm"
-// index is left out on purpose. Every committed write lands in the main file
-// or the WAL, while readers, including this process's own scan connections,
-// rewrite the shared-memory file, so folding its mtime in would make every
-// scan report the container as changed and schedule the next scan.
-var sqliteDBJournalSuffixes = []string{"", "-wal"}
-
-// sqliteDBCompositeMtime returns the freshest mtime across a SQLite database
-// file and the listed sibling suffixes (e.g. "-wal", "-shm").
-func sqliteDBCompositeMtime(dbPath string, suffixes []string) (int64, error) {
-	var maxMtime int64
-	for _, suffix := range suffixes {
-		info, err := os.Stat(dbPath + suffix)
-		if err != nil {
-			continue
-		}
-		if mtime := info.ModTime().UnixNano(); mtime > maxMtime {
-			maxMtime = mtime
-		}
-	}
-	if maxMtime == 0 {
-		return 0, &os.PathError{Op: "stat", Path: dbPath, Err: os.ErrNotExist}
-	}
-	return maxMtime, nil
 }
 
 // parseZedVirtualPath splits a Zed virtual source path into its physical

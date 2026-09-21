@@ -69,8 +69,12 @@ const AutomationEvidencePrefixBytes = userPatternMaxLen
 // IsAutomatedSessionMetadata classifies durable provider-owned session
 // metadata that explicitly identifies an automated invocation.
 func IsAutomatedSessionMetadata(agent, sessionKind string) bool {
-	return agent == string(parser.AgentGrok) &&
-		sessionKind == parser.SessionKindNonInteractive
+	switch sessionKind {
+	case parser.SessionKindNonInteractive, parser.SessionKindRoborev:
+		return true
+	default:
+		return false
+	}
 }
 
 var (
@@ -363,7 +367,7 @@ func IsAutomatedTranscript(
 
 func firstUserMessageContent(msgs []Message) (string, bool) {
 	for _, m := range msgs {
-		if m.Role != "user" || m.IsSystem {
+		if m.Role != "user" || m.IsSystem || m.SourceSubtype == parser.SourceSubtypeToolResult {
 			continue
 		}
 		if strings.TrimSpace(m.Content) == "" {

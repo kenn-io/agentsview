@@ -1,7 +1,6 @@
 package vector
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 
@@ -36,7 +35,7 @@ CREATE TABLE IF NOT EXISTS vector_aux_meta (
 
 func openSpecT(t *testing.T, path string, spec IndexSpec, readOnly bool) *Index {
 	t.Helper()
-	ix, err := OpenSpec(context.Background(), path, spec, readOnly, 8192)
+	ix, err := OpenSpec(t.Context(), path, spec, readOnly, 8192)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = ix.Close() })
 	return ix
@@ -49,7 +48,7 @@ func testGen(model string) kitvec.Generation {
 // Two stores in one vectors.db: generations and metadata stay disjoint.
 func TestSpecCoexistenceGenerationsAndMetaAreDisjoint(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "vectors.db")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	msg := openSpecT(t, path, MessageIndexSpec(), false)
 	aux := openSpecT(t, path, auxSpec(), false)
@@ -79,7 +78,7 @@ func TestSpecCoexistenceGenerationsAndMetaAreDisjoint(t *testing.T) {
 // metadata, and generations intact.
 func TestSpecResetLeavesOtherStoreIntact(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "vectors.db")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	msg := openSpecT(t, path, MessageIndexSpec(), false)
 	aux := openSpecT(t, path, auxSpec(), false)
@@ -111,7 +110,7 @@ func TestSpecResetLeavesOtherStoreIntact(t *testing.T) {
 // wildcard position) that belongs to no store owned by the spec.
 func TestSpecResetPrefixMatchIsLiteral(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "vectors.db")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	msg := openSpecT(t, path, MessageIndexSpec(), false)
 	_, err := msg.db.ExecContext(ctx,
@@ -134,7 +133,7 @@ SELECT COUNT(*) FROM sqlite_master
 // must not affect reads on the other.
 func TestSpecReadPathMismatchIsPerStore(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "vectors.db")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	msg := openSpecT(t, path, MessageIndexSpec(), false)
 	aux := openSpecT(t, path, auxSpec(), false)
@@ -147,7 +146,7 @@ func TestSpecReadPathMismatchIsPerStore(t *testing.T) {
 	msgRO := openSpecT(t, path, stale, true)
 
 	_, err = msgRO.Generations(ctx)
-	assert.ErrorIs(t, err, ErrMirrorVersionMismatch)
+	require.ErrorIs(t, err, ErrMirrorVersionMismatch)
 
 	auxGens, err := aux.Generations(ctx)
 	require.NoError(t, err)

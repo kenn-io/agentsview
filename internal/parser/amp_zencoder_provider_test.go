@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"crypto/sha256"
 	"fmt"
 	"os"
@@ -28,13 +27,13 @@ func TestAmpProviderSourceMethods(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, AgentAmp, discovered[0].Provider)
 	assert.Equal(t, sourcePath, discovered[0].DisplayPath)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~amp:" + threadID,
 	})
 	require.NoError(t, err)
@@ -43,7 +42,7 @@ func TestAmpProviderSourceMethods(t *testing.T) {
 
 	require.NoError(t, os.Remove(sourcePath))
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: sourcePath, EventKind: "remove", WatchRoot: root},
 	)
 	require.NoError(t, err)
@@ -68,12 +67,12 @@ func TestAmpProviderSourceMethodsFollowSymlinkedSessionFile(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, sourcePath, discovered[0].DisplayPath)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~amp:" + threadID,
 	})
 	require.NoError(t, err)
@@ -81,7 +80,7 @@ func TestAmpProviderSourceMethodsFollowSymlinkedSessionFile(t *testing.T) {
 	assert.Equal(t, sourcePath, found.DisplayPath)
 
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: sourcePath, EventKind: "write", WatchRoot: root},
 	)
 	require.NoError(t, err)
@@ -101,14 +100,14 @@ func TestAmpProviderParse(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 
-	fingerprint, err := provider.Fingerprint(context.Background(), sources[0])
+	fingerprint, err := provider.Fingerprint(t.Context(), sources[0])
 	require.NoError(t, err)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      sources[0],
 		Fingerprint: fingerprint,
 	})
@@ -119,8 +118,7 @@ func TestAmpProviderParse(t *testing.T) {
 	assert.Equal(t, "amp:"+threadID, outcome.Results[0].Result.Session.ID)
 	assert.Equal(t, "amp-project", outcome.Results[0].Result.Session.Project)
 	assert.Equal(t, "devbox", outcome.Results[0].Result.Session.Machine)
-	assert.Equal(t,
-		fmt.Sprintf("%x", sha256.Sum256([]byte(content))),
+	assert.Equal(t, fmt.Sprintf("%x", sha256.Sum256([]byte(content))),
 		outcome.Results[0].Result.Session.File.Hash,
 	)
 	assert.Len(t, outcome.Results[0].Result.Messages, 2)
@@ -139,13 +137,13 @@ func TestZencoderProviderSourceMethods(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, AgentZencoder, discovered[0].Provider)
 	assert.Equal(t, sourcePath, discovered[0].DisplayPath)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~zencoder:abc-def-123",
 	})
 	require.NoError(t, err)
@@ -154,7 +152,7 @@ func TestZencoderProviderSourceMethods(t *testing.T) {
 
 	require.NoError(t, os.Remove(sourcePath))
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: sourcePath, EventKind: "remove", WatchRoot: root},
 	)
 	require.NoError(t, err)
@@ -178,12 +176,12 @@ func TestZencoderProviderSourceMethodsFollowSymlinkedSessionFile(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, sourcePath, discovered[0].DisplayPath)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~zencoder:abc-def-123",
 	})
 	require.NoError(t, err)
@@ -191,7 +189,7 @@ func TestZencoderProviderSourceMethodsFollowSymlinkedSessionFile(t *testing.T) {
 	assert.Equal(t, sourcePath, found.DisplayPath)
 
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: sourcePath, EventKind: "write", WatchRoot: root},
 	)
 	require.NoError(t, err)
@@ -210,14 +208,14 @@ func TestZencoderProviderParse(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 
-	fingerprint, err := provider.Fingerprint(context.Background(), sources[0])
+	fingerprint, err := provider.Fingerprint(t.Context(), sources[0])
 	require.NoError(t, err)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      sources[0],
 		Fingerprint: fingerprint,
 	})
@@ -228,8 +226,7 @@ func TestZencoderProviderParse(t *testing.T) {
 	assert.Equal(t, "zencoder:abc-def-123", outcome.Results[0].Result.Session.ID)
 	assert.Equal(t, "sample_project", outcome.Results[0].Result.Session.Project)
 	assert.Equal(t, "devbox", outcome.Results[0].Result.Session.Machine)
-	assert.Equal(t,
-		fmt.Sprintf("%x", sha256.Sum256([]byte(content))),
+	assert.Equal(t, fmt.Sprintf("%x", sha256.Sum256([]byte(content))),
 		outcome.Results[0].Result.Session.File.Hash,
 	)
 	assert.Len(t, outcome.Results[0].Result.Messages, 3)

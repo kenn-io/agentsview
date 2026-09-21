@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -22,7 +23,7 @@ import (
 var (
 	processProviderPiebaldSchemaOnce  stdsync.Once
 	processProviderPiebaldSchemaBytes []byte
-	processProviderPiebaldSchemaErr   error
+	errProcessProviderPiebaldSchema   error
 )
 
 const processProviderPiebaldSchema = `
@@ -94,10 +95,9 @@ const processProviderPiebaldSchema = `
 `
 
 func TestProcessFileProviderForgeVirtualSource(t *testing.T) {
-
 	root := t.TempDir()
 	dbPath := writeProcessProviderForgeDB(t, root)
-	engine := NewEngine(openTestDB(t), EngineConfig{
+	engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentForge: {root},
 		},
@@ -110,7 +110,7 @@ func TestProcessFileProviderForgeVirtualSource(t *testing.T) {
 	assert.Equal(t, parser.AgentForge, files[0].Agent)
 	assert.False(t, files[0].ForceParse)
 
-	res := engine.processFile(context.Background(), files[0])
+	res := engine.processFile(t.Context(), files[0])
 
 	require.NoError(t, res.err)
 	require.Len(t, res.results, 1)
@@ -126,7 +126,7 @@ func TestProviderChangedPathUsesSourceMachine(t *testing.T) {
 	root := t.TempDir()
 	dbPath := writeProcessProviderForgeDB(t, root)
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentForge: {root},
 		},
@@ -141,15 +141,15 @@ func TestProviderChangedPathUsesSourceMachine(t *testing.T) {
 	require.Len(t, files, 1)
 	assert.Equal(t, "archivebox", files[0].Machine)
 
-	res := engine.processFile(context.Background(), files[0])
+	res := engine.processFile(t.Context(), files[0])
 
 	require.NoError(t, res.err)
 	require.Len(t, res.results, 1)
 	assert.Equal(t, "archivebox", res.results[0].Session.Machine)
 	assert.Equal(t, "forge:conv-001", res.results[0].Session.ID)
 
-	engine.SyncPathsContext(context.Background(), []string{dbPath})
-	sess, err := database.GetSessionFull(context.Background(), "forge:conv-001")
+	engine.SyncPathsContext(t.Context(), []string{dbPath})
+	sess, err := database.GetSessionFull(t.Context(), "forge:conv-001")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Equal(t, "archivebox", sess.Machine)
@@ -159,7 +159,7 @@ func TestProviderPeriodicSyncUsesSourceMachine(t *testing.T) {
 	root := t.TempDir()
 	writeProcessProviderForgeDB(t, root)
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentForge: {root},
 		},
@@ -169,10 +169,10 @@ func TestProviderPeriodicSyncUsesSourceMachine(t *testing.T) {
 		Machine: "localbox",
 	})
 
-	stats := engine.SyncAll(context.Background(), nil)
+	stats := engine.SyncAll(t.Context(), nil)
 
 	assert.False(t, stats.Aborted)
-	sess, err := database.GetSessionFull(context.Background(), "forge:conv-001")
+	sess, err := database.GetSessionFull(t.Context(), "forge:conv-001")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Equal(t, "archivebox", sess.Machine)
@@ -183,7 +183,7 @@ func TestProviderPeriodicSyncPreservesFreshDBBackedSourceMachine(t *testing.T) {
 	writeProcessProviderForgeDB(t, root)
 	database := openTestDB(t)
 	newEngine := func(machine string) *Engine {
-		return NewEngine(database, EngineConfig{
+		return NewEngine(t.Context(), database, EngineConfig{
 			AgentDirs: map[parser.AgentType][]string{
 				parser.AgentForge: {root},
 			},
@@ -194,12 +194,12 @@ func TestProviderPeriodicSyncPreservesFreshDBBackedSourceMachine(t *testing.T) {
 		})
 	}
 
-	first := newEngine("oldbox").SyncAll(context.Background(), nil)
+	first := newEngine("oldbox").SyncAll(t.Context(), nil)
 	require.Equal(t, 1, first.Synced)
-	second := newEngine("newbox").SyncAll(context.Background(), nil)
+	second := newEngine("newbox").SyncAll(t.Context(), nil)
 	require.Zero(t, second.Synced)
 
-	sess, err := database.GetSessionFull(context.Background(), "forge:conv-001")
+	sess, err := database.GetSessionFull(t.Context(), "forge:conv-001")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Equal(t, "oldbox", sess.Machine)
@@ -211,7 +211,7 @@ func TestProviderPeriodicSyncPreservesTrashedDBBackedSourceMachine(t *testing.T)
 	writeProcessProviderForgeDB(t, root)
 	database := openTestDB(t)
 	newEngine := func(machine string) *Engine {
-		return NewEngine(database, EngineConfig{
+		return NewEngine(t.Context(), database, EngineConfig{
 			AgentDirs: map[parser.AgentType][]string{
 				parser.AgentForge: {root},
 			},
@@ -223,7 +223,7 @@ func TestProviderPeriodicSyncPreservesTrashedDBBackedSourceMachine(t *testing.T)
 	}
 
 	require.Equal(t, 1, newEngine("oldbox").SyncAll(t.Context(), nil).Synced)
-	require.NoError(t, database.SoftDeleteSession("forge:conv-001"))
+	require.NoError(t, database.SoftDeleteSession(t.Context(), "forge:conv-001"))
 	require.Zero(t, newEngine("newbox").SyncAll(t.Context(), nil).Synced)
 
 	active, err := database.GetSession(t.Context(), "forge:conv-001")
@@ -243,7 +243,7 @@ func TestProviderResyncPreservesTrashedDBBackedSourceMachine(t *testing.T) {
 	writeProcessProviderForgeDB(t, root)
 	database := openTestDB(t)
 	newEngine := func(machine string) *Engine {
-		return NewEngine(database, EngineConfig{
+		return NewEngine(t.Context(), database, EngineConfig{
 			AgentDirs: map[parser.AgentType][]string{
 				parser.AgentForge: {root},
 			},
@@ -255,7 +255,7 @@ func TestProviderResyncPreservesTrashedDBBackedSourceMachine(t *testing.T) {
 	}
 
 	require.Equal(t, 1, newEngine("oldbox").SyncAll(t.Context(), nil).Synced)
-	require.NoError(t, database.SoftDeleteSession("forge:conv-001"))
+	require.NoError(t, database.SoftDeleteSession(t.Context(), "forge:conv-001"))
 	stats := newEngine("newbox").ResyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted)
 
@@ -267,19 +267,18 @@ func TestProviderResyncPreservesTrashedDBBackedSourceMachine(t *testing.T) {
 }
 
 func TestProcessFileProviderSkipsStoredFreshSource(t *testing.T) {
-
 	root := t.TempDir()
 	dbPath := writeProcessProviderForgeDB(t, root)
 	virtualPath := dbPath + "#conv-001"
 	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentForge: {root},
 		},
 		Machine: "devbox",
 	})
 
-	first := engine.processFile(context.Background(), parser.DiscoveredFile{
+	first := engine.processFile(t.Context(), parser.DiscoveredFile{
 		Path:  virtualPath,
 		Agent: parser.AgentForge,
 	})
@@ -299,7 +298,7 @@ func TestProcessFileProviderSkipsStoredFreshSource(t *testing.T) {
 	require.Equal(t, 1, written)
 	require.Empty(t, engine.skipCache)
 
-	second := engine.processFile(context.Background(), parser.DiscoveredFile{
+	second := engine.processFile(t.Context(), parser.DiscoveredFile{
 		Path:  virtualPath,
 		Agent: parser.AgentForge,
 	})
@@ -312,19 +311,18 @@ func TestProcessFileProviderSkipsStoredFreshSource(t *testing.T) {
 }
 
 func TestProcessFileProviderPiebaldVirtualSource(t *testing.T) {
-
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "app.db")
 	piebaldDB := openProcessProviderPiebaldDB(t, dbPath)
 	seedProcessProviderPiebaldChat(t, piebaldDB)
-	engine := NewEngine(openTestDB(t), EngineConfig{
+	engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentPiebald: {root},
 		},
 		Machine: "devbox",
 	})
 
-	res := engine.processFile(context.Background(), parser.DiscoveredFile{
+	res := engine.processFile(t.Context(), parser.DiscoveredFile{
 		Path:  dbPath + "#42",
 		Agent: parser.AgentPiebald,
 	})
@@ -348,21 +346,20 @@ func TestProcessFileProviderPiebaldVirtualSource(t *testing.T) {
 // the legacy syncPiebald/piebaldPendingSessionIDs skip and the Forge
 // SkipsStoredFreshSource behavior; the in-memory skip cache stays empty.
 func TestProcessFileProviderPiebaldSkipsStoredFreshSource(t *testing.T) {
-
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "app.db")
 	piebaldDB := openProcessProviderPiebaldDB(t, dbPath)
 	seedProcessProviderPiebaldChat(t, piebaldDB)
 	virtualPath := dbPath + "#42"
 	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentPiebald: {root},
 		},
 		Machine: "devbox",
 	})
 
-	first := engine.processFile(context.Background(), parser.DiscoveredFile{
+	first := engine.processFile(t.Context(), parser.DiscoveredFile{
 		Path:  virtualPath,
 		Agent: parser.AgentPiebald,
 	})
@@ -382,7 +379,7 @@ func TestProcessFileProviderPiebaldSkipsStoredFreshSource(t *testing.T) {
 	require.Equal(t, 1, written)
 	require.Empty(t, engine.skipCache)
 
-	second := engine.processFile(context.Background(), parser.DiscoveredFile{
+	second := engine.processFile(t.Context(), parser.DiscoveredFile{
 		Path:  virtualPath,
 		Agent: parser.AgentPiebald,
 	})
@@ -393,20 +390,573 @@ func TestProcessFileProviderPiebaldSkipsStoredFreshSource(t *testing.T) {
 	assert.Empty(t, second.results)
 }
 
-func TestProcessFileProviderWarpVirtualSource(t *testing.T) {
+func TestProcessFileProviderPiebaldMemoizesStableFailuresByDBIdentity(t *testing.T) {
+	root := t.TempDir()
+	dbPath, fingerprint := writeProcessProviderSource(t, root, "app.db")
+	virtualPath := dbPath + "#42"
+	fingerprint.Key = virtualPath
+	provider := newPiebaldProcessFixtureProvider(
+		processFixturePiebaldSource(virtualPath),
+		fingerprint,
+		parser.ParseOutcome{
+			Results: []parser.ParseResultOutcome{{
+				Result: processFixtureResult(
+					"piebald:42", parser.AgentPiebald, "project",
+					virtualPath, fingerprint,
+				),
+				DataVersion: parser.DataVersionCurrent,
+			}},
+			ResultSetComplete: true,
+			ForceReplace:      true,
+		},
+	)
+	stableErr := errors.New("stable Piebald parse failure")
+	provider.parseErr = stableErr
+	engine := newPiebaldProcessFixtureEngine(t, root, provider)
+	file := parser.DiscoveredFile{Path: virtualPath, Agent: parser.AgentPiebald}
 
+	first := engine.processFile(t.Context(), file)
+	require.ErrorIs(t, first.err, stableErr)
+	assert.False(t, first.cachedFailure)
+	assert.Equal(t, []string{"find-source", "fingerprint", "parse"}, provider.calls)
+
+	second := engine.processFile(t.Context(), file)
+	require.NoError(t, second.err)
+	assert.True(t, second.skip)
+	assert.True(t, second.cachedFailure)
+	assert.Equal(t,
+		[]string{"find-source", "fingerprint", "parse", "find-source"},
+		provider.calls,
+	)
+	assert.Empty(t, engine.SnapshotSkipCache())
+	firstStats := collectProcessFixtureResult(t, engine, file, first)
+	secondStats := collectProcessFixtureResult(t, engine, file, second)
+	assert.Equal(t, 1, firstStats.Failed)
+	assert.Zero(t, secondStats.Failed)
+	assert.Equal(t, 1, secondStats.Skipped)
+	assert.Equal(t, firstStats.Synced, secondStats.Synced)
+
+	info, err := os.Stat(dbPath)
+	require.NoError(t, err)
+	require.NoError(t, os.Chtimes(
+		dbPath, info.ModTime().Add(time.Second), info.ModTime().Add(time.Second),
+	))
+	changed := engine.processFile(t.Context(), file)
+	require.ErrorIs(t, changed.err, stableErr)
+	assert.False(t, changed.cachedFailure)
+	assert.Equal(t, 2, countProcessFixtureCalls(provider.calls, "parse"))
+	require.Len(t, provider.parseRequests, 2)
+	assert.True(t, provider.parseRequests[1].ForceParse)
+
+	info, err = os.Stat(dbPath)
+	require.NoError(t, err)
+	require.NoError(t, os.Chtimes(
+		dbPath, info.ModTime().Add(time.Second), info.ModTime().Add(time.Second),
+	))
+	provider.fingerprintErr = errors.New("fingerprint unavailable")
+	fingerprintFailure := engine.processFile(t.Context(), file)
+	require.Error(t, fingerprintFailure.err)
+	assert.False(t, fingerprintFailure.cachedFailure)
+	assert.Equal(t, 2, countProcessFixtureCalls(provider.calls, "parse"))
+
+	provider.fingerprintErr = nil
+	provider.parseErr = context.Canceled
+	interrupted := engine.processFile(t.Context(), file)
+	require.ErrorIs(t, interrupted.err, context.Canceled)
+	assert.False(t, interrupted.cachedFailure)
+	assert.Equal(t, 3, countProcessFixtureCalls(provider.calls, "parse"))
+	assert.True(t, provider.parseRequests[2].ForceParse)
+
+	provider.parseErr = nil
+	retried := engine.processFile(t.Context(), file)
+	require.NoError(t, retried.err)
+	assert.False(t, retried.cachedFailure)
+	assert.Equal(t, 4, countProcessFixtureCalls(provider.calls, "parse"))
+	assert.True(t, provider.parseRequests[3].ForceParse)
+	assert.Empty(t, engine.piebaldFailureMemo)
+}
+
+func TestProcessFileProviderPiebaldFailureMemoTracksWALButIgnoresSHM(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "app.db")
+	database := openProcessProviderPiebaldDB(t, dbPath)
+	seedProcessProviderPiebaldChat(t, database)
+	_, err := database.ExecContext(t.Context(), "PRAGMA journal_mode=WAL")
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), "PRAGMA wal_autocheckpoint=1000000")
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), "UPDATE chats SET title = 'WAL seed' WHERE id = 42")
+	require.NoError(t, err)
+
+	virtualPath := dbPath + "#42"
+	provider := newPiebaldProcessFixtureProvider(
+		processFixturePiebaldSource(virtualPath),
+		parser.SourceFingerprint{Key: virtualPath, MTimeNS: 1},
+		parser.ParseOutcome{},
+	)
+	provider.parseErr = errors.New("stable WAL failure")
+	engine := newPiebaldProcessFixtureEngine(t, root, provider)
+	file := parser.DiscoveredFile{Path: virtualPath, Agent: parser.AgentPiebald}
+
+	first := engine.processFile(t.Context(), file)
+	require.ErrorIs(t, first.err, provider.parseErr)
+
+	dbBefore, err := os.Stat(dbPath)
+	require.NoError(t, err)
+	walBefore, err := os.Stat(dbPath + "-wal")
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), "UPDATE chats SET title = 'WAL update' WHERE id = 42")
+	require.NoError(t, err)
+	dbAfter, err := os.Stat(dbPath)
+	require.NoError(t, err)
+	walAfter, err := os.Stat(dbPath + "-wal")
+	require.NoError(t, err)
+	assert.Equal(t, dbBefore.Size(), dbAfter.Size())
+	assert.Equal(t, dbBefore.ModTime(), dbAfter.ModTime())
+	assert.Greater(t, walAfter.Size(), walBefore.Size())
+
+	second := engine.processFile(t.Context(), file)
+	require.ErrorIs(t, second.err, provider.parseErr)
+	assert.False(t, second.cachedFailure)
+	assert.Equal(t, 2, countProcessFixtureCalls(provider.calls, "parse"))
+
+	shmPath := dbPath + "-shm"
+	shmBefore, err := os.Stat(shmPath)
+	require.NoError(t, err)
+	require.NoError(t, os.Chtimes(
+		shmPath, shmBefore.ModTime().Add(time.Second), shmBefore.ModTime().Add(time.Second),
+	))
+	third := engine.processFile(t.Context(), file)
+	require.NoError(t, third.err)
+	assert.True(t, third.skip)
+	assert.True(t, third.cachedFailure)
+	assert.Equal(t, 2, countProcessFixtureCalls(provider.calls, "parse"))
+}
+
+func TestProcessFileProviderPiebaldFailureMemoRetainsRetryAfterStatFailure(t *testing.T) {
+	root := t.TempDir()
+	dbPath, fingerprint := writeProcessProviderSource(t, root, "app.db")
+	virtualPath := dbPath + "#42"
+	fingerprint.Key = virtualPath
+	provider := newPiebaldProcessFixtureProvider(
+		processFixturePiebaldSource(virtualPath), fingerprint,
+		parser.ParseOutcome{},
+	)
+	provider.parseErr = errors.New("stable parse failure")
+	engine := newPiebaldProcessFixtureEngine(t, root, provider)
+	filePath := virtualPath
+	fileSize := fingerprint.Size
+	fileMtime := fingerprint.MTimeNS
+	require.NoError(t, engine.db.UpsertSession(t.Context(), db.Session{
+		ID:          "piebald:42",
+		Agent:       string(parser.AgentPiebald),
+		Project:     "fixture-project",
+		Machine:     "devbox",
+		FilePath:    &filePath,
+		FileSize:    &fileSize,
+		FileMtime:   &fileMtime,
+		DataVersion: db.CurrentDataVersion(),
+	}))
+	file := parser.DiscoveredFile{Path: virtualPath, Agent: parser.AgentPiebald}
+
+	first := engine.processFile(t.Context(), file)
+	require.ErrorIs(t, first.err, provider.parseErr)
+	assert.False(t, first.cachedFailure)
+
+	engine.stat = func(string) (os.FileInfo, error) {
+		return nil, errors.New("stat unavailable")
+	}
+	second := engine.processFile(t.Context(), file)
+	require.ErrorIs(t, second.err, provider.parseErr)
+	assert.False(t, second.cachedFailure)
+	assert.True(t, engine.piebaldFailureMemo[virtualPath].retryNeeded)
+	assert.Equal(t, 2, countProcessFixtureCalls(provider.calls, "parse"))
+
+	engine.stat = os.Stat
+	provider.parseErr = nil
+	third := engine.processFile(t.Context(), file)
+	require.NoError(t, third.err)
+	assert.False(t, third.cachedFailure)
+	assert.True(t, provider.parseRequests[2].ForceParse)
+	assert.Empty(t, engine.piebaldFailureMemo)
+}
+
+func TestProcessFileProviderPiebaldFailureMemoIsSourceScoped(t *testing.T) {
+	root := t.TempDir()
+	dbPath, fingerprint := writeProcessProviderSource(t, root, "app.db")
+	firstPath := dbPath + "#42"
+	fingerprint.Key = firstPath
+	provider := newPiebaldProcessFixtureProvider(
+		processFixturePiebaldSource(firstPath), fingerprint,
+		parser.ParseOutcome{},
+	)
+	provider.parseErr = errors.New("member parse failure")
+	engine := newPiebaldProcessFixtureEngine(t, root, provider)
+
+	first := engine.processFile(t.Context(), parser.DiscoveredFile{
+		Path: firstPath, Agent: parser.AgentPiebald,
+	})
+	require.Error(t, first.err)
+
+	siblingPath := dbPath + "#43"
+	siblingSource := processFixturePiebaldSource(siblingPath)
+	sibling := engine.processFile(t.Context(), parser.DiscoveredFile{
+		Path: siblingPath, Agent: parser.AgentPiebald,
+		ProviderSource: &siblingSource,
+	})
+	require.Error(t, sibling.err)
+	assert.False(t, sibling.cachedFailure)
+
+	otherRoot := t.TempDir()
+	otherDB, otherFingerprint := writeProcessProviderSource(t, otherRoot, "app.db")
+	otherPath := otherDB + "#42"
+	otherFingerprint.Key = otherPath
+	otherSource := processFixturePiebaldSource(otherPath)
+	provider.fingerprint = otherFingerprint
+	other := engine.processFile(t.Context(), parser.DiscoveredFile{
+		Path:           otherPath,
+		Agent:          parser.AgentPiebald,
+		ProviderSource: &otherSource,
+	})
+	require.Error(t, other.err)
+	assert.False(t, other.cachedFailure)
+	assert.Equal(t, 3, countProcessFixtureCalls(provider.calls, "parse"))
+}
+
+func TestProcessFileProviderPiebaldForcePathsBypassFailureMemo(t *testing.T) {
+	root := t.TempDir()
+	dbPath, fingerprint := writeProcessProviderSource(t, root, "app.db")
+	virtualPath := dbPath + "#42"
+	fingerprint.Key = virtualPath
+	provider := newPiebaldProcessFixtureProvider(
+		processFixturePiebaldSource(virtualPath), fingerprint,
+		parser.ParseOutcome{},
+	)
+	provider.parseErr = errors.New("forced Piebald parse failure")
+	engine := newPiebaldProcessFixtureEngine(t, root, provider)
+	file := parser.DiscoveredFile{Path: virtualPath, Agent: parser.AgentPiebald}
+
+	first := engine.processFile(t.Context(), file)
+	require.Error(t, first.err)
+
+	forceParse := file
+	forceParse.ForceParse = true
+	forced := engine.processFile(t.Context(), forceParse)
+	require.Error(t, forced.err)
+	assert.False(t, forced.cachedFailure)
+
+	forceFullParse := file
+	forceFullParse.ForceFullParse = true
+	forcedFull := engine.processFile(t.Context(), forceFullParse)
+	require.Error(t, forcedFull.err)
+	assert.False(t, forcedFull.cachedFailure)
+	require.Len(t, provider.parseRequests, 3)
+	assert.True(t, provider.parseRequests[1].ForceParse)
+	assert.True(t, provider.parseRequests[2].ForceParse)
+
+	provider.parseErr = nil
+	forcedSuccess := engine.processFile(t.Context(), forceParse)
+	require.NoError(t, forcedSuccess.err)
+	assert.Empty(t, engine.piebaldFailureMemo)
+
+	provider.parseErr = errors.New("forced Piebald parse failure")
+	repeated := engine.processFile(t.Context(), file)
+	require.Error(t, repeated.err)
+	assert.False(t, repeated.cachedFailure)
+
+	repeated = engine.processFile(t.Context(), file)
+	require.NoError(t, repeated.err)
+	assert.True(t, repeated.skip)
+	assert.True(t, repeated.cachedFailure)
+	assert.Equal(t, 5, countProcessFixtureCalls(provider.calls, "parse"))
+
+	provider.parseErr = os.ErrPermission
+	forcedTransient := engine.processFile(t.Context(), forceParse)
+	require.ErrorIs(t, forcedTransient.err, os.ErrPermission)
+	retried := engine.processFile(t.Context(), file)
+	require.ErrorIs(t, retried.err, os.ErrPermission)
+	retried = engine.processFile(t.Context(), file)
+	require.ErrorIs(t, retried.err, os.ErrPermission)
+	assert.Equal(t, 8, countProcessFixtureCalls(provider.calls, "parse"))
+}
+
+func TestPiebaldFailureInvalidationRetriesUnchangedSource(t *testing.T) {
+	for _, mode := range []string{"reset", "bare-path", "process-key"} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			dbPath, fingerprint := writeProcessProviderSource(t, root, "app.db")
+			path := dbPath + "#42"
+			fingerprint.Key = path
+			provider := newPiebaldProcessFixtureProvider(
+				processFixturePiebaldSource(path), fingerprint, parser.ParseOutcome{},
+			)
+			provider.parseErr = errors.New("stable Piebald failure")
+			engine := newPiebaldProcessFixtureEngine(t, root, provider)
+			file := parser.DiscoveredFile{Path: path, Agent: parser.AgentPiebald}
+			require.Error(t, engine.processFile(t.Context(), file).err)
+			require.True(t, engine.processFile(t.Context(), file).skip)
+			switch mode {
+			case "reset":
+				engine.ResetFailureCache(t.Context())
+			case "bare-path":
+				engine.clearSkipInMemory(path)
+			case "process-key":
+				engine.clearSkipInMemory(providerAgentSkipCacheKey(path, parser.AgentPiebald) + sourceHashSkipMarker + "hash")
+			}
+			require.Error(t, engine.processFile(t.Context(), file).err)
+			assert.Equal(t, 2, countProcessFixtureCalls(provider.calls, "parse"))
+		})
+	}
+}
+
+func TestPiebaldForcedTransientFailureAfterRestartRetainsRetry(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "app.db")
+	sourceDB := openProcessProviderPiebaldDB(t, path)
+	seedProcessProviderPiebaldChat(t, sourceDB)
+	virtualPath := path + "#42"
+	provider := newPiebaldProcessFixtureProvider(
+		processFixturePiebaldSource(virtualPath),
+		parser.SourceFingerprint{Key: virtualPath, MTimeNS: 1},
+		parser.ParseOutcome{ResultSetComplete: true},
+	)
+	provider.parseErr = errors.New("malformed Piebald source")
+	engine := newPiebaldProcessFixtureEngine(t, root, provider)
+	file := parser.DiscoveredFile{Path: virtualPath, Agent: parser.AgentPiebald}
+	first := engine.processFile(t.Context(), file)
+	require.True(t, first.cacheFailure)
+	require.Equal(t, 1, collectProcessFixtureResult(t, engine, file, first).Failed)
+	engine.flushFailureCache(t.Context())
+	restarted := NewEngine(t.Context(), engine.db, EngineConfig{
+		AgentDirs:         map[parser.AgentType][]string{parser.AgentPiebald: {root}},
+		Machine:           "devbox",
+		ProviderFactories: []parser.ProviderFactory{processFixtureFactory{provider: provider}},
+	})
+	t.Cleanup(restarted.Close)
+	provider.parseErr = sqlite3.Error{Code: sqlite3.ErrBusy}
+	forced := file
+	forced.ForceParse = true
+	require.Error(t, restarted.processFile(t.Context(), forced).err)
+	provider.parseErr = nil
+	require.NoError(t, restarted.processFile(t.Context(), file).err)
+	require.Len(t, provider.parseRequests, 3)
+	assert.True(t, provider.parseRequests[2].ForceParse, "retry intent must survive the transient forced attempt")
+}
+
+func TestParseDiffPiebaldFailureBypassesMemo(t *testing.T) {
+	root := t.TempDir()
+	dbPath, fingerprint := writeProcessProviderSource(t, root, "app.db")
+	virtualPath := dbPath + "#42"
+	fingerprint.Key = virtualPath
+	source := processFixturePiebaldSource(virtualPath)
+	provider := newPiebaldProcessFixtureProvider(
+		source, fingerprint, parser.ParseOutcome{},
+	)
+	provider.discovered = []parser.SourceRef{source}
+	provider.parseErr = errors.New("report-only Piebald parse failure")
+	database := openTestDB(t)
+	engine := NewDiffEngine(t.Context(), database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentPiebald: {root},
+		},
+		ProviderFactories: []parser.ProviderFactory{
+			processFixtureFactory{provider: provider},
+		},
+		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			parser.AgentPiebald: parser.ProviderMigrationProviderAuthoritative,
+		},
+	})
+	t.Cleanup(engine.Close)
+	key, _, ok := piebaldFailureSourcePaths(source)
+	require.True(t, ok)
+	identity, err := engine.capturePiebaldFailureIdentity(dbPath)
+	require.NoError(t, err)
+	engine.piebaldFailureMemo[key] = piebaldFailureMemoEntry{
+		identity: identity,
+		err:      errors.New("warm failure"),
+	}
+
+	report, err := engine.ParseDiff(t.Context(), ParseDiffOptions{
+		Agents: []parser.AgentType{parser.AgentPiebald},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, report)
+	assert.Equal(t, 1, report.Totals.ParseErrors)
+	assert.Len(t, engine.piebaldFailureMemo, 1)
+	require.Len(t, provider.parseRequests, 1)
+	warm := engine.piebaldFailureMemo[key]
+	provider.parseErr = nil
+	provider.outcome = parser.ParseOutcome{ResultSetComplete: true}
+	report, err = engine.ParseDiff(t.Context(), ParseDiffOptions{
+		Agents: []parser.AgentType{parser.AgentPiebald},
+	})
+	require.NoError(t, err)
+	assert.Zero(t, report.Totals.ParseErrors)
+	assert.Equal(t, warm, engine.piebaldFailureMemo[key])
+	require.Len(t, provider.parseRequests, 2)
+}
+
+func TestPiebaldFailureMemoClearsOnCacheInvalidation(t *testing.T) {
+	root := t.TempDir()
+	dbPath, _ := writeProcessProviderSource(t, root, "app.db")
+	virtualPath := dbPath + "#42"
+	source := processFixturePiebaldSource(virtualPath)
+	engine := newPiebaldProcessFixtureEngine(t, root, &processFixtureProvider{})
+	key, _, ok := piebaldFailureSourcePaths(source)
+	require.True(t, ok)
+	identity, err := engine.capturePiebaldFailureIdentity(dbPath)
+	require.NoError(t, err)
+	engine.piebaldFailureMemo[key] = piebaldFailureMemoEntry{
+		identity: identity,
+		err:      errors.New("stale failure"),
+	}
+
+	engine.clearWatcherOverflowCaches(t.Context())
+	assert.Empty(t, engine.piebaldFailureMemo)
+
+	engine.piebaldFailureMemo[key] = piebaldFailureMemoEntry{
+		identity: identity,
+		err:      errors.New("stale failure"),
+	}
+	require.NoError(t, engine.ResetCachesAfterSwap(t.Context()))
+	assert.Empty(t, engine.piebaldFailureMemo)
+}
+
+func TestPrunePiebaldFailuresAfterAuthoritativeDiscovery(t *testing.T) {
+	root := t.TempDir()
+	otherRoot := t.TempDir()
+	firstDB, _ := writeProcessProviderSource(t, root, "app.db")
+	otherDB, _ := writeProcessProviderSource(t, otherRoot, "app.db")
+	firstKey := parser.VirtualSourcePath(firstDB, "42")
+	secondKey := parser.VirtualSourcePath(firstDB, "43")
+	otherKey := parser.VirtualSourcePath(otherDB, "42")
+	engine := &Engine{
+		piebaldFailureMemo: map[string]piebaldFailureMemoEntry{
+			firstKey:  {},
+			secondKey: {},
+			otherKey:  {},
+		},
+	}
+
+	engine.prunePiebaldFailures(
+		[]string{root}, map[string]struct{}{firstKey: {}},
+	)
+
+	assert.Contains(t, engine.piebaldFailureMemo, firstKey)
+	assert.NotContains(t, engine.piebaldFailureMemo, secondKey)
+	assert.Contains(t, engine.piebaldFailureMemo, otherKey)
+}
+
+func TestPrunePiebaldFailuresDoesNotCrossNestedRoots(t *testing.T) {
+	parent := t.TempDir()
+	child := filepath.Join(parent, "child")
+	require.NoError(t, os.Mkdir(child, 0o755))
+	childDB, _ := writeProcessProviderSource(t, child, "app.db")
+	childKey := parser.VirtualSourcePath(childDB, "42")
+	engine := &Engine{
+		piebaldFailureMemo: map[string]piebaldFailureMemoEntry{childKey: {}},
+	}
+
+	engine.prunePiebaldFailures([]string{parent}, map[string]struct{}{})
+
+	assert.Contains(t, engine.piebaldFailureMemo, childKey)
+}
+
+func TestPiebaldAuthoritativeRootsSkipUnverifiedStats(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing")
+	blocked := filepath.Join(t.TempDir(), "blocked")
+	present := filepath.Join(t.TempDir(), "present")
+	stats := map[string]error{
+		filepath.Join(missing, parser.PiebaldDBFilename): os.ErrNotExist,
+		filepath.Join(blocked, parser.PiebaldDBFilename): errors.New("permission denied"),
+		filepath.Join(present, parser.PiebaldDBFilename): nil,
+	}
+	stat := func(path string) (os.FileInfo, error) {
+		return nil, stats[path]
+	}
+
+	assert.Equal(t,
+		[]string{missing, present},
+		piebaldAuthoritativeRoots([]string{missing, blocked, present}, stat),
+	)
+}
+
+func TestPiebaldTransientFailureClassesAreNotMemoized(t *testing.T) {
+	root := t.TempDir()
+	dbPath, _ := writeProcessProviderSource(t, root, "app.db")
+	virtualPath := dbPath + "#42"
+	source := processFixturePiebaldSource(virtualPath)
+	identity, err := (&Engine{stat: os.Stat}).capturePiebaldFailureIdentity(dbPath)
+	require.NoError(t, err)
+	pre := piebaldFailureLookup{
+		key:        virtualPath,
+		identity:   identity,
+		identityOK: true,
+	}
+	engine := &Engine{
+		stat:               os.Stat,
+		piebaldFailureMemo: make(map[string]piebaldFailureMemoEntry),
+	}
+	for name, parseErr := range map[string]error{
+		"canceled":  context.Canceled,
+		"deadline":  context.DeadlineExceeded,
+		"busy":      sqlite3.Error{Code: sqlite3.ErrBusy},
+		"locked":    sqlite3.Error{Code: sqlite3.ErrLocked},
+		"interrupt": sqlite3.Error{Code: sqlite3.ErrInterrupt},
+		"io":        sqlite3.Error{Code: sqlite3.ErrIoErr},
+		"full":      sqlite3.Error{Code: sqlite3.ErrFull},
+		"nomem":     sqlite3.Error{Code: sqlite3.ErrNomem},
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.True(t, piebaldFailureIsTransient(t.Context(), parseErr))
+			engine.rememberPiebaldParseFailure(
+				t.Context(), source, pre, parseErr,
+			)
+			assert.Empty(t, engine.piebaldFailureMemo)
+		})
+	}
+}
+
+func countProcessFixtureCalls(calls []string, want string) int {
+	count := 0
+	for _, call := range calls {
+		if call == want {
+			count++
+		}
+	}
+	return count
+}
+
+func collectProcessFixtureResult(
+	t *testing.T, engine *Engine, file parser.DiscoveredFile, result processResult,
+) SyncStats {
+	t.Helper()
+	results := make(chan syncJob, 1)
+	results <- syncJob{
+		processResult: result,
+		agent:         file.Agent,
+		path:          file.Path,
+		containerPath: result.sqliteContainerResultPath,
+	}
+	close(results)
+	return engine.collectAndBatch(
+		t.Context(), results, 1, 1, nil, syncWriteDefault,
+	)
+}
+
+func TestProcessFileProviderWarpVirtualSource(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "warp.sqlite")
 	warpDB := openProcessProviderWarpDB(t, dbPath)
 	seedProcessProviderWarpConversation(t, warpDB)
-	engine := NewEngine(openTestDB(t), EngineConfig{
+	engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentWarp: {root},
 		},
 		Machine: "devbox",
 	})
 
-	res := engine.processFile(context.Background(), parser.DiscoveredFile{
+	res := engine.processFile(t.Context(), parser.DiscoveredFile{
 		Path:  dbPath + "#conv-001",
 		Agent: parser.AgentWarp,
 	})
@@ -424,7 +974,7 @@ func TestProcessFileProviderWarpVirtualSource(t *testing.T) {
 func TestProcessFileProviderZCodeVirtualSource(t *testing.T) {
 	root := t.TempDir()
 	dbPath := writeProcessProviderZCodeDB(t, filepath.Join(root, ".zcode", "cli"))
-	engine := NewEngine(openTestDB(t), EngineConfig{
+	engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentZCode: {filepath.Join(root, ".zcode", "cli")},
 		},
@@ -437,7 +987,7 @@ func TestProcessFileProviderZCodeVirtualSource(t *testing.T) {
 	assert.Equal(t, parser.AgentZCode, files[0].Agent)
 	assert.False(t, files[0].ForceParse)
 
-	res := engine.processFile(context.Background(), files[0])
+	res := engine.processFile(t.Context(), files[0])
 
 	require.NoError(t, res.err)
 	require.Len(t, res.results, 1)
@@ -457,8 +1007,8 @@ func TestProcessFileProviderZCodeVirtualSource(t *testing.T) {
 }
 
 func TestProcessFileUsesProviderDBBackedFamily(t *testing.T) {
-
 	for _, agent := range []parser.AgentType{
+		parser.AgentCrush,
 		parser.AgentForge,
 		parser.AgentGoose,
 		parser.AgentPiebald,
@@ -471,7 +1021,6 @@ func TestProcessFileUsesProviderDBBackedFamily(t *testing.T) {
 }
 
 func TestProcessFileProviderAuthoritativeUsesInjectedProvider(t *testing.T) {
-
 	root := t.TempDir()
 	sourcePath, fingerprint := writeProcessProviderSource(t, root, "owned.jsonl")
 	provider := newProcessFixtureProvider(
@@ -500,7 +1049,7 @@ func TestProcessFileProviderAuthoritativeUsesInjectedProvider(t *testing.T) {
 	)
 	engine := newProcessFixtureEngine(t, root, provider)
 
-	res := engine.processFile(context.Background(), parser.DiscoveredFile{
+	res := engine.processFile(t.Context(), parser.DiscoveredFile{
 		Path:  sourcePath,
 		Agent: parser.AgentCowork,
 	})
@@ -554,7 +1103,7 @@ func TestProcessFileProviderAuthoritativeKeepsRetryStatePerResult(t *testing.T) 
 	)
 	engine := newProcessFixtureEngine(t, root, provider)
 
-	res := engine.processFile(context.Background(), parser.DiscoveredFile{
+	res := engine.processFile(t.Context(), parser.DiscoveredFile{
 		Path:  sourcePath,
 		Agent: parser.AgentCowork,
 	})
@@ -601,15 +1150,15 @@ func TestSyncSingleSessionKeepsRetryStatePerResult(t *testing.T) {
 	engine := newProcessFixtureEngine(t, root, provider)
 
 	_, _, err := engine.processAndWriteSessionFile(
-		context.Background(),
+		t.Context(),
 		parser.DiscoveredFile{Path: sourcePath, Agent: parser.AgentCowork},
 		"cowork:current",
 	)
 	require.NoError(t, err)
 	assert.Equal(t, db.CurrentDataVersion(),
-		engine.db.GetSessionDataVersion("cowork:current"),
+		engine.db.GetSessionDataVersion(t.Context(), "cowork:current"),
 		"a sibling retry must not leave the valid session stale")
-	assert.Less(t, engine.db.GetSessionDataVersion("cowork:retry"),
+	assert.Less(t, engine.db.GetSessionDataVersion(t.Context(), "cowork:retry"),
 		db.CurrentDataVersion(),
 		"the retrying session must remain stale")
 }
@@ -684,11 +1233,11 @@ func TestSyncSingleSessionPartialFullWritesQueueNewChild(t *testing.T) {
 			provider.Caps.Source.MultiSessionSource = parser.CapabilitySupported
 			engine := newProcessFixtureEngine(t, root, provider)
 			database := engine.db
-			require.NoError(t, database.UpsertSession(db.Session{
+			require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 				ID: "cowork:spawner", Agent: string(parser.AgentCowork),
 				Project: "fixture-project", Machine: "devbox", FilePath: &sourcePath,
 			}))
-			require.NoError(t, database.UpsertSession(db.Session{
+			require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 				ID: "cowork:child", Agent: string(parser.AgentCowork),
 				Project: "fixture-project", Machine: "devbox",
 			}))
@@ -696,7 +1245,7 @@ func TestSyncSingleSessionPartialFullWritesQueueNewChild(t *testing.T) {
 			raw, err := sql.Open("sqlite3", database.Path())
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, raw.Close()) })
-			_, err = raw.Exec(tc.failureSQL + `;
+			_, err = raw.ExecContext(t.Context(), tc.failureSQL+`;
 				CREATE TRIGGER fail_partial_parent_repair
 				BEFORE UPDATE OF parent_session_id ON sessions
 				WHEN NEW.id = 'cowork:child'
@@ -708,10 +1257,10 @@ func TestSyncSingleSessionPartialFullWritesQueueNewChild(t *testing.T) {
 			syncErr := engine.SyncSingleSession("cowork:spawner")
 
 			require.ErrorContains(t, syncErr, tc.wantError)
-			assert.ErrorContains(t, syncErr, "injected partial parent repair failure",
+			require.ErrorContains(t, syncErr, "injected partial parent repair failure",
 				"committed message content must activate deferred repair")
 			var edgeCount int
-			require.NoError(t, database.Reader().QueryRow(`
+			require.NoError(t, database.Reader().QueryRow(t.Context(), `
 				SELECT count(*) FROM tool_calls
 				WHERE session_id = 'cowork:spawner'
 				  AND subagent_session_id = 'cowork:child'`,
@@ -719,7 +1268,7 @@ func TestSyncSingleSessionPartialFullWritesQueueNewChild(t *testing.T) {
 			assert.Equal(t, 1, edgeCount,
 				"the partial write must commit its new spawn edge")
 			var queuedRepairs int
-			require.NoError(t, database.Reader().QueryRow(`
+			require.NoError(t, database.Reader().QueryRow(t.Context(), `
 				SELECT count(*) FROM subagent_parent_repair_queue
 				WHERE session_id = 'cowork:child'`,
 			).Scan(&queuedRepairs))
@@ -754,17 +1303,17 @@ func TestSyncSingleSessionPartialFullWriteRepairsAttemptedSession(t *testing.T) 
 	database := engine.db
 	actualParent := "cowork:spawner"
 	started := "2026-01-01T00:00:00Z"
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: actualParent, Agent: string(parser.AgentCowork),
 		Project: "fixture-project", Machine: "devbox", StartedAt: &started,
 		MessageCount: 1,
 	}))
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "cowork:child", Agent: string(parser.AgentCowork),
 		Project: "fixture-project", Machine: "devbox",
 		ParentSessionID: &actualParent, RelationshipType: string(parser.RelSubagent),
 	}))
-	require.NoError(t, database.InsertMessages([]db.Message{{
+	require.NoError(t, database.InsertMessages(t.Context(), []db.Message{{
 		SessionID: actualParent, Ordinal: 0, Role: string(parser.RoleAssistant),
 		Content: "spawn child", HasToolUse: true,
 		ToolCalls: []db.ToolCall{{
@@ -776,7 +1325,7 @@ func TestSyncSingleSessionPartialFullWriteRepairsAttemptedSession(t *testing.T) 
 	raw, err := sql.Open("sqlite3", database.Path())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, raw.Close()) })
-	_, err = raw.Exec(fmt.Sprintf(`
+	_, err = raw.ExecContext(t.Context(), fmt.Sprintf(`
 		CREATE TRIGGER fail_child_write_completion
 		BEFORE UPDATE OF data_version ON sessions
 		WHEN NEW.id = 'cowork:child' AND NEW.data_version = %d
@@ -797,7 +1346,6 @@ func TestSyncSingleSessionPartialFullWriteRepairsAttemptedSession(t *testing.T) 
 }
 
 func TestProcessFileProviderAuthoritativeSuppressesUncleanSkipCache(t *testing.T) {
-
 	root := t.TempDir()
 	sourcePath, fingerprint := writeProcessProviderSource(t, root, "unclean.jsonl")
 	provider := newProcessFixtureProvider(
@@ -819,7 +1367,7 @@ func TestProcessFileProviderAuthoritativeSuppressesUncleanSkipCache(t *testing.T
 	)
 	engine := newProcessFixtureEngine(t, root, provider)
 
-	res := engine.processFile(context.Background(), parser.DiscoveredFile{
+	res := engine.processFile(t.Context(), parser.DiscoveredFile{
 		Path:  sourcePath,
 		Agent: parser.AgentCowork,
 	})
@@ -831,7 +1379,6 @@ func TestProcessFileProviderAuthoritativeSuppressesUncleanSkipCache(t *testing.T
 }
 
 func TestProcessFileProviderAuthoritativeUsesSkipReasonCacheKey(t *testing.T) {
-
 	root := t.TempDir()
 	sourcePath, fingerprint := writeProcessProviderSource(t, root, "skip.jsonl")
 	source := processFixtureSource(sourcePath)
@@ -846,7 +1393,7 @@ func TestProcessFileProviderAuthoritativeUsesSkipReasonCacheKey(t *testing.T) {
 	)
 	engine := newProcessFixtureEngine(t, root, provider)
 
-	res := engine.processFile(context.Background(), parser.DiscoveredFile{
+	res := engine.processFile(t.Context(), parser.DiscoveredFile{
 		Path:  sourcePath,
 		Agent: parser.AgentCowork,
 	})
@@ -855,14 +1402,12 @@ func TestProcessFileProviderAuthoritativeUsesSkipReasonCacheKey(t *testing.T) {
 	assert.True(t, res.skip)
 	assert.True(t, res.cacheSkip)
 	assert.False(t, res.noCacheSkip)
-	assert.Equal(t,
-		providerAgentSkipCacheKey(source.FingerprintKey, parser.AgentCowork),
+	assert.Equal(t, providerAgentSkipCacheKey(source.FingerprintKey, parser.AgentCowork),
 		res.skipCacheKey(sourcePath),
 	)
 }
 
 func TestProcessFileProviderAuthoritativeForceParseAllowsStaleSourceLookup(t *testing.T) {
-
 	root := t.TempDir()
 	sourcePath, fingerprint := writeProcessProviderSource(t, root, "force.jsonl")
 	provider := newProcessFixtureProvider(
@@ -884,7 +1429,7 @@ func TestProcessFileProviderAuthoritativeForceParseAllowsStaleSourceLookup(t *te
 	)
 	engine := newProcessFixtureEngine(t, root, provider)
 
-	res := engine.processFile(context.Background(), parser.DiscoveredFile{
+	res := engine.processFile(t.Context(), parser.DiscoveredFile{
 		Path:       sourcePath,
 		Agent:      parser.AgentCowork,
 		ForceParse: true,
@@ -898,7 +1443,6 @@ func TestProcessFileProviderAuthoritativeForceParseAllowsStaleSourceLookup(t *te
 }
 
 func TestProcessFileProviderAuthoritativeNotFoundFails(t *testing.T) {
-
 	root := t.TempDir()
 	sourcePath, fingerprint := writeProcessProviderSource(t, root, "missing.jsonl")
 	provider := newProcessFixtureProvider(
@@ -909,18 +1453,17 @@ func TestProcessFileProviderAuthoritativeNotFoundFails(t *testing.T) {
 	provider.findFound = false
 	engine := newProcessFixtureEngine(t, root, provider)
 
-	res := engine.processFile(context.Background(), parser.DiscoveredFile{
+	res := engine.processFile(t.Context(), parser.DiscoveredFile{
 		Path:  sourcePath,
 		Agent: parser.AgentCowork,
 	})
 
 	require.Error(t, res.err)
-	assert.ErrorContains(t, res.err, "provider source not found")
+	require.ErrorContains(t, res.err, "provider source not found")
 	assert.Equal(t, []string{"find-source"}, provider.calls)
 }
 
 func TestSyncSingleSessionProviderAuthoritativeBypassesProviderSkipCache(t *testing.T) {
-
 	root := t.TempDir()
 	sourcePath, fingerprint := writeProcessProviderSource(t, root, "single.jsonl")
 	source := processFixtureSource(sourcePath)
@@ -947,8 +1490,7 @@ func TestSyncSingleSessionProviderAuthoritativeBypassesProviderSkipCache(t *test
 
 	require.NoError(t, engine.SyncSingleSession("cowork:single"))
 
-	assert.Equal(
-		t,
+	assert.Equal(t,
 		[]string{
 			"find-source",
 			"find-source",
@@ -986,7 +1528,7 @@ func TestProcessFileClaudeCachedSourceWithoutStoredSessionSkipsParse(t *testing.
 		FingerprintHashRequiredForFreshness: true,
 		SkipCacheFreshWithoutStoredRow:      true,
 	}
-	engine := NewEngine(openTestDB(t), EngineConfig{
+	engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {root},
 		},
@@ -1001,7 +1543,7 @@ func TestProcessFileClaudeCachedSourceWithoutStoredSessionSkipsParse(t *testing.
 		source, fingerprint, provider.Capabilities().Sync,
 	), fingerprint.MTimeNS)
 
-	res := engine.processFile(context.Background(), parser.DiscoveredFile{
+	res := engine.processFile(t.Context(), parser.DiscoveredFile{
 		Path:  sourcePath,
 		Agent: parser.AgentClaude,
 	})
@@ -1043,7 +1585,7 @@ func TestProcessFileRowlessCachedSourceChangedHashReparses(t *testing.T) {
 				FingerprintHashRequiredForFreshness: true,
 				SkipCacheFreshWithoutStoredRow:      true,
 			}
-			engine := NewEngine(openTestDB(t), EngineConfig{
+			engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{agent: {root}},
 				Machine:   "devbox",
 				ProviderFactories: []parser.ProviderFactory{
@@ -1061,7 +1603,7 @@ func TestProcessFileRowlessCachedSourceChangedHashReparses(t *testing.T) {
 			)
 			engine.cacheSkip(oldKey, fingerprint.MTimeNS)
 
-			res := engine.processFile(context.Background(), parser.DiscoveredFile{
+			res := engine.processFile(t.Context(), parser.DiscoveredFile{
 				Path: sourcePath, Agent: agent,
 			})
 
@@ -1096,14 +1638,14 @@ func TestNewEngineNormalizesLegacySourceHashSkipDuplicates(t *testing.T) {
 		hashBase  = plain + "?source_hash="
 		unrelated = "/archive/unrelated.jsonl"
 	)
-	require.NoError(t, database.ReplaceSkippedFiles(map[string]int64{
+	require.NoError(t, database.ReplaceSkippedFiles(t.Context(), map[string]int64{
 		plain:            1,
 		hashBase + "old": 2,
 		hashBase + "new": 3,
 		unrelated:        4,
 	}))
 
-	engine := NewEngine(database, EngineConfig{})
+	engine := NewEngine(t.Context(), database, EngineConfig{})
 	t.Cleanup(engine.Close)
 
 	assert.Equal(t, map[string]int64{unrelated: 4}, engine.SnapshotSkipCache(),
@@ -1128,7 +1670,7 @@ func TestProcessFileClaudeCachedStoredSessionChangedHashReparses(t *testing.T) {
 		FingerprintHashRequiredForFreshness: true,
 		SkipCacheFreshWithoutStoredRow:      true,
 	}
-	engine := NewEngine(openTestDB(t), EngineConfig{
+	engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {root},
 		},
@@ -1155,7 +1697,7 @@ func TestProcessFileClaudeCachedStoredSessionChangedHashReparses(t *testing.T) {
 	require.Zero(t, failed)
 	engine.cacheSkip(source.FingerprintKey, fingerprint.MTimeNS)
 
-	res := engine.processFile(context.Background(), parser.DiscoveredFile{
+	res := engine.processFile(t.Context(), parser.DiscoveredFile{
 		Path:  sourcePath,
 		Agent: parser.AgentClaude,
 	})
@@ -1178,20 +1720,20 @@ func TestProcessFileProviderDevinSkipsStoredFreshSource(t *testing.T) {
 	)
 	virtualPath := parser.VirtualSourcePath(dbPath, "session-001")
 	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentDevin: {root},
 		},
 		Machine: "devbox",
 	})
 
-	first := engine.processFile(context.Background(), parser.DiscoveredFile{
+	first := engine.processFile(t.Context(), parser.DiscoveredFile{
 		Path:  virtualPath,
 		Agent: parser.AgentDevin,
 	})
 	require.NoError(t, first.err)
 	require.Len(t, first.results, 1)
-	require.Equal(t, virtualPath, engine.FindSourceFile("devin:session-001"))
+	require.Equal(t, virtualPath, engine.FindSourceFile(t.Context(), "devin:session-001"))
 	storedMtime := first.results[0].Session.File.Mtime
 	require.NotZero(t, storedMtime)
 	assert.GreaterOrEqual(t, storedMtime, transcriptProcessProviderMtime(t, transcriptPath))
@@ -1209,12 +1751,12 @@ func TestProcessFileProviderDevinSkipsStoredFreshSource(t *testing.T) {
 	require.Equal(t, 0, failed)
 	require.Equal(t, 1, written)
 
-	_, dbStoredMtime, ok := database.GetSessionFileInfo("devin:session-001")
+	_, dbStoredMtime, ok := database.GetSessionFileInfo(t.Context(), "devin:session-001")
 	require.True(t, ok)
 	assert.Equal(t, storedMtime, dbStoredMtime)
-	assert.Equal(t, storedMtime, engine.SourceMtime("devin:session-001"))
+	assert.Equal(t, storedMtime, engine.SourceMtime(t.Context(), "devin:session-001"))
 
-	second := engine.processFile(context.Background(), parser.DiscoveredFile{
+	second := engine.processFile(t.Context(), parser.DiscoveredFile{
 		Path:  virtualPath,
 		Agent: parser.AgentDevin,
 	})
@@ -1238,14 +1780,14 @@ func TestProcessFileProviderDevinReparsesTranscriptOnlyChange(t *testing.T) {
 	)
 	virtualPath := parser.VirtualSourcePath(dbPath, "session-002")
 	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentDevin: {root},
 		},
 		Machine: "devbox",
 	})
 
-	first := engine.processFile(context.Background(), parser.DiscoveredFile{
+	first := engine.processFile(t.Context(), parser.DiscoveredFile{
 		Path:  virtualPath,
 		Agent: parser.AgentDevin,
 	})
@@ -1263,16 +1805,16 @@ func TestProcessFileProviderDevinReparsesTranscriptOnlyChange(t *testing.T) {
 	)
 	require.Equal(t, 0, failed)
 	require.Equal(t, 1, written)
-	before := engine.SourceMtime("devin:session-002")
+	before := engine.SourceMtime(t.Context(), "devin:session-002")
 
 	future := time.Now().Add(2 * time.Second)
 	writeProcessProviderDevinTranscript(t, transcriptPath, "Updated reply")
 	require.NoError(t, os.Chtimes(transcriptPath, future, future))
 
-	after := engine.SourceMtime("devin:session-002")
+	after := engine.SourceMtime(t.Context(), "devin:session-002")
 	assert.Greater(t, after, before)
 
-	second := engine.processFile(context.Background(), parser.DiscoveredFile{
+	second := engine.processFile(t.Context(), parser.DiscoveredFile{
 		Path:  virtualPath,
 		Agent: parser.AgentDevin,
 	})
@@ -1306,14 +1848,14 @@ func TestProcessFileProviderDevinSameSizeSameMtimeTranscriptRewriteReparses(t *t
 			)
 			virtualPath := parser.VirtualSourcePath(dbPath, "session-same-mtime")
 			database := dbtest.OpenTestDB(t)
-			engine := NewEngine(database, EngineConfig{
+			engine := NewEngine(t.Context(), database, EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{
 					parser.AgentDevin: {root},
 				},
 				Machine: "devbox",
 			})
 
-			first := engine.processFile(context.Background(), parser.DiscoveredFile{
+			first := engine.processFile(t.Context(), parser.DiscoveredFile{
 				Path:  virtualPath,
 				Agent: parser.AgentDevin,
 			})
@@ -1353,7 +1895,7 @@ func TestProcessFileProviderDevinSameSizeSameMtimeTranscriptRewriteReparses(t *t
 				engine.cacheSkip(virtualPath, initialMtime)
 			}
 			if tt.freshSync {
-				engine = NewEngine(database, EngineConfig{
+				engine = NewEngine(t.Context(), database, EngineConfig{
 					AgentDirs: map[parser.AgentType][]string{
 						parser.AgentDevin: {root},
 					},
@@ -1361,7 +1903,7 @@ func TestProcessFileProviderDevinSameSizeSameMtimeTranscriptRewriteReparses(t *t
 				})
 			}
 
-			second := engine.processFile(context.Background(), parser.DiscoveredFile{
+			second := engine.processFile(t.Context(), parser.DiscoveredFile{
 				Path:  virtualPath,
 				Agent: parser.AgentDevin,
 			})
@@ -1391,14 +1933,14 @@ func TestProcessFileProviderDevinRepeatedHashRewriteIgnoresStaleHashedCache(t *t
 		Agent: parser.AgentDevin,
 	}
 	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentDevin: {root},
 		},
 		Machine: "devbox",
 	})
 
-	first := engine.processFile(context.Background(), file)
+	first := engine.processFile(t.Context(), file)
 	require.NoError(t, first.err)
 	require.Len(t, first.results, 1)
 	require.Len(t, first.results[0].Messages, 2)
@@ -1415,7 +1957,7 @@ func TestProcessFileProviderDevinRepeatedHashRewriteIgnoresStaleHashedCache(t *t
 	writeProcessProviderDevinTranscript(t, transcriptPath, "Changed reply")
 	initialTime := time.Unix(0, initialMtime)
 	require.NoError(t, os.Chtimes(transcriptPath, initialTime, initialTime))
-	second := engine.processFile(context.Background(), file)
+	second := engine.processFile(t.Context(), file)
 	require.NoError(t, second.err)
 	assert.False(t, second.skip)
 	require.Len(t, second.results, 1)
@@ -1426,12 +1968,12 @@ func TestProcessFileProviderDevinRepeatedHashRewriteIgnoresStaleHashedCache(t *t
 	require.NotEqual(t, initialHash, changedHash)
 	require.Contains(t, second.cacheKey, "?source_hash="+changedHash)
 	writeProcessProviderDevinResult(t, engine, second)
-	engine.clearSkip(second.cacheKey)
+	engine.clearSkip(t.Context(), second.cacheKey)
 
 	writeProcessProviderDevinTranscript(t, transcriptPath, "Initial reply")
 	require.NoError(t, os.Chtimes(transcriptPath, initialTime, initialTime))
 
-	third := engine.processFile(context.Background(), file)
+	third := engine.processFile(t.Context(), file)
 	require.NoError(t, third.err)
 	assert.False(t, third.skip)
 	require.Len(t, third.results, 1)
@@ -1451,14 +1993,14 @@ func TestSyncAllProviderDevinMissingDBPreservesArchive(t *testing.T) {
 		1700000005,
 	)
 	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentDevin: {root},
 		},
 		Machine: "devbox",
 	})
 
-	stats := engine.SyncAll(context.Background(), nil)
+	stats := engine.SyncAll(t.Context(), nil)
 	require.Equal(t, 1, stats.Synced)
 	assertProviderProcessMessageContent(
 		t,
@@ -1469,7 +2011,7 @@ func TestSyncAllProviderDevinMissingDBPreservesArchive(t *testing.T) {
 	)
 
 	require.NoError(t, os.Remove(dbPath))
-	stats = engine.SyncAll(context.Background(), nil)
+	stats = engine.SyncAll(t.Context(), nil)
 	assert.Equal(t, 0, stats.Synced)
 	assertProviderProcessMessageContent(
 		t,
@@ -1478,17 +2020,18 @@ func TestSyncAllProviderDevinMissingDBPreservesArchive(t *testing.T) {
 		"Ship it",
 		"Archived reply",
 	)
-	assert.Empty(t, engine.FindSourceFile("devin:session-003"))
-	assert.Zero(t, engine.SourceMtime("devin:session-003"))
+	assert.Empty(t, engine.FindSourceFile(t.Context(), "devin:session-003"))
+	assert.Zero(t, engine.SourceMtime(t.Context(), "devin:session-003"))
 }
 
 func writeProcessProviderForgeDB(t *testing.T, root string) string {
 	t.Helper()
+
 	dbPath := filepath.Join(root, ".forge.db")
 	database, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = database.Close() })
-	_, err = database.Exec(`
+	_, err = database.ExecContext(t.Context(), `
 		CREATE TABLE conversations (
 			conversation_id TEXT PRIMARY KEY NOT NULL,
 			title TEXT,
@@ -1500,7 +2043,7 @@ func writeProcessProviderForgeDB(t *testing.T, root string) string {
 		);
 	`)
 	require.NoError(t, err)
-	_, err = database.Exec(
+	_, err = database.ExecContext(t.Context(),
 		`INSERT INTO conversations
 			(conversation_id, title, workspace_id, context, created_at, updated_at, metrics)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -1525,6 +2068,7 @@ func writeProcessProviderDevinResult(
 	result processResult,
 ) {
 	t.Helper()
+
 	require.Len(t, result.results, 1)
 	written, _, failed, _ := engine.writeBatch(
 		[]pendingWrite{{
@@ -1549,13 +2093,14 @@ func writeProcessProviderDevinFixture(
 	lastActivityAtSec int64,
 ) (string, string) {
 	t.Helper()
+
 	cliDir := filepath.Join(root, "cli")
 	transcriptsDir := filepath.Join(cliDir, "transcripts")
 	require.NoError(t, os.MkdirAll(transcriptsDir, 0o755))
 	dbPath := filepath.Join(cliDir, "sessions.db")
 	database, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	_, err = database.Exec(`
+	_, err = database.ExecContext(t.Context(), `
 		CREATE TABLE sessions (
 			id TEXT PRIMARY KEY,
 			title TEXT,
@@ -1568,7 +2113,7 @@ func writeProcessProviderDevinFixture(
 		);
 	`)
 	require.NoError(t, err)
-	_, err = database.Exec(
+	_, err = database.ExecContext(t.Context(),
 		`INSERT INTO sessions
 			(id, title, working_directory, model, created_at, last_activity_at, hidden)
 		 VALUES (?, ?, ?, ?, ?, ?, 0)`,
@@ -1627,7 +2172,7 @@ func assertProviderProcessMessageContent(
 	want ...string,
 ) {
 	t.Helper()
-	msgs, err := database.GetAllMessages(context.Background(), sessionID)
+	msgs, err := database.GetAllMessages(t.Context(), sessionID)
 	require.NoError(t, err)
 	require.Len(t, msgs, len(want))
 	for i, content := range want {
@@ -1641,7 +2186,7 @@ func newProcessFixtureEngine(
 	provider *processFixtureProvider,
 ) *Engine {
 	t.Helper()
-	return NewEngine(openTestDB(t), EngineConfig{
+	return NewEngine(t.Context(), openTestDB(t), EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCowork: {root},
 		},
@@ -1651,6 +2196,47 @@ func newProcessFixtureEngine(
 			parser.AgentCowork: parser.ProviderMigrationProviderAuthoritative,
 		},
 	})
+}
+
+func newPiebaldProcessFixtureProvider(
+	source parser.SourceRef,
+	fingerprint parser.SourceFingerprint,
+	outcome parser.ParseOutcome,
+) *processFixtureProvider {
+	provider := newProcessFixtureProvider(source, fingerprint, outcome)
+	provider.Def.Type = parser.AgentPiebald
+	provider.Def.DisplayName = "Piebald"
+	provider.Def.IDPrefix = "piebald:"
+	return provider
+}
+
+func newPiebaldProcessFixtureEngine(
+	t *testing.T,
+	root string,
+	provider *processFixtureProvider,
+) *Engine {
+	t.Helper()
+	engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentPiebald: {root},
+		},
+		Machine:           "devbox",
+		ProviderFactories: []parser.ProviderFactory{processFixtureFactory{provider: provider}},
+		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			parser.AgentPiebald: parser.ProviderMigrationProviderAuthoritative,
+		},
+	})
+	t.Cleanup(engine.Close)
+	return engine
+}
+
+func processFixturePiebaldSource(path string) parser.SourceRef {
+	return parser.SourceRef{
+		Provider:       parser.AgentPiebald,
+		Key:            path,
+		DisplayPath:    path,
+		FingerprintKey: path,
+	}
 }
 
 func writeProcessProviderSource(
@@ -1759,14 +2345,16 @@ func (f processFixtureFactory) NewProvider(parser.ProviderConfig) parser.Provide
 type processFixtureProvider struct {
 	parser.ProviderBase
 
-	source        parser.SourceRef
-	discovered    []parser.SourceRef
-	findFound     bool
-	fingerprint   parser.SourceFingerprint
-	outcome       parser.ParseOutcome
-	calls         []string
-	findRequests  []parser.FindSourceRequest
-	parseRequests []parser.ParseRequest
+	source         parser.SourceRef
+	discovered     []parser.SourceRef
+	findFound      bool
+	fingerprint    parser.SourceFingerprint
+	fingerprintErr error
+	outcome        parser.ParseOutcome
+	parseErr       error
+	calls          []string
+	findRequests   []parser.FindSourceRequest
+	parseRequests  []parser.ParseRequest
 }
 
 func (p *processFixtureProvider) Discover(context.Context) ([]parser.SourceRef, error) {
@@ -1790,6 +2378,9 @@ func (p *processFixtureProvider) Fingerprint(
 	parser.SourceRef,
 ) (parser.SourceFingerprint, error) {
 	p.calls = append(p.calls, "fingerprint")
+	if p.fingerprintErr != nil {
+		return parser.SourceFingerprint{}, p.fingerprintErr
+	}
 	return p.fingerprint, nil
 }
 
@@ -1799,7 +2390,7 @@ func (p *processFixtureProvider) Parse(
 ) (parser.ParseOutcome, error) {
 	p.calls = append(p.calls, "parse")
 	p.parseRequests = append(p.parseRequests, req)
-	return p.outcome, nil
+	return p.outcome, p.parseErr
 }
 
 func openProcessProviderPiebaldDB(t *testing.T, path string) *sql.DB {
@@ -1815,10 +2406,9 @@ func openProcessProviderPiebaldDB(t *testing.T, path string) *sql.DB {
 func copyProcessProviderPiebaldSchemaTemplate(t *testing.T, path string) {
 	t.Helper()
 	processProviderPiebaldSchemaOnce.Do(func() {
-		processProviderPiebaldSchemaBytes, processProviderPiebaldSchemaErr =
-			buildProcessProviderPiebaldSchemaTemplate()
+		processProviderPiebaldSchemaBytes, errProcessProviderPiebaldSchema = buildProcessProviderPiebaldSchemaTemplate()
 	})
-	require.NoError(t, processProviderPiebaldSchemaErr)
+	require.NoError(t, errProcessProviderPiebaldSchema)
 	require.NoError(t, os.WriteFile(path, processProviderPiebaldSchemaBytes, 0o644))
 }
 
@@ -1834,7 +2424,7 @@ func buildProcessProviderPiebaldSchemaTemplate() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open piebald provider schema template: %w", err)
 	}
-	if _, err = database.Exec(processProviderPiebaldSchema); err != nil {
+	if _, err = database.ExecContext(context.Background(), processProviderPiebaldSchema); err != nil {
 		_ = database.Close()
 		return nil, fmt.Errorf("create piebald provider schema template: %w", err)
 	}
@@ -1923,7 +2513,7 @@ func openProcessProviderWarpDB(t *testing.T, path string) *sql.DB {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 
-	_, err = database.Exec(`
+	_, err = database.ExecContext(t.Context(), `
 		CREATE TABLE agent_conversations (
 			id INTEGER PRIMARY KEY NOT NULL,
 			conversation_id TEXT NOT NULL,
@@ -2100,6 +2690,6 @@ func mustExecProcessProviderSQL(
 	args ...any,
 ) {
 	t.Helper()
-	_, err := database.Exec(query, args...)
+	_, err := database.ExecContext(t.Context(), query, args...)
 	require.NoError(t, err)
 }

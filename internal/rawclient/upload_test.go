@@ -48,7 +48,7 @@ func TestMissingObjectsRoundTrip(t *testing.T) {
 		assert.Equal(t, "/api/v1/raw-sync/objects/missing", r.URL.Path)
 		body, err := io.ReadAll(r.Body)
 		if assert.NoError(t, err) {
-			assert.Equal(t, `{"provider":"claude","objects":[`+
+			assert.JSONEq(t, `{"provider":"claude","objects":[`+
 				`{"sha256":"`+digest+`","length":3}]}`, string(body))
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -134,6 +134,8 @@ func (r fullReadEOFReaderAt) ReadAt(dst []byte, offset int64) (int, error) {
 }
 
 func (s *uploadScript) handler(t *testing.T) http.Handler {
+	t.Helper()
+
 	return withTokenRoute(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -143,7 +145,7 @@ func (s *uploadScript) handler(t *testing.T) http.Handler {
 			var in struct {
 				Object rawsync.ObjectRef `json:"object"`
 			}
-			if !assert.NoError(t, jsonDecode(r.Body, &in)) {
+			if !assert.NoError(t, json.UnmarshalRead(r.Body, &in)) {
 				http.Error(w, "bad upload start", http.StatusBadRequest)
 				return
 			}
@@ -207,7 +209,7 @@ func (s *uploadScript) handler(t *testing.T) http.Handler {
 			}
 			io.WriteString(w, uploadResponseJSON("up_1", s.object, s.offset, complete))
 		default:
-			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			assert.Failf(t, "test failed", "unexpected request %s %s", r.Method, r.URL.Path)
 			http.Error(w, "unexpected", http.StatusNotFound)
 		}
 	}))
@@ -289,7 +291,7 @@ func TestUploadObjectRejectsMalformedStartResponse(t *testing.T) {
 			err := client.UploadObject(t.Context(), parser.AgentClaude,
 				object, bytes.NewReader(body))
 			require.Error(t, err)
-			assert.ErrorContains(t, err, tt.want)
+			require.ErrorContains(t, err, tt.want)
 			assert.Zero(t, patches.Load(), "invalid start response must stop before PATCH")
 		})
 	}
@@ -404,7 +406,7 @@ func TestUploadObjectRejectsPatchOffsetBeyondChunk(t *testing.T) {
 	err = client.UploadObject(t.Context(), parser.AgentClaude,
 		object, bytes.NewReader(body))
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "expected offset 2")
+	require.ErrorContains(t, err, "expected offset 2")
 	assert.EqualValues(t, 2, patchedBytes.Load(),
 		"client must reject completion after only the first chunk")
 }
@@ -596,7 +598,7 @@ func TestUploadObjectErrorsWhenFinalizationStaysIncomplete(t *testing.T) {
 	err := client.UploadObject(t.Context(),
 		parser.AgentClaude, newUploadObject(t, body), bytes.NewReader(body))
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "not finalized")
+	require.ErrorContains(t, err, "not finalized")
 	// Exactly one finalization attempt: the client never spins on a session
 	// the server refuses to complete.
 	require.Len(t, script.patchBytes, 1)

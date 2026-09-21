@@ -1,0 +1,44 @@
+{
+  "session_find_whole_word": "全字匹配",
+  "session_find_loading_history": "正在載入歷史訊息…",
+  "session_find_announce_match": "第 {current} 個符合項目，共 {total} 個",
+  "session_find_block_count": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{count} 個符合項目",
+        "countPlural=other": "{count} 個符合項目"
+      }
+    }
+  ],
+  "session_find_results_group_count": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{count} 個符合項目",
+        "countPlural=other": "{count} 個符合項目"
+      }
+    }
+  ],
+  "session_find_results_title": "搜尋結果",
+  "session_find_results_empty": "目前會話中沒有符合項目",
+  "session_find_toggle_results": "顯示搜尋結果",
+  "session_find_hide_results": "隱藏搜尋結果",
+  "session_find_subagent_excluded": "搜尋範圍不包含內嵌子會話訊息。",
+  "session_find_rail_label": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "目前會話共有 {count} 個符合項目",
+        "countPlural=other": "目前會話共有 {count} 個符合項目"
+      }
+    }
+  ],
+  "session_find_raw_output": "搜尋期間顯示原始輸出",
+  "session_find_history_incomplete": "歷史訊息載入失敗，目前搜尋結果不完整。",
+  "session_find_retry_history": "重新載入歷史訊息",
+  "session_find_partial_results": "部分結果"
+}

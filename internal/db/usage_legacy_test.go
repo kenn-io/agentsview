@@ -3,7 +3,6 @@
 package db
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -49,11 +48,11 @@ func TestDailyUsageFactsMatchesLegacy(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			database := openDailyUsageFixtureDB(t)
 			legacy, err := database.getDailyUsageLegacy(
-				context.Background(), test.filter,
+				t.Context(), test.filter,
 			)
 			require.NoError(t, err)
 			facts, err := database.GetDailyUsage(
-				context.Background(), test.filter,
+				t.Context(), test.filter,
 			)
 			require.NoError(t, err)
 			assert.Equal(t, legacy, facts)

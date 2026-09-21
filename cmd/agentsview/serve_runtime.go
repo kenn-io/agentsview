@@ -7,14 +7,17 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/server"
 )
 
 type serveRuntimeOptions struct {
 	Mode           string
+	BasePath       string
 	RequestedPort  int
 	OnCaddyStarted func(int)
 }
@@ -27,7 +30,22 @@ type serveRuntime struct {
 	Caddy      *managedCaddy
 }
 
-func prepareServeRuntimeConfig(
+func prepareRunServeRuntimeConfig(ctx context.Context,
+	cfg config.Config,
+	restartPort int,
+	onCaddyStarted func(int),
+) (config.Config, serveRuntimeOptions, error) {
+	cfg, requestedPort := applyServeRestartPort(cfg, restartPort)
+	opts := serveRuntimeOptions{
+		Mode:           "serve",
+		RequestedPort:  requestedPort,
+		OnCaddyStarted: onCaddyStarted,
+	}
+	prepared, err := prepareServeRuntimeConfig(ctx, cfg, opts)
+	return prepared, opts, err
+}
+
+func prepareServeRuntimeConfig(ctx context.Context,
 	cfg config.Config,
 	opts serveRuntimeOptions,
 ) (config.Config, error) {
@@ -36,9 +54,15 @@ func prepareServeRuntimeConfig(
 		requestedPort = cfg.Port
 	}
 
-	port, err := server.FindAvailablePort(cfg.Host, cfg.Port)
+	port, err := server.FindAvailablePort(ctx, cfg.Host, cfg.Port)
 	if err != nil {
 		return cfg, err
+	}
+	if cfg.PortExplicit && cfg.Port != 0 && port != cfg.Port {
+		return cfg, fmt.Errorf(
+			"requested port %d on %s is unavailable; choose another --port or use --port 0",
+			cfg.Port, cfg.Host,
+		)
 	}
 	if port != cfg.Port {
 		if cfg.Port == 0 {
@@ -80,7 +104,7 @@ func startServerWithOptionalCaddy(
 	}()
 
 	if err := waitForBackendReady(
-		ctx, cfg, srv, 5*time.Second, serveErrCh,
+		ctx, cfg, srv, opts.BasePath, 5*time.Second, serveErrCh,
 	); err != nil {
 		shutdownCtx, cancel := context.WithTimeout(
 			context.Background(), 5*time.Second,
@@ -141,7 +165,7 @@ func startServerWithOptionalCaddy(
 	return &serveRuntime{
 		Cfg:        cfg,
 		LocalURL:   fmt.Sprintf("http://%s:%d", cfg.Host, cfg.Port),
-		PublicURL:  browserURL(cfg),
+		PublicURL:  strings.TrimRight(browserURL(cfg), "/") + strings.TrimRight(opts.BasePath, "/"),
 		ServeErrCh: serveErrCh,
 		Caddy:      caddy,
 	}, nil
@@ -155,6 +179,7 @@ func waitForBackendReady(
 	ctx context.Context,
 	cfg config.Config,
 	srv *server.Server,
+	basePath string,
 	timeout time.Duration,
 	errCh <-chan error,
 ) error {
@@ -167,7 +192,6 @@ func waitForBackendReady(
 	address := net.JoinHostPort(
 		probeHostForDial(cfg.Host), strconv.Itoa(cfg.Port),
 	)
-	probeURL := "http://" + address + srv.StartupProbePath()
 	transport := &http.Transport{}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{
@@ -176,6 +200,10 @@ func waitForBackendReady(
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
+	}
+	api, err := apiclient.NewHTTPClient("http://"+address+strings.TrimRight(basePath, "/"), "", client)
+	if err != nil {
+		return err
 	}
 	var lastErr error
 	for time.Now().Before(deadline) {
@@ -202,14 +230,11 @@ func waitForBackendReady(
 		if err != nil {
 			return err
 		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
-		if err != nil {
-			return fmt.Errorf("create startup probe request: %w", err)
-		}
-		server.SetStartupProbeChallenge(req, challenge)
-		resp, err := client.Do(req)
-		if err == nil {
-			_ = resp.Body.Close()
+		response, err := api.GetStartupProbeWithResponse(ctx, &apiclient.GetStartupProbeRequestOptions{
+			Header: &apiclient.GetStartupProbeHeaders{XAgentsViewStartupChallenge: challenge},
+		})
+		if response != nil {
+			resp := response.HTTPResponse
 			if resp.StatusCode != http.StatusNoContent {
 				err = fmt.Errorf(
 					"startup probe on %s returned status %d",
@@ -248,7 +273,7 @@ func waitForServerRuntime(
 
 	select {
 	case err := <-rt.ServeErrCh:
-		if err != nil && err != http.ErrServerClosed {
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			if rt.Caddy != nil {
 				rt.Caddy.Stop()
 			}
@@ -266,7 +291,7 @@ func waitForServerRuntime(
 		_ = srv.Shutdown(shutdownCtx)
 		if ctx.Err() != nil {
 			if serveErr := <-rt.ServeErrCh; serveErr != nil &&
-				serveErr != http.ErrServerClosed {
+				!errors.Is(serveErr, http.ErrServerClosed) {
 				return fmt.Errorf("server error: %w", serveErr)
 			}
 			return nil
@@ -274,7 +299,7 @@ func waitForServerRuntime(
 		if err != nil {
 			return fmt.Errorf("managed caddy error: %w", err)
 		}
-		return fmt.Errorf("managed caddy exited unexpectedly")
+		return errors.New("managed caddy exited unexpectedly")
 	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(
 			context.Background(), 5*time.Second,
@@ -284,11 +309,11 @@ func waitForServerRuntime(
 			rt.Caddy.Stop()
 		}
 		if err := srv.Shutdown(shutdownCtx); err != nil &&
-			err != http.ErrServerClosed {
+			!errors.Is(err, http.ErrServerClosed) {
 			return fmt.Errorf("server shutdown error: %w", err)
 		}
 		if err := <-rt.ServeErrCh; err != nil &&
-			err != http.ErrServerClosed {
+			!errors.Is(err, http.ErrServerClosed) {
 			return fmt.Errorf("server error: %w", err)
 		}
 		return nil

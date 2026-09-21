@@ -61,9 +61,9 @@ var allowProtectedPathProbes atomic.Bool
 
 type filesystemProjectDiscoveryKey struct{}
 
-// WithoutFilesystemProjectDiscovery returns a context that limits project
-// attribution to transcript metadata and lexical path rules. Bounded importers
-// use it so recorded working directories are never touched on the local host.
+// WithoutFilesystemProjectDiscovery limits project and skill attribution to
+// transcript metadata and lexical path rules. Bounded importers use it so
+// captured paths never trigger local Git discovery or skill frontmatter reads.
 func WithoutFilesystemProjectDiscovery(ctx context.Context) context.Context {
 	return context.WithValue(ctx, filesystemProjectDiscoveryKey{}, true)
 }
@@ -246,18 +246,20 @@ func ExtractProjectFromCwdWithBranchContext(
 	ctx context.Context, cwd, gitBranch string,
 ) string {
 	return extractProjectFromCwdWithBranchPolicy(
-		cwd, gitBranch, !filesystemProjectDiscoveryDisabled(ctx),
+		ctx, cwd, gitBranch, !filesystemProjectDiscoveryDisabled(ctx),
 	)
 }
 
 func extractProjectFromCwdWithBranch(
 	cwd, gitBranch string,
 ) string {
-	return extractProjectFromCwdWithBranchPolicy(cwd, gitBranch, true)
+	return extractProjectFromCwdWithBranchPolicy(
+		context.Background(), cwd, gitBranch, true,
+	)
 }
 
 func extractProjectFromCwdWithBranchPolicy(
-	cwd, gitBranch string, discoverFilesystem bool,
+	ctx context.Context, cwd, gitBranch string, discoverFilesystem bool,
 ) string {
 	if cwd == "" {
 		return ""
@@ -278,7 +280,11 @@ func extractProjectFromCwdWithBranchPolicy(
 	if discoverFilesystem && filepath.IsAbs(cleaned) &&
 		!isForeignOSPath(cwd, cleaned, winPath) &&
 		probeGitRootForCwd(cleaned) {
-		if root, linkedToRecordedPath := findGitRepoRoot(cleaned); root != "" &&
+		rootResult := projectRootMemoFrom(ctx).root(cleaned, func() gitRootResult {
+			root, linked := findGitRepoRootCtx(ctx, cleaned)
+			return gitRootResult{root: root, linked: linked}
+		})
+		if root, linkedToRecordedPath := rootResult.root, rootResult.linked; root != "" &&
 			(linkedToRecordedPath || anchoredProject == "") {
 			name := filepath.Base(root)
 			if isInvalidPathBase(name) {
@@ -320,6 +326,7 @@ type worktreeLayout struct {
 	marker              string
 	projectPart         int
 	minParts            int
+	projectBeforeMarker bool
 	roborevCIBareLayout bool
 	gitFallbackOnly     bool
 }
@@ -352,6 +359,11 @@ func init() {
 		},
 		// ~/.codex/worktrees/$WORKTREE_ID/$REPO[/...]
 		{marker: sep + ".codex" + sep + "worktrees" + sep, projectPart: 1, minParts: 2},
+		// $REPO/.claude/worktrees/$WORKTREE_ID[/...]
+		{
+			marker:   sep + ".claude" + sep + "worktrees" + sep,
+			minParts: 1, projectBeforeMarker: true,
+		},
 		// roborev CI: ~/.roborev/ci-worktrees/$REPO/roborev-ci-<jobID>-<id>[/...].
 		// roborev nests the ephemeral worktree under a repo-named parent so the
 		// owning project survives the generated leaf name. Anchored to the
@@ -381,7 +393,7 @@ func projectFromWorktreeLayouts(path string, includeGitFallbacks bool) string {
 		if layout.gitFallbackOnly && !includeGitFallbacks {
 			continue
 		}
-		_, rest, found := strings.Cut(path, layout.marker)
+		before, rest, found := strings.Cut(path, layout.marker)
 		if !found {
 			continue
 		}
@@ -391,6 +403,13 @@ func projectFromWorktreeLayouts(path string, includeGitFallbacks bool) string {
 		}
 		if len(parts) < layout.minParts {
 			continue
+		}
+		if layout.projectBeforeMarker {
+			project := filepath.Base(before)
+			if isInvalidPathBase(project) || isInvalidPathBase(parts[0]) {
+				continue
+			}
+			return project
 		}
 		project := parts[layout.projectPart]
 		if isInvalidPathBase(project) {
@@ -426,8 +445,8 @@ func allASCIIDigits(s string) bool {
 // output in lieu of running mount(8).
 var autofsMountSource = runMountCommand
 
-func runMountCommand() ([]byte, error) {
-	return exec.Command("/sbin/mount").Output()
+func runMountCommand(ctx context.Context) ([]byte, error) {
+	return exec.CommandContext(ctx, "/sbin/mount").Output()
 }
 
 // autofsPrefixes holds path prefixes that autofs is actively
@@ -447,16 +466,16 @@ func runMountCommand() ([]byte, error) {
 // /etc/auto_master directly) captures prefixes pulled in via
 // +auto_master directory-service includes, which never appear
 // in the local config file.
-var autofsPrefixes = detectAutofsPrefixes()
+var autofsPrefixes = detectAutofsPrefixes(context.Background())
 
 // detectAutofsPrefixes returns the autofs-managed path prefixes
 // reported by the running mount table. Non-darwin hosts and
 // exec failures both return nil.
-func detectAutofsPrefixes() []string {
+func detectAutofsPrefixes(ctx context.Context) []string {
 	if runtime.GOOS != "darwin" {
 		return nil
 	}
-	data, err := autofsMountSource()
+	data, err := autofsMountSource(ctx)
 	if err != nil {
 		return nil
 	}
@@ -644,12 +663,12 @@ func isInvalidPathBase(name string) bool {
 	return false
 }
 
-// findGitRepoRoot walks upward from cwd to find the enclosing git
+// findGitRepoRootCtx walks upward from cwd to find the enclosing git
 // repository root. Supports both standard repos (.git directory)
 // and linked worktrees/submodules (.git file). When cwd no longer
 // exists on disk, sibling directories are checked for worktree
 // .git files that can reveal the true repo root.
-func findGitRepoRoot(cwd string) (string, bool) {
+func findGitRepoRootCtx(ctx context.Context, cwd string) (string, bool) {
 	if cwd == "" {
 		return "", false
 	}
@@ -686,7 +705,7 @@ func findGitRepoRoot(cwd string) (string, bool) {
 			}
 			sibDir = parent
 		}
-		if root := repoRootFromSiblings(sibDir, cwd); root != "" {
+		if root := repoRootFromSiblingsCtx(ctx, sibDir, cwd); root != "" {
 			return root, deletedChildIsWorktree(sibDir, cwd, root)
 		}
 	}
@@ -736,22 +755,43 @@ func findGitRepoRootLocal(
 	}
 }
 
-// repoRootFromSiblings checks child directories of dir for
+// repoRootFromSiblingsCtx checks child directories of dir for
 // linked-worktree .git files and uses them to discover the
 // true repo root. Submodule .git files are skipped, and all
 // candidates must agree on the same root to avoid
 // misattributing unrelated paths.
-func repoRootFromSiblings(dir, cwd string) string {
+func repoRootFromSiblingsCtx(
+	ctx context.Context, dir, cwd string,
+) string {
+	scan := projectRootMemoFrom(ctx).scan(dir, func() siblingScanResult {
+		return scanSiblingRepoCandidates(dir)
+	})
+	if scan.selfIsRepo {
+		return ""
+	}
+	if scan.worktreeCount == 0 {
+		if scan.dirCount != 1 ||
+			!deletedChildIsWorktree(dir, cwd, scan.singleDirRoot) {
+			return ""
+		}
+		return scan.singleDirRoot
+	}
+	return scan.agreedRoot
+}
+
+func scanSiblingRepoCandidates(dir string) siblingScanResult {
+	var result siblingScanResult
 	// If dir is itself a repo or worktree, let the normal upward walk
 	// handle it. A refused .git symlink counts too: it is a boundary the
 	// walk stops at, and typing it must not follow the link.
 	if _, err := statGitEntry(filepath.Join(dir, ".git")); err == nil ||
 		errors.Is(err, errRefusedGitEntry) {
-		return ""
+		result.selfIsRepo = true
+		return result
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return ""
+		return result
 	}
 	worktreeMarker := string(filepath.Separator) + ".git" +
 		string(filepath.Separator) + "worktrees" +
@@ -822,14 +862,12 @@ func repoRootFromSiblings(dir, cwd string) string {
 	}
 
 	// Count worktree and directory siblings.
-	var worktreeCount, dirCount int
-	var singleDirRoot string
 	for _, s := range siblings {
 		if s.isDir {
-			dirCount++
-			singleDirRoot = s.root
+			result.dirCount++
+			result.singleDirRoot = s.root
 		} else {
-			worktreeCount++
+			result.worktreeCount++
 		}
 	}
 
@@ -838,16 +876,8 @@ func repoRootFromSiblings(dir, cwd string) string {
 	// accept a single main checkout only if its
 	// .git/worktrees/ exists, proving it has (or had)
 	// linked worktrees.
-	if worktreeCount == 0 {
-		if dirCount != 1 {
-			return ""
-		}
-		// Verify the deleted child matches a known worktree
-		// entry under .git/worktrees/.
-		if !deletedChildIsWorktree(dir, cwd, singleDirRoot) {
-			return ""
-		}
-		return singleDirRoot
+	if result.worktreeCount == 0 {
+		return result
 	}
 
 	var found string
@@ -855,10 +885,11 @@ func repoRootFromSiblings(dir, cwd string) string {
 		if found == "" {
 			found = s.root
 		} else if found != s.root {
-			return ""
+			return result
 		}
 	}
-	return found
+	result.agreedRoot = found
+	return result
 }
 
 // deletedChildIsWorktree checks whether the first missing

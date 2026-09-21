@@ -1,7 +1,6 @@
 package extract
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -12,7 +11,7 @@ import (
 
 func seedServedGeneratedEntry(t *testing.T, d *db.DB, fp, sessionID, entryID string) {
 	t.Helper()
-	_, err := d.InsertExtractedRecallEntries(context.Background(), []db.RecallEntry{{
+	_, err := d.InsertExtractedRecallEntries(t.Context(), []db.RecallEntry{{
 		ID: entryID, Type: "fact", ReviewState: "unreviewed_auto",
 		Status: "accepted", Title: "t", Body: "b",
 		SourceSessionID: sessionID, SourceRunID: fp, ProvenanceOK: true,
@@ -26,7 +25,7 @@ func seedServedGeneratedEntry(t *testing.T, d *db.DB, fp, sessionID, entryID str
 // session's entries survive.
 func TestReconcilerRetractsIneligibleGeneratedEntries(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	fp := "fp-a"
 	_, err := d.EnsureExtractGeneration(ctx, db.ExtractGeneration{
 		Fingerprint: fp, Model: "m", Segmenter: "turns-v1",
@@ -36,7 +35,7 @@ func TestReconcilerRetractsIneligibleGeneratedEntries(t *testing.T) {
 	seedSession(t, d, "sess-gone", turnMessages("drop this", "done"), nil)
 	seedServedGeneratedEntry(t, d, fp, "sess-ok", "e-ok")
 	seedServedGeneratedEntry(t, d, fp, "sess-gone", "e-gone")
-	require.NoError(t, d.SoftDeleteSession("sess-gone"))
+	require.NoError(t, d.SoftDeleteSession(ctx, "sess-gone"))
 
 	started, _, err := NewReconciler(d).TryPass(ctx, PassOptions{})
 	require.NoError(t, err)

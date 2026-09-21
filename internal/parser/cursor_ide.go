@@ -3,7 +3,9 @@ package parser
 import (
 	"context"
 	"database/sql"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"os"
@@ -52,8 +54,7 @@ func cursorIDEDefaultDirs() []string {
 }
 
 func openCursorIDEDB(dbPath string) (*sql.DB, error) {
-	dsn := "file:" + sqliteURIPath(dbPath) + "?mode=ro&_busy_timeout=3000"
-	db, err := sql.Open("sqlite3", dsn)
+	db, err := openSQLiteReadOnly(dbPath, sqliteReadOptions{busyTimeoutMS: 3000})
 	if err != nil {
 		return nil, fmt.Errorf("opening cursor IDE db %s: %w", dbPath, err)
 	}
@@ -87,7 +88,7 @@ func beginCursorIDESnapshot(
 
 // CursorIDEComposerExists reports whether a composerData row with the given
 // composer ID exists in state.vscdb.
-func CursorIDEComposerExists(dbPath, composerID string) bool {
+func CursorIDEComposerExists(ctx context.Context, dbPath, composerID string) bool {
 	if dbPath == "" || composerID == "" || !IsValidSessionID(composerID) {
 		return false
 	}
@@ -97,7 +98,7 @@ func CursorIDEComposerExists(dbPath, composerID string) bool {
 	}
 	defer conn.Close()
 	var one int
-	err = conn.QueryRow(
+	err = conn.QueryRowContext(ctx,
 		`SELECT 1 FROM cursorDiskKV WHERE key = ? LIMIT 1`,
 		cursorIDEComposerKeyPrefix+composerID,
 	).Scan(&one)
@@ -206,12 +207,21 @@ func loadCursorIDEComposerMeta(
 		`SELECT value FROM cursorDiskKV WHERE key = ?`,
 		cursorIDEComposerKeyPrefix+composerID,
 	).Scan(&raw)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return cursorIDEComposerMeta{}, false, nil
 	}
 	if err != nil {
 		return cursorIDEComposerMeta{}, false, fmt.Errorf(
 			"loading cursor IDE composer meta %s: %w", composerID, err)
+	}
+	if len(raw) == 0 {
+		// A composerData key whose value is NULL or empty holds no session
+		// document, so there is nothing to fingerprint. This is the same fact
+		// as the vanished row above, not the malformed case below: an absent
+		// value yields no shorter transcript that could replace the archived
+		// one. The engine proceeds to Parse, which routes the stored session
+		// to the recoverable source-missing seam while state.vscdb is present.
+		return cursorIDEComposerMeta{}, false, nil
 	}
 	var doc cursorIDEComposerDoc
 	if err := json.Unmarshal(raw, &doc); err != nil {
@@ -261,10 +271,10 @@ func listCursorIDEComposerIDs(ctx context.Context, conn *sql.DB) ([]string, erro
 // separate call/result blocks, Cursor stores one tool invocation (input,
 // status, and output) inline on the assistant bubble that issued it.
 type cursorIDEToolFormerData struct {
-	ToolCallID string `json:"toolCallId"`
-	Name       string `json:"name"`
-	RawArgs    string `json:"rawArgs"`
-	Result     string `json:"result"`
+	ToolCallID string         `json:"toolCallId"`
+	Name       string         `json:"name"`
+	RawArgs    string         `json:"rawArgs"`
+	Result     jsontext.Value `json:"result,omitzero"`
 }
 
 type cursorIDEBubble struct {
@@ -272,6 +282,20 @@ type cursorIDEBubble struct {
 	Text           string                   `json:"text"`
 	CreatedAt      string                   `json:"createdAt"`
 	ToolFormerData *cursorIDEToolFormerData `json:"toolFormerData"`
+}
+
+func cursorIDEToolResultText(v jsontext.Value) string {
+	if len(v) == 0 || v.Kind() == 'n' {
+		return ""
+	}
+	if v.Kind() == '"' {
+		var text string
+		if err := json.Unmarshal(v, &text); err != nil {
+			return ""
+		}
+		return text
+	}
+	return string(v)
 }
 
 func loadCursorIDEBubble(
@@ -291,6 +315,14 @@ func loadCursorIDEBubble(
 	if err != nil {
 		return nil, fmt.Errorf(
 			"loading cursor IDE bubble %s:%s: %w", composerID, bubbleID, err)
+	}
+	if len(raw) == 0 {
+		// A bubbleId row whose value is NULL or empty carries no turn text,
+		// which is the same gap as the missing row above. The caller flags the
+		// transcript truncated, and the engine's truncation guard
+		// (dropShrinkingTruncatedCursorIDEResults) still refuses any result
+		// that would drop an archived message.
+		return nil, nil
 	}
 	var bubble cursorIDEBubble
 	if err := json.Unmarshal(raw, &bubble); err != nil {
@@ -340,12 +372,12 @@ func cursorIDEMessageFromBubble(ordinal int, bubble cursorIDEBubble) (ParsedMess
 			Category:  NormalizeToolCategory(tfd.Name),
 			InputJSON: tfd.RawArgs,
 		}}
-		if tfd.Result != "" {
-			quoted, err := json.Marshal(tfd.Result)
+		if text := cursorIDEToolResultText(tfd.Result); text != "" {
+			quoted, err := json.Marshal(text)
 			if err == nil {
 				msg.ToolResults = []ParsedToolResult{{
 					ToolUseID:     tfd.ToolCallID,
-					ContentLength: len(tfd.Result),
+					ContentLength: len(text),
 					ContentRaw:    string(quoted),
 				}}
 			}
@@ -408,12 +440,19 @@ func parseCursorIDEComposer(
 		`SELECT value FROM cursorDiskKV WHERE key = ?`,
 		cursorIDEComposerKeyPrefix+composerID,
 	).Scan(&raw)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf(
 			"loading cursor IDE composer %s: %w", composerID, err)
+	}
+	if len(raw) == 0 {
+		// Same husk row as in loadCursorIDEComposerMeta: no document, so no
+		// result. A nil result keeps the container fan-out running for every
+		// sibling composer instead of failing the whole pass, and the stored
+		// session is preserved through the source-missing seam.
+		return nil, nil
 	}
 	var doc cursorIDEComposerDoc
 	if err := json.Unmarshal(raw, &doc); err != nil {

@@ -299,7 +299,7 @@ func verifyClaudeProviderRootSecurity(
 		return err
 	}
 	if dacl == nil {
-		return errors.New("Claude provider root has an unrestricted DACL")
+		return errors.New("claude provider root has an unrestricted DACL")
 	}
 	for index := range uint32(dacl.AceCount) {
 		var ace *windows.ACCESS_ALLOWED_ACE
@@ -312,13 +312,13 @@ func verifyClaudeProviderRootSecurity(
 		}
 		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
 			return errors.New(
-				"Claude provider root has an unsupported sensitive ACE",
+				"claude provider root has an unsupported sensitive ACE",
 			)
 		}
 		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
 		if !captureSIDAllowed(sid, allowed) {
 			return errors.New(
-				"Claude provider root grants sensitive access to another principal",
+				"claude provider root grants sensitive access to another principal",
 			)
 		}
 	}

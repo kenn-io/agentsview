@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 
@@ -14,18 +13,18 @@ import (
 func TestApplyWorktreeMappingToSingleSessionUsesSameFileSiblingForEmptyCwd(
 	t *testing.T,
 ) {
-	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "archive.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
-	ctx := context.Background()
+	ctx := t.Context()
 	filePath := filepath.Join(t.TempDir(), "shared-session.jsonl")
 	worktreePrefix := "/srv/worktrees/service"
 
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(ctx, db.Session{
 		ID: "target", Machine: "archive.example", Agent: "claude",
 		Project: "branch", Cwd: "", FilePath: &filePath,
 	}))
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(ctx, db.Session{
 		ID: "sibling", Machine: "archive.example", Agent: "claude",
 		Project: "branch", Cwd: worktreePrefix + "/feature", FilePath: &filePath,
 	}))
@@ -35,7 +34,7 @@ func TestApplyWorktreeMappingToSingleSessionUsesSameFileSiblingForEmptyCwd(
 	})
 	require.NoError(t, err)
 
-	engine := NewEngine(database, EngineConfig{Machine: "archive.example"})
+	engine := NewEngine(ctx, database, EngineConfig{Machine: "archive.example"})
 	finalProject, err := engine.applyWorktreeMappingToSingleSession("target")
 	require.NoError(t, err)
 	assert.Equal(t, "service", finalProject)

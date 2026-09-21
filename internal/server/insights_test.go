@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -65,11 +67,11 @@ func (s *readOnlyInsightPersistStore) InsightGenerationAvailable() bool {
 	return true
 }
 
-func (s *readOnlyInsightPersistStore) InsertInsight(
+func (s *readOnlyInsightPersistStore) InsertInsight(ctx context.Context,
 	insight db.Insight,
 ) (int64, error) {
 	s.insertCalls++
-	return s.Store.InsertInsight(insight)
+	return s.Store.InsertInsight(ctx, insight)
 }
 
 func newFailFirstWriteRecorder() *failFirstWriteRecorder {
@@ -250,12 +252,10 @@ func TestInsightPublish(t *testing.T) {
 			assert.Equal(t, "Insight: Daily Activity - my-app - 2025-01-15", payload.Description)
 			assert.False(t, payload.Public)
 			require.Contains(t, payload.Files, "insight-daily_activity-my-app-20250115.html")
-			assert.Contains(t,
-				payload.Files["insight-daily_activity-my-app-20250115.html"].Content,
+			assert.Contains(t, payload.Files["insight-daily_activity-my-app-20250115.html"].Content,
 				"Daily Activity Insight",
 			)
-			assert.Contains(t,
-				payload.Files["insight-daily_activity-my-app-20250115.html"].Content,
+			assert.Contains(t, payload.Files["insight-daily_activity-my-app-20250115.html"].Content,
 				"# Insight",
 			)
 
@@ -277,12 +277,10 @@ func TestInsightPublish(t *testing.T) {
 		resp := decode[map[string]string](t, w)
 		assert.Equal(t, "gist123", resp["gist_id"])
 		assert.Equal(t, "https://gist.github.com/octocat/gist123", resp["gist_url"])
-		assert.Equal(t,
-			"https://gist.githubusercontent.com/octocat/gist123/raw/insight-daily_activity-my-app-20250115.html",
+		assert.Equal(t, "https://gist.githubusercontent.com/octocat/gist123/raw/insight-daily_activity-my-app-20250115.html",
 			resp["raw_url"],
 		)
-		assert.Equal(t,
-			"https://htmlpreview.github.io/?https://gist.githubusercontent.com/octocat/gist123/raw/insight-daily_activity-my-app-20250115.html",
+		assert.Equal(t, "https://htmlpreview.github.io/?https://gist.githubusercontent.com/octocat/gist123/raw/insight-daily_activity-my-app-20250115.html",
 			resp["view_url"],
 		)
 	})
@@ -302,7 +300,7 @@ func TestInsightPublish(t *testing.T) {
 		te := setup(t)
 		id := te.seedInsight(t, "daily_activity", "2025-01-15", new("my-app"))
 
-		req := httptest.NewRequest(http.MethodPost,
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost,
 			fmt.Sprintf("/api/v1/insights/%d/publish", id),
 			strings.NewReader("{}"))
 		req.Header.Set("Content-Type", "application/json")
@@ -357,7 +355,7 @@ func TestGenerateInsight_DefaultAgent(t *testing.T) {
 		_ context.Context, agent, _ string,
 	) (insight.Result, error) {
 		assert.Equal(t, "claude", agent, "expected default agent claude")
-		return insight.Result{}, fmt.Errorf("stub: no CLI")
+		return insight.Result{}, errors.New("stub: no CLI")
 	}
 	te := setupWithServerOpts(t, []server.Option{
 		server.WithGenerateFunc(stubGen),
@@ -469,7 +467,7 @@ func TestGenerateInsight_PersistsWithReadOnlyStore(t *testing.T) {
 	assert.Equal(t, "persisted from read-only wrapper", saved.Content)
 	assert.Equal(t, "claude", saved.Agent)
 
-	stored, err := database.GetInsight(context.Background(), saved.ID)
+	stored, err := database.GetInsight(t.Context(), saved.ID)
 	require.NoError(t, err, "GetInsight after generate")
 	require.NotNil(t, stored)
 	assert.Equal(t, saved.ID, stored.ID)
@@ -507,7 +505,7 @@ func TestGenerateInsight_StaysBlockedForReadOnlyStoreWithoutInsightWrites(t *tes
 	w := te.post(t, "/api/v1/insights/generate",
 		`{"type":"daily_activity","date_from":"2025-01-15","date_to":"2025-01-15"}`)
 	assertStatus(t, w, http.StatusNotImplemented)
-	assertBodyContains(t, w, "read-only mode")
+	assertBodyContains(t, w, "insight generation is not available for this archive")
 	assert.False(t, called)
 }
 
@@ -656,10 +654,10 @@ func TestGenerateCannedInsight_SaveCacheAndPreserveSignals(t *testing.T) {
 	) (insight.Result, error) {
 		calls.Add(1)
 		if agent != "claude" {
-			t.Fatalf("agent = %q, want claude", agent)
+			require.FailNowf(t, "test failed", "agent = %q, want claude", agent)
 		}
 		if !strings.Contains(prompt, "Do not recalculate, override") {
-			t.Fatalf("prompt missing score boundary: %s", prompt)
+			require.FailNowf(t, "test failed", "prompt missing score boundary: %s", prompt)
 		}
 		return insight.Result{
 			Agent: "claude",
@@ -692,7 +690,7 @@ func TestGenerateCannedInsight_SaveCacheAndPreserveSignals(t *testing.T) {
 	te.seedSession(t, "quality-1", "my-app", 6)
 	score := 86
 	grade := "B"
-	if err := te.db.UpdateSessionSignals("quality-1", db.SessionSignalUpdate{
+	if err := te.db.UpdateSessionSignals(t.Context(), "quality-1", db.SessionSignalUpdate{
 		ToolFailureSignalCount: 2,
 		ToolRetryCount:         1,
 		Outcome:                "completed",
@@ -703,11 +701,11 @@ func TestGenerateCannedInsight_SaveCacheAndPreserveSignals(t *testing.T) {
 		HasToolCalls:           true,
 		HasContextData:         true,
 	}); err != nil {
-		t.Fatalf("UpdateSessionSignals: %v", err)
+		require.FailNowf(t, "test failed", "UpdateSessionSignals: %v", err)
 	}
-	before, err := te.db.GetSession(context.Background(), "quality-1")
+	before, err := te.db.GetSession(t.Context(), "quality-1")
 	if err != nil {
-		t.Fatalf("GetSession before: %v", err)
+		require.FailNowf(t, "test failed", "GetSession before: %v", err)
 	}
 
 	payload := `{"type":"llm_canned","kind":"prompt_maturity_review","date_from":"2025-01-15","date_to":"2025-01-15","project":"my-app","agent":"claude","llm_opt_in":true}`
@@ -715,44 +713,44 @@ func TestGenerateCannedInsight_SaveCacheAndPreserveSignals(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	events := parseSSE(w.Body.String())
 	if len(events) == 0 || events[len(events)-1].Event != "done" {
-		t.Fatalf("expected done event, got %s", w.Body.String())
+		require.FailNowf(t, "test failed", "expected done event, got %s", w.Body.String())
 	}
 
 	var saved db.Insight
 	if err := json.Unmarshal([]byte(events[len(events)-1].Data), &saved); err != nil {
-		t.Fatalf("decode saved insight: %v", err)
+		require.FailNowf(t, "test failed", "decode saved insight: %v", err)
 	}
 	if saved.Type != insight.CannedType {
-		t.Fatalf("Type = %q, want %q", saved.Type, insight.CannedType)
+		require.FailNowf(t, "test failed", "Type = %q, want %q", saved.Type, insight.CannedType)
 	}
 	if saved.Kind != "prompt_maturity_review" {
-		t.Fatalf("Kind = %q", saved.Kind)
+		require.FailNowf(t, "test failed", "Kind = %q", saved.Kind)
 	}
 	if saved.SchemaVersion != insight.CannedSchemaVersion ||
 		saved.TemplateID == "" || saved.AggregateHash == "" ||
 		saved.CacheKey == "" || saved.CacheStatus != "fresh" ||
 		saved.ProvenanceJSON == "" || saved.StructuredJSON == "" {
-		t.Fatalf("missing canned metadata: %+v", saved)
+		require.FailNowf(t, "test failed", "missing canned metadata: %+v", saved)
 	}
 	if !strings.Contains(saved.Content, "AI-generated recommendation") {
-		t.Fatalf("content missing generated label: %s", saved.Content)
+		require.FailNowf(t, "test failed", "content missing generated label: %s", saved.Content)
 	}
 
-	after, err := te.db.GetSession(context.Background(), "quality-1")
+	after, err := te.db.GetSession(t.Context(), "quality-1")
 	if err != nil {
-		t.Fatalf("GetSession after: %v", err)
+		require.FailNowf(t, "test failed", "GetSession after: %v", err)
 	}
 	if *after.HealthScore != *before.HealthScore ||
 		*after.HealthGrade != *before.HealthGrade ||
 		after.ToolFailureSignalCount != before.ToolFailureSignalCount ||
 		after.ToolRetryCount != before.ToolRetryCount {
-		t.Fatalf("canonical signals changed: before=%+v after=%+v", before, after)
+		require.FailNowf(t, "test failed", "canonical signals changed: before=%+v after=%+v", before, after)
 	}
 
 	w = te.post(t, "/api/v1/insights/generate", payload)
 	assertStatus(t, w, http.StatusOK)
 	if calls.Load() != 1 {
-		t.Fatalf("generator calls = %d, want 1 after cache hit", calls.Load())
+		require.FailNowf(t, "test failed", "generator calls = %d, want 1 after cache hit", calls.Load())
 	}
 	events = parseSSE(w.Body.String())
 	foundCacheHit := false
@@ -763,26 +761,26 @@ func TestGenerateCannedInsight_SaveCacheAndPreserveSignals(t *testing.T) {
 		}
 		if ev.Event == "done" {
 			if err := json.Unmarshal([]byte(ev.Data), &cached); err != nil {
-				t.Fatalf("decode cached insight: %v", err)
+				require.FailNowf(t, "test failed", "decode cached insight: %v", err)
 			}
 		}
 	}
 	if !foundCacheHit {
-		t.Fatalf("expected cache_hit status, got %s", w.Body.String())
+		require.FailNowf(t, "test failed", "expected cache_hit status, got %s", w.Body.String())
 	}
 	if cached.CacheStatus != "hit" {
-		t.Fatalf("cached CacheStatus = %q, want hit", cached.CacheStatus)
+		require.FailNowf(t, "test failed", "cached CacheStatus = %q, want hit", cached.CacheStatus)
 	}
 	if !strings.Contains(cached.ProvenanceJSON, `"cache_status":"hit"`) {
-		t.Fatalf("cached provenance missing hit status: %s", cached.ProvenanceJSON)
+		require.FailNowf(t, "test failed", "cached provenance missing hit status: %s", cached.ProvenanceJSON)
 	}
-	stored, err := te.db.GetInsight(context.Background(), saved.ID)
+	stored, err := te.db.GetInsight(t.Context(), saved.ID)
 	if err != nil {
-		t.Fatalf("GetInsight stored: %v", err)
+		require.FailNowf(t, "test failed", "GetInsight stored: %v", err)
 	}
 	if stored == nil || stored.CacheStatus != "fresh" ||
 		!strings.Contains(stored.ProvenanceJSON, `"cache_status":"fresh"`) {
-		t.Fatalf("stored insight should keep original provenance: %+v", stored)
+		require.FailNowf(t, "test failed", "stored insight should keep original provenance: %+v", stored)
 	}
 }
 
@@ -832,7 +830,7 @@ func TestGenerateCannedInsight_ModelCostPromptIncludesModelBreakdown(t *testing.
 			CacheReadPerMTok:     money.MustParseDollars("0.3"),
 		},
 	}); err != nil {
-		t.Fatalf("UpsertModelPricing: %v", err)
+		require.FailNowf(t, "test failed", "UpsertModelPricing: %v", err)
 	}
 	te.seedSession(t, "usage-1", "my-app", 4)
 	te.seedMessages(t, "usage-1", 4, func(i int, m *db.Message) {
@@ -860,11 +858,11 @@ func TestGenerateCannedInsight_ModelCostPromptIncludesModelBreakdown(t *testing.
 		`usage:model_breakdown`,
 	} {
 		if !strings.Contains(capturedPrompt, want) {
-			t.Fatalf("prompt missing %q: %s", want, capturedPrompt)
+			require.FailNowf(t, "test failed", "prompt missing %q: %s", want, capturedPrompt)
 		}
 	}
 	if strings.Contains(capturedPrompt, "Model mix is not directly observable") {
-		t.Fatalf("prompt should include observable model mix: %s", capturedPrompt)
+		require.FailNowf(t, "test failed", "prompt should include observable model mix: %s", capturedPrompt)
 	}
 }
 
@@ -912,7 +910,7 @@ func TestGenerateCannedInsight_CoachSummaryUsesAllPages(t *testing.T) {
 
 	assertStatus(t, w, http.StatusOK)
 	if !strings.Contains(generatedPrompt, `"session_count":501`) {
-		t.Fatalf("generated prompt missing all-page Coach session count: %s",
+		require.FailNowf(t, "test failed", "generated prompt missing all-page Coach session count: %s",
 			generatedPrompt)
 	}
 }
@@ -964,13 +962,13 @@ func TestGenerateCannedInsight_AutomatedScopeOnlyAutomated(t *testing.T) {
 
 	assertStatus(t, w, http.StatusOK)
 	if !strings.Contains(generatedPrompt, `"automated_scope":"automated"`) {
-		t.Fatalf("generated prompt missing automated scope: %s", generatedPrompt)
+		require.FailNowf(t, "test failed", "generated prompt missing automated scope: %s", generatedPrompt)
 	}
 	if !strings.Contains(generatedPrompt, `"session_count":1`) {
-		t.Fatalf("generated prompt should include only automated session: %s", generatedPrompt)
+		require.FailNowf(t, "test failed", "generated prompt should include only automated session: %s", generatedPrompt)
 	}
 	if strings.Contains(generatedPrompt, "human-session") {
-		t.Fatalf("generated prompt included human session: %s", generatedPrompt)
+		require.FailNowf(t, "test failed", "generated prompt included human session: %s", generatedPrompt)
 	}
 }
 
@@ -1043,6 +1041,8 @@ func TestGenerateCannedInsight_UsesSessionFilterPayload(t *testing.T) {
 		s.HasToolCalls = true
 		s.TerminationStatus = &clean
 	})
+	const installationID = "0123456789abcdef0123456789abcdef"
+	require.NoError(t, te.db.AdoptMachineIdentity(t.Context(), installationID, []string{"workstation"}))
 
 	firstPayload := `{"type":"llm_canned","kind":"prompt_maturity_review","date_from":"2025-01-15","date_to":"2025-01-15","project":"my-app","agent":"claude","llm_opt_in":true,"filters":{"timezone":"America/New_York","agent":"codex","machine":"workstation","termination":"clean","min_user_messages":2,"include_one_shot":false,"automated_scope":"human"}}`
 	w := te.post(t, "/api/v1/insights/generate", firstPayload)
@@ -1056,6 +1056,25 @@ func TestGenerateCannedInsight_UsesSessionFilterPayload(t *testing.T) {
 	assert.NotContains(t, generatedPrompts[0], claudePrompt)
 	assert.NotContains(t, generatedPrompts[0], wrongMachinePrompt)
 	assert.NotContains(t, generatedPrompts[0], oneShotPrompt)
+	assert.Contains(t, generatedPrompts[0], `"machine":"`+installationID+`"`)
+	events := parseSSE(w.Body.String())
+	require.NotEmpty(t, events)
+	require.Equal(t, "done", events[len(events)-1].Event, w.Body.String())
+	var saved db.Insight
+	require.NoError(t, json.Unmarshal([]byte(events[len(events)-1].Data), &saved))
+	assert.Contains(t, saved.ProvenanceJSON, `"machine":"`+installationID+`"`)
+
+	canonicalPayload := strings.Replace(firstPayload, `"machine":"workstation"`, `"machine":"`+installationID+`"`, 1)
+	w = te.post(t, "/api/v1/insights/generate", canonicalPayload)
+	assertStatus(t, w, http.StatusOK)
+	require.Equal(t, int32(1), calls.Load(), "alias and installation ID must share the cached insight")
+	events = parseSSE(w.Body.String())
+	require.NotEmpty(t, events)
+	require.Equal(t, "done", events[len(events)-1].Event, w.Body.String())
+	var cached db.Insight
+	require.NoError(t, json.Unmarshal([]byte(events[len(events)-1].Data), &cached))
+	assert.Equal(t, saved.ID, cached.ID)
+	assert.Equal(t, "hit", cached.CacheStatus)
 
 	secondPayload := `{"type":"llm_canned","kind":"prompt_maturity_review","date_from":"2025-01-15","date_to":"2025-01-15","project":"my-app","agent":"claude","llm_opt_in":true,"filters":{"timezone":"America/New_York","agent":"claude","machine":"workstation","termination":"clean","min_user_messages":2,"include_one_shot":false,"automated_scope":"human"}}`
 	w = te.post(t, "/api/v1/insights/generate", secondPayload)
@@ -1197,7 +1216,7 @@ func TestGenerateCannedInsight_RejectsOversizedFocus(t *testing.T) {
 		"prompt":     longFocus,
 	})
 	if err != nil {
-		t.Fatalf("marshal request: %v", err)
+		require.FailNowf(t, "test failed", "marshal request: %v", err)
 	}
 
 	w := te.post(t, "/api/v1/insights/generate", string(body))
@@ -1254,32 +1273,32 @@ func TestGenerateCannedInsight_NormalizesFocusBeforeCaching(t *testing.T) {
 		"prompt":     padded,
 	})
 	if err != nil {
-		t.Fatalf("marshal request: %v", err)
+		require.FailNowf(t, "test failed", "marshal request: %v", err)
 	}
 
 	w := te.post(t, "/api/v1/insights/generate", string(body))
 	assertStatus(t, w, http.StatusOK)
 	events := parseSSE(w.Body.String())
 	if len(events) == 0 || events[len(events)-1].Event != "done" {
-		t.Fatalf("expected done event, got %s", w.Body.String())
+		require.FailNowf(t, "test failed", "expected done event, got %s", w.Body.String())
 	}
 	var saved db.Insight
 	if err := json.Unmarshal([]byte(events[len(events)-1].Data), &saved); err != nil {
-		t.Fatalf("decode saved insight: %v", err)
+		require.FailNowf(t, "test failed", "decode saved insight: %v", err)
 	}
 	if saved.Prompt == nil || *saved.Prompt != "Focus on retries" {
-		t.Fatalf("saved Prompt = %v, want trimmed focus", saved.Prompt)
+		require.FailNowf(t, "test failed", "saved Prompt = %v, want trimmed focus", saved.Prompt)
 	}
 	if strings.Contains(generatedPrompt, padded) ||
 		!strings.Contains(generatedPrompt, "Focus on retries") {
-		t.Fatalf("generated prompt did not normalize focus: %q", generatedPrompt)
+		require.FailNowf(t, "test failed", "generated prompt did not normalize focus: %q", generatedPrompt)
 	}
 
 	trimmedPayload := `{"type":"llm_canned","kind":"prompt_maturity_review","date_from":"2025-01-15","date_to":"2025-01-15","agent":"claude","llm_opt_in":true,"prompt":"Focus on retries"}`
 	w = te.post(t, "/api/v1/insights/generate", trimmedPayload)
 	assertStatus(t, w, http.StatusOK)
 	if calls.Load() != 1 {
-		t.Fatalf("generator calls = %d, want 1 after normalized cache hit", calls.Load())
+		require.FailNowf(t, "test failed", "generator calls = %d, want 1 after normalized cache hit", calls.Load())
 	}
 	assertBodyContains(t, w, "cache_hit")
 }
@@ -1288,9 +1307,7 @@ func TestGenerateInsight_ErrorMessageStripsStderr(t *testing.T) {
 	stubGen := func(
 		_ context.Context, _, _ string,
 	) (insight.Result, error) {
-		return insight.Result{}, fmt.Errorf(
-			"claude CLI failed: exit status 1\nstderr: some debug output",
-		)
+		return insight.Result{}, errors.New("claude CLI failed: exit status 1\nstderr: some debug output")
 	}
 	te := setupWithServerOpts(t, []server.Option{
 		server.WithGenerateFunc(stubGen),
@@ -1309,9 +1326,7 @@ func TestGenerateInsight_ErrorMessageStripsRaw(t *testing.T) {
 	stubGen := func(
 		_ context.Context, _, _ string,
 	) (insight.Result, error) {
-		return insight.Result{}, fmt.Errorf(
-			"claude returned empty result\nraw: {\"type\":\"result\",\"result\":\"\"}",
-		)
+		return insight.Result{}, errors.New("claude returned empty result\nraw: {\"type\":\"result\",\"result\":\"\"}")
 	}
 	te := setupWithServerOpts(t, []server.Option{
 		server.WithGenerateFunc(stubGen),
@@ -1337,7 +1352,7 @@ func TestGenerateInsight_InitialStatusWriteFailureSkipsGeneration(t *testing.T) 
 		}),
 	})
 
-	req := httptest.NewRequest(
+	req := httptest.NewRequestWithContext(t.Context(),
 		http.MethodPost, "/api/v1/insights/generate",
 		strings.NewReader(
 			`{"type":"daily_activity","date_from":"2025-01-15","date_to":"2025-01-15","agent":"claude"}`,
@@ -1396,14 +1411,14 @@ func TestGenerateInsight_StreamsLogs(t *testing.T) {
 
 type slowFlushRecorder struct {
 	*httptest.ResponseRecorder
-	delay time.Duration
-	mu    sync.Mutex
+	wait func()
+	mu   sync.Mutex
 }
 
 func (f *slowFlushRecorder) Write(
 	b []byte,
 ) (int, error) {
-	time.Sleep(f.delay)
+	f.wait()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.ResponseRecorder.Write(b)
@@ -1423,15 +1438,15 @@ func (f *slowFlushRecorder) BodyString() string {
 
 type slowLogRecorder struct {
 	*httptest.ResponseRecorder
-	delay time.Duration
-	mu    sync.Mutex
+	wait func()
+	mu   sync.Mutex
 }
 
 func (f *slowLogRecorder) Write(
 	b []byte,
 ) (int, error) {
 	if strings.HasPrefix(string(b), "event: log\n") {
-		time.Sleep(f.delay)
+		f.wait()
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -1481,9 +1496,9 @@ func (f *blockingLogRecorder) BodyString() string {
 
 type firstLogDelayRecorder struct {
 	*httptest.ResponseRecorder
-	delay time.Duration
-	once  sync.Once
-	mu    sync.Mutex
+	wait func()
+	once sync.Once
+	mu   sync.Mutex
 }
 
 func (f *firstLogDelayRecorder) Write(
@@ -1491,7 +1506,7 @@ func (f *firstLogDelayRecorder) Write(
 ) (int, error) {
 	if strings.HasPrefix(string(b), "event: log\n") {
 		f.once.Do(func() {
-			time.Sleep(f.delay)
+			f.wait()
 		})
 	}
 	f.mu.Lock()
@@ -1595,6 +1610,15 @@ func (f *deadlineAwareBlockingLogRecorder) BodyString() string {
 }
 
 func TestGenerateInsight_LogDropSummaryAndCompletion(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		testGenerateInsightLogDropSummaryAndCompletion(t, func() {
+			time.Sleep(time.Millisecond)
+		})
+	})
+}
+
+func testGenerateInsightLogDropSummaryAndCompletion(t *testing.T, wait func()) {
+	t.Helper()
 	stubGen := func(
 		_ context.Context, _ string, _ string, onLog insight.LogFunc,
 	) (insight.Result, error) {
@@ -1620,7 +1644,7 @@ func TestGenerateInsight_LogDropSummaryAndCompletion(t *testing.T) {
 		server.WithInsightLogDrainTimeouts(30*time.Second, time.Second),
 	})
 
-	req := httptest.NewRequest(
+	req := httptest.NewRequestWithContext(t.Context(),
 		http.MethodPost, "/api/v1/insights/generate",
 		strings.NewReader(
 			`{"type":"daily_activity","date_from":"2025-01-15","date_to":"2025-01-15","agent":"claude"}`,
@@ -1629,7 +1653,7 @@ func TestGenerateInsight_LogDropSummaryAndCompletion(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := &slowFlushRecorder{
 		ResponseRecorder: httptest.NewRecorder(),
-		delay:            time.Millisecond,
+		wait:             wait,
 	}
 
 	done := make(chan struct{})
@@ -1672,6 +1696,15 @@ func TestGenerateInsight_LogDropSummaryAndCompletion(t *testing.T) {
 }
 
 func TestGenerateInsight_LogDrainTimeoutReturnsWithoutHang(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		testGenerateInsightLogDrainTimeoutReturnsWithoutHang(t, func() {
+			time.Sleep(35 * time.Millisecond)
+		})
+	})
+}
+
+func testGenerateInsightLogDrainTimeoutReturnsWithoutHang(t *testing.T, wait func()) {
+	t.Helper()
 	stubGen := func(
 		_ context.Context, _ string, _ string, onLog insight.LogFunc,
 	) (insight.Result, error) {
@@ -1691,7 +1724,7 @@ func TestGenerateInsight_LogDrainTimeoutReturnsWithoutHang(t *testing.T) {
 		fastInsightLogDrainTimeouts(),
 	})
 
-	req := httptest.NewRequest(
+	req := httptest.NewRequestWithContext(t.Context(),
 		http.MethodPost, "/api/v1/insights/generate",
 		strings.NewReader(
 			`{"type":"daily_activity","date_from":"2025-01-15","date_to":"2025-01-15","agent":"claude"}`,
@@ -1700,7 +1733,7 @@ func TestGenerateInsight_LogDrainTimeoutReturnsWithoutHang(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := &slowLogRecorder{
 		ResponseRecorder: httptest.NewRecorder(),
-		delay:            35 * time.Millisecond,
+		wait:             wait,
 	}
 
 	started := time.Now()
@@ -1727,6 +1760,15 @@ func TestGenerateInsight_LogDrainTimeoutReturnsWithoutHang(t *testing.T) {
 }
 
 func TestGenerateInsight_LogDrainTimeoutReportsBufferedDrops(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		testGenerateInsightLogDrainTimeoutReportsBufferedDrops(t, func() {
+			time.Sleep(35 * time.Millisecond)
+		})
+	})
+}
+
+func testGenerateInsightLogDrainTimeoutReportsBufferedDrops(t *testing.T, wait func()) {
+	t.Helper()
 	stubGen := func(
 		_ context.Context, _ string, _ string, onLog insight.LogFunc,
 	) (insight.Result, error) {
@@ -1735,6 +1777,9 @@ func TestGenerateInsight_LogDrainTimeoutReportsBufferedDrops(t *testing.T) {
 				Stream: "stdout",
 				Line:   fmt.Sprintf("slow-line-%d", i),
 			})
+			if i == 0 {
+				synctest.Wait()
+			}
 		}
 		return insight.Result{
 			Content: "# Insight",
@@ -1746,7 +1791,7 @@ func TestGenerateInsight_LogDrainTimeoutReportsBufferedDrops(t *testing.T) {
 		fastInsightLogDrainTimeouts(),
 	})
 
-	req := httptest.NewRequest(
+	req := httptest.NewRequestWithContext(t.Context(),
 		http.MethodPost, "/api/v1/insights/generate",
 		strings.NewReader(
 			`{"type":"daily_activity","date_from":"2025-01-15","date_to":"2025-01-15","agent":"claude"}`,
@@ -1755,20 +1800,11 @@ func TestGenerateInsight_LogDrainTimeoutReportsBufferedDrops(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := &firstLogDelayRecorder{
 		ResponseRecorder: httptest.NewRecorder(),
-		delay:            35 * time.Millisecond,
+		wait:             wait,
 	}
 
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		te.handler.ServeHTTP(w, req)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(10 * time.Second):
-		require.Fail(t, "timed out waiting for generate handler completion")
-	}
+	// The caller owns the fake-time bubble for the write and drain deadlines.
+	te.handler.ServeHTTP(w, req)
 
 	assertStatus(t, w.ResponseRecorder, http.StatusOK)
 	events := parseSSE(w.BodyString())
@@ -1801,8 +1837,8 @@ func TestGenerateInsight_LogDrainTimeoutReportsBufferedDrops(t *testing.T) {
 		if err != nil {
 			continue
 		}
-		require.Positive(t, dropped,
-			"expected timeout drop summary to report at least one dropped log line (%q)", line.Line)
+		require.Equal(t, 299, dropped,
+			"expected every log after the first to be reported as dropped (%q)", line.Line)
 		foundDropSummary = true
 	}
 	require.True(t, foundTimeoutError,
@@ -1823,7 +1859,7 @@ func TestGenerateInsight_LogDrainTimeoutBoundedWhenWriterStuck(t *testing.T) {
 		fastInsightLogDrainTimeouts(),
 	})
 
-	req := httptest.NewRequest(
+	req := httptest.NewRequestWithContext(t.Context(),
 		http.MethodPost, "/api/v1/insights/generate",
 		strings.NewReader(
 			`{"type":"daily_activity","date_from":"2025-01-15","date_to":"2025-01-15","agent":"claude"}`,
@@ -1873,7 +1909,7 @@ func TestGenerateInsight_LogDrainTimeoutForceUnblocksAndNoPostReturnWrites(t *te
 		fastInsightLogDrainTimeouts(),
 	})
 
-	req := httptest.NewRequest(
+	req := httptest.NewRequestWithContext(t.Context(),
 		http.MethodPost, "/api/v1/insights/generate",
 		strings.NewReader(
 			`{"type":"daily_activity","date_from":"2025-01-15","date_to":"2025-01-15","agent":"claude"}`,
@@ -1978,7 +2014,35 @@ func (te *testEnv) seedInsight(
 	for _, opt := range opts {
 		opt(&insight)
 	}
-	id, err := te.db.InsertInsight(insight)
+	id, err := te.db.InsertInsight(t.Context(), insight)
 	require.NoError(t, err)
 	return id
+}
+
+func TestGenerateInsight_ArchiveContentCapability(t *testing.T) {
+	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts, config.ArchiveContentUsage} {
+		t.Run(string(policy), func(t *testing.T) {
+			called := false
+			te := setupWithServerOpts(t, []server.Option{
+				server.WithGenerateFunc(func(context.Context, string, string) (insight.Result, error) {
+					called = true
+					return insight.Result{Agent: "claude", Content: "report"}, nil
+				}),
+			})
+			// Tightening after server construction must update both the
+			// advertised capability and the request guard.
+			te.db.SetArchiveContent(policy)
+			available := !policy.UsageOnly()
+			version := decode[map[string]any](t, te.get(t, "/api/v1/version"))
+			assert.Equal(t, available, version["insight_generation_available"], "capability must be explicit")
+			w := te.post(t, "/api/v1/insights/generate",
+				`{"type":"daily_activity","date_from":"2025-01-15","date_to":"2025-01-15"}`)
+			if available {
+				assertStatus(t, w, http.StatusOK)
+			} else {
+				assertStatus(t, w, http.StatusNotImplemented)
+			}
+			assert.Equal(t, available, called, "unavailable generation must not invoke the agent")
+		})
+	}
 }

@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"encoding/json/v2"
 	"os"
 	"path/filepath"
@@ -36,14 +35,15 @@ func newGrokTestProvider(t *testing.T, root string) Provider {
 
 func parseGrokGolden(t *testing.T, generation string) ParseResult {
 	t.Helper()
+
 	root := t.TempDir()
 	fixtureRoot := filepath.Join("testdata", "grok-build", generation)
 	require.NoError(t, os.CopyFS(root, os.DirFS(fixtureRoot)))
 	provider := newGrokTestProvider(t, root)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: sources[0],
 	})
 	require.NoError(t, err)
@@ -78,8 +78,7 @@ func TestGrokProviderGoldenCurrentMetadata(t *testing.T) {
 	session := result.Session
 	assert.Equal(t, "/workspace/grok-worktrees/parser-audit", session.Cwd)
 	assert.Equal(t, "agentsview", session.Project)
-	assert.Equal(
-		t,
+	assert.Equal(t,
 		"grok:019f5000-0000-7000-8000-000000000000",
 		session.ParentSessionID,
 	)
@@ -103,6 +102,26 @@ func TestGrokProviderGoldenLegacyTranscript(t *testing.T) {
 	assert.Equal(t, "call_1", result.Messages[2].ToolResults[0].ToolUseID)
 }
 
+func TestGrokTimestampLookingPrompt(t *testing.T) {
+	root := t.TempDir()
+	sessionDir := filepath.Join(root, "cwd-key", "grok-timestamp")
+	writeGrokFixtureFile(t, filepath.Join(sessionDir, "summary.json"), `{
+		"info":{"id":"grok-timestamp","cwd":"/workspace/agentsview"},
+		"created_at":"2026-07-02T15:11:00Z",
+		"updated_at":"2026-07-02T15:12:00Z"
+	}`)
+	literal := "<timestamp>Thursday, Jul 2, 2026, 11:11 AM (UTC-4)</timestamp> review this prompt"
+	writeGrokFixtureFile(t, filepath.Join(sessionDir, "chat_history.jsonl"),
+		`{"type":"user","content":"`+literal+`"}`+"\n")
+
+	result, err := ParseGrokSummary(
+		filepath.Join(sessionDir, "summary.json"), "agentsview", "test-machine",
+	)
+	require.NoError(t, err)
+	require.Len(t, result.Messages, 1)
+	assert.Equal(t, literal, result.Messages[0].Content)
+}
+
 func TestGrokProviderParsesMixedTranscriptFormats(t *testing.T) {
 	root := t.TempDir()
 	sessionID := "mixed-formats"
@@ -119,11 +138,11 @@ func TestGrokProviderParsesMixedTranscriptFormats(t *testing.T) {
 			"{\"type\":\"assistant\",\"content\":\"current answer\"}\n",
 	)
 	provider := newGrokTestProvider(t, root)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	outcome, err := provider.Parse(
-		context.Background(),
+		t.Context(),
 		ParseRequest{Source: sources[0]},
 	)
 	require.NoError(t, err)
@@ -349,9 +368,9 @@ func TestGrokProviderStreamingDiscoveryPropagatesDirectorySymlinkErrors(t *testi
 		_, err := discoverEach(t, root)
 
 		require.Error(t, err)
-		assert.ErrorIs(t, err, os.ErrNotExist)
+		require.ErrorIs(t, err, os.ErrNotExist)
 		var incomplete DiscoveryIncompleteError
-		assert.ErrorAs(t, err, &incomplete)
+		require.ErrorAs(t, err, &incomplete)
 
 		require.NoError(t, os.Remove(link))
 		yielded, err := discoverEach(t, root)
@@ -373,9 +392,9 @@ func TestGrokProviderStreamingDiscoveryPropagatesDirectorySymlinkErrors(t *testi
 		_, err := discoverEach(t, root)
 
 		require.Error(t, err)
-		assert.ErrorIs(t, err, os.ErrNotExist)
+		require.ErrorIs(t, err, os.ErrNotExist)
 		var incomplete DiscoveryIncompleteError
-		assert.ErrorAs(t, err, &incomplete)
+		require.ErrorAs(t, err, &incomplete)
 
 		require.NoError(t, os.Remove(link))
 		yielded, err := discoverEach(t, root)
@@ -404,9 +423,9 @@ func TestGrokProviderStreamingDiscoveryPropagatesDirectorySymlinkErrors(t *testi
 		_, err := discoverEach(t, root)
 
 		require.Error(t, err)
-		assert.ErrorIs(t, err, os.ErrPermission)
+		require.ErrorIs(t, err, os.ErrPermission)
 		var incomplete DiscoveryIncompleteError
-		assert.ErrorAs(t, err, &incomplete)
+		require.ErrorAs(t, err, &incomplete)
 
 		require.NoError(t, os.Chmod(targetParent, 0o755))
 		yielded, err := discoverEach(t, root)
@@ -435,11 +454,11 @@ func TestGrokProviderSummarySource(t *testing.T) {
 			}
 		}`)
 	provider := newGrokTestProvider(t, root)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: sources[0],
 	})
 	require.NoError(t, err)
@@ -655,8 +674,7 @@ func TestGrokProviderUpdatesUsageTopLevelFallback(t *testing.T) {
 	assert.Equal(t, "grok-summary", result.UsageEvents[0].Model)
 	assert.Equal(t, 12, result.UsageEvents[0].InputTokens)
 	require.NotNil(t, result.UsageEvents[0].Cost)
-	assert.Equal(t,
-		money.Money{Microdollars: 42_413},
+	assert.Equal(t, money.Money{Microdollars: 42_413},
 		*result.UsageEvents[0].Cost,
 	)
 }
@@ -719,12 +737,12 @@ func TestGrokProviderCurrentBuildSummarySchema(t *testing.T) {
 		}`)
 
 	provider := newGrokTestProvider(t, root)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	assert.Equal(t, cwdKey, sources[0].ProjectHint)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: sources[0],
 	})
 	require.NoError(t, err)
@@ -781,11 +799,11 @@ func TestGrokProviderParsesChatHistoryTranscript(t *testing.T) {
 	}, "\n")+"\n")
 
 	provider := newGrokTestProvider(t, root)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: sources[0],
 	})
 	require.NoError(t, err)
@@ -969,8 +987,8 @@ func TestGrokProviderUpdateTimestampsRejectMismatchedToolIDs(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, result.Messages, 5)
 	assert.True(t, result.Messages[1].Timestamp.IsZero())
-	assert.Equal(
-		t, time.Unix(1_700_000_010, 0).UTC(), result.Messages[3].Timestamp,
+	assert.Equal(t,
+		time.Unix(1_700_000_010, 0).UTC(), result.Messages[3].Timestamp,
 	)
 }
 
@@ -1042,11 +1060,11 @@ func TestGrokProviderUnwrapsOpenAIStyleToolArguments(t *testing.T) {
 	}, "\n")+"\n")
 
 	provider := newGrokTestProvider(t, root)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
 
@@ -1092,11 +1110,11 @@ Please fix the flaky test in grok_test.go`
 	}, "\n")+"\n")
 
 	provider := newGrokTestProvider(t, root)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
 
@@ -1118,14 +1136,14 @@ func TestGrokProviderFindSource(t *testing.T) {
 	}`)
 
 	provider := newGrokTestProvider(t, root)
-	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "sess-1",
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, filepath.Clean(grokSummaryPath(root, "cwd-key", "sess-1")), filepath.Clean(source.FingerprintKey))
 
-	_, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	_, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "missing",
 	})
 	require.NoError(t, err)
@@ -1141,11 +1159,11 @@ func TestGrokProviderFirstPromptKeepsSessionVisibleWithoutNumMessages(t *testing
 	}`)
 
 	provider := newGrokTestProvider(t, root)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: sources[0],
 	})
 	require.NoError(t, err)
@@ -1200,42 +1218,42 @@ func TestGrokProviderFingerprintTracksParsedFiles(t *testing.T) {
 	writeGrokFixtureFile(t, unrelated, "ignored")
 
 	provider := newGrokTestProvider(t, root)
-	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "sess-1",
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	base, err := provider.Fingerprint(context.Background(), source)
+	base, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 
 	writeGrokFixtureFile(t, summary, `{"summary":"Fingerprint changed","firstPrompt":"hello","createdAt":"2026-07-08T10:00:00Z"}`)
-	afterSummary, err := provider.Fingerprint(context.Background(), source)
+	afterSummary, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 	assert.NotEqual(t, base.Hash, afterSummary.Hash)
 
 	writeGrokFixtureFile(t, signals, `{"tokenUsage":{"totalOutputTokens":2}}`)
-	afterSignals, err := provider.Fingerprint(context.Background(), source)
+	afterSignals, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 	assert.NotEqual(t, afterSummary.Hash, afterSignals.Hash)
 
 	writeGrokFixtureFile(t, chat, "{\"message\":1}\n")
-	afterChat, err := provider.Fingerprint(context.Background(), source)
+	afterChat, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 	assert.NotEqual(t, afterSignals.Hash, afterChat.Hash)
 
 	writeGrokFixtureFile(t, updates, "{\"delta\":1}\n")
-	afterUpdates, err := provider.Fingerprint(context.Background(), source)
+	afterUpdates, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 	assert.NotEqual(t, afterChat.Hash, afterUpdates.Hash)
 
 	writeGrokFixtureFile(t, promptContext, `{"is_non_interactive":true}`)
-	afterPromptContext, err := provider.Fingerprint(context.Background(), source)
+	afterPromptContext, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 	assert.NotEqual(t, afterUpdates.Hash, afterPromptContext.Hash)
 
 	writeGrokFixtureFile(t, unrelated, "still ignored")
-	afterUnrelated, err := provider.Fingerprint(context.Background(), source)
+	afterUnrelated, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 	assert.Equal(t, afterPromptContext.Hash, afterUnrelated.Hash)
 }
@@ -1252,7 +1270,7 @@ func TestGrokProviderChangedPathTracksParsedFiles(t *testing.T) {
 		"chat_history.jsonl",
 		"prompt_context.json",
 	} {
-		changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+		changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 			Path: filepath.Join(root, "cwd-key", "sess-1", name),
 		})
 		require.NoError(t, err)
@@ -1260,7 +1278,7 @@ func TestGrokProviderChangedPathTracksParsedFiles(t *testing.T) {
 		assert.Equal(t, filepath.Clean(summary), filepath.Clean(changed[0].FingerprintKey))
 	}
 
-	changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 		Path: filepath.Join(root, "cwd-key", "sess-1", "updates.jsonl"),
 	})
 	require.NoError(t, err)
@@ -1272,7 +1290,7 @@ func TestGrokProviderWatchPlanIncludesParsedCompanions(t *testing.T) {
 	root := t.TempDir()
 	provider := newGrokTestProvider(t, root)
 
-	plan, err := provider.WatchPlan(context.Background())
+	plan, err := provider.WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 1)
 	assert.ElementsMatch(t,
@@ -1282,6 +1300,7 @@ func TestGrokProviderWatchPlanIncludesParsedCompanions(t *testing.T) {
 			"chat_history.jsonl",
 			"updates.jsonl",
 			"prompt_context.json",
+			"meta.json",
 		},
 		plan.Roots[0].IncludeGlobs,
 	)
@@ -1302,12 +1321,12 @@ func TestGrokProviderArtifactBoundaries(t *testing.T) {
 	writeGrokFixtureFile(t, grokSummaryPath(root, "cwd-key", "sess-bad"), `{not json`)
 
 	provider := newGrokTestProvider(t, root)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 2)
 
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{
 			Path: filepath.Join(root, "cwd-key", "not.a.grok.session", "signals.json"),
 		},
@@ -1315,12 +1334,12 @@ func TestGrokProviderArtifactBoundaries(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, changed)
 
-	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "sess-bad",
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
-	_, err = provider.Parse(context.Background(), ParseRequest{Source: source})
+	_, err = provider.Parse(t.Context(), ParseRequest{Source: source})
 	require.Error(t, err)
 }
 

@@ -1,7 +1,8 @@
 package capture
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -37,14 +38,13 @@ type TranscriptBundle struct {
 }
 
 func DecodeTranscriptBundle(r io.Reader) (TranscriptBundle, error) {
-	dec := json.NewDecoder(r)
-	dec.DisallowUnknownFields()
+	dec := jsontext.NewDecoder(r)
 	var bundle TranscriptBundle
-	if err := dec.Decode(&bundle); err != nil {
+	if err := json.UnmarshalDecode(dec, &bundle, json.RejectUnknownMembers(true)); err != nil {
 		return TranscriptBundle{}, fmt.Errorf("decoding transcript bundle: %w", err)
 	}
 	var trailing any
-	if err := dec.Decode(&trailing); err != io.EOF {
+	if err := json.UnmarshalDecode(dec, &trailing); !errors.Is(err, io.EOF) {
 		if err == nil {
 			return TranscriptBundle{}, errors.New("transcript bundle contains trailing JSON")
 		}
@@ -114,7 +114,7 @@ func encodeTranscriptBundle(bundle TranscriptBundle, maxBytes int) ([]byte, erro
 	if err := validateTranscriptBundle(bundle, maxContractSources); err != nil {
 		return nil, err
 	}
-	data, err := json.MarshalIndent(bundle, "", "  ")
+	data, err := json.Marshal(bundle, jsontext.WithIndent("  "))
 	if err != nil {
 		return nil, fmt.Errorf("encoding transcript bundle: %w", err)
 	}

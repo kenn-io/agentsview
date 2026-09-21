@@ -67,22 +67,14 @@ func discoverCursorS3ByRoot(
 
 // keepCursorS3Session accepts the documented harvest layout
 // <project>/<id>.{jsonl,txt} and the local Cursor layouts under
-// <project>/agent-transcripts/. Other .jsonl/.txt objects are ignored.
+// <project>/agent-transcripts/, including a parent session's subagents
+// directory. Other .jsonl/.txt objects are ignored.
 func keepCursorS3Session(_ string, segs []string) bool {
-	switch len(segs) {
-	case 2:
+	if len(segs) == 2 {
 		return cursorS3TranscriptName(segs[1])
-	case 3:
-		return segs[1] == "agent-transcripts" && cursorS3TranscriptName(segs[2])
-	case 4:
-		if segs[1] != "agent-transcripts" || !IsCursorTranscriptExt(segs[3]) {
-			return false
-		}
-		stem := strings.TrimSuffix(segs[3], path.Ext(segs[3]))
-		return stem == segs[2] && IsValidSessionID(stem)
-	default:
-		return false
 	}
+	loc, ok := parseCursorTranscriptRelParts(segs)
+	return ok && IsValidSessionID(loc.RawID)
 }
 
 func cursorS3TranscriptName(name string) bool {
@@ -94,9 +86,10 @@ func cursorS3TranscriptName(name string) bool {
 }
 
 // preferCursorS3Transcripts keeps one object per machine and session stem
-// across all configured S3 roots. Precedence matches local Cursor discovery:
-// .jsonl over .txt, then nested <id>/<id>.ext over flat <id>.ext, then lexical
-// path.
+// across all configured S3 roots. Precedence matches local Cursor discovery: a
+// session's own nested <id>/<id>.ext or flat <id>.ext over a copy in another
+// session's subagents/<id>.ext, then .jsonl over .txt, then nested over flat,
+// then lexical path.
 func preferCursorS3Transcripts(
 	transcripts []cursorS3Transcript,
 ) []cursorS3Transcript {
@@ -130,20 +123,41 @@ func preferCursorS3Transcripts(
 }
 
 func cursorS3Prefers(candidate, current DiscoveredFile) bool {
+	candRank := cursorS3LayoutRank(candidate.Path)
+	currRank := cursorS3LayoutRank(current.Path)
+	if (candRank > cursorS3LayoutSubagent) != (currRank > cursorS3LayoutSubagent) {
+		return candRank > cursorS3LayoutSubagent
+	}
 	candJSONL := strings.HasSuffix(candidate.Path, ".jsonl")
 	currJSONL := strings.HasSuffix(current.Path, ".jsonl")
 	if candJSONL != currJSONL {
 		return candJSONL
 	}
-	candNested := cursorS3NestedTranscript(candidate.Path)
-	currNested := cursorS3NestedTranscript(current.Path)
-	if candNested != currNested {
-		return candNested
+	if candRank != currRank {
+		return candRank > currRank
 	}
 	return candidate.Path < current.Path
 }
 
-func cursorS3NestedTranscript(uri string) bool {
+const (
+	cursorS3LayoutSubagent = iota
+	cursorS3LayoutFlat
+	cursorS3LayoutNested
+)
+
+// cursorS3LayoutRank classifies an object by the local layout it mirrors. A
+// harvest project that happens to be named subagents is still flat: the
+// subagent rank needs the agent-transcripts marker two levels up.
+func cursorS3LayoutRank(uri string) int {
 	stem := strings.TrimSuffix(path.Base(uri), path.Ext(uri))
-	return path.Base(path.Dir(uri)) == stem
+	dir := path.Dir(uri)
+	switch {
+	case path.Base(dir) == stem:
+		return cursorS3LayoutNested
+	case path.Base(dir) == cursorSubagentsDirName &&
+		path.Base(path.Dir(path.Dir(dir))) == "agent-transcripts":
+		return cursorS3LayoutSubagent
+	default:
+		return cursorS3LayoutFlat
+	}
 }

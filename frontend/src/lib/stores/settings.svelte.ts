@@ -1,3 +1,4 @@
+import { m } from "../i18n/index.js";
 import {
   SettingsService,
   type SettingsResponse,
@@ -11,6 +12,9 @@ import {
   isRemoteConnection,
 } from "../api/runtime.js";
 import { DEFAULT_CHART_PALETTE, isChartPalette, type ChartPalette } from "../utils/chartPalette.js";
+import { ui } from "./ui.svelte.js";
+
+export type ToolResultImagesPolicy = "keep" | "drop" | "offload";
 
 type TerminalConfig = TerminalResponse;
 
@@ -21,6 +25,7 @@ interface AppSettings extends Omit<
   agent_dirs: Record<string, string[]>;
   session_providers: SessionProvider[];
   disabled_agents: string[];
+  agent_homes?: Record<string, string[]>;
   terminal: TerminalConfig;
   chart_palette: ChartPalette;
 }
@@ -50,6 +55,7 @@ function forbiddenMessage(serverMessage: string): string {
 
 class SettingsStore {
   private mutationQueue: Promise<void> | null = null;
+  private loadVersion = 0;
   agentDirs: Record<string, string[]> = $state({});
   sessionProviders: SessionProvider[] = $state([]);
   disabledAgents: string[] = $state([]);
@@ -63,6 +69,7 @@ class SettingsStore {
   requireAuth: boolean = $state(false);
   readOnly: boolean = $state(false);
   chartPalette: ChartPalette = $state(DEFAULT_CHART_PALETTE);
+  toolResultImages: ToolResultImagesPolicy = $state("keep");
   loaded: boolean = $state(false);
   loading: boolean = $state(false);
   saving: boolean = $state(false);
@@ -72,7 +79,13 @@ class SettingsStore {
    *  to provide an auth token before the app can load. */
   needsAuth: boolean = $state(false);
 
-  async load() {
+  async load(): Promise<void> {
+    if (this.saving && this.mutationQueue) {
+      await this.mutationQueue;
+      return this.load();
+    }
+    const loadVersion = ++this.loadVersion;
+    const isCurrentLoad = () => loadVersion === this.loadVersion;
     this.loading = true;
     this.loaded = false;
     this.error = null;
@@ -80,6 +93,7 @@ class SettingsStore {
     this.needsAuth = false;
     try {
       const data = await SettingsService.getApiV1Settings();
+      if (!isCurrentLoad()) return;
       if (!isChartPalette(data.chart_palette)) {
         throw new Error(
           `Invalid chart_palette in settings response: ${String(data.chart_palette)}`,
@@ -96,6 +110,13 @@ class SettingsStore {
       this.requireAuth = data.require_auth ?? false;
       this.readOnly = data.read_only === true;
       this.chartPalette = data.chart_palette;
+      ui.applyZoomDefault(data.zoom_level);
+      // A response without the field, including every fixture that predates
+      // it, reads as the default keep policy instead of failing the load.
+      this.toolResultImages =
+        data.tool_result_images === "drop" || data.tool_result_images === "offload"
+          ? data.tool_result_images
+          : "keep";
       // When the server returns an auth token (localhost only), persist
       // it so the client stays authenticated after remote access is
       // toggled on (which starts requiring auth for all requests).
@@ -103,16 +124,19 @@ class SettingsStore {
         setAuthToken(data.auth_token);
       }
     } catch (e) {
+      if (!isCurrentLoad()) return;
       if (e instanceof ApiError && e.status === 401) {
         this.needsAuth = true;
       } else if (e instanceof ApiError && e.status === 403) {
         this.error = forbiddenMessage(generatedErrorMessage(e));
       } else {
-        this.error = e instanceof Error ? e.message : "Failed to load settings";
+        this.error = e instanceof Error ? e.message : m.settings_load_failed();
       }
     } finally {
-      this.loading = false;
-      this.loaded = true;
+      if (isCurrentLoad()) {
+        this.loading = false;
+        this.loaded = true;
+      }
     }
   }
 
@@ -156,12 +180,18 @@ class SettingsStore {
       this.requireAuth = data.require_auth ?? false;
       this.readOnly = data.read_only === true;
       this.chartPalette = data.chart_palette;
+      // A response without the field, including every fixture that predates
+      // it, reads as the default keep policy instead of failing the load.
+      this.toolResultImages =
+        data.tool_result_images === "drop" || data.tool_result_images === "offload"
+          ? data.tool_result_images
+          : "keep";
       if (data.auth_token && !isRemoteConnection()) {
         setAuthToken(data.auth_token);
       }
       return true;
     } catch (e) {
-      this.saveError = e instanceof Error ? e.message : "Failed to save settings";
+      this.saveError = e instanceof Error ? e.message : m.settings_save_failed();
       return false;
     }
   }

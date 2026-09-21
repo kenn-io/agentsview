@@ -95,7 +95,7 @@ func TestRecoverInvalidatesBrokenOfflineSuffixAndResetsAcknowledgedBase(t *testi
 	assert.Zero(t, usage.UsedBytes)
 	assert.Zero(t, usage.ReservedBytes)
 	var generations int
-	require.NoError(t, store.db.QueryRow(`SELECT count(*) FROM outbox_generations`).Scan(
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM outbox_generations`).Scan(
 		&generations,
 	))
 	assert.Zero(t, generations)
@@ -135,7 +135,7 @@ func TestOpenRecoversInterruptedSourceReservationAsCoverageGap(t *testing.T) {
 	assert.Equal(t, CoverageDegraded, coverage.State)
 	assert.Equal(t, "capture_interrupted", coverage.Reason)
 	var failureReason string
-	require.NoError(t, reopened.db.QueryRow(`SELECT reason FROM raw_coverage_failures
+	require.NoError(t, reopened.db.QueryRowContext(t.Context(), `SELECT reason FROM raw_coverage_failures
 		WHERE provider = ? AND configured_root_id = ? AND source_key = ?`,
 		string(source.Provider), source.ConfiguredRootID, source.SourceKey,
 	).Scan(&failureReason))

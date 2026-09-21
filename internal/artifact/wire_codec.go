@@ -86,7 +86,7 @@ func ToWireRef(ref Ref) (WireRef, error) {
 // reference. It only removes a transport extension and never joins paths.
 func FromWireRef(origin string, kind Kind, name string) (Ref, error) {
 	if err := validateOriginID(origin); err != nil {
-		return Ref{}, fmt.Errorf("%w: %v", ErrArtifactInvalid, err)
+		return Ref{}, fmt.Errorf("%w: %w", ErrArtifactInvalid, err)
 	}
 	if err := validateArtifactName(name); err != nil {
 		return Ref{}, err

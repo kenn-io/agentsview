@@ -34,6 +34,32 @@
       "groupSlug": "javascript-dependencies"
     },
     {
+      "description": [
+        "Update Vite+ and its Vite alias together. Review bundled tool pins with each toolchain upgrade."
+      ],
+      "matchManagers": ["npm"],
+      "matchPackageNames": ["vite-plus", "@voidzero-dev/vite-plus-core"],
+      "groupName": "Vite+ toolchain",
+      "groupSlug": "vite-plus-toolchain"
+    },
+    {
+      "description": [
+        "Vite+ selects these bundled versions. Update direct pins to match Vite+ toolchain upgrades, never independently."
+      ],
+      "matchManagers": ["npm"],
+      "matchPackageNames": [
+        "vite",
+        "rolldown",
+        "tsdown",
+        "vitest",
+        "@vitest/**",
+        "oxlint",
+        "oxlint-tsgolint",
+        "oxfmt"
+      ],
+      "enabled": false
+    },
+    {
       "matchManagers": ["npm"],
       "matchPackageNames": ["typescript"],
       "allowedVersions": "<7"

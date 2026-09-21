@@ -21,11 +21,11 @@ func testWatcher(t *testing.T) *Watcher {
 	t.Helper()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
-	database, err := db.Open(dbPath)
+	database, err := db.Open(t.Context(), dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { database.Close() })
 
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {dir},
 		},
@@ -60,7 +60,7 @@ func TestCheckDBForChanges_FileDisappears(t *testing.T) {
 	var lastCount int
 	var lastDBMtime int64
 
-	changed := w.checkDBForChanges(
+	changed := w.checkDBForChanges(t.Context(),
 		"test-session",
 		&lastCount,
 		&lastDBMtime,
@@ -88,7 +88,7 @@ func TestCheckDBForChanges_FileHashChange(t *testing.T) {
 		s.FileHash = &hash1
 	})
 
-	lastCount, lastDBMtime, ok := w.db.GetSessionVersion(sessionID)
+	lastCount, lastDBMtime, ok := w.db.GetSessionVersion(t.Context(), sessionID)
 	require.True(t, ok, "initial session version")
 
 	hash2 := "shelley-fingerprint-2"
@@ -101,7 +101,7 @@ func TestCheckDBForChanges_FileHashChange(t *testing.T) {
 	sourcePath := ""
 	var lastFileMtime int64
 	var mchanged time.Time
-	changed := w.checkDBForChanges(
+	changed := w.checkDBForChanges(t.Context(),
 		sessionID,
 		&lastCount,
 		&lastDBMtime,
@@ -142,7 +142,7 @@ func TestCheckDBForChangesPositAssistantSidecarAppendFallsBackToSync(
 	}
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentPositAssistant: {root},
 		},
@@ -152,11 +152,11 @@ func TestCheckDBForChangesPositAssistantSidecarAppendFallsBackToSync(
 	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
 
 	const sessionID = "posit-assistant:" + conversationID
-	lastCount, lastDBVersion, ok := database.GetSessionVersion(sessionID)
+	lastCount, lastDBVersion, ok := database.GetSessionVersion(t.Context(), sessionID)
 	require.True(t, ok)
-	sourcePath := engine.FindSourceFile(sessionID)
+	sourcePath := engine.FindSourceFile(t.Context(), sessionID)
 	require.Equal(t, conversationPath, sourcePath)
-	lastFileMtime := engine.SourceMtime(sessionID)
+	lastFileMtime := engine.SourceMtime(t.Context(), sessionID)
 	require.Equal(t, baseTime.UnixNano(), lastFileMtime)
 
 	dbtest.WriteTestFile(t, usageEventsPath, []byte(
@@ -167,7 +167,7 @@ func TestCheckDBForChangesPositAssistantSidecarAppendFallsBackToSync(
 
 	watcher := New(database, engine)
 	var fileMtimeChangedAt time.Time
-	changed := watcher.checkDBForChanges(
+	changed := watcher.checkDBForChanges(t.Context(),
 		sessionID,
 		&lastCount,
 		&lastDBVersion,
@@ -181,7 +181,7 @@ func TestCheckDBForChangesPositAssistantSidecarAppendFallsBackToSync(
 	assert.Equal(t, sidecarTime.UnixNano(), lastFileMtime)
 
 	fileMtimeChangedAt = time.Now().Add(-SyncFallbackDelay)
-	changed = watcher.checkDBForChanges(
+	changed = watcher.checkDBForChanges(t.Context(),
 		sessionID,
 		&lastCount,
 		&lastDBVersion,

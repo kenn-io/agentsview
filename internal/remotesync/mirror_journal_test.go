@@ -30,11 +30,11 @@ func TestMirrorRelativeChangePaths(t *testing.T) {
 	_, err = mirrorRelativeLocalChangePath(
 		mirrorRoot, filepath.Join(filepath.Dir(mirrorRoot), "escape.jsonl"),
 	)
-	assert.Error(t, err)
+	require.Error(t, err)
 	_, err = mirrorRelativeRemoteChangePath(mirrorRoot, "../../escape.jsonl")
-	assert.Error(t, err)
+	require.Error(t, err)
 	_, err = mirrorRelativeLocalChangePath(mirrorRoot, mirrorRoot)
-	assert.Error(t, err)
+	require.Error(t, err)
 }
 
 func TestMirrorChangeJournalMergeSetUnionAndRearm(t *testing.T) {
@@ -198,9 +198,8 @@ func TestMirrorChangeJournalRoundTripAndAbsent(t *testing.T) {
 
 	require.NoError(t, retireMirrorChangeJournal(path))
 	_, err = os.Stat(path)
-	assert.ErrorIs(t, err, os.ErrNotExist)
+	require.ErrorIs(t, err, os.ErrNotExist)
 	require.NoError(t, retireMirrorChangeJournal(path))
-
 }
 
 func TestMirrorChangeJournalLoadErrorsAreTyped(t *testing.T) {
@@ -211,17 +210,17 @@ func TestMirrorChangeJournalLoadErrorsAreTyped(t *testing.T) {
 		`{"version":%d}`, mirrorJournalVersion+1,
 	), 0o600))
 	_, err := loadMirrorChangeJournal(unsupported)
-	assert.ErrorIs(t, err, ErrUnsupportedMirrorJournal)
+	require.ErrorIs(t, err, ErrUnsupportedMirrorJournal)
 
 	malformed := filepath.Join(dir, "malformed.json")
 	require.NoError(t, os.WriteFile(malformed, []byte(`{"version":1,`), 0o600))
 	_, err = loadMirrorChangeJournal(malformed)
-	assert.ErrorIs(t, err, ErrMalformedMirrorJournal)
+	require.ErrorIs(t, err, ErrMalformedMirrorJournal)
 
 	invalid := filepath.Join(dir, "invalid.json")
 	require.NoError(t, os.WriteFile(invalid, []byte(`{"version":1,"entries":[{"path":"../escape"}]}`), 0o600))
 	_, err = loadMirrorChangeJournal(invalid)
-	assert.ErrorIs(t, err, ErrMalformedMirrorJournal)
+	require.ErrorIs(t, err, ErrMalformedMirrorJournal)
 
 	invalidOwnership := filepath.Join(dir, "invalid-ownership.json")
 	require.NoError(t, os.WriteFile(invalidOwnership, fmt.Appendf(nil,
@@ -229,7 +228,7 @@ func TestMirrorChangeJournalLoadErrorsAreTyped(t *testing.T) {
 		mirrorJournalVersion,
 	), 0o600))
 	_, err = loadMirrorChangeJournal(invalidOwnership)
-	assert.ErrorIs(t, err, ErrMalformedMirrorJournal)
+	require.ErrorIs(t, err, ErrMalformedMirrorJournal)
 
 	unreadable := filepath.Join(dir, "directory")
 	require.NoError(t, os.Mkdir(unreadable, 0o700))
@@ -254,7 +253,7 @@ func TestMirrorChangeJournalFailedRenamePreservesPreviousFile(t *testing.T) {
 		Version: mirrorJournalVersion,
 		Entries: []MirrorChangeEntry{{Path: "new.jsonl", InvalidateCache: true}},
 	})
-	assert.EqualError(t, err, "replace mirror journal: rename failed")
+	require.EqualError(t, err, "replace mirror journal: rename failed")
 	after, readErr := os.ReadFile(path)
 	require.NoError(t, readErr)
 	assert.Equal(t, before, after)

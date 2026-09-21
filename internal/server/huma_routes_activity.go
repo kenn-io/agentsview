@@ -24,7 +24,8 @@ const (
 )
 
 func (s *Server) registerActivityRoutes() {
-	group := newRouteGroup(s.api, "/api/v1/activity", "Activity")
+	group := huma.NewGroup(s.api, "/api/v1/activity")
+	configureRouteGroup(group, "Activity")
 	s.stream(group, http.MethodGet, "/report", "Get activity report",
 		s.humaActivityReport, streamJSONResponseSchema("ActivityReport"))
 	s.getLong(group, "/report/{report_id}/sessions",
@@ -68,10 +69,14 @@ type activityReportBuildInputs struct {
 func (s *Server) humaActivityReport(
 	ctx context.Context, in *activityReportInput,
 ) (*huma.StreamResponse, error) {
+	machine, err := db.ResolveMachineFilter(ctx, s.db, in.Machine)
+	if err != nil {
+		return nil, serverError(err)
+	}
 	selection, err := resolveActivitySelection(activitySelectionInput{
 		Preset: in.Preset, Date: in.Date, From: in.From, To: in.To,
 		Timezone: in.Timezone, Bucket: in.Bucket, Project: in.Project,
-		GitBranch: in.GitBranch, Agent: in.Agent, Machine: in.Machine,
+		GitBranch: in.GitBranch, Agent: in.Agent, Machine: machine,
 		Automation: in.Automation,
 	}, time.Now())
 	if err != nil {
@@ -79,8 +84,8 @@ func (s *Server) humaActivityReport(
 	}
 	buildInputs, err := s.resolveActivityReportBuildInputs(ctx, selection)
 	if err != nil {
-		var responseErr *apiErrorResponse
-		if errors.As(err, &responseErr) && responseErr.Status >= 400 &&
+		responseErr, hasResponseErr := errors.AsType[*apiResponseError](err)
+		if hasResponseErr && responseErr.Status >= 400 &&
 			responseErr.Status < 500 {
 			return nil, err
 		}
@@ -94,7 +99,7 @@ func (s *Server) humaActivityReport(
 			sse, ok = newHumaSSEStream(hctx)
 			if !ok {
 				writeHumaJSON(hctx, http.StatusInternalServerError,
-					apiErrorResponse{Message: "streaming not supported"})
+					apiResponseError{Message: "streaming not supported"})
 				return
 			}
 		}
@@ -118,11 +123,11 @@ func (s *Server) humaActivityReport(
 				return
 			}
 			status := http.StatusInternalServerError
-			if responseErr, ok := errors.AsType[*apiErrorResponse](publicErr); ok {
+			if responseErr, ok := errors.AsType[*apiResponseError](publicErr); ok {
 				status = responseErr.Status
 			}
 			writeHumaJSON(hctx, status,
-				apiErrorResponse{Message: publicErr.Error()})
+				apiResponseError{Message: publicErr.Error()})
 			return
 		}
 		if streaming {

@@ -7,14 +7,17 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json/v2"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -46,9 +49,11 @@ const (
 
 var immutableGitRefPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
-const maxSnapshotCompressedBytes = 1 << 20
-const maxSnapshotJSONBytes = 8 << 20
-const maxSnapshotModels = 100_000
+const (
+	maxSnapshotCompressedBytes = 1 << 20
+	maxSnapshotJSONBytes       = 8 << 20
+	maxSnapshotModels          = 100_000
+)
 
 type snapshotBundle struct {
 	Version   string                 `json:"version"`
@@ -57,6 +62,8 @@ type snapshotBundle struct {
 }
 
 func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
 	outPath := flag.String("out", defaultOutputPath, "output snapshot file path")
 	validatePath := flag.String("validate", "", "validate a snapshot file and exit")
 	restore := flag.Bool("restore", false, "restore a snapshot from a git artifact commit")
@@ -80,7 +87,7 @@ func main() {
 		return
 	}
 	if *restore {
-		if err := restoreSnapshotFile(
+		if err := restoreSnapshotFile(ctx,
 			*outPath,
 			*restoreRef,
 			*restoreFile,
@@ -97,7 +104,7 @@ func main() {
 		panic("litellm-ref must be a full lowercase commit SHA")
 	}
 	prices, err := catalog.FetchLiteLLMPricingAtRef(
-		context.Background(),
+		ctx,
 		*litellmSourceRef,
 	)
 	if err != nil {
@@ -159,7 +166,7 @@ func validateSnapshotFile(path string) error {
 		return fmt.Errorf("stat snapshot: %w", err)
 	}
 	if info.Size() == 0 {
-		return fmt.Errorf("empty snapshot")
+		return errors.New("empty snapshot")
 	}
 	if info.Size() > maxSnapshotCompressedBytes {
 		return fmt.Errorf(
@@ -190,20 +197,20 @@ func validateSnapshotFile(path string) error {
 		return fmt.Errorf("parsing snapshot json: %w", err)
 	}
 	if snapshot.Version == "" {
-		return fmt.Errorf("missing snapshot version")
+		return errors.New("missing snapshot version")
 	}
 	if !immutableGitRefPattern.MatchString(snapshot.SourceRef) {
-		return fmt.Errorf("missing immutable LiteLLM source ref")
+		return errors.New("missing immutable LiteLLM source ref")
 	}
 	if len(snapshot.Models) == 0 {
-		return fmt.Errorf("missing snapshot models")
+		return errors.New("missing snapshot models")
 	}
 	if len(snapshot.Models) > maxSnapshotModels {
 		return fmt.Errorf("snapshot models exceed %d entries", maxSnapshotModels)
 	}
 	for _, model := range snapshot.Models {
 		if strings.TrimSpace(model.ModelPattern) == "" {
-			return fmt.Errorf("snapshot contains model with empty pattern")
+			return errors.New("snapshot contains model with empty pattern")
 		}
 		if err := catalog.NormalizePricingBands(model.ModelPattern, model.Bands); err != nil {
 			return err
@@ -213,7 +220,7 @@ func validateSnapshotFile(path string) error {
 	return nil
 }
 
-func restoreSnapshotFile(
+func restoreSnapshotFile(ctx context.Context,
 	outPath,
 	ref,
 	snapshotPath,
@@ -222,13 +229,13 @@ func restoreSnapshotFile(
 	snapshotURL string,
 ) error {
 	if ref == "" {
-		return fmt.Errorf("missing artifact ref")
+		return errors.New("missing artifact ref")
 	}
 	if snapshotPath == "" {
-		return fmt.Errorf("missing artifact snapshot path")
+		return errors.New("missing artifact snapshot path")
 	}
 	if expectedSHA256 == "" {
-		return fmt.Errorf("missing expected snapshot SHA256")
+		return errors.New("missing expected snapshot SHA256")
 	}
 
 	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
@@ -263,16 +270,16 @@ func restoreSnapshotFile(
 	}
 	defer os.Remove(tmp)
 
-	if err := restoreSnapshotFileFromGit(tmp, ref, snapshotPath, branch); err != nil {
+	if err := restoreSnapshotFileFromGit(ctx, tmp, ref, snapshotPath, branch); err != nil {
 		if snapshotURL == "" {
 			return err
 		}
 		if removeErr := os.Remove(tmp); removeErr != nil && !os.IsNotExist(removeErr) {
 			return fmt.Errorf("removing failed git snapshot: %w", removeErr)
 		}
-		if downloadErr := downloadSnapshotFile(tmp, snapshotURL); downloadErr != nil {
+		if downloadErr := downloadSnapshotFile(ctx, tmp, snapshotURL); downloadErr != nil {
 			return fmt.Errorf(
-				"restoring snapshot from git failed: %w; downloading snapshot failed: %v",
+				"restoring snapshot from git failed: %w; downloading snapshot failed: %w",
 				err,
 				downloadErr,
 			)
@@ -307,8 +314,8 @@ func restoreSnapshotFile(
 	return nil
 }
 
-func restoreSnapshotFileFromGit(tmp, ref, snapshotPath, branch string) error {
-	if err := ensureGitCommit(ref, branch); err != nil {
+func restoreSnapshotFileFromGit(ctx context.Context, tmp, ref, snapshotPath, branch string) error {
+	if err := ensureGitCommit(ctx, ref, branch); err != nil {
 		return err
 	}
 
@@ -317,7 +324,7 @@ func restoreSnapshotFileFromGit(tmp, ref, snapshotPath, branch string) error {
 		return fmt.Errorf("creating temp snapshot: %w", err)
 	}
 	var stderr bytes.Buffer
-	cmd := exec.Command("git", "show", ref+":"+snapshotPath)
+	cmd := exec.CommandContext(ctx, "git", "show", ref+":"+snapshotPath)
 	cmd.Stdout = file
 	cmd.Stderr = &stderr
 	runErr := cmd.Run()
@@ -336,9 +343,13 @@ func restoreSnapshotFileFromGit(tmp, ref, snapshotPath, branch string) error {
 	return nil
 }
 
-func downloadSnapshotFile(tmp, snapshotURL string) error {
+func downloadSnapshotFile(ctx context.Context, tmp, snapshotURL string) error {
 	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Get(snapshotURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, snapshotURL, nil)
+	if err != nil {
+		return fmt.Errorf("creating snapshot request: %w", err)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("requesting snapshot: %w", err)
 	}
@@ -370,13 +381,13 @@ func downloadSnapshotFile(tmp, snapshotURL string) error {
 	return nil
 }
 
-func ensureGitCommit(ref, branch string) error {
-	if gitCommand("cat-file", "-e", ref+"^{commit}") == nil {
+func ensureGitCommit(ctx context.Context, ref, branch string) error {
+	if gitCommand(ctx, "cat-file", "-e", ref+"^{commit}") == nil {
 		return nil
 	}
 
-	if err := fetchGitRef(ref); err == nil {
-		if gitCommand("cat-file", "-e", ref+"^{commit}") == nil {
+	if err := fetchGitRef(ctx, ref); err == nil {
+		if gitCommand(ctx, "cat-file", "-e", ref+"^{commit}") == nil {
 			return nil
 		}
 	}
@@ -385,17 +396,17 @@ func ensureGitCommit(ref, branch string) error {
 		return fmt.Errorf("artifact ref %s is not available locally", ref)
 	}
 
-	if err := fetchGitRef(branch + ":refs/remotes/origin/" + branch); err != nil {
+	if err := fetchGitRef(ctx, branch+":refs/remotes/origin/"+branch); err != nil {
 		return err
 	}
-	if err := gitCommand("cat-file", "-e", ref+"^{commit}"); err != nil {
+	if err := gitCommand(ctx, "cat-file", "-e", ref+"^{commit}"); err != nil {
 		return fmt.Errorf("artifact ref %s is not available after fetch: %w", ref, err)
 	}
 	return nil
 }
 
-func fetchGitRef(refspec string) error {
-	cmd := exec.Command("git", "fetch", "--depth=1", "origin", refspec)
+func fetchGitRef(ctx context.Context, refspec string) error {
+	cmd := exec.CommandContext(ctx, "git", "fetch", "--depth=1", "origin", refspec)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf(
@@ -408,8 +419,8 @@ func fetchGitRef(refspec string) error {
 	return nil
 }
 
-func gitCommand(args ...string) error {
-	cmd := exec.Command("git", args...)
+func gitCommand(ctx context.Context, args ...string) error {
+	cmd := exec.CommandContext(ctx, "git", args...)
 	return cmd.Run()
 }
 
@@ -604,8 +615,7 @@ func appendModelOverlay(models []catalog.ModelPricing) []catalog.ModelPricing {
 		},
 	}
 
-	out := make([]catalog.ModelPricing, len(models))
-	copy(out, models)
+	out := slices.Clone(models)
 	for modelPattern, price := range overlay {
 		if _, ok := present[modelPattern]; ok {
 			continue

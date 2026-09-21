@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "session_id": "sample_session",
+  "source": "cli",
+  "started_at": "2026-09-10T10:00:00.000Z",
+  "ended_at": "2026-09-10T10:05:00.000Z",
+  "exit_code": 0,
+  "status": "completed",
+  "interactive": true,
+  "provider": "cline",
+  "model": "deepseek/deepseek-v4-flash",
+  "cwd": "/workspace/astro-spectrometer",
+  "workspace_root": "/workspace/astro-spectrometer",
+  "prompt": "<user_input mode=\"act\">Calibrate orbital telescope spectrometer frequency</user_input>",
+  "metadata": {
+    "title": "Calibrate orbital telescope spectrometer frequency",
+    "totalCost": 0.005,
+    "git": {
+      "branch": "instruments/optics"
+    },
+    "usage": {
+      "inputTokens": 15000,
+      "outputTokens": 450,
+      "cacheReadTokens": 10000,
+      "cacheWriteTokens": 0,
+      "totalCost": 0.005
+    }
+  }
+}

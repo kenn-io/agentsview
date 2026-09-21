@@ -1,6 +1,9 @@
 package parser
 
-import "strings"
+import (
+	"context"
+	"strings"
+)
 
 // MiMoCode uses OpenCode's storage format, but stores sessions under
 // storage/session_diff and is exposed as a distinct agent with the
@@ -20,14 +23,14 @@ func ListMiMoCodeSessionMeta(dbPath string) ([]OpenCodeSessionMeta, error) {
 	return metas, nil
 }
 
-func MiMoCodeSourceMtime(sourcePath string) (int64, error) {
+func MiMoCodeSourceMtime(ctx context.Context, sourcePath string) (int64, error) {
 	if sourcePath == "" {
 		return 0, nil
 	}
 	if dbPath, sessionID, ok := parseOpenCodeFormatVirtualPath(
 		mimoFmt.dbName, sourcePath,
 	); ok {
-		return openCodeSQLiteSessionMtime(dbPath, sessionID)
+		return openCodeSQLiteSessionMtime(ctx, dbPath, sessionID)
 	}
 	return openCodeStorageSessionMtime(sourcePath)
 }

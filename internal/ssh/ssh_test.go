@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // nonInteractive is the trailing option block buildSSHArgs appends
@@ -101,7 +102,7 @@ func TestBuildSSHArgs(t *testing.T) {
 				tt.host, tt.user, tt.port,
 				tt.sshOpts, tt.cmd,
 			)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
 		})
 	}
@@ -112,14 +113,14 @@ func TestBuildSSHArgs(t *testing.T) {
 // and bounds the connect phase (ConnectTimeout).
 func TestBuildSSHArgs_NonInteractiveDefaults(t *testing.T) {
 	got, err := buildSSHArgs("devbox1", "", 0, nil, "true")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Subset(t, got, nonInteractive,
 		"ssh invocation must include non-interactive defaults")
 }
 
 func TestBuildSSHScriptArgs(t *testing.T) {
 	got, err := buildSSHScriptArgs("devbox1", "wes", 2222, []string{"-i", "/tmp/key"})
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, wantSSHArgs(
 		[]string{"-p", "2222", "-i", "/tmp/key"},
 		"wes@devbox1",
@@ -139,7 +140,7 @@ func TestBuildSSHArgsRejectsOptionShapedTargetParts(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := buildSSHArgs(tt.host, tt.user, 0, nil, "true")
-			assert.Error(t, err)
+			require.Error(t, err)
 			assert.Nil(t, got)
 		})
 	}

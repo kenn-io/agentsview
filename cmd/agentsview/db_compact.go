@@ -2,14 +2,15 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
-	"strings"
 
 	"github.com/spf13/cobra"
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -22,6 +23,9 @@ func newDBCommand() *cobra.Command {
 		Args:    cobra.NoArgs,
 	}
 	cmd.AddCommand(newDBCompactCommand())
+	cmd.AddCommand(newDBStripCommand())
+	cmd.AddCommand(newDBMigrateCommand())
+	cmd.AddCommand(newDBAdoptMachineCommand())
 	return cmd
 }
 
@@ -37,7 +41,7 @@ func newDBCompactCommand() *cobra.Command {
 			ctx := cmd.Context()
 			jsonOutput := outputFormat(cmd) == "json"
 			if jsonOutput && !yes && !dryRun {
-				return fmt.Errorf("--format json requires --yes for db compact")
+				return errors.New("--format json requires --yes for db compact")
 			}
 			cfg, err := config.LoadMinimal()
 			if err != nil {
@@ -82,7 +86,7 @@ func newDBCompactCommand() *cobra.Command {
 }
 
 func estimateDBCompact(ctx context.Context, cfg config.Config) (db.CompactEstimate, error) {
-	database, err := openReadOnlyDB(cfg)
+	database, err := openReadOnlyDB(ctx, cfg)
 	if err != nil {
 		return db.CompactEstimate{}, fmt.Errorf("opening archive for compaction estimate: %w", err)
 	}
@@ -102,7 +106,7 @@ func runDBCompactDryRun(
 		return err
 	}
 	if jsonOutput {
-		return json.NewEncoder(out).Encode(estimate)
+		return json.MarshalEncode(jsontext.NewEncoder(out), estimate)
 	}
 	fmt.Fprintln(out, "Archive compaction estimate.")
 	fmt.Fprintf(out, "  Database: %s\n", formatBytes(estimate.DatabaseBytes))
@@ -149,9 +153,7 @@ func runDBCompact(
 func decideCompactRoute(tr transport, stagingDir string) (delegate bool, err error) {
 	if tr.Mode == transportHTTP && !tr.ReadOnly {
 		if stagingDir != "" {
-			return false, fmt.Errorf(
-				"--staging-dir requires direct archive access; stop the daemon before using it",
-			)
+			return false, errors.New("--staging-dir requires direct archive access; stop the daemon before using it")
 		}
 		return true, nil
 	}
@@ -187,57 +189,37 @@ func runDBCompactDirect(
 func requestDBCompact(
 	ctx context.Context, tr transport, authToken string, options db.CompactOptions,
 ) (db.CompactResult, error) {
-	body, err := json.Marshal(struct {
-		KeepBackup bool `json:"keep_backup,omitempty"`
-	}{KeepBackup: options.KeepBackup})
+	api, err := apiclient.NewHTTPClient(tr.URL, authToken, &http.Client{Timeout: 0})
 	if err != nil {
 		return db.CompactResult{}, err
 	}
-	endpoint := strings.TrimSuffix(tr.URL, "/") + "/api/v1/data/compact"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(body)))
-	if err != nil {
+	response, err := api.PostAPIV1DataCompactWithResponse(ctx, &apiclient.PostAPIV1DataCompactRequestOptions{Body: &apiclient.DataCompactRequest{KeepBackup: new(options.KeepBackup)}})
+	if response == nil {
 		return db.CompactResult{}, err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	// Mutating API routes require a recognized Origin, including for
-	// loopback callers. The CLI is a trusted local caller, so identify
-	// the daemon origin explicitly instead of weakening the server's
-	// CSRF protection.
-	if parsed, parseErr := url.Parse(tr.URL); parseErr == nil && parsed.Scheme != "" && parsed.Host != "" {
-		parsed.Path = ""
-		parsed.RawPath = ""
-		parsed.RawQuery = ""
-		parsed.Fragment = ""
-		req.Header.Set("Origin", parsed.String())
-	}
-	if authToken != "" {
-		req.Header.Set("Authorization", "Bearer "+authToken)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return db.CompactResult{}, err
-	}
-	defer resp.Body.Close()
+	resp := response.HTTPResponse
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		var api struct {
 			Error string `json:"error"`
 		}
-		_ = json.NewDecoder(resp.Body).Decode(&api)
+		_ = json.Unmarshal(response.Body, &api)
 		if api.Error == "" {
 			api.Error = resp.Status
 		}
 		return db.CompactResult{}, fmt.Errorf("archive compaction: %s", api.Error)
 	}
-	var result db.CompactResult
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err != nil {
 		return db.CompactResult{}, fmt.Errorf("decode archive compaction result: %w", err)
 	}
-	return result, nil
+	if len(response.Body) == 0 {
+		return db.CompactResult{}, fmt.Errorf("decode archive compaction result: %w", io.ErrUnexpectedEOF)
+	}
+	return *response.JSON200, nil
 }
 
 func writeDBCompactResult(out io.Writer, result db.CompactResult, jsonOutput bool) error {
 	if jsonOutput {
-		return json.NewEncoder(out).Encode(result)
+		return json.MarshalEncode(jsontext.NewEncoder(out), result)
 	}
 	fmt.Fprintln(out, "Archive compaction completed.")
 	fmt.Fprintln(out, "Before:")

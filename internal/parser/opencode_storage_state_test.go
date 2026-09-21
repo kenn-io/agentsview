@@ -91,8 +91,7 @@ func TestStatOpenCodeStorageSessionState(t *testing.T) {
 			"text":      "appended part grown longer",
 			"time":      map[string]any{"created": int64(1700000001000)},
 		})
-		require.NoError(t,
-			os.Chtimes(partPath, info.ModTime(), info.ModTime()))
+		require.NoError(t, os.Chtimes(partPath, info.ModTime(), info.ModTime()))
 		next, ok := StatOpenCodeStorageSessionState(sessionPath)
 		require.True(t, ok)
 		assert.NotEqual(t, state, next,

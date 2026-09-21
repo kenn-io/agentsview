@@ -1,7 +1,7 @@
 <!-- ABOUTME: One row inside the Calls section — call name, args preview, timing bar, duration label. -->
 <script lang="ts">
   import { m } from "../../i18n/index.js";
-  import type { CallTiming } from "../../api/types/timing.js";
+  import type { DbCallTiming as CallTiming } from "../../api/generated/index.js";
   import { formatDuration } from "../../utils/duration.js";
   import { categoryToken } from "../../utils/categoryToken.js";
   import { displayToolName } from "../../utils/toolDisplay.js";
@@ -10,16 +10,11 @@
     call: CallTiming;
     barWidthPct: number;
     isSlow?: boolean;
-    isShared?: boolean;
     isLive?: boolean;
-    /** Elapsed ms for the running call, supplied by the parent
-     *  from a 1Hz ticker. Used only when `isLive` is true; falls
-     *  back to `call.duration_ms` (or 0) when omitted. */
     liveDurationMs?: number;
     isSubagentExpanded?: boolean;
     expandable?: boolean;
     dimmed?: boolean;
-    sharedDurationLabel?: string | null;
     onClick?: () => void;
     onChevronClick?: () => void;
   }
@@ -28,30 +23,25 @@
     call,
     barWidthPct,
     isSlow = false,
-    isShared = false,
     isLive = false,
     liveDurationMs,
     isSubagentExpanded = false,
     expandable = true,
     dimmed = false,
-    sharedDurationLabel,
     onClick,
     onChevronClick,
   }: Props = $props();
 
   let isSubagent = $derived(call.subagent_session_id != null);
+  let isLiveRow = $derived(isLive && call.duration_ms == null);
 
   let durationLabel = $derived.by(() => {
-    if (isLive) {
-      const elapsed = liveDurationMs ?? call.duration_ms ?? 0;
+    if (isLiveRow) {
       return m.call_row_running_duration({
-        duration: formatDuration(elapsed),
+        duration: formatDuration(liveDurationMs ?? call.duration_ms ?? 0),
       });
     }
-    if (call.duration_ms == null) {
-      return sharedDurationLabel ?? "—";
-    }
-    return formatDuration(call.duration_ms);
+    return call.duration_ms != null ? formatDuration(call.duration_ms) : m.shared_unknown();
   });
 
   function handleChevronClick(e: MouseEvent) {
@@ -97,14 +87,15 @@
   <span class="cbar-wrap">
     <span
       class="cbar"
-      class:shared={isShared}
-      class:live={isLive}
-      style={isLive
-        ? `width: ${barWidthPct}%`
-        : `width: ${barWidthPct}%; background: ${categoryToken(call.category)}`}
+      style="width: {call.duration_ms == null || call.duration_ms <= 0 ? 0 : barWidthPct}%; background: {categoryToken(call.category)}"
     ></span>
   </span>
-  <span class="cd" class:slow={isSlow} class:live={isLive} class:muted={!isSlow && !isLive}>
+  <span
+    class="cd"
+    class:slow={isSlow}
+    class:live={isLiveRow}
+    class:muted={!isSlow && !isLiveRow}
+  >
     {durationLabel}
   </span>
 </div>
@@ -173,25 +164,6 @@
     bottom: 0;
     border-radius: 1px;
   }
-  .call .cbar.shared {
-    opacity: 0.55;
-    background-image: repeating-linear-gradient(
-      45deg,
-      color-mix(in srgb, var(--text-primary) 18%, transparent) 0 3px,
-      transparent 3px 6px
-    );
-  }
-  .call .cbar.live {
-    background: linear-gradient(
-      90deg,
-      var(--running-fg),
-      color-mix(in srgb, var(--running-fg) 70%, black)
-    );
-    animation:
-      duration-pulse 1.6s ease-in-out infinite,
-      live-grow-fallback 1s linear infinite;
-    transform-origin: left center;
-  }
   .call.slow .cbar-wrap {
     background: var(--slow-bg);
   }
@@ -226,14 +198,6 @@
   .call.dimmed {
     opacity: 0.3;
     transition: opacity 0.18s;
-  }
-  @keyframes live-grow-fallback {
-    from {
-      transform: scaleX(0.985);
-    }
-    to {
-      transform: scaleX(1);
-    }
   }
   :global(.high-contrast) .call .ca,
   :global(.high-contrast) .call .cd.muted,

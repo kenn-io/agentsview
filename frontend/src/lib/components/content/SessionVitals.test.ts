@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { cleanup, fireEvent, render, screen } from "@testing-library/svelte";
 import type { Session } from "../../api/types/core.js";
-import type { SessionTiming } from "../../api/types/timing.js";
+import type { DbSessionTiming as SessionTiming } from "../../api/generated/index.js";
 
 const mocks = vi.hoisted(() => {
   const timing: SessionTiming = {
@@ -16,6 +16,8 @@ const mocks = vi.hoisted(() => {
     slowest_call: null,
     by_category: [],
     turns: [],
+    activity: [],
+    activity_totals: { tool_ms: 0, unattributed_ms: 0 },
     running: false,
   };
 
@@ -26,6 +28,19 @@ const mocks = vi.hoisted(() => {
 });
 
 const traceSession: Session = {
+  compaction_count: 0,
+  consecutive_failure_max: 0,
+  edit_churn_count: 0,
+  ended_with_role: "",
+  final_failure_streak: 0,
+  has_peak_context_tokens: false,
+  has_total_output_tokens: false,
+  mid_task_compaction_count: 0,
+  outcome: "",
+  outcome_confidence: "",
+  secret_leak_count: 0,
+  tool_failure_signal_count: 0,
+  tool_retry_count: 0,
   id: "sess-1",
   project: "agentsview",
   machine: "local",
@@ -42,11 +57,12 @@ const traceSession: Session = {
   cwd: "/repos/agentsview/.worktrees/trace-context",
 };
 
-vi.mock("../../api/timing.js", () => ({
-  fetchSessionTiming: mocks.fetchSessionTiming,
+vi.mock("../../api/generated/sessions/sessions.js", () => ({
+  getApiV1SessionsByIdTiming: mocks.fetchSessionTiming,
 }));
 
 import { ui } from "../../stores/ui.svelte.js";
+import { liveTick } from "../../stores/liveTick.svelte.js";
 import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
 import { m } from "../../i18n/index.js";
 // @ts-ignore
@@ -88,6 +104,196 @@ describe("SessionVitals", () => {
     cleanup();
     document.body.innerHTML = "";
     vi.unstubAllGlobals();
+  });
+
+  it.each([
+    { duration: null, label: "Not measured" },
+    { duration: 0, label: "0ms" },
+  ])(
+    "distinguishes $label from missing timing and keeps its category filter",
+    async ({ duration, label }) => {
+      const timing = timingWithCall();
+      timing.tool_duration_ms = 0;
+      timing.turns[0]!.calls[0]!.duration_ms = duration;
+      timing.by_category = [{ category: "Bash", duration_ms: 0, call_count: 1 }];
+      mocks.fetchSessionTiming.mockResolvedValue(timing);
+      component = mount(SessionVitals, {
+        target: document.body,
+        props: { sessionId: "sess-1", session: traceSession },
+      });
+      await tick();
+      await tick();
+
+      expect(document.querySelectorAll(".stat-grid .val")[1]?.textContent?.trim()).toBe(label);
+      const category = [...document.querySelectorAll<HTMLButtonElement>(".agg-row")].find(
+        (row) => row.querySelector(".agg-name")?.textContent?.trim() === "Bash",
+      );
+      expect(category?.querySelector(".agg-val")?.textContent?.trim()).toBe(label);
+      category!.click();
+      await tick();
+      expect(document.querySelector(".filter-chip")?.textContent).toContain("Bash");
+    },
+  );
+
+  it("renders measured activity and unattributed time and jumps to the prompt", async () => {
+    const timing = timingWithCall();
+    timing.total_duration_ms = 6000;
+    timing.tool_duration_ms = 2000;
+    timing.activity_totals = {
+      tool_ms: 2000,
+      unattributed_ms: 4000,
+    };
+    timing.activity = [
+      {
+        message_id: 10,
+        ordinal: 4,
+        started_at: "2026-07-14T12:00:00Z",
+        duration_ms: 6000,
+        tool_ms: 2000,
+        unattributed_ms: 4000,
+        running: false,
+      },
+    ];
+    timing.turns[0]!.duration_ms = 5000;
+    timing.turns[0]!.calls[0]!.duration_ms = 2000;
+    timing.turns[0]!.calls.push({
+      tool_use_id: "unknown",
+      tool_name: "Read",
+      category: "Read",
+      duration_ms: null,
+      is_parallel: true,
+      input_preview: "main.go",
+    });
+    timing.by_category = [
+      { category: "Bash", duration_ms: 2000, call_count: 1 },
+      { category: "Read", duration_ms: 0, call_count: 1 },
+    ];
+    timing.tool_call_count = 2;
+    mocks.fetchSessionTiming.mockResolvedValue(timing);
+    component = mount(SessionVitals, {
+      target: document.body,
+      props: { sessionId: "sess-1", session: undefined },
+    });
+    await tick();
+    await tick();
+
+    const row = document.querySelector<HTMLButtonElement>(".activity-row");
+    expect(row?.getAttribute("aria-label")).toBe("Turn 1 · 6.0s");
+    expect(
+      [...row!.querySelectorAll(".activity-track > span")].map((el) => el.getAttribute("title")),
+    ).toEqual(["Tool execution · 2.0s", "Unattributed · 4.0s"]);
+    expect(
+      parseFloat(row!.querySelector<HTMLElement>('[data-activity-kind="tool"]')!.style.width),
+    ).toBeCloseTo(33.3333);
+    expect(
+      parseFloat(
+        row!.querySelector<HTMLElement>('[data-activity-kind="unattributed"]')!.style.width,
+      ),
+    ).toBeCloseTo(66.6667);
+    expect(document.querySelector(".activity-totals")?.textContent).toContain(
+      "Unattributed · 4.0s",
+    );
+    expect([...document.querySelectorAll(".cd")].map((el) => el.textContent?.trim())).toEqual([
+      "2.0s",
+      "unknown",
+    ]);
+    expect(
+      [...document.querySelectorAll<HTMLElement>(".cbar")].map((el) => el.style.width),
+    ).toEqual(["100%", "0%"]);
+    const readCategory = [...document.querySelectorAll<HTMLButtonElement>(".agg-row")].find(
+      (row) => row.querySelector(".agg-name")?.textContent?.trim() === "Read",
+    );
+    expect(readCategory).not.toBeUndefined();
+    readCategory!.click();
+    await tick();
+    expect(document.querySelector(".cgroup")?.classList.contains("dimmed")).toBe(false);
+    expect(document.querySelector(".lane-row .lane-mark")?.classList.contains("dimmed")).toBe(
+      false,
+    );
+    const readLane = [...document.querySelectorAll(".lane-row")].find(
+      (row) => row.querySelector(".lane-label")?.textContent?.trim() === "Read",
+    );
+    expect(readLane?.querySelector(".lane-mark")).not.toBeNull();
+    const scroll = vi.spyOn(ui, "scrollToOrdinal");
+    row!.click();
+    expect(scroll).toHaveBeenCalledWith(4);
+    scroll.mockRestore();
+  });
+
+  it("keeps a running unsupported window fully unattributed", async () => {
+    mocks.fetchSessionTiming.mockResolvedValue({
+      ...mocks.timing,
+      total_duration_ms: 6000,
+      running: true,
+      activity_totals: { tool_ms: 0, unattributed_ms: 6000 },
+      activity: [
+        {
+          message_id: 1,
+          ordinal: 0,
+          started_at: "2026-07-14T12:00:00Z",
+          duration_ms: 6000,
+          tool_ms: 0,
+          unattributed_ms: 6000,
+          running: true,
+        },
+      ],
+    });
+    component = mount(SessionVitals, {
+      target: document.body,
+      props: { sessionId: "sess-1", session: undefined },
+    });
+    await tick();
+    await tick();
+
+    expect(
+      document.querySelector<HTMLElement>('[data-activity-kind="unattributed"]')?.style.width,
+    ).toBe("100%");
+    expect(document.querySelector<HTMLElement>('[data-activity-kind="tool"]')?.style.width).toBe(
+      "0%",
+    );
+  });
+
+  it("updates a running activity from live time", async () => {
+    const startMs = Date.now() - 1000;
+    mocks.fetchSessionTiming.mockResolvedValue({
+      ...mocks.timing,
+      total_duration_ms: 1000,
+      running: true,
+      activity_totals: { tool_ms: 1000, unattributed_ms: 0 },
+      activity: [
+        {
+          message_id: 1,
+          ordinal: 0,
+          started_at: new Date(startMs).toISOString(),
+          duration_ms: 1000,
+          tool_ms: 1000,
+          unattributed_ms: 0,
+          running: true,
+        },
+      ],
+    });
+    component = mount(SessionVitals, {
+      target: document.body,
+      props: { sessionId: "sess-1", session: undefined },
+    });
+    await tick();
+    await tick();
+
+    liveTick.now = startMs + 5000;
+    await tick();
+
+    const row = document.querySelector<HTMLButtonElement>(".activity-row");
+    expect(row?.getAttribute("aria-label")).toBe("Turn 1 · 5.0s");
+    expect(
+      [...row!.querySelectorAll(".activity-track > span")].map((el) => el.getAttribute("title")),
+    ).toEqual(["Tool execution · 1.0s", "Unattributed · 4.0s"]);
+    expect(row!.querySelector<HTMLElement>('[data-activity-kind="tool"]')!.style.width).toBe("20%");
+    expect(
+      row!.querySelector<HTMLElement>('[data-activity-kind="unattributed"]')!.style.width,
+    ).toBe("80%");
+    expect(document.querySelector(".activity-totals")?.textContent).toContain(
+      "Unattributed · 4.0s",
+    );
   });
 
   it("has an obvious close control inside the analysis pane", async () => {
@@ -372,11 +578,13 @@ describe("SessionVitals", () => {
 
   it("aborts a pending sub-agent timing read when collapsed", async () => {
     const signals: AbortSignal[] = [];
-    mocks.fetchSessionTiming.mockImplementation((sessionId: string, signal?: AbortSignal) => {
-      if (sessionId === "sess-1") return Promise.resolve(mocks.timing);
-      if (signal) signals.push(signal);
-      return new Promise<SessionTiming>(() => {});
-    });
+    mocks.fetchSessionTiming.mockImplementation(
+      ({ id: sessionId }: { id: string }, { signal }: { signal?: AbortSignal }) => {
+        if (sessionId === "sess-1") return Promise.resolve(mocks.timing);
+        if (signal) signals.push(signal);
+        return new Promise<SessionTiming>(() => {});
+      },
+    );
     component = mount(SessionVitals, {
       target: document.body,
       props: { sessionId: "sess-1", session: undefined },
@@ -403,11 +611,13 @@ describe("SessionVitals", () => {
 
   it("aborts a pending sub-agent timing read when unmounted", async () => {
     const signals: AbortSignal[] = [];
-    mocks.fetchSessionTiming.mockImplementation((sessionId: string, signal?: AbortSignal) => {
-      if (sessionId === "sess-1") return Promise.resolve(mocks.timing);
-      if (signal) signals.push(signal);
-      return new Promise<SessionTiming>(() => {});
-    });
+    mocks.fetchSessionTiming.mockImplementation(
+      ({ id: sessionId }: { id: string }, { signal }: { signal?: AbortSignal }) => {
+        if (sessionId === "sess-1") return Promise.resolve(mocks.timing);
+        if (signal) signals.push(signal);
+        return new Promise<SessionTiming>(() => {});
+      },
+    );
     component = mount(SessionVitals, {
       target: document.body,
       props: { sessionId: "sess-1", session: undefined },
@@ -434,13 +644,15 @@ describe("SessionVitals", () => {
 
   it("aborts a pending sub-agent timing read when the parent changes", async () => {
     const signals: AbortSignal[] = [];
-    mocks.fetchSessionTiming.mockImplementation((sessionId: string, signal?: AbortSignal) => {
-      if (sessionId.startsWith("sess-")) {
-        return Promise.resolve(mocks.timing);
-      }
-      if (signal) signals.push(signal);
-      return new Promise<SessionTiming>(() => {});
-    });
+    mocks.fetchSessionTiming.mockImplementation(
+      ({ id: sessionId }: { id: string }, { signal }: { signal?: AbortSignal }) => {
+        if (sessionId.startsWith("sess-")) {
+          return Promise.resolve(mocks.timing);
+        }
+        if (signal) signals.push(signal);
+        return new Promise<SessionTiming>(() => {});
+      },
+    );
     const view = render(SessionVitals, {
       sessionId: "sess-1",
       session: undefined,

@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // seedInventorySession inserts a session with the fields the project
@@ -34,8 +35,8 @@ func seedInventorySession(
 	if configure != nil {
 		configure(&sess)
 	}
-	require.NoError(t, local.UpsertSession(sess), "UpsertSession")
-	require.NoError(t, local.InsertMessages([]db.Message{{
+	require.NoError(t, local.UpsertSession(t.Context(), sess), "UpsertSession")
+	require.NoError(t, local.InsertMessages(t.Context(), []db.Message{{
 		SessionID:     id,
 		Ordinal:       0,
 		Role:          "assistant",
@@ -57,6 +58,7 @@ const duckPushMachine = "test-machine"
 // behavior is covered separately below.
 func buildInventoryFixture(t *testing.T, local *db.DB, ctx context.Context) {
 	t.Helper()
+
 	seedInventorySession(t, local, "alpha-1", "alpha", func(s *db.Session) {
 		s.Machine = duckPushMachine
 		s.Agent = "claude"
@@ -84,7 +86,7 @@ func buildInventoryFixture(t *testing.T, local *db.DB, ctx context.Context) {
 		s.StartedAt = new("2020-01-01T00:00:00Z")
 		s.EndedAt = new("2020-01-02T00:00:00Z")
 	})
-	require.NoError(t, local.SoftDeleteSession("alpha-trashed"))
+	require.NoError(t, local.SoftDeleteSession(ctx, "alpha-trashed"))
 
 	seedInventorySession(t, local, "beta-1", "beta", func(s *db.Session) {
 		s.Machine = duckPushMachine
@@ -161,26 +163,25 @@ func truncateInventoryRows(rows []db.ProjectInventoryRow) []db.ProjectInventoryR
 // hand-inserted mirror rows) so provenance columns and mapping mirroring
 // are covered too.
 func TestDuckProjectInventoryMatchesSQLite(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
 	buildInventoryFixture(t, local, ctx)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	pushDataReadMirror(t, ctx, syncer)
 
-	localInv, err := local.GetProjectInventory(ctx)
+	localInv, err := local.GetProjectInventory(ctx, db.ProjectDateFilter{})
 	require.NoError(t, err, "local GetProjectInventory")
 
 	duckStore := NewStoreFromDB(syncer.DB())
-	duckInv, err := duckStore.GetProjectInventory(ctx)
+	duckInv, err := duckStore.GetProjectInventory(ctx, db.ProjectDateFilter{})
 	require.NoError(t, err, "duckdb GetProjectInventory")
 
 	assert.Equal(t, localInv.TotalProjects, duckInv.TotalProjects)
 	assert.Equal(t, localInv.TotalSessions, duckInv.TotalSessions)
 	assert.Equal(t, localInv.GovernedSessions, duckInv.GovernedSessions)
-	require.Equal(t, len(localInv.Projects), len(duckInv.Projects))
-	assert.Equal(t,
-		truncateInventoryRows(localInv.Projects),
+	require.Len(t, duckInv.Projects, len(localInv.Projects))
+	assert.Equal(t, truncateInventoryRows(localInv.Projects),
 		truncateInventoryRows(duckInv.Projects),
 	)
 
@@ -210,16 +211,47 @@ func TestDuckProjectInventoryMatchesSQLite(t *testing.T) {
 		"misc has no rule targeting it by raw label, only gamma is resolved to")
 }
 
+func TestDuckGovernedCountExcludesAssignedSiblingEvidence(t *testing.T) {
+	ctx := t.Context()
+	local := newLocalDB(t)
+	sharedPath := t.TempDir() + "/sessions.jsonl"
+	seedInventorySession(t, local, "assigned-reference", "alpha", func(s *db.Session) {
+		s.Machine = duckPushMachine
+		s.Cwd = "/w/a/run"
+		s.FilePath = &sharedPath
+	})
+	seedInventorySession(t, local, "empty-cwd", "misc", func(s *db.Session) {
+		s.Machine = duckPushMachine
+		s.FilePath = &sharedPath
+	})
+	_, err := local.CreateWorktreeProjectMapping(ctx, db.WorktreeProjectMapping{
+		Machine: duckPushMachine, PathPrefix: "/w/a",
+		Project: "alpha", Enabled: true,
+	})
+	require.NoError(t, err)
+	_, err = local.AssignSessionProject(ctx, "assigned-reference", "alpha")
+	require.NoError(t, err)
+
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
+	pushDataReadMirror(t, ctx, syncer)
+	localInv, err := local.GetProjectInventory(ctx, db.ProjectDateFilter{})
+	require.NoError(t, err)
+	duckInv, err := NewStoreFromDB(syncer.DB()).GetProjectInventory(ctx, db.ProjectDateFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, localInv.GovernedSessions)
+	assert.Equal(t, localInv.GovernedSessions, duckInv.GovernedSessions)
+}
+
 func TestDuckProjectInventoryKeepsSanitizedLabelCollisionsDistinct(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
 	seedInventorySession(t, local, "private-a-1", "/private/repos/alpha", nil)
 	seedInventorySession(t, local, "private-b-1", "/private/repos/beta", nil)
 	seedInventorySession(t, local, "private-b-2", "/private/repos/beta", nil)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	pushDataReadMirror(t, ctx, syncer)
-	inv, err := NewStoreFromDB(syncer.DB()).GetProjectInventory(ctx)
+	inv, err := NewStoreFromDB(syncer.DB()).GetProjectInventory(ctx, db.ProjectDateFilter{})
 	require.NoError(t, err)
 	require.Len(t, inv.Projects, 2)
 	assert.Equal(t, 2, inv.TotalProjects)
@@ -243,15 +275,15 @@ func TestDuckProjectInventoryKeepsSanitizedLabelCollisionsDistinct(t *testing.T)
 // the governed count but stays visible in every aggregate count:
 // provenance only gates governedness, not visibility.
 func TestDuckProjectInventoryIgnoresUnattributedSessions(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
 	buildInventoryFixture(t, local, ctx)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	pushDataReadMirror(t, ctx, syncer)
 
 	duckStore := NewStoreFromDB(syncer.DB())
-	before, err := duckStore.GetProjectInventory(ctx)
+	before, err := duckStore.GetProjectInventory(ctx, db.ProjectDateFilter{})
 	require.NoError(t, err, "GetProjectInventory before")
 	require.Equal(t, 2, before.GovernedSessions,
 		"alpha-1 and gamma-dynamic governed before provenance is cleared")
@@ -260,7 +292,7 @@ func TestDuckProjectInventoryIgnoresUnattributedSessions(t *testing.T) {
 		`UPDATE sessions SET source_archive_id = '' WHERE id = 'alpha-1'`)
 	require.NoError(t, err, "clear provenance")
 
-	after, err := duckStore.GetProjectInventory(ctx)
+	after, err := duckStore.GetProjectInventory(ctx, db.ProjectDateFilter{})
 	require.NoError(t, err, "GetProjectInventory after")
 
 	assert.Equal(t, before.GovernedSessions-1, after.GovernedSessions,
@@ -285,7 +317,7 @@ func TestDuckProjectInventoryIgnoresUnattributedSessions(t *testing.T) {
 }
 
 func TestDuckPushPreservesSessionMachineForGovernance(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
 	for _, fixture := range []struct {
 		id      string
@@ -308,7 +340,7 @@ func TestDuckPushPreservesSessionMachineForGovernance(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	pushDataReadMirror(t, ctx, syncer)
 
 	rows, err := syncer.DB().QueryContext(ctx,
@@ -327,7 +359,7 @@ func TestDuckPushPreservesSessionMachineForGovernance(t *testing.T) {
 		"host-b-session": "host-b",
 	}, machines)
 
-	inventory, err := NewStoreFromDB(syncer.DB()).GetProjectInventory(ctx)
+	inventory, err := NewStoreFromDB(syncer.DB()).GetProjectInventory(ctx, db.ProjectDateFilter{})
 	require.NoError(t, err)
 	assert.Equal(t, 2, inventory.GovernedSessions,
 		"each mirrored session must join the mapping from its source machine")
@@ -351,7 +383,7 @@ func TestDuckPushPreservesSessionMachineForGovernance(t *testing.T) {
 // a filter scoped by source_archive_id alone (dropping the machine
 // comparison) would wrongly admit and govern it.
 func TestDuckProjectInventoryCrossArchiveIsolation(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
 
 	// Archive A (the local push archive) has no worktree mapping of its
@@ -362,7 +394,7 @@ func TestDuckProjectInventoryCrossArchiveIsolation(t *testing.T) {
 		s.StartedAt = new("2024-01-01T00:00:00Z")
 	})
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	pushDataReadMirror(t, ctx, syncer)
 
 	var aSessionMachine string
@@ -409,7 +441,7 @@ func TestDuckProjectInventoryCrossArchiveIsolation(t *testing.T) {
 	require.NoError(t, err, "seed archive B session on a different machine")
 
 	duckStore := NewStoreFromDB(syncer.DB())
-	inv, err := duckStore.GetProjectInventory(ctx)
+	inv, err := duckStore.GetProjectInventory(ctx, db.ProjectDateFilter{})
 	require.NoError(t, err, "GetProjectInventory")
 
 	byLabel := map[string]db.ProjectInventoryRow{}
@@ -462,6 +494,7 @@ func TestDuckProjectInventoryCrossArchiveIsolation(t *testing.T) {
 // real push produces.
 func pushDataReadMirror(t *testing.T, ctx context.Context, syncer *Sync) {
 	t.Helper()
+
 	require.NoError(t, createSchema(ctx, syncer.DB()), "createSchema")
 	_, err := syncer.pushEverything(ctx, nil)
 	require.NoError(t, err, "pushEverything")

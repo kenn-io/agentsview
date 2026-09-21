@@ -461,18 +461,18 @@ func TestListRecallEntriesPaginatesStableDiversifiedRankedResults(t *testing.T) 
 		firstPage.RecallEntries[0].ID,
 		firstPage.RecallEntries[1].ID,
 	})
-	direct, err := te.db.QueryRecallEntries(context.Background(), db.RecallQuery{
+	direct, err := te.db.QueryRecallEntries(t.Context(), db.RecallQuery{
 		Text:  "heliotrope",
 		Limit: 2,
 	})
 	require.NoError(t, err)
 	require.Len(t, direct.RecallEntries, 2)
 	assert.Equal(t, direct.RecallEntries[0].ID, firstPage.RecallEntries[0].ID)
-	assert.Equal(t, direct.RecallEntries[0].Score,
-		firstPage.RecallEntries[0].Score)
+	assert.InDelta(t, direct.RecallEntries[0].Score,
+		firstPage.RecallEntries[0].Score, 0)
 	assert.Equal(t, direct.RecallEntries[1].ID, firstPage.RecallEntries[1].ID)
-	assert.Equal(t, direct.RecallEntries[1].Score,
-		firstPage.RecallEntries[1].Score)
+	assert.InDelta(t, direct.RecallEntries[1].Score,
+		firstPage.RecallEntries[1].Score, 0)
 	for _, result := range firstPage.RecallEntries {
 		assert.Positive(t, result.Score)
 		assert.Contains(t, result.MatchedTerms, "heliotrope")
@@ -494,8 +494,7 @@ func TestListRecallEntriesPaginatesStableDiversifiedRankedResults(t *testing.T) 
 		secondPage.RecallEntries[0].ID,
 		secondPage.RecallEntries[1].ID,
 	}
-	assert.ElementsMatch(t,
-		[]string{"shared-a", "shared-b", "unique-b", "unique-c"}, ids)
+	assert.ElementsMatch(t, []string{"shared-a", "shared-b", "unique-b", "unique-c"}, ids)
 }
 
 func TestListRecallEntriesRejectsRankedCursorAfterCorpusMutation(t *testing.T) {
@@ -539,7 +538,9 @@ func TestListRecallEntriesRejectsRankedCursorAfterRankingFieldMutation(
 		{
 			name: "entry metadata",
 			mutate: func(t *testing.T, raw *sql.DB) {
-				_, err := raw.Exec(`
+				t.Helper()
+
+				_, err := raw.ExecContext(t.Context(), `
 					UPDATE recall_entries
 					SET project = 'changed-project'
 					WHERE id = 'ranked-a'`)
@@ -549,7 +550,9 @@ func TestListRecallEntriesRejectsRankedCursorAfterRankingFieldMutation(
 		{
 			name: "evidence",
 			mutate: func(t *testing.T, raw *sql.DB) {
-				_, err := raw.Exec(`
+				t.Helper()
+
+				_, err := raw.ExecContext(t.Context(), `
 					UPDATE recall_evidence
 					SET snippet = 'A changed evidence ranking signal.'
 					WHERE entry_id = 'ranked-a'`)
@@ -1025,7 +1028,7 @@ func TestListRecallEntriesTrustedOnlyRejectsArchivedStatusBeforeReadOnlyStore(
 	store := &readOnlyRecallQueryStore{}
 	srv := server.New(cfg, store, nil)
 	handler := wrapTestHandler(cfg, srv.Handler())
-	req := httptest.NewRequest(http.MethodGet,
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet,
 		"/api/v1/recall/entries?trusted_only=true&status=archived", nil)
 	w := httptest.NewRecorder()
 
@@ -1119,7 +1122,7 @@ func TestListRecallEntriesWithoutQueryUsesUpdatedOrder(t *testing.T) {
 	raw, err := sql.Open("sqlite3", filepath.Join(te.dataDir, "test.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { raw.Close() })
-	_, err = raw.Exec(`
+	_, err = raw.ExecContext(t.Context(), `
 		UPDATE recall_entries SET updated_at = CASE id
 			WHEN 'older-source-first' THEN '2024-01-01T00:00:00Z'
 			WHEN 'newer-source-second' THEN '2024-02-01T00:00:00Z'
@@ -1216,7 +1219,7 @@ func TestQueryRecallEntriesReturnsContext(t *testing.T) {
 	require.NotNil(t, r.ContextMeta)
 	assert.Equal(t, 1, r.ContextMeta.EntryCount)
 	assert.Equal(t, []string{"m1"}, r.ContextMeta.IncludedIDs)
-	event, err := te.db.GetRecallQueryEvent(context.Background(), r.QueryID)
+	event, err := te.db.GetRecallQueryEvent(t.Context(), r.QueryID)
 	require.NoError(t, err)
 	require.NotNil(t, event)
 	assert.Equal(t, r.QueryID, event.QueryID)
@@ -1769,6 +1772,6 @@ func seedRecallEntry(t *testing.T, te *testEnv, m db.RecallEntry) {
 	if m.Status == "" {
 		m.Status = "accepted"
 	}
-	_, err := te.db.InsertRecallEntry(m)
+	_, err := te.db.InsertRecallEntry(t.Context(), m)
 	require.NoError(t, err, "InsertRecallEntry")
 }

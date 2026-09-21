@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
@@ -111,7 +112,11 @@ func runSyncWorkerContext(
 	// pass itself succeeded. The parent also treats a missing result as a
 	// protocol failure, but the worker's own exit contract must not lie.
 	var encErr error
+	var emittedResult bool
 	emit := func(line workerLine) {
+		if line.Result != nil {
+			emittedResult = true
+		}
 		if err := json.MarshalEncode(enc, line); err != nil && encErr == nil {
 			encErr = err
 		}
@@ -134,6 +139,10 @@ func runSyncWorkerContext(
 		return fmt.Errorf("unknown sync-worker mode %q", mode)
 	}
 	if err != nil {
+		if !emittedResult {
+			result := resyncBuildResultFromStats(ctx, sync.SyncStats{Aborted: true}, err)
+			emit(workerLine{Result: &result})
+		}
 		return err
 	}
 	if encErr != nil {
@@ -153,17 +162,25 @@ func runSyncWorkerStartup(
 	emit func(workerLine),
 	onProgress func(sync.Progress),
 ) error {
-	database, writeLock, err := openWorkerWriteDB(cfg)
+	reportOpening := func(p db.OpenProgress) {
+		onProgress(sync.Progress{Phase: sync.PhaseOpeningDatabase, Detail: p.Detail, Resync: p.ResyncRequired})
+	}
+	reportOpening(db.OpenProgress{Detail: "Waiting for database write lock"})
+	database, writeLock, err := openWorkerWriteDB(ctx, cfg, reportOpening)
 	if err != nil {
 		return err
 	}
 	defer closeWriteDB(database, writeLock)
+	onProgress(sync.Progress{
+		Phase: sync.PhaseDiscovering, Detail: "Preparing session sync",
+		Resync: mode == "startup" && database.NeedsResync(),
+	})
 
 	// Remove stale temp DB from a prior crashed resync before ResyncAll
 	// stages a fresh one, matching runServe's startup cleanup.
 	cleanResyncTemp(cfg.DBPath)
 
-	engine := sync.NewEngine(database, workerEngineConfig(cfg))
+	engine := sync.NewEngine(ctx, database, workerEngineConfig(cfg))
 	defer engine.Close()
 
 	if database.NeedsResync() && mode != "startup" {
@@ -196,6 +213,12 @@ func runSyncWorkerStartup(
 		var stats sync.SyncStats
 		var tombstoned int
 		var auditErr error
+		// The audit is also the periodic content-verification pass for
+		// checkpointed sources: bypass the stat-trust gate so the provider's
+		// full-source fingerprint detects and repairs same-stat in-place
+		// rewrites that append-trust would otherwise keep stale.
+		engine.SetCheckpointAudit(true)
+		defer engine.SetCheckpointAudit(false)
 		if auditRoots := reconcileRootPaths(cfg); len(auditRoots) > 0 {
 			stats, tombstoned, auditErr = engine.ReconcileWatchRootsWithStats(
 				ctx, auditRoots, false, onProgress,
@@ -241,13 +264,13 @@ func runSyncWorkerResyncBuild(
 	// other worker modes inherit this through openWorkerWriteDB -> openDB.
 	applyClassifierConfig(cfg)
 
-	origRO, err := db.OpenReadOnly(cfg.DBPath)
+	origRO, err := db.OpenReadOnly(ctx, cfg.DBPath)
 	if err != nil {
 		return fmt.Errorf("resync-build: open read-only archive: %w", err)
 	}
 	defer origRO.Close()
 
-	engine := sync.NewEngine(origRO, workerEngineConfig(cfg))
+	engine := sync.NewEngine(ctx, origRO, workerEngineConfig(cfg))
 	defer engine.Close()
 
 	_, stats, buildErr := engine.ResyncBuild(ctx, onProgress)
@@ -356,8 +379,10 @@ func workerResultFromStats(
 // must tear down through closeWriteDB so a failed database close (undrained
 // connections) retains the write-owner flock instead of letting another
 // process acquire writer ownership alongside a surviving SQLite connection.
-func openWorkerWriteDB(cfg config.Config) (*db.DB, *writeOwnerLock, error) {
-	return openWriteDB(context.Background(), cfg)
+func openWorkerWriteDB(ctx context.Context, cfg config.Config, progress db.OpenProgressFunc) (*db.DB, *writeOwnerLock, error) {
+	return openWriteDBWith(ctx, cfg, func(ctx context.Context, cfg config.Config) (*db.DB, error) {
+		return openDBWithProgress(ctx, cfg, progress)
+	})
 }
 
 // workerEngineConfig mirrors the sync.EngineConfig literal in runServe minus the
@@ -366,10 +391,14 @@ func workerEngineConfig(cfg config.Config) sync.EngineConfig {
 	return sync.EngineConfig{
 		AgentDirs:               cfg.AgentDirs,
 		SourceMachines:          cfg.SourceMachines,
+		ProviderMetadata:        cfg.ProviderMetadata,
 		DisabledAgents:          cfg.DisabledAgents,
 		IncludeCwdPrefixes:      cfg.SyncIncludeCwdPrefixes,
 		ScanProtectedPaths:      cfg.ScanProtectedPaths,
-		Machine:                 cfg.LocalMachineName,
+		Machine:                 cfg.InstallationID,
 		BlockedResultCategories: cfg.ResultContentBlockedCategories,
+		ToolResultImages:        cfg.ToolResultImages,
+		AssetsDir:               filepath.Join(cfg.DataDir, "assets"),
+		ArchiveContent:          cfg.ArchiveContent,
 	}
 }

@@ -23,6 +23,28 @@ func TestIcodemateCLIDefaultDirs(t *testing.T) {
 	assert.Contains(t, def.DefaultDirs, ".icodemate/cli/projects")
 }
 
+func TestIcodemateCLITitlePriority(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	content := strings.Join([]string{
+		buildMetadataLine(map[string]any{"type": "user", "uuid": "u1", "message": map[string]any{"content": "CLI question"}}),
+		buildMetadataLine(map[string]any{"type": "ai-title", "aiTitle": "Generated CLI title"}),
+		buildMetadataLine(map[string]any{"type": "custom-title", "customTitle": "Custom CLI title"}),
+		buildMetadataLine(map[string]any{"type": "user", "sessionName": "Session CLI title"}),
+		buildMetadataLine(map[string]any{"type": "system", "content": "<command-name>/rename</command-name><command-args>Renamed CLI title</command-args>"}),
+		buildMetadataLine(map[string]any{"type": "assistant", "uuid": "a1", "parentUuid": "u1", "message": map[string]any{"content": []map[string]any{{"type": "text", "text": "CLI answer"}}}}),
+	}, "\n") + "\n"
+	writeSourceFile(t, path, content)
+	results, excluded, err := parseIcodemateCLISession(t.Context(), path, "project", "devbox", nil)
+	require.NoError(t, err)
+	assert.Empty(t, excluded)
+	require.Len(t, results, 1)
+	assert.Equal(t, "icodemate:session", results[0].Session.ID)
+	assert.Equal(t, "Custom CLI title", results[0].Session.SessionName)
+	require.Len(t, results[0].Messages, 2)
+	assert.Equal(t, "CLI question", results[0].Messages[0].Content)
+	assert.Equal(t, "CLI answer", results[0].Messages[1].Content)
+}
+
 // TestIcodemateCLIDiscoverParseAndFindSource builds a Claude-format projects
 // transcript under an IcodeMate CLI root and asserts the CLI source set
 // discovers it, parses it onto the icodemate agent with the icodemate: ID
@@ -65,20 +87,20 @@ func TestIcodemateCLIDiscoverParseAndFindSource(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, path, discovered[0].Key)
 	assert.Equal(t, "my-project", discovered[0].ProjectHint)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "icodemate:session-cli",
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, path, found.Key)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      discovered[0],
 		Fingerprint: SourceFingerprint{Hash: "hash-cli"},
 	})
@@ -190,8 +212,7 @@ func TestParseIcodemateCLIResolvesPersistedToolResult(t *testing.T) {
 	require.Len(t, results, 1)
 	require.Len(t, results[0].Messages, 3)
 	require.Len(t, results[0].Messages[2].ToolResults, 1)
-	assert.Equal(
-		t,
+	assert.Equal(t,
 		fullOutput,
 		DecodeContent(results[0].Messages[2].ToolResults[0].ContentRaw),
 	)
@@ -253,7 +274,7 @@ func TestIcodemateProviderMergesOpenCodeAndCLIRoots(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 2)
 
@@ -265,7 +286,7 @@ func TestIcodemateProviderMergesOpenCodeAndCLIRoots(t *testing.T) {
 	require.Contains(t, sourcesByKey, cliPath)
 
 	for key, src := range sourcesByKey {
-		outcome, err := provider.Parse(context.Background(), ParseRequest{
+		outcome, err := provider.Parse(t.Context(), ParseRequest{
 			Source: src, Machine: "testmachine",
 		})
 		require.NoError(t, err)
@@ -321,7 +342,7 @@ func TestIcodemateCLIProviderDiscoversS3Sessions(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 
@@ -371,7 +392,7 @@ func TestIcodemateCLIProviderParsesMaterializedSource(t *testing.T) {
 		Opaque:         MaterializedFileSource{Path: path},
 	}
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: materialized, Machine: "devbox",
 	})
 	require.NoError(t, err)
@@ -381,7 +402,7 @@ func TestIcodemateCLIProviderParsesMaterializedSource(t *testing.T) {
 	assert.Equal(t, "icodemate:session-mat", sess.ID)
 	assert.Equal(t, "hello materialized", sess.FirstMessage)
 
-	fingerprint, err := provider.Fingerprint(context.Background(), materialized)
+	fingerprint, err := provider.Fingerprint(t.Context(), materialized)
 	require.NoError(t, err)
 	// Key is the canonical metadata identity, not the materialized read path.
 	assert.Equal(t, materialized.Key, fingerprint.Key)
@@ -411,7 +432,7 @@ func TestIcodemateCLISourceMethods(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	plan, err := provider.WatchPlan(context.Background())
+	plan, err := provider.WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, root, plan.Roots[0].Path)
@@ -420,20 +441,20 @@ func TestIcodemateCLISourceMethods(t *testing.T) {
 		"the recursive watcher must admit persisted tool-result sidecars")
 	assert.Equal(t, "icodemate:cli-projects:"+root, plan.Roots[0].DebounceKey)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, sourcePath, discovered[0].Key)
 	assert.Equal(t, projectDir, discovered[0].ProjectHint)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: sessionID,
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, sourcePath, found.DisplayPath)
 
-	fingerprint, err := provider.Fingerprint(context.Background(), found)
+	fingerprint, err := provider.Fingerprint(t.Context(), found)
 	require.NoError(t, err)
 	assert.Equal(t, sourcePath, fingerprint.Key)
 	assert.Positive(t, fingerprint.Size)
@@ -441,7 +462,7 @@ func TestIcodemateCLISourceMethods(t *testing.T) {
 	assert.NotEmpty(t, fingerprint.Hash)
 
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: sourcePath, EventKind: "write", WatchRoot: root},
 	)
 	require.NoError(t, err)
@@ -450,7 +471,7 @@ func TestIcodemateCLISourceMethods(t *testing.T) {
 
 	require.NoError(t, os.Remove(sourcePath))
 	changed, err = provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: sourcePath, EventKind: "remove", WatchRoot: root},
 	)
 	require.NoError(t, err)
@@ -458,7 +479,7 @@ func TestIcodemateCLISourceMethods(t *testing.T) {
 	assert.Equal(t, sourcePath, changed[0].DisplayPath)
 
 	ignored, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: outsidePath, EventKind: "write", WatchRoot: wrongRoot},
 	)
 	require.NoError(t, err)

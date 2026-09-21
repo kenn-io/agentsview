@@ -64,6 +64,8 @@ type ContentSearchFilter struct {
 // span overlapping the window masked (including secrets that extend past the
 // window). The CLI sanitizes it for terminal display.
 type ContentMatch struct {
+	// WebURL is a client-derived browser link, never persisted.
+	WebURL    string `json:"web_url,omitempty"`
 	SessionID string `json:"session_id"`
 	Project   string `json:"project"`
 	Agent     string `json:"agent"`
@@ -610,46 +612,57 @@ func (f ContentSearchFilter) buildSnippet(body string, start, end int) string {
 
 // substringSnippet builds the snippet for a substring match: it locates the
 // case-insensitive pattern in body (the LIKE already matched, so it is present;
-// fall back to the start if case-folding shifts the offset) and windows it.
+// fall back to the start of the body if case-folding cannot locate it) and
+// windows it.
 func (f ContentSearchFilter) substringSnippet(body string) string {
-	off := max(CaseInsensitiveIndex(body, f.Pattern), 0)
-	return f.buildSnippet(body, off, min(off+len(f.Pattern), len(body)))
+	start, end, _ := CaseInsensitiveSpan(body, f.Pattern)
+	return f.buildSnippet(body, start, end)
 }
 
-// CaseInsensitiveIndex returns the byte offset in s of the first
-// case-insensitive occurrence of sub, or -1. The offset always indexes s
-// directly: it walks s rune by rune instead of searching strings.ToLower(s),
-// whose byte length can differ from s — the Kelvin sign U+212A lowercases from
-// three bytes to one, U+023A lowercases from two bytes to three — which would
-// shift the offset and, when ToLower grows the prefix, push it past len(s) so
-// the caller's slice panics. Both backends use it to center snippets.
-func CaseInsensitiveIndex(s, sub string) int {
+// CaseInsensitiveSpan returns the byte range [start, end) that the first
+// case-insensitive occurrence of sub covers in s, and whether one exists;
+// a miss reports the start of s so callers can window from there.
+//
+// Both offsets index s directly: the search walks s rune by rune instead of
+// searching strings.ToLower(s), whose byte length can differ from s — the
+// Kelvin sign U+212A lowercases from three bytes to one, U+023A lowercases
+// from two bytes to three — which would shift the offset and, when ToLower
+// grows the prefix, push it past len(s) so the caller's slice panics.
+//
+// end comes from s for the same reason it cannot come from sub: those same
+// mappings make the matched bytes shorter or longer than sub, so start +
+// len(sub) can land inside a rune of s or past the end of the match. Snippet
+// windowing relies on the span being rune-aligned (see snippetBounds, which
+// snaps only the padding edges), so every backend derives the end here.
+func CaseInsensitiveSpan(s, sub string) (int, int, bool) {
 	if sub == "" {
-		return 0
+		return 0, 0, true
 	}
 	for i := range s {
-		if hasFoldPrefixAt(s, i, sub) {
-			return i
+		if end, ok := foldPrefixEnd(s, i, sub); ok {
+			return i, end, true
 		}
 	}
-	return -1
+	return 0, 0, false
 }
 
-// hasFoldPrefixAt reports whether s[i:] begins with sub under simple Unicode
-// lower-case folding, compared rune by rune so a case mapping that changes
-// UTF-8 byte length cannot desynchronize the two cursors.
-func hasFoldPrefixAt(s string, i int, sub string) bool {
+// foldPrefixEnd reports whether s[i:] begins with sub under simple Unicode
+// lower-case folding and, when it does, the offset in s just past the match.
+// The two strings are compared rune by rune so a case mapping that changes
+// UTF-8 byte length cannot desynchronize the cursors, which is also what
+// leaves the returned end on a rune boundary of s.
+func foldPrefixEnd(s string, i int, sub string) (int, bool) {
 	for _, want := range sub {
 		if i >= len(s) {
-			return false
+			return 0, false
 		}
 		got, size := utf8.DecodeRuneInString(s[i:])
 		if got != want && unicode.ToLower(got) != unicode.ToLower(want) {
-			return false
+			return 0, false
 		}
 		i += size
 	}
-	return true
+	return i, true
 }
 
 // literalPrefix extracts a required literal prefix from a regex for use
@@ -678,8 +691,12 @@ func (db *DB) searchContentFTS(
 	// otherwise raise a generic SQLITE_ERROR that classifyFTSError would misread
 	// as invalid user input (400). With FTS present, the only SQLITE_ERROR the
 	// MATCH query can raise comes from a malformed pattern.
-	if !db.HasFTS() {
+	if !db.HasFTS(ctx) {
 		return ContentSearchPage{}, errFTSUnavailable
+	}
+	ftsQuery, err := db.prepareMessageFTSQuery(ctx, f.Pattern)
+	if err != nil {
+		return ContentSearchPage{}, err
 	}
 	scope, scopeArgs := sessionScopeSubquery(f)
 	sysPred := "1=1"
@@ -697,10 +714,13 @@ func (db *DB) searchContentFTS(
 		WHERE messages_fts MATCH ? AND %s AND m.%s
 		ORDER BY rank ASC, m.ordinal ASC, m.id ASC
 		LIMIT ? OFFSET ?`, sysPred, scope)
-	args := []any{PrepareFTSQuery(f.Pattern)}
+	query = strings.ReplaceAll(query, "messages_fts", ftsQuery.table)
+	args := []any{ftsQuery.match}
 	args = append(args, scopeArgs...)
 	args = append(args, f.Limit+1, f.Cursor)
-	page, err := db.scanContentMatches(ctx, query, args, f.Limit, f.Cursor, f.ftsSnippet)
+	page, err := db.scanContentMatches(ctx, query, args, f.Limit, f.Cursor, func(body string) string {
+		return f.ftsSnippet(body, ftsQuery.snippetTerm)
+	})
 	if err != nil {
 		return ContentSearchPage{}, classifyFTSError(err)
 	}
@@ -710,12 +730,15 @@ func (db *DB) searchContentFTS(
 // ftsSnippet builds the snippet for an FTS match. FTS matching is tokenized, so
 // there is no exact byte offset; it centers on the first case-insensitive
 // occurrence of the de-quoted query phrase, falling back to the query's first
-// token, then to the start. Trying the whole phrase first keeps a phrase query
-// ("foo bar") centered on the phrase rather than on a stray earlier "foo". The
-// approximation only affects snippet centering, not redaction, which scans the
-// full body.
-func (f ContentSearchFilter) ftsSnippet(body string) string {
+// token, then a segmented term if supplied, then to the start. Trying the whole
+// phrase first keeps a phrase query ("foo bar") centered on the phrase rather
+// than on a stray earlier "foo". The approximation only affects snippet
+// centering, not redaction, which scans the full body.
+func (f ContentSearchFilter) ftsSnippet(body, segmentedTerm string) string {
 	start, end := FTSSnippetRange(f.Pattern, body)
+	if start == end && segmentedTerm != "" {
+		start, end, _ = CaseInsensitiveSpan(body, segmentedTerm)
+	}
 	return f.buildSnippet(body, start, end)
 }
 
@@ -724,21 +747,20 @@ func (f ContentSearchFilter) ftsSnippet(body string) string {
 // first parsed prepared-FTS term, and finally to the start of the body.
 func FTSSnippetRange(pattern, body string) (int, int) {
 	if phrase := strings.Trim(pattern, "\""); phrase != "" {
-		if off := CaseInsensitiveIndex(body, phrase); off >= 0 {
-			return off, min(off+len(phrase), len(body))
+		if start, end, ok := CaseInsensitiveSpan(body, phrase); ok {
+			return start, end
 		}
 	}
 	for _, term := range FTSTerms(PrepareFTSQuery(pattern)) {
 		if term == "" {
 			continue
 		}
-		if off := CaseInsensitiveIndex(body, term); off >= 0 {
-			return off, min(off+len(term), len(body))
+		if start, end, ok := CaseInsensitiveSpan(body, term); ok {
+			return start, end
 		}
 		if fields := strings.Fields(term); len(fields) > 0 && fields[0] != term {
-			first := fields[0]
-			if off := CaseInsensitiveIndex(body, first); off >= 0 {
-				return off, min(off+len(first), len(body))
+			if start, end, ok := CaseInsensitiveSpan(body, fields[0]); ok {
+				return start, end
 			}
 		}
 		break
@@ -753,10 +775,10 @@ func FTSSnippetRange(pattern, body string) (int, int) {
 // quotes or stray operators). Operational failures (I/O, corruption, busy)
 // carry distinct SQLite codes and pass through unchanged.
 func classifyFTSError(err error) error {
-	var sqliteErr sqlite3.Error
-	if errors.As(err, &sqliteErr) && sqliteErr.Code == sqlite3.ErrError {
+	sqliteErr, hasSqliteErr := errors.AsType[sqlite3.Error](err)
+	if hasSqliteErr && sqliteErr.Code == sqlite3.ErrError {
 		return &SearchInputError{
-			Msg: fmt.Sprintf("search: invalid FTS query: %s", sqliteErr.Error()),
+			Msg: "search: invalid FTS query: " + sqliteErr.Error(),
 		}
 	}
 	return err
@@ -1047,7 +1069,7 @@ func (db *DB) searchContentHybrid(
 	if searcher == nil {
 		return ContentSearchPage{}, ErrSemanticUnavailable
 	}
-	if !db.HasFTS() {
+	if !db.HasFTS(ctx) {
 		return ContentSearchPage{}, errFTSUnavailable
 	}
 
@@ -1161,6 +1183,10 @@ func (db *DB) hybridFTSLeg(
 func (db *DB) fetchHybridFTSBatch(
 	ctx context.Context, f ContentSearchFilter, k, offset int,
 ) ([]hybridDisplay, error) {
+	ftsQuery, err := db.prepareMessageFTSQuery(ctx, f.Pattern)
+	if err != nil {
+		return nil, err
+	}
 	scope, scopeArgs := semanticSessionScopeSubquery(f)
 	query := fmt.Sprintf(`
 		SELECT m.session_id, m.ordinal,
@@ -1171,8 +1197,9 @@ func (db *DB) fetchHybridFTSBatch(
 		  AND m.%s
 		ORDER BY f.rank, m.id LIMIT ? OFFSET ?`,
 		SystemPrefixSQL("m.content", "m.role"), scope)
+	query = strings.ReplaceAll(query, "messages_fts", ftsQuery.table)
 
-	args := []any{PrepareFTSQuery(f.Pattern)}
+	args := []any{ftsQuery.match}
 	args = append(args, scopeArgs...)
 	args = append(args, k, offset)
 
@@ -1357,6 +1384,7 @@ func (db *DB) semanticAllowedSessionIDs(
 		if err != nil {
 			return fmt.Errorf("semantic search session scope: %w", err)
 		}
+		defer rows.Close()
 		for rows.Next() {
 			var id string
 			if err := rows.Scan(&id); err != nil {
@@ -1416,45 +1444,52 @@ func (db *DB) enrichSemanticHits(
 ) (map[semanticHitKey]semanticHitInfo, error) {
 	out := make(map[semanticHitKey]semanticHitInfo, len(hits))
 	for start := 0; start < len(hits); start += enrichHitsChunk {
-		chunk := hits[start:min(start+enrichHitsChunk, len(hits))]
+		if err := func() error {
+			chunk := hits[start:min(start+enrichHitsChunk, len(hits))]
 
-		values := make([]string, len(chunk))
-		args := make([]any, 0, len(chunk)*2)
-		for i, h := range chunk {
-			values[i] = "(?, ?)"
-			args = append(args, h.SessionID, h.Ordinal)
-		}
-		query := "WITH hits(session_id, ordinal) AS (VALUES " +
-			strings.Join(values, ", ") + ") " +
-			"SELECT m.session_id, s.project, s.agent, m.role, m.ordinal, " +
-			"COALESCE(m.timestamp, ''), m.content, " +
-			"COALESCE(s.relationship_type, ''), " +
-			"COALESCE(s.parent_session_id, ''), m.is_sidechain " +
-			"FROM hits h " +
-			"JOIN messages m ON m.session_id = h.session_id AND m.ordinal = h.ordinal " +
-			"JOIN sessions s ON s.id = m.session_id"
-
-		rows, err := db.getReader().QueryContext(ctx, query, args...)
-		if err != nil {
-			return nil, fmt.Errorf("semantic search enrich: %w", err)
-		}
-		for rows.Next() {
-			var key semanticHitKey
-			var info semanticHitInfo
-			if err := rows.Scan(&key.sessionID, &info.project, &info.agent,
-				&info.role, &key.ordinal, &info.timestamp, &info.content,
-				&info.relationshipType, &info.parentSessionID,
-				&info.isSidechain); err != nil {
-				rows.Close()
-				return nil, fmt.Errorf("scan semantic hit: %w", err)
+			values := make([]string, len(chunk))
+			args := make([]any, 0, len(chunk)*2)
+			for i, h := range chunk {
+				values[i] = "(?, ?)"
+				args = append(args, h.SessionID, h.Ordinal)
 			}
-			out[key] = info
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		if err := rows.Close(); err != nil {
+			query := "WITH hits(session_id, ordinal) AS (VALUES " +
+				strings.Join(values, ", ") + ") " +
+				"SELECT m.session_id, s.project, s.agent, m.role, m.ordinal, " +
+				"COALESCE(m.timestamp, ''), m.content, " +
+				"COALESCE(s.relationship_type, ''), " +
+				"COALESCE(s.parent_session_id, ''), m.is_sidechain " +
+				"FROM hits h " +
+				"JOIN messages m ON m.session_id = h.session_id AND m.ordinal = h.ordinal " +
+				"JOIN sessions s ON s.id = m.session_id"
+
+			rows, err := db.getReader().QueryContext(ctx, query, args...)
+			if err != nil {
+				return fmt.Errorf("semantic search enrich: %w", err)
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var key semanticHitKey
+				var info semanticHitInfo
+				if err := rows.Scan(&key.sessionID, &info.project, &info.agent,
+					&info.role, &key.ordinal, &info.timestamp, &info.content,
+					&info.relationshipType, &info.parentSessionID,
+					&info.isSidechain); err != nil {
+					rows.Close()
+					return fmt.Errorf("scan semantic hit: %w", err)
+				}
+				out[key] = info
+			}
+			if err := rows.Err(); err != nil {
+				rows.Close()
+				return err
+			}
+			if err := rows.Close(); err != nil {
+				return err
+			}
+
+			return nil
+		}(); err != nil {
 			return nil, err
 		}
 	}

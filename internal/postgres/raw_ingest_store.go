@@ -114,7 +114,11 @@ func (s *RawIngestStore) MissingObjects(
 	return missing, nil
 }
 
-// CommitManifest atomically records a manifest, advances its head, and queues parsing.
+// CommitManifest atomically records a manifest, advances its head, queues
+// parsing, and supersedes one prior-head nonterminal parse job so stale
+// prefixes never accumulate behind the current head. Legacy duplicate
+// processing versions for the prior head stay nonterminal here and drain
+// through the bounded claim-time supersession fallback.
 func (s *RawIngestStore) CommitManifest(
 	ctx context.Context,
 	manifest rawsync.CanonicalManifest,
@@ -177,7 +181,7 @@ func (s *RawIngestStore) CommitManifest(
 		}
 	}
 	if head.Generation == math.MaxInt64 {
-		return rawsync.CommitResult{}, fmt.Errorf("raw source generation exhausted")
+		return rawsync.CommitResult{}, errors.New("raw source generation exhausted")
 	}
 	generation := head.Generation + 1
 	receipt, err := s.newReceipt()
@@ -245,6 +249,38 @@ func (s *RawIngestStore) CommitManifest(
 	}
 	if affected != 1 {
 		return rawsync.CommitResult{}, fmt.Errorf("advancing raw source head affected %d rows", affected)
+	}
+	if head.ManifestID != "" {
+		// The unique key permits legacy rows with several processing versions
+		// per manifest, so supersede exactly one deterministic candidate per
+		// advance and leave the remaining duplicates to the bounded fallback.
+		// We intentionally rely on the outer UPDATE's nonterminal-state
+		// predicate rather than a FOR UPDATE lock: under READ COMMITTED, when
+		// this statement waits on the candidate's row lock, EvalPlanQual
+		// rechecks the WHERE clause against the newest committed version, so
+		// a candidate completed or failed by a concurrent lease transition is
+		// skipped instead of overwritten, and the remaining obsolete rows are
+		// handled by the bounded claim-time fallback.
+		if _, err := tx.ExecContext(ctx, `
+			WITH candidate AS (
+				SELECT job.id
+				FROM raw_ingest_jobs AS job
+				WHERE job.tenant_id = $1 AND job.manifest_id = $2
+					AND job.stage = 'parse'
+					AND job.state IN ('ready', 'retrying', 'leased')
+				ORDER BY job.id
+				LIMIT 1
+			)
+			UPDATE raw_ingest_jobs AS job
+			SET state = 'superseded', lease_owner = '', lease_expires_at = NULL,
+				updated_at = now()
+			FROM candidate
+			WHERE job.id = candidate.id
+				AND job.state IN ('ready', 'retrying', 'leased')`,
+			manifest.Identity.TenantID, head.ManifestID,
+		); err != nil {
+			return rawsync.CommitResult{}, fmt.Errorf("superseding prior raw parse job: %w", err)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return rawsync.CommitResult{}, fmt.Errorf("committing raw manifest: %w", err)
@@ -347,49 +383,52 @@ func lockRawIngestHead(
 	return head, nil
 }
 
-type rawObjectQueryer interface {
-	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-}
-
 func loadPresentRawObjects(
 	ctx context.Context,
-	queryer rawObjectQueryer,
+	queryer pgSessionQueryer,
 	tenantID string,
 	objects []rawsync.ObjectRef,
 ) (map[rawsync.ObjectRef]bool, error) {
 	present := make(map[rawsync.ObjectRef]bool, len(objects))
 	for start := 0; start < len(objects); start += rawIngestBatchRows {
-		end := min(start+rawIngestBatchRows, len(objects))
-		var query strings.Builder
-		query.WriteString(`SELECT sha256, size_bytes FROM raw_objects WHERE tenant_id = $1 AND (sha256, size_bytes) IN (`)
-		args := make([]any, 1, 1+2*(end-start))
-		args[0] = tenantID
-		for i, object := range objects[start:end] {
-			if i > 0 {
-				query.WriteByte(',')
+		if err := func() error {
+			end := min(start+rawIngestBatchRows, len(objects))
+			var query strings.Builder
+			query.WriteString(`SELECT sha256, size_bytes FROM raw_objects WHERE tenant_id = $1 AND (sha256, size_bytes) IN (`)
+			args := make([]any, 1, 1+2*(end-start))
+			args[0] = tenantID
+			for i, object := range objects[start:end] {
+				if i > 0 {
+					query.WriteByte(',')
+				}
+				argument := 2 + i*2
+				fmt.Fprintf(&query, "($%d,$%d)", argument, argument+1)
+				args = append(args, object.SHA256, object.Length)
 			}
-			argument := 2 + i*2
-			fmt.Fprintf(&query, "($%d,$%d)", argument, argument+1)
-			args = append(args, object.SHA256, object.Length)
-		}
-		query.WriteByte(')')
-		rows, err := queryer.QueryContext(ctx, query.String(), args...)
-		if err != nil {
-			return nil, err
-		}
-		for rows.Next() {
-			var object rawsync.ObjectRef
-			if err := rows.Scan(&object.SHA256, &object.Length); err != nil {
+			query.WriteByte(')')
+			rows, err := queryer.QueryContext(ctx, query.String(), args...)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var object rawsync.ObjectRef
+				if err := rows.Scan(&object.SHA256, &object.Length); err != nil {
+					_ = rows.Close()
+					return err
+				}
+				present[object] = true
+			}
+			if err := rows.Err(); err != nil {
 				_ = rows.Close()
-				return nil, err
+				return err
 			}
-			present[object] = true
-		}
-		if err := rows.Err(); err != nil {
-			_ = rows.Close()
-			return nil, err
-		}
-		if err := rows.Close(); err != nil {
+			if err := rows.Close(); err != nil {
+				return err
+			}
+
+			return nil
+		}(); err != nil {
 			return nil, err
 		}
 	}

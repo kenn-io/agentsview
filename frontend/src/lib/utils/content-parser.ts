@@ -1,4 +1,4 @@
-import type { Message, ToolCall } from "../api/types.js";
+import type { DbMessage as Message, DbToolCall as ToolCall } from "../api/generated/index.js";
 import { LRUCache } from "./cache.js";
 import { isSystemBoundaryMessage } from "./messages.js";
 

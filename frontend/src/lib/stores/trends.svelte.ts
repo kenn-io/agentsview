@@ -1,5 +1,6 @@
+import { m } from "../i18n/index.js";
 import { TrendsService, type DbTrendsTermsResponse } from "../api/generated/index";
-import { callGenerated, isAbortError } from "../api/runtime.js";
+import { isAbortError } from "../api/runtime.js";
 import { rollingRange } from "../utils/dates.js";
 import { LatestRead } from "../utils/latest-read.js";
 import { perf } from "./perf.svelte.js";
@@ -57,10 +58,7 @@ class TrendsStore {
     const started = performance.now();
     let status: "ok" | "error" | "aborted" = "ok";
     try {
-      const data = await callGenerated(
-        (options) => TrendsService.getApiV1TrendsTerms(this.params(), options),
-        signal,
-      );
+      const data = await TrendsService.getApiV1TrendsTerms(this.params(), { signal });
       if (this.version === v && this.termsRead.isCurrent(signal)) {
         this.response = data;
         this.errors.terms = null;
@@ -72,7 +70,7 @@ class TrendsStore {
       }
       status = "error";
       if (this.version === v) {
-        this.errors.terms = e instanceof Error ? e.message : "Failed to load";
+        this.errors.terms = e instanceof Error ? e.message : m.shared_failed_to_load();
         if (isFirstLoad) {
           this.response = null;
         } else {

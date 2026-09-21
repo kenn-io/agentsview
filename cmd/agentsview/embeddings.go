@@ -3,7 +3,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -12,7 +11,6 @@ import (
 	"io"
 	"maps"
 	"net/http"
-	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -22,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 	kitvec "go.kenn.io/kit/vector"
 
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/vector"
@@ -43,7 +42,7 @@ const fingerprintDisplayLen = 12
 // embeddingsDaemonHTTPClient bounds each individual request the embeddings
 // daemon client makes (build/status/list/activate/retire) so a wedged
 // daemon cannot hang the CLI forever, matching the timeout other daemon
-// HTTP clients in this codebase use (internal/service/http.go's
+// HTTP clients in this codebase use (internal/servicehttp/http.go's
 // httpBackend.client). This is a per-request timeout, not a deadline on the
 // overall command: buildViaDaemon's poll loop issues one status call every
 // embeddingsPollInterval, so a build that legitimately runs for longer than
@@ -230,6 +229,9 @@ func parseGenerationID(raw string) (int64, error) {
 // requireVectorEnabled rejects every embeddings subcommand up front when
 // [vector] is not configured, with the exact message the brief specifies.
 func requireVectorEnabled(cfg config.Config) error {
+	if cfg.ArchiveContent.UsageOnly() {
+		return fmt.Errorf("%w: embeddings require transcript content", db.ErrArchiveContentExcluded)
+	}
 	if !cfg.Vector.Enabled {
 		return errors.New(
 			"vector search is not enabled: set [vector] enabled = true in config.toml",
@@ -442,7 +444,7 @@ func confirmFullRebuild(
 func countEmbeddingStoreUnits(
 	ctx context.Context, cfg config.Config, includeAutomated bool, store string,
 ) (int, error) {
-	archiveDB, err := openReadOnlyDB(cfg)
+	archiveDB, err := openReadOnlyDB(ctx, cfg)
 	if err != nil {
 		return 0, err
 	}
@@ -476,7 +478,7 @@ func runEmbeddingsBuildDirect(
 	}
 	defer lock.Close()
 
-	archiveDB, err := openReadOnlyDB(cfg)
+	archiveDB, err := openReadOnlyDB(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("opening archive database: %w", err)
 	}
@@ -635,8 +637,8 @@ func buildViaDaemon(
 	ctx context.Context, out io.Writer, client embeddingsDaemonClient, req vector.BuildRequest,
 ) error {
 	if err := client.startBuild(ctx, req); err != nil {
-		var apiErr *daemonAPIError
-		if errors.As(err, &apiErr) && apiErr.status == http.StatusConflict {
+		apiErr, hasApiErr := errors.AsType[*daemonAPIError](err)
+		if hasApiErr && apiErr.status == http.StatusConflict {
 			fmt.Fprintln(out, "a build is already running (daemon)")
 		} else {
 			return err
@@ -949,55 +951,103 @@ type daemonAPIError struct {
 
 func (e *daemonAPIError) Error() string { return e.message }
 
-// daemonBuildRequest is the wire form of a CLI-initiated daemon build.
-// include_automated is always sent (no omitempty): the CLI has already
-// resolved the config-plus-flag scope, and the daemon treats an omitted
-// field as "use my configured scope" — which would silently discard an
-// explicit `--include-automated=false` override when the daemon's config
-// says true.
-type daemonBuildRequest struct {
-	Store            string `json:"store,omitempty"`
-	FullRebuild      bool   `json:"full_rebuild,omitempty"`
-	Backstop         bool   `json:"backstop,omitempty"`
-	RepairInvalid    bool   `json:"repair_invalid,omitempty"`
-	IncludeAutomated bool   `json:"include_automated"`
-	Using            string `json:"using,omitempty"`
-}
-
 func (c embeddingsDaemonClient) startBuild(ctx context.Context, req vector.BuildRequest) error {
-	wire := daemonBuildRequest{
-		Store:            req.Store,
-		FullRebuild:      req.FullRebuild,
-		Backstop:         req.Backstop,
-		RepairInvalid:    req.RepairInvalid,
-		IncludeAutomated: req.IncludeAutomated,
-		Using:            req.Using,
+	api, err := apiclient.NewHTTPClient(c.baseURL, c.token, embeddingsDaemonHTTPClient)
+	if err != nil {
+		return err
 	}
-	return c.do(ctx, http.MethodPost, "/api/v1/embeddings/build", wire, nil)
+	response, err := api.PostAPIV1EmbeddingsBuildWithResponse(ctx, &apiclient.PostAPIV1EmbeddingsBuildRequestOptions{Body: &apiclient.EmbeddingsBuildRequest{
+		Store: new(req.Store), FullRebuild: new(req.FullRebuild), Backstop: new(req.Backstop), RepairInvalid: new(req.RepairInvalid),
+		// Always send the resolved scope, including an explicit false override.
+		IncludeAutomated: new(req.IncludeAutomated), Using: new(req.Using),
+	}})
+	if response == nil {
+		return err
+	}
+	return embeddingResponseError(response.StatusCode, response.Body, err)
 }
 
 func (c embeddingsDaemonClient) status(ctx context.Context) (vector.BuildStatus, error) {
-	var st vector.BuildStatus
-	err := c.do(ctx, http.MethodGet, c.storePath("/api/v1/embeddings/status"), nil, &st)
-	return st, err
+	var out vector.BuildStatus
+	api, err := apiclient.NewHTTPClient(c.baseURL, c.token, embeddingsDaemonHTTPClient)
+	if err != nil {
+		return out, err
+	}
+	query := &apiclient.GetAPIV1EmbeddingsStatusQuery{}
+	if c.store != "" {
+		query.Store = new(c.store)
+	}
+	response, err := api.GetAPIV1EmbeddingsStatusWithResponse(ctx, &apiclient.GetAPIV1EmbeddingsStatusRequestOptions{Query: query})
+	if response == nil {
+		return out, err
+	}
+	if err := embeddingResponseError(response.StatusCode, response.Body, err); err != nil {
+		return out, err
+	}
+	if len(response.Body) == 0 {
+		return out, io.ErrUnexpectedEOF
+	}
+	return *response.JSON200, nil
 }
 
 func (c embeddingsDaemonClient) generations(ctx context.Context) ([]vector.GenerationInfo, error) {
-	var body struct {
-		Generations []vector.GenerationInfo `json:"generations"`
+	api, err := apiclient.NewHTTPClient(c.baseURL, c.token, embeddingsDaemonHTTPClient)
+	if err != nil {
+		return nil, err
 	}
-	err := c.do(ctx, http.MethodGet, c.storePath("/api/v1/embeddings/generations"), nil, &body)
-	return body.Generations, err
+	query := &apiclient.GetAPIV1EmbeddingsGenerationsQuery{}
+	if c.store != "" {
+		query.Store = new(c.store)
+	}
+	response, err := api.GetAPIV1EmbeddingsGenerationsWithResponse(ctx, &apiclient.GetAPIV1EmbeddingsGenerationsRequestOptions{Query: query})
+	if response == nil {
+		return nil, err
+	}
+	if err := embeddingResponseError(response.StatusCode, response.Body, err); err != nil {
+		return nil, err
+	}
+	if len(response.Body) == 0 {
+		return nil, io.ErrUnexpectedEOF
+	}
+	return response.JSON200.Generations, nil
 }
 
 func (c embeddingsDaemonClient) activate(ctx context.Context, id int64, force bool) error {
-	path := fmt.Sprintf("/api/v1/embeddings/generations/%d/activate", id)
-	return c.do(ctx, http.MethodPost, c.storePath(path), map[string]bool{"force": force}, nil)
+	api, err := apiclient.NewHTTPClient(c.baseURL, c.token, embeddingsDaemonHTTPClient)
+	if err != nil {
+		return err
+	}
+	query := &apiclient.PostAPIV1EmbeddingsGenerationsIDActivateQuery{}
+	if c.store != "" {
+		query.Store = new(c.store)
+	}
+	response, err := api.PostAPIV1EmbeddingsGenerationsIDActivateWithResponse(ctx, &apiclient.PostAPIV1EmbeddingsGenerationsIDActivateRequestOptions{
+		PathParams: &apiclient.PostAPIV1EmbeddingsGenerationsIDActivatePath{ID: id}, Query: query,
+		Body: &apiclient.EmbeddingsGenerationActionRequest{Force: new(force)},
+	})
+	if response == nil {
+		return err
+	}
+	return embeddingResponseError(response.StatusCode, response.Body, err)
 }
 
 func (c embeddingsDaemonClient) retire(ctx context.Context, id int64, force bool) error {
-	path := fmt.Sprintf("/api/v1/embeddings/generations/%d/retire", id)
-	return c.do(ctx, http.MethodPost, c.storePath(path), map[string]bool{"force": force}, nil)
+	api, err := apiclient.NewHTTPClient(c.baseURL, c.token, embeddingsDaemonHTTPClient)
+	if err != nil {
+		return err
+	}
+	query := &apiclient.PostAPIV1EmbeddingsGenerationsIDRetireQuery{}
+	if c.store != "" {
+		query.Store = new(c.store)
+	}
+	response, err := api.PostAPIV1EmbeddingsGenerationsIDRetireWithResponse(ctx, &apiclient.PostAPIV1EmbeddingsGenerationsIDRetireRequestOptions{
+		PathParams: &apiclient.PostAPIV1EmbeddingsGenerationsIDRetirePath{ID: id}, Query: query,
+		Body: &apiclient.EmbeddingsGenerationActionRequest{Force: new(force)},
+	})
+	if response == nil {
+		return err
+	}
+	return embeddingResponseError(response.StatusCode, response.Body, err)
 }
 
 func daemonEmbeddingStore(name string) string {
@@ -1007,59 +1057,11 @@ func daemonEmbeddingStore(name string) string {
 	return name
 }
 
-func (c embeddingsDaemonClient) storePath(path string) string {
-	if c.store == "" {
-		return path
+func embeddingResponseError(status int, body []byte, err error) error {
+	if status >= 300 {
+		return &daemonAPIError{status: status, message: daemonErrorMessage(status, body)}
 	}
-	return path + "?store=" + url.QueryEscape(c.store)
-}
-
-// do performs one HTTP call against the daemon's embeddings API,
-// marshaling reqBody (when non-nil) as the request body and decoding the
-// response into out (when non-nil). A non-2xx response becomes a
-// *daemonAPIError carrying the status and the server's "error" message.
-func (c embeddingsDaemonClient) do(
-	ctx context.Context, method, path string, reqBody, out any,
-) error {
-	var bodyReader io.Reader
-	if reqBody != nil {
-		data, err := json.Marshal(reqBody)
-		if err != nil {
-			return err
-		}
-		bodyReader = bytes.NewReader(data)
-	}
-	req, err := http.NewRequestWithContext(
-		ctx, method, strings.TrimSuffix(c.baseURL, "/")+path, bodyReader,
-	)
-	if err != nil {
-		return err
-	}
-	if reqBody != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	// The daemon's CSRF guard rejects mutating requests whose Origin is not
-	// in the allowlist. Setting Origin to the daemon's own baseURL satisfies
-	// that check for the CLI, which has no real browser origin.
-	req.Header.Set("Origin", c.baseURL)
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
-	}
-
-	resp, err := embeddingsDaemonHTTPClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(resp.Body)
-		return &daemonAPIError{status: resp.StatusCode, message: daemonErrorMessage(resp.StatusCode, body)}
-	}
-	if out == nil {
-		return nil
-	}
-	return json.UnmarshalRead(resp.Body, out)
+	return err
 }
 
 // daemonErrorMessage extracts the {"error": "..."} message huma's error

@@ -35,6 +35,21 @@ type ProjectInventory struct {
 	GovernedSessions int                   `json:"governed_sessions"`
 }
 
+// ProjectDateFilter limits the sessions used to browse projects and folders.
+// It does not limit the reach of a saved folder rule.
+type ProjectDateFilter struct {
+	DateFrom string
+	DateTo   string
+	Timezone string
+}
+
+func (f ProjectDateFilter) SessionFilter() SessionFilter {
+	return SessionFilter{
+		DateFrom: f.DateFrom, DateTo: f.DateTo, Timezone: f.Timezone,
+		IncludeEmpty: true, IncludeChildren: true,
+	}
+}
+
 // projectInventoryAgg is one raw project's aggregate over visible
 // (non-deleted) sessions, before display-label sanitization.
 type projectInventoryAgg struct {
@@ -50,11 +65,11 @@ type projectInventoryAgg struct {
 // inventory: session/machine/agent/cwd counts and activity bounds, plus
 // worktree-mapping-rule attribution (which enabled rules target each
 // project, and whether it was ever recorded as a rule's original_project).
-func (db *DB) GetProjectInventory(ctx context.Context) (ProjectInventory, error) {
+func (db *DB) GetProjectInventory(ctx context.Context, filter ProjectDateFilter) (ProjectInventory, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	agg, err := db.projectInventoryAggregate(ctx)
+	agg, err := db.projectInventoryAggregate(ctx, filter)
 	if err != nil {
 		return ProjectInventory{}, err
 	}
@@ -90,8 +105,11 @@ func (db *DB) GetProjectInventory(ctx context.Context) (ProjectInventory, error)
 // dialects.
 func (db *DB) projectInventoryAggregate(
 	ctx context.Context,
+	filter ProjectDateFilter,
 ) (map[string]projectInventoryAgg, error) {
-	rows, err := db.getReader().QueryContext(ctx, projectInventoryAggregateQuery())
+	where, args := BuildSessionBaseFilterSQL(filter.SessionFilter(), SQLiteQueryDialect())
+	query := strings.Replace(projectInventoryAggregateQuery(), "WHERE deleted_at IS NULL", "WHERE "+where, 1)
+	rows, err := db.getReader().QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("aggregating project inventory: %w", err)
 	}
@@ -267,6 +285,7 @@ func (db *DB) projectInventoryCandidateRows(
 		var row MappingEvaluationRow
 		if err := rows.Scan(
 			&row.SessionID, &row.Machine, &row.Project, &row.Cwd, &row.FilePath,
+			&row.ProjectAssigned,
 		); err != nil {
 			return nil, fmt.Errorf(
 				"scanning project inventory candidate session: %w", err)
@@ -292,7 +311,11 @@ func projectInventoryCandidateQuery(machineList []string) (string, []any) {
 		args[i] = m
 	}
 	query := `
-		SELECT id, machine, project, cwd, COALESCE(file_path, '')
+		SELECT id, machine, project, cwd, COALESCE(file_path, ''),
+			EXISTS (
+				SELECT 1 FROM session_project_assignments spa
+				WHERE spa.session_id = sessions.id
+			)
 		FROM sessions
 		WHERE deleted_at IS NULL
 		  AND machine IN (` + strings.Join(placeholders, ",") + `)`

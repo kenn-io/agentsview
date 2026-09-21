@@ -1,4 +1,33 @@
 {
+  "data_reclassify_session_preview_filtered_empty": "Aucune session à prévisualiser. Les sessions automatisées sont masquées ; utilisez le bouton de filtre pour les inclure.",
+  "data_batch_saving_progress": [
+    {
+      "declarations": [
+        "input saved",
+        "input count",
+        "local savedNumber = saved: number",
+        "local countNumber = count: number"
+      ],
+      "match": { "*": "Enregistrement de {savedNumber} sur {countNumber}…" }
+    }
+  ],
+  "data_candidate_worktree_prefix": "Préfixe de worktree",
+  "data_candidate_common_parent": "Dossier parent commun",
+  "data_candidate_paths_sample": "Extrait des chemins enregistrés.",
+  "data_candidate_observed_paths": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} dossier observé",
+        "countPlural=other": "{countNumber} dossiers observés"
+      }
+    }
+  ],
   "app_auth_title": "Authentification requise",
   "app_auth_description": "Ce serveur exige un token d'authentification. Saisissez l'auth_token depuis ~/.agentsview/config.toml ou AGENTSVIEW_AUTH_TOKEN.",
   "app_auth_placeholder": "Collez le token d'authentification",
@@ -258,6 +287,10 @@
   "message_content_copy_message": "Copier le message",
   "message_content_copied_message": "Message copié",
   "message_content_copied": "Copié !",
+  "message_content_code_collapsed_with_language": "Bloc de code replié · {language} · Développer",
+  "message_content_code_collapsed": "Bloc de code replié · Développer",
+  "message_content_code_expanded_with_language": "Bloc de code déplié · {language} · Replier",
+  "message_content_code_expanded": "Bloc de code déplié · Replier",
   "message_content_unpin_message": "Désépingler le message",
   "message_content_pin_message": "Épingler le message",
   "message_content_unpinned": "Désépinglé",
@@ -308,7 +341,6 @@
       }
     }
   ],
-  "parallel_group_each_duration": "≤ {duration} chacun",
   "parallel_group_running": "en cours...",
   "subagent_inline_label": "Session de sous-agent",
   "subagent_inline_message_count": [
@@ -324,6 +356,7 @@
   "subagent_inline_open_as_full_session": "Ouvrir en session complète",
   "subagent_inline_open_session": "Ouvrir la session",
   "subagent_inline_failed_to_load": "Échec du chargement",
+  "shared_failed_to_load": "Échec du chargement",
   "subagent_inline_loading": "Chargement...",
   "subagent_inline_no_messages": "Aucun message",
   "skill_block_label": "Skill : {name}",
@@ -420,6 +453,7 @@
   "sidebar_row_rename": "Renommer",
   "sidebar_row_open_in_new_tab": "Ouvrir dans un nouvel onglet",
   "sidebar_row_delete": "Supprimer",
+  "sidebar_row_change_project": "Changer de projet…",
   "shared_all_projects": "Tous les projets",
   "shared_project_filter_placeholder": "Filtrer les projets...",
   "shared_select_project": "Sélectionner un projet",
@@ -780,7 +814,7 @@
   "settings_search_empty": "Aucun paramètre correspondant",
   "settings_search_clear": "Effacer la recherche",
   "settings_search_result": "Affichage de {category}",
-  "settings_search_keywords_appearance": "thème contraste disposition texte police blocs theme contrast layout text font blocks",
+  "settings_search_keywords_appearance": "thème contraste disposition texte police blocs theme contrast layout text font blocks zoom",
   "settings_search_keywords_language": "langue paramètres régionaux traduction language locale translation",
   "settings_search_keywords_date_ranges": "date plage pages liées date range linked pages",
   "settings_search_keywords_terminal": "terminal reprise lancement exécutable arguments presse-papiers terminal resume launch binary clipboard",
@@ -791,6 +825,8 @@
   "settings_search_keywords_remote_access": "distant serveur connexion authentification jeton réseau remote server connection auth token network",
   "settings_loading": "Chargement des paramètres...",
   "settings_save_error_label": "Erreur",
+  "settings_load_failed": "Impossible de charger les paramètres",
+  "settings_save_failed": "Impossible d’enregistrer les paramètres",
   "settings_date_ranges_title": "Plages de dates",
   "settings_date_ranges_description": "Partager la sélection de dates entre Sessions, Consommation, Activité, Tendances et Qualité.",
   "settings_date_ranges_link": "Lier les plages de dates entre les pages",
@@ -806,6 +842,8 @@
   "settings_language_korean": "한국어",
   "settings_language_french": "Français",
   "settings_language_japanese": "日本語",
+  "settings_language_azerbaijani": "Azərbaycanca",
+  "settings_language_spanish": "Español",
   "settings_language_no_results": "Aucune langue trouvée",
   "nav_recent_edits": "Modifications récentes",
   "nav_data": "Données",
@@ -813,7 +851,7 @@
   "data_projects_heading": "Projets",
   "data_view_toggle_label": "Vue des données",
   "data_view_inventory": "Inventaire",
-  "data_view_rules": "Règles",
+  "data_view_rules": "Règles de correspondance des projets",
   "data_summary_projects": [
     {
       "declarations": [
@@ -842,6 +880,34 @@
       }
     }
   ],
+  "data_summary_machines": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} machine",
+        "countPlural=other": "{countNumber} machines"
+      }
+    }
+  ],
+  "data_summary_folder_suggestions": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} suggestion de dossier",
+        "countPlural=other": "{countNumber} suggestions de dossier"
+      }
+    }
+  ],
   "data_summary_governed": [
     {
       "declarations": [
@@ -856,6 +922,76 @@
       }
     }
   ],
+  "data_selection_hint": "Cliquez sur un projet, puis Maj-cliquez pour sélectionner une plage.",
+  "data_selection_count": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} projet sélectionné",
+        "countPlural=other": "{countNumber} projets sélectionnés"
+      }
+    }
+  ],
+  "data_selection_clear": "Effacer",
+  "data_batch_workspace_label": "Correction groupée de projets",
+  "data_batch_heading": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} projet sélectionné",
+        "countPlural=other": "{countNumber} projets sélectionnés"
+      }
+    }
+  ],
+  "data_batch_label": "Groupé",
+  "data_batch_folders_heading": "Dossiers sélectionnés",
+  "data_batch_folders_intro": "Dossiers observés regroupés par projet, puis par machine, avec les groupes les plus nombreux en premier sur chaque machine.",
+  "data_batch_outside_selection": "Cette correction concerne aussi des projets hors de votre sélection. Confirmez pour enregistrer les règles pour toutes les sessions correspondantes.",
+  "data_date_filter_scope": "Les dates filtrent la liste des projets, les suggestions de dossiers et les aperçus des sessions. Les corrections de dossiers peuvent aussi modifier des sessions hors de cette période.",
+  "data_batch_correction_heading": "Correction groupée",
+  "data_batch_correction_intro": "Tous les dossiers répertoriés recevront la destination choisie.",
+  "data_batch_folder_count": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} dossier",
+        "countPlural=other": "{countNumber} dossiers"
+      }
+    }
+  ],
+  "data_batch_target_project": "Associer les dossiers sélectionnés à",
+  "data_batch_saving": "Enregistrement de la correction groupée…",
+  "data_batch_save": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "Enregistrer {countNumber} correction",
+        "countPlural=other": "Enregistrer {countNumber} corrections"
+      }
+    }
+  ],
+  "data_batch_partial_save": "{saved} sur {count} enregistrées.",
+  "data_batch_saved": "Correction groupée enregistrée dans {project}",
   "data_filter_projects": "Filtrer les projets",
   "data_col_project": "Projet",
   "data_col_sessions": "Sessions",
@@ -890,8 +1026,15 @@
   "data_reclassify_candidates_failed": "Impossible de trouver les dossiers de session",
   "data_reclassify_no_candidates": "Aucun dossier de session trouvé pour ce projet.",
   "data_reclassify_choose_worktree": "Choisir un dossier",
-  "data_mapping_observed_folders": "Dossiers observés",
-  "data_mapping_definition": "Correspondance",
+  "data_mapping_observed_folders": "Suggestions de dossiers",
+  "data_reclassify_suggestions_intro": "Chemins suggérés à partir des sessions de ce projet.",
+  "data_mapping_definition": "Correction du projet",
+  "data_reclassify_use_for_project": "Utiliser pour ce projet",
+  "data_reclassify_evidence_snapshot": "Instantané",
+  "data_reclassify_evidence_aggregate": "Agrégat",
+  "data_reclassify_evidence_exact_cwd": "Répertoire exact",
+  "data_reclassify_evidence_unavailable": "Aucun préfixe utilisable",
+  "data_reclassify_evidence_suggestion": "Suggestion",
   "data_reclassify_candidate_sessions": [
     {
       "declarations": [
@@ -907,7 +1050,7 @@
     }
   ],
   "data_reclassify_cwd_unavailable": "Ce dossier ne peut pas être associé en toute sécurité, car il est indisponible ou représente la racine du système de fichiers.",
-  "data_reclassify_path_prefix": "Chemin du dossier",
+  "data_reclassify_path_prefix": "Préfixe du chemin",
   "data_reclassify_target_project": "Projet",
   "data_reclassify_use_custom_project": "Utiliser le projet « {query} »",
   "data_reclassify_path_unavailable": "Chemin indisponible",
@@ -972,18 +1115,64 @@
       }
     }
   ],
+  "data_reclassify_session_preview_count": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} aperçu de session",
+        "countPlural=other": "{countNumber} aperçus de sessions"
+      }
+    }
+  ],
+  "data_reclassify_session_preview_position": "{current} sur {count}",
+  "data_reclassify_session_preview_previous": "Session précédente",
+  "data_reclassify_session_preview_next": "Session suivante",
+  "data_reclassify_session_preview_loading": "Chargement de l'aperçu de la session…",
+  "data_reclassify_session_preview_failed": "Impossible de charger l'aperçu de la session",
+  "data_reclassify_session_preview_no_message": "Aucun message de session disponible",
+  "data_reclassify_session_preview_current_project": "Projet actuel",
+  "data_reclassify_session_preview_next_project": "Après correction",
+  "data_reclassify_session_preview_folder": "Dossier de la session",
+  "data_session_assignment_heading": "Projet de la session",
+  "data_session_assignment_intro": "Modifie uniquement cette session. Son dossier et les règles de dossier restent inchangés.",
+  "data_session_assignment_target": "Déplacer cette session vers",
+  "data_session_assignment_save": "Affecter la session",
+  "data_session_assignment_saving": "Affectation…",
+  "data_session_assignment_failed": "Impossible d’affecter la session",
+  "data_session_assignment_saved": "Session affectée à {project}",
+  "data_session_assignment_refresh_failed": "La session a été affectée, mais l’inventaire des projets n’a pas pu être actualisé.",
+  "data_session_assignment_manual": "Remplacement manuel",
+  "data_session_assignment_automatic": "Automatique",
+  "data_session_assignment_use_automatic": "Utiliser l’attribution automatique",
+  "data_session_assignment_clearing": "Restauration…",
+  "data_session_assignment_cleared": "Session restaurée dans {project}",
+  "data_session_assignment_clear_failed": "Échec de la restauration de l’attribution automatique",
   "data_reclassify_zero_matches": "Ce préfixe ne correspond à aucune session de l’archive.",
   "data_reclassify_conflict": "Les correspondances ont changé depuis l’aperçu. L’impact a été actualisé ; vérifiez-le avant d’appliquer.",
-  "data_reclassify_apply": "Enregistrer et appliquer",
-  "data_reclassify_applying": "Enregistrement et application…",
-  "data_reclassify_apply_failed": "Impossible d’enregistrer et d’appliquer la correspondance",
+  "data_reclassify_replaces_rule": "Cette correction remplace une règle de correspondance de projet existante.",
+  "data_reclassify_review_impact": "Vérifier l’impact",
+  "data_reclassify_back": "Retour",
+  "data_reclassify_confirm_save": "Confirmer et enregistrer",
+  "data_reclassify_cancel": "Annuler",
+  "data_reclassify_apply": "Enregistrer la correction",
+  "data_reclassify_applying": "Enregistrement de la correction…",
+  "data_reclassify_apply_failed": "Impossible d’enregistrer la correction",
+  "data_reclassify_saved": "Correction du projet enregistrée pour {project}",
+  "data_flash_success_label": "Succès",
   "data_reclassify_applied_refresh_failed": "La correspondance est enregistrée, mais l’inventaire des projets n’a pas pu être actualisé. Relancez seulement l’actualisation.",
   "data_reclassify_retry_refresh": "Réessayer l’actualisation",
   "data_reclassify_refreshing": "Actualisation…",
-  "data_reclassify_read_only": "Ce magasin est en lecture seule. Gérez les règles de classification depuis l’archive accessible en écriture qui ingère les sessions de cette machine.",
-  "data_reclassify_managed_in_rules": "Les correspondances créées ici peuvent être modifiées dans la vue Règles.",
-  "data_reclassify_open_rules": "Ouvrir les règles",
+  "data_reclassify_read_only": "Les modifications ne sont pas disponibles ici. Ouvrez l’Agents View source pour gérer les règles de correspondance des projets.",
+  "data_reclassify_managed_in_rules": "Cette correction sera enregistrée comme règle de correspondance de projet.",
+  "data_reclassify_open_rules": "Ouvrir les règles de correspondance",
   "data_workspace_all_projects": "Tous les projets",
+  "data_workspace_map_whole_project": "Tous les dossiers",
+  "data_workspace_correct_one_folder": "Un dossier",
   "data_workspace_close": "Fermer les détails du projet",
   "data_workspace_activity": "Activité",
   "data_workspace_activity_range": "{first} – {last}",
@@ -1006,7 +1195,6 @@
   "recent_edits_refresh": "Actualiser",
   "recent_edits_search_placeholder": "Filtrer par chemin de fichier",
   "recent_edits_clear_search": "Effacer la recherche par chemin de fichier",
-  "activity_insight_unavailable_read_only": "Indisponible en mode distant lecture seule",
   "activity_insight_waiting_server": "En attente de la version du serveur",
   "activity_insight_generate_insight": "Générer une analyse",
   "activity_insight_generation_failed": "Échec de la génération",
@@ -1032,14 +1220,12 @@
   "activity_model": "Modèle",
   "activity_agent": "Agent",
   "activity_min_unit": " min",
-  "activity_int_auto_split": "int {int} / auto {auto}",
   "activity_breakdown": "Répartition",
   "activity_view_in_data": "Afficher {project} dans Données",
   "activity_breakdown_metric": "Métrique de répartition",
   "activity_agent_min": "Agent-min",
   "activity_cost": "Coût",
   "activity_none_lower": "aucune",
-  "activity_int_auto_short": "{int} int / {auto} auto",
   "activity_peak_label": "pic {count}",
   "activity_agent_min_value": "{value} agent-min",
   "activity_no_sessions_selected_range": "Aucune session active dans la plage horaire sélectionnée.",
@@ -1053,6 +1239,15 @@
       }
     }
   ],
+  "activity_subagents": "Sous-agents",
+  "activity_subagent": "Sous-agent",
+  "activity_interactive_peak": "Pic interactif",
+  "activity_subagent_peak": "Pic des sous-agents",
+  "activity_automated_peak": "Pic automatisé",
+  "activity_combined_peak": "Pic global",
+  "activity_peak_at": "pic {count} à {time}",
+  "activity_all_sessions_overlay": "Superposition globale",
+  "activity_class_split": "int {int} / sous-agents {sub} / auto {auto}",
   "activity_concurrency": "Simultanéité",
   "activity_overlay": "Superposition",
   "activity_overlay_metric": "Métrique de superposition de simultanéité",
@@ -1068,6 +1263,22 @@
   "activity_session": "Session",
   "activity_automated_session": "Session automatisée",
   "activity_auto": "Auto",
+  "activity_session_kind_split": [
+    {
+      "declarations": [
+        "input interactive",
+        "input subagents",
+        "input subagentsLabel",
+        "input automated",
+        "local subagentPlural = subagents: plural"
+      ],
+      "selectors": ["subagentPlural"],
+      "match": {
+        "subagentPlural=one": "{interactive} interactives / {subagentsLabel} sous-agent / {automated} automatisées",
+        "subagentPlural=other": "{interactive} interactives / {subagentsLabel} sous-agents / {automated} automatisées"
+      }
+    }
+  ],
   "activity_interactive_automated_split": "{interactive} interactives / {automated} automatisées",
   "activity_untimed_count": "{count} sans durée",
   "activity_peak_concurrency": "Pic de simultanéité",
@@ -1322,7 +1533,6 @@
   "recall_page_generation_retire_message": "Retirer {model} ({fingerprint}) ? Ses entrées automatiques resteront archivées.",
   "recall_page_generation_action_error": "Impossible de mettre à jour la génération d’extraction : {error}",
   "session_vitals_title": "Analyse",
-  "session_vitals_subtitle": "Signes vitaux de la session",
   "session_vitals_close": "Fermer l'analyse de la session",
   "session_vitals_resize": "Redimensionner le panneau d'analyse de la session",
   "session_vitals_session": "Session",
@@ -1340,9 +1550,15 @@
   "session_vitals_jump_to_call": "Aller à l'appel",
   "session_vitals_turns": "tours",
   "session_vitals_subagents": "sous-agents",
+  "session_vitals_activity": "Activité par tour",
+  "session_vitals_activity_tool": "Exécution des outils",
+  "session_vitals_activity_unattributed": "Non attribué",
+  "session_vitals_activity_turn": "Tour {ordinal} · {duration}",
+  "session_vitals_not_measured": "Non mesuré",
+  "session_vitals_activity_hint": "Le temps sans limites de phase mesurées reste non attribué.",
   "session_vitals_time_spent": "Temps passé",
   "session_vitals_clear_category_filter": "effacer le filtre de catégorie",
-  "session_vitals_completed_turns_hint": "tours terminés · cliquez pour surligner",
+  "session_vitals_completed_turns_hint": "temps mesuré des outils · cliquez pour surligner",
   "session_vitals_timeline": "Chronologie",
   "session_vitals_click_marks_to_scroll": "cliquez sur les marques pour faire défiler",
   "session_vitals_jump_to_turn": "Aller au tour {category} à {time}",
@@ -1590,7 +1806,7 @@
   "insights_page_no_matching_generators": "Aucun générateur correspondant",
   "insights_page_optional_focus": "Focalisation facultative",
   "insights_page_focus_placeholder": "Affinez la recommandation sans modifier les faits notés",
-  "insights_page_generate_disabled": "La génération est désactivée en mode lecture seule",
+  "insights_page_generate_disabled": "La génération de rapports est indisponible pour cette archive",
   "insights_page_generate_title": "Générer une recommandation de qualité",
   "insights_page_generate": "Générer",
   "insights_page_loading_archive": "Chargement de l'archive...",
@@ -1735,6 +1951,12 @@
   "settings_session_providers_disabled": "Désactivé",
   "settings_session_providers_restart_notice": "Redémarrez le démon AgentsView et tout processus de surveillance d’envoi distinct pour appliquer ces modifications.",
   "settings_session_providers_save_failed": "Impossible de mettre à jour les fournisseurs de sessions. La sélection précédente reste active.",
+  "settings_session_providers_homes_title": "Répertoires personnels alternatifs",
+  "settings_session_providers_homes_hint": "Ajoutez un répertoire personnel d'agent, par exemple un {envVar} personnalisé. AgentsView en déduit automatiquement les répertoires de sessions.",
+  "settings_session_providers_homes_placeholder": "~/.{agent}-work",
+  "settings_session_providers_homes_add": "Ajouter un répertoire",
+  "settings_session_providers_homes_input_aria": "Nouveau répertoire personnel {provider}",
+  "settings_session_providers_homes_remove_aria": "Supprimer le répertoire {provider} {home}",
   "appearance_layout_default": "Par défaut",
   "appearance_layout_compact": "Compacte",
   "appearance_layout_stream": "Flux",
@@ -1929,6 +2151,7 @@
   "trends_per1k_messages": "Pour 1k messages",
   "trends_count": "Nombre",
   "trends_occurrences_per1k": "Occurrences / 1k messages",
+  "trends_no_occurrences_in_range": "Aucune occurrence dans cette plage",
   "trends_occurrences": "Occurrences",
   "trends_no_trend_data": "Aucune donnée de tendance",
   "trends_chart_aria_normalized": "Tendances d'occurrences des termes pour 1 000 messages",
@@ -2021,8 +2244,95 @@
   "activity_finalizing_report": "Finalisation du rapport…",
   "activity_next_sessions_page": "Sessions suivantes",
   "activity_sessions_load_failed": "Impossible de charger les sessions d’activité",
+  "activity_report_load_failed": "Impossible de charger le rapport d’activité",
+  "session_activity_load_failed": "Impossible de charger l’activité",
   "appearance_high_contrast": "Contraste élevé",
   "appearance_on": "Activé",
   "appearance_off": "Désactivé",
-  "appearance_text_size": "Taille du texte"
+  "appearance_zoom": "Zoom",
+  "settings_archive_content_title": "Contenu de l'archive",
+  "settings_archive_content_description": "Ce que l'ingestion conserve des résultats d'outils.",
+  "settings_search_keywords_archive_content": "archive contenu images rétention résultats outils substituts stockage retention tool results placeholders storage",
+  "settings_tool_result_images": "Images des résultats d'outils",
+  "settings_tool_result_images_keep": "Conserver",
+  "settings_tool_result_images_drop": "Supprimer",
+  "settings_tool_result_images_offload": "Stocker séparément",
+  "settings_tool_result_images_hint": "Les résultats déjà stockés gardent la règle appliquée lors de leur écriture, et revenir à Conserver ne restaure pas les données déjà supprimées. Lancez agentsview db migrate --images pour traiter les lignes existantes.",
+  "settings_tool_result_images_restart_notice": "Redémarrez le démon AgentsView pour appliquer ce changement aux nouvelles sessions ingérées.",
+  "settings_tool_images_title": "Images des résultats d'outils",
+  "settings_tool_images_description": "Images intégrées stockées dans les résultats d'outils.",
+  "settings_search_keywords_tool_images": "images résultats outils suppression nettoyage charges octets stockage",
+  "settings_image_cleanup_intro": "Prévisualisez les résultats d'outils stockés qui contiennent encore des charges d'images intégrées, puis remplacez ces charges par des espaces réservés lisibles.",
+  "settings_image_cleanup_project_label": "Le projet contient",
+  "settings_image_cleanup_project_placeholder": "Tous les projets",
+  "settings_image_cleanup_before_label": "Terminé avant",
+  "settings_image_cleanup_before_placeholder": "AAAA-MM-JJ",
+  "settings_image_cleanup_preview": "Prévisualiser",
+  "settings_image_cleanup_previewing": "Prévisualisation…",
+  "settings_image_cleanup_preview_failed": "La prévisualisation a échoué.",
+  "settings_image_cleanup_unavailable": "La suppression des images ne s'applique qu'aux archives locales sur cette machine.",
+  "settings_image_cleanup_proxy_denied": "La suppression des images doit s'exécuter avec AgentsView ouvert directement sur cette machine, et non via un proxy ou un port redirigé.",
+  "settings_image_cleanup_read_only": "Cette archive est en lecture seule, les lignes stockées ne peuvent pas être modifiées.",
+  "settings_image_cleanup_empty": "Aucun résultat d'outil stocké dans cette sélection ne contient de charge d'image intégrée.",
+  "settings_image_cleanup_sessions": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} session sélectionnée",
+        "countPlural=other": "{countLabel} sessions sélectionnées"
+      }
+    }
+  ],
+  "settings_image_cleanup_payloads": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} charge d'image",
+        "countPlural=other": "{countLabel} charges d'images"
+      }
+    }
+  ],
+  "settings_image_cleanup_by_project": "Par projet",
+  "settings_image_cleanup_column_project": "Projet",
+  "settings_image_cleanup_column_sessions": "Sessions",
+  "settings_image_cleanup_column_payloads": "Charges",
+  "settings_image_cleanup_column_stored": "Stocké",
+  "settings_image_cleanup_column_decoded": "Décodé",
+  "settings_image_cleanup_apply": "Supprimer les charges d'images",
+  "settings_image_cleanup_applying": "Suppression…",
+  "settings_image_cleanup_apply_failed": "La suppression des images ne s'est pas terminée. Certaines sessions ont peut-être déjà été modifiées. Prévisualisez à nouveau avant de réessayer.",
+  "settings_image_cleanup_busy": "Une autre opération de maintenance des archives est déjà en cours. Réessayez une fois qu'elle sera terminée.",
+  "settings_image_cleanup_confirm_title": "Supprimer les charges d'images stockées ?",
+  "settings_image_cleanup_confirm_close": "Fermer",
+  "settings_image_cleanup_confirm_scope": "Le nettoyage couvre toutes les sessions correspondant à ces filtres au démarrage, de sorte que de nouveaux contenus correspondants peuvent s'y ajouter après cette prévisualisation.",
+  "settings_image_cleanup_confirm_body": "Ceci réécrit les résultats d'outils stockés sélectionnés en place et ne peut pas être annulé. Les transcriptions des fournisseurs et les fichiers image autonomes ne sont pas touchés.",
+  "settings_image_cleanup_confirm_action": "Supprimer",
+  "settings_image_cleanup_cancel": "Annuler",
+  "settings_image_cleanup_applied": "Suppression des images terminée.",
+  "settings_image_cleanup_changed": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} session modifiée",
+        "countPlural=other": "{countLabel} sessions modifiées"
+      }
+    }
+  ],
+  "settings_image_cleanup_compact_note": "La suppression des charges réécrit les lignes stockées. La taille du fichier d'archive reste inchangée jusqu'à ce que vous exécutiez agentsview db compact.",
+  "appearance_render_unknown_xml_blocks": "Afficher les blocs XML inconnus en texte préformaté",
+  "go_to_session_title": "Accéder à une session",
+  "go_to_session_input_label": "ID ou UUID de session",
+  "go_to_session_placeholder": "Collez un ID ou UUID de session",
+  "go_to_session_submit": "Ouvrir la session",
+  "go_to_session_close": "Fermer l'accès à la session",
+  "go_to_session_empty": "Saisissez un ID ou UUID de session.",
+  "go_to_session_invalid": "Saisissez un ID ou UUID de session.",
+  "go_to_session_not_found": "Aucune session ne correspond à cet ID ou UUID.",
+  "go_to_session_ambiguous": "Plusieurs sessions correspondent à cet ID ou UUID. Ouvrez la session souhaitée avec un lien existant.",
+  "go_to_session_capped": "Trop de sessions correspondent à cet ID ou UUID. Ouvrez la session souhaitée avec un lien existant.",
+  "go_to_session_failed": "Impossible de rechercher cette session. Réessayez.",
+  "shortcuts_go_to_session": "Accéder à une session lorsque la recherche est fermée"
 }

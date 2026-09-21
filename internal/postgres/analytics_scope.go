@@ -71,7 +71,7 @@ func (s *Store) resolveAnalyticsMessageScope(
 		pb := &paramBuilder{}
 		placeholders := pgInPlaceholders(chunk, pb)
 		rows, err := s.pg.QueryContext(ctx, `
-			SELECT session_id, ordinal, role, is_system,
+			SELECT session_id, ordinal, role, COALESCE(source_subtype, ''), is_system,
 				COALESCE(model, ''), has_thinking, has_tool_use,
 				timestamp,
 				output_tokens, has_output_tokens, content_length,
@@ -88,13 +88,13 @@ func (s *Store) resolveAnalyticsMessageScope(
 
 		for rows.Next() {
 			var (
-				sessionID, role, model, content                    string
+				sessionID, role, sourceSubtype, model, content     string
 				ordinal, outputTokens, contentLength               int
 				isSystem, hasThinking, hasToolUse, hasOutputTokens bool
 				ts                                                 *time.Time
 			)
 			if err := rows.Scan(
-				&sessionID, &ordinal, &role, &isSystem, &model,
+				&sessionID, &ordinal, &role, &sourceSubtype, &isSystem, &model,
 				&hasThinking, &hasToolUse, &ts, &outputTokens,
 				&hasOutputTokens, &contentLength, &content,
 			); err != nil {
@@ -113,6 +113,7 @@ func (s *Store) resolveAnalyticsMessageScope(
 				SessionID:       sessionID,
 				Ordinal:         ordinal,
 				Role:            role,
+				SourceSubtype:   sourceSubtype,
 				Model:           model,
 				IsSystem:        isSystem,
 				Timestamp:       tsStr,

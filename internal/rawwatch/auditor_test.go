@@ -28,6 +28,7 @@ type auditProvider struct {
 	examinedEntries     int
 	planCalls           int
 	planErrorAt         int
+	planError           error
 }
 
 type partialAuditProvider struct {
@@ -176,6 +177,9 @@ func (p *auditProvider) PlanRawCapture(
 ) (parser.RawCapturePlan, error) {
 	p.planCalls++
 	if p.planErrorAt == p.planCalls {
+		if p.planError != nil {
+			return parser.RawCapturePlan{}, p.planError
+		}
 		return parser.RawCapturePlan{}, errors.New("injected plan failure")
 	}
 	return parser.RawCapturePlan{
@@ -184,6 +188,46 @@ func (p *auditProvider) PlanRawCapture(
 			Path: source.Key, LocalPath: filepath.Join(p.root, source.Key),
 		}},
 	}, nil
+}
+
+func TestAuditorContinuesAfterSourceChangesDuringCapture(t *testing.T) {
+	for _, full := range []bool{false, true} {
+		t.Run(fmt.Sprintf("full=%t", full), func(t *testing.T) {
+			root := t.TempDir()
+			for _, name := range []string{"a.jsonl", "b.jsonl"} {
+				require.NoError(t, os.WriteFile(filepath.Join(root, name), []byte(name), 0o600))
+			}
+			base := t.TempDir()
+			store, err := rawcheckpoint.OpenWithOptions(t.Context(), filepath.Join(base, "checkpoint.db"), rawcheckpoint.Options{
+				SpoolDir: filepath.Join(base, "spool"), MaxOutboxBytes: 1 << 20,
+			})
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, store.Close()) })
+			provider := newAuditProvider(root)
+			// Fail at Capture's plan call, after source identity was established.
+			provider.planErrorAt = 2
+			if full {
+				provider.planErrorAt = 3
+			}
+			provider.planError = rawcapture.ErrSourceChanged
+			auditor := NewAuditor(store, rawcapture.New(store), 32)
+			run := auditor.AuditProvider
+			if full {
+				run = auditor.AuditProviderFull
+			}
+
+			result, err := run(t.Context(), provider)
+			require.NoError(t, err)
+			assert.Equal(t, 2, result.Visited)
+			assert.Equal(t, 1, result.Captured)
+			assert.True(t, result.Complete)
+			// The skipped source remains discoverable on the next pass.
+			retry, err := run(t.Context(), provider)
+			require.NoError(t, err)
+			assert.Equal(t, 1, retry.Captured)
+			assert.Equal(t, 1, retry.Unchanged)
+		})
+	}
 }
 
 func newPartialAuditProvider(roots ...string) *partialAuditProvider {
@@ -287,6 +331,7 @@ func newRootCoverageFailure(
 	t *testing.T, maxOutboxBytes int64,
 ) (string, *rawcheckpoint.Store, string) {
 	t.Helper()
+
 	root := t.TempDir()
 	require.NoError(t, os.WriteFile(
 		filepath.Join(root, "session.jsonl"), []byte("session"), 0o600,
@@ -362,7 +407,7 @@ func TestAuditorFullReconciliationPreservesDegradedRootCoverageFailure(t *testin
 	blocker, err := store.ReserveCapture(t.Context(), rootID, maxOutboxBytes)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		require.NoError(t, store.ReleaseReservation(context.Background(), blocker.ID))
+		require.NoError(t, store.ReleaseReservation(context.WithoutCancel(t.Context()), blocker.ID))
 	})
 
 	result, err := NewAuditor(store, rawcapture.New(store), 1).

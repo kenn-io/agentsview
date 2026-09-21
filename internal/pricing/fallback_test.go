@@ -22,6 +22,7 @@ func testRate(dollars string) money.Money {
 
 func assertFlatPricing(t *testing.T, want, got ModelPricing) {
 	t.Helper()
+
 	assert.Equal(t, want.ModelPattern, got.ModelPattern)
 	assert.Equal(t, want.InputPerMTok, got.InputPerMTok)
 	assert.Equal(t, want.OutputPerMTok, got.OutputPerMTok)
@@ -180,14 +181,14 @@ func TestFallbackPricing_DeepClonesPricingBands(t *testing.T) {
 
 func TestFallbackPricing_SortedByModelPattern(t *testing.T) {
 	prices := requireEmbeddedFallbackPricing(t)
-	require.Greater(t, len(prices), 0, "FallbackPricing returned empty")
+	require.NotEmpty(t, prices, "FallbackPricing returned empty")
 
 	for i := 1; i < len(prices); i++ {
 		prev := prices[i-1].ModelPattern
 		cur := prices[i].ModelPattern
-		assert.False(
+		assert.LessOrEqual(
 			t,
-			strings.Compare(prev, cur) > 0,
+			strings.Compare(prev, cur), 0,
 			"fallback pricing should be sorted for model pattern: %q before %q", prev, cur,
 		)
 	}

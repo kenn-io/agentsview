@@ -1,7 +1,6 @@
 package activity
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -24,12 +23,18 @@ func TestApplyUsage_DedupAndDayFilter(t *testing.T) {
 	// no claude IDs but share a dedup key -> must count once. A row outside
 	// the range is dropped without claiming a key.
 	usage := []UsageRow{
-		{SessionID: "a", Model: "m1", Timestamp: "2026-06-16T10:00:00Z",
-			InputTokens: 1000, OutputTokens: 100, Cost: money.MustParseDollars("1.0"), ClaudeMessageID: "x", ClaudeRequestID: "r"},
-		{SessionID: "a", Model: "m1", Timestamp: "2026-06-16T10:00:00Z",
-			InputTokens: 1000, OutputTokens: 100, Cost: money.MustParseDollars("1.0"), ClaudeMessageID: "x", ClaudeRequestID: "r"},
-		{SessionID: "a", Model: "m1", Timestamp: "2026-06-15T23:00:00Z",
-			InputTokens: 9999, OutputTokens: 999, Cost: money.MustParseDollars("9.0"), UsageDedupKey: "k-out"},
+		{
+			SessionID: "a", Model: "m1", Timestamp: "2026-06-16T10:00:00Z",
+			InputTokens: 1000, OutputTokens: 100, Cost: money.MustParseDollars("1.0"), ClaudeMessageID: "x", ClaudeRequestID: "r",
+		},
+		{
+			SessionID: "a", Model: "m1", Timestamp: "2026-06-16T10:00:00Z",
+			InputTokens: 1000, OutputTokens: 100, Cost: money.MustParseDollars("1.0"), ClaudeMessageID: "x", ClaudeRequestID: "r",
+		},
+		{
+			SessionID: "a", Model: "m1", Timestamp: "2026-06-15T23:00:00Z",
+			InputTokens: 9999, OutputTokens: 999, Cost: money.MustParseDollars("9.0"), UsageDedupKey: "k-out",
+		},
 	}
 	start := mustStart(t, "2026-06-16T00:00:00Z")
 	end := mustStart(t, "2026-06-17T00:00:00Z")
@@ -133,7 +138,7 @@ func TestCanonicalSessionTokenCoverageCreditsEquivalentSnapshotCategories(t *tes
 	}
 
 	coverage, err := CanonicalSessionTokenCoverageContext(
-		context.Background(), usage)
+		t.Context(), usage)
 	require.NoError(t, err)
 
 	want := SessionTokenCoverage{OutputTokens: 100, PeakContextTokens: 1400}
@@ -154,7 +159,7 @@ func TestCanonicalSessionTokenCoverageCreditsGenericDuplicateCategories(t *testi
 	}
 
 	coverage, err := CanonicalSessionTokenCoverageContext(
-		context.Background(), usage)
+		t.Context(), usage)
 	require.NoError(t, err)
 
 	want := SessionTokenCoverage{OutputTokens: 80, PeakContextTokens: 800}
@@ -243,12 +248,16 @@ func TestDedupUsagePreservesWebSearchesFromEarlierClaudeSnapshot(t *testing.T) {
 func TestApplyUsage_DedupBySourceUUIDFallback(t *testing.T) {
 	p := baseParams(t, "2026-06-16", "UTC")
 	usage := []UsageRow{
-		{SessionID: "earlier", Model: "m1", Timestamp: "2026-06-16T10:00:00Z",
+		{
+			SessionID: "earlier", Model: "m1", Timestamp: "2026-06-16T10:00:00Z",
 			OutputTokens: 500, Cost: money.MustParseDollars("5.0"), Agent: "claude",
-			ClaudeMessageID: "dup-m", SourceUUID: "src-dup"},
-		{SessionID: "later", Model: "m1", Timestamp: "2026-06-16T10:01:00Z",
+			ClaudeMessageID: "dup-m", SourceUUID: "src-dup",
+		},
+		{
+			SessionID: "later", Model: "m1", Timestamp: "2026-06-16T10:01:00Z",
 			OutputTokens: 900, Cost: money.MustParseDollars("9.0"), Agent: "claude",
-			ClaudeMessageID: "dup-m", SourceUUID: "src-dup"},
+			ClaudeMessageID: "dup-m", SourceUUID: "src-dup",
+		},
 	}
 	start := mustStart(t, "2026-06-16T00:00:00Z")
 	end := mustStart(t, "2026-06-17T00:00:00Z")

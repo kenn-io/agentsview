@@ -13,9 +13,8 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
-	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/postgres"
+	"go.kenn.io/agentsview/internal/storage"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
@@ -41,12 +40,13 @@ func newPushProgressStreamSender[P any](send func(P)) func(P) {
 	}
 }
 
-// newPGPushProgressLogger returns an onProgress callback that logs pg push
-// progress at most once per pushProgressLogInterval, phase-aware so the
-// vector phase is distinguishable from the session phase.
-func newPGPushProgressLogger() func(postgres.PushProgress) {
+// newReplicaPushProgressLogger returns an onProgress callback that logs
+// replica push progress at most once per pushProgressLogInterval, phase-aware
+// so the vector phase is distinguishable from the session phase. name is the
+// backend's CLI verb, e.g. "pg".
+func newReplicaPushProgressLogger(name string) func(storage.PushProgress) {
 	var last time.Time
-	return func(p postgres.PushProgress) {
+	return func(p storage.PushProgress) {
 		if time.Since(last) < pushProgressLogInterval {
 			return
 		}
@@ -54,43 +54,54 @@ func newPGPushProgressLogger() func(postgres.PushProgress) {
 		switch p.Phase {
 		case "preparing":
 			if p.SessionsTotal == 0 {
-				log.Printf("pg push: preparing (sync state, metadata, fingerprints)")
+				log.Printf("%s push: preparing (sync state, metadata, fingerprints)", name)
 				return
 			}
-			log.Printf("pg push: preparing %d/%d session(s)",
-				p.SessionsDone, p.SessionsTotal)
+			log.Printf("%s push: preparing %d/%d session(s)",
+				name, p.SessionsDone, p.SessionsTotal)
 		case "vectors":
-			log.Printf("pg push: vectors %d/%d session(s) scanned, %d chunks",
-				p.VectorSessionsDone, p.VectorSessionsTotal, p.VectorChunksPushed)
+			log.Printf("%s push: vectors %d/%d session(s) scanned, %d chunks",
+				name, p.VectorSessionsDone, p.VectorSessionsTotal, p.VectorChunksPushed)
 		default:
-			log.Printf("pg push: %d/%d session(s), %d messages",
-				p.SessionsDone, p.SessionsTotal, p.MessagesDone)
+			log.Printf("%s push: %d/%d session(s), %d messages",
+				name, p.SessionsDone, p.SessionsTotal, p.MessagesDone)
 		}
 	}
 }
 
-// newDuckDBPushProgressLogger is newPGPushProgressLogger's DuckDB analog.
-func newDuckDBPushProgressLogger() func(duckdbsync.PushProgress) {
+// newMirrorPushProgressLogger is newReplicaPushProgressLogger's mirror analog.
+func newMirrorPushProgressLogger(name string) func(storage.MirrorPushProgress) {
 	var last time.Time
-	return func(p duckdbsync.PushProgress) {
+	return func(p storage.MirrorPushProgress) {
 		if time.Since(last) < pushProgressLogInterval {
 			return
 		}
 		last = time.Now()
-		log.Printf("duckdb push: %d/%d session(s), %d messages",
-			p.SessionsDone, p.SessionsTotal, p.MessagesDone)
+		log.Printf("%s push: %d/%d session(s), %d messages",
+			name, p.SessionsDone, p.SessionsTotal, p.MessagesDone)
 	}
 }
 
+// registerPushRoutes exposes one daemon-delegated push route per registered
+// backend: /api/v1/push/<replica name> for each replica and
+// /api/v1/push/<mirror name> for the mirror. A server built without backends
+// has no push routes.
 func (s *Server) registerPushRoutes() {
-	group := newRouteGroup(s.api, "/api/v1/push", "Push")
+	group := huma.NewGroup(s.api, "/api/v1/push")
+	configureRouteGroup(group, "Push")
 
-	s.stream(group, http.MethodPost, "/pg",
-		"Push to PostgreSQL", s.humaPGPush, streamJSONResponse(),
-	)
-	s.stream(group, http.MethodPost, "/duckdb",
-		"Push to DuckDB", s.humaDuckDBPush, streamJSONResponse(),
-	)
+	for _, replica := range s.replicas {
+		s.stream(group, http.MethodPost, "/"+replica.Name(),
+			"Push to "+replica.DisplayName(),
+			s.replicaPushHandler(replica), streamJSONResponse(),
+		)
+	}
+	if s.mirror != nil {
+		s.stream(group, http.MethodPost, "/"+s.mirror.Name(),
+			"Push to "+s.mirror.DisplayName(),
+			s.humaMirrorPush, streamJSONResponse(),
+		)
+	}
 }
 
 // runPushStream executes run once and writes its outcome to the client: SSE
@@ -148,39 +159,75 @@ type daemonPushInput struct {
 }
 
 type daemonPushRequest struct {
-	Full                   bool                 `json:"full"`
-	Projects               []string             `json:"projects,omitempty"`
-	ExcludeProjects        []string             `json:"exclude_projects,omitempty"`
-	PG                     *config.PGConfig     `json:"pg,omitempty"`
-	DuckDB                 *config.DuckDBConfig `json:"duckdb,omitempty"`
-	SyncStateTarget        string               `json:"sync_state_target,omitempty"`
-	MigrateLegacySyncState bool                 `json:"migrate_legacy_sync_state,omitzero"`
+	Full            bool     `json:"full"`
+	Projects        []string `json:"projects,omitempty"`
+	ExcludeProjects []string `json:"exclude_projects,omitempty"`
+	// Replica is the remote target a replica push writes to. Omitted, the
+	// daemon pushes to its own default configured target for that backend.
+	Replica *daemonReplicaTarget `json:"replica,omitempty"`
+	DuckDB  *config.DuckDBConfig `json:"duckdb,omitempty"`
+	// SyncStateTarget and MigrateLegacySyncState scope the archive-side push
+	// watermarks; see storage.ReplicaTargetRef.
+	SyncStateTarget        string `json:"sync_state_target,omitempty"`
+	MigrateLegacySyncState bool   `json:"migrate_legacy_sync_state,omitzero"`
 	// NoVectors carries the CLI --no-vectors flag, which has no daemon-side
 	// flag of its own, into the push handler's vector-source gate.
 	NoVectors bool `json:"no_vectors,omitzero"`
 	// ScopeVectorsToChangedSessions is set by change-triggered watch
 	// pushes so the vector phase reads state only for the changed
-	// relational sessions (see postgres.PushOptions).
+	// relational sessions (see storage.PushOptions).
 	ScopeVectorsToChangedSessions bool `json:"scope_vectors_to_changed_sessions,omitzero"`
 	// LastReconciledVectorGeneration travels with a scoped push so this
-	// request's fresh Sync can promote to generation-wide when the active
-	// generation id has changed (see postgres.PushOptions).
+	// request's fresh pusher can promote to generation-wide when the active
+	// generation id has changed (see storage.PushOptions).
 	LastReconciledVectorGeneration int64 `json:"last_reconciled_vector_generation,omitzero"`
-	// Automatic is set by the CLI's watch-mode DuckDB pushes: a mirror
+	// Automatic is set by the CLI's watch-mode mirror pushes: a mirror
 	// held by a live serve process defers instead of rebuilding the whole
 	// archive on every changed batch, and archive-scale diagnostics are
-	// skipped (see duckdbsync.SyncOptions.Automatic). Explicit pushes
+	// skipped (see storage.MirrorPushOptions.Automatic). Explicit pushes
 	// leave it unset and do neither.
 	Automatic     bool                        `json:"automatic,omitzero"`
 	WatchBatch    *syncpkg.WatchBatch         `json:"watch_batch,omitempty"`
 	WatchRecovery *syncpkg.WatchRecoveryScope `json:"watch_recovery,omitempty"`
 }
 
+// daemonReplicaTarget is the wire shape of a delegated push's remote target.
+// push_vectors is optional: omitted means the target accepts the vector
+// phase, matching the config default, and an explicit false opts out.
+type daemonReplicaTarget struct {
+	URL           string `json:"url"`
+	Schema        string `json:"schema,omitempty"`
+	MachineName   string `json:"machine_name"`
+	AllowInsecure bool   `json:"allow_insecure,omitzero"`
+	PushVectors   *bool  `json:"push_vectors,omitempty"`
+}
+
+func (t daemonReplicaTarget) target() storage.ReplicaTarget {
+	return storage.ReplicaTarget{
+		URL:           t.URL,
+		Schema:        t.Schema,
+		MachineName:   t.MachineName,
+		AllowInsecure: t.AllowInsecure,
+		PushVectors:   t.PushVectors == nil || *t.PushVectors,
+	}
+}
+
 // WithVectorPushSource wires the local vectors.db push source used by the
-// daemon's pg push handler. Nil (the default) leaves the vector push phase
-// disabled, e.g. when [vector] is not configured.
-func WithVectorPushSource(src postgres.VectorPushSource) Option {
+// daemon's replica push handlers. Nil (the default) leaves the vector push
+// phase disabled, e.g. when [vector] is not configured.
+func WithVectorPushSource(src storage.VectorPushSource) Option {
 	return func(s *Server) { s.vectorPushSource = src }
+}
+
+// WithReplicas registers the remote replica backends the daemon can push to.
+// Each gets a /api/v1/push/<name> route.
+func WithReplicas(replicas ...storage.Replica) Option {
+	return func(s *Server) { s.replicas = append(s.replicas, replicas...) }
+}
+
+// WithMirror registers the derived mirror backend the daemon can push to.
+func WithMirror(mirror storage.Mirror) Option {
+	return func(s *Server) { s.mirror = mirror }
 }
 
 func (s *Server) localPushTarget() (*db.DB, error) {
@@ -194,24 +241,32 @@ func (s *Server) localPushTarget() (*db.DB, error) {
 	return local, nil
 }
 
-// pgPushVectorSource returns the vector push source to attach for this push,
-// or nil when the phase is gated off: no source is wired ([vector] disabled),
-// the target opts out via push_vectors=false, or the caller passed
-// --no-vectors. A nil source leaves postgres.Sync's vector phase skipped.
-func (s *Server) pgPushVectorSource(
-	pgCfg config.PGConfig, noVectors bool,
-) postgres.VectorPushSource {
-	if s.vectorPushSource == nil || !pgCfg.PushVectorsEnabled() || noVectors {
+// replicaPushVectorSource returns the vector push source to attach for this
+// push, or nil when the phase is gated off: no source is wired ([vector]
+// disabled), the target opts out via push_vectors=false, or the caller passed
+// --no-vectors. A nil source leaves the pusher's vector phase skipped.
+func (s *Server) replicaPushVectorSource(
+	target storage.ReplicaTarget, noVectors bool,
+) storage.VectorPushSource {
+	if s.vectorPushSource == nil || !target.PushVectors || noVectors {
 		return nil
 	}
 	return s.vectorPushSource
 }
 
-func (s *Server) pgPushConfig(req daemonPushRequest) (config.PGConfig, error) {
-	if req.PG != nil {
-		return *req.PG, nil
+// replicaPushTarget resolves the target a replica push writes to: the one in
+// the request, else the daemon's own default configured target.
+func (s *Server) replicaPushTarget(
+	replica storage.Replica, req daemonPushRequest,
+) (storage.ReplicaTarget, error) {
+	if req.Replica != nil {
+		return req.Replica.target(), nil
 	}
-	return s.cfg.ResolvePG()
+	target, err := storage.DefaultTarget(replica, s.cfg)
+	if err != nil {
+		return storage.ReplicaTarget{}, err
+	}
+	return target.Target, nil
 }
 
 // duckDBPushConfig resolves the DuckDB config a daemon push writes to. The
@@ -229,7 +284,7 @@ func (s *Server) pgPushConfig(req daemonPushRequest) (config.PGConfig, error) {
 // cwd, so a configured relative path could absolutize differently in the
 // CLI and the daemon and spuriously fail the equality check. The mismatch
 // rejection stays for third-party API callers.
-func (s *Server) duckDBPushConfig(
+func (s *Server) mirrorPushConfig(
 	req daemonPushRequest,
 ) (config.DuckDBConfig, error) {
 	resolved, err := s.cfg.ResolveDuckDB()
@@ -267,8 +322,8 @@ func normalizeDuckDBMirrorPath(path string) string {
 	return abs
 }
 
-func duckDBPushSyncOptions(req daemonPushRequest) duckdbsync.SyncOptions {
-	return duckdbsync.SyncOptions{
+func mirrorPushOptions(req daemonPushRequest) storage.MirrorPushOptions {
+	return storage.MirrorPushOptions{
 		Projects:        req.Projects,
 		ExcludeProjects: req.ExcludeProjects,
 		Automatic:       req.Automatic,
@@ -431,11 +486,33 @@ func (s *Server) syncThenRunForPush(
 		return err
 	}
 	if s.localResyncRunner == nil || (!full && !local.NeedsResync()) {
+		currentArchive := !full && !local.NeedsResync()
 		stats, err := engine.SyncThenRun(ctx, full, nil, work)
-		if err == nil {
-			err = requireProcessingComplete(stats)
+		if err != nil || stats.ProcessingComplete() {
+			return err
 		}
-		return err
+		incomplete := requireProcessingComplete(stats)
+		if !currentArchive {
+			return incomplete
+		}
+		// Local sync owns retries for failed sources. An unscoped mirror push
+		// must report its own outcome so the client does not repeat a completed
+		// copy or lose row-level errors from its result. SyncThenRun skips work
+		// on incomplete processing, so copy the archive under its lock here.
+		pushErr := engine.RunExclusiveFlushed(func() error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if local.NeedsResync() {
+				return incomplete
+			}
+			return work(false)
+		})
+		if pushErr != nil {
+			return errors.Join(incomplete, pushErr)
+		}
+		log.Printf("local ingestion warning during archive push: %v", incomplete)
+		return nil
 	}
 	if _, err := s.runResyncWithFallback(ctx, engine, nil); err != nil {
 		return err
@@ -446,11 +523,27 @@ func (s *Server) syncThenRunForPush(
 	return engine.RunExclusiveFlushed(func() error { return work(true) })
 }
 
-func (s *Server) humaPGPush(
+// replicaPushHandler builds the daemon-delegated push handler for one
+// replica backend. The handler validates the request before the stream body
+// flushes a 200, brings the archive current, then runs the backend's pusher
+// against the daemon's archive under the sync lock.
+func (s *Server) replicaPushHandler(
+	replica storage.Replica,
+) func(context.Context, *daemonPushInput) (*huma.StreamResponse, error) {
+	return func(
+		ctx context.Context, in *daemonPushInput,
+	) (*huma.StreamResponse, error) {
+		return s.humaReplicaPush(ctx, replica, in)
+	}
+}
+
+func (s *Server) humaReplicaPush(
 	ctx context.Context,
+	replica storage.Replica,
 	in *daemonPushInput,
 ) (*huma.StreamResponse, error) {
-	if err := postgres.ValidateProjectFilters(
+	name := replica.Name()
+	if err := storage.ValidateProjectFilters(
 		in.Body.Projects,
 		in.Body.ExcludeProjects,
 	); err != nil {
@@ -466,28 +559,33 @@ func (s *Server) humaPGPush(
 	if local.WriterClosed() {
 		return nil, writerClosedError()
 	}
-	pgCfg, err := s.pgPushConfig(in.Body)
+	target, err := s.replicaPushTarget(replica, in.Body)
 	if err != nil {
 		return nil, apiError(http.StatusBadRequest, err.Error())
 	}
-	if pgCfg.URL == "" {
-		return nil, apiError(http.StatusBadRequest, "pg push: url not configured")
+	if target.URL == "" {
+		return nil, apiError(http.StatusBadRequest, name+" push: url not configured")
+	}
+	// Reject a target the backend would refuse before the stream flushes a
+	// 200 and before the local sync pass runs.
+	if err := replica.ValidateTarget(target); err != nil {
+		return nil, apiError(http.StatusBadRequest, name+" push: "+err.Error())
 	}
 	if err := validatePushWatchScope(ctx, in.Body, s.ingestionConfig()); err != nil {
 		return nil, apiError(http.StatusBadRequest, err.Error())
 	}
 
-	engine := s.syncEngineForLocal(local)
-	vectorSource := s.pgPushVectorSource(pgCfg, in.Body.NoVectors)
+	engine := s.syncEngineForLocal(ctx, local)
+	vectorSource := s.replicaPushVectorSource(target, in.Body.NoVectors)
 	body := in.Body
 	return &huma.StreamResponse{Body: func(hctx huma.Context) {
 		runPushStream(hctx, func(
-			streamProgress func(postgres.PushProgress),
+			streamProgress func(storage.PushProgress),
 		) (any, error) {
 			onProgress := composePushProgress(
-				newPGPushProgressLogger(), streamProgress,
+				newReplicaPushProgressLogger(name), streamProgress,
 			)
-			var result postgres.PushResult
+			var result storage.PushResult
 			err := s.syncThenRunForPush(
 				ctx, engine, local, body.Full, body.WatchBatch, body.WatchRecovery,
 				func(forceFull bool) error {
@@ -500,10 +598,8 @@ func (s *Server) humaPGPush(
 					if ctxErr := ctx.Err(); ctxErr != nil {
 						return ctxErr
 					}
-					ps, err := postgres.New(
-						pgCfg.URL, pgCfg.Schema, local,
-						pgCfg.MachineName, pgCfg.AllowInsecure,
-						postgres.SyncOptions{
+					pusher, err := replica.NewPusher(
+						ctx, target, local, storage.PusherOptions{
 							Projects:               body.Projects,
 							ExcludeProjects:        body.ExcludeProjects,
 							SyncStateTarget:        body.SyncStateTarget,
@@ -514,11 +610,11 @@ func (s *Server) humaPGPush(
 					if err != nil {
 						return err
 					}
-					defer ps.Close()
-					if err := ps.EnsureSchema(ctx); err != nil {
+					defer pusher.Close()
+					if err := pusher.EnsureSchema(ctx); err != nil {
 						return err
 					}
-					result, err = ps.PushWithOptions(ctx, postgres.PushOptions{
+					result, err = pusher.PushWithOptions(ctx, storage.PushOptions{
 						Full: forceFull,
 						ScopeVectorsToChangedSessions: body.
 							ScopeVectorsToChangedSessions,
@@ -533,11 +629,11 @@ func (s *Server) humaPGPush(
 	}}, nil
 }
 
-func (s *Server) humaDuckDBPush(
+func (s *Server) humaMirrorPush(
 	ctx context.Context,
 	in *daemonPushInput,
 ) (*huma.StreamResponse, error) {
-	if err := postgres.ValidateProjectFilters(
+	if err := storage.ValidateProjectFilters(
 		in.Body.Projects,
 		in.Body.ExcludeProjects,
 	); err != nil {
@@ -548,35 +644,35 @@ func (s *Server) humaDuckDBPush(
 		return nil, err
 	}
 	// Reject before the stream body flushes a 200 so SSE clients see the
-	// 503 + Retry-After (mirrors humaPGPush).
+	// 503 + Retry-After (mirrors humaReplicaPush).
 	if local.WriterClosed() {
 		return nil, writerClosedError()
 	}
-	duckCfg, err := s.duckDBPushConfig(in.Body)
+	duckCfg, err := s.mirrorPushConfig(in.Body)
 	if err != nil {
 		return nil, apiError(http.StatusBadRequest, err.Error())
 	}
-	if err := duckdbsync.ValidatePushTarget(duckCfg); err != nil {
+	if err := s.mirror.ValidatePushTarget(duckCfg); err != nil {
 		return nil, apiError(http.StatusBadRequest, err.Error())
 	}
 
-	engine := s.syncEngineForLocal(local)
-	opts := duckDBPushSyncOptions(in.Body)
+	engine := s.syncEngineForLocal(ctx, local)
+	opts := mirrorPushOptions(in.Body)
 	body := in.Body
+	name := s.mirror.Name()
 	return &huma.StreamResponse{Body: func(hctx huma.Context) {
 		runPushStream(hctx, func(
-			streamProgress func(duckdbsync.PushProgress),
+			streamProgress func(storage.MirrorPushProgress),
 		) (any, error) {
 			onProgress := composePushProgress(
-				newDuckDBPushProgressLogger(), streamProgress,
+				newMirrorPushProgressLogger(name), streamProgress,
 			)
-			var result duckdbsync.PushResult
+			var result storage.MirrorPushResult
 			err := s.syncThenRunForPush(ctx, engine, local, body.Full, nil, nil,
 				func(forceFull bool) error {
 					var pushErr error
-					result, pushErr = duckdbsync.Push(
-						ctx, duckCfg.Path, local, duckCfg.MachineName,
-						opts, forceFull, onProgress,
+					result, pushErr = s.mirror.Push(
+						ctx, duckCfg, local, opts, forceFull, onProgress,
 					)
 					return pushErr
 				})

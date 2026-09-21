@@ -39,6 +39,14 @@
       name: "ja",
       label: m.settings_language_japanese(),
     },
+    {
+      name: "az",
+      label: m.settings_language_azerbaijani(),
+    },
+    {
+      name: "es",
+      label: m.settings_language_spanish(),
+    },
   ]);
 
   function handleLocaleSelect(value: string) {

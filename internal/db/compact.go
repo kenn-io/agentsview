@@ -5,7 +5,8 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -360,7 +361,7 @@ func (db *DB) Compact(ctx context.Context, options CompactOptions) (result Compa
 		}
 		return result, primary
 	}
-	if err := db.installCompactCandidate(op); err != nil {
+	if err := db.installCompactCandidate(ctx, op); err != nil {
 		return result, err
 	}
 	if compactTestHookAfterInstall != nil {
@@ -371,12 +372,12 @@ func (db *DB) Compact(ctx context.Context, options CompactOptions) (result Compa
 	// the caller (an HTTP request, a Ctrl-C'd CLI) has gone away.
 	opCtx := context.WithoutCancel(ctx)
 	if err := db.verifyReopenedArchive(opCtx, op.verification); err != nil {
-		return result, db.rollbackCompactInstall(
+		return result, db.rollbackCompactInstall(ctx,
 			fmt.Errorf("verify reopened archive: %w", err), op)
 	}
 	op.manifest.Phase = compactPhaseCommitted
 	if err := writeCompactManifest(op.manifestPath, op.manifest); err != nil {
-		return result, db.rollbackCompactInstall(
+		return result, db.rollbackCompactInstall(ctx,
 			fmt.Errorf("record committed archive compaction: %w", err), op)
 	}
 	// Commit point: the compacted archive is authoritative from here on.
@@ -631,9 +632,9 @@ func checkpointWALTruncateConn(ctx context.Context, conn *sql.DB) error {
 // every pool, rename the staged copy over the archive, and reopen with the
 // write barrier still up. On failure the unchanged (or restored) original is
 // serving again before the error returns.
-func (db *DB) installCompactCandidate(op *compactOperation) error {
+func (db *DB) installCompactCandidate(ctx context.Context, op *compactOperation) error {
 	db.mu.Lock()
-	if err := db.closeConnectionsLocked(); err != nil {
+	if err := db.closeConnectionsLocked(ctx); err != nil {
 		return db.reopenUnchangedAfterSwapFailureLocked(
 			fmt.Errorf("close archive connections: %w", err), op)
 	}
@@ -728,9 +729,9 @@ func (db *DB) restoreOriginalAfterSwapFailureLocked(primary error, op *compactOp
 // rollbackCompactInstall undoes an installed but not yet committed
 // replacement. Writes have been barred since before the backup was taken, so
 // restoring the backup is lossless.
-func (db *DB) rollbackCompactInstall(primary error, op *compactOperation) error {
+func (db *DB) rollbackCompactInstall(ctx context.Context, primary error, op *compactOperation) error {
 	db.mu.Lock()
-	if err := db.closeConnectionsLocked(); err != nil {
+	if err := db.closeConnectionsLocked(ctx); err != nil {
 		// The installed candidate keeps serving reads; the barrier stays up
 		// and the prepared manifest lets startup recovery finish the decision.
 		reopenErr := db.reopenLockedWithBarrier(true)
@@ -1157,7 +1158,7 @@ func compactManifestPath(databasePath string) string {
 }
 
 func writeCompactManifest(path string, manifest compactManifest) error {
-	data, err := json.MarshalIndent(manifest, "", "  ")
+	data, err := json.Marshal(manifest, jsontext.WithIndent("  "))
 	if err != nil {
 		return err
 	}
@@ -1382,7 +1383,7 @@ func compactRecoveryFileState(
 		return false, nil
 	}
 	if err := verifyArchiveFile(context.Background(), path, expected); err != nil {
-		return false, nil
+		return false, nil //nolint:nilerr // A candidate that fails integrity verification is ineligible for recovery.
 	}
 	return true, nil
 }

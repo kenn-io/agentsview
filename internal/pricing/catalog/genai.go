@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -207,7 +208,7 @@ func readLimitedGenAIPrices(reader io.Reader) ([]byte, error) {
 // prices, and tier thresholds needed at lookup time.
 func ParseGenAIPrices(data []byte) (*GenAIPrices, error) {
 	if len(data) == 0 {
-		return nil, fmt.Errorf("parsing GenAI Prices JSON: empty document")
+		return nil, errors.New("parsing GenAI Prices JSON: empty document")
 	}
 	if len(data) > maxGenAIPricesBytes {
 		return nil, fmt.Errorf(
@@ -220,7 +221,7 @@ func ParseGenAIPrices(data []byte) (*GenAIPrices, error) {
 		return nil, fmt.Errorf("parsing GenAI Prices JSON: %w", err)
 	}
 	if len(raw) == 0 {
-		return nil, fmt.Errorf("parsing GenAI Prices JSON: no providers")
+		return nil, errors.New("parsing GenAI Prices JSON: no providers")
 	}
 
 	prices := &GenAIPrices{
@@ -241,9 +242,7 @@ func ParseGenAIPrices(data []byte) (*GenAIPrices, error) {
 func parseGenAIProvider(raw rawGenAIProvider) (genAIProvider, error) {
 	id := strings.TrimSpace(raw.ID)
 	if id == "" {
-		return genAIProvider{}, fmt.Errorf(
-			"parsing GenAI Prices JSON: provider has empty id",
-		)
+		return genAIProvider{}, errors.New("parsing GenAI Prices JSON: provider has empty id")
 	}
 	modelMatch, err := parseOptionalGenAIMatch(raw.ModelMatch)
 	if err != nil {
@@ -380,9 +379,7 @@ func parseGenAIConstraint(raw jsontext.Value) (genAIConstraint, error) {
 			kind: genAIConstraintTimeOfDay, startTime: start, endTime: end,
 		}, nil
 	default:
-		return genAIConstraint{}, fmt.Errorf(
-			"constraint must contain start_date or start_time and end_time",
-		)
+		return genAIConstraint{}, errors.New("constraint must contain start_date or start_time and end_time")
 	}
 }
 
@@ -417,7 +414,7 @@ func parseGenAIPriceFields(
 func parseGenAIRate(raw jsontext.Value) (genAIRate, error) {
 	value := strings.TrimSpace(string(raw))
 	if value == "" || value == "null" {
-		return genAIRate{}, fmt.Errorf("price must be a non-negative number")
+		return genAIRate{}, errors.New("price must be a non-negative number")
 	}
 	if !strings.HasPrefix(value, "{") {
 		base, err := parseNonnegativeGenAIPrice(value)
@@ -439,9 +436,7 @@ func parseGenAIRate(raw jsontext.Value) (genAIRate, error) {
 	tiers := make([]genAITier, len(tiered.Tiers))
 	for i, tier := range tiered.Tiers {
 		if tier.Start < 0 {
-			return genAIRate{}, fmt.Errorf(
-				"pricing threshold must be non-negative",
-			)
+			return genAIRate{}, errors.New("pricing threshold must be non-negative")
 		}
 		price, parseErr := parseNonnegativeGenAIPrice(
 			strings.TrimSpace(string(tier.Price)),
@@ -469,7 +464,7 @@ func parseNonnegativeGenAIPrice(value string) (money.Money, error) {
 	}
 	if strings.HasPrefix(mantissa, "-") &&
 		strings.ContainsAny(mantissa, "123456789") {
-		return money.Money{}, fmt.Errorf("price must be non-negative")
+		return money.Money{}, errors.New("price must be non-negative")
 	}
 	return price, nil
 }
@@ -526,9 +521,7 @@ func parseRequiredGenAIMatch(raw jsontext.Value) (genAIMatch, error) {
 		})
 	}
 	if len(matches) != 1 {
-		return genAIMatch{}, fmt.Errorf(
-			"match clause must contain exactly one operation",
-		)
+		return genAIMatch{}, errors.New("match clause must contain exactly one operation")
 	}
 	match := matches[0]
 	if match.kind == genAIMatchRegex {

@@ -8,11 +8,11 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-func (s *Store) StarSession(sessionID string) (bool, error) {
+func (s *Store) StarSession(ctx context.Context, sessionID string) (bool, error) {
 	return false, db.ErrReadOnly
 }
 
-func (s *Store) UnstarSession(sessionID string) error {
+func (s *Store) UnstarSession(ctx context.Context, sessionID string) error {
 	return db.ErrReadOnly
 }
 
@@ -35,15 +35,15 @@ func (s *Store) ListStarredSessionIDs(ctx context.Context) ([]string, error) {
 	return ids, rows.Err()
 }
 
-func (s *Store) BulkStarSessions(sessionIDs []string) error {
+func (s *Store) BulkStarSessions(ctx context.Context, sessionIDs []string) error {
 	return db.ErrReadOnly
 }
 
-func (s *Store) PinMessage(sessionID string, messageID int64, note *string) (int64, error) {
+func (s *Store) PinMessage(ctx context.Context, sessionID string, messageID int64, note *string) (int64, error) {
 	return 0, db.ErrReadOnly
 }
 
-func (s *Store) UnpinMessage(sessionID string, messageID int64) error {
+func (s *Store) UnpinMessage(ctx context.Context, sessionID string, messageID int64) error {
 	return db.ErrReadOnly
 }
 

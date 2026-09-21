@@ -11,4 +11,5 @@ export interface DbSearchResult {
   session_ended_at: string;
   session_id: string;
   snippet: string;
+  web_url?: string;
 }

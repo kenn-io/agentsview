@@ -573,6 +573,25 @@ func (e *Engine) unNoteSQLiteContainerDiscovery(file parser.DiscoveredFile) {
 	pass.discovered[dbPath]--
 }
 
+// sqliteContainerDiscoveredMembers returns how many sessions this pass
+// discovered in the shared SQLite container backing the file, or 0 when the
+// file is not a container member or no pass is tracking membership. A zero
+// answer leaves the caller on the whole-container size, which is what the
+// engine charged before per-member sizing existed.
+func (e *Engine) sqliteContainerDiscoveredMembers(file parser.DiscoveredFile) int {
+	dbPath, _, ok := sqliteContainerSourceForFile(file)
+	if !ok {
+		return 0
+	}
+	e.containerMu.Lock()
+	defer e.containerMu.Unlock()
+	pass := e.containerPass
+	if pass == nil {
+		return 0
+	}
+	return pass.discovered[dbPath]
+}
+
 func (e *Engine) finishStreamingSQLiteContainerDiscovery() {
 	e.containerMu.Lock()
 	defer e.containerMu.Unlock()
@@ -595,9 +614,16 @@ func (e *Engine) finishStreamingSQLiteContainerDiscovery() {
 // check covers hybrid roots, where the discoverable row set can grow (a
 // removed storage JSON stops shadowing its same-ID row) without the
 // container state changing; such a row was never verified and must parse.
-func (e *Engine) sqliteContainerSourceFresh(file parser.DiscoveredFile) bool {
+func (e *Engine) sqliteContainerSourceFresh(ctx context.Context, file parser.DiscoveredFile) bool {
 	if e.forceParseRequested(file) {
 		return false
+	}
+	// Rehydration keeps the candidate path for archive identity, so gate the
+	// source that the provider resolved for this pass.
+	if file.ProviderSource != nil {
+		if path := providerDiscoveredPath(*file.ProviderSource); path != "" {
+			file.Path = path
+		}
 	}
 	dbPath, sessionID, ok := sqliteContainerSourceForFile(file)
 	if !ok {
@@ -628,8 +654,8 @@ func (e *Engine) sqliteContainerSourceFresh(file parser.DiscoveredFile) bool {
 		return false
 	}
 	fullID := applyIDPrefixToID(e.idPrefix, string(file.Agent)+":"+sessionID)
-	return e.db.GetSessionDataVersion(fullID) >= db.CurrentDataVersion() &&
-		e.db.GetSessionFilePath(fullID) == e.effectiveSourcePath(file.Path)
+	return e.db.GetSessionDataVersion(ctx, fullID) >= db.CurrentDataVersion() &&
+		e.db.GetSessionFilePath(ctx, fullID) == e.effectiveSourcePath(file.Path)
 }
 
 // watermarkOnlySQLiteSourceFresh reports whether a shared-container session
@@ -645,7 +671,7 @@ func (e *Engine) sqliteContainerSourceFresh(file parser.DiscoveredFile) bool {
 // digest still catches it (see storedMemberFreshnessPager for the full
 // contract). That keeps per-event work bounded by the changed batch instead
 // of the archive.
-func (e *Engine) watermarkOnlySQLiteSourceFresh(
+func (e *Engine) watermarkOnlySQLiteSourceFresh(ctx context.Context,
 	source parser.SourceRef,
 	file parser.DiscoveredFile,
 ) (int64, bool) {
@@ -673,12 +699,12 @@ func (e *Engine) watermarkOnlySQLiteSourceFresh(
 	if e.pathRewriter != nil {
 		lookupPath = e.pathRewriter(lookupPath)
 	}
-	_, storedMtime, found := e.db.GetFileInfoByPath(lookupPath)
+	_, storedMtime, found := e.db.GetFileInfoByPath(ctx, lookupPath)
 	if !found {
 		return 0, false
 	}
 	limit := storedMtime
-	if hash, ok := e.db.GetFileHashByPath(lookupPath); ok {
+	if hash, ok := e.db.GetFileHashByPath(ctx, lookupPath); ok {
 		if metadata, parsed := parser.OpenCodeChildDigestMetadataWatermarkNS(
 			hash,
 		); parsed {
@@ -688,7 +714,7 @@ func (e *Engine) watermarkOnlySQLiteSourceFresh(
 	if limit < watermark {
 		return 0, false
 	}
-	if e.db.GetDataVersionByPath(lookupPath) < db.CurrentDataVersion() {
+	if e.db.GetDataVersionByPath(ctx, lookupPath) < db.CurrentDataVersion() {
 		return 0, false
 	}
 	return storedMtime, true
@@ -859,8 +885,7 @@ func (e *Engine) finishSQLiteContainerPass(incomplete, fullDiscovery bool) {
 			continue
 		}
 		if e.trustedSQLiteContainers == nil {
-			e.trustedSQLiteContainers =
-				make(map[string]trustedSQLiteContainer)
+			e.trustedSQLiteContainers = make(map[string]trustedSQLiteContainer)
 		}
 		e.trustedSQLiteContainers[dbPath] = trustedSQLiteContainer{
 			state: state,

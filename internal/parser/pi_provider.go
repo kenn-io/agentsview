@@ -2,7 +2,7 @@ package parser
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -125,6 +125,13 @@ func (p *piProvider) FindSource(
 			return source, ok, err
 		}
 	}
+	// Native Pi default filenames are timestamp-prefixed, so a bare header
+	// UUID lookup finds nothing by filename. Fall back to scanning session
+	// headers only after the filename/directory lookup misses, so files with
+	// no header still resolve by their filename-derived identity.
+	if p.Def.Type == AgentPi {
+		return p.sourceForHeaderSessionID(ctx, req.RawSessionID)
+	}
 	return SourceRef{}, false, nil
 }
 
@@ -165,7 +172,7 @@ func (p *piProvider) sourceForSessionID(
 
 	entries, err := os.ReadDir(root)
 	if err != nil {
-		return SourceRef{}, false, nil
+		return SourceRef{}, false, nil //nolint:nilerr // Unavailable optional discovery roots have no matching source.
 	}
 	target := sessionID + ".jsonl"
 	for _, entry := range entries {
@@ -234,7 +241,7 @@ func (p *piProvider) Parse(
 		return ParseOutcome{}, err
 	}
 	if !ok {
-		return ParseOutcome{}, fmt.Errorf("pi source path unavailable")
+		return ParseOutcome{}, errors.New("pi source path unavailable")
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
 	sess, msgs, err := p.parseSession(path, req.Source.ProjectHint, machine)
@@ -283,6 +290,22 @@ func newPiSourceSet(agent AgentType, roots []string) JSONLSourceSet {
 		return NewJSONLSourceSet(agent, roots,
 			WithFollowSymlinkFiles(),
 			WithIncludePath(isPiSourcePath),
+			WithProjectHint(func(root, path string) string { return "" }),
+			WithSessionIDFromPath(piSessionIDFromPath),
+			WithContentHashing(),
+		)
+	}
+
+	// Pi's native session-dir override writes transcripts directly into the
+	// chosen directory; default homes group them by project instead.
+	if agent == AgentPi {
+		return NewJSONLSourceSet(agent, roots,
+			WithRecursive(),
+			WithSymlinkFollowing(),
+			WithIncludePath(func(root, path string) bool {
+				return isPiSourcePath(root, path) &&
+					(filepath.Dir(path) == filepath.Clean(root) || IsDirectoryJSONLPath(root, path))
+			}),
 			WithProjectHint(func(root, path string) string { return "" }),
 			WithSessionIDFromPath(piSessionIDFromPath),
 			WithContentHashing(),

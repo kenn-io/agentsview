@@ -1,7 +1,6 @@
 package sync_test
 
 import (
-	"context"
 	"fmt"
 	"runtime"
 	"strings"
@@ -16,7 +15,7 @@ import (
 
 func newOpenCodeTestEngine(t *testing.T, env *testEnv) *sync.Engine {
 	t.Helper()
-	engine := sync.NewEngine(env.db, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentOpenCode: {env.opencodeDir},
 		},
@@ -42,7 +41,7 @@ func TestOpenCodeSessionPrefilterIssue1557(t *testing.T) {
 		}
 	})
 
-	first := env.engine.SyncAll(context.Background(), nil)
+	first := env.engine.SyncAll(t.Context(), nil)
 	require.False(t, first.Aborted, "initial sync aborted: %+v", first)
 	require.Equal(t, 123, first.Synced)
 
@@ -54,7 +53,7 @@ func TestOpenCodeSessionPrefilterIssue1557(t *testing.T) {
 
 	scansBefore := parser.OpenCodeContainerChildScans()
 	lookupsBefore := parser.OpenCodeSessionChildLookups()
-	second := env.engine.SyncAll(context.Background(), nil)
+	second := env.engine.SyncAll(t.Context(), nil)
 	scans := parser.OpenCodeContainerChildScans() - scansBefore
 	lookups := parser.OpenCodeSessionChildLookups() - lookupsBefore
 
@@ -92,7 +91,7 @@ func TestOpenCodeChangedContainerStreamRehydratesWatermarkMetadata(
 			1779012000000, 1779012030000, "prompt", "answer",
 		)
 	}
-	require.Equal(t, 123, env.engine.SyncAll(context.Background(), nil).Synced)
+	require.Equal(t, 123, env.engine.SyncAll(t.Context(), nil).Synced)
 
 	oc.updateSessionTime(t, "ses00000", 1779015630000)
 	oc.replaceTextContent(
@@ -108,8 +107,7 @@ func TestOpenCodeChangedContainerStreamRehydratesWatermarkMetadata(
 	assert.Equal(t, 122, stats.Skipped)
 	assert.Zero(t, parser.OpenCodeContainerChildScans()-scansBefore,
 		"streamed changed-container reconciliation must avoid a full child scan")
-	assert.LessOrEqual(t,
-		parser.OpenCodeSessionChildLookups()-lookupsBefore, int64(1),
+	assert.LessOrEqual(t, parser.OpenCodeSessionChildLookups()-lookupsBefore, int64(1),
 		"only the changed streamed member may resolve its child digest")
 	assertMessageContent(
 		t, env.db, "opencode:ses00000", "changed prompt", "changed answer",
@@ -151,7 +149,7 @@ func TestOpenCodeSharedContainerChangeIsPerSessionBounded(t *testing.T) {
 				}
 			})
 			require.Equal(t, n,
-				env.engine.SyncAll(context.Background(), nil).Synced)
+				env.engine.SyncAll(t.Context(), nil).Synced)
 
 			// Change exactly one session. This also grows the shared
 			// container file, which is precisely the signal that used to
@@ -164,7 +162,7 @@ func TestOpenCodeSharedContainerChangeIsPerSessionBounded(t *testing.T) {
 
 			scansBefore := parser.OpenCodeContainerChildScans()
 			lookupsBefore := parser.OpenCodeSessionChildLookups()
-			stats := env.engine.SyncAll(context.Background(), nil)
+			stats := env.engine.SyncAll(t.Context(), nil)
 			childScans[n] = parser.OpenCodeContainerChildScans() - scansBefore
 			childLookups[n] = parser.OpenCodeSessionChildLookups() - lookupsBefore
 			require.False(t, stats.Aborted, "sync aborted: %+v", stats)
@@ -215,7 +213,7 @@ func TestOpenCodeWatcherEventIsWatermarkBounded(t *testing.T) {
 				}
 			})
 			require.Equal(t, n,
-				env.engine.SyncAll(context.Background(), nil).Synced)
+				env.engine.SyncAll(t.Context(), nil).Synced)
 
 			oc.updateSessionTime(t, "ses00000", 1779015630000)
 			oc.replaceTextContent(
@@ -226,15 +224,14 @@ func TestOpenCodeWatcherEventIsWatermarkBounded(t *testing.T) {
 			scansBefore := parser.OpenCodeContainerChildScans()
 			lookupsBefore := parser.OpenCodeSessionChildLookups()
 			require.NoError(t, env.engine.SyncPathsContext(
-				context.Background(), []string{oc.path},
+				t.Context(), []string{oc.path},
 			))
 			stats := env.engine.LastSyncStats()
 			assert.Equal(t, 1, stats.Synced,
 				"only the changed session may be rewritten")
 			assert.Zero(t, stats.Skipped,
 				"unchanged sessions must not even be materialized as sources")
-			assert.Zero(t,
-				parser.OpenCodeContainerChildScans()-scansBefore,
+			assert.Zero(t, parser.OpenCodeContainerChildScans()-scansBefore,
 				"a watcher event must not aggregate the whole container's "+
 					"child tables")
 			lookups[n] = parser.OpenCodeSessionChildLookups() - lookupsBefore
@@ -274,7 +271,7 @@ func TestOpenCodeWatcherPassDefersChildOnlyEditToFullDiscovery(t *testing.T) {
 		1779012000000, 1779099999000,
 		"original prompt", "original answer",
 	)
-	require.Equal(t, 1, env.engine.SyncAll(context.Background(), nil).Synced)
+	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
 
 	// Child-only replacement: same counts, new rows and content, timestamps
 	// below the session row's watermark, session and project rows untouched.
@@ -285,7 +282,7 @@ func TestOpenCodeWatcherPassDefersChildOnlyEditToFullDiscovery(t *testing.T) {
 	scansBefore := parser.OpenCodeContainerChildScans()
 	lookupsBefore := parser.OpenCodeSessionChildLookups()
 	require.NoError(t, env.engine.SyncPathsContext(
-		context.Background(), []string{oc.path},
+		t.Context(), []string{oc.path},
 	))
 	assert.Zero(t, parser.OpenCodeContainerChildScans()-scansBefore,
 		"the watcher pass must not scan child tables for a child-only edit")
@@ -296,7 +293,7 @@ func TestOpenCodeWatcherPassDefersChildOnlyEditToFullDiscovery(t *testing.T) {
 		"original prompt", "original answer",
 	)
 
-	fullStats := env.engine.SyncAllForceParse(context.Background(), nil)
+	fullStats := env.engine.SyncAllForceParse(t.Context(), nil)
 	assert.Equal(t, 1, fullStats.Synced,
 		"full discovery must reconcile the deferred child-only edit")
 	assertMessageContent(
@@ -318,7 +315,7 @@ func TestOpenCodeWatcherPassDefersChildOnlyEditToFullDiscovery(t *testing.T) {
 	scansBefore = parser.OpenCodeContainerChildScans()
 	lookupsBefore = parser.OpenCodeSessionChildLookups()
 	require.NoError(t, env.engine.SyncPathsContext(
-		context.Background(), []string{oc.path},
+		t.Context(), []string{oc.path},
 	))
 	assert.Zero(t, parser.OpenCodeContainerChildScans()-scansBefore,
 		"the watcher pass must not scan child tables for an above-composite "+
@@ -330,7 +327,7 @@ func TestOpenCodeWatcherPassDefersChildOnlyEditToFullDiscovery(t *testing.T) {
 		"swapped prompt", "swapped answer",
 	)
 
-	fullStats = env.engine.SyncAllForceParse(context.Background(), nil)
+	fullStats = env.engine.SyncAllForceParse(t.Context(), nil)
 	assert.Equal(t, 1, fullStats.Synced,
 		"full discovery must reconcile the deferred above-composite append")
 	assertMessageContent(
@@ -357,7 +354,7 @@ func TestOpenCodeFullPassSkipsAfterWatcherPassParse(t *testing.T) {
 			"prompt", "answer",
 		)
 	}
-	require.Equal(t, 3, env.engine.SyncAll(context.Background(), nil).Synced)
+	require.Equal(t, 3, env.engine.SyncAll(t.Context(), nil).Synced)
 
 	oc.updateSessionTime(t, "ses00000", 1779015630000)
 	oc.replaceTextContent(
@@ -368,12 +365,12 @@ func TestOpenCodeFullPassSkipsAfterWatcherPassParse(t *testing.T) {
 		1779099999000, "ses00000")
 
 	require.NoError(t, env.engine.SyncPathsContext(
-		context.Background(), []string{oc.path},
+		t.Context(), []string{oc.path},
 	))
 	require.Equal(t, 1, env.engine.LastSyncStats().Synced)
 
 	lookupsBefore := parser.OpenCodeSessionChildLookups()
-	stats := env.engine.SyncAll(context.Background(), nil)
+	stats := env.engine.SyncAll(t.Context(), nil)
 	assert.Zero(t, stats.Synced,
 		"the full pass must not rewrite sessions the watcher pass stored")
 	assert.Equal(t, 3, stats.Skipped)
@@ -406,7 +403,7 @@ func TestOpenCodeWatcherCatchesMetadataUpdateUnderChildDominatedComposite(
 	oc.mustExec(t, "raise children above all metadata times",
 		"UPDATE part SET time_updated = ? WHERE session_id = ?",
 		1779099999000, "meta-mark")
-	require.Equal(t, 1, env.engine.SyncAll(context.Background(), nil).Synced)
+	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
 
 	// Metadata advances past its own stored value but stays below the
 	// child-dominated composite.
@@ -416,7 +413,7 @@ func TestOpenCodeWatcherCatchesMetadataUpdateUnderChildDominatedComposite(
 
 	scansBefore := parser.OpenCodeContainerChildScans()
 	require.NoError(t, env.engine.SyncPathsContext(
-		context.Background(), []string{oc.path},
+		t.Context(), []string{oc.path},
 	))
 	stats := env.engine.LastSyncStats()
 	assert.Equal(t, 1, stats.Synced,
@@ -427,7 +424,7 @@ func TestOpenCodeWatcherCatchesMetadataUpdateUnderChildDominatedComposite(
 
 	// OpenCode's LLM-generated title lands in first_message.
 	var firstMessage string
-	require.NoError(t, env.db.Reader().QueryRow(
+	require.NoError(t, env.db.Reader().QueryRow(t.Context(),
 		"SELECT first_message FROM sessions WHERE id = ?",
 		"opencode:meta-mark",
 	).Scan(&firstMessage))
@@ -455,12 +452,12 @@ func TestOpenCodeIdleReconcilePassSkipsContainerChildScan(t *testing.T) {
 			"prompt", "answer",
 		)
 	}
-	require.Equal(t, 5, env.engine.SyncAll(context.Background(), nil).Synced)
+	require.Equal(t, 5, env.engine.SyncAll(t.Context(), nil).Synced)
 
 	scansBefore := parser.OpenCodeContainerChildScans()
 	lookupsBefore := parser.OpenCodeSessionChildLookups()
 	require.NoError(t, env.engine.ReconcileWatchRoots(
-		context.Background(), []string{env.opencodeDir}, false,
+		t.Context(), []string{env.opencodeDir}, false,
 	))
 	assert.Zero(t, parser.OpenCodeContainerChildScans()-scansBefore,
 		"an idle reconcile pass must not aggregate the container's child "+
@@ -477,9 +474,9 @@ func TestOpenCodeIdleReconcilePassSkipsContainerChildScan(t *testing.T) {
 		t, "ses00000", "swapped prompt", "swapped answer", 1779012500000,
 	)
 	require.NoError(t, env.engine.ReconcileWatchRoots(
-		context.Background(), []string{env.opencodeDir}, false,
+		t.Context(), []string{env.opencodeDir}, false,
 	))
-	forceStats := env.engine.SyncAllForceParse(context.Background(), nil)
+	forceStats := env.engine.SyncAllForceParse(t.Context(), nil)
 	require.False(t, forceStats.Aborted, "force digest pass aborted: %+v", forceStats)
 	assertMessageContent(
 		t, env.db, "opencode:ses00000",
@@ -510,11 +507,11 @@ func TestOpenCodeIdleFullPassSkipsContainerChildScan(t *testing.T) {
 			"prompt", "answer",
 		)
 	}
-	require.Equal(t, 5, env.engine.SyncAll(context.Background(), nil).Synced)
+	require.Equal(t, 5, env.engine.SyncAll(t.Context(), nil).Synced)
 
 	scansBefore := parser.OpenCodeContainerChildScans()
 	lookupsBefore := parser.OpenCodeSessionChildLookups()
-	stats := env.engine.SyncAll(context.Background(), nil)
+	stats := env.engine.SyncAll(t.Context(), nil)
 	assert.Zero(t, stats.Synced)
 	assert.Equal(t, 5, stats.Skipped,
 		"every session of a trusted container must gate-skip")
@@ -528,7 +525,7 @@ func TestOpenCodeIdleFullPassSkipsContainerChildScan(t *testing.T) {
 	oc.replaceTextContent(
 		t, "ses00000", "swapped prompt", "swapped answer", 1779012500000,
 	)
-	stats = newOpenCodeTestEngine(t, env).SyncAll(context.Background(), nil)
+	stats = newOpenCodeTestEngine(t, env).SyncAll(t.Context(), nil)
 	assert.Equal(t, 1, stats.Synced,
 		"the ordinary full digest pass must reconcile the child-only edit")
 	assertMessageContent(
@@ -546,6 +543,8 @@ func TestOpenCodeIdleFullPassSkipsContainerChildScan(t *testing.T) {
 // verification stamp makes the digest listing due immediately).
 func TestOpenCodeHiddenChildChangesAreDetected(t *testing.T) {
 	deleteAssistant := func(t *testing.T, oc *openCodeTestDB) {
+		t.Helper()
+
 		oc.mustExec(t, "delete assistant parts",
 			"DELETE FROM part WHERE session_id = ? AND message_id LIKE ?",
 			"probe", "%assistant%")
@@ -588,6 +587,8 @@ func TestOpenCodeHiddenChildChangesAreDetected(t *testing.T) {
 			// session row's watermark, but different rows and content.
 			name: "same-count child replacement below the watermark",
 			mutate: func(t *testing.T, oc *openCodeTestDB) {
+				t.Helper()
+
 				oc.replaceTextContent(
 					t, "probe", "swapped prompt", "swapped answer",
 					1779012500000,
@@ -600,6 +601,8 @@ func TestOpenCodeHiddenChildChangesAreDetected(t *testing.T) {
 			// the session and project timestamps in their own right.
 			name: "project rename below the child watermark",
 			seed: func(t *testing.T, oc *openCodeTestDB) {
+				t.Helper()
+
 				oc.addProject(t, "proj", "/home/user/code/original-app")
 				seedOpenCodeSQLiteTextSession(
 					t, oc, "proj", "probe",
@@ -611,6 +614,8 @@ func TestOpenCodeHiddenChildChangesAreDetected(t *testing.T) {
 					1779099999000, "probe")
 			},
 			mutate: func(t *testing.T, oc *openCodeTestDB) {
+				t.Helper()
+
 				oc.updateProjectWorktree(
 					t, "proj", "/home/user/code/renamed-app", 1779013000000,
 				)
@@ -622,6 +627,8 @@ func TestOpenCodeHiddenChildChangesAreDetected(t *testing.T) {
 			// a complete child identity can tell the two states apart.
 			name: "middle-row replacement preserving counts, sums and extrema",
 			seed: func(t *testing.T, oc *openCodeTestDB) {
+				t.Helper()
+
 				oc.addProject(t, "proj", "/home/user/code/app")
 				oc.addSession(t, "probe", "proj", 1779012000000, 1779099999000)
 				oc.addMessage(t, "probe-msg-a", "probe", "user", 1779012000000)
@@ -633,6 +640,8 @@ func TestOpenCodeHiddenChildChangesAreDetected(t *testing.T) {
 					"zulu", 1779012000002)
 			},
 			mutate: func(t *testing.T, oc *openCodeTestDB) {
+				t.Helper()
+
 				oc.mustExec(t, "delete middle part",
 					"DELETE FROM part WHERE id = ?", "probe-part-m")
 				oc.addTextPart(t, "probe-part-n", "probe", "probe-msg-a",
@@ -653,7 +662,7 @@ func TestOpenCodeHiddenChildChangesAreDetected(t *testing.T) {
 					"keep prompt", "drop answer",
 				)
 			}
-			initial := env.engine.SyncAll(context.Background(), nil)
+			initial := env.engine.SyncAll(t.Context(), nil)
 			require.False(t, initial.Aborted, "initial sync aborted: %+v", initial)
 			require.Equal(t, 1, initial.Synced)
 			if tc.wantAbsent != "" {
@@ -672,11 +681,11 @@ func TestOpenCodeHiddenChildChangesAreDetected(t *testing.T) {
 
 			if tc.viaReconcile {
 				require.NoError(t, env.engine.ReconcileWatchRoots(
-					context.Background(), []string{env.opencodeDir}, false,
+					t.Context(), []string{env.opencodeDir}, false,
 				))
 			}
 			stats := newOpenCodeTestEngine(t, env).SyncAll(
-				context.Background(), nil,
+				t.Context(), nil,
 			)
 			require.False(t, stats.Aborted, "full pass aborted: %+v", stats)
 			if !tc.viaReconcile {

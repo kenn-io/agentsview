@@ -26,7 +26,7 @@ func TestParseDiffDiscoversProviderSources(t *testing.T) {
 		mtime:      info.ModTime(),
 		size:       info.Size(),
 	}
-	engine := NewDiffEngine(dbtest.OpenTestDB(t), EngineConfig{
+	engine := NewDiffEngine(t.Context(), dbtest.OpenTestDB(t), EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {root},
 		},
@@ -39,7 +39,7 @@ func TestParseDiffDiscoversProviderSources(t *testing.T) {
 		},
 	})
 
-	report, err := engine.ParseDiff(context.Background(), ParseDiffOptions{
+	report, err := engine.ParseDiff(t.Context(), ParseDiffOptions{
 		Agents: []parser.AgentType{parser.AgentClaude},
 	})
 
@@ -55,7 +55,7 @@ func TestParseDiffDiscoversProviderSources(t *testing.T) {
 }
 
 func TestParseDiffSupportedAgentsAreDiscoverable(t *testing.T) {
-	engine := NewDiffEngine(dbtest.OpenTestDB(t), EngineConfig{})
+	engine := NewDiffEngine(t.Context(), dbtest.OpenTestDB(t), EngineConfig{})
 	for _, agent := range []parser.AgentType{
 		parser.AgentGptme,
 		parser.AgentPi,
@@ -89,7 +89,7 @@ func TestParseDiffSupportedAgentsAreDiscoverable(t *testing.T) {
 // yet still admitted by the parse-diff discoverability gate, because the gate
 // keys on the provider factory, not FileBased.
 func TestParseDiffDBBackedAgentsAreDiscoverable(t *testing.T) {
-	engine := NewDiffEngine(dbtest.OpenTestDB(t), EngineConfig{})
+	engine := NewDiffEngine(t.Context(), dbtest.OpenTestDB(t), EngineConfig{})
 	for _, agent := range []parser.AgentType{
 		parser.AgentForge,
 		parser.AgentDevin,
@@ -130,7 +130,7 @@ func TestSyncAllDiscoversProviderSources(t *testing.T) {
 		size:       info.Size(),
 	}
 	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {root},
 		},
@@ -143,14 +143,14 @@ func TestSyncAllDiscoversProviderSources(t *testing.T) {
 		},
 	})
 
-	stats := engine.SyncAll(context.Background(), nil)
+	stats := engine.SyncAll(t.Context(), nil)
 
 	assert.Equal(t, 1, stats.TotalSessions)
 	assert.Equal(t, 1, stats.Synced)
-	session, err := database.GetSession(context.Background(), "provider-discovered")
+	session, err := database.GetSession(t.Context(), "provider-discovered")
 	require.NoError(t, err)
 	require.NotNil(t, session)
-	assert.Equal(t, sourcePath, database.GetSessionFilePath("provider-discovered"))
+	assert.Equal(t, sourcePath, database.GetSessionFilePath(t.Context(), "provider-discovered"))
 }
 
 type parseDiffProviderFactory struct {
@@ -262,7 +262,7 @@ func (p parseDiffProvider) source() parser.SourceRef {
 
 func TestParseDiffProviderSourcesThreadsS3Metadata(t *testing.T) {
 	const uri = "s3://bucket/host/raw/claude/proj/session.jsonl"
-	engine := NewDiffEngine(dbtest.OpenTestDB(t), EngineConfig{
+	engine := NewDiffEngine(t.Context(), dbtest.OpenTestDB(t), EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {"s3://bucket/host/raw/claude"},
 		},
@@ -275,7 +275,7 @@ func TestParseDiffProviderSourcesThreadsS3Metadata(t *testing.T) {
 		},
 	})
 
-	files, err := engine.parseDiffProviderSources(context.Background(), parser.AgentClaude)
+	files, err := engine.parseDiffProviderSources(t.Context(), parser.AgentClaude)
 	require.NoError(t, err)
 	require.Len(t, files, 1)
 
@@ -294,7 +294,7 @@ func TestParseDiffProviderSourcesThreadsS3Metadata(t *testing.T) {
 }
 
 func TestParseDiffSourceReliableForRacedDevinVirtualPath(t *testing.T) {
-	engine := NewDiffEngine(dbtest.OpenTestDB(t), EngineConfig{})
+	engine := NewDiffEngine(t.Context(), dbtest.OpenTestDB(t), EngineConfig{})
 	assert.False(
 		t,
 		engine.parseDiffSourceReliableForRaced(

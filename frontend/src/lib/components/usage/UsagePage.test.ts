@@ -139,6 +139,7 @@ afterEach(() => {
   usage.toggles.attribution.view = "treemap";
   usage.excludedProjects = "";
   usage.excludedProjectKeys = "";
+  usage.excludedModels = "";
   usage.knownProjects = [];
   settings.chartPalette = "agentsview";
   sessions.projects = [];
@@ -147,6 +148,21 @@ afterEach(() => {
 });
 
 describe("UsagePage refresh behavior", () => {
+  it("restores hidden models from a shared URL", async () => {
+    vi.spyOn(usage, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    router.route = "usage";
+    router.params = { exclude_model: "model-alpha" };
+    usage.summary = usageSummaryWithUnsupported();
+
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+
+    expect(usage.excludedModels).toBe("model-alpha");
+    expect(router.params.exclude_model).toBe("model-alpha");
+    expect(usage.hasActiveFilters).toBe(true);
+  });
+
   it("uses stable project keys in the Project filter", async () => {
     vi.stubGlobal(
       "ResizeObserver",
@@ -601,17 +617,17 @@ describe("UsagePage refresh behavior", () => {
 
     router.route = "usage";
     router.params = {
-      model: "fixture-model",
+      exclude_model: "fixture-model",
       exclude_project_key: "pl1:sha256:stale",
     };
     usage.excludedProjectKeys = "";
-    usage.selectedModels = "";
+    usage.excludedModels = "";
 
     component = mount(UsagePage, { target: document.body });
     await flushEffects();
 
     expect(usage.excludedProjectKeys).toBe("");
-    expect(usage.selectedModels).toBe("fixture-model");
+    expect(usage.excludedModels).toBe("fixture-model");
   });
 
   it("seeds bare Usage from an enabled fixed range", async () => {

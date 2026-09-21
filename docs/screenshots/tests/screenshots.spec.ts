@@ -6,12 +6,15 @@ const DIR = process.env.SCREENSHOT_DIR || join(
 );
 
 const FULL = { width: 1440, height: 900 };
+// Imported session IDs can contain original machine names.
+const CAPTURE_STYLE = '.session-id { visibility: hidden !important; }';
 
 // PG serve instance for pg-sync screenshots (machine labels, etc.)
 const PG_BASE_URL = process.env.PG_BASE_URL || '';
 
 async function snap(page: Page, name: string) {
   await page.screenshot({
+    style: CAPTURE_STYLE,
     path: join(DIR, `${name}.png`),
     type: 'png',
   });
@@ -19,6 +22,7 @@ async function snap(page: Page, name: string) {
 
 async function snapEl(loc: Locator, name: string) {
   await loc.screenshot({
+    style: CAPTURE_STYLE,
     path: join(DIR, `${name}.png`),
     type: 'png',
   });
@@ -41,6 +45,7 @@ async function snapRange(
     lastBox.x + lastBox.width
   );
   await page.screenshot({
+    style: CAPTURE_STYLE,
     path: join(DIR, `${name}.png`),
     type: 'png',
     clip: {
@@ -132,6 +137,7 @@ test.describe('Dashboard', () => {
     const clickable = page.locator('.heatmap-cell.clickable');
     if (await clickable.count() > 0) {
       await clickable.first().click();
+      await page.mouse.move(0, 0);
       await page.waitForTimeout(2000);
       await snap(page, 'heatmap-filtered');
       // Click again to deselect
@@ -144,15 +150,9 @@ test.describe('Dashboard', () => {
   });
 
   test('hour of week heatmap', async ({ page }) => {
-    const panels = page.locator('.chart-panel');
-    const count = await panels.count();
-    for (let i = 0; i < count; i++) {
-      const text = await panels.nth(i).textContent();
-      if (text && (text.includes('Hour') || text.includes('Week'))) {
-        await snapEl(panels.nth(i), 'hour-of-week');
-        break;
-      }
-    }
+    const heatmap = page.locator('.how-container');
+    await expect(heatmap.locator('.how-chart')).toBeVisible();
+    await snapEl(heatmap, 'hour-of-week');
   });
 
   test('activity timeline', async ({ page }) => {
@@ -163,13 +163,7 @@ test.describe('Dashboard', () => {
         timeout: 10_000,
       });
       await page.waitForTimeout(500);
-      // Capture the parent chart-panel that wraps the timeline
-      const panel = page.locator(
-        '.chart-panel:has(.timeline-container)'
-      );
-      if (await panel.count() > 0) {
-        await snapEl(panel, 'activity-timeline');
-      }
+      await snapEl(timeline, 'activity-timeline');
     }
   });
 
@@ -228,7 +222,12 @@ test.describe('Dashboard', () => {
       if (text && (text.includes('Shape') || text.includes('Distribution'))) {
         await panels.nth(i).scrollIntoViewIfNeeded();
         await page.waitForTimeout(300);
-        await snapEl(panels.nth(i), 'session-shape');
+        await snapRange(
+          page,
+          panels.nth(i).locator('.shape-header'),
+          panels.nth(i).locator('.shape-footer'),
+          'session-shape'
+        );
         break;
       }
     }
@@ -317,7 +316,7 @@ test.describe('Dashboard', () => {
   test('dashboard model filter', async ({ page }) => {
     // The dashboard toolbar Model dropdown reuses the shared
     // FilterDropdown (label "Model") in include mode. Open it and
-    // include the first listed model so the screenshot shows the open
+    // include a Claude model so the screenshot shows the open
     // panel, the resulting "Model: <name>" trigger label, and the
     // active-filter chip the ActiveFilters row renders beneath it.
     const modelDropdown = page.locator(
@@ -331,14 +330,9 @@ test.describe('Dashboard', () => {
       { state: 'visible', timeout: 5_000 }
     );
 
-    // In include mode the first dropdown item is the "All models"
-    // reset row; the actual models follow. Include the first real
-    // model if one exists so a filter chip appears.
     const rows = modelDropdown.locator('.kit-filter-dropdown__item');
-    if (await rows.count() > 1) {
-      await rows.nth(1).click();
-      await page.waitForTimeout(1500);
-    }
+    await rows.filter({ hasText: /claude/i }).first().click();
+    await page.waitForTimeout(1500);
     await snap(page, 'analytics-model-filter');
 
     // Clean up: clicking the "All models" row clears the filter.
@@ -353,7 +347,19 @@ test.describe('Dashboard', () => {
 
 test.describe('Activity dashboard', () => {
   async function navigateToActivity(page: Page, path = '/activity') {
-    await page.goto(path);
+    // Anchor the range to the fixture, so a release run never captures an empty today.
+    const response = await page.request.get('/api/v1/sessions?limit=1');
+    const latest = (await response.json()).sessions[0];
+    const timestamp = new Date(
+      latest.ended_at || latest.started_at || latest.created_at
+    );
+    expect(
+      timestamp.getTime(), 'latest session must have a valid activity date'
+    ).not.toBeNaN();
+    const date = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Chicago',
+    }).format(timestamp);
+    await page.goto(`${path}${path.includes('?') ? '&' : '?'}date=${date}`);
     await page.waitForSelector('.activity-page', { timeout: 10_000 });
     await expect(
       page.locator('.activity-page .summary-cards .card').first()
@@ -409,6 +415,17 @@ test.describe('Activity dashboard', () => {
   });
 
   test('activity insight', async ({ page }) => {
+    // Use a fixed example instead of invoking an external agent CLI.
+    await page.route('**/api/v1/insights?*', async (route) => {
+      const params = new URL(route.request().url()).searchParams;
+      await route.fulfill({ json: { insights: [{
+        id: 1, type: 'daily_activity', project: null,
+        date_from: params.get('date_from'),
+        date_to: params.get('date_to'),
+        agent: 'claude', model: 'claude-opus-4-1',
+        content: '## Activity summary\n\nWork focused on AgentsView documentation and the roborev review engine.\n\n### What changed\n\n- Clarified setup instructions and refreshed the documentation screenshots.\n- Improved how review findings are grouped before they reach the reader.\n\n### Follow up\n\nReview the updated guides alongside the release notes before publishing.',
+      }] } });
+    });
     await navigateToActivity(page, '/activity?preset=week');
     const panel = page.locator(
       '.activity-page .chart-panel:has(.activity-insight)'
@@ -416,6 +433,7 @@ test.describe('Activity dashboard', () => {
     await expect(panel).toBeVisible({ timeout: 10_000 });
     await panel.scrollIntoViewIfNeeded();
     await page.waitForTimeout(500);
+    await expect(panel.locator('.markdown-body')).toBeVisible();
     await snapEl(panel, 'activity-insight');
   });
 });
@@ -516,6 +534,11 @@ test.describe('Data workspace', () => {
       page.getByText('Finding session folders…', { exact: true })
     ).toBeHidden({ timeout: 10_000 });
     await snap(page, 'data-workspace');
+    await page.getByRole('radio', { name: 'All folders', exact: true }).click();
+    await expect(
+      page.getByRole('button', { name: 'Save 3 corrections' })
+    ).toBeVisible();
+    await snap(page, 'project-mapping-bulk');
   });
 });
 
@@ -674,6 +697,8 @@ test.describe('Session browser', () => {
     if (await filterBtn.count() > 0) {
       await filterBtn.click();
       await page.waitForTimeout(300);
+      await page.getByRole('button', { name: '10', exact: true })
+        .scrollIntoViewIfNeeded();
       await snap(page, 'session-filters');
     }
   });
@@ -815,11 +840,12 @@ test.describe('Message viewer', () => {
   });
 
   test('Codex desktop resume menu', async ({ page }) => {
-    const codexSession = page.locator(
-      '.session-item:has(.agent-tag:text-is("Codex"))'
-    ).first();
-    await expect(codexSession).toBeVisible({ timeout: 10_000 });
-    await codexSession.click();
+    const response = await page.request.get('/api/v1/sessions?agent=codex&limit=200');
+    const session = (await response.json()).sessions.find(
+      (session: { id: string }) => !session.id.includes('~')
+    );
+    expect(session, 'fixture needs a local Codex session').toBeDefined();
+    await page.goto(`/sessions/${encodeURIComponent(session.id)}`);
     await expect(page.locator('.message').first()).toBeVisible({
       timeout: 10_000,
     });
@@ -836,6 +862,29 @@ test.describe('Message viewer', () => {
       /^codex:\/\/threads\//
     );
     await snapEl(menu, 'session-resume-menu');
+  });
+
+  test('remote session resume command', async ({ page }) => {
+    const response = await page.request.get('/api/v1/sessions?agent=claude&limit=1');
+    const source = (await response.json()).sessions[0];
+    expect(source, 'remote resume screenshot requires a Claude session in the source archive').toBeDefined();
+    const remote = { ...source, id: `work-desktop~${source.id.split('~').pop()}`, machine: 'work-desktop' };
+    const remotePath = `/api/v1/sessions/${encodeURIComponent(remote.id)}`;
+    await page.route(`**${remotePath}**`, async (route) => {
+      const url = new URL(route.request().url());
+      if (url.pathname === remotePath) return route.fulfill({ json: remote });
+      if (url.pathname.endsWith('/directory')) return route.fulfill({ json: { path: '' } });
+      await route.continue({
+        url: url.href.replace(encodeURIComponent(remote.id), encodeURIComponent(source.id)),
+      });
+    });
+    await page.goto(`/sessions/${encodeURIComponent(remote.id)}`);
+    await expect(page.locator('.message').first()).toBeVisible();
+    await page.locator('.resume-btn').click();
+    const menu = page.locator('.open-menu');
+    await expect(menu.getByRole('button', { name: 'Copy command', exact: true })).toBeVisible();
+    await expect(menu.getByRole('button')).toHaveCount(1);
+    await snap(page, 'remote-resume-command');
   });
 
   test('thinking blocks', async ({ page }) => {
@@ -1126,6 +1175,7 @@ test.describe('Message viewer', () => {
       throw new Error('code-block has no bounding box');
     }
     await page.screenshot({
+      style: CAPTURE_STYLE,
       path: join(DIR, 'code-block-copy-btn.png'),
       type: 'png',
       clip: {
@@ -1185,6 +1235,26 @@ test.describe('Command palette', () => {
     await expect(setup).toContainText('[vector]');
     await expect(setup).toContainText('agentsview embeddings build');
     await snapEl(setup, 'semantic-search-setup');
+  });
+
+  test('project and date search filters', async ({ page }) => {
+    await page.keyboard.press('Control+k');
+    const palette = page.locator('.palette-overlay');
+    await palette.locator('.palette-input').fill('implement');
+    await palette.getByTitle('Select project', { exact: true }).click();
+    await page.getByRole('option', { name: /^agentsview \(/ }).first().click();
+    await expect(palette.locator('.palette-item').first()).toBeVisible();
+    await palette.getByRole('button', { name: 'All time', exact: true }).click();
+    await expect(page.getByRole('radio', { name: 'Calendar', exact: true })).toBeVisible();
+    await snap(page, 'search-filters');
+  });
+
+  test('open session by ID', async ({ page }) => {
+    await page.keyboard.press('Control+g');
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByRole('textbox', { name: 'Session ID or UUID' })).toBeVisible();
+    await expect(dialog.getByRole('button', { name: 'Open session', exact: true })).toBeVisible();
+    await snap(page, 'open-session');
   });
 });
 
@@ -1409,6 +1479,61 @@ test.describe('Settings', () => {
     await snap(page, 'settings');
   });
 
+  test('settings archive image retention', async ({ page }) => {
+    // Save only in this browser's response fixture; other captures keep their policy.
+    await page.route('**/api/v1/settings', async (route) => {
+      if (route.request().method() !== 'PUT') return route.continue();
+      const current = await (await page.request.get('/api/v1/settings')).json();
+      await route.fulfill({ json: { ...current, ...route.request().postDataJSON() } });
+    });
+    await openSettings(page);
+    const section = await openSettingsPanel(page, 'Archive content');
+    const offload = section.getByRole('radio', { name: 'Offload', exact: true });
+    await offload.click();
+    await expect(offload).toHaveAttribute('aria-checked', 'true');
+    await expect(section.getByRole('status')).toContainText('Restart');
+    await snapEl(section, 'settings-archive-content');
+  });
+
+  test('settings alternate agent homes', async ({ page }) => {
+    await page.route('**/api/v1/settings', async (route) => {
+      const response = await route.fetch();
+      const settings = await response.json();
+      for (const provider of settings.session_providers) {
+        if (provider.id !== 'codex') continue;
+        provider.dirs = ['~/.codex/sessions', '~/.codex-work/sessions'];
+        provider.homes = ['~/.codex-work'];
+      }
+      await route.fulfill({ response, json: settings });
+    });
+    await openSettings(page);
+    const section = await openSettingsPanel(page, 'Session Providers');
+    const card = section.locator('.provider-row').filter({
+      has: page.locator('.provider-name', { hasText: /^Codex$/ }),
+    });
+    await expect(card.getByRole('textbox', { name: 'New Codex home directory' })).toBeVisible();
+    await expect(card.locator('.provider-home')).toContainText('~/.codex-work');
+    await snapEl(card, 'settings-agent-homes');
+  });
+
+  test('settings image cleanup preview', async ({ page }) => {
+    await page.route('**/api/v1/data/strip-images/preview', (route) => route.fulfill({
+      json: {
+        sessions: 3, changed: 3, payloads: 5, stored_bytes: 8192, decoded_bytes: 4096,
+        projects: [
+          { project: 'agentsview', sessions: 2, changed: 2, payloads: 4, stored_bytes: 6144, decoded_bytes: 3072 },
+          { project: 'roborev', sessions: 1, changed: 1, payloads: 1, stored_bytes: 2048, decoded_bytes: 1024 },
+        ],
+      },
+    }));
+    await openSettings(page);
+    const section = await openSettingsPanel(page, 'Tool-result images');
+    await section.getByRole('button', { name: 'Preview', exact: true }).click();
+    await expect(section).toContainText('5 image payloads');
+    await expect(section.getByRole('button', { name: 'Remove image payloads' })).toBeVisible();
+    await snapEl(section, 'settings-image-cleanup');
+  });
+
   test('settings remote access section', async ({ page }) => {
     await openSettings(page);
     const remoteSection = await openSettingsPanel(
@@ -1560,12 +1685,22 @@ test.describe('In-session search', () => {
     await page.waitForSelector('.kit-find-bar', { timeout: 5_000 });
     await page.waitForTimeout(300);
 
-    // Type a common word to get matches
+    // Search for text present in the selected transcript, in any language.
+    const text = await page.locator('.message .text-content:visible')
+      .filter({ hasText: /\S/ }).first().innerText();
+    const query = text.match(/[\p{L}\p{N}]{3,24}/u)?.[0]
+      ?? text.trim().split(/\s+/)[0];
     const input = page.locator('.kit-find-bar__input');
-    await input.fill('the');
+    await input.fill(query);
     await page.waitForTimeout(1000);
 
     await snap(page, 'in-session-search');
+
+    await page.getByRole('button', { name: 'Show search results' }).click();
+    await expect(page.getByRole('region', { name: 'Search results' })).toBeVisible();
+    await expect(page.locator('.find-overview-rail')).toBeVisible();
+    await expect(page.locator('.find-result-button').first()).toBeVisible();
+    await snap(page, 'in-session-search-results');
 
     // Close search
     await page.keyboard.press('Escape');
@@ -1581,7 +1716,40 @@ test.describe('Token usage', () => {
   });
 
   test('token usage in session header', async ({ page }) => {
-    await selectRichSession(page);
+    // The archive may have no Codex assistant/model messages or recorded tokens.
+    const session = {
+      id: 'screenshot-token-usage', agent: 'codex', project: 'agentsview', machine: 'local',
+      first_message: 'Review the changes.',
+      started_at: '2026-09-01T15:00:00Z', ended_at: '2026-09-01T15:02:00Z',
+      created_at: '2026-09-01T15:00:00Z', message_count: 2, user_message_count: 1,
+      peak_context_tokens: 32000, total_output_tokens: 1200,
+      has_peak_context_tokens: true, has_total_output_tokens: true, is_automated: false,
+    };
+    const messages = [
+      {
+        id: 1, session_id: session.id, ordinal: 0, role: 'user',
+        content: session.first_message, content_length: session.first_message.length,
+        timestamp: session.started_at, model: '', thinking_text: '',
+        has_thinking: false, has_tool_use: false, is_system: false,
+        context_tokens: 0, output_tokens: 0, has_context_tokens: false, has_output_tokens: false,
+      },
+      {
+        id: 2, session_id: session.id, ordinal: 1, role: 'assistant',
+        content: 'The changes are ready.', content_length: 22,
+        timestamp: session.ended_at, model: 'gpt-5.4', reasoning_effort: 'high', thinking_text: '',
+        has_thinking: false, has_tool_use: false, is_system: false,
+        context_tokens: 32000, output_tokens: 1200, has_context_tokens: true, has_output_tokens: true,
+      },
+    ];
+    const sessionPath = `/api/v1/sessions/${session.id}`;
+    await page.route(`**${sessionPath}`, (route) => route.fulfill({ json: session }));
+    await page.route(`**${sessionPath}/messages*`, (route) => route.fulfill({
+      json: { messages, count: messages.length },
+    }));
+    await page.goto(`/sessions/${session.id}`);
+    await expect(page.locator('.model-badge__model')).toHaveText('gpt-5.4');
+    await expect(page.locator('.model-badge .model-badge__effort')).toHaveText('high');
+    await expect(page.getByRole('button', { name: 'Copy link to session', exact: true })).toBeVisible();
     await page.waitForTimeout(500);
 
     // Token badge lives in SessionBreadcrumb
@@ -1670,6 +1838,7 @@ test.describe('Follow latest', () => {
     const padX = 100;
     const padY = 14;
     await page.screenshot({
+      style: CAPTURE_STYLE,
       path: join(DIR, 'follow-latest-toggle.png'),
       type: 'png',
       clip: {

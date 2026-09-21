@@ -1,7 +1,12 @@
 import type { DataChangedEvent } from "../api/client.js";
-import { MetadataService, SessionsService } from "../api/generated/index";
-import { callGenerated, isAbortError, isNotFoundError } from "../api/runtime.js";
-import type { Session, ProjectInfo, AgentInfo, SidebarSessionIndexRow } from "../api/types.js";
+import { MetadataService, SessionsService, SettingsService } from "../api/generated/index";
+import { isAbortError, isNotFoundError } from "../api/runtime.js";
+import type { Session } from "../api/types.js";
+import type {
+  DbProjectInfo as ProjectInfo,
+  DbAgentInfo as AgentInfo,
+  DbSidebarSessionIndexRow as SidebarSessionIndexRow,
+} from "../api/generated/index.js";
 import { sync } from "./sync.svelte.js";
 import { events } from "./events.svelte.js";
 import { starred } from "./starred.svelte.js";
@@ -32,6 +37,7 @@ export interface SessionGroupInput {
   parent_session_id?: string | null;
   relationship_type?: string | null;
   project: string;
+  project_assigned?: boolean;
   machine: string;
   agent: string;
   agent_label?: string | null;
@@ -267,6 +273,8 @@ class SessionsStore {
   projects: ProjectInfo[] = $state([]);
   agents: AgentInfo[] = $state([]);
   machines: string[] = $state([]);
+  machineLabels: Record<string, string> = $state({});
+  private machineAliases = new Map<string, string>();
   activeSessionId: string | null = $state(null);
   // Lets the message pane explain a 404 instead of rendering blank.
   activeSessionNotFound: boolean = $state(false);
@@ -420,6 +428,7 @@ class SessionsStore {
     this.filters = this.#savedFilters.filters;
     this.dateFiltersWindowDays = this.#savedFilters.windowDays;
     this.filterPersistenceHeld = false;
+    this.normalizeMachineFilter();
     if (
       previous.includeOneShot !== this.filters.includeOneShot ||
       previous.includeAutomated !== this.filters.includeAutomated
@@ -451,6 +460,7 @@ class SessionsStore {
     this.dateFiltersWindowDays = parseWindowDaysParam(params[SESSION_ANALYTICS_WINDOW_PARAM]);
     starred.filterOnly = params["starred"] === "true";
     this.filterPersistenceHeld = false;
+    this.normalizeMachineFilter();
     if (prevOneShot !== next.includeOneShot || prevAutomated !== next.includeAutomated) {
       this.invalidateFilterCaches();
     }
@@ -513,10 +523,7 @@ class SessionsStore {
       total: this.total,
     };
     try {
-      const index = await callGenerated(
-        (options) => SessionsService.getApiV1SessionsSidebarIndex(params, options),
-        signal,
-      );
+      const index = await SessionsService.getApiV1SessionsSidebarIndex(params, { signal });
       if (this.loadVersion !== version) return;
 
       this.sidebarIndexVersion = indexVersion;
@@ -602,10 +609,7 @@ class SessionsStore {
         const promise = this.runSidebarHydration(async () => {
           if (signal.aborted) return;
           try {
-            const hydrated = await callGenerated(
-              (options) => SessionsService.getApiV1SessionsById({ id }, options),
-              signal,
-            );
+            const hydrated = await SessionsService.getApiV1SessionsById({ id }, { signal });
             if (
               version !== this.sidebarIndexVersion ||
               epoch !== (this.sidebarHydrationEpochByVersion.get(version) ?? 0)
@@ -685,17 +689,13 @@ class SessionsStore {
     const signal = this.routeSignal();
     this.loading = true;
     try {
-      const index = await callGenerated(
-        (options) =>
-          SessionsService.getApiV1SessionsSidebarIndex(
-            {
-              ...this.apiParams,
-              cursor: this.nextCursor!,
-              limit: SESSION_PAGE_SIZE,
-            },
-            options,
-          ),
-        signal,
+      const index = await SessionsService.getApiV1SessionsSidebarIndex(
+        {
+          ...this.apiParams,
+          cursor: this.nextCursor!,
+          limit: SESSION_PAGE_SIZE,
+        },
+        { signal },
       );
       if (this.loadVersion !== version) return;
       // Merge index-page order first, appended rows last. Rows outside
@@ -805,6 +805,9 @@ class SessionsStore {
         const res = await MetadataService.getApiV1Machines(this.metadataParams);
         if (ver === this.machinesVersion) {
           this.machines = res.machines;
+          this.machineLabels = res.machine_labels ?? {};
+          this.machineAliases = new Map(Object.entries(res.machine_aliases ?? {}));
+          this.normalizeMachineFilter();
           this.machinesLoaded = true;
         }
       } catch {
@@ -816,6 +819,22 @@ class SessionsStore {
       }
     })();
     return this.machinesPromise;
+  }
+
+  machineLabel(machine: string): string {
+    return this.machineLabels[machine] ?? machine;
+  }
+
+  private normalizeMachineFilter(): void {
+    const machine = [
+      ...new Set(
+        this.filters.machine.split(",").map((key) => this.machineAliases.get(key.trim()) ?? key),
+      ),
+    ].join(",");
+    if (machine !== this.filters.machine) {
+      this.filters.machine = machine;
+      this.persistFiltersIfAllowed();
+    }
   }
 
   private setActiveSession(id: string | null) {
@@ -858,10 +877,7 @@ class SessionsStore {
     const entry = { id, promise: Promise.resolve() };
     entry.promise = (async () => {
       try {
-        const session = await callGenerated(
-          (options) => SessionsService.getApiV1SessionsById({ id }, options),
-          signal,
-        );
+        const session = await SessionsService.getApiV1SessionsById({ id }, { signal });
         if (this.activeSessionId === id && this.navigateRead.isCurrent(signal)) {
           const idx = this.sessions.findIndex((s) => s.id === id);
           if (idx >= 0) {
@@ -941,10 +957,7 @@ class SessionsStore {
     const version = ++this.refreshVersion;
     const signal = this.refreshRead.begin();
     try {
-      const session = await callGenerated(
-        (options) => SessionsService.getApiV1SessionsById({ id }, options),
-        signal,
-      );
+      const session = await SessionsService.getApiV1SessionsById({ id }, { signal });
       if (
         this.refreshVersion !== version ||
         this.activeSessionId !== id ||
@@ -971,9 +984,9 @@ class SessionsStore {
     const version = ++this.childSessionsVersion;
     const signal = this.childSessionsRead.begin();
     try {
-      const children = await callGenerated(
-        (options) => SessionsService.getApiV1SessionsByIdChildren({ id: parentId }, options),
-        signal,
+      const children = await SessionsService.getApiV1SessionsByIdChildren(
+        { id: parentId },
+        { signal },
       );
       if (
         this.childSessionsVersion !== version ||
@@ -1024,10 +1037,7 @@ class SessionsStore {
     const signal = this.routeSignal();
     this.signalDetailLoading = true;
     try {
-      const session = await callGenerated(
-        (options) => SessionsService.getApiV1SessionsById({ id }, options),
-        signal,
-      );
+      const session = await SessionsService.getApiV1SessionsById({ id }, { signal });
       if (signal.aborted) return;
       this.signalDetailCache.set(id, {
         basis: session.health_score_basis ?? null,
@@ -1049,7 +1059,7 @@ class SessionsStore {
         this.sessions[idx] = {
           ...s,
           health_score_basis: detail.basis,
-          health_penalties: detail.penalties,
+          health_penalties: detail.penalties ?? undefined,
         };
       }
     }
@@ -1418,10 +1428,47 @@ class SessionsStore {
       // Explicitly null it out so the store reflects the cleared state rather
       // than keeping the stale value until the next SSE-triggered refresh.
       if (displayName === null && updated.display_name === undefined) {
-        merged.display_name = null;
+        merged.display_name = undefined;
       }
       this.sessions[idx] = merged;
     }
+  }
+
+  async assignSessionProject(id: string, project: string) {
+    const assignment = await SettingsService.putApiV1SettingsSessionProjectAssignmentsBySessionId(
+      {
+        sessionId: id,
+      },
+      { project },
+    );
+    const idx = this.sessions.findIndex((session) => session.id === id);
+    if (idx !== -1) {
+      this.sessions[idx] = {
+        ...this.sessions[idx]!,
+        project: assignment.project,
+        project_assigned: true,
+      };
+    }
+    this.invalidateProjectCache();
+    await this.load({ force: true });
+    return assignment.project;
+  }
+
+  async clearSessionProjectAssignment(id: string) {
+    const cleared = await SettingsService.deleteApiV1SettingsSessionProjectAssignmentsBySessionId({
+      sessionId: id,
+    });
+    const idx = this.sessions.findIndex((session) => session.id === id);
+    if (idx !== -1) {
+      this.sessions[idx] = {
+        ...this.sessions[idx]!,
+        project: cleared.project,
+        project_assigned: false,
+      };
+    }
+    this.invalidateProjectCache();
+    await this.load({ force: true });
+    return cleared.project;
   }
 
   private startLiveRefresh() {
@@ -1530,21 +1577,33 @@ export function createSessionsStore(): SessionsStore {
 
 function sidebarIndexRowToSession(row: SidebarSessionIndexRow, existing?: Session): Session {
   const skinny: Session = {
+    compaction_count: 0,
+    consecutive_failure_max: 0,
+    edit_churn_count: 0,
+    ended_with_role: "",
+    final_failure_streak: 0,
+    mid_task_compaction_count: 0,
+    outcome: "",
+    outcome_confidence: "",
+    secret_leak_count: 0,
+    tool_failure_signal_count: 0,
+    tool_retry_count: 0,
     id: row.id,
     project: row.project,
+    project_assigned: row.project_assigned ?? false,
     machine: row.machine,
     agent: row.agent,
     agent_label: row.agent_label ?? undefined,
     entrypoint: row.entrypoint ?? undefined,
     first_message: null,
-    display_name: row.display_name ?? null,
+    display_name: row.display_name ?? undefined,
     started_at: row.started_at,
     ended_at: row.ended_at,
     message_count: row.message_count,
     user_message_count: row.user_message_count,
     parent_session_id: row.parent_session_id ?? undefined,
     relationship_type: row.relationship_type ?? undefined,
-    termination_status: row.termination_status ?? null,
+    termination_status: row.termination_status ?? undefined,
     total_output_tokens: 0,
     peak_context_tokens: 0,
     has_total_output_tokens: false,
@@ -1560,6 +1619,7 @@ function sidebarIndexRowToSession(row: SidebarSessionIndexRow, existing?: Sessio
     ...skinny,
     ...existing,
     project: skinny.project,
+    project_assigned: skinny.project_assigned,
     machine: skinny.machine,
     agent: skinny.agent,
     agent_label: skinny.agent_label,

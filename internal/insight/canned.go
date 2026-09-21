@@ -13,6 +13,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 const (
@@ -418,6 +419,8 @@ func writeCannedKindRules(
 			b.WriteString("- Context pressure coverage is present; pressure conclusions must cite the aggregate pressure fields and stay proportional to the covered session count.\n")
 		}
 		b.WriteString("\n")
+	default:
+		// Other templates need no context-setup rules.
 	}
 }
 
@@ -1105,11 +1108,11 @@ func sortedKeys(values map[string]bool) []string {
 }
 
 func truncateRunes(s string, maxRunes int) string {
-	runes := []rune(strings.TrimSpace(s))
-	if len(runes) <= maxRunes {
-		return string(runes)
+	s = string([]rune(strings.TrimSpace(s)))
+	if stringutil.TruncateRunes(s, maxRunes, "") == s {
+		return s
 	}
-	return string(runes[:maxRunes-3]) + "..."
+	return stringutil.TruncateRunes(s, maxRunes-3, "...")
 }
 
 func round1(v float64) float64 {

@@ -31,6 +31,7 @@ func TestParseUsageTokenTypes(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got, err := ParseUsageTokenTypes(tt.raw)
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
@@ -39,6 +40,7 @@ func TestParseUsageTokenTypes(t *testing.T) {
 
 	for _, raw := range []string{"unknown", "input,unknown", ","} {
 		t.Run("reject "+raw, func(t *testing.T) {
+			t.Parallel()
 			_, err := ParseUsageTokenTypes(raw)
 			require.Error(t, err)
 		})

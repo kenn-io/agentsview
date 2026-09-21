@@ -36,8 +36,7 @@ func TestDeviceAuthServiceEnrollmentTokenAndRevocation(t *testing.T) {
 	assert.Equal(t, now, enrollment.CreatedAt)
 
 	stored := store.devices[enrollment.Identity.DeviceID]
-	assert.Equal(t,
-		CredentialDigest(sha256.Sum256([]byte(enrollment.Credential))),
+	assert.Equal(t, CredentialDigest(sha256.Sum256([]byte(enrollment.Credential))),
 		stored.CredentialDigest,
 	)
 	assert.NotContains(t, string(stored.CredentialDigest[:]), enrollment.Credential)
@@ -57,7 +56,7 @@ func TestDeviceAuthServiceEnrollmentTokenAndRevocation(t *testing.T) {
 	assert.Equal(t, enrollment.Identity, identity)
 
 	_, err = service.AuthenticateToken(t.Context(), issued.Token, ScopeCommit)
-	assert.ErrorIs(t, err, ErrUnauthorized)
+	require.ErrorIs(t, err, ErrUnauthorized)
 	assert.NotContains(t, err.Error(), issued.Token)
 
 	revoked, err := service.RevokeDevice(t.Context(), enrollment.Identity)
@@ -65,7 +64,7 @@ func TestDeviceAuthServiceEnrollmentTokenAndRevocation(t *testing.T) {
 	assert.True(t, revoked)
 
 	_, err = service.AuthenticateToken(t.Context(), issued.Token, ScopeUpload)
-	assert.ErrorIs(t, err, ErrUnauthorized)
+	require.ErrorIs(t, err, ErrUnauthorized)
 	assert.NotContains(t, err.Error(), issued.Token)
 }
 
@@ -92,7 +91,7 @@ func TestDeviceAuthServiceCredentialAndExpiryFailuresStayOpaque(t *testing.T) {
 		t.Context(), enrollment.Identity.DeviceID,
 		"avdc_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", ScopeStatus,
 	)
-	assert.ErrorIs(t, err, ErrUnauthorized)
+	require.ErrorIs(t, err, ErrUnauthorized)
 	assert.NotContains(t, err.Error(), enrollment.Credential)
 
 	issued, err := service.IssueToken(
@@ -102,7 +101,7 @@ func TestDeviceAuthServiceCredentialAndExpiryFailuresStayOpaque(t *testing.T) {
 
 	now = issued.ExpiresAt
 	_, err = service.AuthenticateToken(t.Context(), issued.Token, ScopeStatus)
-	assert.ErrorIs(t, err, ErrUnauthorized)
+	require.ErrorIs(t, err, ErrUnauthorized)
 	assert.NotContains(t, err.Error(), issued.Token)
 }
 
@@ -130,7 +129,7 @@ func TestDeviceAuthServiceAuthenticatesCredentialWithoutIssuingToken(t *testing.
 		t.Context(), enrollment.Identity.DeviceID,
 		"avdc_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
 	)
-	assert.ErrorIs(t, err, ErrUnauthorized)
+	require.ErrorIs(t, err, ErrUnauthorized)
 	assert.NotContains(t, err.Error(), enrollment.Credential)
 
 	_, err = service.RevokeDevice(t.Context(), enrollment.Identity)
@@ -151,14 +150,14 @@ func TestDeviceAuthServiceRejectsInvalidScopeRequestsBeforeStoreAccess(t *testin
 	_, err = service.IssueToken(
 		t.Context(), "device-a", "avdc_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", 0,
 	)
-	assert.ErrorIs(t, err, ErrInvalid)
+	require.ErrorIs(t, err, ErrInvalid)
 	assert.Zero(t, store.issueCalls)
 
 	_, err = service.AuthenticateToken(
 		t.Context(), "avdt_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
 		ScopeNegotiate|ScopeUpload,
 	)
-	assert.ErrorIs(t, err, ErrInvalid)
+	require.ErrorIs(t, err, ErrInvalid)
 	assert.Zero(t, store.authenticateCalls)
 }
 
@@ -175,7 +174,7 @@ func TestDeviceAuthServiceRejectsCredentialStoreIdentityMismatch(t *testing.T) {
 	credential := "avdc_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 
 	_, err = service.AuthenticateCredential(t.Context(), "dev_requested", credential)
-	assert.ErrorIs(t, err, ErrConflict)
+	require.ErrorIs(t, err, ErrConflict)
 
 	_, err = service.IssueToken(
 		t.Context(), "dev_requested", credential, ScopeNegotiate,
@@ -206,7 +205,7 @@ func TestParseDeviceTokenScopeNamesRejectsAmbiguousValues(t *testing.T) {
 		{"unknown"},
 	} {
 		_, err := ParseDeviceTokenScopeNames(names)
-		assert.ErrorIs(t, err, ErrInvalid, "names: %v", names)
+		require.ErrorIs(t, err, ErrInvalid, "names: %v", names)
 	}
 	assert.Nil(t, DeviceTokenScope(0).Names())
 }
@@ -216,6 +215,8 @@ func TestDigestDeviceSecretRejectsOversizedInputWithoutProportionalAllocation(t 
 
 	oversized := credentialPrefix + strings.Repeat("A", 8*1024)
 	result := testing.Benchmark(func(b *testing.B) {
+		b.Helper()
+
 		for b.Loop() {
 			_, _ = digestDeviceSecret(oversized, credentialPrefix)
 		}

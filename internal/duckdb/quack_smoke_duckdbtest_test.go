@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 func TestQuackLoopbackAttachRoundTrip(t *testing.T) {
@@ -157,7 +158,7 @@ func TestQuackStoreReattachesAfterServerRestart(t *testing.T) {
 	)
 	require.NoError(t, err, "insert seed row")
 
-	store, err := NewQuackStore(uri, token, false, 0)
+	store, err := NewQuackStore(ctx, uri, token, false, 0)
 	require.NoError(t, err, "open quack store")
 	t.Cleanup(func() {
 		require.NoError(t, store.Close(), "close quack store")
@@ -207,7 +208,7 @@ func TestQuackStoreReattachesAfterFailedReattach(t *testing.T) {
 	)
 	require.NoError(t, err, "insert seed row")
 
-	store, err := NewQuackStore(uri, token, false, 0)
+	store, err := NewQuackStore(ctx, uri, token, false, 0)
 	require.NoError(t, err, "open quack store")
 	t.Cleanup(func() {
 		require.NoError(t, store.Close(), "close quack store")
@@ -252,14 +253,14 @@ func TestQuackStoreAnalyticsDashboardReads(t *testing.T) {
 		t, local, "alpha", "duck-sync-edit",
 		0, 0, "src/main.go", "2026-01-10T02:00:00Z",
 	)
-	result, err := Push(ctx, path, local, "quack-client", SyncOptions{}, true, nil)
+	result, err := Push(ctx, path, local, "quack-client", storage.MirrorPushOptions{}, true, nil)
 	require.NoError(t, err, "push analytics fixture into local mirror")
 	assert.Equal(t, 3, result.SessionsPushed)
 	assert.Equal(t, 4, result.MessagesPushed)
 
 	openQuackMirrorServer(t, ctx, path, uri, token)
 
-	store, err := NewQuackStore(uri, token, false, 0)
+	store, err := NewQuackStore(ctx, uri, token, false, 0)
 	require.NoError(t, err, "open Quack-backed store")
 	t.Cleanup(func() {
 		require.NoError(t, store.Close(), "close Quack-backed store")
@@ -367,7 +368,7 @@ func openQuackMirrorServer(
 	t *testing.T, ctx context.Context, path, uri, token string,
 ) *sql.DB {
 	t.Helper()
-	server, err := Open(path)
+	server, err := Open(ctx, path)
 	require.NoError(t, err, "open server DuckDB file")
 	t.Cleanup(func() {
 		require.NoError(t, server.Close(), "close server DuckDB file")

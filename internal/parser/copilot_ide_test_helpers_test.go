@@ -73,8 +73,7 @@ func parseVisualStudioCopilotTestSession(
 	t *testing.T, path, project, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	t.Helper()
-	if tracePath, conversationID, ok :=
-		splitVisualStudioCopilotVirtualPath(path); ok {
+	if tracePath, conversationID, ok := splitVisualStudioCopilotVirtualPath(path); ok {
 		return parseVisualStudioCopilotConversation(
 			tracePath, conversationID, project, machine,
 		)

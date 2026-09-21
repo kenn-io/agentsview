@@ -1,8 +1,6 @@
 package service_test
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +12,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/servicehttp"
 )
 
 func seedPairwiseUsageFixture(t *testing.T, d *db.DB) {
@@ -195,7 +194,7 @@ func TestBuildUsageFilter_Validation(t *testing.T) {
 			_, err := service.BuildUsageFilter(tc.req)
 			require.Error(t, err)
 			var ue *service.UsageInputError
-			assert.True(t, errors.As(err, &ue),
+			assert.ErrorAs(t, err, &ue,
 				"want UsageInputError, got %T", err)
 		})
 	}
@@ -206,12 +205,12 @@ func TestDirectBackend_UsageSummary_InvalidInput(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	be := service.NewDirectBackend(d, nil)
 
-	_, err := be.UsageSummary(context.Background(), service.UsageRequest{
+	_, err := be.UsageSummary(t.Context(), service.UsageRequest{
 		Timezone: "Fake/Zone",
 	})
 	require.Error(t, err)
 	var ue *service.UsageInputError
-	assert.True(t, errors.As(err, &ue), "want UsageInputError, got %T", err)
+	assert.ErrorAs(t, err, &ue, "want UsageInputError, got %T", err)
 }
 
 func TestDirectBackend_UsageSummary_UnknownProjectKeyHasStableCode(t *testing.T) {
@@ -219,7 +218,7 @@ func TestDirectBackend_UsageSummary_UnknownProjectKeyHasStableCode(t *testing.T)
 	d := dbtest.OpenTestDB(t)
 	be := service.NewDirectBackend(d, nil)
 
-	_, err := be.UsageSummary(context.Background(), service.UsageRequest{
+	_, err := be.UsageSummary(t.Context(), service.UsageRequest{
 		ExcludeProjectKey: "pl1:sha256:stale",
 	})
 	require.Error(t, err)
@@ -233,7 +232,7 @@ func TestDirectBackend_UsageSummary_EmptyRange(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	be := service.NewDirectBackend(d, nil)
 
-	res, err := be.UsageSummary(context.Background(), service.UsageRequest{
+	res, err := be.UsageSummary(t.Context(), service.UsageRequest{
 		From: "2024-06-01", To: "2024-06-03",
 	})
 	require.NoError(t, err)
@@ -248,7 +247,7 @@ func TestHTTPBackend_UsageSummary_Roundtrip(t *testing.T) {
 	env := newHTTPBackendEnv(t)
 	svc := env.Backend("", false)
 
-	res, err := svc.UsageSummary(context.Background(), service.UsageRequest{
+	res, err := svc.UsageSummary(t.Context(), service.UsageRequest{
 		From: "2024-06-01", To: "2024-06-03",
 	})
 	require.NoError(t, err)
@@ -280,9 +279,9 @@ func TestHTTPBackend_UsageSummary_SendsExplicitIncludeOneShot(t *testing.T) {
 					_, _ = w.Write([]byte(`{"from":"x","to":"y"}`))
 				}))
 			t.Cleanup(srv.Close)
-			svc := service.NewHTTPBackend(srv.URL, "", false)
+			svc := servicehttp.NewHTTPBackend(srv.URL, "", false, "")
 
-			_, err := svc.UsageSummary(context.Background(), service.UsageRequest{
+			_, err := svc.UsageSummary(t.Context(), service.UsageRequest{
 				From: "2024-06-01", To: "2024-06-02",
 				IncludeOneShot: tc.includeOneShot,
 			})
@@ -301,13 +300,13 @@ func TestHTTPBackend_UsageSummary_ReadOnly(t *testing.T) {
 			w.WriteHeader(http.StatusNotImplemented)
 		}))
 	t.Cleanup(srv.Close)
-	svc := service.NewHTTPBackend(srv.URL, "", true)
+	svc := servicehttp.NewHTTPBackend(srv.URL, "", true, "")
 
-	_, err := svc.UsageSummary(context.Background(), service.UsageRequest{
+	_, err := svc.UsageSummary(t.Context(), service.UsageRequest{
 		From: "2024-06-01", To: "2024-06-02",
 	})
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, db.ErrReadOnly),
+	assert.ErrorIs(t, err, db.ErrReadOnly,
 		"501 should map to db.ErrReadOnly, got %v", err)
 }
 
@@ -325,7 +324,7 @@ func TestBuildUsagePairwiseFilters_Validation(t *testing.T) {
 	)
 	require.Error(t, err)
 	var ue *service.UsageInputError
-	assert.True(t, errors.As(err, &ue))
+	require.ErrorAs(t, err, &ue)
 	assert.Equal(t, "right_dimension must be model or project", ue.Msg)
 }
 
@@ -383,7 +382,7 @@ func TestDirectBackend_UsagePairwiseComparison_ModelVsModel(t *testing.T) {
 	be := service.NewDirectBackend(d, nil)
 
 	res, err := be.UsagePairwiseComparison(
-		context.Background(),
+		t.Context(),
 		service.UsagePairwiseComparisonRequest{
 			From:           "2024-06-01",
 			To:             "2024-06-01",
@@ -412,7 +411,7 @@ func TestDirectBackend_UsagePairwiseComparison_ProjectVsModel(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	seedPairwiseUsageFixture(t, d)
 	be := service.NewDirectBackend(d, nil)
-	summary, err := be.UsageSummary(context.Background(), service.UsageRequest{
+	summary, err := be.UsageSummary(t.Context(), service.UsageRequest{
 		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
 		IncludeOneShot: true,
 	})
@@ -426,7 +425,7 @@ func TestDirectBackend_UsagePairwiseComparison_ProjectVsModel(t *testing.T) {
 	require.NotEmpty(t, betaKey)
 
 	res, err := be.UsagePairwiseComparison(
-		context.Background(),
+		t.Context(),
 		service.UsagePairwiseComparisonRequest{
 			From:           "2024-06-01",
 			To:             "2024-06-01",
@@ -458,7 +457,7 @@ func TestDirectBackend_UsagePairwiseComparison_PreservesCommaProjectLabel(
 		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
 		IncludeOneShot: true,
 	}
-	summary, err := be.UsageSummary(context.Background(), base)
+	summary, err := be.UsageSummary(t.Context(), base)
 	require.NoError(t, err)
 	keys := make(map[string]string)
 	for _, project := range summary.ProjectTotals {
@@ -468,7 +467,7 @@ func TestDirectBackend_UsagePairwiseComparison_PreservesCommaProjectLabel(
 	require.NotEmpty(t, keys["other"])
 
 	comparison, err := be.UsagePairwiseComparison(
-		context.Background(),
+		t.Context(),
 		service.UsagePairwiseComparisonRequest{
 			UsageRequest:   base,
 			LeftDimension:  "project",
@@ -495,7 +494,7 @@ func TestDirectBackend_UsageSummary_ExcludesOpaqueProjectKey(t *testing.T) {
 		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
 		IncludeOneShot: true,
 	}
-	summary, err := be.UsageSummary(context.Background(), base)
+	summary, err := be.UsageSummary(t.Context(), base)
 	require.NoError(t, err)
 	var betaKey string
 	for _, project := range summary.ProjectTotals {
@@ -506,7 +505,7 @@ func TestDirectBackend_UsageSummary_ExcludesOpaqueProjectKey(t *testing.T) {
 	require.NotEmpty(t, betaKey)
 
 	base.ExcludeProjectKey = betaKey
-	filtered, err := be.UsageSummary(context.Background(), base)
+	filtered, err := be.UsageSummary(t.Context(), base)
 	require.NoError(t, err)
 	require.Len(t, filtered.ProjectTotals, 1)
 	assert.Equal(t, "alpha", filtered.ProjectTotals[0].Project)
@@ -544,14 +543,14 @@ func TestDirectBackend_UsageSummary_ExcludesSubagentOnlyProjectKey(t *testing.T)
 		IncludeOneShot: true,
 	}
 
-	summary, err := be.UsageSummary(context.Background(), base)
+	summary, err := be.UsageSummary(t.Context(), base)
 	require.NoError(t, err)
 	require.Len(t, summary.ProjectTotals, 1)
 	require.NotEmpty(t, summary.ProjectTotals[0].ProjectKey)
 	assert.Equal(t, "subagent-only", summary.ProjectTotals[0].Project)
 
 	base.ExcludeProjectKey = summary.ProjectTotals[0].ProjectKey
-	filtered, err := be.UsageSummary(context.Background(), base)
+	filtered, err := be.UsageSummary(t.Context(), base)
 	require.NoError(t, err)
 	assert.Empty(t, filtered.ProjectTotals)
 	assert.Zero(t, filtered.Totals.InputTokens)
@@ -569,7 +568,7 @@ func TestDirectBackend_UsageSummary_ExcludesCommaProjectByOpaqueKey(
 		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
 		IncludeOneShot: true,
 	}
-	summary, err := be.UsageSummary(context.Background(), base)
+	summary, err := be.UsageSummary(t.Context(), base)
 	require.NoError(t, err)
 	var commaKey string
 	for _, project := range summary.ProjectTotals {
@@ -580,7 +579,7 @@ func TestDirectBackend_UsageSummary_ExcludesCommaProjectByOpaqueKey(
 	require.NotEmpty(t, commaKey)
 
 	base.ExcludeProjectKey = commaKey
-	filtered, err := be.UsageSummary(context.Background(), base)
+	filtered, err := be.UsageSummary(t.Context(), base)
 	require.NoError(t, err)
 	require.Len(t, filtered.ProjectTotals, 1)
 	assert.Equal(t, "other", filtered.ProjectTotals[0].Project)
@@ -595,7 +594,7 @@ func TestDirectBackend_UsagePairwiseComparison_ZeroDataSide(t *testing.T) {
 	be := service.NewDirectBackend(d, nil)
 
 	res, err := be.UsagePairwiseComparison(
-		context.Background(),
+		t.Context(),
 		service.UsagePairwiseComparisonRequest{
 			From:           "2024-06-01",
 			To:             "2024-06-01",
@@ -623,7 +622,7 @@ func TestDirectBackend_UsagePairwiseComparison_ConflictingBaseFilterReturnsZeroD
 	be := service.NewDirectBackend(d, nil)
 
 	res, err := be.UsagePairwiseComparison(
-		context.Background(),
+		t.Context(),
 		service.UsagePairwiseComparisonRequest{
 			From:           "2024-06-01",
 			To:             "2024-06-01",
@@ -687,7 +686,7 @@ func TestDirectBackend_UsagePairwiseComparison_DoesNotUseSentinelFilterValues(t 
 	be := service.NewDirectBackend(d, nil)
 
 	res, err := be.UsagePairwiseComparison(
-		context.Background(),
+		t.Context(),
 		service.UsagePairwiseComparisonRequest{
 			From:           "2024-06-01",
 			To:             "2024-06-01",
@@ -716,7 +715,7 @@ func TestHTTPBackend_UsagePairwiseComparison_Roundtrip(t *testing.T) {
 	svc := env.Backend("", false)
 
 	res, err := svc.UsagePairwiseComparison(
-		context.Background(),
+		t.Context(),
 		service.UsagePairwiseComparisonRequest{
 			From:           "2024-06-01",
 			To:             "2024-06-01",
@@ -753,10 +752,10 @@ func TestHTTPBackend_UsagePairwiseComparison_SerializesRequest(t *testing.T) {
 		},
 	))
 	t.Cleanup(srv.Close)
-	svc := service.NewHTTPBackend(srv.URL, "", false)
+	svc := servicehttp.NewHTTPBackend(srv.URL, "", false, "")
 
 	res, err := svc.UsagePairwiseComparison(
-		context.Background(),
+		t.Context(),
 		service.UsagePairwiseComparisonRequest{
 			GitBranch:         "alpha/main",
 			ExcludeProjectKey: "pl1:sha256:hidden",

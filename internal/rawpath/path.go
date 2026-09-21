@@ -14,6 +14,20 @@ const DefaultMaxBytes = 4096
 
 var ErrInvalid = errors.New("invalid raw logical path")
 
+// PlatformKey maps a validated logical path to its cross-platform
+// filesystem-equivalence key: two paths with the same key denote the same
+// location wherever a manifest may materialize. Windows (NTFS, ReFS) and
+// macOS (default case-insensitive APFS volumes) compare file names
+// case-insensitively using simple Unicode case mapping, so the key lowercases
+// every rune. The mapping deliberately stops at case: those filesystems do
+// not normalize Unicode, so NFC and NFD spellings stay distinct keys, and
+// NTFS short-name aliases depend on per-volume state that cannot be
+// predicted here. The result depends only on the input, never on locale,
+// time, or the host running the check.
+func PlatformKey(value string) string {
+	return strings.ToLower(value)
+}
+
 // Validate enforces the cross-platform relative-path contract used by capture
 // plans and raw manifests.
 func Validate(value string, maxBytes int) error {

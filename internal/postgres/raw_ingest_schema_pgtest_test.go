@@ -3,7 +3,9 @@
 package postgres
 
 import (
+	"bytes"
 	"database/sql"
+	"log"
 	"net/url"
 	"strings"
 	"testing"
@@ -342,7 +344,18 @@ func TestCanWriteRawSyncSchemaRequiresExactRuntimePrivileges(t *testing.T) {
 	require.NoError(t, err, "Open runtime role")
 	t.Cleanup(func() { _ = restricted.Close() })
 
+	var output bytes.Buffer
+	previousOutput := log.Writer()
+	log.SetOutput(&output)
+	t.Cleanup(func() { log.SetOutput(previousOutput) })
 	writable, err := CanWriteRawSyncSchema(t.Context(), restricted, schema)
+	require.NoError(t, err)
+	assert.False(t, writable, "the prior insert-only job grants disable raw-sync routes")
+	assert.Contains(t, output.String(), "raw-sync routes disabled; missing requirements: SELECT ON raw_ingest_jobs, UPDATE ON raw_ingest_jobs")
+
+	_, err = admin.Exec(`GRANT SELECT, UPDATE ON ` + schema + `.raw_ingest_jobs TO ` + role)
+	require.NoError(t, err)
+	writable, err = CanWriteRawSyncSchema(t.Context(), restricted, schema)
 	require.NoError(t, err)
 	assert.True(t, writable)
 
@@ -367,7 +380,9 @@ func TestCanWriteRawSyncSchemaRequiresExactRuntimePrivileges(t *testing.T) {
 		{"raw_source_heads", "SELECT"},
 		{"raw_source_heads", "INSERT"},
 		{"raw_source_heads", "UPDATE"},
+		{"raw_ingest_jobs", "SELECT"},
 		{"raw_ingest_jobs", "INSERT"},
+		{"raw_ingest_jobs", "UPDATE"},
 	}
 	for _, required := range requiredTablePrivileges {
 		t.Run(required.table+"_"+strings.ToLower(required.privilege), func(t *testing.T) {

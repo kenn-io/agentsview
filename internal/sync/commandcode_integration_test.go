@@ -1,7 +1,6 @@
 package sync_test
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -23,7 +22,7 @@ func TestSyncPathsCommandCode(t *testing.T) {
 
 	commandCodeDir := t.TempDir()
 	testDB := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(testDB, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), testDB, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCommandCode: {commandCodeDir},
 		},
@@ -65,7 +64,7 @@ func TestSyncPathsCommandCodeMetaArrivalTriggersResync(t *testing.T) {
 
 	commandCodeDir := t.TempDir()
 	testDB := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(testDB, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), testDB, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCommandCode: {commandCodeDir},
 		},
@@ -109,7 +108,7 @@ func TestSyncAllSinceCommandCodeMetaArrivalTriggersResync(t *testing.T) {
 
 	commandCodeDir := t.TempDir()
 	testDB := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(testDB, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), testDB, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCommandCode: {commandCodeDir},
 		},
@@ -133,11 +132,10 @@ func TestSyncAllSinceCommandCodeMetaArrivalTriggersResync(t *testing.T) {
 	})
 
 	cutoff := time.Now()
-	time.Sleep(10 * time.Millisecond)
 	require.NoError(t, os.WriteFile(metaPath, []byte(`{"title":"Startup investigation","cwd":"/Users/alice/code/sample-project"}`), 0o644), "WriteFile(meta)")
 	require.NoError(t, os.Chtimes(metaPath, time.Now().Add(2*time.Second), time.Now().Add(2*time.Second)))
 
-	stats := engine.SyncAllSince(context.Background(), cutoff, nil)
+	stats := engine.SyncAllSince(t.Context(), cutoff, nil)
 	require.Equal(t, 1, stats.Synced, "synced = %d, want 1", stats.Synced)
 
 	assertSessionState(t, testDB, "commandcode:"+sessionID, func(sess *db.Session) {
@@ -155,7 +153,7 @@ func TestSourceMtimeCommandCodeIncludesMetaMtime(t *testing.T) {
 
 	commandCodeDir := t.TempDir()
 	testDB := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(testDB, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), testDB, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCommandCode: {commandCodeDir},
 		},
@@ -179,5 +177,5 @@ func TestSourceMtimeCommandCodeIncludesMetaMtime(t *testing.T) {
 
 	engine.SyncPaths([]string{jsonlPath})
 	assert.Equal(t, metaTime.UnixNano(),
-		engine.SourceMtime("commandcode:"+sessionID))
+		engine.SourceMtime(t.Context(), "commandcode:"+sessionID))
 }

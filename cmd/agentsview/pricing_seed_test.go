@@ -38,8 +38,7 @@ func TestSeedFallbackPricing_UpgradesExistingDBWithSupplementals(t *testing.T) {
 
 	// Simulate a DB seeded by the pre-supplemental binary: meta holds
 	// the bare snapshot version and the alias rows are absent.
-	require.NoError(t,
-		database.SetPricingMeta("_fallback_version", pricing.FallbackVersion))
+	require.NoError(t, database.SetPricingMeta("_fallback_version", pricing.FallbackVersion))
 
 	require.NoError(t, pricingrefresh.SeedFallback(database))
 
@@ -60,6 +59,29 @@ func TestSeedFallbackPricing_UpgradesExistingDBWithSupplementals(t *testing.T) {
 		assert.Equal(t, money.MustParseDollars("0.30"), row.CacheReadPerMTok,
 			"%s cache read rate", model)
 	}
+
+	meta, err := database.GetPricingMeta("_fallback_version")
+	require.NoError(t, err)
+	assert.Equal(t, pricing.SeedVersion, meta)
+}
+
+// TestSeedFallbackPricing_UpgradesExistingDBWithStepFunRow proves the
+// supplemental bump reaches databases seeded by the previous binary: a
+// DB whose meta holds the prior seed version re-seeds on startup and
+// gains the step-5-preview row without a resync.
+func TestSeedFallbackPricing_UpgradesExistingDBWithStepFunRow(t *testing.T) {
+	database := newTestDB(t)
+	require.NoError(t, database.SetPricingMeta("_fallback_version",
+		pricing.FallbackVersion+"+supplemental-4"))
+
+	require.NoError(t, pricingrefresh.SeedFallback(database))
+
+	row, err := database.GetModelPricing("step-5-preview")
+	require.NoError(t, err)
+	require.NotNil(t, row, "step-5-preview must be seeded after the version bump")
+	assert.Equal(t, money.MustParseDollars("1.00"), row.InputPerMTok)
+	assert.Equal(t, money.MustParseDollars("2.70"), row.OutputPerMTok)
+	assert.Equal(t, money.MustParseDollars("0.05"), row.CacheReadPerMTok)
 
 	meta, err := database.GetPricingMeta("_fallback_version")
 	require.NoError(t, err)
@@ -96,9 +118,8 @@ func TestSeedFallbackPricing_DeletesStaleDateAliasRows(t *testing.T) {
 			CacheReadPerMTok: money.MustParseDollars("0.16"),
 		},
 	})
-	require.NoError(t,
-		database.SetPricingMeta("_fallback_version",
-			pricing.FallbackVersion+"+supplemental-1"))
+	require.NoError(t, database.SetPricingMeta("_fallback_version",
+		pricing.FallbackVersion+"+supplemental-1"))
 
 	require.NoError(t, pricingrefresh.SeedFallback(database))
 

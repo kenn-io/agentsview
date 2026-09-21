@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -19,7 +18,7 @@ func TestDirectoryJSONLSourceSetDiscoversProjectFiles(t *testing.T) {
 
 	sources := NewDirectoryJSONLSourceSet(AgentQwen, []string{root})
 
-	discovered, err := sources.Discover(context.Background())
+	discovered, err := sources.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 2)
 	assert.Equal(t, []string{"project-a", "project-b"}, sourceProjects(discovered))
@@ -28,7 +27,7 @@ func TestDirectoryJSONLSourceSetDiscoversProjectFiles(t *testing.T) {
 		filepath.Join(root, "project-b", "session-b.jsonl"),
 	}, sourceDisplayPaths(discovered))
 
-	found, ok, err := sources.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := sources.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "session-b",
 	})
 	require.NoError(t, err)
@@ -50,7 +49,7 @@ func TestDirectoryJSONLSourceSetComposesPathFilters(t *testing.T) {
 		}),
 	)
 
-	discovered, err := sources.Discover(context.Background())
+	discovered, err := sources.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, "custom-project", discovered[0].ProjectHint)
@@ -62,7 +61,7 @@ func TestDirectoryJSONLSourceSetClassifiesDeletedProjectFiles(t *testing.T) {
 	sources := NewDirectoryJSONLSourceSet(AgentCommandCode, []string{root})
 
 	changed, err := sources.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{
 			Path:      filepath.Join(root, "project", "deleted.jsonl"),
 			EventKind: "remove",
@@ -75,7 +74,7 @@ func TestDirectoryJSONLSourceSetClassifiesDeletedProjectFiles(t *testing.T) {
 	assert.Equal(t, "project/deleted.jsonl", changed[0].Opaque.(JSONLSource).RelPath)
 
 	deep, err := sources.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{
 			Path:      filepath.Join(root, "project", "nested", "ignored.jsonl"),
 			EventKind: "remove",

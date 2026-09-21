@@ -8,10 +8,13 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/update"
+
+	"github.com/danielgtaylor/huma/v2"
 )
 
 func (s *Server) registerMetadataRoutes() {
-	group := newRouteGroup(s.api, "/api/v1", "Metadata")
+	group := huma.NewGroup(s.api, "/api/v1")
+	configureRouteGroup(group, "Metadata")
 
 	s.get(group, "/projects", "List projects", s.humaListProjects)
 	s.get(group, "/machines", "List machines", s.humaListMachines)
@@ -44,7 +47,21 @@ type projectsResponse struct {
 }
 
 type machinesResponse struct {
-	Machines []string `json:"machines"`
+	Machines       []string          `json:"machines"`
+	MachineLabels  map[string]string `json:"machine_labels"`
+	MachineAliases map[string]string `json:"machine_aliases"`
+}
+
+func (s *Server) machineAliases(ctx context.Context) (map[string]string, error) {
+	aliases, err := s.db.GetMachineAliases(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// The old local sentinel belongs only to this archive, never a shared mirror.
+	if _, local := s.db.(*db.DB); local && s.cfg.InstallationID != "" {
+		aliases["local"] = s.cfg.InstallationID
+	}
+	return aliases, nil
 }
 
 type branchesResponse struct {
@@ -122,7 +139,15 @@ func (s *Server) humaListMachines(
 	if err != nil {
 		return nil, serverError(err)
 	}
-	return &jsonOutput[machinesResponse]{Body: machinesResponse{Machines: machines}}, nil
+	labels, err := s.db.GetMachineLabels(ctx)
+	if err != nil {
+		return nil, serverError(err)
+	}
+	aliases, err := s.machineAliases(ctx)
+	if err != nil {
+		return nil, serverError(err)
+	}
+	return &jsonOutput[machinesResponse]{Body: machinesResponse{Machines: machines, MachineLabels: labels, MachineAliases: aliases}}, nil
 }
 
 func (s *Server) humaListBranches(
@@ -151,11 +176,13 @@ func (s *Server) humaGetVersion(
 	_ context.Context,
 	_ *emptyInput,
 ) (*jsonOutput[VersionInfo], error) {
-	return &jsonOutput[VersionInfo]{Body: s.version}, nil
+	version := s.version
+	version.InsightGenerationAvailable = supportsInsightGeneration(s.db)
+	return &jsonOutput[VersionInfo]{Body: version}, nil
 }
 
 func (s *Server) humaCheckUpdate(
-	_ context.Context,
+	ctx context.Context,
 	_ *emptyInput,
 ) (*jsonOutput[updateCheckResponse], error) {
 	if s.cfg.DisableUpdateCheck {
@@ -167,9 +194,9 @@ func (s *Server) humaCheckUpdate(
 	if checkFn == nil {
 		checkFn = update.CheckForUpdate
 	}
-	info, err := checkFn(s.version.Version, false, s.dataDir)
+	info, err := checkFn(ctx, s.version.Version, false, s.dataDir)
 	if err != nil || info == nil {
-		return &jsonOutput[updateCheckResponse]{
+		return &jsonOutput[updateCheckResponse]{ //nolint:nilerr // Optional update metadata falls back to the installed version.
 			Body: updateCheckResponse{CurrentVersion: s.version.Version},
 		}, nil
 	}

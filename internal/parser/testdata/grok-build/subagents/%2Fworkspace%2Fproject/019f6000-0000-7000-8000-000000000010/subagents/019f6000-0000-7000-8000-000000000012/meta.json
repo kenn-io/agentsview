@@ -1,0 +1,13 @@
+{
+  "subagent_id": "019f6000-0000-7000-8000-000000000012",
+  "parent_session_id": "019f6000-0000-7000-8000-000000000010",
+  "child_session_id": "019f6000-0000-7000-8000-000000000012",
+  "subagent_type": "explore",
+  "description": "Continue parser research",
+  "prompt": "Resume the earlier search",
+  "status": "completed",
+  "started_at": "2026-07-18T10:06:00Z",
+  "completed_at": "2026-07-18T10:08:00Z",
+  "effective_context_source": "resumed",
+  "resumed_from": "019f6000-0000-7000-8000-000000000011"
+}

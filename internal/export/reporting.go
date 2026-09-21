@@ -1,6 +1,7 @@
 package export
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -12,30 +13,30 @@ const (
 	reportingHourLayout = "2006-01-02-15"
 	reportingDateLayout = "2006-01-02"
 
-	// ReportingLegacySchemaVersion preserves the original first-seen usage
-	// snapshot and token-only charging semantics.
-	ReportingLegacySchemaVersion = 1
 	// ReportingSchemaVersion is the current wire version for hour, day, and
 	// digest exports consumed by downstream integrations.
-	ReportingSchemaVersion = 2
+	ReportingSchemaVersion = 3
+	// ReportingJointSchemaVersion adds opt-in session-free joint bucket cells.
+	ReportingJointSchemaVersion = 4
 )
 
 // IsSupportedReportingSchemaVersion reports whether reporting exports can
 // still produce the requested wire semantics.
 func IsSupportedReportingSchemaVersion(version int) bool {
-	return version == ReportingLegacySchemaVersion ||
-		version == ReportingSchemaVersion
+	return version == ReportingSchemaVersion || version == ReportingJointSchemaVersion
 }
 
 // ReportingHour is one immutable UTC-hour export. Digest identifies the
 // canonical document body with the derived Digest field omitted.
 type ReportingHour struct {
 	SchemaVersion int               `json:"schema_version"`
+	BucketSeconds int               `json:"bucket_seconds,omitzero"`
 	Period        string            `json:"period"`
 	Digest        string            `json:"digest"`
 	HasData       bool              `json:"has_data"`
 	Activity      ReportingActivity `json:"activity"`
 	Usage         ReportingUsage    `json:"usage"`
+	Joint         *ReportingJoint   `json:"joint,omitempty"`
 }
 
 // ReportingDay is one UTC date exported from a single read snapshot. A
@@ -43,6 +44,7 @@ type ReportingHour struct {
 // observed activity or usage.
 type ReportingDay struct {
 	SchemaVersion int             `json:"schema_version"`
+	BucketSeconds int             `json:"bucket_seconds,omitzero"`
 	Date          string          `json:"date"`
 	Complete      bool            `json:"complete"`
 	HasData       bool            `json:"has_data"`
@@ -54,6 +56,7 @@ type ReportingDay struct {
 // changed completed days without transferring hour document bodies.
 type ReportingDigest struct {
 	SchemaVersion int                  `json:"schema_version"`
+	BucketSeconds int                  `json:"bucket_seconds,omitzero"`
 	From          string               `json:"from"`
 	To            string               `json:"to"`
 	Days          []ReportingDigestDay `json:"days"`
@@ -70,12 +73,15 @@ type ReportingDigestDay struct {
 }
 
 type ReportingActivity struct {
-	Totals    ReportingActivityTotals             `json:"totals"`
-	Peak      ReportingActivityPeak               `json:"peak"`
-	Buckets   []ReportingActivityBucket           `json:"buckets"`
-	ByModel   []ReportingActivityBreakdown        `json:"by_model"`
-	ByAgent   []ReportingActivityBreakdown        `json:"by_agent"`
-	ByProject []ReportingActivityProjectBreakdown `json:"by_project"`
+	Totals          ReportingActivityTotals             `json:"totals"`
+	Peak            ReportingActivityPeak               `json:"peak"`
+	InteractivePeak ReportingActivityPeak               `json:"interactive_peak"`
+	SubagentPeak    ReportingActivityPeak               `json:"subagent_peak"`
+	AutomatedPeak   ReportingActivityPeak               `json:"automated_peak"`
+	Buckets         []ReportingActivityBucket           `json:"buckets"`
+	ByModel         []ReportingActivityBreakdown        `json:"by_model"`
+	ByAgent         []ReportingActivityBreakdown        `json:"by_agent"`
+	ByProject       []ReportingActivityProjectBreakdown `json:"by_project"`
 }
 
 type ReportingActivityTotals struct {
@@ -83,13 +89,16 @@ type ReportingActivityTotals struct {
 	IdleMinutes             float64     `json:"idle_minutes"`
 	AgentMinutes            float64     `json:"agent_minutes"`
 	AutomatedAgentMinutes   float64     `json:"automated_agent_minutes"`
+	SubagentAgentMinutes    float64     `json:"subagent_agent_minutes"`
 	InteractiveAgentMinutes float64     `json:"interactive_agent_minutes"`
 	OutputTokens            int64       `json:"output_tokens"`
 	Cost                    money.Money `json:"cost"`
 	AutomatedCost           money.Money `json:"automated_cost"`
+	SubagentCost            money.Money `json:"subagent_cost"`
 	InteractiveCost         money.Money `json:"interactive_cost"`
 	NewSessions             int         `json:"new_sessions"`
 	NewAutomatedSessions    int         `json:"new_automated_sessions"`
+	NewSubagentSessions     int         `json:"new_subagent_sessions"`
 	NewInteractiveSessions  int         `json:"new_interactive_sessions"`
 	NewUntimedSessions      int         `json:"new_untimed_sessions"`
 	NewProjects             int         `json:"new_projects"`
@@ -102,22 +111,28 @@ type ReportingActivityPeak struct {
 }
 
 type ReportingActivityBucket struct {
-	Start             string      `json:"start"`
-	AgentMinutes      float64     `json:"agent_minutes"`
-	MaxAgents         int         `json:"max_agents"`
-	OutputTokens      int64       `json:"output_tokens"`
-	Cost              money.Money `json:"cost"`
-	AutomatedAtPeak   int         `json:"automated_at_peak"`
-	InteractiveAtPeak int         `json:"interactive_at_peak"`
+	Start                string      `json:"start"`
+	AgentMinutes         float64     `json:"agent_minutes"`
+	MaxAgents            int         `json:"max_agents"`
+	MaxInteractiveAgents int         `json:"max_interactive_agents"`
+	MaxSubagentAgents    int         `json:"max_subagent_agents"`
+	MaxAutomatedAgents   int         `json:"max_automated_agents"`
+	OutputTokens         int64       `json:"output_tokens"`
+	Cost                 money.Money `json:"cost"`
+	AutomatedAtPeak      int         `json:"automated_at_peak"`
+	SubagentAtPeak       int         `json:"subagent_at_peak"`
+	InteractiveAtPeak    int         `json:"interactive_at_peak"`
 }
 
 type ReportingActivityBreakdown struct {
 	Key                     string      `json:"key"`
 	AgentMinutes            float64     `json:"agent_minutes"`
 	AutomatedAgentMinutes   float64     `json:"automated_agent_minutes"`
+	SubagentAgentMinutes    float64     `json:"subagent_agent_minutes"`
 	InteractiveAgentMinutes float64     `json:"interactive_agent_minutes"`
 	Cost                    money.Money `json:"cost"`
 	AutomatedCost           money.Money `json:"automated_cost"`
+	SubagentCost            money.Money `json:"subagent_cost"`
 	InteractiveCost         money.Money `json:"interactive_cost"`
 }
 
@@ -126,9 +141,11 @@ type ReportingActivityProjectBreakdown struct {
 	ProjectKey              string      `json:"project_key"`
 	AgentMinutes            float64     `json:"agent_minutes"`
 	AutomatedAgentMinutes   float64     `json:"automated_agent_minutes"`
+	SubagentAgentMinutes    float64     `json:"subagent_agent_minutes"`
 	InteractiveAgentMinutes float64     `json:"interactive_agent_minutes"`
 	Cost                    money.Money `json:"cost"`
 	AutomatedCost           money.Money `json:"automated_cost"`
+	SubagentCost            money.Money `json:"subagent_cost"`
 	InteractiveCost         money.Money `json:"interactive_cost"`
 }
 
@@ -201,16 +218,26 @@ func FinalizeReportingHour(hour ReportingHour) (ReportingHour, []byte, error) {
 		return ReportingHour{}, nil, err
 	}
 	hour = normalizeReportingHour(hour)
-	if err := validateReportingBuckets(hourStart, hour.Activity.Buckets); err != nil {
+	hour.Joint, err = normalizeReportingJoint(hour)
+	if err != nil {
+		return ReportingHour{}, nil, err
+	}
+	bucket, err := reportingBucketDuration(hour.SchemaVersion, hour.BucketSeconds)
+	if err != nil {
+		return ReportingHour{}, nil, err
+	}
+	if err := validateReportingBuckets(hourStart, bucket, hour.Activity.Buckets); err != nil {
 		return ReportingHour{}, nil, err
 	}
 
 	digest, err := DigestCanonical(reportingHourDigestInput{
 		SchemaVersion: hour.SchemaVersion,
+		BucketSeconds: hour.BucketSeconds,
 		Period:        hour.Period,
 		HasData:       hour.HasData,
 		Activity:      hour.Activity,
 		Usage:         hour.Usage,
+		Joint:         hour.Joint,
 	})
 	if err != nil {
 		return ReportingHour{}, nil, fmt.Errorf("digest reporting hour: %w", err)
@@ -234,6 +261,9 @@ func FinalizeReportingDay(day ReportingDay) (ReportingDay, []byte, error) {
 	if _, err := ParseReportingDate(day.Date); err != nil {
 		return ReportingDay{}, nil, err
 	}
+	if _, err := reportingBucketDuration(day.SchemaVersion, day.BucketSeconds); err != nil {
+		return ReportingDay{}, nil, err
+	}
 
 	hours := cloneOrEmpty(day.Hours)
 	sort.SliceStable(hours, func(i, j int) bool {
@@ -253,6 +283,9 @@ func FinalizeReportingDay(day ReportingDay) (ReportingDay, []byte, error) {
 	digests := make([]string, len(hours))
 	hasData := false
 	for i := range hours {
+		if hours[i].SchemaVersion != day.SchemaVersion || hours[i].BucketSeconds != day.BucketSeconds {
+			return ReportingDay{}, nil, errors.New("reporting date hours must share its schema and bucket resolution")
+		}
 		wantPeriod := fmt.Sprintf("%s-%02d", day.Date, i)
 		if hours[i].Period != wantPeriod {
 			return ReportingDay{}, nil, fmt.Errorf(
@@ -290,10 +323,12 @@ func FinalizeReportingDay(day ReportingDay) (ReportingDay, []byte, error) {
 
 type reportingHourDigestInput struct {
 	SchemaVersion int               `json:"schema_version"`
+	BucketSeconds int               `json:"bucket_seconds,omitzero"`
 	Period        string            `json:"period"`
 	HasData       bool              `json:"has_data"`
 	Activity      ReportingActivity `json:"activity"`
 	Usage         ReportingUsage    `json:"usage"`
+	Joint         *ReportingJoint   `json:"joint,omitempty"`
 }
 
 func parseReportingHour(value string) (time.Time, error) {
@@ -362,13 +397,14 @@ func reportingProjectLess(aKey, aProject, bKey, bProject string) bool {
 }
 
 func validateReportingBuckets(
-	hourStart time.Time, buckets []ReportingActivityBucket,
+	hourStart time.Time, duration time.Duration, buckets []ReportingActivityBucket,
 ) error {
-	if len(buckets) != 12 {
-		return fmt.Errorf("reporting hour requires 12 activity buckets, got %d", len(buckets))
+	count := int(time.Hour / duration)
+	if len(buckets) != count {
+		return fmt.Errorf("reporting hour requires %d activity buckets, got %d", count, len(buckets))
 	}
 	for i, bucket := range buckets {
-		want := hourStart.Add(time.Duration(i) * 5 * time.Minute).
+		want := hourStart.Add(time.Duration(i) * duration).
 			Format(time.RFC3339)
 		if bucket.Start != want {
 			return fmt.Errorf(

@@ -2,7 +2,9 @@ import { describe, it, expect, vi, beforeEach } from "vite-plus/test";
 import { messages } from "./messages.svelte.js";
 import { readProgress } from "./read-progress.svelte.js";
 import { parseContent } from "../utils/content-parser.js";
-import type { Message, MessagesResponse, Session } from "../api/types.js";
+import type { Session } from "../api/types.js";
+import type { DbMessage as Message } from "../api/generated/index.js";
+import type { ServiceMessageList as MessagesResponse } from "../api/generated/index.js";
 
 const api = vi.hoisted(() => ({
   getMessages: vi.fn(),
@@ -14,12 +16,6 @@ const runtimeMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../api/runtime.js", () => ({
-  callGenerated: vi.fn(
-    (request: (options?: { signal?: AbortSignal }) => Promise<unknown>, signal?: AbortSignal) => {
-      if (signal) runtimeMocks.signals.push(signal);
-      return request(signal ? { signal } : undefined);
-    },
-  ),
   isAbortError: (err: unknown) => {
     if (err instanceof DOMException && err.name === "AbortError") {
       return true;
@@ -81,6 +77,19 @@ function generatedCancelError(): Error & { isCancelled: true } {
 
 function makeSession(id: string, messageCount: number): Session {
   return {
+    compaction_count: 0,
+    consecutive_failure_max: 0,
+    edit_churn_count: 0,
+    ended_with_role: "",
+    final_failure_streak: 0,
+    has_peak_context_tokens: false,
+    has_total_output_tokens: false,
+    mid_task_compaction_count: 0,
+    outcome: "",
+    outcome_confidence: "",
+    secret_leak_count: 0,
+    tool_failure_signal_count: 0,
+    tool_retry_count: 0,
     id,
     project: "project-alpha",
     machine: "test-machine",
@@ -253,22 +262,31 @@ describe("MessagesStore", () => {
     const msgs = Array.from({ length: 5 }, (_, i) => ({
       ...makeMessage(i),
       model: "claude-3-opus",
+      reasoning_effort: i < 3 ? "high" : "medium",
     }));
     await setupSession("s1", 5, msgs);
 
     expect(messages.mainModel).toBe("claude-3-opus");
+    expect(messages.mainModelInfo).toEqual({
+      model: "claude-3-opus",
+      reasoningEffort: "high",
+    });
 
-    // Start a reload that hangs — mainModel must stay stable.
-    const { promise: hang, resolve: resolveHang } = createDeferred<Session>();
-    vi.mocked(api.getSession).mockReturnValue(hang);
+    // A smaller transcript triggers a full reload and its stable model state.
+    vi.mocked(api.getSession).mockResolvedValueOnce(makeSession("s1", 2));
+    const { promise: hang, resolve: resolveHang } = createDeferred<MessagesResponse>();
+    vi.mocked(api.getMessages).mockReturnValueOnce(hang);
 
     const p = messages.reload();
+    await vi.waitFor(() => expect(messages.loading).toBe(true));
 
-    // While reload is in flight, mainModel should still be
-    // computed from the existing messages, not blank.
     expect(messages.mainModel).toBe("claude-3-opus");
+    expect(messages.mainModelInfo).toEqual({
+      model: "claude-3-opus",
+      reasoningEffort: "high",
+    });
 
-    resolveHang(makeSession("s1", 5));
+    resolveHang(makeMessagesResponse(msgs.slice(0, 2)));
     await p;
 
     expect(messages.mainModel).toBe("claude-3-opus");

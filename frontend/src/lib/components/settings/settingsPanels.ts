@@ -6,8 +6,10 @@ export type SettingsPanelId =
   | "date-ranges"
   | "terminal"
   | "agent-directories"
+  | "tool-result-images"
   | "worktree-mappings"
   | "embeddings"
+  | "archive-content"
   | "github"
   | "remote-access";
 
@@ -67,6 +69,14 @@ export function settingsPanels(): SettingsPanelMeta[] {
       keywords: m.settings_search_keywords_agent_directories(),
     },
     {
+      id: "tool-result-images",
+      label: m.settings_tool_images_title(),
+      title: m.settings_tool_images_title(),
+      description: m.settings_tool_images_description(),
+      group: data,
+      keywords: m.settings_search_keywords_tool_images(),
+    },
+    {
       id: "worktree-mappings",
       label: m.worktree_title(),
       title: m.worktree_title(),
@@ -81,6 +91,14 @@ export function settingsPanels(): SettingsPanelMeta[] {
       description: m.settings_embeddings_description(),
       group: data,
       keywords: m.settings_search_keywords_embeddings(),
+    },
+    {
+      id: "archive-content",
+      label: m.settings_archive_content_title(),
+      title: m.settings_archive_content_title(),
+      description: m.settings_archive_content_description(),
+      group: data,
+      keywords: m.settings_search_keywords_archive_content(),
     },
     {
       id: "github",

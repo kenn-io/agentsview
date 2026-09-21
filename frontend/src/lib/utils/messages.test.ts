@@ -1,9 +1,11 @@
 import { describe, it, expect } from "vite-plus/test";
 import { isSystemMessage, normalizeMessagePreview, previewMessage } from "./messages.js";
-import type { Message } from "../api/types.js";
+import type { DbMessage as Message } from "../api/generated/index.js";
 
 function msg(overrides: Partial<Message>): Message {
   return {
+    has_context_tokens: false,
+    has_output_tokens: false,
     id: 1,
     session_id: "s1",
     ordinal: 0,
@@ -100,6 +102,13 @@ describe("isSystemMessage", () => {
       expect(isSystemMessage(msg({ content }))).toBe(false);
     },
   );
+
+  it("keeps attributed reminder classification unchanged", () => {
+    // Preview stripping widened the tag match; classification did not.
+    expect(
+      isSystemMessage(msg({ content: '<system-reminder data-role="x">c</system-reminder>' })),
+    ).toBe(false);
+  });
 
   it("hides system reminders without making them visible cards", () => {
     expect(isSystemMessage(msg({ is_system: true, source_subtype: "system_reminder" }))).toBe(true);
@@ -205,12 +214,88 @@ describe("previewMessage", () => {
     ).toEqual({ text: "!echo hi\nhi", isShell: true });
   });
 
+  it("drops a leading attributed system-reminder envelope", () => {
+    expect(
+      previewMessage(
+        '<system-reminder data-role="user-context">\n<user_info>\nOS Version: darwin\n</user_info>\n</system-reminder>\nrefactor the auth guard',
+      ),
+    ).toEqual({ text: "refactor the auth guard", isShell: false });
+  });
+
+  it("drops a leading bare system-reminder envelope", () => {
+    expect(previewMessage("<system-reminder>ctx</system-reminder>actual question")).toEqual({
+      text: "actual question",
+      isShell: false,
+    });
+  });
+
+  it("drops repeated leading envelopes in either form", () => {
+    expect(
+      previewMessage(
+        '<system-reminder>a</system-reminder>\n<system-reminder data-role="user-context">b</system-reminder>\nthe prompt',
+      ),
+    ).toEqual({ text: "the prompt", isShell: false });
+  });
+
+  it("preserves an unclosed attributed envelope verbatim", () => {
+    // Truncated first_message shape: no close tag survived, so
+    // there is no remainder to promote and the label must not blank.
+    const raw = '<system-reminder data-role="user-context"> <user_info> OS Version: darwin...';
+    expect(previewMessage(raw)).toEqual({ text: raw, isShell: false });
+  });
+
+  it("preserves an envelope-only message verbatim", () => {
+    const raw = '<system-reminder data-role="user-context">ctx</system-reminder>';
+    expect(previewMessage(raw)).toEqual({ text: raw, isShell: false });
+  });
+
+  it("does not match a prefix-adjacent tag name", () => {
+    const raw = "<system-reminderish>hello</system-reminderish>";
+    expect(previewMessage(raw)).toEqual({ text: raw, isShell: false });
+  });
+
+  it("leaves other leading markup untouched", () => {
+    const raw = "<user_instructions> do the thing";
+    expect(previewMessage(raw)).toEqual({ text: raw, isShell: false });
+  });
+
+  it("preserves leading whitespace on ordinary prose", () => {
+    expect(previewMessage("  hello")).toEqual({ text: "  hello", isShell: false });
+  });
+
+  it("still flags a shell shortcut that follows an envelope", () => {
+    expect(
+      previewMessage(
+        '<system-reminder data-role="user-context">ctx</system-reminder>\n<bash-input>ls -la</bash-input>',
+      ),
+    ).toEqual({ text: "!ls -la", isShell: true });
+  });
+
+  it("preserves the original preview when stripped shell output is empty", () => {
+    const raw = '<system-reminder data-role="user-context">ctx</system-reminder><bash-stdout></bash-stdout>';
+    expect(previewMessage(raw)).toEqual({
+      text: '<system-reminder data-role="user-context">ctx</system-reminder>',
+      isShell: true,
+    });
+  });
+
+  it("preserves the original preview when stripped shell output is whitespace", () => {
+    const raw = '<system-reminder>ctx</system-reminder><bash-stderr>   </bash-stderr>';
+    expect(previewMessage(raw)).toEqual({
+      text: "<system-reminder>ctx</system-reminder>",
+      isShell: true,
+    });
+  });
+
   it("normalizeMessagePreview returns previewMessage(text).text", () => {
     const cases = [
       "<bash-input>ls</bash-input>",
       "<bash-stdout>ok</bash-stdout>",
       "plain text",
       "",
+      '<system-reminder data-role="user-context">c</system-reminder>next',
+      '<system-reminder data-role="user-context">c',
+      "<system-reminderish>x</system-reminderish>",
     ];
     for (const c of cases) {
       expect(normalizeMessagePreview(c)).toBe(previewMessage(c).text);

@@ -101,8 +101,7 @@ func TestListActiveSessionSourceOwnershipScopesPageExcludesOutOfScopeRows(
 
 	gotIDs := make([]string, 0, len(paged))
 	for _, ownership := range paged {
-		assert.True(t,
-			StoredSourcePathHintScopesContain(ownership.FilePath, scopes),
+		assert.True(t, StoredSourcePathHintScopesContain(ownership.FilePath, scopes),
 			"paged row %s at %s is outside the requested scope",
 			ownership.ID, ownership.FilePath)
 		gotIDs = append(gotIDs, ownership.ID)

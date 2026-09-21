@@ -3,5 +3,5 @@
  */
 
 export type PostApiV1ImportChatgptBody = {
-  file: Blob;
+  file: Blob | File;
 };

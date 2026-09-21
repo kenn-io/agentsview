@@ -6,10 +6,34 @@ default_stages = ["pre-commit"]
 repo = "local"
 
 [[repos.hooks]]
+id = "check-timing-budgets"
+name = "Check timing budgets"
+language = "system"
+entry = "go run ./scripts/check-timing-budgets ."
+pass_filenames = false
+always_run = true
+
+[[repos.hooks]]
+id = "lint-config-check"
+name = "Check shared Go lint configuration"
+language = "system"
+entry = "make lint-config-check lint-sql"
+pass_filenames = false
+always_run = true
+
+[[repos.hooks]]
 id = "golangci-lint"
 name = "golangci-lint"
 language = "system"
 entry = "make lint-golangci"
+pass_filenames = false
+always_run = true
+
+[[repos.hooks]]
+id = "huma-check"
+name = "Check Huma API contract"
+language = "system"
+entry = "go run go.kenn.io/kit/cmd/huma-check@e9840a327158da2559458186b253b0c15a5e2c2b -fix=false ./..."
 pass_filenames = false
 always_run = true
 

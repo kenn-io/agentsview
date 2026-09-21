@@ -65,7 +65,7 @@ func testSSHOpts(t *testing.T) []string {
 func testDB(t *testing.T) *db.DB {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	database, err := db.Open(dbPath)
+	database, err := db.Open(t.Context(), dbPath)
 	require.NoError(t, err, "opening test db")
 	t.Cleanup(func() { database.Close() })
 	return database

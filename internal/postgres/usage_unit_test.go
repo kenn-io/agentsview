@@ -263,7 +263,7 @@ func TestPGGetDailyUsageReturnsDedupedSessionCounts(t *testing.T) {
 		pg: newUsageProbeDB(t, &usageProbeState{}),
 	}
 
-	result, err := store.GetDailyUsage(context.Background(), db.UsageFilter{
+	result, err := store.GetDailyUsage(t.Context(), db.UsageFilter{
 		From: "2024-06-15",
 		To:   "2024-06-15",
 	})
@@ -504,7 +504,7 @@ func TestPGGetUsageMatchingSessionCountUsesSessionQuery(t *testing.T) {
 		pg: newUsageProbeDB(t, state),
 	}
 
-	count, err := store.GetUsageMatchingSessionCount(context.Background(), db.UsageFilter{
+	count, err := store.GetUsageMatchingSessionCount(t.Context(), db.UsageFilter{
 		Agent: "copilot",
 		Model: "gpt-5.3-codex",
 	})
@@ -813,6 +813,61 @@ func TestPGDailyUsageAmountsPrefersExactCustomKimiAlias(t *testing.T) {
 	resolutions := block.Models["kimi-for-coding"].Resolutions
 	require.Len(t, resolutions, 1)
 	assert.Equal(t, "kimi-for-coding", resolutions[0].PricedModel)
+}
+
+func TestPGDailyUsageAmountsPricesGPTReserveAsLuna(t *testing.T) {
+	lunaCost := money.MustParseDollars("0.20")
+	resolver := export.NewPricingResolver([]export.EffectivePricingRow{{
+		ModelPattern: pricingpkg.GPT56LunaCanonical,
+		Rates:        export.ModelRates{InputPerMTok: lunaCost},
+	}})
+
+	_, _, _, _, cost, _, err := pgDailyUsageAmounts(pgDailyUsageScanRow{
+		usageSource: "provider",
+		model:       pricingpkg.GPTReserveModelName,
+		inputTokens: 1_000_000,
+	}, resolver)
+	require.NoError(t, err)
+	assert.Equal(t, lunaCost, cost)
+	block, err := resolver.BuildBlock()
+	require.NoError(t, err)
+	require.Contains(t, block.Models, pricingpkg.GPTReserveModelName)
+	resolutions := block.Models[pricingpkg.GPTReserveModelName].Resolutions
+	require.Len(t, resolutions, 1)
+	assert.Equal(t, pricingpkg.GPT56LunaCanonical, resolutions[0].PricedModel)
+	assert.NotContains(t, block.Models, pricingpkg.GPT56LunaCanonical)
+}
+
+func TestPGDailyUsageAmountsPrefersExactCustomGPTReserve(t *testing.T) {
+	resolver := export.NewPricingResolver([]export.EffectivePricingRow{
+		{
+			ModelPattern: pricingpkg.GPTReserveModelName,
+			Rates: export.ModelRates{
+				InputPerMTok: money.MustParseDollars("7"),
+				Source:       export.PricingRowSourceCustom,
+			},
+		},
+		{
+			ModelPattern: pricingpkg.GPT56LunaCanonical,
+			Rates: export.ModelRates{
+				InputPerMTok: money.MustParseDollars("0.20"),
+				Source:       export.PricingRowSourceFetched,
+			},
+		},
+	})
+
+	_, _, _, _, cost, _, err := pgDailyUsageAmounts(pgDailyUsageScanRow{
+		usageSource: "provider",
+		model:       pricingpkg.GPTReserveModelName,
+		inputTokens: 1_000_000,
+	}, resolver)
+	require.NoError(t, err)
+	assert.Equal(t, money.MustParseDollars("7"), cost)
+	block, err := resolver.BuildBlock()
+	require.NoError(t, err)
+	resolutions := block.Models[pricingpkg.GPTReserveModelName].Resolutions
+	require.Len(t, resolutions, 1)
+	assert.Equal(t, pricingpkg.GPTReserveModelName, resolutions[0].PricedModel)
 }
 
 func TestPGDailyUsageAmountsForwardsProviderToBilling(t *testing.T) {

@@ -20,7 +20,7 @@ func TestParsePoolsideSession(t *testing.T) {
 {"id":"event-5","step_id":"step-event-5","timestamp":"2026-07-08T07:21:00.000000-04:00","type":"tool_call.inference.start","tool_call_inference_start":{"chat_completion_request":{"model":"poolside/laguna-m.1"}}}
 {"id":"event-6","step_id":"step-event-5","timestamp":"2026-07-08T07:21:00.000000-04:00","type":"tool_call.inference.end","tool_call_inference_end":{"input_tokens":1000,"output_tokens":50,"cache_read_input_tokens":500,"cache_write_input_tokens":0}}
 `
-	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0644))
+	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
 	sess, msgs, usageEvents, err := parsePoolsideSession(trajectoryPath, "", "test-machine")
 	require.NoError(t, err)
@@ -62,7 +62,7 @@ func TestParsePoolsideSessionWithToolCalls(t *testing.T) {
 {"id":"result-1","step_id":"step-1","timestamp":"2026-07-08T07:20:57.000000-04:00","type":"tool_call.result","tool_call_result":{"id":"chatcmpl-tool-1","tool_name":"read","observation":"file contents here"}}
 {"id":"event-6","timestamp":"2026-07-08T07:21:00.000000-04:00","type":"assistant_message.end","assistant_message_end":{"assistant_message":"Here is the file content."}}
 `
-	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0644))
+	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
 	sess, msgs, _, err := parsePoolsideSession(trajectoryPath, "", "")
 	require.NoError(t, err)
@@ -94,7 +94,7 @@ func TestParsePoolsideMultipleCallsSameStep(t *testing.T) {
 {"id":"result-2","step_id":"step-multi","timestamp":"2026-07-08T07:20:54.100000-04:00","type":"tool_call.result","tool_call_result":{"id":"call-b","tool_name":"read","observation":"contents of B"}}
 {"id":"event-6","timestamp":"2026-07-08T07:21:00.000000-04:00","type":"assistant_message.end","assistant_message_end":{"assistant_message":"Here are both files."}}
 `
-	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0644))
+	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
 	_, msgs, _, err := parsePoolsideSession(trajectoryPath, "", "")
 	require.NoError(t, err)
@@ -132,7 +132,7 @@ func TestParsePoolsideMultipleShellCallsSameStep(t *testing.T) {
 {"id":"parsed-status-b","step_id":"step-status-b","timestamp":"2026-07-08T07:21:00.100000-04:00","type":"tool_call.parsed","tool_call_parsed":{"id":"status-b","name":"shell_status","args":{"shell_id":"shell-lint"}}}
 {"id":"event-end","timestamp":"2026-07-08T07:22:00.000000-04:00","type":"assistant_message.end","assistant_message_end":{"assistant_message":"Both commands finished."}}
 `
-	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0644))
+	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
 	_, msgs, _, err := parsePoolsideSession(trajectoryPath, "", "")
 	require.NoError(t, err)
@@ -176,7 +176,7 @@ func TestParsePoolsideSessionWithThinking(t *testing.T) {
 {"id":"event-5","timestamp":"2026-07-08T07:20:57.000000-04:00","type":"thought.end","thought_end":{"thought":"Let me think about this carefully..."}}
 {"id":"event-6","timestamp":"2026-07-08T07:21:00.000000-04:00","type":"assistant_message.end","assistant_message_end":{"assistant_message":"After thinking, here is my answer."}}
 `
-	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0644))
+	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
 	sess, msgs, _, err := parsePoolsideSession(trajectoryPath, "", "")
 	require.NoError(t, err)
@@ -195,7 +195,7 @@ func TestParsePoolsideSessionEmpty(t *testing.T) {
 
 	content := `{"id":"event-1","timestamp":"2026-07-08T07:20:51.089334-04:00","type":"session.start","session_start":{"workspace":"","working_directories":["/test"],"prompt":""}}
 `
-	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0644))
+	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
 	sess, msgs, _, err := parsePoolsideSession(trajectoryPath, "", "")
 	require.NoError(t, err)
@@ -308,7 +308,7 @@ func TestParsePoolsideMultipleThoughts(t *testing.T) {
 {"id":"thought-2","timestamp":"2026-07-08T07:20:54.000000-04:00","type":"thought.end","thought_end":{"thought":"Second reasoning block."}}
 {"id":"event-4","timestamp":"2026-07-08T07:21:00.000000-04:00","type":"assistant_message.end","assistant_message_end":{"assistant_message":"Here is my answer."}}
 `
-	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0644))
+	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
 	_, msgs, _, err := parsePoolsideSession(trajectoryPath, "", "")
 	require.NoError(t, err)
@@ -335,7 +335,7 @@ func TestParsePoolsideMalformedFinalLineSetsTruncated(t *testing.T) {
 {"id":"event-3","timestamp":"2026-07-08T07:20:52.000000-04:00","type":"assistant_message.start","assistant_message_start":{}}
 {"id":"event-4","timestamp":"2026-07-08T07:21:00.000000-04:00","type":"assistant_message.end","assistant_message_end":{"assistant_message":"response"}}
 {"id":"malformed`
-	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0644))
+	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
 	sess, _, _, err := parsePoolsideSession(trajectoryPath, "", "")
 	require.NoError(t, err)
@@ -447,7 +447,7 @@ func TestParsePoolsideShellEnrichment(t *testing.T) {
 {"id":"result-status","step_id":"step-status","timestamp":"2026-07-08T07:21:01.000000-04:00","type":"tool_call.result","tool_call_result":{"id":"call-2","tool_name":"shell_status","observation":"running"}}
 {"id":"event-8","timestamp":"2026-07-08T07:22:00.000000-04:00","type":"assistant_message.end","assistant_message_end":{"assistant_message":"Tests passed."}}
 `
-	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0644))
+	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
 	_, msgs, _, err := parsePoolsideSession(trajectoryPath, "", "")
 	require.NoError(t, err)
@@ -481,12 +481,12 @@ func TestParsePoolsideDeniedToolCall(t *testing.T) {
 {"id":"result-denied","step_id":"step-denied","timestamp":"2026-07-08T07:20:57.000000-04:00","type":"tool_call.result","tool_call_result":{"id":"chatcmpl-tool-1","tool_name":"shell","execution_latency":0,"observation":"user denied tool","is_error":true,"execution_error_kind":"approval_denied"}}
 {"id":"event-6","timestamp":"2026-07-08T07:21:00.000000-04:00","type":"assistant_message.end","assistant_message_end":{"assistant_message":"I won't do that."}}
 `
-	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0644))
+	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
 	_, msgs, _, err := parsePoolsideSession(trajectoryPath, "", "")
 	require.NoError(t, err)
 
-	assert.Equal(t, 2, len(msgs))
+	assert.Len(t, msgs, 2)
 	assert.True(t, msgs[1].HasToolUse)
 	require.Len(t, msgs[1].ToolCalls, 1)
 	assert.Equal(t, "shell", msgs[1].ToolCalls[0].ToolName)
@@ -530,7 +530,7 @@ func TestParsePoolsideSkillToolName(t *testing.T) {
 {"id":"result-skill","step_id":"step-skill","timestamp":"2026-07-08T07:20:54.000000-04:00","type":"tool_call.result","tool_call_result":{"id":"call-1","tool_name":"skill","observation":"skill output"}}
 {"id":"event-6","timestamp":"2026-07-08T07:22:00.000000-04:00","type":"assistant_message.end","assistant_message_end":{"assistant_message":"Skill completed."}}
 `
-			require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0644))
+			require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
 			_, msgs, _, err := parsePoolsideSession(trajectoryPath, "", "")
 			require.NoError(t, err)
@@ -554,7 +554,7 @@ func TestParsePoolsideSkillInferenceFromReadTool(t *testing.T) {
 {"id":"result-skillread","step_id":"step-skillread","timestamp":"2026-07-08T07:20:54.000000-04:00","type":"tool_call.result","tool_call_result":{"id":"call-1","tool_name":"read","observation":"skill content"}}
 {"id":"event-6","timestamp":"2026-07-08T07:22:00.000000-04:00","type":"assistant_message.end","assistant_message_end":{"assistant_message":"Read skill."}}
 `
-	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0644))
+	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
 	sess, msgs, _, err := parsePoolsideSession(trajectoryPath, "/test", "")
 	require.NoError(t, err)
@@ -594,7 +594,7 @@ func TestParsePoolsideSessionModelSwitch(t *testing.T) {
 {"id":"turn2-end","step_id":"step-s21","timestamp":"2026-07-08T07:20:58.000000-04:00","type":"assistant_message.end","assistant_message_end":{"assistant_message":"second turn response"}}
 {"id":"inf2-end","step_id":"step-s21","timestamp":"2026-07-08T07:20:59.000000-04:00","type":"tool_call.inference.end","tool_call_inference_end":{"input_tokens":2000,"output_tokens":100,"cache_read_input_tokens":0,"cache_write_input_tokens":150}}
 `
-	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0644))
+	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
 	sess, msgs, usageEvents, err := parsePoolsideSession(trajectoryPath, "", "")
 	require.NoError(t, err)
@@ -664,7 +664,7 @@ func TestParsePoolsideSessionToolOnlyModelAttribution(t *testing.T) {
 {"id":"asst-end","step_id":"step-to1","timestamp":"2026-07-08T07:20:54.000000-04:00","type":"assistant_message.end","assistant_message_end":{"assistant_message":""}}
 {"id":"inf-end","step_id":"step-to1","timestamp":"2026-07-08T07:20:55.000000-04:00","type":"tool_call.inference.end","tool_call_inference_end":{"input_tokens":500,"output_tokens":30,"cache_read_input_tokens":0,"cache_write_input_tokens":0}}
 `
-	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0644))
+	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
 	sess, msgs, usageEvents, err := parsePoolsideSession(trajectoryPath, "", "")
 	require.NoError(t, err)
@@ -716,7 +716,7 @@ func TestParsePoolsideSessionPeakContextIsMax(t *testing.T) {
 {"id":"e3","step_id":"step-c","timestamp":"2026-07-08T07:20:58.000000-04:00","type":"tool_call.inference.end","tool_call_inference_end":{"input_tokens":500,"output_tokens":5,"cache_read_input_tokens":0,"cache_write_input_tokens":0}}
 {"id":"x","timestamp":"2026-07-08T07:20:59.000000-04:00","type":"assistant_message.end","assistant_message_end":{"assistant_message":"done"}}
 `
-	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0644))
+	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
 	sess, _, usageEvents, err := parsePoolsideSession(trajectoryPath, "", "")
 	require.NoError(t, err)
@@ -750,7 +750,7 @@ func TestParsePoolsideSessionInferenceWithoutStart(t *testing.T) {
 {"id":"e2","step_id":"step-y","timestamp":"2026-07-08T07:20:55.000000-04:00","type":"tool_call.inference.end","tool_call_inference_end":{"input_tokens":200,"output_tokens":20,"cache_read_input_tokens":0,"cache_write_input_tokens":0}}
 {"id":"end","timestamp":"2026-07-08T07:20:56.000000-04:00","type":"assistant_message.end","assistant_message_end":{"assistant_message":"done"}}
 `
-	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0644))
+	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
 	_, _, usageEvents, err := parsePoolsideSession(trajectoryPath, "", "")
 	require.NoError(t, err)
@@ -774,7 +774,7 @@ func TestPoolsideInferenceSourceAndDedupKeyShape(t *testing.T) {
 {"id":"s","step_id":"step-1","timestamp":"2026-07-08T07:20:52.000000-04:00","type":"tool_call.inference.start","tool_call_inference_start":{"chat_completion_request":{"model":"poolside/laguna-m.1"}}}
 {"id":"e","step_id":"step-1","timestamp":"2026-07-08T07:20:53.000000-04:00","type":"tool_call.inference.end","tool_call_inference_end":{"input_tokens":50,"output_tokens":5,"cache_read_input_tokens":0,"cache_write_input_tokens":0}}
 `
-	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0644))
+	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
 	_, _, usageEvents, err := parsePoolsideSession(trajectoryPath, "", "")
 	require.NoError(t, err)

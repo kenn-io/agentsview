@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"fmt"
 	"testing"
 
@@ -14,7 +13,7 @@ import (
 
 func TestWorktreeReclassificationPreviewUsesBoundaryAndPortablePaths(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	seedReclassificationSession(t, d, "unix-root", "archive.example", "/worktrees/service", "branch")
 	seedReclassificationSession(t, d, "unix-child", "archive.example", "/worktrees/service/cmd", "branch")
 	seedReclassificationSession(t, d, "unix-neighbor", "archive.example", "/worktrees/service-old", "neighbor")
@@ -43,7 +42,7 @@ func TestWorktreeReclassificationPreviewCountsAlreadyTargetSessionsByProject(
 	t *testing.T,
 ) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	seedReclassificationSession(
 		t, d, "already-target", "archive.example",
 		"/worktrees/service/main", "service",
@@ -64,6 +63,8 @@ func TestWorktreeReclassificationPreviewCountsAlreadyTargetSessionsByProject(
 
 	assert.Equal(t, 2, preview.MatchedSessions)
 	assert.Equal(t, 1, preview.UpdatedSessions)
+	assert.ElementsMatch(t, []string{"already-target", "changes-project"}, preview.MatchedSessionIDs)
+	assert.Equal(t, []string{"changes-project"}, preview.UpdatedSessionIDs)
 	assert.Equal(t, 2, preview.DistinctProjects)
 	assert.Equal(t, []WorktreeReclassificationProjectSample{
 		{Project: "branch", Count: 1},
@@ -75,7 +76,7 @@ func TestWorktreeReclassificationPreviewCountsAlreadyTargetSessionsByProject(
 
 func TestWorktreeReclassificationPreviewHonorsSpecificRuleAndBoundsSamples(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	for i := range 14 {
 		seedReclassificationSession(t, d, fmt.Sprintf("session-%02d", i),
 			"archive.example", fmt.Sprintf("/worktrees/service/branch-%02d", i),
@@ -95,6 +96,11 @@ func TestWorktreeReclassificationPreviewHonorsSpecificRuleAndBoundsSamples(t *te
 	assert.Equal(t, 14, preview.MatchedSessions)
 	assert.Equal(t, 14, preview.UpdatedSessions)
 	assert.Equal(t, 14, preview.DistinctProjects)
+	assert.Equal(t, []string{
+		"branch_00", "branch_01", "branch_02", "branch_03", "branch_04",
+		"branch_05", "branch_06", "branch_07", "branch_08", "branch_09",
+		"branch_10", "branch_11", "branch_12", "branch_13",
+	}, preview.MatchedProjects)
 	assert.Len(t, preview.ProjectSamples, 10)
 	assert.Len(t, preview.SessionSamples, 10)
 	assert.Equal(t, "branch_00", preview.ProjectSamples[0].Project)
@@ -105,7 +111,7 @@ func TestWorktreeReclassificationPreviewHonorsSpecificRuleAndBoundsSamples(t *te
 
 func TestWorktreeReclassificationTokenBindsDraftAndAffectedSessions(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	seedReclassificationSession(t, d, "one", "archive.example", "/worktrees/service/one", "branch")
 	draft := WorktreeReclassificationDraft{
 		Machine: "archive.example", PathPrefix: "/worktrees/service",
@@ -137,6 +143,11 @@ func TestWorktreeReclassificationTokenBindsDraftAndAffectedSessions(t *testing.T
 	require.NoError(t, err)
 	assert.Equal(t, "branch", mapping.OriginalProject)
 	assert.Equal(t, 2, applied.UpdatedSessions)
+	afterSave, err := d.PreviewWorktreeReclassification(ctx, draft)
+	require.NoError(t, err)
+	assert.NotEqual(t, current.MappingSetToken, applied.MappingSetToken)
+	assert.Equal(t, afterSave.MappingSetToken, applied.MappingSetToken,
+		"batch continuation must identify precisely the rules committed by this save")
 
 	stalePreview, err := d.PreviewWorktreeReclassification(ctx, WorktreeReclassificationDraft{
 		Machine: "other.example", PathPrefix: "/worktrees/service",
@@ -157,7 +168,7 @@ func TestWorktreeReclassificationTokenBindsDraftAndAffectedSessions(t *testing.T
 
 func TestWorktreeReclassificationExactCollisionIsServerResolved(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	existing, err := d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 		Machine: "archive.example", PathPrefix: "/worktrees/service",
 		Project: "old-target", Enabled: true,
@@ -215,7 +226,7 @@ func TestWorktreeReclassificationExactCollisionPreservesPortableRootIdentity(
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			d := testDB(t)
-			ctx := context.Background()
+			ctx := t.Context()
 			existing, err := d.CreateWorktreeProjectMapping(
 				ctx,
 				WorktreeProjectMapping{
@@ -270,7 +281,7 @@ func TestWorktreeReclassificationApplyRollsBackEveryWriteStage(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			d := testDB(t)
-			ctx := context.Background()
+			ctx := t.Context()
 			seedIdentityReclassificationSession(
 				t, d, "one", "branch", "/worktrees/service/one",
 			)
@@ -305,7 +316,7 @@ func TestWorktreeReclassificationApplyRollsBackEveryWriteStage(t *testing.T) {
 
 func TestProjectIdentityReclassificationReconcilesAggregatesAndPreservesSnapshots(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	seedIdentityReclassificationSession(t, d, "gone", "old_gone", "/worktrees/service/gone")
 	seedIdentityReclassificationSession(t, d, "move", "old_keep", "/worktrees/service/move")
 	seedIdentityReclassificationSession(t, d, "stay", "old_keep", "/other/service/stay")
@@ -366,7 +377,7 @@ func TestProjectIdentityReclassificationPreservesSourceMissingEvidence(
 	t *testing.T,
 ) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	const (
 		legacyProject = "legacy_project"
 		legacyRoot    = "/archives/legacy/repository"
@@ -387,7 +398,7 @@ func TestProjectIdentityReclassificationPreservesSourceMissingEvidence(
 			RemoteResolution: export.ProjectResolutionResolved,
 		},
 	))
-	require.NoError(t, d.SetSessionDataVersion("legacy-missing", 75))
+	require.NoError(t, d.SetSessionDataVersion(ctx, "legacy-missing", 75))
 	_, err := d.getWriter().ExecContext(ctx, `
 		DELETE FROM session_project_identity_snapshots
 		WHERE session_id = 'legacy-missing'`)
@@ -422,7 +433,7 @@ func TestWorktreeReclassificationSucceedsAcrossProjectsAboveVariableLimit(
 	t *testing.T,
 ) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	const sessionCount = 20
 	for i := range sessionCount {
@@ -467,7 +478,7 @@ func seedReclassificationSession(
 	t *testing.T, d *DB, id, machine, cwd, project string,
 ) {
 	t.Helper()
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(t, d.UpsertSession(t.Context(), Session{
 		ID: id, Machine: machine, Agent: "claude", Cwd: cwd, Project: project,
 	}))
 }
@@ -477,7 +488,7 @@ func seedIdentityReclassificationSession(
 ) {
 	t.Helper()
 	seedReclassificationSession(t, d, id, "archive.example", cwd, project)
-	require.NoError(t, d.UpsertProjectIdentityObservation(context.Background(),
+	require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(),
 		export.ProjectIdentityObservation{
 			SessionID: id, Project: project, Machine: "archive.example",
 			RootPath: cwd, GitRemote: "https://example.com/org/repository.git",

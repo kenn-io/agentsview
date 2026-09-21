@@ -1,13 +1,17 @@
 package parser
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json/v2"
 	"fmt"
 	"io"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/tidwall/gjson"
 )
@@ -89,6 +93,7 @@ func (p *cursorProvider) parseSession(
 	hash := fmt.Sprintf("%x", sha256.Sum256(data))
 
 	mtime := info.ModTime()
+	startedAt, endedAt := cursorSessionBounds(messages, mtime)
 	sess := &ParsedSession{
 		ID:           sessionID,
 		Project:      project,
@@ -96,8 +101,8 @@ func (p *cursorProvider) parseSession(
 		Agent:        AgentCursor,
 		Cwd:          cwd,
 		FirstMessage: firstMessage,
-		StartedAt:    mtime,
-		EndedAt:      mtime,
+		StartedAt:    startedAt,
+		EndedAt:      endedAt,
 		MessageCount: len(messages),
 		File: FileInfo{
 			Path:  path,
@@ -105,6 +110,13 @@ func (p *cursorProvider) parseSession(
 			Mtime: mtime.UnixNano(),
 			Hash:  hash,
 		},
+	}
+	// A delegating transcript records only a Subagent tool_use block with a
+	// null id and no tool_result, so the subagents directory is the sole link
+	// from a child to the session that spawned it.
+	if loc, ok := cursorTranscriptLocationFromPath(path); ok && loc.ParentRawID != "" {
+		sess.ParentSessionID = cursorSessionIDPrefix + loc.ParentRawID
+		sess.RelationshipType = RelSubagent
 	}
 	return sess, messages, nil
 }
@@ -123,7 +135,7 @@ func parseCursorMessages(lines []string) []ParsedMessage {
 	messages := make([]ParsedMessage, 0, len(blocks))
 
 	for i, block := range blocks {
-		content, hasThinking, toolCalls := extractCursorContent(
+		content, timestamp, hasThinking, toolCalls := extractCursorContent(
 			block.role, block.lines,
 		)
 		content = strings.TrimSpace(content)
@@ -135,7 +147,7 @@ func parseCursorMessages(lines []string) []ParsedMessage {
 			Ordinal:       i,
 			Role:          block.role,
 			Content:       content,
-			Timestamp:     time.Time{},
+			Timestamp:     timestamp,
 			HasThinking:   hasThinking,
 			HasToolUse:    len(toolCalls) > 0,
 			ContentLength: len(content),
@@ -151,13 +163,13 @@ func parseCursorMessages(lines []string) []ParsedMessage {
 }
 
 // splitCursorBlocks splits lines into blocks delimited by
-// "user:" or "assistant:" on a line by itself.
+// "user:" or "assistant:" at the left margin, with optional trailing whitespace.
 func splitCursorBlocks(lines []string) []cursorBlock {
 	var blocks []cursorBlock
 	var current *cursorBlock
 
 	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
+		trimmed := strings.TrimRightFunc(line, unicode.IsSpace)
 		if trimmed == "user:" || trimmed == "assistant:" {
 			if current != nil {
 				blocks = append(blocks, *current)
@@ -184,12 +196,114 @@ func splitCursorBlocks(lines []string) []cursorBlock {
 // was present, and any tool calls found.
 func extractCursorContent(
 	role RoleType, lines []string,
-) (string, bool, []ParsedToolCall) {
+) (string, time.Time, bool, []ParsedToolCall) {
 	if role == RoleUser {
-		content := extractUserQuery(lines)
-		return content, false, nil
+		content, timestamp := extractCursorUserContent(lines)
+		return content, timestamp, false, nil
 	}
-	return extractAssistantContent(lines)
+	content, hasThinking, toolCalls := extractAssistantContent(lines)
+	return content, time.Time{}, hasThinking, toolCalls
+}
+
+var cursorTimestampPattern = regexp.MustCompile(
+	`^<timestamp>(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [0-9]{1,2}, [0-9]{4}, [0-9]{1,2}:[0-9]{2} (AM|PM) \(UTC([+-])[0-9]{1,2}(?::[0-9]{2})?\)</timestamp>`,
+)
+
+// extractCursorUserContent removes a recognized Cursor metadata tag and
+// returns its parsed time without changing the shared user-query helper.
+func extractCursorUserContent(lines []string) (string, time.Time) {
+	text := strings.Join(lines, "\n")
+	trimmed := strings.TrimLeft(text, " \t\r\n")
+	match := cursorTimestampPattern.FindStringSubmatch(trimmed)
+	if len(match) == 0 {
+		return extractUserQuery(lines), time.Time{}
+	}
+
+	remaining := strings.TrimLeft(
+		trimmed[len(match[0]):], " \t\r\n",
+	)
+	const (
+		userQueryStart = "<user_query>"
+		userQueryEnd   = "</user_query>"
+	)
+	if !strings.HasPrefix(remaining, userQueryStart) {
+		return extractUserQuery(lines), time.Time{}
+	}
+	if strings.Index(remaining, userQueryEnd) < len(userQueryStart) {
+		return extractUserQuery(lines), time.Time{}
+	}
+
+	timestamp, ok := parseCursorTimestamp(match[0])
+	if !ok {
+		return extractUserQuery(lines), time.Time{}
+	}
+	return extractUserQuery(strings.Split(trimmed[len(match[0]):], "\n")), timestamp
+}
+
+func parseCursorTimestamp(tag string) (time.Time, bool) {
+	match := cursorTimestampPattern.FindStringSubmatch(tag)
+	if len(match) == 0 {
+		return time.Time{}, false
+	}
+
+	dateText := strings.TrimSuffix(
+		strings.TrimPrefix(tag, "<timestamp>"),
+		"</timestamp>",
+	)
+	dateText = strings.TrimSuffix(dateText, ")")
+	zoneStart := strings.LastIndex(dateText, " (UTC")
+	if zoneStart < 0 {
+		return time.Time{}, false
+	}
+	localText := dateText[:zoneStart]
+	zoneText := dateText[zoneStart+len(" (UTC"):]
+	zoneText = strings.TrimSuffix(zoneText, ")")
+
+	parsed, err := time.Parse("Monday, Jan 2, 2006, 3:04 PM", localText)
+	if err != nil {
+		return time.Time{}, false
+	}
+
+	sign := 1
+	if zoneText[0] == '-' {
+		sign = -1
+	}
+	zoneText = zoneText[1:]
+	parts := strings.SplitN(zoneText, ":", 2)
+	hour, err := strconv.Atoi(parts[0])
+	if err != nil || hour > 23 {
+		return time.Time{}, false
+	}
+	minute := 0
+	if len(parts) == 2 {
+		minute, err = strconv.Atoi(parts[1])
+		if err != nil || minute > 59 {
+			return time.Time{}, false
+		}
+	}
+	offset := sign * (hour*60*60 + minute*60)
+	return time.Date(
+		parsed.Year(), parsed.Month(), parsed.Day(), parsed.Hour(),
+		parsed.Minute(), 0, 0, time.FixedZone("Cursor", offset),
+	).UTC(), true
+}
+
+func cursorSessionBounds(messages []ParsedMessage, fallback time.Time) (time.Time, time.Time) {
+	startedAt, endedAt := fallback, fallback
+	found := false
+	for _, message := range messages {
+		if message.Timestamp.IsZero() {
+			continue
+		}
+		if !found || message.Timestamp.Before(startedAt) {
+			startedAt = message.Timestamp
+		}
+		if !found || message.Timestamp.After(endedAt) {
+			endedAt = message.Timestamp
+		}
+		found = true
+	}
+	return startedAt, endedAt
 }
 
 // extractUserQuery extracts text from <user_query> tags.
@@ -255,7 +369,7 @@ func extractAssistantContent(
 				ToolName:  toolName,
 				Category:  NormalizeToolCategory(toolName),
 				InputJSON: inputJSON,
-				SkillName: inferToolSkillName(
+				SkillName: inferToolSkillName(context.Background(),
 					toolName,
 					inputJSON,
 				),
@@ -263,14 +377,27 @@ func extractAssistantContent(
 			continue
 		}
 
-		// Tool result — skip the header and body
+		// Tool result — attach the body to the preceding call
 		if strings.HasPrefix(trimmed, "[Tool result]") {
 			i++
+			bodyStart := i
 			for i < len(lines) {
 				if isBlockBodyEnd(lines[i]) {
 					break
 				}
 				i++
+			}
+			if len(toolCalls) > 0 {
+				content := strings.TrimSpace(strings.Join(
+					dedentCursorBlock(lines[bodyStart:i]), "\n",
+				))
+				if content == "" {
+					continue
+				}
+				toolCalls[len(toolCalls)-1].ResultEvents = append(
+					toolCalls[len(toolCalls)-1].ResultEvents,
+					ParsedToolResultEvent{Content: content},
+				)
 			}
 			continue
 		}
@@ -386,12 +513,14 @@ func isBlockBodyEnd(line string) bool {
 		line[0] != '\t'
 }
 
+const cursorSessionIDPrefix = "cursor:"
+
 // CursorSessionID derives a session ID from a transcript file
 // path by stripping whatever extension is present.
 func CursorSessionID(path string) string {
 	base := filepath.Base(path)
 	base = strings.TrimSuffix(base, filepath.Ext(base))
-	return "cursor:" + base
+	return cursorSessionIDPrefix + base
 }
 
 // isCursorJSONL returns true if the data looks like JSONL
@@ -457,12 +586,11 @@ func parseCursorJSONL(data string) []ParsedMessage {
 
 		if role == "user" {
 			msg.Role = RoleUser
-			msg.Content = extractJSONLUserContent(content)
+			msg.Content, msg.Timestamp = extractJSONLUserContent(content)
 		} else {
 			msg.Role = RoleAssistant
 			text, _, hasThinking, hasToolUse,
-				toolCalls, toolResults :=
-				ExtractTextContent(content)
+				toolCalls, toolResults := ExtractTextContent(context.Background(), content)
 			msg.Content = text
 			msg.HasThinking = hasThinking
 			msg.HasToolUse = hasToolUse
@@ -488,15 +616,15 @@ func parseCursorJSONL(data string) []ParsedMessage {
 // content field. If the content is a string, strips
 // <user_query> tags. If it's an array of blocks, collects
 // text blocks and strips tags from the combined result.
-func extractJSONLUserContent(content gjson.Result) string {
+func extractJSONLUserContent(content gjson.Result) (string, time.Time) {
 	if content.Type == gjson.String {
-		return extractUserQuery(
+		return extractCursorUserContent(
 			strings.Split(content.Str, "\n"),
 		)
 	}
 
 	if !content.IsArray() {
-		return ""
+		return "", time.Time{}
 	}
 
 	var parts []string
@@ -511,10 +639,10 @@ func extractJSONLUserContent(content gjson.Result) string {
 	})
 
 	if len(parts) == 0 {
-		return ""
+		return "", time.Time{}
 	}
 	combined := strings.Join(parts, "\n")
-	return extractUserQuery(strings.Split(combined, "\n"))
+	return extractCursorUserContent(strings.Split(combined, "\n"))
 }
 
 // cursorHighMarkers are directory names that are very

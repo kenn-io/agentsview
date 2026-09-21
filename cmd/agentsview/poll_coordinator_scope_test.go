@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -191,6 +192,8 @@ func TestUnwatchedPollDoesNotDragUnrelatedProvidersThroughOneProvidersGap(t *tes
 				agentACalls = append(agentACalls, c)
 			case parser.AgentOpenHands:
 				agentBCalls = append(agentBCalls, c)
+			default:
+				require.FailNowf(t, "unexpected agent", "got %v", c.Agent)
 			}
 		}
 		require.Len(t, agentACalls, 1, "provider A must have exactly one call")
@@ -341,7 +344,7 @@ func TestUnwatchedPollWaitsAfterAPassLongerThanTheInterval(t *testing.T) {
 	select {
 	case <-afterCh:
 	case <-time.After(2 * time.Second):
-		t.Fatal("expected after() to be called for cooldown wait")
+		require.FailNow(t, "expected after() to be called for cooldown wait")
 	}
 
 	afterMu.Lock()
@@ -426,54 +429,45 @@ func TestUnwatchedPollAttemptsEveryProviderAfterOneFails(t *testing.T) {
 // TestUnwatchedPollDefersOnlyTheProviderWhoseProbeIsMissing asserts that a
 // missing probe defers only its own provider; the healthy provider still polls.
 func TestUnwatchedPollDefersOnlyTheProviderWhoseProbeIsMissing(t *testing.T) {
-	parent := t.TempDir()
-	sharedRoot := requireExistingPollRoot(t, parent, "shared")
-	probeA := filepath.Join(sharedRoot, "probe-a")
-	require.NoError(t, os.Mkdir(probeA, 0o755))
-	// probeB is intentionally absent — A's probe is missing.
+	synctest.Test(t, func(t *testing.T) {
+		parent := t.TempDir()
+		sharedRoot := requireExistingPollRoot(t, parent, "shared")
+		probeA := filepath.Join(sharedRoot, "probe-a")
+		require.NoError(t, os.Mkdir(probeA, 0o755))
+		// probeB is intentionally absent — A's probe is missing.
 
-	syncer := &recordingProviderPollSyncer{wake: make(chan struct{}, 4)}
-	coordinator := newUnwatchedPollCoordinatorWithTicks(
-		t.Context(), syncer, make(chan time.Time), func() {},
-		func(run func()) { run() }, nil,
-		time.Now, time.After,
-	)
-	t.Cleanup(coordinator.Stop)
+		syncer := &recordingProviderPollSyncer{wake: make(chan struct{}, 4)}
+		coordinator := newUnwatchedPollCoordinatorWithTicks(
+			t.Context(), syncer, make(chan time.Time), func() {},
+			func(run func()) { run() }, nil,
+			time.Now, time.After,
+		)
+		t.Cleanup(coordinator.Stop)
 
-	// Provider A: probe is missing → must be deferred.
-	missingProbeA := filepath.Join(sharedRoot, "missing-probe-a")
-	require.NoError(t, coordinator.AddObligation(pollingObligation{
-		Key:    "agent-a-root",
-		Scopes: []pollingScope{{Agent: parser.AgentClaude, Root: sharedRoot}},
-		Probe:  missingProbeA,
-	}))
-	// Provider B: probe is present → must be polled.
-	require.NoError(t, coordinator.AddObligation(pollingObligation{
-		Key:    "agent-b-root",
-		Scopes: []pollingScope{{Agent: parser.AgentOpenHands, Root: sharedRoot}},
-		Probe:  probeA, // present
-	}))
+		// Provider A: probe is missing → must be deferred.
+		missingProbeA := filepath.Join(sharedRoot, "missing-probe-a")
+		require.NoError(t, coordinator.AddObligation(pollingObligation{
+			Key:    "agent-a-root",
+			Scopes: []pollingScope{{Agent: parser.AgentClaude, Root: sharedRoot}},
+			Probe:  missingProbeA,
+		}))
+		// Provider B: probe is present → must be polled.
+		require.NoError(t, coordinator.AddObligation(pollingObligation{
+			Key:    "agent-b-root",
+			Scopes: []pollingScope{{Agent: parser.AgentOpenHands, Root: sharedRoot}},
+			Probe:  probeA, // present
+		}))
 
-	coordinator.requestPoll()
-	requirePollWithin(t, syncer.wake, time.Second)
+		coordinator.requestPoll()
+		requirePollWithin(t, syncer.wake, time.Second)
 
-	calls := syncer.snapshot()
-	require.Len(t, calls, 1,
-		"only the healthy provider must be called; the one with missing probe must be deferred")
-	assert.Equal(t, parser.AgentOpenHands, calls[0].Agent,
-		"the call must be for the healthy provider")
-	assert.Equal(t, []string{sharedRoot}, calls[0].Roots)
-
-	// Assert A was never called.
-	assert.Never(t, func() bool {
-		for _, c := range syncer.snapshot() {
-			if c.Agent == parser.AgentClaude {
-				return true
-			}
-		}
-		return false
-	}, 100*time.Millisecond, 10*time.Millisecond,
-		"provider A must never be called while its probe is missing")
+		calls := syncer.snapshot()
+		require.Len(t, calls, 1,
+			"only the healthy provider must be called; the one with missing probe must be deferred")
+		assert.Equal(t, parser.AgentOpenHands, calls[0].Agent,
+			"the call must be for the healthy provider")
+		assert.Equal(t, []string{sharedRoot}, calls[0].Roots)
+	})
 }
 
 // TestUnwatchedPollStopDuringCooldown asserts that Stop() returns immediately
@@ -540,7 +534,7 @@ func TestUnwatchedPollStopDuringCooldown(t *testing.T) {
 	select {
 	case <-afterBlocking:
 	case <-time.After(2 * time.Second):
-		t.Fatal("cooldown after() was not called")
+		require.FailNow(t, "cooldown after() was not called")
 	}
 
 	// Stop must return without waiting out the cooldown.
@@ -552,6 +546,6 @@ func TestUnwatchedPollStopDuringCooldown(t *testing.T) {
 	select {
 	case <-stopDone:
 	case <-time.After(2 * time.Second):
-		t.Fatal("Stop() did not return while in cooldown wait")
+		require.FailNow(t, "Stop() did not return while in cooldown wait")
 	}
 }

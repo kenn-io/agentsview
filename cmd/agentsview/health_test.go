@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"net/http"
 	"testing"
@@ -12,6 +11,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/servicehttp"
 )
 
 func TestGradeCell(t *testing.T) {
@@ -124,6 +124,8 @@ func TestTruncate(t *testing.T) {
 		{"exact length unchanged", "hello", 5, "hello"},
 		{"over limit ellipsized", "hello world", 5, "hell…"},
 		{"single char limit", "abc", 1, "a"},
+		{"multibyte boundary", "a\u65e5\u672cz", 4, "a…"},
+		{"single byte cannot fit rune", "\u65e5", 1, ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -254,13 +256,13 @@ func TestHealthListFilterIncludesAllSessions(t *testing.T) {
 func TestResolveHealthSessionIDMatchesDisplayedShortID(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
 
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "abcdef1234567890", Project: "p", Machine: "m",
 		Agent: "claude", MessageCount: 1,
 	}), "upsert one-shot session")
 
 	got, err := resolveHealthSessionID(
-		context.Background(),
+		t.Context(),
 		service.NewDirectBackend(database, nil),
 		"abcdef12",
 	)
@@ -273,18 +275,18 @@ func TestResolveHealthSessionIDExactMatchCanBeOutsideHealthList(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
 
 	parentID := "parent-session"
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: parentID, Project: "p", Machine: "m", Agent: "claude",
 		MessageCount: 2, UserMessageCount: 2,
 	}), "upsert parent session")
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "child-session", Project: "p", Machine: "m", Agent: "codex",
 		MessageCount: 2, UserMessageCount: 2,
 		ParentSessionID: &parentID, RelationshipType: "subagent",
 	}), "upsert child session")
 
 	got, err := resolveHealthSessionID(
-		context.Background(),
+		t.Context(),
 		service.NewDirectBackend(database, nil),
 		"child-session",
 	)
@@ -310,12 +312,12 @@ func TestResolveHealthSessionIDPartialMatchCanBeOutsideHealthList(t *testing.T) 
 		ID: "old-partial-target", Project: "p", Machine: "m",
 		Agent: "codex", MessageCount: 1, StartedAt: &oldStarted,
 	}})
-	result, err := database.WriteSessionBatchAtomic(writes)
+	result, err := database.WriteSessionBatchAtomic(t.Context(), writes)
 	require.NoError(t, err, "seed health sessions")
 	require.Equal(t, maxHealthLimit+1, result.WrittenSessions)
 
 	got, err := resolveHealthSessionID(
-		context.Background(),
+		t.Context(),
 		service.NewDirectBackend(database, nil),
 		"partial-target",
 	)
@@ -334,8 +336,8 @@ func TestResolveHealthSessionIDUsesDaemonPartialLookup(t *testing.T) {
 	})
 
 	got, err := resolveHealthSessionID(
-		context.Background(),
-		service.NewHTTPBackend(ts.URL, "", false),
+		t.Context(),
+		servicehttp.NewHTTPBackend(ts.URL, "", false, ""),
 		"partial-target",
 	)
 
@@ -349,17 +351,17 @@ func TestResolveHealthSessionIDExactMatchStillChecksShortIDAmbiguity(
 ) {
 	database := dbtest.OpenTestDB(t)
 
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "abcdef12", Project: "p", Machine: "m",
 		Agent: "claude", MessageCount: 1,
 	}), "upsert exact session")
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "abcdef1234567890", Project: "p", Machine: "m",
 		Agent: "codex", MessageCount: 1,
 	}), "upsert short-id collision")
 
 	got, err := resolveHealthSessionID(
-		context.Background(),
+		t.Context(),
 		service.NewDirectBackend(database, nil),
 		"abcdef12",
 	)
@@ -375,7 +377,7 @@ func TestResolveSessionID(t *testing.T) {
 
 	upsert := func(id string) {
 		t.Helper()
-		require.NoError(t, database.UpsertSession(db.Session{
+		require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 			ID: id, Project: "p", Machine: "m",
 			Agent: "claude", MessageCount: 1,
 		}), "upsert %q", id)
@@ -394,7 +396,7 @@ func TestResolveSessionID(t *testing.T) {
 	upsert("local-uuid-aaaa-bbbb")
 	upsert("remotehost~local-uuid-aaaa-bbbb")
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	t.Run("unique substring resolves", func(t *testing.T) {
 		got, err := resolveSessionID(ctx, database, "unique")
@@ -445,7 +447,7 @@ func TestResolveSessionIDCollisionBeyondTopFew(t *testing.T) {
 
 	upsert := func(id string, started string) {
 		t.Helper()
-		require.NoError(t, database.UpsertSession(db.Session{
+		require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 			ID: id, Project: "p", Machine: "m",
 			Agent: "claude", MessageCount: 1,
 			StartedAt: &started,
@@ -475,7 +477,7 @@ func TestResolveSessionIDCollisionBeyondTopFew(t *testing.T) {
 	// match result set (well beyond the previous limit of 5).
 	upsert(partial+"-collide", "2020-01-01T00:00:00Z")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := resolveSessionID(ctx, database, partial)
 	require.Error(t, err, "expected ambiguity error")
 	assert.Contains(t, err.Error(), "ambiguous",

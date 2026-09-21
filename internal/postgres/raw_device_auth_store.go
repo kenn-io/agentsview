@@ -251,8 +251,8 @@ func rawDeviceAuthSingleScope(scope rawsync.DeviceTokenScope) bool {
 }
 
 func rawDeviceAuthUniqueViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr != nil && pgErr.Code == "23505"
+	pgErr, hasPgErr := errors.AsType[*pgconn.PgError](err)
+	return hasPgErr && pgErr != nil && pgErr.Code == "23505"
 }
 
 var _ rawsync.DeviceAuthStore = (*RawDeviceAuthStore)(nil)

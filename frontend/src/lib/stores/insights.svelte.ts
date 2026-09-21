@@ -1,13 +1,14 @@
+import { m } from "../i18n/index.js";
 import type {
   InsightType,
   AgentName,
   CannedInsightKind,
   AutomatedScope,
-  InsightGenerationFilters,
   Session,
 } from "../api/types.js";
+import type { CannedSessionFiltersInput as InsightGenerationFilters } from "../api/generated/index.js";
 import { InsightsService, type DbInsight } from "../api/generated/index";
-import { ApiError, callGenerated, isAbortError } from "../api/runtime.js";
+import { ApiError, isAbortError } from "../api/runtime.js";
 import {
   generateInsight,
   type GenerateInsightHandle,
@@ -67,6 +68,7 @@ class InsightsStore {
   tasks: InsightTask[] = $state([]);
 
   #handles = new Map<string, GenerateInsightHandle>();
+  #nextTaskId = 0;
   #version = 0;
   #listRead = new LatestRead();
 
@@ -88,10 +90,7 @@ class InsightsStore {
     const signal = this.#listRead.begin();
     this.loading = true;
     try {
-      const res = await callGenerated(
-        (options) => InsightsService.getApiV1Insights({}, options),
-        signal,
-      );
+      const res = await InsightsService.getApiV1Insights({}, { signal });
       if (this.#version === v && this.#listRead.isCurrent(signal)) {
         this.items = res.insights;
         if (this.selectedId !== null && !this.items.some((s) => s.id === this.selectedId)) {
@@ -220,7 +219,7 @@ class InsightsStore {
 
   #startGeneration(
     snap: GenerationSnapshot,
-    clientId: string = crypto.randomUUID(),
+    clientId: string = String(++this.#nextTaskId),
     selectTask = false,
   ) {
     const task: InsightTask = {
@@ -305,7 +304,7 @@ class InsightsStore {
           this.tasks = this.tasks.filter((t) => t.clientId !== clientId);
           return;
         }
-        const msg = e instanceof Error ? e.message : "Generation failed";
+        const msg = e instanceof Error ? e.message : m.activity_insight_generation_failed();
         this.tasks = this.tasks.map((t) =>
           t.clientId === clientId ? { ...t, status: "error" as const, error: msg } : t,
         );

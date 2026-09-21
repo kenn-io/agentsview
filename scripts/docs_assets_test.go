@@ -1,6 +1,7 @@
 package scripts
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -8,7 +9,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -102,7 +102,6 @@ func TestAssetPublishersRejectUnexpectedFiles(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-
 			tempDir := t.TempDir()
 			repo := filepath.Join(tempDir, "repo")
 			sourceDir := filepath.Join(tempDir, "source")
@@ -136,7 +135,7 @@ func TestGeneratedAssetPublisherAcceptsSemanticSetupScreenshot(t *testing.T) {
 	output, err := runBash(t, repo, nil, scriptPath, "--source", sourceDir)
 	require.NoError(t, err, string(output))
 
-	show := exec.Command(
+	show := exec.CommandContext(t.Context(),
 		"git", "show",
 		"docs-generated-assets:screenshots/semantic-search-setup.png",
 	)
@@ -227,7 +226,7 @@ func TestBuiltSiteCheckRequiresMarkdownCompanions(t *testing.T) {
 	writeMinimalBuiltDocsSite(t, filepath.Join(repo, "docs", "site"))
 
 	pythonPath := requireRunnablePython3(t)
-	cmd := exec.Command(pythonPath, checkScript)
+	cmd := exec.CommandContext(t.Context(), pythonPath, checkScript)
 	cmd.Dir = filepath.Join(repo, "docs")
 	output, err := cmd.CombinedOutput()
 
@@ -270,7 +269,7 @@ func TestBuiltSiteCheckRejectsSvgUsePlainHref(t *testing.T) {
 			require.NoError(t, os.WriteFile(indexPath, []byte(patched), 0o644))
 
 			pythonPath := requireRunnablePython3(t)
-			cmd := exec.Command(pythonPath, checkScript)
+			cmd := exec.CommandContext(t.Context(), pythonPath, checkScript)
 			cmd.Dir = filepath.Join(repo, "docs")
 			output, err := cmd.CombinedOutput()
 
@@ -369,6 +368,7 @@ printf '<urlset></urlset>\n' > site/docs/sitemap.xml
 
 func writeWebsiteTierFixture(t *testing.T, docsDir string) {
 	t.Helper()
+
 	websiteDir := filepath.Join(docsDir, "website")
 	files := map[string]string{
 		"index.html":                         "<!doctype html>\n",
@@ -393,6 +393,7 @@ func writeWebsiteTierFixture(t *testing.T, docsDir string) {
 
 func installScript(t *testing.T, repo, scriptRel string) string {
 	t.Helper()
+
 	script, err := os.ReadFile(filepath.Join("..", scriptRel))
 	require.NoError(t, err)
 	scriptPath := filepath.Join(repo, scriptRel)
@@ -408,8 +409,8 @@ func runBash(
 	bashPath, err := exec.LookPath("bash")
 	require.NoError(t, err)
 	var output []byte
-	for attempt := range 3 {
-		cmd := exec.Command(bashPath, args...)
+	for range 3 {
+		cmd := exec.CommandContext(t.Context(), bashPath, args...)
 		cmd.Dir = dir
 		if env != nil {
 			cmd.Env = env
@@ -417,9 +418,6 @@ func runBash(
 		output, err = cmd.CombinedOutput()
 		if !windowsDLLInitializationFailure(err) {
 			return output, err
-		}
-		if attempt < 2 {
-			time.Sleep(time.Second)
 		}
 	}
 	return output, err
@@ -441,7 +439,7 @@ func requireRunnablePython3(t *testing.T) string {
 	if err != nil {
 		t.Skipf("python3 not available on PATH: %v", err)
 	}
-	cmd := exec.Command(pythonPath, "--version")
+	cmd := exec.CommandContext(t.Context(), pythonPath, "--version")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		if runtime.GOOS == "windows" {
 			t.Skipf("python3 is not runnable: %v\n%s", err, out)
@@ -469,6 +467,7 @@ var builtDocsRoutes = func() []string {
 		"quality",
 		"commands",
 		"session-export",
+		"conversation-export",
 		"reporting-export",
 		"stats",
 		"session-api",
@@ -481,6 +480,7 @@ var builtDocsRoutes = func() []string {
 		"pg-sync",
 		"hosted-raw-sync",
 		"duckdb",
+		"clickhouse-sync",
 	}
 	routes := []string{"/", "/guide/", "/docs/"}
 	for _, page := range pages {
@@ -502,6 +502,7 @@ func routeMarkdownPath(route string) string {
 
 func writeMinimalBuiltDocsSite(t *testing.T, siteDir string) {
 	t.Helper()
+
 	for _, route := range builtDocsRoutes {
 		path := filepath.Join(siteDir, strings.Trim(route, "/"), "index.html")
 		if route == "/" {
@@ -533,6 +534,7 @@ func writeMinimalBuiltDocsSite(t *testing.T, siteDir string) {
 
 func writeBuiltSiteMarkdownCompanions(t *testing.T, siteDir string) {
 	t.Helper()
+
 	var llms strings.Builder
 	llms.WriteString("# AgentsView\n\n")
 	for _, route := range builtDocsRoutes {
@@ -627,6 +629,7 @@ func writeGeneratedAssets(t *testing.T, dir, content string) {
 		"screenshots/import-modal-chatgpt.png",
 		"screenshots/import-modal-claude.png",
 		"screenshots/in-session-search.png",
+		"screenshots/in-session-search-results.png",
 		"screenshots/quality.png",
 		"screenshots/recall-generated-insights.png",
 		"screenshots/layout-compact.png",
@@ -634,11 +637,15 @@ func writeGeneratedAssets(t *testing.T, dir, content string) {
 		"screenshots/machine-labels.png",
 		"screenshots/message-copy-btn.png",
 		"screenshots/message-viewer.png",
+		"screenshots/open-session.png",
 		"screenshots/project-breakdown.png",
+		"screenshots/project-mapping-bulk.png",
 		"screenshots/publish-modal.png",
 		"screenshots/recall-corpus.png",
 		"screenshots/recent-edits.png",
+		"screenshots/remote-resume-command.png",
 		"screenshots/resync-modal.png",
+		"screenshots/search-filters.png",
 		"screenshots/search-grouped.png",
 		"screenshots/search-results.png",
 		"screenshots/semantic-search-setup.png",
@@ -651,8 +658,11 @@ func writeGeneratedAssets(t *testing.T, dir, content string) {
 		"screenshots/session-resume-menu.png",
 		"screenshots/session-shape.png",
 		"screenshots/session-vital-signs.png",
+		"screenshots/settings-agent-homes.png",
+		"screenshots/settings-archive-content.png",
 		"screenshots/settings-chart-colors.png",
 		"screenshots/settings-embeddings.png",
+		"screenshots/settings-image-cleanup.png",
 		"screenshots/settings-remote.png",
 		"screenshots/settings.png",
 		"screenshots/shortcuts-modal.png",
@@ -715,7 +725,7 @@ func updateBareBranch(t *testing.T, bareRepo, branch, commit string) {
 
 func git(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	cmd := exec.CommandContext(t.Context(), "git", args...)
 	cmd.Dir = dir
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(output))
@@ -725,7 +735,7 @@ func gitBareWorkTree(
 	t *testing.T, bareRepo, workTree string, env []string, args ...string,
 ) {
 	t.Helper()
-	output, err := gitBareCmd(bareRepo, workTree, env, args...).CombinedOutput()
+	output, err := gitBareCmd(t.Context(), bareRepo, workTree, env, args...).CombinedOutput()
 	require.NoError(t, err, string(output))
 }
 
@@ -733,33 +743,33 @@ func gitBareWorkTreeOutput(
 	t *testing.T, bareRepo, workTree string, env []string, args ...string,
 ) string {
 	t.Helper()
-	output, err := gitBareCmd(bareRepo, workTree, env, args...).Output()
+	output, err := gitBareCmd(t.Context(), bareRepo, workTree, env, args...).Output()
 	require.NoError(t, err)
 	return strings.TrimSpace(string(output))
 }
 
 func gitBare(t *testing.T, bareRepo string, env []string, args ...string) {
 	t.Helper()
-	output, err := gitBareCmd(bareRepo, "", env, args...).CombinedOutput()
+	output, err := gitBareCmd(t.Context(), bareRepo, "", env, args...).CombinedOutput()
 	require.NoError(t, err, string(output))
 }
 
 func gitBareOutput(t *testing.T, bareRepo string, env []string, args ...string) string {
 	t.Helper()
-	output, err := gitBareCmd(bareRepo, "", env, args...).Output()
+	output, err := gitBareCmd(t.Context(), bareRepo, "", env, args...).Output()
 	require.NoError(t, err)
 	return strings.TrimSpace(string(output))
 }
 
 func gitBareCmd(
-	bareRepo, workTree string, env []string, args ...string,
+	ctx context.Context, bareRepo, workTree string, env []string, args ...string,
 ) *exec.Cmd {
 	fullArgs := []string{"--git-dir", bareRepo}
 	if workTree != "" {
 		fullArgs = append(fullArgs, "--work-tree", workTree)
 	}
 	fullArgs = append(fullArgs, args...)
-	cmd := exec.Command("git", fullArgs...)
+	cmd := exec.CommandContext(ctx, "git", fullArgs...)
 	if workTree != "" {
 		cmd.Dir = workTree
 	}

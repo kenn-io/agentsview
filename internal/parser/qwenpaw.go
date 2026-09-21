@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/tidwall/gjson"
+	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 // IsValidQwenPawIDPart accepts workspace names and session file
@@ -195,7 +196,7 @@ func parseQwenPawSession(
 	}
 	for _, m := range messages {
 		if m.Role == RoleUser && !m.IsSystem && strings.TrimSpace(m.Content) != "" {
-			sess.FirstMessage = truncateFirstMessage(m.Content)
+			sess.FirstMessage = stringutil.TruncateRunes(m.Content, 300, "")
 			break
 		}
 	}
@@ -315,23 +316,11 @@ func parseQwenPawTimestamp(s string) time.Time {
 		"2006-01-02 15:04:05.999",
 		"2006-01-02 15:04:05",
 	} {
-		if t, err := time.ParseInLocation(layout, s, time.Local); err == nil {
+		if t, err := time.ParseInLocation(layout, s, time.Local); err == nil { //nolint:forbidigo // QwenPaw source timestamps omit the offset and represent local wall-clock time.
 			return t
 		}
 	}
 	return time.Time{}
-}
-
-// truncateFirstMessage caps FirstMessage length to keep list views
-// readable; the constant matches the truncation length other parsers
-// use for the same field.
-func truncateFirstMessage(s string) string {
-	const max = 300
-	r := []rune(s)
-	if len(r) <= max {
-		return s
-	}
-	return string(r[:max])
 }
 
 // populateQwenPawFileFields fills the File metadata on the session.

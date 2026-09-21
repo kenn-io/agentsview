@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { Message } from "../api/types.js";
+import type { DbMessage as Message } from "../api/generated/index.js";
 import { buildDisplayItems } from "./display-items.js";
 import {
   filterDisplayItemsByTranscriptMode,
@@ -10,6 +10,8 @@ let nextId = 1;
 
 function msg(overrides: Partial<Message> & { content: string }): Message {
   return {
+    has_context_tokens: false,
+    has_output_tokens: false,
     id: nextId++,
     session_id: "s1",
     ordinal: 0,
@@ -29,11 +31,23 @@ function msg(overrides: Partial<Message> & { content: string }): Message {
 }
 
 function userMsg(ordinal: number, content = "user") {
-  return msg({ ordinal, role: "user", content });
+  return msg({
+    has_context_tokens: false,
+    has_output_tokens: false,
+    ordinal,
+    role: "user",
+    content,
+  });
 }
 
 function assistantMsg(ordinal: number, content = "assistant") {
-  return msg({ ordinal, role: "assistant", content });
+  return msg({
+    has_context_tokens: false,
+    has_output_tokens: false,
+    ordinal,
+    role: "assistant",
+    content,
+  });
 }
 
 function toolMsg(ordinal: number, tool = "Bash", args = "$ ls") {
@@ -41,6 +55,18 @@ function toolMsg(ordinal: number, tool = "Bash", args = "$ ls") {
     ordinal,
     content: `[${tool}]\n${args}`,
     has_tool_use: true,
+  });
+}
+
+function systemMsg(ordinal: number, subtype: string, content: string) {
+  return msg({
+    has_context_tokens: false,
+    has_output_tokens: false,
+    ordinal,
+    role: "user",
+    is_system: true,
+    source_subtype: subtype,
+    content,
   });
 }
 
@@ -55,6 +81,58 @@ describe("filterDisplayItemsByTranscriptMode", () => {
   it("returns items unchanged in normal mode", () => {
     const items = buildDisplayItems([userMsg(0), assistantMsg(1), toolMsg(2)]);
     expect(filterDisplayItemsByTranscriptMode(items, "normal")).toEqual(items);
+  });
+
+  it("keeps one turn across task notifications", () => {
+    expect(
+      ordinalsOf([
+        userMsg(0, "review the repo"),
+        assistantMsg(1, "spawning four review agents"),
+        toolMsg(2, "Task", "review ui"),
+        systemMsg(3, "task_notification", "<task-notification>done</task-notification>"),
+        assistantMsg(4, "one agent finished, waiting for the rest"),
+        toolMsg(5, "Task", "review errors"),
+        systemMsg(6, "task_notification", "<task-notification>done</task-notification>"),
+        assistantMsg(7, "review complete, report published"),
+        userMsg(8, "thanks"),
+      ]),
+    ).toEqual([0, 7, 8]);
+  });
+
+  it("does not let a task notification resurrect dropped narration", () => {
+    expect(
+      ordinalsOf([
+        userMsg(0),
+        assistantMsg(1, "working"),
+        toolMsg(2),
+        systemMsg(3, "task_notification", "<task-notification>done</task-notification>"),
+        userMsg(4),
+      ]),
+    ).toEqual([0, 4]);
+  });
+
+  it("keeps one turn across stop hook feedback", () => {
+    expect(
+      ordinalsOf([
+        userMsg(0),
+        assistantMsg(1, "first attempt"),
+        systemMsg(2, "stop_hook", "Stop hook feedback: tests failed"),
+        assistantMsg(3, "fixed and rerun"),
+        userMsg(4),
+      ]),
+    ).toEqual([0, 3, 4]);
+  });
+
+  it("still ends the turn at an interruption", () => {
+    expect(
+      ordinalsOf([
+        userMsg(0),
+        assistantMsg(1, "partial answer"),
+        systemMsg(2, "interrupted", "[Request interrupted by user]"),
+        userMsg(3),
+        assistantMsg(4, "answer"),
+      ]),
+    ).toEqual([0, 1, 2, 3, 4]);
   });
 
   it("keeps the final assistant before the next user", () => {
@@ -101,6 +179,8 @@ describe("filterDisplayItemsByTranscriptMode", () => {
 
   it("keeps the assistant response that precedes a compact-boundary divider", () => {
     const boundary = msg({
+      has_context_tokens: false,
+      has_output_tokens: false,
       ordinal: 2,
       role: "user",
       content: "[compact summary]",

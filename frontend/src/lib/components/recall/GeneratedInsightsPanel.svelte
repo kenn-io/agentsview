@@ -21,7 +21,7 @@
   import { ui } from "../../stores/ui.svelte.js";
   import { agentLabel } from "../../utils/agents.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
-  import { renderMarkdown } from "../../utils/markdown.js";
+  import { loadAssetImages, renderMarkdown } from "../../utils/markdown.js";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
   import RangePicker from "../shared/RangePicker.svelte";
   import {
@@ -42,8 +42,8 @@
     ),
   );
   const insightGenerationAvailable = $derived(
-    sync.serverVersion?.insight_generation_available === true ||
-      sync.serverVersion?.read_only !== true,
+    sync.serverVersion?.insight_generation_available ??
+      (sync.serverVersion?.read_only !== true),
   );
   const generationUnavailable = $derived(
     sync.serverVersion === null || !insightGenerationAvailable,
@@ -502,8 +502,10 @@
                 >×</IconButton>
               </div>
             </div>
-            <div class="markdown-body">
-              {@html renderMarkdown(insights.selectedItem.content)}
+            <div class="markdown-body" use:loadAssetImages={insights.selectedItem.content}>
+              {@html renderMarkdown(insights.selectedItem.content, {
+                renderUnknownXmlBlocksAsPreformatted: ui.renderUnknownXmlBlocksAsPreformatted,
+              })}
             </div>
           {:else}
             <p>{m.insights_page_select_to_read()}</p>

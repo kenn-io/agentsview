@@ -20,7 +20,7 @@ func TestGzipMiddlewareCompressesAPIResponse(t *testing.T) {
 		_, _ = w.Write([]byte(body))
 	}))
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/sessions/sidebar-index", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/sessions/sidebar-index", nil)
 	req.Header.Set("Accept-Encoding", "gzip")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -48,7 +48,7 @@ func TestGzipMiddlewareCompressesMultiWriteAPIResponse(t *testing.T) {
 		_, _ = w.Write([]byte(second))
 	}))
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/sessions/sidebar-index", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/sessions/sidebar-index", nil)
 	req.Header.Set("Accept-Encoding", "gzip")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -72,7 +72,7 @@ func TestGzipMiddlewareSkipsEventStreams(t *testing.T) {
 		_, _ = w.Write([]byte(body))
 	}))
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/events", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/events", nil)
 	req.Header.Set("Accept-Encoding", "gzip")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -93,7 +93,7 @@ func TestGzipMiddlewareKeepsFlushedEventStreamPlain(t *testing.T) {
 		_, _ = w.Write([]byte(body))
 	}))
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/sync", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/sync", nil)
 	req.Header.Set("Accept-Encoding", "gzip")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -112,7 +112,7 @@ func TestGzipMiddlewareLeavesSmallAPIResponsePlain(t *testing.T) {
 		_, _ = w.Write([]byte("ok"))
 	}))
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/health", nil)
 	req.Header.Set("Accept-Encoding", "gzip")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)

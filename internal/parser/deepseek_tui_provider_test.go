@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"crypto/sha256"
 	"fmt"
 	"os"
@@ -26,20 +25,20 @@ func TestDeepSeekTUIProviderSourceMethods(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, AgentDeepSeekTUI, discovered[0].Provider)
 	assert.Equal(t, sourcePath, discovered[0].DisplayPath)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~deepseek-tui:session_123",
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, sourcePath, found.DisplayPath)
 
-	found, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		FingerprintKey: sourcePath,
 	})
 	require.NoError(t, err)
@@ -48,7 +47,7 @@ func TestDeepSeekTUIProviderSourceMethods(t *testing.T) {
 
 	require.NoError(t, os.Remove(sourcePath))
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: sourcePath, EventKind: "remove", WatchRoot: root},
 	)
 	require.NoError(t, err)
@@ -72,12 +71,12 @@ func TestDeepSeekTUIProviderSourceMethodsFollowSymlinkedSessionFile(t *testing.T
 	})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, sourcePath, discovered[0].DisplayPath)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~deepseek-tui:session_123",
 	})
 	require.NoError(t, err)
@@ -85,7 +84,7 @@ func TestDeepSeekTUIProviderSourceMethodsFollowSymlinkedSessionFile(t *testing.T
 	assert.Equal(t, sourcePath, found.DisplayPath)
 
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: sourcePath, EventKind: "write", WatchRoot: root},
 	)
 	require.NoError(t, err)
@@ -104,14 +103,14 @@ func TestDeepSeekTUIProviderParse(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 
-	fingerprint, err := provider.Fingerprint(context.Background(), sources[0])
+	fingerprint, err := provider.Fingerprint(t.Context(), sources[0])
 	require.NoError(t, err)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      sources[0],
 		Fingerprint: fingerprint,
 	})
@@ -122,8 +121,7 @@ func TestDeepSeekTUIProviderParse(t *testing.T) {
 	assert.Equal(t, "deepseek-tui:session_123", outcome.Results[0].Result.Session.ID)
 	assert.Equal(t, "sample_project", outcome.Results[0].Result.Session.Project)
 	assert.Equal(t, "devbox", outcome.Results[0].Result.Session.Machine)
-	assert.Equal(t,
-		fmt.Sprintf("%x", sha256.Sum256([]byte(content))),
+	assert.Equal(t, fmt.Sprintf("%x", sha256.Sum256([]byte(content))),
 		outcome.Results[0].Result.Session.File.Hash,
 	)
 	assert.Len(t, outcome.Results[0].Result.Messages, 2)

@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -12,7 +11,7 @@ func TestFileBackedSessionCount_ExcludesNonDevinNonFileBackedAgents(
 	t *testing.T,
 ) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Insert a claude-ai session (non-file-backed).
 	insertSession(t, d, "claude-ai:test-1", "claude.ai",
@@ -40,7 +39,7 @@ func TestFileBackedSessionCountForRebuildOwner_IcodemateExclusions(
 	t *testing.T,
 ) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	containerPath := "/home/user/.local/share/icodemate/icodemate.db"
 	cliPath := "/home/user/.icodemate/cli/projects/proj/abc.jsonl"

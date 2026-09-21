@@ -9,6 +9,7 @@ import (
 	"os"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -42,6 +43,7 @@ type deepSeekHarnessResponse struct {
 	HasChunk       bool
 	Blocks         map[int64]*deepSeekHarnessBlockState
 	FinalSeen      bool
+	FinalSeq       int64
 	FinalUsage     *deepSeekHarnessUsage
 	ChunkUsage     *deepSeekHarnessUsage
 	UsageTime      int64
@@ -66,6 +68,11 @@ type deepSeekHarnessLifecycle struct {
 	HasOpenTurn  bool
 	HasOpenStep  bool
 	PendingCalls map[string]struct{}
+
+	// CanRestartOpenTurn records a non-empty next-turn inbox splice immediately
+	// before the next turn/start. Released v3 logs use that legacy restart
+	// shape instead of emitting an explicit turn/end for the interrupted turn.
+	CanRestartOpenTurn bool
 }
 
 type deepSeekHarnessCandidate struct {
@@ -92,6 +99,8 @@ func parseDeepSeekHarnessSession(
 	latestAgentPreset := ""
 	latestOwnedTime := int64(0)
 	headerSeen := false
+	hasInheritedCut := false
+	inheritedCutSeq := int64(0)
 	lastTurnEndKind := ""
 	lifecycle := deepSeekHarnessLifecycle{
 		NextTurn: 1, NextStep: 1, PendingCalls: make(map[string]struct{}),
@@ -160,11 +169,20 @@ func parseDeepSeekHarnessSession(
 			}
 			return nil
 		}
+		trackingInheritedCut := header.Version >= 2 && header.IsSeeded
 		defer func() {
-			if consumeErr == nil && event.Time > latestOwnedTime {
+			if consumeErr == nil && event.Time > latestOwnedTime &&
+				(!trackingInheritedCut || hasInheritedCut) {
 				latestOwnedTime = event.Time
 			}
 		}()
+		if trackingInheritedCut && event.Type == "session/end-seed" &&
+			deepSeekHarnessInheritedSeed(event.Data) {
+			hasInheritedCut = true
+			inheritedCutSeq = event.Seq
+			lastTurnEndKind = ""
+			currentStep = nil
+		}
 		switch event.Type {
 		case "turn/start":
 			if _, err := deepSeekHarnessEventTurn(event.Data); err != nil {
@@ -203,6 +221,18 @@ func parseDeepSeekHarnessSession(
 				return nil
 			}
 			appendCandidate(event.Seq, message)
+		case "system/message":
+			message, err := deepSeekHarnessSystemMessage(event)
+			if err != nil {
+				return eventError(event, err)
+			}
+			if !deepSeekHarnessSurfaceAppend(event.SurfaceOp) {
+				return nil
+			}
+			if !deepSeekHarnessMessageVisible(message) {
+				return nil
+			}
+			appendCandidate(event.Seq, message)
 		case "assistant/chunk":
 			key, chunk, err := deepSeekHarnessChunkData(event.Data)
 			if err != nil {
@@ -225,6 +255,13 @@ func parseDeepSeekHarnessSession(
 			if err != nil {
 				return eventError(event, err)
 			}
+			streamUsage, stopReason, err := deepSeekHarnessEmbeddedAssistantStream(event.Data)
+			if err != nil {
+				return eventError(event, err)
+			}
+			if usage == nil {
+				usage = streamUsage
+			}
 			message, model, err := deepSeekHarnessAssistantMessage(rawMessage, event.Time)
 			if err != nil {
 				return eventError(event, err)
@@ -237,6 +274,10 @@ func parseDeepSeekHarnessSession(
 				response.RequestModel = latestRequestModel
 			}
 			response.FinalSeen = true
+			response.FinalSeq = event.Seq
+			if stopReason != "" {
+				response.StopReason = stopReason
+			}
 			if usage != nil {
 				response.FinalUsage = usage
 				response.UsageTime = event.Time
@@ -285,6 +326,20 @@ func parseDeepSeekHarnessSession(
 			"DeepSeek Harness seedLength %d exceeds decoded event count %d",
 			scan.Header.SeedLength, scan.EventCount,
 		)
+	}
+	if hasInheritedCut {
+		candidates = slices.DeleteFunc(candidates, func(candidate deepSeekHarnessCandidate) bool {
+			return candidate.Seq < inheritedCutSeq
+		})
+		compactionUsage = slices.DeleteFunc(compactionUsage, func(record deepSeekHarnessUsageRecord) bool {
+			return record.Seq < inheritedCutSeq
+		})
+		for key, response := range responses {
+			if response.FinalSeq < inheritedCutSeq &&
+				response.FirstChunkSeq < inheritedCutSeq {
+				delete(responses, key)
+			}
+		}
 	}
 
 	for _, response := range responses {
@@ -396,7 +451,7 @@ func parseDeepSeekHarnessSession(
 		AgentLabel:          latestAgentPreset,
 		Cwd:                 scan.Header.Cwd,
 		SourceSessionID:     scan.Header.ID,
-		SourceVersion:       "0",
+		SourceVersion:       strconv.FormatInt(scan.Header.Version, 10),
 		MalformedLines:      scan.MalformedLines,
 		IsTruncated:         scan.Truncated,
 		FirstMessage:        firstMessage,
@@ -464,6 +519,9 @@ func validateDeepSeekHarnessSemanticEvent(event deepSeekHarnessEvent) error {
 	case "user/message":
 		_, err := deepSeekHarnessUserMessage(event)
 		return err
+	case "system/message":
+		_, err := deepSeekHarnessSystemMessage(event)
+		return err
 	case "assistant/chunk":
 		_, chunk, err := deepSeekHarnessChunkData(event.Data)
 		if err != nil {
@@ -508,6 +566,13 @@ func (state *deepSeekHarnessLifecycle) validate(event deepSeekHarnessEvent) erro
 		return nil
 	}
 
+	restartAfterInbox := state.CanRestartOpenTurn
+	state.CanRestartOpenTurn = false
+	if event.Type == "agent/inbox/spliced" {
+		state.CanRestartOpenTurn = deepSeekHarnessNextTurnSpliceRestart(event.Data)
+		return nil
+	}
+
 	switch event.Type {
 	case "turn/start":
 		turn, err := deepSeekHarnessEventTurn(event.Data)
@@ -515,7 +580,17 @@ func (state *deepSeekHarnessLifecycle) validate(event deepSeekHarnessEvent) erro
 			return err
 		}
 		if state.HasOpenTurn {
-			return fmt.Errorf("turn/start %d while turn %d is still open", turn, state.OpenTurn)
+			switch {
+			case restartAfterInbox && !state.HasOpenStep && turn == state.OpenTurn+1:
+				state.HasOpenTurn = false
+				state.OpenTurn = 0
+				state.NextTurn = turn
+				clear(state.PendingCalls)
+			default:
+				return fmt.Errorf(
+					"turn/start %d while turn %d is still open", turn, state.OpenTurn,
+				)
+			}
 		}
 		if turn != state.NextTurn {
 			return fmt.Errorf("turn/start expected turn %d, got %d", state.NextTurn, turn)
@@ -622,11 +697,43 @@ func (state *deepSeekHarnessLifecycle) validate(event deepSeekHarnessEvent) erro
 	return nil
 }
 
+func deepSeekHarnessInheritedSeed(raw jsontext.Value) bool {
+	fields, err := decodeDeepSeekHarnessObject(raw)
+	if err != nil {
+		return false
+	}
+	rawInherited, ok := fields["inherited"]
+	if !ok {
+		return false
+	}
+	var inherited bool
+	if err := json.Unmarshal(rawInherited, &inherited); err != nil {
+		return false
+	}
+	return inherited
+}
+
+func deepSeekHarnessNextTurnSpliceRestart(raw jsontext.Value) bool {
+	fields, err := decodeDeepSeekHarnessObject(raw)
+	if err != nil {
+		return false
+	}
+	target, err := deepSeekHarnessRequiredString(fields, "target")
+	if err != nil || target != "next-turn" {
+		return false
+	}
+	var inserted []jsontext.Value
+	if err := json.Unmarshal(fields["inserted"], &inserted); err != nil {
+		return false
+	}
+	return len(inserted) > 0
+}
+
 func deepSeekHarnessOpenNumber(value int64, present bool) string {
 	if !present {
 		return "none"
 	}
-	return fmt.Sprintf("%d", value)
+	return strconv.FormatInt(value, 10)
 }
 
 func eventError(event deepSeekHarnessEvent, err error) error {
@@ -794,6 +901,73 @@ func deepSeekHarnessAssistantData(raw jsontext.Value) (
 	return key, message, usage, nil
 }
 
+// deepSeekHarnessEmbeddedAssistantStream reads the generation-2+ assistant
+// message stream envelope for settlement facts Agentsview renders: the usage
+// fallback when the outer data omits it, and the terminal finish reason.
+func deepSeekHarnessEmbeddedAssistantStream(raw jsontext.Value) (
+	*deepSeekHarnessUsage, string, error,
+) {
+	fields, err := decodeDeepSeekHarnessObject(raw)
+	if err != nil {
+		return nil, "", errors.New("assistant data is not an object")
+	}
+	rawStream, ok := fields["stream"]
+	if !ok {
+		return nil, "", nil
+	}
+	var stream []jsontext.Value
+	if err := json.Unmarshal(rawStream, &stream); err != nil {
+		return nil, "", errors.New("assistant stream is not an array")
+	}
+	var usage *deepSeekHarnessUsage
+	stopReason := ""
+	for _, rawItem := range stream {
+		item, err := decodeDeepSeekHarnessObject(rawItem)
+		if err != nil {
+			return nil, "", errors.New("assistant stream item is not an object")
+		}
+		rawChunk, ok := item["chunk"]
+		if !ok {
+			continue
+		}
+		chunk, err := decodeDeepSeekHarnessObject(rawChunk)
+		if err != nil {
+			return nil, "", errors.New("assistant stream chunk is not an object")
+		}
+		chunkType, err := deepSeekHarnessRequiredString(chunk, "type")
+		if err != nil {
+			return nil, "", err
+		}
+		switch chunkType {
+		case "usage":
+			rawUsage, ok := chunk["usage"]
+			if !ok {
+				return nil, "", errors.New("assistant stream usage has no usage")
+			}
+			parsed, err := parseDeepSeekHarnessUsage(rawUsage)
+			if err != nil {
+				return nil, "", err
+			}
+			usage = &parsed
+		case "finish":
+			rawReason, ok := chunk["reason"]
+			if !ok {
+				return nil, "", errors.New("assistant stream finish has no reason")
+			}
+			reason, err := decodeDeepSeekHarnessObject(rawReason)
+			if err != nil {
+				return nil, "", errors.New("assistant stream finish reason is not an object")
+			}
+			kind, err := deepSeekHarnessRequiredString(reason, "kind")
+			if err != nil || kind == "" {
+				return nil, "", errors.New("assistant stream finish reason has no kind")
+			}
+			stopReason = kind
+		}
+	}
+	return usage, stopReason, nil
+}
+
 func deepSeekHarnessUserMessage(event deepSeekHarnessEvent) (ParsedMessage, error) {
 	message, source, _, err := deepSeekHarnessMessageEnvelope(event.Data, "user")
 	if err != nil {
@@ -805,6 +979,29 @@ func deepSeekHarnessUserMessage(event deepSeekHarnessEvent) (ParsedMessage, erro
 	}
 	parsed.Role = RoleUser
 	parsed.IsSystem = source != "user"
+	parsed.SourceType = source
+	return parsed, nil
+}
+
+func deepSeekHarnessSystemMessage(event deepSeekHarnessEvent) (ParsedMessage, error) {
+	fields, err := decodeDeepSeekHarnessObject(event.Data)
+	if err != nil {
+		return ParsedMessage{}, errors.New("system message data is not an object")
+	}
+	rawMessage, ok := fields["message"]
+	if !ok {
+		return ParsedMessage{}, errors.New("system message data has no message")
+	}
+	content, source, _, err := deepSeekHarnessMessageEnvelope(rawMessage, "system")
+	if err != nil {
+		return ParsedMessage{}, err
+	}
+	parsed, err := parseDeepSeekHarnessContent(content, event.Time)
+	if err != nil {
+		return ParsedMessage{}, err
+	}
+	parsed.Role = RoleSystem
+	parsed.IsSystem = true
 	parsed.SourceType = source
 	return parsed, nil
 }
@@ -899,11 +1096,11 @@ func parseDeepSeekHarnessContent(
 				return ParsedMessage{}, err
 			}
 			thinking = append(thinking, text)
-		case "image":
+		case "image", "file":
 			if _, ok := fields["attachment"]; !ok {
-				return ParsedMessage{}, errors.New("image block has no attachment")
+				return ParsedMessage{}, fmt.Errorf("%s block has no attachment", blockType)
 			}
-			visible = append(visible, "[image]")
+			visible = append(visible, "["+blockType+"]")
 		case "tool-call":
 			id, idErr := deepSeekHarnessRequiredString(fields, "id")
 			name, nameErr := deepSeekHarnessRequiredString(fields, "name")
@@ -976,12 +1173,12 @@ func normalizeDeepSeekHarnessContentImages(
 			return nil, err
 		}
 		switch blockType {
-		case "image":
+		case "image", "file":
 			if _, ok := fields["attachment"]; !ok {
-				return nil, errors.New("image block has no attachment")
+				return nil, fmt.Errorf("%s block has no attachment", blockType)
 			}
 			block, _ = json.Marshal(map[string]any{
-				"type": "text", "text": "[image]",
+				"type": "text", "text": "[" + blockType + "]",
 			}, json.Deterministic(true))
 		case "tool-result":
 			content, ok := fields["content"]

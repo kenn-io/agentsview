@@ -126,6 +126,7 @@ CREATE TABLE IF NOT EXISTS messages (
     content_length INTEGER NOT NULL DEFAULT 0,
     is_system      INTEGER NOT NULL DEFAULT 0,
     model TEXT NOT NULL DEFAULT '',
+    reasoning_effort TEXT NOT NULL DEFAULT '',
     token_usage TEXT NOT NULL DEFAULT '',
     context_tokens INTEGER NOT NULL DEFAULT 0,
     output_tokens INTEGER NOT NULL DEFAULT 0,
@@ -158,7 +159,7 @@ CREATE TABLE IF NOT EXISTS artifact_export_queue (
     generation INTEGER NOT NULL DEFAULT 1,
     -- Acknowledgement clears pending but retains the row as durable generation
     -- authority, preventing an old claim from becoming valid after requeue.
-    pending INTEGER NOT NULL DEFAULT 1 CHECK (pending IN (0, 1)),
+    pending INTEGER NOT NULL DEFAULT 1,
     rejected_generation INTEGER,
     last_error TEXT NOT NULL DEFAULT '',
     rejected_at TEXT
@@ -331,6 +332,9 @@ CREATE TABLE IF NOT EXISTS tool_calls (
 
 CREATE INDEX IF NOT EXISTS idx_tool_calls_session
     ON tool_calls(session_id);
+CREATE INDEX IF NOT EXISTS idx_tool_calls_session_tool_use
+    ON tool_calls(session_id, tool_use_id)
+    WHERE tool_use_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_tool_calls_session_category
     ON tool_calls(session_id, category);
 -- idx_tool_calls_message backs the ON DELETE CASCADE from
@@ -364,7 +368,9 @@ CREATE TABLE IF NOT EXISTS tool_result_events (
     content                  TEXT NOT NULL,
     content_length           INTEGER NOT NULL DEFAULT 0,
     timestamp                TEXT,
-    event_index              INTEGER NOT NULL DEFAULT 0
+    event_index              INTEGER NOT NULL DEFAULT 0,
+    raw_content_digest       BLOB,
+    summary_participates     INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_tool_result_events_session
@@ -376,6 +382,16 @@ CREATE INDEX IF NOT EXISTS idx_tool_result_events_call
         call_index,
         event_index
     );
+
+-- Raw identity is independent of stored display bytes, which may be blanked.
+CREATE INDEX IF NOT EXISTS idx_tool_result_events_identity
+    ON tool_result_events(session_id, tool_call_message_ordinal, call_index,
+                          agent_id, status, raw_content_digest)
+    WHERE raw_content_digest IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_tool_result_events_summary
+    ON tool_result_events(session_id, tool_call_message_ordinal, call_index,
+                          (summary_participates IS NULL OR raw_content_digest IS NULL),
+                          summary_participates, event_index);
 
 -- Insights table for AI-generated activity insights
 CREATE TABLE IF NOT EXISTS insights (
@@ -415,10 +431,7 @@ CREATE TABLE IF NOT EXISTS recall_entries (
     type              TEXT NOT NULL,
     scope             TEXT NOT NULL,
     status            TEXT NOT NULL DEFAULT 'accepted',
-    review_state      TEXT NOT NULL DEFAULT 'unreviewed_auto'
-        CHECK (review_state IN (
-            'human_reviewed', 'unreviewed_auto', 'calibrated_auto', 'eval_raw'
-        )),
+    review_state      TEXT NOT NULL DEFAULT 'unreviewed_auto',
     title             TEXT NOT NULL,
     body              TEXT NOT NULL,
     trigger           TEXT NOT NULL DEFAULT '',
@@ -461,7 +474,7 @@ CREATE INDEX IF NOT EXISTS idx_recall_entries_supersession
 -- Monotonic source revision for Recall vector freshness. Unlike timestamps,
 -- this cannot collide when several corpus mutations happen in one clock tick.
 CREATE TABLE IF NOT EXISTS recall_corpus_state (
-    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    singleton INTEGER PRIMARY KEY,
     revision  INTEGER NOT NULL DEFAULT 0
 );
 INSERT OR IGNORE INTO recall_corpus_state (singleton, revision) VALUES (1, 0);
@@ -471,7 +484,7 @@ INSERT OR IGNORE INTO recall_corpus_state (singleton, revision) VALUES (1, 0);
 -- deliberately separate from recall_corpus_state: embedding freshness only
 -- tracks the accepted fields sent to the embedding provider.
 CREATE TABLE IF NOT EXISTS recall_query_state (
-    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    singleton INTEGER PRIMARY KEY,
     revision  INTEGER NOT NULL DEFAULT 0
 );
 INSERT OR IGNORE INTO recall_query_state (singleton, revision) VALUES (1, 0);
@@ -621,8 +634,8 @@ CREATE TABLE IF NOT EXISTS recall_query_events (
     filters_json         TEXT NOT NULL DEFAULT '{}',
     trusted_only         INTEGER NOT NULL DEFAULT 0,
     score_policy_version TEXT NOT NULL,
-    result_count         INTEGER NOT NULL DEFAULT 0 CHECK (result_count >= 0),
-    packed_count         INTEGER NOT NULL DEFAULT 0 CHECK (packed_count >= 0),
+    result_count         INTEGER NOT NULL DEFAULT 0,
+    packed_count         INTEGER NOT NULL DEFAULT 0,
     top_score            REAL NOT NULL DEFAULT 0,
     miss_reason          TEXT NOT NULL DEFAULT '',
     created_at           TEXT NOT NULL
@@ -637,10 +650,10 @@ CREATE INDEX IF NOT EXISTS idx_recall_query_events_surface
 CREATE TABLE IF NOT EXISTS recall_query_exposures (
     query_id TEXT NOT NULL
         REFERENCES recall_query_events(id) ON DELETE CASCADE,
-    rank     INTEGER NOT NULL CHECK (rank >= 1),
+    rank     INTEGER NOT NULL,
     entry_id TEXT NOT NULL,
     score    REAL NOT NULL,
-    packed   INTEGER NOT NULL DEFAULT 0 CHECK (packed IN (0, 1)),
+    packed   INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (query_id, rank)
 );
 
@@ -653,8 +666,7 @@ CREATE INDEX IF NOT EXISTS idx_recall_query_exposures_entry
 -- changing configuration creates a new generation rather than mixing corpora.
 CREATE TABLE IF NOT EXISTS recall_extract_generations (
     fingerprint TEXT PRIMARY KEY,
-    state       TEXT NOT NULL DEFAULT 'building'
-        CHECK (state IN ('building', 'active', 'retired')),
+    state       TEXT NOT NULL DEFAULT 'building',
     model       TEXT NOT NULL,
     segmenter   TEXT NOT NULL,
     params_json TEXT NOT NULL DEFAULT '{}',
@@ -675,8 +687,7 @@ CREATE TABLE IF NOT EXISTS recall_extract_progress (
         REFERENCES recall_extract_generations(fingerprint) ON DELETE CASCADE,
     unit_cursor    INTEGER NOT NULL DEFAULT 0,
     units_total    INTEGER NOT NULL DEFAULT 0,
-    state          TEXT NOT NULL DEFAULT 'pending'
-        CHECK (state IN ('pending', 'partial', 'done', 'failed')),
+    state          TEXT NOT NULL DEFAULT 'pending',
     content_digest TEXT NOT NULL DEFAULT '',
     -- pre-read cutoff of the last coverage claim; advances on insert, digest
     -- reset, and same-digest revisits alike, so it marks the transcript
@@ -734,6 +745,16 @@ CREATE TABLE IF NOT EXISTS skipped_files (
     file_path  TEXT PRIMARY KEY,
     file_mtime INTEGER NOT NULL
 );
+-- Source failures cache: source files whose last parse failed for a reason
+-- that will not change until the file does. Sync skips them while the recorded
+-- identity still matches. missing = 1 records a source that did not exist.
+CREATE TABLE IF NOT EXISTS source_failures (
+    cache_key   TEXT PRIMARY KEY,
+    file_mtime  INTEGER NOT NULL,
+    file_size   INTEGER NOT NULL DEFAULT 0,
+    fingerprint TEXT NOT NULL DEFAULT '',
+    missing     INTEGER NOT NULL DEFAULT 0
+);
 
 -- Machine-local watcher proof. This deliberately stays outside the shared
 -- session model: remote stores must not authorize source tombstones for paths
@@ -775,6 +796,45 @@ CREATE INDEX IF NOT EXISTS idx_worktree_project_mappings_match
 
 CREATE INDEX IF NOT EXISTS idx_worktree_project_mappings_project
     ON worktree_project_mappings(machine, project);
+
+-- A user-selected project for one session. This is deliberately independent
+-- of folder rules: temporary working directories often belong to a real
+-- project without being useful future mapping evidence.
+CREATE TABLE IF NOT EXISTS session_project_assignments (
+    session_id       TEXT PRIMARY KEY,
+    project          TEXT NOT NULL,
+    original_project TEXT NOT NULL,
+    created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE TRIGGER IF NOT EXISTS trg_sessions_apply_project_assignment_insert
+AFTER INSERT ON sessions
+WHEN EXISTS (
+    SELECT 1 FROM session_project_assignments WHERE session_id = NEW.id
+)
+BEGIN
+    UPDATE sessions
+    SET project = (
+        SELECT project FROM session_project_assignments WHERE session_id = NEW.id
+    )
+    WHERE id = NEW.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_sessions_apply_project_assignment_update
+AFTER UPDATE OF project ON sessions
+WHEN EXISTS (
+    SELECT 1
+    FROM session_project_assignments
+    WHERE session_id = NEW.id AND project != NEW.project
+)
+BEGIN
+    UPDATE sessions
+    SET project = (
+        SELECT project FROM session_project_assignments WHERE session_id = NEW.id
+    )
+    WHERE id = NEW.id;
+END;
 
 CREATE TABLE IF NOT EXISTS archive_metadata (
     key        TEXT PRIMARY KEY,
@@ -857,7 +917,7 @@ CREATE TABLE IF NOT EXISTS project_identity_observation_changes (
     root_path   TEXT NOT NULL DEFAULT '',
     git_remote  TEXT NOT NULL DEFAULT '',
     revision    INTEGER NOT NULL,
-    deleted     INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1)),
+    deleted     INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (project, machine, root_path, git_remote)
 );
 
@@ -868,7 +928,7 @@ CREATE TABLE IF NOT EXISTS session_project_identity_snapshot_changes (
     session_id  TEXT NOT NULL,
     project     TEXT NOT NULL,
     revision    INTEGER NOT NULL,
-    deleted     INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1)),
+    deleted     INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (session_id, project)
 );
 
@@ -1016,7 +1076,7 @@ CREATE TABLE IF NOT EXISTS session_deletion_changes (
     session_id TEXT PRIMARY KEY,
     project    TEXT NOT NULL,
     revision   INTEGER NOT NULL,
-    deleted    INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1))
+    deleted    INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_session_deletion_changes_revision
@@ -1065,7 +1125,7 @@ CREATE TABLE IF NOT EXISTS worktree_project_mapping_changes (
     machine     TEXT NOT NULL,
     path_prefix TEXT NOT NULL,
     revision    INTEGER NOT NULL,
-    deleted     INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1)),
+    deleted     INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (machine, path_prefix)
 );
 
@@ -1171,7 +1231,7 @@ CREATE TABLE IF NOT EXISTS model_pricing (
 CREATE TABLE IF NOT EXISTS model_pricing_bands (
     model_pattern TEXT NOT NULL
         REFERENCES model_pricing(model_pattern) ON DELETE CASCADE,
-    above_input_tokens INTEGER NOT NULL CHECK (above_input_tokens > 0),
+    above_input_tokens INTEGER NOT NULL,
     input_microdollars_per_mtok INTEGER NOT NULL,
     output_microdollars_per_mtok INTEGER NOT NULL,
     cache_creation_microdollars_per_mtok INTEGER NOT NULL,
@@ -1183,10 +1243,10 @@ CREATE TABLE IF NOT EXISTS model_pricing_bands (
 );
 
 CREATE TABLE IF NOT EXISTS genai_pricing (
-    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    singleton INTEGER PRIMARY KEY,
     version TEXT NOT NULL,
     source_ref TEXT NOT NULL DEFAULT '',
-    source TEXT NOT NULL CHECK (source IN ('embedded', 'fetched')),
+    source TEXT NOT NULL,
     data_json BLOB NOT NULL,
     updated_at TEXT NOT NULL
         DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
@@ -1236,22 +1296,12 @@ CREATE TABLE IF NOT EXISTS artifact_import_queue (
     kind                        TEXT NOT NULL,
     name                        TEXT NOT NULL,
     sha256                      TEXT NOT NULL,
-    size                        INTEGER NOT NULL CHECK (size >= 0),
-    required_checkpoint_version INTEGER NOT NULL CHECK (
-        required_checkpoint_version >= 1
-    ),
-    required_manifest_version   INTEGER NOT NULL CHECK (
-        required_manifest_version >= 1
-    ),
-    required_segment_version    INTEGER NOT NULL CHECK (
-        required_segment_version >= 1
-    ),
-    attempt_generation          INTEGER NOT NULL DEFAULT 0 CHECK (
-        attempt_generation >= 0
-    ),
-    quarantine_pending          INTEGER NOT NULL DEFAULT 0 CHECK (
-        quarantine_pending IN (0, 1)
-    ),
+    size                        INTEGER NOT NULL,
+    required_checkpoint_version INTEGER NOT NULL,
+    required_manifest_version   INTEGER NOT NULL,
+    required_segment_version    INTEGER NOT NULL,
+    attempt_generation          INTEGER NOT NULL DEFAULT 0,
+    quarantine_pending          INTEGER NOT NULL DEFAULT 0,
     enqueued_at                 TEXT NOT NULL DEFAULT (
         strftime('%Y-%m-%dT%H:%M:%fZ','now')
     ),
@@ -1271,22 +1321,22 @@ ON artifact_import_queue (
 );
 
 CREATE TABLE IF NOT EXISTS artifact_import_attempt_generations (
-    singleton  INTEGER PRIMARY KEY CHECK (singleton = 1),
-    generation INTEGER NOT NULL CHECK (generation >= 0)
+    singleton  INTEGER PRIMARY KEY,
+    generation INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS artifact_peer_checkpoint_heads (
     origin            TEXT PRIMARY KEY,
-    sequence          INTEGER NOT NULL CHECK (sequence >= 1),
+    sequence          INTEGER NOT NULL,
     checkpoint_sha256 TEXT NOT NULL,
-    checkpoint_size   INTEGER NOT NULL CHECK (checkpoint_size >= 0)
+    checkpoint_size   INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS artifact_checkpoint_landings (
     origin            TEXT PRIMARY KEY,
-    sequence          INTEGER NOT NULL CHECK (sequence >= 1),
+    sequence          INTEGER NOT NULL,
     checkpoint_sha256 TEXT NOT NULL,
-    checkpoint_size   INTEGER NOT NULL CHECK (checkpoint_size >= 0)
+    checkpoint_size   INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS artifact_checkpoint_landing_sessions (
@@ -1300,15 +1350,15 @@ CREATE TABLE IF NOT EXISTS artifact_checkpoint_landing_sessions (
 
 CREATE TABLE IF NOT EXISTS artifact_checkpoint_stages (
     origin            TEXT NOT NULL,
-    sequence          INTEGER NOT NULL CHECK (sequence >= 1),
+    sequence          INTEGER NOT NULL,
     checkpoint_sha256 TEXT NOT NULL,
-    checkpoint_size   INTEGER NOT NULL CHECK (checkpoint_size >= 0),
-    complete          INTEGER NOT NULL DEFAULT 0 CHECK (complete IN (0, 1)),
-    session_count     INTEGER NOT NULL DEFAULT 0 CHECK (session_count >= 0),
-    pending_count     INTEGER NOT NULL DEFAULT 0 CHECK (pending_count >= 0),
-    decoded_count     INTEGER NOT NULL DEFAULT 0 CHECK (decoded_count >= 0),
-    decode_offset     INTEGER NOT NULL DEFAULT 0 CHECK (decode_offset >= 0),
-    decoder_version   INTEGER NOT NULL DEFAULT 1 CHECK (decoder_version >= 1),
+    checkpoint_size   INTEGER NOT NULL,
+    complete          INTEGER NOT NULL DEFAULT 0,
+    session_count     INTEGER NOT NULL DEFAULT 0,
+    pending_count     INTEGER NOT NULL DEFAULT 0,
+    decoded_count     INTEGER NOT NULL DEFAULT 0,
+    decode_offset     INTEGER NOT NULL DEFAULT 0,
+    decoder_version   INTEGER NOT NULL DEFAULT 1,
     PRIMARY KEY (origin, sequence)
 );
 
@@ -1317,10 +1367,8 @@ CREATE TABLE IF NOT EXISTS artifact_checkpoint_stage_sessions (
     sequence           INTEGER NOT NULL,
     gid                TEXT NOT NULL,
     manifest_hash      TEXT NOT NULL,
-    attempt_generation INTEGER NOT NULL DEFAULT 0 CHECK (
-        attempt_generation >= 0
-    ),
-    satisfied         INTEGER NOT NULL DEFAULT 0 CHECK (satisfied IN (0, 1)),
+    attempt_generation INTEGER NOT NULL DEFAULT 0,
+    satisfied         INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (origin, sequence, gid),
     FOREIGN KEY (origin, sequence)
         REFERENCES artifact_checkpoint_stages(origin, sequence)
@@ -1342,3 +1390,82 @@ CREATE TABLE IF NOT EXISTS artifact_imported_sessions (
     ),
     PRIMARY KEY (origin, gid)
 );
+
+-- Machine-local per-call-occurrence agent content state for incremental
+-- summary recomputation: the latest contributing event per agent in first-write
+-- order. Provider call IDs are not unique, so the natural stored coordinates
+-- (message ordinal, call index) are the authoritative key. A late result
+-- update reads only this table (O(distinct agents)) instead of rescanning the
+-- call's full event history. Never mirrored to PostgreSQL or DuckDB.
+CREATE TABLE IF NOT EXISTS tool_call_occurrence_agent_state (
+    session_id         TEXT NOT NULL,
+    message_ordinal    INTEGER NOT NULL,
+    call_index         INTEGER NOT NULL,
+    agent_id           TEXT NOT NULL,
+    first_event_index  INTEGER NOT NULL,
+    latest_event_index INTEGER NOT NULL,
+    PRIMARY KEY (session_id, message_ordinal, call_index, agent_id)
+);
+
+-- Machine-local parse checkpoints. SQLite-only, never mirrored to
+-- PostgreSQL or DuckDB: parsers never run against those read-side stores,
+-- and a copy that drops this table degrades to the conservative no-checkpoint
+-- behavior (full parse / prefix rescan), never to a wrong resume.
+CREATE TABLE IF NOT EXISTS parser_checkpoints (
+    session_id         TEXT PRIMARY KEY,
+    agent              TEXT NOT NULL,
+    file_path          TEXT NOT NULL,
+    file_inode         INTEGER NOT NULL,
+    file_device        INTEGER NOT NULL,
+    file_mtime         INTEGER NOT NULL,
+    file_change_time   INTEGER NOT NULL DEFAULT 0,
+    offset             INTEGER NOT NULL,
+    tail_anchor_digest TEXT NOT NULL,
+    hash               TEXT NOT NULL,
+    next_ordinal       INTEGER NOT NULL,
+    checkpoint_version INTEGER NOT NULL,
+    updated_at         TEXT NOT NULL
+);
+
+-- Lazy-loaded checkpoint payload: the provider cursor and the resumable
+-- hash state. Kept out of parser_checkpoints so the stat-only freshness
+-- gate reads the small metadata row without touching the blobs.
+CREATE TABLE IF NOT EXISTS parser_checkpoint_blobs (
+    session_id TEXT PRIMARY KEY,
+    cursor     BLOB NOT NULL,
+    hash_state BLOB
+);
+
+-- Compact per-session signal/secret maintenance state. SQLite-only: the
+-- state is machine-local sync bookkeeping and is never mirrored to
+-- PostgreSQL or DuckDB. The state row carries a verification token
+-- (transcript revision + signal version); a row whose token disagrees with
+-- the stored session must never be folded into an incremental delta.
+CREATE TABLE IF NOT EXISTS session_signal_state (
+    session_id          TEXT PRIMARY KEY,
+    state               BLOB NOT NULL,
+    transcript_revision TEXT NOT NULL,
+    signal_version      INTEGER NOT NULL,
+    updated_at          TEXT NOT NULL
+);
+
+-- SQLite-only parser-proven conversation projection and compact latest changes.
+-- Bodies are stored once here; removed rows retain metadata, not old text.
+CREATE TABLE IF NOT EXISTS conversation_messages (
+    session_id TEXT NOT NULL, message_id TEXT NOT NULL,
+    ordinal INTEGER NOT NULL, role TEXT NOT NULL, timestamp TEXT NOT NULL DEFAULT '',
+    source_id TEXT NOT NULL DEFAULT '', body TEXT, digest TEXT NOT NULL DEFAULT '',
+    text_bytes INTEGER NOT NULL DEFAULT 0, gap TEXT NOT NULL DEFAULT '',
+    deleted INTEGER NOT NULL DEFAULT 0, removed INTEGER NOT NULL DEFAULT 0,
+    revision INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(session_id, message_id)
+);
+CREATE INDEX IF NOT EXISTS idx_conversation_messages_revision ON conversation_messages(revision);
+CREATE INDEX IF NOT EXISTS idx_conversation_messages_source ON conversation_messages(session_id, source_id);
+CREATE TABLE IF NOT EXISTS conversation_session_changes (
+    session_id TEXT PRIMARY KEY,
+    revision INTEGER NOT NULL,
+    deleted INTEGER NOT NULL DEFAULT 0,
+    gap TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_conversation_session_changes_revision ON conversation_session_changes(revision);

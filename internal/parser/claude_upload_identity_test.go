@@ -1,10 +1,10 @@
 package parser
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -44,9 +44,9 @@ func TestClaudeUploadIdentityAdoptsExplicitRootAndDerivesFork(t *testing.T) {
 	for _, branch := range []string{"b", "c"} {
 		parent := "a1"
 		for i := 1; i <= 4; i++ {
-			uuid := branch + fmt.Sprint(i)
+			uuid := branch + strconv.Itoa(i)
 			lines = append(lines, fmt.Sprintf(`{"type":"user","uuid":%q,"parentUuid":%q,"timestamp":"2026-01-01T00:00:%02dZ","sessionId":"root-stable","isSidechain":false,"message":{"content":"%s"}}`, uuid, parent, i+1, uuid))
-			assistant := branch + "a" + fmt.Sprint(i)
+			assistant := branch + "a" + strconv.Itoa(i)
 			lines = append(lines, fmt.Sprintf(`{"type":"assistant","uuid":%q,"parentUuid":%q,"timestamp":"2026-01-01T00:00:%02dZ","sessionId":"root-stable","isSidechain":false,"message":{"content":[{"type":"text","text":"answer"}]}}`, assistant, uuid, i+1))
 			parent = assistant
 		}
@@ -120,10 +120,10 @@ func TestClaudeLocalProviderPreservesFilenameIdentity(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(uploadIdentityTranscript("embedded", "false", "embedded")), 0o644))
 	provider, ok := NewProvider(AgentClaude, ProviderConfig{Roots: []string{root}, Machine: "local"})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
-	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
 	assert.Equal(t, "transport-name", outcome.Results[0].Result.Session.ID)

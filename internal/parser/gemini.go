@@ -250,8 +250,7 @@ func parseGeminiMessage(
 	if msgType == "gemini" {
 		role = RoleAssistant
 	}
-	content, hasThinking, hasToolUse, tcs, trs :=
-		extractGeminiContent(msg)
+	content, hasThinking, hasToolUse, tcs, trs := extractGeminiContent(msg)
 	if strings.TrimSpace(content) == "" {
 		return ParsedMessage{}, false
 	}
@@ -423,12 +422,14 @@ func extractGeminiContent(
 			hasToolUse = true
 			name := tc.Get("name").Str
 			tcID := tc.Get("id").Str
+			rendering := formatGeminiToolCall(tc)
 			if name != "" {
 				parsed = append(parsed, ParsedToolCall{
 					ToolName:  name,
 					Category:  NormalizeToolCategory(name),
 					ToolUseID: tcID,
 					InputJSON: tc.Get("args").Raw,
+					Rendering: rendering,
 				})
 				// Extract inline tool results from
 				// result[].functionResponse.response.output
@@ -453,7 +454,7 @@ func extractGeminiContent(
 					},
 				)
 			}
-			parts = append(parts, formatGeminiToolCall(tc))
+			parts = append(parts, rendering)
 			return true
 		})
 	}
@@ -482,7 +483,7 @@ func formatGeminiToolCall(tc gjson.Result) string {
 		)
 	case "run_command", "execute_command", "run_shell_command":
 		cmd := args.Get("command").Str
-		return fmt.Sprintf("[Bash]\n$ %s", cmd)
+		return "[Bash]\n$ " + cmd
 	case "list_directory":
 		return fmt.Sprintf(
 			"[List: %s]", args.Get("dir_path").Str,

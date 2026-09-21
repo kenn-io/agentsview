@@ -1,7 +1,6 @@
 package service_test
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -11,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/servicehttp"
 )
 
 func TestHTTPBackendStats(t *testing.T) {
@@ -30,9 +30,9 @@ func TestHTTPBackendStats(t *testing.T) {
 			}`))
 		}))
 	t.Cleanup(srv.Close)
-	svc := service.NewHTTPBackend(srv.URL, "", false)
+	svc := servicehttp.NewHTTPBackend(srv.URL, "", false, "")
 
-	stats, err := svc.Stats(context.Background(), service.StatsFilter{
+	stats, err := svc.Stats(t.Context(), service.StatsFilter{
 		Since:                 "2026-04-01",
 		Until:                 "2026-04-15",
 		Agent:                 "codex",
@@ -71,9 +71,9 @@ func TestHTTPBackendStatsDisablesDefaultVisibilityWithExplicitIncludes(t *testin
 			_, _ = w.Write([]byte(`{"schema_version":1,"totals":{"sessions_all":2}}`))
 		}))
 	t.Cleanup(srv.Close)
-	svc := service.NewHTTPBackend(srv.URL, "", false)
+	svc := servicehttp.NewHTTPBackend(srv.URL, "", false, "")
 
-	stats, err := svc.Stats(context.Background(), service.StatsFilter{
+	stats, err := svc.Stats(t.Context(), service.StatsFilter{
 		Since: "28d",
 		Agent: "all",
 	})

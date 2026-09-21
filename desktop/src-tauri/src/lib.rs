@@ -16,7 +16,12 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use tauri::async_runtime::Receiver;
-use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
+#[cfg(target_os = "macos")]
+use tauri::menu::{CheckMenuItem, CheckMenuItemBuilder};
+use tauri::menu::{
+    MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder, HELP_SUBMENU_ID,
+    WINDOW_SUBMENU_ID,
+};
 use tauri::plugin::Builder as PluginBuilder;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use tauri::tray::TrayIconBuilder;
@@ -55,8 +60,12 @@ const DEEP_LINK_SESSIONS_HOST: &str = "sessions";
 const ABOUT_MENU_ID: &str = "about";
 const CHECK_UPDATES_MENU_ID: &str = "check_updates";
 const OPEN_LOGS_FOLDER_MENU_ID: &str = "open_logs_folder";
+const DOCUMENTATION_MENU_ID: &str = "documentation";
 const SHOW_MAIN_WINDOW_MENU_ID: &str = "show_main_window";
 const QUIT_FROM_STATUS_ITEM_MENU_ID: &str = "quit_from_status_item";
+#[cfg(target_os = "macos")]
+const DOCK_MODE_MENU_ID: &str = "dock_mode";
+const DOCK_MODE_SETTINGS_FILE_NAME: &str = "settings.json";
 // Delay after navigating to the backend before probing whether the
 // Linux WebKitGTK web content process is actually alive. Gives the
 // process time to spawn so we don't false-positive on slow startup.
@@ -172,13 +181,24 @@ impl Default for DeepLinkState {
     }
 }
 
+/// Retained handle to the tray dock-mode checkbox. muda flips the
+/// checkmark before the menu event fires and Tauri 2.10 cannot look up
+/// tray items by id, so the toggle needs this handle to read the new
+/// checked state and to revert the mark when persisting fails.
+#[cfg(target_os = "macos")]
+#[derive(Default)]
+struct DockModeCheckItem(Mutex<Option<CheckMenuItem<tauri::Wry>>>);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DesktopMenuAction {
     About,
     CheckUpdates,
     OpenLogsFolder,
+    Documentation,
     Quit,
     ShowMainWindow,
+    #[cfg(target_os = "macos")]
+    ToggleDockMode,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -236,7 +256,7 @@ pub fn run() {
         }
     }
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             show_main_window(app);
         }))
@@ -247,7 +267,12 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(init_navigation_guard_plugin())
         .manage(SidecarState::default())
-        .manage(DeepLinkState::default())
+        .manage(DeepLinkState::default());
+
+    #[cfg(target_os = "macos")]
+    let builder = builder.manage(DockModeCheckItem::default());
+
+    builder
         .setup(|app| {
             setup_deep_link_handling(app);
             if let Err(err) = setup_menu(app) {
@@ -306,6 +331,15 @@ pub fn run() {
             if let RunEvent::MenuEvent(event) = &event {
                 handle_desktop_menu_event(app_handle, event.id().0.as_str());
             }
+            // macOS asks a running app to show itself again through
+            // applicationShouldHandleReopen (Dock icon click, Cmd-Tab
+            // activation with no visible windows, `open -a AgentsView`).
+            // Restore the close-to-tray window here; otherwise the app
+            // stays hidden with no way back in until it is relaunched.
+            #[cfg(target_os = "macos")]
+            if let RunEvent::Reopen { .. } = &event {
+                show_main_window(app_handle);
+            }
         });
 }
 
@@ -314,8 +348,11 @@ fn desktop_menu_action(id: &str) -> Option<DesktopMenuAction> {
         ABOUT_MENU_ID => Some(DesktopMenuAction::About),
         CHECK_UPDATES_MENU_ID => Some(DesktopMenuAction::CheckUpdates),
         OPEN_LOGS_FOLDER_MENU_ID => Some(DesktopMenuAction::OpenLogsFolder),
+        DOCUMENTATION_MENU_ID => Some(DesktopMenuAction::Documentation),
         QUIT_FROM_STATUS_ITEM_MENU_ID => Some(DesktopMenuAction::Quit),
         SHOW_MAIN_WINDOW_MENU_ID => Some(DesktopMenuAction::ShowMainWindow),
+        #[cfg(target_os = "macos")]
+        DOCK_MODE_MENU_ID => Some(DesktopMenuAction::ToggleDockMode),
         _ => None,
     }
 }
@@ -334,16 +371,72 @@ fn handle_desktop_menu_event(handle: &AppHandle, id: &str) {
             });
         }
         Some(DesktopMenuAction::OpenLogsFolder) => open_logs_folder(handle),
+        Some(DesktopMenuAction::Documentation) => {
+            if let Err(err) = handle
+                .opener()
+                .open_url("https://agentsview.io/docs/", Option::<&str>::None)
+            {
+                eprintln!("[agentsview] failed to open documentation: {err}");
+            }
+        }
         Some(DesktopMenuAction::Quit) => handle.exit(0),
         Some(DesktopMenuAction::ShowMainWindow) => show_main_window(handle),
+        #[cfg(target_os = "macos")]
+        Some(DesktopMenuAction::ToggleDockMode) => toggle_dock_mode(handle),
         None => {}
     }
+}
+
+/// Flips the persisted dock mode from the tray checkbox and applies the
+/// new Dock presence immediately, so a change while the window is hidden
+/// takes effect without showing and re-hiding the window.
+///
+/// muda flips the checkmark before the menu event fires, so the target
+/// mode is derived from the item's checked state (UI and intent cannot
+/// diverge); if persisting fails the mark is flipped back so the menu
+/// still reports the mode that is actually stored.
+#[cfg(target_os = "macos")]
+fn toggle_dock_mode(handle: &AppHandle) {
+    let Some(item) = dock_mode_check_item(handle) else {
+        return;
+    };
+    let Ok(checked) = item.is_checked() else {
+        return;
+    };
+    let Some(path) = dock_mode_settings_path(handle) else {
+        let _ = item.set_checked(!checked);
+        return;
+    };
+    let next = DockMode::from_checked(checked);
+    if let Err(err) = write_dock_mode(&path, next) {
+        eprintln!("[agentsview] failed to persist dock mode: {err}");
+        let _ = item.set_checked(!checked);
+        return;
+    }
+    let window_visible = handle
+        .get_webview_window("main")
+        .and_then(|window| window.is_visible().ok())
+        .unwrap_or(false);
+    apply_dock_presence(handle, next, window_visible);
+}
+
+#[cfg(target_os = "macos")]
+fn dock_mode_check_item(handle: &AppHandle) -> Option<CheckMenuItem<tauri::Wry>> {
+    handle
+        .state::<DockModeCheckItem>()
+        .0
+        .lock()
+        .expect("lock dock mode item")
+        .as_ref()
+        .cloned()
 }
 
 fn show_main_window(handle: &AppHandle) {
     let Some(window) = handle.get_webview_window("main") else {
         return;
     };
+    #[cfg(target_os = "macos")]
+    sync_dock_presence(handle, true);
     restore_main_window(&window);
 }
 
@@ -563,6 +656,134 @@ fn restore_main_window(window: &impl MainWindowVisibility) {
     window.show_main_window();
     window.unminimize_main_window();
     window.focus_main_window();
+}
+
+/// Controls whether AgentsView keeps its Dock and Cmd-Tab presence while
+/// the main window is hidden. `Dock` keeps today's behavior (always
+/// present while running); `Hybrid` leaves the Dock and Cmd-Tab while
+/// the window is hidden, like a menu-bar-only app, and comes back when
+/// the window is restored.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DockMode {
+    Dock,
+    Hybrid,
+}
+
+impl DockMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            DockMode::Dock => "dock",
+            DockMode::Hybrid => "hybrid",
+        }
+    }
+
+    fn from_str(value: &str) -> Option<DockMode> {
+        match value {
+            "dock" => Some(DockMode::Dock),
+            "hybrid" => Some(DockMode::Hybrid),
+            _ => None,
+        }
+    }
+
+    fn from_checked(checked: bool) -> DockMode {
+        if checked {
+            DockMode::Hybrid
+        } else {
+            DockMode::Dock
+        }
+    }
+}
+
+// Dock mode is persisted next to the other desktop app state as
+// {"dock_mode":"dock"|"hybrid"}. Any read failure falls back to Dock so
+// a missing or corrupt file never flips behavior behind the user's back.
+fn read_dock_mode(path: &Path) -> DockMode {
+    let Ok(content) = fs::read_to_string(path) else {
+        return DockMode::Dock;
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return DockMode::Dock;
+    };
+    value
+        .get("dock_mode")
+        .and_then(|value| value.as_str())
+        .and_then(DockMode::from_str)
+        .unwrap_or(DockMode::Dock)
+}
+
+fn write_dock_mode(path: &Path, mode: DockMode) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    // Read-modify-write: keep any other keys in the settings file so a
+    // future setting added next to dock_mode is not wiped on toggle.
+    let mut settings = fs::read_to_string(path)
+        .ok()
+        .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    settings.insert(
+        "dock_mode".to_string(),
+        serde_json::Value::String(mode.as_str().to_string()),
+    );
+    let content =
+        serde_json::to_vec(&serde_json::Value::Object(settings)).map_err(io::Error::other)?;
+    fs::write(path, content)
+}
+
+fn dock_mode_settings_path(handle: &AppHandle) -> Option<PathBuf> {
+    handle
+        .path()
+        .app_config_dir()
+        .ok()
+        .map(|dir| dir.join(DOCK_MODE_SETTINGS_FILE_NAME))
+}
+
+/// Which Dock presence macOS should show for a dock mode and window
+/// visibility. Kept as an own type so the decision is testable without
+/// constructing Tauri's non-exhaustive ActivationPolicy.
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DockPresence {
+    Regular,
+    Accessory,
+}
+
+#[cfg(target_os = "macos")]
+fn dock_presence_for(mode: DockMode, window_visible: bool) -> DockPresence {
+    match (mode, window_visible) {
+        (DockMode::Hybrid, false) => DockPresence::Accessory,
+        _ => DockPresence::Regular,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn apply_dock_presence(handle: &AppHandle, mode: DockMode, window_visible: bool) {
+    let policy = match dock_presence_for(mode, window_visible) {
+        DockPresence::Regular => tauri::ActivationPolicy::Regular,
+        DockPresence::Accessory => tauri::ActivationPolicy::Accessory,
+    };
+    if let Err(err) = handle.set_activation_policy(policy) {
+        eprintln!("[agentsview] failed to apply dock presence: {err}");
+    }
+}
+
+/// Reapplies the Dock presence for the current window state. Call after
+/// hiding or before showing the window.
+#[cfg(target_os = "macos")]
+fn sync_dock_presence(handle: &AppHandle, window_visible: bool) {
+    if let Some(path) = dock_mode_settings_path(handle) {
+        apply_dock_presence(handle, read_dock_mode(&path), window_visible);
+    }
+}
+
+/// Initial checked state for the tray dock-mode checkbox: checked only
+/// when hybrid mode is persisted.
+#[cfg(target_os = "macos")]
+fn dock_mode_checked(app: &App) -> bool {
+    dock_mode_settings_path(app.handle())
+        .map(|path| read_dock_mode(&path) == DockMode::Hybrid)
+        .unwrap_or(false)
 }
 
 fn launch_backend(app: &mut App) -> Result<(), DynError> {
@@ -2288,31 +2509,75 @@ fn setup_menu(app: &mut App) -> Result<(), DynError> {
     let check_updates =
         MenuItemBuilder::with_id(CHECK_UPDATES_MENU_ID, "Check for Updates...").build(app)?;
 
-    let builder = SubmenuBuilder::new(app, "File")
+    #[cfg(target_os = "macos")]
+    let app_submenu = SubmenuBuilder::new(app, "AgentsView")
         .item(&about)
         .separator()
         .item(&open_logs_folder)
         .item(&check_updates)
-        .separator();
-
-    #[cfg(target_os = "macos")]
-    let builder = builder.hide().hide_others().separator();
-
-    let app_submenu = builder.quit().build()?;
-
-    let edit_submenu = SubmenuBuilder::new(app, "Edit")
-        .undo()
-        .redo()
         .separator()
-        .cut()
-        .copy()
-        .paste()
-        .select_all()
+        .item(&PredefinedMenuItem::services(app, None)?)
+        .separator()
+        .item(&PredefinedMenuItem::hide(app, None)?)
+        .item(&PredefinedMenuItem::hide_others(app, None)?)
+        .item(&PredefinedMenuItem::show_all(app, None)?)
+        .separator()
+        .item(&PredefinedMenuItem::quit(app, None)?)
         .build()?;
 
+    #[cfg(not(target_os = "macos"))]
+    let file_submenu = SubmenuBuilder::new(app, "File")
+        .item(&about)
+        .separator()
+        .item(&open_logs_folder)
+        .item(&check_updates)
+        .separator()
+        .item(&PredefinedMenuItem::close_window(app, None)?)
+        .separator()
+        .item(&PredefinedMenuItem::quit(app, None)?)
+        .build()?;
+
+    #[cfg(target_os = "macos")]
+    let file_submenu = SubmenuBuilder::new(app, "File")
+        .item(&PredefinedMenuItem::close_window(app, None)?)
+        .build()?;
+
+    let edit_submenu = SubmenuBuilder::new(app, "Edit")
+        .item(&PredefinedMenuItem::undo(app, None)?)
+        .item(&PredefinedMenuItem::redo(app, None)?)
+        .separator()
+        .item(&PredefinedMenuItem::cut(app, None)?)
+        .item(&PredefinedMenuItem::copy(app, None)?)
+        .item(&PredefinedMenuItem::paste(app, None)?)
+        .item(&PredefinedMenuItem::select_all(app, None)?)
+        .build()?;
+
+    #[cfg(target_os = "macos")]
+    let window_submenu = SubmenuBuilder::with_id(app, WINDOW_SUBMENU_ID, "Window")
+        .item(&PredefinedMenuItem::minimize(app, None)?)
+        .item(&PredefinedMenuItem::maximize(app, None)?)
+        .build()?;
+
+    let documentation =
+        MenuItemBuilder::with_id(DOCUMENTATION_MENU_ID, "Documentation").build(app)?;
+    let help_submenu = SubmenuBuilder::with_id(app, HELP_SUBMENU_ID, "Help")
+        .item(&documentation)
+        .build()?;
+
+    #[cfg(target_os = "macos")]
     let menu = MenuBuilder::new(app)
         .item(&app_submenu)
+        .item(&file_submenu)
         .item(&edit_submenu)
+        .item(&window_submenu)
+        .item(&help_submenu)
+        .build()?;
+
+    #[cfg(not(target_os = "macos"))]
+    let menu = MenuBuilder::new(app)
+        .item(&file_submenu)
+        .item(&edit_submenu)
+        .item(&help_submenu)
         .build()?;
     app.set_menu(menu)?;
     Ok(())
@@ -2327,14 +2592,34 @@ fn setup_status_item(app: &mut App) -> Result<(), DynError> {
         MenuItemBuilder::with_id(CHECK_UPDATES_MENU_ID, "Check for Updates...").build(app)?;
     let quit =
         MenuItemBuilder::with_id(QUIT_FROM_STATUS_ITEM_MENU_ID, "Quit AgentsView").build(app)?;
+    #[cfg(target_os = "macos")]
+    let hide_from_dock = CheckMenuItemBuilder::with_id(
+        DOCK_MODE_MENU_ID,
+        "Hide from Dock and Cmd-Tab when window closed",
+    )
+    .checked(dock_mode_checked(app))
+    .build(app)?;
+
+    #[cfg(target_os = "macos")]
+    {
+        let item = hide_from_dock.clone();
+        *app.state::<DockModeCheckItem>()
+            .0
+            .lock()
+            .expect("lock dock mode item") = Some(item);
+    }
+
     let menu = MenuBuilder::new(app)
         .item(&show)
         .separator()
         .item(&open_logs)
         .item(&check_updates)
-        .separator()
-        .item(&quit)
-        .build()?;
+        .separator();
+
+    #[cfg(target_os = "macos")]
+    let menu = menu.item(&hide_from_dock).separator();
+
+    let menu = menu.item(&quit).build()?;
 
     let builder = TrayIconBuilder::with_id("agentsview")
         .tooltip("AgentsView")
@@ -2370,9 +2655,13 @@ fn setup_close_to_tray_with<T>(
 fn setup_window_lifecycle(app: &App) -> Result<(), DynError> {
     let window = main_window(app)?;
     let close_window = window.clone();
+    #[cfg(target_os = "macos")]
+    let dock_presence_handle = app.handle().clone();
     window.on_window_event(move |event| {
         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
             hide_main_window_on_close(&close_window, || api.prevent_close());
+            #[cfg(target_os = "macos")]
+            sync_dock_presence(&dock_presence_handle, false);
         }
     });
     Ok(())
@@ -4293,7 +4582,80 @@ agentsview running at http://127.0.0.1:18082
             desktop_menu_action(QUIT_FROM_STATUS_ITEM_MENU_ID),
             Some(DesktopMenuAction::Quit)
         );
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            desktop_menu_action(DOCK_MODE_MENU_ID),
+            Some(DesktopMenuAction::ToggleDockMode)
+        );
         assert_eq!(desktop_menu_action("unknown"), None);
+    }
+
+    #[test]
+    fn dock_mode_round_trips_through_json_settings() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(DOCK_MODE_SETTINGS_FILE_NAME);
+
+        write_dock_mode(&path, DockMode::Hybrid).expect("write hybrid");
+        assert_eq!(read_dock_mode(&path), DockMode::Hybrid);
+
+        write_dock_mode(&path, DockMode::Dock).expect("write dock");
+        assert_eq!(read_dock_mode(&path), DockMode::Dock);
+    }
+
+    #[test]
+    fn write_dock_mode_preserves_other_settings_keys() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(DOCK_MODE_SETTINGS_FILE_NAME);
+        fs::write(&path, r#"{"other":"value"}"#).expect("seed settings");
+
+        write_dock_mode(&path, DockMode::Hybrid).expect("write hybrid");
+
+        let content = fs::read_to_string(&path).expect("read settings");
+        let value: serde_json::Value = serde_json::from_str(&content).expect("valid json");
+        assert_eq!(value["dock_mode"], "hybrid");
+        assert_eq!(value["other"], "value");
+    }
+
+    #[test]
+    fn dock_mode_falls_back_to_dock_for_unreadable_settings() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("missing.json");
+        assert_eq!(read_dock_mode(&missing), DockMode::Dock);
+
+        let corrupt = dir.path().join("corrupt.json");
+        fs::write(&corrupt, "not json").expect("write corrupt settings");
+        assert_eq!(read_dock_mode(&corrupt), DockMode::Dock);
+
+        let other_key = dir.path().join("other.json");
+        fs::write(&other_key, r#"{"other":"hybrid"}"#).expect("write settings");
+        assert_eq!(read_dock_mode(&other_key), DockMode::Dock);
+    }
+
+    #[test]
+    fn dock_mode_from_checked_reflects_the_tray_mark() {
+        assert_eq!(DockMode::from_checked(true), DockMode::Hybrid);
+        assert_eq!(DockMode::from_checked(false), DockMode::Dock);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn hybrid_dock_presence_is_accessory_only_while_window_is_hidden() {
+        assert_eq!(
+            dock_presence_for(DockMode::Hybrid, false),
+            DockPresence::Accessory
+        );
+        assert_eq!(
+            dock_presence_for(DockMode::Hybrid, true),
+            DockPresence::Regular
+        );
+        assert_eq!(
+            dock_presence_for(DockMode::Dock, false),
+            DockPresence::Regular
+        );
+        assert_eq!(
+            dock_presence_for(DockMode::Dock, true),
+            DockPresence::Regular
+        );
     }
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]

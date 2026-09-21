@@ -1,0 +1,38 @@
+{
+  "session_find_whole_word": "単語単位で検索",
+  "session_find_loading_history": "過去のメッセージを読み込み中…",
+  "session_find_announce_match": "全 {total} 件中 {current} 件目",
+  "session_find_block_count": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=one": "{count} 件の一致", "countPlural=other": "{count} 件の一致" }
+    }
+  ],
+  "session_find_results_group_count": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=one": "{count} 件の一致", "countPlural=other": "{count} 件の一致" }
+    }
+  ],
+  "session_find_results_title": "検索結果",
+  "session_find_results_empty": "このセッションに一致する結果はありません",
+  "session_find_toggle_results": "検索結果を表示",
+  "session_find_hide_results": "検索結果を非表示",
+  "session_find_subagent_excluded": "埋め込みのサブエージェントメッセージは検索対象外です。",
+  "session_find_rail_label": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "このセッションに {count} 件の一致",
+        "countPlural=other": "このセッションに {count} 件の一致"
+      }
+    }
+  ],
+  "session_find_raw_output": "検索中は元の出力を表示",
+  "session_find_history_incomplete": "過去のメッセージを読み込めませんでした。検索結果は一部のみです。",
+  "session_find_retry_history": "過去のメッセージを再読み込み",
+  "session_find_partial_results": "一部の結果"
+}

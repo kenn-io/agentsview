@@ -1,7 +1,6 @@
 package extract
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/json/v2"
 	"errors"
@@ -34,16 +33,16 @@ func newScriptedServer(
 	return httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
-				t.Errorf("request path = %q, want /chat/completions", r.URL.Path)
+				assert.Failf(t, "test failed", "request path = %q, want /chat/completions", r.URL.Path)
 			}
 			var payload map[string]any
 			if err := json.UnmarshalRead(r.Body, &payload); err != nil {
-				t.Errorf("decoding request: %v", err)
+				assert.Failf(t, "test failed", "decoding request: %v", err)
 			}
 			*requests = append(*requests, payload)
 			i := int(index.Add(1)) - 1
 			if i >= len(responses) {
-				t.Errorf("unexpected request %d", i)
+				assert.Failf(t, "test failed", "unexpected request %d", i)
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
@@ -89,7 +88,7 @@ func entriesJSON(t *testing.T, titles ...string) string {
 	}
 	raw, err := json.Marshal(map[string]any{"entries": entries})
 	if err != nil {
-		t.Fatal(err)
+		require.FailNow(t, fmt.Sprint(err))
 	}
 	return string(raw)
 }
@@ -120,29 +119,29 @@ func TestClientDistillParsesEntriesAndSendsShape(t *testing.T) {
 	defer server.Close()
 
 	entries, usage, err := testClient(server.URL).DistillWithRecovery(
-		context.Background(), "system prompt", "unit text", 3,
+		t.Context(), "system prompt", "unit text", 3,
 	)
 	if err != nil {
-		t.Fatalf("DistillWithRecovery: %v", err)
+		require.FailNowf(t, "test failed", "DistillWithRecovery: %v", err)
 	}
 	if len(entries) != 2 || entries[0].Title != "one" {
-		t.Fatalf("entries = %+v", entries)
+		require.FailNowf(t, "test failed", "entries = %+v", entries)
 	}
 	if usage.PromptTokens != 7 || usage.CompletionTokens != 3 {
-		t.Fatalf("usage = %+v", usage)
+		require.FailNowf(t, "test failed", "usage = %+v", usage)
 	}
 	payload := requests[0]
 	if payload["temperature"] != float64(0) {
-		t.Fatalf("temperature = %v", payload["temperature"])
+		require.FailNowf(t, "test failed", "temperature = %v", payload["temperature"])
 	}
 	if payload["max_tokens"] != float64(100) {
-		t.Fatalf("max_tokens = %v", payload["max_tokens"])
+		require.FailNowf(t, "test failed", "max_tokens = %v", payload["max_tokens"])
 	}
 	if _, ok := payload["chat_template_kwargs"]; !ok {
-		t.Fatal("extra body must be merged into the request")
+		require.FailNow(t, "extra body must be merged into the request")
 	}
 	if _, ok := payload["response_format"]; !ok {
-		t.Fatal("constrained decoding must be requested")
+		require.FailNow(t, "constrained decoding must be requested")
 	}
 }
 
@@ -163,14 +162,13 @@ func TestClientDistillSendsBearerToken(t *testing.T) {
 				"completion_tokens": 3,
 			},
 		})
-
 	}))
 	defer server.Close()
 
 	client := testClient(server.URL)
 	client.APIKey = "secret-key"
 	_, _, err := client.DistillWithRecovery(
-		context.Background(), "system prompt", "unit text", 1,
+		t.Context(), "system prompt", "unit text", 1,
 	)
 	require.NoError(t, err)
 
@@ -186,10 +184,10 @@ func TestClientTrailingSlashBaseURL(t *testing.T) {
 
 	client := testClient(server.URL + "/")
 	entries, _, err := client.DistillWithRecovery(
-		context.Background(), "p", "text", 3,
+		t.Context(), "p", "text", 3,
 	)
 	if err != nil || len(entries) != 1 {
-		t.Fatalf("entries=%v err=%v", entries, err)
+		require.FailNowf(t, "test failed", "entries=%v err=%v", entries, err)
 	}
 }
 
@@ -204,17 +202,17 @@ func TestClientTruncationIsTypedSplitSignal(t *testing.T) {
 	defer server.Close()
 
 	_, usage, err := testClient(server.URL).DistillWithRecovery(
-		context.Background(), "p", "unit text", 3,
+		t.Context(), "p", "unit text", 3,
 	)
 	if !errors.Is(err, ErrPersistentTruncation) {
-		t.Fatalf("err = %v, want ErrPersistentTruncation", err)
+		require.FailNowf(t, "test failed", "err = %v, want ErrPersistentTruncation", err)
 	}
 	if len(requests) != 1 {
-		t.Fatalf("requests = %d, want 1 (truncation is deterministic)",
+		require.FailNowf(t, "test failed", "requests = %d, want 1 (truncation is deterministic)",
 			len(requests))
 	}
 	if usage.PromptTokens != 7 || usage.CompletionTokens != 3 {
-		t.Fatalf("usage = %+v, want the truncated attempt accounted", usage)
+		require.FailNowf(t, "test failed", "usage = %+v, want the truncated attempt accounted", usage)
 	}
 }
 
@@ -233,10 +231,10 @@ func TestClientBadRequestMentioningContextIsNotOverflow(t *testing.T) {
 	defer server.Close()
 
 	_, _, err := testClient(server.URL).DistillWithRecovery(
-		context.Background(), "p", "text", 3,
+		t.Context(), "p", "text", 3,
 	)
 	if err == nil || errors.Is(err, ErrContextOverflow) {
-		t.Fatalf("err = %v, must be a permanent non-overflow error", err)
+		require.FailNowf(t, "test failed", "err = %v, must be a permanent non-overflow error", err)
 	}
 }
 
@@ -252,10 +250,10 @@ func TestClientContextOverflowIsTyped(t *testing.T) {
 	defer server.Close()
 
 	_, _, err := testClient(server.URL).DistillWithRecovery(
-		context.Background(), "p", "text", 3,
+		t.Context(), "p", "text", 3,
 	)
 	if !errors.Is(err, ErrContextOverflow) {
-		t.Fatalf("err = %v, want ErrContextOverflow", err)
+		require.FailNowf(t, "test failed", "err = %v, want ErrContextOverflow", err)
 	}
 }
 
@@ -273,19 +271,19 @@ func TestClientBadRequestOtherThanOverflowIsPermanent(t *testing.T) {
 	defer server.Close()
 
 	_, _, err := testClient(server.URL).DistillWithRecovery(
-		context.Background(), "p", "text", 3,
+		t.Context(), "p", "text", 3,
 	)
 	if err == nil {
-		t.Fatal("bad request must be an error")
+		require.FailNow(t, "bad request must be an error")
 	}
 	if errors.Is(err, ErrContextOverflow) {
-		t.Fatalf("err = %v, must not be ErrContextOverflow", err)
+		require.FailNowf(t, "test failed", "err = %v, must not be ErrContextOverflow", err)
 	}
 	if !strings.Contains(err.Error(), "not found") {
-		t.Fatalf("err = %v, must carry the server detail", err)
+		require.FailNowf(t, "test failed", "err = %v, must carry the server detail", err)
 	}
 	if len(requests) != 1 {
-		t.Fatalf("requests = %d, want 1 (bad requests are not retried)",
+		require.FailNowf(t, "test failed", "requests = %d, want 1 (bad requests are not retried)",
 			len(requests))
 	}
 }
@@ -301,17 +299,17 @@ func TestClientTruncationAfterTransientRetryAccountsUsage(t *testing.T) {
 	defer server.Close()
 
 	_, usage, err := testClient(server.URL).DistillWithRecovery(
-		context.Background(), "p", "text", 3,
+		t.Context(), "p", "text", 3,
 	)
 	if !errors.Is(err, ErrPersistentTruncation) {
-		t.Fatalf("err = %v, want ErrPersistentTruncation", err)
+		require.FailNowf(t, "test failed", "err = %v, want ErrPersistentTruncation", err)
 	}
 	if len(requests) != 2 {
-		t.Fatalf("requests = %d, want 2 (one transient retry, then "+
+		require.FailNowf(t, "test failed", "requests = %d, want 2 (one transient retry, then "+
 			"truncation)", len(requests))
 	}
 	if usage.PromptTokens != 7 || usage.CompletionTokens != 3 {
-		t.Fatalf("usage = %+v, want the truncated attempt accounted", usage)
+		require.FailNowf(t, "test failed", "usage = %+v, want the truncated attempt accounted", usage)
 	}
 }
 
@@ -325,13 +323,13 @@ func TestClientRetriesTransientErrors(t *testing.T) {
 	defer server.Close()
 
 	entries, _, err := testClient(server.URL).DistillWithRecovery(
-		context.Background(), "p", "text", 3,
+		t.Context(), "p", "text", 3,
 	)
 	if err != nil || len(entries) != 1 {
-		t.Fatalf("entries=%v err=%v", entries, err)
+		require.FailNowf(t, "test failed", "entries=%v err=%v", entries, err)
 	}
 	if len(requests) != 3 {
-		t.Fatalf("requests = %d, want 3 (5xx and 429 are transient)",
+		require.FailNowf(t, "test failed", "requests = %d, want 3 (5xx and 429 are transient)",
 			len(requests))
 	}
 }
@@ -346,13 +344,13 @@ func TestClientPermanentHTTPStatusFailsFast(t *testing.T) {
 	defer server.Close()
 
 	_, _, err := testClient(server.URL).DistillWithRecovery(
-		context.Background(), "p", "text", 3,
+		t.Context(), "p", "text", 3,
 	)
 	if err == nil {
-		t.Fatal("unauthorized must be an error")
+		require.FailNow(t, "unauthorized must be an error")
 	}
 	if len(requests) != 1 {
-		t.Fatalf("requests = %d, want 1 (permanent statuses are not retried)",
+		require.FailNowf(t, "test failed", "requests = %d, want 1 (permanent statuses are not retried)",
 			len(requests))
 	}
 }
@@ -368,13 +366,13 @@ func TestClientRejectsReservedExtraBodyKeys(t *testing.T) {
 	client := testClient(server.URL)
 	client.Request.ExtraBody = map[string]any{"max_tokens": 5}
 	_, _, err := client.DistillWithRecovery(
-		context.Background(), "p", "text", 3,
+		t.Context(), "p", "text", 3,
 	)
 	if err == nil || !strings.Contains(err.Error(), "max_tokens") {
-		t.Fatalf("err = %v, want reserved-key rejection naming the key", err)
+		require.FailNowf(t, "test failed", "err = %v, want reserved-key rejection naming the key", err)
 	}
 	if len(requests) != 0 {
-		t.Fatalf("requests = %d, want 0 (rejected before any call)",
+		require.FailNowf(t, "test failed", "requests = %d, want 0 (rejected before any call)",
 			len(requests))
 	}
 }
@@ -394,7 +392,7 @@ func TestIsContextOverflowDetail(t *testing.T) {
 	}
 	for _, body := range overflow {
 		if !isContextOverflowDetail(body) {
-			t.Errorf("must classify as overflow: %q", body)
+			assert.Failf(t, "test failed", "must classify as overflow: %q", body)
 		}
 	}
 	// A length-related noun alone is not an overflow: these are validation
@@ -415,23 +413,23 @@ func TestIsContextOverflowDetail(t *testing.T) {
 	}
 	for _, body := range notOverflow {
 		if isContextOverflowDetail(body) {
-			t.Errorf("must not classify as overflow: %q", body)
+			assert.Failf(t, "test failed", "must not classify as overflow: %q", body)
 		}
 	}
 }
 
 func TestParseRetryAfter(t *testing.T) {
 	if got := parseRetryAfter("2"); got != 2*time.Second {
-		t.Fatalf("parseRetryAfter(2) = %v", got)
+		require.FailNowf(t, "test failed", "parseRetryAfter(2) = %v", got)
 	}
 	future := time.Now().Add(5 * time.Second).UTC().Format(http.TimeFormat)
 	got := parseRetryAfter(future)
 	if got <= 0 || got > 5*time.Second {
-		t.Fatalf("parseRetryAfter(http-date) = %v", got)
+		require.FailNowf(t, "test failed", "parseRetryAfter(http-date) = %v", got)
 	}
 	for _, value := range []string{"", "garbage", "-3"} {
 		if got := parseRetryAfter(value); got != 0 {
-			t.Fatalf("parseRetryAfter(%q) = %v, want 0", value, got)
+			require.FailNowf(t, "test failed", "parseRetryAfter(%q) = %v, want 0", value, got)
 		}
 	}
 }
@@ -447,17 +445,17 @@ func TestClientChoicelessResponseAccountsUsageAcrossRetry(t *testing.T) {
 	defer server.Close()
 
 	entries, usage, err := testClient(server.URL).DistillWithRecovery(
-		context.Background(), "p", "text", 3,
+		t.Context(), "p", "text", 3,
 	)
 	if err != nil || len(entries) != 1 {
-		t.Fatalf("entries=%v err=%v", entries, err)
+		require.FailNowf(t, "test failed", "entries=%v err=%v", entries, err)
 	}
 	if len(requests) != 2 {
-		t.Fatalf("requests = %d, want 2 (choiceless responses retry)",
+		require.FailNowf(t, "test failed", "requests = %d, want 2 (choiceless responses retry)",
 			len(requests))
 	}
 	if usage.PromptTokens != 14 || usage.CompletionTokens != 6 {
-		t.Fatalf("usage = %+v, want both attempts accounted (14/6)", usage)
+		require.FailNowf(t, "test failed", "usage = %+v, want both attempts accounted (14/6)", usage)
 	}
 }
 
@@ -472,13 +470,13 @@ func TestClientNonStopFinishReasonIsError(t *testing.T) {
 	defer server.Close()
 
 	_, _, err := testClient(server.URL).DistillWithRecovery(
-		context.Background(), "p", "text", 3,
+		t.Context(), "p", "text", 3,
 	)
 	if err == nil || !strings.Contains(err.Error(), "content_filter") {
-		t.Fatalf("err = %v, want an error naming the finish reason", err)
+		require.FailNowf(t, "test failed", "err = %v, want an error naming the finish reason", err)
 	}
 	if len(requests) != 1 {
-		t.Fatalf("requests = %d, want 1 (a filtered response is "+
+		require.FailNowf(t, "test failed", "requests = %d, want 1 (a filtered response is "+
 			"deterministic)", len(requests))
 	}
 }
@@ -495,13 +493,13 @@ func TestClientEmptyContentIsError(t *testing.T) {
 	defer server.Close()
 
 	_, _, err := testClient(server.URL).DistillWithRecovery(
-		context.Background(), "p", "text", 3,
+		t.Context(), "p", "text", 3,
 	)
 	if err == nil {
-		t.Fatal("empty content must be an error")
+		require.FailNow(t, "empty content must be an error")
 	}
 	if len(requests) != 1 {
-		t.Fatalf("requests = %d, want 1 (deterministic emptiness is not retried)",
+		require.FailNowf(t, "test failed", "requests = %d, want 1 (deterministic emptiness is not retried)",
 			len(requests))
 	}
 }
@@ -537,14 +535,14 @@ func TestClientRejectsSchemaViolatingContent(t *testing.T) {
 			defer server.Close()
 
 			entries, _, err := testClient(server.URL).DistillWithRecovery(
-				context.Background(), "p", "text", 3,
+				t.Context(), "p", "text", 3,
 			)
 			if err == nil {
-				t.Fatalf("content %q must be rejected, got entries %+v",
+				require.FailNowf(t, "test failed", "content %q must be rejected, got entries %+v",
 					content, entries)
 			}
 			if len(requests) != 1 {
-				t.Fatalf("requests = %d, want 1 (schema violations are "+
+				require.FailNowf(t, "test failed", "requests = %d, want 1 (schema violations are "+
 					"deterministic)", len(requests))
 			}
 		})
@@ -561,13 +559,13 @@ func TestClientAcceptsEmptyEntriesArray(t *testing.T) {
 	defer server.Close()
 
 	entries, _, err := testClient(server.URL).DistillWithRecovery(
-		context.Background(), "p", "text", 3,
+		t.Context(), "p", "text", 3,
 	)
 	if err != nil {
-		t.Fatalf("DistillWithRecovery: %v", err)
+		require.FailNowf(t, "test failed", "DistillWithRecovery: %v", err)
 	}
 	if len(entries) != 0 {
-		t.Fatalf("entries = %+v, want none", entries)
+		require.FailNowf(t, "test failed", "entries = %+v, want none", entries)
 	}
 }
 
@@ -598,21 +596,21 @@ func TestClientErrorDetailRedactsReflectedCredentials(t *testing.T) {
 
 			endpoint, err := url.Parse(server.URL)
 			if err != nil {
-				t.Fatalf("parsing test server URL: %v", err)
+				require.FailNowf(t, "test failed", "parsing test server URL: %v", err)
 			}
 			endpoint.User = url.UserPassword(user, pass)
 			endpoint.RawQuery = "api_key=" + keyValue
 			client := testClient(endpoint.String())
 
 			_, _, derr := client.DistillWithRecovery(
-				context.Background(), "p", "text", 1,
+				t.Context(), "p", "text", 1,
 			)
 			if derr == nil {
-				t.Fatal("scripted failure must surface an error")
+				require.FailNow(t, "scripted failure must surface an error")
 			}
 			for _, secret := range []string{pass, keyValue, basic} {
 				if strings.Contains(derr.Error(), secret) {
-					t.Fatalf("error leaks reflected credential %q: %v",
+					require.FailNowf(t, "test failed", "error leaks reflected credential %q: %v",
 						secret, derr)
 				}
 			}
@@ -653,14 +651,14 @@ func TestClientErrorDetailRedactsRawQueryForms(t *testing.T) {
 
 			client := testClient(server.URL + "?" + tc.rawQuery)
 			_, _, err := client.DistillWithRecovery(
-				context.Background(), "p", "text", 1,
+				t.Context(), "p", "text", 1,
 			)
 			if err == nil {
-				t.Fatal("scripted failure must surface an error")
+				require.FailNow(t, "scripted failure must surface an error")
 			}
 			for _, secret := range tc.secrets {
 				if strings.Contains(err.Error(), secret) {
-					t.Fatalf("error leaks reflected credential %q: %v",
+					require.FailNowf(t, "test failed", "error leaks reflected credential %q: %v",
 						secret, err)
 				}
 			}
@@ -704,25 +702,25 @@ func TestClientErrorDetailWithholdsBodyForCredentialedEndpoints(t *testing.T) {
 
 			endpoint, err := url.Parse(server.URL)
 			if err != nil {
-				t.Fatalf("parsing test server URL: %v", err)
+				require.FailNowf(t, "test failed", "parsing test server URL: %v", err)
 			}
 			tc.mutate(endpoint)
 			client := testClient(endpoint.String())
 
 			_, _, derr := client.DistillWithRecovery(
-				context.Background(), "p", "text", 1,
+				t.Context(), "p", "text", 1,
 			)
 			if derr == nil {
-				t.Fatal("scripted failure must surface an error")
+				require.FailNow(t, "scripted failure must surface an error")
 			}
 			for _, secret := range tc.secrets {
 				if strings.Contains(derr.Error(), secret) {
-					t.Fatalf("error leaks reflected credential %q: %v",
+					require.FailNowf(t, "test failed", "error leaks reflected credential %q: %v",
 						secret, derr)
 				}
 			}
 			if strings.Contains(derr.Error(), "denied") {
-				t.Fatalf("error carries attacker-controlled body content "+
+				require.FailNowf(t, "test failed", "error carries attacker-controlled body content "+
 					"from a credentialed endpoint: %v", derr)
 			}
 		})
@@ -743,17 +741,17 @@ func TestClientErrorDetailStripsControlCharacters(t *testing.T) {
 	defer server.Close()
 
 	_, _, err := testClient(server.URL).DistillWithRecovery(
-		context.Background(), "p", "text", 1,
+		t.Context(), "p", "text", 1,
 	)
 	if err == nil {
-		t.Fatal("scripted failure must surface an error")
+		require.FailNow(t, "scripted failure must surface an error")
 	}
 	if !strings.Contains(err.Error(), "bad model") {
-		t.Fatalf("error must keep the printable server detail: %v", err)
+		require.FailNowf(t, "test failed", "error must keep the printable server detail: %v", err)
 	}
 	for _, banned := range []string{"\x1b", "\x07", "\r"} {
 		if strings.Contains(err.Error(), banned) {
-			t.Fatalf("error carries control byte %q: %q", banned, err.Error())
+			require.FailNowf(t, "test failed", "error carries control byte %q: %q", banned, err.Error())
 		}
 	}
 }
@@ -769,13 +767,13 @@ func TestClientBoundsUnknownFinishReasonDetail(t *testing.T) {
 	defer server.Close()
 
 	_, _, err := testClient(server.URL).DistillWithRecovery(
-		context.Background(), "p", "text", 1,
+		t.Context(), "p", "text", 1,
 	)
 	if err == nil {
-		t.Fatal("an unknown finish reason must surface an error")
+		require.FailNow(t, "an unknown finish reason must surface an error")
 	}
 	if len(err.Error()) > 500 {
-		t.Fatalf("error carries %d bytes of endpoint-controlled text, "+
+		require.FailNowf(t, "test failed", "error carries %d bytes of endpoint-controlled text, "+
 			"want a bounded excerpt", len(err.Error()))
 	}
 }
@@ -800,17 +798,17 @@ func TestClientDeterministicStatusesAreEndpointScoped(t *testing.T) {
 			defer server.Close()
 
 			_, _, err := testClient(server.URL).DistillWithRecovery(
-				context.Background(), "p", "text", 3,
+				t.Context(), "p", "text", 3,
 			)
 			if err == nil {
-				t.Fatal("scripted failure must surface an error")
+				require.FailNow(t, "scripted failure must surface an error")
 			}
 			if len(requests) != 1 {
-				t.Fatalf("requests = %d, want 1: a deterministic status "+
+				require.FailNowf(t, "test failed", "requests = %d, want 1: a deterministic status "+
 					"must not consume transient retries", len(requests))
 			}
 			if !endpointScopedRejection(err) {
-				t.Fatalf("error must classify as endpoint-scoped: %v", err)
+				require.FailNowf(t, "test failed", "error must classify as endpoint-scoped: %v", err)
 			}
 		})
 	}
@@ -847,13 +845,13 @@ func TestClientWithholdsSuccessDiagnosticsForCredentialedEndpoints(t *testing.T)
 
 			client := testClient(server.URL + "?api_key=" + secret)
 			_, _, err := client.DistillWithRecovery(
-				context.Background(), "p", "text", 1,
+				t.Context(), "p", "text", 1,
 			)
 			if err == nil {
-				t.Fatal("scripted violation must surface an error")
+				require.FailNow(t, "scripted violation must surface an error")
 			}
 			if strings.Contains(err.Error(), secret) {
-				t.Fatalf("error reflects the endpoint credential: %v", err)
+				require.FailNowf(t, "test failed", "error reflects the endpoint credential: %v", err)
 			}
 		})
 	}
@@ -882,16 +880,16 @@ func TestClientWithholdsBodyForPathTokenEndpoints(t *testing.T) {
 
 			client := testClient(server.URL + "/" + token + "/v1")
 			_, _, err := client.DistillWithRecovery(
-				context.Background(), "p", "text", 1,
+				t.Context(), "p", "text", 1,
 			)
 			if err == nil {
-				t.Fatal("scripted failure must surface an error")
+				require.FailNow(t, "scripted failure must surface an error")
 			}
 			if strings.Contains(err.Error(), token) {
-				t.Fatalf("error reflects the path token: %v", err)
+				require.FailNowf(t, "test failed", "error reflects the path token: %v", err)
 			}
 			if strings.Contains(err.Error(), "denied") {
-				t.Fatalf("error carries attacker-controlled body content "+
+				require.FailNowf(t, "test failed", "error carries attacker-controlled body content "+
 					"from a credentialed endpoint: %v", err)
 			}
 		})
@@ -914,16 +912,16 @@ func TestClientWithholdsMalformedRedirectDetail(t *testing.T) {
 
 	client := testClient(server.URL + "/cap-4bcdefgh1jklmn0pqrst/v1")
 	_, _, err := client.DistillWithRecovery(
-		context.Background(), "p", "text", 1,
+		t.Context(), "p", "text", 1,
 	)
 	if err == nil {
-		t.Fatal("malformed redirect must surface an error")
+		require.FailNow(t, "malformed redirect must surface an error")
 	}
 	if strings.Contains(err.Error(), reflected) {
-		t.Fatalf("error reflects the malformed Location header: %v", err)
+		require.FailNowf(t, "test failed", "error reflects the malformed Location header: %v", err)
 	}
 	if !strings.Contains(err.Error(), "withheld") {
-		t.Fatalf("credentialed transport-error detail must be withheld: %v",
+		require.FailNowf(t, "test failed", "credentialed transport-error detail must be withheld: %v",
 			err)
 	}
 }
@@ -942,19 +940,19 @@ func TestClientBoundsTransportErrorDetail(t *testing.T) {
 
 	client := testClient(server.URL + "/v1")
 	_, _, err := client.DistillWithRecovery(
-		context.Background(), "p", "text", 1,
+		t.Context(), "p", "text", 1,
 	)
 	if err == nil {
-		t.Fatal("malformed redirect must surface an error")
+		require.FailNow(t, "malformed redirect must surface an error")
 	}
 	if !strings.Contains(err.Error(), "%zz") {
-		t.Fatalf("credential-free transport diagnostics must be kept: %v", err)
+		require.FailNowf(t, "test failed", "credential-free transport diagnostics must be kept: %v", err)
 	}
 	if strings.Contains(err.Error(), long) {
-		t.Fatalf("transport-error text must be length-bounded: %v", err)
+		require.FailNowf(t, "test failed", "transport-error text must be length-bounded: %v", err)
 	}
 	if !strings.Contains(err.Error(), "…(truncated)") {
-		t.Fatalf("transport-error text must note truncation: %v", err)
+		require.FailNowf(t, "test failed", "transport-error text must note truncation: %v", err)
 	}
 }
 
@@ -973,16 +971,16 @@ func TestClientOmitsRedirectTargetForCredentialedEndpoints(t *testing.T) {
 
 	client := testClient(server.URL + "/" + token + "/v1")
 	_, _, err := client.DistillWithRecovery(
-		context.Background(), "p", "text", 1,
+		t.Context(), "p", "text", 1,
 	)
 	if err == nil {
-		t.Fatal("refused redirect must surface an error")
+		require.FailNow(t, "refused redirect must surface an error")
 	}
 	if strings.Contains(err.Error(), token) {
-		t.Fatalf("error reflects the redirect target hostname: %v", err)
+		require.FailNowf(t, "test failed", "error reflects the redirect target hostname: %v", err)
 	}
 	if !strings.Contains(err.Error(), "do not follow redirects") {
-		t.Fatalf("error must keep the redirect-refusal cause: %v", err)
+		require.FailNowf(t, "test failed", "error must keep the redirect-refusal cause: %v", err)
 	}
 }
 
@@ -1000,19 +998,19 @@ func TestClientBoundsRedirectTargetDetail(t *testing.T) {
 
 	client := testClient(server.URL + "/v1")
 	_, _, err := client.DistillWithRecovery(
-		context.Background(), "p", "text", 1,
+		t.Context(), "p", "text", 1,
 	)
 	if err == nil {
-		t.Fatal("refused redirect must surface an error")
+		require.FailNow(t, "refused redirect must surface an error")
 	}
 	if !strings.Contains(err.Error(), "refusing redirect to") {
-		t.Fatalf("credential-free redirect diagnostics must be kept: %v", err)
+		require.FailNowf(t, "test failed", "credential-free redirect diagnostics must be kept: %v", err)
 	}
 	if strings.Contains(err.Error(), long) {
-		t.Fatalf("redirect target must be length-bounded: %v", err)
+		require.FailNowf(t, "test failed", "redirect target must be length-bounded: %v", err)
 	}
 	if !strings.Contains(err.Error(), "…(truncated)") {
-		t.Fatalf("redirect target must note truncation: %v", err)
+		require.FailNowf(t, "test failed", "redirect target must note truncation: %v", err)
 	}
 }
 
@@ -1029,7 +1027,7 @@ func TestClientSanitizesBodyReadErrorDetail(t *testing.T) {
 			func(w http.ResponseWriter, _ *http.Request) {
 				conn, _, err := w.(http.Hijacker).Hijack()
 				if err != nil {
-					t.Error(err)
+					assert.Fail(t, fmt.Sprint(err))
 					return
 				}
 				defer func() { _ = conn.Close() }()
@@ -1044,16 +1042,16 @@ func TestClientSanitizesBodyReadErrorDetail(t *testing.T) {
 		defer server.Close()
 		client := testClient(server.URL + "/cap-4bcdefgh1jklmn0pqrst/v1")
 		_, _, err := client.DistillWithRecovery(
-			context.Background(), "p", "text", 1,
+			t.Context(), "p", "text", 1,
 		)
 		if err == nil {
-			t.Fatal("malformed trailer must surface an error")
+			require.FailNow(t, "malformed trailer must surface an error")
 		}
 		if strings.Contains(err.Error(), reflected) {
-			t.Fatalf("error reflects the malformed trailer line: %v", err)
+			require.FailNowf(t, "test failed", "error reflects the malformed trailer line: %v", err)
 		}
 		if !strings.Contains(err.Error(), "withheld") {
-			t.Fatalf("credentialed read-error detail must be withheld: %v",
+			require.FailNowf(t, "test failed", "credentialed read-error detail must be withheld: %v",
 				err)
 		}
 	})
@@ -1063,13 +1061,13 @@ func TestClientSanitizesBodyReadErrorDetail(t *testing.T) {
 		defer server.Close()
 		client := testClient(server.URL + "/v1")
 		_, _, err := client.DistillWithRecovery(
-			context.Background(), "p", "text", 1,
+			t.Context(), "p", "text", 1,
 		)
 		if err == nil {
-			t.Fatal("malformed trailer must surface an error")
+			require.FailNow(t, "malformed trailer must surface an error")
 		}
 		if !strings.Contains(err.Error(), "malformed MIME header") {
-			t.Fatalf("credential-free read diagnostics must be kept: %v", err)
+			require.FailNowf(t, "test failed", "credential-free read diagnostics must be kept: %v", err)
 		}
 	})
 }
@@ -1090,13 +1088,13 @@ func TestClientKeepsDiagnosticsForKnownAPIPaths(t *testing.T) {
 
 			client := testClient(server.URL + path)
 			_, _, err := client.DistillWithRecovery(
-				context.Background(), "p", "text", 1,
+				t.Context(), "p", "text", 1,
 			)
 			if err == nil {
-				t.Fatal("scripted failure must surface an error")
+				require.FailNow(t, "scripted failure must surface an error")
 			}
 			if !strings.Contains(err.Error(), "model not found") {
-				t.Fatalf("error must keep the server detail for a "+
+				require.FailNowf(t, "test failed", "error must keep the server detail for a "+
 					"vocabulary-only path: %v", err)
 			}
 		})
@@ -1116,13 +1114,13 @@ func TestClientBoundsUnknownKeyDetail(t *testing.T) {
 	defer server.Close()
 
 	_, _, err := testClient(server.URL).DistillWithRecovery(
-		context.Background(), "p", "text", 1,
+		t.Context(), "p", "text", 1,
 	)
 	if err == nil {
-		t.Fatal("an unknown key must surface an error")
+		require.FailNow(t, "an unknown key must surface an error")
 	}
 	if len(err.Error()) > 500 {
-		t.Fatalf("error carries %d bytes of endpoint-controlled text, "+
+		require.FailNowf(t, "test failed", "error carries %d bytes of endpoint-controlled text, "+
 			"want a bounded excerpt", len(err.Error()))
 	}
 }
@@ -1145,17 +1143,17 @@ func TestClientRedirectRefusalIsEndpointScoped(t *testing.T) {
 	client := testClient(server.URL)
 	client.HTTPClient = &http.Client{CheckRedirect: RefuseRedirects}
 	_, _, err := client.DistillWithRecovery(
-		context.Background(), "p", "text", 3,
+		t.Context(), "p", "text", 3,
 	)
 	if err == nil {
-		t.Fatal("a refused redirect must surface an error")
+		require.FailNow(t, "a refused redirect must surface an error")
 	}
 	if got := calls.Load(); got != 1 {
-		t.Fatalf("requests = %d, want 1: a deterministic redirect must "+
+		require.FailNowf(t, "test failed", "requests = %d, want 1: a deterministic redirect must "+
 			"not consume transient retries", got)
 	}
 	if !endpointScopedRejection(err) {
-		t.Fatalf("error must classify as endpoint-scoped: %v", err)
+		require.FailNowf(t, "test failed", "error must classify as endpoint-scoped: %v", err)
 	}
 }
 
@@ -1172,10 +1170,10 @@ func TestClientRequestEntityTooLargeSplits(t *testing.T) {
 	defer server.Close()
 
 	_, _, err := testClient(server.URL).DistillWithRecovery(
-		context.Background(), "p", "text", 3,
+		t.Context(), "p", "text", 3,
 	)
 	if !errors.Is(err, ErrContextOverflow) {
-		t.Fatalf("err = %v, want ErrContextOverflow", err)
+		require.FailNowf(t, "test failed", "err = %v, want ErrContextOverflow", err)
 	}
 }
 
@@ -1200,7 +1198,7 @@ func TestClientRejectsOversizedContent(t *testing.T) {
 		}
 		raw, err := json.Marshal(map[string]any{"entries": list})
 		if err != nil {
-			t.Fatalf("marshaling scripted entries: %v", err)
+			require.FailNowf(t, "test failed", "marshaling scripted entries: %v", err)
 		}
 		return string(raw)
 	}
@@ -1229,14 +1227,14 @@ func TestClientRejectsOversizedContent(t *testing.T) {
 			defer server.Close()
 
 			entries, _, err := testClient(server.URL).DistillWithRecovery(
-				context.Background(), "p", "text", 3,
+				t.Context(), "p", "text", 3,
 			)
 			if err == nil {
-				t.Fatalf("oversized content must be rejected, got %d entries",
+				require.FailNowf(t, "test failed", "oversized content must be rejected, got %d entries",
 					len(entries))
 			}
 			if len(requests) != 1 {
-				t.Fatalf("requests = %d, want 1 (limit violations are "+
+				require.FailNowf(t, "test failed", "requests = %d, want 1 (limit violations are "+
 					"deterministic)", len(requests))
 			}
 		})
@@ -1256,10 +1254,10 @@ func TestClientClassifiesTransportOverflowWithoutRetry(t *testing.T) {
 	defer server.Close()
 
 	_, _, err := testClient(server.URL).DistillWithRecovery(
-		context.Background(), "p", "text", 3,
+		t.Context(), "p", "text", 3,
 	)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, errClientOnlyResponseLimit)
+	require.ErrorIs(t, err, errClientOnlyResponseLimit)
 	assert.False(t, endpointScopedRejection(err))
 	assert.Len(t, requests, 1, "a deterministic overflow must not retry")
 }
@@ -1276,7 +1274,7 @@ func TestClientRequestSchemaKeepsLargeBodyLimitLocal(t *testing.T) {
 	defer server.Close()
 
 	_, _, err := testClient(server.URL).DistillWithRecovery(
-		context.Background(), "p", "text", 3,
+		t.Context(), "p", "text", 3,
 	)
 	require.NoError(t, err)
 	require.Len(t, requests, 1)
@@ -1291,31 +1289,31 @@ func TestClientRequestSchemaKeepsLargeBodyLimitLocal(t *testing.T) {
 	require.True(t, ok, "entry schema has no properties object")
 	entriesSchema, ok := properties["entries"].(map[string]any)
 	require.True(t, ok, "entry schema has no entries property")
-	assert.Equal(t, float64(maxResponseEntries), entriesSchema["maxItems"])
+	assert.InDelta(t, float64(maxResponseEntries), entriesSchema["maxItems"], 1e-9)
 	items, ok := entriesSchema["items"].(map[string]any)
 	require.True(t, ok, "entries schema has no items object")
 	fields, ok := items["properties"].(map[string]any)
 	require.True(t, ok, "entry schema has no item properties")
 	title, ok := fields["title"].(map[string]any)
 	require.True(t, ok, "entry schema has no title property")
-	assert.Equal(t, float64(maxEntryTitleChars), title["maxLength"])
+	assert.InDelta(t, float64(maxEntryTitleChars), title["maxLength"], 1e-9)
 	body, ok := fields["body"].(map[string]any)
 	require.True(t, ok, "entry schema has no body property")
 	assert.NotContains(t, body, "maxLength")
 	entities, ok := fields["entities"].(map[string]any)
 	require.True(t, ok, "entry schema has no entities property")
-	assert.Equal(t, float64(maxEntryEntities), entities["maxItems"])
+	assert.InDelta(t, float64(maxEntryEntities), entities["maxItems"], 1e-9)
 	entityItems, ok := entities["items"].(map[string]any)
 	require.True(t, ok, "entities schema has no items object")
-	assert.Equal(t, float64(maxEntityChars), entityItems["maxLength"])
+	assert.InDelta(t, float64(maxEntityChars), entityItems["maxLength"], 1e-9)
 }
 
 func TestSplitFloorChars(t *testing.T) {
 	if got := SplitFloorChars(50000); got != 2000 {
-		t.Fatalf("SplitFloorChars(50000) = %d, want 2000", got)
+		require.FailNowf(t, "test failed", "SplitFloorChars(50000) = %d, want 2000", got)
 	}
 	if got := SplitFloorChars(800); got != 100 {
-		t.Fatalf("SplitFloorChars(800) = %d, want 100", got)
+		require.FailNowf(t, "test failed", "SplitFloorChars(800) = %d, want 100", got)
 	}
 }
 
@@ -1336,16 +1334,16 @@ func TestClientEndpointWithQueryRoutesCorrectly(t *testing.T) {
 
 	client := testClient(server.URL + "/v1?api-version=2024-06-01")
 	entries, _, err := client.DistillWithRecovery(
-		context.Background(), "p", "text", 1,
+		t.Context(), "p", "text", 1,
 	)
 	if err != nil || len(entries) != 1 {
-		t.Fatalf("entries=%v err=%v", entries, err)
+		require.FailNowf(t, "test failed", "entries=%v err=%v", entries, err)
 	}
 	if gotPath != "/v1/chat/completions" {
-		t.Fatalf("request path = %q, want /v1/chat/completions", gotPath)
+		require.FailNowf(t, "test failed", "request path = %q, want /v1/chat/completions", gotPath)
 	}
 	if gotQuery != "2024-06-01" {
-		t.Fatalf("api-version = %q; the endpoint query must survive "+
+		require.FailNowf(t, "test failed", "api-version = %q; the endpoint query must survive "+
 			"route joining", gotQuery)
 	}
 }
@@ -1359,14 +1357,14 @@ func TestClientTransportErrorRedactsEndpoint(t *testing.T) {
 	client := testClient(
 		"http://tester:hunter2@127.0.0.1:1/v1?api_key=sekret")
 	_, _, err := client.DistillWithRecovery(
-		context.Background(), "p", "text", 1,
+		t.Context(), "p", "text", 1,
 	)
 	if err == nil {
-		t.Fatal("expected a connection error against a closed port")
+		require.FailNow(t, "expected a connection error against a closed port")
 	}
 	for _, secret := range []string{"hunter2", "sekret", "tester"} {
 		if strings.Contains(err.Error(), secret) {
-			t.Fatalf("transport error leaks %q: %v", secret, err)
+			require.FailNowf(t, "test failed", "transport error leaks %q: %v", secret, err)
 		}
 	}
 }

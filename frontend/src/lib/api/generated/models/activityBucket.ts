@@ -11,6 +11,10 @@ export interface ActivityBucket {
   input_tokens?: number;
   interactive_at_peak: number;
   max_agents: number;
+  max_automated_agents: number;
+  max_interactive_agents: number;
+  max_subagent_agents: number;
   output_tokens: number;
   start: string;
+  subagent_at_peak: number;
 }

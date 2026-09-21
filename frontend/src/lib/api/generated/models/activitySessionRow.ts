@@ -11,6 +11,7 @@ export interface ActivitySessionRow {
   /** @nullable */
   first_active: string | null;
   is_automated: boolean;
+  is_subagent: boolean;
   /** @nullable */
   last_active: string | null;
   models: string[];

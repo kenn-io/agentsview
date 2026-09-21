@@ -60,6 +60,18 @@ func TestShellQuote(t *testing.T) {
 	}
 }
 
+func TestResumeCommandAugureCode(t *testing.T) {
+	assert.True(t, resumeAgentNeedsModel("augure-code"))
+
+	// Model selection mirrors the frontend: codex-shaped -m flag,
+	// omitted when the session has no eligible model usage.
+	cmd := resumeCommand("augure-code", resumeAgents["augure-code"], "sess-1", "")
+	assert.Equal(t, "augure resume sess-1", cmd)
+
+	cmd = resumeCommand("augure-code", resumeAgents["augure-code"], "run-1", "ossington-5")
+	assert.Equal(t, "augure resume run-1 -m ossington-5", cmd)
+}
+
 func TestCommandWithCleanup(t *testing.T) {
 	assert.Equal(t,
 		"claude < prompt.txt; rm -f -- 'prompt.txt'",
@@ -157,9 +169,7 @@ func TestDetectTerminalLinux_EnvTerminal(t *testing.T) {
 	// Create a fake terminal binary on PATH.
 	binDir := t.TempDir()
 	fakeBin := filepath.Join(binDir, "myterm")
-	require.NoError(t,
-		os.WriteFile(fakeBin, []byte("#!/bin/sh\n"), 0o755),
-	)
+	require.NoError(t, os.WriteFile(fakeBin, []byte("#!/bin/sh\n"), 0o755))
 	t.Setenv("PATH", binDir)
 	t.Setenv("TERMINAL", "myterm")
 
@@ -176,9 +186,7 @@ func TestDetectTerminalLinux_EnvTerminalWithArgs(t *testing.T) {
 	}
 	binDir := t.TempDir()
 	fakeBin := filepath.Join(binDir, "kitty")
-	require.NoError(t,
-		os.WriteFile(fakeBin, []byte("#!/bin/sh\n"), 0o755),
-	)
+	require.NoError(t, os.WriteFile(fakeBin, []byte("#!/bin/sh\n"), 0o755))
 	t.Setenv("PATH", binDir)
 	t.Setenv("TERMINAL", "kitty --single-instance")
 
@@ -222,7 +230,7 @@ func TestLaunchClaudeDesktop(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cmd := launchClaudeDesktop(tt.sessionID, tt.cwd)
+			cmd := launchClaudeDesktop(t.Context(), tt.sessionID, tt.cwd)
 			require.NotEmpty(t, cmd.Path,
 				"expected non-empty command path")
 			// The command should be "open <url>".

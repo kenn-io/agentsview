@@ -1,0 +1,134 @@
+[
+  {
+    "id": "msg_082b45328001jSTP2KFYbXPtOx",
+    "type": "user",
+    "seq": 2,
+    "time_created": 1788899250985,
+    "time_updated": 1788899251159,
+    "data": {
+      "time": {
+        "created": 1788899250985
+      },
+      "text": "Read input.txt using the read tool. Reply with the three words in order and the number of lines. Do not edit files or run other commands."
+    }
+  },
+  {
+    "id": "msg_082b456e2001ophIbxQ7GQZSkT",
+    "type": "assistant",
+    "seq": 3,
+    "time_created": 1788899251938,
+    "time_updated": 1788899252240,
+    "data": {
+      "time": {
+        "created": 1788899251938,
+        "completed": 1788899252239
+      },
+      "agent": "build",
+      "model": {
+        "id": "big-pickle",
+        "providerID": "opencode",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "reasoning",
+          "id": "reasoning-0",
+          "text": "The user wants me to read input.txt using the read tool, then reply with the three words in order and the number of lines. Let me do that.",
+          "time": {
+            "created": 1788899251942,
+            "completed": 1788899252102
+          }
+        },
+        {
+          "type": "tool",
+          "id": "call_e9b2ce1109a040968ac818e5",
+          "name": "read",
+          "provider": {
+            "executed": false
+          },
+          "state": {
+            "status": "completed",
+            "input": {
+              "path": "input.txt"
+            },
+            "content": [],
+            "outputPaths": [],
+            "structured": {
+              "uri": "file:///workspace/project-a/input.txt",
+              "name": "input.txt",
+              "content": "alpha\nbeta\ngamma\n",
+              "encoding": "utf8",
+              "mime": "text/plain"
+            }
+          },
+          "time": {
+            "created": 1788899252106,
+            "ran": 1788899252217,
+            "completed": 1788899252236
+          }
+        }
+      ],
+      "finish": "tool-calls",
+      "cost": 0,
+      "tokens": {
+        "input": 3106,
+        "output": 77,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    }
+  },
+  {
+    "id": "msg_082b4581f0017vy8fnFyNVvwVC",
+    "type": "system",
+    "seq": 11,
+    "time_created": 1788899252255,
+    "time_updated": 1788899252255,
+    "data": {
+      "time": {
+        "created": 1788899252255
+      },
+      "text": "Skills provide specialized instructions and workflows for specific tasks.\nUse the skill tool to load a skill when a task matches its description.\n<available_skills>\n  <skill>\n    <name>customize-opencode</name>\n    <description>Use ONLY when the user is editing or creating opencode's own configuration: opencode.json, opencode.jsonc, files under .opencode/, or files under ~/.config/opencode/. Also use when creating or fixing opencode agents, subagents, commands, skills, plugins, MCP servers, or permission rules. Do not use for the user's own application code, or for any project that is not configuring opencode itself.</description>\n  </skill>\n</available_skills>"
+    }
+  },
+  {
+    "id": "msg_082b45aea001aBrwKoJJU0tu5S",
+    "type": "assistant",
+    "seq": 12,
+    "time_created": 1788899252971,
+    "time_updated": 1788899253026,
+    "data": {
+      "time": {
+        "created": 1788899252971,
+        "completed": 1788899253024
+      },
+      "agent": "build",
+      "model": {
+        "id": "big-pickle",
+        "providerID": "opencode",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "id": "text-0",
+          "text": "The three words in order are: **alpha**, **beta**, **gamma**.\n\nThe file has **3 lines**."
+        }
+      ],
+      "finish": "stop",
+      "cost": 0,
+      "tokens": {
+        "input": 3487,
+        "output": 25,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    }
+  }
+]

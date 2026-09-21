@@ -1,7 +1,6 @@
 package sync_test
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"os"
@@ -41,7 +40,7 @@ func TestIcodemateCLIForkSessionsReconcileAcrossSourceReparse(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentIcodemate: {root},
 		},
@@ -49,17 +48,17 @@ func TestIcodemateCLIForkSessionsReconcileAcrossSourceReparse(t *testing.T) {
 	})
 	t.Cleanup(engine.Close)
 
-	first := engine.SyncAll(context.Background(), nil)
+	first := engine.SyncAll(t.Context(), nil)
 	require.Zero(t, first.Failed)
 	require.Equal(t, 2, first.Synced)
 
 	mainSession, err := database.GetSession(
-		context.Background(), "icodemate:fork-session",
+		t.Context(), "icodemate:fork-session",
 	)
 	require.NoError(t, err)
 	require.NotNil(t, mainSession)
 	forkSession, err := database.GetSession(
-		context.Background(), "icodemate:fork-session-fork",
+		t.Context(), "icodemate:fork-session-fork",
 	)
 	require.NoError(t, err)
 	require.NotNil(t, forkSession)
@@ -68,19 +67,19 @@ func TestIcodemateCLIForkSessionsReconcileAcrossSourceReparse(t *testing.T) {
 
 	updated := content + `{"type":"ai-title","aiTitle":"Updated title"}` + "\n"
 	require.NoError(t, os.WriteFile(path, []byte(updated), 0o644))
-	second := engine.SyncAll(context.Background(), nil)
+	second := engine.SyncAll(t.Context(), nil)
 	require.Zero(t, second.Failed)
 	require.Equal(t, 2, second.Synced)
 
 	mainSession, err = database.GetSession(
-		context.Background(), "icodemate:fork-session",
+		t.Context(), "icodemate:fork-session",
 	)
 	require.NoError(t, err)
 	require.NotNil(t, mainSession)
 	require.NotNil(t, mainSession.DisplayName)
 	assert.Equal(t, "Updated title", *mainSession.DisplayName)
 	forkSession, err = database.GetSession(
-		context.Background(), "icodemate:fork-session-fork",
+		t.Context(), "icodemate:fork-session-fork",
 	)
 	require.NoError(t, err)
 	require.NotNil(t, forkSession)
@@ -89,16 +88,16 @@ func TestIcodemateCLIForkSessionsReconcileAcrossSourceReparse(t *testing.T) {
 
 	truncated := mainLines[0] + "\n" + `{"type":"assistant","uuid":"partial`
 	require.NoError(t, os.WriteFile(path, []byte(truncated), 0o644))
-	incomplete := engine.SyncAll(context.Background(), nil)
+	incomplete := engine.SyncAll(t.Context(), nil)
 	require.Equal(t, 1, incomplete.Failed)
 	assert.Zero(t, incomplete.Synced)
 	forkSession, err = database.GetSession(
-		context.Background(), "icodemate:fork-session-fork",
+		t.Context(), "icodemate:fork-session-fork",
 	)
 	require.NoError(t, err)
 	assert.NotNil(t, forkSession)
 	messages, err := database.GetMessages(
-		context.Background(), "icodemate:fork-session", 0, 20, true,
+		t.Context(), "icodemate:fork-session", 0, 20, true,
 	)
 	require.NoError(t, err)
 	assert.Len(t, messages, len(mainLines))
@@ -106,24 +105,24 @@ func TestIcodemateCLIForkSessionsReconcileAcrossSourceReparse(t *testing.T) {
 	mainOnly := strings.Join(mainLines, "\n") + "\n" +
 		`{"type":"ai-title","aiTitle":"Main only"}` + "\n"
 	require.NoError(t, os.WriteFile(path, []byte(mainOnly), 0o644))
-	third := engine.SyncAll(context.Background(), nil)
+	third := engine.SyncAll(t.Context(), nil)
 	require.Zero(t, third.Failed)
 	require.Equal(t, 1, third.Synced)
 
 	mainSession, err = database.GetSession(
-		context.Background(), "icodemate:fork-session",
+		t.Context(), "icodemate:fork-session",
 	)
 	require.NoError(t, err)
 	require.NotNil(t, mainSession)
 	require.NotNil(t, mainSession.DisplayName)
 	assert.Equal(t, "Main only", *mainSession.DisplayName)
 	forkSession, err = database.GetSession(
-		context.Background(), "icodemate:fork-session-fork",
+		t.Context(), "icodemate:fork-session-fork",
 	)
 	require.NoError(t, err)
 	assert.NotNil(t, forkSession)
 	archivedFork, err := database.GetSessionFull(
-		context.Background(), "icodemate:fork-session-fork",
+		t.Context(), "icodemate:fork-session-fork",
 	)
 	require.NoError(t, err)
 	assertSourceMissingState(t, archivedFork)
@@ -139,7 +138,7 @@ func TestIcodemateCLIShortenedTranscriptReplacesArchivedMessages(t *testing.T) {
 	dbtest.WriteTestFile(t, path, []byte(initial))
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentIcodemate: {root},
 		},
@@ -189,7 +188,7 @@ func TestIcodemateCLISourceMtimeIncludesPersistedToolResults(t *testing.T) {
 	))
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentIcodemate: {root},
 		},
@@ -198,7 +197,7 @@ func TestIcodemateCLISourceMtimeIncludesPersistedToolResults(t *testing.T) {
 	t.Cleanup(engine.Close)
 
 	assert.Equal(t, sidecarTime.UnixNano(),
-		engine.SourceMtime("icodemate:mtime"))
+		engine.SourceMtime(t.Context(), "icodemate:mtime"))
 
 	deletedAt := sidecarTime.Add(time.Minute)
 	require.NoError(t, os.Remove(olderSidecar))
@@ -206,7 +205,7 @@ func TestIcodemateCLISourceMtimeIncludesPersistedToolResults(t *testing.T) {
 		filepath.Dir(sidecar), deletedAt, deletedAt,
 	))
 	assert.Equal(t, deletedAt.UnixNano(),
-		engine.SourceMtime("icodemate:mtime"))
+		engine.SourceMtime(t.Context(), "icodemate:mtime"))
 }
 
 func TestIcodemateCLISyncAllSinceDetectsDeletedToolResult(t *testing.T) {
@@ -232,7 +231,7 @@ func TestIcodemateCLISyncAllSinceDetectsDeletedToolResult(t *testing.T) {
 	dbtest.WriteTestFile(t, sessionPath, []byte(transcript))
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentIcodemate: {root},
 		},
@@ -275,7 +274,7 @@ func TestIcodemateCLIResyncAllAbortsOnEmptyDiscovery(t *testing.T) {
 		String()))
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentIcodemate: {root},
 		},
@@ -317,7 +316,7 @@ func TestIcodemateCLIPartialForkWriteRetriesWholeSource(t *testing.T) {
 	))
 
 	database := dbtest.OpenTestDB(t)
-	initialEngine := sync.NewEngine(database, sync.EngineConfig{
+	initialEngine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentIcodemate: {root},
 		},
@@ -328,7 +327,7 @@ func TestIcodemateCLIPartialForkWriteRetriesWholeSource(t *testing.T) {
 	require.Zero(t, initial.Failed)
 	require.Equal(t, 1, initial.Synced)
 	require.Equal(t, db.CurrentDataVersion(),
-		database.GetSessionDataVersion("icodemate:forked"))
+		database.GetSessionDataVersion(t.Context(), "icodemate:forked"))
 
 	forkLine := `{"type":"assistant","timestamp":"2024-01-01T10:00:06Z","uuid":"fork","parentUuid":"root","message":{"content":[{"type":"text","text":"fork reply"}]}}`
 	require.NoError(t, os.WriteFile(path, []byte(
@@ -338,7 +337,7 @@ func TestIcodemateCLIPartialForkWriteRetriesWholeSource(t *testing.T) {
 	raw, err := sql.Open("sqlite3", database.Path())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, raw.Close()) })
-	_, err = raw.Exec(`
+	_, err = raw.ExecContext(t.Context(), `
 		CREATE TRIGGER fail_icodemate_fork_insert
 		BEFORE INSERT ON sessions
 		WHEN NEW.id = 'icodemate:forked-fork'
@@ -348,7 +347,7 @@ func TestIcodemateCLIPartialForkWriteRetriesWholeSource(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	partialEngine := sync.NewEngine(database, sync.EngineConfig{
+	partialEngine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentIcodemate: {root},
 		},
@@ -358,8 +357,7 @@ func TestIcodemateCLIPartialForkWriteRetriesWholeSource(t *testing.T) {
 	failed := partialEngine.SyncAll(t.Context(), nil)
 	require.Equal(t, 1, failed.Synced)
 	require.Equal(t, 1, failed.Failed)
-	assert.Less(t,
-		database.GetSessionDataVersion("icodemate:forked"),
+	assert.Less(t, database.GetSessionDataVersion(t.Context(), "icodemate:forked"),
 		db.CurrentDataVersion(),
 		"the committed main branch must remain retryable",
 	)
@@ -367,9 +365,9 @@ func TestIcodemateCLIPartialForkWriteRetriesWholeSource(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, fork)
 
-	_, err = raw.Exec(`DROP TRIGGER fail_icodemate_fork_insert`)
+	_, err = raw.ExecContext(t.Context(), `DROP TRIGGER fail_icodemate_fork_insert`)
 	require.NoError(t, err)
-	restarted := sync.NewEngine(database, sync.EngineConfig{
+	restarted := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentIcodemate: {root},
 		},
@@ -384,9 +382,9 @@ func TestIcodemateCLIPartialForkWriteRetriesWholeSource(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, fork)
 	assert.Equal(t, db.CurrentDataVersion(),
-		database.GetSessionDataVersion("icodemate:forked"))
+		database.GetSessionDataVersion(t.Context(), "icodemate:forked"))
 	assert.Equal(t, db.CurrentDataVersion(),
-		database.GetSessionDataVersion("icodemate:forked-fork"))
+		database.GetSessionDataVersion(t.Context(), "icodemate:forked-fork"))
 }
 
 func TestIcodemateCLIDeduplicatesSameSessionAcrossRoots(t *testing.T) {
@@ -419,7 +417,7 @@ func TestIcodemateCLIDeduplicatesSameSessionAcrossRoots(t *testing.T) {
 	require.NoError(t, os.Chtimes(liveSidecar, newer, newer))
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentIcodemate: {liveRoot, archiveRoot},
 		},
@@ -431,7 +429,7 @@ func TestIcodemateCLIDeduplicatesSameSessionAcrossRoots(t *testing.T) {
 	require.Zero(t, first.Failed)
 	assert.Equal(t, 1, first.Synced)
 	assert.Equal(t, livePath,
-		database.GetSessionFilePath("icodemate:duplicate"))
+		database.GetSessionFilePath(t.Context(), "icodemate:duplicate"))
 	messages, err := database.GetMessages(
 		t.Context(), "icodemate:duplicate", 0, 10, true,
 	)
@@ -444,7 +442,7 @@ func TestIcodemateCLIDeduplicatesSameSessionAcrossRoots(t *testing.T) {
 	assert.Zero(t, engine.LastSyncStats().Synced,
 		"a stale duplicate watcher event must not replace the committed source")
 	assert.Equal(t, livePath,
-		database.GetSessionFilePath("icodemate:duplicate"))
+		database.GetSessionFilePath(t.Context(), "icodemate:duplicate"))
 
 	staleLarge := testjsonl.NewSessionBuilder().
 		AddClaudeUser("2024-01-01T00:00:00Z", strings.Repeat("stale ", 50)).
@@ -465,7 +463,7 @@ func TestIcodemateCLIDeduplicatesSameSessionAcrossRoots(t *testing.T) {
 	require.Zero(t, stats.Failed)
 	require.Equal(t, 1, stats.Synced)
 	assert.Equal(t, livePath,
-		database.GetSessionFilePath("icodemate:duplicate"))
+		database.GetSessionFilePath(t.Context(), "icodemate:duplicate"))
 	messages, err = database.GetMessages(
 		t.Context(), "icodemate:duplicate", 0, 10, true,
 	)
@@ -477,7 +475,7 @@ func TestIcodemateCLIDeduplicatesSameSessionAcrossRoots(t *testing.T) {
 		t.Context(), []string{liveRoot, archiveRoot}, false,
 	))
 	assert.Equal(t, livePath,
-		database.GetSessionFilePath("icodemate:duplicate"))
+		database.GetSessionFilePath(t.Context(), "icodemate:duplicate"))
 	messages, err = database.GetMessages(
 		t.Context(), "icodemate:duplicate", 0, 10, true,
 	)
@@ -499,7 +497,7 @@ func TestIcodemateCLIDeduplicatesSameSessionAcrossRoots(t *testing.T) {
 		t.Context(), []string{liveRoot, archiveRoot}, false,
 	))
 	assert.Equal(t, livePath,
-		database.GetSessionFilePath("icodemate:duplicate"))
+		database.GetSessionFilePath(t.Context(), "icodemate:duplicate"))
 	messages, err = database.GetMessages(
 		t.Context(), "icodemate:duplicate", 0, 10, true,
 	)
@@ -519,7 +517,7 @@ func TestIcodemateCLIDeduplicatesSameSessionAcrossRoots(t *testing.T) {
 		t.Context(), []string{liveRoot, archiveRoot}, false,
 	))
 	assert.Equal(t, archivePath,
-		database.GetSessionFilePath("icodemate:duplicate"))
+		database.GetSessionFilePath(t.Context(), "icodemate:duplicate"))
 	messages, err = database.GetMessages(
 		t.Context(), "icodemate:duplicate", 0, 10, true,
 	)
@@ -535,7 +533,7 @@ func TestIcodemateCLIDeduplicatesSameSessionAcrossRoots(t *testing.T) {
 	stats = engine.SyncAll(t.Context(), nil)
 	require.Zero(t, stats.Failed)
 	assert.Equal(t, archivePath,
-		database.GetSessionFilePath("icodemate:duplicate"))
+		database.GetSessionFilePath(t.Context(), "icodemate:duplicate"))
 	messages, err = database.GetMessages(
 		t.Context(), "icodemate:duplicate", 0, 10, true,
 	)
@@ -561,7 +559,7 @@ func TestIcodemateCLIReconcilePreservesMovedSessionAcrossRoots(t *testing.T) {
 	dbtest.WriteTestFile(t, oldPath, []byte(initial))
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentIcodemate: {oldRoot, newRoot},
 		},
@@ -585,7 +583,7 @@ func TestIcodemateCLIReconcilePreservesMovedSessionAcrossRoots(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, active)
 	assert.Equal(t, newPath,
-		database.GetSessionFilePath("icodemate:moved"))
+		database.GetSessionFilePath(t.Context(), "icodemate:moved"))
 	messages, err := database.GetMessages(
 		t.Context(), "icodemate:moved", 0, 10, true,
 	)
@@ -619,7 +617,7 @@ func TestIcodemateCLIResyncAllTombstonesRemovedFork(t *testing.T) {
 	))
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentIcodemate: {root},
 		},

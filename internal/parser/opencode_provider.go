@@ -17,158 +17,55 @@ import (
 	"sync"
 )
 
-var _ Provider = (*openCodeFormatProvider)(nil)
-
-// A SQLite WAL begins with a 32-byte header. Bytes beyond the header are
-// transaction frames, so a larger WAL can contain source changes worth
-// syncing. Read-only SQLite connections may create an empty WAL and its SHM
-// index simply by opening a quiet WAL-mode database; those sidecars must not
-// make the watcher trigger itself.
-const sqliteWALHeaderSize = int64(32)
-
-type openCodeFormatProviderFactory struct {
-	def   AgentDef
-	spec  openCodeProviderSpec
-	index *openCodeFormatSourceIndex
-}
+var _ SourceSet = openCodeFormatSourceSet{}
 
 func newOpenCodeProviderFactory(def AgentDef) ProviderFactory {
-	return openCodeFormatProviderFactory{
-		def:   cloneAgentDef(def),
-		spec:  openCodeProviderSpecForAgent(AgentOpenCode),
-		index: newOpenCodeFormatSourceIndex(),
-	}
+	return newOpenCodeFormatProviderFactory(def, AgentOpenCode)
 }
 
 func newKiloProviderFactory(def AgentDef) ProviderFactory {
-	return openCodeFormatProviderFactory{
-		def:   cloneAgentDef(def),
-		spec:  openCodeProviderSpecForAgent(AgentKilo),
-		index: newOpenCodeFormatSourceIndex(),
-	}
+	return newOpenCodeFormatProviderFactory(def, AgentKilo)
 }
 
 func newMiMoCodeProviderFactory(def AgentDef) ProviderFactory {
-	return openCodeFormatProviderFactory{
-		def:   cloneAgentDef(def),
-		spec:  openCodeProviderSpecForAgent(AgentMiMoCode),
-		index: newOpenCodeFormatSourceIndex(),
-	}
+	return newOpenCodeFormatProviderFactory(def, AgentMiMoCode)
 }
 
-func (f openCodeFormatProviderFactory) Definition() AgentDef {
-	return cloneAgentDef(f.def)
+func newOpenCodeFormatProviderFactory(def AgentDef, agent AgentType) ProviderFactory {
+	spec := openCodeProviderSpecForAgent(agent)
+	index := newOpenCodeFormatSourceIndex()
+	return NewSourceSetFactory(def, openCodeFormatProviderCapabilities(),
+		func(cfg ProviderConfig) SourceSet {
+			return newOpenCodeFormatSourceSet(
+				cfg.Roots, spec, cfg.SQLiteContainerListsWatermarkOnly, index,
+			)
+		},
+	)
 }
 
-func (f openCodeFormatProviderFactory) Capabilities() Capabilities {
-	return openCodeFormatProviderCapabilities()
-}
-
-func (f openCodeFormatProviderFactory) NewProvider(cfg ProviderConfig) Provider {
-	cfg = cfg.Clone()
-	return &openCodeFormatProvider{
-		Def:    cloneAgentDef(f.def),
-		Caps:   openCodeFormatProviderCapabilities(),
-		Config: cfg,
-		sources: newOpenCodeFormatSourceSet(
-			cfg.Roots, f.spec, cfg.SQLiteContainerListsWatermarkOnly, f.index,
-		),
-	}
-}
-
-type openCodeFormatProvider struct {
-	ProviderBase
-	sources openCodeFormatSourceSet
-}
-
-func (p *openCodeFormatProvider) Discover(ctx context.Context) ([]SourceRef, error) {
-	return p.sources.Discover(ctx)
-}
-
-func (p *openCodeFormatProvider) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
-	return p.sources.DiscoverEach(ctx, yield)
-}
-
-func (p *openCodeFormatProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {
-	return p.sources.WatchPlan(ctx)
-}
-
-func (p *openCodeFormatProvider) SourcesForChangedPath(
-	ctx context.Context,
-	req ChangedPathRequest,
-) ([]SourceRef, error) {
-	return p.sources.SourcesForChangedPath(ctx, req)
-}
-
-func (p *openCodeFormatProvider) ChangedPathRelevance(
-	ctx context.Context,
-	req ChangedPathRequest,
-) (ChangedPathRelevance, error) {
-	return p.sources.ChangedPathRelevance(ctx, req)
-}
-
-func (p *openCodeFormatProvider) SourceForReconciliation(
-	ctx context.Context, path, project string,
-) (SourceRef, bool, error) {
-	return p.sources.SourceForReconciliation(ctx, path, project)
-}
-
-// ResolveReconciliationScopes widens a request naming the family database, a
-// WAL or SHM sidecar, or one virtual member to the container itself. The
-// container's membership is atomic: a proof of the bare database path admits
-// no member row, and a proof of one member would let a completed pass promote
-// container-state trust over siblings it never verified.
-func (p *openCodeFormatProvider) ResolveReconciliationScopes(
-	_ context.Context, req ReconciliationScopeRequest,
-) (ReconciliationScopePlan, error) {
-	if err := ValidateReconciliationScopeRoots(
-		p.Def.Type, p.Config.Roots, req.Roots,
-	); err != nil {
-		return ReconciliationScopePlan{}, err
-	}
-	return containerAwareReconciliationScopePlan(
-		p.Config.Roots, req.Roots, p.sources.reconciliationContainer,
-	), nil
-}
-
-func (p *openCodeFormatProvider) FindSource(
-	ctx context.Context,
-	req FindSourceRequest,
-) (SourceRef, bool, error) {
-	req = ProviderFindRequestWithRawSessionID(p.Def, req)
-	return p.sources.FindSource(ctx, req)
-}
-
-func (p *openCodeFormatProvider) Fingerprint(
-	ctx context.Context,
-	source SourceRef,
-) (SourceFingerprint, error) {
-	return p.sources.Fingerprint(ctx, source)
-}
-
-func (p *openCodeFormatProvider) Parse(
+func (s openCodeFormatSourceSet) Parse(
 	ctx context.Context,
 	req ParseRequest,
 ) (ParseOutcome, error) {
 	if err := ctx.Err(); err != nil {
 		return ParseOutcome{}, err
 	}
-	path, ok := p.sources.pathFromSource(req.Source)
+	path, ok := s.pathFromSource(ctx, req.Source)
 	if !ok {
-		return ParseOutcome{}, fmt.Errorf("%s source path unavailable", p.Def.Type)
+		return ParseOutcome{}, fmt.Errorf("%s source path unavailable", s.spec.agent)
 	}
 
-	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
+	machine := req.Machine
 	var (
 		sess *ParsedSession
 		msgs []ParsedMessage
 		err  error
 	)
-	dbPath, sessionID, sqliteSource := p.sources.spec.parseVirtual(path)
+	dbPath, sessionID, sqliteSource := s.spec.parseVirtual(path)
 	if sqliteSource {
-		sess, msgs, err = p.sources.spec.parseSQLite(dbPath, sessionID, machine)
+		sess, msgs, err = s.spec.parseSQLite(ctx, dbPath, sessionID, machine)
 	} else {
-		sess, msgs, err = p.sources.spec.parseFile(path, machine)
+		sess, msgs, err = s.spec.parseFile(ctx, path, machine)
 	}
 	if err != nil {
 		return ParseOutcome{}, err
@@ -216,7 +113,7 @@ type openCodeProviderSpec struct {
 	// streamSQLite, used by streamed reconciliation discovery for containers
 	// the engine's container gate will skip wholesale.
 	streamSQLiteWatermark func(context.Context, string, func(OpenCodeSessionMeta) error) error
-	sourceMtime           func(string) (int64, error)
+	sourceMtime           func(context.Context, string) (int64, error)
 	relabel               func(*ParsedSession)
 }
 
@@ -330,8 +227,8 @@ func (spec openCodeProviderSpec) discover(root string) []DiscoveredFile {
 
 // find locates a session source path (storage JSON or SQLite virtual
 // path) by raw session ID under a root.
-func (spec openCodeProviderSpec) find(root, sessionID string) string {
-	return findOpenCodeFormatSourceFile(spec.format, root, sessionID)
+func (spec openCodeProviderSpec) find(ctx context.Context, root, sessionID string) string {
+	return findOpenCodeFormatSourceFile(ctx, spec.format, root, sessionID)
 }
 
 // storageIDs returns the set of session IDs present as storage JSON
@@ -358,9 +255,9 @@ func (spec openCodeProviderSpec) containerGlobs() []string {
 // parseFile parses a file-backed storage session and relabels it onto
 // this agent's ID prefix when the agent is a fork of OpenCode.
 func (spec openCodeProviderSpec) parseFile(
-	sessionPath, machine string,
+	ctx context.Context, sessionPath, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
-	sess, msgs, err := parseOpenCodeStorageFile(sessionPath, machine)
+	sess, msgs, err := parseOpenCodeStorageFileContext(ctx, sessionPath, machine)
 	if err != nil || sess == nil {
 		return sess, msgs, err
 	}
@@ -373,9 +270,9 @@ func (spec openCodeProviderSpec) parseFile(
 // parseSQLite parses a single SQLite-backed session and relabels it
 // onto this agent's ID prefix when the agent is a fork of OpenCode.
 func (spec openCodeProviderSpec) parseSQLite(
-	dbPath, sessionID, machine string,
+	ctx context.Context, dbPath, sessionID, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
-	sess, msgs, err := parseOpenCodeDBSession(dbPath, sessionID, machine)
+	sess, msgs, err := parseOpenCodeDBSessionContext(ctx, dbPath, sessionID, machine)
 	if err != nil || sess == nil {
 		return sess, msgs, err
 	}
@@ -484,7 +381,7 @@ func (s openCodeFormatSourceSet) Discover(ctx context.Context) ([]SourceRef, err
 		if src.Mode == OpenCodeSourceStorage {
 			for _, file := range s.spec.discover(root) {
 				s.indexStorageSession(root, file.Path)
-				source, ok := s.sourceRef(root, file.Path, false)
+				source, ok := s.sourceRef(ctx, root, file.Path, false)
 				if !ok {
 					continue
 				}
@@ -677,7 +574,7 @@ func (s openCodeFormatSourceSet) discoverStorageEach(
 			}
 			path := filepath.Join(projectDir, entry.Name())
 			s.indexStorageSession(root, path)
-			source, ok := s.sourceRef(root, path, false)
+			source, ok := s.sourceRef(ctx, root, path, false)
 			if !ok {
 				return nil
 			}
@@ -806,14 +703,14 @@ func openCodeStorageWatchDir(root string) string {
 	return filepath.Join(root, "storage")
 }
 
-// reconciliationContainer maps a requested path to the SQLite container that
+// ReconciliationContainer maps a requested path to the SQLite container that
 // atomically owns it, without statting: a deleted database must still resolve
 // so its members remain reclaimable through the container proof. A virtual
 // spelling splits at the raw separator instead of parseVirtual, whose exact
 // basename check would let a Windows case variant of the database name skip
 // widening and admit a single member; the alias comparison below already
 // carries the platform's case rule.
-func (s openCodeFormatSourceSet) reconciliationContainer(
+func (s openCodeFormatSourceSet) ReconciliationContainer(
 	requested string,
 ) (string, bool) {
 	physical := requested
@@ -941,17 +838,16 @@ func (s openCodeFormatSourceSet) SourceForReconciliation(
 		return SourceRef{}, false, err
 	}
 	for _, root := range s.roots {
-		source, ok := s.sourceRef(root, path, true)
+		source, ok := s.sourceRef(ctx, root, path, true)
 		if !ok {
 			continue
 		}
-		sourcePath, sourcePathOK := s.pathFromSource(source)
+		sourcePath, sourcePathOK := s.pathFromSource(ctx, source)
 		if sourcePathOK {
 			if dbPath, sessionID, sqlite := s.spec.parseVirtual(sourcePath); sqlite &&
 				s.containerListsWatermarkOnly != nil &&
 				s.containerListsWatermarkOnly(dbPath) {
-				watermark, composite, found, err :=
-					openCodeSQLiteSessionWatermarkOnly(ctx, dbPath, sessionID)
+				watermark, composite, found, err := openCodeSQLiteSessionWatermarkOnly(ctx, dbPath, sessionID)
 				if err != nil {
 					return SourceRef{}, false, err
 				}
@@ -1060,14 +956,23 @@ func openCodeSQLiteSessionWatermarkOnly(
 		return 0, false, false, err
 	}
 	defer db.Close()
-	composite, err = openCodeCompositeMtimeSupportedCached(db, dbPath)
+	composite, err = openCodeCompositeMtimeSupportedCached(ctx, db, dbPath)
 	if err != nil {
 		return 0, false, false, err
 	}
-	query := "SELECT s.time_updated FROM session s WHERE s.id = ?"
+	table, err := openCodeSessionTableCached(ctx, db, dbPath, sessionID)
+	if err != nil {
+		return 0, false, false, err
+	}
+	from, err := openCodeSessionFromCached(ctx, db, dbPath, table)
+	if err != nil {
+		return 0, false, false, err
+	}
+
+	query := "SELECT s.time_updated FROM " + from + " s WHERE s.id = ?"
 	if composite {
 		query = "SELECT " + openCodeSessionRowWatermarkExpr +
-			" FROM session s" + openCodeSessionCompositeMtimeJoins +
+			" FROM " + from + " s" + openCodeSessionCompositeMtimeJoins +
 			" WHERE s.id = ?"
 	}
 	err = db.QueryRowContext(ctx, query, sessionID).Scan(&watermark)
@@ -1100,7 +1005,7 @@ func (s openCodeFormatSourceSet) canonicalVirtualSource(
 				return nil
 			}
 			path := filepath.Join(src.SessionRoot, project.Name(), sessionID+".json")
-			if source, ok := s.sourceRef(root, path, false); ok {
+			if source, ok := s.sourceRef(ctx, root, path, false); ok {
 				found = source
 				return errOpenCodeCanonicalSourceFound
 			}
@@ -1113,7 +1018,7 @@ func (s openCodeFormatSourceSet) canonicalVirtualSource(
 			return SourceRef{}, false, ctx.Err()
 		}
 	}
-	source, ok := s.sourceRef(root, virtualPath, false)
+	source, ok := s.sourceRef(ctx, root, virtualPath, false)
 	return source, ok, nil
 }
 
@@ -1129,7 +1034,7 @@ func (s openCodeFormatSourceSet) FindSource(
 			continue
 		}
 		for _, root := range s.roots {
-			if source, ok := s.sourceRef(root, path, true); ok {
+			if source, ok := s.sourceRef(ctx, root, path, true); ok {
 				return source, true, nil
 			}
 		}
@@ -1138,11 +1043,11 @@ func (s openCodeFormatSourceSet) FindSource(
 		return SourceRef{}, false, nil
 	}
 	for _, root := range s.roots {
-		path := s.spec.find(root, req.RawSessionID)
+		path := s.spec.find(ctx, root, req.RawSessionID)
 		if path == "" {
 			continue
 		}
-		if source, ok := s.sourceRef(root, path, false); ok {
+		if source, ok := s.sourceRef(ctx, root, path, false); ok {
 			return source, true, nil
 		}
 	}
@@ -1152,13 +1057,13 @@ func (s openCodeFormatSourceSet) FindSource(
 // sourceMtimeWithComposite resolves a source's change signal when discovery did
 // not carry one (FindSource lookups, storage sessions), reporting whether the
 // value is the per-session composite.
-func (s openCodeFormatSourceSet) sourceMtimeWithComposite(
+func (s openCodeFormatSourceSet) sourceMtimeWithComposite(ctx context.Context,
 	path string,
 ) (int64, string, bool, error) {
 	if dbPath, sessionID, ok := s.spec.parseVirtual(path); ok {
-		return openCodeSQLiteSessionMtimeComposite(dbPath, sessionID)
+		return openCodeSQLiteSessionMtimeComposite(ctx, dbPath, sessionID)
 	}
-	mtime, err := s.spec.sourceMtime(path)
+	mtime, err := s.spec.sourceMtime(ctx, path)
 	return mtime, "", false, err
 }
 
@@ -1169,7 +1074,7 @@ func (s openCodeFormatSourceSet) Fingerprint(
 	if err := ctx.Err(); err != nil {
 		return SourceFingerprint{}, err
 	}
-	path, ok := s.pathFromSource(source)
+	path, ok := s.pathFromSource(ctx, source)
 	if !ok {
 		return SourceFingerprint{}, fmt.Errorf("%s source path unavailable", s.spec.agent)
 	}
@@ -1179,7 +1084,7 @@ func (s openCodeFormatSourceSet) Fingerprint(
 	dbPath, _, sqliteSource := s.spec.parseVirtual(path)
 	var storageSnapshot *openCodeStorageSnapshot
 	if !sqliteSource && mtime == 0 {
-		snapshot, err := loadOpenCodeStorageSnapshot(path, true)
+		snapshot, err := loadOpenCodeStorageSnapshot(ctx, path, true)
 		if err != nil {
 			return SourceFingerprint{}, err
 		}
@@ -1197,8 +1102,7 @@ func (s openCodeFormatSourceSet) Fingerprint(
 		// empty, and an empty hash is treated as no constraint by the
 		// freshness gate — so a deletion-only change would pass unnoticed on
 		// every non-discovery path.
-		lookupMtime, lookupDigest, lookupComposite, err :=
-			s.sourceMtimeWithComposite(path)
+		lookupMtime, lookupDigest, lookupComposite, err := s.sourceMtimeWithComposite(ctx, path)
 		if err != nil {
 			return SourceFingerprint{}, err
 		}
@@ -1258,7 +1162,7 @@ func (s openCodeFormatSourceSet) Fingerprint(
 	// persists. Project metadata is part of that fingerprint, so a metadata
 	// rewrite still invalidates a row whose session size and mtime are stable.
 	if storageSnapshot == nil {
-		snapshot, snapshotErr := loadOpenCodeStorageSnapshot(path, false)
+		snapshot, snapshotErr := loadOpenCodeStorageSnapshot(ctx, path, false)
 		if snapshotErr != nil {
 			return SourceFingerprint{}, snapshotErr
 		}
@@ -1329,7 +1233,7 @@ func sourceCarriedMTimeNS(source SourceRef) int64 {
 	return 0
 }
 
-func (s openCodeFormatSourceSet) pathFromSource(source SourceRef) (string, bool) {
+func (s openCodeFormatSourceSet) pathFromSource(ctx context.Context, source SourceRef) (string, bool) {
 	switch src := source.Opaque.(type) {
 	case openCodeFormatSource:
 		return src.Path, src.Path != ""
@@ -1344,7 +1248,7 @@ func (s openCodeFormatSourceSet) pathFromSource(source SourceRef) (string, bool)
 		source.Key,
 	} {
 		for _, root := range s.roots {
-			if ref, ok := s.sourceRef(root, candidate, false); ok {
+			if ref, ok := s.sourceRef(ctx, root, candidate, false); ok {
 				src := ref.Opaque.(openCodeFormatSource)
 				return src.Path, true
 			}
@@ -1529,28 +1433,10 @@ func (s openCodeFormatSourceSet) sqliteSourceRefFromMeta(
 	return ref, true
 }
 
-func (p *openCodeFormatProvider) ReconciliationSourceState(
+func (s openCodeFormatSourceSet) ReconciliationSourceState(ctx context.Context,
 	source SourceRef,
 ) (ReconciliationSourceState, bool) {
-	return p.sources.reconciliationSourceState(source)
-}
-
-func (p *openCodeFormatProvider) SourceForReconciliationWithState(
-	ctx context.Context, path, project string, state ReconciliationSourceState,
-) (SourceRef, bool, error) {
-	return p.sources.SourceForReconciliationWithState(ctx, path, project, state)
-}
-
-func (p *openCodeFormatProvider) ApplyReconciliationSourceState(
-	source *SourceRef, state ReconciliationSourceState,
-) error {
-	return p.sources.applyReconciliationSourceState(source, state)
-}
-
-func (s openCodeFormatSourceSet) reconciliationSourceState(
-	source SourceRef,
-) (ReconciliationSourceState, bool) {
-	path, ok := s.pathFromSource(source)
+	path, ok := s.pathFromSource(ctx, source)
 	if !ok {
 		return ReconciliationSourceState{}, false
 	}
@@ -1579,13 +1465,13 @@ func (s openCodeFormatSourceSet) reconciliationSourceState(
 	}, true
 }
 
-func (s openCodeFormatSourceSet) applyReconciliationSourceState(
+func (s openCodeFormatSourceSet) ApplyReconciliationSourceState(ctx context.Context,
 	source *SourceRef, state ReconciliationSourceState,
 ) error {
 	if source == nil || state.Version == 0 {
 		return nil
 	}
-	path, ok := s.pathFromSource(*source)
+	path, ok := s.pathFromSource(ctx, *source)
 	if !ok {
 		return fmt.Errorf("%s reconciliation source path unavailable", s.spec.agent)
 	}
@@ -1702,7 +1588,7 @@ func (s openCodeFormatSourceSet) sourcesForChangedPathInRoot(
 		parts[1] == sessionSubdir &&
 		strings.HasSuffix(parts[3], ".json"):
 		s.indexStorageSession(root, path)
-		source, ok := s.sourceRef(root, path, false)
+		source, ok := s.sourceRef(ctx, root, path, false)
 		if !ok {
 			return nil, true, nil
 		}
@@ -1722,7 +1608,7 @@ func (s openCodeFormatSourceSet) sourcesForChangedPathInRoot(
 		parts[0] == "storage" &&
 		parts[1] == "message" &&
 		strings.HasSuffix(parts[3], ".json"):
-		source, ok := s.sourceForRawID(root, parts[2])
+		source, ok := s.sourceForRawID(ctx, root, parts[2])
 		if !ok {
 			return nil, false, nil
 		}
@@ -1741,7 +1627,7 @@ func (s openCodeFormatSourceSet) sourcesForChangedPathInRoot(
 		if sessionID == "" {
 			return nil, false, nil
 		}
-		source, ok := s.sourceForRawID(root, sessionID)
+		source, ok := s.sourceForRawID(ctx, root, sessionID)
 		if !ok {
 			return nil, false, nil
 		}
@@ -1750,7 +1636,7 @@ func (s openCodeFormatSourceSet) sourcesForChangedPathInRoot(
 		len(parts) == 3 &&
 		parts[0] == "storage" &&
 		parts[1] == "message":
-		source, ok := s.sourceForRawID(root, parts[2])
+		source, ok := s.sourceForRawID(ctx, root, parts[2])
 		if !ok {
 			return nil, false, nil
 		}
@@ -1763,7 +1649,7 @@ func (s openCodeFormatSourceSet) sourcesForChangedPathInRoot(
 		if sessionID == "" {
 			return nil, false, nil
 		}
-		source, ok := s.sourceForRawID(root, sessionID)
+		source, ok := s.sourceForRawID(ctx, root, sessionID)
 		if !ok {
 			return nil, false, nil
 		}
@@ -2112,15 +1998,15 @@ func sqliteWALHasFrames(path string) bool {
 	return info.Mode().IsRegular() && info.Size() > sqliteWALHeaderSize
 }
 
-func (s openCodeFormatSourceSet) sourceForRawID(root, sessionID string) (SourceRef, bool) {
-	path := s.spec.find(root, sessionID)
+func (s openCodeFormatSourceSet) sourceForRawID(ctx context.Context, root, sessionID string) (SourceRef, bool) {
+	path := s.spec.find(ctx, root, sessionID)
 	if path == "" {
 		return SourceRef{}, false
 	}
-	return s.sourceRef(root, path, false)
+	return s.sourceRef(ctx, root, path, false)
 }
 
-func (s openCodeFormatSourceSet) sourceRef(
+func (s openCodeFormatSourceSet) sourceRef(ctx context.Context,
 	root string,
 	path string,
 	promoteVirtual bool,
@@ -2132,12 +2018,12 @@ func (s openCodeFormatSourceSet) sourceRef(
 			return SourceRef{}, false
 		}
 		if promoteVirtual {
-			if selected := s.spec.find(root, sessionID); selected != "" &&
+			if selected := s.spec.find(ctx, root, sessionID); selected != "" &&
 				selected != path {
-				return s.sourceRef(root, selected, false)
+				return s.sourceRef(ctx, root, selected, false)
 			}
 		}
-		if !OpenCodeSQLiteSessionExists(dbPath, sessionID) {
+		if !OpenCodeSQLiteSessionExists(ctx, dbPath, sessionID) {
 			return SourceRef{}, false
 		}
 		return s.newSourceRef(root, path, ""), true

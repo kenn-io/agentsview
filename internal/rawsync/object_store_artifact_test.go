@@ -5,9 +5,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -46,11 +49,16 @@ func TestArtifactObjectStoreContract(t *testing.T) {
 	require.NoError(t, reader.Close())
 	assert.Equal(t, body, got)
 	assert.Equal(t, ref, info.Ref)
+	var copied bytes.Buffer
+	copyInfo, err := store.CopyObject(t.Context(), identity.TenantID, ref, &copied)
+	require.NoError(t, err)
+	assert.Equal(t, ref, copyInfo.Ref)
+	assert.Equal(t, body, copied.Bytes())
 	wrongLength := ObjectRef{SHA256: ref.SHA256, Length: ref.Length + 1}
 	_, err = store.StatObject(t.Context(), identity.TenantID, wrongLength)
-	assert.ErrorIs(t, err, ErrConflict)
+	require.ErrorIs(t, err, ErrConflict)
 	_, wrongReader, err := store.OpenObject(t.Context(), identity.TenantID, wrongLength)
-	assert.ErrorIs(t, err, ErrConflict)
+	require.ErrorIs(t, err, ErrConflict)
 	assert.Nil(t, wrongReader)
 	if wrongReader != nil {
 		_ = wrongReader.Close()
@@ -58,7 +66,7 @@ func TestArtifactObjectStoreContract(t *testing.T) {
 	_, err = store.MissingObjects(
 		t.Context(), identity.TenantID, []ObjectRef{wrongLength},
 	)
-	assert.ErrorIs(t, err, ErrConflict)
+	require.ErrorIs(t, err, ErrConflict)
 
 	missing, err := store.MissingObjects(t.Context(), identity.TenantID, []ObjectRef{
 		ref,
@@ -75,6 +83,87 @@ func TestArtifactObjectStoreContract(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNotFound)
 }
 
+func TestArtifactObjectStoreCopyCancellationNeverClosesDuringRead(t *testing.T) {
+	t.Parallel()
+	body := []byte("raw bytes")
+	ref := objectRefForBytes(t, body)
+	artifactRef, artifactIdentity, err := rawArtifactCoordinates("tenant-a", ref)
+	require.NoError(t, err)
+	reader := &cancelAwareArtifactReader{started: make(chan struct{})}
+	content := &copyArtifactStore{
+		entry:  artifact.Entry{Ref: artifactRef, Identity: artifactIdentity},
+		reader: reader,
+	}
+	store, err := NewArtifactObjectStore(content)
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, copyErr := store.CopyObject(ctx, "tenant-a", ref, io.Discard)
+		done <- copyErr
+	}()
+	select {
+	case <-reader.started:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "the object store never began reading the artifact")
+	}
+	cancel()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+		assert.False(t, reader.concurrentClose.Load(),
+			"the adapter must close only after the context-aware read returns")
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "the artifact copy never observed cancellation")
+	}
+}
+
+type copyArtifactStore struct {
+	artifact.ArtifactStore
+	entry  artifact.Entry
+	reader artifact.VerifiedReader
+}
+
+func (s *copyArtifactStore) Open(
+	ctx context.Context,
+	ref artifact.Ref,
+) (artifact.Entry, artifact.VerifiedReader, error) {
+	if reader, ok := s.reader.(*cancelAwareArtifactReader); ok {
+		reader.ctx = ctx
+	}
+	return s.entry, s.reader, nil
+}
+
+type cancelAwareArtifactReader struct {
+	ctx             context.Context
+	started         chan struct{}
+	reading         atomic.Bool
+	concurrentClose atomic.Bool
+}
+
+func (r *cancelAwareArtifactReader) Read([]byte) (int, error) {
+	r.reading.Store(true)
+	defer r.reading.Store(false)
+	close(r.started)
+	select {
+	case <-r.ctx.Done():
+		return 0, r.ctx.Err()
+	case <-time.After(5 * time.Second):
+		return 0, errors.New("canceled artifact read never observed its context")
+	}
+}
+
+func (*cancelAwareArtifactReader) Verify() error { return nil }
+
+func (r *cancelAwareArtifactReader) Close() error {
+	if r.reading.Load() {
+		r.concurrentClose.Store(true)
+	}
+	return nil
+}
+
 func TestArtifactObjectStoreRejectsInvalidWritesAndRequests(t *testing.T) {
 	t.Parallel()
 
@@ -86,21 +175,21 @@ func TestArtifactObjectStoreRejectsInvalidWritesAndRequests(t *testing.T) {
 	ref := objectRefForBytes(t, []byte("expected"))
 
 	_, err = store.PutObject(t.Context(), "tenant-a", ref, bytes.NewReader([]byte("corrupt")))
-	assert.ErrorIs(t, err, ErrConflict)
+	require.ErrorIs(t, err, ErrConflict)
 	_, err = store.PutObject(t.Context(), "tenant-a", ref, bytes.NewReader([]byte("EXPected")))
-	assert.ErrorIs(t, err, ErrConflict)
+	require.ErrorIs(t, err, ErrConflict)
 	_, err = store.PutObject(t.Context(), "bad/tenant", ref, bytes.NewReader([]byte("expected")))
-	assert.ErrorIs(t, err, ErrInvalid)
+	require.ErrorIs(t, err, ErrInvalid)
 	_, err = store.MissingObjects(t.Context(), "tenant-a", []ObjectRef{
 		ref,
 		{SHA256: ref.SHA256, Length: ref.Length + 1},
 	})
-	assert.ErrorIs(t, err, ErrConflict)
+	require.ErrorIs(t, err, ErrConflict)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	_, err = store.PutObject(ctx, "tenant-a", ref, bytes.NewReader([]byte("expected")))
-	assert.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, context.Canceled)
 	_, err = NewArtifactObjectStore(nil)
 	assert.ErrorIs(t, err, ErrInvalid)
 }

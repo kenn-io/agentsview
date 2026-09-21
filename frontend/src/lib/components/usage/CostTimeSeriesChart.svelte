@@ -59,8 +59,7 @@
   function isSeriesVisible(key: string): boolean {
     if (groupBy === "project") return !usage.isProjectKeyExcluded(key);
     if (groupBy === "agent") return !usage.isAgentExcluded(key);
-    if (!usage.selectedModels) return true;
-    return usage.selectedModels.split(",").includes(key);
+    return !usage.isModelExcluded(key);
   }
 
   function fillMissingDailyEntries(

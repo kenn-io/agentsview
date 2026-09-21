@@ -1,7 +1,6 @@
 package git
 
 import (
-	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -51,7 +50,7 @@ esac
 	prependPath(t, dir)
 
 	got, err := AggregatePRs(
-		context.Background(),
+		t.Context(),
 		t.TempDir(),
 		"2026-01-01", "2026-02-01",
 		"fake-token",
@@ -72,7 +71,7 @@ exit 97
 	prependPath(t, dir)
 
 	got, err := AggregatePRs(
-		context.Background(),
+		t.Context(),
 		t.TempDir(),
 		"2026-01-01", "2026-02-01",
 		"",
@@ -90,7 +89,7 @@ exit 1
 	prependPath(t, dir)
 
 	_, err := AggregatePRs(
-		context.Background(),
+		t.Context(),
 		t.TempDir(),
 		"2026-01-01", "2026-02-01",
 		"fake-token",
@@ -106,7 +105,7 @@ echo '[]'
 	prependPath(t, dir)
 
 	got, err := AggregatePRs(
-		context.Background(),
+		t.Context(),
 		t.TempDir(),
 		"2026-01-01", "2026-02-01",
 		"fake-token",
@@ -125,7 +124,7 @@ echo 'not json at all'
 	prependPath(t, dir)
 
 	_, err := AggregatePRs(
-		context.Background(),
+		t.Context(),
 		t.TempDir(),
 		"2026-01-01", "2026-02-01",
 		"fake-token",
@@ -147,7 +146,7 @@ echo '[]'
 	prependPath(t, dir)
 
 	_, err := AggregatePRs(
-		context.Background(),
+		t.Context(),
 		t.TempDir(),
 		"2026-01-01", "2026-02-01",
 		"injected-token-123",

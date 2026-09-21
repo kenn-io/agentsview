@@ -1,3 +1,9 @@
 self-hosted-runner:
   labels:
+    - namespace-profile-linux-4cpu
+    - namespace-profile-linux-8cpu
+    - namespace-profile-linux-16cpu
+    - namespace-profile-windows-4cpu
+    - namespace-profile-windows-8cpu
+    - namespace-profile-windows-16cpu
     - windows-11-vs2026-arm

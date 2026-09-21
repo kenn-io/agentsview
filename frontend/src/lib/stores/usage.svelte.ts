@@ -1,3 +1,4 @@
+import { m } from "../i18n/index.js";
 import type { UsagePairwiseDimension } from "../api/types/usage.js";
 import {
   UsageService,
@@ -5,7 +6,7 @@ import {
   type ServiceUsagePairwiseComparisonResponse,
   type UsageSummaryResponse,
 } from "../api/generated/index";
-import { ApiError, callGenerated, isAbortError } from "../api/runtime.js";
+import { ApiError, isAbortError } from "../api/runtime.js";
 import { sessions } from "./sessions.svelte.js";
 import { perf, type PerfEntryStatus } from "./perf.svelte.js";
 import { rollingRange, today } from "../utils/dates.js";
@@ -120,7 +121,6 @@ export interface UsageFilterState {
   excludedProjectKeys?: string;
   excludedAgents: string;
   excludedModels: string;
-  selectedModels: string;
 }
 
 function loadUsageFilters(): UsageFilterState {
@@ -132,8 +132,7 @@ function loadUsageFilters(): UsageFilterState {
         excludedProjects: saved.excludedProjects ?? "",
         excludedProjectKeys: "",
         excludedAgents: saved.excludedAgents ?? "",
-        excludedModels: "",
-        selectedModels: saved.selectedModels ?? "",
+        excludedModels: saved.excludedModels ?? "",
       };
     }
   } catch {
@@ -144,7 +143,6 @@ function loadUsageFilters(): UsageFilterState {
     excludedProjectKeys: "",
     excludedAgents: "",
     excludedModels: "",
-    selectedModels: "",
   };
 }
 
@@ -154,7 +152,6 @@ function saveUsageFilters(f: UsageFilterState): void {
       excludedProjects: f.excludedProjects,
       excludedAgents: f.excludedAgents,
       excludedModels: f.excludedModels,
-      selectedModels: f.selectedModels,
     };
     localStorage.setItem(USAGE_FILTERS_KEY, JSON.stringify(data));
   } catch {
@@ -324,14 +321,13 @@ class UsageStore {
   selectedTokenTypes: UsageTokenType[] = $state([...ALL_TOKEN_TYPES]);
   selectedTimeRange: { from: string; to: string } | null = $state(null);
 
-  // Excluded project items and included model items
-  // (comma-separated strings). Empty models = all models.
+  // Empty exclusion sets show all items. Chart clicks and picker checkboxes
+  // share these comma-separated sets.
   // Initialized from localStorage to survive tab switches.
   excludedProjects: string = $state("");
   excludedProjectKeys: string = $state("");
   excludedAgents: string = $state("");
   excludedModels: string = $state("");
-  selectedModels: string = $state("");
   knownProjects: UsageProjectFilterItem[] = $state([]);
 
   constructor() {
@@ -340,7 +336,6 @@ class UsageStore {
     this.excludedProjectKeys = saved.excludedProjectKeys ?? "";
     this.excludedAgents = saved.excludedAgents;
     this.excludedModels = saved.excludedModels;
-    this.selectedModels = saved.selectedModels;
   }
 
   summary = $state<UsageSummaryResponse | null>(null);
@@ -421,8 +416,8 @@ class UsageStore {
     if (this.excludedAgents) {
       p.exclude_agent = this.excludedAgents;
     }
-    if (this.selectedModels) {
-      p.model = this.selectedModels;
+    if (this.excludedModels) {
+      p.exclude_model = this.excludedModels;
     }
     return p;
   }
@@ -637,17 +632,26 @@ class UsageStore {
     });
   }
 
-  toggleModel(name: string, options: { preserveTimeRange?: boolean } = {}): void {
-    const previousSelected = this.selectedModels;
-    const previousExcluded = this.excludedModels;
+  hideModel(name: string, options: { preserveTimeRange?: boolean } = {}): void {
+    const previous = this.excludedModels;
     const hadSelectedTimeRange = options.preserveTimeRange && this.selectedTimeRange !== null;
-    this.selectedModels = this.toggleCsv(this.selectedModels, name);
-    this.excludedModels = "";
-    const changed = this.selectedModels;
+    this.excludedModels = joinCsvParts(this.excludedModels, name);
+    const changed = this.excludedModels;
     void this.fetchAllWithResult(options).then((result) => {
-      if (result !== "error" || !hadSelectedTimeRange || this.selectedModels !== changed) return;
-      this.selectedModels = previousSelected;
-      this.excludedModels = previousExcluded;
+      if (result !== "error" || !hadSelectedTimeRange || this.excludedModels !== changed) return;
+      this.excludedModels = previous;
+      void this.fetchAll({ preserveTimeRange: true });
+    });
+  }
+
+  toggleModel(name: string, options: { preserveTimeRange?: boolean } = {}): void {
+    const previous = this.excludedModels;
+    const hadSelectedTimeRange = options.preserveTimeRange && this.selectedTimeRange !== null;
+    this.excludedModels = this.toggleCsv(this.excludedModels, name);
+    const changed = this.excludedModels;
+    void this.fetchAllWithResult(options).then((result) => {
+      if (result !== "error" || !hadSelectedTimeRange || this.excludedModels !== changed) return;
+      this.excludedModels = previous;
       void this.fetchAll({ preserveTimeRange: true });
     });
   }
@@ -685,11 +689,6 @@ class UsageStore {
     return this.excludedModels.split(",").includes(name);
   }
 
-  isModelSelected(name: string): boolean {
-    if (!this.selectedModels) return false;
-    return this.selectedModels.split(",").includes(name);
-  }
-
   selectAllProjects(): void {
     this.excludedProjects = "";
     this.excludedProjectKeys = "";
@@ -716,14 +715,12 @@ class UsageStore {
   }
 
   selectAllModels(): void {
-    this.selectedModels = "";
     this.excludedModels = "";
     this.fetchAll();
   }
 
-  deselectAllModels(_all: string[]): void {
-    this.selectedModels = "";
-    this.excludedModels = "";
+  deselectAllModels(all: string[]): void {
+    this.excludedModels = joinCsvParts(this.excludedModels, all.join(","));
     this.fetchAll();
   }
 
@@ -732,7 +729,6 @@ class UsageStore {
     this.excludedProjectKeys = "";
     this.excludedAgents = "";
     this.excludedModels = "";
-    this.selectedModels = "";
     this.fetchAll();
   }
 
@@ -741,7 +737,7 @@ class UsageStore {
       this.excludedProjects !== "" ||
       this.excludedProjectKeys !== "" ||
       this.excludedAgents !== "" ||
-      this.selectedModels !== ""
+      this.excludedModels !== ""
     );
   }
 
@@ -919,17 +915,11 @@ class UsageStore {
       let contextData: UsageSummaryResponse | null = null;
       if (contextParams) {
         [data, contextData] = await Promise.all([
-          callGenerated((options) => UsageService.getApiV1UsageSummary(params, options), signal),
-          callGenerated(
-            (options) => UsageService.getApiV1UsageSummary(contextParams, options),
-            signal,
-          ),
+          UsageService.getApiV1UsageSummary(params, { signal }),
+          UsageService.getApiV1UsageSummary(contextParams, { signal }),
         ]);
       } else {
-        data = await callGenerated(
-          (options) => UsageService.getApiV1UsageSummary(params, options),
-          signal,
-        );
+        data = await UsageService.getApiV1UsageSummary(params, { signal });
       }
       if (this.versions.summary === v) {
         this.summary = data;
@@ -998,9 +988,9 @@ class UsageStore {
           this.selectedTimeRange = null;
           this.timeSeriesContextSummary = null;
           this.isTimeRangeSummaryProvisional = false;
-          this.errors.summary = e instanceof Error ? e.message : "Failed to load";
+          this.errors.summary = e instanceof Error ? e.message : m.shared_failed_to_load();
         } else if (this.summary === null) {
-          this.errors.summary = e instanceof Error ? e.message : "Failed to load";
+          this.errors.summary = e instanceof Error ? e.message : m.shared_failed_to_load();
         } else {
           console.warn("usage.fetchSummary refetch failed:", e);
         }
@@ -1030,16 +1020,12 @@ class UsageStore {
     const started = performance.now();
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
     try {
-      const comparison = await callGenerated(
-        (options) =>
-          UsageService.getApiV1UsageComparison(
-            {
-              ...params,
-              current_microdollars: summary.totals.totalCost.microdollars,
-            },
-            options,
-          ),
-        signal,
+      const comparison = await UsageService.getApiV1UsageComparison(
+        {
+          ...params,
+          current_microdollars: summary.totals.totalCost.microdollars,
+        },
+        { signal },
       );
       if (this.versions.summary === summaryVersion) {
         this.summary = { ...summary, comparison };
@@ -1099,10 +1085,7 @@ class UsageStore {
     const started = performance.now();
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
     try {
-      const comparison = await callGenerated(
-        (options) => UsageService.getApiV1UsagePairwiseComparison(request, options),
-        signal,
-      );
+      const comparison = await UsageService.getApiV1UsagePairwiseComparison(request, { signal });
       if (this.versions.summary === summaryVersion && this.versions.pairwise === pairwiseVersion) {
         this.pairwiseComparison = comparison;
         this.errors.pairwise = null;
@@ -1117,7 +1100,7 @@ class UsageStore {
       status = "error";
       if (this.versions.summary === summaryVersion && this.versions.pairwise === pairwiseVersion) {
         if (this.pairwiseComparison === null) {
-          this.errors.pairwise = e instanceof Error ? e.message : "Failed to load";
+          this.errors.pairwise = e instanceof Error ? e.message : m.shared_failed_to_load();
         } else {
           console.warn("usage.fetchPairwise failed:", e);
         }
@@ -1146,20 +1129,16 @@ class UsageStore {
     const started = performance.now();
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
     try {
-      const data = await callGenerated(
-        (options) =>
-          UsageService.getApiV1UsageTopSessions(
-            {
-              ...(params ?? this.baseParams()),
-              sort: this.mode === "token" ? "tokens" : "cost",
-              token_types:
-                this.mode === "token" && this.selectedTokenTypes.length < ALL_TOKEN_TYPES.length
-                  ? this.selectedTokenTypes.join(",")
-                  : undefined,
-            },
-            options,
-          ),
-        signal,
+      const data = await UsageService.getApiV1UsageTopSessions(
+        {
+          ...(params ?? this.baseParams()),
+          sort: this.mode === "token" ? "tokens" : "cost",
+          token_types:
+            this.mode === "token" && this.selectedTokenTypes.length < ALL_TOKEN_TYPES.length
+              ? this.selectedTokenTypes.join(",")
+              : undefined,
+        },
+        { signal },
       );
       if (this.versions.topSessions === v) {
         this.topSessions = data;
@@ -1175,7 +1154,7 @@ class UsageStore {
       status = "error";
       if (this.versions.topSessions === v) {
         if (this.topSessions === null) {
-          this.errors.topSessions = e instanceof Error ? e.message : "Failed to load";
+          this.errors.topSessions = e instanceof Error ? e.message : m.shared_failed_to_load();
         } else {
           console.warn("usage.fetchTopSessions refetch failed:", e);
         }
@@ -1258,7 +1237,6 @@ export interface UsageUrlState {
   excludedProjectKeys: string;
   excludedAgents: string;
   excludedModels: string;
-  selectedModels: string;
 }
 
 export const USAGE_DEFAULT_WINDOW_DAYS = DEFAULT_WINDOW_DAYS;
@@ -1280,8 +1258,8 @@ export function buildUsageUrlParams(state: UsageUrlState): Record<string, string
   } else if (state.windowDays > 0 && state.windowDays !== DEFAULT_WINDOW_DAYS) {
     params["window_days"] = String(state.windowDays);
   }
-  if (state.selectedModels) {
-    params["model"] = state.selectedModels;
+  if (state.excludedModels) {
+    params["exclude_model"] = state.excludedModels;
   }
   if (state.excludedProjects) {
     params["exclude_project"] = state.excludedProjects;

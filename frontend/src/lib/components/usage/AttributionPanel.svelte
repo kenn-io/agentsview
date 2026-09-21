@@ -104,7 +104,7 @@
     } else if (groupBy === "agent") {
       usage.toggleAgent(id, { preserveTimeRange: true });
     } else {
-      usage.toggleModel(id, { preserveTimeRange: true });
+      usage.hideModel(id, { preserveTimeRange: true });
     }
   }
 

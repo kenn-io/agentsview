@@ -2,7 +2,6 @@ package db
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -10,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/config"
 )
 
 func artifactImportTestWork(origin string, sequence int) ArtifactImportWork {
@@ -324,7 +324,7 @@ func TestArtifactImportQueueRejectsInvalidClaims(t *testing.T) {
 			tc.mutate(&work)
 			err := database.EnqueueArtifactImport(ctx, work)
 			require.Error(t, err)
-			assert.False(t, errors.Is(err, ErrArtifactImportConflict))
+			assert.NotErrorIs(t, err, ErrArtifactImportConflict)
 		})
 	}
 }
@@ -346,18 +346,15 @@ func TestArtifactCheckpointLandingBindsPeerIdentity(t *testing.T) {
 		head.Origin + "~one": strings.Repeat("b", 64),
 		head.Origin + "~two": strings.Repeat("c", 64),
 	}
-	require.NoError(t,
-		database.RecordArtifactCheckpointLanding(ctx, landing, want))
+	require.NoError(t, database.RecordArtifactCheckpointLanding(ctx, landing, want))
 
-	gotLanding, got, found, err :=
-		database.GetArtifactCheckpointLanding(ctx, head.Origin)
+	gotLanding, got, found, err := database.GetArtifactCheckpointLanding(ctx, head.Origin)
 	require.NoError(t, err)
 	require.True(t, found)
 	assert.Equal(t, landing, gotLanding)
 	assert.Equal(t, want, got)
 
-	require.NoError(t,
-		database.RecordArtifactCheckpointLanding(ctx, landing, want))
+	require.NoError(t, database.RecordArtifactCheckpointLanding(ctx, landing, want))
 }
 
 func TestArtifactCheckpointLandingIdentityReadDoesNotMaterializeSessionMap(
@@ -376,8 +373,7 @@ func TestArtifactCheckpointLandingIdentityReadDoesNotMaterializeSessionMap(
 	const sessionCount = 2_000
 	sessionMap := make(map[string]string, sessionCount)
 	for i := range sessionCount {
-		sessionMap[fmt.Sprintf("%s~session-%04d", head.Origin, i)] =
-			fmt.Sprintf("%064x", i+1)
+		sessionMap[fmt.Sprintf("%s~session-%04d", head.Origin, i)] = fmt.Sprintf("%064x", i+1)
 	}
 	require.NoError(t, database.RecordArtifactCheckpointLanding(
 		ctx, ArtifactCheckpointLanding(head), sessionMap,
@@ -387,8 +383,7 @@ func TestArtifactCheckpointLandingIdentityReadDoesNotMaterializeSessionMap(
 	var found bool
 	allocations := testing.AllocsPerRun(3, func() {
 		var readErr error
-		got, found, readErr =
-			database.GetArtifactCheckpointLandingIdentity(ctx, head.Origin)
+		got, found, readErr = database.GetArtifactCheckpointLandingIdentity(ctx, head.Origin)
 		require.NoError(t, readErr)
 	})
 	require.True(t, found)
@@ -565,7 +560,7 @@ func TestApplyArtifactImportedSessionPreservesLocalCollision(t *testing.T) {
 		}},
 		ReplaceMessages: true,
 	}
-	result, err := database.WriteSessionBatchAtomic(
+	result, err := database.WriteSessionBatchAtomic(ctx,
 		[]SessionBatchWrite{localWrite},
 	)
 	require.NoError(t, err)
@@ -602,6 +597,40 @@ func TestApplyArtifactImportedSessionPreservesLocalCollision(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{gid: imported.ManifestHash}, provenance)
+}
+
+func TestApplyArtifactImportedSessionProjectsToolResultImages(t *testing.T) {
+	database := testDB(t)
+	database.SetToolResultImages(config.ToolResultImagesOffload)
+	database.SetAssetsDir(t.TempDir())
+	ctx := t.Context()
+	origin := "peer-a1b2c3"
+	gid := origin + "~image"
+	imported := ArtifactImportedSession{
+		Origin:            origin,
+		GID:               gid,
+		ManifestHash:      strings.Repeat("a", 64),
+		ImportedSessionID: gid,
+	}
+	write := SessionBatchWrite{
+		Session: Session{
+			ID: gid, Project: "project", Machine: origin, Agent: "codex",
+		},
+		Messages:        []Message{testImageMessage(gid)},
+		ReplaceMessages: true,
+	}
+
+	result, err := database.ApplyArtifactImportedSession(ctx, imported, write)
+	require.NoError(t, err)
+	require.True(t, result.Written)
+
+	messages, err := database.GetAllMessages(ctx, gid)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	call := messages[0].ToolCalls[0]
+	assertOffloadedImage(t, call.ResultContent, database.AssetsDir())
+	require.Len(t, call.ResultEvents, 1)
+	assertOffloadedImage(t, call.ResultEvents[0].Content, database.AssetsDir())
 }
 
 func TestArtifactImportedManifestHashesChunksWithinSQLiteVariableLimit(
@@ -798,7 +827,7 @@ func TestPendingArtifactCheckpointSessionsUsesBoundedPendingOrder(t *testing.T) 
 	require.NoError(t, err)
 	require.Equal(t, []ArtifactCheckpointSession{olderAttempt}, pending)
 
-	rows, err := database.getReader().Query(
+	rows, err := database.getReader().Query(ctx,
 		`PRAGMA index_info('idx_artifact_checkpoint_stage_ready')`,
 	)
 	require.NoError(t, err)

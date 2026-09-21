@@ -225,8 +225,7 @@ func preflightSegmentData(data []byte, limits artifactLimits) (segmentPreflight,
 				limits.segmentMessages,
 			)
 		}
-		recordVersion, messageNested, err :=
-			preflightMessageNestedCollections(line, limits)
+		recordVersion, messageNested, err := preflightMessageNestedCollections(line, limits)
 		if err != nil {
 			return segmentPreflight{}, err
 		}
@@ -345,6 +344,7 @@ func (m segmentMessage) dbMessage() db.Message {
 		HasToolUse:        m.HasToolUse,
 		ContentLength:     m.ContentLength,
 		Model:             m.Model,
+		ReasoningEffort:   m.ReasoningEffort,
 		ProviderID:        m.ProviderID,
 		TokenUsage:        m.TokenUsage,
 		ContextTokens:     m.ContextTokens,

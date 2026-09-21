@@ -3,6 +3,8 @@ package parser
 import (
 	"log"
 	"time"
+
+	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 // timestampLayouts lists accepted timestamp formats in priority
@@ -35,7 +37,7 @@ func parseTimestamp(ts string) time.Time {
 func logParseError(ts string) {
 	const maxLen = 100
 	if len(ts) > maxLen {
-		ts = ts[:maxLen] + "..."
+		ts = stringutil.SafeTruncate(ts, maxLen) + "..."
 	}
 	log.Printf(
 		"unparseable timestamp %q: no matching layout", ts,

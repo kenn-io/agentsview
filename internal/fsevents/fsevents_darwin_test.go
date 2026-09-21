@@ -98,7 +98,7 @@ func TestStreamCloseIsConcurrentAndIdempotent(t *testing.T) {
 	close(errs)
 
 	for err := range errs {
-		assert.NoError(t, err)
+		require.NoError(t, err)
 	}
 	assert.NoError(t, stream.Close())
 }
@@ -217,6 +217,7 @@ func TestStreamClosingSharedQueueSiblingKeepsOtherStreamRunning(t *testing.T) {
 
 func newTestStream(t *testing.T, root string, sink func([]Event)) *Stream {
 	t.Helper()
+
 	queue, err := NewQueue()
 	require.NoError(t, err)
 	stream, err := NewStream(queue, root, 500*time.Millisecond, sink)

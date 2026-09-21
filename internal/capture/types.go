@@ -3,7 +3,8 @@
 package capture
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -135,14 +136,13 @@ type ProducerMetadata struct {
 }
 
 func DecodeResult(r io.Reader) (Result, error) {
-	dec := json.NewDecoder(r)
-	dec.DisallowUnknownFields()
+	dec := jsontext.NewDecoder(r)
 	var result Result
-	if err := dec.Decode(&result); err != nil {
+	if err := json.UnmarshalDecode(dec, &result, json.RejectUnknownMembers(true)); err != nil {
 		return Result{}, fmt.Errorf("decoding capture result: %w", err)
 	}
 	var trailing any
-	if err := dec.Decode(&trailing); err != io.EOF {
+	if err := json.UnmarshalDecode(dec, &trailing); !errors.Is(err, io.EOF) {
 		if err == nil {
 			return Result{}, errors.New("capture result contains trailing JSON")
 		}

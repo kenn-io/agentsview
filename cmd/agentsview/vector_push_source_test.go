@@ -11,7 +11,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/postgres"
+	"go.kenn.io/agentsview/internal/storage"
 	"go.kenn.io/agentsview/internal/vector"
 )
 
@@ -81,7 +81,8 @@ func testPushUnitSource() fakePushUnitSource {
 // it so the push source can reopen the file read-only.
 func buildTestVectorsDB(t *testing.T, cfg config.Config) {
 	t.Helper()
-	ctx := context.Background()
+
+	ctx := t.Context()
 	ix, err := vector.Open(
 		ctx, cfg.Vector.ResolvedDBPath(cfg.DataDir), false,
 		cfg.Vector.Embeddings.MaxInputChars,
@@ -100,7 +101,7 @@ func buildTestVectorsDB(t *testing.T, cfg config.Config) {
 // closePushSource registers a cleanup that closes the adapter's vectors.db
 // handle. Required on Windows, where TempDir removal fails while the sqlite
 // file is still open.
-func closePushSource(t *testing.T, src postgres.VectorPushSource) {
+func closePushSource(t *testing.T, src storage.VectorPushSource) {
 	t.Helper()
 	t.Cleanup(func() {
 		require.NoError(t, src.(*vectorPushSource).Close())
@@ -118,7 +119,7 @@ func TestVectorPushSourceMissingFile(t *testing.T) {
 	require.NotNil(t, src)
 	closePushSource(t, src)
 
-	_, ok, err := src.BeginExport(context.Background(), nil)
+	_, ok, err := src.BeginExport(t.Context(), nil)
 	require.NoError(t, err)
 	assert.False(t, ok) // no vectors.db yet -> nothing to push, not an error
 }
@@ -128,7 +129,7 @@ func TestVectorPushSourceMissingFile(t *testing.T) {
 // then picks up a generation built at the same path afterward, as a daemon push
 // that starts before embeddings exist must.
 func TestVectorPushSourceMissingFileThenBuilt(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := enabledVectorConfig(t)
 	src := newVectorPushSource(cfg)
 	require.NotNil(t, src)
@@ -158,7 +159,7 @@ func TestVectorPushSourceMissingFileThenBuilt(t *testing.T) {
 // PG vectors, so Generation must refuse with ErrVectorSourceNotReady until a
 // build completes.
 func TestVectorPushSourceNotReadyDuringRebuild(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := enabledVectorConfig(t)
 	buildTestVectorsDB(t, cfg)
 
@@ -186,7 +187,7 @@ func TestVectorPushSourceNotReadyDuringRebuild(t *testing.T) {
 
 	_, ok, err := src.BeginExport(ctx, []string{"session-1"})
 	require.Error(t, err)
-	assert.ErrorIs(t, err, postgres.ErrVectorSourceNotReady)
+	require.ErrorIs(t, err, storage.ErrVectorSourceNotReady)
 	assert.False(t, ok)
 }
 
@@ -195,7 +196,7 @@ func TestVectorPushSourceNotReadyDuringRebuild(t *testing.T) {
 // docs outside its candidate sessions, while a generation-wide push against the
 // same active generation still blocks until the pending docs are embedded.
 func TestVectorPushSourceScopedGenerationIgnoresOutOfScopePendingDocs(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := enabledVectorConfig(t)
 	buildTestVectorsDB(t, cfg)
 
@@ -230,12 +231,12 @@ func TestVectorPushSourceScopedGenerationIgnoresOutOfScopePendingDocs(t *testing
 
 	_, ok, err = src.BeginExport(ctx, nil)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, postgres.ErrVectorSourceNotReady)
+	require.ErrorIs(t, err, storage.ErrVectorSourceNotReady)
 	assert.False(t, ok)
 }
 
 func TestVectorPushSourceRoundTrip(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := enabledVectorConfig(t)
 	buildTestVectorsDB(t, cfg)
 
@@ -271,7 +272,7 @@ func TestVectorPushSourceRoundTrip(t *testing.T) {
 	want, wantHash, err := ix.ExportSessionDocs(ctx, exp.Ordinal, "session-1")
 	require.NoError(t, err)
 	require.NotEmpty(t, want)
-	assert.Equal(t, hashes["session-1"], wantHash,
+	assert.Equal(t, wantHash, hashes["session-1"],
 		"export hash must match the delta-scan aggregate for an unchanged index")
 
 	docs, gotHash, err := export.SessionDocs(ctx, "session-1")
@@ -309,7 +310,7 @@ func TestCloseVectorPushSource(t *testing.T) {
 	src := newVectorPushSource(cfg)
 	require.NotNil(t, src)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	export, ok, err := src.BeginExport(ctx, nil)
 	require.NoError(t, err)
 	require.True(t, ok)

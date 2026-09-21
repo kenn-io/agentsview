@@ -7,7 +7,7 @@ import { router } from "../../stores/router.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
 import { yokedDates } from "../../stores/yokedDates.svelte.js";
 import { AnalyticsService } from "../../api/generated/index.js";
-import type { SignalsAnalyticsResponse } from "../../api/types.js";
+import type { DbSignalsAnalyticsResponse as SignalsAnalyticsResponse } from "../../api/generated/index.js";
 // @ts-ignore
 import QualityPage from "./QualityPage.svelte";
 
@@ -135,6 +135,7 @@ vi.mock("../../paraglide/messages.js", () => {
 
 vi.mock("../../utils/markdown.js", () => ({
   renderMarkdown: (content: string) => content,
+  loadAssetImages: () => ({ destroy() {} }),
 }));
 
 vi.mock("../../utils/highlight-fences.js", () => ({

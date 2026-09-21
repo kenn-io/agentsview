@@ -4,6 +4,10 @@ package parser
 
 import "os"
 
-func codexIndexChangeTime(_ string, _ os.FileInfo) (int64, bool) {
+func codexIndexChangeTimeForFile(_ *os.File, _ os.FileInfo) (int64, bool) {
 	return 0, false
+}
+
+func codexIndexChangeTime(_ string, info os.FileInfo) (int64, bool) {
+	return codexIndexChangeTimeForFile(nil, info)
 }

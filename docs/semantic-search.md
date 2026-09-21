@@ -103,6 +103,14 @@ server configurations retain their document-count batching until their model and
 provider limits are declared. These settings only shape build and repair
 requests; they do not alter input text or the vector-generation fingerprint.
 
+Any `agentsview` command that loads the config, including `sync` and
+`embeddings build`, fails if `[vector]` or its subtables contain an unknown key.
+This check also applies when vector search is disabled, so a misspelled
+`enabled` key cannot silently leave it off. The error names the key. For a
+per-server key written in the parent `[vector.embeddings]` table, it also names
+`[vector.embeddings.servers.<name>]` as the table that owns it. Fix or remove
+the key before running the command again.
+
 This split exists so you can encode search queries against a fast local server
 while offloading bulk index builds to a bigger remote machine:
 
@@ -527,6 +535,18 @@ modes. Semantic ranks message content by meaning, while Hybrid combines semantic
 and FTS5 rankings. Both present the highest-ranked match from each session, with
 at most one result per session, and remember the selected mode across palette
 openings and browser sessions.
+
+After entering a query, the project selector shows the current project scope. It
+starts with the sidebar project filter; choose **All Projects** to search across
+projects without changing the sidebar.
+
+Use the date-range picker beside the search modes to limit the search to
+sessions active during a relative, calendar, or custom range. The default is
+**All time**. Changing the range reruns the query, and the range stays selected
+when switching search modes. Closing the palette resets it to All time. Semantic
+and Hybrid interpret dates in your browser's timezone; Full text uses UTC. Dates
+filter session activity, not individual message timestamps, so a match from a
+session that overlaps the range can contain an earlier or later message.
 
 Semantic and Hybrid depend on the same enabled `[vector]` configuration and
 active embeddings index described above. If `[vector]` is not configured, the

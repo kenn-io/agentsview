@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { DataService } from "../api/generated/index";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DbProjectInventory, DbProjectInventoryRow } from "../api/generated/index";
 
@@ -7,7 +8,6 @@ const api = vi.hoisted(() => ({
 }));
 
 const apiRuntimeMocks = vi.hoisted(() => ({
-  callGenerated: vi.fn((request: () => Promise<unknown>, _signal?: AbortSignal) => request()),
   isAbortError: vi.fn(() => false),
 }));
 
@@ -19,7 +19,6 @@ vi.mock("../api/generated/index", () => ({
   DataService: { getApiV1DataProjects: api.getApiV1DataProjects },
 }));
 vi.mock("../api/runtime.js", () => ({
-  callGenerated: apiRuntimeMocks.callGenerated,
   isAbortError: apiRuntimeMocks.isAbortError,
 }));
 vi.mock("./router.svelte.js", () => ({
@@ -62,10 +61,7 @@ let emitDataChanged: ((event: { scope: "messages" | "sessions" | "sync" }) => vo
 
 beforeEach(() => {
   api.getApiV1DataProjects.mockReset();
-  apiRuntimeMocks.callGenerated.mockReset();
-  apiRuntimeMocks.callGenerated.mockImplementation(
-    (request: () => Promise<unknown>, _signal?: AbortSignal) => request(),
-  );
+
   apiRuntimeMocks.isAbortError.mockReset();
   apiRuntimeMocks.isAbortError.mockReturnValue(false);
   eventBus.subscribe.mockReset();
@@ -80,6 +76,7 @@ beforeEach(() => {
   data.error = "";
   data.view = "inventory";
   data.selectedProjectKey = "";
+  data.dateSelection = { mode: "relative", days: 0 };
   data.rulesMachine = "";
   data.rulesRefreshVersion = 0;
   (routerMod.router as unknown as { params: Record<string, string> }).params = {};
@@ -95,29 +92,58 @@ afterEach(() => {
 });
 
 describe("hydrateFromUrl", () => {
+  it("loads a chosen month and preserves its bounds when selecting projects", async () => {
+    api.getApiV1DataProjects.mockResolvedValue(makeInventory([]));
+    data.setDateSelection({ mode: "calendar", unit: "month", anchor: "2026-08-15" });
+    expect(api.getApiV1DataProjects).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        date_from: "2026-08-01",
+        date_to: "2026-08-31",
+      }),
+      { signal: expect.any(AbortSignal) },
+    );
+    data.selectProject("k1");
+    expect(routerMod.router.replaceParams).toHaveBeenLastCalledWith({
+      project_key: "k1",
+      date_from: "2026-08-01",
+      date_to: "2026-08-31",
+    });
+    data.setDateSelection({ mode: "relative", days: 0 });
+    expect(api.getApiV1DataProjects).toHaveBeenLastCalledWith({}, { signal: expect.any(AbortSignal) });
+    expect(data.selectedProjectKey).toBe("");
+    await Promise.resolve();
+  });
+
   it("defaults to the inventory view with no selection or machine", () => {
-    data.hydrateFromUrl({});
+    data.hydrateFromUrl({}, true);
     expect(data.view).toBe("inventory");
     expect(data.selectedProjectKey).toBe("");
     expect(data.rulesMachine).toBe("");
   });
 
   it("selects the project_key param in the inventory view", () => {
-    data.hydrateFromUrl({ project_key: "k1" });
+    data.hydrateFromUrl({ project_key: "k1" }, true);
     expect(data.view).toBe("inventory");
     expect(data.selectedProjectKey).toBe("k1");
   });
 
   it("hydrates the rules view with a machine and clears any selection", () => {
-    data.hydrateFromUrl({ view: "rules", machine: "machine-a" });
+    data.hydrateFromUrl({ view: "rules", machine: "machine-a" }, true);
     expect(data.view).toBe("rules");
     expect(data.rulesMachine).toBe("machine-a");
     expect(data.selectedProjectKey).toBe("");
   });
 
   it("falls back to the inventory view for an unknown view value", () => {
-    data.hydrateFromUrl({ view: "bogus" });
+    data.hydrateFromUrl({ view: "bogus" }, true);
     expect(data.view).toBe("inventory");
+    expect(data.rulesMachine).toBe("");
+  });
+
+  it("keeps a disabled project workspace in the rules view", () => {
+    data.hydrateFromUrl({ project_key: "k1" }, false);
+    expect(data.view).toBe("rules");
+    expect(data.selectedProjectKey).toBe("");
     expect(data.rulesMachine).toBe("");
   });
 });
@@ -228,7 +254,7 @@ describe("attach", () => {
     (routerMod.router as unknown as { params: Record<string, string> }).params = {
       project_key: "k1",
     };
-    detach = data.attach();
+    detach = data.attach(true);
     expect(data.view).toBe("inventory");
     expect(data.selectedProjectKey).toBe("k1");
 
@@ -249,7 +275,7 @@ describe("attach", () => {
 
   it("stops re-hydrating and reloading once the returned detach runs", async () => {
     (routerMod.router as unknown as { params: Record<string, string> }).params = {};
-    detach = data.attach();
+    detach = data.attach(true);
     const release = detach;
     detach = null;
     release();
@@ -270,7 +296,7 @@ describe("attach", () => {
       view: "rules",
     };
     data.inventory = makeInventory([makeRow({ project_key: "before" })]);
-    detach = data.attach();
+    detach = data.attach(true);
 
     const afterSession = makeInventory([makeRow({ project_key: "after-session", sessions: 2 })]);
     api.getApiV1DataProjects.mockResolvedValueOnce(afterSession);
@@ -300,14 +326,6 @@ describe("attach", () => {
 
 describe("cancelInFlightReads", () => {
   it("stops loading and a late resolution does not overwrite inventory or loading", async () => {
-    const signals: AbortSignal[] = [];
-    apiRuntimeMocks.callGenerated.mockImplementation(
-      (request: () => Promise<unknown>, signal?: AbortSignal) => {
-        signals.push(signal as AbortSignal);
-        return request();
-      },
-    );
-
     let resolveLoad!: (inventory: DbProjectInventory) => void;
     api.getApiV1DataProjects.mockImplementationOnce(
       () =>
@@ -318,11 +336,17 @@ describe("cancelInFlightReads", () => {
 
     const pending = data.load();
     expect(data.loading).toBe(true);
-    expect(signals[0]?.aborted).toBe(false);
+    expect(
+      vi.mocked(DataService.getApiV1DataProjects).mock.calls[0]?.[1]?.signal
+        ?.aborted,
+    ).toBe(false);
 
     data.cancelInFlightReads();
     expect(data.loading).toBe(false);
-    expect(signals[0]?.aborted).toBe(true);
+    expect(
+      vi.mocked(DataService.getApiV1DataProjects).mock.calls[0]?.[1]?.signal
+        ?.aborted,
+    ).toBe(true);
 
     resolveLoad(makeInventory([makeRow()]));
     await expect(pending).resolves.toBe(false);
@@ -352,6 +376,91 @@ describe("unknownProjectKey", () => {
 });
 
 describe("refreshAfterApply", () => {
+  it("queues an event refresh that expires during the post-apply refresh", async () => {
+    vi.useFakeTimers();
+    data.selectedProjectKey = "k1";
+    (routerMod.router as unknown as { params: Record<string, string> }).params = {
+      project_key: "k1",
+    };
+    detach = data.attach(true);
+
+    let resolveMutationRefresh!: (inventory: DbProjectInventory) => void;
+    let resolveEventRefresh!: (inventory: DbProjectInventory) => void;
+    api.getApiV1DataProjects
+      .mockImplementationOnce(
+        () =>
+          new Promise<DbProjectInventory>((resolve) => {
+            resolveMutationRefresh = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<DbProjectInventory>((resolve) => {
+            resolveEventRefresh = resolve;
+          }),
+      );
+
+    const pending = data.refreshAfterApply("k1", "Merged Target");
+    emitDataChanged?.({ scope: "sessions" });
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect(api.getApiV1DataProjects).toHaveBeenCalledTimes(1);
+
+    resolveMutationRefresh(
+      makeInventory([
+        makeRow({ project_key: "k2", label: "Beta" }),
+        makeRow({ project_key: "k3", label: "Merged Target" }),
+      ]),
+    );
+
+    await expect(pending).resolves.toBe(true);
+    expect(data.selectedProjectKey).toBe("k3");
+    expect(api.getApiV1DataProjects).toHaveBeenCalledTimes(2);
+
+    const latest = makeInventory([
+      makeRow({ project_key: "k3", label: "Merged Target" }),
+      makeRow({ project_key: "k4", label: "Later Project" }),
+    ]);
+    resolveEventRefresh(latest);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(data.inventory).toEqual(latest);
+  });
+
+  it("serializes concurrent mutation refreshes", async () => {
+    let resolveFirst!: (inventory: DbProjectInventory) => void;
+    let resolveSecond!: (inventory: DbProjectInventory) => void;
+    api.getApiV1DataProjects
+      .mockImplementationOnce(
+        () =>
+          new Promise<DbProjectInventory>((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<DbProjectInventory>((resolve) => {
+            resolveSecond = resolve;
+          }),
+      );
+
+    const first = data.loadAfterMutation();
+    const second = data.loadAfterMutation();
+
+    await vi.waitFor(() => expect(api.getApiV1DataProjects).toHaveBeenCalledTimes(1));
+
+    const firstInventory = makeInventory([makeRow({ project_key: "first" })]);
+    resolveFirst(firstInventory);
+    await expect(first).resolves.toBe(true);
+    expect(data.inventory).toEqual(firstInventory);
+    expect(api.getApiV1DataProjects).toHaveBeenCalledTimes(2);
+
+    const secondInventory = makeInventory([makeRow({ project_key: "second" })]);
+    resolveSecond(secondInventory);
+    await expect(second).resolves.toBe(true);
+    expect(data.inventory).toEqual(secondInventory);
+  });
+
   it("keeps the selection when the original key still exists", async () => {
     const inventory = makeInventory([
       makeRow({ project_key: "k1", label: "Alpha" }),
@@ -428,6 +537,7 @@ describe("refreshAfterApply", () => {
     spy.mockClear();
 
     const pending = data.refreshAfterApply("k1", "Merged Target");
+    await vi.waitFor(() => expect(api.getApiV1DataProjects).toHaveBeenCalledTimes(1));
     data.clearSelection();
     spy.mockClear();
 

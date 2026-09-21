@@ -179,6 +179,7 @@ SELECT d.doc_key, d.content
 	if err != nil {
 		return nil, fmt.Errorf("read repair document content: %w", err)
 	}
+	defer contentRows.Close()
 	for contentRows.Next() {
 		var docKey, content string
 		if err := contentRows.Scan(&docKey, &content); err != nil {
@@ -394,6 +395,7 @@ SELECT d.doc_key, d.content, d.content_hash
 	if err != nil {
 		return nil, fmt.Errorf("scan repair documents: %w", err)
 	}
+	defer rows.Close()
 	var pending []kitvec.Pending[string]
 	for rows.Next() {
 		var p kitvec.Pending[string]

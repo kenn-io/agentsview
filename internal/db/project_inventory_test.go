@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"database/sql"
 	"sort"
 	"strings"
@@ -16,7 +15,7 @@ import (
 
 func TestGetProjectInventoryAggregates(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertSession(t, d, "alpha-1", "alpha", func(s *Session) {
 		s.Machine = "m1"
@@ -45,7 +44,7 @@ func TestGetProjectInventoryAggregates(t *testing.T) {
 		s.StartedAt = Ptr("2020-01-01T00:00:00Z")
 		s.EndedAt = Ptr("2020-01-02T00:00:00Z")
 	})
-	require.NoError(t, d.SoftDeleteSession("alpha-trashed"))
+	require.NoError(t, d.SoftDeleteSession(ctx, "alpha-trashed"))
 
 	insertSession(t, d, "beta-1", "beta", func(s *Session) {
 		s.Machine = "m3"
@@ -54,7 +53,7 @@ func TestGetProjectInventoryAggregates(t *testing.T) {
 		s.StartedAt = Ptr("2024-02-01T00:00:00Z")
 	})
 
-	inv, err := d.GetProjectInventory(ctx)
+	inv, err := d.GetProjectInventory(ctx, ProjectDateFilter{})
 	require.NoError(t, err)
 
 	require.Len(t, inv.Projects, 2)
@@ -96,15 +95,50 @@ func TestGetProjectInventoryAggregates(t *testing.T) {
 	assert.Equal(t, export.ProjectKeyForEntry(projects["beta"]), beta.ProjectKey)
 }
 
+func TestProjectDateFilterScopesInventoryAndFolders(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	for _, fixture := range []struct{ id, project, cwd, start, end string }{
+		{"august", "alpha", "/work/august", "2026-08-15T12:00:00Z", "2026-08-15T13:00:00Z"},
+		{"september", "alpha", "/work/september", "2026-09-01T00:00:00Z", "2026-09-01T01:00:00Z"},
+		{"overlap", "beta", "/other/overlap", "2026-07-31T23:00:00Z", "2026-08-01T01:00:00Z"},
+		{"july", "old", "/old/july", "2026-07-01T00:00:00Z", "2026-07-01T01:00:00Z"},
+	} {
+		insertSession(t, d, fixture.id, fixture.project, func(s *Session) {
+			s.Cwd = fixture.cwd
+			s.StartedAt = &fixture.start
+			s.EndedAt = &fixture.end
+		})
+	}
+	filter := ProjectDateFilter{DateFrom: "2026-08-01", DateTo: "2026-08-31", Timezone: "UTC"}
+	inv, err := d.GetProjectInventory(ctx, filter)
+	require.NoError(t, err)
+	require.Len(t, inv.Projects, 2)
+	assert.Equal(t, 2, inv.TotalSessions)
+	assert.Equal(t, "alpha", inv.Projects[0].Label)
+	assert.Equal(t, 1, inv.Projects[0].Sessions)
+	assert.Equal(t, "beta", inv.Projects[1].Label)
+	candidates, err := d.ListArchiveWorktreeCandidates(ctx, ArchiveWorktreeCandidateRequest{
+		ProjectLabel: "alpha", ProjectKey: inv.Projects[0].ProjectKey, ProjectDateFilter: filter,
+	})
+	require.NoError(t, err)
+	require.Len(t, candidates, 1)
+	assert.Equal(t, "/work/august", candidates[0].SuggestedPrefix)
+	assert.Equal(t, 1, candidates[0].ContributingSessions)
+	all, err := d.GetProjectInventory(ctx, ProjectDateFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, 4, all.TotalSessions)
+}
+
 func TestGetProjectInventoryKeepsSanitizedLabelCollisionsDistinct(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertSession(t, d, "private-a-1", "/private/repos/alpha")
 	insertSession(t, d, "private-b-1", "/private/repos/beta")
 	insertSession(t, d, "private-b-2", "/private/repos/beta")
 
-	inv, err := d.GetProjectInventory(ctx)
+	inv, err := d.GetProjectInventory(ctx, ProjectDateFilter{})
 	require.NoError(t, err)
 	require.Len(t, inv.Projects, 2)
 	assert.Equal(t, 2, inv.TotalProjects)
@@ -125,7 +159,7 @@ func TestGetProjectInventoryKeepsSanitizedLabelCollisionsDistinct(t *testing.T) 
 
 func TestGetProjectInventoryIgnoresEmptyTimestampStrings(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertSession(t, d, "legacy-1", "alpha", func(s *Session) {
 		s.StartedAt = Ptr("2024-01-05T00:00:00Z")
@@ -134,11 +168,11 @@ func TestGetProjectInventoryIgnoresEmptyTimestampStrings(t *testing.T) {
 	// Legacy rows can hold '' instead of NULL in the TEXT timestamp
 	// columns; an empty string sorts before every real timestamp and would
 	// corrupt MIN(started_at) without the NULLIF guard.
-	_, err := d.getWriter().Exec(
+	_, err := d.getWriter().Exec(ctx,
 		`UPDATE sessions SET started_at = '', ended_at = '' WHERE id = 'legacy-2'`)
 	require.NoError(t, err)
 
-	inv, err := d.GetProjectInventory(ctx)
+	inv, err := d.GetProjectInventory(ctx, ProjectDateFilter{})
 	require.NoError(t, err)
 
 	require.Len(t, inv.Projects, 1)
@@ -154,7 +188,7 @@ func TestGetProjectInventoryIgnoresEmptyTimestampStrings(t *testing.T) {
 
 func TestGetProjectInventoryCwdNormalization(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertSession(t, d, "win-1", "winproj", func(s *Session) {
 		s.Cwd = `C:\w\repo`
@@ -165,7 +199,7 @@ func TestGetProjectInventoryCwdNormalization(t *testing.T) {
 		s.StartedAt = Ptr("2024-01-02T00:00:00Z")
 	})
 
-	inv, err := d.GetProjectInventory(ctx)
+	inv, err := d.GetProjectInventory(ctx, ProjectDateFilter{})
 	require.NoError(t, err)
 
 	require.Len(t, inv.Projects, 1)
@@ -176,7 +210,7 @@ func TestGetProjectInventoryCwdNormalization(t *testing.T) {
 
 func TestGetProjectInventoryAnnotations(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertSession(t, d, "alpha-1", "alpha", func(s *Session) {
 		s.StartedAt = Ptr("2024-01-01T00:00:00Z")
@@ -229,7 +263,7 @@ func TestGetProjectInventoryAnnotations(t *testing.T) {
 		s.StartedAt = Ptr("2024-01-02T00:00:00Z")
 	})
 
-	inv, err := d.GetProjectInventory(ctx)
+	inv, err := d.GetProjectInventory(ctx, ProjectDateFilter{})
 	require.NoError(t, err)
 
 	byLabel := map[string]ProjectInventoryRow{}
@@ -261,7 +295,7 @@ func TestGetProjectInventoryAnnotations(t *testing.T) {
 // must use the sessions machine index rather than a full table scan.
 func TestGetProjectInventoryManyDistinctProjects(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	// Exceed SQLite's bind-variable budget (32766) with distinct visible
 	// project labels: the inventory feeds every raw label to
 	// BuildProjectIdentityMap at once, so the identity-observation lookup
@@ -269,7 +303,7 @@ func TestGetProjectInventoryManyDistinctProjects(t *testing.T) {
 	const projectCount = 33000
 	seedDistinctProjectSessions(t, d, projectCount)
 
-	inv, err := d.GetProjectInventory(ctx)
+	inv, err := d.GetProjectInventory(ctx, ProjectDateFilter{})
 	require.NoError(t, err,
 		"inventory must not expand one bind variable per distinct project")
 	assert.Equal(t, projectCount, inv.TotalProjects)
@@ -280,8 +314,8 @@ func TestGetProjectInventoryManyDistinctProjects(t *testing.T) {
 func TestProjectInventorySingleAggregationPass(t *testing.T) {
 	t.Run("aggregation query is a single sessions scan", func(t *testing.T) {
 		d := testDB(t)
-		rows, err := d.getReader().Query(
-			"EXPLAIN QUERY PLAN " + projectInventoryAggregateQuery(),
+		rows, err := d.getReader().Query(t.Context(),
+			"EXPLAIN QUERY PLAN "+projectInventoryAggregateQuery(),
 		)
 		require.NoError(t, err)
 		defer rows.Close()
@@ -301,7 +335,7 @@ func TestProjectInventorySingleAggregationPass(t *testing.T) {
 	t.Run("candidate query uses the sessions machine index", func(t *testing.T) {
 		d := testDB(t)
 		query, args := projectInventoryCandidateQuery([]string{"ws"})
-		rows, err := d.getReader().Query("EXPLAIN QUERY PLAN "+query, args...)
+		rows, err := d.getReader().Query(t.Context(), "EXPLAIN QUERY PLAN "+query, args...)
 		require.NoError(t, err)
 		defer rows.Close()
 

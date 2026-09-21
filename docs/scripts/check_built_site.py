@@ -31,6 +31,7 @@ DOCS_PAGES = [
     "quality",
     "commands",
     "session-export",
+    "conversation-export",
     "reporting-export",
     "stats",
     "session-api",
@@ -43,6 +44,7 @@ DOCS_PAGES = [
     "pg-sync",
     "hosted-raw-sync",
     "duckdb",
+    "clickhouse-sync",
 ]
 
 ROUTES = ["/", "/guide/", "/docs/"] + [f"/docs/{page}/" for page in DOCS_PAGES]

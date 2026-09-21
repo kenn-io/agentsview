@@ -3,12 +3,12 @@
 package duckdb
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // syncedStoreFromWrites seeds a local SQLite DB with the given batch writes and
@@ -16,11 +16,12 @@ import (
 // against the DuckDB dialect (CAST placeholders, COALESCE sentinel).
 func syncedStoreFromWrites(t *testing.T, writes []db.SessionBatchWrite) *Store {
 	t.Helper()
-	ctx := context.Background()
+
+	ctx := t.Context()
 	local := newLocalDB(t)
-	_, err := local.WriteSessionBatchAtomic(writes)
+	_, err := local.WriteSessionBatchAtomic(ctx, writes)
 	require.NoError(t, err)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -48,7 +49,7 @@ func sortSeedSession(id, project, ts string, signals db.SessionSignalUpdate) db.
 
 func duckWalk(t *testing.T, store *Store, f db.SessionFilter) []string {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	var got []string
 	seen := map[string]bool{}
 	cursor := ""
@@ -130,7 +131,7 @@ func TestDuckDBSort_MultiKey(t *testing.T) {
 		{Key: "started", Descending: &desc},
 	}
 
-	full, err := store.ListSessions(context.Background(), db.SessionFilter{
+	full, err := store.ListSessions(t.Context(), db.SessionFilter{
 		Project: "mk", Sort: sortKeys, Limit: 100,
 	})
 	require.NoError(t, err)

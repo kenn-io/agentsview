@@ -194,7 +194,10 @@ test.describe("Generated insights", () => {
     const generate = page
       .getByRole("region", { name: "Generated insights" })
       .getByRole("button", { name: "Generate" });
-    await expect(generate).toHaveAttribute("title", "Generation is disabled in read-only mode");
+    await expect(generate).toHaveAttribute(
+      "title",
+      "Insight generation is unavailable for this archive",
+    );
     await expect(generate).toBeDisabled();
   });
 

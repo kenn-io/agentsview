@@ -64,6 +64,7 @@ type exportSessionsConfig struct {
 
 type exportSessionsOutput struct {
 	SchemaVersion int                               `json:"schema_version"`
+	ArchiveID     string                            `json:"archive_id"`
 	DatabaseID    string                            `json:"database_id"`
 	Cursor        exportSessionsOutputCursor        `json:"cursor"`
 	Pricing       any                               `json:"pricing"`
@@ -74,6 +75,7 @@ type exportSessionsOutput struct {
 type exportSessionsMetaOutput struct {
 	Type          string                            `json:"type"`
 	SchemaVersion int                               `json:"schema_version"`
+	ArchiveID     string                            `json:"archive_id"`
 	DatabaseID    string                            `json:"database_id"`
 	Cursor        exportSessionsOutputCursor        `json:"cursor"`
 	Pricing       any                               `json:"pricing"`
@@ -106,10 +108,12 @@ func newExportCommandWithDeps(deps exportReportingDeps) *cobra.Command {
 		},
 	}
 	cmd.AddCommand(newExportSessionsCommand())
+	cmd.AddCommand(newExportConversationsCommand())
 	cmd.AddCommand(newExportStatusCommand())
 	cmd.AddCommand(newExportHourCommand(deps))
 	cmd.AddCommand(newExportDayCommand(deps))
 	cmd.AddCommand(newExportDigestCommand(deps))
+	cmd.AddCommand(newExportRangeCommand(deps))
 	return cmd
 }
 
@@ -124,7 +128,7 @@ func newExportStatusCommand() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("loading config: %w", err)
 			}
-			database, err := openExportReadOnlyDB(appCfg)
+			database, err := openExportReadOnlyDB(cmd.Context(), appCfg)
 			if err != nil {
 				return err
 			}
@@ -147,21 +151,21 @@ func newExportStatusCommand() *cobra.Command {
 	}
 }
 
-func openExportReadOnlyDB(appCfg config.Config) (*db.DB, error) {
-	database, err := openReadOnlyDB(appCfg)
+func openExportReadOnlyDB(ctx context.Context, appCfg config.Config) (*db.DB, error) {
+	database, err := openReadOnlyDB(ctx, appCfg)
 	if err == nil {
 		return database, nil
 	}
 	if !db.IsSchemaUpgradeRequired(err) {
 		return nil, fmt.Errorf("open local archive: %w", err)
 	}
-	if upgradeErr := db.UpgradeExportSchemaInPlace(
+	if upgradeErr := db.UpgradeExportSchemaInPlace(ctx,
 		appCfg.DBPath, err,
 	); upgradeErr != nil {
 		return nil, fmt.Errorf(
 			"upgrade local archive schema for export: %w", upgradeErr)
 	}
-	database, err = openReadOnlyDB(appCfg)
+	database, err = openReadOnlyDB(ctx, appCfg)
 	if err != nil {
 		return nil, fmt.Errorf("reopen upgraded local archive: %w", err)
 	}
@@ -169,6 +173,7 @@ func openExportReadOnlyDB(appCfg config.Config) (*db.DB, error) {
 }
 
 func newExportSessionsCommand() *cobra.Command {
+	var profile *SyncConfig
 	cfg := exportSessionsConfig{
 		Limit:  db.MaxSessionLimit,
 		Format: exportSessionsFormat("json"),
@@ -179,6 +184,7 @@ func newExportSessionsCommand() *cobra.Command {
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			defer startSyncProfile(*profile)()
 			cfg.MinToolFailuresSet = cmd.Flags().Changed("min-tool-failures")
 			if cfg.JSON {
 				if cmd.Flags().Changed("format") && cfg.Format != "json" {
@@ -189,6 +195,7 @@ func newExportSessionsCommand() *cobra.Command {
 			return runExportSessions(cmd, cfg)
 		},
 	}
+	profile = bindExportProfile(cmd)
 
 	flags := cmd.Flags()
 	flags.StringVar(&cfg.Project, "project", "",
@@ -259,7 +266,7 @@ func runExportSessions(cmd *cobra.Command, cfg exportSessionsConfig) error {
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
-	database, err := openExportReadOnlyDB(appCfg)
+	database, err := openExportReadOnlyDB(cmd.Context(), appCfg)
 	if err != nil {
 		return err
 	}
@@ -297,12 +304,13 @@ func runExportSessions(cmd *cobra.Command, cfg exportSessionsConfig) error {
 		return err
 	}
 
-	output := buildExportSessionsOutput(databaseID, pages)
+	output := buildExportSessionsOutput(pages)
 	enc := jsontext.NewEncoder(cmd.OutOrStdout())
 	if cfg.Format == "ndjson" {
 		if err := json.MarshalEncode(enc, exportSessionsMetaOutput{
 			Type:          "meta",
 			SchemaVersion: output.SchemaVersion,
+			ArchiveID:     output.ArchiveID,
 			DatabaseID:    output.DatabaseID,
 			Cursor:        output.Cursor,
 			Pricing:       output.Pricing,
@@ -380,6 +388,13 @@ func collectExportSessionPages(
 		Limit:           cfg.Limit,
 		Format:          string(cfg.Format),
 	}
+	if cfg.Cursor == "" {
+		var err error
+		opts.Filter.Machine, err = db.ResolveMachineFilter(ctx, database, opts.Filter.Machine)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if cfg.All {
 		return database.ExportAllSessionSummaries(ctx, opts)
 	}
@@ -433,18 +448,19 @@ func splitExportSessionsCSV(s string) []string {
 }
 
 func buildExportSessionsOutput(
-	databaseID string, pages []db.SessionExportResult,
+	pages []db.SessionExportResult,
 ) exportSessionsOutput {
 	var pricing *export.PricingBlock
 	output := exportSessionsOutput{
 		SchemaVersion: export.SessionSummarySchemaVersion,
-		DatabaseID:    databaseID,
 		Cursor:        exportSessionsOutputCursor{},
 		Pricing:       map[string]any{},
 		Projects:      map[string]export.ProjectMapEntry{},
 		Sessions:      []db.SessionSummaryRow{},
 	}
 	for _, page := range pages {
+		output.ArchiveID = page.ArchiveID
+		output.DatabaseID = page.DatabaseID
 		if output.SchemaVersion == export.SessionSummarySchemaVersion &&
 			page.SchemaVersion != 0 {
 			output.SchemaVersion = page.SchemaVersion
@@ -536,8 +552,7 @@ func cloneExportSessionsPricing(
 	clone.Models = make(map[string]export.ModelPricingProvenance,
 		len(block.Models))
 	for model, provenance := range block.Models {
-		clone.Models[model] =
-			cloneExportSessionsModelProvenance(provenance)
+		clone.Models[model] = cloneExportSessionsModelProvenance(provenance)
 	}
 	return &clone
 }

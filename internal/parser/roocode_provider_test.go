@@ -37,7 +37,7 @@ func TestRooCodeDiscoveryUnreadableTaskDirFails(t *testing.T) {
 	paths, err = rooCodeDiscoverPaths(t, provider)
 	require.Error(t, err,
 		"an unreadable task directory must not be skipped as a deleted session")
-	assert.ErrorIs(t, err, os.ErrPermission)
+	require.ErrorIs(t, err, os.ErrPermission)
 	assert.Empty(t, paths)
 }
 
@@ -100,7 +100,7 @@ func TestRooCodeDiscoveryUnreadableTasksDirFails(t *testing.T) {
 	paths, err = rooCodeDiscoverPaths(t, provider)
 	require.Error(t, err,
 		"an unreadable tasks directory must not stream an authoritative empty discovery")
-	assert.ErrorIs(t, err, os.ErrPermission)
+	require.ErrorIs(t, err, os.ErrPermission)
 	assert.Empty(t, paths)
 
 	_, err = provider.Discover(t.Context())

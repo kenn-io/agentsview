@@ -17,7 +17,7 @@ import (
 func TestRunDeferredStartupSyncFallbackPerformsSkippedSync(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
 	reconciled := make(chan struct{}, 1)
-	engine := syncpkg.NewEngine(database, syncpkg.EngineConfig{
+	engine := syncpkg.NewEngine(t.Context(), database, syncpkg.EngineConfig{
 		Machine:                 "local",
 		DeferStartupMaintenance: true,
 		OnStartupReconciled: func(syncpkg.SyncStats, error) {
@@ -36,7 +36,7 @@ func TestRunDeferredStartupSyncFallbackPerformsSkippedSync(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.True(t, ran)
-	assert.False(t, engine.LastSyncStartedAt().IsZero(),
+	assert.False(t, engine.LastSyncStartedAt(t.Context()).IsZero(),
 		"timeout fallback must perform the skipped local sync")
 	select {
 	case <-reconciled:
@@ -50,7 +50,7 @@ func TestRunDeferredStartupSyncFallbackPerformsSkippedSync(t *testing.T) {
 // reconciliation, the deferred fallback performs no sync.
 func TestRunDeferredStartupSyncFallbackSkipsWhenAlreadyReconciled(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
-	engine := syncpkg.NewEngine(database, syncpkg.EngineConfig{
+	engine := syncpkg.NewEngine(t.Context(), database, syncpkg.EngineConfig{
 		Machine:                 "local",
 		DeferStartupMaintenance: true,
 	})
@@ -66,7 +66,7 @@ func TestRunDeferredStartupSyncFallbackSkipsWhenAlreadyReconciled(t *testing.T) 
 
 	require.NoError(t, err)
 	assert.False(t, ran, "already-reconciled startup must skip the deferred sync")
-	assert.True(t, engine.LastSyncStartedAt().IsZero(),
+	assert.True(t, engine.LastSyncStartedAt(t.Context()).IsZero(),
 		"no redundant local sync should run")
 }
 
@@ -79,7 +79,7 @@ func TestForegroundSyncRunnerReconcilesStartup(t *testing.T) {
 	cfg := testConfigWithClaudeFixture(t)
 	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
 	opened := make(chan struct{}, 1)
-	engine := syncpkg.NewEngine(database, syncpkg.EngineConfig{
+	engine := syncpkg.NewEngine(t.Context(), database, syncpkg.EngineConfig{
 		AgentDirs:               cfg.AgentDirs,
 		Machine:                 "local",
 		DeferStartupMaintenance: true,
@@ -96,7 +96,7 @@ func TestForegroundSyncRunnerReconcilesStartup(t *testing.T) {
 	})
 	t.Cleanup(engine.Close)
 
-	runner := newForegroundSyncRunner(context.Background(), cfg, engine, database, nil)
+	runner := newForegroundSyncRunner(t.Context(), cfg, engine, database, nil)
 	stats, err := runner(t.Context(), nil)
 
 	require.NoError(t, err)

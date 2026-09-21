@@ -22,6 +22,8 @@ describe("CompactBoundaryDivider", () => {
       target: document.body,
       props: {
         message: {
+          has_context_tokens: false,
+          has_output_tokens: false,
           id: 1,
           session_id: "session-1",
           ordinal: 1,
@@ -61,6 +63,8 @@ describe("CompactBoundaryDivider", () => {
       target: document.body,
       props: {
         message: {
+          has_context_tokens: false,
+          has_output_tokens: false,
           id: 1,
           session_id: "session-1",
           ordinal: 1,
@@ -95,6 +99,8 @@ describe("CompactBoundaryDivider", () => {
       target: document.body,
       props: {
         message: {
+          has_context_tokens: false,
+          has_output_tokens: false,
           id: 1,
           session_id: "session-1",
           ordinal: 1,

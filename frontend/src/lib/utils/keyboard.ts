@@ -3,6 +3,7 @@ import { sessions } from "../stores/sessions.svelte.js";
 import { starred } from "../stores/starred.svelte.js";
 import { sync } from "../stores/sync.svelte.js";
 import { router } from "../stores/router.svelte.js";
+import { ignoreShortcut } from "../search/find-input.js";
 import { inSessionSearch } from "../stores/inSessionSearch.svelte.js";
 import { messages } from "../stores/messages.svelte.js";
 import { getExportUrl } from "../api/client.js";
@@ -35,7 +36,7 @@ function isInputFocused(): boolean {
 
 function isFindInput(): boolean {
   const el = document.activeElement;
-  return el instanceof HTMLInputElement && el.getAttribute("aria-label") === "Search query";
+  return el instanceof HTMLInputElement && el.closest(".kit-find-bar") !== null;
 }
 
 interface ShortcutOptions {
@@ -44,12 +45,12 @@ interface ShortcutOptions {
 }
 
 function handleEscape(): void {
-  if (inSessionSearch.isOpen) {
-    inSessionSearch.close();
-    return;
-  }
   if (ui.activeModal !== null) {
     ui.activeModal = null;
+    return;
+  }
+  if (inSessionSearch.isOpen) {
+    inSessionSearch.close();
     return;
   }
   if (sessions.activeSessionId && !isInputFocused()) {
@@ -80,6 +81,7 @@ export function registerShortcuts(opts: ShortcutOptions): () => void {
   }
 
   function handler(e: KeyboardEvent) {
+    if (ignoreShortcut(e)) return;
     const meta = e.metaKey || e.ctrlKey;
 
     // Cmd+K — always works
@@ -95,7 +97,7 @@ export function registerShortcuts(opts: ShortcutOptions): () => void {
     // typeahead) where native find should work normally.
     if (
       meta &&
-      e.key === "f" &&
+      e.key.toLowerCase() === "f" &&
       router.route === "sessions" &&
       sessions.activeSessionId &&
       ui.activeModal === null &&
@@ -106,13 +108,13 @@ export function registerShortcuts(opts: ShortcutOptions): () => void {
       return;
     }
 
-    // Cmd+G / Cmd+Shift+G — next/prev match while find is
+    // Cmd+G / Cmd+Shift+G and F3 / Shift+F3 — next/prev while find is
     // open on the session view. Skip when a modal is open or
     // an unrelated input has focus.
     if (
-      meta &&
-      e.key === "g" &&
+      ((meta && e.key.toLowerCase() === "g") || (!meta && !e.altKey && e.key === "F3")) &&
       router.route === "sessions" &&
+      sessions.activeSessionId &&
       inSessionSearch.isOpen &&
       ui.activeModal === null &&
       (!isInputFocused() || isFindInput())
@@ -123,6 +125,20 @@ export function registerShortcuts(opts: ShortcutOptions): () => void {
       } else {
         inSessionSearch.next();
       }
+      return;
+    }
+
+    if (
+      meta &&
+      e.key.toLowerCase() === "g" &&
+      !e.shiftKey &&
+      !e.altKey &&
+      ui.activeModal === null &&
+      !isInputFocused() &&
+      !(router.route === "sessions" && inSessionSearch.isOpen)
+    ) {
+      e.preventDefault();
+      ui.activeModal = "goToSession";
       return;
     }
 
@@ -147,6 +163,9 @@ export function registerShortcuts(opts: ShortcutOptions): () => void {
 
     // Esc — always works
     if (e.key === "Escape") {
+      // The palette handles Escape after its nested popovers have had a
+      // chance to claim it at document level.
+      if (ui.activeModal === "commandPalette") return;
       handleEscape();
       return;
     }
@@ -220,7 +239,7 @@ export function registerShortcuts(opts: ShortcutOptions): () => void {
       },
       c: () => {
         const session = sessions.activeSession;
-        if (session && supportsResume(session.agent) && !session.id.includes("~")) {
+        if (session && supportsResume(session.agent)) {
           // Copy a runnable resume command. Cursor needs the backend cwd
           // applied client-side so the copied command is self-contained.
           SessionsService.postApiV1SessionsByIdResume({ id: session.id }, {

@@ -89,8 +89,8 @@ func TestRewriteManifestForImportClearsLocalStateAndPrefixesRelationships(
 	assert.Equal(t, contractOrigin+"~parent", *write.Session.ParentSessionID)
 	assert.True(t, write.Session.HasToolCalls)
 	assert.True(t, write.Session.HasContextData)
-	assert.Equal(
-		t, m.SessionQualitySignals.dbQualitySignals(),
+	assert.Equal(t,
+		m.SessionQualitySignals.dbQualitySignals(),
 		write.Session.StoredQualitySignals(),
 	)
 	assert.True(t, write.ReplaceMessages)
@@ -106,8 +106,8 @@ func TestRewriteManifestForImportClearsLocalStateAndPrefixesRelationships(
 	assert.Equal(t, importedID, call.SessionID)
 	assert.Equal(t, contractOrigin+"~child", call.SubagentSessionID)
 	require.Len(t, call.ResultEvents, 1)
-	assert.Equal(
-		t, contractOrigin+"~existing",
+	assert.Equal(t,
+		contractOrigin+"~existing",
 		call.ResultEvents[0].SubagentSessionID,
 	)
 
@@ -116,6 +116,27 @@ func TestRewriteManifestForImportClearsLocalStateAndPrefixesRelationships(
 	assert.Equal(t, m.UsageEvents[0].Cost, write.UsageEvents[0].Cost)
 	assert.Empty(t, write.Signals.SecretsRulesVersion)
 	assert.Zero(t, write.Signals.SecretLeakCount)
+}
+
+func TestDowngradeImportedAssetReferencesKeepsInlineImages(t *testing.T) {
+	content := `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"},{"byte_size":3,"image_ref":"asset://abc.png","media_type":"image/png","sha256":"abc","text":"![Image: image/png, 3 bytes](asset://abc.png)","type":"agentsview_image","version":1}]`
+	messages := []db.Message{{ToolCalls: []db.ToolCall{{
+		ResultContent:       content,
+		ResultContentLength: len(content),
+		ResultEvents: []db.ToolResultEvent{{
+			Content:       content,
+			ContentLength: len(content),
+		}},
+	}}}}
+
+	downgradeImportedAssetReferences(messages)
+
+	call := messages[0].ToolCalls[0]
+	assert.Contains(t, call.ResultContent, "data:image/png;base64,AAEC")
+	assert.NotContains(t, call.ResultContent, "image_ref")
+	assert.NotContains(t, call.ResultContent, "asset://")
+	assert.Contains(t, call.ResultEvents[0].Content, "data:image/png;base64,AAEC")
+	assert.NotContains(t, call.ResultEvents[0].Content, "image_ref")
 }
 
 func TestLoadImportedSessionCompleteClosure(t *testing.T) {
@@ -148,8 +169,9 @@ func TestLoadImportedSessionDefersOversizedFutureSegment(t *testing.T) {
 	store := newTestArtifactStore(t)
 	var segment strings.Builder
 	for range productionArtifactLimits().segmentMessages + 1 {
-		segment.WriteString(
-			"{\"content\":\"future\",\"ordinal\":0,\"role\":\"user\",\"v\":4}\n",
+		_, _ = fmt.Fprintf(&segment,
+			"{\"content\":\"future\",\"ordinal\":0,\"role\":\"user\",\"v\":%d}\n",
+			messageSegmentFormatVersion+1,
 		)
 	}
 	segmentHash := createHashedImportArtifact(
@@ -171,7 +193,7 @@ func TestLoadImportedSessionDefersOversizedFutureSegment(t *testing.T) {
 	var future *futureArtifactVersionError
 	require.ErrorAs(t, err, &future)
 	assert.Equal(t, Kind(KindSegments), future.Kind)
-	assert.Equal(t, 4, future.Version)
+	assert.Equal(t, messageSegmentFormatVersion+1, future.Version)
 }
 
 func TestLoadImportedSessionDefersMissingAndFutureDependencies(t *testing.T) {
@@ -191,6 +213,8 @@ func TestLoadImportedSessionDefersMissingAndFutureDependencies(t *testing.T) {
 		{
 			name: "missing segment",
 			prepare: func(t *testing.T, store ArtifactStore) string {
+				t.Helper()
+
 				m := importTestManifest("session")
 				m.Segments = []string{strings.Repeat("b", 64)}
 				return createImportTestManifest(t, store, m, false)
@@ -199,6 +223,8 @@ func TestLoadImportedSessionDefersMissingAndFutureDependencies(t *testing.T) {
 		{
 			name: "future manifest",
 			prepare: func(t *testing.T, store ArtifactStore) string {
+				t.Helper()
+
 				body := []byte(`{"origin":"contract-a1b2c3","v":5}`)
 				return createHashedImportArtifact(
 					t, store, KindManifests, ".json", body,
@@ -209,9 +235,12 @@ func TestLoadImportedSessionDefersMissingAndFutureDependencies(t *testing.T) {
 		{
 			name: "future segment",
 			prepare: func(t *testing.T, store ArtifactStore) string {
-				segment := []byte(
-					"{\"content\":\"future\",\"ordinal\":0,\"role\":\"user\",\"v\":4}\n",
-				)
+				t.Helper()
+
+				segment := []byte(fmt.Sprintf(
+					"{\"content\":\"future\",\"ordinal\":0,\"role\":\"user\",\"v\":%d}\n",
+					messageSegmentFormatVersion+1,
+				))
 				segmentHash := createHashedImportArtifact(
 					t, store, KindSegments, ".ndjson", segment,
 				)
@@ -224,6 +253,8 @@ func TestLoadImportedSessionDefersMissingAndFutureDependencies(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			database := testExportDB(t)
 			store := newTestArtifactStore(t)
 			manifestHash := tc.prepare(t, store)
@@ -258,6 +289,7 @@ func TestLoadImportedSessionQuarantinesInvalidStatDependency(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			database := testExportDB(t)
 			base := newTestArtifactStore(t)
 			m := importTestManifest("session")
@@ -303,6 +335,8 @@ func TestLoadImportedSessionQuarantinesPersistenceInvariantViolations(
 		{
 			name: "duplicate message ordinals",
 			prepare: func(t *testing.T, store ArtifactStore) (manifest, string) {
+				t.Helper()
+
 				m := importTestManifest("session")
 				hash := createImportTestClosure(t, store, &m, []db.Message{
 					{Ordinal: 0, Role: "user", Content: "one"},
@@ -314,6 +348,8 @@ func TestLoadImportedSessionQuarantinesPersistenceInvariantViolations(
 		{
 			name: "manifest message count mismatch",
 			prepare: func(t *testing.T, store ArtifactStore) (manifest, string) {
+				t.Helper()
+
 				m := importTestManifest("session")
 				segment, err := encodeSegment([]db.Message{{
 					Ordinal: 0, Role: "user", Content: "one",
@@ -332,6 +368,8 @@ func TestLoadImportedSessionQuarantinesPersistenceInvariantViolations(
 		{
 			name: "manifest user message count mismatch",
 			prepare: func(t *testing.T, store ArtifactStore) (manifest, string) {
+				t.Helper()
+
 				m := importTestManifest("session")
 				createImportTestClosure(t, store, &m, []db.Message{{
 					Ordinal: 0, Role: "user", Content: "one",
@@ -344,6 +382,8 @@ func TestLoadImportedSessionQuarantinesPersistenceInvariantViolations(
 		{
 			name: "duplicate nonempty usage key",
 			prepare: func(t *testing.T, store ArtifactStore) (manifest, string) {
+				t.Helper()
+
 				m := importTestManifest("session")
 				m.UsageEvents = []artifactUsageEvent{
 					{Source: "provider", DedupKey: "same"},
@@ -358,6 +398,7 @@ func TestLoadImportedSessionQuarantinesPersistenceInvariantViolations(
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			database := testExportDB(t)
 			store := newTestArtifactStore(t)
 			_, manifestHash := tc.prepare(t, store)
@@ -388,6 +429,8 @@ func TestLoadImportedSessionQuarantinesInvalidCompleteDependency(t *testing.T) {
 		{
 			name: "wrong manifest origin",
 			prepare: func(t *testing.T, store ArtifactStore) (string, Ref) {
+				t.Helper()
+
 				m := importTestManifest("session")
 				m.Origin = "another-a1b2c3"
 				body, err := canonicalJSON(m)
@@ -403,6 +446,8 @@ func TestLoadImportedSessionQuarantinesInvalidCompleteDependency(t *testing.T) {
 		{
 			name: "native ID contains separator",
 			prepare: func(t *testing.T, store ArtifactStore) (string, Ref) {
+				t.Helper()
+
 				m := importTestManifest("bad~session")
 				m.Session.ID = "bad~session"
 				body, err := canonicalJSON(m)
@@ -418,6 +463,8 @@ func TestLoadImportedSessionQuarantinesInvalidCompleteDependency(t *testing.T) {
 		{
 			name: "invalid segment",
 			prepare: func(t *testing.T, store ArtifactStore) (string, Ref) {
+				t.Helper()
+
 				segment := []byte("{not-json}\n")
 				segmentHash := createHashedImportArtifact(
 					t, store, KindSegments, ".ndjson", segment,
@@ -433,6 +480,7 @@ func TestLoadImportedSessionQuarantinesInvalidCompleteDependency(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			database := testExportDB(t)
 			store := newTestArtifactStore(t)
 			manifestHash, invalidRef := tc.prepare(t, store)
@@ -557,6 +605,7 @@ func TestLoadImportedSessionAggregateBoundaries(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			for _, count := range []int{2, 3} {
 				database := testExportDB(t)
 				store := newTestArtifactStore(t)
@@ -582,6 +631,8 @@ func TestLoadImportedSessionAggregateBoundaries(t *testing.T) {
 	}
 
 	t.Run("decoded bytes", func(t *testing.T) {
+		t.Parallel()
+
 		database := testExportDB(t)
 		store := newTestArtifactStore(t)
 		m := importTestManifest("session")

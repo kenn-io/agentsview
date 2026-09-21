@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -96,7 +97,7 @@ func NormalizeSessionPageOptions(options SessionPageOptions) (SessionPageOptions
 		options.Limit = MaxSessionPageLimit
 	}
 	if options.Offset < 0 {
-		return SessionPageOptions{}, fmt.Errorf("session page offset must be non-negative")
+		return SessionPageOptions{}, errors.New("session page offset must be non-negative")
 	}
 	if options.Sort == "" {
 		options.Sort = SessionSortAgentMinutes
@@ -117,7 +118,7 @@ func NormalizeSessionPageOptions(options SessionPageOptions) (SessionPageOptions
 	}
 	if options.BucketRange != nil &&
 		(options.BucketRange.Start < 0 || options.BucketRange.End <= options.BucketRange.Start) {
-		return SessionPageOptions{}, fmt.Errorf("invalid activity session bucket range")
+		return SessionPageOptions{}, errors.New("invalid activity session bucket range")
 	}
 	return options, nil
 }
@@ -138,14 +139,14 @@ func ResolveSessionPageOptions(
 		return SessionPageOptions{}, err
 	}
 	if presence.Sort && requested.Sort != normalizedContinuation.Sort {
-		return SessionPageOptions{}, fmt.Errorf("activity session sort does not match cursor")
+		return SessionPageOptions{}, errors.New("activity session sort does not match cursor")
 	}
 	if presence.Direction && requested.Direction != normalizedContinuation.Direction {
-		return SessionPageOptions{}, fmt.Errorf("activity session direction does not match cursor")
+		return SessionPageOptions{}, errors.New("activity session direction does not match cursor")
 	}
 	if presence.BucketRange &&
 		!sameSessionBucketRange(requested.BucketRange, normalizedContinuation.BucketRange) {
-		return SessionPageOptions{}, fmt.Errorf("activity session bucket range does not match cursor")
+		return SessionPageOptions{}, errors.New("activity session bucket range does not match cursor")
 	}
 	requested.Sort = normalizedContinuation.Sort
 	requested.Direction = normalizedContinuation.Direction
@@ -256,7 +257,7 @@ func PageSessionsFromOrder(
 	page.Sessions = make([]SessionRow, 0, end-options.Offset)
 	for _, index := range order[options.Offset:end] {
 		if index < 0 || index >= len(rows) {
-			return SessionPage{}, fmt.Errorf("activity session order index out of range")
+			return SessionPage{}, errors.New("activity session order index out of range")
 		}
 		page.Sessions = append(page.Sessions, rows[index])
 	}

@@ -49,7 +49,7 @@ func usageTimezoneIdentityFor(
 	location *time.Location, _ []usageQueryInterval,
 ) usageTimezoneIdentity {
 	if location == nil {
-		location = time.Local
+		location = time.Local //nolint:forbidigo // The report cache identifies the local calendar timezone used for date buckets.
 	}
 	// Production locations come from time.LoadLocation or time.Local, so one
 	// zone name maps to one rule set for the life of the process. Keying by
@@ -97,7 +97,7 @@ func usageTimezoneRuleFingerprint(name string, location *time.Location) string {
 
 func usageLocationName(location *time.Location) string {
 	name := location.String()
-	if location != time.Local || (name != "" && name != "Local") {
+	if location != time.Local || (name != "" && name != "Local") { //nolint:forbidigo // The report cache identifies the local calendar timezone used for date buckets.
 		return name
 	}
 	resolved, err := filepath.EvalSymlinks("/etc/localtime")
@@ -312,8 +312,7 @@ func (c *usageRollupCoordinator) ensureNow(
 			return nil, metrics, err
 		}
 		if attempt >= usageRollupMaxBuildAttempts {
-			return nil, metrics, fmt.Errorf(
-				"usage rollup build kept losing dedup classification races")
+			return nil, metrics, errors.New("usage rollup build kept losing dedup classification races")
 		}
 	}
 }
@@ -442,15 +441,34 @@ func readUsageRollupInstalls(
 	snapshot usageQuerySnapshot, fills map[string]usageFillResult,
 	pricingHash string,
 ) (map[string]usageRollupInstall, map[string]bool, error) {
-	rows, err := conn.QueryContext(ctx, `SELECT i.id, i.session_id,
+	query := `SELECT i.id, i.session_id,
 		i.fact_install_revision, i.install_revision, i.cached_at,
 		i.source_sync_marker, i.source_transcript_rev, i.usage_event_fingerprint,
 		i.baked_agent, i.baked_started_at, i.pricing_hash
 		FROM usage_rollup_timezones tz JOIN usage_rollup_installs i
-		  ON i.timezone_id = tz.id WHERE tz.timezone_key = ?`, identity.Key)
+		  ON i.timezone_id = tz.id WHERE tz.timezone_key = ?`
+	args := []any{identity.Key}
+	// Scope the read to the sessions this snapshot can consult, so a batched
+	// backfill pass stays linear in archive size instead of re-reading every
+	// installed row per batch. Sessions and Versions carry the same IDs in the
+	// same order from capture through ordering and batch slicing. Archive-scale
+	// snapshots exceed the bind limit and read unscoped, which returns a
+	// superset of the same rows.
+	scope := make([]string, 1, len(snapshot.Versions)+1)
+	scope[0] = usageRollupCursorSessionID
+	for _, version := range snapshot.Versions {
+		scope = append(scope, version.SessionID)
+	}
+	if len(scope) < maxSQLVars {
+		placeholders, scopeArgs := inPlaceholders(scope)
+		query += ` AND i.session_id IN ` + placeholders
+		args = append(args, scopeArgs...)
+	}
+	rows, err := conn.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, nil, err
 	}
+	defer rows.Close()
 	installs := make(map[string]usageRollupInstall)
 	sources := make(map[string]usageSourceVersion)
 	baked := make(map[string][2]string)
@@ -472,7 +490,7 @@ func readUsageRollupInstalls(
 		baked[item.SessionID] = [2]string{agent, startedAt}
 		pricing[item.SessionID] = installedPricing
 	}
-	if err := rows.Close(); err != nil {
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return nil, nil, err
 	}
 	sessions := make(map[string]usageQuerySession, len(snapshot.Sessions))
@@ -586,7 +604,7 @@ func installUsageRollupBuilds(
 			FROM usage_rollup_installs
 			WHERE timezone_id = ? AND session_id = ?`, timezoneID, build.SessionID).
 			Scan(&installID, &installedFactRevision)
-		if err != nil && err != sql.ErrNoRows {
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
 		if err == nil && build.SessionID == usageRollupCursorSessionID &&
@@ -710,7 +728,7 @@ func installUsageRollupDays(
 	location *time.Location, dates map[string]bool,
 ) error {
 	if location == nil {
-		location = time.Local
+		location = time.Local //nolint:forbidigo // The report cache identifies the local calendar timezone used for date buckets.
 	}
 	for date := range dates {
 		day, err := time.ParseInLocation(time.DateOnly, date, location)

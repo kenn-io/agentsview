@@ -12,6 +12,7 @@ import type {
   RawSyncUploadResponse,
   RawSyncUploadStartInputBody,
   RawsyncManifest,
+  RawsyncStatus,
 } from "../models";
 
 import { orvalFetch } from "../../runtime.ts";
@@ -32,8 +33,19 @@ export const postApiV1RawSyncManifests = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return orvalFetch<RawSyncManifestResponse>(getPostApiV1RawSyncManifestsUrl(), {
     ...options,
@@ -59,14 +71,41 @@ export const postApiV1RawSyncObjectsMissing = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return orvalFetch<RawSyncMissingObjectsResponse>(getPostApiV1RawSyncObjectsMissingUrl(), {
     ...options,
     method: "POST",
     headers: { "Content-Type": "application/json", ...getHeaders(options?.headers) },
     body: JSON.stringify(rawSyncMissingObjectsInputBody),
+  });
+};
+
+export const getGetApiV1RawSyncStatusUrl = () => {
+  return `/api/v1/raw-sync/status`;
+};
+
+/**
+ * @summary Read hosted raw sync status
+ */
+export const getApiV1RawSyncStatus = async (
+  options?: Parameters<typeof orvalFetch>[1],
+): Promise<RawsyncStatus> => {
+  return orvalFetch<RawsyncStatus>(getGetApiV1RawSyncStatusUrl(), {
+    ...options,
+    method: "GET",
   });
 };
 
@@ -86,8 +125,19 @@ export const postApiV1RawSyncTokens = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return orvalFetch<RawSyncTokenResponse>(getPostApiV1RawSyncTokensUrl(), {
     ...options,
@@ -113,8 +163,19 @@ export const postApiV1RawSyncUploads = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return orvalFetch<RawSyncUploadResponse>(getPostApiV1RawSyncUploadsUrl(), {
     ...options,
@@ -162,8 +223,19 @@ export const patchApiV1RawSyncUploadsByUploadId = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return orvalFetch<RawSyncUploadResponse>(getPatchApiV1RawSyncUploadsByUploadIdUrl({ uploadId }), {
     ...options,

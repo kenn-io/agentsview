@@ -11,7 +11,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // TestPGSessionNameVisibleInReadPaths verifies that a session with only a
@@ -31,7 +33,7 @@ func TestPGSessionNameVisibleInReadPaths(t *testing.T) {
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	// Local SQLite DB used by the Sync push path.
-	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
 	defer localDB.Close()
 
@@ -49,7 +51,7 @@ func TestPGSessionNameVisibleInReadPaths(t *testing.T) {
 		StartedAt:        strPtr("2026-01-01T00:00:00Z"),
 		EndedAt:          strPtr("2026-01-01T01:00:00Z"),
 	}
-	require.NoError(t, localDB.UpsertSession(sess), "UpsertSession")
+	require.NoError(t, localDB.UpsertSession(t.Context(), sess), "UpsertSession")
 
 	sync := &Sync{
 		pg:         pg,
@@ -115,3 +117,46 @@ func TestPGSessionNameVisibleInReadPaths(t *testing.T) {
 
 // strPtr is a helper to take the address of a string literal.
 func strPtr(s string) *string { return &s }
+
+func TestPGPushUsageOnlyClearsRenamedTitle(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanPGSchema(t, pgURL)
+	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	local := testDB(t)
+	ps, err := New(pgURL, "agentsview", local, "test-machine", true, storage.PusherOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ps.Close() })
+	ctx := context.Background()
+	session := db.Session{
+		ID: "title-policy", Agent: "claude", Project: "proj", Machine: "test-machine",
+		FirstMessage: strPtr("original prompt"), DisplayName: strPtr("source title"),
+		SessionName: strPtr("provider title"),
+	}
+	require.NoError(t, local.UpsertSession(t.Context(), session))
+	require.NoError(t, local.RenameSession(t.Context(), session.ID, strPtr("source title")))
+	_, err = ps.Push(ctx, true, nil)
+	require.NoError(t, err)
+	_, err = ps.pg.ExecContext(ctx, `UPDATE sessions SET display_name = 'remote title' WHERE id = $1`, session.ID)
+	require.NoError(t, err)
+	// Full-content pushes preserve an independent PostgreSQL rename.
+	_, err = ps.Push(ctx, true, nil)
+	require.NoError(t, err)
+	var display, source, provider sql.NullString
+	require.NoError(t, ps.pg.QueryRowContext(ctx,
+		`SELECT display_name, source_display_name, session_name FROM sessions WHERE id = $1`, session.ID,
+	).Scan(&display, &source, &provider))
+	assert.Equal(t, "remote title", display.String)
+	assert.Equal(t, "source title", source.String)
+	assert.Equal(t, "provider title", provider.String)
+
+	local.SetArchiveContent(config.ArchiveContentUsage)
+	require.NoError(t, local.UpsertSession(t.Context(), session))
+	_, err = ps.Push(ctx, true, nil)
+	require.NoError(t, err)
+	require.NoError(t, ps.pg.QueryRowContext(ctx,
+		`SELECT display_name, source_display_name, session_name FROM sessions WHERE id = $1`, session.ID,
+	).Scan(&display, &source, &provider))
+	assert.False(t, display.Valid, "usage-only push must remove the remote rename")
+	assert.False(t, source.Valid)
+	assert.False(t, provider.Valid)
+}

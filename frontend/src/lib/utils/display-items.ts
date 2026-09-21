@@ -1,4 +1,4 @@
-import type { Message } from "../api/types.js";
+import type { DbMessage as Message } from "../api/generated/index.js";
 import { isToolOnly } from "./content-parser.js";
 
 export interface MessageItem {

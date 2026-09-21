@@ -44,7 +44,7 @@ type bytesOutput struct {
 	Body               []byte
 }
 
-type apiErrorResponse struct {
+type apiResponseError struct {
 	Status              int    `json:"-"`
 	Code                string `json:"code,omitempty"`
 	Message             string `json:"error"`
@@ -54,20 +54,20 @@ type apiErrorResponse struct {
 	CurrentUploadOffset *int64 `json:"upload_offset,omitempty"`
 }
 
-func (e *apiErrorResponse) Error() string {
+func (e *apiResponseError) Error() string {
 	return e.Message
 }
 
-func (e *apiErrorResponse) GetStatus() int {
+func (e *apiResponseError) GetStatus() int {
 	return e.Status
 }
 
 func apiError(status int, message string) error {
-	return &apiErrorResponse{Status: status, Message: message}
+	return &apiResponseError{Status: status, Message: message}
 }
 
 func apiErrorWithCode(status int, code, message string) error {
-	return &apiErrorResponse{Status: status, Code: code, Message: message}
+	return &apiResponseError{Status: status, Code: code, Message: message}
 }
 
 var configureHumaOnce stdsync.Once
@@ -96,7 +96,7 @@ func configureHuma() {
 			if strings.Contains(message, "(query.type:") {
 				message = "invalid type: " + message
 			}
-			return &apiErrorResponse{
+			return &apiResponseError{
 				Status:  status,
 				Message: message,
 			}
@@ -117,6 +117,7 @@ type requestInfo struct {
 	Forwarded  bool
 }
 
+//nolint:recvcheck // Huma discovers Schema on values and mutates parameters through pointers.
 type optionalIntParam struct {
 	Value int
 	IsSet bool
@@ -143,6 +144,8 @@ func optionalIntValue(p optionalIntParam) *int {
 
 // optionalBoolParam distinguishes an omitted query param from an explicit
 // false, so a sort key's canonical direction is used unless ?descending is set.
+//
+//nolint:recvcheck // Huma discovers Schema on values and mutates parameters through pointers.
 type optionalBoolParam struct {
 	Value bool
 	IsSet bool
@@ -193,6 +196,10 @@ func isLocalhostContext(ctx context.Context) bool {
 }
 
 func agentsViewSchemaNamer(t reflect.Type, hint string) string {
+	if schemaNamedType(t) == reflect.TypeFor[apiResponseError]() {
+		// Keep the published schema name independent of the Go error type name.
+		return "ApiErrorResponse"
+	}
 	name := huma.DefaultSchemaNamer(t, hint)
 	base := schemaNamedType(t)
 	pkgPath := base.PkgPath()
@@ -227,68 +234,74 @@ func pascalASCII(s string) string {
 }
 
 func (s *Server) get[I, O any](
-	group routeGroup, path, summary string,
+	group *huma.Group, path, summary string,
 	handler func(context.Context, *I) (*O, error),
 ) {
-	group.register(http.MethodGet, path, summary, handler, s.humaTimeout())
+	registerRoute(group, http.MethodGet, path, summary, handler, s.humaTimeout())
 }
 
 func (*Server) getLong[I, O any](
-	group routeGroup, path, summary string,
+	group *huma.Group, path, summary string,
 	handler func(context.Context, *I) (*O, error),
 ) {
-	group.register(http.MethodGet, path, summary, handler)
+	registerRoute(group, http.MethodGet, path, summary, handler)
 }
 
 func (s *Server) post[I, O any](
-	group routeGroup, path, summary string,
+	group *huma.Group, path, summary string,
 	handler func(context.Context, *I) (*O, error),
 ) {
-	group.register(http.MethodPost, path, summary, handler, s.humaTimeout())
+	registerRoute(group, http.MethodPost, path, summary, handler, s.humaTimeout())
 }
 
 func (*Server) postLong[I, O any](
-	group routeGroup, path, summary string,
+	group *huma.Group, path, summary string,
 	handler func(context.Context, *I) (*O, error),
 ) {
-	group.register(http.MethodPost, path, summary, handler)
+	registerRoute(group, http.MethodPost, path, summary, handler)
 }
 
 func (s *Server) put[I, O any](
-	group routeGroup, path, summary string,
+	group *huma.Group, path, summary string,
 	handler func(context.Context, *I) (*O, error),
 ) {
-	group.register(http.MethodPut, path, summary, handler, s.humaTimeout())
+	registerRoute(group, http.MethodPut, path, summary, handler, s.humaTimeout())
 }
 
 func (s *Server) patch[I, O any](
-	group routeGroup, path, summary string,
+	group *huma.Group, path, summary string,
 	handler func(context.Context, *I) (*O, error),
 ) {
-	group.register(http.MethodPatch, path, summary, handler, s.humaTimeout())
+	registerRoute(group, http.MethodPatch, path, summary, handler, s.humaTimeout())
 }
 
 func (s *Server) deleteRoute[I, O any](
-	group routeGroup, path, summary string,
+	group *huma.Group, path, summary string,
 	handler func(context.Context, *I) (*O, error),
 ) {
-	group.register(http.MethodDelete, path, summary, handler, s.humaTimeout())
+	registerRoute(group, http.MethodDelete, path, summary, handler, s.humaTimeout())
 }
 
 func (*Server) stream[I any](
-	group routeGroup, method, path, summary string,
+	group *huma.Group, method, path, summary string,
 	handler func(context.Context, *I) (*huma.StreamResponse, error),
 	options ...func(*huma.Operation),
 ) {
 	routeOptions := append([]func(*huma.Operation){streamResponse()}, options...)
-	group.register(method, path, summary, handler, routeOptions...)
+	registerRoute(group, method, path, summary, handler, routeOptions...)
 }
 
 func (*Server) raw[I any](
-	group routeGroup, method, path, summary string,
+	group *huma.Group, method, path, summary, contentType string,
 	handler func(context.Context, *I) (*bytesOutput, error),
 ) {
-	group.register(method, path, summary, handler)
+	registerRoute(group, method, path, summary, handler, func(op *huma.Operation) {
+		op.Responses = map[string]*huma.Response{
+			"200": {Description: "OK", Content: map[string]*huma.MediaType{
+				contentType: {Schema: &huma.Schema{Type: "string", Format: "binary"}},
+			}},
+		}
+	})
 }
 
 func operationID(method, path string) string {
@@ -313,13 +326,13 @@ func operationID(method, path string) string {
 	return strings.Trim(b.String(), "-")
 }
 
-func (group routeGroup) register[I, O any](
+func registerRoute[I, O any](group *huma.Group,
 	method, path, summary string,
 	handler func(context.Context, *I) (*O, error),
 	options ...func(*huma.Operation),
 ) {
 	op := huma.Operation{
-		OperationID: operationID(method, group.fullPath(path)),
+		OperationID: operationID(method, path),
 		Method:      method,
 		Path:        path,
 		Summary:     summary,
@@ -339,7 +352,7 @@ func (group routeGroup) register[I, O any](
 	for _, option := range options {
 		option(&op)
 	}
-	huma.Register(group.api, op, handler)
+	huma.Register(group, op, handler)
 }
 
 func maxBodyBytes(limit int64) func(*huma.Operation) {
@@ -508,11 +521,29 @@ func (s *Server) rejectWriterClosedWrite() error {
 // serializeArchiveWrite runs work under the daemon engine's exclusive lock —
 // the same mutex a worker pass holds while the writer is closed — so a write
 // that passed the pre-stream writer gate cannot race a maintenance pass
-// closing the writer mid-operation. Servers without a daemon engine have no
-// worker passes to serialize with, so work runs directly.
-func (s *Server) serializeArchiveWrite(work func() error) error {
+// closing the writer mid-operation. Local servers without a daemon engine
+// share the on-demand sync engine's lock.
+func (s *Server) serializeArchiveWrite(ctx context.Context, work func() error) error {
 	if s.engine != nil {
 		return s.engine.RunExclusive(work)
+	}
+	if local, ok := s.db.(*db.DB); ok {
+		return s.syncEngineForLocal(ctx, local).RunExclusive(work)
+	}
+	return work()
+}
+
+// tryArchiveWrite runs user-triggered archive maintenance under the daemon
+// engine's exclusive lock without waiting for it, which is the barrier
+// newForegroundCompactRunner puts compaction behind. Background work keeps
+// serializeArchiveWrite so scheduled obligations are not lost. Local servers
+// without a daemon engine share the on-demand sync engine's lock.
+func (s *Server) tryArchiveWrite(ctx context.Context, work func() error) error {
+	if s.engine != nil {
+		return s.engine.TryRunExclusive(work)
+	}
+	if local, ok := s.db.(*db.DB); ok {
+		return s.syncEngineForLocal(ctx, local).TryRunExclusive(work)
 	}
 	return work()
 }
@@ -597,4 +628,13 @@ func writeHumaJSON(ctx huma.Context, status int, value any) {
 
 func sjson(w io.Writer, value any) error {
 	return json.MarshalEncode(jsontext.NewEncoder(w), value)
+}
+
+// handleHTTP registers handlers that own streaming and response serialization
+// through the same Huma adapter as the typed API operations.
+func (s *Server) handleHTTP(op *huma.Operation, handler http.HandlerFunc) {
+	s.api.Adapter().Handle(op, func(ctx huma.Context) {
+		r, w := humago.Unwrap(ctx)
+		handler(w, r)
+	})
 }

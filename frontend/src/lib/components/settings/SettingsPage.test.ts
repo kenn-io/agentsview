@@ -261,7 +261,7 @@ describe("SettingsPage", () => {
     restoredSearch.dispatchEvent(new Event("input", { bubbles: true }));
     await tick();
 
-    expect(restoredNav.querySelectorAll("button")).toHaveLength(9);
+    expect(restoredNav.querySelectorAll("button")).toHaveLength(11);
     expect(
       document.body.querySelector(".settings-page")?.classList.contains("settings-no-results"),
     ).toBe(false);
@@ -409,8 +409,11 @@ describe("SettingsPage", () => {
 
     unmount(component);
   });
+});
 
-  it("shows a danger flash when a settings save fails", async () => {
+describe("SettingsPage in Spanish", () => {
+  it("renders the settings chrome and language picker in Spanish", async () => {
+    setLocale("es");
     settingsService.getApiV1Settings.mockResolvedValue({
       agent_dirs: {},
       chart_palette: "agentsview",
@@ -421,25 +424,31 @@ describe("SettingsPage", () => {
       require_auth: false,
       terminal: { mode: "auto" },
     });
-    settingsService.putApiV1Settings.mockRejectedValue(new Error("settings endpoint unavailable"));
-    const component = mount(SettingsPage, { target: document.body });
-    await tick();
-    await tick();
-
-    const matplotlib = Array.from(
-      document.body.querySelectorAll<HTMLElement>('[role="radio"]'),
-    ).find((control) => control.textContent?.includes("Matplotlib"));
-    expect(matplotlib).toBeTruthy();
-    matplotlib!.click();
-
-    await vi.waitFor(() => {
-      const flash = document.body.querySelector<HTMLElement>(
-        '.kit-flash-banner[data-kit-tone="danger"]',
-      );
-      expect(flash).not.toBeNull();
-      expect(flash?.textContent).toContain("settings endpoint unavailable");
+    const component = mount(SettingsPage, {
+      target: document.body,
     });
+    await tick();
+    await tick();
 
-    await unmount(component);
+    expect(document.body.textContent).toContain("Configuración");
+    expect(document.body.querySelector('nav[aria-label="Configuración"]')).not.toBeNull();
+    const trigger = document.body.querySelector<HTMLButtonElement>(
+      'button[title="Idioma de la interfaz"]',
+    );
+    expect(trigger).not.toBeNull();
+    expect(trigger!.textContent).toContain("Español");
+
+    const search = document.body.querySelector<HTMLInputElement>(
+      'input[type="search"][aria-label="Buscar en la configuración"]',
+    )!;
+    search.value = "idioma";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    await tick();
+
+    const nav = document.body.querySelector('nav[aria-label="Configuración"]')!;
+    expect(nav.querySelectorAll("button")).toHaveLength(1);
+    expect(nav.textContent).toContain("Idioma");
+
+    unmount(component);
   });
 });

@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,19 +11,19 @@ import (
 )
 
 func parseQwenTestSession(
-	t testing.TB,
+	tb testing.TB,
 	path, project, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
-	t.Helper()
+	tb.Helper()
 	return parseQwenSession(path, project, machine)
 }
 
-func discoverQwenTestSessions(t testing.TB, root string) []DiscoveredFile {
-	t.Helper()
+func discoverQwenTestSessions(tb testing.TB, root string) []DiscoveredFile {
+	tb.Helper()
 	provider, ok := NewProvider(AgentQwen, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
-	require.NoError(t, err)
+	require.True(tb, ok)
+	sources, err := provider.Discover(tb.Context())
+	require.NoError(tb, err)
 
 	files := make([]DiscoveredFile, 0, len(sources))
 	for _, source := range sources {
@@ -37,15 +36,15 @@ func discoverQwenTestSessions(t testing.TB, root string) []DiscoveredFile {
 	return files
 }
 
-func findQwenTestSourceFile(t testing.TB, root, rawID string) string {
-	t.Helper()
+func findQwenTestSourceFile(tb testing.TB, root, rawID string) string {
+	tb.Helper()
 	provider, ok := NewProvider(AgentQwen, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
+	require.True(tb, ok)
 	source, found, err := provider.FindSource(
-		context.Background(),
+		tb.Context(),
 		FindSourceRequest{RawSessionID: rawID},
 	)
-	require.NoError(t, err)
+	require.NoError(tb, err)
 	if !found {
 		return ""
 	}

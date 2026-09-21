@@ -28,7 +28,7 @@ func newKiroSQLiteTestDB(t *testing.T) (string, *sql.DB) {
 	db, err := sql.Open("sqlite3", path)
 	require.NoError(t, err, "open kiro sqlite test db")
 	t.Cleanup(func() { db.Close() })
-	_, err = db.Exec(kiroSQLiteSchema)
+	_, err = db.ExecContext(t.Context(), kiroSQLiteSchema)
 	require.NoError(t, err, "create kiro sqlite schema")
 	return path, db
 }
@@ -47,7 +47,7 @@ func seedKiroSQLiteSession(
 	createdAt, updatedAt int64,
 ) {
 	t.Helper()
-	_, err := db.Exec(
+	_, err := db.ExecContext(t.Context(),
 		`INSERT INTO conversations_v2
 			(key, conversation_id, value, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?)`,
@@ -65,7 +65,7 @@ func TestParseKiroSQLiteSession(t *testing.T) {
 	)
 
 	sess, msgs, err := parseKiroSQLiteSession(
-		dbPath, "sqlite-session", "test-machine",
+		t.Context(), dbPath, "sqlite-session", "test-machine",
 	)
 	require.NoError(t, err, "parseKiroSQLiteSession")
 	require.NotNil(t, sess, "expected session")
@@ -115,7 +115,7 @@ func TestKiroSQLiteSourceMtime(t *testing.T) {
 		readKiroFixture(t, "standard_payload.json"),
 		1, 7,
 	)
-	mtime, err := KiroSQLiteSourceMtime(
+	mtime, err := KiroSQLiteSourceMtime(t.Context(),
 		KiroSQLiteVirtualPath(dbPath, "sqlite-session"),
 	)
 	require.NoError(t, err, "KiroSQLiteSourceMtime")
@@ -160,7 +160,7 @@ func TestParseKiroSQLiteSessionRejectsMalformedPayload(t *testing.T) {
 		1, 2,
 	)
 	_, _, err := parseKiroSQLiteSession(
-		dbPath, "broken-session", "test-machine",
+		t.Context(), dbPath, "broken-session", "test-machine",
 	)
 	require.Error(t, err, "expected malformed payload error")
 }

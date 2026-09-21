@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -13,6 +14,49 @@ import (
 
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
+
+func TestHostedSkillInferenceKeepsNamesLexical(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		parse func(*testing.T, context.Context, string) string
+	}{
+		{"claude", func(t *testing.T, ctx context.Context, path string) string {
+			t.Helper()
+
+			_, _, _, _, calls, _ := ExtractTextContent(ctx, gjson.Parse(
+				`[{"type":"tool_use","id":"call-1","name":"Read","input":{"file_path":`+strconv.Quote(path)+`}}]`,
+			))
+			require.Len(t, calls, 1)
+			return calls[0].SkillName
+		}},
+		{"goose", func(t *testing.T, ctx context.Context, path string) string {
+			t.Helper()
+
+			call, ok := gooseParseToolCall(ctx, gjson.Parse(
+				`{"id":"call-1","toolCall":{"status":"success","value":{"name":"Read","arguments":{"file_path":`+strconv.Quote(path)+`}}}}`,
+			))
+			require.True(t, ok)
+			return call.SkillName
+		}},
+		{"zcode", func(t *testing.T, ctx context.Context, path string) string {
+			t.Helper()
+
+			call, ok := zcodeParseToolCall(ctx, gjson.Parse(
+				`{"id":"call-1","name":"Read","input":{"file_path":`+strconv.Quote(path)+`}}`,
+			))
+			require.True(t, ok)
+			return call.SkillName
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeTestSkill(t, "visible-folder", "server-only-frontmatter-name")
+			// Populate the local cache first: hosted parsing must not expose
+			// either freshly read frontmatter or a previous local lookup.
+			assert.Equal(t, "server-only-frontmatter-name", tc.parse(t, t.Context(), path))
+			assert.Equal(t, "visible-folder", tc.parse(t, WithoutFilesystemProjectDiscovery(t.Context()), path))
+		})
+	}
+}
 
 func TestInferCursorSkillNameFromReadFile(t *testing.T) {
 	path := writeTestSkill(t, "foo", "foo")
@@ -112,7 +156,7 @@ func TestInferCodexSkillNameFromReadCommands(t *testing.T) {
 		"cd /tmp && sed -n '1,220p' " + path,
 	} {
 		t.Run(cmd, func(t *testing.T) {
-			got := inferCodexSkillName(
+			got := inferCodexSkillName(t.Context(),
 				"exec_command",
 				`{"cmd":`+quoteJSON(t, cmd)+`}`,
 			)
@@ -136,7 +180,7 @@ func TestInferCodexSkillNameIgnoresWriteCommands(t *testing.T) {
 		"cat > " + path,
 	} {
 		t.Run(cmd, func(t *testing.T) {
-			got := inferCodexSkillName(
+			got := inferCodexSkillName(t.Context(),
 				"exec_command",
 				`{"cmd":`+quoteJSON(t, cmd)+`}`,
 			)
@@ -157,7 +201,7 @@ func TestInferCodexSkillNameMixedWriteThenRead(t *testing.T) {
 		"touch marker; grep name " + path,
 	} {
 		t.Run(cmd, func(t *testing.T) {
-			got := inferCodexSkillName(
+			got := inferCodexSkillName(t.Context(),
 				"exec_command",
 				`{"cmd":`+quoteJSON(t, cmd)+`}`,
 			)
@@ -175,7 +219,7 @@ func TestInferCodexSkillNameIgnoresGlobDiscovery(t *testing.T) {
 		"head -40 skills/[ab]/SKILL.md",
 	} {
 		t.Run(cmd, func(t *testing.T) {
-			got := inferCodexSkillName(
+			got := inferCodexSkillName(t.Context(),
 				"exec_command",
 				`{"cmd":`+quoteJSON(t, cmd)+`}`,
 			)
@@ -188,7 +232,7 @@ func TestInferCodexSkillNameBareSkillFileWithWorkdir(t *testing.T) {
 	path := writeTestSkill(t, "data-analytics", "data-analytics:index")
 	workdir := filepath.Dir(path)
 
-	got := inferCodexSkillName(
+	got := inferCodexSkillName(t.Context(),
 		"exec_command",
 		`{"cmd":`+quoteJSON(t, "cat SKILL.md")+
 			`,"workdir":`+quoteJSON(t, workdir)+`}`,
@@ -200,7 +244,7 @@ func TestInferCodexSkillNameBareSkillFileUsesFallbackCwd(t *testing.T) {
 	path := writeTestSkill(t, "data-analytics", "data-analytics:index")
 	cwd := filepath.Dir(path)
 
-	got := inferCodexSkillNameWithBase(
+	got := inferCodexSkillNameWithBase(t.Context(),
 		"exec_command",
 		`{"cmd":`+quoteJSON(t, "sed -n '1,40p' SKILL.md")+`}`,
 		cwd,
@@ -214,7 +258,7 @@ func TestInferCodexSkillNameBareSkillPatternWithoutFileIgnored(t *testing.T) {
 	// not be resolved to the workdir name and miscounted as usage.
 	workdir := t.TempDir()
 
-	got := inferCodexSkillName(
+	got := inferCodexSkillName(t.Context(),
 		"exec_command",
 		`{"cmd":`+quoteJSON(t, "grep SKILL.md notes.txt")+
 			`,"workdir":`+quoteJSON(t, workdir)+`}`,
@@ -238,7 +282,7 @@ func TestInferCodexSkillNameBareSkillSearchPatternIgnoredEvenWithFile(t *testing
 		"grep -e SKILL.md notes.txt",   // SKILL.md is the -e pattern value
 	} {
 		t.Run(cmd, func(t *testing.T) {
-			got := inferCodexSkillName(
+			got := inferCodexSkillName(t.Context(),
 				"exec_command",
 				`{"cmd":`+quoteJSON(t, cmd)+
 					`,"workdir":`+quoteJSON(t, workdir)+`}`,
@@ -262,7 +306,7 @@ func TestInferCodexSkillNameSearchCommandReadsFileOperand(t *testing.T) {
 		"grep -i name SKILL.md",
 	} {
 		t.Run(cmd, func(t *testing.T) {
-			got := inferCodexSkillName(
+			got := inferCodexSkillName(t.Context(),
 				"exec_command",
 				`{"cmd":`+quoteJSON(t, cmd)+
 					`,"workdir":`+quoteJSON(t, workdir)+`}`,
@@ -284,7 +328,7 @@ func TestInferCodexSkillNameSearchQuotedPatternIgnored(t *testing.T) {
 		`grep -e "read the SKILL.md" notes.txt`,
 	} {
 		t.Run(cmd, func(t *testing.T) {
-			got := inferCodexSkillName(
+			got := inferCodexSkillName(t.Context(),
 				"exec_command",
 				`{"cmd":`+quoteJSON(t, cmd)+
 					`,"workdir":`+quoteJSON(t, workdir)+`}`,
@@ -306,7 +350,7 @@ func TestInferCodexSkillNameIgnoresNonReadSegments(t *testing.T) {
 		"grep foo notes.txt; ls SKILL.md",
 	} {
 		t.Run(cmd, func(t *testing.T) {
-			got := inferCodexSkillName(
+			got := inferCodexSkillName(t.Context(),
 				"exec_command",
 				`{"cmd":`+quoteJSON(t, cmd)+
 					`,"workdir":`+quoteJSON(t, workdir)+`}`,
@@ -387,7 +431,7 @@ func TestInferCodexSkillNameIgnoresRedirectTargets(t *testing.T) {
 		"cat foo >skills/data-analytics/SKILL.md",
 	} {
 		t.Run(cmd, func(t *testing.T) {
-			got := inferCodexSkillName(
+			got := inferCodexSkillName(t.Context(),
 				"exec_command",
 				`{"cmd":`+quoteJSON(t, cmd)+
 					`,"workdir":`+quoteJSON(t, workdir)+`}`,
@@ -402,7 +446,7 @@ func TestInferCodexSkillNameReadsFileDespiteQuotedRedirectChar(t *testing.T) {
 	// so the SKILL.md file operand is still read.
 	path := writeTestSkill(t, "data-analytics", "data-analytics:index")
 
-	got := inferCodexSkillName(
+	got := inferCodexSkillName(t.Context(),
 		"exec_command",
 		`{"cmd":`+quoteJSON(t, `grep ">" `+path)+`}`,
 	)
@@ -414,7 +458,7 @@ func TestInferCodexSkillNameReadsSourceDespiteRedirect(t *testing.T) {
 	// so the read is still inferred.
 	path := writeTestSkill(t, "data-analytics", "data-analytics:index")
 
-	got := inferCodexSkillName(
+	got := inferCodexSkillName(t.Context(),
 		"exec_command",
 		`{"cmd":`+quoteJSON(t, "cat "+path+" > out.txt")+`}`,
 	)
@@ -426,7 +470,7 @@ func TestInferCodexSkillNameSearchCommandStillReadsPathOperand(t *testing.T) {
 	// (the pattern is a separate token), so it is still inferred.
 	path := writeTestSkill(t, "data-analytics", "data-analytics:index")
 
-	got := inferCodexSkillName(
+	got := inferCodexSkillName(t.Context(),
 		"exec_command",
 		`{"cmd":`+quoteJSON(t, "grep name "+path)+`}`,
 	)
@@ -451,7 +495,6 @@ func TestParseCodexSessionInfersSkillName(t *testing.T) {
 }
 
 func TestParseCodexSessionInfersSkillNameFromSessionCwd(t *testing.T) {
-
 	path := writeTestSkill(t, "index", "data-analytics:index")
 	cwd := filepath.Dir(filepath.Dir(filepath.Dir(path)))
 	content := testjsonl.JoinJSONL(
@@ -470,7 +513,6 @@ func TestParseCodexSessionInfersSkillNameFromSessionCwd(t *testing.T) {
 }
 
 func TestParseCodexSessionFromInfersSkillNameFromSeededCwd(t *testing.T) {
-
 	path := writeTestSkill(t, "index", "data-analytics:index")
 	cwd := filepath.Dir(filepath.Dir(filepath.Dir(path)))
 
@@ -510,7 +552,7 @@ func TestExtractTextContentInfersCursorJSONLSkillName(t *testing.T) {
 			quoteJSON(t, path) + `}}]`,
 	)
 
-	_, _, _, _, toolCalls, _ := ExtractTextContent(content)
+	_, _, _, _, toolCalls, _ := ExtractTextContent(t.Context(), content)
 
 	require.Len(t, toolCalls, 1)
 	assert.Equal(t, "Read", toolCalls[0].ToolName)
@@ -524,7 +566,7 @@ func TestExtractTextContentInfersCursorJSONLSkillNameFromFrontmatter(t *testing.
 			quoteJSON(t, path) + `}}]`,
 	)
 
-	_, _, _, _, toolCalls, _ := ExtractTextContent(content)
+	_, _, _, _, toolCalls, _ := ExtractTextContent(t.Context(), content)
 
 	require.Len(t, toolCalls, 1)
 	assert.Equal(t, "ReadFile", toolCalls[0].ToolName)
@@ -540,7 +582,7 @@ func TestExtractTextContentInfersSkillNameFromPathWithSpaces(t *testing.T) {
 			quoteJSON(t, path) + `}}]`,
 	)
 
-	_, _, _, _, toolCalls, _ := ExtractTextContent(content)
+	_, _, _, _, toolCalls, _ := ExtractTextContent(t.Context(), content)
 
 	require.Len(t, toolCalls, 1)
 	assert.Equal(t, "data-analytics:index", toolCalls[0].SkillName)
@@ -553,7 +595,7 @@ func TestExtractTextContentInfersCursorJSONLSkillNameFromShellRead(t *testing.T)
 			quoteJSON(t, "cd /tmp && sed -n '1,120p' "+path) + `}}]`,
 	)
 
-	_, _, _, _, toolCalls, _ := ExtractTextContent(content)
+	_, _, _, _, toolCalls, _ := ExtractTextContent(t.Context(), content)
 
 	require.Len(t, toolCalls, 1)
 	assert.Equal(t, "Shell", toolCalls[0].ToolName)
@@ -609,7 +651,7 @@ func TestExtractTextContentDoesNotInferCursorJSONLNonUsage(t *testing.T) {
 					quoteJSON(t, tt.toolName) + `,"input":` + tt.input + `}]`,
 			)
 
-			_, _, _, _, toolCalls, _ := ExtractTextContent(content)
+			_, _, _, _, toolCalls, _ := ExtractTextContent(t.Context(), content)
 
 			require.Len(t, toolCalls, 1)
 			assert.Empty(t, toolCalls[0].SkillName)
@@ -621,7 +663,7 @@ func TestInferCodexSkillNameResolvesRelativePathAgainstWorkdir(t *testing.T) {
 	path := writeTestSkill(t, "index", "data-analytics:index")
 	workdir := filepath.Dir(filepath.Dir(filepath.Dir(path)))
 
-	got := inferCodexSkillName(
+	got := inferCodexSkillName(t.Context(),
 		"exec_command",
 		`{"cmd":`+quoteJSON(t, "sed -n '1,220p' skills/index/SKILL.md")+
 			`,"workdir":`+quoteJSON(t, workdir)+`}`,
@@ -634,7 +676,7 @@ func TestInferCodexSkillNameWorkdirOverridesFallbackBase(t *testing.T) {
 	path := writeTestSkill(t, "index", "data-analytics:index")
 	workdir := filepath.Dir(filepath.Dir(filepath.Dir(path)))
 
-	got := inferCodexSkillNameWithBase(
+	got := inferCodexSkillNameWithBase(t.Context(),
 		"exec_command",
 		`{"cmd":`+quoteJSON(t, "cat skills/index/SKILL.md")+
 			`,"workdir":`+quoteJSON(t, workdir)+`}`,
@@ -648,7 +690,7 @@ func TestInferCodexSkillNameUsesFallbackBaseWhenNoWorkdir(t *testing.T) {
 	path := writeTestSkill(t, "index", "data-analytics:index")
 	fallback := filepath.Dir(filepath.Dir(filepath.Dir(path)))
 
-	got := inferCodexSkillNameWithBase(
+	got := inferCodexSkillNameWithBase(t.Context(),
 		"exec_command",
 		`{"cmd":`+quoteJSON(t, "cat skills/index/SKILL.md")+`}`,
 		fallback,
@@ -665,7 +707,7 @@ func TestInferCodexSkillNameRelativePathNoWorkdirUsesParentFallback(t *testing.T
 	// unrelated SKILL.md under the process cwd.
 	writeTestSkill(t, "index", "data-analytics:index")
 
-	got := inferCodexSkillName(
+	got := inferCodexSkillName(t.Context(),
 		"exec_command",
 		`{"cmd":`+quoteJSON(t, "cat skills/index/SKILL.md")+`}`,
 	)
@@ -683,8 +725,10 @@ func TestExpandSkillHome(t *testing.T) {
 		want string
 	}{
 		{"bare tilde", "~", home},
-		{"tilde slash", "~/.claude/skills/foo/SKILL.md",
-			filepath.Join(home, ".claude/skills/foo/SKILL.md")},
+		{
+			"tilde slash", "~/.claude/skills/foo/SKILL.md",
+			filepath.Join(home, ".claude/skills/foo/SKILL.md"),
+		},
 		{"absolute unchanged", "/abs/SKILL.md", "/abs/SKILL.md"},
 		{"relative unchanged", "skills/foo/SKILL.md", "skills/foo/SKILL.md"},
 		{"tilde user not expanded", "~bob/SKILL.md", "~bob/SKILL.md"},
@@ -711,15 +755,23 @@ func TestResolveSkillPath(t *testing.T) {
 		wantReadable bool
 	}{
 		{"absolute", absSkillPath, "", absSkillPath, true},
-		{"tilde expands", "~/s/SKILL.md", "",
-			filepath.Join(home, "s/SKILL.md"), true},
-		{"relative joined to base", relativeSkillPath, baseDir,
-			filepath.Join(baseDir, relativeSkillPath), true},
+		{
+			"tilde expands", "~/s/SKILL.md", "",
+			filepath.Join(home, "s/SKILL.md"), true,
+		},
+		{
+			"relative joined to base", relativeSkillPath, baseDir,
+			filepath.Join(baseDir, relativeSkillPath), true,
+		},
 		{"relative no base", relativeSkillPath, "", relativeSkillPath, false},
-		{"relative with relative base", relativeSkillPath, "rel",
-			relativeSkillPath, false},
-		{"tilde base expands", relativeSkillPath, "~/repo",
-			filepath.Join(home, "repo", relativeSkillPath), true},
+		{
+			"relative with relative base", relativeSkillPath, "rel",
+			relativeSkillPath, false,
+		},
+		{
+			"tilde base expands", relativeSkillPath, "~/repo",
+			filepath.Join(home, "repo", relativeSkillPath), true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -743,7 +795,7 @@ func TestSkillNameFromFrontmatterBoundsReadSize(t *testing.T) {
 	sb.WriteString("\nname: too-far\n---\n")
 	require.NoError(t, os.WriteFile(path, []byte(sb.String()), 0o644))
 
-	assert.Equal(t, "huge", skillNameFromPath(path, ""))
+	assert.Equal(t, "huge", skillNameFromPath(t.Context(), path, ""))
 }
 
 func writeTestSkill(t *testing.T, folder, name string) string {

@@ -11,7 +11,7 @@ on:
 
 jobs:
   windows-update-check:
-    runs-on: windows-latest
+    runs-on: namespace-profile-windows-16cpu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -39,7 +39,24 @@ jobs:
           New-Item -ItemType Directory -Force internal/web/dist | Out-Null
           Set-Content -Path internal/web/dist/stub.html -Value ok
 
+      # Capture tests reject the parent permissions of the SYSTEM temp path.
+      # Keep their fixtures in a private directory on the system drive.
+      - name: Prepare test temporary directory
+        shell: pwsh
+        run: |
+          $testTemp = Join-Path $env:SystemDrive ("agentsview-ci-" + [guid]::NewGuid().ToString("N"))
+          New-Item -ItemType Directory -Path $testTemp | Out-Null
+          icacls $testTemp /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "SystemTemp=$testTemp" >> $env:GITHUB_ENV
+          "AGENTSVIEW_CI_TEMP=$testTemp" >> $env:GITHUB_ENV
+
       - name: Run Go tests
         run: go test -tags "fts5" ./... -v -count=1
         env:
           CGO_ENABLED: "1"
+
+      - name: Remove test temporary directory
+        if: always() && env.AGENTSVIEW_CI_TEMP != ''
+        shell: pwsh
+        run: Remove-Item -LiteralPath $env:AGENTSVIEW_CI_TEMP -Recurse -Force

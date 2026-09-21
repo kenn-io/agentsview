@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"go.kenn.io/agentsview/internal/assets"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 )
@@ -45,8 +46,8 @@ func (c *ImportCallbacks) indexing() {
 // ftsSuspender is optionally implemented by stores that
 // support dropping and rebuilding FTS indexes.
 type ftsSuspender interface {
-	DropFTS() error
-	RebuildFTS() error
+	DropFTS(ctx context.Context) error
+	RebuildFTS(ctx context.Context) error
 }
 
 // lazyFTS suspends FTS triggers on first call to suspend()
@@ -60,35 +61,35 @@ type lazyFTS struct {
 	onIndexing func()
 }
 
-func newLazyFTS(
+func newLazyFTS(ctx context.Context,
 	store db.Store, onIndexing func(),
 ) *lazyFTS {
 	s, ok := store.(ftsSuspender)
-	if !ok || !store.HasFTS() {
+	if !ok || !store.HasFTS(ctx) {
 		return nil
 	}
 	return &lazyFTS{sus: s, onIndexing: onIndexing}
 }
 
-func (f *lazyFTS) suspend() {
+func (f *lazyFTS) suspend(ctx context.Context) {
 	if f == nil || f.dropped {
 		return
 	}
-	if err := f.sus.DropFTS(); err != nil {
+	if err := f.sus.DropFTS(ctx); err != nil {
 		log.Printf("import: drop FTS: %v", err)
 		return
 	}
 	f.dropped = true
 }
 
-func (f *lazyFTS) restore() error {
+func (f *lazyFTS) restore(ctx context.Context) error {
 	if f == nil || !f.dropped {
 		return nil
 	}
 	if f.onIndexing != nil {
 		f.onIndexing()
 	}
-	if err := f.sus.RebuildFTS(); err != nil {
+	if err := f.sus.RebuildFTS(ctx); err != nil {
 		return fmt.Errorf("rebuilding FTS index: %w", err)
 	}
 	return nil
@@ -106,9 +107,9 @@ func ImportClaudeAI(
 	cb *ImportCallbacks,
 	machine ...string,
 ) (stats ImportStats, retErr error) {
-	fts := newLazyFTS(store, cb.indexing)
+	fts := newLazyFTS(ctx, store, cb.indexing)
 	defer func() {
-		if err := fts.restore(); err != nil {
+		if err := fts.restore(ctx); err != nil {
 			retErr = errors.Join(retErr, err)
 		}
 	}()
@@ -117,13 +118,11 @@ func ImportClaudeAI(
 		parser.AgentClaudeAI, parser.ProviderConfig{},
 	)
 	if !ok {
-		return stats, fmt.Errorf("claude.ai provider unavailable")
+		return stats, errors.New("claude.ai provider unavailable")
 	}
 	exporter, ok := provider.(parser.ClaudeAIExportParser)
 	if !ok {
-		return stats, fmt.Errorf(
-			"claude.ai provider does not support exports",
-		)
+		return stats, errors.New("claude.ai provider does not support exports")
 	}
 
 	err := exporter.ParseClaudeAIExport(r, func(
@@ -213,7 +212,7 @@ func upsertConversation(
 	}
 	db.ApplyParsedSessionIdentity(&sess, s)
 
-	if err := store.UpsertSession(sess); err != nil {
+	if err := store.UpsertSession(ctx, sess); err != nil {
 		if errors.Is(err, db.ErrSessionExcluded) {
 			return importSkipped, nil
 		}
@@ -224,7 +223,7 @@ func upsertConversation(
 	// changes even when the skip path below returns importSkipped (message
 	// count unchanged) and ReplaceSessionMessages is never called.
 	if localDB, ok := store.(*db.DB); ok {
-		if err := localDB.BumpLocalModifiedAt(s.ID); err != nil {
+		if err := localDB.BumpLocalModifiedAt(ctx, s.ID); err != nil {
 			log.Printf("import: bumping local_modified_at for %s: %v", s.ID, err)
 		}
 	}
@@ -249,9 +248,9 @@ func upsertConversation(
 
 	// Suspend FTS before first message-changing operation to
 	// avoid per-row trigger overhead during bulk work.
-	fts.suspend()
+	fts.suspend(ctx)
 
-	if err := store.ReplaceSessionMessages(s.ID, msgs); err != nil {
+	if err := store.ReplaceSessionMessages(ctx, s.ID, msgs); err != nil {
 		return importNew, fmt.Errorf("replacing messages: %w", err)
 	}
 
@@ -277,7 +276,7 @@ func (a *assetResolverAdapter) Resolve(
 func (a *assetResolverAdapter) Copy(
 	srcPath string,
 ) (string, error) {
-	return CopyAsset(srcPath, a.assetsDir)
+	return assets.CopyAsset(srcPath, a.assetsDir)
 }
 
 // ImportChatGPT reads a ChatGPT export directory (containing
@@ -292,9 +291,9 @@ func ImportChatGPT(
 	cb *ImportCallbacks,
 	machine ...string,
 ) (stats ImportStats, retErr error) {
-	fts := newLazyFTS(store, cb.indexing)
+	fts := newLazyFTS(ctx, store, cb.indexing)
 	defer func() {
-		if err := fts.restore(); err != nil {
+		if err := fts.restore(ctx); err != nil {
 			retErr = errors.Join(retErr, err)
 		}
 	}()
@@ -309,13 +308,11 @@ func ImportChatGPT(
 		parser.AgentChatGPT, parser.ProviderConfig{},
 	)
 	if !ok {
-		return stats, fmt.Errorf("chatgpt provider unavailable")
+		return stats, errors.New("chatgpt provider unavailable")
 	}
 	exporter, ok := provider.(parser.ChatGPTExportParser)
 	if !ok {
-		return stats, fmt.Errorf(
-			"chatgpt provider does not support exports",
-		)
+		return stats, errors.New("chatgpt provider does not support exports")
 	}
 
 	err := exporter.ParseChatGPTExport(dir, resolver,
@@ -341,7 +338,7 @@ func ImportChatGPT(
 				// a partial UpsertSession would overwrite first_message,
 				// timestamps, and counts with zero values.
 				if localDB, ok := store.(*db.DB); ok {
-					if err := localDB.RefreshSessionName(s.ID, db.ParsedSessionName(s)); err != nil {
+					if err := localDB.RefreshSessionName(ctx, s.ID, db.ParsedSessionName(s)); err != nil {
 						stats.Errors++
 						log.Printf("import: refreshing session_name for %s: %v", s.ID, err)
 						cb.progress(stats)
@@ -366,7 +363,7 @@ func ImportChatGPT(
 			}
 			db.ApplyParsedSessionIdentity(&sess, s)
 
-			if err := store.UpsertSession(sess); err != nil {
+			if err := store.UpsertSession(ctx, sess); err != nil {
 				if errors.Is(err, db.ErrSessionExcluded) {
 					stats.Skipped++
 					cb.progress(stats)
@@ -380,7 +377,7 @@ func ImportChatGPT(
 				return nil
 			}
 
-			fts.suspend()
+			fts.suspend(ctx)
 
 			msgs := make([]db.Message, len(result.Messages))
 			for i, m := range result.Messages {
@@ -403,7 +400,7 @@ func ImportChatGPT(
 				}
 			}
 
-			if err := store.ReplaceSessionMessages(
+			if err := store.ReplaceSessionMessages(ctx,
 				s.ID, msgs,
 			); err != nil {
 				stats.Errors++

@@ -19,23 +19,18 @@
     ) => void;
   } = $props();
 
-  const CHART_H = 160;
+  const TOP_PAD = 8;
+  const PLOT_H = 160;
   const X_LABEL_H = 18;
   const STRIP_H = 14;
   const STRIP_GAP = 6;
   const Y_LABEL_W = 32;
   const RIGHT_PAD = 16;
   const OVERLAY_AXIS_W = 48;
-  // Reserved headroom so the tallest bar, its grid line, and
-  // the top y-axis label do not clip against the viewBox edge.
-  const TOP_PAD = 10;
   const TICK_TARGET = 4;
+  const PLOT_BOTTOM = TOP_PAD + PLOT_H;
 
-  // buckets/by_* are typed `any[] | null` by the codegen, so cast
-  // to the generated element model for field-level type safety.
-  const buckets = $derived(
-    report.buckets ?? [],
-  );
+  const buckets = $derived(report.buckets ?? []);
 
   let tooltip = $state<{ x: number; y: number; bucket: ActivityBucket } | null>(null);
   let tooltipEl = $state<HTMLDivElement>();
@@ -117,10 +112,6 @@
     return fmtMinuteRange(startMs, endMs);
   }
 
-  // Only the peak count splits by automation; the bucket's agent-minutes and
-  // cost stay combined (the API does not break those down per bucket), so the
-  // split annotation sits on "peak" alone and shows only when an automated
-  // agent was running at the peak.
   function showSlotTip(e: MouseEvent, b: ActivityBucket) {
     const rect = (e.currentTarget as Element).getBoundingClientRect();
     tooltip = {
@@ -133,6 +124,15 @@
   function hideTip() {
     tooltip = null;
   }
+
+  // ActivityPage keeps this chart mounted and replaces the report in place.
+  // Slot hits are keyed by index, so a date change can drop or reuse them
+  // without mouseleave. Clear any hover box captured against the previous
+  // report before the new bars paint.
+  $effect.pre(() => {
+    void report;
+    hideTip();
+  });
 
   function fmtSelectionRange(start: number, end: number): string {
     const first = buckets[start];
@@ -257,9 +257,7 @@
     dragEnd = null;
   }
 
-  // Optional secondary series overlaid on the bars: none, output tokens, or
-  // cost. Each metric scales to its own max so the line reads as a shape over
-  // the concurrency bars, not an absolute count on the agent axis.
+  // Combined usage overlays the stacked plot with its own right axis.
   let overlayMetric = $state<"none" | "tokens" | "cost">("none");
   const overlayOptions: TypeaheadOption[] = $derived([
     { name: "none", label: m.activity_overlay_none(), displayLabel: m.activity_overlay_none() },
@@ -291,13 +289,29 @@
     }).format(v);
   }
 
-  function peakValue(b: ActivityBucket): string {
-    if (b.automated_at_peak === 0) return String(b.max_agents);
-    return `${b.max_agents} (${m.activity_int_auto_short({
-      int: b.interactive_at_peak,
-      auto: b.automated_at_peak,
-    })})`;
+  // Sub-day ranges read the clock alone; longer ranges need the date too.
+  function peakTimeLabel(ms: number): string {
+    if (report.bucket_unit === "minute" || report.bucket_unit === "hour") {
+      return timeLabel(ms);
+    }
+    return formatDateTime(ms, {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+      timeZone: report.timezone,
+    });
   }
+
+  // The combined peak is the tallest stacked bar: its segments sum to
+  // report.peak.agents at that instant.
+  const peakLabel = $derived.by(() => {
+    const count = report.peak.agents.toLocaleString(getLocale());
+    return report.peak.at
+      ? m.activity_peak_at({ count, time: peakTimeLabel(Date.parse(report.peak.at)) })
+      : m.activity_peak_label({ count });
+  });
 
   function fmtOverlayTick(v: number): string {
     if (overlayMetric === "cost") return formatMoney(moneyFromMicrodollars(v));
@@ -355,65 +369,75 @@
     return { step, max };
   }
 
-  const maxAgents = $derived.by(() => {
-    let m = 0;
-    for (const b of buckets) {
-      if (b.max_agents > m) m = b.max_agents;
-    }
-    return m;
-  });
+  // Segment order from the baseline up. Each segment is that class's count at
+  // the instant of the bucket's combined peak, so the stack sums to max_agents.
+  // The independent class maxima can occur at different instants and are only
+  // reported in the tooltip; stacking them would overstate overlap.
+  const classes = $derived([
+    {
+      kind: "interactive",
+      label: m.activity_interactive(),
+      peakLabel: m.activity_interactive_peak(),
+      atPeak: "interactive_at_peak" as const,
+      max: "max_interactive_agents" as const,
+    },
+    {
+      kind: "subagent",
+      label: m.activity_subagents(),
+      peakLabel: m.activity_subagent_peak(),
+      atPeak: "subagent_at_peak" as const,
+      max: "max_subagent_agents" as const,
+    },
+    {
+      kind: "automated",
+      label: m.activity_automated(),
+      peakLabel: m.activity_automated_peak(),
+      atPeak: "automated_at_peak" as const,
+      max: "max_automated_agents" as const,
+    },
+  ]);
 
-  const scale = $derived(niceScale(maxAgents));
+  // One shared y-axis from zero to the tallest stacked bar.
+  const yScale = $derived(
+    niceScale(Math.max(0, ...buckets.map((bucket) => bucket.max_agents))),
+  );
+  const yTicks = $derived(
+    Array.from({ length: Math.round(yScale.max / yScale.step) + 1 }, (_, i) => ({
+      y: PLOT_BOTTOM - ((i * yScale.step) / yScale.max) * PLOT_H,
+      label: (i * yScale.step).toLocaleString(getLocale()),
+    })),
+  );
 
-  function scaleY(val: number, max: number, h: number): number {
-    const plotH = h - TOP_PAD;
-    return h - (val / max) * plotH;
+  function segmentHeight(count: number): number {
+    return (count / yScale.max) * PLOT_H;
   }
 
-  // Each bucket owns a full contiguous cell [cellX, cellX+cellW); the visible
-  // bar is inset by a small gap. Strip cells and hit targets reuse the cell.
-  const bars = $derived.by(() => {
-    const out: Array<{
-      x: number;
-      y: number;
-      w: number;
-      h: number;
-      interactiveY: number;
-      interactiveH: number;
-      automatedY: number;
-      automatedH: number;
-      cellX: number;
-      cellW: number;
-      idx: number;
-    }> = [];
-    for (let i = 0; i < buckets.length; i++) {
-      const b = buckets[i]!;
-      const bStart = Date.parse(b.start);
-      const bEnd = Date.parse(b.end);
-      const cellX = xForMs(bStart);
-      const cellW = Math.max(((bEnd - bStart) / rangeSpanMs) * plotWidth, 1);
-      const barGap = Math.min(cellW * 0.2, 2);
-      const top = scaleY(b.max_agents, scale.max, CHART_H);
-      // Split the peak bar into a blue interactive base and an orange automated
-      // cap. interactive_at_peak + automated_at_peak == max_agents, so the two
-      // segments stack to the full bar; interactiveTop is the seam between them.
-      const interactiveTop = scaleY(b.interactive_at_peak, scale.max, CHART_H);
-      out.push({
-        x: cellX + barGap / 2,
-        y: top,
-        w: Math.max(cellW - barGap, 1),
-        h: Math.max(CHART_H - top, 0),
-        interactiveY: interactiveTop,
-        interactiveH: Math.max(CHART_H - interactiveTop, 0),
-        automatedY: top,
-        automatedH: Math.max(interactiveTop - top, 0),
-        cellX,
-        cellW,
-        idx: i,
-      });
-    }
-    return out;
-  });
+  // The stacked bar, the activity strip, and selection share bucket bounds.
+  // Segments are stacked from the baseline in class order; zero-count classes
+  // draw nothing.
+  const bars = $derived(buckets.map((bucket, idx) => {
+    const start = Date.parse(bucket.start);
+    const end = Date.parse(bucket.end);
+    const cellX = xForMs(start);
+    const cellW = Math.max(((end - start) / rangeSpanMs) * plotWidth, 1);
+    const gap = Math.min(cellW * 0.2, 2);
+    let top = PLOT_BOTTOM;
+    const segments = classes.flatMap((cls) => {
+      const count = bucket[cls.atPeak];
+      if (count <= 0) return [];
+      const height = segmentHeight(count);
+      top -= height;
+      return [{ kind: cls.kind, y: top, height }];
+    });
+    return {
+      x: cellX + gap / 2,
+      w: Math.max(cellW - gap, 1),
+      cellX,
+      cellW,
+      idx,
+      segments,
+    };
+  }));
 
   const selectionBounds = $derived.by(() => {
     if (!activeRange) return null;
@@ -441,7 +465,7 @@
       ? []
       : buckets.map((bucket) => ({
           time: (Date.parse(bucket.start) + Date.parse(bucket.end)) / 2,
-          value: (bucketOverlayValue(bucket) / overlayMax) * scale.max,
+          value: bucketOverlayValue(bucket) / overlayMax,
         })),
   );
 
@@ -450,24 +474,9 @@
     const values =
       overlayDataMax <= 0 ? [0] : [0, overlayDataMax / 2, overlayDataMax];
     return values.map((val) => ({
-      y: scaleY(val, overlayMax, CHART_H),
+      y: PLOT_BOTTOM - (val / overlayMax) * PLOT_H,
       label: fmtOverlayTick(val),
     }));
-  });
-
-  const yTicks = $derived.by(() => {
-    const { step, max } = scale;
-    if (max <= 0 || step <= 0) return [];
-    const ticks: Array<{ y: number; label: string }> = [];
-    const count = Math.round(max / step);
-    for (let i = 0; i <= count; i++) {
-      const val = step * i;
-      ticks.push({
-        y: scaleY(val, max, CHART_H),
-        label: String(val),
-      });
-    }
-    return ticks;
   });
 
   // Local clock fields in the report timezone, used to pick tick boundaries.
@@ -553,8 +562,8 @@
     bars.filter((bar) => Date.parse(buckets[bar.idx]!.start) < futureStartMs),
   );
 
-  const svgH = $derived(CHART_H + STRIP_GAP + STRIP_H + X_LABEL_H);
-  const stripY = $derived(CHART_H + STRIP_GAP);
+  const svgH = PLOT_BOTTOM + STRIP_GAP + STRIP_H + X_LABEL_H;
+  const stripY = PLOT_BOTTOM + STRIP_GAP;
 
   function setOverlayMetric(value: string) {
     overlayMetric = value as "none" | "tokens" | "cost";
@@ -578,16 +587,8 @@
           onclick={() => onSelectRange?.(null)}
         />
       {/if}
-      <div class="legend" aria-hidden="true">
-        <span class="legend-item">
-          <span class="swatch interactive"></span>{m.activity_interactive()}
-        </span>
-        <span class="legend-item">
-          <span class="swatch automated"></span>{m.activity_automated()}
-        </span>
-      </div>
       <div class="overlay-toggle">
-        <span>{m.activity_overlay()}</span>
+        <span>{m.activity_all_sessions_overlay()}</span>
         <Typeahead
           options={overlayOptions}
           value={overlayMetric}
@@ -599,6 +600,17 @@
         />
       </div>
     </div>
+  </div>
+
+  <div class="chart-meta">
+    <div class="legend" aria-hidden="true">
+      {#each classes as cls (cls.kind)}
+        <span class="legend-item">
+          <span class={`swatch ${cls.kind}`}></span>{cls.label}
+        </span>
+      {/each}
+    </div>
+    <span class="chart-peak">{peakLabel}</span>
   </div>
 
   <div
@@ -614,9 +626,9 @@
       y="value"
       xScale={scaleLinear()}
       xDomain={[rangeStartMs, rangeEndMs]}
-      yDomain={[0, scale.max]}
+      yDomain={[0, 1]}
       xRange={[Y_LABEL_W, Y_LABEL_W + plotWidth]}
-      yRange={[CHART_H, TOP_PAD]}
+      yRange={[PLOT_BOTTOM, TOP_PAD]}
       padding={0}
       height={svgH}
     >
@@ -628,7 +640,7 @@
             x={futureX}
             y={TOP_PAD}
             width={futureW}
-            height={CHART_H - TOP_PAD}
+            height={PLOT_H}
           />
         {/if}
 
@@ -648,22 +660,19 @@
             textAnchor="end"
           />
         {/each}
-
         {#each bars as bar (bar.idx)}
-          <Rect
-            class={`concurrency-seg interactive${activeRange && bar.idx >= activeRange.start && bar.idx < activeRange.end ? " selected" : ""}`}
-            x={bar.x}
-            y={bar.interactiveY}
-            width={bar.w}
-            height={bar.interactiveH}
-          />
-          <Rect
-            class={`concurrency-seg automated${activeRange && bar.idx >= activeRange.start && bar.idx < activeRange.end ? " selected" : ""}`}
-            x={bar.x}
-            y={bar.automatedY}
-            width={bar.w}
-            height={bar.automatedH}
-          />
+          {@const selected = activeRange !== null && bar.idx >= activeRange.start && bar.idx < activeRange.end}
+          <g class="concurrency-bar" data-concurrency-bar={bar.idx}>
+            {#each bar.segments as seg (seg.kind)}
+              <Rect
+                class={`concurrency-seg ${seg.kind}${selected ? " selected" : ""}`}
+                x={bar.x}
+                y={seg.y}
+                width={bar.w}
+                height={seg.height}
+              />
+            {/each}
+          </g>
         {/each}
 
         {#if overlayMetric !== "none" && overlayPoints.length > 0}
@@ -679,7 +688,7 @@
             x1={Y_LABEL_W + plotWidth}
             y1={TOP_PAD}
             x2={Y_LABEL_W + plotWidth}
-            y2={CHART_H}
+            y2={PLOT_BOTTOM}
           />
           {#each overlayTicks as tick}
             <Line
@@ -777,10 +786,22 @@
       >
         <div class="tooltip-date">{fmtBucketRange(tooltip.bucket)}</div>
         <dl class="tooltip-metrics">
+          {#each classes as cls (cls.kind)}
+            <div>
+              <dt>{cls.label}</dt>
+              <dd>{tooltip.bucket[cls.atPeak].toLocaleString(getLocale())}</dd>
+            </div>
+          {/each}
           <div>
-            <dt>{m.activity_peak_concurrency()}</dt>
-            <dd>{peakValue(tooltip.bucket)}</dd>
+            <dt>{m.activity_combined_peak()}</dt>
+            <dd>{tooltip.bucket.max_agents.toLocaleString(getLocale())}</dd>
           </div>
+          {#each classes as cls (cls.kind)}
+            <div>
+              <dt>{cls.peakLabel}</dt>
+              <dd>{tooltip.bucket[cls.max].toLocaleString(getLocale())}</dd>
+            </div>
+          {/each}
           <div>
             <dt>{m.activity_agent_min()}</dt>
             <dd>{fmtCompactValue(tooltip.bucket.agent_minutes)}</dd>
@@ -813,6 +834,8 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
     margin-bottom: 8px;
   }
 
@@ -835,9 +858,19 @@
     font-size: 10px;
   }
 
+  .chart-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    margin-bottom: 4px;
+  }
+
   .legend {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: var(--space-5);
   }
 
@@ -859,8 +892,18 @@
     background: var(--accent-blue);
   }
 
+  .swatch.subagent {
+    background: var(--accent-violet);
+  }
+
   .swatch.automated {
     background: var(--accent-orange);
+  }
+
+  .chart-peak {
+    font-size: 10px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
   }
 
   .overlay-toggle {
@@ -912,10 +955,17 @@
 
   .timeline :global(.concurrency-seg) {
     opacity: 0.75;
+    /* Surface-colored seam so stacked segments read as separate parts. */
+    stroke: var(--bg-surface);
+    stroke-width: 1;
   }
 
   .timeline :global(.concurrency-seg.interactive) {
     fill: var(--accent-blue);
+  }
+
+  .timeline :global(.concurrency-seg.subagent) {
+    fill: var(--accent-violet);
   }
 
   .timeline :global(.concurrency-seg.automated) {

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 # Extract only screenshot-safe project sessions from the source
 # database. This runs on the host before the Docker build so the
@@ -68,11 +69,13 @@ mkdir -p "$(dirname "$OUTPUT")"
 rm -f "$OUTPUT"
 
 {
-  echo "CREATE TEMP TABLE screenshot_redactions(from_text TEXT PRIMARY KEY, to_text TEXT NOT NULL);"
+  echo "CREATE TEMP TABLE screenshot_redactions(from_text TEXT PRIMARY KEY, to_text TEXT NOT NULL, encoded_from_text TEXT NOT NULL);"
   if [ -n "$HOME_PATH" ] && [ "$HOME_PATH" != "/" ]; then
     home_sql="${HOME_PATH//\'/\'\'}"
-    printf "INSERT OR IGNORE INTO screenshot_redactions(from_text, to_text) VALUES ('%s', '~');\n" \
-      "$home_sql"
+    # Claude replaces every character except ASCII letters, digits, and dashes.
+    encoded_home="${HOME_PATH//[^a-zA-Z0-9-]/-}"
+    printf "INSERT OR IGNORE INTO screenshot_redactions(from_text, to_text, encoded_from_text) VALUES ('%s', '~', '%s');\n" \
+      "$home_sql" "$encoded_home"
   fi
 
   echo "CREATE TEMP TABLE screenshot_blocked_patterns(pattern TEXT PRIMARY KEY);"
@@ -108,7 +111,7 @@ rm -f "$OUTPUT"
 # reads one snapshot-isolated pass that concurrent writes do not
 # restart, and does not touch the source. The target must not exist
 # (rm -f above guarantees that).
-sqlite3 "$SOURCE" "VACUUM INTO '$OUTPUT'"
+sqlite3 -readonly "$SOURCE" "VACUUM INTO '$OUTPUT'"
 
 # Delete sessions (and related data) for non-matching projects.
 # The heredoc delimiter is quoted so bash does NOT expand $ or
@@ -127,6 +130,13 @@ INSERT INTO screenshot_projects(name) VALUES
   ('roborev'),
   ('roborev_docs');
 
+-- Host-prefixed imports can expose original machine names in IDs and paths.
+-- Use local transcripts; the capture runner supplies example remote machines.
+INSERT OR IGNORE INTO screenshot_blocked_patterns(pattern)
+SELECT '%' || replace(replace(replace(
+  lower(substr(id, 1, instr(id, '~') - 1)), '\', '\\'), '%', '\%'), '_', '\_') || '%'
+FROM sessions WHERE instr(id, '~') > 0;
+
 CREATE TEMP TABLE screenshot_safe_sessions(id TEXT PRIMARY KEY);
 CREATE TEMP TABLE screenshot_root_sessions(id TEXT PRIMARY KEY);
 CREATE TEMP TABLE screenshot_sessions(id TEXT PRIMARY KEY);
@@ -139,6 +149,7 @@ INSERT INTO screenshot_safe_sessions(id)
 SELECT id
 FROM sessions s
 WHERE s.project IN (SELECT name FROM screenshot_projects)
+  AND instr(s.id, '~') = 0
   AND s.message_count > 0
   AND s.deleted_at IS NULL
   AND NOT EXISTS (
@@ -296,27 +307,28 @@ DELETE FROM worktree_project_mappings;
 -- multi-machine UI remains covered with deterministic example identities.
 UPDATE sessions SET machine = 'dev-laptop';
 
+-- Redact both plain home paths and encoded Claude project folders.
 UPDATE sessions
-SET first_message = replace(first_message, r.from_text, r.to_text),
-    display_name = replace(display_name, r.from_text, r.to_text),
-    session_name = replace(session_name, r.from_text, r.to_text),
-    cwd = replace(cwd, r.from_text, r.to_text),
-    file_path = replace(file_path, r.from_text, r.to_text)
+SET first_message = replace(replace(first_message, r.from_text, r.to_text), r.encoded_from_text, '-home-user'),
+    display_name = replace(replace(display_name, r.from_text, r.to_text), r.encoded_from_text, '-home-user'),
+    session_name = replace(replace(session_name, r.from_text, r.to_text), r.encoded_from_text, '-home-user'),
+    cwd = replace(replace(cwd, r.from_text, r.to_text), r.encoded_from_text, '-home-user'),
+    file_path = replace(replace(file_path, r.from_text, r.to_text), r.encoded_from_text, '-home-user')
 FROM screenshot_redactions r;
 
 UPDATE messages
-SET content = replace(content, r.from_text, r.to_text),
-    thinking_text = replace(thinking_text, r.from_text, r.to_text)
+SET content = replace(replace(content, r.from_text, r.to_text), r.encoded_from_text, '-home-user'),
+    thinking_text = replace(replace(thinking_text, r.from_text, r.to_text), r.encoded_from_text, '-home-user')
 FROM screenshot_redactions r;
 
 UPDATE tool_calls
-SET file_path = replace(file_path, r.from_text, r.to_text),
-    input_json = replace(input_json, r.from_text, r.to_text),
-    result_content = replace(result_content, r.from_text, r.to_text)
+SET file_path = replace(replace(file_path, r.from_text, r.to_text), r.encoded_from_text, '-home-user'),
+    input_json = replace(replace(input_json, r.from_text, r.to_text), r.encoded_from_text, '-home-user'),
+    result_content = replace(replace(result_content, r.from_text, r.to_text), r.encoded_from_text, '-home-user')
 FROM screenshot_redactions r;
 
 UPDATE tool_result_events
-SET content = replace(content, r.from_text, r.to_text)
+SET content = replace(replace(content, r.from_text, r.to_text), r.encoded_from_text, '-home-user')
 FROM screenshot_redactions r;
 
 -- Rebuild FTS index from the surviving messages.

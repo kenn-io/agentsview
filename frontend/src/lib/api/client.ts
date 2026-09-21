@@ -1,128 +1,83 @@
-import type { SyncProgress, SyncStats, Insight, GenerateInsightRequest } from "./types.js";
-import type { SessionTiming } from "./types/timing.js";
+import { EventSource } from "eventsource";
+import { createParser, type EventSourceMessage } from "eventsource-parser";
+import type {
+  SyncProgress,
+  SyncSyncStats as SyncStats,
+  DbInsight as Insight,
+  GenerateInsightRequest,
+} from "./generated/index.js";
 import {
-  ApiError,
-  authHeaders,
-  getAuthToken,
-  getBase,
-  isRemoteConnection,
-  responseErrorMessage,
-} from "./runtime.js";
+  SyncService,
+  SessionsService,
+  InsightsService,
+  ImportService,
+  type DbSessionTiming as SessionTiming,
+  type ImporterImportStats as ImportStats,
+} from "./generated/index.js";
+import { ApiError, getAuthToken, getGeneratedBase, isRemoteConnection } from "./runtime.js";
 
 export interface SyncHandle {
   abort: () => void;
   done: Promise<SyncStats>;
 }
 
-function streamSyncSSE(path: string, onProgress?: (p: SyncProgress) => void): SyncHandle {
-  const controller = new AbortController();
-
-  const done = (async () => {
-    const res = await fetch(
-      `${getBase()}${path}`,
-      authHeaders({
-        method: "POST",
-        signal: controller.signal,
-      }),
-    );
-
-    if (!res.ok || !res.body) {
-      throw new Error(`Sync request failed: ${res.status}`);
-    }
-
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = "";
-    let stats: SyncStats | undefined;
-
-    for (;;) {
-      const { done: eof, value } = await reader.read();
-      if (eof) break;
-      buf += decoder.decode(value, { stream: true });
-      buf = buf.replaceAll("\r\n", "\n");
-
-      const result = processFrames(buf, onProgress);
-      if (result) {
-        stats = result;
-        reader.cancel();
+export async function consumeEvents<T>(
+  response: Response,
+  dispatch: (event: EventSourceMessage) => T | undefined,
+  missingResult: string,
+): Promise<T> {
+  if (!response.body) throw new Error(missingResult);
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let result: T | undefined;
+  const parser = createParser({
+    onEvent: (event) => {
+      if (result === undefined) result = dispatch(event);
+    },
+  });
+  try {
+    while (result === undefined) {
+      const { done, value } = await reader.read();
+      if (done) {
+        // The daemon may close immediately after its terminal event.
+        parser.feed(decoder.decode() + "\n\n");
         break;
       }
-      const last = buf.lastIndexOf("\n\n");
-      if (last !== -1) buf = buf.slice(last + 2);
+      parser.feed(decoder.decode(value, { stream: true }));
     }
+    if (result === undefined) throw new Error(missingResult);
+    return result;
+  } finally {
+    await reader.cancel();
+    reader.releaseLock();
+  }
+}
 
-    // Flush any remaining multibyte bytes from decoder
-    buf += decoder.decode();
-
-    if (!stats && buf.trim()) {
-      stats = processFrame(buf, onProgress);
-    }
-
-    if (!stats) {
-      throw new Error("Sync stream ended without done event");
-    }
-
-    return stats;
-  })();
-
+function streamSyncSSE(
+  request: (signal: AbortSignal) => Promise<Response>,
+  onProgress?: (p: SyncProgress) => void,
+): SyncHandle {
+  const controller = new AbortController();
+  const done = request(controller.signal).then((response) =>
+    consumeEvents<SyncStats>(
+      response,
+      ({ event, data }) => {
+        if (event === "progress") onProgress?.(JSON.parse(data));
+        if (event === "done") return JSON.parse(data);
+        if (event === "error") throw new Error(JSON.parse(data).error ?? "Sync failed");
+      },
+      "Sync stream ended without done event",
+    ),
+  );
   return { abort: () => controller.abort(), done };
 }
 
 export function triggerSync(onProgress?: (p: SyncProgress) => void): SyncHandle {
-  return streamSyncSSE("/sync", onProgress);
+  return streamSyncSSE((signal) => SyncService.postApiV1Sync(undefined, { signal }), onProgress);
 }
 
 export function triggerResync(onProgress?: (p: SyncProgress) => void): SyncHandle {
-  return streamSyncSSE("/resync", onProgress);
-}
-
-/**
- * Parse all complete SSE frames in buf.
- * Returns the SyncStats if a "done" event was received, undefined otherwise.
- */
-function processFrames(buf: string, onProgress?: (p: SyncProgress) => void): SyncStats | undefined {
-  let idx: number;
-  let start = 0;
-  while ((idx = buf.indexOf("\n\n", start)) !== -1) {
-    const frame = buf.slice(start, idx);
-    start = idx + 2;
-    const stats = processFrame(frame, onProgress);
-    if (stats) return stats;
-  }
-  return undefined;
-}
-
-/**
- * Dispatch a single SSE frame.
- * Returns the SyncStats if it was a "done" event, undefined otherwise.
- */
-function processFrame(
-  frame: string,
-  onProgress?: (p: SyncProgress) => void,
-): SyncStats | undefined {
-  let event = "";
-  const dataLines: string[] = [];
-  for (const line of frame.split("\n")) {
-    if (line.startsWith("event: ")) {
-      event = line.slice(7);
-    } else if (line.startsWith("data: ")) {
-      dataLines.push(line.slice(6));
-    } else if (line.startsWith("data:")) {
-      dataLines.push(line.slice(5));
-    }
-  }
-  const data = dataLines.join("\n");
-  if (!data) return undefined;
-
-  if (event === "progress") {
-    onProgress?.(JSON.parse(data) as SyncProgress);
-  } else if (event === "done") {
-    return JSON.parse(data) as SyncStats;
-  } else if (event === "error") {
-    const payload = JSON.parse(data) as { error?: string };
-    throw new Error(payload.error ?? "Sync failed");
-  }
-  return undefined;
+  return streamSyncSSE((signal) => SyncService.postApiV1Resync({ signal }), onProgress);
 }
 
 /** Event payload for /api/v1/events data_changed frames. */
@@ -130,15 +85,6 @@ export interface DataChangedEvent {
   scope: "messages" | "sessions" | "sync";
 }
 
-/** Watch a session for live updates via SSE.
- *
- * SECURITY NOTE: The native EventSource API does not support custom
- * headers, so the auth token is passed as a query parameter for
- * remote connections. This means the token may appear in browser
- * history and proxy/server access logs. This is an accepted
- * limitation of SSE — switching to a fetch-based streaming
- * approach would avoid this but adds significant complexity.
- */
 /** Number of consecutive onerror firings without a successful
  * connection or event delivery before watchSession gives up. Guards
  * against the browser hammering `/watch` forever when the session
@@ -151,12 +97,13 @@ export function watchSession(
   onUpdate: () => void,
   onTiming?: (t: SessionTiming) => void,
 ): EventSource {
-  const url = `${getBase()}/sessions/${encodeURIComponent(sessionId)}/watch`;
-  const token = getAuthToken();
-  // EventSource does not support custom headers, so pass the
-  // auth token as a query parameter for remote connections.
-  const fullUrl = token ? `${url}?token=${encodeURIComponent(token)}` : url;
-  const es = new EventSource(fullUrl);
+  const url = new URL(
+    `${getGeneratedBase()}${SessionsService.getGetApiV1SessionsByIdWatchUrl({ id: sessionId })}`,
+    window.location.origin,
+  );
+  const es = new EventSource(url, {
+    fetch: (_url, options) => SessionsService.getApiV1SessionsByIdWatch({ id: sessionId }, options),
+  });
 
   // Circuit breaker: mirrors watchEvents. A 404 (unknown session)
   // or other permanent failure would otherwise have EventSource
@@ -193,18 +140,6 @@ export function watchSession(
   return es;
 }
 
-/** Watch the global sync event stream via SSE.
- *
- * Returns the underlying EventSource so callers can close() it
- * when done. The browser's native EventSource auto-reconnects
- * on transient errors; in PG serve mode the endpoint returns
- * 503 and the browser will retry at its default interval.
- *
- * SECURITY NOTE: Same as watchSession — EventSource cannot set
- * headers, so the auth token is passed as a query parameter
- * for remote connections. This may leak the token into browser
- * history / access logs; accepted per the project threat model.
- */
 /** Number of consecutive onerror firings without any successful
  * event delivery before watchEvents gives up and closes the
  * underlying EventSource. This protects PG serve mode — where
@@ -230,10 +165,13 @@ export function watchEvents(
   onEvent: (e: DataChangedEvent) => void,
   opts: WatchEventsOptions = {},
 ): EventSource {
-  const url = `${getBase()}/events`;
-  const token = getAuthToken();
-  const fullUrl = token ? `${url}?token=${encodeURIComponent(token)}` : url;
-  const es = new EventSource(fullUrl);
+  const url = new URL(
+    `${getGeneratedBase()}${SessionsService.getGetApiV1EventsUrl()}`,
+    window.location.origin,
+  );
+  const es = new EventSource(url, {
+    fetch: (_url, options) => SessionsService.getApiV1Events(options),
+  });
 
   // Circuit breaker: on N consecutive onerror firings without any
   // successful connection or event delivery, close the stream.
@@ -298,52 +236,53 @@ export function watchEvents(
  * token in the URL query string.
  */
 export function getExportUrl(sessionId: string): string {
-  return `${getBase()}/sessions/${encodeURIComponent(sessionId)}/export`;
-}
-
-function getInsightExportUrl(insightId: number): string {
-  return `${getBase()}/insights/${insightId}/export`;
+  return `${getGeneratedBase()}${SessionsService.getGetApiV1SessionsByIdExportUrl({ id: sessionId })}`;
 }
 
 /** Get markdown export URL for a session, with optional child depth. */
 export function getMarkdownExportUrl(sessionId: string, depth?: 1 | "all"): string {
   const url = new URL(
-    `${getBase()}/sessions/${encodeURIComponent(sessionId)}/md`,
+    `${getGeneratedBase()}${SessionsService.getGetApiV1SessionsByIdMdUrl({ id: sessionId }, { depth: depth === 1 ? "1" : depth })}`,
     window.location.origin,
   );
-  if (depth !== undefined) {
-    url.searchParams.set("depth", String(depth));
-  }
   if (isRemoteConnection()) {
     return url.toString();
   }
   return `${url.pathname}${url.search}`;
 }
 
-export function getInsightMarkdownExportUrl(insightId: number): string {
-  return `${getBase()}/insights/${insightId}/md`;
-}
-
 /** Download a session export using fetch with auth headers,
  *  avoiding token leakage in the URL for remote connections. */
 export async function downloadExport(sessionId: string): Promise<void> {
-  await downloadAuthenticatedExport(getExportUrl(sessionId), `session-${sessionId}.html`);
+  await downloadAuthenticatedExport(
+    SessionsService.getGetApiV1SessionsByIdExportUrl({ id: sessionId }),
+    () => SessionsService.getApiV1SessionsByIdExport({ id: sessionId }),
+    `session-${sessionId}.html`,
+  );
 }
 
 export async function downloadInsightExport(insightId: number): Promise<void> {
-  await downloadAuthenticatedExport(getInsightExportUrl(insightId), `insight-${insightId}.html`);
+  await downloadAuthenticatedExport(
+    InsightsService.getGetApiV1InsightsByIdExportUrl({ id: insightId }),
+    () => InsightsService.getApiV1InsightsByIdExport({ id: insightId }),
+    `insight-${insightId}.html`,
+  );
 }
 
-async function downloadAuthenticatedExport(url: string, fallbackFilename: string): Promise<void> {
+async function downloadAuthenticatedExport(
+  url: string,
+  request: () => Promise<Response>,
+  fallbackFilename: string,
+): Promise<void> {
   const token = getAuthToken();
   if (!token) {
     // Local connection — simple navigation is fine.
-    window.open(url, "_blank");
+    window.open(`${getGeneratedBase()}${url}`, "_blank");
     return;
   }
   // Remote connection — use fetch with Authorization header
   // to avoid putting the token in the URL.
-  const res = await fetch(url, authHeaders());
+  const res = await request();
   if (!res.ok) {
     throw new ApiError(res.status, `Export failed: ${res.status}`);
   }
@@ -378,203 +317,63 @@ export function generateInsight(
 ): GenerateInsightHandle {
   const controller = new AbortController();
 
-  const done = (async () => {
-    const res = await fetch(
-      `${getBase()}/insights/generate`,
-      authHeaders({
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(req),
-        signal: controller.signal,
-      }),
-    );
-
-    if (!res.ok) {
-      throw new ApiError(res.status, await responseErrorMessage(res));
-    }
-    if (!res.body) {
-      throw new Error("Generate request failed: empty response");
-    }
-
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = "";
-    let result: Insight | undefined;
-
-    for (;;) {
-      const { done: eof, value } = await reader.read();
-      if (eof) break;
-      buf += decoder.decode(value, { stream: true });
-      buf = buf.replaceAll("\r\n", "\n");
-
-      const parsed = processInsightFrames(buf, onStatus, onLog);
-      buf = parsed.remaining;
-      if (parsed.result) {
-        result = parsed.result;
-        reader.cancel();
-        break;
-      }
-    }
-
-    // Flush any remaining multibyte bytes from decoder
-    buf += decoder.decode();
-
-    if (!result && buf.trim()) {
-      result = processInsightFrame(buf, onStatus, onLog);
-    }
-
-    if (!result) {
-      throw new Error("Generate stream ended without done event");
-    }
-
-    return result;
-  })();
-
+  const done = InsightsService.postApiV1InsightsGenerate(req, { signal: controller.signal }).then(
+    (response) =>
+      consumeEvents<Insight>(
+        response,
+        ({ event, data }) => {
+          if (event === "status") onStatus?.(JSON.parse(data).phase);
+          if (event === "log") onLog?.(JSON.parse(data));
+          if (event === "done") return JSON.parse(data);
+          if (event === "error") throw new Error(JSON.parse(data).message);
+        },
+        "Generate stream ended without done event",
+      ),
+  );
   return { abort: () => controller.abort(), done };
 }
 
-function processInsightFrames(
-  buf: string,
-  onStatus?: (phase: string) => void,
-  onLog?: (event: InsightLogEvent) => void,
-): { result?: Insight; remaining: string } {
-  let idx: number;
-  let start = 0;
-  while ((idx = buf.indexOf("\n\n", start)) !== -1) {
-    const frame = buf.slice(start, idx);
-    start = idx + 2;
-    const result = processInsightFrame(frame, onStatus, onLog);
-    if (result) {
-      return { result, remaining: buf.slice(start) };
-    }
-  }
-  return { remaining: buf.slice(start) };
-}
-
-function processInsightFrame(
-  frame: string,
-  onStatus?: (phase: string) => void,
-  onLog?: (event: InsightLogEvent) => void,
-): Insight | undefined {
-  let event = "";
-  const dataLines: string[] = [];
-  for (const line of frame.split("\n")) {
-    if (line.startsWith("event: ")) {
-      event = line.slice(7);
-    } else if (line.startsWith("data: ")) {
-      dataLines.push(line.slice(6));
-    } else if (line.startsWith("data:")) {
-      dataLines.push(line.slice(5));
-    }
-  }
-  const data = dataLines.join("\n");
-  if (!data) return undefined;
-
-  if (event === "status") {
-    const parsed = JSON.parse(data) as { phase: string };
-    onStatus?.(parsed.phase);
-  } else if (event === "log") {
-    const parsed = JSON.parse(data) as InsightLogEvent;
-    onLog?.(parsed);
-  } else if (event === "done") {
-    return JSON.parse(data) as Insight;
-  } else if (event === "error") {
-    const parsed = JSON.parse(data) as { message: string };
-    throw new Error(parsed.message);
-  }
-  return undefined;
-}
-
 /* Import */
-
-export interface ImportStats {
-  imported: number;
-  updated: number;
-  skipped: number;
-  errors: number;
-}
 
 export interface ImportCallbacks {
   onProgress?: (stats: ImportStats) => void;
   onIndexing?: () => void;
 }
 
-async function readImportSSE(res: Response, cb?: ImportCallbacks): Promise<ImportStats> {
-  const reader = res.body!.getReader();
-  const decoder = new TextDecoder();
-  let buf = "";
-  let result: ImportStats | null = null;
-
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-
-    // Process complete SSE frames (double newline delimited).
-    let idx: number;
-    while ((idx = buf.indexOf("\n\n")) !== -1) {
-      const frame = buf.slice(0, idx);
-      buf = buf.slice(idx + 2);
-
-      let event = "";
-      let data = "";
-      for (const line of frame.split("\n")) {
-        if (line.startsWith("event: ")) event = line.slice(7);
-        else if (line.startsWith("data: ")) data = line.slice(6);
-      }
-      if (!event || !data) continue;
-
-      const parsed = JSON.parse(data);
-      switch (event) {
-        case "progress":
-          cb?.onProgress?.(parsed as ImportStats);
-          break;
-        case "indexing":
-          cb?.onIndexing?.();
-          break;
-        case "done":
-          result = parsed as ImportStats;
-          break;
-        case "error":
-          throw new Error((parsed as { error?: string }).error ?? "Import failed");
-      }
-    }
-  }
-
-  if (!result) throw new Error("Import stream ended without result");
-  return result;
+async function readImportResponse(response: Response, cb?: ImportCallbacks): Promise<ImportStats> {
+  if (!response.headers.get("content-type")?.includes("text/event-stream")) return response.json();
+  return consumeEvents<ImportStats>(
+    response,
+    ({ event, data }) => {
+      if (event === "progress") cb?.onProgress?.(JSON.parse(data));
+      if (event === "indexing") cb?.onIndexing?.();
+      if (event === "done") return JSON.parse(data);
+      if (event === "error") throw new Error(JSON.parse(data).error ?? "Import failed");
+    },
+    "Import stream ended without result",
+  );
 }
 
 export async function importClaudeAI(file: File, cb?: ImportCallbacks): Promise<ImportStats> {
-  const form = new FormData();
-  form.append("file", file);
-  const init = authHeaders({ method: "POST", body: form });
-  const headers = new Headers(init.headers);
-  headers.set("Accept", "text/event-stream");
-  const res = await fetch(`${getBase()}/import/claude-ai`, { ...init, headers });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error((err as { error?: string }).error ?? `Import failed (${res.status})`);
-  }
-  if (res.headers.get("content-type")?.includes("text/event-stream")) {
-    return readImportSSE(res, cb);
-  }
-  return res.json();
+  return readImportResponse(
+    await ImportService.postApiV1ImportClaudeAi(
+      { file },
+      {
+        headers: { Accept: "text/event-stream" },
+      },
+    ),
+    cb,
+  );
 }
 
 export async function importChatGPT(file: File, cb?: ImportCallbacks): Promise<ImportStats> {
-  const form = new FormData();
-  form.append("file", file);
-  const init = authHeaders({ method: "POST", body: form });
-  const headers = new Headers(init.headers);
-  headers.set("Accept", "text/event-stream");
-  const res = await fetch(`${getBase()}/import/chatgpt`, { ...init, headers });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error((err as { error?: string }).error ?? `Import failed (${res.status})`);
-  }
-  if (res.headers.get("content-type")?.includes("text/event-stream")) {
-    return readImportSSE(res, cb);
-  }
-  return res.json();
+  return readImportResponse(
+    await ImportService.postApiV1ImportChatgpt(
+      { file },
+      {
+        headers: { Accept: "text/event-stream" },
+      },
+    ),
+    cb,
+  );
 }

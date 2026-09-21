@@ -18,6 +18,11 @@ import (
 	"go.kenn.io/agentsview/internal/service"
 )
 
+type sessionListDocument struct {
+	service.SessionList
+	MachineLabels service.MachineLabelCatalog `json:"machine_labels"`
+}
+
 func newSessionListCommand() *cobra.Command {
 	var (
 		project, excludeProject, machine, agent string
@@ -27,6 +32,7 @@ func newSessionListCommand() *cobra.Command {
 		minUserMessages                         int
 		includeOneShot                          bool
 		includeAutomated, includeChildren       bool
+		includeSource                           bool
 		outcome, healthGrade                    string
 		minToolFailures                         int
 		hasSecret                               bool
@@ -69,6 +75,7 @@ func newSessionListCommand() *cobra.Command {
 				IncludeOneShot:   includeOneShot,
 				IncludeAutomated: includeAutomated,
 				IncludeChildren:  includeChildren,
+				IncludeSource:    includeSource,
 				Outcome:          outcome,
 				HealthGrade:      healthGrade,
 				HasSecret:        hasSecret,
@@ -127,7 +134,23 @@ func newSessionListCommand() *cobra.Command {
 				fmt.Fprintln(cmd.ErrOrStderr(), notice)
 			}
 			if outputFormat(cmd) == "json" {
-				return json.MarshalEncode(jsontext.NewEncoder(cmd.OutOrStdout()), list)
+				keys := make(map[string]struct{}, len(list.Sessions))
+				for _, session := range list.Sessions {
+					keys[session.Machine] = struct{}{}
+				}
+				machineLabels := machineLabelsForKeys(machineLabelCatalog(
+					cmd.Context(), cmd.ErrOrStderr(),
+					func(ctx context.Context) (service.MachineLabelCatalog, error) {
+						return service.MachineLabels(ctx, svc)
+					},
+				), keys)
+				document := sessionListDocument{
+					SessionList:   *list,
+					MachineLabels: machineLabels,
+				}
+				return json.MarshalEncode(
+					jsontext.NewEncoder(cmd.OutOrStdout()), document,
+				)
 			}
 			home, _ := os.UserHomeDir()
 			return printSessionListHuman(
@@ -166,6 +189,8 @@ func newSessionListCommand() *cobra.Command {
 		"Include automated sessions (excluded by default)")
 	flags.BoolVar(&includeChildren, "include-children", false,
 		"Include subagent/child sessions")
+	flags.BoolVar(&includeSource, "include-source", false,
+		"Include source file paths in JSON output")
 	flags.StringVar(&outcome, "outcome", "",
 		"Filter by outcome (comma-separated: success,failure,...)")
 	flags.StringVar(&healthGrade, "health-grade", "",

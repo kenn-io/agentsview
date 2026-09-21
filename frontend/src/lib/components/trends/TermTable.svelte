@@ -1,6 +1,6 @@
 <script lang="ts">
   import { m } from "../../i18n/index.js";
-  import type { TrendsSeries } from "../../api/types.js";
+  import type { DbTrendSeries as TrendsSeries } from "../../api/generated/index.js";
 
   interface Props {
     series: TrendsSeries[];

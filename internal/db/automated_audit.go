@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 )
@@ -20,11 +21,11 @@ func (text boundedAutomationText) evidence() AutomationTextEvidence {
 	}
 }
 
-func auditAutomatedFull(
+func auditAutomatedFull(ctx context.Context,
 	w *writerHandle,
 	patterns automationPatternSnapshot,
 ) (setIDs, clearIDs []string, err error) {
-	rows, err := w.Query(
+	rows, err := w.Query(ctx,
 		`SELECT
 			s.id,
 			s.agent,
@@ -37,6 +38,7 @@ func auditAutomatedFull(
 				FROM messages m
 				WHERE m.session_id = s.id
 				  AND m.role = 'user'
+				  AND COALESCE(m.source_subtype, '') <> 'tool_result'
 				  AND m.is_system = 0
 				  AND TRIM(m.content) <> ''
 				ORDER BY m.ordinal
@@ -49,6 +51,7 @@ func auditAutomatedFull(
 			"querying automated backfill candidates: %w", err,
 		)
 	}
+	defer rows.Close()
 
 	setIDs, clearIDs, err = scanFullAutomationCandidates(rows, patterns)
 	if closeErr := rows.Close(); err == nil && closeErr != nil {
@@ -57,11 +60,11 @@ func auditAutomatedFull(
 	return setIDs, clearIDs, err
 }
 
-func auditAutomatedMatchingHash(
+func auditAutomatedMatchingHash(ctx context.Context,
 	w *writerHandle,
 	patterns automationPatternSnapshot,
 ) (setIDs, clearIDs []string, err error) {
-	rows, err := w.Query(
+	rows, err := w.Query(ctx,
 		`SELECT
 			s.id,
 			s.agent,
@@ -88,6 +91,7 @@ func auditAutomatedMatchingHash(
 				FROM messages m
 				WHERE m.session_id = s.id
 				  AND m.role = 'user'
+				  AND COALESCE(m.source_subtype, '') <> 'tool_result'
 				  AND m.is_system = 0
 				  AND TRIM(m.content) <> ''
 				ORDER BY m.ordinal
@@ -101,6 +105,7 @@ func auditAutomatedMatchingHash(
 			"querying bounded automated audit candidates: %w", err,
 		)
 	}
+	defer rows.Close()
 
 	var unresolved []string
 	for rows.Next() {
@@ -157,7 +162,7 @@ func auditAutomatedMatchingHash(
 
 	err = queryChunked(unresolved, func(ids []string) error {
 		placeholders, args := inPlaceholders(ids)
-		fullRows, err := w.Query(
+		fullRows, err := w.Query(ctx,
 			`SELECT
 				s.id,
 				s.agent,
@@ -170,6 +175,7 @@ func auditAutomatedMatchingHash(
 					FROM messages m
 					WHERE m.session_id = s.id
 					  AND m.role = 'user'
+					  AND COALESCE(m.source_subtype, '') <> 'tool_result'
 					  AND m.is_system = 0
 					  AND TRIM(m.content) <> ''
 					ORDER BY m.ordinal
@@ -184,6 +190,7 @@ func auditAutomatedMatchingHash(
 				"querying unresolved automated audit candidates: %w", err,
 			)
 		}
+		defer fullRows.Close()
 		batchSet, batchClear, scanErr := scanFullAutomationCandidates(
 			fullRows, patterns,
 		)

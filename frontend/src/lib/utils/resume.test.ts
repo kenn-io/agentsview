@@ -6,11 +6,14 @@ describe("supportsResume", () => {
     expect(supportsResume("claude")).toBe(true);
     expect(supportsResume("codex")).toBe(true);
     expect(supportsResume("traex")).toBe(true);
+    expect(supportsResume("augure-code")).toBe(true);
     expect(supportsResume("copilot")).toBe(true);
     expect(supportsResume("cursor")).toBe(true);
     expect(supportsResume("gemini")).toBe(true);
     expect(supportsResume("opencode")).toBe(true);
     expect(supportsResume("amp")).toBe(true);
+    expect(supportsResume("kiro")).toBe(true);
+    expect(supportsResume("pi")).toBe(true);
   });
 
   it("returns false for unsupported agents", () => {
@@ -26,6 +29,34 @@ describe("supportsResume", () => {
 });
 
 describe("buildResumeCommand", () => {
+  it.each([
+    ["claude", "devbox1~claude:abc-123", "claude --resume abc-123"],
+    ["claude", "devbox1~abc-123", "claude --resume abc-123"],
+    ["codex", "devbox1~codex:abc-123", "codex resume abc-123"],
+    ["codex", "devbox1~codex:$(whoami)", "codex resume '$(whoami)'"],
+    ["claude", "devbox1~claude:it's a test", "claude --resume 'it'\"'\"'s a test'"],
+    ["claude", "devbox1~claude:a~b", "claude --resume 'a~b'"],
+    ["cursor", "devbox1~cursor:abc-123", null],
+    ["pi", "devbox1~pi:abc-123", null],
+    ["unknown", "devbox1~unknown:abc-123", null],
+  ])("remote fallback %s %s is ID-only", (agent, id, command) => {
+    expect(buildResumeCommand(agent, id)).toBe(command);
+  });
+
+  it.each([
+    ["abc-123", "claude --resume abc-123"],
+    ["claude:abc-123", "claude --resume abc-123"],
+    ["devbox1:abc-123", "claude --resume 'devbox1:abc-123'"],
+    ["$(whoami)", "claude --resume '$(whoami)'"],
+  ])("local fallback false positive %s", (id, command) => {
+    expect(buildResumeCommand("claude", id)).toBe(command);
+  });
+
+  it("preserves remote Claude flags", () => {
+    expect(buildResumeCommand("claude", "devbox1~claude:abc-123", {
+      skipPermissions: true, forkSession: true, print: true,
+    })).toBe("claude --resume abc-123 --dangerously-skip-permissions --fork-session --print");
+  });
   it("generates claude resume command", () => {
     expect(buildResumeCommand("claude", "abc-123-def")).toBe("claude --resume abc-123-def");
   });
@@ -38,6 +69,15 @@ describe("buildResumeCommand", () => {
     expect(buildResumeCommand("traex", "traex:sess-1")).toBe("traex resume sess-1");
     expect(buildResumeCommand("traex", "traex:run-1", { model: "gpt-5-codex" })).toBe(
       "traex resume run-1 -m gpt-5-codex",
+    );
+  });
+
+  it("generates augure-code resume command with the vendor CLI name", () => {
+    expect(buildResumeCommand("augure-code", "augure-code:sess-1")).toBe(
+      "augure resume sess-1",
+    );
+    expect(buildResumeCommand("augure-code", "augure-code:run-1", { model: "ossington-5" })).toBe(
+      "augure resume run-1 -m ossington-5",
     );
   });
 
@@ -77,6 +117,16 @@ describe("buildResumeCommand", () => {
 
   it("generates amp resume command", () => {
     expect(buildResumeCommand("amp", "amp:t-1")).toBe("amp --resume t-1");
+  });
+
+  it("generates kiro resume command", () => {
+    expect(
+      buildResumeCommand("kiro", "kiro:session-1"),
+    ).toBe("kiro-cli chat --resume-id session-1");
+  });
+
+  it("returns null for pi (server-only resume)", () => {
+    expect(buildResumeCommand("pi", "pi:session-1")).toBeNull();
   });
 
   it("strips agent prefix from compound IDs", () => {
@@ -170,6 +220,15 @@ describe("buildResumeCommand", () => {
 });
 
 describe("formatResumeResponseCommand", () => {
+  it.each([
+    ["claude", "cd '/remote/project' && claude --resume abc-123", "cd '/remote/project' && claude --resume abc-123"],
+    ["kiro", "cd '/remote/project' && kiro-cli chat --resume-id abc-123", "cd '/remote/project' && kiro-cli chat --resume-id abc-123"],
+    ["pi", "cd '/project' && pi --session session-1", "cd '/project' && pi --session session-1"],
+    ["cursor", "cursor agent --resume abc-123", "cd '/remote/project' && cursor agent --resume abc-123"],
+    ["codex", "codex resume abc-123", "codex resume abc-123"],
+  ])("remote cwd formatting for %s", (agent, command, expected) => {
+    expect(formatResumeResponseCommand(agent, { command, cwd: "/remote/project" })).toBe(expected);
+  });
   it("keeps non-cursor backend commands unchanged", () => {
     expect(
       formatResumeResponseCommand("claude", {

@@ -226,28 +226,30 @@ func TestPrintStatsHuman_Populated(t *testing.T) {
 			AvgEditChurn:          1.2,
 		},
 		CodeAttribution: &db.CodeAttribution{
-			Sources: []db.CodeAttributionSource{{
-				Provider: "cursor",
-				Scope:    "machine_local",
-				Status:   "available",
-				Metrics: &db.CursorAttributionMetrics{
-					ScoredCommits:        2,
-					LinesAdded:           30,
-					LinesDeleted:         12,
-					TabLinesAdded:        8,
-					TabLinesDeleted:      2,
-					ComposerLinesAdded:   3,
-					ComposerLinesDeleted: 1,
-					HumanLinesAdded:      19,
-					HumanLinesDeleted:    9,
-					BlankLinesAdded:      4,
-					BlankLinesDeleted:    0,
-					AIAuthoredPct:        11.0 / 30.0,
-					ConversationCounts: []db.CursorConversationCount{
-						{Model: "claude-3.5-sonnet", Mode: "composer", Count: 2},
-						{Model: "claude-3.5-sonnet", Mode: "tab", Count: 1},
+			Sources: []db.CodeAttributionSource{
+				{
+					Provider: "cursor",
+					Scope:    "machine_local",
+					Status:   "available",
+					Metrics: &db.CursorAttributionMetrics{
+						ScoredCommits:        2,
+						LinesAdded:           30,
+						LinesDeleted:         12,
+						TabLinesAdded:        8,
+						TabLinesDeleted:      2,
+						ComposerLinesAdded:   3,
+						ComposerLinesDeleted: 1,
+						HumanLinesAdded:      19,
+						HumanLinesDeleted:    9,
+						BlankLinesAdded:      4,
+						BlankLinesDeleted:    0,
+						AIAuthoredPct:        11.0 / 30.0,
+						ConversationCounts: []db.CursorConversationCount{
+							{Model: "claude-3.5-sonnet", Mode: "composer", Count: 2},
+							{Model: "claude-3.5-sonnet", Mode: "tab", Count: 1},
+						},
 					},
-				}},
+				},
 			},
 		},
 		GeneratedAt: "2026-04-18T00:00:00Z",
@@ -410,7 +412,7 @@ func TestStatsCommandReportsDaemonValidationError(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid timezone: Fake/Zone")
 }
 
-func TestStatsCommandSkipsReadOnlyDaemon(t *testing.T) {
+func TestStatsCommandUsesReadOnlyDaemon(t *testing.T) {
 	dataDir := setupGoldenStatsDataDir(t)
 
 	var called bool
@@ -430,11 +432,8 @@ func TestStatsCommandSkipsReadOnlyDaemon(t *testing.T) {
 		"--timezone", "UTC",
 	)
 
-	require.NoError(t, err, "stats output:\n%s", out)
-	assert.False(t, called, "read-only daemon stats endpoint should be skipped")
-	var got db.SessionStats
-	require.NoError(t, json.Unmarshal([]byte(out), &got))
-	assert.Equal(t, 9, got.Totals.SessionsAll)
+	require.ErrorIs(t, err, db.ErrReadOnly, "stats output:\n%s", out)
+	assert.True(t, called, "stats should use the discovered read-only daemon")
 }
 
 // updateGolden toggles regeneration of stats_golden.json.
@@ -499,13 +498,7 @@ func TestStatsGolden(t *testing.T) {
 	if !assert.Equal(t, want, got) {
 		gotBuf, _ := json.Marshal(got, jsontext.WithIndent("  "))
 		wantBuf, _ := json.Marshal(want, jsontext.WithIndent("  "))
-		t.Fatalf(
-			"stats JSON mismatch — regenerate with "+
-				"`go test ./cmd/agentsview -run "+
-				"TestStatsGolden -update` if intentional.\n"+
-				"--- got ---\n%s\n--- want ---\n%s",
-			gotBuf, wantBuf,
-		)
+		require.FailNowf(t, "stats JSON mismatch", "regenerate with `go test ./cmd/agentsview -run TestStatsGolden -update` if intentional.\n--- got ---\n%s\n--- want ---\n%s", gotBuf, wantBuf)
 	}
 }
 
@@ -525,16 +518,16 @@ func TestStatsReadOnlyOpenAppliesCustomPricing(t *testing.T) {
 var (
 	goldenFixtureTemplateOnce  sync.Once
 	goldenFixtureTemplateFiles map[string][]byte
-	goldenFixtureTemplateErr   error
+	errGoldenFixtureTemplate   error
 )
 
 func copyGoldenFixtureDB(t *testing.T, dbPath string) {
 	t.Helper()
+
 	goldenFixtureTemplateOnce.Do(func() {
-		goldenFixtureTemplateFiles, goldenFixtureTemplateErr =
-			buildGoldenFixtureTemplateFiles(t)
+		goldenFixtureTemplateFiles, errGoldenFixtureTemplate = buildGoldenFixtureTemplateFiles(t)
 	})
-	require.NoError(t, goldenFixtureTemplateErr, "build golden fixture template")
+	require.NoError(t, errGoldenFixtureTemplate, "build golden fixture template")
 	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755),
 		"create golden fixture dir")
 	for _, suffix := range []string{"", "-wal", "-shm"} {
@@ -549,14 +542,10 @@ func copyGoldenFixtureDB(t *testing.T, dbPath string) {
 
 func buildGoldenFixtureTemplateFiles(t *testing.T) (map[string][]byte, error) {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "agentsview-golden-stats-*")
-	if err != nil {
-		return nil, fmt.Errorf("create golden fixture template dir: %w", err)
-	}
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 
 	dbPath := filepath.Join(dir, "sessions.db")
-	d, err := db.Open(dbPath)
+	d, err := db.Open(t.Context(), dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("open golden fixture template db: %w", err)
 	}
@@ -568,7 +557,7 @@ func buildGoldenFixtureTemplateFiles(t *testing.T) (map[string][]byte, error) {
 	}()
 
 	seedGoldenFixtureDB(t, d)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	if err := d.CheckpointWALTruncate(ctx); err != nil {
 		return nil, fmt.Errorf("checkpoint golden fixture template: %w", err)
@@ -772,7 +761,7 @@ func seedGoldenSession(
 	// has meaningful non-zero values.
 	totalOutput := 0
 	if spec.model != "" {
-		for i := 0; i < spec.userMsgs; i++ {
+		for i := range spec.userMsgs {
 			totalOutput += goldenOutputTokens(i)
 		}
 	}
@@ -792,7 +781,7 @@ func seedGoldenSession(
 		TotalOutputTokens:    totalOutput,
 		HasTotalOutputTokens: totalOutput > 0,
 	}
-	require.NoError(t, d.UpsertSession(session), "upsert %s", spec.id)
+	require.NoError(t, d.UpsertSession(t.Context(), session), "upsert %s", spec.id)
 
 	if spec.outcome != "" || spec.healthGrade != "" ||
 		spec.retryCount > 0 || spec.editChurn > 0 ||
@@ -802,7 +791,7 @@ func seedGoldenSession(
 			g := spec.healthGrade
 			grade = &g
 		}
-		require.NoError(t, d.UpdateSessionSignals(spec.id, db.SessionSignalUpdate{
+		require.NoError(t, d.UpdateSessionSignals(t.Context(), spec.id, db.SessionSignalUpdate{
 			Outcome:         spec.outcome,
 			HealthGrade:     grade,
 			ToolRetryCount:  spec.retryCount,
@@ -813,7 +802,7 @@ func seedGoldenSession(
 
 	msgs := buildGoldenMessages(spec)
 	if len(msgs) > 0 {
-		require.NoError(t, d.InsertMessages(msgs),
+		require.NoError(t, d.InsertMessages(t.Context(), msgs),
 			"insert messages %s", spec.id)
 	}
 }
@@ -831,7 +820,7 @@ func buildGoldenMessages(spec goldenSessionSpec) []db.Message {
 	if toolName == "" && spec.toolCount > 0 {
 		toolName = "Read"
 	}
-	for i := 0; i < spec.userMsgs; i++ {
+	for i := range spec.userMsgs {
 		ts := addMinutes(spec.startedAt, i)
 		out = append(out, db.Message{
 			SessionID:     spec.id,

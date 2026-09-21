@@ -2,6 +2,7 @@ package remotesync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -25,8 +26,10 @@ func ResolveTargets(cfg config.Config) (TargetSet, error) {
 	dirs := make(map[parser.AgentType][]string)
 	files := make(map[parser.AgentType][]string)
 	providerExtraFiles := make(map[parser.AgentType][]string)
+	codexIndexFiles := make(map[string][]string)
 	var forbiddenRoots []string
-	for _, def := range parser.Registry {
+	for _, factory := range parser.ProviderFactories() {
+		def := factory.Definition()
 		resolvedDirs := cfg.ResolveDirs(def.Type)
 		if def.RemoteSyncExcluded {
 			for _, dir := range resolvedDirs {
@@ -36,6 +39,11 @@ func ResolveTargets(cfg config.Config) (TargetSet, error) {
 		}
 		if !resolveAgentHasOnDiskSource(def) {
 			continue
+		}
+		var metadata parser.CodexMetadata
+		if def.Type == parser.AgentCodex {
+			provider := factory.NewProvider(parser.ProviderConfig{Roots: resolvedDirs, MetadataDirs: cfg.ProviderMetadata[def.Type]})
+			metadata = provider.(parser.CodexMetadataProvider).Metadata()
 		}
 		for _, dir := range resolvedDirs {
 			// Remote imports assign the serving host to every transported root.
@@ -87,6 +95,20 @@ func ResolveTargets(cfg config.Config) (TargetSet, error) {
 				}
 				continue
 			}
+			if def.Type == parser.AgentCline {
+				root, targetFiles, err := resolveClineTarget(dir)
+				if err != nil {
+					return TargetSet{}, err
+				}
+				if root != "" {
+					dirs[def.Type] = append(dirs[def.Type], root)
+					if _, exists := files[def.Type]; !exists {
+						files[def.Type] = []string{}
+					}
+					files[def.Type] = append(files[def.Type], targetFiles...)
+				}
+				continue
+			}
 			if def.Type == parser.AgentKiloLegacy {
 				root, targetFiles, err := resolveKiloLegacyTarget(dir)
 				if err != nil {
@@ -106,7 +128,7 @@ func ResolveTargets(cfg config.Config) (TargetSet, error) {
 				continue
 			}
 			if emptyFileScopeAgent(def.Type) {
-				root, targetFiles, err := resolveEditorTarget(def.Type, dir)
+				root, targetFiles, err := resolveFileScopedTarget(def.Type, dir)
 				if err != nil {
 					return TargetSet{}, err
 				}
@@ -135,8 +157,15 @@ func ResolveTargets(cfg config.Config) (TargetSet, error) {
 			}
 			dirs[def.Type] = append(dirs[def.Type], dir)
 			if def.Type == parser.AgentCodex {
-				index := filepath.Join(filepath.Dir(dir), parser.CodexSessionIndexFilename)
-				if info, err := os.Stat(index); err == nil && !info.IsDir() {
+				// An empty association must not become inferred parent metadata on import.
+				codexIndexFiles[dir] = nil
+				for _, index := range metadata.IndexFiles(dir) {
+					if info, err := os.Stat(index); err != nil || info.IsDir() {
+						continue
+					}
+					if !slices.Contains(codexIndexFiles[dir], index) {
+						codexIndexFiles[dir] = append(codexIndexFiles[dir], index)
+					}
 					if !slices.Contains(providerExtraFiles[def.Type], index) {
 						providerExtraFiles[def.Type] = append(
 							providerExtraFiles[def.Type], index,
@@ -148,14 +177,15 @@ func ResolveTargets(cfg config.Config) (TargetSet, error) {
 	}
 	return filterForbiddenTargets(TargetSet{
 		Dirs: dirs, Files: files, ProviderExtraFiles: providerExtraFiles,
-		ForbiddenRoots: forbiddenRoots,
+		CodexIndexFiles: codexIndexFiles,
+		ForbiddenRoots:  forbiddenRoots,
 	}), nil
 }
 
-// resolveEditorTarget asks the parser for the exact session files it would
-// consume, then adds only the workspace manifest needed to preserve project
-// attribution. The configured editor root remains the authorization boundary.
-func resolveEditorTarget(agent parser.AgentType, root string) (string, []string, error) {
+// resolveFileScopedTarget asks the provider for the exact session files it
+// consumes. Provider-owned companions travel with each source; editor workspace
+// manifests preserve project attribution. The root is the authorization boundary.
+func resolveFileScopedTarget(agent parser.AgentType, root string) (string, []string, error) {
 	root = filepath.Clean(root)
 	ok, err := curatedRoot(root)
 	if err != nil || !ok {
@@ -173,6 +203,35 @@ func resolveEditorTarget(agent parser.AgentType, root string) (string, []string,
 	seen := make(map[string]struct{})
 	var files []string
 	for _, source := range sources {
+		if agent == parser.AgentEvener {
+			plan, supported, err := parser.ResolveRawCapturePlan(context.Background(), provider, source)
+			if err != nil {
+				return "", nil, err
+			}
+			if !supported {
+				return "", nil, errors.New("evener provider does not declare source companions")
+			}
+			for _, entry := range plan.Entries {
+				// Capture validation canonicalizes paths; retain the configured
+				// root spelling used by the remote target's authorization scope.
+				rel, err := filepath.Rel(plan.ConfiguredRoot, entry.LocalPath)
+				if err != nil {
+					return "", nil, err
+				}
+				localPath := filepath.Join(root, rel)
+				regular, err := regularCuratedFile(root, localPath)
+				if err != nil {
+					return "", nil, err
+				}
+				if regular {
+					if _, exists := seen[localPath]; !exists {
+						seen[localPath] = struct{}{}
+						files = append(files, localPath)
+					}
+				}
+			}
+			continue
+		}
 		path := providerDiscoveredPath(source)
 		if path == "" {
 			continue
@@ -241,7 +300,7 @@ func isLocalRemoteSyncSource(
 	cfg config.Config, agent parser.AgentType, dir string,
 ) bool {
 	machine, ok := cfg.SourceMachines[agent][dir]
-	return !ok || machine == "" || machine == cfg.LocalMachineName
+	return !ok || machine == "" || machine == cfg.InstallationID
 }
 
 // filterForbiddenTargets drops resolved targets that lie inside a forbidden
@@ -306,7 +365,29 @@ func filterForbiddenTargets(t TargetSet) TargetSet {
 		}
 		t.ProviderExtraFiles[agent] = kept
 	}
+	t.CodexIndexFiles = selectedCodexIndexFiles(t, t.CodexIndexFiles)
 	return t
+}
+
+// Keep associations only for roots and files retained in this target set.
+func selectedCodexIndexFiles(targets TargetSet, indexes map[string][]string) map[string][]string {
+	var selected map[string][]string
+	for _, root := range targets.Dirs[parser.AgentCodex] {
+		if _, ok := indexes[root]; !ok {
+			continue
+		}
+		if selected == nil {
+			selected = make(map[string][]string)
+		}
+		selected[root] = nil
+		for _, index := range indexes[root] {
+			if !slices.Contains(targets.ProviderExtraFiles[parser.AgentCodex], index) {
+				continue
+			}
+			selected[root] = append(selected[root], index)
+		}
+	}
+	return selected
 }
 
 func withoutForbidden(paths []string, forbidden forbiddenRootMatcher) []string {
@@ -531,6 +612,89 @@ func resolveRooCodeTarget(root string) (string, []string, error) {
 	return targetRoot, files, nil
 }
 
+// resolveClineTarget resolves a Cline root directory to only the per-session
+// metadata and transcript files (<id>.json, <id>.messages.json).
+func resolveClineTarget(root string) (string, []string, error) {
+	targetRoot := filepath.Clean(root)
+	ok, err := curatedRoot(targetRoot)
+	if err != nil || !ok {
+		return "", nil, err
+	}
+	base := filepath.Base(targetRoot)
+	isDirect := base == "sessions" || strings.HasSuffix(filepath.ToSlash(targetRoot), "data/sessions")
+	sessionsDir := targetRoot
+	if !isDirect {
+		sessionsDir = filepath.Join(targetRoot, "data", "sessions")
+		if symlinkEscapesRoot(targetRoot, filepath.Join(sessionsDir, "placeholder")) {
+			return "", nil, nil
+		}
+	}
+	sessionsExist, err := curatedRoot(sessionsDir)
+	if err != nil || !sessionsExist {
+		return "", nil, err
+	}
+	provider, ok := parser.NewProvider(parser.AgentCline, parser.ProviderConfig{
+		Roots: []string{targetRoot},
+	})
+	if !ok {
+		return "", nil, nil
+	}
+	sources, err := discoverProviderSources(provider)
+	if err != nil {
+		return "", nil, fmt.Errorf("discover cline remote sync targets under %q: %w",
+			targetRoot, err)
+	}
+	var files []string
+	for _, source := range sources {
+		metaPath := providerDiscoveredPath(source)
+		if metaPath == "" || symlinkEscapesRoot(targetRoot, metaPath) {
+			continue
+		}
+		dir := filepath.Dir(metaPath)
+		sessionID := filepath.Base(dir)
+		if !validClineSessionID(sessionID) {
+			continue
+		}
+		regular, err := statRegularRemoteSyncFile(metaPath)
+		if err != nil {
+			return "", nil, err
+		}
+		if !regular {
+			continue
+		}
+		files = append(files, metaPath)
+		msgPath := filepath.Join(dir, sessionID+".messages.json")
+		regular, err = statRegularRemoteSyncFile(msgPath)
+		if err != nil {
+			return "", nil, err
+		}
+		if regular {
+			files = append(files, msgPath)
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil && !os.IsNotExist(err) {
+			return "", nil, fmt.Errorf("read cline session dir %q: %w", dir, err)
+		}
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			if parser.IsClineTeammateMessagesFile(sessionID, entry.Name()) {
+				teammatePath := filepath.Join(dir, entry.Name())
+				regular, err := statRegularRemoteSyncFile(teammatePath)
+				if err != nil {
+					return "", nil, err
+				}
+				if regular {
+					files = append(files, teammatePath)
+				}
+			}
+		}
+	}
+	sort.Strings(files)
+	return targetRoot, files, nil
+}
+
 // resolveKiloLegacyTarget resolves a Kilo Legacy globalStorage root to
 // only the per-task session files (task_metadata.json, ui_messages.json,
 // api_conversation_history.json). This avoids recursively transferring
@@ -621,7 +785,7 @@ func regularCuratedFile(root, path string) (bool, error) {
 	path = filepath.Clean(path)
 	rel, err := filepath.Rel(root, path)
 	if err != nil || !filepath.IsLocal(rel) || symlinkEscapesRoot(root, path) {
-		return false, nil
+		return false, nil //nolint:nilerr // Paths outside the discovery root are not eligible source candidates.
 	}
 	return statRegularRemoteSyncFile(path)
 }
@@ -662,7 +826,7 @@ func curatedFileOrMissing(root, path string) (bool, error) {
 	path = filepath.Clean(path)
 	rel, err := filepath.Rel(root, path)
 	if err != nil || !filepath.IsLocal(rel) || symlinkEscapesRoot(root, path) {
-		return false, nil
+		return false, nil //nolint:nilerr // Paths outside the discovery root are not eligible source candidates.
 	}
 	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {
@@ -851,6 +1015,7 @@ func SelectAllowedTargets(allowed TargetSet, requested TargetSet) (TargetSet, bo
 			)
 		}
 	}
+	selected.CodexIndexFiles = selectedCodexIndexFiles(selected, allowed.CodexIndexFiles)
 	return selected, true
 }
 
@@ -905,6 +1070,43 @@ func kiloLegacySessionFileShape(rel string) bool {
 	return false
 }
 
+// validClineSessionID reports whether sessionID is safe to discover, sync,
+// and archive without introducing path traversal or escaping separators.
+func validClineSessionID(sessionID string) bool {
+	return parser.ValidClineSessionID(sessionID)
+}
+
+// clineSessionFileShape reports whether rel — a slash-separated path
+// relative to a Cline root — names exactly a session file the
+// provider would discover: data/sessions/<sessionID>/<sessionID>.json or
+// data/sessions/<sessionID>/<sessionID>.messages.json for an application
+// root, or <sessionID>/<sessionID>.json, <sessionID>/<sessionID>.messages.json
+// relative to a direct sessions root. Session IDs starting with "_"
+// or "." are rejected, matching discovery's marker-directory skip.
+func clineSessionFileShape(root, rel string) bool {
+	cleanRoot := filepath.Clean(root)
+	sessionsDir := parser.ClineResolveSessionsDir(root)
+	isDirectSessionsRoot := sessionsDir == cleanRoot
+
+	parts := strings.Split(rel, "/")
+	var sessionID, filename string
+	if isDirectSessionsRoot {
+		if len(parts) != 2 {
+			return false
+		}
+		sessionID, filename = parts[0], parts[1]
+	} else {
+		if len(parts) != 4 || parts[0] != "data" || parts[1] != "sessions" {
+			return false
+		}
+		sessionID, filename = parts[2], parts[3]
+	}
+	if !validClineSessionID(sessionID) {
+		return false
+	}
+	return filename == sessionID+".json" || filename == sessionID+".messages.json" || parser.IsClineTeammateMessagesFile(sessionID, filename)
+}
+
 // authorizedStaleCuratedFile reports whether a curated file request
 // that missed the fresh per-request resolution is still authorized
 // under a verbatim or snapshot file-scoped agent's allowed root — the
@@ -945,7 +1147,7 @@ func authorizedStaleCuratedFile(
 			) {
 				continue
 			}
-		} else if !sessionFileShape(agent, rel) {
+		} else if !sessionFileShape(agent, dir, rel) {
 			continue
 		}
 		if symlinkEscapesRoot(dir, file) {
@@ -964,6 +1166,11 @@ func authorizedStaleCuratedFile(
 		if agent == parser.AgentVSCodeCopilot && isVSCodeWorkspaceMetadata(rel) &&
 			vscodeWorkspaceChatVanished(allowed, forbidden, dir, rel, requestedFiles) {
 			return true
+		}
+		if agent == parser.AgentEvener && strings.HasSuffix(file, ".meta.json") {
+			// Metadata left behind by a deleted transcript is no longer a source companion.
+			_, err := os.Lstat(strings.TrimSuffix(file, ".meta.json") + ".transcript.jsonl")
+			return os.IsNotExist(err)
 		}
 		return hasPreferredCuratedSibling(dir, allowed.Files[agent], rel)
 	}
@@ -1030,10 +1237,26 @@ func vscodeWorkspaceChatVanished(
 
 // sessionFileShape reports whether rel names exactly a session file
 // for the given agent type.
-func sessionFileShape(agent parser.AgentType, rel string) bool {
+func sessionFileShape(agent parser.AgentType, root, rel string) bool {
 	switch agent {
+	case parser.AgentEvener:
+		parts := strings.Split(rel, "/")
+		validLayout := len(parts) == 4 && parts[0] == "projects" && parts[2] == "sessions" ||
+			len(parts) == 2 && parts[0] == "sessions" ||
+			len(parts) == 1 && filepath.Base(root) == "sessions"
+		if !validLayout {
+			return false
+		}
+		name := parts[len(parts)-1]
+		id, ok := strings.CutSuffix(name, ".transcript.jsonl")
+		if !ok {
+			id, ok = strings.CutSuffix(name, ".meta.json")
+		}
+		return ok && id != "" && id != "." && id != ".." && !strings.ContainsAny(id, "\\:\x00")
 	case parser.AgentKiloLegacy:
 		return kiloLegacySessionFileShape(rel)
+	case parser.AgentCline:
+		return clineSessionFileShape(root, rel)
 	case parser.AgentCursor:
 		_, ok := parser.ParseCursorTranscriptRelPath(rel)
 		return ok

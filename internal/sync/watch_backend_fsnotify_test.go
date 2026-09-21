@@ -161,6 +161,39 @@ func TestFSNotifyBackendRemoveDoesNotInheritBudgetSkippedParentOwnership(t *test
 		"budget-skipped parent root must not own explicit nested-root watches")
 }
 
+func TestFSNotifyBackendExcludesExistingLockFileEvents(t *testing.T) {
+	backend, err := newFSNotifyBackend([]string{"*.lock*"})
+	require.NoError(t, err)
+	t.Cleanup(backend.Stop)
+
+	root := t.TempDir()
+	require.NoError(t, backend.AddRecursive(root, math.MaxInt).Err)
+	lockPath := filepath.Join(root, "session.jsonl.events.lock.temporary.pending")
+	normalPath := filepath.Join(root, "session.jsonl")
+
+	for _, op := range []fsnotify.Op{
+		fsnotify.Create,
+		fsnotify.Write,
+		fsnotify.Remove,
+		fsnotify.Rename,
+	} {
+		event, relevant := backend.translateEvent(fsnotify.Event{
+			Name: lockPath,
+			Op:   op,
+		})
+		assert.False(t, relevant, "lock event should be ignored for op %v", op)
+		assert.Equal(t, backendEvent{}, event)
+	}
+
+	event, relevant := backend.translateEvent(fsnotify.Event{
+		Name: normalPath,
+		Op:   fsnotify.Write,
+	})
+	assert.True(t, relevant)
+	assert.Equal(t, filepath.Clean(normalPath), event.Path)
+	assert.Equal(t, backendOpWrite, event.Op)
+}
+
 type blockingRemoveWatchOps struct {
 	watcher       *fsnotify.Watcher
 	removeStarted chan struct{}
@@ -309,7 +342,7 @@ func waitForBackendEvent(
 				return event
 			}
 		case <-deadline.C:
-			t.Fatalf("backend event %v for %s was not observed", wantOp, path)
+			require.FailNowf(t, "test failed", "backend event %v for %s was not observed", wantOp, path)
 		}
 	}
 }
@@ -430,7 +463,7 @@ func TestFSNotifyBackendRuntimeCreateRecursivelyWatchesMovedSubtree(t *testing.T
 				return
 			}
 		case <-deadline.C:
-			t.Fatal("deep write under moved subtree was not observed")
+			require.FailNow(t, "deep write under moved subtree was not observed")
 		}
 	}
 }
@@ -463,7 +496,7 @@ func TestFSNotifyBackendConcurrentAddWaitsForRemoveOwnershipDecision(t *testing.
 	select {
 	case <-barrier.removeStarted:
 	case <-time.After(time.Second):
-		t.Fatal("Remove did not reach native-watch barrier")
+		require.FailNow(t, "Remove did not reach native-watch barrier")
 	}
 
 	addErr := make(chan error, 1)
@@ -511,7 +544,7 @@ func TestFSNotifyBackendLifecycleStopBeforeStartReturns(t *testing.T) {
 	select {
 	case <-stopped:
 	case <-time.After(100 * time.Millisecond):
-		t.Fatal("fsnotify backend Stop blocked before Start")
+		require.FailNow(t, "fsnotify backend Stop blocked before Start")
 	}
 	require.NoError(t, backend.Start())
 	backend.Stop()
@@ -551,7 +584,7 @@ func TestFSNotifyBackendLifecycleStartStopRace(t *testing.T) {
 		select {
 		case <-done:
 		case <-time.After(time.Second):
-			t.Fatal("fsnotify backend concurrent Start and Stop deadlocked")
+			require.FailNow(t, "fsnotify backend concurrent Start and Stop deadlocked")
 		}
 		require.NoError(t, <-startErr)
 		backend.Stop()
@@ -695,7 +728,7 @@ func TestFSNotifyBackendRemoveDuringBatchDoesNotDeadlockEventLoop(t *testing.T) 
 	select {
 	case <-stopped:
 	case <-time.After(2 * time.Second):
-		t.Fatal("fsnotify backend Stop hung after a Remove during a native batch")
+		require.FailNow(t, "fsnotify backend Stop hung after a Remove during a native batch")
 	}
 }
 
@@ -728,7 +761,7 @@ func TestFSNotifyBackendEventBeforeStartDoesNotBlockRegistration(t *testing.T) {
 		require.NoError(t, result.Err)
 		require.Equal(t, 2, result.Watched)
 	case <-time.After(2 * time.Second):
-		t.Fatal("AddRecursive blocked on a native event delivered before Start")
+		require.FailNow(t, "AddRecursive blocked on a native event delivered before Start")
 	}
 
 	require.NoError(t, backend.Start())
@@ -830,7 +863,7 @@ func TestFSNotifyBackendOverflowReinstallsShallowWatches(t *testing.T) {
 		"a reachable shallow root must have its native watch re-added")
 	select {
 	case extra := <-obligations:
-		t.Fatalf("re-addable shallow root was degraded to polling: %+v", extra)
+		require.FailNowf(t, "test failed", "re-addable shallow root was degraded to polling: %+v", extra)
 	default:
 	}
 }
@@ -845,7 +878,7 @@ func TestNativeEventQueueOverflowSurfacesLostEventsOnce(t *testing.T) {
 
 	first, ok := queue.next(stop)
 	require.True(t, ok)
-	assert.ErrorIs(t, first.err, fsnotify.ErrEventOverflow)
+	require.ErrorIs(t, first.err, fsnotify.ErrEventOverflow)
 	remaining := []string{}
 	for {
 		item, ok := queue.next(stop)
@@ -892,7 +925,7 @@ func TestFSNotifyBackendQueueOverflowRequestsFullSync(t *testing.T) {
 		case event := <-backend.Events():
 			sawFullSync = event.Op == backendOpFullSync
 		case <-deadline:
-			t.Fatal("queue overflow did not request a full sync")
+			require.FailNow(t, "queue overflow did not request a full sync")
 		}
 	}
 }

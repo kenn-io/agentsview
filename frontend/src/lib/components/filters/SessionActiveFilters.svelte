@@ -48,7 +48,9 @@
   );
 
   function removeMachineTitle(machine: string): string {
-    return m.shared_active_filters_remove_machine({ machine });
+    return m.shared_active_filters_remove_machine({
+      machine: sessions.machineLabel(machine),
+    });
   }
 
   function removeAgentTitle(agent: string): string {
@@ -116,7 +118,7 @@
         onclick={() => removeMachine(machine)}
         title={removeMachineTitle(machine)}
       >
-        {machine}
+        {sessions.machineLabel(machine)}
         <span class="chip-x">
           <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
         </span>

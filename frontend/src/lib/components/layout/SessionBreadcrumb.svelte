@@ -25,7 +25,6 @@
     type ResumeResponse,
   } from "../../api/generated/index";
   import {
-    callGenerated,
     isAbortError,
   } from "../../api/runtime.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
@@ -56,6 +55,7 @@
 
   import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
   import { messages as messagesStore } from "../../stores/messages.svelte.js";
+  import { formatModelEffort } from "../../utils/model.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { m } from "../../i18n/index.js";
 
@@ -104,7 +104,7 @@
 
   onMount(() => {
     const signal = openersRead.begin();
-    callGenerated((options) => OpenersService.getApiV1Openers(options), signal)
+    OpenersService.getApiV1Openers({ signal })
       .then((res) => {
         if (!openersRead.isCurrent(signal)) return;
         openers = res.openers;
@@ -131,10 +131,7 @@
     const signal = directoryRead.begin();
     pendingSessionDirId = id;
     sessionDir = null;
-    callGenerated(
-      (options) => SessionsService.getApiV1SessionsByIdDirectory({ id }, options),
-      signal,
-    )
+    SessionsService.getApiV1SessionsByIdDirectory({ id }, { signal })
       .then(({ path }) => {
         if (session?.id === id && directoryRead.isCurrent(signal)) {
           sessionDir = (path as SessionDirectoryResponse["path"]) || null;
@@ -241,10 +238,7 @@
     if (key === costFetchKey) return;
     const signal = costRead.begin();
     costSessionId = id;
-    callGenerated(
-      (options) => SessionsService.getApiV1SessionsByIdUsage({ id }, { rollup: true }, options),
-      signal,
-    )
+    SessionsService.getApiV1SessionsByIdUsage({ id }, { rollup: true }, { signal })
       .then((res) => {
         if (!costRead.isCurrent(signal)) return;
         costFetchKey = key;
@@ -281,11 +275,7 @@
     if (key === breakdownFetchKey) return;
     const signal = breakdownRead.begin();
     usageBreakdownLoading = true;
-    callGenerated(
-      (options) =>
-        SessionsService.getApiV1SessionsByIdUsage({ id }, { breakdown: true }, options),
-      signal,
-    )
+    SessionsService.getApiV1SessionsByIdUsage({ id }, { breakdown: true }, { signal })
       .then((res) => {
         if (!breakdownRead.isCurrent(signal)) return;
         breakdownFetchKey = key;
@@ -347,11 +337,12 @@
       : null,
   );
 
-  let mainModel = $derived(
+  let mainModelInfo = $derived(
     messagesStore.sessionId === session?.id
-      ? messagesStore.mainModel
-      : "",
+      ? messagesStore.mainModelInfo
+      : { model: "", reasoningEffort: "" },
   );
+  let mainModel = $derived(formatModelEffort(mainModelInfo));
 
   let resumeModel = $derived(
     session ? messagesStore.resumeModelFor(session.id) : "",
@@ -407,7 +398,6 @@
       if (copiedSessionId === sessionId) copiedSessionId = "";
     }, 1500);
   }
-
 
   let copiedLinkId = $state("");
   let copiedLinkTimer: ReturnType<typeof setTimeout> | undefined;
@@ -645,7 +635,7 @@
     !session?.id.includes("~"),
   );
 
-  const canResume = $derived(
+  const canLaunch = $derived(
     session
       ? supportsResume(session.agent) && isLocal
       : false,
@@ -660,6 +650,7 @@
       ? claudeCodeLink(sessionDir)
       : null,
   );
+  const canCopyCommand = $derived(session ? supportsResume(session.agent) : false);
 
   const terminalOpeners = $derived(
     openers.filter((o) => o.kind === "terminal"),
@@ -680,7 +671,7 @@
   );
 
   const showDropdown = $derived(
-    canResume ||
+    canCopyCommand ||
     codexLink !== null ||
     (isLocal && (
       editorOpeners.length > 0 ||
@@ -736,7 +727,6 @@
   onkeydown={handleKeydown}
   onclick={handleClickOutside}
 />
-
 
 <div class="session-breadcrumb">
   {#if !ui.isMobileViewport && !ui.sidebarOpen}
@@ -841,10 +831,10 @@
             class:has-feedback-success={openFeedback !== "" && openFeedbackKind === "success"}
             class:has-feedback-error={openFeedback !== "" && openFeedbackKind === "error"}
             onclick={(e) => { e.stopPropagation(); showOpenMenu = !showOpenMenu; }}
-            title={canResume
+            title={canLaunch
               ? m.session_breadcrumb_resume_session_in_terminal()
               : m.session_breadcrumb_session_actions()}
-            aria-label={canResume
+            aria-label={canLaunch
               ? m.session_breadcrumb_resume_session()
               : m.session_breadcrumb_session_actions()}
           >
@@ -856,7 +846,7 @@
               {/if}
               {openFeedback}
             {:else}
-              {canResume
+              {canLaunch
                 ? m.session_breadcrumb_resume()
                 : m.session_breadcrumb_open()}
               <ChevronDownIcon size="8" strokeWidth="2.6" aria-hidden="true" />
@@ -864,7 +854,7 @@
           </button>
           {#if showOpenMenu}
             <div class="open-menu">
-              {#if canResume}
+              {#if canLaunch}
                 {#each terminalOpeners as opener, i (opener.id)}
                   <button
                     class="open-menu-item"
@@ -908,7 +898,9 @@
                     <span class="open-menu-name">{m.session_breadcrumb_open_in_claude_code()}</span>
                   </a>
                 {/if}
-                <div class="open-menu-divider"></div>
+              {/if}
+              {#if canCopyCommand}
+                {#if canLaunch}<div class="open-menu-divider"></div>{/if}
                 <button class="open-menu-item" onclick={handleCopyResumeCommand}>
                   <span class="open-menu-num">
                     <CopyIcon size="10" strokeWidth="2" aria-hidden="true" />
@@ -950,7 +942,7 @@
                 {/each}
               {/if}
               {/if}
-              {#if canResume && claudeDesktopOpener}
+              {#if canLaunch && claudeDesktopOpener}
                 <div class="open-menu-divider"></div>
                 <button
                   class="open-menu-item"
@@ -1046,8 +1038,12 @@
           {/if}
         </span>
       {/if}
-      {#if mainModel}
-        <span class="model-badge" title={mainModel}>{mainModel}</span>
+      {#if mainModelInfo.model}
+        <span
+          class="model-badge"
+          class:model-badge--with-effort={mainModelInfo.reasoningEffort}
+          title={mainModel}
+        ><span class="model-badge__model">{mainModelInfo.model}</span>{#if mainModelInfo.reasoningEffort}{" "}<span class="model-badge__effort">{mainModelInfo.reasoningEffort}</span>{/if}</span>
       {/if}
       <div class="actions-wrapper">
         <button
@@ -1192,7 +1188,8 @@
     align-items: center;
     gap: 6px;
     margin-left: auto;
-    flex-shrink: 0;
+    min-width: 0;
+    flex-shrink: 1;
   }
 
   .agent-badge {
@@ -1384,7 +1381,6 @@
     letter-spacing: 0.04em;
   }
 
-
   .session-id {
     font-size: 10px;
     font-family: "SF Mono", "Menlo", "Consolas", monospace;
@@ -1523,13 +1519,33 @@
   }
 
   .model-badge {
+    display: inline-flex;
+    align-items: center;
+    min-width: 0;
+    max-width: min(280px, 28vw);
     font-size: 10px;
     color: var(--text-muted);
     padding: 1px 5px;
     border-radius: 4px;
     background: var(--bg-tertiary);
     white-space: nowrap;
+    overflow: hidden;
+    flex-shrink: 1;
+  }
+
+  .model-badge__model {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .model-badge--with-effort {
+    min-width: 39px;
+  }
+
+  .model-badge__effort {
     flex-shrink: 0;
+    margin-left: 4px;
   }
 
   .actions-wrapper {
@@ -1700,9 +1716,9 @@
     );
   }
 
-  @media (max-width: 760px) {
+  @media (max-width: 900px) {
     .breadcrumb-meta {
-      gap: 4px;
+      gap: 2px;
     }
 
     .session-time {
@@ -1744,6 +1760,29 @@
 
     .session-id {
       display: none;
+    }
+
+    .usage-breakdown {
+      display: none;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .session-breadcrumb {
+      gap: 4px;
+      padding: 0 6px;
+    }
+
+    .breadcrumb-meta {
+      gap: 1px;
+    }
+
+    .breadcrumb-meta > .agent-badge {
+      display: none;
+    }
+
+    .actions-wrapper {
+      gap: 0;
     }
   }
 </style>

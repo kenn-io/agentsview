@@ -9,7 +9,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
+	"testing/synctest"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -324,46 +326,49 @@ func TestPGModelPricingSourceDetectsBandOnlyFallbackMismatch(t *testing.T) {
 }
 
 func TestLoadPricingMapSharesConcurrentDBRows(t *testing.T) {
-	block := make(chan struct{})
-	state := &pricingProbeState{
-		rows: [][]driver.Value{{
-			"db-model", int64(1000000), int64(2000000), int64(3000000), int64(0), int64(4000000), "2026-06-08",
-		}},
-		block: block,
-	}
-	pg := newPricingProbeDB(t, state)
-	store := &Store{pg: pg}
+	synctest.Test(t, func(t *testing.T) {
+		block := make(chan struct{})
+		var blockOnce sync.Once
+		releaseBlock := func() { blockOnce.Do(func() { close(block) }) }
+		t.Cleanup(releaseBlock)
+		state := &pricingProbeState{
+			rows: [][]driver.Value{{
+				"db-model", int64(1000000), int64(2000000), int64(3000000), int64(0), int64(4000000), "2026-06-08",
+			}},
+			block: block,
+		}
+		pg := newPricingProbeDB(t, state)
+		store := &Store{pg: pg}
 
-	type result struct {
-		prices []export.EffectivePricingRow
-		err    error
-	}
-	results := make(chan result, 2)
-	go func() {
-		prices, err := store.loadPricingMap(context.Background())
-		results <- result{prices: prices, err: err}
-	}()
-	require.Eventually(t, func() bool {
-		return state.queryCount() == 1
-	}, time.Second, 10*time.Millisecond)
+		type result struct {
+			prices []export.EffectivePricingRow
+			err    error
+		}
+		results := make(chan result, 2)
+		go func() {
+			prices, err := store.loadPricingMap(t.Context())
+			results <- result{prices: prices, err: err}
+		}()
+		synctest.Wait()
+		require.Equal(t, 1, state.queryCount(), "pricing queries")
 
-	go func() {
-		prices, err := store.loadPricingMap(context.Background())
-		results <- result{prices: prices, err: err}
-	}()
-	require.Never(t, func() bool {
-		return state.queryCount() > 1
-	}, 50*time.Millisecond, 10*time.Millisecond)
-	close(block)
+		go func() {
+			prices, err := store.loadPricingMap(t.Context())
+			results <- result{prices: prices, err: err}
+		}()
+		synctest.Wait()
+		require.Equal(t, 1, state.queryCount(), "pricing queries")
+		releaseBlock()
 
-	first := <-results
-	second := <-results
-	require.NoError(t, first.err, "first loadPricingMap")
-	require.NoError(t, second.err, "second loadPricingMap")
-	require.Equal(t, 1, state.queryCount(), "pricing queries")
-	first.prices[0].Rates.InputPerMTok = money.MustParseDollars("99")
-	secondByPattern := pricingRowsByPattern(second.prices)
-	assert.Equal(t, money.MustParseDollars("1"), secondByPattern["db-model"].InputPerMTok)
+		first := <-results
+		second := <-results
+		require.NoError(t, first.err, "first loadPricingMap")
+		require.NoError(t, second.err, "second loadPricingMap")
+		require.Equal(t, 1, state.queryCount(), "pricing queries")
+		first.prices[0].Rates.InputPerMTok = money.MustParseDollars("99")
+		secondByPattern := pricingRowsByPattern(second.prices)
+		assert.Equal(t, money.MustParseDollars("1"), secondByPattern["db-model"].InputPerMTok)
+	})
 }
 
 func TestLoadPricingMapUsesFallbackForSentinelOnlyCatalog(t *testing.T) {
@@ -373,7 +378,7 @@ func TestLoadPricingMapUsesFallbackForSentinelOnlyCatalog(t *testing.T) {
 	}}}
 	store := &Store{pg: newPricingProbeDB(t, state)}
 
-	rows, err := store.loadPricingMap(context.Background())
+	rows, err := store.loadPricingMap(t.Context())
 	require.NoError(t, err)
 	byPattern := pricingRowsByPattern(rows)
 
@@ -383,13 +388,11 @@ func TestLoadPricingMapUsesFallbackForSentinelOnlyCatalog(t *testing.T) {
 
 func TestLoadPricingMapUsesEmbeddedGenAIWhenTableMissing(t *testing.T) {
 	state := &pricingProbeState{
-		genAIErr: errors.New(
-			`relation "genai_pricing" does not exist (SQLSTATE 42P01)`,
-		),
+		genAIErr: &pgconn.PgError{Code: "42P01", Message: `relation "genai_pricing" does not exist`},
 	}
 	store := &Store{pg: newPricingProbeDB(t, state)}
 
-	rows, err := store.loadPricingMap(context.Background())
+	rows, err := store.loadPricingMap(t.Context())
 	require.NoError(t, err)
 
 	var genAIRow *export.EffectivePricingRow
@@ -412,7 +415,7 @@ func TestLoadPricingMapUsesDBRowsAsEffectiveTable(t *testing.T) {
 	pg := newPricingProbeDB(t, state)
 	store := &Store{pg: pg}
 
-	prices, err := store.loadPricingMap(context.Background())
+	prices, err := store.loadPricingMap(t.Context())
 	require.NoError(t, err, "loadPricingMap")
 
 	byPattern := pricingRowsByPattern(prices)
@@ -422,167 +425,166 @@ func TestLoadPricingMapUsesDBRowsAsEffectiveTable(t *testing.T) {
 }
 
 func TestLoadPricingMapKeepsSharedDBRowsForActiveCaller(t *testing.T) {
-	block := make(chan struct{})
-	var unblockOnce sync.Once
-	unblock := func() { unblockOnce.Do(func() { close(block) }) }
-	defer unblock()
-	state := &pricingProbeState{
-		rows: [][]driver.Value{{
-			"db-model", int64(1000000), int64(2000000), int64(3000000), int64(0), int64(4000000), "2026-06-08",
-		}},
-		block: block,
-	}
-	pg := newPricingProbeDB(t, state)
-	store := &Store{pg: pg}
+	synctest.Test(t, func(t *testing.T) {
+		block := make(chan struct{})
+		var unblockOnce sync.Once
+		unblock := func() { unblockOnce.Do(func() { close(block) }) }
+		defer unblock()
+		state := &pricingProbeState{
+			rows: [][]driver.Value{{
+				"db-model", int64(1000000), int64(2000000), int64(3000000), int64(0), int64(4000000), "2026-06-08",
+			}},
+			block: block,
+		}
+		pg := newPricingProbeDB(t, state)
+		store := &Store{pg: pg}
 
-	type result struct {
-		prices []export.EffectivePricingRow
-		err    error
-	}
-	firstCtx, cancelFirst := context.WithCancel(context.Background())
-	firstResult := make(chan result, 1)
-	go func() {
-		prices, err := store.loadPricingMap(firstCtx)
-		firstResult <- result{prices: prices, err: err}
-	}()
-	require.Eventually(t, func() bool {
-		return state.queryCount() == 1
-	}, time.Second, 10*time.Millisecond)
+		type result struct {
+			prices []export.EffectivePricingRow
+			err    error
+		}
+		firstCtx, cancelFirst := context.WithCancel(t.Context())
+		firstResult := make(chan result, 1)
+		go func() {
+			prices, err := store.loadPricingMap(firstCtx)
+			firstResult <- result{prices: prices, err: err}
+		}()
+		synctest.Wait()
+		require.Equal(t, 1, state.queryCount(), "pricing queries")
 
-	secondResult := make(chan result, 1)
-	go func() {
-		prices, err := store.loadPricingMap(context.Background())
-		secondResult <- result{prices: prices, err: err}
-	}()
-	require.Never(t, func() bool {
-		return state.queryCount() > 1
-	}, 50*time.Millisecond, 10*time.Millisecond)
+		secondResult := make(chan result, 1)
+		go func() {
+			prices, err := store.loadPricingMap(t.Context())
+			secondResult <- result{prices: prices, err: err}
+		}()
+		synctest.Wait()
+		require.Equal(t, 1, state.queryCount(), "pricing queries")
 
-	cancelFirst()
+		cancelFirst()
 
-	first := <-firstResult
-	require.ErrorIs(t, first.err, context.Canceled)
+		first := <-firstResult
+		require.ErrorIs(t, first.err, context.Canceled)
 
-	unblock()
-	second := <-secondResult
-	require.NoError(t, second.err, "second loadPricingMap")
-	secondByPattern := pricingRowsByPattern(second.prices)
-	assert.Equal(t, money.MustParseDollars("1"), secondByPattern["db-model"].InputPerMTok)
-	assert.Equal(t, 1, state.queryCount(), "pricing queries")
+		unblock()
+		second := <-secondResult
+		require.NoError(t, second.err, "second loadPricingMap")
+		secondByPattern := pricingRowsByPattern(second.prices)
+		assert.Equal(t, money.MustParseDollars("1"), secondByPattern["db-model"].InputPerMTok)
+		assert.Equal(t, 1, state.queryCount(), "pricing queries")
+	})
 }
 
 func TestLoadPricingMapCancelsDBRowsWithCaller(t *testing.T) {
-	block := make(chan struct{})
-	defer close(block)
-	state := &pricingProbeState{
-		rows: [][]driver.Value{{
-			"db-model", int64(1000000), int64(2000000), int64(3000000), int64(0), int64(4000000), "2026-06-08",
-		}},
-		block: block,
-		done:  make(chan struct{}),
-	}
-	pg := newPricingProbeDB(t, state)
-	store := &Store{pg: pg}
+	synctest.Test(t, func(t *testing.T) {
+		block := make(chan struct{})
+		defer close(block)
+		state := &pricingProbeState{
+			rows: [][]driver.Value{{
+				"db-model", int64(1000000), int64(2000000), int64(3000000), int64(0), int64(4000000), "2026-06-08",
+			}},
+			block: block,
+			done:  make(chan struct{}),
+		}
+		pg := newPricingProbeDB(t, state)
+		store := &Store{pg: pg}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	result := make(chan error, 1)
-	go func() {
-		_, err := store.loadPricingMap(ctx)
-		result <- err
-	}()
-	require.Eventually(t, func() bool {
-		return state.queryCount() == 1
-	}, time.Second, 10*time.Millisecond)
+		ctx, cancel := context.WithCancel(t.Context())
+		result := make(chan error, 1)
+		go func() {
+			_, err := store.loadPricingMap(ctx)
+			result <- err
+		}()
+		synctest.Wait()
+		require.Equal(t, 1, state.queryCount(), "pricing queries")
 
-	cancel()
+		cancel()
 
-	require.Eventually(t, func() bool {
+		synctest.Wait()
 		select {
 		case <-state.done:
-			return true
 		default:
-			return false
+			require.FailNow(t, "canceled pricing query did not finish")
 		}
-	}, time.Second, 10*time.Millisecond)
-	require.ErrorIs(t, <-result, context.Canceled)
+		require.ErrorIs(t, <-result, context.Canceled)
+	})
 }
 
 func TestLoadPricingMapStartsFreshLoadAfterAllWaitersCancel(t *testing.T) {
-	block := make(chan struct{})
-	releaseCanceledQuery := make(chan struct{})
-	defer close(releaseCanceledQuery)
-	state := &pricingProbeState{
-		rows: [][]driver.Value{{
-			"db-model", int64(1000000), int64(2000000), int64(3000000), int64(0), int64(4000000), "2026-06-08",
-		}},
-		block:            block,
-		afterCancelBlock: releaseCanceledQuery,
-	}
-	pg := newPricingProbeDB(t, state)
-	store := &Store{pg: pg}
+	synctest.Test(t, func(t *testing.T) {
+		block := make(chan struct{})
+		releaseCanceledQuery := make(chan struct{})
+		defer close(releaseCanceledQuery)
+		state := &pricingProbeState{
+			rows: [][]driver.Value{{
+				"db-model", int64(1000000), int64(2000000), int64(3000000), int64(0), int64(4000000), "2026-06-08",
+			}},
+			block:            block,
+			afterCancelBlock: releaseCanceledQuery,
+		}
+		pg := newPricingProbeDB(t, state)
+		store := &Store{pg: pg}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	firstResult := make(chan error, 1)
-	go func() {
-		_, err := store.loadPricingMap(ctx)
-		firstResult <- err
-	}()
-	require.Eventually(t, func() bool {
-		return state.queryCount() == 1
-	}, time.Second, 10*time.Millisecond)
+		ctx, cancel := context.WithCancel(t.Context())
+		firstResult := make(chan error, 1)
+		go func() {
+			_, err := store.loadPricingMap(ctx)
+			firstResult <- err
+		}()
+		synctest.Wait()
+		require.Equal(t, 1, state.queryCount(), "pricing queries")
 
-	cancel()
-	require.ErrorIs(t, <-firstResult, context.Canceled)
-	state.unblockNextQuery()
+		cancel()
+		require.ErrorIs(t, <-firstResult, context.Canceled)
+		state.unblockNextQuery()
 
-	secondResult := make(chan error, 1)
-	go func() {
-		_, err := store.loadPricingMap(context.Background())
-		secondResult <- err
-	}()
+		secondResult := make(chan error, 1)
+		go func() {
+			_, err := store.loadPricingMap(t.Context())
+			secondResult <- err
+		}()
 
-	require.Eventually(t, func() bool {
-		return state.queryCount() == 2
-	}, time.Second, 10*time.Millisecond)
-	require.NoError(t, <-secondResult, "second loadPricingMap")
+		synctest.Wait()
+		require.Equal(t, 2, state.queryCount(), "pricing queries")
+		require.NoError(t, <-secondResult, "second loadPricingMap")
+	})
 }
 
 func TestSetCustomPricingForgetsInFlightPricingLoad(t *testing.T) {
-	block := make(chan struct{})
-	defer close(block)
-	state := &pricingProbeState{
-		rows: [][]driver.Value{{
-			"db-model", int64(1000000), int64(2000000), int64(3000000), int64(0), int64(4000000), "2026-06-08",
-		}},
-		block: block,
-	}
-	pg := newPricingProbeDB(t, state)
-	store := &Store{pg: pg}
+	synctest.Test(t, func(t *testing.T) {
+		block := make(chan struct{})
+		defer close(block)
+		state := &pricingProbeState{
+			rows: [][]driver.Value{{
+				"db-model", int64(1000000), int64(2000000), int64(3000000), int64(0), int64(4000000), "2026-06-08",
+			}},
+			block: block,
+		}
+		pg := newPricingProbeDB(t, state)
+		store := &Store{pg: pg}
 
-	type result struct {
-		prices []export.EffectivePricingRow
-		err    error
-	}
-	results := make(chan result, 2)
-	go func() {
-		prices, err := store.loadPricingMap(context.Background())
-		results <- result{prices: prices, err: err}
-	}()
-	require.Eventually(t, func() bool {
-		return state.queryCount() == 1
-	}, time.Second, 10*time.Millisecond)
+		type result struct {
+			prices []export.EffectivePricingRow
+			err    error
+		}
+		results := make(chan result, 2)
+		go func() {
+			prices, err := store.loadPricingMap(t.Context())
+			results <- result{prices: prices, err: err}
+		}()
+		synctest.Wait()
+		require.Equal(t, 1, state.queryCount(), "pricing queries")
 
-	store.SetCustomPricing(map[string]config.CustomModelRate{
-		"custom-model": {InputMicrodollarsPerMTok: money.MustParseDollars("9.0").Microdollars},
+		store.SetCustomPricing(map[string]config.CustomModelRate{
+			"custom-model": {InputMicrodollarsPerMTok: money.MustParseDollars("9.0").Microdollars},
+		})
+		go func() {
+			prices, err := store.loadPricingMap(t.Context())
+			results <- result{prices: prices, err: err}
+		}()
+
+		synctest.Wait()
+		require.Equal(t, 2, state.queryCount(), "pricing queries")
 	})
-	go func() {
-		prices, err := store.loadPricingMap(context.Background())
-		results <- result{prices: prices, err: err}
-	}()
-
-	require.Eventually(t, func() bool {
-		return state.queryCount() == 2
-	}, time.Second, 10*time.Millisecond)
 }
 
 func TestLoadPricingMapReloadsAfterCompletedDBRows(t *testing.T) {
@@ -594,12 +596,12 @@ func TestLoadPricingMapReloadsAfterCompletedDBRows(t *testing.T) {
 	pg := newPricingProbeDB(t, state)
 	store := &Store{pg: pg}
 
-	first, err := store.loadPricingMap(context.Background())
+	first, err := store.loadPricingMap(t.Context())
 	require.NoError(t, err, "first loadPricingMap")
 	state.setRows([][]driver.Value{{
 		"db-model", int64(7000000), int64(2000000), int64(3000000), int64(0), int64(4000000), "2026-06-08",
 	}})
-	second, err := store.loadPricingMap(context.Background())
+	second, err := store.loadPricingMap(t.Context())
 	require.NoError(t, err, "second loadPricingMap")
 
 	require.Equal(t, 2, state.queryCount(), "pricing queries")
@@ -624,14 +626,14 @@ func pricingRowsByPattern(
 
 func TestLoadPricingMapDoesNotCacheMissingTableFallback(t *testing.T) {
 	state := &pricingProbeState{
-		err: errors.New(`relation "model_pricing" does not exist (SQLSTATE 42P01)`),
+		err: &pgconn.PgError{Code: "42P01", Message: `relation "model_pricing" does not exist`},
 	}
 	pg := newPricingProbeDB(t, state)
 	store := &Store{pg: pg}
 
-	_, err := store.loadPricingMap(context.Background())
+	_, err := store.loadPricingMap(t.Context())
 	require.NoError(t, err, "first loadPricingMap")
-	_, err = store.loadPricingMap(context.Background())
+	_, err = store.loadPricingMap(t.Context())
 	require.NoError(t, err, "second loadPricingMap")
 
 	assert.Equal(t, 2, state.queryCount(), "pricing queries")
@@ -775,8 +777,8 @@ func TestPGPricingDeleteStatement(t *testing.T) {
 }
 
 func TestSyncModelPricingSkipsWriteWhenRemoteRowsUnchanged(t *testing.T) {
-	ctx := context.Background()
-	local, err := db.Open(t.TempDir() + "/local.db")
+	ctx := t.Context()
+	local, err := db.Open(ctx, t.TempDir()+"/local.db")
 	require.NoError(t, err, "open local db")
 	t.Cleanup(func() { local.Close() })
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{

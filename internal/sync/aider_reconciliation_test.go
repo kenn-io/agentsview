@@ -29,7 +29,7 @@ func TestReconcileWatchRootsAiderOverlappingRootsReuseStableRunIdentity(t *testi
 	expectedID := "aider:" + expectedRawID
 
 	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentAider: {root, repo},
 		},
@@ -74,7 +74,7 @@ func TestReconcileWatchRootsAiderScansOneLargeContainerOnce(t *testing.T) {
 		[]byte(history.String()), 0o644,
 	))
 	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentAider: {root}},
 		Machine:   "test-machine",
 	})
@@ -107,7 +107,7 @@ func TestReconcileWatchRootsAiderTombstonesDeletedVirtualRun(t *testing.T) {
 	deletedID := "aider:" + deletedRawID
 
 	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentAider: {root}},
 		Machine:   "test-machine",
 	})
@@ -147,7 +147,7 @@ func TestReconcileWatchRootsAiderTombstonesDeletedRunWhenPositionIsReused(t *tes
 	shiftedID := "aider:" + shiftedRawID
 
 	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentAider: {root}},
 		Machine:   "test-machine",
 	})

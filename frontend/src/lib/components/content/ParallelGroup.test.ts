@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
-import type { ToolCall } from "../../api/types.js";
+import type { DbToolCall as ToolCall } from "../../api/generated/index.js";
+import type { DbCallTiming as CallTiming } from "../../api/generated/index.js";
 import { setLocale } from "../../i18n/index.js";
 // @ts-ignore
 import ParallelGroup from "./ParallelGroup.svelte";
@@ -22,20 +23,62 @@ afterEach(() => {
 });
 
 describe("ParallelGroup", () => {
+  it("shows only known timing rows", async () => {
+    const callTimingByID = new Map<string, CallTiming>([
+      [
+        "a",
+        {
+          tool_use_id: "a",
+          tool_name: "Read",
+          category: "Read",
+          duration_ms: 2000,
+          is_parallel: true,
+          input_preview: "main.go",
+        },
+      ],
+      [
+        "b",
+        {
+          tool_use_id: "b",
+          tool_name: "Task",
+          category: "Task",
+          duration_ms: null,
+          is_parallel: true,
+          input_preview: "review",
+          subagent_session_id: "child-1",
+        },
+      ],
+    ]);
+    const component = mount(ParallelGroup, {
+      target: document.body,
+      props: {
+        toolCalls: [makeToolCall("a"), makeToolCall("b"), makeToolCall("c")],
+        callTimingByID,
+      },
+    });
+    await tick();
+
+    expect(
+      [...document.querySelectorAll(".tool-duration")].map((el) => el.textContent?.trim()),
+    ).toEqual(["2.0s", "unknown"]);
+    expect(document.querySelector(".pg-header")?.textContent).not.toContain("5.0s");
+    expect(document.querySelector(".pg-count")?.textContent?.trim()).toBe("3 calls");
+    unmount(component);
+  });
+
   it("renders parallel tool group labels in Simplified Chinese", async () => {
     setLocale("zh-CN");
     const component = mount(ParallelGroup, {
       target: document.body,
       props: {
         toolCalls: [makeToolCall("a"), makeToolCall("b")],
-        turnDurationMs: 2500,
       },
     });
     await tick();
 
     expect(document.querySelector(".pg-label")?.textContent?.trim()).toBe("并行");
     expect(document.querySelector(".pg-count")?.textContent?.trim()).toBe("2 次调用");
-    expect(document.querySelector(".pg-upper")?.textContent?.trim()).toBe("每个 ≤ 2.5s");
+    expect(document.querySelectorAll(".tool-duration")).toHaveLength(0);
 
     unmount(component);
   });

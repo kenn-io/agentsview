@@ -14,6 +14,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 type usageParitySnapshot struct {
@@ -93,7 +94,7 @@ func TestSQLiteFactsAndPostgresLiveUsageParity(t *testing.T) {
 	seedUsageParity1hCacheFixture(t, local)
 
 	syncer, err := New(
-		pgURL, schema, local, "parity-machine", true, SyncOptions{},
+		pgURL, schema, local, "parity-machine", true, storage.PusherOptions{},
 	)
 	require.NoError(t, err, "create PostgreSQL sync")
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
@@ -189,12 +190,12 @@ func TestPGUsageFractionalMicrodollarRoundingParity(t *testing.T) {
 		InputPerMTok: money.Money{Microdollars: 500_000},
 	}}))
 	startedAt := "2026-08-12T13:00:00Z"
-	require.NoError(t, local.UpsertSession(db.Session{
+	require.NoError(t, local.UpsertSession(t.Context(), db.Session{
 		ID: "fractional-rounding", Project: "project-rounding",
 		Machine: "parity-machine", Agent: "claude", StartedAt: &startedAt,
 		MessageCount: 2, UserMessageCount: 1,
 	}))
-	require.NoError(t, local.InsertMessages([]db.Message{
+	require.NoError(t, local.InsertMessages(t.Context(), []db.Message{
 		{
 			SessionID: "fractional-rounding", Ordinal: 0, Role: "assistant",
 			Timestamp: "2026-08-12T13:01:00Z", Model: "model-fractional",
@@ -209,7 +210,7 @@ func TestPGUsageFractionalMicrodollarRoundingParity(t *testing.T) {
 		},
 	}))
 
-	syncer, err := New(pgURL, schema, local, "parity-machine", true, SyncOptions{})
+	syncer, err := New(pgURL, schema, local, "parity-machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 	_, err = syncer.Push(t.Context(), false, nil)
@@ -338,11 +339,11 @@ func seedUsageParityFixture(t testing.TB, local *db.DB) {
 		usageParitySessionFixture("historical-usage", "project-f", "claude", "2026-07-20T13:02:00Z", 4, 6),
 	}
 	for i := range sessions {
-		require.NoError(t, local.UpsertSession(sessions[i]),
+		require.NoError(t, local.UpsertSession(t.Context(), sessions[i]),
 			"seed session %s", sessions[i].ID)
 	}
 
-	require.NoError(t, local.InsertMessages([]db.Message{
+	require.NoError(t, local.InsertMessages(t.Context(), []db.Message{
 		{
 			SessionID: "snapshot-loser", Ordinal: 0, Role: "assistant",
 			Timestamp: "2026-08-12T10:00:00Z", Model: "model-priced",
@@ -373,7 +374,7 @@ func seedUsageParityFixture(t testing.TB, local *db.DB) {
 	}), "seed messages")
 
 	reportedCost := money.Money{Microdollars: 250_000}
-	require.NoError(t, local.ReplaceSessionUsageEvents("reported", []db.UsageEvent{{
+	require.NoError(t, local.ReplaceSessionUsageEvents(t.Context(), "reported", []db.UsageEvent{{
 		SessionID: "reported", Source: "provider", Model: "model-reported",
 		InputTokens: 30, OutputTokens: 5,
 		CacheCreationInputTokens: 2, CacheReadInputTokens: 3, Cost: &reportedCost,
@@ -396,8 +397,8 @@ func seedUsageParity1hCacheFixture(t testing.TB, local *db.DB) {
 	}}), "seed 1h pricing")
 	session := usageParitySessionFixture(
 		"cache-1h", "project-g", "claude", "2026-08-12T12:30:00Z", 62, 20)
-	require.NoError(t, local.UpsertSession(session), "seed session cache-1h")
-	require.NoError(t, local.InsertMessages([]db.Message{{
+	require.NoError(t, local.UpsertSession(t.Context(), session), "seed session cache-1h")
+	require.NoError(t, local.InsertMessages(t.Context(), []db.Message{{
 		SessionID: "cache-1h", Ordinal: 0, Role: "assistant",
 		Timestamp: "2026-08-12T12:31:00Z", Model: "model-1h-cache",
 		TokenUsage: json.RawMessage(

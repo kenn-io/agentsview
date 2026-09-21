@@ -124,6 +124,6 @@ func TestSessionMessagesAroundNoOtherFlagsSucceeds(t *testing.T) {
 	// default asks for 5; after-window gets the full 5 (6..10).
 	assert.Equal(t, 10, got.Count,
 		"before is capped at 4 available messages; after takes the full 5")
-	assert.Equal(t, float64(1), got.Messages[0]["ordinal"])
-	assert.Equal(t, float64(10), got.Messages[len(got.Messages)-1]["ordinal"])
+	assert.InDelta(t, float64(1), got.Messages[0]["ordinal"], 0)
+	assert.InDelta(t, float64(10), got.Messages[len(got.Messages)-1]["ordinal"], 0)
 }
