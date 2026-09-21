@@ -28,11 +28,12 @@ const (
 // include-children / one-shot / orphan logic is shared, not reimplemented.
 type ContentSearchFilter struct {
 	Pattern       string
-	Mode          string   // "substring" (default) | "regex" | "fts" | "semantic" | "hybrid"
+	Mode          string   // "substring" (default) | "regex" | "fts" | "terms" | "semantic" | "hybrid"
 	Sources       []string // subset of {"messages","tool_input","tool_result"}
 	ExcludeSystem bool
 
 	Project, ExcludeProject, Machine, Agent           string
+	SessionID, GitBranchExact                         string
 	Date, DateFrom, DateTo, Timezone, ActiveSince     string
 	IncludeChildren, IncludeAutomated, IncludeOneShot bool
 	// ExcludeSessionIDs drops matches from these session IDs before LIMIT,
@@ -100,6 +101,10 @@ type ContentMatch struct {
 	// ordinal) is excluded from both slices.
 	ContextBefore []Message `json:"context_before,omitempty"`
 	ContextAfter  []Message `json:"context_after,omitempty"`
+	// TranscriptRevision identifies the exact stored transcript observed by
+	// the storage query that produced this evidence. An empty value means the
+	// backend cannot provide revision-bound evidence for this result.
+	TranscriptRevision string `json:"transcript_revision,omitempty"`
 }
 
 // ContentSearchPage is a page of matches with an optional next cursor.
@@ -130,6 +135,7 @@ func contentSessionFilter(f ContentSearchFilter) SessionFilter {
 	return SessionFilter{
 		Project: f.Project, ExcludeProject: f.ExcludeProject,
 		Machine: f.Machine, GitBranch: f.GitBranch, Agent: f.Agent,
+		SessionID: f.SessionID, GitBranchExact: f.GitBranchExact,
 		Date: f.Date, DateFrom: f.DateFrom, DateTo: f.DateTo,
 		Timezone:         f.Timezone,
 		ActiveSince:      f.ActiveSince,
@@ -144,7 +150,11 @@ func contentSessionFilter(f ContentSearchFilter) SessionFilter {
 // filter machinery. The Limit/Cursor on the inner filter are irrelevant
 // (no LIMIT in a SELECT id subquery), so they are left unset.
 func sessionScopeSubquery(f ContentSearchFilter) (string, []any) {
-	where, args := buildSessionFilter(contentSessionFilter(f))
+	sessionFilter := contentSessionFilter(f)
+	where, args := buildSessionFilter(sessionFilter)
+	if f.SessionID != "" {
+		where, args = buildSessionBaseFilter(sessionFilter)
+	}
 	where, args = AppendExcludeSessionIDs(where, args, "id", f.ExcludeSessionIDs)
 	return "session_id IN (SELECT id FROM sessions WHERE " + where + ")", args
 }
@@ -233,6 +243,8 @@ func (db *DB) SearchContent(
 		return db.searchContentSemantic(ctx, f)
 	case "hybrid":
 		return db.searchContentHybrid(ctx, f)
+	case "terms":
+		return db.searchContentTerms(ctx, f)
 	}
 
 	if len(f.Sources) == 0 {
@@ -285,7 +297,9 @@ func (db *DB) searchContentSubstring(
 				SystemPrefixSQL("m.content", "m.role")
 		}
 		branches = append(branches, fmt.Sprintf(`
-			SELECT m.session_id, s.project, s.agent, 'message' AS location,
+			SELECT m.session_id, s.project, s.agent,
+				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				'message' AS location,
 				m.role AS role, '' AS tool_name, m.ordinal,
 				COALESCE(m.timestamp,'') AS ts, %s AS snippet,
 				COALESCE(s.ended_at, s.started_at, '') AS sort_ts,
@@ -298,7 +312,9 @@ func (db *DB) searchContentSubstring(
 	}
 	if hasSource(f, "tool_input") {
 		branches = append(branches, fmt.Sprintf(`
-			SELECT tc.session_id, s.project, s.agent, 'tool_input' AS location,
+			SELECT tc.session_id, s.project, s.agent,
+				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				'tool_input' AS location,
 				'assistant' AS role, tc.tool_name, mm.ordinal,
 				COALESCE(mm.timestamp,'') AS ts, %s AS snippet,
 				COALESCE(s.ended_at, s.started_at, '') AS sort_ts,
@@ -322,7 +338,9 @@ func (db *DB) searchContentSubstring(
 		// never missed. A precise per-call key would need a call_index on
 		// tool_calls, which SQLite does not store.
 		branches = append(branches, fmt.Sprintf(`
-			SELECT tc.session_id, s.project, s.agent, 'tool_result' AS location,
+			SELECT tc.session_id, s.project, s.agent,
+				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				'tool_result' AS location,
 				'assistant' AS role, tc.tool_name, mm.ordinal,
 				COALESCE(mm.timestamp,'') AS ts, %s AS snippet,
 				COALESCE(s.ended_at, s.started_at, '') AS sort_ts,
@@ -340,7 +358,9 @@ func (db *DB) searchContentSubstring(
 		args = append(args, like)
 		args = append(args, scopeArgs...)
 		branches = append(branches, fmt.Sprintf(`
-			SELECT tre.session_id, s.project, s.agent, 'tool_result' AS location,
+			SELECT tre.session_id, s.project, s.agent,
+				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				'tool_result' AS location,
 				'assistant' AS role, '' AS tool_name,
 				tre.tool_call_message_ordinal AS ordinal,
 				COALESCE(tre.timestamp,'') AS ts, %s AS snippet,
@@ -357,7 +377,7 @@ func (db *DB) searchContentSubstring(
 		return ContentSearchPage{}, nil
 	}
 
-	query := "SELECT session_id, project, agent, location, role, tool_name, " +
+	query := "SELECT session_id, project, agent, transcript_revision, location, role, tool_name, " +
 		"ordinal, ts, snippet FROM (" +
 		strings.Join(branches, " UNION ALL ") +
 		") ORDER BY julianday(sort_ts) DESC, session_id ASC, ordinal ASC, src ASC, row_id ASC " +
@@ -387,6 +407,7 @@ func (db *DB) scanContentMatches(
 		var m ContentMatch
 		var body string
 		if err := rows.Scan(&m.SessionID, &m.Project, &m.Agent,
+			&m.TranscriptRevision,
 			&m.Location, &m.Role, &m.ToolName, &m.Ordinal,
 			&m.Timestamp, &body); err != nil {
 			return ContentSearchPage{}, fmt.Errorf("scan match: %w", err)
@@ -413,6 +434,177 @@ func (db *DB) scanContentMatches(
 		return ContentSearchPage{}, err
 	}
 	return page, nil
+}
+
+// ParseContentSearchTerms returns de-duplicated whitespace-separated literal
+// terms while preserving first-seen spelling and order.
+func ParseContentSearchTerms(pattern string) []string {
+	fields := strings.Fields(pattern)
+	seen := make(map[string]struct{}, len(fields))
+	terms := make([]string, 0, len(fields))
+	for _, field := range fields {
+		key := strings.ToLower(field)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		terms = append(terms, field)
+	}
+	return terms
+}
+
+// ValidateTermsFilter validates the message-only, scope-aware terms mode.
+func ValidateTermsFilter(f ContentSearchFilter) error {
+	for _, source := range f.Sources {
+		if source != "messages" {
+			return searchInputErrorf(
+				"search: terms searches messages only (got source %q)", source)
+		}
+	}
+	switch f.Scope {
+	case "", "all", "top", "subordinate":
+		return nil
+	default:
+		return searchInputErrorf("search: invalid scope %q", f.Scope)
+	}
+}
+
+// searchContentTerms groups embeddable user/assistant rows into a transient
+// exchange: one user message and the following assistant run on the same
+// sidechain branch. Every whitespace-separated term must occur literally
+// somewhere in that exchange. Tool and system content never participates.
+// Groups without a user message (assistant rows before the first user
+// message land in exchange_no = 0) are excluded: the exchange contract is
+// user-anchored.
+func (db *DB) searchContentTerms(
+	ctx context.Context, f ContentSearchFilter,
+) (ContentSearchPage, error) {
+	if err := ValidateTermsFilter(f); err != nil {
+		return ContentSearchPage{}, err
+	}
+	terms := ParseContentSearchTerms(f.Pattern)
+	if len(terms) == 0 {
+		return ContentSearchPage{}, nil
+	}
+
+	scope, scopeArgs := semanticSessionScopeSubquery(f)
+	subordinate := `(m.is_sidechain = 1
+		OR s.relationship_type IN ('subagent','fork')
+		OR (COALESCE(s.parent_session_id,'') <> ''
+			AND s.relationship_type <> 'continuation'))`
+	query := fmt.Sprintf(`
+		WITH eligible AS (
+			SELECT m.session_id, s.project, s.agent,
+				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				COALESCE(s.relationship_type,'') AS relationship_type,
+				COALESCE(s.parent_session_id,'') AS parent_session_id,
+				m.role, m.ordinal, COALESCE(m.timestamp,'') AS ts,
+				m.content, m.is_sidechain,
+				COALESCE(s.ended_at, s.started_at, s.created_at, '') AS sort_ts,
+				CASE WHEN %s THEN 1 ELSE 0 END AS subordinate,
+				CASE WHEN m.role = 'user' THEN 1 ELSE 0 END AS user_start
+			FROM messages m
+			JOIN sessions s ON s.id = m.session_id
+			WHERE m.role IN ('user','assistant')
+			  AND m.is_system = 0 AND %s AND m.%s
+		), tagged AS (
+			SELECT *, SUM(user_start) OVER (
+				PARTITION BY session_id, is_sidechain
+				ORDER BY ordinal ROWS UNBOUNDED PRECEDING
+			) AS exchange_no
+			FROM eligible
+		), exchanges AS (
+			SELECT session_id, project, agent, transcript_revision, relationship_type,
+				parent_session_id, is_sidechain, subordinate, exchange_no,
+				MIN(ordinal) AS start_ordinal, MAX(ordinal) AS end_ordinal,
+				CASE WHEN exchange_no > 0 THEN 'user' ELSE 'assistant' END AS role,
+				MIN(ts) AS ts,
+				GROUP_CONCAT(content, char(10) ORDER BY ordinal) AS body,
+				MAX(sort_ts) AS sort_ts
+			FROM tagged
+			GROUP BY session_id, project, agent, transcript_revision, relationship_type,
+				parent_session_id, is_sidechain, subordinate, exchange_no
+		)
+		SELECT session_id, project, agent, transcript_revision,
+			'message', role, start_ordinal,
+			ts, body, end_ordinal, relationship_type, parent_session_id,
+			is_sidechain, subordinate
+		FROM exchanges`, subordinate, SystemPrefixSQL("m.content", "m.role"), scope)
+	args := append([]any{}, scopeArgs...)
+	predicates := []string{"exchange_no > 0"}
+	for _, term := range terms {
+		predicates = append(predicates, "body LIKE ? ESCAPE '\\'")
+		args = append(args, "%"+escapeLike(term)+"%")
+	}
+	if len(predicates) > 0 {
+		query += " WHERE " + strings.Join(predicates, " AND ")
+	}
+	switch f.Scope {
+	case "top":
+		query += " AND subordinate = 0"
+	case "subordinate":
+		query += " AND subordinate = 1"
+	}
+	query += ` ORDER BY subordinate ASC, julianday(sort_ts) DESC,
+		session_id ASC, start_ordinal ASC LIMIT ? OFFSET ?`
+	args = append(args, f.Limit+1, f.Cursor)
+	return db.scanTermsMatches(ctx, query, args, f, terms)
+}
+
+func (db *DB) scanTermsMatches(
+	ctx context.Context, query string, args []any,
+	f ContentSearchFilter, terms []string,
+) (ContentSearchPage, error) {
+	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	if err != nil {
+		return ContentSearchPage{}, fmt.Errorf("terms search: %w", err)
+	}
+	defer rows.Close()
+	matches := make([]ContentMatch, 0, f.Limit+1)
+	for rows.Next() {
+		var match ContentMatch
+		var body string
+		var endOrdinal int
+		if err := rows.Scan(
+			&match.SessionID, &match.Project, &match.Agent,
+			&match.TranscriptRevision, &match.Location,
+			&match.Role, &match.Ordinal, &match.Timestamp, &body, &endOrdinal,
+			&match.Relationship, &match.ParentSessionID, &match.Sidechain,
+			&match.Subordinate,
+		); err != nil {
+			return ContentSearchPage{}, fmt.Errorf("scan terms match: %w", err)
+		}
+		match.OrdinalRange = [2]int{match.Ordinal, endOrdinal}
+		match.Snippet = f.TermsSnippet(body, terms)
+		matches = append(matches, match)
+	}
+	if err := rows.Err(); err != nil {
+		return ContentSearchPage{}, fmt.Errorf("iterate terms matches: %w", err)
+	}
+	page := ContentSearchPage{Matches: matches}
+	if len(matches) > f.Limit {
+		page.Matches = matches[:f.Limit]
+		page.NextCursor = f.Cursor + f.Limit
+	}
+	return page, nil
+}
+
+// TermsSnippet returns a redacted window covering the first occurrence of
+// every matched term in an exchange body.
+func (f ContentSearchFilter) TermsSnippet(body string, terms []string) string {
+	start, end := len(body), 0
+	for _, term := range terms {
+		termStart, termEnd, ok := CaseInsensitiveSpan(body, term)
+		if !ok {
+			continue
+		}
+		start = min(start, termStart)
+		end = max(end, termEnd)
+	}
+	if start == len(body) {
+		start = 0
+	}
+	return f.buildSnippet(body, start, end)
 }
 
 // searchContentRegex compiles the pattern, narrows candidate rows with a
@@ -443,6 +635,7 @@ func (db *DB) searchContentRegex(
 		var m ContentMatch
 		var body string
 		if err := rows.Scan(&m.SessionID, &m.Project, &m.Agent,
+			&m.TranscriptRevision,
 			&m.Location, &m.Role, &m.ToolName, &m.Ordinal,
 			&m.Timestamp, &body); err != nil {
 			return ContentSearchPage{}, fmt.Errorf("scan candidate: %w", err)
@@ -484,9 +677,8 @@ func (db *DB) searchContentRegex(
 
 // regexCandidateRows returns full-body rows for the selected sources,
 // LIKE-prefiltered by lit when non-empty, ordered for stable paging.
-// Each branch selects: session_id, project, agent, location, role,
-// tool_name, ordinal, ts AS ts, body, sort_ts, src, row_id. The outer
-// query projects the first 9 columns by name.
+// Each branch selects: session_id, project, agent, transcript_revision,
+// location, role, tool_name, ordinal, ts AS ts, body, sort_ts, src, row_id.
 func (db *DB) regexCandidateRows(
 	ctx context.Context, f ContentSearchFilter, lit string,
 ) (*sql.Rows, error) {
@@ -513,7 +705,9 @@ func (db *DB) regexCandidateRows(
 		w := prefilterClause("m.content")
 		branches = append(branches, fmt.Sprintf(`
 			SELECT m.session_id AS session_id, s.project AS project,
-				s.agent AS agent, 'message' AS location,
+				s.agent AS agent,
+				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				'message' AS location,
 				m.role AS role, '' AS tool_name,
 				m.ordinal AS ordinal, COALESCE(m.timestamp,'') AS ts,
 				m.content AS body,
@@ -527,7 +721,9 @@ func (db *DB) regexCandidateRows(
 		w := prefilterClause("tc.input_json")
 		branches = append(branches, fmt.Sprintf(`
 			SELECT tc.session_id AS session_id, s.project AS project,
-				s.agent AS agent, 'tool_input' AS location,
+				s.agent AS agent,
+				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				'tool_input' AS location,
 				'assistant' AS role, tc.tool_name AS tool_name,
 				mm.ordinal AS ordinal, COALESCE(mm.timestamp,'') AS ts,
 				tc.input_json AS body,
@@ -542,7 +738,9 @@ func (db *DB) regexCandidateRows(
 		w := prefilterClause("tc.result_content")
 		branches = append(branches, fmt.Sprintf(`
 			SELECT tc.session_id AS session_id, s.project AS project,
-				s.agent AS agent, 'tool_result' AS location,
+				s.agent AS agent,
+				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				'tool_result' AS location,
 				'assistant' AS role, tc.tool_name AS tool_name,
 				mm.ordinal AS ordinal, COALESCE(mm.timestamp,'') AS ts,
 				tc.result_content AS body,
@@ -558,7 +756,9 @@ func (db *DB) regexCandidateRows(
 		wEv := prefilterClause("tre.content")
 		branches = append(branches, fmt.Sprintf(`
 			SELECT tre.session_id AS session_id, s.project AS project,
-				s.agent AS agent, 'tool_result' AS location,
+				s.agent AS agent,
+				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				'tool_result' AS location,
 				'assistant' AS role, '' AS tool_name,
 				tre.tool_call_message_ordinal AS ordinal,
 				COALESCE(tre.timestamp,'') AS ts,
@@ -571,13 +771,14 @@ func (db *DB) regexCandidateRows(
 	}
 	if len(branches) == 0 {
 		// Return an empty result set.
-		q := "SELECT '' AS session_id, '' AS project, '' AS agent, '' AS location, " +
+		q := "SELECT '' AS session_id, '' AS project, '' AS agent, " +
+			"'' AS transcript_revision, '' AS location, " +
 			"'' AS role, '' AS tool_name, 0 AS ordinal, '' AS ts, '' AS body " +
 			"WHERE 0"
 		return db.getReader().QueryContext(ctx, q)
 	}
 
-	query := "SELECT session_id, project, agent, location, role, tool_name, " +
+	query := "SELECT session_id, project, agent, transcript_revision, location, role, tool_name, " +
 		"ordinal, ts, body FROM (" +
 		strings.Join(branches, " UNION ALL ") +
 		") ORDER BY julianday(sort_ts) DESC, session_id ASC, ordinal ASC, src ASC, row_id ASC"
@@ -706,7 +907,8 @@ func (db *DB) searchContentFTS(
 	// Select the full content (not FTS snippet()) so the snippet is built in Go
 	// and secret redaction sees whole secrets rather than a pre-truncated window.
 	query := fmt.Sprintf(`
-		SELECT m.session_id, s.project, s.agent, 'message', m.role, '',
+		SELECT m.session_id, s.project, s.agent,
+			COALESCE(s.transcript_revision,''), 'message', m.role, '',
 			m.ordinal, COALESCE(m.timestamp,'') AS ts, m.content AS snippet
 		FROM messages_fts
 		JOIN messages m ON m.id = messages_fts.rowid
@@ -906,20 +1108,21 @@ func (db *DB) searchContentSemantic(
 		}
 		score := float64(h.Score)
 		out = append(out, ContentMatch{
-			SessionID:       h.SessionID,
-			Project:         info.project,
-			Agent:           info.agent,
-			Location:        "message",
-			Role:            info.role,
-			Ordinal:         h.Ordinal,
-			OrdinalRange:    [2]int{h.OrdinalStart, h.OrdinalEnd},
-			Subordinate:     h.Subordinate,
-			Relationship:    info.relationshipType,
-			ParentSessionID: info.parentSessionID,
-			Sidechain:       info.isSidechain,
-			Timestamp:       info.timestamp,
-			Snippet:         f.SemanticSnippet(info.content, h.Snippet),
-			Score:           &score,
+			SessionID:          h.SessionID,
+			Project:            info.project,
+			Agent:              info.agent,
+			TranscriptRevision: info.transcriptRevision,
+			Location:           "message",
+			Role:               info.role,
+			Ordinal:            h.Ordinal,
+			OrdinalRange:       [2]int{h.OrdinalStart, h.OrdinalEnd},
+			Subordinate:        h.Subordinate,
+			Relationship:       info.relationshipType,
+			ParentSessionID:    info.parentSessionID,
+			Sidechain:          info.isSidechain,
+			Timestamp:          info.timestamp,
+			Snippet:            f.SemanticSnippet(info.content, h.Snippet),
+			Score:              &score,
 		})
 		if len(out) >= f.Limit {
 			break
@@ -1319,20 +1522,21 @@ func (db *DB) enrichHybridMatches(
 		}
 		score := m.Score
 		out = append(out, ContentMatch{
-			SessionID:       d.sessionID,
-			Project:         info.project,
-			Agent:           info.agent,
-			Location:        "message",
-			Role:            info.role,
-			Ordinal:         d.ordinal,
-			OrdinalRange:    [2]int{d.ordinalStart, d.ordinalEnd},
-			Subordinate:     d.subordinate,
-			Relationship:    info.relationshipType,
-			ParentSessionID: info.parentSessionID,
-			Sidechain:       info.isSidechain,
-			Timestamp:       info.timestamp,
-			Snippet:         f.SemanticSnippet(info.content, d.snippet),
-			Score:           &score,
+			SessionID:          d.sessionID,
+			Project:            info.project,
+			Agent:              info.agent,
+			TranscriptRevision: info.transcriptRevision,
+			Location:           "message",
+			Role:               info.role,
+			Ordinal:            d.ordinal,
+			OrdinalRange:       [2]int{d.ordinalStart, d.ordinalEnd},
+			Subordinate:        d.subordinate,
+			Relationship:       info.relationshipType,
+			ParentSessionID:    info.parentSessionID,
+			Sidechain:          info.isSidechain,
+			Timestamp:          info.timestamp,
+			Snippet:            f.SemanticSnippet(info.content, d.snippet),
+			Score:              &score,
 		})
 	}
 	return ContentSearchPage{Matches: out}, nil
@@ -1423,6 +1627,7 @@ type semanticHitKey struct {
 // store lineage per hit); isSidechain is the ANCHOR ordinal's message flag.
 type semanticHitInfo struct {
 	project, agent, role, timestamp, content string
+	transcriptRevision                       string
 	relationshipType, parentSessionID        string
 	isSidechain                              bool
 }
@@ -1457,6 +1662,7 @@ func (db *DB) enrichSemanticHits(
 				strings.Join(values, ", ") + ") " +
 				"SELECT m.session_id, s.project, s.agent, m.role, m.ordinal, " +
 				"COALESCE(m.timestamp, ''), m.content, " +
+				"COALESCE(s.transcript_revision, ''), " +
 				"COALESCE(s.relationship_type, ''), " +
 				"COALESCE(s.parent_session_id, ''), m.is_sidechain " +
 				"FROM hits h " +
@@ -1473,6 +1679,7 @@ func (db *DB) enrichSemanticHits(
 				var info semanticHitInfo
 				if err := rows.Scan(&key.sessionID, &info.project, &info.agent,
 					&info.role, &key.ordinal, &info.timestamp, &info.content,
+					&info.transcriptRevision,
 					&info.relationshipType, &info.parentSessionID,
 					&info.isSidechain); err != nil {
 					rows.Close()

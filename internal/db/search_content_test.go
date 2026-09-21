@@ -357,6 +357,216 @@ func TestSearchContentFTS(t *testing.T) {
 	assert.Equal(t, "message", got.Matches[0].Location, "fts match Location")
 }
 
+func TestSearchContentTermsAcrossExchange(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "terms-main", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.UserMessageCount = 2
+	})
+	messages := []Message{
+		{
+			SessionID: "terms-main", Ordinal: 0, Role: "user",
+			Content: "deploy alpha%_\\ marker", Timestamp: "2026-05-20T10:00:00Z",
+		},
+		{
+			SessionID: "terms-main", Ordinal: 1, Role: "assistant",
+			Content: "the beta setting is required", Timestamp: "2026-05-20T10:01:00Z",
+		},
+		{
+			SessionID: "terms-main", Ordinal: 2, Role: "user",
+			Content: "alpha appears again", Timestamp: "2026-05-20T10:02:00Z",
+		},
+		{
+			SessionID: "terms-main", Ordinal: 3, Role: "assistant",
+			Content: "gamma only", Timestamp: "2026-05-20T10:03:00Z",
+		},
+	}
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "terms-main", messages))
+
+	got, err := d.SearchContent(t.Context(), ContentSearchFilter{
+		Pattern: "alpha beta", Mode: "terms", Scope: "all", Limit: 50,
+		IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, got.Matches, 1)
+	match := got.Matches[0]
+	assert.Equal(t, "terms-main", match.SessionID)
+	assert.Equal(t, 0, match.Ordinal)
+	assert.Equal(t, [2]int{0, 1}, match.OrdinalRange)
+	assert.Contains(t, match.Snippet, "alpha")
+	assert.Contains(t, match.Snippet, "beta")
+	assert.False(t, match.Subordinate)
+
+	literal, err := d.SearchContent(t.Context(), ContentSearchFilter{
+		Pattern: `alpha%_\ beta`, Mode: "terms", Scope: "all", Limit: 50,
+		IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, literal.Matches, 1, "wildcard characters must be literal")
+
+	missing, err := d.SearchContent(t.Context(), ContentSearchFilter{
+		Pattern: "alpha missing", Mode: "terms", Scope: "all", Limit: 50,
+		IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, missing.Matches)
+}
+
+// Assistant rows before the first user message land in the exchange_no = 0
+// group, which has no user anchor. Terms search must never match that group
+// even when every term occurs in the preamble.
+func TestSearchContentTermsIgnoresAssistantPreamble(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "terms-preamble", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.UserMessageCount = 1
+	})
+	messages := []Message{
+		{
+			SessionID: "terms-preamble", Ordinal: 0, Role: "assistant",
+			Content: "boot gamma preamble", Timestamp: "2026-05-20T09:00:00Z",
+		},
+		{
+			SessionID: "terms-preamble", Ordinal: 1, Role: "user",
+			Content: "alpha question", Timestamp: "2026-05-20T10:00:00Z",
+		},
+		{
+			SessionID: "terms-preamble", Ordinal: 2, Role: "assistant",
+			Content: "beta answer", Timestamp: "2026-05-20T10:01:00Z",
+		},
+	}
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "terms-preamble", messages))
+
+	preamble, err := d.SearchContent(t.Context(), ContentSearchFilter{
+		Pattern: "gamma boot", Mode: "terms", Scope: "all", Limit: 50,
+		IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, preamble.Matches, "assistant-only preamble must not satisfy terms queries")
+
+	exchange, err := d.SearchContent(t.Context(), ContentSearchFilter{
+		Pattern: "alpha beta", Mode: "terms", Scope: "all", Limit: 50,
+		IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, exchange.Matches, 1)
+	assert.Equal(t, 1, exchange.Matches[0].Ordinal)
+	assert.Equal(t, "user", exchange.Matches[0].Role)
+}
+
+func TestSearchContentTermsScopeAndStablePaging(t *testing.T) {
+	d := testDB(t)
+	for _, session := range []struct {
+		id        string
+		ended     string
+		sidechain bool
+	}{
+		{id: "terms-top-new", ended: "2026-05-20T12:00:00Z"},
+		{id: "terms-side-newest", ended: "2026-05-20T13:00:00Z", sidechain: true},
+		{id: "terms-top-old", ended: "2026-05-20T11:00:00Z"},
+	} {
+		insertSession(t, d, session.id, "proj", func(s *Session) {
+			s.Agent = "claude"
+			s.UserMessageCount = 2
+			s.EndedAt = &session.ended
+		})
+		msgs := []Message{
+			{
+				SessionID: session.id, Ordinal: 0, Role: "user", Content: "alpha",
+				Timestamp: session.ended, IsSidechain: session.sidechain,
+			},
+			{
+				SessionID: session.id, Ordinal: 1, Role: "assistant", Content: "beta",
+				Timestamp: session.ended, IsSidechain: session.sidechain,
+			},
+		}
+		require.NoError(t, d.ReplaceSessionMessages(t.Context(), session.id, msgs))
+	}
+
+	all, err := d.SearchContent(t.Context(), ContentSearchFilter{
+		Pattern: "alpha beta", Mode: "terms", Scope: "all", Limit: 50,
+		IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, all.Matches, 3)
+	assert.Equal(t, []string{"terms-top-new", "terms-top-old", "terms-side-newest"},
+		[]string{all.Matches[0].SessionID, all.Matches[1].SessionID, all.Matches[2].SessionID})
+	assert.False(t, all.Matches[0].Subordinate)
+	assert.True(t, all.Matches[2].Subordinate)
+
+	top, err := d.SearchContent(t.Context(), ContentSearchFilter{
+		Pattern: "alpha beta", Mode: "terms", Scope: "top", Limit: 1,
+		IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, top.Matches, 1)
+	assert.Equal(t, "terms-top-new", top.Matches[0].SessionID)
+	require.NotZero(t, top.NextCursor)
+
+	next, err := d.SearchContent(t.Context(), ContentSearchFilter{
+		Pattern: "alpha beta", Mode: "terms", Scope: "top", Limit: 1,
+		Cursor: top.NextCursor, IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, next.Matches, 1)
+	assert.Equal(t, "terms-top-old", next.Matches[0].SessionID)
+	assert.Zero(t, next.NextCursor)
+}
+
+func TestSearchContentExactSessionAndBranchFilters(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "exact-parent", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.UserMessageCount = 2
+	})
+	for _, session := range []struct{ id, branch string }{
+		{id: "exact-main", branch: "main"},
+		{id: "exact-feature", branch: "feature/memory"},
+	} {
+		insertSession(t, d, session.id, "proj", func(s *Session) {
+			s.Agent = "claude"
+			s.GitBranch = session.branch
+			s.UserMessageCount = 2
+		})
+		require.NoError(t, d.ReplaceSessionMessages(t.Context(), session.id, []Message{
+			{SessionID: session.id, Ordinal: 0, Role: "user", Content: "EXACTNEEDLE"},
+		}))
+	}
+
+	got, err := d.SearchContent(t.Context(), ContentSearchFilter{
+		Pattern: "EXACTNEEDLE", Mode: "substring", SessionID: "exact-feature",
+		GitBranchExact: "feature/memory", IncludeOneShot: true, Limit: 50,
+	})
+	require.NoError(t, err)
+	require.Len(t, got.Matches, 1)
+	assert.Equal(t, "exact-feature", got.Matches[0].SessionID)
+
+	none, err := d.SearchContent(t.Context(), ContentSearchFilter{
+		Pattern: "EXACTNEEDLE", Mode: "substring", SessionID: "exact-feature",
+		GitBranchExact: "main", IncludeOneShot: true, Limit: 50,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, none.Matches)
+
+	insertSession(t, d, "exact-child", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.GitBranch = "feature/memory"
+		s.UserMessageCount = 1
+		s.ParentSessionID = Ptr("exact-parent")
+		s.RelationshipType = "subagent"
+	})
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "exact-child", []Message{
+		{SessionID: "exact-child", Ordinal: 0, Role: "user", Content: "EXACTNEEDLE child"},
+	}))
+	child, err := d.SearchContent(t.Context(), ContentSearchFilter{
+		Pattern: "EXACTNEEDLE", Mode: "substring", SessionID: "exact-child",
+		GitBranchExact: "feature/memory", IncludeOneShot: true, Limit: 50,
+	})
+	require.NoError(t, err)
+	require.Len(t, child.Matches, 1, "an exact ID must bypass sidebar-child hiding")
+	assert.Equal(t, "exact-child", child.Matches[0].SessionID)
+}
+
 func TestSearchContentFTSPhraseSnippetFallsBackToFirstToken(t *testing.T) {
 	d := testDB(t)
 	if !d.HasFTS(t.Context()) {

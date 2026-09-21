@@ -101,10 +101,18 @@ func TestNewMCPCommand_Wiring(t *testing.T) {
 	assert.True(t, cmd.SilenceUsage)
 
 	for _, name := range []string{
-		"http", "http-allow-insecure", "server", "server-token-file", "pg",
+		"http", "http-allow-insecure", "server", "server-token-file", "pg", "profile",
 	} {
 		assert.NotNil(t, cmd.Flags().Lookup(name), "missing flag --%s", name)
 	}
+}
+
+func TestMCPCommandRejectsUnknownProfileBeforeResolvingBackend(t *testing.T) {
+	t.Parallel()
+
+	_, err := executeCommand(newRootCommand(), "mcp", "--profile", "analytics")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown MCP profile")
 }
 
 func TestRootCommand_RegistersMCP(t *testing.T) {
