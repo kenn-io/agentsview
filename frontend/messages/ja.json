@@ -539,7 +539,6 @@
   "shared_refresh_step_finalize": "集計",
   "shared_refresh_step_entries": "エントリ",
   "shared_refresh_step_status": "抽出ステータス",
-  "shared_refresh_step_progress": "抽出の進行状況",
   "shared_relative_just_now": "ちょうど今",
   "shared_relative_minutes_ago": "{count}分前",
   "shared_relative_hours_ago": "{count}時間前",

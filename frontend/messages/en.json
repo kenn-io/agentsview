@@ -539,7 +539,6 @@
   "shared_refresh_step_finalize": "Finalize",
   "shared_refresh_step_entries": "Entries",
   "shared_refresh_step_status": "Extraction status",
-  "shared_refresh_step_progress": "Extraction progress",
   "shared_relative_just_now": "just now",
   "shared_relative_minutes_ago": "{count}m ago",
   "shared_relative_hours_ago": "{count}h ago",

@@ -525,7 +525,6 @@
   "shared_refresh_step_finalize": "마무리",
   "shared_refresh_step_entries": "항목",
   "shared_refresh_step_status": "추출 상태",
-  "shared_refresh_step_progress": "추출 진행 상황",
   "shared_relative_just_now": "방금 전",
   "shared_relative_minutes_ago": "{count}분 전",
   "shared_relative_hours_ago": "{count}시간 전",

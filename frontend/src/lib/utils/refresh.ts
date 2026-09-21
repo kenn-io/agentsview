@@ -80,7 +80,6 @@ const STEP_LABELS: Record<string, () => string> = {
   finalize: () => m.shared_refresh_step_finalize(),
   entries: () => m.shared_refresh_step_entries(),
   status: () => m.shared_refresh_step_status(),
-  progress: () => m.shared_refresh_step_progress(),
 };
 
 /** Localized name for a query step; unknown keys render as-is. */

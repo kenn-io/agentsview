@@ -539,7 +539,6 @@
   "shared_refresh_step_finalize": "Finalisation",
   "shared_refresh_step_entries": "Entrées",
   "shared_refresh_step_status": "État de l'extraction",
-  "shared_refresh_step_progress": "Progression de l'extraction",
   "shared_relative_just_now": "à l'instant",
   "shared_relative_minutes_ago": "il y a {count} min",
   "shared_relative_hours_ago": "il y a {count} h",
