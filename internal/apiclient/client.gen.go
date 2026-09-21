@@ -14790,19 +14790,20 @@ const (
 	Regex     GetAPIV1SearchContentQueryMode = "regex"
 	Semantic  GetAPIV1SearchContentQueryMode = "semantic"
 	Substring GetAPIV1SearchContentQueryMode = "substring"
+	Terms     GetAPIV1SearchContentQueryMode = "terms"
 )
 
 // Validate checks if the GetAPIV1SearchContentQueryMode value is valid
 func (g GetAPIV1SearchContentQueryMode) Validate() error {
 	switch g {
-	case Fts, Hybrid, Regex, Semantic, Substring:
+	case Fts, Hybrid, Regex, Semantic, Substring, Terms:
 		return nil
 	default:
 		return runtime.NewValidationErrorsFromString("Enum", fmt.Sprintf("must be a valid GetAPIV1SearchContentQueryMode value, got: %v", g))
 	}
 }
 
-// GetAPIV1SearchContentQueryScope Semantic/hybrid result scope: top, all, or subordinate (default all)
+// GetAPIV1SearchContentQueryScope Semantic/hybrid/terms result scope: top, all, or subordinate (default all)
 type GetAPIV1SearchContentQueryScope string
 
 const (
@@ -15285,7 +15286,7 @@ type GetAPIV1SearchContentQuery struct {
 	// Mode Search mode
 	Mode *GetAPIV1SearchContentQueryMode `json:"mode,omitempty"`
 
-	// Scope Semantic/hybrid result scope: top, all, or subordinate (default all)
+	// Scope Semantic/hybrid/terms result scope: top, all, or subordinate (default all)
 	Scope *GetAPIV1SearchContentQueryScope `json:"scope,omitempty"`
 
 	// In Comma-separated content sources
@@ -15308,6 +15309,12 @@ type GetAPIV1SearchContentQuery struct {
 
 	// GitBranch Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
 	GitBranch *string `json:"git_branch,omitempty"`
+
+	// SessionID Filter by exact full stored session ID
+	SessionID *string `json:"session_id,omitempty"`
+
+	// GitBranchExact Filter by exact raw git branch
+	GitBranchExact *string `json:"git_branch_exact,omitempty"`
 
 	// Agent Filter by agent
 	Agent *string `json:"agent,omitempty"`
@@ -15710,6 +15717,12 @@ type GetAPIV1SessionsIDMessagesQuery struct {
 
 	// Roles Comma-separated roles to include, e.g. user,assistant
 	Roles *string `json:"roles,omitempty"`
+
+	// ExpectedRevision Reject the read when the transcript revision no longer matches
+	ExpectedRevision *string `json:"expected_revision,omitempty"`
+
+	// EvidenceSource Opaque archive binding returned by an earlier evidence read
+	EvidenceSource *string `json:"evidence_source,omitempty"`
 }
 
 func (g GetAPIV1SessionsIDMessagesQuery) Validate() error {
@@ -18557,24 +18570,25 @@ type DBCompactEstimate struct {
 type DBCompactResult = db.CompactResult
 
 type DBContentMatch struct {
-	Agent           string      `json:"agent" validate:"required"`
-	ContextAfter    []DBMessage `json:"context_after,omitempty"`
-	ContextBefore   []DBMessage `json:"context_before,omitempty"`
-	IsSidechain     *bool       `json:"is_sidechain,omitempty"`
-	Location        string      `json:"location" validate:"required"`
-	Ordinal         int64       `json:"ordinal"`
-	OrdinalRange    []int64     `json:"ordinal_range" validate:"required"`
-	ParentSessionID *string     `json:"parent_session_id,omitempty"`
-	Project         string      `json:"project" validate:"required"`
-	Relationship    *string     `json:"relationship,omitempty"`
-	Role            string      `json:"role" validate:"required"`
-	Score           *float64    `json:"score,omitempty"`
-	SessionID       string      `json:"session_id" validate:"required"`
-	Snippet         string      `json:"snippet" validate:"required"`
-	Subordinate     *bool       `json:"subordinate,omitempty"`
-	Timestamp       string      `json:"timestamp" validate:"required"`
-	ToolName        *string     `json:"tool_name,omitempty"`
-	WebURL          *string     `json:"web_url,omitempty"`
+	Agent              string      `json:"agent" validate:"required"`
+	ContextAfter       []DBMessage `json:"context_after,omitempty"`
+	ContextBefore      []DBMessage `json:"context_before,omitempty"`
+	IsSidechain        *bool       `json:"is_sidechain,omitempty"`
+	Location           string      `json:"location" validate:"required"`
+	Ordinal            int64       `json:"ordinal"`
+	OrdinalRange       []int64     `json:"ordinal_range" validate:"required"`
+	ParentSessionID    *string     `json:"parent_session_id,omitempty"`
+	Project            string      `json:"project" validate:"required"`
+	Relationship       *string     `json:"relationship,omitempty"`
+	Role               string      `json:"role" validate:"required"`
+	Score              *float64    `json:"score,omitempty"`
+	SessionID          string      `json:"session_id" validate:"required"`
+	Snippet            string      `json:"snippet" validate:"required"`
+	Subordinate        *bool       `json:"subordinate,omitempty"`
+	Timestamp          string      `json:"timestamp" validate:"required"`
+	ToolName           *string     `json:"tool_name,omitempty"`
+	TranscriptRevision *string     `json:"transcript_revision,omitempty"`
+	WebURL             *string     `json:"web_url,omitempty"`
 }
 
 func (d DBContentMatch) Validate() error {

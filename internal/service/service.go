@@ -162,7 +162,7 @@ type SessionSearchResult struct {
 // ContentSearchRequest is the transport-neutral content-search input.
 type ContentSearchRequest struct {
 	Pattern       string   `json:"pattern"`
-	Mode          string   `json:"mode,omitempty"` // substring|regex|fts|semantic|hybrid
+	Mode          string   `json:"mode,omitempty"` // substring|regex|fts|terms|semantic|hybrid
 	Sources       []string `json:"sources,omitempty"`
 	ExcludeSystem bool     `json:"exclude_system,omitempty"`
 	Reveal        bool     `json:"reveal,omitempty"`
@@ -171,6 +171,7 @@ type ContentSearchRequest struct {
 	Context int `json:"context,omitempty"`
 
 	Project, ExcludeProject, Machine, Agent           string
+	SessionID, GitBranchExact                         string
 	Date, DateFrom, DateTo, Timezone, ActiveSince     string
 	IncludeChildren, IncludeAutomated, IncludeOneShot bool
 	ExcludeSessionIDs                                 []string
@@ -188,8 +189,9 @@ type ContentSearchRequest struct {
 
 // ContentSearchResult mirrors db.ContentSearchPage for transport.
 type ContentSearchResult struct {
-	Matches    []db.ContentMatch `json:"matches"`
-	NextCursor int               `json:"next_cursor,omitempty"`
+	Matches       []db.ContentMatch `json:"matches"`
+	NextCursor    int               `json:"next_cursor,omitempty"`
+	RevisionBound bool              `json:"revision_bound"`
 }
 
 // RecallFilter mirrors GET /api/v1/recall/entries query parameters.
@@ -425,17 +427,34 @@ type MessageFilter struct {
 	Before    *int     `json:"before,omitempty"` // default 5 when Around set
 	After     *int     `json:"after,omitempty"`  // default 5 when Around set
 	Roles     []string `json:"roles,omitempty"`
+	// ExpectedRevision rejects a read when the session no longer has the
+	// transcript revision cited by search or an earlier read.
+	ExpectedRevision string `json:"expected_revision,omitempty"`
+	// EvidenceSource is the opaque backend binding returned by an earlier
+	// read. It prevents a continuation cursor from being replayed against a
+	// different archive/server instance.
+	EvidenceSource string `json:"evidence_source,omitempty"`
 }
 
 // MessageList mirrors {messages, count}. FirstOrdinal/LastOrdinal report the
 // returned window's bounds (nil when Messages is empty) so callers can page
 // on with from = last_ordinal + 1.
 type MessageList struct {
-	Messages     []db.Message `json:"messages"`
-	Count        int          `json:"count"`
-	FirstOrdinal *int         `json:"first_ordinal,omitempty"`
-	LastOrdinal  *int         `json:"last_ordinal,omitempty"`
+	Messages           []db.Message `json:"messages"`
+	Count              int          `json:"count"`
+	FirstOrdinal       *int         `json:"first_ordinal,omitempty"`
+	LastOrdinal        *int         `json:"last_ordinal,omitempty"`
+	TranscriptRevision string       `json:"transcript_revision,omitempty"`
+	EvidenceSource     string       `json:"evidence_source,omitempty"`
 }
+
+// ErrSourceChanged marks a revision-bound evidence read whose archive,
+// session, or transcript revision no longer matches the cited source.
+var ErrSourceChanged = errors.New("source_changed")
+
+// ErrRevisionBoundReadUnavailable marks a backend that cannot provide stable
+// transcript revisions for evidence reads.
+var ErrRevisionBoundReadUnavailable = errors.New("revision-bound reads unavailable")
 
 // ToolCall mirrors a flattened tool call with its enclosing message's
 // ordinal/timestamp attached. Serialized from parser.ParsedToolCall.

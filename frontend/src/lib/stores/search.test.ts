@@ -174,6 +174,7 @@ describe("SearchStore", () => {
       store.setMode(mode);
       searchService.getApiV1SearchContent.mockResolvedValueOnce({
         matches: [contentMatch("semantic-1", 4, 0.9)],
+        revision_bound: false,
       });
 
       store.search("  padded query  ", "semantic-project");
@@ -213,7 +214,7 @@ describe("SearchStore", () => {
       const store = createSearchStore(memoryStorage());
       store.setMode(mode);
       searchService.getApiV1Search.mockResolvedValue(fullTextResponse("needle"));
-      searchService.getApiV1SearchContent.mockResolvedValue({ matches: [] });
+      searchService.getApiV1SearchContent.mockResolvedValue({ matches: [], revision_bound: false });
       const request =
         mode === "fulltext" ? searchService.getApiV1Search : searchService.getApiV1SearchContent;
 
@@ -249,7 +250,7 @@ describe("SearchStore", () => {
   it("cancels the previous range request and keeps the range across retries and mode changes", async () => {
     const store = createSearchStore(memoryStorage());
     store.setMode("semantic");
-    const old = deferred<{ matches: DbContentMatch[] }>();
+    const old = deferred<{ matches: DbContentMatch[]; revision_bound: false }>();
     searchService.getApiV1SearchContent.mockReturnValueOnce(old.promise);
     searchService.getApiV1SearchContent.mockRejectedValueOnce(new Error("timeout"));
     store.search("needle");
@@ -259,13 +260,14 @@ describe("SearchStore", () => {
     store.setRange({ mode: "calendar", unit: "day", anchor: "2026-07-04" });
     await flushMicrotasks();
     expect(oldSignal.aborted).toBe(true);
-    old.resolve({ matches: [contentMatch("out-of-range", 1, 0.9)] });
+    old.resolve({ matches: [contentMatch("out-of-range", 1, 0.9)], revision_bound: false });
     await flushMicrotasks();
     expect(store.results).toEqual([]);
     expect(store.error?.kind).toBe("timeout");
 
     searchService.getApiV1SearchContent.mockResolvedValue({
       matches: [contentMatch("in-range", 4, 0.8)],
+      revision_bound: false,
     });
     store.retry();
     await flushMicrotasks();
@@ -288,7 +290,7 @@ describe("SearchStore", () => {
         contentMatch(`session-${index}`, index + 4, 100 - index),
       ),
     ];
-    searchService.getApiV1SearchContent.mockResolvedValueOnce({ matches });
+    searchService.getApiV1SearchContent.mockResolvedValueOnce({ matches, revision_bound: false });
 
     store.search("ranked");
     await runDebounce();
@@ -359,7 +361,7 @@ describe("SearchStore", () => {
     const storage = memoryStorage();
     const store = createSearchStore(storage);
     store.search("  rerun me  ", "alpha");
-    searchService.getApiV1SearchContent.mockResolvedValueOnce({ matches: [] });
+    searchService.getApiV1SearchContent.mockResolvedValueOnce({ matches: [], revision_bound: false });
 
     store.setMode("semantic");
     await flushMicrotasks();
@@ -393,7 +395,7 @@ describe("SearchStore", () => {
     expect(store.error).not.toBeNull();
 
     vi.clearAllMocks();
-    searchService.getApiV1SearchContent.mockResolvedValueOnce({ matches: [] });
+    searchService.getApiV1SearchContent.mockResolvedValueOnce({ matches: [], revision_bound: false });
     store.retry();
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(DEBOUNCE_MS + 10);
@@ -454,6 +456,7 @@ describe("SearchStore", () => {
 
     searchService.getApiV1SearchContent.mockResolvedValueOnce({
       matches: [contentMatch("newer", 8, 0.8)],
+      revision_bound: false,
     });
     store.setMode("semantic");
     await flushMicrotasks();

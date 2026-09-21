@@ -1,4 +1,5 @@
 ---
+last_edited: 2026-09-21
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -10,6 +11,16 @@ The latest published release is
 
 **New features**
 
+- MCP clients can use `agentsview mcp --profile memory` to advertise only the
+    conversation evidence search and read tools, reducing unrelated tool
+    choices while leaving the default full MCP surface unchanged.
+- Agents can open recalled evidence against the exact transcript revision that
+    produced it. MCP message reads reject stale citations with `source_changed`,
+    and oversized messages now provide a revision-bound continuation cursor.
+- Agents can require several literal terms within one user/assistant exchange
+    when searching conversation history through MCP. Exact session, branch, and
+    current-session filters narrow recall before the result limit, and each
+    response reports the search mode, filters, exclusions, and truncation.
 - Push the local SQLite archive into ClickHouse and serve the read-only web UI
     from it. Configure `[clickhouse]` or named `[clickhouse.NAME]` targets, then
     run `agentsview clickhouse push`, `status`, `serve`, or `service`. Push

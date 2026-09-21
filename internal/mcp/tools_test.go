@@ -2,13 +2,16 @@ package mcp
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
@@ -48,8 +51,9 @@ func newTestToolset(t *testing.T) (*toolset, *db.DB) {
 	t.Helper()
 	d := dbtest.OpenTestDB(t)
 	return &toolset{
-		svc: service.NewDirectBackend(d, nil),
-		now: func() time.Time { return fixedNow },
+		svc:       service.NewDirectBackend(d, nil),
+		now:       func() time.Time { return fixedNow },
+		cursorKey: newCursorKey(),
 	}, d
 }
 
@@ -535,6 +539,305 @@ func TestGetMessages_RoleFilterAndTruncation(t *testing.T) {
 	assert.True(t, first.Truncated)
 	assert.Equal(t, 50, first.FullLength)
 	assert.Len(t, first.Content, 10)
+}
+
+func TestGetMessages_BodyCursorContinuesUnicodeMessage(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "body", "proj", func(s *db.Session) {
+		s.MessageCount = 2
+		s.UserMessageCount = 2
+	})
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
+		dbtest.UserMsg("body", 0, "αβγδεζηθικ"),
+		dbtest.UserMsg("body", 1, "next message"),
+	}))
+
+	_, first, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "body", Limit: 2, MaxCharsPerMessage: 4,
+	})
+	require.NoError(t, err)
+	require.Len(t, first.Messages, 2)
+	assert.Equal(t, "αβγδ", first.Messages[0].Content)
+	assert.Equal(t, 10, first.Messages[0].FullLength)
+	require.NotEmpty(t, first.Messages[0].BodyCursor)
+	require.NotEmpty(t, first.TranscriptRevision)
+	assert.Nil(t, first.NextFrom, "body continuation must finish before message pagination advances")
+
+	_, second, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "body", BodyCursor: first.Messages[0].BodyCursor,
+		MaxCharsPerMessage: 4,
+	})
+	require.NoError(t, err)
+	require.Len(t, second.Messages, 1)
+	assert.Equal(t, "εζηθ", second.Messages[0].Content)
+	require.NotEmpty(t, second.Messages[0].BodyCursor)
+	assert.Equal(t, first.TranscriptRevision, second.TranscriptRevision)
+
+	_, third, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "body", BodyCursor: second.Messages[0].BodyCursor,
+		MaxCharsPerMessage: 4,
+	})
+	require.NoError(t, err)
+	// The queued remainder of the second truncated message follows in the
+	// same response once the first body completes, and next_from stays
+	// withheld until that remainder finishes too.
+	require.Len(t, third.Messages, 2)
+	assert.Equal(t, 0, third.Messages[0].Ordinal)
+	assert.Equal(t, "ικ", third.Messages[0].Content)
+	assert.False(t, third.Messages[0].Truncated)
+	assert.Empty(t, third.Messages[0].BodyCursor)
+	assert.Equal(t, 1, third.Messages[1].Ordinal)
+	assert.Equal(t, " mes", third.Messages[1].Content)
+	assert.True(t, third.Messages[1].Truncated)
+	require.NotEmpty(t, third.Messages[1].BodyCursor)
+	assert.Nil(t, third.NextFrom)
+
+	_, fourth, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "body", BodyCursor: third.Messages[1].BodyCursor,
+		MaxCharsPerMessage: 4,
+	})
+	require.NoError(t, err)
+	require.Len(t, fourth.Messages, 1)
+	assert.Equal(t, 1, fourth.Messages[0].Ordinal)
+	assert.Equal(t, "sage", fourth.Messages[0].Content)
+	assert.False(t, fourth.Messages[0].Truncated)
+	assert.Empty(t, fourth.Messages[0].BodyCursor)
+	require.NotNil(t, fourth.NextFrom,
+		"next_from resumes only after every queued body completes")
+	assert.Equal(t, 2, *fourth.NextFrom)
+}
+
+func TestGetMessages_BodyCursorContinuesPastMaximumChunk(t *testing.T) {
+	ts, d := newTestToolset(t)
+	body := strings.Repeat("界", maxMaxCharsPerMessage+5)
+	dbtest.SeedSessionWithMessages(t, d, "oversized", "proj", []db.Message{
+		dbtest.UserMsg("oversized", 0, body),
+	}, dbtest.WithMessageCounts(1, 1))
+
+	_, first, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "oversized", MaxCharsPerMessage: maxMaxCharsPerMessage,
+	})
+	require.NoError(t, err)
+	require.Len(t, first.Messages, 1)
+	assert.Equal(t, maxMaxCharsPerMessage, utf8.RuneCountInString(first.Messages[0].Content))
+	assert.Equal(t, maxMaxCharsPerMessage+5, first.Messages[0].FullLength)
+	require.NotEmpty(t, first.Messages[0].BodyCursor)
+
+	_, rest, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "oversized", BodyCursor: first.Messages[0].BodyCursor,
+		MaxCharsPerMessage: maxMaxCharsPerMessage,
+	})
+	require.NoError(t, err)
+	require.Len(t, rest.Messages, 1)
+	assert.Equal(t, strings.Repeat("界", 5), rest.Messages[0].Content)
+	assert.False(t, rest.Messages[0].Truncated)
+}
+
+func TestGetMessages_BodyCursorRejectsChangedTranscript(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSessionWithMessages(t, d, "body", "proj", []db.Message{
+		dbtest.UserMsg("body", 0, "abcdefghij"),
+	}, dbtest.WithMessageCounts(1, 1))
+
+	_, first, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "body", MaxCharsPerMessage: 4,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, first.Messages[0].BodyCursor)
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "body", []db.Message{
+		dbtest.UserMsg("body", 0, "changed body"),
+	}))
+
+	_, _, err = ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "body", BodyCursor: first.Messages[0].BodyCursor,
+		MaxCharsPerMessage: 4,
+	})
+	require.ErrorIs(t, err, service.ErrSourceChanged)
+}
+
+func TestGetMessages_BodyCursorChainsPageTruncations(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSessionWithMessages(t, d, "chain", "proj", []db.Message{
+		dbtest.UserMsg("chain", 0, "abcdefghijkl"),
+		dbtest.AsstMsg("chain", 1, "mnopqrstuvwx"),
+		dbtest.UserMsg("chain", 2, "short"),
+	}, dbtest.WithMessageCounts(3, 2))
+
+	_, first, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "chain", Limit: 3, MaxCharsPerMessage: 5,
+	})
+	require.NoError(t, err)
+	require.Len(t, first.Messages, 3)
+	// Only the first truncated message carries a cursor; it queues the rest.
+	assert.Equal(t, "abcde", first.Messages[0].Content)
+	require.NotEmpty(t, first.Messages[0].BodyCursor)
+	assert.Equal(t, "mnopq", first.Messages[1].Content)
+	assert.True(t, first.Messages[1].Truncated)
+	assert.Empty(t, first.Messages[1].BodyCursor)
+	assert.Nil(t, first.NextFrom)
+
+	// First continuation: message 0's middle segment, still not complete.
+	_, second, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "chain", BodyCursor: first.Messages[0].BodyCursor,
+		MaxCharsPerMessage: 5,
+	})
+	require.NoError(t, err)
+	require.Len(t, second.Messages, 1)
+	assert.Equal(t, 0, second.Messages[0].Ordinal)
+	assert.Equal(t, "fghij", second.Messages[0].Content)
+	require.NotEmpty(t, second.Messages[0].BodyCursor)
+	assert.Nil(t, second.NextFrom)
+
+	// Second continuation: message 0 completes and message 1's tail opens
+	// in the same response.
+	_, third, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "chain", BodyCursor: second.Messages[0].BodyCursor,
+		MaxCharsPerMessage: 5,
+	})
+	require.NoError(t, err)
+	require.Len(t, third.Messages, 2)
+	assert.Equal(t, 0, third.Messages[0].Ordinal)
+	assert.Equal(t, "kl", third.Messages[0].Content)
+	assert.False(t, third.Messages[0].Truncated)
+	assert.Empty(t, third.Messages[0].BodyCursor)
+	assert.Equal(t, 1, third.Messages[1].Ordinal)
+	assert.Equal(t, "rstuv", third.Messages[1].Content)
+	require.NotEmpty(t, third.Messages[1].BodyCursor)
+	assert.Nil(t, third.NextFrom,
+		"next_from waits until every queued body completes")
+
+	// Final continuation: message 1 finishes and pagination resumes.
+	_, fourth, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "chain", BodyCursor: third.Messages[1].BodyCursor,
+		MaxCharsPerMessage: 5,
+	})
+	require.NoError(t, err)
+	require.Len(t, fourth.Messages, 1)
+	assert.Equal(t, 1, fourth.Messages[0].Ordinal)
+	assert.Equal(t, "wx", fourth.Messages[0].Content)
+	assert.False(t, fourth.Messages[0].Truncated)
+	assert.Empty(t, fourth.Messages[0].BodyCursor)
+	require.NotNil(t, fourth.NextFrom)
+	assert.Equal(t, 3, *fourth.NextFrom)
+}
+
+// unrevisionedStore strips transcript revisions so get_messages sees the
+// pre-revision backend shape.
+type unrevisionedStore struct {
+	db.Store
+}
+
+func (s *unrevisionedStore) GetSession(
+	ctx context.Context, id string,
+) (*db.Session, error) {
+	sess, err := s.Store.GetSession(ctx, id)
+	if err != nil || sess == nil {
+		return sess, err
+	}
+	sess.TranscriptRevision = nil
+	return sess, nil
+}
+
+func TestGetMessages_BodyCursorNeedsStableRevision(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	dbtest.SeedSessionWithMessages(t, d, "plain", "proj", []db.Message{
+		dbtest.UserMsg("plain", 0, strings.Repeat("x", 30)),
+	}, dbtest.WithMessageCounts(1, 1))
+	ts := &toolset{
+		svc:       service.NewReadOnlyBackend(&unrevisionedStore{Store: d}),
+		now:       func() time.Time { return fixedNow },
+		cursorKey: newCursorKey(),
+	}
+
+	_, out, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "plain", Limit: 1, MaxCharsPerMessage: 10,
+	})
+	require.NoError(t, err)
+	require.Len(t, out.Messages, 1)
+	assert.True(t, out.Messages[0].Truncated)
+	assert.Empty(t, out.Messages[0].BodyCursor,
+		"no cursor may be minted without a stable revision to bind it to")
+	assert.Empty(t, out.TranscriptRevision)
+	require.NotNil(t, out.NextFrom,
+		"pagination must survive the missing body cursor")
+	assert.Equal(t, 1, *out.NextFrom)
+}
+
+func TestGetMessages_BodyCursorRejectsTamperedToken(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSessionWithMessages(t, d, "signed", "proj", []db.Message{
+		dbtest.UserMsg("signed", 0, strings.Repeat("y", 30)),
+	}, dbtest.WithMessageCounts(1, 1))
+
+	_, first, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "signed", Limit: 1, MaxCharsPerMessage: 10,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, first.Messages[0].BodyCursor)
+
+	// Re-encode the payload with a different offset while keeping the
+	// original MAC, exactly like a client editing the opaque token.
+	encoded, _, ok := strings.Cut(first.Messages[0].BodyCursor, ".")
+	require.True(t, ok)
+	raw, err := base64.RawURLEncoding.DecodeString(encoded)
+	require.NoError(t, err)
+	var cursor messageBodyCursor
+	require.NoError(t, json.Unmarshal(raw, &cursor))
+	cursor.Offset = 20
+	edited, err := json.Marshal(cursor)
+	require.NoError(t, err)
+	tampered := base64.RawURLEncoding.EncodeToString(edited) + "." + encoded
+
+	_, _, err = ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "signed", BodyCursor: tampered, MaxCharsPerMessage: 10,
+	})
+	require.ErrorContains(t, err, "invalid body_cursor")
+}
+
+func TestGetMessages_BodyCursorCannotSurfaceFilteredMessage(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "filtered", "proj", func(s *db.Session) {
+		s.MessageCount = 3
+		s.UserMessageCount = 1
+	})
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
+		dbtest.UserMsg("filtered", 0, "visible question"),
+		{
+			SessionID: "filtered", Ordinal: 1, Role: "tool",
+			Content: "secret tool output", ContentLength: len("secret tool output"),
+		},
+		{
+			SessionID: "filtered", Ordinal: 2, Role: "system",
+			Content: "system noise", IsSystem: true, ContentLength: len("system noise"),
+		},
+	}))
+
+	_, first, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "filtered", Limit: 1, MaxCharsPerMessage: 10,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, first.Messages[0].BodyCursor)
+
+	for _, target := range []struct {
+		name    string
+		ordinal int
+	}{{"tool role", 1}, {"system flag", 2}} {
+		t.Run(target.name, func(t *testing.T) {
+			// Re-signing with the test's key stands in for any future bug or
+			// key leak: even a validly signed cursor naming suppressed
+			// content must be refused at read time.
+			cursor, err := ts.decodeMessageBodyCursor(first.Messages[0].BodyCursor)
+			require.NoError(t, err)
+			cursor.Ordinal = target.ordinal
+			cursor.Offset = 1
+			forged := ts.encodeMessageBodyCursor(cursor)
+
+			_, _, err = ts.getMessages(t.Context(), nil, getMessagesIn{
+				SessionID: "filtered", BodyCursor: forged, MaxCharsPerMessage: 10,
+			})
+			require.ErrorIs(t, err, service.ErrSourceChanged)
+		})
+	}
 }
 
 // Even when a caller explicitly allow-lists the "system" role, get_messages
@@ -1415,9 +1718,25 @@ func TestServer_SearchContentIncludeOneShot(t *testing.T) {
 // when IncludeActive is set, which skips the session-activity lookup).
 type fakeContentSearchService struct {
 	service.SessionService
-	lastReq service.ContentSearchRequest
-	result  *service.ContentSearchResult
-	err     error
+	lastReq  service.ContentSearchRequest
+	result   *service.ContentSearchResult
+	err      error
+	getErr   error
+	getFound bool
+}
+
+// Get backs the current_session_id resolution. Found defaults to false so
+// a fake without explicit resolution answers like a missing session.
+func (f *fakeContentSearchService) Get(
+	context.Context, string,
+) (*service.SessionDetail, error) {
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
+	if !f.getFound {
+		return nil, nil
+	}
+	return &service.SessionDetail{}, nil
 }
 
 func (f *fakeContentSearchService) SearchContent(
@@ -1447,11 +1766,11 @@ func TestSearchContent_SemanticUnavailableMapsToRemediationError(t *testing.T) {
 	assert.Equal(t, "semantic", fake.lastReq.Mode)
 }
 
-// search_content must reject scope outside semantic/hybrid with the same
+// search_content must reject scope outside semantic/hybrid/terms with the same
 // message the HTTP transport uses (the db layer silently ignores Scope for
 // lexical modes, so the guard lives in the transport), and must not reach
 // the service at all on rejection.
-func TestSearchContent_ScopeRejectedOnLexicalModes(t *testing.T) {
+func TestSearchContent_ScopeRejectedOnUnsupportedLexicalModes(t *testing.T) {
 	fake := &fakeContentSearchService{result: &service.ContentSearchResult{}}
 	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
 
@@ -1462,7 +1781,7 @@ func TestSearchContent_ScopeRejectedOnLexicalModes(t *testing.T) {
 			})
 			require.Error(t, err)
 			assert.EqualError(t, err,
-				"scope is only supported for semantic and hybrid search modes")
+				"scope is only supported for semantic, hybrid, and terms search modes")
 		})
 	}
 	assert.Empty(t, fake.lastReq.Pattern,
@@ -1470,22 +1789,148 @@ func TestSearchContent_ScopeRejectedOnLexicalModes(t *testing.T) {
 }
 
 // search_content must pass Scope through to the service untouched for
-// semantic and hybrid modes; the db layer owns scope-value validation from
+// semantic, hybrid, and terms modes; the db layer owns scope-value validation from
 // there.
-func TestSearchContent_ScopeForwardedForSemanticModes(t *testing.T) {
-	for _, mode := range []string{"semantic", "hybrid"} {
+func TestSearchContent_ScopeForwardedForScopedModes(t *testing.T) {
+	for _, mode := range []string{"semantic", "hybrid", "terms"} {
 		t.Run(mode, func(t *testing.T) {
 			fake := &fakeContentSearchService{result: &service.ContentSearchResult{}}
 			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
 
-			_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{
+			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
 				Pattern: "retries", Mode: mode, Scope: "subordinate", IncludeActive: true,
 			})
 			require.NoError(t, err)
 			assert.Equal(t, mode, fake.lastReq.Mode)
 			assert.Equal(t, "subordinate", fake.lastReq.Scope,
 				"scope must reach the service untouched")
+			assert.Equal(t, "subordinate", out.AppliedFilters.Scope)
 		})
+	}
+
+	fake := &fakeContentSearchService{result: &service.ContentSearchResult{}}
+	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
+		Pattern: "retries", Mode: "terms", IncludeActive: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "all", out.AppliedFilters.Scope)
+
+	_, out, err = ts.searchContent(t.Context(), nil, searchContentIn{
+		Pattern: "retries", IncludeActive: true,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, out.RequestedMode)
+	assert.Equal(t, "substring", out.EffectiveMode)
+}
+
+func TestSearchContent_RecallContractMapping(t *testing.T) {
+	fake := &fakeContentSearchService{getFound: true, result: &service.ContentSearchResult{
+		Matches: []db.ContentMatch{{
+			SessionID: "older", Project: "agentsview", Agent: "codex",
+			Location: "message", Role: "user", Ordinal: 4,
+			OrdinalRange: [2]int{4, 6}, Timestamp: "2026-09-01T10:00:00Z",
+			Snippet: "alpha then beta",
+		}},
+		NextCursor: 50,
+	}}
+	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+
+	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
+		Pattern: "alpha beta", Mode: "terms", Scope: "subordinate",
+		Project: "agentsview", Agent: "codex", SessionID: "older",
+		GitBranch: "feature/memory", CurrentSessionID: "current",
+		DateFrom: "2026-08-01", DateTo: "2026-09-20", Limit: 50,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "terms", fake.lastReq.Mode)
+	assert.Equal(t, "subordinate", fake.lastReq.Scope)
+	assert.Equal(t, "older", fake.lastReq.SessionID)
+	assert.Equal(t, "feature/memory", fake.lastReq.GitBranchExact)
+	assert.Equal(t, []string{"current"}, fake.lastReq.ExcludeSessionIDs)
+	assert.Equal(t, 50, fake.lastReq.Limit)
+	assert.Equal(t, "terms", out.RequestedMode)
+	assert.Equal(t, "terms", out.EffectiveMode)
+	assert.Equal(t, "older", out.AppliedFilters.SessionID)
+	assert.Equal(t, "feature/memory", out.AppliedFilters.GitBranch)
+	assert.Equal(t, "subordinate", out.AppliedFilters.Scope)
+	assert.Equal(t, "current", out.Exclusions.CurrentSessionID)
+	assert.False(t, out.Exclusions.RecentActive)
+	assert.True(t, out.Exclusions.OneShot)
+	assert.True(t, out.Exclusions.Automated)
+	assert.True(t, out.CandidateTruncated)
+	require.Len(t, out.Matches, 1)
+}
+
+func TestSearchContent_RejectsInvalidRecallLimits(t *testing.T) {
+	for _, limit := range []int{-1, 51} {
+		t.Run(fmt.Sprintf("limit=%d", limit), func(t *testing.T) {
+			fake := &fakeContentSearchService{result: &service.ContentSearchResult{}}
+			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+			_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{
+				Pattern: "needle", Limit: limit, IncludeActive: true,
+			})
+			require.EqualError(t, err, "limit must be between 1 and 50")
+			assert.Empty(t, fake.lastReq.Pattern)
+		})
+	}
+}
+
+// A current_session_id that does not resolve to one stored session must
+// fail the call instead of silently disabling the recent-activity guard:
+// with the guard off, an unknown ID excludes nothing and active sessions
+// (including the caller's own conversation) leak into the results.
+func TestSearchContent_CurrentSessionIDMustResolve(t *testing.T) {
+	t.Run("unknown id is rejected before dispatch", func(t *testing.T) {
+		fake := &fakeContentSearchService{result: &service.ContentSearchResult{}}
+		ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+
+		_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{
+			Pattern: "needle", CurrentSessionID: "does-not-exist",
+		})
+		require.ErrorContains(t, err, "unknown current_session_id")
+		assert.Contains(t, err.Error(), "does-not-exist")
+		assert.Empty(t, fake.lastReq.Pattern,
+			"the search must not run with the guard weakened")
+	})
+
+	t.Run("lookup failure is reported", func(t *testing.T) {
+		fake := &fakeContentSearchService{
+			result: &service.ContentSearchResult{}, getErr: errors.New("backend down"),
+		}
+		ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+
+		_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{
+			Pattern: "needle", CurrentSessionID: "current",
+		})
+		require.ErrorContains(t, err, "current_session_id: backend down")
+		assert.Empty(t, fake.lastReq.Pattern)
+	})
+
+	t.Run("resolved id keeps the guard disabled", func(t *testing.T) {
+		fake := &fakeContentSearchService{getFound: true, result: &service.ContentSearchResult{}}
+		ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+
+		_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
+			Pattern: "needle", CurrentSessionID: "current",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "current", out.Exclusions.CurrentSessionID)
+		assert.False(t, out.Exclusions.RecentActive)
+		assert.Equal(t, "needle", fake.lastReq.Pattern)
+	})
+}
+
+func TestSearchContent_RejectsInvalidRecallDates(t *testing.T) {
+	for _, in := range []searchContentIn{
+		{Pattern: "needle", DateFrom: "09/01/2026"},
+		{Pattern: "needle", DateFrom: "2026-09-20", DateTo: "2026-09-01"},
+	} {
+		fake := &fakeContentSearchService{result: &service.ContentSearchResult{}}
+		ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+		_, _, err := ts.searchContent(t.Context(), nil, in)
+		require.Error(t, err)
+		assert.Empty(t, fake.lastReq.Pattern)
 	}
 }
 
