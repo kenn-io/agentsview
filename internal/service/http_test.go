@@ -1032,6 +1032,8 @@ func TestHTTPSearchContent(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, res.Matches, 1)
 	assert.Equal(t, "s1", res.Matches[0].SessionID)
+	assert.Equal(t, service.MemoryUnknown, res.Coverage.Status)
+	assert.Equal(t, "unsupported", res.Coverage.Lexical.Reason)
 }
 
 func TestHTTPSearchContentSemanticSetsIntentHeader(t *testing.T) {
@@ -1094,6 +1096,7 @@ func TestHTTPSearchContent_RealServer(t *testing.T) {
 	require.Len(t, res.Matches, 1)
 	assert.Equal(t, "cs-1", res.Matches[0].SessionID)
 	assert.Equal(t, "message", res.Matches[0].Location)
+	assert.Equal(t, service.MemoryPartial, res.Coverage.Status)
 }
 
 func TestHTTPSearchContent_ExcludeSession(t *testing.T) {

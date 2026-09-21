@@ -661,26 +661,31 @@ in the [user-facing error taxonomy](/docs/semantic-search/#error-taxonomy).
 
 ## Skill generation
 
-`internal/skills` renders the `agentsview-finding-history` skill (see
+`internal/skills` renders a harness-specific artifact package (see
 [Skills for coding agents](/docs/semantic-search/#skills-for-coding-agents))
-from a single embedded template,
-`internal/skills/templates/finding-history.md.tmpl` via `go:embed` — the same
-pattern `internal/web` uses for the frontend — with no per-harness copies
-checked in. `Render` fills in a harness-specific delegation phrase (whether the
-harness can dispatch a search subagent or must run the bounded probes itself),
-optional `--server` / `--server-token-file` suffixes for remote-daemon installs,
-and inserts a `generated-by` header — carrying the CLI version and a sha256 hash
-of the pure template render — as a YAML comment on line two, just inside the
-frontmatter fence, so the file still begins with `---` and frontmatter-based
-skill discovery keeps working. A following `# install-remote:` JSON comment
-records the baked remote so `skills list` and a flagless reinstall keep
-classifying the file as current. Staleness and tamper detection are
-hash-authoritative, not version-authoritative: `Classify` compares a file's
-recorded hash against its own body hash to detect modification, and against a
-fresh render's hash to detect staleness, and never consults the version string,
-because dev builds all report version `"dev"` and would otherwise be
-indistinguishable from one another. There is deliberately no Claude Code
-plugin/marketplace packaging: that would tie distribution to one harness's
-install mechanism, whereas the goal is a single `SKILL.md` artifact that any
-`.agents/skills`-reading harness can consume the same way, installed directly by
-the `agentsview` binary rather than a separate package manager.
+from embedded templates via `go:embed`. Both harnesses receive
+`agentsview-finding-history`; Claude also receives the
+`agentsview-search-conversations` agent. The generic Agents/Codex package stays
+skill-only and follows the same MCP workflow directly when no permitted search
+agent exists.
+
+`RenderPackage` assigns every artifact an install-relative path and feeds both
+templates through the same generated-header and content-hash renderer. The
+skill receives the harness-specific delegation phrase and optional `--server` /
+`--server-token-file` suffixes. Its `# install-remote:` JSON comment records
+remote intent so `skills list` and a flagless reinstall classify the package
+against the same target. The search agent is endpoint-neutral and calls the
+registered `search_content` and `get_messages` tool names.
+
+Classification remains hash-authoritative and per file. `Classify` compares an
+artifact's recorded hash against its body to detect modification and against a
+fresh render to detect staleness. Install therefore refuses a modified agent
+without preventing a safe skill update, and list emits one row per artifact.
+The CLI version in the header remains informational because development builds
+all report `"dev"`.
+
+The templates adapt the pinned Episodic Memory skill, agent, and prompt under
+MIT; the
+[adaptation record](https://github.com/kenn-io/agentsview/blob/main/docs/internal/episodic-memory-adaptation.md)
+documents the source and deviations. Distribution remains direct through the
+`agentsview` binary rather than a Claude Code plugin or marketplace package.

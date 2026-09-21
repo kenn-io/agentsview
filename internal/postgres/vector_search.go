@@ -57,6 +57,81 @@ func NewVectorSearcher(
 	}
 }
 
+// SemanticReadiness reports the wired generation's fingerprint and live
+// coverage without encoding a query. It implements
+// db.SemanticReadinessProvider, mirroring the SQLite searcherAdapter.
+// Coverage is session-granular: PG cannot see the pushing machine's local
+// embedding backlog, so a session counts as Missing when the archive holds
+// it but no push has recorded it for this generation. The universe mirrors
+// what vector export can ever push — live (non-trashed), non-automated
+// sessions with at least one embeddable message (the same predicates
+// internal/db's embeddableUnitsQuery applies) — because trashed, automated,
+// or content-less sessions can never receive push state and would otherwise
+// pin readiness at partial forever. A generation row or chunk table that
+// vanished after wiring degrades to unavailable instead of claiming a
+// ready, empty index.
+func (v *vectorSearcher) SemanticReadiness(
+	ctx context.Context,
+) (db.SemanticReadiness, error) {
+	var fingerprint string
+	err := v.pg.QueryRowContext(ctx,
+		`SELECT fingerprint FROM vector_generations WHERE id = $1`, v.genID,
+	).Scan(&fingerprint)
+	if errors.Is(err, sql.ErrNoRows) {
+		return db.SemanticReadiness{
+			State: "unavailable", Reason: "generation_missing",
+		}, nil
+	}
+	if err != nil {
+		return db.SemanticReadiness{}, fmt.Errorf(
+			"reading vector generation %d: %w", v.genID, err)
+	}
+	tableOK, err := VectorChunkTableExists(ctx, v.pg, v.genID)
+	if err != nil {
+		return db.SemanticReadiness{}, fmt.Errorf(
+			"probing chunk table for generation %d: %w", v.genID, err)
+	}
+	if !tableOK {
+		return db.SemanticReadiness{
+			State: "unavailable", Reason: "chunk_table_missing",
+		}, nil
+	}
+	docs, _, err := vectorChunkCounts(ctx, v.pg, v.genID)
+	if err != nil {
+		return db.SemanticReadiness{}, err
+	}
+	var missing int64
+	if err := v.pg.QueryRowContext(ctx, `
+SELECT count(*)
+  FROM sessions s
+ WHERE s.deleted_at IS NULL
+   AND s.is_automated = FALSE
+   AND EXISTS (
+       SELECT 1 FROM messages m
+        WHERE m.session_id = s.id
+          AND m.role IN ('user', 'assistant')
+          AND m.is_system = FALSE
+          AND `+db.PostgresSystemPrefixSQL("m.content", "m.role")+`)
+   AND NOT EXISTS (
+       SELECT 1 FROM vector_push_state ps
+        WHERE ps.generation_id = $1 AND ps.session_id = s.id)`, v.genID,
+	).Scan(&missing); err != nil {
+		return db.SemanticReadiness{}, fmt.Errorf(
+			"counting sessions missing from generation %d: %w", v.genID, err)
+	}
+	out := db.SemanticReadiness{
+		State:      "ready",
+		Generation: fingerprint,
+		Embedded:   docs,
+		Missing:    missing,
+	}
+	if missing > 0 {
+		out.State = "partial"
+		out.Reason = "index_incomplete"
+	}
+	return out, nil
+}
+
 // resolveExtSchema returns the quoted schema pgvector's types and operators
 // live in, resolving it once from pg_extension. It is cached because the
 // pgvector schema cannot change for a live connection pool.
@@ -429,4 +504,27 @@ func (s *Store) semanticUnavailableError() error {
 		return db.ErrSemanticUnavailable
 	}
 	return db.NewSemanticUnavailableError(reason)
+}
+
+// SemanticReadiness reports the already-negotiated PG semantic capability.
+// PG serve wires a searcher only after finding a compatible generation; the
+// wired searcher then reports its generation fingerprint and live coverage.
+func (s *Store) SemanticReadiness(ctx context.Context) (db.SemanticReadiness, error) {
+	s.vectorMu.RLock()
+	searcher := s.vectorSearcher
+	reason := s.semanticUnavailableReason
+	s.vectorMu.RUnlock()
+	if searcher == nil {
+		if reason == "" {
+			reason = "not_configured"
+		}
+		return db.SemanticReadiness{State: "unavailable", Reason: reason}, nil
+	}
+	// Mirrors db.DB.SemanticReadiness: the wired searcher answers for itself
+	// when it can, and a searcher without a readiness provider reports an
+	// explicit unknown instead of an unqualified ready.
+	if provider, ok := searcher.(db.SemanticReadinessProvider); ok {
+		return provider.SemanticReadiness(ctx)
+	}
+	return db.SemanticReadiness{State: "unknown", Reason: "status_unsupported"}, nil
 }

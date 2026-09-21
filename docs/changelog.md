@@ -1,4 +1,5 @@
 ---
+last_edited: 2026-09-21
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -106,6 +107,37 @@ Release notes for
     new derived tables before serving and resumes if interrupted; a read-only
     serve role reports the pending fill until a push with a capable role
     finishes it.
+- Conversation-memory clients can check archive and search readiness through
+  MCP `get_memory_status` or `GET /api/v1/memory/status`. Search responses
+  carry the same compact lexical and semantic coverage snapshot, including
+  active vector-generation counts and explicit unknown source telemetry.
+- Install the native AgentsView Memory package in Claude Code or Codex to get
+  the recall skill, focused MCP server, Claude search agent, and a fail-open
+  session-start hook from one package. Local and hosted targets stay in local
+  runtime configuration, and startup reports duplicate standalone skills
+  without changing user-edited files.
+- Native conversation-memory integrations can use
+  `agentsview memory session-start` for local, hosted-contributor, and
+  hosted-reader lifecycle roles. The command wakes the configured ingestion
+  owner or checks the selected read target and returns within two seconds.
+- MCP clients can use `agentsview mcp --profile memory` to advertise only the
+  conversation evidence search and read tools, reducing unrelated tool
+  choices while leaving the default full MCP surface unchanged.
+- Agents can open recalled evidence against the exact transcript revision that
+  produced it. MCP message reads reject stale citations with `source_changed`,
+  and oversized messages now provide a revision-bound continuation cursor.
+- Agents can require several literal terms within one user/assistant exchange
+  when searching conversation history through MCP. Exact session, branch, and
+  current-session filters narrow recall before the result limit, and each
+  response reports the search mode, filters, exclusions, and truncation.
+- Coding agents can now consult prior conversation evidence proactively when
+  earlier decisions or solutions may help. `agentsview skills install`
+  upgrades the existing recall skill for Claude and Agents/Codex, and Claude
+  also receives a bounded `agentsview-search-conversations` agent whose
+  frontmatter allowlists only AgentsView's focused read-only MCP tools, so
+  archived transcript content cannot drive built-in tools or other servers'
+  integrations. Every generated artifact is listed and protected
+  independently from local edits.
 
 **Bug fixes**
 

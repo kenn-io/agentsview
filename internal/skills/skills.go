@@ -18,8 +18,10 @@ import (
 	"text/template"
 )
 
-//go:embed templates/finding-history.md.tmpl
+//go:embed templates/*.md.tmpl
 var templatesFS embed.FS
+
+//go:generate go run ./cmd/render-memory-plugin -out ../../plugins/agentsview-memory -version 0.1.0
 
 // Harness identifies a skill discovery convention.
 type Harness string
@@ -38,13 +40,33 @@ func AllHarnesses() []Harness {
 // package currently renders.
 const skillName = "agentsview-finding-history"
 
+// The search agent's `tools:` allowlist, per install context. The plugin
+// render names the plugin-owned MCP tools, whose mcp__plugin_<plugin>_
+// <server>__ prefix no repository can shadow. A standalone install has no
+// plugin identity, so it names the documented generic server spellings
+// (agentsview, agentsview-memory); a user whose registration key differs
+// gets an agent with no tools, which fails closed to the skill's direct
+// steps instead of improvising with other tools.
+const (
+	pluginAgentTools = "mcp__plugin_agentsview-memory_agentsview__search_content, " +
+		"mcp__plugin_agentsview-memory_agentsview__get_messages"
+	standaloneAgentTools = "mcp__agentsview__search_content, mcp__agentsview__get_messages, " +
+		"mcp__agentsview-memory__search_content, mcp__agentsview-memory__get_messages"
+)
+
+// claudeAgentDir is the Claude project agent directory, both as the prose
+// fragment in the delegation guard and as the base of the search agent's
+// install path.
+const claudeAgentDir = ".claude/agents"
+
 // delegatePhrases supplies the harness-specific instruction that replaces
 // {{.Delegate}} in the template: whether the harness can dispatch a search
 // subagent or must run the bounded probes itself.
 var delegatePhrases = map[Harness]string{
-	HarnessClaude: "Dispatch a search subagent (e.g. the Task/Agent tool)",
-	HarnessAgents: "Delegate to a search subagent if your harness supports one; " +
-		"otherwise run the bounded probes yourself in order",
+	HarnessClaude: "Use the `agentsview-search-conversations` agent when this harness exposes it; " +
+		"otherwise follow these steps directly",
+	HarnessAgents: "Delegate to a permitted search agent if this harness provides one; " +
+		"otherwise follow these steps directly",
 }
 
 // skillsSubdir is the harness-specific path segment under the install base,
@@ -73,7 +95,7 @@ var headerPattern = regexp.MustCompile(
 // and Render re-emits it above the generated-by header.
 const frontmatterFence = "---\n"
 
-var tmpl = template.Must(template.ParseFS(templatesFS, "templates/finding-history.md.tmpl"))
+var tmpl = template.Must(template.ParseFS(templatesFS, "templates/*.md.tmpl"))
 
 // Remote is the optional remote-daemon targeting baked into generated
 // examples so `skills install` on a shared archive does not teach the
@@ -174,13 +196,26 @@ func ParseRemote(content string) Remote {
 type templateData struct {
 	Delegate   string
 	ServerArgs string
+	// AgentDir is the harness's project-level agent directory, included in
+	// the delegation guard when the harness installs the search agent. Its
+	// presence switches the guard to plugin-only delegation: a project or
+	// user-level same-named file is repo-overridable, so only the plugin's
+	// namespaced agent may be delegated to. Empty for harnesses that do not
+	// install one, so the guard keeps its generated-by header check.
+	AgentDir string
+	// AgentTools is the `tools:` frontmatter line for the search agent: the
+	// plugin render names the plugin-owned MCP tools; a standalone render
+	// names the documented generic server spellings, which fail closed when
+	// the user's registration uses a different key.
+	AgentTools string
 }
 
 // Rendered is one skill file ready to install.
 type Rendered struct {
-	Name    string // "agentsview-finding-history"
-	Content string // full file: frontmatter fence, generated-by header, rest
-	Hash    string // sha256 hex of Content minus the header line
+	Name         string // artifact name from its frontmatter
+	RelativePath string // install path relative to the user or project base
+	Content      string // full file: frontmatter fence, generated-by header, rest
+	Hash         string // sha256 hex of Content minus the header line
 }
 
 // Render produces the skill for a harness. version is the CLI version
@@ -190,6 +225,27 @@ type Rendered struct {
 // line two, inside the frontmatter fence, so the rendered file still begins
 // with "---".
 func Render(h Harness, version string, remote Remote) (Rendered, error) {
+	return renderSkill(h, version, remote, standaloneAgentTools)
+}
+
+// renderAgent renders the Claude bounded search agent. agentTools is the
+// allowlisted MCP tool line for the install context: the plugin render names
+// the plugin-owned tools; the standalone render names the documented generic
+// spellings.
+func renderAgent(version, agentTools string) (Rendered, error) {
+	return renderTemplate(
+		"agentsview-search-conversations",
+		filepath.Join(claudeAgentDir, "agentsview-search-conversations.md"),
+		"search-conversations.md.tmpl",
+		templateData{AgentTools: agentTools},
+		version,
+		"",
+	)
+}
+
+func renderSkill(
+	h Harness, version string, remote Remote, agentTools string,
+) (Rendered, error) {
 	delegate, ok := delegatePhrases[h]
 	if !ok {
 		return Rendered{}, fmt.Errorf("skills: unknown harness %q", h)
@@ -198,17 +254,10 @@ func Render(h Harness, version string, remote Remote) (Rendered, error) {
 		return Rendered{}, err
 	}
 
-	var body bytes.Buffer
-	data := templateData{Delegate: delegate, ServerArgs: remote.Args()}
-	if err := tmpl.ExecuteTemplate(&body, "finding-history.md.tmpl", data); err != nil {
-		return Rendered{}, fmt.Errorf("skills: render %s template: %w", h, err)
+	data := templateData{Delegate: delegate, ServerArgs: remote.Args(), AgentTools: agentTools}
+	if h == HarnessClaude {
+		data.AgentDir = claudeAgentDir
 	}
-	if !strings.HasPrefix(body.String(), frontmatterFence) {
-		return Rendered{}, fmt.Errorf(
-			"skills: %s template must start with a %q frontmatter fence", h, "---")
-	}
-
-	rest := strings.TrimPrefix(body.String(), frontmatterFence)
 	var remoteLine string
 	if !remote.Empty() {
 		payload, err := json.Marshal(remote)
@@ -217,15 +266,90 @@ func Render(h Harness, version string, remote Remote) (Rendered, error) {
 		}
 		remoteLine = installRemotePrefix + string(payload) + "\n"
 	}
+	return renderTemplate(
+		skillName,
+		"",
+		"finding-history.md.tmpl",
+		data,
+		version,
+		remoteLine,
+	)
+}
+
+// RenderPackage produces every artifact supported by h. Both harnesses get
+// the recall skill; Claude also gets the bounded search agent used by it.
+// The standalone agent's allowlist names the documented generic server
+// spellings, so it works with the documented MCP registrations and fails
+// closed on anything else; the skill's delegation guard still only
+// delegates to the plugin-namespaced agent.
+func RenderPackage(h Harness, version string, remote Remote) ([]Rendered, error) {
+	skill, err := renderSkill(h, version, remote, standaloneAgentTools)
+	if err != nil {
+		return nil, err
+	}
+	skill.RelativePath = filepath.Join(skillsSubdir[h], skillName, "SKILL.md")
+	artifacts := []Rendered{skill}
+
+	if h == HarnessClaude {
+		agent, err := renderAgent(version, standaloneAgentTools)
+		if err != nil {
+			return nil, err
+		}
+		artifacts = append(artifacts, agent)
+	}
+
+	return artifacts, nil
+}
+
+// RenderPluginPackage produces the native plugin artifacts: the recall
+// skill plus the Claude bounded search agent. The skill is derived from the
+// same render helper as the standalone package, so lifecycle diagnostics
+// recognize a duplicate standalone skill without maintaining a second copy
+// of the behavioral instructions.
+func RenderPluginPackage(version string) ([]Rendered, error) {
+	skill, err := renderSkill(HarnessClaude, version, Remote{}, pluginAgentTools)
+	if err != nil {
+		return nil, err
+	}
+	skill.RelativePath = filepath.ToSlash(filepath.Join(
+		"skills", skillName, "SKILL.md"))
+	agent, err := renderAgent(version, pluginAgentTools)
+	if err != nil {
+		return nil, err
+	}
+	agent.RelativePath = filepath.ToSlash(filepath.Join(
+		"agents", "agentsview-search-conversations.md"))
+	return []Rendered{skill, agent}, nil
+}
+
+func renderTemplate(
+	name string,
+	relativePath string,
+	templateName string,
+	data templateData,
+	version string,
+	remoteLine string,
+) (Rendered, error) {
+	var body bytes.Buffer
+	if err := tmpl.ExecuteTemplate(&body, templateName, data); err != nil {
+		return Rendered{}, fmt.Errorf("skills: render %s template: %w", name, err)
+	}
+	if !strings.HasPrefix(body.String(), frontmatterFence) {
+		return Rendered{}, fmt.Errorf(
+			"skills: %s template must start with a %q frontmatter fence", name, "---")
+	}
+
+	rest := strings.TrimPrefix(body.String(), frontmatterFence)
 	hashed := frontmatterFence + remoteLine + rest
 	hash := bodyHash(hashed)
 	header := fmt.Sprintf(headerFormat, version, hash)
 	content := frontmatterFence + header + "\n" + remoteLine + rest
 
 	return Rendered{
-		Name:    skillName,
-		Content: content,
-		Hash:    hash,
+		Name:         name,
+		RelativePath: relativePath,
+		Content:      content,
+		Hash:         hash,
 	}, nil
 }
 

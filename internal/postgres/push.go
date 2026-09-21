@@ -2250,6 +2250,36 @@ func (s *Sync) pushSession(
 	if err != nil {
 		return fmt.Errorf("encoding legacy marker machines: %w", err)
 	}
+	// A changed session row invalidates the vector coverage an earlier
+	// vector push recorded: its stored doc_agg_hash describes the previous
+	// transcript. Only vector-relevant changes count — embedded-document
+	// identity and transcript content signals — so unrelated metadata
+	// updates keep their coverage instead of forcing a re-push for every
+	// generation. The delete precedes the upsert so the DISTINCT
+	// comparisons see the pre-update row, and it is a no-op for sessions
+	// never vector-pushed.
+	if checkErr == nil {
+		if _, delErr := tx.ExecContext(ctx, `
+			DELETE FROM vector_push_state
+			 WHERE session_id = $1
+			   AND EXISTS (
+			       SELECT 1 FROM sessions s
+			        WHERE s.id = $1
+			          AND (s.transcript_revision IS DISTINCT FROM $2
+			            OR s.deleted_at IS DISTINCT FROM $3
+			            OR s.is_automated IS DISTINCT FROM $4
+			            OR s.project IS DISTINCT FROM $5
+			            OR s.message_count IS DISTINCT FROM $6
+			            OR s.user_message_count IS DISTINCT FROM $7))`,
+			sess.ID, transcriptRevisionValue(sess.TranscriptRevision), deletedAt,
+			isAutomated, sanitizePG(sess.Project),
+			sess.MessageCount, sess.UserMessageCount,
+		); delErr != nil {
+			return fmt.Errorf(
+				"invalidating vector push state for updated session %s: %w",
+				sess.ID, delErr)
+		}
+	}
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO sessions (
 			id, machine, owner_marker, project, agent,

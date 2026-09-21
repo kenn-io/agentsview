@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "agentsview": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/mcp-server.sh",
+      "args": []
+    }
+  }
+}

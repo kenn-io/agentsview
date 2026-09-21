@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -148,6 +149,14 @@ func (s *Store) fetchHybridKeywordBatchPG(
 	scopeWhere, scopeArgs := buildPGSessionBaseFilter(semanticPGSessionFilter(f))
 	scopeWhere, scopeArgs = appendExcludeSessionIDsPG(
 		scopeWhere, scopeArgs, "id", f.ExcludeSessionIDs)
+	// The recent-activity cutoff is applied inside this leg's session scope
+	// (not post-page) so fixed-size recency batches are not spent on the
+	// live conversation. Mirrors internal/db's hybrid FTS leg.
+	if f.ExcludeActiveAfter != "" {
+		scopeWhere += " AND COALESCE(ended_at, started_at, created_at) <= $" +
+			strconv.Itoa(len(scopeArgs)+1) + "::timestamptz"
+		scopeArgs = append(scopeArgs, f.ExcludeActiveAfter)
+	}
 	pb := &paramBuilder{n: len(scopeArgs), args: append([]any{}, scopeArgs...)}
 
 	kf := f
@@ -346,20 +355,21 @@ func (s *Store) enrichHybridMatchesPG(
 		}
 		score := m.Score
 		out = append(out, db.ContentMatch{
-			SessionID:       d.sessionID,
-			Project:         info.project,
-			Agent:           info.agent,
-			Location:        "message",
-			Role:            info.role,
-			Ordinal:         d.ordinal,
-			OrdinalRange:    [2]int{d.ordinalStart, d.ordinalEnd},
-			Subordinate:     d.subordinate,
-			Relationship:    info.relationshipType,
-			ParentSessionID: info.parentSessionID,
-			Sidechain:       info.isSidechain,
-			Timestamp:       info.timestamp,
-			Snippet:         f.SemanticSnippet(info.content, d.snippet),
-			Score:           &score,
+			SessionID:          d.sessionID,
+			Project:            info.project,
+			Agent:              info.agent,
+			TranscriptRevision: info.transcriptRevision,
+			Location:           "message",
+			Role:               info.role,
+			Ordinal:            d.ordinal,
+			OrdinalRange:       [2]int{d.ordinalStart, d.ordinalEnd},
+			Subordinate:        d.subordinate,
+			Relationship:       info.relationshipType,
+			ParentSessionID:    info.parentSessionID,
+			Sidechain:          info.isSidechain,
+			Timestamp:          info.timestamp,
+			Snippet:            f.SemanticSnippet(info.content, d.snippet),
+			Score:              &score,
 		})
 	}
 	return db.ContentSearchPage{Matches: out}, nil

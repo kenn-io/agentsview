@@ -215,21 +215,37 @@ func pgReadRequested(cmd *cobra.Command) bool {
 	return err == nil && v
 }
 
-func explicitServerToken(cmd *cobra.Command) (string, error) {
+// flagServerToken reads only the --server-token-file flag value, with no
+// fallback to the global AGENTSVIEW_SERVER_TOKEN environment variable.
+// Callers that select a server from the environment must use this: project
+// settings can inject the endpoint, and the global fallback would hand the
+// user's standing credential to whoever injected it.
+func flagServerToken(cmd *cobra.Command) (string, error) {
 	if cmd == nil {
 		return "", nil
 	}
 	path, err := cmd.Flags().GetString("server-token-file")
-	if err == nil && strings.TrimSpace(path) != "" {
-		path, err = pathutil.ExpandHome(path)
-		if err != nil {
-			return "", fmt.Errorf("expanding --server-token-file: %w", err)
-		}
-		b, err := os.ReadFile(path)
-		if err != nil {
-			return "", fmt.Errorf("reading --server-token-file: %w", err)
-		}
-		return strings.TrimSpace(string(b)), nil
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(path) == "" {
+		return "", nil
+	}
+	path, err = pathutil.ExpandHome(path)
+	if err != nil {
+		return "", fmt.Errorf("expanding --server-token-file: %w", err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("reading --server-token-file: %w", err)
+	}
+	return strings.TrimSpace(string(b)), nil
+}
+
+func explicitServerToken(cmd *cobra.Command) (string, error) {
+	token, err := flagServerToken(cmd)
+	if err != nil || token != "" {
+		return token, err
 	}
 	return strings.TrimSpace(os.Getenv("AGENTSVIEW_SERVER_TOKEN")), nil
 }

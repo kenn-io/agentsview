@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"context"
 	"math"
 	"testing"
 
@@ -107,4 +108,53 @@ func TestStoreVectorSearcherWiring(t *testing.T) {
 
 	s.SetVectorSearcher(nil)
 	assert.False(t, s.HasSemantic(), "searcher cleared")
+}
+
+// stubReadinessSearcher is a db.VectorSearcher that also implements
+// db.SemanticReadinessProvider with a canned status, so Store-level
+// delegation can be tested without a database.
+type stubReadinessSearcher struct {
+	db.VectorSearcher
+	status db.SemanticReadiness
+}
+
+func (s *stubReadinessSearcher) SemanticReadiness(
+	_ context.Context,
+) (db.SemanticReadiness, error) {
+	return s.status, nil
+}
+
+// bareSearcher implements only db.VectorSearcher, so a wired searcher
+// without a readiness provider must report explicit unknown, not ready.
+type bareSearcher struct {
+	db.VectorSearcher
+}
+
+func TestStoreSemanticReadinessPreservesNegotiationReason(t *testing.T) {
+	s := &Store{}
+	s.SetSemanticUnavailableReason("no compatible embeddings generation")
+
+	status, err := s.SemanticReadiness(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, "unavailable", status.State)
+	assert.Equal(t, "no compatible embeddings generation", status.Reason)
+
+	s.SetVectorSearcher(&stubReadinessSearcher{status: db.SemanticReadiness{
+		State: "partial", Reason: "index_incomplete",
+		Generation: "fp", Embedded: 3, Missing: 1,
+	}})
+	status, err = s.SemanticReadiness(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, "partial", status.State)
+	assert.Equal(t, "index_incomplete", status.Reason)
+	assert.Equal(t, "fp", status.Generation)
+	assert.Equal(t, int64(3), status.Embedded)
+	assert.Equal(t, int64(1), status.Missing)
+
+	s.SetVectorSearcher(&bareSearcher{})
+	status, err = s.SemanticReadiness(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, "unknown", status.State,
+		"a wired searcher without a readiness provider must not claim ready")
+	assert.Equal(t, "status_unsupported", status.Reason)
 }

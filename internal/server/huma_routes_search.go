@@ -37,32 +37,33 @@ type searchInput struct {
 }
 
 type contentSearchInput struct {
-	Pattern          string             `query:"pattern" required:"true" doc:"Pattern to search for"`
-	Mode             contentSearchMode  `query:"mode" enum:"substring,regex,fts,terms,semantic,hybrid" doc:"Search mode"`
-	Scope            contentSearchScope `query:"scope" enum:"top,all,subordinate" doc:"Semantic/hybrid/terms result scope: top, all, or subordinate (default all)"`
-	SearchIntent     string             `header:"X-AgentsView-Search-Intent" doc:"Required for semantic/hybrid GET searches"`
-	In               string             `query:"in" doc:"Comma-separated content sources"`
-	ExcludeSystem    bool               `query:"exclude_system" doc:"Exclude system messages"`
-	Reveal           bool               `query:"reveal" doc:"Return unredacted secret matches for localhost callers"`
-	Project          string             `query:"project" doc:"Filter by project"`
-	ExcludeProject   string             `query:"exclude_project" doc:"Exclude a project"`
-	Machine          string             `query:"machine" doc:"Filter by machine"`
-	GitBranch        string             `query:"git_branch" doc:"Filter by git branch; opaque (project, branch) tokens from the /branches endpoint"`
-	SessionID        string             `query:"session_id" doc:"Filter by exact full stored session ID"`
-	GitBranchExact   string             `query:"git_branch_exact" doc:"Filter by exact raw git branch"`
-	Agent            string             `query:"agent" doc:"Filter by agent"`
-	Date             string             `query:"date" format:"date" doc:"Filter sessions active on this YYYY-MM-DD date"`
-	DateFrom         string             `query:"date_from" format:"date" doc:"Filter sessions active on or after this date"`
-	DateTo           string             `query:"date_to" format:"date" doc:"Filter sessions active on or before this date"`
-	Timezone         string             `query:"timezone" doc:"IANA timezone for calendar-date filters; defaults to UTC"`
-	ActiveSince      string             `query:"active_since" format:"date-time" doc:"Filter sessions active since this RFC3339 timestamp"`
-	IncludeChildren  bool               `query:"include_children" doc:"Include child sessions"`
-	IncludeAutomated bool               `query:"include_automated" doc:"Include automated sessions"`
-	IncludeOneShot   bool               `query:"include_one_shot" doc:"Include one-shot sessions"`
-	ExcludeSession   []string           `query:"exclude_session,explode" doc:"Session IDs to exclude; repeatable"`
-	Limit            int                `query:"limit" minimum:"0" doc:"Maximum number of results"`
-	Cursor           int                `query:"cursor" minimum:"0" doc:"Pagination cursor"`
-	Context          int                `query:"context" doc:"Include N messages of context before and after each match (max 10)"`
+	Pattern            string             `query:"pattern" required:"true" doc:"Pattern to search for"`
+	Mode               contentSearchMode  `query:"mode" enum:"substring,regex,fts,terms,semantic,hybrid" doc:"Search mode"`
+	Scope              contentSearchScope `query:"scope" enum:"top,all,subordinate" doc:"Semantic/hybrid/terms result scope: top, all, or subordinate (default all)"`
+	SearchIntent       string             `header:"X-AgentsView-Search-Intent" doc:"Required for semantic/hybrid GET searches"`
+	In                 string             `query:"in" doc:"Comma-separated content sources"`
+	ExcludeSystem      bool               `query:"exclude_system" doc:"Exclude system messages"`
+	Reveal             bool               `query:"reveal" doc:"Return unredacted secret matches for localhost callers"`
+	Project            string             `query:"project" doc:"Filter by project"`
+	ExcludeProject     string             `query:"exclude_project" doc:"Exclude a project"`
+	Machine            string             `query:"machine" doc:"Filter by machine"`
+	GitBranch          string             `query:"git_branch" doc:"Filter by git branch; opaque (project, branch) tokens from the /branches endpoint"`
+	SessionID          string             `query:"session_id" doc:"Filter by exact full stored session ID"`
+	GitBranchExact     string             `query:"git_branch_exact" doc:"Filter by exact raw git branch"`
+	Agent              string             `query:"agent" doc:"Filter by agent"`
+	Date               string             `query:"date" format:"date" doc:"Filter sessions active on this YYYY-MM-DD date"`
+	DateFrom           string             `query:"date_from" format:"date" doc:"Filter sessions active on or after this date"`
+	DateTo             string             `query:"date_to" format:"date" doc:"Filter sessions active on or before this date"`
+	Timezone           string             `query:"timezone" doc:"IANA timezone for calendar-date filters; defaults to UTC"`
+	ActiveSince        string             `query:"active_since" format:"date-time" doc:"Filter sessions active since this RFC3339 timestamp"`
+	ExcludeActiveAfter string             `query:"exclude_active_after" format:"date-time" doc:"Drop semantic/hybrid hits from sessions active after this RFC3339 cutoff, before the result limit"`
+	IncludeChildren    bool               `query:"include_children" doc:"Include child sessions"`
+	IncludeAutomated   bool               `query:"include_automated" doc:"Include automated sessions"`
+	IncludeOneShot     bool               `query:"include_one_shot" doc:"Include one-shot sessions"`
+	ExcludeSession     []string           `query:"exclude_session,explode" doc:"Session IDs to exclude; repeatable"`
+	Limit              int                `query:"limit" minimum:"0" doc:"Maximum number of results"`
+	Cursor             int                `query:"cursor" minimum:"0" doc:"Pagination cursor"`
+	Context            int                `query:"context" doc:"Include N messages of context before and after each match (max 10)"`
 }
 
 func (s *Server) humaSearch(
@@ -129,31 +130,32 @@ func (s *Server) humaSearchContent(
 		return nil, apiError(http.StatusBadRequest, err.Error())
 	}
 	res, err := s.sessions.SearchContent(ctx, service.ContentSearchRequest{
-		Pattern:           in.Pattern,
-		Mode:              string(in.Mode),
-		Sources:           sources,
-		ExcludeSystem:     in.ExcludeSystem,
-		Reveal:            in.Reveal,
-		Project:           in.Project,
-		ExcludeProject:    in.ExcludeProject,
-		Machine:           in.Machine,
-		GitBranch:         in.GitBranch,
-		SessionID:         in.SessionID,
-		GitBranchExact:    in.GitBranchExact,
-		Agent:             in.Agent,
-		Date:              in.Date,
-		DateFrom:          in.DateFrom,
-		DateTo:            in.DateTo,
-		Timezone:          timezone,
-		ActiveSince:       in.ActiveSince,
-		IncludeChildren:   in.IncludeChildren,
-		IncludeAutomated:  in.IncludeAutomated,
-		IncludeOneShot:    in.IncludeOneShot,
-		ExcludeSessionIDs: in.ExcludeSession,
-		Scope:             string(in.Scope),
-		Limit:             in.Limit,
-		Cursor:            in.Cursor,
-		Context:           in.Context,
+		Pattern:            in.Pattern,
+		Mode:               string(in.Mode),
+		Sources:            sources,
+		ExcludeSystem:      in.ExcludeSystem,
+		Reveal:             in.Reveal,
+		Project:            in.Project,
+		ExcludeProject:     in.ExcludeProject,
+		Machine:            in.Machine,
+		GitBranch:          in.GitBranch,
+		SessionID:          in.SessionID,
+		GitBranchExact:     in.GitBranchExact,
+		Agent:              in.Agent,
+		Date:               in.Date,
+		DateFrom:           in.DateFrom,
+		DateTo:             in.DateTo,
+		Timezone:           timezone,
+		ActiveSince:        in.ActiveSince,
+		IncludeChildren:    in.IncludeChildren,
+		IncludeAutomated:   in.IncludeAutomated,
+		IncludeOneShot:     in.IncludeOneShot,
+		ExcludeSessionIDs:  in.ExcludeSession,
+		Scope:              string(in.Scope),
+		ExcludeActiveAfter: in.ExcludeActiveAfter,
+		Limit:              in.Limit,
+		Cursor:             in.Cursor,
+		Context:            in.Context,
 	})
 	if err != nil {
 		if handled := handleHumaContextError(err); handled != nil {
