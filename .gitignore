@@ -87,3 +87,4 @@ graphify-out/
 .kata.local.toml
 # roborev snapshots
 /.roborev/
+.env*
