@@ -14,6 +14,8 @@ import (
 	"go.kenn.io/agentsview/internal/service"
 )
 
+const fakeAWSKey = "AKIA" + "7QHWN2DKR4FYPLJM"
+
 // seedServiceSearchSession creates a session with a single user message
 // whose content contains the given text. The session has UserMessageCount=2
 // so it is not excluded by the default one-shot filter.
@@ -31,7 +33,7 @@ func TestDirectSearchContentRedacts(t *testing.T) {
 	t.Parallel()
 	d := dbtest.OpenTestDB(t)
 	seedServiceSearchSession(t, d, "x1", "proj",
-		"my key is AKIA7QHWN2DKR4FYPLJM ok")
+		"my key is "+fakeAWSKey+" ok")
 	be := service.NewDirectBackend(d, nil)
 
 	// default: secret should be redacted
@@ -40,7 +42,7 @@ func TestDirectSearchContentRedacts(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, res.Matches, 1)
-	assert.NotContains(t, res.Matches[0].Snippet, "AKIA7QHWN2DKR4FYPLJM",
+	assert.NotContains(t, res.Matches[0].Snippet, fakeAWSKey,
 		"default search leaked secret: %q", res.Matches[0].Snippet)
 
 	// reveal: full secret should be present
@@ -49,7 +51,7 @@ func TestDirectSearchContentRedacts(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, rev.Matches, 1)
-	assert.Contains(t, rev.Matches[0].Snippet, "AKIA7QHWN2DKR4FYPLJM",
+	assert.Contains(t, rev.Matches[0].Snippet, fakeAWSKey,
 		"reveal should show full secret: %q", rev.Matches[0].Snippet)
 }
 
@@ -73,8 +75,11 @@ func TestDirectSearchContentFTSSourceGuard(t *testing.T) {
 // test path reached it (none of these tests exercise anything else).
 type fakeContentStore struct {
 	db.Store
-	page    db.ContentSearchPage
-	windows map[string][]db.Message // keyed by contextWindowKey
+	page           db.ContentSearchPage
+	pagesByPattern map[string]db.ContentSearchPage
+	lastFilter     db.ContentSearchFilter
+	filters        []db.ContentSearchFilter
+	windows        map[string][]db.Message // keyed by contextWindowKey
 }
 
 func contextWindowKey(sessionID string, anchor int) string {
@@ -82,9 +87,143 @@ func contextWindowKey(sessionID string, anchor int) string {
 }
 
 func (f *fakeContentStore) SearchContent(
-	context.Context, db.ContentSearchFilter,
+	_ context.Context, filter db.ContentSearchFilter,
 ) (db.ContentSearchPage, error) {
+	f.lastFilter = filter
+	f.filters = append(f.filters, filter)
+	if page, ok := f.pagesByPattern[filter.Pattern]; ok {
+		return page, nil
+	}
 	return f.page, nil
+}
+
+func TestDirectSearchContentConceptsIntersectAndRankSessions(t *testing.T) {
+	store := &fakeContentStore{pagesByPattern: map[string]db.ContentSearchPage{
+		"auth model": {Matches: []db.ContentMatch{
+			{SessionID: "both", Ordinal: 4, OrdinalRange: [2]int{3, 5}, Snippet: "auth evidence", Score: new(0.7)},
+			{SessionID: "both", Ordinal: 8, OrdinalRange: [2]int{8, 9}, Snippet: "weaker auth", Score: new(0.4)},
+			{SessionID: "auth-only", Ordinal: 2, OrdinalRange: [2]int{2, 2}, Snippet: "auth only", Score: new(0.95)},
+			{SessionID: "tie", Ordinal: 1, OrdinalRange: [2]int{1, 2}, Snippet: "tie auth", Score: new(0.8)},
+		}},
+		"retry policy": {Matches: []db.ContentMatch{
+			{SessionID: "both", Project: "agentsview", Agent: "codex", Ordinal: 12, OrdinalRange: [2]int{11, 13}, Snippet: "retry evidence", Score: new(0.9)},
+			{SessionID: "tie", Project: "agentsview", Agent: "codex", Ordinal: 6, OrdinalRange: [2]int{6, 7}, Snippet: "tie retry", Score: new(0.8)},
+		}},
+	}}
+	be := service.NewReadOnlyBackend(store)
+
+	res, err := be.SearchContent(t.Context(), service.ContentSearchRequest{
+		Concepts: []string{"auth model", "retry policy"},
+		Project:  "agentsview", Agent: "codex", SessionID: "target",
+		GitBranchExact: "feature/memory", DateFrom: "2026-08-01",
+		DateTo: "2026-09-20", ExcludeSessionIDs: []string{"current"},
+		Scope: "top", Limit: 10,
+	})
+	require.NoError(t, err)
+	require.Len(t, res.Matches, 2)
+	assert.Equal(t, "both", res.Matches[0].SessionID)
+	assert.InDelta(t, 0.8, *res.Matches[0].Score, 0.0001)
+	assert.Equal(t, "tie", res.Matches[1].SessionID)
+	assert.InDelta(t, 0.8, *res.Matches[1].Score, 0.0001)
+	require.Len(t, res.Matches[0].ConceptEvidence, 2)
+	assert.Equal(t, "auth model", res.Matches[0].ConceptEvidence[0].Concept)
+	assert.Equal(t, [2]int{3, 5}, res.Matches[0].ConceptEvidence[0].OrdinalRange)
+	assert.Equal(t, "auth evidence", res.Matches[0].ConceptEvidence[0].Snippet)
+	assert.Equal(t, "retry policy", res.Matches[0].ConceptEvidence[1].Concept)
+	assert.Equal(t, [2]int{11, 13}, res.Matches[0].ConceptEvidence[1].OrdinalRange)
+
+	require.Len(t, store.filters, 2)
+	for _, filter := range store.filters {
+		assert.Equal(t, "semantic", filter.Mode)
+		assert.Equal(t, "agentsview", filter.Project)
+		assert.Equal(t, "codex", filter.Agent)
+		assert.Equal(t, "target", filter.SessionID)
+		assert.Equal(t, "feature/memory", filter.GitBranchExact)
+		assert.Equal(t, "2026-08-01", filter.DateFrom)
+		assert.Equal(t, "2026-09-20", filter.DateTo)
+		assert.Equal(t, []string{"current"}, filter.ExcludeSessionIDs)
+		assert.Equal(t, "top", filter.Scope)
+		assert.Equal(t, 50, filter.Limit)
+		assert.Zero(t, filter.Cursor)
+	}
+}
+
+func TestDirectSearchContentConceptsValidateAndBoundCandidates(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		req  service.ContentSearchRequest
+		want string
+	}{
+		{"pattern", service.ContentSearchRequest{Pattern: "x", Concepts: []string{"a", "b"}}, "pattern and concepts"},
+		{"one", service.ContentSearchRequest{Concepts: []string{"a"}}, "between 2 and 5"},
+		{"six", service.ContentSearchRequest{Concepts: []string{"a", "b", "c", "d", "e", "f"}}, "between 2 and 5"},
+		{"blank", service.ContentSearchRequest{Concepts: []string{"a", " "}}, "must not be blank"},
+		{"duplicate", service.ContentSearchRequest{Concepts: []string{"a", "a"}}, "must be distinct"},
+		{"mode", service.ContentSearchRequest{Concepts: []string{"a", "b"}, Mode: "hybrid"}, "mode must be semantic"},
+		{"cursor", service.ContentSearchRequest{Concepts: []string{"a", "b"}, Cursor: 1}, "cursor is not supported"},
+		{"limit", service.ContentSearchRequest{Concepts: []string{"a", "b"}, Limit: 51}, "limit must be between 1 and 50"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &fakeContentStore{}
+			_, err := service.NewReadOnlyBackend(store).SearchContent(t.Context(), tc.req)
+			require.ErrorContains(t, err, tc.want)
+			assert.Empty(t, store.filters)
+		})
+	}
+
+	store := &fakeContentStore{pagesByPattern: map[string]db.ContentSearchPage{
+		"a": {}, "b": {},
+	}}
+	_, err := service.NewReadOnlyBackend(store).SearchContent(t.Context(), service.ContentSearchRequest{
+		Concepts: []string{"a", "b"}, Limit: 50,
+	})
+	require.NoError(t, err)
+	require.Len(t, store.filters, 2)
+	assert.Equal(t, 250, store.filters[0].Limit)
+	assert.Equal(t, 250, store.filters[1].Limit)
+}
+
+func TestDirectSearchContentConceptsApplyFinalLimitAndStableTie(t *testing.T) {
+	leg := func(concept string) db.ContentSearchPage {
+		return db.ContentSearchPage{Matches: []db.ContentMatch{
+			{SessionID: "z-session", Ordinal: 1, Snippet: concept, Score: new(0.5)},
+			{SessionID: "a-session", Ordinal: 1, Snippet: concept, Score: new(0.5)},
+		}}
+	}
+	store := &fakeContentStore{pagesByPattern: map[string]db.ContentSearchPage{
+		"a": leg("a"), "b": leg("b"),
+	}}
+	res, err := service.NewReadOnlyBackend(store).SearchContent(t.Context(), service.ContentSearchRequest{
+		Concepts: []string{"a", "b"}, Limit: 1,
+	})
+	require.NoError(t, err)
+	require.Len(t, res.Matches, 1)
+	assert.Equal(t, "a-session", res.Matches[0].SessionID)
+	assert.True(t, res.CandidateTruncated)
+	assert.Equal(t, 5, store.filters[0].Limit)
+}
+
+func TestDirectSearchContentTermsAndExactFilters(t *testing.T) {
+	store := &fakeContentStore{}
+	be := service.NewReadOnlyBackend(store)
+
+	_, err := be.SearchContent(t.Context(), service.ContentSearchRequest{
+		Pattern: "alpha beta", Mode: "terms",
+		SessionID: "session-1", GitBranchExact: "feature/memory",
+		Scope: "top", Limit: 50,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"messages"}, store.lastFilter.Sources)
+	assert.Equal(t, "session-1", store.lastFilter.SessionID)
+	assert.Equal(t, "feature/memory", store.lastFilter.GitBranchExact)
+	assert.Equal(t, "top", store.lastFilter.Scope)
+
+	_, err = be.SearchContent(t.Context(), service.ContentSearchRequest{
+		Pattern: "alpha beta", Mode: "terms",
+		Sources: []string{"tool_result"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "messages only")
 }
 
 func (f *fakeContentStore) GetMessagesWindow(
@@ -175,7 +314,7 @@ func TestDirectSearchContentContextRejectsOverMax(t *testing.T) {
 // of the match's own Snippet redaction.
 func contextWindowFixtureWithSecret(sessionID string, anchor int) []db.Message {
 	msgs := contextWindowFixture(sessionID, anchor)
-	msgs[1].Content = "my key is AKIA7QHWN2DKR4FYPLJM ok"
+	msgs[1].Content = "my key is " + fakeAWSKey + " ok"
 	return msgs
 }
 
@@ -206,7 +345,7 @@ func TestDirectSearchContentContextRedactsSecretsByDefault(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, res.Matches, 1)
 	require.Len(t, res.Matches[0].ContextBefore, 2)
-	assert.NotContains(t, res.Matches[0].ContextBefore[1].Content, "AKIA7QHWN2DKR4FYPLJM",
+	assert.NotContains(t, res.Matches[0].ContextBefore[1].Content, fakeAWSKey,
 		"default (Reveal=false) must redact a secret in a context message: %q",
 		res.Matches[0].ContextBefore[1].Content)
 
@@ -217,7 +356,7 @@ func TestDirectSearchContentContextRedactsSecretsByDefault(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rev.Matches, 1)
 	require.Len(t, rev.Matches[0].ContextBefore, 2)
-	assert.Contains(t, rev.Matches[0].ContextBefore[1].Content, "AKIA7QHWN2DKR4FYPLJM",
+	assert.Contains(t, rev.Matches[0].ContextBefore[1].Content, fakeAWSKey,
 		"Reveal=true must leave a context message's secret intact: %q",
 		rev.Matches[0].ContextBefore[1].Content)
 }
@@ -229,7 +368,7 @@ func TestDirectSearchContentContextRedactsSecretsByDefault(t *testing.T) {
 func TestDirectSearchContentContextRedactsToolPayloads(t *testing.T) {
 	t.Parallel()
 	const sess = "s1"
-	secret := "AKIA7QHWN2DKR4FYPLJM"
+	secret := fakeAWSKey
 	store := &fakeContentStore{
 		page: db.ContentSearchPage{
 			Matches: []db.ContentMatch{{SessionID: sess, Ordinal: 5, Snippet: "match one"}},

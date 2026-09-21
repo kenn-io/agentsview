@@ -1,4 +1,5 @@
 ---
+last_edited: 2026-09-21
 title: MCP Server
 description: Connect assistant clients to your AgentsView session history with MCP
 ---
@@ -62,7 +63,7 @@ client will see these tools:
 | `list_sessions`        | List recent or filtered sessions                                         |
 | `get_session_overview` | Fetch metadata and a compact message preview                             |
 | `get_messages`         | Read paginated message bodies from one session                           |
-| `search_content`       | Substring, regex, semantic, or hybrid search over raw session text       |
+| `search_content`       | Substring, regex, terms, semantic, or hybrid search over session text    |
 | `get_usage_summary`    | Aggregate token and cost usage                                           |
 | `query_recall`         | Search extracted Recall entries when the backend supports Recall queries |
 
@@ -90,7 +91,10 @@ full stored ID with an older server.
 
 `search_sessions` and `search_content` exclude sessions active in the last ten
 minutes by default, including the current conversation. Set
-`include_active: true` when you need that recent work.
+`include_active: true` when you need that recent work. For recall from a known
+conversation, pass its full ID as `current_session_id`; `search_content` then
+excludes only that session before applying the result limit and does not hide
+other recent work.
 
 `search_content` also excludes one-shot and automated sessions by default. Set
 `include_one_shot: true` or `include_automated: true` to include those classes.
@@ -104,15 +108,36 @@ If the index is unavailable, use `search_sessions` for keyword search, or
 `search_content` with substring/regex for exact errors, identifiers, and code
 fragments. The default search mode remains substring.
 
-`search_content` accepts a `mode` of `substring` (default), `regex`, `semantic`,
-or `hybrid`, plus a `scope` of `top`, `all` (default), or `subordinate` that is
-only valid with the semantic and hybrid modes. The `semantic` and `hybrid` modes
-need the opt-in [semantic search](/docs/semantic-search/) index on the local
-SQLite archive; without it they return a "not available" error. In every mode,
-each match carries a conversation-unit citation: an `ordinal_range` of
+`search_content` accepts a `mode` of `substring` (default), `regex`, `terms`,
+`semantic`, or `hybrid`. `terms` splits `pattern` on whitespace and requires
+every literal term to occur within one exchange: a user message and its ensuing
+assistant run on the same main or sidechain branch. Terms can appear on opposite
+sides of that exchange. `%`, `_`, and backslashes stay literal; tool and system
+content is outside this mode.
+The `terms` mode currently requires a SQLite or PostgreSQL backend.
+
+For questions that require several ideas to appear in one prior session, pass
+`concepts` instead of `pattern`. Supply two to five distinct strings; the mode
+defaults to `semantic` and rejects any explicit mode other than `semantic`.
+AgentsView searches each concept separately, retains only sessions with evidence
+for every concept, and ranks them by the mean of each concept's strongest score.
+Each match includes `concept_evidence` in request order with the supporting
+snippet, score, ordinal, and conversation-unit `ordinal_range`. A concept can be
+supported by a different exchange in the same session.
+
+`scope` can be `top`, `all` (default), or `subordinate` for terms, semantic, and
+hybrid searches. The semantic and hybrid modes need the opt-in
+[semantic search](/docs/semantic-search/) index on the local SQLite archive;
+without it they return a "not available" error. Exact `session_id`,
+`git_branch`, `project`, `agent`, `date_from`, and `date_to` filters apply before
+the final limit. Limits default to 10 and must be between 1 and 50.
+
+Every match carries a conversation-unit citation: an `ordinal_range` of
 `[start, end]` ordinals around the match, plus `subordinate`, `relationship`,
 `parent_session_id`, and `is_sidechain` fields that flag hits from sidechain
-runs and subagent or fork sessions.
+runs and subagent or fork sessions. The response also reports requested and
+effective modes, applied filters, default and exact exclusions, and whether the
+candidate page was truncated.
 
 ## Daemon-Backed Reads
 

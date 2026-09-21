@@ -1108,11 +1108,42 @@ components:
         - reclaimed_bytes
         - duration_millis
       type: object
+    DbConceptEvidence:
+      additionalProperties: false
+      properties:
+        concept:
+          type: string
+        ordinal:
+          format: int64
+          type: integer
+        ordinal_range:
+          items:
+            format: int64
+            type: integer
+          maxItems: 2
+          minItems: 2
+          type: array
+        score:
+          format: double
+          type: number
+        snippet:
+          type: string
+      required:
+        - concept
+        - ordinal
+        - ordinal_range
+        - snippet
+        - score
+      type: object
     DbContentMatch:
       additionalProperties: false
       properties:
         agent:
           type: string
+        concept_evidence:
+          items:
+            $ref: "#/components/schemas/DbConceptEvidence"
+          type: array
         context_after:
           items:
             $ref: "#/components/schemas/DbMessage"
@@ -5633,6 +5664,8 @@ components:
     ServiceContentSearchResult:
       additionalProperties: false
       properties:
+        candidate_truncated:
+          type: boolean
         matches:
           items:
             $ref: "#/components/schemas/DbContentMatch"
@@ -15596,14 +15629,22 @@ paths:
     get:
       operationId: get-api-v1-search-content
       parameters:
-        - description: Pattern to search for
+        - description: Pattern to search for; mutually exclusive with concepts
           explode: false
           in: query
           name: pattern
-          required: true
           schema:
-            description: Pattern to search for
+            description: Pattern to search for; mutually exclusive with concepts
             type: string
+        - description: Two to five semantic concepts that must all match one session; repeatable and mutually exclusive with pattern
+          explode: true
+          in: query
+          name: concepts
+          schema:
+            description: Two to five semantic concepts that must all match one session; repeatable and mutually exclusive with pattern
+            items:
+              type: string
+            type: array
         - description: Search mode
           explode: false
           in: query
@@ -15614,15 +15655,16 @@ paths:
               - substring
               - regex
               - fts
+              - terms
               - semantic
               - hybrid
             type: string
-        - description: "Semantic/hybrid result scope: top, all, or subordinate (default all)"
+        - description: "Semantic/hybrid/terms result scope: top, all, or subordinate (default all)"
           explode: false
           in: query
           name: scope
           schema:
-            description: "Semantic/hybrid result scope: top, all, or subordinate (default all)"
+            description: "Semantic/hybrid/terms result scope: top, all, or subordinate (default all)"
             enum:
               - top
               - all
@@ -15682,6 +15724,20 @@ paths:
           name: git_branch
           schema:
             description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+            type: string
+        - description: Filter by exact full stored session ID
+          explode: false
+          in: query
+          name: session_id
+          schema:
+            description: Filter by exact full stored session ID
+            type: string
+        - description: Filter by exact raw git branch
+          explode: false
+          in: query
+          name: git_branch_exact
+          schema:
+            description: Filter by exact raw git branch
             type: string
         - description: Filter by agent
           explode: false

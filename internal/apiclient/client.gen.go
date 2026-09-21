@@ -14790,19 +14790,20 @@ const (
 	Regex     GetAPIV1SearchContentQueryMode = "regex"
 	Semantic  GetAPIV1SearchContentQueryMode = "semantic"
 	Substring GetAPIV1SearchContentQueryMode = "substring"
+	Terms     GetAPIV1SearchContentQueryMode = "terms"
 )
 
 // Validate checks if the GetAPIV1SearchContentQueryMode value is valid
 func (g GetAPIV1SearchContentQueryMode) Validate() error {
 	switch g {
-	case Fts, Hybrid, Regex, Semantic, Substring:
+	case Fts, Hybrid, Regex, Semantic, Substring, Terms:
 		return nil
 	default:
 		return runtime.NewValidationErrorsFromString("Enum", fmt.Sprintf("must be a valid GetAPIV1SearchContentQueryMode value, got: %v", g))
 	}
 }
 
-// GetAPIV1SearchContentQueryScope Semantic/hybrid result scope: top, all, or subordinate (default all)
+// GetAPIV1SearchContentQueryScope Semantic/hybrid/terms result scope: top, all, or subordinate (default all)
 type GetAPIV1SearchContentQueryScope string
 
 const (
@@ -15279,13 +15280,16 @@ func (g GetAPIV1SearchQuery) Validate() error {
 }
 
 type GetAPIV1SearchContentQuery struct {
-	// Pattern Pattern to search for
-	Pattern string `json:"pattern" validate:"required"`
+	// Pattern Pattern to search for; mutually exclusive with concepts
+	Pattern *string `json:"pattern,omitempty"`
+
+	// Concepts Two to five semantic concepts that must all match one session; repeatable and mutually exclusive with pattern
+	Concepts []string `json:"concepts,omitempty"`
 
 	// Mode Search mode
 	Mode *GetAPIV1SearchContentQueryMode `json:"mode,omitempty"`
 
-	// Scope Semantic/hybrid result scope: top, all, or subordinate (default all)
+	// Scope Semantic/hybrid/terms result scope: top, all, or subordinate (default all)
 	Scope *GetAPIV1SearchContentQueryScope `json:"scope,omitempty"`
 
 	// In Comma-separated content sources
@@ -15308,6 +15312,12 @@ type GetAPIV1SearchContentQuery struct {
 
 	// GitBranch Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
 	GitBranch *string `json:"git_branch,omitempty"`
+
+	// SessionID Filter by exact full stored session ID
+	SessionID *string `json:"session_id,omitempty"`
+
+	// GitBranchExact Filter by exact raw git branch
+	GitBranchExact *string `json:"git_branch_exact,omitempty"`
 
 	// Agent Filter by agent
 	Agent *string `json:"agent,omitempty"`
@@ -15351,9 +15361,6 @@ type GetAPIV1SearchContentQuery struct {
 
 func (g GetAPIV1SearchContentQuery) Validate() error {
 	var errors runtime.ValidationErrors
-	if err := typesValidator.Var(g.Pattern, "required"); err != nil {
-		errors = errors.Append("Pattern", err)
-	}
 	if g.Mode != nil {
 		if v, ok := any(g.Mode).(runtime.Validator); ok {
 			if err := v.Validate(); err != nil {
@@ -18556,31 +18563,51 @@ type DBCompactEstimate struct {
 
 type DBCompactResult = db.CompactResult
 
+type DBConceptEvidence struct {
+	Concept      string  `json:"concept" validate:"required"`
+	Ordinal      int64   `json:"ordinal"`
+	OrdinalRange []int64 `json:"ordinal_range" validate:"required"`
+	Score        float64 `json:"score"`
+	Snippet      string  `json:"snippet" validate:"required"`
+}
+
+func (d DBConceptEvidence) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(d))
+}
+
 type DBContentMatch struct {
-	Agent           string      `json:"agent" validate:"required"`
-	ContextAfter    []DBMessage `json:"context_after,omitempty"`
-	ContextBefore   []DBMessage `json:"context_before,omitempty"`
-	IsSidechain     *bool       `json:"is_sidechain,omitempty"`
-	Location        string      `json:"location" validate:"required"`
-	Ordinal         int64       `json:"ordinal"`
-	OrdinalRange    []int64     `json:"ordinal_range" validate:"required"`
-	ParentSessionID *string     `json:"parent_session_id,omitempty"`
-	Project         string      `json:"project" validate:"required"`
-	Relationship    *string     `json:"relationship,omitempty"`
-	Role            string      `json:"role" validate:"required"`
-	Score           *float64    `json:"score,omitempty"`
-	SessionID       string      `json:"session_id" validate:"required"`
-	Snippet         string      `json:"snippet" validate:"required"`
-	Subordinate     *bool       `json:"subordinate,omitempty"`
-	Timestamp       string      `json:"timestamp" validate:"required"`
-	ToolName        *string     `json:"tool_name,omitempty"`
-	WebURL          *string     `json:"web_url,omitempty"`
+	Agent           string              `json:"agent" validate:"required"`
+	ConceptEvidence []DBConceptEvidence `json:"concept_evidence,omitempty"`
+	ContextAfter    []DBMessage         `json:"context_after,omitempty"`
+	ContextBefore   []DBMessage         `json:"context_before,omitempty"`
+	IsSidechain     *bool               `json:"is_sidechain,omitempty"`
+	Location        string              `json:"location" validate:"required"`
+	Ordinal         int64               `json:"ordinal"`
+	OrdinalRange    []int64             `json:"ordinal_range" validate:"required"`
+	ParentSessionID *string             `json:"parent_session_id,omitempty"`
+	Project         string              `json:"project" validate:"required"`
+	Relationship    *string             `json:"relationship,omitempty"`
+	Role            string              `json:"role" validate:"required"`
+	Score           *float64            `json:"score,omitempty"`
+	SessionID       string              `json:"session_id" validate:"required"`
+	Snippet         string              `json:"snippet" validate:"required"`
+	Subordinate     *bool               `json:"subordinate,omitempty"`
+	Timestamp       string              `json:"timestamp" validate:"required"`
+	ToolName        *string             `json:"tool_name,omitempty"`
+	WebURL          *string             `json:"web_url,omitempty"`
 }
 
 func (d DBContentMatch) Validate() error {
 	var errors runtime.ValidationErrors
 	if err := typesValidator.Var(d.Agent, "required"); err != nil {
 		errors = errors.Append("Agent", err)
+	}
+	for i, item := range d.ConceptEvidence {
+		if v, ok := any(item).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append(fmt.Sprintf("ConceptEvidence[%d]", i), err)
+			}
+		}
 	}
 	for i, item := range d.ContextAfter {
 		if v, ok := any(item).(runtime.Validator); ok {

@@ -50,6 +50,7 @@ export * from "./dbCodeAttribution.ts";
 export * from "./dbCodeAttributionSource.ts";
 export * from "./dbCompactEstimate.ts";
 export * from "./dbCompactResult.ts";
+export * from "./dbConceptEvidence.ts";
 export * from "./dbContentMatch.ts";
 export * from "./dbCursorAttributionMetrics.ts";
 export * from "./dbCursorConversationCount.ts";

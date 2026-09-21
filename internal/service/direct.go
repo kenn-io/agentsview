@@ -825,11 +825,16 @@ const maxContentSearchContext = 10
 func (b *directBackend) SearchContent(
 	ctx context.Context, req ContentSearchRequest,
 ) (*ContentSearchResult, error) {
-	if req.Mode == "fts" {
+	var err error
+	req, err = NormalizeContentSearchRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	if req.Mode == "fts" || req.Mode == "terms" {
 		for _, s := range req.Sources {
 			if s != "messages" {
 				return nil, &db.SearchInputError{Msg: fmt.Sprintf(
-					"search: --fts searches messages only (got source %q)", s)}
+					"search: %s searches messages only (got source %q)", req.Mode, s)}
 			}
 		}
 		req.Sources = []string{"messages"}
@@ -852,7 +857,28 @@ func (b *directBackend) SearchContent(
 	if err != nil {
 		return nil, err
 	}
-	page, err := b.db.SearchContent(ctx, db.ContentSearchFilter{
+	if len(req.Concepts) > 0 {
+		return b.searchContentConcepts(ctx, req)
+	}
+	page, err := b.db.SearchContent(ctx, contentSearchFilter(req))
+	if err != nil {
+		return nil, err
+	}
+	if req.Context > 0 {
+		if err := b.enrichContentContext(
+			ctx, page.Matches, req.Context, req.Reveal,
+		); err != nil {
+			return nil, err
+		}
+	}
+	return &ContentSearchResult{
+		Matches:    page.Matches,
+		NextCursor: page.NextCursor,
+	}, nil
+}
+
+func contentSearchFilter(req ContentSearchRequest) db.ContentSearchFilter {
+	return db.ContentSearchFilter{
 		Pattern:           req.Pattern,
 		Mode:              req.Mode,
 		Sources:           req.Sources,
@@ -861,6 +887,8 @@ func (b *directBackend) SearchContent(
 		ExcludeProject:    req.ExcludeProject,
 		Machine:           req.Machine,
 		GitBranch:         req.GitBranch,
+		SessionID:         req.SessionID,
+		GitBranchExact:    req.GitBranchExact,
 		Agent:             req.Agent,
 		Date:              req.Date,
 		DateFrom:          req.DateFrom,
@@ -878,21 +906,162 @@ func (b *directBackend) SearchContent(
 		RevealSecrets: req.Reveal,
 		Limit:         req.Limit,
 		Cursor:        req.Cursor,
+	}
+}
+
+// NormalizeContentSearchRequest validates the multi-concept contract and
+// returns a copy with trimmed concepts and the effective semantic mode. A
+// request without concepts is returned unchanged.
+func NormalizeContentSearchRequest(req ContentSearchRequest) (ContentSearchRequest, error) {
+	if len(req.Concepts) == 0 {
+		return req, nil
+	}
+	if strings.TrimSpace(req.Pattern) != "" {
+		return req, &db.SearchInputError{Msg: "search: pattern and concepts are mutually exclusive"}
+	}
+	if len(req.Concepts) < 2 || len(req.Concepts) > 5 {
+		return req, &db.SearchInputError{Msg: "search: concepts must contain between 2 and 5 values"}
+	}
+	normalized := make([]string, len(req.Concepts))
+	seen := make(map[string]struct{}, len(req.Concepts))
+	for i, concept := range req.Concepts {
+		normalized[i] = strings.TrimSpace(concept)
+		if normalized[i] == "" {
+			return req, &db.SearchInputError{Msg: "search: concepts must not be blank"}
+		}
+		if _, ok := seen[normalized[i]]; ok {
+			return req, &db.SearchInputError{Msg: "search: concepts must be distinct"}
+		}
+		seen[normalized[i]] = struct{}{}
+	}
+	req.Concepts = normalized
+	if req.Mode != "" && req.Mode != "semantic" {
+		return req, &db.SearchInputError{Msg: "search: mode must be semantic when concepts are supplied"}
+	}
+	if req.Cursor != 0 {
+		return req, &db.SearchInputError{Msg: "search: cursor is not supported with concepts"}
+	}
+	if req.Limit < 0 || req.Limit > 50 {
+		return req, &db.SearchInputError{Msg: "search: concepts limit must be between 1 and 50"}
+	}
+	req.Mode = "semantic"
+	return req, nil
+}
+
+type conceptSessionResult struct {
+	match    db.ContentMatch
+	evidence []db.ConceptEvidence
+	score    float64
+}
+
+func (b *directBackend) searchContentConcepts(
+	ctx context.Context, req ContentSearchRequest,
+) (*ContentSearchResult, error) {
+	limit := req.Limit
+	if limit <= 0 || limit > db.MaxContentSearchLimit {
+		limit = db.DefaultContentSearchLimit
+	}
+	candidateLimit := min(limit*5, 250)
+	bySession := make(map[string]*conceptSessionResult)
+	candidateTruncated := false
+
+	for conceptIndex, concept := range req.Concepts {
+		legReq := req
+		legReq.Pattern = concept
+		legReq.Concepts = nil
+		legReq.Limit = candidateLimit
+		legReq.Cursor = 0
+		legReq.Context = 0
+		page, err := b.db.SearchContent(ctx, contentSearchFilter(legReq))
+		if err != nil {
+			return nil, err
+		}
+		if len(page.Matches) >= candidateLimit || page.NextCursor > 0 {
+			candidateTruncated = true
+		}
+
+		best := bestConceptMatches(page.Matches)
+		if conceptIndex == 0 {
+			for sessionID, match := range best {
+				bySession[sessionID] = &conceptSessionResult{
+					match: match,
+					evidence: []db.ConceptEvidence{
+						conceptEvidence(concept, match),
+					},
+					score: matchScore(match),
+				}
+			}
+			continue
+		}
+		for sessionID, aggregate := range bySession {
+			match, ok := best[sessionID]
+			if !ok {
+				delete(bySession, sessionID)
+				continue
+			}
+			aggregate.evidence = append(aggregate.evidence, conceptEvidence(concept, match))
+			aggregate.score += matchScore(match)
+		}
+	}
+
+	results := make([]conceptSessionResult, 0, len(bySession))
+	for _, aggregate := range bySession {
+		aggregate.score /= float64(len(req.Concepts))
+		aggregate.match.Score = new(aggregate.score)
+		aggregate.match.ConceptEvidence = aggregate.evidence
+		results = append(results, *aggregate)
+	}
+	slices.SortFunc(results, func(a, b conceptSessionResult) int {
+		if a.score > b.score {
+			return -1
+		}
+		if a.score < b.score {
+			return 1
+		}
+		return strings.Compare(a.match.SessionID, b.match.SessionID)
 	})
-	if err != nil {
-		return nil, err
+	if len(results) > limit {
+		results = results[:limit]
+		candidateTruncated = true
+	}
+	matches := make([]db.ContentMatch, len(results))
+	for i := range results {
+		matches[i] = results[i].match
 	}
 	if req.Context > 0 {
-		if err := b.enrichContentContext(
-			ctx, page.Matches, req.Context, req.Reveal,
-		); err != nil {
+		if err := b.enrichContentContext(ctx, matches, req.Context, req.Reveal); err != nil {
 			return nil, err
 		}
 	}
 	return &ContentSearchResult{
-		Matches:    page.Matches,
-		NextCursor: page.NextCursor,
+		Matches: matches, CandidateTruncated: candidateTruncated,
 	}, nil
+}
+
+func bestConceptMatches(matches []db.ContentMatch) map[string]db.ContentMatch {
+	best := make(map[string]db.ContentMatch)
+	for _, match := range matches {
+		current, ok := best[match.SessionID]
+		if !ok || matchScore(match) > matchScore(current) ||
+			(matchScore(match) == matchScore(current) && match.Ordinal < current.Ordinal) {
+			best[match.SessionID] = match
+		}
+	}
+	return best
+}
+
+func matchScore(match db.ContentMatch) float64 {
+	if match.Score == nil {
+		return 0
+	}
+	return *match.Score
+}
+
+func conceptEvidence(concept string, match db.ContentMatch) db.ConceptEvidence {
+	return db.ConceptEvidence{
+		Concept: concept, Ordinal: match.Ordinal, OrdinalRange: match.OrdinalRange,
+		Snippet: match.Snippet, Score: matchScore(match),
+	}
 }
 
 // enrichContentContext populates ContextBefore/ContextAfter on each match

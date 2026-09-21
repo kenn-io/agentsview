@@ -24,6 +24,24 @@ func (f fakeHitsVectorSearcher) SemanticSearch(
 	return f.hits, nil
 }
 
+type queryHitsVectorSearcher map[string][]db.VectorHit
+
+func (f queryHitsVectorSearcher) SemanticSearch(
+	_ context.Context, query string, limit int,
+) ([]db.VectorHit, error) {
+	hits := f[query]
+	if limit > 0 && len(hits) > limit {
+		hits = hits[:limit]
+	}
+	return hits, nil
+}
+
+func (f queryHitsVectorSearcher) ResolveMessageUnits(
+	_ context.Context, refs []db.MessageRef,
+) ([]db.UnitRef, error) {
+	return make([]db.UnitRef, len(refs)), nil
+}
+
 func (f fakeHitsVectorSearcher) ResolveMessageUnits(
 	_ context.Context, refs []db.MessageRef,
 ) ([]db.UnitRef, error) {
@@ -61,6 +79,26 @@ func TestSearchContentScopeRequiresSemanticOrHybridMode(t *testing.T) {
 		assert.Contains(t, w.Body.String(), "semantic",
 			"error should point at the semantic/hybrid-only restriction")
 	}
+}
+
+func TestSearchContentTermsAndExactFiltersThroughHTTP(t *testing.T) {
+	te := setup(t)
+	for _, id := range []string{"target-session", "other-session"} {
+		te.seedSession(t, id, "proj", 2, func(s *db.Session) {
+			s.GitBranch = "feature/memory"
+		})
+		te.seedMessages(t, id, 1, func(_ int, m *db.Message) {
+			m.Role = "user"
+			m.Content = "alpha beta"
+		})
+	}
+
+	w := te.get(t, "/api/v1/search/content?pattern=alpha+beta&mode=terms&scope=all"+
+		"&session_id=target-session&git_branch_exact=feature%2Fmemory&include_one_shot=true")
+	assertStatus(t, w, http.StatusOK)
+	res := decode[service.ContentSearchResult](t, w)
+	require.Len(t, res.Matches, 1)
+	assert.Equal(t, "target-session", res.Matches[0].SessionID)
 }
 
 // TestSearchContentScopeFiltersSemanticResults exercises the scope param
@@ -116,6 +154,42 @@ func TestSearchContentScopeFiltersSemanticResults(t *testing.T) {
 	assert.Equal(t, []string{"top-sess"}, search(t, "top"))
 	assert.Equal(t, []string{"sub-sess"}, search(t, "subordinate"))
 	assert.ElementsMatch(t, []string{"top-sess", "sub-sess"}, search(t, "all"))
+}
+
+func TestSearchContentConceptsIntersectDifferentExchangesThroughHTTP(t *testing.T) {
+	te := setup(t)
+	for _, id := range []string{"both", "auth-only"} {
+		te.seedSession(t, id, "proj", 4)
+		te.seedMessages(t, id, 4, func(i int, m *db.Message) {
+			m.Content = "message"
+			if i%2 == 0 {
+				m.Role = "user"
+			} else {
+				m.Role = "assistant"
+			}
+		})
+	}
+	te.db.SetVectorSearcher(queryHitsVectorSearcher{
+		"auth model": {
+			{SessionID: "auth-only", Ordinal: 0, OrdinalStart: 0, OrdinalEnd: 1, Score: 0.95},
+			{SessionID: "both", Ordinal: 0, OrdinalStart: 0, OrdinalEnd: 1, Score: 0.7},
+		},
+		"retry policy": {
+			{SessionID: "both", Ordinal: 2, OrdinalStart: 2, OrdinalEnd: 3, Score: 0.9},
+		},
+	})
+
+	w := te.wrappedRequest(http.MethodGet,
+		"/api/v1/search/content?concepts=auth+model&concepts=retry+policy&scope=top&limit=10",
+		withHeader("X-AgentsView-Search-Intent", "semantic"))
+	assertStatus(t, w, http.StatusOK)
+	res := decode[service.ContentSearchResult](t, w)
+	require.Len(t, res.Matches, 1)
+	assert.Equal(t, "both", res.Matches[0].SessionID)
+	assert.InDelta(t, 0.8, *res.Matches[0].Score, 0.0001)
+	require.Len(t, res.Matches[0].ConceptEvidence, 2)
+	assert.Equal(t, [2]int{0, 1}, res.Matches[0].ConceptEvidence[0].OrdinalRange)
+	assert.Equal(t, [2]int{2, 3}, res.Matches[0].ConceptEvidence[1].OrdinalRange)
 }
 
 // TestSearchContentSemanticResponseCarriesUnitRangeAndLineage pins the HTTP

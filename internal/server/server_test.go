@@ -776,7 +776,7 @@ func TestOpenAPIEndpointDocumentsEnumsAndRequestBodies(t *testing.T) {
 			path:   "/api/v1/search/content",
 			method: "get",
 			name:   "mode",
-			want:   []any{"substring", "regex", "fts", "semantic", "hybrid"},
+			want:   []any{"substring", "regex", "fts", "terms", "semantic", "hybrid"},
 		},
 		{
 			path:   "/api/v1/search/content",
