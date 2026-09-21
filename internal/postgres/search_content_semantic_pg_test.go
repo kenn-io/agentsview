@@ -31,8 +31,9 @@ func insertSemDoc(
 INSERT INTO vector_documents (
     doc_key, session_id, source_uuid, ordinal, ordinal_end,
     subordinate, offsets, content, content_hash)
-VALUES ($1, $2, '', $3, $4, $5, $6, $7, 'h')`,
-		docKey, sessionID, ordinal, ordinalEnd, subordinate, offsets, content)
+VALUES ($1, $2, '', $3, $4, $5, $6, $7, $8)`,
+		docKey, sessionID, ordinal, ordinalEnd, subordinate, offsets, content,
+		db.UnitContentHash(content))
 	require.NoError(t, err, "insert doc "+docKey)
 }
 
@@ -112,6 +113,14 @@ func seedSemanticFixture(t *testing.T, store *Store) (int64, string) {
 	insertSearchChunk(t, pg, table, halfvec, "d2", 0, []float32{1, 0.5, 0, 0})
 	insertSearchChunk(t, pg, table, halfvec, "run1", 0, []float32{0, 0, 1, 0})
 	insertSearchChunk(t, pg, table, halfvec, "run1", 1, []float32{1, 1, 0, 0})
+
+	// Stamp every chunk row with its doc's recorded content hash, the way the
+	// push's replaceVectorChunks does, so stale-vector verification sees the
+	// generation's embedding provenance.
+	_, err = pg.Exec(
+		`UPDATE ` + table + ` c SET content_hash = d.content_hash
+		  FROM vector_documents d WHERE c.doc_key = d.doc_key`)
+	require.NoError(t, err, "stamp chunk content hashes")
 
 	return genID, table
 }
@@ -305,4 +314,162 @@ func TestPGSemanticSearchInvalidInput(t *testing.T) {
 			assert.NotEmpty(t, strings.TrimSpace(inputErr.Error()))
 		})
 	}
+}
+
+// TestPGSemanticSearchRunExtensionMarksStale pins the end-boundary check: a
+// run that grew past its recorded span (an assistant message appended at
+// ordinal_end+1) fails closed even though the recorded prefix content is
+// unchanged. The extended run's match loses its transcript revision while a
+// user-document match on the same session keeps it.
+func TestPGSemanticSearchRunExtensionMarksStale(t *testing.T) {
+	store, genID, _ := setupSemanticSearch(t)
+	_, err := store.DB().Exec(
+		`UPDATE sessions SET transcript_revision = 'rev-1' WHERE id = 'S1'`)
+	require.NoError(t, err, "set transcript revision")
+	// Give the user document its real recorded hash so only the extension
+	// check distinguishes the two matches.
+	_, err = store.DB().Exec(
+		`UPDATE vector_documents SET content_hash = $1 WHERE doc_key = 'd1'`,
+		db.UnitContentHash("hello alpha content"))
+	require.NoError(t, err, "set d1 content hash")
+
+	// run1 indexes the assistant run spanning ordinals 10-12; appending an
+	// embeddable assistant message at 13 grows the run past the recorded end.
+	insertCSUnitMessage(t, store, "S1", 13, "assistant",
+		"extension member content", false, false)
+	wireSemanticSearcher(t, store, genID)
+
+	page, err := store.SearchContent(context.Background(), db.ContentSearchFilter{
+		Pattern: "content", Mode: "semantic", Limit: 50,
+	})
+	require.NoError(t, err, "SearchContent semantic")
+	byKey := semMatchesByKey(t, page)
+	run := byKey[semKey{"S1", 12}]
+	assert.Empty(t, run.TranscriptRevision,
+		"the grown run's stale hit must be reported unbound")
+
+	user := byKey[semKey{"S1", 0}]
+	assert.Equal(t, "rev-1", user.TranscriptRevision,
+		"a user document never extends and stays bound")
+}
+
+// TestPGSemanticSearchExtensionPastIgnoredRowMarksStale is the PostgreSQL
+// twin of TestSearchContentSemanticExtensionPastIgnoredRowFailsClosed: an
+// ignored row (a system message) between the indexed run and an appended
+// assistant message must not hide the extension, because ignored rows never
+// split an embedding unit.
+func TestPGSemanticSearchExtensionPastIgnoredRowMarksStale(t *testing.T) {
+	store, genID, _ := setupSemanticSearch(t)
+	_, err := store.DB().Exec(
+		`UPDATE sessions SET transcript_revision = 'rev-1' WHERE id = 'S1'`)
+	require.NoError(t, err, "set transcript revision")
+	// Give the user document its real recorded hash so only the extension
+	// check distinguishes the two matches.
+	_, err = store.DB().Exec(
+		`UPDATE vector_documents SET content_hash = $1 WHERE doc_key = 'd1'`,
+		db.UnitContentHash("hello alpha content"))
+	require.NoError(t, err, "set d1 content hash")
+
+	// run1 indexes the assistant run spanning ordinals 10-12. A system row at
+	// 13 is invisible to the embedding universe, and the assistant message at
+	// 14 extends the run past its recorded end.
+	insertCSUnitMessage(t, store, "S1", 13, "assistant",
+		"system noise", true, false)
+	insertCSUnitMessage(t, store, "S1", 14, "assistant",
+		"extension member content", false, false)
+	wireSemanticSearcher(t, store, genID)
+
+	page, err := store.SearchContent(context.Background(), db.ContentSearchFilter{
+		Pattern: "content", Mode: "semantic", Limit: 50,
+	})
+	require.NoError(t, err, "SearchContent semantic")
+	byKey := semMatchesByKey(t, page)
+	run := byKey[semKey{"S1", 12}]
+	assert.Empty(t, run.TranscriptRevision,
+		"the run extended past an ignored row: the hit must be unbound")
+
+	user := byKey[semKey{"S1", 0}]
+	assert.Equal(t, "rev-1", user.TranscriptRevision,
+		"a user document never extends and stays bound")
+}
+
+// TestPGSemanticSearchStructuralChangeMarksStale is the PostgreSQL twin of
+// TestSearchContentSemanticStructuralChangeFailsClosed: an in-span row that
+// changes sidechain without changing content still splits the indexed unit,
+// so the hit must be reported unbound.
+func TestPGSemanticSearchStructuralChangeMarksStale(t *testing.T) {
+	store, genID, _ := setupSemanticSearch(t)
+	_, err := store.DB().Exec(
+		`UPDATE sessions SET transcript_revision = 'rev-1' WHERE id = 'S1'`)
+	require.NoError(t, err, "set transcript revision")
+	_, err = store.DB().Exec(
+		`UPDATE vector_documents SET content_hash = $1 WHERE doc_key = 'd1'`,
+		db.UnitContentHash("hello alpha content"))
+	require.NoError(t, err, "set d1 content hash")
+
+	// run1's member at ordinal 12 flips to the sidechain branch with its
+	// content unchanged: the recorded unit no longer exists as such.
+	_, err = store.DB().Exec(
+		`UPDATE messages SET is_sidechain = TRUE WHERE session_id = 'S1' AND ordinal = 12`)
+	require.NoError(t, err, "flip member sidechain")
+	wireSemanticSearcher(t, store, genID)
+
+	page, err := store.SearchContent(context.Background(), db.ContentSearchFilter{
+		Pattern: "content", Mode: "semantic", Limit: 50,
+	})
+	require.NoError(t, err, "SearchContent semantic")
+	byKey := semMatchesByKey(t, page)
+	run := byKey[semKey{"S1", 12}]
+	assert.Empty(t, run.TranscriptRevision,
+		"the structurally split run must be reported unbound")
+
+	user := byKey[semKey{"S1", 0}]
+	assert.Equal(t, "rev-1", user.TranscriptRevision,
+		"the untouched user document stays bound")
+}
+
+// TestPGSemanticSearchGenerationStampMarksStale covers the multi-generation
+// window: gen 1 embedded the doc's original content; a later push for gen 2
+// rewrote the content, re-embedded it there, and updated the shared
+// vector_documents row — while the gen 1 chunk table still holds the original
+// embeddings. A searcher pinned to gen 1 must compare its own generation's
+// stamp against the current archive and report the hit unbound, not inherit
+// the shared row's newer hash.
+func TestPGSemanticSearchGenerationStampMarksStale(t *testing.T) {
+	store, genID, chunkTable := setupSemanticSearch(t)
+	_, err := store.DB().Exec(
+		`UPDATE sessions SET transcript_revision = 'rev-1' WHERE id = 'S1'`)
+	require.NoError(t, err, "set transcript revision")
+
+	// The gen 1 push stamped its chunk rows with the hash of the content it
+	// embedded (the fixture's original "hello alpha content").
+	_, err = store.DB().Exec(
+		`UPDATE `+chunkTable+` SET content_hash = $1 WHERE doc_key = 'd1'`,
+		db.UnitContentHash("hello alpha content"))
+	require.NoError(t, err, "stamp gen 1 chunk")
+
+	// A content update plus a gen 2 push: the archive message and the shared
+	// doc row now carry the rewritten content and its hash. Gen 1 has not
+	// re-embedded, so its chunk stamp still cites the original content.
+	const rewritten = "rewritten alpha content"
+	_, err = store.DB().Exec(
+		`UPDATE messages SET content = $1, content_length = $2
+		  WHERE session_id = 'S1' AND ordinal = 0`,
+		rewritten, len(rewritten))
+	require.NoError(t, err, "rewrite message content")
+	_, err = store.DB().Exec(
+		`UPDATE vector_documents SET content = $1, content_hash = $2
+		  WHERE doc_key = 'd1'`,
+		rewritten, db.UnitContentHash(rewritten))
+	require.NoError(t, err, "update shared doc row")
+	wireSemanticSearcher(t, store, genID)
+
+	page, err := store.SearchContent(context.Background(), db.ContentSearchFilter{
+		Pattern: "content", Mode: "semantic", Limit: 50,
+	})
+	require.NoError(t, err, "SearchContent semantic")
+	byKey := semMatchesByKey(t, page)
+	user := byKey[semKey{"S1", 0}]
+	assert.Empty(t, user.TranscriptRevision,
+		"the gen 1 hit cites stale content and must be unbound")
 }

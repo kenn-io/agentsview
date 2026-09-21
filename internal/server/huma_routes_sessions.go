@@ -100,14 +100,16 @@ type sessionFilterInput struct {
 }
 
 type messageListInput struct {
-	ID        string           `path:"id" required:"true" doc:"Session ID"`
-	Limit     int              `query:"limit" minimum:"0" doc:"Maximum number of messages"`
-	Direction messageDirection `query:"direction" enum:"asc,desc" doc:"Message ordering direction"`
-	From      optionalIntParam `query:"from" minimum:"0" doc:"Starting message ordinal"`
-	Around    optionalIntParam `query:"around" minimum:"0" doc:"Center a symmetric window on this ordinal (mutually exclusive with from/direction)"`
-	Before    optionalIntParam `query:"before" minimum:"0" doc:"Messages before the around anchor (default 5)"`
-	After     optionalIntParam `query:"after" minimum:"0" doc:"Messages after the around anchor (default 5)"`
-	Roles     string           `query:"roles" doc:"Comma-separated roles to include, e.g. user,assistant"`
+	ID               string           `path:"id" required:"true" doc:"Session ID"`
+	Limit            int              `query:"limit" minimum:"0" doc:"Maximum number of messages"`
+	Direction        messageDirection `query:"direction" enum:"asc,desc" doc:"Message ordering direction"`
+	From             optionalIntParam `query:"from" minimum:"0" doc:"Starting message ordinal"`
+	Around           optionalIntParam `query:"around" minimum:"0" doc:"Center a symmetric window on this ordinal (mutually exclusive with from/direction)"`
+	Before           optionalIntParam `query:"before" minimum:"0" doc:"Messages before the around anchor (default 5)"`
+	After            optionalIntParam `query:"after" minimum:"0" doc:"Messages after the around anchor (default 5)"`
+	Roles            string           `query:"roles" doc:"Comma-separated roles to include, e.g. user,assistant"`
+	ExpectedRevision string           `query:"expected_revision" doc:"Reject the read when the transcript revision no longer matches"`
+	EvidenceSource   string           `query:"evidence_source" doc:"Opaque archive binding returned by an earlier evidence read"`
 }
 
 type searchSessionInput struct {
@@ -313,8 +315,10 @@ func (s *Server) humaGetMessages(
 ) (*jsonOutput[*service.MessageList], error) {
 	limit := clampLimit(in.Limit, db.DefaultMessageLimit, db.MaxMessageLimit)
 	filter := service.MessageFilter{
-		Limit:     limit,
-		Direction: string(in.Direction),
+		Limit:            limit,
+		Direction:        string(in.Direction),
+		ExpectedRevision: in.ExpectedRevision,
+		EvidenceSource:   in.EvidenceSource,
 	}
 	if in.From.IsSet {
 		filter.From = &in.From.Value
@@ -333,6 +337,12 @@ func (s *Server) humaGetMessages(
 	}
 	list, err := s.sessions.Messages(ctx, in.ID, filter)
 	if err != nil {
+		if errors.Is(err, service.ErrSourceChanged) {
+			return nil, apiErrorWithCode(http.StatusConflict, "source_changed", err.Error())
+		}
+		if errors.Is(err, service.ErrRevisionBoundReadUnavailable) {
+			return nil, apiError(http.StatusNotImplemented, err.Error())
+		}
 		if errors.Is(err, service.ErrAroundMutuallyExclusive) ||
 			errors.Is(err, service.ErrBeforeAfterRequireAround) {
 			return nil, apiError(http.StatusBadRequest, err.Error())

@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -42,6 +43,10 @@ func (s *Store) searchContentSemanticPG(
 	if err != nil {
 		return db.ContentSearchPage{}, err
 	}
+	stale, err := s.staleVectorHitsPG(ctx, surviving)
+	if err != nil {
+		return db.ContentSearchPage{}, err
+	}
 
 	out := make([]db.ContentMatch, 0, min(len(surviving), f.Limit))
 	for _, h := range surviving {
@@ -51,20 +56,21 @@ func (s *Store) searchContentSemanticPG(
 		}
 		score := float64(h.Score)
 		out = append(out, db.ContentMatch{
-			SessionID:       h.SessionID,
-			Project:         info.project,
-			Agent:           info.agent,
-			Location:        "message",
-			Role:            info.role,
-			Ordinal:         h.Ordinal,
-			OrdinalRange:    [2]int{h.OrdinalStart, h.OrdinalEnd},
-			Subordinate:     h.Subordinate,
-			Relationship:    info.relationshipType,
-			ParentSessionID: info.parentSessionID,
-			Sidechain:       info.isSidechain,
-			Timestamp:       info.timestamp,
-			Snippet:         f.SemanticSnippet(info.content, h.Snippet),
-			Score:           &score,
+			SessionID:          h.SessionID,
+			Project:            info.project,
+			Agent:              info.agent,
+			TranscriptRevision: pgBoundRevision(stale, h, info),
+			Location:           "message",
+			Role:               info.role,
+			Ordinal:            h.Ordinal,
+			OrdinalRange:       [2]int{h.OrdinalStart, h.OrdinalEnd},
+			Subordinate:        h.Subordinate,
+			Relationship:       info.relationshipType,
+			ParentSessionID:    info.parentSessionID,
+			Sidechain:          info.isSidechain,
+			Timestamp:          info.timestamp,
+			Snippet:            f.SemanticSnippet(info.content, h.Snippet),
+			Score:              &score,
 		})
 		if len(out) >= f.Limit {
 			break
@@ -168,6 +174,153 @@ func (s *Store) semanticAllowedSessionIDsPG(
 	return allowed, nil
 }
 
+// staleVectorHitsPG is the PostgreSQL twin of internal/db's staleVectorHits:
+// it reports which hits were ranked from content that no longer matches the
+// archive. Each hit carries ContentHash, the vector_documents content_hash
+// for the document its embedding was computed from; the current document
+// content is rebuilt from the archive with the exact membership the embedding
+// build used -- every embeddable (non-system, non-system-prefixed
+// user/assistant) message between the unit's ordinal bounds, joined with
+// "\n\n" for runs -- and hashed with db.UnitContentHash. The unit's end
+// boundary is verified too: an embeddable assistant row now occupying
+// ordinal_end+1 with the run's sidechain means the run grew past the recorded
+// span, so the old hash can never prove currency. A hit whose recorded hash
+// is empty or differs (or whose span has no embeddable members left) is
+// stale: its score or snippet may describe older content, so the caller must
+// not report it as revision-bound. The result is keyed by (session_id, unit
+// start ordinal).
+func (s *Store) staleVectorHitsPG(
+	ctx context.Context, hits []db.VectorHit,
+) (map[db.MessageRef]bool, error) {
+	stale := make(map[db.MessageRef]bool, len(hits))
+	type span struct {
+		hit              db.VectorHit
+		parts            []string
+		isRun            bool
+		runSide          *bool
+		firstRole        string
+		structureChanged bool
+		extended         bool
+	}
+	byKey := make(map[db.MessageRef]*span, len(hits))
+	sessionIDs := make([]string, 0, len(hits))
+	los := make([]int32, 0, len(hits))
+	his := make([]int32, 0, len(hits))
+	for _, h := range hits {
+		key := db.MessageRef{SessionID: h.SessionID, Ordinal: h.OrdinalStart}
+		if _, seen := byKey[key]; seen {
+			continue // two anchors on one unit: verify it once
+		}
+		if h.ContentHash == "" {
+			// Without the mirror's recorded hash there is nothing to compare
+			// against; fail closed.
+			stale[key] = true
+			continue
+		}
+		sp := &span{hit: h}
+		byKey[key] = sp
+		sessionIDs = append(sessionIDs, h.SessionID)
+		los = append(los, int32(h.OrdinalStart))
+		his = append(his, int32(h.OrdinalEnd))
+	}
+	if len(byKey) == 0 {
+		return stale, nil
+	}
+
+	// hi+1 is the would-be extension row: a run grows only when an
+	// embeddable assistant message with the run's sidechain lands there.
+	// The probe is the first embeddable row after the recorded end (ignored
+	// rows never split an embedding unit, so the physical next ordinal may
+	// hide the real extension candidate).
+	query := "SELECT sp.session_id, sp.lo, m.ordinal, m.content, m.role, m.is_sidechain " +
+		"FROM (SELECT unnest($1::text[]) AS session_id, " +
+		"unnest($2::int[]) AS lo, unnest($3::int[]) AS hi) sp " +
+		"JOIN messages m ON m.session_id = sp.session_id " +
+		"AND m.ordinal BETWEEN sp.lo AND sp.hi " +
+		"WHERE m.role IN ('user','assistant') AND m.is_system = FALSE AND " +
+		db.PostgresSystemPrefixSQL("m.content", "m.role") + " " +
+		"UNION ALL " +
+		"SELECT p.session_id, p.lo, m.ordinal, m.content, m.role, m.is_sidechain " +
+		"FROM (SELECT sp.session_id, sp.lo, MIN(m.ordinal) AS next_ordinal " +
+		"FROM (SELECT unnest($1::text[]) AS session_id, " +
+		"unnest($2::int[]) AS lo, unnest($3::int[]) AS hi) sp " +
+		"JOIN messages m ON m.session_id = sp.session_id " +
+		"AND m.ordinal > sp.hi " +
+		"WHERE m.role IN ('user','assistant') AND m.is_system = FALSE AND " +
+		db.PostgresSystemPrefixSQL("m.content", "m.role") + " " +
+		"GROUP BY sp.session_id, sp.lo) p " +
+		"JOIN messages m ON m.session_id = p.session_id " +
+		"AND m.ordinal = p.next_ordinal " +
+		"ORDER BY 1, 2, 3"
+	rows, err := s.pg.QueryContext(ctx, query, sessionIDs, los, his)
+	if err != nil {
+		return nil, fmt.Errorf("pg verify vector hit currency: %w", err)
+	}
+	defer rows.Close()
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var sessionID, role string
+		var lo, ordinal int
+		var content string
+		var sidechain bool
+		if err := rows.Scan(&sessionID, &lo, &ordinal, &content,
+			&role, &sidechain); err != nil {
+			return nil, fmt.Errorf("scan pg vector hit verification row: %w", err)
+		}
+		sp, ok := byKey[db.MessageRef{SessionID: sessionID, Ordinal: lo}]
+		if !ok {
+			continue
+		}
+		if ordinal > sp.hit.OrdinalEnd {
+			// Candidate extension row past the recorded span. A run grows
+			// only when an embeddable assistant message with the run's
+			// sidechain lands there; a user document never extends, and
+			// anything else closes the unit at the recorded end.
+			if sp.isRun && role == "assistant" && sidechain == *sp.runSide {
+				sp.extended = true
+			}
+			continue
+		}
+		if sp.runSide == nil {
+			sp.isRun = role == "assistant"
+			sp.firstRole = role
+			runSide := sidechain
+			sp.runSide = &runSide
+		} else if role != sp.firstRole || sidechain != *sp.runSide {
+			// Units are homogeneous: a user row never sits inside an
+			// assistant run, and a sidechain flip splits the run. An
+			// in-span row that changed role or sidechain means the current
+			// structure differs from the indexed unit even when every
+			// content byte is unchanged.
+			sp.structureChanged = true
+		}
+		sp.parts = append(sp.parts, content)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate pg vector hit verification rows: %w", err)
+	}
+	for key, sp := range byKey {
+		if sp.extended || sp.structureChanged ||
+			db.UnitContentHash(strings.Join(sp.parts, "\n\n")) != sp.hit.ContentHash {
+			stale[key] = true
+		}
+	}
+	return stale, nil
+}
+
+// pgBoundRevision returns the match's transcript revision, or "" when the
+// hit was ranked from stale content: an empty revision marks the match
+// unbound so the page's revision_bound flag stays honest about what the
+// ranking evidence was computed from.
+func pgBoundRevision(
+	stale map[db.MessageRef]bool, h db.VectorHit, info pgSemanticHitInfo,
+) string {
+	if stale[db.MessageRef{SessionID: h.SessionID, Ordinal: h.OrdinalStart}] {
+		return ""
+	}
+	return info.transcriptRevision
+}
+
 // pgSemanticHitInfo is the session/message metadata enrichSemanticHitsPG
 // attaches to a surviving hit. content is the message's full, un-truncated
 // content: semantic/hybrid snippets are built from it (SemanticSnippet) rather
@@ -177,6 +330,7 @@ func (s *Store) semanticAllowedSessionIDsPG(
 // sessions/messages rows; isSidechain is the ANCHOR ordinal's message flag.
 type pgSemanticHitInfo struct {
 	project, agent, role, timestamp, content string
+	transcriptRevision                       string
 	relationshipType, parentSessionID        string
 	isSidechain                              bool
 }
@@ -205,6 +359,7 @@ func (s *Store) enrichSemanticHitsPG(
 	const query = `
 SELECT m.session_id, s.project, s.agent, m.role, m.ordinal,
        m.timestamp, m.content,
+       COALESCE(s.transcript_revision, ''),
        COALESCE(s.relationship_type, ''), COALESCE(s.parent_session_id, ''),
        m.is_sidechain
   FROM (SELECT unnest($1::text[]) AS session_id,
@@ -225,6 +380,7 @@ SELECT m.session_id, s.project, s.agent, m.role, m.ordinal,
 		var ts *time.Time
 		if err := rows.Scan(&ref.SessionID, &info.project, &info.agent,
 			&info.role, &ref.Ordinal, &ts, &info.content,
+			&info.transcriptRevision,
 			&info.relationshipType, &info.parentSessionID,
 			&info.isSidechain); err != nil {
 			return nil, fmt.Errorf("scan pg semantic hit: %w", err)

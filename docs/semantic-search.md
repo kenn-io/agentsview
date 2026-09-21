@@ -694,7 +694,8 @@ the broader ten-minute activity guard, so an unrelated recent session remains
 searchable. Limits default to 10 and go up to 50; a value outside that range
 falls back to the default. Responses state the effective mode and scope and
 which default exclusions applied; `next_cursor` is present when another page
-exists.
+exists. Values outside 1-50 are rejected. The response also reports the
+requested mode and the filters the search applied.
 
 ### Inline context: `--context N`
 

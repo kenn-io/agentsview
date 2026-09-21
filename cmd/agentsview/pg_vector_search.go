@@ -113,6 +113,20 @@ func wirePGVectorSearch(
 		log.Printf("%s: %s", label, reason)
 		return nil
 	}
+	// Migrate a pre-stamp chunk table during read setup: the searcher selects
+	// the per-generation content hash, so a table that predates the column
+	// must gain it here or every semantic/hybrid query would fail on it. A
+	// migration the read role cannot run disables semantic search instead.
+	if err := postgres.EnsureVectorChunkContentHashColumn(ctx, store.DB(), genID); err != nil {
+		reason := fmt.Sprintf(
+			"semantic search: PG generation %d chunk table predates the "+
+				"content-hash stamp and could not be migrated (%v); re-run "+
+				"'agentsview pg push' from a machine with a matching "+
+				"[vector.embeddings] config", genID, err)
+		store.SetSemanticUnavailableReason(reason)
+		log.Printf("%s: %s", label, reason)
+		return nil
+	}
 
 	enc, err := newVectorQueryEncoder(appCfg.Vector.Embeddings, "")
 	if err != nil {

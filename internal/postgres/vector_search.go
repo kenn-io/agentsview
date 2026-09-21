@@ -109,12 +109,17 @@ func (v *vectorSearcher) SemanticSearch(
 }
 
 // chunkHit is one chunk-level KNN neighbor: the document it belongs to, which
-// chunk matched, and its cosine similarity (1 - cosine distance, higher is
-// better).
+// chunk matched, its cosine similarity (1 - cosine distance, higher is
+// better), and the content hash stamped on the chunk row when this
+// generation's embeddings were written. The stamp — not the shared doc row —
+// is what a stale-vector verifier must compare against: a later push for
+// another generation can update the shared row while this generation still
+// holds embeddings of older content.
 type chunkHit struct {
-	docKey     string
-	chunkIndex int
-	score      float32
+	docKey      string
+	chunkIndex  int
+	score       float32
+	contentHash string
 }
 
 // knnChunks runs the chunk-level KNN, returning up to exactly limit neighbors
@@ -146,7 +151,7 @@ func (v *vectorSearcher) knnChunks(
 	}
 	dist := fmt.Sprintf("embedding OPERATOR(%s.<=>) $1::%s.halfvec", extSchema, extSchema)
 	q := fmt.Sprintf(`
-SELECT doc_key, chunk_index, 1 - (%s) AS score
+SELECT doc_key, chunk_index, 1 - (%s) AS score, content_hash
   FROM %s
  ORDER BY %s
  LIMIT $2`, dist, v.chunkTable, dist)
@@ -171,7 +176,7 @@ SELECT doc_key, chunk_index, 1 - (%s) AS score
 	for rows.Next() {
 		var h chunkHit
 		var score float64
-		if err := rows.Scan(&h.docKey, &h.chunkIndex, &score); err != nil {
+		if err := rows.Scan(&h.docKey, &h.chunkIndex, &score, &h.contentHash); err != nil {
 			return nil, fmt.Errorf("scanning chunk knn row: %w", err)
 		}
 		h.score = float32(score)
@@ -264,6 +269,7 @@ type vectorDoc struct {
 	subordinate bool
 	offsets     []db.UnitOffset
 	content     string
+	contentHash string
 }
 
 // hydrateHits looks up each hit's document row and builds its db.VectorHit,
@@ -300,6 +306,12 @@ func (v *vectorSearcher) hydrateHits(
 			Subordinate:  doc.subordinate,
 			Score:        h.score,
 			Snippet:      snippet,
+			// The generation's stamp wins over the shared doc row: a later
+			// push for another generation can update the shared row while
+			// this generation still holds embeddings of older content. An
+			// empty stamp (a chunk written before the column existed) fails
+			// closed in the verifier.
+			ContentHash: h.contentHash,
 		})
 	}
 	return out, nil
@@ -319,7 +331,8 @@ func (v *vectorSearcher) lookupDocs(
 		return docs, nil
 	}
 	rows, err := v.pg.QueryContext(ctx, `
-SELECT doc_key, session_id, ordinal, ordinal_end, subordinate, offsets, content
+SELECT doc_key, session_id, ordinal, ordinal_end, subordinate, offsets, content,
+       content_hash
   FROM vector_documents
  WHERE ordinal >= 0 AND doc_key = ANY($1)`, docKeys)
 	if err != nil {
@@ -332,7 +345,8 @@ SELECT doc_key, session_id, ordinal, ordinal_end, subordinate, offsets, content
 		var key, offsets string
 		var doc vectorDoc
 		if err := rows.Scan(&key, &doc.sessionID, &doc.ordinal,
-			&doc.ordinalEnd, &doc.subordinate, &offsets, &doc.content); err != nil {
+			&doc.ordinalEnd, &doc.subordinate, &offsets, &doc.content,
+			&doc.contentHash); err != nil {
 			return nil, fmt.Errorf("scanning search hit document: %w", err)
 		}
 		if err := json.Unmarshal([]byte(offsets), &doc.offsets); err != nil {

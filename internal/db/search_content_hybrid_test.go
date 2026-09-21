@@ -689,3 +689,107 @@ func TestSearchContentHybridVectorOnlyMatchCarriesUnitRange(t *testing.T) {
 	assert.Equal(t, [2]int{1, 2}, m.OrdinalRange)
 	assert.False(t, m.Subordinate)
 }
+
+// A hybrid unit present in BOTH legs carries stale vector ranking evidence
+// even though the FTS display wins, so it must be verified like a vector-only
+// unit: a fused match whose vector contribution is stale loses its transcript
+// revision and is not reported as revision-bound, while a fresh vector
+// contribution keeps it.
+func TestSearchContentHybridStaleVectorContributionDropsRevision(t *testing.T) {
+	d := testDB(t)
+	if !d.HasFTS(t.Context()) {
+		t.Skip("fts5 not available")
+	}
+	seedSearchSession(t, d, "shared", "proj", [][2]string{
+		{"user", "needle in a haystack"},
+	})
+	fresh := UnitContentHash("needle in a haystack")
+
+	for _, tc := range []struct {
+		name        string
+		contentHash string
+		wantBound   bool
+	}{
+		{"fresh vector contribution keeps the revision", fresh, true},
+		{
+			"stale vector contribution drops the revision",
+			UnitContentHash("content from before an edit"), false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// The unit appears in both legs: the FTS leg matches "needle" and
+			// the vector leg returns the same unit.
+			d.SetVectorSearcher(&fakeVectorSearcher{hits: []VectorHit{{
+				SessionID: "shared", Ordinal: 0, Score: 0.9,
+				Snippet:     "needle in a haystack",
+				ContentHash: tc.contentHash,
+			}}})
+
+			page, err := d.SearchContent(t.Context(), ContentSearchFilter{
+				Pattern: "needle", Mode: "hybrid", Limit: 50,
+			})
+			require.NoError(t, err)
+			require.Len(t, page.Matches, 1)
+			if tc.wantBound {
+				assert.NotEmpty(t, page.Matches[0].TranscriptRevision)
+			} else {
+				assert.Empty(t, page.Matches[0].TranscriptRevision,
+					"stale vector contribution must be reported unbound")
+			}
+		})
+	}
+}
+
+// A keyword-leg hit carries the session's transcript revision at FTS-query
+// time. When that revision no longer matches the revision observed during
+// enrichment (the transcript changed between the two reads), the fused match
+// must be reported unbound; a matching revision stays bound.
+func TestSearchContentHybridKeywordRevisionRaceDropsBinding(t *testing.T) {
+	d := testDB(t)
+	if !d.HasFTS(t.Context()) {
+		t.Skip("fts5 not available")
+	}
+	seedSearchSession(t, d, "kw-race", "proj", [][2]string{
+		{"user", "needle in a haystack"},
+	})
+	session, err := d.GetSession(t.Context(), "kw-race")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	require.NotNil(t, session.TranscriptRevision)
+	current := *session.TranscriptRevision
+
+	ftsKey := MessageFusionKey("kw-race", 0)
+	merged := []FusedUnit{{
+		Unit:  RankedUnit{Key: ftsKey},
+		Score: 1,
+	}}
+	ftsDisplay := map[string]hybridDisplay{
+		ftsKey: {sessionID: "kw-race", ordinal: 0, revision: current},
+	}
+	staleFtsDisplay := map[string]hybridDisplay{
+		ftsKey: {sessionID: "kw-race", ordinal: 0, revision: "pre-rewrite"},
+	}
+
+	for _, tc := range []struct {
+		name      string
+		fts       map[string]hybridDisplay
+		wantBound bool
+	}{
+		{"matching revision stays bound", ftsDisplay, true},
+		{"rewritten revision drops the binding", staleFtsDisplay, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			page, err := d.enrichHybridMatches(t.Context(), ContentSearchFilter{
+				Pattern: "needle", Limit: 50,
+			}, merged, map[string]hybridDisplay{}, tc.fts)
+			require.NoError(t, err)
+			require.Len(t, page.Matches, 1)
+			if tc.wantBound {
+				assert.Equal(t, current, page.Matches[0].TranscriptRevision)
+			} else {
+				assert.Empty(t, page.Matches[0].TranscriptRevision,
+					"keyword evidence from a prior revision must be unbound")
+			}
+		})
+	}
+}

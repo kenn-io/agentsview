@@ -20,6 +20,15 @@ type pgHybridDisplay struct {
 	ordinalEnd   int
 	subordinate  bool
 	snippet      string
+	// contentHash is set only on vector-leg displays: the mirror's
+	// content_hash for the ranked document. Keyword-leg displays need none
+	// — the keyword leg matches the stored messages directly, so its
+	// ranking evidence is always current.
+	contentHash string
+	// revision is set only on keyword-leg displays: the session's transcript
+	// revision at keyword-query time. Comparing it against the enriched
+	// (later) revision detects a transcript rewrite between the two reads.
+	revision string
 }
 
 // pgHybridLeg is one rank-ordered fusion leg: entries for db.RRFMerge plus each
@@ -87,7 +96,7 @@ func (s *Store) hybridVectorLegPG(
 		leg.display[key] = pgHybridDisplay{
 			sessionID: h.SessionID, ordinal: h.Ordinal, snippet: h.Snippet,
 			ordinalStart: h.OrdinalStart, ordinalEnd: h.OrdinalEnd,
-			subordinate: h.Subordinate,
+			subordinate: h.Subordinate, contentHash: h.ContentHash,
 		}
 	}
 	return leg, nil
@@ -157,7 +166,8 @@ func (s *Store) fetchHybridKeywordBatchPG(
 	offsetP := pb.add(offset)
 
 	query := fmt.Sprintf(`
-		SELECT m.session_id, m.ordinal, m.content
+		SELECT m.session_id, m.ordinal,
+		       COALESCE(s.transcript_revision,'') AS revision, m.content
 		FROM messages m
 		JOIN sessions s ON s.id = m.session_id
 		WHERE %s
@@ -180,7 +190,7 @@ func (s *Store) fetchHybridKeywordBatchPG(
 	for rows.Next() {
 		var hit pgHybridDisplay
 		var content string
-		if err := rows.Scan(&hit.sessionID, &hit.ordinal, &content); err != nil {
+		if err := rows.Scan(&hit.sessionID, &hit.ordinal, &hit.revision, &content); err != nil {
 			return nil, fmt.Errorf("scan hybrid keyword hit: %w", err)
 		}
 		hit.snippet = pgKeywordApproxSnippet(content, f.Pattern)
@@ -324,6 +334,7 @@ func (s *Store) enrichHybridMatchesPG(
 ) (db.ContentSearchPage, error) {
 	displays := make([]pgHybridDisplay, len(merged))
 	asHits := make([]db.VectorHit, len(merged))
+	vecContributions := make([]db.VectorHit, 0, len(merged))
 	for i, m := range merged {
 		d, ok := kwDisplay[m.Unit.Key]
 		if !ok {
@@ -331,8 +342,25 @@ func (s *Store) enrichHybridMatchesPG(
 		}
 		displays[i] = d
 		asHits[i] = db.VectorHit{SessionID: d.sessionID, Ordinal: d.ordinal}
+		if vec, inVec := vecDisplay[m.Unit.Key]; inVec {
+			// The vector leg contributed ranking evidence to this unit even
+			// when the keyword leg supplies the display: a stale vector
+			// contribution must still mark the fused match unbound.
+			vecContributions = append(vecContributions, db.VectorHit{
+				SessionID: vec.sessionID, OrdinalStart: vec.ordinalStart,
+				OrdinalEnd: vec.ordinalEnd, ContentHash: vec.contentHash,
+			})
+		}
 	}
 	meta, err := s.enrichSemanticHitsPG(ctx, asHits)
+	if err != nil {
+		return db.ContentSearchPage{}, err
+	}
+	// Every unit with a vector-leg contribution needs the currency check: a
+	// unit the keyword leg surfaced was matched against the stored messages
+	// directly, but the vector leg's score may still have come from stale
+	// content.
+	stale, err := s.staleVectorHitsPG(ctx, vecContributions)
 	if err != nil {
 		return db.ContentSearchPage{}, err
 	}
@@ -345,21 +373,31 @@ func (s *Store) enrichHybridMatchesPG(
 			continue
 		}
 		score := m.Score
+		revision := pgBoundRevision(stale, db.VectorHit{
+			SessionID: d.sessionID, OrdinalStart: d.ordinalStart,
+		}, info)
+		if d.revision != "" && d.revision != revision {
+			// The keyword evidence was matched under a prior transcript
+			// revision: the transcript changed between the keyword read and
+			// the enrichment read, so the response must not claim binding.
+			revision = ""
+		}
 		out = append(out, db.ContentMatch{
-			SessionID:       d.sessionID,
-			Project:         info.project,
-			Agent:           info.agent,
-			Location:        "message",
-			Role:            info.role,
-			Ordinal:         d.ordinal,
-			OrdinalRange:    [2]int{d.ordinalStart, d.ordinalEnd},
-			Subordinate:     d.subordinate,
-			Relationship:    info.relationshipType,
-			ParentSessionID: info.parentSessionID,
-			Sidechain:       info.isSidechain,
-			Timestamp:       info.timestamp,
-			Snippet:         f.SemanticSnippet(info.content, d.snippet),
-			Score:           &score,
+			SessionID:          d.sessionID,
+			Project:            info.project,
+			Agent:              info.agent,
+			TranscriptRevision: revision,
+			Location:           "message",
+			Role:               info.role,
+			Ordinal:            d.ordinal,
+			OrdinalRange:       [2]int{d.ordinalStart, d.ordinalEnd},
+			Subordinate:        d.subordinate,
+			Relationship:       info.relationshipType,
+			ParentSessionID:    info.parentSessionID,
+			Sidechain:          info.isSidechain,
+			Timestamp:          info.timestamp,
+			Snippet:            f.SemanticSnippet(info.content, d.snippet),
+			Score:              &score,
 		})
 	}
 	return db.ContentSearchPage{Matches: out}, nil

@@ -101,6 +101,10 @@ type ContentMatch struct {
 	// ordinal) is excluded from both slices.
 	ContextBefore []Message `json:"context_before,omitempty"`
 	ContextAfter  []Message `json:"context_after,omitempty"`
+	// TranscriptRevision identifies the exact stored transcript observed by
+	// the storage query that produced this evidence. An empty value means the
+	// backend cannot provide revision-bound evidence for this result.
+	TranscriptRevision string `json:"transcript_revision,omitempty"`
 }
 
 // ContentSearchPage is a page of matches with an optional next cursor.
@@ -306,7 +310,9 @@ func (db *DB) searchContentSubstring(
 				SystemPrefixSQL("m.content", "m.role")
 		}
 		branches = append(branches, fmt.Sprintf(`
-			SELECT m.session_id, s.project, s.agent, 'message' AS location,
+			SELECT m.session_id, s.project, s.agent,
+				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				'message' AS location,
 				m.role AS role, '' AS tool_name, m.ordinal,
 				COALESCE(m.timestamp,'') AS ts, %s AS snippet,
 				COALESCE(s.ended_at, s.started_at, '') AS sort_ts,
@@ -319,7 +325,9 @@ func (db *DB) searchContentSubstring(
 	}
 	if hasSource(f, "tool_input") {
 		branches = append(branches, fmt.Sprintf(`
-			SELECT tc.session_id, s.project, s.agent, 'tool_input' AS location,
+			SELECT tc.session_id, s.project, s.agent,
+				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				'tool_input' AS location,
 				'assistant' AS role, tc.tool_name, mm.ordinal,
 				COALESCE(mm.timestamp,'') AS ts, %s AS snippet,
 				COALESCE(s.ended_at, s.started_at, '') AS sort_ts,
@@ -343,7 +351,9 @@ func (db *DB) searchContentSubstring(
 		// never missed. A precise per-call key would need a call_index on
 		// tool_calls, which SQLite does not store.
 		branches = append(branches, fmt.Sprintf(`
-			SELECT tc.session_id, s.project, s.agent, 'tool_result' AS location,
+			SELECT tc.session_id, s.project, s.agent,
+				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				'tool_result' AS location,
 				'assistant' AS role, tc.tool_name, mm.ordinal,
 				COALESCE(mm.timestamp,'') AS ts, %s AS snippet,
 				COALESCE(s.ended_at, s.started_at, '') AS sort_ts,
@@ -361,7 +371,9 @@ func (db *DB) searchContentSubstring(
 		args = append(args, like)
 		args = append(args, scopeArgs...)
 		branches = append(branches, fmt.Sprintf(`
-			SELECT tre.session_id, s.project, s.agent, 'tool_result' AS location,
+			SELECT tre.session_id, s.project, s.agent,
+				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				'tool_result' AS location,
 				'assistant' AS role, '' AS tool_name,
 				tre.tool_call_message_ordinal AS ordinal,
 				COALESCE(tre.timestamp,'') AS ts, %s AS snippet,
@@ -378,7 +390,7 @@ func (db *DB) searchContentSubstring(
 		return ContentSearchPage{}, nil
 	}
 
-	query := "SELECT session_id, project, agent, location, role, tool_name, " +
+	query := "SELECT session_id, project, agent, transcript_revision, location, role, tool_name, " +
 		"ordinal, ts, snippet FROM (" +
 		strings.Join(branches, " UNION ALL ") +
 		") ORDER BY julianday(sort_ts) DESC, session_id ASC, ordinal ASC, src ASC, row_id ASC " +
@@ -408,6 +420,7 @@ func (db *DB) scanContentMatches(
 		var m ContentMatch
 		var body string
 		if err := rows.Scan(&m.SessionID, &m.Project, &m.Agent,
+			&m.TranscriptRevision,
 			&m.Location, &m.Role, &m.ToolName, &m.Ordinal,
 			&m.Timestamp, &body); err != nil {
 			return ContentSearchPage{}, fmt.Errorf("scan match: %w", err)
@@ -490,6 +503,7 @@ func (db *DB) searchContentRegex(
 		var m ContentMatch
 		var body string
 		if err := rows.Scan(&m.SessionID, &m.Project, &m.Agent,
+			&m.TranscriptRevision,
 			&m.Location, &m.Role, &m.ToolName, &m.Ordinal,
 			&m.Timestamp, &body); err != nil {
 			return ContentSearchPage{}, fmt.Errorf("scan candidate: %w", err)
@@ -527,9 +541,8 @@ func (db *DB) searchContentRegex(
 
 // regexCandidateRows returns full-body rows for the selected sources,
 // LIKE-prefiltered by lit when non-empty, ordered for stable paging.
-// Each branch selects: session_id, project, agent, location, role,
-// tool_name, ordinal, ts AS ts, body, sort_ts, src, row_id. The outer
-// query projects the first 9 columns by name.
+// Each branch selects: session_id, project, agent, transcript_revision,
+// location, role, tool_name, ordinal, ts AS ts, body, sort_ts, src, row_id.
 func (db *DB) regexCandidateRows(
 	ctx context.Context, f ContentSearchFilter, lit string,
 ) (*sql.Rows, error) {
@@ -556,7 +569,9 @@ func (db *DB) regexCandidateRows(
 		w := prefilterClause("m.content")
 		branches = append(branches, fmt.Sprintf(`
 			SELECT m.session_id AS session_id, s.project AS project,
-				s.agent AS agent, 'message' AS location,
+				s.agent AS agent,
+				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				'message' AS location,
 				m.role AS role, '' AS tool_name,
 				m.ordinal AS ordinal, COALESCE(m.timestamp,'') AS ts,
 				m.content AS body,
@@ -570,7 +585,9 @@ func (db *DB) regexCandidateRows(
 		w := prefilterClause("tc.input_json")
 		branches = append(branches, fmt.Sprintf(`
 			SELECT tc.session_id AS session_id, s.project AS project,
-				s.agent AS agent, 'tool_input' AS location,
+				s.agent AS agent,
+				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				'tool_input' AS location,
 				'assistant' AS role, tc.tool_name AS tool_name,
 				mm.ordinal AS ordinal, COALESCE(mm.timestamp,'') AS ts,
 				tc.input_json AS body,
@@ -585,7 +602,9 @@ func (db *DB) regexCandidateRows(
 		w := prefilterClause("tc.result_content")
 		branches = append(branches, fmt.Sprintf(`
 			SELECT tc.session_id AS session_id, s.project AS project,
-				s.agent AS agent, 'tool_result' AS location,
+				s.agent AS agent,
+				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				'tool_result' AS location,
 				'assistant' AS role, tc.tool_name AS tool_name,
 				mm.ordinal AS ordinal, COALESCE(mm.timestamp,'') AS ts,
 				tc.result_content AS body,
@@ -601,7 +620,9 @@ func (db *DB) regexCandidateRows(
 		wEv := prefilterClause("tre.content")
 		branches = append(branches, fmt.Sprintf(`
 			SELECT tre.session_id AS session_id, s.project AS project,
-				s.agent AS agent, 'tool_result' AS location,
+				s.agent AS agent,
+				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				'tool_result' AS location,
 				'assistant' AS role, '' AS tool_name,
 				tre.tool_call_message_ordinal AS ordinal,
 				COALESCE(tre.timestamp,'') AS ts,
@@ -614,13 +635,14 @@ func (db *DB) regexCandidateRows(
 	}
 	if len(branches) == 0 {
 		// Return an empty result set.
-		q := "SELECT '' AS session_id, '' AS project, '' AS agent, '' AS location, " +
+		q := "SELECT '' AS session_id, '' AS project, '' AS agent, " +
+			"'' AS transcript_revision, '' AS location, " +
 			"'' AS role, '' AS tool_name, 0 AS ordinal, '' AS ts, '' AS body " +
 			"WHERE 0"
 		return db.getReader().QueryContext(ctx, q)
 	}
 
-	query := "SELECT session_id, project, agent, location, role, tool_name, " +
+	query := "SELECT session_id, project, agent, transcript_revision, location, role, tool_name, " +
 		"ordinal, ts, body FROM (" +
 		strings.Join(branches, " UNION ALL ") +
 		") ORDER BY julianday(sort_ts) DESC, session_id ASC, ordinal ASC, src ASC, row_id ASC"
@@ -781,7 +803,8 @@ func (db *DB) searchContentFTS(
 	// Select the full content (not FTS snippet()) so the snippet is built in Go
 	// and secret redaction sees whole secrets rather than a pre-truncated window.
 	query := fmt.Sprintf(`
-		SELECT m.session_id, s.project, s.agent, 'message', m.role, '',
+		SELECT m.session_id, s.project, s.agent,
+			COALESCE(s.transcript_revision,''), 'message', m.role, '',
 			m.ordinal, COALESCE(m.timestamp,'') AS ts, m.content AS snippet
 		FROM messages_fts
 		JOIN messages m ON m.id = messages_fts.rowid
@@ -972,6 +995,10 @@ func (db *DB) searchContentSemantic(
 	if err != nil {
 		return ContentSearchPage{}, err
 	}
+	stale, err := db.staleVectorHits(ctx, surviving)
+	if err != nil {
+		return ContentSearchPage{}, err
+	}
 
 	out := make([]ContentMatch, 0, min(len(surviving), f.Limit))
 	for _, h := range surviving {
@@ -981,20 +1008,21 @@ func (db *DB) searchContentSemantic(
 		}
 		score := float64(h.Score)
 		out = append(out, ContentMatch{
-			SessionID:       h.SessionID,
-			Project:         info.project,
-			Agent:           info.agent,
-			Location:        "message",
-			Role:            info.role,
-			Ordinal:         h.Ordinal,
-			OrdinalRange:    [2]int{h.OrdinalStart, h.OrdinalEnd},
-			Subordinate:     h.Subordinate,
-			Relationship:    info.relationshipType,
-			ParentSessionID: info.parentSessionID,
-			Sidechain:       info.isSidechain,
-			Timestamp:       info.timestamp,
-			Snippet:         f.SemanticSnippet(info.content, h.Snippet),
-			Score:           &score,
+			SessionID:          h.SessionID,
+			Project:            info.project,
+			Agent:              info.agent,
+			TranscriptRevision: boundRevision(stale, h, info),
+			Location:           "message",
+			Role:               info.role,
+			Ordinal:            h.Ordinal,
+			OrdinalRange:       [2]int{h.OrdinalStart, h.OrdinalEnd},
+			Subordinate:        h.Subordinate,
+			Relationship:       info.relationshipType,
+			ParentSessionID:    info.parentSessionID,
+			Sidechain:          info.isSidechain,
+			Timestamp:          info.timestamp,
+			Snippet:            f.SemanticSnippet(info.content, h.Snippet),
+			Score:              &score,
 		})
 		if len(out) >= f.Limit {
 			break
@@ -1117,6 +1145,15 @@ type hybridDisplay struct {
 	ordinalEnd   int
 	subordinate  bool
 	snippet      string
+	// contentHash is set only on vector-leg displays: the mirror's
+	// content_hash for the ranked document. FTS-leg displays need none —
+	// the FTS index is updated transactionally with the archive, so their
+	// ranking evidence is always current.
+	contentHash string
+	// revision is set only on FTS-leg displays: the session's transcript
+	// revision at keyword-query time. Comparing it against the enriched
+	// (later) revision detects a transcript rewrite between the two reads.
+	revision string
 }
 
 // hybridLeg is one rank-ordered fusion leg: entries for RRFMerge plus each
@@ -1198,7 +1235,7 @@ func (db *DB) hybridVectorLeg(
 		leg.display[key] = hybridDisplay{
 			sessionID: h.SessionID, ordinal: h.Ordinal, snippet: h.Snippet,
 			ordinalStart: h.OrdinalStart, ordinalEnd: h.OrdinalEnd,
-			subordinate: h.Subordinate,
+			subordinate: h.Subordinate, contentHash: h.ContentHash,
 		}
 	}
 	return leg, nil
@@ -1265,8 +1302,10 @@ func (db *DB) fetchHybridFTSBatch(
 	scope, scopeArgs := semanticSessionScopeSubquery(f)
 	query := fmt.Sprintf(`
 		SELECT m.session_id, m.ordinal,
+		       COALESCE(s.transcript_revision,'') AS revision,
 		       snippet(messages_fts, 0, '', '', '...', 32) AS snip
 		FROM messages_fts f JOIN messages m ON m.id = f.rowid
+		JOIN sessions s ON s.id = m.session_id
 		WHERE messages_fts MATCH ? AND m.role IN ('user','assistant')
 		  AND m.is_system = 0 AND %s
 		  AND m.%s
@@ -1287,7 +1326,7 @@ func (db *DB) fetchHybridFTSBatch(
 	var hits []hybridDisplay
 	for rows.Next() {
 		var hit hybridDisplay
-		if err := rows.Scan(&hit.sessionID, &hit.ordinal, &hit.snippet); err != nil {
+		if err := rows.Scan(&hit.sessionID, &hit.ordinal, &hit.revision, &hit.snippet); err != nil {
 			return nil, fmt.Errorf("scan hybrid fts hit: %w", err)
 		}
 		hits = append(hits, hit)
@@ -1372,6 +1411,7 @@ func (db *DB) enrichHybridMatches(
 ) (ContentSearchPage, error) {
 	displays := make([]hybridDisplay, len(merged))
 	asHits := make([]VectorHit, len(merged))
+	vecContributions := make([]VectorHit, 0, len(merged))
 	for i, m := range merged {
 		d, ok := ftsDisplay[m.Unit.Key]
 		if !ok {
@@ -1379,8 +1419,25 @@ func (db *DB) enrichHybridMatches(
 		}
 		displays[i] = d
 		asHits[i] = VectorHit{SessionID: d.sessionID, Ordinal: d.ordinal}
+		if vec, inVec := vecDisplay[m.Unit.Key]; inVec {
+			// The vector leg contributed ranking evidence to this unit even
+			// when FTS supplies the display: a stale vector contribution must
+			// still mark the fused match unbound.
+			vecContributions = append(vecContributions, VectorHit{
+				SessionID: vec.sessionID, OrdinalStart: vec.ordinalStart,
+				OrdinalEnd: vec.ordinalEnd, ContentHash: vec.contentHash,
+			})
+		}
 	}
 	meta, err := db.enrichSemanticHits(ctx, asHits)
+	if err != nil {
+		return ContentSearchPage{}, err
+	}
+	// Every unit with a vector-leg contribution needs the currency check: a
+	// unit the FTS leg surfaced was matched against content that is current
+	// by construction, but the vector leg's score may still have come from
+	// stale content.
+	stale, err := db.staleVectorHits(ctx, vecContributions)
 	if err != nil {
 		return ContentSearchPage{}, err
 	}
@@ -1393,24 +1450,188 @@ func (db *DB) enrichHybridMatches(
 			continue
 		}
 		score := m.Score
+		revision := boundRevision(stale, VectorHit{
+			SessionID: d.sessionID, OrdinalStart: d.ordinalStart,
+		}, info)
+		if d.revision != "" && d.revision != revision {
+			// The keyword evidence was matched under a prior transcript
+			// revision: the transcript changed between the FTS read and the
+			// enrichment read, so the response must not claim binding.
+			revision = ""
+		}
 		out = append(out, ContentMatch{
-			SessionID:       d.sessionID,
-			Project:         info.project,
-			Agent:           info.agent,
-			Location:        "message",
-			Role:            info.role,
-			Ordinal:         d.ordinal,
-			OrdinalRange:    [2]int{d.ordinalStart, d.ordinalEnd},
-			Subordinate:     d.subordinate,
-			Relationship:    info.relationshipType,
-			ParentSessionID: info.parentSessionID,
-			Sidechain:       info.isSidechain,
-			Timestamp:       info.timestamp,
-			Snippet:         f.SemanticSnippet(info.content, d.snippet),
-			Score:           &score,
+			SessionID:          d.sessionID,
+			Project:            info.project,
+			Agent:              info.agent,
+			TranscriptRevision: revision,
+			Location:           "message",
+			Role:               info.role,
+			Ordinal:            d.ordinal,
+			OrdinalRange:       [2]int{d.ordinalStart, d.ordinalEnd},
+			Subordinate:        d.subordinate,
+			Relationship:       info.relationshipType,
+			ParentSessionID:    info.parentSessionID,
+			Sidechain:          info.isSidechain,
+			Timestamp:          info.timestamp,
+			Snippet:            f.SemanticSnippet(info.content, d.snippet),
+			Score:              &score,
 		})
 	}
 	return ContentSearchPage{Matches: out}, nil
+}
+
+// staleVectorHits reports which hits were ranked from content that no longer
+// matches the archive. Each hit carries ContentHash, the vector mirror's
+// content_hash for the document its embedding was computed from; the current
+// document content is rebuilt from the archive with the exact membership the
+// embedding build used -- every embeddable (non-system, non-system-prefixed
+// user/assistant) message between the unit's ordinal bounds, joined with
+// "\n\n" for runs (see runUnit) and taken verbatim for user documents -- and
+// hashed with UnitContentHash. The unit's end boundary is verified too: an
+// embeddable assistant row now occupying ordinal_end+1 with the run's
+// sidechain means the run grew past the recorded span, so the old hash can
+// never prove currency. A hit whose recorded hash is empty or differs (or
+// whose span has no embeddable members left) is stale: its score or snippet
+// may describe older content, so the caller must not report it as
+// revision-bound. The result is keyed by (session_id, unit start ordinal).
+func (db *DB) staleVectorHits(
+	ctx context.Context, hits []VectorHit,
+) (map[semanticHitKey]bool, error) {
+	stale := make(map[semanticHitKey]bool, len(hits))
+	type span struct {
+		hit              VectorHit
+		parts            []string
+		isRun            bool
+		runSide          *bool
+		firstRole        string
+		structureChanged bool
+		extended         bool
+	}
+	byKey := make(map[semanticHitKey]*span, len(hits))
+	flat := make([]*span, 0, len(hits))
+	for _, h := range hits {
+		key := semanticHitKey{h.SessionID, h.OrdinalStart}
+		if _, seen := byKey[key]; seen {
+			continue // two anchors on one unit: verify it once
+		}
+		if h.ContentHash == "" {
+			// Without the mirror's recorded hash there is nothing to compare
+			// against; fail closed.
+			stale[key] = true
+			continue
+		}
+		sp := &span{hit: h}
+		byKey[key] = sp
+		flat = append(flat, sp)
+	}
+
+	chunk := maxSQLVars / 3 // each span binds 3 values
+	for lo := 0; lo < len(flat); lo += chunk {
+		batch := flat[lo:min(lo+chunk, len(flat))]
+		values := make([]string, len(batch))
+		args := make([]any, 0, len(batch)*3)
+		for i, sp := range batch {
+			values[i] = "(?, ?, ?)"
+			args = append(args, sp.hit.SessionID, sp.hit.OrdinalStart, sp.hit.OrdinalEnd)
+		}
+		// hi+1 is the physical would-be extension slot, but ignored rows
+		// (system, tool, system-prefixed) never split an embedding unit: the
+		// first embeddable row AFTER the recorded end is the real extension
+		// candidate, wherever it physically lands.
+		query := "WITH spans(session_id, lo, hi) AS (VALUES " +
+			strings.Join(values, ", ") + ") " +
+			"SELECT sp.session_id, sp.lo, m.ordinal, m.content, m.role, m.is_sidechain " +
+			"FROM spans sp " +
+			"JOIN messages m ON m.session_id = sp.session_id " +
+			"AND m.ordinal BETWEEN sp.lo AND sp.hi " +
+			"WHERE m.role IN ('user','assistant') AND m.is_system = 0 AND " +
+			SystemPrefixSQL("m.content", "m.role") + " " +
+			"UNION ALL " +
+			"SELECT p.session_id, p.lo, m.ordinal, m.content, m.role, m.is_sidechain " +
+			"FROM (SELECT sp.session_id, sp.lo, MIN(m.ordinal) AS next_ordinal " +
+			"FROM spans sp " +
+			"JOIN messages m ON m.session_id = sp.session_id " +
+			"AND m.ordinal > sp.hi " +
+			"WHERE m.role IN ('user','assistant') AND m.is_system = 0 AND " +
+			SystemPrefixSQL("m.content", "m.role") + " " +
+			"GROUP BY sp.session_id, sp.lo) p " +
+			"JOIN messages m ON m.session_id = p.session_id " +
+			"AND m.ordinal = p.next_ordinal " +
+			"ORDER BY 1, 2, 3"
+		rows, err := db.getReader().QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, fmt.Errorf("verify vector hit currency: %w", err)
+		}
+		scanErr := func() error {
+			defer rows.Close()
+			for rows.Next() {
+				var sessionID, role string
+				var lo, ordinal int
+				var content string
+				var sidechain bool
+				if err := rows.Scan(&sessionID, &lo, &ordinal, &content,
+					&role, &sidechain); err != nil {
+					return fmt.Errorf("scan vector hit verification row: %w", err)
+				}
+				sp, ok := byKey[semanticHitKey{sessionID, lo}]
+				if !ok {
+					continue
+				}
+				if ordinal > sp.hit.OrdinalEnd {
+					// Candidate extension row past the recorded span. A run
+					// grows only when an embeddable assistant message with
+					// the run's sidechain lands there; a user document never
+					// extends, and anything else closes the unit at the
+					// recorded end.
+					if sp.isRun && role == "assistant" && sidechain == *sp.runSide {
+						sp.extended = true
+					}
+					continue
+				}
+				if sp.runSide == nil {
+					sp.isRun = role == "assistant"
+					sp.firstRole = role
+					runSide := sidechain
+					sp.runSide = &runSide
+				} else if role != sp.firstRole || sidechain != *sp.runSide {
+					// Units are homogeneous: a user row never sits inside an
+					// assistant run, and a sidechain flip splits the run. An
+					// in-span row that changed role or sidechain means the
+					// current structure differs from the indexed unit even
+					// when every content byte is unchanged.
+					sp.structureChanged = true
+				}
+				sp.parts = append(sp.parts, content)
+			}
+			if err := rows.Err(); err != nil {
+				return fmt.Errorf("iterate vector hit verification rows: %w", err)
+			}
+			return nil
+		}()
+		if scanErr != nil {
+			return nil, scanErr
+		}
+	}
+	for key, sp := range byKey {
+		if sp.extended || sp.structureChanged ||
+			UnitContentHash(strings.Join(sp.parts, "\n\n")) != sp.hit.ContentHash {
+			stale[key] = true
+		}
+	}
+	return stale, nil
+}
+
+// boundRevision returns the match's transcript revision, or "" when the hit
+// was ranked from stale content: an empty revision marks the match unbound
+// so the page's revision_bound flag stays honest about what the ranking
+// evidence was computed from.
+func boundRevision(
+	stale map[semanticHitKey]bool, h VectorHit, info semanticHitInfo,
+) string {
+	if stale[semanticHitKey{h.SessionID, h.OrdinalStart}] {
+		return ""
+	}
+	return info.transcriptRevision
 }
 
 // uniqueSessionIDs returns the distinct session IDs referenced by hits.
@@ -1498,6 +1719,7 @@ type semanticHitKey struct {
 // store lineage per hit); isSidechain is the ANCHOR ordinal's message flag.
 type semanticHitInfo struct {
 	project, agent, role, timestamp, content string
+	transcriptRevision                       string
 	relationshipType, parentSessionID        string
 	isSidechain                              bool
 }
@@ -1532,6 +1754,7 @@ func (db *DB) enrichSemanticHits(
 				strings.Join(values, ", ") + ") " +
 				"SELECT m.session_id, s.project, s.agent, m.role, m.ordinal, " +
 				"COALESCE(m.timestamp, ''), m.content, " +
+				"COALESCE(s.transcript_revision, ''), " +
 				"COALESCE(s.relationship_type, ''), " +
 				"COALESCE(s.parent_session_id, ''), m.is_sidechain " +
 				"FROM hits h " +
@@ -1548,6 +1771,7 @@ func (db *DB) enrichSemanticHits(
 				var info semanticHitInfo
 				if err := rows.Scan(&key.sessionID, &info.project, &info.agent,
 					&info.role, &key.ordinal, &info.timestamp, &info.content,
+					&info.transcriptRevision,
 					&info.relationshipType, &info.parentSessionID,
 					&info.isSidechain); err != nil {
 					rows.Close()
