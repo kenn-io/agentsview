@@ -528,9 +528,6 @@ func EnsureSchemaOn(ctx context.Context, conn *sql.DB) error {
 			}
 		}
 	}
-	if err := ensureUsageColumns(ctx, conn); err != nil {
-		return err
-	}
 	if err := ensureUsageMessages(ctx, conn); err != nil {
 		return err
 	}
@@ -585,11 +582,6 @@ func CheckSchemaCompat(ctx context.Context, conn *sql.DB) error {
 			if _, has := cols[c.name]; !has {
 				missing = append(missing, t.name+"."+c.name)
 			}
-		}
-	}
-	for _, c := range usageColumns {
-		if _, has := existing["messages"][c.name]; !has {
-			missing = append(missing, "messages."+c.name)
 		}
 	}
 	for _, table := range []string{"usage_messages", "terminal_event_snapshots"} {

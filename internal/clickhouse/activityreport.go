@@ -335,7 +335,7 @@ func (s *Store) GetSessionUsageRows(
 	err = chQueryChunked(ids, func(chunk []string) error {
 		inList, inArgs := chInPlaceholders(chunk)
 		query := clickUsageNormalizedQuery(
-			chUsageMessageEligibility+" AND s.id IN "+inList,
+			chUsageStoredMessageEligibility+" AND s.id IN "+inList,
 			chUsageEventEligibility+" AND s.id IN "+inList,
 		)
 		queryArgs := append([]any{}, inArgs...)
@@ -584,7 +584,7 @@ func clickActivityReportUsageQuery(
 				m.claude_request_id AS claude_request_id
 			FROM usage_messages m
 			JOIN sessions s ON s.id = m.session_id
-			WHERE ` + chUsageMessageCurrent + " AND " + boundedKeys + " AND " + chUsageMessageEligibility + `
+			WHERE ` + chUsageMessageCurrent + " AND " + boundedKeys + " AND " + chUsageStoredMessageEligibility + `
 				AND ` + candidateIn + `
 				AND m.claude_message_id != ''
 				AND m.claude_request_id != ''` + messageBound + `
@@ -592,7 +592,7 @@ func clickActivityReportUsageQuery(
 		`
 	// Keep both OR branches on messages so ClickHouse can filter before the join.
 	query := clickUsageNormalizedQueryWith(ctes,
-		boundedKeys+" AND "+chUsageMessageEligibility+`
+		boundedKeys+" AND "+chUsageStoredMessageEligibility+`
 			AND (m.session_id IN (SELECT id FROM candidate_sessions)
 				OR (m.claude_message_id, m.claude_request_id) IN (
 					SELECT claude_message_id, claude_request_id
@@ -611,6 +611,14 @@ func clickActivityReportUsageQuery(
 // published version so that window shows the newer rows instead of no usage.
 // Rows a shorter republished session left behind stay below it and are skipped.
 const chUsageMessageCurrent = "m.push_version >= s.push_version"
+
+// chUsageStoredMessageEligibility is chUsageMessageEligibility for reads of
+// usage_messages, which stores a presence flag instead of the raw JSON.
+const chUsageStoredMessageEligibility = `
+			m.usage_present != 0
+			AND m.model != ''
+			AND m.model != '<synthetic>'
+			AND s.deleted_at IS NULL`
 
 func clickUsageNormalizedQuery(messageWhere, eventWhere string) string {
 	return clickUsageNormalizedQueryWith("", messageWhere, eventWhere)

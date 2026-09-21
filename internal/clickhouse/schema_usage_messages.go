@@ -8,6 +8,21 @@ import (
 	"strings"
 )
 
+// usageColumns are the token counters usage_messages stores for each message.
+// The view computes them from token_usage at insert time, and the startup
+// backfill computes them once for rows that predate the view. The messages
+// table keeps only the raw JSON.
+var usageColumns = []struct{ name, typ, expression string }{
+	{"usage_present", "UInt8", "token_usage != ''"},
+	{"usage_input", "Int64", "JSONExtractInt(token_usage, 'input_tokens')"},
+	{"usage_output", "Int64", "JSONExtractInt(token_usage, 'output_tokens')"},
+	{"usage_cache_create", "Int64", "JSONExtractInt(token_usage, 'cache_creation_input_tokens')"},
+	{"usage_cache_create_1h", "Int64", "JSONExtractInt(token_usage, 'cache_creation', 'ephemeral_1h_input_tokens')"},
+	{"usage_cache_read", "Int64", "JSONExtractInt(token_usage, 'cache_read_input_tokens')"},
+	{"usage_reasoning", "Int64", "JSONExtractInt(token_usage, 'reasoning_tokens')"},
+	{"usage_web", "Int64", "JSONExtractInt(token_usage, 'server_tool_use', 'web_search_requests')"},
+}
+
 // Keep the source key, not the timestamp, as the replacement key: a retry may
 // correct a timestamp or remove usage without changing the message ordinal.
 const usageMessageFields = `session_id, ordinal, timestamp, model, provider_id,
@@ -30,7 +45,7 @@ func ensureUsageMessages(ctx context.Context, conn *sql.DB) error {
 	fields := []string{usageMessageFields}
 	for _, column := range usageColumns {
 		columns = append(columns, column.name+" "+column.typ)
-		fields = append(fields, column.name)
+		fields = append(fields, column.expression+" AS "+column.name)
 	}
 	selection := strings.Join(fields, ", ")
 	// The low bit makes a live insert beat a concurrent, older backfill of

@@ -25,49 +25,40 @@ func TestClickHouseStoredUsageUpgrade(t *testing.T) {
 	_, err := conn.ExecContext(ctx,
 		"INSERT INTO messages (session_id, ordinal, token_usage, push_version) VALUES (?, ?, ?, ?)", "upgrade", int64(0), tokens, uint64(1))
 	require.NoError(t, err)
-	// Resume after a startup that added one column but did not backfill it.
-	_, err = conn.ExecContext(ctx, "ALTER TABLE messages ADD COLUMN usage_input Int64 MATERIALIZED JSONExtractInt(token_usage, 'input_tokens')")
-	require.NoError(t, err)
 	_, err = NewStore(ctx, Target{URL: dsn, Database: database})
 	require.ErrorContains(t, err, "missing")
 	store, err := (Backend{}).OpenServeStore(ctx, storage.ReplicaTarget{URL: dsn, Schema: database})
 	require.NoError(t, err)
 	require.NoError(t, store.Close())
 	var raw string
+	require.NoError(t, conn.QueryRowContext(ctx,
+		"SELECT token_usage FROM messages WHERE session_id = 'upgrade'").Scan(&raw))
+	require.Equal(t, tokens, raw)
+	var messageColumns int
+	require.NoError(t, conn.QueryRowContext(ctx, `SELECT count() FROM system.columns
+		WHERE database = currentDatabase() AND table = 'messages' AND name LIKE 'usage_%'`).Scan(&messageColumns))
+	require.Zero(t, messageColumns, "the source table must keep only the raw JSON")
 	var present uint8
 	var input, output, create, create1h, read, reasoning, web int64
-	err = conn.QueryRowContext(ctx, `SELECT token_usage, usage_present, usage_input,
+	err = conn.QueryRowContext(ctx, `SELECT usage_present, usage_input,
 		usage_output, usage_cache_create, usage_cache_create_1h, usage_cache_read,
-		usage_reasoning, usage_web FROM messages WHERE session_id = 'upgrade'`).Scan(
-		&raw, &present, &input, &output, &create, &create1h, &read, &reasoning, &web)
-	require.NoError(t, err)
-	require.Equal(t, tokens, raw)
+		usage_reasoning, usage_web FROM usage_messages WHERE session_id = 'upgrade'`).Scan(
+		&present, &input, &output, &create, &create1h, &read, &reasoning, &web)
+	require.NoError(t, err, "startup must copy messages that existed before the view")
 	require.Equal(t, uint8(1), present)
 	require.Equal(t, []int64{12, 34, 56, 7, 8, 9, 10}, []int64{input, output, create, create1h, read, reasoning, web})
-	var storedOutput int64
-	require.NoError(t, conn.QueryRowContext(ctx,
-		"SELECT usage_output FROM usage_messages WHERE session_id = 'upgrade'").Scan(&storedOutput))
-	require.Equal(t, int64(34), storedOutput, "startup must copy messages that existed before the view")
-	var stored int
-	err = conn.QueryRowContext(ctx, `SELECT uniqExact(column) FROM system.parts_columns
-		WHERE database = currentDatabase() AND table = 'messages' AND active
-		AND column LIKE 'usage_%'`).Scan(&stored)
-	require.NoError(t, err)
-	require.Equal(t, 8, stored, "old rows must be stored, not parsed on each read")
-	var mutationsBefore, mutationsAfter int
-	err = conn.QueryRowContext(ctx, `SELECT count() FROM system.mutations
-		WHERE database = currentDatabase() AND table = 'messages'`).Scan(&mutationsBefore)
+	// A completed fill must not run again: remove its row and check that the
+	// next startup leaves the table alone.
+	_, err = conn.ExecContext(ctx,
+		"DELETE FROM usage_messages WHERE session_id = 'upgrade' SETTINGS mutations_sync = 1")
 	require.NoError(t, err)
 	require.NoError(t, EnsureSchemaOn(ctx, conn))
-	err = conn.QueryRowContext(ctx, `SELECT count() FROM system.mutations
-		WHERE database = currentDatabase() AND table = 'messages'`).Scan(&mutationsAfter)
-	require.NoError(t, err)
-	require.Equal(t, mutationsBefore, mutationsAfter, "completed backfill must not run again")
+	require.Zero(t, chtest.Count(t, conn, "usage_messages", "session_id = 'upgrade'"))
 	_, err = conn.ExecContext(ctx,
 		"INSERT INTO messages (session_id, ordinal, token_usage, push_version) VALUES (?, ?, ?, ?)", "upgrade", int64(0), `{"input_tokens":99}`, uint64(2))
 	require.NoError(t, err)
-	err = conn.QueryRowContext(ctx, "SELECT usage_input, usage_output FROM messages WHERE session_id = 'upgrade'").Scan(&input, &output)
-	require.NoError(t, err)
+	err = conn.QueryRowContext(ctx, "SELECT usage_input, usage_output FROM usage_messages WHERE session_id = 'upgrade'").Scan(&input, &output)
+	require.NoError(t, err, "the view must store usage for new pushes")
 	require.Equal(t, int64(99), input)
 	require.Zero(t, output)
 	require.Equal(t, 1, chtest.Count(t, conn, "messages", ""))

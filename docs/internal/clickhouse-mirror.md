@@ -152,12 +152,12 @@ segment tree over message timestamps finds the lowest eligible ordinal even when
 timestamps run backwards, so ordinal and timestamp behavior matches the old SQL,
 including reversed clocks and the tail pairing after the last message.
 
-**Usage is stored, not parsed.** `messages` carries `MATERIALIZED` usage columns
-computed from `token_usage`. The insert-maintained `usage_messages` table holds
-only the usage-relevant columns with a time index, and the usage query reads it
-instead of `messages`. Its replacement key is the source message key, not the
-timestamp, so a retry that corrects a timestamp or removes usage still replaces
-the earlier row.
+**Usage is stored, not parsed.** The insert-maintained `usage_messages` table
+stores token counters that its view computes from `token_usage` at insert time,
+together with the usage-relevant message columns and a time index. The usage
+query reads it instead of `messages`, and `messages` keeps only the raw JSON.
+Its replacement key is the source message key, not the timestamp, so a retry
+that corrects a timestamp or removes usage still replaces the earlier row.
 
 **Terminal events are snapshotted per session version.** The insert-maintained
 `terminal_event_snapshots` table stores the latest terminal tool event timestamp

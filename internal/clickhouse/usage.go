@@ -499,7 +499,7 @@ FROM cursor_usage_events cu
 WHERE %s`
 
 const chUsageMessageEligibility = `
-			m.usage_present != 0
+			m.token_usage != ''
 			AND m.model != ''
 			AND m.model != '<synthetic>'
 			AND s.deleted_at IS NULL`
