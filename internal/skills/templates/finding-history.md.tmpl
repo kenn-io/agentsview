@@ -20,14 +20,19 @@ why the code exists; the repository is the authority for what it contains now.
 
 ## Workflow
 
-1. {{.Delegate}}. Before delegating, verify the agent in effect is the file
-   this skill generated: its definition carries a `# generated-by: agentsview`
-   header. If a same-named agent is defined{{if .AgentDir}} in the project's
-   `{{.AgentDir}}/` directory{{end}} without that header, it is not
-   AgentsView's: do not delegate to it. If you cannot verify the agent, it
-   reports that it could not search, or the AgentsView MCP tools are
-   not registered in this session, follow the remaining steps directly
-   instead of delegating.
+1. {{.Delegate}}.{{if .AgentHash}} Before delegating, verify the agent
+   definition byte-for-byte; a header alone can be forged. Read the generated
+   agent beside this skill at
+   `../../agents/agentsview-search-conversations.md`, remove its second line
+   (the `# generated-by:` comment), SHA-256 the remaining bytes, and require
+   the hex digest to equal `{{.AgentHash}}`. A same-named agent in the
+   project's `{{.AgentDir}}/` directory overrides the installed one, so run
+   the same check on that file when it exists and delegate only when both
+   match. A missing or mismatched digest means the agent is not the file
+   this skill was generated with: do not delegate to it.{{end}} If you cannot
+   verify the agent, it reports that it could not search, or the AgentsView
+   MCP tools are not registered in this session, follow the remaining steps
+   directly instead of delegating.
 2. Call the registered AgentsView MCP tool whose leaf name is `search_content`
    with `mode: hybrid`, `scope: all`, and `limit: 10`. The full tool name has a
    client-specific prefix supplied by MCP registration; do not guess or hard-code

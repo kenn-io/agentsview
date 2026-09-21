@@ -11,6 +11,10 @@ The latest published release is
 
 **New features**
 
+- Diagnose conversation-memory setup with `agentsview doctor memory`. It reports
+    the selected archive's lexical and semantic readiness separately, then checks
+    the local native plugin, MCP profile, SessionStart hook, and conflicting
+    standalone skills without starting a daemon or changing the installation.
 - Conversation-memory clients can check archive and search readiness through
     MCP `get_memory_status` or `GET /api/v1/memory/status`. Search responses
     carry the same compact lexical and semantic coverage snapshot, including
@@ -38,11 +42,13 @@ The latest published release is
     earlier decisions or solutions may help. `agentsview skills install`
     upgrades the existing recall skill for Claude and Agents/Codex, and Claude
     also receives a bounded `agentsview-search-conversations` agent whose
-    frontmatter denies built-in shell, file, network, dispatch, and
-    MCP-discovery tools; tools from other registered MCP servers are still
-    inherited, and the agent is instructed to use only AgentsView's read-only
-    tools. Every generated
-    artifact is listed and protected independently from local edits.
+    frontmatter allowlists exactly AgentsView's `search_content` and
+    `get_messages` MCP tools and denies built-in shell, file, network,
+    dispatch, and MCP-discovery tools, so tools from other registered MCP
+    servers are never inherited; the recall skill verifies the agent against
+    a content hash before delegating, so a project-level override cannot
+    redirect it. Every generated artifact is listed and
+    protected independently from local edits.
 - Push the local SQLite archive into ClickHouse and serve the read-only web UI
     from it. Configure `[clickhouse]` or named `[clickhouse.NAME]` targets, then
     run `agentsview clickhouse push`, `status`, `serve`, or `service`. Push

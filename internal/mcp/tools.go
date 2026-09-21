@@ -5,10 +5,15 @@ package mcp
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -24,6 +29,25 @@ type toolset struct {
 	svc     service.SessionService
 	now     func() time.Time
 	version string
+	// cursorKey signs message body continuations. It is generated once per
+	// process on first use, so a cursor never outlives the server that
+	// signed it.
+	cursorKey     []byte
+	cursorKeyOnce sync.Once
+}
+
+// bodyCursorKey returns the process-wide HMAC key for message body
+// cursors, generating it on first use so constructors and tests can build
+// a toolset without wiring a key.
+func (t *toolset) bodyCursorKey() []byte {
+	t.cursorKeyOnce.Do(func() {
+		key := make([]byte, 32)
+		if _, err := rand.Read(key); err != nil {
+			panic(fmt.Sprintf("mcp: generate body-cursor signing key: %v", err))
+		}
+		t.cursorKey = key
+	})
+	return t.cursorKey
 }
 
 func (t *toolset) clock() time.Time {
@@ -422,7 +446,7 @@ type getMessagesIn struct {
 	Roles              []string `json:"roles,omitempty" jsonschema:"Roles to include, e.g. tool. Default: user and assistant only. System messages are always excluded."`
 	MaxCharsPerMessage int      `json:"max_chars_per_message,omitempty" jsonschema:"Truncate each message to this many characters, default 2000, max 20000."`
 	ExpectedRevision   string   `json:"expected_revision,omitempty" jsonschema:"Transcript revision cited by search or an earlier read. Returns source_changed when it no longer matches."`
-	BodyCursor         string   `json:"body_cursor,omitempty" jsonschema:"Opaque continuation for the remainder of one oversized message. Use before advancing next_from."`
+	BodyCursor         string   `json:"body_cursor,omitempty" jsonschema:"Opaque, server-signed continuation for the remainder of one oversized message. Use before advancing next_from. It pins the transcript revision and the role filter of the request that issued it; while it is set, from, direction, around, before, after, and roles are ignored. Invalidated by transcript changes or a restart of this MCP server."`
 }
 
 type messageOut struct {
@@ -447,33 +471,81 @@ type getMessagesOut struct {
 	TranscriptRevision string `json:"transcript_revision"`
 }
 
+// bodyCursorVersion is the current message body cursor wire version.
+// Version 2 added the role-policy binding and the HMAC; version 1 cursors
+// fail signature verification and must be re-issued by a fresh read.
+const bodyCursorVersion = 2
+
+// messageBodyCursor is the continuation state for the remainder of one
+// oversized message. RolesPolicy records the effective role filter of the
+// request that produced the cursor, so the continuation re-applies exactly
+// that policy and a cursor can never widen what its issuing read was
+// allowed to see. MAC is an HMAC-SHA256 over the marshaled cursor with a
+// zero MAC, so every field -- session, revision, ordinal, offset, role
+// policy, and next anchor -- is authenticated and a modified cursor is
+// rejected instead of resolving to an arbitrary read.
 type messageBodyCursor struct {
-	Version        int    `json:"v"`
-	EvidenceSource string `json:"s"`
-	SessionID      string `json:"i"`
-	Revision       string `json:"r"`
-	Ordinal        int    `json:"o"`
-	Offset         int    `json:"p"`
-	NextFrom       *int   `json:"n,omitempty"`
+	Version        int      `json:"v"`
+	EvidenceSource string   `json:"s"`
+	SessionID      string   `json:"i"`
+	Revision       string   `json:"r"`
+	Ordinal        int      `json:"o"`
+	Offset         int      `json:"p"`
+	NextFrom       *int     `json:"n,omitempty"`
+	RolesPolicy    []string `json:"rp,omitempty"`
+	MAC            string   `json:"m"`
 }
 
-func encodeMessageBodyCursor(cursor messageBodyCursor) string {
-	raw, _ := json.Marshal(cursor)
+// bodyCursorMAC signs the cursor. Clearing MAC before marshaling makes the
+// canonical form independent of the signature field itself.
+func (t *toolset) bodyCursorMAC(cursor messageBodyCursor) string {
+	cursor.MAC = ""
+	canonical, err := json.Marshal(cursor)
+	if err != nil {
+		return ""
+	}
+	mac := hmac.New(sha256.New, t.bodyCursorKey())
+	mac.Write(canonical)
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+func (t *toolset) encodeMessageBodyCursor(cursor messageBodyCursor) string {
+	cursor.Version = bodyCursorVersion
+	cursor.MAC = t.bodyCursorMAC(cursor)
+	raw, err := json.Marshal(cursor)
+	if err != nil {
+		return ""
+	}
 	return base64.RawURLEncoding.EncodeToString(raw)
 }
 
-func decodeMessageBodyCursor(raw string) (messageBodyCursor, error) {
+func (t *toolset) decodeMessageBodyCursor(raw string) (messageBodyCursor, error) {
 	payload, err := base64.RawURLEncoding.DecodeString(raw)
 	if err != nil {
 		return messageBodyCursor{}, errors.New("invalid body_cursor")
 	}
 	var cursor messageBodyCursor
-	if err := json.Unmarshal(payload, &cursor); err != nil || cursor.Version != 1 ||
+	if err := json.Unmarshal(payload, &cursor); err != nil || cursor.Version != bodyCursorVersion ||
 		cursor.EvidenceSource == "" || cursor.SessionID == "" || cursor.Revision == "" ||
-		cursor.Ordinal < 0 || cursor.Offset <= 0 {
+		cursor.Ordinal < 0 || cursor.Offset <= 0 || cursor.MAC == "" {
+		return messageBodyCursor{}, errors.New("invalid body_cursor")
+	}
+	if subtle.ConstantTimeCompare(
+		[]byte(t.bodyCursorMAC(cursor)), []byte(cursor.MAC)) != 1 {
 		return messageBodyCursor{}, errors.New("invalid body_cursor")
 	}
 	return cursor, nil
+}
+
+// effectiveRolesPolicy normalizes a get_messages roles argument into the
+// policy stored in a body cursor: an empty argument means roleAllowed's
+// user+assistant default, and any explicit list is kept verbatim so the
+// continuation re-applies exactly what the issuing request saw.
+func effectiveRolesPolicy(roles []string) []string {
+	if len(roles) == 0 {
+		return []string{"user", "assistant"}
+	}
+	return roles
 }
 
 // filterAndMapMessage applies the get_messages role/system contract to one
@@ -557,7 +629,7 @@ func (t *toolset) getMessages(
 			out.NextFrom = &next
 		}
 	}
-	attachBodyCursors(&out, res.EvidenceSource, in.SessionID)
+	t.attachBodyCursors(&out, in.Roles, res.EvidenceSource, in.SessionID)
 	return nil, out, nil
 }
 
@@ -611,11 +683,22 @@ func (t *toolset) getMessagesAround(
 		next := out.Messages[len(out.Messages)-1].Ordinal + 1
 		out.NextFrom = &next
 	}
-	attachBodyCursors(&out, res.EvidenceSource, in.SessionID)
+	t.attachBodyCursors(&out, roles, res.EvidenceSource, in.SessionID)
 	return nil, out, nil
 }
 
-func attachBodyCursors(out *getMessagesOut, evidenceSource, sessionID string) {
+// attachBodyCursors signs and attaches a continuation cursor to every
+// truncated message, binding the effective role policy of the issuing
+// request alongside the session, revision, ordinal, and offset.
+func (t *toolset) attachBodyCursors(out *getMessagesOut, roles []string, evidenceSource, sessionID string) {
+	// Older or partially upgraded remote backends can omit transcript
+	// revision and evidence-source metadata. A cursor without them could
+	// never be validated, so keep ordinary next_from pagination instead of
+	// issuing an unusable cursor that would strand the caller mid-message.
+	if out.TranscriptRevision == "" || evidenceSource == "" {
+		return
+	}
+	policy := effectiveRolesPolicy(roles)
 	nextFrom := out.NextFrom
 	hasBodyCursor := false
 	for i := range out.Messages {
@@ -623,10 +706,11 @@ func attachBodyCursors(out *getMessagesOut, evidenceSource, sessionID string) {
 			continue
 		}
 		hasBodyCursor = true
-		out.Messages[i].BodyCursor = encodeMessageBodyCursor(messageBodyCursor{
-			Version: 1, EvidenceSource: evidenceSource, SessionID: sessionID,
+		out.Messages[i].BodyCursor = t.encodeMessageBodyCursor(messageBodyCursor{
+			Version: bodyCursorVersion, EvidenceSource: evidenceSource, SessionID: sessionID,
 			Revision: out.TranscriptRevision, Ordinal: out.Messages[i].Ordinal,
 			Offset: utf8.RuneCountInString(out.Messages[i].Content), NextFrom: nextFrom,
+			RolesPolicy: policy,
 		})
 	}
 	if hasBodyCursor {
@@ -637,11 +721,11 @@ func attachBodyCursors(out *getMessagesOut, evidenceSource, sessionID string) {
 func (t *toolset) getMessageBodyContinuation(
 	ctx context.Context, in getMessagesIn,
 ) (*mcp.CallToolResult, getMessagesOut, error) {
-	if in.From != nil || in.Around != nil || in.Direction != "" ||
-		in.Before != nil || in.After != nil || len(in.Roles) > 0 {
-		return nil, getMessagesOut{}, errors.New("body_cursor is mutually exclusive with message navigation and roles")
-	}
-	cursor, err := decodeMessageBodyCursor(in.BodyCursor)
+	// The cursor is authoritative: navigation and role arguments are
+	// ignored rather than rejected, because the signed cursor already binds
+	// the session, revision, ordinal, offset, and the role policy of the
+	// request that issued it.
+	cursor, err := t.decodeMessageBodyCursor(in.BodyCursor)
 	if err != nil {
 		return nil, getMessagesOut{}, err
 	}
@@ -661,6 +745,14 @@ func (t *toolset) getMessageBodyContinuation(
 		return nil, getMessagesOut{}, fmt.Errorf("%w: cited message no longer exists", service.ErrSourceChanged)
 	}
 	message := res.Messages[0]
+	// Re-apply the role/system contract bound into the cursor. A valid
+	// signature already proves the cursor was issued by this server for a
+	// message the issuing read could see; this check keeps that guarantee
+	// true against the current rows even if a cursor-issuing path ever
+	// regresses.
+	if isSystemMessage(message) || !roleAllowed(message.Role, cursor.RolesPolicy) {
+		return nil, getMessagesOut{}, fmt.Errorf("%w: cited message no longer exists", service.ErrSourceChanged)
+	}
 	runes := []rune(message.Content)
 	if cursor.Offset >= len(runes) {
 		return nil, getMessagesOut{}, errors.New("invalid body_cursor offset")
@@ -675,7 +767,7 @@ func (t *toolset) getMessageBodyContinuation(
 	out := getMessagesOut{Messages: []messageOut{mo}, TranscriptRevision: res.TranscriptRevision}
 	if end < len(runes) {
 		cursor.Offset = end
-		out.Messages[0].BodyCursor = encodeMessageBodyCursor(cursor)
+		out.Messages[0].BodyCursor = t.encodeMessageBodyCursor(cursor)
 	} else {
 		out.NextFrom = cursor.NextFrom
 	}

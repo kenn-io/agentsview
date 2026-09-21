@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json/v2"
 	"fmt"
 	"net/http"
@@ -609,6 +610,36 @@ func TestGetMessages_BodyCursorContinuesPastMaximumChunk(t *testing.T) {
 	assert.False(t, rest.Messages[0].Truncated)
 }
 
+// Truncation metadata alone must not produce a cursor: older or partially
+// upgraded remote backends can omit transcript revision and evidence-source
+// metadata, and a cursor without them can never be validated. The read must
+// keep ordinary next_from pagination in that case instead of stranding the
+// caller with an unusable cursor.
+func TestAttachBodyCursorsRequiresRevisionAndEvidenceSource(t *testing.T) {
+	ts := &toolset{}
+	out := &getMessagesOut{
+		Messages: []messageOut{{Ordinal: 3, Truncated: true}},
+		NextFrom: new(4),
+	}
+
+	ts.attachBodyCursors(out, nil, "", "session")
+	require.Empty(t, out.Messages[0].BodyCursor,
+		"no cursor without an evidence source")
+	require.NotNil(t, out.NextFrom, "ordinary pagination must survive")
+
+	out.NextFrom = new(4)
+	ts.attachBodyCursors(out, nil, "sqlite", "session")
+	require.Empty(t, out.Messages[0].BodyCursor,
+		"no cursor without a transcript revision")
+	require.NotNil(t, out.NextFrom, "ordinary pagination must survive")
+
+	out.TranscriptRevision = "rev-1"
+	ts.attachBodyCursors(out, nil, "sqlite", "session")
+	require.NotEmpty(t, out.Messages[0].BodyCursor)
+	require.Nil(t, out.NextFrom,
+		"a usable cursor takes over from next_from")
+}
+
 func TestGetMessages_BodyCursorRejectsChangedTranscript(t *testing.T) {
 	ts, d := newTestToolset(t)
 	dbtest.SeedSessionWithMessages(t, d, "body", "proj", []db.Message{
@@ -629,6 +660,153 @@ func TestGetMessages_BodyCursorRejectsChangedTranscript(t *testing.T) {
 		MaxCharsPerMessage: 4,
 	})
 	require.ErrorIs(t, err, service.ErrSourceChanged)
+}
+
+// The signed cursor is authoritative: a continuation may repeat navigation
+// or role arguments from the issuing request, and they are ignored instead
+// of rejected, because the cursor alone pins the session, revision,
+// ordinal, offset, and role policy.
+func TestGetMessages_BodyCursorContinuationIgnoresNavigationAndRoles(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSessionWithMessages(t, d, "body", "proj", []db.Message{
+		dbtest.UserMsg("body", 0, "abcdefghij"),
+		dbtest.UserMsg("body", 1, "tail message"),
+	}, dbtest.WithMessageCounts(2, 2))
+
+	_, first, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "body", MaxCharsPerMessage: 4,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, first.Messages[0].BodyCursor)
+
+	_, cont, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "body", BodyCursor: first.Messages[0].BodyCursor,
+		From: new(0), Direction: "desc", Around: new(1),
+		Before: new(3), After: new(3), Roles: []string{"tool"},
+		MaxCharsPerMessage: 20,
+	})
+	require.NoError(t, err)
+	require.Len(t, cont.Messages, 1)
+	assert.Equal(t, 0, cont.Messages[0].Ordinal, "cursor pins the ordinal")
+	assert.Equal(t, "efghij", cont.Messages[0].Content)
+}
+
+// A body_cursor is only trusted when its HMAC verifies against this
+// server's key. Flipping a field -- here the ordinal -- must yield an
+// invalid cursor rather than a read of the attacker-chosen message.
+func TestGetMessages_BodyCursorRejectsModifiedPayload(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSessionWithMessages(t, d, "body", "proj", []db.Message{
+		dbtest.UserMsg("body", 0, "abcdefghij"),
+		dbtest.UserMsg("body", 1, "secret tail"),
+	}, dbtest.WithMessageCounts(2, 2))
+
+	_, first, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "body", MaxCharsPerMessage: 4,
+	})
+	require.NoError(t, err)
+	signed := first.Messages[0].BodyCursor
+
+	payload, err := base64.RawURLEncoding.DecodeString(signed)
+	require.NoError(t, err)
+	var fields map[string]any
+	require.NoError(t, json.Unmarshal(payload, &fields))
+	fields["o"] = 1
+	tampered, err := json.Marshal(fields)
+	require.NoError(t, err)
+
+	_, _, err = ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "body", BodyCursor: base64.RawURLEncoding.EncodeToString(tampered),
+		MaxCharsPerMessage: 4,
+	})
+	require.EqualError(t, err, "invalid body_cursor")
+}
+
+// Each process signs cursors with its own key, so a cursor issued by one
+// MCP server instance is invalid everywhere else.
+func TestGetMessages_BodyCursorRejectsForeignServer(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSessionWithMessages(t, d, "body", "proj", []db.Message{
+		dbtest.UserMsg("body", 0, "abcdefghij"),
+	}, dbtest.WithMessageCounts(1, 1))
+
+	_, first, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "body", MaxCharsPerMessage: 4,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, first.Messages[0].BodyCursor)
+
+	other := &toolset{svc: ts.svc, now: ts.now}
+	_, _, err = other.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "body", BodyCursor: first.Messages[0].BodyCursor,
+		MaxCharsPerMessage: 4,
+	})
+	require.EqualError(t, err, "invalid body_cursor")
+}
+
+// A correctly signed cursor still cannot widen the issuing read's role and
+// system filtering. Point a re-signed default-policy cursor at a tool
+// message and at a system message: the policy-bound continuation must
+// refuse both instead of disclosing filtered content.
+func TestGetMessages_BodyCursorReappliesRoleAndSystemPolicy(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "body", "proj", func(s *db.Session) {
+		s.MessageCount = 3
+		s.UserMessageCount = 1
+	})
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
+		dbtest.UserMsg("body", 0, "abcdefghij"),
+		{
+			SessionID: "body", Ordinal: 1, Role: "tool",
+			Content: "tool payload", ContentLength: len("tool payload"),
+		},
+		{
+			SessionID: "body", Ordinal: 2, Role: "system",
+			Content: "system noise", IsSystem: true, ContentLength: len("system noise"),
+		},
+	}))
+
+	_, first, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "body", MaxCharsPerMessage: 4,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, first.Messages[0].BodyCursor)
+
+	cursor, err := ts.decodeMessageBodyCursor(first.Messages[0].BodyCursor)
+	require.NoError(t, err)
+	require.Equal(t, []string{"user", "assistant"}, cursor.RolesPolicy)
+
+	for name, ordinal := range map[string]int{"tool": 1, "system": 2} {
+		t.Run(name, func(t *testing.T) {
+			reforged := cursor
+			reforged.Ordinal = ordinal
+			reforged.Offset = 1
+			_, _, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+				SessionID: "body", BodyCursor: ts.encodeMessageBodyCursor(reforged),
+				MaxCharsPerMessage: 4,
+			})
+			require.ErrorIs(t, err, service.ErrSourceChanged)
+		})
+	}
+
+	// The same binding keeps a legitimately issued tool-role cursor working
+	// on continuation even though the continuation passes no roles: the
+	// cursor's stored policy, not the request's, governs.
+	_, toolPage, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "body", Roles: []string{"tool"}, MaxCharsPerMessage: 4,
+	})
+	require.NoError(t, err)
+	require.Len(t, toolPage.Messages, 1)
+	require.NotEmpty(t, toolPage.Messages[0].BodyCursor)
+
+	_, cont, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "body", BodyCursor: toolPage.Messages[0].BodyCursor,
+		MaxCharsPerMessage: 20,
+	})
+	require.NoError(t, err)
+	require.Len(t, cont.Messages, 1)
+	assert.Equal(t, " payload", cont.Messages[0].Content)
+	assert.Equal(t, "tool", cont.Messages[0].Role)
 }
 
 // Even when a caller explicitly allow-lists the "system" role, get_messages

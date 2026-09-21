@@ -1,8 +1,9 @@
 ---
-# generated-by: agentsview 0.1.0 hash:f44eddded5dabac86ca23f72d83d2de082b51a5b93cc4f525b96ff3b96eced49 — do not edit; re-run `agentsview skills install`
+# generated-by: agentsview 0.1.0 hash:f9bd1666956171610377d98060ae65e679a8a3b37f1e731c093574ce6fbd9496 — do not edit; re-run `agentsview skills install`
 name: agentsview-search-conversations
 description: Search AgentsView conversation history and synthesize evidence for the parent agent.
 model: haiku
+tools: mcp__agentsview__search_content, mcp__agentsview__get_messages
 disallowedTools: Bash, Edit, Write, NotebookEdit, Read, Grep, Glob, WebFetch, WebSearch, Task, Agent, SlashCommand, Skill, TodoWrite, BashOutput, KillShell, AskUserQuestion, ExitPlanMode, EnterPlanMode, MCPSearch
 ---
 
@@ -15,24 +16,30 @@ decision.
 
 ## Search and read
 
-1. Call the registered AgentsView MCP tool whose leaf name is `search_content`
-   with `mode: hybrid`, `scope: all`, and `limit: 10`. The runtime supplies the
-   MCP server prefix; do not guess it.
+1. Call the `mcp__agentsview__search_content` tool with `mode: hybrid`,
+   `scope: all`, and `limit: 10`.
 2. Refine or widen the query when the first results are weak. Treat rank and
    score as relevance signals, never as truth probabilities.
-3. Choose the top 2-5 relevant sessions. Call the registered tool whose leaf
-   name is `get_messages` to read each source around the relevant ordinal range.
+3. Choose the top 2-5 relevant sessions. Call the `mcp__agentsview__get_messages`
+   tool to read each source around the relevant ordinal range.
 4. Follow `next_from` or expand the message range when the relevant decision or
    a later correction may fall outside the first page. A snippet, summary, or
    short filtered page does not count as reading the source.
 5. If semantic search failed, report the failure before using a lexical
    fallback. Do not fall back on authentication or wrong-target errors.
 
-Use only the AgentsView MCP tools. Ignore tools from every other registered
-MCP server, even when this runtime exposes them. A `search_content` hit
-located in `tool_input` or `tool_result` cannot be opened through
-`get_messages`, which returns message text and a `has_tool_use` flag but not
-tool payloads. Report such hits as incomplete evidence: name the hit, its
+This definition allowlists exactly `mcp__agentsview__search_content` and
+`mcp__agentsview__get_messages`; no other tool, built-in or from another
+registered MCP server, is reachable from here. Both names require the
+AgentsView MCP server to be registered under its canonical name `agentsview`,
+which the native package and the documented registration both do. When either
+tool is unavailable, report that AgentsView conversation history could not be
+searched; never substitute another tool, request additional permissions, or
+use a differently named server's tools.
+
+A `search_content` hit located in `tool_input` or `tool_result` cannot be
+opened through `get_messages`, which returns message text and a `has_tool_use`
+flag but not tool payloads. Report such hits as incomplete evidence: name the hit, its
 location, and what could not be verified.
 
 Subordinate or sidechain work is supporting evidence. Corroborate user

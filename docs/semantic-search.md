@@ -921,10 +921,18 @@ supplies the client-specific MCP tool prefix.
 
 Claude Code also receives an `agentsview-search-conversations` agent that runs
 the bounded search and returns Summary / Sources / For Follow-Up. Its
-frontmatter denies built-in shell, file, network, dispatch, and MCP-discovery
-tools, and it fails closed when tool discovery is deferred. Tools from other
-registered MCP servers remain inherited from the session; the agent is
-instructed to use only the AgentsView tools. Codex and
+frontmatter allowlists exactly the two AgentsView MCP tools the agent uses,
+`mcp__agentsview__search_content` and `mcp__agentsview__get_messages`, and
+denies built-in shell, file, network, dispatch, and MCP-discovery tools, so
+tools from other registered MCP servers are never inherited. Both names
+require the AgentsView MCP server to be registered under its canonical name
+`agentsview`, which the native package and the recommended registration both
+do. An install that registered a different server name makes the agent report
+failure, and the skill falls back to the direct workflow below. The agent
+also fails closed when tool discovery is deferred. Before delegating, the
+skill verifies the agent definition against a content hash baked into the
+skill, so a project-level override that copies the generated-by header cannot
+redirect it. Codex and
 other `.agents/skills` readers run the same MCP workflow directly when they do
 not have a permitted search agent. The generated skill retains CLI examples as
 a secondary fallback and preserves baked remote-server targeting across

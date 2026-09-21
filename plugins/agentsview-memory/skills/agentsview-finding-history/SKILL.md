@@ -1,5 +1,5 @@
 ---
-# generated-by: agentsview 0.1.0 hash:adea9967f1952050a07263d7c8478c7c7b7ac32739a3db479deff90f935a6ee5 — do not edit; re-run `agentsview skills install`
+# generated-by: agentsview 0.1.0 hash:20063860bfc92a5f43a9444f8cd468b1d1b38f31fd5747b6a91d6c42bc1d32d1 — do not edit; re-run `agentsview skills install`
 name: agentsview-finding-history
 description: Use proactively when prior decisions, rationale, solutions, pitfalls, project context, or repeated workflows may help, when stuck, or before guessing about something learned previously — searches AgentsView conversation history for evidence.
 ---
@@ -21,14 +21,19 @@ why the code exists; the repository is the authority for what it contains now.
 
 ## Workflow
 
-1. Use the `agentsview-search-conversations` agent when this harness exposes it; otherwise follow these steps directly. Before delegating, verify the agent in effect is the file
-   this skill generated: its definition carries a `# generated-by: agentsview`
-   header. If a same-named agent is defined in the project's
-   `.claude/agents/` directory without that header, it is not
-   AgentsView's: do not delegate to it. If you cannot verify the agent, it
-   reports that it could not search, or the AgentsView MCP tools are
-   not registered in this session, follow the remaining steps directly
-   instead of delegating.
+1. Use the `agentsview-search-conversations` agent when this harness exposes it; otherwise follow these steps directly. Before delegating, verify the agent
+   definition byte-for-byte; a header alone can be forged. Read the generated
+   agent beside this skill at
+   `../../agents/agentsview-search-conversations.md`, remove its second line
+   (the `# generated-by:` comment), SHA-256 the remaining bytes, and require
+   the hex digest to equal `f9bd1666956171610377d98060ae65e679a8a3b37f1e731c093574ce6fbd9496`. A same-named agent in the
+   project's `.claude/agents/` directory overrides the installed one, so run
+   the same check on that file when it exists and delegate only when both
+   match. A missing or mismatched digest means the agent is not the file
+   this skill was generated with: do not delegate to it. If you cannot
+   verify the agent, it reports that it could not search, or the AgentsView
+   MCP tools are not registered in this session, follow the remaining steps
+   directly instead of delegating.
 2. Call the registered AgentsView MCP tool whose leaf name is `search_content`
    with `mode: hybrid`, `scope: all`, and `limit: 10`. The full tool name has a
    client-specific prefix supplied by MCP registration; do not guess or hard-code

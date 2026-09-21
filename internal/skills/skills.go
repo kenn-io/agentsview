@@ -187,6 +187,11 @@ type templateData struct {
 	// for harnesses that do not install one, so the guard text omits the
 	// project-directory clause.
 	AgentDir string
+	// AgentHash is the content hash of the rendered search agent, baked into
+	// the delegation guard so a project-level override with a forged header
+	// cannot redirect the skill to attacker-controlled instructions. Empty
+	// for harnesses that do not install one.
+	AgentHash string
 }
 
 // Rendered is one skill file ready to install.
@@ -215,6 +220,22 @@ func Render(h Harness, version string, remote Remote) (Rendered, error) {
 	data := templateData{Delegate: delegate, ServerArgs: remote.Args()}
 	if h == HarnessClaude {
 		data.AgentDir = claudeAgentDir
+		// The delegation guard pins the search agent's content hash, so a
+		// project-level agent that merely copies the generated-by header
+		// cannot pass for the generated file. Render the agent once here to
+		// learn the hash the installed artifact will carry.
+		agent, err := renderTemplate(
+			"agentsview-search-conversations",
+			filepath.Join(claudeAgentDir, "agentsview-search-conversations.md"),
+			"search-conversations.md.tmpl",
+			templateData{},
+			version,
+			"",
+		)
+		if err != nil {
+			return Rendered{}, err
+		}
+		data.AgentHash = agent.Hash
 	}
 	var remoteLine string
 	if !remote.Empty() {

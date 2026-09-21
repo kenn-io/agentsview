@@ -102,6 +102,12 @@ reads `AGENTSVIEW_MEMORY_SERVER`, `AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE`, or
 without a server fails instead of falling back to the local archive. PostgreSQL
 reads use the configured `default_pg` target.
 
+Run `agentsview doctor memory` to inspect this server status together with the
+local client integration. Pass the native package root with `--plugin-root` to
+check its skill, MCP profile, and SessionStart hook. The diagnostic uses
+read-only metadata and does not start a daemon, sync transcripts, or rebuild
+vectors.
+
 `search_sessions` accepts optional `date_from` and `date_to` bounds in
 `YYYY-MM-DD` format, just like `list_sessions` and `search_content`. Dates
 include sessions whose activity overlaps the requested days in UTC. Either bound
@@ -170,9 +176,16 @@ citation.
 
 `get_messages` returns the revision observed for its page. A message longer than
 `max_chars_per_message` has a `body_cursor`; keep calling `get_messages` with
-that cursor before following `next_from`. The opaque cursor stays bound to the
-archive instance, session, revision, message ordinal, and next content offset,
-so it cannot silently continue against replaced transcript content. Role and
+that cursor before following `next_from`. The opaque cursor is signed by the
+MCP server and stays bound to the archive instance, session, revision, message
+ordinal, next content offset, and the role filter of the request that issued
+it, so it cannot silently continue against replaced transcript content, be
+modified to select another message, or widen what the first read could see. A
+continuation ignores its navigation and role arguments and re-applies the
+stored role filter. Cursors stop working when the transcript changes or the
+MCP server restarts. When the backing daemon predates revision-bound reads
+and omits revision or evidence-source metadata, `get_messages` skips cursors
+and keeps ordinary `next_from` pagination. Role and
 system filtering still happens after each scanned page, so an empty or short
 page can have a `next_from` and should be continued.
 

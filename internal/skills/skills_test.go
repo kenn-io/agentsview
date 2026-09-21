@@ -74,8 +74,7 @@ func TestRenderRecallWorkflowContract(t *testing.T) {
 	assert.Contains(t, skill, "next_from")
 	assert.Contains(t, skill, "subordinate")
 	assert.Contains(t, skill, "user accepted")
-	assert.Contains(t, skill, "verify the agent in effect")
-	assert.Contains(t, skill, "without that header")
+	assert.Contains(t, collapseSpaces(skill), "If you cannot verify the agent")
 	assert.Contains(t, skill, "not registered in this session")
 	assert.NotContains(t, skill, ".claude/agents")
 	assert.Contains(t, skill, "semantic search failed")
@@ -94,9 +93,42 @@ func TestRenderClaudeSkillDelegationGuard(t *testing.T) {
 	require.NotEmpty(t, claude)
 	skill := claude[0].Content
 
-	assert.Contains(t, skill, "the project's")
-	assert.Contains(t, skill, ".claude/agents/` directory")
-	assert.Contains(t, skill, "without that header")
+	flat := collapseSpaces(skill)
+	assert.Contains(t, flat, "the project's `.claude/agents/` directory")
+	assert.Contains(t, flat, "byte-for-byte")
+	assert.Contains(t, flat, "do not delegate to it")
+}
+
+// collapseSpaces replaces every run of whitespace with one space so
+// assertions on rendered template prose do not depend on line wrapping.
+func collapseSpaces(s string) string {
+	return strings.Join(strings.Fields(s), " ")
+}
+
+// The delegation guard must pin the search agent's full content hash: a
+// project-level override that copies the generated-by header would otherwise
+// redirect the skill to attacker-controlled instructions. The rendered skill
+// embeds the exact digest of the agent artifact, and the Agents harness,
+// which installs no agent, embeds none.
+func TestRenderClaudeDelegationGuardPinsAgentHash(t *testing.T) {
+	skill, err := Render(HarnessClaude, "dev", Remote{})
+	require.NoError(t, err)
+	packageArtifacts, err := RenderPackage(HarnessClaude, "dev", Remote{})
+	require.NoError(t, err)
+	require.Len(t, packageArtifacts, 2)
+	agent := packageArtifacts[1]
+
+	flat := collapseSpaces(skill.Content)
+	assert.Contains(t, flat, agent.Hash,
+		"the guard must embed the rendered agent's content hash")
+	assert.Contains(t, flat,
+		"remove its second line (the `# generated-by:` comment)")
+	assert.Contains(t, flat, "the project's `.claude/agents/` directory")
+
+	agentsSkill, err := Render(HarnessAgents, "dev", Remote{})
+	require.NoError(t, err)
+	assert.NotContains(t, agentsSkill.Content, agent.Hash,
+		"the Agents harness installs no agent to verify")
 }
 
 func TestRenderClaudeSearchAgentContract(t *testing.T) {
@@ -108,19 +140,24 @@ func TestRenderClaudeSearchAgentContract(t *testing.T) {
 	assert.Contains(t, agent, "name: agentsview-search-conversations")
 	assert.Contains(t, agent, "model: haiku")
 	// The subagent reads untrusted archived transcripts, so its frontmatter
-	// denies every capability-bearing Claude Code built-in tool (shell, file
-	// mutation, network, local reads, subagent dispatch, slash commands, and
-	// skills) plus the plan-mode housekeeping built-ins. MCPSearch is denied
-	// too so deferred MCP tool discovery fails closed instead of exposing
-	// other servers' tools. A `tools:` allowlist cannot name the dynamically
-	// prefixed AgentsView MCP tools, so a deny list is the only mechanism
-	// that keeps those tools callable.
+	// allowlists exactly the two read-only AgentsView MCP tools it uses.
+	// The native package and the documented registration both name the MCP
+	// server `agentsview`, so the allowlist can pin full tool names; tools
+	// from every other registered MCP server stay unreachable, which a
+	// deny list alone could never guarantee. The built-in deny list is kept
+	// so runtimes that ignore `tools` still fail closed on capability-
+	// bearing built-ins. An install whose server uses a different name
+	// makes the agent report failure, and the parent falls back to the
+	// skill's direct workflow.
+	assert.Contains(t, agent,
+		"tools: mcp__agentsview__search_content, mcp__agentsview__get_messages")
 	assert.Contains(t, agent,
 		"disallowedTools: Bash, Edit, Write, NotebookEdit, Read, Grep, Glob, "+
 			"WebFetch, WebSearch, Task, Agent, SlashCommand, Skill, TodoWrite, "+
 			"BashOutput, KillShell, AskUserQuestion, ExitPlanMode, EnterPlanMode, "+
 			"MCPSearch")
-	assert.Contains(t, agent, "Use only the AgentsView MCP tools")
+	assert.Contains(t, agent, "allowlists exactly")
+	assert.Contains(t, agent, "canonical name `agentsview`")
 	assert.Contains(t, agent, "incomplete evidence")
 	assert.Contains(t, agent, "### Summary")
 	assert.Contains(t, agent, "### Sources")

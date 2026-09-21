@@ -1556,6 +1556,40 @@ sent to an explicitly supplied server.
 
 ______________________________________________________________________
 
+### `agentsview doctor memory`
+
+Inspect the selected conversation-memory target and the local client package:
+
+```bash
+agentsview doctor memory
+agentsview doctor memory --server <url> [--server-token-file <path>]
+agentsview doctor memory --pg
+agentsview doctor memory --plugin-root <path> --format json
+```
+
+The target section uses the same readiness provider as MCP
+`get_memory_status` and search-result coverage. It reports the authenticated
+archive identity, backend, read-only mode, lexical availability, semantic
+generation coverage, source telemetry, and server version when available. An
+older remote server reports `unknown` with reason `unsupported`; authentication
+and transport failures remain command errors instead of looking like an empty
+archive.
+
+The client section checks the native package's recall skill, focused MCP
+configuration, and SessionStart hook when `--plugin-root`, `PLUGIN_ROOT`, or
+`CLAUDE_PLUGIN_ROOT` identifies the package. It also detects standalone
+AgentsView skills and reports when their baked target differs from the selected
+archive. Human and JSON output omit plugin paths, server URLs, and token values.
+
+Local diagnostics open the archive read-only and do not start a daemon. Every
+mode is metadata-only: the command does not sync transcripts, rebuild vectors,
+probe an embedding provider, or modify client files. `--server`, `--pg`, and
+the `AGENTSVIEW_MEMORY_SERVER`, `AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE`, and
+`AGENTSVIEW_MEMORY_PG` environment variables select the same read target used
+by `agentsview mcp --profile memory`.
+
+______________________________________________________________________
+
 ### `agentsview memory session-start`
 
 Run the bounded conversation-memory lifecycle action used by native agent
@@ -1697,7 +1731,9 @@ ______________________________________________________________________
 Install or list the bundled recall artifacts that teach coding-agent harnesses
 to consult AgentsView conversation history. Claude Code receives the
 `agentsview-finding-history` skill and the
-`agentsview-search-conversations` agent. Codex and other `.agents/skills`
+`agentsview-search-conversations` agent, whose frontmatter allowlists the two
+AgentsView MCP tools under the canonical server name `agentsview` so no other
+registered server's tools are reachable from it. Codex and other `.agents/skills`
 readers receive the skill with the same direct MCP workflow as its fallback.
 See [Semantic Search](/docs/semantic-search/#skills-for-coding-agents) for the
 workflow and upgrade guidance.
