@@ -69,11 +69,16 @@
   // What one loader measured when it applied its response. Each loader
   // returns its own record, or null when it failed or a newer load
   // superseded it, so a refresh can only publish the requests it made.
+  // `seq` is the loader's start counter at the time, so a refresh can also
+  // tell when a later load has overtaken one of its requests.
   interface LoadTiming {
+    seq: number;
     startedAt: number;
     appliedAt: number;
     timing: ResponseTiming | undefined;
   }
+  let entriesLoadSeq = 0;
+  let statusLoadSeq = 0;
   let progress = $state<RecallExtractProgress[]>([]);
   let progressExpanded = $state(false);
   let progressState = $state<"" | RecallExtractProgressState>("");
@@ -173,6 +178,7 @@
   // itself as the latest query. refreshRecall passes publishTiming=false and
   // reports the entries and status pair together once both have applied.
   async function loadEntries(cursor = "", publishTiming = true): Promise<LoadTiming | null> {
+    const seq = ++entriesLoadSeq;
     const startedAt = performance.now();
     const signal = entriesRead.begin();
     const appending = cursor !== "";
@@ -195,7 +201,7 @@
       nextCursor = page.next_cursor ?? "";
       resultCap = page.result_cap ?? 0;
       entriesUpdatedAt = Date.now();
-      const load = { startedAt, appliedAt: performance.now(), timing: responseTimingOf(page) };
+      const load = { seq, startedAt, appliedAt: performance.now(), timing: responseTimingOf(page) };
       if (publishTiming) {
         queryDurationMs = load.appliedAt - startedAt;
         querySteps = [queryStepFrom("entries", load.timing, startedAt, load.appliedAt, startedAt)];
@@ -219,6 +225,7 @@
   }
 
   async function loadStatus(): Promise<LoadTiming | null> {
+    const seq = ++statusLoadSeq;
     const startedAt = performance.now();
     const signal = statusRead.begin();
     statusLoading = true;
@@ -228,7 +235,7 @@
       if (!statusRead.isCurrent(signal)) return null;
       status = next;
       statusUpdatedAt = Date.now();
-      return { startedAt, appliedAt: performance.now(), timing: responseTimingOf(next) };
+      return { seq, startedAt, appliedAt: performance.now(), timing: responseTimingOf(next) };
     } catch (error) {
       if (isAbortError(error) || !statusRead.isCurrent(signal)) return null;
       status = null;
@@ -278,10 +285,16 @@
   async function refreshRecall() {
     const startedAt = performance.now();
     const [entriesLoad, statusLoad] = await Promise.all([loadEntries("", false), loadStatus()]);
-    // Only a refresh whose own two requests both applied counts as a
-    // completed query. A failure, or a filter change that superseded one of
-    // them, keeps the previous duration and timeline.
-    if (entriesLoad !== null && statusLoad !== null) {
+    // Only a refresh whose own two requests both applied, and were not
+    // overtaken by a later load while the other was still in flight, counts
+    // as a completed query. Otherwise the previous duration and timeline
+    // stay, which after a filter change is that load's own timeline.
+    if (
+      entriesLoad !== null &&
+      statusLoad !== null &&
+      entriesLoad.seq === entriesLoadSeq &&
+      statusLoad.seq === statusLoadSeq
+    ) {
       queryDurationMs = performance.now() - startedAt;
       querySteps = [
         queryStepFrom("entries", entriesLoad.timing, entriesLoad.startedAt, entriesLoad.appliedAt, startedAt),
