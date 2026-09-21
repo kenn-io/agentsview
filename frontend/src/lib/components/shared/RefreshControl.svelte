@@ -48,12 +48,15 @@
   const ageWidthSamples = refreshStatusWidthSamples();
   const showSteps = $derived(status === undefined && querySteps.length > 0);
 
-  // Shared time axis for the timeline: the whole query, or the last step's
-  // end if a step outran the recorded total.
+  // Time zero on the axis is the first request going out, not the refresh
+  // being asked for: the sub-millisecond setup before the first send would
+  // otherwise nudge every bar off the zero line. The axis runs to the last
+  // step's end, or to the recorded total if that is later.
+  const originMs = $derived(Math.min(...querySteps.map((step) => step.startMs), 0));
   const axisMs = $derived(
     Math.max(
-      queryDurationMs ?? 0,
-      ...querySteps.map((step) => step.startMs + step.durationMs),
+      (queryDurationMs ?? 0) - originMs,
+      ...querySteps.map((step) => step.startMs + step.durationMs - originMs),
       1,
     ),
   );
@@ -65,16 +68,16 @@
     return ((100 * ms) / axisMs).toFixed(2);
   }
 
+  function barStyle(startMs: number, durationMs: number): string {
+    return `left: ${percent(startMs - originMs)}%; width: ${percent(durationMs)}%`;
+  }
+
   // Tick labels centre on their line; one that would spill past the right
   // edge of the track hangs to the left of its line instead.
   function tickStyle(tick: number): string {
     const pct = (100 * tick) / axisMs;
     const shift = pct > 90 ? "-100%" : "-50%";
     return `left: ${pct.toFixed(2)}%; transform: translateX(${shift})`;
-  }
-
-  function barStyle(startMs: number, durationMs: number): string {
-    return `left: ${percent(startMs)}%; width: ${percent(durationMs)}%`;
   }
 </script>
 
@@ -233,9 +236,9 @@
     min-width: 1px;
   }
 
+  /* Square ends: a rounded start would sit visibly right of the zero line. */
   .query-steps__bar--wait {
     background: var(--accent-blue);
-    border-radius: 2px 0 0 2px;
   }
 
   .query-steps__bar--download {
@@ -244,7 +247,6 @@
 
   .query-steps__bar--apply {
     background: color-mix(in srgb, var(--text-muted) 60%, transparent);
-    border-radius: 0 2px 2px 0;
   }
 
   .query-steps__duration {
