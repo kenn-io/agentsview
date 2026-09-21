@@ -16,6 +16,16 @@ The latest published release is
     writes the copy; serve queries it. Rename, trash, and similar stay on
     SQLite. See [ClickHouse Sync](/docs/clickhouse-sync/).
 
+**Improvements**
+
+- The Activity report served from ClickHouse returns the same results with far
+    less database work. Usage tokens are read from stored columns instead of
+    parsed JSON, tool events are paired per session, and candidate sessions are
+    sent once as native data. The first push or serve after upgrading fills the
+    new derived tables before serving and resumes if interrupted; a read-only
+    serve role reports the pending fill until a push with a capable role
+    finishes it.
+
 **Bug fixes**
 
 - Correct saved Codex prompts and message counts when injected context shares

@@ -1728,7 +1728,7 @@ func chSessionSetFromWhere(where string, args []any) chSessionSet {
 // statement, so production paths derive the set in SQL instead.
 func chSessionSetFromIDs(ids []string) chSessionSet {
 	ph, args := chInPlaceholders(ids)
-	return chSessionSet{body: strings.Trim(ph, "()"), args: args}
+	return chSessionSet{body: "SELECT arrayJoin([" + strings.Trim(ph, "()") + "]) AS id", args: args}
 }
 
 // in returns `col IN (...)` with a fresh copy of the bound arguments so

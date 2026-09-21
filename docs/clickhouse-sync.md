@@ -263,6 +263,15 @@ On startup, `clickhouse serve` applies the current schema if the ClickHouse role
 can create tables. If the role is read-only, that step is skipped and the server
 falls back to the schema compatibility check.
 
+The first push or serve after upgrading to this schema also fills three derived
+structures before serving: stored usage columns on `messages`, the
+`usage_messages` table, and the `terminal_event_snapshots` table. The Activity
+report reads these instead of parsing usage JSON and scanning tool events on
+every request. The fill runs once per mirror, keeps the source tables unchanged,
+and resumes from the start if interrupted. Until it completes, a read-only serve
+role fails the compatibility check with a message naming the missing fill; run
+`agentsview clickhouse push` with a role that can create tables to finish it.
+
 When `require_auth` is enabled, a bearer token is generated if needed and
 printed on startup. Pass it via `Authorization: Bearer <token>` on API requests.
 
@@ -336,7 +345,8 @@ ______________________________________________________________________
   the DSN path).
 - There is no vector / pgvector phase and no hosted raw-sync control plane.
 - `clickhouse serve` does not run PostgreSQL-style migrations beyond
-  `CREATE TABLE IF NOT EXISTS` and `ADD COLUMN IF NOT EXISTS`.
+  `CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, and the one-time
+  fill of derived usage and terminal-event tables described above.
 - Deletes are version-bounded `DELETE` statements. ClickHouse applies them at
   merge time; readers always open connections with `final=1` so they see one
   row per key without writing `FINAL` in query text.

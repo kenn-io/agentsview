@@ -8,6 +8,9 @@ import (
 	"sort"
 	"time"
 
+	chdriver "github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/ClickHouse/clickhouse-go/v2/ext"
+
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
@@ -61,16 +64,24 @@ func (s *Store) BuildActivityReportArtifacts(
 	lowerBound := chUsagePaddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14)
 	upperBound := chUsagePaddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
 
-	// The same predicate selects the session metadata and, as a subquery,
-	// the candidate set inside the usage and interval queries, so the
-	// statement size does not grow with the number of matching sessions.
 	candidateWhere, candidateArgs := clickActivityReportCandidateWhere(
 		f, rangeStartUTC, rangeEndUTC)
-	candidates := chSessionSetFromWhere(candidateWhere, candidateArgs)
 	sessions, ids, err := s.activityReportSessions(ctx, candidateWhere, candidateArgs)
 	if err != nil {
 		return activity.CandidateArtifacts{}, err
 	}
+	// Send the already selected IDs as native data instead of repeating discovery.
+	table, err := ext.NewTable("activity_candidate_ids", ext.Column("id", "String"))
+	if err != nil {
+		return activity.CandidateArtifacts{}, fmt.Errorf("creating activity candidate table: %w", err)
+	}
+	for _, id := range ids {
+		if err := table.Append(id); err != nil {
+			return activity.CandidateArtifacts{}, fmt.Errorf("adding activity candidate: %w", err)
+		}
+	}
+	ctx = chdriver.Context(ctx, chdriver.WithExternalTable(table))
+	candidates := chSessionSet{body: "SELECT id FROM activity_candidate_ids"}
 	clickReportProgress(onProgress, activity.Progress{
 		Phase: activity.ProgressLoadingUsage, SessionsTotal: len(sessions),
 	})
@@ -210,12 +221,9 @@ func clickActivityReportCandidateWhere(
 	// subquery other backends use; ClickHouse does not evaluate those.
 	where += `
 		AND (COALESCE(s.ended_at, s.last_message_at, s.started_at, s.created_at) >= ` + chTimestampSQL + `
-			OR s.id IN (
-				SELECT tre.session_id FROM tool_result_events tre
-				WHERE tre.source = 'tool_execution'
-					AND tre.status IN ('completed', 'errored')
-					AND tre.timestamp >= ` + chTimestampSQL + `
-			))
+			OR (s.id, s.push_version) IN (
+				SELECT session_id, push_version FROM terminal_event_snapshots
+				WHERE last_terminal_at >= ` + chTimestampSQL + `))
 		AND COALESCE(s.started_at, s.created_at) < ` + chTimestampSQL
 	return where, append(args, rangeStartUTC, rangeStartUTC, rangeEndUTC)
 }
@@ -239,262 +247,29 @@ func (s *Store) activityReportCandidateSource(
 		for _, id := range ids {
 			known[id] = struct{}{}
 		}
-		lower := q.RangeStart.Add(
-			-time.Duration(q.GapCapSeconds) * time.Second,
-		)
-		terminalIn, terminalArgs := candidates.in("tre.session_id")
-		assistantIn, assistantArgs := candidates.in("session_id")
-		stampedIn, stampedArgs := candidates.in("session_id")
-		scanCandidate := func(
-			row interface{ Scan(dest ...any) error },
-		) (activity.IntervalCandidate, error) {
-			var candidate activity.IntervalCandidate
-			var start, end any
-			if err := row.Scan(
-				&candidate.SessionID, &candidate.StartOrdinal,
-				&candidate.EndOrdinal, &start, &end,
-				&candidate.ClosingRole, &candidate.ClosingModel,
-				&candidate.PriorModel,
-			); err != nil {
-				return candidate, fmt.Errorf(
-					"scanning clickhouse activity report candidate: %w", err)
-			}
-			startText, endText := formatDBTime(start), formatDBTime(end)
-			var err error
-			candidate.Start, err = time.Parse(time.RFC3339Nano, startText)
-			if err != nil {
-				return candidate, fmt.Errorf(
-					"parsing clickhouse activity candidate start: %w", err)
-			}
-			candidate.End, err = time.Parse(time.RFC3339Nano, endText)
-			if err != nil {
-				return candidate, fmt.Errorf(
-					"parsing clickhouse activity candidate end: %w", err)
-			}
-			candidate.Start = candidate.Start.UTC()
-			candidate.End = candidate.End.UTC()
-			return candidate, nil
-		}
-
-		terminalQuery := `
-		WITH terminal_events AS (
-			SELECT tre.session_id, tre.tool_call_message_ordinal AS ordinal,
-				tre.call_index, tre.event_index, tre.timestamp
-			FROM tool_result_events tre
-			WHERE ` + terminalIn + `
-				AND tre.source = 'tool_execution'
-				AND tre.status IN ('completed', 'errored')
-				AND tre.timestamp IS NOT NULL
-				AND tre.timestamp >= ` + chTimestampSQL + `
-		), ordered_terminal AS (
-			SELECT te.*,
-				leadInFrame(CAST(te.ordinal AS Nullable(Int64)), 1, CAST(NULL AS Nullable(Int64))) OVER terminal_order AS next_terminal_ordinal,
-				leadInFrame(CAST(te.timestamp AS Nullable(DateTime64(6, 'UTC'))), 1, CAST(NULL AS Nullable(DateTime64(6, 'UTC')))) OVER terminal_order AS next_terminal_timestamp
-			FROM terminal_events te
-			WINDOW terminal_order AS (
-				PARTITION BY te.session_id
-				ORDER BY te.timestamp, te.call_index, te.event_index
-				ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-			)
-		), next_after_terminal AS (
-			SELECT te.session_id AS session_id,
-				te.ordinal AS terminal_ordinal,
-				te.call_index AS call_index,
-				te.event_index AS event_index,
-				argMin(m.ordinal, m.ordinal) AS next_message_ordinal,
-				argMin(m.timestamp, m.ordinal) AS next_message_timestamp,
-				argMin(m.role, m.ordinal) AS next_message_role,
-				argMin(m.model, m.ordinal) AS next_message_model
-			FROM terminal_events te
-			INNER JOIN messages m
-				ON m.session_id = te.session_id
-				AND m.ordinal > te.ordinal
-				AND m.timestamp IS NOT NULL
-				AND m.timestamp > te.timestamp
-			GROUP BY te.session_id, te.ordinal, te.call_index, te.event_index
-		), terminal_with_message AS (
-			SELECT ot.*,
-				nm.next_message_ordinal,
-				nm.next_message_timestamp,
-				nm.next_message_role,
-				nm.next_message_model
-			FROM ordered_terminal ot
-			LEFT JOIN next_after_terminal nm
-				ON nm.session_id = ot.session_id
-				AND nm.terminal_ordinal = ot.ordinal
-				AND nm.call_index = ot.call_index
-				AND nm.event_index = ot.event_index
-		), last_messages AS (
-			SELECT session_id,
-				argMax(ordinal, ordinal) AS last_ordinal,
-				argMax(timestamp, ordinal) AS last_timestamp
-			FROM messages
-			WHERE session_id IN (SELECT DISTINCT session_id FROM terminal_events)
-				AND timestamp IS NOT NULL
-			GROUP BY session_id
-		), first_tail_events AS (
-			SELECT lm.session_id, lm.last_ordinal AS ordinal, lm.last_timestamp AS timestamp,
-				te.call_index, te.event_index, te.timestamp AS terminal_timestamp,
-				row_number() OVER (
-					PARTITION BY lm.session_id
-					ORDER BY te.timestamp, te.call_index, te.event_index
-				) AS row_num
-			FROM last_messages lm
-			JOIN terminal_events te ON te.session_id = lm.session_id
-			WHERE te.timestamp > lm.last_timestamp
-		), candidates AS (
-			SELECT twm.session_id, twm.ordinal AS start_ordinal,
-				if(
-					twm.next_terminal_timestamp IS NOT NULL AND
-						(twm.next_message_timestamp IS NULL OR
-						 twm.next_terminal_timestamp < twm.next_message_timestamp),
-					twm.next_terminal_ordinal,
-					twm.next_message_ordinal
-				) AS end_ordinal,
-				twm.timestamp AS start_timestamp,
-				if(
-					twm.next_terminal_timestamp IS NOT NULL AND
-						(twm.next_message_timestamp IS NULL OR
-						 twm.next_terminal_timestamp < twm.next_message_timestamp),
-					twm.next_terminal_timestamp,
-					twm.next_message_timestamp
-				) AS end_timestamp,
-				if(
-					twm.next_terminal_timestamp IS NOT NULL AND
-						(twm.next_message_timestamp IS NULL OR
-						 twm.next_terminal_timestamp < twm.next_message_timestamp),
-					'tool',
-					twm.next_message_role
-				) AS closing_role,
-				if(
-					twm.next_terminal_timestamp IS NOT NULL AND
-						(twm.next_message_timestamp IS NULL OR
-						 twm.next_terminal_timestamp < twm.next_message_timestamp),
-					'',
-					twm.next_message_model
-				) AS closing_model,
-				twm.call_index, twm.event_index
-			FROM terminal_with_message twm
-
-			UNION ALL
-
-			SELECT fte.session_id, fte.ordinal, fte.ordinal,
-				fte.timestamp, fte.terminal_timestamp, 'tool', '',
-				fte.call_index, fte.event_index
-			FROM first_tail_events fte
-			WHERE fte.row_num = 1
-		), assistant_models AS (
-			SELECT session_id, ordinal, model
-			FROM messages
-			WHERE ` + assistantIn + `
-				AND role = 'assistant'
-				AND model != ''
-		)
-		SELECT candidate.session_id, candidate.start_ordinal,
-			candidate.end_ordinal, candidate.start_timestamp,
-			candidate.end_timestamp, candidate.closing_role,
-			candidate.closing_model,
-			ifNull(nullIf(am.model, ''), 'unknown')
-		FROM candidates candidate
-		ASOF LEFT JOIN assistant_models am
-			ON candidate.session_id = am.session_id
-			AND candidate.start_ordinal >= am.ordinal
-		WHERE candidate.end_timestamp IS NOT NULL
-			AND candidate.start_timestamp < ` + chTimestampSQL + `
-		ORDER BY candidate.start_timestamp, candidate.session_id,
-			candidate.start_ordinal, candidate.call_index, candidate.event_index`
-		terminalArgs = append(terminalArgs, lower.UTC().Format(time.RFC3339Nano))
-		terminalArgs = append(terminalArgs, assistantArgs...)
-		terminalArgs = append(terminalArgs, q.EffectiveEnd.UTC().Format(time.RFC3339Nano))
-
-		terminalRows, err := s.queryContext(ctx, terminalQuery, terminalArgs...)
+		paired, terminal, err := s.activityReportPairs(ctx, candidates, q)
 		if err != nil {
-			return fmt.Errorf("querying clickhouse activity report terminal candidates: %w", err)
-		}
-		defer terminalRows.Close()
-		var terminal []activity.IntervalCandidate
-		for terminalRows.Next() {
-			candidate, scanErr := scanCandidate(terminalRows)
-			if scanErr != nil {
-				return scanErr
-			}
-			if _, ok := known[candidate.SessionID]; !ok {
-				continue
-			}
-			terminal = append(terminal, candidate)
-		}
-		if err := terminalRows.Err(); err != nil {
 			return err
 		}
-		if err := terminalRows.Close(); err != nil {
-			return err
-		}
-
-		messageSource := func(
-			ctx context.Context,
-			yield func(activity.IntervalCandidate) error,
-		) error {
-			query := `
-			WITH stamped AS (
-				SELECT session_id, ordinal, timestamp, role, model,
-					leadInFrame(CAST(ordinal AS Nullable(Int64)), 1, CAST(NULL AS Nullable(Int64))) OVER w AS successor_ordinal,
-					leadInFrame(CAST(timestamp AS Nullable(DateTime64(6, 'UTC'))), 1, CAST(NULL AS Nullable(DateTime64(6, 'UTC')))) OVER w AS successor_timestamp,
-					leadInFrame(CAST(role AS Nullable(String)), 1, CAST(NULL AS Nullable(String))) OVER w AS successor_role,
-					leadInFrame(CAST(model AS Nullable(String)), 1, CAST(NULL AS Nullable(String))) OVER w AS successor_model,
-					lagInFrame(CAST(timestamp AS Nullable(DateTime64(6, 'UTC'))), 1, CAST(NULL AS Nullable(DateTime64(6, 'UTC')))) OVER w AS prev_timestamp
-				FROM messages
-				WHERE ` + stampedIn + `
-					AND timestamp IS NOT NULL
-				WINDOW w AS (
-					PARTITION BY session_id ORDER BY ordinal
-					ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-				)
-			), prior_models AS (
-				SELECT session_id, ordinal, model
-				FROM stamped
-				WHERE role = 'assistant'
-					AND model != ''
-					AND prev_timestamp IS NOT NULL
-					AND timestamp > prev_timestamp
-			)
-			SELECT m.session_id, m.ordinal, m.successor_ordinal,
-				m.timestamp, m.successor_timestamp,
-				m.successor_role, m.successor_model,
-				ifNull(nullIf(pm.model, ''), 'unknown')
-			FROM stamped m
-			ASOF LEFT JOIN prior_models pm
-				ON m.session_id = pm.session_id AND m.ordinal >= pm.ordinal
-			WHERE m.successor_ordinal IS NOT NULL
-				AND m.timestamp >= ` + chTimestampSQL + `
-				AND m.timestamp < ` + chTimestampSQL + `
-			ORDER BY m.timestamp, m.session_id, m.ordinal`
-			stampedArgs = append(stampedArgs,
-				lower.UTC().Format(time.RFC3339Nano),
-				q.EffectiveEnd.UTC().Format(time.RFC3339Nano),
-			)
-			rows, queryErr := s.queryContext(ctx, query, stampedArgs...)
-			if queryErr != nil {
-				return fmt.Errorf(
-					"querying clickhouse activity report candidates: %w", queryErr)
-			}
-			defer rows.Close()
-			for rows.Next() {
+		terminal = slices.DeleteFunc(terminal, func(c activity.IntervalCandidate) bool {
+			_, ok := known[c.SessionID]
+			return !ok
+		})
+		messageSource := func(ctx context.Context, yield func(activity.IntervalCandidate) error) error {
+			for _, c := range paired {
 				if err := ctx.Err(); err != nil {
 					return err
 				}
-				candidate, scanErr := scanCandidate(rows)
-				if scanErr != nil {
-					return scanErr
-				}
-				if _, ok := known[candidate.SessionID]; !ok {
+				if _, ok := known[c.SessionID]; !ok {
 					continue
 				}
-				if err := yield(candidate); err != nil {
+				if err := yield(c); err != nil {
 					return err
 				}
 			}
-			return rows.Err()
+			return nil
 		}
+
 		return activity.MergeCandidateSlice(terminal, messageSource)(ctx, yield)
 	}
 }
@@ -794,33 +569,41 @@ func clickActivityReportUsageQuery(
 	eventBound := " AND COALESCE(ue.occurred_at, s.started_at) >= " + chTimestampSQL +
 		" AND COALESCE(ue.occurred_at, s.started_at) <= " + chTimestampSQL
 	const candidateIn = "s.id IN (SELECT id FROM candidate_sessions)"
-	ctes := `candidate_sessions AS (
+	// Read keys without FINAL so the time index can prune old parts. The outer
+	// read still resolves replacements and checks the current timestamp.
+	const boundedKeys = "(m.session_id, m.ordinal) IN (SELECT session_id, ordinal FROM bounded_usage_keys)"
+	ctes := `bounded_usage_keys AS (
+			SELECT session_id, ordinal FROM usage_messages
+			WHERE timestamp IS NULL OR (timestamp >= ` + chTimestampSQL + ` AND timestamp <= ` + chTimestampSQL + `)
+			SETTINGS final = 0
+		), candidate_sessions AS (
 			SELECT id FROM (` + candidates.body + `)
 		),
 		candidate_snapshot_keys AS (
 			SELECT DISTINCT m.claude_message_id AS claude_message_id,
 				m.claude_request_id AS claude_request_id
-			FROM messages m
-			JOIN sessions s ON s.id = m.session_id
-			WHERE ` + chUsageMessageEligibility + `
+			FROM usage_messages m
+			JOIN sessions s ON s.id = m.session_id AND s.push_version = m.push_version
+			WHERE ` + boundedKeys + " AND " + chUsageMessageEligibility + `
 				AND ` + candidateIn + `
 				AND m.claude_message_id != ''
 				AND m.claude_request_id != ''` + messageBound + `
 		),
 		`
+	// Keep both OR branches on messages so ClickHouse can filter before the join.
 	query := clickUsageNormalizedQueryWith(ctes,
-		chUsageMessageEligibility+`
-			AND (`+candidateIn+`
+		boundedKeys+" AND "+chUsageMessageEligibility+`
+			AND (m.session_id IN (SELECT id FROM candidate_sessions)
 				OR (m.claude_message_id, m.claude_request_id) IN (
 					SELECT claude_message_id, claude_request_id
 					FROM candidate_snapshot_keys))`+messageBound,
 		chUsageEventEligibility+" AND "+candidateIn+eventBound,
 	)
-	args := slices.Clone(candidates.args)
+	args := append([]any{lowerBound, upperBound}, candidates.args...)
 	args = append(args, lowerBound, upperBound)
 	args = append(args, lowerBound, upperBound)
 	args = append(args, lowerBound, upperBound)
-	return query, args
+	return query + " SETTINGS optimize_move_to_prewhere_if_final = 0", args
 }
 
 func clickUsageNormalizedQuery(messageWhere, eventWhere string) string {
@@ -834,13 +617,13 @@ func clickUsageNormalizedQueryWith(ctes, messageWhere, eventWhere string) string
 	clamp := func(expr string) string {
 		return fmt.Sprintf("least(greatest(%s, toInt64(0)), toInt64(%d))", expr, maxTok)
 	}
-	msgInput := clamp("JSONExtractInt(token_json, 'input_tokens')")
-	msgOutput := clamp("JSONExtractInt(token_json, 'output_tokens')")
-	msgCacheCr := clamp("JSONExtractInt(token_json, 'cache_creation_input_tokens')")
-	msgCacheCr1h := clamp("JSONExtractInt(token_json, 'cache_creation', 'ephemeral_1h_input_tokens')")
-	msgCacheRd := clamp("JSONExtractInt(token_json, 'cache_read_input_tokens')")
-	msgReasoning := clamp("JSONExtractInt(token_json, 'reasoning_tokens')")
-	msgWeb := "greatest(JSONExtractInt(token_json, 'server_tool_use', 'web_search_requests'), toInt64(0))"
+	msgInput := clamp("usage_input")
+	msgOutput := clamp("usage_output")
+	msgCacheCr := clamp("usage_cache_create")
+	msgCacheCr1h := clamp("usage_cache_create_1h")
+	msgCacheRd := clamp("usage_cache_read")
+	msgReasoning := clamp("usage_reasoning")
+	msgWeb := "greatest(usage_web, toInt64(0))"
 	return fmt.Sprintf(`
 		WITH %[15]susage_raw AS (
 			SELECT m.session_id AS session_id,
@@ -849,7 +632,13 @@ func clickUsageNormalizedQueryWith(ctes, messageWhere, eventWhere string) string
 				COALESCE(m.timestamp, s.started_at) AS ts,
 				m.timestamp AS pricing_ts,
 				m.model AS model, m.provider_id AS provider_id,
-				m.token_usage AS token_json,
+				m.usage_input AS usage_input,
+				m.usage_output AS usage_output,
+				m.usage_cache_create AS usage_cache_create,
+				m.usage_cache_create_1h AS usage_cache_create_1h,
+				m.usage_cache_read AS usage_cache_read,
+				m.usage_reasoning AS usage_reasoning,
+				m.usage_web AS usage_web,
 				s.agent AS agent,
 				m.claude_message_id AS claude_message_id,
 				m.claude_request_id AS claude_request_id,
@@ -862,8 +651,8 @@ func clickUsageNormalizedQueryWith(ctes, messageWhere, eventWhere string) string
 				CAST('' AS String) AS cost_source,
 				COALESCE(m.timestamp, s.started_at) AS ts_raw,
 				s.started_at AS started_at_raw
-			FROM messages m
-			JOIN sessions s ON s.id = m.session_id
+			FROM usage_messages m
+			JOIN sessions s ON s.id = m.session_id AND s.push_version = m.push_version
 			WHERE %[1]s
 			UNION ALL
 			SELECT ue.session_id AS session_id,
@@ -872,7 +661,13 @@ func clickUsageNormalizedQueryWith(ctes, messageWhere, eventWhere string) string
 				COALESCE(ue.occurred_at, s.started_at) AS ts,
 				ue.occurred_at AS pricing_ts,
 				ue.model AS model, ue.provider_id AS provider_id,
-				CAST('' AS String) AS token_json,
+				toInt64(0) AS usage_input,
+				toInt64(0) AS usage_output,
+				toInt64(0) AS usage_cache_create,
+				toInt64(0) AS usage_cache_create_1h,
+				toInt64(0) AS usage_cache_read,
+				toInt64(0) AS usage_reasoning,
+				toInt64(0) AS usage_web,
 				s.agent AS agent,
 				CAST('' AS String) AS claude_message_id,
 				CAST('' AS String) AS claude_request_id,

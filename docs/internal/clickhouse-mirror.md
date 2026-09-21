@@ -132,6 +132,48 @@ Copilot authoritative costs retain their per-session selection and allocation.
 The first push after the schema upgrade creates and fills the price tables.
 These are derived data; SQLite remains the archive.
 
+## Activity report reads
+
+The Activity report used to rebuild its candidate-session predicate inside every
+usage and interval query, parse usage JSON per row, and pair tool events with
+their next message through an inequality join that grew with the square of each
+session's size. Four changes keep the same output with less work:
+
+**Candidate IDs travel as an external table.** Session discovery runs once. The
+selected IDs are attached to the request context as a native external table
+named `activity_candidate_ids`, and every later query reads
+`SELECT id FROM activity_candidate_ids`. No candidate SQL is repeated and no
+`IN (...)` list is inlined into statement text.
+
+**Tool events pair per session in Go.** Serve loads the candidate sessions'
+messages and terminal tool events in two ordered scans, then pairs each tool
+event with the next stamped message or the next tool event per session. A
+segment tree over message timestamps finds the lowest eligible ordinal even when
+timestamps run backwards, so ordinal and timestamp behavior matches the old SQL,
+including reversed clocks and the tail pairing after the last message.
+
+**Usage is stored, not parsed.** `messages` carries `MATERIALIZED` usage columns
+computed from `token_usage`. The insert-maintained `usage_messages` table holds
+only the usage-relevant columns with a time index, and the usage query reads it
+instead of `messages`. Its replacement key is the source message key, not the
+timestamp, so a retry that corrects a timestamp or removes usage still replaces
+the earlier row.
+
+**Terminal events are snapshotted per session version.** The insert-maintained
+`terminal_event_snapshots` table stores the latest terminal tool event timestamp
+per `(session_id, push_version)`. Candidate discovery filters on it before
+version resolution instead of scanning `tool_result_events`.
+
+Both derived tables use `ReplacingMergeTree(revision)` with
+`revision = push_version * 2` for backfilled rows and `push_version * 2 + 1` for
+rows written by the materialized view. A live insert therefore beats a
+concurrent backfill of the same version, and readers join on
+`sessions.push_version` so rows from superseded versions never surface. The
+startup fills record completion in `sync_metadata` only after the work finishes,
+so an interrupted startup repeats the fill without touching source tables. A
+read-only role cannot run the fill and fails the compatibility check until a
+capable push completes it.
+
 ## Tradeoffs
 
 Push copies stars and pins from SQLite, but the ClickHouse UI cannot change

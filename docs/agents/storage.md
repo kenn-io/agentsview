@@ -440,6 +440,18 @@ own metadata, which is why the docs below call the database a mirror.
   sets `final = 1`. Do not write `FINAL` in query text. `OpenForAdmin`
   bootstraps through the server `default` database; do not ping a DSN-path
   database that does not exist yet.
+- Derived tables (`usage_messages`, `terminal_event_snapshots`) are
+  insert-maintained by materialized views and keyed by
+  `ReplacingMergeTree(revision)`, where live rows use an odd revision above
+  the backfill's even one. Readers must join them on `sessions.push_version`.
+  Startup backfills record completion in `sync_metadata` only after finishing,
+  never modify source tables, and must stay safe to repeat. See the
+  [Activity report reads](../internal/clickhouse-mirror.md#activity-report-reads)
+  design section.
+- Activity report queries receive the selected session IDs as the
+  `activity_candidate_ids` external table on the request context. Do not
+  rebuild candidate discovery inside later queries, and never materialize a
+  recursive CTE.
 - Design ClickHouse SQL for MergeTree. Do not paste PostgreSQL or DuckDB queries
   unchanged. Orphan filters must treat `parent_session_id IS NULL` as an
   orphan (`NULL NOT IN (...)` is unknown).

@@ -3,6 +3,7 @@ package clickhouse
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -527,6 +528,15 @@ func EnsureSchemaOn(ctx context.Context, conn *sql.DB) error {
 			}
 		}
 	}
+	if err := ensureUsageColumns(ctx, conn); err != nil {
+		return err
+	}
+	if err := ensureUsageMessages(ctx, conn); err != nil {
+		return err
+	}
+	if err := ensureTerminalEventSnapshots(ctx, conn); err != nil {
+		return err
+	}
 	return writeMetadata(ctx, conn, map[string]string{
 		schemaVersionKey:     strconv.Itoa(SchemaVersion),
 		sourceDataVersionKey: strconv.Itoa(db.CurrentDataVersion()),
@@ -577,7 +587,27 @@ func CheckSchemaCompat(ctx context.Context, conn *sql.DB) error {
 			}
 		}
 	}
+	for _, c := range usageColumns {
+		if _, has := existing["messages"][c.name]; !has {
+			missing = append(missing, "messages."+c.name)
+		}
+	}
+	for _, table := range []string{"usage_messages", "terminal_event_snapshots"} {
+		if _, has := existing[table]; !has {
+			missing = append(missing, table)
+		}
+	}
 	if len(missing) == 0 {
+		metadata, err := readMetadata(ctx, conn, "usage_messages_backfill", "terminal_event_snapshots_backfill")
+		if err != nil {
+			return err
+		}
+		if metadata["usage_messages_backfill"] != "1" {
+			return errors.New("clickhouse usage backfill is incomplete; run `agentsview clickhouse push` with a role that can finish it")
+		}
+		if metadata["terminal_event_snapshots_backfill"] != "1" {
+			return errors.New("clickhouse terminal event backfill is incomplete; run `agentsview clickhouse push` with a role that can finish it")
+		}
 		return nil
 	}
 	sort.Strings(missing)
