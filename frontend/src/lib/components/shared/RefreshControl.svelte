@@ -216,7 +216,7 @@
     position: absolute;
     top: 0;
     bottom: 0;
-    width: 1px;
+    width: 2px;
     background: var(--border-muted);
   }
 
