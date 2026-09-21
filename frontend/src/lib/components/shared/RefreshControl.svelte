@@ -166,12 +166,19 @@
   }
 
   /* Devtools-style timeline: name, a track on the shared time axis, duration. */
+  /* Rows touch (no row gap) and each track stretches to the full row height,
+   * so the per-row gridlines join into one continuous line per tick. Row
+   * rhythm comes from the text cells' padding instead. */
   .query-steps__list {
     display: grid;
     grid-template-columns: max-content 200px max-content;
     column-gap: var(--space-4);
-    row-gap: var(--space-1);
     align-items: center;
+  }
+
+  .query-steps__name,
+  .query-steps__duration {
+    padding: 2px 0;
   }
 
   .query-steps__row {
@@ -202,21 +209,21 @@
 
   .query-steps__track {
     position: relative;
-    height: 8px;
+    align-self: stretch;
   }
 
   .query-steps__grid {
     position: absolute;
-    top: -2px;
-    bottom: -2px;
+    top: 0;
+    bottom: 0;
     width: 1px;
     background: var(--border-muted);
   }
 
   .query-steps__bar {
     position: absolute;
-    top: 0;
-    bottom: 0;
+    top: calc(50% - 4px);
+    height: 8px;
     min-width: 1px;
   }
 

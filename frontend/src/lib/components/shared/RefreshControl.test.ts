@@ -150,7 +150,7 @@ describe("RefreshControl", () => {
     ]);
     expect(
       tooltip.querySelector(".query-steps__legend")?.textContent?.replace(/\s+/g, " ").trim(),
-    ).toBe("Waiting on server Download Applied in page");
+    ).toBe("Server Transfer Render");
     expect(tooltip.querySelector(".query-steps__total")?.textContent).toBe("2 s");
 
     unmount(component);

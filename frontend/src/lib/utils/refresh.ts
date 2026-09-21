@@ -50,8 +50,9 @@ export function refreshAgeWidthSamples(): string[] {
 
 const SECOND_MS = 1000;
 
-/** Phases of one request, as the browser's network panel draws them:
- * waiting on the server, downloading the body, and the page applying it. */
+/** Phases of one request, as the browser's network panel draws them: the
+ * server (sent until the first byte back), the transfer of the body, and the
+ * page rendering the data in. */
 export type QueryPhase = "wait" | "download" | "apply";
 
 export interface QuerySegment {
