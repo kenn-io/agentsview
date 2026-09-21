@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,8 +16,122 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/skills"
 	"go.kenn.io/agentsview/internal/storage"
 )
+
+func TestMemorySessionStartUsesPluginEnvironment(t *testing.T) {
+	original := runMemorySessionStart
+	t.Cleanup(func() { runMemorySessionStart = original })
+	t.Setenv("AGENTSVIEW_MEMORY_MODE", "hosted-contributor")
+	t.Setenv("AGENTSVIEW_MEMORY_TARGET", "team")
+
+	var got memorySessionStartRequest
+	runMemorySessionStart = func(
+		_ context.Context, req memorySessionStartRequest,
+	) error {
+		got = req
+		return nil
+	}
+
+	_, err := executeCommand(newRootCommand(), "memory", "session-start")
+	require.NoError(t, err)
+	assert.Equal(t, memorySessionStartRequest{
+		Mode: memoryModeHostedContributor, Target: "team",
+	}, got)
+}
+
+func TestMemoryContributorIgnoresMCPReadTargetEnvironment(t *testing.T) {
+	original := runMemorySessionStart
+	t.Cleanup(func() { runMemorySessionStart = original })
+	t.Setenv("AGENTSVIEW_MEMORY_MODE", "hosted-contributor")
+	t.Setenv("AGENTSVIEW_MEMORY_TARGET", "team")
+	t.Setenv("AGENTSVIEW_MEMORY_PG", "true")
+
+	var got memorySessionStartRequest
+	runMemorySessionStart = func(
+		_ context.Context, req memorySessionStartRequest,
+	) error {
+		got = req
+		return nil
+	}
+
+	_, err := executeCommand(newRootCommand(), "memory", "session-start")
+	require.NoError(t, err)
+	assert.Equal(t, memorySessionStartRequest{
+		Mode: memoryModeHostedContributor, Target: "team",
+	}, got)
+}
+
+func TestMemorySessionStartExplicitFlagsOverridePluginEnvironment(t *testing.T) {
+	original := runMemorySessionStart
+	t.Cleanup(func() { runMemorySessionStart = original })
+	t.Setenv("AGENTSVIEW_MEMORY_MODE", "hosted-reader")
+	t.Setenv("AGENTSVIEW_MEMORY_SERVER", "https://wrong.example")
+
+	var got memorySessionStartRequest
+	runMemorySessionStart = func(
+		_ context.Context, req memorySessionStartRequest,
+	) error {
+		got = req
+		return nil
+	}
+
+	_, err := executeCommand(newRootCommand(), "memory", "session-start",
+		"--mode", "local")
+	require.NoError(t, err)
+	assert.Equal(t, memorySessionStartRequest{Mode: memoryModeLocal}, got)
+}
+
+func TestMemorySessionStartHookReportsFailureWithoutBlocking(t *testing.T) {
+	original := runMemorySessionStart
+	t.Cleanup(func() { runMemorySessionStart = original })
+	runMemorySessionStart = func(
+		context.Context, memorySessionStartRequest,
+	) error {
+		return errors.New("remote unavailable")
+	}
+
+	cmd := newRootCommand()
+	var stderr bytes.Buffer
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"memory", "session-start", "--hook"})
+	require.NoError(t, cmd.Execute())
+	assert.Contains(t, stderr.String(), "remote unavailable")
+}
+
+func TestMemoryPluginConflictDiagnosticPreservesStandaloneSkill(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	pkg, err := skills.RenderPackage(skills.HarnessClaude, "dev", skills.Remote{})
+	require.NoError(t, err)
+	path := filepath.Join(home, pkg[0].RelativePath)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(pkg[0].Content), 0o644))
+
+	pluginRoot := t.TempDir()
+	pluginSkill := filepath.Join(pluginRoot, "skills",
+		"agentsview-finding-history", "SKILL.md")
+	require.NoError(t, os.MkdirAll(filepath.Dir(pluginSkill), 0o755))
+	require.NoError(t, os.WriteFile(pluginSkill, []byte(pkg[0].Content), 0o644))
+
+	var diagnostics bytes.Buffer
+	reportMemoryPluginConflicts(&diagnostics, pluginRoot)
+	assert.Contains(t, diagnostics.String(), "duplicates managed standalone skill")
+	body, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, pkg[0].Content, string(body))
+
+	modified := pkg[0].Content + "\nlocal edit\n"
+	require.NoError(t, os.WriteFile(path, []byte(modified), 0o644))
+	diagnostics.Reset()
+	reportMemoryPluginConflicts(&diagnostics, pluginRoot)
+	assert.Contains(t, diagnostics.String(), "conflicts with user-managed skill")
+	body, err = os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, modified, string(body))
+}
 
 func TestMemorySessionStartUsesBoundedContext(t *testing.T) {
 	original := runMemorySessionStart

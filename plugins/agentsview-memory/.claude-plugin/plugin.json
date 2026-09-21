@@ -1,0 +1,20 @@
+{
+  "name": "agentsview-memory",
+  "version": "0.1.0",
+  "description": "Search and read relevant AgentsView conversation history before guessing.",
+  "author": {
+    "name": "Kenn Software LLC",
+    "url": "https://agentsview.io"
+  },
+  "homepage": "https://agentsview.io/docs/",
+  "repository": "https://github.com/kenn-io/agentsview",
+  "license": "MIT",
+  "keywords": ["memory", "conversation-history", "agentsview"],
+  "agents": ["./agents/agentsview-search-conversations.md"],
+  "mcpServers": {
+    "agentsview": {
+      "command": "agentsview",
+      "args": ["mcp", "--profile", "memory"]
+    }
+  }
+}

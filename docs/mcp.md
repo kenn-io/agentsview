@@ -88,6 +88,13 @@ the same schemas and backend selection as the full profile, over either stdio or
 StreamableHTTP. Omitting `--profile` or choosing `--profile full` preserves the
 complete tool list above.
 
+The repository's `plugins/agentsview-memory` package registers this profile for
+Claude Code and Codex and bundles the generated recall skill. Its MCP process
+reads `AGENTSVIEW_MEMORY_SERVER`, `AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE`, or
+`AGENTSVIEW_MEMORY_PG`; explicit command flags still win. A token-file setting
+without a server fails instead of falling back to the local archive. PostgreSQL
+reads use the configured `default_pg` target.
+
 `search_sessions` accepts optional `date_from` and `date_to` bounds in
 `YYYY-MM-DD` format, just like `list_sessions` and `search_content`. Dates
 include sessions whose activity overlaps the requested days in UTC. Either bound

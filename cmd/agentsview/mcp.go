@@ -59,6 +59,9 @@ Add to your MCP client config (e.g. Claude Desktop):
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := applyMemoryTargetEnv(cmd, profileName); err != nil {
+				return err
+			}
 			profile, err := mcpserver.ParseProfile(profileName)
 			if err != nil {
 				return err
@@ -153,6 +156,46 @@ Add to your MCP client config (e.g. Claude Desktop):
 
 	cmd.AddCommand(newMCPStatusCommand())
 	return cmd
+}
+
+func applyMemoryTargetEnv(cmd *cobra.Command, profileName string) error {
+	if strings.TrimSpace(profileName) != string(mcpserver.ProfileMemory) {
+		return nil
+	}
+	explicit := false
+	for _, name := range []string{"server", "server-token-file", "pg"} {
+		if cmd.Flags().Changed(name) {
+			explicit = true
+			break
+		}
+	}
+	if !explicit {
+		for _, item := range []struct{ flag, env string }{
+			{"server", "AGENTSVIEW_MEMORY_SERVER"},
+			{"server-token-file", "AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE"},
+			{"pg", "AGENTSVIEW_MEMORY_PG"},
+		} {
+			if value := strings.TrimSpace(os.Getenv(item.env)); value != "" {
+				if err := cmd.Flags().Set(item.flag, value); err != nil {
+					return fmt.Errorf("mcp: invalid %s: %w", item.env, err)
+				}
+			}
+		}
+	}
+	server, err := cmd.Flags().GetString("server")
+	if err != nil {
+		return err
+	}
+	tokenFile, err := cmd.Flags().GetString("server-token-file")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(tokenFile) != "" && strings.TrimSpace(server) == "" {
+		return errors.New(
+			"mcp: --server-token-file or AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE requires --server or AGENTSVIEW_MEMORY_SERVER",
+		)
+	}
+	return nil
 }
 
 // resolveMCPService constructs the SessionService used by the long-lived

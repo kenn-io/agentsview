@@ -32,6 +32,21 @@ func TestRenderPackage_HarnessArtifacts(t *testing.T) {
 	}, renderedPaths(agents))
 }
 
+func TestRenderPluginPackageReusesClaudeArtifacts(t *testing.T) {
+	standalone, err := RenderPackage(HarnessClaude, "0.1.0", Remote{})
+	require.NoError(t, err)
+
+	plugin, err := RenderPluginPackage("0.1.0")
+	require.NoError(t, err)
+	require.Len(t, plugin, 2)
+	assert.Equal(t, []string{
+		"skills/agentsview-finding-history/SKILL.md",
+		"agents/agentsview-search-conversations.md",
+	}, renderedPaths(plugin))
+	assert.Equal(t, standalone[0].Content, plugin[0].Content)
+	assert.Equal(t, standalone[1].Content, plugin[1].Content)
+}
+
 func TestRenderPackage_ProtectsSearchAgentEdits(t *testing.T) {
 	pkg, err := RenderPackage(HarnessClaude, "dev", Remote{})
 	require.NoError(t, err)

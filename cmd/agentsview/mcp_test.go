@@ -107,6 +107,50 @@ func TestNewMCPCommand_Wiring(t *testing.T) {
 	}
 }
 
+func TestMCPMemoryProfileUsesPluginEnvironment(t *testing.T) {
+	t.Setenv("AGENTSVIEW_MEMORY_SERVER", "https://memory.example")
+	t.Setenv("AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE", "/tmp/token")
+	cmd := newMCPCommand()
+	require.NoError(t, cmd.ParseFlags([]string{"--profile", "memory"}))
+	require.NoError(t, applyMemoryTargetEnv(cmd, "memory"))
+
+	server, err := cmd.Flags().GetString("server")
+	require.NoError(t, err)
+	tokenFile, err := cmd.Flags().GetString("server-token-file")
+	require.NoError(t, err)
+	assert.Equal(t, "https://memory.example", server)
+	assert.Equal(t, "/tmp/token", tokenFile)
+}
+
+func TestMCPFullProfileIgnoresPluginEnvironment(t *testing.T) {
+	t.Setenv("AGENTSVIEW_MEMORY_SERVER", "https://memory.example")
+	cmd := newMCPCommand()
+	require.NoError(t, applyMemoryTargetEnv(cmd, "full"))
+
+	server, err := cmd.Flags().GetString("server")
+	require.NoError(t, err)
+	assert.Empty(t, server)
+}
+
+func TestMCPMemoryProfileRejectsTokenFileWithoutServer(t *testing.T) {
+	t.Setenv("AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE", "/tmp/token")
+	cmd := newMCPCommand()
+	require.NoError(t, cmd.ParseFlags([]string{"--profile", "memory"}))
+	err := applyMemoryTargetEnv(cmd, "memory")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "requires --server")
+}
+
+func TestMCPMemoryProfileRejectsExplicitTokenFileWithoutServer(t *testing.T) {
+	cmd := newMCPCommand()
+	require.NoError(t, cmd.ParseFlags([]string{
+		"--profile", "memory", "--server-token-file", "/tmp/token",
+	}))
+	err := applyMemoryTargetEnv(cmd, "memory")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "requires --server")
+}
+
 func TestMCPCommandRejectsUnknownProfileBeforeResolvingBackend(t *testing.T) {
 	t.Parallel()
 

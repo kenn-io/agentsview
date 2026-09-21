@@ -11,6 +11,11 @@ The latest published release is
 
 **New features**
 
+- Install the native AgentsView Memory package in Claude Code or Codex to get
+    the recall skill, focused MCP server, Claude search agent, and a fail-open
+    session-start hook from one package. Local and hosted targets stay in local
+    runtime configuration, and startup reports duplicate standalone skills
+    without changing user-edited files.
 - Native conversation-memory integrations can use
     `agentsview memory session-start` for local, hosted-contributor, and
     hosted-reader lifecycle roles. The command wakes the configured ingestion

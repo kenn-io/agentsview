@@ -1567,6 +1567,7 @@ agentsview memory session-start --mode hosted-contributor [--target <pg-name>]
 agentsview memory session-start --mode hosted-reader --server <url> \
   [--server-token-file <path>]
 agentsview memory session-start --mode hosted-reader --pg [--target <pg-name>]
+agentsview memory session-start --hook [--plugin-root <path>]
 ```
 
 The default `local` mode ensures the writable local daemon is available, then
@@ -1584,6 +1585,15 @@ started by an older binary must be restarted once so it can advertise the
 lifecycle wake endpoint. The contributor wake is available on macOS and Linux;
 Windows contributors continue on the watcher's normal event and interval
 cadence.
+
+Native packages can configure these flags with `AGENTSVIEW_MEMORY_MODE`,
+`AGENTSVIEW_MEMORY_TARGET`, `AGENTSVIEW_MEMORY_SERVER`,
+`AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE`, and `AGENTSVIEW_MEMORY_PG`. Explicit
+target flags override the package environment as a group. `--hook` reports a
+failure to stderr and exits successfully so startup problems do not prevent the
+agent session from opening. `--plugin-root` also diagnoses standalone skill
+copies that would be loaded alongside the native package; it never changes
+those files.
 
 ______________________________________________________________________
 

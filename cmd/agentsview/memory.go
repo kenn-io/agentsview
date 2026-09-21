@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/servicehttp"
+	"go.kenn.io/agentsview/internal/skills"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
@@ -72,6 +74,8 @@ func newMemorySessionStartCommand() *cobra.Command {
 	var server string
 	var serverTokenFile string
 	var pg bool
+	var hook bool
+	var pluginRoot string
 	cmd := &cobra.Command{
 		Use:   "session-start",
 		Short: "Run the bounded memory lifecycle action for a session start",
@@ -81,33 +85,12 @@ func newMemorySessionStartCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if os.Getenv("AGENTSVIEW_DISABLE_AUTO_SYNC") == "1" {
-				fmt.Fprintln(cmd.ErrOrStderr(),
-					"agentsview memory: automatic sync disabled by "+
-						"AGENTSVIEW_DISABLE_AUTO_SYNC=1")
+			err := runMemorySessionStartCommand(cmd, pluginRoot)
+			if hook && err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "agentsview memory hook: %v\n", err)
 				return nil
 			}
-			req := memorySessionStartRequest{
-				Mode:   memorySessionStartMode(strings.TrimSpace(mode)),
-				Target: strings.TrimSpace(target),
-				Server: strings.TrimSpace(server),
-				PG:     pg,
-			}
-			if err := req.validate(strings.TrimSpace(serverTokenFile) != ""); err != nil {
-				return err
-			}
-			if req.Server != "" {
-				token, err := explicitServerToken(cmd)
-				if err != nil {
-					return err
-				}
-				req.ServerToken = token
-			}
-			ctx, cancel := context.WithTimeout(
-				cmd.Context(), memorySessionStartTimeout,
-			)
-			defer cancel()
-			return runMemorySessionStart(ctx, req)
+			return err
 		},
 	}
 	cmd.Flags().StringVar(&mode, "mode", string(memoryModeLocal),
@@ -120,7 +103,132 @@ func newMemorySessionStartCommand() *cobra.Command {
 		"File containing bearer token for --server")
 	cmd.Flags().BoolVar(&pg, "pg", false,
 		"Check the configured PostgreSQL target in hosted-reader mode")
+	cmd.Flags().BoolVar(&hook, "hook", false,
+		"Report failures without preventing the agent session from starting")
+	cmd.Flags().StringVar(&pluginRoot, "plugin-root", "",
+		"Native plugin root used to diagnose duplicate standalone skills")
 	return cmd
+}
+
+func runMemorySessionStartCommand(
+	cmd *cobra.Command, pluginRoot string,
+) error {
+	if err := applyMemorySessionEnv(cmd); err != nil {
+		return err
+	}
+	mode, _ := cmd.Flags().GetString("mode")
+	target, _ := cmd.Flags().GetString("target")
+	server, _ := cmd.Flags().GetString("server")
+	serverTokenFile, _ := cmd.Flags().GetString("server-token-file")
+	pg, _ := cmd.Flags().GetBool("pg")
+
+	if strings.TrimSpace(pluginRoot) != "" {
+		reportMemoryPluginConflicts(cmd.ErrOrStderr(), pluginRoot)
+	}
+	if os.Getenv("AGENTSVIEW_DISABLE_AUTO_SYNC") == "1" {
+		fmt.Fprintln(cmd.ErrOrStderr(),
+			"agentsview memory: automatic sync disabled by "+
+				"AGENTSVIEW_DISABLE_AUTO_SYNC=1")
+		return nil
+	}
+	req := memorySessionStartRequest{
+		Mode:   memorySessionStartMode(strings.TrimSpace(mode)),
+		Target: strings.TrimSpace(target),
+		Server: strings.TrimSpace(server),
+		PG:     pg,
+	}
+	if err := req.validate(strings.TrimSpace(serverTokenFile) != ""); err != nil {
+		return err
+	}
+	if req.Server != "" {
+		token, err := explicitServerToken(cmd)
+		if err != nil {
+			return err
+		}
+		req.ServerToken = token
+	}
+	ctx, cancel := context.WithTimeout(
+		cmd.Context(), memorySessionStartTimeout,
+	)
+	defer cancel()
+	return runMemorySessionStart(ctx, req)
+}
+
+func applyMemorySessionEnv(cmd *cobra.Command) error {
+	for _, name := range []string{"mode", "target", "server", "server-token-file", "pg"} {
+		if cmd.Flags().Changed(name) {
+			return nil
+		}
+	}
+	for _, item := range []struct{ flag, env string }{
+		{"mode", "AGENTSVIEW_MEMORY_MODE"},
+		{"target", "AGENTSVIEW_MEMORY_TARGET"},
+	} {
+		if value := strings.TrimSpace(os.Getenv(item.env)); value != "" {
+			if err := cmd.Flags().Set(item.flag, value); err != nil {
+				return fmt.Errorf("memory session-start: invalid %s: %w", item.env, err)
+			}
+		}
+	}
+	mode, err := cmd.Flags().GetString("mode")
+	if err != nil {
+		return err
+	}
+	// Hosted contributors can use AGENTSVIEW_MEMORY_PG for the MCP read
+	// target while their hook still wakes the existing push owner. Only a
+	// hosted-reader lifecycle probe consumes read-target environment values.
+	if memorySessionStartMode(strings.TrimSpace(mode)) != memoryModeHostedReader {
+		return nil
+	}
+	for _, item := range []struct{ flag, env string }{
+		{"server", "AGENTSVIEW_MEMORY_SERVER"},
+		{"server-token-file", "AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE"},
+		{"pg", "AGENTSVIEW_MEMORY_PG"},
+	} {
+		if value := strings.TrimSpace(os.Getenv(item.env)); value != "" {
+			if err := cmd.Flags().Set(item.flag, value); err != nil {
+				return fmt.Errorf("memory session-start: invalid %s: %w", item.env, err)
+			}
+		}
+	}
+	return nil
+}
+
+func reportMemoryPluginConflicts(out io.Writer, pluginRoot string) {
+	if _, err := os.Stat(filepath.Join(pluginRoot, "skills",
+		"agentsview-finding-history", "SKILL.md")); err != nil {
+		fmt.Fprintf(out, "agentsview memory: plugin skill unavailable: %v\n", err)
+		return
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(out, "agentsview memory: cannot check standalone skills: %v\n", err)
+		return
+	}
+	for _, harness := range skills.AllHarnesses() {
+		pkg, renderErr := skills.RenderPackage(harness, version, skills.Remote{})
+		if renderErr != nil || len(pkg) == 0 {
+			continue
+		}
+		path := filepath.Join(home, pkg[0].RelativePath)
+		existing, readErr := os.ReadFile(path)
+		if os.IsNotExist(readErr) {
+			continue
+		}
+		if readErr != nil {
+			fmt.Fprintf(out, "agentsview memory: cannot inspect %s: %v\n", path, readErr)
+			continue
+		}
+		state := skills.Classify(existing, pkg[0])
+		switch state {
+		case skills.StateMissing:
+			continue
+		case skills.StateCurrent, skills.StateStale:
+			fmt.Fprintf(out, "agentsview memory: native plugin duplicates managed standalone skill %s; remove the standalone copy\n", path)
+		case skills.StateModified, skills.StateForeign:
+			fmt.Fprintf(out, "agentsview memory: native plugin conflicts with user-managed skill %s; preserved it for manual resolution\n", path)
+		}
+	}
 }
 
 func (r memorySessionStartRequest) validate(tokenFileSet bool) error {

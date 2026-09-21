@@ -21,6 +21,8 @@ import (
 //go:embed templates/*.md.tmpl
 var templatesFS embed.FS
 
+//go:generate go run ./cmd/render-memory-plugin -out ../../plugins/agentsview-memory -version 0.1.0
+
 // Harness identifies a skill discovery convention.
 type Harness string
 
@@ -257,6 +259,23 @@ func RenderPackage(h Harness, version string, remote Remote) ([]Rendered, error)
 		artifacts = append(artifacts, agent)
 	}
 
+	return artifacts, nil
+}
+
+// RenderPluginPackage produces the native plugin artifacts from the same
+// templates as the standalone Claude package. Keeping the rendered content
+// byte-identical lets lifecycle diagnostics recognize a duplicate standalone
+// install without maintaining a second copy of the behavioral instructions.
+func RenderPluginPackage(version string) ([]Rendered, error) {
+	artifacts, err := RenderPackage(HarnessClaude, version, Remote{})
+	if err != nil {
+		return nil, err
+	}
+	for i := range artifacts {
+		artifacts[i].RelativePath = strings.TrimPrefix(
+			filepath.ToSlash(artifacts[i].RelativePath), ".claude/",
+		)
+	}
 	return artifacts, nil
 }
 
