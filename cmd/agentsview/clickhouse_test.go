@@ -48,7 +48,7 @@ func TestClickHouseTargets_DefaultAndAll(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "clickhouse://archive", resolved.Target.URL)
 	assert.Equal(t, "archivebox", resolved.Target.MachineName)
-	assert.False(t, resolved.Target.PushVectors, "ClickHouse has no vector phase")
+	assert.True(t, resolved.Target.PushVectors, "ClickHouse pushes vectors by default")
 }
 
 func TestClickHouseTargets_RejectsTargetWithAll(t *testing.T) {
