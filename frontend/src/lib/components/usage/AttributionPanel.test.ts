@@ -10,7 +10,8 @@ const usageServiceMocks = vi.hoisted(() => ({
   getApiV1UsageTopSessions: vi.fn().mockResolvedValue([]),
 }));
 
-vi.mock("../../api/runtime.js", () => ({
+vi.mock("../../api/runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../api/runtime.js")>()),
   isAbortError: vi.fn(() => false),
 }));
 

@@ -52,7 +52,9 @@
   // being asked for: the sub-millisecond setup before the first send would
   // otherwise nudge every bar off the zero line. The axis runs to the last
   // step's end, or to the recorded total if that is later.
-  const originMs = $derived(Math.min(...querySteps.map((step) => step.startMs), 0));
+  const originMs = $derived(
+    querySteps.length === 0 ? 0 : Math.min(...querySteps.map((step) => step.startMs)),
+  );
   const axisMs = $derived(
     Math.max(
       (queryDurationMs ?? 0) - originMs,

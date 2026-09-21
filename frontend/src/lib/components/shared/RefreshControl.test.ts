@@ -179,10 +179,37 @@ describe("RefreshControl", () => {
     const lefts = Array.from(
       document.querySelectorAll<HTMLElement>('[role="tooltip"] .query-steps__bar'),
     ).map((bar) => bar.style.left);
-    // 0.4 ms and 1.6 ms after the first send are within two pixels of the
-    // origin on a 200 px track, so both sit at 0%; the later request keeps
-    // its real offset.
-    expect(lefts).toEqual(["0%", "0%", "50%"]);
+    // The axis starts at the first send (0.4 ms). 1.6 ms is within two
+    // pixels of it on a 200 px track, so both sit at 0%; the later request
+    // keeps its real offset from that origin: 99.6 of 199.6 ms.
+    expect(lefts).toEqual(["0%", "0%", "49.9%"]);
+
+    unmount(component);
+    document.body.innerHTML = "";
+  });
+
+  it("starts the axis at the first request, not at the refresh", async () => {
+    const component = mount(RefreshControl, {
+      target: document.body,
+      props: {
+        lastUpdatedAt: Date.now(),
+        queryDurationMs: 110,
+        // 3 ms of setup before the first send is well past the two-pixel
+        // snap on a ~107 ms axis, so only a moved origin puts it at zero.
+        querySteps: [{ name: "entries", startMs: 3, durationMs: 100 }],
+        onRefresh: vi.fn(),
+      },
+    });
+    await tick();
+    document
+      .querySelector(".kit-tooltip-trigger")!
+      .dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    await tick();
+
+    const bar = document.querySelector<HTMLElement>('[role="tooltip"] .query-steps__bar')!;
+    expect(bar.style.left).toBe("0%");
+    // The axis runs 107 ms: from the first send to the recorded total.
+    expect(bar.style.width).toBe("93.46%");
 
     unmount(component);
     document.body.innerHTML = "";

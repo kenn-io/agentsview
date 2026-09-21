@@ -167,7 +167,10 @@
     },
   ]);
 
-  async function loadEntries(cursor = "") {
+  // An entries load on its own (a filter change or the next page) reports
+  // itself as the latest query. refreshRecall passes publishTiming=false and
+  // reports the entries and status pair together once both have applied.
+  async function loadEntries(cursor = "", publishTiming = true) {
     const startedAt = performance.now();
     const signal = entriesRead.begin();
     const appending = cursor !== "";
@@ -192,13 +195,15 @@
       entriesUpdatedAt = Date.now();
       const appliedAt = performance.now();
       const timing = responseTimingOf(page);
-      queryDurationMs = appliedAt - startedAt;
       stepTimings.set("entries", { startedAt, appliedAt, timing });
-      querySteps = [queryStepFrom("entries", timing, startedAt, appliedAt, startedAt)];
+      if (publishTiming) {
+        queryDurationMs = appliedAt - startedAt;
+        querySteps = [queryStepFrom("entries", timing, startedAt, appliedAt, startedAt)];
+      }
     } catch (error) {
       if (isAbortError(error) || !entriesRead.isCurrent(signal)) return;
       if (appending && error instanceof ApiError && error.status === 409) {
-        await loadEntries();
+        await loadEntries("", publishTiming);
         return;
       }
       if (!appending) {
@@ -275,9 +280,10 @@
   async function refreshRecall() {
     const startedAt = performance.now();
     const startedAtEpoch = Date.now();
-    await Promise.all([loadEntries(), loadStatus()]);
+    await Promise.all([loadEntries("", false), loadStatus()]);
     // Both loads swallow their own failures; only a refresh where each one
-    // applied fresh data counts as a completed query.
+    // applied fresh data counts as a completed query. A partial failure
+    // keeps the previous duration and timeline.
     if ((entriesUpdatedAt ?? -1) >= startedAtEpoch && (statusUpdatedAt ?? -1) >= startedAtEpoch) {
       queryDurationMs = performance.now() - startedAt;
       querySteps = (["entries", "status"] as const).flatMap((name) => {
