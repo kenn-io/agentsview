@@ -5022,11 +5022,12 @@ func TestSyncEngineHashSkip(t *testing.T) {
 	// Second sync — unchanged content → skipped
 	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 0 + 1, Synced: 0, Skipped: 1})
 
-	// Overwrite with different content (changes mtime).
+	// Advance mtime explicitly; a same-size rewrite can share a clock tick.
 	different := testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsZero, "msg2").
 		String()
-	os.WriteFile(path, []byte(different), 0o644)
+	require.NoError(t, os.WriteFile(path, []byte(different), 0o644))
+	setFileMtime(t, path, mtime+int64(time.Second))
 
 	// Third sync — mtime changed → re-synced
 	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 1 + 0, Synced: 1, Skipped: 0})
