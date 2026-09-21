@@ -44,7 +44,7 @@ describe("RefreshControl", () => {
       target: document.body,
       props: {
         lastUpdatedAt: Date.now() - 3 * 60_000,
-        queryDurationMs: 1234,
+        queryDurationMs: 2400,
         onRefresh: vi.fn(),
       },
     });
@@ -55,7 +55,7 @@ describe("RefreshControl", () => {
       ".kit-refresh-control__detail > .kit-refresh-control__text",
     );
     expect(age?.textContent).toBe("Updated 3m ago");
-    expect(detail?.textContent).toBe("1.2 s");
+    expect(detail?.textContent).toBe("2 s");
     expect(age!.compareDocumentPosition(detail!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
     unmount(component);

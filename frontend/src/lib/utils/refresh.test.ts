@@ -59,13 +59,15 @@ describe("formatQueryDuration", () => {
     { durationMs: 42.4, expected: "42 ms" },
     { durationMs: 999.4, expected: "999 ms" },
     // Rounds across the unit boundary instead of reading "1000 ms".
-    { durationMs: 999.6, expected: "1.0 s" },
-    { durationMs: 1000, expected: "1.0 s" },
-    { durationMs: 1234, expected: "1.2 s" },
-    { durationMs: 9950, expected: "10.0 s" },
-    { durationMs: 59_940, expected: "59.9 s" },
-    // Rounds across the minute boundary instead of reading "60.0 s".
-    { durationMs: 59_960, expected: "1m 00s" },
+    { durationMs: 999.6, expected: "1 s" },
+    { durationMs: 1000, expected: "1 s" },
+    // Whole seconds only: sub-second detail adds nothing at this scale.
+    { durationMs: 1499, expected: "1 s" },
+    { durationMs: 1500, expected: "2 s" },
+    { durationMs: 9950, expected: "10 s" },
+    { durationMs: 59_400, expected: "59 s" },
+    // Rounds across the minute boundary instead of reading "60 s".
+    { durationMs: 59_600, expected: "1m 00s" },
     { durationMs: 60_000, expected: "1m 00s" },
     { durationMs: 65_000, expected: "1m 05s" },
     { durationMs: 125_400, expected: "2m 05s" },
@@ -79,12 +81,12 @@ describe("formatQueryDuration", () => {
     setLocale("zh-CN");
 
     expect(formatQueryDuration(42)).toBe("42 毫秒");
-    expect(formatQueryDuration(1234)).toBe("1.2 秒");
+    expect(formatQueryDuration(1234)).toBe("1 秒");
     expect(formatQueryDuration(65_000)).toBe("1 分 05 秒");
   });
 
   it("reserves the widest rendering of every unit", () => {
-    expect(queryDurationWidthSamples()).toEqual(["999 ms", "59.9 s", "99m 59s"]);
+    expect(queryDurationWidthSamples()).toEqual(["999 ms", "59 s", "99m 59s"]);
   });
 });
 

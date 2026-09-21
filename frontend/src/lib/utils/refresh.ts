@@ -51,9 +51,10 @@ const SECOND_MS = 1000;
 
 /**
  * How long the last data query took, in a short fixed-format string:
- * whole milliseconds under a second, seconds with one decimal under a
- * minute, then minutes plus zero-padded seconds. Each unit boundary is
- * applied after rounding so a value like 999.6 ms reads "1.0 s" rather
+ * whole milliseconds under a second, whole seconds under a minute, then
+ * minutes plus zero-padded seconds. Sub-second precision stops mattering
+ * once a query takes seconds, so no decimals. Each unit boundary is
+ * applied after rounding so a value like 999.6 ms reads "1 s" rather
  * than "1000 ms". Returns "" for a missing duration so the reserved box
  * stays empty instead of showing a placeholder.
  */
@@ -67,16 +68,12 @@ export function formatQueryDuration(durationMs: number | null | undefined): stri
       value: new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(wholeMs),
     });
   }
-  const tenths = Math.round(ms / 100);
-  if (tenths < 600) {
+  const totalSeconds = Math.round(ms / SECOND_MS);
+  if (totalSeconds < 60) {
     return m.shared_refresh_duration_seconds({
-      value: new Intl.NumberFormat(locale, {
-        minimumFractionDigits: 1,
-        maximumFractionDigits: 1,
-      }).format(tenths / 10),
+      value: new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(totalSeconds),
     });
   }
-  const totalSeconds = Math.round(ms / SECOND_MS);
   return m.shared_refresh_duration_minutes({
     minutes: new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(
       Math.floor(totalSeconds / 60),
@@ -96,7 +93,7 @@ export function formatQueryDuration(durationMs: number | null | undefined): stri
 export function queryDurationWidthSamples(): string[] {
   return [
     formatQueryDuration(999),
-    formatQueryDuration(59_900),
+    formatQueryDuration(59 * SECOND_MS),
     formatQueryDuration(99 * MINUTE_MS + 59 * SECOND_MS),
   ];
 }
