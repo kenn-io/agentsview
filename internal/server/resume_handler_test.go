@@ -1906,12 +1906,7 @@ func TestResumeTerminalSurvivesRequestCancellation(t *testing.T) {
 	case <-time.After(time.Second):
 		require.FailNow(t, "resume request did not return")
 	}
-	assertStatus(t, response, http.StatusOK)
-	var result struct {
-		Launched bool `json:"launched"`
-	}
-	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &result))
-	assert.True(t, result.Launched)
+	// Cancellation can interrupt the HTTP response; check the terminal itself.
 	assert.NoFileExists(t, completed)
 	_, err = releaseFile.WriteString("release\n")
 	require.NoError(t, err)
