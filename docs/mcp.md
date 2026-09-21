@@ -179,6 +179,14 @@ background reconciliation, and returns within two seconds without waiting for
 the archive pass. Parallel starts coalesce in the daemon, while the file watcher
 continues to ingest changed transcripts normally.
 
+Packages configured as hosted contributors call the same command with
+`--mode hosted-contributor` and an optional named PostgreSQL target. This wakes
+the existing push watcher; it does not start another writer or copy that
+owner's credentials. Hosted read-only packages use `--mode hosted-reader` with
+either `--server` or `--pg`. That mode only checks the selected read endpoint
+and never starts a local archive or reports that the remote corpus was
+refreshed. Contributor wake delivery is currently available on macOS and Linux.
+
 Set `AGENTSVIEW_DISABLE_AUTO_SYNC=1` to skip this automatic lifecycle request.
 Explicit `agentsview sync` commands and existing-history searches remain
 available. A disabled or failed lifecycle request does not change archive data;

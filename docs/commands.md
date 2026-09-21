@@ -1558,18 +1558,32 @@ ______________________________________________________________________
 
 ### `agentsview memory session-start`
 
-Queue the local conversation-memory refresh used by native agent lifecycle
+Run the bounded conversation-memory lifecycle action used by native agent
 packages:
 
 ```bash
 agentsview memory session-start
+agentsview memory session-start --mode hosted-contributor [--target <pg-name>]
+agentsview memory session-start --mode hosted-reader --server <url> \
+  [--server-token-file <path>]
+agentsview memory session-start --mode hosted-reader --pg [--target <pg-name>]
 ```
 
-The command ensures the writable local daemon is available, then asks it to run
-a coalesced background reconciliation. It returns within two seconds and does
-not wait for archive-scale work. Parallel requests share the daemon's bounded
-queue. Set `AGENTSVIEW_DISABLE_AUTO_SYNC=1` to skip only this automatic request;
-explicit sync commands and searches remain available.
+The default `local` mode ensures the writable local daemon is available, then
+asks it to run a coalesced background reconciliation. `hosted-contributor`
+notifies the already running PostgreSQL push watcher for the selected target;
+that owner keeps its existing debounce, credentials, embedding work, and push
+cadence. It does not start another writer. `hosted-reader` checks an explicit
+authenticated daemon or configured PostgreSQL read target without starting a
+local archive or claiming to refresh hosted data.
+
+Every mode returns within 1.9 seconds and does not wait for archive-scale work.
+Set `AGENTSVIEW_DISABLE_AUTO_SYNC=1` to skip only this automatic request;
+explicit sync commands and searches remain available. A contributor owner
+started by an older binary must be restarted once so it can advertise the
+lifecycle wake endpoint. The contributor wake is available on macOS and Linux;
+Windows contributors continue on the watcher's normal event and interval
+cadence.
 
 ______________________________________________________________________
 

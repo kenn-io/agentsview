@@ -1,5 +1,5 @@
 // ABOUTME: Fast lifecycle entry points used by conversation-memory packages.
-// ABOUTME: SessionStart only queues daemon work and never scans the archive.
+// ABOUTME: SessionStart dispatches bounded local or hosted owner work.
 package main
 
 import (
@@ -15,6 +15,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/postgres"
+	"go.kenn.io/agentsview/internal/servicehttp"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 const (
@@ -22,7 +25,31 @@ const (
 	memoryRefreshDebounce     = 250 * time.Millisecond
 )
 
-var runMemorySessionStart = requestLocalMemoryRefresh
+type memorySessionStartMode string
+
+const (
+	memoryModeLocal             memorySessionStartMode = "local"
+	memoryModeHostedContributor memorySessionStartMode = "hosted-contributor"
+	memoryModeHostedReader      memorySessionStartMode = "hosted-reader"
+)
+
+type memorySessionStartRequest struct {
+	Mode        memorySessionStartMode
+	Target      string
+	Server      string
+	ServerToken string
+	PG          bool
+}
+
+var (
+	runMemorySessionStart             = executeMemorySessionStart
+	requestMemoryLocalRefresh         = requestLocalMemoryRefresh
+	requestMemoryContributorRefresh   = requestHostedContributorRefresh
+	checkMemoryHostedReader           = checkHostedReaderAvailability
+	probeMemoryHostedReaderHTTP       = probeHostedReaderHTTP
+	probeMemoryHostedReaderPostgreSQL = probeHostedReaderPostgreSQL
+	notifyMemoryReplicaWatch          = notifyReplicaWatchLifecycle
+)
 
 func newMemoryCommand() *cobra.Command {
 	cmd := &cobra.Command{
@@ -40,12 +67,17 @@ func newMemoryCommand() *cobra.Command {
 }
 
 func newMemorySessionStartCommand() *cobra.Command {
-	return &cobra.Command{
+	var mode string
+	var target string
+	var server string
+	var serverTokenFile string
+	var pg bool
+	cmd := &cobra.Command{
 		Use:   "session-start",
-		Short: "Queue a local archive refresh for an agent session start",
-		Long: "Ensure the configured local daemon is available and queue a " +
-			"coalesced background refresh. The command returns within two seconds " +
-			"without waiting for archive reconciliation.",
+		Short: "Run the bounded memory lifecycle action for a session start",
+		Long: "Queue a local refresh, wake a hosted contributor's existing " +
+			"push owner, or check a hosted reader target. The command returns " +
+			"within two seconds without waiting for archive reconciliation.",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -55,13 +87,179 @@ func newMemorySessionStartCommand() *cobra.Command {
 						"AGENTSVIEW_DISABLE_AUTO_SYNC=1")
 				return nil
 			}
+			req := memorySessionStartRequest{
+				Mode:   memorySessionStartMode(strings.TrimSpace(mode)),
+				Target: strings.TrimSpace(target),
+				Server: strings.TrimSpace(server),
+				PG:     pg,
+			}
+			if err := req.validate(strings.TrimSpace(serverTokenFile) != ""); err != nil {
+				return err
+			}
+			if req.Server != "" {
+				token, err := explicitServerToken(cmd)
+				if err != nil {
+					return err
+				}
+				req.ServerToken = token
+			}
 			ctx, cancel := context.WithTimeout(
 				cmd.Context(), memorySessionStartTimeout,
 			)
 			defer cancel()
-			return runMemorySessionStart(ctx)
+			return runMemorySessionStart(ctx, req)
 		},
 	}
+	cmd.Flags().StringVar(&mode, "mode", string(memoryModeLocal),
+		"Lifecycle role: local, hosted-contributor, or hosted-reader")
+	cmd.Flags().StringVar(&target, "target", "",
+		"Named PostgreSQL target for a hosted lifecycle role")
+	cmd.Flags().StringVar(&server, "server", "",
+		"Remote daemon URL for hosted-reader mode")
+	cmd.Flags().StringVar(&serverTokenFile, "server-token-file", "",
+		"File containing bearer token for --server")
+	cmd.Flags().BoolVar(&pg, "pg", false,
+		"Check the configured PostgreSQL target in hosted-reader mode")
+	return cmd
+}
+
+func (r memorySessionStartRequest) validate(tokenFileSet bool) error {
+	switch r.Mode {
+	case memoryModeLocal:
+		if r.Target != "" || r.Server != "" || tokenFileSet || r.PG {
+			return errors.New(
+				"memory session-start: local mode does not accept hosted target flags",
+			)
+		}
+	case memoryModeHostedContributor:
+		if r.Server != "" || tokenFileSet || r.PG {
+			return errors.New(
+				"memory session-start: hosted-contributor mode accepts only --target",
+			)
+		}
+	case memoryModeHostedReader:
+		if (r.Server != "") == r.PG {
+			return errors.New(
+				"memory session-start: hosted-reader mode requires exactly one of --server or --pg",
+			)
+		}
+		if tokenFileSet && r.Server == "" {
+			return errors.New(
+				"memory session-start: --server-token-file requires --server",
+			)
+		}
+		if r.Target != "" && !r.PG {
+			return errors.New(
+				"memory session-start: --target requires --pg in hosted-reader mode",
+			)
+		}
+	default:
+		return fmt.Errorf(
+			"memory session-start: unknown --mode %q (want local, hosted-contributor, or hosted-reader)",
+			r.Mode,
+		)
+	}
+	return nil
+}
+
+func executeMemorySessionStart(
+	ctx context.Context, req memorySessionStartRequest,
+) error {
+	switch req.Mode {
+	case memoryModeLocal:
+		return requestMemoryLocalRefresh(ctx)
+	case memoryModeHostedContributor:
+		return requestMemoryContributorRefresh(ctx, req.Target)
+	case memoryModeHostedReader:
+		return checkMemoryHostedReader(ctx, req)
+	default:
+		return fmt.Errorf("memory session-start: unsupported mode %q", req.Mode)
+	}
+}
+
+func requestHostedContributorRefresh(
+	ctx context.Context, targetName string,
+) error {
+	cfg, target, err := resolveMemoryPGTarget(targetName)
+	if err != nil {
+		return err
+	}
+	backend := pgReplica{}
+	if err := backend.ValidateTarget(target.Target); err != nil {
+		return fmt.Errorf("memory session-start: invalid PostgreSQL target: %w", err)
+	}
+	if err := notifyMemoryReplicaWatch(
+		ctx, cfg.DataDir, backend.Name(), target.Name,
+	); err != nil {
+		return fmt.Errorf("memory session-start: hosted contributor owner: %w", err)
+	}
+	return nil
+}
+
+func checkHostedReaderAvailability(
+	ctx context.Context, req memorySessionStartRequest,
+) error {
+	if req.Server != "" {
+		if err := probeMemoryHostedReaderHTTP(
+			ctx, req.Server, req.ServerToken,
+		); err != nil {
+			return fmt.Errorf("memory session-start: hosted reader endpoint: %w", err)
+		}
+		return nil
+	}
+
+	_, target, err := resolveMemoryPGTarget(req.Target)
+	if err != nil {
+		return err
+	}
+	if err := probeMemoryHostedReaderPostgreSQL(ctx, target.Target); err != nil {
+		return fmt.Errorf("memory session-start: hosted reader PostgreSQL target: %w", err)
+	}
+	return nil
+}
+
+func resolveMemoryPGTarget(
+	targetName string,
+) (config.Config, storage.ConfiguredReplica, error) {
+	cfg, err := config.LoadMinimal()
+	if err != nil {
+		return config.Config{}, storage.ConfiguredReplica{},
+			fmt.Errorf("memory session-start: loading config: %w", err)
+	}
+	backend := pgReplica{}
+	refs, err := storage.SelectTargets(backend, cfg, targetName, false)
+	if err != nil {
+		return config.Config{}, storage.ConfiguredReplica{},
+			fmt.Errorf("memory session-start: resolving PostgreSQL target: %w", err)
+	}
+	target, err := backend.ResolveTarget(cfg, refs[0])
+	if err != nil {
+		return config.Config{}, storage.ConfiguredReplica{},
+			fmt.Errorf("memory session-start: resolving PostgreSQL target: %w", err)
+	}
+	if target.Target.URL == "" {
+		return config.Config{}, storage.ConfiguredReplica{}, errors.New(
+			"memory session-start: PostgreSQL target URL is not configured",
+		)
+	}
+	return cfg, target, nil
+}
+
+func probeHostedReaderHTTP(ctx context.Context, server, token string) error {
+	_, err := servicehttp.ProbeHTTPServerCapabilities(ctx, server, token)
+	return err
+}
+
+func probeHostedReaderPostgreSQL(
+	ctx context.Context, target storage.ReplicaTarget,
+) error {
+	database, err := postgres.OpenContext(
+		ctx, target.URL, target.Schema, target.AllowInsecure,
+	)
+	if err != nil {
+		return err
+	}
+	return database.Close()
 }
 
 func requestLocalMemoryRefresh(ctx context.Context) error {

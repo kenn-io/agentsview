@@ -43,6 +43,9 @@ type ReplicaPushConfig struct {
 	// pushes leave them nil and retain the historical unscoped sync.
 	WatchBatch    *syncpkg.WatchBatch
 	WatchRecovery *syncpkg.WatchRecoveryScope
+	// LifecycleWake carries nonblocking SessionStart notifications from the
+	// process runtime owner into the existing debounced push loop.
+	LifecycleWake <-chan struct{}
 }
 
 type ReplicaStatusConfig struct {

@@ -11,10 +11,10 @@ The latest published release is
 
 **New features**
 
-- Native conversation-memory integrations can queue a coalesced local archive
-    refresh with `agentsview memory session-start`. The command starts the
-    local daemon when needed and returns within two seconds while reconciliation
-    continues in the daemon.
+- Native conversation-memory integrations can use
+    `agentsview memory session-start` for local, hosted-contributor, and
+    hosted-reader lifecycle roles. The command wakes the configured ingestion
+    owner or checks the selected read target and returns within two seconds.
 - MCP clients can use `agentsview mcp --profile memory` to advertise only the
     conversation evidence search and read tools, reducing unrelated tool
     choices while leaving the default full MCP surface unchanged.
