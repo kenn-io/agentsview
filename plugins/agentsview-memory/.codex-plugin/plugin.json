@@ -1,0 +1,25 @@
+{
+  "name": "agentsview-memory",
+  "version": "0.1.0",
+  "description": "Search and read relevant AgentsView conversation history before guessing.",
+  "author": {
+    "name": "Kenn Software LLC",
+    "url": "https://agentsview.io"
+  },
+  "homepage": "https://agentsview.io/docs/",
+  "repository": "https://github.com/kenn-io/agentsview",
+  "license": "MIT",
+  "keywords": ["memory", "conversation-history", "agentsview"],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "AgentsView Memory",
+    "shortDescription": "Recall relevant conversation history.",
+    "longDescription": "Search and read relevant AgentsView conversation history with a focused MCP tool set.",
+    "developerName": "Kenn Software LLC",
+    "category": "Productivity",
+    "capabilities": ["Conversation recall", "Evidence reading"],
+    "websiteURL": "https://agentsview.io",
+    "defaultPrompt": "Find relevant prior conversation context in AgentsView before answering."
+  }
+}

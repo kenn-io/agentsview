@@ -1,7 +1,6 @@
 package sync_test
 
 import (
-	"bytes"
 	"database/sql"
 	"log"
 	"os"
@@ -363,7 +362,9 @@ func TestSyncPiebaldFullSyncSuppressesStableParseFailure(t *testing.T) {
 	}))
 	piebald.mustExec(t, "drop messages table", `DROP TABLE messages`)
 
-	var logs bytes.Buffer
+	// The engine may still log from background goroutines when this test
+	// resets the capture between phases, so the buffer must be lock-protected.
+	var logs lockedLogBuffer
 	previousWriter := log.Writer()
 	log.SetOutput(&logs)
 	t.Cleanup(func() { log.SetOutput(previousWriter) })
@@ -483,7 +484,7 @@ func TestResyncBuildPiebaldFailureBypassesMemo(t *testing.T) {
 	)
 	piebald.mustExec(t, "drop messages table", `DROP TABLE messages`)
 
-	var logs bytes.Buffer
+	var logs lockedLogBuffer
 	previousWriter := log.Writer()
 	log.SetOutput(&logs)
 	t.Cleanup(func() { log.SetOutput(previousWriter) })

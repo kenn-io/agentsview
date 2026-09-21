@@ -1,4 +1,5 @@
 ---
+last_edited: 2026-09-21
 title: CLI Reference
 description: All AgentsView commands, flags, and environment variables
 ---
@@ -1560,6 +1561,47 @@ sent to an explicitly supplied server.
 
 ______________________________________________________________________
 
+### `agentsview memory session-start`
+
+Run the bounded conversation-memory lifecycle action used by native agent
+packages:
+
+```bash
+agentsview memory session-start
+agentsview memory session-start --mode hosted-contributor [--target <pg-name>]
+agentsview memory session-start --mode hosted-reader --server <url> \
+  [--server-token-file <path>]
+agentsview memory session-start --mode hosted-reader --pg [--target <pg-name>]
+agentsview memory session-start --hook [--plugin-root <path>]
+```
+
+The default `local` mode ensures the writable local daemon is available, then
+asks it to run a coalesced background reconciliation. `hosted-contributor`
+notifies the already running PostgreSQL push watcher for the selected target;
+that owner keeps its existing debounce, credentials, embedding work, and push
+cadence. It does not start another writer. `hosted-reader` checks an explicit
+authenticated daemon or configured PostgreSQL read target without starting a
+local archive or claiming to refresh hosted data.
+
+Every mode returns within 1.9 seconds and does not wait for archive-scale work.
+Set `AGENTSVIEW_DISABLE_AUTO_SYNC=1` to skip only this automatic request;
+explicit sync commands and searches remain available. A contributor owner
+started by an older binary must be restarted once so it can advertise the
+lifecycle wake endpoint. The contributor wake is available on macOS and Linux;
+Windows contributors continue on the watcher's normal event and interval
+cadence.
+
+Native packages can configure these flags with `AGENTSVIEW_MEMORY_MODE`,
+`AGENTSVIEW_MEMORY_TARGET`, `AGENTSVIEW_MEMORY_SERVER`,
+`AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE`, and `AGENTSVIEW_MEMORY_PG`. Explicit
+target flags override the package environment as a group. `--hook` reports a
+failure to stderr and exits successfully so startup problems do not prevent the
+agent session from opening. `--plugin-root` also diagnoses standalone skill
+copies that would be loaded alongside the native package; it never changes
+those files.
+
+______________________________________________________________________
+
 ### `agentsview mcp`
 
 Run a read-only Model Context Protocol server for assistant clients that can
@@ -1570,6 +1612,7 @@ and operational guidance.
 
 ```bash
 agentsview mcp
+agentsview mcp --profile memory
 agentsview mcp --http 127.0.0.1:8085
 agentsview mcp --server http://127.0.0.1:8080
 agentsview mcp status --json
@@ -1591,6 +1634,11 @@ daemon and starts it when needed, so a long-lived MCP server can keep working
 after the daemon exits due to idleness. The MCP server does not fall back to
 opening the local SQLite archive directly.
 
+Use `--profile memory` when the client should discover only the
+`search_content` and `get_messages` conversation-memory tools. The default
+`full` profile preserves the complete MCP tool surface. Profile selection works
+with both stdio and StreamableHTTP and does not change backend selection.
+
 Use `--server <url>` to point at an explicit running daemon. When the daemon
 requires auth, provide `AGENTSVIEW_SERVER_TOKEN` or
 `--server-token-file <path>`. Use `--pg` to read from configured PostgreSQL
@@ -1604,6 +1652,7 @@ pass its URL with `--server`.
 | `--server <url>`             |         | Explicit daemon URL for MCP tool calls              |
 | `--server-token-file <path>` |         | Bearer token file for an explicit daemon URL        |
 | `--pg`                       | `false` | Read from configured PostgreSQL                     |
+| `--profile <name>`           | `full`  | Advertise the `full` or focused `memory` tool set    |
 
 ______________________________________________________________________
 
@@ -1648,10 +1697,13 @@ ______________________________________________________________________
 
 ### `agentsview skills`
 
-Install or list the bundled skill files that teach coding-agent harnesses
-(Claude Code, Codex, and other `.agents/skills` readers) to search AgentsView
-history. See [Semantic Search](/docs/semantic-search/#skills-for-coding-agents)
-for what the skill does and when to re-run it.
+Install or list the bundled recall artifacts that teach coding-agent harnesses
+to consult AgentsView conversation history. Claude Code receives the
+`agentsview-finding-history` skill and the
+`agentsview-search-conversations` agent. Codex and other `.agents/skills`
+readers receive the skill with the same direct MCP workflow as its fallback.
+See [Semantic Search](/docs/semantic-search/#skills-for-coding-agents) for the
+workflow and upgrade guidance.
 
 ```bash
 agentsview skills install [--harness claude|agents] [--project] [--force]
@@ -1660,26 +1712,28 @@ agentsview skills list [--project] [--format json]
     [--server URL] [--server-token-file PATH]
 ```
 
-`install` renders the embedded `agentsview-finding-history` skill for each
-`--harness` (default both) and writes `SKILL.md` under
-`~/.claude/skills/agentsview-finding-history/` and/or
-`~/.agents/skills/agentsview-finding-history/`, or under `.claude/skills/` /
-`.agents/skills/` at the current git root with `--project`. It overwrites an
-unmodified generated file, refuses a hand-edited or foreign file unless
-`--force` is passed, and exits non-zero on any refusal. `list` reports HARNESS,
+`install` renders the package for each `--harness` (default both). Skills land
+under `~/.claude/skills/agentsview-finding-history/` and/or
+`~/.agents/skills/agentsview-finding-history/`; Claude's search agent lands at
+`~/.claude/agents/agentsview-search-conversations.md`. `--project` uses the
+equivalent paths at the current git root. Each artifact has its own generated
+hash: install updates safe generated files, refuses hand-edited or foreign
+files unless `--force` is passed, continues processing the other artifacts,
+and exits non-zero if anything was refused. `list` reports HARNESS, ARTIFACT,
 LEVEL, STATE (`missing`, `current`, `stale`, `modified`, `foreign`), and PATH
-for every harness.
+for every artifact.
 
 `--server` / `--server-token-file` (or `AGENTSVIEW_SKILLS_SERVER` /
 `AGENTSVIEW_SKILLS_SERVER_TOKEN_FILE`) bake those flags into every example
 command so a remote-daemon install does not teach the local SQLite default.
 Values are shell-quoted, so a token path with a space stays one argument.
 
-Precedence is explicit flags, then whatever the installed file already bakes,
-then the environment. An installed file therefore decides even when it bakes no
-remote, so exporting `AGENTSVIEW_SKILLS_SERVER` never marks existing skills
-stale in `list`; the variables only seed a file that is not installed yet. Pass
-`--server ""` to un-bake a remote and go back to a local-SQLite skill.
+Precedence is explicit flags, then whatever the installed skill already bakes,
+then the environment. An installed skill therefore decides even when it bakes
+no remote, so exporting `AGENTSVIEW_SKILLS_SERVER` never marks an existing
+package stale in `list`; the variables only seed a package whose skill is not
+installed yet. The endpoint-neutral Claude agent never contains server flags.
+Pass `--server ""` to un-bake a remote and return the skill to local SQLite.
 
 These variables are skills-only and named apart from `AGENTSVIEW_SERVER_TOKEN`
 on purpose: they do not change the CLI's default read path, and `session search`

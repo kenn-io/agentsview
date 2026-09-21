@@ -673,6 +673,28 @@ these modes — a subagent session structurally has exactly one "user" message
 Substring, regex, and FTS modes keep the existing `--include-children` and
 one-shot behavior unchanged.
 
+### MCP all-terms exchange search
+
+The MCP `search_content` tool also has a `terms` mode for literal multi-term
+recall without an embedding query. It splits `pattern` on whitespace and
+requires every term inside one exchange: a user message plus the assistant run
+that follows it on the same main or sidechain branch. Terms can occur in
+different messages. Tool and system content does not participate, and `%`, `_`,
+and backslashes are ordinary characters rather than wildcard syntax.
+
+Terms results are ordered with top-level exchanges first, then newest session
+activity, with stable session and ordinal tie breaks. `scope=top`, `all`, or
+`subordinate` applies before the final limit. Exact `session_id`, raw
+`git_branch`, project, agent, and UTC date filters use the same SQLite and
+PostgreSQL session scope as semantic and hybrid retrieval.
+
+For a recall request from a known running conversation, pass its full ID as
+`current_session_id`. This excludes that session before the limit and disables
+the broader ten-minute activity guard, so an unrelated recent session remains
+searchable. Limits default to 10; values outside 1-50 are rejected. Responses
+state the effective mode, applied filters and exclusions, and whether another
+candidate page exists.
+
 ### Inline context: `--context N`
 
 ```bash
@@ -730,7 +752,7 @@ of `ordinal_range` to read the whole stretch.
 | Only a building generation exists                                                                       | same message, plus `: index is building: N% complete`                                                                                                        |
 | Active generation's fingerprint no longer matches config (model, dimension, or chunking changed)        | same message, plus `: index is stale (embedding config changed): run 'agentsview embeddings build --full-rebuild'`                                           |
 | Index was built by an incompatible agentsview version (mirror schema mismatch)                          | same message, plus `` : vector index was built by an incompatible version: run `agentsview embeddings build` ``                                              |
-| `--scope` with a lexical mode (or without `--semantic`/`--hybrid`)                                      | CLI: `--scope requires --semantic or --hybrid`; HTTP/MCP: `scope is only supported for semantic and hybrid search modes`                                     |
+| `--scope` with a lexical mode (or without `--semantic`/`--hybrid`)                                      | CLI/HTTP: `scope is only supported for semantic and hybrid search modes`; MCP also supports scope with `terms`                                                |
 | Embeddings endpoint unreachable or timed out                                                            | `[vector.embeddings] request: ...` (the underlying transport error)                                                                                          |
 | Embeddings endpoint returned non-200                                                                    | `[vector.embeddings] status <code>: <body>`                                                                                                                  |
 | Embeddings endpoint returned a non-finite or zero-norm vector                                           | `[vector.embeddings] invalid embedding at index <n>: ...`; correct the endpoint/cache configuration, then run `agentsview embeddings build --repair-invalid` |
@@ -889,43 +911,60 @@ differ between the backends.
 
 ## Skills for coding agents
 
-`agentsview skills install` writes a bundled skill file that teaches a
-coding-agent harness the search workflow described on this page: when to reach
-for `--hybrid` versus `--fts`, when to use plain substring search over
-`tool_input`/`tool_result` for identifiers, how to pass `--exclude-session` so
-the live conversation does not fill the page, how to react to the
-[error taxonomy](#error-taxonomy), and how to walk from a hit into its
-surrounding conversation with
-[`session messages --around`](#cursor-follow-from-a-hit-to-its-surrounding-conversation).
+`agentsview skills install` writes a proactive conversation-recall skill.
+Agents consult history when prior decisions, rationale, solutions, pitfalls,
+or project context may help, when stuck, and before guessing about something
+learned previously. The skill starts with the registered `search_content` MCP
+tool, reads the top sources with `get_messages`, follows continuation, and
+distinguishes snippets and summaries from messages read in detail. The runtime
+supplies the client-specific MCP tool prefix.
+
+Claude Code also receives an `agentsview-search-conversations` agent that runs
+the bounded search and returns Summary / Sources / For Follow-Up. Its
+frontmatter denies built-in shell, file, network, dispatch, and MCP-discovery
+tools, and it fails closed when tool discovery is deferred. Tools from other
+registered MCP servers remain inherited from the session; the agent is
+instructed to use only the AgentsView tools. Codex and
+other `.agents/skills` readers run the same MCP workflow directly when they do
+not have a permitted search agent. The generated skill retains CLI examples as
+a secondary fallback and preserves baked remote-server targeting across
+reinstalls.
 
 ```bash
 agentsview skills install                    # both harnesses, user level
 agentsview skills install --harness claude   # one harness only
 agentsview skills install --project          # install under the current git root
 agentsview skills install --server URL       # bake remote-daemon flags into examples
-agentsview skills list                       # show install state per harness
+agentsview skills list                       # show install state per artifact
 ```
 
-| `--harness` | Target                                                                                                                     |
-| ----------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `claude`    | `~/.claude/skills/agentsview-finding-history/SKILL.md`                                                                     |
-| `agents`    | `$HOME/.agents/skills/agentsview-finding-history/SKILL.md` — the open convention Codex reads (per Codex's own skills docs) |
+| `--harness` | Artifact     | Target                                                                                                                     |
+| ----------- | ------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `claude`    | skill        | `~/.claude/skills/agentsview-finding-history/SKILL.md`                                                                     |
+| `claude`    | search-agent | `~/.claude/agents/agentsview-search-conversations.md`                                                                      |
+| `agents`    | skill        | `$HOME/.agents/skills/agentsview-finding-history/SKILL.md` — the open convention Codex reads (per Codex's own skills docs) |
 
 `--project` swaps the base from the home directory to the current git root (or
 the working directory itself outside a repo), writing to `.claude/skills/...`
 and `.agents/skills/...` instead.
 
-Every rendered file carries a `generated-by` header with a content hash, written
-as a YAML comment just inside the frontmatter fence so the file still starts
-with `---` and harnesses keep discovering it. `install` overwrites a file whose
-hash still matches its header (unmodified since the last install) but refuses a
-file that was hand-edited or was never generated by `agentsview`, printing which
-paths it refused and exiting non-zero; pass `--force` to overwrite anyway.
-Re-run `agentsview skills install` after upgrading `agentsview` to pick up skill
-content changes — the header records the CLI version for humans, but the content
-hash, not the version, decides whether a reinstall is a no-op.
+Every rendered artifact carries a `generated-by` header with a content hash,
+written as a YAML comment just inside the frontmatter fence so the file still
+starts with `---` and harnesses keep discovering it. `install` classifies and
+protects each file independently: one refused local edit does not block safe
+package files from installing. Pass `--force` to overwrite modified or foreign
+files. Re-run `agentsview skills install` after upgrading `agentsview`; the
+content hash, rather than the displayed version, decides whether each artifact
+is current.
 
-`agentsview skills list [--project] [--format json]` reports each harness's
-install state — `missing`, `current`, `stale` (unmodified but older than the
-current render), `modified`, or `foreign` (no header) — without writing
-anything.
+`agentsview skills list [--project] [--format json]` reports each artifact's
+harness, kind, path, and install state — `missing`, `current`, `stale`
+(unmodified but older than the current render), `modified`, or `foreign` (no
+header) — without writing anything.
+
+The recall text is adapted from `obra/episodic-memory` at pinned commit
+`7e06519357777badd7a115d2014a7ef845904310` under the MIT License. See the
+[adaptation record](https://github.com/kenn-io/agentsview/blob/main/docs/internal/episodic-memory-adaptation.md).
+This release does not yet add multi-concept search, long-message continuation,
+memory-profile packaging, SessionStart lifecycle wiring, or readiness
+diagnostics.

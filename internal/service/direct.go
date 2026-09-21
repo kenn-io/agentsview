@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -9,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -32,9 +35,10 @@ import (
 // interface (GetSessionFilePath, Reader). Structural nil checks
 // on local+engine replace runtime type assertions.
 type directBackend struct {
-	db     db.Store
-	local  *db.DB
-	engine *sync.Engine
+	db             db.Store
+	local          *db.DB
+	engine         *sync.Engine
+	evidenceSource string
 }
 
 // NewDirectBackend returns a full read/write SessionService
@@ -43,15 +47,25 @@ type directBackend struct {
 // work. Use NewReadOnlyBackend for stores that are not *db.DB
 // (e.g. a PostgreSQL reader).
 func NewDirectBackend(d *db.DB, engine *sync.Engine) SessionService {
-	return &directBackend{db: d, local: d, engine: engine}
+	return &directBackend{db: d, local: d, engine: engine, evidenceSource: newEvidenceSource()}
 }
 
 // NewReadOnlyBackend returns a read-only SessionService over any
 // db.Store (e.g. a PostgreSQL reader used by `pg serve`). Sync
 // returns db.ErrReadOnly unconditionally.
 func NewReadOnlyBackend(d db.Store) SessionService {
-	return &directBackend{db: d}
+	return &directBackend{db: d, evidenceSource: newEvidenceSource()}
 }
+
+func newEvidenceSource() string {
+	var raw [18]byte
+	if _, err := rand.Read(raw[:]); err == nil {
+		return base64.RawURLEncoding.EncodeToString(raw[:])
+	}
+	return fmt.Sprintf("fallback-%x-%x", time.Now().UnixNano(), evidenceSourceFallback.Add(1))
+}
+
+var evidenceSourceFallback atomic.Uint64
 
 func (b *directBackend) SupportsRecallQueries() bool { return b.local != nil }
 
@@ -315,11 +329,52 @@ func (b *directBackend) Messages(
 		w.From = &from
 	}
 
+	before, err := b.db.GetSession(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	revision := ""
+	if before != nil && before.TranscriptRevision != nil {
+		revision = *before.TranscriptRevision
+	}
+	boundRead := f.ExpectedRevision != "" || f.EvidenceSource != ""
+	if before == nil && boundRead {
+		return nil, fmt.Errorf("%w: cited session no longer exists", ErrSourceChanged)
+	}
+	if before != nil && revision == "" && boundRead {
+		return nil, ErrRevisionBoundReadUnavailable
+	}
+	if f.ExpectedRevision != "" && f.ExpectedRevision != revision {
+		return nil, fmt.Errorf("%w: transcript revision does not match", ErrSourceChanged)
+	}
+	if f.EvidenceSource != "" && f.EvidenceSource != b.evidenceSource {
+		return nil, fmt.Errorf("%w: evidence source does not match", ErrSourceChanged)
+	}
+
 	msgs, err := b.db.GetMessagesWindow(ctx, id, w)
 	if err != nil {
 		return nil, err
 	}
-	list := &MessageList{Messages: msgs, Count: len(msgs)}
+	if revision != "" {
+		after, err := b.db.GetSession(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if after == nil || after.TranscriptRevision == nil || *after.TranscriptRevision != revision {
+			if boundRead {
+				return nil, fmt.Errorf("%w: transcript changed during read", ErrSourceChanged)
+			}
+			// Preserve ordinary read behavior without attaching a revision that
+			// may describe different content than the page just returned.
+			revision = ""
+		}
+	}
+	list := &MessageList{
+		Messages: msgs, Count: len(msgs), TranscriptRevision: revision,
+	}
+	if revision != "" {
+		list.EvidenceSource = b.evidenceSource
+	}
 	if len(msgs) > 0 {
 		first := msgs[0].Ordinal
 		last := msgs[len(msgs)-1].Ordinal
@@ -825,11 +880,11 @@ const maxContentSearchContext = 10
 func (b *directBackend) SearchContent(
 	ctx context.Context, req ContentSearchRequest,
 ) (*ContentSearchResult, error) {
-	if req.Mode == "fts" {
+	if req.Mode == "fts" || req.Mode == "terms" {
 		for _, s := range req.Sources {
 			if s != "messages" {
 				return nil, &db.SearchInputError{Msg: fmt.Sprintf(
-					"search: --fts searches messages only (got source %q)", s)}
+					"search: %s searches messages only (got source %q)", req.Mode, s)}
 			}
 		}
 		req.Sources = []string{"messages"}
@@ -861,6 +916,8 @@ func (b *directBackend) SearchContent(
 		ExcludeProject:    req.ExcludeProject,
 		Machine:           req.Machine,
 		GitBranch:         req.GitBranch,
+		SessionID:         req.SessionID,
+		GitBranchExact:    req.GitBranchExact,
 		Agent:             req.Agent,
 		Date:              req.Date,
 		DateFrom:          req.DateFrom,
@@ -882,6 +939,13 @@ func (b *directBackend) SearchContent(
 	if err != nil {
 		return nil, err
 	}
+	revisionBound := true
+	for i := range page.Matches {
+		if page.Matches[i].TranscriptRevision == "" {
+			revisionBound = false
+			break
+		}
+	}
 	if req.Context > 0 {
 		if err := b.enrichContentContext(
 			ctx, page.Matches, req.Context, req.Reveal,
@@ -890,8 +954,9 @@ func (b *directBackend) SearchContent(
 		}
 	}
 	return &ContentSearchResult{
-		Matches:    page.Matches,
-		NextCursor: page.NextCursor,
+		Matches:       page.Matches,
+		NextCursor:    page.NextCursor,
+		RevisionBound: revisionBound,
 	}, nil
 }
 
