@@ -81,3 +81,50 @@ func TestClickHouseUsageMessagesReplacement(t *testing.T) {
 	require.NoError(t, ensureUsageMessages(ctx, store.DB()))
 	require.NoError(t, CheckSchemaCompat(ctx, store.DB()))
 }
+
+// A push writes messages before it publishes the session row, and an
+// interrupted push never publishes it. Usage must not read as zero meanwhile.
+func TestClickHouseUsageSurvivesUnpublishedPush(t *testing.T) {
+	store, _, _ := newPushedStore(t)
+	ctx := t.Context()
+	const id = "usage-unpublished-push"
+	query, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: "2026-01-10", Timezone: "UTC"},
+		time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	outputTokens := func() (int, int) {
+		t.Helper()
+		got, err := store.GetSessionUsageRows(ctx, []string{id})
+		require.NoError(t, err)
+		report, err := store.BuildActivityReportArtifacts(ctx,
+			db.AnalyticsFilter{Project: id, Timezone: "UTC"}, query, nil)
+		require.NoError(t, err)
+		return got.RawOutputTokensBySession[id], report.Report.Totals.OutputTokens
+	}
+	exec := func(statement string, args ...any) {
+		t.Helper()
+		_, err := store.DB().ExecContext(ctx, statement, args...)
+		require.NoError(t, err)
+	}
+	const insertMessage = `INSERT INTO messages (session_id,ordinal,timestamp,model,token_usage,push_version)
+		VALUES (?,?,parseDateTime64BestEffort('2026-01-10T12:01:00Z'),'gpt-4o',?,?)`
+	const publish = `INSERT INTO sessions (id,agent,project,started_at,message_count,push_version)
+		VALUES (?,'codex',?,parseDateTime64BestEffort('2026-01-10T12:00:00Z'),?,?)`
+
+	exec(insertMessage, id, 0, `{"output_tokens":17}`, 1)
+	exec(insertMessage, id, 1, `{"output_tokens":5}`, 1)
+	exec(publish, id, id, 2, 1)
+	session, day := outputTokens()
+	require.Equal(t, 22, session)
+	require.Equal(t, 22, day)
+
+	// Version 2 rewrites the session as a single message; its row is not published yet.
+	exec(insertMessage, id, 0, `{"output_tokens":31}`, 2)
+	session, day = outputTokens()
+	require.Equal(t, 36, session, "the rewritten message shows beside the not yet replaced tail")
+	require.Equal(t, 36, day)
+
+	exec(publish, id, id, 1, 2)
+	session, day = outputTokens()
+	require.Equal(t, 31, session, "the older tail falls below the published version")
+	require.Equal(t, 31, day)
+}

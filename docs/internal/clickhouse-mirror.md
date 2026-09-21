@@ -167,8 +167,19 @@ version resolution instead of scanning `tool_result_events`.
 Both derived tables use `ReplacingMergeTree(revision)` with
 `revision = push_version * 2` for backfilled rows and `push_version * 2 + 1` for
 rows written by the materialized view. A live insert therefore beats a
-concurrent backfill of the same version, and readers join on
-`sessions.push_version` so rows from superseded versions never surface. The
+concurrent backfill of the same version. Readers compare each row with
+`sessions.push_version`. A push writes messages before it publishes the session
+row, and an interrupted push never publishes it, so usage rows count when their
+version is at or above the session's; an exact match would report no usage for
+that session until its next successful push. Rows that a shorter republished
+session left behind stay below the session's version and never surface. Terminal
+snapshots are written by the session insert itself and match exactly.
+
+The snapshot view runs inside every `sessions` insert, and ClickHouse reads a
+view's joined table in full. The view therefore limits `tool_result_events` to
+the sessions in the inserted block, which keeps the cost tied to the push batch
+and not to the size of the mirror. Materialized views do not see deletes, so
+removing a session from the mirror also clears its rows in both tables. The
 startup fills record completion in `sync_metadata` only after the work finishes,
 so an interrupted startup repeats the fill without touching source tables. A
 read-only role cannot run the fill and fails the compatibility check until a

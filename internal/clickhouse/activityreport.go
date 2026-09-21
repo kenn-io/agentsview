@@ -583,8 +583,8 @@ func clickActivityReportUsageQuery(
 			SELECT DISTINCT m.claude_message_id AS claude_message_id,
 				m.claude_request_id AS claude_request_id
 			FROM usage_messages m
-			JOIN sessions s ON s.id = m.session_id AND s.push_version = m.push_version
-			WHERE ` + boundedKeys + " AND " + chUsageMessageEligibility + `
+			JOIN sessions s ON s.id = m.session_id
+			WHERE ` + chUsageMessageCurrent + " AND " + boundedKeys + " AND " + chUsageMessageEligibility + `
 				AND ` + candidateIn + `
 				AND m.claude_message_id != ''
 				AND m.claude_request_id != ''` + messageBound + `
@@ -605,6 +605,12 @@ func clickActivityReportUsageQuery(
 	args = append(args, lowerBound, upperBound)
 	return query + " SETTINGS optimize_move_to_prewhere_if_final = 0", args
 }
+
+// A push writes a session's messages before it publishes the session row, and
+// an interrupted push may never publish it. Accept stored usage at or above the
+// published version so that window shows the newer rows instead of no usage.
+// Rows a shorter republished session left behind stay below it and are skipped.
+const chUsageMessageCurrent = "m.push_version >= s.push_version"
 
 func clickUsageNormalizedQuery(messageWhere, eventWhere string) string {
 	return clickUsageNormalizedQueryWith("", messageWhere, eventWhere)
@@ -652,8 +658,8 @@ func clickUsageNormalizedQueryWith(ctes, messageWhere, eventWhere string) string
 				COALESCE(m.timestamp, s.started_at) AS ts_raw,
 				s.started_at AS started_at_raw
 			FROM usage_messages m
-			JOIN sessions s ON s.id = m.session_id AND s.push_version = m.push_version
-			WHERE %[1]s
+			JOIN sessions s ON s.id = m.session_id
+			WHERE %[16]s AND %[1]s
 			UNION ALL
 			SELECT ue.session_id AS session_id,
 				ue.message_ordinal AS message_ordinal,
@@ -730,7 +736,7 @@ func clickUsageNormalizedQueryWith(ctes, messageWhere, eventWhere string) string
 		msgInput, msgOutput, msgCacheCr, msgCacheCr1h, msgCacheRd,
 		clamp("input_tokens"), clamp("output_tokens"), clamp("cache_create"),
 		clamp("cache_read"), msgReasoning, clamp("reasoning_tokens"), msgWeb,
-		ctes,
+		ctes, chUsageMessageCurrent,
 	)
 }
 

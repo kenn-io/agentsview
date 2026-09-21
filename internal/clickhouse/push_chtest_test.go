@@ -141,6 +141,13 @@ func TestPushRemovesHardDeletedSessions(t *testing.T) {
 	_, err := s.Push(ctx, false, nil)
 	require.NoError(t, err)
 
+	conn := chtest.Open(t, target.URL, target.Database)
+	// Views fill these on insert but never see a delete.
+	derived := []string{"usage_messages", "terminal_event_snapshots"}
+	for _, table := range derived {
+		require.Equal(t, 1, chtest.Count(t, conn, table, "session_id = ?", fixtureBetaID), table)
+	}
+
 	require.NoError(t, local.SoftDeleteSession(t.Context(), fixtureBetaID))
 	deleted, err := local.DeleteSessionIfTrashed(t.Context(), fixtureBetaID)
 	require.NoError(t, err)
@@ -150,9 +157,11 @@ func TestPushRemovesHardDeletedSessions(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, res.DeletedStale)
 
-	conn := chtest.Open(t, target.URL, target.Database)
 	assert.Zero(t, chtest.Count(t, conn, "sessions", "id = ?", fixtureBetaID))
 	assert.Zero(t, chtest.Count(t, conn, "messages", "session_id = ?", fixtureBetaID))
+	for _, table := range derived {
+		assert.Zero(t, chtest.Count(t, conn, table, "session_id = ?", fixtureBetaID), table)
+	}
 	assert.Equal(t, 2, chtest.Count(t, conn, "sessions", ""))
 }
 

@@ -443,9 +443,14 @@ own metadata, which is why the docs below call the database a mirror.
 - Derived tables (`usage_messages`, `terminal_event_snapshots`) are
   insert-maintained by materialized views and keyed by
   `ReplacingMergeTree(revision)`, where live rows use an odd revision above
-  the backfill's even one. Readers must join them on `sessions.push_version`.
-  Startup backfills record completion in `sync_metadata` only after finishing,
-  never modify source tables, and must stay safe to repeat. See the
+  the backfill's even one. Readers check them against `sessions.push_version`:
+  `usage_messages` rows count at or above it, because messages land before the
+  session row is published, and `terminal_event_snapshots` rows match it
+  exactly. A materialized view runs inside the insert and reads joined tables
+  in full, so filter a joined table to the inserted block's sessions. Views
+  never see deletes; `deleteMirrorSessions` clears the derived tables. Startup
+  backfills record completion in `sync_metadata` only after finishing, never
+  modify source tables, and must stay safe to repeat. See the
   [Activity report reads](../internal/clickhouse-mirror.md#activity-report-reads)
   design section.
 - Activity report queries receive the selected session IDs as the

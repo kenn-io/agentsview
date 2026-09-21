@@ -377,11 +377,15 @@ func (s *Sync) deleteResidentSessions(ctx context.Context, ids []string, result 
 	return nil
 }
 
+// derivedSessionTables are filled by materialized views, which see inserts but
+// not deletes, so removing a session has to clear them explicitly.
+var derivedSessionTables = []string{"usage_messages", "terminal_event_snapshots"}
+
 // deleteMirrorSessions removes every row for the given sessions.
 func (s *Sync) deleteMirrorSessions(ctx context.Context, ids []string) error {
 	for batch := range idBatches(ids) {
 		placeholders, args := inArgs(batch)
-		for _, table := range append(append([]string(nil), dependentTables...), "starred_sessions") {
+		for _, table := range slices.Concat(dependentTables, derivedSessionTables, []string{"starred_sessions"}) {
 			if _, err := s.conn.ExecContext(ctx,
 				"DELETE FROM "+table+" WHERE session_id IN ("+placeholders+")", args...); err != nil {
 				return fmt.Errorf("deleting clickhouse %s rows: %w", table, err)
