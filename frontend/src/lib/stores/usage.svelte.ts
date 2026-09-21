@@ -16,9 +16,13 @@ import { ALL_TOKEN_TYPES, canonicalTokenTypes, type UsageTokenType } from "./usa
 type UsageParams = NonNullable<Parameters<typeof UsageService.getApiV1UsageSummary>[0]>;
 type UsagePairwiseParams = Parameters<typeof UsageService.getApiV1UsagePairwiseComparison>[0];
 type UsagePanel = "summary" | "comparison" | "pairwise" | "topSessions";
-// Execution order of a full refresh; the step breakdown follows it.
-const USAGE_STEP_ORDER: readonly UsagePanel[] = [
+// Steps of a full refresh in execution order; the breakdown follows it. The
+// window summary is the second summary request made while a time range is
+// selected on the chart.
+type UsageStep = UsagePanel | "contextSummary";
+const USAGE_STEP_ORDER: readonly UsageStep[] = [
   "summary",
+  "contextSummary",
   "topSessions",
   "comparison",
   "pairwise",
@@ -361,7 +365,7 @@ class UsageStore {
   // Latest successful timing per panel, collected while a full refresh runs
   // and snapshotted into lastQuerySteps when it completes. Offsets are
   // relative to refreshStartedAt.
-  private stepTimings = new Map<UsagePanel, Omit<QueryStep, "name">>();
+  private stepTimings = new Map<UsageStep, QueryStep>();
   private refreshStartedAt = 0;
   hasNewData: boolean = $state(false);
 
@@ -944,7 +948,17 @@ class UsageStore {
       }
       if (this.versions.summary === v) {
         this.summary = data;
-        this.noteStep("summary", started, data);
+        // Both responses are applied together, so each request's apply
+        // phase starts once the later body has arrived; the earlier one
+        // shows a gap while it waited for its sibling.
+        const bodies = [data, contextData]
+          .map((body) => responseTimingOf(body)?.bodyAt)
+          .filter((at): at is number => at !== undefined);
+        const applyStartedAt = bodies.length > 0 ? Math.max(...bodies) : undefined;
+        this.noteStep("summary", started, data, applyStartedAt);
+        if (contextData !== null) {
+          this.noteStep("contextSummary", started, contextData, applyStartedAt);
+        }
         this.isTimeRangeSummaryProvisional = false;
         if (contextData !== null) {
           this.timeSeriesContextSummary = contextData;
@@ -1228,10 +1242,7 @@ class UsageStore {
   private markRefreshComplete(startedAt: number): void {
     this.lastUpdatedAt = Date.now();
     this.lastQueryDurationMs = performance.now() - startedAt;
-    this.lastQuerySteps = USAGE_STEP_ORDER.flatMap((name) => {
-      const timing = this.stepTimings.get(name);
-      return timing === undefined ? [] : [{ name, ...timing }];
-    });
+    this.lastQuerySteps = USAGE_STEP_ORDER.flatMap((name) => this.stepTimings.get(name) ?? []);
     this.hasNewData = false;
   }
 
@@ -1248,17 +1259,25 @@ class UsageStore {
     });
   }
 
-  // Called once a panel's data is applied: the step spans request sent to
+  // Called once a request's data is applied: the step spans request sent to
   // data applied and carries the request's wait/download/apply phases.
-  private noteStep(panel: UsagePanel, startedAt: number, data: unknown): void {
-    const { name: _name, ...timing } = queryStepFrom(
-      panel,
-      responseTimingOf(data),
-      startedAt,
-      performance.now(),
-      this.refreshStartedAt,
+  private noteStep(
+    step: UsageStep,
+    startedAt: number,
+    data: unknown,
+    applyStartedAt?: number,
+  ): void {
+    this.stepTimings.set(
+      step,
+      queryStepFrom(
+        step,
+        responseTimingOf(data),
+        startedAt,
+        performance.now(),
+        this.refreshStartedAt,
+        applyStartedAt,
+      ),
     );
-    this.stepTimings.set(panel, timing);
   }
 }
 

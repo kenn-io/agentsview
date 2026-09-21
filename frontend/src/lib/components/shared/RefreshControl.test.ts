@@ -133,25 +133,56 @@ describe("RefreshControl", () => {
         tick.textContent?.trim(),
       ),
     ).toEqual(["0", "500 ms", "1 s", "1.5 s", "2 s"]);
-    const rows = Array.from(tooltip.querySelectorAll('[role="row"]')).slice(1);
-    expect(rows.map((row) => row.querySelector(".query-steps__name")?.textContent)).toEqual([
-      "Summary",
-      "Top sessions",
-    ]);
+    expect(
+      Array.from(tooltip.querySelectorAll(".query-steps__name")).map((name) => name.textContent),
+    ).toEqual(["Summary", "Top sessions"]);
+    const tracks = tooltip.querySelectorAll(".query-steps__track");
     // Segmented step: wait, download, apply placed end to end.
-    expect(Array.from(rows[0]!.querySelectorAll(".query-steps__bar")).map(geometry)).toEqual([
+    expect(Array.from(tracks[0]!.querySelectorAll(".query-steps__bar")).map(geometry)).toEqual([
       "0% 20%",
       "20% 4%",
       "24% 1%",
     ]);
     // Unsegmented step: one solid bar at its start offset.
-    expect(Array.from(rows[1]!.querySelectorAll(".query-steps__bar")).map(geometry)).toEqual([
+    expect(Array.from(tracks[1]!.querySelectorAll(".query-steps__bar")).map(geometry)).toEqual([
       "25% 75%",
     ]);
     expect(
       tooltip.querySelector(".query-steps__legend")?.textContent?.replace(/\s+/g, " ").trim(),
     ).toBe("Server Transfer Render");
     expect(tooltip.querySelector(".query-steps__total")?.textContent).toBe("2 s");
+
+    unmount(component);
+    document.body.innerHTML = "";
+  });
+
+  it("draws requests from one dispatch burst flush with the zero line", async () => {
+    const component = mount(RefreshControl, {
+      target: document.body,
+      props: {
+        lastUpdatedAt: Date.now(),
+        queryDurationMs: 200,
+        querySteps: [
+          { name: "summary", startMs: 0.4, durationMs: 100 },
+          { name: "activity", startMs: 1.6, durationMs: 100 },
+          { name: "topSessions", startMs: 100, durationMs: 100 },
+        ],
+        onRefresh: vi.fn(),
+      },
+    });
+    await tick();
+    document
+      .querySelector(".kit-tooltip-trigger")!
+      .dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    await tick();
+
+    const lefts = Array.from(
+      document.querySelectorAll<HTMLElement>('[role="tooltip"] .query-steps__bar'),
+    ).map((bar) => bar.style.left);
+    // 0.4 ms and 1.6 ms after the first send are within two pixels of the
+    // origin on a 200 px track, so both sit at 0%; the later request keeps
+    // its real offset.
+    expect(lefts).toEqual(["0%", "0%", "50%"]);
 
     unmount(component);
     document.body.innerHTML = "";

@@ -529,6 +529,7 @@
   "shared_refresh_step_tools": "Tools",
   "shared_refresh_step_skills": "Skills",
   "shared_refresh_step_top_sessions": "Top sessions",
+  "shared_refresh_step_context_summary": "Window summary",
   "shared_refresh_step_signals": "Signals",
   "shared_refresh_step_comparison": "Comparison",
   "shared_refresh_step_pairwise": "Pairwise comparison",

@@ -515,6 +515,7 @@
   "shared_refresh_step_tools": "도구",
   "shared_refresh_step_skills": "스킬",
   "shared_refresh_step_top_sessions": "상위 세션",
+  "shared_refresh_step_context_summary": "전체 기간 요약",
   "shared_refresh_step_signals": "신호",
   "shared_refresh_step_comparison": "비교",
   "shared_refresh_step_pairwise": "쌍별 비교",

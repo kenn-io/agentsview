@@ -139,6 +139,8 @@ describe("query timeline helpers", () => {
     { axisMs: 154, ticks: [0, 50, 100, 150] },
     { axisMs: 2000, ticks: [0, 500, 1000, 1500, 2000] },
     { axisMs: 9, ticks: [0, 2, 4, 6, 8] },
+    // Never finer than a millisecond: labels are whole milliseconds.
+    { axisMs: 2, ticks: [0, 1, 2] },
     { axisMs: 0, ticks: [0] },
   ])("spaces axis ticks for $axisMs ms", ({ axisMs, ticks }) => {
     expect(queryAxisTicks(axisMs)).toEqual(ticks);
@@ -163,6 +165,15 @@ describe("query timeline helpers", () => {
       durationMs: 94,
       segments: querySegmentsFrom(timing, 1104, 1000),
     });
+  });
+
+  it("starts the apply phase later when the store waited for a sibling request", () => {
+    const timing = { sentAt: 1010, headersAt: 1090, bodyAt: 1100 };
+    expect(queryStepFrom("summary", timing, 1005, 1160, 1000, 1150).segments).toEqual([
+      { phase: "wait", startMs: 10, durationMs: 80 },
+      { phase: "download", startMs: 90, durationMs: 10 },
+      { phase: "apply", startMs: 150, durationMs: 10 },
+    ]);
   });
 
   it("falls back to the caller's own start when a response carried no timing", () => {

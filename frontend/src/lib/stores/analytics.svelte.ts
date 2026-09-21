@@ -109,7 +109,7 @@ class AnalyticsStore {
   // Latest successful timing per panel, collected while a refresh runs and
   // snapshotted into lastQuerySteps when the refresh completes. Offsets are
   // relative to refreshStartedAt.
-  private stepTimings = new Map<Panel, Omit<QueryStep, "name">>();
+  private stepTimings = new Map<Panel, QueryStep>();
   private refreshStartedAt = 0;
   hasNewData: boolean = $state(false);
 
@@ -499,14 +499,16 @@ class AnalyticsStore {
       if (this.versions[panel] === v) {
         onSuccess(data);
         this.errors[panel] = null;
-        const { name: _name, ...timing } = queryStepFrom(
+        this.stepTimings.set(
           panel,
-          responseTimingOf(data),
-          started,
-          performance.now(),
-          this.refreshStartedAt,
+          queryStepFrom(
+            panel,
+            responseTimingOf(data),
+            started,
+            performance.now(),
+            this.refreshStartedAt,
+          ),
         );
-        this.stepTimings.set(panel, timing);
         return "ok";
       }
       return "aborted";
@@ -575,10 +577,7 @@ class AnalyticsStore {
   }
 
   private snapshotSteps(): QueryStep[] {
-    return PANEL_ORDER.flatMap((name) => {
-      const timing = this.stepTimings.get(name);
-      return timing === undefined ? [] : [{ name, ...timing }];
-    });
+    return PANEL_ORDER.flatMap((name) => this.stepTimings.get(name) ?? []);
   }
 
   private rollDates(): void {
@@ -826,8 +825,9 @@ class AnalyticsStore {
       this.qualityLastUpdatedAt = Date.now();
       const durationMs = performance.now() - startedAt;
       this.qualityLastQueryDurationMs = durationMs;
-      const timing = this.stepTimings.get("signals") ?? { startMs: 0, durationMs };
-      this.qualityLastQuerySteps = [{ name: "signals", ...timing }];
+      this.qualityLastQuerySteps = [
+        this.stepTimings.get("signals") ?? { name: "signals", startMs: 0, durationMs },
+      ];
     }
   }
 

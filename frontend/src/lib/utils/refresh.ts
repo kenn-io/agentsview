@@ -74,13 +74,16 @@ export interface QueryStep {
 
 /**
  * Splits one request into wait, download, and apply segments, offset from
- * `originMs` (the query's start on the `performance.now()` clock).
- * `appliedAt` is when the page finished applying the parsed response.
+ * `originMs` (the query's start on the `performance.now()` clock). The apply
+ * segment runs from `applyStartedAt` (the body's arrival unless the store
+ * had to wait for a sibling request first) to `appliedAt`, when the page
+ * finished applying the parsed response; any wait in between stays a gap.
  */
 export function querySegmentsFrom(
   timing: ResponseTiming,
   appliedAt: number,
   originMs: number,
+  applyStartedAt: number = timing.bodyAt,
 ): QuerySegment[] {
   return [
     {
@@ -93,7 +96,7 @@ export function querySegmentsFrom(
       startMs: timing.headersAt - originMs,
       durationMs: timing.bodyAt - timing.headersAt,
     },
-    { phase: "apply", startMs: timing.bodyAt - originMs, durationMs: appliedAt - timing.bodyAt },
+    { phase: "apply", startMs: applyStartedAt - originMs, durationMs: appliedAt - applyStartedAt },
   ];
 }
 
@@ -108,10 +111,11 @@ export function queryStepFrom(
   startedAt: number,
   appliedAt: number,
   originMs: number,
+  applyStartedAt?: number,
 ): QueryStep {
   const sentAt = timing?.sentAt ?? startedAt;
   const step: QueryStep = { name, startMs: sentAt - originMs, durationMs: appliedAt - sentAt };
-  if (timing) step.segments = querySegmentsFrom(timing, appliedAt, originMs);
+  if (timing) step.segments = querySegmentsFrom(timing, appliedAt, originMs, applyStartedAt);
   return step;
 }
 
@@ -129,10 +133,11 @@ export function formatQueryPhaseLabel(phase: QueryPhase): string {
 /**
  * Tick positions for a time axis spanning `axisMs`: the smallest 1, 2, or 5
  * times a power of ten step that fits in at most five intervals, from zero.
+ * Never finer than a millisecond, since labels are whole milliseconds.
  */
 export function queryAxisTicks(axisMs: number): number[] {
   if (!(axisMs > 0)) return [0];
-  const raw = axisMs / 5;
+  const raw = Math.max(axisMs / 5, 1);
   const magnitude = 10 ** Math.floor(Math.log10(raw));
   const step = [1, 2, 5, 10].map((m) => m * magnitude).find((candidate) => candidate >= raw)!;
   const ticks: number[] = [];
@@ -165,6 +170,7 @@ const STEP_LABELS: Record<string, () => string> = {
   tools: () => m.shared_refresh_step_tools(),
   skills: () => m.shared_refresh_step_skills(),
   topSessions: () => m.shared_refresh_step_top_sessions(),
+  contextSummary: () => m.shared_refresh_step_context_summary(),
   signals: () => m.shared_refresh_step_signals(),
   comparison: () => m.shared_refresh_step_comparison(),
   pairwise: () => m.shared_refresh_step_pairwise(),

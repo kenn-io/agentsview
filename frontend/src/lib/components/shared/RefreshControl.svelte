@@ -60,6 +60,16 @@
       1,
     ),
   );
+  // Requests fired in one dispatch burst leave a millisecond or two apart,
+  // which at this scale draws as a false stagger off the zero line. Anything
+  // starting within two pixels of the origin is drawn flush with it; later
+  // starts keep their real offset.
+  const TRACK_PX = 200;
+  const snapMs = $derived((2 * axisMs) / TRACK_PX);
+  function shiftMs(step: QueryStep): number {
+    const startMs = step.startMs - originMs;
+    return startMs < snapMs ? step.startMs : originMs;
+  }
   const ticks = $derived(queryAxisTicks(axisMs));
   const hasSegments = $derived(querySteps.some((step) => step.segments !== undefined));
   const PHASES: QueryPhase[] = ["wait", "download", "apply"];
@@ -68,15 +78,16 @@
     return ((100 * ms) / axisMs).toFixed(2);
   }
 
-  function barStyle(startMs: number, durationMs: number): string {
-    return `left: ${percent(startMs - originMs)}%; width: ${percent(durationMs)}%`;
+  function barStyle(startMs: number, durationMs: number, shift: number): string {
+    return `left: ${percent(startMs - shift)}%; width: ${percent(durationMs)}%`;
   }
 
-  // Tick labels centre on their line; one that would spill past the right
-  // edge of the track hangs to the left of its line instead.
+  // Tick labels centre on their line. A centred label may spill into the
+  // column gap, but one at the very end of the track would run into the
+  // duration column, so it hangs to the left of its line instead.
   function tickStyle(tick: number): string {
     const pct = (100 * tick) / axisMs;
-    const shift = pct > 90 ? "-100%" : "-50%";
+    const shift = pct > 98 ? "-100%" : "-50%";
     return `left: ${pct.toFixed(2)}%; transform: translateX(${shift})`;
   }
 </script>
@@ -102,43 +113,38 @@
       {/if}
       <span class="query-steps__total">{formatQueryDuration(queryDurationMs)}</span>
     </div>
-    <div class="query-steps__list" role="table">
-      <div class="query-steps__row" role="row">
-        <span role="columnheader"></span>
-        <span class="query-steps__axis" role="columnheader" aria-hidden="true">
-          {#each ticks as tick (tick)}
-            <span class="query-steps__tick" style={tickStyle(tick)}>
-              {formatQueryTick(tick)}
-            </span>
-          {/each}
-        </span>
-        <span role="columnheader"></span>
-      </div>
+    <div class="query-steps__list">
+      <span></span>
+      <span class="query-steps__axis" aria-hidden="true">
+        {#each ticks as tick (tick)}
+          <span class="query-steps__tick" style={tickStyle(tick)}>
+            {formatQueryTick(tick)}
+          </span>
+        {/each}
+      </span>
+      <span></span>
       {#each querySteps as step (step.name)}
-        <div class="query-steps__row" role="row">
-          <span class="query-steps__name" role="cell">{formatQueryStepLabel(step.name)}</span>
-          <span class="query-steps__track" role="cell" aria-hidden="true">
-            {#each ticks as tick (tick)}
-              <span class="query-steps__grid" style={`left: ${percent(tick)}%`}></span>
-            {/each}
-            {#if step.segments}
-              {#each step.segments as segment (segment.phase)}
-                <span
-                  class={`query-steps__bar query-steps__bar--${segment.phase}`}
-                  style={barStyle(segment.startMs, segment.durationMs)}
-                ></span>
-              {/each}
-            {:else}
+        {@const shift = shiftMs(step)}
+        <span class="query-steps__name">{formatQueryStepLabel(step.name)}</span>
+        <span class="query-steps__track" aria-hidden="true">
+          {#each ticks as tick (tick)}
+            <span class="query-steps__grid" style={`left: ${percent(tick)}%`}></span>
+          {/each}
+          {#if step.segments}
+            {#each step.segments as segment (segment.phase)}
               <span
-                class="query-steps__bar query-steps__bar--wait"
-                style={barStyle(step.startMs, step.durationMs)}
+                class={`query-steps__bar query-steps__bar--${segment.phase}`}
+                style={barStyle(segment.startMs, segment.durationMs, shift)}
               ></span>
-            {/if}
-          </span>
-          <span class="query-steps__duration" role="cell">
-            {formatQueryDuration(step.durationMs)}
-          </span>
-        </div>
+            {/each}
+          {:else}
+            <span
+              class="query-steps__bar query-steps__bar--wait"
+              style={barStyle(step.startMs, step.durationMs, shift)}
+            ></span>
+          {/if}
+        </span>
+        <span class="query-steps__duration">{formatQueryDuration(step.durationMs)}</span>
       {/each}
     </div>
     {#if hasSegments}
@@ -182,7 +188,7 @@
    * rhythm comes from the text cells' padding instead. */
   .query-steps__list {
     display: grid;
-    grid-template-columns: max-content 200px max-content;
+    grid-template-columns: max-content 200px max-content; /* track = TRACK_PX */
     column-gap: var(--space-4);
     align-items: center;
   }
@@ -190,10 +196,6 @@
   .query-steps__name,
   .query-steps__duration {
     padding: 2px 0;
-  }
-
-  .query-steps__row {
-    display: contents;
   }
 
   .query-steps__name {
