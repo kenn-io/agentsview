@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"slices"
 	"sort"
 	"time"
 
@@ -243,25 +242,14 @@ func (s *Store) activityReportCandidateSource(
 		if len(ids) == 0 {
 			return nil
 		}
-		known := make(map[string]struct{}, len(ids))
-		for _, id := range ids {
-			known[id] = struct{}{}
-		}
 		paired, terminal, err := s.activityReportPairs(ctx, candidates, q)
 		if err != nil {
 			return err
 		}
-		terminal = slices.DeleteFunc(terminal, func(c activity.IntervalCandidate) bool {
-			_, ok := known[c.SessionID]
-			return !ok
-		})
 		messageSource := func(ctx context.Context, yield func(activity.IntervalCandidate) error) error {
 			for _, c := range paired {
 				if err := ctx.Err(); err != nil {
 					return err
-				}
-				if _, ok := known[c.SessionID]; !ok {
-					continue
 				}
 				if err := yield(c); err != nil {
 					return err

@@ -3,7 +3,6 @@ package clickhouse
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -594,11 +593,10 @@ func CheckSchemaCompat(ctx context.Context, conn *sql.DB) error {
 		if err != nil {
 			return err
 		}
-		if metadata["usage_messages_backfill"] != "1" {
-			return errors.New("clickhouse usage backfill is incomplete; run `agentsview clickhouse push` with a role that can finish it")
-		}
-		if metadata["terminal_event_snapshots_backfill"] != "1" {
-			return errors.New("clickhouse terminal event backfill is incomplete; run `agentsview clickhouse push` with a role that can finish it")
+		for _, fill := range [][2]string{{"usage_messages_backfill", "usage"}, {"terminal_event_snapshots_backfill", "terminal event"}} {
+			if metadata[fill[0]] != "1" {
+				return fmt.Errorf("clickhouse %s backfill is incomplete; run `agentsview clickhouse push` with a role that can finish it", fill[1])
+			}
 		}
 		return nil
 	}

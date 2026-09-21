@@ -105,10 +105,7 @@ func (s *Store) activityReportPairs(ctx context.Context, candidates chSessionSet
 		// left first to find the lowest eligible ordinal, even for clock reversals.
 		// This takes linear memory and logarithmic work per tool event instead
 		// of comparing every tool event with every message in its session.
-		tree := make([]int, max(1, 4*len(ms)))
-		for i := range tree {
-			tree[i] = -1
-		}
+		tree := slices.Repeat([]int{-1}, max(1, 4*len(ms)))
 		var build func(int, int, int) int
 		build = func(node, lo, hi int) int {
 			if lo == hi {
@@ -154,9 +151,6 @@ func (s *Store) activityReportPairs(ctx context.Context, candidates chSessionSet
 			out = append(out, clickOrderedCandidate{c, e.callIndex, e.eventIndex})
 		}
 		for i, e := range es {
-			if err := ctx.Err(); err != nil {
-				return nil, nil, err
-			}
 			start, _ := slices.BinarySearchFunc(ms, e.ordinal, func(m clickActivityMessage, ordinal int) int { return cmp.Compare(m.ordinal, ordinal) })
 			if start < len(ms) && ms[start].ordinal == e.ordinal {
 				start++
@@ -183,19 +177,9 @@ func (s *Store) activityReportPairs(ctx context.Context, candidates chSessionSet
 		}
 	}
 	slices.SortFunc(out, func(a, b clickOrderedCandidate) int {
-		if n := a.Start.Compare(b.Start); n != 0 {
-			return n
-		}
-		if n := cmp.Compare(a.SessionID, b.SessionID); n != 0 {
-			return n
-		}
-		if n := cmp.Compare(a.StartOrdinal, b.StartOrdinal); n != 0 {
-			return n
-		}
-		if n := cmp.Compare(a.callIndex, b.callIndex); n != 0 {
-			return n
-		}
-		return cmp.Compare(a.eventIndex, b.eventIndex)
+		return cmp.Or(a.Start.Compare(b.Start), cmp.Compare(a.SessionID, b.SessionID),
+			cmp.Compare(a.StartOrdinal, b.StartOrdinal), cmp.Compare(a.callIndex, b.callIndex),
+			cmp.Compare(a.eventIndex, b.eventIndex))
 	})
 	result := make([]activity.IntervalCandidate, len(out))
 	for i, c := range out {
