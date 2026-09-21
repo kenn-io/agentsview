@@ -33,6 +33,9 @@ The latest published release is
     `originator=codex_exec`. Sessions tagged `thread_source=roborev` keep that
     more specific kind so roborev reviews are identifiable as code review.
     Restart or run `agentsview sync` so existing exec sessions reparse.
+- Price StepFun `step-5-preview` sessions from the supplemental rates instead of
+    leaving them unpriced. The pinned LiteLLM snapshot has no `stepfun` rows, so
+    existing databases reseed the new row on startup.
 
 ## 0.43.0
 

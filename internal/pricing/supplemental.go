@@ -17,8 +17,9 @@ import (
 // deletes their stale rows) and k3/k3-agent moved from K2.6 to K3
 // rates. Version 3 removed moonshot/kimi-k3 after LiteLLM added it.
 // Version 4 adds namespaced Codex mappings and a temporary Bedrock Astra
-// fallback until the pinned LiteLLM snapshot includes it.
-const supplementalVersion = "4"
+// fallback until the pinned LiteLLM snapshot includes it. Version 5 adds
+// a StepFun step-5-preview row, which the pinned snapshot lacks.
+const supplementalVersion = "5"
 
 // Canonical pricing models runtime aliases resolve to.
 // KimiK26Canonical exists in the embedded LiteLLM snapshot;
@@ -227,6 +228,17 @@ var supplementalPricing = []ModelPricing{
 		OutputPerMTok:        money.MustParseDollars("15.00"),
 		CacheCreationPerMTok: money.Money{},
 		CacheReadPerMTok:     money.MustParseDollars("0.30"),
+	},
+	{
+		// StepFun publishes step-5-preview at input 1.00 (cache miss,
+		// which includes writing new content to the cache), cache read
+		// 0.05, and output 2.70 USD per MTok; read 2026-09-21 from
+		// https://platform.stepfun.ai/docs/en/guides/pricing/details.
+		ModelPattern:         "step-5-preview",
+		InputPerMTok:         money.MustParseDollars("1.00"),
+		OutputPerMTok:        money.MustParseDollars("2.70"),
+		CacheCreationPerMTok: money.MustParseDollars("1.00"),
+		CacheReadPerMTok:     money.MustParseDollars("0.05"),
 	},
 }
 

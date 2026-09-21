@@ -52,6 +52,50 @@ func TestSupplementalPricing_KimiK3StaticAliases(t *testing.T) {
 		GPT56LunaCanonical)
 }
 
+// TestSupplementalPricing_StepFunStep5Preview pins the curated StepFun
+// row. The pinned LiteLLM snapshot has no stepfun entries at all, so a
+// step-5-preview session otherwise reports unpriced. Rates are
+// StepFun's published USD list prices, read 2026-09-21 from
+// <https://platform.stepfun.ai/docs/en/guides/pricing/details>. That
+// page notes the cache-miss input price includes writing new content
+// to the cache, so cache creation bills at the input rate.
+func TestSupplementalPricing_StepFunStep5Preview(t *testing.T) {
+	fallback := requireEmbeddedFallbackPricing(t)
+	byPattern := make(map[string]ModelPricing, len(fallback))
+	for _, p := range fallback {
+		byPattern[p.ModelPattern] = p
+	}
+
+	want := ModelPricing{
+		ModelPattern:         "step-5-preview",
+		InputPerMTok:         money.MustParseDollars("1.00"),
+		OutputPerMTok:        money.MustParseDollars("2.70"),
+		CacheCreationPerMTok: money.MustParseDollars("1.00"),
+		CacheReadPerMTok:     money.MustParseDollars("0.05"),
+	}
+	// The bare name and the provider-qualified spelling both resolve to
+	// the same curated row.
+	for _, model := range []string{"step-5-preview", "stepfun/step-5-preview"} {
+		got, ok := Resolve(byPattern, model)
+		require.True(t, ok, "Resolve(%q) found no pricing", model)
+		assertFlatPricing(t, want, got)
+	}
+
+	// An unrelated model keeps resolving to its own catalog row.
+	var unrelated ModelPricing
+	for _, p := range requireEmbeddedFallbackSnapshot(t).Models {
+		if p.ModelPattern == "claude-opus-4-6" {
+			unrelated = p
+			break
+		}
+	}
+	require.NotEmpty(t, unrelated.ModelPattern)
+	got, ok := Resolve(byPattern, unrelated.ModelPattern)
+	require.True(t, ok, "unrelated model %q should still resolve",
+		unrelated.ModelPattern)
+	assert.Equal(t, unrelated, got)
+}
+
 func TestDateAliasedModels(t *testing.T) {
 	assert.Equal(t, []string{
 		"daimon-kimi-code",
