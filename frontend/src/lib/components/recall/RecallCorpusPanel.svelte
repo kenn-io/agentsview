@@ -66,12 +66,14 @@
   // an entries load on its own, or the entries and status pair on refresh.
   let queryDurationMs = $state<number | null>(null);
   let querySteps = $state<QueryStep[]>([]);
-  // Latest successful timing per loader, read when a refresh completes.
-  // Offsets are relative to the refresh that started them.
-  const stepTimings = new Map<
-    "entries" | "status",
-    { startedAt: number; appliedAt: number; timing: ResponseTiming | undefined }
-  >();
+  // What one loader measured when it applied its response. Each loader
+  // returns its own record, or null when it failed or a newer load
+  // superseded it, so a refresh can only publish the requests it made.
+  interface LoadTiming {
+    startedAt: number;
+    appliedAt: number;
+    timing: ResponseTiming | undefined;
+  }
   let progress = $state<RecallExtractProgress[]>([]);
   let progressExpanded = $state(false);
   let progressState = $state<"" | RecallExtractProgressState>("");
@@ -170,7 +172,7 @@
   // An entries load on its own (a filter change or the next page) reports
   // itself as the latest query. refreshRecall passes publishTiming=false and
   // reports the entries and status pair together once both have applied.
-  async function loadEntries(cursor = "", publishTiming = true) {
+  async function loadEntries(cursor = "", publishTiming = true): Promise<LoadTiming | null> {
     const startedAt = performance.now();
     const signal = entriesRead.begin();
     const appending = cursor !== "";
@@ -186,25 +188,23 @@
         review_state: reviewState || undefined,
         cursor: cursor || undefined,
       }, { signal });
-      if (!entriesRead.isCurrent(signal)) return;
+      if (!entriesRead.isCurrent(signal)) return null;
       entries = appending
         ? [...entries, ...page.entries]
         : page.entries;
       nextCursor = page.next_cursor ?? "";
       resultCap = page.result_cap ?? 0;
       entriesUpdatedAt = Date.now();
-      const appliedAt = performance.now();
-      const timing = responseTimingOf(page);
-      stepTimings.set("entries", { startedAt, appliedAt, timing });
+      const load = { startedAt, appliedAt: performance.now(), timing: responseTimingOf(page) };
       if (publishTiming) {
-        queryDurationMs = appliedAt - startedAt;
-        querySteps = [queryStepFrom("entries", timing, startedAt, appliedAt, startedAt)];
+        queryDurationMs = load.appliedAt - startedAt;
+        querySteps = [queryStepFrom("entries", load.timing, startedAt, load.appliedAt, startedAt)];
       }
+      return load;
     } catch (error) {
-      if (isAbortError(error) || !entriesRead.isCurrent(signal)) return;
+      if (isAbortError(error) || !entriesRead.isCurrent(signal)) return null;
       if (appending && error instanceof ApiError && error.status === 409) {
-        await loadEntries("", publishTiming);
-        return;
+        return loadEntries("", publishTiming);
       }
       if (!appending) {
         entries = [];
@@ -212,30 +212,28 @@
         resultCap = 0;
         entriesFailed = true;
       }
+      return null;
     } finally {
       if (entriesRead.finish(signal)) entriesLoading = false;
     }
   }
 
-  async function loadStatus() {
+  async function loadStatus(): Promise<LoadTiming | null> {
     const startedAt = performance.now();
     const signal = statusRead.begin();
     statusLoading = true;
     statusFailed = false;
     try {
       const next = await RecallService.getApiV1RecallExtractionStatus({ signal });
-      if (!statusRead.isCurrent(signal)) return;
+      if (!statusRead.isCurrent(signal)) return null;
       status = next;
       statusUpdatedAt = Date.now();
-      stepTimings.set("status", {
-        startedAt,
-        appliedAt: performance.now(),
-        timing: responseTimingOf(next),
-      });
+      return { startedAt, appliedAt: performance.now(), timing: responseTimingOf(next) };
     } catch (error) {
-      if (isAbortError(error) || !statusRead.isCurrent(signal)) return;
+      if (isAbortError(error) || !statusRead.isCurrent(signal)) return null;
       status = null;
       statusFailed = true;
+      return null;
     } finally {
       if (statusRead.finish(signal)) statusLoading = false;
     }
@@ -279,19 +277,16 @@
 
   async function refreshRecall() {
     const startedAt = performance.now();
-    const startedAtEpoch = Date.now();
-    await Promise.all([loadEntries("", false), loadStatus()]);
-    // Both loads swallow their own failures; only a refresh where each one
-    // applied fresh data counts as a completed query. A partial failure
-    // keeps the previous duration and timeline.
-    if ((entriesUpdatedAt ?? -1) >= startedAtEpoch && (statusUpdatedAt ?? -1) >= startedAtEpoch) {
+    const [entriesLoad, statusLoad] = await Promise.all([loadEntries("", false), loadStatus()]);
+    // Only a refresh whose own two requests both applied counts as a
+    // completed query. A failure, or a filter change that superseded one of
+    // them, keeps the previous duration and timeline.
+    if (entriesLoad !== null && statusLoad !== null) {
       queryDurationMs = performance.now() - startedAt;
-      querySteps = (["entries", "status"] as const).flatMap((name) => {
-        const load = stepTimings.get(name);
-        return load === undefined
-          ? []
-          : [queryStepFrom(name, load.timing, load.startedAt, load.appliedAt, startedAt)];
-      });
+      querySteps = [
+        queryStepFrom("entries", entriesLoad.timing, entriesLoad.startedAt, entriesLoad.appliedAt, startedAt),
+        queryStepFrom("status", statusLoad.timing, statusLoad.startedAt, statusLoad.appliedAt, startedAt),
+      ];
     }
     if (progressExpanded) await loadProgress();
   }
