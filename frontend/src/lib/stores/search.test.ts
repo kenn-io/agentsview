@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { SearchService } from "../api/generated/index.js";
 import { ApiError } from "../api/runtime.js";
 import type { SearchResponse } from "../api/generated/index.js";
-import type { DbContentMatch } from "../api/generated/index.js";
+import type { DbContentMatch, ServiceContentSearchResult } from "../api/generated/index.js";
 import { SEARCH_MODE_STORAGE_KEY, createSearchStore, type SearchMode } from "./search.svelte.js";
 
 vi.mock("../api/generated/index.js", async (importOriginal) => {
@@ -18,6 +18,10 @@ vi.mock("../api/generated/index.js", async (importOriginal) => {
 
 const searchService = vi.mocked(SearchService);
 const DEBOUNCE_MS = 300;
+
+function contentResult(matches: DbContentMatch[]): ServiceContentSearchResult {
+  return { matches, revision_bound: false };
+}
 
 function memoryStorage(initial: Record<string, string> = {}) {
   const values = new Map(Object.entries(initial));
@@ -172,9 +176,9 @@ describe("SearchStore", () => {
     async (mode: SearchMode) => {
       const store = createSearchStore(memoryStorage());
       store.setMode(mode);
-      searchService.getApiV1SearchContent.mockResolvedValueOnce({
-        matches: [contentMatch("semantic-1", 4, 0.9)],
-      });
+      searchService.getApiV1SearchContent.mockResolvedValueOnce(
+        contentResult([contentMatch("semantic-1", 4, 0.9)]),
+      );
 
       store.search("  padded query  ", "semantic-project");
       await runDebounce();
@@ -213,7 +217,7 @@ describe("SearchStore", () => {
       const store = createSearchStore(memoryStorage());
       store.setMode(mode);
       searchService.getApiV1Search.mockResolvedValue(fullTextResponse("needle"));
-      searchService.getApiV1SearchContent.mockResolvedValue({ matches: [] });
+      searchService.getApiV1SearchContent.mockResolvedValue(contentResult([]));
       const request =
         mode === "fulltext" ? searchService.getApiV1Search : searchService.getApiV1SearchContent;
 
@@ -249,7 +253,7 @@ describe("SearchStore", () => {
   it("cancels the previous range request and keeps the range across retries and mode changes", async () => {
     const store = createSearchStore(memoryStorage());
     store.setMode("semantic");
-    const old = deferred<{ matches: DbContentMatch[] }>();
+    const old = deferred<ServiceContentSearchResult>();
     searchService.getApiV1SearchContent.mockReturnValueOnce(old.promise);
     searchService.getApiV1SearchContent.mockRejectedValueOnce(new Error("timeout"));
     store.search("needle");
@@ -259,14 +263,14 @@ describe("SearchStore", () => {
     store.setRange({ mode: "calendar", unit: "day", anchor: "2026-07-04" });
     await flushMicrotasks();
     expect(oldSignal.aborted).toBe(true);
-    old.resolve({ matches: [contentMatch("out-of-range", 1, 0.9)] });
+    old.resolve(contentResult([contentMatch("out-of-range", 1, 0.9)]));
     await flushMicrotasks();
     expect(store.results).toEqual([]);
     expect(store.error?.kind).toBe("timeout");
 
-    searchService.getApiV1SearchContent.mockResolvedValue({
-      matches: [contentMatch("in-range", 4, 0.8)],
-    });
+    searchService.getApiV1SearchContent.mockResolvedValue(
+      contentResult([contentMatch("in-range", 4, 0.8)]),
+    );
     store.retry();
     await flushMicrotasks();
     store.setMode("hybrid");
@@ -288,7 +292,7 @@ describe("SearchStore", () => {
         contentMatch(`session-${index}`, index + 4, 100 - index),
       ),
     ];
-    searchService.getApiV1SearchContent.mockResolvedValueOnce({ matches });
+    searchService.getApiV1SearchContent.mockResolvedValueOnce(contentResult(matches));
 
     store.search("ranked");
     await runDebounce();
@@ -359,7 +363,7 @@ describe("SearchStore", () => {
     const storage = memoryStorage();
     const store = createSearchStore(storage);
     store.search("  rerun me  ", "alpha");
-    searchService.getApiV1SearchContent.mockResolvedValueOnce({ matches: [] });
+    searchService.getApiV1SearchContent.mockResolvedValueOnce(contentResult([]));
 
     store.setMode("semantic");
     await flushMicrotasks();
@@ -393,7 +397,7 @@ describe("SearchStore", () => {
     expect(store.error).not.toBeNull();
 
     vi.clearAllMocks();
-    searchService.getApiV1SearchContent.mockResolvedValueOnce({ matches: [] });
+    searchService.getApiV1SearchContent.mockResolvedValueOnce(contentResult([]));
     store.retry();
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(DEBOUNCE_MS + 10);
@@ -452,9 +456,9 @@ describe("SearchStore", () => {
     store.search("stale");
     await runDebounce();
 
-    searchService.getApiV1SearchContent.mockResolvedValueOnce({
-      matches: [contentMatch("newer", 8, 0.8)],
-    });
+    searchService.getApiV1SearchContent.mockResolvedValueOnce(
+      contentResult([contentMatch("newer", 8, 0.8)]),
+    );
     store.setMode("semantic");
     await flushMicrotasks();
 

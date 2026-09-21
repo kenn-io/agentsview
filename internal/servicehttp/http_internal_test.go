@@ -104,6 +104,41 @@ func TestSearchContentForwardsRecallContract(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestMessagesForwardsRevisionBinding(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "rev-1", r.URL.Query().Get("expected_revision"))
+		assert.Equal(t, "archive-binding", r.URL.Query().Get("evidence_source"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"messages":[],"count":0,"transcript_revision":"rev-1","evidence_source":"archive-binding"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	result, err := NewHTTPBackend(srv.URL, "", false, "").Messages(
+		t.Context(), "session", service.MessageFilter{
+			ExpectedRevision: "rev-1", EvidenceSource: "archive-binding",
+		},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "rev-1", result.TranscriptRevision)
+	assert.Equal(t, "archive-binding", result.EvidenceSource)
+}
+
+func TestMessagesMapsSourceChangedConflict(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"status":409,"detail":"source_changed: transcript revision does not match"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	_, err := NewHTTPBackend(srv.URL, "", false, "").Messages(
+		t.Context(), "session", service.MessageFilter{ExpectedRevision: "old"},
+	)
+	require.ErrorIs(t, err, service.ErrSourceChanged)
+}
+
 func TestUsageSummaryUsesLongRunningClient(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		srv := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

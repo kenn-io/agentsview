@@ -25,6 +25,9 @@ The latest published release is
   it. Set `push_vectors = false` under `[clickhouse]` or pass `--no-vectors`
   to leave vectors out. See
   [semantic search: ClickHouse](/docs/semantic-search/#clickhouse).
+- Agents can open recalled evidence against the exact transcript revision that
+  produced it. MCP message reads reject stale citations with `source_changed`,
+  and oversized messages now provide a revision-bound continuation cursor.
 
 ## 0.44.0
 

@@ -89,9 +89,9 @@ var termsSQLByDialect = map[string]termsSQLFragments{
 // rows before a session's first user message anchor no exchange, so those
 // groups are dropped and assistant-only sessions never match.
 //
-// Columns: session_id, project, agent, location, role, start_ordinal,
-// timestamp, body, end_ordinal, relationship_type, parent_session_id,
-// is_sidechain, subordinate. ScanTermsMatches reads them.
+// Columns: session_id, project, agent, transcript_revision, location, role,
+// start_ordinal, timestamp, body, end_ordinal, relationship_type,
+// parent_session_id, is_sidechain, subordinate. ScanTermsMatches reads them.
 func BuildTermsSearchSQL(
 	f ContentSearchFilter, terms []string, dialect QueryDialect,
 ) (string, []any, error) {
@@ -136,6 +136,7 @@ func BuildTermsSearchSQL(
 			SELECT id FROM sessions WHERE %s
 		), eligible AS (
 			SELECT m.session_id, s.project, s.agent,
+				COALESCE(s.transcript_revision,'') AS transcript_revision,
 				COALESCE(s.relationship_type,'') AS relationship_type,
 				COALESCE(s.parent_session_id,'') AS parent_session_id,
 				m.role, m.ordinal, %s AS ts, m.content, m.is_sidechain,
@@ -155,7 +156,7 @@ func BuildTermsSearchSQL(
 			) AS exchange_no
 			FROM eligible
 		), exchanges AS (
-			SELECT session_id, project, agent, relationship_type,
+			SELECT session_id, project, agent, transcript_revision, relationship_type,
 				parent_session_id, is_sidechain, subordinate, exchange_no,
 				MIN(ordinal) AS start_ordinal, MAX(ordinal) AS end_ordinal,
 				CASE WHEN exchange_no > 0 THEN 'user' ELSE 'assistant' END AS role,
@@ -164,10 +165,10 @@ func BuildTermsSearchSQL(
 				MAX(sort_ts) AS sort_ts
 			FROM tagged
 			WHERE exchange_no > 0
-			GROUP BY session_id, project, agent, relationship_type,
+			GROUP BY session_id, project, agent, transcript_revision, relationship_type,
 				parent_session_id, is_sidechain, subordinate, exchange_no
 		)
-		SELECT session_id, project, agent, 'message', role, start_ordinal,
+		SELECT session_id, project, agent, transcript_revision, 'message', role, start_ordinal,
 			ts, body, end_ordinal, relationship_type, parent_session_id,
 			is_sidechain, subordinate
 		FROM exchanges
@@ -198,7 +199,8 @@ func ScanTermsMatches(
 		var body string
 		var endOrdinal int
 		if err := rows.Scan(
-			&match.SessionID, &match.Project, &match.Agent, &match.Location,
+			&match.SessionID, &match.Project, &match.Agent,
+			&match.TranscriptRevision, &match.Location,
 			&match.Role, &match.Ordinal, timestampDest, &body, &endOrdinal,
 			&match.Relationship, &match.ParentSessionID, &match.Sidechain,
 			&match.Subordinate,
