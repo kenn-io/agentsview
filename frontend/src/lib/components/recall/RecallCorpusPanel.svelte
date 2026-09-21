@@ -29,6 +29,7 @@
   import { ui } from "../../stores/ui.svelte.js";
   import { LatestRead } from "../../utils/latest-read.js";
   import RefreshControl from "../shared/RefreshControl.svelte";
+  import type { QueryStep } from "../../utils/refresh.js";
 
   const ENTRY_TYPES = [
     "fact",
@@ -64,6 +65,9 @@
   // Wall-clock ms of the most recent query, request start to data applied:
   // an entries load on its own, or the entries and status pair on refresh.
   let queryDurationMs = $state<number | null>(null);
+  let querySteps = $state<QueryStep[]>([]);
+  // Latest successful duration per loader, read when a query completes.
+  const stepDurations = new Map<"entries" | "status" | "progress", number>();
   let progress = $state<RecallExtractProgress[]>([]);
   let progressExpanded = $state(false);
   let progressState = $state<"" | RecallExtractProgressState>("");
@@ -183,6 +187,8 @@
       resultCap = page.result_cap ?? 0;
       entriesUpdatedAt = Date.now();
       queryDurationMs = performance.now() - startedAt;
+      stepDurations.set("entries", queryDurationMs);
+      querySteps = [{ name: "entries", durationMs: queryDurationMs }];
     } catch (error) {
       if (isAbortError(error) || !entriesRead.isCurrent(signal)) return;
       if (appending && error instanceof ApiError && error.status === 409) {
@@ -201,6 +207,7 @@
   }
 
   async function loadStatus() {
+    const startedAt = performance.now();
     const signal = statusRead.begin();
     statusLoading = true;
     statusFailed = false;
@@ -209,6 +216,7 @@
       if (!statusRead.isCurrent(signal)) return;
       status = next;
       statusUpdatedAt = Date.now();
+      stepDurations.set("status", performance.now() - startedAt);
     } catch (error) {
       if (isAbortError(error) || !statusRead.isCurrent(signal)) return;
       status = null;
@@ -262,6 +270,10 @@
     // applied fresh data counts as a completed query.
     if ((entriesUpdatedAt ?? -1) >= startedAtEpoch && (statusUpdatedAt ?? -1) >= startedAtEpoch) {
       queryDurationMs = performance.now() - startedAt;
+      querySteps = (["entries", "status"] as const).map((name) => ({
+        name,
+        durationMs: stepDurations.get(name) ?? 0,
+      }));
     }
     if (progressExpanded) await loadProgress();
   }
@@ -417,6 +429,7 @@
       <RefreshControl
         {lastUpdatedAt}
         {queryDurationMs}
+        {querySteps}
         busy={entriesLoading || statusLoading || progressLoading}
         onRefresh={refreshRecall}
         label={m.shared_refresh()}

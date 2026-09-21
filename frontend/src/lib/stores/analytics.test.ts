@@ -249,6 +249,8 @@ function resetStore() {
   analytics.qualityLastUpdatedAt = null;
   analytics.lastQueryDurationMs = null;
   analytics.qualityLastQueryDurationMs = null;
+  analytics.lastQuerySteps = [];
+  analytics.qualityLastQuerySteps = [];
   analytics.hasNewData = false;
   sessions.filters.date = "";
   sessions.filters.dateFrom = "";
@@ -477,6 +479,21 @@ describe("AnalyticsStore freshness state", () => {
       await analytics.fetchAll();
       expect(analytics.lastQueryDurationMs).toBe(700);
       expect(analytics.qualityLastQueryDurationMs).toBeNull();
+      // One step per panel, in execution order, each with its own timing.
+      expect(analytics.lastQuerySteps.map((step) => step.name)).toEqual([
+        "summary",
+        "activity",
+        "heatmap",
+        "projects",
+        "hourOfWeek",
+        "sessionShape",
+        "velocity",
+        "tools",
+        "skills",
+        "topSessions",
+        "signals",
+      ]);
+      expect(analytics.lastQuerySteps).toContainEqual({ name: "velocity", durationMs: 700 });
 
       vi.mocked(analyticsService.getApiV1AnalyticsSignals).mockImplementationOnce(async () => {
         vi.advanceTimersByTime(90);
@@ -484,6 +501,7 @@ describe("AnalyticsStore freshness state", () => {
       });
       await analytics.fetchSignalsForQuality();
       expect(analytics.qualityLastQueryDurationMs).toBe(90);
+      expect(analytics.qualityLastQuerySteps).toEqual([{ name: "signals", durationMs: 90 }]);
       expect(analytics.lastQueryDurationMs).toBe(700);
     } finally {
       vi.useRealTimers();

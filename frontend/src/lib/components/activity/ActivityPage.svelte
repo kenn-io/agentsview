@@ -437,6 +437,7 @@
       <RefreshControl
         lastUpdatedAt={activity.lastUpdatedAt}
         queryDurationMs={activity.lastQueryDurationMs}
+        querySteps={activity.lastQuerySteps}
         busy={activity.loading}
         status={refreshStatus}
         onRefresh={() => activity.load({ background: true })}

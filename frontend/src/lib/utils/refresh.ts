@@ -49,6 +49,42 @@ export function refreshAgeWidthSamples(): string[] {
 
 const SECOND_MS = 1000;
 
+/** One measured step of a page's last data query. `name` is a stable key
+ * (see `formatQueryStepLabel`), never user-facing on its own. */
+export interface QueryStep {
+  name: string;
+  durationMs: number;
+}
+
+const STEP_LABELS: Record<string, () => string> = {
+  summary: () => m.shared_refresh_step_summary(),
+  activity: () => m.shared_refresh_step_activity(),
+  heatmap: () => m.shared_refresh_step_heatmap(),
+  projects: () => m.shared_refresh_step_projects(),
+  hourOfWeek: () => m.shared_refresh_step_hour_of_week(),
+  sessionShape: () => m.shared_refresh_step_session_shape(),
+  velocity: () => m.shared_refresh_step_velocity(),
+  tools: () => m.shared_refresh_step_tools(),
+  skills: () => m.shared_refresh_step_skills(),
+  topSessions: () => m.shared_refresh_step_top_sessions(),
+  signals: () => m.shared_refresh_step_signals(),
+  comparison: () => m.shared_refresh_step_comparison(),
+  pairwise: () => m.shared_refresh_step_pairwise(),
+  report: () => m.shared_refresh_step_report(),
+  sessions: () => m.shared_refresh_step_sessions(),
+  usage: () => m.shared_refresh_step_usage(),
+  scan: () => m.shared_refresh_step_scan(),
+  finalize: () => m.shared_refresh_step_finalize(),
+  entries: () => m.shared_refresh_step_entries(),
+  status: () => m.shared_refresh_step_status(),
+  progress: () => m.shared_refresh_step_progress(),
+};
+
+/** Localized name for a query step; unknown keys render as-is. */
+export function formatQueryStepLabel(name: string): string {
+  return STEP_LABELS[name]?.() ?? name;
+}
+
 /**
  * How long the last data query took, in a short fixed-format string:
  * whole milliseconds under a second, whole seconds under a minute, then

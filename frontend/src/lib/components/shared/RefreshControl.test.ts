@@ -92,6 +92,50 @@ describe("RefreshControl", () => {
     document.body.innerHTML = "";
   });
 
+  it("lists each query step with its duration when the label is focused", async () => {
+    const component = mount(RefreshControl, {
+      target: document.body,
+      props: {
+        lastUpdatedAt: Date.now(),
+        queryDurationMs: 2400,
+        querySteps: [
+          { name: "summary", durationMs: 120 },
+          { name: "topSessions", durationMs: 2400 },
+        ],
+        onRefresh: vi.fn(),
+      },
+    });
+    await tick();
+    expect(document.querySelector('[role="tooltip"]')).toBeNull();
+
+    document
+      .querySelector(".kit-tooltip-trigger")!
+      .dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    await tick();
+
+    const rows = Array.from(
+      document.querySelectorAll('[role="tooltip"] dt, [role="tooltip"] dd'),
+    ).map((node) => node.textContent);
+    expect(rows).toEqual(["Summary", "120 ms", "Top sessions", "2 s"]);
+
+    unmount(component);
+    document.body.innerHTML = "";
+  });
+
+  it("keeps the plain timestamp title when there are no steps", async () => {
+    const component = mount(RefreshControl, {
+      target: document.body,
+      props: { lastUpdatedAt: Date.now(), onRefresh: vi.fn() },
+    });
+    await tick();
+
+    expect(document.querySelector(".kit-tooltip-trigger")).toBeNull();
+    expect(document.querySelector(".kit-refresh-control__age")?.getAttribute("title")).toBeTruthy();
+
+    unmount(component);
+    document.body.innerHTML = "";
+  });
+
   it("replaces the age with a transient status", async () => {
     const component = mount(RefreshControl, {
       target: document.body,

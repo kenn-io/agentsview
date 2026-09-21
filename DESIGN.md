@@ -82,9 +82,11 @@ App-level glue that remains local:
 - `frontend/src/lib/components/shared/RefreshControl.svelte` wraps kit-ui
   `RefreshControl`, injecting the localized label (`formatRefreshStatus`: the
   age plus the last-query duration as one phrase, "Updated just now · 2 s"),
-  the app locale, and the localized width samples that keep the label box a
-  constant width. Pages pass `lastUpdatedAt` and `queryDurationMs` from their
-  store; each store measures the fetch from request start to data applied.
+  the app locale, the localized width samples that keep the label box a
+  constant width, and a hover list of the query's steps with their timings.
+  Pages pass `lastUpdatedAt`, `queryDurationMs`, and `querySteps` from their
+  store; each store measures the fetch from request start to data applied and
+  records one step per panel or report phase.
 - kit-ui components with a `locale` prop (DateRangePicker, RefreshControl,
   Calendar) should receive `locale={getLocale()}` from the i18n facade so
   their date formatting follows the app language setting instead of the
@@ -126,7 +128,8 @@ Resolved upstream (adopted at the current pin): `RefreshControl` takes a
 `formatAge` prop, `DateRangePicker`'s `weekOfLabel` substitutes a `{date}`
 placeholder, and both take a `locale` prop — the shared wrappers inject all
 three. `RefreshControl` also takes `ageWidthSamples`, which the shared wrapper
-uses to keep the label box a fixed width.
+uses to keep the label box a fixed width, and an `ageTooltip` snippet, which it
+uses for the query step list.
 
 ## Legacy Exceptions
 

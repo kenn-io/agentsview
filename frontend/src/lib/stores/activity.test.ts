@@ -101,6 +101,7 @@ beforeEach(() => {
   activity.error = null;
   activity.lastUpdatedAt = null;
   activity.lastQueryDurationMs = null;
+  activity.lastQuerySteps = [];
   activity.hasNewData = false;
   activity.projects = [];
   activity.agents = [];
@@ -622,6 +623,51 @@ describe("freshness state", () => {
       });
       await activity.load({ background: true });
       expect(activity.lastQueryDurationMs).toBe(1800);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("splits the report query into its streamed phases", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance"] });
+    try {
+      api.getActivityReport.mockImplementationOnce(async (_query, _signal, onProgress) => {
+        vi.advanceTimersByTime(100);
+        onProgress?.({ phase: "loading_sessions" });
+        vi.advanceTimersByTime(50);
+        onProgress?.({ phase: "loading_usage" });
+        vi.advanceTimersByTime(300);
+        onProgress?.({ phase: "scanning_activity", rows_processed: 10 });
+        vi.advanceTimersByTime(20);
+        onProgress?.({ phase: "finalizing" });
+        vi.advanceTimersByTime(30);
+        onProgress?.({ phase: "done" });
+        return makeReport();
+      });
+      await activity.load();
+
+      // Request latency before the first event belongs to the first phase.
+      expect(activity.lastQuerySteps).toEqual([
+        { name: "sessions", durationMs: 150 },
+        { name: "usage", durationMs: 300 },
+        { name: "scan", durationMs: 20 },
+        { name: "finalize", durationMs: 30 },
+      ]);
+      expect(activity.lastQueryDurationMs).toBe(500);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("records a single report step when the response is not streamed", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance"] });
+    try {
+      api.getActivityReport.mockImplementationOnce(async () => {
+        vi.advanceTimersByTime(80);
+        return makeReport();
+      });
+      await activity.load();
+      expect(activity.lastQuerySteps).toEqual([{ name: "report", durationMs: 80 }]);
     } finally {
       vi.useRealTimers();
     }

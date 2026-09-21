@@ -1,4 +1,5 @@
 import { m } from "../i18n/index.js";
+import type { QueryStep } from "../utils/refresh.js";
 import type { AutomatedScope } from "../api/types.js";
 import type {
   DbAnalyticsSummary as AnalyticsSummary,
@@ -46,6 +47,20 @@ type Panel =
   | "topSessions"
   | "signals";
 type FetchResult = "ok" | "error" | "aborted";
+// Execution order of a full refresh; the step breakdown follows it.
+const PANEL_ORDER = [
+  "summary",
+  "activity",
+  "heatmap",
+  "projects",
+  "hourOfWeek",
+  "sessionShape",
+  "velocity",
+  "tools",
+  "skills",
+  "topSessions",
+  "signals",
+] as const satisfies readonly Panel[];
 
 class AnalyticsStore {
   from: string = $state(rollingRange(ANALYTICS_DEFAULT_WINDOW_DAYS).from);
@@ -88,6 +103,12 @@ class AnalyticsStore {
   // shown next to each page's refresh label. null until the first load.
   lastQueryDurationMs: number | null = $state(null);
   qualityLastQueryDurationMs: number | null = $state(null);
+  // Per-panel timings behind the durations above, in PANEL_ORDER.
+  lastQuerySteps: QueryStep[] = $state([]);
+  qualityLastQuerySteps: QueryStep[] = $state([]);
+  // Latest successful duration per panel, collected while a refresh runs
+  // and snapshotted into lastQuerySteps when the refresh completes.
+  private stepDurations = new Map<Panel, number>();
   hasNewData: boolean = $state(false);
 
   loading = $state({
@@ -497,12 +518,14 @@ class AnalyticsStore {
       }
       return "error";
     } finally {
+      const durationMs = performance.now() - started;
       perf.recordPanel({
         route: "analytics",
         name: panel,
-        durationMs: performance.now() - started,
+        durationMs,
         status,
       });
+      if (status === "ok") this.stepDurations.set(panel, durationMs);
       this.clearAbortSignal(panel, signal);
       if (this.versions[panel] === v) {
         this.querying[panel] = false;
@@ -538,7 +561,15 @@ class AnalyticsStore {
   private markRefreshComplete(startedAt: number): void {
     this.lastUpdatedAt = Date.now();
     this.lastQueryDurationMs = performance.now() - startedAt;
+    this.lastQuerySteps = this.snapshotSteps();
     this.hasNewData = false;
+  }
+
+  private snapshotSteps(): QueryStep[] {
+    return PANEL_ORDER.flatMap((name) => {
+      const durationMs = this.stepDurations.get(name);
+      return durationMs === undefined ? [] : [{ name, durationMs }];
+    });
   }
 
   private rollDates(): void {
@@ -551,6 +582,7 @@ class AnalyticsStore {
   async fetchAll() {
     this.fetchStartHandler?.();
     const startedAt = performance.now();
+    this.stepDurations.clear();
     const fetchVersion = ++this.fetchAllVersion;
     this.rollDates();
     const results = await Promise.all([
@@ -781,7 +813,9 @@ class AnalyticsStore {
     const result = await this.fetchSignals({ includeModel: false });
     if (result === "ok") {
       this.qualityLastUpdatedAt = Date.now();
-      this.qualityLastQueryDurationMs = performance.now() - startedAt;
+      const durationMs = performance.now() - startedAt;
+      this.qualityLastQueryDurationMs = durationMs;
+      this.qualityLastQuerySteps = [{ name: "signals", durationMs }];
     }
   }
 

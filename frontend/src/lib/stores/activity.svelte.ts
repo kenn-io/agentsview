@@ -1,3 +1,4 @@
+import type { QueryStep } from "../utils/refresh.js";
 import type {
   DbAgentInfo as AgentInfo,
   DbProjectInfo as ProjectInfo,
@@ -53,6 +54,54 @@ function customToInstant(to: string): string {
 
 export type ActivityQueryParams = import("../api/generated/index.js").GetApiV1ActivityReportParams;
 
+// Step names for the report stream's phases; "done" only closes the
+// previous phase.
+const REPORT_PHASE_STEPS: Record<ActivityReportProgress["phase"], string | null> = {
+  loading_sessions: "sessions",
+  loading_usage: "usage",
+  scanning_activity: "scan",
+  finalizing: "finalize",
+  done: null,
+};
+
+/**
+ * Splits a report fetch into per-phase steps from the timestamps of its
+ * progress events. Request latency before the first event counts toward
+ * the first phase; a fetch that reports no phases is a single "report"
+ * step.
+ */
+class ReportPhaseTimer {
+  private readonly steps: QueryStep[] = [];
+  private current: string | null = null;
+  private currentStartedAt: number;
+
+  constructor(private readonly startedAt: number) {
+    this.currentStartedAt = startedAt;
+  }
+
+  observe(phase: ActivityReportProgress["phase"], at: number): void {
+    const step = REPORT_PHASE_STEPS[phase];
+    if (step === this.current) return;
+    this.close(at);
+    this.current = step;
+    // Request latency before the first event belongs to the first phase.
+    this.currentStartedAt = this.steps.length === 0 ? this.startedAt : at;
+  }
+
+  finish(at: number): QueryStep[] {
+    this.close(at);
+    return this.steps.length > 0
+      ? this.steps
+      : [{ name: "report", durationMs: at - this.startedAt }];
+  }
+
+  private close(at: number): void {
+    if (this.current === null) return;
+    this.steps.push({ name: this.current, durationMs: at - this.currentStartedAt });
+    this.current = null;
+  }
+}
+
 class ActivityStore {
   preset = $state<Preset>("day");
   date: string = $state(localDateStr(new Date()));
@@ -83,6 +132,10 @@ class ActivityStore {
   // Wall-clock ms of the most recent report fetch, request start to data
   // applied, shown next to the refresh label. null until the first load.
   lastQueryDurationMs: number | null = $state(null);
+  // How that time split across the report's server-side phases, measured
+  // between the progress events the report stream emits. A plain JSON
+  // response (no stream) yields a single "report" step.
+  lastQuerySteps: QueryStep[] = $state([]);
   // Set when an SSE event arrives after the first load, signalling that newer
   // data exists. Mirrors the analytics/usage stores: marking is cheap, and the
   // actual refetch is left to the manual refresh button and the periodic
@@ -184,8 +237,10 @@ class ActivityStore {
     this.loading = true;
     this.progress = null;
     this.error = null;
+    const phases = new ReportPhaseTimer(startedAt);
     try {
       const res = await fetchActivityReport(this.queryParams(), signal, (progress) => {
+        phases.observe(progress.phase, performance.now());
         if (v === this.loadVersion && this.reportRead.isCurrent(signal)) {
           this.progress = progress;
         }
@@ -200,7 +255,9 @@ class ActivityStore {
       this.report = res;
       this.reportGeneration++;
       this.lastUpdatedAt = Date.now();
-      this.lastQueryDurationMs = performance.now() - startedAt;
+      const finishedAt = performance.now();
+      this.lastQueryDurationMs = finishedAt - startedAt;
+      this.lastQuerySteps = phases.finish(finishedAt);
       this.hasNewData = false;
       return true;
     } catch (e) {
@@ -260,7 +317,9 @@ class ActivityStore {
         this.sessionsDirection = "desc";
         this.sessionsBucketRange = null;
         this.lastUpdatedAt = Date.now();
-        this.lastQueryDurationMs = performance.now() - startedAt;
+        const durationMs = performance.now() - startedAt;
+        this.lastQueryDurationMs = durationMs;
+        this.lastQuerySteps = [{ name: "report", durationMs }];
         this.hasNewData = false;
         return true;
       }
