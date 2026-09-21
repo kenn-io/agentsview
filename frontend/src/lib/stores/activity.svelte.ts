@@ -210,7 +210,7 @@ class ActivityStore {
       // changes are always foreground and clear on error.
       if (background && this.report !== null) return false;
       this.report = null;
-      this.error = e instanceof Error ? e.message : "Failed to load activity report";
+      this.error = e instanceof Error ? e.message : m.activity_report_load_failed();
       return false;
     } finally {
       if (this.reportRead.finish(signal)) {

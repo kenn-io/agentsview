@@ -1,3 +1,4 @@
+import { m } from "../i18n/index.js";
 import {
   SettingsService,
   type SettingsResponse,
@@ -129,7 +130,7 @@ class SettingsStore {
       } else if (e instanceof ApiError && e.status === 403) {
         this.error = forbiddenMessage(generatedErrorMessage(e));
       } else {
-        this.error = e instanceof Error ? e.message : "Failed to load settings";
+        this.error = e instanceof Error ? e.message : m.settings_load_failed();
       }
     } finally {
       if (isCurrentLoad()) {
@@ -190,7 +191,7 @@ class SettingsStore {
       }
       return true;
     } catch (e) {
-      this.saveError = e instanceof Error ? e.message : "Failed to save settings";
+      this.saveError = e instanceof Error ? e.message : m.settings_save_failed();
       return false;
     }
   }

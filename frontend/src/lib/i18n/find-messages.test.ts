@@ -8,10 +8,11 @@ import ko from "../../../messages/find/ko.json";
 import fr from "../../../messages/find/fr.json";
 import ja from "../../../messages/find/ja.json";
 import az from "../../../messages/find/az.json";
+import es from "../../../messages/find/es.json";
 import baseEn from "../../../messages/en.json";
 import { m, setLocale, type SupportedLocale } from "./index.js";
 
-const catalogs = { en, "zh-CN": zhCN, "zh-TW": zhTW, ko, fr, ja, az };
+const catalogs = { en, "zh-CN": zhCN, "zh-TW": zhTW, ko, fr, ja, az, es };
 afterEach(() => setLocale("en"));
 
 describe("find message catalogs", () => {

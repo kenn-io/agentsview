@@ -139,7 +139,7 @@
       </Layer>
     </Chart>
     {#if !hasData}
-      <div class="empty-svg">No occurrences in this range</div>
+      <div class="empty-svg">{m.trends_no_occurrences_in_range()}</div>
     {/if}
   {/if}
 </div>

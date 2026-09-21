@@ -1,3 +1,4 @@
+import { m } from "../i18n/index.js";
 import type { UsagePairwiseDimension } from "../api/types/usage.js";
 import {
   UsageService,
@@ -987,9 +988,9 @@ class UsageStore {
           this.selectedTimeRange = null;
           this.timeSeriesContextSummary = null;
           this.isTimeRangeSummaryProvisional = false;
-          this.errors.summary = e instanceof Error ? e.message : "Failed to load";
+          this.errors.summary = e instanceof Error ? e.message : m.shared_failed_to_load();
         } else if (this.summary === null) {
-          this.errors.summary = e instanceof Error ? e.message : "Failed to load";
+          this.errors.summary = e instanceof Error ? e.message : m.shared_failed_to_load();
         } else {
           console.warn("usage.fetchSummary refetch failed:", e);
         }
@@ -1099,7 +1100,7 @@ class UsageStore {
       status = "error";
       if (this.versions.summary === summaryVersion && this.versions.pairwise === pairwiseVersion) {
         if (this.pairwiseComparison === null) {
-          this.errors.pairwise = e instanceof Error ? e.message : "Failed to load";
+          this.errors.pairwise = e instanceof Error ? e.message : m.shared_failed_to_load();
         } else {
           console.warn("usage.fetchPairwise failed:", e);
         }
@@ -1153,7 +1154,7 @@ class UsageStore {
       status = "error";
       if (this.versions.topSessions === v) {
         if (this.topSessions === null) {
-          this.errors.topSessions = e instanceof Error ? e.message : "Failed to load";
+          this.errors.topSessions = e instanceof Error ? e.message : m.shared_failed_to_load();
         } else {
           console.warn("usage.fetchTopSessions refetch failed:", e);
         }

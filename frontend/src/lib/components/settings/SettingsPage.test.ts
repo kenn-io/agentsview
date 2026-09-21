@@ -409,5 +409,46 @@ describe("SettingsPage", () => {
 
     unmount(component);
   });
+});
 
+describe("SettingsPage in Spanish", () => {
+  it("renders the settings chrome and language picker in Spanish", async () => {
+    setLocale("es");
+    settingsService.getApiV1Settings.mockResolvedValue({
+      agent_dirs: {},
+      chart_palette: "agentsview",
+      github_configured: false,
+      host: "127.0.0.1",
+      port: 8080,
+      read_only: false,
+      require_auth: false,
+      terminal: { mode: "auto" },
+    });
+    const component = mount(SettingsPage, {
+      target: document.body,
+    });
+    await tick();
+    await tick();
+
+    expect(document.body.textContent).toContain("Configuración");
+    expect(document.body.querySelector('nav[aria-label="Configuración"]')).not.toBeNull();
+    const trigger = document.body.querySelector<HTMLButtonElement>(
+      'button[title="Idioma de la interfaz"]',
+    );
+    expect(trigger).not.toBeNull();
+    expect(trigger!.textContent).toContain("Español");
+
+    const search = document.body.querySelector<HTMLInputElement>(
+      'input[type="search"][aria-label="Buscar en la configuración"]',
+    )!;
+    search.value = "idioma";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    await tick();
+
+    const nav = document.body.querySelector('nav[aria-label="Configuración"]')!;
+    expect(nav.querySelectorAll("button")).toHaveLength(1);
+    expect(nav.textContent).toContain("Idioma");
+
+    unmount(component);
+  });
 });

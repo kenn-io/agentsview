@@ -3,11 +3,11 @@
 Official docs:
 
 - Basic usage and generated messages:
-  <https://github.com/opral/paraglide-js/blob/main/docs/basics.md>
+    <https://github.com/opral/paraglide-js/blob/main/docs/basics.md>
 - Variants and plural selectors:
-  <https://github.com/opral/paraglide-js/blob/main/docs/variants.md>
+    <https://github.com/opral/paraglide-js/blob/main/docs/variants.md>
 - Number, datetime, and relative-time formatting:
-  <https://github.com/opral/paraglide-js/blob/main/docs/formatting.md>
+    <https://github.com/opral/paraglide-js/blob/main/docs/formatting.md>
 
 ## Generated Messages
 
@@ -52,9 +52,11 @@ Call with a number:
 m.tool_call_group_call_count({ count: 3 });
 ```
 
-For `zh-CN`, use the same declaration and provide the matching locale text; a
-single `other` or wildcard branch is often enough only when the locale truly has
-no visible plural distinction.
+For every other locale, use the same declaration and provide the matching locale
+text. Locales without a visible plural distinction (`zh-CN`, `zh-TW`, `ko`,
+`ja`) can use a single `other` or wildcard branch. Locales with `one`/`other`
+plurals (`fr`, `es`) need both branches; note that CLDR puts 0 in `one` for
+French but in `other` for Spanish.
 
 ## Ordinals
 
@@ -82,8 +84,8 @@ Use `type=ordinal` for values such as 1st, 2nd, and 3rd.
 
 ## Date And Time
 
-For dates inside translatable copy, use the Paraglide `datetime` formatter in the
-message declaration so locale formatting and word order stay in the catalog.
+For dates inside translatable copy, use the Paraglide `datetime` formatter in
+the message declaration so locale formatting and word order stay in the catalog.
 
 ```json
 {

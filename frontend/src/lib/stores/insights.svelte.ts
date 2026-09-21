@@ -1,3 +1,4 @@
+import { m } from "../i18n/index.js";
 import type {
   InsightType,
   AgentName,
@@ -303,7 +304,7 @@ class InsightsStore {
           this.tasks = this.tasks.filter((t) => t.clientId !== clientId);
           return;
         }
-        const msg = e instanceof Error ? e.message : "Generation failed";
+        const msg = e instanceof Error ? e.message : m.activity_insight_generation_failed();
         this.tasks = this.tasks.map((t) =>
           t.clientId === clientId ? { ...t, status: "error" as const, error: msg } : t,
         );

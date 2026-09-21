@@ -1,3 +1,4 @@
+import { m } from "../i18n/index.js";
 import type { AutomatedScope } from "../api/types.js";
 import type {
   DbAnalyticsSummary as AnalyticsSummary,
@@ -485,7 +486,7 @@ class AnalyticsStore {
         // existing values stay visible instead of flipping to an
         // error state. First-load failures still surface.
         if (isFirstLoad) {
-          this.errors[panel] = e instanceof Error ? e.message : "Failed to load";
+          this.errors[panel] = e instanceof Error ? e.message : m.shared_failed_to_load();
         } else {
           console.warn(`analytics.${panel} refetch failed:`, e);
         }

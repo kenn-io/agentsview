@@ -1209,7 +1209,7 @@ organized into sections:
 
 | Section            | What You Can Configure                                                                                   |
 | ------------------ | -------------------------------------------------------------------------------------------------------- |
-| Language           | Interface language (English, French, Japanese, Korean, Simplified Chinese, or Traditional Chinese)       |
+| Language           | Interface language (English, French, Japanese, Korean, Spanish, Simplified or Traditional Chinese)       |
 | Appearance         | Theme (light/dark), high-contrast mode, chart colors, message layout, zoom, block visibility             |
 | Date ranges        | Browser-local checkbox for linking date selections across Sessions, Usage, Activity, Trends, and Quality |
 | Session Providers  | Enable session providers, inspect their session directories, and add alternate agent homes               |

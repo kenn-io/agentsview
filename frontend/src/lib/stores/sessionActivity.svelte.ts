@@ -1,3 +1,4 @@
+import { m } from "../i18n/index.js";
 import { SessionsService } from "../api/generated/index";
 import { isAbortError } from "../api/runtime.js";
 import type { DbSessionActivityBucket as SessionActivityBucket } from "../api/generated/index.js";
@@ -69,7 +70,7 @@ class SessionActivityStore {
     } catch (e) {
       if (isAbortError(e) || version !== this.loadVersion || !this.activityRead.isCurrent(signal))
         return;
-      this.error = e instanceof Error ? e.message : "Failed to load activity";
+      this.error = e instanceof Error ? e.message : m.session_activity_load_failed();
       this.buckets = [];
       this.cachedSessionId = sessionId;
       this.loaded = true;
