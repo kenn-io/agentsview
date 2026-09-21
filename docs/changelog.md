@@ -11,6 +11,10 @@ The latest published release is
 
 **New features**
 
+- Native conversation-memory integrations can queue a coalesced local archive
+    refresh with `agentsview memory session-start`. The command starts the
+    local daemon when needed and returns within two seconds while reconciliation
+    continues in the daemon.
 - MCP clients can use `agentsview mcp --profile memory` to advertise only the
     conversation evidence search and read tools, reducing unrelated tool
     choices while leaving the default full MCP surface unchanged.

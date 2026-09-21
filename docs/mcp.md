@@ -172,6 +172,19 @@ The MCP server does not open the local SQLite archive directly. This keeps MCP
 reads on the same daemon policy as the desktop app and avoids a long-running MCP
 process holding its own archive handle.
 
+Native conversation-memory packages can call
+`agentsview memory session-start` on startup, resume, and clear events. The
+command ensures the writable local daemon is available, queues a debounced
+background reconciliation, and returns within two seconds without waiting for
+the archive pass. Parallel starts coalesce in the daemon, while the file watcher
+continues to ingest changed transcripts normally.
+
+Set `AGENTSVIEW_DISABLE_AUTO_SYNC=1` to skip this automatic lifecycle request.
+Explicit `agentsview sync` commands and existing-history searches remain
+available. A disabled or failed lifecycle request does not change archive data;
+the package hook is responsible for reporting the failure without blocking the
+agent session.
+
 If you need to disable daemon auto-start for general CLI work with
 `AGENTSVIEW_NO_DAEMON=1`, do not use local MCP mode for that archive. Start the
 daemon yourself and connect with `--server`, or stop the MCP server.

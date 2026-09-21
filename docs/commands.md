@@ -1556,6 +1556,23 @@ sent to an explicitly supplied server.
 
 ______________________________________________________________________
 
+### `agentsview memory session-start`
+
+Queue the local conversation-memory refresh used by native agent lifecycle
+packages:
+
+```bash
+agentsview memory session-start
+```
+
+The command ensures the writable local daemon is available, then asks it to run
+a coalesced background reconciliation. It returns within two seconds and does
+not wait for archive-scale work. Parallel requests share the daemon's bounded
+queue. Set `AGENTSVIEW_DISABLE_AUTO_SYNC=1` to skip only this automatic request;
+explicit sync commands and searches remain available.
+
+______________________________________________________________________
+
 ### `agentsview mcp`
 
 Run a read-only Model Context Protocol server for assistant clients that can
