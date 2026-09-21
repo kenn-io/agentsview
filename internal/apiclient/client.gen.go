@@ -14790,19 +14790,20 @@ const (
 	Regex     GetAPIV1SearchContentQueryMode = "regex"
 	Semantic  GetAPIV1SearchContentQueryMode = "semantic"
 	Substring GetAPIV1SearchContentQueryMode = "substring"
+	Terms     GetAPIV1SearchContentQueryMode = "terms"
 )
 
 // Validate checks if the GetAPIV1SearchContentQueryMode value is valid
 func (g GetAPIV1SearchContentQueryMode) Validate() error {
 	switch g {
-	case Fts, Hybrid, Regex, Semantic, Substring:
+	case Fts, Hybrid, Regex, Semantic, Substring, Terms:
 		return nil
 	default:
 		return runtime.NewValidationErrorsFromString("Enum", fmt.Sprintf("must be a valid GetAPIV1SearchContentQueryMode value, got: %v", g))
 	}
 }
 
-// GetAPIV1SearchContentQueryScope Semantic/hybrid result scope: top, all, or subordinate (default all)
+// GetAPIV1SearchContentQueryScope Semantic/hybrid/terms result scope: top, all, or subordinate (default all)
 type GetAPIV1SearchContentQueryScope string
 
 const (
@@ -15285,7 +15286,7 @@ type GetAPIV1SearchContentQuery struct {
 	// Mode Search mode
 	Mode *GetAPIV1SearchContentQueryMode `json:"mode,omitempty"`
 
-	// Scope Semantic/hybrid result scope: top, all, or subordinate (default all)
+	// Scope Semantic/hybrid/terms result scope: top, all, or subordinate (default all)
 	Scope *GetAPIV1SearchContentQueryScope `json:"scope,omitempty"`
 
 	// In Comma-separated content sources
@@ -15308,6 +15309,12 @@ type GetAPIV1SearchContentQuery struct {
 
 	// GitBranch Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
 	GitBranch *string `json:"git_branch,omitempty"`
+
+	// SessionID Filter by exact full stored session ID
+	SessionID *string `json:"session_id,omitempty"`
+
+	// GitBranchExact Filter by exact raw git branch
+	GitBranchExact *string `json:"git_branch_exact,omitempty"`
 
 	// Agent Filter by agent
 	Agent *string `json:"agent,omitempty"`

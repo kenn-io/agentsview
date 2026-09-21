@@ -9,6 +9,7 @@ export const GetApiV1SearchContentMode = {
   substring: "substring",
   regex: "regex",
   fts: "fts",
+  terms: "terms",
   semantic: "semantic",
   hybrid: "hybrid",
 } as const;

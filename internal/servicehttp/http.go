@@ -650,6 +650,12 @@ func (b *httpBackend) SearchContent(
 	if req.GitBranch != "" {
 		q.GitBranch = new(req.GitBranch)
 	}
+	if req.SessionID != "" {
+		q.SessionID = new(req.SessionID)
+	}
+	if req.GitBranchExact != "" {
+		q.GitBranchExact = new(req.GitBranchExact)
+	}
 	if req.Agent != "" {
 		q.Agent = new(req.Agent)
 	}

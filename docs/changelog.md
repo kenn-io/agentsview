@@ -10,6 +10,10 @@ The latest published release is
 
 **New features**
 
+- Agents can require several literal terms within one user/assistant exchange
+    when searching conversation history through MCP. Exact session, branch, and
+    current-session filters narrow recall before the result limit, and each
+    response reports the search mode, filters, exclusions, and truncation.
 - Push the local SQLite archive into ClickHouse and serve the read-only web UI
     from it. Configure `[clickhouse]` or named `[clickhouse.NAME]` targets, then
     run `agentsview clickhouse push`, `status`, `serve`, or `service`. Push

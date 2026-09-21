@@ -162,7 +162,7 @@ type SessionSearchResult struct {
 // ContentSearchRequest is the transport-neutral content-search input.
 type ContentSearchRequest struct {
 	Pattern       string   `json:"pattern"`
-	Mode          string   `json:"mode,omitempty"` // substring|regex|fts|semantic|hybrid
+	Mode          string   `json:"mode,omitempty"` // substring|regex|fts|terms|semantic|hybrid
 	Sources       []string `json:"sources,omitempty"`
 	ExcludeSystem bool     `json:"exclude_system,omitempty"`
 	Reveal        bool     `json:"reveal,omitempty"`
@@ -171,6 +171,7 @@ type ContentSearchRequest struct {
 	Context int `json:"context,omitempty"`
 
 	Project, ExcludeProject, Machine, Agent           string
+	SessionID, GitBranchExact                         string
 	Date, DateFrom, DateTo, Timezone, ActiveSince     string
 	IncludeChildren, IncludeAutomated, IncludeOneShot bool
 	ExcludeSessionIDs                                 []string

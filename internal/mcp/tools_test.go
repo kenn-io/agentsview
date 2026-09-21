@@ -1447,11 +1447,11 @@ func TestSearchContent_SemanticUnavailableMapsToRemediationError(t *testing.T) {
 	assert.Equal(t, "semantic", fake.lastReq.Mode)
 }
 
-// search_content must reject scope outside semantic/hybrid with the same
+// search_content must reject scope outside semantic/hybrid/terms with the same
 // message the HTTP transport uses (the db layer silently ignores Scope for
 // lexical modes, so the guard lives in the transport), and must not reach
 // the service at all on rejection.
-func TestSearchContent_ScopeRejectedOnLexicalModes(t *testing.T) {
+func TestSearchContent_ScopeRejectedOnUnsupportedLexicalModes(t *testing.T) {
 	fake := &fakeContentSearchService{result: &service.ContentSearchResult{}}
 	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
 
@@ -1462,7 +1462,7 @@ func TestSearchContent_ScopeRejectedOnLexicalModes(t *testing.T) {
 			})
 			require.Error(t, err)
 			assert.EqualError(t, err,
-				"scope is only supported for semantic and hybrid search modes")
+				"scope is only supported for semantic, hybrid, and terms search modes")
 		})
 	}
 	assert.Empty(t, fake.lastReq.Pattern,
@@ -1470,22 +1470,103 @@ func TestSearchContent_ScopeRejectedOnLexicalModes(t *testing.T) {
 }
 
 // search_content must pass Scope through to the service untouched for
-// semantic and hybrid modes; the db layer owns scope-value validation from
+// semantic, hybrid, and terms modes; the db layer owns scope-value validation from
 // there.
-func TestSearchContent_ScopeForwardedForSemanticModes(t *testing.T) {
-	for _, mode := range []string{"semantic", "hybrid"} {
+func TestSearchContent_ScopeForwardedForScopedModes(t *testing.T) {
+	for _, mode := range []string{"semantic", "hybrid", "terms"} {
 		t.Run(mode, func(t *testing.T) {
 			fake := &fakeContentSearchService{result: &service.ContentSearchResult{}}
 			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
 
-			_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{
+			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
 				Pattern: "retries", Mode: mode, Scope: "subordinate", IncludeActive: true,
 			})
 			require.NoError(t, err)
 			assert.Equal(t, mode, fake.lastReq.Mode)
 			assert.Equal(t, "subordinate", fake.lastReq.Scope,
 				"scope must reach the service untouched")
+			assert.Equal(t, "subordinate", out.AppliedFilters.Scope)
 		})
+	}
+
+	fake := &fakeContentSearchService{result: &service.ContentSearchResult{}}
+	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
+		Pattern: "retries", Mode: "terms", IncludeActive: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "all", out.AppliedFilters.Scope)
+
+	_, out, err = ts.searchContent(t.Context(), nil, searchContentIn{
+		Pattern: "retries", IncludeActive: true,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, out.RequestedMode)
+	assert.Equal(t, "substring", out.EffectiveMode)
+}
+
+func TestSearchContent_RecallContractMapping(t *testing.T) {
+	fake := &fakeContentSearchService{result: &service.ContentSearchResult{
+		Matches: []db.ContentMatch{{
+			SessionID: "older", Project: "agentsview", Agent: "codex",
+			Location: "message", Role: "user", Ordinal: 4,
+			OrdinalRange: [2]int{4, 6}, Timestamp: "2026-09-01T10:00:00Z",
+			Snippet: "alpha then beta",
+		}},
+		NextCursor: 50,
+	}}
+	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+
+	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
+		Pattern: "alpha beta", Mode: "terms", Scope: "subordinate",
+		Project: "agentsview", Agent: "codex", SessionID: "older",
+		GitBranch: "feature/memory", CurrentSessionID: "current",
+		DateFrom: "2026-08-01", DateTo: "2026-09-20", Limit: 50,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "terms", fake.lastReq.Mode)
+	assert.Equal(t, "subordinate", fake.lastReq.Scope)
+	assert.Equal(t, "older", fake.lastReq.SessionID)
+	assert.Equal(t, "feature/memory", fake.lastReq.GitBranchExact)
+	assert.Equal(t, []string{"current"}, fake.lastReq.ExcludeSessionIDs)
+	assert.Equal(t, 50, fake.lastReq.Limit)
+	assert.Equal(t, "terms", out.RequestedMode)
+	assert.Equal(t, "terms", out.EffectiveMode)
+	assert.Equal(t, "older", out.AppliedFilters.SessionID)
+	assert.Equal(t, "feature/memory", out.AppliedFilters.GitBranch)
+	assert.Equal(t, "subordinate", out.AppliedFilters.Scope)
+	assert.Equal(t, "current", out.Exclusions.CurrentSessionID)
+	assert.False(t, out.Exclusions.RecentActive)
+	assert.True(t, out.Exclusions.OneShot)
+	assert.True(t, out.Exclusions.Automated)
+	assert.True(t, out.CandidateTruncated)
+	require.Len(t, out.Matches, 1)
+}
+
+func TestSearchContent_RejectsInvalidRecallLimits(t *testing.T) {
+	for _, limit := range []int{-1, 51} {
+		t.Run(fmt.Sprintf("limit=%d", limit), func(t *testing.T) {
+			fake := &fakeContentSearchService{result: &service.ContentSearchResult{}}
+			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+			_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{
+				Pattern: "needle", Limit: limit, IncludeActive: true,
+			})
+			require.EqualError(t, err, "limit must be between 1 and 50")
+			assert.Empty(t, fake.lastReq.Pattern)
+		})
+	}
+}
+
+func TestSearchContent_RejectsInvalidRecallDates(t *testing.T) {
+	for _, in := range []searchContentIn{
+		{Pattern: "needle", DateFrom: "09/01/2026"},
+		{Pattern: "needle", DateFrom: "2026-09-20", DateTo: "2026-09-01"},
+	} {
+		fake := &fakeContentSearchService{result: &service.ContentSearchResult{}}
+		ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+		_, _, err := ts.searchContent(t.Context(), nil, in)
+		require.Error(t, err)
+		assert.Empty(t, fake.lastReq.Pattern)
 	}
 }
 

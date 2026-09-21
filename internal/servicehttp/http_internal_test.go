@@ -82,6 +82,28 @@ func TestSearchContentUsesLongRunningClient(t *testing.T) {
 	})
 }
 
+func TestSearchContentForwardsRecallContract(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		assert.Equal(t, "terms", query.Get("mode"))
+		assert.Equal(t, "all", query.Get("scope"))
+		assert.Equal(t, "target-session", query.Get("session_id"))
+		assert.Equal(t, "feature/memory", query.Get("git_branch_exact"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"matches":[]}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	_, err := NewHTTPBackend(srv.URL, "", false, "").SearchContent(
+		t.Context(), service.ContentSearchRequest{
+			Pattern: "alpha beta", Mode: "terms", Scope: "all",
+			SessionID: "target-session", GitBranchExact: "feature/memory",
+		},
+	)
+	require.NoError(t, err)
+}
+
 func TestUsageSummaryUsesLongRunningClient(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		srv := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
