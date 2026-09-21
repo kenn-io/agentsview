@@ -557,8 +557,9 @@ func TestLoadActivityReportUsageCandidatesBoundsFilteredWorkingSet(t *testing.T)
 		})
 	}
 
+	capture := &sessionExportQueryCapture{inner: d.getReader()}
 	candidates, _, _, err := d.loadActivityReportUsageCandidatesFrom(
-		ctx, d.getReader(), []string{"candidate"},
+		ctx, capture, []string{"candidate"},
 		"2026-06-15T10:00:00Z", "2026-06-17T10:00:00Z", false)
 	require.NoError(t, err)
 	require.Len(t, candidates, 2,
@@ -567,6 +568,24 @@ func TestLoadActivityReportUsageCandidatesBoundsFilteredWorkingSet(t *testing.T)
 		candidates[0].row.SessionID,
 		candidates[1].row.SessionID,
 	})
+
+	// Returning only matching rows is insufficient: scanning unrelated usage
+	// before filtering made a day report scale with the entire archive.
+	var details []string
+	for _, captured := range capture.queries {
+		rows, err := d.getReader().QueryContext(
+			ctx, "EXPLAIN QUERY PLAN "+captured.query, captured.args...,
+		)
+		require.NoError(t, err)
+		defer rows.Close()
+		details = append(details, explainQueryPlanDetails(t, rows)...)
+		require.NoError(t, rows.Close())
+	}
+	plan := strings.Join(details, "\n")
+	assert.NotContains(t, plan, "SCAN m ",
+		"candidate and peer lookups must not scan unrelated message history")
+	assert.Contains(t, plan,
+		"idx_messages_claude_snapshot (claude_message_id=? AND claude_request_id=?)")
 }
 
 func TestGetSessionUsageRowsPrefersCompleteClaudeSnapshotAcrossSessions(

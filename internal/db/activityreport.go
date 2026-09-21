@@ -1041,31 +1041,36 @@ func (db *DB) loadActivityReportUsageCandidatesFrom(
 			"encoding activity report session IDs: %w", err)
 	}
 	const candidateSessions = "(SELECT value FROM json_each(?))"
-	messageWhere := usageMessageEligibility +
-		" AND m.session_id IN " + candidateSessions
-	args := []any{string(encodedIDs)}
+	rowsSQL := dailyUsageRowsSQLWithWhere(
+		usageMessageEligibility+" AND m.session_id IN "+candidateSessions,
+		usageEventEligibility+" AND ue.session_id IN "+candidateSessions,
+	)
+	args := []any{string(encodedIDs), string(encodedIDs)}
 	if !restrictToIDs {
-		messageWhere = usageMessageEligibility + `
-			AND (m.session_id IN ` + candidateSessions + `
-				OR (m.claude_message_id, m.claude_request_id) IN (
-					SELECT m.claude_message_id, m.claude_request_id
-					FROM messages m
-					JOIN sessions s ON s.id = m.session_id
-					WHERE ` + usageMessageEligibility + `
-						AND m.session_id IN ` + candidateSessions + `
-						AND m.claude_message_id != ''
-						AND m.claude_request_id != ''
-						AND COALESCE(NULLIF(m.timestamp, ''), s.started_at, '') >= ?
-						AND COALESCE(NULLIF(m.timestamp, ''), s.started_at, '') <= ?
-				))`
-		args = append(args, string(encodedIDs), lowerBound, upperBound)
+		// Keep candidate and peer reads separate so each can use its index.
+		// Exclude candidate sessions here: UNION ALL must not load them twice.
+		peerWhere := usageMessageEligibility + `
+			AND m.session_id NOT IN ` + candidateSessions + `
+			AND m.claude_message_id != ''
+			AND m.claude_request_id != ''
+			AND (m.claude_message_id, m.claude_request_id) IN (
+				SELECT m.claude_message_id, m.claude_request_id
+				FROM messages m
+				JOIN sessions s ON s.id = m.session_id
+				WHERE ` + usageMessageEligibility + `
+					AND m.session_id IN ` + candidateSessions + `
+					AND m.claude_message_id != ''
+					AND m.claude_request_id != ''
+					AND COALESCE(NULLIF(m.timestamp, ''), s.started_at, '') >= ?
+					AND COALESCE(NULLIF(m.timestamp, ''), s.started_at, '') <= ?
+			)`
+		rowsSQL += "\nUNION ALL\n" + fmt.Sprintf(
+			dailyUsageMessageRowsSQLTemplate, "messages", peerWhere,
+		)
+		args = append(args, string(encodedIDs), string(encodedIDs), lowerBound, upperBound)
 	}
-	args = append(args, string(encodedIDs), lowerBound, upperBound)
-	query := dailyUsageRowSelectFromRowsWithMachine(
-		dailyUsageRowsSQLWithWhere(
-			messageWhere,
-			usageEventEligibility+" AND ue.session_id IN "+candidateSessions,
-		), true) + `
+	args = append(args, lowerBound, upperBound)
+	query := dailyUsageRowSelectFromRowsWithMachine(rowsSQL, true) + `
 			AND u.ts >= ? AND u.ts <= ?`
 
 	rows, err := source.QueryContext(ctx, query, args...)
