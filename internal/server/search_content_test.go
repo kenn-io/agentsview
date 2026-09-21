@@ -23,6 +23,9 @@ func TestHandleSearchContentInvalidParams(t *testing.T) {
 		wantStatus int
 	}{
 		{"empty pattern", "", "127.0.0.1:1234", "", http.StatusBadRequest},
+		{"pattern with concepts", "pattern=x&concepts=a&concepts=b", "127.0.0.1:1234", "", http.StatusBadRequest},
+		{"one concept", "concepts=a", "127.0.0.1:1234", "", http.StatusBadRequest},
+		{"concepts without intent", "concepts=a&concepts=b", "127.0.0.1:1234", "", http.StatusForbidden},
 		{"invalid mode", "pattern=x&mode=bad", "127.0.0.1:1234", "", http.StatusBadRequest},
 		{"invalid limit", "pattern=x&limit=abc", "127.0.0.1:1234", "", http.StatusBadRequest},
 		{"invalid cursor", "pattern=x&cursor=abc", "127.0.0.1:1234", "", http.StatusBadRequest},

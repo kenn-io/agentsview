@@ -4,6 +4,7 @@
 import type { DbContentMatch } from "./dbContentMatch.ts";
 
 export interface ServiceContentSearchResult {
+  candidate_truncated?: boolean;
   matches: DbContentMatch[];
   next_cursor?: number;
 }

@@ -3,8 +3,17 @@ title: Changelog
 description: Release history for AgentsView
 ---
 
-Release notes for
+The latest published release is
 [0.44.0](https://github.com/kenn-io/agentsview/releases/tag/v0.44.0).
+
+## Unreleased
+
+**New features**
+
+- Agents can require several literal terms within one user/assistant exchange
+  when searching conversation history through MCP. Exact session, branch, and
+  current-session filters narrow recall before the result limit, and each
+  response reports the search mode, filters, exclusions, and truncation.
 
 ## 0.44.0
 

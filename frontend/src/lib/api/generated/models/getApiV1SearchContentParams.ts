@@ -6,15 +6,19 @@ import type { GetApiV1SearchContentScope } from "./getApiV1SearchContentScope.ts
 
 export type GetApiV1SearchContentParams = {
   /**
-   * Pattern to search for
+   * Pattern to search for; mutually exclusive with concepts
    */
-  pattern: string;
+  pattern?: string;
+  /**
+   * Two to five semantic concepts that must all match one session; repeatable and mutually exclusive with pattern
+   */
+  concepts?: string[];
   /**
    * Search mode
    */
   mode?: GetApiV1SearchContentMode;
   /**
-   * Semantic/hybrid result scope: top, all, or subordinate (default all)
+   * Semantic/hybrid/terms result scope: top, all, or subordinate (default all)
    */
   scope?: GetApiV1SearchContentScope;
   /**
@@ -45,6 +49,14 @@ export type GetApiV1SearchContentParams = {
    * Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
    */
   git_branch?: string;
+  /**
+   * Filter by exact full stored session ID
+   */
+  session_id?: string;
+  /**
+   * Filter by exact raw git branch
+   */
+  git_branch_exact?: string;
   /**
    * Filter by agent
    */
