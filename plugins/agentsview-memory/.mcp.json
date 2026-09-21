@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "agentsview": {
+      "command": "agentsview",
+      "args": ["mcp", "--profile", "memory"],
+      "env_vars": [
+        "AGENTSVIEW_MEMORY_SERVER",
+        "AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE",
+        "AGENTSVIEW_MEMORY_PG"
+      ]
+    }
+  }
+}

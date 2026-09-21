@@ -5,7 +5,9 @@ import type { DbMessage } from "./dbMessage.ts";
 
 export interface ServiceMessageList {
   count: number;
+  evidence_source?: string;
   first_ordinal?: number;
   last_ordinal?: number;
   messages: DbMessage[];
+  transcript_revision?: string;
 }

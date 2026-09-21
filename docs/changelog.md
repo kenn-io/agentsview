@@ -6,6 +6,53 @@ description: Release history for AgentsView
 Release notes for
 [0.44.0](https://github.com/kenn-io/agentsview/releases/tag/v0.44.0).
 
+## Unreleased
+
+**New features**
+
+- Install the native AgentsView Memory package in Claude Code or Codex to get
+    the recall skill, focused MCP server, Claude search agent, and a fail-open
+    session-start hook from one package. Local and hosted targets stay in local
+    runtime configuration, and startup reports duplicate standalone skills
+    without changing user-edited files.
+- Native conversation-memory integrations can use
+    `agentsview memory session-start` for local, hosted-contributor, and
+    hosted-reader lifecycle roles. The command wakes the configured ingestion
+    owner or checks the selected read target and returns within two seconds.
+- MCP clients can use `agentsview mcp --profile memory` to advertise only the
+    conversation evidence search and read tools, reducing unrelated tool
+    choices while leaving the default full MCP surface unchanged.
+- Agents can open recalled evidence against the exact transcript revision that
+    produced it. MCP message reads reject stale citations with `source_changed`,
+    and oversized messages now provide a revision-bound continuation cursor.
+- Agents can require several literal terms within one user/assistant exchange
+    when searching conversation history through MCP. Exact session, branch, and
+    current-session filters narrow recall before the result limit, and each
+    response reports the search mode, filters, exclusions, and truncation.
+- Coding agents can now consult prior conversation evidence proactively when
+    earlier decisions or solutions may help. `agentsview skills install`
+    upgrades the existing recall skill for Claude and Agents/Codex, and Claude
+    also receives a bounded `agentsview-search-conversations` agent whose
+    frontmatter allowlists exactly the two read-only AgentsView MCP tools, so
+    the agent cannot reach shell, file, network, or other MCP servers' tools
+    even when crafted transcript text asks it to. Every generated
+    artifact is listed and protected independently from local edits.
+
+**Bug fixes**
+
+- A session-start memory refresh request that arrives while a refresh pass is
+    already running now triggers a confirming pass instead of waiting for the
+    next periodic pass, so sessions that start mid-scan are discovered
+    promptly.
+- Opening an oversized message's continuation in MCP no longer skips the
+    other oversized messages from the same page, and continuation cursors are
+    authenticated so a hand-edited cursor cannot surface filtered content.
+    Connections to daemons older than API version 11 report oversized bodies
+    as unreadable instead of issuing a cursor that cannot be redeemed.
+- The focused memory MCP server now refuses to send revision-bound reads and
+    exact content filters to daemons older than API version 11 instead of
+    letting them silently ignore the parameters and return unbounded results.
+
 ## 0.44.0
 
 <small>2026-09-21</small>

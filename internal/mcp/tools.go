@@ -5,9 +5,16 @@ package mcp
 
 import (
 	"context"
+	"crypto/hmac"
+	cryptorand "crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"time"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -417,6 +424,8 @@ type getMessagesIn struct {
 	After              *int     `json:"after,omitempty" jsonschema:"Messages of context after the around anchor, default 5. Requires around; replaces limit on that path."`
 	Roles              []string `json:"roles,omitempty" jsonschema:"Roles to include, e.g. tool. Default: user and assistant only. System messages are always excluded."`
 	MaxCharsPerMessage int      `json:"max_chars_per_message,omitempty" jsonschema:"Truncate each message to this many characters, default 2000, max 20000."`
+	ExpectedRevision   string   `json:"expected_revision,omitempty" jsonschema:"Transcript revision cited by search or an earlier read. Returns source_changed when it no longer matches."`
+	BodyCursor         string   `json:"body_cursor,omitempty" jsonschema:"Opaque authenticated continuation that walks the remainder of every oversized message issued by the page that produced it. Use before advancing next_from."`
 }
 
 type messageOut struct {
@@ -428,6 +437,7 @@ type messageOut struct {
 	HasToolUse bool   `json:"has_tool_use,omitempty"`
 	FullLength int    `json:"full_length,omitempty"`
 	Truncated  bool   `json:"truncated,omitempty"`
+	BodyCursor string `json:"body_cursor,omitempty"`
 }
 
 type getMessagesOut struct {
@@ -436,7 +446,84 @@ type getMessagesOut struct {
 	// NextFrom is set off the last scanned ordinal (not the last visible
 	// one), so paging stays reliable even though filtering can make a page
 	// return fewer than the limit.
-	NextFrom *int `json:"next_from,omitempty" jsonschema:"Anchor for the next page's from parameter when more messages may remain; absent means the end. Filtering can make a page return fewer than limit messages, so keep paging until next_from is absent, not until a page comes back short."`
+	NextFrom           *int   `json:"next_from,omitempty" jsonschema:"Anchor for the next page's from parameter when more messages may remain; absent means the end. Filtering can make a page return fewer than limit messages, so keep paging until next_from is absent, not until a page comes back short."`
+	TranscriptRevision string `json:"transcript_revision"`
+}
+
+// messageBodyCursor is the payload authenticated inside a get_messages
+// body_cursor. Clients treat the cursor as opaque and the HMAC below makes
+// that true: an edited or forged cursor fails validation instead of naming
+// an arbitrary ordinal. Roles records the visibility filter in force on the
+// page that issued the cursor so the continuation can re-apply it, and
+// Pending chains the page's remaining oversized ordinals so finishing one
+// body continues with the next instead of skipping it.
+type messageBodyCursor struct {
+	Version        int      `json:"v"`
+	EvidenceSource string   `json:"s"`
+	SessionID      string   `json:"i"`
+	Revision       string   `json:"r"`
+	Ordinal        int      `json:"o"`
+	Offset         int      `json:"p"`
+	NextFrom       *int     `json:"n,omitempty"`
+	Roles          []string `json:"l,omitempty"`
+	Pending        []int    `json:"q,omitempty"`
+}
+
+// signedBodyCursor wraps the payload with an HMAC over its exact JSON
+// encoding. The key is process-local: cursors are revision-bound and never
+// outlive the server that issued them, so a restart invalidating
+// outstanding cursors only costs the client one paginated re-read.
+type signedBodyCursor struct {
+	Payload messageBodyCursor `json:"p"`
+	MAC     string            `json:"m"`
+}
+
+var bodyCursorKey = mustBodyCursorKey()
+
+func mustBodyCursorKey() []byte {
+	key := make([]byte, 32)
+	if _, err := cryptorand.Read(key); err != nil {
+		panic(fmt.Sprintf("mcp: generate body cursor key: %v", err))
+	}
+	return key
+}
+
+func signBodyCursorPayload(payload []byte) string {
+	mac := hmac.New(sha256.New, bodyCursorKey)
+	mac.Write(payload)
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+func encodeMessageBodyCursor(cursor messageBodyCursor) string {
+	payload, _ := json.Marshal(cursor)
+	signed, _ := json.Marshal(signedBodyCursor{
+		Payload: cursor, MAC: signBodyCursorPayload(payload),
+	})
+	return base64.RawURLEncoding.EncodeToString(signed)
+}
+
+func decodeMessageBodyCursor(raw string) (messageBodyCursor, error) {
+	invalid := errors.New("invalid body_cursor")
+	payload, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return messageBodyCursor{}, invalid
+	}
+	var signed signedBodyCursor
+	if err := json.Unmarshal(payload, &signed); err != nil {
+		return messageBodyCursor{}, invalid
+	}
+	encoded, err := json.Marshal(signed.Payload)
+	if err != nil || !hmac.Equal(
+		[]byte(signBodyCursorPayload(encoded)), []byte(signed.MAC),
+	) {
+		return messageBodyCursor{}, invalid
+	}
+	cursor := signed.Payload
+	if cursor.Version != 1 || cursor.EvidenceSource == "" || cursor.SessionID == "" ||
+		cursor.Revision == "" || cursor.Ordinal < 0 || cursor.Offset < 0 {
+		return messageBodyCursor{}, invalid
+	}
+	return cursor, nil
 }
 
 // filterAndMapMessage applies the get_messages role/system contract to one
@@ -460,7 +547,7 @@ func filterAndMapMessage(m db.Message, roles []string, maxChars int) (messageOut
 		Truncated:  cut,
 	}
 	if cut {
-		mo.FullLength = m.ContentLength
+		mo.FullLength = utf8.RuneCountInString(m.Content)
 	}
 	return mo, true
 }
@@ -468,6 +555,9 @@ func filterAndMapMessage(m db.Message, roles []string, maxChars int) (messageOut
 func (t *toolset) getMessages(
 	ctx context.Context, _ *mcp.CallToolRequest, in getMessagesIn,
 ) (*mcp.CallToolResult, getMessagesOut, error) {
+	if in.BodyCursor != "" {
+		return t.getMessageBodyContinuation(ctx, in)
+	}
 	if in.Around != nil {
 		return t.getMessagesAround(ctx, in)
 	}
@@ -479,18 +569,22 @@ func (t *toolset) getMessages(
 	// around" when set without Around.
 	limit := clampLimit(in.Limit, defaultMessageLimit, maxMessageLimit)
 	res, err := t.svc.Messages(ctx, in.SessionID, service.MessageFilter{
-		From:      in.From,
-		Direction: in.Direction,
-		Limit:     limit,
-		Before:    in.Before,
-		After:     in.After,
+		From:             in.From,
+		Direction:        in.Direction,
+		Limit:            limit,
+		Before:           in.Before,
+		After:            in.After,
+		ExpectedRevision: in.ExpectedRevision,
 	})
 	if err != nil {
 		return nil, getMessagesOut{}, err
 	}
 	maxChars := clampLimit(
 		in.MaxCharsPerMessage, defaultMaxCharsPerMessage, maxMaxCharsPerMessage)
-	out := getMessagesOut{Messages: make([]messageOut, 0, len(res.Messages))}
+	out := getMessagesOut{
+		Messages:           make([]messageOut, 0, len(res.Messages)),
+		TranscriptRevision: res.TranscriptRevision,
+	}
 	for _, m := range res.Messages {
 		mo, ok := filterAndMapMessage(m, in.Roles, maxChars)
 		if !ok {
@@ -512,6 +606,9 @@ func (t *toolset) getMessages(
 		if next >= 0 {
 			out.NextFrom = &next
 		}
+	}
+	if err := attachBodyCursors(&out, res.EvidenceSource, in.SessionID, in.Roles); err != nil {
+		return nil, getMessagesOut{}, err
 	}
 	return nil, out, nil
 }
@@ -537,19 +634,23 @@ func (t *toolset) getMessagesAround(
 		roles = []string{"user", "assistant"}
 	}
 	res, err := t.svc.Messages(ctx, in.SessionID, service.MessageFilter{
-		From:      in.From,
-		Direction: in.Direction,
-		Around:    in.Around,
-		Before:    in.Before,
-		After:     in.After,
-		Roles:     roles,
+		From:             in.From,
+		Direction:        in.Direction,
+		Around:           in.Around,
+		Before:           in.Before,
+		After:            in.After,
+		Roles:            roles,
+		ExpectedRevision: in.ExpectedRevision,
 	})
 	if err != nil {
 		return nil, getMessagesOut{}, err
 	}
 	maxChars := clampLimit(
 		in.MaxCharsPerMessage, defaultMaxCharsPerMessage, maxMaxCharsPerMessage)
-	out := getMessagesOut{Messages: make([]messageOut, 0, len(res.Messages))}
+	out := getMessagesOut{
+		Messages:           make([]messageOut, 0, len(res.Messages)),
+		TranscriptRevision: res.TranscriptRevision,
+	}
 	for _, m := range res.Messages {
 		mo, ok := filterAndMapMessage(m, roles, maxChars)
 		if !ok {
@@ -562,20 +663,142 @@ func (t *toolset) getMessagesAround(
 		next := out.Messages[len(out.Messages)-1].Ordinal + 1
 		out.NextFrom = &next
 	}
+	if err := attachBodyCursors(&out, res.EvidenceSource, in.SessionID, roles); err != nil {
+		return nil, getMessagesOut{}, err
+	}
+	return nil, out, nil
+}
+
+// attachBodyCursors issues a continuation cursor for every truncated
+// message on the page. Each cursor chains the page's later oversized
+// ordinals in Pending, so resolving bodies in order reaches every one of
+// them before next_from advances; issuing any cursor therefore clears
+// next_from until the chain completes. roles is the visibility filter the
+// page applied, recorded so the continuation can re-apply it.
+//
+// Cursors are revision-bound by construction, so a backend that cannot
+// provide revision evidence (an HTTP daemon older than API version 11)
+// must fail closed here: a cursor issued without it would decode as
+// invalid and strand the client mid-message.
+func attachBodyCursors(
+	out *getMessagesOut, evidenceSource, sessionID string, roles []string,
+) error {
+	// Collect the page's oversized ordinals in page order so each cursor can
+	// chain the ones after it.
+	var chain []int
+	for i := range out.Messages {
+		if out.Messages[i].Truncated {
+			chain = append(chain, out.Messages[i].Ordinal)
+		}
+	}
+	if len(chain) == 0 {
+		return nil
+	}
+	if out.TranscriptRevision == "" || evidenceSource == "" {
+		return fmt.Errorf(
+			"%w: this connection cannot continue oversized message bodies",
+			service.ErrRevisionBoundReadUnavailable)
+	}
+	for i := range out.Messages {
+		if !out.Messages[i].Truncated {
+			continue
+		}
+		out.Messages[i].BodyCursor = encodeMessageBodyCursor(messageBodyCursor{
+			Version: 1, EvidenceSource: evidenceSource, SessionID: sessionID,
+			Revision: out.TranscriptRevision, Ordinal: out.Messages[i].Ordinal,
+			Offset:   utf8.RuneCountInString(out.Messages[i].Content),
+			NextFrom: out.NextFrom, Roles: roles, Pending: chain[1:],
+		})
+		chain = chain[1:]
+	}
+	// Resolving the chain must reach every oversized body before ordinary
+	// pagination advances, so next_from stays hidden until the chain ends.
+	out.NextFrom = nil
+	return nil
+}
+
+func (t *toolset) getMessageBodyContinuation(
+	ctx context.Context, in getMessagesIn,
+) (*mcp.CallToolResult, getMessagesOut, error) {
+	if in.From != nil || in.Around != nil || in.Direction != "" ||
+		in.Before != nil || in.After != nil || len(in.Roles) > 0 {
+		return nil, getMessagesOut{}, errors.New("body_cursor is mutually exclusive with message navigation and roles")
+	}
+	cursor, err := decodeMessageBodyCursor(in.BodyCursor)
+	if err != nil {
+		return nil, getMessagesOut{}, err
+	}
+	if cursor.SessionID != in.SessionID ||
+		(in.ExpectedRevision != "" && in.ExpectedRevision != cursor.Revision) {
+		return nil, getMessagesOut{}, fmt.Errorf("%w: body cursor does not match request", service.ErrSourceChanged)
+	}
+	zero := 0
+	res, err := t.svc.Messages(ctx, in.SessionID, service.MessageFilter{
+		Around: &cursor.Ordinal, Before: &zero, After: &zero,
+		ExpectedRevision: cursor.Revision, EvidenceSource: cursor.EvidenceSource,
+		Roles: cursor.Roles,
+	})
+	if err != nil {
+		return nil, getMessagesOut{}, err
+	}
+	if len(res.Messages) != 1 || res.Messages[0].Ordinal != cursor.Ordinal {
+		return nil, getMessagesOut{}, fmt.Errorf("%w: cited message no longer exists", service.ErrSourceChanged)
+	}
+	message := res.Messages[0]
+	// Re-apply the get_messages visibility contract. The around window
+	// returns its anchor row regardless of role, and the roles filter comes
+	// from the authenticated cursor rather than this request, so this check
+	// is what keeps a cursor from surfacing system or filtered-role content
+	// even if the underlying page's filter ever changes.
+	if isSystemMessage(message) || !roleAllowed(message.Role, cursor.Roles) {
+		return nil, getMessagesOut{}, fmt.Errorf("%w: cited message no longer exists", service.ErrSourceChanged)
+	}
+	runes := []rune(message.Content)
+	if cursor.Offset >= len(runes) {
+		return nil, getMessagesOut{}, errors.New("invalid body_cursor offset")
+	}
+	maxChars := clampLimit(in.MaxCharsPerMessage, defaultMaxCharsPerMessage, maxMaxCharsPerMessage)
+	end := min(cursor.Offset+maxChars, len(runes))
+	mo := messageOut{
+		Ordinal: message.Ordinal, Role: message.Role, Content: string(runes[cursor.Offset:end]),
+		Timestamp: message.Timestamp, Model: message.Model, HasToolUse: message.HasToolUse,
+		FullLength: len(runes), Truncated: end < len(runes),
+	}
+	out := getMessagesOut{Messages: []messageOut{mo}, TranscriptRevision: res.TranscriptRevision}
+	switch {
+	case end < len(runes):
+		cursor.Offset = end
+		out.Messages[0].BodyCursor = encodeMessageBodyCursor(cursor)
+	case len(cursor.Pending) > 0:
+		// This body is finished. Rebind the chain to the next oversized
+		// ordinal from the issuing page at offset zero instead of dropping
+		// the rest of the chain; the next call delivers that body.
+		out.Messages[0].BodyCursor = encodeMessageBodyCursor(messageBodyCursor{
+			Version: 1, EvidenceSource: cursor.EvidenceSource,
+			SessionID: cursor.SessionID, Revision: cursor.Revision,
+			Ordinal: cursor.Pending[0], Offset: 0, NextFrom: cursor.NextFrom,
+			Roles: cursor.Roles, Pending: cursor.Pending[1:],
+		})
+	default:
+		out.NextFrom = cursor.NextFrom
+	}
 	return nil, out, nil
 }
 
 // --- search_content ---
 
 type searchContentIn struct {
-	Pattern          string `json:"pattern" jsonschema:"Natural-language query for semantic/hybrid, or exact substring/regex for lexical search across message text and tool inputs/results."`
-	Mode             string `json:"mode,omitempty" jsonschema:"substring (default), regex, semantic, or hybrid. Prefer hybrid or semantic for contextual questions when a vector search index is configured."`
-	Scope            string `json:"scope,omitempty" jsonschema:"Semantic/hybrid result scope: top, all, or subordinate (default all). Only valid with mode semantic or hybrid."`
+	Pattern          string `json:"pattern" jsonschema:"Natural-language query for semantic/hybrid, whitespace-separated literals for terms, or exact substring/regex for lexical search across message text and tool inputs/results."`
+	Mode             string `json:"mode,omitempty" jsonschema:"substring (default), regex, terms, semantic, or hybrid. Prefer hybrid or semantic for contextual questions when a vector search index is configured."`
+	Scope            string `json:"scope,omitempty" jsonschema:"Semantic/hybrid/terms result scope: top, all, or subordinate (default all)."`
 	Project          string `json:"project,omitempty" jsonschema:"Restrict to one project."`
 	Agent            string `json:"agent,omitempty" jsonschema:"Restrict to one agent."`
+	SessionID        string `json:"session_id,omitempty" jsonschema:"Restrict to one exact full stored session ID."`
+	GitBranch        string `json:"git_branch,omitempty" jsonschema:"Restrict to one exact git branch."`
+	CurrentSessionID string `json:"current_session_id,omitempty" jsonschema:"Exclude this exact full stored session ID instead of applying the recent-activity heuristic."`
 	DateFrom         string `json:"date_from,omitempty" jsonschema:"Only sessions on or after this date (YYYY-MM-DD)."`
 	DateTo           string `json:"date_to,omitempty" jsonschema:"Only sessions on or before this date (YYYY-MM-DD)."`
-	Limit            int    `json:"limit,omitempty" jsonschema:"Max matches, default 10, max 30."`
+	Limit            int    `json:"limit,omitempty" jsonschema:"Max matches, default 10, range 1-50."`
 	Cursor           int    `json:"cursor,omitempty" jsonschema:"Pagination cursor from a previous next_cursor."`
 	IncludeActive    bool   `json:"include_active,omitempty" jsonschema:"Include matches from sessions active in the last 10 minutes. Default false: the conversation you are in right now is also recorded, so without this exclusion you would find yourself."`
 	IncludeOneShot   bool   `json:"include_one_shot,omitempty" jsonschema:"Include one-shot sessions. Default false."`
@@ -624,38 +847,96 @@ type contentMatch struct {
 	// ContextBefore/ContextAfter are populated when Context > 0: the N
 	// messages immediately before/after this match, content truncated to
 	// 500 characters.
-	ContextBefore []contextMessage `json:"context_before,omitempty"`
-	ContextAfter  []contextMessage `json:"context_after,omitempty"`
+	ContextBefore      []contextMessage `json:"context_before,omitempty"`
+	ContextAfter       []contextMessage `json:"context_after,omitempty"`
+	TranscriptRevision string           `json:"transcript_revision,omitempty" jsonschema:"Transcript revision observed with this evidence; pass it as expected_revision to get_messages."`
 }
 
 type searchContentOut struct {
-	Matches        []contentMatch `json:"matches"`
-	NextCursor     *int           `json:"next_cursor,omitempty"`
-	ExcludedActive int            `json:"excluded_active,omitempty"`
+	Matches            []contentMatch              `json:"matches"`
+	NextCursor         *int                        `json:"next_cursor,omitempty"`
+	ExcludedActive     int                         `json:"excluded_active,omitempty"`
+	RequestedMode      string                      `json:"requested_mode"`
+	EffectiveMode      string                      `json:"effective_mode"`
+	AppliedFilters     searchContentAppliedFilters `json:"applied_filters"`
+	Exclusions         searchContentExclusions     `json:"exclusions"`
+	CandidateTruncated bool                        `json:"candidate_truncated"`
+	RevisionBound      bool                        `json:"revision_bound" jsonschema:"True when every returned match was captured with a transcript revision and can be opened with a revision-bound get_messages call."`
+}
+
+type searchContentAppliedFilters struct {
+	Project   string `json:"project,omitempty"`
+	Agent     string `json:"agent,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+	GitBranch string `json:"git_branch,omitempty"`
+	DateFrom  string `json:"date_from,omitempty"`
+	DateTo    string `json:"date_to,omitempty"`
+	Scope     string `json:"scope,omitempty"`
+}
+
+type searchContentExclusions struct {
+	CurrentSessionID string `json:"current_session_id,omitempty"`
+	RecentActive     bool   `json:"recent_active"`
+	OneShot          bool   `json:"one_shot"`
+	Automated        bool   `json:"automated"`
+}
+
+func recallSearchLimit(requested int) (int, error) {
+	if requested == 0 {
+		return defaultSearchLimit, nil
+	}
+	if requested < 1 || requested > 50 {
+		return 0, errors.New("limit must be between 1 and 50")
+	}
+	return requested, nil
+}
+
+func validateRecallSearchDates(from, to string) error {
+	for _, date := range []string{from, to} {
+		if date == "" {
+			continue
+		}
+		if parsed, err := time.Parse(time.DateOnly, date); err != nil || parsed.Format(time.DateOnly) != date {
+			return errors.New("invalid date format: use YYYY-MM-DD")
+		}
+	}
+	if from != "" && to != "" && from > to {
+		return errors.New("date_from must not be after date_to")
+	}
+	return nil
 }
 
 func (t *toolset) searchContent(
 	ctx context.Context, _ *mcp.CallToolRequest, in searchContentIn,
 ) (*mcp.CallToolResult, searchContentOut, error) {
-	// The db layer silently ignores Scope outside semantic/hybrid, so reject
-	// it here with the same message the HTTP transport uses
-	// (internal/server/huma_routes_search.go).
-	if in.Scope != "" && in.Mode != "semantic" && in.Mode != "hybrid" {
-		return nil, searchContentOut{}, errors.New("scope is only supported for semantic and hybrid search modes")
+	// Scope has unit-level meaning only for semantic, hybrid, and terms.
+	if in.Scope != "" && in.Mode != "semantic" && in.Mode != "hybrid" && in.Mode != "terms" {
+		return nil, searchContentOut{}, errors.New("scope is only supported for semantic, hybrid, and terms search modes")
 	}
+	limit, err := recallSearchLimit(in.Limit)
+	if err != nil {
+		return nil, searchContentOut{}, err
+	}
+	if err := validateRecallSearchDates(in.DateFrom, in.DateTo); err != nil {
+		return nil, searchContentOut{}, err
+	}
+	excludeSessions := db.NormalizeExcludeSessionIDs([]string{in.CurrentSessionID})
 	res, err := t.svc.SearchContent(ctx, service.ContentSearchRequest{
-		Pattern:          in.Pattern,
-		Mode:             in.Mode,
-		Scope:            in.Scope,
-		Project:          in.Project,
-		Agent:            in.Agent,
-		DateFrom:         in.DateFrom,
-		DateTo:           in.DateTo,
-		Limit:            clampLimit(in.Limit, defaultSearchLimit, maxSearchLimit),
-		Cursor:           in.Cursor,
-		Context:          in.Context,
-		IncludeOneShot:   in.IncludeOneShot,
-		IncludeAutomated: in.IncludeAutomated,
+		Pattern:           in.Pattern,
+		Mode:              in.Mode,
+		Scope:             in.Scope,
+		Project:           in.Project,
+		Agent:             in.Agent,
+		SessionID:         in.SessionID,
+		GitBranchExact:    in.GitBranch,
+		DateFrom:          in.DateFrom,
+		DateTo:            in.DateTo,
+		Limit:             limit,
+		Cursor:            in.Cursor,
+		Context:           in.Context,
+		IncludeOneShot:    in.IncludeOneShot,
+		IncludeAutomated:  in.IncludeAutomated,
+		ExcludeSessionIDs: excludeSessions,
 	})
 	if err != nil {
 		return nil, searchContentOut{}, err
@@ -668,9 +949,32 @@ func (t *toolset) searchContent(
 	// back to started_at) like search_sessions does -- not by the match
 	// timestamp. Activity is looked up once per session and cached.
 	activity := make(map[string]string, len(res.Matches))
-	out := searchContentOut{Matches: make([]contentMatch, 0, len(res.Matches))}
+	effectiveMode := in.Mode
+	if effectiveMode == "" {
+		effectiveMode = "substring"
+	}
+	effectiveScope := in.Scope
+	if effectiveScope == "" && (effectiveMode == "semantic" || effectiveMode == "hybrid" || effectiveMode == "terms") {
+		effectiveScope = "all"
+	}
+	out := searchContentOut{
+		Matches:       make([]contentMatch, 0, len(res.Matches)),
+		RequestedMode: in.Mode,
+		EffectiveMode: effectiveMode,
+		AppliedFilters: searchContentAppliedFilters{
+			Project: in.Project, Agent: in.Agent, SessionID: in.SessionID,
+			GitBranch: in.GitBranch, DateFrom: in.DateFrom, DateTo: in.DateTo,
+			Scope: effectiveScope,
+		},
+		Exclusions: searchContentExclusions{
+			CurrentSessionID: in.CurrentSessionID,
+			RecentActive:     in.CurrentSessionID == "" && !in.IncludeActive,
+			OneShot:          !in.IncludeOneShot, Automated: !in.IncludeAutomated,
+		},
+		RevisionBound: res.RevisionBound,
+	}
 	for _, m := range res.Matches {
-		if !in.IncludeActive {
+		if in.CurrentSessionID == "" && !in.IncludeActive {
 			ts, ok := t.lookupActivity(ctx, m.SessionID, activity)
 			if !ok {
 				// Lookup failed: fall back to the match timestamp so the
@@ -688,14 +992,16 @@ func (t *toolset) searchContent(
 			Timestamp: m.Timestamp, Snippet: m.Snippet, Score: m.Score,
 			OrdinalRange: m.OrdinalRange, Subordinate: m.Subordinate,
 			Relationship: m.Relationship, ParentSessionID: m.ParentSessionID,
-			Sidechain:     m.Sidechain,
-			ContextBefore: toContextMessages(m.ContextBefore),
-			ContextAfter:  toContextMessages(m.ContextAfter),
+			Sidechain:          m.Sidechain,
+			ContextBefore:      toContextMessages(m.ContextBefore),
+			ContextAfter:       toContextMessages(m.ContextAfter),
+			TranscriptRevision: m.TranscriptRevision,
 		})
 	}
 	if res.NextCursor > 0 && len(res.Matches) > 0 {
 		nc := res.NextCursor
 		out.NextCursor = &nc
+		out.CandidateTruncated = true
 	}
 	return nil, out, nil
 }

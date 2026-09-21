@@ -46,8 +46,29 @@ function isCodePointBoundary(value: string, index: number): boolean {
   return !(previous >= 0xd800 && previous <= 0xdbff && current >= 0xdc00 && current <= 0xdfff);
 }
 
-const WORD_END = /[\p{L}\p{M}\p{N}\p{Pc}]$/u;
-const WORD_START = /^[\p{L}\p{M}\p{N}\p{Pc}]/u;
+const WORD_CHARS = /[\p{L}\p{M}\p{N}\p{Pc}]/u;
+
+// Classify whole code points instead of testing a sliced, anchored character
+// class: engines have shipped class-range regressions over astral
+// characters, and a two-unit slice can split a surrogate pair.
+function isWordCodePoint(codePoint: number | undefined): boolean {
+  return codePoint !== undefined && WORD_CHARS.test(String.fromCodePoint(codePoint));
+}
+
+// Return the code point ending at UTF-16 index, combining a surrogate pair
+// when one ends there. codePointAt cannot do this: it only combines forward
+// from a high surrogate, never backward from a low one.
+function codePointBefore(value: string, index: number): number | undefined {
+  if (index <= 0) return undefined;
+  const unit = value.charCodeAt(index - 1);
+  if (unit >= 0xdc00 && unit <= 0xdfff && index >= 2) {
+    const high = value.charCodeAt(index - 2);
+    if (high >= 0xd800 && high <= 0xdbff) {
+      return ((high - 0xd800) << 10) + (unit - 0xdc00) + 0x10000;
+    }
+  }
+  return unit;
+}
 
 function findFoldedOffsets(text: string, query: string, wholeWord: boolean): TextOccurrence[] {
   const occurrences: TextOccurrence[] = [];
@@ -60,8 +81,8 @@ function findFoldedOffsets(text: string, query: string, wholeWord: boolean): Tex
       isCodePointBoundary(text, start) &&
       isCodePointBoundary(text, end) &&
       (!wholeWord ||
-        (!WORD_END.test(text.slice(Math.max(0, start - 2), start)) &&
-          !WORD_START.test(text.slice(end, end + 2))))
+        (!isWordCodePoint(codePointBefore(text, start)) &&
+          !isWordCodePoint(end < text.length ? text.codePointAt(end) : undefined)))
     ) {
       occurrences.push({ start, end });
       cursor = end;

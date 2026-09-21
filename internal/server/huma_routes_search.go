@@ -38,8 +38,8 @@ type searchInput struct {
 
 type contentSearchInput struct {
 	Pattern          string             `query:"pattern" required:"true" doc:"Pattern to search for"`
-	Mode             contentSearchMode  `query:"mode" enum:"substring,regex,fts,semantic,hybrid" doc:"Search mode"`
-	Scope            contentSearchScope `query:"scope" enum:"top,all,subordinate" doc:"Semantic/hybrid result scope: top, all, or subordinate (default all)"`
+	Mode             contentSearchMode  `query:"mode" enum:"substring,regex,fts,terms,semantic,hybrid" doc:"Search mode"`
+	Scope            contentSearchScope `query:"scope" enum:"top,all,subordinate" doc:"Semantic/hybrid/terms result scope: top, all, or subordinate (default all)"`
 	SearchIntent     string             `header:"X-AgentsView-Search-Intent" doc:"Required for semantic/hybrid GET searches"`
 	In               string             `query:"in" doc:"Comma-separated content sources"`
 	ExcludeSystem    bool               `query:"exclude_system" doc:"Exclude system messages"`
@@ -48,6 +48,8 @@ type contentSearchInput struct {
 	ExcludeProject   string             `query:"exclude_project" doc:"Exclude a project"`
 	Machine          string             `query:"machine" doc:"Filter by machine"`
 	GitBranch        string             `query:"git_branch" doc:"Filter by git branch; opaque (project, branch) tokens from the /branches endpoint"`
+	SessionID        string             `query:"session_id" doc:"Filter by exact full stored session ID"`
+	GitBranchExact   string             `query:"git_branch_exact" doc:"Filter by exact raw git branch"`
 	Agent            string             `query:"agent" doc:"Filter by agent"`
 	Date             string             `query:"date" format:"date" doc:"Filter sessions active on this YYYY-MM-DD date"`
 	DateFrom         string             `query:"date_from" format:"date" doc:"Filter sessions active on or after this date"`
@@ -111,9 +113,9 @@ func (s *Server) humaSearchContent(
 		return nil, apiError(http.StatusForbidden,
 			"semantic and hybrid search require "+service.SemanticSearchIntentHeader)
 	}
-	if in.Scope != "" && !requiresSemanticSearchIntent(in.Mode) {
+	if in.Scope != "" && !requiresSemanticSearchIntent(in.Mode) && in.Mode != "terms" {
 		return nil, apiError(http.StatusBadRequest,
-			"scope is only supported for semantic and hybrid search modes")
+			"scope is only supported for semantic, hybrid, and terms search modes")
 	}
 	var sources []string
 	if in.In != "" {
@@ -136,6 +138,8 @@ func (s *Server) humaSearchContent(
 		ExcludeProject:    in.ExcludeProject,
 		Machine:           in.Machine,
 		GitBranch:         in.GitBranch,
+		SessionID:         in.SessionID,
+		GitBranchExact:    in.GitBranchExact,
 		Agent:             in.Agent,
 		Date:              in.Date,
 		DateFrom:          in.DateFrom,

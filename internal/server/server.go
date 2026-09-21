@@ -52,7 +52,13 @@ type VersionInfo struct {
 // Bump it when a client-visible contract cannot be decoded safely by an older
 // CLI or daemon.
 const (
-	APIVersion = 10
+	APIVersion = 11
+	// RevisionEvidenceAPIVersion is the first daemon API that accepts
+	// revision-bound message reads (expected_revision, evidence_source) and
+	// the exact content-search filters session_id and git_branch_exact.
+	// Older daemons silently ignore those query parameters, so clients must
+	// gate them on this version.
+	RevisionEvidenceAPIVersion = 11
 	// ScopedWatchPushAPIVersion is the first daemon API that accepts bounded
 	// watcher batches and their authoritative recovery scope on push requests.
 	ScopedWatchPushAPIVersion = 7
@@ -178,6 +184,11 @@ type Server struct {
 	// localResyncRunner, when set, backs the foreground full-resync HTTP handler
 	// with the worker-backed build-and-swap instead of an in-process resync.
 	localResyncRunner LocalResyncRunner
+
+	// memoryRefreshRequest queues a background reconciliation for the local
+	// conversation-memory lifecycle hook. It must return immediately and
+	// coalesce duplicate requests outside the HTTP handler.
+	memoryRefreshRequest func()
 
 	// localCompactRunner, when set, backs archive compaction with the daemon's
 	// maintenance barrier instead of allowing a CLI to bypass the writer.
@@ -580,6 +591,12 @@ func WithLocalResyncRunner(r LocalResyncRunner) Option {
 	return func(s *Server) { s.localResyncRunner = r }
 }
 
+// WithMemoryRefreshRequester enables the narrow SessionStart refresh route.
+// fn must only enqueue work; the request path must never run reconciliation.
+func WithMemoryRefreshRequester(fn func()) Option {
+	return func(s *Server) { s.memoryRefreshRequest = fn }
+}
+
 // LocalCompactRunner runs staged maintenance against the local SQLite archive.
 // The daemon injects this runner so the command shares the archive-wide
 // maintenance barrier with sync and resync.
@@ -648,6 +665,7 @@ func (s *Server) routes() {
 	configureHuma()
 	s.api = humago.New(s.mux, s.humaConfig())
 	s.registerTypedAPIRoutes()
+	s.registerMemoryRefreshRoute()
 
 	if s.pprofEnabled {
 		s.handleHTTP(&huma.Operation{Method: http.MethodGet, Path: "/debug/pprof/", Hidden: true}, httppprof.Index)

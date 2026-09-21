@@ -82,6 +82,164 @@ func TestSearchContentUsesLongRunningClient(t *testing.T) {
 	})
 }
 
+func TestSearchContentForwardsRecallContract(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		assert.Equal(t, "terms", query.Get("mode"))
+		assert.Equal(t, "all", query.Get("scope"))
+		assert.Equal(t, "target-session", query.Get("session_id"))
+		assert.Equal(t, "feature/memory", query.Get("git_branch_exact"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"matches":[]}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	_, err := NewHTTPBackend(srv.URL, "", false, "").SearchContent(
+		t.Context(), service.ContentSearchRequest{
+			Pattern: "alpha beta", Mode: "terms", Scope: "all",
+			SessionID: "target-session", GitBranchExact: "feature/memory",
+		},
+	)
+	require.NoError(t, err)
+}
+
+func TestMessagesForwardsRevisionBinding(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "rev-1", r.URL.Query().Get("expected_revision"))
+		assert.Equal(t, "archive-binding", r.URL.Query().Get("evidence_source"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"messages":[],"count":0,"transcript_revision":"rev-1","evidence_source":"archive-binding"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	result, err := NewHTTPBackend(srv.URL, "", false, "").Messages(
+		t.Context(), "session", service.MessageFilter{
+			ExpectedRevision: "rev-1", EvidenceSource: "archive-binding",
+		},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "rev-1", result.TranscriptRevision)
+	assert.Equal(t, "archive-binding", result.EvidenceSource)
+}
+
+// Revision-bound message reads and the exact content-search filters only
+// exist from API version 11. Older daemons silently ignore unknown query
+// parameters, so the backend must fail closed for them instead of letting a
+// request lose its binding or scoping semantics in transit.
+func TestHTTPBackendGatesRevisionEvidenceByAPIVersion(t *testing.T) {
+	t.Parallel()
+	t.Run("older daemon fails closed without calling it", func(t *testing.T) {
+		t.Parallel()
+		called := false
+		srv := httptest.NewServer(http.HandlerFunc(func(
+			w http.ResponseWriter, _ *http.Request,
+		) {
+			called = true
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"messages":[],"count":0}`))
+		}))
+		t.Cleanup(srv.Close)
+
+		backend := NewHTTPBackendForServer(srv.URL, "", HTTPServerCapabilities{
+			APIVersion: revisionEvidenceAPIVersion - 1,
+		})
+		_, err := backend.Messages(t.Context(), "session", service.MessageFilter{
+			ExpectedRevision: "rev-1", EvidenceSource: "archive-binding",
+		})
+		require.ErrorIs(t, err, service.ErrRevisionBoundReadUnavailable)
+		assert.False(t, called, "gated request must not reach the daemon")
+	})
+
+	t.Run("current daemon forwards the binding", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(
+			w http.ResponseWriter, r *http.Request,
+		) {
+			assert.Equal(t, "rev-1", r.URL.Query().Get("expected_revision"))
+			assert.Equal(t, "archive-binding", r.URL.Query().Get("evidence_source"))
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(
+				`{"messages":[],"count":0,"transcript_revision":"rev-1",` +
+					`"evidence_source":"archive-binding"}`))
+		}))
+		t.Cleanup(srv.Close)
+
+		backend := NewHTTPBackendForServer(srv.URL, "", HTTPServerCapabilities{
+			APIVersion: revisionEvidenceAPIVersion,
+		})
+		result, err := backend.Messages(t.Context(), "session", service.MessageFilter{
+			ExpectedRevision: "rev-1", EvidenceSource: "archive-binding",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "rev-1", result.TranscriptRevision)
+	})
+}
+
+func TestHTTPBackendGatesExactScopeFiltersByAPIVersion(t *testing.T) {
+	t.Parallel()
+	t.Run("older daemon fails closed without calling it", func(t *testing.T) {
+		t.Parallel()
+		called := false
+		srv := httptest.NewServer(http.HandlerFunc(func(
+			w http.ResponseWriter, _ *http.Request,
+		) {
+			called = true
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"matches":[]}`))
+		}))
+		t.Cleanup(srv.Close)
+
+		backend := NewHTTPBackendForServer(srv.URL, "", HTTPServerCapabilities{
+			APIVersion: exactScopeAPIVersion - 1,
+		})
+		_, err := backend.SearchContent(t.Context(), service.ContentSearchRequest{
+			Pattern: "needle", SessionID: "target-session",
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "require a newer remote daemon")
+		assert.False(t, called, "gated request must not reach the daemon")
+	})
+
+	t.Run("current daemon forwards the exact filters", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(
+			w http.ResponseWriter, r *http.Request,
+		) {
+			assert.Equal(t, "target-session", r.URL.Query().Get("session_id"))
+			assert.Equal(t, "feature/memory", r.URL.Query().Get("git_branch_exact"))
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"matches":[]}`))
+		}))
+		t.Cleanup(srv.Close)
+
+		backend := NewHTTPBackendForServer(srv.URL, "", HTTPServerCapabilities{
+			APIVersion: exactScopeAPIVersion,
+		})
+		_, err := backend.SearchContent(t.Context(), service.ContentSearchRequest{
+			Pattern: "needle", SessionID: "target-session",
+			GitBranchExact: "feature/memory",
+		})
+		require.NoError(t, err)
+	})
+}
+
+func TestMessagesMapsSourceChangedConflict(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"status":409,"detail":"source_changed: transcript revision does not match"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	_, err := NewHTTPBackend(srv.URL, "", false, "").Messages(
+		t.Context(), "session", service.MessageFilter{ExpectedRevision: "old"},
+	)
+	require.ErrorIs(t, err, service.ErrSourceChanged)
+}
+
 func TestUsageSummaryUsesLongRunningClient(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		srv := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

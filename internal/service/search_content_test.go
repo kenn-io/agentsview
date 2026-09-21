@@ -14,6 +14,8 @@ import (
 	"go.kenn.io/agentsview/internal/service"
 )
 
+const fakeAWSKey = "AKIA" + "7QHWN2DKR4FYPLJM"
+
 // seedServiceSearchSession creates a session with a single user message
 // whose content contains the given text. The session has UserMessageCount=2
 // so it is not excluded by the default one-shot filter.
@@ -31,7 +33,7 @@ func TestDirectSearchContentRedacts(t *testing.T) {
 	t.Parallel()
 	d := dbtest.OpenTestDB(t)
 	seedServiceSearchSession(t, d, "x1", "proj",
-		"my key is AKIA7QHWN2DKR4FYPLJM ok")
+		"my key is "+fakeAWSKey+" ok")
 	be := service.NewDirectBackend(d, nil)
 
 	// default: secret should be redacted
@@ -40,7 +42,7 @@ func TestDirectSearchContentRedacts(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, res.Matches, 1)
-	assert.NotContains(t, res.Matches[0].Snippet, "AKIA7QHWN2DKR4FYPLJM",
+	assert.NotContains(t, res.Matches[0].Snippet, fakeAWSKey,
 		"default search leaked secret: %q", res.Matches[0].Snippet)
 
 	// reveal: full secret should be present
@@ -49,7 +51,7 @@ func TestDirectSearchContentRedacts(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, rev.Matches, 1)
-	assert.Contains(t, rev.Matches[0].Snippet, "AKIA7QHWN2DKR4FYPLJM",
+	assert.Contains(t, rev.Matches[0].Snippet, fakeAWSKey,
 		"reveal should show full secret: %q", rev.Matches[0].Snippet)
 }
 
@@ -73,8 +75,9 @@ func TestDirectSearchContentFTSSourceGuard(t *testing.T) {
 // test path reached it (none of these tests exercise anything else).
 type fakeContentStore struct {
 	db.Store
-	page    db.ContentSearchPage
-	windows map[string][]db.Message // keyed by contextWindowKey
+	page       db.ContentSearchPage
+	lastFilter db.ContentSearchFilter
+	windows    map[string][]db.Message // keyed by contextWindowKey
 }
 
 func contextWindowKey(sessionID string, anchor int) string {
@@ -82,9 +85,33 @@ func contextWindowKey(sessionID string, anchor int) string {
 }
 
 func (f *fakeContentStore) SearchContent(
-	context.Context, db.ContentSearchFilter,
+	_ context.Context, filter db.ContentSearchFilter,
 ) (db.ContentSearchPage, error) {
+	f.lastFilter = filter
 	return f.page, nil
+}
+
+func TestDirectSearchContentTermsAndExactFilters(t *testing.T) {
+	store := &fakeContentStore{}
+	be := service.NewReadOnlyBackend(store)
+
+	_, err := be.SearchContent(t.Context(), service.ContentSearchRequest{
+		Pattern: "alpha beta", Mode: "terms",
+		SessionID: "session-1", GitBranchExact: "feature/memory",
+		Scope: "top", Limit: 50,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"messages"}, store.lastFilter.Sources)
+	assert.Equal(t, "session-1", store.lastFilter.SessionID)
+	assert.Equal(t, "feature/memory", store.lastFilter.GitBranchExact)
+	assert.Equal(t, "top", store.lastFilter.Scope)
+
+	_, err = be.SearchContent(t.Context(), service.ContentSearchRequest{
+		Pattern: "alpha beta", Mode: "terms",
+		Sources: []string{"tool_result"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "messages only")
 }
 
 func (f *fakeContentStore) GetMessagesWindow(
@@ -175,7 +202,7 @@ func TestDirectSearchContentContextRejectsOverMax(t *testing.T) {
 // of the match's own Snippet redaction.
 func contextWindowFixtureWithSecret(sessionID string, anchor int) []db.Message {
 	msgs := contextWindowFixture(sessionID, anchor)
-	msgs[1].Content = "my key is AKIA7QHWN2DKR4FYPLJM ok"
+	msgs[1].Content = "my key is " + fakeAWSKey + " ok"
 	return msgs
 }
 
@@ -206,7 +233,7 @@ func TestDirectSearchContentContextRedactsSecretsByDefault(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, res.Matches, 1)
 	require.Len(t, res.Matches[0].ContextBefore, 2)
-	assert.NotContains(t, res.Matches[0].ContextBefore[1].Content, "AKIA7QHWN2DKR4FYPLJM",
+	assert.NotContains(t, res.Matches[0].ContextBefore[1].Content, fakeAWSKey,
 		"default (Reveal=false) must redact a secret in a context message: %q",
 		res.Matches[0].ContextBefore[1].Content)
 
@@ -217,7 +244,7 @@ func TestDirectSearchContentContextRedactsSecretsByDefault(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rev.Matches, 1)
 	require.Len(t, rev.Matches[0].ContextBefore, 2)
-	assert.Contains(t, rev.Matches[0].ContextBefore[1].Content, "AKIA7QHWN2DKR4FYPLJM",
+	assert.Contains(t, rev.Matches[0].ContextBefore[1].Content, fakeAWSKey,
 		"Reveal=true must leave a context message's secret intact: %q",
 		rev.Matches[0].ContextBefore[1].Content)
 }
@@ -229,7 +256,7 @@ func TestDirectSearchContentContextRedactsSecretsByDefault(t *testing.T) {
 func TestDirectSearchContentContextRedactsToolPayloads(t *testing.T) {
 	t.Parallel()
 	const sess = "s1"
-	secret := "AKIA7QHWN2DKR4FYPLJM"
+	secret := fakeAWSKey
 	store := &fakeContentStore{
 		page: db.ContentSearchPage{
 			Matches: []db.ContentMatch{{SessionID: sess, Ordinal: 5, Snippet: "match one"}},

@@ -13863,6 +13863,12 @@ func (b *lockedLogBuffer) String() string {
 	return b.buf.String()
 }
 
+func (b *lockedLogBuffer) Reset() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf.Reset()
+}
+
 // A Codex incremental decline must be logged with a provider-agnostic
 // fallback reason, not as appended Claude lines.
 func TestIncrementalSync_CodexFallbackLogIsProviderAgnostic(t *testing.T) {

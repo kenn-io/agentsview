@@ -64,6 +64,52 @@ func TestNewServer_RegistersSevenReadOnlyTools(t *testing.T) {
 	require.NoError(t, st.Wait())
 }
 
+func TestNewServer_MemoryProfileRegistersOnlyEvidenceTools(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	srv := newServer(ServeOptions{
+		Service: service.NewDirectBackend(d, nil),
+		Profile: ProfileMemory,
+		Now:     func() time.Time { return fixedNow },
+	})
+
+	st, ct := newInMemoryPair(t, srv)
+	tools, err := ct.ListTools(t.Context(), nil)
+	require.NoError(t, err)
+	require.Len(t, tools.Tools, 2)
+	names := make([]string, 0, len(tools.Tools))
+	for _, tool := range tools.Tools {
+		names = append(names, tool.Name)
+		require.NotNil(t, tool.Annotations, "tool %s missing annotations", tool.Name)
+		assert.True(t, tool.Annotations.ReadOnlyHint,
+			"tool %s should be annotated read-only", tool.Name)
+		if tool.Name == ToolSearchContent {
+			assert.NotContains(t, tool.Description, ToolSearchSessions,
+				"memory-profile tools must not refer to unavailable tools")
+		}
+	}
+	assert.ElementsMatch(t, []string{ToolSearchContent, ToolGetMessages}, names)
+	require.NoError(t, ct.Close())
+	require.NoError(t, st.Wait())
+}
+
+func TestParseProfile(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{"", string(ProfileFull), string(ProfileMemory)} {
+		profile, err := ParseProfile(name)
+		require.NoError(t, err)
+		if name == "" {
+			assert.Equal(t, ProfileFull, profile)
+		} else {
+			assert.Equal(t, Profile(name), profile)
+		}
+	}
+
+	_, err := ParseProfile("analytics")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown MCP profile")
+}
+
 func TestNewServer_OmitsRecallToolForUnsupportedBackend(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	srv := newServer(ServeOptions{

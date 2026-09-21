@@ -84,49 +84,56 @@ func newSkillsInstallCommand() *cobra.Command {
 	return cmd
 }
 
-// runSkillsInstall renders and writes each harness's skill file under base,
-// printing one line per target. It processes every target before returning
-// so a refusal on one harness never blocks another, then reports a non-nil
-// error if any target was refused.
+// runSkillsInstall renders and writes each harness's recall package under
+// base, printing one line per artifact. It processes every artifact before
+// returning so one refusal never blocks other safe writes, then reports a
+// non-nil error if any artifact was refused.
 func runSkillsInstall(
 	out io.Writer, harnesses []skills.Harness, base string, force bool,
 	remote skillRemoteSource,
 ) error {
 	var refused []string
 	for _, h := range harnesses {
-		dir := skills.TargetDir(h, base)
-		path := filepath.Join(dir, skillFileName)
-
-		existing, err := readSkillFile(path)
+		skillPath := filepath.Join(skills.TargetDir(h, base), skillFileName)
+		installedSkill, err := readSkillFile(skillPath)
 		if err != nil {
 			return err
 		}
-		rendered, err := skills.Render(h, version, remote.resolve(existing))
+		pkg, err := skills.RenderPackage(h, version, remote.resolve(installedSkill))
 		if err != nil {
 			return err
 		}
-		state := skills.Classify(existing, rendered)
 
-		if !force && (state == skills.StateModified || state == skills.StateForeign) {
-			fmt.Fprintf(out, "%s was modified (or not generated); use --force to overwrite\n", path)
-			refused = append(refused, path)
-			continue
-		}
+		for _, rendered := range pkg {
+			path := filepath.Join(base, rendered.RelativePath)
+			existing, err := readSkillFile(path)
+			if err != nil {
+				return err
+			}
+			state := skills.Classify(existing, rendered)
 
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return fmt.Errorf("skills: create %s: %w", dir, err)
-		}
-		if err := os.WriteFile(path, []byte(rendered.Content), 0o644); err != nil {
-			return fmt.Errorf("skills: write %s: %w", path, err)
-		}
+			if !force && (state == skills.StateModified || state == skills.StateForeign) {
+				fmt.Fprintf(out, "%s was modified (or not generated); use --force to overwrite\n", path)
+				refused = append(refused, path)
+				continue
+			}
 
-		switch state {
-		case skills.StateMissing:
-			fmt.Fprintf(out, "installed %s\n", path)
-		case skills.StateCurrent:
-			fmt.Fprintf(out, "up to date %s\n", path)
-		default: // StateStale, or StateModified/StateForeign forced
-			fmt.Fprintf(out, "updated %s\n", path)
+			dir := filepath.Dir(path)
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				return fmt.Errorf("skills: create %s: %w", dir, err)
+			}
+			if err := os.WriteFile(path, []byte(rendered.Content), 0o644); err != nil {
+				return fmt.Errorf("skills: write %s: %w", path, err)
+			}
+
+			switch state {
+			case skills.StateMissing:
+				fmt.Fprintf(out, "installed %s\n", path)
+			case skills.StateCurrent:
+				fmt.Fprintf(out, "up to date %s\n", path)
+			default: // StateStale, or StateModified/StateForeign forced
+				fmt.Fprintf(out, "updated %s\n", path)
+			}
 		}
 	}
 
@@ -175,14 +182,15 @@ func newSkillsListCommand() *cobra.Command {
 
 // skillListRow is one row of `skills list` output, in both human and JSON form.
 type skillListRow struct {
-	Harness string `json:"harness"`
-	Level   string `json:"level"`
-	State   string `json:"state"`
-	Path    string `json:"path"`
+	Harness  string `json:"harness"`
+	Artifact string `json:"artifact"`
+	Level    string `json:"level"`
+	State    string `json:"state"`
+	Path     string `json:"path"`
 }
 
-// listSkillRows classifies every harness's skill file under base against a
-// fresh render.
+// listSkillRows classifies every artifact in every harness package under base
+// against a fresh render.
 func listSkillRows(
 	base string, project bool, remote skillRemoteSource,
 ) ([]skillListRow, error) {
@@ -192,37 +200,53 @@ func listSkillRows(
 	}
 
 	harnesses := skills.AllHarnesses()
-	rows := make([]skillListRow, 0, len(harnesses))
+	rows := make([]skillListRow, 0, len(harnesses)+1)
 	for _, h := range harnesses {
-		dir := skills.TargetDir(h, base)
-		path := filepath.Join(dir, skillFileName)
-
-		existing, err := readSkillFile(path)
+		skillPath := filepath.Join(skills.TargetDir(h, base), skillFileName)
+		installedSkill, err := readSkillFile(skillPath)
 		if err != nil {
 			return nil, err
 		}
-		rendered, err := skills.Render(h, version, remote.resolve(existing))
+		pkg, err := skills.RenderPackage(h, version, remote.resolve(installedSkill))
 		if err != nil {
 			return nil, err
 		}
-		state := skills.Classify(existing, rendered)
 
-		rows = append(rows, skillListRow{
-			Harness: string(h),
-			Level:   level,
-			State:   skillStateString(state),
-			Path:    path,
-		})
+		for _, rendered := range pkg {
+			path := filepath.Join(base, rendered.RelativePath)
+			existing, err := readSkillFile(path)
+			if err != nil {
+				return nil, err
+			}
+			state := skills.Classify(existing, rendered)
+
+			rows = append(rows, skillListRow{
+				Harness:  string(h),
+				Artifact: skillArtifactName(rendered),
+				Level:    level,
+				State:    skillStateString(state),
+				Path:     path,
+			})
+		}
 	}
 	return rows, nil
 }
 
 func printSkillListHuman(w io.Writer, rows []skillListRow) error {
-	fmt.Fprintf(w, "%-8s  %-8s  %-8s  %s\n", "HARNESS", "LEVEL", "STATE", "PATH")
+	fmt.Fprintf(w, "%-8s  %-12s  %-8s  %-8s  %s\n",
+		"HARNESS", "ARTIFACT", "LEVEL", "STATE", "PATH")
 	for _, r := range rows {
-		fmt.Fprintf(w, "%-8s  %-8s  %-8s  %s\n", r.Harness, r.Level, r.State, r.Path)
+		fmt.Fprintf(w, "%-8s  %-12s  %-8s  %-8s  %s\n",
+			r.Harness, r.Artifact, r.Level, r.State, r.Path)
 	}
 	return nil
+}
+
+func skillArtifactName(rendered skills.Rendered) string {
+	if filepath.Base(rendered.RelativePath) == skillFileName {
+		return "skill"
+	}
+	return "search-agent"
 }
 
 func skillStateString(s skills.InstalledState) string {

@@ -82,10 +82,24 @@ type httpBackend struct {
 	longRunningClient *http.Client
 	readOnly          bool
 	recallQueries     bool
+	// revisionEvidence and exactScopeFilters report that the remote daemon
+	// enforces the revision-bound read and exact content-search semantics
+	// this backend can request. Older daemons silently ignore unknown query
+	// parameters, so unsupported requests must fail closed here instead.
+	revisionEvidence  bool
+	exactScopeFilters bool
 	token             string
 }
 
 const recallNonRecordingAPIVersion = 4
+
+// revisionEvidenceAPIVersion is the first daemon API that accepts
+// revision-bound message reads (expected_revision, evidence_source).
+const revisionEvidenceAPIVersion = 11
+
+// exactScopeAPIVersion is the first daemon API that accepts the exact
+// content-search filters session_id and git_branch_exact.
+const exactScopeAPIVersion = 11
 
 // HTTPServerCapabilities is the subset of version metadata needed to expose
 // client features safely for an explicitly selected daemon.
@@ -102,7 +116,7 @@ type HTTPServerCapabilities struct {
 // with require_auth=true. browserURL selects the browser-facing address;
 // an empty value uses baseURL.
 func NewHTTPBackend(baseURL, token string, readOnly bool, browserURL string) service.SessionService {
-	b := newHTTPBackend(baseURL, token, readOnly, !readOnly)
+	b := newHTTPBackend(baseURL, token, readOnly, !readOnly, true, true)
 	if browserURL != "" {
 		b.browserURL = browserURL
 	}
@@ -120,11 +134,14 @@ func NewHTTPBackendForServer(
 		capabilities.ReadOnly,
 		!capabilities.ReadOnly &&
 			capabilities.APIVersion >= recallNonRecordingAPIVersion,
+		capabilities.APIVersion >= revisionEvidenceAPIVersion,
+		capabilities.APIVersion >= exactScopeAPIVersion,
 	)
 }
 
 func newHTTPBackend(
-	baseURL, token string, readOnly, recallQueries bool,
+	baseURL, token string, readOnly, recallQueries, revisionEvidence,
+	exactScopeFilters bool,
 ) *httpBackend {
 	return &httpBackend{
 		baseURL:           strings.TrimSuffix(baseURL, "/"),
@@ -133,6 +150,8 @@ func newHTTPBackend(
 		longRunningClient: &http.Client{Timeout: 0},
 		readOnly:          readOnly,
 		recallQueries:     recallQueries,
+		revisionEvidence:  revisionEvidence,
+		exactScopeFilters: exactScopeFilters,
 		token:             token,
 	}
 }
@@ -142,7 +161,7 @@ func newHTTPBackend(
 func ProbeHTTPServerCapabilities(
 	ctx context.Context, baseURL, token string,
 ) (HTTPServerCapabilities, error) {
-	b := newHTTPBackend(baseURL, token, false, false)
+	b := newHTTPBackend(baseURL, token, false, false, false, false)
 	api, err := b.apiClient(b.client)
 	if err != nil {
 		return HTTPServerCapabilities{}, err
@@ -408,6 +427,15 @@ func (b *httpBackend) Messages(
 	if len(f.Roles) > 0 {
 		q.Roles = new(strings.Join(f.Roles, ","))
 	}
+	if f.ExpectedRevision != "" || f.EvidenceSource != "" {
+		if !b.revisionEvidence {
+			return nil, fmt.Errorf(
+				"%w: remote daemon does not accept revision-bound reads",
+				service.ErrRevisionBoundReadUnavailable)
+		}
+		q.ExpectedRevision = new(f.ExpectedRevision)
+		q.EvidenceSource = new(f.EvidenceSource)
+	}
 	api, err := b.apiClient(b.client)
 	if err != nil {
 		return nil, err
@@ -419,6 +447,13 @@ func (b *httpBackend) Messages(
 	out := response.JSON200
 	err = serviceResponseError(response.HTTPResponse, response.Body, err)
 	if err != nil {
+		if response.HTTPResponse != nil && response.StatusCode == http.StatusConflict &&
+			strings.Contains(string(response.Body), "source_changed") {
+			return nil, service.ErrSourceChanged
+		}
+		if response.HTTPResponse != nil && response.StatusCode == http.StatusNotImplemented {
+			return nil, service.ErrRevisionBoundReadUnavailable
+		}
 		return nil, err
 	}
 	return out, nil
@@ -649,6 +684,15 @@ func (b *httpBackend) SearchContent(
 	}
 	if req.GitBranch != "" {
 		q.GitBranch = new(req.GitBranch)
+	}
+	if req.SessionID != "" || req.GitBranchExact != "" {
+		if !b.exactScopeFilters {
+			return nil, errors.New(
+				"exact session_id and git_branch_exact content filters " +
+					"require a newer remote daemon")
+		}
+		q.SessionID = new(req.SessionID)
+		q.GitBranchExact = new(req.GitBranchExact)
 	}
 	if req.Agent != "" {
 		q.Agent = new(req.Agent)
