@@ -1,4 +1,5 @@
 ---
+last_edited: 2026-09-21
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -10,6 +11,42 @@ The latest published release is
 
 **New features**
 
+- Diagnose conversation-memory setup with `agentsview doctor memory`. It reports
+    the selected archive's lexical and semantic readiness separately, then checks
+    the local native plugin, MCP profile, SessionStart hook, and conflicting
+    standalone skills without starting a daemon or changing the installation.
+- Conversation-memory clients can check archive and search readiness through
+    MCP `get_memory_status` or `GET /api/v1/memory/status`. Search responses
+    carry the same compact lexical and semantic coverage snapshot, including
+    active vector-generation counts and explicit unknown source telemetry.
+- Install the native AgentsView Memory package in Claude Code or Codex to get
+    the recall skill, focused MCP server, Claude search agent, and a fail-open
+    session-start hook from one package. Local and hosted targets stay in local
+    runtime configuration, and startup reports duplicate standalone skills
+    without changing user-edited files.
+- Native conversation-memory integrations can use
+    `agentsview memory session-start` for local, hosted-contributor, and
+    hosted-reader lifecycle roles. The command wakes the configured ingestion
+    owner or checks the selected read target and returns within two seconds.
+- MCP clients can use `agentsview mcp --profile memory` to advertise only the
+    conversation evidence search and read tools, reducing unrelated tool
+    choices while leaving the default full MCP surface unchanged.
+- Agents can open recalled evidence against the exact transcript revision that
+    produced it. MCP message reads reject stale citations with `source_changed`,
+    and oversized messages now provide a revision-bound continuation cursor.
+- Agents can require several literal terms within one user/assistant exchange
+    when searching conversation history through MCP. Exact session, branch, and
+    current-session filters narrow recall before the result limit, and each
+    response reports the search mode, filters, exclusions, and truncation.
+- Coding agents can now consult prior conversation evidence proactively when
+    earlier decisions or solutions may help. `agentsview skills install`
+    upgrades the existing recall skill for Claude and Agents/Codex, and Claude
+    also receives a bounded `agentsview-search-conversations` agent whose
+    frontmatter denies built-in shell, file, network, dispatch, and
+    MCP-discovery tools; tools from other registered MCP servers are still
+    inherited, and the agent is instructed to use only AgentsView's read-only
+    tools. Every generated
+    artifact is listed and protected independently from local edits.
 - Push the local SQLite archive into ClickHouse and serve the read-only web UI
     from it. Configure `[clickhouse]` or named `[clickhouse.NAME]` targets, then
     run `agentsview clickhouse push`, `status`, `serve`, or `service`. Push

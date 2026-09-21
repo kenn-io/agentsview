@@ -180,6 +180,18 @@ func (l *pushLoop) signalDirty() {
 
 // Run blocks until ctx is cancelled, then performs a final flush push.
 func (l *pushLoop) Run(ctx context.Context) {
+	l.run(ctx, nil)
+}
+
+// RunWithWake runs the push loop and treats each external wake as a normal
+// coalesced change notification. A nil wake behaves exactly like Run.
+func (l *pushLoop) RunWithWake(
+	ctx context.Context, wake <-chan struct{},
+) {
+	l.run(ctx, wake)
+}
+
+func (l *pushLoop) run(ctx context.Context, wake <-chan struct{}) {
 	var armed bool
 	var fire <-chan time.Time
 	for {
@@ -201,6 +213,12 @@ func (l *pushLoop) Run(ctx context.Context) {
 				armed = true
 				fire = l.after(l.debounce)
 			}
+		case _, ok := <-wake:
+			if !ok {
+				wake = nil
+				continue
+			}
+			l.NotifyDirty()
 		case <-fire:
 			armed = false
 			fire = nil

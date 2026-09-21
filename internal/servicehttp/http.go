@@ -161,6 +161,28 @@ func ProbeHTTPServerCapabilities(
 
 func (b *httpBackend) SupportsRecallQueries() bool { return b.recallQueries }
 
+func (b *httpBackend) MemoryStatus(ctx context.Context) (service.MemoryStatus, error) {
+	api, err := b.apiClient(b.client)
+	if err != nil {
+		return service.MemoryStatus{}, err
+	}
+	response, err := api.GetAPIV1MemoryStatusWithResponse(ctx)
+	if response == nil {
+		return service.MemoryStatus{}, err
+	}
+	err = serviceResponseError(response.HTTPResponse, response.Body, err)
+	if errors.Is(err, errHTTPNotFound) || errors.Is(err, errHTTPNotImplemented) {
+		return service.UnsupportedMemoryStatus(time.Now()), nil
+	}
+	if err != nil {
+		return service.MemoryStatus{}, err
+	}
+	if response.JSON200 == nil {
+		return service.MemoryStatus{}, errors.New("memory status: empty response")
+	}
+	return *response.JSON200, nil
+}
+
 func (b *httpBackend) MachineLabels(
 	ctx context.Context,
 ) (service.MachineLabelCatalog, error) {
@@ -408,6 +430,12 @@ func (b *httpBackend) Messages(
 	if len(f.Roles) > 0 {
 		q.Roles = new(strings.Join(f.Roles, ","))
 	}
+	if f.ExpectedRevision != "" {
+		q.ExpectedRevision = new(f.ExpectedRevision)
+	}
+	if f.EvidenceSource != "" {
+		q.EvidenceSource = new(f.EvidenceSource)
+	}
 	api, err := b.apiClient(b.client)
 	if err != nil {
 		return nil, err
@@ -419,6 +447,13 @@ func (b *httpBackend) Messages(
 	out := response.JSON200
 	err = serviceResponseError(response.HTTPResponse, response.Body, err)
 	if err != nil {
+		if response.HTTPResponse != nil && response.StatusCode == http.StatusConflict &&
+			strings.Contains(string(response.Body), "source_changed") {
+			return nil, service.ErrSourceChanged
+		}
+		if response.HTTPResponse != nil && response.StatusCode == http.StatusNotImplemented {
+			return nil, service.ErrRevisionBoundReadUnavailable
+		}
 		return nil, err
 	}
 	return out, nil
@@ -650,6 +685,12 @@ func (b *httpBackend) SearchContent(
 	if req.GitBranch != "" {
 		q.GitBranch = new(req.GitBranch)
 	}
+	if req.SessionID != "" {
+		q.SessionID = new(req.SessionID)
+	}
+	if req.GitBranchExact != "" {
+		q.GitBranchExact = new(req.GitBranchExact)
+	}
 	if req.Agent != "" {
 		q.Agent = new(req.Agent)
 	}
@@ -737,6 +778,7 @@ func (b *httpBackend) SearchContent(
 	for i := range out.Matches {
 		out.Matches[i].WebURL = b.sessionWebURL(out.Matches[i].SessionID)
 	}
+	out.Coverage = service.NormalizeMemoryCoverage(out.Coverage)
 	return out, nil
 }
 

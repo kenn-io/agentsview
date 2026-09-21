@@ -23,6 +23,7 @@ func (s *Server) registerMetadataRoutes() {
 	s.get(group, "/stats", "Get stats", s.humaGetStats)
 	s.get(group, "/session-stats", "Get session stats", s.humaGetSessionStats)
 	s.get(group, "/version", "Get server version", s.humaGetVersion)
+	s.get(group, "/memory/status", "Get memory readiness", s.humaGetMemoryStatus)
 	s.get(group, "/update/check", "Check for updates", s.humaCheckUpdate)
 }
 
@@ -179,6 +180,21 @@ func (s *Server) humaGetVersion(
 	version := s.version
 	version.InsightGenerationAvailable = supportsInsightGeneration(s.db)
 	return &jsonOutput[VersionInfo]{Body: version}, nil
+}
+
+func (s *Server) humaGetMemoryStatus(
+	ctx context.Context,
+	_ *emptyInput,
+) (*jsonOutput[service.MemoryStatus], error) {
+	status, err := service.GetMemoryStatus(ctx, s.sessions)
+	if err != nil {
+		return nil, internalError("memory status error", err)
+	}
+	status.ServerVersion = s.version.Version
+	if _, local := s.db.(*db.DB); local && status.Archive.Identity == "" {
+		status.Archive.Identity = s.cfg.InstallationID
+	}
+	return &jsonOutput[service.MemoryStatus]{Body: status}, nil
 }
 
 func (s *Server) humaCheckUpdate(

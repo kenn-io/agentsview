@@ -1,12 +1,137 @@
 package skills
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func renderedPaths(pkg []Rendered) []string {
+	paths := make([]string, 0, len(pkg))
+	for _, artifact := range pkg {
+		paths = append(paths, filepath.ToSlash(artifact.RelativePath))
+	}
+	return paths
+}
+
+func TestRenderPackage_HarnessArtifacts(t *testing.T) {
+	claude, err := RenderPackage(HarnessClaude, "dev", Remote{})
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		".claude/skills/agentsview-finding-history/SKILL.md",
+		".claude/agents/agentsview-search-conversations.md",
+	}, renderedPaths(claude))
+
+	agents, err := RenderPackage(HarnessAgents, "dev", Remote{})
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		".agents/skills/agentsview-finding-history/SKILL.md",
+	}, renderedPaths(agents))
+}
+
+func TestRenderPluginPackageReusesClaudeArtifacts(t *testing.T) {
+	standalone, err := RenderPackage(HarnessClaude, "0.1.0", Remote{})
+	require.NoError(t, err)
+
+	plugin, err := RenderPluginPackage("0.1.0")
+	require.NoError(t, err)
+	require.Len(t, plugin, 2)
+	assert.Equal(t, []string{
+		"skills/agentsview-finding-history/SKILL.md",
+		"agents/agentsview-search-conversations.md",
+	}, renderedPaths(plugin))
+	assert.Equal(t, standalone[0].Content, plugin[0].Content)
+	assert.Equal(t, standalone[1].Content, plugin[1].Content)
+}
+
+func TestRenderPackage_ProtectsSearchAgentEdits(t *testing.T) {
+	pkg, err := RenderPackage(HarnessClaude, "dev", Remote{})
+	require.NoError(t, err)
+	require.Len(t, pkg, 2)
+	agent := pkg[1]
+
+	assert.Equal(t, StateCurrent, Classify([]byte(agent.Content), agent))
+	assert.Equal(t, StateModified,
+		Classify([]byte(agent.Content+"\nlocal edit\n"), agent))
+}
+
+func TestRenderRecallWorkflowContract(t *testing.T) {
+	rendered, err := RenderPackage(HarnessAgents, "dev", Remote{})
+	require.NoError(t, err)
+	require.NotEmpty(t, rendered)
+	skill := rendered[0].Content
+
+	assert.Contains(t, skill, "Search before guessing")
+	assert.Contains(t, skill, "inspect the current code first")
+	assert.Contains(t, skill, "already answered in this conversation")
+	assert.Contains(t, skill, "search_content")
+	assert.Contains(t, skill, "get_messages")
+	assert.Contains(t, skill, "limit: 10")
+	assert.Contains(t, skill, "top 2-5")
+	assert.Contains(t, skill, "next_from")
+	assert.Contains(t, skill, "subordinate")
+	assert.Contains(t, skill, "user accepted")
+	assert.Contains(t, skill, "verify the agent in effect")
+	assert.Contains(t, skill, "without that header")
+	assert.Contains(t, skill, "not registered in this session")
+	assert.NotContains(t, skill, ".claude/agents")
+	assert.Contains(t, skill, "semantic search failed")
+	assert.Contains(t, skill, "Do not fall back on authentication or wrong-target errors")
+	assert.Contains(t, skill, "Copyright (c) 2025 Jesse Vincent")
+	assert.NotContains(t, skill, "mcp__plugin_episodic-memory")
+	assert.NotContains(t, skill, "50-100x")
+}
+
+// TestRenderClaudeSkillDelegationGuard pins the Claude-specific delegation
+// guard: only the Claude harness renders the project agent directory into the
+// guard text.
+func TestRenderClaudeSkillDelegationGuard(t *testing.T) {
+	claude, err := RenderPackage(HarnessClaude, "dev", Remote{})
+	require.NoError(t, err)
+	require.NotEmpty(t, claude)
+	skill := claude[0].Content
+
+	assert.Contains(t, skill, "the project's")
+	assert.Contains(t, skill, ".claude/agents/` directory")
+	assert.Contains(t, skill, "without that header")
+}
+
+func TestRenderClaudeSearchAgentContract(t *testing.T) {
+	rendered, err := RenderPackage(HarnessClaude, "dev", Remote{})
+	require.NoError(t, err)
+	require.Len(t, rendered, 2)
+	agent := rendered[1].Content
+
+	assert.Contains(t, agent, "name: agentsview-search-conversations")
+	assert.Contains(t, agent, "model: haiku")
+	// The subagent reads untrusted archived transcripts, so its frontmatter
+	// denies every capability-bearing Claude Code built-in tool (shell, file
+	// mutation, network, local reads, subagent dispatch, slash commands, and
+	// skills) plus the plan-mode housekeeping built-ins. MCPSearch is denied
+	// too so deferred MCP tool discovery fails closed instead of exposing
+	// other servers' tools. A `tools:` allowlist cannot name the dynamically
+	// prefixed AgentsView MCP tools, so a deny list is the only mechanism
+	// that keeps those tools callable.
+	assert.Contains(t, agent,
+		"disallowedTools: Bash, Edit, Write, NotebookEdit, Read, Grep, Glob, "+
+			"WebFetch, WebSearch, Task, Agent, SlashCommand, Skill, TodoWrite, "+
+			"BashOutput, KillShell, AskUserQuestion, ExitPlanMode, EnterPlanMode, "+
+			"MCPSearch")
+	assert.Contains(t, agent, "Use only the AgentsView MCP tools")
+	assert.Contains(t, agent, "incomplete evidence")
+	assert.Contains(t, agent, "### Summary")
+	assert.Contains(t, agent, "### Sources")
+	assert.Contains(t, agent, "### For Follow-Up")
+	assert.Contains(t, agent, "1,000 words")
+	assert.Contains(t, agent, "Read in detail")
+	assert.Contains(t, agent, "Summary only")
+	assert.Contains(t, agent, "Skimmed")
+	assert.Contains(t, agent, "ordinal range")
+	assert.NotContains(t, agent, "% match")
+}
 
 func TestRemoteArgs(t *testing.T) {
 	assert.Empty(t, Remote{}.Args())
