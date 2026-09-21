@@ -368,6 +368,12 @@ func conversationRowFromMessage(m Message) (conversationRow, bool) {
 // native source identity or an unchanged complete projection preserves IDs;
 // content digests are equality evidence, never logical message identifiers.
 func reconcileConversationMessagesTx(tx transactionQueries, sessionID string, msgs []Message, replace, usageOnly bool) error {
+	if replace && usageOnly {
+		// Usage storage omits messages and text, so its projection cannot prove
+		// deletion or changed identity. Preserve existing IDs as policy gaps;
+		// the session gap covers activity without retained message records.
+		return clearUsageOnlyConversationTx(tx, sessionID)
+	}
 	var incoming []conversationRow
 	counts := map[string]int{}
 	for _, msg := range msgs {

@@ -448,6 +448,94 @@ func TestConversationExportFullRewriteClearsPolicyGap(t *testing.T) {
 	}
 }
 
+func TestConversationExportUsageRewritePreservesPolicyGaps(t *testing.T) {
+	for _, writer := range []string{"messages", "content", "batch", "atomic", "rebuild"} {
+		t.Run(writer, func(t *testing.T) {
+			d := testDB(t)
+			session := Session{ID: "chat", Project: "sample", Machine: "local", Agent: "codex"}
+			msgs := []Message{
+				{SessionID: "chat", Ordinal: 0, Role: "user", Content: "Keep this prompt", SourceUUID: "prompt-one"},
+				{SessionID: "chat", Ordinal: 1, Role: "assistant", Content: "Reply without source identity"},
+				{SessionID: "chat", Ordinal: 2, Role: "user", Content: "Remove this prompt later", SourceUUID: "prompt-two"},
+			}
+			require.NoError(t, d.UpsertSession(t.Context(), session))
+			require.NoError(t, d.InsertMessages(t.Context(), msgs))
+			initial, err := d.ExportConversationChanges(t.Context(), ConversationExportOptions{})
+			require.NoError(t, err)
+			require.Len(t, initial.Changes, 3)
+			ids := map[int]string{}
+			for _, change := range initial.Changes {
+				ids[change.Ordinal] = change.MessageID
+			}
+			if writer == "rebuild" {
+				source := d
+				d = testDB(t)
+				d.SetArchiveContent(config.ArchiveContentUsage)
+				require.NoError(t, d.CopyArchiveIdentityFrom(source.Path()))
+				require.NoError(t, d.UpsertSession(t.Context(), session))
+				require.NoError(t, d.InsertMessages(t.Context(), msgs))
+				_, err = d.CopyOrphanedDataFrom(source.Path())
+				require.NoError(t, err)
+			} else {
+				d.SetArchiveContent(config.ArchiveContentUsage)
+				switch writer {
+				case "messages":
+					require.NoError(t, d.ReplaceSessionMessages(t.Context(), "chat", msgs))
+				case "content":
+					require.NoError(t, d.ReplaceSessionContent(t.Context(), "chat", msgs, SessionSignalUpdate{}, nil))
+				case "batch", "atomic":
+					writes := []SessionBatchWrite{{Session: session, Messages: msgs, ReplaceMessages: true, DataVersion: CurrentDataVersion()}}
+					var result SessionBatchResult
+					if writer == "batch" {
+						result, err = d.WriteSessionBatch(writes)
+					} else {
+						result, err = d.WriteSessionBatchAtomic(t.Context(), writes)
+					}
+					require.NoError(t, err)
+					require.Equal(t, 1, result.WrittenSessions)
+				}
+			}
+			page, err := d.ExportConversationChanges(t.Context(), ConversationExportOptions{})
+			require.NoError(t, err)
+			require.Len(t, page.Changes, 4, "three retained messages and the session coverage gap")
+			reader, err := OpenReadOnly(t.Context(), d.Path())
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, reader.Close()) })
+			for _, change := range page.Changes {
+				assert.False(t, change.Deleted)
+				assert.Equal(t, "archive_content_excluded", change.Gap)
+				assert.Empty(t, change.Digest)
+				assert.Zero(t, change.TextBytes)
+				if change.Type == "message" {
+					assert.Equal(t, ids[change.Ordinal], change.MessageID)
+					body, err := reader.GetConversationMessage(t.Context(), ConversationMessageOptions{DatabaseID: page.DatabaseID, SessionID: "chat", MessageID: change.MessageID, Revision: change.Revision})
+					require.NoError(t, err)
+					assert.Nil(t, body.Text, "excluded text must be removed from storage")
+				}
+			}
+			require.NoError(t, reader.Close())
+			require.NoError(t, d.ReplaceSessionMessages(t.Context(), "chat", msgs))
+			quiet, err := d.ExportConversationChanges(t.Context(), ConversationExportOptions{Checkpoint: page.Checkpoint})
+			require.NoError(t, err)
+			assert.Empty(t, quiet.Changes, "repeated usage writes preserve IDs even without source identity")
+			require.NoError(t, d.Close())
+			full, err := Open(t.Context(), d.Path())
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, full.Close()) })
+			require.NoError(t, full.ReplaceSessionMessages(t.Context(), "chat", msgs[:1]))
+			restored, err := full.ExportConversationChanges(t.Context(), ConversationExportOptions{})
+			require.NoError(t, err)
+			require.Len(t, restored.Changes, 4)
+			for _, change := range restored.Changes {
+				if change.Type == "message" {
+					assert.Equal(t, ids[change.Ordinal], change.MessageID)
+					assert.Equal(t, change.Ordinal != 0, change.Deleted, "a complete replacement distinguishes real removals")
+				}
+			}
+		})
+	}
+}
+
 func TestConversationExportNoSourceIdentityIsExplicit(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()

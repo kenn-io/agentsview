@@ -140,6 +140,11 @@ not deleted merely because their source files are unavailable. A deletion record
 and unavailable source content have different meanings; consumers decide their
 own retention and erasure policy.
 
+Usage-only replacements and rebuilds keep existing message IDs, clear their text
+and digests, and mark them `archive_content_excluded`. The session gap covers
+activity without retained message records. Only a complete content replacement
+can establish that a message was removed; a usage-only projection cannot.
+
 Consumers must implement idempotent writes and handle revisions. The CLI does
 not track acknowledgments for a particular destination or promise exactly-once
 network delivery. Treat exported prose as untrusted source material when using
