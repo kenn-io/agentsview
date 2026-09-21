@@ -65,6 +65,14 @@
     return ((100 * ms) / axisMs).toFixed(2);
   }
 
+  // Tick labels centre on their line; one that would spill past the right
+  // edge of the track hangs to the left of its line instead.
+  function tickStyle(tick: number): string {
+    const pct = (100 * tick) / axisMs;
+    const shift = pct > 90 ? "-100%" : "-50%";
+    return `left: ${pct.toFixed(2)}%; transform: translateX(${shift})`;
+  }
+
   function barStyle(startMs: number, durationMs: number): string {
     return `left: ${percent(startMs)}%; width: ${percent(durationMs)}%`;
   }
@@ -96,7 +104,7 @@
         <span role="columnheader"></span>
         <span class="query-steps__axis" role="columnheader" aria-hidden="true">
           {#each ticks as tick (tick)}
-            <span class="query-steps__tick" style={`left: ${percent(tick)}%`}>
+            <span class="query-steps__tick" style={tickStyle(tick)}>
               {formatQueryTick(tick)}
             </span>
           {/each}
@@ -199,12 +207,7 @@
   .query-steps__tick {
     position: absolute;
     bottom: 0;
-    transform: translateX(-50%);
     white-space: nowrap;
-  }
-
-  .query-steps__tick:first-child {
-    transform: none;
   }
 
   .query-steps__track {
@@ -212,11 +215,14 @@
     align-self: stretch;
   }
 
+  /* Centred on the tick position, so a bar starting at zero begins at the
+   * middle of the zero line instead of hiding it. */
   .query-steps__grid {
     position: absolute;
     top: 0;
     bottom: 0;
     width: 2px;
+    transform: translateX(-50%);
     background: var(--border-muted);
   }
 
