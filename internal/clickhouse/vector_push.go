@@ -315,12 +315,20 @@ func (s *Sync) clearUsageOnlyVectors(ctx context.Context) error {
 // recorded in vector_push_state.
 type archiveVectorSession struct{ fingerprint, sessionID string }
 
-// archiveVectorSessions lists every session this archive recorded in any
-// generation, excluding completion markers.
+// archiveVectorSessions lists every (generation, session) pair this archive
+// is answerable for: pairs it recorded in vector_push_state, plus pairs that
+// hold chunks for a session whose row this archive pushed. The second set
+// catches a session push interrupted after its chunks landed but before its
+// state row, which no later push would otherwise revisit once the archive
+// keeps usage only.
 func (s *Sync) archiveVectorSessions(ctx context.Context) ([]archiveVectorSession, error) {
 	rows, err := s.conn.QueryContext(ctx, `
 		SELECT generation_fingerprint, session_id FROM vector_push_state
-		WHERE source_archive_id = ? AND session_id <> ?`, s.archiveID, vectorCompleteMarker)
+		WHERE source_archive_id = ? AND session_id <> ?
+		UNION DISTINCT
+		SELECT c.generation_fingerprint, c.session_id FROM vector_chunks c
+		WHERE c.session_id IN (SELECT id FROM sessions WHERE source_archive_id = ?)`,
+		s.archiveID, vectorCompleteMarker, s.archiveID)
 	if err != nil {
 		return nil, fmt.Errorf("listing clickhouse archive vector sessions: %w", err)
 	}
