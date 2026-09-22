@@ -3063,6 +3063,9 @@ func (db *DB) MessageContentFingerprint(ctx context.Context, sessionID string) (
 // raw NUL must be removed before strings.ToValidUTF8 (which treats it
 // as valid).
 func SanitizeUTF8(s string) string {
+	if isCleanText(s) {
+		return s
+	}
 	s = strings.ReplaceAll(s, "\x00", "")
 	s = strings.ToValidUTF8(s, "")
 	// Fast path: skip the rune scan and allocation when the string
@@ -3076,6 +3079,29 @@ func SanitizeUTF8(s string) string {
 		}
 		return r
 	}, s)
+}
+
+// isCleanText reports whether SanitizeUTF8 would return s unchanged:
+// valid UTF-8 with no NUL or strippable control rune. Most transcript
+// text needs no repair, so one pass that skips ASCII decoding avoids
+// the separate NUL, UTF-8 and control scans of the repair path.
+func isCleanText(s string) bool {
+	for i := 0; i < len(s); {
+		c := s[i]
+		if c < utf8.RuneSelf {
+			if c == 0x7f || c < 0x20 && c != '\n' && c != '\t' && c != '\r' {
+				return false
+			}
+			i++
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if r == utf8.RuneError && size == 1 || isStrippableControl(r) {
+			return false
+		}
+		i += size
+	}
+	return true
 }
 
 // isStrippableControl reports whether r is a control rune that
