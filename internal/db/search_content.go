@@ -51,6 +51,14 @@ type ContentSearchFilter struct {
 	// an unknown value here is a SearchInputError.
 	Scope string
 
+	// ExcludeActiveAfter drops, before LIMIT, semantic/hybrid hits whose
+	// session's canonical activity (ended_at, then started_at, then
+	// created_at) is strictly after this RFC3339 cutoff, so the fixed
+	// top-ranked page keeps enough eligible matches instead of spending
+	// slots on the live conversation and returning them only for the MCP
+	// layer to discard them. Empty disables the exclusion.
+	ExcludeActiveAfter string
+
 	// RevealSecrets returns raw snippets. It defaults false so snippets are
 	// secret-redacted unless a caller (the localhost-gated reveal path)
 	// explicitly opts out; a forgotten flag fails safe.
@@ -101,6 +109,10 @@ type ContentMatch struct {
 	// ordinal) is excluded from both slices.
 	ContextBefore []Message `json:"context_before,omitempty"`
 	ContextAfter  []Message `json:"context_after,omitempty"`
+	// TranscriptRevision identifies the exact stored transcript observed by
+	// the storage query that produced this evidence. An empty value means the
+	// backend cannot provide revision-bound evidence for this result.
+	TranscriptRevision string `json:"transcript_revision,omitempty"`
 }
 
 // ContentSearchPage is a page of matches with an optional next cursor.
@@ -221,15 +233,41 @@ func semanticContentSessionFilter(f ContentSearchFilter) SessionFilter {
 	return sf
 }
 
-// semanticSessionScopeSubquery is sessionScopeSubquery minus the
-// sidebar-child exclusion: semantic/hybrid unit visibility is governed by
-// Scope (which supersedes IncludeChildren), so the hybrid FTS leg must see
-// the same universe the vector leg does — every other predicate (project,
+// semanticActiveCutoffClause returns the recent-activity cutoff predicate
+// (the canonical activity expression, matching analytics.go's ActiveSince
+// form) for sessions passing the filter's ExcludeActiveAfter, or empty when
+// no cutoff is set. It is applied inside every ranked, cursorless semantic
+// and hybrid candidate leg — the shared session-scope lookup and the hybrid
+// FTS leg's SQL scope — so an active session cannot consume page slots the
+// caller would only discard.
+func semanticActiveCutoffClause(f ContentSearchFilter) (string, []any) {
+	if f.ExcludeActiveAfter == "" {
+		return "", nil
+	}
+	return " AND COALESCE(NULLIF(ended_at, ''), NULLIF(started_at, ''), created_at) <= ?",
+		[]any{f.ExcludeActiveAfter}
+}
+
+// semanticSessionScopeSubqueryActive returns "session_id IN (SELECT id FROM
+// sessions WHERE <scope>)" for the semantic/hybrid candidate legs, with the
+// sidebar-child exclusion lifted: unit visibility is governed by Scope
+// (which supersedes IncludeChildren), so the hybrid FTS leg must see the
+// same universe the vector leg does — every other predicate (project,
 // agent, dates, automated, one-shot for top-level sessions) still applies
-// to each session's own row.
-func semanticSessionScopeSubquery(f ContentSearchFilter) (string, []any) {
+// to each session's own row. applyActiveCutoff additionally applies the
+// filter's recent-activity cutoff inside the subquery, so a candidate leg
+// that pages fixed-size rank windows cannot keep surfacing rows the caller
+// filters out afterward.
+func semanticSessionScopeSubqueryActive(
+	f ContentSearchFilter, applyActiveCutoff bool,
+) (string, []any) {
 	where, args := buildSessionBaseFilter(semanticContentSessionFilter(f))
 	where, args = AppendExcludeSessionIDs(where, args, "id", f.ExcludeSessionIDs)
+	if applyActiveCutoff {
+		clause, clauseArgs := semanticActiveCutoffClause(f)
+		where += clause
+		args = append(args, clauseArgs...)
+	}
 	return "session_id IN (SELECT id FROM sessions WHERE " + where + ")", args
 }
 
@@ -306,7 +344,9 @@ func (db *DB) searchContentSubstring(
 				SystemPrefixSQL("m.content", "m.role")
 		}
 		branches = append(branches, fmt.Sprintf(`
-			SELECT m.session_id, s.project, s.agent, 'message' AS location,
+			SELECT m.session_id, s.project, s.agent,
+				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				'message' AS location,
 				m.role AS role, '' AS tool_name, m.ordinal,
 				COALESCE(m.timestamp,'') AS ts, %s AS snippet,
 				COALESCE(s.ended_at, s.started_at, '') AS sort_ts,
@@ -319,7 +359,9 @@ func (db *DB) searchContentSubstring(
 	}
 	if hasSource(f, "tool_input") {
 		branches = append(branches, fmt.Sprintf(`
-			SELECT tc.session_id, s.project, s.agent, 'tool_input' AS location,
+			SELECT tc.session_id, s.project, s.agent,
+				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				'tool_input' AS location,
 				'assistant' AS role, tc.tool_name, mm.ordinal,
 				COALESCE(mm.timestamp,'') AS ts, %s AS snippet,
 				COALESCE(s.ended_at, s.started_at, '') AS sort_ts,
@@ -343,7 +385,9 @@ func (db *DB) searchContentSubstring(
 		// never missed. A precise per-call key would need a call_index on
 		// tool_calls, which SQLite does not store.
 		branches = append(branches, fmt.Sprintf(`
-			SELECT tc.session_id, s.project, s.agent, 'tool_result' AS location,
+			SELECT tc.session_id, s.project, s.agent,
+				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				'tool_result' AS location,
 				'assistant' AS role, tc.tool_name, mm.ordinal,
 				COALESCE(mm.timestamp,'') AS ts, %s AS snippet,
 				COALESCE(s.ended_at, s.started_at, '') AS sort_ts,
@@ -361,7 +405,9 @@ func (db *DB) searchContentSubstring(
 		args = append(args, like)
 		args = append(args, scopeArgs...)
 		branches = append(branches, fmt.Sprintf(`
-			SELECT tre.session_id, s.project, s.agent, 'tool_result' AS location,
+			SELECT tre.session_id, s.project, s.agent,
+				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				'tool_result' AS location,
 				'assistant' AS role, '' AS tool_name,
 				tre.tool_call_message_ordinal AS ordinal,
 				COALESCE(tre.timestamp,'') AS ts, %s AS snippet,
@@ -378,7 +424,7 @@ func (db *DB) searchContentSubstring(
 		return ContentSearchPage{}, nil
 	}
 
-	query := "SELECT session_id, project, agent, location, role, tool_name, " +
+	query := "SELECT session_id, project, agent, transcript_revision, location, role, tool_name, " +
 		"ordinal, ts, snippet FROM (" +
 		strings.Join(branches, " UNION ALL ") +
 		") ORDER BY julianday(sort_ts) DESC, session_id ASC, ordinal ASC, src ASC, row_id ASC " +
@@ -408,6 +454,7 @@ func (db *DB) scanContentMatches(
 		var m ContentMatch
 		var body string
 		if err := rows.Scan(&m.SessionID, &m.Project, &m.Agent,
+			&m.TranscriptRevision,
 			&m.Location, &m.Role, &m.ToolName, &m.Ordinal,
 			&m.Timestamp, &body); err != nil {
 			return ContentSearchPage{}, fmt.Errorf("scan match: %w", err)
@@ -490,6 +537,7 @@ func (db *DB) searchContentRegex(
 		var m ContentMatch
 		var body string
 		if err := rows.Scan(&m.SessionID, &m.Project, &m.Agent,
+			&m.TranscriptRevision,
 			&m.Location, &m.Role, &m.ToolName, &m.Ordinal,
 			&m.Timestamp, &body); err != nil {
 			return ContentSearchPage{}, fmt.Errorf("scan candidate: %w", err)
@@ -527,9 +575,8 @@ func (db *DB) searchContentRegex(
 
 // regexCandidateRows returns full-body rows for the selected sources,
 // LIKE-prefiltered by lit when non-empty, ordered for stable paging.
-// Each branch selects: session_id, project, agent, location, role,
-// tool_name, ordinal, ts AS ts, body, sort_ts, src, row_id. The outer
-// query projects the first 9 columns by name.
+// Each branch selects: session_id, project, agent, transcript_revision,
+// location, role, tool_name, ordinal, ts AS ts, body, sort_ts, src, row_id.
 func (db *DB) regexCandidateRows(
 	ctx context.Context, f ContentSearchFilter, lit string,
 ) (*sql.Rows, error) {
@@ -556,7 +603,9 @@ func (db *DB) regexCandidateRows(
 		w := prefilterClause("m.content")
 		branches = append(branches, fmt.Sprintf(`
 			SELECT m.session_id AS session_id, s.project AS project,
-				s.agent AS agent, 'message' AS location,
+				s.agent AS agent,
+				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				'message' AS location,
 				m.role AS role, '' AS tool_name,
 				m.ordinal AS ordinal, COALESCE(m.timestamp,'') AS ts,
 				m.content AS body,
@@ -570,7 +619,9 @@ func (db *DB) regexCandidateRows(
 		w := prefilterClause("tc.input_json")
 		branches = append(branches, fmt.Sprintf(`
 			SELECT tc.session_id AS session_id, s.project AS project,
-				s.agent AS agent, 'tool_input' AS location,
+				s.agent AS agent,
+				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				'tool_input' AS location,
 				'assistant' AS role, tc.tool_name AS tool_name,
 				mm.ordinal AS ordinal, COALESCE(mm.timestamp,'') AS ts,
 				tc.input_json AS body,
@@ -585,7 +636,9 @@ func (db *DB) regexCandidateRows(
 		w := prefilterClause("tc.result_content")
 		branches = append(branches, fmt.Sprintf(`
 			SELECT tc.session_id AS session_id, s.project AS project,
-				s.agent AS agent, 'tool_result' AS location,
+				s.agent AS agent,
+				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				'tool_result' AS location,
 				'assistant' AS role, tc.tool_name AS tool_name,
 				mm.ordinal AS ordinal, COALESCE(mm.timestamp,'') AS ts,
 				tc.result_content AS body,
@@ -601,7 +654,9 @@ func (db *DB) regexCandidateRows(
 		wEv := prefilterClause("tre.content")
 		branches = append(branches, fmt.Sprintf(`
 			SELECT tre.session_id AS session_id, s.project AS project,
-				s.agent AS agent, 'tool_result' AS location,
+				s.agent AS agent,
+				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				'tool_result' AS location,
 				'assistant' AS role, '' AS tool_name,
 				tre.tool_call_message_ordinal AS ordinal,
 				COALESCE(tre.timestamp,'') AS ts,
@@ -614,13 +669,14 @@ func (db *DB) regexCandidateRows(
 	}
 	if len(branches) == 0 {
 		// Return an empty result set.
-		q := "SELECT '' AS session_id, '' AS project, '' AS agent, '' AS location, " +
+		q := "SELECT '' AS session_id, '' AS project, '' AS agent, " +
+			"'' AS transcript_revision, '' AS location, " +
 			"'' AS role, '' AS tool_name, 0 AS ordinal, '' AS ts, '' AS body " +
 			"WHERE 0"
 		return db.getReader().QueryContext(ctx, q)
 	}
 
-	query := "SELECT session_id, project, agent, location, role, tool_name, " +
+	query := "SELECT session_id, project, agent, transcript_revision, location, role, tool_name, " +
 		"ordinal, ts, body FROM (" +
 		strings.Join(branches, " UNION ALL ") +
 		") ORDER BY julianday(sort_ts) DESC, session_id ASC, ordinal ASC, src ASC, row_id ASC"
@@ -781,7 +837,8 @@ func (db *DB) searchContentFTS(
 	// Select the full content (not FTS snippet()) so the snippet is built in Go
 	// and secret redaction sees whole secrets rather than a pre-truncated window.
 	query := fmt.Sprintf(`
-		SELECT m.session_id, s.project, s.agent, 'message', m.role, '',
+		SELECT m.session_id, s.project, s.agent,
+			COALESCE(s.transcript_revision,''), 'message', m.role, '',
 			m.ordinal, COALESCE(m.timestamp,'') AS ts, m.content AS snippet
 		FROM messages_fts
 		JOIN messages m ON m.id = messages_fts.rowid
@@ -944,24 +1001,9 @@ func (db *DB) searchContentSemantic(
 		return ContentSearchPage{}, ErrSemanticUnavailable
 	}
 
-	k := max(f.Limit*4, SemanticOverfetchMin)
-	hits, err := searcher.SemanticSearch(ctx, f.Pattern, k)
+	surviving, err := db.survivingVectorHits(ctx, f, searcher)
 	if err != nil {
 		return ContentSearchPage{}, err
-	}
-	if len(hits) == 0 {
-		return ContentSearchPage{}, nil
-	}
-
-	allowed, err := db.semanticAllowedSessionIDs(ctx, f, uniqueSessionIDs(hits))
-	if err != nil {
-		return ContentSearchPage{}, err
-	}
-	surviving := make([]VectorHit, 0, len(hits))
-	for _, h := range hits {
-		if allowed[h.SessionID] && !ScopeExcludes(f.Scope, h.Subordinate) {
-			surviving = append(surviving, h)
-		}
 	}
 	if len(surviving) == 0 {
 		return ContentSearchPage{}, nil
@@ -981,20 +1023,21 @@ func (db *DB) searchContentSemantic(
 		}
 		score := float64(h.Score)
 		out = append(out, ContentMatch{
-			SessionID:       h.SessionID,
-			Project:         info.project,
-			Agent:           info.agent,
-			Location:        "message",
-			Role:            info.role,
-			Ordinal:         h.Ordinal,
-			OrdinalRange:    [2]int{h.OrdinalStart, h.OrdinalEnd},
-			Subordinate:     h.Subordinate,
-			Relationship:    info.relationshipType,
-			ParentSessionID: info.parentSessionID,
-			Sidechain:       info.isSidechain,
-			Timestamp:       info.timestamp,
-			Snippet:         f.SemanticSnippet(info.content, h.Snippet),
-			Score:           &score,
+			SessionID:          h.SessionID,
+			Project:            info.project,
+			Agent:              info.agent,
+			TranscriptRevision: info.transcriptRevision,
+			Location:           "message",
+			Role:               info.role,
+			Ordinal:            h.Ordinal,
+			OrdinalRange:       [2]int{h.OrdinalStart, h.OrdinalEnd},
+			Subordinate:        h.Subordinate,
+			Relationship:       info.relationshipType,
+			ParentSessionID:    info.parentSessionID,
+			Sidechain:          info.isSidechain,
+			Timestamp:          info.timestamp,
+			Snippet:            f.SemanticSnippet(info.content, h.Snippet),
+			Score:              &score,
 		})
 		if len(out) >= f.Limit {
 			break
@@ -1170,38 +1213,47 @@ func (db *DB) searchContentHybrid(
 // searchContentSemantic uses) or whose subordinate flag falls outside
 // f.Scope, and returns the survivors as a rank-ordered fusion leg keyed by
 // unit. Both filters run before the merge so reciprocal-rank fusion only
-// ranks eligible units and a scoped search can still fill the limit.
+// ranks eligible units and a scoped search can still fill the limit. When
+// the filters discard most of a fetch, the pool doubles (bounded by
+// maxSemanticFetchDoublings) until the leg holds k entries or the index is
+// exhausted, so a fixed top-k page cannot fill with hits the caller would
+// discard.
 func (db *DB) hybridVectorLeg(
-	ctx context.Context, f ContentSearchFilter, searcher VectorSearcher, k int,
+	ctx context.Context, f ContentSearchFilter, searcher VectorSearcher, baseK int,
 ) (hybridLeg, error) {
 	leg := hybridLeg{display: make(map[string]hybridDisplay)}
-	hits, err := searcher.SemanticSearch(ctx, f.Pattern, k)
-	if err != nil {
-		return hybridLeg{}, err
-	}
-	if len(hits) == 0 {
-		return leg, nil
-	}
-	allowed, err := db.semanticAllowedSessionIDs(ctx, f, uniqueSessionIDs(hits))
-	if err != nil {
-		return hybridLeg{}, err
-	}
-	for _, h := range hits {
-		if !allowed[h.SessionID] || ScopeExcludes(f.Scope, h.Subordinate) {
-			continue
+	for attempt := 0; ; attempt++ {
+		k := baseK << attempt
+		hits, err := searcher.SemanticSearch(ctx, f.Pattern, k)
+		if err != nil {
+			return hybridLeg{}, err
 		}
-		key := UnitFusionKey(h.SessionID, h.OrdinalStart)
-		if _, seen := leg.display[key]; seen {
-			continue
+		if len(hits) == 0 {
+			return leg, nil
 		}
-		leg.ranked = append(leg.ranked, RankedUnit{Key: key, Subordinate: h.Subordinate})
-		leg.display[key] = hybridDisplay{
-			sessionID: h.SessionID, ordinal: h.Ordinal, snippet: h.Snippet,
-			ordinalStart: h.OrdinalStart, ordinalEnd: h.OrdinalEnd,
-			subordinate: h.Subordinate,
+		allowed, err := db.semanticAllowedSessionIDs(ctx, f, uniqueSessionIDs(hits))
+		if err != nil {
+			return hybridLeg{}, err
+		}
+		for _, h := range hits {
+			if !allowed[h.SessionID] || ScopeExcludes(f.Scope, h.Subordinate) {
+				continue
+			}
+			key := UnitFusionKey(h.SessionID, h.OrdinalStart)
+			if _, seen := leg.display[key]; seen {
+				continue
+			}
+			leg.ranked = append(leg.ranked, RankedUnit{Key: key, Subordinate: h.Subordinate})
+			leg.display[key] = hybridDisplay{
+				sessionID: h.SessionID, ordinal: h.Ordinal, snippet: h.Snippet,
+				ordinalStart: h.OrdinalStart, ordinalEnd: h.OrdinalEnd,
+				subordinate: h.Subordinate,
+			}
+		}
+		if len(leg.ranked) >= k || len(hits) < k || attempt >= maxSemanticFetchDoublings {
+			return leg, nil
 		}
 	}
-	return leg, nil
 }
 
 // maxHybridFTSBatches caps how many k-row FTS batches hybridFTSLeg fetches.
@@ -1262,7 +1314,10 @@ func (db *DB) fetchHybridFTSBatch(
 	if err != nil {
 		return nil, err
 	}
-	scope, scopeArgs := semanticSessionScopeSubquery(f)
+	// The recent-activity cutoff is applied inside this leg's session scope
+	// (not post-page) so the fixed-size rank batches are not spent on the
+	// live conversation.
+	scope, scopeArgs := semanticSessionScopeSubqueryActive(f, true)
 	query := fmt.Sprintf(`
 		SELECT m.session_id, m.ordinal,
 		       snippet(messages_fts, 0, '', '', '...', 32) AS snip
@@ -1394,23 +1449,70 @@ func (db *DB) enrichHybridMatches(
 		}
 		score := m.Score
 		out = append(out, ContentMatch{
-			SessionID:       d.sessionID,
-			Project:         info.project,
-			Agent:           info.agent,
-			Location:        "message",
-			Role:            info.role,
-			Ordinal:         d.ordinal,
-			OrdinalRange:    [2]int{d.ordinalStart, d.ordinalEnd},
-			Subordinate:     d.subordinate,
-			Relationship:    info.relationshipType,
-			ParentSessionID: info.parentSessionID,
-			Sidechain:       info.isSidechain,
-			Timestamp:       info.timestamp,
-			Snippet:         f.SemanticSnippet(info.content, d.snippet),
-			Score:           &score,
+			SessionID:          d.sessionID,
+			Project:            info.project,
+			Agent:              info.agent,
+			TranscriptRevision: info.transcriptRevision,
+			Location:           "message",
+			Role:               info.role,
+			Ordinal:            d.ordinal,
+			OrdinalRange:       [2]int{d.ordinalStart, d.ordinalEnd},
+			Subordinate:        d.subordinate,
+			Relationship:       info.relationshipType,
+			ParentSessionID:    info.parentSessionID,
+			Sidechain:          info.isSidechain,
+			Timestamp:          info.timestamp,
+			Snippet:            f.SemanticSnippet(info.content, d.snippet),
+			Score:              &score,
 		})
 	}
 	return ContentSearchPage{Matches: out}, nil
+}
+
+// maxSemanticFetchDoublings bounds how many times survivingVectorHits
+// doubles the overfetch pool when the recent-activity and scope filters
+// discard most of a fetch. Each doubling refetches the whole top-k, so the
+// bound caps the worst case; a leg needing survivors deeper than the final
+// pool can still under-fill, the same documented residual as the hybrid
+// FTS leg's batch cap.
+const maxSemanticFetchDoublings = 2
+
+// survivingVectorHits fetches rank-ordered vector hits and returns those
+// whose session passes the filter's metadata scope and whose subordinate
+// flag stays inside f.Scope. The pool starts at the standard overfetch size
+// and doubles (bounded) while the page's worth of survivors has not been
+// reached and the index keeps serving full pages, so filters applied after
+// ranking — notably the recent-activity cutoff — cannot push every
+// eligible hit below a fixed top-k page.
+func (db *DB) survivingVectorHits(
+	ctx context.Context, f ContentSearchFilter, searcher VectorSearcher,
+) ([]VectorHit, error) {
+	baseK := max(f.Limit*4, SemanticOverfetchMin)
+	var surviving []VectorHit
+	for attempt := 0; ; attempt++ {
+		k := baseK << attempt
+		hits, err := searcher.SemanticSearch(ctx, f.Pattern, k)
+		if err != nil {
+			return nil, err
+		}
+		if len(hits) == 0 {
+			break
+		}
+		allowed, err := db.semanticAllowedSessionIDs(ctx, f, uniqueSessionIDs(hits))
+		if err != nil {
+			return nil, err
+		}
+		surviving = surviving[:0]
+		for _, h := range hits {
+			if allowed[h.SessionID] && !ScopeExcludes(f.Scope, h.Subordinate) {
+				surviving = append(surviving, h)
+			}
+		}
+		if len(surviving) >= f.Limit || len(hits) < k || attempt >= maxSemanticFetchDoublings {
+			break
+		}
+	}
+	return surviving, nil
 }
 
 // uniqueSessionIDs returns the distinct session IDs referenced by hits.
@@ -1446,6 +1548,12 @@ func (db *DB) semanticAllowedSessionIDs(
 	}
 	where, filterArgs := buildSessionBaseFilter(semanticContentSessionFilter(f))
 	where, filterArgs = AppendExcludeSessionIDs(where, filterArgs, "id", f.ExcludeSessionIDs)
+	// The recent-activity cutoff joins the scope here, before the ranked
+	// page is cut to f.Limit, so an active session cannot consume page
+	// slots the caller would only discard.
+	clause, clauseArgs := semanticActiveCutoffClause(f)
+	where += clause
+	filterArgs = append(filterArgs, clauseArgs...)
 	query := "SELECT id FROM sessions WHERE " + where + " AND id IN "
 
 	allowed := make(map[string]bool, len(ids))
@@ -1498,6 +1606,7 @@ type semanticHitKey struct {
 // store lineage per hit); isSidechain is the ANCHOR ordinal's message flag.
 type semanticHitInfo struct {
 	project, agent, role, timestamp, content string
+	transcriptRevision                       string
 	relationshipType, parentSessionID        string
 	isSidechain                              bool
 }
@@ -1532,6 +1641,7 @@ func (db *DB) enrichSemanticHits(
 				strings.Join(values, ", ") + ") " +
 				"SELECT m.session_id, s.project, s.agent, m.role, m.ordinal, " +
 				"COALESCE(m.timestamp, ''), m.content, " +
+				"COALESCE(s.transcript_revision, ''), " +
 				"COALESCE(s.relationship_type, ''), " +
 				"COALESCE(s.parent_session_id, ''), m.is_sidechain " +
 				"FROM hits h " +
@@ -1548,6 +1658,7 @@ func (db *DB) enrichSemanticHits(
 				var info semanticHitInfo
 				if err := rows.Scan(&key.sessionID, &info.project, &info.agent,
 					&info.role, &key.ordinal, &info.timestamp, &info.content,
+					&info.transcriptRevision,
 					&info.relationshipType, &info.parentSessionID,
 					&info.isSidechain); err != nil {
 					rows.Close()

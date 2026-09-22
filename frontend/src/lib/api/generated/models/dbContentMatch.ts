@@ -25,5 +25,6 @@ export interface DbContentMatch {
   subordinate?: boolean;
   timestamp: string;
   tool_name?: string;
+  transcript_revision?: string;
   web_url?: string;
 }

@@ -57,6 +57,12 @@ actions:
       x-go-type-import:
         path: go.kenn.io/agentsview/internal/service
         name: service
+  - target: $.components.schemas.ServiceMemoryStatus
+    update:
+      x-go-type: service.MemoryStatus
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/service
+        name: service
   - target: $.components.schemas.ServiceMessageList
     update:
       x-go-type: service.MessageList

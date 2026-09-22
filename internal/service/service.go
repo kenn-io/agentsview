@@ -183,14 +183,21 @@ type ContentSearchRequest struct {
 	// those modes. See db.ContentSearchFilter.Scope.
 	Scope string `json:"scope,omitempty"`
 
+	// ExcludeActiveAfter drops semantic/hybrid hits from sessions whose
+	// canonical activity is strictly after this RFC3339 cutoff, applied
+	// before LIMIT. See db.ContentSearchFilter.ExcludeActiveAfter.
+	ExcludeActiveAfter string `json:"exclude_active_after,omitempty"`
+
 	Limit  int `json:"limit,omitempty"`
 	Cursor int `json:"cursor,omitempty"`
 }
 
 // ContentSearchResult mirrors db.ContentSearchPage for transport.
 type ContentSearchResult struct {
-	Matches    []db.ContentMatch `json:"matches"`
-	NextCursor int               `json:"next_cursor,omitempty"`
+	Matches       []db.ContentMatch `json:"matches"`
+	NextCursor    int               `json:"next_cursor,omitempty"`
+	RevisionBound bool              `json:"revision_bound"`
+	Coverage      MemoryCoverage    `json:"coverage"`
 }
 
 // RecallFilter mirrors GET /api/v1/recall/entries query parameters.
@@ -426,17 +433,34 @@ type MessageFilter struct {
 	Before    *int     `json:"before,omitempty"` // default 5 when Around set
 	After     *int     `json:"after,omitempty"`  // default 5 when Around set
 	Roles     []string `json:"roles,omitempty"`
+	// ExpectedRevision rejects a read when the session no longer has the
+	// transcript revision cited by search or an earlier read.
+	ExpectedRevision string `json:"expected_revision,omitempty"`
+	// EvidenceSource is the opaque backend binding returned by an earlier
+	// read. It prevents a continuation cursor from being replayed against a
+	// different archive/server instance.
+	EvidenceSource string `json:"evidence_source,omitempty"`
 }
 
 // MessageList mirrors {messages, count}. FirstOrdinal/LastOrdinal report the
 // returned window's bounds (nil when Messages is empty) so callers can page
 // on with from = last_ordinal + 1.
 type MessageList struct {
-	Messages     []db.Message `json:"messages"`
-	Count        int          `json:"count"`
-	FirstOrdinal *int         `json:"first_ordinal,omitempty"`
-	LastOrdinal  *int         `json:"last_ordinal,omitempty"`
+	Messages           []db.Message `json:"messages"`
+	Count              int          `json:"count"`
+	FirstOrdinal       *int         `json:"first_ordinal,omitempty"`
+	LastOrdinal        *int         `json:"last_ordinal,omitempty"`
+	TranscriptRevision string       `json:"transcript_revision,omitempty"`
+	EvidenceSource     string       `json:"evidence_source,omitempty"`
 }
+
+// ErrSourceChanged marks a revision-bound evidence read whose archive,
+// session, or transcript revision no longer matches the cited source.
+var ErrSourceChanged = errors.New("source_changed")
+
+// ErrRevisionBoundReadUnavailable marks a backend that cannot provide stable
+// transcript revisions for evidence reads.
+var ErrRevisionBoundReadUnavailable = errors.New("revision-bound reads unavailable")
 
 // ToolCall mirrors a flattened tool call with its enclosing message's
 // ordinal/timestamp attached. Serialized from parser.ParsedToolCall.

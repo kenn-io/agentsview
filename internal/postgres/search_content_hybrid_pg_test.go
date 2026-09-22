@@ -306,3 +306,51 @@ func hybridSessionIDs(page db.ContentSearchPage) []string {
 	}
 	return out
 }
+
+// The recent-activity cutoff must apply inside the keyword leg's SQL scope:
+// a just-ended session ranking first cannot spend the fixed-size recency
+// batch on rows the caller would discard. Parity with internal/db's
+// TestHybridFTSLegExcludesActiveBeforeBatchLimit.
+func TestPGHybridKeywordLegExcludesActiveBeforeBatchLimit(t *testing.T) {
+	store := setupContentSearch(t)
+	insertCSSession(t, store, "fresh", "proj", "claude",
+		"2026-05-21T08:00:00Z", "2026-05-21T09:00:00Z")
+	insertCSSession(t, store, "old", "proj", "claude",
+		"2026-05-20T11:00:00Z", "2026-05-20T12:00:00Z")
+	insertCSMessage(t, store, "fresh", 0, "user",
+		"zebra keyword in the live session", "2026-05-21T09:00:00Z", false)
+	insertCSMessage(t, store, "old", 0, "user",
+		"zebra keyword in the archived session", "2026-05-20T12:00:00Z", false)
+
+	filter := db.ContentSearchFilter{Pattern: "zebra", Mode: "hybrid", Limit: 10}
+	unfiltered, err := store.fetchHybridKeywordBatchPG(
+		context.Background(), filter, 10, 0)
+	require.NoError(t, err, "fetchHybridKeywordBatchPG")
+	require.Len(t, unfiltered, 2, "both sessions match the keyword")
+
+	filter.ExcludeActiveAfter = "2026-05-21T00:00:00Z"
+	filtered, err := store.fetchHybridKeywordBatchPG(
+		context.Background(), filter, 10, 0)
+	require.NoError(t, err, "fetchHybridKeywordBatchPG")
+	require.Len(t, filtered, 1, "the active session must be dropped in SQL")
+	assert.Equal(t, "old", filtered[0].sessionID)
+}
+
+// The shared semantic session-scope lookup applies the same cutoff, so the
+// vector leg of semantic and hybrid search keeps the eligible universe.
+func TestPGSemanticAllowedSessionIDsAppliesActiveCutoff(t *testing.T) {
+	store := setupContentSearch(t)
+	insertCSSession(t, store, "fresh", "proj", "claude",
+		"2026-05-21T08:00:00Z", "2026-05-21T09:00:00Z")
+	insertCSSession(t, store, "old", "proj", "claude",
+		"2026-05-20T11:00:00Z", "2026-05-20T12:00:00Z")
+
+	filter := db.ContentSearchFilter{
+		Mode:               "semantic",
+		ExcludeActiveAfter: "2026-05-21T00:00:00Z",
+	}
+	allowed, err := store.semanticAllowedSessionIDsPG(
+		context.Background(), filter, []string{"fresh", "old"})
+	require.NoError(t, err, "semanticAllowedSessionIDsPG")
+	assert.Equal(t, map[string]bool{"old": true}, allowed)
+}

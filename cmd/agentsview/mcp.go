@@ -28,6 +28,7 @@ import (
 func newMCPCommand() *cobra.Command {
 	var httpAddr string
 	var httpAllowInsecure bool
+	var profileName string
 
 	cmd := &cobra.Command{
 		Use:   "mcp",
@@ -35,8 +36,11 @@ func newMCPCommand() *cobra.Command {
 		Long: `Start an MCP (Model Context Protocol) server over stdio (default) or
 StreamableHTTP, exposing read-only tools for searching and reading
 recorded agent sessions: search_sessions, list_sessions,
-get_session_overview, get_messages, search_content, and
+get_session_overview, get_messages, get_memory_status, search_content, and
 get_usage_summary, plus query_recall for distilled session knowledge.
+Use --profile memory to advertise only get_memory_status, search_content, and
+get_messages for focused conversation-memory clients. The default full profile
+is unchanged.
 
 The server reads through the daemon path. By default each tool call talks to
 the local agentsview daemon, starting it when needed so a long-lived MCP server
@@ -56,7 +60,15 @@ Add to your MCP client config (e.g. Claude Desktop):
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			svc, cleanup, err := resolveMCPService(cmd)
+			serverFromEnv, err := applyMemoryTargetEnv(cmd, profileName)
+			if err != nil {
+				return err
+			}
+			profile, err := mcpserver.ParseProfile(profileName)
+			if err != nil {
+				return err
+			}
+			svc, cleanup, err := resolveMCPService(cmd, serverFromEnv)
 			if err != nil {
 				return err
 			}
@@ -69,7 +81,11 @@ Add to your MCP client config (e.g. Claude Desktop):
 				cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 
-			opts := mcpserver.ServeOptions{Service: svc, Version: version}
+			opts := mcpserver.ServeOptions{
+				Service: svc,
+				Version: version,
+				Profile: profile,
+			}
 
 			var serveErr error
 			if httpAddr != "" {
@@ -137,9 +153,56 @@ Add to your MCP client config (e.g. Claude Desktop):
 		"File containing bearer token for explicit --server requests")
 	cmd.Flags().Bool("pg", false,
 		"Read session data from configured PostgreSQL")
+	cmd.Flags().StringVar(&profileName, "profile", string(mcpserver.ProfileFull),
+		"Tool profile to advertise (full or memory)")
 
 	cmd.AddCommand(newMCPStatusCommand())
 	return cmd
+}
+
+func applyMemoryTargetEnv(
+	cmd *cobra.Command, profileName string,
+) (serverFromEnv bool, err error) {
+	if strings.TrimSpace(profileName) != string(mcpserver.ProfileMemory) {
+		return false, nil
+	}
+	explicit := false
+	for _, name := range []string{"server", "server-token-file", "pg"} {
+		if cmd.Flags().Changed(name) {
+			explicit = true
+			break
+		}
+	}
+	if !explicit {
+		for _, item := range []struct{ flag, env string }{
+			{"server", "AGENTSVIEW_MEMORY_SERVER"},
+			{"server-token-file", "AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE"},
+			{"pg", "AGENTSVIEW_MEMORY_PG"},
+		} {
+			if value := strings.TrimSpace(os.Getenv(item.env)); value != "" {
+				if err := cmd.Flags().Set(item.flag, value); err != nil {
+					return false, fmt.Errorf("mcp: invalid %s: %w", item.env, err)
+				}
+				if item.flag == "server" {
+					serverFromEnv = true
+				}
+			}
+		}
+	}
+	server, err := cmd.Flags().GetString("server")
+	if err != nil {
+		return false, err
+	}
+	tokenFile, err := cmd.Flags().GetString("server-token-file")
+	if err != nil {
+		return false, err
+	}
+	if strings.TrimSpace(tokenFile) != "" && strings.TrimSpace(server) == "" {
+		return false, errors.New(
+			"mcp: --server-token-file or AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE requires --server or AGENTSVIEW_MEMORY_SERVER",
+		)
+	}
+	return serverFromEnv, nil
 }
 
 // resolveMCPService constructs the SessionService used by the long-lived
@@ -147,7 +210,7 @@ Add to your MCP client config (e.g. Claude Desktop):
 // lazy: every operation re-resolves the daemon transport so a tool call can
 // wake the daemon after it exits due to idleness.
 func resolveMCPService(
-	cmd *cobra.Command,
+	cmd *cobra.Command, serverFromEnv bool,
 ) (service.SessionService, func(), error) {
 	remote, _ := cmd.Flags().GetString("server")
 	if remote != "" {
@@ -156,9 +219,24 @@ func resolveMCPService(
 				"--server and --pg are mutually exclusive",
 			)
 		}
-		token, err := explicitServerToken(cmd)
-		if err != nil {
-			return nil, nil, err
+		// An environment-selected server must not receive credentials:
+		// project settings can inject the endpoint, and both the global
+		// token fallback and an environment-sourced token file would
+		// disclose archive credentials to whoever injected it. The server
+		// connection runs unauthenticated and a diagnostic says so, so the
+		// user can switch to explicit flags.
+		var token string
+		if serverFromEnv {
+			fmt.Fprintln(cmd.ErrOrStderr(),
+				"agentsview mcp: environment-selected server runs "+
+					"unauthenticated; pass --server and --server-token-file "+
+					"explicitly to authenticate")
+		} else {
+			var err error
+			token, err = explicitServerToken(cmd)
+			if err != nil {
+				return nil, nil, err
+			}
 		}
 		capabilities, err := servicehttp.ProbeHTTPServerCapabilities(
 			cmd.Context(), remote, token,
@@ -330,6 +408,16 @@ func (s *mcpDaemonService) SearchContent(
 		return nil, err
 	}
 	return svc.SearchContent(ctx, req)
+}
+
+func (s *mcpDaemonService) MemoryStatus(
+	ctx context.Context,
+) (service.MemoryStatus, error) {
+	svc, err := s.daemonService(ctx)
+	if err != nil {
+		return service.MemoryStatus{}, err
+	}
+	return service.GetMemoryStatus(ctx, svc)
 }
 
 func (s *mcpDaemonService) UsageSummary(

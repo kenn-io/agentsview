@@ -69,6 +69,108 @@ func requireHybridReady(t *testing.T, d *DB, mode string) {
 	}
 }
 
+// TestSearchContentSemanticExcludesActiveBeforeLimit pins the ordering
+// contract: the recent-activity exclusion applies to the semantic/hybrid
+// overfetch pool before the page is cut to Limit. A session active right now
+// can rank first; without a pre-limit exclusion it would consume the page's
+// only slot, and semantic pages carry no continuation cursor, so the
+// eligible historical match below it would be unreachable.
+func TestSearchContentSemanticExcludesActiveBeforeLimit(t *testing.T) {
+	for _, mode := range []string{"semantic", "hybrid"} {
+		t.Run(mode, func(t *testing.T) {
+			d := testDB(t)
+			requireHybridReady(t, d, mode)
+			for _, seed := range []struct {
+				id      string
+				endedAt string
+				content string
+				score   float32
+			}{
+				{"fresh", "2026-05-21T09:00:00Z", "zebra prompt in the live session", 0.9},
+				{"old", "2026-05-20T12:00:00Z", "zebra question in the archived session", 0.5},
+			} {
+				insertSession(t, d, seed.id, "proj", func(s *Session) {
+					s.Agent = "claude"
+					s.UserMessageCount = 2
+					s.EndedAt = Ptr(seed.endedAt)
+				})
+				require.NoError(t, d.ReplaceSessionMessages(t.Context(), seed.id, []Message{
+					{
+						SessionID: seed.id, Ordinal: 0, Role: "user",
+						Content: seed.content, Timestamp: seed.endedAt,
+					},
+				}), "ReplaceSessionMessages "+seed.id)
+			}
+			d.SetVectorSearcher(&fakeVectorSearcher{hits: []VectorHit{
+				{SessionID: "fresh", Ordinal: 0, Score: 0.9, Snippet: "zebra prompt in the live session"},
+				{SessionID: "old", Ordinal: 0, Score: 0.5, Snippet: "zebra question in the archived session"},
+			}})
+
+			// Baseline: without the exclusion the active session outranks the
+			// historical one and wins the single page slot.
+			page, err := d.SearchContent(t.Context(), ContentSearchFilter{
+				Pattern: "zebra", Mode: mode, Limit: 1,
+			})
+			require.NoError(t, err, "SearchContent")
+			require.NotEmpty(t, page.Matches)
+			assert.Equal(t, "fresh", page.Matches[0].SessionID)
+
+			// The cutoff falls between the two sessions' activity, so the
+			// active session is dropped before the limit cut and the
+			// historical match survives the single-slot page.
+			page, err = d.SearchContent(t.Context(), ContentSearchFilter{
+				Pattern: "zebra", Mode: mode, Limit: 1,
+				ExcludeActiveAfter: "2026-05-21T00:00:00Z",
+			})
+			require.NoError(t, err, "SearchContent")
+			require.Len(t, page.Matches, 1)
+			assert.Equal(t, "old", page.Matches[0].SessionID)
+		})
+	}
+}
+
+// TestHybridFTSLegExcludesActiveBeforeBatchLimit pins the keyword leg's
+// half of the recent-activity contract: the cutoff applies inside the FTS
+// batch's session scope, so a just-ended session ranking first cannot spend
+// the fixed-size batch on rows the caller would discard. Without the
+// in-SQL predicate the batch under-fills after post-filtering and the
+// eligible historical match is unreachable.
+func TestHybridFTSLegExcludesActiveBeforeBatchLimit(t *testing.T) {
+	d := testDB(t)
+	requireFTS(t, d)
+	for _, seed := range []struct {
+		id      string
+		endedAt string
+		content string
+	}{
+		{"fresh", "2026-05-21T09:00:00Z", "zebra keyword in the live session"},
+		{"old", "2026-05-20T12:00:00Z", "zebra keyword in the archived session"},
+	} {
+		insertSession(t, d, seed.id, "proj", func(s *Session) {
+			s.Agent = "claude"
+			s.UserMessageCount = 2
+			s.EndedAt = Ptr(seed.endedAt)
+		})
+		require.NoError(t, d.ReplaceSessionMessages(t.Context(), seed.id, []Message{
+			{
+				SessionID: seed.id, Ordinal: 0, Role: "user",
+				Content: seed.content, Timestamp: seed.endedAt,
+			},
+		}), "ReplaceSessionMessages "+seed.id)
+	}
+
+	filter := ContentSearchFilter{Pattern: "zebra", Mode: "hybrid", Limit: 10}
+	unfiltered, err := d.fetchHybridFTSBatch(t.Context(), filter, 10, 0)
+	require.NoError(t, err, "fetchHybridFTSBatch")
+	require.Len(t, unfiltered, 2, "both sessions match the keyword")
+
+	filter.ExcludeActiveAfter = "2026-05-21T00:00:00Z"
+	filtered, err := d.fetchHybridFTSBatch(t.Context(), filter, 10, 0)
+	require.NoError(t, err, "fetchHybridFTSBatch")
+	require.Len(t, filtered, 1, "the active session must be dropped in SQL")
+	assert.Equal(t, "old", filtered[0].sessionID)
+}
+
 // TestSearchContentScopeDefaultAllIncludesSubordinate is the precedence
 // rule's critical test: with the default scope ("all") a subagent-session
 // unit IS returned by semantic and hybrid search even though

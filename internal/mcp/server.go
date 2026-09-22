@@ -30,8 +30,35 @@ const (
 	ToolGetSessionOverview = "get_session_overview"
 	ToolGetMessages        = "get_messages"
 	ToolSearchContent      = "search_content"
+	ToolGetMemoryStatus    = "get_memory_status"
 	ToolGetUsageSummary    = "get_usage_summary"
 )
+
+// Profile selects the tools advertised by an MCP server while keeping their
+// implementations and schemas shared.
+type Profile string
+
+const (
+	// ProfileFull preserves the complete read-only AgentsView MCP surface.
+	ProfileFull Profile = "full"
+	// ProfileMemory limits discovery to the evidence search/read pair used by
+	// conversation-memory clients.
+	ProfileMemory Profile = "memory"
+)
+
+// ParseProfile validates a user-facing profile name. An empty name selects the
+// backward-compatible full profile.
+func ParseProfile(name string) (Profile, error) {
+	switch profile := Profile(strings.TrimSpace(name)); profile {
+	case "", ProfileFull:
+		return ProfileFull, nil
+	case ProfileMemory:
+		return ProfileMemory, nil
+	default:
+		return "", fmt.Errorf(
+			"unknown MCP profile %q (want full or memory)", name)
+	}
+}
 
 // ServeOptions configures the MCP server. Service is required; Version is
 // reported in the server's implementation info; Now is injectable so
@@ -43,6 +70,9 @@ type ServeOptions struct {
 	Service            service.SessionService
 	Version            string
 	Now                func() time.Time
+	// Profile controls which shared tools the server advertises. The zero
+	// value preserves the full profile.
+	Profile Profile
 	// Token, when non-empty, requires every StreamableHTTP request to
 	// carry "Authorization: Bearer <Token>". It has no effect on stdio.
 	// The command layer sets it for non-loopback HTTP binds so the
@@ -63,52 +93,55 @@ func newServer(opts ServeOptions) *mcp.Server {
 		Version: version,
 	}, &mcp.ServerOptions{Instructions: "Use returned web_url values when linking to recorded sessions."})
 
-	t := &toolset{svc: opts.Service, now: opts.Now}
+	t := &toolset{svc: opts.Service, now: opts.Now, version: version}
 	readOnly := &mcp.ToolAnnotations{ReadOnlyHint: true}
+	memoryOnly := opts.Profile == ProfileMemory
 
-	mcp.AddTool(s, &mcp.Tool{
-		Name: ToolSearchSessions,
-		Description: "Full-text search across all recorded AI agent sessions (Claude Code, Codex, Gemini, " +
-			"Antigravity, and others) from every project and machine. Returns ranked snippets with a " +
-			"match_ordinal usable with get_messages to read the surrounding conversation. For prior-work " +
-			"questions, prefer search_content with mode hybrid or semantic when a vector search index " +
-			"is configured. Use this tool for keyword search, with optional date_from/date_to bounds. " +
-			"Every term must appear (AND); wrap the query in double quotes for an exact phrase. " +
-			"Sessions active in the last 10 minutes (including the current conversation) are excluded " +
-			"unless include_active is set. Set session_id to look up one raw UUID or full stored ID. " +
-			"That lookup returns one metadata row, includes active sessions, ignores other search " +
-			"arguments, and reports missing or ambiguous raw IDs as errors. Its snippet is empty and " +
-			"match_ordinal is 0; call get_messages with that anchor for the first message. " +
-			"Use get_session_overview for a known full ID when you need a message preview.",
-		Annotations: readOnly,
-	}, t.searchSessions)
-
-	if service.SupportsRecallQueries(opts.Service) {
+	if !memoryOnly {
 		mcp.AddTool(s, &mcp.Tool{
-			Name: ToolQueryRecall,
-			Description: "Search distilled knowledge extracted from prior sessions. " +
-				"Use lexical mode for exact terms, vector mode for semantic similarity, " +
-				"or hybrid mode to fuse both rankings. Returns recall entries with their " +
-				"source-session evidence and retrieval scores.",
+			Name: ToolSearchSessions,
+			Description: "Full-text search across all recorded AI agent sessions (Claude Code, Codex, Gemini, " +
+				"Antigravity, and others) from every project and machine. Returns ranked snippets with a " +
+				"match_ordinal usable with get_messages to read the surrounding conversation. For prior-work " +
+				"questions, prefer search_content with mode hybrid or semantic when a vector search index " +
+				"is configured. Use this tool for keyword search, with optional date_from/date_to bounds. " +
+				"Every term must appear (AND); wrap the query in double quotes for an exact phrase. " +
+				"Sessions active in the last 10 minutes (including the current conversation) are excluded " +
+				"unless include_active is set. Set session_id to look up one raw UUID or full stored ID. " +
+				"That lookup returns one metadata row, includes active sessions, ignores other search " +
+				"arguments, and reports missing or ambiguous raw IDs as errors. Its snippet is empty and " +
+				"match_ordinal is 0; call get_messages with that anchor for the first message. " +
+				"Use get_session_overview for a known full ID when you need a message preview.",
 			Annotations: readOnly,
-		}, t.queryRecall)
+		}, t.searchSessions)
+
+		if service.SupportsRecallQueries(opts.Service) {
+			mcp.AddTool(s, &mcp.Tool{
+				Name: ToolQueryRecall,
+				Description: "Search distilled knowledge extracted from prior sessions. " +
+					"Use lexical mode for exact terms, vector mode for semantic similarity, " +
+					"or hybrid mode to fuse both rankings. Returns recall entries with their " +
+					"source-session evidence and retrieval scores.",
+				Annotations: readOnly,
+			}, t.queryRecall)
+		}
+
+		mcp.AddTool(s, &mcp.Tool{
+			Name: ToolListSessions,
+			Description: "List recorded agent sessions with filters (project, agent, machine, date range). " +
+				"Returns compact metadata rows, newest first. For prior-work questions, prefer search_content " +
+				"with mode hybrid or semantic when a vector search index is configured; use search_sessions " +
+				"for keyword search.",
+			Annotations: readOnly,
+		}, t.listSessions)
+
+		mcp.AddTool(s, &mcp.Tool{
+			Name: ToolGetSessionOverview,
+			Description: "Cheap summary of one session: metadata, the opening user message, and the last few " +
+				"conversation messages. Call this before get_messages to decide whether a session is relevant.",
+			Annotations: readOnly,
+		}, t.sessionOverview)
 	}
-
-	mcp.AddTool(s, &mcp.Tool{
-		Name: ToolListSessions,
-		Description: "List recorded agent sessions with filters (project, agent, machine, date range). " +
-			"Returns compact metadata rows, newest first. For prior-work questions, prefer search_content " +
-			"with mode hybrid or semantic when a vector search index is configured; use search_sessions " +
-			"for keyword search.",
-		Annotations: readOnly,
-	}, t.listSessions)
-
-	mcp.AddTool(s, &mcp.Tool{
-		Name: ToolGetSessionOverview,
-		Description: "Cheap summary of one session: metadata, the opening user message, and the last few " +
-			"conversation messages. Call this before get_messages to decide whether a session is relevant.",
-		Annotations: readOnly,
-	}, t.sessionOverview)
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: ToolGetMessages,
@@ -124,13 +157,19 @@ func newServer(opts ServeOptions) *mcp.Server {
 	}, t.getMessages)
 
 	mcp.AddTool(s, &mcp.Tool{
+		Name: ToolGetMemoryStatus,
+		Description: "Report whether conversation memory is ready, including archive backend, lexical " +
+			"and semantic search capability, vector generation coverage, and source telemetry availability.",
+		Annotations: readOnly,
+	}, t.getMemoryStatus)
+
+	mcp.AddTool(s, &mcp.Tool{
 		Name: ToolSearchContent,
 		Description: "Search raw session text, including tool inputs and results. When a vector search index is " +
 			"configured, prefer mode hybrid (semantic similarity plus keywords) or semantic for finding " +
 			"prior work and answering contextual questions, especially when the exact wording is unknown. " +
-			"If these modes report not available, use search_sessions for keywords or this tool with " +
-			"substring/regex for exact error messages, identifiers, and code fragments, or terms when every " +
-			"literal term must occur within one user/assistant exchange. " +
+			"If these modes report not available, use terms when every literal term must occur within one " +
+			"user/assistant exchange, or substring/regex for exact error messages, identifiers, and code fragments. " +
 			"The default mode remains substring. Set context to include N messages of " +
 			"surrounding conversation with each match. Matches from the last 10 minutes (including the " +
 			"current conversation) are excluded unless include_active is set; current_session_id replaces " +
@@ -139,12 +178,14 @@ func newServer(opts ServeOptions) *mcp.Server {
 		Annotations: readOnly,
 	}, t.searchContent)
 
-	mcp.AddTool(s, &mcp.Tool{
-		Name: ToolGetUsageSummary,
-		Description: "Aggregate token usage and cost across all agents: totals plus per-day breakdown, " +
-			"filterable by project, agent, machine, and date range.",
-		Annotations: readOnly,
-	}, t.usageSummary)
+	if !memoryOnly {
+		mcp.AddTool(s, &mcp.Tool{
+			Name: ToolGetUsageSummary,
+			Description: "Aggregate token usage and cost across all agents: totals plus per-day breakdown, " +
+				"filterable by project, agent, machine, and date range.",
+			Annotations: readOnly,
+		}, t.usageSummary)
+	}
 
 	return s
 }

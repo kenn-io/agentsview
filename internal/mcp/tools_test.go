@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
@@ -535,6 +536,242 @@ func TestGetMessages_RoleFilterAndTruncation(t *testing.T) {
 	assert.True(t, first.Truncated)
 	assert.Equal(t, 50, first.FullLength)
 	assert.Len(t, first.Content, 10)
+}
+
+func TestGetMessages_BodyCursorContinuesUnicodeMessage(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "body", "proj", func(s *db.Session) {
+		s.MessageCount = 2
+		s.UserMessageCount = 2
+	})
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
+		dbtest.UserMsg("body", 0, "αβγδεζηθικ"),
+		dbtest.UserMsg("body", 1, "next message"),
+	}))
+
+	_, first, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "body", Limit: 2, MaxCharsPerMessage: 4,
+	})
+	require.NoError(t, err)
+	require.Len(t, first.Messages, 2)
+	assert.Equal(t, "αβγδ", first.Messages[0].Content)
+	assert.Equal(t, 10, first.Messages[0].FullLength)
+	require.NotEmpty(t, first.Messages[0].BodyCursor)
+	require.NotEmpty(t, first.TranscriptRevision)
+	assert.Nil(t, first.NextFrom, "body continuation must finish before message pagination advances")
+
+	_, second, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "body", BodyCursor: first.Messages[0].BodyCursor,
+		MaxCharsPerMessage: 4,
+	})
+	require.NoError(t, err)
+	require.Len(t, second.Messages, 1)
+	assert.Equal(t, "εζηθ", second.Messages[0].Content)
+	require.NotEmpty(t, second.Messages[0].BodyCursor)
+	assert.Equal(t, first.TranscriptRevision, second.TranscriptRevision)
+
+	_, third, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "body", BodyCursor: second.Messages[0].BodyCursor,
+		MaxCharsPerMessage: 4,
+	})
+	require.NoError(t, err)
+	require.Len(t, third.Messages, 1)
+	assert.Equal(t, "ικ", third.Messages[0].Content)
+	assert.False(t, third.Messages[0].Truncated)
+	assert.Empty(t, third.Messages[0].BodyCursor)
+	require.NotNil(t, third.NextFrom)
+	assert.Equal(t, 2, *third.NextFrom)
+}
+
+func TestGetMessages_BodyCursorContinuesPastMaximumChunk(t *testing.T) {
+	ts, d := newTestToolset(t)
+	body := strings.Repeat("界", maxMaxCharsPerMessage+5)
+	dbtest.SeedSessionWithMessages(t, d, "oversized", "proj", []db.Message{
+		dbtest.UserMsg("oversized", 0, body),
+	}, dbtest.WithMessageCounts(1, 1))
+
+	_, first, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "oversized", MaxCharsPerMessage: maxMaxCharsPerMessage,
+	})
+	require.NoError(t, err)
+	require.Len(t, first.Messages, 1)
+	assert.Equal(t, maxMaxCharsPerMessage, utf8.RuneCountInString(first.Messages[0].Content))
+	assert.Equal(t, maxMaxCharsPerMessage+5, first.Messages[0].FullLength)
+	require.NotEmpty(t, first.Messages[0].BodyCursor)
+
+	_, rest, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "oversized", BodyCursor: first.Messages[0].BodyCursor,
+		MaxCharsPerMessage: maxMaxCharsPerMessage,
+	})
+	require.NoError(t, err)
+	require.Len(t, rest.Messages, 1)
+	assert.Equal(t, strings.Repeat("界", 5), rest.Messages[0].Content)
+	assert.False(t, rest.Messages[0].Truncated)
+}
+
+func TestGetMessages_BodyCursorRejectsChangedTranscript(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSessionWithMessages(t, d, "body", "proj", []db.Message{
+		dbtest.UserMsg("body", 0, "abcdefghij"),
+	}, dbtest.WithMessageCounts(1, 1))
+
+	_, first, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "body", MaxCharsPerMessage: 4,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, first.Messages[0].BodyCursor)
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "body", []db.Message{
+		dbtest.UserMsg("body", 0, "changed body"),
+	}))
+
+	_, _, err = ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "body", BodyCursor: first.Messages[0].BodyCursor,
+		MaxCharsPerMessage: 4,
+	})
+	require.ErrorIs(t, err, service.ErrSourceChanged)
+}
+
+// legacyBindingService returns a full page of oversized messages with no
+// transcript revision and no evidence source, the page shape an older
+// backend produces when it cannot bind revision-bound reads. The page is
+// full (len == limit) so the handler would set next_from before
+// attachBodyCursors runs.
+type legacyBindingService struct {
+	service.SessionService
+}
+
+func (f *legacyBindingService) Messages(
+	_ context.Context, _ string, filter service.MessageFilter,
+) (*service.MessageList, error) {
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 1
+	}
+	long := strings.Repeat("x", 40)
+	messages := make([]db.Message, limit)
+	for i := range messages {
+		messages[i] = db.Message{
+			SessionID: "legacy", Ordinal: i, Role: "user",
+			Content: long, ContentLength: len(long),
+		}
+	}
+	return &service.MessageList{Messages: messages}, nil
+}
+
+// A backend that returns no transcript revision cannot produce a body cursor
+// that decodeMessageBodyCursor would accept. Emitting one anyway would also
+// clear next_from, ending pagination at the truncation point, so the legacy
+// contract must survive intact instead: truncated message, no cursor, and a
+// usable next_from.
+func TestGetMessages_LegacyBackendKeepsNextFromInsteadOfBodyCursor(t *testing.T) {
+	ts := &toolset{svc: &legacyBindingService{}, now: func() time.Time { return fixedNow }}
+	_, out, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "legacy", MaxCharsPerMessage: 10,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, out.Messages)
+	for _, message := range out.Messages {
+		assert.True(t, message.Truncated)
+		assert.Empty(t, message.BodyCursor,
+			"a page without revision bindings must not carry an undecodable body cursor")
+	}
+	require.NotNil(t, out.NextFrom, "legacy next_from pagination must stay available")
+	assert.Equal(t, len(out.Messages), *out.NextFrom)
+}
+
+// A body cursor tampered after issuance (here: a different ordinal signed by
+// nobody) must fail decoding instead of continuing from an attacker-chosen
+// position.
+func TestGetMessages_BodyCursorRejectsTamperedPayload(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSessionWithMessages(t, d, "body", "proj", []db.Message{
+		dbtest.UserMsg("body", 0, "first message body"),
+		dbtest.UserMsg("body", 1, "second message body"),
+	}, dbtest.WithMessageCounts(2, 2))
+
+	_, first, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "body", Limit: 1, MaxCharsPerMessage: 4,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, first.Messages[0].BodyCursor)
+
+	forged := ts.encodeMessageBodyCursor(messageBodyCursor{
+		Version: 1, EvidenceSource: "x", SessionID: "body", Revision: "1",
+		Ordinal: 1, Offset: 1,
+	})
+	parts := strings.Split(first.Messages[0].BodyCursor, cursorMACSep)
+	require.Len(t, parts, 2)
+	_, _, err = ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "body", BodyCursor: parts[0] + cursorMACSep + forged[strings.LastIndex(forged, cursorMACSep)+1:],
+		MaxCharsPerMessage: 4,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid body_cursor",
+		"a payload swapped under someone else's MAC must be rejected")
+}
+
+// The continuation path must reapply the page contract: a cursor that cites
+// a system message, or a message outside the issuing call's role filter,
+// fails as a vanished citation instead of surfacing excluded content.
+func TestGetMessages_BodyCursorContinuationReappliesPageContract(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "contract", "proj", func(s *db.Session) {
+		s.MessageCount = 3
+		s.UserMessageCount = 1
+	})
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
+		dbtest.UserMsg("contract", 0, "hello there"),
+		{
+			SessionID: "contract", Ordinal: 1, Role: "system", IsSystem: true,
+			Content: "secret system prompt", ContentLength: len("secret system prompt"),
+		},
+		{
+			SessionID: "contract", Ordinal: 2, Role: "tool",
+			Content: "tool output content", ContentLength: len("tool output content"),
+		},
+	}))
+
+	t.Run("system message citation is rejected", func(t *testing.T) {
+		cursor := ts.encodeMessageBodyCursor(messageBodyCursor{
+			Version: 1, EvidenceSource: "x", SessionID: "contract", Revision: "1",
+			Ordinal: 1, Offset: 1,
+		})
+		_, _, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+			SessionID: "contract", BodyCursor: cursor, MaxCharsPerMessage: 4,
+		})
+		require.ErrorIs(t, err, service.ErrSourceChanged)
+	})
+
+	t.Run("role outside the issuing filter is rejected", func(t *testing.T) {
+		cursor := ts.encodeMessageBodyCursor(messageBodyCursor{
+			Version: 1, EvidenceSource: "x", SessionID: "contract", Revision: "1",
+			Ordinal: 2, Offset: 1, Roles: []string{"user", "assistant"},
+		})
+		_, _, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+			SessionID: "contract", BodyCursor: cursor, MaxCharsPerMessage: 4,
+		})
+		require.ErrorIs(t, err, service.ErrSourceChanged)
+	})
+
+	t.Run("role carried in the cursor stays readable", func(t *testing.T) {
+		_, first, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+			SessionID: "contract", Roles: []string{"tool"}, MaxCharsPerMessage: 4,
+		})
+		require.NoError(t, err)
+		require.Len(t, first.Messages, 1)
+		require.Equal(t, "tool", first.Messages[0].Role)
+		require.NotEmpty(t, first.Messages[0].BodyCursor)
+
+		_, second, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+			SessionID: "contract", BodyCursor: first.Messages[0].BodyCursor,
+			MaxCharsPerMessage: 4,
+		})
+		require.NoError(t, err)
+		require.Len(t, second.Messages, 1)
+		assert.Equal(t, " out", second.Messages[0].Content,
+			"continuation applies the cursor's carried role filter")
+		assert.True(t, second.Messages[0].Truncated)
+	})
 }
 
 // Even when a caller explicitly allow-lists the "system" role, get_messages
@@ -1297,7 +1534,7 @@ func TestServer_EndToEnd(t *testing.T) {
 	}
 	assert.ElementsMatch(t, []string{
 		ToolSearchSessions, ToolQueryRecall, ToolListSessions, ToolGetSessionOverview,
-		ToolGetMessages, ToolSearchContent, ToolGetUsageSummary,
+		ToolGetMessages, ToolGetMemoryStatus, ToolSearchContent, ToolGetUsageSummary,
 	}, names)
 
 	res, err := ct.CallTool(ctx, callParams("search_sessions", map[string]any{
@@ -1445,6 +1682,40 @@ func TestSearchContent_SemanticUnavailableMapsToRemediationError(t *testing.T) {
 	require.ErrorIs(t, err, service.ErrSemanticUnavailable)
 	assert.Contains(t, err.Error(), "embeddings build")
 	assert.Equal(t, "semantic", fake.lastReq.Mode)
+}
+
+// search_content must push the recent-activity exclusion down to the
+// service for semantic and hybrid modes (as an RFC3339 cutoff one active-
+// exclusion window before now) so the backend can apply it before its
+// ranked page is cut; lexical modes keep the post-page filter because their
+// cursor recovers filtered-out matches on the next page.
+func TestSearchContent_ExcludesActiveAfterOnlyForCursorlessModes(t *testing.T) {
+	fake := &fakeContentSearchService{result: &service.ContentSearchResult{}}
+	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+
+	for _, mode := range []string{"semantic", "hybrid"} {
+		_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{
+			Pattern: "needle", Mode: mode,
+		})
+		require.NoError(t, err)
+		want := fixedNow.Add(-activeExclusionWindow).UTC().Format(time.RFC3339)
+		assert.Equal(t, want, fake.lastReq.ExcludeActiveAfter,
+			"mode %s must carry the activity cutoff", mode)
+	}
+
+	_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{
+		Pattern: "needle", Mode: "substring",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, fake.lastReq.ExcludeActiveAfter,
+		"cursor-backed lexical modes must not need the pre-limit exclusion")
+
+	_, _, err = ts.searchContent(t.Context(), nil, searchContentIn{
+		Pattern: "needle", Mode: "semantic", IncludeActive: true,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, fake.lastReq.ExcludeActiveAfter,
+		"include_active opts out of the exclusion entirely")
 }
 
 // search_content must reject scope outside semantic/hybrid/terms with the same

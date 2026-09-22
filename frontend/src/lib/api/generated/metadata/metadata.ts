@@ -14,6 +14,7 @@ import type {
   GetApiV1StatsParams,
   MachinesResponse,
   ProjectsResponse,
+  ServiceMemoryStatus,
   UpdateCheckResponse,
   VersionInfo,
 } from "../models";
@@ -100,6 +101,22 @@ export const getApiV1Machines = async (
   options?: Parameters<typeof orvalFetch>[1],
 ): Promise<MachinesResponse> => {
   return orvalFetch<MachinesResponse>(getGetApiV1MachinesUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetApiV1MemoryStatusUrl = () => {
+  return `/api/v1/memory/status`;
+};
+
+/**
+ * @summary Get memory readiness
+ */
+export const getApiV1MemoryStatus = async (
+  options?: Parameters<typeof orvalFetch>[1],
+): Promise<ServiceMemoryStatus> => {
+  return orvalFetch<ServiceMemoryStatus>(getGetApiV1MemoryStatusUrl(), {
     ...options,
     method: "GET",
   });

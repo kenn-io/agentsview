@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -51,20 +52,21 @@ func (s *Store) searchContentSemanticPG(
 		}
 		score := float64(h.Score)
 		out = append(out, db.ContentMatch{
-			SessionID:       h.SessionID,
-			Project:         info.project,
-			Agent:           info.agent,
-			Location:        "message",
-			Role:            info.role,
-			Ordinal:         h.Ordinal,
-			OrdinalRange:    [2]int{h.OrdinalStart, h.OrdinalEnd},
-			Subordinate:     h.Subordinate,
-			Relationship:    info.relationshipType,
-			ParentSessionID: info.parentSessionID,
-			Sidechain:       info.isSidechain,
-			Timestamp:       info.timestamp,
-			Snippet:         f.SemanticSnippet(info.content, h.Snippet),
-			Score:           &score,
+			SessionID:          h.SessionID,
+			Project:            info.project,
+			Agent:              info.agent,
+			TranscriptRevision: info.transcriptRevision,
+			Location:           "message",
+			Role:               info.role,
+			Ordinal:            h.Ordinal,
+			OrdinalRange:       [2]int{h.OrdinalStart, h.OrdinalEnd},
+			Subordinate:        h.Subordinate,
+			Relationship:       info.relationshipType,
+			ParentSessionID:    info.parentSessionID,
+			Sidechain:          info.isSidechain,
+			Timestamp:          info.timestamp,
+			Snippet:            f.SemanticSnippet(info.content, h.Snippet),
+			Score:              &score,
 		})
 		if len(out) >= f.Limit {
 			break
@@ -73,32 +75,49 @@ func (s *Store) searchContentSemanticPG(
 	return db.ContentSearchPage{Matches: out}, nil
 }
 
+// maxSemanticFetchDoublings bounds the overfetch-pool growth in
+// survivingVectorHitsPG; the PG twin of internal/db.maxSemanticFetchDoublings,
+// defined locally for the same self-contained-diff reason as
+// maxHybridKeywordBatches.
+const maxSemanticFetchDoublings = 2
+
 // survivingVectorHitsPG over-fetches k ranked hits from the searcher and keeps
 // only those whose session passes the filter's metadata scope (the
 // child-exclusion-lifted lookup) and whose subordinate flag falls inside
 // f.Scope, preserving the searcher's rank order. Shared by the semantic mode
 // and the hybrid vector leg so both filter the vector candidates identically.
+// The pool starts at the standard overfetch size and doubles (bounded) while
+// the caller's page worth of survivors has not been reached and the index
+// keeps serving full pages, so filters applied after ranking — notably the
+// recent-activity cutoff — cannot push every eligible hit below a fixed
+// top-k page. It is the PG twin of internal/db.survivingVectorHits.
 func (s *Store) survivingVectorHitsPG(
-	ctx context.Context, f db.ContentSearchFilter, searcher db.VectorSearcher, k int,
+	ctx context.Context, f db.ContentSearchFilter, searcher db.VectorSearcher, baseK int,
 ) ([]db.VectorHit, error) {
-	hits, err := searcher.SemanticSearch(ctx, f.Pattern, k)
-	if err != nil {
-		return nil, err
-	}
-	if len(hits) == 0 {
-		return nil, nil
-	}
-	allowed, err := s.semanticAllowedSessionIDsPG(ctx, f, pgUniqueSessionIDs(hits))
-	if err != nil {
-		return nil, err
-	}
-	surviving := make([]db.VectorHit, 0, len(hits))
-	for _, h := range hits {
-		if allowed[h.SessionID] && !db.ScopeExcludes(f.Scope, h.Subordinate) {
-			surviving = append(surviving, h)
+	var surviving []db.VectorHit
+	for attempt := 0; ; attempt++ {
+		k := baseK << attempt
+		hits, err := searcher.SemanticSearch(ctx, f.Pattern, k)
+		if err != nil {
+			return nil, err
+		}
+		if len(hits) == 0 {
+			return surviving, nil
+		}
+		allowed, err := s.semanticAllowedSessionIDsPG(ctx, f, pgUniqueSessionIDs(hits))
+		if err != nil {
+			return nil, err
+		}
+		surviving = surviving[:0]
+		for _, h := range hits {
+			if allowed[h.SessionID] && !db.ScopeExcludes(f.Scope, h.Subordinate) {
+				surviving = append(surviving, h)
+			}
+		}
+		if len(surviving) >= f.Limit || len(hits) < k || attempt >= maxSemanticFetchDoublings {
+			return surviving, nil
 		}
 	}
-	return surviving, nil
 }
 
 // pgUniqueSessionIDs returns the distinct session IDs referenced by hits.
@@ -143,6 +162,16 @@ func (s *Store) semanticAllowedSessionIDsPG(
 	}
 	where, args := buildPGSessionBaseFilter(semanticPGSessionFilter(f))
 	where, args = appendExcludeSessionIDsPG(where, args, "id", f.ExcludeSessionIDs)
+	// The recent-activity cutoff joins the scope here, before the ranked
+	// page is cut to f.Limit, mirroring internal/db's
+	// semanticActiveCutoffClause so both backends keep the same eligible
+	// universe (the canonical activity expression matches analytics.go's
+	// ActiveSince form).
+	if f.ExcludeActiveAfter != "" {
+		where += " AND COALESCE(ended_at, started_at, created_at) <= $" +
+			strconv.Itoa(len(args)+1) + "::timestamptz"
+		args = append(args, f.ExcludeActiveAfter)
+	}
 	query := fmt.Sprintf(
 		"SELECT id FROM sessions WHERE %s AND id = ANY($%d)", where, len(args)+1)
 	args = append(args, ids)
@@ -177,6 +206,7 @@ func (s *Store) semanticAllowedSessionIDsPG(
 // sessions/messages rows; isSidechain is the ANCHOR ordinal's message flag.
 type pgSemanticHitInfo struct {
 	project, agent, role, timestamp, content string
+	transcriptRevision                       string
 	relationshipType, parentSessionID        string
 	isSidechain                              bool
 }
@@ -205,6 +235,7 @@ func (s *Store) enrichSemanticHitsPG(
 	const query = `
 SELECT m.session_id, s.project, s.agent, m.role, m.ordinal,
        m.timestamp, m.content,
+       COALESCE(s.transcript_revision, ''),
        COALESCE(s.relationship_type, ''), COALESCE(s.parent_session_id, ''),
        m.is_sidechain
   FROM (SELECT unnest($1::text[]) AS session_id,
@@ -225,6 +256,7 @@ SELECT m.session_id, s.project, s.agent, m.role, m.ordinal,
 		var ts *time.Time
 		if err := rows.Scan(&ref.SessionID, &info.project, &info.agent,
 			&info.role, &ref.Ordinal, &ts, &info.content,
+			&info.transcriptRevision,
 			&info.relationshipType, &info.parentSessionID,
 			&info.isSidechain); err != nil {
 			return nil, fmt.Errorf("scan pg semantic hit: %w", err)

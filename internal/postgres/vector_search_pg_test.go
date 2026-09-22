@@ -252,6 +252,115 @@ func TestPGVectorSearcher(t *testing.T) {
 // whose only chunk sits at rank k+1 never enters the result. Over-fetching more
 // than k chunks would surface the outside-k doc, so this guards the LIMIT k
 // candidate pool that keeps PG parity with the local sqlite-vec searcher.
+// TestPGVectorSearcherSemanticReadiness pins the readiness contract of the
+// wired PG searcher: it must propagate the generation fingerprint and live
+// coverage counts instead of an unqualified ready. Sessions held by the
+// archive without a vector_push_state row for the generation are Missing
+// and flip the state to partial; pushing every session restores ready.
+func TestPGVectorSearcherSemanticReadiness(t *testing.T) {
+	pgURL := testPGURL(t)
+	pg := newVectorSearchTestPG(t, pgURL, "agentsview_vector_search_readiness_test")
+	ctx := context.Background()
+
+	genID, err := ensureVectorGeneration(ctx, pg, "fp-readiness", "m", 4)
+	require.NoError(t, err, "ensureVectorGeneration")
+	require.NoError(t, ensureVectorChunkTable(ctx, pg, genID, 4), "ensureVectorChunkTable")
+	extSchema, err := vectorExtensionSchema(ctx, pg)
+	require.NoError(t, err, "vectorExtensionSchema")
+	halfvec := extSchema + ".halfvec"
+	table := vectorChunkTable(genID)
+	insertSearchDoc(t, pg, "d1", "S1", 1, 1, "[]", "indexed content")
+	insertSearchChunk(t, pg, table, halfvec, "d1", 0, []float32{1, 0, 0, 0})
+
+	provider, ok := NewVectorSearcher(
+		pg, genID, 4, searchMaxInputChars, nil).(db.SemanticReadinessProvider)
+	require.True(t, ok, "PG searcher must implement db.SemanticReadinessProvider")
+
+	// Two archived sessions, neither pushed: partial with the full missing
+	// count, not ready. Trashed, automated, and non-embeddable sessions sit
+	// outside the export universe and must not count as missing. The two
+	// missing candidates carry embeddable user messages, because a session
+	// without any is itself outside the universe.
+	for _, id := range []string{"S1", "S2"} {
+		_, err = pg.ExecContext(ctx, `
+INSERT INTO sessions (id, machine, project, agent, started_at, ended_at,
+	message_count, user_message_count)
+VALUES ($1, 'machine', 'project', 'claude',
+	'2026-06-15T23:59:00Z', '2026-06-15T23:59:30Z', 1, 1)`, id)
+		require.NoError(t, err, "seed session "+id)
+		_, err = pg.ExecContext(ctx, `
+INSERT INTO messages (session_id, ordinal, role, content, timestamp,
+	content_length, is_system)
+VALUES ($1, 0, 'user', 'embeddable question for ' || $1,
+	'2026-06-15T23:59:30Z', 40, FALSE)`, id)
+		require.NoError(t, err, "seed embeddable message for "+id)
+	}
+	_, err = pg.ExecContext(ctx, `
+INSERT INTO sessions (id, machine, project, agent, started_at, ended_at,
+	message_count, user_message_count, deleted_at)
+VALUES ('trash', 'machine', 'project', 'claude',
+	'2026-06-15T23:59:00Z', '2026-06-15T23:59:30Z', 1, 1,
+	'2026-06-16T00:00:00Z')`)
+	require.NoError(t, err, "seed trashed session")
+	_, err = pg.ExecContext(ctx, `
+INSERT INTO sessions (id, machine, project, agent, started_at, ended_at,
+	message_count, user_message_count, is_automated)
+VALUES ('auto', 'machine', 'project', 'claude',
+	'2026-06-15T23:59:00Z', '2026-06-15T23:59:30Z', 1, 1, TRUE)`)
+	require.NoError(t, err, "seed automated session")
+	_, err = pg.ExecContext(ctx, `
+INSERT INTO sessions (id, machine, project, agent, started_at, ended_at,
+	message_count, user_message_count)
+VALUES ('noembed', 'machine', 'project', 'claude',
+	'2026-06-15T23:59:00Z', '2026-06-15T23:59:30Z', 1, 0)`)
+	require.NoError(t, err, "seed non-embeddable session")
+	_, err = pg.ExecContext(ctx, `
+INSERT INTO messages (session_id, ordinal, role, content, timestamp,
+	content_length, is_system)
+VALUES ('noembed', 0, 'system', 'system noise only',
+	'2026-06-15T23:59:30Z', 17, TRUE)`)
+	require.NoError(t, err, "seed system-only message")
+
+	status, err := provider.SemanticReadiness(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "partial", status.State)
+	assert.Equal(t, "index_incomplete", status.Reason)
+	assert.Equal(t, "fp-readiness", status.Generation)
+	assert.Equal(t, int64(1), status.Embedded, "one distinct indexed doc")
+	assert.Equal(t, int64(2), status.Missing,
+		"trashed, automated, and non-embeddable sessions stay outside the universe")
+
+	// Recording the push for one session still leaves the other missing.
+	_, err = pg.ExecContext(ctx,
+		`INSERT INTO vector_push_state (generation_id, session_id, doc_agg_hash)
+		 VALUES ($1, 'S1', 'h')`, genID)
+	require.NoError(t, err)
+	status, err = provider.SemanticReadiness(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "partial", status.State)
+	assert.Equal(t, int64(1), status.Missing)
+
+	// Once every archived session is pushed, the index is ready.
+	_, err = pg.ExecContext(ctx,
+		`INSERT INTO vector_push_state (generation_id, session_id, doc_agg_hash)
+		 VALUES ($1, 'S2', 'h')`, genID)
+	require.NoError(t, err)
+	status, err = provider.SemanticReadiness(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "ready", status.State)
+	assert.Empty(t, status.Reason)
+	assert.Equal(t, int64(0), status.Missing)
+
+	// Losing the generation row degrades to unavailable instead of a ready
+	// index with unknown coverage.
+	_, err = pg.ExecContext(ctx, `DELETE FROM vector_generations WHERE id = $1`, genID)
+	require.NoError(t, err)
+	status, err = provider.SemanticReadiness(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "unavailable", status.State)
+	assert.Equal(t, "generation_missing", status.Reason)
+}
+
 func TestPGVectorSearcherExactK(t *testing.T) {
 	pgURL := testPGURL(t)
 	pg := newVectorSearchTestPG(t, pgURL, "agentsview_vector_search_exactk_test")

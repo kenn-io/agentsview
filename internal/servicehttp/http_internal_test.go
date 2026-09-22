@@ -179,3 +179,70 @@ func TestQueryRecallSemanticModesUseLongRunningClient(t *testing.T) {
 		})
 	}
 }
+
+// A guarded message read against a daemon that predates revision-bound
+// evidence succeeds with no bindings at all. The client must refuse to
+// return unbound data: missing bindings mean the revision-bound read is
+// unavailable here, and a contradicting binding means the source changed.
+func TestMessagesGuardedReadRejectsBindingLessLegacyResponse(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name        string
+		body        string
+		filter      service.MessageFilter
+		wantMissing bool
+		wantChanged bool
+	}{
+		{
+			name:        "no bindings at all",
+			body:        `{"messages":[{"session_id":"s","ordinal":0,"role":"user","content":"x","timestamp":"2026-01-01T00:00:00Z"}],"count":1}`,
+			filter:      service.MessageFilter{ExpectedRevision: "1", EvidenceSource: "src"},
+			wantMissing: true,
+		},
+		{
+			name:        "revision contradicts the request",
+			body:        `{"messages":[],"count":0,"transcript_revision":"2","evidence_source":"src"}`,
+			filter:      service.MessageFilter{ExpectedRevision: "1", EvidenceSource: "src"},
+			wantChanged: true,
+		},
+		{
+			name:        "evidence source contradicts the request",
+			body:        `{"messages":[],"count":0,"transcript_revision":"1","evidence_source":"other"}`,
+			filter:      service.MessageFilter{EvidenceSource: "src"},
+			wantChanged: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			srv := httptest.NewServer(http.HandlerFunc(func(
+				w http.ResponseWriter, _ *http.Request,
+			) {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			t.Cleanup(srv.Close)
+
+			b := newHTTPBackend(srv.URL, "", false, false)
+			_, err := b.Messages(t.Context(), "s", tc.filter)
+			require.Error(t, err)
+			if tc.wantMissing {
+				assert.ErrorIs(t, err, service.ErrRevisionBoundReadUnavailable)
+			} else {
+				assert.ErrorIs(t, err, service.ErrSourceChanged)
+			}
+		})
+	}
+
+	// A legacy response must not fail an UNGUARDED read: plain pagination
+	// over an old daemon keeps working.
+	srv := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter, _ *http.Request,
+	) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"messages":[],"count":0}`))
+	}))
+	t.Cleanup(srv.Close)
+	b := newHTTPBackend(srv.URL, "", false, false)
+	_, err := b.Messages(t.Context(), "s", service.MessageFilter{Limit: 10})
+	require.NoError(t, err, "unguarded reads must be unaffected")
+}

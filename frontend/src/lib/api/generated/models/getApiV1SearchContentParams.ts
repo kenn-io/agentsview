@@ -78,6 +78,10 @@ export type GetApiV1SearchContentParams = {
    */
   active_since?: string;
   /**
+   * Drop semantic/hybrid hits from sessions active after this RFC3339 cutoff, before the result limit
+   */
+  exclude_active_after?: string;
+  /**
    * Include child sessions
    */
   include_children?: boolean;

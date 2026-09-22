@@ -161,6 +161,28 @@ func ProbeHTTPServerCapabilities(
 
 func (b *httpBackend) SupportsRecallQueries() bool { return b.recallQueries }
 
+func (b *httpBackend) MemoryStatus(ctx context.Context) (service.MemoryStatus, error) {
+	api, err := b.apiClient(b.client)
+	if err != nil {
+		return service.MemoryStatus{}, err
+	}
+	response, err := api.GetAPIV1MemoryStatusWithResponse(ctx)
+	if response == nil {
+		return service.MemoryStatus{}, err
+	}
+	err = serviceResponseError(response.HTTPResponse, response.Body, err)
+	if errors.Is(err, errHTTPNotFound) || errors.Is(err, errHTTPNotImplemented) {
+		return service.UnsupportedMemoryStatus(time.Now()), nil
+	}
+	if err != nil {
+		return service.MemoryStatus{}, err
+	}
+	if response.JSON200 == nil {
+		return service.MemoryStatus{}, errors.New("memory status: empty response")
+	}
+	return *response.JSON200, nil
+}
+
 func (b *httpBackend) MachineLabels(
 	ctx context.Context,
 ) (service.MachineLabelCatalog, error) {
@@ -408,6 +430,12 @@ func (b *httpBackend) Messages(
 	if len(f.Roles) > 0 {
 		q.Roles = new(strings.Join(f.Roles, ","))
 	}
+	if f.ExpectedRevision != "" {
+		q.ExpectedRevision = new(f.ExpectedRevision)
+	}
+	if f.EvidenceSource != "" {
+		q.EvidenceSource = new(f.EvidenceSource)
+	}
 	api, err := b.apiClient(b.client)
 	if err != nil {
 		return nil, err
@@ -419,7 +447,32 @@ func (b *httpBackend) Messages(
 	out := response.JSON200
 	err = serviceResponseError(response.HTTPResponse, response.Body, err)
 	if err != nil {
+		if response.HTTPResponse != nil && response.StatusCode == http.StatusConflict &&
+			strings.Contains(string(response.Body), "source_changed") {
+			return nil, service.ErrSourceChanged
+		}
+		if response.HTTPResponse != nil && response.StatusCode == http.StatusNotImplemented {
+			return nil, service.ErrRevisionBoundReadUnavailable
+		}
 		return nil, err
+	}
+	// A guarded read against a daemon that predates revision-bound evidence
+	// succeeds with no bindings at all. Treat missing bindings as an
+	// unavailable revision-bound read and a binding that contradicts the
+	// request as a changed source, so a body cursor can never continue on
+	// unbound data.
+	if f.ExpectedRevision != "" || f.EvidenceSource != "" {
+		if out == nil || out.TranscriptRevision == "" || out.EvidenceSource == "" {
+			return nil, service.ErrRevisionBoundReadUnavailable
+		}
+		if f.ExpectedRevision != "" && out.TranscriptRevision != f.ExpectedRevision {
+			return nil, fmt.Errorf(
+				"%w: transcript revision does not match", service.ErrSourceChanged)
+		}
+		if f.EvidenceSource != "" && out.EvidenceSource != f.EvidenceSource {
+			return nil, fmt.Errorf(
+				"%w: evidence source does not match", service.ErrSourceChanged)
+		}
 	}
 	return out, nil
 }
@@ -693,6 +746,16 @@ func (b *httpBackend) SearchContent(
 	if req.Scope != "" {
 		q.Scope = new(apiclient.GetAPIV1SearchContentQueryScope(req.Scope))
 	}
+	if req.ExcludeActiveAfter != "" {
+		// Only reachable on a server advertising the field; an older remote
+		// simply ignores it and the MCP layer's post-page filter stays the
+		// fallback.
+		parsedCutoff, err := time.Parse(time.RFC3339, req.ExcludeActiveAfter)
+		if err != nil {
+			return nil, err
+		}
+		q.ExcludeActiveAfter = &parsedCutoff
+	}
 	if req.IncludeChildren {
 		q.IncludeChildren = new(true)
 	}
@@ -743,6 +806,7 @@ func (b *httpBackend) SearchContent(
 	for i := range out.Matches {
 		out.Matches[i].WebURL = b.sessionWebURL(out.Matches[i].SessionID)
 	}
+	out.Coverage = service.NormalizeMemoryCoverage(out.Coverage)
 	return out, nil
 }
 
