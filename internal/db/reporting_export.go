@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"time"
 
@@ -345,23 +346,33 @@ func reportingHoursFromSource(
 	activityIDs := reportingSessionIDSet(ids)
 	activityUsage := reportingActivityUsage(usage, activityIDs)
 	createdAt := source.createdAt
+	gapCap := time.Duration(query.GapCapSeconds) * time.Second
 	firstSeen := buildReportingFirstSeen(
 		date,
 		end,
-		time.Duration(query.GapCapSeconds)*time.Second,
+		gapCap,
 		sessions,
 		createdAt,
 		events,
 		activityUsage,
 	)
+	// Pair once for the whole range. Prior-model inheritance does not depend on
+	// the pruning window, and each hour's window [hourStart-gapCap, hourEnd)
+	// lies inside the daily one, so the start-ordered subslice for an hour
+	// equals pairing that hour on its own.
+	dayCandidates := activity.PairActivityEvents(events, date, end, gapCap)
+	candidateStartsAt := func(c activity.IntervalCandidate, at time.Time) int {
+		return c.Start.Compare(at)
+	}
 	for i := range hours {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		hourStart := date.Add(time.Duration(i) * time.Hour)
 		hourEnd := hourStart.Add(time.Hour)
-		gapCap := time.Duration(query.GapCapSeconds) * time.Second
-		candidates := activity.PairActivityEvents(events, hourStart, hourEnd, gapCap)
+		first, _ := slices.BinarySearchFunc(dayCandidates, hourStart.Add(-gapCap), candidateStartsAt)
+		last, _ := slices.BinarySearchFunc(dayCandidates, hourEnd, candidateStartsAt)
+		candidates := dayCandidates[first:last:last]
 		aggregate := activity.AggregateCandidates
 		if schemaVersion == export.ReportingJointSchemaVersion {
 			aggregate = activity.AggregateCandidatesWithJointActivity
