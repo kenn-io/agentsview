@@ -41,6 +41,8 @@ import (
 // AGENTSVIEW_BENCH_SYNC_MESSAGES for larger local runs.
 // AGENTSVIEW_BENCH_SYNC_REPLY_BYTES pads each assistant reply in the
 // usage fixture so ingest runs can exercise transcript text volume.
+// AGENTSVIEW_BENCH_SYNC_PENDING_MIB overrides the bulk pending-result budget
+// for cold-archive runs, so budgets can be compared on one fixture.
 
 const (
 	defaultBenchSyncSessions = 40
@@ -380,6 +382,11 @@ func benchColdArchive(
 	dir := b.TempDir()
 	writeArchive(b, dir, sessions, perSession)
 	dbDir := b.TempDir()
+	if mib := benchIntFromEnv("AGENTSVIEW_BENCH_SYNC_PENDING_MIB", 0); mib > 0 {
+		prev := bulkPendingRetentionBytes
+		bulkPendingRetentionBytes = int64(mib) << 20
+		b.Cleanup(func() { bulkPendingRetentionBytes = prev })
+	}
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -558,6 +565,9 @@ func benchResyncBulkContributorIngest(b *testing.B, withUsage bool) {
 					writes, sessions,
 				)
 			}
+			// Each batch is one write transaction; a smaller pending budget
+			// trades more transactions for less retained parser data.
+			b.ReportMetric(float64(stats.RebuildPhases[1].Batches), "batches/op")
 		},
 	)
 }

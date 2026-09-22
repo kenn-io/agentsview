@@ -13,18 +13,25 @@ import (
 
 const (
 	defaultParseRetentionBytes = int64(64 << 20)
-	// Keep all eight workers available for the roughly 6 MiB sources that
-	// exposed bulk-sync throttling under the four-times-source-size estimate.
-	// Together with the pending-result limit, the two explicit pipeline bounds
-	// total 768 MiB.
+	// Keep all eight workers available for roughly 6 MiB sources under the
+	// four-times-source-size estimate. Active parses and pending writes have
+	// nominal budgets totaling 384 MiB. An indivisible oversized or unknown
+	// source may exceed the pending budget before its standalone batch is
+	// written; these estimates are not a hard heap limit.
 	defaultBulkParseRetentionBytes   = int64(256 << 20)
-	defaultBulkPendingRetentionBytes = int64(512 << 20)
+	defaultBulkPendingRetentionBytes = int64(128 << 20)
 	parseRetentionFixedBytes         = int64(64 << 10)
 	parseRetentionMultiplier         = int64(4)
 	parseRetentionScavengeThreshold  = int64(16 << 20)
 	// Bound pending daemon writes by source bytes as well as session count.
 	parseBatchBytesLimit = defaultParseRetentionBytes
 )
+
+// bulkPendingRetentionBytes is the pending-result budget each new bulk budget
+// receives. It is a variable only so benchmarks can compare budgets over the
+// same fixture; rebuild contributor engines construct their own budgets, so a
+// per-engine field would not reach them.
+var bulkPendingRetentionBytes = defaultBulkPendingRetentionBytes
 
 type parseRetentionBudget struct {
 	capacity             int64
@@ -58,7 +65,7 @@ func newParseRetentionBudget(capacity int64) *parseRetentionBudget {
 // budget's large-source threshold.
 func newBulkParseRetentionBudget(capacity int64) *parseRetentionBudget {
 	budget := newParseRetentionBudget(capacity)
-	budget.pendingCapacity = defaultBulkPendingRetentionBytes
+	budget.pendingCapacity = bulkPendingRetentionBytes
 	budget.scavengeEveryAcquire = true
 	return budget
 }
