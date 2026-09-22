@@ -26,8 +26,8 @@ var (
 // of the resolved range `q` as RFC3339 strings. ClickHouse compares parsed
 // instants, so the zone suffix stays, matching DuckDB and PostgreSQL.
 func activityReportRangeBoundsUTC(q activity.Query) (string, string) {
-	return q.RangeStart.UTC().Format(time.RFC3339),
-		q.RangeEnd.UTC().Format(time.RFC3339)
+	return q.RangeStart.UTC().Format(time.RFC3339Nano),
+		q.RangeEnd.UTC().Format(time.RFC3339Nano)
 }
 
 // GetActivityReport assembles a concurrency- and usage-oriented report
@@ -60,8 +60,6 @@ func (s *Store) BuildActivityReportArtifacts(
 	f.IncludeSubagents = true
 	f.IncludeForks = true
 	rangeStartUTC, rangeEndUTC := activityReportRangeBoundsUTC(q)
-	lowerBound := chUsagePaddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14)
-	upperBound := chUsagePaddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
 
 	candidateWhere, candidateArgs := clickActivityReportCandidateWhere(
 		f, rangeStartUTC, rangeEndUTC)
@@ -85,8 +83,10 @@ func (s *Store) BuildActivityReportArtifacts(
 		Phase: activity.ProgressLoadingUsage, SessionsTotal: len(sessions),
 	})
 
+	// These bounds are already UTC instants. Rows outside them cannot
+	// participate in usage survivor selection, even as cross-session peers.
 	usage, pricing, err := s.activityReportUsage(
-		ctx, candidates, ids, lowerBound, upperBound, q)
+		ctx, candidates, ids, rangeStartUTC, rangeEndUTC, q)
 	if err != nil {
 		return activity.CandidateArtifacts{}, err
 	}
