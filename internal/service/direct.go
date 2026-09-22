@@ -335,9 +335,11 @@ func (b *directBackend) Messages(
 	if err != nil {
 		return nil, err
 	}
-	// Readers that do not fold the revision into the message statement
-	// still answer from one session lookup. The lookup is skipped when
-	// the message statement already reported the revision.
+	// Every store reports the revision from the same statement or
+	// snapshot as the rows, so a non-empty page arrives with its revision.
+	// An empty page has no rows for the revision to describe, so it still
+	// answers from one session lookup to tell "no messages" apart from
+	// "session gone" on a bound read.
 	boundRead := f.ExpectedRevision != "" || f.EvidenceSource != ""
 	if revision == "" && (len(msgs) > 0 || boundRead) {
 		before, err := b.db.GetSession(ctx, id)
@@ -938,11 +940,13 @@ func (b *directBackend) SearchContent(
 		}
 	}
 	if req.Context > 0 {
-		if err := b.enrichContentContext(
+		contextBound, err := b.enrichContentContext(
 			ctx, page.Matches, req.Context, req.Reveal,
-		); err != nil {
+		)
+		if err != nil {
 			return nil, err
 		}
+		revisionBound = revisionBound && contextBound
 	}
 	return &ContentSearchResult{
 		Matches:       page.Matches,
@@ -971,20 +975,33 @@ func (b *directBackend) SearchContent(
 // adjacent message regardless of transport (HTTP, CLI, MCP all share this
 // path). When reveal is true the raw messages are attached unchanged, same
 // as the snippet path.
+//
+// The context window is read at whatever transcript revision the store
+// holds when the read runs, which can be newer than the revision the match
+// cites when a sync lands between the search and the context read. Each
+// window reports its revision; the returned bool is false when any window
+// came from a different revision than its match, so the caller can drop
+// the revision-bound claim instead of advertising context from a
+// transcript version the citation does not describe.
 func (b *directBackend) enrichContentContext(
 	ctx context.Context, matches []db.ContentMatch, n int, reveal bool,
-) error {
+) (bool, error) {
+	bound := true
 	for i := range matches {
 		m := &matches[i]
 		if m.Ordinal < 0 {
 			continue
 		}
 		anchor := m.Ordinal
+		revision := ""
 		msgs, err := b.db.GetMessagesWindow(ctx, m.SessionID, db.MessageWindow{
-			Around: &anchor, Before: n, After: n,
+			Around: &anchor, Before: n, After: n, ObservedRevision: &revision,
 		})
 		if err != nil {
-			return fmt.Errorf("content search context: %w", err)
+			return false, fmt.Errorf("content search context: %w", err)
+		}
+		if revision != m.TranscriptRevision {
+			bound = false
 		}
 		for _, msg := range msgs {
 			if !reveal {
@@ -998,7 +1015,7 @@ func (b *directBackend) enrichContentContext(
 			}
 		}
 	}
-	return nil
+	return bound, nil
 }
 
 // redactMessageSecrets returns a copy of m with every secret-shaped span

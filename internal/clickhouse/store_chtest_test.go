@@ -307,3 +307,40 @@ func TestStoreGetSessionVersionChangesAfterPush(t *testing.T) {
 	assert.Equal(t, 3, count2)
 	assert.NotEqual(t, version, version2)
 }
+
+func TestStoreMessageWindowReportsRevisionWithRows(t *testing.T) {
+	store, _, _ := newPushedStore(t)
+	ctx := context.Background()
+
+	from := 0
+	revision := ""
+	msgs, err := store.GetMessagesWindow(ctx, fixtureAlphaID, db.MessageWindow{
+		From: &from, Limit: 10, Asc: true,
+		Roles:            []string{"user", "assistant"},
+		ObservedRevision: &revision,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []int{0, 1}, []int{msgs[0].Ordinal, msgs[1].Ordinal})
+	assert.Equal(t, "1", revision,
+		"linear page must report the fixture session revision")
+
+	anchor := 1
+	revision = ""
+	msgs, err = store.GetMessagesWindow(ctx, fixtureAlphaID, db.MessageWindow{
+		Around: &anchor, Before: 5, After: 5,
+		Roles:            []string{"user", "assistant"},
+		ObservedRevision: &revision,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []int{0, 1}, []int{msgs[0].Ordinal, msgs[1].Ordinal})
+	assert.Equal(t, "1", revision,
+		"around window must report the fixture session revision")
+
+	revision = ""
+	msgs, err = store.GetMessagesWindow(ctx, "missing", db.MessageWindow{
+		Around: &anchor, Before: 5, After: 5, ObservedRevision: &revision,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, msgs)
+	assert.Empty(t, revision, "no rows means no revision to describe them")
+}

@@ -180,3 +180,47 @@ func TestDuckGetMessagesWindow_EmptyRolesEquivalentToGetMessages(t *testing.T) {
 	assert.Equal(t, direct, windowed,
 		"empty Roles should behave identically to GetMessages")
 }
+
+func TestDuckGetMessagesWindow_ReportsRevisionWithRows(t *testing.T) {
+	ctx := t.Context()
+	store := newDuckWindowStore(t, func(local *db.DB) {
+		seedDuckWindowMessages(t, local, "sRev")
+	})
+	sess, err := store.GetSession(ctx, "sRev")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.NotNil(t, sess.TranscriptRevision)
+	require.NotEmpty(t, *sess.TranscriptRevision)
+
+	from := 4
+	revision := ""
+	msgs, err := store.GetMessagesWindow(ctx, "sRev", db.MessageWindow{
+		From: &from, Limit: 3, Asc: true,
+		Roles:            []string{"user", "assistant"},
+		ObservedRevision: &revision,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []int{5, 6, 7}, duckOrdinalsOf(msgs))
+	assert.Equal(t, *sess.TranscriptRevision, revision,
+		"linear page must report the session revision it was read at")
+
+	anchor := 6
+	revision = ""
+	msgs, err = store.GetMessagesWindow(ctx, "sRev", db.MessageWindow{
+		Around: &anchor, Before: 2, After: 2,
+		Roles:            []string{"user", "assistant"},
+		ObservedRevision: &revision,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []int{3, 5, 6, 7, 8}, duckOrdinalsOf(msgs))
+	assert.Equal(t, *sess.TranscriptRevision, revision,
+		"around window must report the session revision it was read at")
+
+	revision = ""
+	msgs, err = store.GetMessagesWindow(ctx, "missing", db.MessageWindow{
+		Around: &anchor, Before: 2, After: 2, ObservedRevision: &revision,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, msgs)
+	assert.Empty(t, revision, "no rows means no revision to describe them")
+}

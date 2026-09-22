@@ -694,7 +694,7 @@ func (db *DB) getMessagesLinearWithRevision(
 		LIMIT ?`, selectMessageCols, op, roleClause, dir)
 	args := append([]any{sessionID, sessionID, from}, roleArgs...)
 	args = append(args, limit)
-	revision, msgs, err := db.queryMessageRowsWithRevision(ctx, query, args...)
+	revision, msgs, err := queryMessageRowsWithRevision(ctx, db.getReader(), query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying messages: %w", err)
 	}
@@ -712,6 +712,12 @@ func (db *DB) getMessagesLinearWithRevision(
 // anchor query has no role predicate so the anchor row is always present;
 // before/after apply the role filter (when set) before taking Before/After
 // rows, so the counts reflect role-matching messages, not raw ordinals.
+//
+// The three queries run inside one read transaction so they see one
+// snapshot of the archive: a sync that replaces the session's messages
+// while the window is being read either lands entirely before the window
+// or entirely after it, and the revision reported through
+// ObservedRevision describes every row in the window.
 func (db *DB) getMessagesAroundAnchor(
 	ctx context.Context, sessionID string, w MessageWindow,
 ) ([]Message, error) {
@@ -720,13 +726,19 @@ func (db *DB) getMessagesAroundAnchor(
 	afterLimit := max(w.After, 0)
 	roleClause, roleArgs := roleFilterClause(w.Roles)
 
+	tx, err := db.getReader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, fmt.Errorf("beginning around-window read: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	beforeQuery := fmt.Sprintf(`
 		SELECT %s FROM messages
 		WHERE session_id = ? AND ordinal < ?%s
 		ORDER BY ordinal DESC LIMIT ?`, selectMessageCols, roleClause)
 	beforeArgs := append([]any{sessionID, anchor}, roleArgs...)
 	beforeArgs = append(beforeArgs, beforeLimit)
-	before, err := db.queryMessageRows(ctx, beforeQuery, beforeArgs...)
+	before, err := queryMessageRows(ctx, tx, beforeQuery, beforeArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("querying before-window messages: %w", err)
 	}
@@ -737,15 +749,15 @@ func (db *DB) getMessagesAroundAnchor(
 		anchorQuery := fmt.Sprintf(`
 		SELECT %s FROM messages WHERE session_id = ? AND ordinal = ?`,
 			selectMessageCols)
-		anchorMsgs, err = db.queryMessageRows(ctx, anchorQuery, sessionID, anchor)
+		anchorMsgs, err = queryMessageRows(ctx, tx, anchorQuery, sessionID, anchor)
 	} else {
 		anchorQuery := fmt.Sprintf(`
 		SELECT (SELECT COALESCE(transcript_revision,'') FROM sessions WHERE id = ?), %s
 		FROM messages WHERE session_id = ? AND ordinal = ?`,
 			selectMessageCols)
 		var revision string
-		revision, anchorMsgs, err = db.queryMessageRowsWithRevision(
-			ctx, anchorQuery, sessionID, sessionID, anchor)
+		revision, anchorMsgs, err = queryMessageRowsWithRevision(
+			ctx, tx, anchorQuery, sessionID, sessionID, anchor)
 		*w.ObservedRevision = revision
 	}
 	if err != nil {
@@ -758,9 +770,12 @@ func (db *DB) getMessagesAroundAnchor(
 		ORDER BY ordinal ASC LIMIT ?`, selectMessageCols, roleClause)
 	afterArgs := append([]any{sessionID, anchor}, roleArgs...)
 	afterArgs = append(afterArgs, afterLimit)
-	after, err := db.queryMessageRows(ctx, afterQuery, afterArgs...)
+	after, err := queryMessageRows(ctx, tx, afterQuery, afterArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("querying after-window messages: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("finishing around-window read: %w", err)
 	}
 
 	msgs := make([]Message, 0, len(before)+len(anchorMsgs)+len(after))
@@ -773,12 +788,12 @@ func (db *DB) getMessagesAroundAnchor(
 	return msgs, nil
 }
 
-// queryMessageRows runs query and scans the resulting message rows,
+// queryMessageRows runs query on q and scans the resulting message rows,
 // without attaching tool calls (callers batch that across the merged set).
-func (db *DB) queryMessageRows(
-	ctx context.Context, query string, args ...any,
+func queryMessageRows(
+	ctx context.Context, q messageRowsQuerier, query string, args ...any,
 ) ([]Message, error) {
-	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -786,10 +801,10 @@ func (db *DB) queryMessageRows(
 	return scanMessages(rows)
 }
 
-func (db *DB) queryMessageRowsWithRevision(
-	ctx context.Context, query string, args ...any,
+func queryMessageRowsWithRevision(
+	ctx context.Context, q messageRowsQuerier, query string, args ...any,
 ) (string, []Message, error) {
-	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return "", nil, err
 	}
@@ -3088,6 +3103,21 @@ func scanMessages(rows *sql.Rows) ([]Message, error) {
 		msgs = append(msgs, m)
 	}
 	return msgs, rows.Err()
+}
+
+// RevisionRows prepends a revision destination to every Scan so a message
+// statement whose first column is the session transcript revision can be
+// consumed by a scanner that only knows the message columns. The mirror
+// stores use it to read the revision from the same statement as the rows.
+type RevisionRows struct {
+	*sql.Rows
+	Revision *string
+}
+
+// Scan scans the leading revision column into Revision and the rest of the
+// row into dest.
+func (r RevisionRows) Scan(dest ...any) error {
+	return r.Rows.Scan(append([]any{r.Revision}, dest...)...)
 }
 
 func scanMessagesWithRevision(rows *sql.Rows) (string, []Message, error) {

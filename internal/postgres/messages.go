@@ -3,7 +3,6 @@ package postgres
 import (
 	"context"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -65,12 +64,23 @@ const pgMessageCols = `session_id, ordinal, role, content, thinking_text,
 	source_parent_uuid, is_sidechain,
 	is_compact_boundary`
 
+// pgRevisionCol selects the session transcript revision as a window
+// statement's first column. It binds $1, which every window statement
+// reserves for the session ID, so the revision comes from the same
+// statement snapshot as the message rows.
+const pgRevisionCol = `COALESCE((SELECT transcript_revision FROM sessions WHERE id = $1), '')`
+
 // GetMessagesWindow mirrors internal/db's GetMessagesWindow: linear mode
-// (optionally role-filtered) delegates to GetMessages when Roles is empty;
-// Around mode merges three queries (before/anchor/after) into one ascending
-// slice. The anchor query has no role predicate so the anchor row is always
-// present regardless of Roles; before/after apply the role filter first, so
+// pages by ordinal (optionally role-filtered); Around mode returns the
+// before, anchor, and after rows merged into one ascending slice. The
+// anchor rows have no role predicate so the anchor row is always present
+// regardless of Roles; before/after apply the role filter first, so
 // Before/After count role-matching messages, not raw ordinal distance.
+//
+// Every window statement selects the session transcript revision as its
+// first column, so the revision reported through ObservedRevision comes
+// from the same statement snapshot as the rows. Around mode runs as one
+// statement for the same reason.
 func (s *Store) GetMessagesWindow(
 	ctx context.Context, sessionID string, w db.MessageWindow,
 ) ([]db.Message, error) {
@@ -81,43 +91,35 @@ func (s *Store) GetMessagesWindow(
 	if w.From != nil {
 		from = *w.From
 	}
-	if len(w.Roles) == 0 {
+	if w.ObservedRevision == nil && len(w.Roles) == 0 {
 		return s.GetMessages(ctx, sessionID, from, w.Limit, w.Asc)
 	}
-	return s.getMessagesLinearRoleFiltered(ctx, sessionID, from, w.Limit, w.Asc, w.Roles)
+	return s.getMessagesLinear(ctx, sessionID, from, w)
 }
 
-func (s *Store) getMessagesLinearRoleFiltered(
-	ctx context.Context,
-	sessionID string, from, limit int, asc bool, roles []string,
+func (s *Store) getMessagesLinear(
+	ctx context.Context, sessionID string, from int, w db.MessageWindow,
 ) ([]db.Message, error) {
+	limit := w.Limit
 	if limit <= 0 || limit > db.MaxMessageLimit {
 		limit = db.DefaultMessageLimit
 	}
-	dir := "ASC"
-	op := ">="
-	if !asc {
-		dir = "DESC"
-		op = "<="
+	dir, op := "ASC", ">="
+	if !w.Asc {
+		dir, op = "DESC", "<="
 	}
-	roleClause, roleArgs := pgRoleFilterClause(roles, 3)
+	roleClause, roleArgs := pgRoleFilterClause(w.Roles, 3)
 	query := fmt.Sprintf(`
-		SELECT %s
+		SELECT %s, %s
 		FROM messages
 		WHERE session_id = $1 AND ordinal %s $2%s
 		ORDER BY ordinal %s
-		LIMIT $%d`, pgMessageCols, op, roleClause, dir, len(roleArgs)+3)
+		LIMIT $%d`, pgRevisionCol, pgMessageCols, op, roleClause, dir, len(roleArgs)+3)
 	args := append([]any{sessionID, from}, roleArgs...)
 	args = append(args, limit)
-
-	rows, err := s.pg.QueryContext(ctx, query, args...)
+	msgs, err := s.queryMessageRowsWithRevision(ctx, w.ObservedRevision, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("querying role-filtered messages: %w", err)
-	}
-	defer rows.Close()
-	msgs, err := scanPGMessages(rows)
-	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("querying messages: %w", err)
 	}
 	if err := s.attachToolCalls(ctx, msgs); err != nil {
 		return nil, err
@@ -129,64 +131,61 @@ func (s *Store) getMessagesAroundAnchor(
 	ctx context.Context, sessionID string, w db.MessageWindow,
 ) ([]db.Message, error) {
 	anchor := *w.Around
-	beforeLimit := max(w.Before, 0)
-	afterLimit := max(w.After, 0)
-	roleClause, roleArgs := pgRoleFilterClause(w.Roles, 3)
-
-	beforeQuery := fmt.Sprintf(`
-		SELECT %s FROM messages
-		WHERE session_id = $1 AND ordinal < $2%s
-		ORDER BY ordinal DESC LIMIT $%d`,
-		pgMessageCols, roleClause, len(roleArgs)+3)
-	beforeArgs := append([]any{sessionID, anchor}, roleArgs...)
-	beforeArgs = append(beforeArgs, beforeLimit)
-	before, err := s.queryMessageRows(ctx, beforeQuery, beforeArgs...)
+	roleClause, roleArgs := pgRoleFilterClause(w.Roles, 4)
+	query := fmt.Sprintf(`
+		SELECT %s, w.*
+		FROM (
+			SELECT * FROM (
+				SELECT %s FROM messages
+				WHERE session_id = $1 AND ordinal < $2%s
+				ORDER BY ordinal DESC LIMIT $3) AS before_rows
+			UNION ALL
+			SELECT %s FROM messages WHERE session_id = $1 AND ordinal = $2
+			UNION ALL
+			SELECT * FROM (
+				SELECT %s FROM messages
+				WHERE session_id = $1 AND ordinal > $2%s
+				ORDER BY ordinal ASC LIMIT $%d) AS after_rows
+		) AS w
+		ORDER BY w.ordinal`,
+		pgRevisionCol, pgMessageCols, roleClause, pgMessageCols,
+		pgMessageCols, roleClause, len(roleArgs)+4)
+	args := append([]any{sessionID, anchor, max(w.Before, 0)}, roleArgs...)
+	args = append(args, max(w.After, 0))
+	msgs, err := s.queryMessageRowsWithRevision(ctx, w.ObservedRevision, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("querying before-window messages: %w", err)
+		return nil, fmt.Errorf("querying around-window messages: %w", err)
 	}
-	slices.Reverse(before)
-
-	anchorQuery := fmt.Sprintf(`
-		SELECT %s FROM messages WHERE session_id = $1 AND ordinal = $2`,
-		pgMessageCols)
-	anchorMsgs, err := s.queryMessageRows(ctx, anchorQuery, sessionID, anchor)
-	if err != nil {
-		return nil, fmt.Errorf("querying anchor message: %w", err)
-	}
-
-	afterQuery := fmt.Sprintf(`
-		SELECT %s FROM messages
-		WHERE session_id = $1 AND ordinal > $2%s
-		ORDER BY ordinal ASC LIMIT $%d`,
-		pgMessageCols, roleClause, len(roleArgs)+3)
-	afterArgs := append([]any{sessionID, anchor}, roleArgs...)
-	afterArgs = append(afterArgs, afterLimit)
-	after, err := s.queryMessageRows(ctx, afterQuery, afterArgs...)
-	if err != nil {
-		return nil, fmt.Errorf("querying after-window messages: %w", err)
-	}
-
-	msgs := make([]db.Message, 0, len(before)+len(anchorMsgs)+len(after))
-	msgs = append(msgs, before...)
-	msgs = append(msgs, anchorMsgs...)
-	msgs = append(msgs, after...)
 	if err := s.attachToolCalls(ctx, msgs); err != nil {
 		return nil, err
 	}
 	return msgs, nil
 }
 
-// queryMessageRows runs query and scans the resulting message rows without
-// attaching tool calls; callers batch that across the merged window set.
-func (s *Store) queryMessageRows(
-	ctx context.Context, query string, args ...any,
+// queryMessageRowsWithRevision runs a window statement whose first column
+// is the session transcript revision and reports that revision through
+// observed when the caller asked for it. An empty result leaves observed
+// untouched.
+func (s *Store) queryMessageRowsWithRevision(
+	ctx context.Context, observed *string, query string, args ...any,
 ) ([]db.Message, error) {
 	rows, err := s.pg.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	return scanPGMessages(rows)
+	var revision string
+	msgs, err := scanPGMessages(db.RevisionRows{Rows: rows, Revision: &revision})
+	if err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if observed != nil && len(msgs) > 0 {
+		*observed = revision
+	}
+	return msgs, nil
 }
 
 // pgRoleFilterClause returns an "AND role IN ($n, ...)" clause and its bind
