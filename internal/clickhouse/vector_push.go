@@ -54,9 +54,9 @@ func (s *Sync) pushVectors(
 		log.Printf("clickhouse vector push: no changed sessions; deferring reconciliation to the next generation-wide push")
 		return res, nil
 	}
-	export, ok, err := s.beginVectorExport(ctx, scope, &res)
-	if err != nil || !ok {
-		return res, err
+	export, err := s.beginVectorExport(ctx, scope, &res)
+	if err != nil {
+		return res, vectorPhaseError(err)
 	}
 	defer func() {
 		if export != nil {
@@ -76,9 +76,9 @@ func (s *Sync) pushVectors(
 				gen.Fingerprint)
 			_ = export.Close()
 			scope = nil
-			export, ok, err = s.beginVectorExport(ctx, nil, &res)
-			if err != nil || !ok {
-				return res, err
+			export, err = s.beginVectorExport(ctx, nil, &res)
+			if err != nil {
+				return res, vectorPhaseError(err)
 			}
 			gen = export.Generation()
 		}
@@ -193,29 +193,43 @@ func (s *Sync) pushVectors(
 	return res, nil
 }
 
-// beginVectorExport opens the local export for scope. It reports ok=false
-// with res marked Skipped when the local index is not ready or has no
-// active generation.
+// errVectorPhaseSkipped marks a beginVectorExport miss that is not a
+// failure: res is already marked Skipped and the phase returns cleanly.
+var errVectorPhaseSkipped = errors.New("vector phase skipped")
+
+// vectorPhaseError maps a skipped export to a clean return and passes any
+// other error through.
+func vectorPhaseError(err error) error {
+	if errors.Is(err, errVectorPhaseSkipped) {
+		return nil
+	}
+	return err
+}
+
+// beginVectorExport opens the local export for scope. It returns an error
+// wrapping errVectorPhaseSkipped, with res marked Skipped, when the local
+// index is not ready or has no active generation; the export is non-nil
+// whenever the error is nil.
 func (s *Sync) beginVectorExport(
 	ctx context.Context, scope []string, res *storage.VectorPushResult,
-) (storage.VectorExport, bool, error) {
+) (storage.VectorExport, error) {
 	export, hasGen, err := s.vectorSource.BeginExport(ctx, scope)
 	if errors.Is(err, storage.ErrVectorSourceNotReady) {
 		res.Skipped, res.SkippedReason = true, err.Error()
 		log.Printf("clickhouse vector push: skipped: %v", err)
-		return nil, false, nil
+		return nil, errVectorPhaseSkipped
 	}
 	if err != nil {
-		return nil, false, fmt.Errorf("resolving local vector generation: %w", err)
+		return nil, fmt.Errorf("resolving local vector generation: %w", err)
 	}
 	if !hasGen {
 		res.Skipped, res.SkippedReason = true, "no active local generation"
-		return nil, false, nil
+		return nil, errVectorPhaseSkipped
 	}
 	if export == nil {
-		return nil, false, errors.New("resolving local vector generation: BeginExport returned a nil export")
+		return nil, errors.New("resolving local vector generation: BeginExport returned a nil export")
 	}
-	return export, true, nil
+	return export, nil
 }
 
 // vectorGenerationRegistered reports whether the mirror holds a
