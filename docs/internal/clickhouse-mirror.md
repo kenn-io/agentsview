@@ -187,6 +187,20 @@ so an interrupted startup repeats the fill without touching source tables. A
 read-only role cannot run the fill and fails the compatibility check until a
 capable push completes it.
 
+**Freshness is checked from part metadata.** Every report request first asks
+whether the mirror changed. That source probe used to scan `sessions`,
+`messages`, `usage_events`, both pricing tables, and `sync_metadata` for their
+counts and maxima on every request. The store now hashes the active
+`system.parts` rows of those six tables, which is metadata and reads no data,
+and reuses the last probe result while the hash is unchanged. A merge changes
+the parts without changing the data, so the hash is never the report token: on a
+hash miss the store recomputes the original probe and caches it under the new
+hash, and only a real data change moves the token or resets pagination. The
+mutex protects only the cached pair, never a query, and an error is not cached.
+This is whole-mirror invalidation; any insert, delete, or merge on one of those
+tables triggers one full probe. Reading `system.parts` needs its own grant,
+described in [ClickHouse sync](../clickhouse-sync.md#3-serve-the-dashboard).
+
 ## Tradeoffs
 
 Push copies stars and pins from SQLite, but the ClickHouse UI cannot change

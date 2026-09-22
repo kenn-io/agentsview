@@ -36,6 +36,7 @@ type Store struct {
 	customPricing map[string]config.CustomModelRate
 	closeOnce     sync.Once
 	closeErr      error
+	probeCache    activityProbeCache
 }
 
 // NewStore connects to the mirror named by t and refuses schemas or data
