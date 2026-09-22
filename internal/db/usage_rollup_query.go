@@ -427,7 +427,7 @@ func aggregateUsageRollupExceptions(
 		itemKey := key{
 			fact.AttributionSessionID, fact.LocalDate, fact.Model,
 			fact.Fact.ProviderID,
-			priced.PricedModel, priced.MatchedPattern, priced.RateHash,
+			priced.PricedModel, priced.MatchedPattern, priced.rateHash(),
 			priced.RateOK, band,
 		}
 		group := groups[itemKey]

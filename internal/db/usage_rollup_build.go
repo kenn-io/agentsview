@@ -22,13 +22,25 @@ type usagePriceInput struct {
 }
 
 type usagePriceResult struct {
-	PricedModel, MatchedPattern, RateHash string
-	RateOK                                bool
-	Cost, Savings                         money.Money
-	AuthoritativeCost                     *money.Money
-	BandThreshold                         *int
-	ComputedRequest, ComputedAggregate    int
-	Reported, BaseRequest                 int
+	PricedModel, MatchedPattern        string
+	RateOK                             bool
+	Cost, Savings                      money.Money
+	AuthoritativeCost                  *money.Money
+	BandThreshold                      *int
+	ComputedRequest, ComputedAggregate int
+	Reported, BaseRequest              int
+	// model and lookup are the exact pricing inputs behind Cost: the plain
+	// resolution for reported rows and the billed resolution otherwise.
+	// Provenance recording reuses lookup instead of resolving the row again.
+	model  string
+	lookup export.PricingLookup
+}
+
+// rateHash fingerprints the rates behind Cost. Rollup grouping and
+// persistence compute it on demand; provenance-only callers skip it.
+func (p usagePriceResult) rateHash() string {
+	return usageRateHash(
+		p.model, p.PricedModel, p.MatchedPattern, p.RateOK, p.lookup.Rates)
 }
 
 type usageRollupFact struct {
@@ -91,16 +103,19 @@ func priceUsageFact(
 	if model == "" {
 		model = input.Fact.Model
 	}
-	pricedModel, lookup := resolver.ResolveAt(
-		model, usageLookupModel(model, input.Timestamp),
-		usagePricingTimestamp(input.Timestamp),
-	)
+	canonicalModel := usageLookupModel(model, input.Timestamp)
+	timestamp := usagePricingTimestamp(input.Timestamp)
 	reported := input.Fact.ReportedCostMicrodollars
-	if reported == nil || input.Fact.CostSource == CopilotReportedCostSource {
+	// Reported rows keep the unadjusted lookup; computed rows are charged at
+	// billed rates. Resolve only the one each row uses.
+	var pricedModel string
+	var lookup export.PricingLookup
+	if reported != nil && input.Fact.CostSource != CopilotReportedCostSource {
+		pricedModel, lookup = resolver.ResolveAt(model, canonicalModel, timestamp)
+	} else {
 		var err error
 		pricedModel, lookup, err = resolver.ResolveBilledAt(
-			input.ProviderID, model, usageLookupModel(model, input.Timestamp),
-			usagePricingTimestamp(input.Timestamp))
+			input.ProviderID, model, canonicalModel, timestamp)
 		if err != nil {
 			return usagePriceResult{}, fmt.Errorf("pricing usage row for model %q: %w", model, err)
 		}
@@ -110,9 +125,8 @@ func priceUsageFact(
 	}
 	result := usagePriceResult{
 		PricedModel: pricedModel, MatchedPattern: lookup.Pattern,
-		RateHash: usageRateHash(
-			model, pricedModel, lookup.Pattern, lookup.OK, lookup.Rates),
 		RateOK: lookup.OK,
+		model:  model, lookup: lookup,
 	}
 	selectedRates := lookup.Rates
 	if input.Fact.RequestScoped {
@@ -123,8 +137,7 @@ func priceUsageFact(
 	if reported != nil && input.Fact.CostSource != CopilotReportedCostSource &&
 		(input.Fact.CacheReadTokens != 0 || input.Fact.CacheCreationTokens != 0) {
 		_, savingsLookup, err := resolver.ResolveBilledAt(
-			input.ProviderID, model, usageLookupModel(model, input.Timestamp),
-			usagePricingTimestamp(input.Timestamp))
+			input.ProviderID, model, canonicalModel, timestamp)
 		if err != nil {
 			return usagePriceResult{}, fmt.Errorf(
 				"pricing reported usage cache savings for model %q: %w", model, err)
@@ -234,6 +247,7 @@ func buildUsageDailyContributions(
 		if err != nil {
 			return nil, err
 		}
+		rateHash := priced.rateHash()
 		band := -1
 		if priced.BandThreshold != nil {
 			band = *priced.BandThreshold
@@ -242,7 +256,7 @@ func buildUsageDailyContributions(
 			session: fact.AttributionSessionID, date: fact.LocalDate,
 			model: fact.Model, providerID: fact.Fact.ProviderID,
 			priced:  priced.PricedModel,
-			pattern: priced.MatchedPattern, rateHash: priced.RateHash,
+			pattern: priced.MatchedPattern, rateHash: rateHash,
 			rateOK: priced.RateOK, band: band,
 		}
 		row := rows[itemKey]
@@ -253,7 +267,7 @@ func buildUsageDailyContributions(
 				ProviderID:  fact.Fact.ProviderID,
 				PricedModel: priced.PricedModel, MatchedPattern: priced.MatchedPattern,
 				PricingTimestamp: timestamp,
-				RateOK:           priced.RateOK, RateHash: priced.RateHash,
+				RateOK:           priced.RateOK, RateHash: rateHash,
 				BandThreshold: priced.BandThreshold,
 			}
 			rows[itemKey] = row

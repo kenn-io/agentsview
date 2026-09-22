@@ -186,6 +186,42 @@ func TestDailyUsageAmountsPricingBandApplicationCounts(t *testing.T) {
 	}, provenance.Resolutions[0].Application)
 }
 
+func TestDailyUsageAmountsRecordsChargedLookup(t *testing.T) {
+	tests := []struct {
+		name       string
+		reported   sql.NullInt64
+		wantCost   int64
+		wantOutput int64
+	}{
+		{name: "computed uses billed rate", wantCost: 1_100_000, wantOutput: 1_100_000},
+		{
+			name:     "reported keeps catalog rate",
+			reported: sql.NullInt64{Int64: 77, Valid: true},
+			wantCost: 77, wantOutput: 1_000_000,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolver := export.NewPricingResolver([]export.EffectivePricingRow{{
+				ModelPattern: "model-a",
+				Rates:        export.ModelRates{OutputPerMTok: money.Money{Microdollars: 1_000_000}},
+			}})
+			_, _, _, _, cost, _, err := dailyUsageAmounts(dailyUsageScanRow{
+				usageSource: "session", model: "model-a", providerID: "positai",
+				outputTokens: 1_000_000, cost: tt.reported, costSource: "provider-reported",
+			}, resolver)
+			require.NoError(t, err)
+			block, err := resolver.BuildBlock()
+			require.NoError(t, err)
+			resolutions := block.Models["model-a"].Resolutions
+			require.Len(t, resolutions, 1)
+
+			assert.Equal(t, tt.wantCost, cost.Microdollars)
+			assert.Equal(t, tt.wantOutput, resolutions[0].OutputCostPerMTok.Microdollars)
+		})
+	}
+}
+
 func TestSessionRowCostPricingBandRequestScope(t *testing.T) {
 	resolver := pricingBandTestResolver()
 	cost, priced, contributes, err := sessionRowCost(usageScanRow{

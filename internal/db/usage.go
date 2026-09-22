@@ -1617,21 +1617,13 @@ func dailyUsageAmounts(
 	if err != nil {
 		return 0, 0, 0, 0, money.Money{}, money.Money{}, err
 	}
-	_, lookup := pricing.ResolveAt(
-		r.model, usageLookupModel(r.model, r.pricingTS),
-		usagePricingTimestamp(r.pricingTS),
-	)
+	// Record the exact lookup behind the charge, including provider billing
+	// adjustments, rather than resolving the row again for provenance.
 	if priced.Reported > 0 {
-		pricing.RecordResolvedReported(r.model, priced.PricedModel, lookup)
+		pricing.RecordResolvedReported(r.model, priced.PricedModel, priced.lookup)
 	} else {
-		_, lookup, err = pricing.ResolveBilledAt(
-			r.providerID, r.model, usageLookupModel(r.model, r.pricingTS),
-			usagePricingTimestamp(r.pricingTS))
-		if err != nil {
-			return 0, 0, 0, 0, money.Money{}, money.Money{}, err
-		}
 		recordComputedUsagePricing(
-			pricing, r.model, priced.PricedModel, lookup, fact.RequestScoped,
+			pricing, r.model, priced.PricedModel, priced.lookup, fact.RequestScoped,
 			inputTok, cacheCrTok, cacheRdTok,
 		)
 	}

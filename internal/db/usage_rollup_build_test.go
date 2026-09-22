@@ -264,6 +264,34 @@ func TestPriceUsageFactPreservesReportedAndAuthoritativeCosts(t *testing.T) {
 	assert.Equal(t, 1, authoritative.ComputedAggregate)
 }
 
+func TestPriceUsageFactRateHashFollowsChargedRates(t *testing.T) {
+	resolver := export.NewPricingResolver([]export.EffectivePricingRow{{
+		ModelPattern: "model-a",
+		Rates:        export.ModelRates{OutputPerMTok: money.Money{Microdollars: 1_000_000}},
+	}})
+	reported := int64(77)
+	rateHash := func(providerID string, reportedCost *int64) string {
+		t.Helper()
+		priced, err := priceUsageFact(usagePriceInput{
+			ProviderID: providerID, ReportedModel: "model-a",
+			Fact: usagefacts.Fact{
+				Model: "model-a", OutputTokens: 1_000,
+				ReportedCostMicrodollars: reportedCost,
+				CostSource:               "provider-reported",
+			},
+		}, resolver)
+		require.NoError(t, err)
+		return priced.rateHash()
+	}
+
+	assert.Equal(t, rateHash("", nil), rateHash("", &reported),
+		"unadjusted provider charges both rows at catalog rates")
+	assert.NotEqual(t, rateHash("positai", nil), rateHash("positai", &reported),
+		"computed row is charged at billed rates, reported row is not")
+	assert.Equal(t, rateHash("", &reported), rateHash("positai", &reported),
+		"reported rows ignore provider billing adjustments")
+}
+
 func TestPriceUsageFactUsesBilledRatesForReportedCacheSavings(t *testing.T) {
 	resolver := export.NewPricingResolver([]export.EffectivePricingRow{{
 		ModelPattern: "model-a",
