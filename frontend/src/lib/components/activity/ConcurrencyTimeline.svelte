@@ -22,8 +22,6 @@
   const TOP_PAD = 8;
   const PLOT_H = 160;
   const X_LABEL_H = 18;
-  const STRIP_H = 14;
-  const STRIP_GAP = 6;
   const Y_LABEL_W = 32;
   const RIGHT_PAD = 16;
   const OVERLAY_AXIS_W = 48;
@@ -412,7 +410,7 @@
     return (count / yScale.max) * PLOT_H;
   }
 
-  // The stacked bar, the activity strip, and selection share bucket bounds.
+  // The stacked bar and selection share bucket bounds.
   // Segments are stacked from the baseline in class order; zero-count classes
   // draw nothing.
   const bars = $derived(buckets.map((bucket, idx) => {
@@ -562,8 +560,7 @@
     bars.filter((bar) => Date.parse(buckets[bar.idx]!.start) < futureStartMs),
   );
 
-  const svgH = PLOT_BOTTOM + STRIP_GAP + STRIP_H + X_LABEL_H;
-  const stripY = PLOT_BOTTOM + STRIP_GAP;
+  const svgH = PLOT_BOTTOM + X_LABEL_H;
 
   function setOverlayMetric(value: string) {
     overlayMetric = value as "none" | "tokens" | "cost";
@@ -722,33 +719,13 @@
           />
         {/each}
 
-        {#each bars as bar (bar.idx)}
-          {@const b = buckets[bar.idx]}
-          <Rect
-            class={`strip-cell${b !== undefined && b.max_agents > 0 ? " active" : ""}`}
-            x={bar.cellX}
-            y={stripY}
-            width={bar.cellW}
-            height={STRIP_H}
-          />
-        {/each}
-        {#if futureW > 0}
-          <Rect
-            class="strip-future"
-            x={futureX}
-            y={stripY}
-            width={futureW}
-            height={STRIP_H}
-          />
-        {/if}
-
         {#if selectionBounds}
           <Rect
             class="range-selection"
             x={selectionBounds.x}
             y={TOP_PAD}
             width={selectionBounds.width}
-            height={stripY + STRIP_H - TOP_PAD}
+            height={PLOT_H}
           />
         {/if}
 
@@ -761,7 +738,7 @@
             x={bar.cellX}
             y={TOP_PAD}
             width={bar.cellW}
-            height={stripY + STRIP_H - TOP_PAD}
+            height={PLOT_H}
             role="button"
             tabindex={0}
             aria-pressed={activeRange !== null && bar.idx >= activeRange.start && bar.idx < activeRange.end}
@@ -1008,22 +985,6 @@
     font-size: 9px;
     fill: var(--accent-amber);
     font-family: var(--font-mono);
-  }
-
-  .timeline :global(.strip-cell) {
-    fill: var(--bg-inset);
-    stroke: var(--bg-surface);
-    stroke-width: 0.5;
-  }
-
-  .timeline :global(.strip-cell.active) {
-    fill: var(--accent-blue);
-    opacity: 0.55;
-  }
-
-  .timeline :global(.strip-future) {
-    fill: var(--bg-inset);
-    opacity: 0.5;
   }
 
   .timeline :global(.slot-hit) {

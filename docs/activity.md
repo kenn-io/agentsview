@@ -72,8 +72,7 @@ violet, and **Automated** in orange, stacked from the baseline in that order on
 one shared scale. Bar height is the bucket's combined concurrency peak, and each
 segment is that class's count at the instant of that peak, so the segments
 always add up to the bar. The legend above the chart names the segments, and the
-label on the right gives the combined peak for the range. The strip below the
-bars marks active versus idle buckets across all sessions. Interactive
+label on the right gives the combined peak for the range. Interactive
 concurrency counts overlapping human-facing conversations; human attention is
 not measured.
 

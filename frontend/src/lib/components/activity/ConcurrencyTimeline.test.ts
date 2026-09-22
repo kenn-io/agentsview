@@ -365,22 +365,6 @@ describe("ConcurrencyTimeline", () => {
     unmount(c);
   });
 
-  it("shades the active/idle strip cell only when max_agents > 0", async () => {
-    const report = makeReport();
-    const c = mount(ConcurrencyTimeline, {
-      target: document.body,
-      props: { report },
-    });
-    await tick();
-
-    const cells = document.querySelectorAll(".strip-cell");
-    expect(cells.length).toBe(report.buckets!.length);
-    const active = document.querySelectorAll(".strip-cell.active");
-    expect(active.length).toBe(3);
-
-    unmount(c);
-  });
-
   it("renders no hit target for future buckets and clamps keyboard nav to live ones", async () => {
     // The last of the three minute buckets starts at the effective end, so it
     // is entirely in the future: it must not be hoverable, tooltippable, or
@@ -748,15 +732,10 @@ describe("ConcurrencyTimeline", () => {
     await tick();
     const selection = target.querySelector(".range-selection");
     const selectedSegment = target.querySelector(".concurrency-seg.selected");
-    const stripCell = target.querySelector(".strip-cell");
     const hitTarget = target.querySelector(".slot-hit");
     expect(selection).toBeTruthy();
     expect(selectedSegment).toBeTruthy();
-    expect(stripCell).toBeTruthy();
     expect(hitTarget).toBeTruthy();
-    expect(
-      selection!.compareDocumentPosition(stripCell!) & Node.DOCUMENT_POSITION_PRECEDING,
-    ).toBeTruthy();
     expect(
       selection!.compareDocumentPosition(hitTarget!) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
