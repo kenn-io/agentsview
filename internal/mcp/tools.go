@@ -717,12 +717,6 @@ func (t *toolset) getMessageBodyContinuation(
 	if err != nil {
 		return nil, getMessagesOut{}, err
 	}
-	// The cursor is a claim about one archive and one transcript version.
-	// A backend that ignores those parameters still returns 200 with some
-	// page; do not slice that page or issue another cursor for it.
-	if res.TranscriptRevision != cursor.Revision || res.EvidenceSource != cursor.EvidenceSource {
-		return nil, getMessagesOut{}, fmt.Errorf("%w: body cursor does not match response", service.ErrSourceChanged)
-	}
 	if len(res.Messages) != 1 || res.Messages[0].Ordinal != cursor.Ordinal {
 		return nil, getMessagesOut{}, fmt.Errorf("%w: cited message no longer exists", service.ErrSourceChanged)
 	}
