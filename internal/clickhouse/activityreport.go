@@ -476,8 +476,13 @@ func (s *Store) activityReportUsage(
 		return nil, nil, err
 	}
 
-	sort.SliceStable(rowsAcc, func(i, j int) bool {
-		a, b := rowsAcc[i], rowsAcc[j]
+	// Keep the wide scanned rows in place while ordering their indexes.
+	order := make([]int, len(rowsAcc))
+	for i := range order {
+		order[i] = i
+	}
+	sort.SliceStable(order, func(i, j int) bool {
+		a, b := &rowsAcc[order[i]], &rowsAcc[order[j]]
 		if a.validTS && b.validTS && !a.ts.Equal(b.ts) {
 			return a.ts.Before(b.ts)
 		}
@@ -487,7 +492,8 @@ func (s *Store) activityReportUsage(
 		return a.ordinal < b.ordinal
 	})
 	baseRows := make([]activity.UsageRow, len(rowsAcc))
-	for i, o := range rowsAcc {
+	for i, index := range order {
+		o := &rowsAcc[index]
 		baseRows[i] = activity.UsageRow{
 			SessionID:         o.scan.sessionID,
 			Model:             o.scan.model,
@@ -506,7 +512,8 @@ func (s *Store) activityReportUsage(
 		q.RangeStart, q.RangeEnd, q.EffectiveEnd, baseRows, ids,
 	)
 	out = make([]activity.UsageRow, 0, len(rowsAcc))
-	for i, o := range rowsAcc {
+	for i, index := range order {
+		o := &rowsAcc[index]
 		if !mask[i] {
 			continue
 		}
@@ -841,10 +848,10 @@ func clickActivityReportRowStatus(
 	r clickActivityReportUsageRow, pricing *export.PricingResolver,
 ) (cost money.Money, priced, contributes bool, err error) {
 	canonicalModel := chUsageLookupModel(r.model, r.pricingTS)
-	pricedModel, lookup := pricing.ResolveAt(
-		r.model, canonicalModel, chUsagePricingTimestamp(r.pricingTS),
-	)
 	if r.cost.Valid {
+		pricedModel, lookup := pricing.ResolveAt(
+			r.model, canonicalModel, chUsagePricingTimestamp(r.pricingTS),
+		)
 		pricing.RecordResolvedReported(r.model, pricedModel, lookup)
 		return money.Money{Microdollars: r.cost.Int64}, true, true, nil
 	}
@@ -854,6 +861,11 @@ func clickActivityReportRowStatus(
 	) {
 		return money.Money{}, true, false, nil
 	}
+	pricedModel, lookup, err := pricing.ResolveBilledAt(
+		r.providerID, r.model, canonicalModel, chUsagePricingTimestamp(r.pricingTS))
+	if err != nil {
+		return money.Money{}, false, false, err
+	}
 	if !lookup.OK {
 		pricing.RecordResolvedComputed(r.model, pricedModel, lookup)
 		fee, feeErr := export.WebSearchFee(r.webSearchRequests)
@@ -861,11 +873,6 @@ func clickActivityReportRowStatus(
 			return money.Money{}, false, false, feeErr
 		}
 		return fee, false, true, nil
-	}
-	pricedModel, lookup, err = pricing.ResolveBilledAt(
-		r.providerID, r.model, canonicalModel, chUsagePricingTimestamp(r.pricingTS))
-	if err != nil {
-		return money.Money{}, false, false, err
 	}
 	requestScoped := db.UsageSourceIsRequestScoped(r.source) || r.messageOrdinal.Valid
 	cost, err = lookup.Rates.CostForTokensScoped(
