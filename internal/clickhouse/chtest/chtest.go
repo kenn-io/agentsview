@@ -24,7 +24,7 @@ import (
 // Image pins the server version the integration suite runs against. The
 // mirror relies on lightweight DELETE, recursive CTEs, and the final=1
 // setting, all available from this release line.
-const Image = "clickhouse/clickhouse-server:25.8"
+const Image = "clickhouse/clickhouse-server:26.8"
 
 var (
 	serverMu  sync.Mutex

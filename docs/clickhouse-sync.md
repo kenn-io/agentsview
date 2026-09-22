@@ -376,4 +376,4 @@ The mirror is designed for MergeTree, not copied from PostgreSQL SQL.
 - **No `FINAL` in queries.** The connection setting covers every statement.
   Putting `FINAL` in query text is rejected by this design.
 - **Lightweight deletes** need ClickHouse 23.3+; the integration suite pins
-  `clickhouse/clickhouse-server:25.8`.
+  `clickhouse/clickhouse-server:26.8`.

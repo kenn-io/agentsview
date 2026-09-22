@@ -22,7 +22,7 @@ services:
       - /var/lib/postgresql/data  # Use tmpfs for faster tests, no persistence needed
 
   clickhouse:
-    image: clickhouse/clickhouse-server:25.8
+    image: clickhouse/clickhouse-server:26.8
     environment:
       CLICKHOUSE_SKIP_USER_SETUP: "1"
     ports:

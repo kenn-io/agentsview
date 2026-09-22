@@ -83,8 +83,8 @@ DuckDB SQL stay byte-identical. ClickHouse uses `UNION ALL` in recursive CTEs,
 `parent_session_id IS NULL OR NOT IN (SELECT id FROM sessions)` for orphans
 (`NULL NOT IN (...)` is unknown and would hide NULL-parent rows), `ILIKE` with
 the default backslash escape and no `ESCAPE` clause (ESCAPE landed in 26.6; the
-pin is 25.8), and `toStartOfDay` / `toStartOfWeek` / `toStartOfMonth` instead of
-`date_trunc`.
+mirror was written against 25.8), and `toStartOfDay` / `toStartOfWeek` /
+`toStartOfMonth` instead of `date_trunc`.
 
 **Bootstrap through `default`.** `OpenForAdmin` pings the server `default`
 database, then `CREATE DATABASE IF NOT EXISTS` the mirror name. Pinging the
@@ -217,5 +217,5 @@ hides the stale ones from readers.
 
 Unit tests cover dialect rendering, config, TLS checks, and fingerprints.
 Integration tests use the `chtest` tag against
-`clickhouse/clickhouse-server:25.8` or `TEST_CLICKHOUSE_URL`.
+`clickhouse/clickhouse-server:26.8` or `TEST_CLICKHOUSE_URL`.
 `make test-clickhouse` is the suite. Do not point it at a live mirror.
