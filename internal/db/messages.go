@@ -3086,9 +3086,29 @@ func SanitizeUTF8(s string) string {
 // text needs no repair, so one pass that skips ASCII decoding avoids
 // the separate NUL, UTF-8 and control scans of the repair path.
 func isCleanText(s string) bool {
+	const (
+		spaces = 0x2020202020202020
+		ones   = 0x0101010101010101
+		highs  = 0x8080808080808080
+	)
 	for i := 0; i < len(s); {
-		if i = skipPrintableASCIIBlocks(s, i); i == len(s) {
-			break
+		if len(s)-i >= 8 {
+			// Skip 8 bytes of printable ASCII (0x20..0x7e) at once.
+			// Subtracting spaces sets the high bit of a byte below 0x20
+			// or at 0xa0 and above; adding ones sets it for DEL and
+			// 0x80..0xfe. A borrow or carry only starts at a byte that
+			// is already flagged, so a clean block always yields zero; a
+			// false positive only sends bytes to the check below. Keep
+			// this inline: the compiler does not inline it as a separate
+			// function, which adds a call for every non-ASCII rune.
+			b := s[i : i+8]
+			word := uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 |
+				uint64(b[3])<<24 | uint64(b[4])<<32 | uint64(b[5])<<40 |
+				uint64(b[6])<<48 | uint64(b[7])<<56
+			if ((word-spaces)|(word+ones))&highs == 0 {
+				i += 8
+				continue
+			}
 		}
 		c := s[i]
 		if c < utf8.RuneSelf {
@@ -3105,34 +3125,6 @@ func isCleanText(s string) bool {
 		i += size
 	}
 	return true
-}
-
-// skipPrintableASCIIBlocks advances i past whole 8-byte blocks of
-// printable ASCII (0x20..0x7e) and returns the start of the first
-// block that may hold anything else, or of a tail shorter than 8
-// bytes. The caller checks from there one byte or rune at a time.
-func skipPrintableASCIIBlocks(s string, i int) int {
-	const (
-		spaces = 0x2020202020202020
-		ones   = 0x0101010101010101
-		highs  = 0x8080808080808080
-	)
-	for len(s)-i >= 8 {
-		b := s[i : i+8]
-		word := uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 |
-			uint64(b[3])<<24 | uint64(b[4])<<32 | uint64(b[5])<<40 |
-			uint64(b[6])<<48 | uint64(b[7])<<56
-		// Subtracting spaces sets the high bit of a byte below 0x20 or
-		// at 0xa0 and above; adding ones sets it for DEL and 0x80..0xfe.
-		// A borrow or carry only starts at a byte that is already
-		// flagged, so a clean block always yields zero; a false
-		// positive only sends bytes to the per-byte check.
-		if ((word-spaces)|(word+ones))&highs != 0 {
-			return i
-		}
-		i += 8
-	}
-	return i
 }
 
 // isStrippableControl reports whether r is a control rune that
