@@ -2,6 +2,8 @@ package db
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 )
 
@@ -53,6 +55,10 @@ var ErrSemanticTransient = errors.New(
 // it is the message's own ordinal. OrdinalStart/OrdinalEnd span the whole
 // unit (both equal Ordinal for user documents), and Subordinate carries the
 // unit's sidechain/subagent classification from the vector mirror.
+// ContentHash is the mirror's content_hash for the indexed document — the
+// sha256 hex of the document content the hit was ranked from — so callers
+// can verify the hit against the archive's current unit content before
+// claiming the match is revision-bound.
 type VectorHit struct {
 	SessionID    string
 	Ordinal      int // anchor ordinal
@@ -61,6 +67,18 @@ type VectorHit struct {
 	Subordinate  bool
 	Score        float32
 	Snippet      string
+	ContentHash  string
+}
+
+// UnitContentHash returns the mirror's content_hash for unit content: the
+// sha256 hex digest the embedding build stamps as the document revision.
+// internal/vector's mirror writes it (see contentHash there, which delegates
+// here) and semantic search recomputes it over the archive's current unit
+// content to detect a hit ranked from stale content. Any change here
+// invalidates every embedding stamp and re-embeds the corpus.
+func UnitContentHash(content string) string {
+	sum := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(sum[:])
 }
 
 // MessageRef identifies one message by its session and ordinal, the shape

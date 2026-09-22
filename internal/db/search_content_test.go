@@ -1291,3 +1291,64 @@ func TestSearchContentExcludeSessionIDs(t *testing.T) {
 	require.Len(t, got.Matches, 1, "excluded id must not consume the page")
 	assert.Equal(t, "keep", got.Matches[0].SessionID)
 }
+
+// A main/sidechain transition ends the exchange's assistant run and the
+// sidechain segment starts a new branch with no user message: terms
+// straddling the flip or living in the user-less segment must not match,
+// while the user-led exchange before the flip still does.
+func TestSearchContentTermsSidechainFlipSplitsExchange(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "terms-flip", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.UserMessageCount = 1
+	})
+	messages := []Message{
+		{
+			SessionID: "terms-flip", Ordinal: 0, Role: "user",
+			Content: "start", Timestamp: "2026-05-20T10:00:00Z",
+		},
+		{
+			SessionID: "terms-flip", Ordinal: 1, Role: "assistant",
+			Content: "bear sighting", Timestamp: "2026-05-20T10:01:00Z",
+		},
+		{
+			SessionID: "terms-flip", Ordinal: 2, Role: "assistant",
+			IsSidechain: true, Content: "cold region",
+			Timestamp: "2026-05-20T10:02:00Z",
+		},
+		{
+			SessionID: "terms-flip", Ordinal: 3, Role: "assistant",
+			Content: "sighting resumed", Timestamp: "2026-05-20T10:03:00Z",
+		},
+	}
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "terms-flip", messages))
+
+	// "sighting" sits on both sides of the flip in the old merged exchange;
+	// with segment splitting the post-flip row is user-less, so the pair
+	// must not match.
+	straddle, err := d.SearchContent(t.Context(), ContentSearchFilter{
+		Pattern: "sighting region", Mode: "terms", Scope: "all", Limit: 50,
+		IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, straddle.Matches,
+		"terms must not match across a sidechain flip")
+
+	// The sidechain segment has no user start: it is not an exchange.
+	sidechain, err := d.SearchContent(t.Context(), ContentSearchFilter{
+		Pattern: "cold region", Mode: "terms", Scope: "all", Limit: 50,
+		IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, sidechain.Matches)
+
+	// The user-led exchange before the flip still matches, spanning only its
+	// own segment.
+	led, err := d.SearchContent(t.Context(), ContentSearchFilter{
+		Pattern: "bear sighting", Mode: "terms", Scope: "all", Limit: 50,
+		IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, led.Matches, 1)
+	assert.Equal(t, [2]int{0, 1}, led.Matches[0].OrdinalRange)
+}

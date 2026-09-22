@@ -1,4 +1,5 @@
 ---
+last_edited: 2026-09-21
 title: CLI Reference
 description: All AgentsView commands, flags, and environment variables
 ---
@@ -1560,6 +1561,37 @@ sent to an explicitly supplied server.
 
 ______________________________________________________________________
 
+### `agentsview memory session-start`
+
+Run the bounded conversation-memory lifecycle action used by native agent
+packages:
+
+```bash
+agentsview memory session-start
+agentsview memory session-start --mode hosted-contributor [--target <pg-name>]
+agentsview memory session-start --mode hosted-reader --server <url> \
+  [--server-token-file <path>]
+agentsview memory session-start --mode hosted-reader --pg [--target <pg-name>]
+```
+
+The default `local` mode ensures the writable local daemon is available, then
+asks it to run a coalesced background reconciliation. `hosted-contributor`
+notifies the already running PostgreSQL push watcher for the selected target;
+that owner keeps its existing debounce, credentials, embedding work, and push
+cadence. It does not start another writer. `hosted-reader` checks an explicit
+authenticated daemon or configured PostgreSQL read target without starting a
+local archive or claiming to refresh hosted data.
+
+Every mode returns within 1.9 seconds and does not wait for archive-scale work.
+Set `AGENTSVIEW_DISABLE_AUTO_SYNC=1` to skip only this automatic request;
+explicit sync commands and searches remain available. A contributor owner
+started by an older binary must be restarted once so it can advertise the
+lifecycle wake endpoint. The contributor wake is available on macOS and Linux;
+Windows contributors continue on the watcher's normal event and interval
+cadence.
+
+______________________________________________________________________
+
 ### `agentsview mcp`
 
 Run a read-only Model Context Protocol server for assistant clients that can
@@ -1570,6 +1602,7 @@ and operational guidance.
 
 ```bash
 agentsview mcp
+agentsview mcp --profile memory
 agentsview mcp --http 127.0.0.1:8085
 agentsview mcp --server http://127.0.0.1:8080
 agentsview mcp status --json
@@ -1591,6 +1624,11 @@ daemon and starts it when needed, so a long-lived MCP server can keep working
 after the daemon exits due to idleness. The MCP server does not fall back to
 opening the local SQLite archive directly.
 
+Use `--profile memory` when the client should discover only the
+`search_content` and `get_messages` conversation-memory tools. The default
+`full` profile preserves the complete MCP tool surface. Profile selection works
+with both stdio and StreamableHTTP and does not change backend selection.
+
 Use `--server <url>` to point at an explicit running daemon. When the daemon
 requires auth, provide `AGENTSVIEW_SERVER_TOKEN` or
 `--server-token-file <path>`. Use `--pg` to read from configured PostgreSQL
@@ -1604,6 +1642,7 @@ pass its URL with `--server`.
 | `--server <url>`             |         | Explicit daemon URL for MCP tool calls              |
 | `--server-token-file <path>` |         | Bearer token file for an explicit daemon URL        |
 | `--pg`                       | `false` | Read from configured PostgreSQL                     |
+| `--profile <name>`           | `full`  | Advertise the `full` or focused `memory` tool set    |
 
 ______________________________________________________________________
 

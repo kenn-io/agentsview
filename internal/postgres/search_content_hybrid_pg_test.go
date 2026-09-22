@@ -306,3 +306,106 @@ func hybridSessionIDs(page db.ContentSearchPage) []string {
 	}
 	return out
 }
+
+// TestPGHybridKeywordRevisionRaceDropsBinding is the PostgreSQL twin of
+// TestSearchContentHybridKeywordRevisionRaceDropsBinding: a keyword-leg hit
+// carries the session's transcript revision at keyword-query time, and a
+// fused match whose carried revision no longer matches the enriched revision
+// is reported unbound.
+func TestPGHybridKeywordRevisionRaceDropsBinding(t *testing.T) {
+	store := setupContentSearch(t)
+	insertCSSession(t, store, "cs-kw-race", "proj", "claude",
+		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
+	insertCSMessage(t, store, "cs-kw-race", 0, "user",
+		"needle in a haystack", "2026-05-01T10:00:00Z", false)
+	var revision string
+	require.NoError(t, store.DB().QueryRow(
+		`SELECT transcript_revision FROM sessions WHERE id = 'cs-kw-race'`,
+	).Scan(&revision))
+	require.NotEmpty(t, revision, "the seeded session must have a revision")
+
+	kwKey := db.UnitFusionKey("cs-kw-race", 0)
+	merged := []db.FusedUnit{{
+		Unit:  db.RankedUnit{Key: kwKey},
+		Score: 1,
+	}}
+
+	for _, tc := range []struct {
+		name        string
+		hitRevision string
+		wantBound   bool
+	}{
+		{"matching revision stays bound", revision, true},
+		{"rewritten revision drops the binding", "pre-rewrite", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			kwDisplay := map[string]pgHybridDisplay{
+				kwKey: {sessionID: "cs-kw-race", ordinal: 0, revision: tc.hitRevision},
+			}
+			page, err := store.enrichHybridMatchesPG(t.Context(),
+				db.ContentSearchFilter{Pattern: "needle", Limit: 50},
+				merged, map[string]pgHybridDisplay{}, kwDisplay)
+			require.NoError(t, err)
+			require.Len(t, page.Matches, 1)
+			if tc.wantBound {
+				assert.Equal(t, revision, page.Matches[0].TranscriptRevision)
+			} else {
+				assert.Empty(t, page.Matches[0].TranscriptRevision,
+					"keyword evidence from a prior revision must be unbound")
+			}
+		})
+	}
+}
+
+// stubKeywordLegSearcher resolves every keyword hit to its own single-message
+// unit, so the leg under test can fuse without a real vector mirror.
+type stubKeywordLegSearcher struct{}
+
+func (stubKeywordLegSearcher) SemanticSearch(
+	context.Context, string, int,
+) ([]db.VectorHit, error) {
+	return nil, nil
+}
+
+func (stubKeywordLegSearcher) ResolveMessageUnits(
+	_ context.Context, refs []db.MessageRef,
+) ([]db.UnitRef, error) {
+	out := make([]db.UnitRef, len(refs))
+	for i, ref := range refs {
+		out[i] = db.UnitRef{
+			DocKey:       "stub:" + ref.SessionID,
+			SessionID:    ref.SessionID,
+			OrdinalStart: ref.Ordinal,
+			OrdinalEnd:   ref.Ordinal,
+		}
+	}
+	return out, nil
+}
+
+// TestPGHybridKeywordLegCarriesRevision pins the query-side half of the
+// keyword-evidence race guard: the keyword leg selects each hit's session
+// transcript revision and carries it on the display, so the enrichment-time
+// comparison in enrichHybridMatchesPG compares real revisions instead of
+// always-empty ones.
+func TestPGHybridKeywordLegCarriesRevision(t *testing.T) {
+	store := setupContentSearch(t)
+	insertCSSession(t, store, "cs-kw-carry", "proj", "claude",
+		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
+	insertCSMessage(t, store, "cs-kw-carry", 0, "user",
+		"needle in a haystack", "2026-05-01T10:00:00Z", false)
+	var revision string
+	require.NoError(t, store.DB().QueryRow(
+		`SELECT transcript_revision FROM sessions WHERE id = 'cs-kw-carry'`,
+	).Scan(&revision))
+	require.NotEmpty(t, revision, "the seeded session must have a revision")
+
+	leg, err := store.hybridKeywordLegPG(t.Context(),
+		db.ContentSearchFilter{Pattern: "needle", Limit: 50},
+		stubKeywordLegSearcher{}, 20)
+	require.NoError(t, err)
+	require.Len(t, leg.ranked, 1)
+	d := leg.display[leg.ranked[0].Key]
+	assert.Equal(t, "cs-kw-carry", d.sessionID)
+	assert.Equal(t, revision, d.revision,
+		"keyword hits must carry the evidence-time transcript revision")
+}

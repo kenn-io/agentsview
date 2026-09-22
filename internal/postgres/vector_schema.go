@@ -139,6 +139,26 @@ func vectorChunkTable(genID int64) string {
 	return fmt.Sprintf("vector_chunks_g%d", genID)
 }
 
+// EnsureVectorChunkContentHashColumn adds the per-generation content-hash
+// stamp to genID's chunk table when it predates the stamp. The push writes
+// the stamp; read-side wiring calls this during setup so a pre-upgrade table
+// is migrated before the searcher selects the column, instead of failing
+// every semantic or hybrid query on a missing column. Idempotent. The empty
+// default on pre-stamp rows marks them generation-unverifiable until their
+// next push rewrites them, which keeps stale-vector detection honest for
+// readers pinned to a superseded generation.
+func EnsureVectorChunkContentHashColumn(
+	ctx context.Context, pg *sql.DB, genID int64,
+) error {
+	table := vectorChunkTable(genID)
+	if _, err := pg.ExecContext(ctx, fmt.Sprintf(
+		`ALTER TABLE %s ADD COLUMN IF NOT EXISTS content_hash TEXT NOT NULL DEFAULT ''`,
+		table)); err != nil {
+		return fmt.Errorf("adding %s content_hash: %w", table, err)
+	}
+	return nil
+}
+
 // vectorExtensionSchema locates the namespace pgvector's types and operator
 // classes were installed into. CREATE EXTENSION installs into whichever
 // schema was first on search_path the first time it ran anywhere in the
@@ -177,12 +197,16 @@ func ensureVectorChunkTable(
 	table := vectorChunkTable(genID)
 	if _, err := pg.ExecContext(ctx, fmt.Sprintf(`
 CREATE TABLE IF NOT EXISTS %s (
-    doc_key     TEXT NOT NULL,
-    chunk_index INTEGER NOT NULL,
-    embedding   %s.halfvec(%d) NOT NULL,
+    doc_key      TEXT NOT NULL,
+    chunk_index  INTEGER NOT NULL,
+    embedding    %s.halfvec(%d) NOT NULL,
+    content_hash TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (doc_key, chunk_index)
 )`, table, extSchema, dimension)); err != nil {
 		return fmt.Errorf("creating %s: %w", table, err)
+	}
+	if err := EnsureVectorChunkContentHashColumn(ctx, pg, genID); err != nil {
+		return err
 	}
 	if _, err := pg.ExecContext(ctx, fmt.Sprintf(
 		`CREATE INDEX IF NOT EXISTS idx_%s_hnsw ON %s

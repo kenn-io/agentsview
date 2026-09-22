@@ -7,6 +7,7 @@ import (
 	"log"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -419,6 +420,35 @@ func TestPushLoop_NotifyDirtyWithAckIsNonBlockingAndCoalescesWaiters(t *testing.
 	fire <- time.Now()
 	require.NoError(t, <-first)
 	require.NoError(t, <-second)
+}
+
+func TestPushLoop_RunWithWakeQueuesChange(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		wake := make(chan struct{}, 1)
+		var reasons []pushReason
+		loop := &pushLoop{
+			debounce: time.Second,
+			dirty:    make(chan struct{}, 1),
+			floor:    make(chan time.Time),
+			after:    time.After,
+			push: func(
+				_ context.Context, reason pushReason, _ *syncpkg.WatchBatch,
+			) error {
+				reasons = append(reasons, reason)
+				return nil
+			},
+			promotionCounts: make(map[syncpkg.WatchBatchPromotionReason]int),
+		}
+		go loop.RunWithWake(ctx, wake)
+
+		wake <- struct{}{}
+		time.Sleep(time.Second)
+		synctest.Wait()
+
+		require.Equal(t, []pushReason{reasonChange}, reasons)
+	})
 }
 
 func TestPushWatchFallbackCoverageMarksLoopDirty(t *testing.T) {

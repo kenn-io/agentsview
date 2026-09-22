@@ -1,4 +1,5 @@
 ---
+last_edited: 2026-09-21
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -68,6 +69,20 @@ Release notes for
   `VITE_PROJECT_MAPPING_WORKSPACE=true`. Review folder suggestions and session
   previews, filter by date, and correct individual sessions or whole groups.
   This workspace is disabled in default builds.
+- Native conversation-memory integrations can use
+  `agentsview memory session-start` for local, hosted-contributor, and
+  hosted-reader lifecycle roles. The command wakes the configured ingestion
+  owner or checks the selected read target and returns within two seconds.
+- MCP clients can use `agentsview mcp --profile memory` to advertise only the
+  conversation evidence search and read tools, reducing unrelated tool
+  choices while leaving the default full MCP surface unchanged.
+- Agents can open recalled evidence against the exact transcript revision that
+  produced it. MCP message reads reject stale citations with `source_changed`,
+  and oversized messages now provide a revision-bound continuation cursor.
+- Agents can require several literal terms within one user/assistant exchange
+  when searching conversation history through MCP. Exact session, branch, and
+  current-session filters narrow recall before the result limit, and each
+  response reports the search mode, filters, exclusions, and truncation.
 
 **Improvements**
 
@@ -96,16 +111,13 @@ Release notes for
   cache has size and age limits.
 - Profile `export sessions`, `export hour`, `export day`, and `export digest`
   with `--cpuprofile`, `--memprofile`, and `--trace`.
-
-**Improvements**
-
 - The Activity report served from ClickHouse returns the same results with far
-    less database work. Usage tokens are read from stored columns instead of
-    parsed JSON, tool events are paired per session, and candidate sessions are
-    sent once as native data. The first push or serve after upgrading fills the
-    new derived tables before serving and resumes if interrupted; a read-only
-    serve role reports the pending fill until a push with a capable role
-    finishes it.
+  less database work. Usage tokens are read from stored columns instead of
+  parsed JSON, tool events are paired per session, and candidate sessions are
+  sent once as native data. The first push or serve after upgrading fills the
+  new derived tables before serving and resumes if interrupted; a read-only
+  serve role reports the pending fill until a push with a capable role
+  finishes it.
 
 **Bug fixes**
 

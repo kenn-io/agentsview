@@ -41,6 +41,7 @@ func (s vectorIndexSearcher) SemanticSearch(
 			Subordinate:  h.Subordinate,
 			Score:        h.Score,
 			Snippet:      h.Snippet,
+			ContentHash:  h.ContentHash,
 		}
 	}
 	return out, nil

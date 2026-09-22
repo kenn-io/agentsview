@@ -2,9 +2,7 @@ package vector
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -147,10 +145,11 @@ func escapeDocKeyComponent(s string) string {
 
 // contentHash returns the mirror's content_hash for content: kit's
 // sqlitevec store uses it as the revision column, so any change here
-// invalidates the embedding stamp and marks the document pending.
+// invalidates the embedding stamp and marks the document pending. It
+// delegates to db.UnitContentHash so the build-time stamp and search-time
+// staleness verification cannot drift.
 func contentHash(content string) string {
-	sum := sha256.Sum256([]byte(content))
-	return hex.EncodeToString(sum[:])
+	return db.UnitContentHash(content)
 }
 
 // Refresh reconciles the mirror against src. full=true scans the entire

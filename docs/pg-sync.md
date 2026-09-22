@@ -177,6 +177,13 @@ Operational details:
   when no name is passed, along with the same machine name, project filters,
   classifier settings, and `result_content_blocked_categories` behavior as
   one-shot `pg push`.
+- The watcher publishes an identity-bound local lifecycle record. Native memory
+  hooks can wake that exact owner with
+  `agentsview memory session-start --mode hosted-contributor`; the wake enters
+  the normal debounce loop and does not bypass its credentials or scheduling.
+  Restart a watcher created by an older binary once before using this hook.
+  Lifecycle wake delivery is currently available on macOS and Linux; Windows
+  watchers continue to use their normal filesystem-event and interval cadence.
 
 #### Project Filtering
 

@@ -148,6 +148,7 @@ func TestPGSearchContentSubstringMessages(t *testing.T) {
 	assert.Equal(t, "message", m.Location)
 	assert.Equal(t, 0, m.Ordinal)
 	assert.Equal(t, "user", m.Role)
+	assert.Equal(t, "0", m.TranscriptRevision)
 	assert.NotEmpty(t, m.Snippet)
 	parsed, err := time.Parse(time.RFC3339Nano, m.Timestamp)
 	require.NoError(t, err, "match timestamp must be RFC3339Nano, got %q", m.Timestamp)
@@ -1107,4 +1108,51 @@ func TestSearch_DateRange(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestPGSearchContentTermsSidechainFlipSplitsExchange is the PostgreSQL twin
+// of TestSearchContentTermsSidechainFlipSplitsExchange: a main/sidechain
+// transition ends the exchange's assistant run and the sidechain segment
+// starts a new branch with no user message, so terms straddling the flip or
+// living in the user-less segment must not match.
+func TestPGSearchContentTermsSidechainFlipSplitsExchange(t *testing.T) {
+	store := setupContentSearch(t)
+	insertCSSession(t, store, "cs-terms-flip", "proj", "claude",
+		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
+	insertCSMessage(t, store, "cs-terms-flip", 0, "user",
+		"start", "2026-05-01T10:00:00Z", false)
+	insertCSMessage(t, store, "cs-terms-flip", 1, "assistant",
+		"bear sighting", "2026-05-01T10:01:00Z", false)
+	insertCSMessage(t, store, "cs-terms-flip", 2, "assistant",
+		"cold region", "2026-05-01T10:02:00Z", false)
+	// Row 2 runs on the sidechain branch; flip row 2 back is not possible in
+	// this helper, so mark row 2 sidechain directly and leave 3 main.
+	_, err := store.DB().Exec(
+		`UPDATE messages SET is_sidechain = TRUE WHERE session_id = 'cs-terms-flip' AND ordinal = 2`)
+	require.NoError(t, err)
+	insertCSMessage(t, store, "cs-terms-flip", 3, "assistant",
+		"sighting resumed", "2026-05-01T10:03:00Z", false)
+
+	straddle, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
+		Pattern: "sighting region", Mode: "terms", Scope: "all", Limit: 50,
+		IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, straddle.Matches,
+		"terms must not match across a sidechain flip")
+
+	sidechain, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
+		Pattern: "cold region", Mode: "terms", Scope: "all", Limit: 50,
+		IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, sidechain.Matches)
+
+	led, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
+		Pattern: "bear sighting", Mode: "terms", Scope: "all", Limit: 50,
+		IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, led.Matches, 1)
+	assert.Equal(t, [2]int{0, 1}, led.Matches[0].OrdinalRange)
 }

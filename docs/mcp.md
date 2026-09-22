@@ -1,4 +1,5 @@
 ---
+last_edited: 2026-09-21
 title: MCP Server
 description: Connect assistant clients to your AgentsView session history with MCP
 ---
@@ -66,6 +67,27 @@ client will see these tools:
 | `get_usage_summary`    | Aggregate token and cost usage                                           |
 | `query_recall`         | Search extracted Recall entries when the backend supports Recall queries |
 
+### Focused memory profile
+
+Clients that use AgentsView only for conversation memory can select the focused
+profile:
+
+```json
+{
+  "mcpServers": {
+    "agentsview-memory": {
+      "command": "agentsview",
+      "args": ["mcp", "--profile", "memory"]
+    }
+  }
+}
+```
+
+This profile advertises only `search_content` and `get_messages`. The tools use
+the same schemas and backend selection as the full profile, over either stdio or
+StreamableHTTP. Omitting `--profile` or choosing `--profile full` preserves the
+complete tool list above.
+
 `search_sessions` accepts optional `date_from` and `date_to` bounds in
 `YYYY-MM-DD` format, just like `list_sessions` and `search_content`. Dates
 include sessions whose activity overlaps the requested days in UTC. Either bound
@@ -114,7 +136,9 @@ assistant run on the same main or sidechain branch. Terms can appear on opposite
 sides of that exchange. Assistant messages before a session's first user message
 belong to no exchange and never match. `%`, `_`, and backslashes stay literal;
 tool and system content is outside this mode. The `terms` mode currently
-requires a SQLite or PostgreSQL backend.
+requires a SQLite or PostgreSQL backend. A main/sidechain transition ends the exchange's run; the
+sidechain segment after it starts a new branch with no user message, so terms
+on its two sides never share an exchange.
 
 `scope` can be `top`, `all` (default), or `subordinate` for terms, semantic, and
 hybrid searches. The semantic and hybrid modes need the opt-in
@@ -127,7 +151,7 @@ that range falls back to the default.
 A `terms` snippet shows about 60 characters of context around the first
 occurrence of each term. Terms that sit far apart in a long exchange produce
 separate windows joined by `...`, so snippet size follows the number of terms,
-not the length of the exchange.
+not the length of the exchange. Values outside 1-50 are rejected.
 
 Every match carries a conversation-unit citation: an `ordinal_range` of
 `[start, end]` ordinals around the match, plus `subordinate`, `relationship`,
@@ -135,7 +159,15 @@ Every match carries a conversation-unit citation: an `ordinal_range` of
 runs and subagent or fork sessions. The response also reports the
 `effective_mode`, the `effective_scope` for modes that support scope, and the
 `exclusions` that applied by default. `next_cursor` is present when another page
-exists.
+exists. The response also reports the requested mode and the filters the
+search applied, and whether the candidate page was truncated before ranking.
+
+SQLite and PostgreSQL search matches also carry `transcript_revision`, captured
+by the same storage query as the evidence. A `revision_bound` response flag says
+whether every returned match has that guarantee. Pass a match's revision as
+`expected_revision` when calling `get_messages`. If the transcript changed in
+between, the read returns `source_changed`; repeat the search and use the new
+citation.
 
 ## Daemon-Backed Reads
 
@@ -146,6 +178,27 @@ after the daemon exits due to idleness.
 The MCP server does not open the local SQLite archive directly. This keeps MCP
 reads on the same daemon policy as the desktop app and avoids a long-running MCP
 process holding its own archive handle.
+
+Native conversation-memory packages can call
+`agentsview memory session-start` on startup, resume, and clear events. The
+command ensures the writable local daemon is available, queues a debounced
+background reconciliation, and returns within two seconds without waiting for
+the archive pass. Parallel starts coalesce in the daemon, while the file watcher
+continues to ingest changed transcripts normally.
+
+Packages configured as hosted contributors call the same command with
+`--mode hosted-contributor` and an optional named PostgreSQL target. This wakes
+the existing push watcher; it does not start another writer or copy that
+owner's credentials. Hosted read-only packages use `--mode hosted-reader` with
+either `--server` or `--pg`. That mode only checks the selected read endpoint
+and never starts a local archive or reports that the remote corpus was
+refreshed. Contributor wake delivery is currently available on macOS and Linux.
+
+Set `AGENTSVIEW_DISABLE_AUTO_SYNC=1` to skip this automatic lifecycle request.
+Explicit `agentsview sync` commands and existing-history searches remain
+available. A disabled or failed lifecycle request does not change archive data;
+the package hook is responsible for reporting the failure without blocking the
+agent session.
 
 If you need to disable daemon auto-start for general CLI work with
 `AGENTSVIEW_NO_DAEMON=1`, do not use local MCP mode for that archive. Start the

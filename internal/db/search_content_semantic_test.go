@@ -418,10 +418,13 @@ func TestSearchContentSemanticMatchCarriesUnitRangeAndLineage(t *testing.T) {
 		{
 			SessionID: "child", Ordinal: 1, OrdinalStart: 1, OrdinalEnd: 2,
 			Subordinate: true, Score: 0.9, Snippet: "sidechain step one",
+			ContentHash: UnitContentHash(
+				"sidechain step one\n\nsidechain step two"),
 		},
 		{
 			SessionID: "parent", Ordinal: 0, OrdinalStart: 0, OrdinalEnd: 0,
 			Score: 0.5, Snippet: "top-level step question",
+			ContentHash: UnitContentHash("top-level step question"),
 		},
 	}})
 
@@ -443,6 +446,7 @@ func TestSearchContentSemanticMatchCarriesUnitRangeAndLineage(t *testing.T) {
 	assert.Equal(t, "subagent", sub.Relationship)
 	assert.Equal(t, "parent", sub.ParentSessionID)
 	assert.True(t, sub.Sidechain, "anchor message is_sidechain")
+	assert.NotEmpty(t, sub.TranscriptRevision)
 
 	data, err := json.Marshal(sub)
 	require.NoError(t, err)
@@ -450,6 +454,7 @@ func TestSearchContentSemanticMatchCarriesUnitRangeAndLineage(t *testing.T) {
 		`"ordinal":1`, `"ordinal_range":[1,2]`,
 		`"subordinate":true`, `"relationship":"subagent"`,
 		`"parent_session_id":"parent"`, `"is_sidechain":true`,
+		`"transcript_revision":`,
 	} {
 		assert.Contains(t, string(data), want)
 	}
@@ -461,6 +466,7 @@ func TestSearchContentSemanticMatchCarriesUnitRangeAndLineage(t *testing.T) {
 	assert.Empty(t, top.Relationship)
 	assert.Empty(t, top.ParentSessionID)
 	assert.False(t, top.Sidechain)
+	assert.NotEmpty(t, top.TranscriptRevision)
 }
 
 // TestContentMatchJSONUnitFieldsOmittedForLexicalMatches guards the lexical
@@ -491,4 +497,274 @@ func TestContentMatchJSONUnitFieldsOmittedForLexicalMatches(t *testing.T) {
 		assert.NotContains(t, string(data), `"`+key+`"`,
 			"lexical match JSON must not grow semantic-only keys")
 	}
+}
+
+// A semantic match is revision-bound only when the hit was ranked from
+// content identical to the archive's current unit content. A hit whose
+// recorded mirror hash no longer matches (transcript changed before the
+// vector index refreshed) and a hit with no recorded hash at both fail
+// closed: the match loses its transcript revision so the page's
+// revision_bound flag stays honest about what the ranking evidence was
+// computed from.
+func TestSearchContentSemanticStaleHitLosesRevisionBound(t *testing.T) {
+	d := testDB(t)
+	seedSearchSession(t, d, "s1", "proj", [][2]string{
+		{"user", "explain the entanglement experiment"},
+	})
+	fresh := UnitContentHash("explain the entanglement experiment")
+
+	for _, tc := range []struct {
+		name        string
+		contentHash string
+		wantBound   bool
+	}{
+		{"fresh hash keeps the revision", fresh, true},
+		{"stale hash drops the revision", UnitContentHash("content from before an edit"), false},
+		{"missing hash fails closed", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d.SetVectorSearcher(&fakeVectorSearcher{hits: []VectorHit{{
+				SessionID: "s1", Ordinal: 0, OrdinalStart: 0, OrdinalEnd: 0,
+				Score: 0.9, ContentHash: tc.contentHash,
+			}}})
+
+			page, err := d.SearchContent(t.Context(), ContentSearchFilter{
+				Pattern: "entanglement", Mode: "semantic", Limit: 50,
+			})
+			require.NoError(t, err)
+			require.Len(t, page.Matches, 1)
+			if tc.wantBound {
+				assert.NotEmpty(t, page.Matches[0].TranscriptRevision)
+			} else {
+				assert.Empty(t, page.Matches[0].TranscriptRevision,
+					"stale hit must be reported unbound")
+			}
+		})
+	}
+}
+
+// A run that grew past the recorded span (a new assistant message appended
+// at ordinal_end+1) fails closed even though the recorded prefix content is
+// unchanged: the hit's embedding was computed from a unit that no longer
+// exists. A hit spanning the grown run, and a user document (which never
+// extends), stay bound.
+func TestSearchContentSemanticRunExtensionFailsClosed(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.UserMessageCount = 1
+	})
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "s1", []Message{
+		{
+			SessionID: "s1", Ordinal: 0, Role: "user",
+			Content: "question", Timestamp: "2026-05-20T12:00:00Z",
+		},
+		{
+			SessionID: "s1", Ordinal: 1, Role: "assistant",
+			Content: "alpha part", Timestamp: "2026-05-20T12:00:01Z",
+		},
+		{
+			SessionID: "s1", Ordinal: 2, Role: "assistant",
+			Content: "beta part", Timestamp: "2026-05-20T12:00:02Z",
+		},
+		{
+			SessionID: "s1", Ordinal: 3, Role: "assistant",
+			Content: "gamma extension", Timestamp: "2026-05-20T12:00:03Z",
+		},
+	}))
+
+	for _, tc := range []struct {
+		name         string
+		ordinalStart int
+		ordinalEnd   int
+		contentHash  string
+		wantBound    bool
+	}{
+		{
+			name:         "prefix hash over a grown run is stale",
+			ordinalStart: 1, ordinalEnd: 2,
+			contentHash: UnitContentHash("alpha part\n\nbeta part"),
+			wantBound:   false,
+		},
+		{
+			name:         "hash over the full grown run stays bound",
+			ordinalStart: 1, ordinalEnd: 3,
+			contentHash: UnitContentHash("alpha part\n\nbeta part\n\ngamma extension"),
+			wantBound:   true,
+		},
+		{
+			name:         "a user document never extends",
+			ordinalStart: 0, ordinalEnd: 0,
+			contentHash: UnitContentHash("question"),
+			wantBound:   true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d.SetVectorSearcher(&fakeVectorSearcher{hits: []VectorHit{{
+				SessionID: "s1", Ordinal: tc.ordinalEnd,
+				OrdinalStart: tc.ordinalStart, OrdinalEnd: tc.ordinalEnd,
+				Score: 0.9, ContentHash: tc.contentHash,
+			}}})
+
+			page, err := d.SearchContent(t.Context(), ContentSearchFilter{
+				Pattern: "part", Mode: "semantic", Limit: 50,
+				IncludeOneShot: true,
+			})
+			require.NoError(t, err)
+			require.Len(t, page.Matches, 1)
+			if tc.wantBound {
+				assert.NotEmpty(t, page.Matches[0].TranscriptRevision)
+			} else {
+				assert.Empty(t, page.Matches[0].TranscriptRevision,
+					"extended run must be reported unbound")
+			}
+		})
+	}
+}
+
+// An ignored row (here a system message) between the indexed run and an
+// appended assistant message must not hide the extension: ignored rows never
+// split an embedding unit, so the first embeddable row after the recorded end
+// is the extension candidate regardless of where it physically lands.
+func TestSearchContentSemanticExtensionPastIgnoredRowFailsClosed(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.UserMessageCount = 1
+	})
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "s1", []Message{
+		{
+			SessionID: "s1", Ordinal: 0, Role: "user",
+			Content: "question", Timestamp: "2026-05-20T12:00:00Z",
+		},
+		{
+			SessionID: "s1", Ordinal: 1, Role: "assistant",
+			Content: "alpha part", Timestamp: "2026-05-20T12:00:01Z",
+		},
+		{
+			SessionID: "s1", Ordinal: 2, Role: "assistant",
+			Content: "beta part", Timestamp: "2026-05-20T12:00:02Z",
+		},
+		{
+			SessionID: "s1", Ordinal: 3, Role: "assistant", IsSystem: true,
+			Content: "system noise", Timestamp: "2026-05-20T12:00:03Z",
+		},
+		{
+			SessionID: "s1", Ordinal: 4, Role: "assistant",
+			Content: "gamma extension", Timestamp: "2026-05-20T12:00:04Z",
+		},
+	}))
+
+	d.SetVectorSearcher(&fakeVectorSearcher{hits: []VectorHit{{
+		SessionID: "s1", Ordinal: 2, OrdinalStart: 1, OrdinalEnd: 2,
+		Score: 0.9, ContentHash: UnitContentHash("alpha part\n\nbeta part"),
+	}}})
+
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{
+		Pattern: "part", Mode: "semantic", Limit: 50, IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Empty(t, page.Matches[0].TranscriptRevision,
+		"the run extended past an ignored row: the hit must be unbound")
+}
+
+// An in-span row that changes role or sidechain without changing content
+// still splits the indexed unit (units are homogeneous in both): the hit must
+// be reported unbound even though every content byte is unchanged.
+func TestSearchContentSemanticStructuralChangeFailsClosed(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		mutateRows func(rows []Message)
+	}{
+		{
+			name: "sidechain flip inside the span",
+			mutateRows: func(rows []Message) {
+				rows[2].IsSidechain = true
+			},
+		},
+		{
+			name: "role flip inside the span",
+			mutateRows: func(rows []Message) {
+				rows[2].Role = "user"
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "s1", "proj", func(s *Session) {
+				s.Agent = "claude"
+				s.UserMessageCount = 1
+			})
+			rows := []Message{
+				{
+					SessionID: "s1", Ordinal: 0, Role: "user",
+					Content: "question", Timestamp: "2026-05-20T12:00:00Z",
+				},
+				{
+					SessionID: "s1", Ordinal: 1, Role: "assistant",
+					Content: "zeta", Timestamp: "2026-05-20T12:00:01Z",
+				},
+				{
+					SessionID: "s1", Ordinal: 2, Role: "assistant",
+					Content: "alpha", Timestamp: "2026-05-20T12:00:02Z",
+				},
+			}
+			tc.mutateRows(rows)
+			require.NoError(t, d.ReplaceSessionMessages(t.Context(), "s1", rows))
+
+			d.SetVectorSearcher(&fakeVectorSearcher{hits: []VectorHit{{
+				SessionID: "s1", Ordinal: 1, OrdinalStart: 1, OrdinalEnd: 2,
+				Score: 0.9, ContentHash: UnitContentHash("zeta\n\nalpha"),
+			}}})
+
+			page, err := d.SearchContent(t.Context(), ContentSearchFilter{
+				Pattern: "part", Mode: "semantic", Limit: 50,
+				IncludeOneShot: true,
+			})
+			require.NoError(t, err)
+			require.Len(t, page.Matches, 1)
+			assert.Empty(t, page.Matches[0].TranscriptRevision,
+				"structurally changed unit must be reported unbound")
+		})
+	}
+}
+
+// Verification rows must assemble in message-ordinal order, not content
+// order: a run whose members' content is not lexically ordered (here "zeta"
+// precedes "alpha" by ordinal) keeps its revision binding, and would lose it
+// if the verifier sorted rows by content before hashing.
+func TestSearchContentSemanticNonLexicalRunStaysBound(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.UserMessageCount = 1
+	})
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "s1", []Message{
+		{
+			SessionID: "s1", Ordinal: 0, Role: "user",
+			Content: "question", Timestamp: "2026-05-20T12:00:00Z",
+		},
+		{
+			SessionID: "s1", Ordinal: 1, Role: "assistant",
+			Content: "zeta", Timestamp: "2026-05-20T12:00:01Z",
+		},
+		{
+			SessionID: "s1", Ordinal: 2, Role: "assistant",
+			Content: "alpha", Timestamp: "2026-05-20T12:00:02Z",
+		},
+	}))
+
+	d.SetVectorSearcher(&fakeVectorSearcher{hits: []VectorHit{{
+		SessionID: "s1", Ordinal: 1, OrdinalStart: 1, OrdinalEnd: 2,
+		Score: 0.9, ContentHash: UnitContentHash("zeta\n\nalpha"),
+	}}})
+
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{
+		Pattern: "part", Mode: "semantic", Limit: 50, IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.NotEmpty(t, page.Matches[0].TranscriptRevision,
+		"non-lexical run content must stay bound")
 }

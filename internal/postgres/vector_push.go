@@ -1100,9 +1100,10 @@ DELETE FROM %s WHERE doc_key IN (
 	}
 
 	type chunkRow struct {
-		docKey     string
-		chunkIndex int
-		embedding  string
+		docKey      string
+		chunkIndex  int
+		embedding   string
+		contentHash string
 	}
 	var rows []chunkRow
 	for _, doc := range docs {
@@ -1113,9 +1114,10 @@ DELETE FROM %s WHERE doc_key IN (
 					"doc %s chunk %d: %w", doc.DocKey, chunk.ChunkIndex, err)
 			}
 			rows = append(rows, chunkRow{
-				docKey:     doc.DocKey,
-				chunkIndex: chunk.ChunkIndex,
-				embedding:  literal,
+				docKey:      doc.DocKey,
+				chunkIndex:  chunk.ChunkIndex,
+				embedding:   literal,
+				contentHash: doc.ContentHash,
 			})
 		}
 	}
@@ -1124,18 +1126,18 @@ DELETE FROM %s WHERE doc_key IN (
 		end := min(start+vectorChunkInsertBatch, len(rows))
 		batch := rows[start:end]
 		var values strings.Builder
-		args := make([]any, 0, len(batch)*3)
+		args := make([]any, 0, len(batch)*4)
 		for i, r := range batch {
 			if i > 0 {
 				values.WriteByte(',')
 			}
-			base := i * 3
-			fmt.Fprintf(&values, "($%d,$%d,$%d::%s)",
-				base+1, base+2, base+3, gen.halfvecType)
-			args = append(args, r.docKey, r.chunkIndex, r.embedding)
+			base := i * 4
+			fmt.Fprintf(&values, "($%d,$%d,$%d::%s,$%d)",
+				base+1, base+2, base+3, gen.halfvecType, base+4)
+			args = append(args, r.docKey, r.chunkIndex, r.embedding, r.contentHash)
 		}
 		stmt := fmt.Sprintf(
-			`INSERT INTO %s (doc_key, chunk_index, embedding) VALUES %s`,
+			`INSERT INTO %s (doc_key, chunk_index, embedding, content_hash) VALUES %s`,
 			table, values.String())
 		if _, err := tx.ExecContext(ctx, stmt, args...); err != nil {
 			return 0, fmt.Errorf("inserting chunks for session %s: %w", sessionID, err)

@@ -408,6 +408,12 @@ func (b *httpBackend) Messages(
 	if len(f.Roles) > 0 {
 		q.Roles = new(strings.Join(f.Roles, ","))
 	}
+	if f.ExpectedRevision != "" {
+		q.ExpectedRevision = new(f.ExpectedRevision)
+	}
+	if f.EvidenceSource != "" {
+		q.EvidenceSource = new(f.EvidenceSource)
+	}
 	api, err := b.apiClient(b.client)
 	if err != nil {
 		return nil, err
@@ -419,7 +425,32 @@ func (b *httpBackend) Messages(
 	out := response.JSON200
 	err = serviceResponseError(response.HTTPResponse, response.Body, err)
 	if err != nil {
+		if response.HTTPResponse != nil && response.StatusCode == http.StatusConflict &&
+			strings.Contains(string(response.Body), "source_changed") {
+			return nil, service.ErrSourceChanged
+		}
+		if response.HTTPResponse != nil && response.StatusCode == http.StatusNotImplemented {
+			return nil, service.ErrRevisionBoundReadUnavailable
+		}
 		return nil, err
+	}
+	// A bound read must get a bound response: an older server that ignores
+	// the revision/evidence query parameters would otherwise return content
+	// of unknown currency with no way to detect it. Fail closed on a missing
+	// binding and on a binding that contradicts the request.
+	if f.ExpectedRevision != "" || f.EvidenceSource != "" {
+		if out == nil || out.TranscriptRevision == "" ||
+			(f.EvidenceSource != "" && out.EvidenceSource == "") {
+			return nil, service.ErrRevisionBoundReadUnavailable
+		}
+		if f.ExpectedRevision != "" && out.TranscriptRevision != f.ExpectedRevision {
+			return nil, fmt.Errorf(
+				"%w: transcript revision does not match", service.ErrSourceChanged)
+		}
+		if f.EvidenceSource != "" && out.EvidenceSource != f.EvidenceSource {
+			return nil, fmt.Errorf(
+				"%w: evidence source does not match", service.ErrSourceChanged)
+		}
 	}
 	return out, nil
 }

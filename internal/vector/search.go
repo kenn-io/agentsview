@@ -32,6 +32,11 @@ type Hit struct {
 	Subordinate  bool
 	Score        float32
 	Snippet      string
+	// ContentHash is the mirror's content_hash for the indexed document
+	// (db.UnitContentHash of the document content the hit was ranked
+	// from). Consumers compare it against a recompute over current archive
+	// content to detect a hit ranked from stale content.
+	ContentHash string
 }
 
 // ErrNoActiveGeneration is returned by Search when the index has no active
@@ -190,6 +195,7 @@ type mirrorDoc struct {
 	subordinate bool
 	offsets     []db.UnitOffset
 	content     string
+	contentHash string
 }
 
 // hydrateHits maps kit's doc-key-level hits to agentsview Hits: it looks up
@@ -239,6 +245,7 @@ func (ix *Index) resolveHit(h kitvec.Hit[string], doc mirrorDoc) Hit {
 		Subordinate:  doc.subordinate,
 		Score:        h.Score,
 		Snippet:      ix.snippet(doc.content, h.ChunkIndex),
+		ContentHash:  doc.contentHash,
 	}
 	if len(doc.offsets) > 0 {
 		hit.Ordinal, hit.Snippet = ix.resolveRunHit(doc.content, doc.offsets, h.ChunkIndex)
@@ -359,7 +366,8 @@ func (ix *Index) lookupMirrorDocs(ctx context.Context, docKeys []string) (map[st
 	err := chunkKeys(docKeys, func(chunk []string) error {
 		placeholders, args := inPlaceholders(chunk)
 		rows, err := ix.db.QueryContext(ctx, `
-SELECT doc_key, session_id, ordinal, ordinal_end, subordinate, offsets, content
+SELECT doc_key, session_id, ordinal, ordinal_end, subordinate, offsets, content,
+       content_hash
   FROM `+ix.spec.DocsTable+`
  WHERE ordinal >= 0 AND doc_key IN `+placeholders, args...)
 		if err != nil {
@@ -370,7 +378,8 @@ SELECT doc_key, session_id, ordinal, ordinal_end, subordinate, offsets, content
 			var key, offsets string
 			var doc mirrorDoc
 			if err := rows.Scan(&key, &doc.sessionID, &doc.ordinal,
-				&doc.ordinalEnd, &doc.subordinate, &offsets, &doc.content); err != nil {
+				&doc.ordinalEnd, &doc.subordinate, &offsets, &doc.content,
+				&doc.contentHash); err != nil {
 				rows.Close()
 				return fmt.Errorf("scan search hit document: %w", err)
 			}
