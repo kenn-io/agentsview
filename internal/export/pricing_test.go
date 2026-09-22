@@ -139,6 +139,48 @@ func TestPricingResolverUsesGenAIOnlyBaseForEffortTierSuffix(t *testing.T) {
 	assert.Equal(t, money.MustParseDollars("8"), lookup.Rates.OutputPerMTok)
 }
 
+func TestPricingResolverGenAIProviderQualifiedAliases(t *testing.T) {
+	genAI, err := pricingpkg.ParseGenAIPrices([]byte(`[
+		{
+			"id": "anthropic",
+			"name": "Anthropic",
+			"api_pattern": "https://example.invalid",
+			"model_match": {"contains": "claude"},
+			"models": [
+				{"id": "claude-x", "match": {"ends_with": "claude-x"},
+				 "prices": {"input_mtok": 3}},
+				{"id": "claude-y", "match": {"ends_with": "claude-y"},
+				 "prices": {"input_mtok": 5}}
+			]
+		}
+	]`))
+	require.NoError(t, err)
+	resolver := NewPricingResolver([]EffectivePricingRow{{
+		GenAI: genAI, GenAISource: PricingRowSourceEmbedded,
+	}})
+	at := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name       string
+		reported   string
+		canonical  string
+		wantPriced string
+		wantInput  string
+	}{
+		{"known provider prefix", "anthropic/claude-x", "", "anthropic/claude-x", "3"},
+		{"canonical before reported", "claude-y", "anthropic/claude-x", "anthropic/claude-x", "3"},
+		{"unknown provider prefix matches full name", "proxy/claude-y", "", "proxy/claude-y", "5"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pricedModel, lookup := resolver.ResolveAt(tt.reported, tt.canonical, at)
+			require.True(t, lookup.OK)
+			assert.Equal(t, tt.wantPriced, pricedModel)
+			assert.Equal(t, money.MustParseDollars(tt.wantInput), lookup.Rates.InputPerMTok)
+		})
+	}
+}
+
 func TestPricingResolverBuildBlockUsesRecordedLookup(t *testing.T) {
 	updatedAt := time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC)
 	resolver := NewPricingResolver([]EffectivePricingRow{{
