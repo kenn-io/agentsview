@@ -230,6 +230,9 @@ The latest published release is
   every file they touch, one tool call per file. Startup reparses available
   Codex sessions; sessions whose sources are gone keep their archived tool
   calls.
+- Clicking the selected value in the session filter's minimum-prompts row clears
+  the filter instead of leaving it set, so it can be turned off without
+  clearing the other filters.
 
 **Acknowledgements**
 
