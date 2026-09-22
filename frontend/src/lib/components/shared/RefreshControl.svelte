@@ -91,7 +91,11 @@
   // Time zero on the axis is the first request going out, not the refresh
   // being asked for: the sub-millisecond setup before the first send would
   // otherwise nudge every bar off the zero line. The axis runs to the last
-  // step's end, or to the recorded total if that is later.
+  // step's end, or to the recorded total if that is later. A running query
+  // gets at least a second of axis: in its first milliseconds the axis
+  // would otherwise be as short as the bars, drawing them full width and
+  // spreading sub-millisecond start gaps across the track.
+  const LIVE_MIN_AXIS_MS = 1000;
   const originMs = $derived(
     steps.length === 0 ? 0 : Math.min(...steps.map((step) => step.startMs)),
   );
@@ -99,7 +103,7 @@
     Math.max(
       (durationMs ?? 0) - originMs,
       ...steps.map((step) => step.startMs + step.durationMs - originMs),
-      1,
+      elapsedMs === null ? 1 : LIVE_MIN_AXIS_MS,
     ),
   );
   // Requests fired in one dispatch burst leave a millisecond or two apart,

@@ -280,6 +280,47 @@ describe("RefreshControl", () => {
     }
   });
 
+  it("starts running bars empty at the zero line when a query begins", async () => {
+    vi.useFakeTimers({ toFake: ["performance", "setInterval", "clearInterval"] });
+    try {
+      const live = new LiveQuery();
+      const component = mount(RefreshControl, {
+        target: document.body,
+        props: {
+          lastUpdatedAt: Date.now(),
+          queryDurationMs: 5000,
+          querySteps: [{ name: "summary", startMs: 0, durationMs: 5000 }],
+          liveQuery: live,
+          onRefresh: vi.fn(),
+        },
+      });
+      await tick();
+      document
+        .querySelector(".kit-tooltip-trigger")!
+        .dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+      await tick();
+
+      // Requests from one dispatch leave a fraction of a millisecond apart,
+      // and the first tick lands just after they go out.
+      const started = performance.now();
+      live.begin(started);
+      live.start("summary", started + 0.1);
+      live.start("tools", started + 0.4);
+      vi.advanceTimersByTime(100);
+      await tick();
+
+      const bars = Array.from(
+        document.querySelectorAll<HTMLElement>('[role="tooltip"] .query-steps__bar'),
+      ).map((bar) => `${bar.style.left} ${bar.style.width}`);
+      expect(bars).toEqual(["0% 9.99%", "0% 9.96%"]);
+
+      void unmount(component);
+    } finally {
+      vi.useRealTimers();
+      document.body.innerHTML = "";
+    }
+  });
+
   it("appends the running duration to a progress status", async () => {
     vi.useFakeTimers({ toFake: ["performance", "setInterval", "clearInterval"] });
     try {
