@@ -339,6 +339,22 @@ func TestVectorPushEvictionKeepsOtherArchiveVectors(t *testing.T) {
 		"the other archive's chunk survives the former owner's eviction")
 	assert.Equal(t, 1, chtest.Count(t, conn, "vector_documents", "session_id = ?", fixtureBetaID),
 		"documents stay while any generation still holds chunks for the session")
+
+	// An eviction deletes only through the chunk version it observed with
+	// the owner check, so chunks another archive's push inserts between
+	// that read and the delete survive even though its state row has not
+	// landed yet.
+	otherOwners, newest, err := s.vectorEvictionBound(ctx, vectorFixtureFP, fixtureAlphaID)
+	require.NoError(t, err)
+	require.False(t, otherOwners)
+	require.NotZero(t, newest)
+	require.NoError(t, insertRows(ctx, conn, "vector_chunks", [][]any{{
+		vectorFixtureFP, "alpha-concurrent", int64(0), fixtureAlphaID, vecAlpha0a, newest + 1,
+	}}))
+	require.NoError(t, s.deleteVectorChunksThrough(ctx, vectorFixtureFP, fixtureAlphaID, newest))
+	assert.Equal(t, 0, chtest.Count(t, conn, "vector_chunks", "session_id = ? AND push_version <= ?", fixtureAlphaID, newest))
+	assert.Equal(t, 1, chtest.Count(t, conn, "vector_chunks", "doc_key = ?", "alpha-concurrent"),
+		"chunks newer than the observed version survive the bounded delete")
 }
 
 // TestVectorPushUsageOnlyClearsArchiveVectors pins the archive policy: once
@@ -363,22 +379,24 @@ func TestVectorPushUsageOnlyClearsArchiveVectors(t *testing.T) {
 		"other-archive", vectorFixtureFP, fixtureBetaID, "beta-other-v1", version,
 	}}))
 
-	// A session push interrupted after its chunks landed but before its
-	// state row: the sweep must still find it through the session's archive.
+	// A push under a second generation that stopped after its chunks landed
+	// but before its state row: nothing but the session's archive leads back
+	// to those chunks, and alpha's ordinary eviction under the fixture
+	// generation does not touch them.
+	const otherGen = "fp-second-gen"
+	require.NoError(t, insertRows(ctx, conn, "vector_chunks", [][]any{{
+		otherGen, "alpha-d0", int64(0), fixtureAlphaID, vecAlpha0a, version,
+	}}))
+	require.Equal(t, 0, chtest.Count(t, conn, "vector_push_state", "generation_fingerprint = ?", otherGen))
+	// A push that stopped right after inserting documents, on a session with
+	// no chunks and no state row in any generation: only transcript text is
+	// left, and only the archive-wide document sweep can remove it.
 	require.NoError(t, insertRows(ctx, conn, "vector_documents", [][]any{{
-		"child-orphan", fixtureChildID, "child-uuid", int64(0), int64(0), false,
+		"child-orphan-doc", fixtureChildID, "child-uuid", int64(0), int64(0), false,
 		"[]", "child first", "h-c0", version,
 	}}))
-	require.NoError(t, insertRows(ctx, conn, "vector_chunks", [][]any{{
-		vectorFixtureFP, "child-orphan", int64(0), fixtureChildID, vecChild0, version,
-	}}))
+	require.Equal(t, 0, chtest.Count(t, conn, "vector_chunks", "session_id = ?", fixtureChildID))
 	require.Equal(t, 0, chtest.Count(t, conn, "vector_push_state", "session_id = ?", fixtureChildID))
-	// A push that stopped right after inserting documents: no chunks, no
-	// state row, only transcript text that the sweep must still remove.
-	require.NoError(t, insertRows(ctx, conn, "vector_documents", [][]any{{
-		"alpha-orphan-doc", fixtureAlphaID, "alpha-uuid", int64(9), int64(9), false,
-		"[]", "alpha stranded", "h-a9", version,
-	}}))
 
 	local.SetArchiveContent(config.ArchiveContentUsage)
 	for _, detach := range []bool{false, true} {
@@ -391,10 +409,9 @@ func TestVectorPushUsageOnlyClearsArchiveVectors(t *testing.T) {
 		assert.Equal(t, 0, chtest.Count(t, conn, "vector_push_state", "source_archive_id = ?", s.archiveID))
 		assert.Equal(t, 0, chtest.Count(t, conn, "vector_chunks", "session_id = ?", fixtureAlphaID))
 		assert.Equal(t, 0, chtest.Count(t, conn, "vector_documents", "session_id = ?", fixtureAlphaID))
-		assert.Equal(t, 0, chtest.Count(t, conn, "vector_chunks", "session_id = ?", fixtureChildID),
+		assert.Equal(t, 0, chtest.Count(t, conn, "vector_chunks", "generation_fingerprint = ?", otherGen),
 			"chunks with no state row are swept through the session's archive")
-		assert.Equal(t, 0, chtest.Count(t, conn, "vector_documents", "session_id = ?", fixtureChildID))
-		assert.Equal(t, 0, chtest.Count(t, conn, "vector_documents", "doc_key = ?", "alpha-orphan-doc"),
+		assert.Equal(t, 0, chtest.Count(t, conn, "vector_documents", "session_id = ?", fixtureChildID),
 			"a document with neither chunks nor a state row is swept by archive")
 		assert.Equal(t, 1, chtest.Count(t, conn, "vector_chunks", "doc_key = ?", "beta-other"),
 			"the other archive's beta chunk survives")

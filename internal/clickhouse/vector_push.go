@@ -513,18 +513,13 @@ func (s *Sync) pushVectorSession(
 // last so a failure midway leaves the session discoverable for the next
 // push to finish.
 func (s *Sync) evictVectorSession(ctx context.Context, fingerprint, sessionID string) error {
-	otherOwners, err := s.rowExists(ctx, "vector owners for "+sessionID, `
-		SELECT count() FROM vector_push_state
-		WHERE generation_fingerprint = ? AND session_id = ? AND source_archive_id <> ?`,
-		fingerprint, sessionID, s.archiveID)
+	otherOwners, newest, err := s.vectorEvictionBound(ctx, fingerprint, sessionID)
 	if err != nil {
 		return err
 	}
 	if !otherOwners {
-		if _, err := s.conn.ExecContext(ctx, `
-			DELETE FROM vector_chunks WHERE session_id = ? AND generation_fingerprint = ?`,
-			sessionID, fingerprint); err != nil {
-			return fmt.Errorf("evicting clickhouse vector chunks for %s: %w", sessionID, err)
+		if err := s.deleteVectorChunksThrough(ctx, fingerprint, sessionID, newest); err != nil {
+			return err
 		}
 		if _, err := s.conn.ExecContext(ctx, `
 			DELETE FROM vector_documents
@@ -539,6 +534,38 @@ func (s *Sync) evictVectorSession(ctx context.Context, fingerprint, sessionID st
 		WHERE source_archive_id = ? AND generation_fingerprint = ? AND session_id = ?`,
 		s.archiveID, fingerprint, sessionID); err != nil {
 		return fmt.Errorf("evicting clickhouse vector push state for %s: %w", sessionID, err)
+	}
+	return nil
+}
+
+// vectorEvictionBound reads, in one statement, whether another archive owns
+// the pair and the newest chunk version the pair holds right now. A
+// concurrent push from another archive inserts its chunks before its state
+// row, so an eviction that saw no other owner must still leave chunks that
+// landed after this read alone: it deletes only through the version
+// observed here.
+func (s *Sync) vectorEvictionBound(ctx context.Context, fingerprint, sessionID string) (otherOwners bool, newest uint64, err error) {
+	var owners uint64
+	if err := s.conn.QueryRowContext(ctx, `
+		SELECT
+			(SELECT count() FROM vector_push_state
+			  WHERE generation_fingerprint = ? AND session_id = ? AND source_archive_id <> ?),
+			(SELECT max(push_version) FROM vector_chunks
+			  WHERE session_id = ? AND generation_fingerprint = ?)`,
+		fingerprint, sessionID, s.archiveID, sessionID, fingerprint,
+	).Scan(&owners, &newest); err != nil {
+		return false, 0, fmt.Errorf("reading clickhouse vector owners for %s: %w", sessionID, err)
+	}
+	return owners > 0, newest, nil
+}
+
+// deleteVectorChunksThrough removes the pair's chunks at or below newest.
+func (s *Sync) deleteVectorChunksThrough(ctx context.Context, fingerprint, sessionID string, newest uint64) error {
+	if _, err := s.conn.ExecContext(ctx, `
+		DELETE FROM vector_chunks
+		WHERE session_id = ? AND generation_fingerprint = ? AND push_version <= ?`,
+		sessionID, fingerprint, newest); err != nil {
+		return fmt.Errorf("evicting clickhouse vector chunks for %s: %w", sessionID, err)
 	}
 	return nil
 }
