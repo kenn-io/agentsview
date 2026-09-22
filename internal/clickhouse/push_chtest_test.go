@@ -134,6 +134,47 @@ func TestPushReplacesChangedSessionsWithoutLeavingOldRows(t *testing.T) {
 	assert.Equal(t, 3, chtest.Count(t, conn, "sessions", ""))
 }
 
+func TestPushRemovesUsageForReplacedMessages(t *testing.T) {
+	ctx := t.Context()
+	local, target := seedFixture(t)
+	s := newTestSync(t, local, target, storage.PusherOptions{})
+	first, err := s.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Zero(t, first.Errors)
+	conn := chtest.Open(t, target.URL, target.Database)
+	require.Equal(t, 2, chtest.Count(t, conn, "usage_messages", "session_id = ?", fixtureAlphaID))
+
+	session, err := local.GetSessionFull(ctx, fixtureAlphaID)
+	require.NoError(t, err)
+	messages, err := local.GetAllMessages(ctx, fixtureAlphaID)
+	require.NoError(t, err)
+	for _, remaining := range []int{1, 0} {
+		session.MessageCount = remaining
+		_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+			Session: *session, Messages: messages[:remaining],
+			DataVersion: 1, ReplaceMessages: true,
+		}})
+		require.NoError(t, err)
+		beforePush, err := local.GetAllMessages(ctx, fixtureAlphaID)
+		require.NoError(t, err)
+		result, err := s.Push(ctx, true, nil)
+		require.NoError(t, err)
+		require.Zero(t, result.Errors)
+		assert.Equal(t, remaining, chtest.Count(t, conn, "usage_messages", "session_id = ?", fixtureAlphaID))
+		assert.Equal(t, remaining, chtest.Count(t, conn, "messages", "session_id = ?", fixtureAlphaID))
+		current, err := local.GetAllMessages(ctx, fixtureAlphaID)
+		require.NoError(t, err)
+		assert.Equal(t, beforePush, current, "pushing preserves the source messages")
+		assert.Equal(t, 2, chtest.Count(t, conn, "usage_messages", "session_id != ?", fixtureAlphaID))
+		var oldRows int
+		require.NoError(t, conn.QueryRowContext(ctx,
+			`SELECT count() FROM usage_messages m JOIN sessions s ON s.id = m.session_id
+			 WHERE m.session_id = ? AND m.push_version < s.push_version`,
+			fixtureAlphaID).Scan(&oldRows))
+		assert.Zero(t, oldRows)
+	}
+}
+
 func TestPushRemovesHardDeletedSessions(t *testing.T) {
 	ctx := context.Background()
 	local, target := seedFixture(t)
