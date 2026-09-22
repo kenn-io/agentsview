@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json/v2"
 	"net/http"
@@ -185,4 +186,58 @@ func TestGetMessages_BodyCursorContinuesUnderIssuingRoles(t *testing.T) {
 		parts = append(parts, out.Messages[0].Content)
 	}
 	assert.Equal(t, "remainder text"[4:], strings.Join(parts, ""))
+}
+
+// fixedMessageBackend answers Messages with one prepared page and panics
+// on every other call. Continuation tests use it to show the cursor check
+// looks at the returned bindings, not only at the request.
+type fixedMessageBackend struct {
+	service.SessionService
+	list *service.MessageList
+}
+
+func (b fixedMessageBackend) Messages(
+	context.Context, string, service.MessageFilter,
+) (*service.MessageList, error) {
+	return b.list, nil
+}
+
+func TestGetMessages_BodyCursorRejectsMismatchedResponse(t *testing.T) {
+	cursor := encodeMessageBodyCursor(messageBodyCursor{
+		Version: 2, EvidenceSource: "archive-a", SessionID: "s",
+		Revision: "4", Ordinal: 0, Offset: 4,
+	})
+	message := db.Message{
+		SessionID: "s", Ordinal: 0, Role: "user", Content: "abcdefghij",
+	}
+	cases := []struct {
+		name     string
+		revision string
+		source   string
+		wantErr  bool
+	}{
+		{name: "different revision", revision: "9", source: "archive-a", wantErr: true},
+		{name: "different archive", revision: "4", source: "archive-b", wantErr: true},
+		{name: "matching bindings", revision: "4", source: "archive-a"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := &toolset{svc: fixedMessageBackend{list: &service.MessageList{
+				Messages:           []db.Message{message},
+				TranscriptRevision: tc.revision,
+				EvidenceSource:     tc.source,
+			}}}
+			_, out, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+				SessionID: "s", BodyCursor: cursor, MaxCharsPerMessage: 4,
+			})
+			if tc.wantErr {
+				require.ErrorIs(t, err, service.ErrSourceChanged)
+				assert.Empty(t, out.Messages)
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, out.Messages, 1)
+			assert.Equal(t, "efgh", out.Messages[0].Content)
+		})
+	}
 }
