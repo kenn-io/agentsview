@@ -539,20 +539,26 @@ func (s *Sync) evictVectorSession(ctx context.Context, fingerprint, sessionID st
 }
 
 // vectorEvictionBound reads, in one statement, whether another archive owns
-// the pair and the newest chunk version the pair holds right now. A
-// concurrent push from another archive inserts its chunks before its state
-// row, so an eviction that saw no other owner must still leave chunks that
-// landed after this read alone: it deletes only through the version
-// observed here.
+// the pair and the newest chunk version the pair holds right now.
+//
+// Another archive owns the pair when it has recorded a state row for it, or
+// when the session now resides in that archive in the mirror. The second
+// signal closes the handoff window: a push mirrors its session rows before
+// its vector phase and writes each session's state row only after its
+// chunks, so a session that another archive has claimed may already carry
+// that archive's chunks with no state row to protect them. The version
+// bound covers the remaining gap between this read and the delete: chunks
+// inserted after it carry a newer version and survive.
 func (s *Sync) vectorEvictionBound(ctx context.Context, fingerprint, sessionID string) (otherOwners bool, newest uint64, err error) {
 	var owners uint64
 	if err := s.conn.QueryRowContext(ctx, `
 		SELECT
 			(SELECT count() FROM vector_push_state
-			  WHERE generation_fingerprint = ? AND session_id = ? AND source_archive_id <> ?),
+			  WHERE generation_fingerprint = ? AND session_id = ? AND source_archive_id <> ?)
+			+ (SELECT count() FROM sessions WHERE id = ? AND source_archive_id <> ?),
 			(SELECT max(push_version) FROM vector_chunks
 			  WHERE session_id = ? AND generation_fingerprint = ?)`,
-		fingerprint, sessionID, s.archiveID, sessionID, fingerprint,
+		fingerprint, sessionID, s.archiveID, sessionID, s.archiveID, sessionID, fingerprint,
 	).Scan(&owners, &newest); err != nil {
 		return false, 0, fmt.Errorf("reading clickhouse vector owners for %s: %w", sessionID, err)
 	}

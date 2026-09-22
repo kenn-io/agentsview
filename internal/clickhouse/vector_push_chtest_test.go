@@ -244,6 +244,46 @@ func TestVectorPushFollowsMirrorResidency(t *testing.T) {
 	assert.Equal(t, 3, chtest.Count(t, conn, "vector_chunks", "session_id = ?", fixtureAlphaID))
 }
 
+// TestVectorPushEvictionKeepsNewResidentChunks pins the handoff window: a
+// push mirrors its session rows before its vector phase and writes a
+// session's state row only after its chunks, so the archive that now holds
+// a session may already have chunks in place with no state row yet. The
+// former owner's eviction must treat the mirrored residency as ownership
+// and leave those chunks alone.
+func TestVectorPushEvictionKeepsNewResidentChunks(t *testing.T) {
+	ctx := context.Background()
+	local, target := seedFixture(t)
+	source := newFixtureVectorSource()
+	s := newTestSync(t, local, target, storage.PusherOptions{VectorSource: source})
+	conn := chtest.Open(t, target.URL, target.Database)
+	_, err := s.Push(ctx, false, nil)
+	require.NoError(t, err)
+
+	// The other archive has claimed beta in the mirror and pushed its chunks,
+	// but its state row has not landed yet.
+	version := newPushVersion()
+	_, err = conn.ExecContext(ctx,
+		`INSERT INTO sessions (id, project, source_archive_id, push_version) VALUES (?, ?, ?, ?)`,
+		fixtureBetaID, "beta", "other-archive", version)
+	require.NoError(t, err)
+	require.NoError(t, insertRows(ctx, conn, "vector_chunks", [][]any{{
+		vectorFixtureFP, "beta-other", int64(0), fixtureBetaID, vecBeta0, version,
+	}}))
+	require.Equal(t, 0, chtest.Count(t, conn, "vector_push_state",
+		"source_archive_id = 'other-archive' AND session_id = ?", fixtureBetaID))
+
+	delete(source.hashes, fixtureBetaID)
+	delete(source.docs, fixtureBetaID)
+	res, err := s.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Vectors.SessionsEvicted)
+	assert.Equal(t, 0, chtest.Count(t, conn, "vector_push_state",
+		"source_archive_id = ? AND session_id = ?", s.archiveID, fixtureBetaID))
+	assert.Equal(t, 1, chtest.Count(t, conn, "vector_chunks", "doc_key = ?", "beta-other"),
+		"chunks of the archive that now holds the session survive the former owner's eviction")
+	assert.Equal(t, 1, chtest.Count(t, conn, "vector_documents", "session_id = ?", fixtureBetaID))
+}
+
 // TestVectorPushScopedPromotesUntilArchiveCompletes pins the watch-mode
 // contract: a change-scoped push reconciles generation-wide until this
 // archive has recorded a clean generation-wide pass, then reads only its
