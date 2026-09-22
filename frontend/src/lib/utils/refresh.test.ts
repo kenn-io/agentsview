@@ -138,7 +138,10 @@ describe("query timeline helpers", () => {
   it.each([
     { axisMs: 154, ticks: [0, 50, 100, 150] },
     { axisMs: 2000, ticks: [0, 500, 1000, 1500, 2000] },
-    { axisMs: 9, ticks: [0, 2, 4, 6, 8] },
+    // A running query's one-second minimum axis: "200 ms" labels every
+    // fifth of the track would run into each other.
+    { axisMs: 1000, ticks: [0, 500, 1000] },
+    { axisMs: 9, ticks: [0, 5] },
     // Never finer than a millisecond: labels are whole milliseconds.
     { axisMs: 2, ticks: [0, 1, 2] },
     { axisMs: 0, ticks: [0] },

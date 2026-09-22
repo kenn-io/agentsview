@@ -135,12 +135,14 @@ export function formatQueryPhaseLabel(phase: QueryPhase): string {
 
 /**
  * Tick positions for a time axis spanning `axisMs`: the smallest 1, 2, or 5
- * times a power of ten step that fits in at most five intervals, from zero.
- * Never finer than a millisecond, since labels are whole milliseconds.
+ * times a power of ten step that fits in at most four intervals, from zero.
+ * Four keeps labels such as "400 ms" from running together on the 200 px
+ * track. Never finer than a millisecond, since labels are whole
+ * milliseconds.
  */
 export function queryAxisTicks(axisMs: number): number[] {
   if (!(axisMs > 0)) return [0];
-  const raw = Math.max(axisMs / 5, 1);
+  const raw = Math.max(axisMs / 4, 1);
   const magnitude = 10 ** Math.floor(Math.log10(raw));
   const step = [1, 2, 5, 10].map((m) => m * magnitude).find((candidate) => candidate >= raw)!;
   const ticks: number[] = [];
