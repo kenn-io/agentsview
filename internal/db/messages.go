@@ -716,8 +716,9 @@ func (db *DB) getMessagesLinearWithRevision(
 // The three queries run inside one read transaction so they see one
 // snapshot of the archive: a sync that replaces the session's messages
 // while the window is being read either lands entirely before the window
-// or entirely after it, and the revision reported through
-// ObservedRevision describes every row in the window.
+// or entirely after it. The revision reported through ObservedRevision is
+// read in that same snapshot, so it describes every row in the window
+// even when the anchor ordinal itself has no row.
 func (db *DB) getMessagesAroundAnchor(
 	ctx context.Context, sessionID string, w MessageWindow,
 ) ([]Message, error) {
@@ -744,24 +745,23 @@ func (db *DB) getMessagesAroundAnchor(
 	}
 	slices.Reverse(before)
 
-	var anchorMsgs []Message
-	if w.ObservedRevision == nil {
-		anchorQuery := fmt.Sprintf(`
+	anchorQuery := fmt.Sprintf(`
 		SELECT %s FROM messages WHERE session_id = ? AND ordinal = ?`,
-			selectMessageCols)
-		anchorMsgs, err = queryMessageRows(ctx, tx, anchorQuery, sessionID, anchor)
-	} else {
-		anchorQuery := fmt.Sprintf(`
-		SELECT (SELECT COALESCE(transcript_revision,'') FROM sessions WHERE id = ?), %s
-		FROM messages WHERE session_id = ? AND ordinal = ?`,
-			selectMessageCols)
-		var revision string
-		revision, anchorMsgs, err = queryMessageRowsWithRevision(
-			ctx, tx, anchorQuery, sessionID, sessionID, anchor)
-		*w.ObservedRevision = revision
-	}
+		selectMessageCols)
+	anchorMsgs, err := queryMessageRows(ctx, tx, anchorQuery, sessionID, anchor)
 	if err != nil {
 		return nil, fmt.Errorf("querying anchor message: %w", err)
+	}
+	if w.ObservedRevision != nil {
+		var revision string
+		err := tx.QueryRowContext(ctx,
+			`SELECT COALESCE(transcript_revision,'') FROM sessions WHERE id = ?`,
+			sessionID,
+		).Scan(&revision)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("querying around-window revision: %w", err)
+		}
+		*w.ObservedRevision = revision
 	}
 
 	afterQuery := fmt.Sprintf(`

@@ -186,11 +186,21 @@ func TestGetMessagesWindow_AroundReportsRevisionWithRows(t *testing.T) {
 	assert.Equal(t, *sess.TranscriptRevision, revision,
 		"around window must report the session revision it was read at")
 
+	pastEnd := 12
+	revision = ""
+	msgs, err = d.GetMessagesWindow(ctx, "sRev", MessageWindow{
+		Around: &pastEnd, Before: 2, After: 2, ObservedRevision: &revision,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []int{10, 11}, ordinalsOf(msgs))
+	assert.Equal(t, *sess.TranscriptRevision, revision,
+		"neighbour rows without an anchor row still report their revision")
+
 	revision = ""
 	msgs, err = d.GetMessagesWindow(ctx, "missing", MessageWindow{
 		Around: &anchor, Before: 2, After: 2, ObservedRevision: &revision,
 	})
 	require.NoError(t, err)
 	assert.Empty(t, msgs)
-	assert.Empty(t, revision, "no rows means no revision to describe them")
+	assert.Empty(t, revision, "a missing session has no revision")
 }
