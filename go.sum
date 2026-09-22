@@ -352,6 +352,8 @@ go.kenn.io/kit v0.25.1-0.20260918202731-04a175847323 h1:MZX6PReFoO7BG5gVDlb6ectw
 go.kenn.io/kit v0.25.1-0.20260918202731-04a175847323/go.mod h1:JJN5uFf93goZI0+NV5UrGDd3N0+yJ04a1uzyPlx+R+g=
 go.kenn.io/kit v0.25.1-0.20260921100640-57a958d99909 h1:/kidHXs7ef6bmASbJKT5gwvD4g5EoCtfizQ2K9WR4xY=
 go.kenn.io/kit v0.25.1-0.20260921100640-57a958d99909/go.mod h1:JJN5uFf93goZI0+NV5UrGDd3N0+yJ04a1uzyPlx+R+g=
+go.kenn.io/kit v0.25.1-0.20260922102214-70ff6b6032c5 h1:okCzYkfvutMq/T/Pj4cXSb9pxQQT7coi7kSNs8/cAo0=
+go.kenn.io/kit v0.25.1-0.20260922102214-70ff6b6032c5/go.mod h1:JJN5uFf93goZI0+NV5UrGDd3N0+yJ04a1uzyPlx+R+g=
 go.opentelemetry.io/auto/sdk v1.2.1 h1:jXsnJ4Lmnqd11kwkBV2LgLoFMZKizbCi5fNZ/ipaZ64=
 go.opentelemetry.io/auto/sdk v1.2.1/go.mod h1:KRTj+aOaElaLi+wW1kO/DZRXwkF4C5xPbEe3ZiIhN7Y=
 go.opentelemetry.io/contrib/bridges/prometheus v0.69.0 h1:saQoWg5845Q8TojpqeVStS7zGwVZ6bc5W2PJavTPiBM=
