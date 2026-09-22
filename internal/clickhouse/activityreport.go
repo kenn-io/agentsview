@@ -740,7 +740,9 @@ func (s *Store) scanActivityUsageRows(
 		return nil, fmt.Errorf("querying clickhouse activity usage: %w", err)
 	}
 	defer rows.Close()
-	var rowsAcc []clickSessionUsageOrderedRow
+	// Start non-nil: the caller indexes the result through a sorted index
+	// slice, and NilAway cannot see that an empty result yields no indexes.
+	rowsAcc := make([]clickSessionUsageOrderedRow, 0)
 	for rows.Next() {
 		var r clickActivityReportUsageRow
 		var ts, pricingTS any
