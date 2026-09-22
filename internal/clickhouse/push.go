@@ -381,6 +381,16 @@ func (s *Sync) deleteResidentSessions(ctx context.Context, ids []string, result 
 // not deletes, so removing a session has to clear them explicitly.
 var derivedSessionTables = []string{"usage_messages", "terminal_event_snapshots"}
 
+// replacedDerivedTables are the derived tables whose older versions a push
+// deletes together with dependentTables. usage_messages qualifies: its view
+// cannot drop the rows of ordinals a shorter republished session no longer
+// has, and readers accept any version at or above the session's, so the
+// new rows already count. terminal_event_snapshots stays out: the session
+// insert writes its row last and readers match its version exactly, so
+// deleting the older row here would hide the still-published session until
+// the new session row lands.
+var replacedDerivedTables = []string{"usage_messages"}
+
 // deleteMirrorSessions removes every row for the given sessions.
 func (s *Sync) deleteMirrorSessions(ctx context.Context, ids []string) error {
 	for batch := range idBatches(ids) {
@@ -594,8 +604,7 @@ func (s *Sync) pushSessionBatch(
 	}
 	for batchIDs := range idBatches(ids) {
 		placeholders, args := inArgs(batchIDs)
-		// The messages view cannot propagate deletes for removed ordinals.
-		for _, table := range slices.Concat(dependentTables, []string{"usage_messages"}) {
+		for _, table := range slices.Concat(dependentTables, replacedDerivedTables) {
 			if _, err := s.conn.ExecContext(ctx,
 				"DELETE FROM "+table+" WHERE session_id IN ("+placeholders+") AND push_version < ?",
 				append(args, version)...); err != nil {
