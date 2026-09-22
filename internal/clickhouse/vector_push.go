@@ -300,6 +300,17 @@ func (s *Sync) clearUsageOnlyVectors(ctx context.Context) error {
 			return err
 		}
 	}
+	// Documents outlive chunks when a push stopped after inserting them or
+	// an eviction stopped between its two deletes; neither state nor chunks
+	// lead back to them, so sweep them by the session's archive directly.
+	if _, err := s.conn.ExecContext(ctx, `
+		DELETE FROM vector_documents
+		WHERE session_id IN (SELECT id FROM sessions WHERE source_archive_id = ?)
+		  AND session_id NOT IN (SELECT session_id FROM vector_chunks)
+		  AND session_id NOT IN (SELECT session_id FROM vector_push_state WHERE source_archive_id <> ?)`,
+		s.archiveID, s.archiveID); err != nil {
+		return fmt.Errorf("clearing clickhouse orphaned vector documents: %w", err)
+	}
 	if _, err := s.conn.ExecContext(ctx, `
 		DELETE FROM vector_push_state WHERE source_archive_id = ? AND session_id = ?`,
 		s.archiveID, vectorCompleteMarker); err != nil {

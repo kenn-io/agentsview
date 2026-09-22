@@ -373,6 +373,12 @@ func TestVectorPushUsageOnlyClearsArchiveVectors(t *testing.T) {
 		vectorFixtureFP, "child-orphan", int64(0), fixtureChildID, vecChild0, version,
 	}}))
 	require.Equal(t, 0, chtest.Count(t, conn, "vector_push_state", "session_id = ?", fixtureChildID))
+	// A push that stopped right after inserting documents: no chunks, no
+	// state row, only transcript text that the sweep must still remove.
+	require.NoError(t, insertRows(ctx, conn, "vector_documents", [][]any{{
+		"alpha-orphan-doc", fixtureAlphaID, "alpha-uuid", int64(9), int64(9), false,
+		"[]", "alpha stranded", "h-a9", version,
+	}}))
 
 	local.SetArchiveContent(config.ArchiveContentUsage)
 	for _, detach := range []bool{false, true} {
@@ -388,6 +394,8 @@ func TestVectorPushUsageOnlyClearsArchiveVectors(t *testing.T) {
 		assert.Equal(t, 0, chtest.Count(t, conn, "vector_chunks", "session_id = ?", fixtureChildID),
 			"chunks with no state row are swept through the session's archive")
 		assert.Equal(t, 0, chtest.Count(t, conn, "vector_documents", "session_id = ?", fixtureChildID))
+		assert.Equal(t, 0, chtest.Count(t, conn, "vector_documents", "doc_key = ?", "alpha-orphan-doc"),
+			"a document with neither chunks nor a state row is swept by archive")
 		assert.Equal(t, 1, chtest.Count(t, conn, "vector_chunks", "doc_key = ?", "beta-other"),
 			"the other archive's beta chunk survives")
 		assert.Equal(t, 1, chtest.Count(t, conn, "vector_push_state", "source_archive_id = 'other-archive'"))
