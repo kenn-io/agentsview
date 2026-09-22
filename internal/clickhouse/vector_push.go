@@ -538,17 +538,12 @@ func (s *Sync) evictVectorSession(ctx context.Context, fingerprint, sessionID st
 	return nil
 }
 
-// vectorEvictionBound reads, in one statement, whether another archive owns
-// the pair and the newest chunk version the pair holds right now.
-//
-// Another archive owns the pair when it has recorded a state row for it, or
-// when the session now resides in that archive in the mirror. The second
-// signal closes the handoff window: a push mirrors its session rows before
-// its vector phase and writes each session's state row only after its
-// chunks, so a session that another archive has claimed may already carry
-// that archive's chunks with no state row to protect them. The version
-// bound covers the remaining gap between this read and the delete: chunks
-// inserted after it carry a newer version and survive.
+// vectorEvictionBound reads whether another archive owns the pair and the
+// newest chunk version it holds. Another archive owns the pair through its
+// state row or through the session now being mirrored under it (a push
+// mirrors sessions before chunks, and chunks before its state row). The
+// caller deletes only through the version seen here so later inserts
+// survive.
 func (s *Sync) vectorEvictionBound(ctx context.Context, fingerprint, sessionID string) (otherOwners bool, newest uint64, err error) {
 	var owners uint64
 	if err := s.conn.QueryRowContext(ctx, `

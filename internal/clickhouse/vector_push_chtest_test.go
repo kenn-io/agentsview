@@ -4,6 +4,7 @@ package clickhouse
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -244,46 +245,6 @@ func TestVectorPushFollowsMirrorResidency(t *testing.T) {
 	assert.Equal(t, 3, chtest.Count(t, conn, "vector_chunks", "session_id = ?", fixtureAlphaID))
 }
 
-// TestVectorPushEvictionKeepsNewResidentChunks pins the handoff window: a
-// push mirrors its session rows before its vector phase and writes a
-// session's state row only after its chunks, so the archive that now holds
-// a session may already have chunks in place with no state row yet. The
-// former owner's eviction must treat the mirrored residency as ownership
-// and leave those chunks alone.
-func TestVectorPushEvictionKeepsNewResidentChunks(t *testing.T) {
-	ctx := context.Background()
-	local, target := seedFixture(t)
-	source := newFixtureVectorSource()
-	s := newTestSync(t, local, target, storage.PusherOptions{VectorSource: source})
-	conn := chtest.Open(t, target.URL, target.Database)
-	_, err := s.Push(ctx, false, nil)
-	require.NoError(t, err)
-
-	// The other archive has claimed beta in the mirror and pushed its chunks,
-	// but its state row has not landed yet.
-	version := newPushVersion()
-	_, err = conn.ExecContext(ctx,
-		`INSERT INTO sessions (id, project, source_archive_id, push_version) VALUES (?, ?, ?, ?)`,
-		fixtureBetaID, "beta", "other-archive", version)
-	require.NoError(t, err)
-	require.NoError(t, insertRows(ctx, conn, "vector_chunks", [][]any{{
-		vectorFixtureFP, "beta-other", int64(0), fixtureBetaID, vecBeta0, version,
-	}}))
-	require.Equal(t, 0, chtest.Count(t, conn, "vector_push_state",
-		"source_archive_id = 'other-archive' AND session_id = ?", fixtureBetaID))
-
-	delete(source.hashes, fixtureBetaID)
-	delete(source.docs, fixtureBetaID)
-	res, err := s.Push(ctx, false, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, res.Vectors.SessionsEvicted)
-	assert.Equal(t, 0, chtest.Count(t, conn, "vector_push_state",
-		"source_archive_id = ? AND session_id = ?", s.archiveID, fixtureBetaID))
-	assert.Equal(t, 1, chtest.Count(t, conn, "vector_chunks", "doc_key = ?", "beta-other"),
-		"chunks of the archive that now holds the session survive the former owner's eviction")
-	assert.Equal(t, 1, chtest.Count(t, conn, "vector_documents", "session_id = ?", fixtureBetaID))
-}
-
 // TestVectorPushScopedPromotesUntilArchiveCompletes pins the watch-mode
 // contract: a change-scoped push reconciles generation-wide until this
 // archive has recorded a clean generation-wide pass, then reads only its
@@ -344,57 +305,72 @@ func TestVectorPushPromotedExportNotReady(t *testing.T) {
 	require.Len(t, source.genScopes, 2, "scoped export, then the promoted export that was not ready")
 }
 
-// TestVectorPushEvictionKeepsOtherArchiveVectors pins that reconciliation
-// by one archive only drops its own push state when another archive still
-// records the session for the generation, so an ownership handoff does not
-// let the former owner delete the new owner's vectors.
+// TestVectorPushEvictionKeepsOtherArchiveVectors pins the handoff: once
+// another archive owns a session, the former owner's eviction drops only
+// its own state row. Ownership is a state row, or the session mirrored
+// under the other archive with its chunks in place and no state row yet (a
+// push mirrors sessions before chunks, and chunks before its state row).
 func TestVectorPushEvictionKeepsOtherArchiveVectors(t *testing.T) {
-	ctx := context.Background()
-	local, target := seedFixture(t)
-	source := newFixtureVectorSource()
-	s := newTestSync(t, local, target, storage.PusherOptions{VectorSource: source})
-	conn := chtest.Open(t, target.URL, target.Database)
-	_, err := s.Push(ctx, false, nil)
-	require.NoError(t, err)
+	cases := []struct {
+		name  string
+		claim func(t *testing.T, conn *sql.DB, version uint64)
+	}{
+		{"state row", func(t *testing.T, conn *sql.DB, version uint64) {
+			require.NoError(t, insertRows(t.Context(), conn, "vector_push_state", [][]any{{
+				"other-archive", vectorFixtureFP, fixtureBetaID, "beta-other-v1", version,
+			}}))
+		}},
+		{"mirrored residency", func(t *testing.T, conn *sql.DB, version uint64) {
+			_, err := conn.ExecContext(t.Context(),
+				`INSERT INTO sessions (id, project, source_archive_id, push_version) VALUES (?, ?, ?, ?)`,
+				fixtureBetaID, "beta", "other-archive", version)
+			require.NoError(t, err)
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			local, target := seedFixture(t)
+			source := newFixtureVectorSource()
+			s := newTestSync(t, local, target, storage.PusherOptions{VectorSource: source})
+			conn := chtest.Open(t, target.URL, target.Database)
+			_, err := s.Push(ctx, false, nil)
+			require.NoError(t, err)
 
-	// Another archive now records beta for this generation with its own rows.
-	version := newPushVersion()
-	require.NoError(t, insertRows(ctx, conn, "vector_chunks", [][]any{{
-		vectorFixtureFP, "beta-other", int64(0), fixtureBetaID, vecBeta0, version,
-	}}))
-	require.NoError(t, insertRows(ctx, conn, "vector_push_state", [][]any{{
-		"other-archive", vectorFixtureFP, fixtureBetaID, "beta-other-v1", version,
-	}}))
+			version := newPushVersion()
+			require.NoError(t, insertRows(ctx, conn, "vector_chunks", [][]any{{
+				vectorFixtureFP, "beta-other", int64(0), fixtureBetaID, vecBeta0, version,
+			}}))
+			tc.claim(t, conn, version)
 
-	delete(source.hashes, fixtureBetaID)
-	delete(source.docs, fixtureBetaID)
-	res, err := s.Push(ctx, false, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, res.Vectors.SessionsEvicted)
-	assert.Equal(t, 0, chtest.Count(t, conn, "vector_push_state",
-		"source_archive_id = ? AND session_id = ?", s.archiveID, fixtureBetaID))
-	assert.Equal(t, 1, chtest.Count(t, conn, "vector_push_state",
-		"source_archive_id = 'other-archive' AND session_id = ?", fixtureBetaID))
-	assert.Equal(t, 1, chtest.Count(t, conn, "vector_chunks", "doc_key = ?", "beta-other"),
-		"the other archive's chunk survives the former owner's eviction")
-	assert.Equal(t, 1, chtest.Count(t, conn, "vector_documents", "session_id = ?", fixtureBetaID),
-		"documents stay while any generation still holds chunks for the session")
+			delete(source.hashes, fixtureBetaID)
+			delete(source.docs, fixtureBetaID)
+			res, err := s.Push(ctx, false, nil)
+			require.NoError(t, err)
+			assert.Equal(t, 1, res.Vectors.SessionsEvicted)
+			assert.Equal(t, 0, chtest.Count(t, conn, "vector_push_state",
+				"source_archive_id = ? AND session_id = ?", s.archiveID, fixtureBetaID))
+			assert.Equal(t, 1, chtest.Count(t, conn, "vector_chunks", "doc_key = ?", "beta-other"),
+				"the other archive's chunk survives the former owner's eviction")
+			assert.Equal(t, 1, chtest.Count(t, conn, "vector_documents", "session_id = ?", fixtureBetaID),
+				"documents stay while any generation still holds chunks for the session")
 
-	// An eviction deletes only through the chunk version it observed with
-	// the owner check, so chunks another archive's push inserts between
-	// that read and the delete survive even though its state row has not
-	// landed yet.
-	otherOwners, newest, err := s.vectorEvictionBound(ctx, vectorFixtureFP, fixtureAlphaID)
-	require.NoError(t, err)
-	require.False(t, otherOwners)
-	require.NotZero(t, newest)
-	require.NoError(t, insertRows(ctx, conn, "vector_chunks", [][]any{{
-		vectorFixtureFP, "alpha-concurrent", int64(0), fixtureAlphaID, vecAlpha0a, newest + 1,
-	}}))
-	require.NoError(t, s.deleteVectorChunksThrough(ctx, vectorFixtureFP, fixtureAlphaID, newest))
-	assert.Equal(t, 0, chtest.Count(t, conn, "vector_chunks", "session_id = ? AND push_version <= ?", fixtureAlphaID, newest))
-	assert.Equal(t, 1, chtest.Count(t, conn, "vector_chunks", "doc_key = ?", "alpha-concurrent"),
-		"chunks newer than the observed version survive the bounded delete")
+			// An eviction deletes only through the chunk version it observed
+			// with the owner check, so chunks inserted between that read and
+			// the delete survive.
+			otherOwners, newest, err := s.vectorEvictionBound(ctx, vectorFixtureFP, fixtureAlphaID)
+			require.NoError(t, err)
+			require.False(t, otherOwners)
+			require.NotZero(t, newest)
+			require.NoError(t, insertRows(ctx, conn, "vector_chunks", [][]any{{
+				vectorFixtureFP, "alpha-concurrent", int64(0), fixtureAlphaID, vecAlpha0a, newest + 1,
+			}}))
+			require.NoError(t, s.deleteVectorChunksThrough(ctx, vectorFixtureFP, fixtureAlphaID, newest))
+			assert.Equal(t, 0, chtest.Count(t, conn, "vector_chunks", "session_id = ? AND push_version <= ?", fixtureAlphaID, newest))
+			assert.Equal(t, 1, chtest.Count(t, conn, "vector_chunks", "doc_key = ?", "alpha-concurrent"),
+				"chunks newer than the observed version survive the bounded delete")
+		})
+	}
 }
 
 // TestVectorPushUsageOnlyClearsArchiveVectors pins the archive policy: once
