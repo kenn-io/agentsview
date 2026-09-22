@@ -18,6 +18,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/mattn/go-sqlite3"
+
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
@@ -4669,6 +4671,32 @@ func (db *DB) RebuildBulkImportIndexes(ctx context.Context) error {
 	return nil
 }
 
+// checkFTSModuleLoads fails when messages_fts is in the schema but this
+// executable's SQLite cannot load its virtual table module. Writes to
+// messages fire triggers into messages_fts, so such an archive is
+// read-only for this build no matter how the open succeeds.
+func (db *DB) checkFTSModuleLoads(
+	ctx context.Context, w *writerHandle,
+) error {
+	_, err := w.ExecContext(ctx, "SELECT 1 FROM messages_fts LIMIT 1")
+	if err == nil {
+		return nil
+	}
+	// The statement is fixed and the table row exists, so a generic
+	// SQLITE_ERROR here is the schema failing to load its module. I/O,
+	// corruption, and busy failures carry their own codes.
+	sqliteErr, ok := errors.AsType[sqlite3.Error](err)
+	if !ok || sqliteErr.Code != sqlite3.ErrError {
+		return nil
+	}
+	return fmt.Errorf(
+		"archive %s has a full-text index this executable cannot load"+
+			" (%w); rebuild agentsview with CGO_ENABLED=1 -tags fts5"+
+			" so SQLite is compiled with SQLITE_ENABLE_FTS5",
+		db.path, err,
+	)
+}
+
 // HasFTS checks if Full Text Search is available.
 func (db *DB) HasFTS(ctx context.Context) bool {
 	// We need to actually try to access the table, because it might exist
@@ -4794,7 +4822,15 @@ func (db *DB) init(ctx context.Context, progress OpenProgressFunc) error {
 		if fts5Available {
 			return fmt.Errorf("initializing FTS: %w", err)
 		}
-	} else if !hadFTS {
+	} else if hadFTS {
+		// IF NOT EXISTS skips the module lookup for an existing
+		// table, so an archive indexed by an fts5 build opens on an
+		// executable without fts5 and every message write then fails
+		// inside the messages triggers. Refuse the open instead.
+		if err := db.checkFTSModuleLoads(ctx, w); err != nil {
+			return err
+		}
+	} else {
 		// Schema init succeeded and we didn't have FTS
 		// before. Populate the index for existing messages.
 		if _, err := w.ExecContext(ctx,

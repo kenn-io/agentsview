@@ -4800,6 +4800,41 @@ func TestFTSBackfill(t *testing.T) {
 	assert.Equal(t, "s1", page.Results[0].SessionID, "result session_id")
 }
 
+func TestOpenRejectsArchiveWhoseFTSModuleIsUnavailable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "archive.db")
+	d, err := Open(t.Context(), path)
+	require.NoError(t, err, "Open with fts5 available")
+	requireFTS(t, d)
+	insertSession(t, d, "s1", "proj")
+	insertMessages(t, d, userMsg("s1", 0, "indexed text"))
+	require.NoError(t, d.Close())
+
+	// An archive created by an fts5 build stores messages_fts as
+	// "USING fts5(...)" plus the messages triggers that feed it. A build
+	// whose SQLite lacks fts5 opens that schema fine and only fails once
+	// a trigger fires ("no such module: fts5"). This process cannot drop
+	// its own fts5 module, so point the stored definition at a module
+	// name nothing registers; SQLite reports the same failure mode.
+	raw, err := sql.Open("sqlite3", makeDSN(path, false))
+	require.NoError(t, err)
+	for _, stmt := range []string{
+		"PRAGMA writable_schema=ON",
+		`UPDATE sqlite_master
+		 SET sql = replace(sql, 'USING fts5(', 'USING fts5_absent(')
+		 WHERE type = 'table' AND name = 'messages_fts'`,
+		"PRAGMA writable_schema=OFF",
+	} {
+		_, err := raw.ExecContext(t.Context(), stmt)
+		require.NoError(t, err, stmt)
+	}
+	require.NoError(t, raw.Close())
+
+	_, err = Open(t.Context(), path)
+	require.Error(t, err, "Open must refuse an archive whose FTS index this executable cannot load")
+	require.ErrorContains(t, err, "no such module: fts5_absent")
+	require.ErrorContains(t, err, "-tags fts5")
+}
+
 func TestPath(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")
