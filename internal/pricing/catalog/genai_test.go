@@ -205,3 +205,60 @@ func TestGenAIPricesRegexMatchingPreservesUpstreamCaseSensitivity(t *testing.T) 
 	_, ok = prices.Resolve("", "model-abc", time.Time{})
 	assert.False(t, ok)
 }
+
+func TestGenAIPricesMixedScalarAndRegexCaseRules(t *testing.T) {
+	prices, err := ParseGenAIPrices([]byte(`[
+		{"id":"example", "model_match":{"starts_with":"öPEN-"}, "models":[
+			{"id":"model", "match":{"and":[
+				{"contains":"MoDeL"}, {"ends_with":"eNd"},
+				{"or":[{"regex":"^ÖPEN-"},{"equals":"öpen-special-model-end"}]}
+			]}, "prices":{"input_mtok":1}}
+		]}
+	]`))
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		model   string
+		matches bool
+	}{
+		{"ÖPEN-MODEL-END", true},
+		{"ÖPEN-model-end", true},
+		{"öpen-special-MODEL-END", true},
+		{"öpen-model-end", false},
+		{"ÖPEN-other-end", false},
+		{"ÖPEN-model-other", false},
+	} {
+		t.Run(tc.model, func(t *testing.T) {
+			_, matched := prices.Resolve("", tc.model, time.Time{})
+			assert.Equal(t, tc.matches, matched)
+		})
+	}
+}
+
+func TestGenAIPricesCaseInsensitiveRulesKeepDeclarationOrder(t *testing.T) {
+	prices, err := ParseGenAIPrices([]byte(`[
+		{"id":"direct", "model_match":{"starts_with":"Direct-"},
+		 "provider_match":{"contains":"GateWay"}, "models":[
+			{"id":"specific", "match":{"contains":"-Pro-"}, "prices":{"input_mtok":3}},
+			{"id":"broad", "match":{"starts_with":"DIRECT-"}, "prices":{"input_mtok":1}}
+		]}
+	]`))
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name     string
+		provider string
+		model    string
+		want     string
+		pattern  string
+	}{
+		{"first overlapping rule wins", "", "direct-PRO-v1", "3", "direct/specific"},
+		{"later rule when first misses", "", "DIRECT-lite", "1", "direct/broad"},
+		{"provider match ignores case", " My-GATEWAY ", "direct-pro-v1", "3", "direct/specific"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := prices.Resolve(tc.provider, tc.model, time.Time{})
+			require.True(t, ok)
+			assert.Equal(t, money.MustParseDollars(tc.want), got.InputPerMTok)
+			assert.Equal(t, tc.pattern, got.ModelPattern)
+		})
+	}
+}

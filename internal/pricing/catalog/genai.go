@@ -524,6 +524,12 @@ func parseRequiredGenAIMatch(raw jsontext.Value) (genAIMatch, error) {
 		return genAIMatch{}, errors.New("match clause must contain exactly one operation")
 	}
 	match := matches[0]
+	// Scalar substring rules are case-insensitive. Normalize their immutable
+	// patterns once; equality and regex keep their own case semantics.
+	if match.kind == genAIMatchStartsWith || match.kind == genAIMatchEndsWith ||
+		match.kind == genAIMatchContains {
+		match.value = strings.ToLower(match.value)
+	}
 	if match.kind == genAIMatchRegex {
 		compiled, err := regexp2.Compile(match.value, regexp2.RE2)
 		if err != nil {
@@ -535,26 +541,28 @@ func parseRequiredGenAIMatch(raw jsontext.Value) (genAIMatch, error) {
 	return match, nil
 }
 
-func (m genAIMatch) matches(text string) bool {
+// matches reports whether text satisfies the rule. lowerText must be
+// strings.ToLower(text); callers compute it once per lookup.
+func (m genAIMatch) matches(text, lowerText string) bool {
 	switch m.kind {
 	case genAIMatchEquals:
 		return strings.EqualFold(text, m.value)
 	case genAIMatchStartsWith:
-		return strings.HasPrefix(strings.ToLower(text), strings.ToLower(m.value))
+		return strings.HasPrefix(lowerText, m.value)
 	case genAIMatchEndsWith:
-		return strings.HasSuffix(strings.ToLower(text), strings.ToLower(m.value))
+		return strings.HasSuffix(lowerText, m.value)
 	case genAIMatchContains:
-		return strings.Contains(strings.ToLower(text), strings.ToLower(m.value))
+		return strings.Contains(lowerText, m.value)
 	case genAIMatchRegex:
 		matched, err := m.regex.MatchString(text)
 		return err == nil && matched
 	case genAIMatchOr:
 		return slices.ContainsFunc(m.clauses, func(clause genAIMatch) bool {
-			return clause.matches(text)
+			return clause.matches(text, lowerText)
 		})
 	case genAIMatchAnd:
 		return !slices.ContainsFunc(m.clauses, func(clause genAIMatch) bool {
-			return !clause.matches(text)
+			return !clause.matches(text, lowerText)
 		})
 	default:
 		return false
@@ -571,16 +579,17 @@ func (p *GenAIPrices) Resolve(
 	if p == nil || modelID == "" {
 		return ModelPricing{}, false
 	}
-	provider := p.findProvider(providerID, modelID)
+	lowerModelID := strings.ToLower(modelID)
+	provider := p.findProvider(providerID, modelID, lowerModelID)
 	if provider == nil {
 		return ModelPricing{}, false
 	}
-	model := provider.findModel(modelID)
+	model := provider.findModel(modelID, lowerModelID)
 	if model == nil {
 		for _, fallbackID := range provider.fallbackModelProviders {
 			fallback := p.providerByID(fallbackID)
 			if fallback != nil {
-				model = fallback.findModel(modelID)
+				model = fallback.findModel(modelID, lowerModelID)
 			}
 			if model != nil {
 				break
@@ -596,15 +605,16 @@ func (p *GenAIPrices) Resolve(
 }
 
 func (p *GenAIPrices) findProvider(
-	providerID, modelID string,
+	providerID, modelID, lowerModelID string,
 ) *genAIProvider {
 	if providerID != "" {
 		normalized := strings.ToLower(strings.TrimSpace(providerID))
 		if exact := p.providerByID(normalized); exact != nil {
 			return exact
 		}
+		// normalized is already lowercase and strings.ToLower is idempotent.
 		for i := range p.providers {
-			if p.providers[i].providerMatch.matches(normalized) {
+			if p.providers[i].providerMatch.matches(normalized, normalized) {
 				return &p.providers[i]
 			}
 		}
@@ -613,7 +623,7 @@ func (p *GenAIPrices) findProvider(
 		}
 	}
 	for i := range p.providers {
-		if p.providers[i].modelMatch.matches(modelID) {
+		if p.providers[i].modelMatch.matches(modelID, lowerModelID) {
 			return &p.providers[i]
 		}
 	}
@@ -629,9 +639,9 @@ func (p *GenAIPrices) providerByID(id string) *genAIProvider {
 	return nil
 }
 
-func (p *genAIProvider) findModel(modelID string) *genAIModel {
+func (p *genAIProvider) findModel(modelID, lowerModelID string) *genAIModel {
 	for i := range p.models {
-		if p.models[i].match.matches(modelID) {
+		if p.models[i].match.matches(modelID, lowerModelID) {
 			return &p.models[i]
 		}
 	}
