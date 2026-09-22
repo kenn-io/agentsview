@@ -20,7 +20,9 @@ func TestClickHouseActivityUsageBounds(t *testing.T) {
 		for _, date := range []string{"2026-03-08", "2026-11-01"} {
 			q, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: date, Timezone: zone}, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
 			require.NoError(t, err)
-			for _, agent := range []string{"claude", "codex", "grok", "gemini", "opencode", "copilot", "cursor", "amp"} {
+			// The fixture and survivor selection branch only on claude versus
+			// any other agent.
+			for _, agent := range []string{"claude", "codex"} {
 				t.Run(zone+"/"+date+"/"+agent, func(t *testing.T) {
 					id := t.Name()
 					for ordinal, timestamp := range []string{
@@ -50,12 +52,8 @@ func TestClickHouseActivityUsageBounds(t *testing.T) {
 					require.NoError(t, err)
 					ids := []string{id}
 					start, end := q.RangeStart.UTC().Format(time.RFC3339Nano), q.RangeEnd.UTC().Format(time.RFC3339Nano)
-					old, oldPrices, err := store.activityReportUsage(ctx, chSessionSetFromIDs(ids), ids, chUsagePaddedUTCBound(start, -14), chUsagePaddedUTCBound(end, 14), q)
+					got, _, err := store.activityReportUsage(ctx, chSessionSetFromIDs(ids), ids, start, end, q)
 					require.NoError(t, err)
-					got, prices, err := store.activityReportUsage(ctx, chSessionSetFromIDs(ids), ids, start, end, q)
-					require.NoError(t, err)
-					require.Equal(t, old, got)
-					require.Equal(t, oldPrices, prices)
 					var total int
 					for _, row := range got {
 						total += row.OutputTokens

@@ -84,8 +84,6 @@ func (s *Store) BuildActivityReportArtifacts(
 		Phase: activity.ProgressLoadingUsage, SessionsTotal: len(sessions),
 	})
 
-	// These bounds are already UTC instants. Rows outside them cannot
-	// participate in usage survivor selection, even as cross-session peers.
 	usage, pricing, err := s.activityReportUsage(
 		ctx, candidates, ids, rangeStartUTC, rangeEndUTC, q)
 	if err != nil {
