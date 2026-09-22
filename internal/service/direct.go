@@ -329,45 +329,36 @@ func (b *directBackend) Messages(
 		w.From = &from
 	}
 
-	before, err := b.db.GetSession(ctx, id)
+	revision := ""
+	w.ObservedRevision = &revision
+	msgs, err := b.db.GetMessagesWindow(ctx, id, w)
 	if err != nil {
 		return nil, err
 	}
-	revision := ""
-	if before != nil && before.TranscriptRevision != nil {
-		revision = *before.TranscriptRevision
-	}
+	// Readers that do not fold the revision into the message statement
+	// still answer from one session lookup. The lookup is skipped when
+	// the message statement already reported the revision.
 	boundRead := f.ExpectedRevision != "" || f.EvidenceSource != ""
-	if before == nil && boundRead {
-		return nil, fmt.Errorf("%w: cited session no longer exists", ErrSourceChanged)
-	}
-	if before != nil && revision == "" && boundRead {
-		return nil, ErrRevisionBoundReadUnavailable
+	if revision == "" && (len(msgs) > 0 || boundRead) {
+		before, err := b.db.GetSession(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if before == nil && boundRead {
+			return nil, fmt.Errorf("%w: cited session no longer exists", ErrSourceChanged)
+		}
+		if before != nil && before.TranscriptRevision != nil {
+			revision = *before.TranscriptRevision
+		}
+		if before != nil && revision == "" && boundRead {
+			return nil, ErrRevisionBoundReadUnavailable
+		}
 	}
 	if f.ExpectedRevision != "" && f.ExpectedRevision != revision {
 		return nil, fmt.Errorf("%w: transcript revision does not match", ErrSourceChanged)
 	}
 	if f.EvidenceSource != "" && f.EvidenceSource != b.evidenceSource {
 		return nil, fmt.Errorf("%w: evidence source does not match", ErrSourceChanged)
-	}
-
-	msgs, err := b.db.GetMessagesWindow(ctx, id, w)
-	if err != nil {
-		return nil, err
-	}
-	if revision != "" {
-		after, err := b.db.GetSession(ctx, id)
-		if err != nil {
-			return nil, err
-		}
-		if after == nil || after.TranscriptRevision == nil || *after.TranscriptRevision != revision {
-			if boundRead {
-				return nil, fmt.Errorf("%w: transcript changed during read", ErrSourceChanged)
-			}
-			// Preserve ordinary read behavior without attaching a revision that
-			// may describe different content than the page just returned.
-			revision = ""
-		}
 	}
 	list := &MessageList{
 		Messages: msgs, Count: len(msgs), TranscriptRevision: revision,

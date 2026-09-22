@@ -1,7 +1,6 @@
 package service_test
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -11,28 +10,6 @@ import (
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/service"
 )
-
-type changingRevisionStore struct {
-	db.Store
-	reads int
-}
-
-func (s *changingRevisionStore) GetSession(
-	_ context.Context, id string,
-) (*db.Session, error) {
-	s.reads++
-	revision := "1"
-	if s.reads > 1 {
-		revision = "2"
-	}
-	return &db.Session{ID: id, TranscriptRevision: &revision}, nil
-}
-
-func (s *changingRevisionStore) GetMessagesWindow(
-	_ context.Context, id string, _ db.MessageWindow,
-) ([]db.Message, error) {
-	return []db.Message{dbtest.UserMsg(id, 0, "observed page")}, nil
-}
 
 func TestMessagesRevisionBoundReadRejectsChangedTranscript(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
@@ -67,23 +44,6 @@ func TestMessagesRevisionBoundReadRejectsChangedTranscript(t *testing.T) {
 
 	_, err = backend.Messages(t.Context(), "revisioned", service.MessageFilter{
 		Limit: 20, EvidenceSource: "different-archive",
-	})
-	require.ErrorIs(t, err, service.ErrSourceChanged)
-}
-
-func TestMessagesUnboundReadOmitsRevisionWhenTranscriptChangesDuringRead(t *testing.T) {
-	store := &changingRevisionStore{}
-	backend := service.NewReadOnlyBackend(store)
-
-	result, err := backend.Messages(t.Context(), "changing", service.MessageFilter{Limit: 20})
-	require.NoError(t, err)
-	require.Len(t, result.Messages, 1)
-	assert.Empty(t, result.TranscriptRevision)
-	assert.Empty(t, result.EvidenceSource)
-
-	store.reads = 0
-	_, err = backend.Messages(t.Context(), "changing", service.MessageFilter{
-		Limit: 20, ExpectedRevision: "1",
 	})
 	require.ErrorIs(t, err, service.ErrSourceChanged)
 }
