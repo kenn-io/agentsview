@@ -1086,6 +1086,11 @@ func TestCurrentDataVersionCodexExecSessionKind(t *testing.T) {
 		"version 112 is the data-version boundary for Codex exec and roborev session kinds")
 }
 
+func TestCurrentDataVersionCodexApplyPatchFilePath(t *testing.T) {
+	assert.GreaterOrEqual(t, CurrentDataVersion(), 114,
+		"Codex apply_patch file paths require re-parsing existing sessions")
+}
+
 func TestCurrentDataVersionCursorTurnTimestamps(t *testing.T) {
 	assert.GreaterOrEqual(t, CurrentDataVersion(), 101,
 		"Cursor turn timestamps require re-parsing existing sessions")

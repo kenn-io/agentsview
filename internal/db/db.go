@@ -512,7 +512,10 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // messages and classifying user prompts. Re-parse unchanged sources to
 // remove retained context, restore omitted prompts, and correct first-message
 // previews and user-message counts.)
-const dataVersion = 113
+// (114: Codex `apply_patch` calls record the files named in the patch body,
+// one tool call per file, so file-keyed views such as Recent Edits include
+// them. Re-parse unchanged Codex sources to backfill file_path.)
+const dataVersion = 114
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

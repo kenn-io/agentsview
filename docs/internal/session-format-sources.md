@@ -436,6 +436,15 @@ add an archived or maintained mirror without replacing the original identity.
   roborev. Reverified against an isolated
   `codex-proxy exec --thread-source roborev` rollout.
 
+- **apply_patch file paths (2026-09-21):** Issue
+  [#1899](https://github.com/kenn-io/agentsview/issues/1899) reports that
+  `apply_patch` calls carry no `file_path`, so file-keyed views such as Recent
+  Edits omit every Codex edit. The patch body names each touched file with
+  `*** Add File:`, `*** Update File:`, `*** Delete File:`, or `*** Move to:`
+  markers; Agentsview maps those to `tool_calls.file_path` and emits one tool
+  call per file. `custom_tool_call` items carry the same patch text under
+  `input` instead of a JSON `patch` argument.
+
 - **Evidence:** `source`.
 
 - **Upstream:** Clone `https://github.com/openai/codex.git` at

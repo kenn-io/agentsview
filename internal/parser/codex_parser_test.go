@@ -689,6 +689,7 @@ func TestParseCodexSession_FunctionCalls(t *testing.T) {
 
 		assert.True(t, msgs[2].HasToolUse)
 		assertToolCalls(t, msgs[2].ToolCalls, []ParsedToolCall{{ToolName: "apply_patch", Category: "Edit"}})
+		assert.Empty(t, msgs[2].ToolCalls[0].FilePath)
 
 		for i, m := range msgs {
 			assert.Equal(t, i, m.Ordinal)
@@ -724,6 +725,45 @@ func TestParseCodexSession_FunctionCalls(t *testing.T) {
 		assert.Equal(t, want, msgs[1].Content)
 		assert.NotEmpty(t, msgs[1].ToolCalls[0].InputJSON)
 		assert.Contains(t, msgs[1].ToolCalls[0].InputJSON, "Begin Patch")
+		require.Len(t, msgs[1].ToolCalls, 2)
+		assert.Equal(t, "internal/parser/codex.go", msgs[1].ToolCalls[0].FilePath)
+		assert.Equal(t, "internal/parser/parser_test.go", msgs[1].ToolCalls[1].FilePath)
+	})
+
+	t.Run("apply_patch records the single edited file path", func(t *testing.T) {
+		patch := "*** Begin Patch\n" +
+			"*** Update File: internal/db/recentedits.go\n" +
+			"@@\n-old\n+new\n" +
+			"*** End Patch"
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("fc-patch-single", "/tmp", "user", tsEarly),
+			testjsonl.CodexMsgJSON("user", "fix the feed", tsEarlyS1),
+			testjsonl.CodexFunctionCallArgsJSON("apply_patch", map[string]any{
+				"patch": patch,
+			}, tsEarlyS5),
+		)
+
+		_, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+		require.Len(t, msgs, 2)
+		require.Len(t, msgs[1].ToolCalls, 1)
+		assert.Equal(t, "internal/db/recentedits.go", msgs[1].ToolCalls[0].FilePath)
+	})
+
+	t.Run("apply_patch without file headers records no path", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("fc-patch-pathless", "/tmp", "user", tsEarly),
+			testjsonl.CodexMsgJSON("user", "patch", tsEarlyS1),
+			testjsonl.CodexFunctionCallArgsJSON("apply_patch", map[string]any{
+				"patch": "*** Begin Patch\n*** End Patch",
+			}, tsEarlyS5),
+		)
+
+		_, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+		require.Len(t, msgs, 2)
+		require.Len(t, msgs[1].ToolCalls, 1)
+		assert.Empty(t, msgs[1].ToolCalls[0].FilePath)
 	})
 
 	t.Run("custom_tool_call apply_patch input and output", func(t *testing.T) {
@@ -750,6 +790,7 @@ func TestParseCodexSession_FunctionCalls(t *testing.T) {
 		}})
 		tc := msgs[1].ToolCalls[0]
 		assert.Contains(t, tc.InputJSON, "Begin Patch")
+		assert.Equal(t, "infra/scripts/with-resolved-images.sh", tc.FilePath)
 		assertToolResultEvents(t, tc.ResultEvents, []ParsedToolResultEvent{{
 			ToolUseID: "call_abc",
 			Source:    "custom_tool_call_output",

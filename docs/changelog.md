@@ -157,6 +157,10 @@ Release notes for
   failing the request.
 - Remote ClickHouse URLs that skip TLS certificate checks (`skip_verify=true`)
   are rejected unless `allow_insecure` is set.
+- Codex `apply_patch` edits appear in Recent Edits. Codex patches now record
+  every file they touch, one tool call per file. Startup reparses available
+  Codex sessions; sessions whose sources are gone keep their archived tool
+  calls.
 
 **Acknowledgements**
 
