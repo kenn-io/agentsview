@@ -99,11 +99,11 @@ func (s *Store) survivingVectorHits(
 }
 
 // semanticSessionFilter is the content-search session scope for the
-// semantic and hybrid modes: the shared mapping plus the child one-shot
+// semantic and hybrid modes: the shared db.ContentSessionFilter mapping plus the child one-shot
 // exemption, so child sessions are not dropped by the one-shot gate while
 // top-level one-shots keep their exclusion.
 func semanticSessionFilter(f db.ContentSearchFilter) db.SessionFilter {
-	sf := contentSessionFilter(f)
+	sf := db.ContentSessionFilter(f)
 	sf.ChildExemptOneShot = true
 	return sf
 }
