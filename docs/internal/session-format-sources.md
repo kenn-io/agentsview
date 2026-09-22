@@ -1876,7 +1876,16 @@ schemas keep their existing ordering behavior.
   [session manager](https://github.com/earendil-works/pi/blob/acaa253cc8e3f159e6100b6f3874861b1f0bfc99/packages/coding-agent/src/core/session-manager.ts)
   writes files directly into an explicit session directory; default sessions
   live one encoded project directory below the session root. Agentsview
-  discovers both layouts.
+  discovers both layouts. Reverified 2026-09-22 against
+  [pi-subagents](https://github.com/nicobailon/pi-subagents) v0.70.1 at
+  `9b8356d4351747a7108695344e0c26a7c85e84de`: the extension's
+  `getSubagentSessionRoot` puts a child session under the parent transcript's
+  stem (`<project>/<parent>/<runId>/run-N/session.jsonl`), forked children land
+  one level over in `<parent>/forks/`, and a delegated child repeats the same
+  shape below its own `session.jsonl`. Fresh children carry no `parentSession`
+  header, and forked children record the parent path as usual, so Agentsview
+  indexes a transcript at any depth and keeps the header as the only lineage
+  source.
 - **Agentsview:** `internal/parser/pi.go` and `internal/parser/pi_provider.go`;
   alternate branches remain in the file but only the active ancestry is a
   conversation. Reverified 2026-09-03 against 156 local Pi transcripts: the

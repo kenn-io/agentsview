@@ -126,6 +126,10 @@ Release notes for
 - Grok child sessions appear beneath their spawning parent and count as subagent
   activity. Native Pi branches regain parent links when the parent session can
   be resolved.
+- Pi subagent sessions written by the `pi-subagents` extension are indexed like
+  interactive sessions. The extension keeps each run's transcript in a
+  subdirectory of the sessions directory, which discovery previously skipped.
+  Run `agentsview sync` to pick up existing subagent sessions.
 - Older Piebald and Kilo databases import despite missing columns that
   previously caused discovery or parsing failures.
 - Cursor IDE imports accept structured tool results, including object-valued
