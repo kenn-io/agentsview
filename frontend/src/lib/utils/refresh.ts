@@ -64,12 +64,15 @@ export interface QuerySegment {
 /** One measured step of a page's last data query. `name` is a stable key
  * (see `formatQueryStepLabel`), never user-facing on its own. `startMs` is
  * the offset from the query's start, so parallel steps can be drawn on one
- * time axis. `segments` split the step into request phases when known. */
+ * time axis. `segments` split the step into request phases when known.
+ * `running` marks a step of an in-flight query that has not finished yet;
+ * the refresh control draws it up to the current time. */
 export interface QueryStep {
   name: string;
   startMs: number;
   durationMs: number;
   segments?: QuerySegment[];
+  running?: boolean;
 }
 
 /**
@@ -250,13 +253,27 @@ export function formatRefreshStatus(
 }
 
 /**
- * Every age variant paired with every duration unit at its widest, so the
- * label box is measured once against the widest localized phrase it can
- * show and never changes width afterwards.
+ * The label while a page reports progress in place of the age: the
+ * progress text, then how long the running query has taken so far.
  */
-export function refreshStatusWidthSamples(): string[] {
+export function formatRefreshProgress(
+  status: string,
+  elapsedMs: number | null | undefined,
+): string {
+  const duration = formatQueryDuration(elapsedMs);
+  if (duration === "") return status;
+  return m.shared_refresh_age_with_duration({ age: status, duration });
+}
+
+/**
+ * Every age variant, and every progress text a page can show in its place,
+ * paired with every duration unit at its widest, so the label box is
+ * measured once against the widest localized phrase it can show and never
+ * changes width afterwards.
+ */
+export function refreshStatusWidthSamples(statuses: readonly string[] = []): string[] {
   const durations = queryDurationWidthSamples();
-  return refreshAgeWidthSamples().flatMap((age) =>
+  return [...refreshAgeWidthSamples(), ...statuses].flatMap((age) =>
     durations.map((duration) => m.shared_refresh_age_with_duration({ age, duration })),
   );
 }

@@ -1,12 +1,14 @@
 <script lang="ts">
   import { RefreshControl as KitRefreshControl } from "@kenn-io/kit-ui";
-  import type { ComponentProps } from "svelte";
-  import { formatDateTime, getLocale } from "../../i18n/index.js";
+  import { untrack, type ComponentProps } from "svelte";
+  import { formatDateTime, getLocale, m } from "../../i18n/index.js";
+  import type { LiveQuery } from "../../utils/liveQuery.svelte.js";
   import {
     formatQueryDuration,
     formatQueryPhaseLabel,
     formatQueryStepLabel,
     formatQueryTick,
+    formatRefreshProgress,
     formatRefreshStatus,
     queryAxisTicks,
     refreshStatusWidthSamples,
@@ -19,6 +21,8 @@
   // app locale, the localized width samples that keep the label box a
   // constant width, and a hover breakdown of the last query's steps, so
   // pages pass only data props — mirroring shared/RangePicker.svelte.
+  // While `liveQuery` has a query running, the duration counts up and the
+  // breakdown shows that query's steps as they start and finish.
 
   type Props = Omit<
     ComponentProps<typeof KitRefreshControl>,
@@ -26,6 +30,9 @@
   > & {
     /** Replaces the relative age while a parent operation reports progress. */
     status?: string;
+    /** Every text `status` can take, so the label box is sized for them
+     * too. Read once at mount. */
+    statusWidthSamples?: readonly string[];
     /** Wall-clock time of the page's most recent data query, request start
      * to data applied. Shown after the age label; null before the first
      * query completes. */
@@ -33,32 +40,65 @@
     /** Per-step timings behind `queryDurationMs`, in execution order. Shown
      * as a list when the label is hovered or focused. */
     querySteps?: readonly QueryStep[];
+    /** The page's in-flight query. While it runs, it replaces
+     * `queryDurationMs` and `querySteps`. */
+    liveQuery?: LiveQuery;
   };
 
   let {
     status = undefined,
+    statusWidthSamples = [],
     queryDurationMs = null,
     querySteps = [],
+    liveQuery = undefined,
     lastUpdatedAt,
     ...rest
   }: Props = $props();
 
   // Locale is fixed for the life of a page load (a language change reloads),
   // so the samples are computed once per mount.
-  const ageWidthSamples = refreshStatusWidthSamples();
-  const showSteps = $derived(status === undefined && querySteps.length > 0);
+  const ageWidthSamples = refreshStatusWidthSamples(untrack(() => statusWidthSamples));
+
+  // A running query's clock. Ticks only while a query runs, often enough
+  // for a sub-second count to read as live without redrawing needlessly.
+  const LIVE_TICK_MS = 100;
+  const liveStartedAt = $derived(liveQuery?.startedAt ?? null);
+  let now = $state(performance.now());
+  $effect(() => {
+    if (liveStartedAt === null) return;
+    now = performance.now();
+    const timer = setInterval(() => {
+      now = performance.now();
+    }, LIVE_TICK_MS);
+    return () => clearInterval(timer);
+  });
+  const elapsedMs = $derived(liveStartedAt === null ? null : Math.max(0, now - liveStartedAt));
+  const durationMs = $derived(elapsedMs ?? queryDurationMs);
+  const steps = $derived.by((): readonly QueryStep[] => {
+    if (elapsedMs === null || liveQuery === undefined) return querySteps;
+    return liveQuery.steps.map((step) =>
+      step.running ? { ...step, durationMs: Math.max(0, elapsedMs - step.startMs) } : step,
+    );
+  });
+  // The last query's steps would be stale next to a progress status, so the
+  // breakdown only shows beside one while a query is running. A running
+  // query keeps the breakdown up before its first step starts, so an open
+  // popover stays open across the switch from the last query to the next.
+  const showSteps = $derived(
+    elapsedMs !== null || (status === undefined && steps.length > 0),
+  );
 
   // Time zero on the axis is the first request going out, not the refresh
   // being asked for: the sub-millisecond setup before the first send would
   // otherwise nudge every bar off the zero line. The axis runs to the last
   // step's end, or to the recorded total if that is later.
   const originMs = $derived(
-    querySteps.length === 0 ? 0 : Math.min(...querySteps.map((step) => step.startMs)),
+    steps.length === 0 ? 0 : Math.min(...steps.map((step) => step.startMs)),
   );
   const axisMs = $derived(
     Math.max(
-      (queryDurationMs ?? 0) - originMs,
-      ...querySteps.map((step) => step.startMs + step.durationMs - originMs),
+      (durationMs ?? 0) - originMs,
+      ...steps.map((step) => step.startMs + step.durationMs - originMs),
       1,
     ),
   );
@@ -73,7 +113,7 @@
     return startMs < snapMs ? step.startMs : originMs;
   }
   const ticks = $derived(queryAxisTicks(axisMs));
-  const hasSegments = $derived(querySteps.some((step) => step.segments !== undefined));
+  const hasSegments = $derived(steps.some((step) => step.segments !== undefined));
   const PHASES: QueryPhase[] = ["wait", "download", "apply"];
 
   function percent(ms: number): string {
@@ -98,8 +138,8 @@
   {...rest}
   lastUpdatedAt={status === undefined ? lastUpdatedAt : null}
   formatAge={status === undefined
-    ? (at, now) => formatRefreshStatus(at, queryDurationMs, now)
-    : () => status ?? ""}
+    ? (at, now) => formatRefreshStatus(at, durationMs, now)
+    : () => formatRefreshProgress(status ?? "", elapsedMs)}
   locale={getLocale()}
   {ageWidthSamples}
   ageTooltip={showSteps ? querySteps_tooltip : undefined}
@@ -108,12 +148,14 @@
 {#snippet querySteps_tooltip()}
   <div class="query-steps">
     <div class="query-steps__head">
-      {#if lastUpdatedAt != null}
+      {#if elapsedMs !== null}
+        <span class="query-steps__at">{m.shared_refresh_in_progress()}</span>
+      {:else if lastUpdatedAt != null}
         <span class="query-steps__at">
           {formatDateTime(lastUpdatedAt, { dateStyle: "medium", timeStyle: "medium" })}
         </span>
       {/if}
-      <span class="query-steps__total">{formatQueryDuration(queryDurationMs)}</span>
+      <span class="query-steps__total">{formatQueryDuration(durationMs)}</span>
     </div>
     <div class="query-steps__list">
       <span></span>
@@ -125,7 +167,7 @@
         {/each}
       </span>
       <span></span>
-      {#each querySteps as step (step.name)}
+      {#each steps as step (step.name)}
         {@const shift = shiftMs(step)}
         <span class="query-steps__name">{formatQueryStepLabel(step.name)}</span>
         <span class="query-steps__track" aria-hidden="true">

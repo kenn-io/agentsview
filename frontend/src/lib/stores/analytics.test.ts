@@ -528,6 +528,30 @@ describe("AnalyticsStore freshness state", () => {
     }
   });
 
+  it("lists each panel request live while a refresh runs", async () => {
+    let releaseVelocity!: () => void;
+    vi.mocked(analyticsService.getApiV1AnalyticsVelocity).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseVelocity = () => resolve(makeVelocity());
+        }),
+    );
+    const refresh = analytics.fetchAll();
+    await vi.waitFor(() => {
+      expect(analytics.liveQuery.steps.filter((step) => step.running)).toHaveLength(1);
+    });
+
+    // Every other panel has settled; the held one is still running.
+    expect(analytics.liveQuery.startedAt).not.toBeNull();
+    expect(analytics.liveQuery.steps.find((step) => step.running)?.name).toBe("velocity");
+    expect(analytics.liveQuery.steps).toHaveLength(11);
+
+    releaseVelocity();
+    await refresh;
+    expect(analytics.liveQuery.startedAt).toBeNull();
+    expect(analytics.lastQuerySteps.some((step) => step.running)).toBe(false);
+  });
+
   it("does not mark cached partial refresh failures as current", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});

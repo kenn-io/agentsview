@@ -4,6 +4,7 @@ import { mount, tick, unmount } from "svelte";
 import { setLocale } from "../../i18n/index.js";
 // @ts-ignore
 import RefreshControl from "./RefreshControl.svelte";
+import { LiveQuery } from "../../utils/liveQuery.svelte.js";
 
 // The wrapper's whole job is injecting the app's localized age formatter
 // into kit-ui's RefreshControl (whose built-in default is English).
@@ -213,6 +214,98 @@ describe("RefreshControl", () => {
 
     unmount(component);
     document.body.innerHTML = "";
+  });
+
+  it("counts a running query up and grows its running steps", async () => {
+    vi.useFakeTimers({ toFake: ["performance", "setInterval", "clearInterval"] });
+    try {
+      const live = new LiveQuery();
+      const component = mount(RefreshControl, {
+        target: document.body,
+        props: {
+          lastUpdatedAt: Date.now() - 3 * 60_000,
+          queryDurationMs: 17_000,
+          querySteps: [{ name: "summary", startMs: 0, durationMs: 17_000 }],
+          liveQuery: live,
+          onRefresh: vi.fn(),
+        },
+      });
+      const text = () =>
+        document.querySelector(".kit-refresh-control__age > .kit-refresh-control__text")
+          ?.textContent;
+      await tick();
+      expect(text()).toBe("Updated 3m ago · 17 s");
+
+      const started = performance.now();
+      live.begin(started);
+      const summary = live.start("summary", started);
+      live.start("tools", started);
+      vi.advanceTimersByTime(400);
+      await tick();
+      expect(text()).toBe("Updated 3m ago · 400 ms");
+
+      live.settle(summary, { name: "summary", startMs: 0, durationMs: 300 });
+      vi.advanceTimersByTime(1600);
+      await tick();
+      expect(text()).toBe("Updated 3m ago · 2 s");
+
+      document
+        .querySelector(".kit-tooltip-trigger")!
+        .dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+      await tick();
+      const tooltip = document.querySelector('[role="tooltip"]')!;
+      expect(tooltip.querySelector(".query-steps__at")?.textContent).toBe("Refreshing…");
+      const durations = () =>
+        Array.from(tooltip.querySelectorAll(".query-steps__duration")).map((d) => d.textContent);
+      // The settled step keeps its time; the running one reaches now.
+      expect(durations()).toEqual(["300 ms", "2 s"]);
+      const toolsBar = () =>
+        tooltip
+          .querySelectorAll<HTMLElement>(".query-steps__track")[1]!
+          .querySelector<HTMLElement>(".query-steps__bar")!.style.width;
+      expect(toolsBar()).toBe("100%");
+
+      vi.advanceTimersByTime(2000);
+      await tick();
+      expect(durations()).toEqual(["300 ms", "4 s"]);
+      // The axis grew with the query, so the settled step now covers less of it.
+      expect(tooltip.querySelectorAll<HTMLElement>(".query-steps__bar")[0]!.style.width).toBe(
+        "7.5%",
+      );
+
+      void unmount(component);
+    } finally {
+      vi.useRealTimers();
+      document.body.innerHTML = "";
+    }
+  });
+
+  it("appends the running duration to a progress status", async () => {
+    vi.useFakeTimers({ toFake: ["performance", "setInterval", "clearInterval"] });
+    try {
+      const live = new LiveQuery();
+      live.begin(performance.now());
+      const component = mount(RefreshControl, {
+        target: document.body,
+        props: {
+          lastUpdatedAt: null,
+          status: "Loading sessions…",
+          liveQuery: live,
+          onRefresh: vi.fn(),
+        },
+      });
+      vi.advanceTimersByTime(3000);
+      await tick();
+      expect(
+        document.querySelector(".kit-refresh-control__age > .kit-refresh-control__text")
+          ?.textContent,
+      ).toBe("Loading sessions… · 3 s");
+
+      void unmount(component);
+    } finally {
+      vi.useRealTimers();
+      document.body.innerHTML = "";
+    }
   });
 
   it("keeps the plain timestamp title when there are no steps", async () => {

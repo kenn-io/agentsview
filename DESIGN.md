@@ -87,7 +87,11 @@ App-level glue that remains local:
   time axis, each split into waiting on the server, download, and apply. Pages
   pass `lastUpdatedAt`, `queryDurationMs`, and `querySteps` from their store;
   each store measures the fetch from request start to data applied and records
-  one step per panel or report phase.
+  one step per panel or report phase. Pages also pass the store's `liveQuery`
+  (`utils/liveQuery.svelte.ts`): while a query runs, the duration counts up
+  and the timeline shows each step as it starts, with running bars growing on
+  the shared axis. A page that shows progress text through `status` passes
+  every variant as `statusWidthSamples` so the running duration still fits.
 - kit-ui components with a `locale` prop (DateRangePicker, RefreshControl,
   Calendar) should receive `locale={getLocale()}` from the i18n facade so
   their date formatting follows the app language setting instead of the

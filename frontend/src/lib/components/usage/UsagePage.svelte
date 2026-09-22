@@ -519,6 +519,7 @@
         lastUpdatedAt={usage.lastUpdatedAt}
         queryDurationMs={usage.lastQueryDurationMs}
         querySteps={usage.lastQuerySteps}
+        liveQuery={usage.liveQuery}
         busy={usage.isQuerying}
         onRefresh={() => usage.fetchAll({ preserveTimeRange: true })}
         label={m.usage_refresh()}

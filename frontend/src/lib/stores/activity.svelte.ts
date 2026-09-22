@@ -1,4 +1,5 @@
 import type { QueryStep } from "../utils/refresh.js";
+import { LiveQuery } from "../utils/liveQuery.svelte.js";
 import type {
   DbAgentInfo as AgentInfo,
   DbProjectInfo as ProjectInfo,
@@ -68,14 +69,18 @@ const REPORT_PHASE_STEPS: Record<ActivityReportProgress["phase"], string | null>
  * Splits a report fetch into per-phase steps from the timestamps of its
  * progress events. Request latency before the first event counts toward
  * the first phase; a fetch that reports no phases is a single "report"
- * step.
+ * step. Each phase is also reported to `live` as it starts and ends.
  */
 class ReportPhaseTimer {
   private readonly steps: QueryStep[] = [];
   private current: string | null = null;
   private currentStartedAt: number;
+  private liveStep = 0;
 
-  constructor(private readonly startedAt: number) {
+  constructor(
+    private readonly startedAt: number,
+    private readonly live: LiveQuery,
+  ) {
     this.currentStartedAt = startedAt;
   }
 
@@ -86,6 +91,7 @@ class ReportPhaseTimer {
     this.current = step;
     // Request latency before the first event belongs to the first phase.
     this.currentStartedAt = this.steps.length === 0 ? this.startedAt : at;
+    if (step !== null) this.liveStep = this.live.start(step, this.currentStartedAt);
   }
 
   finish(at: number): QueryStep[] {
@@ -97,11 +103,13 @@ class ReportPhaseTimer {
 
   private close(at: number): void {
     if (this.current === null) return;
-    this.steps.push({
+    const step: QueryStep = {
       name: this.current,
       startMs: this.currentStartedAt - this.startedAt,
       durationMs: at - this.currentStartedAt,
-    });
+    };
+    this.steps.push(step);
+    this.live.settle(this.liveStep, step);
     this.current = null;
   }
 }
@@ -140,6 +148,8 @@ class ActivityStore {
   // between the progress events the report stream emits. A plain JSON
   // response (no stream) yields a single "report" step.
   lastQuerySteps: QueryStep[] = $state([]);
+  // The report fetch running now, drawn live by the refresh control.
+  readonly liveQuery = new LiveQuery();
   // Set when an SSE event arrives after the first load, signalling that newer
   // data exists. Mirrors the analytics/usage stores: marking is cheap, and the
   // actual refetch is left to the manual refresh button and the periodic
@@ -241,11 +251,14 @@ class ActivityStore {
     this.loading = true;
     this.progress = null;
     this.error = null;
-    const phases = new ReportPhaseTimer(startedAt);
+    const live = this.liveQuery.begin(startedAt);
+    const phases = new ReportPhaseTimer(startedAt, this.liveQuery);
     try {
       const res = await fetchActivityReport(this.queryParams(), signal, (progress) => {
-        phases.observe(progress.phase, performance.now());
+        // A superseded load's result is discarded, and its phases must not
+        // reach the live query that now belongs to its replacement.
         if (v === this.loadVersion && this.reportRead.isCurrent(signal)) {
+          phases.observe(progress.phase, performance.now());
           this.progress = progress;
         }
       });
@@ -279,6 +292,7 @@ class ActivityStore {
       this.error = e instanceof Error ? e.message : m.activity_report_load_failed();
       return false;
     } finally {
+      this.liveQuery.end(live);
       if (this.reportRead.finish(signal)) {
         this.loading = false;
         this.progress = null;

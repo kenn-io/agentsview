@@ -659,6 +659,37 @@ describe("freshness state", () => {
     }
   });
 
+  it("shows each streamed phase live while the report query runs", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance"] });
+    try {
+      const startedAt = performance.now();
+      let midway: unknown;
+      api.getActivityReport.mockImplementationOnce(async (_query, _signal, onProgress) => {
+        vi.advanceTimersByTime(100);
+        onProgress?.({ phase: "loading_sessions" });
+        vi.advanceTimersByTime(50);
+        onProgress?.({ phase: "loading_usage" });
+        midway = { startedAt: activity.liveQuery.startedAt, steps: activity.liveQuery.steps };
+        vi.advanceTimersByTime(300);
+        return makeReport();
+      });
+      await activity.load();
+
+      // The finished phase has its measured time; the phase in progress
+      // is marked running from its start.
+      expect(midway).toEqual({
+        startedAt,
+        steps: [
+          { name: "sessions", startMs: 0, durationMs: 150 },
+          { name: "usage", startMs: 150, durationMs: 0, running: true },
+        ],
+      });
+      expect(activity.liveQuery.startedAt).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("records a single report step when the response is not streamed", async () => {
     vi.useFakeTimers({ toFake: ["Date", "performance"] });
     try {

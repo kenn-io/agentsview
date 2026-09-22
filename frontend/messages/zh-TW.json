@@ -505,6 +505,7 @@
   "shared_refresh_duration_seconds": "{value} 秒",
   "shared_refresh_duration_minutes": "{minutes} 分 {seconds} 秒",
   "shared_refresh_age_with_duration": "{age} · {duration}",
+  "shared_refresh_in_progress": "正在重新整理…",
   "shared_refresh_step_summary": "概覽",
   "shared_refresh_step_activity": "活動",
   "shared_refresh_step_heatmap": "熱力圖",

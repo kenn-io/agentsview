@@ -521,6 +521,7 @@
   "shared_refresh_duration_seconds": "{value} s",
   "shared_refresh_duration_minutes": "{minutes} min {seconds} s",
   "shared_refresh_age_with_duration": "{age} · {duration}",
+  "shared_refresh_in_progress": "Actualizando…",
   "shared_refresh_step_summary": "Resumen",
   "shared_refresh_step_activity": "Actividad",
   "shared_refresh_step_heatmap": "Mapa de calor",

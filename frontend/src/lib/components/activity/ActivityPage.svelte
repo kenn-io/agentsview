@@ -117,6 +117,15 @@
   const refreshStatus = $derived(
     activity.loading ? reportProgressLabel(activity.progress) : undefined,
   );
+  // Every progress label at its widest, so the refresh label box fits them
+  // with the running duration after them.
+  const refreshStatusSamples = [
+    m.activity_loading_report(),
+    m.activity_loading_sessions(),
+    m.activity_loading_usage(),
+    m.activity_report_progress({ count: 9_999_999 }),
+    m.activity_finalizing_report(),
+  ];
 
   const earliestSession = $derived(sync.stats?.earliest_session ?? null);
   let today = $state(localDateStr(new Date()));
@@ -438,8 +447,10 @@
         lastUpdatedAt={activity.lastUpdatedAt}
         queryDurationMs={activity.lastQueryDurationMs}
         querySteps={activity.lastQuerySteps}
+        liveQuery={activity.liveQuery}
         busy={activity.loading}
         status={refreshStatus}
+        statusWidthSamples={refreshStatusSamples}
         onRefresh={() => activity.load({ background: true })}
         label={m.activity_refresh()}
       />

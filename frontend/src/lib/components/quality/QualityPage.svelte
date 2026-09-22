@@ -610,6 +610,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
       lastUpdatedAt={analytics.qualityLastUpdatedAt}
       queryDurationMs={analytics.qualityLastQueryDurationMs}
       querySteps={analytics.qualityLastQuerySteps}
+      liveQuery={analytics.qualityLiveQuery}
       busy={querying}
       onRefresh={handleRefresh}
       label={m.quality_page_refresh()}

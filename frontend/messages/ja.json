@@ -519,6 +519,7 @@
   "shared_refresh_duration_seconds": "{value} 秒",
   "shared_refresh_duration_minutes": "{minutes} 分 {seconds} 秒",
   "shared_refresh_age_with_duration": "{age}・{duration}",
+  "shared_refresh_in_progress": "更新中…",
   "shared_refresh_step_summary": "概要",
   "shared_refresh_step_activity": "アクティビティ",
   "shared_refresh_step_heatmap": "ヒートマップ",

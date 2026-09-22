@@ -1,5 +1,6 @@
 import { m } from "../i18n/index.js";
 import { queryStepFrom, type QueryStep } from "../utils/refresh.js";
+import { LiveQuery } from "../utils/liveQuery.svelte.js";
 import type { AutomatedScope } from "../api/types.js";
 import type {
   DbAnalyticsSummary as AnalyticsSummary,
@@ -111,6 +112,11 @@ class AnalyticsStore {
   // relative to refreshStartedAt.
   private stepTimings = new Map<Panel, QueryStep>();
   private refreshStartedAt = 0;
+  // The refresh each page is running now, drawn live by its refresh
+  // control. Panel fetches report into whichever one began last.
+  readonly liveQuery = new LiveQuery();
+  readonly qualityLiveQuery = new LiveQuery();
+  private currentLiveQuery: LiveQuery = this.liveQuery;
   hasNewData: boolean = $state(false);
 
   loading = $state({
@@ -493,22 +499,23 @@ class AnalyticsStore {
     // fresh.
     if (isFirstLoad) this.errors[panel] = null;
     const started = performance.now();
+    const liveQuery = this.currentLiveQuery;
+    const liveStep = liveQuery.start(panel, started);
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
     try {
       const data = await fetchRequest({ signal });
       if (this.versions[panel] === v) {
         onSuccess(data);
         this.errors[panel] = null;
-        this.stepTimings.set(
+        const step = queryStepFrom(
           panel,
-          queryStepFrom(
-            panel,
-            responseTimingOf(data),
-            started,
-            performance.now(),
-            this.refreshStartedAt,
-          ),
+          responseTimingOf(data),
+          started,
+          performance.now(),
+          this.refreshStartedAt,
         );
+        this.stepTimings.set(panel, step);
+        liveQuery.settle(liveStep, step);
         return "ok";
       }
       return "aborted";
@@ -538,6 +545,7 @@ class AnalyticsStore {
         status,
       });
       this.clearAbortSignal(panel, signal);
+      liveQuery.abandon(liveStep);
       if (this.versions[panel] === v) {
         this.querying[panel] = false;
         this.loading[panel] = false;
@@ -560,6 +568,8 @@ class AnalyticsStore {
 
   cancelInFlightReads(): void {
     this.fetchAllVersion++;
+    this.liveQuery.end();
+    this.qualityLiveQuery.end();
     for (const panel of Object.keys(this.abortControllers) as Panel[]) {
       this.versions[panel]++;
       this.abortControllers[panel]?.abort();
@@ -592,6 +602,8 @@ class AnalyticsStore {
     const startedAt = performance.now();
     this.stepTimings.clear();
     this.refreshStartedAt = startedAt;
+    this.currentLiveQuery = this.liveQuery;
+    const live = this.liveQuery.begin(startedAt);
     const fetchVersion = ++this.fetchAllVersion;
     this.rollDates();
     const results = await Promise.all([
@@ -610,6 +622,7 @@ class AnalyticsStore {
     if (fetchVersion === this.fetchAllVersion && results.every((result) => result === "ok")) {
       this.markRefreshComplete(startedAt);
     }
+    this.liveQuery.end(live);
   }
 
   async fetchSummary(): Promise<FetchResult> {
@@ -820,6 +833,8 @@ class AnalyticsStore {
     // silently narrow the Quality signal facts.
     const startedAt = performance.now();
     this.refreshStartedAt = startedAt;
+    this.currentLiveQuery = this.qualityLiveQuery;
+    const live = this.qualityLiveQuery.begin(startedAt);
     const result = await this.fetchSignals({ includeModel: false });
     if (result === "ok") {
       this.qualityLastUpdatedAt = Date.now();
@@ -829,6 +844,7 @@ class AnalyticsStore {
         this.stepTimings.get("signals") ?? { name: "signals", startMs: 0, durationMs },
       ];
     }
+    this.qualityLiveQuery.end(live);
   }
 
   setTopMetric(m: TopSessionsMetric) {

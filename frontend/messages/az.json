@@ -521,6 +521,7 @@
   "shared_refresh_duration_seconds": "{value} san",
   "shared_refresh_duration_minutes": "{minutes} dəq {seconds} san",
   "shared_refresh_age_with_duration": "{age} · {duration}",
+  "shared_refresh_in_progress": "Yenilənir…",
   "shared_refresh_step_summary": "Xülasə",
   "shared_refresh_step_activity": "Fəaliyyət",
   "shared_refresh_step_heatmap": "İstilik xəritəsi",

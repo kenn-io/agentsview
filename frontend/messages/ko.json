@@ -505,6 +505,7 @@
   "shared_refresh_duration_seconds": "{value}초",
   "shared_refresh_duration_minutes": "{minutes}분 {seconds}초",
   "shared_refresh_age_with_duration": "{age} · {duration}",
+  "shared_refresh_in_progress": "새로 고치는 중…",
   "shared_refresh_step_summary": "요약",
   "shared_refresh_step_activity": "활동",
   "shared_refresh_step_heatmap": "히트맵",

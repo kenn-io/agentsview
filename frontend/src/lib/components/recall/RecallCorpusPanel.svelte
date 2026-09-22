@@ -29,6 +29,7 @@
   import { ui } from "../../stores/ui.svelte.js";
   import { LatestRead } from "../../utils/latest-read.js";
   import RefreshControl from "../shared/RefreshControl.svelte";
+  import { LiveQuery } from "../../utils/liveQuery.svelte.js";
   import { queryStepFrom, type QueryStep } from "../../utils/refresh.js";
 
   const ENTRY_TYPES = [
@@ -66,6 +67,8 @@
   // an entries load on its own, or the entries and status pair on refresh.
   let queryDurationMs = $state<number | null>(null);
   let querySteps = $state<QueryStep[]>([]);
+  // The query running now, drawn live by the refresh control.
+  const liveQuery = new LiveQuery();
   // What one loader measured when it applied its response. Each loader
   // returns its own record, or null when it failed or a newer load
   // superseded it, so a refresh can only publish the requests it made.
@@ -184,6 +187,9 @@
     const appending = cursor !== "";
     entriesLoading = true;
     entriesFailed = false;
+    const live = publishTiming ? liveQuery.begin(startedAt) : null;
+    const liveStep = live === null ? 0 : liveQuery.start("entries", startedAt);
+    let load: LoadTiming | null = null;
     try {
       const page = await RecallService.getApiV1RecallEntries({
         limit: 200,
@@ -201,16 +207,18 @@
       nextCursor = page.next_cursor ?? "";
       resultCap = page.result_cap ?? 0;
       entriesUpdatedAt = Date.now();
-      const load = { seq, startedAt, appliedAt: performance.now(), timing: responseTimingOf(page) };
+      load = { seq, startedAt, appliedAt: performance.now(), timing: responseTimingOf(page) };
       if (publishTiming) {
         queryDurationMs = load.appliedAt - startedAt;
-        querySteps = [queryStepFrom("entries", load.timing, startedAt, load.appliedAt, startedAt)];
+        querySteps = [stepOf("entries", load, startedAt)];
       }
       return load;
     } catch (error) {
       if (isAbortError(error) || !entriesRead.isCurrent(signal)) return null;
       if (appending && error instanceof ApiError && error.status === 409) {
-        return loadEntries("", publishTiming);
+        // Awaited so this call's cleanup runs after the retry has
+        // reported its own step to the live query.
+        return await loadEntries("", publishTiming);
       }
       if (!appending) {
         entries = [];
@@ -220,6 +228,10 @@
       }
       return null;
     } finally {
+      if (live !== null) {
+        settleLive(liveStep, "entries", load, startedAt);
+        liveQuery.end(live);
+      }
       if (entriesRead.finish(signal)) entriesLoading = false;
     }
   }
@@ -282,9 +294,31 @@
     }, 250);
   }
 
+  function stepOf(name: string, load: LoadTiming, originMs: number): QueryStep {
+    return queryStepFrom(name, load.timing, load.startedAt, load.appliedAt, originMs);
+  }
+
+  function settleLive(liveStep: number, name: string, load: LoadTiming | null, originMs: number) {
+    if (load === null) liveQuery.abandon(liveStep);
+    else liveQuery.settle(liveStep, stepOf(name, load, originMs));
+  }
+
   async function refreshRecall() {
     const startedAt = performance.now();
-    const [entriesLoad, statusLoad] = await Promise.all([loadEntries("", false), loadStatus()]);
+    const live = liveQuery.begin(startedAt);
+    const entriesStep = liveQuery.start("entries", startedAt);
+    const statusStep = liveQuery.start("status", startedAt);
+    const [entriesLoad, statusLoad] = await Promise.all([
+      loadEntries("", false).then((load) => {
+        settleLive(entriesStep, "entries", load, startedAt);
+        return load;
+      }),
+      loadStatus().then((load) => {
+        settleLive(statusStep, "status", load, startedAt);
+        return load;
+      }),
+    ]);
+    liveQuery.end(live);
     // Only a refresh whose own two requests both applied, and were not
     // overtaken by a later load while the other was still in flight, counts
     // as a completed query. Otherwise the previous duration and timeline
@@ -296,10 +330,7 @@
       statusLoad.seq === statusLoadSeq
     ) {
       queryDurationMs = performance.now() - startedAt;
-      querySteps = [
-        queryStepFrom("entries", entriesLoad.timing, entriesLoad.startedAt, entriesLoad.appliedAt, startedAt),
-        queryStepFrom("status", statusLoad.timing, statusLoad.startedAt, statusLoad.appliedAt, startedAt),
-      ];
+      querySteps = [stepOf("entries", entriesLoad, startedAt), stepOf("status", statusLoad, startedAt)];
     }
     if (progressExpanded) await loadProgress();
   }
@@ -456,6 +487,7 @@
         {lastUpdatedAt}
         {queryDurationMs}
         {querySteps}
+        {liveQuery}
         busy={entriesLoading || statusLoading || progressLoading}
         onRefresh={refreshRecall}
         label={m.shared_refresh()}
