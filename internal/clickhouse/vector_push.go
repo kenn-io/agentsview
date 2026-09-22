@@ -551,7 +551,7 @@ func (s *Sync) vectorEvictionBound(ctx context.Context, fingerprint, sessionID s
 			(SELECT count() FROM vector_push_state
 			  WHERE generation_fingerprint = ? AND session_id = ? AND source_archive_id <> ?)
 			+ (SELECT count() FROM sessions WHERE id = ? AND source_archive_id <> ?),
-			(SELECT max(push_version) FROM vector_chunks
+			(SELECT coalesce(max(push_version), 0) FROM vector_chunks
 			  WHERE session_id = ? AND generation_fingerprint = ?)`,
 		fingerprint, sessionID, s.archiveID, sessionID, s.archiveID, sessionID, fingerprint,
 	).Scan(&owners, &newest); err != nil {
