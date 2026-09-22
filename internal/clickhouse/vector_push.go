@@ -46,6 +46,10 @@ func (s *Sync) pushVectors(
 	failed map[string]struct{}, onProgress func(storage.PushProgress),
 ) (storage.VectorPushResult, error) {
 	var res storage.VectorPushResult
+	if s.local.ArchiveContent().UsageOnly() {
+		res.Skipped, res.SkippedReason = true, "usage-only archive keeps no vectors"
+		return res, s.clearUsageOnlyVectors(ctx)
+	}
 	if s.vectorSource == nil {
 		res.Skipped, res.SkippedReason = true, "no vector source configured"
 		return res, nil
@@ -278,6 +282,58 @@ func (s *Sync) ensureVectorGeneration(ctx context.Context, gen storage.VectorGen
 	return insertRows(ctx, s.conn, "vector_generations", [][]any{{
 		gen.Fingerprint, gen.Model, int64(gen.Dimension), &now, newPushVersion(),
 	}})
+}
+
+// clearUsageOnlyVectors removes every vector row this archive recorded, in
+// every generation, once the local archive keeps usage only: the mirror
+// must not keep serving transcript text the archive no longer holds. Rows
+// another archive still records for the same session survive, as in any
+// eviction, and this archive's completion markers go so a later push with
+// vectors re-enabled starts generation-wide.
+func (s *Sync) clearUsageOnlyVectors(ctx context.Context) error {
+	evict, err := s.archiveVectorSessions(ctx)
+	if err != nil {
+		return err
+	}
+	for _, o := range evict {
+		if err := s.evictVectorSession(ctx, o.fingerprint, o.sessionID); err != nil {
+			return err
+		}
+	}
+	if _, err := s.conn.ExecContext(ctx, `
+		DELETE FROM vector_push_state WHERE source_archive_id = ? AND session_id = ?`,
+		s.archiveID, vectorCompleteMarker); err != nil {
+		return fmt.Errorf("clearing clickhouse vector completion markers: %w", err)
+	}
+	if len(evict) > 0 {
+		log.Printf("clickhouse vector push: usage-only archive; evicted vectors for %d session(s)", len(evict))
+	}
+	return nil
+}
+
+// archiveVectorSession is one (generation, session) pair this archive has
+// recorded in vector_push_state.
+type archiveVectorSession struct{ fingerprint, sessionID string }
+
+// archiveVectorSessions lists every session this archive recorded in any
+// generation, excluding completion markers.
+func (s *Sync) archiveVectorSessions(ctx context.Context) ([]archiveVectorSession, error) {
+	rows, err := s.conn.QueryContext(ctx, `
+		SELECT generation_fingerprint, session_id FROM vector_push_state
+		WHERE source_archive_id = ? AND session_id <> ?`, s.archiveID, vectorCompleteMarker)
+	if err != nil {
+		return nil, fmt.Errorf("listing clickhouse archive vector sessions: %w", err)
+	}
+	defer rows.Close()
+	var out []archiveVectorSession
+	for rows.Next() {
+		var o archiveVectorSession
+		if err := rows.Scan(&o.fingerprint, &o.sessionID); err != nil {
+			return nil, fmt.Errorf("scanning clickhouse archive vector session: %w", err)
+		}
+		out = append(out, o)
+	}
+	return out, rows.Err()
 }
 
 // readVectorPushState returns this archive's per-session aggregate hashes

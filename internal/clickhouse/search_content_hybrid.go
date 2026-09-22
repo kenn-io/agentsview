@@ -119,7 +119,7 @@ func (s *Store) hybridKeywordLeg(
 func (s *Store) fetchHybridKeywordBatch(
 	ctx context.Context, f db.ContentSearchFilter, k, offset int,
 ) ([]hybridDisplay, error) {
-	scopeWhere, scopeArgs := db.BuildSessionFilterSQL(semanticSessionFilter(f), db.ClickHouseQueryDialect())
+	scopeWhere, scopeArgs := db.BuildSessionBaseFilterSQL(semanticSessionFilter(f), db.ClickHouseQueryDialect())
 	scopeWhere, scopeArgs = db.AppendExcludeSessionIDs(scopeWhere, scopeArgs, "id", f.ExcludeSessionIDs)
 	kf := f
 	kf.Mode = "fts"

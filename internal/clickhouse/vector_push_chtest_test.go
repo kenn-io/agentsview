@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/clickhouse/chtest"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/storage"
 )
@@ -24,6 +25,7 @@ var (
 	vecAlpha0b = []float32{0.9, 0.1, 0, 0}
 	vecAlpha1  = []float32{0, 1, 0, 0}
 	vecBeta0   = []float32{0, 0, 1, 0}
+	vecChild0  = []float32{0, 0, 0, 1}
 )
 
 // fakeVectorSource is an in-memory storage.VectorPushSource whose hashes and
@@ -339,6 +341,45 @@ func TestVectorPushEvictionKeepsOtherArchiveVectors(t *testing.T) {
 		"documents stay while any generation still holds chunks for the session")
 }
 
+// TestVectorPushUsageOnlyClearsArchiveVectors pins the archive policy: once
+// the local archive keeps usage only, a push evicts every vector row this
+// archive recorded, whether or not a vector source is still attached, and
+// leaves another archive's rows for the same session alone.
+func TestVectorPushUsageOnlyClearsArchiveVectors(t *testing.T) {
+	ctx := context.Background()
+	local, target := seedFixture(t)
+	source := newFixtureVectorSource()
+	s := newTestSync(t, local, target, storage.PusherOptions{VectorSource: source})
+	conn := chtest.Open(t, target.URL, target.Database)
+	_, err := s.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Equal(t, 4, chtest.Count(t, conn, "vector_chunks", ""))
+
+	version := newPushVersion()
+	require.NoError(t, insertRows(ctx, conn, "vector_chunks", [][]any{{
+		vectorFixtureFP, "beta-other", int64(0), fixtureBetaID, vecBeta0, version,
+	}}))
+	require.NoError(t, insertRows(ctx, conn, "vector_push_state", [][]any{{
+		"other-archive", vectorFixtureFP, fixtureBetaID, "beta-other-v1", version,
+	}}))
+
+	local.SetArchiveContent(config.ArchiveContentUsage)
+	for _, detach := range []bool{false, true} {
+		if detach {
+			s.vectorSource = nil
+		}
+		res, err := s.Push(ctx, false, nil)
+		require.NoError(t, err)
+		assert.True(t, res.Vectors.Skipped)
+		assert.Equal(t, 0, chtest.Count(t, conn, "vector_push_state", "source_archive_id = ?", s.archiveID))
+		assert.Equal(t, 0, chtest.Count(t, conn, "vector_chunks", "session_id = ?", fixtureAlphaID))
+		assert.Equal(t, 0, chtest.Count(t, conn, "vector_documents", "session_id = ?", fixtureAlphaID))
+		assert.Equal(t, 1, chtest.Count(t, conn, "vector_chunks", "doc_key = ?", "beta-other"),
+			"the other archive's beta chunk survives")
+		assert.Equal(t, 1, chtest.Count(t, conn, "vector_push_state", "source_archive_id = 'other-archive'"))
+	}
+}
+
 func fixedEncoder(vec []float32) storage.VectorQueryEncoder {
 	return func(context.Context, string) ([]float32, error) { return vec, nil }
 }
@@ -347,6 +388,10 @@ func TestVectorSearcherServesSemanticAndHybrid(t *testing.T) {
 	ctx := context.Background()
 	local, target := seedFixture(t)
 	source := newFixtureVectorSource()
+	source.hashes[fixtureChildID] = "child-v1"
+	source.docs[fixtureChildID] = []storage.VectorPushDoc{
+		vdoc(fixtureChildID, "child-d0", 0, "child first", "h-c0", vecChild0),
+	}
 	s := newTestSync(t, local, target, storage.PusherOptions{VectorSource: source})
 	_, err := s.Push(ctx, false, nil)
 	require.NoError(t, err)
@@ -369,7 +414,7 @@ func TestVectorSearcherServesSemanticAndHybrid(t *testing.T) {
 	searcher := NewVectorSearcher(store.DB(), vectorFixtureFP, vectorFixtureDim, 20, fixedEncoder(vecAlpha0a))
 	hits, err := searcher.SemanticSearch(ctx, "alpha", 10)
 	require.NoError(t, err)
-	require.Len(t, hits, 3, "one hit per document: both alpha chunks roll up to alpha-d0")
+	require.Len(t, hits, 4, "one hit per document: both alpha chunks roll up to alpha-d0")
 	assert.Equal(t, fixtureAlphaID, hits[0].SessionID)
 	assert.Equal(t, 0, hits[0].Ordinal)
 	assert.InDelta(t, 1.0, hits[0].Score, 1e-5)
@@ -402,6 +447,20 @@ func TestVectorSearcherServesSemanticAndHybrid(t *testing.T) {
 	assert.Equal(t, "alpha", top.Project)
 	require.NotNil(t, top.Score)
 	assert.Contains(t, top.Snippet, "alpha first")
+
+	// Child visibility belongs to Scope, not the sidebar's IncludeChildren:
+	// the child session's own hit must survive with IncludeChildren off.
+	childSearcher := NewVectorSearcher(store.DB(), vectorFixtureFP, vectorFixtureDim, 20, fixedEncoder(vecChild0))
+	store.SetVectorSearcher(childSearcher)
+	for _, mode := range []string{"semantic", "hybrid"} {
+		childPage, err := store.SearchContent(ctx, db.ContentSearchFilter{
+			Pattern: "child first", Mode: mode, Limit: 10, IncludeOneShot: true,
+		})
+		require.NoError(t, err)
+		require.NotEmpty(t, childPage.Matches, mode)
+		assert.Equal(t, fixtureChildID, childPage.Matches[0].SessionID, mode)
+	}
+	store.SetVectorSearcher(searcher)
 
 	scoped, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "alpha", Mode: "semantic", Limit: 10, Project: "beta", IncludeOneShot: true,
