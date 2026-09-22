@@ -36,14 +36,14 @@ func TestSanitizeUTF8PreservesCleanTextAndRepairsControls(t *testing.T) {
 	}{
 		{"empty", "", ""},
 		{"ascii whitespace", "text\n\tline\r", "text\n\tline\r"},
-		{"unicode", "中文 café �", "中文 café �"},
+		{"unicode", "中文 café \ufffd", "中文 café \ufffd"},
 		{"nul", "a\x00b", "ab"},
 		{"terminal controls", "a\x1b]0;title\x07b\x7f", "a]0;titleb"},
-		{"unicode controls", "a\u0080b\u009fc ", "abc "},
+		{"unicode controls", "a\u0080b\u009fc\u00a0", "abc\u00a0"},
 		{"invalid utf8", "a\xff\xfeb\xe2\x82", "ab"},
 		{"ascii bounds", " !~\x7f\x1f", " !~"},
 		{"mixed byte controls", "\x00 \xff~\x7f", " ~"},
-		{"clean c2 prefix", " £©¿", " £©¿"},
+		{"clean c2 prefix", "\u00a0\u00a3\u00a9\u00bf", "\u00a0\u00a3\u00a9\u00bf"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := SanitizeUTF8(tc.input)
@@ -72,8 +72,8 @@ func TestSanitizeUTF8MatchesLegacyOnMixedInput(t *testing.T) {
 		"\x00", "\x01", "\x1b", "\x1f", " ", "~", "\x7f",
 		"\t", "\n", "\r", "\r\n",
 		"\xff", "\xfe", "\x80", "\xc2", "\xe2\x82", "\xf0\x9f\x98", "\xed\xa0\x80",
-		"\u0080", "\u009f", " ", "é", "中", "�",
-		"\U0001f600", " ", "​",
+		"\u0080", "\u009f", "\u00a0", "\u00e9", "\u4e2d", "\ufffd",
+		"\U0001f600", "\u2028", "\u200b",
 	}
 	rng := rand.New(rand.NewPCG(1, 2))
 	var b strings.Builder
