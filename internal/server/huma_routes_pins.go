@@ -13,6 +13,7 @@ func (s *Server) registerPinRoutes() {
 	group := huma.NewGroup(s.api, "/api/v1")
 	configureRouteGroup(group, "Pins")
 
+	s.deleteRoute(group, "/sessions/{id}/pin-references/{messageKey}", "Remove retained pin", s.humaRemovePinReference)
 	s.get(group, "/pins", "List pins", s.humaListPins)
 	s.get(group, "/sessions/{id}/pins", "List session pins", s.humaListSessionPins)
 	s.post(group, "/sessions/{id}/messages/{messageId}/pin", "Pin message", s.humaPinMessage)
@@ -93,6 +94,22 @@ func (s *Server) humaUnpinMessage(ctx context.Context,
 			return nil, handled
 		}
 		return nil, internalError("unpin message", err)
+	}
+	return &noContentOutput{Status: http.StatusNoContent}, nil
+}
+
+type pinReferenceInput struct {
+	ID         string `path:"id"`
+	MessageKey string `path:"messageKey"`
+}
+
+func (s *Server) humaRemovePinReference(ctx context.Context, in *pinReferenceInput) (*noContentOutput, error) {
+	store, ok := s.db.(db.PinReferenceStore)
+	if !ok {
+		return nil, apiError(http.StatusNotImplemented, "pin references are not available")
+	}
+	if err := store.RemovePinReference(ctx, in.ID, in.MessageKey); err != nil {
+		return nil, internalError("remove pin reference", err)
 	}
 	return &noContentOutput{Status: http.StatusNoContent}, nil
 }

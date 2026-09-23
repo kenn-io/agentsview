@@ -45,13 +45,15 @@ type bytesOutput struct {
 }
 
 type apiResponseError struct {
-	Status              int    `json:"-"`
-	Code                string `json:"code,omitempty"`
-	Message             string `json:"error"`
-	CurrentManifestID   string `json:"current_manifest_id,omitempty"`
-	CurrentReceipt      string `json:"current_receipt,omitempty"`
-	CurrentGeneration   int64  `json:"current_generation,omitzero"`
-	CurrentUploadOffset *int64 `json:"upload_offset,omitempty"`
+	Variants            []string `json:"variants,omitempty"`
+	IdentityState       string   `json:"state,omitempty"`
+	Status              int      `json:"-"`
+	Code                string   `json:"code,omitempty"`
+	Message             string   `json:"error"`
+	CurrentManifestID   string   `json:"current_manifest_id,omitempty"`
+	CurrentReceipt      string   `json:"current_receipt,omitempty"`
+	CurrentGeneration   int64    `json:"current_generation,omitzero"`
+	CurrentUploadOffset *int64   `json:"upload_offset,omitempty"`
 }
 
 func (e *apiResponseError) Error() string {
@@ -549,6 +551,9 @@ func (s *Server) tryArchiveWrite(ctx context.Context, work func() error) error {
 }
 
 func serverError(err error) error {
+	if handled := hostedIdentityHTTPError(err); handled != nil {
+		return handled
+	}
 	if errors.Is(err, context.Canceled) {
 		return nil
 	}
@@ -559,6 +564,9 @@ func serverError(err error) error {
 }
 
 func internalError(logPrefix string, err error) error {
+	if handled := hostedIdentityHTTPError(err); handled != nil {
+		return handled
+	}
 	if errors.Is(err, context.Canceled) {
 		return nil
 	}
@@ -637,4 +645,15 @@ func (s *Server) handleHTTP(op *huma.Operation, handler http.HandlerFunc) {
 		r, w := humago.Unwrap(ctx)
 		handler(w, r)
 	})
+}
+
+func hostedIdentityHTTPError(err error) error {
+	if identity, ok := errors.AsType[*db.SessionIdentityError](err); ok {
+		status := http.StatusNotFound
+		if identity.State == "ambiguous" {
+			status = http.StatusConflict
+		}
+		return &apiResponseError{Status: status, Message: identity.Error(), IdentityState: identity.State, Variants: identity.Variants}
+	}
+	return nil
 }

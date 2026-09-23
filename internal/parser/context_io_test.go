@@ -167,7 +167,7 @@ func TestUsageEventTokenAggregateStopsAfterContextCancellation(t *testing.T) {
 func TestTokenCoverageStopsAfterContextCancellation(t *testing.T) {
 	messages := make([]ParsedMessage, 1024)
 
-	_, _, err := (ParsedSession{}).TokenCoverageContext(
+	_, _, err := (&ParsedSession{}).TokenCoverageContext(
 		newCancelOnErrCheckContext(t, 2), messages,
 	)
 

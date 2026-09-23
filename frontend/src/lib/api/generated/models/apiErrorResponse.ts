@@ -8,5 +8,7 @@ export interface ApiErrorResponse {
   current_manifest_id?: string;
   current_receipt?: string;
   error: string;
+  state?: string;
   upload_offset?: number;
+  variants?: string[];
 }

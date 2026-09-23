@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -684,6 +685,24 @@ func (b *directBackend) Watch(
 			case _, ok := <-ticks:
 				if !ok {
 					return
+				}
+				if identity, ok := b.db.(db.SessionWatchStateStore); ok {
+					state, e := identity.GetSessionWatchState(id)
+					if e != nil {
+						return
+					}
+					payload, e := json.Marshal(state)
+					if e != nil {
+						return
+					}
+					select {
+					case out <- Event{Event: "session.identity", Data: string(payload)}:
+					case <-ctx.Done():
+						return
+					}
+					if state.State != db.SessionWatchResolved {
+						return
+					}
 				}
 				select {
 				case out <- Event{Event: "session_updated", Data: id}:

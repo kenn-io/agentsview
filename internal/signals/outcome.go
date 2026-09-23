@@ -38,12 +38,17 @@ var giveUpPatterns = []string{
 // ClassifyOutcome classifies a session's outcome based on its
 // metadata. Pure computation, no DB access.
 func ClassifyOutcome(in OutcomeInput) OutcomeResult {
+	return ClassifyOutcomeAt(in, time.Now())
+}
+
+// ClassifyOutcomeAt evaluates recency at an explicit observation time.
+func ClassifyOutcomeAt(in OutcomeInput, now time.Time) OutcomeResult {
 	if in.IsAutomated {
 		return OutcomeResult{"unknown", "low", false}
 	}
 
 	if in.EndedWithRole == "assistant" && hasTerminalAPIErrorText(in.LastAssistantText) {
-		if isRecent(in.LastActivity) {
+		if isRecentAt(in.LastActivity, now) {
 			return OutcomeResult{"unknown", "low", true}
 		}
 		return OutcomeResult{"errored", "medium", false}
@@ -57,7 +62,7 @@ func ClassifyOutcome(in OutcomeInput) OutcomeResult {
 		return OutcomeResult{"unknown", "low", false}
 	}
 
-	if isRecent(in.LastActivity) {
+	if isRecentAt(in.LastActivity, now) {
 		return OutcomeResult{"unknown", "low", true}
 	}
 
@@ -84,11 +89,11 @@ func ClassifyOutcome(in OutcomeInput) OutcomeResult {
 	return OutcomeResult{"unknown", "low", false}
 }
 
-func isRecent(t time.Time) bool {
+func isRecentAt(t, now time.Time) bool {
 	if t.IsZero() {
 		return false
 	}
-	return time.Since(t) < RecencyWindow
+	return now.Sub(t) < RecencyWindow
 }
 
 func hasGiveUpPattern(text string) bool {

@@ -241,6 +241,15 @@ func TestSyncEnsureSchemaCreatesRawCustodyOnLegacyFastPath(t *testing.T) {
 		)`, schemaTestSchema).Scan(&exists))
 	assert.True(t, exists,
 		"schema-current sync must still install newly introduced custody tables")
+	// An older raw-only installation also needs the additive job migration,
+	// without forcing the unrelated mirror schema down its full DDL path.
+	_, err = pg.ExecContext(t.Context(), `ALTER TABLE raw_ingest_jobs DROP COLUMN projection_generation, DROP COLUMN projection_selected`)
+	require.NoError(t, err)
+	syncer = &Sync{pg: pg, schema: schemaTestSchema}
+	require.NoError(t, syncer.EnsureSchema(t.Context()))
+	rows, err := pg.QueryContext(t.Context(), `SELECT projection_generation,projection_selected FROM raw_ingest_jobs LIMIT 0`)
+	require.NoError(t, err)
+	require.NoError(t, rows.Close())
 }
 
 // TestSyncEnsureSchemaFastPathToleratesRestrictedRole pins the restricted-role

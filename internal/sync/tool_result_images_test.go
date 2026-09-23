@@ -626,7 +626,7 @@ func TestToolResultImagesOffloadFullIngest(t *testing.T) {
 	t.Cleanup(engine.Close)
 	outcome := engine.writeBatchBulkWithOutcome([]pendingWrite{{
 		sess: parser.ParsedSession{ID: "offload-full", Project: "project", Machine: "local", Agent: parser.AgentCodex, StartedAt: time.Unix(1, 0)},
-		msgs: []parser.ParsedMessage{{Ordinal: 0, Role: parser.RoleAssistant, Content: "answer", ToolCalls: []parser.ParsedToolCall{{ToolUseID: "image", ToolName: "Bash", Category: "Bash", ResultEvents: []parser.ParsedToolResultEvent{{ToolUseID: "image", Source: "tool", Status: "completed", Content: `[{"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="}]`}}}}}},
+		msgs: []parser.ParsedMessage{{Ordinal: 0, Role: parser.RoleAssistant, Content: "answer", ToolCalls: []parser.ParsedToolCall{{ToolUseID: "image", ToolName: "Bash", Category: "Bash", ResultEvents: []parser.ParsedToolResultEvent{{ToolUseID: "image", Source: "tool", Status: "completed", Content: `[{"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="},{"type":"text","text":"AKIA7QHWN2DKR4FYPLJM"}]`}}}}}},
 	}}, false)
 	require.NotNil(t, outcome)
 	messages, err := database.GetAllMessages(t.Context(), "offload-full")
@@ -635,6 +635,14 @@ func TestToolResultImagesOffloadFullIngest(t *testing.T) {
 	require.Len(t, messages[0].ToolCalls, 1)
 	require.Len(t, messages[0].ToolCalls[0].ResultEvents, 1)
 	require.Contains(t, messages[0].ToolCalls[0].ResultEvents[0].Content, `"image_ref":"asset://`)
+	page, err := database.ListSecretFindings(t.Context(), db.SecretFindingFilter{})
+	require.NoError(t, err)
+	require.Len(t, page.Findings, 1)
+	finding := page.Findings[0]
+	content := messages[0].ToolCalls[0].ResultEvents[0].Content
+	require.LessOrEqual(t, finding.MatchEnd, len(content))
+	assert.Equal(t, "AKIA7QHWN2DKR4FYPLJM", content[finding.MatchStart:finding.MatchEnd],
+		"secret offsets must address the stored content after image offload")
 	objects, err := os.ReadDir(database.AssetsDir())
 	require.NoError(t, err)
 	require.Len(t, objects, 1)

@@ -151,6 +151,15 @@ func runReplicaPushTarget(
 	cfg ReplicaPushConfig,
 	ref storage.ReplicaTargetRef,
 ) error {
+	if backend.Name() == "pg" {
+		pg, err := appCfg.ResolvePGTarget(ref.Name)
+		if err != nil {
+			return err
+		}
+		if pg.RawTenant != "" || pg.RawDerivation {
+			return errors.New("pg push cannot mutate a hosted-owned projection")
+		}
+	}
 	target, err := backend.ResolveTarget(appCfg, ref)
 	if err != nil {
 		return err
@@ -467,11 +476,12 @@ func loadReplicaServeConfig(cmd *cobra.Command) (config.Config, string, error) {
 }
 
 type replicaServeStartup struct {
-	cfg     config.Config
-	ctx     context.Context
-	rtOpts  serveRuntimeOptions
-	srv     *server.Server
-	cleanup func()
+	cfg         config.Config
+	ctx         context.Context
+	rtOpts      serveRuntimeOptions
+	srv         *server.Server
+	cleanup     func()
+	startWorker func()
 }
 
 var prepareReplicaServe = prepareReplicaServeImpl
@@ -490,6 +500,18 @@ func prepareReplicaServeImpl(
 	}
 	if target.Target.URL == "" {
 		return replicaServeStartup{}, fmt.Errorf("%s serve: url not configured", name)
+	}
+	if name == "pg" {
+		pg, err := appCfg.ResolvePG()
+		if err != nil {
+			return replicaServeStartup{}, err
+		}
+		if err := pg.ValidateRawDerivation(appCfg.RequireAuth); err != nil {
+			return replicaServeStartup{}, err
+		}
+		if pg.RawTenant != "" {
+			return prepareHostedPGServe(appCfg, pg, basePath)
+		}
 	}
 
 	applyClassifierConfig(appCfg)
@@ -587,8 +609,16 @@ func runReplicaServe(backend storage.Replica, appCfg config.Config, basePath str
 	if err != nil {
 		fatal("%v", err)
 	}
+	if err := runPreparedReplicaServe(name, startup); err != nil {
+		fatal("%v", err)
+	}
+}
+
+// Return through cleanup before the outer CLI may call os.Exit, including
+// readiness failures and unexpected server/proxy exits.
+func runPreparedReplicaServe(name string, startup replicaServeStartup) error {
 	defer startup.cleanup()
-	appCfg = startup.cfg
+	appCfg := startup.cfg
 	ctx := startup.ctx
 	rtOpts := startup.rtOpts
 	srv := startup.srv
@@ -601,11 +631,14 @@ func runReplicaServe(backend storage.Replica, appCfg config.Config, basePath str
 	)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
-			return
+			return nil
 		}
-		fatal("%s serve: %v", name, err)
+		return fmt.Errorf("%s serve: %w", name, err)
 	}
 
+	if startup.startWorker != nil {
+		startup.startWorker()
+	}
 	// Write the kit runtime record so CLI commands can discover this
 	// daemon. ReadOnly=true marks it as a replica serve (read-only)
 	// so clients can select an appropriate transport.
@@ -632,8 +665,9 @@ func runReplicaServe(backend storage.Replica, appCfg config.Config, basePath str
 	}
 
 	if err := waitForServerRuntime(ctx, srv, rt); err != nil {
-		fatal("%s serve: %v", name, err)
+		return fmt.Errorf("%s serve: %w", name, err)
 	}
+	return nil
 }
 
 func writeReplicaServeRuntimeRecord(name string, rt *serveRuntime) bool {

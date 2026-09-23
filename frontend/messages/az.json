@@ -1975,6 +1975,7 @@
   "pinned_copy_message": "Mesajı kopyala",
   "pinned_copied_message": "Mesaj kopyalandı",
   "pinned_unpin": "Sancağı çıxar",
+  "pinned_unresolved": "Sancaqlanmış mesaj artıq bu yazışma mətnində yoxdur.",
   "settings_session_providers_title": "Sessiya provayderləri",
   "settings_session_providers_description": "AgentsView tətbiqinin hansı agent sessiya mənbələrini aşkar edib sinxronlaşdıracağını seçin.",
   "settings_session_providers_not_configured": "Heç bir qovluq konfiqurasiya edilməyib",

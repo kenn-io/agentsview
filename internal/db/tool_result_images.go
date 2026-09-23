@@ -472,7 +472,8 @@ func projectToolResultImages(
 	)
 }
 
-func projectToolResultImagesWithoutWriting(
+// ProjectToolResultImagesWithoutWriting applies an image policy without publishing assets.
+func ProjectToolResultImagesWithoutWriting(
 	messages []Message, policy config.ToolResultImages, assetsDir string,
 ) ([]Message, ToolImageStats) {
 	return projectToolResultImagesWithPut(
@@ -631,5 +632,5 @@ func (db *DB) ProjectToolResultImagesForComparison(
 		}
 		return messages, ToolImageStats{}
 	}
-	return projectToolResultImagesWithoutWriting(messages, policy, db.AssetsDir())
+	return ProjectToolResultImagesWithoutWriting(messages, policy, db.AssetsDir())
 }

@@ -16,7 +16,8 @@ import (
 
 // RawDeviceAuthStore persists raw-transport devices and short-lived tokens.
 type RawDeviceAuthStore struct {
-	db *sql.DB
+	db     *sql.DB
+	tenant string
 }
 
 // NewRawDeviceAuthStore constructs a PostgreSQL raw device auth store.
@@ -27,11 +28,28 @@ func NewRawDeviceAuthStore(db *sql.DB) (*RawDeviceAuthStore, error) {
 	return &RawDeviceAuthStore{db: db}, nil
 }
 
+// NewTenantRawDeviceAuthStore binds enrollment, credential lookup and tokens to
+// the configured tenant before any request credential is authenticated.
+func NewTenantRawDeviceAuthStore(database *sql.DB, tenant string) (*RawDeviceAuthStore, error) {
+	if err := validateHostedBinding("hosted", tenant); err != nil {
+		return nil, err
+	}
+	s, err := NewRawDeviceAuthStore(database)
+	if err != nil {
+		return nil, err
+	}
+	s.tenant = tenant
+	return s, nil
+}
+
 // EnrollDevice records only the device credential digest.
 func (s *RawDeviceAuthStore) EnrollDevice(
 	ctx context.Context,
 	record rawsync.DeviceEnrollmentRecord,
 ) error {
+	if s.tenant != "" && record.Identity.TenantID != s.tenant {
+		return rawsync.ErrUnauthorized
+	}
 	if err := validateRawDeviceEnrollment(record); err != nil {
 		return err
 	}
@@ -69,8 +87,8 @@ func (s *RawDeviceAuthStore) AuthenticateCredential(
 		FROM raw_devices
 		WHERE device_id = $1
 			AND credential_sha256 = $2
-			AND revoked_at IS NULL`,
-		deviceID, credential[:],
+			AND revoked_at IS NULL AND ($3 = '' OR tenant_id=$3)`,
+		deviceID, credential[:], s.tenant,
 	).Scan(&identity.TenantID, &identity.DeviceID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return rawsync.AuthIdentity{}, rawsync.ErrUnauthorized
@@ -79,6 +97,9 @@ func (s *RawDeviceAuthStore) AuthenticateCredential(
 		return rawsync.AuthIdentity{}, fmt.Errorf(
 			"authenticating raw sync device credential: %w", err,
 		)
+	}
+	if s.tenant != "" && identity.TenantID != s.tenant {
+		return rawsync.AuthIdentity{}, rawsync.ErrUnauthorized
 	}
 	return identity, nil
 }
@@ -103,7 +124,7 @@ func (s *RawDeviceAuthStore) IssueToken(
 			FROM raw_devices
 			WHERE device_id = $1
 				AND credential_sha256 = $2
-				AND revoked_at IS NULL
+				AND revoked_at IS NULL AND ($7 = '' OR tenant_id=$7)
 		)
 		INSERT INTO raw_device_tokens (
 			token_sha256, tenant_id, device_id, scope_bits, issued_at, expires_at
@@ -116,7 +137,7 @@ func (s *RawDeviceAuthStore) IssueToken(
 		token.Digest[:],
 		int16(token.Scopes),
 		token.IssuedAt,
-		token.ExpiresAt,
+		token.ExpiresAt, s.tenant,
 	).Scan(&identity.TenantID, &identity.DeviceID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return rawsync.AuthIdentity{}, rawsync.ErrUnauthorized
@@ -128,6 +149,9 @@ func (s *RawDeviceAuthStore) IssueToken(
 			)
 		}
 		return rawsync.AuthIdentity{}, fmt.Errorf("issuing raw sync token: %w", err)
+	}
+	if s.tenant != "" && identity.TenantID != s.tenant {
+		return rawsync.AuthIdentity{}, rawsync.ErrUnauthorized
 	}
 	return identity, nil
 }
@@ -153,15 +177,18 @@ func (s *RawDeviceAuthStore) AuthenticateToken(
 			AND devices.device_id = tokens.device_id
 		WHERE tokens.token_sha256 = $1
 			AND tokens.expires_at > $2
-			AND devices.revoked_at IS NULL
+			AND devices.revoked_at IS NULL AND ($4 = '' OR devices.tenant_id=$4)
 			AND (tokens.scope_bits & $3) = $3`,
-		digest[:], now.UTC(), int16(required),
+		digest[:], now.UTC(), int16(required), s.tenant,
 	).Scan(&identity.TenantID, &identity.DeviceID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return rawsync.AuthIdentity{}, rawsync.ErrUnauthorized
 	}
 	if err != nil {
 		return rawsync.AuthIdentity{}, fmt.Errorf("authenticating raw sync token: %w", err)
+	}
+	if s.tenant != "" && identity.TenantID != s.tenant {
+		return rawsync.AuthIdentity{}, rawsync.ErrUnauthorized
 	}
 	return identity, nil
 }
@@ -172,6 +199,9 @@ func (s *RawDeviceAuthStore) RevokeDevice(
 	identity rawsync.AuthIdentity,
 	revokedAt time.Time,
 ) (bool, error) {
+	if s.tenant != "" && identity.TenantID != s.tenant {
+		return false, rawsync.ErrUnauthorized
+	}
 	if err := validateRawDeviceAuthIdentity(identity); err != nil {
 		return false, err
 	}

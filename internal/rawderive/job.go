@@ -30,11 +30,12 @@ func ValidLeaseOwner(owner string) bool {
 
 // JobLease is the fenced ownership token for one parse attempt.
 type JobLease struct {
-	ID                int64
-	Identity          rawsync.AuthIdentity
-	ManifestID        string
-	ProcessingVersion string
-	Attempt           int
-	Owner             string
-	ExpiresAt         time.Time
+	ID                   int64
+	Identity             rawsync.AuthIdentity
+	ManifestID           string
+	ProcessingVersion    string
+	ProjectionGeneration int64
+	Attempt              int
+	Owner                string
+	ExpiresAt            time.Time
 }

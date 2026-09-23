@@ -1714,7 +1714,7 @@ func InferTokenPresence(
 // TokenPresence reports whether context/output token fields were
 // present in the provider payload. Falls back to raw token_usage
 // key inspection when parser-specific flags were not populated.
-func (m ParsedMessage) TokenPresence() (bool, bool) {
+func (m *ParsedMessage) TokenPresence() (bool, bool) {
 	if m.tokenPresenceKnown {
 		return m.HasContextTokens, m.HasOutputTokens
 	}
@@ -1728,7 +1728,7 @@ func (m ParsedMessage) TokenPresence() (bool, bool) {
 // metrics were present. This preserves explicit flags and falls
 // back to non-zero aggregates for providers like Kimi that only
 // expose truthful session-level totals in current Task 1 paths.
-func (s ParsedSession) AggregateTokenPresence() (bool, bool) {
+func (s *ParsedSession) AggregateTokenPresence() (bool, bool) {
 	if s.aggregateTokenPresenceKnown {
 		return s.HasTotalOutputTokens, s.HasPeakContextTokens
 	}
@@ -1740,7 +1740,7 @@ func (s ParsedSession) AggregateTokenPresence() (bool, bool) {
 // TokenCoverage reports the truthful aggregate/session coverage
 // after combining session-level aggregate presence with per-message
 // token presence.
-func (s ParsedSession) TokenCoverage(
+func (s *ParsedSession) TokenCoverage(
 	msgs []ParsedMessage,
 ) (bool, bool) {
 	hasTotal, hasPeak, _ := s.TokenCoverageContext(
@@ -1751,7 +1751,7 @@ func (s ParsedSession) TokenCoverage(
 
 // TokenCoverageContext reports aggregate coverage while allowing bounded
 // transcript preparation to stop between messages.
-func (s ParsedSession) TokenCoverageContext(
+func (s *ParsedSession) TokenCoverageContext(
 	ctx context.Context, msgs []ParsedMessage,
 ) (bool, bool, error) {
 	hasTotal, hasPeak := s.AggregateTokenPresence()
@@ -1803,4 +1803,21 @@ func InferRelationshipTypes(results []ParseResult) {
 			results[i].Session.RelationshipType = RelContinuation
 		}
 	}
+}
+
+// TokenPresenceKnown reports whether provider flags override legacy inference.
+// Transport adapters must preserve it alongside the exported token fields.
+func (m *ParsedMessage) TokenPresenceKnown() bool { return m.tokenPresenceKnown }
+
+// RestoreTokenPresenceKnown restores transport metadata without inferring or
+// changing the provider's exported token values and coverage flags.
+func (m *ParsedMessage) RestoreTokenPresenceKnown(known bool) { m.tokenPresenceKnown = known }
+
+// AggregateTokenPresenceKnown reports whether session aggregate coverage is
+// authoritative rather than inferred from nonzero legacy values.
+func (s *ParsedSession) AggregateTokenPresenceKnown() bool { return s.aggregateTokenPresenceKnown }
+
+// RestoreAggregateTokenPresenceKnown restores the session transport metadata.
+func (s *ParsedSession) RestoreAggregateTokenPresenceKnown(known bool) {
+	s.aggregateTokenPresenceKnown = known
 }

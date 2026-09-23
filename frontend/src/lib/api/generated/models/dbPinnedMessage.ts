@@ -7,6 +7,7 @@ export interface DbPinnedMessage {
   created_at: string;
   id: number;
   message_id: number;
+  message_key?: string;
   note?: string;
   ordinal: number;
   role?: string;
@@ -15,4 +16,5 @@ export interface DbPinnedMessage {
   session_first_message?: string;
   session_id: string;
   session_project?: string;
+  unresolved?: boolean;
 }

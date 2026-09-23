@@ -1,3 +1,7 @@
+---
+last_edited: 2026-09-11
+---
+
 # Session Format Source Inventory
 
 This inventory records the best reproducible evidence currently available for
@@ -100,6 +104,11 @@ repository or document disappears, retain its original URL and commit hash and
 add an archived or maintained mirror without replacing the original identity.
 
 ## Claude Code (`claude`)
+
+Rechecked 2026-09-11 against the existing provider parser and its metadata
+fixtures: the first nonempty JSONL `sessionId` supplies `SourceSessionID`. A
+filename alone does not supply that provider identity. Hosted multi-device
+fixtures retain this field; missing identities remain source-local.
 
 - **Performance fixture check (2026-09-04):** Rechecked the pinned Codeburn
   format notes below for project-scoped JSONL. `cmd/perfsim` uses the shared
@@ -282,10 +291,15 @@ add an archived or maintained mirror without replacing the original identity.
   a background sibling. Reverified 2026-09-11 against the local lineage
   fixtures: replacing the background marker or root UUID in a same-size
   transcript updates the parsed lineage after its file-change timestamp
-  advances, even when its modification time is restored. Reverified 2026-08-16
-  with Claude Code 2.1.233 using a controlled `claude -p --session-id <uuid>`
-  probe under an isolated `CLAUDE_CONFIG_DIR`. Before the deliberately bounded
-  probe was terminated during its API retry, Claude had created the exact UUID
+  advances, even when its modification time is restored. Also reverified
+  2026-09-11 with same-size sibling rewrites that restore mtime: filesystem
+  ctime can also remain unchanged. Cached head metadata therefore requires a
+  bounded leading-byte digest check before reusing the root UUID or background
+  stamp. Full parsing retains the verified parent and trims only the replayed
+  prefix; no provider format changed. Reverified 2026-08-16 with Claude Code
+  2.1.233 using a controlled `claude -p --session-id <uuid>` probe under an
+  isolated `CLAUDE_CONFIG_DIR`. Before the deliberately bounded probe was
+  terminated during its API retry, Claude had created the exact UUID
   transcript under `projects/<sanitized-cwd>/`. A working directory containing
   spaces, `.`, `_`, `@`, and separators confirmed that the producer preserves
   ASCII letters, digits, and `-` and replaces every other character with `-`.
@@ -305,31 +319,31 @@ add an archived or maintained mirror without replacing the original identity.
   child-start failure is persisted as a terminal capture state: later
   `capture report` retries do not discover or attribute a matching transcript
   for an execution that never started. Reverified 2026-08-21 that recovery
-  refuses to seal when the wrapper did not durably record execution
-  completion, even if the transcript is temporarily quiescent and receives
-  more usage later. Reverified 2026-08-21 that exact token projection compares
-  canonical output and context coverage separately for every included session,
-  while crediting a deduplicated snapshot to each source session that
-  contained its equivalent row. It also requires the materialized breakdown
-  length to match its recorded count. A larger context row from another
-  session therefore cannot hide missing delegated input or cache usage.
-  Reverified 2026-08-22 that an incomplete category breakdown, malformed
-  included transcript, or unfinished included session withholds computed or
-  mixed cost; provider-reported cost remains authoritative. Reverified
-  2026-08-27 that raw-capture membership mirrors persisted tool output
-  resolution: it includes regular files at any depth in the session's
-  `tool-results/` directory and, for subagents, the enclosing parent session's
-  `tool-results/` directory. These immutable companions are captured with the
-  appendable transcript so a reconstructed tree preserves the parser's
-  physical inputs. Reverified 2026-09-16 against the persisted-output reader
-  and `TestClaudePersistedToolResultUTF8`: the 16 MiB display cap backs up to
-  a UTF-8 boundary before appending its truncation notice. This is an
-  Agentsview limit, not a producer-format limit. The shared first-message
-  preview helper retains its rune-count limit, whitespace trimming, and
-  trailing `...`, as covered by `TestTruncateRespectsRuneBoundaries`. Reverified
-  2026-09-10 that hosted tool parsing derives skill names from recorded paths
-  without consulting worker-local `SKILL.md` frontmatter or the local parse
-  cache; local parsing retains frontmatter lookup.
+  refuses to seal when the wrapper did not durably record execution completion,
+  even if the transcript is temporarily quiescent and receives more usage
+  later. Reverified 2026-08-21 that exact token projection compares canonical
+  output and context coverage separately for every included session, while
+  crediting a deduplicated snapshot to each source session that contained its
+  equivalent row. It also requires the materialized breakdown length to match
+  its recorded count. A larger context row from another session therefore
+  cannot hide missing delegated input or cache usage. Reverified 2026-08-22
+  that an incomplete category breakdown, malformed included transcript, or
+  unfinished included session withholds computed or mixed cost;
+  provider-reported cost remains authoritative. Reverified 2026-08-27 that
+  raw-capture membership mirrors persisted tool output resolution: it includes
+  regular files at any depth in the session's `tool-results/` directory and,
+  for subagents, the enclosing parent session's `tool-results/` directory.
+  These immutable companions are captured with the appendable transcript so a
+  reconstructed tree preserves the parser's physical inputs. Reverified
+  2026-09-16 against the persisted-output reader and
+  `TestClaudePersistedToolResultUTF8`: the 16 MiB display cap backs up to a
+  UTF-8 boundary before appending its truncation notice. This is an Agentsview
+  limit, not a producer-format limit. The shared first-message preview helper
+  retains its rune-count limit, whitespace trimming, and trailing `...`, as
+  covered by `TestTruncateRespectsRuneBoundaries`. Reverified 2026-09-10 that
+  hosted tool parsing derives skill names from recorded paths without
+  consulting worker-local `SKILL.md` frontmatter or the local parse cache;
+  local parsing retains frontmatter lookup.
   `TestHostedSkillInferenceKeepsNamesLexical` covers this boundary. Reverified
   2026-08-22 against local sessions launched from repository-local
   `REPO/.claude/worktrees/<generated-name>` worktrees: the transcript retains
@@ -553,7 +567,12 @@ add an archived or maintained mirror without replacing the original identity.
   orphaned child's full transcript when its named parent is unavailable,
   matching local parsing. When available, the explicitly named parent travels
   with the captured fork so hosted parsing applies the local replay boundary.
-  Reverified on 2026-09-10 with
+  Rechecked 2026-09-11 against the pinned protocol's `forked_from_id` field
+  and synthetic registered-provider fixtures: an absent parent reports
+  `DataVersionNeedsRetry` while retaining the child messages; a later captured
+  readable turnless parent resolves the same child as current. The hosted
+  integration exercises finite retry exhaustion and new-generation recovery
+  without changing these provider semantics. Reverified on 2026-09-10 with
   `TestProviderParserHostedParseMatchesLocalCodexForkLineage`: parents in
   other configured homes, archives, and custom roots also travel with the
   child. Capture keeps local root precedence when roots contain differing
@@ -719,8 +738,8 @@ add an archived or maintained mirror without replacing the original identity.
   `session_turn_leases`, `gateway_routing`, `async_delegations`,
   `compression_locks`, `system_prompts`, `state_meta`, `schema_version`) plus
   the `sessions/` transcript sibling. Timestamps are REAL epoch seconds;
-  observed rows carry `source = "desktop"`. Hermes-style (`20260910_075655_ca54ab`)
-  and UUID session ids coexist in one store.
+  observed rows carry `source = "desktop"`. Hermes-style
+  (`20260910_075655_ca54ab`) and UUID session ids coexist in one store.
 - **Evidence:** `no-public-source`.
 - **Upstream:** The app is closed and publishes no producer source; it was
   checked 2026-09-11. Its `install-stamp.json` names branch
@@ -731,9 +750,9 @@ add an archived or maintained mirror without replacing the original identity.
   `LEGACY_HERMES_HOME_DIRNAME = ".hermes"`, plus a 340-file `hermes_*` Python
   runtime in the app bundle, identifying a Hermes Agent fork. The fork's
   `schema_version` was 26 the same day stock `~/.hermes/state.db` measured 30:
-  same table family, independent version lines. The fork marker is the
-  store's own root name (`.augure-desktop` / `%LOCALAPPDATA%\augure-desktop`),
-  never the schema shape or `schema_version` number.
+  same table family, independent version lines. The fork marker is the store's
+  own root name (`.augure-desktop` / `%LOCALAPPDATA%\augure-desktop`), never
+  the schema shape or `schema_version` number.
 - **Usage and cost:** the state DB's own authoritative session columns
   (`input_tokens`, `output_tokens`, cache columns, `reasoning_tokens`,
   `estimated_cost_usd`, `actual_cost_usd`, `cost_status`, `cost_source`),
@@ -741,15 +760,15 @@ add an archived or maintained mirror without replacing the original identity.
   a present-zero, estimated 0 does not masquerade as $0. Models observed are
   proprietary Augure slugs (`ossington-5`), absent from the pricing catalog,
   so their events price as unpriced until catalog coverage appears.
-- **Agentsview:** `internal/parser/augure_desktop.go` relabels the shared
-  Hermes provider (`internal/parser/hermes.go`,
-  `internal/parser/hermes_provider.go`) onto the `augure-desktop:` ID prefix
-  through the `hermesProviderSpec` seam; `internal/sync` treats it like Hermes
-  for fingerprint-hash freshness and provider fingerprint file info. The
-  default roots are marker-named, which keeps default discovery disjoint
-  from Hermes without a runtime gate; explicitly configured roots are
-  accepted as given (TraeX precedent). Remote sync is excluded for the same
-  raw-state.db/WAL reasons the registry entry documents.
+- **Agentsview:** `internal/parser/augure_desktop.go` relabels the shared Hermes
+  provider (`internal/parser/hermes.go`, `internal/parser/hermes_provider.go`)
+  onto the `augure-desktop:` ID prefix through the `hermesProviderSpec` seam;
+  `internal/sync` treats it like Hermes for fingerprint-hash freshness and
+  provider fingerprint file info. The default roots are marker-named, which
+  keeps default discovery disjoint from Hermes without a runtime gate;
+  explicitly configured roots are accepted as given (TraeX precedent). Remote
+  sync is excluded for the same raw-state.db/WAL reasons the registry entry
+  documents.
 
 ## GitHub Copilot CLI (`copilot`)
 
@@ -867,7 +886,13 @@ add an archived or maintained mirror without replacing the original identity.
   available; monetary cost is catalog-derived.
 - **Agentsview:** `internal/parser/gemini.go` and
   `internal/parser/gemini_provider.go`; both JSON and JSONL generations remain
-  supported.
+  supported. Reverified the pinned recording source on 2026-09-11: token
+  metadata is attached separately from message content; its writer emits zero
+  defaults when usage arrives. Hosted transport preserves the parser’s
+  explicit coverage state, including absent usage and partially populated
+  older records, rather than inferring coverage from normalized zero-valued
+  keys. The provider-wire-preparation regression is
+  `TestSandboxGeminiWirePreservesTokenCoverage`.
 
 ## Gemini Apps (`gemini-apps`)
 

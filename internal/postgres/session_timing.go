@@ -113,6 +113,10 @@ func (s *Store) queryTurnRows(
 func (s *Store) queryCallRows(
 	ctx context.Context, sessionID string,
 ) ([]db.CallRow, error) {
+	return s.queryCallRowsWithJoin(ctx, sessionID, `LEFT JOIN sessions s_sub ON s_sub.id = tc.subagent_session_id`)
+}
+
+func (s *Store) queryCallRowsWithJoin(ctx context.Context, sessionID, subagentJoin string) ([]db.CallRow, error) {
 	rows, err := s.pg.QueryContext(ctx, `
 		SELECT
 		  tc.message_ordinal,
@@ -149,8 +153,7 @@ func (s *Store) queryCallRows(
 		  ,s_sub.started_at
 		  ,s_sub.ended_at
 		FROM tool_calls tc
-		LEFT JOIN sessions s_sub
-		  ON s_sub.id = tc.subagent_session_id
+		`+subagentJoin+`
 		WHERE tc.session_id = $1
 		ORDER BY tc.message_ordinal, tc.id
 	`, sessionID)

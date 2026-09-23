@@ -29,6 +29,7 @@ const (
 // ORM: callers still own SELECTs, JOINs, backend-specific search paths, and
 // table schemas.
 type QueryDialect struct {
+	parentRelation     func(childAlias, parentAlias string) string
 	name               string
 	placeholderStyle   placeholderStyle
 	trueLiteral        string
@@ -62,7 +63,7 @@ type QueryDialect struct {
 	// ClickHouse needs an uncorrelated IN subquery.
 	starredPredicate func(idExpr string) string
 	// orphanPredicate renders the "parent row is missing" test used by
-	// BuildCanonicalRootWhere. Nil renders SidebarOrphanPredicate.
+	// BuildCanonicalRootWhere. Nil uses the configured parent relation.
 	orphanPredicate func(sessionAlias, parentAlias string) string
 }
 
@@ -84,6 +85,10 @@ func (d QueryDialect) starredPredicateSQL(idExpr string) string {
 func (d QueryDialect) orphanPredicateSQL(sessionAlias, parentAlias string) string {
 	if d.orphanPredicate != nil {
 		return d.orphanPredicate(sessionAlias, parentAlias)
+	}
+	if d.parentRelation != nil {
+		return "NOT EXISTS (SELECT 1 FROM sessions " + parentAlias + " WHERE " +
+			d.ParentRelation(sessionAlias, parentAlias) + ")"
 	}
 	return SidebarOrphanPredicate(sessionAlias, parentAlias)
 }
@@ -572,6 +577,18 @@ func SidebarOrphanPredicate(sessionAlias, parentAlias string) string {
 		)`
 }
 
+func (d QueryDialect) WithParentRelation(relation func(string, string) string) QueryDialect {
+	d.parentRelation = relation
+	return d
+}
+
+func (d QueryDialect) ParentRelation(child, parent string) string {
+	if d.parentRelation != nil {
+		return d.parentRelation(child, parent)
+	}
+	return child + ".parent_session_id = " + parent + ".id"
+}
+
 func BuildCanonicalRootWhere(dialect QueryDialect, sessionAlias string, includeOrphans bool) string {
 	base := `NOT (` + CanonicalChildRelationshipPredicate(dialect, sessionAlias) + `)`
 	if !includeOrphans {
@@ -649,7 +666,7 @@ func buildSessionFilterWithBuilder(
 		rootMatch +
 		" " + b.dialect.recursiveUnionSQL() + " " +
 		"SELECT s.id FROM sessions s" +
-		" JOIN tree t ON s.parent_session_id = t.id" +
+		" JOIN tree t ON " + b.dialect.ParentRelation("s", "t") +
 		" WHERE s.message_count > 0 AND s.deleted_at IS NULL" +
 		childAutomationWhere +
 		") SELECT id FROM tree"

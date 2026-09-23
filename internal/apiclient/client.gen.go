@@ -18291,12 +18291,14 @@ func (a ActivityTotals) Validate() error {
 type AgentTotal = service.AgentTotal
 
 type APIErrorResponse struct {
-	Code              *string `json:"code,omitempty"`
-	CurrentGeneration *int64  `json:"current_generation,omitempty"`
-	CurrentManifestID *string `json:"current_manifest_id,omitempty"`
-	CurrentReceipt    *string `json:"current_receipt,omitempty"`
-	ErrorData         string  `json:"error" validate:"required"`
-	UploadOffset      *int64  `json:"upload_offset,omitempty"`
+	Code              *string  `json:"code,omitempty"`
+	CurrentGeneration *int64   `json:"current_generation,omitempty"`
+	CurrentManifestID *string  `json:"current_manifest_id,omitempty"`
+	CurrentReceipt    *string  `json:"current_receipt,omitempty"`
+	ErrorData         string   `json:"error" validate:"required"`
+	State             *string  `json:"state,omitempty"`
+	UploadOffset      *int64   `json:"upload_offset,omitempty"`
+	Variants          []string `json:"variants,omitempty"`
 }
 
 func (a APIErrorResponse) Validate() error {
@@ -19010,6 +19012,7 @@ type DBSession struct {
 	Outcome                string            `json:"outcome" validate:"required"`
 	OutcomeConfidence      string            `json:"outcome_confidence" validate:"required"`
 	ParentSessionID        *string           `json:"parent_session_id,omitempty"`
+	ParentSessionIds       []string          `json:"parent_session_ids,omitempty"`
 	ParserMalformedLines   *int64            `json:"parser_malformed_lines,omitempty"`
 	PeakContextTokens      int64             `json:"peak_context_tokens"`
 	Project                string            `json:"project" validate:"required"`
