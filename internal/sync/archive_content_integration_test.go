@@ -807,3 +807,33 @@ func TestArchivePolicyCortexToolResultsDoNotChangeAutomation(t *testing.T) {
 		})
 	}
 }
+
+func TestFrictionTranscriptsPolicyMatchesStoredRecompute(t *testing.T) {
+	claudeRoot := t.TempDir()
+	const sessionID = "transcripts-friction-session"
+	writeTranscriptsFixture(t, claudeRoot, sessionID)
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
+		AgentDirs:      map[parser.AgentType][]string{parser.AgentClaude: {claudeRoot}},
+		Machine:        "local",
+		ArchiveContent: config.ArchiveContentTranscripts,
+	})
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+
+	written, err := database.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	writtenFindings, err := database.SessionFrictionFindings(t.Context(), sessionID)
+	require.NoError(t, err)
+	for _, f := range writtenFindings {
+		assert.NotContains(t, f.Text, "make: command not found",
+			"dropped tool output never reaches a finding")
+	}
+
+	require.NoError(t, engine.RecomputeFriction(t.Context(), sessionID))
+	recomputed, err := database.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	assert.Equal(t, written.FrictionHash, recomputed.FrictionHash,
+		"write-time friction equals a recompute from stored rows")
+}

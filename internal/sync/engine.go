@@ -28,6 +28,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/friction"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/pathutil"
 	"go.kenn.io/agentsview/internal/secrets"
@@ -505,6 +506,9 @@ type EngineConfig struct {
 	// DisableSignalRecomputation skips quality and secret signal work. It is
 	// reserved for bounded parsers whose result does not consume those fields.
 	DisableSignalRecomputation bool
+	// FrictionDims supplies seat, persona, channel, and review exclusion
+	// when configured. Nil uses the default coding detector and no dims row.
+	FrictionDims FrictionDimsFunc
 	// DisableFilesystemProjectDiscovery prevents project attribution from
 	// touching working directories recorded in imported transcripts. Bounded
 	// capture uses lexical metadata instead.
@@ -719,7 +723,11 @@ type Engine struct {
 	// recompute triggered by incremental writes, so streaming
 	// sessions don't rescan their whole history on every appended
 	// line. Close flushes and stops it.
-	signalSched *signalScheduler
+	signalSched   *signalScheduler
+	frictionSched *signalScheduler
+	frictionDims  FrictionDimsFunc
+	// frictionReviewHook replaces friction.Review in tests.
+	frictionReviewHook func(friction.SessionInput) []friction.Signal
 
 	// containerMu guards the OpenCode-family shared-SQLite freshness
 	// gate (see opencode_container_gate.go). trustedSQLiteContainers
@@ -980,6 +988,7 @@ func NewEngine(ctx context.Context,
 		stagedCodexMin:          stagedCodexMinBytes(cfg.StagedCodexParseMinBytes),
 		stagedCodexDir:          stagedCodexDir,
 		toolResultImages:        toolResultImages,
+		frictionDims:            cfg.FrictionDims,
 		cwdFilter:               newCwdPrefixFilter(cfg.IncludeCwdPrefixes),
 		scanProtectedPaths:      cfg.ScanProtectedPaths,
 		homeDir:                 userHomeDirOrEmpty(),
@@ -1058,6 +1067,27 @@ func NewEngine(ctx context.Context,
 	)
 	if e.disableSignalRecompute {
 		e.signalSched.stop()
+	}
+	recomputeFriction := func(sessionID string) {
+		if err := e.recomputeFrictionFromDB(context.Background(), sessionID); err != nil {
+			log.Printf("friction: recompute %s: %v", sessionID, err)
+			e.frictionSched.deferRetry(sessionID)
+		}
+	}
+	if e.disableSignalRecompute {
+		recomputeFriction = func(string) {}
+	}
+	e.frictionSched = newSignalScheduler(
+		signalRecomputeInterval, signalRecomputeQuiet,
+		recomputeFriction,
+		func(flush func()) {
+			e.syncMu.Lock()
+			defer e.syncMu.Unlock()
+			flush()
+		},
+	)
+	if e.disableSignalRecompute {
+		e.frictionSched.stop()
 	}
 	return e
 }
@@ -1176,6 +1206,7 @@ func pathWithinRoot(path, root string) bool {
 // safe to call repeatedly.
 func (e *Engine) Close() {
 	e.signalSched.stop()
+	e.frictionSched.stop()
 }
 
 // FlushSignals immediately recomputes signals for sessions with a
@@ -1186,6 +1217,7 @@ func (e *Engine) Close() {
 // by the engine instead.
 func (e *Engine) FlushSignals() {
 	e.signalSched.flushAll()
+	e.frictionSched.flushAll()
 }
 
 func providerFactoryMap(
@@ -4311,6 +4343,7 @@ func (e *Engine) syncThenRunLocked(
 	// deferred signal recomputes first (inline: syncMu is held) or
 	// pushed sessions could carry stale signal/secret fields.
 	e.signalSched.flushAllInline()
+	e.frictionSched.flushAllInline()
 	e.clearCurrentProgress()
 	if err := work(full || didResync); err != nil {
 		return stats, err
@@ -4441,6 +4474,7 @@ func (e *Engine) SyncThenRunWithRebuild(
 		return stats, nil
 	}
 	e.signalSched.flushAllInline()
+	e.frictionSched.flushAllInline()
 	e.clearCurrentProgress()
 	if err := work(full || didResync, didResync); err != nil {
 		return stats, err
@@ -4699,6 +4733,7 @@ func (e *Engine) RunExclusiveFlushed(work func() error) error {
 	e.syncMu.Lock()
 	defer e.syncMu.Unlock()
 	e.signalSched.flushAllInline()
+	e.frictionSched.flushAllInline()
 	return work()
 }
 
@@ -18537,6 +18572,10 @@ func (e *Engine) writeStagedFullParse(
 		return err
 	}
 	e.anomalies.recordSanitize(pw.staged.ValidationStats())
+	if !e.disableSignalRecompute {
+		// Staged tool results become readable only after the commit above.
+		e.frictionSched.markDirty(s.ID)
+	}
 
 	return nil
 }
@@ -19510,6 +19549,10 @@ func (e *Engine) writeIncremental(ctx context.Context,
 	// write or flush retries.
 	if !signalsMaintained {
 		e.signalSched.markDirty(inc.sessionID)
+	} else {
+		// Friction windows span the session, so the maintained delta is
+		// insufficient to refresh its findings.
+		e.frictionSched.markDirtyDeferred(inc.sessionID)
 	}
 	if inc.providerStatHash != nil {
 		e.recordProviderStatHash(

@@ -2,9 +2,12 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log"
 	"time"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/friction"
 	"go.kenn.io/agentsview/internal/parser"
@@ -155,4 +158,70 @@ func computeSessionFriction(
 	}
 	u.Hash = db.FrictionHash(u.Findings, u.Dims, u.RulesVersion)
 	return u, nil
+}
+
+func (e *Engine) frictionOptions() frictionOptions {
+	return frictionOptions{
+		dims:     e.frictionDims,
+		redacted: e.db.ArchiveContent() == config.ArchiveContentTranscripts,
+		review:   e.frictionReviewHook,
+	}
+}
+
+// attachFriction computes from the same projected messages as the signal
+// pass. A detector failure leaves the update unset and the session stale for
+// backfill without failing the content write.
+func (e *Engine) attachFriction(
+	u *db.SessionSignalUpdate, s db.Session, msgs []db.Message,
+) {
+	fu, err := computeSessionFriction(
+		context.Background(), s, msgs, u.ContextPressureMax, e.frictionOptions(),
+	)
+	if err != nil {
+		log.Printf("friction: %v", err)
+		return
+	}
+	u.Friction = &fu
+}
+
+// recomputeFrictionFromDB publishes a finding snapshot only when the
+// transcript revision still matches the rows it was computed from.
+func (e *Engine) recomputeFrictionFromDB(ctx context.Context, sessionID string) error {
+	sess, err := e.db.GetSessionFull(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("loading session %s: %w", sessionID, err)
+	}
+	if sess == nil {
+		return nil
+	}
+	revision := ""
+	if sess.TranscriptRevision != nil {
+		revision = *sess.TranscriptRevision
+	}
+	msgs, err := e.db.GetAllMessages(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("loading messages %s: %w", sessionID, err)
+	}
+	fu, err := computeSessionFriction(
+		ctx, *sess, msgs, sess.ContextPressureMax, e.frictionOptions(),
+	)
+	if err != nil {
+		return err
+	}
+	applied, err := e.db.ReplaceSessionFrictionAtRevision(ctx, sessionID, revision, fu)
+	if err != nil {
+		return fmt.Errorf("publishing friction %s: %w", sessionID, err)
+	}
+	if !applied {
+		return fmt.Errorf("session %s changed during friction recompute", sessionID)
+	}
+	return nil
+}
+
+// RecomputeFriction recomputes one session's friction from stored rows.
+func (e *Engine) RecomputeFriction(ctx context.Context, sessionID string) error {
+	if e.refuseWriteInForceParse("RecomputeFriction") {
+		return errors.New("RecomputeFriction refused on report-only parse-diff engine")
+	}
+	return e.recomputeFrictionFromDB(ctx, sessionID)
 }

@@ -2,6 +2,8 @@ package sync
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -10,6 +12,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/friction"
+	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
 func TestFrictionRawInput(t *testing.T) {
@@ -216,4 +219,135 @@ func TestComputeSessionFrictionRecoversPanic(t *testing.T) {
 		}})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "detector bug")
+}
+
+func writeFrictionClaudeSession(t *testing.T, dir, name string, extra ...string) string {
+	t.Helper()
+	b := testjsonl.NewSessionBuilder().
+		AddClaudeUser("2026-09-16T01:00:00Z", "please fix the failing build").
+		AddClaudeAssistant("2026-09-16T01:00:01Z", "Sure, I'll hardcode the path for now.").
+		AddClaudeUser("2026-09-16T01:00:02Z", "no, use the config file instead").
+		AddClaudeAssistant("2026-09-16T01:00:03Z", "Understood.")
+	for _, line := range extra {
+		b = b.AddRaw(line)
+	}
+	path := filepath.Join(dir, "proj", name+".jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(b.String()), 0o644))
+	return path
+}
+
+func frictionKinds(t *testing.T, d *db.DB, id string) []string {
+	t.Helper()
+	got, err := d.SessionFrictionFindings(t.Context(), id)
+	require.NoError(t, err)
+	kinds := make([]string, 0, len(got))
+	for _, f := range got {
+		kinds = append(kinds, f.Kind+":"+f.Detector)
+	}
+	return kinds
+}
+
+func TestSyncPersistsFrictionFindings(t *testing.T) {
+	fx := newEngineFixture(t)
+	path := writeFrictionClaudeSession(t, fx.claudeDir, "friction-a",
+		testjsonl.ClaudeAssistantJSON([]map[string]any{{
+			"type": "tool_use", "id": "toolu_1", "name": "Bash",
+			"input": map[string]string{"command": "go test ./..."},
+		}}, "2026-09-16T01:00:04Z"),
+		testjsonl.ClaudeToolResultUserJSON("toolu_1",
+			"bash: go: command not found", "2026-09-16T01:00:05Z"),
+	)
+	stats := fx.engine.SyncAll(t.Context(), nil)
+	require.NotZero(t, stats.Synced)
+	id := fx.sessionIDFor(t, path)
+
+	assert.Equal(t, []string{
+		"correction:correction.coding",
+		"error:error",
+		"workaround:workaround",
+	}, frictionKinds(t, fx.db, id))
+	s, err := fx.db.GetSessionFull(t.Context(), id)
+	require.NoError(t, err)
+	assert.Equal(t, 3, s.FrictionCount)
+	assert.Equal(t, friction.RulesVersion, s.FrictionRulesVersion)
+	assert.NotEmpty(t, s.FrictionHash)
+}
+
+func TestFrictionRefreshesAfterIncrementalAppend(t *testing.T) {
+	fx := newEngineFixture(t)
+	path := writeFrictionClaudeSession(t, fx.claudeDir, "friction-grow")
+	fx.engine.SyncAll(t.Context(), nil)
+	id := fx.sessionIDFor(t, path)
+	before := frictionKinds(t, fx.db, id)
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	for _, line := range []string{
+		testjsonl.ClaudeUserJSON("stop adding comments to every line", "2026-09-16T01:00:10Z"),
+		testjsonl.ClaudeAssistantJSON("Leaving the rest for later; next session I will finish.", "2026-09-16T01:00:11Z"),
+	} {
+		_, err = f.WriteString(line + "\n")
+		require.NoError(t, err)
+	}
+	require.NoError(t, f.Close())
+	fx.engine.SyncAll(t.Context(), nil)
+	fx.engine.FlushSignals()
+
+	after := frictionKinds(t, fx.db, id)
+	assert.Len(t, after, len(before)+2, "one new correction and one deferral")
+	assert.Contains(t, after, "deferral:deferral")
+	s, err := fx.db.GetSessionFull(t.Context(), id)
+	require.NoError(t, err)
+	assert.Equal(t, friction.RulesVersion, s.FrictionRulesVersion)
+}
+
+func TestFrictionComputePanicLeavesSessionRetryable(t *testing.T) {
+	fx := newEngineFixture(t)
+	bad := writeFrictionClaudeSession(t, fx.claudeDir, "friction-bad")
+	good := writeFrictionClaudeSession(t, fx.claudeDir, "friction-good")
+	badID, goodID := fx.sessionIDFor(t, bad), fx.sessionIDFor(t, good)
+	fx.engine.frictionReviewHook = func(in friction.SessionInput) []friction.Signal {
+		if in.SubjectID == badID {
+			panic("detector bug")
+		}
+		return friction.Review(in)
+	}
+
+	stats := fx.engine.SyncAll(t.Context(), nil)
+	assert.Equal(t, 2, stats.Synced, "a friction failure never fails the sync")
+
+	badSess, err := fx.db.GetSessionFull(t.Context(), badID)
+	require.NoError(t, err)
+	assert.Empty(t, badSess.FrictionRulesVersion, "left stale for the backfill")
+	assert.Empty(t, frictionKinds(t, fx.db, badID))
+	goodSess, err := fx.db.GetSessionFull(t.Context(), goodID)
+	require.NoError(t, err)
+	assert.Equal(t, friction.RulesVersion, goodSess.FrictionRulesVersion)
+	assert.NotEmpty(t, frictionKinds(t, fx.db, goodID))
+}
+
+func TestSyncPersistsInterruptionFinding(t *testing.T) {
+	fx := newEngineFixture(t)
+	path := writeFrictionClaudeSession(t, fx.claudeDir, "friction-interrupt",
+		testjsonl.ClaudeUserJSON("[Request interrupted by user]", "2026-09-16T01:00:06Z"),
+	)
+	fx.engine.SyncAll(t.Context(), nil)
+	id := fx.sessionIDFor(t, path)
+
+	got, err := fx.db.SessionFrictionFindings(t.Context(), id)
+	require.NoError(t, err)
+	var interruptions []db.FrictionFinding
+	for _, f := range got {
+		if f.Kind == "interruption" {
+			interruptions = append(interruptions, f)
+		}
+	}
+	require.Len(t, interruptions, 1, "one interrupted row, one finding")
+	assert.Equal(t, "interruption", interruptions[0].Detector)
+	assert.Empty(t, interruptions[0].Text)
+	require.NotNil(t, interruptions[0].MessageOrdinal)
+	s, err := fx.db.GetSessionFull(t.Context(), id)
+	require.NoError(t, err)
+	assert.Equal(t, len(got), s.FrictionCount, "friction_count counts interruptions")
 }
