@@ -1,9 +1,11 @@
 package signals
 
 import (
+	"math/rand/v2"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func bashLs(ord, idx int) ToolCallRow {
@@ -98,5 +100,92 @@ func TestRetryRunsSumEqualsCountRetries(t *testing.T) {
 			}
 			assert.Equal(t, tt.want, sum)
 		})
+	}
+}
+
+func edit(path string, ord, idx int) ToolCallRow {
+	return ToolCallRow{
+		ToolName: "Edit", Category: "Edit",
+		InputJSON:      `{"file_path":"` + path + `","old_string":"x"}`,
+		MessageOrdinal: ord, CallIndex: idx,
+	}
+}
+
+func TestEditChurnFiles(t *testing.T) {
+	tests := []struct {
+		name  string
+		calls []ToolCallRow
+		want  []EditChurn
+	}{
+		{"no edits", []ToolCallRow{bashLs(1, 0)}, nil},
+		{"two edits no churn", []ToolCallRow{edit("a.go", 1, 0), edit("a.go", 5, 0)}, nil},
+		{
+			"three edits within span",
+			[]ToolCallRow{edit("a.go", 1, 0), edit("a.go", 5, 0), edit("a.go", 9, 0)},
+			[]EditChurn{{FilePath: "a.go", Count: 3, First: CallPos{MessageOrdinal: 1}, Last: CallPos{MessageOrdinal: 9}}},
+		},
+		{
+			"span of exactly ten is not churn",
+			[]ToolCallRow{edit("a.go", 1, 0), edit("a.go", 5, 0), edit("a.go", 11, 0)},
+			nil,
+		},
+		{
+			"cluster extends while span stays under ten",
+			[]ToolCallRow{
+				edit("a.go", 1, 0), edit("a.go", 2, 0), edit("a.go", 3, 0),
+				edit("a.go", 9, 1), edit("a.go", 30, 0),
+			},
+			[]EditChurn{{FilePath: "a.go", Count: 4, First: CallPos{MessageOrdinal: 1}, Last: CallPos{MessageOrdinal: 9, CallIndex: 1}}},
+		},
+		{
+			"later cluster found when first edits are spread",
+			[]ToolCallRow{
+				edit("a.go", 1, 0), edit("a.go", 40, 0),
+				edit("a.go", 41, 0), edit("a.go", 42, 0),
+			},
+			[]EditChurn{{FilePath: "a.go", Count: 3, First: CallPos{MessageOrdinal: 40}, Last: CallPos{MessageOrdinal: 42}}},
+		},
+		{
+			"files reported in first-edit order",
+			[]ToolCallRow{
+				edit("b.go", 1, 0), edit("a.go", 2, 0),
+				edit("b.go", 3, 0), edit("a.go", 4, 0),
+				edit("b.go", 5, 0), edit("a.go", 6, 0),
+			},
+			[]EditChurn{
+				{FilePath: "b.go", Count: 3, First: CallPos{MessageOrdinal: 1}, Last: CallPos{MessageOrdinal: 5}},
+				{FilePath: "a.go", Count: 3, First: CallPos{MessageOrdinal: 2}, Last: CallPos{MessageOrdinal: 6}},
+			},
+		},
+		{
+			"write category counts, read does not",
+			[]ToolCallRow{
+				{ToolName: "Write", Category: "Write", InputJSON: `{"file_path":"w.go"}`, MessageOrdinal: 1},
+				{ToolName: "Read", Category: "Read", InputJSON: `{"file_path":"w.go"}`, MessageOrdinal: 2},
+				{ToolName: "Write", Category: "Write", InputJSON: `{"file_path":"w.go"}`, MessageOrdinal: 3},
+				{ToolName: "Write", Category: "Write", InputJSON: `{"file_path":"w.go"}`, MessageOrdinal: 4},
+			},
+			[]EditChurn{{FilePath: "w.go", Count: 3, First: CallPos{MessageOrdinal: 1}, Last: CallPos{MessageOrdinal: 4}}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, EditChurnFiles(tt.calls))
+		})
+	}
+}
+
+// TestChurnClusterAgreesWithHasChurnWindow checks the span finder against the
+// unchanged predicate over random ordinal sequences, including unsorted ones.
+func TestChurnClusterAgreesWithHasChurnWindow(t *testing.T) {
+	rng := rand.New(rand.NewPCG(1, 2))
+	for i := range 2000 {
+		n := rng.IntN(8)
+		ords := make([]int, n)
+		for j := range ords {
+			ords[j] = rng.IntN(40)
+		}
+		_, _, ok := churnCluster(ords, 3, 10)
+		require.Equal(t, hasChurnWindow(ords, 3, 10), ok, "case %d ords=%v", i, ords)
 	}
 }
