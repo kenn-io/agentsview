@@ -749,6 +749,47 @@ describe("SessionList visible hydration", () => {
     expect(openSpy).toHaveBeenCalledWith("/sessions/native-open-session", "_blank", "noopener");
   });
 
+  it.each(["continuation", "subagent", "teammate"])(
+    "renders a shared %s under both expanded parent groups",
+    async (kind) => {
+      sessions.sessions = [
+        makeSession({ id: "root-a", display_name: "Parent A" }),
+        makeSession({ id: "root-b", display_name: "Parent B" }),
+        makeSession({
+          id: "shared-child",
+          display_name: "Shared child",
+          parent_session_ids: ["root-a", "root-b"],
+          relationship_type: kind === "subagent" ? "subagent" : "continuation",
+          is_teammate: kind === "teammate",
+        }),
+      ];
+      vi.spyOn(sessions, "hydrateVisibleSessions").mockResolvedValue(undefined);
+
+      component = mount(SessionList, { target: document.body });
+      await tick();
+      for (const id of ["root-a", "root-b"]) {
+        const expand = document.querySelector<HTMLButtonElement>(
+          `[data-session-id="${id}"] button[aria-label="Expand"]`,
+        );
+        expect(expand).not.toBeNull();
+        expand!.click();
+        await tick();
+      }
+
+      expect(document.querySelectorAll('[data-session-id="shared-child"]')).toHaveLength(2);
+      document
+        .querySelector<HTMLButtonElement>(
+          '[data-session-id="root-a"] button[aria-label="Collapse"]',
+        )!
+        .click();
+      await tick();
+      expect(document.querySelectorAll('[data-session-id="shared-child"]')).toHaveLength(1);
+      expect(document.querySelector('[data-session-id="shared-child"]')?.textContent).toContain(
+        "Shared child",
+      );
+    },
+  );
+
   it("uses is_teammate for the collapsed group teammate hint", async () => {
     sessions.sessions = [
       makeSession({ id: "root", display_name: "Root", is_index_only: true }),

@@ -218,7 +218,7 @@ function emitGroupItems(
     const hasFollowingGroup = subagents.length > 0 || teammates.length > 0;
     const isLast = i === continuations.length - 1 && !hasFollowingGroup;
     items.push({
-      id: `child:${s.id}`,
+      id: `child:${g.key}:${s.id}`,
       type: "session",
       label,
       count: 0,
@@ -263,7 +263,7 @@ function emitGroupItems(
       for (let i = 0; i < subagents.length; i++) {
         const s = subagents[i]!;
         items.push({
-          id: `child:${s.id}`,
+          id: `child:${g.key}:${s.id}`,
           type: "session",
           label,
           count: 0,
@@ -303,7 +303,7 @@ function emitGroupItems(
       for (let i = 0; i < teammates.length; i++) {
         const s = teammates[i]!;
         items.push({
-          id: `child:${s.id}`,
+          id: `child:${g.key}:${s.id}`,
           type: "session",
           label,
           count: 0,
