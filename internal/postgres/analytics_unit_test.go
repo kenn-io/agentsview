@@ -116,30 +116,22 @@ func (c *analyticsProbeConn) QueryContext(
 			columns: []string{"model"},
 			values:  sessionModels,
 		}, nil
-	case strings.Contains(normalized, "from sessions"):
-		if strings.Contains(normalized, "message_count, agent, project") {
-			return &analyticsProbeRows{
-				columns: []string{
-					"id", "date", "message_count", "agent", "project",
-					"total_output_tokens", "has_total_output_tokens",
-				},
-				values: [][]driver.Value{
-					{
-						"s1", time.Date(2024, 6, 3, 9, 0, 0, 0, time.UTC),
-						int64(10), "claude", "alpha", int64(0), false,
-					},
-					{
-						"s2", time.Date(2024, 6, 4, 9, 0, 0, 0, time.UTC),
-						int64(20), "codex", "beta", int64(0), false,
-					},
-				},
-			}, nil
-		}
+	case strings.Contains(normalized, "from sessions") &&
+		strings.Contains(normalized, "message_count, agent, project"):
 		return &analyticsProbeRows{
-			columns: []string{"id", "date", "agent"},
+			columns: []string{
+				"id", "date", "message_count", "agent", "project",
+				"total_output_tokens", "has_total_output_tokens",
+			},
 			values: [][]driver.Value{
-				{"s1", time.Date(2024, 6, 3, 9, 0, 0, 0, time.UTC), "claude"},
-				{"s2", time.Date(2024, 6, 4, 9, 0, 0, 0, time.UTC), "codex"},
+				{
+					"s1", time.Date(2024, 6, 3, 9, 0, 0, 0, time.UTC),
+					int64(10), "claude", "alpha", int64(0), false,
+				},
+				{
+					"s2", time.Date(2024, 6, 4, 9, 0, 0, 0, time.UTC),
+					int64(20), "codex", "beta", int64(0), false,
+				},
 			},
 		}, nil
 	case strings.Contains(normalized, "from messages"):
