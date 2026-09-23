@@ -50,6 +50,10 @@ The latest published release is
   runs and the reason is written to `debug.log`.
 - CPU profiles and traces from `--cpuprofile` and `--trace` no longer include
   the memory cleanup that runs while the heap profile is written.
+- Cost estimates find model prices faster. In a benchmark against the bundled
+  price catalog, one lookup took about two-thirds less time. Model names with
+  uppercase letters no longer cause hundreds of extra memory allocations per
+  lookup. The selected prices are unchanged.
 
 ## 0.44.0
 
