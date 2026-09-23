@@ -149,12 +149,11 @@ citation.
 `max_chars_per_message` has a `body_cursor`; keep calling `get_messages` with
 that cursor before following `next_from`. The opaque cursor stays bound to the
 archive instance, session, revision, message ordinal, and next content offset,
-so it cannot silently continue against replaced transcript content. Cursors are
-authenticated with a per-process key and are valid only within one MCP server
-process; a continuation rejected as `invalid body_cursor` should trigger a
-fresh `get_messages` listing. Role and system filtering still happens after
-each scanned page, so an empty or short page can have a `next_from` and should
-be continued.
+so it cannot silently continue against replaced transcript content. A cursor
+stops working when the archive server restarts. If a continuation fails with
+`source_changed` or `invalid body_cursor`, start a fresh `get_messages` listing.
+Role and system filtering still happens after each scanned page, so an empty or
+short page can have a `next_from` and should be continued.
 
 ## Daemon-Backed Reads
 

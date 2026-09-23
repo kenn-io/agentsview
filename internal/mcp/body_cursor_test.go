@@ -1,8 +1,6 @@
 package mcp
 
 import (
-	"encoding/base64"
-	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,63 +16,7 @@ import (
 	"go.kenn.io/agentsview/internal/servicehttp"
 )
 
-// marshalBodyCursorWithMac encodes a cursor with an explicit Mac value
-// (possibly empty), bypassing the keyed encoding, the way a tampering
-// client would.
-func marshalBodyCursorWithMac(
-	t *testing.T, cursor messageBodyCursor, mac string,
-) string {
-	t.Helper()
-	cursor.Mac = mac
-	raw, err := json.Marshal(cursor)
-	require.NoError(t, err)
-	return base64.RawURLEncoding.EncodeToString(raw)
-}
-
-// A cursor whose body was modified without re-signing it (empty or stale
-// Mac) must be rejected before any message content is resolved.
-func TestGetMessages_BodyCursorRejectsTamperedMac(t *testing.T) {
-	ts, d := newTestToolset(t)
-	dbtest.SeedSessionWithMessages(t, d, "tamper", "proj", []db.Message{
-		dbtest.UserMsg("tamper", 0, "abcdefghij"),
-		dbtest.UserMsg("tamper", 1, "klmnopqrst"),
-	}, dbtest.WithMessageCounts(2, 2))
-
-	_, first, err := ts.getMessages(t.Context(), nil, getMessagesIn{
-		SessionID: "tamper", Limit: 2, MaxCharsPerMessage: 4,
-	})
-	require.NoError(t, err)
-	require.Len(t, first.Messages, 2)
-	require.NotEmpty(t, first.Messages[0].BodyCursor)
-
-	cursor, err := decodeMessageBodyCursor(first.Messages[0].BodyCursor)
-	require.NoError(t, err)
-	require.Equal(t, 0, cursor.Ordinal)
-
-	// Repoint the cursor at the second ordinal with no Mac at all.
-	unsigned := marshalBodyCursorWithMac(t, cursor, "")
-	_, out, err := ts.getMessages(t.Context(), nil, getMessagesIn{
-		SessionID: "tamper", BodyCursor: unsigned, MaxCharsPerMessage: 4,
-	})
-	require.ErrorContains(t, err, "invalid body_cursor")
-	assert.Empty(t, out.Messages)
-
-	// Signature substitution: patch the ordinal inside the raw signed JSON
-	// while keeping the original Mac, proving the digest binds the ordinal
-	// itself and not merely that a Mac field is present.
-	payload, err := base64.RawURLEncoding.DecodeString(first.Messages[0].BodyCursor)
-	require.NoError(t, err)
-	substituted := base64.RawURLEncoding.EncodeToString(
-		[]byte(strings.Replace(string(payload), `"o":0`, `"o":1`, 1)))
-	require.NotEqual(t, substituted, first.Messages[0].BodyCursor)
-	_, out, err = ts.getMessages(t.Context(), nil, getMessagesIn{
-		SessionID: "tamper", BodyCursor: substituted, MaxCharsPerMessage: 4,
-	})
-	require.ErrorContains(t, err, "invalid body_cursor")
-	assert.Empty(t, out.Messages)
-}
-
-// A validly signed cursor repointed at a system row must not surface that
+// A cursor repointed at a system row must not surface that
 // row's content: the continuation applies the same visibility contract as
 // the listing path before slicing.
 func TestGetMessages_BodyCursorRejectsSystemRow(t *testing.T) {
@@ -141,7 +83,7 @@ func TestGetMessages_TruncatedWithoutRevisionBindingsKeepsPagination(t *testing.
 }
 
 // A cursor issued under explicit roles must continue under exactly those
-// roles: the issuing roles ride inside the MAC'd cursor, so an explicit-role
+// roles: the issuing roles ride inside the cursor, so an explicit-role
 // listing (here roles: ["tool"]) gets a working continuation even though the
 // continuation request itself carries no Roles.
 func TestGetMessages_BodyCursorContinuesUnderIssuingRoles(t *testing.T) {

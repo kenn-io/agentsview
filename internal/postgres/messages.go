@@ -117,7 +117,7 @@ func (s *Store) getMessagesLinear(
 		LIMIT $%d`, pgRevisionCol, pgMessageCols, op, roleClause, dir, len(roleArgs)+3)
 	args := append([]any{sessionID, from}, roleArgs...)
 	args = append(args, limit)
-	msgs, err := s.queryMessageRowsWithRevision(ctx, w.ObservedRevision, query, args...)
+	msgs, err := db.QueryMessagesWithRevision(ctx, s.pg.QueryContext, scanPGMessages, w.ObservedRevision, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying messages: %w", err)
 	}
@@ -152,38 +152,12 @@ func (s *Store) getMessagesAroundAnchor(
 		pgMessageCols, roleClause, len(roleArgs)+4)
 	args := append([]any{sessionID, anchor, max(w.Before, 0)}, roleArgs...)
 	args = append(args, max(w.After, 0))
-	msgs, err := s.queryMessageRowsWithRevision(ctx, w.ObservedRevision, query, args...)
+	msgs, err := db.QueryMessagesWithRevision(ctx, s.pg.QueryContext, scanPGMessages, w.ObservedRevision, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying around-window messages: %w", err)
 	}
 	if err := s.attachToolCalls(ctx, msgs); err != nil {
 		return nil, err
-	}
-	return msgs, nil
-}
-
-// queryMessageRowsWithRevision runs a window statement whose first column
-// is the session transcript revision and reports that revision through
-// observed when the caller asked for it. An empty result leaves observed
-// untouched.
-func (s *Store) queryMessageRowsWithRevision(
-	ctx context.Context, observed *string, query string, args ...any,
-) ([]db.Message, error) {
-	rows, err := s.pg.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var revision string
-	msgs, err := scanPGMessages(db.RevisionRows{Rows: rows, Revision: &revision})
-	if err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if observed != nil && len(msgs) > 0 {
-		*observed = revision
 	}
 	return msgs, nil
 }
@@ -734,12 +708,7 @@ func (s *Store) attachToolResultEventsBatch(
 // turnByMessage.get(message.id); both depend on Message.ID being
 // non-zero, unique within a session, and equal to int64(ordinal)
 // so it joins with TurnRow.MessageID.
-func scanPGMessages(rows interface {
-	Next() bool
-	Scan(dest ...any) error
-	Err() error
-},
-) ([]db.Message, error) {
+func scanPGMessages(rows db.MessageRows) ([]db.Message, error) {
 	msgs := []db.Message{}
 	for rows.Next() {
 		var m db.Message

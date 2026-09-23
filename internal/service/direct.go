@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"crypto/rand"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -11,7 +10,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -57,15 +55,9 @@ func NewReadOnlyBackend(d db.Store) SessionService {
 	return &directBackend{db: d, evidenceSource: newEvidenceSource()}
 }
 
-func newEvidenceSource() string {
-	var raw [18]byte
-	if _, err := rand.Read(raw[:]); err == nil {
-		return base64.RawURLEncoding.EncodeToString(raw[:])
-	}
-	return fmt.Sprintf("fallback-%x-%x", time.Now().UnixNano(), evidenceSourceFallback.Add(1))
-}
-
-var evidenceSourceFallback atomic.Uint64
+// newEvidenceSource returns a random ID for this backend instance, so a
+// continuation cannot be replayed against a different archive or server.
+func newEvidenceSource() string { return rand.Text() }
 
 func (b *directBackend) SupportsRecallQueries() bool { return b.local != nil }
 

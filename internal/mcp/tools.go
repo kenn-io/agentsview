@@ -6,15 +6,11 @@ package mcp
 import (
 	"cmp"
 	"context"
-	"crypto/hmac"
-	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -461,39 +457,9 @@ type messageBodyCursor struct {
 	Offset         int      `json:"p"`
 	NextFrom       *int     `json:"n,omitempty"`
 	Roles          []string `json:"l,omitempty"`
-	Mac            string   `json:"m,omitempty"`
-}
-
-// bodyCursorMACKey authenticates body cursors so a caller cannot repoint a
-// cursor at an ordinal it was never shown (such as a filtered system row).
-// It is per-process on purpose: cursors live only inside one conversation
-// response chain, so there is no need for the key to survive a restart.
-var (
-	bodyCursorMACKeyOnce sync.Once
-	bodyCursorMACKey     [32]byte
-)
-
-func bodyCursorKey() []byte {
-	bodyCursorMACKeyOnce.Do(func() {
-		if _, err := rand.Read(bodyCursorMACKey[:]); err != nil {
-			panic("mcp: generating body cursor MAC key: " + err.Error())
-		}
-	})
-	return bodyCursorMACKey[:]
-}
-
-// computeBodyCursorMAC HMACs the cursor with the Mac field cleared, so the
-// digest covers every other field exactly as they will be marshaled.
-func computeBodyCursorMAC(cursor messageBodyCursor) string {
-	cursor.Mac = ""
-	raw, _ := json.Marshal(cursor)
-	mac := hmac.New(sha256.New, bodyCursorKey())
-	mac.Write(raw)
-	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
 func encodeMessageBodyCursor(cursor messageBodyCursor) string {
-	cursor.Mac = computeBodyCursorMAC(cursor)
 	raw, _ := json.Marshal(cursor)
 	return base64.RawURLEncoding.EncodeToString(raw)
 }
@@ -507,18 +473,6 @@ func decodeMessageBodyCursor(raw string) (messageBodyCursor, error) {
 	if err := json.Unmarshal(payload, &cursor); err != nil || cursor.Version != 2 ||
 		cursor.EvidenceSource == "" || cursor.SessionID == "" || cursor.Revision == "" ||
 		cursor.Ordinal < 0 || cursor.Offset <= 0 {
-		return messageBodyCursor{}, errors.New("invalid body_cursor")
-	}
-	received, err := base64.RawURLEncoding.DecodeString(cursor.Mac)
-	if err != nil {
-		return messageBodyCursor{}, errors.New("invalid body_cursor")
-	}
-	cursor.Mac = ""
-	want, err := base64.RawURLEncoding.DecodeString(computeBodyCursorMAC(cursor))
-	if err != nil {
-		return messageBodyCursor{}, errors.New("invalid body_cursor")
-	}
-	if !hmac.Equal(received, want) {
 		return messageBodyCursor{}, errors.New("invalid body_cursor")
 	}
 	return cursor, nil
@@ -724,10 +678,10 @@ func (t *toolset) getMessageBodyContinuation(
 	maxChars := clampLimit(in.MaxCharsPerMessage, defaultMaxCharsPerMessage, maxMaxCharsPerMessage)
 	// A body continuation must honor the same role/system visibility
 	// contract as the listing path: never surface content that
-	// filterAndMapMessage would have filtered, even under a validly
-	// signed cursor. The issuing roles ride inside the MAC'd cursor, so
-	// an explicit-role listing continues under exactly the roles that
-	// made the message visible. The message is still sliced from the raw
+	// filterAndMapMessage would have filtered, whatever the cursor
+	// claims. The issuing roles ride inside the cursor, so an
+	// explicit-role listing continues under exactly the roles that made
+	// the message visible. The message is still sliced from the raw
 	// content below, so the mapped output is intentionally discarded.
 	if _, ok := filterAndMapMessage(message, cursor.Roles, maxChars); !ok {
 		return nil, getMessagesOut{}, fmt.Errorf("%w: cited message is not available", service.ErrSourceChanged)

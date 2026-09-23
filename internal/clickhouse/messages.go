@@ -20,7 +20,7 @@ const messageCols = `id, session_id, ordinal, role, content, thinking_text,
 func (s *Store) GetMessages(
 	ctx context.Context, sessionID string, from, limit int, asc bool,
 ) ([]db.Message, error) {
-	return s.getMessagesLinear(ctx, sessionID, from, limit, asc, nil)
+	return s.getMessagesLinear(ctx, sessionID, from, db.MessageWindow{Limit: limit, Asc: asc})
 }
 
 // revisionCol selects the session transcript revision as a window
@@ -48,41 +48,13 @@ func (s *Store) GetMessagesWindow(
 	if w.From != nil {
 		from = *w.From
 	}
-	if w.ObservedRevision == nil {
-		return s.getMessagesLinear(ctx, sessionID, from, w.Limit, w.Asc, w.Roles)
-	}
-	return s.getMessagesLinearWithRevision(ctx, sessionID, from, w)
+	return s.getMessagesLinear(ctx, sessionID, from, w)
 }
 
+// getMessagesLinear pages by ordinal, optionally role-filtered. It selects
+// the session transcript revision only when the caller asked for it; the
+// plain page selects an empty literal in that column instead.
 func (s *Store) getMessagesLinear(
-	ctx context.Context, sessionID string, from, limit int, asc bool, roles []string,
-) ([]db.Message, error) {
-	if limit <= 0 || limit > db.MaxMessageLimit {
-		limit = db.DefaultMessageLimit
-	}
-	dir, op := "ASC", ">="
-	if !asc {
-		dir, op = "DESC", "<="
-	}
-	roleClause, roleArgs := roleFilterClause(roles)
-	args := append([]any{sessionID, from}, roleArgs...)
-	args = append(args, limit)
-	msgs, err := s.queryMessageRows(ctx, `
-		SELECT `+messageCols+`
-		FROM messages
-		WHERE session_id = ? AND ordinal `+op+` ?`+roleClause+`
-		ORDER BY ordinal `+dir+`
-		LIMIT ?`, args...)
-	if err != nil {
-		return nil, fmt.Errorf("querying clickhouse messages: %w", err)
-	}
-	if err := s.attachToolCalls(ctx, msgs); err != nil {
-		return nil, err
-	}
-	return msgs, nil
-}
-
-func (s *Store) getMessagesLinearWithRevision(
 	ctx context.Context, sessionID string, from int, w db.MessageWindow,
 ) ([]db.Message, error) {
 	limit := w.Limit
@@ -93,11 +65,16 @@ func (s *Store) getMessagesLinearWithRevision(
 	if !w.Asc {
 		dir, op = "DESC", "<="
 	}
+	revCol, args := "''", []any{}
+	if w.ObservedRevision != nil {
+		revCol, args = revisionCol, []any{sessionID}
+	}
 	roleClause, roleArgs := roleFilterClause(w.Roles)
-	args := append([]any{sessionID, sessionID, from}, roleArgs...)
+	args = append(args, sessionID, from)
+	args = append(args, roleArgs...)
 	args = append(args, limit)
-	msgs, err := s.queryMessageRowsWithRevision(ctx, w.ObservedRevision, `
-		SELECT `+revisionCol+`, `+messageCols+`
+	msgs, err := db.QueryMessagesWithRevision(ctx, s.queryContext, scanMessages, w.ObservedRevision, `
+		SELECT `+revCol+`, `+messageCols+`
 		FROM messages
 		WHERE session_id = ? AND ordinal `+op+` ?`+roleClause+`
 		ORDER BY ordinal `+dir+`
@@ -120,7 +97,7 @@ func (s *Store) getMessagesAroundAnchor(
 	args = append(args, max(w.Before, 0), sessionID, anchor, sessionID, anchor)
 	args = append(args, roleArgs...)
 	args = append(args, max(w.After, 0))
-	msgs, err := s.queryMessageRowsWithRevision(ctx, w.ObservedRevision, `
+	msgs, err := db.QueryMessagesWithRevision(ctx, s.queryContext, scanMessages, w.ObservedRevision, `
 		SELECT `+revisionCol+`, w.*
 		FROM (
 			SELECT * FROM (
@@ -141,32 +118,6 @@ func (s *Store) getMessagesAroundAnchor(
 	}
 	if err := s.attachToolCalls(ctx, msgs); err != nil {
 		return nil, err
-	}
-	return msgs, nil
-}
-
-// queryMessageRowsWithRevision runs a window statement whose first column
-// is the session transcript revision and reports that revision through
-// observed when the caller asked for it. An empty result leaves observed
-// untouched.
-func (s *Store) queryMessageRowsWithRevision(
-	ctx context.Context, observed *string, query string, args ...any,
-) ([]db.Message, error) {
-	rows, err := s.queryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var revision string
-	msgs, err := scanMessages(db.RevisionRows{Rows: rows, Revision: &revision})
-	if err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if observed != nil && len(msgs) > 0 {
-		*observed = revision
 	}
 	return msgs, nil
 }
@@ -238,12 +189,7 @@ func (s *Store) GetResumeModelCounts(ctx context.Context, sessionID string) ([]d
 	return counts, nil
 }
 
-func scanMessages(rows interface {
-	Next() bool
-	Scan(dest ...any) error
-	Err() error
-},
-) ([]db.Message, error) {
+func scanMessages(rows db.MessageRows) ([]db.Message, error) {
 	var msgs []db.Message
 	for rows.Next() {
 		var m db.Message

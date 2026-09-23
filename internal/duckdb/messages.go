@@ -112,7 +112,7 @@ func (s *Store) getMessagesLinear(
 		LIMIT ?`
 	args := append([]any{sessionID, sessionID, from}, roleArgs...)
 	args = append(args, limit)
-	msgs, err := s.queryMessageRowsWithRevision(ctx, w.ObservedRevision, query, args...)
+	msgs, err := db.QueryMessagesWithRevision(ctx, s.queryContext, scanMessages, w.ObservedRevision, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying duckdb messages: %w", err)
 	}
@@ -147,38 +147,12 @@ func (s *Store) getMessagesAroundAnchor(
 	args = append(args, max(w.Before, 0), sessionID, anchor, sessionID, anchor)
 	args = append(args, roleArgs...)
 	args = append(args, max(w.After, 0))
-	msgs, err := s.queryMessageRowsWithRevision(ctx, w.ObservedRevision, query, args...)
+	msgs, err := db.QueryMessagesWithRevision(ctx, s.queryContext, scanMessages, w.ObservedRevision, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying duckdb around-window messages: %w", err)
 	}
 	if err := s.attachToolCalls(ctx, msgs); err != nil {
 		return nil, err
-	}
-	return msgs, nil
-}
-
-// queryMessageRowsWithRevision runs a window statement whose first column
-// is the session transcript revision and reports that revision through
-// observed when the caller asked for it. An empty result leaves observed
-// untouched.
-func (s *Store) queryMessageRowsWithRevision(
-	ctx context.Context, observed *string, query string, args ...any,
-) ([]db.Message, error) {
-	rows, err := s.queryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var revision string
-	msgs, err := scanMessages(db.RevisionRows{Rows: rows, Revision: &revision})
-	if err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if observed != nil && len(msgs) > 0 {
-		*observed = revision
 	}
 	return msgs, nil
 }
@@ -257,12 +231,7 @@ func (s *Store) GetResumeModelCounts(
 	return counts, nil
 }
 
-func scanMessages(rows interface {
-	Next() bool
-	Scan(dest ...any) error
-	Err() error
-},
-) ([]db.Message, error) {
+func scanMessages(rows db.MessageRows) ([]db.Message, error) {
 	var msgs []db.Message
 	for rows.Next() {
 		var m db.Message
