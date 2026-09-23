@@ -129,8 +129,9 @@ Additions beyond jilog:
 - Frustration markers (`signals.IsFrustrationMarker`) and user interruptions
   (rows the Claude parser tags `interrupted`) are friction kinds of their
   own. They run after jilog's five kinds.
-- Seats come only from `[friction] seat_patterns` globs the user configures.
-  jilog's built-in pool-directory conventions are not carried over.
+- `SeatFromPath` uses only the patterns its caller provides. Wiring those
+  patterns to `[friction] seat_patterns` configuration is planned for a later
+  PR. jilog's built-in pool-directory conventions are not carried over.
 
 ## Parity notes
 

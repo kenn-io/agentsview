@@ -151,6 +151,7 @@ func TestArchivedClaudeSession(t *testing.T) {
 		// and is long enough to be a correction, but it yields exactly one
 		// interruption finding (spec §6.8) and no correction.
 		assert.Equal(t, []string{friction.DetectorInterruption}, detectors(got))
+		require.Len(t, got, 1)
 		require.NotNil(t, got[0].Ordinal)
 		assert.Equal(t, 3, *got[0].Ordinal)
 
@@ -160,6 +161,34 @@ func TestArchivedClaudeSession(t *testing.T) {
 		assert.Empty(t, reviewArchived(t,
 			claudeAssistant(t, 10, text("Listing.")), echo,
 			claudeAssistant(t, 12, text("Listed."))))
+	})
+
+	t.Run("compact_boundary_cannot_create_correction_window", func(t *testing.T) {
+		// If the compact summary survives as an assistant turn, it makes
+		// ordinal 3 look like a correction between two assistant turns.
+		// Dropping it leaves two adjacent user turns and no correction.
+		got := reviewArchived(t,
+			claudeAssistant(t, 0, text("Working on the config.")),
+			userRow(1, "ok"),
+			compactRow(2, "Summary: the config work continues"),
+			userRow(3, "no, revert the config change first"),
+			claudeAssistant(t, 4, text("Reverted.")),
+		)
+		assert.Empty(t, got)
+
+		// A regular assistant row in the same position creates the
+		// correction, so this case is sensitive to the boundary filter.
+		retained := reviewArchived(t,
+			claudeAssistant(t, 0, text("Working on the config.")),
+			userRow(1, "ok"),
+			claudeAssistant(t, 2, text("Summary: the config work continues")),
+			userRow(3, "no, revert the config change first"),
+			claudeAssistant(t, 4, text("Reverted.")),
+		)
+		require.Len(t, retained, 1)
+		assert.Equal(t, friction.DetectorCorrectionCoding, retained[0].Detector)
+		require.NotNil(t, retained[0].Ordinal)
+		assert.Equal(t, 3, *retained[0].Ordinal)
 	})
 
 	t.Run("no_workaround_or_deferral_from_thinking_or_todowrite", func(t *testing.T) {
@@ -214,6 +243,7 @@ func TestArchivedClaudeSession(t *testing.T) {
 			claudeAssistant(t, 1, text("Using a hardcoded value for now.")),
 		)
 		assert.Equal(t, []string{friction.DetectorWorkaround}, detectors(got))
+		require.Len(t, got, 1)
 		assert.Equal(t, "for now", got[0].Label)
 	})
 }
