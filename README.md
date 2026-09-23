@@ -29,6 +29,11 @@ Or download the **desktop app** (macOS / Windows) from
 [GitHub Releases](https://github.com/kenn-io/agentsview/releases) or via
 homebrew: `brew install --cask agentsview`
 
+On macOS, see
+[Use the bundled CLI](https://agentsview.io/docs/quickstart/#macos-use-the-bundled-cli)
+for terminal setup and the required first launch. For Macs managed over SSH, use
+the standalone CLI installer above.
+
 Or run the published Docker image:
 
 ```bash

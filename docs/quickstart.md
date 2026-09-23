@@ -34,6 +34,38 @@ To keep AgentsView out of the Dock and Cmd-Tab while its window is closed, turn
 on **Hide from Dock and Cmd-Tab when window closed** in the menu-bar menu. This
 option is off by default and stays set across relaunches.
 
+#### macOS: use the bundled CLI
+
+The macOS app includes the `agentsview` CLI at
+`/Applications/AgentsView.app/Contents/MacOS/agentsview`. Homebrew Cask links it
+into Homebrew's `bin` directory automatically.
+
+If you installed the `.app` from a downloaded `.dmg`, move it to Applications,
+then add its CLI to your current shell's `PATH`:
+
+```bash
+export PATH="/Applications/AgentsView.app/Contents/MacOS:$PATH"
+```
+
+Add that same `export` line to `~/.zshrc` to keep it in new Terminal windows
+(or your shell's startup file if you use a different shell). Adjust the path
+if you installed the app elsewhere. The CLI follows updates to the app at that
+location; update it through the desktop app or Homebrew.
+
+Before running the bundled CLI for the first time, open AgentsView from
+Applications in a graphical login session and complete the macOS first-launch
+dialogs. A fresh Homebrew Cask install over SSH has been reported to leave the
+CLI hanging without output until this step is completed. Adding it to `PATH`
+does not replace that first launch. For an unattended Mac, use the
+[standalone CLI installer](#shell-script) instead.
+
+Confirm which CLI your shell finds and check its version:
+
+```bash
+command -v agentsview
+agentsview --version
+```
+
 ### pip / uvx
 
 ```bash
@@ -45,6 +77,9 @@ Platform-specific wheels are published to PyPI for Linux (x86_64, aarch64),
 macOS (x86_64, arm64), and Windows (x86_64, arm64).
 
 ### Shell Script
+
+For macOS and Linux, this installs the standalone CLI without the desktop app.
+Use this path when setting up a Mac over SSH without a graphical login session.
 
 ```bash
 curl -fsSL https://agentsview.io/install.sh | bash
@@ -58,6 +93,12 @@ powershell -ExecutionPolicy ByPass -c "irm https://agentsview.io/install.ps1 | i
 
 The installer detects your OS and architecture, downloads the latest release
 from GitHub Releases, verifies the SHA-256 checksum, and installs the binary.
+
+On macOS and Linux, it installs to `/usr/local/bin` when that directory is
+writable, or `~/.local/bin` otherwise. Follow the installer's `PATH` instructions
+and run `command -v agentsview` to check which binary your shell uses. When
+the standalone CLI and bundled CLI use different directories, put the
+standalone install directory first in `PATH` to select it.
 
 !!! note
 
