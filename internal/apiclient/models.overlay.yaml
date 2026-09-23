@@ -105,6 +105,12 @@ actions:
       x-go-type-import:
         path: go.kenn.io/agentsview/internal/vector
         name: vector
+  - target: $.components.schemas.KataStatus
+    update:
+      x-go-type: kata.Status
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/kata
+        name: kata
   - target: $.components.schemas.VectorGenerationInfo
     update:
       x-go-type: vector.GenerationInfo

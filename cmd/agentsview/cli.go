@@ -130,6 +130,7 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newMCPCommand())
 	root.AddCommand(newRecallCommand())
 	root.AddCommand(newInsightCommand())
+	root.AddCommand(newKataCommand())
 	root.AddCommand(newStatsCommand())
 	root.AddCommand(newParseDiffCommand())
 	root.AddCommand(newClassifierCommand())
