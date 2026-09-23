@@ -26,6 +26,13 @@ The latest published release is
   to leave vectors out. See
   [semantic search: ClickHouse](/docs/semantic-search/#clickhouse).
 
+**Improvements**
+
+- Syncing uses less CPU to check transcript text for invalid characters. Clean
+  text is now checked in one pass and stored unchanged. In a full sync of a
+  950 MB local test corpus, total CPU time fell about 4%. Wall-clock time did
+  not change measurably.
+
 ## 0.44.0
 
 <small>2026-09-21</small>
