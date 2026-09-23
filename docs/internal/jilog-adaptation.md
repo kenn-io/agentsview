@@ -10,10 +10,10 @@ AgentsView's Friction Log adapts the session review from
 behavioral reference. This page records the source, the changes, and the MIT
 notice. Source paths below are relative to that jilog commit.
 
-PR 1 provides pure detection, signal, formatting, and JSON packages. The
-archive adapter, persisted review, digest rendering, scheduling, NanoClaw
-integration, and Kata filing are planned for later PRs. Descriptions of those
-parts below record the approved mapping; they do not describe PR 1 behavior.
+PR 1 provides pure detection, signal, formatting, and JSON packages. PR 2 adds
+the pure archived-row adapter, pattern detection, and session review.
+Persistence, digest rendering, scheduling, NanoClaw integration, and Kata filing
+remain planned for later PRs.
 
 ## Kept in PR 1
 
@@ -41,12 +41,6 @@ parts below record the approved mapping; they do not describe PR 1 behavior.
 
 ## Planned replacements
 
-- AgentsView parsers and its archive replace jilog's transcript readers. An
-  adapter will build detector input from archived sessions in PR 2.
-- Existing retry, runaway-loop, edit-churn, mid-task-compaction, and
-  context-pressure signals replace jilog's `stuck_loop` and
-  `compaction_storm`. The review will expose them as pattern kinds.
-- Session parent relationships replace jilog's 16-zero sub-agent ID prefix.
 - Database tables replace the processed-sessions file and retry sidecar. A
   catch-up job will build each completed local day once, replacing the nightly
   run.
@@ -57,6 +51,15 @@ parts below record the approved mapping; they do not describe PR 1 behavior.
 - Generic NanoClaw persona and channel resolution, trust filtering, and
   message-envelope cleanup will retain the public NanoClaw behavior. They will
   be inactive until a NanoClaw data directory is configured.
+
+## Kept in PR 2
+
+- AgentsView parser and archive rows replace jilog's transcript readers.
+  `BuildSessionInput` prepares detector input from those rows.
+- Existing retry, runaway-loop, edit-churn, mid-task-compaction, and
+  context-pressure signals replace jilog's `stuck_loop` and
+  `compaction_storm` as pattern kinds.
+- Session parent relationships replace jilog's 16-zero sub-agent ID prefix.
 
 ## Dropped
 
@@ -70,26 +73,64 @@ parts below record the approved mapping; they do not describe PR 1 behavior.
 - Migration or matching of existing `[jilog/…]` issues. Friction Log starts
   with its own issue history.
 
-## Planned additions
+## Additions
 
-- `frustration` and `interruption` kinds will use AgentsView's existing
+- `frustration` and `interruption` kinds use AgentsView's existing
   frustration markers and interrupted-turn rows. They do not change a jilog
   kind.
-- Archived tool calls will supply error, P0, and pattern findings. jilog's
-  AgentsView reader cannot produce those findings from its session rows.
-- Detection and digests will be on by default, as running jilog makes them.
+- Archived tool calls supply error and pattern findings. jilog's AgentsView
+  reader cannot produce those findings from its session rows.
+- Detection and digests are planned to be on by default, as running jilog
+  makes them. P0 filing awaits the archive and Kata integration.
 
 ## Deliberate differences
 
 - Titles use `[friction/<kind>]`, labels use `friction`, and the planned digest
   heading is `# Friction Log — <date>`.
-- The planned adapter removes system, compact-boundary, and tool-result rows
+- The adapter removes system, compact-boundary, and tool-result rows
   from every correction stream, extending jilog's NanoClaw rule to all
   sessions.
-- The planned adapter drops thinking blocks and tool renderings from stored
+- The adapter drops thinking blocks and tool renderings from stored
   assistant content, matching jilog's text-block-only extraction.
-- The planned adapter synthesizes error envelopes from tool rows and maps the
+- The adapter synthesizes error envelopes from tool rows and maps the
   `Bash` tool category to `bash` for the noise allowlist.
+
+## Session input adapter
+
+agentsview does not port jilog's file readers. `friction.BuildSessionInput`
+maps archived rows into the message stream jilog's detectors read:
+
+- System rows, compact-boundary rows and `tool_result` fallback rows are
+  dropped from the stream. This applies jilog's NanoClaw rule to every
+  session (D10) and closes jilog's Claude Code reader gap, which kept
+  `isMeta` and compact-summary lines.
+- Assistant text drops inline `[Thinking]` blocks and tool-call renderings,
+  reproducing jilog's text-blocks-only extraction (D11).
+- Every tool call becomes a `tool` message whose envelope is
+  `{"error","success"}`, with success from `signals.IsFailure` (D12). The
+  noise allowlist keys on `bash` for any Bash-category call.
+- Pattern kinds reuse `internal/signals`: `retry_loop`, `runaway_loop`,
+  `edit_churn`, `mid_task_compaction` and `context_pressure`.
+  `iteration_runaway` is ported. `resume_storm` is dropped because no
+  agentsview source records resumes (D14).
+
+Architecture-forced deltas from jilog:
+
+- jilog's `stuck_loop` fires at 4 identical calls. `retry_loop` fires at 3,
+  because it is the same predicate as the Quality page's retry count.
+- Compaction storms (3 compactions within 10 minutes) are replaced by
+  mid-task compactions, the agentsview signal. The evidence range spans all
+  compact boundaries in the session.
+- A user message that mixes text and tool results keeps its text, because
+  the echo part was removed at parse. jilog would skip it.
+
+Additions beyond jilog:
+
+- Frustration markers (`signals.IsFrustrationMarker`) and user interruptions
+  (rows the Claude parser tags `interrupted`) are friction kinds of their
+  own. They run after jilog's five kinds.
+- Seats come only from `[friction] seat_patterns` globs the user configures.
+  jilog's built-in pool-directory conventions are not carried over.
 
 ## Parity notes
 
