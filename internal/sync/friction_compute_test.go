@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/friction"
 	"go.kenn.io/agentsview/internal/testjsonl"
@@ -350,4 +351,88 @@ func TestSyncPersistsInterruptionFinding(t *testing.T) {
 	s, err := fx.db.GetSessionFull(t.Context(), id)
 	require.NoError(t, err)
 	assert.Equal(t, len(got), s.FrictionCount, "friction_count counts interruptions")
+}
+
+func TestFrictionSameOnSyncResyncAndBackfill(t *testing.T) {
+	fx := newEngineFixture(t)
+	path := writeFrictionClaudeSession(t, fx.claudeDir, "friction-stable")
+	require.Equal(t, 1, fx.engine.SyncAll(t.Context(), nil).Synced)
+	id := fx.sessionIDFor(t, path)
+	first, err := fx.db.SessionFrictionFindings(t.Context(), id)
+	require.NoError(t, err)
+	require.NotEmpty(t, first)
+	firstSess, err := fx.db.GetSessionFull(t.Context(), id)
+	require.NoError(t, err)
+
+	fx.engine.ResyncAll(t.Context(), nil)
+	afterResync, err := fx.db.SessionFrictionFindings(t.Context(), id)
+	require.NoError(t, err)
+	assert.Equal(t, first, afterResync, "resync reproduces findings")
+
+	require.NoError(t, fx.db.MarkFrictionStale(t.Context(), id))
+	processed, err := fx.engine.BackfillFriction(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 1, processed)
+	afterBackfill, err := fx.db.SessionFrictionFindings(t.Context(), id)
+	require.NoError(t, err)
+	assert.Equal(t, first, afterBackfill, "backfill reproduces findings")
+	s, err := fx.db.GetSessionFull(t.Context(), id)
+	require.NoError(t, err)
+	assert.Equal(t, firstSess.FrictionHash, s.FrictionHash)
+
+	processed, err = fx.engine.BackfillFriction(t.Context())
+	require.NoError(t, err)
+	assert.Zero(t, processed, "nothing stale: the tick is a no-op")
+	state, err := fx.db.FrictionBackfillState(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, "completed", state)
+}
+
+func TestBackfillFrictionSettlesUsageOnlyArchive(t *testing.T) {
+	fx := newEngineFixture(t)
+	path := writeFrictionClaudeSession(t, fx.claudeDir, "friction-usage")
+	require.Equal(t, 1, fx.engine.SyncAll(t.Context(), nil).Synced)
+	id := fx.sessionIDFor(t, path)
+	fx.db.SetArchiveContent(config.ArchiveContentUsage)
+	require.NoError(t, fx.db.MarkFrictionStale(t.Context(), id))
+
+	_, err := fx.engine.BackfillFriction(t.Context())
+	require.NoError(t, err)
+	stale, err := fx.db.StaleFrictionSessions(t.Context(), friction.RulesVersion, 10)
+	require.NoError(t, err)
+	assert.Empty(t, stale, "usage-only sessions settle and are never revisited")
+	assert.Empty(t, frictionKinds(t, fx.db, id))
+}
+
+func TestBackfillFrictionRetriesFailedSessionWithoutBlockingOthers(t *testing.T) {
+	fx := newEngineFixture(t)
+	bad := writeFrictionClaudeSession(t, fx.claudeDir, "friction-backfill-bad")
+	good := writeFrictionClaudeSession(t, fx.claudeDir, "friction-backfill-good")
+	require.Equal(t, 2, fx.engine.SyncAll(t.Context(), nil).Synced)
+	badID, goodID := fx.sessionIDFor(t, bad), fx.sessionIDFor(t, good)
+	require.NoError(t, fx.db.MarkFrictionStale(t.Context(), badID, goodID))
+	fx.engine.frictionReviewHook = func(in friction.SessionInput) []friction.Signal {
+		if in.SubjectID == badID {
+			panic("detector bug")
+		}
+		return friction.Review(in)
+	}
+
+	processed, err := fx.engine.BackfillFriction(t.Context())
+	require.Error(t, err)
+	assert.Equal(t, 1, processed, "the other session should still settle")
+	stale, err := fx.db.StaleFrictionSessions(t.Context(), friction.RulesVersion, 10)
+	require.NoError(t, err)
+	assert.Equal(t, []string{badID}, stale)
+	state, err := fx.db.FrictionBackfillState(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, "pending", state)
+
+	fx.engine.frictionReviewHook = nil
+	processed, err = fx.engine.BackfillFriction(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 1, processed)
+	state, err = fx.db.FrictionBackfillState(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, "completed", state)
 }

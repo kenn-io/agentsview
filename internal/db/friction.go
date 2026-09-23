@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/friction"
+	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 // FrictionFinding is one persisted friction detection (spec §5.2). Rows
@@ -355,13 +356,99 @@ func (db *DB) SessionFrictionDims(
 func (db *DB) StaleFrictionSessions(
 	ctx context.Context, rulesVersion string, limit int,
 ) ([]string, error) {
+	return db.StaleFrictionSessionsAfter(ctx, rulesVersion, "", limit)
+}
+
+// StaleFrictionSessionsAfter pages past earlier ids, including sessions that
+// failed in this pass, so they cannot starve later sessions.
+func (db *DB) StaleFrictionSessionsAfter(
+	ctx context.Context, rulesVersion, afterID string, limit int,
+) ([]string, error) {
 	rows, err := db.getReader().QueryContext(ctx, `
 		SELECT id FROM sessions
-		WHERE friction_rules_version <> ?
+		WHERE friction_rules_version <> ? AND id > ?
 		ORDER BY id
-		LIMIT ?`, rulesVersion, limit)
+		LIMIT ?`, rulesVersion, afterID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("querying stale friction sessions: %w", err)
 	}
 	return scanStrings(rows)
+}
+
+// FrictionBackfillName identifies the resumable migration record.
+const FrictionBackfillName = "friction_backfill_v1"
+
+// MarkFrictionStale queues the selected sessions for a later rules-version
+// backfill. With no ids it queues every session.
+func (db *DB) MarkFrictionStale(ctx context.Context, sessionIDs ...string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	tx, err := db.getWriter().Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("beginning friction stale tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if len(sessionIDs) == 0 {
+		if _, err := tx.ExecContext(ctx, `UPDATE sessions SET friction_rules_version = ''`); err != nil {
+			return fmt.Errorf("marking friction stale: %w", err)
+		}
+	} else {
+		for _, id := range sessionIDs {
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE sessions SET friction_rules_version = '' WHERE id = ?`, id,
+			); err != nil {
+				return fmt.Errorf("marking friction stale %s: %w", id, err)
+			}
+		}
+	}
+	return tx.Commit()
+}
+
+// MarkFrictionBackfill records the current backfill pass and progress.
+func (db *DB) MarkFrictionBackfill(
+	ctx context.Context, state string, total, completed int, lastErr string,
+) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	lastErr = stringutil.SafeTruncate(lastErr, 1024)
+	_, err := db.getWriter().Exec(ctx, `
+		INSERT INTO background_migrations (
+			name, state, total_items, completed_items, last_error,
+			started_at, completed_at
+		) VALUES (?, ?, ?, ?, ?,
+			strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+			CASE WHEN ? = 'completed'
+				THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') END)
+		ON CONFLICT(name) DO UPDATE SET
+			state = excluded.state,
+			total_items = excluded.total_items,
+			completed_items = excluded.completed_items,
+			last_error = excluded.last_error,
+			started_at = CASE WHEN background_migrations.state = 'running'
+				THEN background_migrations.started_at
+				ELSE excluded.started_at END,
+			completed_at = excluded.completed_at,
+			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`,
+		FrictionBackfillName, state, total, completed, lastErr, state,
+	)
+	if err != nil {
+		return fmt.Errorf("recording friction backfill state: %w", err)
+	}
+	return nil
+}
+
+// FrictionBackfillState returns the recorded state, or empty when none exists.
+func (db *DB) FrictionBackfillState(ctx context.Context) (string, error) {
+	var state string
+	err := db.getReader().QueryRow(ctx,
+		`SELECT state FROM background_migrations WHERE name = ?`,
+		FrictionBackfillName,
+	).Scan(&state)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("reading friction backfill state: %w", err)
+	}
+	return state, nil
 }

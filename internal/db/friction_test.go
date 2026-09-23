@@ -349,6 +349,44 @@ func TestStaleFrictionSessions(t *testing.T) {
 	ids, err = d.StaleFrictionSessions(ctx, friction.RulesVersion, 1)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"a"}, ids)
+
+	ids, err = d.StaleFrictionSessionsAfter(ctx, friction.RulesVersion, "a", 1)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"c"}, ids,
+		"a failed early session must not hide later backfill pages")
+}
+
+func TestFrictionBackfillStateRoundTrip(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	state, err := d.FrictionBackfillState(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, state)
+	require.NoError(t, d.MarkFrictionBackfill(ctx, "running", 10, 4, ""))
+	require.NoError(t, d.MarkFrictionBackfill(ctx, "completed", 10, 10, ""))
+	state, err = d.FrictionBackfillState(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "completed", state)
+	var total, done int
+	require.NoError(t, d.getReader().QueryRow(ctx,
+		`SELECT total_items, completed_items FROM background_migrations WHERE name = ?`,
+		FrictionBackfillName).Scan(&total, &done))
+	assert.Equal(t, 10, total)
+	assert.Equal(t, 10, done)
+}
+
+func TestMarkFrictionStaleTargetsRequestedSessions(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	for _, id := range []string{"a", "b"} {
+		insertSession(t, d, id, "proj")
+		require.NoError(t, d.ReplaceSessionFriction(ctx, id, nil, nil,
+			friction.RulesVersion, FrictionHash(nil, nil, friction.RulesVersion)))
+	}
+	require.NoError(t, d.MarkFrictionStale(ctx, "a"))
+	stale, err := d.StaleFrictionSessions(ctx, friction.RulesVersion, 10)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"a"}, stale)
 }
 
 func TestFrictionReadsPropagateTableProbeError(t *testing.T) {

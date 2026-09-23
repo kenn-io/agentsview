@@ -225,3 +225,93 @@ func (e *Engine) RecomputeFriction(ctx context.Context, sessionID string) error 
 	}
 	return e.recomputeFrictionFromDB(ctx, sessionID)
 }
+
+const frictionBackfillPage = 200
+
+// BackfillFriction computes findings for sessions with an older rules
+// version. Each session takes the sync lock separately so live sync can
+// interleave with a long backfill.
+func (e *Engine) BackfillFriction(ctx context.Context) (int, error) {
+	if e.refuseWriteInForceParse("BackfillFriction") {
+		return 0, errors.New("BackfillFriction refused on report-only parse-diff engine")
+	}
+	if e.disableSignalRecompute {
+		return 0, nil
+	}
+	ids, err := e.db.StaleFrictionSessions(ctx, friction.RulesVersion, 1)
+	if err != nil {
+		return 0, err
+	}
+	if len(ids) == 0 {
+		state, err := e.db.FrictionBackfillState(ctx)
+		if err != nil {
+			return 0, err
+		}
+		if state != "completed" {
+			return 0, e.db.MarkFrictionBackfill(ctx, "completed", 0, 0, "")
+		}
+		return 0, nil
+	}
+	if err := e.db.MarkFrictionBackfill(ctx, "running", 0, 0, ""); err != nil {
+		return 0, err
+	}
+	log.Printf("friction backfill: recomputing stale sessions")
+	processed, failed := 0, 0
+	var lastErr error
+	cursor := ""
+	for {
+		ids, err := e.db.StaleFrictionSessionsAfter(
+			ctx, friction.RulesVersion, cursor, frictionBackfillPage,
+		)
+		if err != nil {
+			return processed, err
+		}
+		if len(ids) == 0 {
+			break
+		}
+		for _, id := range ids {
+			if err := ctx.Err(); err != nil {
+				return processed, err
+			}
+			cursor = id
+			err := e.RunExclusive(func() error {
+				return e.recomputeFrictionFromDB(ctx, id)
+			})
+			if err != nil {
+				failed++
+				lastErr = err
+				log.Printf("friction backfill: %s: %v", id, err)
+				continue
+			}
+			processed++
+		}
+		if err := e.db.MarkFrictionBackfill(
+			ctx, "running", processed+failed, processed, "",
+		); err != nil {
+			return processed, err
+		}
+	}
+	remaining, err := e.db.StaleFrictionSessions(ctx, friction.RulesVersion, 1)
+	if err != nil {
+		return processed, err
+	}
+	if failed > 0 {
+		msg := fmt.Sprintf("%d sessions failed; last: %v", failed, lastErr)
+		if err := e.db.MarkFrictionBackfill(
+			ctx, "pending", processed+failed, processed, msg,
+		); err != nil {
+			return processed, err
+		}
+		return processed, fmt.Errorf("friction backfill incomplete: %s", msg)
+	}
+	if len(remaining) > 0 {
+		// A concurrent writer introduced a stale session before the cursor.
+		return processed, e.db.MarkFrictionBackfill(
+			ctx, "pending", processed, processed, "",
+		)
+	}
+	log.Printf("friction backfill: completed %d sessions", processed)
+	return processed, e.db.MarkFrictionBackfill(
+		ctx, "completed", processed, processed, "",
+	)
+}
