@@ -3,6 +3,7 @@ package rawclient
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -23,14 +24,14 @@ func (c *Client) Status(ctx context.Context) (rawsync.Status, error) {
 		return rawsync.Status{}, err
 	}
 	if response.StatusCode != http.StatusOK || response.JSON200 == nil {
-		return rawsync.Status{}, fmt.Errorf("rawclient: invalid status response")
+		return rawsync.Status{}, errors.New("rawclient: invalid status response")
 	}
 	var status *rawsync.Status
 	if err := json.Unmarshal(response.Body, &status); err != nil {
 		return rawsync.Status{}, fmt.Errorf("rawclient: decode status response: %w", err)
 	}
 	if status == nil {
-		return rawsync.Status{}, fmt.Errorf("rawclient: status response is null")
+		return rawsync.Status{}, errors.New("rawclient: status response is null")
 	}
 	return *status, nil
 }

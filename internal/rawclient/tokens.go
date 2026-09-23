@@ -9,10 +9,12 @@ import (
 	"go.kenn.io/agentsview/internal/apiclient"
 )
 
-// tokenScopes covers NewClient's upload operations. NewStatusClient requests
-// only status through the token endpoint.
-var tokenScopes = []string{"negotiate", "upload", "commit"}
-var statusTokenScopes = []string{"status"}
+var (
+	// tokenScopes covers NewClient's upload operations. NewStatusClient requests
+	// only status through the token endpoint.
+	tokenScopes       = []string{"negotiate", "upload", "commit"}
+	statusTokenScopes = []string{"status"}
+)
 
 // tokenProvider caches one live device token and refreshes it with
 // single-flight semantics before the server-side expiry margin.

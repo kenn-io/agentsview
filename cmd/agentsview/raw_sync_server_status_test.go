@@ -64,8 +64,8 @@ func TestRawSyncServerStatusJSON(t *testing.T) {
 		"source_heads", "parse_jobs", "active_device_count", "devices", "uploads",
 		"pipeline_depth", "parse_lag_seconds",
 	}, mapKeys(got))
-	assert.Equal(t, float64(9), got["pipeline_depth"])
-	assert.Equal(t, float64(2), got["parse_lag_seconds"])
+	assert.InDelta(t, 9.0, got["pipeline_depth"], 0)
+	assert.InDelta(t, 2.0, got["parse_lag_seconds"], 0)
 	heads, ok := got["source_heads"].([]any)
 	require.True(t, ok)
 	for _, head := range heads {
@@ -131,7 +131,7 @@ func TestRawSyncServerStatusParseLag(t *testing.T) {
 				return
 			}
 			require.NotNil(t, got)
-			assert.Equal(t, *tt.want, *got)
+			assert.InDelta(t, *tt.want, *got, 0)
 			if tt.name == "most recently completed head" {
 				t.Log("selected lag 2.0 seconds; historical lag 1200.0 seconds ignored")
 			}
@@ -443,10 +443,10 @@ func TestWriteRawSyncStatusWriterError(t *testing.T) {
 	sentinel := errors.New("writer failed")
 	writer := failingRawSyncWriter{err: sentinel}
 	err := writeRawSyncStatus(&writer, rawsync.Status{})
-	assert.ErrorIs(t, err, sentinel)
+	require.ErrorIs(t, err, sentinel)
 	writer = failingRawSyncWriter{err: sentinel}
 	err = writeRawSyncStatus(&writer, rawSyncServerStatus{ParseLagSeconds: new(2.0)})
-	assert.ErrorIs(t, err, sentinel)
+	require.ErrorIs(t, err, sentinel)
 }
 
 type failingRawSyncWriter struct{ err error }

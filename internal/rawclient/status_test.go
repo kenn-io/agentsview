@@ -154,7 +154,7 @@ func TestStatusClientResponses(t *testing.T) {
 		})
 		require.NoError(t, err)
 		_, err = client.Status(t.Context())
-		assert.Error(t, err)
+		require.Error(t, err)
 		var apiErr APIError
 		assert.False(t, AsAPIError(err, &apiErr))
 	})
