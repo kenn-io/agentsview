@@ -54,6 +54,10 @@ The latest published release is
   price catalog, one lookup took about two-thirds less time. Model names with
   uppercase letters no longer cause hundreds of extra memory allocations per
   lookup. The selected prices are unchanged.
+- Usage and cost totals are built faster, because each usage record's price is
+  now looked up once instead of twice. On a synthetic archive with about
+  105,000 usage records, rebuilding all saved daily totals took about 16% less
+  time. Stored totals and costs are unchanged.
 
 ## 0.44.0
 
