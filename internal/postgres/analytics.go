@@ -2101,15 +2101,13 @@ func (s *Store) queryAutonomyChunk(
 // --- Tools ---
 
 // pgAnalyticsZone returns the IANA zone PostgreSQL uses to localize
-// analytics call timestamps. "Local" resolves to the process timezone's
-// IANA name, matching analyticsLocation's time.Local. Unknown names, and a
-// process timezone without a loadable name, fall back to UTC.
+// analytics call timestamps. "Local" resolves through the shared
+// timeutil.LocalTimezoneOrUTC helper; unknown names fall back to UTC.
 func pgAnalyticsZone(f db.AnalyticsFilter) string {
-	name := f.Timezone
-	if name == "Local" {
-		name = timeutil.BestEffortLocalTimezone()
+	if f.Timezone == "Local" {
+		return timeutil.LocalTimezoneOrUTC()
 	}
-	zone, err := db.NormalizeSessionTimezone(name)
+	zone, err := db.NormalizeSessionTimezone(f.Timezone)
 	if err != nil {
 		return "UTC"
 	}
