@@ -485,7 +485,10 @@ func (s *Sync) pushBatchWithRetry(
 	onProgress func(storage.PushProgress),
 	failed map[string]struct{},
 ) error {
-	counts, err := s.pushSessionBatch(ctx, batch, fingerprints, version)
+	// Keep each session's payload unchanged across retries of this version,
+	// even if the local archive changes after the batch attempt.
+	payloads := make(map[string]sessionPayload, len(batch))
+	counts, err := s.pushSessionBatch(ctx, batch, fingerprints, version, payloads)
 	if err == nil {
 		for i := range batch {
 			result.SessionsPushed++
@@ -503,7 +506,7 @@ func (s *Sync) pushBatchWithRetry(
 			result.Errors += len(batch) - i
 			return err
 		}
-		counts, err := s.pushSessionBatch(ctx, batch[i:i+1], fingerprints, version)
+		counts, err := s.pushSessionBatch(ctx, batch[i:i+1], fingerprints, version, payloads)
 		switch {
 		case err == nil:
 			result.SessionsPushed++
@@ -574,14 +577,19 @@ func (s *Sync) loadPayload(ctx context.Context, sess db.Session) (sessionPayload
 // session.
 func (s *Sync) pushSessionBatch(
 	ctx context.Context, batch []db.Session, fingerprints map[string]string,
-	version uint64,
+	version uint64, loaded map[string]sessionPayload,
 ) ([]int, error) {
 	payloads := make([]sessionPayload, 0, len(batch))
 	counts := make([]int, 0, len(batch))
 	for _, sess := range batch {
-		p, err := s.loadPayload(ctx, sess)
-		if err != nil {
-			return nil, err
+		p, ok := loaded[sess.ID]
+		if !ok {
+			var err error
+			p, err = s.loadPayload(ctx, sess)
+			if err != nil {
+				return nil, err
+			}
+			loaded[sess.ID] = p
 		}
 		payloads = append(payloads, p)
 		counts = append(counts, len(p.messages))
