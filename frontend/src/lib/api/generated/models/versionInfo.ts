@@ -9,6 +9,7 @@ export interface VersionInfo {
   data_version: number;
   friction_available: boolean;
   insight_generation_available: boolean;
+  kata_available: boolean;
   read_only?: boolean;
   version: string;
 }

@@ -5249,6 +5249,23 @@ components:
       required:
         - insights
       type: object
+    KataStatus:
+      additionalProperties: false
+      properties:
+        api_schema_version:
+          type: string
+        instance_uid:
+          type: string
+        message:
+          type: string
+        project:
+          type: string
+        state:
+          type: string
+      required:
+        - state
+        - project
+      type: object
     MachinesResponse:
       additionalProperties: false
       properties:
@@ -7731,6 +7748,8 @@ components:
           type: boolean
         insight_generation_available:
           type: boolean
+        kata_available:
+          type: boolean
         read_only:
           type: boolean
         version:
@@ -7741,6 +7760,7 @@ components:
         - build_date
         - insight_generation_available
         - friction_available
+        - kata_available
         - api_version
         - data_version
       type: object
@@ -14202,6 +14222,79 @@ paths:
       summary: Publish insight
       tags:
         - Insights
+  /api/v1/kata/status:
+    get:
+      operationId: get-api-v1-kata-status
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KataStatus"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Get Kata connection status
+      tags:
+        - Kata
   /api/v1/machines:
     get:
       operationId: get-api-v1-machines

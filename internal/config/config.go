@@ -846,6 +846,7 @@ type Config struct {
 	Recall               RecallConfig                `json:"recall,omitempty" toml:"recall"`
 	Insights             InsightsConfig              `json:"insights,omitempty" toml:"insights"`
 	Friction             FrictionConfig              `json:"friction,omitempty" toml:"friction"`
+	Kata                 KataConfig                  `json:"-" toml:"kata"`
 	Automated            AutomatedConfig             `json:"automated,omitempty" toml:"automated"`
 	Agent                map[string]AgentConfig      `json:"agent,omitempty" toml:"agent"`
 	WriteTimeout         time.Duration               `json:"-" toml:"-"`
@@ -1254,6 +1255,7 @@ func Default() (Config, error) {
 			},
 		},
 		Friction: FrictionConfig{Enabled: true, BackfillDays: DefaultFrictionBackfillDays},
+		Kata:     defaultKataConfig(),
 	}, nil
 }
 
@@ -1646,6 +1648,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		Recall                         RecallConfig           `toml:"recall"`
 		Insights                       InsightsConfig         `toml:"insights"`
 		Friction                       FrictionConfig         `toml:"friction"`
+		Kata                           KataConfig             `toml:"kata"`
 		Automated                      AutomatedConfig        `toml:"automated"`
 		Agent                          map[string]AgentConfig `toml:"agent"`
 		EventsCoalesceInterval         time.Duration          `toml:"events_coalesce_interval"`
@@ -1934,6 +1937,9 @@ func (c *Config) applyConfigTOML(data string) error {
 				c.Friction.SeatPatterns = append(c.Friction.SeatPatterns, p)
 			}
 		}
+	}
+	if meta.IsDefined("kata") {
+		mergeKataTOML(&c.Kata, file.Kata, meta)
 	}
 	// IsDefined distinguishes "unset" (leave default 10s) from an
 	// explicit "0s" (disable coalescing). Checking != 0 would silently
@@ -2514,6 +2520,9 @@ func finalize(cfg *Config) error {
 		return err
 	}
 	if err := cfg.Friction.Validate(); err != nil {
+		return err
+	}
+	if err := cfg.Kata.Validate(); err != nil {
 		return err
 	}
 	return nil

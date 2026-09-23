@@ -1529,6 +1529,20 @@ server.
 
 ______________________________________________________________________
 
+### `agentsview kata status`
+
+Shows whether the configured Kata instance is reachable, compatible (API
+schema 0.21.0 or newer), authenticated, and has the configured project. With a
+running daemon it reports the daemon's view. When no daemon owns the data
+directory, it probes from the local config without starting one. An
+unreachable owner returns an error. `--format json` prints the status
+object; `--json` is an alias. `--format human` selects the default text output.
+`--server URL` asks an explicit AgentsView daemon; use
+`AGENTSVIEW_SERVER_TOKEN` or `--server-token-file PATH` for its credential. See
+[Kata](/docs/kata/).
+
+______________________________________________________________________
+
 ### `agentsview insight`
 
 Generate and inspect stored Activity Insights through the daemon API.

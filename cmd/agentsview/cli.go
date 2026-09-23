@@ -131,6 +131,7 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newRecallCommand())
 	root.AddCommand(newInsightCommand())
 	root.AddCommand(newFrictionCommand())
+	root.AddCommand(newKataCommand())
 	root.AddCommand(newStatsCommand())
 	root.AddCommand(newParseDiffCommand())
 	root.AddCommand(newClassifierCommand())
