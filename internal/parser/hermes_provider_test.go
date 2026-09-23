@@ -1076,6 +1076,140 @@ func TestHermesProviderParseStateDB(t *testing.T) {
 	)
 }
 
+func TestHermesDefaultRootsDiscoverWindowsStateDB(t *testing.T) {
+	newProvider := func(t *testing.T) (Provider, string, string) {
+		t.Helper()
+		home := t.TempDir()
+		windowsRoot := filepath.Join(home, "AppData", "Local", "hermes", "sessions")
+		hermesHome := filepath.Dir(windowsRoot)
+		require.NoError(t, os.MkdirAll(hermesHome, 0o755))
+		createHermesStateDB(t, hermesHome)
+
+		var def AgentDef
+		for _, candidate := range Registry {
+			if candidate.Type == AgentHermes {
+				def = candidate
+				break
+			}
+		}
+		require.NotEmpty(t, def.DefaultDirs)
+		roots := make([]string, 0, len(def.DefaultDirs))
+		for _, relative := range def.DefaultDirs {
+			roots = append(roots, filepath.Join(home, filepath.FromSlash(relative)))
+		}
+
+		provider, ok := NewProvider(AgentHermes, ProviderConfig{
+			Roots:   roots,
+			Machine: "test-machine",
+		})
+		require.True(t, ok)
+		return provider, windowsRoot, filepath.Join(hermesHome, "state.db")
+	}
+
+	t.Run("state_db_under_windows_hermes_home", func(t *testing.T) {
+		provider, windowsRoot, stateDB := newProvider(t)
+
+		sources, err := provider.Discover(t.Context())
+		require.NoError(t, err)
+		require.Len(t, sources, 1)
+		assert.Equal(t, windowsRoot, sources[0].ConfiguredRoot)
+		assert.Equal(t, stateDB, sources[0].DisplayPath)
+
+		outcome, err := provider.Parse(t.Context(), ParseRequest{
+			Source:      sources[0],
+			Fingerprint: SourceFingerprint{Key: stateDB, Hash: "aggregate-hash"},
+		})
+		require.NoError(t, err)
+		require.True(t, outcome.ResultSetComplete)
+		require.True(t, outcome.ForceReplace)
+		require.Len(t, outcome.Results, 1)
+		result := outcome.Results[0]
+		assert.Equal(t, DataVersionCurrent, result.DataVersion)
+		assert.Equal(t, "hermes:child", result.Result.Session.ID)
+		assert.Equal(t, "child", result.Result.Session.SourceSessionID)
+		assert.Equal(t, "hermes:parent", result.Result.Session.ParentSessionID)
+		assert.Equal(t, RelContinuation, result.Result.Session.RelationshipType)
+		assert.Equal(t, "hermes-state-db", result.Result.Session.SourceVersion)
+		assert.Equal(t, stateDB, result.Result.Session.File.Path)
+	})
+
+	t.Run("streamed_state_member", func(t *testing.T) {
+		provider, windowsRoot, stateDB := newProvider(t)
+		discoverer, ok := provider.(StreamingDiscoverer)
+		require.True(t, ok)
+
+		var sources []SourceRef
+		err := discoverer.DiscoverEach(t.Context(), func(source SourceRef) error {
+			sources = append(sources, source)
+			return nil
+		})
+		require.NoError(t, err)
+		require.Len(t, sources, 1)
+
+		memberPath := VirtualSourcePath(stateDB, "child")
+		assert.Equal(t, windowsRoot, sources[0].ConfiguredRoot)
+		assert.Equal(t, memberPath, sources[0].DisplayPath)
+
+		outcome, err := provider.Parse(t.Context(), ParseRequest{
+			Source:      sources[0],
+			Fingerprint: SourceFingerprint{Key: memberPath, Hash: "streamed-hash"},
+		})
+		require.NoError(t, err)
+		require.True(t, outcome.ResultSetComplete)
+		require.True(t, outcome.ForceReplace)
+		require.Len(t, outcome.Results, 1)
+		result := outcome.Results[0]
+		assert.Equal(t, DataVersionCurrent, result.DataVersion)
+		assert.Equal(t, "hermes:child", result.Result.Session.ID)
+		assert.Equal(t, "child", result.Result.Session.SourceSessionID)
+		assert.Equal(t, "hermes:parent", result.Result.Session.ParentSessionID)
+		assert.Equal(t, RelContinuation, result.Result.Session.RelationshipType)
+		assert.Equal(t, "hermes-state-db", result.Result.Session.SourceVersion)
+		assert.Equal(t, memberPath, result.Result.Session.File.Path)
+		require.Len(t, result.Result.Messages, 1)
+		assert.Equal(t, "state db only has one message", result.Result.Messages[0].Content)
+	})
+
+	t.Run("watch_plan_before_hermes_home_exists", func(t *testing.T) {
+		home := t.TempDir()
+		windowsRoot := filepath.Join(home, "AppData", "Local", "hermes", "sessions")
+		var def AgentDef
+		for _, candidate := range Registry {
+			if candidate.Type == AgentHermes {
+				def = candidate
+				break
+			}
+		}
+		roots := make([]string, 0, len(def.DefaultDirs))
+		for _, relative := range def.DefaultDirs {
+			roots = append(roots, filepath.Join(home, filepath.FromSlash(relative)))
+		}
+		provider, ok := NewProvider(AgentHermes, ProviderConfig{Roots: roots})
+		require.True(t, ok)
+
+		plan, err := provider.WatchPlan(t.Context())
+		require.NoError(t, err)
+		hermesHome := filepath.Dir(windowsRoot)
+		var homeWatch, sessionsWatch *WatchRoot
+		for i := range plan.Roots {
+			root := &plan.Roots[i]
+			if samePath(root.Path, hermesHome) {
+				homeWatch = root
+			}
+			if samePath(root.Path, windowsRoot) {
+				sessionsWatch = root
+			}
+			assert.False(t, samePath(root.Path, hermesHome) && root.Recursive)
+		}
+		require.NotNil(t, homeWatch)
+		assert.False(t, homeWatch.Recursive)
+		assert.Equal(t, []string{"state.db", "state.db-wal"}, homeWatch.IncludeGlobs)
+		require.NotNil(t, sessionsWatch)
+		assert.True(t, sessionsWatch.Recursive)
+		assert.Equal(t, []string{"*.jsonl", "session_*.json"}, sessionsWatch.IncludeGlobs)
+	})
+}
+
 func TestHermesStateMembershipHonorsCallerCancellation(t *testing.T) {
 	root := t.TempDir()
 	createHermesStateDB(t, root)

@@ -2113,7 +2113,10 @@ func TestHermesRegistryEntry(t *testing.T) {
 	assert.Equal(t, "hermes_sessions_dirs", found.ConfigKey)
 	assert.Equal(t, "hermes:", found.IDPrefix)
 	assert.True(t, found.FileBased)
-	assert.Contains(t, found.DefaultDirs, ".hermes/sessions")
+	assert.Equal(t, []string{
+		".hermes/sessions",
+		"AppData/Local/hermes/sessions",
+	}, found.DefaultDirs)
 	// The watch-root resolvers are provider-owned and consumed by watcher setup.
 	assert.NotNil(t, found.WatchRootsFunc)
 	assert.NotNil(t, found.ShallowWatchRootsFunc)

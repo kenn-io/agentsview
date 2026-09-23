@@ -2368,6 +2368,12 @@ schemas keep their existing ordering behavior.
   [hermes_state.py](https://github.com/NousResearch/hermes-agent/blob/299e409f15aa5615a8a64be488580be92cda351e/hermes_state.py)
   and
   [usage_pricing.py](https://github.com/NousResearch/hermes-agent/blob/299e409f15aa5615a8a64be488580be92cda351e/agent/usage_pricing.py).
+- **Windows root check (2026-09-22).** The pinned
+  [Hermes constants](https://github.com/NousResearch/hermes-agent/blob/2182f51d7ce7073b61a91ffc110e1ccb68a877cc/hermes_constants.py)
+  select `%LOCALAPPDATA%/hermes`, fall back to `~/AppData/Local/hermes`, and
+  place `state.db` directly under that home. The
+  [session-storage guide](https://github.com/NousResearch/hermes-agent/blob/2182f51d7ce7073b61a91ffc110e1ccb68a877cc/website/docs/developer-guide/session-storage.md)
+  documents the same sibling database layout.
 - **Timestamp check (2026-09-10):** Reverified the pinned `hermes_state.py`:
   `end_session` writes `ended_at` from `time.time()` only when closing a
   session. `append_message` and `_insert_message_rows` persist message times

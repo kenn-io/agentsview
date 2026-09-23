@@ -711,7 +711,7 @@ var Registry = []AgentDef{
 		DisplayName:           "Hermes Agent",
 		EnvVar:                "HERMES_SESSIONS_DIR",
 		ConfigKey:             "hermes_sessions_dirs",
-		DefaultDirs:           []string{".hermes/sessions"},
+		DefaultDirs:           []string{".hermes/sessions", "AppData/Local/hermes/sessions"},
 		IDPrefix:              "hermes:",
 		FileBased:             true,
 		WatchRootsFunc:        ResolveHermesWatchRoots,

@@ -1736,7 +1736,7 @@ agentsview help
 | `GOOSE_PATH_ROOT`                     | (platform-specific)                                  | Goose path root; sessions are read from `<root>/data/sessions/sessions.db`                          |
 | `GPTME_DIR`                           | `~/.local/share/gptme/logs`                          | gptme logs directory                                                                                |
 | `GROK_DIR`                            | `~/.grok/sessions`                                   | Grok sessions directory                                                                             |
-| `HERMES_SESSIONS_DIR`                 | `~/.hermes/sessions`                                 | Hermes Agent sessions directory                                                                     |
+| `HERMES_SESSIONS_DIR`                 | `~/.hermes/sessions` (macOS/Linux), `~/AppData/Local/hermes/sessions` (Windows) | Hermes Agent sessions root; sibling SQLite `state.db` is discovered even when `sessions/` is absent |
 | `IFLOW_DIR`                           | `~/.iflow/projects`                                  | iFlow projects directory                                                                            |
 | `KILO_DIR`                            | `~/.local/share/kilo`                                | Kilo data directory                                                                                 |
 | `KILO_LEGACY_DIR`                     | (platform-specific)                                  | Kilo legacy VS Code extension data directory                                                        |

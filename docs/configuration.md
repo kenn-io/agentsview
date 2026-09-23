@@ -433,7 +433,7 @@ keeps its default directories.
 | Goose                 | (platform-specific, see below)                                                                                                                                   | SQLite `sessions.db` with transcripts, tool activity, relationships, usage, and recorded costs                                                                |
 | gptme                 | `~/.local/share/gptme/logs/`                                                                                                                                     | JSONL logs                                                                                                                                                    |
 | Grok                  | `~/.grok/sessions/`                                                                                                                                              | `summary.json` + optional `signals.json` + `chat_history.jsonl` transcript when present                                                                       |
-| Hermes Agent          | `~/.hermes/sessions/`                                                                                                                                            | JSONL / JSON per session                                                                                                                                      |
+| Hermes Agent          | `~/.hermes/sessions/` (macOS and Linux), `~/AppData/Local/hermes/sessions/` (Windows)                                                                            | SQLite `state.db`; JSONL / JSON transcripts remain supported                                                                                                 |
 | iFlow                 | `~/.iflow/projects/`                                                                                                                                             | JSONL per session                                                                                                                                             |
 | IcodeMate             | `~/.local/share/icodemate/` and `~/.icodemate/cli/projects/`                                                                                                     | OpenCode-family storage, including per-session usage events                                                                                                   |
 | Kilo                  | `~/.local/share/kilo/`                                                                                                                                           | SQLite DB or `storage/` JSON files                                                                                                                            |
@@ -487,6 +487,14 @@ Windows. Set `AUGURE_DESKTOP_DIR` or `agents.augure-desktop.dirs` to use another
 data root. These sessions appear as `augure-desktop`, separately from Augure
 Code and Hermes. Local browsing, search, exports, and recorded usage are
 supported; remote source-file sync is disabled for this provider.
+
+**Hermes Agent** stores current session state in the SQLite `state.db` file.
+AgentsView checks `~/.hermes/sessions/` on macOS and Linux and
+`~/AppData/Local/hermes/sessions/` on Windows. The sessions root resolves its
+sibling `state.db`, so discovery still works when the `sessions/` directory does
+not exist. If Windows `LOCALAPPDATA` is redirected or a named Windows profile
+uses another Hermes home, set `HERMES_SESSIONS_DIR` or `hermes_sessions_dirs`
+explicitly.
 
 **Cline support covers the CLI**, not the VS Code extension. Set `CLINE_DIR` or
 `agents.cline.dirs` to its data root or directly to its sessions directory.

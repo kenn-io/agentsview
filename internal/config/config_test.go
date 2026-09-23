@@ -510,6 +510,7 @@ func TestDefault_IncludesHermesProfilesRoot(t *testing.T) {
 
 	assert.Contains(t, dirs, filepath.Join(home, ".hermes", "sessions"))
 	assert.Contains(t, dirs, filepath.Join(home, ".hermes", "profiles"))
+	assert.Contains(t, dirs, filepath.Join(home, "AppData", "Local", "hermes", "sessions"))
 }
 
 func TestDefault_HermesNoProfilesDirIsSafe(t *testing.T) {
@@ -534,6 +535,18 @@ func TestDefault_HermesEnvReplacesDefaultAndProfilesRoots(t *testing.T) {
 	cfg.loadEnv()
 
 	assert.Equal(t, []string{custom}, cfg.ResolveDirs(parser.AgentHermes))
+}
+
+func TestLoad_HermesConfigDirsReplaceAllDefaultRoots(t *testing.T) {
+	t.Setenv("HERMES_SESSIONS_DIR", "")
+	custom := filepath.Join(canonicalTempDir(t), "hermes-sessions")
+
+	cfg := loadMinimalWithConfig(t, map[string]any{
+		"hermes_sessions_dirs": []string{custom},
+	})
+
+	assert.Equal(t, []string{custom}, cfg.ResolveDirs(parser.AgentHermes))
+	assert.True(t, cfg.IsUserConfigured(parser.AgentHermes))
 }
 
 func TestLoadEnv_GoosePathRootUsesProducerLayout(t *testing.T) {
