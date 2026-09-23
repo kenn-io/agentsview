@@ -185,6 +185,13 @@ func TestHostedTenantAuthAndJobFences(t *testing.T) {
 	}
 	bound, err := NewTenantRawIngestStore(pg, "tenant-a")
 	require.NoError(t, err)
+	status, err := bound.ReadRawSyncStatus(t.Context(), first.Identity)
+	require.NoError(t, err)
+	require.Len(t, status.Devices, 1)
+	assert.Equal(t, first.Identity.DeviceID, status.Devices[0].DeviceID)
+	status, err = bound.ReadRawSyncStatus(t.Context(), second.Identity)
+	assert.ErrorIs(t, err, rawsync.ErrUnauthorized)
+	assert.Equal(t, rawsync.Status{}, status)
 	leases, err := bound.ClaimRawParseJobs(t.Context(), "worker", 2, time.Minute)
 	require.NoError(t, err)
 	require.Len(t, leases, 1)

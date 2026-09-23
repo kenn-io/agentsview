@@ -17,7 +17,7 @@ func (s *RawIngestStore) ReadRawSyncStatus(
 	ctx context.Context,
 	identity rawsync.AuthIdentity,
 ) (rawsync.Status, error) {
-	if err := validateRawIngestIdentity(identity); err != nil {
+	if err := s.validateIdentity(identity); err != nil {
 		return rawsync.Status{}, err
 	}
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{
