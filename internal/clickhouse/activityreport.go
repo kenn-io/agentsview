@@ -84,6 +84,11 @@ func (s *Store) BuildActivityReportArtifacts(
 		Phase: activity.ProgressLoadingUsage, SessionsTotal: len(sessions),
 	})
 
+	// Usage selection and interval pairing both depend only on the candidate
+	// set, so pair while usage loads instead of serializing the two stages.
+	pairCtx, cancelPairs := context.WithCancel(ctx)
+	defer cancelPairs()
+	pairs := s.startActivityReportPairs(pairCtx, candidates, ids, q)
 	usage, pricing, err := s.activityReportUsage(
 		ctx, candidates, ids, rangeStartUTC, rangeEndUTC, q)
 	if err != nil {
@@ -91,7 +96,7 @@ func (s *Store) BuildActivityReportArtifacts(
 	}
 
 	rowsProcessed := int64(0)
-	source := s.activityReportCandidateSource(candidates, ids, q)
+	source := pairs.candidateSource()
 	artifacts, err := activity.BuildCandidateArtifactsFromSourceWithSurvivorUsage(ctx, activity.Params{
 		RangeStart:    q.RangeStart,
 		RangeEnd:      q.RangeEnd,
@@ -226,25 +231,50 @@ func clickActivityReportCandidateWhere(
 	return where, append(args, rangeStartUTC, rangeStartUTC, rangeEndUTC)
 }
 
-// activityReportCandidateSource streams interval candidates for the sessions
-// selected by `candidates`. The set is evaluated inside each statement; `ids`
-// is the session list the caller already loaded, and candidates for any
-// session outside it are dropped so the stream matches the metadata the
-// aggregator was given even if a push lands between the two queries.
-func (s *Store) activityReportCandidateSource(
-	candidates chSessionSet, ids []string, q activity.Query,
-) activity.CandidateSource {
+// activityReportPairing holds pairing started ahead of its consumer.
+type activityReportPairing struct {
+	done     chan struct{}
+	paired   []activity.IntervalCandidate
+	terminal []activity.IntervalCandidate
+	err      error
+}
+
+// startActivityReportPairs runs activityReportPairs in the background for
+// the sessions selected by `candidates`. The set is evaluated inside each
+// statement; `ids` is the session list the caller already loaded, and
+// candidates for any session outside it are dropped so the stream matches
+// the metadata the aggregator was given even if a push lands between the
+// two queries.
+func (s *Store) startActivityReportPairs(
+	ctx context.Context, candidates chSessionSet, ids []string, q activity.Query,
+) *activityReportPairing {
+	pairing := &activityReportPairing{done: make(chan struct{})}
+	if len(ids) == 0 {
+		close(pairing.done)
+		return pairing
+	}
+	go func() {
+		defer close(pairing.done)
+		pairing.paired, pairing.terminal, pairing.err = s.activityReportPairs(ctx, candidates, q)
+	}()
+	return pairing
+}
+
+// candidateSource streams the paired intervals once pairing completes.
+func (pairing *activityReportPairing) candidateSource() activity.CandidateSource {
 	return func(
 		ctx context.Context,
 		yield func(activity.IntervalCandidate) error,
 	) error {
-		if len(ids) == 0 {
-			return nil
+		select {
+		case <-pairing.done:
+		case <-ctx.Done():
+			return ctx.Err()
 		}
-		paired, terminal, err := s.activityReportPairs(ctx, candidates, q)
-		if err != nil {
-			return err
+		if pairing.err != nil {
+			return pairing.err
 		}
+		paired, terminal := pairing.paired, pairing.terminal
 		messageSource := func(ctx context.Context, yield func(activity.IntervalCandidate) error) error {
 			for _, c := range paired {
 				if err := ctx.Err(); err != nil {
@@ -267,7 +297,9 @@ func (s *Store) activityReportCandidateSource(
 func (s *Store) ActivityReportCandidateSource(
 	ids []string, q activity.Query,
 ) activity.CandidateSource {
-	return s.activityReportCandidateSource(chSessionSetFromIDs(ids), ids, q)
+	return func(ctx context.Context, yield func(activity.IntervalCandidate) error) error {
+		return s.startActivityReportPairs(ctx, chSessionSetFromIDs(ids), ids, q).candidateSource()(ctx, yield)
+	}
 }
 
 type clickActivityReportUsageRow struct {
