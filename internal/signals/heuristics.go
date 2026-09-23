@@ -98,10 +98,35 @@ func IsFrustrationMarker(content string) bool {
 	if len(normalized) < 10 {
 		return false
 	}
-	if frustrationPhraseRe.MatchString(normalized) {
+	if mayContainFrustrationPhrase(normalized) && frustrationPhraseRe.MatchString(normalized) {
 		return true
 	}
 	return capsWordRatio(content, 3) >= 0.4
+}
+
+// mayContainFrustrationPhrase reports whether frustrationPhraseRe can match
+// normalized. Every alternative of the expression requires one of
+// frustrationPhraseLowercase, so checking them first skips the expression
+// for the common prompt that cannot match; the expression is an unanchored
+// alternation that the Go engine runs as a full NFA over the whole prompt,
+// which dominates signals analytics for long prompts. normalized is already
+// lowercase, and the expression matches with simple case folding, under
+// which long s (U+017F) is the only lowercase non-ASCII rune that folds to
+// an ASCII letter. Replacing it with s makes a plain substring search exact.
+func mayContainFrustrationPhrase(normalized string) bool {
+	normalized = strings.ReplaceAll(normalized, "\u017f", "s")
+	for _, literal := range frustrationPhraseLowercase {
+		if strings.Contains(normalized, literal) {
+			return true
+		}
+	}
+	return false
+}
+
+var frustrationPhraseLowercase = []string{
+	"!!!", "???", "wtf", "come on", "why won't", "this is broken",
+	"doesn't work", "does not work", "still broken", "same error",
+	"you broke", "fuck",
 }
 
 // CountFrustrationMarkers counts user prompts that indicate the
@@ -237,12 +262,38 @@ func parsePromptTime(raw string) (time.Time, bool) {
 }
 
 func normalizePrompt(content string) string {
-	withoutCode := content
-	if strings.Contains(content, "```") {
-		withoutCode = codeFenceRe.ReplaceAllString(content, " ")
-	}
+	withoutCode := stripCodeFences(content)
 	lower := strings.ToLower(strings.TrimSpace(withoutCode))
 	return collapseWhitespace(lower)
+}
+
+// stripCodeFences replaces every fenced block with one space, matching
+// codeFenceRe.ReplaceAllString(content, " "): each match starts at the
+// leftmost unconsumed fence and ends at the next fence, and an opening fence
+// without a closer is left as is. The scan avoids running the regular
+// expression over long pasted prompts.
+func stripCodeFences(content string) string {
+	const fence = "```"
+	var b strings.Builder
+	rest := content
+	for {
+		before, inside, opened := strings.Cut(rest, fence)
+		if !opened {
+			break
+		}
+		_, after, closed := strings.Cut(inside, fence)
+		if !closed {
+			break
+		}
+		b.WriteString(before)
+		b.WriteByte(' ')
+		rest = after
+	}
+	if b.Len() == 0 {
+		return content
+	}
+	b.WriteString(rest)
+	return b.String()
 }
 
 func collapseWhitespace(s string) string {
@@ -282,7 +333,7 @@ func promptTokens(normalized string) []string {
 }
 
 func capsWordRatio(content string, minWords int) float64 {
-	withoutCode := codeFenceRe.ReplaceAllString(content, " ")
+	withoutCode := stripCodeFences(content)
 	words := strings.FieldsFunc(withoutCode, func(r rune) bool {
 		return !unicode.IsLetter(r)
 	})
