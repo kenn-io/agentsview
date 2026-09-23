@@ -3,6 +3,7 @@
 package postgres
 
 import (
+	"database/sql"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -17,7 +18,8 @@ import (
 // analytics. The fixture crosses the America/New_York spring-forward
 // boundary, a local-versus-UTC month edge, and a session whose calls span
 // several days, and it carries blank tool names, timestamp-less messages,
-// and sessions each default filter must exclude.
+// a session with no timestamp at all, and sessions each default filter
+// must exclude.
 func TestAnalyticsToolsSkillsSQLiteParity(t *testing.T) {
 	const schema = "agentsview_tools_skills_parity_test"
 	pgURL := testPGURL(t)
@@ -47,6 +49,21 @@ func TestAnalyticsToolsSkillsSQLiteParity(t *testing.T) {
 	deleted, err := res.RowsAffected()
 	require.NoError(t, err)
 	require.EqualValues(t, 1, deleted, "deleted session was pushed")
+
+	// Push requires a created_at, so clear the no-time session's timestamps
+	// in both stores after the push. SQLite stores a missing created_at as
+	// an empty string and PostgreSQL as NULL.
+	require.NoError(t, local.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(),
+			`UPDATE sessions SET started_at = NULL, created_at = '' WHERE id = 'no-time'`)
+		return err
+	}), "clear SQLite session timestamps")
+	res, err = remote.DB().ExecContext(t.Context(),
+		`UPDATE sessions SET started_at = NULL, created_at = NULL WHERE id = 'no-time'`)
+	require.NoError(t, err, "clear PostgreSQL session timestamps")
+	cleared, err := res.RowsAffected()
+	require.NoError(t, err)
+	require.EqualValues(t, 1, cleared, "no-time session was pushed")
 
 	hour3, monday := 3, 0
 	march := func(tz string) db.AnalyticsFilter {
@@ -110,7 +127,19 @@ func TestAnalyticsToolsSkillsSQLiteParity(t *testing.T) {
 			f.ExcludeOneShot = false
 			return f
 		}},
-		{"all-time", 12, func() db.AnalyticsFilter {
+		// The no-time session's call has an empty date. SQLite keeps it
+		// under an upper bound alone and drops it under a lower bound.
+		{"upper-bound-only", 11, func() db.AnalyticsFilter {
+			f := march("America/New_York")
+			f.From = ""
+			return f
+		}},
+		{"lower-bound-only", 9, func() db.AnalyticsFilter {
+			f := march("America/New_York")
+			f.To = ""
+			return f
+		}},
+		{"all-time", 13, func() db.AnalyticsFilter {
 			return db.AnalyticsFilter{Timezone: "UTC"}
 		}},
 	}
@@ -286,6 +315,15 @@ func seedToolsSkillsParityFixture(t *testing.T, local *db.DB) {
 			startedAt: "2024-03-13T15:00:00Z", userMessages: 1,
 			msgs: []msg{{ts: "2024-03-13T15:01:00Z", model: "model-a", calls: []call{
 				{tool: "Glob", category: "Glob", skill: "review-code"},
+			}}},
+		},
+		{
+			// Neither the session nor its message has a timestamp; the
+			// test clears the session's timestamps after the push.
+			id: "no-time", agent: "codex", project: "beta",
+			startedAt: "2024-03-14T15:00:00Z",
+			msgs: []msg{{model: "model-b", calls: []call{
+				{tool: "Task", category: "Task", skill: "write-tests"},
 			}}},
 		},
 		{

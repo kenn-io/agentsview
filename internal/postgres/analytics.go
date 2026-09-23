@@ -2156,8 +2156,10 @@ func pgAnalyticsCallsSQL(
 }
 
 // pgAnalyticsCallLocalWhere filters analytics_calls by the local date
-// range and the hour/day-of-week filter. Calls without any timestamp
-// never match a bound or time filter.
+// range and the hour/day-of-week filter, as ResolveSkillRowTime does. A
+// call without any timestamp fails a lower bound and the hour/day-of-week
+// filter but passes an upper bound. Bounds must be valid dates; callers
+// validate them before they reach the store.
 func pgAnalyticsCallLocalWhere(
 	f db.AnalyticsFilter, pb *paramBuilder,
 ) string {
@@ -2166,7 +2168,8 @@ func pgAnalyticsCallLocalWhere(
 		preds = append(preds, "local_at >= "+pb.add(f.From)+"::date")
 	}
 	if f.To != "" {
-		preds = append(preds, "local_at < "+pb.add(f.To)+"::date + 1")
+		preds = append(preds,
+			"(local_at IS NULL OR local_at < "+pb.add(f.To)+"::date + 1)")
 	}
 	if f.DayOfWeek != nil {
 		// ISODOW is Monday=1; the filter is Monday=0.
