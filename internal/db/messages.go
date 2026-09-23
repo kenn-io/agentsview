@@ -2074,25 +2074,25 @@ func bumpInsertedTranscriptRevisionTx(tx transactionQueries, sessionID string) e
 func bumpTranscriptRevision(
 	tx transactionQueries, sessionID string, touchModified bool,
 ) error {
-	// Advancing the revision also revokes secret-scan freshness in the same
-	// transaction: the mutated transcript has content the recorded scan
-	// never saw, and consumers that require a current scan (extraction's
-	// privacy boundary) must fail closed until a rescan re-stamps it. The
-	// incremental sync path re-scans in a separate later write; the atomic
-	// replace path re-stamps inside this same transaction.
+	// Advancing the revision revokes secret-scan and friction freshness in
+	// the same transaction. The mutated transcript has content those
+	// derived results never saw. Incremental sync recomputes later; the
+	// atomic replace path re-stamps inside this transaction.
 	query := `UPDATE sessions
 		 SET transcript_revision = CAST(
 			CAST(transcript_revision AS INTEGER) + 1 AS TEXT
 		 ),
 		     local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
-		     secrets_rules_version = ''
+		     secrets_rules_version = '',
+		     friction_rules_version = ''
 		 WHERE id = ?`
 	if !touchModified {
 		query = `UPDATE sessions
 		 SET transcript_revision = CAST(
 			CAST(transcript_revision AS INTEGER) + 1 AS TEXT
 		 ),
-		     secrets_rules_version = ''
+		     secrets_rules_version = '',
+		     friction_rules_version = ''
 		 WHERE id = ?`
 	}
 	result, err := tx.Exec(query, sessionID)

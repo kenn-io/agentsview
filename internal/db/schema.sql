@@ -91,6 +91,9 @@ CREATE TABLE IF NOT EXISTS sessions (
     termination_status TEXT,
     secret_leak_count INTEGER NOT NULL DEFAULT 0,
     secrets_rules_version TEXT NOT NULL DEFAULT '',
+    friction_count INTEGER NOT NULL DEFAULT 0,
+    friction_rules_version TEXT NOT NULL DEFAULT '',
+    friction_hash TEXT NOT NULL DEFAULT '',
     sync_marker TEXT
 );
 
@@ -1288,6 +1291,49 @@ CREATE INDEX IF NOT EXISTS idx_secret_findings_session
     ON secret_findings(session_id);
 CREATE INDEX IF NOT EXISTS idx_secret_findings_rule
     ON secret_findings(rule_name);
+
+-- Friction findings: per-occurrence detections from internal/friction.
+-- Derived from stored messages at sync time and replaced per session.
+-- Natural coordinates let findings survive the full-resync orphan copy.
+CREATE TABLE IF NOT EXISTS friction_findings (
+    id              INTEGER PRIMARY KEY,
+    session_id      TEXT NOT NULL
+        REFERENCES sessions(id) ON DELETE CASCADE,
+    kind            TEXT NOT NULL,
+    detector        TEXT NOT NULL,
+    message_ordinal INTEGER,
+    call_index      INTEGER,
+    tool_name       TEXT NOT NULL DEFAULT '',
+    label           TEXT NOT NULL DEFAULT '',
+    text            TEXT NOT NULL DEFAULT '',
+    evidence        TEXT NOT NULL DEFAULT '',
+    title           TEXT NOT NULL,
+    fingerprint     TEXT NOT NULL,
+    occurred_at     TEXT,
+    seq             INTEGER NOT NULL,
+    rules_version   TEXT NOT NULL,
+    created_at      TEXT NOT NULL
+        DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_friction_findings_session
+    ON friction_findings(session_id);
+CREATE INDEX IF NOT EXISTS idx_friction_findings_fingerprint
+    ON friction_findings(fingerprint);
+CREATE INDEX IF NOT EXISTS idx_friction_findings_kind
+    ON friction_findings(kind);
+
+-- Friction dimensions per session. A row exists only when at least one
+-- field differs from its default. Agent and machine live on sessions.
+CREATE TABLE IF NOT EXISTS friction_session_dims (
+    session_id      TEXT PRIMARY KEY
+        REFERENCES sessions(id) ON DELETE CASCADE,
+    seat            TEXT NOT NULL DEFAULT '',
+    persona         TEXT NOT NULL DEFAULT '',
+    channel         TEXT NOT NULL DEFAULT '',
+    dims_source     TEXT NOT NULL DEFAULT '',
+    review_excluded INTEGER NOT NULL DEFAULT 0
+);
 
 -- Durable normalized-artifact import claims. Artifact kinds evolve
 -- independently, so each claim retains a separate version gate.
