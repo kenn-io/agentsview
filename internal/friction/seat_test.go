@@ -49,26 +49,56 @@ func TestSeatFromPath(t *testing.T) {
 		want     string
 	}{
 		{"seat_from_path_no_patterns", "/home/user/agents/profiles/seat-01/projects/p/s.jsonl", nil, ""},
-		{"spec example on absolute path", "/home/user/agents/profiles/seat-01/projects/app/s.jsonl",
-			[]string{"*/profiles/{seat}/projects/*"}, "seat-01"},
-		{"pool sessions layout", "/srv/pool/seat-02/sessions/2026/09/13/rollout-x.jsonl",
-			[]string{"pool/{seat}/sessions"}, "seat-02"},
-		{"star stays within one segment", "/home/user/a/b/profiles/seat-03/projects/p/s.jsonl",
-			[]string{"/home/*/profiles/{seat}"}, ""},
-		{"anchored pattern", "/home/user/profiles/seat-04/projects/p/s.jsonl",
-			[]string{"/home/*/profiles/{seat}"}, "seat-04"},
-		{"anchored pattern does not float", "/mnt/home/user/profiles/seat-05/s.jsonl",
-			[]string{"/home/*/profiles/{seat}"}, ""},
-		{"no match", "/home/user/.claude/projects/p/s.jsonl",
-			[]string{"*/profiles/{seat}/projects/*"}, ""},
-		{"first pattern wins", "/x/profiles/seat-06/pool/seat-07/s.jsonl",
-			[]string{"pool/{seat}", "profiles/{seat}"}, "seat-07"},
-		{"leftmost window wins", "/x/profiles/seat-08/profiles/seat-09/s.jsonl",
-			[]string{"profiles/{seat}"}, "seat-08"},
-		{"windows separators", `C:\Users\user\pool\seat-10\sessions\rollout-x.jsonl`,
-			[]string{"pool/{seat}/sessions"}, "seat-10"},
-		{"character class glob", "/srv/pool-b/seat-11/s.jsonl",
-			[]string{"pool-[ab]/{seat}"}, "seat-11"},
+		{
+			"spec example on absolute path", "/home/user/agents/profiles/seat-01/projects/app/s.jsonl",
+			[]string{"*/profiles/{seat}/projects/*"},
+			"seat-01",
+		},
+		{
+			"pool sessions layout", "/srv/pool/seat-02/sessions/2026/09/13/rollout-x.jsonl",
+			[]string{"pool/{seat}/sessions"},
+			"seat-02",
+		},
+		{
+			"star stays within one segment", "/home/user/a/b/profiles/seat-03/projects/p/s.jsonl",
+			[]string{"/home/*/profiles/{seat}"},
+			"",
+		},
+		{
+			"anchored pattern", "/home/user/profiles/seat-04/projects/p/s.jsonl",
+			[]string{"/home/*/profiles/{seat}"},
+			"seat-04",
+		},
+		{
+			"anchored pattern does not float", "/mnt/home/user/profiles/seat-05/s.jsonl",
+			[]string{"/home/*/profiles/{seat}"},
+			"",
+		},
+		{
+			"no match", "/home/user/.claude/projects/p/s.jsonl",
+			[]string{"*/profiles/{seat}/projects/*"},
+			"",
+		},
+		{
+			"first pattern wins", "/x/profiles/seat-06/pool/seat-07/s.jsonl",
+			[]string{"pool/{seat}", "profiles/{seat}"},
+			"seat-07",
+		},
+		{
+			"leftmost window wins", "/x/profiles/seat-08/profiles/seat-09/s.jsonl",
+			[]string{"profiles/{seat}"},
+			"seat-08",
+		},
+		{
+			"windows separators", `C:\Users\user\pool\seat-10\sessions\rollout-x.jsonl`,
+			[]string{"pool/{seat}/sessions"},
+			"seat-10",
+		},
+		{
+			"character class glob", "/srv/pool-b/seat-11/s.jsonl",
+			[]string{"pool-[ab]/{seat}"},
+			"seat-11",
+		},
 		{"empty path", "", []string{"*/{seat}"}, ""},
 	}
 	for _, tt := range tests {

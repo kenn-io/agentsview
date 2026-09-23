@@ -12,7 +12,7 @@ import (
 
 var inputTestStart = time.Date(2026, 9, 16, 9, 0, 0, 0, time.UTC)
 
-func inputAt(min int) time.Time { return inputTestStart.Add(time.Duration(min) * time.Minute) }
+func inputAt(minutes int) time.Time { return inputTestStart.Add(time.Duration(minutes) * time.Minute) }
 
 func TestBuildSessionInput(t *testing.T) {
 	bashFail := RawToolCall{MessageOrdinal: 1, CallIndex: 0, ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"make"}`, EventStatus: "errored", LastEventContent: "boom"}
@@ -62,7 +62,7 @@ func TestBuildSessionInput(t *testing.T) {
 			{Ordinal: 4, Role: "user", Content: "u", Timestamp: inputAt(4)},
 		}, []RawToolCall{systemOwned, orphan, readOK, withTime}, BuildOptions{})
 		assert.Equal(t, []int{1, 1, 1, 2, 3, 4}, messageOrdinals(in.Messages))
-		assert.Equal(t, []time.Time{inputAt(2), inputAt(1), time.Time{}, inputAt(3)}, in.Patterns.CallTimes)
+		assert.Equal(t, []time.Time{inputAt(2), inputAt(1), {}, inputAt(3)}, in.Patterns.CallTimes)
 		require.Len(t, in.Messages, 6)
 		assert.Equal(t, inputAt(1), in.Messages[2].Timestamp)
 		assert.Equal(t, "tool", in.Messages[3].Role)
@@ -81,8 +81,11 @@ func TestBuildSessionInput(t *testing.T) {
 	t.Run("compaction and pressure", func(t *testing.T) {
 		p := 0.95
 		calls := []RawToolCall{
-			{MessageOrdinal: 1, ToolName: "Read"}, {MessageOrdinal: 1, ToolName: "Edit"}, {MessageOrdinal: 1, ToolName: "Bash"},
-			{MessageOrdinal: 3, ToolName: "Read"}, {MessageOrdinal: 3, ToolName: "Edit"},
+			{MessageOrdinal: 1, ToolName: "Read"},
+			{MessageOrdinal: 1, ToolName: "Edit"},
+			{MessageOrdinal: 1, ToolName: "Bash"},
+			{MessageOrdinal: 3, ToolName: "Read"},
+			{MessageOrdinal: 3, ToolName: "Edit"},
 		}
 		in := BuildSessionInput("s1", Dims{}, false, []RawMessage{
 			{Ordinal: 3, Role: "assistant", ContextTokens: 900, HasContextTokens: true, Timestamp: inputAt(3)},
@@ -129,26 +132,34 @@ func TestToolEnvelope(t *testing.T) {
 	}{
 		{
 			"errored status uses last event content",
-			RawToolCall{ToolName: "Bash", Category: "Bash", EventStatus: "errored",
-				ResultContent: "summary", LastEventContent: "boom"},
+			RawToolCall{
+				ToolName: "Bash", Category: "Bash", EventStatus: "errored",
+				ResultContent: "summary", LastEventContent: "boom",
+			},
 			`{"error":"boom","success":false}`,
 		},
 		{
 			"cancelled status is a failure",
-			RawToolCall{ToolName: "Bash", Category: "Bash", EventStatus: "cancelled",
-				ResultContent: "interrupted"},
+			RawToolCall{
+				ToolName: "Bash", Category: "Bash", EventStatus: "cancelled",
+				ResultContent: "interrupted",
+			},
 			`{"error":"interrupted","success":false}`,
 		},
 		{
 			"event with empty content falls back to result content",
-			RawToolCall{ToolName: "Bash", Category: "Bash", EventStatus: "errored",
-				ResultContent: "summary"},
+			RawToolCall{
+				ToolName: "Bash", Category: "Bash", EventStatus: "errored",
+				ResultContent: "summary",
+			},
 			`{"error":"summary","success":false}`,
 		},
 		{
 			"event content ignored without an event status",
-			RawToolCall{ToolName: "Bash", Category: "Bash",
-				ResultContent: "bash: x: command not found", LastEventContent: "stale"},
+			RawToolCall{
+				ToolName: "Bash", Category: "Bash",
+				ResultContent: "bash: x: command not found", LastEventContent: "stale",
+			},
 			`{"error":"bash: x: command not found","success":false}`,
 		},
 		{
@@ -158,20 +169,26 @@ func TestToolEnvelope(t *testing.T) {
 		},
 		{
 			"content heuristic failure without status",
-			RawToolCall{ToolName: "Bash", Category: "Bash",
-				ResultContent: "bash: foo: command not found"},
+			RawToolCall{
+				ToolName: "Bash", Category: "Bash",
+				ResultContent: "bash: foo: command not found",
+			},
 			`{"error":"bash: foo: command not found","success":false}`,
 		},
 		{
 			"precomputed content verdict wins over content scan",
-			RawToolCall{ToolName: "Bash", Category: "Bash", ResultContent: "ok",
-				ContentFailure: true, ContentFailureKnown: true},
+			RawToolCall{
+				ToolName: "Bash", Category: "Bash", ResultContent: "ok",
+				ContentFailure: true, ContentFailureKnown: true,
+			},
 			`{"error":"ok","success":false}`,
 		},
 		{
 			"html and line separators are not escaped",
-			RawToolCall{ToolName: "Bash", Category: "Bash", EventStatus: "errored",
-				ResultContent: "a<b>&c\u2028d"},
+			RawToolCall{
+				ToolName: "Bash", Category: "Bash", EventStatus: "errored",
+				ResultContent: "a<b>&c\u2028d",
+			},
 			"{\"error\":\"a<b>&c\u2028d\",\"success\":false}",
 		},
 	}

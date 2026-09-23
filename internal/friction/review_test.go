@@ -20,8 +20,10 @@ func reviewFixture(dims Dims) SessionInput {
 		{Ordinal: 3, Role: "assistant", Content: "Ran them.", Timestamp: rmin(3)},
 		{Ordinal: 4, Role: "user", Content: "this is broken again, same error", Timestamp: rmin(4)},
 		{Ordinal: 5, Role: "assistant", Content: "Looking.", Timestamp: rmin(5)},
-		{Ordinal: 6, Role: "user", Content: "[Request interrupted by user]", IsSystem: true,
-			SourceSubtype: SourceSubtypeInterrupted, Timestamp: rmin(6)},
+		{
+			Ordinal: 6, Role: "user", Content: "[Request interrupted by user]", IsSystem: true,
+			SourceSubtype: SourceSubtypeInterrupted, Timestamp: rmin(6),
+		},
 	}
 	// The failing call belongs to the last assistant turn, so its tool
 	// message does not break either (assistant, user, assistant) triple.

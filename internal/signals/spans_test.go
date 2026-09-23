@@ -58,17 +58,23 @@ func TestRunawayToolLoopSpan(t *testing.T) {
 		{
 			"exact run spans the whole equal-signature run",
 			exact, true,
-			CallPos{MessageOrdinal: 0}, CallPos{MessageOrdinal: 24}, 13,
+			CallPos{MessageOrdinal: 0},
+			CallPos{MessageOrdinal: 24},
+			13,
 		},
 		{
 			"six failures in first twelve-call window",
 			stepCalls(13, 1, 3, 5, 7, 9, 11), true,
-			CallPos{MessageOrdinal: 1}, CallPos{MessageOrdinal: 12}, 12,
+			CallPos{MessageOrdinal: 1},
+			CallPos{MessageOrdinal: 12},
+			12,
 		},
 		{
 			"window found later in the session",
 			stepCalls(20, 9, 11, 13, 15, 17, 19), true,
-			CallPos{MessageOrdinal: 9}, CallPos{MessageOrdinal: 20}, 12,
+			CallPos{MessageOrdinal: 9},
+			CallPos{MessageOrdinal: 20},
+			12,
 		},
 		{"two failures is not runaway", stepCalls(12, 2, 5), false, CallPos{}, CallPos{}, 0},
 	}

@@ -25,8 +25,10 @@ func TestDetectPatterns(t *testing.T) {
 	t.Run("retry loop per run", func(t *testing.T) {
 		var calls []signals.ToolCallRow
 		for i := range 4 {
-			calls = append(calls, signals.ToolCallRow{ToolName: "Bash", Category: "Bash",
-				InputJSON: `{"command":"cargo build"}`, MessageOrdinal: 10 + 2*i})
+			calls = append(calls, signals.ToolCallRow{
+				ToolName: "Bash", Category: "Bash",
+				InputJSON: `{"command":"cargo build"}`, MessageOrdinal: 10 + 2*i,
+			})
 		}
 		got := DetectPatterns("s1", false, patternInput(calls, base))
 		require.Len(t, got, 1)
@@ -75,9 +77,11 @@ func TestDetectPatterns(t *testing.T) {
 	t.Run("runaway loop", func(t *testing.T) {
 		var calls []signals.ToolCallRow
 		for i := range 12 {
-			calls = append(calls, signals.ToolCallRow{ToolName: "Bash", Category: "Bash",
+			calls = append(calls, signals.ToolCallRow{
+				ToolName: "Bash", Category: "Bash",
 				InputJSON:   `{"command":"npm run step-` + string(rune('a'+i)) + `"}`,
-				EventStatus: "errored", MessageOrdinal: i + 1})
+				EventStatus: "errored", MessageOrdinal: i + 1,
+			})
 		}
 		got := DetectPatterns("s1", false, patternInput(calls, base))
 		require.Len(t, got, 1)
@@ -89,9 +93,11 @@ func TestDetectPatterns(t *testing.T) {
 
 	t.Run("edit_churn_uses_base_name_for_posix_and_windows_paths", func(t *testing.T) {
 		mk := func(path string, o int) signals.ToolCallRow {
-			return signals.ToolCallRow{ToolName: "Edit", Category: "Edit",
+			return signals.ToolCallRow{
+				ToolName: "Edit", Category: "Edit",
 				InputJSON:      `{"file_path":"` + path + `","old_string":"` + string(rune('a'+o)) + `"}`,
-				MessageOrdinal: o}
+				MessageOrdinal: o,
+			}
 		}
 		win := `C:\\Users\\user\\app\\main.go`
 		calls := []signals.ToolCallRow{
@@ -175,8 +181,10 @@ func TestDetectPatterns(t *testing.T) {
 	t.Run("iteration runaway is last and sub-agents are exempt", func(t *testing.T) {
 		var calls []signals.ToolCallRow
 		for i := range 150 {
-			calls = append(calls, signals.ToolCallRow{ToolName: "Read", Category: "Read",
-				InputJSON: `{"file_path":"f` + string(rune('0'+i%10)) + `"}`, MessageOrdinal: i + 1})
+			calls = append(calls, signals.ToolCallRow{
+				ToolName: "Read", Category: "Read",
+				InputJSON: `{"file_path":"f` + string(rune('0'+i%10)) + `"}`, MessageOrdinal: i + 1,
+			})
 		}
 		p := 0.99
 		in := patternInput(calls, base)

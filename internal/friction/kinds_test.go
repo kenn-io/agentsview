@@ -58,7 +58,7 @@ func TestDetectFrustration(t *testing.T) {
 		long := "this is broken " + strings.Repeat("é", 300)
 		got := DetectFrustration([]Message{{Ordinal: 1, Role: "user", Text: long}}, "s1")
 		require.Len(t, got, 1)
-		assert.Equal(t, 200, len([]rune(got[0].Text)))
+		assert.Len(t, []rune(got[0].Text), 200)
 	})
 }
 
@@ -73,14 +73,20 @@ func TestDetectInterruptions(t *testing.T) {
 			"each interruption counts and carries no text",
 			[]Message{
 				{Ordinal: 6, Role: "user", Text: "[Request interrupted by user]", Timestamp: kindsBase},
-				{Ordinal: 9, Role: "user", Text: "[Request interrupted by user for tool use]",
-					Timestamp: kindsBase.Add(time.Minute)},
+				{
+					Ordinal: 9, Role: "user", Text: "[Request interrupted by user for tool use]",
+					Timestamp: kindsBase.Add(time.Minute),
+				},
 			},
 			[]Signal{
-				{Kind: KindInterruption, SubjectID: "s1", SubjectKind: SubjectSession,
-					Detector: DetectorInterruption, Ordinal: new(6), OccurredAt: kindsBase},
-				{Kind: KindInterruption, SubjectID: "s1", SubjectKind: SubjectSession,
-					Detector: DetectorInterruption, Ordinal: new(9), OccurredAt: kindsBase.Add(time.Minute)},
+				{
+					Kind: KindInterruption, SubjectID: "s1", SubjectKind: SubjectSession,
+					Detector: DetectorInterruption, Ordinal: new(6), OccurredAt: kindsBase,
+				},
+				{
+					Kind: KindInterruption, SubjectID: "s1", SubjectKind: SubjectSession,
+					Detector: DetectorInterruption, Ordinal: new(9), OccurredAt: kindsBase.Add(time.Minute),
+				},
 			},
 		},
 	}
