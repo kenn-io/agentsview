@@ -89,11 +89,15 @@ func (s *Store) readActivitySourceProbe(ctx context.Context) (activity.SourcePro
 
 func (s *Store) preparedUsageReady(ctx context.Context) (bool, error) {
 	var refreshed, filled uint64
+	var fingerprint string
 	err := s.queryRowContext(ctx, `SELECT
 		(SELECT ifNull(max(toUnixTimestamp(last_success_time)),0) FROM system.view_refreshes
 		 WHERE database=currentDatabase() AND view='prepare_usage'),
-		(SELECT ifNull(max(toUInt64OrZero(value)),0) FROM sync_metadata WHERE startsWith(key,?))`,
-		usageSnapshotReadyKeyBase+":").Scan(&refreshed, &filled)
+		(SELECT ifNull(max(toUInt64OrZero(value)),0) FROM sync_metadata WHERE startsWith(key,?)),
+		(SELECT hex(SHA256(toString(arraySort(groupArray((table, name, hash_of_all_files))))))
+		 FROM system.parts WHERE database = currentDatabase() AND active
+		 AND table IN ('sessions', 'usage_session_snapshots'))`,
+		usageSnapshotReadyKeyBase+":").Scan(&refreshed, &filled, &fingerprint)
 	if err != nil {
 		return false, fmt.Errorf("checking prepared usage refresh: %w", err)
 	}
@@ -102,6 +106,14 @@ func (s *Store) preparedUsageReady(ctx context.Context) (bool, error) {
 	if filled == 0 || refreshed <= filled {
 		return false, nil
 	}
+	// Coverage joins every session with its snapshot; both tables are named
+	// in the fingerprint, so the answer only changes when their parts do.
+	s.coverageCache.mu.Lock()
+	covered, cached := s.coverageCache.covered, s.coverageCache.fingerprint == fingerprint
+	s.coverageCache.mu.Unlock()
+	if cached {
+		return covered, nil
+	}
 	var missing uint64
 	err = s.queryRowContext(ctx, `SELECT count() FROM sessions s
 		LEFT JOIN usage_session_snapshots u ON u.id=s.id
@@ -109,5 +121,14 @@ func (s *Store) preparedUsageReady(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("checking complete usage coverage: %w", err)
 	}
+	s.coverageCache.mu.Lock()
+	s.coverageCache.fingerprint, s.coverageCache.covered = fingerprint, missing == 0
+	s.coverageCache.mu.Unlock()
 	return missing == 0, nil
+}
+
+type usageCoverageCache struct {
+	mu          sync.Mutex
+	fingerprint string
+	covered     bool
 }

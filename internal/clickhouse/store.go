@@ -48,6 +48,8 @@ type Store struct {
 	frustrationMarkers frustrationMarkerMemo
 	// pricing memoizes the pricing catalog per set of active pricing parts.
 	pricing pricingCache
+	// coverageCache memoizes complete usage snapshot coverage per parts.
+	coverageCache usageCoverageCache
 }
 
 // NewStore connects to the mirror named by t and refuses schemas or data
