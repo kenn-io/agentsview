@@ -32,6 +32,11 @@ The latest published release is
   text is now checked in one pass and stored unchanged. In a full sync of a
   950 MB local test corpus, total CPU time fell about 4%. Wall-clock time did
   not change measurably.
+- Full syncs and archive rebuilds use less memory. They now write parsed
+  sessions to the database in smaller batches instead of holding more of them
+  in memory. In a full sync of a 2.1 GB local test corpus, peak memory fell
+  about 22%, from 441 MiB to 342 MiB. Each rebuild makes more, smaller write
+  transactions; total sync time did not change measurably.
 
 ## 0.44.0
 
