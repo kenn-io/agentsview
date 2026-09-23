@@ -1,6 +1,7 @@
 package signals
 
 import (
+	"fmt"
 	"math/rand/v2"
 	"testing"
 
@@ -12,6 +13,94 @@ func bashLs(ord, idx int) ToolCallRow {
 	return ToolCallRow{
 		ToolName: "Bash", InputJSON: `{"cmd":"ls"}`,
 		MessageOrdinal: ord, CallIndex: idx,
+	}
+}
+
+func failingNpmTest(i int) ToolCallRow {
+	return ToolCallRow{
+		Category: "Bash", ToolName: "Bash",
+		InputJSON:      `{"command":"npm test"}`,
+		EventStatus:    "errored",
+		ResultContent:  "exit status 1\nFAIL",
+		MessageOrdinal: i * 2, CallIndex: 0,
+	}
+}
+
+func TestRunawayToolLoopSpan(t *testing.T) {
+	stepCalls := func(n int, failing ...int) []ToolCallRow {
+		calls := make([]ToolCallRow, n)
+		for i := range calls {
+			calls[i] = ToolCallRow{
+				Category: "Bash", ToolName: "Bash",
+				InputJSON:      fmt.Sprintf(`{"command":"step-%c"}`, rune('a'+i)),
+				MessageOrdinal: i + 1,
+			}
+		}
+		for _, i := range failing {
+			calls[i].EventStatus = "errored"
+		}
+		return calls
+	}
+	exact := make([]ToolCallRow, 14)
+	for i := range exact {
+		exact[i] = failingNpmTest(i)
+	}
+	exact[13] = ToolCallRow{Category: "Read", ToolName: "Read", InputJSON: `{}`, MessageOrdinal: 26}
+
+	tests := []struct {
+		name        string
+		calls       []ToolCallRow
+		wantOK      bool
+		first, last CallPos
+		n           int
+	}{
+		{"under twelve calls", exact[:11], false, CallPos{}, CallPos{}, 0},
+		{
+			"exact run spans the whole equal-signature run",
+			exact, true,
+			CallPos{MessageOrdinal: 0}, CallPos{MessageOrdinal: 24}, 13,
+		},
+		{
+			"six failures in first twelve-call window",
+			stepCalls(13, 1, 3, 5, 7, 9, 11), true,
+			CallPos{MessageOrdinal: 1}, CallPos{MessageOrdinal: 12}, 12,
+		},
+		{
+			"window found later in the session",
+			stepCalls(20, 9, 11, 13, 15, 17, 19), true,
+			CallPos{MessageOrdinal: 9}, CallPos{MessageOrdinal: 20}, 12,
+		},
+		{"two failures is not runaway", stepCalls(12, 2, 5), false, CallPos{}, CallPos{}, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			first, last, n, ok := RunawayToolLoopSpan(tt.calls)
+			assert.Equal(t, tt.wantOK, ok)
+			assert.Equal(t, tt.first, first)
+			assert.Equal(t, tt.last, last)
+			assert.Equal(t, tt.n, n)
+		})
+	}
+}
+
+func TestHighContextPressureMatchesScorePenalty(t *testing.T) {
+	tests := []struct {
+		name     string
+		pressure float64
+		want     bool
+	}{
+		{"at threshold no penalty", HighContextPressure, false},
+		{"just above threshold", HighContextPressure + 0.0001, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ComputeHealthScore(ScoreInput{
+				Outcome: "completed", OutcomeConfidence: "high",
+				HasContextData: true, PressureMax: new(tt.pressure),
+			})
+			_, penalized := got.Penalties["context_pressure_high"]
+			assert.Equal(t, tt.want, penalized)
+		})
 	}
 }
 
