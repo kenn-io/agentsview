@@ -8,6 +8,7 @@ export interface VersionInfo {
   commit: string;
   data_version: number;
   insight_generation_available: boolean;
+  kata_available: boolean;
   read_only?: boolean;
   version: string;
 }
