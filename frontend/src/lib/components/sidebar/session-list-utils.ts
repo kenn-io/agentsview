@@ -1,4 +1,5 @@
 import type { SessionGroup, SessionGroupInput } from "../../stores/sessions.svelte.js";
+import { sessionAncestryMatches } from "../../utils/session-ancestry.js";
 
 export const ITEM_HEIGHT = 42;
 const CHILD_ITEM_HEIGHT = 34;
@@ -119,20 +120,7 @@ function isTeammateByMessage(s: SessionGroupInput): boolean {
  * same teammate chain.
  */
 function isTeammate(s: SessionGroupInput, allSessions: SessionGroupInput[]): boolean {
-  if (isTeammateByMessage(s)) return true;
-  // Walk up the parent chain within the group to inherit.
-  if (s.parent_session_id) {
-    const visited = new Set<string>();
-    let cur: SessionGroupInput | undefined = s;
-    while (cur?.parent_session_id && !visited.has(cur.id)) {
-      visited.add(cur.id);
-      const parent = allSessions.find((p) => p.id === cur!.parent_session_id);
-      if (!parent) break;
-      if (isTeammateByMessage(parent)) return true;
-      cur = parent;
-    }
-  }
-  return false;
+  return sessionAncestryMatches(s, allSessions, isTeammateByMessage);
 }
 
 /**
@@ -154,18 +142,7 @@ export function isSubagentDescendant(
   s: SessionGroupInput,
   groupSessions: SessionGroupInput[],
 ): boolean {
-  if (isSubagent(s)) return true;
-  if (!s.parent_session_id) return false;
-  const visited = new Set<string>();
-  let cur: SessionGroupInput | undefined = s;
-  while (cur?.parent_session_id && !visited.has(cur.id)) {
-    visited.add(cur.id);
-    const parent = groupSessions.find((p) => p.id === cur!.parent_session_id);
-    if (!parent) break;
-    if (isSubagent(parent)) return true;
-    cur = parent;
-  }
-  return false;
+  return sessionAncestryMatches(s, groupSessions, isSubagent);
 }
 
 /**

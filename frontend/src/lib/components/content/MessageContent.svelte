@@ -7,6 +7,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   import { formatDuration } from "../../utils/duration.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
   import { formatMessageForCopy } from "../../utils/copy-message.js";
+  import { sessionAncestryMatches } from "../../utils/session-ancestry.js";
   import { messages as messagesStore } from "../../stores/messages.svelte.js";
   import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
   import { liveTick } from "../../stores/liveTick.svelte.js";
@@ -62,34 +63,6 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   let owningSession = $derived(session !== undefined ? session
     : sessions.sessions.find((s) => s.id === message.session_id) ?? sessions.activeSession);
 
-  function isTeammateAncestry(s: Session, all: Session[]): boolean {
-    if ((s.first_message ?? "").includes("<teammate-message")) return true;
-    if (!s.parent_session_id) return false;
-    const visited = new Set<string>();
-    let cur: Session | undefined = s;
-    while (cur?.parent_session_id && !visited.has(cur.id)) {
-      visited.add(cur.id);
-      const parent = all.find((p) => p.id === cur!.parent_session_id);
-      if (!parent) break;
-      if ((parent.first_message ?? "").includes("<teammate-message")) return true;
-      cur = parent;
-    }
-    return false;
-  }
-  function isSubagentAncestry(s: Session, all: Session[]): boolean {
-    if (s.relationship_type === "subagent") return true;
-    if (!s.parent_session_id) return false;
-    const visited = new Set<string>();
-    let cur: Session | undefined = s;
-    while (cur?.parent_session_id && !visited.has(cur.id)) {
-      visited.add(cur.id);
-      const parent = all.find((p) => p.id === cur!.parent_session_id);
-      if (!parent) break;
-      if (parent.relationship_type === "subagent") return true;
-      cur = parent;
-    }
-    return false;
-  }
   const INLINE_TEAMMATE_MESSAGE_RE =
     /<teammate-message\b[^>]*\bteammate_id\s*=\s*(?:"[^"]+"|'[^']+'|[^\s>]+)[^>]*>[\s\S]*?<\/teammate-message\s*>/;
   let hasInlineTeammateMessage = $derived(isUser && !isSubagentContext && segments.some(
@@ -99,8 +72,8 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
     const s = owningSession;
     if (!s) return "user";
     const all = sessions.sessions;
-    if (isSubagentAncestry(s, all)) return "subagent";
-    if (isTeammateAncestry(s, all)) return "teammate";
+    if (sessionAncestryMatches(s, all, (ancestor) => ancestor.relationship_type === "subagent")) return "subagent";
+    if (sessionAncestryMatches(s, all, (ancestor) => (ancestor.first_message ?? "").includes("<teammate-message"))) return "teammate";
     return "user";
   });
   let roleLabel = $derived.by(() => {

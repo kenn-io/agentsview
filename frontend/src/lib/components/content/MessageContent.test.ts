@@ -280,6 +280,46 @@ describe("MessageContent", () => {
       expect(text(".role-icon")).toBe(icon);
     },
   );
+  it.each([
+    ["subagent", "continuation", "Agent"],
+    ["subagent", "fork", "Agent"],
+    ["teammate", "continuation", "Teammate"],
+    ["teammate", "fork", "Teammate"],
+  ] as const)("labels a shared %s %s by its ancestry", async (kind, relation, label) => {
+    state.sessions = [
+      session({ id: "ordinary-parent" }),
+      session({
+        id: "agent-parent",
+        relationship_type: kind === "subagent" ? "subagent" : undefined,
+        first_message: kind === "teammate" ? "<teammate-message>hello</teammate-message>" : "hello",
+      }),
+      session({
+        relationship_type: relation,
+        parent_session_ids: ["agent-parent", "ordinary-parent"],
+      }),
+    ];
+    await render(message({ role: "user", content: "Continue the work." }));
+    expect(text(".role-label")).toBe(label);
+  });
+
+  it("uses the contextual parent instead of a different proven parent", async () => {
+    state.sessions = [
+      session({ id: "subagent-parent", relationship_type: "subagent" }),
+      session({
+        id: "teammate-parent",
+        first_message: "<teammate-message>hello</teammate-message>",
+      }),
+    ];
+    await render(message({ role: "user", content: "Continue the work." }), {
+      session: session({
+        relationship_type: "continuation",
+        parent_session_id: "teammate-parent",
+        parent_session_ids: ["subagent-parent", "teammate-parent"],
+      }),
+    });
+    expect(text(".role-label")).toBe("Teammate");
+  });
+
   it("keeps differently classified rows separate in one document", async () => {
     state.sessions = [session(), session({ id: "child", relationship_type: "subagent" })];
     await render(
