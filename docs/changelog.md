@@ -59,10 +59,11 @@ The latest published release is
   105,000 usage records, rebuilding all saved daily totals took about 16% less
   time. Stored totals and costs are unchanged.
 - Activity reports and session exports spend less time and memory removing
-  duplicate Claude usage records. Claude can log the same response several
-  times as it streams. In a benchmark where each response appeared once, this
-  step ran about 66% faster with about half the memory. Where each response
-  appeared many times, it ran about 27% faster. Totals are unchanged.
+  duplicate Claude usage records. Claude transcripts can record the same
+  response more than once, sometimes in more than one session. In a benchmark
+  where each response appeared once, this step ran about 66% faster with about
+  half the memory. Where each response appeared many times, it ran about 27%
+  faster. Totals are unchanged.
 
 ## 0.44.0
 
