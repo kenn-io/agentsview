@@ -370,9 +370,12 @@ func reportingHoursFromSource(
 		}
 		hourStart := date.Add(time.Duration(i) * time.Hour)
 		hourEnd := hourStart.Add(time.Hour)
-		first, _ := slices.BinarySearchFunc(dayCandidates, hourStart.Add(-gapCap), candidateStartsAt)
-		last, _ := slices.BinarySearchFunc(dayCandidates, hourEnd, candidateStartsAt)
-		candidates := dayCandidates[first:last:last]
+		var candidates []activity.IntervalCandidate
+		if len(dayCandidates) > 0 {
+			first, _ := slices.BinarySearchFunc(dayCandidates, hourStart.Add(-gapCap), candidateStartsAt)
+			last, _ := slices.BinarySearchFunc(dayCandidates, hourEnd, candidateStartsAt)
+			candidates = dayCandidates[first:last:last]
+		}
 		aggregate := activity.AggregateCandidates
 		if schemaVersion == export.ReportingJointSchemaVersion {
 			aggregate = activity.AggregateCandidatesWithJointActivity
