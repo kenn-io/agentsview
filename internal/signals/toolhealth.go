@@ -167,32 +167,55 @@ func countFailures(
 	return failures, maxStreak
 }
 
-// countRetries counts retried calls using a sliding window.
-// 3+ consecutive calls with same ToolName AND identical InputJSON
-// = (count - 1) retries per group.
-func countRetries(calls []ToolCallRow) int {
-	if len(calls) < 3 {
-		return 0
-	}
+// retryRunMinLen is the shortest run of identical consecutive calls
+// that counts as retrying.
+const retryRunMinLen = 3
 
-	total := 0
-	runLen := 1
+// ToolRun is one maximal run of consecutive calls with the same
+// ToolName and byte-identical InputJSON, at least retryRunMinLen
+// long. First and Last are the run's outermost calls.
+type ToolRun struct {
+	ToolName    string
+	Count       int
+	First, Last CallPos
+}
 
-	for i := 1; i < len(calls); i++ {
-		if calls[i].ToolName == calls[i-1].ToolName &&
+// RetryRuns returns every maximal retry run in call order. It is the
+// per-occurrence form of countRetries: countRetries == Σ(Count-1).
+func RetryRuns(calls []ToolCallRow) []ToolRun {
+	var runs []ToolRun
+	start := 0
+	for i := 1; i <= len(calls); i++ {
+		if i < len(calls) &&
+			calls[i].ToolName == calls[i-1].ToolName &&
 			calls[i].InputJSON == calls[i-1].InputJSON {
-			runLen++
-		} else {
-			if runLen >= 3 {
-				total += runLen - 1
-			}
-			runLen = 1
+			continue
 		}
+		if n := i - start; n >= retryRunMinLen {
+			runs = append(runs, ToolRun{
+				ToolName: calls[start].ToolName,
+				Count:    n,
+				First:    toolCallPos(calls[start]),
+				Last:     toolCallPos(calls[i-1]),
+			})
+		}
+		start = i
 	}
-	if runLen >= 3 {
-		total += runLen - 1
+	return runs
+}
+
+// countRetries counts retried calls: each run of 3+ consecutive calls
+// with the same ToolName AND identical InputJSON adds (count - 1).
+func countRetries(calls []ToolCallRow) int {
+	total := 0
+	for _, r := range RetryRuns(calls) {
+		total += r.Count - 1
 	}
 	return total
+}
+
+func toolCallPos(c ToolCallRow) CallPos {
+	return CallPos{MessageOrdinal: c.MessageOrdinal, CallIndex: c.CallIndex}
 }
 
 // countEditChurn counts churn events for Edit/Write calls.
