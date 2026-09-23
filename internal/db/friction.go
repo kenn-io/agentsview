@@ -188,6 +188,12 @@ func settledUsageOnlyFriction() SessionFrictionUpdate {
 	}
 }
 
+// clearSessionFrictionTx drops a session's friction and marks it for
+// recompute with an empty rules version after copied content is projected.
+func clearSessionFrictionTx(tx transactionQueries, sessionID string) error {
+	return replaceSessionFrictionTx(tx, sessionID, SessionFrictionUpdate{})
+}
+
 // ReplaceSessionFriction atomically replaces a session's friction findings
 // and dims and updates friction_count, friction_rules_version and
 // friction_hash. Under a usage-only archive policy it stores the settled

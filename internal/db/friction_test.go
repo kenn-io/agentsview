@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -121,7 +122,7 @@ func TestReplaceSessionMessagesRevokesFrictionVersion(t *testing.T) {
 func frictionFixture(sessionID string) ([]FrictionFinding, *FrictionSessionDims) {
 	ord, call := 3, 0
 	at := time.Date(2026, 9, 16, 1, 35, 0, 120000000, time.UTC)
-	return []FrictionFinding{
+	findings := []FrictionFinding{
 		{
 			SessionID: sessionID, Kind: "correction",
 			Detector: "correction.coding", MessageOrdinal: &ord,
@@ -145,9 +146,11 @@ func frictionFixture(sessionID string) ([]FrictionFinding, *FrictionSessionDims)
 			Title:       "[friction/pattern] " + sessionID + ": iteration runaway",
 			Fingerprint: "fl1:cc", Seq: 2,
 		},
-	}, &FrictionSessionDims{
+	}
+	dims := &FrictionSessionDims{
 		SessionID: sessionID, Seat: "seat-02", DimsSource: "seat_pattern",
 	}
+	return findings, dims
 }
 
 func TestReplaceSessionFrictionRoundTrip(t *testing.T) {
@@ -357,4 +360,96 @@ func TestFrictionReadsPropagateTableProbeError(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	_, err = d.SessionFrictionDims(ctx, "s1")
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestOrphanCopyPreservesFriction(t *testing.T) {
+	dir := t.TempDir()
+	ctx := t.Context()
+	srcPath := filepath.Join(dir, "old.db")
+	src, err := Open(ctx, srcPath)
+	require.NoError(t, err)
+	insertSession(t, src, "s1", "proj")
+	insertMessages(t, src, userMsg("s1", 0, "hello"), asstMsg("s1", 1, "reply"))
+	findings, dims := frictionFixture("s1")
+	hash := FrictionHash(findings, dims, friction.RulesVersion)
+	require.NoError(t, src.ReplaceSessionFriction(ctx, "s1", findings, dims,
+		friction.RulesVersion, hash))
+	_, err = src.getWriter().Exec(ctx,
+		"UPDATE friction_findings SET created_at = '2020-01-01T00:00:00.000Z'")
+	require.NoError(t, err)
+	require.NoError(t, src.Close())
+
+	dst, err := Open(ctx, filepath.Join(dir, "new.db"))
+	require.NoError(t, err)
+	defer dst.Close()
+	count, err := dst.CopyOrphanedDataFrom(srcPath)
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+
+	got, err := dst.SessionFrictionFindings(ctx, "s1")
+	require.NoError(t, err)
+	require.Len(t, got, 3)
+	gotDims, err := dst.SessionFrictionDims(ctx, "s1")
+	require.NoError(t, err)
+	assert.Equal(t, dims, gotDims)
+	s, err := dst.GetSessionFull(ctx, "s1")
+	require.NoError(t, err)
+	assert.Equal(t, 3, s.FrictionCount)
+	assert.Equal(t, friction.RulesVersion, s.FrictionRulesVersion)
+	assert.Equal(t, hash, s.FrictionHash)
+	var createdAt string
+	require.NoError(t, dst.getReader().QueryRow(ctx,
+		"SELECT created_at FROM friction_findings LIMIT 1").Scan(&createdAt))
+	assert.Equal(t, "2020-01-01T00:00:00.000Z", createdAt)
+}
+
+func TestOrphanCopyFromArchiveWithoutFrictionTables(t *testing.T) {
+	dir := t.TempDir()
+	ctx := t.Context()
+	srcPath := filepath.Join(dir, "old.db")
+	src, err := Open(ctx, srcPath)
+	require.NoError(t, err)
+	insertSession(t, src, "s1", "proj")
+	insertMessages(t, src, userMsg("s1", 0, "hello"))
+	require.NoError(t, src.Close())
+	execRawSQLite(t, srcPath, "DROP TABLE friction_findings")
+	execRawSQLite(t, srcPath, "DROP TABLE friction_session_dims")
+	for _, c := range []string{"friction_count", "friction_rules_version", "friction_hash"} {
+		execRawSQLite(t, srcPath, "ALTER TABLE sessions DROP COLUMN "+c)
+	}
+
+	dst, err := Open(ctx, filepath.Join(dir, "new.db"))
+	require.NoError(t, err)
+	defer dst.Close()
+	count, err := dst.CopyOrphanedDataFrom(srcPath)
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+	s, err := dst.GetSessionFull(ctx, "s1")
+	require.NoError(t, err)
+	assert.Empty(t, s.FrictionRulesVersion, "an old source leaves the session stale for backfill")
+}
+
+func TestTrashedCopyPreservesFriction(t *testing.T) {
+	src := testDB(t)
+	insertSession(t, src, "s1", "proj")
+	findings, dims := frictionFixture("s1")
+	hash := FrictionHash(findings, dims, friction.RulesVersion)
+	require.NoError(t, src.ReplaceSessionFriction(t.Context(), "s1", findings, dims,
+		friction.RulesVersion, hash))
+	require.NoError(t, src.SoftDeleteSession(t.Context(), "s1"))
+
+	dst := testDB(t)
+	ids, err := dst.CopyTrashedDataFrom(src.Path())
+	require.NoError(t, err)
+	assert.Equal(t, []string{"s1"}, ids)
+	got, err := dst.SessionFrictionFindings(t.Context(), "s1")
+	require.NoError(t, err)
+	require.Len(t, got, len(findings))
+	gotDims, err := dst.SessionFrictionDims(t.Context(), "s1")
+	require.NoError(t, err)
+	assert.Equal(t, dims, gotDims)
+	s, err := dst.GetSessionFull(t.Context(), "s1")
+	require.NoError(t, err)
+	assert.Equal(t, len(findings), s.FrictionCount)
+	assert.Equal(t, hash, s.FrictionHash)
 }
