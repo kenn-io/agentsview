@@ -1,8 +1,10 @@
 package friction
 
 import (
+	"fmt"
 	"math/big"
 	"sort"
+	"time"
 )
 
 // RootRole keys top-level sessions in SpendSummary.RoleCosts
@@ -143,4 +145,109 @@ func sortedKeys[V any](m map[string]V) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// PeriodSpend is archive spend over one day or the trailing week.
+// Days counts rows present.
+type PeriodSpend struct {
+	Total          USD
+	Days           int
+	Agents, Models map[string]USD
+}
+
+// ArchiveSpend is the archive spend block. WeekFrom and WeekTo are
+// YYYY-MM-DD dates in Timezone.
+type ArchiveSpend struct {
+	Yesterday                  *PeriodSpend
+	Week                       PeriodSpend
+	WeekFrom, WeekTo, Timezone string
+}
+
+// DailySpend is one local-date usage row.
+type DailySpend struct {
+	Date           string
+	Total          USD
+	Agents, Models map[string]USD
+}
+
+// NamedUSD is one ranked agent or model cost.
+type NamedUSD struct {
+	Name string
+	USD  USD
+}
+
+func (p *PeriodSpend) add(r DailySpend) {
+	p.Days++
+	p.Total = addUSD(p.Total, r.Total)
+	for _, k := range sortedKeys(r.Agents) {
+		p.Agents = addToMap(p.Agents, k, r.Agents[k])
+	}
+	for _, k := range sortedKeys(r.Models) {
+		p.Models = addToMap(p.Models, k, r.Models[k])
+	}
+}
+
+// AgentsByCost ranks agents by cost descending, ties by name.
+func (p PeriodSpend) AgentsByCost() []NamedUSD { return rankByCost(p.Agents) }
+
+// TopModels returns the n most expensive models, ties by name.
+func (p PeriodSpend) TopModels(n int) []NamedUSD {
+	ranked := rankByCost(p.Models)
+	if len(ranked) > n {
+		ranked = ranked[:n]
+	}
+	return ranked
+}
+
+func rankByCost(m map[string]USD) []NamedUSD {
+	out := make([]NamedUSD, 0, len(m))
+	for _, k := range sortedKeys(m) {
+		out = append(out, NamedUSD{Name: k, USD: m[k]})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return cmpUSD(out[i].USD, out[j].USD) > 0
+	})
+	return out
+}
+
+// ArchiveWindow returns (date-7, date-1), excluding the digest day.
+func ArchiveWindow(date string) (from, to string, err error) {
+	d, err := time.Parse(time.DateOnly, date)
+	if err != nil {
+		return "", "", fmt.Errorf("archive spend window: %w", err)
+	}
+	return d.AddDate(0, 0, -7).Format(time.DateOnly),
+		d.AddDate(0, 0, -1).Format(time.DateOnly), nil
+}
+
+// SummarizeArchiveSpend buckets rows into yesterday and the trailing
+// week, returning nil when no row falls in the window.
+func SummarizeArchiveSpend(rows []DailySpend, date, timezone string) (*ArchiveSpend, error) {
+	from, to, err := ArchiveWindow(date)
+	if err != nil {
+		return nil, err
+	}
+	var week PeriodSpend
+	var yesterday *PeriodSpend
+	for _, r := range rows {
+		if _, err := time.Parse(time.DateOnly, r.Date); err != nil {
+			return nil, fmt.Errorf("archive spend row date %q: %w", r.Date, err)
+		}
+		if r.Date < from || r.Date > to {
+			continue
+		}
+		week.add(r)
+		if r.Date == to {
+			var y PeriodSpend
+			y.add(r)
+			yesterday = &y
+		}
+	}
+	if week.Days == 0 {
+		return nil, nil
+	}
+	return &ArchiveSpend{
+		Yesterday: yesterday, Week: week,
+		WeekFrom: from, WeekTo: to, Timezone: timezone,
+	}, nil
 }

@@ -224,3 +224,107 @@ func TestFormatUSDRenderContract(t *testing.T) {
 	}
 	assert.Equal(t, "$1300.250000", FormatUSD(USDFromMicros(1_300_250_000)))
 }
+
+// Ports archive_spend.rs parses_daily_rows_and_summarizes_yesterday_and_week
+// (:269-330), minus usage-daily JSON parsing replaced by the native rollup query.
+func archiveRows() []DailySpend {
+	return []DailySpend{
+		{Date: "2026-09-14", Total: USDFromMicros(1_500_000),
+			Agents: map[string]USD{"codex": USDFromMicros(1_500_000)},
+			Models: map[string]USD{"gpt-5.6-sol": USDFromMicros(1_500_000)}},
+		{Date: "2026-09-15", Total: USDFromMicros(332_138_392),
+			Agents: map[string]USD{
+				"codex": USDFromMicros(224_554_060), "claude": USDFromMicros(104_943_456),
+				"cowork": USDFromMicros(2_640_876),
+			},
+			Models: map[string]USD{
+				"gpt-6-astra": USDFromMicros(125_784_488), "claude-opus-5": USDFromMicros(107_584_332),
+				"gpt-5.6-sol": USDFromMicros(98_769_572),
+			}},
+		{Date: "2026-09-16", Total: USDFromMicros(999)},
+	}
+}
+
+func names(ranked []NamedUSD) []string {
+	out := make([]string, 0, len(ranked))
+	for _, r := range ranked {
+		out = append(out, r.Name)
+	}
+	return out
+}
+
+func TestArchiveWindow(t *testing.T) {
+	tests := []struct{ date, from, to string }{
+		{"2026-09-16", "2026-09-09", "2026-09-15"},
+		{"2026-09-18", "2026-09-11", "2026-09-17"},
+		{"2026-03-01", "2026-02-22", "2026-02-28"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.date, func(t *testing.T) {
+			from, to, err := ArchiveWindow(tt.date)
+			require.NoError(t, err)
+			assert.Equal(t, tt.from, from)
+			assert.Equal(t, tt.to, to)
+		})
+	}
+	_, _, err := ArchiveWindow("2026-9-16")
+	require.Error(t, err)
+}
+
+func TestSummarizeArchiveSpend(t *testing.T) {
+	t.Run("parses_daily_rows_and_summarizes_yesterday_and_week", func(t *testing.T) {
+		spend, err := SummarizeArchiveSpend(archiveRows(), "2026-09-16", "Asia/Dhaka")
+		require.NoError(t, err)
+		require.NotNil(t, spend, "rows in window")
+		assert.Equal(t, "Asia/Dhaka", spend.Timezone)
+		assert.Equal(t, "2026-09-09", spend.WeekFrom)
+		assert.Equal(t, "2026-09-15", spend.WeekTo)
+		require.NotNil(t, spend.Yesterday)
+		assert.Equal(t, "332.138392", spend.Yesterday.Total.String())
+		assert.Equal(t, 2, spend.Week.Days)
+		assert.Equal(t, "333.638392", spend.Week.Total.String())
+		assert.Equal(t, "226.054060", spend.Week.Agents["codex"].String())
+		assert.Equal(t, []string{"codex", "claude", "cowork"}, names(spend.Week.AgentsByCost()))
+		assert.Equal(t, []string{"gpt-6-astra", "claude-opus-5"}, names(spend.Week.TopModels(2)))
+	})
+	t.Run("yesterday_absent_week_still_summarized", func(t *testing.T) {
+		spend, err := SummarizeArchiveSpend(archiveRows(), "2026-09-18", "UTC")
+		require.NoError(t, err)
+		require.NotNil(t, spend)
+		assert.Nil(t, spend.Yesterday)
+		assert.Equal(t, 3, spend.Week.Days)
+	})
+	t.Run("nothing_in_window_is_nil", func(t *testing.T) {
+		spend, err := SummarizeArchiveSpend(archiveRows(), "2027-01-01", "UTC")
+		require.NoError(t, err)
+		assert.Nil(t, spend)
+		spend, err = SummarizeArchiveSpend(nil, "2026-09-16", "UTC")
+		require.NoError(t, err)
+		assert.Nil(t, spend)
+	})
+	t.Run("window_edges", func(t *testing.T) {
+		edge := func(d string) DailySpend { return DailySpend{Date: d, Total: mustUSD(t, "1")} }
+		spend, err := SummarizeArchiveSpend([]DailySpend{edge("2026-09-08"), edge("2026-09-09")}, "2026-09-16", "UTC")
+		require.NoError(t, err)
+		require.NotNil(t, spend)
+		assert.Equal(t, 1, spend.Week.Days)
+	})
+	t.Run("top_5_truncation_descending", func(t *testing.T) {
+		many := DailySpend{Date: "2026-09-15", Total: mustUSD(t, "1"), Models: map[string]USD{}}
+		for i := range 8 {
+			many.Models["m"+string(rune('0'+i))] = mustUSD(t, string(rune('0'+i)))
+		}
+		spend, err := SummarizeArchiveSpend([]DailySpend{many}, "2026-09-16", "UTC")
+		require.NoError(t, err)
+		require.NotNil(t, spend)
+		assert.Equal(t, []string{"m7", "m6", "m5", "m4", "m3"}, names(spend.Week.TopModels(5)))
+	})
+	t.Run("ties_break_by_name", func(t *testing.T) {
+		p := PeriodSpend{Agents: map[string]USD{"b": mustUSD(t, "1.00"), "a": mustUSD(t, "1"), "c": mustUSD(t, "2")}}
+		assert.Equal(t, []string{"c", "a", "b"}, names(p.AgentsByCost()))
+	})
+	t.Run("malformed_row_date_is_an_error", func(t *testing.T) {
+		_, err := SummarizeArchiveSpend([]DailySpend{{Date: "15/09/2026", Total: mustUSD(t, "1")}}, "2026-09-16", "UTC")
+		require.Error(t, err)
+	})
+}
