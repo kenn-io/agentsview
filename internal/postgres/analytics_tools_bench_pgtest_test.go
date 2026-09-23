@@ -83,7 +83,7 @@ func seedPGToolsBenchArchive(
 				'Glob', 'Write', 'Task', 'WebFetch'])[m.ordinal % 8 + 1]
 				AS tool) AS t`)
 	require.NoError(b, err, "seed tool_calls")
-	_, err = pg.ExecContext(ctx, `ANALYZE`)
+	_, err = pg.ExecContext(ctx, `ANALYZE sessions, messages, tool_calls`)
 	require.NoError(b, err)
 
 	store, err := NewStore(pgURL, schema, true)
