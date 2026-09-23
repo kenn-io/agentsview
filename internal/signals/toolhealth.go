@@ -241,7 +241,7 @@ func EditChurnFiles(calls []ToolCallRow) []EditChurn {
 		pos  []CallPos
 	}
 	var order []string
-	byFile := map[string]*fileEdits{}
+	byFile := map[string]fileEdits{}
 	for _, c := range calls {
 		if c.Category != "Edit" && c.Category != "Write" {
 			continue
@@ -252,12 +252,11 @@ func EditChurnFiles(calls []ToolCallRow) []EditChurn {
 		}
 		fe, ok := byFile[path]
 		if !ok {
-			fe = &fileEdits{}
-			byFile[path] = fe
 			order = append(order, path)
 		}
 		fe.ords = append(fe.ords, c.MessageOrdinal)
 		fe.pos = append(fe.pos, toolCallPos(c))
+		byFile[path] = fe
 	}
 	var out []EditChurn
 	for _, path := range order {
