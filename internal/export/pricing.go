@@ -144,6 +144,7 @@ type PricingLookup struct {
 
 type PricingResolver struct {
 	rows                 []EffectivePricingRow
+	digest               string
 	byModel              map[string]ModelRates
 	lookupCache          map[string]PricingLookup
 	genAI                *pricingpkg.GenAIPrices
@@ -177,6 +178,15 @@ type pricingRecordKey struct {
 	cacheWrite, cacheWrite1h, cacheRead int64
 	bands                               string
 	adjustment                          string
+}
+
+// NewPricingResolverWithDigest is NewPricingResolver for a caller that has
+// already computed EffectivePricingDigest(rows); BuildBlock reuses digest
+// instead of canonicalizing every row again.
+func NewPricingResolverWithDigest(rows []EffectivePricingRow, digest string) *PricingResolver {
+	resolver := NewPricingResolver(rows)
+	resolver.digest = digest
+	return resolver
 }
 
 func NewPricingResolver(rows []EffectivePricingRow) *PricingResolver {
@@ -806,7 +816,11 @@ func (r *PricingResolver) BuildBlock() (PricingBlock, error) {
 	}
 	sort.Strings(fallbackModels)
 
-	digest, err := EffectivePricingDigest(r.rows)
+	digest := r.digest
+	var err error
+	if digest == "" {
+		digest, err = EffectivePricingDigest(r.rows)
+	}
 	if err != nil {
 		return PricingBlock{}, err
 	}

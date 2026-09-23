@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"sync"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -463,4 +464,63 @@ func loadUsagePriceContexts(
 		return nil, fmt.Errorf("iterating clickhouse usage price contexts: %w", err)
 	}
 	return out, nil
+}
+
+// pricingSnapshot is the mirror's pricing catalog as read under one set of
+// active pricing parts. Every report and usage read needs the same rows,
+// the same digest, and the same parsed GenAI document; reading and
+// canonicalizing them per request cost more than the usage rows themselves.
+type pricingSnapshot struct {
+	rows    []export.EffectivePricingRow
+	digest  string
+	catalog chPricingCatalog
+	// catalogDigest is EffectivePricingDigest(catalog.rows).
+	catalogDigest string
+}
+
+type pricingCache struct {
+	mu          sync.Mutex
+	fingerprint string
+	snapshot    *pricingSnapshot
+}
+
+// pricingSnapshot returns the catalog for the current pricing parts. Any
+// insert or merge on a pricing table changes the fingerprint, so a stale
+// snapshot is never served; a merge only costs one reload.
+func (s *Store) pricingSnapshot(ctx context.Context) (*pricingSnapshot, error) {
+	var fingerprint string
+	err := s.queryRowContext(ctx, `SELECT
+		hex(SHA256(toString(arraySort(groupArray((table, name, hash_of_all_files))))))
+		FROM system.parts
+		WHERE database = currentDatabase() AND active
+		AND table IN ('model_pricing', 'model_pricing_bands', 'genai_pricing')`).Scan(&fingerprint)
+	if err != nil {
+		return nil, fmt.Errorf("reading clickhouse pricing parts: %w", err)
+	}
+	s.pricing.mu.Lock()
+	defer s.pricing.mu.Unlock()
+	if s.pricing.snapshot != nil && s.pricing.fingerprint == fingerprint {
+		return s.pricing.snapshot, nil
+	}
+	rows, _, err := chLoadPricingRows(ctx, s.conn, s.customPricing)
+	if err != nil {
+		return nil, err
+	}
+	digest, err := export.EffectivePricingDigest(rows)
+	if err != nil {
+		return nil, err
+	}
+	catalog, err := chLoadPricingCatalog(ctx, s.conn, s.customPricing)
+	if err != nil {
+		return nil, err
+	}
+	catalogDigest, err := export.EffectivePricingDigest(catalog.rows)
+	if err != nil {
+		return nil, err
+	}
+	snapshot := &pricingSnapshot{
+		rows: rows, digest: digest, catalog: catalog, catalogDigest: catalogDigest,
+	}
+	s.pricing.fingerprint, s.pricing.snapshot = fingerprint, snapshot
+	return snapshot, nil
 }

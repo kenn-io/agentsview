@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dlclark/regexp2/v2"
@@ -36,6 +37,16 @@ type GenAIPrices struct {
 	providers []genAIProvider
 	raw       []byte
 	version   string
+	// resolved memoizes provider and model matching per (provider, model)
+	// identifier. Matching runs pattern lists that include regular
+	// expressions, and a usage report resolves the same few models for
+	// every row; only the price version depends on the timestamp.
+	resolved sync.Map
+}
+
+type genAIResolvedModel struct {
+	provider *genAIProvider
+	model    *genAIModel
 }
 
 type genAIProvider struct {
@@ -579,29 +590,42 @@ func (p *GenAIPrices) Resolve(
 	if p == nil || modelID == "" {
 		return ModelPricing{}, false
 	}
+	resolved := p.resolveModel(providerID, modelID)
+	if resolved.model == nil {
+		return ModelPricing{}, false
+	}
+	selected := resolved.model.activePrices(timestamp)
+	rates, ok := genAIModelPricing(resolved.provider.id+"/"+resolved.model.id, selected)
+	return rates, ok
+}
+
+func (p *GenAIPrices) resolveModel(providerID, modelID string) genAIResolvedModel {
+	key := providerID + "\x00" + modelID
+	if cached, ok := p.resolved.Load(key); ok {
+		return cached.(genAIResolvedModel)
+	}
+	var resolved genAIResolvedModel
 	lowerModelID := strings.ToLower(modelID)
 	provider := p.findProvider(providerID, modelID, lowerModelID)
-	if provider == nil {
-		return ModelPricing{}, false
-	}
-	model := provider.findModel(modelID, lowerModelID)
-	if model == nil {
-		for _, fallbackID := range provider.fallbackModelProviders {
-			fallback := p.providerByID(fallbackID)
-			if fallback != nil {
-				model = fallback.findModel(modelID, lowerModelID)
-			}
-			if model != nil {
-				break
+	if provider != nil {
+		model := provider.findModel(modelID, lowerModelID)
+		if model == nil {
+			for _, fallbackID := range provider.fallbackModelProviders {
+				fallback := p.providerByID(fallbackID)
+				if fallback != nil {
+					model = fallback.findModel(modelID, lowerModelID)
+				}
+				if model != nil {
+					break
+				}
 			}
 		}
+		if model != nil {
+			resolved = genAIResolvedModel{provider: provider, model: model}
+		}
 	}
-	if model == nil {
-		return ModelPricing{}, false
-	}
-	selected := model.activePrices(timestamp)
-	rates, ok := genAIModelPricing(provider.id+"/"+model.id, selected)
-	return rates, ok
+	p.resolved.Store(key, resolved)
+	return resolved
 }
 
 func (p *GenAIPrices) findProvider(
