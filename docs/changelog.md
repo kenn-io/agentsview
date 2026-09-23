@@ -37,6 +37,11 @@ The latest published release is
   in memory. In a full sync of a 2.1 GB local test corpus, peak memory fell
   about 22%, from 441 MiB to 342 MiB. Each rebuild makes more, smaller write
   transactions; total sync time did not change measurably.
+- `export day` and `export digest` build their hourly reports faster. Activity
+  for a day is now matched up once instead of once per hour. A benchmark day
+  with many long sessions exported about 63% faster and allocated about 77%
+  less memory. Typical benchmark days were up to about 17% faster, and output
+  is unchanged.
 
 ## 0.44.0
 
