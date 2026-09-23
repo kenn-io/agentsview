@@ -32,8 +32,8 @@ type RenderLinks struct {
 	IssueIndex map[string]IssueRef // by fingerprint
 }
 
-// RenderMarkdown ports render_digest (digest.rs:723-1031) byte for byte,
-// except the heading (D8).
+// RenderMarkdown ports render_digest (digest.rs:723-1031), with the D8 heading
+// and D36 frustration/interruption additions.
 func RenderMarkdown(s DigestSnapshot, l RenderLinks) []byte {
 	var corrections, errs, workarounds, deferrals, frustrations, interruptions, patterns []Signal
 	for _, sig := range s.Signals {
