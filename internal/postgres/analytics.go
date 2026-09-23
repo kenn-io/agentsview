@@ -2116,6 +2116,12 @@ func pgAnalyticsZone(f db.AnalyticsFilter) string {
 // its message timestamp, or the session start when the message has none;
 // local_at is that time in the requested zone. sessionCols and callCols
 // add panel-specific columns and callPreds add panel-specific predicates.
+//
+// analytics_sessions is MATERIALIZED so PostgreSQL filters sessions
+// before it touches tool_calls and messages. pgx caches prepared
+// statements per connection. After five executions PostgreSQL may switch
+// to a generic plan. With an inlined CTE, that plan joins every tool call
+// to every message before it applies a narrow project filter.
 func pgAnalyticsCallsSQL(
 	f db.AnalyticsFilter, pb *paramBuilder,
 	sessionCols, callCols string, callPreds ...string,
@@ -2132,7 +2138,7 @@ func pgAnalyticsCallsSQL(
 	if len(preds) > 0 {
 		callWhere = "\n\t\tWHERE " + strings.Join(preds, " AND ")
 	}
-	return `WITH analytics_sessions AS (
+	return `WITH analytics_sessions AS MATERIALIZED (
 		SELECT id, ` + pgDateCol + ` AS session_at` + sessionCols + `
 		FROM sessions WHERE ` + where + `
 	),
