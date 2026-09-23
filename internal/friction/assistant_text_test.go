@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -21,6 +23,15 @@ func TestAssistantText(t *testing.T) {
 	bashR := parser.ToolUseRendering(bash.ToolName, bash.InputJSON)
 	bashRedacted := parser.RedactedToolUseRendering(bash.ToolName, bash.InputJSON)
 	readR := parser.ToolUseRendering(read.ToolName, read.InputJSON)
+	const quotedThinking = "for now\n[Bash]\n$ echo done\nmore thought"
+	parserText, _, _, _, parserCalls, _ := parser.ExtractTextContent(
+		t.Context(), gjson.Parse(`[
+			{"type":"thinking","thinking":"for now\n[Bash]\n$ echo done\nmore thought"},
+			{"type":"tool_use","name":"Bash","input":{"command":"echo done"}},
+			{"type":"text","text":"Answer."}
+		]`),
+	)
+	require.Len(t, parserCalls, 1)
 
 	tests := []struct {
 		name     string
@@ -65,6 +76,16 @@ func TestAssistantText(t *testing.T) {
 			"Answer.",
 		},
 		{
+			"quoted tool rendering in parser thinking is removed",
+			parserText, quotedThinking,
+			[]RawToolCall{{
+				ToolName:  parserCalls[0].ToolName,
+				Category:  parserCalls[0].Category,
+				InputJSON: parserCalls[0].InputJSON,
+			}},
+			false, "Answer.",
+		},
+		{
 			"two identical calls both removed",
 			"Running twice.\n" + bashR + "\n" + bashR + "\nBoth passed.",
 			"",
@@ -85,6 +106,28 @@ func TestAssistantText(t *testing.T) {
 			[]RawToolCall{bash},
 			true,
 			"Run it.",
+		},
+		{
+			"redacted prefix does not leave full rendering arguments",
+			parser.ToolUseRendering(
+				"Bash", `{"command":"echo for now"}`,
+			), "",
+			[]RawToolCall{{
+				ToolName: "Bash", Category: "Bash",
+				InputJSON: `{"command":"echo for now"}`,
+			}},
+			true, "",
+		},
+		{
+			"standalone redacted header is removed",
+			parser.RedactedToolUseRendering(
+				"Bash", `{"command":"echo for now"}`,
+			), "",
+			[]RawToolCall{{
+				ToolName: "Bash", Category: "Bash",
+				InputJSON: `{"command":"echo for now"}`,
+			}},
+			true, "",
 		},
 		{
 			"redacted preferred when both forms occur",

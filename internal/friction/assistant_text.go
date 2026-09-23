@@ -16,13 +16,13 @@ const (
 func AssistantText(
 	content, thinking string, calls []RawToolCall, redacted bool,
 ) string {
-	text := content
+	text := stripThinking(content, thinking)
 	for _, call := range calls {
 		if rendering := renderingInText(text, call, redacted); rendering != "" {
 			text = removePart(text, strings.Index(text, rendering), len(rendering))
 		}
 	}
-	return stripThinking(text, thinking)
+	return text
 }
 
 // renderingInText chooses the longest present rendering in the preferred
@@ -31,12 +31,30 @@ func renderingInText(text string, call RawToolCall, redacted bool) string {
 	pairs := parser.ToolUseRenderingCandidates(
 		call.Category, call.ToolName, call.InputJSON,
 	)
-	pick := func(form func(parser.ToolUseRenderingPair) string) string {
+	pick := func(
+		form func(parser.ToolUseRenderingPair) string,
+		skipFullRenderingPrefixes bool,
+	) string {
 		best := ""
 		for _, pair := range pairs {
 			rendering := form(pair)
-			if len(rendering) > len(best) && strings.Contains(text, rendering) {
+			if len(rendering) <= len(best) {
+				continue
+			}
+			for from := 0; from < len(text); {
+				i := strings.Index(text[from:], rendering)
+				if i < 0 {
+					break
+				}
+				at := from + i
+				if skipFullRenderingPrefixes && prefixesFullRendering(
+					text[at:], rendering, pairs,
+				) {
+					from = at + len(rendering)
+					continue
+				}
 				best = rendering
+				break
 			}
 		}
 		return best
@@ -44,15 +62,30 @@ func renderingInText(text string, call RawToolCall, redacted bool) string {
 	full := func(pair parser.ToolUseRenderingPair) string { return pair.Full }
 	red := func(pair parser.ToolUseRenderingPair) string { return pair.Redacted }
 	if redacted {
-		if rendering := pick(red); rendering != "" {
+		if rendering := pick(red, true); rendering != "" {
 			return rendering
 		}
-		return pick(full)
+		return pick(full, false)
 	}
-	if rendering := pick(full); rendering != "" {
+	if rendering := pick(full, false); rendering != "" {
 		return rendering
 	}
-	return pick(red)
+	return pick(red, false)
+}
+
+// prefixesFullRendering reports whether a redacted candidate at the start of
+// text is only the header of a longer rendering for the same call.
+func prefixesFullRendering(
+	text, redacted string, pairs []parser.ToolUseRenderingPair,
+) bool {
+	for _, pair := range pairs {
+		if len(pair.Full) > len(redacted) &&
+			strings.HasPrefix(pair.Full, redacted) &&
+			strings.HasPrefix(text, pair.Full) {
+			return true
+		}
+	}
+	return false
 }
 
 // removePart deletes a block and one adjacent newline separator. The
