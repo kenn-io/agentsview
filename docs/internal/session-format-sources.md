@@ -710,8 +710,8 @@ add an archived or maintained mirror without replacing the original identity.
   `session_turn_leases`, `gateway_routing`, `async_delegations`,
   `compression_locks`, `system_prompts`, `state_meta`, `schema_version`) plus
   the `sessions/` transcript sibling. Timestamps are REAL epoch seconds;
-  observed rows carry `source = "desktop"`. Hermes-style (`20260910_075655_ca54ab`)
-  and UUID session ids coexist in one store.
+  observed rows carry `source = "desktop"`. Hermes-style
+  (`20260910_075655_ca54ab`) and UUID session ids coexist in one store.
 - **Evidence:** `no-public-source`.
 - **Upstream:** The app is closed and publishes no producer source; it was
   checked 2026-09-11. Its `install-stamp.json` names branch
@@ -722,9 +722,9 @@ add an archived or maintained mirror without replacing the original identity.
   `LEGACY_HERMES_HOME_DIRNAME = ".hermes"`, plus a 340-file `hermes_*` Python
   runtime in the app bundle, identifying a Hermes Agent fork. The fork's
   `schema_version` was 26 the same day stock `~/.hermes/state.db` measured 30:
-  same table family, independent version lines. The fork marker is the
-  store's own root name (`.augure-desktop` / `%LOCALAPPDATA%\augure-desktop`),
-  never the schema shape or `schema_version` number.
+  same table family, independent version lines. The fork marker is the store's
+  own root name (`.augure-desktop` / `%LOCALAPPDATA%\augure-desktop`), never
+  the schema shape or `schema_version` number.
 - **Usage and cost:** the state DB's own authoritative session columns
   (`input_tokens`, `output_tokens`, cache columns, `reasoning_tokens`,
   `estimated_cost_usd`, `actual_cost_usd`, `cost_status`, `cost_source`),
@@ -732,15 +732,15 @@ add an archived or maintained mirror without replacing the original identity.
   a present-zero, estimated 0 does not masquerade as $0. Models observed are
   proprietary Augure slugs (`ossington-5`), absent from the pricing catalog,
   so their events price as unpriced until catalog coverage appears.
-- **Agentsview:** `internal/parser/augure_desktop.go` relabels the shared
-  Hermes provider (`internal/parser/hermes.go`,
-  `internal/parser/hermes_provider.go`) onto the `augure-desktop:` ID prefix
-  through the `hermesProviderSpec` seam; `internal/sync` treats it like Hermes
-  for fingerprint-hash freshness and provider fingerprint file info. The
-  default roots are marker-named, which keeps default discovery disjoint
-  from Hermes without a runtime gate; explicitly configured roots are
-  accepted as given (TraeX precedent). Remote sync is excluded for the same
-  raw-state.db/WAL reasons the registry entry documents.
+- **Agentsview:** `internal/parser/augure_desktop.go` relabels the shared Hermes
+  provider (`internal/parser/hermes.go`, `internal/parser/hermes_provider.go`)
+  onto the `augure-desktop:` ID prefix through the `hermesProviderSpec` seam;
+  `internal/sync` treats it like Hermes for fingerprint-hash freshness and
+  provider fingerprint file info. The default roots are marker-named, which
+  keeps default discovery disjoint from Hermes without a runtime gate;
+  explicitly configured roots are accepted as given (TraeX precedent). Remote
+  sync is excluded for the same raw-state.db/WAL reasons the registry entry
+  documents.
 
 ## GitHub Copilot CLI (`copilot`)
 
@@ -1880,12 +1880,16 @@ schemas keep their existing ordering behavior.
   [pi-subagents](https://github.com/nicobailon/pi-subagents) v0.70.1 at
   `9b8356d4351747a7108695344e0c26a7c85e84de`: the extension's
   `getSubagentSessionRoot` puts a child session under the parent transcript's
-  stem (`<project>/<parent>/<runId>/run-N/session.jsonl`), forked children land
-  one level over in `<parent>/forks/`, and a delegated child repeats the same
-  shape below its own `session.jsonl`. Fresh children carry no `parentSession`
-  header, and forked children record the parent path as usual, so Agentsview
-  indexes a transcript at any depth and keeps the header as the only lineage
-  source.
+  stem (`<project>/<parent>/<runId>/run-N/session.jsonl`), forked children
+  land one level over in `<parent>/forks/`, and a delegated child repeats the
+  same shape below its own `session.jsonl`. Fresh children carry no
+  `parentSession` header; forked children record the parent path as usual.
+  Agentsview indexes a transcript at any depth. It links a fresh child at
+  `<parent>/<runId>/run-N/session.jsonl` to `<parent>.jsonl` as a subagent
+  when that parent is a Pi transcript, and an explicit `sessionDir` with no
+  parent transcript above the run stays unlinked. Checked 2026-09-23 against
+  two local pi-subagents runs: the parent's `subagent` tool result records
+  each child's path in `details.results[].sessionFile`, matching that layout.
 - **Agentsview:** `internal/parser/pi.go` and `internal/parser/pi_provider.go`;
   alternate branches remain in the file but only the active ancestry is a
   conversation. Reverified 2026-09-03 against 156 local Pi transcripts: the

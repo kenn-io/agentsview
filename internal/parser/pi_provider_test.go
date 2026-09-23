@@ -574,6 +574,8 @@ func TestPiProviderDiscoversSubagentSessionsInSubdirectory(t *testing.T) {
 	// has to win over the filename-derived id.
 	assert.Equal(t, "pi:child-uuid", byPath[childPath].ID)
 	assert.Equal(t, AgentPi, byPath[childPath].Agent)
+	assert.Equal(t, "pi:parent-uuid", byPath[childPath].ParentSessionID)
+	assert.Equal(t, RelSubagent, byPath[childPath].RelationshipType)
 }
 
 // TestPiProviderLinksForkedSubagentToParent checks that a forked child keeps
@@ -654,7 +656,67 @@ func TestPiProviderDiscoversNestedSubagentsWithoutDuplicates(t *testing.T) {
 	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: byPath[deepPath]})
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
-	assert.Equal(t, "pi:grandchild-uuid", outcome.Results[0].Result.Session.ID)
+	grandchild := outcome.Results[0].Result.Session
+	assert.Equal(t, "pi:grandchild-uuid", grandchild.ID)
+	assert.Equal(t, "pi:child-uuid", grandchild.ParentSessionID)
+	assert.Equal(t, RelSubagent, grandchild.RelationshipType)
+}
+
+// TestPiProviderLeavesUnmatchedSubagentShapesUnlinked checks that a
+// session.jsonl is linked only when it sits in a run-N directory with a Pi
+// transcript at <parent>.jsonl. An explicit pi-subagents sessionDir has no
+// parent transcript above the run, so it must stay a standalone session.
+func TestPiProviderLeavesUnmatchedSubagentShapesUnlinked(t *testing.T) {
+	tests := []struct {
+		name  string
+		child string
+		files map[string]string
+	}{
+		{
+			name:  "explicit session dir without parent transcript",
+			child: filepath.Join("run-abc", "run-0", "session.jsonl"),
+		},
+		{
+			name:  "parent transcript is not a Pi session",
+			child: filepath.Join("encoded-cwd", "notes", "run-abc", "run-0", "session.jsonl"),
+			files: map[string]string{
+				filepath.Join("encoded-cwd", "notes.jsonl"): `{"type":"message"}` + "\n",
+			},
+		},
+		{
+			name:  "attempt directory is not run-N",
+			child: filepath.Join("encoded-cwd", "parent", "run-abc", "attempt", "session.jsonl"),
+			files: map[string]string{
+				filepath.Join("encoded-cwd", "parent.jsonl"): piProviderFixture("parent-uuid"),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			for rel, content := range tt.files {
+				writeSourceFile(t, filepath.Join(root, rel), content)
+			}
+			childPath := filepath.Join(root, tt.child)
+			writeSourceFile(t, childPath, piProviderFixture("child-uuid"))
+
+			provider, ok := NewProvider(AgentPi, ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+			source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
+				StoredFilePath: childPath,
+			})
+			require.NoError(t, err)
+			require.True(t, ok)
+
+			outcome, err := provider.Parse(t.Context(), ParseRequest{Source: source})
+			require.NoError(t, err)
+			require.Len(t, outcome.Results, 1)
+			child := outcome.Results[0].Result.Session
+			assert.Equal(t, "pi:child-uuid", child.ID)
+			assert.Empty(t, child.ParentSessionID)
+			assert.Empty(t, child.RelationshipType)
+		})
+	}
 }
 
 // TestPiProviderIgnoresTranscriptlessSubagentDirectory checks that a subagent
