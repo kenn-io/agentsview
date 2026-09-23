@@ -91,6 +91,7 @@ func TestDarwinWatcherNativeSinkCollapsesBlockedConsumerOverflow(t *testing.T) {
 	batches := make(chan WatchBatch, 3)
 	consumerEntered := make(chan struct{})
 	releaseConsumer := make(chan struct{})
+	unblockConsumer := sync.OnceFunc(func() { close(releaseConsumer) })
 	watcher, err := newWatcherWithBackend(
 		0,
 		0,
@@ -109,6 +110,7 @@ func TestDarwinWatcherNativeSinkCollapsesBlockedConsumerOverflow(t *testing.T) {
 	require.NoError(t, err)
 	watcher.Start()
 	t.Cleanup(watcher.Stop)
+	t.Cleanup(unblockConsumer)
 
 	require.True(t, backend.emit([]backendEvent{{
 		Path: "/sessions/first.jsonl",
@@ -135,11 +137,16 @@ func TestDarwinWatcherNativeSinkCollapsesBlockedConsumerOverflow(t *testing.T) {
 	assert.True(t, requireReceiveWithin(t, nativeReturned, time.Second),
 		"native sink must acquire the idle pending accumulator")
 
-	handoff := watcher.eventSink.handoff.Load()
-	require.NotNil(t, handoff)
-	assert.True(t, handoff.fullSync)
-	assert.LessOrEqual(t, len(handoff.strings), defaultWatchBatchMaxEntries)
-	assert.LessOrEqual(t, handoff.pathBytes, defaultWatchBatchMaxPathBytes)
+	func() {
+		watcher.eventSink.mu.Lock()
+		defer watcher.eventSink.mu.Unlock()
+		// The scheduler can absorb the handoff while the callback is blocked.
+		watcher.eventSink.absorbHandoff()
+		pending := watcher.eventSink.pending
+		assert.True(t, pending.fullSync)
+		assert.LessOrEqual(t, len(pending.strings), defaultWatchBatchMaxEntries)
+		assert.LessOrEqual(t, pending.pathBytes, defaultWatchBatchMaxPathBytes)
+	}()
 
 	first := requireReceiveWithin(t, batches, time.Second)
 	assert.Equal(t, WatchBatch{
@@ -147,7 +154,7 @@ func TestDarwinWatcherNativeSinkCollapsesBlockedConsumerOverflow(t *testing.T) {
 		Renames:        []WatchRename{},
 		ReconcileRoots: []string{},
 	}, first)
-	close(releaseConsumer)
+	unblockConsumer()
 	second := requireReceiveWithin(t, batches, time.Second)
 	assert.Equal(t, WatchBatch{FullSync: true, LostEvents: true}, second)
 	assert.Never(t, func() bool { return len(batches) != 0 }, 100*time.Millisecond, 10*time.Millisecond)
