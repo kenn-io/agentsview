@@ -105,7 +105,12 @@ func TestAnalyticsToolsSkillsSQLiteParity(t *testing.T) {
 			f.AutomatedScope = "automated"
 			return f
 		}},
-		{"all-time", 11, func() db.AnalyticsFilter {
+		{"include-one-shot", 10, func() db.AnalyticsFilter {
+			f := march("America/New_York")
+			f.ExcludeOneShot = false
+			return f
+		}},
+		{"all-time", 12, func() db.AnalyticsFilter {
 			return db.AnalyticsFilter{Timezone: "UTC"}
 		}},
 	}
@@ -205,7 +210,9 @@ func seedToolsSkillsParityFixture(t *testing.T, local *db.DB) {
 	type session struct {
 		id, agent, project, startedAt, relationship string
 		automated                                   bool
-		msgs                                        []msg
+		// userMessages defaults to 3, which every one-shot filter keeps.
+		userMessages int
+		msgs         []msg
 	}
 	read := call{tool: "Read", category: "Read"}
 	sessions := []session{
@@ -275,6 +282,13 @@ func seedToolsSkillsParityFixture(t *testing.T, local *db.DB) {
 			}}},
 		},
 		{
+			id: "one-shot", agent: "claude", project: "alpha",
+			startedAt: "2024-03-13T15:00:00Z", userMessages: 1,
+			msgs: []msg{{ts: "2024-03-13T15:01:00Z", model: "model-a", calls: []call{
+				{tool: "Glob", category: "Glob", skill: "review-code"},
+			}}},
+		},
+		{
 			id: "february", agent: "claude", project: "alpha",
 			startedAt: "2024-02-01T12:00:00Z",
 			msgs: []msg{{ts: "2024-02-01T12:01:00Z", model: "model-a", calls: []call{
@@ -284,10 +298,14 @@ func seedToolsSkillsParityFixture(t *testing.T, local *db.DB) {
 	}
 	for _, s := range sessions {
 		startedAt := s.startedAt
+		userMessages := s.userMessages
+		if userMessages == 0 {
+			userMessages = 3
+		}
 		require.NoError(t, local.UpsertSession(t.Context(), db.Session{
 			ID: s.id, Project: s.project, Machine: "parity-machine",
 			Agent: s.agent, StartedAt: &startedAt,
-			MessageCount: len(s.msgs), UserMessageCount: 3,
+			MessageCount: len(s.msgs), UserMessageCount: userMessages,
 			RelationshipType: s.relationship, IsAutomated: s.automated,
 		}), "seed session %s", s.id)
 		msgs := make([]db.Message, len(s.msgs))
