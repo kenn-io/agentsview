@@ -96,6 +96,12 @@ func TestAssistantText(t *testing.T) {
 			"[Thinking]\nfor now\nAnswer.", "for now", nil, false,
 			"[Thinking]\nfor now\nAnswer.",
 		},
+		{
+			"thinking block with unmatched body kept",
+			"Before.\n[Thinking]\nprivate draft\n[/Thinking]\nAfter.",
+			"different thought", nil, false,
+			"Before.\n[Thinking]\nprivate draft\n[/Thinking]\nAfter.",
+		},
 		{"only rendering leaves empty text", readR, "", []RawToolCall{read}, false, ""},
 	}
 	for _, tt := range tests {

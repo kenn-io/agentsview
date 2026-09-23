@@ -95,11 +95,10 @@ func stripThinking(text, thinking string) string {
 	return text
 }
 
-// blockEnd returns the end of the longest inner text found in thinking,
-// falling back to the first line-ending close marker when none matches.
+// blockEnd returns the end of the longest inner text found in thinking.
+// Without thinking text, it uses the first line-ending close marker.
 func blockEnd(text string, start int, thinking string) int {
 	innerStart := start + len(thinkingOpen)
-	first := -1
 	matched := -1
 	for search := innerStart - 1; search < len(text); {
 		j := strings.Index(text[search:], thinkingClose)
@@ -112,9 +111,6 @@ func blockEnd(text string, start int, thinking string) int {
 		if end < len(text) && text[end] != '\n' {
 			continue
 		}
-		if first < 0 {
-			first = end
-		}
 		inner := text[innerStart:max(closeAt, innerStart)]
 		if thinking == "" {
 			return end
@@ -123,8 +119,5 @@ func blockEnd(text string, start int, thinking string) int {
 			matched = end
 		}
 	}
-	if matched >= 0 {
-		return matched
-	}
-	return first
+	return matched
 }
