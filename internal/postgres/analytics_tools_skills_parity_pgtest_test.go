@@ -5,6 +5,7 @@ package postgres
 import (
 	"database/sql"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -208,6 +209,29 @@ func TestAnalyticsToolsSkillsSQLiteParity(t *testing.T) {
 		assert.Equal(t, []db.SkillTrendEntry{
 			{Date: "2024-03-01", BySkill: map[string]int{"review-code": 4, "write-tests": 2}},
 		}, skills.Trend)
+	})
+
+	t.Run("local-timezone", func(t *testing.T) {
+		newYork, err := time.LoadLocation("America/New_York")
+		require.NoError(t, err)
+		t.Setenv("TZ", "America/New_York")
+		origLocal := time.Local                      //nolint:forbidigo // "Local" analytics follow the process timezone.
+		t.Cleanup(func() { time.Local = origLocal }) //nolint:forbidigo // "Local" analytics follow the process timezone.
+		time.Local = newYork                         //nolint:forbidigo // "Local" analytics follow the process timezone.
+
+		f := march("Local")
+		wantTools, err := local.GetAnalyticsTools(t.Context(), f)
+		require.NoError(t, err, "SQLite tools")
+		gotTools, err := remote.GetAnalyticsTools(t.Context(), f)
+		require.NoError(t, err, "PostgreSQL tools")
+		assert.Equal(t, wantTools, gotTools, "tools parity")
+		assert.Equal(t, 9, gotTools.TotalCalls,
+			"New York places the 23:30 EST March 9 calls in March; UTC has 8")
+		wantSkills, err := local.GetAnalyticsSkills(t.Context(), f, "day")
+		require.NoError(t, err, "SQLite skills")
+		gotSkills, err := remote.GetAnalyticsSkills(t.Context(), f, "day")
+		require.NoError(t, err, "PostgreSQL skills")
+		assert.Equal(t, wantSkills, gotSkills, "skills parity")
 	})
 
 	t.Run("spring-forward-literal", func(t *testing.T) {

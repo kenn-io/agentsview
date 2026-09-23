@@ -10,6 +10,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/signals"
+	"go.kenn.io/agentsview/internal/timeutil"
 )
 
 // maxPGVars is the maximum bind variables per IN clause.
@@ -2100,10 +2101,15 @@ func (s *Store) queryAutonomyChunk(
 // --- Tools ---
 
 // pgAnalyticsZone returns the IANA zone PostgreSQL uses to localize
-// analytics call timestamps. Unknown names fall back to UTC, as
-// analyticsLocation does for the Go-side panels.
+// analytics call timestamps. "Local" resolves to the process timezone's
+// IANA name, matching analyticsLocation's time.Local. Unknown names, and a
+// process timezone without a loadable name, fall back to UTC.
 func pgAnalyticsZone(f db.AnalyticsFilter) string {
-	zone, err := db.NormalizeSessionTimezone(f.Timezone)
+	name := f.Timezone
+	if name == "Local" {
+		name = timeutil.BestEffortLocalTimezone()
+	}
+	zone, err := db.NormalizeSessionTimezone(name)
 	if err != nil {
 		return "UTC"
 	}
