@@ -64,6 +64,13 @@ The latest published release is
   where each response appeared once, this step ran about 66% faster with about
   half the memory. Where each response appeared many times, it ran about 27%
   faster. Totals are unchanged.
+- **Tool Usage** and **Top Skills** analytics load much faster from
+  `agentsview pg serve`. PostgreSQL now counts the tool calls itself instead of
+  sending every call to AgentsView. On a synthetic archive with about 219,000
+  tool calls, a one-year tools view went from 1.7 seconds to 0.13 seconds and
+  used about 99% less memory in AgentsView. Local dates and hours now come
+  from the PostgreSQL server's time zone data, which matches AgentsView's for
+  current time zones.
 
 ## 0.44.0
 
