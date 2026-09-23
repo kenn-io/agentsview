@@ -25,7 +25,7 @@ func DetectPatterns(
 		}
 	}
 	span := func(first, last signals.CallPos) (string, time.Time) {
-		return formatRange(times[first], times[last]), times[first]
+		return rangeSuffix(times[first], times[last]), times[first]
 	}
 	var out []Signal
 	add := func(kind, description, evidence string, ordinal *int, at time.Time) {
@@ -45,14 +45,14 @@ func DetectPatterns(
 		rng, at := span(r.First, r.Last)
 		add(PatternRetryLoop,
 			fmt.Sprintf("retry loop: `%s` called %d times with identical arguments", tool, r.Count),
-			fmt.Sprintf("`%s` x%d identical arguments %s", tool, r.Count, rng),
+			fmt.Sprintf("`%s` x%d identical arguments%s", tool, r.Count, rng),
 			new(r.First.MessageOrdinal), at)
 	}
 	if first, last, n, ok := signals.RunawayToolLoopSpan(in.Calls); ok {
 		rng, at := span(first, last)
 		add(PatternRunawayLoop,
 			fmt.Sprintf("runaway tool loop: %d tool calls with repeated failures", n),
-			fmt.Sprintf("%d tool calls %s", n, rng),
+			fmt.Sprintf("%d tool calls%s", n, rng),
 			new(first.MessageOrdinal), at)
 	}
 	for _, c := range signals.EditChurnFiles(in.Calls) {
@@ -60,17 +60,20 @@ func DetectPatterns(
 		rng, at := span(c.First, c.Last)
 		add(PatternEditChurn,
 			fmt.Sprintf("edit churn: `%s` edited %d times within 10 messages", file, c.Count),
-			fmt.Sprintf("`%s` x%d edits %s", file, c.Count, rng),
+			fmt.Sprintf("`%s` x%d edits%s", file, c.Count, rng),
 			new(c.First.MessageOrdinal), at)
 	}
 	if n := in.MidTaskCompactions; n > 0 && len(in.CompactBoundaries) > 0 {
 		var first, last time.Time
-		if k := len(in.BoundaryTimes); k > 0 {
-			first, last = in.BoundaryTimes[0], in.BoundaryTimes[k-1]
+		if len(in.BoundaryTimes) > 0 {
+			first = in.BoundaryTimes[0]
+		}
+		if lastIndex := len(in.CompactBoundaries) - 1; lastIndex < len(in.BoundaryTimes) {
+			last = in.BoundaryTimes[lastIndex]
 		}
 		add(PatternMidTaskCompaction,
 			fmt.Sprintf("mid-task compaction: %d compactions during active work", n),
-			fmt.Sprintf("%d compactions %s", n, formatRange(first, last)),
+			fmt.Sprintf("%d compactions%s", n, rangeSuffix(first, last)),
 			new(in.CompactBoundaries[0]), first)
 	}
 	if p := in.PressureMax; p != nil && *p > signals.HighContextPressure {

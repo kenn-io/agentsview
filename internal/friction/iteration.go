@@ -12,6 +12,14 @@ func formatRange(first, last time.Time) string {
 	return first.UTC().Format("15:04") + "-" + last.UTC().Format("15:04")
 }
 
+// rangeSuffix omits the span when either endpoint time is unknown.
+func rangeSuffix(first, last time.Time) string {
+	if first.IsZero() || last.IsZero() {
+		return ""
+	}
+	return " " + formatRange(first, last)
+}
+
 type iterationEvent struct {
 	ordinal int
 	user    bool
@@ -86,7 +94,7 @@ func detectIterationRunaway(subjectID string, isSubAgent bool, in PatternInput) 
 		Detector:    PatternDetector(PatternIterationRunaway),
 		Label:       PatternIterationRunaway,
 		Text:        fmt.Sprintf("iteration runaway: %d tool calls with no intervening user message", bestCount),
-		Evidence:    fmt.Sprintf("%d tool calls without a user message %s", bestCount, formatRange(start, end)),
+		Evidence:    fmt.Sprintf("%d tool calls without a user message%s", bestCount, rangeSuffix(start, end)),
 		Ordinal:     new(in.Calls[bestFirst].MessageOrdinal),
 		OccurredAt:  start,
 	}, true

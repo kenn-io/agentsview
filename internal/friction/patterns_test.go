@@ -47,6 +47,31 @@ func TestDetectPatterns(t *testing.T) {
 		assert.Equal(t, "retry loop: `unknown` called 3 times with identical arguments", got[0].Text)
 	})
 
+	t.Run("retry loop omits unknown call-time ranges", func(t *testing.T) {
+		calls := []signals.ToolCallRow{
+			{ToolName: "Bash", InputJSON: "{}", MessageOrdinal: 2},
+			{ToolName: "Bash", InputJSON: "{}", MessageOrdinal: 3},
+			{ToolName: "Bash", InputJSON: "{}", MessageOrdinal: 4},
+		}
+		for _, tt := range []struct {
+			name  string
+			times []time.Time
+			at    time.Time
+		}{
+			{"missing", nil, time.Time{}},
+			{"short", []time.Time{base}, base},
+			{"zero first", []time.Time{{}, base.Add(time.Minute), base.Add(2 * time.Minute)}, time.Time{}},
+			{"zero last", []time.Time{base, base.Add(time.Minute), {}}, base},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				got := DetectPatterns("s1", false, PatternInput{Calls: calls, CallTimes: tt.times})
+				require.Len(t, got, 1)
+				assert.Equal(t, "`Bash` x3 identical arguments", got[0].Evidence)
+				assert.Equal(t, tt.at, got[0].OccurredAt)
+			})
+		}
+	})
+
 	t.Run("runaway loop", func(t *testing.T) {
 		var calls []signals.ToolCallRow
 		for i := range 12 {
@@ -98,6 +123,29 @@ func TestDetectPatterns(t *testing.T) {
 		assert.Equal(t, ord(7), got[0].Ordinal)
 	})
 
+	t.Run("mid task compaction omits unknown boundary-time ranges", func(t *testing.T) {
+		for _, tt := range []struct {
+			name  string
+			times []time.Time
+			at    time.Time
+		}{
+			{"missing", nil, time.Time{}},
+			{"short", []time.Time{base}, base},
+			{"short with zero", []time.Time{{}}, time.Time{}},
+			{"zero first", []time.Time{{}, base.Add(8 * time.Minute)}, time.Time{}},
+			{"zero last", []time.Time{base, {}}, base},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				got := DetectPatterns("s1", false, PatternInput{
+					CompactBoundaries: []int{7, 20}, BoundaryTimes: tt.times, MidTaskCompactions: 2,
+				})
+				require.Len(t, got, 1)
+				assert.Equal(t, "2 compactions", got[0].Evidence)
+				assert.Equal(t, tt.at, got[0].OccurredAt)
+			})
+		}
+	})
+
 	t.Run("no mid task compaction when count is zero", func(t *testing.T) {
 		in := PatternInput{CompactBoundaries: []int{7}, BoundaryTimes: []time.Time{base}}
 		assert.Empty(t, DetectPatterns("s1", false, in))
@@ -139,6 +187,32 @@ func TestDetectPatterns(t *testing.T) {
 		assert.Equal(t, "pattern.context_pressure", root[len(root)-2].Detector)
 		for _, s := range DetectPatterns("s1", true, in) {
 			assert.NotEqual(t, "pattern.iteration_runaway", s.Detector)
+		}
+	})
+
+	t.Run("iteration runaway omits unknown call-time ranges", func(t *testing.T) {
+		var calls []signals.ToolCallRow
+		for i := range 150 {
+			calls = append(calls, signals.ToolCallRow{
+				ToolName: "Read", InputJSON: string(rune('a' + i%10)), MessageOrdinal: i + 1,
+			})
+		}
+		for _, tt := range []struct {
+			name  string
+			times []time.Time
+			at    time.Time
+		}{
+			{"missing", nil, time.Time{}},
+			{"short", []time.Time{base}, base},
+			{"zero first", append([]time.Time{{}}, patternInput(calls[1:], base).CallTimes...), time.Time{}},
+			{"zero last", append(patternInput(calls[:149], base).CallTimes, time.Time{}), base},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				got := DetectPatterns("s1", false, PatternInput{Calls: calls, CallTimes: tt.times})
+				require.Len(t, got, 1)
+				assert.Equal(t, "150 tool calls without a user message", got[0].Evidence)
+				assert.Equal(t, tt.at, got[0].OccurredAt)
+			})
 		}
 	})
 
