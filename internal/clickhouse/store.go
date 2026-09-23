@@ -46,6 +46,8 @@ type Store struct {
 	probeCache                activityProbeCache
 	// frustrationMarkers memoizes signals marker counts per session version.
 	frustrationMarkers frustrationMarkerMemo
+	// pricing memoizes the pricing catalog per set of active pricing parts.
+	pricing pricingCache
 }
 
 // NewStore connects to the mirror named by t and refuses schemas or data
