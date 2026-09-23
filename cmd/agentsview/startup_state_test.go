@@ -3,6 +3,8 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -97,6 +99,34 @@ func TestReadStartupStateMissingOrCorrupt(t *testing.T) {
 		startupStatePath(dir), []byte("{not json"), 0o600,
 	))
 	assert.Nil(t, readStartupState(dir), "corrupt file must read as nil")
+}
+
+func TestStartupStateConcurrentReaders(t *testing.T) {
+	dir := t.TempDir()
+	w := newStartupStateWriter(dir, time.Now)
+	w.SetPhase("opening archive")
+	stop := make(chan struct{})
+	var readers sync.WaitGroup
+	for range 4 {
+		readers.Go(func() {
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					assert.NotNil(t, readStartupState(dir))
+				}
+			}
+		})
+	}
+	defer func() { close(stop); readers.Wait() }()
+	for i := range 100 {
+		phase := strconv.Itoa(i)
+		w.SetPhase(phase)
+		state := readStartupState(dir)
+		require.NotNil(t, state)
+		require.Equal(t, phase, state.Phase, "readers must allow snapshot replacement")
+	}
 }
 
 func TestRemoveStartupState(t *testing.T) {
