@@ -42,6 +42,14 @@ The latest published release is
   with many long sessions exported about 63% faster and allocated about 77%
   less memory. Typical benchmark days were up to about 17% faster, and output
   is unchanged.
+- Profile the background sync workers that the server starts. Set
+  `AGENTSVIEW_SYNC_PROFILE_DIR` before starting the server, and each worker
+  writes `cpu.pprof` and `memory.pprof` to its own private folder there. Add
+  `AGENTSVIEW_SYNC_PROFILE_TRACE=true` to also write `runtime.trace`.
+  Profiling is off by default. If the folder cannot be created, the sync still
+  runs and the reason is written to `debug.log`.
+- CPU profiles and traces from `--cpuprofile` and `--trace` no longer include
+  the memory cleanup that runs while the heap profile is written.
 
 ## 0.44.0
 
