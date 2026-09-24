@@ -37,7 +37,7 @@ func (f *fakeReviewStore) FrictionSubjectsForDate(_ context.Context, date string
 	defer f.mu.Unlock()
 	var out []db.FrictionSubject
 	for _, s := range f.sessions[date] {
-		if d, ok := f.digested[s.SubjectID]; ok && !(includeDigested && d == date) {
+		if d, ok := f.digested[s.SubjectID]; ok && (!includeDigested || d != date) {
 			continue
 		}
 		out = append(out, s)

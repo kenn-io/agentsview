@@ -80,7 +80,7 @@ func errorsOf(r Report) []friction.Signal {
 }
 
 func TestRunnerDiagnostics(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Port of worker_evidence_flows_through_errors_and_dedup (flow only).
 	t.Run("worker_evidence_flows_through_errors_and_dedup", func(t *testing.T) {

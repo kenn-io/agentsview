@@ -56,7 +56,7 @@ func (l LedgerDiagnostics) DiagnosticSignalsForDate(
 		limit = defaultDiagnosticLimit
 	}
 	var subsystems []string
-	if !(len(l.Subsystems) == 0 || (len(l.Subsystems) == 1 && l.Subsystems[0] == "*")) {
+	if len(l.Subsystems) > 0 && (len(l.Subsystems) != 1 || l.Subsystems[0] != "*") {
 		subsystems = l.Subsystems
 	}
 	health := ledger.ClassHealth

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"log"
+	"maps"
 	"strings"
 	"testing"
 	"time"
@@ -37,9 +38,7 @@ func diagAtTime(ts time.Time, identity string, extra map[string]any) ledger.Even
 		"kind": "diagnostic", "subsystem": "ci", "diagnostic": "ci_nightly_failed",
 		"identity": identity, "detail": "lint step exited 1",
 	}
-	for k, v := range extra {
-		p[k] = v
-	}
+	maps.Copy(p, extra)
 	return ledger.Event{
 		EventID: ledger.NewEventID(), Timestamp: ts, EventClass: ledger.ClassHealth,
 		PayloadTier: ledger.TierStructured, Payload: p,

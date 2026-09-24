@@ -60,7 +60,7 @@ func TestPatternTransitions(t *testing.T) {
 }
 
 func TestRunnerLedgerEvents(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	seedSession := func(store *fakeReviewStore, date, id, tool string) {
 		store.sessions[date] = append(store.sessions[date], db.FrictionSubject{
 			SubjectID: id, SubjectKind: friction.SubjectSession,

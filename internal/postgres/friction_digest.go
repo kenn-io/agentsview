@@ -20,28 +20,30 @@ func (s *Store) FrictionDigestedSubjects(ctx context.Context, subjectIDs []strin
 	out := map[string]string{}
 	for start := 0; start < len(subjectIDs); start += 500 {
 		chunk := subjectIDs[start:min(start+500, len(subjectIDs))]
-		pb := &paramBuilder{}
-		in := pgInPlaceholders(chunk, pb)
-		rows, err := s.pg.QueryContext(ctx,
-			`SELECT subject_id, date FROM friction_digest_sessions WHERE subject_id IN `+in, pb.args...)
-		if err != nil {
-			return nil, fmt.Errorf("querying digested friction subjects: %w", err)
-		}
-		for rows.Next() {
-			var id, date string
-			if err := rows.Scan(&id, &date); err != nil {
-				rows.Close()
-				return nil, fmt.Errorf("scanning digested friction subject: %w", err)
-			}
-			out[id] = date
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
+		if err := s.frictionDigestedSubjectsChunk(ctx, chunk, out); err != nil {
 			return nil, err
 		}
-		rows.Close()
 	}
 	return out, nil
+}
+
+func (s *Store) frictionDigestedSubjectsChunk(ctx context.Context, chunk []string, out map[string]string) error {
+	pb := &paramBuilder{}
+	in := pgInPlaceholders(chunk, pb)
+	rows, err := s.pg.QueryContext(ctx,
+		`SELECT subject_id, date FROM friction_digest_sessions WHERE subject_id IN `+in, pb.args...)
+	if err != nil {
+		return fmt.Errorf("querying digested friction subjects: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, date string
+		if err := rows.Scan(&id, &date); err != nil {
+			return fmt.Errorf("scanning digested friction subject: %w", err)
+		}
+		out[id] = date
+	}
+	return rows.Err()
 }
 
 // FrictionPatternsByFingerprint returns stored state before a digest updates
@@ -50,36 +52,38 @@ func (s *Store) FrictionPatternsByFingerprint(ctx context.Context, fingerprints 
 	out := map[string]db.FrictionPattern{}
 	for start := 0; start < len(fingerprints); start += 500 {
 		chunk := fingerprints[start:min(start+500, len(fingerprints))]
-		pb := &paramBuilder{}
-		in := pgInPlaceholders(chunk, pb)
-		rows, err := s.pg.QueryContext(ctx, `
-			SELECT fingerprint, kind, title, first_seen_date, last_seen_date,
-				occurrence_count, session_count, last_subject_id, last_ordinal
-			FROM friction_patterns WHERE fingerprint IN `+in, pb.args...)
-		if err != nil {
-			return nil, fmt.Errorf("querying friction patterns: %w", err)
-		}
-		for rows.Next() {
-			var p db.FrictionPattern
-			var ordinal sql.NullInt64
-			if err := rows.Scan(&p.Fingerprint, &p.Kind, &p.Title, &p.FirstSeenDate,
-				&p.LastSeenDate, &p.OccurrenceCount, &p.SessionCount, &p.LastSubjectID,
-				&ordinal); err != nil {
-				rows.Close()
-				return nil, fmt.Errorf("scanning friction pattern: %w", err)
-			}
-			if ordinal.Valid {
-				p.LastOrdinal = new(int(ordinal.Int64))
-			}
-			out[p.Fingerprint] = p
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
+		if err := s.frictionPatternsChunk(ctx, chunk, out); err != nil {
 			return nil, err
 		}
-		rows.Close()
 	}
 	return out, nil
+}
+
+func (s *Store) frictionPatternsChunk(ctx context.Context, chunk []string, out map[string]db.FrictionPattern) error {
+	pb := &paramBuilder{}
+	in := pgInPlaceholders(chunk, pb)
+	rows, err := s.pg.QueryContext(ctx, `
+		SELECT fingerprint, kind, title, first_seen_date, last_seen_date,
+			occurrence_count, session_count, last_subject_id, last_ordinal
+		FROM friction_patterns WHERE fingerprint IN `+in, pb.args...)
+	if err != nil {
+		return fmt.Errorf("querying friction patterns: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var p db.FrictionPattern
+		var ordinal sql.NullInt64
+		if err := rows.Scan(&p.Fingerprint, &p.Kind, &p.Title, &p.FirstSeenDate,
+			&p.LastSeenDate, &p.OccurrenceCount, &p.SessionCount, &p.LastSubjectID,
+			&ordinal); err != nil {
+			return fmt.Errorf("scanning friction pattern: %w", err)
+		}
+		if ordinal.Valid {
+			p.LastOrdinal = new(int(ordinal.Int64))
+		}
+		out[p.Fingerprint] = p
+	}
+	return rows.Err()
 }
 
 // FrictionAvailable reports whether startup proved this role can write the
