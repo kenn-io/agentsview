@@ -6,6 +6,7 @@ export type CannedInsightKind =
   | "workflow_hygiene_review"
   | "tool_reliability_review"
   | "model_cost_review"
-  | "instruction_opportunity_review";
+  | "instruction_opportunity_review"
+  | "friction_review";
 
 export type AgentName = "claude" | "codex" | "copilot" | "gemini" | "kiro";

@@ -235,6 +235,8 @@
         return m.insights_page_template_model_cost();
       case "instruction_opportunity_review":
         return m.insights_page_template_instruction_opportunities();
+      case "friction_review":
+        return m.insights_page_template_friction_review();
       default:
         return m.insights_page_generated_recommendation();
     }
