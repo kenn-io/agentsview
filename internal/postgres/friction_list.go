@@ -132,9 +132,6 @@ func (s *Store) ListFrictionPatterns(
 	if err != nil {
 		return nil, "", err
 	}
-	if db.FrictionLinkFilterExcludesAll(f.LinkState) {
-		return []db.FrictionPattern{}, "", nil
-	}
 	pb := &paramBuilder{}
 	var preds []string
 	if f.Kind != "" {
@@ -142,6 +139,13 @@ func (s *Store) ListFrictionPatterns(
 	}
 	if f.Since != "" {
 		preds = append(preds, "last_seen_date >= "+pb.add(f.Since))
+	}
+	clause, err := db.FrictionLinkStateClause(f.LinkState, "friction_patterns.fingerprint", pb.add)
+	if err != nil {
+		return nil, "", err
+	}
+	if clause != "" {
+		preds = append(preds, clause)
 	}
 	where := ""
 	if len(preds) > 0 {
@@ -176,8 +180,26 @@ func (s *Store) ListFrictionPatterns(
 	if err := rows.Err(); err != nil {
 		return nil, "", fmt.Errorf("listing friction patterns: %w", err)
 	}
-	if len(out) > limit {
-		return out[:limit], db.EncodeFrictionCursor(offset + limit), nil
+	if err := rows.Close(); err != nil {
+		return nil, "", fmt.Errorf("closing friction patterns: %w", err)
 	}
-	return out, "", nil
+	next := ""
+	if len(out) > limit {
+		out = out[:limit]
+		next = db.EncodeFrictionCursor(offset + limit)
+	}
+	fingerprints := make([]string, len(out))
+	for i := range out {
+		fingerprints[i] = out[i].Fingerprint
+	}
+	links, err := s.GetFrictionIssueLinks(ctx, fingerprints)
+	if err != nil {
+		return nil, "", err
+	}
+	for i := range out {
+		if link, ok := links[out[i].Fingerprint]; ok {
+			out[i].Link = &link
+		}
+	}
+	return out, next, nil
 }

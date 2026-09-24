@@ -15,8 +15,7 @@ const (
 	MaxFrictionListLimit     = 1000
 )
 
-// Pattern link-state filter values understood before issue links exist.
-// PR 10 adds the per-state values (pending, failed, needs_human, abandoned).
+// Pattern link-state filter values.
 const (
 	FrictionLinkStateLinked   = "linked"
 	FrictionLinkStateUnlinked = "unlinked"
@@ -24,15 +23,16 @@ const (
 
 // FrictionPattern is one local recurrence row from friction_patterns.
 type FrictionPattern struct {
-	Fingerprint     string `json:"fingerprint"`
-	Kind            string `json:"kind"`
-	Title           string `json:"title"`
-	FirstSeenDate   string `json:"first_seen_date"`
-	LastSeenDate    string `json:"last_seen_date"`
-	OccurrenceCount int    `json:"occurrence_count"`
-	SessionCount    int    `json:"session_count"`
-	LastSubjectID   string `json:"last_subject_id"`
-	LastOrdinal     *int   `json:"last_ordinal"`
+	Fingerprint     string             `json:"fingerprint"`
+	Kind            string             `json:"kind"`
+	Title           string             `json:"title"`
+	FirstSeenDate   string             `json:"first_seen_date"`
+	LastSeenDate    string             `json:"last_seen_date"`
+	OccurrenceCount int                `json:"occurrence_count"`
+	SessionCount    int                `json:"session_count"`
+	LastSubjectID   string             `json:"last_subject_id"`
+	LastOrdinal     *int               `json:"last_ordinal"`
+	Link            *FrictionIssueLink `json:"link,omitempty"`
 }
 
 // FrictionFindingFilter narrows ListFrictionFindings. Date selects the
@@ -82,12 +82,6 @@ func EncodeFrictionCursor(offset int) string {
 		return ""
 	}
 	return strconv.Itoa(offset)
-}
-
-// FrictionLinkFilterExcludesAll reports whether a link-state filter can match
-// nothing because no issue links exist yet. "unlinked" matches every pattern.
-func FrictionLinkFilterExcludesAll(state string) bool {
-	return state != "" && state != FrictionLinkStateUnlinked
 }
 
 func parseFrictionTime(s string) (time.Time, error) {
@@ -234,9 +228,6 @@ func (db *DB) ListFrictionPatterns(
 	if err != nil {
 		return nil, "", err
 	}
-	if FrictionLinkFilterExcludesAll(f.LinkState) {
-		return []FrictionPattern{}, "", nil
-	}
 	var preds []string
 	var args []any
 	if f.Kind != "" {
@@ -246,6 +237,16 @@ func (db *DB) ListFrictionPatterns(
 	if f.Since != "" {
 		preds = append(preds, "last_seen_date >= ?")
 		args = append(args, f.Since)
+	}
+	clause, err := FrictionLinkStateClause(f.LinkState, "friction_patterns.fingerprint", func(value any) string {
+		args = append(args, value)
+		return "?"
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	if clause != "" {
+		preds = append(preds, clause)
 	}
 	where := ""
 	if len(preds) > 0 {
@@ -279,8 +280,26 @@ func (db *DB) ListFrictionPatterns(
 	if err := rows.Err(); err != nil {
 		return nil, "", fmt.Errorf("listing friction patterns: %w", err)
 	}
-	if len(out) > limit {
-		return out[:limit], EncodeFrictionCursor(offset + limit), nil
+	if err := rows.Close(); err != nil {
+		return nil, "", fmt.Errorf("closing friction patterns: %w", err)
 	}
-	return out, "", nil
+	next := ""
+	if len(out) > limit {
+		out = out[:limit]
+		next = EncodeFrictionCursor(offset + limit)
+	}
+	fingerprints := make([]string, len(out))
+	for i := range out {
+		fingerprints[i] = out[i].Fingerprint
+	}
+	links, err := db.GetFrictionIssueLinks(ctx, fingerprints)
+	if err != nil {
+		return nil, "", err
+	}
+	for i := range out {
+		if link, ok := links[out[i].Fingerprint]; ok {
+			out[i].Link = &link
+		}
+	}
+	return out, next, nil
 }

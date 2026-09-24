@@ -174,6 +174,13 @@ type Store interface {
 	ListFrictionDigests(ctx context.Context, from, to string) ([]FrictionDigest, error)
 	ListFrictionPatterns(ctx context.Context, f FrictionPatternFilter) ([]FrictionPattern, string, error)
 
+	// Friction Log Kata linkage and retry state. Only the filing hub writes it.
+	GetFrictionIssueLinks(ctx context.Context, fingerprints []string) (map[string]FrictionIssueLink, error)
+	UpsertFrictionIssueLink(ctx context.Context, link FrictionIssueLink) error
+	DeleteFrictionIssueLink(ctx context.Context, fingerprint string) error
+	DueFrictionFilings(ctx context.Context, now time.Time, limit int) ([]FrictionIssueLink, error)
+	DigestDatesForFingerprints(ctx context.Context, fingerprints []string) ([]string, error)
+
 	// ReadOnly returns true for remote/PG-backed stores.
 	ReadOnly() bool
 }

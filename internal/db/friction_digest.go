@@ -392,6 +392,7 @@ func (db *DB) CopyFrictionStateFrom(sourcePath string) error {
 		{"friction_digests", "date, timezone, rules_version, built_at, revision, sessions_scanned, snapshot_json, summary_json, markdown, markdown_sha256, run_id"},
 		{"friction_digest_sessions", "subject_id, date, subject_kind"},
 		{"friction_patterns", "fingerprint, kind, title, first_seen_date, last_seen_date, occurrence_count, session_count, last_subject_id, last_ordinal"},
+		{"friction_issue_links", frictionLinkCols},
 	}
 	for _, c := range copies {
 		var present int
