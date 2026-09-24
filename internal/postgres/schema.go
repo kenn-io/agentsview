@@ -932,6 +932,9 @@ func EnsureSchema(
 	if err := ensureRawIngestSchemaPG(ctx, db); err != nil {
 		return err
 	}
+	if err := ensureLedgerSchemaPG(ctx, db); err != nil {
+		return err
+	}
 	log.Printf(
 		"pg schema: core DDL step completed in %s",
 		time.Since(step).Round(time.Millisecond),
