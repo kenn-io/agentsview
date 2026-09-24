@@ -38,6 +38,7 @@ const (
 	CannedToolReliabilityReview        CannedKind = "tool_reliability_review"
 	CannedModelCostReview              CannedKind = "model_cost_review"
 	CannedInstructionOpportunityReview CannedKind = "instruction_opportunity_review"
+	CannedFrictionReview               CannedKind = "friction_review"
 )
 
 // ValidCannedKinds is the fixed template set for generated recommendations.
@@ -48,6 +49,7 @@ var ValidCannedKinds = map[CannedKind]bool{
 	CannedToolReliabilityReview:        true,
 	CannedModelCostReview:              true,
 	CannedInstructionOpportunityReview: true,
+	CannedFrictionReview:               true,
 }
 
 type cannedTemplate struct {
@@ -100,6 +102,13 @@ var cannedTemplates = map[CannedKind]cannedTemplate{
 		Focus: "Suggest instruction, skill, or process improvements using only the supplied deterministic aggregates and Coach-derived repeated workflow clusters. " +
 			"Label every suggestion as a draft opportunity, not a confirmed policy or installed skill.",
 	},
+	CannedFrictionReview: {
+		ID:      "friction_review",
+		Version: "2026-09-22",
+		Title:   "Friction Review",
+		Focus: "Summarize one Friction Log digest using only the supplied deterministic digest summary, pattern titles and counts, and P0 alerts. " +
+			"Focus on which friction patterns recur, which tools fail across sessions, and which process, instruction, or environment changes would reduce them.",
+	},
 }
 
 // CannedAggregatePayload is the deterministic input sent to the LLM.
@@ -115,6 +124,9 @@ type CannedAggregatePayload struct {
 	Usage          *CannedUsageSummary         `json:"usage,omitempty"`
 	Coach          *CannedCoachSummary         `json:"coach,omitempty"`
 	EvidenceRefs   []CannedEvidenceRef         `json:"evidence_refs"`
+	// Friction is set only for friction_review. Nil keeps the previous
+	// aggregate hashes for all existing session-signal templates.
+	Friction *CannedFrictionReviewInput `json:"friction,omitempty"`
 }
 
 type CannedSessionFilters struct {
@@ -268,8 +280,32 @@ func CannedTemplate(kind CannedKind) (cannedTemplate, bool) {
 	return t, ok
 }
 
+// cannedModelInput is the JSON the model sees and the aggregate hash covers.
+// Existing templates keep their full payload. friction_review sends only its
+// digest input, excluding empty session aggregates.
+func cannedModelInput(payload CannedAggregatePayload) any {
+	if payload.Kind != CannedFrictionReview {
+		return payload
+	}
+	return struct {
+		Kind         CannedKind                 `json:"kind"`
+		DateFrom     string                     `json:"date_from"`
+		DateTo       string                     `json:"date_to"`
+		Focus        string                     `json:"focus,omitempty"`
+		Friction     *CannedFrictionReviewInput `json:"friction"`
+		EvidenceRefs []CannedEvidenceRef        `json:"evidence_refs"`
+	}{
+		Kind:         payload.Kind,
+		DateFrom:     payload.DateFrom,
+		DateTo:       payload.DateTo,
+		Focus:        payload.Focus,
+		Friction:     payload.Friction,
+		EvidenceRefs: payload.EvidenceRefs,
+	}
+}
+
 func CannedAggregateHash(payload CannedAggregatePayload) (string, error) {
-	data, err := canonicalJSON(payload)
+	data, err := canonicalJSON(cannedModelInput(payload))
 	if err != nil {
 		return "", err
 	}
@@ -345,7 +381,7 @@ func BuildCannedPrompt(
 	if !ok {
 		return "", fmt.Errorf("unknown canned insight kind: %s", payload.Kind)
 	}
-	data, err := canonicalJSON(payload)
+	data, err := canonicalJSON(cannedModelInput(payload))
 	if err != nil {
 		return "", err
 	}
@@ -419,6 +455,14 @@ func writeCannedKindRules(
 			b.WriteString("- Context pressure coverage is present; pressure conclusions must cite the aggregate pressure fields and stay proportional to the covered session count.\n")
 		}
 		b.WriteString("\n")
+	case CannedFrictionReview:
+		b.WriteString("Friction review template rules:\n")
+		b.WriteString("- Friction findings are deterministic heuristics already computed by agentsview. Do not add, remove, re-classify, or dispute findings, and do not assign severities or scores.\n")
+		b.WriteString("- Do not propose filing, closing, reopening, or editing tracker issues; agentsview files issues deterministically.\n")
+		b.WriteString("- Cite friction:pattern:NN refs for pattern-specific recommendations and friction:p0_alerts for tools failing across sessions.\n")
+		b.WriteString("- frustration (user frustration markers) and interruption (user-interrupted turns) are agentsview detector kinds, not jilog kinds; weigh them like corrections and deferrals respectively.\n")
+		b.WriteString("- Frustration pattern titles are withheld because they quote the user; reason about them from kind and counts only, and never guess their wording.\n")
+		b.WriteString("- Prefer recurring patterns (recurring=true) over first-seen ones when their counts are similar.\n\n")
 	default:
 		// Other templates need no context-setup rules.
 	}
@@ -495,7 +539,11 @@ func RenderCannedMarkdown(
 ) string {
 	var b strings.Builder
 	b.WriteString("# AI-generated recommendation\n\n")
-	b.WriteString("> Generated recommendation text. Deterministic health scores and signal rows were not modified.\n\n")
+	if out.Kind == CannedFrictionReview {
+		fmt.Fprintf(&b, "> Model-written summary of the Friction Log digest for %s. Findings, digests, and tracker issues were not modified.\n\n", prov.DateFrom)
+	} else {
+		b.WriteString("> Generated recommendation text. Deterministic health scores and signal rows were not modified.\n\n")
+	}
 	b.WriteString("## Summary\n\n")
 	b.WriteString(out.Summary)
 	b.WriteString("\n\n")
@@ -553,12 +601,23 @@ func NewCannedProvenance(
 		Filters:         payload.Filters.ProvenanceMap(payload.Project),
 		Agent:           agent,
 		Model:           model,
-		SourceVersions: map[string]string{
-			"signals_analytics": "v1",
-			"usage_analytics":   "v1",
-			"coach_insights":    "AI-Engineering-Coach-inspired.v1",
-		},
+		SourceVersions:  cannedSourceVersions(payload),
 	}, nil
+}
+
+func cannedSourceVersions(payload CannedAggregatePayload) map[string]string {
+	if payload.Kind == CannedFrictionReview && payload.Friction != nil {
+		return map[string]string{
+			"friction_rules":           payload.Friction.RulesVersion,
+			"friction_summary_schema":  "3",
+			"friction_digest_revision": strconv.Itoa(payload.Friction.Revision),
+		}
+	}
+	return map[string]string{
+		"signals_analytics": "v1",
+		"usage_analytics":   "v1",
+		"coach_insights":    "AI-Engineering-Coach-inspired.v1",
+	}
 }
 
 func canonicalJSON(v any) ([]byte, error) {
