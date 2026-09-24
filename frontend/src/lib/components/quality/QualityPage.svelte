@@ -365,6 +365,14 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     }
   }
 
+  function openFrictionLog(event: MouseEvent) {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+      return;
+    }
+    event.preventDefault();
+    router.navigate("friction");
+  }
+
   function openEvidenceListSession(event: MouseEvent) {
     if (
       !(event.target instanceof Element) ||
@@ -664,6 +672,18 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
             </Card>
           {/each}
         </div>
+      {/if}
+      {#if sync.serverVersion?.friction_available === true}
+        <Card level="default" padding="none" class="friction-link-card">
+          <article class="friction-link-content">
+            <span class="badge rule">{m.insights_page_rule_based()}</span>
+            <strong>{m.friction_quality_card_title()}</strong>
+            <p>{m.friction_quality_card_body()}</p>
+            <a class="friction-link" href={router.buildHref("friction")} onclick={openFrictionLog}>
+              {m.friction_quality_card_open()}
+            </a>
+          </article>
+        </Card>
       {/if}
     </section>
 
@@ -1566,6 +1586,23 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     display: grid;
     gap: var(--space-3);
     min-width: 0;
+  }
+
+  .friction-link-content {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-5);
+  }
+
+  .friction-link-content p {
+    margin: 0;
+    color: var(--text-secondary);
+  }
+
+  .friction-link {
+    color: var(--accent-blue);
+    align-self: flex-start;
   }
 
   .recommendation-list :global(.recommendation strong) {
