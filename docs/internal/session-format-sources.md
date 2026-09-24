@@ -660,6 +660,14 @@ fixtures retain this field; missing identities remain source-local.
   retain their result text in full archives but do not count as user prompts
   or supply the first-user text used for automation classification.
 
+- **Hosted resume integration reverified 2026-09-24:** The Codex, TraeX, and
+  Augure Code providers leave `SourceSessionID` empty and put the rollout's
+  native ID in the agent-prefixed parser session ID. Hosted resume reads that
+  original ID from captured source membership. The real parser-to-PostgreSQL
+  HTTP regression `TestHostedResumeUsesCapturedProviderIdentity` checks
+  commands for both base and variant URLs. This is an Agentsview integration
+  check; the producer format is unchanged.
+
 ## TraeX (`traex`)
 
 - **Format:** Codex-compatible rollout JSONL under a dated `YYYY/MM/DD` tree,

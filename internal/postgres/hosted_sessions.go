@@ -2,7 +2,6 @@ package postgres
 
 import (
 	"context"
-	"errors"
 	"slices"
 	"strings"
 
@@ -232,22 +231,34 @@ func (h *HostedStore) SearchSession(ctx context.Context, id, query string) ([]in
 }
 
 func (h *HostedStore) GetProviderResumeID(ctx context.Context, id string) (string, error) {
-	session, err := h.GetSessionFull(ctx, id)
-	if err != nil {
-		return "", err
-	}
-	if session == nil {
-		return "", &db.SessionIdentityError{State: "gone"}
-	}
-	if session.SourceSessionID != "" {
-		return session.SourceSessionID, nil
-	}
-	target, err := h.resolve(ctx, id)
-	if err != nil {
-		return "", err
-	}
-	if target.Legacy {
-		return strings.TrimPrefix(target.SessionID, session.Agent+":"), nil
-	}
-	return "", errors.New("provider resume identity is unavailable")
+	return hostedRead(ctx, h, func(_ hostedRevision) (string, error) {
+		target, err := h.resolve(ctx, id)
+		if err != nil {
+			return "", err
+		}
+		if target.SessionID == "" {
+			return "", &db.SessionIdentityError{State: "gone"}
+		}
+		session, err := h.physical.GetSessionFull(ctx, target.SessionID)
+		if err != nil {
+			return "", err
+		}
+		if session == nil {
+			return "", &db.SessionIdentityError{State: "gone"}
+		}
+		if session.SourceSessionID != "" {
+			return session.SourceSessionID, nil
+		}
+		memberID := target.SessionID
+		if !target.Legacy {
+			// Without a source ID, groups are scoped to the original parser member.
+			// Public aliases and projected row IDs are not provider resume IDs.
+			err = h.physical.pg.QueryRowContext(ctx, `SELECT member_id FROM raw_session_branches
+				WHERE group_id=$1 AND session_id=$2 AND active ORDER BY branch_id LIMIT 1`, target.GroupID, target.SessionID).Scan(&memberID)
+			if err != nil {
+				return "", err
+			}
+		}
+		return strings.TrimPrefix(memberID, session.Agent+":"), nil
+	})
 }
