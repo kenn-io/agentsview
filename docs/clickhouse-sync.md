@@ -380,7 +380,12 @@ checks whether the mirror changed by hashing the active parts of its source
 tables before it rescans them. With the default server setting
 `select_from_system_db_requires_grant`, a role granted only
 `SELECT ON <database>.*` can read `system.columns` but not `system.parts`, and
-the Activity report fails with an access error that names the missing grant.
+serve refuses to start with an error naming the missing grant. An administrator
+must grant it to the serve user. For users managed in XML, add
+`<query>GRANT SELECT ON system.parts</query>` to that user's `<grants>` in the
+deployment configuration and run `SYSTEM RELOAD USERS`. SQL `GRANT` cannot
+modify XML-managed users, and schema upgrades cannot grant a permission the
+application account lacks.
 
 When `require_auth` is enabled, a bearer token is generated if needed and
 printed on startup. Pass it via `Authorization: Bearer <token>` on API requests.
