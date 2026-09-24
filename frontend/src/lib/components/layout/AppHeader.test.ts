@@ -230,6 +230,16 @@ describe("AppHeader export actions", () => {
   });
 
   it("renders every route as a primary-nav tab", async () => {
+    sync.serverVersion = {
+      api_version: 1,
+      data_version: 1,
+      insight_generation_available: false,
+      friction_available: true,
+      version: "dev",
+      commit: "unknown",
+      build_date: "",
+      read_only: false,
+    };
     component = mount(AppHeader, { target: document.body });
     await tick();
 
@@ -248,6 +258,7 @@ describe("AppHeader export actions", () => {
       "Recall",
       "Pinned",
       "Quality",
+      "Friction Log",
       "Trash",
       "Recent Edits",
       "Data",
@@ -255,6 +266,27 @@ describe("AppHeader export actions", () => {
       expect(labels).toContain(expected);
     }
     expect(labels).not.toContain("Token Usage");
+  });
+
+  it("hides the Friction Log tab when the server does not build digests", async () => {
+    sync.serverVersion = {
+      api_version: 1,
+      data_version: 1,
+      insight_generation_available: false,
+      friction_available: false,
+      version: "dev",
+      commit: "unknown",
+      build_date: "",
+      read_only: true,
+    };
+    component = mount(AppHeader, { target: document.body });
+    await tick();
+
+    const labels = Array.from(
+      document.querySelectorAll<HTMLElement>(".kit-top-bar__probe .kit-top-bar__tab"),
+    ).map((b) => b.textContent?.trim());
+    expect(labels).toContain("Quality");
+    expect(labels).not.toContain("Friction Log");
   });
 
   it("distinguishes global sync from page refresh controls", async () => {

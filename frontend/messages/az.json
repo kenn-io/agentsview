@@ -2366,5 +2366,183 @@
   "go_to_session_ambiguous": "Bu ID-yə və ya UUID-yə bir neçə sessiya uyğun gəlir. İstədiyiniz sessiyanı mövcud keçiddən açın.",
   "go_to_session_capped": "Bu ID-yə və ya UUID-yə həddindən çox sessiya uyğun gəlir. İstədiyiniz sessiyanı mövcud keçiddən açın.",
   "go_to_session_failed": "Həmin sessiyanı tapmaq mümkün olmadı. Yenidən cəhd edin.",
-  "shortcuts_go_to_session": "Tapma pəncərəsi bağlı olduqda sessiyaya keç"
+  "shortcuts_go_to_session": "Tapma pəncərəsi bağlı olduqda sessiyaya keç",
+  "nav_friction": "Sürtünmə jurnalı",
+  "friction_page_help_intro": "Hər tapıntı saxlanmış sessiyalardan hesablanan deterministik evristikadır, mütləq həqiqət deyil. Nəyin sürtünmə sayıldığına heç bir model qərar vermir.",
+  "friction_page_help_docs": "Sürtünmə jurnalı necə işləyir",
+  "friction_page_refresh": "Sürtünmə jurnalını yenilə",
+  "friction_date_label": "İcmal tarixi",
+  "friction_date_previous": "Əvvəlki icmal",
+  "friction_date_next": "Növbəti icmal",
+  "friction_date_no_match": "Uyğun tarix yoxdur",
+  "friction_build_now": "İndi yarat",
+  "friction_build_title": "Hələ icmalı olmayan hər tamamlanmış gün üçün icmal yaradır",
+  "friction_build_done": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} icmal yaradıldı",
+        "countPlural=other": "{countNumber} icmal yaradıldı"
+      }
+    }
+  ],
+  "friction_build_nothing": "Hər tamamlanmış günün artıq icmalı var.",
+  "friction_build_failed": "Yaratma alınmadı: {error}",
+  "friction_empty_title": "Hələ sürtünmə icmalı yoxdur",
+  "friction_empty_hint": "İcmal hər yerli gün başa çatdıqda avtomatik yaradılır, saatlıq iş isə buraxılmış günləri tamamlayır. Çatışmayan günləri dərhal yaratmaq üçün İndi yarat düyməsindən istifadə edin.",
+  "friction_load_error": "Sürtünmə jurnalı yüklənmədi",
+  "friction_retry": "Yenidən cəhd et",
+  "friction_digest_heading": "Sürtünmə jurnalı — {date}",
+  "friction_digest_missing": "{date} üçün icmal yoxdur.",
+  "friction_digest_meta": "{timezone} · düzəliş {revision}",
+  "friction_scanned": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} sessiya yoxlanıldı",
+        "countPlural=other": "{countNumber} sessiya yoxlanıldı"
+      }
+    }
+  ],
+  "friction_headline_title": "Əsas məqamlar",
+  "friction_p0_title": "P0 xəbərdarlıqları",
+  "friction_p0_none": "P0 xəbərdarlığı yoxdur.",
+  "friction_p0_item": [
+    {
+      "declarations": [
+        "input count",
+        "input tool",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{tool} {countNumber} fərqli sessiyada uğursuz oldu",
+        "countPlural=other": "{tool} {countNumber} fərqli sessiyada uğursuz oldu"
+      }
+    }
+  ],
+  "friction_patterns_new": "Yeni nümunələr",
+  "friction_patterns_recurring": "Təkrarlanan nümunələr",
+  "friction_patterns_none": "Bu icmalda nümunə yoxdur.",
+  "friction_pattern_occurrences": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} dəfə",
+        "countPlural=other": "{countNumber} dəfə"
+      }
+    }
+  ],
+  "friction_pattern_sessions": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} sessiya",
+        "countPlural=other": "{countNumber} sessiya"
+      }
+    }
+  ],
+  "friction_pattern_first_seen": "İlk dəfə {date} tarixində görüldü",
+  "friction_section_corrections": "Düzəlişlər",
+  "friction_section_errors": "Xətalar",
+  "friction_section_workarounds": "Müvəqqəti həllər",
+  "friction_section_deferrals": "Təxirə salınanlar",
+  "friction_section_patterns": "Nümunələr",
+  "friction_none_corrections": "Düzəliş aşkarlanmadı.",
+  "friction_none_errors": "Xəta aşkarlanmadı.",
+  "friction_none_workarounds": "Müvəqqəti həll aşkarlanmadı.",
+  "friction_none_deferrals": "Təxirə salınan iş aşkarlanmadı.",
+  "friction_none_patterns": "Nümunə aşkarlanmadı.",
+  "friction_section_frustration": "Narazılıq",
+  "friction_section_interruptions": "Kəsintilər",
+  "friction_none_frustration": "Narazılıq aşkarlanmadı.",
+  "friction_none_interruptions": "Kəsinti aşkarlanmadı.",
+  "friction_interruption_count": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} kəsinti",
+        "countPlural=other": "{countNumber} kəsinti"
+      }
+    }
+  ],
+  "friction_kind_correction": "Düzəliş",
+  "friction_kind_error": "Xəta",
+  "friction_kind_workaround": "Müvəqqəti həll",
+  "friction_kind_deferral": "Təxirə salınma",
+  "friction_kind_pattern": "Nümunə",
+  "friction_kind_frustration": "Narazılıq",
+  "friction_kind_interruption": "Kəsinti",
+  "friction_disabled_title": "Bu serverdə sürtünmə jurnalı söndürülüb",
+  "friction_disabled_hint": "Sürtünmə jurnalı standart olaraq işləyir. Bu server icmal yaratmır, çünki config.toml faylında [friction] enabled = false təyin edilib və ya arxiv yalnız oxunandır.",
+  "friction_section_personas": "Personalar",
+  "friction_section_spend": "Xərc",
+  "friction_spend_total": "Cəmi",
+  "friction_spend_no_cost": "Xərc məlumatı yoxdur",
+  "friction_spend_coverage": [
+    {
+      "declarations": [
+        "input count",
+        "input withCost",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "İstifadə məlumatı olan {countNumber} sessiyadan {withCost}",
+        "countPlural=other": "İstifadə məlumatı olan {countNumber} sessiyadan {withCost}"
+      }
+    }
+  ],
+  "friction_spend_tokens": "{input} giriş / {output} çıxış tokeni",
+  "friction_spend_by_role": "Rola görə",
+  "friction_spend_by_model": "Modelə görə",
+  "friction_archive_title": "Arxiv xərci",
+  "friction_archive_yesterday": "Dünən ({date})",
+  "friction_archive_no_rows": "Arxiv sətri yoxdur",
+  "friction_archive_week": "Son 7 gün ({from} – {to})",
+  "friction_markdown_title": "Markdown",
+  "friction_markdown_show": "Markdown-u göstər",
+  "friction_markdown_copy": "Markdown-u kopyala",
+  "friction_markdown_copied": "Markdown kopyalandı",
+  "friction_markdown_download": "Markdown-u endir",
+  "friction_markdown_loading": "Markdown yüklənir…",
+  "friction_markdown_error": "Markdown icmalı yüklənmədi.",
+  "friction_open_session": "{session} sessiyasını {ordinal} nömrəli mesajda aç",
+  "friction_open_session_start": "{session} sessiyasını aç",
+  "friction_quality_card_title": "Sürtünmə jurnalı",
+  "friction_quality_card_body": "Sessiyalarınızda tapılan düzəlişlərin, alət xətalarının, müvəqqəti həllərin, təxirə salınanların və təkrarlanan nümunələrin gündəlik icmalları.",
+  "friction_quality_card_open": "Sürtünmə jurnalını aç",
+  "friction_session_title": "Sürtünmə tapıntıları",
+  "friction_session_loading": "Sürtünmə tapıntıları yüklənir…",
+  "friction_session_error": "Sürtünmə tapıntıları əlçatan deyil.",
+  "friction_session_empty": "Bu sessiyada sürtünmə tapıntısı yoxdur.",
+  "friction_session_jump": "Mesaj {ordinal}",
+  "friction_session_jump_title": "{ordinal} nömrəli mesaja keç"
 }

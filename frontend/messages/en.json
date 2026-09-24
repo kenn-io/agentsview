@@ -2364,5 +2364,183 @@
   "go_to_session_ambiguous": "Multiple sessions match that ID or UUID. Open the desired session from an existing link.",
   "go_to_session_capped": "Too many sessions match that ID or UUID. Open the desired session from an existing link.",
   "go_to_session_failed": "Could not look up that session. Try again.",
-  "shortcuts_go_to_session": "Go to session when find is closed"
+  "shortcuts_go_to_session": "Go to session when find is closed",
+  "nav_friction": "Friction Log",
+  "friction_page_help_intro": "Every finding is a deterministic heuristic computed from stored sessions, not ground truth. No model decides what counts as friction.",
+  "friction_page_help_docs": "How the Friction Log works",
+  "friction_page_refresh": "Refresh Friction Log",
+  "friction_date_label": "Digest date",
+  "friction_date_previous": "Previous digest",
+  "friction_date_next": "Next digest",
+  "friction_date_no_match": "No matching dates",
+  "friction_build_now": "Build now",
+  "friction_build_title": "Build a digest for every complete day that does not have one yet",
+  "friction_build_done": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "Built {countNumber} digest",
+        "countPlural=other": "Built {countNumber} digests"
+      }
+    }
+  ],
+  "friction_build_nothing": "Every complete day already has a digest.",
+  "friction_build_failed": "Build failed: {error}",
+  "friction_empty_title": "No friction digests yet",
+  "friction_empty_hint": "A digest is built automatically once each local day is complete, and the hourly job catches up on any day that was missed. Use Build now to build missing days right away.",
+  "friction_load_error": "Could not load the Friction Log",
+  "friction_retry": "Retry",
+  "friction_digest_heading": "Friction Log — {date}",
+  "friction_digest_missing": "No digest exists for {date}.",
+  "friction_digest_meta": "{timezone} · revision {revision}",
+  "friction_scanned": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} session scanned",
+        "countPlural=other": "{countNumber} sessions scanned"
+      }
+    }
+  ],
+  "friction_headline_title": "Headline",
+  "friction_p0_title": "P0 alerts",
+  "friction_p0_none": "No P0 alerts.",
+  "friction_p0_item": [
+    {
+      "declarations": [
+        "input count",
+        "input tool",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{tool} failed in {countNumber} distinct session",
+        "countPlural=other": "{tool} failed in {countNumber} distinct sessions"
+      }
+    }
+  ],
+  "friction_patterns_new": "New patterns",
+  "friction_patterns_recurring": "Recurring patterns",
+  "friction_patterns_none": "No patterns in this digest.",
+  "friction_pattern_occurrences": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} occurrence",
+        "countPlural=other": "{countNumber} occurrences"
+      }
+    }
+  ],
+  "friction_pattern_sessions": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} session",
+        "countPlural=other": "{countNumber} sessions"
+      }
+    }
+  ],
+  "friction_pattern_first_seen": "First seen {date}",
+  "friction_section_corrections": "Corrections",
+  "friction_section_errors": "Errors",
+  "friction_section_workarounds": "Workarounds",
+  "friction_section_deferrals": "Deferrals",
+  "friction_section_patterns": "Patterns",
+  "friction_none_corrections": "No corrections detected.",
+  "friction_none_errors": "No errors detected.",
+  "friction_none_workarounds": "No workarounds detected.",
+  "friction_none_deferrals": "No deferrals detected.",
+  "friction_none_patterns": "No patterns detected.",
+  "friction_section_frustration": "Frustration",
+  "friction_section_interruptions": "Interruptions",
+  "friction_none_frustration": "No frustration detected.",
+  "friction_none_interruptions": "No interruptions detected.",
+  "friction_interruption_count": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} interruption",
+        "countPlural=other": "{countNumber} interruptions"
+      }
+    }
+  ],
+  "friction_kind_correction": "Correction",
+  "friction_kind_error": "Error",
+  "friction_kind_workaround": "Workaround",
+  "friction_kind_deferral": "Deferral",
+  "friction_kind_pattern": "Pattern",
+  "friction_kind_frustration": "Frustration",
+  "friction_kind_interruption": "Interruption",
+  "friction_disabled_title": "Friction Log is off on this server",
+  "friction_disabled_hint": "Friction Log runs by default. This server does not build digests, either because [friction] enabled = false is set in config.toml or because the archive is read-only.",
+  "friction_section_personas": "Personas",
+  "friction_section_spend": "Spend",
+  "friction_spend_total": "Total",
+  "friction_spend_no_cost": "No cost data",
+  "friction_spend_coverage": [
+    {
+      "declarations": [
+        "input count",
+        "input withCost",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{withCost} of {countNumber} session with usage data",
+        "countPlural=other": "{withCost} of {countNumber} sessions with usage data"
+      }
+    }
+  ],
+  "friction_spend_tokens": "{input} in / {output} out tokens",
+  "friction_spend_by_role": "By role",
+  "friction_spend_by_model": "By model",
+  "friction_archive_title": "Archive spend",
+  "friction_archive_yesterday": "Yesterday ({date})",
+  "friction_archive_no_rows": "No archive rows",
+  "friction_archive_week": "Trailing 7 days ({from} – {to})",
+  "friction_markdown_title": "Markdown",
+  "friction_markdown_show": "Show Markdown",
+  "friction_markdown_copy": "Copy Markdown",
+  "friction_markdown_copied": "Copied Markdown",
+  "friction_markdown_download": "Download Markdown",
+  "friction_markdown_loading": "Loading Markdown…",
+  "friction_markdown_error": "Could not load the Markdown digest.",
+  "friction_open_session": "Open {session} at message {ordinal}",
+  "friction_open_session_start": "Open {session}",
+  "friction_quality_card_title": "Friction Log",
+  "friction_quality_card_body": "Daily digests of corrections, tool errors, workarounds, deferrals and recurring patterns found in your sessions.",
+  "friction_quality_card_open": "Open the Friction Log",
+  "friction_session_title": "Friction findings",
+  "friction_session_loading": "Loading friction findings…",
+  "friction_session_error": "Friction findings are unavailable.",
+  "friction_session_empty": "No friction findings in this session.",
+  "friction_session_jump": "Message {ordinal}",
+  "friction_session_jump_title": "Jump to message {ordinal}"
 }

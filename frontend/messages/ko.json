@@ -2281,5 +2281,164 @@
   "go_to_session_ambiguous": "여러 세션 ID 또는 UUID가 일치합니다. 기존 링크에서 원하는 세션을 여세요.",
   "go_to_session_capped": "일치하는 세션 ID 또는 UUID가 너무 많습니다. 기존 링크에서 원하는 세션을 여세요.",
   "go_to_session_failed": "세션을 조회하지 못했습니다. 다시 시도하세요.",
-  "shortcuts_go_to_session": "찾기를 닫았을 때 세션으로 이동"
+  "shortcuts_go_to_session": "찾기를 닫았을 때 세션으로 이동",
+  "nav_friction": "마찰 로그",
+  "friction_page_help_intro": "모든 발견 항목은 저장된 세션에서 계산한 결정적 휴리스틱이며 정답이 아닙니다. 무엇을 마찰로 볼지 모델이 결정하지 않습니다.",
+  "friction_page_help_docs": "마찰 로그 작동 방식",
+  "friction_page_refresh": "마찰 로그 새로 고침",
+  "friction_date_label": "다이제스트 날짜",
+  "friction_date_previous": "이전 다이제스트",
+  "friction_date_next": "다음 다이제스트",
+  "friction_date_no_match": "일치하는 날짜가 없습니다",
+  "friction_build_now": "지금 생성",
+  "friction_build_title": "아직 다이제스트가 없는 완료된 모든 날의 다이제스트를 생성합니다",
+  "friction_build_done": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "다이제스트 {countNumber}개를 생성했습니다" }
+    }
+  ],
+  "friction_build_nothing": "완료된 모든 날에 이미 다이제스트가 있습니다.",
+  "friction_build_failed": "생성 실패: {error}",
+  "friction_empty_title": "아직 마찰 다이제스트가 없습니다",
+  "friction_empty_hint": "다이제스트는 각 로컬 날짜가 끝나면 자동으로 생성되며, 누락된 날은 매시간 작업이 채웁니다. 누락된 날을 바로 만들려면 지금 생성을 사용하세요.",
+  "friction_load_error": "마찰 로그를 불러오지 못했습니다",
+  "friction_retry": "다시 시도",
+  "friction_digest_heading": "마찰 로그 — {date}",
+  "friction_digest_missing": "{date} 다이제스트가 없습니다.",
+  "friction_digest_meta": "{timezone} · 리비전 {revision}",
+  "friction_scanned": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "세션 {countNumber}개 검사" }
+    }
+  ],
+  "friction_headline_title": "주요 내용",
+  "friction_p0_title": "P0 경고",
+  "friction_p0_none": "P0 경고가 없습니다.",
+  "friction_p0_item": [
+    {
+      "declarations": [
+        "input count",
+        "input tool",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "{tool}이(가) 서로 다른 세션 {countNumber}개에서 실패했습니다"
+      }
+    }
+  ],
+  "friction_patterns_new": "새 패턴",
+  "friction_patterns_recurring": "반복 패턴",
+  "friction_patterns_none": "이 다이제스트에 패턴이 없습니다.",
+  "friction_pattern_occurrences": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "{countNumber}회 발생" }
+    }
+  ],
+  "friction_pattern_sessions": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "세션 {countNumber}개" }
+    }
+  ],
+  "friction_pattern_first_seen": "처음 발견 {date}",
+  "friction_section_corrections": "수정 지시",
+  "friction_section_errors": "오류",
+  "friction_section_workarounds": "임시 해결책",
+  "friction_section_deferrals": "미룬 작업",
+  "friction_section_patterns": "패턴",
+  "friction_none_corrections": "감지된 수정 지시가 없습니다.",
+  "friction_none_errors": "감지된 오류가 없습니다.",
+  "friction_none_workarounds": "감지된 임시 해결책이 없습니다.",
+  "friction_none_deferrals": "감지된 미룬 작업이 없습니다.",
+  "friction_none_patterns": "감지된 패턴이 없습니다.",
+  "friction_section_frustration": "좌절",
+  "friction_section_interruptions": "중단",
+  "friction_none_frustration": "감지된 좌절이 없습니다.",
+  "friction_none_interruptions": "감지된 중단이 없습니다.",
+  "friction_interruption_count": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "중단 {countNumber}회" }
+    }
+  ],
+  "friction_kind_correction": "수정 지시",
+  "friction_kind_error": "오류",
+  "friction_kind_workaround": "임시 해결책",
+  "friction_kind_deferral": "미룬 작업",
+  "friction_kind_pattern": "패턴",
+  "friction_kind_frustration": "좌절",
+  "friction_kind_interruption": "중단",
+  "friction_disabled_title": "이 서버에서는 마찰 로그가 꺼져 있습니다",
+  "friction_disabled_hint": "마찰 로그는 기본적으로 켜져 있습니다. config.toml에 [friction] enabled = false가 설정되어 있거나 아카이브가 읽기 전용이어서 이 서버는 다이제스트를 생성하지 않습니다.",
+  "friction_section_personas": "페르소나",
+  "friction_section_spend": "지출",
+  "friction_spend_total": "합계",
+  "friction_spend_no_cost": "비용 데이터 없음",
+  "friction_spend_coverage": [
+    {
+      "declarations": [
+        "input count",
+        "input withCost",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "사용 데이터가 있는 세션 {countNumber}개 중 {withCost}개" }
+    }
+  ],
+  "friction_spend_tokens": "입력 {input} / 출력 {output} 토큰",
+  "friction_spend_by_role": "역할별",
+  "friction_spend_by_model": "모델별",
+  "friction_archive_title": "아카이브 지출",
+  "friction_archive_yesterday": "어제 ({date})",
+  "friction_archive_no_rows": "아카이브 행 없음",
+  "friction_archive_week": "최근 7일 ({from} – {to})",
+  "friction_markdown_title": "Markdown",
+  "friction_markdown_show": "Markdown 표시",
+  "friction_markdown_copy": "Markdown 복사",
+  "friction_markdown_copied": "Markdown을 복사했습니다",
+  "friction_markdown_download": "Markdown 다운로드",
+  "friction_markdown_loading": "Markdown 불러오는 중…",
+  "friction_markdown_error": "Markdown 다이제스트를 불러오지 못했습니다.",
+  "friction_open_session": "메시지 {ordinal}에서 {session} 열기",
+  "friction_open_session_start": "{session} 열기",
+  "friction_quality_card_title": "마찰 로그",
+  "friction_quality_card_body": "세션에서 발견된 수정 지시, 도구 오류, 임시 해결책, 미룬 작업, 반복 패턴의 일일 다이제스트입니다.",
+  "friction_quality_card_open": "마찰 로그 열기",
+  "friction_session_title": "마찰 발견 항목",
+  "friction_session_loading": "마찰 발견 항목 불러오는 중…",
+  "friction_session_error": "마찰 발견 항목을 사용할 수 없습니다.",
+  "friction_session_empty": "이 세션에는 마찰 발견 항목이 없습니다.",
+  "friction_session_jump": "메시지 {ordinal}",
+  "friction_session_jump_title": "메시지 {ordinal}(으)로 이동"
 }

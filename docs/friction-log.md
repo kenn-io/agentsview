@@ -18,6 +18,29 @@ on one.
 The review logic is adapted from [jilog](https://github.com/Joi/jilog)'s session
 review (MIT).
 
+## The Friction Log page
+
+Open **Friction Log** from the header or navigate to `/friction`. The page opens
+the latest digest. Use the arrows or date picker to move between days. The
+selected date stays in the URL as `?date=YYYY-MM-DD`, so a link opens the same
+digest.
+
+![Friction Log page](/docs/assets/generated/screenshots/friction-log.png)
+
+The page shows P0 alerts and new or recurring patterns first, then sections for
+each kind of finding. Session findings link to the session and, when available,
+the exact message. Interruptions are grouped by session with a count.
+Diagnostics recorded by another tool have no session link. Personas and spend
+appear when the digest contains them. **Show Markdown** displays the stored
+digest text and offers copy and download actions.
+
+**Build now** builds missing complete days when this server is allowed to build
+digests. It never builds today. If digest building is disabled and no digests
+exist, the page explains why. Read-only servers can still show stored digests
+but do not offer **Build now**. The session signal panel also lists findings
+for the open session, including findings from messages added after its daily
+digest was built.
+
 ## What it detects
 
 | Kind         | What it means                                                                                                                                             |

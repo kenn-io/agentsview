@@ -4,27 +4,63 @@ import { mount, tick, unmount } from "svelte";
 import { analytics } from "../../stores/analytics.svelte.js";
 import { insights } from "../../stores/insights.svelte.js";
 import { router } from "../../stores/router.svelte.js";
+import { sync } from "../../stores/sync.svelte.js";
 
 // @ts-ignore
 import QualityPage from "./QualityPage.svelte";
 
 describe("QualityPage", () => {
   let component: ReturnType<typeof mount> | undefined;
+  let insightLoadCalls = 0;
 
   beforeEach(() => {
     router.route = "quality";
     router.params = {};
     vi.spyOn(analytics, "fetchSignalsForQuality").mockResolvedValue();
-    vi.spyOn(insights, "load").mockResolvedValue();
+    insightLoadCalls = 0;
+    vi.spyOn(insights, "load").mockImplementation(async () => {
+      insightLoadCalls += 1;
+    });
   });
 
-  afterEach(() => {
-    if (component) unmount(component);
+  afterEach(async () => {
+    if (component) await unmount(component);
     component = undefined;
     document.body.innerHTML = "";
     router.route = "sessions";
     router.params = {};
+    sync.serverVersion = null;
     vi.restoreAllMocks();
+  });
+
+  it("links to the Friction Log from recommendations when available", async () => {
+    sync.serverVersion = {
+      api_version: 1,
+      data_version: 1,
+      insight_generation_available: false,
+      friction_available: true,
+      version: "dev",
+      commit: "unknown",
+      build_date: "",
+      read_only: false,
+    };
+    component = mount(QualityPage, { target: document.body });
+    await tick();
+
+    const link = document.querySelector<HTMLAnchorElement>("a.friction-link");
+    expect(link).not.toBeNull();
+    expect(link!.getAttribute("href")).toBe("/friction");
+    expect(document.body.textContent).toContain("Daily digests of corrections");
+
+    link!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+    expect(router.route).toBe("friction");
+  });
+
+  it("omits the Friction Log card when the server does not build digests", async () => {
+    sync.serverVersion = null;
+    component = mount(QualityPage, { target: document.body });
+    await tick();
+    expect(document.querySelector("a.friction-link")).toBeNull();
   });
 
   it("renders deterministic quality analysis without loading generated reports", async () => {
@@ -33,7 +69,7 @@ describe("QualityPage", () => {
 
     expect(document.body.textContent).toContain("Deterministic Recommendations");
     expect(document.body.textContent).toContain("Quality Patterns");
-    expect(insights.load).not.toHaveBeenCalled();
+    expect(insightLoadCalls).toBe(0);
   });
 
   it("shows refresh activity while a filtered quality query is running", async () => {
