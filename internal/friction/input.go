@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"go.kenn.io/agentsview/internal/nanoclaw"
 	"go.kenn.io/agentsview/internal/serdejson"
 	"go.kenn.io/agentsview/internal/signals"
 )
@@ -55,6 +56,10 @@ type BuildOptions struct {
 	// PressureMax is the session's peak context pressure as the
 	// quality signal pass computed it (sessions.context_pressure_max).
 	PressureMax *float64
+	// UnwrapNanoClawEnvelope applies nanoclaw.UnwrapEnvelope to user text,
+	// as jilog's NanoClaw reader does (nanoclaw.rs:292-313), so correction
+	// lengths are measured on what the person wrote.
+	UnwrapNanoClawEnvelope bool
 }
 
 // SessionInput is one subject mapped into the stream the detectors
@@ -171,10 +176,20 @@ func BuildSessionInput(subjectID string, dims Dims, isSubAgent bool, msgs []RawM
 		case m.IsSystem || m.SourceSubtype == "tool_result":
 			// System and tool-result rows do not enter the correction stream.
 		case m.Role == "user":
-			in.Messages = append(in.Messages, Message{
-				Ordinal: m.Ordinal, Role: m.Role, Text: m.Content, Timestamp: m.Timestamp,
-			})
+			// Every real user row is user activity for iteration_runaway,
+			// envelope or not (nanoclaw.rs:457-464).
 			in.Patterns.UserOrdinals = append(in.Patterns.UserOrdinals, m.Ordinal)
+			text := m.Content
+			if opts.UnwrapNanoClawEnvelope {
+				text = nanoclaw.UnwrapEnvelope(text)
+				if text == "" {
+					// nanoclaw.rs:304-307: no text, no user message.
+					break
+				}
+			}
+			in.Messages = append(in.Messages, Message{
+				Ordinal: m.Ordinal, Role: "user", Text: text, Timestamp: m.Timestamp,
+			})
 		case m.Role == "assistant":
 			in.Messages = append(in.Messages, Message{
 				Ordinal: m.Ordinal, Role: m.Role,
