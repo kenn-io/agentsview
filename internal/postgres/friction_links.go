@@ -140,7 +140,10 @@ func (s *Store) DigestDatesForFingerprints(ctx context.Context, fingerprints []s
 		FROM friction_digest_sessions ds
 		JOIN friction_findings f ON f.session_id = ds.subject_id
 		WHERE f.fingerprint = ANY($1)
-		ORDER BY ds.date`, fingerprints)
+		UNION
+		SELECT first_seen_date FROM friction_patterns
+		WHERE fingerprint = ANY($1)
+		ORDER BY 1`, fingerprints)
 	if err != nil {
 		return nil, fmt.Errorf("querying digest dates for fingerprints: %w", err)
 	}

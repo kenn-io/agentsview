@@ -11,6 +11,9 @@ The latest published release is
 
 **New features**
 
+- The Friction Log filing hub now records filed, linked, and reopened Kata
+  issues in the event ledger. Diagnostic errors can also be filed and retried
+  from the outbox when Kata returns.
 - Friction Log builds now record activity in the event ledger when it is
   enabled. Tools can opt in to include their own operational failures in the
   daily digest through `[friction.diagnostics]`.

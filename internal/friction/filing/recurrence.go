@@ -7,6 +7,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/friction"
+	"go.kenn.io/agentsview/internal/friction/frictionevents"
 	"go.kenn.io/agentsview/internal/kata"
 )
 
@@ -35,9 +36,16 @@ func (f *Filer) recur(ctx context.Context, sig friction.Signal, run RunContext, 
 	if is.WebURL != "" {
 		row.WebURL = is.WebURL
 	}
-	if _, err := f.Kata.Reopen(ctx, is.UID); err != nil {
+	changed, err := f.Kata.Reopen(ctx, is.UID)
+	if err != nil {
 		failed, ferr := f.fail(ctx, row, err)
 		return failed, outcomeNone, ferr
+	}
+	if changed {
+		f.appendLedger(ctx, frictionevents.IssueReopenedEvent(f.LedgerSource, frictionevents.IssueReopened{
+			Fingerprint: row.Fingerprint, Title: f.redact(sig.Title()), IssueUID: is.UID, QualifiedID: is.QualifiedID,
+			Date: run.Date, RunID: frictionevents.ParseRunID(run.RunID),
+		}, f.now()), run.InlineLedger)
 	}
 	url := ""
 	if sig.SubjectKind != friction.SubjectDiagnostic {

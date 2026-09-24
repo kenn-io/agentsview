@@ -86,6 +86,8 @@ approved mapping where code has not joined this branch yet.
 - Friction digest builds and pattern transitions emit deterministic ledger
   events. This implements the review-to-ledger intent in jilog's
   `docs/architecture.html:290,366`, which its code did not implement.
+- On the filing hub, issue creation, manual linking, and recurrence reopening
+  also emit ledger events. A failed ledger append does not fail filing.
 
 ## Deliberate differences
 

@@ -41,22 +41,25 @@ func annotatableFingerprints(sigs []friction.Signal) []string {
 	return out
 }
 
-func (r *Runner) filingRun(date string) filing.RunContext {
-	return filing.RunContext{Date: date, PublicURL: r.PublicURL, DigestURL: filing.DigestURL(r.PublicURL, date)}
+func (r *Runner) filingRun(date, runID string) filing.RunContext {
+	return filing.RunContext{
+		Date: date, PublicURL: r.PublicURL, DigestURL: filing.DigestURL(r.PublicURL, date),
+		RunID: runID, InlineLedger: true,
+	}
 }
 
 // fileAndLink is spec §8.3 step 8 for a non-dry-run build. With Kata not
 // ready it only queues pending outbox rows (auto_file) and renders no links.
 // Kata problems are logged and never fail the build (§20).
 func (r *Runner) fileAndLink(ctx context.Context, date string, snap *friction.DigestSnapshot, meta *friction.SummaryMeta,
-	usage map[string]friction.SessionUsage,
+	usage map[string]friction.SessionUsage, runID string,
 ) friction.RenderLinks {
 	if r.Filer == nil {
 		return friction.RenderLinks{}
 	}
 	if !r.Filer.Ready(ctx) {
 		if r.AutoFile {
-			if _, err := r.Filer.FileAll(ctx, snap.Signals, r.filingRun(date)); err != nil {
+			if _, err := r.Filer.FileAll(ctx, snap.Signals, r.filingRun(date, runID)); err != nil {
 				log.Printf("friction review: %s: queueing Kata filings: %v", date, err)
 			}
 		}
@@ -77,7 +80,7 @@ func (r *Runner) fileAndLink(ctx context.Context, date string, snap *friction.Di
 	}
 	snap.RecurrenceCosts = friction.RecurrenceCostAnnotations(snap.Signals, open, costs)
 	if r.AutoFile {
-		rep, err := r.Filer.FileAll(ctx, snap.Signals, r.filingRun(date))
+		rep, err := r.Filer.FileAll(ctx, snap.Signals, r.filingRun(date, runID))
 		if err != nil {
 			log.Printf("friction review: %s: filing to Kata: %v", date, err)
 		}

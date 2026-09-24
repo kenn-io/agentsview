@@ -55,7 +55,10 @@ func (pgReplica) serveOptions(
 	frictionExcl := serialExclusive()
 	var frictionFiler *filing.Filer
 	frictionRunner, waitFriction := startFrictionReview(ctx, appCfg, pgStore, frictionExcl, func(r *review.Runner) {
-		frictionFiler = newFrictionFiler(frictionFilerDeps{Cfg: &appCfg, Store: pgStore, Conn: kataConn, Runner: r, IsPGServe: true})
+		frictionFiler = newFrictionFiler(frictionFilerDeps{
+			Cfg: &appCfg, Store: pgStore, Conn: kataConn, Runner: r,
+			IsPGServe: true, LedgerAPIExclusive: frictionExcl,
+		})
 		attachFiler(r, frictionFiler)
 	})
 	if frictionRunner != nil {

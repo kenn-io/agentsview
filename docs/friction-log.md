@@ -107,8 +107,11 @@ The review keeps one line per identity, including when the same diagnostic is
 sent by more than one source or on another day. A rebuild keeps identities
 already recorded for that date. A producer that also needs exact event dedupe
 can set the event id with `ledger.DeterministicEventID(source, identity)` when
-using the ledger append API. Automatic issue filing for diagnostics arrives
-with the filing integration.
+using the ledger append API. On a filing hub with `[friction.kata] auto_file =
+true`, diagnostic errors use the same outbox as session findings. Creates use
+Kata's `force_new` option so a similar issue title does not block a distinct
+diagnostic identity.
+
 ## Filing to Kata
 
 When `[kata]` is enabled, the AgentsView hub can file Friction Log patterns to

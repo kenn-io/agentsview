@@ -25,8 +25,10 @@ const (
 // RunContext carries the digest date and URLs into bodies. ForceNew is the
 // explicit "file a new issue anyway" request (friction file --force-new).
 type RunContext struct {
-	Date, DigestURL, PublicURL string
-	ForceNew                   bool
+	Date, DigestURL, PublicURL, RunID string
+	ForceNew                          bool
+	// InlineLedger is set only while the caller already holds the review lock.
+	InlineLedger bool
 }
 
 // IdempotencyKey is jilog's slug (trackers/kata.rs idempotency_key): every

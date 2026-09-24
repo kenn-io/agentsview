@@ -58,14 +58,18 @@ events supplied by tools:
 | `friction.digest.built`       | A dated digest was built or rebuilt          |
 | `friction.pattern.first_seen` | A pattern first appeared in a digest         |
 | `friction.pattern.recurred`   | A pattern appeared again after its first day |
+| `friction.issue.filed`        | The filing hub linked a pattern to a Kata issue |
+| `friction.issue.linked`       | A person linked a pattern to a Kata issue |
+| `friction.issue.reopened`     | The hub reopened a `done` issue after recurrence |
 | `diagnostic`                  | A tool reported an operational failure      |
 
 The first three use deterministic event ids, so a retry or rebuild does not
 duplicate the same fact. A rebuilt digest has a new revision and its own build
 event. `diagnostic` events are supplied by tools and can feed the daily
 [Friction Log](/docs/friction-log/#diagnostics-from-your-own-tools) when
-`[friction.diagnostics]` is enabled. Issue filing events arrive with the filing
-integration and appear only on its hub.
+`[friction.diagnostics]` is enabled. Issue events appear only on the filing hub
+when both Kata filing and the ledger are enabled. Filed events use deterministic
+ids; a digest build and the issue events it files share a correlation id.
 
 ## Commands
 

@@ -47,6 +47,12 @@ func TestFrictionDigestLookups(t *testing.T) {
 		assert.Equal(t, 2, p.OccurrenceCount)
 	})
 
+	t.Run("diagnostic_fingerprint_resolves_its_digest", func(t *testing.T) {
+		got, err := d.DigestDatesForFingerprints(t.Context(), []string{"fl1:aa", "fl1:missing"})
+		require.NoError(t, err)
+		assert.Equal(t, []string{"2026-09-13"}, got)
+	})
+
 	t.Run("chunks_large_inputs", func(t *testing.T) {
 		ids := make([]string, 1200)
 		for i := range ids {

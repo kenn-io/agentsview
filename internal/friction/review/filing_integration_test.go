@@ -2,6 +2,7 @@
 package review_test
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -13,10 +14,28 @@ import (
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/friction"
 	"go.kenn.io/agentsview/internal/friction/filing"
+	"go.kenn.io/agentsview/internal/friction/frictionevents"
 	"go.kenn.io/agentsview/internal/friction/review"
 	"go.kenn.io/agentsview/internal/kata"
 	"go.kenn.io/agentsview/internal/kata/katatest"
+	"go.kenn.io/agentsview/internal/ledger"
 )
+
+type filingEventSink struct{ events []ledger.Event }
+
+func (s *filingEventSink) Append(_ context.Context, _ string, events []ledger.Event) error {
+	s.events = append(s.events, events...)
+	return nil
+}
+
+func (s *filingEventSink) event(kind string) *ledger.Event {
+	for i := range s.events {
+		if s.events[i].Payload.(map[string]any)["kind"] == kind {
+			return &s.events[i]
+		}
+	}
+	return nil
+}
 
 func seedErrorSession(t *testing.T, d *db.DB, id, ended string, sigs ...friction.Signal) {
 	t.Helper()
@@ -116,6 +135,46 @@ func TestBuildDateFilesInlineWhenReady(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, dry.Written)
 	assert.Len(t, fake.RequestsMatching("POST", "/issues"), 1, "dry run files nothing")
+}
+
+func TestBuildDateFilingAndDigestShareRunID(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	sig := friction.Signal{
+		Kind: friction.KindError, SubjectKind: friction.SubjectSession,
+		SubjectID: "claude:s1", Detector: "error", ToolName: "Bash", Text: "boom", Ordinal: new(2),
+	}
+	seedErrorSession(t, d, "claude:s1", "2026-09-20T15:00:00Z", sig)
+	fake := katatest.New(t)
+	now := time.Date(2026, 9, 21, 3, 0, 0, 0, time.UTC)
+	inline, api := &filingEventSink{}, &filingEventSink{}
+	runner := &review.Runner{
+		Store: d, Loc: time.UTC, Now: func() time.Time { return now },
+		BackfillDays: 7, AutoFile: true, Ledger: inline, LedgerSource: "av-hub",
+	}
+	runner.Filer = &filing.Filer{
+		Kata: kata.NewConn(kata.Config{
+			Enabled: true, Hub: true, Endpoint: fake.Endpoint(),
+			Project: katatest.DefaultProjectName, Actor: "agentsview",
+		}),
+		Store: d, Now: func() time.Time { return now }, Policy: filing.Policy{Kinds: filing.DefaultKinds()},
+		Snapshot: runner.Snapshot, Rerender: runner.Rerender,
+		Ledger: api, InlineLedger: inline, LedgerSource: "av-hub",
+	}
+
+	_, err := runner.BuildDate(t.Context(), "2026-09-20", review.BuildOptions{})
+	require.NoError(t, err)
+	assert.Empty(t, api.events, "a digest build already holds the review lock")
+	filed := inline.event(frictionevents.KindIssueFiled)
+	built := inline.event(frictionevents.KindDigestBuilt)
+	require.NotNil(t, filed)
+	require.NotNil(t, built)
+	require.NotNil(t, filed.CorrelationID)
+	require.NotNil(t, built.CorrelationID)
+	assert.Equal(t, built.CorrelationID, filed.CorrelationID)
+	digest, err := d.GetFrictionDigest(t.Context(), "2026-09-20")
+	require.NoError(t, err)
+	require.NotNil(t, digest)
+	assert.Equal(t, digest.RunID, filed.CorrelationID.String())
 }
 
 func TestCopyFrictionStateFromCopiesLinks(t *testing.T) {

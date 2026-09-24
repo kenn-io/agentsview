@@ -343,16 +343,16 @@ func (r *Runner) BuildDate(ctx context.Context, date string, opts BuildOptions) 
 		return Report{Date: date, Snapshot: snap, Meta: meta}, nil
 	}
 
-	links := r.fileAndLink(ctx, date, &snap, &meta, usage)
+	runID, err := uuid.NewV7()
+	if err != nil {
+		return Report{}, fmt.Errorf("friction run id: %w", err)
+	}
+	links := r.fileAndLink(ctx, date, &snap, &meta, usage, runID.String())
 	md := friction.RenderMarkdown(snap, links)
 	summary := friction.RenderSummaryJSON(snap, meta)
 	snapJSON, err := EncodeSnapshot(snap)
 	if err != nil {
 		return Report{}, err
-	}
-	runID, err := uuid.NewV7()
-	if err != nil {
-		return Report{}, fmt.Errorf("friction run id: %w", err)
 	}
 	revision := 1
 	counted := map[string]bool{}

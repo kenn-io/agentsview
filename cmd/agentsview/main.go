@@ -510,7 +510,9 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	kataConn := kata.NewConn(kata.ConfigFrom(cfg.Kata, filing.EligibleHost(false, cfg.HasPGPushTarget())))
 	var frictionFiler *filing.Filer
 	frictionRunner, waitFriction := startFrictionReview(ctx, cfg, database, frictionExcl, func(r *review.Runner) {
-		frictionFiler = newFrictionFiler(frictionFilerDeps{Cfg: &cfg, Store: database, Conn: kataConn, Runner: r})
+		frictionFiler = newFrictionFiler(frictionFilerDeps{
+			Cfg: &cfg, Store: database, Conn: kataConn, Runner: r, LedgerAPIExclusive: frictionExcl,
+		})
 		attachFiler(r, frictionFiler)
 	})
 	defer func() {

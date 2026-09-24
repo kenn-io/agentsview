@@ -14,7 +14,10 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/friction"
+	"go.kenn.io/agentsview/internal/friction/frictionevents"
 	"go.kenn.io/agentsview/internal/kata"
+	"go.kenn.io/agentsview/internal/ledger"
+	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 const (
@@ -67,6 +70,23 @@ type Filer struct {
 	PublicURL string
 	Snapshot  func(ctx context.Context, date string) (friction.DigestSnapshot, error)
 	Rerender  func(ctx context.Context, date string) error
+	// Ledger takes the review lock for manual API calls. InlineLedger is used
+	// by digest builds and outbox drains, which already hold that lock.
+	Ledger, InlineLedger ledger.Sink
+	LedgerSource         string
+}
+
+func (f *Filer) appendLedger(ctx context.Context, e ledger.Event, inline bool) {
+	sink := f.Ledger
+	if inline && f.InlineLedger != nil {
+		sink = f.InlineLedger
+	}
+	if sink == nil {
+		return
+	}
+	if err := sink.Append(ctx, "", []ledger.Event{e}); err != nil {
+		log.Printf("friction filing: ledger append failed: %s", stringutil.SafeTruncate(f.redact(err.Error()), 512))
+	}
 }
 
 func (f *Filer) now() time.Time {
@@ -113,12 +133,27 @@ func (f *Filer) File(ctx context.Context, sig friction.Signal, run RunContext) (
 	return link, err
 }
 
-func (f *Filer) file(ctx context.Context, sig friction.Signal, run RunContext) (db.FrictionIssueLink, outcome, error) {
+func (f *Filer) file(ctx context.Context, sig friction.Signal, run RunContext) (l db.FrictionIssueLink, oc outcome, err error) {
 	fp := sig.Fingerprint()
 	row, has, err := f.existing(ctx, fp)
 	if err != nil {
 		return db.FrictionIssueLink{}, outcomeNone, err
 	}
+	wasLinked := has && row.State == db.FrictionLinkStateLinked
+	defer func() {
+		if err != nil || wasLinked || oc == outcomeNone || l.State != db.FrictionLinkStateLinked {
+			return
+		}
+		switch l.LinkSource {
+		case db.FrictionLinkSourceCreated, db.FrictionLinkSourceFound, db.FrictionLinkSourceIdempotentReuse:
+		default:
+			return
+		}
+		f.appendLedger(ctx, frictionevents.IssueFiledEvent(f.LedgerSource, frictionevents.IssueFiled{
+			Fingerprint: fp, Title: f.redact(sig.Title()), IssueUID: l.IssueUID, QualifiedID: l.QualifiedID,
+			KataInstanceUID: l.KataInstanceUID, LinkSource: l.LinkSource, RunID: frictionevents.ParseRunID(run.RunID),
+		}, f.now()), run.InlineLedger)
+	}()
 	row.Fingerprint = fp
 	if has && !run.ForceNew {
 		switch {
@@ -512,6 +547,9 @@ func (f *Filer) Link(ctx context.Context, fingerprint, issueRef string) (db.Fric
 	if err != nil {
 		return link, err
 	}
+	f.appendLedger(ctx, frictionevents.IssueLinkedEvent(f.LedgerSource, frictionevents.IssueLinked{
+		Fingerprint: fingerprint, Title: f.redact(is.Title), IssueUID: link.IssueUID,
+	}, f.now()), false)
 	f.rerenderFingerprints(ctx, []string{fingerprint})
 	return link, nil
 }
@@ -600,6 +638,7 @@ func (f *Filer) Drain(ctx context.Context) (Report, error) {
 			log.Printf("friction: drain could not load signal %s: %v", row.Fingerprint, err)
 			continue
 		}
+		run.InlineLedger = true
 		link, oc, ferr := f.file(ctx, sig, run)
 		f.tally(&rep, sig, link, oc, ferr)
 		if link.State == db.FrictionLinkStateLinked {

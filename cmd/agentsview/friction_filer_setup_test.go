@@ -17,6 +17,7 @@ import (
 	"go.kenn.io/agentsview/internal/friction"
 	"go.kenn.io/agentsview/internal/friction/review"
 	"go.kenn.io/agentsview/internal/kata"
+	"go.kenn.io/agentsview/internal/ledger"
 )
 
 func TestNewFrictionFilerHubOnly(t *testing.T) {
@@ -60,6 +61,32 @@ func TestAttachFilerKeepsNilInterface(t *testing.T) {
 	r := &review.Runner{}
 	attachFiler(r, nil)
 	require.Nil(t, r.Filer, "a typed-nil *filing.Filer must never enter the interface")
+}
+
+func TestNewFrictionFilerLedgerSinks(t *testing.T) {
+	store := dbtest.OpenTestDB(t)
+	cfg := &config.Config{InstallationID: "0123456789abcdef0123456789abcdef"}
+	cfg.Kata = config.KataConfig{Enabled: true, Project: "agentsview"}
+	cfg.Friction.Kata = config.DefaultFrictionKataConfig()
+	cfg.Ledger = config.LedgerConfig{Enabled: true, DefaultZone: "default", Zones: []config.LedgerZoneConfig{{ID: "default"}}}
+	source := cfg.Ledger.EffectiveSource(cfg.InstallationID)
+	excl := &tryLockExclusive{}
+	runner := &review.Runner{Ledger: ledger.NewZoneWriters(store, source, cfg.Ledger.ZoneIDs(), runInline), LedgerSource: source}
+	f := newFrictionFiler(frictionFilerDeps{
+		Cfg: cfg, Store: store, Runner: runner, LedgerAPIExclusive: excl.run,
+	})
+	require.NotNil(t, f)
+	require.NotNil(t, f.Ledger)
+	require.NotNil(t, f.InlineLedger)
+	assert.Equal(t, source, f.LedgerSource)
+	event := ledger.Event{Timestamp: time.Now().UTC(), EventClass: ledger.ClassHealth, PayloadTier: ledger.TierStructured}
+	require.NoError(t, excl.run(func() error { return f.InlineLedger.Append(t.Context(), "", []ledger.Event{event}) }))
+	require.NoError(t, f.Ledger.Append(t.Context(), "", []ledger.Event{event}))
+	err := excl.run(func() error { return f.Ledger.Append(t.Context(), "", []ledger.Event{event}) })
+	require.ErrorIs(t, err, errReentered, "the API sink takes the lock itself")
+	status, err := store.LedgerStatus(t.Context(), "default")
+	require.NoError(t, err)
+	assert.Equal(t, 2, status.Segments)
 }
 
 func TestFrictionKinds(t *testing.T) {

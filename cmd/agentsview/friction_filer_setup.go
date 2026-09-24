@@ -9,15 +9,22 @@ import (
 	"go.kenn.io/agentsview/internal/friction/filing"
 	"go.kenn.io/agentsview/internal/friction/review"
 	"go.kenn.io/agentsview/internal/kata"
+	"go.kenn.io/agentsview/internal/ledger"
 )
 
+type frictionFilerStore interface {
+	filing.LinkStore
+	ledger.WriterStore
+}
+
 type frictionFilerDeps struct {
-	Cfg       *config.Config
-	Store     filing.LinkStore
-	Conn      *kata.Conn
-	Runner    *review.Runner
-	IsPGServe bool
-	Now       func() time.Time
+	Cfg                *config.Config
+	Store              frictionFilerStore
+	Conn               *kata.Conn
+	Runner             *review.Runner
+	IsPGServe          bool
+	Now                func() time.Time
+	LedgerAPIExclusive func(func() error) error
 }
 
 func frictionKinds(names []string) []friction.Kind {
@@ -55,6 +62,11 @@ func newFrictionFiler(d frictionFilerDeps) *filing.Filer {
 	}
 	if d.Runner != nil {
 		f.Snapshot, f.Rerender = d.Runner.Snapshot, d.Runner.Rerender
+		if d.Runner.Ledger != nil {
+			f.InlineLedger = d.Runner.Ledger
+			f.LedgerSource = d.Runner.LedgerSource
+			f.Ledger = ledger.NewZoneWriters(d.Store, f.LedgerSource, d.Cfg.Ledger.ZoneIDs(), d.LedgerAPIExclusive)
+		}
 	}
 	log.Printf("friction: Kata filing enabled on this hub (pg serve=%v, auto_file=%v)", d.IsPGServe, pk.AutoFile)
 	return f

@@ -229,8 +229,8 @@ func (db *DB) DueFrictionFilings(ctx context.Context, now time.Time, limit int) 
 	return out, rows.Err()
 }
 
-// DigestDatesForFingerprints returns the digest dates whose session subjects
-// produced any of the fingerprints, ascending.
+// DigestDatesForFingerprints returns digest dates for session findings and
+// diagnostic patterns, ascending. A caller still checks each snapshot.
 func (db *DB) DigestDatesForFingerprints(ctx context.Context, fingerprints []string) ([]string, error) {
 	if len(fingerprints) == 0 {
 		return nil, nil
@@ -240,7 +240,10 @@ func (db *DB) DigestDatesForFingerprints(ctx context.Context, fingerprints []str
 		FROM friction_digest_sessions ds
 		JOIN friction_findings f ON f.session_id = ds.subject_id
 		WHERE f.fingerprint IN (`+placeholders(len(fingerprints))+`)
-		ORDER BY ds.date`, stringArgs(fingerprints)...)
+		UNION
+		SELECT first_seen_date FROM friction_patterns
+		WHERE fingerprint IN (`+placeholders(len(fingerprints))+`)
+		ORDER BY 1`, append(stringArgs(fingerprints), stringArgs(fingerprints)...)...)
 	if err != nil {
 		return nil, fmt.Errorf("querying digest dates for fingerprints: %w", err)
 	}
