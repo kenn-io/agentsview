@@ -247,12 +247,18 @@ snapshot, reads use raw rows. When the stored price copies no longer match the
 price records, for example after the records were cleared, reads keep the
 prepared rows and price them through the per-request join.
 
-**Kept usage reads.** Serve keeps the rows of recent usage reads in memory, one
-slot per read, versioned by the active parts of every table. A repeat request
-between pushes reads no rows from ClickHouse; it still runs the metadata query
-that checks the parts. Reads filtered by `active`, `stale`, or `unclean`
+**Kept reads.** Serve keeps the results of recent reads in memory so a repeat
+request between pushes reads no rows from ClickHouse; it still runs the small
+metadata queries that check whether its inputs changed. Each kept read has one
+slot per selection (filter, range, and similar inputs), and its key names the
+rows it read: the prepared usage stamp and the parts of the small tables it
+joins, the candidate sessions and their push versions, or the parts of the
+tables it scanned. A push that changes those replaces the slot; a push that does
+not leaves it in place. Usage reads filtered by `active`, `stale`, or `unclean`
 termination compare session times with the current time, so their rows are never
-kept.
+kept. Kept reads include usage rows, analytics session listings, Activity
+pairing inputs per session version, candidate listings, and the whole report of
+an ended range.
 
 ## Tradeoffs
 

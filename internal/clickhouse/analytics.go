@@ -86,7 +86,7 @@ func (s *Store) analyticsSessionsFiltered(
 	}
 	// Every analytics panel on a page lists the same sessions; keep the
 	// rows per parts and predicate so one page reads them once.
-	fingerprint, err := s.partsFingerprint(ctx)
+	fingerprint, err := s.tablePartsFingerprint(ctx, []string{"sessions", "messages"})
 	if err != nil {
 		return nil, err
 	}

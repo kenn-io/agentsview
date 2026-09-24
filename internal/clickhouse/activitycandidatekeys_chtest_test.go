@@ -45,7 +45,7 @@ func TestActivityCandidateKeysKeepLatestEventVersion(t *testing.T) {
 		db.AnalyticsFilter{Project: "terminal-key-fixture", Timezone: "UTC"},
 		"2026-01-10T00:00:00Z", "2026-01-11T00:00:00Z",
 	)
-	_, ids, err := store.activityReportSessions(ctx, where, args)
+	_, ids, _, err := store.activityReportSessions(ctx, where, args)
 	require.NoError(t, err)
 	slices.Sort(ids)
 	require.Equal(t, []string{"active", "newer"}, ids)
