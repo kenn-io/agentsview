@@ -30,6 +30,7 @@ func TestCatchUp(t *testing.T) {
 		{
 			name: "builds_exactly_the_missing_complete_dates_within_backfill",
 			seed: func(t *testing.T, d *db.DB, _ *review.Runner) {
+				t.Helper()
 				seed(t, d, subject{id: "old", ended: "2026-09-01T10:00:00Z"},
 					subject{id: "today", ended: "2026-09-22T09:00:00Z"})
 			},
@@ -39,6 +40,7 @@ func TestCatchUp(t *testing.T) {
 		{
 			name: "starts_after_latest_digest",
 			seed: func(t *testing.T, d *db.DB, r *review.Runner) {
+				t.Helper()
 				seed(t, d, subject{id: "old", ended: "2026-09-01T10:00:00Z"})
 				_, err := r.BuildDate(t.Context(), "2026-09-18", review.BuildOptions{})
 				require.NoError(t, err)
@@ -49,6 +51,7 @@ func TestCatchUp(t *testing.T) {
 		{
 			name: "starts_at_earliest_session",
 			seed: func(t *testing.T, d *db.DB, _ *review.Runner) {
+				t.Helper()
 				seed(t, d, subject{id: "new", ended: "2026-09-20T10:00:00Z"})
 			},
 			backfill: 7,
@@ -63,6 +66,7 @@ func TestCatchUp(t *testing.T) {
 		{
 			name: "never_today",
 			seed: func(t *testing.T, d *db.DB, _ *review.Runner) {
+				t.Helper()
 				seed(t, d, subject{id: "today", ended: "2026-09-22T09:00:00Z"})
 			},
 			backfill: 7,
@@ -71,6 +75,7 @@ func TestCatchUp(t *testing.T) {
 		{
 			name: "backfill_of_one_builds_yesterday_only",
 			seed: func(t *testing.T, d *db.DB, _ *review.Runner) {
+				t.Helper()
 				seed(t, d, subject{id: "old", ended: "2026-09-01T10:00:00Z"})
 			},
 			backfill: 1,

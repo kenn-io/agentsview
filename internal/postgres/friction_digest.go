@@ -145,45 +145,11 @@ func (s *Store) FrictionFindingsForSubjects(
 	out := []db.FrictionFinding{}
 	for start := 0; start < len(subjectIDs); start += 500 {
 		chunk := subjectIDs[start:min(start+500, len(subjectIDs))]
-		pb := &paramBuilder{}
-		in := pgInPlaceholders(chunk, pb)
-		rows, err := s.pg.QueryContext(ctx, `
-			SELECT session_id, kind, detector, message_ordinal, call_index,
-				tool_name, label, text, evidence, title, fingerprint,
-				occurred_at, seq, rules_version
-			FROM friction_findings
-			WHERE session_id IN `+in, pb.args...)
+		findings, err := s.frictionFindingsChunk(ctx, chunk)
 		if err != nil {
-			return nil, fmt.Errorf("loading friction findings: %w", err)
-		}
-		for rows.Next() {
-			var (
-				f         db.FrictionFinding
-				ord, call sql.NullInt64
-				occurred  sql.NullTime
-			)
-			if err := rows.Scan(&f.SessionID, &f.Kind, &f.Detector, &ord, &call,
-				&f.ToolName, &f.Label, &f.Text, &f.Evidence, &f.Title, &f.Fingerprint,
-				&occurred, &f.Seq, &f.RulesVersion); err != nil {
-				rows.Close()
-				return nil, fmt.Errorf("scanning friction finding: %w", err)
-			}
-			if ord.Valid {
-				f.MessageOrdinal = new(int(ord.Int64))
-			}
-			if call.Valid {
-				f.CallIndex = new(int(call.Int64))
-			}
-			if occurred.Valid {
-				f.OccurredAt = new(occurred.Time.UTC())
-			}
-			out = append(out, f)
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
 			return nil, err
 		}
-		rows.Close()
+		out = append(out, findings...)
 	}
 	// PG has no rowid tiebreak; seq is unique within a session's findings.
 	// Sort in Go with byte order so collation never differs from SQLite.
@@ -193,6 +159,50 @@ func (s *Store) FrictionFindingsForSubjects(
 		}
 		return out[i].Seq < out[j].Seq
 	})
+	return out, nil
+}
+
+func (s *Store) frictionFindingsChunk(
+	ctx context.Context, subjectIDs []string,
+) ([]db.FrictionFinding, error) {
+	pb := &paramBuilder{}
+	in := pgInPlaceholders(subjectIDs, pb)
+	rows, err := s.pg.QueryContext(ctx, `
+		SELECT session_id, kind, detector, message_ordinal, call_index,
+			tool_name, label, text, evidence, title, fingerprint,
+			occurred_at, seq, rules_version
+		FROM friction_findings
+		WHERE session_id IN `+in, pb.args...)
+	if err != nil {
+		return nil, fmt.Errorf("loading friction findings: %w", err)
+	}
+	defer rows.Close()
+	out := []db.FrictionFinding{}
+	for rows.Next() {
+		var (
+			f         db.FrictionFinding
+			ord, call sql.NullInt64
+			occurred  sql.NullTime
+		)
+		if err := rows.Scan(&f.SessionID, &f.Kind, &f.Detector, &ord, &call,
+			&f.ToolName, &f.Label, &f.Text, &f.Evidence, &f.Title, &f.Fingerprint,
+			&occurred, &f.Seq, &f.RulesVersion); err != nil {
+			return nil, fmt.Errorf("scanning friction finding: %w", err)
+		}
+		if ord.Valid {
+			f.MessageOrdinal = new(int(ord.Int64))
+		}
+		if call.Valid {
+			f.CallIndex = new(int(call.Int64))
+		}
+		if occurred.Valid {
+			f.OccurredAt = new(occurred.Time.UTC())
+		}
+		out = append(out, f)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 

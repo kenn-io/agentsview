@@ -119,6 +119,7 @@ func TestBuildDate(t *testing.T) {
 		run  func(t *testing.T, d *db.DB, r *review.Runner)
 	}{
 		{name: "run_review_writes_digest_when_file_absent_even_with_no_sessions", run: func(t *testing.T, d *db.DB, r *review.Runner) {
+			t.Helper()
 			rep, err := r.BuildDate(t.Context(), day, review.BuildOptions{})
 			require.NoError(t, err)
 			assert.True(t, rep.Written)
@@ -132,6 +133,7 @@ func TestBuildDate(t *testing.T) {
 			assert.NotEmpty(t, got.RunID)
 		}},
 		{name: "run_review_preserves_existing_digest_when_nothing_scanned", run: func(t *testing.T, d *db.DB, r *review.Runner) {
+			t.Helper()
 			seeded := db.FrictionDigest{
 				Date: day, Timezone: "UTC", RulesVersion: friction.RulesVersion,
 				BuiltAt: reviewNow, Revision: 1, SnapshotJSON: []byte(`{"date":"` + day + `"}`),
@@ -146,6 +148,7 @@ func TestBuildDate(t *testing.T) {
 			assert.Equal(t, "SEEDED-FROM-EARLIER-RUN\n", string(stored(t, d, day).Markdown))
 		}},
 		{name: "processed_sessions_persist_across_load", run: func(t *testing.T, d *db.DB, r *review.Runner) {
+			t.Helper()
 			seed(t, d, subject{id: "s1", ended: "2026-09-15T12:00:00Z", findings: []db.FrictionFinding{correction("s1", "no, use the other file please")}})
 			rep, err := r.BuildDate(t.Context(), day, review.BuildOptions{})
 			require.NoError(t, err)
@@ -157,6 +160,7 @@ func TestBuildDate(t *testing.T) {
 			assert.Equal(t, 0, next.Snapshot.SessionsScanned, "a subject enters one digest only")
 		}},
 		{name: "rebuild_keeps_membership", run: func(t *testing.T, d *db.DB, r *review.Runner) {
+			t.Helper()
 			seed(t, d, subject{id: "a", ended: "2026-09-15T10:00:00Z", findings: []db.FrictionFinding{correction("a", "no, use the other file please")}})
 			_, err := r.BuildDate(t.Context(), day, review.BuildOptions{})
 			require.NoError(t, err)
@@ -182,6 +186,7 @@ func TestBuildDate(t *testing.T) {
 			assert.Equal(t, 1, occ)
 		}},
 		{name: "rebuild_does_not_count_new_findings_on_old_member", run: func(t *testing.T, d *db.DB, r *review.Runner) {
+			t.Helper()
 			seed(t, d, subject{id: "quiet", ended: "2026-09-15T10:00:00Z"})
 			_, err := r.BuildDate(t.Context(), day, review.BuildOptions{})
 			require.NoError(t, err)
@@ -195,6 +200,7 @@ func TestBuildDate(t *testing.T) {
 			assert.Equal(t, 0, rowCount(t, d, "friction_patterns"), "old member's new findings never change recurrence")
 		}},
 		{name: "dry_run_writes_nothing", run: func(t *testing.T, d *db.DB, r *review.Runner) {
+			t.Helper()
 			seed(t, d, subject{id: "s1", ended: "2026-09-15T12:00:00Z", findings: []db.FrictionFinding{correction("s1", "no, use the other file please")}})
 			rep, err := r.BuildDate(t.Context(), day, review.BuildOptions{DryRun: true})
 			require.NoError(t, err)
@@ -204,11 +210,12 @@ func TestBuildDate(t *testing.T) {
 			assert.Nil(t, stored(t, d, day))
 			assert.Equal(t, 0, rowCount(t, d, "friction_digest_sessions"))
 			assert.Equal(t, 0, rowCount(t, d, "friction_patterns"))
-			real, err := r.BuildDate(t.Context(), day, review.BuildOptions{})
+			built, err := r.BuildDate(t.Context(), day, review.BuildOptions{})
 			require.NoError(t, err)
-			assert.Equal(t, 1, real.Snapshot.SessionsScanned, "dry run did not consume the session")
+			assert.Equal(t, 1, built.Snapshot.SessionsScanned, "dry run did not consume the session")
 		}},
 		{name: "run_review_stamps_dims_and_renders_personas_section", run: func(t *testing.T, d *db.DB, r *review.Runner) {
+			t.Helper()
 			seed(t, d,
 				subject{
 					id: "sess-helper", ended: "2026-09-15T01:00:00Z",
@@ -250,6 +257,7 @@ func TestBuildDate(t *testing.T) {
 			assert.Contains(t, body, "- `agent:claude` `machine:machine-a` `sess-coding` — ")
 		}},
 		{name: "personas_rollup_carries_tokens_and_optional_cost", run: func(t *testing.T, d *db.DB, r *review.Runner) {
+			t.Helper()
 			seed(t, d,
 				subject{
 					id: "sess-cell", ended: "2026-09-15T01:00:00Z",
@@ -281,6 +289,7 @@ func TestBuildDate(t *testing.T) {
 			assert.Contains(t, body, "800 in / 40 out tokens, $1.500000")
 		}},
 		{name: "stats_only_session_counts_toward_spend_and_personas", run: func(t *testing.T, d *db.DB, r *review.Runner) {
+			t.Helper()
 			seed(t, d, subject{
 				id: "sess-counters", ended: "2026-09-15T01:00:00Z",
 				dims: &db.FrictionSessionDims{Persona: "meter", DimsSource: "nanoclaw"}, usage: tokens(500, 25, ""),
@@ -296,6 +305,7 @@ func TestBuildDate(t *testing.T) {
 			assert.Equal(t, uint64(500), m.InputTokens)
 		}},
 		{name: "agent_and_machine_tags_are_stamped_and_rendered", run: func(t *testing.T, d *db.DB, r *review.Runner) {
+			t.Helper()
 			const id = "a37ffc87-2799-4a09-830b-a92fde71d768"
 			seed(t, d, subject{
 				id: id, ended: "2026-09-15T01:00:00Z", machine: "laptop-01",
@@ -310,6 +320,7 @@ func TestBuildDate(t *testing.T) {
 				"- `agent:claude` `machine:laptop-01` `"+id+"` — 'no, use the other path'")
 		}},
 		{name: "subagent_cost_lands_under_subagent_role", run: func(t *testing.T, d *db.DB, r *review.Runner) {
+			t.Helper()
 			seed(t, d,
 				subject{id: "root", ended: "2026-09-15T01:00:00Z", usage: tokens(10, 1, "3.1")},
 				subject{id: "child", ended: "2026-09-15T02:00:00Z", parent: "root", usage: tokens(10, 1, "1.1")})
@@ -320,6 +331,7 @@ func TestBuildDate(t *testing.T) {
 			assert.Equal(t, "1.100000", rep.Snapshot.Spend.RoleCosts["subagent"].String())
 		}},
 		{name: "p0_alert_needs_three_top_level_subjects", run: func(t *testing.T, d *db.DB, r *review.Runner) {
+			t.Helper()
 			errFinding := func(sid string) db.FrictionFinding {
 				return finding(sid, friction.KindError, "error", "exit 2: boom", "", "Bash", 2, 0)
 			}
@@ -332,6 +344,7 @@ func TestBuildDate(t *testing.T) {
 			assert.Empty(t, rep.Snapshot.P0Alerts, "sub-agent subjects never count toward P0")
 		}},
 		{name: "review_excluded_sessions_are_skipped_and_not_recorded", run: func(t *testing.T, d *db.DB, r *review.Runner) {
+			t.Helper()
 			seed(t, d, subject{
 				id: "x", ended: "2026-09-15T01:00:00Z",
 				dims: &db.FrictionSessionDims{ReviewExcluded: true, DimsSource: "nanoclaw"},
@@ -342,6 +355,7 @@ func TestBuildDate(t *testing.T) {
 			assert.Equal(t, 0, rowCount(t, d, "friction_digest_sessions"))
 		}},
 		{name: "stale_rules_defer_then_skip_after_grace", run: func(t *testing.T, d *db.DB, r *review.Runner) {
+			t.Helper()
 			seed(t, d, subject{id: "stale", ended: "2026-09-15T01:00:00Z", rules: "friction-old"})
 			r.Now = func() time.Time { return time.Date(2026, 9, 16, 10, 0, 0, 0, time.UTC) }
 			_, err := r.BuildDate(t.Context(), day, review.BuildOptions{})
@@ -355,6 +369,7 @@ func TestBuildDate(t *testing.T) {
 			assert.Equal(t, 0, rowCount(t, d, "friction_digest_sessions"))
 		}},
 		{name: "today_is_refused_unless_dry_run", run: func(t *testing.T, d *db.DB, r *review.Runner) {
+			t.Helper()
 			_, err := r.BuildDate(t.Context(), "2026-09-22", review.BuildOptions{})
 			require.ErrorIs(t, err, review.ErrIncompleteDate)
 			_, err = r.BuildDate(t.Context(), "2026-09-22", review.BuildOptions{DryRun: true})
@@ -363,6 +378,7 @@ func TestBuildDate(t *testing.T) {
 			require.Error(t, err)
 		}},
 		{name: "digest_path_uses_public_url", run: func(t *testing.T, d *db.DB, r *review.Runner) {
+			t.Helper()
 			r.PublicURL = "https://av.example/"
 			rep, err := r.BuildDate(t.Context(), day, review.BuildOptions{})
 			require.NoError(t, err)
@@ -372,6 +388,7 @@ func TestBuildDate(t *testing.T) {
 			assert.Equal(t, "friction:"+day, review.DigestURL("", day))
 		}},
 		{name: "frustration_and_interruption_kinds_flow_through", run: func(t *testing.T, d *db.DB, r *review.Runner) {
+			t.Helper()
 			seed(t, d, subject{id: "s1", ended: "2026-09-15T12:00:00Z", findings: []db.FrictionFinding{
 				correction("s1", "no, use the other file please"),
 				finding("s1", friction.KindFrustration, "frustration", "this is still broken", "", "", 3, 1),
@@ -398,6 +415,7 @@ func TestBuildDate(t *testing.T) {
 			assert.Equal(t, 3, rowCount(t, d, "friction_patterns"), "every kind feeds local recurrence")
 		}},
 		{name: "diagnostics_come_last_are_recorded_and_never_raise_p0", run: func(t *testing.T, d *db.DB, r *review.Runner) {
+			t.Helper()
 			seed(t, d, subject{id: "s1", ended: "2026-09-15T12:00:00Z", findings: []db.FrictionFinding{correction("s1", "no, use the other file please")}})
 			diag := func(id string) friction.Signal {
 				return friction.Signal{
@@ -431,12 +449,14 @@ func TestBuildDate(t *testing.T) {
 			assert.Len(t, rebuilt.Snapshot.Signals, 4, "rebuild keeps diagnostic members")
 		}},
 		{name: "diagnostic_source_error_fails_the_build", run: func(t *testing.T, d *db.DB, r *review.Runner) {
+			t.Helper()
 			r.Diagnostics = fakeDiagnostics{err: assert.AnError}
 			_, err := r.BuildDate(t.Context(), day, review.BuildOptions{})
 			require.ErrorIs(t, err, assert.AnError)
 			assert.Nil(t, stored(t, d, day), "no partial digest")
 		}},
 		{name: "concurrent_builder_loses_cleanly", run: func(t *testing.T, d *db.DB, r *review.Runner) {
+			t.Helper()
 			seed(t, d, subject{id: "s1", ended: "2026-09-15T12:00:00Z", findings: []db.FrictionFinding{correction("s1", "no, use the other file please")}})
 			racing := &raceStore{Store: d, beforeSave: func() {
 				require.NoError(t, d.SaveFrictionDigest(t.Context(), db.FrictionDigest{
@@ -454,6 +474,7 @@ func TestBuildDate(t *testing.T) {
 			assert.Equal(t, 0, rowCount(t, d, "friction_patterns"), "losing save rolled back")
 		}},
 		{name: "archive_spend_failure_hides_block", run: func(t *testing.T, d *db.DB, r *review.Runner) {
+			t.Helper()
 			r.Store = &raceStore{Store: d, archiveErr: assert.AnError}
 			rep, err := r.BuildDate(t.Context(), day, review.BuildOptions{})
 			require.NoError(t, err)

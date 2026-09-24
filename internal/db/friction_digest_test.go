@@ -55,6 +55,7 @@ func TestFrictionSubjectsForDate(t *testing.T) {
 			name: "ended_at decides the date",
 			loc:  time.UTC, date: "2026-09-15",
 			seed: func(t *testing.T, d *DB) {
+				t.Helper()
 				seedFrictionSession(t, d, "a", "2026-09-14T23:00:00Z", "2026-09-15T00:30:00Z", nil)
 				seedFrictionSession(t, d, "b", "2026-09-15T10:00:00Z", "2026-09-16T00:00:00Z", nil)
 			},
@@ -64,6 +65,7 @@ func TestFrictionSubjectsForDate(t *testing.T) {
 			name: "started_at_only",
 			loc:  time.UTC, date: "2026-09-15",
 			seed: func(t *testing.T, d *DB) {
+				t.Helper()
 				seedFrictionSession(t, d, "open", "2026-09-15T08:00:00Z", "", nil)
 			},
 			want: []string{"open"},
@@ -72,6 +74,7 @@ func TestFrictionSubjectsForDate(t *testing.T) {
 			name: "timestamp with offset crosses UTC date",
 			loc:  time.UTC, date: "2026-09-15",
 			seed: func(t *testing.T, d *DB) {
+				t.Helper()
 				seedFrictionSession(t, d, "offset", "", "2026-09-16T08:30:00+09:00", nil)
 			},
 			want: []string{"offset"},
@@ -80,6 +83,7 @@ func TestFrictionSubjectsForDate(t *testing.T) {
 			name: "dst_short_day_new_york",
 			loc:  ny, date: "2026-03-08",
 			seed: func(t *testing.T, d *DB) {
+				t.Helper()
 				// 23:30 EDT on 2026-03-08 is 03:30Z on 2026-03-09.
 				seedFrictionSession(t, d, "late", "", "2026-03-09T03:30:00Z", nil)
 				// 00:30 EDT on 2026-03-09 is 04:30Z: next local date.
@@ -91,6 +95,7 @@ func TestFrictionSubjectsForDate(t *testing.T) {
 			name: "digested subjects excluded",
 			loc:  time.UTC, date: "2026-09-15",
 			seed: func(t *testing.T, d *DB) {
+				t.Helper()
 				seedFrictionSession(t, d, "done", "", "2026-09-15T01:00:00Z", nil)
 				seedFrictionSession(t, d, "fresh", "", "2026-09-15T02:00:00Z", nil)
 				require.NoError(t, d.SaveFrictionDigest(t.Context(), testDigest("2026-09-15", 1),
@@ -102,6 +107,7 @@ func TestFrictionSubjectsForDate(t *testing.T) {
 			name: "rebuild keeps membership even after activity moved",
 			loc:  time.UTC, date: "2026-09-15", includeDigested: true,
 			seed: func(t *testing.T, d *DB) {
+				t.Helper()
 				seedFrictionSession(t, d, "moved", "", "2026-09-17T01:00:00Z", nil)
 				seedFrictionSession(t, d, "fresh", "", "2026-09-15T02:00:00Z", nil)
 				require.NoError(t, d.SaveFrictionDigest(t.Context(), testDigest("2026-09-15", 1),
@@ -113,6 +119,7 @@ func TestFrictionSubjectsForDate(t *testing.T) {
 			name: "trashed sessions excluded",
 			loc:  time.UTC, date: "2026-09-15",
 			seed: func(t *testing.T, d *DB) {
+				t.Helper()
 				seedFrictionSession(t, d, "gone", "", "2026-09-15T01:00:00Z", nil)
 				require.NoError(t, d.SoftDeleteSession(t.Context(), "gone"))
 			},
@@ -122,6 +129,7 @@ func TestFrictionSubjectsForDate(t *testing.T) {
 			name: "review excluded sessions excluded",
 			loc:  time.UTC, date: "2026-09-15",
 			seed: func(t *testing.T, d *DB) {
+				t.Helper()
 				seedFrictionSession(t, d, "excluded", "", "2026-09-15T01:00:00Z", nil)
 				require.NoError(t, d.ReplaceSessionFriction(t.Context(), "excluded", nil,
 					&FrictionSessionDims{SessionID: "excluded", ReviewExcluded: true}, "friction-v1", "h2"))
@@ -200,6 +208,7 @@ func TestSaveFrictionDigest(t *testing.T) {
 		run  func(t *testing.T, d *DB)
 	}{
 		{name: "round_trip", run: func(t *testing.T, d *DB) {
+			t.Helper()
 			want := testDigest("2026-09-15", 1)
 			want.SessionsScanned = 3
 			require.NoError(t, d.SaveFrictionDigest(t.Context(), want, nil, nil))
@@ -209,11 +218,13 @@ func TestSaveFrictionDigest(t *testing.T) {
 			assert.Equal(t, want, *got)
 		}},
 		{name: "missing_date_is_nil", run: func(t *testing.T, d *DB) {
+			t.Helper()
 			got, err := d.GetFrictionDigest(t.Context(), "2026-01-01")
 			require.NoError(t, err)
 			assert.Nil(t, got)
 		}},
 		{name: "second_insert_conflicts", run: func(t *testing.T, d *DB) {
+			t.Helper()
 			require.NoError(t, d.SaveFrictionDigest(t.Context(), testDigest("2026-09-15", 1), nil,
 				[]FrictionPatternUpdate{{Fingerprint: "fl1:a", Kind: "error", Title: "t", Date: "2026-09-15", SubjectID: "s1", Occurrences: 2}}))
 			err := d.SaveFrictionDigest(t.Context(), testDigest("2026-09-15", 1), nil,
@@ -222,6 +233,7 @@ func TestSaveFrictionDigest(t *testing.T) {
 			assert.Equal(t, 2, frictionPatternCount(t, d, "fl1:a"), "rolled-back save must not count")
 		}},
 		{name: "revision_update_requires_previous", run: func(t *testing.T, d *DB) {
+			t.Helper()
 			require.NoError(t, d.SaveFrictionDigest(t.Context(), testDigest("2026-09-15", 1), nil, nil))
 			require.ErrorIs(t, d.SaveFrictionDigest(t.Context(), testDigest("2026-09-15", 3), nil, nil), ErrFrictionDigestConflict)
 			second := testDigest("2026-09-15", 2)
@@ -233,12 +245,14 @@ func TestSaveFrictionDigest(t *testing.T) {
 			assert.Equal(t, 9, got.SessionsScanned)
 		}},
 		{name: "subjects_are_recorded_once", run: func(t *testing.T, d *DB) {
+			t.Helper()
 			subj := []FrictionDigestSubject{{SubjectID: "s1", Date: "2026-09-15", SubjectKind: friction.SubjectSession}}
 			require.NoError(t, d.SaveFrictionDigest(t.Context(), testDigest("2026-09-15", 1), subj, nil))
 			require.NoError(t, d.SaveFrictionDigest(t.Context(), testDigest("2026-09-15", 2), subj, nil))
 			assert.Equal(t, 1, countRows(t, d, "friction_digest_sessions"))
 		}},
 		{name: "patterns_accumulate_across_dates", run: func(t *testing.T, d *DB) {
+			t.Helper()
 			require.NoError(t, d.SaveFrictionDigest(t.Context(), testDigest("2026-09-15", 1), nil, []FrictionPatternUpdate{
 				{Fingerprint: "fl1:a", Kind: "correction", Title: "t", Date: "2026-09-15", SubjectID: "s1", Ordinal: Ptr(4), Occurrences: 2},
 				{Fingerprint: "fl1:a", Kind: "correction", Title: "t", Date: "2026-09-15", SubjectID: "s2", Ordinal: Ptr(7), Occurrences: 1},
@@ -253,6 +267,7 @@ func TestSaveFrictionDigest(t *testing.T) {
 			}, row)
 		}},
 		{name: "latest_date", run: func(t *testing.T, d *DB) {
+			t.Helper()
 			latest, err := d.LatestFrictionDigestDate(t.Context())
 			require.NoError(t, err)
 			assert.Empty(t, latest)
@@ -263,6 +278,7 @@ func TestSaveFrictionDigest(t *testing.T) {
 			assert.Equal(t, "2026-09-16", latest)
 		}},
 		{name: "update_render_bumps_revision", run: func(t *testing.T, d *DB) {
+			t.Helper()
 			require.NoError(t, d.SaveFrictionDigest(t.Context(), testDigest("2026-09-15", 1), nil, nil))
 			require.NoError(t, d.UpdateFrictionDigestRender(t.Context(), "2026-09-15", []byte("new md\n"), []byte("{\"x\":1}\n"), 2))
 			got, err := d.GetFrictionDigest(t.Context(), "2026-09-15")

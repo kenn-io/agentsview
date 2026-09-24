@@ -30,8 +30,10 @@ func (s availableFrictionStore) FrictionAvailable() bool { return *s.available }
 func TestNewFrictionRunner(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	yes, no := true, false
-	base := config.Config{Friction: config.FrictionConfig{Enabled: true, Timezone: "Asia/Tokyo", BackfillDays: 30},
-		PublicURL: "https://av.example"}
+	base := config.Config{
+		Friction:  config.FrictionConfig{Enabled: true, Timezone: "Asia/Tokyo", BackfillDays: 30},
+		PublicURL: "https://av.example",
+	}
 	tests := []struct {
 		name    string
 		cfg     func() config.Config
@@ -43,10 +45,14 @@ func TestNewFrictionRunner(t *testing.T) {
 		{name: "disabled", cfg: func() config.Config { c := base; c.Friction.Enabled = false; return c }, store: d, wantNil: true},
 		{name: "sqlite writable", cfg: func() config.Config { return base }, store: d, wantTZ: "Asia/Tokyo"},
 		{name: "read-only sqlite", cfg: func() config.Config { return base }, store: readOnlyFrictionStore{Store: d, readOnly: true}, wantNil: true},
-		{name: "pg without write access", cfg: func() config.Config { return base },
-			store: availableFrictionStore{readOnlyFrictionStore{Store: d, readOnly: true, available: &no}}, wantNil: true},
-		{name: "pg with write access", cfg: func() config.Config { return base },
-			store: availableFrictionStore{readOnlyFrictionStore{Store: d, readOnly: true, available: &yes}}, wantTZ: "Asia/Tokyo"},
+		{
+			name: "pg without write access", cfg: func() config.Config { return base },
+			store: availableFrictionStore{readOnlyFrictionStore{Store: d, readOnly: true, available: &no}}, wantNil: true,
+		},
+		{
+			name: "pg with write access", cfg: func() config.Config { return base },
+			store: availableFrictionStore{readOnlyFrictionStore{Store: d, readOnly: true, available: &yes}}, wantTZ: "Asia/Tokyo",
+		},
 		{name: "env overrides zone", cfg: func() config.Config { return base }, store: d, env: "Europe/Berlin", wantTZ: "Europe/Berlin"},
 	}
 	for _, tt := range tests {

@@ -412,17 +412,13 @@ func (r *Runner) CatchUp(ctx context.Context) ([]Report, error) {
 		return nil, nil
 	}
 	start := addDays(today, -r.backfillDays())
-	if earliest > start {
-		start = earliest
-	}
+	start = max(start, earliest)
 	latest, err := r.Store.LatestFrictionDigestDate(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if latest != "" {
-		if next := addDays(latest, 1); next > start {
-			start = next
-		}
+		start = max(start, addDays(latest, 1))
 	}
 	var reports []Report
 	for d := start; d <= yesterday; d = addDays(d, 1) {
