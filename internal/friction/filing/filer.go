@@ -148,6 +148,22 @@ func (f *Filer) File(ctx context.Context, sig friction.Signal, run RunContext) (
 	return f.onCreateError(ctx, row, run, err)
 }
 
+// FileAndRerender files a stored signal and refreshes its digests only when
+// the issue link changes. Inline filing uses File while the digest is built.
+func (f *Filer) FileAndRerender(ctx context.Context, sig friction.Signal, run RunContext) (db.FrictionIssueLink, error) {
+	previous, hadLink, err := f.existing(ctx, sig.Fingerprint())
+	if err != nil {
+		return db.FrictionIssueLink{}, err
+	}
+	link, err := f.File(ctx, sig, run)
+	if err == nil && link.State == db.FrictionLinkStateLinked &&
+		(!hadLink || previous.State != db.FrictionLinkStateLinked ||
+			previous.IssueUID != link.IssueUID || previous.QualifiedID != link.QualifiedID || previous.WebURL != link.WebURL) {
+		f.rerenderFingerprints(ctx, []string{sig.Fingerprint()})
+	}
+	return link, err
+}
+
 // onLinked is the already-linked path. PR 11 adds the recurrence check here.
 func (f *Filer) onLinked(_ context.Context, _ friction.Signal, _ RunContext, row db.FrictionIssueLink) (db.FrictionIssueLink, error) {
 	return row, nil

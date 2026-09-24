@@ -21,7 +21,7 @@ import (
 	"go.kenn.io/agentsview/internal/server"
 )
 
-func frictionFilingEnv(t *testing.T, hub bool) (*testEnv, *katatest.Server, friction.Signal) {
+func frictionFilingEnv(t *testing.T, hub bool, rerender ...func(context.Context, string) error) (*testEnv, *katatest.Server, friction.Signal) {
 	t.Helper()
 	fake := katatest.New(t)
 	sig := friction.Signal{Kind: friction.KindError, SubjectKind: friction.SubjectSession, SubjectID: "claude:s1", ToolName: "Bash", Text: "boom", Ordinal: new(1)}
@@ -35,6 +35,9 @@ func frictionFilingEnv(t *testing.T, hub bool) (*testEnv, *katatest.Server, fric
 				return friction.DigestSnapshot{Date: "2026-09-20", Signals: []friction.Signal{sig}}, nil
 			},
 		}
+		if len(rerender) > 0 {
+			f.Rerender = rerender[0]
+		}
 		opts = append(opts, server.WithFrictionFiler(f))
 		te = setupWithServerOpts(t, opts)
 		f.Store = fixedDates{LinkStore: te.db, dates: []string{"2026-09-20"}}
@@ -42,6 +45,18 @@ func frictionFilingEnv(t *testing.T, hub bool) (*testEnv, *katatest.Server, fric
 		te = setupWithServerOpts(t, opts)
 	}
 	return te, fake, sig
+}
+
+func TestFrictionFileRouteRerendersOnlyWhenLinkChanges(t *testing.T) {
+	var dates []string
+	te, _, sig := frictionFilingEnv(t, true, func(_ context.Context, date string) error {
+		dates = append(dates, date)
+		return nil
+	})
+	path := "/api/v1/friction/patterns/" + sig.Fingerprint() + "/file"
+	assertStatus(t, te.post(t, path, `{}`), http.StatusOK)
+	assertStatus(t, te.post(t, path, `{}`), http.StatusOK)
+	assert.Equal(t, []string{"2026-09-20"}, dates)
 }
 
 type fixedDates struct {

@@ -116,7 +116,7 @@ func (s *Server) humaFileFrictionPattern(ctx context.Context, in *frictionFileIn
 	if !f.Ready(ctx) {
 		return nil, s.kataUnavailable(ctx)
 	}
-	link, err := f.File(ctx, sig, run)
+	link, err := f.FileAndRerender(ctx, sig, run)
 	if err != nil && link.Fingerprint == "" {
 		if h := handleHumaReadOnly(err); h != nil {
 			return nil, h
