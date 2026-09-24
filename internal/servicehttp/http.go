@@ -16,6 +16,7 @@ import (
 	"github.com/doordash-oss/oapi-codegen-dd/v3/pkg/runtime"
 	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/ledger"
 	"go.kenn.io/agentsview/internal/service"
 )
 
@@ -82,6 +83,7 @@ type httpBackend struct {
 	longRunningClient *http.Client
 	readOnly          bool
 	recallQueries     bool
+	ledgerQueries     bool
 	token             string
 }
 
@@ -90,8 +92,9 @@ const recallNonRecordingAPIVersion = 4
 // HTTPServerCapabilities is the subset of version metadata needed to expose
 // client features safely for an explicitly selected daemon.
 type HTTPServerCapabilities struct {
-	ReadOnly   bool `json:"read_only"`
-	APIVersion int  `json:"api_version"`
+	ReadOnly      bool `json:"read_only"`
+	APIVersion    int  `json:"api_version"`
+	LedgerQueries bool `json:"ledger_queries"`
 }
 
 // NewHTTPBackend constructs a SessionService that proxies to a
@@ -114,13 +117,15 @@ func NewHTTPBackend(baseURL, token string, readOnly bool, browserURL string) ser
 func NewHTTPBackendForServer(
 	baseURL, token string, capabilities HTTPServerCapabilities,
 ) service.SessionService {
-	return newHTTPBackend(
+	b := newHTTPBackend(
 		baseURL,
 		token,
 		capabilities.ReadOnly,
 		!capabilities.ReadOnly &&
 			capabilities.APIVersion >= recallNonRecordingAPIVersion,
 	)
+	b.ledgerQueries = capabilities.LedgerQueries
+	return b
 }
 
 func newHTTPBackend(
@@ -156,10 +161,56 @@ func ProbeHTTPServerCapabilities(
 		return HTTPServerCapabilities{},
 			fmt.Errorf("probing server capabilities: %w", err)
 	}
-	return HTTPServerCapabilities{ReadOnly: response.JSON200.ReadOnly != nil && *response.JSON200.ReadOnly, APIVersion: int(response.JSON200.APIVersion)}, nil
+	return HTTPServerCapabilities{
+		ReadOnly:      response.JSON200.ReadOnly != nil && *response.JSON200.ReadOnly,
+		APIVersion:    int(response.JSON200.APIVersion),
+		LedgerQueries: response.JSON200.LedgerAvailable,
+	}, nil
 }
 
 func (b *httpBackend) SupportsRecallQueries() bool { return b.recallQueries }
+
+func (b *httpBackend) SupportsLedgerQueries() bool { return b.ledgerQueries }
+
+func (b *httpBackend) LedgerQuery(ctx context.Context, q ledger.Query) ([]ledger.ZoneEvents, error) {
+	api, err := b.apiClient(b.client)
+	if err != nil {
+		return nil, err
+	}
+	since := q.Since.UTC().Format(time.RFC3339Nano)
+	query := &apiclient.GetAPIV1LedgerEventsQuery{Since: &since, Subsystem: q.Subsystems}
+	if q.Class != nil {
+		class := string(*q.Class)
+		query.Class = &class
+	}
+	if q.Zone != "" {
+		query.Zone = &q.Zone
+	}
+	if q.Limit > 0 {
+		limit := int64(q.Limit)
+		query.Limit = &limit
+	}
+	response, err := api.GetAPIV1LedgerEventsWithResponse(ctx, &apiclient.GetAPIV1LedgerEventsRequestOptions{Query: query})
+	if response == nil {
+		return nil, err
+	}
+	if err := serviceResponseError(response.HTTPResponse, response.Body, err); err != nil {
+		return nil, err
+	}
+	out := make([]ledger.ZoneEvents, 0, len(response.JSON200.Results))
+	for _, z := range response.JSON200.Results {
+		ze := ledger.ZoneEvents{Zone: z.Zone}
+		for _, e := range z.Events {
+			ev, err := ledger.ParseEventJSON([]byte(e.Serde))
+			if err != nil {
+				return nil, err
+			}
+			ze.Events = append(ze.Events, ev)
+		}
+		out = append(out, ze)
+	}
+	return out, nil
+}
 
 func (b *httpBackend) MachineLabels(
 	ctx context.Context,

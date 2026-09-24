@@ -20,6 +20,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/ledger"
 	mcpserver "go.kenn.io/agentsview/internal/mcp"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/servicehttp"
@@ -198,6 +199,24 @@ func (s *mcpDaemonService) SupportsRecallQueries() bool {
 
 	runtime := FindDaemonRuntime(s.cfg.DataDir, s.cfg.AuthToken)
 	return runtime == nil || !runtime.ReadOnly
+}
+
+func (s *mcpDaemonService) SupportsLedgerQueries() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cfg.Ledger.Enabled
+}
+
+func (s *mcpDaemonService) LedgerQuery(ctx context.Context, q ledger.Query) ([]ledger.ZoneEvents, error) {
+	svc, err := s.daemonService(ctx)
+	if err != nil {
+		return nil, err
+	}
+	c, ok := svc.(service.LedgerQueryCapability)
+	if !ok {
+		return nil, service.ErrLedgerUnavailable
+	}
+	return c.LedgerQuery(ctx, q)
 }
 
 func (s *mcpDaemonService) daemonService(

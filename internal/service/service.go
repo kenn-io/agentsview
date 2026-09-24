@@ -10,6 +10,7 @@ import (
 	"io"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/ledger"
 )
 
 // ErrSearchUnavailable is returned by Search when the backing store has
@@ -29,6 +30,30 @@ type RecallQueryCapability interface {
 func SupportsRecallQueries(svc SessionService) bool {
 	capability, ok := svc.(RecallQueryCapability)
 	return ok && capability.SupportsRecallQueries()
+}
+
+// LedgerQueryCapability is implemented by services that can read the event ledger.
+type LedgerQueryCapability interface {
+	SupportsLedgerQueries() bool
+	LedgerQuery(ctx context.Context, q ledger.Query) ([]ledger.ZoneEvents, error)
+}
+
+// ErrLedgerUnavailable is returned when a service cannot read the ledger.
+var ErrLedgerUnavailable = errors.New("the event ledger is not available on this backend")
+
+// SupportsLedgerQueries reports whether svc can read the event ledger.
+func SupportsLedgerQueries(svc SessionService) bool {
+	c, ok := svc.(LedgerQueryCapability)
+	return ok && c.SupportsLedgerQueries()
+}
+
+// LedgerQuery runs q through svc.
+func LedgerQuery(ctx context.Context, svc SessionService, q ledger.Query) ([]ledger.ZoneEvents, error) {
+	c, ok := svc.(LedgerQueryCapability)
+	if !ok || !c.SupportsLedgerQueries() {
+		return nil, ErrLedgerUnavailable
+	}
+	return c.LedgerQuery(ctx, q)
 }
 
 // ErrAroundMutuallyExclusive is returned by Messages when Around is combined
