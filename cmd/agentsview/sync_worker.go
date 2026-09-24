@@ -403,5 +403,6 @@ func workerEngineConfig(cfg config.Config) sync.EngineConfig {
 		ToolResultImages:        cfg.ToolResultImages,
 		AssetsDir:               filepath.Join(cfg.DataDir, "assets"),
 		ArchiveContent:          cfg.ArchiveContent,
+		FrictionDims:            newFrictionDimsFunc(cfg),
 	}
 }

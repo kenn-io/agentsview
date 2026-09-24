@@ -83,6 +83,7 @@ func syncService(ctx context.Context,
 		ScanProtectedPaths: cfg.ScanProtectedPaths,
 		Machine:            cfg.InstallationID,
 		ArchiveContent:     cfg.ArchiveContent,
+		FrictionDims:       newFrictionDimsFunc(cfg),
 	})
 	// Close the engine before the DB so pending debounced signal
 	// recomputes flush while the DB is still open.

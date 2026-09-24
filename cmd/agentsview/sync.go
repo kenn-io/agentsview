@@ -1001,6 +1001,7 @@ func coordinateLocalSync(
 		Machine:                 appCfg.InstallationID,
 		BlockedResultCategories: appCfg.ResultContentBlockedCategories,
 		ArchiveContent:          appCfg.ArchiveContent,
+		FrictionDims:            newFrictionDimsFunc(appCfg),
 	})
 	defer engine.Close()
 

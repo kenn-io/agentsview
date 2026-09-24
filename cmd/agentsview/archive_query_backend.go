@@ -313,6 +313,7 @@ func (b localArchiveQueryBackend) SessionUsage(
 			Machine:                 b.cfg.InstallationID,
 			BlockedResultCategories: b.cfg.ResultContentBlockedCategories,
 			ArchiveContent:          b.cfg.ArchiveContent,
+			FrictionDims:            newFrictionDimsFunc(b.cfg),
 		})
 		var syncErr error
 		if query.OwnOnly {

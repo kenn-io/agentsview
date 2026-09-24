@@ -330,6 +330,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			Machine:                 cfg.InstallationID,
 			BlockedResultCategories: cfg.ResultContentBlockedCategories,
 			ArchiveContent:          cfg.ArchiveContent,
+			FrictionDims:            newFrictionDimsFunc(cfg),
 			Emitter:                 emitter,
 			DeferStartupMaintenance: deferStartupMaintenance(
 				opts.SkipInitialSync, workerSyncDone,
@@ -458,6 +459,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			Machine:            cfg.InstallationID,
 			ScanProtectedPaths: cfg.ScanProtectedPaths,
 			ArchiveContent:     cfg.ArchiveContent,
+			FrictionDims:       newFrictionDimsFunc(cfg),
 		})
 	}
 	go idleTracker.Do(func() {

@@ -1007,6 +1007,7 @@ func (b *localArchiveWriteBackend) DuckDBPushWatch(
 		Machine:                 b.appCfg.InstallationID,
 		BlockedResultCategories: b.appCfg.ResultContentBlockedCategories,
 		ArchiveContent:          b.appCfg.ArchiveContent,
+		FrictionDims:            newFrictionDimsFunc(b.appCfg),
 	})
 	defer engine.Close()
 
@@ -1141,6 +1142,7 @@ func (b *localArchiveWriteBackend) ReplicaPushWatch(
 		Machine:                 b.appCfg.InstallationID,
 		BlockedResultCategories: b.appCfg.ResultContentBlockedCategories,
 		ArchiveContent:          b.appCfg.ArchiveContent,
+		FrictionDims:            newFrictionDimsFunc(b.appCfg),
 	})
 	defer engine.Close()
 
