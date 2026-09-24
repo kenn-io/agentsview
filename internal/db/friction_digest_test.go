@@ -3,12 +3,14 @@ package db
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/friction"
 )
 
@@ -347,4 +349,55 @@ func countRows(t *testing.T, d *DB, table string) int {
 	var n int
 	require.NoError(t, d.getReader().QueryRowContext(t.Context(), "SELECT count(*) FROM "+table).Scan(&n))
 	return n
+}
+
+func TestCopyFrictionStateFrom(t *testing.T) {
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "src.db")
+	src := testDBAtPath(t, srcPath, "src")
+	require.NoError(t, src.SaveFrictionDigest(t.Context(), testDigest("2026-09-15", 1),
+		[]FrictionDigestSubject{{SubjectID: "s1", Date: "2026-09-15", SubjectKind: friction.SubjectSession}},
+		[]FrictionPatternUpdate{{Fingerprint: "fl1:a", Kind: "error", Title: "t", Date: "2026-09-15", SubjectID: "s1", Occurrences: 3}}))
+	src.Close()
+
+	dst := testDBAtPath(t, filepath.Join(dir, "dst.db"), "dst")
+	defer dst.Close()
+	require.NoError(t, dst.CopyFrictionStateFrom(srcPath))
+	require.NoError(t, dst.CopyFrictionStateFrom(srcPath), "copy is idempotent")
+
+	got, err := dst.GetFrictionDigest(t.Context(), "2026-09-15")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, testDigest("2026-09-15", 1), *got)
+	assert.Equal(t, 1, countRows(t, dst, "friction_digest_sessions"))
+	assert.Equal(t, 3, frictionPatternCount(t, dst, "fl1:a"))
+}
+
+func TestCopyFrictionStateFromOldArchive(t *testing.T) {
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "old.db")
+	src := testDBAtPath(t, srcPath, "old")
+	_, err := src.getWriter().Exec(t.Context(), `
+		DROP TABLE friction_digests;
+		DROP TABLE friction_digest_sessions;
+		DROP TABLE friction_patterns;`)
+	require.NoError(t, err)
+	src.Close()
+	dst := testDBAtPath(t, filepath.Join(dir, "dst.db"), "dst")
+	defer dst.Close()
+	require.NoError(t, dst.CopyFrictionStateFrom(srcPath))
+	assert.Equal(t, 0, countRows(t, dst, "friction_digests"))
+}
+
+func TestCopyFrictionStateFromRejectsUsageOnly(t *testing.T) {
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "src.db")
+	src := testDBAtPath(t, srcPath, "src")
+	require.NoError(t, src.SaveFrictionDigest(t.Context(), testDigest("2026-09-15", 1), nil, nil))
+	require.NoError(t, src.Close())
+
+	dst := testDBAtPath(t, filepath.Join(dir, "dst.db"), "dst")
+	dst.SetArchiveContent(config.ArchiveContentUsage)
+	require.ErrorIs(t, dst.CopyFrictionStateFrom(srcPath), ErrArchiveContentExcluded)
+	assert.Equal(t, 0, countRows(t, dst, "friction_digests"))
 }

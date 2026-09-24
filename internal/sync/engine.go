@@ -3568,6 +3568,24 @@ func (e *Engine) resyncBuildLocked(
 			time.Since(tInsights).Round(time.Millisecond),
 		)
 	}
+	// Digest snapshots and Markdown may contain transcript text. Preserve
+	// them only when the rebuilt archive stores that content.
+	if copyDerivedText {
+		if err := newDB.CopyFrictionStateFrom(origPath); err != nil {
+			log.Printf("resync: copy friction state: %v", err)
+			stats.Aborted = true
+			stats.Warnings = append(stats.Warnings,
+				"friction state copy failed, aborting swap: "+err.Error(),
+			)
+			newDB.Close()
+			removeTempDB(tempPath)
+			restoreSkipCache()
+			e.mu.Lock()
+			e.lastSyncStats = stats
+			e.mu.Unlock()
+			return stats, err
+		}
+	}
 
 	// Copy model pricing so usage costs survive the swap. The
 	// startup seed only runs once per daemon lifetime, so a

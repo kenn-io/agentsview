@@ -25,6 +25,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/friction"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
@@ -17616,4 +17617,65 @@ func TestSyncAllPreservesUnprovenClaudeMissingRows(t *testing.T) {
 			assert.False(t, cause.Valid, "preserved row must not gain a cause")
 		})
 	}
+}
+
+func TestResyncAllPreservesFrictionDigests(t *testing.T) {
+	env := setupTestEnv(t)
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "Hello").
+		AddClaudeAssistant(tsEarlyS5, "Hi there!").
+		String()
+	env.writeClaudeSession(t, "test-proj", "friction-test.jsonl", content)
+	env.engine.SyncAll(t.Context(), nil)
+	before, err := env.db.FrictionSubjectsForDate(t.Context(), "2024-01-01", time.UTC, false)
+	require.NoError(t, err)
+	require.Len(t, before, 1, "fixture session must be eligible before the digest")
+	assert.Equal(t, "friction-test", before[0].SubjectID)
+
+	require.NoError(t, env.db.SaveFrictionDigest(t.Context(), db.FrictionDigest{
+		Date: "2024-01-01", Timezone: "UTC", RulesVersion: "friction-v1",
+		BuiltAt: time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC), Revision: 1,
+		SnapshotJSON: []byte("{}"), SummaryJSON: []byte("{}\n"),
+		Markdown: []byte("# Friction Log — 2024-01-01\n"), MarkdownSHA256: "x", RunID: "r",
+	}, []db.FrictionDigestSubject{{SubjectID: "friction-test", Date: "2024-01-01", SubjectKind: friction.SubjectSession}}, nil))
+
+	stats := env.engine.ResyncAll(t.Context(), nil)
+	require.NotZero(t, stats.Synced)
+
+	got, err := env.db.GetFrictionDigest(t.Context(), "2024-01-01")
+	require.NoError(t, err)
+	require.NotNil(t, got, "digest must survive a full resync")
+	assert.Equal(t, "# Friction Log — 2024-01-01\n", string(got.Markdown))
+	subjects, err := env.db.FrictionSubjectsForDate(t.Context(), "2024-01-01", time.UTC, false)
+	require.NoError(t, err)
+	assert.Empty(t, subjects, "membership survives, so the session is not re-reviewed")
+}
+
+func TestResyncAllUsageOnlyDropsFrictionDigestText(t *testing.T) {
+	env := setupTestEnv(t)
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "private prompt").
+		AddClaudeAssistant(tsEarlyS5, "private reply").
+		String()
+	env.writeClaudeSession(t, "test-proj", "friction-private.jsonl", content)
+	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+	require.NoError(t, env.db.SaveFrictionDigest(t.Context(), db.FrictionDigest{
+		Date: "2024-01-01", Timezone: "UTC", RulesVersion: "friction-v1",
+		BuiltAt: time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC), Revision: 1,
+		SnapshotJSON: []byte(`{"prompt":"private prompt"}`), SummaryJSON: []byte("{}"),
+		Markdown: []byte("private reply"), MarkdownSHA256: "x", RunID: "r",
+	}, nil, nil))
+
+	env.engine.Close()
+	env.db.SetArchiveContent(config.ArchiveContentUsage)
+	usageEngine := sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {env.claudeDir}},
+		Machine:   "local", ArchiveContent: config.ArchiveContentUsage,
+	})
+	t.Cleanup(usageEngine.Close)
+	stats := usageEngine.ResyncAll(t.Context(), nil)
+	require.False(t, stats.Aborted, "resync aborted: %v", stats.Warnings)
+	got, err := env.db.GetFrictionDigest(t.Context(), "2024-01-01")
+	require.NoError(t, err)
+	assert.Nil(t, got, "usage-only archive must not retain digest text")
 }
