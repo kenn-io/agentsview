@@ -1,6 +1,7 @@
 package review
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -384,4 +385,84 @@ func (r *Runner) BuildDate(ctx context.Context, date string, opts BuildOptions) 
 		return Report{}, err
 	}
 	return Report{Date: date, Snapshot: snap, Meta: meta, Written: true}, nil
+}
+
+var ErrDigestNotFound = errors.New("friction: no digest for date")
+
+func (r *Runner) backfillDays() int {
+	if r.BackfillDays < 1 {
+		return 7
+	}
+	return r.BackfillDays
+}
+
+// CatchUp builds every complete local date without a digest, from the
+// latest of (last digest + 1, today − backfill_days, earliest session) to
+// yesterday. Today is never built. A date still waiting on findings stops
+// the pass without error; later dates wait for it so no date is skipped.
+func (r *Runner) CatchUp(ctx context.Context) ([]Report, error) {
+	loc := r.loc()
+	today := localDate(r.now(), loc)
+	yesterday := addDays(today, -1)
+	earliest, err := r.Store.EarliestSessionDate(ctx, loc)
+	if err != nil {
+		return nil, err
+	}
+	if earliest == "" {
+		return nil, nil
+	}
+	start := addDays(today, -r.backfillDays())
+	if earliest > start {
+		start = earliest
+	}
+	latest, err := r.Store.LatestFrictionDigestDate(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if latest != "" {
+		if next := addDays(latest, 1); next > start {
+			start = next
+		}
+	}
+	var reports []Report
+	for d := start; d <= yesterday; d = addDays(d, 1) {
+		if err := ctx.Err(); err != nil {
+			return reports, err
+		}
+		rep, err := r.BuildDate(ctx, d, BuildOptions{})
+		if errors.Is(err, ErrStaleSubjects) {
+			log.Printf("friction review: deferring %s: %v", d, err)
+			return reports, nil
+		}
+		if err != nil {
+			return reports, fmt.Errorf("building friction digest %s: %w", d, err)
+		}
+		if rep.Written {
+			reports = append(reports, rep)
+		}
+	}
+	return reports, nil
+}
+
+// Rerender rebuilds a digest's Markdown and summary JSON from its frozen
+// snapshot and bumps revision when either changed (spec §8.6). Links come
+// from the Kata filer once PR 10 adds it; until then none are rendered.
+func (r *Runner) Rerender(ctx context.Context, date string) error {
+	existing, err := r.Store.GetFrictionDigest(ctx, date)
+	if err != nil {
+		return err
+	}
+	if existing == nil {
+		return fmt.Errorf("%w: %s", ErrDigestNotFound, date)
+	}
+	snap, err := DecodeSnapshot(existing.SnapshotJSON)
+	if err != nil {
+		return err
+	}
+	md := friction.RenderMarkdown(snap, friction.RenderLinks{})
+	summary := friction.RenderSummaryJSON(snap, r.meta(date, false))
+	if bytes.Equal(md, existing.Markdown) && bytes.Equal(summary, existing.SummaryJSON) {
+		return nil
+	}
+	return r.Store.UpdateFrictionDigestRender(ctx, date, md, summary, existing.Revision+1)
 }
