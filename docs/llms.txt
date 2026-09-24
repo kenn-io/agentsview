@@ -31,6 +31,7 @@ The Markdown pages are canonical for machine readers; the HTML routes drop the
 
 - [Session Intelligence](https://agentsview.io/docs/session-intelligence.md): Health scores, outcomes, and session-quality analytics.
 - [Quality](https://agentsview.io/docs/quality.md): Deterministic quality signals and recommendations computed from session data.
+- [Friction Log](https://agentsview.io/docs/friction-log.md): Daily heuristic review of corrections, tool errors, workarounds, deferrals, frustration, interruptions and recurring patterns.
 - [Semantic Search](https://agentsview.io/docs/semantic-search.md): Vector search over session messages, plus hybrid search and cursor-based context retrieval.
 - [Semantic Search Internals](https://agentsview.io/docs/semantic-search-internals.md): Architecture and invariants behind the vector index.
 - [Recall](https://agentsview.io/docs/recall.md): Experimental, provenance-linked durable knowledge over the local session archive.

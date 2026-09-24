@@ -1,4 +1,5 @@
 ---
+last_edited: 2026-09-24
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -10,6 +11,12 @@ The latest published release is
 
 **New features**
 
+- Friction Log digests, findings and recurring patterns can now be read and
+  built from the API, CLI and MCP. `agentsview friction run` builds missing
+  complete days, while `friction digest`, `friction findings` and
+  `friction patterns` read the results. MCP clients can read digests and
+  patterns with two new tools. The findings are heuristics, so check the
+  linked session before acting on one.
 - AgentsView now builds a Friction Log digest for every completed local day,
   including days the daemon was not running (up to `backfill_days`, default
   7). It is on by default; set `[friction] enabled = false` to turn it off.

@@ -26,6 +26,7 @@ nav = [
   {"One-shot CI Capture" = "one-shot-capture.md"},
   {"Chat Import" = "chat-import.md"},
   {"Quality" = "quality.md"},
+  {"Friction Log" = "friction-log.md"},
   {"CLI Reference" = "commands.md"},
   {"Session Export" = "session-export.md"},
   {"Conversation Export" = "conversation-export.md"},
