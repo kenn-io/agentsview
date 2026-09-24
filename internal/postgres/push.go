@@ -1320,12 +1320,24 @@ func (s *Sync) pushBatchAttempt(
 			*pushed = (*pushed)[:len(*pushed)-n]
 			return batchResult{}, nil
 		}
+		frictionChanged, err := s.pushFrictionFindings(ctx, tx, sess.ID)
+		if err == nil {
+			var dimsChanged bool
+			dimsChanged, err = s.pushFrictionDims(ctx, tx, sess.ID)
+			frictionChanged = frictionChanged || dimsChanged
+		}
+		if err != nil {
+			log.Printf("pgsync: friction findings %s: %v", sess.ID, err)
+			_ = tx.Rollback()
+			*pushed = (*pushed)[:len(*pushed)-n]
+			return batchResult{}, nil
+		}
 
-		// Bump updated_at when messages or secret findings were
+		// Bump updated_at when messages, secret findings, or friction were
 		// rewritten but pushSession was a metadata no-op (its
 		// WHERE clause skips unchanged rows). PG read-mode session
-		// watchers rely on updated_at to surface secret-only changes.
-		if msgCount > 0 || findingsChanged {
+		// watchers rely on updated_at to surface finding-only changes.
+		if msgCount > 0 || findingsChanged || frictionChanged {
 			if _, err := tx.ExecContext(ctx, `
 				UPDATE sessions
 				SET updated_at = NOW()
@@ -2103,6 +2115,9 @@ func sessionPushFingerprint(
 		stringValue(sess.TerminationStatus),
 		strconv.Itoa(sess.SecretLeakCount),
 		sess.SecretsRulesVersion,
+		strconv.Itoa(sess.FrictionCount),
+		sess.FrictionRulesVersion,
+		sess.FrictionHash,
 		usageEventFingerprint,
 	}
 	var b strings.Builder
@@ -2286,7 +2301,9 @@ func (s *Sync) pushSession(
 			transcript_fidelity, transcript_revision,
 			agent_label, entrypoint, session_kind,
 			source_archive_id, source_database_generation, file_path,
-			project_assigned, prompt_evidence_discarded, updated_at
+			project_assigned, prompt_evidence_discarded,
+			friction_count, friction_rules_version, friction_hash,
+			updated_at
 			)
 			SELECT
 				$1, $2, $3, $4, $5, $6, $7, $8,
@@ -2304,7 +2321,7 @@ func (s *Sync) pushSession(
 				$50, $51,
 				$52, $53, $54, $55, $56, $57, $58, $59, $60, $61,
 				$62, $63, $64, $65, $66, $67, $68,
-				$70, NOW()
+				$70, $71, $72, $73, NOW()
 			WHERE NOT EXISTS (
 				SELECT 1 FROM excluded_sessions WHERE id = $1
 			)
@@ -2388,6 +2405,9 @@ func (s *Sync) pushSession(
 			has_context_data = EXCLUDED.has_context_data,
 			secret_leak_count = EXCLUDED.secret_leak_count,
 			secrets_rules_version = EXCLUDED.secrets_rules_version,
+			friction_count = EXCLUDED.friction_count,
+			friction_rules_version = EXCLUDED.friction_rules_version,
+			friction_hash = EXCLUDED.friction_hash,
 			quality_signal_version = EXCLUDED.quality_signal_version,
 			short_prompt_count = EXCLUDED.short_prompt_count,
 			unstructured_start = EXCLUDED.unstructured_start,
@@ -2475,6 +2495,9 @@ func (s *Sync) pushSession(
 			OR sessions.has_context_data IS DISTINCT FROM EXCLUDED.has_context_data
 			OR sessions.secret_leak_count IS DISTINCT FROM EXCLUDED.secret_leak_count
 			OR sessions.secrets_rules_version IS DISTINCT FROM EXCLUDED.secrets_rules_version
+			OR sessions.friction_count IS DISTINCT FROM EXCLUDED.friction_count
+			OR sessions.friction_rules_version IS DISTINCT FROM EXCLUDED.friction_rules_version
+			OR sessions.friction_hash IS DISTINCT FROM EXCLUDED.friction_hash
 			OR sessions.quality_signal_version IS DISTINCT FROM EXCLUDED.quality_signal_version
 			OR sessions.short_prompt_count IS DISTINCT FROM EXCLUDED.short_prompt_count
 			OR sessions.unstructured_start IS DISTINCT FROM EXCLUDED.unstructured_start
@@ -2534,6 +2557,7 @@ func (s *Sync) pushSession(
 		sess.ProjectAssigned,
 		string(legacyMarkerMachinesJSON),
 		s.local.ArchiveContent().UsageOnly(),
+		sess.FrictionCount, sess.FrictionRulesVersion, sess.FrictionHash,
 	)
 	if err != nil {
 		return err

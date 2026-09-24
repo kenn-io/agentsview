@@ -10,11 +10,11 @@ AgentsView's Friction Log adapts the session review from
 behavioral reference. This page records the source, the changes, and the MIT
 notice. Source paths below are relative to that jilog commit.
 
-PR 1 provides pure detection, signal, formatting, and JSON packages. PR 12
-adds the pure event ledger model and file codec. The archive adapter,
-persisted review, digest rendering, scheduling, NanoClaw integration, and
-Kata filing are planned for later PRs. Descriptions of those
-parts below record the approved mapping; they do not describe PR 1 behavior.
+PRs 1–5 provide detection, the archived-row adapter, persisted findings,
+digest rendering, and scheduled review. PRs 12–15 provide the ledger model,
+archive storage, replication, and query surfaces. NanoClaw integration and
+Kata filing are separate roadmap branches. Descriptions below record the
+approved mapping where code has not joined this branch yet.
 
 ## Kept in PR 1
 
@@ -42,12 +42,6 @@ parts below record the approved mapping; they do not describe PR 1 behavior.
 
 ## Planned replacements
 
-- AgentsView parsers and its archive replace jilog's transcript readers. An
-  adapter will build detector input from archived sessions in PR 2.
-- Existing retry, runaway-loop, edit-churn, mid-task-compaction, and
-  context-pressure signals replace jilog's `stuck_loop` and
-  `compaction_storm`. The review will expose them as pattern kinds.
-- Session parent relationships replace jilog's 16-zero sub-agent ID prefix.
 - Database tables replace the processed-sessions file and retry sidecar. A
   catch-up job will build each completed local day once, replacing the nightly
   run.
@@ -58,6 +52,15 @@ parts below record the approved mapping; they do not describe PR 1 behavior.
 - Generic NanoClaw persona and channel resolution, trust filtering, and
   message-envelope cleanup will retain the public NanoClaw behavior. They will
   be inactive until a NanoClaw data directory is configured.
+
+## Kept in PR 2
+
+- AgentsView parser and archive rows replace jilog's transcript readers.
+  `BuildSessionInput` prepares detector input from those rows.
+- Existing retry, runaway-loop, edit-churn, mid-task-compaction, and
+  context-pressure signals replace jilog's `stuck_loop` and
+  `compaction_storm` as pattern kinds.
+- Session parent relationships replace jilog's 16-zero sub-agent ID prefix.
 
 ## Dropped
 
@@ -71,26 +74,65 @@ parts below record the approved mapping; they do not describe PR 1 behavior.
 - Migration or matching of existing `[jilog/…]` issues. Friction Log starts
   with its own issue history.
 
-## Planned additions
+## Additions
 
-- `frustration` and `interruption` kinds will use AgentsView's existing
+- `frustration` and `interruption` kinds use AgentsView's existing
   frustration markers and interrupted-turn rows. They do not change a jilog
   kind.
-- Archived tool calls will supply error, P0, and pattern findings. jilog's
-  AgentsView reader cannot produce those findings from its session rows.
-- Detection and digests will be on by default, as running jilog makes them.
+- Archived tool calls supply error and pattern findings. jilog's AgentsView
+  reader cannot produce those findings from its session rows.
+- Detection and digests are planned to be on by default, as running jilog
+  makes them. P0 filing awaits the archive and Kata integration.
 
 ## Deliberate differences
 
 - Titles use `[friction/<kind>]`, labels use `friction`, and the planned digest
   heading is `# Friction Log — <date>`.
-- The planned adapter removes system, compact-boundary, and tool-result rows
+- The adapter removes system, compact-boundary, and tool-result rows
   from every correction stream, extending jilog's NanoClaw rule to all
   sessions.
-- The planned adapter drops thinking blocks and tool renderings from stored
+- The adapter drops thinking blocks and tool renderings from stored
   assistant content, matching jilog's text-block-only extraction.
-- The planned adapter synthesizes error envelopes from tool rows and maps the
+- The adapter synthesizes error envelopes from tool rows and maps the
   `Bash` tool category to `bash` for the noise allowlist.
+
+## Session input adapter
+
+agentsview does not port jilog's file readers. `friction.BuildSessionInput`
+maps archived rows into the message stream jilog's detectors read:
+
+- System rows, compact-boundary rows and `tool_result` fallback rows are
+  dropped from the stream. This applies jilog's NanoClaw rule to every
+  session (D10) and closes jilog's Claude Code reader gap, which kept
+  `isMeta` and compact-summary lines.
+- Assistant text drops inline `[Thinking]` blocks and tool-call renderings,
+  reproducing jilog's text-blocks-only extraction (D11).
+- Every tool call becomes a `tool` message whose envelope is
+  `{"error","success"}`, with success from `signals.IsFailure` (D12). The
+  noise allowlist keys on `bash` for any Bash-category call.
+- Pattern kinds reuse `internal/signals`: `retry_loop`, `runaway_loop`,
+  `edit_churn`, `mid_task_compaction` and `context_pressure`.
+  `iteration_runaway` is ported. `resume_storm` is dropped because no
+  agentsview source records resumes (D14).
+
+Architecture-forced deltas from jilog:
+
+- jilog's `stuck_loop` fires at 4 identical calls. `retry_loop` fires at 3,
+  because it is the same predicate as the Quality page's retry count.
+- Compaction storms (3 compactions within 10 minutes) are replaced by
+  mid-task compactions, the agentsview signal. The evidence range spans all
+  compact boundaries in the session.
+- A user message that mixes text and tool results keeps its text, because
+  the echo part was removed at parse. jilog would skip it.
+
+Additions beyond jilog:
+
+- Frustration markers (`signals.IsFrustrationMarker`) and user interruptions
+  (rows the Claude parser tags `interrupted`) are friction kinds of their
+  own. They run after jilog's five kinds.
+- `SeatFromPath` uses only the patterns its caller provides. Wiring those
+  patterns to `[friction] seat_patterns` configuration is planned for a later
+  PR. jilog's built-in pool-directory conventions are not carried over.
 
 ## Parity notes
 
@@ -109,12 +151,98 @@ parts below record the approved mapping; they do not describe PR 1 behavior.
   exponents and underscores, which AgentsView does not produce.
 - An empty tool name becomes `unknown`; jilog does this only for a missing
   name.
+- Observed-spend role and model names are sanitized in Markdown so a backtick
+  or control character cannot break a line. JSON keeps the original map keys.
 
-## Digest golden deltas
+## Digest goldens
 
-The digest renderer is planned for PR 4. That PR will replace this note with
-every difference between AgentsView's golden digest and jilog's
-`tests/golden/learning-digest.md`.
+`internal/friction/testdata/golden/friction-log.md` is jilog's
+`crates/jilog-review/tests/golden/learning-digest.md` (at `9e8e094`), and
+`summary.json` is `crates/jilog/tests/golden/review-nightly.json`. The fixture
+builders port `tests/golden_digest.rs` and `digest_report()` in
+`crates/jilog/src/commands/review.rs`. The only Markdown differences are the D8
+heading, scrubbed fixture strings, the two D36 frontmatter keys and the two D36
+sections, which are empty here. Every jilog line keeps its bytes. The JSON
+differences are the `kata` backend, the `digest_path` meaning, `schema_version`
+3 and the two D36 count keys:
+
+```diff
+ patterns: 1
++frustrations: 0
++interruptions: 0
+ ---
+-# Learning Digest — 2026-09-16
++# Friction Log — 2026-09-16
++- `842c45ce-77b2-4d72-b995-f2a10466eb40` — 'do calendar re-auth' (recurred in sessions totaling $4.20)
++- `helper@general` `seat:seat-02` `chat-1` — 'no, use the gh cli'
+ - `seat:seat-03` `ee58d934-1049-4da0-b5b3-9a00f50efcc7` kind=`stuck_loop`: `bash` x6 identical arguments 01:35-01:54
+
++## Frustration
++
++_No frustration detected._
++
++## Interruptions
++
++_No interruptions detected._
++
++- `helper@general`: 1 corrections, …
+```
+
+```diff
+-      "backend": "github",
++      "backend": "kata",
+-  "digest_path": "/tmp/learning-digest-2026-05-10.md",
++  "digest_path": "friction:2026-05-10",
++  "frustrations": 0,
++  "interruptions": 0,
++    "helper@general": {
++      "channel": "general",
++      "persona": "helper",
+-  "schema_version": 2,
++  "schema_version": 3,
+```
+
+`friction-log-extra-kinds.md` has no jilog counterpart. It pins the D36 sections
+with content: a frustration line with both annotations, a persona frustration
+line, and interruptions counted per session.
+
+The pattern line keeps jilog's `stuck_loop` kind. The renderer prints the kind
+verbatim, and agentsview's `retry_loop` evidence has the same shape. Ported unit
+tests scrub personal, channel and machine names the same way, and replace the
+fixture time zone with another UTC+06 zone. The `+` lines above show the
+scrubbed fixture strings; jilog's originals are not reproduced here.
+
+Zone resolution differs from jilog `zone.rs`. `AGENTSVIEW_FRICTION_TZ` and
+`[friction] timezone` replace `JILOG_TZ` and the config key. After them,
+`timeutil.LocalLocation()` covers jilog's `TZ` and system-zone steps and falls
+back to the process zone instead of UTC. An empty configured timezone means
+unset rather than an error.
+
+## Review orchestration (roadmap PR 5)
+
+Ported from jilog `9e8e094` `crates/jilog-review/src/digest.rs:208-706`
+(`run_review`), `reader.rs:233-270` (processed sessions) and
+`archive_spend.rs:83-109`.
+
+- **Added:** `frustration` and `interruption` kinds from agentsview's own
+  detectors flow through digests and recurrence (not counted in the persona
+  line); generic diagnostic subjects (`subject_kind = diagnostic`) replace
+  jilog's worker records and are excluded from P0 by kind, not by tool name.
+- **Kept:** detector order and run order within each kind, dimension
+  stamping, persona rollup including sessions without signals, spend
+  accumulation with `(root)` role keys, P0 alerts over the digest's errors,
+  archive-spend window and summarizing, empty digest on the first build of a
+  date, dry run writes nothing.
+- **Replaced:** the processed-sessions file is `friction_digest_sessions`;
+  "nightly" is an hourly catch-up over complete local dates; a date is built
+  once (jilog's same-date preservation rule becomes build-once plus explicit
+  rebuild); subjects are dated by last activity instead of the run day;
+  archive spend reads native daily usage instead of shelling out; per-session
+  cost is archive microdollars (scale 6), so a jilog `$1.50` renders
+  `$1.500000`; sub-agent spend is keyed `subagent`.
+- **Dropped:** reader discovery windows and the retry sidecar (the filing
+  outbox replaces it in the Kata PRs); jilog's private worker collectors and
+  pool-seat conventions (seats come only from user `seat_patterns`).
 
 ## Event ledger
 

@@ -22245,6 +22245,7 @@ type VersionInfo struct {
 	BuildDate                  string `json:"build_date" validate:"required"`
 	Commit                     string `json:"commit" validate:"required"`
 	DataVersion                int64  `json:"data_version"`
+	FrictionAvailable          bool   `json:"friction_available"`
 	InsightGenerationAvailable bool   `json:"insight_generation_available"`
 	LedgerAvailable            bool   `json:"ledger_available"`
 	ReadOnly                   *bool  `json:"read_only,omitempty"`

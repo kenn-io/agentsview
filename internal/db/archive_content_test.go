@@ -11,6 +11,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/friction"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -826,6 +827,10 @@ func TestCopyOrphanedDataProjectsArchiveContent(t *testing.T) {
 			[]SecretFinding{{SessionID: "archived", RuleName: "aws-access-key"}},
 			1, "rules-v1",
 		))
+		frictionRows, dims := frictionFixture("archived")
+		require.NoError(t, source.ReplaceSessionFriction(t.Context(), "archived",
+			frictionRows, dims, friction.RulesVersion,
+			FrictionHash(frictionRows, dims, friction.RulesVersion)))
 		archivedRows, err := source.GetAllMessages(t.Context(), "archived")
 		require.NoError(t, err)
 		pinNote := "quoted the secret here"
@@ -863,6 +868,11 @@ func TestCopyOrphanedDataProjectsArchiveContent(t *testing.T) {
 		)
 		require.NoError(t, err)
 		assert.Empty(t, findings)
+		frictionRows, err := destination.SessionFrictionFindings(t.Context(), "archived")
+		require.NoError(t, err)
+		assert.Empty(t, frictionRows, "findings from dropped tool payloads are cleared")
+		assert.Empty(t, stored.FrictionRulesVersion,
+			"the projected transcript must be recomputed")
 
 		messages, err := destination.GetAllMessages(t.Context(), "archived")
 		require.NoError(t, err)
@@ -934,6 +944,12 @@ func TestCopyOrphanedDataProjectsArchiveContent(t *testing.T) {
 		)
 		require.NoError(t, err)
 		assert.Empty(t, findings)
+		frictionRows, err := destination.SessionFrictionFindings(t.Context(), "archived")
+		require.NoError(t, err)
+		assert.Empty(t, frictionRows)
+		assert.Zero(t, stored.FrictionCount)
+		assert.Equal(t, friction.RulesVersion, stored.FrictionRulesVersion)
+		assert.Equal(t, FrictionHash(nil, nil, friction.RulesVersion), stored.FrictionHash)
 
 		messages, err := destination.GetAllMessages(t.Context(), "archived")
 		require.NoError(t, err)

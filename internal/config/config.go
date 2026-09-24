@@ -29,6 +29,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/gofrs/flock"
 	"github.com/spf13/pflag"
+	"go.kenn.io/agentsview/internal/friction"
 	"go.kenn.io/agentsview/internal/jsonutil"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/pathutil"
@@ -607,6 +608,45 @@ func (c InsightsConfig) Validate() error {
 	return nil
 }
 
+// DefaultFrictionBackfillDays bounds catch-up to recent complete local dates.
+const DefaultFrictionBackfillDays = 7
+
+// FrictionConfig controls the deterministic Friction Log review.
+type FrictionConfig struct {
+	Enabled bool `json:"enabled" toml:"enabled"`
+	// Timezone is the IANA zone digests are dated in. An empty value uses
+	// the local zone; AGENTSVIEW_FRICTION_TZ overrides this setting.
+	Timezone string `json:"timezone,omitempty" toml:"timezone"`
+	// BackfillDays bounds catch-up to recent complete local dates.
+	BackfillDays int `json:"backfill_days" toml:"backfill_days"`
+	// SeatPatterns are globs over session file paths with one {seat} capture.
+	SeatPatterns []string `json:"seat_patterns,omitempty" toml:"seat_patterns"`
+}
+
+// Validate checks the zone name, backfill bound, and seat patterns.
+func (c FrictionConfig) Validate() error {
+	if tz := strings.TrimSpace(c.Timezone); tz != "" {
+		if tz == "Local" {
+			return fmt.Errorf("[friction] timezone %q is not an IANA zone", tz)
+		}
+		if _, err := time.LoadLocation(tz); err != nil {
+			return fmt.Errorf("[friction] timezone %q is not an IANA zone", tz)
+		}
+	}
+	if c.BackfillDays < 1 || c.BackfillDays > 3650 {
+		return errors.New("[friction] backfill_days must be between 1 and 3650")
+	}
+	for _, p := range c.SeatPatterns {
+		if strings.Count(p, "{seat}") != 1 {
+			return fmt.Errorf("[friction] seat_patterns entry %q must contain exactly one {seat}", p)
+		}
+	}
+	if _, err := friction.CompileSeatPatterns(c.SeatPatterns); err != nil {
+		return fmt.Errorf("[friction] seat_patterns: %w", err)
+	}
+	return nil
+}
+
 type CustomModelRate struct {
 	InputMicrodollarsPerMTok         int64 `json:"input_microdollars_per_mtok" toml:"input_microdollars_per_mtok"`
 	OutputMicrodollarsPerMTok        int64 `json:"output_microdollars_per_mtok" toml:"output_microdollars_per_mtok"`
@@ -806,6 +846,7 @@ type Config struct {
 	Recall               RecallConfig                `json:"recall,omitempty" toml:"recall"`
 	Insights             InsightsConfig              `json:"insights,omitempty" toml:"insights"`
 	Ledger               LedgerConfig                `json:"ledger,omitempty" toml:"ledger"`
+	Friction             FrictionConfig              `json:"friction,omitempty" toml:"friction"`
 	Automated            AutomatedConfig             `json:"automated,omitempty" toml:"automated"`
 	Agent                map[string]AgentConfig      `json:"agent,omitempty" toml:"agent"`
 	WriteTimeout         time.Duration               `json:"-" toml:"-"`
@@ -1213,6 +1254,7 @@ func Default() (Config, error) {
 				FailureBackoff:   "1h",
 			},
 		},
+		Friction: FrictionConfig{Enabled: true, BackfillDays: DefaultFrictionBackfillDays},
 	}, nil
 }
 
@@ -1605,6 +1647,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		Recall                         RecallConfig           `toml:"recall"`
 		Insights                       InsightsConfig         `toml:"insights"`
 		Ledger                         LedgerConfig           `toml:"ledger"`
+		Friction                       FrictionConfig         `toml:"friction"`
 		Automated                      AutomatedConfig        `toml:"automated"`
 		Agent                          map[string]AgentConfig `toml:"agent"`
 		EventsCoalesceInterval         time.Duration          `toml:"events_coalesce_interval"`
@@ -1879,6 +1922,23 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	if meta.IsDefined("ledger") {
 		c.Ledger = file.Ledger.normalized()
+	}
+	if meta.IsDefined("friction", "enabled") {
+		c.Friction.Enabled = file.Friction.Enabled
+	}
+	if meta.IsDefined("friction", "timezone") {
+		c.Friction.Timezone = strings.TrimSpace(file.Friction.Timezone)
+	}
+	if meta.IsDefined("friction", "backfill_days") {
+		c.Friction.BackfillDays = file.Friction.BackfillDays
+	}
+	if meta.IsDefined("friction", "seat_patterns") {
+		c.Friction.SeatPatterns = make([]string, 0, len(file.Friction.SeatPatterns))
+		for _, p := range file.Friction.SeatPatterns {
+			if p = strings.TrimSpace(p); p != "" {
+				c.Friction.SeatPatterns = append(c.Friction.SeatPatterns, p)
+			}
+		}
 	}
 	// IsDefined distinguishes "unset" (leave default 10s) from an
 	// explicit "0s" (disable coalescing). Checking != 0 would silently
@@ -2459,6 +2519,9 @@ func finalize(cfg *Config) error {
 		return err
 	}
 	if err := cfg.Ledger.Validate(); err != nil {
+		return err
+	}
+	if err := cfg.Friction.Validate(); err != nil {
 		return err
 	}
 	return nil

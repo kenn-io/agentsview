@@ -7486,6 +7486,8 @@ components:
         data_version:
           format: int64
           type: integer
+        friction_available:
+          type: boolean
         insight_generation_available:
           type: boolean
         ledger_available:
@@ -7500,6 +7502,7 @@ components:
         - build_date
         - insight_generation_available
         - ledger_available
+        - friction_available
         - api_version
         - data_version
       type: object

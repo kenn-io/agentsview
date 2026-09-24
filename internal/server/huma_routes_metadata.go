@@ -179,6 +179,7 @@ func (s *Server) humaGetVersion(
 	version := s.version
 	version.InsightGenerationAvailable = supportsInsightGeneration(s.db)
 	version.LedgerAvailable = s.ledgerConfig().Enabled
+	version.FrictionAvailable = s.frictionRunner != nil
 	return &jsonOutput[VersionInfo]{Body: version}, nil
 }
 
