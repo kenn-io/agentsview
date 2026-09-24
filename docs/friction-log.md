@@ -110,6 +110,12 @@ auto_file = true
 kinds = ["correction", "error", "workaround", "deferral", "pattern"]
 ```
 
+On the Friction Log page, the hub shows a pattern's Kata state and linked issue.
+When Kata is ready, use **File to Kata** to file a pattern, **Link issue** to
+connect an existing Kata issue, or **Unlink** to remove the local link. Unlink
+does not close the Kata issue. These controls are hidden when Kata is unavailable
+or the archive is read-only; pushing laptops do not offer them.
+
 The hub looks for an issue with matching `friction.fingerprint` metadata before
 creating one. It uses an idempotency key for creates, so retries do not create
 duplicates. It does not match issues by title. Titles and bodies pass through

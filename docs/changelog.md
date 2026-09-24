@@ -11,6 +11,10 @@ The latest published release is
 
 **New features**
 
+- The Friction Log page now shows each headline pattern's Kata status and linked
+  issue. On a writable hub with Kata ready, you can file a pattern, link an
+  existing issue, or remove the local link. Removing the link leaves the Kata
+  issue open.
 - The AgentsView hub can file Friction Log patterns to Kata, with manual
   `friction file`, `link` and `unlink` commands. Set `auto_file = true` under
   `[friction.kata]` to file during digest builds. Pending patterns wait in an
