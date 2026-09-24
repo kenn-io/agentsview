@@ -16,6 +16,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"golang.org/x/sync/singleflight"
 )
 
 // Compile-time check: *Store satisfies db.Store.
@@ -54,6 +55,10 @@ type Store struct {
 	dailyUsageRows       usageRowMemo[chDailyUsageGroupRow]
 	sessionAggregateRows usageRowMemo[chUsageAggregateRow]
 	usageSessionRows     usageRowMemo[chUsageSessionRow]
+	// analyticsSessionRows keeps recent analytics session listings.
+	analyticsSessionRows usageRowMemo[chAnalyticsSession]
+	// analyticsListings shares one listing read among concurrent requests.
+	analyticsListings singleflight.Group
 }
 
 // NewStore connects to the mirror named by t and refuses schemas or data

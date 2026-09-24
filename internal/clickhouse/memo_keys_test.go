@@ -8,6 +8,15 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
+// Arguments that render the same when joined by spaces must still name
+// different listings, or one filter's sessions would answer another's.
+func TestAnalyticsSessionMemoKeyKeepsArgumentBoundaries(t *testing.T) {
+	a := analyticsSessionMemoKey("s.project IN (?, ?)", []any{"a b", "c"})
+	b := analyticsSessionMemoKey("s.project IN (?, ?)", []any{"a", "b c"})
+	require.NotEqual(t, a, b)
+	require.NotEqual(t, a, analyticsSessionMemoKey("s.project IN (?, ?)", []any{"a b", 1}))
+}
+
 func TestUsageRowMemoKeyKeepsCustomModelBoundaries(t *testing.T) {
 	f := db.UsageFilter{Timezone: "UTC", From: "2026-01-12", To: "2026-01-12"}
 	a, err := usageRowMemoKeyFor("daily", f, "", "digest", [][2]string{{"a b", "c"}})
