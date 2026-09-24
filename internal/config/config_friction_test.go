@@ -1,6 +1,7 @@
 package config
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -88,4 +89,63 @@ func TestFrictionConfigTOMLLoadAndFinalize(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `[friction] timezone "Nowhere/Land" is not an IANA zone`)
+}
+
+func TestFrictionNanoClawConfigTOML(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	t.Run("absent_means_off", func(t *testing.T) {
+		cfg := loadMinimalWithConfig(t, map[string]any{})
+		assert.False(t, cfg.Friction.NanoClaw.Active())
+	})
+
+	t.Run("loads_and_trims", func(t *testing.T) {
+		cfg := loadMinimalWithConfig(t, map[string]any{
+			"friction": map[string]any{"nanoclaw": map[string]any{
+				"data_dir": " ~/cell ",
+				"include":  []string{" helper "},
+				"exclude":  []string{"reviewer"},
+			}},
+		})
+		assert.True(t, cfg.Friction.NanoClaw.Active())
+		assert.Equal(t, []string{"helper"}, cfg.Friction.NanoClaw.Include)
+		assert.Equal(t, []string{"reviewer"}, cfg.Friction.NanoClaw.Exclude)
+		dataDir, dbPath, err := cfg.Friction.NanoClaw.ResolvedPaths()
+		require.NoError(t, err)
+		assert.Equal(t, filepath.Join(home, "cell"), dataDir)
+		assert.Equal(t, filepath.Join(home, "cell", "v2.db"), dbPath)
+	})
+
+	t.Run("explicit_db", func(t *testing.T) {
+		cfg := loadMinimalWithConfig(t, map[string]any{
+			"friction": map[string]any{"nanoclaw": map[string]any{
+				"data_dir": "~/cell", "db": "~/mirror/routing.db",
+			}},
+		})
+		_, dbPath, err := cfg.Friction.NanoClaw.ResolvedPaths()
+		require.NoError(t, err)
+		assert.Equal(t, filepath.Join(home, "mirror", "routing.db"), dbPath)
+	})
+}
+
+func TestFrictionNanoClawConfigValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		data    map[string]any
+		wantErr string
+	}{
+		{"db_without_data_dir", map[string]any{"db": "/x/v2.db"}, "[friction.nanoclaw] db requires data_dir"},
+		{"filter_without_data_dir", map[string]any{"exclude": []string{"reviewer"}}, "[friction.nanoclaw] include and exclude require data_dir"},
+		{"empty_include_entry", map[string]any{"data_dir": "/x", "include": []string{" "}}, "[friction.nanoclaw] include entries must be non-empty"},
+		{"empty_exclude_entry", map[string]any{"data_dir": "/x", "exclude": []string{""}}, "[friction.nanoclaw] exclude entries must be non-empty"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := loadMinimalErrWithConfig(t, map[string]any{"friction": map[string]any{"nanoclaw": tt.data}})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
 }

@@ -621,6 +621,9 @@ type FrictionConfig struct {
 	BackfillDays int `json:"backfill_days" toml:"backfill_days"`
 	// SeatPatterns are globs over session file paths with one {seat} capture.
 	SeatPatterns []string `json:"seat_patterns,omitempty" toml:"seat_patterns"`
+	// NanoClaw maps NanoClaw cell sessions to persona and channel. It is
+	// active only when DataDir is set (spec §11.1).
+	NanoClaw FrictionNanoClawConfig `json:"nanoclaw" toml:"nanoclaw"`
 }
 
 // Validate checks the zone name, backfill bound, and seat patterns.
@@ -644,7 +647,7 @@ func (c FrictionConfig) Validate() error {
 	if _, err := friction.CompileSeatPatterns(c.SeatPatterns); err != nil {
 		return fmt.Errorf("[friction] seat_patterns: %w", err)
 	}
-	return nil
+	return c.NanoClaw.Validate()
 }
 
 type CustomModelRate struct {
@@ -1935,6 +1938,7 @@ func (c *Config) applyConfigTOML(data string) error {
 			}
 		}
 	}
+	c.mergeFrictionNanoClawTOML(file.Friction, meta)
 	// IsDefined distinguishes "unset" (leave default 10s) from an
 	// explicit "0s" (disable coalescing). Checking != 0 would silently
 	// ignore the latter.
