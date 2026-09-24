@@ -48,3 +48,9 @@ func rustDebugStrings(values []string) string {
 	}
 	return "[" + strings.Join(parts, ", ") + "]"
 }
+
+// RustDebugString renders a string with Rust's Debug formatting.
+func RustDebugString(s string) string { return rustDebugString(s) }
+
+// RustDebugStrings renders a slice with Rust's Debug formatting.
+func RustDebugStrings(v []string) string { return rustDebugStrings(v) }
