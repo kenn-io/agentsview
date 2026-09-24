@@ -1851,6 +1851,7 @@ func orphanSessionCols(ctx context.Context, tx *sql.Tx) string {
 		"is_truncated", "last_write_incremental",
 		"transcript_revision",
 		"secret_leak_count", "secrets_rules_version",
+		"friction_count", "friction_rules_version", "friction_hash",
 	} {
 		if oldDBHasColumn(ctx, tx, "sessions", c) {
 			cols = append(cols, c)
@@ -2180,6 +2181,40 @@ func copySessionDataForIDs(
 			)`,
 		); err != nil {
 			return fmt.Errorf("copying secret_findings: %w", err)
+		}
+	}
+	if oldDBHasTable(ctx, tx, "friction_findings") {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO friction_findings
+				(session_id, kind, detector, message_ordinal, call_index,
+				 tool_name, label, text, evidence, title, fingerprint,
+				 occurred_at, seq, rules_version, created_at)
+			SELECT
+				session_id, kind, detector, message_ordinal, call_index,
+				tool_name, label, text, evidence, title, fingerprint,
+				occurred_at, seq, rules_version, created_at
+			FROM old_db.friction_findings
+			WHERE session_id IN (
+				SELECT id FROM `+tempIDsTable+`
+			)`,
+		); err != nil {
+			return fmt.Errorf("copying friction_findings: %w", err)
+		}
+	}
+	if oldDBHasTable(ctx, tx, "friction_session_dims") {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO friction_session_dims
+				(session_id, seat, persona, channel, dims_source,
+				 review_excluded)
+			SELECT
+				session_id, seat, persona, channel, dims_source,
+				review_excluded
+			FROM old_db.friction_session_dims
+			WHERE session_id IN (
+				SELECT id FROM `+tempIDsTable+`
+			)`,
+		); err != nil {
+			return fmt.Errorf("copying friction_session_dims: %w", err)
 		}
 	}
 

@@ -103,7 +103,7 @@ type IncrementalState struct {
 	// counted latch. EditChurnCount itself lives on the sessions row.
 	EditLast map[string]EditChurnState `json:"edit_last,omitempty"`
 
-	// Runaway loop: RunawayHistorical latches hasRunawayToolWindow over
+	// Runaway loop: RunawayHistorical latches runawayToolWindowSpan over
 	// every 12-window that has fully left the mutable late-result region.
 	RunawayHistorical bool `json:"runaway_historical"`
 
@@ -798,7 +798,7 @@ func windowAt(facts []ToolFact, windowStart, start int) bool {
 	return windowFactsQualify(facts[first : first+12])
 }
 
-// windowFactsQualify mirrors hasRunawayToolWindow's single-window test.
+// windowFactsQualify mirrors runawayToolWindowSpan's single-window test.
 func windowFactsQualify(facts []ToolFact) bool {
 	if len(facts) < 12 {
 		return false

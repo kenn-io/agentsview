@@ -31,6 +31,11 @@ The latest published release is
 
 **Improvements**
 
+- Session sync now saves Friction Log findings such as corrections, tool errors,
+  workarounds, deferrals, repeated patterns, frustration, and interruptions.
+  Existing sessions are filled in during background reconciliation, and
+  PostgreSQL mirrors receive the same findings. These deterministic detections
+  are stored for upcoming digest, API, and UI work.
 - Syncing uses less CPU to check transcript text for invalid characters. Clean
   text is now checked in one pass and stored unchanged. In a full sync of a
   950 MB local test corpus, total CPU time fell about 4%. Wall-clock time did
