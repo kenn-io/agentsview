@@ -3,6 +3,18 @@ info:
   title: Reuse AgentsView response models in the Go client
   version: 1.0.0
 actions:
+  - target: $.components.schemas.LedgerAppendEvent.properties.payload
+    update:
+      x-go-type: jsontext.Value
+      x-go-type-import:
+        path: encoding/json/jsontext
+        name: jsontext
+  - target: $.components.schemas.LedgerEventView.properties.payload
+    update:
+      x-go-type: jsontext.Value
+      x-go-type-import:
+        path: encoding/json/jsontext
+        name: jsontext
   - target: $.components.schemas.ActivityReport
     update:
       x-go-type: activity.Report

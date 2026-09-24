@@ -32,6 +32,7 @@ func newLedgerCommand() *cobra.Command {
 	}
 	cmd.AddCommand(newLedgerAppendCommand())
 	cmd.AddCommand(newLedgerStatusCommand())
+	cmd.AddCommand(newLedgerQueryCommand())
 	cmd.AddCommand(newLedgerVerifyCommand())
 	cmd.AddCommand(newLedgerImportCommand())
 	cmd.AddCommand(newLedgerExportCommand())
@@ -84,6 +85,17 @@ func newLedgerAppendCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			tr, daemon, err := ledgerDaemon(cmd.Context(), cfg)
+			if err != nil {
+				return err
+			}
+			if daemon {
+				res, err := requestLedgerAppend(cmd.Context(), tr, cfg.AuthToken, zones[0], event)
+				if err != nil {
+					return err
+				}
+				return writeLedgerAppendResult(cmd.OutOrStdout(), res, outputFormat(cmd) == "json")
+			}
 			database, lock, err := openWriteDB(cmd.Context(), cfg)
 			if err != nil {
 				return err
@@ -95,7 +107,14 @@ func newLedgerAppendCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return writeLedgerAppendResult(cmd.OutOrStdout(), zones[0], seg, outputFormat(cmd) == "json")
+			ids := make([]string, 0, len(seg.Events))
+			for _, e := range seg.Events {
+				ids = append(ids, e.EventID.String())
+			}
+			return writeLedgerAppendResult(cmd.OutOrStdout(), ledgerAppendResult{
+				Zone: zones[0], Source: seg.Source, SourceSeq: seg.SourceSeq,
+				Checksum: seg.Checksum, EventIDs: ids,
+			}, outputFormat(cmd) == "json")
 		},
 	}
 	f := cmd.Flags()
@@ -157,18 +176,12 @@ func buildLedgerAppendEvent(class, tier, subsystem, summary, payload, actor, obj
 	return e, nil
 }
 
-func writeLedgerAppendResult(w io.Writer, zone string, seg ledger.Segment, jsonOut bool) error {
+func writeLedgerAppendResult(w io.Writer, res ledgerAppendResult, jsonOut bool) error {
 	if jsonOut {
-		ids := make([]string, 0, len(seg.Events))
-		for _, e := range seg.Events {
-			ids = append(ids, e.EventID.String())
-		}
-		return writeLedgerJSON(w, map[string]any{
-			"zone": zone, "source": seg.Source, "source_seq": seg.SourceSeq,
-			"checksum": seg.Checksum, "event_ids": ids,
-		})
+		return writeLedgerJSON(w, res)
 	}
-	_, err := fmt.Fprintf(w, "appended %d event(s) to %s as %s\n", len(seg.Events), zone, seg.Filename())
+	_, err := fmt.Fprintf(w, "appended %d event(s) to %s as %s-%06d.json\n",
+		len(res.EventIDs), res.Zone, res.Source, res.SourceSeq)
 	return err
 }
 
@@ -187,6 +200,20 @@ func newLedgerStatusCommand() *cobra.Command {
 			zones, err := ledgerZones(cfg, zone)
 			if err != nil {
 				return err
+			}
+			tr, daemon, err := ledgerDaemon(cmd.Context(), cfg)
+			if err != nil {
+				return err
+			}
+			if daemon {
+				reports, enabled, err := requestLedgerStatus(cmd.Context(), tr, cfg.AuthToken, zone)
+				if err != nil {
+					return err
+				}
+				if outputFormat(cmd) == "json" {
+					return writeLedgerJSON(cmd.OutOrStdout(), reports)
+				}
+				return ledgerstatus.WriteText(cmd.OutOrStdout(), enabled, reports)
 			}
 			database, err := openReadOnlyDB(cmd.Context(), cfg)
 			if err != nil {
@@ -224,6 +251,29 @@ func newLedgerVerifyCommand() *cobra.Command {
 			zones, err := ledgerZones(cfg, zone)
 			if err != nil {
 				return err
+			}
+			tr, daemon, err := ledgerDaemon(cmd.Context(), cfg)
+			if err != nil {
+				return err
+			}
+			if daemon {
+				reports, err := requestLedgerVerify(cmd.Context(), tr, cfg.AuthToken, zone, full)
+				if err != nil {
+					return err
+				}
+				failures := 0
+				for _, z := range reports {
+					fmt.Fprintf(cmd.OutOrStdout(), "verify [%s]: %d newly verified, %d skipped, %d failure(s)\n",
+						z.Zone, z.NewlyVerified, z.Skipped, len(z.Failures))
+					for _, f := range z.Failures {
+						fmt.Fprintf(cmd.OutOrStdout(), "  %s: %s\n", ledgerstatus.FormatID(f[0], f[1]), f[2])
+					}
+					failures += len(z.Failures)
+				}
+				if failures > 0 {
+					return fmt.Errorf("ledger verify found %d failure(s)", failures)
+				}
+				return nil
 			}
 			database, lock, err := openWriteDB(cmd.Context(), cfg)
 			if err != nil {

@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"time"
 
+	jsontext "encoding/json/jsontext"
+
 	"github.com/doordash-oss/oapi-codegen-dd/v3/pkg/runtime"
 	"github.com/go-playground/validator/v10"
 	activity "go.kenn.io/agentsview/internal/activity"
@@ -20864,9 +20866,9 @@ type LedgerAppendEvent struct {
 	CorrelationID *string `json:"correlation_id,omitempty"`
 
 	// EventClass Event class, e.g. state-change
-	EventClass string    `json:"event_class" validate:"required"`
-	ObjectRef  *string   `json:"object_ref,omitempty"`
-	Payload    *struct{} `json:"payload,omitempty"`
+	EventClass string          `json:"event_class" validate:"required"`
+	ObjectRef  *string         `json:"object_ref,omitempty"`
+	Payload    *jsontext.Value `json:"payload,omitempty"`
 
 	// PayloadTier metadata-only, structured or confidential; default structured with a payload, else metadata-only
 	PayloadTier *string `json:"payload_tier,omitempty"`
@@ -20876,7 +20878,21 @@ type LedgerAppendEvent struct {
 }
 
 func (l LedgerAppendEvent) Validate() error {
-	return runtime.ConvertValidatorError(typesValidator.Struct(l))
+	var errors runtime.ValidationErrors
+	if err := typesValidator.Var(l.EventClass, "required"); err != nil {
+		errors = errors.Append("EventClass", err)
+	}
+	if l.Payload != nil {
+		if v, ok := any(l.Payload).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("Payload", err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
 }
 
 type LedgerAppendRequest struct {
@@ -20914,25 +20930,84 @@ func (l LedgerAppendResponse) Validate() error {
 }
 
 type LedgerEventView struct {
-	ActorRef      *string  `json:"actor_ref,omitempty" validate:"required"`
-	CausationID   *string  `json:"causation_id,omitempty" validate:"required"`
-	CorrelationID *string  `json:"correlation_id,omitempty" validate:"required"`
-	EventClass    string   `json:"event_class" validate:"required"`
-	EventID       string   `json:"event_id" validate:"required"`
-	ObjectRef     *string  `json:"object_ref,omitempty" validate:"required"`
-	Payload       struct{} `json:"payload"`
-	PayloadTier   string   `json:"payload_tier" validate:"required"`
-	Serde         string   `json:"serde" validate:"required"`
-	Source        string   `json:"source" validate:"required"`
-	SourceSeq     int64    `json:"source_seq" validate:"gte=0"`
-	Subsystem     string   `json:"subsystem" validate:"required"`
-	Summary       string   `json:"summary" validate:"required"`
-	Timestamp     string   `json:"timestamp" validate:"required"`
-	Zone          string   `json:"zone" validate:"required"`
+	ActorRef      *string        `json:"actor_ref,omitempty" validate:"required"`
+	CausationID   *string        `json:"causation_id,omitempty" validate:"required"`
+	CorrelationID *string        `json:"correlation_id,omitempty" validate:"required"`
+	EventClass    string         `json:"event_class" validate:"required"`
+	EventID       string         `json:"event_id" validate:"required"`
+	ObjectRef     *string        `json:"object_ref,omitempty" validate:"required"`
+	Payload       jsontext.Value `json:"payload"`
+	PayloadTier   string         `json:"payload_tier" validate:"required"`
+	Serde         string         `json:"serde" validate:"required"`
+	Source        string         `json:"source" validate:"required"`
+	SourceSeq     int64          `json:"source_seq" validate:"gte=0"`
+	Subsystem     string         `json:"subsystem" validate:"required"`
+	Summary       string         `json:"summary" validate:"required"`
+	Timestamp     string         `json:"timestamp" validate:"required"`
+	Zone          string         `json:"zone" validate:"required"`
 }
 
 func (l LedgerEventView) Validate() error {
-	return runtime.ConvertValidatorError(typesValidator.Struct(l))
+	var errors runtime.ValidationErrors
+	if l.ActorRef != nil {
+		if err := typesValidator.Var(l.ActorRef, "required"); err != nil {
+			errors = errors.Append("ActorRef", err)
+		}
+	}
+	if l.CausationID != nil {
+		if err := typesValidator.Var(l.CausationID, "required"); err != nil {
+			errors = errors.Append("CausationID", err)
+		}
+	}
+	if l.CorrelationID != nil {
+		if err := typesValidator.Var(l.CorrelationID, "required"); err != nil {
+			errors = errors.Append("CorrelationID", err)
+		}
+	}
+	if err := typesValidator.Var(l.EventClass, "required"); err != nil {
+		errors = errors.Append("EventClass", err)
+	}
+	if err := typesValidator.Var(l.EventID, "required"); err != nil {
+		errors = errors.Append("EventID", err)
+	}
+	if l.ObjectRef != nil {
+		if err := typesValidator.Var(l.ObjectRef, "required"); err != nil {
+			errors = errors.Append("ObjectRef", err)
+		}
+	}
+	if v, ok := any(l.Payload).(runtime.Validator); ok {
+		if err := v.Validate(); err != nil {
+			errors = errors.Append("Payload", err)
+		}
+	}
+	if err := typesValidator.Var(l.PayloadTier, "required"); err != nil {
+		errors = errors.Append("PayloadTier", err)
+	}
+	if err := typesValidator.Var(l.Serde, "required"); err != nil {
+		errors = errors.Append("Serde", err)
+	}
+	if err := typesValidator.Var(l.Source, "required"); err != nil {
+		errors = errors.Append("Source", err)
+	}
+	if err := typesValidator.Var(l.SourceSeq, "gte=0"); err != nil {
+		errors = errors.Append("SourceSeq", err)
+	}
+	if err := typesValidator.Var(l.Subsystem, "required"); err != nil {
+		errors = errors.Append("Subsystem", err)
+	}
+	if err := typesValidator.Var(l.Summary, "required"); err != nil {
+		errors = errors.Append("Summary", err)
+	}
+	if err := typesValidator.Var(l.Timestamp, "required"); err != nil {
+		errors = errors.Append("Timestamp", err)
+	}
+	if err := typesValidator.Var(l.Zone, "required"); err != nil {
+		errors = errors.Append("Zone", err)
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
 }
 
 type LedgerQueryResponse struct {
