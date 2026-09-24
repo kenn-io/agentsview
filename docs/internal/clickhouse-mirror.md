@@ -238,11 +238,14 @@ and rebuilt on the next schema step, and a rebuild that stopped halfway finishes
 on the next start. The schema step adds a missing projection only with the
 refresh stopped, and always starts it again.
 
-**Currency is proven per read.** A read uses prepared rows only when they were
-refreshed from the current snapshot set; otherwise it uses raw rows. When the
-stored price copies no longer match the price records, for example after the
-records were cleared, reads keep the prepared rows and price them through the
-per-request join.
+**Currency is proven per read.** A read uses prepared rows only when every
+session has a current snapshot. Sessions pushed since the last refresh form a
+delta: their rows are prepared and priced in Go once per snapshot, sent to the
+read as an external table, and replace that session's stored rows. A refresh
+empties the delta. Before the first refresh, or while a session lacks a current
+snapshot, reads use raw rows. When the stored price copies no longer match the
+price records, for example after the records were cleared, reads keep the
+prepared rows and price them through the per-request join.
 
 **Kept usage reads.** Serve keeps the rows of recent usage reads in memory, one
 slot per read, versioned by the active parts of every table. A repeat request

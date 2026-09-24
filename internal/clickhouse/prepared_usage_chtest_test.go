@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	chdriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/activity"
@@ -126,11 +127,21 @@ func TestPreparedUsagePublicationAndPricing(t *testing.T) {
 	result, err = syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 	require.Zero(t, result.Errors)
-	requireReady(false)
+	// The push republished one session; until the refresh, its rows are
+	// prepared at read time while the other sessions keep their stored rows.
+	state, err := store.preparedUsageState(ctx)
+	require.NoError(t, err)
+	require.True(t, state.ready)
+	require.Equal(t, []string{usagePriceRoundID}, state.changed)
+	require.Equal(t, []string{usagePriceRoundID}, state.stale)
 	corrected := read()
 	require.NotEqual(t, repriced, corrected, "reads must not serve the previous push's prepared usage")
 	refresh()
-	requireReady(true)
+	state, err = store.preparedUsageState(ctx)
+	require.NoError(t, err)
+	require.True(t, state.ready)
+	require.Empty(t, state.changed)
+	require.Empty(t, state.stale)
 	require.Equal(t, corrected, read())
 	var roundRows []activity.UsageRow
 	for _, row := range corrected {
@@ -299,7 +310,7 @@ func TestEnsurePreparedUsageRebuildsOutdatedTable(t *testing.T) {
 	conn := store.DB()
 	selection := clickUsageNormalizedQueryFrom("", chUsageStoredMessageEligibility, chUsageEventEligibility,
 		"usage_session_snapshots s ARRAY JOIN s.usage_facts AS m",
-		"usage_session_snapshots s ARRAY JOIN s.usage_events AS ue", "1")
+		"usage_session_snapshots s ARRAY JOIN s.usage_events AS ue", "1", "")
 	for _, query := range []string{
 		"SYSTEM STOP VIEW prepare_usage",
 		"DROP VIEW prepare_usage SYNC",
@@ -369,4 +380,228 @@ func TestEnsurePreparedUsageProjectionsRestartsRefreshAfterFailure(t *testing.T)
 	require.NoError(t, conn.QueryRowContext(ctx, `SELECT toString(status) FROM system.view_refreshes
 		WHERE database = currentDatabase() AND view = 'prepare_usage'`).Scan(&status))
 	require.NotEqual(t, "Disabled", status)
+}
+
+// Between a refresh and the next, a push republishes, adds, and removes
+// sessions. Reads keep the prepared rows of the untouched sessions and
+// prepare the pushed sessions' rows themselves, so they match both the
+// refresh that follows and the raw rows.
+func TestPreparedUsageServesReadsBetweenRefreshes(t *testing.T) {
+	ctx := t.Context()
+	local, target := seedUsagePriceFixture(t)
+	syncer := newTestSync(t, local, target, storage.PusherOptions{})
+	store := NewStoreFromDB(syncer.conn)
+	exec := func(stmts ...string) {
+		t.Helper()
+		for _, stmt := range stmts {
+			_, err := store.DB().ExecContext(ctx, stmt)
+			require.NoError(t, err, stmt)
+		}
+	}
+	push := func() {
+		t.Helper()
+		result, err := syncer.Push(ctx, false, nil)
+		require.NoError(t, err)
+		require.Zero(t, result.Errors)
+	}
+	exec("SYSTEM STOP VIEW prepare_usage")
+	push()
+	exec("SYSTEM START VIEW prepare_usage", "SYSTEM REFRESH VIEW prepare_usage",
+		"SYSTEM WAIT VIEW prepare_usage", "SYSTEM STOP VIEW prepare_usage")
+	filters := []db.UsageFilter{
+		{Timezone: "UTC", From: "2026-01-12", To: "2026-01-12", Breakdowns: true},
+		{Timezone: "UTC", From: "2026-01-01", To: "2026-01-31", Agent: "claude", ExcludeOneShot: true},
+		{Timezone: "UTC", Project: "delta", Breakdowns: true},
+		{Timezone: "UTC", Breakdowns: true},
+	}
+	type reads struct {
+		daily  []db.DailyUsageResult
+		top    [][]db.TopSessionEntry
+		counts []db.UsageSessionCounts
+	}
+	read := func() reads {
+		t.Helper()
+		var out reads
+		for _, f := range filters {
+			daily, err := store.GetDailyUsage(ctx, f)
+			require.NoError(t, err)
+			out.daily = append(out.daily, daily)
+			top, err := store.GetTopSessionsByCost(ctx, f, 10)
+			require.NoError(t, err)
+			out.top = append(out.top, top)
+			counts, err := store.GetUsageSessionCounts(ctx, f)
+			require.NoError(t, err)
+			out.counts = append(out.counts, counts)
+		}
+		return out
+	}
+	state, err := store.preparedUsageState(ctx)
+	require.NoError(t, err)
+	require.True(t, state.ready)
+	require.Empty(t, state.changed)
+	require.Empty(t, state.stale)
+	prepared := read()
+
+	// Republish one session with different usage, remove another, and add
+	// a third; the stopped view holds the refresh the push requests.
+	session, err := local.GetSessionFull(ctx, usagePriceRoundID)
+	require.NoError(t, err)
+	messages, err := local.GetAllMessages(ctx, usagePriceRoundID)
+	require.NoError(t, err)
+	messages[0].TokenUsage = []byte(`{"input_tokens":100}`)
+	const addedID = "ch-price-added"
+	added := fixtureSession(addedID, "delta", "added first", "2026-01-12T03:45:00.000Z", 1)
+	_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{
+		{Session: *session, Messages: messages[:1], ReplaceMessages: true, DataVersion: 1},
+		{Session: added, Messages: []db.Message{usagePriceMessage(addedID, 0, "2026-01-12T03:45:00.000Z",
+			"tier-test", `{"input_tokens":1500,"output_tokens":200}`)}, ReplaceMessages: true, DataVersion: 1},
+	})
+	require.NoError(t, err)
+	require.NoError(t, local.SoftDeleteSession(ctx, usagePriceSnapBID))
+	deleted, err := local.DeleteSessionIfTrashed(ctx, usagePriceSnapBID)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, deleted)
+	push()
+	state, err = store.preparedUsageState(ctx)
+	require.NoError(t, err)
+	require.True(t, state.ready)
+	require.ElementsMatch(t, []string{usagePriceRoundID, addedID}, state.changed)
+	require.ElementsMatch(t, []string{usagePriceRoundID, usagePriceSnapBID}, state.stale)
+	between := read()
+	require.NotEqual(t, prepared, between, "reads must serve the pushed sessions")
+
+	exec("SYSTEM START VIEW prepare_usage", "SYSTEM REFRESH VIEW prepare_usage",
+		"SYSTEM WAIT VIEW prepare_usage", "SYSTEM STOP VIEW prepare_usage")
+	state, err = store.preparedUsageState(ctx)
+	require.NoError(t, err)
+	require.True(t, state.ready)
+	require.Empty(t, state.changed)
+	require.Empty(t, state.stale)
+	require.Equal(t, between, read(), "rows prepared at read time must match the refresh")
+	// An empty table is not ready, so the same reads use the raw rows.
+	exec("TRUNCATE TABLE prepared_usage")
+	ready, err := store.preparedUsageReady(ctx)
+	require.NoError(t, err)
+	require.False(t, ready)
+	require.Equal(t, between, read(), "rows prepared at read time must match the raw rows")
+}
+
+// A read that took its prepared state before a refresh and runs after it
+// counts a new session once: the refresh already holds the rows the
+// state's delta supplies.
+func TestPreparedUsageReadAcrossRefreshCountsNewSessionOnce(t *testing.T) {
+	ctx := t.Context()
+	local, target := seedUsagePriceFixture(t)
+	syncer := newTestSync(t, local, target, storage.PusherOptions{})
+	store := NewStoreFromDB(syncer.conn)
+	exec := func(stmts ...string) {
+		t.Helper()
+		for _, stmt := range stmts {
+			_, err := store.DB().ExecContext(ctx, stmt)
+			require.NoError(t, err, stmt)
+		}
+	}
+	refresh := func() {
+		t.Helper()
+		exec("SYSTEM START VIEW prepare_usage", "SYSTEM REFRESH VIEW prepare_usage",
+			"SYSTEM WAIT VIEW prepare_usage", "SYSTEM STOP VIEW prepare_usage")
+	}
+	push := func() {
+		t.Helper()
+		result, err := syncer.Push(ctx, false, nil)
+		require.NoError(t, err)
+		require.Zero(t, result.Errors)
+	}
+	exec("SYSTEM STOP VIEW prepare_usage")
+	push()
+	refresh()
+	const addedID = "ch-price-added"
+	added := fixtureSession(addedID, "delta", "added first", "2026-01-12T03:45:00.000Z", 1)
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+		Session: added, Messages: []db.Message{usagePriceMessage(addedID, 0, "2026-01-12T03:45:00.000Z",
+			"tier-test", `{"input_tokens":1500,"output_tokens":200}`)}, ReplaceMessages: true, DataVersion: 1,
+	}})
+	require.NoError(t, err)
+	push()
+	count := func(state preparedUsageState) uint64 {
+		t.Helper()
+		query, args := chPreparedUsageSourceSQL(state, "session_id = ?", []any{addedID})
+		readCtx, err := withUsageDeltaTables(ctx, state)
+		require.NoError(t, err)
+		var n uint64
+		require.NoError(t, store.queryRowContext(readCtx, "SELECT count() FROM ("+query+")", args...).Scan(&n))
+		return n
+	}
+	taken, err := store.preparedUsageState(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []string{addedID}, taken.changed)
+	want := count(taken)
+	require.NotZero(t, want)
+	refresh()
+	require.Equal(t, want, count(taken), "a state taken before the refresh must not add the delta to the refreshed rows")
+}
+
+// Session ids reach the changed-session query as an Array(String) query
+// parameter; ClickHouse must parse back exactly the ids that were sent.
+func TestChangedSessionParameterKeepsIDs(t *testing.T) {
+	ctx := t.Context()
+	store, _, _ := newPushedStore(t)
+	ids := []string{"plain", `quote'd`, `back\slash`, `both\'`, "tab\tnewline\n"}
+	var got []string
+	require.NoError(t, store.queryRowContext(chdriver.Context(ctx, chdriver.WithParameters(chdriver.Parameters{
+		"ids": chStringArrayLiteral(ids),
+	})), "SELECT {ids:Array(String)}").Scan(&got))
+	require.Equal(t, ids, got)
+}
+
+// A delta that reuses the kept rows of an earlier changed snapshot and
+// reads a newly changed one serves what a store that kept nothing does.
+func TestUsageDeltaReusesKeptSnapshotRows(t *testing.T) {
+	ctx := t.Context()
+	local, target := seedUsagePriceFixture(t)
+	syncer := newTestSync(t, local, target, storage.PusherOptions{})
+	store := NewStoreFromDB(syncer.conn)
+	push := func() {
+		t.Helper()
+		result, err := syncer.Push(ctx, false, nil)
+		require.NoError(t, err)
+		require.Zero(t, result.Errors)
+	}
+	_, err := store.DB().ExecContext(ctx, "SYSTEM STOP VIEW prepare_usage")
+	require.NoError(t, err)
+	push()
+	for _, stmt := range []string{"SYSTEM START VIEW prepare_usage", "SYSTEM REFRESH VIEW prepare_usage",
+		"SYSTEM WAIT VIEW prepare_usage", "SYSTEM STOP VIEW prepare_usage"} {
+		_, err := store.DB().ExecContext(ctx, stmt)
+		require.NoError(t, err, stmt)
+	}
+	republish := func(id, usage string) {
+		t.Helper()
+		session, err := local.GetSessionFull(ctx, id)
+		require.NoError(t, err)
+		messages, err := local.GetAllMessages(ctx, id)
+		require.NoError(t, err)
+		messages[0].TokenUsage = []byte(usage)
+		_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+			Session: *session, Messages: messages[:1], ReplaceMessages: true, DataVersion: 1,
+		}})
+		require.NoError(t, err)
+		push()
+	}
+	f := db.UsageFilter{Timezone: "UTC", Breakdowns: true}
+	requireFresh := func() {
+		t.Helper()
+		got, err := store.GetDailyUsage(ctx, f)
+		require.NoError(t, err)
+		fresh, err := NewStoreFromDB(store.DB()).GetDailyUsage(ctx, f)
+		require.NoError(t, err)
+		require.Equal(t, fresh, got)
+	}
+	republish(usagePriceRoundID, `{"input_tokens":100}`)
+	requireFresh()
+	republish(usagePriceTierID, `{"input_tokens":2500,"output_tokens":10}`)
+	state, err := store.preparedUsageState(ctx)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{usagePriceRoundID, usagePriceTierID}, state.changed)
+	requireFresh()
 }
