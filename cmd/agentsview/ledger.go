@@ -18,6 +18,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/ledger"
 	"go.kenn.io/agentsview/internal/ledger/segfile"
+	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/serdejson"
 )
 
@@ -186,6 +187,17 @@ func writeLedgerAppendResult(w io.Writer, zone string, seg ledger.Segment, jsonO
 type ledgerZoneReport struct {
 	ledger.ZoneStatus `json:",inline"`
 	Imports           []ledgerImportReport `json:"imports"`
+	Push              []ledgerPushReport   `json:"push"`
+}
+
+// ledgerPushReport is one PostgreSQL target's last ledger push for a zone.
+type ledgerPushReport struct {
+	Target    string      `json:"target"`
+	At        string      `json:"at"`
+	Pushed    int         `json:"pushed"`
+	Identical int         `json:"identical"`
+	HeldBack  int         `json:"held_back"`
+	Failures  [][4]string `json:"failures"`
 }
 
 type ledgerImportReport struct {
@@ -231,13 +243,20 @@ func newLedgerStatusCommand() *cobra.Command {
 }
 
 func collectLedgerStatus(ctx context.Context, cfg config.Config, database *db.DB, zones []string) ([]ledgerZoneReport, error) {
+	pushes, err := database.ListSyncStateByPrefix(ctx, postgres.LedgerPushStatusKeyPrefix)
+	if err != nil {
+		return nil, err
+	}
 	reports := make([]ledgerZoneReport, 0, len(zones))
 	for _, z := range zones {
 		st, err := database.LedgerStatus(ctx, z)
 		if err != nil {
 			return nil, err
 		}
-		r := ledgerZoneReport{ZoneStatus: st, Imports: []ledgerImportReport{}}
+		r := ledgerZoneReport{
+			ZoneStatus: st, Imports: []ledgerImportReport{},
+			Push: ledgerPushReports(pushes, z),
+		}
 		if zc, ok := cfg.Ledger.Zone(z); ok {
 			dir, err := zc.ImportSegmentsDir()
 			if err != nil {
@@ -260,6 +279,30 @@ func collectLedgerStatus(ctx context.Context, cfg config.Config, database *db.DB
 	return reports, nil
 }
 
+// ledgerPushReports extracts one zone's push status in target name order.
+func ledgerPushReports(pushes map[string]string, zone string) []ledgerPushReport {
+	out := []ledgerPushReport{}
+	for _, target := range slices.Sorted(maps.Keys(pushes)) {
+		st, err := postgres.DecodeLedgerPushStatus(pushes[target])
+		if err != nil {
+			continue
+		}
+		counts := st.Zones[zone]
+		r := ledgerPushReport{
+			Target: target, At: st.At, Pushed: counts.Pushed,
+			Identical: counts.Identical, HeldBack: counts.HeldBack,
+			Failures: [][4]string{},
+		}
+		for _, f := range st.Failures {
+			if f[0] == zone {
+				r.Failures = append(r.Failures, f)
+			}
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
 func writeLedgerStatusText(w io.Writer, cfg config.Config, reports []ledgerZoneReport) error {
 	var b strings.Builder
 	if !cfg.Ledger.Enabled {
@@ -278,6 +321,17 @@ func writeLedgerStatusText(w io.Writer, cfg config.Config, reports []ledgerZoneR
 		}
 		for _, imp := range r.Imports {
 			fmt.Fprintf(&b, "  import %s at %s: %s\n", imp.Path, imp.UpdatedAt, string(imp.Report))
+		}
+		for _, p := range r.Push {
+			target := p.Target
+			if target == "" {
+				target = "(default)"
+			}
+			fmt.Fprintf(&b, "  push [%s] at %s: %d pushed, %d already present, %d held back, %d refused\n",
+				target, p.At, p.Pushed, p.Identical, p.HeldBack, len(p.Failures))
+			for _, f := range p.Failures {
+				fmt.Fprintf(&b, "    refused %s: %s\n", formatLedgerID(f[1], f[2]), f[3])
+			}
 		}
 	}
 	_, err := io.WriteString(w, b.String())
