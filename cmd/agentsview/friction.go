@@ -41,6 +41,7 @@ func newFrictionCommand() *cobra.Command {
 func newFrictionRunCommand() *cobra.Command {
 	var req review.RunRequest
 	var asJSON bool
+	var format string
 	cmd := &cobra.Command{
 		Use:   "run",
 		Short: "Build missing digests, or one date with --date",
@@ -50,6 +51,9 @@ func newFrictionRunCommand() *cobra.Command {
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if format != "human" && format != "json" {
+				return errors.New("--format must be human or json")
+			}
 			backend, cleanup, err := resolveFrictionBackend(cmd)
 			if err != nil {
 				return err
@@ -60,7 +64,7 @@ func newFrictionRunCommand() *cobra.Command {
 				return err
 			}
 			w := cmd.OutOrStdout()
-			if asJSON {
+			if asJSON || format == "json" {
 				for _, o := range outcomes {
 					if _, err := w.Write(o.SummaryJSON); err != nil {
 						return err
@@ -87,12 +91,14 @@ func newFrictionRunCommand() *cobra.Command {
 	cmd.Flags().StringVar(&req.Date, "date", "", "Digest date (YYYY-MM-DD)")
 	cmd.Flags().BoolVar(&req.Rebuild, "rebuild", false, "Rebuild an existing digest, keeping its membership")
 	cmd.Flags().BoolVar(&req.DryRun, "dry-run", false, "Compute and render without writing")
+	cmd.Flags().StringVar(&format, "format", "human", "Output format: human or json")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "Print the summary JSON object instead of the human summary")
 	return cmd
 }
 
 func newFrictionDigestCommand() *cobra.Command {
 	var date, from, to, format string
+	var asJSON bool
 	cmd := &cobra.Command{
 		Use:          "digest",
 		Short:        "Print a stored digest (Markdown or summary JSON)",
@@ -122,7 +128,7 @@ func newFrictionDigestCommand() *cobra.Command {
 						return err
 					}
 					payload := out.Markdown
-					if format == "json" {
+					if asJSON || format == "json" {
 						payload = out.SummaryJSON
 					}
 					if _, err := w.Write(payload); err != nil {
@@ -142,7 +148,7 @@ func newFrictionDigestCommand() *cobra.Command {
 				return err
 			}
 			payload := out.Markdown
-			if format == "json" {
+			if asJSON || format == "json" {
 				payload = out.SummaryJSON
 			}
 			_, err = w.Write(payload)
@@ -153,12 +159,14 @@ func newFrictionDigestCommand() *cobra.Command {
 	cmd.Flags().StringVar(&from, "from", "", "First date of a range (YYYY-MM-DD)")
 	cmd.Flags().StringVar(&to, "to", "", "Last date of a range (YYYY-MM-DD)")
 	cmd.Flags().StringVar(&format, "format", "md", "Output format: md or json")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "Print summary JSON (alias for --format json)")
 	return cmd
 }
 
 func newFrictionFindingsCommand() *cobra.Command {
 	var f db.FrictionFindingFilter
 	var format string
+	var asJSON bool
 	cmd := &cobra.Command{
 		Use:          "findings",
 		Short:        "List stored friction findings",
@@ -177,7 +185,7 @@ func newFrictionFindingsCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if format == "json" {
+			if asJSON || format == "json" {
 				return json.MarshalEncode(jsontext.NewEncoder(cmd.OutOrStdout()), page)
 			}
 			return printFrictionFindings(cmd.OutOrStdout(), page)
@@ -189,6 +197,7 @@ func newFrictionFindingsCommand() *cobra.Command {
 	cmd.Flags().IntVar(&f.Limit, "limit", 0, "Page size (default 100, max 1000)")
 	cmd.Flags().StringVar(&f.Cursor, "cursor", "", "Cursor from a previous page")
 	cmd.Flags().StringVar(&format, "format", "table", "Output format: table or json")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "Print JSON (alias for --format json)")
 	return cmd
 }
 
@@ -196,6 +205,7 @@ func newFrictionPatternsCommand() *cobra.Command {
 	var f db.FrictionPatternFilter
 	var linked, unlinked bool
 	var format string
+	var asJSON bool
 	cmd := &cobra.Command{
 		Use:          "patterns",
 		Short:        "List recurring friction patterns",
@@ -220,7 +230,7 @@ func newFrictionPatternsCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if format == "json" {
+			if asJSON || format == "json" {
 				return json.MarshalEncode(jsontext.NewEncoder(cmd.OutOrStdout()), page)
 			}
 			return printFrictionPatterns(cmd.OutOrStdout(), page)
@@ -234,6 +244,7 @@ func newFrictionPatternsCommand() *cobra.Command {
 	cmd.Flags().IntVar(&f.Limit, "limit", 0, "Page size (default 100, max 1000)")
 	cmd.Flags().StringVar(&f.Cursor, "cursor", "", "Cursor from a previous page")
 	cmd.Flags().StringVar(&format, "format", "table", "Output format: table or json")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "Print JSON (alias for --format json)")
 	return cmd
 }
 

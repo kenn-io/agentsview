@@ -1569,15 +1569,16 @@ recurring patterns. It is on by default; `[friction] enabled = false` turns it
 off.
 
 ```bash
-agentsview friction run [--date YYYY-MM-DD] [--rebuild] [--dry-run] [--json]
-agentsview friction digest [--date D | --from D --to D] [--format md|json]
-agentsview friction findings [--date D] [--kind K] [--session ID] [--format table|json]
-agentsview friction patterns [--kind K] [--since D] [--linked | --unlinked] [--format table|json]
+agentsview friction run [--date YYYY-MM-DD] [--rebuild] [--dry-run] [--format human|json | --json]
+agentsview friction digest [--date D | --from D --to D] [--format md|json | --json]
+agentsview friction findings [--date D] [--kind K] [--session ID] [--format table|json | --json]
+agentsview friction patterns [--kind K] [--since D] [--linked | --unlinked] [--format table|json | --json]
 ```
 
 `friction run` without flags builds every complete local day that has no digest
 yet. It prints jilog-compatible summary lines, or the summary JSON object per
 day with `--json`, and exits non-zero only when the review fails.
+`--json` is an alias for `--format json` on every friction command.
 `friction digest` prints the latest digest unless `--date` or a range is given;
 `--format json` prints the counts-only summary object, byte-identical whether it
 comes from the daemon or the local archive. `--linked` and `--unlinked` filter

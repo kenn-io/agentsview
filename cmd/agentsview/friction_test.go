@@ -95,6 +95,9 @@ func TestFrictionDigestJSONMatchesGolden(t *testing.T) {
 			stdout, stderr, err := runInsightCommand(t, append(args, "--format", "json")...)
 			require.NoError(t, err, stderr)
 			assert.Equal(t, string(golden), stdout, "byte-identical to the golden")
+			alias, stderr, err := runInsightCommand(t, append(args, "--json")...)
+			require.NoError(t, err, stderr)
+			assert.Equal(t, stdout, alias, "--json aliases --format json")
 
 			stdout, _, err = runInsightCommand(t, args...)
 			require.NoError(t, err)
@@ -152,6 +155,9 @@ func TestFrictionRunLocalWithoutDaemon(t *testing.T) {
 	assert.Contains(t, stdout, "\"frustrations\": 0")
 	assert.Contains(t, stdout, "\"interruptions\": 0")
 	assert.Contains(t, stdout, "\"digest_path\": \"friction:2026-09-14\"")
+	formatted, _, err := runInsightCommand(t, "friction", "run", "--date", "2026-09-14", "--format", "json")
+	require.NoError(t, err)
+	assert.Equal(t, stdout, formatted)
 
 	_, _, err = runInsightCommand(t, "friction", "run", "--date", "2999-01-01")
 	require.Error(t, err)
@@ -181,10 +187,16 @@ func TestFrictionRunThroughDaemon(t *testing.T) {
 	stdout, _, err = runInsightCommand(t, "friction", "findings", "--server", ts.URL, "--format", "json")
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"findings":[],"next_cursor":""}`, stdout)
+	alias, _, err := runInsightCommand(t, "friction", "findings", "--server", ts.URL, "--json")
+	require.NoError(t, err)
+	assert.JSONEq(t, stdout, alias)
 
 	stdout, _, err = runInsightCommand(t, "friction", "patterns", "--server", ts.URL)
 	require.NoError(t, err)
 	assert.Equal(t, "(no friction patterns)\n", stdout)
+	jsonPatterns, _, err := runInsightCommand(t, "friction", "patterns", "--server", ts.URL, "--json")
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"patterns":[],"next_cursor":""}`, jsonPatterns)
 }
 
 func TestFrictionFindingsAndPatternsLocal(t *testing.T) {
