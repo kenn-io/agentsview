@@ -106,8 +106,22 @@ preview a create request, use `agentsview friction file <fingerprint> --dry-run`
 `agentsview friction file --date YYYY-MM-DD` files every pattern in a stored
 digest. These commands need the running hub daemon or `--server URL`.
 
-The `reopen_on_recurrence` setting is reserved for the recurrence follow-up;
-this change links closed matches without reopening them.
+### When a pattern comes back
+
+When the hub files a recurring pattern whose Kata issue was closed as `done`,
+it reopens the issue, comments
+`Recurred on <date> — closure may have been premature.` (with a session link
+when `public_url` is set), and adds the `friction:recurred` label. It does this
+at most once per issue per digest date.
+
+Issues closed for any other reason (`wontfix`, `duplicate`, `superseded`, or
+`audit-no-change`) stay closed; the pattern is only linked. Set
+`reopen_on_recurrence = false` under `[friction.kata]` to turn reopening off.
+
+When a digest contains a pattern already linked to an open issue before the
+digest was built, its line ends with `(recurred in sessions totaling $X)`, the
+summed cost of the sessions where it appeared that day. Deferrals and
+interruptions are never annotated.
 
 ## Limits
 

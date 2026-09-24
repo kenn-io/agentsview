@@ -11,6 +11,11 @@ The latest published release is
 
 **New features**
 
+- When the hub files a recurring Friction Log pattern whose Kata issue was
+  closed as `done`, it reopens the issue with a comment and the
+  `friction:recurred` label. Other close reasons are left alone. Digest lines
+  for patterns that were already open show the cost of the sessions they
+  recurred in.
 - The AgentsView hub can file Friction Log patterns to Kata, with manual
   `friction file`, `link` and `unlink` commands. Set `auto_file = true` under
   `[friction.kata]` to file during digest builds. Pending patterns wait in an
