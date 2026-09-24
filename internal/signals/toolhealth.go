@@ -167,40 +167,81 @@ func countFailures(
 	return failures, maxStreak
 }
 
-// countRetries counts retried calls using a sliding window.
-// 3+ consecutive calls with same ToolName AND identical InputJSON
-// = (count - 1) retries per group.
-func countRetries(calls []ToolCallRow) int {
-	if len(calls) < 3 {
-		return 0
-	}
+// retryRunMinLen is the shortest run of identical consecutive calls
+// that counts as retrying.
+const retryRunMinLen = 3
 
-	total := 0
-	runLen := 1
+// ToolRun is one maximal run of consecutive calls with the same
+// ToolName and byte-identical InputJSON, at least retryRunMinLen
+// long. First and Last are the run's outermost calls.
+type ToolRun struct {
+	ToolName    string
+	Count       int
+	First, Last CallPos
+}
 
-	for i := 1; i < len(calls); i++ {
-		if calls[i].ToolName == calls[i-1].ToolName &&
+// RetryRuns returns every maximal retry run in call order. It is the
+// per-occurrence form of countRetries: countRetries == Σ(Count-1).
+func RetryRuns(calls []ToolCallRow) []ToolRun {
+	var runs []ToolRun
+	start := 0
+	for i := 1; i <= len(calls); i++ {
+		if i < len(calls) &&
+			calls[i].ToolName == calls[i-1].ToolName &&
 			calls[i].InputJSON == calls[i-1].InputJSON {
-			runLen++
-		} else {
-			if runLen >= 3 {
-				total += runLen - 1
-			}
-			runLen = 1
+			continue
 		}
+		if n := i - start; n >= retryRunMinLen {
+			runs = append(runs, ToolRun{
+				ToolName: calls[start].ToolName,
+				Count:    n,
+				First:    toolCallPos(calls[start]),
+				Last:     toolCallPos(calls[i-1]),
+			})
+		}
+		start = i
 	}
-	if runLen >= 3 {
-		total += runLen - 1
+	return runs
+}
+
+// countRetries counts retried calls: each run of 3+ consecutive calls
+// with the same ToolName AND identical InputJSON adds (count - 1).
+func countRetries(calls []ToolCallRow) int {
+	total := 0
+	for _, r := range RetryRuns(calls) {
+		total += r.Count - 1
 	}
 	return total
 }
 
-// countEditChurn counts churn events for Edit/Write calls.
-// One churn event = 3+ edits to the same file within a 10-ordinal
-// span.
-func countEditChurn(calls []ToolCallRow) int {
-	// Collect ordinals per file path.
-	fileOrdinals := map[string][]int{}
+func toolCallPos(c ToolCallRow) CallPos {
+	return CallPos{MessageOrdinal: c.MessageOrdinal, CallIndex: c.CallIndex}
+}
+
+const (
+	editChurnWindow  = 3
+	editChurnMaxSpan = 10
+)
+
+// EditChurn is one churned file: FilePath is the raw file_path from
+// the tool input. Count and First/Last describe the file's first
+// churn cluster (see churnCluster).
+type EditChurn struct {
+	FilePath    string
+	Count       int
+	First, Last CallPos
+}
+
+// EditChurnFiles returns one entry per churned file, in the order the
+// files were first edited. It is the per-occurrence form of
+// countEditChurn: countEditChurn == len(EditChurnFiles).
+func EditChurnFiles(calls []ToolCallRow) []EditChurn {
+	type fileEdits struct {
+		ords []int
+		pos  []CallPos
+	}
+	var order []string
+	byFile := map[string]fileEdits{}
 	for _, c := range calls {
 		if c.Category != "Edit" && c.Category != "Write" {
 			continue
@@ -209,18 +250,68 @@ func countEditChurn(calls []ToolCallRow) int {
 		if path == "" {
 			continue
 		}
-		fileOrdinals[path] = append(
-			fileOrdinals[path], c.MessageOrdinal,
-		)
-	}
-
-	churn := 0
-	for _, ords := range fileOrdinals {
-		if hasChurnWindow(ords, 3, 10) {
-			churn++
+		fe, ok := byFile[path]
+		if !ok {
+			order = append(order, path)
 		}
+		fe.ords = append(fe.ords, c.MessageOrdinal)
+		fe.pos = append(fe.pos, toolCallPos(c))
+		byFile[path] = fe
 	}
-	return churn
+	var out []EditChurn
+	for _, path := range order {
+		fe := byFile[path]
+		start, end, ok := churnCluster(
+			fe.ords, editChurnWindow, editChurnMaxSpan,
+		)
+		if !ok {
+			continue
+		}
+		out = append(out, EditChurn{
+			FilePath: path,
+			Count:    end - start + 1,
+			First:    fe.pos[start],
+			Last:     fe.pos[end],
+		})
+	}
+	return out
+}
+
+// countEditChurn counts churn events for Edit/Write calls.
+// One churn event = 3+ edits to the same file within a 10-ordinal
+// span.
+func countEditChurn(calls []ToolCallRow) int {
+	return len(EditChurnFiles(calls))
+}
+
+// churnCluster finds the first contiguous window of windowSize edits
+// that hasChurnWindow accepts, then extends it over the following
+// edits while the whole cluster still spans fewer than maxSpan
+// ordinals. ok is true exactly when hasChurnWindow is.
+func churnCluster(
+	ordinals []int, windowSize, maxSpan int,
+) (start, end int, ok bool) {
+	n := len(ordinals)
+	for i := 0; i <= n-windowSize; i++ {
+		lo, hi := ordinals[i], ordinals[i]
+		for j := i + 1; j < i+windowSize; j++ {
+			lo, hi = min(lo, ordinals[j]), max(hi, ordinals[j])
+		}
+		if hi-lo >= maxSpan {
+			continue
+		}
+		end := i + windowSize - 1
+		for end+1 < n {
+			nlo := min(lo, ordinals[end+1])
+			nhi := max(hi, ordinals[end+1])
+			if nhi-nlo >= maxSpan {
+				break
+			}
+			lo, hi, end = nlo, nhi, end+1
+		}
+		return i, end, true
+	}
+	return 0, 0, false
 }
 
 // extractFilePath extracts file_path from InputJSON using simple

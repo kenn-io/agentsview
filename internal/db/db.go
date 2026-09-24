@@ -1829,6 +1829,9 @@ var readOnlyRequiredTables = []string{
 	"model_pricing_bands",
 	"genai_pricing",
 	"secret_findings",
+	"friction_digests",
+	"friction_digest_sessions",
+	"friction_patterns",
 	"recall_entries",
 	"recall_evidence",
 	"recall_query_events",
@@ -2544,6 +2547,18 @@ func schemaColumnMigrations() []schemaColumnMigration {
 		{
 			"sessions", "secrets_rules_version",
 			"ALTER TABLE sessions ADD COLUMN secrets_rules_version TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			"sessions", "friction_count",
+			"ALTER TABLE sessions ADD COLUMN friction_count INTEGER NOT NULL DEFAULT 0",
+		},
+		{
+			"sessions", "friction_rules_version",
+			"ALTER TABLE sessions ADD COLUMN friction_rules_version TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			"sessions", "friction_hash",
+			"ALTER TABLE sessions ADD COLUMN friction_hash TEXT NOT NULL DEFAULT ''",
 		},
 		{
 			"recall_extract_progress", "content_stamped_at",

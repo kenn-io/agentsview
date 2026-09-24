@@ -164,7 +164,9 @@ func (e *Engine) computeSignalsAndSecretsForStorage(
 			msgs, e.toolResultImages,
 		)
 	}
-	return computeSignalsAndSecrets(s, msgs)
+	update, findings := computeSignalsAndSecrets(s, msgs)
+	e.attachFriction(&update, s, msgs)
+	return update, findings
 }
 
 // computeFullSignalsAndSecretsForStorage seeds full-parse state from the same
@@ -180,5 +182,14 @@ func (e *Engine) computeFullSignalsAndSecretsForStorage(
 			msgs, e.toolResultImages,
 		)
 	}
-	return computeFullSignalsAndSecrets(s, msgs, failures)
+	update, findings, err := computeFullSignalsAndSecrets(s, msgs, failures)
+	if err != nil {
+		return update, findings, err
+	}
+	// Staged writes use placeholder tool results in memory. Their friction
+	// is recomputed from stored rows after the staged transaction commits.
+	if failures == nil {
+		e.attachFriction(&update, s, msgs)
+	}
+	return update, findings, nil
 }

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.kenn.io/agentsview/internal/config"
@@ -26,6 +27,7 @@ type Store struct {
 
 	insightCapabilityMu        sync.RWMutex
 	insightGenerationAvailable bool
+	frictionAvailable          atomic.Bool
 
 	pricingMu     sync.Mutex
 	pricingLoadMu sync.Mutex
@@ -71,6 +73,7 @@ const pgSessionBaseCols = `id, project, project_assigned, machine, agent,
 	cwd, git_branch, source_session_id, source_version,
 	transcript_fidelity, parser_malformed_lines, is_truncated,
 	secret_leak_count, secrets_rules_version,
+	friction_count, friction_rules_version, friction_hash,
 	deleted_at, deletion_cause, termination_status, transcript_revision`
 
 // pgSessionCols is the column list for full PG session queries.
@@ -243,6 +246,7 @@ func scanPGSessionWithSource(
 		&s.SourceSessionID, &s.SourceVersion,
 		&s.TranscriptFidelity, &s.ParserMalformedLines, &s.IsTruncated,
 		&s.SecretLeakCount, &s.SecretsRulesVersion,
+		&s.FrictionCount, &s.FrictionRulesVersion, &s.FrictionHash,
 		&deletedAt, &s.DeletionCause, &s.TerminationStatus, &s.TranscriptRevision,
 	}
 	if includeSource {

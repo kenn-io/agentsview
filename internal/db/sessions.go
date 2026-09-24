@@ -61,6 +61,7 @@ const sessionBaseCols = `id, project, machine, agent,
 	health_score, health_grade,
 	has_tool_calls, has_context_data,
 	secret_leak_count, secrets_rules_version,
+	friction_count, friction_rules_version, friction_hash,
 	quality_signal_version,
 	short_prompt_count, unstructured_start,
 	missing_success_criteria_count,
@@ -96,6 +97,7 @@ const sessionPruneCols = `id, project, machine, agent,
 	health_score, health_grade,
 	has_tool_calls, has_context_data,
 	secret_leak_count, secrets_rules_version,
+	friction_count, friction_rules_version, friction_hash,
 	quality_signal_version,
 	short_prompt_count, unstructured_start,
 	missing_success_criteria_count,
@@ -127,6 +129,7 @@ const sessionFullCols = `id, project, machine, agent,
 	health_score, health_grade,
 	has_tool_calls, has_context_data,
 	secret_leak_count, secrets_rules_version,
+	friction_count, friction_rules_version, friction_hash,
 	quality_signal_version,
 	short_prompt_count, unstructured_start,
 	missing_success_criteria_count,
@@ -188,6 +191,7 @@ func scanSessionRowWithSource(rs rowScanner, includeSource bool) (Session, error
 		&s.HealthScore, &s.HealthGrade,
 		&s.HasToolCalls, &s.HasContextData,
 		&s.SecretLeakCount, &s.SecretsRulesVersion,
+		&s.FrictionCount, &s.FrictionRulesVersion, &s.FrictionHash,
 		&s.QualitySignalVersion,
 		&s.ShortPromptCount, &s.UnstructuredStart,
 		&s.MissingSuccessCriteriaCount,
@@ -346,28 +350,32 @@ type Session struct {
 	HealthGrade            *string  `json:"health_grade,omitempty"`
 	// QualitySignals mirrors the scalar persistence fields below for API
 	// schema and JSON transport.
-	QualitySignals              *QualitySignals `json:"quality_signals,omitempty"`
-	HasToolCalls                bool            `json:"-"`
-	HasContextData              bool            `json:"-"`
-	SecretLeakCount             int             `json:"secret_leak_count"`
-	SecretsRulesVersion         string          `json:"-"`
-	QualitySignalVersion        int             `json:"-"`
-	ShortPromptCount            int             `json:"-"`
-	UnstructuredStart           bool            `json:"-"`
-	MissingSuccessCriteriaCount int             `json:"-"`
-	MissingVerificationCount    int             `json:"-"`
-	DuplicatePromptCount        int             `json:"-"`
-	NoCodeContextCount          int             `json:"-"`
-	RunawayToolLoopCount        int             `json:"-"`
-	DataVersion                 int             `json:"-"`
-	Cwd                         string          `json:"cwd,omitempty"`
-	GitBranch                   string          `json:"git_branch,omitempty"`
-	ProjectAssigned             bool            `json:"project_assigned,omitempty"`
-	SourceSessionID             string          `json:"source_session_id,omitempty"`
-	SourceVersion               string          `json:"source_version,omitempty"`
-	TranscriptFidelity          string          `json:"transcript_fidelity,omitempty"`
-	ParserMalformedLines        int             `json:"parser_malformed_lines,omitzero"`
-	IsTruncated                 bool            `json:"is_truncated,omitzero"`
+	QualitySignals      *QualitySignals `json:"quality_signals,omitempty"`
+	HasToolCalls        bool            `json:"-"`
+	HasContextData      bool            `json:"-"`
+	SecretLeakCount     int             `json:"secret_leak_count"`
+	SecretsRulesVersion string          `json:"-"`
+	// Friction summary columns stay out of the session API payload.
+	FrictionCount               int    `json:"-"`
+	FrictionRulesVersion        string `json:"-"`
+	FrictionHash                string `json:"-"`
+	QualitySignalVersion        int    `json:"-"`
+	ShortPromptCount            int    `json:"-"`
+	UnstructuredStart           bool   `json:"-"`
+	MissingSuccessCriteriaCount int    `json:"-"`
+	MissingVerificationCount    int    `json:"-"`
+	DuplicatePromptCount        int    `json:"-"`
+	NoCodeContextCount          int    `json:"-"`
+	RunawayToolLoopCount        int    `json:"-"`
+	DataVersion                 int    `json:"-"`
+	Cwd                         string `json:"cwd,omitempty"`
+	GitBranch                   string `json:"git_branch,omitempty"`
+	ProjectAssigned             bool   `json:"project_assigned,omitempty"`
+	SourceSessionID             string `json:"source_session_id,omitempty"`
+	SourceVersion               string `json:"source_version,omitempty"`
+	TranscriptFidelity          string `json:"transcript_fidelity,omitempty"`
+	ParserMalformedLines        int    `json:"parser_malformed_lines,omitzero"`
+	IsTruncated                 bool   `json:"is_truncated,omitzero"`
 
 	DeletedAt         *string `json:"deleted_at,omitempty"`
 	DeletionCause     *string `json:"-"`
@@ -1225,6 +1233,7 @@ func (db *DB) getSessionFullUncoalesced(
 		&s.HealthScore, &s.HealthGrade,
 		&s.HasToolCalls, &s.HasContextData,
 		&s.SecretLeakCount, &s.SecretsRulesVersion,
+		&s.FrictionCount, &s.FrictionRulesVersion, &s.FrictionHash,
 		&s.QualitySignalVersion,
 		&s.ShortPromptCount, &s.UnstructuredStart,
 		&s.MissingSuccessCriteriaCount,
@@ -5508,6 +5517,7 @@ func (db *DB) FindPruneCandidates(ctx context.Context,
 			&s.HealthScore, &s.HealthGrade,
 			&s.HasToolCalls, &s.HasContextData,
 			&s.SecretLeakCount, &s.SecretsRulesVersion,
+			&s.FrictionCount, &s.FrictionRulesVersion, &s.FrictionHash,
 			&s.QualitySignalVersion,
 			&s.ShortPromptCount, &s.UnstructuredStart,
 			&s.MissingSuccessCriteriaCount,
@@ -5954,6 +5964,7 @@ func (db *DB) ListSessionsModifiedBetween(
 			&s.HealthScore, &s.HealthGrade,
 			&s.HasToolCalls, &s.HasContextData,
 			&s.SecretLeakCount, &s.SecretsRulesVersion,
+			&s.FrictionCount, &s.FrictionRulesVersion, &s.FrictionHash,
 			&s.QualitySignalVersion,
 			&s.ShortPromptCount, &s.UnstructuredStart,
 			&s.MissingSuccessCriteriaCount,
@@ -6063,6 +6074,7 @@ func (db *DB) ListSessionsForMirrorWindow(
 			&s.HealthScore, &s.HealthGrade,
 			&s.HasToolCalls, &s.HasContextData,
 			&s.SecretLeakCount, &s.SecretsRulesVersion,
+			&s.FrictionCount, &s.FrictionRulesVersion, &s.FrictionHash,
 			&s.QualitySignalVersion,
 			&s.ShortPromptCount, &s.UnstructuredStart,
 			&s.MissingSuccessCriteriaCount,

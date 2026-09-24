@@ -10,6 +10,13 @@ The latest published release is
 
 **New features**
 
+- AgentsView now builds a Friction Log digest for every completed local day,
+  including days the daemon was not running (up to `backfill_days`, default
+  7). It is on by default; set `[friction] enabled = false` to turn it off.
+  Each session is reviewed once, the digest is kept across full resyncs, and
+  `pg serve` builds its own digests for the hub. Findings, including
+  frustration markers and interrupted turns, are deterministic heuristics; no
+  model is involved.
 - Coding agents can now consult prior conversation evidence proactively when
   earlier decisions or solutions may help. `agentsview skills install`
   upgrades the existing recall skill for Claude and Agents/Codex, and Claude
@@ -31,6 +38,11 @@ The latest published release is
 
 **Improvements**
 
+- Session sync now saves Friction Log findings such as corrections, tool errors,
+  workarounds, deferrals, repeated patterns, frustration, and interruptions.
+  Existing sessions are filled in during background reconciliation, and
+  PostgreSQL mirrors receive the same findings. These deterministic detections
+  are stored for upcoming digest, API, and UI work.
 - Syncing uses less CPU to check transcript text for invalid characters. Clean
   text is now checked in one pass and stored unchanged. In a full sync of a
   950 MB local test corpus, total CPU time fell about 4%. Wall-clock time did

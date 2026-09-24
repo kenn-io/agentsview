@@ -187,6 +187,9 @@ CREATE TABLE IF NOT EXISTS sessions (
     no_code_context_count     INT NOT NULL DEFAULT 0,
     runaway_tool_loop_count   INT NOT NULL DEFAULT 0,
     termination_status        TEXT,
+    friction_count            INT NOT NULL DEFAULT 0,
+    friction_rules_version    TEXT NOT NULL DEFAULT '',
+    friction_hash             TEXT NOT NULL DEFAULT '',
     transcript_revision       TEXT NOT NULL DEFAULT '0',
     source_archive_id          TEXT NOT NULL DEFAULT '',
     source_database_generation TEXT NOT NULL DEFAULT '',
@@ -590,6 +593,43 @@ CREATE INDEX IF NOT EXISTS idx_secret_findings_session
 CREATE INDEX IF NOT EXISTS idx_secret_findings_rule
     ON secret_findings (rule_name);
 
+CREATE TABLE IF NOT EXISTS friction_findings (
+    id               BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    session_id       TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    kind             TEXT NOT NULL,
+    detector         TEXT NOT NULL,
+    message_ordinal  INTEGER,
+    call_index       INTEGER,
+    tool_name        TEXT NOT NULL DEFAULT '',
+    label            TEXT NOT NULL DEFAULT '',
+    text             TEXT NOT NULL DEFAULT '',
+    evidence         TEXT NOT NULL DEFAULT '',
+    title            TEXT NOT NULL,
+    fingerprint      TEXT NOT NULL,
+    occurred_at      TIMESTAMPTZ,
+    seq              INTEGER NOT NULL,
+    rules_version    TEXT NOT NULL,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_friction_findings_session
+    ON friction_findings (session_id);
+
+CREATE INDEX IF NOT EXISTS idx_friction_findings_fingerprint
+    ON friction_findings (fingerprint);
+
+CREATE INDEX IF NOT EXISTS idx_friction_findings_kind
+    ON friction_findings (kind);
+
+CREATE TABLE IF NOT EXISTS friction_session_dims (
+    session_id       TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+    seat             TEXT NOT NULL DEFAULT '',
+    persona          TEXT NOT NULL DEFAULT '',
+    channel          TEXT NOT NULL DEFAULT '',
+    dims_source      TEXT NOT NULL DEFAULT '',
+    review_excluded  BOOLEAN NOT NULL DEFAULT FALSE
+);
+
 CREATE TABLE IF NOT EXISTS insights (
     id               BIGSERIAL PRIMARY KEY,
     type             TEXT NOT NULL DEFAULT '',
@@ -618,6 +658,44 @@ CREATE INDEX IF NOT EXISTS idx_insights_lookup
 CREATE INDEX IF NOT EXISTS idx_insights_cache
     ON insights (cache_key, created_at DESC)
     WHERE cache_key <> '';
+
+CREATE TABLE IF NOT EXISTS friction_digests (
+    date             TEXT PRIMARY KEY,
+    timezone         TEXT NOT NULL,
+    rules_version    TEXT NOT NULL,
+    built_at         TIMESTAMPTZ NOT NULL,
+    revision         INTEGER NOT NULL DEFAULT 1,
+    sessions_scanned INTEGER NOT NULL,
+    snapshot_json    TEXT NOT NULL,
+    summary_json     TEXT NOT NULL,
+    markdown         TEXT NOT NULL,
+    markdown_sha256  TEXT NOT NULL,
+    run_id           TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS friction_digest_sessions (
+    subject_id   TEXT PRIMARY KEY,
+    date         TEXT NOT NULL,
+    subject_kind TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_friction_digest_sessions_date
+    ON friction_digest_sessions (date);
+
+CREATE TABLE IF NOT EXISTS friction_patterns (
+    fingerprint      TEXT PRIMARY KEY,
+    kind             TEXT NOT NULL,
+    title            TEXT NOT NULL,
+    first_seen_date  TEXT NOT NULL,
+    last_seen_date   TEXT NOT NULL,
+    occurrence_count INTEGER NOT NULL,
+    session_count    INTEGER NOT NULL,
+    last_subject_id  TEXT NOT NULL,
+    last_ordinal     INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_friction_patterns_last_seen
+    ON friction_patterns (last_seen_date);
 `
 
 func migrateMoneyColumnsPG(
@@ -1311,6 +1389,21 @@ func EnsureSchema(
 			"sessions", "secrets_rules_version",
 			`secrets_rules_version TEXT NOT NULL DEFAULT ''`,
 			"adding sessions.secrets_rules_version",
+		},
+		{
+			"sessions", "friction_count",
+			`friction_count INTEGER NOT NULL DEFAULT 0`,
+			"adding sessions.friction_count",
+		},
+		{
+			"sessions", "friction_rules_version",
+			`friction_rules_version TEXT NOT NULL DEFAULT ''`,
+			"adding sessions.friction_rules_version",
+		},
+		{
+			"sessions", "friction_hash",
+			`friction_hash TEXT NOT NULL DEFAULT ''`,
+			"adding sessions.friction_hash",
 		},
 		{
 			"sessions", "session_name",
@@ -2757,7 +2850,8 @@ func checkPushSchemaCompat(ctx context.Context, db *sql.DB) error {
 // not require push-only sessions.owner_marker (verified by
 // checkPushSchemaCompat), model_pricing (always queried by syncModelPricing)
 // or cursor_usage_events (written by syncCursorUsageEvents), so probe those
-// explicitly. It also requires the cursor dedup index, which the cursor usage
+// explicitly. Friction findings and dims are also written by push-only paths.
+// It also requires the cursor dedup index, which the cursor usage
 // insert relies on for ON CONFLICT dedup. When any of these is missing the
 // caller must run EnsureSchema so push migrates the schema instead of failing
 // or duplicating rows.
@@ -2778,7 +2872,12 @@ func pushSchemaCurrent(ctx context.Context, db *sql.DB) bool {
 		!pgHasTable(ctx, db, "source_session_project_identity_snapshot_scopes") ||
 		!pgHasTable(ctx, db, "source_worktree_project_mappings") ||
 		!pgHasTable(ctx, db, "source_worktree_project_mapping_scopes") ||
-		!pgHasTable(ctx, db, "cursor_usage_events") {
+		!pgHasTable(ctx, db, "friction_digests") ||
+		!pgHasTable(ctx, db, "friction_digest_sessions") ||
+		!pgHasTable(ctx, db, "friction_patterns") ||
+		!pgHasTable(ctx, db, "cursor_usage_events") ||
+		!pgHasTable(ctx, db, "friction_findings") ||
+		!pgHasTable(ctx, db, "friction_session_dims") {
 		return false
 	}
 	// bulkInsertCursorUsageEvents dedups via a targetless ON CONFLICT

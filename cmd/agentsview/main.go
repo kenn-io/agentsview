@@ -495,6 +495,16 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		fatal("%v", prepErr)
 	}
 	cfg = preparedCfg
+	var frictionEngine remoteSyncExclusiveRunner
+	if engine != nil {
+		frictionEngine = engine
+	}
+	frictionExcl := frictionExclusive(idleTracker, frictionEngine)
+	frictionRunner, waitFriction := startFrictionReview(ctx, cfg, database, frictionExcl)
+	defer func() {
+		stop()
+		waitFriction()
+	}()
 
 	srvOpts := []server.Option{
 		server.WithVersion(server.VersionInfo{
@@ -541,6 +551,9 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	srvOpts = append(srvOpts, server.WithArtifactExchangeRunner(
 		newDaemonArtifactExchangeRunner(cfg, database, engine, emitter),
 	))
+	if frictionRunner != nil {
+		srvOpts = append(srvOpts, server.WithFriction(frictionRunner, frictionExcl))
+	}
 	srv := server.New(cfg, database, engine, srvOpts...)
 
 	startupProgress.SetPhase("starting HTTP server")
@@ -2840,6 +2853,7 @@ func startPeriodicSync(
 			runScheduledSyncPass(ctx, engine, scheduledReconcileTargets(cfg))
 			runRemoteSourceSyncPass(ctx, engine, remoteRoots)
 			recomputePendingSessions(engine, database)
+			recomputeStaleFriction(ctx, engine)
 		})
 	}
 }
@@ -3200,5 +3214,13 @@ func recomputePendingSessions(
 		// deferred-recompute loop is best-effort, the next
 		// pass will retry any that failed.
 		_ = engine.RecomputeSignals(context.Background(), id)
+	}
+}
+
+// recomputeStaleFriction retries the guarded friction backfill on the
+// scheduled reconcile tick. A current archive is a cheap no-op.
+func recomputeStaleFriction(ctx context.Context, engine *sync.Engine) {
+	if _, err := engine.BackfillFriction(ctx); err != nil && ctx.Err() == nil {
+		log.Printf("friction backfill: %v", err)
 	}
 }
