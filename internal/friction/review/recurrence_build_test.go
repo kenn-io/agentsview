@@ -41,13 +41,17 @@ func (m *memStore) SaveFrictionDigest(_ context.Context, d db.FrictionDigest, _ 
 	m.saved = &d
 	return nil
 }
+
 func (m *memStore) GetFrictionDigest(context.Context, string) (*db.FrictionDigest, error) {
 	return m.saved, nil
 }
+
 func (m *memStore) LatestFrictionDigestDate(context.Context) (string, error) { return "", nil }
+
 func (m *memStore) EarliestSessionDate(context.Context, *time.Location) (string, error) {
 	return "2026-07-01", nil
 }
+
 func (m *memStore) UpdateFrictionDigestRender(context.Context, string, []byte, []byte, int) error {
 	return nil
 }
@@ -61,6 +65,7 @@ type openFingerprints struct {
 }
 
 func (o *openFingerprints) Ready(context.Context) bool { return true }
+
 func (o *openFingerprints) SnapshotOpen(_ context.Context, fps []string) (map[string]bool, error) {
 	o.snapshot++
 	out := map[string]bool{}
@@ -80,6 +85,7 @@ func (o *openFingerprints) FileAll(context.Context, []friction.Signal, filing.Ru
 func (o *openFingerprints) Links(context.Context, []string) (map[string]friction.IssueRef, error) {
 	return map[string]friction.IssueRef{}, nil
 }
+
 func (o *openFingerprints) Drain(context.Context) (filing.Report, error) { return filing.Report{}, nil }
 
 func correctionFixture(t *testing.T, subject, context, cost, role string) *memStore {
