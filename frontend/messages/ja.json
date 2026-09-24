@@ -2352,5 +2352,164 @@
   "go_to_session_ambiguous": "複数のセッションIDまたはUUIDが一致します。既存のリンクから目的のセッションを開いてください。",
   "go_to_session_capped": "一致するセッションIDまたはUUIDが多すぎます。既存のリンクから目的のセッションを開いてください。",
   "go_to_session_failed": "セッションを検索できませんでした。もう一度お試しください。",
-  "shortcuts_go_to_session": "検索を閉じてセッションへ移動"
+  "shortcuts_go_to_session": "検索を閉じてセッションへ移動",
+  "nav_friction": "フリクションログ",
+  "friction_page_help_intro": "すべての検出結果は保存済みセッションから計算した決定的なヒューリスティックであり、正解そのものではありません。何をフリクションとみなすかをモデルが決めることはありません。",
+  "friction_page_help_docs": "フリクションログの仕組み",
+  "friction_page_refresh": "フリクションログを更新",
+  "friction_date_label": "ダイジェストの日付",
+  "friction_date_previous": "前のダイジェスト",
+  "friction_date_next": "次のダイジェスト",
+  "friction_date_no_match": "一致する日付がありません",
+  "friction_build_now": "今すぐ作成",
+  "friction_build_title": "ダイジェストがまだない完了済みの日すべてについてダイジェストを作成します",
+  "friction_build_done": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "{countNumber} 件のダイジェストを作成しました" }
+    }
+  ],
+  "friction_build_nothing": "完了済みの日にはすべてダイジェストがあります。",
+  "friction_build_failed": "作成に失敗しました: {error}",
+  "friction_empty_title": "フリクションダイジェストはまだありません",
+  "friction_empty_hint": "ダイジェストはローカルの各日が終わると自動で作成され、作成されなかった日は毎時のジョブが補います。「今すぐ作成」で不足している日をすぐに作成できます。",
+  "friction_load_error": "フリクションログを読み込めませんでした",
+  "friction_retry": "再試行",
+  "friction_digest_heading": "フリクションログ — {date}",
+  "friction_digest_missing": "{date} のダイジェストはありません。",
+  "friction_digest_meta": "{timezone} · リビジョン {revision}",
+  "friction_scanned": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "{countNumber} 件のセッションをスキャン" }
+    }
+  ],
+  "friction_headline_title": "ハイライト",
+  "friction_p0_title": "P0 アラート",
+  "friction_p0_none": "P0 アラートはありません。",
+  "friction_p0_item": [
+    {
+      "declarations": [
+        "input count",
+        "input tool",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "{tool} が {countNumber} 件の異なるセッションで失敗しました" }
+    }
+  ],
+  "friction_patterns_new": "新しいパターン",
+  "friction_patterns_recurring": "繰り返し発生しているパターン",
+  "friction_patterns_none": "このダイジェストにパターンはありません。",
+  "friction_pattern_occurrences": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "{countNumber} 回発生" }
+    }
+  ],
+  "friction_pattern_sessions": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "{countNumber} 件のセッション" }
+    }
+  ],
+  "friction_pattern_first_seen": "初回検出 {date}",
+  "friction_section_corrections": "修正指示",
+  "friction_section_errors": "エラー",
+  "friction_section_workarounds": "回避策",
+  "friction_section_deferrals": "先送り",
+  "friction_section_patterns": "パターン",
+  "friction_none_corrections": "修正指示は検出されませんでした。",
+  "friction_none_errors": "エラーは検出されませんでした。",
+  "friction_none_workarounds": "回避策は検出されませんでした。",
+  "friction_none_deferrals": "先送りは検出されませんでした。",
+  "friction_none_patterns": "パターンは検出されませんでした。",
+  "friction_section_frustration": "苛立ち",
+  "friction_section_interruptions": "中断",
+  "friction_none_frustration": "苛立ちは検出されませんでした。",
+  "friction_none_interruptions": "中断は検出されませんでした。",
+  "friction_interruption_count": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "{countNumber} 回の中断" }
+    }
+  ],
+  "friction_kind_correction": "修正指示",
+  "friction_kind_error": "エラー",
+  "friction_kind_workaround": "回避策",
+  "friction_kind_deferral": "先送り",
+  "friction_kind_pattern": "パターン",
+  "friction_kind_frustration": "苛立ち",
+  "friction_kind_interruption": "中断",
+  "friction_disabled_title": "このサーバーではフリクションログがオフです",
+  "friction_disabled_hint": "フリクションログは既定で有効です。config.toml で [friction] enabled = false が設定されているか、アーカイブが読み取り専用のため、このサーバーはダイジェストを作成しません。",
+  "friction_section_personas": "ペルソナ",
+  "friction_section_spend": "支出",
+  "friction_spend_total": "合計",
+  "friction_spend_no_cost": "コストデータなし",
+  "friction_spend_coverage": [
+    {
+      "declarations": [
+        "input count",
+        "input withCost",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "使用データのある {countNumber} 件中 {withCost} 件のセッション"
+      }
+    }
+  ],
+  "friction_spend_tokens": "入力 {input} / 出力 {output} トークン",
+  "friction_spend_by_role": "ロール別",
+  "friction_spend_by_model": "モデル別",
+  "friction_archive_title": "アーカイブの支出",
+  "friction_archive_yesterday": "昨日 ({date})",
+  "friction_archive_no_rows": "アーカイブの行なし",
+  "friction_archive_week": "直近 7 日間 ({from} – {to})",
+  "friction_markdown_title": "Markdown",
+  "friction_markdown_show": "Markdown を表示",
+  "friction_markdown_copy": "Markdown をコピー",
+  "friction_markdown_copied": "Markdown をコピーしました",
+  "friction_markdown_download": "Markdown をダウンロード",
+  "friction_markdown_loading": "Markdown を読み込み中…",
+  "friction_markdown_error": "Markdown ダイジェストを読み込めませんでした。",
+  "friction_open_session": "{session} をメッセージ {ordinal} で開く",
+  "friction_open_session_start": "{session} を開く",
+  "friction_quality_card_title": "フリクションログ",
+  "friction_quality_card_body": "セッションで見つかった修正指示、ツールエラー、回避策、先送り、繰り返し発生するパターンの日次ダイジェスト。",
+  "friction_quality_card_open": "フリクションログを開く",
+  "friction_session_title": "フリクションの検出結果",
+  "friction_session_loading": "フリクションの検出結果を読み込み中…",
+  "friction_session_error": "フリクションの検出結果を利用できません。",
+  "friction_session_empty": "このセッションにフリクションの検出結果はありません。",
+  "friction_session_jump": "メッセージ {ordinal}",
+  "friction_session_jump_title": "メッセージ {ordinal} へ移動"
 }

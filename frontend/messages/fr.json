@@ -2363,5 +2363,183 @@
   "go_to_session_ambiguous": "Plusieurs sessions correspondent à cet ID ou UUID. Ouvrez la session souhaitée avec un lien existant.",
   "go_to_session_capped": "Trop de sessions correspondent à cet ID ou UUID. Ouvrez la session souhaitée avec un lien existant.",
   "go_to_session_failed": "Impossible de rechercher cette session. Réessayez.",
-  "shortcuts_go_to_session": "Accéder à une session lorsque la recherche est fermée"
+  "shortcuts_go_to_session": "Accéder à une session lorsque la recherche est fermée",
+  "nav_friction": "Journal des frictions",
+  "friction_page_help_intro": "Chaque constat est une heuristique déterministe calculée à partir des sessions enregistrées, pas une vérité absolue. Aucun modèle ne décide de ce qui compte comme une friction.",
+  "friction_page_help_docs": "Fonctionnement du journal des frictions",
+  "friction_page_refresh": "Actualiser le journal des frictions",
+  "friction_date_label": "Date du résumé",
+  "friction_date_previous": "Résumé précédent",
+  "friction_date_next": "Résumé suivant",
+  "friction_date_no_match": "Aucune date correspondante",
+  "friction_build_now": "Générer maintenant",
+  "friction_build_title": "Génère un résumé pour chaque journée complète qui n'en a pas encore",
+  "friction_build_done": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} résumé généré",
+        "countPlural=other": "{countNumber} résumés générés"
+      }
+    }
+  ],
+  "friction_build_nothing": "Chaque journée complète a déjà un résumé.",
+  "friction_build_failed": "Échec de la génération : {error}",
+  "friction_empty_title": "Aucun résumé de frictions pour l'instant",
+  "friction_empty_hint": "Un résumé est généré automatiquement une fois chaque journée locale terminée, et la tâche horaire rattrape toute journée manquée. Utilisez Générer maintenant pour générer tout de suite les journées manquantes.",
+  "friction_load_error": "Impossible de charger le journal des frictions",
+  "friction_retry": "Réessayer",
+  "friction_digest_heading": "Journal des frictions — {date}",
+  "friction_digest_missing": "Aucun résumé n'existe pour le {date}.",
+  "friction_digest_meta": "{timezone} · révision {revision}",
+  "friction_scanned": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} session analysée",
+        "countPlural=other": "{countNumber} sessions analysées"
+      }
+    }
+  ],
+  "friction_headline_title": "À la une",
+  "friction_p0_title": "Alertes P0",
+  "friction_p0_none": "Aucune alerte P0.",
+  "friction_p0_item": [
+    {
+      "declarations": [
+        "input count",
+        "input tool",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{tool} a échoué dans {countNumber} session distincte",
+        "countPlural=other": "{tool} a échoué dans {countNumber} sessions distinctes"
+      }
+    }
+  ],
+  "friction_patterns_new": "Nouveaux motifs",
+  "friction_patterns_recurring": "Motifs récurrents",
+  "friction_patterns_none": "Aucun motif dans ce résumé.",
+  "friction_pattern_occurrences": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} occurrence",
+        "countPlural=other": "{countNumber} occurrences"
+      }
+    }
+  ],
+  "friction_pattern_sessions": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} session",
+        "countPlural=other": "{countNumber} sessions"
+      }
+    }
+  ],
+  "friction_pattern_first_seen": "Vu pour la première fois le {date}",
+  "friction_section_corrections": "Corrections",
+  "friction_section_errors": "Erreurs",
+  "friction_section_workarounds": "Contournements",
+  "friction_section_deferrals": "Reports",
+  "friction_section_patterns": "Motifs",
+  "friction_none_corrections": "Aucune correction détectée.",
+  "friction_none_errors": "Aucune erreur détectée.",
+  "friction_none_workarounds": "Aucun contournement détecté.",
+  "friction_none_deferrals": "Aucun report détecté.",
+  "friction_none_patterns": "Aucun motif détecté.",
+  "friction_section_frustration": "Frustration",
+  "friction_section_interruptions": "Interruptions",
+  "friction_none_frustration": "Aucune frustration détectée.",
+  "friction_none_interruptions": "Aucune interruption détectée.",
+  "friction_interruption_count": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} interruption",
+        "countPlural=other": "{countNumber} interruptions"
+      }
+    }
+  ],
+  "friction_kind_correction": "Correction",
+  "friction_kind_error": "Erreur",
+  "friction_kind_workaround": "Contournement",
+  "friction_kind_deferral": "Report",
+  "friction_kind_pattern": "Motif",
+  "friction_kind_frustration": "Frustration",
+  "friction_kind_interruption": "Interruption",
+  "friction_disabled_title": "Le journal des frictions est désactivé sur ce serveur",
+  "friction_disabled_hint": "Le journal des frictions est actif par défaut. Ce serveur ne génère pas de résumés, soit parce que config.toml contient [friction] enabled = false, soit parce que l'archive est en lecture seule.",
+  "friction_section_personas": "Personas",
+  "friction_section_spend": "Dépenses",
+  "friction_spend_total": "Total",
+  "friction_spend_no_cost": "Aucune donnée de coût",
+  "friction_spend_coverage": [
+    {
+      "declarations": [
+        "input count",
+        "input withCost",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{withCost} sur {countNumber} session avec des données d'usage",
+        "countPlural=other": "{withCost} sur {countNumber} sessions avec des données d'usage"
+      }
+    }
+  ],
+  "friction_spend_tokens": "{input} tokens en entrée / {output} en sortie",
+  "friction_spend_by_role": "Par rôle",
+  "friction_spend_by_model": "Par modèle",
+  "friction_archive_title": "Dépenses de l'archive",
+  "friction_archive_yesterday": "Hier ({date})",
+  "friction_archive_no_rows": "Aucune ligne d'archive",
+  "friction_archive_week": "7 derniers jours ({from} – {to})",
+  "friction_markdown_title": "Markdown",
+  "friction_markdown_show": "Afficher le Markdown",
+  "friction_markdown_copy": "Copier le Markdown",
+  "friction_markdown_copied": "Markdown copié",
+  "friction_markdown_download": "Télécharger le Markdown",
+  "friction_markdown_loading": "Chargement du Markdown…",
+  "friction_markdown_error": "Impossible de charger le résumé Markdown.",
+  "friction_open_session": "Ouvrir {session} au message {ordinal}",
+  "friction_open_session_start": "Ouvrir {session}",
+  "friction_quality_card_title": "Journal des frictions",
+  "friction_quality_card_body": "Résumés quotidiens des corrections, erreurs d'outils, contournements, reports et motifs récurrents trouvés dans vos sessions.",
+  "friction_quality_card_open": "Ouvrir le journal des frictions",
+  "friction_session_title": "Constats de friction",
+  "friction_session_loading": "Chargement des constats de friction…",
+  "friction_session_error": "Les constats de friction ne sont pas disponibles.",
+  "friction_session_empty": "Aucun constat de friction dans cette session.",
+  "friction_session_jump": "Message {ordinal}",
+  "friction_session_jump_title": "Aller au message {ordinal}"
 }

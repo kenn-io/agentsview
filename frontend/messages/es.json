@@ -2366,5 +2366,183 @@
   "go_to_session_ambiguous": "Varias sesiones coinciden con ese ID o UUID. Abre la sesión deseada desde un enlace existente.",
   "go_to_session_capped": "Demasiadas sesiones coinciden con ese ID o UUID. Abre la sesión deseada desde un enlace existente.",
   "go_to_session_failed": "No se pudo buscar esa sesión. Inténtalo de nuevo.",
-  "shortcuts_go_to_session": "Ir a la sesión cuando la búsqueda está cerrada"
+  "shortcuts_go_to_session": "Ir a la sesión cuando la búsqueda está cerrada",
+  "nav_friction": "Registro de fricción",
+  "friction_page_help_intro": "Cada hallazgo es una heurística determinista calculada a partir de las sesiones guardadas, no una verdad absoluta. Ningún modelo decide qué cuenta como fricción.",
+  "friction_page_help_docs": "Cómo funciona el registro de fricción",
+  "friction_page_refresh": "Actualizar registro de fricción",
+  "friction_date_label": "Fecha del resumen",
+  "friction_date_previous": "Resumen anterior",
+  "friction_date_next": "Resumen siguiente",
+  "friction_date_no_match": "No hay fechas coincidentes",
+  "friction_build_now": "Generar ahora",
+  "friction_build_title": "Genera un resumen para cada día completo que aún no tenga uno",
+  "friction_build_done": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "Se generó {countNumber} resumen",
+        "countPlural=other": "Se generaron {countNumber} resúmenes"
+      }
+    }
+  ],
+  "friction_build_nothing": "Todos los días completos ya tienen un resumen.",
+  "friction_build_failed": "La generación falló: {error}",
+  "friction_empty_title": "Todavía no hay resúmenes de fricción",
+  "friction_empty_hint": "Se genera un resumen automáticamente cuando termina cada día local, y el trabajo horario recupera cualquier día que falte. Usa Generar ahora para crear los días que faltan de inmediato.",
+  "friction_load_error": "No se pudo cargar el registro de fricción",
+  "friction_retry": "Reintentar",
+  "friction_digest_heading": "Registro de fricción — {date}",
+  "friction_digest_missing": "No existe un resumen para {date}.",
+  "friction_digest_meta": "{timezone} · revisión {revision}",
+  "friction_scanned": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} sesión analizada",
+        "countPlural=other": "{countNumber} sesiones analizadas"
+      }
+    }
+  ],
+  "friction_headline_title": "Lo destacado",
+  "friction_p0_title": "Alertas P0",
+  "friction_p0_none": "No hay alertas P0.",
+  "friction_p0_item": [
+    {
+      "declarations": [
+        "input count",
+        "input tool",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{tool} falló en {countNumber} sesión distinta",
+        "countPlural=other": "{tool} falló en {countNumber} sesiones distintas"
+      }
+    }
+  ],
+  "friction_patterns_new": "Patrones nuevos",
+  "friction_patterns_recurring": "Patrones recurrentes",
+  "friction_patterns_none": "No hay patrones en este resumen.",
+  "friction_pattern_occurrences": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} aparición",
+        "countPlural=other": "{countNumber} apariciones"
+      }
+    }
+  ],
+  "friction_pattern_sessions": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} sesión",
+        "countPlural=other": "{countNumber} sesiones"
+      }
+    }
+  ],
+  "friction_pattern_first_seen": "Visto por primera vez el {date}",
+  "friction_section_corrections": "Correcciones",
+  "friction_section_errors": "Errores",
+  "friction_section_workarounds": "Soluciones provisionales",
+  "friction_section_deferrals": "Aplazamientos",
+  "friction_section_patterns": "Patrones",
+  "friction_none_corrections": "No se detectaron correcciones.",
+  "friction_none_errors": "No se detectaron errores.",
+  "friction_none_workarounds": "No se detectaron soluciones provisionales.",
+  "friction_none_deferrals": "No se detectaron aplazamientos.",
+  "friction_none_patterns": "No se detectaron patrones.",
+  "friction_section_frustration": "Frustración",
+  "friction_section_interruptions": "Interrupciones",
+  "friction_none_frustration": "No se detectó frustración.",
+  "friction_none_interruptions": "No se detectaron interrupciones.",
+  "friction_interruption_count": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} interrupción",
+        "countPlural=other": "{countNumber} interrupciones"
+      }
+    }
+  ],
+  "friction_kind_correction": "Corrección",
+  "friction_kind_error": "Error",
+  "friction_kind_workaround": "Solución provisional",
+  "friction_kind_deferral": "Aplazamiento",
+  "friction_kind_pattern": "Patrón",
+  "friction_kind_frustration": "Frustración",
+  "friction_kind_interruption": "Interrupción",
+  "friction_disabled_title": "El registro de fricción está desactivado en este servidor",
+  "friction_disabled_hint": "El registro de fricción funciona de forma predeterminada. Este servidor no genera resúmenes porque config.toml tiene [friction] enabled = false o porque el archivo es de solo lectura.",
+  "friction_section_personas": "Personas",
+  "friction_section_spend": "Gasto",
+  "friction_spend_total": "Total",
+  "friction_spend_no_cost": "Sin datos de coste",
+  "friction_spend_coverage": [
+    {
+      "declarations": [
+        "input count",
+        "input withCost",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{withCost} de {countNumber} sesión con datos de uso",
+        "countPlural=other": "{withCost} de {countNumber} sesiones con datos de uso"
+      }
+    }
+  ],
+  "friction_spend_tokens": "{input} tokens de entrada / {output} de salida",
+  "friction_spend_by_role": "Por rol",
+  "friction_spend_by_model": "Por modelo",
+  "friction_archive_title": "Gasto del archivo",
+  "friction_archive_yesterday": "Ayer ({date})",
+  "friction_archive_no_rows": "Sin filas en el archivo",
+  "friction_archive_week": "Últimos 7 días ({from} – {to})",
+  "friction_markdown_title": "Markdown",
+  "friction_markdown_show": "Mostrar Markdown",
+  "friction_markdown_copy": "Copiar Markdown",
+  "friction_markdown_copied": "Markdown copiado",
+  "friction_markdown_download": "Descargar Markdown",
+  "friction_markdown_loading": "Cargando Markdown…",
+  "friction_markdown_error": "No se pudo cargar el resumen en Markdown.",
+  "friction_open_session": "Abrir {session} en el mensaje {ordinal}",
+  "friction_open_session_start": "Abrir {session}",
+  "friction_quality_card_title": "Registro de fricción",
+  "friction_quality_card_body": "Resúmenes diarios de correcciones, errores de herramientas, soluciones provisionales, aplazamientos y patrones recurrentes encontrados en tus sesiones.",
+  "friction_quality_card_open": "Abrir el registro de fricción",
+  "friction_session_title": "Hallazgos de fricción",
+  "friction_session_loading": "Cargando hallazgos de fricción…",
+  "friction_session_error": "Los hallazgos de fricción no están disponibles.",
+  "friction_session_empty": "No hay hallazgos de fricción en esta sesión.",
+  "friction_session_jump": "Mensaje {ordinal}",
+  "friction_session_jump_title": "Ir al mensaje {ordinal}"
 }
