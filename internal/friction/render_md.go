@@ -164,7 +164,7 @@ type interruptionGroup struct {
 // groupInterruptions folds interruption signals into one entry per
 // subject, in order of first appearance (run order).
 func groupInterruptions(sigs []Signal) []interruptionGroup {
-	var groups []interruptionGroup
+	groups := make([]interruptionGroup, 0)
 	index := map[string]int{}
 	for _, sig := range sigs {
 		if i, ok := index[sig.SubjectID]; ok {

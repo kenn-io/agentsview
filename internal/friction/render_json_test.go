@@ -16,18 +16,20 @@ import (
 func digestReportFixture(t *testing.T) (DigestSnapshot, SummaryMeta) {
 	t.Helper()
 	path := "friction:2026-05-10"
-	return DigestSnapshot{
+	snapshot := DigestSnapshot{
 		Date:            "2026-05-10",
 		P0Alerts:        map[string][]string{"bash": {"session-a", "session-b"}},
 		Personas:        map[PersonaKey]*PersonaCounts{{"helper", "general"}: {Sessions: 2, Corrections: 1, Patterns: 1, InputTokens: 5000, OutputTokens: 250}},
 		SessionsScanned: 3,
-	}, SummaryMeta{
+	}
+	meta := SummaryMeta{
 		DigestPath: &path,
 		CreatedIssues: []IssueRef{{
 			ID: "#42", Backend: "kata", Title: "tracked issue",
 			URL: "https://example.com/issues/42",
 		}},
 	}
+	return snapshot, meta
 }
 
 func decodeObject(t *testing.T, b []byte) map[string]any {
