@@ -11,6 +11,11 @@ The latest published release is
 
 **New features**
 
+- The **Friction Log page** opens the latest daily digest with P0 alerts and
+  new or recurring patterns first. It then shows corrections, errors,
+  workarounds, deferrals, patterns, frustration and interruptions, with links
+  to the exact session message when available. The session signal panel lists
+  findings for the open session, and Quality links to the page.
 - Friction Log digests, findings and recurring patterns can now be read and
   built from the API, CLI and MCP. `agentsview friction run` builds missing
   complete days, while `friction digest`, `friction findings` and

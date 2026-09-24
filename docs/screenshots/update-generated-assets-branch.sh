@@ -40,6 +40,7 @@ expected_assets=(
   "screenshots/in-session-search.png"
   "screenshots/in-session-search-results.png"
   "screenshots/quality.png"
+  "screenshots/friction-log.png"
   "screenshots/layout-compact.png"
   "screenshots/layout-stream.png"
   "screenshots/machine-labels.png"

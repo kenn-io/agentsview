@@ -1,4 +1,5 @@
 ---
+last_edited: 2026-09-24
 title: Quality
 description: Deterministic quality signals and recommendations computed from session data
 ---
@@ -11,6 +12,10 @@ page does not call a model.
 Open **Quality** from the header or navigate to `/quality`.
 
 ![Quality page](/docs/assets/generated/screenshots/quality.png)
+
+For day-by-day corrections, tool errors, workarounds, deferrals, frustration
+and interruptions, open the [Friction Log](/docs/friction-log/) from the card at
+the top of this page.
 
 ## Scope
 
