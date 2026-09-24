@@ -169,6 +169,20 @@ func TestFrictionSubjectsCarryDimsAndRole(t *testing.T) {
 	assert.False(t, byID["root"].IsSubAgent)
 }
 
+func TestFrictionSubjectsIdentifyPriorMembership(t *testing.T) {
+	d := testDB(t)
+	seedFrictionSession(t, d, "old", "", "2026-09-15T01:00:00Z", nil)
+	seedFrictionSession(t, d, "new", "", "2026-09-15T02:00:00Z", nil)
+	require.NoError(t, d.SaveFrictionDigest(t.Context(), testDigest("2026-09-15", 1),
+		[]FrictionDigestSubject{{SubjectID: "old", Date: "2026-09-15", SubjectKind: friction.SubjectSession}}, nil))
+	got, err := d.FrictionSubjectsForDate(t.Context(), "2026-09-15", time.UTC, true)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	byID := map[string]FrictionSubject{got[0].SubjectID: got[0], got[1].SubjectID: got[1]}
+	assert.True(t, byID["old"].AlreadyDigested)
+	assert.False(t, byID["new"].AlreadyDigested)
+}
+
 func testDigest(date string, revision int) FrictionDigest {
 	md := []byte("# Friction Log — " + date + "\n")
 	sum := sha256.Sum256(md)

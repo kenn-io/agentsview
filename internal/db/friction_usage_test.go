@@ -90,6 +90,13 @@ func TestFrictionUsageFromSessionUsage(t *testing.T) {
 		{name: "nil", in: nil},
 		{name: "no token or cost data", in: &SessionUsage{}},
 		{
+			name: "breakdown without session summary counters",
+			in: &SessionUsage{Breakdown: []SessionUsageBreakdownEntry{
+				{Model: "unpriced", InputTokens: 12, OutputTokens: 3},
+			}},
+			ok: true, input: 12, output: 3, models: map[string]string{},
+		},
+		{
 			name: "tokens only",
 			in: &SessionUsage{HasTokenData: true, Breakdown: []SessionUsageBreakdownEntry{
 				{Model: "unpriced", InputTokens: 100, CacheReadInputTokens: 20, CacheCreationInputTokens: 5, OutputTokens: 7},

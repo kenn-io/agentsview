@@ -76,7 +76,7 @@ func FrictionArchiveSpendFromDaily(
 // review's stats form. The bool is false when the session carries no
 // token or cost data (jilog load_stats → None).
 func FrictionUsageFromSessionUsage(u *SessionUsage) (friction.SessionUsage, bool) {
-	if u == nil || (!u.HasTokenData && !u.HasCost) {
+	if u == nil || (!u.HasTokenData && !u.HasCost && len(u.Breakdown) == 0) {
 		return friction.SessionUsage{}, false
 	}
 	out := friction.SessionUsage{SubjectID: u.SessionID, ModelCosts: map[string]friction.USD{}}

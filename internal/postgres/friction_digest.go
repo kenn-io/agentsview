@@ -94,7 +94,8 @@ func (s *Store) FrictionSubjectsForDate(
 			(s.parent_session_id IS NOT NULL AND s.relationship_type = 'subagent'),
 			COALESCE(s.ended_at, s.started_at), s.friction_rules_version,
 			COALESCE(d.seat, ''), COALESCE(d.persona, ''), COALESCE(d.channel, ''),
-			COALESCE(d.dims_source, ''), COALESCE(d.review_excluded, FALSE)
+			COALESCE(d.dims_source, ''), COALESCE(d.review_excluded, FALSE),
+			COALESCE(ds.date, '')
 		FROM sessions s
 		LEFT JOIN friction_session_dims d ON d.session_id = s.id
 		LEFT JOIN friction_digest_sessions ds ON ds.subject_id = s.id
@@ -112,20 +113,22 @@ func (s *Store) FrictionSubjectsForDate(
 	out := []db.FrictionSubject{}
 	for rows.Next() {
 		var (
-			sub     db.FrictionSubject
-			machine string
-			last    sql.NullTime
+			sub        db.FrictionSubject
+			machine    string
+			last       sql.NullTime
+			digestDate string
 		)
 		if err := rows.Scan(&sub.SubjectID, &machine, &sub.FilePath, &sub.Agent,
 			&sub.IsSubAgent, &last, &sub.RulesVersion, &sub.Dims.Seat,
 			&sub.Dims.Persona, &sub.Dims.Channel, &sub.Dims.DimsSource,
-			&sub.Dims.ReviewExcluded); err != nil {
+			&sub.Dims.ReviewExcluded, &digestDate); err != nil {
 			return nil, fmt.Errorf("scanning friction subject: %w", err)
 		}
 		if last.Valid {
 			sub.LastActivity = last.Time.UTC()
 		}
 		sub.SubjectKind = friction.SubjectSession
+		sub.AlreadyDigested = digestDate != ""
 		sub.Dims.SessionID = sub.SubjectID
 		sub.Machine = machine
 		if label := labels[machine]; label != "" {

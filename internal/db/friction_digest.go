@@ -22,6 +22,7 @@ var ErrFrictionDigestConflict = errors.New("friction digest was written concurre
 type FrictionSubject struct {
 	SubjectID, SubjectKind, Machine, FilePath, Agent string
 	IsSubAgent                                       bool
+	AlreadyDigested                                  bool
 	LastActivity                                     time.Time
 	Dims                                             FrictionSessionDims
 	RulesVersion                                     string
@@ -131,6 +132,7 @@ func (db *DB) FrictionSubjectsForDate(
 		}
 		s.SubjectKind = friction.SubjectSession
 		s.IsSubAgent = sub != 0
+		s.AlreadyDigested = digestDate != ""
 		s.Dims.SessionID = s.SubjectID
 		s.Dims.ReviewExcluded = excluded != 0
 		s.Machine = machine

@@ -127,6 +127,14 @@ func TestFrictionReviewStoreParity(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, after, 1)
 			assert.Equal(t, "b", after[0].SubjectID)
+			all, err := s.FrictionSubjectsForDate(ctx, "2026-09-15", time.UTC, true)
+			require.NoError(t, err)
+			require.Len(t, all, 2)
+			membership := map[string]bool{}
+			for _, subject := range all {
+				membership[subject.SubjectID] = subject.AlreadyDigested
+			}
+			assert.Equal(t, map[string]bool{"a": true, "b": false}, membership)
 
 			latest, err := s.LatestFrictionDigestDate(ctx)
 			require.NoError(t, err)
