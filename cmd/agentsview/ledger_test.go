@@ -8,6 +8,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/dbtest"
 )
 
 func writeLedgerTestConfig(t *testing.T, dataDir, body string) {
@@ -123,4 +126,43 @@ func TestLedgerImportExportRebuild(t *testing.T) {
 	out, err = runLedger(t, "rebuild-index", "--zone", "default")
 	require.NoError(t, err)
 	assert.Equal(t, "ledger rebuild-index [default]: 19 event(s) projected from 5 segment(s)\n", out)
+}
+
+func TestLedgerImportJob(t *testing.T) {
+	importRoot := t.TempDir()
+	segments := filepath.Join(importRoot, "segments")
+	require.NoError(t, os.MkdirAll(segments, 0o755))
+	src := filepath.Join("..", "..", "internal", "ledger", "testdata", "segments", "fixture-a-000001.json")
+	raw, err := os.ReadFile(src)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(segments, "fixture-a-000001.json"), raw, 0o644))
+
+	tests := []struct {
+		name   string
+		ledger config.LedgerConfig
+		want   bool
+	}{
+		{"disabled", config.LedgerConfig{Zones: []config.LedgerZoneConfig{{ID: "default", ImportPath: importRoot}}}, false},
+		{"no_import_path", config.LedgerConfig{Enabled: true}, false},
+		{"import_path", config.LedgerConfig{Enabled: true, Zones: []config.LedgerZoneConfig{{ID: "default", ImportPath: importRoot}}}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			database := dbtest.OpenTestDB(t)
+			job, ok := ledgerImportJob(config.Config{Ledger: tt.ledger}, database, nil)
+			require.Equal(t, tt.want, ok)
+			if !ok {
+				return
+			}
+			assert.Equal(t, "ledger-import", job.Name)
+			require.NoError(t, job.Run(t.Context()))
+			st, err := database.LedgerStatus(t.Context(), "default")
+			require.NoError(t, err)
+			assert.Equal(t, 1, st.Segments)
+			state, err := database.GetLedgerImportState(t.Context(), "default", segments)
+			require.NoError(t, err)
+			require.NotNil(t, state)
+			assert.Contains(t, state.LastReportJSON, `"segments_indexed":1`, state.LastReportJSON)
+		})
+	}
 }
