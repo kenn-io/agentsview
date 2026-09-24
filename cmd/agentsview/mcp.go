@@ -37,7 +37,8 @@ func newMCPCommand() *cobra.Command {
 StreamableHTTP, exposing read-only tools for searching and reading
 recorded agent sessions: search_sessions, list_sessions,
 get_session_overview, get_messages, search_content, and
-get_usage_summary, plus query_recall for distilled session knowledge.
+get_usage_summary, plus query_recall for distilled session knowledge and
+query_ledger for structured event history.
 
 The server reads through the daemon path. By default each tool call talks to
 the local agentsview daemon, starting it when needed so a long-lived MCP server

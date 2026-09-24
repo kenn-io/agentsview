@@ -26,6 +26,7 @@ import (
 const (
 	ToolSearchSessions     = "search_sessions"
 	ToolQueryRecall        = "query_recall"
+	ToolQueryLedger        = "query_ledger"
 	ToolListSessions       = "list_sessions"
 	ToolGetSessionOverview = "get_session_overview"
 	ToolGetMessages        = "get_messages"
@@ -92,6 +93,15 @@ func newServer(opts ServeOptions) *mcp.Server {
 				"source-session evidence and retrieval scores.",
 			Annotations: readOnly,
 		}, t.queryRecall)
+	}
+	if service.SupportsLedgerQueries(opts.Service) {
+		mcp.AddTool(s, &mcp.Tool{
+			Name: ToolQueryLedger,
+			Description: "Query the event ledger: structured events recorded by agentsview and other tools, " +
+				"newest first per zone, filtered by time window, subsystem globs and event class. " +
+				"Returns events in the jilog query JSON form.",
+			Annotations: readOnly,
+		}, t.queryLedger)
 	}
 
 	mcp.AddTool(s, &mcp.Tool{

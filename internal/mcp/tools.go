@@ -6,6 +6,7 @@ package mcp
 import (
 	"cmp"
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/ledger"
 	"go.kenn.io/agentsview/internal/service"
 )
 
@@ -29,6 +31,63 @@ func (t *toolset) clock() time.Time {
 		return t.now()
 	}
 	return time.Now()
+}
+
+const (
+	defaultLedgerLimit = 100
+	maxLedgerLimit     = 1000
+)
+
+type queryLedgerIn struct {
+	Since      string   `json:"since,omitempty" jsonschema:"Time window: Nh, Nd, Nw or YYYY-MM-DD (UTC midnight). Default 7d."`
+	Subsystems []string `json:"subsystems,omitempty" jsonschema:"Subsystem globs; a trailing * matches a prefix; OR-ed."`
+	Class      string   `json:"class,omitempty" jsonschema:"Event class, e.g. state-change, health, decision."`
+	Zone       string   `json:"zone,omitempty" jsonschema:"Only this zone."`
+	Limit      int      `json:"limit,omitempty" jsonschema:"Max events per zone, default 100, max 1000."`
+}
+
+type queryLedgerEvent struct {
+	Event map[string]any `json:"event"`
+	Zone  string         `json:"zone"`
+}
+
+type queryLedgerOut struct {
+	Since  string             `json:"since"`
+	Events []queryLedgerEvent `json:"events"`
+}
+
+func (t *toolset) queryLedger(
+	ctx context.Context, _ *mcp.CallToolRequest, in queryLedgerIn,
+) (*mcp.CallToolResult, queryLedgerOut, error) {
+	since := cmp.Or(in.Since, "7d")
+	from, err := ledger.ParseSince(since, t.clock())
+	if err != nil {
+		return nil, queryLedgerOut{}, err
+	}
+	q := ledger.Query{
+		Since: from, Subsystems: in.Subsystems, Zone: in.Zone,
+		Limit: clampLimit(in.Limit, defaultLedgerLimit, maxLedgerLimit),
+	}
+	if in.Class != "" {
+		c, err := ledger.ParseClass(in.Class)
+		if err != nil {
+			return nil, queryLedgerOut{}, err
+		}
+		q.Class = &c
+	}
+	results, err := service.LedgerQuery(ctx, t.svc, q)
+	if err != nil {
+		return nil, queryLedgerOut{}, err
+	}
+	b, err := ledger.FormatJSON(results)
+	if err != nil {
+		return nil, queryLedgerOut{}, err
+	}
+	out := queryLedgerOut{Since: since, Events: []queryLedgerEvent{}}
+	if err := json.Unmarshal(b, &out.Events); err != nil {
+		return nil, queryLedgerOut{}, fmt.Errorf("decoding ledger events: %w", err)
+	}
+	return nil, out, nil
 }
 
 func strval(p *string) string {
