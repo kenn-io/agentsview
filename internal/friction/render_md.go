@@ -183,7 +183,7 @@ func costTable(b *bytes.Buffer, header string, costs map[string]USD) {
 	}
 	b.WriteString(header)
 	for _, k := range sortedKeys(costs) {
-		fmt.Fprintf(b, "- `%s`: %s\n", k, FormatUSD(costs[k]))
+		fmt.Fprintf(b, "- `%s`: %s\n", SanitizeDisplay(k), FormatUSD(costs[k]))
 	}
 	b.WriteByte('\n')
 }

@@ -190,8 +190,12 @@ func (p *PeriodSpend) add(r DailySpend) {
 // AgentsByCost ranks agents by cost descending, ties by name.
 func (p PeriodSpend) AgentsByCost() []NamedUSD { return rankByCost(p.Agents) }
 
-// TopModels returns the n most expensive models, ties by name.
+// TopModels returns the n most expensive models, ties by name. Nonpositive
+// limits return no models.
 func (p PeriodSpend) TopModels(n int) []NamedUSD {
+	if n <= 0 {
+		return nil
+	}
 	ranked := rankByCost(p.Models)
 	if len(ranked) > n {
 		ranked = ranked[:n]

@@ -1,6 +1,7 @@
 package friction
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -108,9 +109,13 @@ func usdStrings(m map[string]USD) map[string]string {
 // fingerprint instead of title.
 func TestRecurrenceCostAnnotations(t *testing.T) {
 	corr := Signal{Kind: KindCorrection, SubjectID: "sess-r_explore", Text: "no, use the gh cli for calendar"}
-	corrOther := corr
-	corrOther.SubjectID = "sess-2"
 	errSig := Signal{Kind: KindError, SubjectID: "sess-3", ToolName: "bash", Text: "boom"}
+	sharedErr := Signal{Kind: KindError, SubjectID: "sess-r_explore", ToolName: "bash", Text: "same failure"}
+	sharedErrOther := sharedErr
+	sharedErrOther.SubjectID = "sess-2"
+	sharedWorkaround := Signal{Kind: KindWorkaround, SubjectID: "sess-r_explore", Label: "for now", Text: "temporary fix"}
+	sharedWorkaroundOther := sharedWorkaround
+	sharedWorkaroundOther.SubjectID = "sess-2"
 	def := Signal{Kind: KindDeferral, SubjectID: "sess-r_explore", Label: "next session"}
 	frus := Signal{Kind: KindFrustration, SubjectID: "sess-r_explore", Text: "this is broken again"}
 	intr := Signal{Kind: KindInterruption, SubjectID: "sess-r_explore", Text: "[Request interrupted by user]"}
@@ -137,15 +142,16 @@ func TestRecurrenceCostAnnotations(t *testing.T) {
 			want: map[string]string{},
 		},
 		{
-			name: "distinct_sessions_sum_with_max_scale",
-			// corr and corrOther have different titles (the correction
-			// title carries the session id), so give both fingerprints.
-			sigs: []Signal{corr, corr, corrOther},
-			open: map[string]bool{corr.Fingerprint(): true, corrOther.Fingerprint(): true},
-			want: map[string]string{
-				corr.Fingerprint():      "$4.20",
-				corrOther.Fingerprint(): "$0.05",
-			},
+			name: "matching_errors_sum_distinct_sessions_once_at_max_scale",
+			sigs: []Signal{sharedErr, sharedErr, sharedErrOther},
+			open: map[string]bool{sharedErr.Fingerprint(): true},
+			want: map[string]string{sharedErr.Fingerprint(): "$4.25"},
+		},
+		{
+			name: "matching_workarounds_sum_distinct_sessions_once_at_max_scale",
+			sigs: []Signal{sharedWorkaround, sharedWorkaroundOther, sharedWorkaroundOther},
+			open: map[string]bool{sharedWorkaround.Fingerprint(): true},
+			want: map[string]string{sharedWorkaround.Fingerprint(): "$4.25"},
 		},
 		{
 			name: "sessions_without_cost_give_no_annotation",
@@ -333,4 +339,13 @@ func TestSummarizeArchiveSpend(t *testing.T) {
 		_, err := SummarizeArchiveSpend([]DailySpend{{Date: "15/09/2026", Total: mustUSD(t, "1")}}, "2026-09-16", "UTC")
 		require.Error(t, err)
 	})
+}
+
+func TestPeriodSpendTopModelsNonPositive(t *testing.T) {
+	p := PeriodSpend{Models: map[string]USD{"model": mustUSD(t, "1")}}
+	for _, n := range []int{0, -1} {
+		t.Run(fmt.Sprintf("limit_%d", n), func(t *testing.T) {
+			assert.Empty(t, p.TopModels(n))
+		})
+	}
 }

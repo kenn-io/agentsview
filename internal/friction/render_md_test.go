@@ -294,6 +294,27 @@ func TestRenderMarkdownArchiveNamesSanitized(t *testing.T) {
 	assert.NotContains(t, body, "\n## Injected")
 }
 
+func TestRenderMarkdownSpendNamesSanitized(t *testing.T) {
+	role := "role`\n## Injected role"
+	model := "model`\n## Injected model"
+	s := snap("2026-09-16")
+	s.Spend = &SpendSummary{
+		Total: new(mustUSD(t, "2")), SessionsWithStats: 1, SessionsWithCost: 1,
+		RoleCosts:  map[string]USD{role: mustUSD(t, "1")},
+		ModelCosts: map[string]USD{model: mustUSD(t, "1")},
+	}
+	body := render(s, RenderLinks{})
+	assert.Contains(t, body, "- `role' ## Injected role`: $1.00\n")
+	assert.Contains(t, body, "- `model' ## Injected model`: $1.00\n")
+	assert.NotContains(t, body, "\n## Injected role")
+	assert.NotContains(t, body, "\n## Injected model")
+	assert.Contains(t, s.Spend.RoleCosts, role, "display sanitization must leave the raw key intact")
+	assert.Contains(t, s.Spend.ModelCosts, model, "display sanitization must leave the raw key intact")
+	spend := decodeObject(t, RenderSummaryJSON(s, SummaryMeta{}))["spend"].(map[string]any)
+	assert.Equal(t, map[string]any{role: "1"}, spend["role_costs_usd"])
+	assert.Equal(t, map[string]any{model: "1"}, spend["model_costs_usd"])
+}
+
 // Review Focus 2: Go map order never leaks into the bytes.
 func TestRenderIsDeterministic(t *testing.T) {
 	s := snap("2026-09-16")

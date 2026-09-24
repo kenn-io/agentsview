@@ -109,6 +109,8 @@ behavior.
   exponents and underscores, which AgentsView does not produce.
 - An empty tool name becomes `unknown`; jilog does this only for a missing
   name.
+- Observed-spend role and model names are sanitized in Markdown so a backtick
+  or control character cannot break a line. JSON keeps the original map keys.
 
 ## Digest goldens
 
