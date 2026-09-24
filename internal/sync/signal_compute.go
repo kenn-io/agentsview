@@ -226,13 +226,15 @@ func extractToolCallRows(
 				status = tc.ResultEvents[n-1].Status
 			}
 			rows = append(rows, signals.ToolCallRow{
-				ToolName:       tc.ToolName,
-				Category:       tc.Category,
-				InputJSON:      tc.InputJSON,
-				ResultContent:  tc.ResultContent,
-				MessageOrdinal: m.Ordinal,
-				CallIndex:      callIdx,
-				EventStatus:    status,
+				ToolName:            tc.ToolName,
+				Category:            tc.Category,
+				InputJSON:           tc.InputJSON,
+				ResultContent:       tc.ResultContent,
+				MessageOrdinal:      m.Ordinal,
+				CallIndex:           callIdx,
+				ToolUseID:           tc.ToolUseID,
+				ResultContentLength: tc.ResultContentLength,
+				EventStatus:         status,
 			})
 		}
 	}
