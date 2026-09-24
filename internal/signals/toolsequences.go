@@ -153,7 +153,7 @@ func classifyToolOutcome(call ToolCallRow) ToolOutcome {
 		return ToolOutcomeUnknown
 	}
 	if call.EventStatus == "completed" && call.ResultContentLength == 0 &&
-		call.ResultContent == "" && isSupportedEmptyTool(call.ToolName) {
+		call.ResultContent == "" && isSupportedEmptyTool(call) {
 		return ToolOutcomeEmpty
 	}
 	if isMeasuredEmptyToolResult(call.ToolName, call.ResultContent) {
@@ -165,13 +165,17 @@ func classifyToolOutcome(call ToolCallRow) ToolOutcome {
 	return ToolOutcomeContent
 }
 
-func isSupportedEmptyTool(toolName string) bool {
-	switch toolName {
-	case "Grep", "Glob", "Read", "search", "WebSearch", "search_web", "web_search":
+func isSupportedEmptyTool(call ToolCallRow) bool {
+	switch call.Category {
+	case "Read", "Grep", "Glob":
 		return true
-	default:
-		return false
+	case "Tool":
+		switch call.ToolName {
+		case "search", "WebSearch", "search_web", "web_search":
+			return true
+		}
 	}
+	return false
 }
 
 func isMeasuredEmptyToolResult(toolName, content string) bool {
@@ -257,16 +261,13 @@ func isStagedMarker(line string) bool {
 
 func isImageOnlySummary(content string) bool {
 	trimmed := strings.TrimSpace(content)
-	if trimmed == "[binary content]" {
-		return true
-	}
-	if isImageOnlyJSON(trimmed) || isOffloadedImageReference(trimmed) {
+	if isImageOnlySummaryPart(trimmed) {
 		return true
 	}
 	if firstLine, rest, found := strings.Cut(trimmed, "\n"); found &&
 		strings.HasSuffix(strings.TrimSpace(firstLine), ":") {
 		body := strings.TrimSpace(rest)
-		if isImageOnlyJSON(body) || isOffloadedImageReference(body) {
+		if isImageOnlySummaryPart(body) {
 			return true
 		}
 	}
@@ -275,12 +276,17 @@ func isImageOnlySummary(content string) bool {
 		return false
 	}
 	for _, section := range sections {
-		section = strings.TrimSpace(stripSummaryLabel(section))
-		if !isImageOnlyJSON(section) && !isOffloadedImageReference(section) {
+		if !isImageOnlySummaryPart(stripSummaryLabel(section)) {
 			return false
 		}
 	}
 	return true
+}
+
+func isImageOnlySummaryPart(content string) bool {
+	content = strings.TrimSpace(content)
+	return content == "[binary content]" || isImageOnlyJSON(content) ||
+		isOffloadedImageReference(content)
 }
 
 func isOffloadedImageReference(content string) bool {

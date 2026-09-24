@@ -46,60 +46,81 @@ func TestClassifyToolOutcome(t *testing.T) {
 		{
 			name: "completed supported empty",
 			call: ToolCallRow{
-				ToolName: "Grep", EventStatus: "completed",
+				ToolName: "Grep", Category: "Grep", EventStatus: "completed",
+			},
+			want: ToolOutcomeEmpty,
+		},
+		{
+			name: "completed aliased read empty",
+			call: ToolCallRow{
+				ToolName: "read", Category: "Read", EventStatus: "completed",
+			},
+			want: ToolOutcomeEmpty,
+		},
+		{
+			name: "completed aliased read file empty",
+			call: ToolCallRow{
+				ToolName: "read_file", Category: "Read", EventStatus: "completed",
 			},
 			want: ToolOutcomeEmpty,
 		},
 		{
 			name: "measured grep no matches",
 			call: ToolCallRow{
-				ToolName: "Grep", ResultContent: "No matches found",
+				ToolName: "Grep", Category: "Grep",
+				ResultContent: "No matches found",
 			},
 			want: ToolOutcomeEmpty,
 		},
 		{
 			name: "measured grep no files",
 			call: ToolCallRow{
-				ToolName: "Grep", ResultContent: "No files found",
+				ToolName: "Grep", Category: "Grep",
+				ResultContent: "No files found",
 			},
 			want: ToolOutcomeEmpty,
 		},
 		{
 			name: "measured glob no files",
 			call: ToolCallRow{
-				ToolName: "Glob", ResultContent: "No files found",
+				ToolName: "Glob", Category: "Glob",
+				ResultContent: "No files found",
 			},
 			want: ToolOutcomeEmpty,
 		},
 		{
 			name: "search style empty",
 			call: ToolCallRow{
-				ToolName: "search_web", EventStatus: "completed",
+				ToolName: "search_web", Category: "Tool", EventStatus: "completed",
 			},
 			want: ToolOutcomeEmpty,
 		},
 		{
 			name: "missing completion evidence",
-			call: ToolCallRow{ToolName: "Grep", ResultContentLength: 17},
+			call: ToolCallRow{
+				ToolName: "Grep", Category: "Grep", ResultContentLength: 17,
+			},
 			want: ToolOutcomeUnknown,
 		},
 		{
 			name: "empty content with retained length 17",
 			call: ToolCallRow{
-				ToolName: "Grep", EventStatus: "completed",
+				ToolName: "Grep", Category: "Grep", EventStatus: "completed",
 				ResultContentLength: 17,
 			},
 			want: ToolOutcomeUnknown,
 		},
 		{
 			name: "unsupported completed empty",
-			call: ToolCallRow{ToolName: "Bash", EventStatus: "completed"},
+			call: ToolCallRow{
+				ToolName: "Bash", Category: "Tool", EventStatus: "completed",
+			},
 			want: ToolOutcomeUnknown,
 		},
 		{
 			name: "running status",
 			call: ToolCallRow{
-				ToolName: "Read", EventStatus: "running",
+				ToolName: "Read", Category: "Read", EventStatus: "running",
 				ResultContent: "text",
 			},
 			want: ToolOutcomeUnknown,
@@ -107,7 +128,7 @@ func TestClassifyToolOutcome(t *testing.T) {
 		{
 			name: "future status",
 			call: ToolCallRow{
-				ToolName: "Read", EventStatus: "future",
+				ToolName: "Read", Category: "Read", EventStatus: "future",
 				ResultContent: "text",
 			},
 			want: ToolOutcomeUnknown,
@@ -150,6 +171,44 @@ func TestClassifyToolOutcome(t *testing.T) {
 			name: "Amp binary placeholder",
 			call: ToolCallRow{ToolName: "Read", ResultContent: "[binary content]"},
 			want: ToolOutcomeUnknown,
+		},
+		{
+			name: "labeled binary placeholder",
+			call: ToolCallRow{
+				ToolName: "Read", ResultContent: "agent-a:\n[binary content]",
+			},
+			want: ToolOutcomeUnknown,
+		},
+		{
+			name: "same-line labeled binary placeholder",
+			call: ToolCallRow{
+				ToolName: "Read", ResultContent: "agent-a: [binary content]",
+			},
+			want: ToolOutcomeUnknown,
+		},
+		{
+			name: "joined binary placeholders",
+			call: ToolCallRow{
+				ToolName:      "Read",
+				ResultContent: "[binary content]\n\n[binary content]",
+			},
+			want: ToolOutcomeUnknown,
+		},
+		{
+			name: "joined binary and image placeholders",
+			call: ToolCallRow{
+				ToolName:      "Read",
+				ResultContent: "agent-a:\n[binary content]\n\nagent-b:\n" + projectedImage,
+			},
+			want: ToolOutcomeUnknown,
+		},
+		{
+			name: "joined binary and retained text",
+			call: ToolCallRow{
+				ToolName:      "Read",
+				ResultContent: "[binary content]\n\nagent-b:\nkept text",
+			},
+			want: ToolOutcomeContent,
 		},
 		{
 			name: "Amp image block",
@@ -288,17 +347,19 @@ func TestExtractToolSequences_Example(t *testing.T) {
 	calls := []ToolCallRow{
 		{
 			ToolUseID: "empty-1", MessageOrdinal: 4, CallIndex: 0,
-			ToolName: "Grep", InputJSON: `{"path":"/tmp","query":"needle"}`,
+			ToolName: "Grep", Category: "Grep",
+			InputJSON:   `{"path":"/tmp","query":"needle"}`,
 			EventStatus: "completed",
 		},
 		{
 			ToolUseID: "empty-2", MessageOrdinal: 5, CallIndex: 0,
-			ToolName: "Grep", InputJSON: `{"path":"/tmp","query":"needle"}`,
+			ToolName: "Grep", Category: "Grep",
+			InputJSON:   `{"path":"/tmp","query":"needle"}`,
 			EventStatus: "completed",
 		},
 		{
 			ToolUseID: "switch-1", MessageOrdinal: 6, CallIndex: 0,
-			ToolName: "Glob", ResultContent: "No files found",
+			ToolName: "Glob", Category: "Glob", ResultContent: "No files found",
 		},
 		{
 			ToolUseID: "content-1", MessageOrdinal: 7, CallIndex: 1,
@@ -379,7 +440,9 @@ func TestExtractToolSequences_Repeats(t *testing.T) {
 }
 
 func TestExtractToolSequences_Endings(t *testing.T) {
-	empty := ToolCallRow{ToolName: "Grep", EventStatus: "completed"}
+	empty := ToolCallRow{
+		ToolName: "Grep", Category: "Grep", EventStatus: "completed",
+	}
 	assert.Equal(t, []ToolSequence{{
 		Start: 0, End: 1, Ending: ToolSequenceEndingAbandoned,
 	}}, ExtractToolSequences([]ToolCallRow{empty}, true).Sequences)
@@ -427,17 +490,28 @@ func TestExtractToolSequences_Endings(t *testing.T) {
 		Start: 0, End: 2, ToolChanged: true,
 		Ending: ToolSequenceEndingAbandoned,
 	}}, ampImage.Sequences)
+
+	labeledBinary := ExtractToolSequences([]ToolCallRow{
+		empty,
+		{ToolName: "Read", ResultContent: "agent-a:\n[binary content]"},
+	}, true)
+	assert.Equal(t, []ToolSequence{{
+		Start: 0, End: 2, ToolChanged: true,
+		Ending: ToolSequenceEndingAbandoned,
+	}}, labeledBinary.Sequences)
 }
 
 func TestExtractToolSequences_Invariants(t *testing.T) {
 	calls := []ToolCallRow{
 		{
 			ToolUseID: "duplicate", MessageOrdinal: 3, CallIndex: 2,
-			ToolName: "Grep", InputJSON: `{"q":1}`, EventStatus: "completed",
+			ToolName: "Grep", Category: "Grep",
+			InputJSON: `{"q":1}`, EventStatus: "completed",
 		},
 		{
 			ToolUseID: "duplicate", MessageOrdinal: 4, CallIndex: 0,
-			ToolName: "Grep", InputJSON: `{"q":1}`, EventStatus: "completed",
+			ToolName: "Grep", Category: "Grep",
+			InputJSON: `{"q":1}`, EventStatus: "completed",
 		},
 		{
 			MessageOrdinal: 5, CallIndex: 1, ToolName: "Bash",

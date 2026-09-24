@@ -100,7 +100,7 @@ func TestExtractToolCallRowsSequenceEvidence(t *testing.T) {
 			Ordinal: 8,
 			ToolCalls: []db.ToolCall{
 				{
-					ToolUseID: "empty-call", ToolName: "Grep",
+					ToolUseID: "empty-call", ToolName: "Grep", Category: "Grep",
 					ResultEvents: []db.ToolResultEvent{{Status: "completed"}},
 				},
 			},
@@ -109,7 +109,7 @@ func TestExtractToolCallRowsSequenceEvidence(t *testing.T) {
 			Ordinal: 9,
 			ToolCalls: []db.ToolCall{
 				{
-					ToolUseID: "read-call", ToolName: "Read",
+					ToolUseID: "read-call", ToolName: "Read", Category: "Read",
 					ResultContent: "retained result", ResultContentLength: 15,
 				},
 			},
@@ -141,14 +141,14 @@ func TestExtractToolCallRowsStagedSummary(t *testing.T) {
 		{
 			Ordinal: 8,
 			ToolCalls: []db.ToolCall{{
-				ToolUseID: "empty-call", ToolName: "Grep",
+				ToolUseID: "empty-call", ToolName: "Grep", Category: "Grep",
 				ResultEvents: []db.ToolResultEvent{{Status: "completed"}},
 			}},
 		},
 		{
 			Ordinal: 9,
 			ToolCalls: []db.ToolCall{{
-				ToolUseID: "staged-call", ToolName: "Read",
+				ToolUseID: "staged-call", ToolName: "Read", Category: "Read",
 				ResultContent: "agent-a:\nstaged:7\n\nagent-b:\nstaged:8",
 			}},
 		},
@@ -179,7 +179,7 @@ func TestExtractToolCallRowsRestoresSingleEventSummary(t *testing.T) {
 	msgs := []db.Message{{
 		Ordinal: 8,
 		ToolCalls: []db.ToolCall{{
-			ToolUseID: "restored-call", ToolName: "Read",
+			ToolUseID: "restored-call", ToolName: "Read", Category: "Read",
 			ResultContentLength: len(content),
 			ResultEvents: []db.ToolResultEvent{{
 				Content: content, ContentLength: len(content),
