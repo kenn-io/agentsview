@@ -67,8 +67,9 @@ See the [CLI Reference](/docs/commands/#agentsview-ledger) for every flag.
 - **Append-only.** Database triggers reject updates and deletes of stored
   segments and events on SQLite and PostgreSQL.
 - **No overwrites.** A segment is identified by zone, source and sequence
-  number. Writing an identical copy again is a no-op. A copy with different
-  content is an integrity error and the stored segment is kept.
+  number. A direct write of an identical copy is a no-op. A direct write with
+  different content at that identity is an integrity error, and the stored
+  segment is kept.
 - **Verified imports.** Imported files are checked against their file name and
   their checksum before they are stored. Bad files are reported and retried on
   the next import.
@@ -92,6 +93,8 @@ Limits:
   is reported.
 - Event ids are unique across the archive. If the same event id appears in
   another zone, that zone keeps its segment but does not project the event.
+- Import skips a segment identity already in the archive without rereading
+  its file. A changed copy of an imported file is not checked again.
 - jilog's own `verify` cannot always re-check segments that contain some
   floating-point payload values, because jilog parses floats without full
   round-trip precision. AgentsView verifies them correctly. Prefer integers
