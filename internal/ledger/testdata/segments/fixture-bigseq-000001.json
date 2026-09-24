@@ -1,0 +1,22 @@
+{
+  "source": "fixture-bigseq",
+  "source_seq": 1,
+  "checksum": 3553725883,
+  "created_at": "2026-01-02T03:04:05Z",
+  "events": [
+    {
+      "event_id": "0190f5a2-7c3e-7000-8000-000000000200",
+      "zone": "default",
+      "source": "fixture-bigseq",
+      "source_seq": 18446744073709551615,
+      "timestamp": "2026-01-02T03:04:05Z",
+      "correlation_id": null,
+      "causation_id": null,
+      "actor_ref": null,
+      "object_ref": null,
+      "event_class": "health",
+      "payload_tier": "metadata_only",
+      "payload": null
+    }
+  ]
+}
