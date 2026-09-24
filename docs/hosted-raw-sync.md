@@ -31,8 +31,8 @@ Device enrollment and revocation remain operator-managed. The operator supplies
 each laptop with a server URL, device ID and credential. There is no public
 enrollment command or HTTP endpoint. The broader delivery work remains tracked
 in [issue #1352](https://github.com/kenn-io/agentsview/issues/1352), including
-embedding consumption, accepted-generation retention and garbage collection,
-and disaster rebuilds.
+embedding consumption, accepted-generation retention and garbage collection, and
+disaster rebuilds.
 
 ## Provision a hosted instance
 
@@ -203,14 +203,32 @@ unresolved members and retry finitely. Exhausted jobs remain failed until new
 source or processing-version selection provides new work.
 
 Equivalent content from several devices coalesces when it shares a stable
-provider session identity. Without that identity, sources remain separate even
-when their content matches. Divergent content makes the bare session ID
-ambiguous and exposes explicit variants. Source removal retracts only that
-source's proof. Names, stars and pins survive compatible publication; ambiguous
-identity never silently picks a transcript. Owner imports that change legacy
-identity must retry their transaction on serialization failure
-(`SQLSTATE 40001`) if publication or curation holds a conflicting identity lock.
-Ordinary legacy content and curation writes do not take those identity locks.
+provider session identity. Piebald's numeric database IDs stay scoped to their
+source, so unrelated chats on different devices do not merge. Without a stable
+provider identity, sources remain separate even when their content matches.
+
+A shorter transcript shares the longer copy's displayed session when every
+retained message and usage event matches its prefix and the source metadata
+agrees. Each source keeps its captured revision. Removing the longer source
+restores the shorter copy. Changed messages, conflicting metadata, or several
+divergent continuations remain separate variants; the bare session ID is then
+ambiguous. Source removal retracts only that source's proof.
+
+Names, stars and pins survive compatible publication; ambiguous identity never
+silently picks a transcript. Owner imports that change legacy identity must
+retry their transaction on serialization failure (`SQLSTATE 40001`) if
+publication or curation holds a conflicting identity lock. Ordinary legacy
+content and curation writes do not take those identity locks.
+
+Selecting a parser job does not expire browsing cursors. Publishing changed
+identities does; the sidebar and activity report reload when their next page
+uses an expired cursor. The API returns a bad-request response for invalid or
+expired cursors.
+
+Hosted raw derivation accepts `tool_result_images = "keep"` or `"drop"`. It
+rejects `"offload"` at startup because it has no hosted image asset store. This
+restriction does not prevent serving existing hosted sessions with
+`raw_derivation = false`.
 
 The maintenance pass examines at most 64 indexed pending signal rows with a
 10-second timeout. It does not scan the archive during idle polling. Shutdown
@@ -293,8 +311,8 @@ the spool directory. Repeating the command can revisit the same preserved
 entries. Entries beyond that window require the running server, which keeps its
 cursor between passes. The command checks that the target has the provisioned
 raw-sync schema and write privileges before creating the upload spool. It
-reports `Raw upload cleanup pass completed.` only after the cleanup store
-closes successfully.
+reports `Raw upload cleanup pass completed.` only after the cleanup store closes
+successfully.
 
 ## HTTP control plane
 

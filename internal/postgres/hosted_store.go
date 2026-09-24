@@ -32,7 +32,7 @@ type hostedRevision struct{ Identity, Selection, Corpus int64 }
 
 var (
 	ErrHostedIdentityChanged = errors.New("hosted identity changed during read; retry the request")
-	ErrHostedCursor          = errors.New("invalid or expired hosted cursor")
+	ErrHostedCursor          = fmt.Errorf("invalid or expired hosted cursor: %w", db.ErrInvalidCursor)
 )
 
 func newHostedAdapter(pg *sql.DB, tenant string) (*HostedStore, error) {
@@ -143,7 +143,8 @@ func (h *HostedStore) sealCursor(payload string, r hostedRevision) (string, erro
 	if _, err = rand.Read(nonce); err != nil {
 		return "", err
 	}
-	aad := fmt.Sprintf("hosted-v1:%s:%d:%d", h.tenant, r.Selection, r.Identity)
+	// Pending selection does not change the published identities being paged.
+	aad := fmt.Sprintf("hosted-v1:%s:%d", h.tenant, r.Identity)
 	return base64.RawURLEncoding.EncodeToString(c.Seal(append([]byte{1}, nonce...), nonce, []byte(payload), []byte(aad))), nil
 }
 
@@ -165,7 +166,7 @@ func (h *HostedStore) openCursor(token string, r hostedRevision) (string, error)
 	if len(b) < 1+c.NonceSize()+c.Overhead() || b[0] != 1 {
 		return "", ErrHostedCursor
 	}
-	aad := fmt.Sprintf("hosted-v1:%s:%d:%d", h.tenant, r.Selection, r.Identity)
+	aad := fmt.Sprintf("hosted-v1:%s:%d", h.tenant, r.Identity)
 	p, err := c.Open(nil, b[1:1+c.NonceSize()], b[1+c.NonceSize():], []byte(aad))
 	if err != nil {
 		return "", ErrHostedCursor

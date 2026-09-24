@@ -120,8 +120,11 @@ func sessionForStoragePolicy(
 	// Derive automation while the parser/importer preview is still present.
 	// The retained session row is authoritative after transcript text is gone.
 	session.IsAutomated = sessionIsAutomated(session)
-	session.PreserveStoredAutomation = session.FirstMessage == nil &&
-		session.UserMessageCount <= 1
+	if !session.UsageAutomationProjected {
+		session.PreserveStoredAutomation = session.FirstMessage == nil &&
+			session.UserMessageCount <= 1
+		session.UsageAutomationProjected = true
+	}
 	session.FirstMessage = nil
 	session.DisplayName = nil
 	session.SessionName = nil

@@ -15,13 +15,14 @@ import (
 
 type rawBranch struct {
 	ID, Source, Group, Member, Session, Revision, Manifest, Version string
+	CapturedSession                                                 string
 	Generation                                                      int64
 	Active                                                          bool
 	Payload                                                         []byte
 }
 
 func loadRawBranches(ctx context.Context, q hostedQuerier, where string, arg string) ([]rawBranch, error) {
-	rows, err := q.QueryContext(ctx, `SELECT branch_id,source_id,group_id,member_id,session_id,content_revision,manifest_id,processing_version,projection_generation,active,prior_payload FROM raw_session_branches WHERE `+where+`=$1 ORDER BY branch_id`, arg)
+	rows, err := q.QueryContext(ctx, `SELECT branch_id,source_id,group_id,member_id,session_id,content_revision,manifest_id,processing_version,projection_generation,active,prior_payload,captured_session_id FROM raw_session_branches WHERE `+where+`=$1 ORDER BY branch_id`, arg)
 	if err != nil {
 		return nil, err
 	}
@@ -29,7 +30,7 @@ func loadRawBranches(ctx context.Context, q hostedQuerier, where string, arg str
 	var branches []rawBranch
 	for rows.Next() {
 		var b rawBranch
-		if err = rows.Scan(&b.ID, &b.Source, &b.Group, &b.Member, &b.Session, &b.Revision, &b.Manifest, &b.Version, &b.Generation, &b.Active, &b.Payload); err != nil {
+		if err = rows.Scan(&b.ID, &b.Source, &b.Group, &b.Member, &b.Session, &b.Revision, &b.Manifest, &b.Version, &b.Generation, &b.Active, &b.Payload, &b.CapturedSession); err != nil {
 			return nil, err
 		}
 		branches = append(branches, b)
@@ -86,7 +87,7 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		if _, duplicate := candidates[group]; duplicate {
 			return errors.New("duplicate raw projection member")
 		}
-		groups[group] = c.Session.ID
+		groups[group] = rawBaseAlias(m, c.Session)
 		keys[group] = key
 		candidates[group] = c
 	}
@@ -118,7 +119,7 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 	}
 	for group, base := range groups {
 		if base != "" {
-			aliases = append(aliases, base, base+"~"+rawDigest("branch-v1", group, source))
+			aliases = append(aliases, base, base+"~"+rawDigest("branch-v1", group, source), candidates[group].Session.ID)
 			aliases = append(aliases, pgSessionAliasIDs(candidates[group].Session)...)
 		}
 	}
@@ -158,7 +159,7 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		var old ingest.PreparedSession
 		var history *ingest.PriorSession
 		if exists {
-			old, err = loadRawPayload(ctx, tx, previous.Session)
+			old, err = loadRawPayload(ctx, tx, previous.CapturedSession)
 			if err != nil {
 				return err
 			}
@@ -211,8 +212,11 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		if err != nil {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO raw_session_branches(branch_id,source_id,group_id,member_id,session_id,content_revision,manifest_id,processing_version,projection_generation,active,prior_payload) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,true,$10)
- ON CONFLICT(branch_id) DO UPDATE SET session_id=EXCLUDED.session_id,content_revision=EXCLUDED.content_revision,manifest_id=EXCLUDED.manifest_id,processing_version=EXCLUDED.processing_version,projection_generation=EXCLUDED.projection_generation,active=true,prior_payload=EXCLUDED.prior_payload`, branchID, source, group, c.Session.ID, sessionID, revision, m.ManifestID, lease.ProcessingVersion, lease.ProjectionGeneration, metadata)
+		_, err = tx.ExecContext(ctx, `INSERT INTO raw_session_branches(branch_id,source_id,group_id,member_id,session_id,content_revision,manifest_id,processing_version,projection_generation,active,prior_payload,captured_session_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,true,$10,$5)
+ ON CONFLICT(branch_id) DO UPDATE SET
+ session_id=CASE WHEN raw_session_branches.captured_session_id=EXCLUDED.captured_session_id THEN raw_session_branches.session_id ELSE EXCLUDED.session_id END,
+ content_revision=CASE WHEN raw_session_branches.captured_session_id=EXCLUDED.captured_session_id THEN raw_session_branches.content_revision ELSE EXCLUDED.content_revision END,
+ captured_session_id=EXCLUDED.captured_session_id,manifest_id=EXCLUDED.manifest_id,processing_version=EXCLUDED.processing_version,projection_generation=EXCLUDED.projection_generation,active=true,prior_payload=EXCLUDED.prior_payload`, branchID, source, group, c.Session.ID, sessionID, revision, m.ManifestID, lease.ProcessingVersion, lease.ProjectionGeneration, metadata)
 		if err != nil {
 			return err
 		}
@@ -228,13 +232,15 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 			return err
 		}
 
-		for _, alias := range pgSessionAliasIDs(c.Session) {
+		// Keep parser IDs for source-owned relationships even when the public
+		// base alias is scoped to a database with local row IDs.
+		for _, alias := range append([]string{c.Session.ID}, pgSessionAliasIDs(c.Session)...) {
 			_, err = tx.ExecContext(ctx, `INSERT INTO raw_session_public_aliases(alias_id,group_id,anchor_branch) VALUES($1,$2,'') ON CONFLICT(alias_id,group_id) DO NOTHING`, alias, group)
 			if err != nil {
 				return err
 			}
 		}
-		changed = changed || !exists || !previous.Active || previous.Session != sessionID
+		changed = changed || !exists || !previous.Active || previous.CapturedSession != sessionID
 	}
 	// A complete archive snapshot can omit sessions that must remain retained.
 	replaceMembership := complete && (parsed.Tombstone || parsed.Outcome.ForceReplace)
@@ -267,7 +273,7 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO session_sources(branch_id,group_id,source_id,session_id,physical_session_id,manifest_id,content_revision,processing_version,projection_generation) SELECT b.branch_id,b.group_id,b.source_id,b.session_id,s.id,b.manifest_id,b.content_revision,b.processing_version,b.projection_generation FROM raw_session_branches b LEFT JOIN sessions s ON s.id=b.session_id WHERE b.source_id=$1 AND b.active`, source)
+	_, err = tx.ExecContext(ctx, `INSERT INTO session_sources(branch_id,group_id,source_id,session_id,physical_session_id,manifest_id,content_revision,processing_version,projection_generation) SELECT b.branch_id,b.group_id,b.source_id,b.captured_session_id,s.id,b.manifest_id,c.content_revision,b.processing_version,b.projection_generation FROM raw_session_branches b JOIN raw_content_revisions c ON c.session_id=b.captured_session_id LEFT JOIN sessions s ON s.id=b.session_id WHERE b.source_id=$1 AND b.active`, source)
 	if err != nil {
 		return err
 	}

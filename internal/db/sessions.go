@@ -410,6 +410,9 @@ type Session struct {
 	// PreserveStoredAutomation is transient write intent set by the usage-only
 	// projection when metadata cannot reclassify a one-turn session.
 	PreserveStoredAutomation bool `json:"-"`
+	// UsageAutomationProjected keeps repeated projections from treating the
+	// prompt they already discarded as missing classification evidence.
+	UsageAutomationProjected bool `json:"-"`
 }
 
 // SessionCursor is the opaque pagination token. EndedAt carries the

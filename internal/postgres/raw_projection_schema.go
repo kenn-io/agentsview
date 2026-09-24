@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS raw_content_revisions (
 CREATE TABLE IF NOT EXISTS raw_session_branches (
  branch_id TEXT PRIMARY KEY, source_id TEXT NOT NULL, group_id TEXT NOT NULL,
  member_id TEXT NOT NULL, session_id TEXT NOT NULL, content_revision TEXT NOT NULL,
+ captured_session_id TEXT NOT NULL,
  manifest_id TEXT NOT NULL, processing_version TEXT NOT NULL,
  projection_generation BIGINT NOT NULL, active BOOLEAN NOT NULL,
  prior_payload BYTEA NOT NULL, UNIQUE(source_id,group_id)
@@ -110,6 +111,7 @@ var rawProjectionTables = []HostedTable{
 	{Name: "raw_session_branches", Key: []string{"branch_id"}, ForeignKeys: append(rawGroupFK(),
 		HostedForeignKey{Columns: []string{"source_id"}, Table: "raw_source_projections", References: []string{"source_id"}, Delete: "RESTRICT"},
 		HostedForeignKey{Columns: []string{"session_id"}, Table: "raw_content_revisions", References: []string{"session_id"}, Delete: "RESTRICT"},
+		HostedForeignKey{Columns: []string{"captured_session_id"}, Table: "raw_content_revisions", References: []string{"session_id"}, Delete: "RESTRICT"},
 		HostedForeignKey{Columns: []string{"manifest_id"}, Table: "raw_manifests", References: []string{"manifest_id"}, Delete: "RESTRICT"})},
 	{Name: "session_sources", Key: []string{"branch_id"}, ForeignKeys: []HostedForeignKey{
 		{Columns: []string{"physical_session_id"}, Table: "sessions", References: []string{"id"}, Delete: "RESTRICT"},

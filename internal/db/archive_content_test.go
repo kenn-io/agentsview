@@ -39,7 +39,7 @@ func TestOpenUsageOnlyPreservesStoredAutomationClassification(t *testing.T) {
 }
 
 func TestUsageOnlyUpsertsPreserveAutomationWithoutPreview(t *testing.T) {
-	for _, writeKind := range []string{"direct", "identity", "batch"} {
+	for _, writeKind := range []string{"direct", "identity", "batch", "prepared"} {
 		t.Run(writeKind, func(t *testing.T) {
 			for _, tc := range []struct {
 				name      string
@@ -75,6 +75,9 @@ func TestUsageOnlyUpsertsPreserveAutomationWithoutPreview(t *testing.T) {
 							export.ProjectIdentityObservation{SessionID: session.ID, Project: "project", Machine: "local"}, "project")
 					case "batch":
 						_, err = database.WriteSessionBatch([]SessionBatchWrite{{Session: session}})
+					case "prepared":
+						session, _ = ProjectSessionForStoragePolicy(session, nil, tc.policy)
+						err = database.UpsertSession(t.Context(), session)
 					}
 					require.NoError(t, err)
 					stored, err = database.GetSessionFull(t.Context(), session.ID)

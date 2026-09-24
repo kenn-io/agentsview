@@ -7,7 +7,7 @@ import type {
 import type { Report } from "../api/types/activity.js";
 import { m } from "../i18n/index.js";
 import { MetadataService } from "../api/generated/index";
-import { isAbortError } from "../api/runtime.js";
+import { ApiError, isAbortError } from "../api/runtime.js";
 import {
   fetchActivityReport,
   fetchActivitySessions,
@@ -303,6 +303,7 @@ class ActivityStore {
   async loadSessionPage(options: ActivitySessionPageOptions = {}): Promise<boolean> {
     const report = this.report;
     if (!report?.report_id) return false;
+    const reportVersion = this.loadVersion;
     const startedAt = performance.now();
     const signal = this.sessionsRead.begin();
     const sort = options.sort ?? this.sessionsSort;
@@ -353,7 +354,20 @@ class ActivityStore {
       };
       return true;
     } catch (e) {
-      if (isAbortError(e) || !this.sessionsRead.isCurrent(signal)) return false;
+      if (
+        isAbortError(e) ||
+        !this.sessionsRead.isCurrent(signal) ||
+        this.loadVersion !== reportVersion
+      )
+        return false;
+      if (
+        e instanceof ApiError &&
+        e.status === 400 &&
+        (e.message === "invalid activity report ID" ||
+          e.message === "invalid activity session cursor")
+      ) {
+        return await this.load();
+      }
       this.sessionsError = e instanceof Error ? e.message : m.activity_sessions_load_failed();
       return false;
     } finally {

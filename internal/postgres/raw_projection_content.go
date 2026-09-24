@@ -13,6 +13,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/ingest"
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/rawsync"
 )
 
@@ -31,10 +32,18 @@ func rawSourceID(m rawsync.CanonicalManifest) string {
 
 func rawGroupID(m rawsync.CanonicalManifest, s db.Session) (string, string) {
 	key := s.SourceSessionID
-	if key == "" {
+	// Piebald chat and fork IDs are SQLite row IDs, local to one source.
+	if key == "" || s.Agent == string(parser.AgentPiebald) {
 		key = rawDigest("source-local-v1", rawSourceID(m), s.ID)
 	}
 	return rawDigest("group-v1", m.Identity.TenantID, s.Agent, key), key
+}
+
+func rawBaseAlias(m rawsync.CanonicalManifest, s db.Session) string {
+	if s.Agent == string(parser.AgentPiebald) {
+		return s.ID + "~source-" + rawSourceID(m)
+	}
+	return s.ID
 }
 
 func encodeRawPayload(p ingest.PreparedSession) ([]byte, error) {
@@ -175,7 +184,9 @@ func rawCanonicalValue(v reflect.Value, field string) (any, error) {
 		out := map[string]any{}
 		for i := range v.NumField() {
 			f := v.Type().Field(i)
-			if !f.IsExported() {
+			// This transient projection marker adds no content to the existing
+			// normalized-content-v1 representation.
+			if !f.IsExported() || f.Name == "UsageAutomationProjected" {
 				continue
 			}
 			value, err := rawCanonicalValue(v.Field(i), f.Name)

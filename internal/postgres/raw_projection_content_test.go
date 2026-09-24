@@ -5,9 +5,17 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/ingest"
 )
+
+func TestRawProjectionRejectsImageOffload(t *testing.T) {
+	_, err := NewRawProjectionStore(nil, RawProjectionOptions{
+		Content: ingest.ContentOptions{ToolResultImages: config.ToolResultImagesOffload},
+	})
+	require.ErrorContains(t, err, "tool_result_images = offload is not supported for hosted raw derivation")
+}
 
 func TestRawContentRevisionRetainsHiddenSemanticFields(t *testing.T) {
 	original := ingest.PreparedSession{Session: db.Session{ID: "physical", Machine: "device", SessionName: new("provider title")}, Messages: []db.Message{{Ordinal: 0, Role: "assistant", Content: "same", ToolCalls: []db.ToolCall{{ToolName: "Bash", InputJSON: `{"a":1,"b":2}`, ResultEvents: []db.ToolResultEvent{{Content: "same", RawContentDigest: []byte("transport")}}}}}}}

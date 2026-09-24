@@ -12,12 +12,15 @@ import (
 
 const (
 	rawSourceProofDeleteSQL = `DELETE FROM session_sources WHERE source_id=$1`
-	rawSourceProofAttachSQL = `UPDATE session_sources SET physical_session_id=$1 WHERE session_id=$1`
+	rawSourceProofAttachSQL = `UPDATE session_sources p SET physical_session_id=b.session_id FROM raw_session_branches b WHERE b.branch_id=p.branch_id AND b.active AND b.session_id=$1`
 	rawSourceProofDetachSQL = `UPDATE session_sources SET physical_session_id=NULL WHERE physical_session_id=$1`
 	rawGroupContentsSQL     = `SELECT id,raw_content_revision FROM sessions WHERE raw_group_id=$1 AND raw_group_id<>'' UNION SELECT session_id,content_revision FROM raw_session_branches WHERE group_id=$1 AND active ORDER BY 1`
 )
 
 func (s *RawProjectionStore) materializeGroup(ctx context.Context, tx *sql.Tx, group string, corpus int64) error {
+	if err := reconcileRawPrefixes(ctx, tx, group); err != nil {
+		return err
+	}
 	branches, err := loadRawBranches(ctx, tx, "group_id", group)
 	if err != nil {
 		return err

@@ -1,6 +1,6 @@
 import type { DataChangedEvent } from "../api/client.js";
 import { MetadataService, SessionsService, SettingsService } from "../api/generated/index";
-import { isAbortError, isNotFoundError } from "../api/runtime.js";
+import { ApiError, isAbortError, isNotFoundError } from "../api/runtime.js";
 import type { Session } from "../api/types.js";
 import type {
   DbProjectInfo as ProjectInfo,
@@ -720,7 +720,12 @@ class SessionsStore {
       this.nextCursor = index.next_cursor ?? null;
       this.total = index.total;
     } catch (error) {
-      if (signal.aborted || isAbortError(error)) return;
+      if (signal.aborted || isAbortError(error) || this.loadVersion !== version) return;
+      if (error instanceof ApiError && error.status === 400 && error.message === "invalid cursor") {
+        this.nextCursor = null;
+        await this.load({ force: true });
+        return;
+      }
       throw error;
     } finally {
       if (this.loadVersion === version) {

@@ -1652,6 +1652,75 @@ describe("SessionsStore", () => {
   });
 
   describe("loadMore serialization", () => {
+    it("reloads the first page when the pagination cursor expires", async () => {
+      sessions.sessions = [makeSession({ id: "old" })];
+      sessions.nextCursor = "expired";
+      api.getSidebarSessionIndex
+        .mockRejectedValueOnce(new ApiError(400, "invalid cursor"))
+        .mockResolvedValueOnce({
+          sessions: [makeSkinnyRow({ id: "current" })],
+          total: 2,
+          next_cursor: "fresh",
+        });
+
+      await sessions.loadMore();
+
+      expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(2);
+      expect(api.getSidebarSessionIndex.mock.calls.map(([params]) => params.cursor)).toEqual([
+        "expired",
+        undefined,
+      ]);
+      expect(sessions.sessions.map((session) => session.id)).toEqual(["current"]);
+      expect(sessions.nextCursor).toBe("fresh");
+      expect(sessions.loading).toBe(false);
+    });
+
+    it("discards an expired cursor even when the first-page reload fails", async () => {
+      sessions.sessions = [makeSession({ id: "old" })];
+      sessions.nextCursor = "expired";
+      api.getSidebarSessionIndex
+        .mockRejectedValueOnce(new ApiError(400, "invalid cursor"))
+        .mockRejectedValueOnce(new ApiError(503, "temporarily unavailable"));
+
+      await sessions.loadMore();
+      await sessions.loadMore();
+
+      expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(2);
+      expect(sessions.sessions.map((session) => session.id)).toEqual(["old"]);
+      expect(sessions.nextCursor).toBeNull();
+      expect(sessions.loading).toBe(false);
+    });
+
+    it("does not reload after an obsolete pagination request rejects its cursor", async () => {
+      let rejectPage!: (error: Error) => void;
+      sessions.nextCursor = "expired";
+      api.getSidebarSessionIndex.mockReturnValueOnce(
+        new Promise((_, reject) => {
+          rejectPage = reject;
+        }),
+      );
+
+      const page = sessions.loadMore();
+      mockSidebarPage({ next_cursor: "current" });
+      await sessions.load();
+      rejectPage(new ApiError(400, "invalid cursor"));
+      await page;
+
+      expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(2);
+      expect(sessions.nextCursor).toBe("current");
+    });
+
+    it("preserves unrelated pagination failures", async () => {
+      sessions.nextCursor = "valid";
+      const error = new ApiError(400, "invalid timezone");
+      api.getSidebarSessionIndex.mockRejectedValueOnce(error);
+
+      await expect(sessions.loadMore()).rejects.toBe(error);
+
+      expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
+      expect(sessions.nextCursor).toBe("valid");
+    });
+
     it("should pass the browser timezone in loadMore", async () => {
       sessions.nextCursor = "cur-timezone";
 

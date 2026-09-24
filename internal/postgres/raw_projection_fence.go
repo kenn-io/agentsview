@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/rawderive"
 	"go.kenn.io/agentsview/internal/rawsync"
@@ -28,6 +29,9 @@ type RawProjectionStore struct {
 var _ rawderive.ProjectionSink = (*RawProjectionStore)(nil)
 
 func NewRawProjectionStore(database *sql.DB, options RawProjectionOptions) (*RawProjectionStore, error) {
+	if options.Content.ToolResultImages == config.ToolResultImagesOffload {
+		return nil, errors.New("tool_result_images = offload is not supported for hosted raw derivation; use keep or drop")
+	}
 	if options.Now == nil {
 		options.Now = time.Now
 	}

@@ -81,6 +81,9 @@ func prepareHostedPGServe(app config.Config, pg config.PGConfig, basePath string
 	if err := pg.ValidateRawDerivation(app.RequireAuth); err != nil {
 		return replicaServeStartup{}, err
 	}
+	if pg.RawDerivation && app.ToolResultImages == config.ToolResultImagesOffload {
+		return replicaServeStartup{}, errors.New("tool_result_images = offload is not supported for hosted raw derivation; use keep or drop")
+	}
 	applyClassifierConfig(app)
 	store, err := postgres.NewHostedStore(pg.URL, pg.Schema, pg.RawTenant, pg.AllowInsecure)
 	if err != nil {

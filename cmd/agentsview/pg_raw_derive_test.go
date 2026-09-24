@@ -137,6 +137,15 @@ func TestHostedProjectionConfiguredContentPolicies(t *testing.T) {
 	}
 }
 
+func TestHostedRawDerivationRejectsImageOffloadBeforeOpeningDatabase(t *testing.T) {
+	_, err := prepareHostedPGServe(
+		config.Config{RequireAuth: true, ToolResultImages: config.ToolResultImagesOffload},
+		config.PGConfig{RawTenant: "tenant", Schema: "hosted", RawDerivation: true, URL: "://invalid"},
+		"",
+	)
+	require.ErrorContains(t, err, "tool_result_images = offload is not supported for hosted raw derivation")
+}
+
 func hostedRuntimeClaudeFixture() []byte {
 	return []byte(`{"type":"user","timestamp":"2026-08-13T12:00:00Z","uuid":"u1","sessionId":"runtime-session","message":{"content":"hello runtime"},"cwd":"/work/project"}` + "\n" + `{"type":"assistant","timestamp":"2026-08-13T12:00:01Z","uuid":"a1","parentUuid":"u1","sessionId":"runtime-session","message":{"content":"hello viewer"}}` + "\n")
 }

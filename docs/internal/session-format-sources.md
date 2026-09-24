@@ -2528,7 +2528,14 @@ schemas keep their existing ordering behavior.
   store and does not prove the historical schema. Reverified 2026-09-20: the
   pinned analyzer joins `chats` to `projects` without selecting
   `chats.current_directory`. Sync remembers schema failures until database or
-  WAL state changes.
+  WAL state changes. Reverified 2026-09-24: the pinned analyzer reads integer
+  chat and message row IDs from each local database. An isolated SQLite
+  fixture parsed through the provider and projected into PostgreSQL confirms
+  that equal chat IDs from independent capture sources need separate hosted
+  identities. Hosted groups and public base aliases include the capture source;
+  fork groups also include the parsed member ID because forks share their
+  parent chat's `SourceSessionID`. Original parser IDs remain available for
+  source-owned links.
 
 ## Warp (`warp`)
 
