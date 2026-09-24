@@ -4839,7 +4839,8 @@ components:
             type: string
           type: array
         metadata:
-          additionalProperties: {}
+          additionalProperties:
+            type: string
           type: object
         priority:
           format: int64

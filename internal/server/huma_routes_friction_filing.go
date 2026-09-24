@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -33,12 +34,12 @@ type frictionFileInput struct {
 }
 
 type FrictionFilePreview struct {
-	Title    string         `json:"title"`
-	Body     string         `json:"body"`
-	Priority int            `json:"priority"`
-	Labels   []string       `json:"labels"`
-	Metadata map[string]any `json:"metadata"`
-	ForceNew bool           `json:"force_new"`
+	Title    string            `json:"title"`
+	Body     string            `json:"body"`
+	Priority int               `json:"priority"`
+	Labels   []string          `json:"labels"`
+	Metadata map[string]string `json:"metadata"`
+	ForceNew bool              `json:"force_new"`
 }
 
 type FrictionFileResponse struct {
@@ -100,8 +101,16 @@ func (s *Server) humaFileFrictionPattern(ctx context.Context, in *frictionFileIn
 	run.ForceNew = in.Body.ForceNew
 	if in.Body.DryRun {
 		p := f.Plan(sig, run)
+		metadata := make(map[string]string, len(p.Metadata))
+		for key, value := range p.Metadata {
+			str, ok := value.(string)
+			if !ok {
+				return nil, serverError(fmt.Errorf("friction preview metadata %q is not a string", key))
+			}
+			metadata[key] = str
+		}
 		return &jsonOutput[FrictionFileResponse]{Body: FrictionFileResponse{Preview: &FrictionFilePreview{
-			Title: p.Title, Body: p.Body, Priority: p.Priority, Labels: p.Labels, Metadata: p.Metadata, ForceNew: p.ForceNew}}}, nil
+			Title: p.Title, Body: p.Body, Priority: p.Priority, Labels: p.Labels, Metadata: metadata, ForceNew: p.ForceNew}}}, nil
 	}
 	if !f.Ready(ctx) {
 		return nil, s.kataUnavailable(ctx)

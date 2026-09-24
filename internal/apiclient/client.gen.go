@@ -22912,12 +22912,12 @@ func (f FrictionDigestsResponse) Validate() error {
 }
 
 type FrictionFilePreview struct {
-	Body     string              `json:"body" validate:"required"`
-	ForceNew bool                `json:"force_new"`
-	Labels   []string            `json:"labels" validate:"required"`
-	Metadata map[string]struct{} `json:"metadata"`
-	Priority int64               `json:"priority"`
-	Title    string              `json:"title" validate:"required"`
+	Body     string            `json:"body" validate:"required"`
+	ForceNew bool              `json:"force_new"`
+	Labels   []string          `json:"labels" validate:"required"`
+	Metadata map[string]string `json:"metadata"`
+	Priority int64             `json:"priority"`
+	Title    string            `json:"title" validate:"required"`
 }
 
 func (f FrictionFilePreview) Validate() error {
