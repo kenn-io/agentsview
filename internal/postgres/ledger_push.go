@@ -82,8 +82,15 @@ func (s *Sync) syncLedgerSegments(ctx context.Context, full bool) error {
 	}
 	statusKey := LedgerPushStatusKeyPrefix + s.syncStateTarget
 	prior := LedgerPushStatus{}
-	if value, err := s.local.GetSyncState(ctx, statusKey); err == nil && value != "" {
-		prior, _ = DecodeLedgerPushStatus(value)
+	value, err := s.local.GetSyncState(ctx, statusKey)
+	if err != nil {
+		return fmt.Errorf("reading ledger push status: %w", err)
+	}
+	if value != "" {
+		prior, err = DecodeLedgerPushStatus(value)
+		if err != nil {
+			return err
+		}
 	}
 
 	run := ledgerPushRun{
@@ -136,15 +143,6 @@ func (s *Sync) syncLedgerSegments(ctx context.Context, full bool) error {
 		}
 	}
 
-	if newest != "" {
-		t, err := time.Parse("2006-01-02T15:04:05.000000Z", newest)
-		if err != nil {
-			return fmt.Errorf("parsing ledger ingested_at %q: %w", newest, err)
-		}
-		if err := state.SetSyncState(ctx, ledgerPushWatermarkKey, t.Format(time.RFC3339Nano)); err != nil {
-			return fmt.Errorf("saving %s: %w", ledgerPushWatermarkKey, err)
-		}
-	}
 	slices.SortFunc(run.status.Failures, func(a, b [4]string) int {
 		return cmp.Or(cmp.Compare(a[0], b[0]), cmp.Compare(a[1], b[1]), cmp.Compare(a[2], b[2]))
 	})
@@ -154,6 +152,15 @@ func (s *Sync) syncLedgerSegments(ctx context.Context, full bool) error {
 	}
 	if err := s.local.SetSyncState(ctx, statusKey, string(b)); err != nil {
 		return fmt.Errorf("saving ledger push status: %w", err)
+	}
+	if newest != "" {
+		t, err := time.Parse("2006-01-02T15:04:05.000000Z", newest)
+		if err != nil {
+			return fmt.Errorf("parsing ledger ingested_at %q: %w", newest, err)
+		}
+		if err := state.SetSyncState(ctx, ledgerPushWatermarkKey, t.Format(time.RFC3339Nano)); err != nil {
+			return fmt.Errorf("saving %s: %w", ledgerPushWatermarkKey, err)
+		}
 	}
 	pushed, identical, held := 0, 0, 0
 	for _, c := range run.status.Zones {

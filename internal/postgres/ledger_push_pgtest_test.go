@@ -214,6 +214,42 @@ func TestLedgerPush(t *testing.T) {
 			assert.Equal(t, 2, pgTableCount(t, ctx, env.pg, "ledger_segments"))
 			assert.Equal(t, 2, pgTableCount(t, ctx, env.pg, "ledger_events"))
 		}},
+		{"status_write_failure_does_not_advance_watermark", func(t *testing.T, env *ledgerPushEnv) {
+			t.Helper()
+			ctx := t.Context()
+			local, sync := env.laptop("machine-a", defaultPolicy)
+			appendLocal(t, local, "default", "av-a", ledger.TierStructured, "new")
+			raw, err := sql.Open("sqlite3", local.Path())
+			require.NoError(t, err)
+			_, err = raw.ExecContext(ctx, `CREATE TRIGGER refuse_ledger_status
+				BEFORE INSERT ON pg_sync_state
+				WHEN NEW.key = 'pg_ledger_push_status_v1:hub'
+				BEGIN SELECT RAISE(ABORT, 'status storage failed'); END`)
+			require.NoError(t, err)
+			require.NoError(t, raw.Close())
+
+			err = sync.syncLedgerSegments(ctx, false)
+			require.ErrorContains(t, err, "status storage failed")
+			watermark, err := sync.effectiveSyncState().GetSyncState(ctx, ledgerPushWatermarkKey)
+			require.NoError(t, err)
+			assert.Empty(t, watermark, "the next push must re-read the segment")
+		}},
+		{"malformed_prior_status_is_not_overwritten", func(t *testing.T, env *ledgerPushEnv) {
+			t.Helper()
+			ctx := t.Context()
+			local, sync := env.laptop("machine-a", defaultPolicy)
+			appendLocal(t, local, "default", "av-a", ledger.TierStructured, "new")
+			require.NoError(t, local.SetSyncState(ctx, LedgerPushStatusKeyPrefix+"hub", "{bad json"))
+
+			err := sync.syncLedgerSegments(ctx, false)
+			require.ErrorContains(t, err, "decoding ledger push status")
+			stored, err := local.GetSyncState(ctx, LedgerPushStatusKeyPrefix+"hub")
+			require.NoError(t, err)
+			assert.Equal(t, "{bad json", stored)
+			watermark, err := sync.effectiveSyncState().GetSyncState(ctx, ledgerPushWatermarkKey)
+			require.NoError(t, err)
+			assert.Empty(t, watermark)
+		}},
 		{"push_runs_the_phase_and_nil_policy_skips_it", func(t *testing.T, env *ledgerPushEnv) {
 			t.Helper()
 			ctx := t.Context()
