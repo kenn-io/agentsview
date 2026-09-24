@@ -65,6 +65,10 @@ client will see these tools:
 | `search_content`       | Substring, regex, terms, semantic, or hybrid search over session text    |
 | `get_usage_summary`    | Aggregate token and cost usage                                           |
 | `query_recall`         | Search extracted Recall entries when the backend supports Recall queries |
+| `query_ledger`         | Query structured event history when the ledger is enabled                |
+
+`query_ledger` filters by `since`, `subsystems`, `class` and `zone`. It returns
+events in the `agentsview ledger query --format json` shape.
 
 `search_sessions` accepts optional `date_from` and `date_to` bounds in
 `YYYY-MM-DD` format, just like `list_sessions` and `search_content`. Dates

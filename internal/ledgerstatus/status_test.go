@@ -19,8 +19,10 @@ func TestCollectAndWriteText(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	ctx := t.Context()
 	w := ledger.NewWriter(d, "default", "host-a", nil)
-	_, err := w.Append(ctx, []ledger.Event{{EventClass: ledger.ClassHealth, PayloadTier: ledger.TierMetadataOnly,
-		Timestamp: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)}})
+	_, err := w.Append(ctx, []ledger.Event{{
+		EventClass: ledger.ClassHealth, PayloadTier: ledger.TierMetadataOnly,
+		Timestamp: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+	}})
 	require.NoError(t, err)
 	require.NoError(t, d.SetSyncState(ctx, postgres.LedgerPushStatusKeyPrefix+"hub",
 		`{"at":"2026-09-22T10:00:00.000000Z","zones":{"default":{"pushed":1}},"failures":[]}`))

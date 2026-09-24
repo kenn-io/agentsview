@@ -70,6 +70,7 @@ func count(results []ledger.ZoneEvents) int {
 // ledger-sqlite read tests (db.rs:696-730) onto QueryLedger, plus the SQL
 // filtering jilog does not do (D20).
 func QueryConformance(t *testing.T, open func(t *testing.T) QueryStore) {
+	t.Helper()
 	now := time.Now().UTC()
 	health := ledger.ClassHealth
 	stateChange := ledger.ClassStateChange

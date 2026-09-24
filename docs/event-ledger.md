@@ -53,6 +53,7 @@ By convention `payload.subsystem` names the component an event is about and
 
 ```bash
 agentsview ledger append --class state-change --subsystem deploy --summary "rolled out v2"
+agentsview ledger query --since 24h --subsystem 'hook-*'
 agentsview ledger status [--zone Z] [--json]
 agentsview ledger verify [--zone Z] [--full]
 agentsview ledger import --zone Z --segments DIR
@@ -61,6 +62,19 @@ agentsview ledger rebuild-index --zone Z
 ```
 
 See the [CLI Reference](/docs/commands/#agentsview-ledger) for every flag.
+
+## Querying
+
+`ledger query` filters events by time, subsystem, class and zone. It prints
+newest first per zone. Use `--format json` for the jilog-compatible event
+array.
+
+The same query is available as `GET /api/v1/ledger/events` (`since`, repeated
+`subsystem`, `class`, `zone`, `limit`) and as the MCP tool `query_ledger`.
+`GET /api/v1/ledger/status`, `POST /api/v1/ledger/events` (append as this
+machine's source) and `POST /api/v1/ledger/verify` complete the API. Writes
+need the auth token, or a localhost request when auth is off. Each event in an
+API response carries `serde`, its exact serialized form.
 
 ## Guarantees
 

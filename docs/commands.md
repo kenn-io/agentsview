@@ -1569,6 +1569,8 @@ Appending, importing and rebuilding the index require `[ledger] enabled = true`.
 agentsview ledger append --class <class> [--tier <tier>] [--zone <zone>] \
   [--subsystem <name>] [--summary <text>] [--payload <json>] \
   [--actor <ref>] [--object <ref>]
+agentsview ledger query [--since 7d] [--subsystem <glob>]... [--class <class>] \
+  [--zone <zone>] [--limit 100] [--format text|json]
 agentsview ledger status [--zone <zone>] [--format json]
 agentsview ledger verify [--zone <zone>] [--full]
 agentsview ledger import --zone <zone> --segments <dir>
@@ -1593,8 +1595,16 @@ file was refused. Refused files are retried on the next import. `ledger export`
 writes a zone as jilog-format files and never replaces an existing file.
 `ledger rebuild-index` rebuilds a zone's query index from its stored segments.
 
-These commands open the archive directly. While a local daemon owns the
-archive, stop it first.
+`ledger query` prints matching events newest first per zone in the same text
+and JSON formats as `jilog query`. `--since` takes `24h`, `7d`, `4w` or a
+`YYYY-MM-DD` date (UTC midnight). `--subsystem` matches `payload.subsystem`,
+or `object_ref` after `subsystem:`; a trailing `*` matches a prefix, and
+repeated flags are OR-ed. Filters run before `--limit`, so older matches are
+never cut off.
+
+`query`, `status`, `append` and `verify` go through the local daemon when one
+is running, and open the archive directly otherwise. `import`, `export` and
+`rebuild-index` always open the archive directly; stop the daemon first.
 
 ______________________________________________________________________
 
