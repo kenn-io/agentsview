@@ -2433,6 +2433,22 @@
   "friction_patterns_new": "New patterns",
   "friction_patterns_recurring": "Recurring patterns",
   "friction_patterns_none": "No patterns in this digest.",
+  "friction_kata_file": "File to Kata",
+  "friction_kata_link": "Link issue",
+  "friction_kata_unlink": "Unlink",
+  "friction_kata_unlink_title": "Remove only the local link. The Kata issue stays open.",
+  "friction_kata_state_linked": "Linked",
+  "friction_kata_state_pending": "Pending",
+  "friction_kata_state_failed": "Failed",
+  "friction_kata_state_needs_human": "Needs review",
+  "friction_kata_state_abandoned": "Abandoned",
+  "friction_kata_state_unknown": "Unknown state",
+  "friction_kata_link_title": "Link an existing Kata issue",
+  "friction_kata_link_hint": "Enter a Kata issue reference, such as project#abc. Linking does not create or close an issue.",
+  "friction_kata_issue_label": "Kata issue reference",
+  "friction_kata_issue_placeholder": "project#issue",
+  "friction_kata_issue_required": "Enter a Kata issue reference.",
+  "friction_kata_cancel": "Cancel",
   "friction_pattern_occurrences": [
     {
       "declarations": [

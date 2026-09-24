@@ -2432,6 +2432,22 @@
   "friction_patterns_new": "Nouveaux motifs",
   "friction_patterns_recurring": "Motifs récurrents",
   "friction_patterns_none": "Aucun motif dans ce résumé.",
+  "friction_kata_file": "Créer dans Kata",
+  "friction_kata_link": "Lier un ticket",
+  "friction_kata_unlink": "Délier",
+  "friction_kata_unlink_title": "Supprime uniquement le lien local. Le ticket Kata reste ouvert.",
+  "friction_kata_state_linked": "Lié",
+  "friction_kata_state_pending": "En attente",
+  "friction_kata_state_failed": "Échec",
+  "friction_kata_state_needs_human": "À examiner",
+  "friction_kata_state_abandoned": "Abandonné",
+  "friction_kata_state_unknown": "État inconnu",
+  "friction_kata_link_title": "Lier un ticket Kata existant",
+  "friction_kata_link_hint": "Saisissez une référence de ticket Kata, comme project#abc. Le lien ne crée ni ne ferme de ticket.",
+  "friction_kata_issue_label": "Référence du ticket Kata",
+  "friction_kata_issue_placeholder": "project#issue",
+  "friction_kata_issue_required": "Saisissez une référence de ticket Kata.",
+  "friction_kata_cancel": "Annuler",
   "friction_pattern_occurrences": [
     {
       "declarations": [

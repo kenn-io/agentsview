@@ -162,6 +162,7 @@ function version(overrides: Partial<VersionInfo & { friction_available: boolean 
     data_version: 1,
     insight_generation_available: false,
     friction_available: true,
+    kata_available: false,
     read_only: false,
     version: "dev",
     ...overrides,
@@ -424,6 +425,88 @@ describe("FrictionPage", () => {
     sync.serverVersion = version({ friction_available: true, read_only: true });
     await render();
     expect(document.body.textContent).not.toContain("Build now");
+  });
+
+  it("shows File and Link only when Kata is ready on a writable hub", async () => {
+    sync.serverVersion = version({ kata_available: true });
+    await render();
+    const row = document.querySelector(".pattern-row")!;
+    expect(row.querySelectorAll("button").length).toBe(2);
+    expect(row.textContent).toContain("File to Kata");
+    expect(row.textContent).toContain("Link issue");
+    await unmount(component!);
+    component = undefined;
+
+    sync.serverVersion = version({ kata_available: true, read_only: true });
+    await render();
+    expect(document.querySelector(".pattern-row button")).toBeNull();
+  });
+
+  it("shows a stored Kata link and its state even when Kata is unavailable", async () => {
+    friction.patterns[0]!.link = {
+      state: "linked",
+      qualified_id: "agentsview#abc",
+      web_url: "https://kata.example/issues/abc",
+    } as never;
+    await render();
+    const row = document.querySelector(".pattern-row")!;
+    expect(row.textContent).toContain("Linked");
+    expect(row.querySelector<HTMLAnchorElement>("a.kata-issue")?.href).toBe(
+      "https://kata.example/issues/abc",
+    );
+    expect(row.querySelector("button")).toBeNull();
+  });
+
+  it("shows Unlink for linked patterns and keeps the issue after an action error", async () => {
+    sync.serverVersion = version({ kata_available: true });
+    friction.patterns[0]!.link = {
+      state: "linked",
+      qualified_id: "agentsview#abc",
+      web_url: "https://kata.example/issues/abc",
+    } as never;
+    vi.spyOn(friction, "unlinkPattern").mockImplementation(async () => {
+      friction.mutationError = {
+        fingerprint: friction.patterns[0]!.fingerprint,
+        message: "Kata offline",
+      };
+    });
+    await render();
+    const row = document.querySelector(".pattern-row")!;
+    const button = Array.from(row.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Unlink"),
+    )!;
+    expect(button.title).toContain("local link");
+    button.click();
+    await tick();
+    expect(row.textContent).toContain("Kata offline");
+    expect(row.querySelector("a.kata-issue")).not.toBeNull();
+  });
+
+  it("links an existing issue through a modal after trimming its ref", async () => {
+    sync.serverVersion = version({ kata_available: true });
+    const link = vi.spyOn(friction, "linkPattern").mockImplementation(async (fingerprint) => {
+      friction.mutationError = { fingerprint, message: "Kata offline" };
+    });
+    await render();
+    const row = document.querySelector(".pattern-row")!;
+    Array.from(row.querySelectorAll("button"))
+      .find((b) => b.textContent?.includes("Link issue"))!
+      .click();
+    await tick();
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    const input = document.querySelector<HTMLInputElement>(
+      'input[aria-label="Kata issue reference"]',
+    )!;
+    input.value = "  agentsview#abc  ";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await tick();
+    const submit = Array.from(document.querySelectorAll("button")).find(
+      (b) => b.textContent?.trim() === "Link issue" && b.closest('[role="dialog"]'),
+    )!;
+    submit.click();
+    await tick();
+    expect(link).toHaveBeenCalledWith(friction.patterns[0]!.fingerprint, "agentsview#abc");
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Kata offline");
   });
 
   it("moves to the older digest and records it in the URL", async () => {

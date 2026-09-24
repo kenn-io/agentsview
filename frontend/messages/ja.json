@@ -2412,6 +2412,22 @@
   "friction_patterns_new": "新しいパターン",
   "friction_patterns_recurring": "繰り返し発生しているパターン",
   "friction_patterns_none": "このダイジェストにパターンはありません。",
+  "friction_kata_file": "Kata に登録",
+  "friction_kata_link": "課題をリンク",
+  "friction_kata_unlink": "リンク解除",
+  "friction_kata_unlink_title": "ローカルのリンクだけを削除します。Kata の課題は開いたままです。",
+  "friction_kata_state_linked": "リンク済み",
+  "friction_kata_state_pending": "保留中",
+  "friction_kata_state_failed": "失敗",
+  "friction_kata_state_needs_human": "要確認",
+  "friction_kata_state_abandoned": "放棄",
+  "friction_kata_state_unknown": "不明な状態",
+  "friction_kata_link_title": "既存の Kata 課題をリンク",
+  "friction_kata_link_hint": "project#abc のような Kata 課題の参照を入力してください。リンクしても課題は作成・終了されません。",
+  "friction_kata_issue_label": "Kata 課題の参照",
+  "friction_kata_issue_placeholder": "project#issue",
+  "friction_kata_issue_required": "Kata 課題の参照を入力してください。",
+  "friction_kata_cancel": "キャンセル",
   "friction_pattern_occurrences": [
     {
       "declarations": [

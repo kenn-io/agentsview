@@ -2435,6 +2435,22 @@
   "friction_patterns_new": "Yeni nümunələr",
   "friction_patterns_recurring": "Təkrarlanan nümunələr",
   "friction_patterns_none": "Bu icmalda nümunə yoxdur.",
+  "friction_kata_file": "Kata-ya göndər",
+  "friction_kata_link": "Məsələni əlaqələndir",
+  "friction_kata_unlink": "Əlaqəni sil",
+  "friction_kata_unlink_title": "Yalnız yerli əlaqə silinir. Kata məsələsi açıq qalır.",
+  "friction_kata_state_linked": "Əlaqələndirilib",
+  "friction_kata_state_pending": "Gözləyir",
+  "friction_kata_state_failed": "Uğursuz",
+  "friction_kata_state_needs_human": "Baxış tələb edir",
+  "friction_kata_state_abandoned": "Tərk edilib",
+  "friction_kata_state_unknown": "Naməlum vəziyyət",
+  "friction_kata_link_title": "Mövcud Kata məsələsini əlaqələndir",
+  "friction_kata_link_hint": "project#abc kimi Kata məsələ istinadını daxil edin. Əlaqələndirmə məsələ yaratmır və ya bağlamır.",
+  "friction_kata_issue_label": "Kata məsələ istinadı",
+  "friction_kata_issue_placeholder": "project#issue",
+  "friction_kata_issue_required": "Kata məsələ istinadı daxil edin.",
+  "friction_kata_cancel": "Ləğv et",
   "friction_pattern_occurrences": [
     {
       "declarations": [

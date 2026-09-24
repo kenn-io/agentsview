@@ -2341,6 +2341,22 @@
   "friction_patterns_new": "新模式",
   "friction_patterns_recurring": "反覆出現的模式",
   "friction_patterns_none": "此摘要中沒有模式。",
+  "friction_kata_file": "提交到 Kata",
+  "friction_kata_link": "連結議題",
+  "friction_kata_unlink": "取消連結",
+  "friction_kata_unlink_title": "僅移除本機連結。Kata 議題仍保持開啟。",
+  "friction_kata_state_linked": "已連結",
+  "friction_kata_state_pending": "待處理",
+  "friction_kata_state_failed": "失敗",
+  "friction_kata_state_needs_human": "需要審查",
+  "friction_kata_state_abandoned": "已放棄",
+  "friction_kata_state_unknown": "未知狀態",
+  "friction_kata_link_title": "連結現有 Kata 議題",
+  "friction_kata_link_hint": "輸入 Kata 議題參照，例如 project#abc。連結不會建立或關閉議題。",
+  "friction_kata_issue_label": "Kata 議題參照",
+  "friction_kata_issue_placeholder": "project#issue",
+  "friction_kata_issue_required": "請輸入 Kata 議題參照。",
+  "friction_kata_cancel": "取消",
   "friction_pattern_occurrences": [
     {
       "declarations": [

@@ -2341,6 +2341,22 @@
   "friction_patterns_new": "新模式",
   "friction_patterns_recurring": "反复出现的模式",
   "friction_patterns_none": "此摘要中没有模式。",
+  "friction_kata_file": "提交到 Kata",
+  "friction_kata_link": "关联议题",
+  "friction_kata_unlink": "取消关联",
+  "friction_kata_unlink_title": "仅移除本地关联。Kata 议题仍保持打开。",
+  "friction_kata_state_linked": "已关联",
+  "friction_kata_state_pending": "待处理",
+  "friction_kata_state_failed": "失败",
+  "friction_kata_state_needs_human": "需要审核",
+  "friction_kata_state_abandoned": "已放弃",
+  "friction_kata_state_unknown": "未知状态",
+  "friction_kata_link_title": "关联现有 Kata 议题",
+  "friction_kata_link_hint": "输入 Kata 议题引用，例如 project#abc。关联不会创建或关闭议题。",
+  "friction_kata_issue_label": "Kata 议题引用",
+  "friction_kata_issue_placeholder": "project#issue",
+  "friction_kata_issue_required": "请输入 Kata 议题引用。",
+  "friction_kata_cancel": "取消",
   "friction_pattern_occurrences": [
     {
       "declarations": [

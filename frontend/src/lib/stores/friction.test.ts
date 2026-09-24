@@ -13,6 +13,9 @@ vi.mock("../api/generated/index", () => ({
     getApiV1FrictionDigestsByDateMd: vi.fn(),
     getApiV1FrictionPatterns: vi.fn(),
     postApiV1FrictionRun: vi.fn(),
+    postApiV1FrictionPatternsByFingerprintFile: vi.fn(),
+    putApiV1FrictionPatternsByFingerprintLink: vi.fn(),
+    deleteApiV1FrictionPatternsByFingerprintLink: vi.fn(),
   },
 }));
 
@@ -25,6 +28,9 @@ const service = FrictionService as unknown as {
   getApiV1FrictionDigestsByDateMd: ReturnType<typeof vi.fn>;
   getApiV1FrictionPatterns: ReturnType<typeof vi.fn>;
   postApiV1FrictionRun: ReturnType<typeof vi.fn>;
+  postApiV1FrictionPatternsByFingerprintFile: ReturnType<typeof vi.fn>;
+  putApiV1FrictionPatternsByFingerprintLink: ReturnType<typeof vi.fn>;
+  deleteApiV1FrictionPatternsByFingerprintLink: ReturnType<typeof vi.fn>;
 };
 
 const LATEST = "2026-09-21";
@@ -256,5 +262,78 @@ describe("FrictionStore.buildNow", () => {
     await friction.buildNow();
     expect(friction.errors.build).toBe("friction review is not enabled");
     expect(friction.building).toBe(false);
+  });
+});
+
+describe("FrictionStore Kata pattern actions", () => {
+  it("files a pattern and refreshes the selected digest", async () => {
+    service.getApiV1FrictionPatterns.mockResolvedValueOnce({ patterns: [patternItem("fl1:a")] });
+    await friction.selectDate(LATEST);
+    service.postApiV1FrictionPatternsByFingerprintFile.mockResolvedValueOnce({ status: "created" });
+    service.getApiV1FrictionPatterns.mockResolvedValueOnce({
+      patterns: [{ ...patternItem("fl1:a"), link: { state: "open", qualified_id: "project#abc" } }],
+    });
+
+    await friction.filePattern("fl1:a");
+
+    expect(service.postApiV1FrictionPatternsByFingerprintFile).toHaveBeenCalledWith(
+      { fingerprint: "fl1:a" },
+      {},
+    );
+    expect(service.getApiV1FrictionDigestsByDate).toHaveBeenCalledTimes(2);
+    expect(friction.patterns[0]?.link?.qualified_id).toBe("project#abc");
+    expect(friction.mutationFingerprint).toBeNull();
+  });
+
+  it("trims an existing issue ref before linking and refreshes", async () => {
+    await friction.selectDate(LATEST);
+    service.putApiV1FrictionPatternsByFingerprintLink.mockResolvedValueOnce({});
+    await friction.linkPattern("fl1:b", "  project#abc  ");
+    expect(service.putApiV1FrictionPatternsByFingerprintLink).toHaveBeenCalledWith(
+      { fingerprint: "fl1:b" },
+      { issue_ref: "project#abc" },
+    );
+    expect(service.getApiV1FrictionDigestsByDate).toHaveBeenCalledTimes(2);
+  });
+
+  it("unlinks the local mapping and refreshes", async () => {
+    await friction.selectDate(LATEST);
+    service.deleteApiV1FrictionPatternsByFingerprintLink.mockResolvedValueOnce({ removed: true });
+    await friction.unlinkPattern("fl1:c");
+    expect(service.deleteApiV1FrictionPatternsByFingerprintLink).toHaveBeenCalledWith({
+      fingerprint: "fl1:c",
+    });
+    expect(service.getApiV1FrictionDigestsByDate).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the row on a rejected request, shows the error, and allows a retry", async () => {
+    service.getApiV1FrictionPatterns.mockResolvedValue({ patterns: [patternItem("fl1:a")] });
+    await friction.selectDate(LATEST);
+    service.postApiV1FrictionPatternsByFingerprintFile.mockRejectedValueOnce(
+      new Error("Kata offline"),
+    );
+    await friction.filePattern("fl1:a");
+    expect(friction.patterns[0]?.fingerprint).toBe("fl1:a");
+    expect(friction.mutationError).toEqual({ fingerprint: "fl1:a", message: "Kata offline" });
+    expect(service.getApiV1FrictionDigestsByDate).toHaveBeenCalledTimes(1);
+    service.postApiV1FrictionPatternsByFingerprintFile.mockResolvedValueOnce({});
+    await friction.filePattern("fl1:a");
+    expect(friction.mutationError).toBeNull();
+  });
+
+  it("ignores a second action while a mutation is in flight", async () => {
+    await friction.selectDate(LATEST);
+    let release: () => void = () => {};
+    service.postApiV1FrictionPatternsByFingerprintFile.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const pending = friction.filePattern("fl1:a");
+    await friction.unlinkPattern("fl1:b");
+    expect(service.deleteApiV1FrictionPatternsByFingerprintLink).not.toHaveBeenCalled();
+    release();
+    await pending;
   });
 });

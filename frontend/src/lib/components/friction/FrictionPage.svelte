@@ -20,6 +20,9 @@
   const buildAvailable = $derived(
     frictionAvailable && sync.serverVersion?.read_only !== true,
   );
+  const kataAvailable = $derived(
+    sync.serverVersion?.kata_available === true && sync.serverVersion?.read_only !== true,
+  );
   const dateOptions = $derived(
     friction.dates.map((item) => ({ name: item.date, label: item.date })),
   );
@@ -166,6 +169,7 @@
         p0Alerts={digest.p0_alerts}
         signals={digest.signals ?? []}
         patterns={friction.patterns}
+        {kataAvailable}
       />
 
       {#each sections as section (section.kind)}

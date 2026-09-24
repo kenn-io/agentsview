@@ -40,6 +40,8 @@ class FrictionStore {
     build: string | null;
   }>({ dates: null, digest: null, markdown: null, build: null });
   building: boolean = $state(false);
+  mutationFingerprint: string | null = $state(null);
+  mutationError: { fingerprint: string; message: string } | null = $state(null);
   lastBuildWritten: number | null = $state(null);
   lastUpdatedAt: number | null = $state(null);
   lastQueryDurationMs: number | null = $state(null);
@@ -115,6 +117,7 @@ class FrictionStore {
     const signal = this.#digestRead.begin();
     this.#markdownRead.cancel();
     this.selectedDate = date;
+    this.mutationError = null;
     this.markdown = null;
     this.errors.markdown = null;
     this.loading.markdown = false;
@@ -192,6 +195,44 @@ class FrictionStore {
     }
   }
 
+  async #mutatePattern(fingerprint: string, action: () => Promise<unknown>): Promise<void> {
+    if (this.mutationFingerprint !== null) return;
+    this.mutationFingerprint = fingerprint;
+    this.mutationError = null;
+    const date = this.selectedDate;
+    try {
+      await action();
+      if (date !== null && this.selectedDate === date) await this.selectDate(date);
+    } catch (e) {
+      this.mutationError = { fingerprint, message: errorMessage(e) };
+    } finally {
+      this.mutationFingerprint = null;
+    }
+  }
+
+  async filePattern(fingerprint: string): Promise<void> {
+    await this.#mutatePattern(fingerprint, () =>
+      FrictionService.postApiV1FrictionPatternsByFingerprintFile({ fingerprint }, {}),
+    );
+  }
+
+  async linkPattern(fingerprint: string, issueRef: string): Promise<void> {
+    const issue_ref = issueRef.trim();
+    if (!issue_ref) {
+      this.mutationError = { fingerprint, message: m.friction_kata_issue_required() };
+      return;
+    }
+    await this.#mutatePattern(fingerprint, () =>
+      FrictionService.putApiV1FrictionPatternsByFingerprintLink({ fingerprint }, { issue_ref }),
+    );
+  }
+
+  async unlinkPattern(fingerprint: string): Promise<void> {
+    await this.#mutatePattern(fingerprint, () =>
+      FrictionService.deleteApiV1FrictionPatternsByFingerprintLink({ fingerprint }),
+    );
+  }
+
   cancelInFlightReads(): void {
     this.#datesRead.cancel();
     this.#digestRead.cancel();
@@ -213,6 +254,8 @@ class FrictionStore {
     this.errors.markdown = null;
     this.errors.build = null;
     this.building = false;
+    this.mutationFingerprint = null;
+    this.mutationError = null;
     this.lastBuildWritten = null;
     this.lastUpdatedAt = null;
     this.lastQueryDurationMs = null;

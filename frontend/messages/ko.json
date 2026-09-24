@@ -2343,6 +2343,22 @@
   "friction_patterns_new": "새 패턴",
   "friction_patterns_recurring": "반복 패턴",
   "friction_patterns_none": "이 다이제스트에 패턴이 없습니다.",
+  "friction_kata_file": "Kata에 등록",
+  "friction_kata_link": "이슈 연결",
+  "friction_kata_unlink": "연결 해제",
+  "friction_kata_unlink_title": "로컬 연결만 제거합니다. Kata 이슈는 열린 상태로 유지됩니다.",
+  "friction_kata_state_linked": "연결됨",
+  "friction_kata_state_pending": "대기 중",
+  "friction_kata_state_failed": "실패",
+  "friction_kata_state_needs_human": "검토 필요",
+  "friction_kata_state_abandoned": "포기됨",
+  "friction_kata_state_unknown": "알 수 없는 상태",
+  "friction_kata_link_title": "기존 Kata 이슈 연결",
+  "friction_kata_link_hint": "project#abc와 같은 Kata 이슈 참조를 입력하세요. 연결해도 이슈가 생성되거나 닫히지 않습니다.",
+  "friction_kata_issue_label": "Kata 이슈 참조",
+  "friction_kata_issue_placeholder": "project#issue",
+  "friction_kata_issue_required": "Kata 이슈 참조를 입력하세요.",
+  "friction_kata_cancel": "취소",
   "friction_pattern_occurrences": [
     {
       "declarations": [
