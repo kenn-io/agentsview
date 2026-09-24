@@ -80,6 +80,19 @@ See the [CLI Reference](/docs/commands/#agentsview-ledger) for every flag.
 gaps. `ledger verify --full` re-reads every segment, which also catches damage
 to segments that verified earlier.
 
+## Replication to PostgreSQL
+
+`agentsview pg push` copies ledger segments to the PostgreSQL hub with the
+archive (see [PostgreSQL Sync](/docs/pg-sync/#event-ledger-push)). The hub keeps
+one copy of each segment identity. If it already holds that source and sequence
+number with different content, the push refuses the segment, keeps going, and
+`ledger status` lists the refusal until it is resolved.
+
+- `replicate = false` on a zone keeps that zone on the machine.
+- Segments containing a `confidential` event stay on the machine unless
+  `[ledger] replicate_confidential = true`. The whole segment is held back, so
+  append confidential events in separate batches.
+
 ## Working with jilog ledgers
 
 `ledger import` reads a jilog segments directory (`<ledger_path>/segments`). A

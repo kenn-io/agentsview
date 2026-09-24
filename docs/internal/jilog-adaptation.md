@@ -150,6 +150,13 @@ Storage and import (PR 13):
   tier in serde form. Verify checkpoints live in the archive per zone and
   source.
 
+Replication (PR 14) replaces jilog's file-synced spool (`spool emit` on each
+host, `spool ingest` on one authority) with a phase of `agentsview pg push`.
+The producer verifies each segment again before sending. The hub skips an
+identical duplicate identity and refuses different content without overwriting
+it. Per-zone `replicate` and `replicate_confidential` keep selected segments
+local.
+
 Planned in the query PR:
 
 - Query filtering will move into SQL, so a filtered query can find older

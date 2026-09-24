@@ -10,6 +10,10 @@ The latest published release is
 
 **New features**
 
+- `agentsview pg push` now copies the event ledger to PostgreSQL without
+  overwriting hub segments. Conflicting or damaged segments appear in
+  `agentsview ledger status`; confidential segments stay local unless
+  `[ledger] replicate_confidential = true`.
 - An optional event ledger stores append-only, checksummed events in the
   archive. `agentsview ledger` appends, verifies, imports and exports segments
   that are byte-compatible with jilog ledgers, and a zone with `import_path`
