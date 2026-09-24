@@ -4703,6 +4703,60 @@ components:
       required:
         - insights
       type: object
+    LedgerSpoolIngestInputBody:
+      additionalProperties: false
+      properties:
+        zone:
+          description: Only this [[ledger.zones]] id; default all zones
+          type: string
+      type: object
+    LedgerspoolrunFailure:
+      additionalProperties: false
+      properties:
+        error:
+          type: string
+        file:
+          type: string
+      required:
+        - file
+        - error
+      type: object
+    LedgerspoolrunLedgerSpoolIngestRun:
+      additionalProperties: false
+      properties:
+        zones:
+          items:
+            $ref: "#/components/schemas/LedgerspoolrunZoneIngest"
+          type: array
+      required:
+        - zones
+      type: object
+    LedgerspoolrunZoneIngest:
+      additionalProperties: false
+      properties:
+        committed:
+          items:
+            type: string
+          type: array
+        failed:
+          items:
+            $ref: "#/components/schemas/LedgerspoolrunFailure"
+          type: array
+        skipped:
+          items:
+            type: string
+          type: array
+        state:
+          type: string
+        zone:
+          type: string
+      required:
+        - zone
+        - state
+        - committed
+        - skipped
+        - failed
+      type: object
     MachinesResponse:
       additionalProperties: false
       properties:
@@ -13046,6 +13100,91 @@ paths:
       summary: Publish insight
       tags:
         - Insights
+  /api/v1/ledger/spool/ingest:
+    post:
+      operationId: post-api-v1-ledger-spool-ingest
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LedgerSpoolIngestInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LedgerspoolrunLedgerSpoolIngestRun"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Ingest jilog spool segments into the local ledger
+      tags:
+        - Ledger
   /api/v1/machines:
     get:
       operationId: get-api-v1-machines

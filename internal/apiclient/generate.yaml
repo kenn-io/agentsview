@@ -34,6 +34,7 @@ filter:
       - get-api-v1-projects
       - get-api-v1-sessions-id-usage
       - post-api-v1-data-compact
+      - post-api-v1-ledger-spool-ingest
       - post-api-v1-embeddings-build
       - get-api-v1-embeddings-status
       - get-api-v1-embeddings-generations
