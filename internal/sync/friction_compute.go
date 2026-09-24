@@ -123,6 +123,9 @@ func computeSessionFriction(
 		friction.BuildOptions{
 			RedactedToolRenderings: o.redacted,
 			PressureMax:            pressureMax,
+			// Only NanoClaw sets a persona, and every NanoClaw session's user
+			// text is an envelope (nanoclaw.rs:292-313).
+			UnwrapNanoClawEnvelope: dims.Persona != "",
 		})
 	in.Excluded = excluded
 	review := o.review
