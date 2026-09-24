@@ -138,6 +138,7 @@ async function mockFriction(page: Page) {
         data_version: 1,
         insight_generation_available: false,
         friction_available: true,
+        kata_available: false,
         version: "dev",
         commit: "unknown",
         build_date: "",
@@ -256,5 +257,140 @@ test.describe("Friction Log", () => {
   test("falls back to the latest digest for an unknown date", async ({ page }) => {
     await page.goto("/friction?date=2020-01-01");
     await expect(page.getByRole("heading", { level: 1 })).toHaveText(`Friction Log — ${DATE}`);
+  });
+
+  test("files, links, and unlinks headline patterns through the hub", async ({ page }) => {
+    const fingerprint = `fl1:${"f".repeat(64)}`;
+    const pattern = {
+      fingerprint,
+      kind: "pattern",
+      title: "[friction/pattern] retry loop",
+      first_seen_date: DATE,
+      last_seen_date: DATE,
+      occurrence_count: 2,
+      session_count: 1,
+      last_subject_id: SESSION_ID,
+      last_ordinal: null,
+    };
+    let link: Record<string, unknown> | undefined;
+    let kataAvailable = true;
+    let readOnly = false;
+    const mutations: { method: string; path: string; body: unknown }[] = [];
+    await page.route("**/api/v1/version", (route) =>
+      route.fulfill({
+        json: {
+          api_version: 1,
+          data_version: 1,
+          insight_generation_available: false,
+          friction_available: true,
+          kata_available: kataAvailable,
+          version: "dev",
+          commit: "unknown",
+          build_date: "",
+          read_only: readOnly,
+        },
+      }),
+    );
+    await page.route(`**/api/v1/friction/digests/${DATE}`, (route) =>
+      route.fulfill({
+        json: digest(DATE, [
+          signal({
+            kind: "pattern",
+            detector: "pattern.retry_loop",
+            fingerprint,
+            label: "retry_loop",
+          }),
+        ]),
+      }),
+    );
+    await page.route("**/api/v1/friction/patterns**", async (route) => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      const decodedPath = decodeURIComponent(path);
+      const method = request.method();
+      if (method === "GET" && path.endsWith("/patterns")) {
+        await route.fulfill({
+          json: { patterns: [{ ...pattern, ...(link ? { link } : {}) }], next_cursor: "" },
+        });
+        return;
+      }
+      const body = request.postDataJSON();
+      mutations.push({ method, path, body });
+      if (method === "POST" && decodedPath.endsWith(`/${fingerprint}/file`)) {
+        link = {
+          state: "linked",
+          qualified_id: "agentsview#filed",
+          web_url: "https://kata.example/issues/filed",
+        };
+      } else if (method === "PUT" && decodedPath.endsWith(`/${fingerprint}/link`)) {
+        link = {
+          state: "linked",
+          qualified_id: "agentsview#existing",
+          web_url: "https://kata.example/issues/existing",
+        };
+      } else if (method === "DELETE" && decodedPath.endsWith(`/${fingerprint}/link`)) {
+        link = undefined;
+      } else {
+        throw new Error(`Unexpected Friction Log mutation ${method} ${path}`);
+      }
+      await route.fulfill({ json: method === "DELETE" ? { unlinked: true } : { link } });
+    });
+
+    await page.goto("/friction");
+    const row = page.locator(".pattern-row").filter({ hasText: "retry loop" });
+    await expect(row.getByRole("button", { name: "File to Kata" })).toBeVisible();
+    await row.getByRole("button", { name: "File to Kata" }).click();
+    await expect(row).toContainText("agentsview#filed");
+    await expect(row.getByRole("link", { name: "agentsview#filed" })).toHaveAttribute(
+      "href",
+      "https://kata.example/issues/filed",
+    );
+
+    await row.getByRole("button", { name: "Unlink" }).click();
+    await expect(row.getByRole("button", { name: "Link issue" })).toBeVisible();
+    await row.getByRole("button", { name: "Link issue" }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByRole("button", { name: "Link issue" }).click();
+    await expect(dialog).toContainText("Enter a Kata issue reference.");
+    await dialog
+      .getByRole("textbox", { name: "Kata issue reference" })
+      .fill("  agentsview#existing  ");
+    await dialog.getByRole("button", { name: "Link issue" }).click();
+    await expect(row).toContainText("agentsview#existing");
+    await row.getByRole("button", { name: "Unlink" }).click();
+    await expect(row.getByRole("button", { name: "File to Kata" })).toBeVisible();
+
+    expect(mutations).toEqual([
+      {
+        method: "POST",
+        path: `/api/v1/friction/patterns/${encodeURIComponent(fingerprint)}/file`,
+        body: {},
+      },
+      {
+        method: "DELETE",
+        path: `/api/v1/friction/patterns/${encodeURIComponent(fingerprint)}/link`,
+        body: null,
+      },
+      {
+        method: "PUT",
+        path: `/api/v1/friction/patterns/${encodeURIComponent(fingerprint)}/link`,
+        body: { issue_ref: "agentsview#existing" },
+      },
+      {
+        method: "DELETE",
+        path: `/api/v1/friction/patterns/${encodeURIComponent(fingerprint)}/link`,
+        body: null,
+      },
+    ]);
+
+    kataAvailable = false;
+    await page.reload();
+    await expect(row).toBeVisible();
+    await expect(row.locator("button")).toHaveCount(0);
+    kataAvailable = true;
+    readOnly = true;
+    await page.reload();
+    await expect(row).toBeVisible();
+    await expect(row.locator("button")).toHaveCount(0);
   });
 });
