@@ -50,6 +50,10 @@ type Store struct {
 	pricing pricingCache
 	// coverageCache memoizes complete usage snapshot coverage per parts.
 	coverageCache usageCoverageCache
+	// The usage row memos keep recent range reads per parts and filter.
+	dailyUsageRows       usageRowMemo[chDailyUsageGroupRow]
+	sessionAggregateRows usageRowMemo[chUsageAggregateRow]
+	usageSessionRows     usageRowMemo[chUsageSessionRow]
 }
 
 // NewStore connects to the mirror named by t and refuses schemas or data
@@ -68,19 +72,15 @@ func NewStore(ctx context.Context, t Target) (*Store, error) {
 		conn.Close()
 		return nil, err
 	}
-	// system.view_refreshes tells whether prepared usage reflects the
-	// completed snapshot fill.
-	for _, table := range []string{"system.parts", "system.view_refreshes"} {
-		var n uint64
-		if err := conn.QueryRowContext(ctx,
-			`SELECT count() FROM `+table+` WHERE database = currentDatabase()`,
-		).Scan(&n); err != nil {
-			conn.Close()
-			if IsPermissionError(err) {
-				return nil, fmt.Errorf("clickhouse Activity reports require SELECT ON %[1]s; ask an administrator to run GRANT SELECT ON %[1]s TO <serve_user>, or add <query>GRANT SELECT ON %[1]s</query> to the XML user's grants and reload users: %[2]w", table, err)
-			}
-			return nil, fmt.Errorf("checking clickhouse Activity metadata access: %w", err)
+	var parts uint64
+	if err := conn.QueryRowContext(ctx,
+		`SELECT count() FROM system.parts WHERE database = currentDatabase() AND active`,
+	).Scan(&parts); err != nil {
+		conn.Close()
+		if IsPermissionError(err) {
+			return nil, fmt.Errorf("clickhouse Activity reports require SELECT ON system.parts; ask an administrator to run GRANT SELECT ON system.parts TO <serve_user>, or add <query>GRANT SELECT ON system.parts</query> to the XML user's grants and reload users: %w", err)
 		}
+		return nil, fmt.Errorf("checking clickhouse Activity metadata access: %w", err)
 	}
 	return NewStoreFromDB(conn), nil
 }

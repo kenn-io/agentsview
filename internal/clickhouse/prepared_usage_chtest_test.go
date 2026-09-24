@@ -18,16 +18,38 @@ import (
 
 // Preparing usage must preserve pricing and deduplication, keep a failed push
 // invisible, and replace corrected or removed facts after the next refresh.
+// Between a push and its refresh, reads use the raw rows rather than the
+// previous push's prepared usage.
 func TestPreparedUsagePublicationAndPricing(t *testing.T) {
 	ctx := t.Context()
 	local, target := seedUsagePriceFixture(t)
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
+	store := NewStoreFromDB(syncer.conn)
+	// A stopped view remembers the refresh each push requests and runs it
+	// once resumed, so the test controls when prepared usage catches up.
+	_, err := store.DB().ExecContext(ctx, "ALTER TABLE prepare_usage MODIFY REFRESH EVERY 1 DAY")
+	require.NoError(t, err)
+	_, err = store.DB().ExecContext(ctx, "SYSTEM STOP VIEW prepare_usage")
+	require.NoError(t, err)
+	refresh := func() {
+		t.Helper()
+		for _, stmt := range []string{
+			"SYSTEM START VIEW prepare_usage", "SYSTEM REFRESH VIEW prepare_usage",
+			"SYSTEM WAIT VIEW prepare_usage", "SYSTEM STOP VIEW prepare_usage",
+		} {
+			_, err := store.DB().ExecContext(ctx, stmt)
+			require.NoError(t, err, stmt)
+		}
+	}
+	requireReady := func(want bool) {
+		t.Helper()
+		ready, err := store.preparedUsageReady(ctx)
+		require.NoError(t, err)
+		require.Equal(t, want, ready)
+	}
 	result, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 	require.Zero(t, result.Errors)
-	store := NewStoreFromDB(syncer.conn)
-	_, err = store.DB().ExecContext(ctx, "ALTER TABLE prepare_usage MODIFY REFRESH EVERY 1 DAY")
-	require.NoError(t, err)
 	ids := []string{usagePriceRoundID, usagePriceTierID, usagePriceSnapAID, usagePriceSnapBID, usagePriceMixedID, usagePriceCopilotID}
 	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: "2026-01-12", Timezone: "UTC"},
 		time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
@@ -39,28 +61,15 @@ func TestPreparedUsagePublicationAndPricing(t *testing.T) {
 		require.NoError(t, err)
 		return rows
 	}
-	refresh := func() {
-		t.Helper()
-		_, err := store.DB().ExecContext(ctx, "SYSTEM REFRESH VIEW prepare_usage")
-		require.NoError(t, err)
-		_, err = store.DB().ExecContext(ctx, "SYSTEM WAIT VIEW prepare_usage")
-		require.NoError(t, err)
-	}
+	requireReady(false)
 	before := read()
 	require.NotEmpty(t, before)
-	ready, err := store.preparedUsageReady(ctx)
-	require.NoError(t, err)
-	require.False(t, ready)
-	// The fixture has completed its backfill; use an earlier completion time
-	// so the test does not depend on crossing a wall-clock second.
-	require.NoError(t, writeMetadata(ctx, syncer.conn, map[string]string{syncer.archiveKey(usageSnapshotReadyKeyBase): "1"}))
 	probeBefore, err := store.ActivityReportSourceProbe(ctx)
 	require.NoError(t, err)
+	require.Empty(t, probeBefore.PreparedUsageFingerprint)
 	refresh()
-	ready, err = store.preparedUsageReady(ctx)
-	require.NoError(t, err)
-	require.True(t, ready)
-	require.Equal(t, before, read())
+	requireReady(true)
+	require.Equal(t, before, read(), "prepared usage must match the raw rows it replaces")
 	probeAfter, err := store.ActivityReportSourceProbe(ctx)
 	require.NoError(t, err)
 	require.NotEmpty(t, probeAfter.PreparedUsageFingerprint)
@@ -94,6 +103,7 @@ func TestPreparedUsagePublicationAndPricing(t *testing.T) {
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{ModelPattern: "round-test",
 		InputPerMTok: money.MustParseDollars("2"), OutputPerMTok: money.MustParseDollars("3")}}))
 	require.NoError(t, syncer.syncModelPricing(ctx))
+	requireReady(true)
 	repriced := read()
 	require.NotEqual(t, before, repriced, "prepared facts must use the current pricing catalog")
 
@@ -116,9 +126,12 @@ func TestPreparedUsagePublicationAndPricing(t *testing.T) {
 	result, err = syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 	require.Zero(t, result.Errors)
-	require.Equal(t, repriced, read(), "the previous complete usage remains visible during preparation")
-	refresh()
+	requireReady(false)
 	corrected := read()
+	require.NotEqual(t, repriced, corrected, "reads must not serve the previous push's prepared usage")
+	refresh()
+	requireReady(true)
+	require.Equal(t, corrected, read())
 	var roundRows []activity.UsageRow
 	for _, row := range corrected {
 		if row.SessionID == usagePriceRoundID {
@@ -137,6 +150,7 @@ func TestPreparedUsagePublicationAndPricing(t *testing.T) {
 	_, err = syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 	refresh()
+	requireReady(true)
 	for _, row := range read() {
 		require.NotEqual(t, usagePriceRoundID, row.SessionID)
 	}
@@ -167,6 +181,163 @@ func TestPreparedUsageBackfillsExistingPushCursor(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, result.Full)
 	require.Zero(t, result.Errors)
+}
+
+// Range usage reads must return the same result from prepared usage as
+// from the raw messages and usage events they replace.
+func TestPreparedUsageServesRangeUsageReads(t *testing.T) {
+	ctx := t.Context()
+	local, target := seedUsagePriceFixture(t)
+	syncer := newTestSync(t, local, target, storage.PusherOptions{})
+	store := NewStoreFromDB(syncer.conn)
+	// The stopped view holds the push's refresh until the raw rows are read.
+	_, err := store.DB().ExecContext(ctx, "SYSTEM STOP VIEW prepare_usage")
+	require.NoError(t, err)
+	result, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Zero(t, result.Errors)
+	// The project and model filters select sessions whose Claude snapshot
+	// facts are attributed to a session outside the filter.
+	filters := []db.UsageFilter{
+		{Timezone: "UTC", From: "2026-01-12", To: "2026-01-12", Breakdowns: true},
+		{Timezone: "America/New_York", From: "2026-01-11", To: "2026-01-13", Breakdowns: true},
+		{Timezone: "UTC", From: "2026-01-01", To: "2026-01-31", Agent: "claude", ExcludeOneShot: true},
+		{Timezone: "UTC", Project: "delta", Breakdowns: true},
+		{Timezone: "UTC", Model: "claude-test", Breakdowns: true},
+		{Timezone: "UTC", ExcludeModel: "claude-test"},
+		// Unfiltered reads union the cursor rows, which the per-request join
+		// still prices.
+		{Timezone: "UTC", Breakdowns: true},
+	}
+	type reads struct {
+		daily  []db.DailyUsageResult
+		top    [][]db.TopSessionEntry
+		counts []db.UsageSessionCounts
+	}
+	read := func() reads {
+		t.Helper()
+		var out reads
+		for _, f := range filters {
+			daily, err := store.GetDailyUsage(ctx, f)
+			require.NoError(t, err)
+			out.daily = append(out.daily, daily)
+			top, err := store.GetTopSessionsByCost(ctx, f, 10)
+			require.NoError(t, err)
+			out.top = append(out.top, top)
+			counts, err := store.GetUsageSessionCounts(ctx, f)
+			require.NoError(t, err)
+			out.counts = append(out.counts, counts)
+		}
+		return out
+	}
+	raw := read()
+	require.NotEmpty(t, raw.daily[0].Daily)
+	ready, err := store.preparedUsageReady(ctx)
+	require.NoError(t, err)
+	require.False(t, ready)
+	for _, stmt := range []string{
+		"SYSTEM START VIEW prepare_usage", "SYSTEM REFRESH VIEW prepare_usage", "SYSTEM WAIT VIEW prepare_usage",
+	} {
+		_, err := store.DB().ExecContext(ctx, stmt)
+		require.NoError(t, err, stmt)
+	}
+	state, err := store.preparedUsageState(ctx)
+	require.NoError(t, err)
+	require.True(t, state.ready)
+	// The stored price records serve the reads, not the per-request join.
+	pricing, err := store.pricingSnapshot(ctx)
+	require.NoError(t, err)
+	require.Equal(t, pricing.catalog.digest, state.pricingDigest)
+	require.Equal(t, raw, read())
+	// A mirror whose price records were cleared still reads the prepared
+	// rows, but prices them through the join like the raw rows.
+	_, err = store.DB().ExecContext(ctx, "TRUNCATE TABLE usage_event_prices")
+	require.NoError(t, err)
+	state, err = store.preparedUsageState(ctx)
+	require.NoError(t, err)
+	require.True(t, state.ready)
+	require.Empty(t, state.pricingDigest)
+	cleared := read()
+	for i := range filters {
+		require.Equal(t, dailyUsageWire(t, raw.daily[i], false), dailyUsageWire(t, cleared.daily[i], false))
+	}
+	require.Equal(t, raw.top, cleared.top)
+	require.Equal(t, raw.counts, cleared.counts)
+}
+
+// A rebuild that stopped after dropping the view but before the table must
+// complete on the next start instead of failing to stop the missing view.
+func TestEnsurePreparedUsageRecoversFromInterruptedRebuild(t *testing.T) {
+	ctx := t.Context()
+	store, _, _ := newPushedStore(t)
+	conn := store.DB()
+	for _, query := range []string{
+		"SYSTEM STOP VIEW prepare_usage",
+		"DROP VIEW prepare_usage SYNC",
+		"ALTER TABLE prepared_usage MODIFY COMMENT 'prepared by an earlier query'",
+	} {
+		_, err := conn.ExecContext(ctx, query)
+		require.NoError(t, err, query)
+	}
+	require.NoError(t, ensurePreparedUsage(ctx, conn))
+	var comment string
+	require.NoError(t, conn.QueryRowContext(ctx, `SELECT comment FROM system.tables
+		WHERE database = currentDatabase() AND name = 'prepared_usage'`).Scan(&comment))
+	require.Equal(t, chPreparedUsageComment(), comment)
+	var views uint64
+	require.NoError(t, conn.QueryRowContext(ctx, `SELECT count() FROM system.tables
+		WHERE database = currentDatabase() AND name = 'prepare_usage'`).Scan(&views))
+	require.Equal(t, uint64(1), views)
+}
+
+// An installation whose prepared usage table was made by an earlier query,
+// here one sorted by the nullable timestamp expression that ClickHouse
+// cannot prune through, must be rebuilt for the current query.
+func TestEnsurePreparedUsageRebuildsOutdatedTable(t *testing.T) {
+	ctx := t.Context()
+	store, _, _ := newPushedStore(t)
+	conn := store.DB()
+	selection := clickUsageNormalizedQueryFrom("", chUsageStoredMessageEligibility, chUsageEventEligibility,
+		"usage_session_snapshots s ARRAY JOIN s.usage_facts AS m",
+		"usage_session_snapshots s ARRAY JOIN s.usage_events AS ue", "1")
+	for _, query := range []string{
+		"SYSTEM STOP VIEW prepare_usage",
+		"DROP VIEW prepare_usage SYNC",
+		"DROP TABLE prepared_usage SYNC",
+		`CREATE TABLE prepared_usage ENGINE=MergeTree
+		ORDER BY (ifNull(ts,toDateTime64(0,6,'UTC')),session_id) AS ` + selection + " LIMIT 0",
+		"CREATE MATERIALIZED VIEW prepare_usage REFRESH EVERY 1 DAY TO prepared_usage EMPTY AS " + selection,
+	} {
+		_, err := conn.ExecContext(ctx, query)
+		require.NoError(t, err, query)
+	}
+	sortingKey := func() string {
+		t.Helper()
+		var key string
+		require.NoError(t, conn.QueryRowContext(ctx, `SELECT sorting_key FROM system.tables
+			WHERE database = currentDatabase() AND name = 'prepared_usage'`).Scan(&key))
+		return key
+	}
+	require.NotEqual(t, chPreparedUsageSortingKey, sortingKey())
+	ready, err := store.preparedUsageReady(ctx)
+	require.NoError(t, err)
+	require.False(t, ready, "a table prepared by another query must not serve reads")
+	require.NoError(t, ensurePreparedUsage(ctx, conn))
+	require.Equal(t, chPreparedUsageSortingKey, sortingKey())
+	_, err = conn.ExecContext(ctx, "SYSTEM REFRESH VIEW prepare_usage")
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, "SYSTEM WAIT VIEW prepare_usage")
+	require.NoError(t, err)
+	var rows, keyed uint64
+	require.NoError(t, conn.QueryRowContext(ctx, `SELECT count(), countIf(ts_key = ifNull(ts,toDateTime64(0,6,'UTC')))
+		FROM prepared_usage`).Scan(&rows, &keyed))
+	require.NotZero(t, rows)
+	require.Equal(t, rows, keyed)
+	// A current table is left alone, including its rows.
+	require.NoError(t, ensurePreparedUsage(ctx, conn))
+	var after uint64
+	require.NoError(t, conn.QueryRowContext(ctx, "SELECT count() FROM prepared_usage").Scan(&after))
+	require.Equal(t, rows, after)
 }
 
 // A process that starts while the prepared usage refresh swaps in its new

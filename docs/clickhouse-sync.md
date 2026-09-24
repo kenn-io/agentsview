@@ -375,20 +375,17 @@ read-only serve role fails the compatibility check with a message naming the
 missing fill; run `agentsview clickhouse push` with a role that can create
 tables to finish it.
 
-The serve role also needs `GRANT SELECT ON system.parts` and
-`GRANT SELECT ON system.view_refreshes`. The Activity report checks whether the
-mirror changed by hashing the active parts of its source tables before it
-rescans them, and reads prepared usage rows only after their refresh has run
-past the snapshot fill. With the default server setting
+The serve role also needs `GRANT SELECT ON system.parts`. The Activity report
+checks whether the mirror changed by hashing the active parts of its source
+tables before it rescans them. With the default server setting
 `select_from_system_db_requires_grant`, a role granted only
-`SELECT ON <database>.*` can read `system.columns` but not these tables, and
+`SELECT ON <database>.*` can read `system.columns` but not `system.parts`, and
 serve refuses to start with an error naming the missing grant. An administrator
-must grant them to the serve user. For users managed in XML, add
-`<query>GRANT SELECT ON system.parts</query>` and
-`<query>GRANT SELECT ON system.view_refreshes</query>` to that user's `<grants>`
-in the deployment configuration and run `SYSTEM RELOAD USERS`. SQL `GRANT`
-cannot modify XML-managed users, and schema upgrades cannot grant a permission
-the application account lacks.
+must grant it to the serve user. For users managed in XML, add
+`<query>GRANT SELECT ON system.parts</query>` to that user's `<grants>` in the
+deployment configuration and run `SYSTEM RELOAD USERS`. SQL `GRANT` cannot
+modify XML-managed users, and schema upgrades cannot grant a permission the
+application account lacks.
 
 When `require_auth` is enabled, a bearer token is generated if needed and
 printed on startup. Pass it via `Authorization: Bearer <token>` on API requests.

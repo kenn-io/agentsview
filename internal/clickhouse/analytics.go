@@ -1758,6 +1758,13 @@ func chQueryChunked(ids []string, fn func(chunk []string) error) error {
 	return nil
 }
 
+// chAnalyticsToolCallMessagesSQL selects the message columns tool call
+// analytics join, limited to the chunk's sessions so the join hashes those
+// sessions' messages rather than every message. The join keys on session
+// id, so rows outside the chunk could never match.
+const chAnalyticsToolCallMessagesSQL = `SELECT session_id, ordinal, timestamp, model
+					FROM messages WHERE session_id IN `
+
 func (s *Store) GetAnalyticsTools(
 	ctx context.Context, f db.AnalyticsFilter,
 ) (db.ToolsAnalyticsResponse, error) {
@@ -1779,7 +1786,8 @@ func (s *Store) GetAnalyticsTools(
 	}
 	var toolRows []db.ToolAnalyticsRow
 	err = chQueryChunked(ids, func(chunk []string) error {
-		ph, args := chInPlaceholders(chunk)
+		ph, inArgs := chInPlaceholders(chunk)
+		args := append(append([]any{}, inArgs...), inArgs...)
 		modelPred, modelArgs := chAnalyticsCSVPredicate("m.model", f.Model)
 		args = append(args, modelArgs...)
 		from, to := chAnalyticsWindowBounds(f)
@@ -1789,7 +1797,7 @@ func (s *Store) GetAnalyticsTools(
 				trim(COALESCE(tc.tool_name, '')), toInt64(COUNT(*)),
 				MAX(m.timestamp)
 				FROM tool_calls tc
-				LEFT JOIN messages m
+				LEFT JOIN (` + chAnalyticsToolCallMessagesSQL + ph + `) m
 					ON m.session_id = tc.session_id
 					AND m.ordinal = tc.message_ordinal
 				WHERE tc.session_id IN ` + ph
@@ -1864,7 +1872,8 @@ func (s *Store) GetAnalyticsSkills(
 
 	var skillRows []db.SkillAnalyticsRow
 	err = chQueryChunked(ids, func(chunk []string) error {
-		ph, args := chInPlaceholders(chunk)
+		ph, inArgs := chInPlaceholders(chunk)
+		args := append(append([]any{}, inArgs...), inArgs...)
 		modelPred, modelArgs := chAnalyticsCSVPredicate("m.model", f.Model)
 		args = append(args, modelArgs...)
 		from, to := chAnalyticsWindowBounds(f)
@@ -1874,7 +1883,7 @@ func (s *Store) GetAnalyticsSkills(
 			`SELECT tc.session_id, trim(COALESCE(tc.skill_name, '')),
 				toInt64(COUNT(*)), MAX(m.timestamp)
 				FROM tool_calls tc
-				LEFT JOIN messages m
+				LEFT JOIN (`+chAnalyticsToolCallMessagesSQL+ph+`) m
 					ON m.session_id = tc.session_id
 					AND m.ordinal = tc.message_ordinal
 				WHERE tc.session_id IN `+ph+`

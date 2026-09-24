@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 
 	"go.kenn.io/agentsview/internal/config"
@@ -85,6 +86,31 @@ const chUsagePriceKeySQL = `hex(sipHash128(
 				cache_create_norm, cache_create_1h_norm, cache_read_norm,
 				cost_microdollars IS NOT NULL AND cost_source != 'copilot-reported'
 			))`
+
+// chUsageStoredPriceColumns maps each price record column to the name the
+// per-request join exposes it under and the name prepared_usage stores it
+// under. zero is the value a row without a record carries, matching a LEFT
+// JOIN without join_use_nulls.
+var chUsageStoredPriceColumns = []struct{ source, joined, stored, zero string }{
+	{"priced", "p_priced", "stored_priced", "toInt64(0)"},
+	{"token_cost_microdollars", "p_token_cost", "stored_token_cost", "toInt64(0)"},
+	{"cache_savings_microdollars", "p_savings", "stored_savings", "toInt64(0)"},
+	{"billed_context_id", "p_billed_context_id", "stored_billed_context_id", "''"},
+	{"unbilled_context_id", "p_unbilled_context_id", "stored_unbilled_context_id", "''"},
+	{"request_scoped", "p_request_scoped", "stored_request_scoped", "false"},
+	{"band_above_input_tokens", "p_band", "stored_band", "toInt64(0)"},
+	{"price_error", "p_price_error", "stored_price_error", "''"},
+}
+
+// chUsagePriceRowsSQL selects the price records under their joined names.
+func chUsagePriceRowsSQL() string {
+	columns := make([]string, 0, len(chUsageStoredPriceColumns)+1)
+	columns = append(columns, "price_key AS p_price_key")
+	for _, column := range chUsageStoredPriceColumns {
+		columns = append(columns, column.source+" AS "+column.joined)
+	}
+	return "SELECT " + strings.Join(columns, ", ") + " FROM usage_event_prices"
+}
 
 const (
 	chUsagePriceKindReported  = "reported"
