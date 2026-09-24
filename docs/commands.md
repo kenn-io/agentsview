@@ -1,4 +1,5 @@
 ---
+last_edited: 2026-09-24
 title: CLI Reference
 description: All AgentsView commands, flags, and environment variables
 ---
@@ -1605,6 +1606,37 @@ never cut off.
 `query`, `status`, `append` and `verify` go through the local daemon when one
 is running, and open the archive directly otherwise. `import`, `export` and
 `rebuild-index` always open the archive directly; stop the daemon first.
+
+### `agentsview friction`
+
+Build and read the [Friction Log](friction-log.md), a daily heuristic review of
+corrections, tool errors, workarounds, deferrals, frustration, interruptions and
+recurring patterns. It is on by default; `[friction] enabled = false` turns it
+off.
+
+```bash
+agentsview friction run [--date YYYY-MM-DD] [--rebuild] [--dry-run] [--format human|json | --json]
+agentsview friction digest [--date D | --from D --to D] [--format md|json | --json]
+agentsview friction findings [--date D] [--kind K] [--session ID] [--format table|json | --json]
+agentsview friction patterns [--kind K] [--since D] [--linked | --unlinked] [--format table|json | --json]
+```
+
+`friction run` without flags builds every complete local day that has no digest
+yet. It prints jilog-compatible summary lines, or the summary JSON object per
+day with `--json`, and exits non-zero only when the review fails.
+`--json` is an alias for `--format json` on every friction command.
+`friction digest` prints the latest digest unless `--date` or a range is given;
+`--format json` prints the counts-only summary object, byte-identical whether it
+comes from the daemon or the local archive. `--linked` and `--unlinked` filter
+patterns by issue linkage. Issue filing arrives in a later update, so currently
+no pattern is linked. `--kind` accepts `correction`, `error`, `workaround`,
+`deferral`, `pattern`, `frustration` and `interruption`.
+
+Commands use the running daemon (starting one when needed) or, with
+`AGENTSVIEW_NO_DAEMON=1`, read and write the local archive directly. An explicit
+`--server <url>` targets a running server; provide its token with
+`AGENTSVIEW_SERVER_TOKEN` or `--server-token-file <path>`. `friction run`
+refuses to run where `[friction] enabled = false`.
 
 ______________________________________________________________________
 

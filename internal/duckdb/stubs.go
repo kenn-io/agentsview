@@ -110,3 +110,19 @@ func (s *Store) EarliestSessionDate(_ context.Context, _ *time.Location) (string
 func (s *Store) UpdateFrictionDigestRender(_ context.Context, _ string, _, _ []byte, _ int) error {
 	return db.ErrReadOnly
 }
+
+func (s *Store) ListFrictionFindings(
+	_ context.Context, _ db.FrictionFindingFilter,
+) ([]db.FrictionFinding, string, error) {
+	return nil, "", db.ErrReadOnly
+}
+
+func (s *Store) ListFrictionDigests(_ context.Context, _, _ string) ([]db.FrictionDigest, error) {
+	return nil, db.ErrReadOnly
+}
+
+func (s *Store) ListFrictionPatterns(
+	_ context.Context, _ db.FrictionPatternFilter,
+) ([]db.FrictionPattern, string, error) {
+	return nil, "", db.ErrReadOnly
+}

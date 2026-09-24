@@ -1,4 +1,5 @@
 ---
+last_edited: 2026-09-24
 title: MCP Server
 description: Connect assistant clients to your AgentsView session history with MCP
 ---
@@ -56,19 +57,26 @@ For local desktop-style MCP clients, use stdio:
 Restart or reload your MCP client after adding the server. Once connected, the
 client will see these tools:
 
-| Tool                   | Purpose                                                                  |
-| ---------------------- | ------------------------------------------------------------------------ |
-| `search_sessions`      | Full-text search across recorded sessions                                |
-| `list_sessions`        | List recent or filtered sessions                                         |
-| `get_session_overview` | Fetch metadata and a compact message preview                             |
-| `get_messages`         | Read paginated message bodies from one session                           |
-| `search_content`       | Substring, regex, terms, semantic, or hybrid search over session text    |
-| `get_usage_summary`    | Aggregate token and cost usage                                           |
-| `query_recall`         | Search extracted Recall entries when the backend supports Recall queries |
-| `query_ledger`         | Query structured event history when the ledger is enabled                |
+| Tool                     | Purpose                                                                  |
+| ------------------------ | ------------------------------------------------------------------------ |
+| `search_sessions`        | Full-text search across recorded sessions                                |
+| `list_sessions`          | List recent or filtered sessions                                         |
+| `get_session_overview`   | Fetch metadata and a compact message preview                             |
+| `get_messages`           | Read paginated message bodies from one session                           |
+| `search_content`         | Substring, regex, terms, semantic, or hybrid search over session text    |
+| `get_usage_summary`      | Aggregate token and cost usage                                           |
+| `query_recall`           | Search extracted Recall entries when the backend supports Recall queries |
+| `query_ledger`           | Query structured event history when the ledger is enabled                |
+| `get_friction_digest`    | Read a dated Friction Log digest as Markdown or the summary object       |
+| `list_friction_patterns` | List recurring friction patterns ranked by occurrences                   |
 
 `query_ledger` filters by `since`, `subsystems`, `class` and `zone`. It returns
 events in the `agentsview ledger query --format json` shape.
+
+`get_friction_digest` defaults to the latest digest; pass `date` (YYYY-MM-DD)
+and `format` (`markdown` or `summary`). `list_friction_patterns` accepts `kind`,
+`since`, `limit` (default 20, max 100) and `linked`. Both are read-only and
+report [Friction Log](friction-log.md) heuristics, not ground truth.
 
 `search_sessions` accepts optional `date_from` and `date_to` bounds in
 `YYYY-MM-DD` format, just like `list_sessions` and `search_content`. Dates

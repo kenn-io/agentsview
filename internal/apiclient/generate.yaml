@@ -58,6 +58,12 @@ filter:
       - post-api-v1-raw-sync-uploads
       - head-api-v1-raw-sync-uploads-upload-id
       - patch-api-v1-raw-sync-uploads-upload-id
+      - get-api-v1-friction-digests
+      - get-api-v1-friction-digests-date
+      - get-api-v1-friction-digests-date-md
+      - get-api-v1-friction-findings
+      - get-api-v1-friction-patterns
+      - post-api-v1-friction-run
       - post-api-v1-raw-sync-manifests
       - get-api-v1-ledger-events
       - get-api-v1-ledger-status

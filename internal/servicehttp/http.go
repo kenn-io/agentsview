@@ -84,6 +84,7 @@ type httpBackend struct {
 	readOnly          bool
 	recallQueries     bool
 	ledgerQueries     bool
+	friction          bool
 	token             string
 }
 
@@ -106,6 +107,7 @@ type HTTPServerCapabilities struct {
 // an empty value uses baseURL.
 func NewHTTPBackend(baseURL, token string, readOnly bool, browserURL string) service.SessionService {
 	b := newHTTPBackend(baseURL, token, readOnly, !readOnly)
+	b.friction = true
 	if browserURL != "" {
 		b.browserURL = browserURL
 	}
@@ -125,6 +127,7 @@ func NewHTTPBackendForServer(
 			capabilities.APIVersion >= recallNonRecordingAPIVersion,
 	)
 	b.ledgerQueries = capabilities.LedgerQueries
+	b.friction = capabilities.APIVersion >= frictionAPIVersion
 	return b
 }
 

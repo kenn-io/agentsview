@@ -29,6 +29,7 @@ DOCS_PAGES = [
     "one-shot-capture",
     "chat-import",
     "quality",
+    "friction-log",
     "commands",
     "session-export",
     "conversation-export",

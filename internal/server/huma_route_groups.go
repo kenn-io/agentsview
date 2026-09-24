@@ -16,6 +16,7 @@ func (s *Server) registerTypedAPIRoutes() {
 	s.registerUsageRoutes()
 	s.registerInsightsRoutes()
 	s.registerLedgerRoutes()
+	s.registerFrictionRoutes()
 	s.registerSearchRoutes()
 	s.registerRecallRoutes()
 	s.describeTransferRoutes()

@@ -4630,6 +4630,552 @@ components:
         - Skipped
         - Stale
       type: object
+    FrictionArchivePeriod:
+      additionalProperties: false
+      properties:
+        agents_usd:
+          additionalProperties:
+            type: string
+          type: object
+        days:
+          format: int64
+          type: integer
+        models_usd:
+          additionalProperties:
+            type: string
+          type: object
+        total_usd:
+          type: string
+      required:
+        - total_usd
+        - days
+        - agents_usd
+        - models_usd
+      type: object
+    FrictionArchiveSpend:
+      additionalProperties: false
+      properties:
+        timezone:
+          type: string
+        week:
+          $ref: "#/components/schemas/FrictionArchivePeriod"
+        week_from:
+          type: string
+        week_to:
+          type: string
+        yesterday:
+          $ref: "#/components/schemas/FrictionArchivePeriod"
+      required:
+        - yesterday
+        - week
+        - week_from
+        - week_to
+        - timezone
+      type: object
+    FrictionCreatedIssue:
+      additionalProperties: false
+      properties:
+        backend:
+          type: string
+        id:
+          type: string
+        title:
+          type: string
+        url:
+          type: string
+      required:
+        - id
+        - backend
+        - title
+        - url
+      type: object
+    FrictionDigestItem:
+      additionalProperties: false
+      properties:
+        built_at:
+          format: date-time
+          type: string
+        date:
+          type: string
+        revision:
+          format: int64
+          type: integer
+        rules_version:
+          type: string
+        sessions_scanned:
+          format: int64
+          type: integer
+        timezone:
+          type: string
+      required:
+        - date
+        - timezone
+        - rules_version
+        - built_at
+        - revision
+        - sessions_scanned
+      type: object
+    FrictionDigestResponse:
+      additionalProperties: false
+      properties:
+        built_at:
+          format: date-time
+          type: string
+        date:
+          type: string
+        markdown_sha256:
+          type: string
+        p0_alerts:
+          items:
+            $ref: "#/components/schemas/FrictionP0Alert"
+          type: array
+        revision:
+          format: int64
+          type: integer
+        rules_version:
+          type: string
+        sessions_scanned:
+          format: int64
+          type: integer
+        signals:
+          items:
+            $ref: "#/components/schemas/FrictionSignal"
+          type: array
+        summary:
+          $ref: "#/components/schemas/FrictionSummary"
+        timezone:
+          type: string
+        web_url:
+          type: string
+      required:
+        - date
+        - timezone
+        - rules_version
+        - built_at
+        - revision
+        - sessions_scanned
+        - markdown_sha256
+        - web_url
+        - summary
+        - signals
+        - p0_alerts
+      type: object
+    FrictionDigestsResponse:
+      additionalProperties: false
+      properties:
+        digests:
+          items:
+            $ref: "#/components/schemas/FrictionDigestItem"
+          type: array
+      required:
+        - digests
+      type: object
+    FrictionFindingItem:
+      additionalProperties: false
+      properties:
+        call_index:
+          format: int64
+          type:
+            - integer
+            - "null"
+        detector:
+          type: string
+        evidence:
+          type: string
+        fingerprint:
+          type: string
+        kind:
+          type: string
+        label:
+          type: string
+        message_ordinal:
+          format: int64
+          type:
+            - integer
+            - "null"
+        occurred_at:
+          format: date-time
+          type:
+            - string
+            - "null"
+        rules_version:
+          type: string
+        seq:
+          format: int64
+          type: integer
+        session_id:
+          type: string
+        text:
+          type: string
+        title:
+          type: string
+        tool_name:
+          type: string
+      required:
+        - session_id
+        - kind
+        - detector
+        - message_ordinal
+        - call_index
+        - tool_name
+        - label
+        - text
+        - evidence
+        - title
+        - fingerprint
+        - occurred_at
+        - seq
+        - rules_version
+      type: object
+    FrictionFindingsResponse:
+      additionalProperties: false
+      properties:
+        findings:
+          items:
+            $ref: "#/components/schemas/FrictionFindingItem"
+          type: array
+        next_cursor:
+          type: string
+      required:
+        - findings
+        - next_cursor
+      type: object
+    FrictionP0Alert:
+      additionalProperties: false
+      properties:
+        subject_ids:
+          items:
+            type: string
+          type: array
+        tool:
+          type: string
+      required:
+        - tool
+        - subject_ids
+      type: object
+    FrictionPatternItem:
+      additionalProperties: false
+      properties:
+        fingerprint:
+          type: string
+        first_seen_date:
+          type: string
+        kind:
+          type: string
+        last_ordinal:
+          format: int64
+          type:
+            - integer
+            - "null"
+        last_seen_date:
+          type: string
+        last_subject_id:
+          type: string
+        occurrence_count:
+          format: int64
+          type: integer
+        session_count:
+          format: int64
+          type: integer
+        title:
+          type: string
+      required:
+        - fingerprint
+        - kind
+        - title
+        - first_seen_date
+        - last_seen_date
+        - occurrence_count
+        - session_count
+        - last_subject_id
+        - last_ordinal
+      type: object
+    FrictionPatternsResponse:
+      additionalProperties: false
+      properties:
+        next_cursor:
+          type: string
+        patterns:
+          items:
+            $ref: "#/components/schemas/FrictionPatternItem"
+          type: array
+      required:
+        - patterns
+        - next_cursor
+      type: object
+    FrictionPersonaSummary:
+      additionalProperties: false
+      properties:
+        channel:
+          type:
+            - string
+            - "null"
+        corrections:
+          format: int64
+          type: integer
+        cost_usd:
+          type:
+            - string
+            - "null"
+        deferrals:
+          format: int64
+          type: integer
+        errors:
+          format: int64
+          type: integer
+        input_tokens:
+          format: int64
+          minimum: 0
+          type: integer
+        output_tokens:
+          format: int64
+          minimum: 0
+          type: integer
+        patterns:
+          format: int64
+          type: integer
+        persona:
+          type: string
+        sessions:
+          format: int64
+          type: integer
+        workarounds:
+          format: int64
+          type: integer
+      required:
+        - persona
+        - channel
+        - sessions
+        - corrections
+        - errors
+        - workarounds
+        - deferrals
+        - patterns
+        - input_tokens
+        - output_tokens
+        - cost_usd
+      type: object
+    FrictionRunReport:
+      additionalProperties: false
+      properties:
+        date:
+          type: string
+        human:
+          type: string
+        summary:
+          $ref: "#/components/schemas/FrictionSummary"
+        written:
+          type: boolean
+      required:
+        - date
+        - written
+        - summary
+        - human
+      type: object
+    FrictionRunRequest:
+      additionalProperties: false
+      properties:
+        date:
+          description: Digest date (YYYY-MM-DD); omit to catch up every missing complete date
+          type: string
+        dry_run:
+          description: Compute and render without writing
+          type: boolean
+        rebuild:
+          description: Rebuild an existing digest, keeping its membership
+          type: boolean
+      type: object
+    FrictionRunResponse:
+      additionalProperties: false
+      properties:
+        reports:
+          items:
+            $ref: "#/components/schemas/FrictionRunReport"
+          type: array
+      required:
+        - reports
+      type: object
+    FrictionSignal:
+      additionalProperties: false
+      properties:
+        agent:
+          type: string
+        call_index:
+          format: int64
+          type:
+            - integer
+            - "null"
+        channel:
+          type: string
+        detector:
+          type: string
+        evidence:
+          type: string
+        fingerprint:
+          type: string
+        kind:
+          type: string
+        label:
+          type: string
+        machine:
+          type: string
+        message_ordinal:
+          format: int64
+          type:
+            - integer
+            - "null"
+        occurred_at:
+          format: date-time
+          type:
+            - string
+            - "null"
+        persona:
+          type: string
+        seat:
+          type: string
+        session_url:
+          type: string
+        subject_id:
+          type: string
+        subject_kind:
+          type: string
+        text:
+          type: string
+        title:
+          type: string
+        tool_name:
+          type: string
+      required:
+        - kind
+        - detector
+        - subject_id
+        - subject_kind
+        - title
+        - fingerprint
+        - text
+        - tool_name
+        - label
+        - evidence
+        - message_ordinal
+        - call_index
+        - occurred_at
+        - seat
+        - agent
+        - machine
+        - persona
+        - channel
+        - session_url
+      type: object
+    FrictionSpendSummary:
+      additionalProperties: false
+      properties:
+        input_tokens:
+          format: int64
+          minimum: 0
+          type: integer
+        model_costs_usd:
+          additionalProperties:
+            type: string
+          type: object
+        output_tokens:
+          format: int64
+          minimum: 0
+          type: integer
+        role_costs_usd:
+          additionalProperties:
+            type: string
+          type: object
+        sessions_with_cost:
+          format: int64
+          type: integer
+        sessions_with_stats:
+          format: int64
+          type: integer
+        total_usd:
+          type:
+            - string
+            - "null"
+      required:
+        - total_usd
+        - sessions_with_stats
+        - sessions_with_cost
+        - input_tokens
+        - output_tokens
+        - role_costs_usd
+        - model_costs_usd
+      type: object
+    FrictionSummary:
+      additionalProperties: false
+      properties:
+        archive_spend:
+          $ref: "#/components/schemas/FrictionArchiveSpend"
+        corrections:
+          format: int64
+          type: integer
+        created_issues:
+          items:
+            $ref: "#/components/schemas/FrictionCreatedIssue"
+          type: array
+        deferrals:
+          format: int64
+          type: integer
+        digest_path:
+          type:
+            - string
+            - "null"
+        errors:
+          format: int64
+          type: integer
+        frustrations:
+          format: int64
+          type: integer
+        interruptions:
+          format: int64
+          type: integer
+        p0_alerts:
+          additionalProperties:
+            items:
+              type: string
+            type: array
+          type: object
+        patterns:
+          format: int64
+          type: integer
+        personas:
+          additionalProperties:
+            $ref: "#/components/schemas/FrictionPersonaSummary"
+          type: object
+        schema_version:
+          format: int64
+          type: integer
+        sessions_scanned:
+          format: int64
+          type: integer
+        spend:
+          $ref: "#/components/schemas/FrictionSpendSummary"
+        tracker_failures:
+          format: int64
+          type: integer
+        workarounds:
+          format: int64
+          type: integer
+      required:
+        - schema_version
+        - sessions_scanned
+        - tracker_failures
+        - corrections
+        - errors
+        - workarounds
+        - deferrals
+        - patterns
+        - frustrations
+        - interruptions
+        - p0_alerts
+        - personas
+        - spend
+        - digest_path
+        - created_issues
+      type: object
     GenerateInsightRequest:
       additionalProperties: false
       properties:
@@ -12476,6 +13022,613 @@ paths:
       summary: Watch server events
       tags:
         - Sessions
+  /api/v1/friction/digests:
+    get:
+      operationId: get-api-v1-friction-digests
+      parameters:
+        - description: First digest date (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: from
+          schema:
+            description: First digest date (YYYY-MM-DD)
+            type: string
+        - description: Last digest date (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: to
+          schema:
+            description: Last digest date (YYYY-MM-DD)
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FrictionDigestsResponse"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: List friction digests
+      tags:
+        - Friction
+  /api/v1/friction/digests/{date}:
+    get:
+      operationId: get-api-v1-friction-digests-date
+      parameters:
+        - description: Digest date (YYYY-MM-DD)
+          in: path
+          name: date
+          required: true
+          schema:
+            description: Digest date (YYYY-MM-DD)
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FrictionDigestResponse"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Get friction digest
+      tags:
+        - Friction
+  /api/v1/friction/digests/{date}/md:
+    get:
+      operationId: get-api-v1-friction-digests-date-md
+      parameters:
+        - description: Digest date (YYYY-MM-DD)
+          in: path
+          name: date
+          required: true
+          schema:
+            description: Digest date (YYYY-MM-DD)
+            type: string
+      responses:
+        "200":
+          content:
+            text/markdown:
+              schema:
+                contentMediaType: application/octet-stream
+                format: binary
+                type: string
+          description: OK
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+            Content-Disposition:
+              schema:
+                type: string
+            Content-Type:
+              schema:
+                type: string
+            X-Content-Type-Options:
+              schema:
+                type: string
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Get friction digest as Markdown
+      tags:
+        - Friction
+  /api/v1/friction/findings:
+    get:
+      operationId: get-api-v1-friction-findings
+      parameters:
+        - description: Only findings from sessions in this digest (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: date
+          schema:
+            description: Only findings from sessions in this digest (YYYY-MM-DD)
+            type: string
+        - description: correction, error, workaround, deferral, pattern, frustration or interruption
+          explode: false
+          in: query
+          name: kind
+          schema:
+            description: correction, error, workaround, deferral, pattern, frustration or interruption
+            type: string
+        - description: Session ID
+          explode: false
+          in: query
+          name: session_id
+          schema:
+            description: Session ID
+            type: string
+        - description: Pattern fingerprint (fl1:<sha256>)
+          explode: false
+          in: query
+          name: fingerprint
+          schema:
+            description: Pattern fingerprint (fl1:<sha256>)
+            type: string
+        - description: Page size, 1-1000 (default 100)
+          explode: false
+          in: query
+          name: limit
+          schema:
+            description: Page size, 1-1000 (default 100)
+            format: int64
+            type: integer
+        - description: Cursor from next_cursor
+          explode: false
+          in: query
+          name: cursor
+          schema:
+            description: Cursor from next_cursor
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FrictionFindingsResponse"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: List friction findings
+      tags:
+        - Friction
+  /api/v1/friction/patterns:
+    get:
+      operationId: get-api-v1-friction-patterns
+      parameters:
+        - description: correction, error, workaround, deferral, pattern, frustration or interruption
+          explode: false
+          in: query
+          name: kind
+          schema:
+            description: correction, error, workaround, deferral, pattern, frustration or interruption
+            type: string
+        - description: linked, unlinked, pending, failed, needs_human or abandoned
+          explode: false
+          in: query
+          name: link_state
+          schema:
+            description: linked, unlinked, pending, failed, needs_human or abandoned
+            type: string
+        - description: Only patterns last seen on or after this date (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: since
+          schema:
+            description: Only patterns last seen on or after this date (YYYY-MM-DD)
+            type: string
+        - description: Page size, 1-1000 (default 100)
+          explode: false
+          in: query
+          name: limit
+          schema:
+            description: Page size, 1-1000 (default 100)
+            format: int64
+            type: integer
+        - description: Cursor from next_cursor
+          explode: false
+          in: query
+          name: cursor
+          schema:
+            description: Cursor from next_cursor
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FrictionPatternsResponse"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: List friction patterns
+      tags:
+        - Friction
+  /api/v1/friction/run:
+    post:
+      operationId: post-api-v1-friction-run
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FrictionRunRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FrictionRunResponse"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Run friction review
+      tags:
+        - Friction
   /api/v1/import/chatgpt:
     post:
       operationId: post-api-v1-import-chatgpt

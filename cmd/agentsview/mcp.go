@@ -38,7 +38,8 @@ StreamableHTTP, exposing read-only tools for searching and reading
 recorded agent sessions: search_sessions, list_sessions,
 get_session_overview, get_messages, search_content, and
 get_usage_summary, plus query_recall for distilled session knowledge and
-query_ledger for structured event history.
+query_ledger for structured event history, and
+get_friction_digest/list_friction_patterns for the Friction Log.
 
 The server reads through the daemon path. By default each tool call talks to
 the local agentsview daemon, starting it when needed so a long-lived MCP server
@@ -218,6 +219,38 @@ func (s *mcpDaemonService) LedgerQuery(ctx context.Context, q ledger.Query) ([]l
 		return nil, service.ErrLedgerUnavailable
 	}
 	return c.LedgerQuery(ctx, q)
+}
+
+// SupportsFriction is true: the daemon (started on demand) serves the
+// friction read routes; an older daemon is upgraded by the transport.
+func (s *mcpDaemonService) SupportsFriction() bool { return true }
+
+func (s *mcpDaemonService) FrictionDigest(
+	ctx context.Context, date string,
+) (*service.FrictionDigestView, error) {
+	svc, err := s.daemonService(ctx)
+	if err != nil {
+		return nil, err
+	}
+	fs, ok := svc.(service.FrictionService)
+	if !ok {
+		return nil, errors.New("daemon backend does not serve friction digests")
+	}
+	return fs.FrictionDigest(ctx, date)
+}
+
+func (s *mcpDaemonService) FrictionPatterns(
+	ctx context.Context, f service.FrictionPatternFilter,
+) ([]service.FrictionPatternView, error) {
+	svc, err := s.daemonService(ctx)
+	if err != nil {
+		return nil, err
+	}
+	fs, ok := svc.(service.FrictionService)
+	if !ok {
+		return nil, errors.New("daemon backend does not serve friction patterns")
+	}
+	return fs.FrictionPatterns(ctx, f)
 }
 
 func (s *mcpDaemonService) daemonService(
