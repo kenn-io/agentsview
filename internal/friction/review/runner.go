@@ -339,7 +339,7 @@ func (r *Runner) BuildDate(ctx context.Context, date string, opts BuildOptions) 
 		return Report{Date: date, Snapshot: snap, Meta: meta}, nil
 	}
 
-	links := r.fileAndLink(ctx, date, &snap, &meta)
+	links := r.fileAndLink(ctx, date, &snap, &meta, usage)
 	md := friction.RenderMarkdown(snap, links)
 	summary := friction.RenderSummaryJSON(snap, meta)
 	snapJSON, err := EncodeSnapshot(snap)

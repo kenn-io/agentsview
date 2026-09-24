@@ -48,7 +48,9 @@ func (r *Runner) filingRun(date string) filing.RunContext {
 // fileAndLink is spec §8.3 step 8 for a non-dry-run build. With Kata not
 // ready it only queues pending outbox rows (auto_file) and renders no links.
 // Kata problems are logged and never fail the build (§20).
-func (r *Runner) fileAndLink(ctx context.Context, date string, snap *friction.DigestSnapshot, meta *friction.SummaryMeta) friction.RenderLinks {
+func (r *Runner) fileAndLink(ctx context.Context, date string, snap *friction.DigestSnapshot, meta *friction.SummaryMeta,
+	usage map[string]friction.SessionUsage,
+) friction.RenderLinks {
 	if r.Filer == nil {
 		return friction.RenderLinks{}
 	}
@@ -60,8 +62,20 @@ func (r *Runner) fileAndLink(ctx context.Context, date string, snap *friction.Di
 		}
 		return friction.RenderLinks{}
 	}
-	// PR 11 inserts the open-issue snapshot and recurrence costs here, before
-	// any create.
+	// Snapshot already-open linked issues before filing. A new issue from this
+	// build cannot count as a recurrence in the same digest.
+	open, err := r.Filer.SnapshotOpen(ctx, annotatableFingerprints(snap.Signals))
+	if err != nil {
+		log.Printf("friction review: %s: open-issue snapshot failed (no recurrence annotations): %v", date, err)
+		open = map[string]bool{}
+	}
+	costs := map[string]friction.USD{}
+	for id, u := range usage {
+		if u.CostUSD != nil {
+			costs[id] = *u.CostUSD
+		}
+	}
+	snap.RecurrenceCosts = friction.RecurrenceCostAnnotations(snap.Signals, open, costs)
 	if r.AutoFile {
 		rep, err := r.Filer.FileAll(ctx, snap.Signals, r.filingRun(date))
 		if err != nil {
