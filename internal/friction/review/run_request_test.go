@@ -13,6 +13,7 @@ import (
 func TestRunnerRun(t *testing.T) {
 	now := time.Date(2026, 9, 16, 2, 30, 0, 0, time.UTC)
 	newRunner := func(t *testing.T) *Runner {
+		t.Helper()
 		return &Runner{
 			Store: dbtest.OpenTestDB(t), Loc: time.UTC,
 			Now: func() time.Time { return now }, BackfillDays: 7,
