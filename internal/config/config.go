@@ -621,6 +621,8 @@ type FrictionConfig struct {
 	BackfillDays int `json:"backfill_days" toml:"backfill_days"`
 	// SeatPatterns are globs over session file paths with one {seat} capture.
 	SeatPatterns []string `json:"seat_patterns,omitempty" toml:"seat_patterns"`
+	// Kata is the filing policy, used only by the filing hub.
+	Kata FrictionKataConfig `json:"-" toml:"kata"`
 }
 
 // Validate checks the zone name, backfill bound, and seat patterns.
@@ -1254,7 +1256,7 @@ func Default() (Config, error) {
 				FailureBackoff:   "1h",
 			},
 		},
-		Friction: FrictionConfig{Enabled: true, BackfillDays: DefaultFrictionBackfillDays},
+		Friction: FrictionConfig{Enabled: true, BackfillDays: DefaultFrictionBackfillDays, Kata: DefaultFrictionKataConfig()},
 		Kata:     defaultKataConfig(),
 	}, nil
 }
@@ -1938,6 +1940,9 @@ func (c *Config) applyConfigTOML(data string) error {
 			}
 		}
 	}
+	if meta.IsDefined("friction", "kata") {
+		mergeFrictionKataTOML(&c.Friction.Kata, file.Friction.Kata, meta)
+	}
 	if meta.IsDefined("kata") {
 		mergeKataTOML(&c.Kata, file.Kata, meta)
 	}
@@ -2520,6 +2525,9 @@ func finalize(cfg *Config) error {
 		return err
 	}
 	if err := cfg.Friction.Validate(); err != nil {
+		return err
+	}
+	if err := cfg.Friction.Kata.Validate(); err != nil {
 		return err
 	}
 	if err := cfg.Kata.Validate(); err != nil {
