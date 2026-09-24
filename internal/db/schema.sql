@@ -1469,3 +1469,98 @@ CREATE TABLE IF NOT EXISTS conversation_session_changes (
     gap TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_conversation_session_changes_revision ON conversation_session_changes(revision);
+
+-- Event ledger, adapted from jilog ledger-core (docs/internal/jilog-adaptation.md).
+-- ledger_segments is the authority: events_json holds the exact bytes the
+-- CRC-32 checksum covers. ledger_events is the query projection. Both are
+-- append-only; only `agentsview ledger rebuild-index` drops the
+-- ledger_events guard inside its own transaction.
+CREATE TABLE IF NOT EXISTS ledger_segments (
+    zone        TEXT NOT NULL,
+    source      TEXT NOT NULL,
+    source_seq  INTEGER NOT NULL,
+    checksum    INTEGER NOT NULL,
+    created_at  TEXT NOT NULL,
+    event_count INTEGER NOT NULL,
+    events_json TEXT NOT NULL,
+    origin      TEXT NOT NULL,
+    ingested_at TEXT NOT NULL,
+    PRIMARY KEY (zone, source, source_seq)
+);
+CREATE INDEX IF NOT EXISTS idx_ledger_segments_ingested
+    ON ledger_segments(ingested_at);
+
+CREATE TABLE IF NOT EXISTS ledger_events (
+    event_id       TEXT PRIMARY KEY,
+    zone           TEXT NOT NULL,
+    source         TEXT NOT NULL,
+    source_seq     INTEGER NOT NULL,
+    timestamp      TEXT NOT NULL,
+    correlation_id TEXT,
+    causation_id   TEXT,
+    actor_ref      TEXT,
+    object_ref     TEXT,
+    event_class    TEXT NOT NULL,
+    payload_tier   TEXT NOT NULL,
+    payload        TEXT,
+    subsystem      TEXT NOT NULL DEFAULT '',
+    summary        TEXT NOT NULL DEFAULT '',
+    segment_source TEXT NOT NULL,
+    segment_seq    INTEGER NOT NULL,
+    event_json     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ledger_events_timestamp
+    ON ledger_events(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_ledger_events_zone_time
+    ON ledger_events(zone, timestamp DESC, event_id DESC);
+CREATE INDEX IF NOT EXISTS idx_ledger_events_zone_class
+    ON ledger_events(zone, event_class);
+CREATE INDEX IF NOT EXISTS idx_ledger_events_subsystem
+    ON ledger_events(subsystem);
+CREATE INDEX IF NOT EXISTS idx_ledger_events_actor
+    ON ledger_events(actor_ref) WHERE actor_ref IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_ledger_events_object
+    ON ledger_events(object_ref) WHERE object_ref IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_ledger_events_correlation
+    ON ledger_events(correlation_id) WHERE correlation_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_ledger_events_segment
+    ON ledger_events(zone, segment_source, segment_seq);
+
+CREATE TABLE IF NOT EXISTS ledger_verify_state (
+    zone          TEXT NOT NULL,
+    source        TEXT NOT NULL,
+    verified_seq  INTEGER NOT NULL,
+    failures_json TEXT NOT NULL,
+    missing_json  TEXT NOT NULL,
+    updated_at    TEXT NOT NULL,
+    PRIMARY KEY (zone, source)
+);
+
+CREATE TABLE IF NOT EXISTS ledger_import_state (
+    zone             TEXT NOT NULL,
+    path             TEXT NOT NULL,
+    last_report_json TEXT NOT NULL,
+    updated_at       TEXT NOT NULL,
+    PRIMARY KEY (zone, path)
+);
+
+CREATE TRIGGER IF NOT EXISTS trg_ledger_segments_no_update
+BEFORE UPDATE ON ledger_segments
+BEGIN
+    SELECT RAISE(ABORT, 'ledger is append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS trg_ledger_segments_no_delete
+BEFORE DELETE ON ledger_segments
+BEGIN
+    SELECT RAISE(ABORT, 'ledger is append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS trg_ledger_events_no_update
+BEFORE UPDATE ON ledger_events
+BEGIN
+    SELECT RAISE(ABORT, 'ledger is append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS trg_ledger_events_no_delete
+BEFORE DELETE ON ledger_events
+BEGIN
+    SELECT RAISE(ABORT, 'ledger is append-only');
+END;
