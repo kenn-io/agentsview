@@ -59,6 +59,10 @@ filter:
       - head-api-v1-raw-sync-uploads-upload-id
       - patch-api-v1-raw-sync-uploads-upload-id
       - post-api-v1-raw-sync-manifests
+      - get-api-v1-ledger-events
+      - get-api-v1-ledger-status
+      - post-api-v1-ledger-events
+      - post-api-v1-ledger-verify
 overlay:
   sources:
     - internal/apiclient/models.overlay.yaml

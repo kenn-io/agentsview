@@ -4703,6 +4703,311 @@ components:
       required:
         - insights
       type: object
+    LedgerAppendEvent:
+      additionalProperties: false
+      properties:
+        actor_ref:
+          type: string
+        causation_id:
+          type: string
+        correlation_id:
+          type: string
+        event_class:
+          description: Event class, e.g. state-change
+          type: string
+        object_ref:
+          type: string
+        payload: {}
+        payload_tier:
+          description: metadata-only, structured or confidential; default structured with a payload, else metadata-only
+          type: string
+        timestamp:
+          description: Defaults to now
+          format: date-time
+          type: string
+      required:
+        - event_class
+      type: object
+    LedgerAppendRequest:
+      additionalProperties: false
+      properties:
+        events:
+          items:
+            $ref: "#/components/schemas/LedgerAppendEvent"
+          maxItems: 1000
+          minItems: 1
+          type: array
+        zone:
+          description: "Default: [ledger] default_zone"
+          type: string
+      required:
+        - events
+      type: object
+    LedgerAppendResponse:
+      additionalProperties: false
+      properties:
+        checksum:
+          format: int32
+          minimum: 0
+          type: integer
+        event_ids:
+          items:
+            type: string
+          type: array
+        source:
+          type: string
+        source_seq:
+          format: int64
+          minimum: 0
+          type: integer
+        zone:
+          type: string
+      required:
+        - zone
+        - source
+        - source_seq
+        - checksum
+        - event_ids
+      type: object
+    LedgerEventView:
+      additionalProperties: false
+      properties:
+        actor_ref:
+          type:
+            - string
+            - "null"
+        causation_id:
+          type:
+            - string
+            - "null"
+        correlation_id:
+          type:
+            - string
+            - "null"
+        event_class:
+          type: string
+        event_id:
+          type: string
+        object_ref:
+          type:
+            - string
+            - "null"
+        payload: {}
+        payload_tier:
+          type: string
+        serde:
+          type: string
+        source:
+          type: string
+        source_seq:
+          format: int64
+          minimum: 0
+          type: integer
+        subsystem:
+          type: string
+        summary:
+          type: string
+        timestamp:
+          type: string
+        zone:
+          type: string
+      required:
+        - event_id
+        - zone
+        - source
+        - source_seq
+        - timestamp
+        - correlation_id
+        - causation_id
+        - actor_ref
+        - object_ref
+        - event_class
+        - payload_tier
+        - payload
+        - subsystem
+        - summary
+        - serde
+      type: object
+    LedgerQueryResponse:
+      additionalProperties: false
+      properties:
+        results:
+          items:
+            $ref: "#/components/schemas/LedgerZoneEventsView"
+          type: array
+        since:
+          type: string
+      required:
+        - since
+        - results
+      type: object
+    LedgerStatusResponse:
+      additionalProperties: false
+      properties:
+        enabled:
+          type: boolean
+        zones:
+          items:
+            $ref: "#/components/schemas/LedgerstatusZoneReport"
+          type: array
+      required:
+        - enabled
+        - zones
+      type: object
+    LedgerVerifyRequest:
+      additionalProperties: false
+      properties:
+        full:
+          description: Re-verify every segment and reset the checkpoints
+          type: boolean
+        zone:
+          description: Only this zone
+          type: string
+      type: object
+    LedgerVerifyResponse:
+      additionalProperties: false
+      properties:
+        zones:
+          items:
+            $ref: "#/components/schemas/LedgerVerifyZone"
+          type: array
+      required:
+        - zones
+      type: object
+    LedgerVerifyZone:
+      additionalProperties: false
+      properties:
+        failures:
+          items:
+            items:
+              type: string
+            maxItems: 3
+            minItems: 3
+            type: array
+          type: array
+        newly_verified:
+          format: int64
+          type: integer
+        skipped:
+          format: int64
+          type: integer
+        zone:
+          type: string
+      required:
+        - zone
+        - newly_verified
+        - skipped
+        - failures
+      type: object
+    LedgerZoneEventsView:
+      additionalProperties: false
+      properties:
+        events:
+          items:
+            $ref: "#/components/schemas/LedgerEventView"
+          type: array
+        zone:
+          type: string
+      required:
+        - zone
+        - events
+      type: object
+    LedgerstatusImportReport:
+      additionalProperties: false
+      properties:
+        path:
+          type: string
+        report: {}
+        updated_at:
+          type: string
+      required:
+        - path
+        - updated_at
+        - report
+      type: object
+    LedgerstatusPushReport:
+      additionalProperties: false
+      properties:
+        at:
+          type: string
+        failures:
+          items:
+            items:
+              type: string
+            maxItems: 4
+            minItems: 4
+            type: array
+          type: array
+        held_back:
+          format: int64
+          type: integer
+        identical:
+          format: int64
+          type: integer
+        pushed:
+          format: int64
+          type: integer
+        target:
+          type: string
+      required:
+        - target
+        - at
+        - pushed
+        - identical
+        - held_back
+        - failures
+      type: object
+    LedgerstatusZoneReport:
+      additionalProperties: false
+      properties:
+        events:
+          format: int64
+          type: integer
+        failures:
+          items:
+            items:
+              type: string
+            maxItems: 3
+            minItems: 3
+            type: array
+          type: array
+        gaps:
+          items:
+            items:
+              type: string
+            maxItems: 2
+            minItems: 2
+            type: array
+          type: array
+        imports:
+          items:
+            $ref: "#/components/schemas/LedgerstatusImportReport"
+          type: array
+        push:
+          items:
+            $ref: "#/components/schemas/LedgerstatusPushReport"
+          type: array
+        segments:
+          format: int64
+          type: integer
+        sources:
+          additionalProperties:
+            format: int64
+            minimum: 0
+            type: integer
+          type: object
+        zone:
+          type: string
+      required:
+        - imports
+        - push
+        - zone
+        - segments
+        - events
+        - sources
+        - gaps
+        - failures
+      type: object
     MachinesResponse:
       additionalProperties: false
       properties:
@@ -7183,6 +7488,8 @@ components:
           type: integer
         insight_generation_available:
           type: boolean
+        ledger_available:
+          type: boolean
         read_only:
           type: boolean
         version:
@@ -7192,6 +7499,7 @@ components:
         - commit
         - build_date
         - insight_generation_available
+        - ledger_available
         - api_version
         - data_version
       type: object
@@ -13046,6 +13354,384 @@ paths:
       summary: Publish insight
       tags:
         - Insights
+  /api/v1/ledger/events:
+    get:
+      operationId: get-api-v1-ledger-events
+      parameters:
+        - description: Nh, Nd, Nw, YYYY-MM-DD (UTC midnight) or an RFC 3339 time
+          explode: false
+          in: query
+          name: since
+          schema:
+            default: 7d
+            description: Nh, Nd, Nw, YYYY-MM-DD (UTC midnight) or an RFC 3339 time
+            type: string
+        - description: Subsystem glob; a trailing * is a prefix match; repeatable, OR-ed
+          explode: false
+          in: query
+          name: subsystem
+          schema:
+            description: Subsystem glob; a trailing * is a prefix match; repeatable, OR-ed
+            items:
+              type: string
+            type: array
+        - description: Event class, e.g. state-change
+          explode: false
+          in: query
+          name: class
+          schema:
+            description: Event class, e.g. state-change
+            type: string
+        - description: Only this zone
+          explode: false
+          in: query
+          name: zone
+          schema:
+            description: Only this zone
+            type: string
+        - description: Events per zone
+          explode: false
+          in: query
+          name: limit
+          schema:
+            default: 100
+            description: Events per zone
+            format: int64
+            maximum: 1000
+            minimum: 1
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LedgerQueryResponse"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Query ledger events
+      tags:
+        - Ledger
+    post:
+      operationId: post-api-v1-ledger-events
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LedgerAppendRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LedgerAppendResponse"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Append ledger events
+      tags:
+        - Ledger
+  /api/v1/ledger/status:
+    get:
+      operationId: get-api-v1-ledger-status
+      parameters:
+        - description: Only this zone
+          explode: false
+          in: query
+          name: zone
+          schema:
+            description: Only this zone
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LedgerStatusResponse"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Ledger status
+      tags:
+        - Ledger
+  /api/v1/ledger/verify:
+    post:
+      operationId: post-api-v1-ledger-verify
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LedgerVerifyRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LedgerVerifyResponse"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Verify ledger checksums
+      tags:
+        - Ledger
   /api/v1/machines:
     get:
       operationId: get-api-v1-machines

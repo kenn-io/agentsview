@@ -505,6 +505,182 @@ func (o *GetAPIV1EmbeddingsStatusRequestOptions) GetHeader() (map[string]string,
 	return nil, nil
 }
 
+// GetAPIV1LedgerEventsRequestOptions is the options needed to make a request to GetAPIV1LedgerEvents.
+type GetAPIV1LedgerEventsRequestOptions struct {
+	Query *GetAPIV1LedgerEventsQuery
+}
+
+// Validate validates all the fields in the options.
+// Use it if fields validation was not run.
+func (o *GetAPIV1LedgerEventsRequestOptions) Validate() error {
+	var errors runtime.ValidationErrors
+
+	if o.Query != nil {
+		if v, ok := any(o.Query).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("Query", err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+
+	return errors
+}
+
+// GetPathParams returns the path params as a map.
+func (o *GetAPIV1LedgerEventsRequestOptions) GetPathParams() (map[string]any, error) {
+	return nil, nil
+}
+
+// GetQuery returns the query params as a map.
+func (o *GetAPIV1LedgerEventsRequestOptions) GetQuery() (map[string]any, error) {
+	return runtime.AsMap[any](o.Query)
+}
+
+// GetBody returns the payload in any type that can be marshalled to JSON by the client.
+func (o *GetAPIV1LedgerEventsRequestOptions) GetBody() any {
+	return nil
+}
+
+// GetHeader returns the headers as a map.
+func (o *GetAPIV1LedgerEventsRequestOptions) GetHeader() (map[string]string, error) {
+	return nil, nil
+}
+
+// PostAPIV1LedgerEventsRequestOptions is the options needed to make a request to PostAPIV1LedgerEvents.
+type PostAPIV1LedgerEventsRequestOptions struct {
+	Body *PostAPIV1LedgerEventsBody
+}
+
+// Validate validates all the fields in the options.
+// Use it if fields validation was not run.
+func (o *PostAPIV1LedgerEventsRequestOptions) Validate() error {
+	var errors runtime.ValidationErrors
+
+	if o.Body != nil {
+		if v, ok := any(o.Body).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("Body", err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+
+	return errors
+}
+
+// GetPathParams returns the path params as a map.
+func (o *PostAPIV1LedgerEventsRequestOptions) GetPathParams() (map[string]any, error) {
+	return nil, nil
+}
+
+// GetQuery returns the query params as a map.
+func (o *PostAPIV1LedgerEventsRequestOptions) GetQuery() (map[string]any, error) {
+	return nil, nil
+}
+
+// GetBody returns the payload in any type that can be marshalled to JSON by the client.
+func (o *PostAPIV1LedgerEventsRequestOptions) GetBody() any {
+	return o.Body
+}
+
+// GetHeader returns the headers as a map.
+func (o *PostAPIV1LedgerEventsRequestOptions) GetHeader() (map[string]string, error) {
+	return nil, nil
+}
+
+// GetAPIV1LedgerStatusRequestOptions is the options needed to make a request to GetAPIV1LedgerStatus.
+type GetAPIV1LedgerStatusRequestOptions struct {
+	Query *GetAPIV1LedgerStatusQuery
+}
+
+// Validate validates all the fields in the options.
+// Use it if fields validation was not run.
+func (o *GetAPIV1LedgerStatusRequestOptions) Validate() error {
+	var errors runtime.ValidationErrors
+
+	if o.Query != nil {
+		if v, ok := any(o.Query).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("Query", err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+
+	return errors
+}
+
+// GetPathParams returns the path params as a map.
+func (o *GetAPIV1LedgerStatusRequestOptions) GetPathParams() (map[string]any, error) {
+	return nil, nil
+}
+
+// GetQuery returns the query params as a map.
+func (o *GetAPIV1LedgerStatusRequestOptions) GetQuery() (map[string]any, error) {
+	return runtime.AsMap[any](o.Query)
+}
+
+// GetBody returns the payload in any type that can be marshalled to JSON by the client.
+func (o *GetAPIV1LedgerStatusRequestOptions) GetBody() any {
+	return nil
+}
+
+// GetHeader returns the headers as a map.
+func (o *GetAPIV1LedgerStatusRequestOptions) GetHeader() (map[string]string, error) {
+	return nil, nil
+}
+
+// PostAPIV1LedgerVerifyRequestOptions is the options needed to make a request to PostAPIV1LedgerVerify.
+type PostAPIV1LedgerVerifyRequestOptions struct {
+	Body *PostAPIV1LedgerVerifyBody
+}
+
+// Validate validates all the fields in the options.
+// Use it if fields validation was not run.
+func (o *PostAPIV1LedgerVerifyRequestOptions) Validate() error {
+	var errors runtime.ValidationErrors
+
+	if o.Body != nil {
+		if v, ok := any(o.Body).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("Body", err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+
+	return errors
+}
+
+// GetPathParams returns the path params as a map.
+func (o *PostAPIV1LedgerVerifyRequestOptions) GetPathParams() (map[string]any, error) {
+	return nil, nil
+}
+
+// GetQuery returns the query params as a map.
+func (o *PostAPIV1LedgerVerifyRequestOptions) GetQuery() (map[string]any, error) {
+	return nil, nil
+}
+
+// GetBody returns the payload in any type that can be marshalled to JSON by the client.
+func (o *PostAPIV1LedgerVerifyRequestOptions) GetBody() any {
+	return o.Body
+}
+
+// GetHeader returns the headers as a map.
+func (o *PostAPIV1LedgerVerifyRequestOptions) GetHeader() (map[string]string, error) {
+	return nil, nil
+}
+
 // GetAPIV1MachinesRequestOptions is the options needed to make a request to GetAPIV1Machines.
 type GetAPIV1MachinesRequestOptions struct {
 	Query *GetAPIV1MachinesQuery
@@ -4534,6 +4710,10 @@ type ClientInterface interface {
 	PostAPIV1EmbeddingsGenerationsIDActivateWithResponse(ctx context.Context, options *PostAPIV1EmbeddingsGenerationsIDActivateRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1EmbeddingsGenerationsIDActivateResp, error)
 	PostAPIV1EmbeddingsGenerationsIDRetireWithResponse(ctx context.Context, options *PostAPIV1EmbeddingsGenerationsIDRetireRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1EmbeddingsGenerationsIDRetireResp, error)
 	GetAPIV1EmbeddingsStatusWithResponse(ctx context.Context, options *GetAPIV1EmbeddingsStatusRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1EmbeddingsStatusResp, error)
+	GetAPIV1LedgerEventsWithResponse(ctx context.Context, options *GetAPIV1LedgerEventsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1LedgerEventsResp, error)
+	PostAPIV1LedgerEventsWithResponse(ctx context.Context, options *PostAPIV1LedgerEventsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1LedgerEventsResp, error)
+	GetAPIV1LedgerStatusWithResponse(ctx context.Context, options *GetAPIV1LedgerStatusRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1LedgerStatusResp, error)
+	PostAPIV1LedgerVerifyWithResponse(ctx context.Context, options *PostAPIV1LedgerVerifyRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1LedgerVerifyResp, error)
 	GetAPIV1MachinesWithResponse(ctx context.Context, options *GetAPIV1MachinesRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1MachinesResp, error)
 	GetAPIV1ProjectsWithResponse(ctx context.Context, options *GetAPIV1ProjectsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1ProjectsResp, error)
 	PostAPIV1PushClickhouseWithResponse(ctx context.Context, options *PostAPIV1PushClickhouseRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1PushClickhouseResp, error)
@@ -6461,6 +6641,900 @@ func (c *Client) GetAPIV1EmbeddingsStatusWithResponse(ctx context.Context, optio
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
 					TargetType:    "GetAPIV1EmbeddingsStatusErrorResponseJSON504",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	default:
+		return out, runtime.NewClientAPIError(fmt.Errorf("unexpected status code: %d", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	}
+}
+
+// GetAPIV1LedgerEvents Query ledger events
+func (c *Client) GetAPIV1LedgerEventsWithResponse(ctx context.Context, options *GetAPIV1LedgerEventsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1LedgerEventsResp, error) {
+	var err error
+	reqParams := runtime.RequestOptionsParameters{
+		RequestURL: c.apiClient.GetBaseURL() + "/api/v1/ledger/events",
+		Method:     "GET",
+		Options:    options,
+	}
+
+	req, err := c.apiClient.CreateRequest(ctx, reqParams, reqEditors...)
+	if err != nil {
+		return nil, fmt.Errorf("error creating request: %w", err)
+	}
+
+	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/api/v1/ledger/events")
+	if err != nil {
+		return nil, fmt.Errorf("error executing request: %w", err)
+	}
+
+	out := &GetAPIV1LedgerEventsResp{
+		HTTPResponse: resp.Raw,
+		Body:         resp.Content,
+		StatusCode:   resp.StatusCode,
+	}
+
+	switch resp.StatusCode {
+	case 200:
+		out.JSON200 = new(GetAPIV1LedgerEventsResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON200); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1LedgerEventsResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, nil
+	case 400:
+		out.JSON400 = new(GetAPIV1LedgerEventsErrorResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON400); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1LedgerEventsErrorResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 401:
+		out.JSON401 = new(GetAPIV1LedgerEventsErrorResponseJSON)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON401); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1LedgerEventsErrorResponseJSON",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 403:
+		out.JSON403 = new(GetAPIV1LedgerEventsErrorResponseJSON403)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON403); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1LedgerEventsErrorResponseJSON403",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 404:
+		out.JSON404 = new(GetAPIV1LedgerEventsErrorResponseJSON404)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON404); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1LedgerEventsErrorResponseJSON404",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 409:
+		out.JSON409 = new(GetAPIV1LedgerEventsErrorResponseJSON409)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON409); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1LedgerEventsErrorResponseJSON409",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 422:
+		out.JSON422 = new(GetAPIV1LedgerEventsErrorResponseJSON422)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON422); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1LedgerEventsErrorResponseJSON422",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 500:
+		out.JSON500 = new(GetAPIV1LedgerEventsErrorResponseJSON500)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON500); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1LedgerEventsErrorResponseJSON500",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 501:
+		out.JSON501 = new(GetAPIV1LedgerEventsErrorResponseJSON501)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON501); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1LedgerEventsErrorResponseJSON501",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 502:
+		out.JSON502 = new(GetAPIV1LedgerEventsErrorResponseJSON502)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON502); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1LedgerEventsErrorResponseJSON502",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 503:
+		out.JSON503 = new(GetAPIV1LedgerEventsErrorResponseJSON503)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON503); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1LedgerEventsErrorResponseJSON503",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 504:
+		out.JSON504 = new(GetAPIV1LedgerEventsErrorResponseJSON504)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON504); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1LedgerEventsErrorResponseJSON504",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	default:
+		return out, runtime.NewClientAPIError(fmt.Errorf("unexpected status code: %d", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	}
+}
+
+// PostAPIV1LedgerEvents Append ledger events
+func (c *Client) PostAPIV1LedgerEventsWithResponse(ctx context.Context, options *PostAPIV1LedgerEventsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1LedgerEventsResp, error) {
+	var err error
+	reqParams := runtime.RequestOptionsParameters{
+		RequestURL:  c.apiClient.GetBaseURL() + "/api/v1/ledger/events",
+		Method:      "POST",
+		Options:     options,
+		ContentType: "application/json",
+	}
+
+	req, err := c.apiClient.CreateRequest(ctx, reqParams, reqEditors...)
+	if err != nil {
+		return nil, fmt.Errorf("error creating request: %w", err)
+	}
+
+	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/api/v1/ledger/events")
+	if err != nil {
+		return nil, fmt.Errorf("error executing request: %w", err)
+	}
+
+	out := &PostAPIV1LedgerEventsResp{
+		HTTPResponse: resp.Raw,
+		Body:         resp.Content,
+		StatusCode:   resp.StatusCode,
+	}
+
+	switch resp.StatusCode {
+	case 200:
+		out.JSON200 = new(PostAPIV1LedgerEventsResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON200); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1LedgerEventsResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, nil
+	case 400:
+		out.JSON400 = new(PostAPIV1LedgerEventsErrorResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON400); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1LedgerEventsErrorResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 401:
+		out.JSON401 = new(PostAPIV1LedgerEventsErrorResponseJSON)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON401); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1LedgerEventsErrorResponseJSON",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 403:
+		out.JSON403 = new(PostAPIV1LedgerEventsErrorResponseJSON403)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON403); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1LedgerEventsErrorResponseJSON403",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 404:
+		out.JSON404 = new(PostAPIV1LedgerEventsErrorResponseJSON404)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON404); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1LedgerEventsErrorResponseJSON404",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 409:
+		out.JSON409 = new(PostAPIV1LedgerEventsErrorResponseJSON409)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON409); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1LedgerEventsErrorResponseJSON409",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 422:
+		out.JSON422 = new(PostAPIV1LedgerEventsErrorResponseJSON422)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON422); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1LedgerEventsErrorResponseJSON422",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 500:
+		out.JSON500 = new(PostAPIV1LedgerEventsErrorResponseJSON500)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON500); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1LedgerEventsErrorResponseJSON500",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 501:
+		out.JSON501 = new(PostAPIV1LedgerEventsErrorResponseJSON501)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON501); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1LedgerEventsErrorResponseJSON501",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 502:
+		out.JSON502 = new(PostAPIV1LedgerEventsErrorResponseJSON502)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON502); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1LedgerEventsErrorResponseJSON502",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 503:
+		out.JSON503 = new(PostAPIV1LedgerEventsErrorResponseJSON503)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON503); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1LedgerEventsErrorResponseJSON503",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 504:
+		out.JSON504 = new(PostAPIV1LedgerEventsErrorResponseJSON504)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON504); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1LedgerEventsErrorResponseJSON504",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	default:
+		return out, runtime.NewClientAPIError(fmt.Errorf("unexpected status code: %d", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	}
+}
+
+// GetAPIV1LedgerStatus Ledger status
+func (c *Client) GetAPIV1LedgerStatusWithResponse(ctx context.Context, options *GetAPIV1LedgerStatusRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1LedgerStatusResp, error) {
+	var err error
+	reqParams := runtime.RequestOptionsParameters{
+		RequestURL: c.apiClient.GetBaseURL() + "/api/v1/ledger/status",
+		Method:     "GET",
+		Options:    options,
+	}
+
+	req, err := c.apiClient.CreateRequest(ctx, reqParams, reqEditors...)
+	if err != nil {
+		return nil, fmt.Errorf("error creating request: %w", err)
+	}
+
+	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/api/v1/ledger/status")
+	if err != nil {
+		return nil, fmt.Errorf("error executing request: %w", err)
+	}
+
+	out := &GetAPIV1LedgerStatusResp{
+		HTTPResponse: resp.Raw,
+		Body:         resp.Content,
+		StatusCode:   resp.StatusCode,
+	}
+
+	switch resp.StatusCode {
+	case 200:
+		out.JSON200 = new(GetAPIV1LedgerStatusResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON200); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1LedgerStatusResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, nil
+	case 400:
+		out.JSON400 = new(GetAPIV1LedgerStatusErrorResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON400); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1LedgerStatusErrorResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 401:
+		out.JSON401 = new(GetAPIV1LedgerStatusErrorResponseJSON)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON401); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1LedgerStatusErrorResponseJSON",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 403:
+		out.JSON403 = new(GetAPIV1LedgerStatusErrorResponseJSON403)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON403); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1LedgerStatusErrorResponseJSON403",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 404:
+		out.JSON404 = new(GetAPIV1LedgerStatusErrorResponseJSON404)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON404); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1LedgerStatusErrorResponseJSON404",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 409:
+		out.JSON409 = new(GetAPIV1LedgerStatusErrorResponseJSON409)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON409); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1LedgerStatusErrorResponseJSON409",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 422:
+		out.JSON422 = new(GetAPIV1LedgerStatusErrorResponseJSON422)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON422); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1LedgerStatusErrorResponseJSON422",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 500:
+		out.JSON500 = new(GetAPIV1LedgerStatusErrorResponseJSON500)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON500); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1LedgerStatusErrorResponseJSON500",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 501:
+		out.JSON501 = new(GetAPIV1LedgerStatusErrorResponseJSON501)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON501); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1LedgerStatusErrorResponseJSON501",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 502:
+		out.JSON502 = new(GetAPIV1LedgerStatusErrorResponseJSON502)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON502); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1LedgerStatusErrorResponseJSON502",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 503:
+		out.JSON503 = new(GetAPIV1LedgerStatusErrorResponseJSON503)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON503); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1LedgerStatusErrorResponseJSON503",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 504:
+		out.JSON504 = new(GetAPIV1LedgerStatusErrorResponseJSON504)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON504); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1LedgerStatusErrorResponseJSON504",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	default:
+		return out, runtime.NewClientAPIError(fmt.Errorf("unexpected status code: %d", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	}
+}
+
+// PostAPIV1LedgerVerify Verify ledger checksums
+func (c *Client) PostAPIV1LedgerVerifyWithResponse(ctx context.Context, options *PostAPIV1LedgerVerifyRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1LedgerVerifyResp, error) {
+	var err error
+	reqParams := runtime.RequestOptionsParameters{
+		RequestURL:  c.apiClient.GetBaseURL() + "/api/v1/ledger/verify",
+		Method:      "POST",
+		Options:     options,
+		ContentType: "application/json",
+	}
+
+	req, err := c.apiClient.CreateRequest(ctx, reqParams, reqEditors...)
+	if err != nil {
+		return nil, fmt.Errorf("error creating request: %w", err)
+	}
+
+	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/api/v1/ledger/verify")
+	if err != nil {
+		return nil, fmt.Errorf("error executing request: %w", err)
+	}
+
+	out := &PostAPIV1LedgerVerifyResp{
+		HTTPResponse: resp.Raw,
+		Body:         resp.Content,
+		StatusCode:   resp.StatusCode,
+	}
+
+	switch resp.StatusCode {
+	case 200:
+		out.JSON200 = new(PostAPIV1LedgerVerifyResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON200); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1LedgerVerifyResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, nil
+	case 400:
+		out.JSON400 = new(PostAPIV1LedgerVerifyErrorResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON400); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1LedgerVerifyErrorResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 401:
+		out.JSON401 = new(PostAPIV1LedgerVerifyErrorResponseJSON)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON401); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1LedgerVerifyErrorResponseJSON",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 403:
+		out.JSON403 = new(PostAPIV1LedgerVerifyErrorResponseJSON403)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON403); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1LedgerVerifyErrorResponseJSON403",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 404:
+		out.JSON404 = new(PostAPIV1LedgerVerifyErrorResponseJSON404)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON404); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1LedgerVerifyErrorResponseJSON404",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 409:
+		out.JSON409 = new(PostAPIV1LedgerVerifyErrorResponseJSON409)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON409); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1LedgerVerifyErrorResponseJSON409",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 422:
+		out.JSON422 = new(PostAPIV1LedgerVerifyErrorResponseJSON422)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON422); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1LedgerVerifyErrorResponseJSON422",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 500:
+		out.JSON500 = new(PostAPIV1LedgerVerifyErrorResponseJSON500)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON500); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1LedgerVerifyErrorResponseJSON500",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 501:
+		out.JSON501 = new(PostAPIV1LedgerVerifyErrorResponseJSON501)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON501); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1LedgerVerifyErrorResponseJSON501",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 502:
+		out.JSON502 = new(PostAPIV1LedgerVerifyErrorResponseJSON502)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON502); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1LedgerVerifyErrorResponseJSON502",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 503:
+		out.JSON503 = new(PostAPIV1LedgerVerifyErrorResponseJSON503)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON503); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1LedgerVerifyErrorResponseJSON503",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 504:
+		out.JSON504 = new(PostAPIV1LedgerVerifyErrorResponseJSON504)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON504); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1LedgerVerifyErrorResponseJSON504",
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -15002,6 +16076,10 @@ type PostAPIV1EmbeddingsGenerationsIDActivateBody = EmbeddingsGenerationActionRe
 
 type PostAPIV1EmbeddingsGenerationsIDRetireBody = EmbeddingsGenerationActionRequest
 
+type PostAPIV1LedgerEventsBody = LedgerAppendRequest
+
+type PostAPIV1LedgerVerifyBody = LedgerVerifyRequest
+
 type PostAPIV1PushClickhouseBody = DaemonPushRequest
 
 type PostAPIV1PushDuckdbBody = DaemonPushRequest
@@ -15168,6 +16246,32 @@ type PostAPIV1EmbeddingsGenerationsIDRetireQuery struct {
 
 type GetAPIV1EmbeddingsStatusQuery struct {
 	Store *string `json:"store,omitempty"`
+}
+
+type GetAPIV1LedgerEventsQuery struct {
+	// Since Nh, Nd, Nw, YYYY-MM-DD (UTC midnight) or an RFC 3339 time
+	Since *string `json:"since,omitempty"`
+
+	// Subsystem Subsystem glob; a trailing * is a prefix match; repeatable, OR-ed
+	Subsystem []string `json:"subsystem,omitempty"`
+
+	// Class Event class, e.g. state-change
+	Class *string `json:"class,omitempty"`
+
+	// Zone Only this zone
+	Zone *string `json:"zone,omitempty"`
+
+	// Limit Events per zone
+	Limit *int64 `json:"limit,omitempty" validate:"omitempty,gte=1,lte=1000"`
+}
+
+func (g GetAPIV1LedgerEventsQuery) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(g))
+}
+
+type GetAPIV1LedgerStatusQuery struct {
+	// Zone Only this zone
+	Zone *string `json:"zone,omitempty"`
 }
 
 type GetAPIV1MachinesQuery struct {
@@ -16285,6 +17389,102 @@ type GetAPIV1EmbeddingsStatusErrorResponseJSON503 = APIErrorResponse
 
 type GetAPIV1EmbeddingsStatusErrorResponseJSON504 = APIErrorResponse
 
+type GetAPIV1LedgerEventsResponse = LedgerQueryResponse
+
+type GetAPIV1LedgerEventsErrorResponse = APIErrorResponse
+
+type GetAPIV1LedgerEventsErrorResponseJSON = APIErrorResponse
+
+type GetAPIV1LedgerEventsErrorResponseJSON403 = APIErrorResponse
+
+type GetAPIV1LedgerEventsErrorResponseJSON404 = APIErrorResponse
+
+type GetAPIV1LedgerEventsErrorResponseJSON409 = APIErrorResponse
+
+type GetAPIV1LedgerEventsErrorResponseJSON422 = APIErrorResponse
+
+type GetAPIV1LedgerEventsErrorResponseJSON500 = APIErrorResponse
+
+type GetAPIV1LedgerEventsErrorResponseJSON501 = APIErrorResponse
+
+type GetAPIV1LedgerEventsErrorResponseJSON502 = APIErrorResponse
+
+type GetAPIV1LedgerEventsErrorResponseJSON503 = APIErrorResponse
+
+type GetAPIV1LedgerEventsErrorResponseJSON504 = APIErrorResponse
+
+type PostAPIV1LedgerEventsResponse = LedgerAppendResponse
+
+type PostAPIV1LedgerEventsErrorResponse = APIErrorResponse
+
+type PostAPIV1LedgerEventsErrorResponseJSON = APIErrorResponse
+
+type PostAPIV1LedgerEventsErrorResponseJSON403 = APIErrorResponse
+
+type PostAPIV1LedgerEventsErrorResponseJSON404 = APIErrorResponse
+
+type PostAPIV1LedgerEventsErrorResponseJSON409 = APIErrorResponse
+
+type PostAPIV1LedgerEventsErrorResponseJSON422 = APIErrorResponse
+
+type PostAPIV1LedgerEventsErrorResponseJSON500 = APIErrorResponse
+
+type PostAPIV1LedgerEventsErrorResponseJSON501 = APIErrorResponse
+
+type PostAPIV1LedgerEventsErrorResponseJSON502 = APIErrorResponse
+
+type PostAPIV1LedgerEventsErrorResponseJSON503 = APIErrorResponse
+
+type PostAPIV1LedgerEventsErrorResponseJSON504 = APIErrorResponse
+
+type GetAPIV1LedgerStatusResponse = LedgerStatusResponse
+
+type GetAPIV1LedgerStatusErrorResponse = APIErrorResponse
+
+type GetAPIV1LedgerStatusErrorResponseJSON = APIErrorResponse
+
+type GetAPIV1LedgerStatusErrorResponseJSON403 = APIErrorResponse
+
+type GetAPIV1LedgerStatusErrorResponseJSON404 = APIErrorResponse
+
+type GetAPIV1LedgerStatusErrorResponseJSON409 = APIErrorResponse
+
+type GetAPIV1LedgerStatusErrorResponseJSON422 = APIErrorResponse
+
+type GetAPIV1LedgerStatusErrorResponseJSON500 = APIErrorResponse
+
+type GetAPIV1LedgerStatusErrorResponseJSON501 = APIErrorResponse
+
+type GetAPIV1LedgerStatusErrorResponseJSON502 = APIErrorResponse
+
+type GetAPIV1LedgerStatusErrorResponseJSON503 = APIErrorResponse
+
+type GetAPIV1LedgerStatusErrorResponseJSON504 = APIErrorResponse
+
+type PostAPIV1LedgerVerifyResponse = LedgerVerifyResponse
+
+type PostAPIV1LedgerVerifyErrorResponse = APIErrorResponse
+
+type PostAPIV1LedgerVerifyErrorResponseJSON = APIErrorResponse
+
+type PostAPIV1LedgerVerifyErrorResponseJSON403 = APIErrorResponse
+
+type PostAPIV1LedgerVerifyErrorResponseJSON404 = APIErrorResponse
+
+type PostAPIV1LedgerVerifyErrorResponseJSON409 = APIErrorResponse
+
+type PostAPIV1LedgerVerifyErrorResponseJSON422 = APIErrorResponse
+
+type PostAPIV1LedgerVerifyErrorResponseJSON500 = APIErrorResponse
+
+type PostAPIV1LedgerVerifyErrorResponseJSON501 = APIErrorResponse
+
+type PostAPIV1LedgerVerifyErrorResponseJSON502 = APIErrorResponse
+
+type PostAPIV1LedgerVerifyErrorResponseJSON503 = APIErrorResponse
+
+type PostAPIV1LedgerVerifyErrorResponseJSON504 = APIErrorResponse
+
 type GetAPIV1MachinesResponse = MachinesResponse
 
 type GetAPIV1MachinesErrorResponse = APIErrorResponse
@@ -17377,6 +18577,78 @@ type GetAPIV1EmbeddingsStatusResp struct {
 	JSON502      *GetAPIV1EmbeddingsStatusErrorResponseJSON502
 	JSON503      *GetAPIV1EmbeddingsStatusErrorResponseJSON503
 	JSON504      *GetAPIV1EmbeddingsStatusErrorResponseJSON504
+}
+
+type GetAPIV1LedgerEventsResp struct {
+	HTTPResponse *http.Response
+	Body         []byte
+	StatusCode   int
+	JSON200      *GetAPIV1LedgerEventsResponse
+	JSON400      *GetAPIV1LedgerEventsErrorResponse
+	JSON401      *GetAPIV1LedgerEventsErrorResponseJSON
+	JSON403      *GetAPIV1LedgerEventsErrorResponseJSON403
+	JSON404      *GetAPIV1LedgerEventsErrorResponseJSON404
+	JSON409      *GetAPIV1LedgerEventsErrorResponseJSON409
+	JSON422      *GetAPIV1LedgerEventsErrorResponseJSON422
+	JSON500      *GetAPIV1LedgerEventsErrorResponseJSON500
+	JSON501      *GetAPIV1LedgerEventsErrorResponseJSON501
+	JSON502      *GetAPIV1LedgerEventsErrorResponseJSON502
+	JSON503      *GetAPIV1LedgerEventsErrorResponseJSON503
+	JSON504      *GetAPIV1LedgerEventsErrorResponseJSON504
+}
+
+type PostAPIV1LedgerEventsResp struct {
+	HTTPResponse *http.Response
+	Body         []byte
+	StatusCode   int
+	JSON200      *PostAPIV1LedgerEventsResponse
+	JSON400      *PostAPIV1LedgerEventsErrorResponse
+	JSON401      *PostAPIV1LedgerEventsErrorResponseJSON
+	JSON403      *PostAPIV1LedgerEventsErrorResponseJSON403
+	JSON404      *PostAPIV1LedgerEventsErrorResponseJSON404
+	JSON409      *PostAPIV1LedgerEventsErrorResponseJSON409
+	JSON422      *PostAPIV1LedgerEventsErrorResponseJSON422
+	JSON500      *PostAPIV1LedgerEventsErrorResponseJSON500
+	JSON501      *PostAPIV1LedgerEventsErrorResponseJSON501
+	JSON502      *PostAPIV1LedgerEventsErrorResponseJSON502
+	JSON503      *PostAPIV1LedgerEventsErrorResponseJSON503
+	JSON504      *PostAPIV1LedgerEventsErrorResponseJSON504
+}
+
+type GetAPIV1LedgerStatusResp struct {
+	HTTPResponse *http.Response
+	Body         []byte
+	StatusCode   int
+	JSON200      *GetAPIV1LedgerStatusResponse
+	JSON400      *GetAPIV1LedgerStatusErrorResponse
+	JSON401      *GetAPIV1LedgerStatusErrorResponseJSON
+	JSON403      *GetAPIV1LedgerStatusErrorResponseJSON403
+	JSON404      *GetAPIV1LedgerStatusErrorResponseJSON404
+	JSON409      *GetAPIV1LedgerStatusErrorResponseJSON409
+	JSON422      *GetAPIV1LedgerStatusErrorResponseJSON422
+	JSON500      *GetAPIV1LedgerStatusErrorResponseJSON500
+	JSON501      *GetAPIV1LedgerStatusErrorResponseJSON501
+	JSON502      *GetAPIV1LedgerStatusErrorResponseJSON502
+	JSON503      *GetAPIV1LedgerStatusErrorResponseJSON503
+	JSON504      *GetAPIV1LedgerStatusErrorResponseJSON504
+}
+
+type PostAPIV1LedgerVerifyResp struct {
+	HTTPResponse *http.Response
+	Body         []byte
+	StatusCode   int
+	JSON200      *PostAPIV1LedgerVerifyResponse
+	JSON400      *PostAPIV1LedgerVerifyErrorResponse
+	JSON401      *PostAPIV1LedgerVerifyErrorResponseJSON
+	JSON403      *PostAPIV1LedgerVerifyErrorResponseJSON403
+	JSON404      *PostAPIV1LedgerVerifyErrorResponseJSON404
+	JSON409      *PostAPIV1LedgerVerifyErrorResponseJSON409
+	JSON422      *PostAPIV1LedgerVerifyErrorResponseJSON422
+	JSON500      *PostAPIV1LedgerVerifyErrorResponseJSON500
+	JSON501      *PostAPIV1LedgerVerifyErrorResponseJSON501
+	JSON502      *PostAPIV1LedgerVerifyErrorResponseJSON502
+	JSON503      *PostAPIV1LedgerVerifyErrorResponseJSON503
+	JSON504      *PostAPIV1LedgerVerifyErrorResponseJSON504
 }
 
 type GetAPIV1MachinesResp struct {
@@ -19586,6 +20858,296 @@ type FillStats struct {
 	Stale     int64 `json:"Stale"`
 }
 
+type LedgerAppendEvent struct {
+	ActorRef      *string `json:"actor_ref,omitempty"`
+	CausationID   *string `json:"causation_id,omitempty"`
+	CorrelationID *string `json:"correlation_id,omitempty"`
+
+	// EventClass Event class, e.g. state-change
+	EventClass string    `json:"event_class" validate:"required"`
+	ObjectRef  *string   `json:"object_ref,omitempty"`
+	Payload    *struct{} `json:"payload,omitempty"`
+
+	// PayloadTier metadata-only, structured or confidential; default structured with a payload, else metadata-only
+	PayloadTier *string `json:"payload_tier,omitempty"`
+
+	// Timestamp Defaults to now
+	Timestamp *time.Time `json:"timestamp,omitempty"`
+}
+
+func (l LedgerAppendEvent) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(l))
+}
+
+type LedgerAppendRequest struct {
+	Events []LedgerAppendEvent `json:"events" validate:"required"`
+
+	// Zone Default: [ledger] default_zone
+	Zone *string `json:"zone,omitempty"`
+}
+
+func (l LedgerAppendRequest) Validate() error {
+	var errors runtime.ValidationErrors
+	for i, item := range l.Events {
+		if v, ok := any(item).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append(fmt.Sprintf("Events[%d]", i), err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
+
+type LedgerAppendResponse struct {
+	Checksum  int32    `json:"checksum" validate:"gte=0"`
+	EventIds  []string `json:"event_ids" validate:"required"`
+	Source    string   `json:"source" validate:"required"`
+	SourceSeq int64    `json:"source_seq" validate:"gte=0"`
+	Zone      string   `json:"zone" validate:"required"`
+}
+
+func (l LedgerAppendResponse) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(l))
+}
+
+type LedgerEventView struct {
+	ActorRef      *string  `json:"actor_ref,omitempty" validate:"required"`
+	CausationID   *string  `json:"causation_id,omitempty" validate:"required"`
+	CorrelationID *string  `json:"correlation_id,omitempty" validate:"required"`
+	EventClass    string   `json:"event_class" validate:"required"`
+	EventID       string   `json:"event_id" validate:"required"`
+	ObjectRef     *string  `json:"object_ref,omitempty" validate:"required"`
+	Payload       struct{} `json:"payload"`
+	PayloadTier   string   `json:"payload_tier" validate:"required"`
+	Serde         string   `json:"serde" validate:"required"`
+	Source        string   `json:"source" validate:"required"`
+	SourceSeq     int64    `json:"source_seq" validate:"gte=0"`
+	Subsystem     string   `json:"subsystem" validate:"required"`
+	Summary       string   `json:"summary" validate:"required"`
+	Timestamp     string   `json:"timestamp" validate:"required"`
+	Zone          string   `json:"zone" validate:"required"`
+}
+
+func (l LedgerEventView) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(l))
+}
+
+type LedgerQueryResponse struct {
+	Results []LedgerZoneEventsView `json:"results" validate:"required"`
+	Since   string                 `json:"since" validate:"required"`
+}
+
+func (l LedgerQueryResponse) Validate() error {
+	var errors runtime.ValidationErrors
+	for i, item := range l.Results {
+		if v, ok := any(item).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append(fmt.Sprintf("Results[%d]", i), err)
+			}
+		}
+	}
+	if err := typesValidator.Var(l.Since, "required"); err != nil {
+		errors = errors.Append("Since", err)
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
+
+type LedgerStatusResponse struct {
+	Enabled bool                     `json:"enabled"`
+	Zones   []LedgerstatusZoneReport `json:"zones" validate:"required"`
+}
+
+func (l LedgerStatusResponse) Validate() error {
+	var errors runtime.ValidationErrors
+	for i, item := range l.Zones {
+		if v, ok := any(item).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append(fmt.Sprintf("Zones[%d]", i), err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
+
+type LedgerVerifyRequest struct {
+	// Full Re-verify every segment and reset the checkpoints
+	Full *bool `json:"full,omitempty"`
+
+	// Zone Only this zone
+	Zone *string `json:"zone,omitempty"`
+}
+
+type LedgerVerifyResponse struct {
+	Zones []LedgerVerifyZone `json:"zones" validate:"required"`
+}
+
+func (l LedgerVerifyResponse) Validate() error {
+	var errors runtime.ValidationErrors
+	for i, item := range l.Zones {
+		if v, ok := any(item).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append(fmt.Sprintf("Zones[%d]", i), err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
+
+type LedgerVerifyZone struct {
+	Failures      [][]string `json:"failures" validate:"required"`
+	NewlyVerified int64      `json:"newly_verified"`
+	Skipped       int64      `json:"skipped"`
+	Zone          string     `json:"zone" validate:"required"`
+}
+
+func (l LedgerVerifyZone) Validate() error {
+	var errors runtime.ValidationErrors
+	for i, item := range l.Failures {
+		if v, ok := any(item).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append(fmt.Sprintf("Failures[%d]", i), err)
+			}
+		}
+	}
+	if err := typesValidator.Var(l.Zone, "required"); err != nil {
+		errors = errors.Append("Zone", err)
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
+
+type LedgerZoneEventsView struct {
+	Events []LedgerEventView `json:"events" validate:"required"`
+	Zone   string            `json:"zone" validate:"required"`
+}
+
+func (l LedgerZoneEventsView) Validate() error {
+	var errors runtime.ValidationErrors
+	for i, item := range l.Events {
+		if v, ok := any(item).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append(fmt.Sprintf("Events[%d]", i), err)
+			}
+		}
+	}
+	if err := typesValidator.Var(l.Zone, "required"); err != nil {
+		errors = errors.Append("Zone", err)
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
+
+type LedgerstatusImportReport struct {
+	Path      string   `json:"path" validate:"required"`
+	Report    struct{} `json:"report"`
+	UpdatedAt string   `json:"updated_at" validate:"required"`
+}
+
+func (l LedgerstatusImportReport) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(l))
+}
+
+type LedgerstatusPushReport struct {
+	At        string     `json:"at" validate:"required"`
+	Failures  [][]string `json:"failures" validate:"required"`
+	HeldBack  int64      `json:"held_back"`
+	Identical int64      `json:"identical"`
+	Pushed    int64      `json:"pushed"`
+	Target    string     `json:"target" validate:"required"`
+}
+
+func (l LedgerstatusPushReport) Validate() error {
+	var errors runtime.ValidationErrors
+	if err := typesValidator.Var(l.At, "required"); err != nil {
+		errors = errors.Append("At", err)
+	}
+	for i, item := range l.Failures {
+		if v, ok := any(item).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append(fmt.Sprintf("Failures[%d]", i), err)
+			}
+		}
+	}
+	if err := typesValidator.Var(l.Target, "required"); err != nil {
+		errors = errors.Append("Target", err)
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
+
+type LedgerstatusZoneReport struct {
+	Events   int64                      `json:"events"`
+	Failures [][]string                 `json:"failures" validate:"required"`
+	Gaps     [][]string                 `json:"gaps" validate:"required"`
+	Imports  []LedgerstatusImportReport `json:"imports" validate:"required"`
+	Push     []LedgerstatusPushReport   `json:"push" validate:"required"`
+	Segments int64                      `json:"segments"`
+	Sources  map[string]int64           `json:"sources"`
+	Zone     string                     `json:"zone" validate:"required"`
+}
+
+func (l LedgerstatusZoneReport) Validate() error {
+	var errors runtime.ValidationErrors
+	for i, item := range l.Failures {
+		if v, ok := any(item).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append(fmt.Sprintf("Failures[%d]", i), err)
+			}
+		}
+	}
+	for i, item := range l.Gaps {
+		if v, ok := any(item).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append(fmt.Sprintf("Gaps[%d]", i), err)
+			}
+		}
+	}
+	for i, item := range l.Imports {
+		if v, ok := any(item).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append(fmt.Sprintf("Imports[%d]", i), err)
+			}
+		}
+	}
+	for i, item := range l.Push {
+		if v, ok := any(item).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append(fmt.Sprintf("Push[%d]", i), err)
+			}
+		}
+	}
+	for k, v := range l.Sources {
+		if err := typesValidator.Var(v, "omitempty,gte=0"); err != nil {
+			errors = errors.Append(fmt.Sprintf("Sources[%s]", k), err)
+		}
+	}
+	if err := typesValidator.Var(l.Zone, "required"); err != nil {
+		errors = errors.Append("Zone", err)
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
+
 type MachinesResponse struct {
 	MachineAliases map[string]string `json:"machine_aliases"`
 	MachineLabels  map[string]string `json:"machine_labels"`
@@ -20609,6 +22171,7 @@ type VersionInfo struct {
 	Commit                     string `json:"commit" validate:"required"`
 	DataVersion                int64  `json:"data_version"`
 	InsightGenerationAvailable bool   `json:"insight_generation_available"`
+	LedgerAvailable            bool   `json:"ledger_available"`
 	ReadOnly                   *bool  `json:"read_only,omitempty"`
 	Version                    string `json:"version" validate:"required"`
 }
