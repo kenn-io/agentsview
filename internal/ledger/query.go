@@ -11,10 +11,12 @@ import (
 )
 
 // Query selects events. Storage filters in SQL (D20): Since, Class and
-// Subsystems are applied before Limit, unlike jilog's newest-5xlimit
+// Until, Subsystems are applied before Limit, unlike jilog's newest-5xlimit
 // window (query.rs:210).
 type Query struct {
-	Since      time.Time
+	Since time.Time
+	// Until, when non-zero, keeps events strictly before it.
+	Until      time.Time
 	Subsystems []string
 	Class      *EventClass
 	Zone       string // "" = every stored zone (callers order via SortZoneEvents, PR 15)

@@ -52,6 +52,10 @@ func (db *DB) queryLedgerZone(ctx context.Context, zone string, q ledger.Query, 
 		where.WriteString(" AND timestamp >= ?")
 		args = append(args, ledger.StorageTimestamp(q.Since))
 	}
+	if !q.Until.IsZero() {
+		where.WriteString(" AND timestamp < ?")
+		args = append(args, ledger.StorageTimestamp(q.Until))
+	}
 	if q.Class != nil {
 		where.WriteString(" AND event_class = ?")
 		args = append(args, string(*q.Class))

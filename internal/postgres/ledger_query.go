@@ -47,6 +47,9 @@ func (s *Store) queryLedgerZone(ctx context.Context, zone string, q ledger.Query
 	if !q.Since.IsZero() {
 		where.WriteString(" AND timestamp >= " + arg(q.Since.UTC()))
 	}
+	if !q.Until.IsZero() {
+		where.WriteString(" AND timestamp < " + arg(q.Until.UTC()))
+	}
 	if q.Class != nil {
 		where.WriteString(" AND event_class = " + arg(string(*q.Class)))
 	}
