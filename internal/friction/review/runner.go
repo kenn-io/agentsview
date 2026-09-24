@@ -135,7 +135,7 @@ func signalFromFinding(f db.FrictionFinding, s db.FrictionSubject) friction.Sign
 func patternUpdates(date string, sigs []friction.Signal, skip map[string]bool) []db.FrictionPatternUpdate {
 	type key struct{ fp, subject string }
 	idx := map[key]int{}
-	var out []db.FrictionPatternUpdate
+	out := []db.FrictionPatternUpdate{}
 	for _, s := range sigs {
 		if skip[s.SubjectID] {
 			continue
@@ -356,6 +356,8 @@ func (r *Runner) BuildDate(ctx context.Context, date string, opts BuildOptions) 
 	}
 	if existing != nil {
 		revision = existing.Revision + 1
+	}
+	if prior != nil {
 		for _, s := range prior.Signals {
 			if s.SubjectKind == friction.SubjectDiagnostic {
 				counted[s.SubjectID] = true
