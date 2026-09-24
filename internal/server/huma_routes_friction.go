@@ -51,6 +51,7 @@ type frictionFindingsInput struct {
 	Kind        string `query:"kind" doc:"correction, error, workaround, deferral, pattern, frustration or interruption"`
 	SessionID   string `query:"session_id" doc:"Session ID"`
 	Fingerprint string `query:"fingerprint" doc:"Pattern fingerprint (fl1:<sha256>)"`
+	Persona     string `query:"persona" doc:"Only rows from sessions whose NanoClaw persona equals this value (display form)"`
 	Limit       int    `query:"limit" doc:"Page size, 1-1000 (default 100)"`
 	Cursor      string `query:"cursor" doc:"Cursor from next_cursor"`
 }
@@ -59,6 +60,7 @@ type frictionPatternsInput struct {
 	Kind      string `query:"kind" doc:"correction, error, workaround, deferral, pattern, frustration or interruption"`
 	LinkState string `query:"link_state" doc:"linked, unlinked, pending, failed, needs_human or abandoned"`
 	Since     string `query:"since" doc:"Only patterns last seen on or after this date (YYYY-MM-DD)"`
+	Persona   string `query:"persona" doc:"Only rows from sessions whose NanoClaw persona equals this value (display form)"`
 	Limit     int    `query:"limit" doc:"Page size, 1-1000 (default 100)"`
 	Cursor    string `query:"cursor" doc:"Cursor from next_cursor"`
 }
@@ -445,7 +447,7 @@ func (s *Server) humaListFrictionFindings(
 	}
 	rows, next, err := s.db.ListFrictionFindings(ctx, db.FrictionFindingFilter{
 		Date: in.Date, Kind: in.Kind, SessionID: in.SessionID,
-		Fingerprint: in.Fingerprint, Limit: in.Limit, Cursor: in.Cursor,
+		Fingerprint: in.Fingerprint, Persona: in.Persona, Limit: in.Limit, Cursor: in.Cursor,
 	})
 	if err != nil {
 		return nil, frictionStoreError("list friction findings", err)
@@ -481,7 +483,7 @@ func (s *Server) humaListFrictionPatterns(
 		return nil, err
 	}
 	rows, next, err := s.db.ListFrictionPatterns(ctx, db.FrictionPatternFilter{
-		Kind: in.Kind, LinkState: in.LinkState, Since: in.Since,
+		Kind: in.Kind, LinkState: in.LinkState, Since: in.Since, Persona: in.Persona,
 		Limit: in.Limit, Cursor: in.Cursor,
 	})
 	if err != nil {

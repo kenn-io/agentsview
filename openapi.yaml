@@ -13029,6 +13029,13 @@ paths:
           schema:
             description: Pattern fingerprint (fl1:<sha256>)
             type: string
+        - description: Only rows from sessions whose NanoClaw persona equals this value (display form)
+          explode: false
+          in: query
+          name: persona
+          schema:
+            description: Only rows from sessions whose NanoClaw persona equals this value (display form)
+            type: string
         - description: Page size, 1-1000 (default 100)
           explode: false
           in: query
@@ -13144,6 +13151,13 @@ paths:
           name: since
           schema:
             description: Only patterns last seen on or after this date (YYYY-MM-DD)
+            type: string
+        - description: Only rows from sessions whose NanoClaw persona equals this value (display form)
+          explode: false
+          in: query
+          name: persona
+          schema:
+            description: Only rows from sessions whose NanoClaw persona equals this value (display form)
             type: string
         - description: Page size, 1-1000 (default 100)
           explode: false

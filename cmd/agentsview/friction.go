@@ -193,6 +193,7 @@ func newFrictionFindingsCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&f.Date, "date", "", "Only sessions in this digest date (YYYY-MM-DD)")
 	cmd.Flags().StringVar(&f.Kind, "kind", "", "correction, error, workaround, deferral, pattern, frustration or interruption")
+	cmd.Flags().StringVar(&f.Persona, "persona", "", "Only rows from sessions with this NanoClaw persona")
 	cmd.Flags().StringVar(&f.SessionID, "session", "", "Session ID")
 	cmd.Flags().IntVar(&f.Limit, "limit", 0, "Page size (default 100, max 1000)")
 	cmd.Flags().StringVar(&f.Cursor, "cursor", "", "Cursor from a previous page")
@@ -237,6 +238,7 @@ func newFrictionPatternsCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&f.Kind, "kind", "", "correction, error, workaround, deferral, pattern, frustration or interruption")
+	cmd.Flags().StringVar(&f.Persona, "persona", "", "Only rows from sessions with this NanoClaw persona")
 	cmd.Flags().StringVar(&f.Since, "since", "", "Only patterns last seen on or after this date (YYYY-MM-DD)")
 	cmd.Flags().BoolVar(&linked, "linked", false, "Only patterns linked to a Kata issue")
 	cmd.Flags().BoolVar(&unlinked, "unlinked", false, "Only patterns without a Kata issue")

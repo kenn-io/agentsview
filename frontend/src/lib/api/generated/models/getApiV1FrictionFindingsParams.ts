@@ -20,6 +20,10 @@ export type GetApiV1FrictionFindingsParams = {
    */
   fingerprint?: string;
   /**
+   * Only rows from sessions whose NanoClaw persona equals this value (display form)
+   */
+  persona?: string;
+  /**
    * Page size, 1-1000 (default 100)
    */
   limit?: number;

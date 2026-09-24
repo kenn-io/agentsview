@@ -225,8 +225,10 @@ func TestFrictionFindingsAndPatternsLocal(t *testing.T) {
 	}{
 		{"findings_table", []string{"friction", "findings", "--date", "2026-09-14"}, []string{"SESSION", "claude:s1", "error", "[friction/error] Bash: boom"}},
 		{"findings_kind_filter_empty", []string{"friction", "findings", "--kind", "deferral"}, []string{"(no friction findings)"}},
+		{"findings_persona_filter_empty", []string{"friction", "findings", "--persona", "helper"}, []string{"(no friction findings)"}},
 		{"patterns_table", []string{"friction", "patterns"}, []string{"COUNT", "fl1:x", "2026-09-14"}},
 		{"patterns_linked_empty", []string{"friction", "patterns", "--linked"}, []string{"(no friction patterns)"}},
+		{"patterns_persona_filter_empty", []string{"friction", "patterns", "--persona", "helper"}, []string{"(no friction patterns)"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

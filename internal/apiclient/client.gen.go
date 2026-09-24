@@ -16812,6 +16812,9 @@ type GetAPIV1FrictionFindingsQuery struct {
 	// Fingerprint Pattern fingerprint (fl1:<sha256>)
 	Fingerprint *string `json:"fingerprint,omitempty"`
 
+	// Persona Only rows from sessions whose NanoClaw persona equals this value (display form)
+	Persona *string `json:"persona,omitempty"`
+
 	// Limit Page size, 1-1000 (default 100)
 	Limit *int64 `json:"limit,omitempty"`
 
@@ -16828,6 +16831,9 @@ type GetAPIV1FrictionPatternsQuery struct {
 
 	// Since Only patterns last seen on or after this date (YYYY-MM-DD)
 	Since *string `json:"since,omitempty"`
+
+	// Persona Only rows from sessions whose NanoClaw persona equals this value (display form)
+	Persona *string `json:"persona,omitempty"`
 
 	// Limit Page size, 1-1000 (default 100)
 	Limit *int64 `json:"limit,omitempty"`

@@ -40,6 +40,10 @@ func (s *Store) ListFrictionFindings(
 	if f.Fingerprint != "" {
 		preds = append(preds, "ff.fingerprint = "+pb.add(f.Fingerprint))
 	}
+	if f.Persona != "" {
+		preds = append(preds, `EXISTS (SELECT 1 FROM friction_session_dims d
+			WHERE d.session_id = ff.session_id AND d.persona = `+pb.add(f.Persona)+`)`)
+	}
 	limitParam := pb.add(limit + 1)
 	offsetParam := pb.add(offset)
 	rows, err := s.pg.QueryContext(ctx, `
@@ -142,6 +146,11 @@ func (s *Store) ListFrictionPatterns(
 	}
 	if f.Since != "" {
 		preds = append(preds, "last_seen_date >= "+pb.add(f.Since))
+	}
+	if f.Persona != "" {
+		preds = append(preds, `EXISTS (SELECT 1 FROM friction_findings pf
+			JOIN friction_session_dims d ON d.session_id = pf.session_id
+			WHERE pf.fingerprint = friction_patterns.fingerprint AND d.persona = `+pb.add(f.Persona)+`)`)
 	}
 	where := ""
 	if len(preds) > 0 {

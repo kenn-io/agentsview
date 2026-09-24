@@ -354,7 +354,7 @@ func (b frictionDaemonBackend) Findings(ctx context.Context, f db.FrictionFindin
 	for _, p := range []struct {
 		dst **string
 		v   string
-	}{{&q.Date, f.Date}, {&q.Kind, f.Kind}, {&q.SessionID, f.SessionID}, {&q.Fingerprint, f.Fingerprint}, {&q.Cursor, f.Cursor}} {
+	}{{&q.Date, f.Date}, {&q.Kind, f.Kind}, {&q.SessionID, f.SessionID}, {&q.Fingerprint, f.Fingerprint}, {&q.Persona, f.Persona}, {&q.Cursor, f.Cursor}} {
 		if p.v != "" {
 			*p.dst = new(p.v)
 		}
@@ -385,7 +385,7 @@ func (b frictionDaemonBackend) Patterns(ctx context.Context, f db.FrictionPatter
 	for _, p := range []struct {
 		dst **string
 		v   string
-	}{{&q.Kind, f.Kind}, {&q.LinkState, f.LinkState}, {&q.Since, f.Since}, {&q.Cursor, f.Cursor}} {
+	}{{&q.Kind, f.Kind}, {&q.LinkState, f.LinkState}, {&q.Since, f.Since}, {&q.Persona, f.Persona}, {&q.Cursor, f.Cursor}} {
 		if p.v != "" {
 			*p.dst = new(p.v)
 		}

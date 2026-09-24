@@ -42,6 +42,7 @@ type FrictionFindingFilter struct {
 	Kind        string
 	SessionID   string
 	Fingerprint string
+	Persona     string
 	Limit       int
 	Cursor      string
 }
@@ -52,6 +53,7 @@ type FrictionPatternFilter struct {
 	Kind      string
 	LinkState string
 	Since     string
+	Persona   string
 	Limit     int
 	Cursor    string
 }
@@ -129,6 +131,10 @@ func (db *DB) ListFrictionFindings(
 	}
 	if f.Fingerprint != "" {
 		add("ff.fingerprint = ?", f.Fingerprint)
+	}
+	if f.Persona != "" {
+		add(`EXISTS (SELECT 1 FROM friction_session_dims d
+			WHERE d.session_id = ff.session_id AND d.persona = ?)`, f.Persona)
 	}
 	query := `
 		SELECT ff.session_id, ff.kind, ff.detector, ff.message_ordinal,
@@ -246,6 +252,12 @@ func (db *DB) ListFrictionPatterns(
 	if f.Since != "" {
 		preds = append(preds, "last_seen_date >= ?")
 		args = append(args, f.Since)
+	}
+	if f.Persona != "" {
+		preds = append(preds, `EXISTS (SELECT 1 FROM friction_findings pf
+			JOIN friction_session_dims d ON d.session_id = pf.session_id
+			WHERE pf.fingerprint = friction_patterns.fingerprint AND d.persona = ?)`)
+		args = append(args, f.Persona)
 	}
 	where := ""
 	if len(preds) > 0 {
