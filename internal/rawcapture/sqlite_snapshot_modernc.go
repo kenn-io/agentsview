@@ -100,8 +100,8 @@ func sqliteOnlineBackup(
 }
 
 func sqliteModerncBackupBusy(err error) bool {
-	var sqliteErr *sqlite.Error
-	if !errors.As(err, &sqliteErr) {
+	sqliteErr, ok := errors.AsType[*sqlite.Error](err)
+	if !ok {
 		return false
 	}
 	code := sqliteErr.Code() & 0xff

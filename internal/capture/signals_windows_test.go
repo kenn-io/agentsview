@@ -33,7 +33,7 @@ func captureHelperWaitForSignal(mode, marker string) {
 		os.Exit(0)
 	}
 	for {
-		time.Sleep(time.Hour)
+		select {}
 	}
 }
 
@@ -73,7 +73,7 @@ func TestForwardSignalsRecordsInterruptAfterSuccessfulChild(t *testing.T) {
 	if os.Getenv("AGENTSVIEW_CAPTURE_WINDOWS_EXIT_ZERO") == "1" {
 		os.Exit(0)
 	}
-	cmd := exec.Command(os.Args[0],
+	cmd := exec.CommandContext(t.Context(), os.Args[0],
 		"-test.run=^TestForwardSignalsRecordsInterruptAfterSuccessfulChild$")
 	cmd.Env = append(os.Environ(), "AGENTSVIEW_CAPTURE_WINDOWS_EXIT_ZERO=1")
 	require.NoError(t, cmd.Start())
@@ -91,7 +91,7 @@ func TestForwardSignalsStopsBlockingChild(t *testing.T) {
 	root := t.TempDir()
 	marker := filepath.Join(t.TempDir(), "child-started")
 	producer := copyCaptureHelper(t, "claude")
-	cmd := exec.Command(producer, "-p", "prompt")
+	cmd := exec.CommandContext(t.Context(), producer, "-p", "prompt")
 	cmd.Env = append(
 		helperEnvironment(root, "claude-ignore-signal", 0),
 		"AGENTSVIEW_CAPTURE_TEST_SIGNAL_MARKER="+marker,

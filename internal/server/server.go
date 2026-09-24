@@ -189,6 +189,7 @@ type Server struct {
 	rawSyncStatus          RawSyncStatusReader
 	rawSyncSchemaOnly      bool
 	rawSyncUploads         RawSyncUploads
+	rawSyncJobHealth       RawSyncJobHealth
 
 	ensurePricing func(context.Context, *db.DB) error
 }
@@ -360,6 +361,15 @@ type RawSyncUploads interface {
 	) (rawsync.UploadSession, error)
 }
 
+// RawSyncJobHealth exposes read-only tenant-scoped raw parse-job health.
+type RawSyncJobHealth interface {
+	RawJobHealth(
+		context.Context,
+		rawsync.AuthIdentity,
+		rawsync.JobHealthQuery,
+	) (rawsync.JobHealthReport, error)
+}
+
 // WithRawSyncServices enables authenticated raw-sync machine routes.
 func WithRawSyncServices(auth RawSyncDeviceAuth, custody RawSyncCustody) Option {
 	return func(s *Server) {
@@ -379,6 +389,13 @@ func WithRawSyncUploads(uploads RawSyncUploads) Option {
 func WithRawSyncStatus(status RawSyncStatusReader) Option {
 	return func(s *Server) {
 		s.rawSyncStatus = status
+	}
+}
+
+// WithRawSyncJobHealth enables the scoped raw parse-job health read.
+func WithRawSyncJobHealth(health RawSyncJobHealth) Option {
+	return func(s *Server) {
+		s.rawSyncJobHealth = health
 	}
 }
 

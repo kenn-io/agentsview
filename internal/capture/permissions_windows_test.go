@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -98,12 +99,17 @@ func TestWindowsParentSecurityAllowsInheritOnlyWrites(t *testing.T) {
 func TestWindowsCaptureDirectoryAllowsSplitTrustedEntries(t *testing.T) {
 	allowed, err := captureDirectorySIDs()
 	require.NoError(t, err)
-	sddl := "D:P"
+	var sddl strings.Builder
+	sddl.WriteString("D:P")
 	for _, sid := range allowed {
-		sddl += "(A;OICI;GA;;;" + sid.String() + ")"
+		sddl.WriteString("(A;OICI;GA;;;")
+		sddl.WriteString(sid.String())
+		sddl.WriteByte(')')
 	}
-	sddl += "(A;CI;GA;;;" + allowed[0].String() + ")"
-	descriptor, err := windows.SecurityDescriptorFromString(sddl)
+	sddl.WriteString("(A;CI;GA;;;")
+	sddl.WriteString(allowed[0].String())
+	sddl.WriteByte(')')
+	descriptor, err := windows.SecurityDescriptorFromString(sddl.String())
 	require.NoError(t, err)
 
 	err = verifyCaptureDirectorySecurity(descriptor, allowed)
@@ -114,11 +120,14 @@ func TestWindowsCaptureDirectoryAllowsSplitTrustedEntries(t *testing.T) {
 func TestWindowsCaptureDirectoryAllowsMappedFullAccess(t *testing.T) {
 	allowed, err := captureDirectorySIDs()
 	require.NoError(t, err)
-	sddl := "D:P"
+	var sddl strings.Builder
+	sddl.WriteString("D:P")
 	for _, sid := range allowed {
-		sddl += "(A;OICI;FA;;;" + sid.String() + ")"
+		sddl.WriteString("(A;OICI;FA;;;")
+		sddl.WriteString(sid.String())
+		sddl.WriteByte(')')
 	}
-	descriptor, err := windows.SecurityDescriptorFromString(sddl)
+	descriptor, err := windows.SecurityDescriptorFromString(sddl.String())
 	require.NoError(t, err)
 
 	err = verifyCaptureDirectorySecurity(descriptor, allowed)
@@ -191,11 +200,14 @@ func TestClaudeProviderRootAllowsExistingSafeUnprotectedDACL(t *testing.T) {
 func TestWindowsCaptureDirectoryRequiresInheritableTrustedAccess(t *testing.T) {
 	allowed, err := captureDirectorySIDs()
 	require.NoError(t, err)
-	sddl := "D:P"
+	var sddl strings.Builder
+	sddl.WriteString("D:P")
 	for _, sid := range allowed {
-		sddl += "(A;;GA;;;" + sid.String() + ")"
+		sddl.WriteString("(A;;GA;;;")
+		sddl.WriteString(sid.String())
+		sddl.WriteByte(')')
 	}
-	descriptor, err := windows.SecurityDescriptorFromString(sddl)
+	descriptor, err := windows.SecurityDescriptorFromString(sddl.String())
 	require.NoError(t, err)
 
 	err = verifyCaptureDirectorySecurity(descriptor, allowed)
@@ -206,11 +218,14 @@ func TestWindowsCaptureDirectoryRequiresInheritableTrustedAccess(t *testing.T) {
 func TestWindowsClaudeProviderRootAllowsInheritedTrustedAccess(t *testing.T) {
 	allowed, err := captureDirectorySIDs()
 	require.NoError(t, err)
-	sddl := "D:AI"
+	var sddl strings.Builder
+	sddl.WriteString("D:AI")
 	for _, sid := range allowed {
-		sddl += "(A;OICIID;GA;;;" + sid.String() + ")"
+		sddl.WriteString("(A;OICIID;GA;;;")
+		sddl.WriteString(sid.String())
+		sddl.WriteByte(')')
 	}
-	descriptor, err := windows.SecurityDescriptorFromString(sddl)
+	descriptor, err := windows.SecurityDescriptorFromString(sddl.String())
 	require.NoError(t, err)
 
 	err = verifyClaudeProviderRootSecurity(descriptor, allowed)
