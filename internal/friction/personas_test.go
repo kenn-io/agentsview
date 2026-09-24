@@ -88,7 +88,7 @@ func TestPersonaCountsFold(t *testing.T) {
 
 		priced := &PersonaCounts{Sessions: 1}
 		priced.AddSignals(nil)
-		priced.AddUsage(SessionUsage{SubjectID: "sess-priced", InputTokens: 800, OutputTokens: 40, CostUSD: usdPtr(mustUSD(t, "1.5"))})
+		priced.AddUsage(SessionUsage{SubjectID: "sess-priced", InputTokens: 800, OutputTokens: 40, CostUSD: new(mustUSD(t, "1.5"))})
 		require.NotNil(t, priced.CostUSD)
 		assert.Equal(t, "1.5", priced.CostUSD.String())
 		assert.Equal(t, 1, priced.Sessions)
@@ -104,18 +104,23 @@ func TestPersonaCountsFold(t *testing.T) {
 	t.Run("add_signals_counts_each_kind", func(t *testing.T) {
 		c := &PersonaCounts{}
 		c.AddSignals([]Signal{
-			{Kind: KindCorrection}, {Kind: KindCorrection}, {Kind: KindError},
-			{Kind: KindWorkaround}, {Kind: KindDeferral}, {Kind: KindPattern},
+			{Kind: KindCorrection},
+			{Kind: KindCorrection},
+			{Kind: KindError},
+			{Kind: KindWorkaround},
+			{Kind: KindDeferral},
+			{Kind: KindPattern},
 			// D36: persona counts stay jilog's five kinds.
-			{Kind: KindFrustration}, {Kind: KindInterruption},
+			{Kind: KindFrustration},
+			{Kind: KindInterruption},
 		})
 		assert.Equal(t, PersonaCounts{Corrections: 2, Errors: 1, Workarounds: 1, Deferrals: 1, Patterns: 1}, *c)
 		assert.Equal(t, 6, c.signalTotal())
 	})
 	t.Run("cost_sums_across_sessions", func(t *testing.T) {
 		c := &PersonaCounts{}
-		c.AddUsage(SessionUsage{CostUSD: usdPtr(mustUSD(t, "0.25"))})
-		c.AddUsage(SessionUsage{CostUSD: usdPtr(mustUSD(t, "0.25"))})
+		c.AddUsage(SessionUsage{CostUSD: new(mustUSD(t, "0.25"))})
+		c.AddUsage(SessionUsage{CostUSD: new(mustUSD(t, "0.25"))})
 		require.NotNil(t, c.CostUSD)
 		assert.Equal(t, "0.50", c.CostUSD.String())
 	})

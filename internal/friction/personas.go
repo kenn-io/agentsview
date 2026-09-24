@@ -12,7 +12,7 @@ type PersonaKey struct{ Persona, Channel string }
 // PersonaCounts is one persona's rollup (jilog PersonaCounts,
 // digest.rs:81-121). Tokens always; CostUSD only when a session carried
 // a cost (jilog#2hwm).
-type PersonaCounts struct {
+type PersonaCounts struct { //nolint:recvcheck // Mutating fold methods need pointers; read-only helpers keep value semantics.
 	Sessions, Corrections, Errors, Workarounds, Deferrals, Patterns int
 	InputTokens, OutputTokens                                       uint64
 	CostUSD                                                         *USD

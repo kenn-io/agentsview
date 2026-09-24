@@ -53,11 +53,11 @@ func goldenDigestFixture(t *testing.T) (DigestSnapshot, RenderLinks) {
 		Personas: map[PersonaKey]*PersonaCounts{
 			{"helper", "general"}: {
 				Sessions: 2, Corrections: 1,
-				InputTokens: 5000, OutputTokens: 250, CostUSD: usdPtr(d("0.5")),
+				InputTokens: 5000, OutputTokens: 250, CostUSD: new(d("0.5")),
 			},
 		},
 		Spend: &SpendSummary{
-			Total: usdPtr(d("4.2")), SessionsWithStats: 3, SessionsWithCost: 2,
+			Total: new(d("4.2")), SessionsWithStats: 3, SessionsWithCost: 2,
 			InputTokens: 1000, OutputTokens: 50,
 			RoleCosts:  map[string]USD{"(root)": d("1.2"), "explore": d("3")},
 			ModelCosts: map[string]USD{"claude-opus-5": d("4.2")},

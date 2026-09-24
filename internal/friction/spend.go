@@ -149,7 +149,7 @@ func sortedKeys[V any](m map[string]V) []string {
 
 // PeriodSpend is archive spend over one day or the trailing week.
 // Days counts rows present.
-type PeriodSpend struct {
+type PeriodSpend struct { //nolint:recvcheck // add mutates; ranking methods use the planned value-receiver API.
 	Total          USD
 	Days           int
 	Agents, Models map[string]USD

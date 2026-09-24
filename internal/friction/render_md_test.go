@@ -16,7 +16,7 @@ func snap(date string, sigs ...Signal) DigestSnapshot {
 
 func lineWith(t *testing.T, body, needle string) string {
 	t.Helper()
-	for _, l := range strings.Split(body, "\n") {
+	for l := range strings.SplitSeq(body, "\n") {
 		if strings.Contains(l, needle) {
 			return l
 		}
@@ -107,7 +107,7 @@ func TestRenderMarkdown(t *testing.T) {
 	t.Run("digest_spend_section_renders_totals_roles_models", func(t *testing.T) {
 		s := snap("2026-07-05")
 		s.Spend = &SpendSummary{
-			Total:             usdPtr(mustUSD(t, "4.2")),
+			Total:             new(mustUSD(t, "4.2")),
 			SessionsWithStats: 3, SessionsWithCost: 2,
 			InputTokens: 12345, OutputTokens: 678,
 			RoleCosts:  map[string]USD{"(root)": mustUSD(t, "3.1"), "explore": mustUSD(t, "1.1")},
@@ -156,7 +156,7 @@ func TestRenderMarkdown(t *testing.T) {
 		s := snap("2026-08-26")
 		s.Personas = map[PersonaKey]*PersonaCounts{
 			{"helper", "ops"}:   {Sessions: 1, Corrections: 1, InputTokens: 12000, OutputTokens: 300},
-			{"reviewer", ""}:    {Sessions: 1, InputTokens: 800, OutputTokens: 40, CostUSD: usdPtr(mustUSD(t, "1.5"))},
+			{"reviewer", ""}:    {Sessions: 1, InputTokens: 800, OutputTokens: 40, CostUSD: new(mustUSD(t, "1.5"))},
 			{"quiet", "lounge"}: {Sessions: 2},
 		}
 		body := render(s, RenderLinks{})
@@ -303,7 +303,7 @@ func TestRenderIsDeterministic(t *testing.T) {
 		s.Personas[PersonaKey{p, "ch"}] = &PersonaCounts{Sessions: 1}
 	}
 	s.Spend = &SpendSummary{
-		Total: usdPtr(mustUSD(t, "5")), SessionsWithStats: 5, SessionsWithCost: 5,
+		Total: new(mustUSD(t, "5")), SessionsWithStats: 5, SessionsWithCost: 5,
 		RoleCosts:  map[string]USD{"(root)": mustUSD(t, "1"), "subagent": mustUSD(t, "2"), "b": mustUSD(t, "2")},
 		ModelCosts: map[string]USD{"m1": mustUSD(t, "1"), "m2": mustUSD(t, "1"), "m3": mustUSD(t, "3")},
 	}

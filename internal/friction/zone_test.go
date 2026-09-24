@@ -33,14 +33,22 @@ func TestResolveZone(t *testing.T) {
 		{name: "blank_env_falls_through", env: "   ", cfg: "Asia/Dhaka", want: "Asia/Dhaka"},
 		{name: "blank_config_is_unset", cfg: "  ", want: "Europe/Paris"},
 		{name: "utc_is_a_zone", cfg: "UTC", want: "UTC"},
-		{name: "env_typo_is_an_error", env: "Asia/Tokio", cfg: "Asia/Dhaka",
-			errContain: []string{"AGENTSVIEW_FRICTION_TZ", `"Asia/Tokio"`, "is not an IANA zone"}},
-		{name: "config_typo_is_an_error", cfg: "Asia/Dhakka",
-			errContain: []string{`[friction] timezone "Asia/Dhakka" is not an IANA zone`}},
-		{name: "local_is_not_an_iana_zone", cfg: "Local",
-			errContain: []string{`[friction] timezone "Local" is not an IANA zone`}},
-		{name: "posix_rule_is_not_a_zone", env: "JST-9",
-			errContain: []string{"AGENTSVIEW_FRICTION_TZ", `"JST-9"`}},
+		{
+			name: "env_typo_is_an_error", env: "Asia/Tokio", cfg: "Asia/Dhaka",
+			errContain: []string{"AGENTSVIEW_FRICTION_TZ", `"Asia/Tokio"`, "is not an IANA zone"},
+		},
+		{
+			name: "config_typo_is_an_error", cfg: "Asia/Dhakka",
+			errContain: []string{`[friction] timezone "Asia/Dhakka" is not an IANA zone`},
+		},
+		{
+			name: "local_is_not_an_iana_zone", cfg: "Local",
+			errContain: []string{`[friction] timezone "Local" is not an IANA zone`},
+		},
+		{
+			name: "posix_rule_is_not_a_zone", env: "JST-9",
+			errContain: []string{"AGENTSVIEW_FRICTION_TZ", `"JST-9"`},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

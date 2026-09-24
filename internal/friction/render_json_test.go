@@ -108,7 +108,7 @@ func TestRenderSummaryJSON(t *testing.T) {
 	t.Run("spend_object_uses_decimal_strings", func(t *testing.T) {
 		s, m := digestReportFixture(t)
 		s.Spend = &SpendSummary{
-			Total: usdPtr(mustUSD(t, "4.2")), SessionsWithStats: 3, SessionsWithCost: 2,
+			Total: new(mustUSD(t, "4.2")), SessionsWithStats: 3, SessionsWithCost: 2,
 			InputTokens: 1000, OutputTokens: 50,
 			RoleCosts:  map[string]USD{"(root)": mustUSD(t, "1.2")},
 			ModelCosts: map[string]USD{"claude-opus-5": mustUSD(t, "4.2")},
@@ -180,7 +180,7 @@ func TestHumanSummary(t *testing.T) {
 				Signals:         []Signal{{Kind: KindCorrection}, {Kind: KindPattern}},
 				P0Alerts:        map[string][]string{"bash": {"a", "b", "c"}},
 				SessionsScanned: 3,
-				Spend:           &SpendSummary{Total: usdPtr(mustUSD(t, "4.2")), SessionsWithStats: 3, SessionsWithCost: 2},
+				Spend:           &SpendSummary{Total: new(mustUSD(t, "4.2")), SessionsWithStats: 3, SessionsWithCost: 2},
 			},
 			meta: SummaryMeta{DigestPath: &path},
 			want: "1 corrections, 0 errors, 0 workarounds, 0 deferrals, 1 patterns, 1 P0 alert(s), 3 session(s) scanned\n" +

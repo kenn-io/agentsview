@@ -7,8 +7,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func usdPtr(u USD) *USD { return &u }
-
 // Ports digest.rs accumulate_stats (:1169-1203) through the fold-level
 // assertions of run_review_annotates_recurring_signal_with_session_cost,
 // run_review_no_recurrence_annotation_for_new_signals and
@@ -29,7 +27,7 @@ func TestSpendSummaryAccumulate(t *testing.T) {
 			usage: []SessionUsage{{
 				SubjectID: "sess-r_explore", Role: "explore",
 				InputTokens: 100, OutputTokens: 10,
-				CostUSD: usdPtr(mustUSD(t, "4.2")),
+				CostUSD: new(mustUSD(t, "4.2")),
 			}},
 			total: "4.2", withStats: 1, withCost: 1, in: 100, out: 10,
 			roles: map[string]string{"explore": "4.2"},
@@ -38,7 +36,7 @@ func TestSpendSummaryAccumulate(t *testing.T) {
 			name: "run_review_no_recurrence_annotation_for_new_signals",
 			usage: []SessionUsage{{
 				SubjectID: "sess-n", InputTokens: 1, OutputTokens: 1,
-				CostUSD: usdPtr(mustUSD(t, "1.0")),
+				CostUSD: new(mustUSD(t, "1.0")),
 			}},
 			total: "1.0", withStats: 1, withCost: 1, in: 1, out: 1,
 			roles: map[string]string{"(root)": "1.0"},
@@ -53,10 +51,14 @@ func TestSpendSummaryAccumulate(t *testing.T) {
 		{
 			name: "sums_keep_the_max_scale_and_model_costs_fold",
 			usage: []SessionUsage{
-				{SubjectID: "a", Role: RootRole, CostUSD: usdPtr(mustUSD(t, "1.2")),
-					ModelCosts: map[string]USD{"claude-opus-5": mustUSD(t, "1.2")}},
-				{SubjectID: "b", Role: "subagent", CostUSD: usdPtr(mustUSD(t, "3")),
-					ModelCosts: map[string]USD{"claude-opus-5": mustUSD(t, "3")}},
+				{
+					SubjectID: "a", Role: RootRole, CostUSD: new(mustUSD(t, "1.2")),
+					ModelCosts: map[string]USD{"claude-opus-5": mustUSD(t, "1.2")},
+				},
+				{
+					SubjectID: "b", Role: "subagent", CostUSD: new(mustUSD(t, "3")),
+					ModelCosts: map[string]USD{"claude-opus-5": mustUSD(t, "3")},
+				},
 			},
 			total: "4.2", withStats: 2, withCost: 2,
 			roles:  map[string]string{"(root)": "1.2", "subagent": "3"},
@@ -229,10 +231,13 @@ func TestFormatUSDRenderContract(t *testing.T) {
 // (:269-330), minus usage-daily JSON parsing replaced by the native rollup query.
 func archiveRows() []DailySpend {
 	return []DailySpend{
-		{Date: "2026-09-14", Total: USDFromMicros(1_500_000),
+		{
+			Date: "2026-09-14", Total: USDFromMicros(1_500_000),
 			Agents: map[string]USD{"codex": USDFromMicros(1_500_000)},
-			Models: map[string]USD{"gpt-5.6-sol": USDFromMicros(1_500_000)}},
-		{Date: "2026-09-15", Total: USDFromMicros(332_138_392),
+			Models: map[string]USD{"gpt-5.6-sol": USDFromMicros(1_500_000)},
+		},
+		{
+			Date: "2026-09-15", Total: USDFromMicros(332_138_392),
 			Agents: map[string]USD{
 				"codex": USDFromMicros(224_554_060), "claude": USDFromMicros(104_943_456),
 				"cowork": USDFromMicros(2_640_876),
@@ -240,7 +245,8 @@ func archiveRows() []DailySpend {
 			Models: map[string]USD{
 				"gpt-6-astra": USDFromMicros(125_784_488), "claude-opus-5": USDFromMicros(107_584_332),
 				"gpt-5.6-sol": USDFromMicros(98_769_572),
-			}},
+			},
+		},
 		{Date: "2026-09-16", Total: USDFromMicros(999)},
 	}
 }
