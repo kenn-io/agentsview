@@ -247,18 +247,42 @@ snapshot, reads use raw rows. When the stored price copies no longer match the
 price records, for example after the records were cleared, reads keep the
 prepared rows and price them through the per-request join.
 
-**Kept reads.** Serve keeps the results of recent reads in memory so a repeat
-request between pushes reads no rows from ClickHouse; it still runs the small
-metadata queries that check whether its inputs changed. Each kept read has one
-slot per selection (filter, range, and similar inputs), and its key names the
-rows it read: the prepared usage stamp and the parts of the small tables it
-joins, the candidate sessions and their push versions, or the parts of the
-tables it scanned. A push that changes those replaces the slot; a push that does
-not leaves it in place. Usage reads filtered by `active`, `stale`, or `unclean`
-termination compare session times with the current time, so their rows are never
-kept. Kept reads include usage rows, analytics session listings, Activity
-pairing inputs per session version, candidate listings, and the whole report of
+## Kept reads
+
+Serve keeps the results of recent reads in memory so a repeat request between
+pushes reads no rows from ClickHouse; it still runs the small metadata queries
+that check whether its inputs changed. Each kept read has one slot per selection
+(filter, range, and similar inputs), and its key names the rows it read: the
+prepared usage stamp and the parts of the small tables it joins, the candidate
+sessions and their push versions, or the parts of the tables it scanned. A push
+that changes those replaces the slot; a push that does not leaves it in place.
+Usage reads filtered by `active`, `stale`, or `unclean` termination compare
+session times with the current time, so their rows are never kept. Kept reads
+include usage rows, analytics session listings, Activity pairing inputs per
+session version, candidate listings, project label maps, and the whole report of
 an ended range.
+
+**Warmer.** A background loop checks the mirror's parts every 500 ms while
+clients are reading, and stops querying after half an hour with no client read.
+Serve starts it only after it installs custom pricing, so warmed reads use the
+operator's rates. After a change it runs again the usage and Activity reads
+clients made in the last half hour (at most 16), so the next request finds them
+ready. It prepares only what clients asked for; an ended day no one opened is
+built when first requested.
+
+**Reports on disk.** When a client opens an ended day, its report is written to
+the report cache described in
+[ClickHouse sync](../clickhouse-sync.md#agentsview-clickhouse-serve), one file
+per selection and one directory per mirror. Nothing prepares days ahead of time,
+so a day no one opens costs no disk. A file names the binary that wrote it and
+the report's key, so a new build or a change to that day's rows rebuilds it.
+Every open, whether served from memory or from the file, refreshes the file's
+modification time. At startup and about once a day the warmer removes reports no
+one has opened for 30 days, and temporary files that interrupted writes left
+more than an hour ago; there is no other size or count limit. The day selections
+clients asked for are kept beside the reports so a restart can prepare today's
+view. With no kept selections, the server starts from the default day view in
+its own timezone (`TZ` or `/etc/localtime`).
 
 ## Tradeoffs
 

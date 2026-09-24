@@ -541,6 +541,39 @@ func TestPreparedUsageReadAcrossRefreshCountsNewSessionOnce(t *testing.T) {
 	require.Equal(t, want, count(taken), "a state taken before the refresh must not add the delta to the refreshed rows")
 }
 
+// A push that stops after writing a session's messages, before it prices
+// them or writes the snapshot and session rows, must not leave that
+// session's usage read from before the push.
+func TestSessionUsageReadsMessagesOfInterruptedPush(t *testing.T) {
+	ctx := t.Context()
+	local, target := seedUsagePriceFixture(t)
+	syncer := newTestSync(t, local, target, storage.PusherOptions{})
+	store := NewStoreFromDB(syncer.conn)
+	result, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Zero(t, result.Errors)
+	_, err = store.DB().ExecContext(ctx, "SYSTEM WAIT VIEW prepare_usage")
+	require.NoError(t, err)
+	ready, err := store.preparedUsageReady(ctx)
+	require.NoError(t, err)
+	require.True(t, ready)
+	before, err := store.GetSessionUsage(ctx, usagePriceRoundID, true)
+	require.NoError(t, err)
+
+	// The rows insertDependents writes for a republished message.
+	_, err = store.DB().ExecContext(ctx, `INSERT INTO messages
+		SELECT * REPLACE (? AS token_usage, 0 AS output_tokens, push_version + 1 AS push_version)
+		FROM messages WHERE session_id = ? AND ordinal = 0`, `{"input_tokens":100}`, usagePriceRoundID)
+	require.NoError(t, err)
+
+	after, err := store.GetSessionUsage(ctx, usagePriceRoundID, true)
+	require.NoError(t, err)
+	fresh, err := NewStoreFromDB(store.DB()).GetSessionUsage(ctx, usagePriceRoundID, true)
+	require.NoError(t, err)
+	require.NotEqual(t, before, fresh, "the interrupted push must have changed the raw rows")
+	require.Equal(t, fresh, after)
+}
+
 // Session ids reach the changed-session query as an Array(String) query
 // parameter; ClickHouse must parse back exactly the ids that were sent.
 func TestChangedSessionParameterKeepsIDs(t *testing.T) {

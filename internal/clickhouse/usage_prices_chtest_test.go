@@ -482,3 +482,39 @@ func TestPushPricesCursorUsageAddedLater(t *testing.T) {
 	stats := dailyUsageGroupRowStats(t, store, db.UsageFilter{Timezone: "UTC"})
 	assert.Equal(t, 1, stats.explicit)
 }
+
+// Serve installs custom rates after it opens the store. The background
+// work it starts afterwards must price with them, even when a session
+// pushed since the last refresh makes the first prepared state load the
+// pricing catalog.
+func TestServeStoreBackgroundPricesWithCustomRates(t *testing.T) {
+	ctx := t.Context()
+	store, syncer, local := newUsagePriceStore(t)
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	for _, stmt := range []string{"SYSTEM WAIT VIEW prepare_usage", "SYSTEM STOP VIEW prepare_usage"} {
+		_, err := store.DB().ExecContext(ctx, stmt)
+		require.NoError(t, err, stmt)
+	}
+	appendMessage(t, local, usagePriceRoundID, "one more turn", "2026-01-13T06:00:00.000Z")
+	_, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+
+	opened, err := (Backend{}).OpenServeStore(ctx, storage.ReplicaTarget{
+		URL: syncer.target.URL, Schema: syncer.target.Database,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, opened.Close()) })
+	custom := map[string]config.CustomModelRate{
+		"round-test": {InputMicrodollarsPerMTok: 5_000_000},
+	}
+	opened.SetCustomPricing(custom)
+	serve, ok := opened.(*Store)
+	require.True(t, ok)
+	serve.StartBackground(ctx)
+	state, err := serve.preparedUsageState(ctx)
+	require.NoError(t, err)
+	require.NotEmpty(t, state.changed, "the startup state must price a delta")
+
+	local.SetCustomPricing(custom)
+	assertDailyUsageParity(t, local, serve)
+}

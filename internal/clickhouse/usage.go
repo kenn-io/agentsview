@@ -1653,7 +1653,7 @@ func (s *Store) forEachDailyUsageGroupRow(
 	if err != nil {
 		return err
 	}
-	memoSlot, memoVersion, err := s.usageRowMemoKey(ctx, "daily", f, "", pricingDigest, customModels)
+	memoSlot, memoVersion, err := s.usageRowMemoKey(ctx, state, "daily", f, "", pricingDigest, customModels)
 	if err != nil {
 		return err
 	}
@@ -1739,6 +1739,7 @@ func (s *Store) forEachDailyUsageGroupRow(
 	if err != nil {
 		return err
 	}
+	s.usageReadQueries.Add(1)
 	rows, err := s.queryContext(readCtx, query, args...)
 	if err != nil {
 		return fmt.Errorf("querying clickhouse daily usage aggregates: %w", err)
@@ -1852,6 +1853,13 @@ const chDailyUsageLoadAttempts = 3
 var errUsagePriceContextChanged = errors.New("usage price context changed during read")
 
 func (s *Store) GetDailyUsage(
+	ctx context.Context, f db.UsageFilter,
+) (db.DailyUsageResult, error) {
+	s.recordUsageRead("daily", f, 0)
+	return s.dailyUsage(ctx, f)
+}
+
+func (s *Store) dailyUsage(
 	ctx context.Context, f db.UsageFilter,
 ) (db.DailyUsageResult, error) {
 	snapshot, err := s.pricingSnapshot(ctx)
@@ -2225,7 +2233,7 @@ func (s *Store) forEachSessionUsageAggregateRow(
 	if err != nil {
 		return err
 	}
-	memoSlot, memoVersion, err := s.usageRowMemoKey(ctx, "session", f, sessionID, "", nil)
+	memoSlot, memoVersion, err := s.usageRowMemoKey(ctx, state, "session", f, sessionID, "", nil)
 	if err != nil {
 		return err
 	}
@@ -2255,6 +2263,7 @@ func (s *Store) forEachSessionUsageAggregateRow(
 	if err != nil {
 		return err
 	}
+	s.usageReadQueries.Add(1)
 	rows, err := s.queryContext(readCtx, query, args...)
 	if err != nil {
 		return fmt.Errorf("querying clickhouse session usage aggregates: %w", err)
@@ -2357,6 +2366,13 @@ func (s *Store) sessionUsageRows(
 func (s *Store) GetTopSessionsByCost(
 	ctx context.Context, f db.UsageFilter, limit int,
 ) ([]db.TopSessionEntry, error) {
+	s.recordUsageRead("top", f, limit)
+	return s.topSessionsByCost(ctx, f, limit)
+}
+
+func (s *Store) topSessionsByCost(
+	ctx context.Context, f db.UsageFilter, limit int,
+) ([]db.TopSessionEntry, error) {
 	rateResolver, err := s.loadPricingResolver(ctx)
 	if err != nil {
 		return nil, err
@@ -2428,11 +2444,18 @@ func (s *Store) GetTopSessionsByCost(
 func (s *Store) GetUsageSessionCounts(
 	ctx context.Context, f db.UsageFilter,
 ) (db.UsageSessionCounts, error) {
+	s.recordUsageRead("counts", f, 0)
+	return s.usageSessionCounts(ctx, f)
+}
+
+func (s *Store) usageSessionCounts(
+	ctx context.Context, f db.UsageFilter,
+) (db.UsageSessionCounts, error) {
 	state, err := s.preparedUsageState(ctx)
 	if err != nil {
 		return db.UsageSessionCounts{}, err
 	}
-	memoSlot, memoVersion, err := s.usageRowMemoKey(ctx, "counts", f, "", "", nil)
+	memoSlot, memoVersion, err := s.usageRowMemoKey(ctx, state, "counts", f, "", "", nil)
 	if err != nil {
 		return db.UsageSessionCounts{}, err
 	}
@@ -2443,6 +2466,7 @@ func (s *Store) GetUsageSessionCounts(
 		if err != nil {
 			return db.UsageSessionCounts{}, err
 		}
+		s.usageReadQueries.Add(1)
 		rows, err := s.queryContext(readCtx, source.cte+`
 			SELECT DISTINCT session_id, project, agent
 			FROM usage_localized
@@ -2479,37 +2503,25 @@ type chUsageSessionRow struct {
 }
 
 // usageRowMemoKey names a usage read's memo slot by the read's own
-// parameters and its version by the active parts of every table in the
-// mirror, so any push, merge, or refresh starts a new version.
+// parameters and its version by everything its rows depend on (see
+// usageReadFingerprint). A single session's usage is read from the raw
+// rows even when prepared rows are ready (see usageCTEFor), so its version
+// names the parts of every table: a push that fails after writing the raw
+// rows and before the snapshot changes no table a prepared read joins.
 func (s *Store) usageRowMemoKey(
-	ctx context.Context, kind string, f db.UsageFilter, sessionID, pricingDigest string,
-	customModels [][2]string,
+	ctx context.Context, state preparedUsageState, kind string, f db.UsageFilter,
+	sessionID, pricingDigest string, customModels [][2]string,
 ) (slot, version string, err error) {
-	version, err = s.partsFingerprint(ctx)
+	if sessionID != "" {
+		version, err = s.partsFingerprint(ctx)
+	} else {
+		version, err = s.usageReadFingerprint(ctx, state)
+	}
 	if err != nil {
 		return "", "", err
 	}
 	slot, err = usageRowMemoKeyFor(kind, f, sessionID, pricingDigest, customModels)
 	return slot, version, err
-}
-
-// usageRowMemoKeyFor renders the key. The filter is JSON and the custom
-// models are Go syntax, so every field and string boundary is preserved.
-// A filter that compares session times with the current time selects
-// other sessions as time passes, with no write to name the change, so its
-// key is empty and its rows are not kept.
-func usageRowMemoKeyFor(
-	kind string, f db.UsageFilter, sessionID, pricingDigest string,
-	customModels [][2]string,
-) (string, error) {
-	if chTerminationUsesTime(f.Termination) {
-		return "", nil
-	}
-	filter, err := json.Marshal(f)
-	if err != nil {
-		return "", fmt.Errorf("encoding usage filter for memo: %w", err)
-	}
-	return fmt.Sprintf("%s|%s|%s|%s|%#v", kind, filter, sessionID, pricingDigest, customModels), nil
 }
 
 // chUsageReadTables are the tables a prepared usage read touches besides
@@ -2533,6 +2545,25 @@ func (s *Store) usageReadFingerprint(ctx context.Context, state preparedUsageSta
 		return "", err
 	}
 	return fingerprint + "|" + state.stamp, nil
+}
+
+// usageRowMemoKeyFor renders the key. The filter is JSON and the custom
+// models are Go syntax, so every field and string boundary is preserved.
+// A filter that compares session times with the current time selects
+// other sessions as time passes, with no write to name the change, so its
+// key is empty and its rows are not kept.
+func usageRowMemoKeyFor(
+	kind string, f db.UsageFilter, sessionID, pricingDigest string,
+	customModels [][2]string,
+) (string, error) {
+	if chTerminationUsesTime(f.Termination) {
+		return "", nil
+	}
+	filter, err := json.Marshal(f)
+	if err != nil {
+		return "", fmt.Errorf("encoding usage filter for memo: %w", err)
+	}
+	return fmt.Sprintf("%s|%s|%s|%s|%#v", kind, filter, sessionID, pricingDigest, customModels), nil
 }
 
 // partsFingerprint identifies the active parts of every table in the

@@ -11,6 +11,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	chdriver "github.com/ClickHouse/clickhouse-go/v2"
@@ -62,8 +63,27 @@ func (s *Store) BuildActivityReportArtifacts(
 	q activity.Query,
 	onProgress activity.ProgressFunc,
 ) (activity.CandidateArtifacts, error) {
+	s.recordActivityRead(f, q)
+	return s.buildActivityReportArtifacts(ctx, f, q, onProgress)
+}
+
+func (s *Store) buildActivityReportArtifacts(
+	ctx context.Context,
+	f db.AnalyticsFilter,
+	q activity.Query,
+	onProgress activity.ProgressFunc,
+) (activity.CandidateArtifacts, error) {
 	clickReportProgress(onProgress, activity.Progress{Phase: activity.ProgressLoadingSessions})
-	ctx, err := s.withPartsSnapshot(ctx)
+	// Builds of one selection take turns: after a push, a request that
+	// arrives while the warmer rebuilds waits for it and then finds the
+	// rows in the memos, instead of both reading the same rows at once.
+	release, err := s.activityBuildTurn(ctx, fmt.Sprintf("%#v|%s|%s|%s", f, q.Timezone,
+		q.RangeStart.UTC().Format(time.RFC3339Nano), q.RangeEnd.UTC().Format(time.RFC3339Nano)))
+	if err != nil {
+		return activity.CandidateArtifacts{}, err
+	}
+	defer release()
+	ctx, err = s.withPartsSnapshot(ctx)
 	if err != nil {
 		return activity.CandidateArtifacts{}, err
 	}
@@ -73,12 +93,19 @@ func (s *Store) BuildActivityReportArtifacts(
 	// An ended range whose kept report was checked against these exact
 	// parts needs no further read.
 	var selection, fingerprint string
+	// Only the reports of ended days a client opens are kept on disk. Every
+	// open refreshes the file's modification time, and a sweep removes the
+	// files no client opened for activityReportUnopened.
+	onDisk := !q.Partial && activityDayPreset(q, time.Now())
 	if !q.Partial {
 		selection = activityReportSelection(f, q)
 		if fingerprint, err = s.partsFingerprint(ctx); err != nil {
 			return activity.CandidateArtifacts{}, err
 		}
-		if kept, ok := s.checkedActivityReport(selection, fingerprint); ok {
+		if kept, key, ok := s.checkedActivityReport(selection, fingerprint); ok {
+			if onDisk {
+				s.touchActivityReport(selection, key, kept)
+			}
 			clickReportProgress(onProgress, kept.done)
 			return kept.artifacts, nil
 		}
@@ -99,8 +126,18 @@ func (s *Store) BuildActivityReportArtifacts(
 		}
 		if kept, ok := s.activityReports.get(selection, memoKey); ok && memoKey != "" {
 			s.markActivityReportChecked(selection, fingerprint, memoKey)
+			if onDisk {
+				s.touchActivityReport(selection, memoKey, kept[0])
+			}
 			clickReportProgress(onProgress, kept[0].done)
 			return kept[0].artifacts, nil
+		}
+		if kept, ok := s.loadActivityReport(selection, memoKey); ok && onDisk {
+			s.activityReports.put(selection, memoKey, []activityReportEntry{kept})
+			s.markActivityReportChecked(selection, fingerprint, memoKey)
+			s.touchActivityReport(selection, memoKey, kept)
+			clickReportProgress(onProgress, kept.done)
+			return kept.artifacts, nil
 		}
 	}
 	sessions, ids, versions, err := s.activityReportSessions(ctx, candidateWhere, candidateArgs)
@@ -186,8 +223,57 @@ func (s *Store) BuildActivityReportArtifacts(
 		entry := activityReportEntry{artifacts: artifacts, done: done}
 		s.activityReports.put(selection, memoKey, []activityReportEntry{entry})
 		s.markActivityReportChecked(selection, fingerprint, memoKey)
+		if onDisk {
+			s.saveActivityReport(selection, memoKey, entry)
+		}
 	}
 	return artifacts, nil
+}
+
+// activityBuildTurns holds one turn per selection while any build of it
+// runs or waits, and drops it after the last one leaves.
+type activityBuildTurns struct {
+	mu    sync.Mutex
+	turns map[string]*activityBuildTurnEntry
+}
+
+type activityBuildTurnEntry struct {
+	turn  chan struct{}
+	users int
+}
+
+// activityBuildTurn waits for the selection's turn to build, or for ctx.
+func (s *Store) activityBuildTurn(ctx context.Context, selection string) (func(), error) {
+	b := &s.activityBuilds
+	b.mu.Lock()
+	if b.turns == nil {
+		b.turns = map[string]*activityBuildTurnEntry{}
+	}
+	entry := b.turns[selection]
+	if entry == nil {
+		entry = &activityBuildTurnEntry{turn: make(chan struct{}, 1)}
+		b.turns[selection] = entry
+	}
+	entry.users++
+	b.mu.Unlock()
+	leave := func() {
+		b.mu.Lock()
+		entry.users--
+		if entry.users == 0 {
+			delete(b.turns, selection)
+		}
+		b.mu.Unlock()
+	}
+	select {
+	case entry.turn <- struct{}{}:
+		return func() {
+			<-entry.turn
+			leave()
+		}, nil
+	case <-ctx.Done():
+		leave()
+		return nil, ctx.Err()
+	}
 }
 
 // activityReportCheck records the key an ended range's kept report was
@@ -203,16 +289,16 @@ func (s *Store) markActivityReportChecked(selection, fingerprint, key string) {
 // checkedActivityReport returns the kept report for a selection checked
 // against exactly these parts. The parts name every row the report reads,
 // so the report's key cannot have changed.
-func (s *Store) checkedActivityReport(selection, fingerprint string) (activityReportEntry, bool) {
+func (s *Store) checkedActivityReport(selection, fingerprint string) (activityReportEntry, string, bool) {
 	check, ok := s.activityChecks.get(selection, fingerprint)
 	if !ok {
-		return activityReportEntry{}, false
+		return activityReportEntry{}, "", false
 	}
 	kept, ok := s.activityReports.get(selection, check[0].key)
 	if !ok {
-		return activityReportEntry{}, false
+		return activityReportEntry{}, "", false
 	}
-	return kept[0], true
+	return kept[0], check[0].key, true
 }
 
 // endedActivityReportKey identifies everything the report of an ended
