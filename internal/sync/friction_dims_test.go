@@ -47,6 +47,11 @@ func TestNewFrictionDims(t *testing.T) {
 			true,
 		},
 		{
+			"nanoclaw_excluded_with_seat_stores_only_exclusion", resolver(nanoclaw.Filter{Exclude: []string{"reviewer"}}), seats, cell("ag-2", "s-2"),
+			db.FrictionSessionDims{DimsSource: "nanoclaw", ReviewExcluded: true},
+			true,
+		},
+		{
 			"seat_only", nil, seats, cell("ag-3", "s-3"),
 			db.FrictionSessionDims{Seat: "ag-3", DimsSource: "seat_pattern"},
 			true,

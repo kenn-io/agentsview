@@ -49,23 +49,23 @@ INSERT INTO messaging_group_agents VALUES
 // folder general, channel general), ag-2 (reviewer/reviewer, events team)
 // and ag-3 (helper, folder steering, steering committee). It returns the
 // database path.
-func WriteV2DB(t testing.TB, dataDir string) string {
-	t.Helper()
-	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+func WriteV2DB(tb testing.TB, dataDir string) string {
+	tb.Helper()
+	require.NoError(tb, os.MkdirAll(dataDir, 0o755))
 	path := filepath.Join(dataDir, "v2.db")
-	Exec(t, path, v2Schema+v2Rows)
+	Exec(tb, path, v2Schema+v2Rows)
 	return path
 }
 
 // Exec runs stmts against the SQLite database at dbPath, creating it when
 // absent. Multi-statement strings must not take args.
-func Exec(t testing.TB, dbPath, stmts string, args ...any) {
-	t.Helper()
+func Exec(tb testing.TB, dbPath, stmts string, args ...any) {
+	tb.Helper()
 	conn, err := sql.Open("sqlite3", dbPath)
-	require.NoError(t, err)
+	require.NoError(tb, err)
 	defer conn.Close()
-	_, err = conn.Exec(stmts, args...)
-	require.NoError(t, err)
+	_, err = conn.ExecContext(tb.Context(), stmts, args...)
+	require.NoError(tb, err)
 }
 
 // ProjectsRoot is the Claude root a user configures for one cell agent.
@@ -80,11 +80,11 @@ func SessionPath(dataDir, agent, session string) string {
 
 // WriteSession writes body as the agent's session transcript and returns
 // its path.
-func WriteSession(t testing.TB, dataDir, agent, session, body string) string {
-	t.Helper()
+func WriteSession(tb testing.TB, dataDir, agent, session, body string) string {
+	tb.Helper()
 	path := SessionPath(dataDir, agent, session)
-	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-	require.NoError(t, os.WriteFile(path, []byte(body), 0o644))
+	require.NoError(tb, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(tb, os.WriteFile(path, []byte(body), 0o644))
 	return path
 }
 
@@ -95,11 +95,11 @@ var CellSessions = [][2]string{
 }
 
 // WriteCell writes the v2.db and SessionBody for every CellSessions entry.
-func WriteCell(t testing.TB, dataDir string) {
-	t.Helper()
-	WriteV2DB(t, dataDir)
+func WriteCell(tb testing.TB, dataDir string) {
+	tb.Helper()
+	WriteV2DB(tb, dataDir)
 	for _, cs := range CellSessions {
-		WriteSession(t, dataDir, cs[0], cs[1], SessionBody)
+		WriteSession(tb, dataDir, cs[0], cs[1], SessionBody)
 	}
 }
 

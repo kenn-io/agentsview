@@ -39,8 +39,8 @@ func NewResolver(dataDir, dbPath string, f Filter) *Resolver {
 		dbPath = filepath.Join(clean, "v2.db")
 	}
 	dirs := []string{clean}
-	if real, err := filepath.EvalSymlinks(clean); err == nil && filepath.Clean(real) != clean {
-		dirs = append(dirs, filepath.Clean(real))
+	if resolved, err := filepath.EvalSymlinks(clean); err == nil && filepath.Clean(resolved) != clean {
+		dirs = append(dirs, filepath.Clean(resolved))
 	}
 	return &Resolver{dataDirs: dirs, dbPath: dbPath, filter: f}
 }
@@ -107,11 +107,11 @@ func (r *Resolver) agentID(filePath string) (string, bool) {
 	if !strings.Contains(filepath.ToSlash(filePath), "/v2-sessions/") {
 		return "", false
 	}
-	real, err := filepath.EvalSymlinks(filePath)
-	if err != nil || real == filePath {
+	resolved, err := filepath.EvalSymlinks(filePath)
+	if err != nil || resolved == filePath {
 		return "", false
 	}
-	return r.matchDataDirs(real)
+	return r.matchDataDirs(resolved)
 }
 
 func (r *Resolver) matchDataDirs(filePath string) (string, bool) {

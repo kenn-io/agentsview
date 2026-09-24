@@ -159,14 +159,14 @@ func TestResolverReload(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = writer.Close() })
 		writer.SetMaxOpenConns(1)
-		_, err = writer.Exec(`PRAGMA wal_autocheckpoint=0`)
+		_, err = writer.ExecContext(t.Context(), `PRAGMA wal_autocheckpoint=0`)
 		require.NoError(t, err)
 
 		r := NewResolver(data, "", Filter{})
 		persona, _, _, _ := r.Resolve(t.Context(), s1(data))
 		require.Equal(t, "helper", persona)
 		// The write lands in v2.db-wal; v2.db itself is not checkpointed.
-		_, err = writer.Exec(`UPDATE agent_groups SET name = 'assistant' WHERE id = 'ag-1'`)
+		_, err = writer.ExecContext(t.Context(), `UPDATE agent_groups SET name = 'assistant' WHERE id = 'ag-1'`)
 		require.NoError(t, err)
 		persona, _, _, _ = r.Resolve(t.Context(), s1(data))
 		assert.Equal(t, "assistant", persona)
@@ -197,16 +197,16 @@ func TestResolverReload(t *testing.T) {
 }
 
 func TestResolverSymlinkedDataDir(t *testing.T) {
-	real := t.TempDir()
-	nanoclawtest.WriteCell(t, real)
+	dataDir := t.TempDir()
+	nanoclawtest.WriteCell(t, dataDir)
 	link := filepath.Join(t.TempDir(), "cell")
-	if err := os.Symlink(real, link); err != nil {
+	if err := os.Symlink(dataDir, link); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	resolvedReal, err := filepath.EvalSymlinks(real)
+	resolvedReal, err := filepath.EvalSymlinks(dataDir)
 	require.NoError(t, err)
 	r := NewResolver(link, "", Filter{})
-	for _, dir := range []string{real, resolvedReal, link} {
+	for _, dir := range []string{dataDir, resolvedReal, link} {
 		persona, _, _, ok := r.Resolve(t.Context(), nanoclawtest.SessionPath(dir, "ag-1", "s-1"))
 		assert.True(t, ok, dir)
 		assert.Equal(t, "helper", persona, dir)

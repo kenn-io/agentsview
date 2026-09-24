@@ -55,19 +55,23 @@ func TestLoadAgentMap(t *testing.T) {
 		setup func(t *testing.T, dir string) string
 	}{
 		{"missing_file", func(t *testing.T, dir string) string {
+			t.Helper()
 			return filepath.Join(dir, "v2.db")
 		}},
 		{"torn_copy", func(t *testing.T, dir string) string {
+			t.Helper()
 			path := filepath.Join(dir, "v2.db")
 			require.NoError(t, os.WriteFile(path, []byte("not a database"), 0o644))
 			return path
 		}},
 		{"schema_drift", func(t *testing.T, dir string) string {
+			t.Helper()
 			path := filepath.Join(dir, "v2.db")
 			nanoclawtest.Exec(t, path, `CREATE TABLE agent_groups (id TEXT, name TEXT, folder TEXT)`)
 			return path
 		}},
 		{"null_persona", func(t *testing.T, dir string) string {
+			t.Helper()
 			path := nanoclawtest.WriteV2DB(t, dir)
 			nanoclawtest.Exec(t, path, `
 				CREATE TABLE ag2 AS SELECT * FROM agent_groups;

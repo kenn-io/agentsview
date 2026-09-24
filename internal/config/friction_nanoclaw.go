@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -59,15 +60,11 @@ func (c FrictionNanoClawConfig) Validate() error {
 		}
 		return nil
 	}
-	for _, v := range c.Include {
-		if v == "" {
-			return errors.New("[friction.nanoclaw] include entries must be non-empty")
-		}
+	if slices.Contains(c.Include, "") {
+		return errors.New("[friction.nanoclaw] include entries must be non-empty")
 	}
-	for _, v := range c.Exclude {
-		if v == "" {
-			return errors.New("[friction.nanoclaw] exclude entries must be non-empty")
-		}
+	if slices.Contains(c.Exclude, "") {
+		return errors.New("[friction.nanoclaw] exclude entries must be non-empty")
 	}
 	return nil
 }

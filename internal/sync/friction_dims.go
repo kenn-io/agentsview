@@ -46,9 +46,11 @@ func resolveFleetDims(
 	var sources []string
 	if resolver != nil {
 		if persona, channel, excluded, ok := resolver.Resolve(ctx, filePath); ok {
+			if excluded {
+				return db.FrictionSessionDims{DimsSource: frictionDimsNanoClaw, ReviewExcluded: true}
+			}
 			d.Persona = friction.SanitizeDisplay(persona)
 			d.Channel = friction.SanitizeDisplay(channel)
-			d.ReviewExcluded = excluded
 			sources = append(sources, frictionDimsNanoClaw)
 		}
 	}

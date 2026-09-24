@@ -21,7 +21,6 @@ func TestSessionIDsUnderPath(t *testing.T) {
 		"deleted": filepath.Join(root, "ag-1", ".claude-shared", "projects", "-w", "e.jsonl"),
 	}
 	for id, p := range paths {
-		p := p
 		require.NoError(t, d.UpsertSession(ctx, Session{ID: id, Project: "p", Machine: "local", Agent: "claude", FilePath: &p}))
 	}
 	require.NoError(t, d.UpsertSession(ctx, Session{ID: "no-path", Project: "p", Machine: "local", Agent: "claude"}))
