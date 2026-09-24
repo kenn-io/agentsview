@@ -6,6 +6,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/friction/filing"
+	"go.kenn.io/agentsview/internal/friction/review"
 	"go.kenn.io/agentsview/internal/kata"
 	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/server"
@@ -50,14 +51,17 @@ func (pgReplica) serveOptions(
 	if rawSyncOption != nil {
 		opts = append(opts, rawSyncOption)
 	}
-	opts = append(opts, server.WithKataConn(kata.NewConn(kata.ConfigFrom(
-		appCfg.Kata, filing.EligibleHost(true, false),
-	))))
+	kataConn := kata.NewConn(kata.ConfigFrom(appCfg.Kata, filing.EligibleHost(true, false)))
 	frictionExcl := serialExclusive()
-	frictionRunner, waitFriction := startFrictionReview(ctx, appCfg, pgStore, frictionExcl)
+	var frictionFiler *filing.Filer
+	frictionRunner, waitFriction := startFrictionReview(ctx, appCfg, pgStore, frictionExcl, func(r *review.Runner) {
+		frictionFiler = newFrictionFiler(frictionFilerDeps{Cfg: &appCfg, Store: pgStore, Conn: kataConn, Runner: r, IsPGServe: true})
+		attachFiler(r, frictionFiler)
+	})
 	if frictionRunner != nil {
 		opts = append(opts, server.WithFriction(frictionRunner, frictionExcl))
 	}
+	opts = append(opts, server.WithKataConn(kataConn), server.WithFrictionFiler(frictionFiler))
 	closeAll := func() error {
 		waitFriction()
 		if closeRawSync != nil {

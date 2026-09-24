@@ -139,11 +139,11 @@ func (s *Store) GetSessionVersion(ctx context.Context,
 
 const maxPGInsights = 500
 
-type pgInsightRowScanner interface {
+type pgRowScanner interface {
 	Scan(...any) error
 }
 
-func scanPGInsight(rs pgInsightRowScanner) (db.Insight, error) {
+func scanPGInsight(rs pgRowScanner) (db.Insight, error) {
 	var s db.Insight
 	var project, model, prompt sql.NullString
 	var createdAt time.Time

@@ -108,6 +108,7 @@ func TestFileRequestSequences(t *testing.T) {
 			wantState: db.FrictionLinkStateLinked, wantSrc: db.FrictionLinkSourceCreated,
 			wantPaths: []string{"GET /api/v1/projects/17/issues", "POST /api/v1/projects/17/issues", "GET /api/v1/issues/01J0ABCDEF0000000000000001"},
 			check: func(t *testing.T, h *harness, link db.FrictionIssueLink) {
+				t.Helper()
 				post := h.kata.RequestsMatching(http.MethodPost, "/api/v1/projects/17/issues")[0]
 				assert.Equal(t, filing.IdempotencyKey(filing.DefaultRedact(sig.Title())), post.IdempotencyKey)
 				var body map[string]any
@@ -131,8 +132,10 @@ func TestFileRequestSequences(t *testing.T) {
 			name: "idempotency_mismatch_links_prior_uid",
 			setup: func(h *harness) {
 				prior := h.kata.AddIssue(katatest.Issue{Title: "older body", Status: "open"})
-				h.kata.Fail(http.MethodPost, "/api/v1/projects/17/issues", katatest.Fault{Status: 409, Code: "idempotency_mismatch", Message: "m",
-					Data: map[string]any{"uid": prior.UID, "short_id": prior.ShortID, "qualified_id": "agentsview#" + prior.ShortID}})
+				h.kata.Fail(http.MethodPost, "/api/v1/projects/17/issues", katatest.Fault{
+					Status: 409, Code: "idempotency_mismatch", Message: "m",
+					Data: map[string]any{"uid": prior.UID, "short_id": prior.ShortID, "qualified_id": "agentsview#" + prior.ShortID},
+				})
 			},
 			wantState: db.FrictionLinkStateLinked, wantSrc: db.FrictionLinkSourceIdempotentReuse,
 			wantPaths: []string{"GET /api/v1/projects/17/issues", "POST /api/v1/projects/17/issues", "GET /api/v1/issues/01J0ABCDEF0000000000000001"},
@@ -145,6 +148,7 @@ func TestFileRequestSequences(t *testing.T) {
 			wantState: db.FrictionLinkStateNeedsHuman,
 			wantPaths: []string{"GET /api/v1/projects/17/issues", "POST /api/v1/projects/17/issues"},
 			check: func(t *testing.T, _ *harness, link db.FrictionIssueLink) {
+				t.Helper()
 				assert.Equal(t, "idempotency_deleted", link.LastErrorCode)
 				assert.Nil(t, link.NextAttemptAt, "needs_human is never retried automatically")
 			},
@@ -152,11 +156,14 @@ func TestFileRequestSequences(t *testing.T) {
 		{
 			name: "duplicate_candidates_needs_human_with_candidates",
 			setup: func(h *harness) {
-				h.kata.Fail(http.MethodPost, "/api/v1/projects/17/issues", katatest.Fault{Status: 409, Code: "duplicate_candidates", Message: "m",
-					Data: map[string]any{"candidates": []any{map[string]any{"uid": "01J0CAND000000000000000001", "short_id": "c1", "qualified_id": "agentsview#c1", "title": "near", "score": 0.8}}}})
+				h.kata.Fail(http.MethodPost, "/api/v1/projects/17/issues", katatest.Fault{
+					Status: 409, Code: "duplicate_candidates", Message: "m",
+					Data: map[string]any{"candidates": []any{map[string]any{"uid": "01J0CAND000000000000000001", "short_id": "c1", "qualified_id": "agentsview#c1", "title": "near", "score": 0.8}}},
+				})
 			},
 			wantState: db.FrictionLinkStateNeedsHuman,
 			check: func(t *testing.T, _ *harness, link db.FrictionIssueLink) {
+				t.Helper()
 				assert.Contains(t, link.CandidatesJSON, "01J0CAND000000000000000001")
 			},
 		},
@@ -181,6 +188,7 @@ func TestFileRequestSequences(t *testing.T) {
 			},
 			wantState: db.FrictionLinkStateFailed,
 			check: func(t *testing.T, _ *harness, link db.FrictionIssueLink) {
+				t.Helper()
 				assert.Equal(t, 1, link.Attempts)
 				require.NotNil(t, link.FirstFailedAt)
 				require.NotNil(t, link.NextAttemptAt)
@@ -195,6 +203,7 @@ func TestFileRequestSequences(t *testing.T) {
 			wantState: db.FrictionLinkStateFailed,
 			wantPaths: []string{"GET /api/v1/projects/17/issues"},
 			check: func(t *testing.T, _ *harness, link db.FrictionIssueLink) {
+				t.Helper()
 				assert.Equal(t, "invalid_response", link.LastErrorCode)
 			},
 		},
@@ -207,6 +216,7 @@ func TestFileRequestSequences(t *testing.T) {
 			wantState: db.FrictionLinkStateNeedsHuman,
 			wantPaths: []string{"GET /api/v1/projects/17/issues"},
 			check: func(t *testing.T, _ *harness, link db.FrictionIssueLink) {
+				t.Helper()
 				assert.Equal(t, "multiple_matches", link.LastErrorCode)
 				assert.Contains(t, link.CandidatesJSON, "agentsview#f001")
 				assert.Contains(t, link.CandidatesJSON, "agentsview#f002")
@@ -224,6 +234,7 @@ func TestFileRequestSequences(t *testing.T) {
 			sig:       friction.Signal{Kind: friction.KindError, SubjectKind: friction.SubjectDiagnostic, SubjectID: "ci:build-17", ToolName: "ci", Text: "ci: build 17 failed"},
 			wantState: db.FrictionLinkStateLinked, wantSrc: db.FrictionLinkSourceCreated,
 			check: func(t *testing.T, h *harness, _ db.FrictionIssueLink) {
+				t.Helper()
 				var body map[string]any
 				require.NoError(t, json.Unmarshal(h.kata.RequestsMatching(http.MethodPost, "/issues")[0].Body, &body))
 				assert.Equal(t, true, body["force_new"])
@@ -415,8 +426,10 @@ func TestLinksAndSnapshotOpen(t *testing.T) {
 	open := h.kata.AddIssue(katatest.Issue{Title: "o", Status: "open"})
 	closed := h.kata.AddIssue(katatest.Issue{Title: "c", Status: "closed", ClosedReason: "done"})
 	for fp, is := range map[string]katatest.Issue{"fl1:open": open, "fl1:closed": closed} {
-		require.NoError(t, h.db.UpsertFrictionIssueLink(t.Context(), db.FrictionIssueLink{Fingerprint: fp, State: db.FrictionLinkStateLinked,
-			IssueUID: is.UID, QualifiedID: "agentsview#" + is.ShortID, WebURL: "https://kata.example.test/issues/" + is.UID, UpdatedAt: testNow}))
+		require.NoError(t, h.db.UpsertFrictionIssueLink(t.Context(), db.FrictionIssueLink{
+			Fingerprint: fp, State: db.FrictionLinkStateLinked,
+			IssueUID: is.UID, QualifiedID: "agentsview#" + is.ShortID, WebURL: "https://kata.example.test/issues/" + is.UID, UpdatedAt: testNow,
+		}))
 	}
 	require.NoError(t, h.db.UpsertFrictionIssueLink(t.Context(), db.FrictionIssueLink{Fingerprint: "fl1:pending", State: db.FrictionLinkStatePending, UpdatedAt: testNow}))
 
@@ -445,12 +458,18 @@ func TestDrain(t *testing.T) {
 		wantCreates  int
 		wantRerender []string
 	}{
-		{name: "pending_links_and_rerenders", row: db.FrictionIssueLink{Fingerprint: fp, State: db.FrictionLinkStatePending, NextAttemptAt: &recent},
-			ready: true, wantState: db.FrictionLinkStateLinked, wantCreates: 1, wantRerender: []string{"2026-09-20"}},
-		{name: "failed_past_cap_is_abandoned", row: db.FrictionIssueLink{Fingerprint: fp, State: db.FrictionLinkStateFailed, Attempts: 9, FirstFailedAt: &old, NextAttemptAt: &recent},
-			ready: true, wantState: db.FrictionLinkStateAbandoned},
-		{name: "pending_not_consumed_while_kata_unready", row: db.FrictionIssueLink{Fingerprint: fp, State: db.FrictionLinkStatePending, NextAttemptAt: &recent},
-			ready: false, wantState: db.FrictionLinkStatePending},
+		{
+			name: "pending_links_and_rerenders", row: db.FrictionIssueLink{Fingerprint: fp, State: db.FrictionLinkStatePending, NextAttemptAt: &recent},
+			ready: true, wantState: db.FrictionLinkStateLinked, wantCreates: 1, wantRerender: []string{"2026-09-20"},
+		},
+		{
+			name: "failed_past_cap_is_abandoned", row: db.FrictionIssueLink{Fingerprint: fp, State: db.FrictionLinkStateFailed, Attempts: 9, FirstFailedAt: &old, NextAttemptAt: &recent},
+			ready: true, wantState: db.FrictionLinkStateAbandoned,
+		},
+		{
+			name: "pending_not_consumed_while_kata_unready", row: db.FrictionIssueLink{Fingerprint: fp, State: db.FrictionLinkStatePending, NextAttemptAt: &recent},
+			ready: false, wantState: db.FrictionLinkStatePending,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

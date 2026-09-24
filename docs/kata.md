@@ -1,13 +1,14 @@
 ---
+last_edited: 2026-09-24
 title: Kata
 description: Connect AgentsView to a Kata issue tracker as an optional spoke
 ---
 
-AgentsView can check a connection to a [Kata](https://github.com/kenn-io/kata)
-issue tracker, either through a local daemon or an HTTPS hub. The connection is
-off by default. AgentsView does not file issues yet. Kata owns issue state;
-AgentsView will keep only the link between a Friction Log pattern and its Kata
-issue.
+AgentsView can connect to a [Kata](https://github.com/kenn-io/kata) issue
+tracker through a local daemon or an HTTPS hub. The connection is off by
+default. The AgentsView hub can file Friction Log patterns manually or during
+digest builds. Kata owns issue state; AgentsView keeps the link between a
+pattern and its issue.
 
 ## Configure
 
@@ -57,8 +58,8 @@ with `AGENTSVIEW_SERVER_TOKEN` or `--server-token-file PATH`.
 Only the AgentsView instance that holds the aggregated archive can file to
 Kata: `pg serve` on a PostgreSQL hub, or a standalone instance that does not
 push to PostgreSQL. A laptop that pushes to a hub reports `not_hub` and never
-contacts Kata, even when it shares the hub's `[kata]` config. Issue filing will
-arrive with the Friction Log Kata integration.
+contacts Kata, even when it shares the hub's `[kata]` config. See
+[Friction Log: filing to Kata](/docs/friction-log/#filing-to-kata).
 
 ## Limits
 

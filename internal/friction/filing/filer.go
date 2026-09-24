@@ -160,8 +160,7 @@ func (f *Filer) onMatch(ctx context.Context, _ friction.Signal, run RunContext, 
 }
 
 func (f *Filer) onCreateError(ctx context.Context, row db.FrictionIssueLink, run RunContext, err error) (db.FrictionIssueLink, error) {
-	var apiErr *kata.APIError
-	if errors.As(err, &apiErr) {
+	if apiErr, ok := errors.AsType[*kata.APIError](err); ok {
 		switch apiErr.Code {
 		case "idempotency_mismatch":
 			var data struct {
@@ -201,10 +200,10 @@ func codeOr(code, fallback string) string {
 }
 
 func errorCode(err error) string {
-	var apiErr *kata.APIError
-	switch {
-	case errors.As(err, &apiErr):
+	if apiErr, ok := errors.AsType[*kata.APIError](err); ok {
 		return codeOr(apiErr.Code, fmt.Sprintf("http_%d", apiErr.Status))
+	}
+	switch {
 	case errors.Is(err, kata.ErrInvalidResponse):
 		return "invalid_response"
 	case errors.Is(err, kata.ErrNotReady):

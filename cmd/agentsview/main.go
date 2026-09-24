@@ -23,6 +23,9 @@ import (
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/friction/filing"
+	"go.kenn.io/agentsview/internal/friction/review"
+	"go.kenn.io/agentsview/internal/kata"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/poller"
 	"go.kenn.io/agentsview/internal/recall/extract"
@@ -500,7 +503,12 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		frictionEngine = engine
 	}
 	frictionExcl := frictionExclusive(idleTracker, frictionEngine)
-	frictionRunner, waitFriction := startFrictionReview(ctx, cfg, database, frictionExcl)
+	kataConn := kata.NewConn(kata.ConfigFrom(cfg.Kata, filing.EligibleHost(false, cfg.HasPGPushTarget())))
+	var frictionFiler *filing.Filer
+	frictionRunner, waitFriction := startFrictionReview(ctx, cfg, database, frictionExcl, func(r *review.Runner) {
+		frictionFiler = newFrictionFiler(frictionFilerDeps{Cfg: &cfg, Store: database, Conn: kataConn, Runner: r})
+		attachFiler(r, frictionFiler)
+	})
 	defer func() {
 		stop()
 		waitFriction()
@@ -554,6 +562,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	if frictionRunner != nil {
 		srvOpts = append(srvOpts, server.WithFriction(frictionRunner, frictionExcl))
 	}
+	srvOpts = append(srvOpts, server.WithKataConn(kataConn), server.WithFrictionFiler(frictionFiler))
 	srv := server.New(cfg, database, engine, srvOpts...)
 
 	startupProgress.SetPhase("starting HTTP server")

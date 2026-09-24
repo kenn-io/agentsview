@@ -110,7 +110,8 @@ func (s *Server) humaFileFrictionPattern(ctx context.Context, in *frictionFileIn
 			metadata[key] = str
 		}
 		return &jsonOutput[FrictionFileResponse]{Body: FrictionFileResponse{Preview: &FrictionFilePreview{
-			Title: p.Title, Body: p.Body, Priority: p.Priority, Labels: p.Labels, Metadata: metadata, ForceNew: p.ForceNew}}}, nil
+			Title: p.Title, Body: p.Body, Priority: p.Priority, Labels: p.Labels, Metadata: metadata, ForceNew: p.ForceNew,
+		}}}, nil
 	}
 	if !f.Ready(ctx) {
 		return nil, s.kataUnavailable(ctx)

@@ -20,15 +20,19 @@ func TestIdempotencyKey(t *testing.T) {
 		check func(t *testing.T, key string)
 	}{
 		{name: "idempotency_key_is_deterministic", title: "[friction/correction] sess-abc: foo bar baz", check: func(t *testing.T, key string) {
+			t.Helper()
 			assert.Equal(t, key, IdempotencyKey("[friction/correction] sess-abc: foo bar baz"))
 		}},
 		{name: "idempotency_key_strips_whitespace", title: "[friction/correction] sess-abc: foo\tbar\u00a0baz\u2003qux", check: func(t *testing.T, key string) {
+			t.Helper()
 			assert.Equal(t, "[friction/correction]-sess-abc:-foo-bar-baz-qux", key)
 		}},
 		{name: "idempotency_key_clamps_length", title: strings.Repeat("x", 1000), check: func(t *testing.T, key string) {
+			t.Helper()
 			assert.Equal(t, 240, utf8.RuneCountInString(key))
 		}},
 		{name: "idempotency_key_handles_unicode", title: "[friction/error] 失敗: 茶の湯 — em-dash and 日本語 " + strings.Repeat("語", 300), check: func(t *testing.T, key string) {
+			t.Helper()
 			assert.True(t, utf8.ValidString(key))
 			assert.Equal(t, 240, utf8.RuneCountInString(key))
 		}},
@@ -44,9 +48,13 @@ func TestPriorityAndLabels(t *testing.T) {
 		kind     friction.Kind
 		priority int
 	}{
-		{friction.KindError, 3}, {friction.KindCorrection, 2}, {friction.KindPattern, 2},
-		{friction.KindWorkaround, 3}, {friction.KindDeferral, 3},
-		{friction.KindFrustration, 2}, {friction.KindInterruption, 3},
+		{friction.KindError, 3},
+		{friction.KindCorrection, 2},
+		{friction.KindPattern, 2},
+		{friction.KindWorkaround, 3},
+		{friction.KindDeferral, 3},
+		{friction.KindFrustration, 2},
+		{friction.KindInterruption, 3},
 	}
 	for _, tt := range tests {
 		t.Run("signal_priority_all_variants/"+string(tt.kind), func(t *testing.T) {
@@ -87,36 +95,56 @@ func TestBody(t *testing.T) {
 		contains []string
 		absent   []string
 	}{
-		{name: "build_body_correction_contains_context",
-			sig: friction.Signal{Kind: friction.KindCorrection, SubjectKind: friction.SubjectSession, SubjectID: "sess-abc", Text: "no, use the other cli for calendar", Ordinal: &ord},
-			run: run("2026-05-11"),
-			contains: []string{"Detected by agentsview Friction Log on 2026-05-11.\n\n## Source\n- Session: sess-abc\n- Kind: correction\n",
+		{
+			name: "build_body_correction_contains_context",
+			sig:  friction.Signal{Kind: friction.KindCorrection, SubjectKind: friction.SubjectSession, SubjectID: "sess-abc", Text: "no, use the other cli for calendar", Ordinal: &ord},
+			run:  run("2026-05-11"),
+			contains: []string{
+				"Detected by agentsview Friction Log on 2026-05-11.\n\n## Source\n- Session: sess-abc\n- Kind: correction\n",
 				"- Link: https://av.example.test/sessions/sess-abc?msg=7\n", "- Digest: https://av.example.test/friction/2026-05-11\n",
-				"\n\n## Signal\nno, use the other cli for calendar"}},
-		{name: "build_body_error_contains_tool_and_message",
-			sig: friction.Signal{Kind: friction.KindError, SubjectKind: friction.SubjectSession, SubjectID: "sess-def", ToolName: "bash", Text: "command not found: fzf"},
-			run: run("2026-05-11"), contains: []string{"Tool: bash\nMessage: command not found: fzf", "- Kind: error\n"}},
-		{name: "build_body_workaround_contains_pattern_and_context",
-			sig: friction.Signal{Kind: friction.KindWorkaround, SubjectKind: friction.SubjectSession, SubjectID: "sess-ghi", Label: "for now", Text: "temporarily using osascript"},
-			run: run("2026-05-11"), contains: []string{"Pattern: for now\nContext: temporarily using osascript", "- Kind: workaround\n"}},
-		{name: "build_body_pattern_contains_description",
-			sig: friction.Signal{Kind: friction.KindPattern, SubjectKind: friction.SubjectSession, SubjectID: "sess-jkl", Text: "always asks for confirmation before deleting"},
-			run: run("2026-05-11"), contains: []string{"## Signal\nalways asks for confirmation before deleting", "- Kind: pattern\n"}, absent: []string{"?msg="}},
-		{name: "build_body_deferral_contains_item",
-			sig: friction.Signal{Kind: friction.KindDeferral, SubjectKind: friction.SubjectSession, SubjectID: "sess-mno", Label: "set up the CI pipeline"},
-			run: run("2026-05-11"), contains: []string{"## Signal\nset up the CI pipeline", "- Kind: deferral\n"}},
-		{name: "frustration_contains_text",
-			sig: friction.Signal{Kind: friction.KindFrustration, SubjectKind: friction.SubjectSession, SubjectID: "s", Text: "this is broken again"},
-			run: run("2026-05-11"), contains: []string{"## Signal\nthis is broken again"}},
-		{name: "interruption_names_the_message",
-			sig: friction.Signal{Kind: friction.KindInterruption, SubjectKind: friction.SubjectSession, SubjectID: "s", Ordinal: &ord},
-			run: run("2026-05-11"), contains: []string{"## Signal\nUser interrupted the agent at message 7."}},
-		{name: "build_body_uses_threaded_digest_path_when_present_becomes_no_url_lines_without_public_url",
-			sig: friction.Signal{Kind: friction.KindCorrection, SubjectKind: friction.SubjectSession, SubjectID: "sess-abc", Text: "ctx", Ordinal: &ord},
-			run: RunContext{Date: "2026-08-26"}, absent: []string{"- Link:", "- Digest:", "~/.amplifier", "learning-digest"}},
-		{name: "diagnostic_has_no_session_link",
-			sig: friction.Signal{Kind: friction.KindError, SubjectKind: friction.SubjectDiagnostic, SubjectID: "ci:build-17", ToolName: "ci", Text: "ci: build 17 failed"},
-			run: run("2026-05-11"), contains: []string{"- Digest: "}, absent: []string{"- Link:"}},
+				"\n\n## Signal\nno, use the other cli for calendar",
+			},
+		},
+		{
+			name: "build_body_error_contains_tool_and_message",
+			sig:  friction.Signal{Kind: friction.KindError, SubjectKind: friction.SubjectSession, SubjectID: "sess-def", ToolName: "bash", Text: "command not found: fzf"},
+			run:  run("2026-05-11"), contains: []string{"Tool: bash\nMessage: command not found: fzf", "- Kind: error\n"},
+		},
+		{
+			name: "build_body_workaround_contains_pattern_and_context",
+			sig:  friction.Signal{Kind: friction.KindWorkaround, SubjectKind: friction.SubjectSession, SubjectID: "sess-ghi", Label: "for now", Text: "temporarily using osascript"},
+			run:  run("2026-05-11"), contains: []string{"Pattern: for now\nContext: temporarily using osascript", "- Kind: workaround\n"},
+		},
+		{
+			name: "build_body_pattern_contains_description",
+			sig:  friction.Signal{Kind: friction.KindPattern, SubjectKind: friction.SubjectSession, SubjectID: "sess-jkl", Text: "always asks for confirmation before deleting"},
+			run:  run("2026-05-11"), contains: []string{"## Signal\nalways asks for confirmation before deleting", "- Kind: pattern\n"}, absent: []string{"?msg="},
+		},
+		{
+			name: "build_body_deferral_contains_item",
+			sig:  friction.Signal{Kind: friction.KindDeferral, SubjectKind: friction.SubjectSession, SubjectID: "sess-mno", Label: "set up the CI pipeline"},
+			run:  run("2026-05-11"), contains: []string{"## Signal\nset up the CI pipeline", "- Kind: deferral\n"},
+		},
+		{
+			name: "frustration_contains_text",
+			sig:  friction.Signal{Kind: friction.KindFrustration, SubjectKind: friction.SubjectSession, SubjectID: "s", Text: "this is broken again"},
+			run:  run("2026-05-11"), contains: []string{"## Signal\nthis is broken again"},
+		},
+		{
+			name: "interruption_names_the_message",
+			sig:  friction.Signal{Kind: friction.KindInterruption, SubjectKind: friction.SubjectSession, SubjectID: "s", Ordinal: &ord},
+			run:  run("2026-05-11"), contains: []string{"## Signal\nUser interrupted the agent at message 7."},
+		},
+		{
+			name: "build_body_uses_threaded_digest_path_when_present_becomes_no_url_lines_without_public_url",
+			sig:  friction.Signal{Kind: friction.KindCorrection, SubjectKind: friction.SubjectSession, SubjectID: "sess-abc", Text: "ctx", Ordinal: &ord},
+			run:  RunContext{Date: "2026-08-26"}, absent: []string{"- Link:", "- Digest:", "~/.amplifier", "learning-digest"},
+		},
+		{
+			name: "diagnostic_has_no_session_link",
+			sig:  friction.Signal{Kind: friction.KindError, SubjectKind: friction.SubjectDiagnostic, SubjectID: "ci:build-17", ToolName: "ci", Text: "ci: build 17 failed"},
+			run:  run("2026-05-11"), contains: []string{"- Digest: "}, absent: []string{"- Link:"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -152,8 +180,10 @@ func TestBodyRedactsAndScrubsPaths(t *testing.T) {
 	macHome := strings.Join([]string{"", "Users", "example"}, "/")
 	linuxHome := strings.Join([]string{"", "home", "example"}, "/")
 	windowsHome := strings.Join([]string{"C:", "Users", "example"}, `\`)
-	sig := friction.Signal{Kind: friction.KindError, SubjectKind: friction.SubjectSession, SubjectID: "s", ToolName: "Bash",
-		Text: "export AWS_KEY=" + fixtureKey + " failed in " + macHome + "/src/app/main.go and " + linuxHome + "/.config/x and " + windowsHome + `\proj`}
+	sig := friction.Signal{
+		Kind: friction.KindError, SubjectKind: friction.SubjectSession, SubjectID: "s", ToolName: "Bash",
+		Text: "export AWS_KEY=" + fixtureKey + " failed in " + macHome + "/src/app/main.go and " + linuxHome + "/.config/x and " + windowsHome + `\proj`,
+	}
 	out := DefaultRedact(Body(sig, RunContext{Date: "2026-09-21"}))
 	assert.NotContains(t, out, fixtureKey)
 	assert.Contains(t, out, "…MPLE")

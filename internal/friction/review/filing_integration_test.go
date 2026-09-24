@@ -28,8 +28,10 @@ func seedErrorSession(t *testing.T, d *db.DB, id, ended string, sigs ...friction
 	})
 	findings := make([]db.FrictionFinding, 0, len(sigs))
 	for i, s := range sigs {
-		findings = append(findings, db.FrictionFinding{SessionID: id, Kind: string(s.Kind), Detector: s.Detector, MessageOrdinal: s.Ordinal,
-			ToolName: s.ToolName, Label: s.Label, Text: s.Text, Title: s.Title(), Fingerprint: s.Fingerprint(), Seq: i, RulesVersion: friction.RulesVersion})
+		findings = append(findings, db.FrictionFinding{
+			SessionID: id, Kind: string(s.Kind), Detector: s.Detector, MessageOrdinal: s.Ordinal,
+			ToolName: s.ToolName, Label: s.Label, Text: s.Text, Title: s.Title(), Fingerprint: s.Fingerprint(), Seq: i, RulesVersion: friction.RulesVersion,
+		})
 	}
 	require.NoError(t, d.ReplaceSessionFriction(t.Context(), id, findings, nil, friction.RulesVersion, "h-"+id))
 }
@@ -78,7 +80,7 @@ func TestBuildDateKataDownThenDrain(t *testing.T) {
 	errLink := linked[errS.Fingerprint()]
 	assert.Equal(t, db.FrictionLinkStateLinked, errLink.State)
 	assert.Contains(t, md, "(→ kata#"+strings.TrimPrefix(errLink.QualifiedID, "agentsview#")+")", "error line annotated after the drain")
-	for _, line := range strings.Split(md, "\n") {
+	for line := range strings.SplitSeq(md, "\n") {
 		if strings.Contains(line, "write the docs") {
 			assert.NotContains(t, line, "(→ kata#", "deferrals never get annotations")
 		}
@@ -96,8 +98,10 @@ func TestBuildDateFilesInlineWhenReady(t *testing.T) {
 	fake := katatest.New(t)
 	now := time.Date(2026, 9, 21, 3, 0, 0, 0, time.UTC)
 	runner := &review.Runner{Store: d, Loc: time.UTC, Now: func() time.Time { return now }, BackfillDays: 7, AutoFile: true}
-	runner.Filer = &filing.Filer{Kata: kata.NewConn(kata.Config{Enabled: true, Hub: true, Endpoint: fake.Endpoint(), Project: "agentsview"}),
-		Store: d, Now: func() time.Time { return now }, Policy: filing.Policy{Kinds: filing.DefaultKinds()}, Snapshot: runner.Snapshot, Rerender: runner.Rerender}
+	runner.Filer = &filing.Filer{
+		Kata:  kata.NewConn(kata.Config{Enabled: true, Hub: true, Endpoint: fake.Endpoint(), Project: "agentsview"}),
+		Store: d, Now: func() time.Time { return now }, Policy: filing.Policy{Kinds: filing.DefaultKinds()}, Snapshot: runner.Snapshot, Rerender: runner.Rerender,
+	}
 
 	rep, err := runner.BuildDate(t.Context(), "2026-09-20", review.BuildOptions{})
 	require.NoError(t, err)
@@ -116,8 +120,10 @@ func TestBuildDateFilesInlineWhenReady(t *testing.T) {
 
 func TestCopyFrictionStateFromCopiesLinks(t *testing.T) {
 	src := dbtest.OpenTestDB(t)
-	require.NoError(t, src.UpsertFrictionIssueLink(t.Context(), db.FrictionIssueLink{Fingerprint: "fl1:aa", State: db.FrictionLinkStateLinked,
-		IssueUID: "01J0ABCDEF0000000000000001", QualifiedID: "agentsview#f001", UpdatedAt: time.Date(2026, 9, 21, 0, 0, 0, 0, time.UTC)}))
+	require.NoError(t, src.UpsertFrictionIssueLink(t.Context(), db.FrictionIssueLink{
+		Fingerprint: "fl1:aa", State: db.FrictionLinkStateLinked,
+		IssueUID: "01J0ABCDEF0000000000000001", QualifiedID: "agentsview#f001", UpdatedAt: time.Date(2026, 9, 21, 0, 0, 0, 0, time.UTC),
+	}))
 	srcPath := src.Path()
 	dst := dbtest.OpenTestDB(t)
 	require.NoError(t, dst.CopyFrictionStateFrom(srcPath))

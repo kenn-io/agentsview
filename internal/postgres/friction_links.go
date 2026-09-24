@@ -14,8 +14,6 @@ const pgFrictionLinkCols = `fingerprint, state, kata_instance_uid, kata_project_
 	next_attempt_at, last_error_code, last_error, candidates_json,
 	last_recurrence_date, updated_at`
 
-type pgRowScanner interface{ Scan(dest ...any) error }
-
 func scanPGFrictionLink(r pgRowScanner) (db.FrictionIssueLink, error) {
 	var l db.FrictionIssueLink
 	var first, next sql.NullTime

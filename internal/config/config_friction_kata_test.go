@@ -14,13 +14,20 @@ func TestFrictionKataConfigDefaultsAndLoad(t *testing.T) {
 		data map[string]any
 		want FrictionKataConfig
 	}{
-		{name: "defaults", data: map[string]any{},
-			want: FrictionKataConfig{AutoFile: false, ReopenOnRecurrence: true, Kinds: []string{"correction", "error", "workaround", "deferral", "pattern"}}},
-		{name: "partial_keeps_defaults", data: map[string]any{"friction": map[string]any{"kata": map[string]any{"auto_file": true}}},
-			want: FrictionKataConfig{AutoFile: true, ReopenOnRecurrence: true, Kinds: []string{"correction", "error", "workaround", "deferral", "pattern"}}},
-		{name: "all_keys", data: map[string]any{"friction": map[string]any{"kata": map[string]any{
-			"auto_file": true, "reopen_on_recurrence": false, "kinds": []string{"error", "frustration", "interruption"}}}},
-			want: FrictionKataConfig{AutoFile: true, ReopenOnRecurrence: false, Kinds: []string{"error", "frustration", "interruption"}}},
+		{
+			name: "defaults", data: map[string]any{},
+			want: FrictionKataConfig{AutoFile: false, ReopenOnRecurrence: true, Kinds: []string{"correction", "error", "workaround", "deferral", "pattern"}},
+		},
+		{
+			name: "partial_keeps_defaults", data: map[string]any{"friction": map[string]any{"kata": map[string]any{"auto_file": true}}},
+			want: FrictionKataConfig{AutoFile: true, ReopenOnRecurrence: true, Kinds: []string{"correction", "error", "workaround", "deferral", "pattern"}},
+		},
+		{
+			name: "all_keys", data: map[string]any{"friction": map[string]any{"kata": map[string]any{
+				"auto_file": true, "reopen_on_recurrence": false, "kinds": []string{"error", "frustration", "interruption"},
+			}}},
+			want: FrictionKataConfig{AutoFile: true, ReopenOnRecurrence: false, Kinds: []string{"error", "frustration", "interruption"}},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

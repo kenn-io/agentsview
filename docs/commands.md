@@ -1587,6 +1587,9 @@ agentsview friction run [--date YYYY-MM-DD] [--rebuild] [--dry-run] [--format hu
 agentsview friction digest [--date D | --from D --to D] [--format md|json | --json]
 agentsview friction findings [--date D] [--kind K] [--session ID] [--format table|json | --json]
 agentsview friction patterns [--kind K] [--since D] [--linked | --unlinked] [--format table|json | --json]
+agentsview friction file (<fingerprint> | --date D) [--force-new] [--dry-run]
+agentsview friction link <fingerprint> <kata-ref>
+agentsview friction unlink <fingerprint>
 ```
 
 `friction run` without flags builds every complete local day that has no digest
@@ -1596,11 +1599,17 @@ day with `--json`, and exits non-zero only when the review fails.
 `friction digest` prints the latest digest unless `--date` or a range is given;
 `--format json` prints the counts-only summary object, byte-identical whether it
 comes from the daemon or the local archive. `--linked` and `--unlinked` filter
-patterns by issue linkage. Issue filing arrives in a later update, so currently
-no pattern is linked. `--kind` accepts `correction`, `error`, `workaround`,
+patterns by issue linkage. `--kind` accepts `correction`, `error`, `workaround`,
 `deferral`, `pattern`, `frustration` and `interruption`.
 
-Commands use the running daemon (starting one when needed) or, with
+`friction file` files one pattern or every unique pattern in a stored digest.
+`--dry-run` previews the create request; `--force-new` skips the metadata
+lookup. `friction link` records a local link to an existing Kata issue, and
+`friction unlink` removes that local link without changing the Kata issue.
+These three commands work only through the running hub daemon or an explicit
+`--server URL`; they never write directly to a local archive.
+
+The read and run commands use the running daemon (starting one when needed) or, with
 `AGENTSVIEW_NO_DAEMON=1`, read and write the local archive directly. An explicit
 `--server <url>` targets a running server; provide its token with
 `AGENTSVIEW_SERVER_TOKEN` or `--server-token-file <path>`. `friction run`

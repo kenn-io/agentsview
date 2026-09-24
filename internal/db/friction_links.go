@@ -121,29 +121,36 @@ func (db *DB) GetFrictionIssueLinks(ctx context.Context, fingerprints []string) 
 	out := make(map[string]FrictionIssueLink, len(fingerprints))
 	for start := 0; start < len(fingerprints); start += 500 {
 		chunk := fingerprints[start:min(start+500, len(fingerprints))]
-		rows, err := db.getReader().QueryContext(ctx,
-			"SELECT "+frictionLinkCols+" FROM friction_issue_links WHERE fingerprint IN ("+placeholders(len(chunk))+")",
-			stringArgs(chunk)...)
-		if err != nil {
-			return nil, fmt.Errorf("querying friction issue links: %w", err)
-		}
-		for rows.Next() {
-			l, err := scanFrictionLink(rows)
-			if err != nil {
-				rows.Close()
-				return nil, fmt.Errorf("scanning friction issue link: %w", err)
-			}
-			out[l.Fingerprint] = l
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return nil, fmt.Errorf("reading friction issue links: %w", err)
-		}
-		if err := rows.Close(); err != nil {
+		if err := db.appendFrictionIssueLinks(ctx, chunk, out); err != nil {
 			return nil, err
 		}
 	}
 	return out, nil
+}
+
+func (db *DB) appendFrictionIssueLinks(ctx context.Context, chunk []string, out map[string]FrictionIssueLink) (err error) {
+	rows, err := db.getReader().QueryContext(ctx,
+		"SELECT "+frictionLinkCols+" FROM friction_issue_links WHERE fingerprint IN ("+placeholders(len(chunk))+")",
+		stringArgs(chunk)...)
+	if err != nil {
+		return fmt.Errorf("querying friction issue links: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); err == nil && closeErr != nil {
+			err = closeErr
+		}
+	}()
+	for rows.Next() {
+		l, scanErr := scanFrictionLink(rows)
+		if scanErr != nil {
+			return fmt.Errorf("scanning friction issue link: %w", scanErr)
+		}
+		out[l.Fingerprint] = l
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("reading friction issue links: %w", err)
+	}
+	return nil
 }
 
 // UpsertFrictionIssueLink replaces the row for l.Fingerprint.

@@ -100,6 +100,7 @@ func (s *Store) ListFrictionPatterns(
 func (s *Store) GetFrictionIssueLinks(_ context.Context, _ []string) (map[string]db.FrictionIssueLink, error) {
 	return map[string]db.FrictionIssueLink{}, nil
 }
+
 func (s *Store) UpsertFrictionIssueLink(_ context.Context, _ db.FrictionIssueLink) error {
 	return db.ErrReadOnly
 }
@@ -107,6 +108,7 @@ func (s *Store) DeleteFrictionIssueLink(_ context.Context, _ string) error { ret
 func (s *Store) DueFrictionFilings(_ context.Context, _ time.Time, _ int) ([]db.FrictionIssueLink, error) {
 	return []db.FrictionIssueLink{}, nil
 }
+
 func (s *Store) DigestDatesForFingerprints(_ context.Context, _ []string) ([]string, error) {
 	return []string{}, nil
 }

@@ -29,10 +29,12 @@ func frictionFilingEnv(t *testing.T, hub bool) (*testEnv, *katatest.Server, fric
 	opts := []server.Option{server.WithKataConn(conn)}
 	var te *testEnv
 	if hub {
-		f := &filing.Filer{Kata: conn, Now: time.Now, Policy: filing.Policy{Kinds: filing.DefaultKinds()},
+		f := &filing.Filer{
+			Kata: conn, Now: time.Now, Policy: filing.Policy{Kinds: filing.DefaultKinds()},
 			Snapshot: func(context.Context, string) (friction.DigestSnapshot, error) {
 				return friction.DigestSnapshot{Date: "2026-09-20", Signals: []friction.Signal{sig}}, nil
-			}}
+			},
+		}
 		opts = append(opts, server.WithFrictionFiler(f))
 		te = setupWithServerOpts(t, opts)
 		f.Store = fixedDates{LinkStore: te.db, dates: []string{"2026-09-20"}}
@@ -74,15 +76,18 @@ func TestFrictionFileRoute(t *testing.T) {
 		check      func(t *testing.T, fake *katatest.Server, resp map[string]any)
 	}{
 		{name: "files", hub: true, body: `{}`, wantStatus: 200, check: func(t *testing.T, fake *katatest.Server, resp map[string]any) {
+			t.Helper()
 			assert.Equal(t, "linked", resp["link"].(map[string]any)["state"])
 			assert.Len(t, fake.RequestsMatching(http.MethodPost, "/api/v1/projects/17/issues"), 1)
 		}},
 		{name: "dry_run_previews_without_kata_writes", hub: true, body: `{"dry_run":true}`, wantStatus: 200, check: func(t *testing.T, fake *katatest.Server, resp map[string]any) {
+			t.Helper()
 			preview := resp["preview"].(map[string]any)
 			assert.Contains(t, preview["title"], "[friction/error] Bash: boom")
 			assert.Empty(t, fake.RequestsMatching(http.MethodPost, "/issues"))
 		}},
 		{name: "pusher_not_hub", hub: false, body: `{}`, wantStatus: 503, wantCode: "kata_unavailable", wantState: "not_hub", check: func(t *testing.T, fake *katatest.Server, _ map[string]any) {
+			t.Helper()
 			assert.Empty(t, fake.Requests(), "a pusher never contacts Kata")
 		}},
 	}

@@ -89,7 +89,8 @@ func fileOne(ctx context.Context, w io.Writer, api *apiclient.Client, fp string,
 		body.DryRun = new(true)
 	}
 	resp, err := api.PostAPIV1FrictionPatternsFingerprintFileWithResponse(ctx, &apiclient.PostAPIV1FrictionPatternsFingerprintFileRequestOptions{
-		PathParams: &apiclient.PostAPIV1FrictionPatternsFingerprintFilePath{Fingerprint: fp}, Body: &body})
+		PathParams: &apiclient.PostAPIV1FrictionPatternsFingerprintFilePath{Fingerprint: fp}, Body: &body,
+	})
 	if resp == nil {
 		return err
 	}
@@ -115,7 +116,8 @@ func fileOne(ctx context.Context, w io.Writer, api *apiclient.Client, fp string,
 
 func digestFingerprints(ctx context.Context, api *apiclient.Client, date string) ([]string, error) {
 	resp, err := api.GetAPIV1FrictionDigestsDateWithResponse(ctx, &apiclient.GetAPIV1FrictionDigestsDateRequestOptions{
-		PathParams: &apiclient.GetAPIV1FrictionDigestsDatePath{Date: date}})
+		PathParams: &apiclient.GetAPIV1FrictionDigestsDatePath{Date: date},
+	})
 	if resp == nil {
 		return nil, err
 	}
@@ -146,7 +148,8 @@ func newFrictionLinkCommand() *cobra.Command {
 			}
 			resp, err := api.PutAPIV1FrictionPatternsFingerprintLinkWithResponse(cmd.Context(), &apiclient.PutAPIV1FrictionPatternsFingerprintLinkRequestOptions{
 				PathParams: &apiclient.PutAPIV1FrictionPatternsFingerprintLinkPath{Fingerprint: args[0]},
-				Body:       &apiclient.FrictionLinkRequest{IssueRef: args[1]}})
+				Body:       &apiclient.FrictionLinkRequest{IssueRef: args[1]},
+			})
 			if resp == nil {
 				return err
 			}
@@ -171,7 +174,8 @@ func newFrictionUnlinkCommand() *cobra.Command {
 				return err
 			}
 			resp, err := api.DeleteAPIV1FrictionPatternsFingerprintLinkWithResponse(cmd.Context(), &apiclient.DeleteAPIV1FrictionPatternsFingerprintLinkRequestOptions{
-				PathParams: &apiclient.DeleteAPIV1FrictionPatternsFingerprintLinkPath{Fingerprint: args[0]}})
+				PathParams: &apiclient.DeleteAPIV1FrictionPatternsFingerprintLinkPath{Fingerprint: args[0]},
+			})
 			if resp == nil {
 				return err
 			}

@@ -36,27 +36,41 @@ func TestFrictionFilingCommands(t *testing.T) {
 		wantOut  string
 		wantErr  string
 	}{
-		{name: "file", args: []string{"friction", "file", "fl1:aa"}, status: 200,
+		{
+			name: "file", args: []string{"friction", "file", "fl1:aa"}, status: 200,
 			response: `{"link":{"fingerprint":"fl1:aa","state":"linked","qualified_id":"agentsview#f001","web_url":"https://kata.example.test/issues/x"}}`,
-			want:     call{"POST", "/api/v1/friction/patterns/fl1:aa/file", `{}`}, wantOut: "fl1:aa  linked  agentsview#f001  https://kata.example.test/issues/x\n"},
-		{name: "file_force_new", args: []string{"friction", "file", "fl1:aa", "--force-new"}, status: 200,
+			want:     call{"POST", "/api/v1/friction/patterns/fl1:aa/file", `{}`}, wantOut: "fl1:aa  linked  agentsview#f001  https://kata.example.test/issues/x\n",
+		},
+		{
+			name: "file_force_new", args: []string{"friction", "file", "fl1:aa", "--force-new"}, status: 200,
 			response: `{"link":{"fingerprint":"fl1:aa","state":"linked","qualified_id":"agentsview#f002"}}`,
-			want:     call{"POST", "/api/v1/friction/patterns/fl1:aa/file", `{"force_new":true}`}},
-		{name: "file_dry_run", args: []string{"friction", "file", "fl1:aa", "--dry-run"}, status: 200,
+			want:     call{"POST", "/api/v1/friction/patterns/fl1:aa/file", `{"force_new":true}`},
+		},
+		{
+			name: "file_dry_run", args: []string{"friction", "file", "fl1:aa", "--dry-run"}, status: 200,
 			response: `{"preview":{"title":"[friction/error] Bash: boom","body":"Detected by agentsview Friction Log on 2026-09-20.","priority":3,"labels":["friction","friction:error"],"metadata":{"friction.fingerprint":"fl1:aa"},"force_new":false}}`,
-			want:     call{"POST", "/api/v1/friction/patterns/fl1:aa/file", `{"dry_run":true}`}, wantOut: "Title:    [friction/error] Bash: boom\n"},
-		{name: "file_needs_human", args: []string{"friction", "file", "fl1:aa"}, status: 200,
+			want:     call{"POST", "/api/v1/friction/patterns/fl1:aa/file", `{"dry_run":true}`}, wantOut: "Title:    [friction/error] Bash: boom\n",
+		},
+		{
+			name: "file_needs_human", args: []string{"friction", "file", "fl1:aa"}, status: 200,
 			response: `{"link":{"fingerprint":"fl1:aa","state":"needs_human","last_error_code":"duplicate_candidates","last_error":"kata: 409 duplicate_candidates: similar"}}`,
-			want:     call{"POST", "/api/v1/friction/patterns/fl1:aa/file", `{}`}, wantOut: "needs_human  duplicate_candidates"},
-		{name: "file_on_pusher", args: []string{"friction", "file", "fl1:aa"}, status: 503,
+			want:     call{"POST", "/api/v1/friction/patterns/fl1:aa/file", `{}`}, wantOut: "needs_human  duplicate_candidates",
+		},
+		{
+			name: "file_on_pusher", args: []string{"friction", "file", "fl1:aa"}, status: 503,
 			response: `{"code":"kata_unavailable","kata_state":"not_hub","error":"this instance pushes its archive to PostgreSQL; only the agentsview hub files to Kata"}`,
-			want:     call{"POST", "/api/v1/friction/patterns/fl1:aa/file", `{}`}, wantErr: "only the agentsview hub files to Kata"},
-		{name: "link", args: []string{"friction", "link", "fl1:aa", "agentsview#f009"}, status: 200,
+			want:     call{"POST", "/api/v1/friction/patterns/fl1:aa/file", `{}`}, wantErr: "only the agentsview hub files to Kata",
+		},
+		{
+			name: "link", args: []string{"friction", "link", "fl1:aa", "agentsview#f009"}, status: 200,
 			response: `{"fingerprint":"fl1:aa","state":"linked","qualified_id":"agentsview#f009","link_source":"manual"}`,
-			want:     call{"PUT", "/api/v1/friction/patterns/fl1:aa/link", `{"issue_ref":"agentsview#f009"}`}, wantOut: "agentsview#f009"},
-		{name: "unlink", args: []string{"friction", "unlink", "fl1:aa"}, status: 200,
+			want:     call{"PUT", "/api/v1/friction/patterns/fl1:aa/link", `{"issue_ref":"agentsview#f009"}`}, wantOut: "agentsview#f009",
+		},
+		{
+			name: "unlink", args: []string{"friction", "unlink", "fl1:aa"}, status: 200,
 			response: `{"fingerprint":"fl1:aa","unlinked":true}`,
-			want:     call{"DELETE", "/api/v1/friction/patterns/fl1:aa/link", ``}, wantOut: "unlinked fl1:aa\n"},
+			want:     call{"DELETE", "/api/v1/friction/patterns/fl1:aa/link", ``}, wantOut: "unlinked fl1:aa\n",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
