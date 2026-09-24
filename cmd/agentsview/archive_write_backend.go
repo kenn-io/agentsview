@@ -839,7 +839,7 @@ func (b *localArchiveWriteBackend) ReplicaPush(
 	defer closeVectorPushSource(vectorSource)
 	ps, err := backend.NewPusher(
 		ctx, target.Target, b.database,
-		replicaPusherOptions(target, projects, excludeProjects, vectorSource),
+		replicaPusherOptions(target, projects, excludeProjects, vectorSource, b.appCfg.Ledger),
 	)
 	if err != nil {
 		return storage.PushResult{}, err
@@ -1179,7 +1179,7 @@ func (b *localArchiveWriteBackend) ReplicaPushWatch(
 				applyClassifierConfig(b.appCfg)
 				return backend.NewPusher(
 					c, target.Target, b.database,
-					replicaPusherOptions(target, projects, exclude, vectorSource),
+					replicaPusherOptions(target, projects, exclude, vectorSource, b.appCfg.Ledger),
 				)
 			},
 		)
@@ -1298,6 +1298,7 @@ func replicaPusherOptions(
 	target storage.ConfiguredReplica,
 	projects, excludeProjects []string,
 	vectorSource storage.VectorPushSource,
+	ledgerCfg config.LedgerConfig,
 ) storage.PusherOptions {
 	return storage.PusherOptions{
 		Projects:               projects,
@@ -1305,5 +1306,6 @@ func replicaPusherOptions(
 		SyncStateTarget:        target.SyncStateTarget(),
 		MigrateLegacySyncState: target.MigrateLegacySyncState(),
 		VectorSource:           vectorSource,
+		Ledger:                 storage.LedgerPushPolicyFor(ledgerCfg),
 	}
 }
