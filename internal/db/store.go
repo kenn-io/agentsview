@@ -164,6 +164,8 @@ type Store interface {
 	LedgerStatus(ctx context.Context, zone string) (ledger.ZoneStatus, error)
 	GetLedgerVerifyState(ctx context.Context, zone, source string) (*ledger.VerifyCheckpoint, error)
 	SaveLedgerVerifyState(ctx context.Context, zone, source string, c ledger.VerifyCheckpoint) error
+	QueryLedger(ctx context.Context, q ledger.Query) ([]ledger.ZoneEvents, error)
+	LedgerZones(ctx context.Context) ([]string, error)
 
 	// ReadOnly returns true for remote/PG-backed stores.
 	ReadOnly() bool
