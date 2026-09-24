@@ -121,8 +121,8 @@ every difference between AgentsView's golden digest and jilog's
 `internal/ledger` adapts jilog's `crates/ledger-core` (`event.rs`,
 `segment.rs`, `store.rs`), `crates/ledger-spool/src/lib.rs`
 (`valid_source_name`) and `crates/jilog/src/commands/query.rs` at the same
-pinned commit. Segments written by jilog and by AgentsView are
-interchangeable byte for byte.
+pinned commit. The codec reproduces jilog's segment bytes; the float
+verification limit is described below.
 
 Kept:
 
