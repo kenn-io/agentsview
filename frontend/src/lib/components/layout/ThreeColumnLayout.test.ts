@@ -193,6 +193,7 @@ describe("ThreeColumnLayout", () => {
     sync.serverVersion = {
       api_version: 1,
       data_version: 1,
+      friction_available: false,
       insight_generation_available: false,
       version: "dev",
       commit: "unknown",
@@ -220,6 +221,7 @@ describe("ThreeColumnLayout", () => {
     sync.serverVersion = {
       api_version: 1,
       data_version: 1,
+      friction_available: false,
       insight_generation_available: false,
       version: "dev",
       commit: "unknown",
