@@ -47,6 +47,7 @@ type SourceProbe struct {
 	MaxUsageID                int64  `json:"max_usage_id"`
 	MaxPricingUpdated         string `json:"max_pricing_updated"`
 	ProjectIdentityGeneration int64  `json:"project_identity_generation"`
+	PreparedUsageFingerprint  string `json:"prepared_usage_fingerprint,omitempty"`
 }
 
 type SessionSort string

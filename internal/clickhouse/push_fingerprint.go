@@ -23,57 +23,46 @@ const fingerprintProgressStride = 200
 func (s *Sync) sessionFingerprints(
 	ctx context.Context, sessions []db.Session, onProgress func(storage.PushProgress),
 ) (map[string]string, error) {
-	usage, err := s.local.UsageEventFingerprints(sessionIDs(sessions))
-	if err != nil {
-		return nil, fmt.Errorf("computing usage fingerprints: %w", err)
-	}
 	out := make(map[string]string, len(sessions))
 	for i, sess := range sessions {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		msgs, err := s.local.GetAllMessages(ctx, sess.ID)
+		payload, err := s.loadPayload(ctx, sess)
 		if err != nil {
-			return nil, fmt.Errorf("message fingerprint %s: %w", sess.ID, err)
+			return nil, err
 		}
-		findings, err := s.local.SessionSecretFindings(ctx, sess.ID)
-		if err != nil {
-			return nil, fmt.Errorf("secret finding fingerprint %s: %w", sess.ID, err)
-		}
-		pins, err := s.local.ListPinnedMessages(ctx, sess.ID, "")
-		if err != nil {
-			return nil, fmt.Errorf("pin fingerprint %s: %w", sess.ID, err)
-		}
-		toolCalls, err := s.local.ToolCallFingerprint(ctx, sess.ID)
-		if err != nil {
-			return nil, fmt.Errorf("tool call fingerprint %s: %w", sess.ID, err)
-		}
-		payload := struct {
-			SessionFields  []any
-			Messages       []db.Message
-			Usage          string
-			ToolCalls      string
-			SecretFindings []db.SecretFinding
-			Pins           []db.PinnedMessage
-		}{
-			SessionFields:  sessionFingerprintFields(sess, mirroredSessionMachine(sess, s.machine)),
-			Messages:       msgs,
-			Usage:          usage[sess.ID],
-			ToolCalls:      toolCalls,
-			SecretFindings: findings,
-			Pins:           pins,
-		}
-		data, err := json.Marshal(payload)
-		if err != nil {
-			return nil, fmt.Errorf("encoding session fingerprint %s: %w", sess.ID, err)
-		}
-		sum := sha256.Sum256(data)
-		out[sess.ID] = hex.EncodeToString(sum[:])
+		out[sess.ID] = payload.fingerprint
 		if onProgress != nil && (i+1)%fingerprintProgressStride == 0 {
 			onProgress(storage.PushProgress{Phase: "preparing", SessionsDone: i + 1, SessionsTotal: len(sessions)})
 		}
 	}
 	return out, nil
+}
+
+func (s *Sync) snapshotFingerprint(snapshot *db.SessionMirrorSnapshot) (string, error) {
+	sess := snapshot.Session
+	payload := struct {
+		SessionFields  []any
+		Messages       []db.Message
+		Usage          string
+		ToolCalls      string
+		SecretFindings []db.SecretFinding
+		Pins           []db.PinnedMessage
+	}{
+		SessionFields:  sessionFingerprintFields(sess, mirroredSessionMachine(sess, s.machine)),
+		Messages:       snapshot.Messages,
+		Usage:          snapshot.UsageFingerprint,
+		ToolCalls:      snapshot.ToolCallFingerprint,
+		SecretFindings: snapshot.Findings,
+		Pins:           snapshot.Pins,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("encoding session fingerprint %s: %w", sess.ID, err)
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 // sessionFingerprintFields lists every session scalar the session row

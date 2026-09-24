@@ -112,6 +112,10 @@ func (db *DB) UnpinMessage(ctx context.Context, sessionID string, messageID int6
 func (db *DB) ListPinnedMessages(
 	ctx context.Context, sessionID string, project string,
 ) ([]PinnedMessage, error) {
+	return pinnedMessagesWithQuerier(ctx, db.getReader(), sessionID, project)
+}
+
+func pinnedMessagesWithQuerier(ctx context.Context, q messageRowsQuerier, sessionID, project string) ([]PinnedMessage, error) {
 	var query string
 	var args []any
 	if sessionID != "" {
@@ -136,7 +140,7 @@ func (db *DB) ListPinnedMessages(
 		query += " ORDER BY p.created_at DESC LIMIT 500"
 	}
 
-	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("listing pinned messages: %w", err)
 	}
