@@ -94,9 +94,9 @@ func FrictionUsageFromSessionUsage(u *SessionUsage) (friction.SessionUsage, bool
 	return out, true
 }
 
-// frictionUsageSource is the part of db.Store both primary backends share
+// FrictionUsageSource is the part of db.Store both primary backends share
 // for per-session usage.
-type frictionUsageSource interface {
+type FrictionUsageSource interface {
 	GetSessionUsage(ctx context.Context, sessionID string, includeBreakdown bool) (*SessionUsage, error)
 	GetDailyUsage(ctx context.Context, f UsageFilter) (DailyUsageResult, error)
 }
@@ -104,7 +104,7 @@ type frictionUsageSource interface {
 // FrictionUsageForSessionsFrom is the shared implementation of
 // FrictionUsageForSessions for any backend with GetSessionUsage.
 func FrictionUsageForSessionsFrom(
-	ctx context.Context, src frictionUsageSource, sessionIDs []string,
+	ctx context.Context, src FrictionUsageSource, sessionIDs []string,
 ) (map[string]friction.SessionUsage, error) {
 	out := make(map[string]friction.SessionUsage, len(sessionIDs))
 	for _, id := range sessionIDs {
@@ -124,7 +124,7 @@ func FrictionUsageForSessionsFrom(
 // FrictionArchiveSpend: native daily usage in the review zone replaces
 // jilog's `agentsview usage daily` shell-out (spec §4.1).
 func FrictionArchiveSpendFrom(
-	ctx context.Context, src frictionUsageSource, from, to string, loc *time.Location,
+	ctx context.Context, src FrictionUsageSource, from, to string, loc *time.Location,
 ) (*friction.ArchiveSpend, error) {
 	res, err := src.GetDailyUsage(ctx, UsageFilter{
 		From: from, To: to, Timezone: loc.String(),
