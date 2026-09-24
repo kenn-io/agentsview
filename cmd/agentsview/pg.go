@@ -48,5 +48,17 @@ func (pgReplica) serveOptions(
 	if rawSyncOption != nil {
 		opts = append(opts, rawSyncOption)
 	}
-	return opts, closeRawSync, nil
+	frictionExcl := serialExclusive()
+	frictionRunner, waitFriction := startFrictionReview(ctx, appCfg, pgStore, frictionExcl)
+	if frictionRunner != nil {
+		opts = append(opts, server.WithFriction(frictionRunner, frictionExcl))
+	}
+	closeAll := func() error {
+		waitFriction()
+		if closeRawSync != nil {
+			return closeRawSync()
+		}
+		return nil
+	}
+	return opts, closeAll, nil
 }

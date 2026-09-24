@@ -7181,6 +7181,8 @@ components:
         data_version:
           format: int64
           type: integer
+        friction_available:
+          type: boolean
         insight_generation_available:
           type: boolean
         read_only:
@@ -7192,6 +7194,7 @@ components:
         - commit
         - build_date
         - insight_generation_available
+        - friction_available
         - api_version
         - data_version
       type: object

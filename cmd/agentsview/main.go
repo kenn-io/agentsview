@@ -495,6 +495,16 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		fatal("%v", prepErr)
 	}
 	cfg = preparedCfg
+	var frictionEngine remoteSyncExclusiveRunner
+	if engine != nil {
+		frictionEngine = engine
+	}
+	frictionExcl := frictionExclusive(idleTracker, frictionEngine)
+	frictionRunner, waitFriction := startFrictionReview(ctx, cfg, database, frictionExcl)
+	defer func() {
+		stop()
+		waitFriction()
+	}()
 
 	srvOpts := []server.Option{
 		server.WithVersion(server.VersionInfo{
@@ -541,6 +551,9 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	srvOpts = append(srvOpts, server.WithArtifactExchangeRunner(
 		newDaemonArtifactExchangeRunner(cfg, database, engine, emitter),
 	))
+	if frictionRunner != nil {
+		srvOpts = append(srvOpts, server.WithFriction(frictionRunner, frictionExcl))
+	}
 	srv := server.New(cfg, database, engine, srvOpts...)
 
 	startupProgress.SetPhase("starting HTTP server")
