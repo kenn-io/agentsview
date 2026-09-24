@@ -528,6 +528,13 @@ func chUsageSourceWheres(
 		messageWhere, messageArgs, f, sessionID)
 	messageWhere, messageArgs = appendChUsageColumnBounds(
 		messageWhere, "COALESCE(m.timestamp, s.started_at)", b, messageArgs)
+	if b.from != "" || b.to != "" {
+		// Filter timestamped rows before joining sessions; missing timestamps
+		// still use the session start and the original bounds above.
+		timestampWhere, timestampArgs := appendChUsageColumnBounds("1", "m.timestamp", b, nil)
+		messageWhere += "\n\t\t\tAND (m.timestamp IS NULL OR (" + timestampWhere + "))"
+		messageArgs = append(messageArgs, timestampArgs...)
+	}
 
 	eventWhere := chUsageEventEligibility
 	var eventArgs []any
