@@ -1,6 +1,14 @@
 package filing
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+	"log"
+
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/friction"
+	"go.kenn.io/agentsview/internal/kata"
+)
 
 // ReopenAllowed ports jilog's done-only reason gate. A missing reason or any
 // other closure reason does not claim that the underlying problem went away.
@@ -18,4 +26,36 @@ func RecurrenceComment(date, sessionURL string) string {
 		comment += "\nSession: " + sessionURL
 	}
 	return comment
+}
+
+// recur reopens a done-closed issue, then adds an idempotent comment and
+// label. The reopen must succeed; annotation failures only warn.
+func (f *Filer) recur(ctx context.Context, sig friction.Signal, run RunContext, row db.FrictionIssueLink, is kata.Issue) (db.FrictionIssueLink, outcome, error) {
+	row.IssueUID, row.QualifiedID = is.UID, is.QualifiedID
+	if is.WebURL != "" {
+		row.WebURL = is.WebURL
+	}
+	if _, err := f.Kata.Reopen(ctx, is.UID); err != nil {
+		failed, ferr := f.fail(ctx, row, err)
+		return failed, outcomeNone, ferr
+	}
+	url := ""
+	if sig.SubjectKind != friction.SubjectDiagnostic {
+		url = SessionURL(run.PublicURL, sig.SubjectID, sig.Ordinal)
+	}
+	if err := f.Kata.Comment(ctx, is.UID, RecurrenceCommentKey(is.UID, run.Date), f.redact(RecurrenceComment(run.Date, url))); err != nil {
+		log.Printf("friction: Kata recurrence comment on %s failed (issue reopened anyway): %s", is.QualifiedID, f.redact(err.Error()))
+	}
+	if err := f.Kata.AddLabel(ctx, is.UID, LabelRecurred); err != nil {
+		log.Printf("friction: Kata %s label on %s failed (issue reopened anyway): %s", LabelRecurred, is.QualifiedID, f.redact(err.Error()))
+	}
+	source := row.LinkSource
+	if source == "" {
+		source = db.FrictionLinkSourceFound
+	}
+	linked, err := f.linked(ctx, row, is, source, run.Date)
+	if err != nil {
+		return linked, outcomeNone, err
+	}
+	return linked, outcomeReopened, nil
 }

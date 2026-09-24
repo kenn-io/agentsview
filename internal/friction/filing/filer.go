@@ -109,43 +109,60 @@ func (f *Filer) existing(ctx context.Context, fp string) (db.FrictionIssueLink, 
 // File ports KataTracker::create (trackers/kata.rs:359-460) onto the Kata API.
 // Only a failed attempt returns an error; needs_human is a recorded outcome.
 func (f *Filer) File(ctx context.Context, sig friction.Signal, run RunContext) (db.FrictionIssueLink, error) {
+	link, _, err := f.file(ctx, sig, run)
+	return link, err
+}
+
+func (f *Filer) file(ctx context.Context, sig friction.Signal, run RunContext) (db.FrictionIssueLink, outcome, error) {
 	fp := sig.Fingerprint()
 	row, has, err := f.existing(ctx, fp)
 	if err != nil {
-		return db.FrictionIssueLink{}, err
+		return db.FrictionIssueLink{}, outcomeNone, err
 	}
 	row.Fingerprint = fp
 	if has && !run.ForceNew {
-		switch row.State {
-		case db.FrictionLinkStateLinked:
+		switch {
+		case row.State == db.FrictionLinkStateLinked:
 			return f.onLinked(ctx, sig, run, row)
-		case db.FrictionLinkStateNeedsHuman:
-			return row, nil
+		case row.State == db.FrictionLinkStateFailed && row.IssueUID != "":
+			return f.onLinked(ctx, sig, run, row)
+		case row.State == db.FrictionLinkStateNeedsHuman:
+			return row, outcomeNone, nil
 		}
 	}
 	if !run.ForceNew {
 		matches, err := f.Kata.FindByMetadata(ctx, metaFingerprint, fp)
 		if err != nil {
-			return f.fail(ctx, row, err)
+			link, ferr := f.fail(ctx, row, err)
+			return link, outcomeNone, ferr
 		}
 		switch len(matches) {
 		case 0:
 		case 1:
 			return f.onMatch(ctx, sig, run, row, matches[0])
 		default:
-			return f.needsHuman(ctx, row, "multiple_matches", fmt.Sprintf("%d Kata issues carry %s=%s", len(matches), metaFingerprint, fp), candidatesJSON(matches, f.redact))
+			link, herr := f.needsHuman(ctx, row, "multiple_matches", fmt.Sprintf("%d Kata issues carry %s=%s", len(matches), metaFingerprint, fp), candidatesJSON(matches, f.redact))
+			return link, outcomeNone, herr
 		}
 	}
 	req := f.Plan(sig, run)
 	res, err := f.Kata.CreateIssue(ctx, IdempotencyKey(req.Title), req)
 	if err == nil {
-		src := db.FrictionLinkSourceCreated
+		src, oc := db.FrictionLinkSourceCreated, outcomeCreated
 		if res.Reused {
-			src = db.FrictionLinkSourceIdempotentReuse
+			src, oc = db.FrictionLinkSourceIdempotentReuse, outcomeLinked
 		}
-		return f.linked(ctx, row, res.Issue, src, run.Date)
+		link, err := f.linked(ctx, row, res.Issue, src, run.Date)
+		if err != nil {
+			return link, outcomeNone, err
+		}
+		return link, oc, nil
 	}
-	return f.onCreateError(ctx, row, run, err)
+	link, err := f.onCreateError(ctx, row, run, err)
+	if err == nil && link.State == db.FrictionLinkStateLinked {
+		return link, outcomeLinked, nil
+	}
+	return link, outcomeNone, err
 }
 
 // FileAndRerender files a stored signal and refreshes its digests only when
@@ -164,15 +181,40 @@ func (f *Filer) FileAndRerender(ctx context.Context, sig friction.Signal, run Ru
 	return link, err
 }
 
-// onLinked is the already-linked path. PR 11 adds the recurrence check here.
-func (f *Filer) onLinked(_ context.Context, _ friction.Signal, _ RunContext, row db.FrictionIssueLink) (db.FrictionIssueLink, error) {
-	return row, nil
+// onLinked checks the live issue at most once per digest day.
+func (f *Filer) onLinked(ctx context.Context, sig friction.Signal, run RunContext, row db.FrictionIssueLink) (db.FrictionIssueLink, outcome, error) {
+	if run.Date == "" || row.LastRecurrenceDate == run.Date {
+		return row, outcomeLinked, nil
+	}
+	is, err := f.Kata.GetIssue(ctx, row.IssueUID)
+	if err != nil {
+		link, ferr := f.fail(ctx, row, err)
+		return link, outcomeNone, ferr
+	}
+	if is.Status != "open" && ReopenAllowed(is.ClosedReason) && f.Policy.ReopenOnRecurrence {
+		return f.recur(ctx, sig, run, row, is)
+	}
+	link, err := f.linked(ctx, row, is, row.LinkSource, run.Date)
+	if err != nil {
+		return link, outcomeNone, err
+	}
+	return link, outcomeLinked, nil
 }
 
-// onMatch links an existing issue (open or closed). A closed match is linked
-// and left untouched; PR 11 adds the done-reopen rule here.
-func (f *Filer) onMatch(ctx context.Context, _ friction.Signal, run RunContext, row db.FrictionIssueLink, is kata.Issue) (db.FrictionIssueLink, error) {
-	return f.linked(ctx, row, is, db.FrictionLinkSourceFound, run.Date)
+// onMatch links a metadata match and reopens it only after a done closure.
+func (f *Filer) onMatch(ctx context.Context, sig friction.Signal, run RunContext, row db.FrictionIssueLink, is kata.Issue) (db.FrictionIssueLink, outcome, error) {
+	if is.Status != "open" && ReopenAllowed(is.ClosedReason) && f.Policy.ReopenOnRecurrence {
+		row.LinkSource = db.FrictionLinkSourceFound
+		return f.recur(ctx, sig, run, row, is)
+	}
+	if is.Status != "open" {
+		log.Printf("friction: %s matches %s closed %q; not reopening (jilog#42fd)", row.Fingerprint, is.QualifiedID, is.ClosedReason)
+	}
+	link, err := f.linked(ctx, row, is, db.FrictionLinkSourceFound, run.Date)
+	if err != nil {
+		return link, outcomeNone, err
+	}
+	return link, outcomeLinked, nil
 }
 
 func (f *Filer) onCreateError(ctx context.Context, row db.FrictionIssueLink, run RunContext, err error) (db.FrictionIssueLink, error) {
@@ -230,6 +272,9 @@ func errorCode(err error) string {
 }
 
 func (f *Filer) linked(ctx context.Context, row db.FrictionIssueLink, is kata.Issue, source, date string) (db.FrictionIssueLink, error) {
+	if source == "" {
+		source = db.FrictionLinkSourceFound
+	}
 	projectUID, _ := f.Kata.ProjectUID(ctx)
 	row.State = db.FrictionLinkStateLinked
 	row.KataInstanceUID = f.Kata.InstanceUID()
@@ -361,18 +406,30 @@ func (f *Filer) FileAll(ctx context.Context, sigs []friction.Signal, run RunCont
 			}
 			continue
 		}
-		link, err := f.File(ctx, s, run)
-		f.tally(&rep, s, link, err)
+		link, oc, err := f.file(ctx, s, run)
+		f.tally(&rep, s, link, oc, err)
 	}
 	return rep, nil
 }
 
-func (f *Filer) tally(rep *Report, s friction.Signal, link db.FrictionIssueLink, err error) {
+type outcome int
+
+const (
+	outcomeNone outcome = iota
+	outcomeCreated
+	outcomeLinked
+	outcomeReopened
+)
+
+func (f *Filer) tally(rep *Report, s friction.Signal, link db.FrictionIssueLink, oc outcome, err error) {
 	switch link.State {
 	case db.FrictionLinkStateLinked:
-		if link.LinkSource == db.FrictionLinkSourceCreated {
+		switch oc {
+		case outcomeReopened:
+			rep.Reopened++
+		case outcomeCreated:
 			rep.Created++
-		} else {
+		default:
 			rep.Linked++
 		}
 		rep.Issues = append(rep.Issues, friction.IssueRef{ID: shortRef(link.QualifiedID), Backend: "kata", URL: link.WebURL, Title: f.redact(s.Title())})
@@ -385,15 +442,19 @@ func (f *Filer) tally(rep *Report, s friction.Signal, link db.FrictionIssueLink,
 	}
 }
 
-// SignalForFingerprint finds the signal in the earliest digest containing it,
-// so a drained filing sends the same body the inline filing would have.
-func (f *Filer) SignalForFingerprint(ctx context.Context, fingerprint string) (friction.Signal, RunContext, error) {
+// signalForFingerprint can choose the earliest filing date or the latest
+// recurrence date for a failed reopen retry.
+func (f *Filer) signalForFingerprint(ctx context.Context, fingerprint string, latest bool) (friction.Signal, RunContext, error) {
 	if f.Snapshot == nil {
 		return friction.Signal{}, RunContext{}, ErrSignalNotFound
 	}
 	dates, err := f.Store.DigestDatesForFingerprints(ctx, []string{fingerprint})
 	if err != nil {
 		return friction.Signal{}, RunContext{}, err
+	}
+	if latest {
+		dates = slices.Clone(dates)
+		slices.Reverse(dates)
 	}
 	for _, date := range dates {
 		snap, err := f.Snapshot(ctx, date)
@@ -407,6 +468,12 @@ func (f *Filer) SignalForFingerprint(ctx context.Context, fingerprint string) (f
 		}
 	}
 	return friction.Signal{}, RunContext{}, ErrSignalNotFound
+}
+
+// SignalForFingerprint returns the earliest digest that first tried to file
+// the signal, so an outbox create uses the same body as inline filing.
+func (f *Filer) SignalForFingerprint(ctx context.Context, fingerprint string) (friction.Signal, RunContext, error) {
+	return f.signalForFingerprint(ctx, fingerprint, false)
 }
 
 // FileDate files every signal of an existing digest, then re-renders it.
@@ -519,7 +586,9 @@ func (f *Filer) Drain(ctx context.Context) (Report, error) {
 			}
 			continue
 		}
-		sig, run, err := f.SignalForFingerprint(ctx, row.Fingerprint)
+		// A failed row with an issue UID is a recurrence retry: use the latest
+		// digest date whose recurrence has not yet been handled.
+		sig, run, err := f.signalForFingerprint(ctx, row.Fingerprint, row.IssueUID != "")
 		if errors.Is(err, ErrSignalNotFound) {
 			if _, herr := f.needsHuman(ctx, row, "signal_not_found", "the signal is no longer in any stored digest", ""); herr != nil {
 				return rep, herr
@@ -531,8 +600,8 @@ func (f *Filer) Drain(ctx context.Context) (Report, error) {
 			log.Printf("friction: drain could not load signal %s: %v", row.Fingerprint, err)
 			continue
 		}
-		link, ferr := f.File(ctx, sig, run)
-		f.tally(&rep, sig, link, ferr)
+		link, oc, ferr := f.file(ctx, sig, run)
+		f.tally(&rep, sig, link, oc, ferr)
 		if link.State == db.FrictionLinkStateLinked {
 			changed = append(changed, row.Fingerprint)
 		}
