@@ -217,6 +217,32 @@ Zone resolution differs from jilog `zone.rs`. `AGENTSVIEW_FRICTION_TZ` and
 back to the process zone instead of UTC. An empty configured timezone means
 unset rather than an error.
 
+## Review orchestration (roadmap PR 5)
+
+Ported from jilog `9e8e094` `crates/jilog-review/src/digest.rs:208-706`
+(`run_review`), `reader.rs:233-270` (processed sessions) and
+`archive_spend.rs:83-109`.
+
+- **Added:** `frustration` and `interruption` kinds from agentsview's own
+  detectors flow through digests and recurrence (not counted in the persona
+  line); generic diagnostic subjects (`subject_kind = diagnostic`) replace
+  jilog's worker records and are excluded from P0 by kind, not by tool name.
+- **Kept:** detector order and run order within each kind, dimension
+  stamping, persona rollup including sessions without signals, spend
+  accumulation with `(root)` role keys, P0 alerts over the digest's errors,
+  archive-spend window and summarizing, empty digest on the first build of a
+  date, dry run writes nothing.
+- **Replaced:** the processed-sessions file is `friction_digest_sessions`;
+  "nightly" is an hourly catch-up over complete local dates; a date is built
+  once (jilog's same-date preservation rule becomes build-once plus explicit
+  rebuild); subjects are dated by last activity instead of the run day;
+  archive spend reads native daily usage instead of shelling out; per-session
+  cost is archive microdollars (scale 6), so a jilog `$1.50` renders
+  `$1.500000`; sub-agent spend is keyed `subagent`.
+- **Dropped:** reader discovery windows and the retry sidecar (the filing
+  outbox replaces it in the Kata PRs); jilog's private worker collectors and
+  pool-seat conventions (seats come only from user `seat_patterns`).
+
 ## License
 
 The adapted code is distributed under the MIT License:

@@ -1476,20 +1476,23 @@ its triggers.
 
 ### Schema tables
 
-| Table                | Purpose                                                                      |
-| -------------------- | ---------------------------------------------------------------------------- |
-| `sessions`           | Session metadata (project, agent, timestamps, file info, user message count) |
-| `messages`           | Message content with role, ordinal, timestamps                               |
-| `tool_calls`         | Tool invocations with normalized category taxonomy                           |
-| `tool_result_events` | Chronological status events for tool calls (e.g. Codex subagent updates)     |
-| `insights`           | AI-generated session analysis and summaries                                  |
-| `starred_sessions`   | Server-side star persistence (replaces localStorage)                         |
-| `pinned_messages`    | Pinned message references with session linkage                               |
-| `stats`              | Aggregate counts (session_count, message_count)                              |
-| `skipped_files`      | Cache of non-interactive session files                                       |
-| `source_failures`    | Cache of session files whose last parse failed                               |
-| `messages_fts`       | FTS5 virtual table for full-text search                                      |
-| `messages_cjk_fts`   | Optional CJK FTS5 index using the `simple` character tokenizer               |
+| Table                      | Purpose                                                                                  |
+| -------------------------- | ---------------------------------------------------------------------------------------- |
+| `sessions`                 | Session metadata (project, agent, timestamps, file info, user message count)             |
+| `messages`                 | Message content with role, ordinal, timestamps                                           |
+| `tool_calls`               | Tool invocations with normalized category taxonomy                                       |
+| `tool_result_events`       | Chronological status events for tool calls (e.g. Codex subagent updates)                 |
+| `insights`                 | AI-generated session analysis and summaries                                              |
+| `friction_digests`         | One Friction Log digest per completed local date (Markdown, summary JSON, frozen inputs) |
+| `friction_digest_sessions` | Which digest reviewed each session, so a session is reviewed once                        |
+| `friction_patterns`        | Local recurrence of each friction fingerprint across digests                             |
+| `starred_sessions`         | Server-side star persistence (replaces localStorage)                                     |
+| `pinned_messages`          | Pinned message references with session linkage                                           |
+| `stats`                    | Aggregate counts (session_count, message_count)                                          |
+| `skipped_files`            | Cache of non-interactive session files                                                   |
+| `source_failures`          | Cache of session files whose last parse failed                                           |
+| `messages_fts`             | FTS5 virtual table for full-text search                                                  |
+| `messages_cjk_fts`         | Optional CJK FTS5 index using the `simple` character tokenizer                           |
 
 The database is automatically migrated on startup when the schema changes. When
 the stored data version is stale, AgentsView preserves the existing database and
