@@ -41,9 +41,8 @@ type DiagnosticSource interface {
 	DiagnosticSignalsForDate(ctx context.Context, date string, loc *time.Location) ([]friction.Signal, error)
 }
 
-// Runner builds digests. Filer, Ledger and AutoFile from spec §26.5 arrive
-// with the Kata and ledger PRs; Diagnostics is nil until PR 17 wires the
-// ledger-backed source.
+// Runner builds digests. Ledger from spec §26.5 arrives with the ledger PRs;
+// Diagnostics is nil until PR 17 wires the ledger-backed source.
 type Runner struct {
 	Store        Store
 	Diagnostics  DiagnosticSource
@@ -51,6 +50,9 @@ type Runner struct {
 	Now          func() time.Time
 	BackfillDays int
 	PublicURL    string
+	// Filer is non-nil only on the filing hub with Kata enabled.
+	Filer    Filer
+	AutoFile bool
 }
 
 type BuildOptions struct{ Rebuild, DryRun bool }
@@ -337,7 +339,8 @@ func (r *Runner) BuildDate(ctx context.Context, date string, opts BuildOptions) 
 		return Report{Date: date, Snapshot: snap, Meta: meta}, nil
 	}
 
-	md := friction.RenderMarkdown(snap, friction.RenderLinks{})
+	links := r.fileAndLink(ctx, date, &snap, &meta)
+	md := friction.RenderMarkdown(snap, links)
 	summary := friction.RenderSummaryJSON(snap, meta)
 	snapJSON, err := EncodeSnapshot(snap)
 	if err != nil {
@@ -403,6 +406,7 @@ func (r *Runner) backfillDays() int {
 // yesterday. Today is never built. A date still waiting on findings stops
 // the pass without error; later dates wait for it so no date is skipped.
 func (r *Runner) CatchUp(ctx context.Context) ([]Report, error) {
+	defer r.drain(ctx)
 	loc := r.loc()
 	today := localDate(r.now(), loc)
 	yesterday := addDays(today, -1)
@@ -443,8 +447,7 @@ func (r *Runner) CatchUp(ctx context.Context) ([]Report, error) {
 }
 
 // Rerender rebuilds a digest's Markdown and summary JSON from its frozen
-// snapshot and bumps revision when either changed (spec §8.6). Links come
-// from the Kata filer once PR 10 adds it; until then none are rendered.
+// snapshot and bumps revision when either changed (spec §8.6).
 func (r *Runner) Rerender(ctx context.Context, date string) error {
 	existing, err := r.Store.GetFrictionDigest(ctx, date)
 	if err != nil {
@@ -457,7 +460,7 @@ func (r *Runner) Rerender(ctx context.Context, date string) error {
 	if err != nil {
 		return err
 	}
-	md := friction.RenderMarkdown(snap, friction.RenderLinks{})
+	md := friction.RenderMarkdown(snap, r.linksFor(ctx, date, snap.Signals))
 	summary := friction.RenderSummaryJSON(snap, r.meta(date, false))
 	if bytes.Equal(md, existing.Markdown) && bytes.Equal(summary, existing.SummaryJSON) {
 		return nil
