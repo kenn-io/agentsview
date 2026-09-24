@@ -139,11 +139,19 @@ Kept:
 - The `jilog query` `--since` grammar, class names, subsystem globs, and the
   text and JSON output formats.
 
-Planned in the storage and query PRs:
+Storage and import (PR 13):
 
-- Database rows will become the authority instead of the segment directory.
-  Files will remain the import, export, and interop format.
-- The verify checkpoint file will become one stored row per zone and source.
+- Database rows are the authority instead of per-zone SQLite index files.
+  Segment files remain the import, export, and interop format.
+- No-clobber publication, directory listing, and import keep jilog's identity
+  check, checksum verification, skip-and-retry behavior, and separate listing
+  errors. `ledger rebuild-index` reprojects stored segments in one transaction.
+- Each projected event stores its exact serialized bytes alongside class and
+  tier in serde form. Verify checkpoints live in the archive per zone and
+  source.
+
+Planned in the query PR:
+
 - Query filtering will move into SQL, so a filtered query can find older
   matches beyond the newest `5 x limit` events.
 

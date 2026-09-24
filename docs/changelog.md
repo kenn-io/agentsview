@@ -10,6 +10,11 @@ The latest published release is
 
 **New features**
 
+- An optional event ledger stores append-only, checksummed events in the
+  archive. `agentsview ledger` appends, verifies, imports and exports segments
+  that are byte-compatible with jilog ledgers, and a zone with `import_path`
+  follows a jilog segments directory automatically. Enable it with
+  `[ledger] enabled = true`; see [Event Ledger](/docs/event-ledger/).
 - Coding agents can now consult prior conversation evidence proactively when
   earlier decisions or solutions may help. `agentsview skills install`
   upgrades the existing recall skill for Claude and Agents/Codex, and Claude

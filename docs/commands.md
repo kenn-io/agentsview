@@ -1560,6 +1560,44 @@ sent to an explicitly supplied server.
 
 ______________________________________________________________________
 
+### `agentsview ledger`
+
+Append to, inspect and maintain the optional [event ledger](/docs/event-ledger/).
+Appending, importing and rebuilding the index require `[ledger] enabled = true`.
+
+```bash
+agentsview ledger append --class <class> [--tier <tier>] [--zone <zone>] \
+  [--subsystem <name>] [--summary <text>] [--payload <json>] \
+  [--actor <ref>] [--object <ref>]
+agentsview ledger status [--zone <zone>] [--format json]
+agentsview ledger verify [--zone <zone>] [--full]
+agentsview ledger import --zone <zone> --segments <dir>
+agentsview ledger export --zone <zone> --dir <dir> [--source <source>]
+agentsview ledger rebuild-index --zone <zone>
+```
+
+`ledger append` writes one event as a new sealed segment from this host's
+source. `--class` accepts `state-change`, `state_change` and `statechange`
+forms. The tier defaults to `structured` when the event has a payload and to
+`metadata-only` otherwise. `--subsystem` and `--summary` set
+`payload.subsystem` and `payload.summary`.
+
+`ledger status` prints segment and event counts, the latest sequence number per
+source, sequence gaps, remembered verify failures and the last import result
+for each zone. `ledger verify` checks checksums incrementally; `--full`
+re-reads every segment. Verification exits non-zero when a check fails.
+
+`ledger import` stores every new segment file from a jilog-format segments
+directory after checking its name and checksum, and exits non-zero when any
+file was refused. Refused files are retried on the next import. `ledger export`
+writes a zone as jilog-format files and never replaces an existing file.
+`ledger rebuild-index` rebuilds a zone's query index from its stored segments.
+
+These commands open the archive directly. While a local daemon owns the
+archive, stop it first.
+
+______________________________________________________________________
+
 ### `agentsview mcp`
 
 Run a read-only Model Context Protocol server for assistant clients that can
