@@ -224,15 +224,16 @@ type frictionPatternsResponse struct {
 }
 
 type frictionPatternItem struct {
-	Fingerprint     string `json:"fingerprint"`
-	Kind            string `json:"kind"`
-	Title           string `json:"title"`
-	FirstSeenDate   string `json:"first_seen_date"`
-	LastSeenDate    string `json:"last_seen_date"`
-	OccurrenceCount int    `json:"occurrence_count"`
-	SessionCount    int    `json:"session_count"`
-	LastSubjectID   string `json:"last_subject_id"`
-	LastOrdinal     *int   `json:"last_ordinal"`
+	Fingerprint     string                `json:"fingerprint"`
+	Kind            string                `json:"kind"`
+	Title           string                `json:"title"`
+	FirstSeenDate   string                `json:"first_seen_date"`
+	LastSeenDate    string                `json:"last_seen_date"`
+	OccurrenceCount int                   `json:"occurrence_count"`
+	SessionCount    int                   `json:"session_count"`
+	LastSubjectID   string                `json:"last_subject_id"`
+	LastOrdinal     *int                  `json:"last_ordinal"`
+	Link            *db.FrictionIssueLink `json:"link,omitempty"`
 }
 
 type frictionRunResponse struct {
@@ -494,6 +495,7 @@ func (s *Server) humaListFrictionPatterns(
 			FirstSeenDate: p.FirstSeenDate, LastSeenDate: p.LastSeenDate,
 			OccurrenceCount: p.OccurrenceCount, SessionCount: p.SessionCount,
 			LastSubjectID: p.LastSubjectID, LastOrdinal: p.LastOrdinal,
+			Link: p.Link,
 		})
 	}
 	return &jsonOutput[frictionPatternsResponse]{

@@ -23022,19 +23022,49 @@ func (f FrictionP0Alert) Validate() error {
 }
 
 type FrictionPatternItem struct {
-	Fingerprint     string `json:"fingerprint" validate:"required"`
-	FirstSeenDate   string `json:"first_seen_date" validate:"required"`
-	Kind            string `json:"kind" validate:"required"`
-	LastOrdinal     *int64 `json:"last_ordinal,omitempty"`
-	LastSeenDate    string `json:"last_seen_date" validate:"required"`
-	LastSubjectID   string `json:"last_subject_id" validate:"required"`
-	OccurrenceCount int64  `json:"occurrence_count"`
-	SessionCount    int64  `json:"session_count"`
-	Title           string `json:"title" validate:"required"`
+	Fingerprint     string               `json:"fingerprint" validate:"required"`
+	FirstSeenDate   string               `json:"first_seen_date" validate:"required"`
+	Kind            string               `json:"kind" validate:"required"`
+	LastOrdinal     *int64               `json:"last_ordinal,omitempty"`
+	LastSeenDate    string               `json:"last_seen_date" validate:"required"`
+	LastSubjectID   string               `json:"last_subject_id" validate:"required"`
+	Link            *DBFrictionIssueLink `json:"link,omitempty"`
+	OccurrenceCount int64                `json:"occurrence_count"`
+	SessionCount    int64                `json:"session_count"`
+	Title           string               `json:"title" validate:"required"`
 }
 
 func (f FrictionPatternItem) Validate() error {
-	return runtime.ConvertValidatorError(typesValidator.Struct(f))
+	var errors runtime.ValidationErrors
+	if err := typesValidator.Var(f.Fingerprint, "required"); err != nil {
+		errors = errors.Append("Fingerprint", err)
+	}
+	if err := typesValidator.Var(f.FirstSeenDate, "required"); err != nil {
+		errors = errors.Append("FirstSeenDate", err)
+	}
+	if err := typesValidator.Var(f.Kind, "required"); err != nil {
+		errors = errors.Append("Kind", err)
+	}
+	if err := typesValidator.Var(f.LastSeenDate, "required"); err != nil {
+		errors = errors.Append("LastSeenDate", err)
+	}
+	if err := typesValidator.Var(f.LastSubjectID, "required"); err != nil {
+		errors = errors.Append("LastSubjectID", err)
+	}
+	if f.Link != nil {
+		if v, ok := any(f.Link).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("Link", err)
+			}
+		}
+	}
+	if err := typesValidator.Var(f.Title, "required"); err != nil {
+		errors = errors.Append("Title", err)
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
 }
 
 type FrictionPatternsResponse struct {

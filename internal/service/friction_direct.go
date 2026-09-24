@@ -57,13 +57,17 @@ func frictionPatternViews(
 ) []FrictionPatternView {
 	out := make([]FrictionPatternView, 0, len(rows))
 	for _, p := range rows {
-		out = append(out, FrictionPatternView{
+		v := FrictionPatternView{
 			Fingerprint: p.Fingerprint, Kind: p.Kind, Title: p.Title,
 			FirstSeenDate: p.FirstSeenDate, LastSeenDate: p.LastSeenDate,
 			OccurrenceCount: p.OccurrenceCount, SessionCount: p.SessionCount,
 			LastSubjectID: p.LastSubjectID, LastOrdinal: p.LastOrdinal,
 			LastSessionURL: sessionURL(p.LastSubjectID, p.LastOrdinal),
-		})
+		}
+		if p.Link != nil {
+			v.IssueQualifiedID, v.IssueWebURL = p.Link.QualifiedID, p.Link.WebURL
+		}
+		out = append(out, v)
 	}
 	return out
 }

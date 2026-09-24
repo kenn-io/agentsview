@@ -54,8 +54,8 @@ type FrictionPatternFilter struct {
 	Linked *bool
 }
 
-// FrictionPatternView is one recurrence row plus browser links. The Kata
-// fields stay empty until issue filing exists (PR 10).
+// FrictionPatternView is one recurrence row plus browser links. Kata fields
+// come from the pattern's issue link when present.
 type FrictionPatternView struct {
 	Fingerprint      string `json:"fingerprint"`
 	Kind             string `json:"kind"`

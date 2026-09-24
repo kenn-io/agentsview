@@ -4984,6 +4984,8 @@ components:
           type: string
         last_subject_id:
           type: string
+        link:
+          $ref: "#/components/schemas/DbFrictionIssueLink"
         occurrence_count:
           format: int64
           type: integer
