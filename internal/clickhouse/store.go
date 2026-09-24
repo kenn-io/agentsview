@@ -12,6 +12,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.kenn.io/agentsview/internal/config"
@@ -56,6 +57,21 @@ type Store struct {
 	usageSessionRows     usageRowMemo[chUsageSessionRow]
 	// analyticsSessionRows keeps recent analytics session listings.
 	analyticsSessionRows usageRowMemo[chAnalyticsSession]
+	// activitySessions keeps activity pairing inputs per session version.
+	activitySessions activitySessionMemo
+	// activityInputQueries counts pairing input reads that reached ClickHouse.
+	activityInputQueries atomic.Int64
+	// activityUsageRows keeps activity usage reads per source, set, and range.
+	activityUsageRows usageRowMemo[clickSessionUsageOrderedRow]
+	// activitySessionListings keeps candidate listings per parts and predicate.
+	activitySessionListings usageRowMemo[activitySessionListing]
+	// activityReports keeps the reports of ended ranges per the rows they read.
+	activityReports usageRowMemo[activityReportEntry]
+	// activityChecks records per selection the parts its kept report was
+	// last checked against.
+	activityChecks         usageRowMemo[activityReportCheck]
+	activityUsageQueries   atomic.Int64
+	activitySessionQueries atomic.Int64
 }
 
 // NewStore connects to the mirror named by t and refuses schemas or data

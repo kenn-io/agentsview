@@ -2,10 +2,13 @@ package clickhouse
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -2509,16 +2512,93 @@ func usageRowMemoKeyFor(
 	return fmt.Sprintf("%s|%s|%s|%s|%#v", kind, filter, sessionID, pricingDigest, customModels), nil
 }
 
+// chUsageReadTables are the tables a prepared usage read touches besides
+// prepared_usage itself, whose rows the state's stamp identifies.
+var chUsageReadTables = []string{
+	"sessions", "usage_session_snapshots", "cursor_usage_events", "usage_event_prices",
+	"usage_price_contexts", "model_pricing", "model_pricing_bands", "genai_pricing", "sync_metadata",
+}
+
+// usageReadFingerprint identifies what a usage read depends on. A prepared
+// read depends on the prepared rows, named by the state's stamp, and on the
+// active parts of the tables it joins or prices from; the large message and
+// event tables, whose background merges rename parts long after a push, are
+// not among them. A raw read depends on the parts of every table.
+func (s *Store) usageReadFingerprint(ctx context.Context, state preparedUsageState) (string, error) {
+	if !state.ready {
+		return s.partsFingerprint(ctx)
+	}
+	fingerprint, err := s.tablePartsFingerprint(ctx, chUsageReadTables)
+	if err != nil {
+		return "", err
+	}
+	return fingerprint + "|" + state.stamp, nil
+}
+
 // partsFingerprint identifies the active parts of every table in the
 // mirror. Two reads under the same fingerprint see the same rows.
 func (s *Store) partsFingerprint(ctx context.Context) (string, error) {
-	var fingerprint string
-	err := s.queryRowContext(ctx, `SELECT hex(SHA256(toString(arraySort(groupArray((table, name, hash_of_all_files))))))
-		FROM system.parts WHERE database = currentDatabase() AND active`).Scan(&fingerprint)
-	if err != nil {
-		return "", fmt.Errorf("reading clickhouse parts fingerprint: %w", err)
+	return s.tablePartsFingerprint(ctx, nil)
+}
+
+// tablePartsFingerprint identifies the active parts of the named tables,
+// or of every table when none are named. Within a request that took a
+// parts snapshot, every fingerprint comes from that one snapshot.
+func (s *Store) tablePartsFingerprint(ctx context.Context, tables []string) (string, error) {
+	snapshot, ok := ctx.Value(partsSnapshotKey{}).(partsSnapshot)
+	if !ok {
+		var err error
+		if snapshot, err = s.readPartsSnapshot(ctx); err != nil {
+			return "", err
+		}
 	}
-	return fingerprint, nil
+	if len(tables) == 0 {
+		tables = slices.Collect(maps.Keys(snapshot))
+	}
+	tables = slices.Sorted(slices.Values(tables))
+	sum := sha256.New()
+	for _, table := range slices.Compact(tables) {
+		fmt.Fprintf(sum, "%s\x00%s\x00", table, snapshot[table])
+	}
+	return hex.EncodeToString(sum.Sum(nil)), nil
+}
+
+// partsSnapshot maps each table to a digest of its active parts.
+type partsSnapshot map[string]string
+
+type partsSnapshotKey struct{}
+
+// readPartsSnapshot reads the active parts of every table in one query.
+func (s *Store) readPartsSnapshot(ctx context.Context) (partsSnapshot, error) {
+	rows, err := s.queryContext(ctx, `SELECT table,
+		hex(SHA256(toString(arraySort(groupArray((name, hash_of_all_files))))))
+		FROM system.parts WHERE database = currentDatabase() AND active GROUP BY table`)
+	if err != nil {
+		return nil, fmt.Errorf("reading clickhouse parts: %w", err)
+	}
+	defer rows.Close()
+	snapshot := partsSnapshot{}
+	for rows.Next() {
+		var table, digest string
+		if err := rows.Scan(&table, &digest); err != nil {
+			return nil, fmt.Errorf("scanning clickhouse parts: %w", err)
+		}
+		snapshot[table] = digest
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating clickhouse parts: %w", err)
+	}
+	return snapshot, nil
+}
+
+// withPartsSnapshot makes the fingerprints of the reads under the returned
+// context come from one snapshot of the parts, taken before any of them.
+func (s *Store) withPartsSnapshot(ctx context.Context) (context.Context, error) {
+	snapshot, err := s.readPartsSnapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return context.WithValue(ctx, partsSnapshotKey{}, snapshot), nil
 }
 
 // usageRowMemo keeps the rows of recent usage reads. A slot names the read
