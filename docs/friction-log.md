@@ -41,6 +41,26 @@ but do not offer **Build now**. The session signal panel also lists findings
 for the open session, including findings from messages added after its daily
 digest was built.
 
+## Model-written summary (optional)
+
+Open a digest, choose a generator, and select **Generate summary** to ask a model
+for an overview. AgentsView uses the same configured `[insights]` endpoint or
+selected agent CLI as Generated insights. Nothing generates summaries on a
+schedule.
+
+The model receives the digest summary, up to 20 patterns ranked by occurrences
+in that digest, and P0 alerts. The summary can contain digest paths and issue
+titles and URLs; P0 alerts contain session IDs. Pattern titles can contain up
+to 80 characters of the text that triggered a correction, workaround, or
+deferral. Frustration titles are withheld because they quote the user. The model
+does not receive finding text, evidence, or transcripts.
+
+The result is labeled as model-written. It cannot change findings, digests,
+recurrence counts, or issues. Repeating a request for the same digest and
+generator returns the saved summary until the digest changes. **Regenerate**
+asks the model again. Saved summaries also appear under **Recall → Generated
+insights** as **Friction Review**.
+
 ## What it detects
 
 | Kind         | What it means                                                                                                                                             |

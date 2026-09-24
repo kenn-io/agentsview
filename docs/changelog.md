@@ -11,6 +11,9 @@ The latest published release is
 
 **New features**
 
+- The Friction Log page can generate an optional model-written summary of a
+  digest. It uses digest counts, pattern titles, and P0 alerts, saves the
+  result for later, and never changes findings, digests, or issues.
 - The **Friction Log page** opens the latest daily digest with P0 alerts and
   new or recurring patterns first. It then shows corrections, errors,
   workarounds, deferrals, patterns, frustration and interruptions, with links
