@@ -8,6 +8,7 @@ export type Route =
   | "trends"
   | "recall"
   | "quality"
+  | "friction"
   | "pinned"
   | "trash"
   | "recent-edits"
@@ -22,6 +23,7 @@ const VALID_ROUTES: ReadonlySet<string> = new Set<Route>([
   "trends",
   "recall",
   "quality",
+  "friction",
   "pinned",
   "trash",
   "recent-edits",
