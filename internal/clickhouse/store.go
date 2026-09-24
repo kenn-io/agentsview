@@ -48,6 +48,10 @@ type Store struct {
 	pricing pricingCache
 	// coverageCache memoizes complete usage snapshot coverage per parts.
 	coverageCache usageCoverageCache
+	// The usage row memos keep recent range reads per parts and filter.
+	dailyUsageRows       usageRowMemo[chDailyUsageGroupRow]
+	sessionAggregateRows usageRowMemo[chUsageAggregateRow]
+	usageSessionRows     usageRowMemo[chUsageSessionRow]
 }
 
 // NewStore connects to the mirror named by t and refuses schemas or data
