@@ -611,6 +611,14 @@ func (c InsightsConfig) Validate() error {
 // DefaultFrictionBackfillDays bounds catch-up to recent complete local dates.
 const DefaultFrictionBackfillDays = 7
 
+// FrictionDiagnosticsConfig turns ledger health events with a diagnostic
+// payload into daily Friction Log error signals.
+type FrictionDiagnosticsConfig struct {
+	Enabled    bool     `json:"enabled" toml:"enabled"`
+	Subsystems []string `json:"subsystems,omitempty" toml:"subsystems"`
+	Zones      []string `json:"zones,omitempty" toml:"zones"`
+}
+
 // FrictionConfig controls the deterministic Friction Log review.
 type FrictionConfig struct {
 	Enabled bool `json:"enabled" toml:"enabled"`
@@ -620,7 +628,8 @@ type FrictionConfig struct {
 	// BackfillDays bounds catch-up to recent complete local dates.
 	BackfillDays int `json:"backfill_days" toml:"backfill_days"`
 	// SeatPatterns are globs over session file paths with one {seat} capture.
-	SeatPatterns []string `json:"seat_patterns,omitempty" toml:"seat_patterns"`
+	SeatPatterns []string                  `json:"seat_patterns,omitempty" toml:"seat_patterns"`
+	Diagnostics  FrictionDiagnosticsConfig `json:"diagnostics" toml:"diagnostics"`
 }
 
 // Validate checks the zone name, backfill bound, and seat patterns.
@@ -1254,7 +1263,10 @@ func Default() (Config, error) {
 				FailureBackoff:   "1h",
 			},
 		},
-		Friction: FrictionConfig{Enabled: true, BackfillDays: DefaultFrictionBackfillDays},
+		Friction: FrictionConfig{
+			Enabled: true, BackfillDays: DefaultFrictionBackfillDays,
+			Diagnostics: FrictionDiagnosticsConfig{Subsystems: []string{"*"}},
+		},
 	}, nil
 }
 
@@ -1940,6 +1952,12 @@ func (c *Config) applyConfigTOML(data string) error {
 			}
 		}
 	}
+	if meta.IsDefined("friction", "diagnostics") {
+		c.Friction.Diagnostics = file.Friction.Diagnostics
+		if len(c.Friction.Diagnostics.Subsystems) == 0 {
+			c.Friction.Diagnostics.Subsystems = []string{"*"}
+		}
+	}
 	// IsDefined distinguishes "unset" (leave default 10s) from an
 	// explicit "0s" (disable coalescing). Checking != 0 would silently
 	// ignore the latter.
@@ -2523,6 +2541,29 @@ func finalize(cfg *Config) error {
 	}
 	if err := cfg.Friction.Validate(); err != nil {
 		return err
+	}
+	if err := cfg.validateFrictionDiagnostics(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *Config) validateFrictionDiagnostics() error {
+	d := c.Friction.Diagnostics
+	if !d.Enabled {
+		return nil
+	}
+	if !c.Ledger.Enabled {
+		return errors.New("[friction.diagnostics] enabled requires [ledger] enabled")
+	}
+	known := map[string]bool{}
+	for _, z := range c.Ledger.ZoneIDs() {
+		known[z] = true
+	}
+	for _, z := range d.Zones {
+		if !known[z] {
+			return fmt.Errorf("[friction.diagnostics] zone %q is not a configured [[ledger.zones]] id", z)
+		}
 	}
 	return nil
 }

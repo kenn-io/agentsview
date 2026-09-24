@@ -11,6 +11,9 @@ The latest published release is
 
 **New features**
 
+- Friction Log builds now record activity in the event ledger when it is
+  enabled. Tools can opt in to include their own operational failures in the
+  daily digest through `[friction.diagnostics]`.
 - `agentsview ledger query`, `GET /api/v1/ledger/events` and the MCP tool
   `query_ledger` search the event ledger by time, subsystem and class, with
   jilog-compatible text and JSON output. Ledger commands now go through the

@@ -69,8 +69,8 @@ approved mapping where code has not joined this branch yet.
   (`contract_tilde`, `expand_tilde`), and `run_with_timeout`.
 - Collectors and rules tied to a particular worker setup: private diagnostic
   collectors, seats inferred from fixed pool-profile paths, a worker-specific
-  title exception, and a P0 exclusion list of worker tool names. A configured
-  source can provide generic diagnostics and seats in later PRs.
+  title exception, and a P0 exclusion list of worker tool names. Opt-in ledger
+  events now provide generic diagnostics; configured seat patterns provide seats.
 - Migration or matching of existing `[jilog/…]` issues. Friction Log starts
   with its own issue history.
 
@@ -83,6 +83,9 @@ approved mapping where code has not joined this branch yet.
   reader cannot produce those findings from its session rows.
 - Detection and digests are planned to be on by default, as running jilog
   makes them. P0 filing awaits the archive and Kata integration.
+- Friction digest builds and pattern transitions emit deterministic ledger
+  events. This implements the review-to-ledger intent in jilog's
+  `docs/architecture.html:290,366`, which its code did not implement.
 
 ## Deliberate differences
 

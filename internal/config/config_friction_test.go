@@ -79,6 +79,7 @@ func TestFrictionConfigTOMLLoadAndFinalize(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := loadMinimalWithConfig(t, tt.data)
+			tt.want.Diagnostics = FrictionDiagnosticsConfig{Subsystems: []string{"*"}}
 			assert.Equal(t, tt.want, cfg.Friction)
 		})
 	}
@@ -88,4 +89,47 @@ func TestFrictionConfigTOMLLoadAndFinalize(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `[friction] timezone "Nowhere/Land" is not an IANA zone`)
+}
+
+func TestFrictionDiagnosticsConfig(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		toml    string
+		wantErr string
+		check   func(t *testing.T, c Config)
+	}{
+		{"default_off_with_star", "", "", func(t *testing.T, c Config) {
+			t.Helper()
+			assert.False(t, c.Friction.Diagnostics.Enabled)
+			assert.Equal(t, []string{"*"}, c.Friction.Diagnostics.Subsystems)
+		}},
+		{
+			"enabled_with_ledger", "[ledger]\nenabled = true\n[[ledger.zones]]\nid = \"default\"\n[friction.diagnostics]\nenabled = true\nsubsystems = [\"ci*\"]\n", "",
+			func(t *testing.T, c Config) {
+				t.Helper()
+				assert.True(t, c.Friction.Diagnostics.Enabled)
+				assert.Equal(t, []string{"ci*"}, c.Friction.Diagnostics.Subsystems)
+			},
+		},
+		{"requires_ledger", "[friction.diagnostics]\nenabled = true\n", "[friction.diagnostics] enabled requires [ledger] enabled", nil},
+		{
+			"unknown_zone", "[ledger]\nenabled = true\n[[ledger.zones]]\nid = \"default\"\n[friction.diagnostics]\nenabled = true\nzones = [\"other\"]\n",
+			`[friction.diagnostics] zone "other" is not a configured [[ledger.zones]] id`, nil,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := Default()
+			require.NoError(t, err)
+			err = cfg.applyConfigTOML(tc.toml)
+			if err == nil {
+				err = finalize(&cfg)
+			}
+			if tc.wantErr != "" {
+				require.EqualError(t, err, tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			tc.check(t, cfg)
+		})
+	}
 }

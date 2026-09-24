@@ -75,6 +75,42 @@ by how many times they occurred, with the first and last day seen. Each pattern
 has a fingerprint (`fl1:` plus a SHA-256 of its title) that stays the same
 across days.
 
+## Diagnostics from your own tools
+
+Enable the event ledger and opt in to diagnostics to include operational
+failures from your own tools in the daily digest:
+
+```toml
+[ledger]
+enabled = true
+
+[friction.diagnostics]
+enabled = true
+subsystems = ["*"] # default: all subsystems
+# zones = ["default"] # default: all configured ledger zones
+```
+
+A diagnostic is a `health` event whose structured payload has `kind` set to
+`diagnostic`. It needs a lowercase `diagnostic` name (1–64 characters from
+`a-z`, `0-9`, `.`, `_`, `:` and `-`), a stable nonblank `identity`, and a string
+`detail`. An optional `seat` names the affected seat. The event becomes a P3
+error signal; diagnostics never raise P0 alerts.
+
+For example, a CI job could append a diagnostic after a nightly check fails:
+
+```sh
+agentsview ledger append --class health --subsystem ci \
+  --summary "nightly lint failed" \
+  --payload '{"kind":"diagnostic","diagnostic":"ci_nightly_failed","identity":"'"$RUN_ID"':ci_nightly_failed","detail":"lint step exited 1"}'
+```
+
+The review keeps one line per identity, including when the same diagnostic is
+sent by more than one source or on another day. A rebuild keeps identities
+already recorded for that date. A producer that also needs exact event dedupe
+can set the event id with `ledger.DeterministicEventID(source, identity)` when
+using the ledger append API. Automatic issue filing for diagnostics arrives
+with the filing integration.
+
 ## Limits
 
 - The review reads only stored session data; it needs no transcript files.

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"os"
 	"sync"
@@ -10,6 +11,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/friction"
 	"go.kenn.io/agentsview/internal/friction/review"
+	"go.kenn.io/agentsview/internal/ledger"
 	"go.kenn.io/agentsview/internal/poller"
 )
 
@@ -39,10 +41,25 @@ func newFrictionRunner(cfg config.Config, store frictionRunnerStore, now func() 
 	if err != nil {
 		return nil, err
 	}
-	return &review.Runner{
+	runner := &review.Runner{
 		Store: store, Loc: loc, Now: now,
 		BackfillDays: cfg.Friction.BackfillDays, PublicURL: cfg.PublicURL,
-	}, nil
+	}
+	if cfg.Ledger.Enabled {
+		writer, ok := store.(ledger.WriterStore)
+		if !ok {
+			return nil, errors.New("friction ledger enabled: review store cannot append ledger segments")
+		}
+		querier, ok := store.(diagnosticsStore)
+		if !ok {
+			return nil, errors.New("friction ledger enabled: review store cannot query diagnostics")
+		}
+		parts := frictionLedgerWiring(cfg, writer, querier, nil)
+		runner.Ledger = parts.JobSink
+		runner.LedgerSource = parts.Source
+		runner.Diagnostics = parts.Diagnostics
+	}
+	return runner, nil
 }
 
 // frictionExclusive keeps a detached daemon alive and serializes digest work

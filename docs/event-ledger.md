@@ -1,4 +1,5 @@
 ---
+last_edited: 2026-09-24
 title: Event Ledger
 description: An optional append-only, checksummed event log compatible with jilog segment files
 ---
@@ -10,8 +11,8 @@ change after they are written. The format is byte-compatible with
 [jilog](https://github.com/Joi/jilog) ledger segments, so existing jilog
 segment directories can be imported and exported.
 
-The ledger is off by default and records nothing on its own until something
-appends to it.
+The ledger is off by default. When enabled, Friction Log digest builds append
+activity events; tools can also append events directly.
 
 ## Enabling the ledger
 
@@ -48,6 +49,23 @@ an optional JSON payload. The classes are `ingest`, `route`, `decision`,
 
 By convention `payload.subsystem` names the component an event is about and
 `payload.summary` is a one-line description.
+
+Friction Log writes activity events after a digest is saved and reads diagnostic
+events supplied by tools:
+
+| Payload `kind`                | Meaning                                      |
+| ----------------------------- | -------------------------------------------- |
+| `friction.digest.built`       | A dated digest was built or rebuilt          |
+| `friction.pattern.first_seen` | A pattern first appeared in a digest         |
+| `friction.pattern.recurred`   | A pattern appeared again after its first day |
+| `diagnostic`                  | A tool reported an operational failure      |
+
+The first three use deterministic event ids, so a retry or rebuild does not
+duplicate the same fact. A rebuilt digest has a new revision and its own build
+event. `diagnostic` events are supplied by tools and can feed the daily
+[Friction Log](/docs/friction-log/#diagnostics-from-your-own-tools) when
+`[friction.diagnostics]` is enabled. Issue filing events arrive with the filing
+integration and appear only on its hub.
 
 ## Commands
 
