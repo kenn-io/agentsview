@@ -1335,6 +1335,48 @@ CREATE TABLE IF NOT EXISTS friction_session_dims (
     review_excluded INTEGER NOT NULL DEFAULT 0
 );
 
+-- Friction Log review state is built independently by each store.
+-- One digest is kept for each completed local date.
+CREATE TABLE IF NOT EXISTS friction_digests (
+    date             TEXT PRIMARY KEY,
+    timezone         TEXT NOT NULL,
+    rules_version    TEXT NOT NULL,
+    built_at         TEXT NOT NULL,
+    revision         INTEGER NOT NULL DEFAULT 1,
+    sessions_scanned INTEGER NOT NULL,
+    snapshot_json    TEXT NOT NULL,
+    summary_json     TEXT NOT NULL,
+    markdown         TEXT NOT NULL,
+    markdown_sha256  TEXT NOT NULL,
+    run_id           TEXT NOT NULL
+);
+
+-- A subject enters one digest only, even if the session resumes later.
+CREATE TABLE IF NOT EXISTS friction_digest_sessions (
+    subject_id   TEXT PRIMARY KEY,
+    date         TEXT NOT NULL,
+    subject_kind TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_friction_digest_sessions_date
+    ON friction_digest_sessions(date);
+
+-- Local recurrence per fingerprint across digests.
+CREATE TABLE IF NOT EXISTS friction_patterns (
+    fingerprint      TEXT PRIMARY KEY,
+    kind             TEXT NOT NULL,
+    title            TEXT NOT NULL,
+    first_seen_date  TEXT NOT NULL,
+    last_seen_date   TEXT NOT NULL,
+    occurrence_count INTEGER NOT NULL,
+    session_count    INTEGER NOT NULL,
+    last_subject_id  TEXT NOT NULL,
+    last_ordinal     INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_friction_patterns_last_seen
+    ON friction_patterns(last_seen_date);
+
 -- Durable normalized-artifact import claims. Artifact kinds evolve
 -- independently, so each claim retains a separate version gate.
 CREATE TABLE IF NOT EXISTS artifact_import_queue (
