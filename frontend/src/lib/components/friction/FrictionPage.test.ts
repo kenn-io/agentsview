@@ -265,6 +265,13 @@ describe("FrictionPage", () => {
     expect(loadCalls).toContain(OLDER);
   });
 
+  it("links to the published Friction Log guide", async () => {
+    await render();
+    expect(document.querySelector<HTMLAnchorElement>(".friction-help-link")?.href).toBe(
+      "https://agentsview.io/docs/friction-log/",
+    );
+  });
+
   it("renders summary first: heading, P0 alerts, then ranked patterns", async () => {
     await render();
     const text = document.body.textContent ?? "";

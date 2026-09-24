@@ -99,7 +99,7 @@
     <p class="friction-help">
       {m.friction_page_help_intro()}
       <a
-        href="https://www.agentsview.io/friction-log/"
+        href="https://agentsview.io/docs/friction-log/"
         target="_blank"
         rel="noopener noreferrer"
         class="friction-help-link"
@@ -202,6 +202,11 @@
     display: flex;
     align-items: center;
     gap: 4px;
+  }
+  .date-nav :global(.kit-typeahead) {
+    width: 170px;
+    min-width: 170px;
+    flex: 0 0 170px;
   }
   .content {
     flex: 1;
