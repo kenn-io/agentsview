@@ -11,6 +11,9 @@ import (
 	"sync"
 	"time"
 
+	chdriver "github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/ClickHouse/clickhouse-go/v2/ext"
+
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/signals"
 )
@@ -81,6 +84,16 @@ func (s *Store) analyticsSessionsFiltered(
 		where += " AND " + extraPred
 		args = append(args, extraArgs...)
 	}
+	// Every analytics panel on a page lists the same sessions; keep the
+	// rows per parts and predicate so one page reads them once.
+	fingerprint, err := s.partsFingerprint(ctx)
+	if err != nil {
+		return nil, err
+	}
+	memoKey := analyticsSessionMemoKey(where, args)
+	if cached, ok := s.analyticsSessionRows.get(memoKey, fingerprint); ok {
+		return slices.Clone(cached), nil
+	}
 	rows, err := s.queryContext(ctx, `
 		SELECT id, project, machine, agent, first_message,
 			COALESCE(display_name, session_name) AS display_name,
@@ -129,7 +142,18 @@ func (s *Store) analyticsSessionsFiltered(
 		r.createdAt = formatDBTime(createdAt)
 		out = append(out, r)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	s.analyticsSessionRows.put(memoKey, fingerprint, slices.Clone(out))
+	return out, nil
+}
+
+// analyticsSessionMemoKey names a session listing by predicate and
+// arguments. Arguments are rendered in Go syntax so their boundaries and
+// types survive: ["a b", "c"] and ["a", "b c"] are different keys.
+func analyticsSessionMemoKey(where string, args []any) string {
+	return fmt.Sprintf("%s|%#v", where, args)
 }
 
 // analyticsSessionsModelTimeFiltered loads the date- and model-scoped sessions
@@ -405,14 +429,7 @@ func analyticsLocalDate(ts, tz string) string {
 }
 
 func analyticsLocation(tz string) *time.Location {
-	if tz == "" {
-		return time.UTC
-	}
-	loc, err := time.LoadLocation(tz)
-	if err != nil {
-		return time.UTC
-	}
-	return loc
+	return db.LoadLocationOr(tz, time.UTC)
 }
 
 func parseAnalyticsTime(ts string) (time.Time, bool) {
@@ -1759,11 +1776,31 @@ func chQueryChunked(ids []string, fn func(chunk []string) error) error {
 }
 
 // chAnalyticsToolCallMessagesSQL selects the message columns tool call
-// analytics join, limited to the chunk's sessions so the join hashes those
+// analytics join, limited to the selected sessions so the join hashes those
 // sessions' messages rather than every message. The join keys on session
-// id, so rows outside the chunk could never match.
+// id, so rows outside the selection could never match.
 const chAnalyticsToolCallMessagesSQL = `SELECT session_id, ordinal, timestamp, model
 					FROM messages WHERE session_id IN `
+
+// withAnalyticsSessionIDs runs fn once with every selected session id sent
+// as an external table, so a read over the selection is one statement and
+// one scan of each table instead of one per chunk of placeholders. ph is
+// the subquery selecting the ids.
+func (s *Store) withAnalyticsSessionIDs(
+	ctx context.Context, ids []string, fn func(ctx context.Context, ph string) error,
+) error {
+	table, err := ext.NewTable("analytics_session_ids", ext.Column("id", "String"))
+	if err != nil {
+		return fmt.Errorf("creating analytics session table: %w", err)
+	}
+	for _, id := range ids {
+		if err := table.Append(id); err != nil {
+			return fmt.Errorf("adding analytics session: %w", err)
+		}
+	}
+	ctx = chdriver.Context(ctx, chdriver.WithExternalTable(table))
+	return fn(ctx, "(SELECT id FROM analytics_session_ids)")
+}
 
 func (s *Store) GetAnalyticsTools(
 	ctx context.Context, f db.AnalyticsFilter,
@@ -1785,9 +1822,8 @@ func (s *Store) GetAnalyticsTools(
 		return db.BuildToolsAnalytics(nil), nil
 	}
 	var toolRows []db.ToolAnalyticsRow
-	err = chQueryChunked(ids, func(chunk []string) error {
-		ph, inArgs := chInPlaceholders(chunk)
-		args := append(append([]any{}, inArgs...), inArgs...)
+	err = s.withAnalyticsSessionIDs(ctx, ids, func(ctx context.Context, ph string) error {
+		var args []any
 		modelPred, modelArgs := chAnalyticsCSVPredicate("m.model", f.Model)
 		args = append(args, modelArgs...)
 		from, to := chAnalyticsWindowBounds(f)
@@ -1871,9 +1907,8 @@ func (s *Store) GetAnalyticsSkills(
 	}
 
 	var skillRows []db.SkillAnalyticsRow
-	err = chQueryChunked(ids, func(chunk []string) error {
-		ph, inArgs := chInPlaceholders(chunk)
-		args := append(append([]any{}, inArgs...), inArgs...)
+	err = s.withAnalyticsSessionIDs(ctx, ids, func(ctx context.Context, ph string) error {
+		var args []any
 		modelPred, modelArgs := chAnalyticsCSVPredicate("m.model", f.Model)
 		args = append(args, modelArgs...)
 		from, to := chAnalyticsWindowBounds(f)
