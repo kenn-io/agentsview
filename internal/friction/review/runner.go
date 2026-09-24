@@ -16,6 +16,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/friction"
+	"go.kenn.io/agentsview/internal/ledger"
 	"go.kenn.io/agentsview/internal/timeutil"
 )
 
@@ -48,6 +49,8 @@ type DiagnosticSource interface {
 type Runner struct {
 	Store        Store
 	Diagnostics  DiagnosticSource
+	Ledger       ledger.Sink
+	LedgerSource string
 	Loc          *time.Location
 	Now          func() time.Time
 	BackfillDays int
@@ -379,6 +382,7 @@ func (r *Runner) BuildDate(ctx context.Context, date string, opts BuildOptions) 
 	for _, id := range diagIDs {
 		members = append(members, db.FrictionDigestSubject{SubjectID: id, Date: date, SubjectKind: friction.SubjectDiagnostic})
 	}
+	before := r.patternsBefore(ctx, signals)
 	err = r.Store.SaveFrictionDigest(ctx, digest, members, patternUpdates(date, signals, counted))
 	if errors.Is(err, db.ErrFrictionDigestConflict) {
 		log.Printf("friction review: %s: another builder wrote this digest first", date)
@@ -387,7 +391,9 @@ func (r *Runner) BuildDate(ctx context.Context, date string, opts BuildOptions) 
 	if err != nil {
 		return Report{}, err
 	}
-	return Report{Date: date, Snapshot: snap, Meta: meta, Written: true}, nil
+	report := Report{Date: date, Snapshot: snap, Meta: meta, Written: true}
+	r.emitBuildEvents(ctx, date, report, digest, before)
+	return report, nil
 }
 
 var ErrDigestNotFound = errors.New("friction: no digest for date")
