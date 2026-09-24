@@ -138,6 +138,9 @@ Kept:
   and remembered gaps.
 - The `jilog query` `--since` grammar, class names, subsystem globs, and the
   text and JSON output formats.
+- The `ledger-spool` writer and ingester and `commands/spool.rs` emit, ingest,
+  and status flows. Publication uses no-clobber hard links; bad incoming files
+  remain available for inspection and retry.
 
 Storage and import (PR 13):
 
@@ -149,6 +152,9 @@ Storage and import (PR 13):
 - Each projected event stores its exact serialized bytes alongside class and
   tier in serde form. Verify checkpoints live in the archive per zone and
   source.
+- The archive replaces `fleet_store_path` and the separate mirror-zone index
+  refresh. `spool_authority` marks the ingest host. The configured ledger
+  source or installation-ID source replaces jilog's hostname source.
 
 Planned in the query PR:
 

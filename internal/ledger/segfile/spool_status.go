@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 )
 
 // SpoolStatus renders the observable part of one zone's status line
@@ -22,7 +23,7 @@ func SpoolStatus(spoolDir, cursorDir, zone, source string) (string, bool) {
 		case present && !valid:
 			cursor, cursorOK = "unreadable/corrupt (emit will restart from 0)", false
 		default:
-			cursor, cursorOK = fmt.Sprint(seq), true
+			cursor, cursorOK = strconv.FormatUint(seq, 10), true
 		}
 	}
 	line := fmt.Sprintf("incoming=%s processed=%s cursor[%s]=%s", incoming, processed, host, cursor)
@@ -53,5 +54,5 @@ func countSpoolDir(dir string) (string, bool) {
 	if readErr != nil {
 		return fmt.Sprintf("%d (unreadable entries: 1)", n), false
 	}
-	return fmt.Sprint(n), true
+	return strconv.Itoa(n), true
 }

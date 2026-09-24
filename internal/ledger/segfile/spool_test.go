@@ -34,12 +34,18 @@ func TestSpoolErrorsMatchJilogText(t *testing.T) {
 		err  error
 		want string
 	}{
-		{"invalid_source", &InvalidSourceError{Name: "../evil"},
-			`invalid segment source "../evil": must match ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`},
-		{"identity_mismatch", &IdentityMismatchError{Found: "hostB-000001.json", Expected: "hostA-000001.json"},
-			`spool filename "hostB-000001.json" does not match segment identity "hostA-000001.json" (path-traversal / spoof guard)`},
-		{"integrity", &IntegrityError{Src: "hostA", Seq: 1, Reason: "checksum mismatch"},
-			"integrity check failed for hostA:1: checksum mismatch"},
+		{
+			"invalid_source", &InvalidSourceError{Name: "../evil"},
+			`invalid segment source "../evil": must match ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`,
+		},
+		{
+			"identity_mismatch", &IdentityMismatchError{Found: "hostB-000001.json", Expected: "hostA-000001.json"},
+			`spool filename "hostB-000001.json" does not match segment identity "hostA-000001.json" (path-traversal / spoof guard)`,
+		},
+		{
+			"integrity", &IntegrityError{Src: "hostA", Seq: 1, Reason: "checksum mismatch"},
+			"integrity check failed for hostA:1: checksum mismatch",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, tc.err.Error())

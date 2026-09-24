@@ -20,6 +20,7 @@ type emitFixture struct {
 }
 
 func newEmitFixture(t *testing.T) emitFixture {
+	t.Helper()
 	root := t.TempDir()
 	return emitFixture{store: newMemLedger(), spool: filepath.Join(root, "spool"), cursors: filepath.Join(root, "cursors")}
 }
@@ -202,7 +203,7 @@ func TestSpoolEmit(t *testing.T) {
 	})
 
 	t.Run("cursor_path_is_unambiguous_for_dashed_names", func(t *testing.T) {
-		dir := filepath.Join("cursors")
+		dir := "cursors"
 		assert.NotEqual(t, CursorPath(dir, "team-ops", "x"), CursorPath(dir, "team", "ops-x"))
 	})
 

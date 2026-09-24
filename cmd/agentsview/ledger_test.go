@@ -32,7 +32,7 @@ func TestNewLedgerCommand_RegistersSubcommands(t *testing.T) {
 	for _, sub := range cmd.Commands() {
 		names = append(names, sub.Name())
 	}
-	assert.ElementsMatch(t, []string{"append", "status", "verify", "import", "export", "rebuild-index"}, names)
+	assert.ElementsMatch(t, []string{"append", "status", "verify", "import", "export", "rebuild-index", "spool"}, names)
 }
 
 func TestLedgerAppendStatusVerify(t *testing.T) {

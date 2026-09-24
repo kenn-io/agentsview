@@ -10,6 +10,9 @@ The latest published release is
 
 **New features**
 
+- Ledger spool interop lets `agentsview ledger spool emit|ingest|status`
+  exchange segments with jilog and opsctl hosts through a shared directory.
+  It checks segment integrity and keeps the archive outside the synced spool.
 - An optional event ledger stores append-only, checksummed events in the
   archive. `agentsview ledger` appends, verifies, imports and exports segments
   that are byte-compatible with jilog ledgers, and a zone with `import_path`

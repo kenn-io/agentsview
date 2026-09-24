@@ -58,6 +58,9 @@ agentsview ledger verify [--zone Z] [--full]
 agentsview ledger import --zone Z --segments DIR
 agentsview ledger export --zone Z --dir DIR [--source S]
 agentsview ledger rebuild-index --zone Z
+agentsview ledger spool emit [--zone Z] [--source S] [--cursor-dir DIR]
+agentsview ledger spool ingest [--zone Z]
+agentsview ledger spool status [--zone Z] [--source S] [--cursor-dir DIR]
 ```
 
 See the [CLI Reference](/docs/commands/#agentsview-ledger) for every flag.
@@ -87,7 +90,53 @@ zone with `import_path` is followed automatically every five minutes while the
 daemon runs. `ledger export` writes a zone back out as jilog files and never
 replaces an existing file.
 
-Limits:
+## Spool interop with jilog and opsctl
+
+Set `spool_path` on each zone that exchanges segments. Its `incoming/` and
+`processed/` directories use jilog's spool layout. A file-sync tool can
+replicate the spool directory between hosts; AgentsView does not sync it.
+Set `spool_authority = true` only on the host that ingests that zone.
+
+```toml
+[[ledger.zones]]
+id = "default"
+spool_path = "/path/to/spool"
+spool_authority = true
+```
+
+`ledger spool emit` copies sealed segments from this host's source into
+`incoming/` using no-clobber hard links. It checks every own segment on each
+run. The cursor at `<data_dir>/ledger/spool-cursors/<zone>/<source>.json`
+reports progress; it does not decide which segments to check. The source is
+`[ledger] source`, or `av-<installation_id>` by default.
+
+`ledger spool ingest` runs only on a spool authority. It checks each file's
+source name, filename identity, and CRC, then stores it in the archive with
+origin `spool` and moves it to `processed/`. Failed files stay in `incoming/`
+and make the command exit nonzero. When a writable daemon owns the archive,
+the command asks its localhost-only ingest endpoint to do the work.
+
+`ledger spool status` prints incoming and processed counts and the source's
+cursor for each zone. It exits nonzero for unreadable directories or a corrupt
+cursor.
+
+The spool directory must support hard links, and the AgentsView data directory
+must not be inside it. File-sync conflict copies (`*.sync-conflict-*`) stay in
+the spool for an operator to inspect. A segment row that cannot be decoded
+stops emit's listing for that run.
+
+AgentsView uses its archive as the query index. Its spool messages differ from
+jilog where the underlying configuration differs:
+
+| jilog message refers to | AgentsView message refers to |
+| --- | --- |
+| Mirror zone (`spool = false`) | Spool disabled (`spool_path` unset) |
+| `fleet_store_path` and its setup hint | `spool_authority` and its zone setting |
+| Separate SQLite index refresh | Archive commit; no index refresh line |
+| Fleet store path | This archive, or a producer host |
+| Hostname source | Configured ledger source or installation ID |
+
+## Import and export limits
 
 - A segment whose event sequence number is above 2^63-1 cannot be stored and
   is reported.

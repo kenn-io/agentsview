@@ -152,7 +152,7 @@ func SpoolIngest(ctx context.Context, spoolDir, zone string, dst Appender) (Inge
 	incoming := filepath.Join(spoolDir, SpoolIncomingDir)
 	processed := filepath.Join(spoolDir, SpoolProcessedDir)
 	// Rust's Path::exists is false on any stat error (ingester.rs:130-133).
-	if _, err := os.Stat(incoming); err != nil {
+	if !spoolPathExists(incoming) {
 		return report, nil
 	}
 	if err := os.MkdirAll(processed, 0o755); err != nil {
@@ -193,6 +193,11 @@ func SpoolIngest(ctx context.Context, spoolDir, zone string, dst Appender) (Inge
 		}
 	}
 	return report, nil
+}
+
+func spoolPathExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // spoolJSONNames lists *.json entries of dir sorted by name, skipping
@@ -284,13 +289,17 @@ func storeConflict(ctx context.Context, dst Appender, zone string, seg ledger.Se
 				return fmt.Errorf("ledger error: serialization error: %w", err)
 			}
 			if !valid {
-				return &IntegrityError{Src: seg.Source, Seq: seg.SourceSeq,
-					Reason: "store copy of this identity fails checksum verification — corrupt store copy; left in incoming/"}
+				return &IntegrityError{
+					Src: seg.Source, Seq: seg.SourceSeq,
+					Reason: "store copy of this identity fails checksum verification — corrupt store copy; left in incoming/",
+				}
 			}
 		}
 	}
-	return &IntegrityError{Src: seg.Source, Seq: seg.SourceSeq,
-		Reason: "duplicate identity with DIFFERENT content — possible hostname collision or corrupt store copy; left in incoming/"}
+	return &IntegrityError{
+		Src: seg.Source, Seq: seg.SourceSeq,
+		Reason: "duplicate identity with DIFFERENT content — possible hostname collision or corrupt store copy; left in incoming/",
+	}
 }
 
 // moveNoClobber ports move_no_clobber (ingester.rs:248-279): hard-link then

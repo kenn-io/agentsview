@@ -1574,6 +1574,9 @@ agentsview ledger verify [--zone <zone>] [--full]
 agentsview ledger import --zone <zone> --segments <dir>
 agentsview ledger export --zone <zone> --dir <dir> [--source <source>]
 agentsview ledger rebuild-index --zone <zone>
+agentsview ledger spool emit [--zone <zone>] [--source <source>] [--cursor-dir <dir>]
+agentsview ledger spool ingest [--zone <zone>]
+agentsview ledger spool status [--zone <zone>] [--source <source>] [--cursor-dir <dir>]
 ```
 
 `ledger append` writes one event as a new sealed segment from this host's
@@ -1593,8 +1596,17 @@ file was refused. Refused files are retried on the next import. `ledger export`
 writes a zone as jilog-format files and never replaces an existing file.
 `ledger rebuild-index` rebuilds a zone's query index from its stored segments.
 
-These commands open the archive directly. While a local daemon owns the
-archive, stop it first.
+`ledger spool emit` copies this host's sealed segments into the configured
+spool's `incoming/` directory. `ledger spool ingest` verifies and commits
+incoming segments on a configured spool authority. `ledger spool status` prints
+spool counts and the emit cursor. `--zone` selects one zone; the default is all
+zones. `--source` overrides the configured source for emit and status.
+`--cursor-dir` overrides the default cursor directory under the data directory.
+See [spool interop](/docs/event-ledger/#spool-interop-with-jilog-and-opsctl).
+
+The other ledger write commands open the archive directly. Stop a local daemon
+before using them. `ledger spool ingest` delegates to the writable daemon when
+it owns the archive.
 
 ______________________________________________________________________
 
