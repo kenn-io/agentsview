@@ -271,6 +271,43 @@ describe("ThreeColumnLayout", () => {
     navigate.mockRestore();
   });
 
+  it("exposes the Friction Log in mobile nav when the server builds digests", async () => {
+    sync.serverVersion = {
+      api_version: 1,
+      data_version: 1,
+      insight_generation_available: false,
+      friction_available: true,
+      version: "dev",
+      commit: "unknown",
+      build_date: "",
+      read_only: false,
+    };
+    renderLayout();
+    await tick();
+
+    const navButtons = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(".mobile-nav .mobile-nav-btn"),
+    );
+    const frictionButton = navButtons.find((btn) => btn.textContent?.trim() === m.nav_friction());
+    expect(frictionButton).not.toBeUndefined();
+
+    const navigate = vi.spyOn(router, "navigate").mockImplementation(() => true);
+    frictionButton!.click();
+    expect(navigate).toHaveBeenCalledWith("friction");
+    navigate.mockRestore();
+  });
+
+  it("omits the Friction Log from mobile nav when the server does not report it", async () => {
+    sync.serverVersion = null;
+    renderLayout();
+    await tick();
+
+    const labels = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(".mobile-nav .mobile-nav-btn"),
+    ).map((button) => button.textContent?.trim());
+    expect(labels).not.toContain(m.nav_friction());
+  });
+
   it("renders the resize handle at the desktop layout breakpoint", async () => {
     const expectedWidth = getClampedSidebarWidthForLayout(320, SIDEBAR_DESKTOP_BREAKPOINT);
 

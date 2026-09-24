@@ -64,6 +64,7 @@
   import TrendsPage from "./lib/components/trends/TrendsPage.svelte";
   import RecallPage from "./lib/components/recall/RecallPage.svelte";
   import QualityPage from "./lib/components/quality/QualityPage.svelte";
+  import FrictionPage from "./lib/components/friction/FrictionPage.svelte";
   import PinnedPage from "./lib/components/pinned/PinnedPage.svelte";
   import TrashPage from "./lib/components/trash/TrashPage.svelte";
   import RecentEditsPage from "./lib/components/recentedits/RecentEditsPage.svelte";
@@ -828,6 +829,10 @@
 {:else if router.route === "quality"}
   <div class="page-scroll">
     <QualityPage />
+  </div>
+{:else if router.route === "friction"}
+  <div class="page-scroll">
+    <FrictionPage />
   </div>
 {:else if router.route === "pinned"}
   <div class="page-scroll">
