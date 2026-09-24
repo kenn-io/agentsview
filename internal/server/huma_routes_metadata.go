@@ -178,6 +178,7 @@ func (s *Server) humaGetVersion(
 ) (*jsonOutput[VersionInfo], error) {
 	version := s.version
 	version.InsightGenerationAvailable = supportsInsightGeneration(s.db)
+	version.LedgerAvailable = s.ledgerConfig().Enabled
 	return &jsonOutput[VersionInfo]{Body: version}, nil
 }
 
