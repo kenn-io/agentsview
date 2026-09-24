@@ -70,10 +70,36 @@ only when the review itself fails.
 ## Findings and patterns
 
 `agentsview friction findings` lists stored findings, filtered by `--date`,
-`--kind` or `--session`. `agentsview friction patterns` ranks recurring patterns
-by how many times they occurred, with the first and last day seen. Each pattern
-has a fingerprint (`fl1:` plus a SHA-256 of its title) that stays the same
-across days.
+`--kind`, `--session` or `--persona`. `agentsview friction patterns` ranks
+recurring patterns by how many times they occurred, with the first and last day
+seen. It also accepts `--persona`. The API uses a `persona` query parameter on
+both lists. Each pattern has a fingerprint (`fl1:` plus a SHA-256 of its title)
+that stays the same across days.
+
+## Personas and seats
+
+Friction Log can label findings with two optional dimensions. Both are off
+until you configure them.
+
+**NanoClaw personas.** Point `[friction.nanoclaw] data_dir` at a NanoClaw data
+directory, and add each agent's `.claude-shared/projects` directory as a Claude
+source. Sessions under `<data_dir>/v2-sessions/<agent-id>/` then carry the
+agent's persona and channel from the cell's `v2.db`. Persona sessions use a
+chat-tuned correction detector, the digest gains a Personas section, and the
+findings and patterns lists accept `persona`.
+
+`include` and `exclude` match an agent's id, persona or folder. `exclude` always
+wins, and a non-empty `include` admits only matching agents. When either list is
+set, an agent that `v2.db` cannot resolve is excluded rather than guessed. So is
+every agent while `v2.db` is unreadable. Excluded sessions get no findings and
+never appear in a digest. When the database changes, affected sessions are
+recomputed on the next reconcile pass. Dates that already have a digest change
+only when you run `agentsview friction run --date YYYY-MM-DD --rebuild`.
+
+**Seats.** `[friction] seat_patterns` labels sessions by a path segment you
+choose. A seat is a label only; it never changes which detector runs.
+
+These are heuristics over names you control, not ground truth.
 
 ## Limits
 

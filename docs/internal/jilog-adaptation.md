@@ -12,8 +12,9 @@ notice. Source paths below are relative to that jilog commit.
 
 PR 1 provides pure detection, signal, formatting, and JSON packages. PR 2 adds
 the archived-row adapter, pattern detection, and session review. PR 3 persists
-findings, and PR 4 adds digest rendering. Scheduled review, NanoClaw
-integration, and Kata filing remain planned for later PRs.
+findings, PR 4 adds digest rendering, PR 5 adds scheduled review, and PR 19 adds
+opt-in NanoClaw personas and seats. Kata filing is separate from this
+adaptation.
 
 ## Kept in PR 1
 
@@ -39,18 +40,18 @@ integration, and Kata filing remain planned for later PRs.
   keys, no HTML escaping, and float layout. This keeps JSON serialization
   byte-stable for future digests within the documented parity limits.
 
-## Planned replacements
+## Replacements in later PRs
 
-- Database tables replace the processed-sessions file and retry sidecar. A
-  catch-up job will build each completed local day once, replacing the nightly
+- Database tables replace the processed-sessions file and retry sidecar. An
+  hourly catch-up builds each completed local day once, replacing the nightly
   run.
-- A direct usage-rollup query will replace the `agentsview usage daily`
-  shell-out for archive spend.
-- A native Kata HTTP client will replace the Kata CLI tracker. Filing remains
-  off until a Kata hub is configured.
+- A direct usage-rollup query replaces the `agentsview usage daily` shell-out
+  for archive spend.
+- A native Kata HTTP client replaces the Kata CLI tracker. Filing stays off
+  until a Kata hub is configured.
 - Generic NanoClaw persona and channel resolution, trust filtering, and
-  message-envelope cleanup will retain the public NanoClaw behavior. They will
-  be inactive until a NanoClaw data directory is configured.
+  message-envelope cleanup retain the public NanoClaw behavior. They stay
+  inactive until a NanoClaw data directory is configured.
 
 ## Kept in PR 2
 
@@ -72,6 +73,8 @@ integration, and Kata filing remain planned for later PRs.
   source can provide generic diagnostics and seats in later PRs.
 - Migration or matching of existing `[jilog/…]` issues. Friction Log starts
   with its own issue history.
+- jilog's default `~/nanoclaw/data` path (D33). AgentsView reads a NanoClaw
+  data directory only when `[friction.nanoclaw] data_dir` is set.
 
 ## Additions
 
@@ -80,8 +83,8 @@ integration, and Kata filing remain planned for later PRs.
   kind.
 - Archived tool calls supply error and pattern findings. jilog's AgentsView
   reader cannot produce those findings from its session rows.
-- Detection and digests are planned to be on by default, as running jilog
-  makes them. P0 filing awaits the archive and Kata integration.
+- Detection and digests are on by default, as running jilog makes them. P0
+  filing requires a configured Kata hub.
 
 ## Deliberate differences
 
@@ -129,9 +132,8 @@ Additions beyond jilog:
 - Frustration markers (`signals.IsFrustrationMarker`) and user interruptions
   (rows the Claude parser tags `interrupted`) are friction kinds of their
   own. They run after jilog's five kinds.
-- `SeatFromPath` uses only the patterns its caller provides. Wiring those
-  patterns to `[friction] seat_patterns` configuration is planned for a later
-  PR. jilog's built-in pool-directory conventions are not carried over.
+- `SeatFromPath` uses only the user-provided `[friction] seat_patterns`. jilog's
+  built-in pool-directory conventions are not carried over.
 
 ## Parity notes
 
@@ -242,6 +244,26 @@ Ported from jilog `9e8e094` `crates/jilog-review/src/digest.rs:208-706`
 - **Dropped:** reader discovery windows and the retry sidecar (the filing
   outbox replaces it in the Kata PRs); jilog's private worker collectors and
   pool-seat conventions (seats come only from user `seat_patterns`).
+
+## NanoClaw personas and seats (PR 19)
+
+- **Kept:** `readers/nanoclaw.rs` agent-map SQL, include/exclude trust filter,
+  fail-closed behavior when a filter is set, and message-envelope cleanup.
+  The ported `nanoclaw_*` discover and reader cases run cell files through the
+  Claude parser before checking stored dimensions, findings, and digests.
+- **Replaced:** each session stores sanitized persona and channel names in its
+  Friction Log dimensions. A routing database or filter change refreshes those
+  dimensions on the next reconcile pass, rather than resolving names during
+  each nightly discovery. Already-built dates still require an explicit
+  `friction run --rebuild`.
+- **Dropped (D33):** jilog's default NanoClaw data path. The integration stays
+  off until a user sets `[friction.nanoclaw] data_dir`.
+
+The archive imposes three differences. Claude response blocks with the same
+message ID become one stored message, so a split response counts usage once.
+Known models can have priced usage, so cell digests can show dollars where jilog
+had tokens only. A user row mixing envelope and plain text blocks is flattened
+before unwrapping; the unwrapped text keeps only envelope bodies.
 
 ## License
 

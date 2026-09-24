@@ -11,6 +11,9 @@ The latest published release is
 
 **New features**
 
+- Friction Log can label findings with NanoClaw personas and channels and with
+  seats from your own path patterns. Both are off until configured. NanoClaw
+  trust filters fail closed, and excluded agents never reach a digest.
 - Friction Log digests, findings and recurring patterns can now be read and
   built from the API, CLI and MCP. `agentsview friction run` builds missing
   complete days, while `friction digest`, `friction findings` and
