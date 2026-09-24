@@ -65,6 +65,9 @@ filter:
       - get-api-v1-friction-findings
       - get-api-v1-friction-patterns
       - post-api-v1-friction-run
+      - post-api-v1-friction-patterns-fingerprint-file
+      - put-api-v1-friction-patterns-fingerprint-link
+      - delete-api-v1-friction-patterns-fingerprint-link
       - post-api-v1-raw-sync-manifests
 overlay:
   sources:

@@ -193,6 +193,7 @@ type Server struct {
 
 	artifactExchangeRunner ArtifactExchangeRunner
 	frictionRunner         *review.Runner
+	frictionFiler          *filing.Filer
 	frictionExclusive      func(func() error) error
 	rawSyncDeviceAuth      RawSyncDeviceAuth
 	rawSyncCustody         RawSyncCustody
