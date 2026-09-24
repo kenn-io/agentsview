@@ -159,6 +159,7 @@ func newServeCommandWithDaemonDeps(deps daemonCommandDeps) *cobra.Command {
 	var background bool
 	var checkDataVersion bool
 	var replace bool
+	var basePath string
 	var pprofEnabled bool
 	var skipInitialSync bool
 	var restartPort int
@@ -194,6 +195,7 @@ func newServeCommandWithDaemonDeps(deps daemonCommandDeps) *cobra.Command {
 				ReplaceDaemon:   replace,
 				NoSyncExplicit:  cmd.Flags().Changed("no-sync"),
 				SkipInitialSync: skipInitialSync,
+				BasePath:        basePath,
 				Pprof:           pprofEnabled,
 			}, restartPort)
 			return nil
@@ -210,6 +212,12 @@ func newServeCommandWithDaemonDeps(deps daemonCommandDeps) *cobra.Command {
 		"replace",
 		false,
 		"Replace a running local daemon before starting",
+	)
+	cmd.Flags().StringVar(
+		&basePath,
+		"base-path",
+		"",
+		"URL prefix for reverse-proxy subpath (e.g. /agentsview)",
 	)
 	cmd.Flags().BoolVar(
 		&checkDataVersion,

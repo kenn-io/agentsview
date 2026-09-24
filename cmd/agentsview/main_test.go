@@ -161,6 +161,21 @@ func TestServeRuntimeRecordWriteSuccessDoesNotWarnVisible(t *testing.T) {
 	assert.NotContains(t, string(out), "could not write daemon runtime record")
 }
 
+func TestServeCommandMountsWritableServerAtBasePath(t *testing.T) {
+	dataDir := t.TempDir()
+	out, err := runRuntimeWarningHelperProcess(
+		t, "serve base path", "TestRunServeRuntimeWarningHelperProcess",
+		[]string{
+			"AGENTSVIEW_RUN_SERVE_RUNTIME_WARNING_HELPER=1",
+			"AGENTSVIEW_RUN_SERVE_BASE_PATH=/av",
+			"AGENTSVIEW_DATA_DIR=" + dataDir,
+		},
+		"base path runtime record reached",
+	)
+	require.NoError(t, err, string(out))
+	assert.Contains(t, string(out), "base path runtime record reached")
+}
+
 func TestServeSkipInitialSyncStillReparsesStaleArchive(t *testing.T) {
 	cfg := testConfigWithClaudeFixture(t)
 	cfg.Host = "127.0.0.1"
@@ -342,6 +357,10 @@ func TestRunServeRuntimeWarningHelperProcess(t *testing.T) {
 				dataDir, host, port, version, browserURL, readOnly, requireAuth, noSync, explicitPort,
 				caddyPID...,
 			)
+			if os.Getenv("AGENTSVIEW_RUN_SERVE_BASE_PATH") != "" {
+				require.Equal(t, "http://viewer.example.test/av", browserURL)
+				fmt.Println("base path runtime record reached")
+			}
 			fmt.Println("runtime record write reached")
 			return path, err
 		}
@@ -354,6 +373,20 @@ func TestRunServeRuntimeWarningHelperProcess(t *testing.T) {
 	_, err := fmt.Fscanln(os.Stdin, &signal)
 	require.NoError(t, err)
 	require.Equal(t, "start", signal)
+	if basePath := os.Getenv("AGENTSVIEW_RUN_SERVE_BASE_PATH"); basePath != "" {
+		_, err := executeCommand(
+			newRootCommand(),
+			"serve",
+			"--host", "127.0.0.1",
+			"--port", "0",
+			"--public-url", "http://viewer.example.test",
+			"--base-path", basePath,
+			"--no-browser",
+			"--no-sync",
+		)
+		require.NoError(t, err)
+		return
+	}
 	cfg := config.Config{
 		Host:    "127.0.0.1",
 		Port:    0,

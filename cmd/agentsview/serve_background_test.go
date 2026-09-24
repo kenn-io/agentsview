@@ -640,6 +640,7 @@ func TestServeBackgroundReplaceCommandUsesParentReplacementUnderLaunchLock(
 	oldArgs := os.Args
 	os.Args = []string{
 		"agentsview", "serve", "--background", "--replace", "--port", "0",
+		"--base-path", "/av",
 	}
 	t.Cleanup(func() { os.Args = oldArgs })
 
@@ -682,11 +683,12 @@ func TestServeBackgroundReplaceCommandUsesParentReplacementUnderLaunchLock(
 
 	_, err = executeCommand(
 		newRootCommand(), "serve", "--background", "--replace", "--port", "0",
+		"--base-path", "/av",
 	)
 
 	require.NoError(t, err)
 	assert.True(t, stopped)
-	assert.Equal(t, []string{"serve", "--port", "0"}, gotArgs)
+	assert.Equal(t, []string{"serve", "--port", "0", "--base-path", "/av"}, gotArgs)
 }
 
 func TestServeCommandParsesBackgroundFlag(t *testing.T) {

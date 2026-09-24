@@ -107,6 +107,7 @@ type serveOptions struct {
 	ReplaceDaemon   bool
 	NoSyncExplicit  bool
 	SkipInitialSync bool
+	BasePath        string
 	Pprof           bool
 }
 
@@ -495,6 +496,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		fatal("%v", prepErr)
 	}
 	cfg = preparedCfg
+	rtOpts.BasePath = opts.BasePath
 
 	srvOpts := []server.Option{
 		server.WithVersion(server.VersionInfo{
@@ -508,6 +510,9 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		server.WithIdleTracker(idleTracker),
 		server.WithHTTPRemoteCleanupRegistry(httpRemoteCleanupRegistry),
 		server.WithPprof(opts.Pprof),
+	}
+	if rtOpts.BasePath != "" {
+		srvOpts = append(srvOpts, server.WithBasePath(rtOpts.BasePath))
 	}
 	srvOpts = append(srvOpts, pushBackendOptions()...)
 	srvOpts = append(srvOpts, vectorServe.ServerOpts...)
