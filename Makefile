@@ -528,10 +528,10 @@ lint-config-check:
 # vars pointing at the parent repo, which makes the clone and the
 # VCS-stamped build fail with exit 128. The list comes from
 # `git rev-parse --local-env-vars` so it tracks whatever Git considers
-# repo-local at runtime. An existing binary newer than .custom-gcl.yml and this
-# Makefile, which pin its plugins and version, is reused.
+# repo-local at runtime. An existing binary is reused while it is newer than
+# .custom-gcl.yml, which pins its plugins, and reports GOLANGCI_LINT_VERSION.
 nilaway-golangci-build:
-	@if [ -x "$(CUSTOM_GCL)$(GOEXE)" ] && [ "$(CUSTOM_GCL)$(GOEXE)" -nt .custom-gcl.yml ] && [ "$(CUSTOM_GCL)$(GOEXE)" -nt Makefile ]; then exit 0; fi; \
+	@if [ -x "$(CUSTOM_GCL)$(GOEXE)" ] && [ "$(CUSTOM_GCL)$(GOEXE)" -nt .custom-gcl.yml ]; then case "$$($(CUSTOM_GCL) version --short 2>/dev/null)" in "$(GOLANGCI_LINT_VERSION)"-custom-gcl-*) exit 0;; esac; fi; \
 	if ! command -v golangci-lint >/dev/null 2>&1; then \
 		echo "golangci-lint not found. Install with: make lint-tools" >&2; \
 		exit 1; \
