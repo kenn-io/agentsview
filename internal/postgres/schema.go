@@ -932,6 +932,9 @@ func EnsureSchema(
 	if err := ensureRawIngestSchemaPG(ctx, db); err != nil {
 		return err
 	}
+	if err := ensureLedgerSchemaPG(ctx, db); err != nil {
+		return err
+	}
 	log.Printf(
 		"pg schema: core DDL step completed in %s",
 		time.Since(step).Round(time.Millisecond),
@@ -2778,7 +2781,9 @@ func pushSchemaCurrent(ctx context.Context, db *sql.DB) bool {
 		!pgHasTable(ctx, db, "source_session_project_identity_snapshot_scopes") ||
 		!pgHasTable(ctx, db, "source_worktree_project_mappings") ||
 		!pgHasTable(ctx, db, "source_worktree_project_mapping_scopes") ||
-		!pgHasTable(ctx, db, "cursor_usage_events") {
+		!pgHasTable(ctx, db, "cursor_usage_events") ||
+		!pgHasTable(ctx, db, "ledger_segments") ||
+		!pgHasTable(ctx, db, "ledger_events") {
 		return false
 	}
 	// bulkInsertCursorUsageEvents dedups via a targetless ON CONFLICT

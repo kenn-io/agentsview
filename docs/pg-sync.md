@@ -241,6 +241,17 @@ findings also push through this codepath, with the same parity guarantees as
 session content (`secret_findings` table, per-session `secret_leak_count`, and
 the [`has-secret`](/docs/session-api/#agentsview-session-list) list filter).
 
+#### Event Ledger Push
+
+When the [event ledger](/docs/event-ledger/) is enabled, `pg push` also
+replicates ledger segments into the `ledger_segments` and `ledger_events`
+tables. Each segment is checked again before sending. The hub skips an
+identical copy and refuses a copy with the same identity but different content;
+`agentsview ledger status` lists refusals. Zones with `replicate = false` stay
+local. Segments containing a confidential-tier event also stay local unless
+`[ledger] replicate_confidential = true`. Project-filtered pushes skip the
+ledger phase.
+
 #### Vector Push
 
 When `[vector]` is enabled locally, `pg push` runs a vector phase after the

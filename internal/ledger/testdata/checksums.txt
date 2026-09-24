@@ -1,0 +1,6 @@
+fixture-a-000001.json 1796932786 5
+fixture-a-000002.json 3548185085 3
+host-with-dash-000007.json 1192239657 10
+fixture-empty-000001.json 223132457 0
+fixture-bigseq-000001.json 3553725883 1
+fixture-lossy-000001.json 4223796471 1

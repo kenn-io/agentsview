@@ -179,6 +179,8 @@ type Sync struct {
 	// vectorSource, when set, supplies the local vectors.db active generation
 	// pushed as a phase at the end of Push. Nil disables the phase.
 	vectorSource storage.VectorPushSource
+	// ledgerPolicy enables the ledger phase when the ledger is configured.
+	ledgerPolicy *storage.LedgerPushPolicy
 	// afterVectorApply is a full/scoped post-apply test hook.
 	afterVectorApply func()
 	// beforeVectorWitnessRecord is a generation-wide pre-witness test hook.
@@ -283,6 +285,7 @@ func New(
 		projects:               opts.Projects,
 		excludeProjects:        opts.ExcludeProjects,
 		vectorSource:           opts.VectorSource,
+		ledgerPolicy:           opts.Ledger,
 	}, nil
 }
 
