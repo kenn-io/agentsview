@@ -40,6 +40,14 @@ func TestNewStoreRequiresActivityPartsRead(t *testing.T) {
 	_, err = admin.ExecContext(ctx, "GRANT SELECT ON system.parts TO "+user)
 	require.NoError(t, err)
 	store, err = NewStore(ctx, target)
+	if store != nil {
+		require.NoError(t, store.Close())
+	}
+	require.ErrorContains(t, err, "GRANT SELECT ON system.view_refreshes")
+
+	_, err = admin.ExecContext(ctx, "GRANT SELECT ON system.view_refreshes TO "+user)
+	require.NoError(t, err)
+	store, err = NewStore(ctx, target)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	_, err = store.ActivityReportSourceProbe(ctx)
