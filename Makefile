@@ -15,6 +15,7 @@ GOLANGCI_LINT_VERSION ?= v2.13.1
 GOLANGCI_LINT_CACHE ?= $(CURDIR)/.golangci-cache
 export GOLANGCI_LINT_CACHE
 CUSTOM_GCL := ./custom-gcl
+GOEXE := $(shell go env GOEXE)
 PRICING_SNAPSHOT_FILE := internal/pricing/snapshot/litellm_snapshot.json.gz
 
 # sqlite-vec's cgo bindings #include "sqlite3.h". Without an override the
@@ -527,13 +528,15 @@ lint-config-check:
 # vars pointing at the parent repo, which makes the clone and the
 # VCS-stamped build fail with exit 128. The list comes from
 # `git rev-parse --local-env-vars` so it tracks whatever Git considers
-# repo-local at runtime.
+# repo-local at runtime. An existing binary newer than .custom-gcl.yml and this
+# Makefile, which pin its plugins and version, is reused.
 nilaway-golangci-build:
-	@if ! command -v golangci-lint >/dev/null 2>&1; then \
+	@if [ -x "$(CUSTOM_GCL)$(GOEXE)" ] && [ "$(CUSTOM_GCL)$(GOEXE)" -nt .custom-gcl.yml ] && [ "$(CUSTOM_GCL)$(GOEXE)" -nt Makefile ]; then exit 0; fi; \
+	if ! command -v golangci-lint >/dev/null 2>&1; then \
 		echo "golangci-lint not found. Install with: make lint-tools" >&2; \
 		exit 1; \
-	fi
-	@unset_args=$$(git rev-parse --local-env-vars 2>/dev/null | sed 's/^/-u /' | tr '\n' ' '); \
+	fi; \
+	unset_args=$$(git rev-parse --local-env-vars 2>/dev/null | sed 's/^/-u /' | tr '\n' ' '); \
 	env $$unset_args GOFLAGS=-buildvcs=false \
 		golangci-lint custom --version "$(GOLANGCI_LINT_VERSION)" --name custom-gcl
 
