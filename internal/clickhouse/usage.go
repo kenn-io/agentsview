@@ -17,6 +17,9 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
+
+	chdriver "github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/ClickHouse/clickhouse-go/v2/ext"
 )
 
 const (
@@ -768,17 +771,17 @@ func chUsageLocalDateSQL(f db.UsageFilter) (string, any) {
 // counters, so they take the place of the token JSON and the raw counters;
 // the normalization step is idempotent on them. Session columns still come
 // from the live sessions row, exactly as the raw form joins them.
-func chPreparedUsageRawSQL(f db.UsageFilter, sessionID string) (string, []any) {
+func chPreparedUsageRawSQL(state preparedUsageState, f db.UsageFilter, sessionID string) (string, []any) {
 	// Model and session filters apply after Claude snapshot attribution
 	// (usage_snapshot_filtered), exactly as the raw source does: a filtered
 	// session's facts may belong to another session in the same request.
 	inputFilter := chUsageSnapshotInputFilter(f)
-	where := "s.deleted_at IS NULL"
-	var args []any
-	where, args = appendChUsageSessionFilterClauses(where, args, inputFilter, sessionID)
 	bounds := chUsageBoundsForFilter(inputFilter)
-	where, args = appendChUsageColumnBounds(where, "p.ts", bounds, args)
-	where, args = appendChUsageColumnBounds(where, "p."+chPreparedUsageKeyColumn, bounds, args)
+	rangeWhere, rangeArgs := appendChUsageColumnBounds("1", "ts", bounds, nil)
+	rangeWhere, rangeArgs = appendChUsageColumnBounds(rangeWhere, chPreparedUsageKeyColumn, bounds, rangeArgs)
+	sourceSQL, args := chPreparedUsageSourceSQL(state, rangeWhere, rangeArgs)
+	where := "s.deleted_at IS NULL"
+	where, args = appendChUsageSessionFilterClauses(where, args, inputFilter, sessionID)
 	return `
 		SELECT p.session_id AS session_id, p.message_ordinal AS message_ordinal,
 			p.source AS source, p.ts AS ts, p.pricing_ts AS pricing_ts,
@@ -800,9 +803,88 @@ func chPreparedUsageRawSQL(f db.UsageFilter, sessionID string) (string, []any) {
 			COALESCE(s.ended_at, s.started_at, s.created_at) AS activity_at,
 			p.price_model AS stored_price_model, p.price_key AS stored_price_key,
 			` + chUsageStoredPriceSelect("p.") + `
-		FROM prepared_usage p
+		FROM (` + sourceSQL + `) p
 		JOIN sessions s ON s.id = p.session_id
 		WHERE ` + where, args
+}
+
+// chPreparedUsageSourceSQL renders the prepared rows a read may use under
+// where, which names prepared columns without a prefix: the stored rows of
+// every session whose snapshot is the one they were derived from, and rows
+// prepared now for the sessions pushed since the refresh. The two sets are
+// disjoint, so their union is what a refresh would store for the current
+// snapshots. The session lists travel as external tables; see
+// withUsageDeltaTables.
+func chPreparedUsageSourceSQL(state preparedUsageState, where string, whereArgs []any) (string, []any) {
+	query := "SELECT " + chPreparedUsageRowColumns + " FROM prepared_usage WHERE " + where
+	args := slices.Clone(whereArgs)
+	if len(state.replaced()) > 0 {
+		query += " AND session_id NOT IN (SELECT id FROM usage_replaced_sessions)"
+	}
+	if len(state.changed) > 0 {
+		query += "\n\t\tUNION ALL\n\t\tSELECT " + chPreparedUsageRowColumns + " FROM usage_delta_rows WHERE " + where
+		args = append(args, whereArgs...)
+	}
+	return query, args
+}
+
+// usageSessionListTable is an external table of session ids under name.
+func usageSessionListTable(name string, ids []string) (*ext.Table, error) {
+	table, err := ext.NewTable(name, ext.Column("id", "String"))
+	if err != nil {
+		return nil, fmt.Errorf("creating %s table: %w", name, err)
+	}
+	for _, id := range ids {
+		if err := table.Append(id); err != nil {
+			return nil, fmt.Errorf("adding %s session: %w", name, err)
+		}
+	}
+	return table, nil
+}
+
+// chExternalColumn declares an external table column of a type named as a
+// string. The column type's Go type is inferred from ext.Column, so this
+// package does not import the driver's column package, which the compile
+// graph fixed before patching does not provide.
+func chExternalColumn[T ~string](declare func(string, T) func(*ext.Table) error, name, typ string) func(*ext.Table) error {
+	return declare(name, T(typ))
+}
+
+// withUsageDeltaTables attaches the replaced session list and the prepared
+// delta rows a prepared read's SQL names, when the state has them, to the
+// context the read runs under.
+func withUsageDeltaTables(ctx context.Context, state preparedUsageState) (context.Context, error) {
+	if !state.ready {
+		return ctx, nil
+	}
+	var tables []*ext.Table
+	if replaced := state.replaced(); len(replaced) > 0 {
+		table, err := usageSessionListTable("usage_replaced_sessions", replaced)
+		if err != nil {
+			return nil, err
+		}
+		tables = append(tables, table)
+	}
+	if len(state.changed) > 0 {
+		columns := make([]func(*ext.Table) error, 0, len(chPreparedUsageDeltaColumns))
+		for _, c := range chPreparedUsageDeltaColumns {
+			columns = append(columns, chExternalColumn(ext.Column, c.name, c.typ))
+		}
+		table, err := ext.NewTable("usage_delta_rows", columns...)
+		if err != nil {
+			return nil, fmt.Errorf("creating usage_delta_rows table: %w", err)
+		}
+		for _, row := range state.deltaRows {
+			if err := table.Append(row...); err != nil {
+				return nil, fmt.Errorf("adding usage_delta_rows row: %w", err)
+			}
+		}
+		tables = append(tables, table)
+	}
+	if len(tables) == 0 {
+		return ctx, nil
+	}
+	return chdriver.Context(ctx, chdriver.WithExternalTable(tables...)), nil
 }
 
 // chUsageStoredPriceSelect selects the stored price columns from prefix.
@@ -838,14 +920,14 @@ type chUsageSource struct {
 }
 
 // chPreparedUsageCTE is chUsageCTE over prepared usage rows.
-func chPreparedUsageCTE(f db.UsageFilter, sessionID string) (string, []any) {
-	rawSQL, args := chPreparedUsageRawSQL(f, sessionID)
+func chPreparedUsageCTE(state preparedUsageState, f db.UsageFilter, sessionID string) (string, []any) {
+	rawSQL, args := chPreparedUsageRawSQL(state, f, sessionID)
 	return chUsageCTEFromRawSource(f, rawSQL, args, true, chPreparedUsageNormSource())
 }
 
 // chPreparedDailyUsageCTE is chDailyUsageCTE over prepared usage rows.
-func chPreparedDailyUsageCTE(f db.UsageFilter, includeCursor bool) (string, []any, bool) {
-	sessionRowsSQL, sessionArgs := chPreparedUsageRawSQL(f, "")
+func chPreparedDailyUsageCTE(state preparedUsageState, f db.UsageFilter, includeCursor bool) (string, []any, bool) {
+	sessionRowsSQL, sessionArgs := chPreparedUsageRawSQL(state, f, "")
 	cursorRowsSQL, cursorArgs, ok := chCursorUsageRowsSQLForBounds(f, chUsageBoundsForFilter(f))
 	ok = ok && includeCursor
 	if ok {
@@ -857,36 +939,26 @@ func chPreparedDailyUsageCTE(f db.UsageFilter, includeCursor bool) (string, []an
 	return cte, args, ok
 }
 
-// usageCTE selects the prepared form once every archive has published
+// usageCTEFor selects the prepared form once every archive has published
 // complete snapshots and the refresh has run; until then reads use the raw
 // messages and usage events. A single-session read stays raw: prepared
 // usage is ordered by time, not session, and one session is cheap by key.
-func (s *Store) usageCTE(ctx context.Context, f db.UsageFilter, sessionID string) (chUsageSource, error) {
-	if sessionID == "" {
-		state, err := s.preparedUsageState(ctx)
-		if err != nil {
-			return chUsageSource{}, err
-		}
-		if state.ready {
-			cte, args := chPreparedUsageCTE(f, "")
-			return chUsageSource{cte: cte, args: args, storedPricesDigest: state.pricingDigest}, nil
-		}
+func usageCTEFor(state preparedUsageState, f db.UsageFilter, sessionID string) chUsageSource {
+	if sessionID == "" && state.ready {
+		cte, args := chPreparedUsageCTE(state, f, "")
+		return chUsageSource{cte: cte, args: args, storedPricesDigest: state.pricingDigest}
 	}
 	cte, args := chUsageCTE(f, sessionID)
-	return chUsageSource{cte: cte, args: args}, nil
+	return chUsageSource{cte: cte, args: args}
 }
 
-func (s *Store) dailyUsageCTE(ctx context.Context, f db.UsageFilter) (chUsageSource, error) {
-	state, err := s.preparedUsageState(ctx)
-	if err != nil {
-		return chUsageSource{}, err
-	}
+func (s *Store) dailyUsageCTE(ctx context.Context, state preparedUsageState, f db.UsageFilter) (chUsageSource, error) {
 	if state.ready {
 		includeCursor, err := s.cursorUsageRowsInBounds(ctx, f)
 		if err != nil {
 			return chUsageSource{}, err
 		}
-		cte, args, cursorRows := chPreparedDailyUsageCTE(f, includeCursor)
+		cte, args, cursorRows := chPreparedDailyUsageCTE(state, f, includeCursor)
 		return chUsageSource{cte: cte, args: args, storedPricesDigest: state.pricingDigest, cursorRows: cursorRows}, nil
 	}
 	cte, args := chDailyUsageCTE(f)
@@ -1574,6 +1646,10 @@ func (s *Store) forEachDailyUsageGroupRow(
 ) error {
 	// The key is taken before any read the rows depend on, so a change
 	// that lands after it makes the next request miss.
+	state, err := s.preparedUsageState(ctx)
+	if err != nil {
+		return err
+	}
 	memoSlot, memoVersion, err := s.usageRowMemoKey(ctx, "daily", f, "", pricingDigest, customModels)
 	if err != nil {
 		return err
@@ -1586,7 +1662,7 @@ func (s *Store) forEachDailyUsageGroupRow(
 		}
 		return nil
 	}
-	source, err := s.dailyUsageCTE(ctx, f)
+	source, err := s.dailyUsageCTE(ctx, state, f)
 	if err != nil {
 		return err
 	}
@@ -1656,7 +1732,11 @@ func (s *Store) forEachDailyUsageGroupRow(
 			row_source ASC, row_usage_dedup_key ASC`
 	args = append(args, pricedArgs...)
 	args = append(args, customArgs...)
-	rows, err := s.queryContext(ctx, query, args...)
+	readCtx, err := withUsageDeltaTables(ctx, state)
+	if err != nil {
+		return err
+	}
+	rows, err := s.queryContext(readCtx, query, args...)
 	if err != nil {
 		return fmt.Errorf("querying clickhouse daily usage aggregates: %w", err)
 	}
@@ -2138,6 +2218,10 @@ func (s *Store) forEachSessionUsageAggregateRow(
 	sessionID string,
 	visit func(chUsageAggregateRow) error,
 ) error {
+	state, err := s.preparedUsageState(ctx)
+	if err != nil {
+		return err
+	}
 	memoSlot, memoVersion, err := s.usageRowMemoKey(ctx, "session", f, sessionID, "", nil)
 	if err != nil {
 		return err
@@ -2150,10 +2234,7 @@ func (s *Store) forEachSessionUsageAggregateRow(
 		}
 		return nil
 	}
-	source, err := s.usageCTE(ctx, f, sessionID)
-	if err != nil {
-		return err
-	}
+	source := usageCTEFor(state, f, sessionID)
 	cte, args := source.cte, source.args
 	query := cte + `
 		SELECT session_id, project, agent, model, provider_id, price_model, source, message_ordinal, ts,
@@ -2167,7 +2248,11 @@ func (s *Store) forEachSessionUsageAggregateRow(
 		FROM usage_localized
 		ORDER BY session_id ASC, model ASC, price_model ASC, ts ASC,
 			COALESCE(message_ordinal, -1) ASC, source ASC, usage_dedup_key ASC`
-	rows, err := s.queryContext(ctx, query, args...)
+	readCtx, err := withUsageDeltaTables(ctx, state)
+	if err != nil {
+		return err
+	}
+	rows, err := s.queryContext(readCtx, query, args...)
 	if err != nil {
 		return fmt.Errorf("querying clickhouse session usage aggregates: %w", err)
 	}
@@ -2340,17 +2425,22 @@ func (s *Store) GetTopSessionsByCost(
 func (s *Store) GetUsageSessionCounts(
 	ctx context.Context, f db.UsageFilter,
 ) (db.UsageSessionCounts, error) {
+	state, err := s.preparedUsageState(ctx)
+	if err != nil {
+		return db.UsageSessionCounts{}, err
+	}
 	memoSlot, memoVersion, err := s.usageRowMemoKey(ctx, "counts", f, "", "", nil)
 	if err != nil {
 		return db.UsageSessionCounts{}, err
 	}
 	counted, ok := s.usageSessionRows.get(memoSlot, memoVersion)
 	if !ok {
-		source, err := s.usageCTE(ctx, f, "")
+		source := usageCTEFor(state, f, "")
+		readCtx, err := withUsageDeltaTables(ctx, state)
 		if err != nil {
 			return db.UsageSessionCounts{}, err
 		}
-		rows, err := s.queryContext(ctx, source.cte+`
+		rows, err := s.queryContext(readCtx, source.cte+`
 			SELECT DISTINCT session_id, project, agent
 			FROM usage_localized
 			WHERE session_id != ''
