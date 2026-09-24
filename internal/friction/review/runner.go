@@ -24,6 +24,7 @@ import (
 type Store interface {
 	FrictionSubjectsForDate(ctx context.Context, date string, loc *time.Location, includeDigested bool) ([]db.FrictionSubject, error)
 	FrictionFindingsForSubjects(ctx context.Context, subjectIDs []string) ([]db.FrictionFinding, error)
+	FrictionPatternsByFingerprint(ctx context.Context, fingerprints []string) (map[string]db.FrictionPattern, error)
 	FrictionUsageForSessions(ctx context.Context, sessionIDs []string) (map[string]friction.SessionUsage, error)
 	FrictionArchiveSpend(ctx context.Context, from, to string, loc *time.Location) (*friction.ArchiveSpend, error)
 	SaveFrictionDigest(ctx context.Context, d db.FrictionDigest, subjects []db.FrictionDigestSubject, patterns []db.FrictionPatternUpdate) error

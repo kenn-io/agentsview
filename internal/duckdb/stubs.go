@@ -83,6 +83,14 @@ func (s *Store) FrictionFindingsForSubjects(_ context.Context, _ []string) ([]db
 	return nil, db.ErrReadOnly
 }
 
+func (s *Store) FrictionDigestedSubjects(_ context.Context, _ []string) (map[string]string, error) {
+	return map[string]string{}, nil
+}
+
+func (s *Store) FrictionPatternsByFingerprint(_ context.Context, _ []string) (map[string]db.FrictionPattern, error) {
+	return map[string]db.FrictionPattern{}, nil
+}
+
 func (s *Store) FrictionUsageForSessions(_ context.Context, _ []string) (map[string]friction.SessionUsage, error) {
 	return nil, db.ErrReadOnly
 }

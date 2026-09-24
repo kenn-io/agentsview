@@ -48,6 +48,69 @@ type FrictionPatternUpdate struct {
 	Occurrences                               int
 }
 
+const frictionLookupChunk = 500
+
+// FrictionDigestedSubjects returns the digest date of each known subject ID.
+func (db *DB) FrictionDigestedSubjects(ctx context.Context, subjectIDs []string) (map[string]string, error) {
+	out := map[string]string{}
+	err := queryChunkedSize(subjectIDs, frictionLookupChunk, func(chunk []string) error {
+		ph, args := inPlaceholders(chunk)
+		rows, err := db.getReader().QueryContext(ctx,
+			`SELECT subject_id, date FROM friction_digest_sessions WHERE subject_id IN `+ph, args...)
+		if err != nil {
+			return fmt.Errorf("querying digested friction subjects: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id, date string
+			if err := rows.Scan(&id, &date); err != nil {
+				return fmt.Errorf("scanning digested friction subject: %w", err)
+			}
+			out[id] = date
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// FrictionPatternsByFingerprint returns the stored state before a digest
+// updates recurrence counts.
+func (db *DB) FrictionPatternsByFingerprint(ctx context.Context, fingerprints []string) (map[string]FrictionPattern, error) {
+	out := map[string]FrictionPattern{}
+	err := queryChunkedSize(fingerprints, frictionLookupChunk, func(chunk []string) error {
+		ph, args := inPlaceholders(chunk)
+		rows, err := db.getReader().QueryContext(ctx, `
+			SELECT fingerprint, kind, title, first_seen_date, last_seen_date,
+				occurrence_count, session_count, last_subject_id, last_ordinal
+			FROM friction_patterns WHERE fingerprint IN `+ph, args...)
+		if err != nil {
+			return fmt.Errorf("querying friction patterns: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var p FrictionPattern
+			var ordinal sql.NullInt64
+			if err := rows.Scan(&p.Fingerprint, &p.Kind, &p.Title, &p.FirstSeenDate,
+				&p.LastSeenDate, &p.OccurrenceCount, &p.SessionCount, &p.LastSubjectID,
+				&ordinal); err != nil {
+				return fmt.Errorf("scanning friction pattern: %w", err)
+			}
+			if ordinal.Valid {
+				p.LastOrdinal = new(int(ordinal.Int64))
+			}
+			out[p.Fingerprint] = p
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // FrictionDayBounds returns [local midnight of date, next local midnight).
 // AddDate keeps DST days at their real 23 or 25 hours.
 func FrictionDayBounds(date string, loc *time.Location) (time.Time, time.Time, error) {
