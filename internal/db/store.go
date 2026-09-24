@@ -169,6 +169,11 @@ type Store interface {
 	EarliestSessionDate(ctx context.Context, loc *time.Location) (string, error)
 	UpdateFrictionDigestRender(ctx context.Context, date string, markdown, summaryJSON []byte, revision int) error
 
+	// Friction Log reads.
+	ListFrictionFindings(ctx context.Context, f FrictionFindingFilter) ([]FrictionFinding, string, error)
+	ListFrictionDigests(ctx context.Context, from, to string) ([]FrictionDigest, error)
+	ListFrictionPatterns(ctx context.Context, f FrictionPatternFilter) ([]FrictionPattern, string, error)
+
 	// ReadOnly returns true for remote/PG-backed stores.
 	ReadOnly() bool
 }
