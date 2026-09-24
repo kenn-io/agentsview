@@ -466,6 +466,7 @@ var builtDocsRoutes = func() []string {
 		"chat-import",
 		"quality",
 		"commands",
+		"kata",
 		"session-export",
 		"conversation-export",
 		"reporting-export",

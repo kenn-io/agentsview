@@ -52,6 +52,7 @@ type apiResponseError struct {
 	CurrentReceipt      string `json:"current_receipt,omitempty"`
 	CurrentGeneration   int64  `json:"current_generation,omitzero"`
 	CurrentUploadOffset *int64 `json:"upload_offset,omitempty"`
+	KataState           string `json:"kata_state,omitempty"`
 }
 
 func (e *apiResponseError) Error() string {

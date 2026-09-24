@@ -696,6 +696,28 @@ CREATE TABLE IF NOT EXISTS friction_patterns (
 
 CREATE INDEX IF NOT EXISTS idx_friction_patterns_last_seen
     ON friction_patterns (last_seen_date);
+
+CREATE TABLE IF NOT EXISTS friction_issue_links (
+    fingerprint          TEXT PRIMARY KEY,
+    state                TEXT NOT NULL,
+    kata_instance_uid    TEXT NOT NULL DEFAULT '',
+    kata_project_uid     TEXT NOT NULL DEFAULT '',
+    issue_uid            TEXT NOT NULL DEFAULT '',
+    qualified_id         TEXT NOT NULL DEFAULT '',
+    web_url              TEXT NOT NULL DEFAULT '',
+    link_source          TEXT NOT NULL DEFAULT '',
+    attempts             INTEGER NOT NULL DEFAULT 0,
+    first_failed_at      TIMESTAMPTZ,
+    next_attempt_at      TIMESTAMPTZ,
+    last_error_code      TEXT NOT NULL DEFAULT '',
+    last_error           TEXT NOT NULL DEFAULT '',
+    candidates_json      TEXT NOT NULL DEFAULT '',
+    last_recurrence_date TEXT NOT NULL DEFAULT '',
+    updated_at           TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_friction_issue_links_due
+    ON friction_issue_links (state, next_attempt_at);
 `
 
 func migrateMoneyColumnsPG(

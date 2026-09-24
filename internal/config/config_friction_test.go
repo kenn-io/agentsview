@@ -78,6 +78,10 @@ func TestFrictionConfigTOMLLoadAndFinalize(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			tt.want.Kata = FrictionKataConfig{
+				ReopenOnRecurrence: true,
+				Kinds:              []string{"correction", "error", "workaround", "deferral", "pattern"},
+			}
 			cfg := loadMinimalWithConfig(t, tt.data)
 			tt.want.Diagnostics = FrictionDiagnosticsConfig{Subsystems: []string{"*"}}
 			assert.Equal(t, tt.want, cfg.Friction)

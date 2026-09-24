@@ -734,7 +734,7 @@ const (
 )
 
 func scanRawUploadSession(
-	row pgInsightRowScanner,
+	row pgRowScanner,
 	withCreated bool,
 ) (rawsync.UploadSession, string, bool, error) {
 	var session rawsync.UploadSession

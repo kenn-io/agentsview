@@ -35,6 +35,7 @@ func newFrictionCommand() *cobra.Command {
 	cmd.AddCommand(newFrictionDigestCommand())
 	cmd.AddCommand(newFrictionFindingsCommand())
 	cmd.AddCommand(newFrictionPatternsCommand())
+	cmd.AddCommand(newFrictionFileCommand(), newFrictionLinkCommand(), newFrictionUnlinkCommand())
 	return cmd
 }
 

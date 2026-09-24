@@ -410,6 +410,8 @@ components:
           type: string
         error:
           type: string
+        kata_state:
+          type: string
         upload_offset:
           format: int64
           type: integer
@@ -1356,6 +1358,61 @@ components:
         - units_done
         - units_total
         - entries
+      type: object
+    DbFrictionIssueLink:
+      additionalProperties: false
+      properties:
+        attempts:
+          format: int64
+          type: integer
+        candidates_json:
+          type: string
+        fingerprint:
+          type: string
+        first_failed_at:
+          format: date-time
+          type: string
+        issue_uid:
+          type: string
+        kata_instance_uid:
+          type: string
+        kata_project_uid:
+          type: string
+        last_error:
+          type: string
+        last_error_code:
+          type: string
+        last_recurrence_date:
+          type: string
+        link_source:
+          type: string
+        next_attempt_at:
+          format: date-time
+          type: string
+        qualified_id:
+          type: string
+        state:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+        web_url:
+          type: string
+      required:
+        - fingerprint
+        - state
+        - kata_instance_uid
+        - kata_project_uid
+        - issue_uid
+        - qualified_id
+        - web_url
+        - link_source
+        - attempts
+        - last_error_code
+        - last_error
+        - candidates_json
+        - last_recurrence_date
+        - updated_at
       type: object
     DbHeatmapEntry:
       additionalProperties: false
@@ -4770,6 +4827,52 @@ components:
       required:
         - digests
       type: object
+    FrictionFilePreview:
+      additionalProperties: false
+      properties:
+        body:
+          type: string
+        force_new:
+          type: boolean
+        labels:
+          items:
+            type: string
+          type: array
+        metadata:
+          additionalProperties:
+            type: string
+          type: object
+        priority:
+          format: int64
+          type: integer
+        title:
+          type: string
+      required:
+        - title
+        - body
+        - priority
+        - labels
+        - metadata
+        - force_new
+      type: object
+    FrictionFileRequest:
+      additionalProperties: false
+      properties:
+        dry_run:
+          description: Return the request that would be sent; write nothing
+          type: boolean
+        force_new:
+          description: Skip the metadata lookup and ask Kata for a new issue
+          type: boolean
+      type: object
+    FrictionFileResponse:
+      additionalProperties: false
+      properties:
+        link:
+          $ref: "#/components/schemas/DbFrictionIssueLink"
+        preview:
+          $ref: "#/components/schemas/FrictionFilePreview"
+      type: object
     FrictionFindingItem:
       additionalProperties: false
       properties:
@@ -4840,6 +4943,16 @@ components:
         - findings
         - next_cursor
       type: object
+    FrictionLinkRequest:
+      additionalProperties: false
+      properties:
+        issue_ref:
+          description: Kata short id, qualified id (project#short) or UID
+          minLength: 1
+          type: string
+      required:
+        - issue_ref
+      type: object
     FrictionP0Alert:
       additionalProperties: false
       properties:
@@ -4871,6 +4984,8 @@ components:
           type: string
         last_subject_id:
           type: string
+        link:
+          $ref: "#/components/schemas/DbFrictionIssueLink"
         occurrence_count:
           format: int64
           type: integer
@@ -5248,6 +5363,23 @@ components:
           type: array
       required:
         - insights
+      type: object
+    KataStatus:
+      additionalProperties: false
+      properties:
+        api_schema_version:
+          type: string
+        instance_uid:
+          type: string
+        message:
+          type: string
+        project:
+          type: string
+        state:
+          type: string
+      required:
+        - state
+        - project
       type: object
     LedgerAppendEvent:
       additionalProperties: false
@@ -7780,6 +7912,17 @@ components:
       required:
         - sessions
       type: object
+    UnlinkResponse:
+      additionalProperties: false
+      properties:
+        fingerprint:
+          type: string
+        unlinked:
+          type: boolean
+      required:
+        - fingerprint
+        - unlinked
+      type: object
     UnsupportedUsage:
       additionalProperties: false
       properties:
@@ -8036,6 +8179,8 @@ components:
           type: boolean
         insight_generation_available:
           type: boolean
+        kata_available:
+          type: boolean
         ledger_available:
           type: boolean
         read_only:
@@ -8049,6 +8194,7 @@ components:
         - insight_generation_available
         - ledger_available
         - friction_available
+        - kata_available
         - api_version
         - data_version
       type: object
@@ -13544,6 +13690,278 @@ paths:
       summary: List friction patterns
       tags:
         - Friction
+  /api/v1/friction/patterns/{fingerprint}/file:
+    post:
+      operationId: post-api-v1-friction-patterns-fingerprint-file
+      parameters:
+        - description: Friction pattern fingerprint (fl1:<sha256 hex>)
+          in: path
+          name: fingerprint
+          required: true
+          schema:
+            description: Friction pattern fingerprint (fl1:<sha256 hex>)
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FrictionFileRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FrictionFileResponse"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: File a friction pattern to Kata
+      tags:
+        - Friction
+  /api/v1/friction/patterns/{fingerprint}/link:
+    delete:
+      operationId: delete-api-v1-friction-patterns-fingerprint-link
+      parameters:
+        - description: Friction pattern fingerprint (fl1:<sha256 hex>)
+          in: path
+          name: fingerprint
+          required: true
+          schema:
+            description: Friction pattern fingerprint (fl1:<sha256 hex>)
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UnlinkResponse"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Remove a friction pattern's local Kata link
+      tags:
+        - Friction
+    put:
+      operationId: put-api-v1-friction-patterns-fingerprint-link
+      parameters:
+        - description: Friction pattern fingerprint (fl1:<sha256 hex>)
+          in: path
+          name: fingerprint
+          required: true
+          schema:
+            description: Friction pattern fingerprint (fl1:<sha256 hex>)
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FrictionLinkRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DbFrictionIssueLink"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Link a friction pattern to a Kata issue
+      tags:
+        - Friction
   /api/v1/friction/run:
     post:
       operationId: post-api-v1-friction-run
@@ -14510,6 +14928,79 @@ paths:
       summary: Publish insight
       tags:
         - Insights
+  /api/v1/kata/status:
+    get:
+      operationId: get-api-v1-kata-status
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KataStatus"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Get Kata connection status
+      tags:
+        - Kata
   /api/v1/ledger/events:
     get:
       operationId: get-api-v1-ledger-events

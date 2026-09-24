@@ -47,8 +47,7 @@ timezone = ""        # IANA zone; empty uses the machine's local zone
 backfill_days = 7    # how far back the first run looks
 ```
 
-Issue filing is planned for a later update. Digests and pattern reads work
-without it.
+Digests and pattern reads work without Kata.
 
 ## Read digests
 
@@ -110,6 +109,54 @@ already recorded for that date. A producer that also needs exact event dedupe
 can set the event id with `ledger.DeterministicEventID(source, identity)` when
 using the ledger append API. Automatic issue filing for diagnostics arrives
 with the filing integration.
+## Filing to Kata
+
+When `[kata]` is enabled, the AgentsView hub can file Friction Log patterns to
+Kata. The hub is `pg serve`, or a standalone instance that does not push to
+PostgreSQL. Pushing laptops never file, even when they share the hub's config.
+Filing is manual by default. To file during each digest build, set:
+
+```toml
+[friction.kata]
+auto_file = true
+kinds = ["correction", "error", "workaround", "deferral", "pattern"]
+```
+
+The hub looks for an issue with matching `friction.fingerprint` metadata before
+creating one. It uses an idempotency key for creates, so retries do not create
+duplicates. It does not match issues by title. Titles and bodies pass through
+secret redaction; home-directory paths are shortened to `~`. Session and digest
+links use `public_url`.
+
+When automatic filing is enabled and Kata is down, the digest is still written.
+Pending patterns wait in an outbox and are filed when Kata returns. The digest
+is then re-rendered with a Kata issue link. A failed filing is abandoned after
+14 days; use `agentsview friction file <fingerprint>` to retry it manually.
+
+Ambiguous matches and other conflicts are marked `needs_human`. Resolve them
+with `agentsview friction link <fingerprint> <kata-ref>` or
+`agentsview friction file <fingerprint> --force-new`. Use
+`agentsview friction unlink <fingerprint>` to remove only the local link. To
+preview a create request, use `agentsview friction file <fingerprint> --dry-run`.
+`agentsview friction file --date YYYY-MM-DD` files every pattern in a stored
+digest. These commands need the running hub daemon or `--server URL`.
+
+### When a pattern comes back
+
+When the hub files a recurring pattern whose Kata issue was closed as `done`,
+it reopens the issue, comments
+`Recurred on <date> — closure may have been premature.` (with a session link
+when `public_url` is set), and adds the `friction:recurred` label. It does this
+at most once per issue per digest date.
+
+Issues closed for any other reason (`wontfix`, `duplicate`, `superseded`, or
+`audit-no-change`) stay closed; the pattern is only linked. Set
+`reopen_on_recurrence = false` under `[friction.kata]` to turn reopening off.
+
+When a digest contains a pattern already linked to an open issue before the
+digest was built, its line ends with `(recurred in sessions totaling $X)`, the
+summed cost of the sessions where it appeared that day. Deferrals and
+interruptions are never annotated.
 
 ## Limits
 

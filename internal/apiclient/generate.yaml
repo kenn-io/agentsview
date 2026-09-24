@@ -30,6 +30,7 @@ filter:
       - post-api-v1-recall-query
       - post-api-v1-recall-import
       - get-api-v1-secrets
+      - get-api-v1-kata-status
       - post-api-v1-secrets-scan
       - get-api-v1-projects
       - get-api-v1-sessions-id-usage
@@ -64,6 +65,9 @@ filter:
       - get-api-v1-friction-findings
       - get-api-v1-friction-patterns
       - post-api-v1-friction-run
+      - post-api-v1-friction-patterns-fingerprint-file
+      - put-api-v1-friction-patterns-fingerprint-link
+      - delete-api-v1-friction-patterns-fingerprint-link
       - post-api-v1-raw-sync-manifests
       - get-api-v1-ledger-events
       - get-api-v1-ledger-status

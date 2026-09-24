@@ -94,7 +94,7 @@ func serialExclusive() func(func() error) error {
 // The caller cancels ctx before invoking the returned wait function.
 func startFrictionReview(
 	ctx context.Context, cfg config.Config, store frictionRunnerStore,
-	exclusive func(func() error) error,
+	exclusive func(func() error) error, attach ...func(*review.Runner),
 ) (*review.Runner, func()) {
 	runner, err := newFrictionRunner(cfg, store, time.Now)
 	if err != nil {
@@ -103,6 +103,9 @@ func startFrictionReview(
 	}
 	if runner == nil {
 		return nil, func() {}
+	}
+	for _, hook := range attach {
+		hook(runner)
 	}
 	scheduler := poller.Start(ctx, review.Job(runner, exclusive))
 	return runner, scheduler.Wait

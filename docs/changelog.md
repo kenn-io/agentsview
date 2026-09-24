@@ -27,6 +27,15 @@ The latest published release is
   that are byte-compatible with jilog ledgers, and a zone with `import_path`
   follows a jilog segments directory automatically. Enable it with
   `[ledger] enabled = true`; see [Event Ledger](/docs/event-ledger/).
+- When the hub files a recurring Friction Log pattern whose Kata issue was
+  closed as `done`, it reopens the issue with a comment and the
+  `friction:recurred` label. Other close reasons are left alone. Digest lines
+  for patterns that were already open show the cost of the sessions they
+  recurred in.
+- The AgentsView hub can file Friction Log patterns to Kata, with manual
+  `friction file`, `link` and `unlink` commands. Set `auto_file = true` under
+  `[friction.kata]` to file during digest builds. Pending patterns wait in an
+  outbox while Kata is unreachable; pushing laptops never file.
 - Friction Log digests, findings and recurring patterns can now be read and
   built from the API, CLI and MCP. `agentsview friction run` builds missing
   complete days, while `friction digest`, `friction findings` and
@@ -40,6 +49,10 @@ The latest published release is
   `pg serve` builds its own digests for the hub. Findings, including
   frustration markers and interrupted turns, are deterministic heuristics; no
   model is involved.
+- AgentsView can check an optional Kata issue tracker connection, through a
+  local daemon or an HTTPS hub. Configure `[kata]`, then run
+  `agentsview kata status` or request `GET /api/v1/kata/status`. See
+  [Kata](/docs/kata/).
 - Coding agents can now consult prior conversation evidence proactively when
   earlier decisions or solutions may help. `agentsview skills install`
   upgrades the existing recall skill for Claude and Agents/Codex, and Claude

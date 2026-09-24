@@ -9,6 +9,7 @@ export * as FrictionService from "./friction/friction.ts";
 export * as HealthService from "./health/health.ts";
 export * as ImportService from "./import/import.ts";
 export * as InsightsService from "./insights/insights.ts";
+export * as KataService from "./kata/kata.ts";
 export * as LedgerService from "./ledger/ledger.ts";
 export * as MetadataService from "./metadata/metadata.ts";
 export * as OpenersService from "./openers/openers.ts";

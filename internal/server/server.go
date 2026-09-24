@@ -24,8 +24,10 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/friction/filing"
 	"go.kenn.io/agentsview/internal/friction/review"
 	"go.kenn.io/agentsview/internal/insight"
+	"go.kenn.io/agentsview/internal/kata"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/pricingrefresh"
 	"go.kenn.io/agentsview/internal/rawsync"
@@ -47,6 +49,7 @@ type VersionInfo struct {
 	InsightGenerationAvailable bool   `json:"insight_generation_available"`
 	LedgerAvailable            bool   `json:"ledger_available"`
 	FrictionAvailable          bool   `json:"friction_available"`
+	KataAvailable              bool   `json:"kata_available"`
 	APIVersion                 int    `json:"api_version"`
 	DataVersion                int    `json:"data_version"`
 }
@@ -191,12 +194,16 @@ type Server struct {
 
 	artifactExchangeRunner ArtifactExchangeRunner
 	frictionRunner         *review.Runner
+	frictionFiler          *filing.Filer
 	frictionExclusive      func(func() error) error
 	rawSyncDeviceAuth      RawSyncDeviceAuth
 	rawSyncCustody         RawSyncCustody
 	rawSyncStatus          RawSyncStatusReader
 	rawSyncSchemaOnly      bool
 	rawSyncUploads         RawSyncUploads
+
+	// kata is the optional Kata spoke connection; never nil after New.
+	kata *kata.Conn
 
 	ensurePricing func(context.Context, *db.DB) error
 }
@@ -267,6 +274,22 @@ func New(
 	for _, opt := range opts {
 		opt(s)
 	}
+	if s.kata == nil {
+		// Only a local SQLite archive with no PG push target is its own hub.
+		// pg serve passes its own hub Conn; read-only replicas are not hubs.
+		_, local := database.(*db.DB)
+		hub := local && filing.EligibleHost(false, cfg.HasPGPushTarget())
+		s.kata = kata.NewConn(kata.ConfigFrom(cfg.Kata, hub))
+	}
+	eligibility := "disabled"
+	if kataCfg := s.kata.Config(); kataCfg.Enabled {
+		if kataCfg.Hub {
+			eligibility = "hub"
+		} else {
+			eligibility = "not_hub"
+		}
+	}
+	log.Printf("kata: hub eligibility %s", eligibility)
 	if s.version.APIVersion == 0 {
 		s.version.APIVersion = APIVersion
 	}

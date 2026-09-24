@@ -84,3 +84,28 @@ func TestDirectFrictionService(t *testing.T) {
 		})
 	}
 }
+
+func TestFrictionPatternViewsCarryIssueLink(t *testing.T) {
+	link := &db.FrictionIssueLink{
+		Fingerprint: "fl1:a", State: db.FrictionLinkStateLinked,
+		QualifiedID: "kata#12", WebURL: "https://kata.example.test/issues/12",
+	}
+	tests := []struct {
+		name       string
+		link       *db.FrictionIssueLink
+		wantID     string
+		wantWebURL string
+	}{
+		{name: "linked", link: link, wantID: "kata#12", wantWebURL: "https://kata.example.test/issues/12"},
+		{name: "unlinked", link: nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			views := service.FrictionPatternViews([]db.FrictionPattern{{Fingerprint: "fl1:a", Kind: "error", Link: tt.link}},
+				func(string, *int) string { return "" })
+			require.Len(t, views, 1)
+			assert.Equal(t, tt.wantID, views[0].IssueQualifiedID)
+			assert.Equal(t, tt.wantWebURL, views[0].IssueWebURL)
+		})
+	}
+}

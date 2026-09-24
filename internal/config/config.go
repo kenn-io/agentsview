@@ -630,6 +630,8 @@ type FrictionConfig struct {
 	// SeatPatterns are globs over session file paths with one {seat} capture.
 	SeatPatterns []string                  `json:"seat_patterns,omitempty" toml:"seat_patterns"`
 	Diagnostics  FrictionDiagnosticsConfig `json:"diagnostics" toml:"diagnostics"`
+	// Kata is the filing policy, used only by the filing hub.
+	Kata FrictionKataConfig `json:"-" toml:"kata"`
 }
 
 // Validate checks the zone name, backfill bound, and seat patterns.
@@ -856,6 +858,7 @@ type Config struct {
 	Insights             InsightsConfig              `json:"insights,omitempty" toml:"insights"`
 	Ledger               LedgerConfig                `json:"ledger,omitempty" toml:"ledger"`
 	Friction             FrictionConfig              `json:"friction,omitempty" toml:"friction"`
+	Kata                 KataConfig                  `json:"-" toml:"kata"`
 	Automated            AutomatedConfig             `json:"automated,omitempty" toml:"automated"`
 	Agent                map[string]AgentConfig      `json:"agent,omitempty" toml:"agent"`
 	WriteTimeout         time.Duration               `json:"-" toml:"-"`
@@ -1266,7 +1269,9 @@ func Default() (Config, error) {
 		Friction: FrictionConfig{
 			Enabled: true, BackfillDays: DefaultFrictionBackfillDays,
 			Diagnostics: FrictionDiagnosticsConfig{Subsystems: []string{"*"}},
+			Kata:        DefaultFrictionKataConfig(),
 		},
+		Kata: defaultKataConfig(),
 	}, nil
 }
 
@@ -1660,6 +1665,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		Insights                       InsightsConfig         `toml:"insights"`
 		Ledger                         LedgerConfig           `toml:"ledger"`
 		Friction                       FrictionConfig         `toml:"friction"`
+		Kata                           KataConfig             `toml:"kata"`
 		Automated                      AutomatedConfig        `toml:"automated"`
 		Agent                          map[string]AgentConfig `toml:"agent"`
 		EventsCoalesceInterval         time.Duration          `toml:"events_coalesce_interval"`
@@ -1957,6 +1963,12 @@ func (c *Config) applyConfigTOML(data string) error {
 		if len(c.Friction.Diagnostics.Subsystems) == 0 {
 			c.Friction.Diagnostics.Subsystems = []string{"*"}
 		}
+	}
+	if meta.IsDefined("friction", "kata") {
+		mergeFrictionKataTOML(&c.Friction.Kata, file.Friction.Kata, meta)
+	}
+	if meta.IsDefined("kata") {
+		mergeKataTOML(&c.Kata, file.Kata, meta)
 	}
 	// IsDefined distinguishes "unset" (leave default 10s) from an
 	// explicit "0s" (disable coalescing). Checking != 0 would silently
@@ -2543,6 +2555,12 @@ func finalize(cfg *Config) error {
 		return err
 	}
 	if err := cfg.validateFrictionDiagnostics(); err != nil {
+		return err
+	}
+	if err := cfg.Friction.Kata.Validate(); err != nil {
+		return err
+	}
+	if err := cfg.Kata.Validate(); err != nil {
 		return err
 	}
 	return nil

@@ -79,6 +79,37 @@ func seedFrictionDigest(t *testing.T, d *db.DB, date string) {
 	}, []db.FrictionDigestSubject{{SubjectID: "claude:s1", Date: date, SubjectKind: "session"}}, nil))
 }
 
+func TestFrictionPatternsRouteCarriesLink(t *testing.T) {
+	te := setup(t)
+	require.NoError(t, te.db.SaveFrictionDigest(t.Context(), db.FrictionDigest{
+		Date: "2026-09-14", Timezone: "UTC", RulesVersion: friction.RulesVersion,
+		BuiltAt: time.Date(2026, 9, 15, 1, 0, 0, 0, time.UTC), Revision: 1,
+		SnapshotJSON: []byte("{}"), SummaryJSON: []byte("{}"), Markdown: []byte("# x\n"), MarkdownSHA256: "s", RunID: "r",
+	}, nil, []db.FrictionPatternUpdate{
+		{Fingerprint: "fl1:a", Kind: "error", Title: "[friction/error] Bash: boom", Date: "2026-09-14", SubjectID: "claude:s1", Occurrences: 1},
+	}))
+	require.NoError(t, te.db.UpsertFrictionIssueLink(t.Context(), db.FrictionIssueLink{
+		Fingerprint: "fl1:a", State: db.FrictionLinkStateLinked, IssueUID: "u12",
+		QualifiedID: "kata#12", WebURL: "https://kata.example.test/issues/12", LinkSource: db.FrictionLinkSourceManual,
+	}))
+	w := te.get(t, "/api/v1/friction/patterns")
+	assertStatus(t, w, http.StatusOK)
+	got := decode[struct {
+		Patterns []struct {
+			Link *struct {
+				State       string `json:"state"`
+				QualifiedID string `json:"qualified_id"`
+				WebURL      string `json:"web_url"`
+			} `json:"link"`
+		} `json:"patterns"`
+	}](t, w)
+	require.Len(t, got.Patterns, 1)
+	require.NotNil(t, got.Patterns[0].Link)
+	assert.Equal(t, "linked", got.Patterns[0].Link.State)
+	assert.Equal(t, "kata#12", got.Patterns[0].Link.QualifiedID)
+	assert.Equal(t, "https://kata.example.test/issues/12", got.Patterns[0].Link.WebURL)
+}
+
 func TestFrictionDigestRoutes(t *testing.T) {
 	te := setup(t, withPublicURL("https://av.example.test/base/"))
 	seedFrictionDigest(t, te.db, "2026-09-14")

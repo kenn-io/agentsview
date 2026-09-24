@@ -198,6 +198,25 @@ func TestListFrictionPatterns(t *testing.T) {
 		require.NotNil(t, rows[0].LastOrdinal)
 		assert.Equal(t, 5, *rows[0].LastOrdinal)
 	})
+	t.Run("link_filters_and_page_links", func(t *testing.T) {
+		link := FrictionIssueLink{
+			Fingerprint: "fl1:aaa", State: FrictionLinkStateLinked,
+			IssueUID: "01J0ABCDEF0000000000000001", UpdatedAt: time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC),
+		}
+		require.NoError(t, d.UpsertFrictionIssueLink(t.Context(), link))
+		rows, _, err := d.ListFrictionPatterns(t.Context(), FrictionPatternFilter{LinkState: FrictionLinkStateLinked})
+		require.NoError(t, err)
+		require.Len(t, rows, 1)
+		assert.Equal(t, "fl1:aaa", rows[0].Fingerprint)
+		assert.Equal(t, &link, rows[0].Link)
+
+		rows, _, err = d.ListFrictionPatterns(t.Context(), FrictionPatternFilter{LinkState: FrictionLinkStateUnlinked})
+		require.NoError(t, err)
+		require.Len(t, rows, 2)
+		assert.Equal(t, []string{"fl1:bbb", "fl1:ccc"}, []string{rows[0].Fingerprint, rows[1].Fingerprint})
+		_, _, err = d.ListFrictionPatterns(t.Context(), FrictionPatternFilter{LinkState: "unknown"})
+		require.ErrorContains(t, err, "invalid link_state")
+	})
 }
 
 func TestFrictionListHelpers(t *testing.T) {
@@ -221,8 +240,4 @@ func TestFrictionListHelpers(t *testing.T) {
 	}
 	assert.Empty(t, EncodeFrictionCursor(0))
 	assert.Equal(t, "40", EncodeFrictionCursor(40))
-	assert.False(t, FrictionLinkFilterExcludesAll(""))
-	assert.False(t, FrictionLinkFilterExcludesAll(FrictionLinkStateUnlinked))
-	assert.True(t, FrictionLinkFilterExcludesAll(FrictionLinkStateLinked))
-	assert.True(t, FrictionLinkFilterExcludesAll("pending"))
 }
