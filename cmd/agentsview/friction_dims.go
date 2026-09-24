@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 
 	"go.kenn.io/agentsview/internal/config"
@@ -38,4 +39,16 @@ func newFrictionDimsFunc(cfg config.Config) sync.FrictionDimsFunc {
 		}
 	}
 	return sync.NewFrictionDims(newNanoClawResolver(cfg), seats)
+}
+
+// refreshNanoClawFriction runs on the reconcile tick. It is best-effort like
+// recomputeStaleFriction: the next tick retries failures.
+func refreshNanoClawFriction(ctx context.Context, engine *sync.Engine, resolver *nanoclaw.Resolver) {
+	n, err := engine.RefreshNanoClawFriction(ctx, resolver)
+	if err != nil && ctx.Err() == nil {
+		log.Printf("nanoclaw friction refresh: %v", err)
+	}
+	if n > 0 {
+		log.Printf("recomputed friction for %d NanoClaw sessions after an agent map change", n)
+	}
 }

@@ -2841,6 +2841,7 @@ func startPeriodicSync(
 	// reconcile targets are re-probed each tick because disk availability
 	// changes.
 	remoteRoots := remoteSourceSyncRoots(cfg)
+	nanoClaw := newNanoClawResolver(cfg)
 
 	ticker := time.NewTicker(periodicSyncInterval)
 	defer ticker.Stop()
@@ -2856,6 +2857,7 @@ func startPeriodicSync(
 			runRemoteSourceSyncPass(ctx, engine, remoteRoots)
 			recomputePendingSessions(engine, database)
 			recomputeStaleFriction(ctx, engine)
+			refreshNanoClawFriction(ctx, engine, nanoClaw)
 		})
 	}
 }
