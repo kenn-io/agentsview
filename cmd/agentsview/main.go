@@ -482,7 +482,11 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		pricingRefreshRunner = engine
 	}
 	seedPricing(database, pricingRefreshRunner)
-	scheduler := poller.Start(ctx, pricingRefreshJob(database, pricingRefreshRunner))
+	jobs := []poller.Job{pricingRefreshJob(database, pricingRefreshRunner)}
+	if job, ok := ledgerImportJob(cfg, database, pricingRefreshRunner); ok {
+		jobs = append(jobs, job)
+	}
+	scheduler := poller.Start(ctx, jobs...)
 	defer func() {
 		stop()
 		scheduler.Wait()

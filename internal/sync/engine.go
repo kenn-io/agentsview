@@ -3537,6 +3537,24 @@ func (e *Engine) resyncBuildLocked(
 		)
 	}
 
+	// The event ledger is user data with no other copy on this host, and
+	// it holds no transcript text, so it is copied under every archive
+	// content policy and a failure aborts the swap.
+	if err := newDB.CopyLedgerFrom(origPath); err != nil {
+		log.Printf("resync: copy ledger: %v", err)
+		stats.Aborted = true
+		stats.Warnings = append(stats.Warnings,
+			"ledger copy failed, aborting swap: "+err.Error(),
+		)
+		newDB.Close()
+		removeTempDB(tempPath)
+		restoreSkipCache()
+		e.mu.Lock()
+		e.lastSyncStats = stats
+		e.mu.Unlock()
+		return stats, err
+	}
+
 	// Copy model pricing so usage costs survive the swap. The
 	// startup seed only runs once per daemon lifetime, so a
 	// resync triggered through the sync API would otherwise

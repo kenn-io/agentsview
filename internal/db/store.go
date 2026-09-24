@@ -6,6 +6,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/ledger"
 )
 
 // ErrReadOnly is returned by write methods on read-only store
@@ -154,6 +155,15 @@ type Store interface {
 		writes []SessionBatchWrite,
 		beforeCommit ...func() error,
 	) (SessionBatchResult, error)
+
+	// Event ledger. Read-only stores reject writes and return empty reads.
+	AppendLedgerSegment(ctx context.Context, zone string, seg ledger.Segment, origin string) (ledger.PublishOutcome, error)
+	LatestLedgerSeq(ctx context.Context, zone, source string) (uint64, error)
+	ListLedgerSegments(ctx context.Context, zone, source string, afterSeq uint64, limit int) ([]ledger.Segment, error)
+	LedgerSegmentSeqs(ctx context.Context, zone, source string) ([]uint64, error)
+	LedgerStatus(ctx context.Context, zone string) (ledger.ZoneStatus, error)
+	GetLedgerVerifyState(ctx context.Context, zone, source string) (*ledger.VerifyCheckpoint, error)
+	SaveLedgerVerifyState(ctx context.Context, zone, source string, c ledger.VerifyCheckpoint) error
 
 	// ReadOnly returns true for remote/PG-backed stores.
 	ReadOnly() bool

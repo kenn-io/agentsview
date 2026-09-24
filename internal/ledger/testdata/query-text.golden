@@ -1,0 +1,15 @@
+Found 8 event(s) since 7d
+Subsystem filter: ["hook-*", "sub-\"q\""]
+
+Zone: default (5 events)
+  [2026-01-02 03:04:09] route          ?                              
+  [2026-01-02 03:04:08] ingest         ?                              
+  [2026-01-02 03:04:07] notemeta       hook-unicode                   unicode <>&  
+  [2026-01-02 03:04:06] statechange    fixture                        floats and ints
+  [2026-01-02 03:04:05] health         ?                              
+
+Zone: ops (3 events)
+  [2026-01-02 05:04:14] notemeta       sub-0                          event 9
+  [2026-01-02 05:04:13] approval       sub-2                          event 8
+  [2026-01-02 05:04:12] health         sub-1                          event 7
+
