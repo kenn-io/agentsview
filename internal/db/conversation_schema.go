@@ -82,7 +82,7 @@ BEGIN
  ON CONFLICT(session_id) DO UPDATE SET revision=excluded.revision,deleted=excluded.deleted;
 END;`
 
-func ensureConversationSchemaLocked(ctx context.Context, w *writerHandle, usageOnly bool) error {
+func ensureConversationSchemaLocked(ctx context.Context, w *writerHandle) error {
 	tx, err := w.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -91,38 +91,80 @@ func ensureConversationSchemaLocked(ctx context.Context, w *writerHandle, usageO
 	if _, err := tx.ExecContext(ctx, conversationSchemaSQL); err != nil {
 		return fmt.Errorf("creating conversation export state: %w", err)
 	}
-	var initialized bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM archive_metadata WHERE key='conversation_export_initialized')`).Scan(&initialized); err != nil {
+	return tx.Commit()
+}
+
+const conversationExportInitializedKey = "conversation_export_initialized"
+
+// conversationExportActiveTx reports whether the archive maintains its message
+// projection. A cold archive skips that work until its first export.
+func conversationExportActiveTx(tx transactionQueries) (bool, error) {
+	var active bool
+	err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM archive_metadata WHERE key=?)`, conversationExportInitializedKey).Scan(&active)
+	return active, err
+}
+
+// EnsureConversationExportInitialized builds the message projection from the
+// stored archive the first time an export needs it, and reports whether this
+// call did so. Later writes maintain the projection in their own transactions.
+func (db *DB) EnsureConversationExportInitialized(ctx context.Context) (bool, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	if db.writerClosed.Load() {
+		return false, ErrWriterClosed
+	}
+	tx, err := db.getWriter().BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if active, err := conversationExportActiveTx(contextTransaction{ctx: ctx, tx: tx}); err != nil || active {
+		return false, err
+	}
+	if err := initializeConversationExportTx(ctx, tx, db.usageOnlyStorage()); err != nil {
+		return false, err
+	}
+	return true, tx.Commit()
+}
+
+// initializeConversationExportTx projects every stored message once and marks
+// the archive active, so later writes maintain the projection themselves.
+func initializeConversationExportTx(ctx context.Context, tx *sql.Tx, usageOnly bool) error {
+	if err := refreshConversationMessagesFromArchiveTx(ctx, tx, "1=1"); err != nil {
 		return err
 	}
-	if !initialized {
-		if err := refreshConversationMessagesFromArchiveTx(ctx, tx, "1=1"); err != nil {
+	if err := applyConversationPolicyGapsTx(ctx, tx, "1=1"); err != nil {
+		return err
+	}
+	if usageOnly {
+		rows, err := tx.QueryContext(ctx, `SELECT id FROM sessions`)
+		if err != nil {
 			return err
 		}
-		if usageOnly {
-			rows, err := tx.QueryContext(ctx, `SELECT id FROM sessions`)
-			if err != nil {
+		defer rows.Close()
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
 				return err
 			}
-			defer rows.Close()
-			for rows.Next() {
-				var id string
-				if err := rows.Scan(&id); err != nil {
-					return err
-				}
-				if err := clearUsageOnlyConversationTx(contextTransaction{ctx: ctx, tx: tx}, id); err != nil {
-					return err
-				}
-			}
-			if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+			if err := clearUsageOnlyConversationTx(contextTransaction{ctx: ctx, tx: tx}, id); err != nil {
 				return err
 			}
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO archive_metadata(key,value) VALUES ('conversation_export_initialized','1')`); err != nil {
+		if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 			return err
 		}
 	}
-	return tx.Commit()
+	_, err := tx.ExecContext(ctx, `INSERT INTO archive_metadata(key,value) VALUES (?,'1')`, conversationExportInitializedKey)
+	return err
+}
+
+// A session written under usage policy keeps its gap until a full rewrite,
+// even when the projection is rebuilt from text that is present again.
+func applyConversationPolicyGapsTx(ctx context.Context, tx *sql.Tx, where string) error {
+	_, err := tx.ExecContext(ctx, `UPDATE conversation_messages SET body=NULL,digest='',text_bytes=0,gap='archive_content_excluded'
+	 WHERE removed=0 AND session_id IN (SELECT session_id FROM conversation_session_changes WHERE gap='archive_content_excluded') AND `+where)
+	return err
 }
 
 const conversationCopyColumns = `session_id,message_id,ordinal,role,timestamp,source_id,digest,text_bytes,gap,deleted,removed`
@@ -182,28 +224,56 @@ func refreshConversationMessagesFromArchiveTx(ctx context.Context, tx *sql.Tx, w
 	return flush()
 }
 
-func copyConversationRowsTx(ctx context.Context, tx *sql.Tx, where string) error {
+func copyConversationRowsTx(ctx context.Context, tx *sql.Tx, where string, usageOnly bool) error {
 	var initialized bool
 	if oldDBHasTable(ctx, tx, "conversation_messages") {
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM old_db.archive_metadata WHERE key='conversation_export_initialized')`).Scan(&initialized); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM old_db.archive_metadata WHERE key=?)`, conversationExportInitializedKey).Scan(&initialized); err != nil {
 			return err
 		}
 	}
-	if !initialized {
-		return refreshConversationMessagesFromArchiveTx(ctx, tx, where)
-	}
-	_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO main.conversation_messages (`+conversationCopyColumns+`) SELECT `+conversationCopyColumns+` FROM old_db.conversation_messages WHERE `+where)
+	active, err := conversationExportActiveTx(contextTransaction{ctx: ctx, tx: tx})
 	if err != nil {
 		return err
 	}
-	return copyConversationSessionStatesTx(ctx, tx, where)
+	if !active && !initialized {
+		// Session evidence outlives the messages a later scan rebuilds from.
+		if oldDBHasTable(ctx, tx, "conversation_session_changes") {
+			return copyConversationSessionStatesTx(ctx, tx, where)
+		}
+		return nil
+	}
+	if !initialized {
+		if err := refreshConversationMessagesFromArchiveTx(ctx, tx, where); err != nil {
+			return err
+		}
+		if !oldDBHasTable(ctx, tx, "conversation_session_changes") {
+			return nil
+		}
+		if err := copyConversationSessionStatesTx(ctx, tx, where); err != nil {
+			return err
+		}
+		return applyConversationPolicyGapsTx(ctx, tx, where)
+	}
+	_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO main.conversation_messages (`+conversationCopyColumns+`) SELECT `+conversationCopyColumns+` FROM old_db.conversation_messages WHERE `+where)
+	if err != nil {
+		return err
+	}
+	if err := copyConversationSessionStatesTx(ctx, tx, where); err != nil {
+		return err
+	}
+	if active {
+		return nil
+	}
+	// Published identities only survive in an active archive, so activate the
+	// destination around the copied rows; the scan keeps their IDs by ordinal.
+	return initializeConversationExportTx(ctx, tx, usageOnly)
 }
 
-func retainConversationTombstonesTx(ctx context.Context, tx *sql.Tx) error {
+func retainConversationTombstonesTx(ctx context.Context, tx *sql.Tx, usageOnly bool) error {
 	if !oldDBHasTable(ctx, tx, "conversation_messages") {
 		return nil
 	}
-	if err := copyConversationRowsTx(ctx, tx, "session_id NOT IN (SELECT id FROM main.sessions)"); err != nil {
+	if err := copyConversationRowsTx(ctx, tx, "session_id NOT IN (SELECT id FROM main.sessions)", usageOnly); err != nil {
 		return err
 	}
 	_, err := tx.ExecContext(ctx, `UPDATE main.conversation_messages SET deleted=1,removed=1,body=NULL
@@ -267,6 +337,9 @@ func conversationMessagesTx(ctx context.Context, tx *sql.Tx, sessionID string) (
 // Rebuilt archives preserve opaque IDs from the old projection before matching
 // freshly parsed messages. The new database keeps its own publication counter.
 func reconcileConversationResyncTx(ctx context.Context, tx *sql.Tx, usageOnly bool) error {
+	if active, err := conversationExportActiveTx(contextTransaction{ctx: ctx, tx: tx}); err != nil || !active {
+		return err
+	}
 	if !oldDBHasTable(ctx, tx, "conversation_messages") {
 		return nil
 	}

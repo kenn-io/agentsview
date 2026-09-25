@@ -1,6 +1,7 @@
 package sync_test
 
 import (
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -30,8 +31,13 @@ func TestConversationExportUsesStoredTextThroughNormalSync(t *testing.T) {
 	})
 	t.Cleanup(engine.Close)
 	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	rows, active := conversationProjectionState(t, database)
+	assert.Zero(t, rows, "sync does not project messages before the first export")
+	assert.False(t, active)
 	initial, err := database.ExportConversationChanges(t.Context(), db.ConversationExportOptions{})
 	require.NoError(t, err)
+	_, active = conversationProjectionState(t, database)
+	assert.True(t, active)
 	texts := make(map[string]string)
 	for _, change := range initial.Changes {
 		if change.Type == "session" {
@@ -72,6 +78,48 @@ func TestConversationExportUsesStoredTextThroughNormalSync(t *testing.T) {
 	assert.Equal(t, beforeIDs, afterIDs, "a full source rebuild preserves message identities and equal prose")
 	_, err = database.ExportConversationChanges(t.Context(), db.ConversationExportOptions{Checkpoint: initial.Checkpoint})
 	require.ErrorIs(t, err, db.ErrConversationReconciliationRequired)
+}
+
+func conversationProjectionState(t *testing.T, database *db.DB) (rows int, active bool) {
+	t.Helper()
+	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+		if err := tx.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM conversation_messages`).Scan(&rows); err != nil {
+			return err
+		}
+		return tx.QueryRowContext(t.Context(), `SELECT EXISTS(SELECT 1 FROM archive_metadata WHERE key='conversation_export_initialized')`).Scan(&active)
+	}))
+	return rows, active
+}
+
+func TestConversationExportColdArchiveStaysColdThroughResync(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "project-a", "conversation-a.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	source := fmt.Sprintf(`{"type":"user","uuid":"user-a","sessionId":"conversation-a","cwd":%q,"timestamp":"2026-08-01T10:00:00Z","message":{"role":"user","content":"Please check"}}
+{"type":"assistant","uuid":"entry-a","sessionId":"conversation-a","parentUuid":"user-a","timestamp":"2026-08-01T10:00:01Z","message":{"id":"response-a","role":"assistant","content":[{"type":"text","text":"Working on it."}]}}
+`, root)
+	require.NoError(t, os.WriteFile(path, []byte(source), 0o600))
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}},
+		Machine:   "local",
+	})
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	resync := engine.ResyncAll(t.Context(), nil)
+	require.False(t, resync.Aborted, "warnings: %v", resync.Warnings)
+	rows, active := conversationProjectionState(t, database)
+	assert.Zero(t, rows, "rebuilding a cold archive projects nothing")
+	assert.False(t, active)
+	page, err := database.ExportConversationChanges(t.Context(), db.ConversationExportOptions{})
+	require.NoError(t, err)
+	roles := map[string]bool{}
+	for _, change := range page.Changes {
+		if change.Type == "message" {
+			roles[change.Role] = true
+		}
+	}
+	assert.Equal(t, map[string]bool{"user": true, "assistant": true}, roles)
 }
 
 func TestConversationExportCodexAppendAfterRestart(t *testing.T) {

@@ -14,11 +14,12 @@ across all supported agents and imported archives, including sessions whose
 source files are no longer available. They do not contact an agent, reparse its
 transcripts, start a server, or read the DuckDB mirror.
 
-On the first writable open after upgrading to 0.44.0, AgentsView builds the
-conversation change index from existing database records. Existing session and
-reporting exports keep their current formats. If initialization is interrupted,
-conversation exports fail without returning a checkpoint. Run
-`agentsview daemon restart` to finish initialization.
+The first `changes` call on an archive builds the conversation change index from
+existing database records, so it takes longer than later calls; syncing never
+pays for it. The build runs through the daemon when one owns the archive, and
+directly otherwise. Reading a message before that first call fails without
+returning a checkpoint. Existing session and reporting exports keep their
+current formats.
 
 Version 0.44.0 also corrects how Codex prompts are stored. Existing archives
 need the normal startup resync to refresh those records before read-only exports

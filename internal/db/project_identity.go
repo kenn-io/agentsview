@@ -328,12 +328,13 @@ func (db *DB) CopyArchiveIdentityFrom(sourcePath string) error {
 		createdAt string
 		updatedAt string
 	}
-	metadata := make(map[string]metadataRow, 2)
+	metadata := make(map[string]metadataRow, 3)
+	// A rebuilt archive stays as cold or active as the archive it replaces.
 	rows, err := conn.QueryContext(ctx, `
 		SELECT key, value, created_at, updated_at
 		FROM identity_source.archive_metadata
-		WHERE key IN (?, ?)`,
-		archiveMetadataArchiveIDKey, archiveMetadataArchiveSaltKey,
+		WHERE key IN (?, ?, ?)`,
+		archiveMetadataArchiveIDKey, archiveMetadataArchiveSaltKey, conversationExportInitializedKey,
 	)
 	if err != nil {
 		return fmt.Errorf("reading archive identity source: %w", err)
@@ -372,8 +373,12 @@ func (db *DB) CopyArchiveIdentityFrom(sourcePath string) error {
 	for _, key := range []string{
 		archiveMetadataArchiveIDKey,
 		archiveMetadataArchiveSaltKey,
+		conversationExportInitializedKey,
 	} {
-		row := metadata[key]
+		row, ok := metadata[key]
+		if !ok {
+			continue
+		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO archive_metadata (key, value, created_at, updated_at)
 			VALUES (?, ?, ?, ?)

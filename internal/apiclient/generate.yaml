@@ -52,6 +52,7 @@ filter:
       - post-api-v1-remote-sync-archive
       - get-api-v1-remote-sync-targets
       - post-api-v1-artifacts-exchange
+      - post-api-v1-export-conversations-initialize
       - post-api-v1-raw-sync-tokens
       - get-api-v1-raw-sync-status
       - post-api-v1-raw-sync-objects-missing

@@ -4534,6 +4534,7 @@ type ClientInterface interface {
 	PostAPIV1EmbeddingsGenerationsIDActivateWithResponse(ctx context.Context, options *PostAPIV1EmbeddingsGenerationsIDActivateRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1EmbeddingsGenerationsIDActivateResp, error)
 	PostAPIV1EmbeddingsGenerationsIDRetireWithResponse(ctx context.Context, options *PostAPIV1EmbeddingsGenerationsIDRetireRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1EmbeddingsGenerationsIDRetireResp, error)
 	GetAPIV1EmbeddingsStatusWithResponse(ctx context.Context, options *GetAPIV1EmbeddingsStatusRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1EmbeddingsStatusResp, error)
+	PostAPIV1ExportConversationsInitializeWithResponse(ctx context.Context, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1ExportConversationsInitializeResp, error)
 	GetAPIV1MachinesWithResponse(ctx context.Context, options *GetAPIV1MachinesRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1MachinesResp, error)
 	GetAPIV1ProjectsWithResponse(ctx context.Context, options *GetAPIV1ProjectsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1ProjectsResp, error)
 	PostAPIV1PushClickhouseWithResponse(ctx context.Context, options *PostAPIV1PushClickhouseRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1PushClickhouseResp, error)
@@ -6461,6 +6462,212 @@ func (c *Client) GetAPIV1EmbeddingsStatusWithResponse(ctx context.Context, optio
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
 					TargetType:    "GetAPIV1EmbeddingsStatusErrorResponseJSON504",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	default:
+		return out, runtime.NewClientAPIError(fmt.Errorf("unexpected status code: %d", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	}
+}
+
+// PostAPIV1ExportConversationsInitialize Initialize conversation export
+func (c *Client) PostAPIV1ExportConversationsInitializeWithResponse(ctx context.Context, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1ExportConversationsInitializeResp, error) {
+	var err error
+	reqParams := runtime.RequestOptionsParameters{
+		RequestURL: c.apiClient.GetBaseURL() + "/api/v1/export/conversations/initialize",
+		Method:     "POST",
+	}
+
+	req, err := c.apiClient.CreateRequest(ctx, reqParams, reqEditors...)
+	if err != nil {
+		return nil, fmt.Errorf("error creating request: %w", err)
+	}
+
+	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/api/v1/export/conversations/initialize")
+	if err != nil {
+		return nil, fmt.Errorf("error executing request: %w", err)
+	}
+
+	out := &PostAPIV1ExportConversationsInitializeResp{
+		HTTPResponse: resp.Raw,
+		Body:         resp.Content,
+		StatusCode:   resp.StatusCode,
+	}
+
+	switch resp.StatusCode {
+	case 200:
+		out.JSON200 = new(PostAPIV1ExportConversationsInitializeResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON200); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1ExportConversationsInitializeResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, nil
+	case 400:
+		out.JSON400 = new(PostAPIV1ExportConversationsInitializeErrorResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON400); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1ExportConversationsInitializeErrorResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 401:
+		out.JSON401 = new(PostAPIV1ExportConversationsInitializeErrorResponseJSON)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON401); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1ExportConversationsInitializeErrorResponseJSON",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 403:
+		out.JSON403 = new(PostAPIV1ExportConversationsInitializeErrorResponseJSON403)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON403); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1ExportConversationsInitializeErrorResponseJSON403",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 404:
+		out.JSON404 = new(PostAPIV1ExportConversationsInitializeErrorResponseJSON404)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON404); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1ExportConversationsInitializeErrorResponseJSON404",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 409:
+		out.JSON409 = new(PostAPIV1ExportConversationsInitializeErrorResponseJSON409)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON409); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1ExportConversationsInitializeErrorResponseJSON409",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 500:
+		out.JSON500 = new(PostAPIV1ExportConversationsInitializeErrorResponseJSON500)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON500); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1ExportConversationsInitializeErrorResponseJSON500",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 501:
+		out.JSON501 = new(PostAPIV1ExportConversationsInitializeErrorResponseJSON501)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON501); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1ExportConversationsInitializeErrorResponseJSON501",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 502:
+		out.JSON502 = new(PostAPIV1ExportConversationsInitializeErrorResponseJSON502)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON502); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1ExportConversationsInitializeErrorResponseJSON502",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 503:
+		out.JSON503 = new(PostAPIV1ExportConversationsInitializeErrorResponseJSON503)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON503); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1ExportConversationsInitializeErrorResponseJSON503",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 504:
+		out.JSON504 = new(PostAPIV1ExportConversationsInitializeErrorResponseJSON504)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON504); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1ExportConversationsInitializeErrorResponseJSON504",
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -16291,6 +16498,28 @@ type GetAPIV1EmbeddingsStatusErrorResponseJSON503 = APIErrorResponse
 
 type GetAPIV1EmbeddingsStatusErrorResponseJSON504 = APIErrorResponse
 
+type PostAPIV1ExportConversationsInitializeResponse = ConversationExportInitializeResponse
+
+type PostAPIV1ExportConversationsInitializeErrorResponse = APIErrorResponse
+
+type PostAPIV1ExportConversationsInitializeErrorResponseJSON = APIErrorResponse
+
+type PostAPIV1ExportConversationsInitializeErrorResponseJSON403 = APIErrorResponse
+
+type PostAPIV1ExportConversationsInitializeErrorResponseJSON404 = APIErrorResponse
+
+type PostAPIV1ExportConversationsInitializeErrorResponseJSON409 = APIErrorResponse
+
+type PostAPIV1ExportConversationsInitializeErrorResponseJSON500 = APIErrorResponse
+
+type PostAPIV1ExportConversationsInitializeErrorResponseJSON501 = APIErrorResponse
+
+type PostAPIV1ExportConversationsInitializeErrorResponseJSON502 = APIErrorResponse
+
+type PostAPIV1ExportConversationsInitializeErrorResponseJSON503 = APIErrorResponse
+
+type PostAPIV1ExportConversationsInitializeErrorResponseJSON504 = APIErrorResponse
+
 type GetAPIV1MachinesResponse = MachinesResponse
 
 type GetAPIV1MachinesErrorResponse = APIErrorResponse
@@ -17385,6 +17614,23 @@ type GetAPIV1EmbeddingsStatusResp struct {
 	JSON504      *GetAPIV1EmbeddingsStatusErrorResponseJSON504
 }
 
+type PostAPIV1ExportConversationsInitializeResp struct {
+	HTTPResponse *http.Response
+	Body         []byte
+	StatusCode   int
+	JSON200      *PostAPIV1ExportConversationsInitializeResponse
+	JSON400      *PostAPIV1ExportConversationsInitializeErrorResponse
+	JSON401      *PostAPIV1ExportConversationsInitializeErrorResponseJSON
+	JSON403      *PostAPIV1ExportConversationsInitializeErrorResponseJSON403
+	JSON404      *PostAPIV1ExportConversationsInitializeErrorResponseJSON404
+	JSON409      *PostAPIV1ExportConversationsInitializeErrorResponseJSON409
+	JSON500      *PostAPIV1ExportConversationsInitializeErrorResponseJSON500
+	JSON501      *PostAPIV1ExportConversationsInitializeErrorResponseJSON501
+	JSON502      *PostAPIV1ExportConversationsInitializeErrorResponseJSON502
+	JSON503      *PostAPIV1ExportConversationsInitializeErrorResponseJSON503
+	JSON504      *PostAPIV1ExportConversationsInitializeErrorResponseJSON504
+}
+
 type GetAPIV1MachinesResp struct {
 	HTTPResponse *http.Response
 	Body         []byte
@@ -18387,6 +18633,18 @@ type ConfigRemoteHost struct {
 }
 
 func (c ConfigRemoteHost) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(c))
+}
+
+type ConversationExportInitializeResponse struct {
+	// DatabaseID Archive generation that now serves conversation exports
+	DatabaseID string `json:"database_id" validate:"required"`
+
+	// Initialized Whether this request built the projection
+	Initialized bool `json:"initialized"`
+}
+
+func (c ConversationExportInitializeResponse) Validate() error {
 	return runtime.ConvertValidatorError(typesValidator.Struct(c))
 }
 

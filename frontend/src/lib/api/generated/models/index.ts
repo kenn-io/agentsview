@@ -25,6 +25,7 @@ export * from "./cannedSessionFiltersInput.ts";
 export * from "./comparison.ts";
 export * from "./configDuckDBConfig.ts";
 export * from "./configRemoteHost.ts";
+export * from "./conversationExportInitializeResponse.ts";
 export * from "./daemonPushRequest.ts";
 export * from "./daemonReplicaTarget.ts";
 export * from "./dataCandidatesResponse.ts";

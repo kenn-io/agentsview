@@ -500,7 +500,14 @@ func applyArchiveContentToCopiedSessionsTx(
 	if err != nil {
 		return err
 	}
-	return refreshConversationMessagesFromArchiveTx(ctx, tx, "session_id IN (SELECT id FROM "+tempIDsTable+")")
+	if active, err := conversationExportActiveTx(contextTransaction{ctx: ctx, tx: tx}); err != nil || !active {
+		return err
+	}
+	where := "session_id IN (SELECT id FROM " + tempIDsTable + ")"
+	if err := refreshConversationMessagesFromArchiveTx(ctx, tx, where); err != nil {
+		return err
+	}
+	return applyConversationPolicyGapsTx(ctx, tx, where)
 }
 
 // toolOutputMarkerDataVersion is the first data version whose parsers mark
