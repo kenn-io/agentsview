@@ -10,7 +10,6 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/server"
 	agentsync "go.kenn.io/agentsview/internal/sync"
 )
@@ -29,20 +28,21 @@ type daemonIngestion struct {
 	// load rebuilds the configuration the same way daemon startup and the
 	// sync workers do: defaults, config file, environment, then serve flags.
 	load func() (config.Config, error)
+	// syncAll runs the daemon's normal incremental sync after a reload.
+	syncAll server.LocalSyncRunner
 
 	cfg atomic.Pointer[config.Config]
 
+	// applyMu serializes reloads. Each reload reads the saved configuration
+	// under it, so the last one to run applies the latest settings.
+	applyMu sync.Mutex
+	// mu guards the fields below.
 	mu           sync.Mutex
 	watchers     *ingestionWatchers
 	dispatchOpen bool
 	stopLive     func()
-	pending      *config.Config
 	stopped      bool
-
-	wake     chan struct{}
-	stop     chan struct{}
-	done     chan struct{}
-	stopOnce sync.Once
+	applying     sync.WaitGroup
 }
 
 // ingestionWatchers is one generation of change detection for a fixed
@@ -67,6 +67,7 @@ func newDaemonIngestion(
 	database *db.DB,
 	idleTracker *server.IdleTracker,
 	load func() (config.Config, error),
+	syncAll server.LocalSyncRunner,
 ) *daemonIngestion {
 	d := &daemonIngestion{
 		ctx:         ctx,
@@ -74,13 +75,10 @@ func newDaemonIngestion(
 		database:    database,
 		idleTracker: idleTracker,
 		load:        load,
-		wake:        make(chan struct{}, 1),
-		stop:        make(chan struct{}),
-		done:        make(chan struct{}),
+		syncAll:     syncAll,
 	}
 	d.cfg.Store(&cfg)
 	d.watchers = d.startWatchers(cfg)
-	go d.run()
 	return d
 }
 
@@ -120,9 +118,9 @@ func (d *daemonIngestion) StartLiveActivity() {
 	)
 }
 
-// Reload reads the saved configuration and schedules it to be applied. It
-// returns once the configuration loads; the engine and watcher swap runs in
-// the background because it waits for any in-flight sync pass.
+// Reload reads the saved configuration and applies it in the background. It
+// returns once the configuration loads; applying it waits for any in-flight
+// sync pass and then runs a sync, which can take a while.
 func (d *daemonIngestion) Reload(context.Context) (config.Config, error) {
 	cfg, err := d.load()
 	if err != nil {
@@ -133,20 +131,18 @@ func (d *daemonIngestion) Reload(context.Context) (config.Config, error) {
 	if d.stopped {
 		return config.Config{}, errIngestionStopped
 	}
-	d.pending = &cfg
-	select {
-	case d.wake <- struct{}{}:
-	default:
-	}
+	d.applying.Go(d.applyLatest)
 	return cfg, nil
 }
 
-// Stop stops the reload loop, watchers, polling, and live activity polling.
+// Stop waits for in-flight reloads, then stops watchers, polling, and live
+// activity polling.
 func (d *daemonIngestion) Stop() {
-	d.stopOnce.Do(func() { close(d.stop) })
-	<-d.done
 	d.mu.Lock()
 	d.stopped = true
+	d.mu.Unlock()
+	d.applying.Wait()
+	d.mu.Lock()
 	watchers, stopLive := d.watchers, d.stopLive
 	d.stopLive = nil
 	d.mu.Unlock()
@@ -156,36 +152,39 @@ func (d *daemonIngestion) Stop() {
 	watchers.stop()
 }
 
-func (d *daemonIngestion) run() {
-	defer close(d.done)
-	for {
-		select {
-		case <-d.ctx.Done():
-			return
-		case <-d.stop:
-			return
-		case <-d.wake:
-		}
-		d.mu.Lock()
-		next := d.pending
-		d.pending = nil
-		d.mu.Unlock()
-		if next != nil {
-			d.apply(*next)
-		}
+func (d *daemonIngestion) applyLatest() {
+	if !d.applySaved() {
+		return
 	}
+	d.idleTracker.Do(func() {
+		_, err := d.syncAll(d.ctx, nil)
+		if err != nil && d.ctx.Err() == nil {
+			log.Printf("sync after session provider settings change: %v", err)
+		}
+	})
 }
 
-func (d *daemonIngestion) apply(next config.Config) {
+// applySaved switches the engine, watchers, and polling to the saved
+// configuration. It reports whether the provider set changed.
+func (d *daemonIngestion) applySaved() bool {
+	d.applyMu.Lock()
+	defer d.applyMu.Unlock()
+	if d.ctx.Err() != nil {
+		return false
+	}
+	next, err := d.load()
+	if err != nil {
+		log.Printf("reload session provider settings: %v", err)
+		return false
+	}
 	prev := d.Config()
+	d.cfg.Store(&next)
 	if reflect.DeepEqual(engineSourceConfig(prev), engineSourceConfig(next)) {
-		d.cfg.Store(&next)
-		return
+		return false
 	}
 	// The engine switches first so the new watcher's first batch is handled
 	// by the new provider set.
 	d.engine.ReconfigureSources(engineSourceConfig(next))
-	d.cfg.Store(&next)
 
 	// Start the replacement before stopping the old watcher so no change
 	// falls between them; a change seen by both is synced twice, which is
@@ -208,21 +207,9 @@ func (d *daemonIngestion) apply(next config.Config) {
 	if oldLive != nil {
 		oldLive()
 	}
-
-	added := addedReconcileScopes(prev, next)
-	log.Printf(
-		"applied session provider settings: disabled=%v new_root_groups=%d",
-		next.DisabledAgents, len(added),
-	)
-	if len(added) == 0 {
-		return
-	}
-	d.idleTracker.Do(func() {
-		err := d.engine.ReconcileProviderRootsGrouped(d.ctx, added)
-		if err != nil && d.ctx.Err() == nil {
-			log.Printf("sync after session provider settings change: %v", err)
-		}
-	})
+	log.Printf("applied session provider settings: disabled=%v",
+		next.DisabledAgents)
+	return true
 }
 
 func (d *daemonIngestion) startWatchers(cfg config.Config) *ingestionWatchers {
@@ -275,41 +262,4 @@ func engineSourceConfig(cfg config.Config) agentsync.SourceConfig {
 		ProviderMetadata: cfg.ProviderMetadata,
 		DisabledAgents:   cfg.DisabledAgents,
 	}
-}
-
-// addedReconcileScopes returns the present roots that next ingests and prev
-// did not: every root of a newly enabled provider, plus new roots such as an
-// added agent home. Roots that are missing, or overlap a missing root of the
-// same provider, are left to the watcher and polling so a partial discovery
-// never tombstones sessions.
-func addedReconcileScopes(
-	prev, next config.Config,
-) []agentsync.ProviderRootsGroup {
-	type agentRoot struct {
-		agent parser.AgentType
-		root  string
-	}
-	previous := make(map[agentRoot]struct{})
-	for _, factory := range prev.LocalProviderFactories() {
-		agent := factory.Definition().Type
-		for _, root := range prev.ResolveDirs(agent) {
-			previous[agentRoot{agent, root}] = struct{}{}
-		}
-	}
-	present := presentReconcileScopes(next)
-	var groups []agentsync.ProviderRootsGroup
-	for _, def := range parser.Registry {
-		var roots []string
-		for _, root := range present[def.Type] {
-			if _, ok := previous[agentRoot{def.Type, root}]; !ok {
-				roots = append(roots, root)
-			}
-		}
-		if len(roots) > 0 {
-			groups = append(groups, agentsync.ProviderRootsGroup{
-				Agent: def.Type, Roots: roots,
-			})
-		}
-	}
-	return groups
 }
