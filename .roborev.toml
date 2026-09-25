@@ -158,6 +158,10 @@ Key assumptions reviewers MUST account for:
     because the source went away. Only a user's explicit delete removes
     stored data.
 
+21. SCHEMA COMPATIBILITY: Schema migrations support main and releases.
+    Databases from earlier PR revisions may need rebuilding unless we
+    explicitly promise to preserve them.
+
 For local/legacy modes, do not impose requirements that apply only to
 public-facing multi-tenant services. For opt-in hosted raw processing,
 review its actual tenant/role/catalog boundary, immutable source provenance,
