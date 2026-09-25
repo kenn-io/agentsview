@@ -38,6 +38,13 @@ const READY_TIMEOUT: Duration = Duration::from_secs(30);
 const DAEMON_STARTUP_LONG_NOTICE_AFTER: Duration = Duration::from_secs(300);
 const DAEMON_UNHEALTHY_GRACE: Duration = Duration::from_secs(15);
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(125);
+/// How often the Rust side probes the backend while the app is running. The
+/// web view's own recovery paths are JavaScript, and macOS stops executing the
+/// web view when the app has no window on screen, so this probe is the only
+/// recovery that keeps running. Kept well below a minute so an outage is
+/// noticed soon after it ends, and well above the request cost of one
+/// loopback GET.
+const BACKEND_PROBE_INTERVAL: Duration = Duration::from_secs(30);
 const STATUS_POLL_MAX_INTERVAL: Duration = Duration::from_secs(1);
 const STATUS_PROBE_TIMEOUT: Duration = Duration::from_millis(1250);
 const STATUS_PROBE_FAILURE_NOTICE_AFTER: u32 = 10;
@@ -808,6 +815,8 @@ fn launch_backend(app: &mut App) -> Result<(), DynError> {
             }
         }
     });
+
+    spawn_backend_probe(window.clone(), app.handle().clone());
 
     forward_sidecar_logs(rx, window, generation);
 
@@ -3578,6 +3587,103 @@ fn restart_backend_after_update(handle: AppHandle) {
     }
 }
 
+/// Records what the Rust-side probe last saw of the backend, so a restart the
+/// suspended web view could not notice can be recovered from.
+#[derive(Debug, Default)]
+struct BackendProbeState {
+    last: Option<(u16, bool)>,
+}
+
+impl BackendProbeState {
+    /// Records one probe result and reports whether the window has to be
+    /// navigated back to the dashboard.
+    ///
+    /// The window is navigated when a reachable backend is not the one the
+    /// window was last known to be on: it answers on a different port, or it
+    /// answers again after having been unreachable. A backend that comes back
+    /// on the same port may be a different process, and the version endpoint
+    /// carries no per-process identity to tell them apart, so the
+    /// down-then-up transition is the signal. Recovery fires once per
+    /// transition, never on every probe, and never while the backend is down,
+    /// because there would be nothing to navigate to.
+    ///
+    /// The first observation never navigates: start-up has already pointed the
+    /// window at the backend.
+    fn observe(&mut self, port: u16, reachable: bool) -> bool {
+        let previous = self.last.replace((port, reachable));
+        if !reachable {
+            return false;
+        }
+        match previous {
+            None => false,
+            Some((last_port, last_reachable)) => !last_reachable || last_port != port,
+        }
+    }
+}
+
+/// Starts the Rust-side backend probe for the app's lifetime.
+///
+/// Recovery used to be wired to `WindowEvent::Focused(true)` alone, and the
+/// frontend's own health check is disabled in desktop mode on the grounds that
+/// Tauri owns recovery. With the window closed to the tray macOS suspends the
+/// web view, so neither path can fire: the backend can restart, or go away and
+/// come back, and the window stays on a dead page until the app is quit and
+/// started again. This probe runs on the side that keeps executing.
+fn spawn_backend_probe(window: WebviewWindow, handle: AppHandle) {
+    thread::spawn(move || {
+        let never_stop = AtomicBool::new(false);
+        backend_probe_loop(
+            BACKEND_PROBE_INTERVAL,
+            &never_stop,
+            || {
+                handle
+                    .state::<SidecarState>()
+                    .backend_port
+                    .lock()
+                    .ok()
+                    .and_then(|port| *port)
+            },
+            backend_endpoint_ready,
+            |port| {
+                eprintln!(
+                    "[agentsview] backend moved or returned on port {port}, reloading window"
+                );
+                match Url::parse(desktop_redirect_url(port).as_str()) {
+                    Ok(url) => {
+                        if let Err(err) = window.navigate(url) {
+                            eprintln!("[agentsview] backend recovery navigate failed: {err}");
+                        }
+                    }
+                    Err(err) => {
+                        eprintln!("[agentsview] backend recovery URL invalid: {err}");
+                    }
+                }
+            },
+        );
+    });
+}
+
+/// Probes the backend every interval until stop is set, navigating the window
+/// whenever the backend has moved or come back.
+fn backend_probe_loop(
+    interval: Duration,
+    stop: &AtomicBool,
+    mut current_port: impl FnMut() -> Option<u16>,
+    mut probe: impl FnMut(u16) -> bool,
+    mut navigate: impl FnMut(u16),
+) {
+    let mut state = BackendProbeState::default();
+    while !stop.load(Ordering::SeqCst) {
+        if let Some(port) = current_port() {
+            let reachable = probe(port);
+            if state.observe(port, reachable) {
+                navigate(port);
+            }
+        }
+        thread::sleep(interval);
+    }
+}
+
 fn wait_for_server(port: u16, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
@@ -5684,5 +5790,138 @@ agentsview running at http://127.0.0.1:18082
             }
             other => panic!("expected NonZero{{code=42}}; got {other:?}"),
         }
+    }
+
+    // The desktop window's only recovery path was a window-focus event, and
+    // every other recovery path is JavaScript inside the web view. With no
+    // window on screen macOS stops executing that web view, so a backend that
+    // restarts leaves the window permanently stale. These tests pin the
+    // Rust-side probe that recovers it, because the Rust side is the part that
+    // keeps running.
+
+    #[test]
+    fn backend_probe_does_not_navigate_on_the_first_observation() {
+        let mut state = BackendProbeState::default();
+        assert!(
+            !state.observe(8080, true),
+            "start-up has already navigated; the first probe must not repeat it"
+        );
+        assert!(
+            !state.observe(8080, true),
+            "a backend that stays up must not be navigated again"
+        );
+    }
+
+    #[test]
+    fn backend_probe_navigates_when_the_backend_comes_back() {
+        let mut state = BackendProbeState::default();
+        assert!(!state.observe(8080, true));
+        assert!(
+            !state.observe(8080, false),
+            "there is nothing to navigate to while the backend is down"
+        );
+        assert!(
+            state.observe(8080, true),
+            "a backend that came back may be a new process, and a suspended \
+             web view cannot have noticed"
+        );
+        assert!(
+            !state.observe(8080, true),
+            "recovery happens once per outage, not on every later probe"
+        );
+    }
+
+    #[test]
+    fn backend_probe_navigates_when_the_port_changes() {
+        let mut state = BackendProbeState::default();
+        assert!(!state.observe(8080, true));
+        assert!(
+            state.observe(9090, true),
+            "a backend on a new port is a different backend"
+        );
+    }
+
+    #[test]
+    fn backend_probe_does_not_navigate_to_an_unreachable_backend() {
+        let mut state = BackendProbeState::default();
+        assert!(!state.observe(8080, true));
+        assert!(!state.observe(9090, false));
+        assert!(
+            state.observe(9090, true),
+            "the new port is navigated to once it answers"
+        );
+    }
+
+    #[test]
+    fn backend_probe_loop_recovers_after_an_outage_and_stops_when_asked() {
+        // The reachability sequence a longer outage produces: up, then down
+        // for several cycles (past any front-end retry window), then up again.
+        let readings = Arc::new(Mutex::new(VecDeque::from(vec![
+            true, false, false, false, true, true,
+        ])));
+        let navigated = Arc::new(Mutex::new(Vec::new()));
+        let stop = Arc::new(AtomicBool::new(false));
+
+        let probe_readings = Arc::clone(&readings);
+        let probe_stop = Arc::clone(&stop);
+        let recorded = Arc::clone(&navigated);
+        backend_probe_loop(
+            Duration::from_millis(1),
+            &stop,
+            || Some(8080),
+            move |_port| {
+                let mut queue = probe_readings.lock().expect("probe readings");
+                match queue.pop_front() {
+                    Some(reachable) => reachable,
+                    None => {
+                        probe_stop.store(true, Ordering::SeqCst);
+                        true
+                    }
+                }
+            },
+            move |port| recorded.lock().expect("navigated").push(port),
+        );
+
+        assert_eq!(
+            *navigated.lock().expect("navigated"),
+            vec![8080],
+            "the window is navigated exactly once, when the backend returns"
+        );
+        assert!(
+            stop.load(Ordering::SeqCst),
+            "the loop must return when it is asked to stop"
+        );
+    }
+
+    #[test]
+    fn backend_probe_loop_waits_for_a_port_before_probing() {
+        let probes = Arc::new(AtomicUsize::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        let cycles = Arc::new(AtomicUsize::new(0));
+
+        let counted = Arc::clone(&probes);
+        let loop_stop = Arc::clone(&stop);
+        let loop_cycles = Arc::clone(&cycles);
+        backend_probe_loop(
+            Duration::from_millis(1),
+            &stop,
+            move || {
+                if loop_cycles.fetch_add(1, Ordering::SeqCst) >= 3 {
+                    loop_stop.store(true, Ordering::SeqCst);
+                }
+                None
+            },
+            move |_port| {
+                counted.fetch_add(1, Ordering::SeqCst);
+                true
+            },
+            |_port| panic!("nothing to navigate to without a port"),
+        );
+
+        assert_eq!(
+            probes.load(Ordering::SeqCst),
+            0,
+            "no port means no backend to probe yet"
+        );
     }
 }
