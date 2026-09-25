@@ -3857,17 +3857,50 @@ func (e *Engine) resyncBuildLocked(
 
 	// Persist the fresh skip state into the replacement so the post-swap engine
 	// loads warm state: this engine after an in-process swap, or the daemon
-	// after a worker build. Then close the replacement so its file is complete
-	// on disk for the caller's rename. A failed close means a connection still
-	// holds the replacement and committed rows may sit uncheckpointed in its
-	// WAL; the swap renames only the main file and deletes that WAL, so
-	// proceeding would install an archive missing those rows. Abort instead.
+	// after a worker build. Then checkpoint and close the replacement so its
+	// main file is complete on disk for the caller's rename. A failed
+	// checkpoint or close means committed rows may sit only in its WAL; the
+	// swap renames only the main file and deletes that WAL, so proceeding
+	// would install an archive missing those rows. Abort instead.
 	e.persistSkipCacheInto(ctx, newDB)
+	tCheckpoint := time.Now()
+	reportResyncPhase(PhaseFinalizing, "Checkpointing rebuilt database", "")
+	if err := newDB.FinishBulkImport(ctx); err != nil {
+		log.Printf("resync: checkpoint replacement db: %v", err)
+		stats.Aborted = true
+		stats.Warnings = append(stats.Warnings,
+			"replacement checkpoint failed, aborting swap: "+err.Error(),
+		)
+		newDB.Close()
+		removeTempDB(tempPath)
+		restoreSkipCache()
+		e.mu.Lock()
+		e.lastSyncStats = stats
+		e.mu.Unlock()
+		return stats, err
+	}
+	log.Printf(
+		"resync: checkpoint replacement db: %s",
+		time.Since(tCheckpoint).Round(time.Millisecond),
+	)
+	reportResyncPhase(PhaseFinalizing, "Closing rebuilt database", "")
 	if err := newDB.Close(); err != nil {
 		log.Printf("resync: close replacement db: %v", err)
 		stats.Aborted = true
 		stats.Warnings = append(stats.Warnings,
 			"replacement close failed, aborting swap: "+err.Error(),
+		)
+		removeTempDB(tempPath)
+		restoreSkipCache()
+		e.mu.Lock()
+		e.lastSyncStats = stats
+		e.mu.Unlock()
+		return stats, err
+	}
+	if err := ctx.Err(); err != nil {
+		stats.Aborted = true
+		stats.Warnings = append(stats.Warnings,
+			"resync canceled before swap: "+err.Error(),
 		)
 		removeTempDB(tempPath)
 		restoreSkipCache()

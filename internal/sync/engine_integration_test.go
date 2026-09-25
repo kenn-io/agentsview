@@ -4928,6 +4928,8 @@ func TestSyncEngineProgress(t *testing.T) {
 		"Finalizing sync: checking database-backed sessions",
 		"Finalizing sync: linking all subagent sessions",
 		"Finalizing sync: saving the skip cache",
+		"Checkpointing rebuilt database",
+		"Closing rebuilt database",
 	}, finalizingDetails)
 
 	if env.db.HasFTS(t.Context()) {

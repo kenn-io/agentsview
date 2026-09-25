@@ -13,6 +13,14 @@ parser change that needs a full resync must build a fresh database, sync source
 files, copy orphaned sessions from the old database, and swap the files
 atomically. Preserve sessions even when their source files no longer exist.
 
+The replacement archive's writer raises `wal_autocheckpoint` to 128 MiB of
+pages for the bulk load; the live writer keeps SQLite's 1,000-page default.
+The threshold only triggers a passive checkpoint after a commit, so a large
+transaction or a pinned reader can push the WAL past it (249 MiB was observed).
+Before closing the replacement, the build runs a checked truncate checkpoint and
+restores the default. The swap installs only the main file, so a failed
+checkpoint or close aborts it.
+
 ### Conversation export
 
 Conversation exports consume normalized SQLite message records for every agent.

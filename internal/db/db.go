@@ -818,6 +818,9 @@ type DB struct {
 	checkpointMu   sync.Mutex
 	checkpointStop chan struct{}
 	checkpointDone chan struct{}
+	// bulkWALAutocheckpoint holds the writer's wal_autocheckpoint saved by
+	// DropBulkImportIndexes; zero when no bulk override is active. Guarded by mu.
+	bulkWALAutocheckpoint int
 
 	vectorMu       sync.RWMutex
 	vectorSearcher VectorSearcher
@@ -4628,11 +4631,34 @@ func (db *DB) RebuildFTS(ctx context.Context) error {
 	return nil
 }
 
+// bulkImportWALAutocheckpointBytes is the WAL growth between automatic
+// checkpoints in a disposable resync archive. Tests shrink it.
+var bulkImportWALAutocheckpointBytes = 128 << 20
+
+func bulkImportWALAutocheckpointPages(pageSize int) int {
+	return max(1, bulkImportWALAutocheckpointBytes/pageSize)
+}
+
 // DropBulkImportIndexes omits derived index maintenance in a disposable
-// full-resync archive. RebuildBulkImportIndexes must succeed before the swap.
+// full-resync archive and defers its automatic WAL checkpoints.
+// RebuildBulkImportIndexes and FinishBulkImport must succeed before the swap.
 func (db *DB) DropBulkImportIndexes(ctx context.Context) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	w := db.getWriter()
+	if db.bulkWALAutocheckpoint == 0 {
+		var saved, pageSize int
+		if err := w.QueryRow(ctx, "PRAGMA wal_autocheckpoint").Scan(&saved); err != nil {
+			return fmt.Errorf("reading wal_autocheckpoint: %w", err)
+		}
+		if err := w.QueryRow(ctx, "PRAGMA page_size").Scan(&pageSize); err != nil {
+			return fmt.Errorf("reading page_size: %w", err)
+		}
+		if err := setWALAutocheckpoint(ctx, w, bulkImportWALAutocheckpointPages(pageSize)); err != nil {
+			return err
+		}
+		db.bulkWALAutocheckpoint = saved
+	}
 	for _, name := range []string{
 		"idx_messages_usage_timestamp",
 		"idx_messages_usage_session_covering",
@@ -4644,6 +4670,35 @@ func (db *DB) DropBulkImportIndexes(ctx context.Context) error {
 		if _, err := db.getWriter().Exec(ctx, `DROP INDEX IF EXISTS `+name); err != nil {
 			return fmt.Errorf("dropping bulk import index %s: %w", name, err)
 		}
+	}
+	return nil
+}
+
+// FinishBulkImport checkpoints every committed page into the main file and
+// restores the writer's automatic-checkpoint policy. A resync swap installs only
+// the main file, so an error here must abort it.
+func (db *DB) FinishBulkImport(ctx context.Context) error {
+	if err := db.CheckpointWALTruncate(ctx); err != nil {
+		return err
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	if db.bulkWALAutocheckpoint == 0 {
+		return nil
+	}
+	if err := setWALAutocheckpoint(ctx, db.getWriter(), db.bulkWALAutocheckpoint); err != nil {
+		return err
+	}
+	db.bulkWALAutocheckpoint = 0
+	return nil
+}
+
+func setWALAutocheckpoint(ctx context.Context, w *writerHandle, pages int) error {
+	var got int
+	if err := w.QueryRow(ctx,
+		fmt.Sprintf("PRAGMA wal_autocheckpoint = %d", pages),
+	).Scan(&got); err != nil {
+		return fmt.Errorf("setting wal_autocheckpoint: %w", err)
 	}
 	return nil
 }
