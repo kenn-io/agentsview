@@ -1242,7 +1242,7 @@ func OpenFreshIsolatedContext(ctx context.Context, path string) (*DB, error) {
 		return nil, errors.Join(err, d.CloseContext(ctx))
 	}
 	d.mu.Lock()
-	err = ensureConversationSchemaLocked(ctx, d.getWriter(), d.usageOnlyStorage())
+	err = ensureConversationSchemaLocked(ctx, d.getWriter())
 	d.mu.Unlock()
 	if err != nil {
 		return closeOnError(fmt.Errorf("initializing conversation export state: %w", err))
@@ -2975,7 +2975,7 @@ func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc) err
 	if err := scopeLegacyDevinSourceUUIDsLocked(ctx, w); err != nil {
 		return err
 	}
-	if err := ensureConversationSchemaLocked(ctx, w, db.usageOnlyStorage()); err != nil {
+	if err := ensureConversationSchemaLocked(ctx, w); err != nil {
 		return err
 	}
 

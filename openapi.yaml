@@ -642,6 +642,19 @@ components:
       required:
         - host
       type: object
+    ConversationExportInitializeResponse:
+      additionalProperties: false
+      properties:
+        database_id:
+          description: Archive generation that now serves conversation exports
+          type: string
+        initialized:
+          description: Whether this request built the projection
+          type: boolean
+      required:
+        - database_id
+        - initialized
+      type: object
     DaemonPushRequest:
       additionalProperties: false
       properties:
@@ -12196,6 +12209,79 @@ paths:
       summary: Watch server events
       tags:
         - Sessions
+  /api/v1/export/conversations/initialize:
+    post:
+      operationId: post-api-v1-export-conversations-initialize
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationExportInitializeResponse"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Initialize conversation export
+      tags:
+        - Export
   /api/v1/import/chatgpt:
     post:
       operationId: post-api-v1-import-chatgpt
