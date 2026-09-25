@@ -181,6 +181,22 @@ type StatsOutcomeStats struct {
 	FilesChanged int  `json:"files_changed"`
 	PRsOpened    *int `json:"prs_opened,omitempty"` // nil when gh not configured
 	PRsMerged    *int `json:"prs_merged,omitempty"`
+	// Skipped names every repository a lookup could not read, so a caller can
+	// tell a complete total from one missing an unknown number of
+	// repositories. Empty means nothing was missed.
+	Skipped []StatsOutcomeSkippedRepo `json:"skipped,omitempty"`
+}
+
+// StatsOutcomeSkippedRepo records one repository that did not contribute to
+// the outcome totals, and why.
+type StatsOutcomeSkippedRepo struct {
+	// Repo is the local repository toplevel the lookup ran in.
+	Repo string `json:"repo"`
+	// Op is the lookup that failed: "log" for commit and line aggregation,
+	// "pr" for the pull-request counts.
+	Op string `json:"op"`
+	// Reason is the error the lookup returned.
+	Reason string `json:"reason"`
 }
 
 type StatsOutcomes struct {

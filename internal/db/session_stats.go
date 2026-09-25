@@ -1554,11 +1554,16 @@ func (db *DB) computeOutcomeStats(
 		)
 		if err != nil {
 			// Per-repo failures are logged but don't abort
-			// aggregation across other repos.
+			// aggregation across other repos. They are also named in
+			// the output, so a caller can tell a complete total from
+			// one missing this repository's commits.
 			log.Printf(
 				"computeOutcomeStats: repo=%s op=log err=%v",
 				repo, err,
 			)
+			out.Skipped = append(out.Skipped, StatsOutcomeSkippedRepo{
+				Repo: repo, Op: "log", Reason: err.Error(),
+			})
 			continue
 		}
 		contributed = true
@@ -1578,17 +1583,21 @@ func (db *DB) computeOutcomeStats(
 					"computeOutcomeStats: repo=%s op=pr err=%v",
 					repo, err,
 				)
+				out.Skipped = append(out.Skipped, StatsOutcomeSkippedRepo{
+					Repo: repo, Op: "pr", Reason: err.Error(),
+				})
 			} else if prRes != nil {
 				addPtr(&out.PRsOpened, prRes.Opened)
 				addPtr(&out.PRsMerged, prRes.Merged)
 			}
 		}
 	}
-	// Leave OutcomeStats nil when every repo was skipped (missing
-	// author email) or every git command failed. Emitting an
-	// all-zero block would falsely advertise "no commits" when the
-	// real signal is "we couldn't derive any".
-	if !contributed {
+	// Leave OutcomeStats nil when no repo contributed and nothing failed —
+	// an all-zero block would falsely advertise "no commits" when the real
+	// signal is "we couldn't derive any". A recorded failure is different:
+	// the block then carries the reason the totals are short, which is the
+	// only way a caller learns the answer is partial.
+	if !contributed && len(out.Skipped) == 0 {
 		return nil
 	}
 	s.OutcomeStats = out

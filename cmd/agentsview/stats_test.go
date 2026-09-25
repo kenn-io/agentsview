@@ -909,3 +909,36 @@ func addDuration(ts string, d time.Duration) string {
 	}
 	return parsed.Add(d).UTC().Format(time.RFC3339)
 }
+
+// TestStatsHumanNamesSkippedRepos pins that the command tells the reader when
+// the totals are short. A lookup that fails drops a repository's numbers; if
+// the render stays silent the reader takes a partial total for a complete one.
+func TestStatsHumanNamesSkippedRepos(t *testing.T) {
+	prsOpened := 25
+	out := renderStatsHuman(t, &db.SessionStats{
+		Totals: db.StatsTotals{SessionsAll: 1},
+		OutcomeStats: &db.StatsOutcomeStats{
+			ReposActive: 2,
+			Commits:     84,
+			PRsOpened:   &prsOpened,
+			Skipped: []db.StatsOutcomeSkippedRepo{
+				{Repo: "/repos/first", Op: "pr", Reason: "no git remotes found"},
+				{Repo: "/repos/second", Op: "log", Reason: "signal: killed"},
+			},
+		},
+	})
+
+	assert.Contains(t, out, "Not counted:")
+	assert.Contains(t, out, "/repos/first (pr): no git remotes found")
+	assert.Contains(t, out, "/repos/second (log): signal: killed")
+}
+
+// TestStatsHumanSilentWhenNothingSkipped pins that the new lines appear only
+// when something really was missed.
+func TestStatsHumanSilentWhenNothingSkipped(t *testing.T) {
+	out := renderStatsHuman(t, &db.SessionStats{
+		Totals:       db.StatsTotals{SessionsAll: 1},
+		OutcomeStats: &db.StatsOutcomeStats{ReposActive: 2, Commits: 84},
+	})
+	assert.NotContains(t, out, "Not counted:")
+}

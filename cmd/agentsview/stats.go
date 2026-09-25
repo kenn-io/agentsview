@@ -441,6 +441,15 @@ func printOutcomeStats(w io.Writer, o *db.StatsOutcomeStats) {
 	if o.PRsMerged != nil {
 		fmt.Fprintf(w, "  PRs merged:          %s\n", fmtInt(*o.PRsMerged))
 	}
+	if len(o.Skipped) > 0 {
+		// Without these lines a total missing an unknown number of
+		// repositories reads exactly like a complete one.
+		fmt.Fprintln(w, "  Not counted:")
+		for _, skipped := range o.Skipped {
+			fmt.Fprintf(w, "    %s (%s): %s\n",
+				skipped.Repo, skipped.Op, skipped.Reason)
+		}
+	}
 	fmt.Fprintln(w)
 }
 

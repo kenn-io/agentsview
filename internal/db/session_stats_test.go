@@ -2781,3 +2781,127 @@ func TestGetSessionStats_OutcomeStats_CwdOutsideRepo(t *testing.T) {
 	require.NoError(t, err, "GetSessionStats")
 	assert.Nil(t, stats.OutcomeStats, "OutcomeStats")
 }
+
+// statsCanonPath resolves symlinks so a fixture path compares equal to the
+// canonical path `git rev-parse --show-toplevel` prints. On macOS the test
+// temp root lives under /var, which is a symlink to /private/var.
+func statsCanonPath(t *testing.T, path string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(path)
+	require.NoError(t, err, "EvalSymlinks %s", path)
+	return resolved
+}
+
+// statsFakeToolOnPath puts a script named tool at the front of PATH. The
+// script receives the real tool's absolute path as its first argument so it
+// can pass through the subcommands the test still needs to work.
+//
+// The test process's PATH is changed, so the caller must not run in parallel.
+func statsFakeToolOnPath(t *testing.T, tool, body string) {
+	t.Helper()
+	real, err := exec.LookPath(tool)
+	require.NoError(t, err, "locate real %s", tool)
+	dir := t.TempDir()
+	script := "#!/bin/sh\nREAL=" + strconv.Quote(real) + "\n" + body
+	require.NoError(t,
+		os.WriteFile(filepath.Join(dir, tool), []byte(script), 0o700),
+		"write fake %s", tool)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// TestOutcomeStatsNamesRepoWhoseGHLookupFailed pins that a pull-request
+// lookup which fails is reported rather than dropped. Before this, the
+// failure went to the daemon log and the response was an ordinary-looking
+// block, so a caller reading prs_opened could not tell a genuine count from
+// one missing an unknown number of repositories.
+func TestOutcomeStatsNamesRepoWhoseGHLookupFailed(t *testing.T) {
+	skipIfNoGit(t)
+	repo := statsOutcomeRepo(t)
+	statsFakeToolOnPath(t, "gh", `
+echo "no git remotes found" >&2
+exit 1
+`)
+	d := testDB(t)
+	insertSessionFixture(t, d, sessionFixture{
+		id: "gh-failed", agent: "claude", userMsgs: 5,
+		startedAt: hoursAgo(5), cwd: repo,
+	})
+
+	stats, err := d.GetSessionStats(t.Context(), StatsFilter{
+		Since: "28d", IncludeGitOutcomes: true, GHToken: "test-token",
+	})
+	require.NoError(t, err, "GetSessionStats")
+	out := stats.OutcomeStats
+	require.NotNil(t, out, "OutcomeStats")
+	assert.Equal(t, 3, out.Commits,
+		"the git side of the repository still contributes")
+	require.Len(t, out.Skipped, 1,
+		"the repository whose gh lookup failed must be named")
+	assert.Equal(t, statsCanonPath(t, repo), out.Skipped[0].Repo, "Skipped[0].Repo")
+	assert.Equal(t, "pr", out.Skipped[0].Op, "Skipped[0].Op")
+	assert.Contains(t, out.Skipped[0].Reason, "no git remotes found",
+		"Skipped[0].Reason must carry why the lookup failed")
+}
+
+// TestOutcomeStatsNamesRepoWhoseGitLogFailed pins the same contract for the
+// commit side: a `git log` that fails drops the repository's commits, and the
+// response has to say so.
+func TestOutcomeStatsNamesRepoWhoseGitLogFailed(t *testing.T) {
+	skipIfNoGit(t)
+	repo := statsOutcomeRepo(t)
+	// Pass every subcommand through to the real git except `log`, so the
+	// repository is still discovered and its author email still resolves.
+	statsFakeToolOnPath(t, "git", `
+for arg in "$@"; do
+  case "$arg" in
+    log)
+      echo "fatal: simulated git log failure" >&2
+      exit 128
+      ;;
+    -*) continue ;;
+    *) break ;;
+  esac
+done
+exec "$REAL" "$@"
+`)
+	d := testDB(t)
+	insertSessionFixture(t, d, sessionFixture{
+		id: "log-failed", agent: "claude", userMsgs: 5,
+		startedAt: hoursAgo(5), cwd: repo,
+	})
+
+	stats, err := d.GetSessionStats(t.Context(), StatsFilter{
+		Since: "28d", IncludeGitOutcomes: true,
+	})
+	require.NoError(t, err, "GetSessionStats")
+	require.NotNil(t, stats.OutcomeStats,
+		"a block that reports the skip must be returned, not nil")
+	out := stats.OutcomeStats
+	assert.Zero(t, out.ReposActive,
+		"a repository whose log failed is not active")
+	require.Len(t, out.Skipped, 1,
+		"the repository whose git log failed must be named")
+	assert.Equal(t, statsCanonPath(t, repo), out.Skipped[0].Repo, "Skipped[0].Repo")
+	assert.Equal(t, "log", out.Skipped[0].Op, "Skipped[0].Op")
+	assert.Contains(t, out.Skipped[0].Reason, "simulated git log failure",
+		"Skipped[0].Reason must carry why the lookup failed")
+}
+
+// TestOutcomeStatsSkippedEmptyWhenNothingFailed pins that the new field stays
+// empty on the ordinary path, so its presence means something really was
+// missed.
+func TestOutcomeStatsSkippedEmptyWhenNothingFailed(t *testing.T) {
+	skipIfNoGit(t)
+	d := testDB(t)
+	insertSessionFixture(t, d, sessionFixture{
+		id: "nothing-failed", agent: "claude", userMsgs: 5,
+		startedAt: hoursAgo(5), cwd: statsOutcomeRepo(t),
+	})
+
+	stats, err := d.GetSessionStats(t.Context(), StatsFilter{
+		Since: "28d", IncludeGitOutcomes: true,
+	})
+	require.NoError(t, err, "GetSessionStats")
+	require.NotNil(t, stats.OutcomeStats, "OutcomeStats")
+	assert.Empty(t, stats.OutcomeStats.Skipped, "Skipped")
+}
