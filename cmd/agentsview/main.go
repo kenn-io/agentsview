@@ -322,7 +322,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	}
 
 	var engine *sync.Engine
-	var ingestion *daemonIngestion
+	var reloadIngestion server.IngestionReloader
 	var completeWorkerStartup func()
 	if !cfg.NoSync {
 		var onStartupReconciled func(sync.SyncStats, error)
@@ -345,10 +345,13 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			},
 		})
 		defer engine.Close()
-		ingestion = newDaemonIngestion(
+		ingestion := newDaemonIngestion(
 			ctx, cfg, engine, database, idleTracker, opts.ReloadConfig,
 		)
 		defer ingestion.Stop()
+		if opts.ReloadConfig != nil {
+			reloadIngestion = ingestion.Reload
+		}
 		onStartupReconciled = newStartupReconciliationHandler(
 			ctx,
 			database.CheckpointWALTruncateWithRetry,
@@ -517,10 +520,9 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		srvOpts = append(srvOpts, server.WithLocalCompactRunner(
 			newForegroundCompactRunner(engine, database),
 		))
-		if opts.ReloadConfig != nil {
-			srvOpts = append(srvOpts,
-				server.WithIngestionReloader(ingestion.Reload))
-		}
+	}
+	if reloadIngestion != nil {
+		srvOpts = append(srvOpts, server.WithIngestionReloader(reloadIngestion))
 	}
 	srvOpts = append(srvOpts, server.WithArtifactExchangeRunner(
 		newDaemonArtifactExchangeRunner(cfg, database, engine, emitter),
