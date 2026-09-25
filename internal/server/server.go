@@ -296,8 +296,8 @@ func insightGenerateOptions(cfg config.Config) insight.GenerateOptions {
 // Remote import and export ignore DisabledAgents.
 func (s *Server) ingestionConfig() config.Config {
 	s.mu.RLock()
+	defer s.mu.RUnlock()
 	cfg := s.cfg
-	s.mu.RUnlock()
 	cfg.DisabledAgents = append(
 		[]parser.AgentType(nil), s.activeDisabledAgents...,
 	)

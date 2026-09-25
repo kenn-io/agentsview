@@ -347,7 +347,6 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		defer engine.Close()
 		ingestion := newDaemonIngestion(
 			ctx, cfg, engine, database, idleTracker, opts.ReloadConfig,
-			newForegroundSyncRunner(ctx, cfg, engine, database, writeLock),
 		)
 		defer ingestion.Stop()
 		if opts.ReloadConfig != nil {

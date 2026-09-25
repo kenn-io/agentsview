@@ -28,8 +28,6 @@ type daemonIngestion struct {
 	// load rebuilds the configuration the same way daemon startup and the
 	// sync workers do: defaults, config file, environment, then serve flags.
 	load func() (config.Config, error)
-	// syncAll runs the daemon's normal incremental sync after a reload.
-	syncAll server.LocalSyncRunner
 
 	cfg atomic.Pointer[config.Config]
 
@@ -67,7 +65,6 @@ func newDaemonIngestion(
 	database *db.DB,
 	idleTracker *server.IdleTracker,
 	load func() (config.Config, error),
-	syncAll server.LocalSyncRunner,
 ) *daemonIngestion {
 	d := &daemonIngestion{
 		ctx:         ctx,
@@ -75,7 +72,6 @@ func newDaemonIngestion(
 		database:    database,
 		idleTracker: idleTracker,
 		load:        load,
-		syncAll:     syncAll,
 	}
 	d.cfg.Store(&cfg)
 	d.watchers = d.startWatchers(cfg)
@@ -120,7 +116,8 @@ func (d *daemonIngestion) StartLiveActivity() {
 
 // Reload reads the saved configuration and applies it in the background. It
 // returns once the configuration loads; applying it waits for any in-flight
-// sync pass and then runs a sync, which can take a while.
+// sync pass. Reload does not sync: sessions already on disk under newly
+// enabled roots are picked up by the next sync.
 func (d *daemonIngestion) Reload(context.Context) (config.Config, error) {
 	cfg, err := d.load()
 	if err != nil {
@@ -131,7 +128,7 @@ func (d *daemonIngestion) Reload(context.Context) (config.Config, error) {
 	if d.stopped {
 		return config.Config{}, errIngestionStopped
 	}
-	d.applying.Go(d.applyLatest)
+	d.applying.Go(d.applySaved)
 	return cfg, nil
 }
 
@@ -152,35 +149,23 @@ func (d *daemonIngestion) Stop() {
 	watchers.stop()
 }
 
-func (d *daemonIngestion) applyLatest() {
-	if !d.applySaved() {
-		return
-	}
-	d.idleTracker.Do(func() {
-		_, err := d.syncAll(d.ctx, nil)
-		if err != nil && d.ctx.Err() == nil {
-			log.Printf("sync after session provider settings change: %v", err)
-		}
-	})
-}
-
 // applySaved switches the engine, watchers, and polling to the saved
-// configuration. It reports whether the provider set changed.
-func (d *daemonIngestion) applySaved() bool {
+// configuration.
+func (d *daemonIngestion) applySaved() {
 	d.applyMu.Lock()
 	defer d.applyMu.Unlock()
 	if d.ctx.Err() != nil {
-		return false
+		return
 	}
 	next, err := d.load()
 	if err != nil {
 		log.Printf("reload session provider settings: %v", err)
-		return false
+		return
 	}
 	prev := d.Config()
 	d.cfg.Store(&next)
 	if reflect.DeepEqual(engineSourceConfig(prev), engineSourceConfig(next)) {
-		return false
+		return
 	}
 	// The engine switches first so the new watcher's first batch is handled
 	// by the new provider set.
@@ -209,7 +194,6 @@ func (d *daemonIngestion) applySaved() bool {
 	}
 	log.Printf("applied session provider settings: disabled=%v",
 		next.DisabledAgents)
-	return true
 }
 
 func (d *daemonIngestion) startWatchers(cfg config.Config) *ingestionWatchers {
