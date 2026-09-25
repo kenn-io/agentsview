@@ -429,6 +429,12 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			ctx, cfg, ingestion.Config, engine, database, writeLock, idleTracker,
 			validRemotes, emitter,
 		)
+	} else if opts.ReloadConfig != nil {
+		// Without a background engine the server reconfigures its own
+		// on-demand engine from the reloaded settings.
+		reloadIngestion = func(context.Context) (config.Config, error) {
+			return opts.ReloadConfig()
+		}
 	}
 
 	identityBackfillEngine := engine

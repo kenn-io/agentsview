@@ -5820,4 +5820,19 @@ func TestSettingsProviderChangesApplyThroughIngestionReloader(t *testing.T) {
 	w = put(`{"disabled_agents":[]}`)
 	assertStatus(t, w, http.StatusInternalServerError)
 	assert.Equal(t, 3, reloads)
+
+	// A failed reload restores the previous selection everywhere.
+	w = te.get(t, "/api/v1/settings")
+	assertStatus(t, w, http.StatusOK)
+	var got struct {
+		DisabledAgents []parser.AgentType `json:"disabled_agents"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	assert.Equal(t, []parser.AgentType{parser.AgentGemini}, got.DisabledAgents)
+	var persisted struct {
+		DisabledAgents []parser.AgentType `toml:"disabled_agents"`
+	}
+	_, err := toml.DecodeFile(filepath.Join(te.dataDir, "config.toml"), &persisted)
+	require.NoError(t, err)
+	assert.Equal(t, []parser.AgentType{parser.AgentGemini}, persisted.DisabledAgents)
 }
