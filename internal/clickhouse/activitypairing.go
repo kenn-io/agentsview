@@ -67,9 +67,15 @@ type activitySessionMemo struct {
 	mu      sync.Mutex
 	entries map[string]activitySessionInputs
 	order   []string
+	// rows counts the messages and events of the kept entries.
+	rows int
 }
 
-const activitySessionMemoLimit = 8000
+// activitySessionMemoRows bounds the kept messages and events, 32 bytes
+// each. A report over every session must find them all kept: a bound on
+// sessions below the number a report reads evicts each session before
+// the next report reaches it, so every report reads them all again.
+const activitySessionMemoRows = 2_000_000
 
 func (m *activitySessionMemo) lookup(id string, pushVersion uint64) (activitySessionInputs, bool) {
 	m.mu.Lock()
@@ -87,14 +93,19 @@ func (m *activitySessionMemo) store(id string, entry activitySessionInputs) {
 	if m.entries == nil {
 		m.entries = map[string]activitySessionInputs{}
 	}
-	if _, ok := m.entries[id]; !ok {
+	if old, ok := m.entries[id]; ok {
+		m.rows -= len(old.messages) + len(old.events)
+	} else {
 		m.order = append(m.order, id)
-		if len(m.order) > activitySessionMemoLimit {
-			delete(m.entries, m.order[0])
-			m.order = m.order[1:]
-		}
 	}
 	m.entries[id] = entry
+	m.rows += len(entry.messages) + len(entry.events)
+	for m.rows > activitySessionMemoRows && len(m.order) > 1 {
+		oldest := m.entries[m.order[0]]
+		m.rows -= len(oldest.messages) + len(oldest.events)
+		delete(m.entries, m.order[0])
+		m.order = m.order[1:]
+	}
 }
 
 // activityReportPairs pairs tool events with the messages that follow them
