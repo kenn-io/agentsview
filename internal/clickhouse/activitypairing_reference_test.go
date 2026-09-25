@@ -35,13 +35,14 @@ func TestActivityMessagePairsMatchReference(t *testing.T) {
 			var entry activitySessionInputs
 			for ordinal := range rng.IntN(12) {
 				role, model := roles[rng.IntN(len(roles))], models[rng.IntN(len(models))]
-				m := clickActivityMessage{ordinal: ordinal, role: unique.Make(role), model: unique.Make(model)}
+				m := clickActivityMessage{ordinal: ordinal, us: noTimestamp, role: unique.Make(role), model: unique.Make(model)}
 				if rng.IntN(5) != 0 {
 					// Spread across the day and the gap before it, with reversals.
-					m.ts = base.Add(time.Duration(rng.IntN(28*60)) * time.Minute).
+					ts := base.Add(time.Duration(rng.IntN(28*60)) * time.Minute).
 						Add(time.Duration(rng.IntN(1000)) * time.Microsecond)
+					m.us = ts.UnixMicro()
 					transcript = append(transcript, activity.ActivityEvent{
-						SessionID: id, Ordinal: ordinal, Timestamp: m.ts.UTC().Format(time.RFC3339Nano),
+						SessionID: id, Ordinal: ordinal, Timestamp: ts.UTC().Format(time.RFC3339Nano),
 						Role: role, Model: model,
 					})
 				}
