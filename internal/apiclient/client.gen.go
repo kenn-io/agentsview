@@ -19207,14 +19207,40 @@ type DBStatsModelMix struct {
 	ByTokens map[string]int64 `json:"by_tokens"`
 }
 
+type DBStatsOutcomeSkippedRepo struct {
+	Op     string `json:"op" validate:"required"`
+	Reason string `json:"reason" validate:"required"`
+	Repo   string `json:"repo" validate:"required"`
+}
+
+func (d DBStatsOutcomeSkippedRepo) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(d))
+}
+
 type DBStatsOutcomeStats struct {
-	Commits      int64  `json:"commits"`
-	FilesChanged int64  `json:"files_changed"`
-	LocAdded     int64  `json:"loc_added"`
-	LocRemoved   int64  `json:"loc_removed"`
-	PrsMerged    *int64 `json:"prs_merged,omitempty"`
-	PrsOpened    *int64 `json:"prs_opened,omitempty"`
-	ReposActive  int64  `json:"repos_active"`
+	Commits      int64                       `json:"commits"`
+	FilesChanged int64                       `json:"files_changed"`
+	LocAdded     int64                       `json:"loc_added"`
+	LocRemoved   int64                       `json:"loc_removed"`
+	PrsMerged    *int64                      `json:"prs_merged,omitempty"`
+	PrsOpened    *int64                      `json:"prs_opened,omitempty"`
+	ReposActive  int64                       `json:"repos_active"`
+	Skipped      []DBStatsOutcomeSkippedRepo `json:"skipped,omitempty"`
+}
+
+func (d DBStatsOutcomeStats) Validate() error {
+	var errors runtime.ValidationErrors
+	for i, item := range d.Skipped {
+		if v, ok := any(item).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append(fmt.Sprintf("Skipped[%d]", i), err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
 }
 
 type DBStatsOutcomes struct {
