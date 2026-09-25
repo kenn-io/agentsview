@@ -11,7 +11,9 @@ import (
 // rows become explicit prose gaps only when writable reparsing cannot supply
 // evidence. A pending rebuild must not publish temporary message identities.
 const conversationSchemaSQL = `
-CREATE TRIGGER IF NOT EXISTS conversation_messages_insert AFTER INSERT ON conversation_messages
+DROP TRIGGER IF EXISTS conversation_messages_insert;
+CREATE TRIGGER IF NOT EXISTS conversation_messages_revision AFTER INSERT ON conversation_messages
+WHEN NEW.revision = 0
 BEGIN
  INSERT INTO archive_metadata(key,value) VALUES ('conversation_publication_revision','1')
  ON CONFLICT(key) DO UPDATE SET value=CAST(CAST(value AS INTEGER)+1 AS TEXT);
@@ -136,12 +138,32 @@ func refreshConversationMessagesFromArchiveTx(ctx context.Context, tx *sql.Tx, w
 		return err
 	}
 	defer rows.Close()
+	queries := contextTransaction{ctx: ctx, tx: tx}
+	var pending []conversationRow
+	var session string
+	var fresh bool
+	flush := func() error {
+		err := putConversationRowsTx(queries, pending, fresh)
+		pending = pending[:0]
+		return err
+	}
 	for rows.Next() {
 		var msg Message
 		var id, gap string
 		var sourceCount int
 		if err := rows.Scan(&msg.SessionID, &msg.Ordinal, &msg.Role, &msg.Content, &msg.Timestamp, &msg.SourceUUID, &id, &gap, &sourceCount); err != nil {
 			return err
+		}
+		if msg.SessionID != session || len(pending) == conversationRowsPerStmt {
+			if err := flush(); err != nil {
+				return err
+			}
+		}
+		if msg.SessionID != session {
+			session = msg.SessionID
+			if err := tx.QueryRowContext(ctx, `SELECT NOT EXISTS(SELECT 1 FROM conversation_messages WHERE session_id=?)`, session).Scan(&fresh); err != nil {
+				return err
+			}
 		}
 		row, _ := conversationRowFromMessage(msg)
 		row.MessageID = id
@@ -151,11 +173,12 @@ func refreshConversationMessagesFromArchiveTx(ctx context.Context, tx *sql.Tx, w
 		if gap == "archive_content_excluded" && row.body == nil {
 			row.Gap = gap
 		}
-		if err := putConversationRowTx(contextTransaction{ctx: ctx, tx: tx}, row); err != nil {
-			return err
-		}
+		pending = append(pending, row)
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	return flush()
 }
 
 func copyConversationRowsTx(ctx context.Context, tx *sql.Tx, where string) error {

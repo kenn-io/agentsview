@@ -208,7 +208,8 @@ func TestConversationExportPaginationDefersConcurrentChanges(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	require.NoError(t, d.UpsertSession(t.Context(), Session{ID: "chat", Project: "sample", Machine: "local", Agent: "claude"}))
-	msgs := make([]Message, 12)
+	// More rows than one batched insert statement holds.
+	msgs := make([]Message, 2*conversationRowsPerStmt+5)
 	for i := range msgs {
 		text := fmt.Sprintf("Message %d", i)
 		msgs[i] = Message{SessionID: "chat", Ordinal: i, Role: "assistant", Content: text, SourceUUID: fmt.Sprintf("reply-%d", i)}
@@ -233,7 +234,13 @@ func TestConversationExportPaginationDefersConcurrentChanges(t *testing.T) {
 			seen = append(seen, change.Ordinal)
 		}
 	}
-	assert.Equal(t, []int{0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11}, seen)
+	var expected []int
+	for i := range msgs {
+		if i != 5 {
+			expected = append(expected, i)
+		}
+	}
+	assert.Equal(t, expected, seen)
 	next, err := d.ExportConversationChanges(ctx, ConversationExportOptions{Checkpoint: page.Checkpoint})
 	require.NoError(t, err)
 	require.Len(t, next.Changes, 1)
@@ -736,6 +743,120 @@ func TestConversationExportNativeRemovalAndReturn(t *testing.T) {
 	assert.Equal(t, initial.Changes[1].MessageID, restored.Changes[0].MessageID)
 	assert.False(t, restored.Changes[0].Deleted)
 	assert.Empty(t, restored.Changes[0].Gap)
+	// A session left with only tombstones still restores its native IDs on append.
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "chat", nil))
+	require.NoError(t, d.InsertMessages(t.Context(), msgs))
+	returned, err := d.ExportConversationChanges(t.Context(), ConversationExportOptions{Checkpoint: restored.Checkpoint})
+	require.NoError(t, err)
+	require.Len(t, returned.Changes, 2)
+	for i, change := range returned.Changes {
+		assert.Equal(t, initial.Changes[i].MessageID, change.MessageID)
+		assert.False(t, change.Deleted)
+		assert.Empty(t, change.Gap)
+	}
+}
+
+func TestConversationExportReplacesUnconditionalInsertTrigger(t *testing.T) {
+	d := testDB(t)
+	require.NoError(t, d.UpsertSession(t.Context(), Session{ID: "chat", Project: "sample", Machine: "local", Agent: "claude"}))
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: "chat", Role: "user", Content: "Question", SourceUUID: "one"}}))
+	initial, err := d.ExportConversationChanges(t.Context(), ConversationExportOptions{})
+	require.NoError(t, err)
+	// Model a database whose insert trigger predates reserved revisions.
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `DROP TRIGGER conversation_messages_revision;
+		 CREATE TRIGGER conversation_messages_insert AFTER INSERT ON conversation_messages
+		 BEGIN
+		  INSERT INTO archive_metadata(key,value) VALUES ('conversation_publication_revision','1')
+		  ON CONFLICT(key) DO UPDATE SET value=CAST(CAST(value AS INTEGER)+1 AS TEXT);
+		  UPDATE conversation_messages SET revision=(SELECT CAST(value AS INTEGER) FROM archive_metadata WHERE key='conversation_publication_revision')
+		  WHERE session_id=NEW.session_id AND message_id=NEW.message_id;
+		 END`)
+		return err
+	}))
+	path := d.Path()
+	require.NoError(t, d.Close())
+	d, err = OpenIsolated(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	var triggers []string
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(t.Context(), `SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'conversation_messages_%' ORDER BY name`)
+		if err != nil {
+			return err
+		}
+		triggers, err = scanStrings(rows)
+		return err
+	}))
+	assert.Equal(t, []string{"conversation_messages_revision", "conversation_messages_update"}, triggers)
+	require.NoError(t, d.UpsertSession(t.Context(), Session{ID: "later", Project: "sample", Machine: "local", Agent: "claude"}))
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{
+		{SessionID: "later", Ordinal: 0, Role: "user", Content: "First", SourceUUID: "a"},
+		{SessionID: "later", Ordinal: 1, Role: "assistant", Content: "Second", SourceUUID: "b"},
+	}))
+	page, err := d.ExportConversationChanges(t.Context(), ConversationExportOptions{Checkpoint: initial.Checkpoint})
+	require.NoError(t, err)
+	require.Len(t, page.Changes, 2)
+	first, err := strconv.ParseInt(initial.Changes[0].Revision, 10, 64)
+	require.NoError(t, err)
+	for i, change := range page.Changes {
+		assert.Equal(t, strconv.FormatInt(first+int64(i)+1, 10), change.Revision)
+	}
+	// An append to an existing session still takes its revision from the trigger.
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: "chat", Ordinal: 1, Role: "assistant", Content: "Answer", SourceUUID: "two"}}))
+	appended, err := d.ExportConversationChanges(t.Context(), ConversationExportOptions{Checkpoint: page.Checkpoint})
+	require.NoError(t, err)
+	require.Len(t, appended.Changes, 1)
+	assert.Equal(t, strconv.FormatInt(first+3, 10), appended.Changes[0].Revision)
+}
+
+func TestConversationExportInitializationBatchesAcrossSessions(t *testing.T) {
+	d := testDB(t)
+	var msgs []Message
+	for _, session := range []string{"long", "short"} {
+		require.NoError(t, d.UpsertSession(t.Context(), Session{ID: session, Project: "sample", Machine: "local", Agent: "claude"}))
+		count := 2
+		if session == "long" {
+			count = conversationRowsPerStmt + 3
+		}
+		for i := range count {
+			msgs = append(msgs, Message{SessionID: session, Ordinal: i, Role: "assistant", Content: fmt.Sprintf("%s %d", session, i), SourceUUID: fmt.Sprintf("%s-%d", session, i)})
+		}
+	}
+	require.NoError(t, d.InsertMessages(t.Context(), msgs))
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `DELETE FROM conversation_messages; DELETE FROM archive_metadata WHERE key IN ('conversation_export_initialized','conversation_publication_revision')`)
+		return err
+	}))
+	path := d.Path()
+	require.NoError(t, d.Close())
+	d, err := OpenIsolated(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	seen := map[string]bool{}
+	var last int64
+	page, err := d.ExportConversationChanges(t.Context(), ConversationExportOptions{Limit: 7})
+	require.NoError(t, err)
+	for {
+		for _, change := range page.Changes {
+			rev, err := strconv.ParseInt(change.Revision, 10, 64)
+			require.NoError(t, err)
+			assert.Greater(t, rev, last)
+			last = rev
+			seen[change.SessionID+"/"+change.MessageID] = true
+		}
+		if page.NextCursor == "" {
+			break
+		}
+		page, err = d.ExportConversationChanges(t.Context(), ConversationExportOptions{Cursor: page.NextCursor, Limit: 7})
+		require.NoError(t, err)
+	}
+	assert.Len(t, seen, len(msgs))
+	var counter int64
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(), `SELECT CAST(value AS INTEGER) FROM archive_metadata WHERE key='conversation_publication_revision'`).Scan(&counter)
+	}))
+	assert.Equal(t, last, counter)
 }
 
 func TestConversationExportResyncRetainsHardDeletion(t *testing.T) {

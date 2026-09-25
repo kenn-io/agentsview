@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"unicode/utf8"
 
 	"go.kenn.io/agentsview/internal/export"
@@ -401,6 +402,13 @@ func reconcileConversationMessagesTx(tx transactionQueries, sessionID string, ms
 			equal = false
 		}
 	}
+	// Tombstones are absent from old, so only the table can prove a session is new.
+	fresh := len(old) == 0
+	if fresh {
+		if err := tx.QueryRow(`SELECT NOT EXISTS(SELECT 1 FROM conversation_messages WHERE session_id=?)`, sessionID).Scan(&fresh); err != nil {
+			return err
+		}
+	}
 	retained := map[string]bool{}
 	for i := range incoming {
 		row := &incoming[i]
@@ -410,6 +418,11 @@ func reconcileConversationMessagesTx(tx transactionQueries, sessionID string, ms
 			// reflect this write even when stored text is still absent.
 			if old[i].Gap != "archive_content_excluded" {
 				row.Gap = old[i].Gap
+			}
+		} else if row.sourceID != "" && fresh {
+			// No stored rows to match, so only in-batch duplicates are ambiguous.
+			if counts[row.sourceID] > 1 {
+				row.Gap = "identity_ambiguous"
 			}
 		} else if row.sourceID != "" {
 			var count int
@@ -455,10 +468,8 @@ func reconcileConversationMessagesTx(tx transactionQueries, sessionID string, ms
 			}
 		}
 	}
-	for _, row := range incoming {
-		if err := putConversationRowTx(tx, row); err != nil {
-			return err
-		}
+	if err := putConversationRowsTx(tx, incoming, fresh); err != nil {
+		return err
 	}
 	if replace && !usageOnly {
 		var hadGap, deleted bool
@@ -478,15 +489,49 @@ func conversationRowsEqual(a, b conversationRow) bool {
 	return a.Ordinal == b.Ordinal && a.Role == b.Role && sameTime && a.sourceID == b.sourceID && a.Digest == b.Digest && (a.body == nil) == (b.body == nil)
 }
 
-func putConversationRowTx(tx transactionQueries, row conversationRow) error {
-	_, err := tx.Exec(`INSERT INTO conversation_messages (session_id,message_id,ordinal,role,timestamp,source_id,body,digest,text_bytes,gap,deleted)
-		VALUES (?,?,?,?,COALESCE(?,''),?,?,?,?,?,COALESCE((SELECT deleted_at IS NOT NULL FROM sessions WHERE id = ?),0))
-		ON CONFLICT(session_id,message_id) DO UPDATE SET ordinal=excluded.ordinal,role=excluded.role,timestamp=excluded.timestamp,source_id=excluded.source_id,
+const conversationRowsPerStmt = 35 // 12 params per row
+
+// putConversationRowsTx upserts rows in multi-row statements. A fresh session
+// takes its revisions from one counter reservation instead of the insert
+// trigger; existing sessions keep trigger-assigned revisions so an unchanged
+// rewrite leaves the publication counter alone.
+func putConversationRowsTx(tx transactionQueries, rows []conversationRow, fresh bool) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	var revision int64
+	if fresh {
+		if err := tx.QueryRow(`INSERT INTO archive_metadata(key,value) VALUES(?,CAST(? AS TEXT))
+		 ON CONFLICT(key) DO UPDATE SET value=CAST(CAST(value AS INTEGER)+CAST(excluded.value AS INTEGER) AS TEXT) RETURNING CAST(value AS INTEGER)`, conversationRevisionKey, len(rows)).Scan(&revision); err != nil {
+			return err
+		}
+		revision -= int64(len(rows))
+	}
+	for start := 0; start < len(rows); start += conversationRowsPerStmt {
+		chunk := rows[start:min(start+conversationRowsPerStmt, len(rows))]
+		var sb strings.Builder
+		sb.WriteString(`INSERT INTO conversation_messages (session_id,message_id,ordinal,role,timestamp,source_id,body,digest,text_bytes,gap,deleted,revision) VALUES `)
+		args := make([]any, 0, len(chunk)*12)
+		for i, row := range chunk {
+			if i > 0 {
+				sb.WriteByte(',')
+			}
+			sb.WriteString(`(?,?,?,?,COALESCE(?,''),?,?,?,?,?,COALESCE((SELECT deleted_at IS NOT NULL FROM sessions WHERE id = ?),0),?)`)
+			var rev int64
+			if fresh {
+				rev = revision + int64(start+i) + 1
+			}
+			args = append(args, row.SessionID, row.MessageID, row.Ordinal, row.Role, row.Timestamp, row.sourceID, row.body, row.Digest, row.TextBytes, row.Gap, row.SessionID, rev)
+		}
+		sb.WriteString(` ON CONFLICT(session_id,message_id) DO UPDATE SET ordinal=excluded.ordinal,role=excluded.role,timestamp=excluded.timestamp,source_id=excluded.source_id,
 		body=excluded.body,digest=excluded.digest,text_bytes=excluded.text_bytes,gap=excluded.gap,deleted=excluded.deleted,removed=0
 		WHERE ordinal IS NOT excluded.ordinal OR role IS NOT excluded.role OR timestamp IS NOT excluded.timestamp OR source_id IS NOT excluded.source_id
-		OR body IS NOT excluded.body OR digest IS NOT excluded.digest OR text_bytes IS NOT excluded.text_bytes OR gap IS NOT excluded.gap OR deleted IS NOT excluded.deleted OR removed != 0`,
-		row.SessionID, row.MessageID, row.Ordinal, row.Role, row.Timestamp, row.sourceID, row.body, row.Digest, row.TextBytes, row.Gap, row.SessionID)
-	return err
+		OR body IS NOT excluded.body OR digest IS NOT excluded.digest OR text_bytes IS NOT excluded.text_bytes OR gap IS NOT excluded.gap OR deleted IS NOT excluded.deleted OR removed != 0`)
+		if _, err := tx.Exec(sb.String(), args...); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func putConversationSessionChangeTx(tx transactionQueries, sessionID, gap string, deleted bool) error {
