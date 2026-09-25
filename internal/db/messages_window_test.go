@@ -163,3 +163,44 @@ func TestGetMessagesWindow_EmptyRolesEquivalentToGetMessages(t *testing.T) {
 	assert.Equal(t, direct, windowed,
 		"empty Roles should behave identically to GetMessages")
 }
+
+func TestGetMessagesWindow_AroundReportsRevisionWithRows(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	seedWindowMessages(t, d, "sRev")
+	sess, err := d.GetSession(ctx, "sRev")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.NotNil(t, sess.TranscriptRevision)
+	require.NotEmpty(t, *sess.TranscriptRevision)
+
+	anchor := 6
+	revision := ""
+	msgs, err := d.GetMessagesWindow(ctx, "sRev", MessageWindow{
+		Around: &anchor, Before: 2, After: 2,
+		Roles:            []string{"user", "assistant"},
+		ObservedRevision: &revision,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []int{3, 5, 6, 7, 8}, ordinalsOf(msgs))
+	assert.Equal(t, *sess.TranscriptRevision, revision,
+		"around window must report the session revision it was read at")
+
+	pastEnd := 12
+	revision = ""
+	msgs, err = d.GetMessagesWindow(ctx, "sRev", MessageWindow{
+		Around: &pastEnd, Before: 2, After: 2, ObservedRevision: &revision,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []int{10, 11}, ordinalsOf(msgs))
+	assert.Equal(t, *sess.TranscriptRevision, revision,
+		"neighbour rows without an anchor row still report their revision")
+
+	revision = ""
+	msgs, err = d.GetMessagesWindow(ctx, "missing", MessageWindow{
+		Around: &anchor, Before: 2, After: 2, ObservedRevision: &revision,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, msgs)
+	assert.Empty(t, revision, "a missing session has no revision")
+}

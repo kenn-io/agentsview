@@ -2,9 +2,7 @@ package clickhouse
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -22,13 +20,24 @@ const messageCols = `id, session_id, ordinal, role, content, thinking_text,
 func (s *Store) GetMessages(
 	ctx context.Context, sessionID string, from, limit int, asc bool,
 ) ([]db.Message, error) {
-	return s.getMessagesLinear(ctx, sessionID, from, limit, asc, nil)
+	return s.getMessagesLinear(ctx, sessionID, from, db.MessageWindow{Limit: limit, Asc: asc})
 }
 
+// revisionCol selects the session transcript revision as a window
+// statement's first column; it binds the session ID once more, ahead of
+// the statement's other arguments. The aggregate yields an empty string
+// when the session row is missing instead of failing the statement.
+const revisionCol = `(SELECT any(transcript_revision) FROM sessions WHERE id = ?)`
+
 // GetMessagesWindow mirrors internal/db's GetMessagesWindow: linear mode
-// (optionally role-filtered) pages by ordinal; Around mode merges the
-// before, anchor, and after queries into one ascending slice. The anchor
-// query has no role predicate so the anchor row is always present.
+// (optionally role-filtered) pages by ordinal; Around mode returns the
+// before, anchor, and after rows merged into one ascending slice. The
+// anchor rows have no role predicate so the anchor row is always present.
+//
+// Every window statement selects the session transcript revision as its
+// first column, so the revision reported through ObservedRevision comes
+// from the same statement as the rows. Around mode runs as one statement
+// for the same reason.
 func (s *Store) GetMessagesWindow(
 	ctx context.Context, sessionID string, w db.MessageWindow,
 ) ([]db.Message, error) {
@@ -39,24 +48,33 @@ func (s *Store) GetMessagesWindow(
 	if w.From != nil {
 		from = *w.From
 	}
-	return s.getMessagesLinear(ctx, sessionID, from, w.Limit, w.Asc, w.Roles)
+	return s.getMessagesLinear(ctx, sessionID, from, w)
 }
 
+// getMessagesLinear pages by ordinal, optionally role-filtered. It selects
+// the session transcript revision only when the caller asked for it; the
+// plain page selects an empty literal in that column instead.
 func (s *Store) getMessagesLinear(
-	ctx context.Context, sessionID string, from, limit int, asc bool, roles []string,
+	ctx context.Context, sessionID string, from int, w db.MessageWindow,
 ) ([]db.Message, error) {
+	limit := w.Limit
 	if limit <= 0 || limit > db.MaxMessageLimit {
 		limit = db.DefaultMessageLimit
 	}
 	dir, op := "ASC", ">="
-	if !asc {
+	if !w.Asc {
 		dir, op = "DESC", "<="
 	}
-	roleClause, roleArgs := roleFilterClause(roles)
-	args := append([]any{sessionID, from}, roleArgs...)
+	revCol, args := "''", []any{}
+	if w.ObservedRevision != nil {
+		revCol, args = revisionCol, []any{sessionID}
+	}
+	roleClause, roleArgs := roleFilterClause(w.Roles)
+	args = append(args, sessionID, from)
+	args = append(args, roleArgs...)
 	args = append(args, limit)
-	msgs, err := s.queryMessageRows(ctx, `
-		SELECT `+messageCols+`
+	msgs, err := db.QueryMessagesWithRevision(ctx, s.queryContext, scanMessages, w.ObservedRevision, `
+		SELECT `+revCol+`, `+messageCols+`
 		FROM messages
 		WHERE session_id = ? AND ordinal `+op+` ?`+roleClause+`
 		ORDER BY ordinal `+dir+`
@@ -75,41 +93,29 @@ func (s *Store) getMessagesAroundAnchor(
 ) ([]db.Message, error) {
 	anchor := *w.Around
 	roleClause, roleArgs := roleFilterClause(w.Roles)
-
-	beforeArgs := append([]any{sessionID, anchor}, roleArgs...)
-	beforeArgs = append(beforeArgs, max(w.Before, 0))
-	before, err := s.queryMessageRows(ctx, `
-		SELECT `+messageCols+`
-		FROM messages
-		WHERE session_id = ? AND ordinal < ?`+roleClause+`
-		ORDER BY ordinal DESC LIMIT ?`, beforeArgs...)
+	args := append([]any{sessionID, sessionID, anchor}, roleArgs...)
+	args = append(args, max(w.Before, 0), sessionID, anchor, sessionID, anchor)
+	args = append(args, roleArgs...)
+	args = append(args, max(w.After, 0))
+	msgs, err := db.QueryMessagesWithRevision(ctx, s.queryContext, scanMessages, w.ObservedRevision, `
+		SELECT `+revisionCol+`, w.*
+		FROM (
+			SELECT * FROM (
+				SELECT `+messageCols+` FROM messages
+				WHERE session_id = ? AND ordinal < ?`+roleClause+`
+				ORDER BY ordinal DESC LIMIT ?) AS before_rows
+			UNION ALL
+			SELECT `+messageCols+` FROM messages WHERE session_id = ? AND ordinal = ?
+			UNION ALL
+			SELECT * FROM (
+				SELECT `+messageCols+` FROM messages
+				WHERE session_id = ? AND ordinal > ?`+roleClause+`
+				ORDER BY ordinal ASC LIMIT ?) AS after_rows
+		) AS w
+		ORDER BY w.ordinal`, args...)
 	if err != nil {
-		return nil, fmt.Errorf("querying clickhouse before-window messages: %w", err)
+		return nil, fmt.Errorf("querying clickhouse around-window messages: %w", err)
 	}
-	slices.Reverse(before)
-
-	anchorMsgs, err := s.queryMessageRows(ctx, `
-		SELECT `+messageCols+`
-		FROM messages WHERE session_id = ? AND ordinal = ?`, sessionID, anchor)
-	if err != nil {
-		return nil, fmt.Errorf("querying clickhouse anchor message: %w", err)
-	}
-
-	afterArgs := append([]any{sessionID, anchor}, roleArgs...)
-	afterArgs = append(afterArgs, max(w.After, 0))
-	after, err := s.queryMessageRows(ctx, `
-		SELECT `+messageCols+`
-		FROM messages
-		WHERE session_id = ? AND ordinal > ?`+roleClause+`
-		ORDER BY ordinal ASC LIMIT ?`, afterArgs...)
-	if err != nil {
-		return nil, fmt.Errorf("querying clickhouse after-window messages: %w", err)
-	}
-
-	msgs := make([]db.Message, 0, len(before)+len(anchorMsgs)+len(after))
-	msgs = append(msgs, before...)
-	msgs = append(msgs, anchorMsgs...)
-	msgs = append(msgs, after...)
 	if err := s.attachToolCalls(ctx, msgs); err != nil {
 		return nil, err
 	}
@@ -183,7 +189,7 @@ func (s *Store) GetResumeModelCounts(ctx context.Context, sessionID string) ([]d
 	return counts, nil
 }
 
-func scanMessages(rows *sql.Rows) ([]db.Message, error) {
+func scanMessages(rows db.MessageRows) ([]db.Message, error) {
 	var msgs []db.Message
 	for rows.Next() {
 		var m db.Message

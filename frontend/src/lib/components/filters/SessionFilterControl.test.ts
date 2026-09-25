@@ -18,6 +18,7 @@ afterEach(() => {
   sessions.machines = [];
   sessions.machineLabels = {};
   sessions.filters.machine = "";
+  sessions.filters.minUserMessages = 0;
   vi.restoreAllMocks();
 });
 
@@ -67,5 +68,44 @@ describe("SessionFilterControl agent options", () => {
     (rows[1] as HTMLButtonElement).click();
     flushSync();
     expect(sessions.filters.agent).toBe("claude");
+  });
+});
+
+describe("SessionFilterControl minimum prompt filter", () => {
+  async function openControl() {
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    vi.spyOn(sessions, "loadMachines").mockResolvedValue();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+
+    component = mount(SessionFilterControl, { target: document.body });
+    await fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+  }
+
+  it("turns the filter off when the active pill is clicked again", async () => {
+    await openControl();
+
+    await fireEvent.click(screen.getByRole("button", { name: "5" }));
+    expect(sessions.filters.minUserMessages).toBe(5);
+    expect(filtersToParams(sessions.filters).min_user_messages).toBe("5");
+
+    await fireEvent.click(screen.getByRole("button", { name: "5" }));
+    expect(sessions.filters.minUserMessages).toBe(0);
+    expect(filtersToParams(sessions.filters).min_user_messages).toBeUndefined();
+  });
+
+  it("keeps the other filters when the minimum prompt filter is cleared", async () => {
+    sessions.agents = [{ name: "claude", session_count: 2 }];
+    await openControl();
+
+    await fireEvent.click(screen.getByRole("button", { name: /Claude/ }));
+    await fireEvent.click(screen.getByRole("button", { name: "5" }));
+    expect(sessions.filters.agent).toBe("claude");
+    expect(sessions.filters.minUserMessages).toBe(5);
+
+    await fireEvent.click(screen.getByRole("button", { name: "5" }));
+    expect(sessions.filters.minUserMessages).toBe(0);
+    expect(sessions.filters.agent).toBe("claude");
+    expect(filtersToParams(sessions.filters).agent).toBe("claude");
+    expect(filtersToParams(sessions.filters).min_user_messages).toBeUndefined();
   });
 });

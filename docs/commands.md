@@ -172,6 +172,7 @@ Running plain `agentsview` shows help instead of starting the web UI.
 | `--require-auth`    | `false`            | Require a bearer token for API requests                  |
 | `--background`      | `false`            | Start `agentsview serve` as a managed background process |
 | `--replace`         | `false`            | Replace a running local daemon before starting           |
+| `--base-path`       |                    | URL prefix for a reverse-proxy subpath                   |
 | `--public-url`      |                    | Browser URL, also added to trusted origins               |
 | `--public-origin`   |                    | Trusted browser origin (repeatable/comma-separated)      |
 | `--proxy`           |                    | Managed proxy mode (`caddy`)                             |
@@ -207,6 +208,7 @@ agentsview serve --no-browser                   # disable browser auto-open
 agentsview serve --background                   # start managed background server
 agentsview serve --replace                      # replace an existing daemon
 agentsview serve --public-url https://agents.example.com
+agentsview serve --base-path /agentsview --public-url https://example.com
 ```
 
 On startup, the server:

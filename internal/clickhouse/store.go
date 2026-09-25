@@ -45,7 +45,8 @@ type Store struct {
 }
 
 // NewStore connects to the mirror named by t and refuses schemas or data
-// versions this binary cannot serve.
+// versions this binary cannot serve, or accounts that cannot read Activity
+// report metadata.
 func NewStore(ctx context.Context, t Target) (*Store, error) {
 	conn, err := Open(ctx, t)
 	if err != nil {
@@ -58,6 +59,16 @@ func NewStore(ctx context.Context, t Target) (*Store, error) {
 	if err := CheckDataVersionCompat(ctx, conn); err != nil {
 		conn.Close()
 		return nil, err
+	}
+	var parts uint64
+	if err := conn.QueryRowContext(ctx,
+		`SELECT count() FROM system.parts WHERE database = currentDatabase() AND active`,
+	).Scan(&parts); err != nil {
+		conn.Close()
+		if IsPermissionError(err) {
+			return nil, fmt.Errorf("clickhouse Activity reports require SELECT ON system.parts; ask an administrator to run GRANT SELECT ON system.parts TO <serve_user>, or add <query>GRANT SELECT ON system.parts</query> to the XML user's grants and reload users: %w", err)
+		}
+		return nil, fmt.Errorf("checking clickhouse Activity metadata access: %w", err)
 	}
 	return NewStoreFromDB(conn), nil
 }

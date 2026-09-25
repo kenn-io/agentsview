@@ -1403,11 +1403,19 @@ func TestDirectBackend_Messages_AroundOmittedBeforeAfterNoOtherFlags(t *testing.
 // capturingWindowStore is a minimal db.Store fake that records the
 // db.MessageWindow passed to GetMessagesWindow so tests can assert on what
 // directBackend.Messages forwards to the store without needing a real
-// dataset. Every other db.Store method comes from the embedded nil
-// interface and would panic if a test path reached it.
+// dataset. GetSession supplies the stable revision that revision-bound reads
+// require; every other db.Store method comes from the embedded nil interface
+// and would panic if a test path reached it.
 type capturingWindowStore struct {
 	db.Store
 	captured db.MessageWindow
+}
+
+func (f *capturingWindowStore) GetSession(
+	_ context.Context, id string,
+) (*db.Session, error) {
+	revision := "1"
+	return &db.Session{ID: id, TranscriptRevision: &revision}, nil
 }
 
 func (f *capturingWindowStore) GetMessagesWindow(

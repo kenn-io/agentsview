@@ -443,6 +443,7 @@ func TestSearchContentSemanticMatchCarriesUnitRangeAndLineage(t *testing.T) {
 	assert.Equal(t, "subagent", sub.Relationship)
 	assert.Equal(t, "parent", sub.ParentSessionID)
 	assert.True(t, sub.Sidechain, "anchor message is_sidechain")
+	assert.NotEmpty(t, sub.TranscriptRevision)
 
 	data, err := json.Marshal(sub)
 	require.NoError(t, err)
@@ -450,6 +451,7 @@ func TestSearchContentSemanticMatchCarriesUnitRangeAndLineage(t *testing.T) {
 		`"ordinal":1`, `"ordinal_range":[1,2]`,
 		`"subordinate":true`, `"relationship":"subagent"`,
 		`"parent_session_id":"parent"`, `"is_sidechain":true`,
+		`"transcript_revision":`,
 	} {
 		assert.Contains(t, string(data), want)
 	}
@@ -461,6 +463,7 @@ func TestSearchContentSemanticMatchCarriesUnitRangeAndLineage(t *testing.T) {
 	assert.Empty(t, top.Relationship)
 	assert.Empty(t, top.ParentSessionID)
 	assert.False(t, top.Sidechain)
+	assert.NotEmpty(t, top.TranscriptRevision)
 }
 
 // TestContentMatchJSONUnitFieldsOmittedForLexicalMatches guards the lexical

@@ -15925,6 +15925,12 @@ type GetAPIV1SessionsIDMessagesQuery struct {
 
 	// Roles Comma-separated roles to include, e.g. user,assistant
 	Roles *string `json:"roles,omitempty"`
+
+	// ExpectedRevision Reject the read when the transcript revision no longer matches
+	ExpectedRevision *string `json:"expected_revision,omitempty"`
+
+	// EvidenceSource Opaque archive binding returned by an earlier evidence read
+	EvidenceSource *string `json:"evidence_source,omitempty"`
 }
 
 func (g GetAPIV1SessionsIDMessagesQuery) Validate() error {
@@ -18811,24 +18817,25 @@ type DBCompactEstimate struct {
 type DBCompactResult = db.CompactResult
 
 type DBContentMatch struct {
-	Agent           string      `json:"agent" validate:"required"`
-	ContextAfter    []DBMessage `json:"context_after,omitempty"`
-	ContextBefore   []DBMessage `json:"context_before,omitempty"`
-	IsSidechain     *bool       `json:"is_sidechain,omitempty"`
-	Location        string      `json:"location" validate:"required"`
-	Ordinal         int64       `json:"ordinal"`
-	OrdinalRange    []int64     `json:"ordinal_range" validate:"required"`
-	ParentSessionID *string     `json:"parent_session_id,omitempty"`
-	Project         string      `json:"project" validate:"required"`
-	Relationship    *string     `json:"relationship,omitempty"`
-	Role            string      `json:"role" validate:"required"`
-	Score           *float64    `json:"score,omitempty"`
-	SessionID       string      `json:"session_id" validate:"required"`
-	Snippet         string      `json:"snippet" validate:"required"`
-	Subordinate     *bool       `json:"subordinate,omitempty"`
-	Timestamp       string      `json:"timestamp" validate:"required"`
-	ToolName        *string     `json:"tool_name,omitempty"`
-	WebURL          *string     `json:"web_url,omitempty"`
+	Agent              string      `json:"agent" validate:"required"`
+	ContextAfter       []DBMessage `json:"context_after,omitempty"`
+	ContextBefore      []DBMessage `json:"context_before,omitempty"`
+	IsSidechain        *bool       `json:"is_sidechain,omitempty"`
+	Location           string      `json:"location" validate:"required"`
+	Ordinal            int64       `json:"ordinal"`
+	OrdinalRange       []int64     `json:"ordinal_range" validate:"required"`
+	ParentSessionID    *string     `json:"parent_session_id,omitempty"`
+	Project            string      `json:"project" validate:"required"`
+	Relationship       *string     `json:"relationship,omitempty"`
+	Role               string      `json:"role" validate:"required"`
+	Score              *float64    `json:"score,omitempty"`
+	SessionID          string      `json:"session_id" validate:"required"`
+	Snippet            string      `json:"snippet" validate:"required"`
+	Subordinate        *bool       `json:"subordinate,omitempty"`
+	Timestamp          string      `json:"timestamp" validate:"required"`
+	ToolName           *string     `json:"tool_name,omitempty"`
+	TranscriptRevision *string     `json:"transcript_revision,omitempty"`
+	WebURL             *string     `json:"web_url,omitempty"`
 }
 
 func (d DBContentMatch) Validate() error {

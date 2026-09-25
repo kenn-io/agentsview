@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -32,9 +33,10 @@ import (
 // interface (GetSessionFilePath, Reader). Structural nil checks
 // on local+engine replace runtime type assertions.
 type directBackend struct {
-	db     db.Store
-	local  *db.DB
-	engine *sync.Engine
+	db             db.Store
+	local          *db.DB
+	engine         *sync.Engine
+	evidenceSource string
 }
 
 // NewDirectBackend returns a full read/write SessionService
@@ -43,15 +45,19 @@ type directBackend struct {
 // work. Use NewReadOnlyBackend for stores that are not *db.DB
 // (e.g. a PostgreSQL reader).
 func NewDirectBackend(d *db.DB, engine *sync.Engine) SessionService {
-	return &directBackend{db: d, local: d, engine: engine}
+	return &directBackend{db: d, local: d, engine: engine, evidenceSource: newEvidenceSource()}
 }
 
 // NewReadOnlyBackend returns a read-only SessionService over any
 // db.Store (e.g. a PostgreSQL reader used by `pg serve`). Sync
 // returns db.ErrReadOnly unconditionally.
 func NewReadOnlyBackend(d db.Store) SessionService {
-	return &directBackend{db: d}
+	return &directBackend{db: d, evidenceSource: newEvidenceSource()}
 }
+
+// newEvidenceSource returns a random ID for this backend instance, so a
+// continuation cannot be replayed against a different archive or server.
+func newEvidenceSource() string { return rand.Text() }
 
 func (b *directBackend) SupportsRecallQueries() bool { return b.local != nil }
 
@@ -315,11 +321,45 @@ func (b *directBackend) Messages(
 		w.From = &from
 	}
 
+	revision := ""
+	w.ObservedRevision = &revision
 	msgs, err := b.db.GetMessagesWindow(ctx, id, w)
 	if err != nil {
 		return nil, err
 	}
-	list := &MessageList{Messages: msgs, Count: len(msgs)}
+	// Every store reports the revision from the same statement or
+	// snapshot as the rows, so a non-empty page arrives with its revision.
+	// An empty page has no rows for the revision to describe, so it still
+	// answers from one session lookup to tell "no messages" apart from
+	// "session gone" on a bound read.
+	boundRead := f.ExpectedRevision != "" || f.EvidenceSource != ""
+	if revision == "" && (len(msgs) > 0 || boundRead) {
+		before, err := b.db.GetSession(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if before == nil && boundRead {
+			return nil, fmt.Errorf("%w: cited session no longer exists", ErrSourceChanged)
+		}
+		if before != nil && before.TranscriptRevision != nil {
+			revision = *before.TranscriptRevision
+		}
+		if before != nil && revision == "" && boundRead {
+			return nil, ErrRevisionBoundReadUnavailable
+		}
+	}
+	if f.ExpectedRevision != "" && f.ExpectedRevision != revision {
+		return nil, fmt.Errorf("%w: transcript revision does not match", ErrSourceChanged)
+	}
+	if f.EvidenceSource != "" && f.EvidenceSource != b.evidenceSource {
+		return nil, fmt.Errorf("%w: evidence source does not match", ErrSourceChanged)
+	}
+	list := &MessageList{
+		Messages: msgs, Count: len(msgs), TranscriptRevision: revision,
+	}
+	if revision != "" {
+		list.EvidenceSource = b.evidenceSource
+	}
 	if len(msgs) > 0 {
 		first := msgs[0].Ordinal
 		last := msgs[len(msgs)-1].Ordinal
@@ -884,16 +924,26 @@ func (b *directBackend) SearchContent(
 	if err != nil {
 		return nil, err
 	}
-	if req.Context > 0 {
-		if err := b.enrichContentContext(
-			ctx, page.Matches, req.Context, req.Reveal,
-		); err != nil {
-			return nil, err
+	revisionBound := true
+	for i := range page.Matches {
+		if page.Matches[i].TranscriptRevision == "" {
+			revisionBound = false
+			break
 		}
 	}
+	if req.Context > 0 {
+		contextBound, err := b.enrichContentContext(
+			ctx, page.Matches, req.Context, req.Reveal,
+		)
+		if err != nil {
+			return nil, err
+		}
+		revisionBound = revisionBound && contextBound
+	}
 	return &ContentSearchResult{
-		Matches:    page.Matches,
-		NextCursor: page.NextCursor,
+		Matches:       page.Matches,
+		NextCursor:    page.NextCursor,
+		RevisionBound: revisionBound,
 	}, nil
 }
 
@@ -917,20 +967,33 @@ func (b *directBackend) SearchContent(
 // adjacent message regardless of transport (HTTP, CLI, MCP all share this
 // path). When reveal is true the raw messages are attached unchanged, same
 // as the snippet path.
+//
+// The context window is read at whatever transcript revision the store
+// holds when the read runs, which can be newer than the revision the match
+// cites when a sync lands between the search and the context read. Each
+// window reports its revision; the returned bool is false when any window
+// came from a different revision than its match, so the caller can drop
+// the revision-bound claim instead of advertising context from a
+// transcript version the citation does not describe.
 func (b *directBackend) enrichContentContext(
 	ctx context.Context, matches []db.ContentMatch, n int, reveal bool,
-) error {
+) (bool, error) {
+	bound := true
 	for i := range matches {
 		m := &matches[i]
 		if m.Ordinal < 0 {
 			continue
 		}
 		anchor := m.Ordinal
+		revision := ""
 		msgs, err := b.db.GetMessagesWindow(ctx, m.SessionID, db.MessageWindow{
-			Around: &anchor, Before: n, After: n,
+			Around: &anchor, Before: n, After: n, ObservedRevision: &revision,
 		})
 		if err != nil {
-			return fmt.Errorf("content search context: %w", err)
+			return false, fmt.Errorf("content search context: %w", err)
+		}
+		if revision != m.TranscriptRevision {
+			bound = false
 		}
 		for _, msg := range msgs {
 			if !reveal {
@@ -944,7 +1007,7 @@ func (b *directBackend) enrichContentContext(
 			}
 		}
 	}
-	return nil
+	return bound, nil
 }
 
 // redactMessageSecrets returns a copy of m with every secret-shaped span

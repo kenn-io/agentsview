@@ -246,3 +246,53 @@ func TestPGGetMessagesWindow_EmptyRolesEquivalentToGetMessages(t *testing.T) {
 	assert.Equal(t, direct, windowed,
 		"empty Roles should behave identically to GetMessages")
 }
+
+// TestPGGetMessagesWindow_ReportsRevisionWithRows covers the revision the
+// window statements select alongside their rows.
+func TestPGGetMessagesWindow_ReportsRevisionWithRows(t *testing.T) {
+	pgURL := testPGURL(t)
+	pg := mwEnsureSchema(t, pgURL)
+	defer pg.Close()
+	defer func() {
+		_, _ = pg.Exec(`DROP SCHEMA IF EXISTS ` + mwTestSchema + ` CASCADE`)
+	}()
+	ctx := context.Background()
+
+	mwSeedWindowMessages(t, pg, "sRev")
+	_, err := pg.Exec(`UPDATE sessions SET transcript_revision = 'rev-7' WHERE id = $1`, "sRev")
+	require.NoError(t, err)
+	store := mwNewStore(t, pgURL)
+	defer store.Close()
+
+	from := 4
+	revision := ""
+	msgs, err := store.GetMessagesWindow(ctx, "sRev", db.MessageWindow{
+		From: &from, Limit: 3, Asc: true,
+		Roles:            []string{"user", "assistant"},
+		ObservedRevision: &revision,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []int{5, 6, 7}, mwOrdinalsOf(msgs))
+	assert.Equal(t, "rev-7", revision,
+		"linear page must report the session revision it was read at")
+
+	anchor := 6
+	revision = ""
+	msgs, err = store.GetMessagesWindow(ctx, "sRev", db.MessageWindow{
+		Around: &anchor, Before: 2, After: 2,
+		Roles:            []string{"user", "assistant"},
+		ObservedRevision: &revision,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []int{3, 5, 6, 7, 8}, mwOrdinalsOf(msgs))
+	assert.Equal(t, "rev-7", revision,
+		"around window must report the session revision it was read at")
+
+	revision = ""
+	msgs, err = store.GetMessagesWindow(ctx, "missing", db.MessageWindow{
+		Around: &anchor, Before: 2, After: 2, ObservedRevision: &revision,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, msgs)
+	assert.Empty(t, revision, "no rows means no revision to describe them")
+}

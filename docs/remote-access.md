@@ -388,6 +388,41 @@ public_origins = [
 You do not need to repeat `public_url` in `public_origins`. Neither setting
 enables bearer-token authentication; that is controlled by `--require-auth`.
 
+### Reverse Proxy Subpaths
+
+Use `--base-path` when an external reverse proxy mounts AgentsView below a URL
+prefix. Keep `--public-url` origin-only; the server adds the mount path to the
+browser URL and uses it for assets, API requests, live event streams, and
+client-side navigation.
+
+```bash
+agentsview serve \
+  --base-path /av \
+  --public-url http://agents.example.com
+```
+
+The proxy must preserve `/av` in the upstream request. For nginx, omit the
+trailing slash from `proxy_pass` so nginx does not strip the location prefix:
+
+```nginx
+location = /av {
+    return 301 /av/;
+}
+
+location /av/ {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_http_version 1.1;
+    proxy_buffering off;
+}
+```
+
+The same flag works with `serve --background`. The configuration-only
+`daemon start` and `daemon restart` commands do not accept serve-specific flags,
+so start a subpath-mounted background server with `agentsview serve --background
+--base-path /av`.
+
 ### Forwarded Dev Environments
 
 AgentsView validates the request `Host` header before serving API requests. That

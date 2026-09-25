@@ -297,15 +297,14 @@ func newPiSourceSet(agent AgentType, roots []string) JSONLSourceSet {
 	}
 
 	// Pi's native session-dir override writes transcripts directly into the
-	// chosen directory; default homes group them by project instead.
+	// chosen directory, and default homes group them by project. The
+	// pi-subagents extension nests subagent runs several levels below the
+	// project directory, so transcript depth is not capped.
 	if agent == AgentPi {
 		return NewJSONLSourceSet(agent, roots,
 			WithRecursive(),
 			WithSymlinkFollowing(),
-			WithIncludePath(func(root, path string) bool {
-				return isPiSourcePath(root, path) &&
-					(filepath.Dir(path) == filepath.Clean(root) || IsDirectoryJSONLPath(root, path))
-			}),
+			WithIncludePath(isPiSourcePathAtAnyDepth),
 			WithProjectHint(func(root, path string) string { return "" }),
 			WithSessionIDFromPath(piSessionIDFromPath),
 			WithContentHashing(),
@@ -340,6 +339,30 @@ func newPiSourceSet(agent AgentType, roots []string) JSONLSourceSet {
 
 func isPiSourcePath(root, path string) bool {
 	return strings.HasSuffix(filepath.Base(path), ".jsonl")
+}
+
+// isPiSourcePathAtAnyDepth accepts a Pi transcript anywhere under a configured
+// sessions root: directly inside it (the native session-dir override), one
+// project directory down (default homes), or deeper, where pi-subagents keeps
+// each run's child session under the parent transcript's name
+// (<project>/<parent>/<runId>/run-N/session.jsonl). A delegated child can
+// spawn its own children, so the depth is not capped; only empty and traversal
+// segments are rejected. IsPiSessionFile still filters the file contents, so a
+// nested .jsonl that is not a Pi session is not indexed.
+func isPiSourcePathAtAnyDepth(root, path string) bool {
+	if !isPiSourcePath(root, path) {
+		return false
+	}
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
+	if err != nil {
+		return false
+	}
+	for part := range strings.SplitSeq(rel, string(filepath.Separator)) {
+		if part == "" || part == "." || part == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 // isOMPSourcePath accepts OMP transcripts at the main-session depth

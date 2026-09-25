@@ -390,7 +390,9 @@
             class="pill-btn"
             class:active={sessions.filters.minUserMessages === n}
             onclick={() =>
-              sessions.setMinUserMessagesFilter(n)}
+              sessions.setMinUserMessagesFilter(
+                sessions.filters.minUserMessages === n ? 0 : n,
+              )}
           >
             {n}
           </button>

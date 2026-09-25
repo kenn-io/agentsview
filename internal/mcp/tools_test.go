@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
@@ -535,6 +536,99 @@ func TestGetMessages_RoleFilterAndTruncation(t *testing.T) {
 	assert.True(t, first.Truncated)
 	assert.Equal(t, 50, first.FullLength)
 	assert.Len(t, first.Content, 10)
+}
+
+func TestGetMessages_BodyCursorContinuesUnicodeMessage(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "body", "proj", func(s *db.Session) {
+		s.MessageCount = 2
+		s.UserMessageCount = 2
+	})
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
+		dbtest.UserMsg("body", 0, "αβγδεζηθικ"),
+		dbtest.UserMsg("body", 1, "next message"),
+	}))
+
+	_, first, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "body", Limit: 2, MaxCharsPerMessage: 4,
+	})
+	require.NoError(t, err)
+	require.Len(t, first.Messages, 2)
+	assert.Equal(t, "αβγδ", first.Messages[0].Content)
+	assert.Equal(t, 10, first.Messages[0].FullLength)
+	require.NotEmpty(t, first.Messages[0].BodyCursor)
+	require.NotEmpty(t, first.TranscriptRevision)
+	assert.Nil(t, first.NextFrom, "body continuation must finish before message pagination advances")
+
+	_, second, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "body", BodyCursor: first.Messages[0].BodyCursor,
+		MaxCharsPerMessage: 4,
+	})
+	require.NoError(t, err)
+	require.Len(t, second.Messages, 1)
+	assert.Equal(t, "εζηθ", second.Messages[0].Content)
+	require.NotEmpty(t, second.Messages[0].BodyCursor)
+	assert.Equal(t, first.TranscriptRevision, second.TranscriptRevision)
+
+	_, third, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "body", BodyCursor: second.Messages[0].BodyCursor,
+		MaxCharsPerMessage: 4,
+	})
+	require.NoError(t, err)
+	require.Len(t, third.Messages, 1)
+	assert.Equal(t, "ικ", third.Messages[0].Content)
+	assert.False(t, third.Messages[0].Truncated)
+	assert.Empty(t, third.Messages[0].BodyCursor)
+	require.NotNil(t, third.NextFrom)
+	assert.Equal(t, 2, *third.NextFrom)
+}
+
+func TestGetMessages_BodyCursorContinuesPastMaximumChunk(t *testing.T) {
+	ts, d := newTestToolset(t)
+	body := strings.Repeat("界", maxMaxCharsPerMessage+5)
+	dbtest.SeedSessionWithMessages(t, d, "oversized", "proj", []db.Message{
+		dbtest.UserMsg("oversized", 0, body),
+	}, dbtest.WithMessageCounts(1, 1))
+
+	_, first, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "oversized", MaxCharsPerMessage: maxMaxCharsPerMessage,
+	})
+	require.NoError(t, err)
+	require.Len(t, first.Messages, 1)
+	assert.Equal(t, maxMaxCharsPerMessage, utf8.RuneCountInString(first.Messages[0].Content))
+	assert.Equal(t, maxMaxCharsPerMessage+5, first.Messages[0].FullLength)
+	require.NotEmpty(t, first.Messages[0].BodyCursor)
+
+	_, rest, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "oversized", BodyCursor: first.Messages[0].BodyCursor,
+		MaxCharsPerMessage: maxMaxCharsPerMessage,
+	})
+	require.NoError(t, err)
+	require.Len(t, rest.Messages, 1)
+	assert.Equal(t, strings.Repeat("界", 5), rest.Messages[0].Content)
+	assert.False(t, rest.Messages[0].Truncated)
+}
+
+func TestGetMessages_BodyCursorRejectsChangedTranscript(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSessionWithMessages(t, d, "body", "proj", []db.Message{
+		dbtest.UserMsg("body", 0, "abcdefghij"),
+	}, dbtest.WithMessageCounts(1, 1))
+
+	_, first, err := ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "body", MaxCharsPerMessage: 4,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, first.Messages[0].BodyCursor)
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "body", []db.Message{
+		dbtest.UserMsg("body", 0, "changed body"),
+	}))
+
+	_, _, err = ts.getMessages(t.Context(), nil, getMessagesIn{
+		SessionID: "body", BodyCursor: first.Messages[0].BodyCursor,
+		MaxCharsPerMessage: 4,
+	})
+	require.ErrorIs(t, err, service.ErrSourceChanged)
 }
 
 // Even when a caller explicitly allow-lists the "system" role, get_messages
