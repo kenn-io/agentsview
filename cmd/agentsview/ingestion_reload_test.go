@@ -30,6 +30,7 @@ func writeReloadGeminiSession(t *testing.T, root, id string) {
 }
 
 func sessionImported(t *testing.T, database *db.DB, id string) bool {
+	t.Helper()
 	stored, err := database.GetSessionFull(t.Context(), id)
 	require.NoError(t, err)
 	return stored != nil && stored.DeletedAt == nil
