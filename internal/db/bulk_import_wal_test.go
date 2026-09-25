@@ -18,7 +18,7 @@ func TestBulkImportWALAutocheckpointPages(t *testing.T) {
 
 // TestBulkImportDefersWALCheckpointsOnReplacementOnly writes more than the
 // default 1,000-page trigger into a live and a bulk-mode archive. Only the
-// bulk archive keeps every frame in its WAL until FinishBulkImport.
+// bulk archive keeps every frame in its WAL until the final checkpoint.
 func TestBulkImportDefersWALCheckpointsOnReplacementOnly(t *testing.T) {
 	prev := bulkImportWALAutocheckpointBytes
 	bulkImportWALAutocheckpointBytes = 16 << 20
@@ -31,12 +31,7 @@ func TestBulkImportDefersWALCheckpointsOnReplacementOnly(t *testing.T) {
 			createEmptyArchiveWithPageSize(t, replacementPath, pageSize)
 			replacement, err := Open(t.Context(), replacementPath)
 			require.NoError(t, err)
-			reopened := false
-			t.Cleanup(func() {
-				if !reopened {
-					require.NoError(t, replacement.Close())
-				}
-			})
+			t.Cleanup(func() { require.NoError(t, replacement.Close()) })
 			require.Equal(t, pageSize, writerPragma(t, replacement, "page_size"))
 
 			require.NoError(t, replacement.DropBulkImportIndexes(t.Context()))
@@ -45,26 +40,20 @@ func TestBulkImportDefersWALCheckpointsOnReplacementOnly(t *testing.T) {
 			assert.Equal(t, 1000, writerPragma(t, live, "wal_autocheckpoint"),
 				"the live writer keeps its policy")
 
+			// Exclude schema setup so only the probe writes cross the trigger.
+			require.NoError(t, live.CheckpointWALTruncate(t.Context()))
+			require.NoError(t, replacement.CheckpointWALTruncate(t.Context()))
 			liveFrames := fillWAL(t, live, pageSize)
 			replacementFrames := fillWAL(t, replacement, pageSize)
 			assert.Greater(t, replacementFrames, 1000,
 				"bulk mode must defer checkpoints past the default trigger")
-			assert.Less(t, liveFrames, replacementFrames,
+			assert.Less(t, liveFrames, 1000,
 				"the live writer must still checkpoint at its default trigger")
 
-			require.NoError(t, replacement.FinishBulkImport(t.Context()))
-			assert.Equal(t, 1000,
-				writerPragma(t, replacement, "wal_autocheckpoint"))
+			require.NoError(t, replacement.CheckpointWALTruncate(t.Context()))
 			info, err := os.Stat(replacementPath + "-wal")
 			require.NoError(t, err)
 			assert.Zero(t, info.Size(), "finish must truncate the WAL")
-
-			require.NoError(t, replacement.Close())
-			reopened = true
-			again, err := Open(t.Context(), replacementPath)
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, again.Close()) })
-			assert.Equal(t, 1000, writerPragma(t, again, "wal_autocheckpoint"))
 		})
 	}
 }
@@ -92,14 +81,14 @@ func writerPragma(t *testing.T, database *DB, name string) int {
 	return got
 }
 
-// fillWAL commits about 1,600 pages in small transactions and returns the
+// fillWAL commits at least 1,200 pages in small transactions and returns the
 // frame count left in the WAL, which an automatic checkpoint would reset.
 func fillWAL(t *testing.T, database *DB, pageSize int) int {
 	t.Helper()
 	w := database.getWriter()
 	_, err := w.Exec(t.Context(), "CREATE TABLE wal_probe(b BLOB)")
 	require.NoError(t, err)
-	for range 20 {
+	for range 30 {
 		_, err := w.Exec(t.Context(),
 			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 40)
 			 INSERT INTO wal_probe(b) SELECT randomblob(?) FROM n`, pageSize)

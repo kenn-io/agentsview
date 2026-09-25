@@ -3865,7 +3865,7 @@ func (e *Engine) resyncBuildLocked(
 	e.persistSkipCacheInto(ctx, newDB)
 	tCheckpoint := time.Now()
 	reportResyncPhase(PhaseFinalizing, "Checkpointing rebuilt database", "")
-	if err := newDB.FinishBulkImport(ctx); err != nil {
+	if err := newDB.CheckpointWALTruncate(ctx); err != nil {
 		log.Printf("resync: checkpoint replacement db: %v", err)
 		stats.Aborted = true
 		stats.Warnings = append(stats.Warnings,

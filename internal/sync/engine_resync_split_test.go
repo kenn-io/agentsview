@@ -760,8 +760,8 @@ func TestResyncAbortsWhenReplacementCheckpointFails(t *testing.T) {
 				details = append(details, p.Detail)
 			}
 		}, RebuildOptions{}, rebuildOperations{
-			rebuildFTS: func(ctx context.Context, newDB *db.DB) error {
-				if err := newDB.RebuildFTS(ctx); err != nil {
+			rebuildUsageIndexes: func(ctx context.Context, newDB *db.DB) error {
+				if err := newDB.RebuildBulkImportIndexes(ctx); err != nil {
 					return err
 				}
 				rows, qerr := newDB.Reader().Query(t.Context(), "SELECT id FROM sessions")
@@ -778,7 +778,7 @@ func TestResyncAbortsWhenReplacementCheckpointFails(t *testing.T) {
 			},
 		},
 	)
-	require.NotNil(t, pinned, "the FTS hook must have pinned a snapshot")
+	require.NotNil(t, pinned, "the usage-index hook must have pinned a snapshot")
 	require.NoError(t, pinned.Close())
 	require.ErrorIs(t, err, db.ErrWALCheckpointBusy)
 	assert.True(t, stats.Aborted)
