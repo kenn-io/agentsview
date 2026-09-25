@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sync"
 	"time"
+	"unique"
 
 	chdriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/ext"
@@ -16,11 +17,21 @@ import (
 	"go.kenn.io/agentsview/internal/activity"
 )
 
+// clickActivityMessage is one message's pairing input. Role and model
+// repeat across messages, so they are interned handles. A zero ts marks a
+// message without a timestamp: ClickHouse cannot store year 1.
 type clickActivityMessage struct {
-	ordinal            int
-	ts                 sql.NullTime
-	role, model, prior string
+	ordinal     int
+	ts          time.Time
+	role, model unique.Handle[string]
 }
+
+var (
+	assistantRole = unique.Make("assistant")
+	noModel       = unique.Make("")
+)
+
+func (m clickActivityMessage) stamped() bool { return !m.ts.IsZero() }
 
 type clickActivityTerminal struct {
 	ordinal, callIndex, eventIndex int
@@ -120,7 +131,10 @@ func (s *Store) activityReportPairs(
 	for _, id := range uncached {
 		entry := read[id]
 		if version, ok := versions[id]; ok {
+			// Keep exact-length copies: the read's slices grew by doubling.
 			entry.pushVersion = version
+			entry.messages = slices.Clone(entry.messages)
+			entry.events = slices.Clone(entry.events)
 			s.activitySessions.store(id, entry)
 		}
 		inputs[id] = entry
@@ -144,13 +158,28 @@ func (s *Store) readActivitySessionInputs(ctx context.Context, candidates chSess
 	}
 	defer rows.Close()
 	read := map[string]activitySessionInputs{}
+	// Roles and models take few values; look each up in the global table once.
+	handles := map[string]unique.Handle[string]{}
+	handle := func(v string) unique.Handle[string] {
+		h, ok := handles[v]
+		if !ok {
+			h = unique.Make(v)
+			handles[v] = h
+		}
+		return h
+	}
 	for rows.Next() {
-		var id string
-		var m clickActivityMessage
-		if err := rows.Scan(&id, &m.ordinal, &m.ts, &m.role, &m.model); err != nil {
+		var id, role, model string
+		var ordinal int
+		var ts sql.NullTime
+		if err := rows.Scan(&id, &ordinal, &ts, &role, &model); err != nil {
 			return nil, fmt.Errorf("scanning pairing message: %w", err)
 		}
 		entry := read[id]
+		m := clickActivityMessage{ordinal: ordinal, role: handle(role), model: handle(model)}
+		if ts.Valid {
+			m.ts = ts.Time
+		}
 		entry.messages = append(entry.messages, m)
 		read[id] = entry
 	}
@@ -185,54 +214,57 @@ func (s *Store) readActivitySessionInputs(ctx context.Context, candidates chSess
 
 // pairActivitySessions runs the pairing over the sessions' inputs. Events
 // before lower are left out here rather than by the read, so the inputs
-// stay query-independent.
+// stay query-independent. The memoized inputs are shared and only read.
 func (s *Store) pairActivitySessions(
 	inputs map[string]activitySessionInputs, ids []string, lower, end time.Time, q activity.Query,
 ) ([]activity.IntervalCandidate, []activity.IntervalCandidate, error) {
 	// A DateTime64(6) comparison in the read saw the bound at microseconds.
 	lower = lower.Truncate(time.Microsecond)
-	var transcript []activity.ActivityEvent
-	messages := make(map[string][]clickActivityMessage, len(inputs))
-	events := make(map[string][]clickActivityTerminal, len(inputs))
+	gapCap := time.Duration(q.GapCapSeconds) * time.Second
+	pairLower := q.RangeStart.Add(-gapCap)
+	// A message pair starts at a stamped message inside the pairing window,
+	// so their count bounds the pairs; reserving it avoids regrowing.
+	pairs := 0
+	for _, id := range ids {
+		for _, m := range inputs[id].messages {
+			if ts := m.ts.UTC(); m.stamped() && !ts.Before(pairLower) && ts.Before(q.EffectiveEnd) {
+				pairs++
+			}
+		}
+	}
+	transcript := make([]activity.IntervalCandidate, 0, pairs)
+	var out []clickOrderedCandidate
+	var tree []int
+	var priorAt []int
 	for _, id := range ids {
 		entry, ok := inputs[id]
 		if !ok {
 			continue
 		}
-		for _, m := range entry.messages {
-			if m.ts.Valid {
-				transcript = append(transcript, activity.ActivityEvent{SessionID: id, Ordinal: m.ordinal, Timestamp: m.ts.Time.UTC().Format(time.RFC3339Nano), Role: m.role, Model: m.model})
-			}
-		}
-		var es []clickActivityTerminal
-		for _, e := range entry.events {
+		ms := entry.messages
+		transcript = appendMessagePairs(transcript, id, ms, pairLower, q.EffectiveEnd)
+		first := len(entry.events)
+		for i, e := range entry.events {
 			if !e.ts.Before(lower) {
-				es = append(es, e)
+				first = i
+				break
 			}
 		}
+		es := entry.events[first:]
 		if len(es) == 0 {
 			continue
 		}
-		// The pairing annotates messages in place; work on a copy so the
-		// memoized rows stay shared and unchanged.
-		messages[id] = slices.Clone(entry.messages)
-		events[id] = es
-	}
-	var out []clickOrderedCandidate
-	for id, es := range events {
-		ms := messages[id]
-		if ms == nil {
-			// A session can carry tool events without stamped messages.
-			ms = []clickActivityMessage{}
-		}
-		prior := "unknown"
+		// priorAt[i] is the latest assistant message with a model at or
+		// before message i, or -1.
+		priorAt = slices.Grow(priorAt[:0], len(ms))[:len(ms)]
+		prior := -1
 		lastStamped := -1
 		for i := range ms {
-			if ms[i].role == "assistant" && ms[i].model != "" {
-				prior = ms[i].model
+			if ms[i].role == assistantRole && ms[i].model != noModel {
+				prior = i
 			}
-			ms[i].prior = prior
-			if ms[i].ts.Valid {
+			priorAt[i] = prior
+			if ms[i].stamped() {
 				lastStamped = i
 			}
 		}
@@ -240,21 +272,25 @@ func (s *Store) pairActivitySessions(
 		// left first to find the lowest eligible ordinal, even for clock reversals.
 		// This takes linear memory and logarithmic work per tool event instead
 		// of comparing every tool event with every message in its session.
-		tree := slices.Repeat([]int{-1}, max(1, 4*len(ms)))
+		size := max(1, 4*len(ms))
+		tree = slices.Grow(tree[:0], size)[:size]
+		for i := range tree {
+			tree[i] = -1
+		}
 		var build func(int, int, int) int
 		build = func(node, lo, hi int) int {
 			if lo == hi {
 				return -1
 			}
 			if hi-lo == 1 {
-				if ms[lo].ts.Valid {
+				if ms[lo].stamped() {
 					tree[node] = lo
 				}
 				return tree[node]
 			}
 			mid := (lo + hi) / 2
 			a, b := build(node*2, lo, mid), build(node*2+1, mid, hi)
-			if a == -1 || (b != -1 && ms[b].ts.Time.After(ms[a].ts.Time)) {
+			if a == -1 || (b != -1 && ms[b].ts.After(ms[a].ts)) {
 				a = b
 			}
 			tree[node] = a
@@ -263,7 +299,7 @@ func (s *Store) pairActivitySessions(
 		build(1, 0, len(ms))
 		var next func(int, int, int, int, time.Time) int
 		next = func(node, lo, hi, start int, ts time.Time) int {
-			if lo == hi || hi <= start || tree[node] == -1 || !ms[tree[node]].ts.Time.After(ts) {
+			if lo == hi || hi <= start || tree[node] == -1 || !ms[tree[node]].ts.After(ts) {
 				return -1
 			}
 			if hi-lo == 1 {
@@ -280,8 +316,8 @@ func (s *Store) pairActivitySessions(
 				return
 			}
 			c.PriorModel = "unknown"
-			if start > 0 {
-				c.PriorModel = ms[start-1].prior
+			if start > 0 && priorAt[start-1] != -1 {
+				c.PriorModel = ms[priorAt[start-1]].model.Value()
 			}
 			out = append(out, clickOrderedCandidate{c, e.callIndex, e.eventIndex})
 		}
@@ -292,10 +328,10 @@ func (s *Store) pairActivitySessions(
 			}
 			j := next(1, 0, len(ms), start, e.ts)
 			c := activity.IntervalCandidate{SessionID: id, StartOrdinal: e.ordinal, Start: e.ts}
-			if i+1 < len(es) && (j == -1 || es[i+1].ts.Before(ms[j].ts.Time)) {
+			if i+1 < len(es) && (j == -1 || es[i+1].ts.Before(ms[j].ts)) {
 				c.EndOrdinal, c.End, c.ClosingRole = es[i+1].ordinal, es[i+1].ts, "tool"
 			} else if j != -1 {
-				c.EndOrdinal, c.End, c.ClosingRole, c.ClosingModel = ms[j].ordinal, ms[j].ts.Time, ms[j].role, ms[j].model
+				c.EndOrdinal, c.End, c.ClosingRole, c.ClosingModel = ms[j].ordinal, ms[j].ts, ms[j].role.Value(), ms[j].model.Value()
 			} else {
 				continue
 			}
@@ -304,8 +340,8 @@ func (s *Store) pairActivitySessions(
 		if lastStamped != -1 {
 			m := ms[lastStamped]
 			for _, e := range es {
-				if e.ts.After(m.ts.Time) {
-					appendCandidate(activity.IntervalCandidate{SessionID: id, StartOrdinal: m.ordinal, EndOrdinal: m.ordinal, Start: m.ts.Time, End: e.ts, ClosingRole: "tool"}, e, lastStamped+1)
+				if e.ts.After(m.ts) {
+					appendCandidate(activity.IntervalCandidate{SessionID: id, StartOrdinal: m.ordinal, EndOrdinal: m.ordinal, Start: m.ts, End: e.ts, ClosingRole: "tool"}, e, lastStamped+1)
 					break
 				}
 			}
@@ -320,5 +356,51 @@ func (s *Store) pairActivitySessions(
 	for i, c := range out {
 		result[i] = c.IntervalCandidate
 	}
-	return activity.PairActivityEvents(transcript, q.RangeStart, q.EffectiveEnd, time.Duration(q.GapCapSeconds)*time.Second), result, nil
+	if len(transcript) == 0 {
+		// activity.PairActivityEvents returns nil for no pairs.
+		transcript = nil
+	}
+	slices.SortFunc(transcript, func(a, b activity.IntervalCandidate) int {
+		return cmp.Or(a.Start.Compare(b.Start), cmp.Compare(a.SessionID, b.SessionID),
+			cmp.Compare(a.StartOrdinal, b.StartOrdinal))
+	})
+	return transcript, result, nil
+}
+
+// appendMessagePairs pairs each stamped message with the next stamped one
+// in ordinal order, the way activity.PairActivityEvents pairs a session's
+// transcript, without rendering and reparsing every timestamp.
+func appendMessagePairs(
+	out []activity.IntervalCandidate, id string, ms []clickActivityMessage, lower, calculationEnd time.Time,
+) []activity.IntervalCandidate {
+	lastModel := "unknown"
+	previous := -1
+	for i := range ms {
+		// PairActivityEvents keeps only timestamps that render as RFC 3339.
+		if !ms[i].stamped() || ms[i].ts.Year() < 0 || ms[i].ts.Year() > 9999 {
+			continue
+		}
+		if previous == -1 {
+			previous = i
+			continue
+		}
+		prev, cur := ms[previous].ts.UTC(), ms[i].ts.UTC()
+		if !prev.Before(lower) && prev.Before(calculationEnd) {
+			out = append(out, activity.IntervalCandidate{
+				SessionID:    id,
+				StartOrdinal: ms[previous].ordinal,
+				EndOrdinal:   ms[i].ordinal,
+				Start:        prev,
+				End:          cur,
+				ClosingRole:  ms[i].role.Value(),
+				ClosingModel: ms[i].model.Value(),
+				PriorModel:   lastModel,
+			})
+		}
+		if cur.After(prev) && ms[i].role == assistantRole && ms[i].model != noModel {
+			lastModel = ms[i].model.Value()
+		}
+		previous = i
+	}
+	return out
 }

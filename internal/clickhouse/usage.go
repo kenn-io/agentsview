@@ -1,6 +1,7 @@
 package clickhouse
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -2233,11 +2234,14 @@ func (s *Store) forEachSessionUsageAggregateRow(
 	if err != nil {
 		return err
 	}
+	// Only one session's rows are kept. Callers across every session keep
+	// their own totals instead of the rows.
+	keep := sessionID != ""
 	memoSlot, memoVersion, err := s.usageRowMemoKey(ctx, state, "session", f, sessionID, "", nil)
 	if err != nil {
 		return err
 	}
-	if rows, ok := s.sessionAggregateRows.get(memoSlot, memoVersion); ok {
+	if rows, ok := s.sessionAggregateRows.get(memoSlot, memoVersion); keep && ok {
 		for _, r := range rows {
 			if err := visit(r); err != nil {
 				return err
@@ -2290,7 +2294,9 @@ func (s *Store) forEachSessionUsageAggregateRow(
 		r.ts = formatDBTime(ts)
 		r.pricingTS = formatDBTime(pricingTS)
 		r.startedAt = formatDBTime(startedAt)
-		memo = append(memo, r)
+		if keep {
+			memo = append(memo, r)
+		}
 		if err := visit(r); err != nil {
 			return err
 		}
@@ -2298,7 +2304,9 @@ func (s *Store) forEachSessionUsageAggregateRow(
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("iterating clickhouse session usage aggregates: %w", err)
 	}
-	s.sessionAggregateRows.put(memoSlot, memoVersion, memo)
+	if keep {
+		s.sessionAggregateRows.put(memoSlot, memoVersion, memo)
+	}
 	return nil
 }
 
@@ -2373,10 +2381,26 @@ func (s *Store) GetTopSessionsByCost(
 func (s *Store) topSessionsByCost(
 	ctx context.Context, f db.UsageFilter, limit int,
 ) ([]db.TopSessionEntry, error) {
-	rateResolver, err := s.loadPricingResolver(ctx)
+	state, err := s.preparedUsageState(ctx)
 	if err != nil {
 		return nil, err
 	}
+	pricing, err := s.pricingSnapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// Keep one total per session rather than every usage row: the totals
+	// are all a later read needs, and they are a small fraction of the rows.
+	memoSlot, memoVersion, err := s.usageRowMemoKey(ctx, state, "top", f, "", pricing.digest, nil)
+	if err != nil {
+		return nil, err
+	}
+	if kept, ok := s.topSessionTotals.get(memoSlot, memoVersion); ok {
+		return db.SortAndLimitTopSessions(
+			slices.Clone(kept), limit, f.TopSessionsSort, f.TopSessionsTokenTypes,
+		), nil
+	}
+	rateResolver := export.NewPricingResolverWithDigest(pricing.rows, pricing.digest)
 	type acc struct {
 		row               db.TopSessionEntry
 		tokens            int
@@ -2436,8 +2460,9 @@ func (s *Store) topSessionsByCost(
 		}
 		out = append(out, a.row)
 	}
+	s.topSessionTotals.put(memoSlot, memoVersion, out)
 	return db.SortAndLimitTopSessions(
-		out, limit, f.TopSessionsSort, f.TopSessionsTokenTypes,
+		slices.Clone(out), limit, f.TopSessionsSort, f.TopSessionsTokenTypes,
 	), nil
 }
 
@@ -2641,6 +2666,8 @@ type usageRowMemo[T any] struct {
 	mu      sync.Mutex
 	entries map[string]usageRowMemoEntry[T]
 	order   []string
+	// limit caps the slots; zero means usageRowMemoLimit.
+	limit int
 }
 
 type usageRowMemoEntry[T any] struct {
@@ -2674,7 +2701,7 @@ func (m *usageRowMemo[T]) put(slot, version string, rows []T) {
 	}
 	if _, ok := m.entries[slot]; !ok {
 		m.order = append(m.order, slot)
-		if len(m.order) > usageRowMemoLimit {
+		if len(m.order) > cmp.Or(m.limit, usageRowMemoLimit) {
 			delete(m.entries, m.order[0])
 			m.order = m.order[1:]
 		}
