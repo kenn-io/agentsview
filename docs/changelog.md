@@ -242,6 +242,9 @@ The latest published release is
 - Clicking the selected value in the session filter's minimum-prompts row clears
   the filter instead of leaving it set, so it can be turned off without
   clearing the other filters.
+- Transcripts that grow while a sync is reading them no longer cause a full
+  re-parse on the next sync. The incremental path now stores the file size and
+  modification time from the same read.
 
 **Acknowledgements**
 
