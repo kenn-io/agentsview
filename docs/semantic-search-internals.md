@@ -692,5 +692,6 @@ informational because development builds all report `"dev"`.
 The templates adapt the pinned Episodic Memory skill, agent, and prompt under
 MIT; the
 [adaptation record](https://github.com/kenn-io/agentsview/blob/main/docs/internal/episodic-memory-adaptation.md)
-documents the source and deviations. Distribution remains direct through the
-`agentsview` binary rather than a Claude Code plugin or marketplace package.
+documents the source and deviations. The `agentsview` binary installs standalone
+artifacts. The native `plugins/agentsview-memory` package bundles the same
+recall artifacts with the focused MCP profile and a SessionStart lifecycle hook.

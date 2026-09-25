@@ -403,3 +403,21 @@ func (s *Store) semanticUnavailableError() error {
 	}
 	return db.NewSemanticUnavailableError(reason)
 }
+
+// SemanticReadiness reports the already-negotiated PG semantic capability.
+// PG serve wires a searcher only after finding a compatible generation, so no
+// query or archive scan is required here.
+func (s *Store) SemanticReadiness(ctx context.Context) (db.SemanticReadiness, error) {
+	_ = ctx
+	s.vectorMu.RLock()
+	searcher := s.vectorSearcher
+	reason := s.semanticUnavailableReason
+	s.vectorMu.RUnlock()
+	if searcher != nil {
+		return db.SemanticReadiness{State: "ready"}, nil
+	}
+	if reason == "" {
+		reason = "not_configured"
+	}
+	return db.SemanticReadiness{State: "unavailable", Reason: reason}, nil
+}

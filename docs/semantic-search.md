@@ -998,6 +998,7 @@ header) — without writing anything.
 The recall text is adapted from `obra/episodic-memory` at pinned commit
 `7e06519357777badd7a115d2014a7ef845904310` under the MIT License. See the
 [adaptation record](https://github.com/kenn-io/agentsview/blob/main/docs/internal/episodic-memory-adaptation.md).
-This release does not yet add multi-concept search, long-message continuation,
-memory-profile packaging, SessionStart lifecycle wiring, or readiness
-diagnostics.
+The native AgentsView Memory package bundles these recall artifacts with the
+[focused MCP profile](/docs/mcp/#focused-memory-profile), a SessionStart
+lifecycle hook, and readiness diagnostics through `agentsview doctor memory`.
+Use one installation route per client to avoid duplicate skills.

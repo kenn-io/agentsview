@@ -63,9 +63,50 @@ client will see these tools:
 | `list_sessions`        | List recent or filtered sessions                                         |
 | `get_session_overview` | Fetch metadata and a compact message preview                             |
 | `get_messages`         | Read paginated message bodies from one session                           |
+| `get_memory_status`    | Report archive, lexical, semantic, and source readiness                  |
 | `search_content`       | Substring, regex, terms, semantic, or hybrid search over session text    |
 | `get_usage_summary`    | Aggregate token and cost usage                                           |
 | `query_recall`         | Search extracted Recall entries when the backend supports Recall queries |
+
+### Focused memory profile
+
+Clients that use AgentsView only for conversation memory can select the focused
+profile:
+
+```json
+{
+  "mcpServers": {
+    "agentsview": {
+      "command": "agentsview",
+      "args": ["mcp", "--profile", "memory"]
+    }
+  }
+}
+```
+
+This profile advertises only `get_memory_status`, `search_content`, and
+`get_messages`. The status tool reports the authenticated archive backend,
+read-only mode, server version, lexical availability, semantic generation
+coverage, and whether per-source freshness telemetry is available. Its `ready`,
+`partial`, `unavailable`, or `unknown` states come from the same provider as the
+compact `coverage` object on every successful `search_content` response. Older
+remote servers report `unknown` with an `unsupported` reason. The tools use the
+same schemas and backend selection as the full profile, over either stdio or
+StreamableHTTP. Omitting `--profile` or choosing `--profile full` preserves the
+complete tool list above.
+
+The repository's `plugins/agentsview-memory` package registers this profile for
+Claude Code and Codex and bundles the generated recall skill. Its MCP process
+reads `AGENTSVIEW_MEMORY_SERVER`, `AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE`, or
+`AGENTSVIEW_MEMORY_PG`; explicit command flags still win. A token-file setting
+without a server fails instead of falling back to the local archive. PostgreSQL
+reads use the configured `default_pg` target.
+
+Run `agentsview doctor memory` to inspect this server status together with the
+local client integration. Pass the native package root with `--plugin-root` to
+check its skill, MCP profile, and SessionStart hook. The diagnostic uses
+read-only metadata and does not start a daemon, sync transcripts, or rebuild
+vectors.
 
 `search_sessions` accepts optional `date_from` and `date_to` bounds in
 `YYYY-MM-DD` format, just like `list_sessions` and `search_content`. Dates
@@ -164,6 +205,27 @@ after the daemon exits due to idleness.
 The MCP server does not open the local SQLite archive directly. This keeps MCP
 reads on the same daemon policy as the desktop app and avoids a long-running MCP
 process holding its own archive handle.
+
+Native conversation-memory packages can call `agentsview memory session-start`
+on startup, resume, and clear events. The command ensures the writable local
+daemon is available, queues a debounced background reconciliation, and returns
+within two seconds without waiting for the archive pass. Parallel starts
+coalesce in the daemon, while the file watcher continues to ingest changed
+transcripts normally.
+
+Packages configured as hosted contributors call the same command with
+`--mode hosted-contributor` and an optional named PostgreSQL target. This wakes
+the existing push watcher; it does not start another writer or copy that owner's
+credentials. Hosted read-only packages use `--mode hosted-reader` with either
+`--server` or `--pg`. That mode only checks the selected read endpoint and never
+starts a local archive or reports that the remote corpus was refreshed.
+Contributor wake delivery is currently available on macOS and Linux.
+
+Set `AGENTSVIEW_DISABLE_AUTO_SYNC=1` to skip this automatic lifecycle request.
+Explicit `agentsview sync` commands and existing-history searches remain
+available. A disabled or failed lifecycle request does not change archive data;
+the package hook is responsible for reporting the failure without blocking the
+agent session.
 
 If you need to disable daemon auto-start for general CLI work with
 `AGENTSVIEW_NO_DAEMON=1`, do not use local MCP mode for that archive. Start the

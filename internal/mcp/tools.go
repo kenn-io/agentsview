@@ -23,8 +23,9 @@ import (
 // toolset holds the dependencies shared by every tool handler. now is
 // injectable so tests can control the self-reference exclusion window.
 type toolset struct {
-	svc service.SessionService
-	now func() time.Time
+	svc     service.SessionService
+	now     func() time.Time
+	version string
 }
 
 func (t *toolset) clock() time.Time {
@@ -783,6 +784,22 @@ type searchContentOut struct {
 	EffectiveScope string                  `json:"effective_scope,omitempty"`
 	Exclusions     searchContentExclusions `json:"exclusions"`
 	RevisionBound  bool                    `json:"revision_bound" jsonschema:"True when every returned match was captured with a transcript revision and can be opened with a revision-bound get_messages call."`
+	Coverage       service.MemoryCoverage  `json:"coverage" jsonschema:"Current lexical and semantic memory coverage from the same readiness provider as get_memory_status."`
+}
+
+type memoryStatusIn struct{}
+
+func (t *toolset) getMemoryStatus(
+	ctx context.Context, _ *mcp.CallToolRequest, _ memoryStatusIn,
+) (*mcp.CallToolResult, service.MemoryStatus, error) {
+	status, err := service.GetMemoryStatus(ctx, t.svc)
+	if err != nil {
+		return nil, service.MemoryStatus{}, err
+	}
+	if status.ServerVersion == "" {
+		status.ServerVersion = t.version
+	}
+	return nil, status, nil
 }
 
 // searchContentExclusions reports which default exclusions applied, so an
@@ -857,6 +874,7 @@ func (t *toolset) searchContent(
 			OneShot:          !in.IncludeOneShot, Automated: !in.IncludeAutomated,
 		},
 		RevisionBound: res.RevisionBound,
+		Coverage:      service.NormalizeMemoryCoverage(res.Coverage),
 	}
 	if db.ContentSearchModeSupportsScope(in.Mode) {
 		out.EffectiveScope = cmp.Or(in.Scope, "all")

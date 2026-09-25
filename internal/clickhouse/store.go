@@ -21,6 +21,8 @@ import (
 // Compile-time check: *Store satisfies db.Store.
 var _ db.Store = (*Store)(nil)
 
+func (s *Store) MemoryBackendName() string { return "clickhouse" }
+
 // errNotImplemented marks db.Store methods the ClickHouse reader does not
 // serve yet. The HTTP layer surfaces it as a server error; later tasks
 // replace each stub with a real query.

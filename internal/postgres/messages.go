@@ -294,6 +294,10 @@ func (s *Store) HasFTS(ctx context.Context) bool { return true }
 // db.ErrSemanticUnavailable.
 func (s *Store) HasSemantic() bool { return s.getVectorSearcher() != nil }
 
+// MemoryBackendName identifies this store in the transport-neutral memory
+// readiness response.
+func (s *Store) MemoryBackendName() string { return "postgres" }
+
 // escapeLike escapes SQL LIKE metacharacters so the bind
 // parameter is treated as a literal substring.
 func escapeLike(v string) string {

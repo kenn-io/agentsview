@@ -15,7 +15,11 @@ decision.
 ## Search and read
 
 1. Call `mcp__agentsview__search_content` with `mode: hybrid`, `scope: all`,
-   and `limit: 10`.
+   `limit: 10`, `include_active: true`, `include_one_shot: true`, and
+   `include_automated: true`. When the parent supplies the current session
+   identity, pass it as `current_session_id`. Do not invent a project filter
+   from a display name or directory; apply one only when the exact archived
+   project identifier is known.
 2. Refine or widen the query when the first results are weak. Treat rank and
    score as relevance signals, never as truth probabilities.
 3. Choose the top 2-5 relevant sessions. Call `mcp__agentsview__get_messages`
@@ -24,7 +28,9 @@ decision.
    a later correction may fall outside the first page. A snippet, summary, or
    short filtered page does not count as reading the source.
 5. If semantic search failed, report the failure before using a lexical
-   fallback. Do not fall back on authentication or wrong-target errors.
+   fallback. Preserve the inclusion and current-session flags but omit `scope`
+   for substring mode. Do not fall back on authentication or wrong-target
+   errors.
 
 A `search_content` hit located in `tool_input` or `tool_result` cannot be
 opened through `get_messages`, which returns message text and a `has_tool_use`

@@ -5653,6 +5653,8 @@ components:
     ServiceContentSearchResult:
       additionalProperties: false
       properties:
+        coverage:
+          $ref: "#/components/schemas/ServiceMemoryCoverage"
         matches:
           items:
             $ref: "#/components/schemas/DbContentMatch"
@@ -5665,6 +5667,123 @@ components:
       required:
         - matches
         - revision_bound
+        - coverage
+      type: object
+    ServiceMemoryArchiveStatus:
+      additionalProperties: false
+      properties:
+        backend:
+          type: string
+        identity:
+          type: string
+        read_only:
+          type: boolean
+      required:
+        - backend
+        - read_only
+      type: object
+    ServiceMemoryCapabilityStatus:
+      additionalProperties: false
+      properties:
+        reason:
+          type: string
+        status:
+          enum:
+            - ready
+            - partial
+            - unavailable
+            - unknown
+          type: string
+      required:
+        - status
+      type: object
+    ServiceMemoryCoverage:
+      additionalProperties: false
+      properties:
+        lexical:
+          $ref: "#/components/schemas/ServiceMemoryCapabilityStatus"
+        semantic:
+          $ref: "#/components/schemas/ServiceMemoryVectorStatus"
+        status:
+          enum:
+            - ready
+            - partial
+            - unavailable
+            - unknown
+          type: string
+      required:
+        - status
+        - lexical
+        - semantic
+      type: object
+    ServiceMemorySourceStatus:
+      additionalProperties: false
+      properties:
+        reason:
+          type: string
+        status:
+          enum:
+            - ready
+            - partial
+            - unavailable
+            - unknown
+          type: string
+      required:
+        - status
+      type: object
+    ServiceMemoryStatus:
+      additionalProperties: false
+      properties:
+        archive:
+          $ref: "#/components/schemas/ServiceMemoryArchiveStatus"
+        lexical:
+          $ref: "#/components/schemas/ServiceMemoryCapabilityStatus"
+        observed_at:
+          format: date-time
+          type: string
+        semantic:
+          $ref: "#/components/schemas/ServiceMemoryVectorStatus"
+        server_version:
+          type: string
+        sources:
+          $ref: "#/components/schemas/ServiceMemorySourceStatus"
+        status:
+          enum:
+            - ready
+            - partial
+            - unavailable
+            - unknown
+          type: string
+      required:
+        - status
+        - observed_at
+        - archive
+        - lexical
+        - semantic
+        - sources
+      type: object
+    ServiceMemoryVectorStatus:
+      additionalProperties: false
+      properties:
+        embedded:
+          format: int64
+          type: integer
+        generation:
+          type: string
+        missing:
+          format: int64
+          type: integer
+        reason:
+          type: string
+        status:
+          enum:
+            - ready
+            - partial
+            - unavailable
+            - unknown
+          type: string
+      required:
+        - status
       type: object
     ServiceMessageList:
       additionalProperties: false
@@ -13169,6 +13288,79 @@ paths:
                 $ref: "#/components/schemas/ApiErrorResponse"
           description: Gateway Timeout
       summary: List machines
+      tags:
+        - Metadata
+  /api/v1/memory/status:
+    get:
+      operationId: get-api-v1-memory-status
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceMemoryStatus"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Get memory readiness
       tags:
         - Metadata
   /api/v1/openers:

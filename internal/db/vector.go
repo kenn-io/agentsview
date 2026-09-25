@@ -97,6 +97,30 @@ type VectorSearcher interface {
 	ResolveMessageUnits(ctx context.Context, refs []MessageRef) ([]UnitRef, error)
 }
 
+// SemanticReadiness is a bounded, read-only snapshot of the semantic search
+// index. It deliberately contains no filesystem paths or provider secrets.
+type SemanticReadiness struct {
+	State      string
+	Reason     string
+	Generation string
+	Embedded   int64
+	Missing    int64
+}
+
+// SemanticReadinessProvider is implemented by vector searchers and stores
+// that can describe semantic availability without encoding a probe query.
+type SemanticReadinessProvider interface {
+	SemanticReadiness(context.Context) (SemanticReadiness, error)
+}
+
+// MemoryBackendNamer gives readiness surfaces a stable backend label without
+// requiring service code to import every concrete storage package.
+type MemoryBackendNamer interface {
+	MemoryBackendName() string
+}
+
+func (db *DB) MemoryBackendName() string { return "sqlite" }
+
 // RecallVectorHit is one semantic recall-entry match, ranked best first.
 type RecallVectorHit struct {
 	EntryID string
@@ -141,6 +165,20 @@ func (db *DB) SetRecallVectorSearcher(v RecallVectorSearcher) {
 // HasSemantic reports whether a VectorSearcher has been wired in.
 func (db *DB) HasSemantic() bool {
 	return db.getVectorSearcher() != nil
+}
+
+// SemanticReadiness reports the wired searcher's metadata-only readiness.
+// Searchers predating this capability remain usable but have unknown detail.
+func (db *DB) SemanticReadiness(ctx context.Context) (SemanticReadiness, error) {
+	searcher := db.getVectorSearcher()
+	if searcher == nil {
+		return SemanticReadiness{State: "unavailable", Reason: "not_configured"}, nil
+	}
+	provider, ok := searcher.(SemanticReadinessProvider)
+	if !ok {
+		return SemanticReadiness{State: "unknown", Reason: "status_unsupported"}, nil
+	}
+	return provider.SemanticReadiness(ctx)
 }
 
 // getVectorSearcher returns the currently wired VectorSearcher, or nil.

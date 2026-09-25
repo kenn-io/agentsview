@@ -45,6 +45,23 @@ func TestRenderPackage_HarnessArtifacts(t *testing.T) {
 	}, renderedPaths(agents))
 }
 
+func TestRenderPluginPackageReusesClaudeArtifacts(t *testing.T) {
+	standalone, err := RenderPackage(HarnessClaude, "0.1.0", Remote{})
+	require.NoError(t, err)
+
+	plugin, err := RenderPluginPackage("0.1.0")
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		"skills/agentsview-finding-history/SKILL.md",
+		"skills/agentsview-finding-history/LICENSE",
+		"agents/agentsview-search-conversations.md",
+	}, renderedPaths(plugin))
+	for _, artifact := range plugin {
+		assert.Equal(t, artifactByBase(t, standalone,
+			filepath.Base(artifact.RelativePath)).Content, artifact.Content)
+	}
+}
+
 func TestRenderPackage_ProtectsLicenseEdits(t *testing.T) {
 	pkg, err := RenderPackage(HarnessAgents, "dev", Remote{})
 	require.NoError(t, err)
@@ -78,6 +95,12 @@ func TestRenderRecallWorkflowContract(t *testing.T) {
 	assert.Contains(t, skill, "search_content")
 	assert.Contains(t, skill, "get_messages")
 	assert.Contains(t, skill, "limit: 10")
+	assert.Contains(t, skill, "include_active: true")
+	assert.Contains(t, skill, "include_one_shot: true")
+	assert.Contains(t, skill, "include_automated: true")
+	assert.Contains(t, skill, "current_session_id")
+	assert.Contains(t, skill, "Do not invent a project filter")
+	assert.Contains(t, skill, "omit `scope`")
 	assert.Contains(t, skill, "top 2-5")
 	assert.Contains(t, skill, "next_from")
 	assert.Contains(t, skill, "subordinate")
@@ -143,6 +166,12 @@ func TestRenderClaudeSearchAgentContract(t *testing.T) {
 	assert.Contains(t, agent, "Summary only")
 	assert.Contains(t, agent, "Skimmed")
 	assert.Contains(t, agent, "ordinal range")
+	assert.Contains(t, agent, "include_active: true")
+	assert.Contains(t, agent, "include_one_shot: true")
+	assert.Contains(t, agent, "include_automated: true")
+	assert.Contains(t, agent, "current_session_id")
+	assert.Contains(t, agent, "Do not invent a project filter")
+	assert.Contains(t, agent, "omit `scope`")
 	assert.NotContains(t, agent, "% match")
 	assert.NotContains(t, agent, "Copyright (c) 2025 Jesse Vincent")
 }

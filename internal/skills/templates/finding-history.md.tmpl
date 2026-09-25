@@ -29,9 +29,13 @@ why the code exists; the repository is the authority for what it contains now.
    not registered in this session, follow the remaining steps directly
    instead of delegating.
 2. Call the registered AgentsView MCP tool whose leaf name is `search_content`
-   with `mode: hybrid`, `scope: all`, and `limit: 10`. The full tool name has a
-   client-specific prefix supplied by MCP registration; do not guess or hard-code
-   that prefix.
+   with `mode: hybrid`, `scope: all`, `limit: 10`, `include_active: true`,
+   `include_one_shot: true`, and `include_automated: true`. When the current
+   session identity is available, pass it as `current_session_id`. The full tool
+   name has a client-specific prefix supplied by MCP registration; do not guess
+   or hard-code that prefix. Do not invent a project filter from a display name
+   or directory; apply one only when the exact archived project identifier is
+   known.
 3. Inspect the strongest results, then call the registered tool whose leaf name
    is `get_messages` for the top 2-5 relevant sessions. Search snippets and
    session summaries are leads, not source reads.
@@ -65,7 +69,9 @@ is true.
 If semantic search failed, identify and disclose the failure before using a
 lexical fallback. For an unavailable semantic index or transient embedding
 failure, retry once when appropriate, then use `mode: substring` with several
-short queries and synonyms. Describe the fallback in the answer.
+short queries and synonyms. Preserve the inclusion and current-session flags,
+but omit `scope` because substring mode does not accept it. Describe the
+fallback in the answer.
 
 Do not fall back on authentication or wrong-target errors. In particular, do
 not silently search a local archive when the intended remote archive rejected

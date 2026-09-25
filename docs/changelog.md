@@ -1,4 +1,5 @@
 ---
+last_edited: 2026-09-21
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -10,6 +11,31 @@ The latest published release is
 
 **New features**
 
+- Verify conversation memory through an opt-in live release gate that records a
+  synthetic decision, starts a fresh Claude Code or Codex session, and requires
+  the client to search, read, answer accurately, and cite the source. Raw
+  traces stay in ignored local artifacts; the aggregate report records models,
+  client versions, tool use, latency, and tokens.
+- Diagnose conversation-memory setup with `agentsview doctor memory`. It reports
+  the selected archive's lexical and semantic readiness separately, then checks
+  the local native plugin, MCP profile, SessionStart hook, and conflicting
+  standalone skills without starting a daemon or changing the installation.
+- Conversation-memory clients can check archive and search readiness through
+  MCP `get_memory_status` or `GET /api/v1/memory/status`, including explicit
+  unknown source telemetry. Search responses carry a compact lexical and
+  semantic coverage snapshot with active vector-generation counts.
+- Install the native AgentsView Memory package in Claude Code or Codex to get
+  the recall skill, focused MCP server, Claude search agent, and a fail-open
+  session-start hook from one package. Local and hosted targets stay in local
+  runtime configuration, and startup reports duplicate standalone skills
+  without changing user-edited files.
+- Native conversation-memory integrations can use
+  `agentsview memory session-start` for local, hosted-contributor, and
+  hosted-reader lifecycle roles. The command wakes the configured ingestion
+  owner or checks the selected read target and returns within two seconds.
+- MCP clients can use `agentsview mcp --profile memory` to advertise only the
+  conversation readiness, evidence search, and read tools, reducing unrelated
+  tool choices while leaving the default full MCP surface unchanged.
 - Mount the writable SQLite server below a reverse-proxy URL prefix with
   `agentsview serve --base-path`, including background serves. Keep
   `--public-url` set to the browser origin; AgentsView adds the mount path to

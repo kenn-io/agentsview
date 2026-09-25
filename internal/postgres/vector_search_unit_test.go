@@ -84,3 +84,19 @@ func TestStoreVectorSearcherWiring(t *testing.T) {
 	s.SetVectorSearcher(nil)
 	assert.False(t, s.HasSemantic(), "searcher cleared")
 }
+
+func TestStoreSemanticReadinessPreservesNegotiationReason(t *testing.T) {
+	s := &Store{}
+	s.SetSemanticUnavailableReason("no compatible embeddings generation")
+
+	status, err := s.SemanticReadiness(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, "unavailable", status.State)
+	assert.Equal(t, "no compatible embeddings generation", status.Reason)
+
+	s.SetVectorSearcher(NewVectorSearcher(nil, 1, 4, 100, nil))
+	status, err = s.SemanticReadiness(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, "ready", status.State)
+	assert.Empty(t, status.Reason)
+}

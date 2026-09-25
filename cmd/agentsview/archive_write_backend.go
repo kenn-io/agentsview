@@ -766,7 +766,7 @@ func (b daemonArchiveWriteBackend) ReplicaPushWatch(
 	}
 	completePushWatchStartup(ctx, initialErr, loop, openDispatch)
 
-	loop.Run(ctx)
+	loop.RunWithWake(ctx, cfg.LifecycleWake)
 	return nil
 }
 
@@ -1247,7 +1247,7 @@ func (b *localArchiveWriteBackend) ReplicaPushWatch(
 	}
 	completePushWatchStartup(ctx, initialErr, loop, openDispatch)
 
-	loop.Run(ctx)
+	loop.RunWithWake(ctx, cfg.LifecycleWake)
 	return nil
 }
 

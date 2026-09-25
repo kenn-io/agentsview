@@ -1,11 +1,27 @@
 package postgres
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestOpenContextHonorsCanceledContextBeforeConnecting(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	database, err := OpenContext(
+		ctx,
+		"postgres://127.0.0.1:1/database?sslmode=disable",
+		"public",
+		false,
+	)
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Nil(t, database)
+}
 
 func TestCheckSSL(t *testing.T) {
 	tests := []struct {

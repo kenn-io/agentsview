@@ -21,6 +21,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	kitvec "go.kenn.io/kit/vector"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -834,6 +835,46 @@ func TestSearcherAdapterVersionMismatchedIndexReturnsSemanticUnavailable(t *test
 		"a version-mismatched index must surface the semantic-unavailable taxonomy")
 	assert.Contains(t, err.Error(), "embeddings build",
 		"the error must tell the user to rebuild the index")
+}
+
+func TestSearcherAdapterSemanticReadinessCoverageAndCompatibility(t *testing.T) {
+	cfg := enabledVectorConfig(t)
+	path := cfg.Vector.ResolvedDBPath(cfg.DataDir)
+	ix, err := vector.Open(t.Context(), path, false, cfg.Vector.Embeddings.MaxInputChars)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, ix.Close()) })
+	gen := kitvec.Generation{Model: "fake-model", Dimensions: 4}
+	_, err = ix.Build(
+		t.Context(), testPushUnitSource(), fakePushEncoder(), gen, vector.BuildOptions{},
+	)
+	require.NoError(t, err)
+	adapter := newSearcherAdapter(ix, fakePushEncoder(), gen)
+
+	ready, err := adapter.SemanticReadiness(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, "ready", ready.State)
+	assert.EqualValues(t, 3, ready.Embedded)
+	assert.Zero(t, ready.Missing)
+
+	raw, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = raw.ExecContext(t.Context(), `DELETE FROM message_vectors_stamps WHERE rowid IN (SELECT rowid FROM message_vectors_stamps LIMIT 1)`)
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+	partial, err := adapter.SemanticReadiness(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, "partial", partial.State)
+	assert.Equal(t, "index_incomplete", partial.Reason)
+	assert.EqualValues(t, 2, partial.Embedded)
+	assert.EqualValues(t, 1, partial.Missing)
+
+	mismatched := newSearcherAdapter(ix, fakePushEncoder(), kitvec.Generation{
+		Model: "different-model", Dimensions: 4,
+	})
+	status, err := mismatched.SemanticReadiness(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, "unavailable", status.State)
+	assert.Equal(t, "configuration_mismatch", status.Reason)
 }
 
 // --- integration: real serve/server construction path ---

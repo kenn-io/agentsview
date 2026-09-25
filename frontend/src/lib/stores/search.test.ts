@@ -20,7 +20,15 @@ const searchService = vi.mocked(SearchService);
 const DEBOUNCE_MS = 300;
 
 function contentResult(matches: DbContentMatch[]): ServiceContentSearchResult {
-  return { matches, revision_bound: false };
+  return {
+    matches,
+    revision_bound: false,
+    coverage: {
+      status: "ready",
+      lexical: { status: "ready" },
+      semantic: { status: "ready" },
+    },
+  };
 }
 
 function memoryStorage(initial: Record<string, string> = {}) {

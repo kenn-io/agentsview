@@ -5373,6 +5373,26 @@ func TestGetVersion_Default(t *testing.T) {
 	assert.Equal(t, db.CurrentDataVersion(), resp.DataVersion)
 }
 
+func TestGetMemoryStatus(t *testing.T) {
+	te := setupWithServerOpts(t, []server.Option{
+		server.WithVersion(server.VersionInfo{Version: "v-memory"}),
+	}, func(c *config.Config) {
+		c.InstallationID = "archive-test"
+	})
+
+	w := te.get(t, "/api/v1/memory/status")
+	assertStatus(t, w, http.StatusOK)
+	status := decode[service.MemoryStatus](t, w)
+	assert.Equal(t, "v-memory", status.ServerVersion)
+	assert.Equal(t, "archive-test", status.Archive.Identity)
+	assert.Equal(t, "sqlite", status.Archive.Backend)
+	assert.False(t, status.Archive.ReadOnly)
+	assert.Equal(t, service.MemoryReady, status.Lexical.Status)
+	assert.Equal(t, service.MemoryUnavailable, status.Semantic.Status)
+	assert.Equal(t, service.MemoryPartial, status.Status)
+	assert.Equal(t, service.MemoryUnknown, status.Sources.Status)
+}
+
 func TestFindAvailablePortSkipsOccupied(t *testing.T) {
 	// Bind a port on 127.0.0.1 so FindAvailablePort must skip it.
 	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")

@@ -1,4 +1,5 @@
 ---
+last_edited: 2026-09-21
 title: CLI Reference
 description: All AgentsView commands, flags, and environment variables
 ---
@@ -1582,6 +1583,81 @@ sent to an explicitly supplied server.
 
 ______________________________________________________________________
 
+### `agentsview doctor memory`
+
+Inspect the selected conversation-memory target and the local client package:
+
+```bash
+agentsview doctor memory
+agentsview doctor memory --server <url> [--server-token-file <path>]
+agentsview doctor memory --pg
+agentsview doctor memory --plugin-root <path> --format json
+```
+
+The target section uses the same readiness provider as MCP
+`get_memory_status` and search-result coverage. It reports the authenticated
+archive identity, backend, read-only mode, lexical availability, semantic
+generation coverage, source telemetry, and server version when available. An
+older remote server reports `unknown` with reason `unsupported`; authentication
+and transport failures remain command errors instead of looking like an empty
+archive.
+
+The client section checks the native package's recall skill, focused MCP
+configuration, and SessionStart hook when `--plugin-root`, `PLUGIN_ROOT`, or
+`CLAUDE_PLUGIN_ROOT` identifies the package. It also detects standalone
+AgentsView skills and reports when their baked target differs from the selected
+archive. Human and JSON output omit plugin paths, server URLs, and token values.
+
+Local diagnostics open the archive read-only and do not start a daemon. Every
+mode is metadata-only: the command does not sync transcripts, rebuild vectors,
+probe an embedding provider, or modify client files. `--server`, `--pg`, and
+the `AGENTSVIEW_MEMORY_SERVER`, `AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE`, and
+`AGENTSVIEW_MEMORY_PG` environment variables select the same read target used
+by `agentsview mcp --profile memory`.
+
+______________________________________________________________________
+
+### `agentsview memory session-start`
+
+Run the bounded conversation-memory lifecycle action used by native agent
+packages:
+
+```bash
+agentsview memory session-start
+agentsview memory session-start --mode hosted-contributor [--target <pg-name>]
+agentsview memory session-start --mode hosted-reader --server <url> \
+  [--server-token-file <path>]
+agentsview memory session-start --mode hosted-reader --pg [--target <pg-name>]
+agentsview memory session-start --hook [--plugin-root <path>]
+```
+
+The default `local` mode ensures the writable local daemon is available, then
+asks it to run a coalesced background reconciliation. `hosted-contributor`
+notifies the already running PostgreSQL push watcher for the selected target;
+that owner keeps its existing debounce, credentials, embedding work, and push
+cadence. It does not start another writer. `hosted-reader` checks an explicit
+authenticated daemon or configured PostgreSQL read target without starting a
+local archive or claiming to refresh hosted data.
+
+Every mode returns within 1.9 seconds and does not wait for archive-scale work.
+Set `AGENTSVIEW_DISABLE_AUTO_SYNC=1` to skip only this automatic request;
+explicit sync commands and searches remain available. A contributor owner
+started by an older binary must be restarted once so it can advertise the
+lifecycle wake endpoint. The contributor wake is available on macOS and Linux;
+Windows contributors continue on the watcher's normal event and interval
+cadence.
+
+Native packages can configure these flags with `AGENTSVIEW_MEMORY_MODE`,
+`AGENTSVIEW_MEMORY_TARGET`, `AGENTSVIEW_MEMORY_SERVER`,
+`AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE`, and `AGENTSVIEW_MEMORY_PG`. Explicit
+target flags override the package environment as a group. `--hook` reports a
+failure to stderr and exits successfully so startup problems do not prevent the
+agent session from opening. `--plugin-root` also diagnoses standalone skill
+copies that would be loaded alongside the native package; it never changes
+those files.
+
+______________________________________________________________________
+
 ### `agentsview mcp`
 
 Run a read-only Model Context Protocol server for assistant clients that can
@@ -1592,6 +1668,7 @@ and operational guidance.
 
 ```bash
 agentsview mcp
+agentsview mcp --profile memory
 agentsview mcp --http 127.0.0.1:8085
 agentsview mcp --server http://127.0.0.1:8080
 agentsview mcp status --json
@@ -1613,6 +1690,13 @@ daemon and starts it when needed, so a long-lived MCP server can keep working
 after the daemon exits due to idleness. The MCP server does not fall back to
 opening the local SQLite archive directly.
 
+Use `--profile memory` when the client should discover only the
+`get_memory_status`, `search_content`, and `get_messages` conversation-memory
+tools. `get_memory_status` reports archive, lexical, semantic, vector coverage,
+and source-telemetry readiness without running a search probe. The default
+`full` profile preserves the complete MCP tool surface. Profile selection works
+with both stdio and StreamableHTTP and does not change backend selection.
+
 Use `--server <url>` to point at an explicit running daemon. When the daemon
 requires auth, provide `AGENTSVIEW_SERVER_TOKEN` or
 `--server-token-file <path>`. Use `--pg` to read from configured PostgreSQL
@@ -1626,6 +1710,7 @@ pass its URL with `--server`.
 | `--server <url>`             |         | Explicit daemon URL for MCP tool calls              |
 | `--server-token-file <path>` |         | Bearer token file for an explicit daemon URL        |
 | `--pg`                       | `false` | Read from configured PostgreSQL                     |
+| `--profile <name>`           | `full`  | Advertise the `full` or focused `memory` tool set    |
 
 ______________________________________________________________________
 

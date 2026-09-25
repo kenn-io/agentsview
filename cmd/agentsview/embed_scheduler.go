@@ -464,6 +464,40 @@ func newSearcherAdapter(ix *vector.Index, enc kitvec.EncodeFunc, gen kitvec.Gene
 	return searcherAdapter{ix: ix, enc: enc, fingerprint: gen.Fingerprint()}
 }
 
+// SemanticReadiness inspects generation metadata without encoding a query.
+func (a searcherAdapter) SemanticReadiness(
+	ctx context.Context,
+) (db.SemanticReadiness, error) {
+	generations, err := a.ix.Generations(ctx)
+	if err != nil {
+		return db.SemanticReadiness{}, err
+	}
+	for _, generation := range generations {
+		if generation.State != "active" {
+			continue
+		}
+		out := db.SemanticReadiness{
+			State:      "ready",
+			Generation: generation.Fingerprint,
+			Embedded:   generation.Embedded,
+			Missing:    generation.Missing,
+		}
+		if generation.Fingerprint != a.fingerprint {
+			out.State = "unavailable"
+			out.Reason = "configuration_mismatch"
+			return out, nil
+		}
+		if generation.Missing > 0 {
+			out.State = "partial"
+			out.Reason = "index_incomplete"
+		}
+		return out, nil
+	}
+	return db.SemanticReadiness{
+		State: "unavailable", Reason: "no_active_generation",
+	}, nil
+}
+
 // SemanticSearch implements db.VectorSearcher. A stale active generation
 // (the configured model/dimension no longer matches what was last built)
 // is a hard error checked before querying at all, rather than silently

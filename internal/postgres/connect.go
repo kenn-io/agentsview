@@ -147,6 +147,22 @@ func quoteIdentifier(name string) (string, error) {
 func Open(
 	dsn, schema string, allowInsecure bool,
 ) (*sql.DB, error) {
+	ctx, cancel := context.WithTimeout(
+		context.Background(), 10*time.Second,
+	)
+	defer cancel()
+	return OpenContext(ctx, dsn, schema, allowInsecure)
+}
+
+// OpenContext opens a PostgreSQL pool and bounds its initial connectivity
+// check with ctx. Callers that own a shorter lifecycle deadline use this
+// instead of Open's ten-second default.
+func OpenContext(
+	ctx context.Context, dsn, schema string, allowInsecure bool,
+) (*sql.DB, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if dsn == "" {
 		return nil, errors.New("postgres URL is required")
 	}
@@ -186,10 +202,6 @@ func Open(
 	db.SetConnMaxLifetime(30 * time.Minute)
 	db.SetConnMaxIdleTime(5 * time.Minute)
 
-	ctx, cancel := context.WithTimeout(
-		context.Background(), 10*time.Second,
-	)
-	defer cancel()
 	if err := db.PingContext(ctx); err != nil {
 		db.Close()
 		return nil, fmt.Errorf(
