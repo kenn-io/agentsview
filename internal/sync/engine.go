@@ -11001,6 +11001,16 @@ type incrementalUpdate struct {
 	hasTotalOutputTokens bool
 	hasPeakContextTokens bool
 	providerStatHash     *pendingProviderStatHash
+	// suffixReplace marks a delta that re-parses the open same-message.id
+	// assistant run from its first record. msgs is only the suffix, so
+	// the write path loads the stored prefix below replaceFromOrdinal,
+	// routes the whole row set through the full replace writer, and
+	// recomputes the session aggregates from the stored rows. The count
+	// and token fields above are unused on this path.
+	suffixReplace bool
+	// replaceFromOrdinal is the ordinal of the run's merged message: the
+	// first stored ordinal the re-parsed suffix replaces.
+	replaceFromOrdinal int
 }
 
 // hasSubstantiveUserMessage reports whether the delta contains a user
@@ -15782,27 +15792,45 @@ func (e *Engine) tryIncrementalJSONL(
 	// Claude cross-sync split detection: when the first appended
 	// assistant message shares its provider message id with the
 	// last already-stored assistant message for this session, the
-	// previous sync stopped mid-stream. The incremental path would
-	// store the new chunk as a separate message instead of merging
-	// it into the existing one — fall back to a full parse so the
-	// chunk merge sees the whole run. forceReplace tells the
-	// downstream write path to use ReplaceSessionMessages: the
-	// merged tail reuses existing ordinals, so the default
-	// append-only writeMessages would silently drop it.
+	// previous sync stopped mid-stream. The appended window alone
+	// cannot reconstruct the merge, so re-parse from the run's first
+	// record and replace the run's stored message. If the run cannot
+	// be located, fall back to a whole-transcript parse, which
+	// force-replaces every row.
 	if agent == parser.AgentClaude {
 		first := newMsgs[0]
 		if first.Role == parser.RoleAssistant &&
-			first.ClaudeMessageID != "" {
-			if e.db.LastClaudeMessageID(ctx, inc.ID) ==
+			first.ClaudeMessageID != "" &&
+			e.db.LastClaudeMessageID(ctx, inc.ID) ==
 				first.ClaudeMessageID {
+			update, ok, err := e.tryClaudeSplitSuffixUpdate(
+				ctx, file, inc, first.ClaudeMessageID,
+				newOffset, incMtime, incHash, parseFn,
+			)
+			if err != nil {
+				lease.Release()
+				return processResult{err: err}, true
+			}
+			if ok {
 				log.Printf(
 					"incremental %s %s: appended chunk shares"+
-						" message.id with stored tail, full parse",
+						" message.id with stored tail, "+
+						"re-parsed the open run only",
 					agent, file.Path,
 				)
-				lease.Release()
-				return processResult{forceReplace: true}, false
+				return processResult{
+					sourceBytes:    sourceBytes,
+					incremental:    update,
+					retentionLease: lease,
+				}, true
 			}
+			log.Printf(
+				"incremental %s %s: appended chunk shares"+
+					" message.id with stored tail, full parse",
+				agent, file.Path,
+			)
+			lease.Release()
+			return processResult{forceReplace: true}, false
 		}
 	}
 
@@ -15875,6 +15903,72 @@ func (e *Engine) tryIncrementalJSONL(
 		},
 		retentionLease: lease,
 	}, true
+}
+
+// tryClaudeSplitSuffixUpdate re-parses the same-message.id assistant run
+// that straddles inc.FileSize instead of the whole transcript. It locates
+// the run's first record, re-parses from there at the ordinal the stored
+// partial run already occupies, and returns a suffix-replacement delta.
+// ok is false when the run cannot be located or re-parsed, leaving the
+// caller its whole-transcript fallback.
+func (e *Engine) tryClaudeSplitSuffixUpdate(
+	ctx context.Context,
+	file parser.DiscoveredFile,
+	inc *db.IncrementalInfo,
+	messageID string,
+	newOffset int64,
+	incMtime int64,
+	incHash string,
+	parseFn incrementalParseFunc,
+) (*incrementalUpdate, bool, error) {
+	runStart, ok := parser.ClaudeSplitRunStart(
+		file.Path, inc.FileSize, messageID,
+	)
+	if !ok {
+		return nil, false, nil
+	}
+	runOrdinal, ok := e.db.LastClaudeAssistantOrdinal(ctx, inc.ID)
+	if !ok {
+		return nil, false, nil
+	}
+	scanInc := *inc
+	scanInc.FileSize = runStart
+	scanInc.NextOrdinal = runOrdinal
+	suffix, links, toolCallUpdates, messageUsageUpdates, endedAt, consumed,
+		terminationStatus, _, err := parseFn(file.Path, &scanInc)
+	if err != nil {
+		return nil, false, nil
+	}
+	// The re-parse must reproduce the stored commit boundary exactly and
+	// place the merged run on its existing ordinal. Anything else means
+	// the scan picked a boundary the parser disagrees with, so keep the
+	// whole-transcript fallback.
+	if runStart+consumed != newOffset || len(suffix) == 0 ||
+		suffix[0].Ordinal != runOrdinal ||
+		suffix[0].ClaudeMessageID != messageID {
+		return nil, false, nil
+	}
+	return &incrementalUpdate{
+		agent:               file.Agent,
+		sessionID:           inc.ID,
+		project:             inc.Project,
+		sourceProject:       inc.SourceProject,
+		machine:             inc.Machine,
+		cwd:                 inc.Cwd,
+		msgs:                suffix,
+		links:               links,
+		toolCallUpdates:     toolCallUpdates,
+		messageUsageUpdates: messageUsageUpdates,
+		endedAt:             endedAt,
+		terminationStatus:   terminationStatus,
+		fileSize:            newOffset,
+		fileMtime:           incMtime,
+		fileHash:            incHash,
+		nextOrdinal:         nextParsedOrdinal(runOrdinal, suffix),
+		lastEntryUUID:       lastParsedSourceUUID(inc.LastEntryUUID, suffix),
+		suffixReplace:       true,
+		replaceFromOrdinal:  runOrdinal,
+	}, true, nil
 }
 
 // shouldSkipProviderSourceByDB reports whether a provider-dispatched source is
@@ -18610,6 +18704,11 @@ func shouldReplaceFullParseMessages(
 // stored hash as a content fingerprint against same-size in-place
 // rewrites. Other agents pass an empty hash, which COALESCE leaves
 // untouched.
+//
+// A suffix-replacement delta (suffixReplace) rebuilds the whole row set
+// from the stored prefix plus the re-parsed run and routes it through
+// the full replace writer, which recomputes the session aggregates from
+// the stored rows.
 func (e *Engine) writeIncremental(ctx context.Context,
 	inc *incrementalUpdate,
 ) error {
@@ -18681,6 +18780,24 @@ func (e *Engine) writeIncremental(ctx context.Context,
 	// clamped rows. The sum itself is not clamped to the per-message bound,
 	// since a long session legitimately exceeds it.
 	endedAt, _ = blankImplausibleTimestampPtr(endedAt)
+
+	if inc.suffixReplace {
+		// The re-parsed run is only the suffix. Rebuild the whole row set
+		// from the stored prefix and hand it to the full replace writer,
+		// which owns the delete/insert and the conversation projection.
+		prefix, err := e.db.MessagesBelowOrdinal(
+			ctx, inc.sessionID, inc.replaceFromOrdinal,
+		)
+		if err != nil {
+			return fmt.Errorf(
+				"loading stored prefix for %s: %w", inc.sessionID, err,
+			)
+		}
+		full := make([]db.Message, 0, len(prefix)+len(dbMsgs))
+		full = append(full, prefix...)
+		full = append(full, dbMsgs...)
+		dbMsgs = full
+	}
 
 	subagentLinks := make([]db.ToolCallSubagentLink, len(inc.links))
 	for i, link := range inc.links {
@@ -18791,6 +18908,7 @@ func (e *Engine) writeIncremental(ctx context.Context,
 			CheckpointBlobs:          inc.checkpointBlobs,
 			BlockedResultCategories:  e.blockedResultCategories,
 			SignalMaintainer:         maintainer,
+			ReplaceMessages:          inc.suffixReplace,
 		},
 		e.toolResultImages,
 	)

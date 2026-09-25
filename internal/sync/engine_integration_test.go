@@ -13675,9 +13675,10 @@ func TestIncrementalSync_ClaudeSameSizeSameMtimeInPlaceRewriteUsesFullParse(
 // the cross-sync split case: the first sync stores a partial assistant
 // snapshot (one of several streaming snapshots) and the next sync
 // appends a later snapshot of the SAME response (same message.id).
-// The engine must detect the shared id and fall back to a full parse
-// so the chunk merge collapses both snapshots into one assistant
-// message instead of two.
+// The engine must detect the shared id and collapse both snapshots into
+// one assistant message instead of two. The split path re-parses the run
+// from its first record; when the run cannot be located it still falls
+// back to a whole-transcript parse, which force-replaces every row.
 func TestIncrementalSync_ClaudeMidStreamSplitFallsBackToFullParse(t *testing.T) {
 	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
