@@ -573,9 +573,16 @@ func isContextCommand(command string) bool {
 		strings.Contains(command, " lint")
 }
 
-func hasRunawayToolLoop(calls []ToolCallRow) bool {
+// RunawayToolLoopSpan reports the calls that make a session a runaway
+// tool loop. It returns the same verdict as hasRunawayToolLoop. The
+// exact-signature path wins: its span is the whole run of identical
+// calls containing the trigger. Otherwise the span is the first
+// 12-call window that qualifies. n counts the calls in the span.
+func RunawayToolLoopSpan(
+	calls []ToolCallRow,
+) (first, last CallPos, n int, ok bool) {
 	if len(calls) < 12 {
-		return false
+		return CallPos{}, CallPos{}, 0, false
 	}
 	facts := make([]toolLoopFact, len(calls))
 	for i, c := range calls {
@@ -585,10 +592,20 @@ func hasRunawayToolLoop(calls []ToolCallRow) bool {
 			commandClass:   commandClass(c),
 		}
 	}
-	if hasRepeatedFailingExactToolRun(facts, 5, 3) {
-		return true
+	start, end, found := repeatedFailingExactToolRunSpan(facts, 5, 3)
+	if !found {
+		start, end, found = runawayToolWindowSpan(facts)
 	}
-	return hasRunawayToolWindow(facts)
+	if !found {
+		return CallPos{}, CallPos{}, 0, false
+	}
+	return toolCallPos(calls[start]), toolCallPos(calls[end]),
+		end - start + 1, true
+}
+
+func hasRunawayToolLoop(calls []ToolCallRow) bool {
+	_, _, _, ok := RunawayToolLoopSpan(calls)
+	return ok
 }
 
 type toolLoopFact struct {
@@ -597,11 +614,11 @@ type toolLoopFact struct {
 	commandClass   string
 }
 
-func hasRepeatedFailingExactToolRun(
+func repeatedFailingExactToolRunSpan(
 	facts []toolLoopFact,
 	threshold int,
 	failureThreshold int,
-) bool {
+) (start, end int, ok bool) {
 	run := 1
 	failures := 0
 	if len(facts) > 0 && facts[0].failure {
@@ -614,7 +631,12 @@ func hasRepeatedFailingExactToolRun(
 				failures++
 			}
 			if run >= threshold && failures >= failureThreshold {
-				return true
+				start, end = i-run+1, i
+				for end+1 < len(facts) &&
+					facts[end+1].exactSignature == facts[end].exactSignature {
+					end++
+				}
+				return start, end, true
 			}
 		} else {
 			run = 1
@@ -624,10 +646,10 @@ func hasRepeatedFailingExactToolRun(
 			}
 		}
 	}
-	return false
+	return 0, 0, false
 }
 
-func hasRunawayToolWindow(facts []toolLoopFact) bool {
+func runawayToolWindowSpan(facts []toolLoopFact) (start, end int, ok bool) {
 	const windowSize = 12
 	failures := 0
 	classCounts := make(map[string]int, windowSize)
@@ -638,7 +660,7 @@ func hasRunawayToolWindow(facts []toolLoopFact) bool {
 		classCounts[fact.commandClass]++
 	}
 	if isRunawayToolWindow(failures, classCounts) {
-		return true
+		return 0, windowSize - 1, true
 	}
 	for start := 1; start+windowSize <= len(facts); start++ {
 		removed := facts[start-1]
@@ -656,10 +678,10 @@ func hasRunawayToolWindow(facts []toolLoopFact) bool {
 		}
 		classCounts[added.commandClass]++
 		if isRunawayToolWindow(failures, classCounts) {
-			return true
+			return start, start + windowSize - 1, true
 		}
 	}
-	return false
+	return 0, 0, false
 }
 
 func isRunawayToolWindow(failures int, classCounts map[string]int) bool {
