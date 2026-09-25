@@ -152,6 +152,10 @@ Key assumptions reviewers MUST account for:
     correct behavior, not a defect. Flag only changes that stop a
     readable file from being served.
 
+20. SCHEMA COMPATIBILITY: Schema migrations support main and releases.
+    Databases from earlier PR revisions may need rebuilding unless we
+    explicitly promise to preserve them.
+
 For local/legacy modes, do not impose requirements that apply only to
 public-facing multi-tenant services. For opt-in hosted raw processing,
 review its actual tenant/role/catalog boundary, immutable source provenance,
