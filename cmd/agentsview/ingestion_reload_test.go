@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -66,7 +67,6 @@ func TestDaemonIngestionReloadAppliesProviderSettings(t *testing.T) {
 	}
 	ingestion := newDaemonIngestion(
 		t.Context(), startup, engine, database, nil, load,
-		newForegroundSyncRunner(t.Context(), startup, engine, database, nil),
 	)
 	t.Cleanup(ingestion.Stop)
 	ingestion.OpenWatcherDispatch()
@@ -83,11 +83,15 @@ func TestDaemonIngestionReloadAppliesProviderSettings(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, reloaded.DisabledAgents)
 
-	assert.Eventually(t, func() bool {
-		return sessionImported(t, database, "gemini:primary") &&
-			sessionImported(t, database, "gemini:alternate")
+	require.Eventually(t, func() bool {
+		return slices.Equal(
+			engine.ReconciliationRootsForAgent(string(parser.AgentGemini)),
+			[]string{primary, alternate},
+		)
 	}, 10*time.Second, 20*time.Millisecond,
-		"existing sessions in the enabled provider's roots are synced")
+		"the engine switches to the saved provider set")
+	assert.False(t, sessionImported(t, database, "gemini:primary"),
+		"a reload does not sync by itself")
 
 	// A session written after the change is picked up by the replacement
 	// watcher, which covers the new root.
@@ -96,4 +100,9 @@ func TestDaemonIngestionReloadAppliesProviderSettings(t *testing.T) {
 		return sessionImported(t, database, "gemini:later")
 	}, 20*time.Second, 50*time.Millisecond,
 		"the watcher follows the new provider settings")
+
+	// Sessions that were already on disk arrive with the next sync.
+	engine.SyncAll(t.Context(), nil)
+	assert.True(t, sessionImported(t, database, "gemini:primary"))
+	assert.True(t, sessionImported(t, database, "gemini:alternate"))
 }

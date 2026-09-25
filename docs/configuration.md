@@ -1030,10 +1030,10 @@ remote imports, and it does not restrict HTTP, SSH, PostgreSQL, DuckDB, or
 archive exports. `RemoteSyncExcluded` is the separate provider capability that
 keeps unsafe source trees out of remote exports.
 
-A change saved on the Settings page applies to the running daemon right away.
-A newly enabled provider's existing sessions are synced immediately, and file
-watching and polling switch to the new provider set. The daemon reads edits made
-directly to `config.toml` at its next start. Restart any separate
+A change saved on the Settings page applies to the running daemon right away:
+file watching and polling switch to the new provider set. Sessions already on
+disk for a newly enabled provider arrive with the next sync. The daemon reads
+edits made directly to `config.toml` at its next start. Restart any separate
 `pg push --watch`, `clickhouse push --watch`, or `duckdb push --watch` process
 after changing the setting. Previously archived sessions from a disabled
 provider remain available and exportable, including during archive rebuilds.
@@ -1115,7 +1115,7 @@ support S3. Sessions from each home appear under their native provider. Pi's
 directory or a direct session directory.
 
 Homes added or removed on the Settings page apply to the running daemon right
-away, and sessions already in an added home are synced immediately. The daemon
+away. Sessions already in an added home arrive with the next sync. The daemon
 reads `homes` edited directly in `config.toml` at its next start.
 
 Other providers support multiple explicit `dirs`; they do not yet accept
