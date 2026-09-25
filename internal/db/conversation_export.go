@@ -262,13 +262,22 @@ func (db *DB) GetConversationMessage(ctx context.Context, opts ConversationMessa
 		return ConversationMessage{}, err
 	}
 	result.Project = changes[0].Project
-	var body sql.NullString
-	if err := tx.QueryRowContext(ctx, `SELECT substr(CAST(body AS BLOB), ?, ?) FROM conversation_messages WHERE session_id = ? AND message_id = ?`, opts.Offset+1, opts.MaxBytes, opts.SessionID, opts.MessageID).Scan(&body); err != nil {
-		return ConversationMessage{}, err
-	}
 	result.Offset, result.NextOffset = opts.Offset, opts.Offset
-	if body.Valid {
-		chunk := body.String
+	if result.Digest != "" {
+		// The projection holds the digest; the archived message holds the text.
+		var content string
+		err := tx.QueryRowContext(ctx, `SELECT m.content FROM conversation_messages c JOIN messages m ON m.session_id = c.session_id AND m.ordinal = c.ordinal
+		 WHERE c.session_id = ? AND c.message_id = ?`, opts.SessionID, opts.MessageID).Scan(&content)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ConversationMessage{}, ErrConversationRevisionChanged
+		} else if err != nil {
+			return ConversationMessage{}, err
+		}
+		text := SanitizeUTF8(content)
+		if sum := sha256.Sum256([]byte(text)); hex.EncodeToString(sum[:]) != result.Digest {
+			return ConversationMessage{}, ErrConversationRevisionChanged
+		}
+		chunk := text[opts.Offset:min(int64(len(text)), opts.Offset+int64(opts.MaxBytes))]
 		if len(chunk) > 0 && !utf8.RuneStart(chunk[0]) {
 			return ConversationMessage{}, errors.New("offset is not a UTF-8 boundary")
 		}
@@ -331,7 +340,7 @@ type conversationRow struct {
 }
 
 func conversationRowsTx(tx transactionQueries, sessionID string) ([]conversationRow, error) {
-	rows, err := tx.Query(`SELECT `+conversationChangeColumns+`, source_id, body FROM conversation_messages WHERE session_id = ? AND removed = 0 ORDER BY ordinal`, sessionID)
+	rows, err := tx.Query(`SELECT `+conversationChangeColumns+`, source_id FROM conversation_messages WHERE session_id = ? AND removed = 0 ORDER BY ordinal`, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -339,7 +348,7 @@ func conversationRowsTx(tx transactionQueries, sessionID string) ([]conversation
 	var result []conversationRow
 	for rows.Next() {
 		var row conversationRow
-		if err := rows.Scan(&row.SessionID, &row.MessageID, &row.Revision, &row.Ordinal, &row.Role, &row.Timestamp, &row.Deleted, &row.Gap, &row.Digest, &row.TextBytes, &row.sourceID, &row.body); err != nil {
+		if err := rows.Scan(&row.SessionID, &row.MessageID, &row.Revision, &row.Ordinal, &row.Role, &row.Timestamp, &row.Deleted, &row.Gap, &row.Digest, &row.TextBytes, &row.sourceID); err != nil {
 			return nil, err
 		}
 		result = append(result, row)
@@ -486,7 +495,7 @@ func reconcileConversationMessagesTx(tx transactionQueries, sessionID string, ms
 
 func conversationRowsEqual(a, b conversationRow) bool {
 	sameTime := a.Timestamp == nil && b.Timestamp == nil || a.Timestamp != nil && b.Timestamp != nil && *a.Timestamp == *b.Timestamp
-	return a.Ordinal == b.Ordinal && a.Role == b.Role && sameTime && a.sourceID == b.sourceID && a.Digest == b.Digest && (a.body == nil) == (b.body == nil)
+	return a.Ordinal == b.Ordinal && a.Role == b.Role && sameTime && a.sourceID == b.sourceID && a.Digest == b.Digest
 }
 
 const conversationRowsPerStmt = 35 // 12 params per row
@@ -521,12 +530,13 @@ func putConversationRowsTx(tx transactionQueries, rows []conversationRow, fresh 
 			if fresh {
 				rev = revision + int64(start+i) + 1
 			}
-			args = append(args, row.SessionID, row.MessageID, row.Ordinal, row.Role, row.Timestamp, row.sourceID, row.body, row.Digest, row.TextBytes, row.Gap, row.SessionID, rev)
+			// Text stays in messages; a NULL body also retires any copy an older version stored.
+			args = append(args, row.SessionID, row.MessageID, row.Ordinal, row.Role, row.Timestamp, row.sourceID, nil, row.Digest, row.TextBytes, row.Gap, row.SessionID, rev)
 		}
 		sb.WriteString(` ON CONFLICT(session_id,message_id) DO UPDATE SET ordinal=excluded.ordinal,role=excluded.role,timestamp=excluded.timestamp,source_id=excluded.source_id,
-		body=excluded.body,digest=excluded.digest,text_bytes=excluded.text_bytes,gap=excluded.gap,deleted=excluded.deleted,removed=0
+		body=NULL,digest=excluded.digest,text_bytes=excluded.text_bytes,gap=excluded.gap,deleted=excluded.deleted,removed=0
 		WHERE ordinal IS NOT excluded.ordinal OR role IS NOT excluded.role OR timestamp IS NOT excluded.timestamp OR source_id IS NOT excluded.source_id
-		OR body IS NOT excluded.body OR digest IS NOT excluded.digest OR text_bytes IS NOT excluded.text_bytes OR gap IS NOT excluded.gap OR deleted IS NOT excluded.deleted OR removed != 0`)
+		OR digest IS NOT excluded.digest OR text_bytes IS NOT excluded.text_bytes OR gap IS NOT excluded.gap OR deleted IS NOT excluded.deleted OR removed != 0`)
 		if _, err := tx.Exec(sb.String(), args...); err != nil {
 			return err
 		}
