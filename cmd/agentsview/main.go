@@ -436,11 +436,17 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			func() {
 				idleTracker.Do(func() {
 					runScheduledSyncPass(
-						ctx, engine, scheduledReconcileTargets(cfg),
+						ctx, engine, scheduledReconcileTargets(ingestion.Config()),
 					)
 				})
 			},
 		)
+	} else if opts.ReloadConfig != nil {
+		// Without a background engine the server reconfigures its own
+		// on-demand engine from the reloaded settings.
+		reloadIngestion = func(context.Context) (config.Config, error) {
+			return opts.ReloadConfig()
+		}
 	}
 
 	identityBackfillEngine := engine

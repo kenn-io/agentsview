@@ -81,8 +81,10 @@ type Server struct {
 	activeDisabledAgents []parser.AgentType
 	// ingestionReloader applies saved provider settings to the running
 	// daemon; settingsApplyMu keeps saves and their reloads in order.
-	ingestionReloader     IngestionReloader
-	settingsApplyMu       gosync.Mutex
+	ingestionReloader IngestionReloader
+	settingsApplyMu   gosync.Mutex
+	// onDemandReconfigureMu serializes source updates to onDemandEngine.
+	onDemandReconfigureMu gosync.Mutex
 	db                    db.Store
 	activityReports       *activityReportCache
 	assetCache            *assetCache
