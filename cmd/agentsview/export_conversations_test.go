@@ -39,17 +39,25 @@ func TestExportConversationSchemaIsRequiredOnlyForConversations(t *testing.T) {
 			require.Len(t, document.Sessions, 2)
 			assert.Equal(t, "alpha-new", document.Sessions[0].ID)
 			assert.Equal(t, "alpha-old", document.Sessions[1].ID)
+			if name == "incomplete initialization" {
+				// A cold archive only lacks its projection; the message
+				// command cannot build it, and says which command can.
+				stdout, _, err := executeExportSessionsCommand(newRootCommand(), "export", "conversations", "message", "alpha-new", "message-a", "--revision", "1", "--database-id", "export-sessions-test-db")
+				require.ErrorIs(t, err, db.ErrConversationInitializationRequired)
+				assert.Contains(t, err.Error(), "export conversations changes")
+				assert.Empty(t, stdout)
+				after, err := os.ReadFile(path)
+				require.NoError(t, err)
+				assert.Equal(t, before, after, "read-only export must not run archive migrations")
+				return
+			}
 			for _, args := range [][]string{
 				{"export", "conversations", "changes"},
 				{"export", "conversations", "message", "alpha-new", "message-a", "--revision", "1", "--database-id", "export-sessions-test-db"},
 			} {
 				stdout, _, err := executeExportSessionsCommand(newRootCommand(), args...)
 				require.Error(t, err)
-				if name == "incomplete initialization" {
-					require.ErrorIs(t, err, db.ErrConversationInitializationRequired)
-				} else {
-					assert.True(t, db.IsSchemaUpgradeRequired(err))
-				}
+				assert.True(t, db.IsSchemaUpgradeRequired(err))
 				assert.Contains(t, err.Error(), "agentsview daemon restart")
 				assert.Empty(t, stdout)
 			}
@@ -58,6 +66,42 @@ func TestExportConversationSchemaIsRequiredOnlyForConversations(t *testing.T) {
 			assert.Equal(t, before, after, "read-only export must not run archive migrations")
 		})
 	}
+}
+
+func TestExportConversationsFirstExportBuildsProjection(t *testing.T) {
+	path := filepath.Join(testDataDir(t), "sessions.db")
+	database := dbtest.OpenTestDBAt(t, path)
+	insertExportSessionsTestSession(t, database, db.Session{
+		ID: "chat", Project: "sample", Machine: "local", Agent: "gemini",
+	})
+	require.NoError(t, database.InsertMessages(t.Context(), []db.Message{{
+		SessionID: "chat", Role: "assistant", Content: "Saved reply", SourceUUID: "reply-one",
+	}}))
+	require.NoError(t, database.Close())
+
+	stdout, stderr, err := executeExportSessionsCommand(newRootCommand(), "export", "conversations", "changes")
+	require.NoError(t, err)
+	assert.Empty(t, stderr)
+	var page struct {
+		DatabaseID string `json:"database_id"`
+		Checkpoint string `json:"checkpoint"`
+		Changes    []struct {
+			SessionID string `json:"session_id"`
+			MessageID string `json:"message_id"`
+			Revision  string `json:"revision"`
+		} `json:"changes"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &page))
+	require.Len(t, page.Changes, 1, "the first export builds the projection and serves it")
+	change := page.Changes[0]
+	stdout, _, err = executeExportSessionsCommand(newRootCommand(),
+		"export", "conversations", "message", change.SessionID, change.MessageID,
+		"--revision", change.Revision, "--database-id", page.DatabaseID)
+	require.NoError(t, err)
+	assert.Contains(t, stdout, "Saved reply")
+	stdout, _, err = executeExportSessionsCommand(newRootCommand(), "export", "conversations", "changes", "--checkpoint", page.Checkpoint)
+	require.NoError(t, err)
+	assert.Contains(t, stdout, `"changes":[]`)
 }
 
 func TestExportConversationsEmptyCheckpoint(t *testing.T) {

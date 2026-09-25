@@ -5,6 +5,7 @@ export * as AssetsService from "./assets/assets.ts";
 export * as ConfigService from "./config/config.ts";
 export * as DataService from "./data/data.ts";
 export * as EmbeddingsService from "./embeddings/embeddings.ts";
+export * as ExportService from "./export/export.ts";
 export * as HealthService from "./health/health.ts";
 export * as ImportService from "./import/import.ts";
 export * as InsightsService from "./insights/insights.ts";

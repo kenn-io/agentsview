@@ -205,7 +205,7 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 		return nil, fmt.Errorf("reconciling conversation identities: %w", err)
 	}
 	if count > 0 {
-		if err := copySessionDataForIDs(ctx, tx, "_orphaned_ids"); err != nil {
+		if err := copySessionDataForIDs(ctx, tx, "_orphaned_ids", d.usageOnlyStorage()); err != nil {
 			return nil, fmt.Errorf("copying orphaned data: %w", err)
 		}
 		sourceVersion := copiedSourceDataVersion(ctx, tx)
@@ -228,7 +228,7 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 			return nil, err
 		}
 	}
-	if err := retainConversationTombstonesTx(ctx, tx); err != nil {
+	if err := retainConversationTombstonesTx(ctx, tx, d.usageOnlyStorage()); err != nil {
 		return nil, fmt.Errorf("retaining conversation tombstones: %w", err)
 	}
 
@@ -318,7 +318,7 @@ func (d *DB) CopyTrashedDataFrom(sourcePath string) ([]string, error) {
 		return nil, nil
 	}
 
-	if err := copySessionDataForIDs(ctx, tx, "_trashed_ids"); err != nil {
+	if err := copySessionDataForIDs(ctx, tx, "_trashed_ids", d.usageOnlyStorage()); err != nil {
 		return nil, fmt.Errorf("copying trashed data: %w", err)
 	}
 	sourceVersion := copiedSourceDataVersion(ctx, tx)
@@ -2007,6 +2007,7 @@ func copySessionDataForIDs(
 	ctx context.Context,
 	tx *sql.Tx,
 	tempIDsTable string,
+	usageOnly bool,
 ) error {
 	// Copy session rows. Build column list dynamically so
 	// older source DBs missing display_name/deleted_at don't
@@ -2053,7 +2054,7 @@ func copySessionDataForIDs(
 	); err != nil {
 		return fmt.Errorf("copying messages: %w", err)
 	}
-	if err := copyConversationRowsTx(ctx, tx, "session_id IN (SELECT id FROM "+tempIDsTable+")"); err != nil {
+	if err := copyConversationRowsTx(ctx, tx, "session_id IN (SELECT id FROM "+tempIDsTable+")", usageOnly); err != nil {
 		return fmt.Errorf("copying conversation messages: %w", err)
 	}
 
