@@ -1898,7 +1898,7 @@
   "settings_session_providers_enable_aria": "启用 {provider} 会话同步",
   "settings_session_providers_enabled": "已启用",
   "settings_session_providers_disabled": "已停用",
-  "settings_session_providers_restart_notice": "重启 AgentsView 守护进程以及任何单独的推送监视进程，以应用这些更改。",
+  "settings_session_providers_applied_notice": "AgentsView 已应用这些更改。请重启任何单独的推送监视进程，以便在其中也应用这些更改。",
   "settings_session_providers_save_failed": "无法更新会话提供商。之前的选择仍然有效。",
   "settings_session_providers_homes_title": "备用主目录",
   "settings_session_providers_homes_hint": "添加代理主目录，例如自定义的 {envVar}。AgentsView 会自动推导其会话目录。",

@@ -96,14 +96,15 @@ func TestClassifyProviderChangedPathSchedulesStoredSourceHintsByCapability(t *te
 				StoredSourceHints:   tc.caps,
 			}}
 			factory := hintRecordingFactory{agent: "hint-agent", caps: caps, seen: &seen}
-			engine := &Engine{
+			engine := withTestSources(&Engine{
 				db: database, machine: "local",
-				agentDirs:         map[parser.AgentType][]string{"hint-agent": {root}},
-				providerFactories: map[parser.AgentType]parser.ProviderFactory{"hint-agent": factory},
 				providerMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
 					"hint-agent": parser.ProviderMigrationProviderAuthoritative,
 				},
-			}
+			}, &engineSources{
+				agentDirs:         map[parser.AgentType][]string{"hint-agent": {root}},
+				providerFactories: map[parser.AgentType]parser.ProviderFactory{"hint-agent": factory},
+			})
 
 			files := requireClassifyProviderChangedPath(t, engine, changedPath)
 
@@ -134,14 +135,15 @@ func TestClassifyStoredHintProviderChangedPathAllocationsStayBoundedByContainer(
 				Project: "archive", Machine: "local", FilePath: strPtr(hint),
 			}))
 		}
-		engine := &Engine{
+		engine := withTestSources(&Engine{
 			db: database, machine: "local",
-			agentDirs:         map[parser.AgentType][]string{parser.AgentWindsurf: {root}},
-			providerFactories: providerFactoryMap(parser.ProviderFactories()),
 			providerMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
 				parser.AgentWindsurf: parser.ProviderMigrationProviderAuthoritative,
 			},
-		}
+		}, &engineSources{
+			agentDirs:         map[parser.AgentType][]string{parser.AgentWindsurf: {root}},
+			providerFactories: providerFactoryMap(parser.ProviderFactories()),
+		})
 		warm := requireClassifyProviderChangedPath(t, engine, path)
 		require.Len(t, warm, 1)
 		assert.Equal(t, path+"#live", warm[0].Path)
@@ -292,14 +294,15 @@ func TestClassifyProviderChangedPathPreservesHintDependentTombstones(t *testing.
 				ID: string(tc.agent) + ":deleted", Agent: string(tc.agent),
 				Project: "fixture", Machine: "local", FilePath: strPtr(deletedPath),
 			}))
-			engine := &Engine{
+			engine := withTestSources(&Engine{
 				db: database, machine: "local", skipCache: make(map[string]int64),
-				agentDirs:         map[parser.AgentType][]string{tc.agent: {root}},
-				providerFactories: providerFactoryMap(parser.ProviderFactories()),
 				providerMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
 					tc.agent: parser.ProviderMigrationProviderAuthoritative,
 				},
-			}
+			}, &engineSources{
+				agentDirs:         map[parser.AgentType][]string{tc.agent: {root}},
+				providerFactories: providerFactoryMap(parser.ProviderFactories()),
+			})
 
 			files := requireClassifyProviderChangedPath(t, engine, changedPath)
 			var tombstone parser.DiscoveredFile

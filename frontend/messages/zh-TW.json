@@ -1898,7 +1898,7 @@
   "settings_session_providers_enable_aria": "啟用 {provider} 工作階段同步",
   "settings_session_providers_enabled": "已啟用",
   "settings_session_providers_disabled": "已停用",
-  "settings_session_providers_restart_notice": "請重新啟動 AgentsView 常駐程式及任何獨立的推送監看程序，以套用這些變更。",
+  "settings_session_providers_applied_notice": "AgentsView 已套用這些變更。請重新啟動任何獨立的推送監看程序，以便在其中也套用這些變更。",
   "settings_session_providers_save_failed": "無法更新工作階段提供者。先前的選擇仍然有效。",
   "settings_session_providers_homes_title": "備用主目錄",
   "settings_session_providers_homes_hint": "新增代理主目錄，例如自訂的 {envVar}。AgentsView 會自動推導其工作階段目錄。",

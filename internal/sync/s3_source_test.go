@@ -1452,12 +1452,13 @@ func TestIsS3AgentRootSegmentUsesCapability(t *testing.T) {
 }
 
 func TestHydrateS3DiscoveredFileDerivesCursorProject(t *testing.T) {
-	e := &Engine{
+	e := withTestSources(&Engine{
 		db: openTestDB(t),
+	}, &engineSources{
 		agentDirs: map[parser.AgentType][]string{
 			parser.AgentCursor: {"s3://bucket/laptop/raw/cursor"},
 		},
-	}
+	})
 	file := parser.DiscoveredFile{
 		Agent:       parser.AgentCursor,
 		Path:        "s3://bucket/laptop/raw/cursor/demo-proj/abc.jsonl",
@@ -1505,13 +1506,14 @@ func TestSyncSingleSessionS3PreservesStoredMachine(t *testing.T) {
 	}
 	statClaudeS3Session = statS3Object
 
-	e := &Engine{
+	e := withTestSources(&Engine{
 		db:      database,
 		machine: "central",
+	}, &engineSources{
 		agentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {"s3://bucket/laptop/raw/claude"},
 		},
-	}
+	})
 	res := e.processFile(t.Context(), parser.DiscoveredFile{
 		Agent:       parser.AgentClaude,
 		Path:        path,
@@ -1587,13 +1589,14 @@ func TestSyncSingleSessionS3WithoutMachineNamespaceUpdatesRawID(
 	}
 	statClaudeS3Session = statS3Object
 
-	e := &Engine{
+	e := withTestSources(&Engine{
 		db:      database,
 		machine: "central",
+	}, &engineSources{
 		agentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {"s3://bucket/claude"},
 		},
-	}
+	})
 	res := e.processFile(t.Context(), parser.DiscoveredFile{
 		Agent:       parser.AgentClaude,
 		Path:        path,
@@ -1663,13 +1666,14 @@ func TestSourceMtimeS3RawSessionUsesObjectMetadata(t *testing.T) {
 	}
 	statClaudeS3Session = statS3Object
 
-	e := &Engine{
+	e := withTestSources(&Engine{
 		db:      database,
 		machine: "central",
+	}, &engineSources{
 		agentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {"s3://bucket/claude"},
 		},
-	}
+	})
 
 	assert.Equal(t, mtime.UnixNano(), e.SourceMtime(t.Context(), "manual-id"))
 }
@@ -1712,13 +1716,14 @@ func TestSourceMtimeS3HostPrefixedClaudeUsesSidecarMetadata(t *testing.T) {
 		}, nil
 	}
 
-	e := &Engine{
+	e := withTestSources(&Engine{
 		db:      database,
 		machine: "central",
+	}, &engineSources{
 		agentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {"s3://bucket/laptop/raw/claude"},
 		},
-	}
+	})
 
 	assert.Equal(
 		t,
@@ -1765,13 +1770,14 @@ func TestSourceMtimeS3IcodemateUsesSidecarMetadata(t *testing.T) {
 		}, nil
 	}
 
-	e := &Engine{
+	e := withTestSources(&Engine{
 		db:      database,
 		machine: "central",
+	}, &engineSources{
 		agentDirs: map[parser.AgentType][]string{
 			parser.AgentIcodemate: {"s3://bucket/laptop/raw/icodemate"},
 		},
-	}
+	})
 
 	assert.Equal(t, sidecarMtime.UnixNano(),
 		e.SourceMtime(t.Context(), "laptop~icodemate:manual-id"))
@@ -1893,12 +1899,13 @@ func TestFilterFilesByMtimeAppliesCutoffToProviderDiscoveredClaudeS3(t *testing.
 
 	claudeFactory, ok := parser.ProviderFactoryByType(parser.AgentClaude)
 	require.True(t, ok, "claude provider factory must be registered")
-	e := &Engine{
+	e := withTestSources(&Engine{
 		db: database,
+	}, &engineSources{
 		providerFactories: map[parser.AgentType]parser.ProviderFactory{
 			parser.AgentClaude: claudeFactory,
 		},
-	}
+	})
 
 	source := parser.SourceRef{
 		Provider:       parser.AgentClaude,

@@ -1982,7 +1982,7 @@
   "settings_session_providers_enable_aria": "{provider} sessiyalarının sinxronlaşdırılmasını aktivləşdir",
   "settings_session_providers_enabled": "Aktivdir",
   "settings_session_providers_disabled": "Deaktiv",
-  "settings_session_providers_restart_notice": "Bu dəyişiklikləri tətbiq etmək üçün AgentsView fon xidmətini və ayrıca işləyən hər bir push-watch prosesini yenidən başladın.",
+  "settings_session_providers_applied_notice": "AgentsView bu dəyişiklikləri tətbiq etdi. Onları ayrıca işləyən push-watch proseslərinə də tətbiq etmək üçün həmin prosesləri yenidən başladın.",
   "settings_session_providers_save_failed": "Sessiya provayderlərini yeniləmək mümkün olmadı. Əvvəlki seçiminiz hələ də aktivdir.",
   "settings_session_providers_homes_title": "Alternativ ev qovluqları",
   "settings_session_providers_homes_hint": "Fərdi {envVar} kimi agent ev qovluğu əlavə edin. AgentsView onun sessiya qovluqlarını avtomatik müəyyən edir.",

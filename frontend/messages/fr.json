@@ -1979,7 +1979,7 @@
   "settings_session_providers_enable_aria": "Activer la synchronisation des sessions {provider}",
   "settings_session_providers_enabled": "Activé",
   "settings_session_providers_disabled": "Désactivé",
-  "settings_session_providers_restart_notice": "Redémarrez le démon AgentsView et tout processus de surveillance d’envoi distinct pour appliquer ces modifications.",
+  "settings_session_providers_applied_notice": "AgentsView a appliqué ces modifications. Redémarrez tout processus de surveillance d’envoi distinct pour les y appliquer aussi.",
   "settings_session_providers_save_failed": "Impossible de mettre à jour les fournisseurs de sessions. La sélection précédente reste active.",
   "settings_session_providers_homes_title": "Répertoires personnels alternatifs",
   "settings_session_providers_homes_hint": "Ajoutez un répertoire personnel d'agent, par exemple un {envVar} personnalisé. AgentsView en déduit automatiquement les répertoires de sessions.",

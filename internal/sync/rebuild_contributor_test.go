@@ -304,7 +304,7 @@ func TestResyncAbortsWhenLabeledLocalSourceDisappearsAlongsideHealthyContributor
 	require.NoError(t, err)
 	require.NotNil(t, local)
 	require.Equal(t, "archive-host", local.Machine)
-	engine.sourceMachines[parser.AgentClaude][localRoot] = "renamed-archive-host"
+	engine.sources().sourceMachines[parser.AgentClaude][localRoot] = "renamed-archive-host"
 	require.NoError(t, os.Remove(localPath))
 
 	stats, err := engine.ResyncAllWithOptions(t.Context(), nil, options)

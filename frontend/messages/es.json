@@ -1982,7 +1982,7 @@
   "settings_session_providers_enable_aria": "Activar la sincronización de sesiones de {provider}",
   "settings_session_providers_enabled": "Activado",
   "settings_session_providers_disabled": "Desactivado",
-  "settings_session_providers_restart_notice": "Reinicia el daemon de AgentsView y cualquier proceso push-watch independiente para aplicar estos cambios.",
+  "settings_session_providers_applied_notice": "AgentsView aplicó estos cambios. Reinicia cualquier proceso push-watch independiente para aplicarlos también allí.",
   "settings_session_providers_save_failed": "No se pudieron actualizar los proveedores de sesiones. Tu selección anterior sigue activa.",
   "settings_session_providers_homes_title": "Directorios de inicio alternativos",
   "settings_session_providers_homes_hint": "Añade un directorio de inicio de agente, por ejemplo un {envVar} personalizado. AgentsView deriva automáticamente sus directorios de sesiones.",

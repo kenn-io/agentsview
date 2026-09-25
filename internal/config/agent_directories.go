@@ -229,3 +229,30 @@ func (c *Config) migrateAgentTables() error {
 		return nil
 	})
 }
+
+// AdoptSessionSources replaces c's provider selection and resolved session
+// roots with those of src, leaving every other setting untouched. A running
+// daemon uses it to apply provider settings reloaded from disk.
+func (c *Config) AdoptSessionSources(src Config) {
+	c.DisabledAgents = slices.Clone(src.DisabledAgents)
+	c.AgentDirs = cloneAgentMap(src.AgentDirs, slices.Clone)
+	c.agentHomes = cloneAgentMap(src.agentHomes, slices.Clone)
+	c.agentDirSource = maps.Clone(src.agentDirSource)
+	c.SessionSources = slices.Clone(src.SessionSources)
+	c.SourceMachines = cloneAgentMap(src.SourceMachines, maps.Clone)
+	c.ProviderMetadata = cloneAgentMap(src.ProviderMetadata,
+		func(dirs map[string][]string) map[string][]string {
+			return cloneAgentMap(dirs, slices.Clone)
+		})
+}
+
+func cloneAgentMap[K comparable, V any](m map[K]V, clone func(V) V) map[K]V {
+	if m == nil {
+		return nil
+	}
+	out := make(map[K]V, len(m))
+	for k, v := range m {
+		out[k] = clone(v)
+	}
+	return out
+}

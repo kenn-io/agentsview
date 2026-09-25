@@ -20,16 +20,17 @@ func TestClassifyOnePath_Cortex(t *testing.T) {
 	require.NoError(t, os.WriteFile(jsonPath, []byte("{}"), 0o644))
 	require.NoError(t, os.WriteFile(jsonlPath, []byte("{}"), 0o644))
 
-	eng := &Engine{
+	eng := withTestSources(&Engine{
 		db: openTestDB(t),
+		providerMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			parser.AgentCortex: parser.ProviderMigrationProviderAuthoritative,
+		},
+	}, &engineSources{
 		agentDirs: map[parser.AgentType][]string{
 			parser.AgentCortex: {dir},
 		},
 		providerFactories: providerFactoryMap(parser.ProviderFactories()),
-		providerMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
-			parser.AgentCortex: parser.ProviderMigrationProviderAuthoritative,
-		},
-	}
+	})
 
 	tests := []struct {
 		name    string
