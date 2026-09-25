@@ -66,6 +66,7 @@ func TestDaemonIngestionReloadAppliesProviderSettings(t *testing.T) {
 	}
 	ingestion := newDaemonIngestion(
 		t.Context(), startup, engine, database, nil, load,
+		newForegroundSyncRunner(t.Context(), startup, engine, database, nil),
 	)
 	t.Cleanup(ingestion.Stop)
 	ingestion.OpenWatcherDispatch()
@@ -95,61 +96,4 @@ func TestDaemonIngestionReloadAppliesProviderSettings(t *testing.T) {
 		return sessionImported(t, database, "gemini:later")
 	}, 20*time.Second, 50*time.Millisecond,
 		"the watcher follows the new provider settings")
-}
-
-func TestAddedReconcileScopes(t *testing.T) {
-	base := t.TempDir()
-	primary := filepath.Join(base, "gemini")
-	added := filepath.Join(base, "gemini-work")
-	missing := filepath.Join(base, "gemini-missing")
-	for _, root := range []string{primary, added} {
-		require.NoError(t, os.MkdirAll(filepath.Join(root, "tmp"), 0o755))
-	}
-	dirs := func(roots ...string) map[parser.AgentType][]string {
-		return map[parser.AgentType][]string{parser.AgentGemini: roots}
-	}
-
-	tests := []struct {
-		name       string
-		prev, next config.Config
-		want       []agentsync.ProviderRootsGroup
-	}{
-		{
-			name: "enabled provider syncs every present root",
-			prev: config.Config{
-				AgentDirs:      dirs(primary, added),
-				DisabledAgents: []parser.AgentType{parser.AgentGemini},
-			},
-			next: config.Config{AgentDirs: dirs(primary, added)},
-			want: []agentsync.ProviderRootsGroup{{
-				Agent: parser.AgentGemini, Roots: []string{primary, added},
-			}},
-		},
-		{
-			name: "added root syncs only that root",
-			prev: config.Config{AgentDirs: dirs(primary)},
-			next: config.Config{AgentDirs: dirs(primary, added)},
-			want: []agentsync.ProviderRootsGroup{{
-				Agent: parser.AgentGemini, Roots: []string{added},
-			}},
-		},
-		{
-			name: "missing added root waits for the watcher",
-			prev: config.Config{AgentDirs: dirs(primary)},
-			next: config.Config{AgentDirs: dirs(primary, missing)},
-		},
-		{
-			name: "disabling a provider syncs nothing",
-			prev: config.Config{AgentDirs: dirs(primary)},
-			next: config.Config{
-				AgentDirs:      dirs(primary),
-				DisabledAgents: []parser.AgentType{parser.AgentGemini},
-			},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, addedReconcileScopes(tt.prev, tt.next))
-		})
-	}
 }

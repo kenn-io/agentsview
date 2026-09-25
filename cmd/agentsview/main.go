@@ -347,6 +347,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		defer engine.Close()
 		ingestion := newDaemonIngestion(
 			ctx, cfg, engine, database, idleTracker, opts.ReloadConfig,
+			newForegroundSyncRunner(ctx, cfg, engine, database, writeLock),
 		)
 		defer ingestion.Stop()
 		if opts.ReloadConfig != nil {
@@ -2976,25 +2977,6 @@ type scheduledReconcileTarget struct {
 // present scope would read the missing one as an authoritative empty discovery
 // and tombstone every session beneath it.
 func scheduledReconcileTargets(cfg config.Config) []scheduledReconcileTarget {
-	byAgent := presentReconcileScopes(cfg)
-	var targets []scheduledReconcileTarget
-	for _, def := range parser.Registry {
-		if !def.PeriodicReconcile {
-			continue
-		}
-		dirs := byAgent[def.Type]
-		if len(dirs) == 0 {
-			continue
-		}
-		targets = append(targets, scheduledReconcileTarget{Agent: def.Type, Roots: dirs})
-	}
-	return targets
-}
-
-// presentReconcileScopes returns, per provider, the configured roots that can
-// be reconciled authoritatively right now: their watch roots exist and they do
-// not overlap a missing same-provider scope.
-func presentReconcileScopes(cfg config.Config) map[parser.AgentType][]string {
 	roots, _, _, _ := collectWatchRoots(cfg)
 	deferred := make(map[parser.AgentType]map[string]struct{})
 	for _, root := range roots {
@@ -3020,7 +3002,18 @@ func presentReconcileScopes(cfg config.Config) map[parser.AgentType][]string {
 			byAgent[scope.agent] = appendUniqueString(byAgent[scope.agent], scope.syncDir)
 		}
 	}
-	return byAgent
+	var targets []scheduledReconcileTarget
+	for _, def := range parser.Registry {
+		if !def.PeriodicReconcile {
+			continue
+		}
+		dirs := byAgent[def.Type]
+		if len(dirs) == 0 {
+			continue
+		}
+		targets = append(targets, scheduledReconcileTarget{Agent: def.Type, Roots: dirs})
+	}
+	return targets
 }
 
 // runScheduledSyncPass reconciles each opted-in provider within its own scope.
