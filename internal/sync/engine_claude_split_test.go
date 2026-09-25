@@ -2,6 +2,7 @@ package sync_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -55,23 +56,66 @@ func (p *claudeFullParseCountProvider) Parse(
 	return p.Provider.Parse(ctx, req)
 }
 
-func newClaudeSplitTestEnv(
-	t *testing.T, counter *claudeFullParseCounter,
-) (*testEnv, string) {
+// claudeIncrementalErrorFactory fails one ParseIncremental call with a
+// real error rather than one of the parser's whole-parse sentinels, so a
+// test can tell "the run could not be re-parsed" apart from an expected
+// fallback.
+type claudeIncrementalErrorFactory struct {
+	inner  parser.ProviderFactory
+	calls  gosync.Int64
+	failAt int64
+}
+
+func (f *claudeIncrementalErrorFactory) Definition() parser.AgentDef {
+	return f.inner.Definition()
+}
+
+func (f *claudeIncrementalErrorFactory) Capabilities() parser.Capabilities {
+	return f.inner.Capabilities()
+}
+
+func (f *claudeIncrementalErrorFactory) NewProvider(
+	cfg parser.ProviderConfig,
+) parser.Provider {
+	return &claudeIncrementalErrorProvider{
+		Provider: f.inner.NewProvider(cfg),
+		calls:    &f.calls,
+		failAt:   f.failAt,
+	}
+}
+
+type claudeIncrementalErrorProvider struct {
+	parser.Provider
+	calls  *gosync.Int64
+	failAt int64
+}
+
+func (p *claudeIncrementalErrorProvider) ParseIncremental(
+	ctx context.Context, req parser.IncrementalRequest,
+) (parser.IncrementalOutcome, parser.IncrementalStatus, error) {
+	if p.calls.Add(1) == p.failAt {
+		return parser.IncrementalOutcome{}, parser.IncrementalUnsupported,
+			errors.New("synthetic transcript read failure")
+	}
+	return p.Provider.ParseIncremental(ctx, req)
+}
+
+// claudeSplitFactory returns the registered Claude provider factory.
+func claudeSplitFactory(t *testing.T) parser.ProviderFactory {
 	t.Helper()
-	var inner parser.ProviderFactory
 	for _, f := range parser.ProviderFactories() {
 		if f.Definition().Type == parser.AgentClaude {
-			inner = f
+			return f
 		}
 	}
-	require.NotNil(t, inner, "claude provider factory")
+	t.Fatal("claude provider factory not registered")
+	return nil
+}
 
-	factory := parser.ProviderFactory(inner)
-	if counter != nil {
-		counter.inner = inner
-		factory = counter
-	}
+func newClaudeSplitTestEnv(
+	t *testing.T, factory parser.ProviderFactory,
+) (*testEnv, string) {
+	t.Helper()
 	dir := t.TempDir()
 	env := &testEnv{claudeDir: dir, db: dbtest.OpenTestDB(t)}
 	env.engine = sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
@@ -221,8 +265,8 @@ func snapshotSplitSession(t *testing.T, database *db.DB, sessionID string) split
 func TestClaudeIncrementalSplitMatchesFullParse(t *testing.T) {
 	for name, shape := range claudeSplitShapes {
 		t.Run(name, func(t *testing.T) {
-			incrementalEnv, incrementalDir := newClaudeSplitTestEnv(t, nil)
-			fullEnv, fullDir := newClaudeSplitTestEnv(t, nil)
+			incrementalEnv, incrementalDir := newClaudeSplitTestEnv(t, claudeSplitFactory(t))
+			fullEnv, fullDir := newClaudeSplitTestEnv(t, claudeSplitFactory(t))
 
 			const proj = "proj"
 			const file = "split.jsonl"
@@ -262,7 +306,7 @@ func TestClaudeIncrementalSplitMatchesFullParse(t *testing.T) {
 // a sync that lands inside one assistant response must not re-parse the
 // whole transcript to finish it.
 func TestClaudeIncrementalSplitReparsesOnlyTheOpenRun(t *testing.T) {
-	counter := &claudeFullParseCounter{}
+	counter := &claudeFullParseCounter{inner: claudeSplitFactory(t)}
 	env, dir := newClaudeSplitTestEnv(t, counter)
 
 	shape := claudeSplitShapes["cumulative_text"]
@@ -293,7 +337,7 @@ func TestClaudeIncrementalSplitReparsesOnlyTheOpenRun(t *testing.T) {
 // but the run cannot be reconstructed, the engine still re-parses the
 // whole transcript rather than storing a duplicate.
 func TestClaudeIncrementalSplitFallsBackWhenRunCannotBeLocated(t *testing.T) {
-	counter := &claudeFullParseCounter{}
+	counter := &claudeFullParseCounter{inner: claudeSplitFactory(t)}
 	env, dir := newClaudeSplitTestEnv(t, counter)
 
 	path := filepath.Join(dir, "proj", "interrupted.jsonl")
@@ -324,7 +368,7 @@ func TestClaudeIncrementalSplitFallsBackWhenRunCannotBeLocated(t *testing.T) {
 // completed tool_use run advances the stored cursor, so later syncs of
 // the same file neither re-parse it nor leave it unarchived.
 func TestClaudeIncrementalToolUseRunIsNotReparsedEverySync(t *testing.T) {
-	counter := &claudeFullParseCounter{}
+	counter := &claudeFullParseCounter{inner: claudeSplitFactory(t)}
 	env, dir := newClaudeSplitTestEnv(t, counter)
 
 	path := filepath.Join(dir, "proj", "tool-use.jsonl")
@@ -360,4 +404,38 @@ func TestClaudeIncrementalToolUseRunIsNotReparsedEverySync(t *testing.T) {
 	assert.Contains(t, msgs[1].Content, "Working")
 	require.Len(t, msgs[1].ToolCalls, 1)
 	assert.Equal(t, "ok", msgs[1].ToolCalls[0].ResultContent)
+}
+
+// TestClaudeIncrementalSplitPropagatesReParseFailure pins the difference
+// between the parser's declared whole-parse fallbacks and a real read
+// failure. The fallbacks mean "use the whole-transcript path"; a real
+// failure surfaces and leaves the stored rows alone instead of being
+// swallowed as a fallback.
+func TestClaudeIncrementalSplitPropagatesReParseFailure(t *testing.T) {
+	factory := &claudeIncrementalErrorFactory{
+		inner: claudeSplitFactory(t),
+		// Call 1 parses the appended window, call 2 re-parses the run.
+		failAt: 2,
+	}
+	env, dir := newClaudeSplitTestEnv(t, factory)
+
+	shape := claudeSplitShapes["cumulative_text"]
+	path := filepath.Join(dir, "proj", "split.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(
+		path,
+		[]byte(strings.Join(shape.lines[:shape.splitAfter], "\n")+"\n"),
+		0o644,
+	))
+	env.engine.SyncAll(t.Context(), nil)
+
+	appendClaudeSplitLines(t, path, shape.lines[shape.splitAfter:]...)
+	env.engine.SyncPaths([]string{path})
+	assert.Equal(t, int64(2), factory.calls.Load(),
+		"the window parse and the run re-parse both ran")
+
+	msgs := fetchMessages(t, env.db, "split")
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "Hello", msgs[1].Content,
+		"a failed re-parse must not advance the stored run")
 }

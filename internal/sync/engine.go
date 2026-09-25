@@ -15937,7 +15937,18 @@ func (e *Engine) tryClaudeSplitSuffixUpdate(
 	suffix, links, toolCallUpdates, messageUsageUpdates, endedAt, consumed,
 		terminationStatus, _, err := parseFn(file.Path, &scanInc)
 	if err != nil {
-		return nil, false, nil
+		// Re-parsing from the run's start can be declined by the same
+		// fallbacks the window parse has: a queued command sorting ahead
+		// of the run head, a rename or ai-title append, or a fork verdict
+		// the run boundary makes unresolvable. Those mean "use the
+		// whole-transcript path", so this seam reports them as an
+		// unidentified run. Anything else is a real read or database
+		// failure and propagates.
+		if parser.IsIncrementalFullParseFallback(err) ||
+			errors.Is(err, parser.ErrDAGDetected) {
+			return nil, false, nil
+		}
+		return nil, false, err
 	}
 	// The re-parse must reproduce the stored commit boundary exactly and
 	// place the merged run on its existing ordinal. Anything else means
