@@ -1676,10 +1676,14 @@ func (db *DB) writeSessionIncremental(ctx context.Context,
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if err := reconcileConversationMessagesTx(tx, sessionID, msgs, false, db.usageOnlyStorage()); err != nil {
+	if err := reconcileConversationMessagesTx(tx, sessionID, msgs, update.ReplaceMessages, db.usageOnlyStorage()); err != nil {
 		return false, err
 	}
-	if err := writeMessagesTx(tx, msgs); err != nil {
+	if update.ReplaceMessages {
+		if err := replaceSessionMessagesTx(tx, sessionID, msgs); err != nil {
+			return false, err
+		}
+	} else if err := writeMessagesTx(tx, msgs); err != nil {
 		return false, err
 	}
 	transcriptChanged := len(msgs) > 0
@@ -1840,6 +1844,56 @@ func (db *DB) LastClaudeMessageID(ctx context.Context, sessionID string) string 
 		return ""
 	}
 	return s.String
+}
+
+// LastClaudeAssistantOrdinal returns the ordinal of the message
+// LastClaudeMessageID describes. The sync engine uses it to place a
+// re-parsed streaming run at the ordinal the stored partial run already
+// occupies.
+func (db *DB) LastClaudeAssistantOrdinal(
+	ctx context.Context, sessionID string,
+) (int, bool) {
+	var ordinal sql.NullInt64
+	err := db.getReader().QueryRow(ctx,
+		`SELECT ordinal FROM messages
+		 WHERE session_id = ?
+		   AND role = 'assistant'
+		   AND claude_message_id != ''
+		 ORDER BY ordinal DESC
+		 LIMIT 1`,
+		sessionID,
+	).Scan(&ordinal)
+	if err != nil || !ordinal.Valid {
+		return 0, false
+	}
+	return int(ordinal.Int64), true
+}
+
+// MessagesBelowOrdinal returns a session's messages with an ordinal
+// below the given bound, in ordinal order, with tool calls attached.
+// The sync engine uses it to rebuild the stored prefix before a
+// suffix replacement re-inserts the whole row set through the full
+// replace path.
+func (db *DB) MessagesBelowOrdinal(ctx context.Context,
+	sessionID string, ordinal int,
+) ([]Message, error) {
+	rows, err := db.getReader().QueryContext(ctx, fmt.Sprintf(`
+		SELECT %s
+		FROM messages
+		WHERE session_id = ? AND ordinal < ?
+		ORDER BY ordinal ASC`, selectMessageCols), sessionID, ordinal)
+	if err != nil {
+		return nil, fmt.Errorf("querying messages below ordinal: %w", err)
+	}
+	defer rows.Close()
+	msgs, err := scanMessages(rows)
+	if err != nil {
+		return nil, err
+	}
+	if err := db.attachToolCalls(ctx, msgs); err != nil {
+		return nil, err
+	}
+	return msgs, nil
 }
 
 // savedPin captures the message identity needed to re-attach a pin

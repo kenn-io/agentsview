@@ -2817,6 +2817,13 @@ type IncrementalSessionUpdate struct {
 	Checkpoint              *ParserCheckpoint
 	CheckpointBlobs         *ParserCheckpointBlobs
 	BlockedResultCategories map[string]bool
+	// ReplaceMessages marks the caller's message slice as the complete
+	// row set for the session rather than an append. The write path
+	// replaces stored messages and recomputes the session's
+	// message-derived aggregates from the stored rows, so the count and
+	// token fields above are ignored and the row is written as a full
+	// replacement rather than append-only skew.
+	ReplaceMessages bool
 	// SignalMaintainer, when set, computes the incremental signal/secret
 	// delta inside the write transaction (after messages and result
 	// updates are applied). nil keeps the legacy behavior: signals are
@@ -2997,6 +3004,9 @@ func (db *DB) FileIdentityChanged(ctx context.Context, path string, inode, devic
 func updateSessionIncrementalTx(ctx context.Context,
 	tx *sql.Tx, id string, update IncrementalSessionUpdate,
 ) error {
+	if update.ReplaceMessages {
+		return replaceSessionIncrementalTx(ctx, tx, id, update)
+	}
 	var lastEntryUUID any
 	if update.LastEntryUUID != "" {
 		lastEntryUUID = update.LastEntryUUID
@@ -3044,6 +3054,83 @@ func updateSessionIncrementalTx(ctx context.Context,
 	if rows != 1 {
 		return fmt.Errorf(
 			"incremental update session %s: updated %d rows", id, rows,
+		)
+	}
+	return nil
+}
+
+// replaceSessionIncrementalTx advances the file cursor for a suffix
+// replacement and recomputes the session's message-derived aggregates
+// from the stored rows. Recomputing rather than delta-adjusting keeps
+// the counts and token totals equal to what a full parse of the same
+// transcript stores, including when the replacement changed a row that
+// an earlier incremental write had counted. The row is marked as a full
+// replacement so parse-diff does not read it as append-only skew. The
+// count and token expressions mirror
+// ingest.ApplySessionMessageDerivedFieldsContext and
+// ingest.MessageTokenTotalsContext; keep them in step.
+func replaceSessionIncrementalTx(ctx context.Context,
+	tx *sql.Tx, id string, update IncrementalSessionUpdate,
+) error {
+	var lastEntryUUID any
+	if update.LastEntryUUID != "" {
+		lastEntryUUID = update.LastEntryUUID
+	}
+	result, err := tx.ExecContext(ctx, `
+		UPDATE sessions SET
+			ended_at = COALESCE(?, ended_at),
+			message_count = (
+				SELECT COUNT(*) FROM messages WHERE session_id = ?
+			),
+			user_message_count = (
+				SELECT COUNT(*) FROM messages
+				WHERE session_id = ? AND role = 'user'
+				  AND is_system = 0
+				  AND COALESCE(source_subtype, '') <> 'tool_result'
+			),
+			total_output_tokens = (
+				SELECT COALESCE(SUM(output_tokens), 0) FROM messages
+				WHERE session_id = ? AND has_output_tokens != 0
+			),
+			has_total_output_tokens = (
+				SELECT COALESCE(MAX(has_output_tokens != 0), 0)
+				FROM messages WHERE session_id = ?
+			),
+			peak_context_tokens = (
+				SELECT COALESCE(MAX(context_tokens), 0) FROM messages
+				WHERE session_id = ? AND has_context_tokens != 0
+			),
+			has_peak_context_tokens = (
+				SELECT COALESCE(MAX(has_context_tokens != 0), 0)
+				FROM messages WHERE session_id = ?
+			),
+			file_size = ?,
+			file_mtime = ?,
+			file_hash = COALESCE(?, file_hash),
+			next_ordinal = ?,
+			last_entry_uuid = ?,
+			termination_status = ?,
+			last_write_incremental = 0
+		WHERE id = ?`,
+		update.EndedAt,
+		id, id, id, id, id, id,
+		update.FileSize, update.FileMtime, update.FileHash,
+		update.NextOrdinal, lastEntryUUID, update.TerminationStatus, id,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"suffix replacement update session %s: %w", id, err,
+		)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf(
+			"suffix replacement update session %s rows affected: %w", id, err,
+		)
+	}
+	if rows != 1 {
+		return fmt.Errorf(
+			"suffix replacement update session %s: updated %d rows", id, rows,
 		)
 	}
 	return nil
