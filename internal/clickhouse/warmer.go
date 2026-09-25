@@ -68,6 +68,11 @@ const (
 	// client request.
 	usageWarmRecency = 30 * time.Minute
 	usageWarmLimit   = 16
+	// activityWarmSpan bounds the activity reads the warmer rebuilds. A
+	// month's report is a few reads; a report over every session costs as
+	// much as the pushes it would follow, so rebuilding it after each push
+	// keeps a small host busy for a read the next push invalidates anyway.
+	activityWarmSpan = 31 * 24 * time.Hour
 )
 
 // evictOldestWarm removes the least recently used entries of m, by last,
@@ -104,6 +109,9 @@ func (s *Store) recordUsageRead(kind string, f db.UsageFilter, limit int) {
 
 // recordActivityRead notes a client's activity report for the warmer.
 func (s *Store) recordActivityRead(f db.AnalyticsFilter, q activity.Query) {
+	if q.RangeEnd.Sub(q.RangeStart) > activityWarmSpan {
+		return
+	}
 	w := &s.usageWarmer
 	w.mu.Lock()
 	defer w.mu.Unlock()
