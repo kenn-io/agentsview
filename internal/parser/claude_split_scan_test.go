@@ -80,7 +80,7 @@ func TestClaudeSplitRunStart(t *testing.T) {
 		user := line(`{"type":"user","uuid":"u1","message":{"content":"hi"}}`)
 		var b strings.Builder
 		b.WriteString(user)
-		for i := 0; i < 4096; i++ {
+		for range 4096 {
 			b.WriteString(line(`{"type":"assistant","uuid":"a` + strings.Repeat("x", 8) +
 				`","message":{"id":"m","content":[{"type":"text","text":"` +
 				strings.Repeat("y", 40) + `"}]}}`))
