@@ -60,8 +60,8 @@ type Store struct {
 	topSessionTotals usageRowMemo[db.TopSessionEntry]
 	// analyticsSessionRows keeps recent analytics session listings.
 	analyticsSessionRows usageRowMemo[chAnalyticsSession]
-	// usageWarmer refills the usage memos after the mirror changes.
-	usageWarmer usageWarmer
+	// background runs the kept reports' sweep until Close.
+	background storeBackground
 	// usageReadQueries counts usage reads that reached ClickHouse.
 	usageReadQueries atomic.Int64
 	// activitySessions keeps activity pairing inputs per session version.
@@ -85,8 +85,6 @@ type Store struct {
 	// activityChecks records per selection the parts its kept report was
 	// last checked against.
 	activityChecks usageRowMemo[activityReportCheck]
-	// activityBuilds holds one turn per selection; see activityBuildTurn.
-	activityBuilds activityBuildTurns
 	// reportDisk keeps ended ranges' reports on disk; see
 	// openActivityReportDisk. Empty, reports are kept in memory only.
 	reportDisk             activityReportDisk
@@ -125,7 +123,7 @@ func (s *Store) DB() *sql.DB { return s.conn }
 
 func (s *Store) Close() error {
 	s.closeOnce.Do(func() {
-		s.stopUsageWarmer()
+		s.stopBackground()
 		s.keeping.Wait()
 		s.closeErr = s.conn.Close()
 	})

@@ -136,13 +136,10 @@ func (Backend) OpenServeStore(
 	if err != nil {
 		return nil, err
 	}
-	// The kept reports and day selections only save work; without them
-	// every report is built on request, so serve starts anyway.
+	// The kept reports only save work; without them every report is built
+	// on request, so serve starts anyway.
 	if err := store.openActivityReportDisk(target(t)); err != nil {
 		log.Printf("clickhouse: keeping activity reports in memory only: %v", err)
-	}
-	if err := store.loadActivityDaySelections(); err != nil {
-		log.Printf("clickhouse: ignoring kept activity day selections: %v", err)
 	}
 	return store, nil
 }

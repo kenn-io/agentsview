@@ -262,13 +262,8 @@ include usage rows, analytics session listings, Activity pairing inputs per
 session version, candidate listings, project label maps, and the whole report of
 an ended range.
 
-**Warmer.** A background loop checks the mirror's parts every 500 ms while
-clients are reading, and stops querying after half an hour with no client read.
-Serve starts it only after it installs custom pricing, so warmed reads use the
-operator's rates. After a change it runs again the usage and Activity reads
-clients made in the last half hour (at most 16), so the next request finds them
-ready. It prepares only what clients asked for; an ended day no one opened is
-built when first requested.
+Nothing rebuilds kept reads in the background. The first request after a push
+that changes a read's rows pays for that read.
 
 **Reports on disk.** When a client opens an ended day, its report is written to
 the report cache described in
@@ -277,12 +272,9 @@ per selection and one directory per mirror. Nothing prepares days ahead of time,
 so a day no one opens costs no disk. A file names the binary that wrote it and
 the report's key, so a new build or a change to that day's rows rebuilds it.
 Every open, whether served from memory or from the file, refreshes the file's
-modification time. At startup and about once a day the warmer removes reports no
-one has opened for 30 days, and temporary files that interrupted writes left
-more than an hour ago; there is no other size or count limit. The day selections
-clients asked for are kept beside the reports so a restart can prepare today's
-view. With no kept selections, the server starts from the default day view in
-its own timezone (`TZ` or `/etc/localtime`).
+modification time. At startup and about once a day serve removes reports no one
+has opened for 30 days, and temporary files that interrupted writes left more
+than an hour ago; there is no other size or count limit.
 
 ## Tradeoffs
 

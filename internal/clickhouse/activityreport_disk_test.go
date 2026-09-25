@@ -11,14 +11,13 @@ import (
 
 // The sweep removes reports whose last open is more than 30 days old and
 // temporary files an interrupted write left over an hour ago. It keeps
-// newer reports, writes still in progress, and the kept day selections.
+// newer reports and writes still in progress.
 func TestActivityReportSweepRemovesOnlyStaleFiles(t *testing.T) {
 	d := activityReportDisk{dir: t.TempDir()}
 	now := time.Now()
 	files := map[string]time.Duration{
 		"unopened.json":                   31 * 24 * time.Hour,
 		"opened.json":                     29 * 24 * time.Hour,
-		activityDaySelectionsFile:         365 * 24 * time.Hour,
 		activityReportTempPrefix + "old":  2 * time.Hour,
 		activityReportTempPrefix + "busy": time.Minute,
 	}

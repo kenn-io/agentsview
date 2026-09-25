@@ -13,7 +13,6 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	chdriver "github.com/ClickHouse/clickhouse-go/v2"
@@ -65,27 +64,8 @@ func (s *Store) BuildActivityReportArtifacts(
 	q activity.Query,
 	onProgress activity.ProgressFunc,
 ) (activity.CandidateArtifacts, error) {
-	s.recordActivityRead(f, q)
-	return s.buildActivityReportArtifacts(ctx, f, q, onProgress)
-}
-
-func (s *Store) buildActivityReportArtifacts(
-	ctx context.Context,
-	f db.AnalyticsFilter,
-	q activity.Query,
-	onProgress activity.ProgressFunc,
-) (activity.CandidateArtifacts, error) {
 	clickReportProgress(onProgress, activity.Progress{Phase: activity.ProgressLoadingSessions})
-	// Builds of one selection take turns: after a push, a request that
-	// arrives while the warmer rebuilds waits for it and then finds the
-	// rows in the memos, instead of both reading the same rows at once.
-	release, err := s.activityBuildTurn(ctx, fmt.Sprintf("%#v|%s|%s|%s", f, q.Timezone,
-		q.RangeStart.UTC().Format(time.RFC3339Nano), q.RangeEnd.UTC().Format(time.RFC3339Nano)))
-	if err != nil {
-		return activity.CandidateArtifacts{}, err
-	}
-	defer release()
-	ctx, err = s.withPartsSnapshot(ctx)
+	ctx, err := s.withPartsSnapshot(ctx)
 	if err != nil {
 		return activity.CandidateArtifacts{}, err
 	}
@@ -232,52 +212,6 @@ func (s *Store) buildActivityReportArtifacts(
 		}
 	}
 	return artifacts, nil
-}
-
-// activityBuildTurns holds one turn per selection while any build of it
-// runs or waits, and drops it after the last one leaves.
-type activityBuildTurns struct {
-	mu    sync.Mutex
-	turns map[string]*activityBuildTurnEntry
-}
-
-type activityBuildTurnEntry struct {
-	turn  chan struct{}
-	users int
-}
-
-// activityBuildTurn waits for the selection's turn to build, or for ctx.
-func (s *Store) activityBuildTurn(ctx context.Context, selection string) (func(), error) {
-	b := &s.activityBuilds
-	b.mu.Lock()
-	if b.turns == nil {
-		b.turns = map[string]*activityBuildTurnEntry{}
-	}
-	entry := b.turns[selection]
-	if entry == nil {
-		entry = &activityBuildTurnEntry{turn: make(chan struct{}, 1)}
-		b.turns[selection] = entry
-	}
-	entry.users++
-	b.mu.Unlock()
-	leave := func() {
-		b.mu.Lock()
-		entry.users--
-		if entry.users == 0 {
-			delete(b.turns, selection)
-		}
-		b.mu.Unlock()
-	}
-	select {
-	case entry.turn <- struct{}{}:
-		return func() {
-			<-entry.turn
-			leave()
-		}, nil
-	case <-ctx.Done():
-		leave()
-		return nil, ctx.Err()
-	}
 }
 
 // activityDiskReportMemoLimit caps the reports kept in memory beside

@@ -1856,7 +1856,6 @@ var errUsagePriceContextChanged = errors.New("usage price context changed during
 func (s *Store) GetDailyUsage(
 	ctx context.Context, f db.UsageFilter,
 ) (db.DailyUsageResult, error) {
-	s.recordUsageRead("daily", f, 0)
 	return s.dailyUsage(ctx, f)
 }
 
@@ -2374,7 +2373,6 @@ func (s *Store) sessionUsageRows(
 func (s *Store) GetTopSessionsByCost(
 	ctx context.Context, f db.UsageFilter, limit int,
 ) ([]db.TopSessionEntry, error) {
-	s.recordUsageRead("top", f, limit)
 	return s.topSessionsByCost(ctx, f, limit)
 }
 
@@ -2469,7 +2467,6 @@ func (s *Store) topSessionsByCost(
 func (s *Store) GetUsageSessionCounts(
 	ctx context.Context, f db.UsageFilter,
 ) (db.UsageSessionCounts, error) {
-	s.recordUsageRead("counts", f, 0)
 	return s.usageSessionCounts(ctx, f)
 }
 

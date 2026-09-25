@@ -135,8 +135,7 @@ func TestEndedActivityReportIsKeptOnDiskAcrossRestarts(t *testing.T) {
 }
 
 // The report cache only saves work, so serve opens without it when the
-// cache directory cannot be created or the kept day selections cannot be
-// read.
+// cache directory cannot be created.
 func TestOpenServeStoreWithoutUsableReportCache(t *testing.T) {
 	ctx := t.Context()
 	_, syncer, _ := newPushedStore(t)
@@ -145,17 +144,6 @@ func TestOpenServeStoreWithoutUsableReportCache(t *testing.T) {
 	require.NoError(t, os.WriteFile(blocked, nil, 0o600))
 	t.Setenv("CACHE_DIRECTORY", blocked)
 	store, err := (Backend{}).OpenServeStore(ctx, serveTarget)
-	require.NoError(t, err)
-	require.NoError(t, store.Close())
-
-	cache := t.TempDir()
-	t.Setenv("CACHE_DIRECTORY", cache)
-	opened, err := (Backend{}).OpenServeStore(ctx, serveTarget)
-	require.NoError(t, err)
-	dir := opened.(*Store).reportDisk.dir
-	require.NoError(t, opened.Close())
-	require.NoError(t, os.WriteFile(filepath.Join(dir, activityDaySelectionsFile), []byte("not json"), 0o600))
-	store, err = (Backend{}).OpenServeStore(ctx, serveTarget)
 	require.NoError(t, err)
 	require.NoError(t, store.Close())
 }
@@ -207,6 +195,4 @@ func TestKeptActivityReportsExpireUnlessOpened(t *testing.T) {
 	require.Equal(t, 1, removed)
 	require.FileExists(t, openedFile)
 	require.NoFileExists(t, unopenedFile)
-	require.FileExists(t, filepath.Join(s.reportDisk.dir, activityDaySelectionsFile),
-		"the kept day selections are not a report")
 }

@@ -2,6 +2,7 @@ package clickhouse
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json/v2"
@@ -151,7 +152,7 @@ const (
 	// activityReportUnopened is how long a kept report stays on disk after
 	// its last open.
 	activityReportUnopened = 30 * 24 * time.Hour
-	// activityReportSweepInterval is how often the warmer sweeps the kept
+	// activityReportSweepInterval is how often serve sweeps the kept
 	// reports.
 	activityReportSweepInterval = 24 * time.Hour
 	// activityReportTempAge is how old a temporary file must be before the
@@ -172,7 +173,7 @@ func (d activityReportDisk) sweep(now time.Time) (int, error) {
 		name := entry.Name()
 		var maxAge time.Duration
 		switch {
-		case entry.IsDir() || name == activityDaySelectionsFile:
+		case entry.IsDir():
 			continue
 		case strings.HasPrefix(name, activityReportTempPrefix):
 			maxAge = activityReportTempAge
@@ -219,4 +220,74 @@ func writeFileAtomic(dir, path string, data []byte) error {
 		return errors.Join(err, os.Remove(tmp.Name()))
 	}
 	return nil
+}
+
+// storeBackground runs the kept reports' sweep until Close.
+type storeBackground struct {
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+// StartBackground reads the first prepared state and starts the sweep of
+// the kept reports. Serve calls it once, after SetCustomPricing, so the
+// prepared state prices usage with the operator's rates. The first
+// prepared state loads the pricing catalog and reads usage coverage, a few
+// hundred milliseconds; reading it before the server listens keeps that
+// off the first request. A failure here is the one the first read would
+// meet, so it is reported and left to that read.
+func (s *Store) StartBackground(ctx context.Context) {
+	if _, err := s.preparedUsageState(ctx); err != nil {
+		log.Printf("clickhouse: preparing usage state at startup: %v", err)
+	}
+	if s.reportDisk.dir == "" {
+		return
+	}
+	sweepCtx, cancel := context.WithCancel(context.Background())
+	s.background = storeBackground{cancel: cancel, done: make(chan struct{})}
+	go func() {
+		defer close(s.background.done)
+		ticker := time.NewTicker(activityReportSweepInterval)
+		defer ticker.Stop()
+		for {
+			s.sweepActivityReports()
+			select {
+			case <-sweepCtx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+}
+
+func (s *Store) stopBackground() {
+	if s.background.cancel == nil {
+		return
+	}
+	s.background.cancel()
+	<-s.background.done
+}
+
+// sweepActivityReports removes the kept reports no client has opened
+// lately.
+func (s *Store) sweepActivityReports() {
+	removed, err := s.reportDisk.sweep(time.Now())
+	if err != nil {
+		log.Printf("clickhouse: sweeping kept activity reports: %v", err)
+	}
+	if removed > 0 {
+		log.Printf("clickhouse: removed %d activity reports no one opened in %s",
+			removed, activityReportUnopened)
+	}
+}
+
+// activityDayPreset reports whether q is what a plain day request produces.
+func activityDayPreset(q activity.Query, now time.Time) bool {
+	if q.Loc == nil {
+		return false
+	}
+	base, err := activity.ResolveQuery(activity.QueryInput{
+		Preset: "day", Date: q.RangeStart.In(q.Loc).Format("2006-01-02"), Timezone: q.Timezone,
+	}, now)
+	return err == nil && base.RangeStart.Equal(q.RangeStart) && base.RangeEnd.Equal(q.RangeEnd) &&
+		base.Bucket == q.Bucket && base.GapCapSeconds == q.GapCapSeconds
 }
