@@ -152,12 +152,16 @@ it for analysis.
 
 ## Storage and work per poll
 
-The local archive keeps current message text in its export index, plus compact
-change and deletion metadata. It does not retain each intermediate body as an
-event log or track individual consumers. Changes queries seek by publication
-revision; unchanged polling does not walk transcript bodies. Text fetches are
-bounded independently of message length. A consumer that needs past revisions
-must retain them itself.
+The local archive keeps a digest of each current message in its export index,
+plus compact change and deletion metadata; the text itself stays in the
+archived message and is read back by position. It does not retain each
+intermediate body as an event log or track individual consumers. Changes
+queries seek by publication revision; unchanged polling does not walk
+transcript bodies. A text fetch returns at most the requested bytes but reads
+and hashes the whole message to verify it against the pinned revision.
+Archives written by this version hold no text in the export index, so an older
+exporter cannot serve their bodies. A consumer that needs past revisions must
+retain them itself.
 
 Activity history uses `agentsview export range` to discover a starting date,
 then the existing hour, day and digest exports. This does not make historical

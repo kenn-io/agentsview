@@ -35,7 +35,9 @@ Initialize a missing conversation index from existing database messages on
 writable open. Copied orphans and trash use the same stored records; absent
 source files do not make their archived text unavailable.
 
-Keep only current bodies and compact latest changes, not a body event log.
+Keep only digests and compact latest changes, not a body event log; bounded
+body reads take text from the archived message at the projected ordinal and
+reject it when its digest no longer matches the pinned revision.
 Project-only changes publish session invalidations without changing message
 revisions. Manifest and bounded body reads resolve project evidence in their own
 SQLite snapshot; body reads also pin the database generation and message
