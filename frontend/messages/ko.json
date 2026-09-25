@@ -1900,7 +1900,7 @@
   "settings_session_providers_enable_aria": "{provider} 세션 동기화 사용",
   "settings_session_providers_enabled": "사용",
   "settings_session_providers_disabled": "사용 안 함",
-  "settings_session_providers_restart_notice": "변경 사항을 적용하려면 AgentsView 데몬과 별도의 푸시 감시 프로세스를 다시 시작하세요.",
+  "settings_session_providers_applied_notice": "AgentsView에 변경 사항이 적용되었습니다. 별도의 푸시 감시 프로세스에도 적용하려면 해당 프로세스를 다시 시작하세요.",
   "settings_session_providers_save_failed": "세션 공급자를 업데이트하지 못했습니다. 이전 선택이 계속 적용됩니다.",
   "settings_session_providers_homes_title": "대체 홈 디렉터리",
   "settings_session_providers_homes_hint": "사용자 지정 {envVar}와 같은 에이전트 홈 디렉터리를 추가합니다. AgentsView가 세션 디렉터리를 자동으로 찾습니다.",

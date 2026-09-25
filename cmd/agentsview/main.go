@@ -113,6 +113,10 @@ type serveOptions struct {
 	SkipInitialSync bool
 	BasePath        string
 	Pprof           bool
+	// ReloadConfig rebuilds the configuration with the same layers and flags
+	// as startup so saved provider settings apply without a restart. Nil
+	// leaves the startup provider set in place until the daemon restarts.
+	ReloadConfig func() (config.Config, error)
 }
 
 // serveMemoryLimitBytes is the default Go soft memory limit for the
@@ -318,10 +322,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	}
 
 	var engine *sync.Engine
-	var stopWatcher func()
-	var openWatcherDispatch func()
-	var queueWatchRetry func(sync.WatchBatch)
-	var unwatchedPoller *sharedUnwatchedPollCoordinator
+	var ingestion *daemonIngestion
 	var completeWorkerStartup func()
 	if !cfg.NoSync {
 		var onStartupReconciled func(sync.SyncStats, error)
@@ -344,42 +345,14 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			},
 		})
 		defer engine.Close()
-		unwatchedPoller = newUnwatchedPollCoordinator(ctx, engine, idleTracker)
-		defer unwatchedPoller.Stop()
-		stopWatcher, openWatcherDispatch, _, queueWatchRetry = startFileWatcher(
-			cfg, engine, func(_ context.Context, batch sync.WatchBatch) error {
-				done, ok := idleTracker.BeginWork()
-				if !ok {
-					return context.Canceled
-				}
-				defer done()
-				// The serve ctx reaches watcher-driven syncs so SIGTERM can
-				// interrupt database reconciliation before Stop waits for it.
-				return syncWatchBatch(ctx, engine, batch, func() watchRecoveryScope {
-					return probeWatchRecoveryScope(cfg)
-				})
-			},
-			sync.WatcherOptions{
-				OnCoverageDegraded: func(degradedRoots []string) error {
-					scopes := make([]pollingScope, 0, len(degradedRoots))
-					for _, r := range degradedRoots {
-						scopes = append(scopes, pollingScope{Root: r})
-					}
-					return unwatchedPoller.AddObligation(pollingObligation{
-						Key: "watcher-fallback", Scopes: scopes,
-					})
-				},
-				OnPollingRequired: func(obligation sync.PollingObligation) error {
-					return unwatchedPoller.AddObligation(syncObligationToPoller(obligation))
-				},
-				OnPollingReleased: unwatchedPoller.RemoveObligation,
-			},
+		ingestion = newDaemonIngestion(
+			ctx, cfg, engine, database, idleTracker, opts.ReloadConfig,
 		)
-		defer stopWatcher()
+		defer ingestion.Stop()
 		onStartupReconciled = newStartupReconciliationHandler(
 			ctx,
 			database.CheckpointWALTruncateWithRetry,
-			openWatcherDispatch,
+			ingestion.OpenWatcherDispatch,
 		)
 
 		if !opts.SkipInitialSync {
@@ -403,10 +376,10 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 				completeWorkerStartup = func() {
 					completeWorkerStartupReconciliation(
 						ctx,
-						reconcileRootPaths(cfg),
+						reconcileRootPaths(ingestion.Config()),
 						statsFromWorkerResult(workerStartupResult),
 						engine.ReconcileWatchRoots,
-						queueWatchRetry,
+						ingestion.QueueWatchRetry,
 						engine.RecordStartupReconciled,
 					)
 				}
@@ -448,12 +421,10 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			log.Printf("warning: remote_hosts config invalid, skipping periodic remote sync: %v", err)
 			validRemotes = false
 		}
-		stopLiveActivity := startLiveActivityPoller(
-			ctx, cfg, database, engine, idleTracker,
-		)
-		defer stopLiveActivity()
+		ingestion.StartLiveActivity()
 		go startPeriodicSync(
-			ctx, cfg, engine, database, writeLock, idleTracker, validRemotes, emitter,
+			ctx, cfg, ingestion.Config, engine, database, writeLock, idleTracker,
+			validRemotes, emitter,
 		)
 	}
 
@@ -546,6 +517,10 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		srvOpts = append(srvOpts, server.WithLocalCompactRunner(
 			newForegroundCompactRunner(engine, database),
 		))
+		if opts.ReloadConfig != nil {
+			srvOpts = append(srvOpts,
+				server.WithIngestionReloader(ingestion.Reload))
+		}
 	}
 	srvOpts = append(srvOpts, server.WithArtifactExchangeRunner(
 		newDaemonArtifactExchangeRunner(cfg, database, engine, emitter),
@@ -2809,6 +2784,7 @@ func collectLegacyWatchRoots(
 func startPeriodicSync(
 	ctx context.Context,
 	cfg config.Config,
+	sourceConfig func() config.Config,
 	engine *sync.Engine,
 	database *db.DB,
 	lock *writeOwnerLock,
@@ -2831,11 +2807,6 @@ func startPeriodicSync(
 	// scheduled reconcile below (Task 5) untouched.
 	go startArchiveAudit(ctx, cfg, engine, database, lock, idleTracker, emitter)
 
-	// Remote object roots are static config; resolve them once. The scheduled
-	// reconcile targets are re-probed each tick because disk availability
-	// changes.
-	remoteRoots := remoteSourceSyncRoots(cfg)
-
 	ticker := time.NewTicker(periodicSyncInterval)
 	defer ticker.Stop()
 	for {
@@ -2846,8 +2817,12 @@ func startPeriodicSync(
 		}
 		log.Println("Running scheduled reconciliation...")
 		idleTracker.Do(func() {
-			runScheduledSyncPass(ctx, engine, scheduledReconcileTargets(cfg))
-			runRemoteSourceSyncPass(ctx, engine, remoteRoots)
+			// Roots follow provider settings changes, and the scheduled
+			// reconcile targets are re-probed each tick because disk
+			// availability changes.
+			current := sourceConfig()
+			runScheduledSyncPass(ctx, engine, scheduledReconcileTargets(current))
+			runRemoteSourceSyncPass(ctx, engine, remoteSourceSyncRoots(current))
 			recomputePendingSessions(engine, database)
 		})
 	}
@@ -2999,6 +2974,25 @@ type scheduledReconcileTarget struct {
 // present scope would read the missing one as an authoritative empty discovery
 // and tombstone every session beneath it.
 func scheduledReconcileTargets(cfg config.Config) []scheduledReconcileTarget {
+	byAgent := presentReconcileScopes(cfg)
+	var targets []scheduledReconcileTarget
+	for _, def := range parser.Registry {
+		if !def.PeriodicReconcile {
+			continue
+		}
+		dirs := byAgent[def.Type]
+		if len(dirs) == 0 {
+			continue
+		}
+		targets = append(targets, scheduledReconcileTarget{Agent: def.Type, Roots: dirs})
+	}
+	return targets
+}
+
+// presentReconcileScopes returns, per provider, the configured roots that can
+// be reconciled authoritatively right now: their watch roots exist and they do
+// not overlap a missing same-provider scope.
+func presentReconcileScopes(cfg config.Config) map[parser.AgentType][]string {
 	roots, _, _, _ := collectWatchRoots(cfg)
 	deferred := make(map[parser.AgentType]map[string]struct{})
 	for _, root := range roots {
@@ -3024,18 +3018,7 @@ func scheduledReconcileTargets(cfg config.Config) []scheduledReconcileTarget {
 			byAgent[scope.agent] = appendUniqueString(byAgent[scope.agent], scope.syncDir)
 		}
 	}
-	var targets []scheduledReconcileTarget
-	for _, def := range parser.Registry {
-		if !def.PeriodicReconcile {
-			continue
-		}
-		dirs := byAgent[def.Type]
-		if len(dirs) == 0 {
-			continue
-		}
-		targets = append(targets, scheduledReconcileTarget{Agent: def.Type, Roots: dirs})
-	}
-	return targets
+	return byAgent
 }
 
 // runScheduledSyncPass reconciles each opted-in provider within its own scope.

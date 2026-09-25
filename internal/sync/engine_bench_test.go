@@ -528,8 +528,8 @@ func benchResyncBulkContributorIngest(b *testing.B, withUsage bool) {
 	ctx := b.Context()
 	benchColdArchive(b, withUsage,
 		func(engine *Engine) SyncStats {
-			dir := engine.agentDirs[parser.AgentClaude][0]
-			engine.agentDirs = nil
+			dir := engine.sources().agentDirs[parser.AgentClaude][0]
+			engine.sources().agentDirs = nil
 			stats, err := engine.ResyncAllWithOptions(ctx, nil, RebuildOptions{
 				Contributors: []RebuildContributor{{
 					Name: "benchmark-contributor",

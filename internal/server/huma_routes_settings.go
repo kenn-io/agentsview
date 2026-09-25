@@ -177,6 +177,8 @@ func (s *Server) humaUpdateSettings(
 		patch["require_auth"] = *in.Body.RequireAuth
 	}
 	if len(patch) > 0 {
+		s.settingsApplyMu.Lock()
+		defer s.settingsApplyMu.Unlock()
 		s.mu.Lock()
 		err := s.cfg.SaveSettings(patch)
 		if err == nil && s.cfg.RequireAuth {
@@ -186,8 +188,34 @@ func (s *Server) humaUpdateSettings(
 		if err != nil {
 			return nil, internalError("save settings", err)
 		}
+		if err := s.applyIngestionSettings(ctx, patch); err != nil {
+			return nil, err
+		}
 	}
 	return s.humaGetSettings(ctx, &emptyInput{})
+}
+
+// applyIngestionSettings hands saved provider settings to the running daemon
+// so enabling a provider or adding a home takes effect without a restart.
+func (s *Server) applyIngestionSettings(
+	ctx context.Context, patch map[string]any,
+) error {
+	_, disabledChanged := patch["disabled_agents"]
+	_, homesChanged := patch["agent_homes"]
+	if s.ingestionReloader == nil || (!disabledChanged && !homesChanged) {
+		return nil
+	}
+	reloaded, err := s.ingestionReloader(ctx)
+	if err != nil {
+		return internalError("apply session provider settings", err)
+	}
+	s.mu.Lock()
+	s.cfg.AdoptSessionSources(reloaded)
+	s.activeDisabledAgents = append(
+		[]parser.AgentType(nil), reloaded.DisabledAgents...,
+	)
+	s.mu.Unlock()
+	return nil
 }
 
 func (s *Server) localWorktreeMappingHumaDB() (*db.DB, string, error) {

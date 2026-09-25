@@ -257,7 +257,7 @@ func (e *Engine) verifiedProviderSourceFreshInDB(ctx context.Context,
 }
 
 func (e *Engine) verifiedLocalStatSupported(agent parser.AgentType) bool {
-	factory, ok := e.providerFactories[agent]
+	factory, ok := e.sources().providerFactories[agent]
 	return ok && factory != nil &&
 		factory.Capabilities().Source.VerifiedLocalStat ==
 			parser.CapabilitySupported

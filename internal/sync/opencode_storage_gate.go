@@ -47,7 +47,7 @@ func (e *Engine) openCodeStorageSessionPath(file parser.DiscoveredFile) string {
 	if isOpenCodeFormatSQLiteVirtualPath(file.Agent, file.Path) {
 		return ""
 	}
-	for _, dir := range e.agentDirs[file.Agent] {
+	for _, dir := range e.sources().agentDirs[file.Agent] {
 		if dir == "" {
 			continue
 		}

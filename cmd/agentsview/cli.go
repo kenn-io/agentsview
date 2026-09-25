@@ -197,6 +197,9 @@ func newServeCommandWithDaemonDeps(deps daemonCommandDeps) *cobra.Command {
 				SkipInitialSync: skipInitialSync,
 				BasePath:        basePath,
 				Pprof:           pprofEnabled,
+				ReloadConfig: func() (config.Config, error) {
+					return config.LoadPFlags(cmd.Flags())
+				},
 			}, restartPort)
 			return nil
 		},

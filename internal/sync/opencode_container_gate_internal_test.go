@@ -543,14 +543,14 @@ func TestDiscoveredFileWatermarkCutoffRequiresLiveCapture(t *testing.T) {
 func TestCaptureSQLiteContainerStatesScopesChangedPathToImpactedContainer(t *testing.T) {
 	firstDB, _ := newContainerTestDB(t)
 	secondDB, _ := newContainerTestDB(t)
-	engine := &Engine{
+	engine := withTestSources(&Engine{}, &engineSources{
 		agentDirs: map[parser.AgentType][]string{
 			parser.AgentOpenCode: {
 				filepath.Dir(firstDB),
 				filepath.Dir(secondDB),
 			},
 		},
-	}
+	})
 
 	origStat := statSQLiteContainerState
 	t.Cleanup(func() { statSQLiteContainerState = origStat })

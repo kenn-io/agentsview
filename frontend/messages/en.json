@@ -1980,7 +1980,7 @@
   "settings_session_providers_enable_aria": "Enable {provider} session sync",
   "settings_session_providers_enabled": "Enabled",
   "settings_session_providers_disabled": "Disabled",
-  "settings_session_providers_restart_notice": "Restart the AgentsView daemon and any separate push-watch process to apply these changes.",
+  "settings_session_providers_applied_notice": "AgentsView applied these changes. Restart any separate push-watch process to apply them there too.",
   "settings_session_providers_save_failed": "Could not update session providers. Your previous selection is still active.",
   "settings_session_providers_homes_title": "Alternate homes",
   "settings_session_providers_homes_hint": "Add an agent home directory such as a custom {envVar}. AgentsView derives its session directories automatically.",

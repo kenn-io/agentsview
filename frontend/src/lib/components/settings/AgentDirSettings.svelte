@@ -16,7 +16,7 @@
   let pendingDisabledAgents: string[] = $state([]);
   let providerSaving = $state(false);
   let saveFailed = $state(false);
-  let restartRequired = $state(false);
+  let changesApplied = $state(false);
 
   $effect(() => {
     if (!providerSaving) {
@@ -42,7 +42,7 @@
     const saved = await settings.save({ disabled_agents: next });
     if (saved) {
       pendingDisabledAgents = [...settings.disabledAgents];
-      restartRequired = true;
+      changesApplied = true;
     } else {
       pendingDisabledAgents = confirmed;
       saveFailed = true;
@@ -60,7 +60,7 @@
     saveFailed = false;
     const saved = await settings.save({ agent_homes: { [id]: next } });
     if (saved) {
-      restartRequired = true;
+      changesApplied = true;
     } else {
       saveFailed = true;
     }
@@ -171,9 +171,9 @@
     </div>
   {/each}
 
-  {#if restartRequired}
+  {#if changesApplied}
     <p class="provider-status" role="status" aria-live="polite">
-      {m.settings_session_providers_restart_notice()}
+      {m.settings_session_providers_applied_notice()}
     </p>
   {/if}
   {#if saveFailed}

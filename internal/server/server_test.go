@@ -5757,3 +5757,67 @@ func TestMarkdownSessionExportPreservesOffloadedImages(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "agentsview_image")
 	assert.NotContains(t, w.Body.String(), "base64,AAEC")
 }
+
+func TestSettingsProviderChangesApplyThroughIngestionReloader(t *testing.T) {
+	reloadedDir := filepath.Join(t.TempDir(), "claude-work", "projects")
+	reloads := 0
+	reloadErr := error(nil)
+	reloader := func(context.Context) (config.Config, error) {
+		reloads++
+		return config.Config{
+			AgentDirs: map[parser.AgentType][]string{
+				parser.AgentClaude: {"/sessions/claude", reloadedDir},
+			},
+			DisabledAgents: []parser.AgentType{parser.AgentGemini},
+		}, reloadErr
+	}
+	te := setupWithServerOpts(t,
+		[]server.Option{server.WithIngestionReloader(reloader)},
+		func(cfg *config.Config) {
+			cfg.AgentDirs = map[parser.AgentType][]string{
+				parser.AgentClaude: {"/sessions/claude"},
+			}
+		})
+	put := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPut,
+			"/api/v1/settings", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		te.handler.ServeHTTP(w, req)
+		return w
+	}
+	claudeDirs := func(w *httptest.ResponseRecorder) []string {
+		var got struct {
+			SessionProviders []struct {
+				ID   parser.AgentType `json:"id"`
+				Dirs []string         `json:"dirs"`
+			} `json:"session_providers"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+		for _, provider := range got.SessionProviders {
+			if provider.ID == parser.AgentClaude {
+				return provider.Dirs
+			}
+		}
+		return nil
+	}
+
+	w := put(`{"zoom_level":110}`)
+	assertStatus(t, w, http.StatusOK)
+	assert.Zero(t, reloads, "unrelated settings must not reload ingestion")
+
+	w = put(`{"agent_homes":{"claude":["~/.claude-work"]}}`)
+	assertStatus(t, w, http.StatusOK)
+	assert.Equal(t, 1, reloads)
+	assert.Equal(t, []string{"/sessions/claude", reloadedDir}, claudeDirs(w),
+		"the response reports the roots the daemon now syncs")
+
+	w = put(`{"disabled_agents":["gemini"]}`)
+	assertStatus(t, w, http.StatusOK)
+	assert.Equal(t, 2, reloads)
+
+	reloadErr = errors.New("config file is invalid")
+	w = put(`{"disabled_agents":[]}`)
+	assertStatus(t, w, http.StatusInternalServerError)
+	assert.Equal(t, 3, reloads)
+}
