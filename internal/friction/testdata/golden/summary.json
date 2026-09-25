@@ -1,0 +1,43 @@
+{
+  "corrections": 0,
+  "created_issues": [
+    {
+      "backend": "kata",
+      "id": "#42",
+      "title": "tracked issue",
+      "url": "https://example.com/issues/42"
+    }
+  ],
+  "deferrals": 0,
+  "digest_path": "friction:2026-05-10",
+  "errors": 0,
+  "frustrations": 0,
+  "interruptions": 0,
+  "p0_alerts": {
+    "bash": [
+      "session-a",
+      "session-b"
+    ]
+  },
+  "patterns": 0,
+  "personas": {
+    "helper@general": {
+      "channel": "general",
+      "corrections": 1,
+      "cost_usd": null,
+      "deferrals": 0,
+      "errors": 0,
+      "input_tokens": 5000,
+      "output_tokens": 250,
+      "patterns": 1,
+      "persona": "helper",
+      "sessions": 2,
+      "workarounds": 0
+    }
+  },
+  "schema_version": 3,
+  "sessions_scanned": 3,
+  "spend": null,
+  "tracker_failures": 0,
+  "workarounds": 0
+}
