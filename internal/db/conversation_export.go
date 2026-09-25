@@ -277,14 +277,15 @@ func (db *DB) GetConversationMessage(ctx context.Context, opts ConversationMessa
 		if sum := sha256.Sum256([]byte(text)); hex.EncodeToString(sum[:]) != result.Digest {
 			return ConversationMessage{}, ErrConversationRevisionChanged
 		}
-		chunk := text[opts.Offset:min(int64(len(text)), opts.Offset+int64(opts.MaxBytes))]
+		chunk := text[opts.Offset : opts.Offset+min(int64(len(text))-opts.Offset, int64(opts.MaxBytes))]
 		if len(chunk) > 0 && !utf8.RuneStart(chunk[0]) {
 			return ConversationMessage{}, errors.New("offset is not a UTF-8 boundary")
 		}
 		for !utf8.ValidString(chunk) && len(chunk) > 0 {
 			chunk = chunk[:len(chunk)-1]
 		}
-		result.Text, result.NextOffset = new(chunk), opts.Offset+int64(len(chunk))
+		// Clone so a small chunk does not pin the whole message in memory.
+		result.Text, result.NextOffset = new(strings.Clone(chunk)), opts.Offset+int64(len(chunk))
 	}
 	if err := tx.Commit(); err != nil {
 		return ConversationMessage{}, err

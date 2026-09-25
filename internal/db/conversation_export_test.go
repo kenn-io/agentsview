@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -331,6 +332,12 @@ func TestConversationExportReadsTextFromArchivedMessage(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, body.Text)
 	assert.Equal(t, "Reply with noise", *body.Text)
+	// Reading at the end with the largest budget returns an empty, non-nil chunk.
+	end, err := d.GetConversationMessage(ctx, ConversationMessageOptions{DatabaseID: page.DatabaseID, SessionID: "chat", MessageID: ref.MessageID, Revision: ref.Revision, Offset: ref.TextBytes, MaxBytes: math.MaxInt})
+	require.NoError(t, err)
+	require.NotNil(t, end.Text)
+	assert.Empty(t, *end.Text)
+	assert.Equal(t, ref.TextBytes, end.NextOffset)
 	var stored sql.NullString
 	require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx, `SELECT body FROM conversation_messages WHERE session_id='chat'`).Scan(&stored)
