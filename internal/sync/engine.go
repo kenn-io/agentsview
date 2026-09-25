@@ -553,9 +553,12 @@ type Engine struct {
 	// per source path instead.
 	archiveStaleClaudeForks *archiveStaleClaudeForkIndex
 	deferredSourceCwd       *sourceCwdReconciliationBatch
-	agentDirs               map[parser.AgentType][]string
-	sourceMachines          map[parser.AgentType]map[string]string
-	preserveAgents          []parser.AgentType
+	// sourceSet holds the provider set and session roots this engine
+	// discovers from. ReconfigureSources replaces it as one snapshot.
+	sourceSet atomic.Pointer[engineSources]
+	// baseProviderFactories is the unfiltered, unconfigured provider list
+	// that each source snapshot is built from.
+	baseProviderFactories   []parser.ProviderFactory
 	machine                 string
 	blockedResultCategories map[string]bool
 	// stagedCodexMin is the resolved full-parse size above which Codex
@@ -624,15 +627,7 @@ type Engine struct {
 	pathRewriter            func(string) string
 	storedPathResolver      func(string) (string, bool)
 	emitter                 Emitter
-	providerFactories       map[parser.AgentType]parser.ProviderFactory
 	providerMigrationModes  map[parser.AgentType]parser.ProviderMigrationMode
-	// providerStatHashers caches the optional MultiFileStatHasher
-	// implementations keyed by AgentType. Populated at engine
-	// construction by type-asserting each constructed provider; nil
-	// entries indicate the provider does not implement
-	// MultiFileStatHasher (single-file agents and providers without a
-	// multi-file layout take the existing stat-only composite path).
-	providerStatHashers map[parser.AgentType]parser.MultiFileStatHasher
 
 	providerWatchRootsMu    gosync.Mutex
 	providerWatchRoots      map[parser.AgentType][]parser.WatchRoot
@@ -852,7 +847,7 @@ func (e *Engine) ProviderStatHasher(agent parser.AgentType) parser.MultiFileStat
 	if e == nil {
 		return nil
 	}
-	return e.providerStatHashers[agent]
+	return e.sources().providerStatHashers[agent]
 }
 
 // StagedProviderStatHashes returns the cumulative number of per-source
@@ -902,28 +897,10 @@ func NewEngine(ctx context.Context,
 	}
 	skipHashKeys, _ := normalizeSourceHashSkipCache(skipCache, nil)
 
-	dirs := make(map[parser.AgentType][]string, len(cfg.AgentDirs))
-	for k, v := range cfg.AgentDirs {
-		dirs[k] = append([]string(nil), v...)
-	}
-	sourceMachines := make(map[parser.AgentType]map[string]string, len(cfg.SourceMachines))
-	for agent, roots := range cfg.SourceMachines {
-		sourceMachines[agent] = maps.Clone(roots)
-	}
 	providerFactories := parser.ProviderFactories()
 	if cfg.ProviderFactories != nil {
 		providerFactories = append([]parser.ProviderFactory(nil), cfg.ProviderFactories...)
 	}
-	for i, factory := range providerFactories {
-		providerFactories[i] = parser.ConfigureProviderFactory(factory, cfg.ProviderMetadata[factory.Definition().Type])
-	}
-	disabledAgents := append([]parser.AgentType(nil), cfg.DisabledAgents...)
-	providerFactories = slices.DeleteFunc(
-		providerFactories,
-		func(factory parser.ProviderFactory) bool {
-			return slices.Contains(disabledAgents, factory.Definition().Type)
-		},
-	)
 	providerModes := parser.ProviderMigrationModes()
 	if cfg.ProviderMigrationModes != nil {
 		maps.Copy(providerModes, cfg.ProviderMigrationModes)
@@ -970,9 +947,7 @@ func NewEngine(ctx context.Context,
 		db:                      database,
 		stat:                    os.Stat,
 		lstat:                   os.Lstat,
-		agentDirs:               dirs,
-		sourceMachines:          sourceMachines,
-		preserveAgents:          disabledAgents,
+		baseProviderFactories:   providerFactories,
 		machine:                 cfg.Machine,
 		blockedResultCategories: blockedCategorySet(cfg.BlockedResultCategories),
 		stagedCodexMin:          stagedCodexMinBytes(cfg.StagedCodexParseMinBytes),
@@ -998,10 +973,7 @@ func NewEngine(ctx context.Context,
 		pathRewriter:            cfg.PathRewriter,
 		storedPathResolver:      cfg.StoredPathResolver,
 		emitter:                 cfg.Emitter,
-		providerFactories:       providerFactoryMap(providerFactories),
 		providerMigrationModes:  providerModes,
-		providerStatHashers: buildProviderStatHashers(
-			providerFactoryMap(providerFactories)),
 		digestVerifiedAt:        make(map[string]time.Time),
 		providerWatchRoots:      make(map[parser.AgentType][]parser.WatchRoot),
 		projectIdentityCache:    make(map[string]projectIdentityCacheEntry),
@@ -1015,6 +987,12 @@ func NewEngine(ctx context.Context,
 			return newReconciliationSpool(ctx, path)
 		},
 	}
+	e.sourceSet.Store(newEngineSources(providerFactories, SourceConfig{
+		AgentDirs:        cfg.AgentDirs,
+		SourceMachines:   cfg.SourceMachines,
+		ProviderMetadata: cfg.ProviderMetadata,
+		DisabledAgents:   cfg.DisabledAgents,
+	}))
 	if !cfg.Ephemeral {
 		if err := e.failures.Load(ctx, database); err != nil {
 			log.Printf("%v", err)
@@ -1076,7 +1054,7 @@ func (e *Engine) configuredMachineForPath(
 	}
 	bestRoot := ""
 	machine := ""
-	for root, candidate := range e.sourceMachines[agent] {
+	for root, candidate := range e.sources().sourceMachines[agent] {
 		cleanRoot, err := pathutil.LocalComparisonKey(root)
 		if err != nil {
 			continue
@@ -1122,8 +1100,8 @@ func (e *Engine) reconciliationOwnershipMachines(
 		seen[machine] = true
 		machines = append(machines, machine)
 	}
-	configured := make([]string, 0, len(e.sourceMachines[agent]))
-	for root := range e.sourceMachines[agent] {
+	configured := make([]string, 0, len(e.sources().sourceMachines[agent]))
+	for root := range e.sources().sourceMachines[agent] {
 		configured = append(configured, root)
 	}
 	// Map iteration is unordered; sort so the query sequence is deterministic.
@@ -1143,7 +1121,7 @@ func (e *Engine) reconciliationOwnershipMachines(
 				continue
 			}
 			if pathWithinRoot(cleanCfg, clean) || pathWithinRoot(clean, cleanCfg) {
-				add(e.sourceMachines[agent][cfg])
+				add(e.sources().sourceMachines[agent][cfg])
 			}
 		}
 	}
@@ -1293,7 +1271,7 @@ func (e *Engine) recordProviderStatHash(
 	if hash.digest == 0 {
 		return
 	}
-	if _, ok := e.providerStatHashers[hash.agent]; !ok {
+	if _, ok := e.sources().providerStatHashers[hash.agent]; !ok {
 		return
 	}
 	if !e.providerStatHashMetadataVerified(hash) {
@@ -1987,8 +1965,8 @@ func (e *Engine) classifyProviderChangedPath(
 	var classificationErr error
 	seen := map[string]struct{}{}
 
-	agents := make([]parser.AgentType, 0, len(e.providerFactories))
-	for agent := range e.providerFactories {
+	agents := make([]parser.AgentType, 0, len(e.sources().providerFactories))
+	for agent := range e.sources().providerFactories {
 		agents = append(agents, agent)
 	}
 	slices.SortFunc(agents, func(a, b parser.AgentType) int {
@@ -2013,18 +1991,18 @@ func (e *Engine) classifyProviderChangedPath(
 			filepath.Base(path) == parser.CodexSessionIndexFilename {
 			continue
 		}
-		roots := e.agentDirs[agentType]
+		roots := e.sources().agentDirs[agentType]
 		if len(roots) == 0 {
 			continue
 		}
-		factory, ok := e.providerFactories[agentType]
+		factory, ok := e.sources().providerFactories[agentType]
 		if !ok || factory == nil {
 			continue
 		}
 		provider := factory.NewProvider(parser.ProviderConfig{
 			Roots:          roots,
 			Machine:        e.machine,
-			SourceMachines: e.sourceMachines[agentType],
+			SourceMachines: e.sources().sourceMachines[agentType],
 			PathRewriter:   e.pathRewriter,
 		})
 		def := provider.Definition()
@@ -2629,7 +2607,7 @@ func (e *Engine) expandClaudeDuplicateCandidates(
 
 	out := files
 	for agent, ids := range sessionIDs {
-		for _, root := range e.agentDirs[agent] {
+		for _, root := range e.sources().agentDirs[agent] {
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
@@ -3043,7 +3021,7 @@ func (e *Engine) resyncBuildLocked(
 				)
 			}
 		}
-		disabledStorage := storageAgentsForDisabledProviders(e.preserveAgents)
+		disabledStorage := storageAgentsForDisabledProviders(e.sources().preserveAgents)
 		// A disabled ICodeMate provider discovers nothing, so its CLI JSONL
 		// rows are preserved rather than rediscovered and must leave the
 		// protected count with the container rows.
@@ -4182,7 +4160,7 @@ func (e *Engine) protectedFileSessionCount(ctx context.Context,
 	database *db.DB, machine, idPrefix string, scoped bool,
 ) (int, error) {
 	return protectedFileSessionCount(ctx,
-		database, machine, idPrefix, scoped, e.preserveAgents,
+		database, machine, idPrefix, scoped, e.sources().preserveAgents,
 	)
 }
 
@@ -5101,10 +5079,11 @@ func (e *Engine) ReconcileWatchRootsAfterLostEvents(
 // report only one endpoint of a move between that provider's roots.
 func (e *Engine) ReconciliationRootsForAgent(agent string) []string {
 	agentType := parser.AgentType(agent)
-	if _, enabled := e.providerFactories[agentType]; !enabled {
+	sources := e.sources()
+	if _, enabled := sources.providerFactories[agentType]; !enabled {
 		return nil
 	}
-	return append([]string(nil), e.agentDirs[agentType]...)
+	return append([]string(nil), sources.agentDirs[agentType]...)
 }
 
 // providerReconciliationPlan pairs one authoritative provider with the scope
@@ -5128,8 +5107,8 @@ func (e *Engine) resolveReconciliationPlans(
 	roots []string,
 	full, fullCoverage bool,
 ) ([]providerReconciliationPlan, int) {
-	agents := make([]parser.AgentType, 0, len(e.providerFactories))
-	for agent := range e.providerFactories {
+	agents := make([]parser.AgentType, 0, len(e.sources().providerFactories))
+	for agent := range e.sources().providerFactories {
 		agents = append(agents, agent)
 	}
 	slices.SortFunc(agents, func(a, b parser.AgentType) int {
@@ -5143,10 +5122,10 @@ func (e *Engine) resolveReconciliationPlans(
 		if agentFilter != "" && agent != agentFilter {
 			continue
 		}
-		if len(e.agentDirs[agent]) == 0 {
+		if len(e.sources().agentDirs[agent]) == 0 {
 			continue
 		}
-		factory := e.providerFactories[agent]
+		factory := e.sources().providerFactories[agent]
 		if factory == nil {
 			continue
 		}
@@ -5155,7 +5134,7 @@ func (e *Engine) resolveReconciliationPlans(
 			// A full authoritative request covers each provider's complete
 			// configured scope; a partial request lets each provider resolve
 			// the same exact caller roots.
-			requestRoots = e.agentDirs[agent]
+			requestRoots = e.sources().agentDirs[agent]
 		}
 		filtered := make([]string, 0, len(requestRoots))
 		for _, root := range requestRoots {
@@ -5168,8 +5147,8 @@ func (e *Engine) resolveReconciliationPlans(
 			continue
 		}
 		provider := factory.NewProvider(parser.ProviderConfig{
-			Roots: e.agentDirs[agent], Machine: e.machine,
-			SourceMachines: e.sourceMachines[agent],
+			Roots: e.sources().agentDirs[agent], Machine: e.machine,
+			SourceMachines: e.sources().sourceMachines[agent],
 			PathRewriter:   e.pathRewriter,
 		})
 		plan, err := provider.ResolveReconciliationScopes(
@@ -5201,7 +5180,7 @@ func (e *Engine) excludedRemoteReconciliationRoots(
 	requested := roots
 	if full {
 		requested = nil
-		for _, dirs := range e.agentDirs {
+		for _, dirs := range e.sources().agentDirs {
 			requested = append(requested, dirs...)
 		}
 	}
@@ -5881,7 +5860,7 @@ func (e *Engine) streamReconciliationCandidates(
 		if len(plan.plan.Scopes) == 0 {
 			continue
 		}
-		factory := e.providerFactories[agent]
+		factory := e.sources().providerFactories[agent]
 		if factory == nil {
 			continue
 		}
@@ -5899,11 +5878,11 @@ func (e *Engine) streamReconciliationCandidates(
 			planRetryRoots = append(planRetryRoots, scope.RetryRoots...)
 		}
 		if agent == parser.AgentKiro {
-			traversalRoots = append([]string(nil), e.agentDirs[agent]...)
+			traversalRoots = append([]string(nil), e.sources().agentDirs[agent]...)
 		}
 		provider := factory.NewProvider(parser.ProviderConfig{
 			Roots: traversalRoots, Machine: e.machine, PathRewriter: e.pathRewriter,
-			SourceMachines:                    e.sourceMachines[agent],
+			SourceMachines:                    e.sources().sourceMachines[agent],
 			SQLiteContainerListsWatermarkOnly: containerListsWatermarkOnly,
 		})
 		providers[agent] = provider
@@ -5932,11 +5911,11 @@ func (e *Engine) streamReconciliationCandidates(
 				// Kiro source arbitration spans every configured root even when
 				// the proof scope is partial; only the winning candidate inside
 				// that proof is admitted to processing below.
-				discoveryRoots = e.agentDirs[agent]
+				discoveryRoots = e.sources().agentDirs[agent]
 			}
 			scopeProvider := factory.NewProvider(parser.ProviderConfig{
 				Roots: discoveryRoots, Machine: e.machine,
-				SourceMachines:                    e.sourceMachines[agent],
+				SourceMachines:                    e.sources().sourceMachines[agent],
 				PathRewriter:                      e.pathRewriter,
 				SQLiteContainerListsWatermarkOnly: containerListsWatermarkOnly,
 			})
@@ -5953,7 +5932,7 @@ func (e *Engine) streamReconciliationCandidates(
 			rankingRoots := traversalRoots
 			if agent == parser.AgentKiro {
 				// Kiro precedence uses configured roots for reordered scoped requests.
-				rankingRoots = e.agentDirs[agent]
+				rankingRoots = e.sources().agentDirs[agent]
 			}
 			var kiroWinners map[string]reconciliationCandidate
 			if agent == parser.AgentKiro {
@@ -6825,11 +6804,11 @@ func (e *Engine) tombstoneMissingWatchSourcesLocked(
 			)
 		}
 		var provider parser.Provider
-		if factory := e.providerFactories[plan.agent]; factory != nil {
+		if factory := e.sources().providerFactories[plan.agent]; factory != nil {
 			provider = factory.NewProvider(parser.ProviderConfig{
-				Roots:          e.agentDirs[plan.agent],
+				Roots:          e.sources().agentDirs[plan.agent],
 				Machine:        e.machine,
-				SourceMachines: e.sourceMachines[plan.agent],
+				SourceMachines: e.sources().sourceMachines[plan.agent],
 				PathRewriter:   e.pathRewriter,
 			})
 		}
@@ -6949,10 +6928,10 @@ func (e *Engine) tombstoneMissingWatchSourceScopesLocked(
 			}
 		}
 		allProviderRootsCovered := reconciliationCoverageComplete(agentScopes)
-		if factory := e.providerFactories[agent]; factory != nil {
+		if factory := e.sources().providerFactories[agent]; factory != nil {
 			provider = factory.NewProvider(parser.ProviderConfig{
-				Roots: e.agentDirs[agent], Machine: e.machine,
-				SourceMachines: e.sourceMachines[agent],
+				Roots: e.sources().agentDirs[agent], Machine: e.machine,
+				SourceMachines: e.sources().sourceMachines[agent],
 				PathRewriter:   e.pathRewriter,
 			})
 		}
@@ -7125,7 +7104,7 @@ func (e *Engine) tombstoneMissingWatchSourceScopesLocked(
 									// configured scope so a replacement beyond the
 									// narrowed pass stays resolvable.
 									replacementIndex, err = e.buildReconciliationReplacementIndex(
-										ctx, provider, e.agentDirs[agent],
+										ctx, provider, e.sources().agentDirs[agent],
 									)
 									if err != nil {
 										return deleted, fmt.Errorf(
@@ -7951,7 +7930,7 @@ func (e *Engine) syncAllLocked(
 	// provider-authoritative DB-backed providers: a shared SQLite DB hosts every
 	// session, so the provider facade enumerates sources and parses only the
 	// changed ones.
-	if scope.includesAny(e.agentDirs[parser.AgentWarp]) {
+	if scope.includesAny(e.sources().agentDirs[parser.AgentWarp]) {
 		if e.syncProviderDBBackedAgent(
 			ctx, parser.AgentWarp, "warp",
 			writeMode, verbose, scope, &stats, advanceDBProgress,
@@ -7960,7 +7939,7 @@ func (e *Engine) syncAllLocked(
 			return stats
 		}
 	}
-	if scope.includesAny(e.agentDirs[parser.AgentForge]) {
+	if scope.includesAny(e.sources().agentDirs[parser.AgentForge]) {
 		if e.syncProviderDBBackedAgent(
 			ctx, parser.AgentForge, "forge",
 			writeMode, verbose, scope, &stats, advanceDBProgress,
@@ -7969,7 +7948,7 @@ func (e *Engine) syncAllLocked(
 			return stats
 		}
 	}
-	if scope.includesAny(e.agentDirs[parser.AgentPiebald]) {
+	if scope.includesAny(e.sources().agentDirs[parser.AgentPiebald]) {
 		if e.syncProviderDBBackedAgent(
 			ctx, parser.AgentPiebald, "piebald",
 			writeMode, verbose, scope, &stats, advanceDBProgress,
@@ -7978,7 +7957,7 @@ func (e *Engine) syncAllLocked(
 			return stats
 		}
 	}
-	if scope.includesAny(e.agentDirs[parser.AgentZCode]) {
+	if scope.includesAny(e.sources().agentDirs[parser.AgentZCode]) {
 		if e.syncProviderDBBackedAgent(
 			ctx, parser.AgentZCode, "zcode",
 			writeMode, verbose, scope, &stats, advanceDBProgress,
@@ -7987,7 +7966,7 @@ func (e *Engine) syncAllLocked(
 			return stats
 		}
 	}
-	if scope.includesAny(e.agentDirs[parser.AgentGoose]) {
+	if scope.includesAny(e.sources().agentDirs[parser.AgentGoose]) {
 		if e.syncProviderDBBackedAgent(
 			ctx, parser.AgentGoose, "goose",
 			writeMode, verbose, scope, &stats, advanceDBProgress,
@@ -7996,7 +7975,7 @@ func (e *Engine) syncAllLocked(
 			return stats
 		}
 	}
-	if scope.includesAny(e.agentDirs[parser.AgentCrush]) {
+	if scope.includesAny(e.sources().agentDirs[parser.AgentCrush]) {
 		if e.syncProviderDBBackedAgent(
 			ctx, parser.AgentCrush, "crush",
 			writeMode, verbose, scope, &stats, advanceDBProgress,
@@ -8078,8 +8057,8 @@ func (e *Engine) discoverProviderSources(
 		preContainerStates,
 	)
 
-	agents := make([]parser.AgentType, 0, len(e.providerFactories))
-	for agent := range e.providerFactories {
+	agents := make([]parser.AgentType, 0, len(e.sources().providerFactories))
+	for agent := range e.sources().providerFactories {
 		agents = append(agents, agent)
 	}
 	slices.SortFunc(agents, func(a, b parser.AgentType) int {
@@ -8094,7 +8073,7 @@ func (e *Engine) discoverProviderSources(
 		if !scope.matchesAgent(agentType) {
 			continue
 		}
-		roots := e.agentDirs[agentType]
+		roots := e.sources().agentDirs[agentType]
 		if len(roots) == 0 {
 			continue
 		}
@@ -8107,7 +8086,7 @@ func (e *Engine) discoverProviderSources(
 		if len(filteredRoots) == 0 {
 			continue
 		}
-		factory, ok := e.providerFactories[agentType]
+		factory, ok := e.sources().providerFactories[agentType]
 		if !ok || factory == nil {
 			continue
 		}
@@ -8120,7 +8099,7 @@ func (e *Engine) discoverProviderSources(
 		provider := factory.NewProvider(parser.ProviderConfig{
 			Roots:                             providerRoots,
 			Machine:                           e.machine,
-			SourceMachines:                    e.sourceMachines[agentType],
+			SourceMachines:                    e.sources().sourceMachines[agentType],
 			PathRewriter:                      e.pathRewriter,
 			SQLiteContainerListsWatermarkOnly: containerListsWatermarkOnly,
 		})
@@ -8449,12 +8428,12 @@ func (e *Engine) expandCodexProviderDuplicates(
 func (e *Engine) codexUUIDPathLister(
 	agent parser.AgentType, scope *rootSyncScope,
 ) func(string) []string {
-	factory, ok := e.providerFactories[agent]
+	factory, ok := e.sources().providerFactories[agent]
 	if !ok || factory == nil {
 		return nil
 	}
-	roots := make([]string, 0, len(e.agentDirs[agent]))
-	for _, root := range e.agentDirs[agent] {
+	roots := make([]string, 0, len(e.sources().agentDirs[agent]))
+	for _, root := range e.sources().agentDirs[agent] {
 		if root == "" || !scope.includes(root) {
 			continue
 		}
@@ -8466,7 +8445,7 @@ func (e *Engine) codexUUIDPathLister(
 	provider := factory.NewProvider(parser.ProviderConfig{
 		Roots:          roots,
 		Machine:        e.machine,
-		SourceMachines: e.sourceMachines[agent],
+		SourceMachines: e.sources().sourceMachines[agent],
 	})
 	lister, ok := provider.(interface {
 		AllSourcePathsForUUID(string) []string
@@ -8872,7 +8851,7 @@ func (e *Engine) providerSourceMtime(
 	if file.ProviderSource == nil {
 		return 0, false, nil
 	}
-	factory, ok := e.providerFactories[file.Agent]
+	factory, ok := e.sources().providerFactories[file.Agent]
 	if !ok || factory == nil {
 		return 0, false, nil
 	}
@@ -8885,7 +8864,7 @@ func (e *Engine) providerSourceMtime(
 		)
 	}
 	provider := factory.NewProvider(parser.ProviderConfig{
-		Roots:        e.agentDirs[file.Agent],
+		Roots:        e.sources().agentDirs[file.Agent],
 		Machine:      e.machine,
 		PathRewriter: e.pathRewriter,
 	})
@@ -9435,8 +9414,8 @@ func (e *Engine) syncProviderDBBacked(
 	ctx context.Context, agent parser.AgentType, scope *rootSyncScope,
 	flush func([]pendingWrite) bool,
 ) (int, int, error) {
-	roots := make([]string, 0, len(e.agentDirs[agent]))
-	for _, dir := range e.agentDirs[agent] {
+	roots := make([]string, 0, len(e.sources().agentDirs[agent]))
+	for _, dir := range e.sources().agentDirs[agent] {
 		if dir == "" || !scope.includes(dir) {
 			continue
 		}
@@ -9445,14 +9424,14 @@ func (e *Engine) syncProviderDBBacked(
 	if len(roots) == 0 {
 		return 0, 0, nil
 	}
-	factory, ok := e.providerFactories[agent]
+	factory, ok := e.sources().providerFactories[agent]
 	if !ok || factory == nil {
 		return 0, 0, nil
 	}
 	provider := factory.NewProvider(parser.ProviderConfig{
 		Roots:          roots,
 		Machine:        e.machine,
-		SourceMachines: e.sourceMachines[agent],
+		SourceMachines: e.sources().sourceMachines[agent],
 	})
 	discoverer, ok := provider.(parser.StreamingDiscoverer)
 	if !ok || provider.Capabilities().Source.StreamingDiscovery != parser.CapabilitySupported {
@@ -9658,7 +9637,7 @@ func (e *Engine) providerDBBackedSourceFresh(ctx context.Context,
 	if storedMtime != fingerprint.MTimeNS {
 		return false
 	}
-	if factory, ok := e.providerFactories[agent]; ok && factory != nil &&
+	if factory, ok := e.sources().providerFactories[agent]; ok && factory != nil &&
 		!e.providerFingerprintHashMatchesDB(ctx,
 			agent,
 			lookupPath,
@@ -11470,7 +11449,7 @@ func (e *Engine) sourceFailureCacheIdentity(
 	if !e.shouldCacheSkip(file) && fingerprint.Hash == "" {
 		return id, false
 	}
-	factory := e.providerFactories[file.Agent]
+	factory := e.sources().providerFactories[file.Agent]
 	if factory == nil {
 		return id, false
 	}
@@ -11646,7 +11625,7 @@ func (e *Engine) processProviderFile(
 		return processResult{skip: true}, true
 	}
 
-	factory, ok := e.providerFactories[file.Agent]
+	factory, ok := e.sources().providerFactories[file.Agent]
 	if !ok {
 		return processResult{
 			err: fmt.Errorf("provider not found for agent type: %s", file.Agent),
@@ -11654,10 +11633,10 @@ func (e *Engine) processProviderFile(
 	}
 	machine := e.machineForFile(file)
 	providerConfig := parser.ProviderConfig{
-		Roots:                 e.agentDirs[file.Agent],
+		Roots:                 e.sources().agentDirs[file.Agent],
 		Machine:               e.machine,
 		StableSourceSnapshots: e.stableSourceSnapshots,
-		SourceMachines:        e.sourceMachines[file.Agent],
+		SourceMachines:        e.sources().sourceMachines[file.Agent],
 		PathRewriter:          e.pathRewriter,
 	}
 	provider := factory.NewProvider(providerConfig)
@@ -11797,7 +11776,7 @@ func (e *Engine) processProviderFile(
 	// remote stats cannot prove a re-download unchanged, so their remote
 	// freshness stays content-hash arbitrated.
 	var preParseStatHash *pendingProviderStatHash
-	if hasher, ok := e.providerStatHashers[file.Agent]; ok &&
+	if hasher, ok := e.sources().providerStatHashers[file.Agent]; ok &&
 		e.providerStatDigestEligible(file.Agent) {
 		if physicalPath := providerDiscoveredPath(source); physicalPath != "" {
 			targetKey := physicalPath
@@ -13552,7 +13531,7 @@ func (e *Engine) applyProviderFilePathPolicies(
 		// site deliberately withheld.
 		if res.providerStatHash == nil &&
 			e.providerStatDigestEligible(agent) {
-			if hasher, ok := e.providerStatHashers[agent]; ok {
+			if hasher, ok := e.sources().providerStatHashers[agent]; ok {
 				targetKey := filePath
 				if e.pathRewriter != nil {
 					targetKey = e.pathRewriter(filePath)
@@ -14187,7 +14166,7 @@ func (e *Engine) shouldCacheSkip(
 	if isOpenCodeFormatSQLiteVirtualPath(file.Agent, file.Path) {
 		return false
 	}
-	for _, dir := range e.agentDirs[file.Agent] {
+	for _, dir := range e.sources().agentDirs[file.Agent] {
 		if dir == "" {
 			continue
 		}
@@ -14301,7 +14280,7 @@ func (e *Engine) clearSkipInMemory(path string) int {
 	base, _, _ := strings.Cut(path, sourceHashSkipMarker)
 	e.failures.Clear(base)
 	if _, suffix := SplitProviderSkipCachePath(base); suffix == "" {
-		for agent := range e.providerFactories {
+		for agent := range e.sources().providerFactories {
 			e.failures.Clear(providerAgentSkipCacheKey(base, agent))
 		}
 	}
@@ -16128,7 +16107,7 @@ func (e *Engine) classifyCodexIndexPath(ctx context.Context,
 		return nil
 	}
 	var sessionRoots []string
-	for _, agDir := range e.agentDirs[parser.AgentCodex] {
+	for _, agDir := range e.sources().agentDirs[parser.AgentCodex] {
 		if agDir == "" {
 			continue
 		}
@@ -16212,7 +16191,7 @@ func (e *Engine) pickPreferredCodexIndexDiscoveredFile(ctx context.Context,
 // own DB-aware preference across the per-root candidates. Returns "" when the
 // provider, source lookup, or path resolution fails.
 func (e *Engine) codexSourceFileForUUID(root, uuid string) string {
-	factory, ok := e.providerFactories[parser.AgentCodex]
+	factory, ok := e.sources().providerFactories[parser.AgentCodex]
 	if !ok || factory == nil {
 		return ""
 	}
@@ -16240,12 +16219,12 @@ func (e *Engine) codexSourceFileForUUID(root, uuid string) string {
 func (e *Engine) codexPinnedProviderSource(
 	agent parser.AgentType, path string,
 ) *parser.SourceRef {
-	factory, ok := e.providerFactories[agent]
+	factory, ok := e.sources().providerFactories[agent]
 	if !ok || factory == nil {
 		return nil
 	}
 	provider := factory.NewProvider(parser.ProviderConfig{
-		Roots:   e.agentDirs[agent],
+		Roots:   e.sources().agentDirs[agent],
 		Machine: e.machine,
 	})
 	pinner, ok := provider.(interface {
@@ -16430,7 +16409,7 @@ func (e *Engine) classifyReasonixPath(
 	path string,
 ) (parser.DiscoveredFile, bool) {
 	sep := string(filepath.Separator)
-	for _, reasonixDir := range e.agentDirs[parser.AgentReasonix] {
+	for _, reasonixDir := range e.sources().agentDirs[parser.AgentReasonix] {
 		if reasonixDir == "" {
 			continue
 		}
@@ -19414,14 +19393,14 @@ func (e *Engine) findProviderSourceFile(
 	if mode != parser.ProviderMigrationProviderAuthoritative {
 		return ""
 	}
-	factory, ok := e.providerFactories[def.Type]
+	factory, ok := e.sources().providerFactories[def.Type]
 	if !ok || factory == nil {
 		return ""
 	}
 	provider := factory.NewProvider(parser.ProviderConfig{
-		Roots:          e.agentDirs[def.Type],
+		Roots:          e.sources().agentDirs[def.Type],
 		Machine:        e.machine,
-		SourceMachines: e.sourceMachines[def.Type],
+		SourceMachines: e.sources().sourceMachines[def.Type],
 		PathRewriter:   e.pathRewriter,
 	})
 	source, found, err := provider.FindSource(ctx, parser.FindSourceRequest{
@@ -19470,14 +19449,14 @@ func (e *Engine) providerSessionSourceMtime(
 	storedPath string,
 ) int64 {
 	ctx = e.parsePolicyContext(ctx)
-	factory, ok := e.providerFactories[def.Type]
+	factory, ok := e.sources().providerFactories[def.Type]
 	if !ok || factory == nil {
 		return 0
 	}
 	provider := factory.NewProvider(parser.ProviderConfig{
-		Roots:          e.agentDirs[def.Type],
+		Roots:          e.sources().agentDirs[def.Type],
 		Machine:        e.machine,
-		SourceMachines: e.sourceMachines[def.Type],
+		SourceMachines: e.sources().sourceMachines[def.Type],
 		PathRewriter:   e.pathRewriter,
 	})
 	source, found, err := provider.FindSource(ctx, parser.FindSourceRequest{
@@ -19664,7 +19643,7 @@ func (e *Engine) SourceMtime(ctx context.Context, sessionID string) int64 {
 	if def.Type == parser.AgentEvener {
 		// Session polling must notice metadata and parent changes too.
 		// This opaque stat token is compared for equality, not ordering.
-		if hasher := e.providerStatHashers[def.Type]; hasher != nil {
+		if hasher := e.sources().providerStatHashers[def.Type]; hasher != nil {
 			return int64(hasher.ComputeMultiFileStatHash(path))
 		}
 		return 0
@@ -19995,7 +19974,7 @@ func (e *Engine) SyncSingleSessionContext(
 		}
 	case parser.AgentCursor:
 		// Support both flat and nested transcript layouts.
-		for _, cursorDir := range e.agentDirs[parser.AgentCursor] {
+		for _, cursorDir := range e.sources().agentDirs[parser.AgentCursor] {
 			rel, ok := isUnder(cursorDir, path)
 			if !ok {
 				continue
@@ -20025,7 +20004,7 @@ func (e *Engine) SyncSingleSessionContext(
 		//               <qwenpawDir>/<workspace>/sessions/<subdir>/<name>.json
 		// Workspace name is the first path segment relative to the
 		// QwenPaw root.
-		for _, qwenpawDir := range e.agentDirs[parser.AgentQwenPaw] {
+		for _, qwenpawDir := range e.sources().agentDirs[parser.AgentQwenPaw] {
 			rel, ok := isUnder(qwenpawDir, path)
 			if !ok {
 				continue
@@ -20059,7 +20038,7 @@ func (e *Engine) SyncSingleSessionContext(
 			}
 		}
 	case parser.AgentQoder:
-		for _, qoderDir := range e.agentDirs[parser.AgentQoder] {
+		for _, qoderDir := range e.sources().agentDirs[parser.AgentQoder] {
 			rel, ok := isUnder(qoderDir, path)
 			if !ok {
 				continue
@@ -20755,7 +20734,7 @@ func scanShouldReport(i, total int) bool {
 }
 
 func (e *Engine) codexMetadata() parser.CodexMetadata {
-	if provider, ok := e.providerStatHashers[parser.AgentCodex].(parser.CodexMetadataProvider); ok {
+	if provider, ok := e.sources().providerStatHashers[parser.AgentCodex].(parser.CodexMetadataProvider); ok {
 		return provider.Metadata()
 	}
 	return parser.CodexMetadata{}

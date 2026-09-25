@@ -362,7 +362,7 @@ func (e *Engine) hydrateS3DiscoveredFile(
 			file.Project = sess.Project
 		}
 	}
-	for _, root := range e.agentDirs[file.Agent] {
+	for _, root := range e.sources().agentDirs[file.Agent] {
 		if !isS3SourcePath(root) {
 			continue
 		}

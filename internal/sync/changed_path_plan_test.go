@@ -744,7 +744,7 @@ func TestPlanChangedPathsRejectsUntrustedInputAndOwnership(t *testing.T) {
 
 	mismatched := factory
 	mismatched.agent = "different-owner"
-	engine.providerFactories[factory.agent] = mismatched
+	engine.sources().providerFactories[factory.agent] = mismatched
 	plan, err = engine.PlanChangedPathsContext(
 		t.Context(), []string{filepath.Join(root, "changed.jsonl")},
 	)

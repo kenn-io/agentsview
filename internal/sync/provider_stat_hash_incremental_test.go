@@ -79,7 +79,7 @@ func TestClaudeIncrementalWritePersistsCompleteSourceStatHash(t *testing.T) {
 	initial := engine.SyncAll(t.Context(), nil)
 	require.Equal(t, 1, initial.Synced)
 	require.Zero(t, initial.Failed)
-	hasher := engine.providerStatHashers[parser.AgentClaude]
+	hasher := engine.sources().providerStatHashers[parser.AgentClaude]
 	require.NotNil(t, hasher)
 	initialDigest, ok, err := database.GetProviderStatHash(
 		t.Context(), parser.AgentClaude, path,

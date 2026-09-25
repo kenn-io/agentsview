@@ -220,18 +220,18 @@ func (e *Engine) parseDiffProviderSources(
 	ctx context.Context,
 	agentType parser.AgentType,
 ) ([]parser.DiscoveredFile, error) {
-	factory, ok := e.providerFactories[agentType]
+	factory, ok := e.sources().providerFactories[agentType]
 	if !ok || factory == nil {
 		return nil, nil
 	}
-	roots := e.agentDirs[agentType]
+	roots := e.sources().agentDirs[agentType]
 	if len(roots) == 0 {
 		return nil, nil
 	}
 	provider := factory.NewProvider(parser.ProviderConfig{
 		Roots:          roots,
 		Machine:        e.machine,
-		SourceMachines: e.sourceMachines[agentType],
+		SourceMachines: e.sources().sourceMachines[agentType],
 		PathRewriter:   e.pathRewriter,
 	})
 	sources, err := provider.Discover(ctx)
@@ -293,7 +293,7 @@ func (e *Engine) parseDiffAgentDiscoverable(def parser.AgentDef) bool {
 	// rejects them.
 	switch e.providerMigrationModes[def.Type] {
 	case parser.ProviderMigrationProviderAuthoritative:
-		factory, ok := e.providerFactories[def.Type]
+		factory, ok := e.sources().providerFactories[def.Type]
 		return ok && factory != nil
 	default:
 		return false

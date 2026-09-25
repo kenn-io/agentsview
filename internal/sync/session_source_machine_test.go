@@ -84,15 +84,16 @@ func TestMachineForPathUsesNormalizedRootSpecificity(t *testing.T) {
 	}
 	legacyParentPath := legacyParent.String()
 	require.Greater(t, len(legacyParentPath), len(nested))
-	engine := &Engine{
+	engine := withTestSources(&Engine{
+		machine: "localbox",
+	}, &engineSources{
 		sourceMachines: map[parser.AgentType]map[string]string{
 			parser.AgentClaude: {
 				legacyParentPath: "parentbox",
 				nested:           "nestedbox",
 			},
 		},
-		machine: "localbox",
-	}
+	})
 
 	assert.Equal(t, "nestedbox", engine.machineForPath(
 		parser.AgentClaude, filepath.Join(nested, "session.jsonl"),
@@ -103,12 +104,13 @@ func TestMachineForPathMatchesAbsolutePathToRelativeRoot(t *testing.T) {
 	cwd, err := os.Getwd()
 	require.NoError(t, err)
 	relativeRoot := filepath.Join("testdata", "relative-session-source")
-	engine := &Engine{
+	engine := withTestSources(&Engine{
+		machine: "localbox",
+	}, &engineSources{
 		sourceMachines: map[parser.AgentType]map[string]string{
 			parser.AgentClaude: {relativeRoot: "archivebox"},
 		},
-		machine: "localbox",
-	}
+	})
 
 	assert.Equal(t, "archivebox", engine.machineForPath(
 		parser.AgentClaude,

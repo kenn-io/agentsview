@@ -411,13 +411,14 @@ func TestSyncSingleSessionS3ClaudeSidecarOnlyChangeReplacesPreview(
 		}, nil
 	}
 
-	e := &Engine{
+	e := withTestSources(&Engine{
 		db:      database,
 		machine: "central",
+	}, &engineSources{
 		agentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {"s3://bucket/laptop/raw/claude"},
 		},
-	}
+	})
 	first := e.processFile(t.Context(), parser.DiscoveredFile{
 		Agent:       parser.AgentClaude,
 		Path:        path,

@@ -126,7 +126,7 @@ func (e *Engine) captureSQLiteContainerStates(
 	for _, rawPath := range changedPaths {
 		path := filepath.Clean(rawPath)
 		for _, agent := range openCodeFamilySQLiteAgents {
-			for _, dir := range e.agentDirs[agent] {
+			for _, dir := range e.sources().agentDirs[agent] {
 				if dir == "" || strings.HasPrefix(dir, "s3://") {
 					continue
 				}
@@ -182,7 +182,7 @@ func (e *Engine) captureAgentSQLiteContainerStates(
 	roots []string,
 	states map[string]parser.SQLiteContainerState,
 ) {
-	for _, dir := range e.agentDirs[agent] {
+	for _, dir := range e.sources().agentDirs[agent] {
 		if dir == "" || strings.HasPrefix(dir, "s3://") {
 			continue
 		}

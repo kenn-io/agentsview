@@ -33,16 +33,17 @@ func TestClassifyOnePath_OpenHands(t *testing.T) {
 		eventPath, []byte(`{}`), 0o644,
 	))
 
-	eng := &Engine{
+	eng := withTestSources(&Engine{
 		db: openTestDB(t),
+		providerMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			parser.AgentOpenHands: parser.ProviderMigrationProviderAuthoritative,
+		},
+	}, &engineSources{
 		agentDirs: map[parser.AgentType][]string{
 			parser.AgentOpenHands: {root},
 		},
 		providerFactories: providerFactoryMap(parser.ProviderFactories()),
-		providerMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
-			parser.AgentOpenHands: parser.ProviderMigrationProviderAuthoritative,
-		},
-	}
+	})
 
 	tests := []struct {
 		name    string

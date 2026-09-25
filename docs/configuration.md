@@ -223,7 +223,7 @@ zoom_level = 120
 | `daemon_idle_timeout`               | Idle timeout for detached writable daemons; set to `"0s"` to keep them alive                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `chart_palette`                     | Server-wide categorical chart colors: `"agentsview"` (default) or `"matplotlib"`; also configurable under **Settings > Appearance**                                                                                                                                                                                                                                                                                                                                              |
 | `zoom_level`                        | Default interface zoom for clients without a local preference: `67`, `75`, `80`, `90`, `100`, `110`, `120`, `125`, `130`, `150`, `175`, or `200`. Defaults to `100` when omitted. Restart the daemon after manual edits                                                                                                                                                                                                                                                          |
-| `disabled_agents`                   | Session providers to exclude from local filesystem scanning; changes require a daemon restart — see [Disabling Session Providers](#disabling-session-providers)                                                                                                                                                                                                                                                                                                                  |
+| `disabled_agents`                   | Session providers to exclude from local filesystem scanning — see [Disabling Session Providers](#disabling-session-providers)                                                                                                                                                                                                                                                                                                                                                    |
 | `[proxy]`                           | Managed proxy configuration table — see [Remote Access](/docs/remote-access/)                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `disable_update_check`              | Disable the automatic update check (see [Privacy](#privacy-and-telemetry))                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `scan_protected_paths`              | Allow Git discovery inside macOS privacy-protected folders, accepting one consent prompt per folder — see [macOS Protected Folders](#macos-protected-folders)                                                                                                                                                                                                                                                                                                                    |
@@ -1030,11 +1030,14 @@ remote imports, and it does not restrict HTTP, SSH, PostgreSQL, DuckDB, or
 archive exports. `RemoteSyncExcluded` is the separate provider capability that
 keeps unsafe source trees out of remote exports.
 
-Restart the AgentsView daemon and any separate `pg push --watch`,
-`clickhouse push --watch`, or `duckdb push --watch` process after changing the
-setting. Previously archived sessions from a disabled provider remain available
-and exportable, including during archive rebuilds. The setting does not disable
-that provider as a Recall execution backend.
+A change saved on the Settings page applies to the running daemon right away.
+A newly enabled provider's existing sessions are synced immediately, and file
+watching and polling switch to the new provider set. The daemon reads edits made
+directly to `config.toml` at its next start. Restart any separate
+`pg push --watch`, `clickhouse push --watch`, or `duckdb push --watch` process
+after changing the setting. Previously archived sessions from a disabled
+provider remain available and exportable, including during archive rebuilds.
+The setting does not disable that provider as a Recall execution backend.
 
 ### Multiple Directories
 
@@ -1110,6 +1113,10 @@ must be local directories; use `dirs` for `s3://` roots on providers that
 support S3. Sessions from each home appear under their native provider. Pi's
 `homes` values correspond to `PI_CODING_AGENT_DIR`, not its parent `.pi`
 directory or a direct session directory.
+
+Homes added or removed on the Settings page apply to the running daemon right
+away, and sessions already in an added home are synced immediately. The daemon
+reads `homes` edited directly in `config.toml` at its next start.
 
 Other providers support multiple explicit `dirs`; they do not yet accept
 `homes`. A home mapping must match the provider's native layout before it can be

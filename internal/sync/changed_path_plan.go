@@ -77,11 +77,11 @@ func (e *Engine) planOneChangedPath(
 	claimed := false
 	agents := e.sortedAuthoritativeProviderAgents()
 	for _, agent := range agents {
-		roots := e.agentDirs[agent]
+		roots := e.sources().agentDirs[agent]
 		if len(roots) == 0 {
 			continue
 		}
-		factory := e.providerFactories[agent]
+		factory := e.sources().providerFactories[agent]
 		if factory == nil {
 			continue
 		}
@@ -92,7 +92,7 @@ func (e *Engine) planOneChangedPath(
 		}
 		provider := factory.NewProvider(parser.ProviderConfig{
 			Roots: roots, Machine: e.machine,
-			SourceMachines: e.sourceMachines[agent], PathRewriter: e.pathRewriter,
+			SourceMachines: e.sources().sourceMachines[agent], PathRewriter: e.pathRewriter,
 		})
 		watchRoots, err := e.providerChangedPathWatchRoots(ctx, agent, provider, roots)
 		if err != nil {
@@ -272,14 +272,14 @@ func (e *Engine) expandAffectedClaudeDuplicateCandidates(
 ) ([]parser.DiscoveredFile, error) {
 	providers := make(map[parser.AgentType]parser.Provider)
 	for _, agent := range []parser.AgentType{parser.AgentClaude, parser.AgentIcodemate} {
-		factory := e.providerFactories[agent]
-		roots := e.agentDirs[agent]
+		factory := e.sources().providerFactories[agent]
+		roots := e.sources().agentDirs[agent]
 		if factory == nil || len(roots) == 0 {
 			continue
 		}
 		providers[agent] = factory.NewProvider(parser.ProviderConfig{
 			Roots: roots, Machine: e.machine,
-			SourceMachines: e.sourceMachines[agent],
+			SourceMachines: e.sources().sourceMachines[agent],
 			PathRewriter:   e.pathRewriter,
 		})
 	}
@@ -365,8 +365,8 @@ func (e *Engine) expandAffectedClaudeDuplicateCandidates(
 }
 
 func (e *Engine) sortedAuthoritativeProviderAgents() []parser.AgentType {
-	agents := make([]parser.AgentType, 0, len(e.providerFactories))
-	for agent := range e.providerFactories {
+	agents := make([]parser.AgentType, 0, len(e.sources().providerFactories))
+	for agent := range e.sources().providerFactories {
 		if e.providerMigrationModes[agent] == parser.ProviderMigrationProviderAuthoritative {
 			agents = append(agents, agent)
 		}
@@ -594,14 +594,14 @@ func (e *Engine) discoverChangedPathFallbackProviders(
 		if e.providerMigrationModes[agent] != parser.ProviderMigrationProviderAuthoritative {
 			return nil, nil, fmt.Errorf("fallback provider %s is not authoritative", agent)
 		}
-		factory := e.providerFactories[agent]
-		roots := e.agentDirs[agent]
+		factory := e.sources().providerFactories[agent]
+		roots := e.sources().agentDirs[agent]
 		if factory == nil || len(roots) == 0 {
 			return nil, nil, fmt.Errorf("fallback provider %s is not configured", agent)
 		}
 		provider := factory.NewProvider(parser.ProviderConfig{
 			Roots: roots, Machine: e.machine, PathRewriter: e.pathRewriter,
-			SourceMachines: e.sourceMachines[agent],
+			SourceMachines: e.sources().sourceMachines[agent],
 		})
 		sources, err := provider.Discover(ctx)
 		if err != nil {

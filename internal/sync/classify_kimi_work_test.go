@@ -46,16 +46,17 @@ func TestEngineClassifyKimiWorkPaths(t *testing.T) {
 		require.NoError(t, os.WriteFile(p, []byte("{}"), 0o644))
 	}
 
-	eng := &Engine{
+	eng := withTestSources(&Engine{
 		db: openTestDB(t),
+		providerMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			parser.AgentKimiWork: parser.ProviderMigrationProviderAuthoritative,
+		},
+	}, &engineSources{
 		agentDirs: map[parser.AgentType][]string{
 			parser.AgentKimiWork: {dir},
 		},
 		providerFactories: providerFactoryMap(parser.ProviderFactories()),
-		providerMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
-			parser.AgentKimiWork: parser.ProviderMigrationProviderAuthoritative,
-		},
-	}
+	})
 
 	tests := []struct {
 		name    string

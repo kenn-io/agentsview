@@ -45,7 +45,7 @@ afterEach(() => {
 });
 
 describe("AgentDirSettings", () => {
-  it("enables a disabled provider and shows restart guidance", async () => {
+  it("enables a disabled provider and confirms the change was applied", async () => {
     const save = vi.spyOn(settings, "save").mockImplementation(async (patch) => {
       settings.disabledAgents = patch.disabled_agents ?? [];
       return true;
@@ -61,7 +61,7 @@ describe("AgentDirSettings", () => {
 
     expect(save).toHaveBeenCalledWith({ disabled_agents: [] });
     expect(providerSwitch("Enable Gemini session sync").checked).toBe(true);
-    expect(document.body.querySelector('[role="status"]')?.textContent).toContain("Restart");
+    expect(document.body.querySelector('[role="status"]')?.textContent).toContain("applied these changes");
     await unmount(component);
   });
 
@@ -167,7 +167,7 @@ describe("AgentDirSettings", () => {
     });
     const homes = [...document.body.querySelectorAll("code")].map((el) => el.textContent);
     expect(homes).toContain(second);
-    expect(document.body.querySelector('[role="status"]')?.textContent).toContain("Restart");
+    expect(document.body.querySelector('[role="status"]')?.textContent).toContain("applied these changes");
     const remove = document.body.querySelector<HTMLButtonElement>(
       `button[aria-label="Remove ${name} home ${second}"]`,
     );
