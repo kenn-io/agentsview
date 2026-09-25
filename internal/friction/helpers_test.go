@@ -8,8 +8,14 @@ func assistant(text string) Message { return Message{Role: "assistant", Text: te
 
 func user(text string) Message { return Message{Role: "user", Text: text} }
 
-func tool(name, envelope string) Message {
-	return Message{Role: "tool", ToolName: name, Text: envelope}
+func tool(name, text string) Message {
+	return Message{Role: "tool", ToolName: name, Text: text}
+}
+
+func failedTool(name, text string) Message {
+	m := tool(name, text)
+	m.Failed = true
+	return m
 }
 
 // toolResultUser is a user turn that carried a tool_result block. The

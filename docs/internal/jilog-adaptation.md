@@ -1,7 +1,3 @@
----
-last_edited: 2026-09-23
----
-
 # jilog adaptation provenance
 
 AgentsView's Friction Log adapts the session review from
@@ -10,20 +6,21 @@ AgentsView's Friction Log adapts the session review from
 behavioral reference. This page records the source, the changes, and the MIT
 notice. Source paths below are relative to that jilog commit.
 
-PR 1 provides pure detection, signal, formatting, and JSON packages. The
-archive adapter, persisted review, digest rendering, scheduling, NanoClaw
-integration, and Kata filing are planned for later PRs. Descriptions of those
-parts below record the approved mapping; they do not describe PR 1 behavior.
+The pure detection, signal, formatting, and JSON packages are built. The archive
+adapter, persisted review, digest rendering, scheduling, NanoClaw integration,
+and Kata filing are planned. Sections marked planned record the approved
+mapping, not current behavior.
 
-## Kept in PR 1
+## Kept
 
 - The correction, error, workaround, deferral, and pattern signal model
   (`crates/jilog-review/src/signal.rs:6-219`) maps to `friction.Signal`.
 - Coding and chat correction detection keeps the ten chat marker patterns
   (`crates/jilog-review/src/detectors.rs:89-176`).
-- Error detection keeps the `{"error","success"}` envelope rules, message
-  precedence, and expected-noise rules for `mode` denials and content-free
-  `bash` failures (`detectors.rs:205-488`).
+- Error detection keeps one signal per failed tool result and the content-free
+  `bash` rule (`detectors.rs:205-488`): a failure whose text is blank or only
+  the timeout sentence is expected noise. The caller marks failed calls and
+  passes their result text, so there is no JSON envelope to parse.
 - Workaround and deferral detection keeps the eight and nine patterns and
   labels, respectively (`detectors.rs:31-78,504-601`).
 - P0 alerts require at least three distinct root sessions per tool
@@ -36,13 +33,14 @@ parts below record the approved mapping; they do not describe PR 1 behavior.
   (`digest.rs:147-155`), and USD formatting (`digest.rs:1120-1127`) have pure
   Go equivalents. A source-specific title exception was dropped.
 - `internal/serdejson` reproduces the relevant serde_json 1.x output: sorted
-  keys, no HTML escaping, and float layout. This keeps JSON serialization
-  byte-stable for future digests within the documented parity limits.
+  keys, no HTML escaping, and float layout. The planned event ledger must
+  match jilog's format byte for byte, and the planned digest JSON uses the
+  same encoder, within the documented parity limits.
 
 ## Planned replacements
 
 - AgentsView parsers and its archive replace jilog's transcript readers. An
-  adapter will build detector input from archived sessions in PR 2.
+  adapter will build detector input from archived sessions.
 - Existing retry, runaway-loop, edit-churn, mid-task-compaction, and
   context-pressure signals replace jilog's `stuck_loop` and
   `compaction_storm`. The review will expose them as pattern kinds.
@@ -61,14 +59,18 @@ parts below record the approved mapping; they do not describe PR 1 behavior.
 ## Dropped
 
 - `resume_storm`, whose only source is Amplifier `session:resume` events.
+- The `{"error","success"}` envelope parsing, error-message precedence, the
+  `mode` denial rule, and the structured `bash` envelope checks (`returncode`,
+  `stdout`, `stderr`). They read Amplifier result fields that the archive does
+  not store.
 - The GitHub tracker, synthetic IDs from the none tracker, file-path helpers
   (`contract_tilde`, `expand_tilde`), and `run_with_timeout`.
 - Collectors and rules tied to a particular worker setup: private diagnostic
   collectors, seats inferred from fixed pool-profile paths, a worker-specific
   title exception, and a P0 exclusion list of worker tool names. A configured
   source can provide generic diagnostics and seats in later PRs.
-- Migration or matching of existing `[jilog/…]` issues. Friction Log starts
-  with its own issue history.
+- Migration or matching of existing `[jilog/…]` issues. Friction Log starts with
+  its own issue history.
 
 ## Planned additions
 
@@ -88,31 +90,30 @@ parts below record the approved mapping; they do not describe PR 1 behavior.
   sessions.
 - The planned adapter drops thinking blocks and tool renderings from stored
   assistant content, matching jilog's text-block-only extraction.
-- The planned adapter synthesizes error envelopes from tool rows and maps the
-  `Bash` tool category to `bash` for the noise allowlist.
+- The planned adapter marks a tool call failed when `signals.IsFailure` reports
+  it, passes the result text as the error message, and maps the `Bash` tool
+  category to `bash` for the noise rule.
 
 ## Parity notes
 
 - Go's RE2 `\b` is ASCII-only; Rust's word boundary is Unicode-aware. A
   corrective marker beside a non-ASCII letter (`wrongé`) matches here but not
   in jilog. `TestChatCorrectionWordBoundary` pins this accepted difference.
-- RE2 `\d` is ASCII-only. A timeout sentence with fullwidth digits is
-  reported as an error here and suppressed by jilog.
-  `TestBareTimeoutDigitClass` pins the difference.
-- serde_json 1.0.149 formats floats with zmij, not ryu.
-  `internal/serdejson` ports zmij's layout. serde_json's default parser can be
-  one unit in the last place off for some long literals, such as
-  `12345678901234567.0`; Go parses them exactly, so those values print
-  differently.
+- RE2 `\d` is ASCII-only. A timeout sentence with fullwidth digits is reported
+  as an error here and suppressed by jilog. `TestBareTimeoutDigitClass` pins
+  the difference.
+- serde_json 1.0.149 formats floats with zmij, not ryu. `internal/serdejson`
+  ports zmij's layout. serde_json's default parser can be one unit in the last
+  place off for some long literals, such as `12345678901234567.0`; Go parses
+  them exactly, so those values print differently.
 - `friction.ParseUSD` accepts plain decimals only. rust_decimal also accepts
   exponents and underscores, which AgentsView does not produce.
-- An empty tool name becomes `unknown`; jilog does this only for a missing
-  name.
+- An empty tool name becomes `unknown`; jilog does this only for a missing name.
 
 ## Digest golden deltas
 
-The digest renderer is planned for PR 4. That PR will replace this note with
-every difference between AgentsView's golden digest and jilog's
+The digest renderer is planned. When it lands, this section will list every
+difference between AgentsView's golden digest and jilog's
 `tests/golden/learning-digest.md`.
 
 ## License

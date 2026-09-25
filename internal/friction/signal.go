@@ -97,10 +97,13 @@ type Message struct {
 	ToolName      string
 	CallIndex     int
 	HadToolResult bool
-	Timestamp     time.Time
-	// NoiseName is the tool name used by the expected-noise allowlist.
-	// Empty means ToolName. The session adapter sets it to the normalized
-	// name so tool categories can match jilog's lowercase shapes.
+	// Failed marks a tool message whose call failed. DetectErrors reads
+	// only failed tool messages; Text is then the error text.
+	Failed    bool
+	Timestamp time.Time
+	// NoiseName is the tool name used by the expected-noise rule. Empty
+	// means ToolName. The session adapter sets it to "bash" for any Bash
+	// category call.
 	NoiseName string
 }
 

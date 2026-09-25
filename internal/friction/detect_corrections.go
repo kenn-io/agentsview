@@ -7,7 +7,7 @@ import (
 
 // chatCorrectionPatterns is jilog detectors.rs:89-100, verbatim. Go RE2's
 // \b is ASCII-only where Rust's is Unicode-aware; the difference is
-// pinned by TestChatCorrectionWordBoundary (spec Open question 8).
+// pinned by TestChatCorrectionWordBoundary.
 var chatCorrectionPatterns = compileAll([]string{
 	`(?i)^no[,.! ]`,
 	`(?i)\bdon'?t\b`,
