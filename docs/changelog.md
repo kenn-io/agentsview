@@ -10,6 +10,10 @@ The latest published release is
 
 **New features**
 
+- AgentsView can check an optional Kata issue tracker connection, through a
+  local daemon or an HTTPS hub. Configure `[kata]`, then run
+  `agentsview kata status` or request `GET /api/v1/kata/status`. Issue filing is
+  not available yet. See [Kata](/docs/kata/).
 - Mount the writable SQLite server below a reverse-proxy URL prefix with
   `agentsview serve --base-path`, including background serves. Keep
   `--public-url` set to the browser origin; AgentsView adds the mount path to
