@@ -103,13 +103,14 @@ func (p *claudeIncrementalErrorProvider) ParseIncremental(
 // claudeSplitFactory returns the registered Claude provider factory.
 func claudeSplitFactory(t *testing.T) parser.ProviderFactory {
 	t.Helper()
+	var factory parser.ProviderFactory
 	for _, f := range parser.ProviderFactories() {
 		if f.Definition().Type == parser.AgentClaude {
-			return f
+			factory = f
 		}
 	}
-	t.Fatal("claude provider factory not registered")
-	return nil
+	require.NotNil(t, factory, "claude provider factory not registered")
+	return factory
 }
 
 func newClaudeSplitTestEnv(
