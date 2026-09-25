@@ -2504,6 +2504,11 @@ schemas keep their existing ordering behavior.
   double-counts retries and edits. Older databases that predate
   `sessions.main_chain_id` keep that field invalid and fall back to all
   message nodes in creation order. Verified against a live Devin CLI database.
+  Assistant `chat_message.thinking` is an object
+  (`{"thinking": string, "signature": ..., "signature_type": ...}`), never a
+  bare string: across a live database every populated node used the object
+  form, so the parser reads `thinking.thinking` and still accepts a string for
+  compatibility. Verified against a live Devin CLI database 2026-09-25.
   Each message-node request is attributed to the concrete model at
   `metadata.generation_model` (falling back to the session-level
   `sessions.model` alias), because the session column is often empty or a

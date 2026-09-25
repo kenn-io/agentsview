@@ -517,7 +517,11 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (114: Codex `apply_patch` calls record the files named in the patch body,
 // one tool call per file, so file-keyed views such as Recent Edits include
 // them. Re-parse unchanged Codex sources to backfill file_path.)
-const dataVersion = 114
+// (115: Devin message_nodes thinking is read from the observed
+// {thinking, signature, signature_type} object instead of a plain string
+// that Devin never writes. Re-parse Devin sessions to restore dropped
+// thinking text on assistant messages.)
+const dataVersion = 115
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

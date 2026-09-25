@@ -502,7 +502,7 @@ func TestParseDevinSessionMissingTranscriptFallsBackToMessageNodes(t *testing.T)
 	})
 	fixture.insertMessageNodes(t,
 		devinSyntheticMessageNodeRow{SessionID: sessionID, NodeID: 1, ChatMessage: `{"role":"user","content":"Recover from SQLite fallback"}`, CreatedAt: 1704103201},
-		devinSyntheticMessageNodeRow{SessionID: sessionID, NodeID: 2, ChatMessage: `{"role":"assistant","content":"I'll use the database transcript fallback.","thinking":"checking message_nodes","tool_calls":[{"id":"call-1","function":{"name":"read_file","arguments":"{\"file_path\":\"main.go\"}"}}]}`, CreatedAt: 1704103205},
+		devinSyntheticMessageNodeRow{SessionID: sessionID, NodeID: 2, ChatMessage: `{"role":"assistant","content":"I'll use the database transcript fallback.","thinking":{"thinking":"checking message_nodes","signature":"sig","signature_type":"symmetric"},"tool_calls":[{"id":"call-1","function":{"name":"read_file","arguments":"{\"file_path\":\"main.go\"}"}}]}`, CreatedAt: 1704103205},
 		devinSyntheticMessageNodeRow{SessionID: sessionID, NodeID: 3, ChatMessage: `{"role":"tool","content":"package main\n","tool_call_id":"call-1"}`, CreatedAt: 1704103207},
 	)
 
@@ -519,6 +519,7 @@ func TestParseDevinSessionMissingTranscriptFallsBackToMessageNodes(t *testing.T)
 	assert.Equal(t, "Recover from SQLite fallback", msgs[0].Content)
 	assert.Equal(t, RoleAssistant, msgs[1].Role)
 	assert.True(t, msgs[1].HasThinking)
+	assert.Equal(t, "checking message_nodes", msgs[1].ThinkingText)
 	assert.True(t, msgs[1].HasToolUse)
 	assert.Contains(t, msgs[1].Content, "[Thinking]\nchecking message_nodes\n[/Thinking]")
 	assert.Contains(t, msgs[1].Content, "[Read: main.go]")

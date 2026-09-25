@@ -580,7 +580,7 @@ func parseDevinDBMessageNode(
 	}
 
 	content, thinking, hasThinking, hasToolUse, toolCalls, toolResults := ExtractTextContent(context.Background(), root.Get("content"))
-	topThinking := strings.TrimSpace(root.Get("thinking").Str)
+	topThinking := devinNodeThinking(root.Get("thinking"))
 	if topThinking != "" && topThinking != thinking {
 		thinking = joinNonEmpty(thinking, topThinking)
 		content = joinNonEmpty(content, "[Thinking]\n"+topThinking+"\n[/Thinking]")
@@ -643,6 +643,17 @@ func parseDevinDBMessageNode(
 		msg.SourceParentUUID = devinNodeSourceUUID(rawSessionID, row.ParentNodeID.Int64)
 	}
 	return msg, true, nil
+}
+
+// devinNodeThinking extracts thinking text from a message node's thinking
+// field. Devin CLI stores it as an object
+// {"thinking": string, "signature": ..., "signature_type": ...}; a plain
+// string is accepted in case other versions serialize it directly.
+func devinNodeThinking(v gjson.Result) string {
+	if v.Type == gjson.String {
+		return strings.TrimSpace(v.Str)
+	}
+	return strings.TrimSpace(v.Get("thinking").Str)
 }
 
 // devinNodeSourceUUID scopes a message_nodes identity to its session. Devin's
