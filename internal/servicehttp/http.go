@@ -556,7 +556,13 @@ func (b *httpBackend) Stats(
 	q.IncludeGitOutcomes = new(f.IncludeGitOutcomes)
 	q.IncludeGithubOutcomes = new(f.IncludeGitHubOutcomes)
 
-	api, err := b.apiClient(b.client)
+	// Stats is a long operation: git and GitHub aggregation shells out to
+	// `git log` and `gh pr list` once per discovered repository, so it runs for
+	// minutes on a large archive. The default client's fixed 30-second deadline
+	// cannot cover that, and the flags that request the work are offered by the
+	// stats command itself. Use the unbounded client the other long-running
+	// calls in this file already use and let the caller's context bound the wait.
+	api, err := b.apiClient(b.longRunningClient)
 	if err != nil {
 		return nil, err
 	}
