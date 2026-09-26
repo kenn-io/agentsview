@@ -18,10 +18,14 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// uuidRe matches a standard UUID (8-4-4-4-12 hex) at the end of a rollout filename stem.
+// uuidRe matches a standard UUID (8-4-4-4-12 hex) at the end of a rollout
+// filename stem, optionally followed by "_<uuid>", which Codex Desktop uses
+// for a continuation rollout of the same thread.
 var uuidRe = regexp.MustCompile(
 	`^rollout-.*-([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-` +
-		`[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$`,
+		`[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})` +
+		`(_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-` +
+		`[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})?$`,
 )
 
 const (
@@ -884,6 +888,30 @@ func extractUUIDFromRollout(filename string) string {
 		return ""
 	}
 	return match[1]
+}
+
+func isCodexContinuationRollout(filename string) bool {
+	stem := strings.TrimSuffix(filename, ".jsonl")
+	match := uuidRe.FindStringSubmatch(stem)
+	return len(match) == 3 && match[2] != ""
+}
+
+// PreferCodexContinuation compares two rollout filenames for the same Codex
+// session UUID. A continuation rollout ("...-<uuid>_<uuid>.jsonl") holds the
+// thread after Codex Desktop restarted it, so it wins over the original
+// rollout, and the later of two continuations wins. decided is false when the
+// names give no preference and the caller's existing order applies.
+func PreferCodexContinuation(candidate, current string) (prefer, decided bool) {
+	candCont := isCodexContinuationRollout(candidate)
+	currCont := isCodexContinuationRollout(current)
+	switch {
+	case candCont != currCont:
+		return candCont, true
+	case candCont && candidate != current:
+		return candidate > current, true
+	default:
+		return false, false
+	}
 }
 
 // IsDigits reports whether s is non-empty and contains only

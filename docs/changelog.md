@@ -105,6 +105,15 @@ The latest published release is
   from the PostgreSQL server's time zone data, which matches AgentsView's for
   current time zones.
 
+**Bug fixes**
+
+- Codex Desktop sessions that Codex restarted into a second file no longer
+  lose their later messages when AgentsView restarts. Codex names that file
+  `rollout-<time>-<id>_<id>.jsonl`. AgentsView now treats it as the same
+  session and always keeps it, so a Full Resync no longer "finds" the same
+  messages again. Earlier turns that exist only in the first file are still
+  not merged in.
+
 ## 0.44.0
 
 <small>2026-09-21</small>

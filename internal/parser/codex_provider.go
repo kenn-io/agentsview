@@ -954,18 +954,17 @@ func (s codexSourceSet) findSourceFile(sessionsDir, sessionID string) string {
 			if !isCodexSessionFilename(name) {
 				continue
 			}
-			if extractUUIDFromRollout(name) == sessionID {
+			if extractUUIDFromRollout(name) == sessionID &&
+				preferCodexRolloutPath(name, archived) {
 				archived = filepath.Join(sessionsDir, name)
-				break
 			}
 		}
 	}
 
+	// A continuation rollout can land in a later day directory than the
+	// original, so the whole tree is scanned once a match is found.
 	var live string
 	walkCodexDayDirs(sessionsDir, func(dayPath string) bool {
-		if live != "" {
-			return false
-		}
 		dayEntries, err := os.ReadDir(dayPath)
 		if err != nil {
 			return true
@@ -978,9 +977,9 @@ func (s codexSourceSet) findSourceFile(sessionsDir, sessionID string) string {
 			if !isCodexSessionFilename(name) {
 				continue
 			}
-			if extractUUIDFromRollout(name) == sessionID {
+			if extractUUIDFromRollout(name) == sessionID &&
+				preferCodexRolloutPath(name, live) {
 				live = filepath.Join(dayPath, name)
-				return false
 			}
 		}
 		return true
@@ -989,6 +988,16 @@ func (s codexSourceSet) findSourceFile(sessionsDir, sessionID string) string {
 		return live
 	}
 	return archived
+}
+
+// preferCodexRolloutPath keeps the first match unless name is a continuation
+// that supersedes the current pick.
+func preferCodexRolloutPath(name, currentPath string) bool {
+	if currentPath == "" {
+		return true
+	}
+	prefer, _ := PreferCodexContinuation(name, filepath.Base(currentPath))
+	return prefer
 }
 
 func (s codexSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
@@ -1282,6 +1291,11 @@ func CodexSourceKey(agent AgentType, uuid string) string {
 func preferCodexSource(candidate, current SourceRef) bool {
 	cand := candidate.Opaque.(codexSource)
 	curr := current.Opaque.(codexSource)
+	if prefer, decided := PreferCodexContinuation(
+		filepath.Base(cand.Path), filepath.Base(curr.Path),
+	); decided {
+		return prefer
+	}
 	if cand.Layout != curr.Layout {
 		return cand.Layout == CodexLayoutDated
 	}

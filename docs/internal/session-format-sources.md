@@ -459,6 +459,21 @@ fixtures retain this field; missing identities remain source-local.
   call per file. `custom_tool_call` items carry the same patch text under
   `input` instead of a JSON `patch` argument.
 
+- **Continuation rollouts (observed 2026-09-26):** Codex Desktop can restart a
+  thread into a second file named `rollout-<ts>-<A>_<B>.jsonl` while the
+  original `rollout-<ts>-<A>.jsonl` stays on disk. Both files' `session_meta`
+  carry `id` and `session_id` `A`. In three observed pairs the original ended
+  with `turn_aborted`, and the continuation re-sent that prompt and carried on,
+  sometimes in a later day directory. Earlier completed turns can exist only in
+  the original. Agentsview reads the leading UUID as the session and prefers
+  the continuation in every sync path; the original's earlier turns are not
+  merged. This is local observation of a desktop build; no upstream producer
+  of the `_<B>` suffix has been located. `TestPreferCodexContinuation`,
+  `TestCodexProviderPrefersContinuationRollout`, and
+  `TestSyncKeepsCodexContinuationRolloutAcrossRestartAndResync` cover it.
+  Before this, the suffixed file got no session key: full resync kept the
+  continuation, and every restart put the original back.
+
 - **Evidence:** `source`.
 
 - **Upstream:** Clone `https://github.com/openai/codex.git` at

@@ -2573,6 +2573,11 @@ func preferDiscoveredFile(
 	candidate, current parser.DiscoveredFile,
 ) bool {
 	if candidate.Agent == current.Agent && isCodexFormatAgent(candidate.Agent) {
+		if prefer, decided := parser.PreferCodexContinuation(
+			filepath.Base(candidate.Path), filepath.Base(current.Path),
+		); decided {
+			return prefer
+		}
 		candLayout := codexLayoutForPath(candidate.Path)
 		currLayout := codexLayoutForPath(current.Path)
 		if candLayout != currLayout {
@@ -2586,6 +2591,12 @@ func preferNewestCodexDiscoveredFile(
 	candidate, current parser.DiscoveredFile,
 ) bool {
 	if candidate.Agent == current.Agent && isCodexFormatAgent(candidate.Agent) {
+		// Full sync always keeps the continuation; quick sync must agree.
+		if prefer, decided := parser.PreferCodexContinuation(
+			filepath.Base(candidate.Path), filepath.Base(current.Path),
+		); decided {
+			return prefer
+		}
 		candMTime, candOK := discoveredFileMTime(candidate.Path)
 		currMTime, currOK := discoveredFileMTime(current.Path)
 		if candOK && currOK && candMTime != currMTime {
@@ -16294,6 +16305,12 @@ func pickPreferredCodexDiscoveredFile(ctx context.Context,
 	if len(candidates) == 0 {
 		return parser.DiscoveredFile{}
 	}
+	best := candidates[0]
+	for _, candidate := range candidates[1:] {
+		if preferDiscoveredFile(candidate, best) {
+			best = candidate
+		}
+	}
 	if id := parser.CodexSessionUUIDFromFilename(
 		filepath.Base(candidates[0].Path),
 	); id != "" {
@@ -16307,19 +16324,20 @@ func pickPreferredCodexDiscoveredFile(ctx context.Context,
 			}
 			storedPath = filepath.Clean(storedPath)
 			for _, candidate := range candidates {
-				if filepath.Clean(candidate.Path) == storedPath {
-					return candidate
+				if filepath.Clean(candidate.Path) != storedPath {
+					continue
 				}
+				// A stored original rollout must not outlive its continuation.
+				if prefer, _ := parser.PreferCodexContinuation(
+					filepath.Base(best.Path), filepath.Base(candidate.Path),
+				); prefer {
+					return best
+				}
+				return candidate
 			}
 		}
 	}
-	chosen := candidates[0]
-	for _, candidate := range candidates[1:] {
-		if preferDiscoveredFile(candidate, chosen) {
-			chosen = candidate
-		}
-	}
-	return chosen
+	return best
 }
 
 // roocodeEffectiveStat returns the composite size and latest mtime of
