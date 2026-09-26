@@ -196,6 +196,110 @@ func TestLiveActivityPollerRefreshesOpenCodexActivityAndUsage(t *testing.T) {
 	)
 }
 
+// Codex Desktop writes no history.jsonl and keeps its rollout open, and macOS
+// FSEvents does not report those appends. Stored recent activity must still
+// make the live-activity poller pick them up.
+func TestLiveActivityPollerRefreshesOpenCodexRolloutWithoutHistoryHints(t *testing.T) {
+	const (
+		uuid      = "019f0000-0000-7000-8000-000000000004"
+		sessionID = "codex:" + uuid
+	)
+	now := time.Date(2026, 7, 29, 15, 30, 0, 0, time.UTC)
+	firstUser := now.Add(-35 * time.Minute)
+	secondUser := now.Add(-4 * time.Minute)
+
+	base := t.TempDir()
+	sessions := filepath.Join(base, "sessions")
+	require.NoError(t, os.MkdirAll(sessions, 0o755))
+	env := setupSingleAgentTestEnvWithDirs(
+		t, parser.AgentCodex, []string{sessions},
+	)
+	rollout := env.writeCodexSession(
+		t,
+		filepath.Join("2026", "07", "29"),
+		"rollout-2026-07-29T14-55-00-"+uuid+".jsonl",
+		testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON(
+				uuid, "/workspace/project", "user", firstUser.Format(time.RFC3339),
+			),
+			testjsonl.CodexMsgJSON("user", "first", firstUser.Format(time.RFC3339)),
+			testjsonl.CodexMsgJSON(
+				"assistant", "answer", firstUser.Add(time.Minute).Format(time.RFC3339),
+			),
+		),
+	)
+	initialMTime := firstUser.Add(-time.Hour)
+	require.NoError(t, os.Chtimes(rollout, initialMTime, initialMTime))
+	require.NoError(t, env.engine.SyncPathsContext(t.Context(), []string{rollout}))
+
+	appendDescriptor, err := os.OpenFile(rollout, os.O_APPEND|os.O_WRONLY, 0)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, appendDescriptor.Close())
+	})
+	_, err = appendDescriptor.WriteString(testjsonl.JoinJSONL(
+		testjsonl.CodexMsgJSON("user", "second", secondUser.Format(time.RFC3339)),
+		testjsonl.CodexMsgJSON(
+			"assistant", "second answer",
+			secondUser.Add(time.Minute).Format(time.RFC3339),
+		),
+	))
+	require.NoError(t, err)
+	require.NoFileExists(t, filepath.Join(base, "history.jsonl"))
+
+	provider, ok := parser.NewProvider(parser.AgentCodex, parser.ProviderConfig{
+		Roots:   []string{sessions},
+		Machine: "local",
+	})
+	require.True(t, ok)
+	hints, supported, err := parser.ResolveActivityHintProvider(provider)
+	require.NoError(t, err)
+	require.True(t, supported)
+	hintSources, err := hints.ActivityHintSources(t.Context())
+	require.NoError(t, err)
+	newPoller := func() *agentsync.LiveActivityPoller {
+		return agentsync.NewLiveActivityPoller(
+			[]agentsync.LiveActivityTarget{{
+				Provider: provider, Hints: hints, Sources: hintSources,
+			}},
+			func(context.Context, string) (agentsync.LiveActivitySource, bool, error) {
+				t.Fatal("no history hint exists, so no hinted lookup is expected")
+				return agentsync.LiveActivitySource{}, false, nil
+			},
+			env.engine.SyncPathsContext,
+			nil,
+		)
+	}
+
+	hintOnly, err := newPoller().PollOnce(t.Context(), now)
+	require.NoError(t, err)
+	assert.Equal(t, 0, hintOnly.SyncPaths,
+		"without stored recent activity the open rollout stays invisible")
+	assertSessionMessageCount(t, env.db, sessionID, 2)
+
+	poller := newPoller()
+	poller.SetRecentLookup(agentsync.DBRecentSessionLookup(env.db, "local"))
+	stats, err := poller.PollOnce(t.Context(), now)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.RecentSessions)
+	assert.Equal(t, 1, stats.SourceStats)
+	assert.Equal(t, 1, stats.SyncPaths)
+	assertSessionMessageCount(t, env.db, sessionID, 4)
+
+	stats, err = poller.PollOnce(t.Context(), now.Add(30*time.Second))
+	require.NoError(t, err)
+	assert.Equal(t, 0, stats.SyncPaths, "an unchanged rollout is not re-synced")
+
+	_, err = appendDescriptor.WriteString(testjsonl.CodexMsgJSON(
+		"user", "third", now.Add(-time.Minute).Format(time.RFC3339),
+	))
+	require.NoError(t, err)
+	stats, err = poller.PollOnce(t.Context(), now.Add(time.Minute))
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.SyncPaths)
+	assertSessionMessageCount(t, env.db, sessionID, 5)
+}
+
 func requireDailyOutputTokens(
 	t *testing.T,
 	database *db.DB,

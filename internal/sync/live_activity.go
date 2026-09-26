@@ -9,6 +9,7 @@ import (
 	"sort"
 	"time"
 
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -21,6 +22,9 @@ const (
 	liveActivityMaxPathBytes   = 2 << 20
 	liveActivityMaxCursors     = 256
 	liveActivityMaxCursorBytes = liveActivityMaxPathBytes
+	// Stored activity this recent marks a source as possibly still growing.
+	liveActivityRecentWindow = 24 * time.Hour
+	liveActivityMaxRecent    = 256
 )
 
 type LiveActivitySource struct {
@@ -40,6 +44,23 @@ type LiveActivityLookup func(
 
 type LiveActivitySync func(context.Context, []string) error
 
+// LiveActivityRecentSession is a stored session whose source may still be
+// growing. LastActivity is its latest recorded activity.
+type LiveActivityRecentSession struct {
+	FullID       string
+	Source       LiveActivitySource
+	LastActivity time.Time
+}
+
+// LiveActivityRecentLookup lists an agent's stored sessions active at or
+// after since, bounded by limit.
+type LiveActivityRecentLookup func(
+	ctx context.Context,
+	agent parser.AgentType,
+	since time.Time,
+	limit int,
+) ([]LiveActivityRecentSession, error)
+
 type LiveActivityTarget struct {
 	Provider parser.Provider
 	Hints    parser.ActivityHintProvider
@@ -50,6 +71,7 @@ type LiveActivityPollStats struct {
 	HintFiles      int
 	HintBytes      int
 	SessionLookups int
+	RecentSessions int
 	SourceStats    int
 	SyncPaths      int
 }
@@ -77,6 +99,7 @@ type liveActivityCursorKey struct {
 type LiveActivityPoller struct {
 	targets   []LiveActivityTarget
 	lookup    LiveActivityLookup
+	recent    LiveActivityRecentLookup
 	syncPaths LiveActivitySync
 	logf      func(string, ...any)
 
@@ -111,6 +134,92 @@ func NewLiveActivityPoller(
 		retries:   make(map[string]*liveActivityRetryEntry),
 		logged:    make(map[string]time.Time),
 	}
+}
+
+// DBRecentSessionLookup lists recent sessions of one machine from the archive.
+func DBRecentSessionLookup(
+	database *db.DB, machine string,
+) LiveActivityRecentLookup {
+	return func(
+		ctx context.Context,
+		agent parser.AgentType,
+		since time.Time,
+		limit int,
+	) ([]LiveActivityRecentSession, error) {
+		rows, err := database.RecentSessionSources(
+			ctx, string(agent), machine, since, limit,
+		)
+		if err != nil {
+			return nil, err
+		}
+		sessions := make([]LiveActivityRecentSession, 0, len(rows))
+		for _, row := range rows {
+			source := LiveActivitySource{Path: row.FilePath}
+			if row.FileSize.Valid && row.FileMtime.Valid {
+				source.StoredSize = row.FileSize.Int64
+				source.StoredMTimeNS = row.FileMtime.Int64
+				source.HasStoredStat = true
+			}
+			if row.FileInode.Valid && row.FileDevice.Valid {
+				source.StoredInode = row.FileInode.Int64
+				source.StoredDevice = row.FileDevice.Int64
+				source.HasStoredIdentity = true
+			}
+			lastActivity, err := time.Parse(time.RFC3339Nano, row.EndedAt)
+			if err != nil {
+				lastActivity = since
+			}
+			sessions = append(sessions, LiveActivityRecentSession{
+				FullID: row.ID, Source: source, LastActivity: lastActivity,
+			})
+		}
+		return sessions, nil
+	}
+}
+
+// SetRecentLookup adds stored recent activity as a hint for producers without a hint log.
+func (p *LiveActivityPoller) SetRecentLookup(lookup LiveActivityRecentLookup) {
+	p.recent = lookup
+}
+
+func (p *LiveActivityPoller) addRecentSessions(
+	ctx context.Context,
+	now time.Time,
+	stats *LiveActivityPollStats,
+) []error {
+	if p.recent == nil {
+		return nil
+	}
+	var errs []error
+	since := now.Add(-liveActivityRecentWindow)
+	for targetIndex, target := range p.targets {
+		if ctx.Err() != nil {
+			return errs
+		}
+		agent := target.Provider.Definition().Type
+		recent, err := p.recent(ctx, agent, since, liveActivityMaxRecent)
+		if err != nil {
+			errs = append(errs, fmt.Errorf(
+				"list recent %s sessions: %w", agent, err,
+			))
+			continue
+		}
+		stats.RecentSessions += len(recent)
+		for _, session := range recent {
+			if session.FullID == "" || session.Source.Path == "" {
+				continue
+			}
+			// A hot entry's stat is newer than the stored row's.
+			if _, hot := p.hot[session.FullID]; hot {
+				continue
+			}
+			p.setHot(
+				session.FullID, targetIndex, session.Source,
+				session.LastActivity,
+			)
+		}
+	}
+	return errs
 }
 
 func (p *LiveActivityPoller) PollOnce(
@@ -326,6 +435,10 @@ func (p *LiveActivityPoller) PollOnce(
 		}
 	}
 
+	if err := ctx.Err(); err != nil {
+		return stats, err
+	}
+	pollErrors = append(pollErrors, p.addRecentSessions(ctx, now, &stats)...)
 	if err := ctx.Err(); err != nil {
 		return stats, err
 	}

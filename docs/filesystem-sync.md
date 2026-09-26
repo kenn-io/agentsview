@@ -146,7 +146,7 @@ machine = "fedcba9876543210fedcba9876543210" # Laptop installation ID
 
 Shared mounts remove the copy step, but freshness and watcher behavior depend on
 the filesystem. Some network filesystems do not deliver local filesystem events
-reliably; the periodic sync remains the backstop.
+reliably; the daily archive audit remains the backstop.
 
 ## Identity, Filtering, and Freshness
 
@@ -164,7 +164,9 @@ reliably; the periodic sync remains the backstop.
   session is copied into two configured roots, AgentsView continues to
   deduplicate it by the agent's native session ID.
 - A newly transported or changed file is normally detected by the filesystem
-  watcher. AgentsView also performs a full periodic sync every 15 minutes.
+  watcher. Agents with partial watch coverage are also reconciled every 15
+  minutes, and a daily archive audit covers the rest; see
+  [Sync Behavior](/docs/configuration/#sync-behavior).
 - Roots that cannot be watched fall back to polling, as described under
   [Large Watch Trees](/docs/configuration/#large-watch-trees).
 - A machine key changes attribution, not source identity or conflict resolution.

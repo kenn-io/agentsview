@@ -105,6 +105,15 @@ The latest published release is
   from the PostgreSQL server's time zone data, which matches AgentsView's for
   current time zones.
 
+**Bug fixes**
+
+- Active Codex Desktop sessions on macOS now update in AgentsView within about
+  30 seconds. Before, they could lag until Codex closed the session file,
+  AgentsView restarted, or you ran a Full Resync. macOS does not report
+  changes to a file that Codex keeps open, and Codex Desktop writes no
+  `history.jsonl` to say which sessions are active. AgentsView now also checks
+  the files of Codex sessions active in the last 24 hours.
+
 ## 0.44.0
 
 <small>2026-09-21</small>

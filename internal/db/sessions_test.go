@@ -824,3 +824,51 @@ func TestSessionNameCOALESCEInGetSession(t *testing.T) {
 	require.NotNil(t, s.DisplayName)
 	assert.Equal(t, "Agent Title", *s.DisplayName, "session_name restored after clearing rename")
 }
+
+func TestRecentSessionSourcesFiltersToLiveLocalAgentSources(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	since := time.Date(2026, 7, 28, 15, 30, 0, 0, time.UTC)
+	add := func(id, agent, machine, endedAt, path string) {
+		insertSession(t, d, id, "project", func(s *Session) {
+			s.Agent = agent
+			s.Machine = machine
+			s.EndedAt = &endedAt
+			if path != "" {
+				size, mtime := int64(10), int64(20)
+				s.FilePath = &path
+				s.FileSize = &size
+				s.FileMtime = &mtime
+			}
+		})
+	}
+	add("codex:newest", "codex", "local", "2026-07-29T15:20:00.000Z", "/s/newest.jsonl")
+	add("codex:at-cutoff", "codex", "local", "2026-07-28T15:30:00Z", "/s/at-cutoff.jsonl")
+	add("codex:too-old", "codex", "local", "2026-07-28T15:29:59Z", "/s/too-old.jsonl")
+	add("claude-session", "claude", "local", "2026-07-29T15:00:00Z", "/s/claude.jsonl")
+	add("codex:remote", "codex", "laptop", "2026-07-29T15:00:00Z", "/s/remote.jsonl")
+	add("codex:no-path", "codex", "local", "2026-07-29T15:00:00Z", "")
+	add("codex:deleted", "codex", "local", "2026-07-29T15:00:00Z", "/s/deleted.jsonl")
+	add("codex:missing", "codex", "local", "2026-07-29T15:00:00Z", "/s/missing.jsonl")
+	require.NoError(t, d.SoftDeleteSession(ctx, "codex:deleted"))
+	_, err := d.getWriter().Exec(ctx,
+		`UPDATE sessions SET source_missing_at = ? WHERE id = ?`,
+		"2026-07-29T15:10:00Z", "codex:missing",
+	)
+	require.NoError(t, err)
+
+	sources, err := d.RecentSessionSources(ctx, "codex", "local", since, 10)
+	require.NoError(t, err)
+	require.Len(t, sources, 2)
+	assert.Equal(t, "codex:newest", sources[0].ID)
+	assert.Equal(t, "/s/newest.jsonl", sources[0].FilePath)
+	assert.Equal(t, sql.NullInt64{Int64: 10, Valid: true}, sources[0].FileSize)
+	assert.Equal(t, sql.NullInt64{Int64: 20, Valid: true}, sources[0].FileMtime)
+	assert.Equal(t, "2026-07-29T15:20:00.000Z", sources[0].EndedAt)
+	assert.Equal(t, "codex:at-cutoff", sources[1].ID)
+
+	limited, err := d.RecentSessionSources(ctx, "codex", "local", since, 1)
+	require.NoError(t, err)
+	require.Len(t, limited, 1)
+	assert.Equal(t, "codex:newest", limited[0].ID)
+}
