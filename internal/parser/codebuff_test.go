@@ -2211,7 +2211,7 @@ func TestParseCodebuffMixedFormatMidnightRollover(t *testing.T) {
 		{"id":"u5","variant":"user","content":"after","timestamp":"02:00 PM"}
 	]`)
 
-	msgs, _, _, _, err := parseCodebuffMessages(data, sessionDate)
+	msgs, _, _, _, err := refParseCodebuffMessages(data, sessionDate)
 	require.NoError(t, err)
 	require.Len(t, msgs, 5)
 
@@ -2270,7 +2270,7 @@ func TestParseCodebuffMessages_FirstMessageMidnightRollover(t *testing.T) {
 		{"id":"u2","variant":"user","content":"more","timestamp":"12:30 AM"}
 	]`)
 
-	msgs, _, startedAt, _, err := parseCodebuffMessages(data, sessionDate)
+	msgs, _, startedAt, _, err := refParseCodebuffMessages(data, sessionDate)
 	require.NoError(t, err)
 	require.Len(t, msgs, 2)
 
