@@ -21,9 +21,41 @@ import (
 // write. Add new companions here rather than inlining them at
 // individual call sites.
 var CodebuffCompanionFilenames = []string{
-	"run-state.json",
-	"chat-meta.json",
+	codebuffRunStateName,
+	codebuffChatMetaName,
 }
+
+// codebuffPrimaryTranscriptName, codebuffRunStateName, and
+// codebuffChatMetaName name the three session files parseCodebuffSession
+// reads. The classifier (codebuffDataFilenames), the watch include globs,
+// discovery, and the parser itself all derive from these constants, so a
+// future transcript rename changes one spot and every consumer moves
+// together.
+const (
+	codebuffPrimaryTranscriptName = "chat-messages.json"
+	codebuffRunStateName          = "run-state.json"
+	codebuffChatMetaName          = "chat-meta.json"
+)
+
+// codebuffDataFilenames is the set of files in a session directory whose
+// contents feed parseCodebuffSession (the primary transcript plus every
+// companion in CodebuffCompanionFilenames). Anything else under a session
+// directory -- Freebuff's log.jsonl and trace.jsonl debug logs, the
+// <target>.<pid>.<uuid>.tmp siblings write-file-atomic creates during
+// saves -- cannot alter stored session data, so the changed-path relevance
+// prefilter drops those events instead of reparsing the transcript.
+//
+// This set is a performance guard, not a correctness guard: add a file
+// here in the same change that teaches parseCodebuffSession to read it,
+// or its changes will be silently ignored on the watch path.
+var codebuffDataFilenames = func() map[string]struct{} {
+	set := make(map[string]struct{}, len(CodebuffCompanionFilenames)+1)
+	set[codebuffPrimaryTranscriptName] = struct{}{}
+	for _, name := range CodebuffCompanionFilenames {
+		set[name] = struct{}{}
+	}
+	return set
+}()
 
 // CodebuffCompanionMtime returns the max of chatInfo.ModTime() and
 // sibling companion files declared in CodebuffCompanionFilenames. The
@@ -172,13 +204,97 @@ func codebuffWatchRoots(roots []string) []WatchRoot {
 	out := make([]WatchRoot, 0, len(roots))
 	for _, root := range roots {
 		out = append(out, WatchRoot{
-			Path:         root,
-			Recursive:    true,
-			IncludeGlobs: []string{"chat-messages.json", "run-state.json", "chat-meta.json"},
-			DebounceKey:  "codebuff:sessions:" + root,
+			Path:      root,
+			Recursive: true,
+			IncludeGlobs: []string{
+				codebuffPrimaryTranscriptName, codebuffRunStateName, codebuffChatMetaName,
+			},
+			DebounceKey: "codebuff:sessions:" + root,
 		})
 	}
 	return out
+}
+
+// codebuffIsAtomicTempSibling reports whether base names a temporary
+// sibling created by Freebuff's atomic writer
+// (cli/src/utils/write-file-atomic.ts): it writes "<target>.<pid>.<uuid>.tmp"
+// and then renames it onto <target>, so a temp sibling's name always ends
+// with ".tmp" and carries at least two extra dot-separated segments beyond
+// the target name. The rename emits a later event on the target itself, so
+// classifying the temp event as non-data loses nothing. The \".<pid>.\" and
+// \".<uuid>\" segments are not validated beyond requiring one extra middle
+// segment: pid and UUID vary per write, and only the \".tmp\" suffix plus a
+// non-empty target prefix decide the answer. A real data file can never
+// match because the data names carry no \".tmp\" suffix.
+func codebuffIsAtomicTempSibling(base string) bool {
+	if !strings.HasSuffix(base, ".tmp") {
+		return false
+	}
+	trimmed := strings.TrimSuffix(base, ".tmp")
+	// At least one non-empty middle segment (the ".<pid>." component)
+	// between the target name and the suffix.
+	dot := strings.LastIndex(trimmed, ".")
+	return dot > 0
+}
+
+// ChangedPathRelevance implements parser.ChangedPathRelevanceProvider. The
+// engine's watch prefilter consults this before dispatching an event, so a
+// debug-log write no longer reparses the session transcript.
+// WatchRoot scoping mirrors openCodeFormatSourceSet.ChangedPathRelevance:
+// when set, only that root decides the answer, so an event observed by one
+// root cannot classify against another configured root; when empty, every
+// configured root is consulted and the first non-unclassified answer wins.
+func (s codebuffSourceSet) ChangedPathRelevance(
+	ctx context.Context, req ChangedPathRequest,
+) (ChangedPathRelevance, error) {
+	if err := ctx.Err(); err != nil {
+		return ChangedPathUnclassified, err
+	}
+	if req.WatchRoot != "" {
+		return codebuffChangedPathRelevanceInRoot(
+			filepath.Clean(req.WatchRoot), req.Path,
+		), nil
+	}
+	for _, root := range s.roots {
+		if relevance := codebuffChangedPathRelevanceInRoot(root, req.Path); relevance != ChangedPathUnclassified {
+			return relevance, nil
+		}
+	}
+	return ChangedPathUnclassified, nil
+}
+
+// codebuffChangedPathRelevanceInRoot classifies path against one cleaned
+// watch root.
+func codebuffChangedPathRelevanceInRoot(
+	root, path string,
+) ChangedPathRelevance {
+	clean := filepath.Clean(path)
+	if !isWithinRoot(root, clean) || clean == root {
+		return ChangedPathUnclassified
+	}
+	if codebuffIsAtomicTempSibling(filepath.Base(clean)) {
+		return ChangedPathNonData
+	}
+	base := filepath.Base(clean)
+	if _, ok := codebuffDataFilenames[base]; ok {
+		return ChangedPathDataBearing
+	}
+	rel, err := filepath.Rel(root, clean)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return ChangedPathUnclassified
+	}
+	// A direct child of a session directory
+	// (<project>/chats/<timestamp>/<name>) that is not a data file is a
+	// debug artifact (log.jsonl, trace.jsonl): NonData. Anything else --
+	// session-directory events, nested unknown paths, files above the
+	// project level -- stays Unclassified so the engine keeps its
+	// fallback: directory mtimes also gate the reconcile cutoff, so a new
+	// session's first transcript write is never the only signal.
+	parts := strings.Split(rel, string(filepath.Separator))
+	if len(parts) == 4 {
+		return ChangedPathNonData
+	}
+	return ChangedPathUnclassified
 }
 
 // codebuffClassifyPath maps a changed path back to its source
@@ -206,7 +322,17 @@ func codebuffClassifyPath(
 	projectName := parts[0]
 	sessionID := parts[2]
 	sessionDir := filepath.Join(root, projectName, "chats", sessionID)
-	chatPath := filepath.Join(sessionDir, "chat-messages.json")
+	chatPath := filepath.Join(sessionDir, codebuffPrimaryTranscriptName)
+
+	// Only the session's data files map a changed path to the owning
+	// transcript. Debug siblings (log.jsonl, trace.jsonl) and atomic-write
+	// temp siblings resolve to a session directory but cannot alter stored
+	// data, so they must not wake the transcript. The watch prefilter drops
+	// these events first; this narrowing is the second line of defense for
+	// direct SyncPaths callers that bypass it.
+	if _, ok := codebuffDataFilenames[filepath.Base(path)]; !ok {
+		return singleFileMatch{}, false
+	}
 
 	if allowMissing {
 		return singleFileMatch{
@@ -271,7 +397,7 @@ func codebuffFindFile(root, rawID string) (singleFileMatch, bool) {
 		if !IsCodebuffTimestamp(timestamp) {
 			return singleFileMatch{}, false
 		}
-		chatPath := filepath.Join(root, projectName, "chats", timestamp, "chat-messages.json")
+		chatPath := filepath.Join(root, projectName, "chats", timestamp, codebuffPrimaryTranscriptName)
 		if !isWithinRoot(root, chatPath) {
 			return singleFileMatch{}, false
 		}
@@ -296,7 +422,7 @@ func codebuffFindFile(root, rawID string) (singleFileMatch, bool) {
 		if !project.IsDir() {
 			continue
 		}
-		chatPath := filepath.Join(root, project.Name(), "chats", rawID, "chat-messages.json")
+		chatPath := filepath.Join(root, project.Name(), "chats", rawID, codebuffPrimaryTranscriptName)
 		if !isWithinRoot(root, chatPath) {
 			continue
 		}
@@ -424,6 +550,16 @@ func codebuffProviderCapabilities() Capabilities {
 	// passes would fall back to the composite, missing same-size
 	// sibling rewrites whose mtime stays below the existing max.
 	caps.MultiFileStatHash = CapabilitySupported
+	// Changed-path classification lets the watch dispatch drop events on
+	// files that carry no session data before they reparse a transcript:
+	// Freebuff writes log.jsonl and trace.jsonl debug siblings into every
+	// live session directory (older builds left multi-GB log.jsonl files)
+	// and saves chat-messages.json through an atomic temp-sibling rename,
+	// so each of those writes previously forced a full re-read of
+	// chat-messages.json for nothing. The classifier only answers for
+	// paths inside a watch root; unknown paths stay unclassified and keep
+	// the engine's fallback.
+	caps.ChangedPathRelevance = CapabilitySupported
 	// Content-hash freshness is the per-fingerprint safety net that
 	// catches a sibling rewrite whose SHA-256 changes while size
 	// and mtime stay identical. The legacy size/mtime composite and

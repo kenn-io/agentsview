@@ -38,9 +38,9 @@ func parseCodebuffSession(
 	projectHint string,
 	machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
-	chatMessagesPath := filepath.Join(dir, "chat-messages.json")
-	runStatePath := filepath.Join(dir, "run-state.json")
-	chatMetaPath := filepath.Join(dir, "chat-meta.json")
+	chatMessagesPath := filepath.Join(dir, codebuffPrimaryTranscriptName)
+	runStatePath := filepath.Join(dir, codebuffRunStateName)
+	chatMetaPath := filepath.Join(dir, codebuffChatMetaName)
 
 	// Read run-state.json for model, token, agent-type, and skills data.
 	rs, err := readCodebuffRunState(runStatePath)
@@ -1056,7 +1056,7 @@ func codebuffDiscoverEach(
 				return nil
 			}
 			dir := filepath.Join(chatsDir, sessionEntry.Name())
-			chatPath := filepath.Join(dir, "chat-messages.json")
+			chatPath := filepath.Join(dir, codebuffPrimaryTranscriptName)
 			if !IsRegularFile(chatPath) {
 				return nil
 			}

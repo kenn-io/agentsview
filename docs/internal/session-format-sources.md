@@ -3289,7 +3289,11 @@ schemas keep their existing ordering behavior.
   limits.
 - **Agentsview:** `internal/parser/codebuff.go` and
   `internal/parser/codebuff_provider.go`; single-file provider with JSON array
-  parsing.
+  parsing. Watch events are classified against the session's data files, so
+  writes to debug siblings (`log.jsonl`, `trace.jsonl`) or atomic-write temp
+  siblings no longer reparse a session; periodic reconcile still reparses a
+  session whose directory mtime moved, which keeps companion-file deletions
+  detectable.
 
 ## Evener (`evener`)
 

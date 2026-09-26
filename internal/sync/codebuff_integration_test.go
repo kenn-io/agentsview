@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
@@ -243,6 +244,27 @@ func (p *codebuffFingerprintCountingProvider) ComputeMultiFileStatHash(
 	return hasher.ComputeMultiFileStatHash(chatPath)
 }
 
+// ChangedPathRelevance forwards to the inner provider through a
+// ChangedPathRelevanceProvider type assertion because parser.Provider does
+// not include it. Once Codebuff advertises the ChangedPathRelevance
+// capability, ResolveChangedPathRelevance type-asserts the engine-facing
+// provider (this wrapper) itself; without forwarding, every classification
+// fails the assertion, returns UnsupportedProviderFeatureError, and every
+// watch event falls back to full-provider discovery -- silently undoing the
+// filter in exactly the tests that pin it.
+func (p *codebuffFingerprintCountingProvider) ChangedPathRelevance(
+	ctx context.Context, req parser.ChangedPathRequest,
+) (parser.ChangedPathRelevance, error) {
+	relevance, ok := p.inner.(parser.ChangedPathRelevanceProvider)
+	if !ok {
+		return parser.ChangedPathUnclassified, parser.UnsupportedProviderFeatureError{
+			Provider: p.inner.Definition().Type,
+			Feature:  parser.ProviderFeatureChangedPathRelevance,
+		}
+	}
+	return relevance.ChangedPathRelevance(ctx, req)
+}
+
 // codebuffCountingFactory hands out a single prebuilt
 // codebuffFingerprintCountingProvider so every Engine.NewProvider call
 // observes through the same counter.
@@ -268,7 +290,7 @@ func (f codebuffCountingFactory) NewProvider(parser.ProviderConfig) parser.Provi
 // only observability seam.
 func newCodebuffCountingEngine(
 	t *testing.T, root string,
-) (*sync.Engine, *codebuffFingerprintCountingProvider) {
+) (*sync.Engine, *codebuffFingerprintCountingProvider, *db.DB) {
 	t.Helper()
 	database := dbtest.OpenTestDB(t)
 	innerFactory, ok := parser.ProviderFactoryByType(parser.AgentCodebuff)
@@ -299,7 +321,7 @@ func newCodebuffCountingEngine(
 		},
 	})
 	t.Cleanup(engine.Close)
-	return engine, provider
+	return engine, provider, database
 }
 
 // TestSyncCodebuffPerEventWorkIsCardinalityIndependent verifies that the per-event
@@ -329,7 +351,7 @@ func TestSyncCodebuffPerEventWorkIsCardinalityIndependent(t *testing.T) {
 	)
 
 	probe := func(root string, numSessions int) {
-		engine, codebuff := newCodebuffCountingEngine(t, root)
+		engine, codebuff, _ := newCodebuffCountingEngine(t, root)
 
 		// Cold pass: every session needs a fingerprint, so the counter
 		// delta equals the archive size. This proves the counting
@@ -1592,4 +1614,187 @@ func TestSourceMtimeCodebuffUsesPerFileHash(t *testing.T) {
 	assert.NotEqual(t, afterMissingMeta, afterRecreatedMeta,
 		"a recreated chat-meta.json with a new mtime must change "+
 			"SourceMtime back to a value distinct from the missing-file state")
+}
+
+// codebuffSessionIDFromChatPath derives the stored session ID for a session
+// created by createCodebuffSingleSession: the shared fixture declares a
+// free-tier agent in run-state.json, so the stored row carries the Freebuff
+// identity with the project:timestamp raw ID.
+func codebuffSessionIDFromChatPath(t *testing.T, chatPath string) string {
+	t.Helper()
+	return "freebuff:project-0:" + filepath.Base(filepath.Dir(chatPath))
+}
+
+// codebuffAssertSessionMessageCount fetches the stored session and returns
+// its message count, failing the test when the row vanished.
+func codebuffAssertSessionMessageCount(
+	t *testing.T, database *db.DB, sessionID string, want int,
+) {
+	t.Helper()
+	sess, err := database.GetSession(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, sess,
+		"session %s must remain stored", sessionID)
+	require.Equal(t, want, sess.MessageCount,
+		"stored message count for %s diverged", sessionID)
+}
+
+// TestSyncCodebuffNonDataWatchEventsDoNotReparse pins the Codebuff
+// changed-path filter at the sync layer: a watch-delivered write to a debug
+// sibling (log.jsonl, trace.jsonl) or to an atomic-write temp sibling must
+// not reparse the session, while writes to the data files still do. SyncPaths
+// is the watch-equivalent entry point; the reconcile residual is pinned
+// separately below, and the transcript-deletion guarantee is pinned by
+// TestSyncCodebuffMissingSourceClearsProviderStatHash plus the parser-side
+// allowMissing test noted at case (5).
+func TestSyncCodebuffNonDataWatchEventsDoNotReparse(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	root, chatPath := createCodebuffSingleSession(t)
+	sessionDir := filepath.Dir(chatPath)
+	sessionID := codebuffSessionIDFromChatPath(t, chatPath)
+
+	engine, codebuff, database := newCodebuffCountingEngine(t, root)
+
+	require.Equal(t, 1,
+		engine.SyncAll(t.Context(), nil).Synced,
+		"cold sync must parse the seeded session")
+	codebuffAssertSessionMessageCount(t, database, sessionID, 1)
+	hashed, hasHash, err := database.GetProviderStatHash(
+		t.Context(), parser.AgentCodebuff, chatPath,
+	)
+	require.NoError(t, err)
+	require.True(t, hasHash,
+		"cold sync must populate provider_freshness before the "+
+			"side-table comparison is meaningful")
+
+	// warmSyncAfterEvent runs SyncPaths for one changed path and asserts
+	// the outcome through the fingerprint counter: a suppressed event
+	// must issue zero provider work, a data-bearing one exactly one
+	// fingerprint (the changed-path force) and one reparse.
+	warmSyncAfterEvent := func(changedPath string, wantReparse bool) {
+		t.Helper()
+		codebuff.calls.Store(0)
+		require.NoError(t, engine.SyncPathsContext(t.Context(), []string{changedPath}),
+			"SyncPaths must not error for %s", changedPath)
+		if wantReparse {
+			assert.Equal(t, int64(1), codebuff.calls.Load(),
+				"a data-bearing event on %s must reparse its session "+
+					"(exactly one fingerprint)", changedPath)
+		} else {
+			assert.Equal(t, int64(0), codebuff.calls.Load(),
+				"a non-data event on %s must not reparse the session "+
+					"or fall back to provider discovery; a non-zero "+
+					"count means the relevance prefilter or the "+
+					"classifier narrowing regressed", changedPath)
+		}
+	}
+
+	// (1) log.jsonl debug sibling: the multi-GB artifact Freebuff leaves
+	// beside every transcript.
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sessionDir, "log.jsonl"), []byte("step\n"), 0o644))
+	warmSyncAfterEvent(filepath.Join(sessionDir, "log.jsonl"), false)
+
+	// (2) trace.jsonl debug sibling.
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sessionDir, "trace.jsonl"), []byte("span\n"), 0o644))
+	warmSyncAfterEvent(filepath.Join(sessionDir, "trace.jsonl"), false)
+
+	// (3) atomic-write temp sibling of the transcript, named per upstream
+	// write-file-atomic.ts: <target>.<pid>.<uuid>.tmp. The final rename
+	// onto the target emits its own event, so dropping the temp event
+	// loses nothing.
+	tempSibling := filepath.Join(sessionDir,
+		"chat-messages.json.4242.6f9619ff-8b86-d011-b42d-00c04fc964ff.tmp")
+	require.NoError(t, os.WriteFile(tempSibling, []byte("[]"), 0o644))
+	warmSyncAfterEvent(tempSibling, false)
+
+	// The transcript was never touched: stored data and the freshness
+	// side-table must be byte-identical to the cold sync.
+	codebuffAssertSessionMessageCount(t, database, sessionID, 1)
+	hashedAgain, hasHashAgain, err := database.GetProviderStatHash(
+		t.Context(), parser.AgentCodebuff, chatPath,
+	)
+	require.NoError(t, err)
+	require.True(t, hasHashAgain,
+		"non-data events must not clear the provider_freshness row")
+	require.Equal(t, hashed, hashedAgain,
+		"the side-table digest must be unchanged after non-data events")
+
+	// (4) Data files still reparse: run-state.json...
+	require.NoError(t, os.WriteFile(filepath.Join(sessionDir, "run-state.json"),
+		[]byte("{\n\t\t\"sessionState\": {\n\t\t\t\"agentType\": \"base2-free-deepseek\"\n\t\t}\n\t}"), 0o644))
+	warmSyncAfterEvent(filepath.Join(sessionDir, "run-state.json"), true)
+
+	// ...and chat-meta.json. This pins the boundary so the filter cannot
+	// over-reach onto real data files.
+	require.NoError(t, os.WriteFile(filepath.Join(sessionDir, "chat-meta.json"),
+		[]byte("{\"messageCount\":1,\"firstPrompt\":\"Single source\",\"messagesSize\":50}"), 0o644))
+	warmSyncAfterEvent(filepath.Join(sessionDir, "chat-meta.json"), true)
+
+	// (5) Deleting the transcript still maps to the session. The
+	// tombstone trigger is the reconcile pass, not SyncPaths: the classify
+	// loop deliberately skips missing non-persistent sources, and the
+	// counting wrapper used here does not implement the streaming-discovery
+	// seam reconcile needs (only the real provider does). The guarantee is
+	// pinned where it is reachable:
+	// TestSyncCodebuffMissingSourceClearsProviderStatHash (below) proves a
+	// deleted transcript still routes its session through tombstoning, and
+	// TestCodebuffClassifyPathDataBearingAndMissing (parser package) proves
+	// the narrowed classifier still maps a deleted transcript under
+	// allowMissing. This filter must never widen onto the transcript path.
+}
+
+// TestSyncCodebuffDebugSiblingReconcileResidual pins the reconcile behavior
+// the changed-path filter deliberately does NOT change, so the documented
+// limit stays tested rather than accidental: a log.jsonl write bumps the
+// session directory's mtime, and codebuffCompositeMtime folds the directory
+// into the incremental cutoff (internal/sync/engine.go, "companion-file
+// deletions" comment) while ComputeMultiFileStatHash folds the same term
+// into the provider_freshness digest. The next SyncAll therefore reparses
+// the session once even though no data file changed. That directory term
+// is load-bearing: TestSyncCodebuffCompanionFileDeletionReparsesSession
+// relies on it to catch companion deletions. Narrowing it to deletions only
+// is a separate, measured decision, not a drive-by edit.
+func TestSyncCodebuffDebugSiblingReconcileResidual(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	root, chatPath := createCodebuffSingleSession(t)
+	sessionDir := filepath.Dir(chatPath)
+	sessionID := codebuffSessionIDFromChatPath(t, chatPath)
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodebuff: {root},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+
+	require.Equal(t, 1,
+		engine.SyncAll(t.Context(), nil).Synced,
+		"cold sync must parse the seeded session")
+	require.Equal(t, 0,
+		engine.SyncAll(t.Context(), nil).Synced,
+		"warm sync with no changes must skip the session")
+
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sessionDir, "log.jsonl"), []byte("step\n"), 0o644),
+		"writing the debug sibling must succeed")
+
+	require.Equal(t, 1,
+		engine.SyncAll(t.Context(), nil).Synced,
+		"the reconcile path must still reparse a session whose "+
+			"directory mtime moved because of a log.jsonl write; a "+
+			"zero here means the directory term this plan pins was "+
+			"removed without updating the companion-deletion "+
+			"guarantee, and a value above one means the cutoff "+
+			"leaked to unrelated sessions")
+	codebuffAssertSessionMessageCount(t, database, sessionID, 1)
 }
