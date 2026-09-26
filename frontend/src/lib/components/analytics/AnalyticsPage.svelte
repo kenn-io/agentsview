@@ -14,6 +14,7 @@
   import HourOfWeekHeatmap from "./HourOfWeekHeatmap.svelte";
   import SessionShape from "./SessionShape.svelte";
   import VelocityMetrics from "./VelocityMetrics.svelte";
+  import OutcomeTotals from "./OutcomeTotals.svelte";
   import ToolUsage from "./ToolUsage.svelte";
   import TopSkills from "./TopSkills.svelte";
   import SkillTrend from "./SkillTrend.svelte";
@@ -28,6 +29,7 @@
     analytics,
     ANALYTICS_DEFAULT_WINDOW_DAYS,
   } from "../../stores/analytics.svelte.js";
+  import { outcomeTotals } from "../../stores/outcomeTotals.svelte.js";
   import { analyticsPageDates } from "../../stores/analyticsPageDates.js";
   import {
     sessions,
@@ -347,6 +349,26 @@
   }
 
   analytics.setFetchStartHandler(cancelInitialLoad);
+
+  // The outcome totals are read on their own, not through analytics.fetchAll,
+  // because the GitHub half of the aggregation shells out once per repository
+  // and must never be pulled into the page's normal refresh.
+  const outcomeWindow = $derived({
+    since: analytics.from,
+    until: analytics.to,
+    timezone: analytics.timezone,
+    agent: analytics.agent || undefined,
+    includeProject: analytics.project ? [analytics.project] : undefined,
+    includeOneShot: analytics.includeOneShot,
+    includeAutomated: analytics.includeAutomated,
+  });
+
+  $effect(() => {
+    const window = outcomeWindow;
+    untrack(() => {
+      void outcomeTotals.load(window);
+    });
+  });
 
   $effect(() => {
     if (initialLoadDeferred && !sessions.loading) {
@@ -701,6 +723,17 @@
 
       <Card level="default" padding="none" class="chart-panel wide">
         <AgentComparison />
+      </Card>
+
+      <Card level="default" padding="none" class="chart-panel wide">
+        <OutcomeTotals
+          stats={outcomeTotals.stats}
+          loading={outcomeTotals.loading}
+          error={outcomeTotals.error}
+          includePullRequests={outcomeTotals.includePullRequests}
+          onIncludePullRequests={() =>
+            void outcomeTotals.loadWithPullRequests(outcomeWindow)}
+        />
       </Card>
     </div>
 
