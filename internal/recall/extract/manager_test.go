@@ -60,6 +60,18 @@ func seedSession(t *testing.T, d *db.DB, id string, msgs []db.Message, mutate fu
 	seedSessionRows(t, d, s, msgs)
 }
 
+// endedAgo backdates a fixture session's end time. The backlog is walked
+// newest ended first, so a test that inspects whichever session a pass
+// reaches first states which one that is by ending it most recently, instead
+// of resting on the session-id tiebreak between equal end times.
+func endedAgo(ago time.Duration) func(*db.Session) {
+	return func(s *db.Session) {
+		ended := time.Now().Add(-ago).UTC().
+			Format("2006-01-02T15:04:05.000Z")
+		s.EndedAt = &ended
+	}
+}
+
 // seedSessionRows stores the session and its message rows keeping the
 // ordinals the caller assigned, so tests can model transcripts whose ingest
 // filtering left ordinal gaps.
@@ -2271,8 +2283,10 @@ func TestManagerAbortsPassOnEndpointScopedRejection(t *testing.T) {
 	server, log := modelServer(t, func(_ string, _ int) (int, string) {
 		return http.StatusUnauthorized, `{"error":"bad api key"}`
 	})
-	seedSession(t, d, "sess-a", turnMessages("fix the bug", "done"), nil)
-	seedSession(t, d, "sess-b", turnMessages("ship it", "shipped"), nil)
+	seedSession(t, d, "sess-a", turnMessages("fix the bug", "done"),
+		endedAgo(time.Hour))
+	seedSession(t, d, "sess-b", turnMessages("ship it", "shipped"),
+		endedAgo(2*time.Hour))
 	m := newManager(t, d, server.URL, nil)
 
 	_, err := m.RunPass(ctx, PassOptions{})
@@ -2307,8 +2321,10 @@ func TestManagerAbortsPassOnSchemaViolation(t *testing.T) {
 	server, log := modelServer(t, func(_ string, _ int) (int, string) {
 		return http.StatusOK, completionBody(t, `{"wrong":"shape"}`)
 	})
-	seedSession(t, d, "sess-a", turnMessages("fix the bug", "done"), nil)
-	seedSession(t, d, "sess-b", turnMessages("ship it", "shipped"), nil)
+	seedSession(t, d, "sess-a", turnMessages("fix the bug", "done"),
+		endedAgo(time.Hour))
+	seedSession(t, d, "sess-b", turnMessages("ship it", "shipped"),
+		endedAgo(2*time.Hour))
 	m := newManager(t, d, server.URL, nil)
 
 	_, err := m.RunPass(ctx, PassOptions{})
@@ -2539,8 +2555,10 @@ func TestManagerAbortsPassOnExhaustedTransientFailures(t *testing.T) {
 	server, log := modelServer(t, func(_ string, _ int) (int, string) {
 		return http.StatusInternalServerError, `{"error":"upstream down"}`
 	})
-	seedSession(t, d, "sess-a", turnMessages("fix the bug", "done"), nil)
-	seedSession(t, d, "sess-b", turnMessages("ship it", "shipped"), nil)
+	seedSession(t, d, "sess-a", turnMessages("fix the bug", "done"),
+		endedAgo(time.Hour))
+	seedSession(t, d, "sess-b", turnMessages("ship it", "shipped"),
+		endedAgo(2*time.Hour))
 	m := newManager(t, d, server.URL, nil)
 
 	_, err := m.RunPass(ctx, PassOptions{})
@@ -2605,8 +2623,10 @@ func TestManagerScheduledPassSkipsSessionReendedWithinQuietPeriod(t *testing.T) 
 		}
 		return http.StatusOK, completionBody(t, entriesJSON(t, "x"))
 	})
-	seedSession(t, d, "sess-a", turnMessages("fix the bug", "done"), nil)
-	seedSession(t, d, "sess-b", turnMessages("ship it", "shipped"), nil)
+	seedSession(t, d, "sess-a", turnMessages("fix the bug", "done"),
+		endedAgo(time.Hour))
+	seedSession(t, d, "sess-b", turnMessages("ship it", "shipped"),
+		endedAgo(2*time.Hour))
 	m := newManager(t, d, server.URL, nil)
 
 	result, err := m.RunPass(ctx, PassOptions{})
@@ -2645,8 +2665,10 @@ func TestManagerBadRequestStaysSessionScoped(t *testing.T) {
 		}
 		return http.StatusOK, completionBody(t, entriesJSON(t, "x"))
 	})
-	seedSession(t, d, "sess-a", turnMessages("fix the bug", "done"), nil)
-	seedSession(t, d, "sess-b", turnMessages("ship it", "shipped"), nil)
+	seedSession(t, d, "sess-a", turnMessages("fix the bug", "done"),
+		endedAgo(time.Hour))
+	seedSession(t, d, "sess-b", turnMessages("ship it", "shipped"),
+		endedAgo(2*time.Hour))
 	m := newManager(t, d, server.URL, nil)
 
 	result, err := m.RunPass(ctx, PassOptions{})
@@ -2798,9 +2820,12 @@ func TestManagerScheduledPassSkipsSessionsTrashedAfterSelection(t *testing.T) {
 		}
 		return http.StatusOK, completionBody(t, entriesJSON(t, "x"))
 	})
-	seedSession(t, d, "sess-a", turnMessages("fix the bug", "done"), nil)
-	seedSession(t, d, "sess-b", turnMessages("ship it", "shipped"), nil)
-	seedSession(t, d, "sess-c", turnMessages("try this", "tried"), nil)
+	seedSession(t, d, "sess-a", turnMessages("fix the bug", "done"),
+		endedAgo(time.Hour))
+	seedSession(t, d, "sess-b", turnMessages("ship it", "shipped"),
+		endedAgo(2*time.Hour))
+	seedSession(t, d, "sess-c", turnMessages("try this", "tried"),
+		endedAgo(3*time.Hour))
 	m := newManager(t, d, server.URL, nil)
 
 	result, err := m.RunPass(ctx, PassOptions{})
@@ -2823,11 +2848,15 @@ func TestManagerScheduledPassSkipsSessionsTrashedAfterSelection(t *testing.T) {
 	}
 }
 
-// TestManagerExplicitActivateRefusesUncoveredSessions pins the reviewer
-// scenario for the in-tx discovery gate: extracting one session by hand and
-// then activating must not retire the served corpus while other eligible
-// sessions were never extracted.
-func TestManagerExplicitActivateRefusesUncoveredSessions(t *testing.T) {
+// TestManagerExplicitActivateServesFirstPartialCorpus pins the operator
+// scenario the first corpus exists for: on a large archive the whole backlog
+// takes a long time to distill, and while no generation is active nothing is
+// being served, so an explicit activation may start serving what has been
+// extracted so far instead of waiting for complete coverage. Extraction is
+// unaffected — the rest of the backlog is still distilled, and once the
+// generation is active those entries are written straight to served, which is
+// why one early activation is the whole mechanism.
+func TestManagerExplicitActivateServesFirstPartialCorpus(t *testing.T) {
 	d := newTestArchive(t)
 	ctx := t.Context()
 	server, _ := modelServer(t, alwaysEntries(t, "x"))
@@ -2835,21 +2864,84 @@ func TestManagerExplicitActivateRefusesUncoveredSessions(t *testing.T) {
 	seedSession(t, d, "sess-2", turnMessages("c", "d"), nil)
 	m := newManager(t, d, server.URL, nil)
 
-	if _, err := m.RunPass(ctx, PassOptions{SessionID: "sess-1"}); err != nil {
-		require.FailNowf(t, "test failed", "single-session RunPass: %v", err)
-	}
-	err := m.Activate(ctx)
-	if !errors.Is(err, db.ErrExtractActivationBlocked) {
-		require.FailNowf(t, "test failed", "Activate = %v, want ErrExtractActivationBlocked: sess-2 "+
-			"is eligible and was never extracted", err)
-	}
+	_, err := m.RunPass(ctx, PassOptions{SessionID: "sess-1"})
+	require.NoError(t, err, "single-session RunPass")
+	served, err := d.ListRecallEntries(ctx, db.RecallQuery{Limit: 50})
+	require.NoError(t, err)
+	require.Empty(t, served, "a building generation stages its entries")
 
+	require.NoError(t, m.Activate(ctx),
+		"with nothing serving, the first corpus may activate on partial "+
+			"coverage: sess-2 is still eligible and not yet extracted")
+	served, err = d.ListRecallEntries(ctx, db.RecallQuery{Limit: 50})
+	require.NoError(t, err)
+	assert.Len(t, served, 2,
+		"both entries of the one extracted session must start serving")
+
+	// The backlog is not abandoned by activating early, and a later pass's
+	// output needs no second activation to appear.
+	status, err := m.Status(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, status.EligibleBacklog,
+		"sess-2 must still be waiting to be extracted")
 	result, err := m.RunPass(ctx, PassOptions{})
-	if err != nil {
-		require.FailNowf(t, "test failed", "full RunPass: %v", err)
+	require.NoError(t, err, "pass after activation")
+	assert.Equal(t, 1, result.Sessions)
+	served, err = d.ListRecallEntries(ctx, db.RecallQuery{Limit: 50})
+	require.NoError(t, err)
+	assert.Len(t, served, 4,
+		"an active generation's later entries serve as they are produced")
+	staged, err := d.ListRecallEntries(ctx,
+		db.RecallQuery{Status: "archived", Limit: 50})
+	require.NoError(t, err)
+	assert.Empty(t, staged)
+}
+
+// TestManagerExplicitActivateRefusesUncoveredReplacement pins the other half:
+// once a corpus is serving, an explicit activation of a replacement
+// generation must not retire it while eligible sessions were never extracted
+// under the replacement.
+func TestManagerExplicitActivateRefusesUncoveredReplacement(t *testing.T) {
+	d := newTestArchive(t)
+	ctx := t.Context()
+	server, _ := modelServer(t, alwaysEntries(t, "x"))
+	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
+	m := newManager(t, d, server.URL, nil)
+
+	// A complete, serving first corpus.
+	result, err := m.RunPass(ctx, PassOptions{})
+	require.NoError(t, err)
+	require.True(t, result.Activated, "full coverage must activate")
+
+	// A second generation, differing only in a fingerprint input, covers one
+	// of the two eligible sessions.
+	seedSession(t, d, "sess-2", turnMessages("c", "d"), nil)
+	replacement := newManager(t, d, server.URL, func(cfg *ManagerConfig) {
+		cfg.Identity = ModelIdentity{Model: "test-model", Deployment: "next"}
+		cfg.Client.Model = "test-model"
+	})
+	require.NotEqual(t, m.Fingerprint(), replacement.Fingerprint())
+	_, err = replacement.RunPass(ctx, PassOptions{SessionID: "sess-2"})
+	require.NoError(t, err, "single-session RunPass")
+
+	err = replacement.Activate(ctx)
+	require.ErrorIs(t, err, db.ErrExtractActivationBlocked,
+		"sess-1 is eligible and was never extracted under the replacement")
+	served, err := d.ListRecallEntries(ctx, db.RecallQuery{Limit: 50})
+	require.NoError(t, err)
+	require.NotEmpty(t, served,
+		"a refused activation must leave the served corpus in place")
+	for _, entry := range served {
+		assert.Equal(t, m.Fingerprint(), entry.SourceRunID,
+			"only the complete generation may serve")
 	}
-	if !result.Activated {
-		require.FailNowf(t, "test failed", "result = %+v; full coverage must activate", result)
+	staged, err := d.ListRecallEntries(ctx,
+		db.RecallQuery{Status: "archived", Limit: 50})
+	require.NoError(t, err)
+	require.NotEmpty(t, staged)
+	for _, entry := range staged {
+		assert.Equal(t, replacement.Fingerprint(), entry.SourceRunID,
+			"the refused generation's entries stay staged")
 	}
 }
 
@@ -3133,4 +3225,88 @@ func TestManagerArchiveContentBeforeModelCall(t *testing.T) {
 			})
 		}
 	}
+}
+
+// coveredSessions reports which of ids have a progress row under the
+// manager's generation, in the order given, so a pass's reach can be read
+// without depending on how far each session got.
+func coveredSessions(
+	t *testing.T, d *db.DB, fingerprint string, ids ...string,
+) []string {
+	t.Helper()
+	var covered []string
+	for _, id := range ids {
+		_, ok, err := d.ExtractProgress(t.Context(), id, fingerprint)
+		require.NoError(t, err)
+		if ok {
+			covered = append(covered, id)
+		}
+	}
+	return covered
+}
+
+// TestManagerNewestFirstPassesLeaveNoOlderSessionBehind pins newest-first
+// ordering against the discovery watermark, which is the one interaction
+// that could strand work: the watermark bounds discovery to sessions written
+// at or after it, and if it advanced from the rows a pass happened to
+// process, walking the archive newest-first would move it past the older
+// sessions the pass had not reached and they would never be extracted. It
+// advances from the pass start instead, and only on a pass that took
+// everything it found, so bounded passes eat the backlog from the recent end
+// while the oldest session still gets extracted. A session that arrives
+// afterwards with an old ended_at is discovered on its write time, not its
+// end time, so it is not stranded either.
+func TestManagerNewestFirstPassesLeaveNoOlderSessionBehind(t *testing.T) {
+	d := newTestArchive(t)
+	ctx := t.Context()
+	server, _ := modelServer(t, alwaysEntries(t, "x"))
+	seedSession(t, d, "sess-newest", turnMessages("a", "b"), endedAgo(time.Hour))
+	seedSession(t, d, "sess-middle", turnMessages("c", "d"), endedAgo(2*time.Hour))
+	seedSession(t, d, "sess-oldest", turnMessages("e", "f"), endedAgo(3*time.Hour))
+	// A zero quiet period puts the watermark at each completed pass's start,
+	// so it actually bounds the next pass's discovery against these fixtures.
+	m := newManager(t, d, server.URL, func(cfg *ManagerConfig) {
+		cfg.QuietPeriod = 0
+	})
+	all := []string{"sess-newest", "sess-middle", "sess-oldest"}
+
+	result, err := m.RunPass(ctx, PassOptions{Limit: 1})
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Sessions)
+	assert.Equal(t, []string{"sess-newest"},
+		coveredSessions(t, d, m.Fingerprint(), all...),
+		"a bounded pass takes the newest end of the backlog first")
+
+	result, err = m.RunPass(ctx, PassOptions{Limit: 1})
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Sessions)
+	assert.Equal(t, []string{"sess-newest", "sess-middle"},
+		coveredSessions(t, d, m.Fingerprint(), all...),
+		"a bounded pass must not advance the watermark past what it skipped")
+
+	result, err = m.RunPass(ctx, PassOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Sessions)
+	assert.Equal(t, all, coveredSessions(t, d, m.Fingerprint(), all...),
+		"the oldest session is reached even though it is ordered last")
+	assert.True(t, result.Activated,
+		"full coverage activates the generation as it always did")
+	status, err := m.Status(ctx)
+	require.NoError(t, err)
+	assert.Zero(t, status.EligibleBacklog)
+
+	// The unlimited pass advanced the watermark. A session written now but
+	// ended before every session already extracted is still discovered:
+	// discovery is bounded by write time, which the newest-first ordering
+	// does not touch.
+	seedSession(t, d, "sess-late-arrival",
+		turnMessages("g", "h"), endedAgo(10*time.Hour))
+	settleSessionWrite(t, d)
+
+	result, err = m.RunPass(ctx, PassOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Sessions)
+	assert.Equal(t, []string{"sess-late-arrival"},
+		coveredSessions(t, d, m.Fingerprint(), "sess-late-arrival"),
+		"a late-arriving old session must not be stranded by the watermark")
 }
