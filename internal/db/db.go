@@ -517,7 +517,11 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (114: Codex `apply_patch` calls record the files named in the patch body,
 // one tool call per file, so file-keyed views such as Recent Edits include
 // them. Re-parse unchanged Codex sources to backfill file_path.)
-const dataVersion = 114
+// (115: a Claude sub-agent that ran again under a second parent session has
+// that second transcript's entries appended to the same sub-agent session.
+// Re-parse unchanged Claude sources so a sub-agent session reaches its later
+// run's last entry.)
+const dataVersion = 115
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

@@ -249,6 +249,16 @@ func (p *claudeProvider) Parse(
 			results[i].Session.File.Hash = req.Fingerprint.Hash
 		}
 	}
+	// A sub-agent that ran again under a second parent session wrote a second
+	// transcript with the same name. Both are the same sub-agent session, so the
+	// later entries are appended here rather than colliding with the first
+	// file's session row and replacing it.
+	results, _, err = p.joinClaudeSubagentContinuations(
+		ctx, path, project, machine, opts, results,
+	)
+	if err != nil {
+		return ParseOutcome{}, err
+	}
 	InferRelationshipTypes(results)
 	out := make([]ParseResultOutcome, 0, len(results))
 	for _, result := range results {
@@ -311,6 +321,16 @@ func (p *claudeProvider) ParseIncremental(
 	}
 	if req.Fingerprint.Size == req.Offset {
 		return IncrementalOutcome{}, IncrementalNoNewData, nil
+	}
+	if len(claudeSubagentSiblingTranscripts(path)) > 0 {
+		// This sub-agent session's messages end in a companion transcript under
+		// another parent, so an offset into this file is not the end of the
+		// session: appending its tail would interleave with entries that already
+		// carry later ordinals. The session rebuilds authoritatively. The check
+		// sits after the no-new-data arm so an unchanged transcript never pays
+		// for the companion lookup.
+		return IncrementalOutcome{ForceReplace: true},
+			IncrementalNeedsFullParse, nil
 	}
 	newMsgs, links, endedAt, consumed, err := claudeParseSessionFrom(
 		path,
