@@ -1963,7 +1963,7 @@ func TestCodexProviderDiscoverEachExcludesNoncanonicalRolloutOutsideSupportedLay
 		"streaming discovery must preserve slice discovery's layout boundary")
 }
 
-func TestCodexProviderPrefersContinuationRollout(t *testing.T) {
+func TestCodexProviderPrefersRevertRollout(t *testing.T) {
 	const (
 		uuid     = "019eb791-cf7d-75c1-8439-9ed74c1229f1"
 		contUUID = "019eb791-cf7d-75c1-8439-9ed74c1229f2"
@@ -1974,7 +1974,7 @@ func TestCodexProviderPrefersContinuationRollout(t *testing.T) {
 		contDay string
 	}{
 		{"same day directory", "22", "22"},
-		{"continuation in a later day directory", "22", "23"},
+		{"revert rollout in a later day directory", "22", "23"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

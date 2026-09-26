@@ -996,7 +996,7 @@ func preferCodexRolloutPath(name, currentPath string) bool {
 	if currentPath == "" {
 		return true
 	}
-	prefer, _ := PreferCodexContinuation(name, filepath.Base(currentPath))
+	prefer, _ := PreferCodexRevertRollout(name, filepath.Base(currentPath))
 	return prefer
 }
 
@@ -1291,7 +1291,7 @@ func CodexSourceKey(agent AgentType, uuid string) string {
 func preferCodexSource(candidate, current SourceRef) bool {
 	cand := candidate.Opaque.(codexSource)
 	curr := current.Opaque.(codexSource)
-	if prefer, decided := PreferCodexContinuation(
+	if prefer, decided := PreferCodexRevertRollout(
 		filepath.Base(cand.Path), filepath.Base(curr.Path),
 	); decided {
 		return prefer

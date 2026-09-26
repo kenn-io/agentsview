@@ -478,15 +478,17 @@ fixtures retain this field; missing identities remain source-local.
   `turn_aborted`. Two revert rollouts had a null `history_base`. The third
   inherited all of its original except the aborted tail. Agentsview reads
   the leading UUID as the session. Every sync path, including startup
-  reconciliation, prefers the revert rollout with the newest filename
-  timestamp. Source lookup also finds one in a later day directory, and a
-  late watcher event for a superseded rollout is ignored once a newer one is
-  stored. Agentsview does not read `history_base`, so inherited turns are
-  missing from the session. `TestPreferCodexContinuation`,
-  `TestCodexProviderPrefersContinuationRollout`,
-  `TestReconcileWatchRootsPrefersCodexContinuationRollout`,
-  `TestPlanChangedPathsDropsCodexRolloutSupersededByStoredRevert`, and
-  `TestSyncKeepsCodexContinuationRolloutAcrossRestartAndResync` cover it.
+  reconciliation and title-index refreshes, prefers the revert rollout with
+  the newest filename timestamp. Source lookup also finds one in a later day
+  directory, and a late watcher event for a superseded rollout is ignored
+  once a newer one is stored. Agentsview does not read `history_base`, so
+  inherited turns are missing from the session.
+  `TestPreferCodexRevertRollout`,
+  `TestCodexProviderPrefersRevertRollout`,
+  `TestReconcileWatchRootsPrefersCodexRevertRollout`,
+  `TestPlanChangedPathsDropsCodexRolloutSupersededByStoredRevert`,
+  `TestSyncPathsCodexIndexEventPrefersRevertRolloutInAnotherRoot`, and
+  `TestSyncKeepsCodexRevertRolloutAcrossRestartAndResync` cover it.
   Before this, the suffixed file got no session key: full resync kept the
   revert rollout, and every restart put the original back.
 

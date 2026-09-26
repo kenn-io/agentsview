@@ -2576,7 +2576,7 @@ func preferDiscoveredFile(
 	candidate, current parser.DiscoveredFile,
 ) bool {
 	if candidate.Agent == current.Agent && isCodexFormatAgent(candidate.Agent) {
-		if prefer, decided := parser.PreferCodexContinuation(
+		if prefer, decided := parser.PreferCodexRevertRollout(
 			filepath.Base(candidate.Path), filepath.Base(current.Path),
 		); decided {
 			return prefer
@@ -2594,8 +2594,8 @@ func preferNewestCodexDiscoveredFile(
 	candidate, current parser.DiscoveredFile,
 ) bool {
 	if candidate.Agent == current.Agent && isCodexFormatAgent(candidate.Agent) {
-		// Full sync always keeps the continuation; quick sync must agree.
-		if prefer, decided := parser.PreferCodexContinuation(
+		// Full sync always keeps the newest revert rollout; quick sync must agree.
+		if prefer, decided := parser.PreferCodexRevertRollout(
 			filepath.Base(candidate.Path), filepath.Base(current.Path),
 		); decided {
 			return prefer
@@ -6269,8 +6269,8 @@ func (e *Engine) reconciliationCandidate(ctx context.Context,
 		}
 	}
 	if isCodexFormatAgent(agent) {
-		// Same order as parser.PreferCodexContinuation, then the dated layout.
-		preference1 = parser.CodexContinuationRank(filepath.Base(path))
+		// Same order as parser.PreferCodexRevertRollout, then the dated layout.
+		preference1 = parser.CodexRevertRolloutRank(filepath.Base(path))
 		preference2 = boolPreference(
 			codexLayoutForPath(path) == parser.CodexLayoutDated,
 		)
@@ -16213,7 +16213,17 @@ func (e *Engine) pickPreferredCodexIndexDiscoveredFile(ctx context.Context,
 		if uuid != "" && storedPath != "" {
 			storedPath = filepath.Clean(storedPath)
 			for _, candidate := range candidates {
-				if filepath.Clean(e.effectiveSourcePath(candidate.Path)) == storedPath {
+				if filepath.Clean(e.effectiveSourcePath(candidate.Path)) != storedPath {
+					continue
+				}
+				superseded := slices.ContainsFunc(candidates,
+					func(other parser.DiscoveredFile) bool {
+						prefer, _ := parser.PreferCodexRevertRollout(
+							filepath.Base(other.Path), filepath.Base(candidate.Path),
+						)
+						return prefer
+					})
+				if !superseded {
 					return candidate
 				}
 			}
@@ -16335,7 +16345,7 @@ func pickPreferredCodexDiscoveredFile(ctx context.Context,
 					continue
 				}
 				// A stored rollout must not outlive a newer revert rollout.
-				if prefer, _ := parser.PreferCodexContinuation(
+				if prefer, _ := parser.PreferCodexRevertRollout(
 					filepath.Base(best.Path), filepath.Base(candidate.Path),
 				); prefer {
 					return best
@@ -16369,7 +16379,7 @@ func (e *Engine) supersededCodexRollout(
 		parser.CodexSessionUUIDFromFilename(storedName) != uuid {
 		return false
 	}
-	if prefer, _ := parser.PreferCodexContinuation(storedName, name); !prefer {
+	if prefer, _ := parser.PreferCodexRevertRollout(storedName, name); !prefer {
 		return false
 	}
 	// A rewritten stored path is not a local path, so only a local one is checked.
