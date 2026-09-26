@@ -1963,6 +1963,71 @@ func TestCodexProviderDiscoverEachExcludesNoncanonicalRolloutOutsideSupportedLay
 		"streaming discovery must preserve slice discovery's layout boundary")
 }
 
+func TestCodexProviderPrefersRevertRollout(t *testing.T) {
+	const (
+		uuid     = "019eb791-cf7d-75c1-8439-9ed74c1229f1"
+		contUUID = "019eb791-cf7d-75c1-8439-9ed74c1229f2"
+	)
+	tests := []struct {
+		name    string
+		origDay string
+		contDay string
+	}{
+		{"same day directory", "22", "22"},
+		{"revert rollout in a later day directory", "22", "23"},
+		{"flat revert beats dated original", "22", ""},
+		{"dated revert beats flat original", "", "23"},
+		{"stored original outside standard layout", "legacy", "23"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			write := func(day, name, prompt string) string {
+				path := filepath.Join(root, "2026", "09", day, name)
+				if day == "" {
+					path = filepath.Join(root, name)
+				}
+				require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+				require.NoError(t, os.WriteFile(path, []byte(testjsonl.JoinJSONL(
+					testjsonl.CodexSessionMetaJSON(
+						uuid, "/home/user/code/api", "codex_cli_rs", tsEarly,
+					),
+					testjsonl.CodexMsgJSON("user", prompt, tsEarlyS1),
+				)), 0o644))
+				return path
+			}
+			originalPath := write(tt.origDay,
+				"rollout-2026-09-22T11-32-24-"+uuid+".jsonl", "aborted first try")
+			contPath := write(tt.contDay,
+				"rollout-2026-09-22T11-34-12-"+uuid+"_"+contUUID+".jsonl", "retry")
+			provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+
+			discovered, err := provider.Discover(t.Context())
+			require.NoError(t, err)
+			assert.Equal(t, []string{contPath}, sourceDisplayPaths(discovered))
+
+			found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
+				FullSessionID: "codex:" + uuid,
+			})
+			require.NoError(t, err)
+			require.True(t, ok)
+			assert.Equal(t, contPath, found.DisplayPath)
+			for _, request := range []FindSourceRequest{
+				{StoredFilePath: originalPath},
+				{StoredFilePath: originalPath, RequireFreshSource: true, PreferStoredSource: true},
+				{FingerprintKey: originalPath, RequireFreshSource: true, PreferStoredSource: true},
+			} {
+				request.FullSessionID = "codex:" + uuid
+				found, ok, err := provider.FindSource(t.Context(), request)
+				require.NoError(t, err)
+				require.True(t, ok)
+				assert.Equal(t, contPath, found.DisplayPath)
+			}
+		})
+	}
+}
+
 func TestCodexProviderFindSourcePinsExactArchivedDuplicate(t *testing.T) {
 	base := t.TempDir()
 	liveRoot := filepath.Join(base, "sessions")

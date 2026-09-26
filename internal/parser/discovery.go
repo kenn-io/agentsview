@@ -18,10 +18,14 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// uuidRe matches a standard UUID (8-4-4-4-12 hex) at the end of a rollout filename stem.
+// uuidRe matches a standard UUID (8-4-4-4-12 hex) at the end of a rollout
+// filename stem, optionally followed by "_<uuid>": after thread/revert, Codex
+// names the thread's new rollout file "<thread id>_<rollout id>".
 var uuidRe = regexp.MustCompile(
 	`^rollout-.*-([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-` +
-		`[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$`,
+		`[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})` +
+		`(_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-` +
+		`[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})?$`,
 )
 
 const (
@@ -884,6 +888,41 @@ func extractUUIDFromRollout(filename string) string {
 		return ""
 	}
 	return match[1]
+}
+
+// CodexRevertRolloutRank returns the Unix seconds of a revert rollout's
+// filename timestamp ("...-<thread id>_<rollout id>.jsonl"), or 0 for an
+// ordinary rollout. Codex stamps each revert rollout when it is created, so a
+// higher rank is a newer rollout of the thread. A revert rollout whose
+// timestamp does not parse ranks 1.
+func CodexRevertRolloutRank(filename string) int64 {
+	stem := strings.TrimSuffix(filename, ".jsonl")
+	match := uuidRe.FindStringSubmatch(stem)
+	if len(match) != 3 || match[2] == "" {
+		return 0
+	}
+	core := strings.TrimPrefix(stem, "rollout-")
+	if len(core) >= 19 {
+		if ts, err := time.Parse("2006-01-02T15-04-05", core[:19]); err == nil {
+			return max(ts.Unix(), 1)
+		}
+	}
+	return 1
+}
+
+// PreferCodexRevertRollout compares two rollout filenames for the same Codex
+// session UUID. After thread/revert the thread continues in a new rollout
+// ("...-<thread id>_<rollout id>.jsonl"), so a revert rollout wins over the
+// original and a newer revert rollout wins over an older one. decided is
+// false when neither is a revert rollout, or both share a timestamp, and the
+// caller's existing order applies.
+func PreferCodexRevertRollout(candidate, current string) (prefer, decided bool) {
+	candRank := CodexRevertRolloutRank(candidate)
+	currRank := CodexRevertRolloutRank(current)
+	if candRank == currRank {
+		return false, false
+	}
+	return candRank > currRank, true
 }
 
 // IsDigits reports whether s is non-empty and contains only

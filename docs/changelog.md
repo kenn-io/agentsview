@@ -105,6 +105,16 @@ The latest published release is
   from the PostgreSQL server's time zone data, which matches AgentsView's for
   current time zones.
 
+**Bug fixes**
+
+- Reverted Codex threads no longer lose their later messages when AgentsView
+  restarts, and a Full Resync no longer "finds" them again. After a revert,
+  Codex continues the thread in a new file named
+  `rollout-<time>-<thread id>_<rollout id>.jsonl` and leaves the old file in
+  place. AgentsView now treats the new file as the same session and always
+  keeps the newest one. Turns that the new file inherits from the old one are
+  not shown yet.
+
 ## 0.44.0
 
 <small>2026-09-21</small>

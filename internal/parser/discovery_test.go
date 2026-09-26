@@ -469,12 +469,53 @@ func TestExtractUUIDFromRollout(t *testing.T) {
 			"rollout-20240115-abc12345-1234-5678-9abc-def012345678-suffix.jsonl",
 			"",
 		},
+		{
+			"rollout-2026-09-22T11-34-12-abc12345-1234-5678-9abc-def012345678_fed01234-5678-9abc-def0-123456789abc.jsonl",
+			"abc12345-1234-5678-9abc-def012345678",
+		},
+		{
+			"rollout-2026-09-22T11-34-12-abc12345-1234-5678-9abc-def012345678_notauuid.jsonl",
+			"",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.filename, func(t *testing.T) {
 			got := extractUUIDFromRollout(tt.filename)
 			assert.Equalf(t, tt.want, got, "extractUUID(%q)", tt.filename)
+		})
+	}
+}
+
+func TestPreferCodexRevertRollout(t *testing.T) {
+	const (
+		original = "rollout-2026-09-22T11-32-24-abc12345-1234-5678-9abc-def012345678.jsonl"
+		first    = "rollout-2026-09-22T11-34-12-abc12345-1234-5678-9abc-def012345678_fed01234-5678-9abc-def0-123456789abc.jsonl"
+		second   = "rollout-2026-09-23T08-00-00-abc12345-1234-5678-9abc-def012345678_0123abcd-5678-9abc-def0-123456789abc.jsonl"
+		sameTime = "rollout-2026-09-22T11-34-12-abc12345-1234-5678-9abc-def012345678_0123abcd-5678-9abc-def0-123456789abc.jsonl"
+		untimed  = "rollout-flat-abc12345-1234-5678-9abc-def012345678_fed01234-5678-9abc-def0-123456789abc.jsonl"
+	)
+	tests := []struct {
+		name        string
+		candidate   string
+		current     string
+		wantPrefer  bool
+		wantDecided bool
+	}{
+		{"revert beats original", first, original, true, true},
+		{"original loses to revert", original, first, false, true},
+		{"newer revert beats older", second, first, true, true},
+		{"older revert loses to newer", first, second, false, true},
+		{"same-second reverts are undecided", sameTime, first, false, false},
+		{"untimed revert beats original", untimed, original, true, true},
+		{"untimed revert loses to a timestamped one", untimed, first, false, true},
+		{"two originals are undecided", original, original, false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prefer, decided := PreferCodexRevertRollout(tt.candidate, tt.current)
+			assert.Equal(t, tt.wantPrefer, prefer, "prefer")
+			assert.Equal(t, tt.wantDecided, decided, "decided")
 		})
 	}
 }

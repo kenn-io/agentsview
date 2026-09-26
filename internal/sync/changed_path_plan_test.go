@@ -438,6 +438,49 @@ func TestSyncChangedPathPlanPrefersLiveCodexDuplicate(t *testing.T) {
 	assert.Equal(t, "preferred live content", messages[0].Content)
 }
 
+func TestPlanChangedPathsDropsCodexRolloutSupersededByStoredRevert(t *testing.T) {
+	root := t.TempDir()
+	const (
+		uuid     = "019eb791-cf7d-75c1-8439-9ed74c12a001"
+		contUUID = "019eb791-cf7d-75c1-8439-9ed74c12a002"
+	)
+	dayDir := filepath.Join(root, "2026", "09", "22")
+	require.NoError(t, os.MkdirAll(dayDir, 0o755))
+	write := func(name, content string) string {
+		path := filepath.Join(dayDir, name)
+		require.NoError(t, os.WriteFile(path, []byte(testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON(
+				uuid, "/workspace/project", "codex_cli_rs", "2026-09-22T11:32:24Z",
+			),
+			testjsonl.CodexMsgJSON("user", content, "2026-09-22T11:32:25Z"),
+		)), 0o600))
+		return path
+	}
+	originalPath := write("rollout-2026-09-22T11-32-24-"+uuid+".jsonl", "aborted")
+	contPath := write(
+		"rollout-2026-09-22T11-34-12-"+uuid+"_"+contUUID+".jsonl", "retry",
+	)
+	database := dbtest.OpenTestDB(t)
+	engine := NewEngine(t.Context(), database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}},
+		Machine:   "local",
+	})
+	t.Cleanup(engine.Close)
+
+	plan, err := engine.PlanChangedPathsContext(t.Context(), []string{originalPath})
+	require.NoError(t, err)
+	require.Len(t, plan.Files, 1, "with nothing stored the original is new work")
+	assert.Equal(t, originalPath, plan.Files[0].Path)
+
+	require.NoError(t, engine.SyncPathsContext(t.Context(), []string{contPath}))
+	require.Equal(t, contPath, database.GetSessionFilePath(t.Context(), "codex:"+uuid))
+
+	plan, err = engine.PlanChangedPathsContext(t.Context(), []string{originalPath})
+	require.NoError(t, err)
+	assert.Empty(t, plan.Files,
+		"a stored newer revert rollout supersedes the original's event")
+}
+
 func TestPlanChangedPathsOmnigentIncludesStoredDescendants(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
 	physicalRoot := t.TempDir()
