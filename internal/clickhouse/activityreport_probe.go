@@ -22,7 +22,7 @@ func (s *Store) ActivityReportSourceProbe(
 		hex(SHA256(toString(arraySort(groupArray((table, name, hash_of_all_files))))))
 		FROM system.parts
 		WHERE database = currentDatabase() AND active
-		AND table IN ('sessions', 'messages', 'usage_events', 'model_pricing', 'genai_pricing', 'sync_metadata')`).Scan(&fingerprint)
+		AND table IN ('sessions', 'messages', 'usage_events', 'model_pricing', 'genai_pricing', 'sync_metadata', 'usage_session_snapshots', 'prepared_usage')`).Scan(&fingerprint)
 	if err != nil {
 		return activity.SourceProbe{}, fmt.Errorf("reading clickhouse activity source parts: %w", err)
 	}
@@ -70,5 +70,44 @@ func (s *Store) readActivitySourceProbe(ctx context.Context) (activity.SourcePro
 	if err != nil {
 		return activity.SourceProbe{}, fmt.Errorf("probing clickhouse activity report source: %w", err)
 	}
+	ready, err := s.preparedUsageReady(ctx)
+	if err != nil {
+		return activity.SourceProbe{}, err
+	}
+	if ready {
+		// Count and sum row hashes so merges and row ordering do not change the
+		// fingerprint, while duplicate rows still contribute to it.
+		err = s.queryRowContext(ctx, `SELECT hex(SHA256(toString(tuple(count(),sumWithOverflow(row_hash)))))
+			FROM (SELECT reinterpretAsUInt128(sipHash128Reference(tuple(*))) AS row_hash
+			FROM prepared_usage) SETTINGS final=0`).Scan(&probe.PreparedUsageFingerprint)
+		if err != nil {
+			return activity.SourceProbe{}, fmt.Errorf("probing prepared usage: %w", err)
+		}
+	}
 	return probe, nil
+}
+
+func (s *Store) preparedUsageReady(ctx context.Context) (bool, error) {
+	var refreshed, filled uint64
+	err := s.queryRowContext(ctx, `SELECT
+		(SELECT ifNull(max(toUnixTimestamp(last_success_time)),0) FROM system.view_refreshes
+		 WHERE database=currentDatabase() AND view='prepare_usage'),
+		(SELECT ifNull(max(toUInt64OrZero(value)),0) FROM sync_metadata WHERE startsWith(key,?))`,
+		usageSnapshotReadyKeyBase+":").Scan(&refreshed, &filled)
+	if err != nil {
+		return false, fmt.Errorf("checking prepared usage refresh: %w", err)
+	}
+	// Existing reports remain available while every archive prepares its first
+	// complete snapshot. The refresh must start after the backfill finishes.
+	if filled == 0 || refreshed <= filled {
+		return false, nil
+	}
+	var missing uint64
+	err = s.queryRowContext(ctx, `SELECT count() FROM sessions s
+		LEFT JOIN usage_session_snapshots u ON u.id=s.id
+		WHERE u.id='' OR u.push_version<s.push_version`).Scan(&missing)
+	if err != nil {
+		return false, fmt.Errorf("checking complete usage coverage: %w", err)
+	}
+	return missing == 0, nil
 }

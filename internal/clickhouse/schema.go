@@ -34,6 +34,7 @@ const (
 	mappingRevisionKeyBase     = "agentsview_mapping_revision"
 	curationFingerprintKeyBase = "agentsview_curation_fingerprint"
 	cursorUsageMaxIDKeyBase    = "agentsview_cursor_usage_max_id"
+	usageSnapshotReadyKeyBase  = "agentsview_usage_snapshot_ready"
 )
 
 // archiveMetadataKey scopes a sync_metadata key to one source archive so
@@ -583,6 +584,9 @@ func EnsureSchemaOn(ctx context.Context, conn *sql.DB) error {
 		return err
 	}
 	if err := ensureTerminalEventSnapshots(ctx, conn); err != nil {
+		return err
+	}
+	if err := ensureUsageSessionSnapshots(ctx, conn); err != nil {
 		return err
 	}
 	return writeMetadata(ctx, conn, map[string]string{

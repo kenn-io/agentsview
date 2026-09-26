@@ -731,7 +731,11 @@ func (db *DB) GetAllMessages(
 	ctx context.Context, sessionID string,
 ) ([]Message, error) {
 	db.messagesLoadCount.Add(1)
-	rows, err := db.getReader().QueryContext(ctx, fmt.Sprintf(`
+	return allMessagesWithQuerier(ctx, db.getReader(), sessionID)
+}
+
+func allMessagesWithQuerier(ctx context.Context, q messageRowsQuerier, sessionID string) ([]Message, error) {
+	rows, err := q.QueryContext(ctx, fmt.Sprintf(`
 		SELECT %s
 		FROM messages
 		WHERE session_id = ?
@@ -744,7 +748,7 @@ func (db *DB) GetAllMessages(
 	if err != nil {
 		return nil, err
 	}
-	if err := db.attachToolCalls(ctx, msgs); err != nil {
+	if err := attachToolCallsWithQuerier(ctx, q, msgs); err != nil {
 		return nil, err
 	}
 	return msgs, nil
@@ -3816,7 +3820,11 @@ func (db *DB) ToolCallContentFingerprint(ctx context.Context, sessionID string) 
 // tool-call count. Used by PG push fast-paths to avoid skipping parser
 // changes that only affect tool metadata or inputs.
 func (db *DB) ToolCallFingerprint(ctx context.Context, sessionID string) (string, error) {
-	rows, err := db.getReader().Query(ctx,
+	return toolCallFingerprintWithQuerier(ctx, db.getReader(), sessionID)
+}
+
+func toolCallFingerprintWithQuerier(ctx context.Context, q messageRowsQuerier, sessionID string) (string, error) {
+	rows, err := q.QueryContext(ctx,
 		`SELECT m.ordinal, tc.tool_name, tc.category,
 			COALESCE(tc.tool_use_id, ''), COALESCE(tc.input_json, ''),
 			COALESCE(tc.skill_name, ''),

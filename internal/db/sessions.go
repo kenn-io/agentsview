@@ -1209,7 +1209,10 @@ func (db *DB) getSessionFullUncoalesced(
 		"SELECT "+sessionFullCols+" FROM sessions WHERE id = ?",
 		id,
 	)
+	return scanSessionFullRow(row, id)
+}
 
+func scanSessionFullRow(row interface{ Scan(...any) error }, id string) (*Session, error) {
 	var s Session
 	err := row.Scan(
 		&s.ID, &s.Project, &s.Machine, &s.Agent,
@@ -1248,7 +1251,7 @@ func (db *DB) getSessionFullUncoalesced(
 		&s.FileHash, &s.LocalModifiedAt,
 		&s.TranscriptRevision, &s.CreatedAt, &s.ProjectAssigned,
 	)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -6195,4 +6198,61 @@ const (
 
 func sqliteSyncTimestampExpr(expr trustedSQLiteExpr) string {
 	return "strftime('%Y-%m-%dT%H:%M:%fZ', " + string(expr) + ")"
+}
+
+// SessionMirrorSnapshot keeps the raw session names, dependent rows, and
+// fingerprint inputs from the same committed archive version.
+type SessionMirrorSnapshot struct {
+	Session             Session
+	Messages            []Message
+	Usage               []UsageEvent
+	Findings            []SecretFinding
+	Pins                []PinnedMessage
+	UsageFingerprint    string
+	ToolCallFingerprint string
+}
+
+func (db *DB) LoadSessionMirrorSnapshot(ctx context.Context, id string) (*SessionMirrorSnapshot, error) {
+	return db.loadSessionMirrorSnapshot(ctx, id, nil)
+}
+
+func (db *DB) loadSessionMirrorSnapshot(ctx context.Context, id string, afterSession func()) (*SessionMirrorSnapshot, error) {
+	tx, err := db.getReader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, fmt.Errorf("beginning mirror source snapshot: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	session, err := scanSessionFullRow(tx.QueryRowContext(ctx,
+		"SELECT "+sessionFullCols+" FROM sessions WHERE id = ?", id), id)
+	if err != nil || session == nil {
+		return nil, err
+	}
+	if afterSession != nil {
+		afterSession()
+	}
+	result := &SessionMirrorSnapshot{Session: *session}
+	if result.Messages, err = allMessagesWithQuerier(ctx, tx, id); err != nil {
+		return nil, err
+	}
+	if result.Usage, err = usageEventsWithQuerier(ctx, tx, id, 0); err != nil {
+		return nil, err
+	}
+	if result.Findings, err = sessionSecretFindingsWithQuerier(ctx, tx, id); err != nil {
+		return nil, err
+	}
+	if result.Pins, err = pinnedMessagesWithQuerier(ctx, tx, id, ""); err != nil {
+		return nil, err
+	}
+	usage := make(map[string]string, 1)
+	if err := appendUsageEventFingerprints(ctx, tx, usage, []string{id}); err != nil {
+		return nil, err
+	}
+	result.UsageFingerprint = usage[id]
+	if result.ToolCallFingerprint, err = toolCallFingerprintWithQuerier(ctx, tx, id); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("finishing mirror source snapshot: %w", err)
+	}
+	return result, nil
 }

@@ -469,6 +469,13 @@ func (s *Store) activityReportUsage(
 	}
 
 	query, args := clickActivityReportUsageQuery(candidates, lowerBound, upperBound)
+	ready, err := s.preparedUsageReady(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if ready {
+		query, args = clickPreparedActivityUsageQuery(candidates, lowerBound, upperBound)
+	}
 	rowsAcc, err := s.scanActivityUsageRows(ctx, query, args)
 	if err != nil {
 		return nil, nil, err
@@ -588,6 +595,23 @@ func clickActivityReportUsageQuery(
 	return query + " SETTINGS optimize_move_to_prewhere_if_final = 0, use_skip_indexes_if_final_exact_mode = 1", args
 }
 
+func clickPreparedActivityUsageQuery(candidates chSessionSet, lowerBound, upperBound string) (string, []any) {
+	query := `WITH candidate_sessions AS (` + candidates.body + `), candidate_keys AS (
+		SELECT DISTINCT claude_message_id,claude_request_id FROM prepared_usage
+		WHERE session_id IN (SELECT id FROM candidate_sessions)
+		AND claude_message_id != '' AND claude_request_id != ''
+		AND ts >= ` + chTimestampSQL + ` AND ts <= ` + chTimestampSQL + `)
+		SELECT * FROM prepared_usage WHERE ts >= ` + chTimestampSQL + ` AND ts <= ` + chTimestampSQL + `
+		AND (session_id IN (SELECT id FROM candidate_sessions)
+		OR (source='message' AND (claude_message_id,claude_request_id) IN (SELECT * FROM candidate_keys)))
+		SETTINGS final=0`
+	args := slices.Clone(candidates.args)
+	for range 2 {
+		args = append(args, lowerBound, upperBound)
+	}
+	return query, args
+}
+
 // A push writes a session's messages before it publishes the session row, and
 // an interrupted push may never publish it. Accept stored usage at or above the
 // published version so that window shows the newer rows instead of no usage.
@@ -609,20 +633,15 @@ func clickUsageNormalizedQuery(messageWhere, eventWhere string) string {
 // clickUsageNormalizedQueryWith prepends extra common table expressions
 // (each terminated by a comma) ahead of usage_raw.
 func clickUsageNormalizedQueryWith(ctes, messageWhere, eventWhere string) string {
-	maxTok := db.MaxPlausibleTokens
-	clamp := func(expr string) string {
-		return fmt.Sprintf("least(greatest(%s, toInt64(0)), toInt64(%d))", expr, maxTok)
-	}
-	msgInput := clamp("usage_input")
-	msgOutput := clamp("usage_output")
-	msgCacheCr := clamp("usage_cache_create")
-	msgCacheCr1h := clamp("usage_cache_create_1h")
-	msgCacheRd := clamp("usage_cache_read")
-	msgReasoning := clamp("usage_reasoning")
-	msgWeb := "greatest(usage_web, toInt64(0))"
+	return clickUsageNormalizedQueryFrom(ctes, messageWhere, eventWhere,
+		"usage_messages m JOIN sessions s ON s.id = m.session_id",
+		"usage_events ue JOIN sessions s ON s.id = ue.session_id", chUsageMessageCurrent)
+}
+
+func clickUsageNormalizedQueryFrom(ctes, messageWhere, eventWhere, messageFrom, eventFrom, currentVersion string) string {
 	return fmt.Sprintf(`
-		WITH %[15]susage_raw AS (
-			SELECT m.session_id AS session_id,
+		WITH %[3]susage_raw AS (
+			SELECT s.id AS session_id,
 				CAST(m.ordinal AS Nullable(Int64)) AS message_ordinal,
 				'message' AS source,
 				COALESCE(m.timestamp, s.started_at) AS ts,
@@ -647,11 +666,10 @@ func clickUsageNormalizedQueryWith(ctes, messageWhere, eventWhere string) string
 				CAST('' AS String) AS cost_source,
 				COALESCE(m.timestamp, s.started_at) AS ts_raw,
 				s.started_at AS started_at_raw
-			FROM usage_messages m
-			JOIN sessions s ON s.id = m.session_id
-			WHERE %[16]s AND %[1]s
+			FROM %[5]s
+			WHERE %[4]s AND %[1]s
 			UNION ALL
-			SELECT ue.session_id AS session_id,
+			SELECT s.id AS session_id,
 				ue.message_ordinal AS message_ordinal,
 				ue.source AS source,
 				COALESCE(ue.occurred_at, s.started_at) AS ts,
@@ -669,8 +687,8 @@ func clickUsageNormalizedQueryWith(ctes, messageWhere, eventWhere string) string
 				CAST('' AS String) AS claude_request_id,
 				CAST('' AS String) AS source_uuid,
 				if(ue.dedup_key != '',
-					concat(ue.session_id, ':', ue.source, ':', ue.dedup_key),
-					concat(ue.session_id, ':', ue.source, ':id:', toString(ue.id))) AS usage_dedup_key,
+					concat(s.id, ':', ue.source, ':', ue.dedup_key),
+					concat(s.id, ':', ue.source, ':id:', toString(ue.id))) AS usage_dedup_key,
 				toInt64(ue.input_tokens) AS input_tokens,
 				toInt64(ue.output_tokens) AS output_tokens,
 				toInt64(ue.cache_creation_input_tokens) AS cache_create,
@@ -680,53 +698,65 @@ func clickUsageNormalizedQueryWith(ctes, messageWhere, eventWhere string) string
 				ue.cost_source AS cost_source,
 				COALESCE(ue.occurred_at, s.started_at) AS ts_raw,
 				s.started_at AS started_at_raw
-			FROM usage_events ue
-			JOIN sessions s ON s.id = ue.session_id
+			FROM %[6]s
 			WHERE %[2]s
-		)
-		SELECT session_id, message_ordinal, ts, pricing_ts, source, model,
+		)`,
+		messageWhere, eventWhere, ctes, currentVersion, messageFrom, eventFrom,
+	) + " SELECT " + clickUsageNormalizedColumns() + " FROM usage_raw"
+}
+
+func clickUsageNormalizedColumns() string {
+	maxTok := db.MaxPlausibleTokens
+	clamp := func(expr string) string {
+		return fmt.Sprintf("least(greatest(%s, toInt64(0)), toInt64(%d))", expr, maxTok)
+	}
+	msgInput := clamp("usage_input")
+	msgOutput := clamp("usage_output")
+	msgCacheCr := clamp("usage_cache_create")
+	msgCacheCr1h := clamp("usage_cache_create_1h")
+	msgCacheRd := clamp("usage_cache_read")
+	msgReasoning := clamp("usage_reasoning")
+	msgWeb := "greatest(usage_web, toInt64(0))"
+	return fmt.Sprintf(`session_id, message_ordinal, ts, pricing_ts, source, model,
 			provider_id, agent, claude_message_id, claude_request_id, source_uuid,
 			usage_dedup_key,
 			toInt64(CASE
-				WHEN source = 'message' THEN %[3]s
+				WHEN source = 'message' THEN %[1]s
 				WHEN source = 'session' THEN greatest(input_tokens, toInt64(0))
-				ELSE %[8]s
+				ELSE %[6]s
 			END) AS input_tokens_norm,
 			toInt64(CASE
-				WHEN source = 'message' THEN %[4]s
+				WHEN source = 'message' THEN %[2]s
 				WHEN source = 'session' THEN greatest(output_tokens, toInt64(0))
-				ELSE %[9]s
+				ELSE %[7]s
 			END) AS output_tokens_norm,
 			toInt64(CASE
-				WHEN source = 'message' THEN %[5]s
+				WHEN source = 'message' THEN %[3]s
 				WHEN source = 'session' THEN greatest(cache_create, toInt64(0))
-				ELSE %[10]s
+				ELSE %[8]s
 			END) AS cache_create_norm,
 			toInt64(CASE
-				WHEN source = 'message' THEN %[6]s
+				WHEN source = 'message' THEN %[4]s
 				ELSE toInt64(0)
 			END) AS cache_create_1h_norm,
 			toInt64(CASE
-				WHEN source = 'message' THEN %[7]s
+				WHEN source = 'message' THEN %[5]s
 				WHEN source = 'session' THEN greatest(cache_read, toInt64(0))
-				ELSE %[11]s
+				ELSE %[9]s
 			END) AS cache_read_norm,
 			toInt64(CASE
-				WHEN source = 'message' THEN %[12]s
+				WHEN source = 'message' THEN %[10]s
 				WHEN source = 'session' THEN greatest(reasoning_tokens, toInt64(0))
-				ELSE %[13]s
+				ELSE %[11]s
 			END) AS reasoning_tokens_norm,
 			toInt64(CASE
-				WHEN source = 'message' THEN %[14]s
+				WHEN source = 'message' THEN %[12]s
 				ELSE toInt64(0)
 			END) AS web_search_requests_norm,
-			cost_microdollars, cost_source
-		FROM usage_raw`,
-		messageWhere, eventWhere,
+			cost_microdollars, cost_source`,
 		msgInput, msgOutput, msgCacheCr, msgCacheCr1h, msgCacheRd,
 		clamp("input_tokens"), clamp("output_tokens"), clamp("cache_create"),
 		clamp("cache_read"), msgReasoning, clamp("reasoning_tokens"), msgWeb,
-		ctes, chUsageMessageCurrent,
 	)
 }
 
