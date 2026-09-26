@@ -428,11 +428,13 @@ func (s antigravitySourceSet) sourceForChangedPath(root, path string) (SourceRef
 		if IsRegularFile(dbPath) {
 			return s.newSourceRef(root, dbPath, id), true
 		}
-		if IsRegularFile(path) {
-			return s.newSourceRef(
-				root, path, antigravityBrainRawID(root, id),
-			), true
-		}
+		// The transcript is this conversation's own session file, so it routes
+		// to itself whether or not it still exists: a delete has to reach the
+		// parse for the session to be cleared, which is how a removed
+		// conversations/<uuid>.db is handled above.
+		return s.newSourceRef(
+			root, path, antigravityBrainRawID(root, id),
+		), true
 	}
 	if id, ok := antigravityBrainID(root, path); ok {
 		dbPath := filepath.Join(root, "conversations", id+".db")

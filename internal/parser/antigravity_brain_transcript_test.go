@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -219,6 +220,30 @@ func TestAntigravityBrainChangedPathRouting(t *testing.T) {
 		require.NoError(t, err, "SourcesForChangedPath")
 		require.Len(t, sources, 1, "one source")
 		assert.Equal(t, transcript, sources[0].DisplayPath, "routing")
+	})
+
+	t.Run("a deleted transcript still routes to itself", func(t *testing.T) {
+		root := t.TempDir()
+		id := "68b6d305-c8a9-45b4-96c8-fbaff15fa2f3"
+		transcript := writeAntigravityBrainTranscript(
+			t, root, id, antigravityBrainTranscriptFixture,
+		)
+		require.NoError(t, os.Remove(transcript), "remove the transcript")
+		provider := newAntigravityProviderForRoots(t, root)
+
+		sources, err := provider.SourcesForChangedPath(t.Context(),
+			ChangedPathRequest{Path: transcript, EventKind: "remove"})
+		require.NoError(t, err, "SourcesForChangedPath")
+		require.Len(t, sources, 1,
+			"a delete must reach the parse so the session can be cleared")
+		assert.Equal(t, transcript, sources[0].DisplayPath, "routing")
+
+		outcome, err := provider.Parse(t.Context(), ParseRequest{
+			Source: sources[0], Machine: "devbox",
+		})
+		require.NoError(t, err, "Parse")
+		assert.Empty(t, outcome.Results, "no session for a removed transcript")
+		assert.Equal(t, SkipNoSession, outcome.SkipReason, "skip reason")
 	})
 
 	t.Run("the brain watch plan includes the transcript", func(t *testing.T) {
