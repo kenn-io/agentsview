@@ -3,8 +3,10 @@ package parser
 import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -42,6 +44,27 @@ func codebuffTestSession(
 	return dir
 }
 
+// codebuffWriteTrustedChatMeta writes a chat-meta.json that passes the
+// parser's trust rule for the session directory's current transcript: it
+// stats chat-messages.json after it is written and records messageCount,
+// firstPrompt, messagesSize, and messagesMtimeMs exactly as upstream
+// writeChatMeta does. Tests that need a stale, incomplete, or unparsable
+// sidecar write their own fixture instead.
+func codebuffWriteTrustedChatMeta(
+	t *testing.T, dir string, messageCount int, firstPrompt string,
+) {
+	t.Helper()
+	chatPath := filepath.Join(dir, "chat-messages.json")
+	info, err := os.Stat(chatPath)
+	require.NoError(t, err)
+	meta := fmt.Sprintf(
+		`{"messageCount":%d,"firstPrompt":%q,"messagesSize":%d,"messagesMtimeMs":%s}`,
+		messageCount, firstPrompt, info.Size(),
+		strconv.FormatFloat(float64(info.ModTime().UnixMilli()), 'f', -1, 64),
+	)
+	codebuffWriteFile(t, filepath.Join(dir, "chat-meta.json"), meta)
+}
+
 func TestParseCodebuffSession_BasicUserAndAIMessages(t *testing.T) {
 	chatMessages := `[
 		{
@@ -75,9 +98,9 @@ func TestParseCodebuffSession_BasicUserAndAIMessages(t *testing.T) {
 			}
 		}
 	}`
-	chatMeta := `{"messageCount": 2, "firstPrompt": "Fix the login bug", "messagesSize": 1024}`
 
-	dir := codebuffTestSession(t, chatMessages, runState, chatMeta)
+	dir := codebuffTestSession(t, chatMessages, runState, "")
+	codebuffWriteTrustedChatMeta(t, dir, 2, "Fix the login bug")
 	sess, msgs, err := parseCodebuffSession(dir, "myproject", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
@@ -523,13 +546,9 @@ func TestParseCodebuffSessionFromChatMeta(t *testing.T) {
 			}
 		}
 	}`
-	chatMeta := `{
-		"messageCount": 5,
-		"firstPrompt": "Fix the login bug",
-		"messagesSize": 2048
-	}`
 
-	dir := codebuffTestSession(t, chatMessages, runState, chatMeta)
+	dir := codebuffTestSession(t, chatMessages, runState, "")
+	codebuffWriteTrustedChatMeta(t, dir, 5, "Fix the login bug")
 	sess, _, err := parseCodebuffSession(dir, "p", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
@@ -605,6 +624,338 @@ func TestParseCodebuffSessionEmptyChatMetaLeavesCountsNonAuthoritative(
 		"empty transcript and empty meta must keep counts "+
 			"non-authoritative so the sync engine sees a real "+
 			"zero rather than silently skipping its recompute")
+}
+
+// codebuffSidecarFixture builds one chat-meta.json body with explicit
+// fields so trust-rule tests can omit or corrupt individual fields. An
+// empty string drops the field entirely.
+func codebuffSidecarFixture(
+	messageCount string, firstPrompt string, size string, mtimeMs string,
+) string {
+	var b strings.Builder
+	b.WriteString("{")
+	first := true
+	part := func(k, v string) {
+		if v == "" {
+			return
+		}
+		if !first {
+			b.WriteString(",")
+		}
+		first = false
+		b.WriteString(`"` + k + `":` + v)
+	}
+	part("messageCount", messageCount)
+	if firstPrompt != "" {
+		if !first {
+			b.WriteString(",")
+		}
+		first = false
+		b.WriteString(`"firstPrompt":` + firstPrompt)
+	}
+	part("messagesSize", size)
+	part("messagesMtimeMs", mtimeMs)
+	b.WriteString("}")
+	return b.String()
+}
+
+// TestParseCodebuffSessionChatMetaTrustRule pins the sidecar trust rule:
+// chat-meta.json influences session naming and counts only when it parses,
+// carries all four required fields, and its messagesSize/messagesMtimeMs
+// match the transcript's current size and mtime in milliseconds -- the
+// same rule upstream readChatMeta applies. Anything else is treated as if
+// the sidecar did not exist.
+func TestParseCodebuffSessionChatMetaTrustRule(t *testing.T) {
+	chatMessages := `[]`
+	runState := `{
+		"sessionState": {
+			"mainAgentState": {"agentType": "base2-deepseek"}
+		}
+	}`
+
+	// writeTrusted writes a sidecar whose size/mtime bind to the subtest's
+	// own transcript (each subtest gets a fresh temp dir, so the stat must
+	// come from that dir, not a shared fixture), then parses the session.
+	writeTrusted := func(t *testing.T, count int, prompt string) *ParsedSession {
+		t.Helper()
+		dir := codebuffTestSession(t, chatMessages, runState, "")
+		codebuffWriteTrustedChatMeta(t, dir, count, prompt)
+		sess, _, err := parseCodebuffSession(dir, "p", "local")
+		require.NoError(t, err)
+		require.NotNil(t, sess)
+		return sess
+	}
+
+	// writeRaw writes the given sidecar body verbatim into a fresh session
+	// directory and parses it. sizeOverride and mtimeOverride follow the
+	// codebuffSidecarFixture convention: empty uses that dir's real stat.
+	// mtimeFractional appends a sub-millisecond fraction to the real stat's
+	// millisecond value, mimicking Node's statSync().mtimeMs on APFS/ext4.
+	writeRaw := func(
+		t *testing.T, count, prompt, sizeOverride, mtimeOverride string,
+	) *ParsedSession {
+		t.Helper()
+		dir := codebuffTestSession(t, chatMessages, runState, "")
+		info, err := os.Stat(filepath.Join(dir, "chat-messages.json"))
+		require.NoError(t, err)
+		size := strconv.FormatInt(info.Size(), 10)
+		if sizeOverride != "" {
+			size = sizeOverride
+		}
+		mtime := strconv.FormatFloat(
+			float64(info.ModTime().UnixMilli()), 'f', -1, 64,
+		)
+		if mtimeOverride != "" {
+			if mtimeOverride == "fractional" {
+				mtime = strconv.FormatFloat(
+					float64(info.ModTime().UnixMilli())+0.4568, 'f', -1, 64,
+				)
+			} else {
+				mtime = mtimeOverride
+			}
+		}
+		codebuffWriteFile(t, filepath.Join(dir, "chat-meta.json"),
+			codebuffSidecarFixture(count, prompt, size, mtime))
+		sess, _, err := parseCodebuffSession(dir, "p", "local")
+		require.NoError(t, err)
+		require.NotNil(t, sess)
+		return sess
+	}
+
+	t.Run("trusted sidecar drives name and counts", func(t *testing.T) {
+		sess := writeTrusted(t, 5, "Fix the login bug")
+		assert.Equal(t, 5, sess.MessageCount)
+		assert.Equal(t, 1, sess.UserMessageCount)
+		assert.Equal(t, "Fix the login bug", sess.FirstMessage)
+		assert.True(t, sess.CountsAuthoritative,
+			"a trusted sidecar over an empty transcript is the only "+
+				"count source and must be authoritative")
+	})
+
+	t.Run("stale by size is ignored", func(t *testing.T) {
+		sess := writeRaw(t, "5", `"Fix the login bug"`, "999999", "")
+		assert.Equal(t, 0, sess.MessageCount,
+			"a sidecar whose size no longer matches must not supply "+
+				"counts")
+		assert.False(t, sess.CountsAuthoritative)
+	})
+
+	t.Run("stale by mtime is ignored", func(t *testing.T) {
+		sess := writeRaw(t, "5", `"Fix the login bug"`, "", "1")
+		assert.Equal(t, 0, sess.MessageCount,
+			"a transcript rewritten after the sidecar was written must "+
+				"invalidate the sidecar")
+		assert.False(t, sess.CountsAuthoritative)
+	})
+
+	t.Run("fractional mtimeMs still validates", func(t *testing.T) {
+		// Node's statSync().mtimeMs carries sub-millisecond fractions on
+		// APFS and ext4, and JSON.stringify writes the full float. The
+		// comparison must floor the stored value to the two writers'
+		// common millisecond precision, or every real sidecar would read
+		// as stale and the fallback would never fire.
+		sess := writeRaw(t, "5", `"Fix the login bug"`, "", "fractional")
+		assert.Equal(t, 5, sess.MessageCount,
+			"a sidecar whose fractional mtimeMs floors to the transcript's "+
+				"millisecond must stay trusted")
+		assert.Equal(t, "Fix the login bug", sess.FirstMessage)
+		assert.True(t, sess.CountsAuthoritative)
+	})
+
+	t.Run("missing messagesMtimeMs is ignored", func(t *testing.T) {
+		// Older CLIs wrote only three fields; the fourth is required now.
+		sess := writeRaw(t, "5", `"Fix the login bug"`, "", "missing")
+		assert.Equal(t, 0, sess.MessageCount)
+		assert.False(t, sess.CountsAuthoritative)
+	})
+
+	t.Run("missing messagesSize is ignored", func(t *testing.T) {
+		sess := writeRaw(t, "5", `"Fix the login bug"`, "missing", "")
+		assert.Equal(t, 0, sess.MessageCount)
+		assert.False(t, sess.CountsAuthoritative)
+	})
+
+	t.Run("missing messageCount is ignored", func(t *testing.T) {
+		sess := writeRaw(t, "", `"Fix the login bug"`, "", "")
+		assert.Equal(t, 0, sess.MessageCount)
+		assert.False(t, sess.CountsAuthoritative)
+	})
+
+	t.Run("missing firstPrompt is ignored", func(t *testing.T) {
+		sess := writeRaw(t, "5", "", "", "")
+		assert.Equal(t, 0, sess.MessageCount)
+		assert.False(t, sess.CountsAuthoritative)
+	})
+
+	t.Run("unparsable sidecar is ignored", func(t *testing.T) {
+		dir := codebuffTestSession(t, chatMessages, runState, "")
+		codebuffWriteFile(t, filepath.Join(dir, "chat-meta.json"), "{messageCount: 5,")
+		sess, _, err := parseCodebuffSession(dir, "p", "local")
+		require.NoError(t, err)
+		require.NotNil(t, sess)
+		assert.Equal(t, 0, sess.MessageCount)
+		assert.False(t, sess.CountsAuthoritative)
+	})
+
+	t.Run("missing sidecar is ignored", func(t *testing.T) {
+		dir := codebuffTestSession(t, chatMessages, runState, "")
+		sess, _, err := parseCodebuffSession(dir, "p", "local")
+		require.NoError(t, err)
+		require.NotNil(t, sess)
+		assert.Equal(t, 0, sess.MessageCount)
+		assert.False(t, sess.CountsAuthoritative)
+	})
+
+	t.Run("empty transcript plus untrusted sidecar invents nothing", func(t *testing.T) {
+		// The exact failure mode the trust rule exists for: a sidecar that
+		// describes a transcript which no longer matches must not name the
+		// session after a prompt that is no longer in the transcript.
+		sess := writeRaw(t, "3", `"prompt no longer present"`, "999999", "")
+		assert.Empty(t, sess.FirstMessage,
+			"a stale sidecar must not name the session")
+		assert.Equal(t, 0, sess.MessageCount)
+	})
+
+	t.Run("transcript counts beat trusted sidecar", func(t *testing.T) {
+		dir := codebuffTestSession(t,
+			`[{"id":"user-1","variant":"user","content":"hi","timestamp":"03:04 PM"}]`,
+			runState, "")
+		codebuffWriteTrustedChatMeta(t, dir, 9, "sidecar prompt")
+		sess, _, err := parseCodebuffSession(dir, "p", "local")
+		require.NoError(t, err)
+		require.NotNil(t, sess)
+		assert.Equal(t, 1, sess.MessageCount,
+			"a real transcript's counts win over a matching sidecar")
+		assert.False(t, sess.CountsAuthoritative,
+			"transcript-derived counts stay reconcilable")
+	})
+}
+
+// TestParseCodebuffSessionGitBranch pins branch capture from
+// run-state.json: sessionState.fileContext.gitChanges.branch persists into
+// ParsedSession.GitBranch, and its absence (git unavailable, not a repo)
+// leaves the field empty rather than substituting the project name.
+func TestParseCodebuffSessionGitBranch(t *testing.T) {
+	chatMessages := `[
+		{"id":"user-1","variant":"user","content":"hi","timestamp":"03:04 PM"}
+	]`
+
+	t.Run("branch present", func(t *testing.T) {
+		runState := `{
+			"sessionState": {
+				"mainAgentState": {"agentType": "base2-deepseek"},
+				"fileContext": {
+					"gitChanges": {"branch": "feat/agent-view"}
+				}
+			}
+		}`
+		dir := codebuffTestSession(t, chatMessages, runState, "")
+		sess, _, err := parseCodebuffSession(dir, "proj", "local")
+		require.NoError(t, err)
+		require.NotNil(t, sess)
+		assert.Equal(t, "feat/agent-view", sess.GitBranch)
+	})
+
+	t.Run("gitChanges absent leaves branch empty", func(t *testing.T) {
+		runState := `{
+			"sessionState": {
+				"mainAgentState": {"agentType": "base2-deepseek"}
+			}
+		}`
+		dir := codebuffTestSession(t, chatMessages, runState, "")
+		sess, _, err := parseCodebuffSession(dir, "proj", "local")
+		require.NoError(t, err)
+		require.NotNil(t, sess)
+		assert.Empty(t, sess.GitBranch,
+			"no gitChanges means no branch; do not substitute the "+
+				"project name")
+	})
+}
+
+// TestParseCodebuffSessionTerminationStatus pins the termination
+// classification: an unresolved tool call on the last assistant turn
+// reports tool_call_pending, a resolved ending reports clean, and an empty
+// transcript stays unknown. The format carries no stop-reason signal, so
+// awaiting_user must never appear.
+func TestParseCodebuffSessionTerminationStatus(t *testing.T) {
+	runState := `{
+		"sessionState": {
+			"mainAgentState": {"agentType": "base2-deepseek"}
+		}
+	}`
+
+	t.Run("unresolved tool call is pending", func(t *testing.T) {
+		chatMessages := `[
+			{"id":"user-1","variant":"user","content":"run the tests","timestamp":"03:04 PM"},
+			{
+				"id":"ai-1","variant":"ai","content":"","timestamp":"03:05 PM",
+				"blocks": [
+					{
+						"type": "tool",
+						"toolCallId": "call-1",
+						"toolName": "run_terminal_command",
+						"input": {"command": "go test ./..."}
+					}
+				]
+			}
+		]`
+		dir := codebuffTestSession(t, chatMessages, runState, "")
+		sess, _, err := parseCodebuffSession(dir, "p", "local")
+		require.NoError(t, err)
+		require.NotNil(t, sess)
+		assert.Equal(t, TerminationToolCallPending, sess.TerminationStatus)
+	})
+
+	t.Run("resolved ending is clean", func(t *testing.T) {
+		chatMessages := `[
+			{"id":"user-1","variant":"user","content":"hi","timestamp":"03:04 PM"},
+			{
+				"id":"ai-1","variant":"ai","content":"All done.","timestamp":"03:05 PM"
+			}
+		]`
+		dir := codebuffTestSession(t, chatMessages, runState, "")
+		sess, _, err := parseCodebuffSession(dir, "p", "local")
+		require.NoError(t, err)
+		require.NotNil(t, sess)
+		assert.Equal(t, TerminationClean, sess.TerminationStatus)
+	})
+
+	t.Run("empty transcript is unknown", func(t *testing.T) {
+		dir := codebuffTestSession(t, `[]`, runState, "")
+		sess, _, err := parseCodebuffSession(dir, "p", "local")
+		require.NoError(t, err)
+		require.NotNil(t, sess)
+		assert.Empty(t, sess.TerminationStatus,
+			"no messages means no classification")
+	})
+}
+
+// TestParseCodebuffSessionContextTokenCountNotPeak pins the deliberate
+// decision not to derive PeakContextTokens from run-state.json's
+// contextTokenCount. Upstream documents that field as the latest model
+// call's context occupancy -- a length estimate before a model receipt and
+// a post-compaction value -- never accumulated or billed usage. Treating
+// it as a peak would fabricate a usage number out of an estimate.
+func TestParseCodebuffSessionContextTokenCountNotPeak(t *testing.T) {
+	chatMessages := `[
+		{"id":"user-1","variant":"user","content":"hi","timestamp":"03:04 PM"}
+	]`
+	runState := `{
+		"sessionState": {
+			"mainAgentState": {
+				"agentType": "base2-deepseek",
+				"contextTokenCount": 990000
+			}
+		}
+	}`
+	dir := codebuffTestSession(t, chatMessages, runState, "")
+	sess, _, err := parseCodebuffSession(dir, "p", "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Zero(t, sess.PeakContextTokens,
+		"contextTokenCount is context occupancy and a length estimate, "+
+			"not a peak or billed usage; it must never become "+
+			"PeakContextTokens")
 }
 
 func TestParseCodebuffSession_ProjectFromCwd(t *testing.T) {
@@ -869,7 +1220,8 @@ func TestCodebuffProviderCapabilities(t *testing.T) {
 		"model is unknown (selected server-side, can change mid-session)")
 	assert.Equal(t, CapabilitySupported, caps.Content.AggregateUsageEvents)
 	assert.Equal(t, CapabilityNotApplicable, caps.Content.Relationships)
-	assert.Equal(t, CapabilityNotApplicable, caps.Content.TerminationStatus)
+	assert.Equal(t, CapabilitySupported, caps.Content.TerminationStatus,
+		"the last assistant turn's tool-call state classifies the ending")
 	assert.Equal(t, CapabilityNotApplicable, caps.Content.MalformedLineCount)
 }
 

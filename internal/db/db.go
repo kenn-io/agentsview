@@ -520,7 +520,13 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (115: Cursor IDE sessions start at their earliest timestamped bubble;
 // composerData.createdAt is only a fallback for composers without bubble
 // timestamps. Re-parse unchanged state.vscdb containers to correct started_at.)
-const dataVersion = 115
+// (116: Codebuff and Freebuff rows gain git_branch from run-state.json's
+// fileContext.gitChanges.branch and termination_status from the transcript's
+// final assistant turn, and session names and counts now come only from a
+// chat-meta.json sidecar whose recorded size and mtime still match the
+// transcript. Re-parse unchanged Codebuff/Freebuff sources to backfill the
+// two columns and to drop names or counts that a stale sidecar invented.)
+const dataVersion = 116
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

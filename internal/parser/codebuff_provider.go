@@ -590,8 +590,12 @@ func codebuffProviderCapabilities() Capabilities {
 			Model:                CapabilityNotApplicable,
 			AggregateUsageEvents: CapabilitySupported,
 			Relationships:        CapabilityNotApplicable,
-			TerminationStatus:    CapabilityNotApplicable,
-			MalformedLineCount:   CapabilityNotApplicable,
+			// The transcript's final assistant turn is classified: an
+			// unresolved tool call reports tool_call_pending, anything else
+			// clean. The format carries no stop-reason signal, so
+			// awaiting_user is deliberately out of reach.
+			TerminationStatus:  CapabilitySupported,
+			MalformedLineCount: CapabilityNotApplicable,
 		},
 		Sync: ProviderSyncSemantics{
 			FingerprintHashRequiredForFreshness: true,

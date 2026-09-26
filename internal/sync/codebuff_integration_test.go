@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -23,6 +24,9 @@ import (
 
 // writeCodebuffTestFiles creates the three files that make up a Codebuff
 // session directory: chat-messages.json, run-state.json, and chat-meta.json.
+// The sidecar is written after the transcript and records its actual size
+// and mtime in milliseconds, mirroring upstream writeChatMeta, so the
+// parser's trust rule accepts it.
 func writeCodebuffTestFiles(t *testing.T, dir, content string) {
 	t.Helper()
 
@@ -38,11 +42,16 @@ func writeCodebuffTestFiles(t *testing.T, dir, content string) {
 			"mainAgentState": {"agentType": "base2-free-deepseek"}
 		}
 	}`), 0o644))
-	require.NoError(t, os.WriteFile(chatMetaPath, []byte(`{
+	info, err := os.Stat(chatPath)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(chatMetaPath, []byte(fmt.Sprintf(`{
 		"messageCount": 1,
-		"firstPrompt": "`+content+`",
-		"messagesSize": 50
-	}`), 0o644))
+		"firstPrompt": %q,
+		"messagesSize": %d,
+		"messagesMtimeMs": %s
+	}`, content, info.Size(),
+		strconv.FormatFloat(float64(info.ModTime().UnixMilli()), 'f', -1, 64),
+	)), 0o644))
 }
 
 // createCodebuffArchive creates a Codebuff archive with the given number of
@@ -421,7 +430,9 @@ func TestSyncCodebuffPerEventWorkIsCardinalityIndependent(t *testing.T) {
 
 // codebuffMetaOnlySessionFiles creates a codebuff session
 // directory whose chat-messages.json is "[]" while chat-meta.json
-// reports a non-zero messageCount and firstPrompt. The parser
+// reports a non-zero messageCount and firstPrompt. The sidecar binds to
+// the transcript's actual size and mtime (upstream writeChatMeta rule) so
+// the parser's trust rule accepts it. The parser
 // must set CountsAuthoritative=true for this fallback path so the
 // engine's per-message reconciliation cannot overwrite the meta
 // totals with zero derived from the empty parsed-message slice.
@@ -430,11 +441,8 @@ func codebuffMetaOnlySessionFiles(
 ) {
 	t.Helper()
 
-	require.NoError(t, os.WriteFile(
-		filepath.Join(dir, "chat-messages.json"),
-		[]byte("[]"),
-		0o644,
-	))
+	chatPath := filepath.Join(dir, "chat-messages.json")
+	require.NoError(t, os.WriteFile(chatPath, []byte("[]"), 0o644))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(dir, "run-state.json"),
 		[]byte(`{
@@ -445,13 +453,18 @@ func codebuffMetaOnlySessionFiles(
 		}`),
 		0o644,
 	))
+	info, err := os.Stat(chatPath)
+	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(dir, "chat-meta.json"),
 		fmt.Appendf(nil, `{
 			"messageCount": %d,
 			"firstPrompt": %q,
-			"messagesSize": 1024
-		}`, metaCount, firstPrompt),
+			"messagesSize": %d,
+			"messagesMtimeMs": %s
+		}`, metaCount, firstPrompt, info.Size(),
+			strconv.FormatFloat(float64(info.ModTime().UnixMilli()), 'f', -1, 64),
+		),
 		0o644,
 	))
 }
@@ -1797,4 +1810,108 @@ func TestSyncCodebuffDebugSiblingReconcileResidual(t *testing.T) {
 			"guarantee, and a value above one means the cutoff "+
 			"leaked to unrelated sessions")
 	codebuffAssertSessionMessageCount(t, database, sessionID, 1)
+}
+
+// TestSyncCodebuffStaleSidecarStillSyncs verifies end-to-end that a session
+// whose chat-meta.json no longer matches its transcript (size and mtime both
+// off) still syncs from the transcript alone: the stored session name comes
+// from the transcript's first user prompt, not the sidecar's firstPrompt.
+// This is the failure mode the sidecar trust rule exists for -- a stale
+// sidecar must not name a session after a prompt that is no longer in the
+// transcript.
+func TestSyncCodebuffStaleSidecarStillSyncs(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	root, chatPath := createCodebuffSingleSession(t)
+	sessionDir := filepath.Dir(chatPath)
+	sessionID := codebuffSessionIDFromChatPath(t, chatPath)
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodebuff: {root},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+
+	// Rewrite the sidecar so it no longer describes the transcript: the
+	// recorded size is wrong, the mtime is wrong, and the firstPrompt is
+	// one that was never in the transcript.
+	require.NoError(t, os.WriteFile(filepath.Join(sessionDir, "chat-meta.json"),
+		[]byte(`{"messageCount":7,"firstPrompt":"prompt from a vanished transcript","messagesSize":424242,"messagesMtimeMs":1234567890123}`),
+		0o644))
+
+	require.Equal(t, 1,
+		engine.SyncAll(t.Context(), nil).Synced,
+		"cold sync must still parse the session despite the stale sidecar")
+
+	sess, err := database.GetSession(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.NotNil(t, sess.FirstMessage)
+	assert.Contains(t, *sess.FirstMessage, "Single source",
+		"the stored session name must come from the transcript's first "+
+			"user prompt, never from a stale sidecar")
+	assert.NotContains(t, *sess.FirstMessage, "vanished",
+		"a sidecar that describes nothing must not name the session")
+	assert.Equal(t, 1, sess.MessageCount,
+		"counts must come from the real transcript")
+}
+
+// TestSyncCodebuffPersistsGitBranch verifies that a branch recorded in
+// run-state.json (sessionState.fileContext.gitChanges.branch) reaches the
+// stored session's git_branch column after a full sync, and that a session
+// without gitChanges stores an empty branch.
+func TestSyncCodebuffPersistsGitBranch(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	root := t.TempDir()
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodebuff: {root},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+
+	// Session with a branch in run-state.json.
+	ts := "2026-07-15T11-00-00.000Z"
+	dir := filepath.Join(root, "project-0", "chats", ts)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	writeCodebuffTestFiles(t, dir, "Branched session")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "run-state.json"), []byte(`{
+		"sessionState": {
+			"mainAgentState": {"agentType": "base2-free-deepseek"},
+			"fileContext": {"gitChanges": {"branch": "feat/widget"}}
+		}
+	}`), 0o644))
+
+	// Session without gitChanges.
+	dirNoBranch := filepath.Join(root, "project-0", "chats", "2026-07-15T12-00-00.000Z")
+	require.NoError(t, os.MkdirAll(dirNoBranch, 0o755))
+	writeCodebuffTestFiles(t, dirNoBranch, "Unbranched session")
+
+	require.Equal(t, 2,
+		engine.SyncAll(t.Context(), nil).Synced,
+		"cold sync must parse both sessions")
+
+	branchSess, err := database.GetSession(t.Context(),
+		"freebuff:project-0:"+ts)
+	require.NoError(t, err)
+	require.NotNil(t, branchSess)
+	assert.Equal(t, "feat/widget", branchSess.GitBranch,
+		"gitChanges.branch must persist into git_branch")
+
+	noBranchSess, err := database.GetSession(t.Context(),
+		"freebuff:project-0:2026-07-15T12-00-00.000Z")
+	require.NoError(t, err)
+	require.NotNil(t, noBranchSess)
+	assert.Empty(t, noBranchSess.GitBranch,
+		"no gitChanges means an empty branch, not the project name")
 }
