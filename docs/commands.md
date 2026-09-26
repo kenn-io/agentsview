@@ -1731,7 +1731,7 @@ agentsview help
 | ------------------------------------- | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
 | `AIDER_DIR`                           | unset                                                | Aider discovery root; set this to opt into scanning a code root                                     |
 | `AMP_DIR`                             | `~/.local/share/amp/threads`                         | Deprecated; historical local Amp thread JSON files only                                             |
-| `ANTIGRAVITY_DIR`                     | `~/.gemini/antigravity`                              | Google Antigravity IDE sessions directory                                                           |
+| `ANTIGRAVITY_DIR`                     | `~/.gemini/antigravity`, `~/.gemini/antigravity-ide` | Google Antigravity IDE sessions directories                                                         |
 | `ANTIGRAVITY_CLI_DIR`                 | `~/.gemini/antigravity-cli`                          | Google Antigravity CLI sessions directory                                                           |
 | `ANTIGRAVITY_KEY`                     |                                                      | Optional key for decrypting Antigravity CLI `.pb` transcripts (defaults to summary mode without it) |
 | `AUGURE_CODE_SESSIONS_DIR`            | `~/.augure/sessions`                                 | Augure Code sessions directory                                                                      |

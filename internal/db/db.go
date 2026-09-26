@@ -517,7 +517,11 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (114: Codex `apply_patch` calls record the files named in the patch body,
 // one tool call per file, so file-keyed views such as Recent Edits include
 // them. Re-parse unchanged Codex sources to backfill file_path.)
-const dataVersion = 114
+// (115: an Antigravity conversation whose own stream is encrypted is stored
+// from the plaintext transcript its agent brain wrote, and .gemini/antigravity-ide
+// is a default Antigravity root. Re-parse unchanged Antigravity sources so those
+// conversations reach the archive.)
+const dataVersion = 115
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

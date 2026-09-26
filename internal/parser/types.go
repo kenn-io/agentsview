@@ -888,7 +888,11 @@ var Registry = []AgentDef{
 		DisplayName: "Antigravity",
 		EnvVar:      "ANTIGRAVITY_DIR",
 		ConfigKey:   "antigravity_dirs",
-		DefaultDirs: []string{".gemini/antigravity"},
+		// The IDE variant writes to .gemini/antigravity-ide, its own standard
+		// directory, in the same layout. .gemini/antigravity-backup is
+		// deliberately not a default: it is a copy, so every conversation it
+		// holds would be stored twice.
+		DefaultDirs: []string{".gemini/antigravity", ".gemini/antigravity-ide"},
 		IDPrefix:    "antigravity:",
 		WatchSubdirs: []string{
 			"conversations",

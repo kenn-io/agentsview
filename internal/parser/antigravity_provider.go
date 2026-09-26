@@ -185,23 +185,37 @@ func (s antigravitySourceSet) DiscoverEach(ctx context.Context, yield func(Sourc
 		if err != nil {
 			return err
 		}
+		// Brain transcripts are listed rather than streamed: there is one
+		// directory per conversation and the listing is what says which
+		// conversations have no database of their own.
+		for _, path := range antigravityBrainTranscriptSources(root) {
+			source, ok := s.sourceRef(root, path, false)
+			if !ok {
+				continue
+			}
+			if err := yield(source); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
 
-// discoverSessionPaths returns one conversations/<uuid>.db path per IDE session
-// under root, sorted by path. It owns the on-disk discovery the package-level
-// DiscoverAntigravitySessions free function used to provide.
+// discoverSessionPaths returns one path per IDE session under root, sorted by
+// path: every conversations/<uuid>.db, plus the brain transcript of every
+// conversation that has no database of its own. It owns the on-disk discovery
+// the package-level DiscoverAntigravitySessions free function used to provide.
 func (s antigravitySourceSet) discoverSessionPaths(root string) []string {
 	if root == "" {
 		return nil
 	}
+	paths := antigravityBrainTranscriptSources(root)
 	dir := filepath.Join(root, "conversations")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil
+		slices.Sort(paths)
+		return paths
 	}
-	var paths []string
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
@@ -220,10 +234,19 @@ func (s antigravitySourceSet) discoverSessionPaths(root string) []string {
 	return paths
 }
 
-// findSourceFile locates an IDE session DB by id under root. It owns the lookup
-// the package-level FindAntigravitySourceFile free function used to provide.
+// findSourceFile locates a session file by storage id under root: a
+// conversations/<uuid>.db for a plain conversation id, or the brain transcript
+// a tagged brain id names. It owns the lookup the package-level
+// FindAntigravitySourceFile free function used to provide.
 func (s antigravitySourceSet) findSourceFile(root, id string) string {
 	if root == "" || !IsValidSessionID(id) {
+		return ""
+	}
+	if conversation, ok := antigravityBrainConversationForRawID(root, id); ok {
+		p := antigravityBrainTranscriptPath(root, conversation)
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
 		return ""
 	}
 	p := filepath.Join(root, "conversations", id+".db")
@@ -244,10 +267,14 @@ func (s antigravitySourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 				DebounceKey:  string(AgentAntigravity) + ":annotations:" + root,
 			},
 			WatchRoot{
-				Path:         filepath.Join(root, "brain"),
-				Recursive:    true,
-				IncludeGlobs: []string{"*.md", "*.md.metadata.json"},
-				DebounceKey:  string(AgentAntigravity) + ":brain:" + root,
+				Path:      filepath.Join(root, "brain"),
+				Recursive: true,
+				IncludeGlobs: []string{
+					"*.md",
+					"*.md.metadata.json",
+					antigravityBrainTranscriptName,
+				},
+				DebounceKey: string(AgentAntigravity) + ":brain:" + root,
 			},
 			WatchRoot{
 				Path:         filepath.Join(root, "conversations"),
@@ -395,6 +422,18 @@ func (s antigravitySourceSet) sourceForChangedPath(root, path string) (SourceRef
 			return s.newSourceRef(root, dbPath, id), true
 		}
 	}
+	if transcriptRoot, id, ok := antigravityBrainTranscriptConversation(path); ok &&
+		samePath(transcriptRoot, root) {
+		dbPath := filepath.Join(root, "conversations", id+".db")
+		if IsRegularFile(dbPath) {
+			return s.newSourceRef(root, dbPath, id), true
+		}
+		if IsRegularFile(path) {
+			return s.newSourceRef(
+				root, path, antigravityBrainRawID(root, id),
+			), true
+		}
+	}
 	if id, ok := antigravityBrainID(root, path); ok {
 		dbPath := filepath.Join(root, "conversations", id+".db")
 		if IsRegularFile(dbPath) {
@@ -410,6 +449,19 @@ func (s antigravitySourceSet) sourceRef(
 ) (SourceRef, bool) {
 	root = filepath.Clean(root)
 	path = filepath.Clean(path)
+	if transcriptRoot, id, ok := antigravityBrainTranscriptConversation(path); ok &&
+		samePath(transcriptRoot, root) {
+		// A conversation that also has a database is that database's session;
+		// the transcript joins it as a companion instead of standing alone.
+		dbPath := filepath.Join(root, "conversations", id+".db")
+		if IsRegularFile(dbPath) {
+			return s.newSourceRef(root, dbPath, id), true
+		}
+		if !allowMissing && !IsRegularFile(path) {
+			return SourceRef{}, false
+		}
+		return s.newSourceRef(root, path, antigravityBrainRawID(root, id)), true
+	}
 	dbPath, id, ok := antigravityConversationDBForPath(root, path)
 	if !ok || dbPath != path {
 		return SourceRef{}, false
