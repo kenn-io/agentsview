@@ -2,6 +2,9 @@ package db
 
 import (
 	"database/sql"
+	"fmt"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -842,7 +845,8 @@ func TestRecentSessionSourcesFiltersToLiveLocalAgentSources(t *testing.T) {
 			}
 		})
 	}
-	add("codex:newest", "codex", "local", "2026-07-29T15:20:00.000Z", "/s/newest.jsonl")
+	add("codex:newest", "codex", "local", "2026-07-29T15:20:00.500Z", "/s/newest.jsonl")
+	add("codex:whole-second", "codex", "local", "2026-07-29T15:20:00Z", "/s/whole.jsonl")
 	add("codex:at-cutoff", "codex", "local", "2026-07-28T15:30:00Z", "/s/at-cutoff.jsonl")
 	add("codex:too-old", "codex", "local", "2026-07-28T15:29:59Z", "/s/too-old.jsonl")
 	add("claude-session", "claude", "local", "2026-07-29T15:00:00Z", "/s/claude.jsonl")
@@ -859,16 +863,72 @@ func TestRecentSessionSourcesFiltersToLiveLocalAgentSources(t *testing.T) {
 
 	sources, err := d.RecentSessionSources(ctx, "codex", "local", since, 10)
 	require.NoError(t, err)
-	require.Len(t, sources, 2)
+	require.Len(t, sources, 3)
 	assert.Equal(t, "codex:newest", sources[0].ID)
 	assert.Equal(t, "/s/newest.jsonl", sources[0].FilePath)
 	assert.Equal(t, sql.NullInt64{Int64: 10, Valid: true}, sources[0].FileSize)
 	assert.Equal(t, sql.NullInt64{Int64: 20, Valid: true}, sources[0].FileMtime)
-	assert.Equal(t, "2026-07-29T15:20:00.000Z", sources[0].EndedAt)
-	assert.Equal(t, "codex:at-cutoff", sources[1].ID)
+	assert.Equal(t, "2026-07-29T15:20:00.500Z", sources[0].EndedAt)
+	assert.Equal(t, "codex:whole-second", sources[1].ID)
+	assert.Equal(t, "codex:at-cutoff", sources[2].ID)
 
 	limited, err := d.RecentSessionSources(ctx, "codex", "local", since, 1)
 	require.NoError(t, err)
 	require.Len(t, limited, 1)
 	assert.Equal(t, "codex:newest", limited[0].ID)
+
+	fractionalCutoff, err := d.RecentSessionSources(ctx, "codex", "local",
+		time.Date(2026, 7, 29, 15, 20, 0, 250_000_000, time.UTC), 10)
+	require.NoError(t, err)
+	require.Len(t, fractionalCutoff, 1)
+	assert.Equal(t, "codex:newest", fractionalCutoff[0].ID)
+}
+
+func TestRecentSessionSourcesUsesBoundedRangeAfterReopen(t *testing.T) {
+	for _, count := range []int{100, 10000} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			ctx := t.Context()
+			archivePath := filepath.Join(t.TempDir(), "archive.db")
+			database := testDBAtPath(t, archivePath, "recent sources")
+			_, err := database.getWriter().Exec(ctx, `
+				WITH RECURSIVE numbers(value) AS (
+					SELECT 1 UNION ALL SELECT value + 1 FROM numbers WHERE value < ?
+				)
+				INSERT INTO sessions(id, project, agent, machine, ended_at, file_path,
+				                     deleted_at, source_missing_at)
+				SELECT printf('old-%06d', value), 'project', 'codex', 'local',
+				       '2026-01-01T00:00:00Z', '/sessions/old.jsonl', NULL, NULL FROM numbers
+				UNION ALL
+				SELECT printf('deleted-%06d', value), 'project', 'codex', 'local',
+				       '2026-07-29T16:00:00Z', '/sessions/deleted.jsonl', '2026-07-29', NULL FROM numbers
+				UNION ALL
+				SELECT printf('missing-%06d', value), 'project', 'codex', 'local',
+				       '2026-07-29T16:00:00Z', '/sessions/missing.jsonl', NULL, '2026-07-29' FROM numbers`, count)
+			require.NoError(t, err)
+			insertSession(t, database, "recent", "project", func(session *Session) {
+				session.Agent = "codex"
+				session.Machine = "local"
+				session.EndedAt = Ptr("2026-07-29T15:20:00.500Z")
+				session.FilePath = Ptr("/sessions/recent.jsonl")
+			})
+			_, err = database.getWriter().Exec(ctx, "DROP INDEX idx_sessions_recent_source_activity")
+			require.NoError(t, err)
+			require.NoError(t, database.Close())
+			database, err = Open(ctx, archivePath)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, database.Close()) })
+			_, err = database.getWriter().Exec(ctx, "ANALYZE")
+			require.NoError(t, err)
+			sources, err := database.RecentSessionSources(ctx, "codex", "local",
+				time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC), 1)
+			require.NoError(t, err)
+			require.Len(t, sources, 1)
+			assert.Equal(t, "recent", sources[0].ID)
+			plan := strings.Join(explainQueryPlan(t, database, recentSessionSourcesSQL,
+				"codex", "local", "2026-07-29T00:00:00Z", 1), "\n")
+			assert.Contains(t, plan, "SEARCH sessions USING INDEX idx_sessions_recent_source_activity")
+			assert.Contains(t, plan, "agent=? AND machine=? AND <expr>>?")
+			assert.NotContains(t, plan, "TEMP B-TREE")
+		})
+	}
 }

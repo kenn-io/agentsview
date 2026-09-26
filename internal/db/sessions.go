@@ -3323,21 +3323,22 @@ type RecentSessionSource struct {
 	EndedAt    string
 }
 
+const recentSessionSourcesSQL = `
+	SELECT id, file_path, file_size, file_mtime, file_inode, file_device, ended_at
+	FROM sessions
+	WHERE agent = ? AND machine = ? AND julianday(ended_at) >= julianday(?)
+	  AND file_path IS NOT NULL AND file_path != ''
+	  AND deleted_at IS NULL AND source_missing_at IS NULL
+	ORDER BY julianday(ended_at) DESC, id LIMIT ?`
+
 // RecentSessionSources lists one machine's live sessions of an agent whose
-// ended_at is at or after since, newest first. ended_at is compared with
-// datetime() because its fractional-second precision varies.
+// ended_at is at or after since, newest first at SQLite millisecond precision.
 func (db *DB) RecentSessionSources(ctx context.Context,
 	agent, machine string, since time.Time, limit int,
 ) ([]RecentSessionSource, error) {
 	rows, err := db.getReader().Query(ctx,
-		"SELECT id, file_path, file_size, file_mtime, file_inode,"+
-			" file_device, ended_at FROM sessions"+
-			" WHERE agent = ? AND machine = ?"+
-			" AND datetime(NULLIF(ended_at, '')) >= datetime(?)"+
-			" AND file_path IS NOT NULL AND file_path != ''"+
-			" AND deleted_at IS NULL AND source_missing_at IS NULL"+
-			" ORDER BY datetime(ended_at) DESC, ended_at DESC LIMIT ?",
-		agent, machine, since.UTC().Format(time.RFC3339), limit,
+		recentSessionSourcesSQL,
+		agent, machine, since.UTC().Format(time.RFC3339Nano), limit,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing recent session sources: %w", err)

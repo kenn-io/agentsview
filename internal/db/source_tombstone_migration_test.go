@@ -52,6 +52,8 @@ func TestSourceMissingSchemaStartsAndMigratesWithoutDataLoss(t *testing.T) {
 		require.NoError(t, err)
 		_, err = conn.ExecContext(t.Context(), "DROP INDEX IF EXISTS idx_sessions_agent_file_path_active")
 		require.NoError(t, err)
+		_, err = conn.ExecContext(t.Context(), "DROP INDEX IF EXISTS idx_sessions_recent_source_activity")
+		require.NoError(t, err)
 		_, err = conn.ExecContext(t.Context(), "DROP TABLE IF EXISTS local_session_source_baselines")
 		require.NoError(t, err)
 		_, err = conn.ExecContext(t.Context(), "ALTER TABLE sessions DROP COLUMN source_missing_at")

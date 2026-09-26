@@ -3606,6 +3606,10 @@ func (db *DB) createPartialIndexesLocked(ctx context.Context, w *writerHandle) e
 		   AND timestamp IS NOT NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_cwd
 		 ON sessions(cwd) WHERE cwd != ''`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_recent_source_activity
+		 ON sessions(agent, machine, julianday(ended_at) DESC, id)
+		 WHERE file_path IS NOT NULL AND file_path != ''
+		   AND deleted_at IS NULL AND source_missing_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_project_git_branch
 		 ON sessions(project, git_branch) WHERE git_branch != ''`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_compact_boundary
