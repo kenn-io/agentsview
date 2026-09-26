@@ -17,6 +17,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
 )
 
 // Compile-time check: *Store satisfies db.Store.
@@ -59,6 +60,10 @@ type Store struct {
 	usageSessionRows     usageRowMemo[chUsageSessionRow]
 	// analyticsSessionRows keeps recent analytics session listings.
 	analyticsSessionRows usageRowMemo[chAnalyticsSession]
+	// usageWarmer refills the usage memos after the mirror changes.
+	usageWarmer usageWarmer
+	// usageReadQueries counts usage reads that reached ClickHouse.
+	usageReadQueries atomic.Int64
 	// activitySessions keeps activity pairing inputs per session version.
 	activitySessions activitySessionMemo
 	// activityInputQueries counts pairing input reads that reached ClickHouse.
@@ -67,11 +72,17 @@ type Store struct {
 	activityUsageRows usageRowMemo[clickSessionUsageOrderedRow]
 	// activitySessionListings keeps candidate listings per parts and predicate.
 	activitySessionListings usageRowMemo[activitySessionListing]
+	projectIdentityMaps     usageRowMemo[map[string]export.ProjectMapEntry]
 	// activityReports keeps the reports of ended ranges per the rows they read.
 	activityReports usageRowMemo[activityReportEntry]
 	// activityChecks records per selection the parts its kept report was
 	// last checked against.
-	activityChecks         usageRowMemo[activityReportCheck]
+	activityChecks usageRowMemo[activityReportCheck]
+	// activityBuilds holds one turn per selection; see activityBuildTurn.
+	activityBuilds activityBuildTurns
+	// reportDisk keeps ended ranges' reports on disk; see
+	// openActivityReportDisk. Empty, reports are kept in memory only.
+	reportDisk             activityReportDisk
 	activityUsageQueries   atomic.Int64
 	activitySessionQueries atomic.Int64
 }
@@ -115,7 +126,10 @@ func NewStoreFromDB(conn *sql.DB) *Store {
 func (s *Store) DB() *sql.DB { return s.conn }
 
 func (s *Store) Close() error {
-	s.closeOnce.Do(func() { s.closeErr = s.conn.Close() })
+	s.closeOnce.Do(func() {
+		s.stopUsageWarmer()
+		s.closeErr = s.conn.Close()
+	})
 	return s.closeErr
 }
 
@@ -131,6 +145,8 @@ func (s *Store) ReadOnly() bool { return true }
 
 func (s *Store) HasFTS(_ context.Context) bool { return true }
 
+// SetCustomPricing installs the operator's model rates. Call it before
+// StartBackground: the background work caches the pricing catalog.
 func (s *Store) SetCustomPricing(p map[string]config.CustomModelRate) {
 	s.customPricing = p
 }

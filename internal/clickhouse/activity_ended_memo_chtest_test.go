@@ -3,6 +3,8 @@
 package clickhouse
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -10,6 +12,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // The report of an ended day is kept across a push that touches no session
@@ -74,3 +77,136 @@ func TestEndedActivityReportSurvivesUnrelatedPushes(t *testing.T) {
 
 // A store that starts after another kept an ended day's report on disk
 // answers from the file without reading the day's rows, and rebuilds it
+// after a push that touches the day; either way the report matches one
+// built by a store that kept nothing.
+func TestEndedActivityReportIsKeptOnDiskAcrossRestarts(t *testing.T) {
+	ctx := t.Context()
+	store, syncer, local := newPushedStore(t)
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	withDisk := func() *Store {
+		t.Helper()
+		s := NewStoreFromDB(store.DB())
+		require.NoError(t, s.openActivityReportDisk(Target{URL: "clickhouse://mirror:9000/", Database: "agentsview"}))
+		return s
+	}
+	_, err := store.DB().ExecContext(ctx, "SYSTEM WAIT VIEW prepare_usage")
+	require.NoError(t, err)
+	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: "2026-01-10", Timezone: "UTC"},
+		time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	filter := db.AnalyticsFilter{Timezone: "UTC", IncludeSubagents: true}
+	// Every consumer reads a report as its JSON, which the digest covers
+	// with the session rows and bucket membership.
+	digest := func(artifacts activity.CandidateArtifacts) string {
+		t.Helper()
+		d, err := activity.ArtifactDigest(artifacts)
+		require.NoError(t, err)
+		return d
+	}
+	requireFresh := func(got activity.CandidateArtifacts) {
+		t.Helper()
+		fresh, err := NewStoreFromDB(store.DB()).BuildActivityReportArtifacts(ctx, filter, q, nil)
+		require.NoError(t, err)
+		require.Equal(t, digest(fresh), digest(got))
+	}
+	built, err := withDisk().BuildActivityReportArtifacts(ctx, filter, q, nil)
+	require.NoError(t, err)
+
+	restarted := withDisk()
+	var done []activity.Progress
+	loaded, err := restarted.BuildActivityReportArtifacts(ctx, filter, q, func(p activity.Progress) { done = append(done, p) })
+	require.NoError(t, err)
+	require.Zero(t, restarted.activityUsageQueries.Load()+restarted.activityInputQueries.Load(), "the kept file answers")
+	require.Equal(t, activity.ProgressDone, done[len(done)-1].Phase)
+	require.Equal(t, digest(built), digest(loaded))
+	requireFresh(loaded)
+
+	appendMessage(t, local, fixtureAlphaID, "one more turn", "2026-01-10T12:00:00.000Z")
+	_, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	_, err = store.DB().ExecContext(ctx, "SYSTEM WAIT VIEW prepare_usage")
+	require.NoError(t, err)
+	restarted = withDisk()
+	rebuilt, err := restarted.BuildActivityReportArtifacts(ctx, filter, q, nil)
+	require.NoError(t, err)
+	require.NotZero(t, restarted.activityUsageQueries.Load())
+	require.NotEqual(t, digest(built), digest(rebuilt))
+	requireFresh(rebuilt)
+}
+
+// The report cache only saves work, so serve opens without it when the
+// cache directory cannot be created or the kept day selections cannot be
+// read.
+func TestOpenServeStoreWithoutUsableReportCache(t *testing.T) {
+	ctx := t.Context()
+	_, syncer, _ := newPushedStore(t)
+	serveTarget := storage.ReplicaTarget{URL: syncer.target.URL, Schema: syncer.target.Database}
+	blocked := filepath.Join(t.TempDir(), "not-a-directory")
+	require.NoError(t, os.WriteFile(blocked, nil, 0o600))
+	t.Setenv("CACHE_DIRECTORY", blocked)
+	store, err := (Backend{}).OpenServeStore(ctx, serveTarget)
+	require.NoError(t, err)
+	require.NoError(t, store.Close())
+
+	cache := t.TempDir()
+	t.Setenv("CACHE_DIRECTORY", cache)
+	opened, err := (Backend{}).OpenServeStore(ctx, serveTarget)
+	require.NoError(t, err)
+	dir := opened.(*Store).reportDisk.dir
+	require.NoError(t, opened.Close())
+	require.NoError(t, os.WriteFile(filepath.Join(dir, activityDaySelectionsFile), []byte("not json"), 0o600))
+	store, err = (Backend{}).OpenServeStore(ctx, serveTarget)
+	require.NoError(t, err)
+	require.NoError(t, store.Close())
+}
+
+// A day report is written to disk only when a client opens the day, and
+// each open, from memory or from the file, refreshes its modification
+// time. The sweep removes a report no one opened for 30 days and keeps
+// one that was opened since.
+func TestKeptActivityReportsExpireUnlessOpened(t *testing.T) {
+	ctx := t.Context()
+	store, _, _ := newPushedStore(t)
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	_, err := store.DB().ExecContext(ctx, "SYSTEM WAIT VIEW prepare_usage")
+	require.NoError(t, err)
+	s := NewStoreFromDB(store.DB())
+	require.NoError(t, s.openActivityReportDisk(Target{URL: "clickhouse://mirror:9000/", Database: "agentsview"}))
+	now := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	filter := db.AnalyticsFilter{Timezone: "UTC"}
+	day := func(date string) (activity.Query, string) {
+		t.Helper()
+		q, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: date, Timezone: "UTC"}, now)
+		require.NoError(t, err)
+		f := filter
+		f.IncludeSubagents, f.IncludeForks = true, true
+		return q, s.reportDisk.path(activityReportSelection(f, q))
+	}
+	opened, openedFile := day("2026-01-10")
+	unopened, unopenedFile := day("2026-01-11")
+	_, neverFile := day("2026-01-12")
+	for _, q := range []activity.Query{opened, unopened} {
+		_, err := s.BuildActivityReportArtifacts(ctx, filter, q, nil)
+		require.NoError(t, err)
+	}
+	require.FileExists(t, openedFile)
+	require.FileExists(t, unopenedFile)
+	require.NoFileExists(t, neverFile, "a day no one opened is not written")
+
+	// Both files were last opened 31 days ago; then the client opens one
+	// of the days again.
+	longAgo := time.Now().Add(-31 * 24 * time.Hour)
+	for _, path := range []string{openedFile, unopenedFile} {
+		require.NoError(t, os.Chtimes(path, longAgo, longAgo))
+	}
+	_, err = s.BuildActivityReportArtifacts(ctx, filter, opened, nil)
+	require.NoError(t, err)
+
+	removed, err := s.reportDisk.sweep(time.Now())
+	require.NoError(t, err)
+	require.Equal(t, 1, removed)
+	require.FileExists(t, openedFile)
+	require.NoFileExists(t, unopenedFile)
+	require.FileExists(t, filepath.Join(s.reportDisk.dir, activityDaySelectionsFile),
+		"the kept day selections are not a report")
+}

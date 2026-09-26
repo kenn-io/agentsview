@@ -536,6 +536,11 @@ func prepareReplicaServeImpl(
 	if len(appCfg.CustomModelPricing) > 0 {
 		store.SetCustomPricing(appCfg.CustomModelPricing)
 	}
+	// A store that prepares reads in the background starts only now, so
+	// that work uses every serve-time setting installed above.
+	if starter, ok := store.(interface{ StartBackground(context.Context) }); ok {
+		starter.StartBackground(ctx)
+	}
 
 	var closeExtras func() error
 	cleanup := func() {
