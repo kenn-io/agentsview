@@ -95,6 +95,11 @@ func FindCodexS3ParentSessionURI(
 		return "", false
 	}
 	sort.Slice(matches, func(i, j int) bool {
+		if prefer, decided := PreferCodexRevertRollout(
+			path.Base(matches[i]), path.Base(matches[j]),
+		); decided {
+			return prefer
+		}
 		iArchived := strings.Contains(matches[i], "/archived_sessions/")
 		jArchived := strings.Contains(matches[j], "/archived_sessions/")
 		if iArchived != jArchived {
