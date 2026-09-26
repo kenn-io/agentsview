@@ -1737,7 +1737,8 @@ func TestExtractCandidatesRespectsProgressState(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 
-	// Distinct ended-at offsets pin the expected order (oldest first).
+	// Distinct ended-at offsets pin the expected order (newest first, so the
+	// smallest offset leads).
 	seedExtractCandidate(t, d, "sess-new", 6*time.Hour, nil)
 	seedExtractCandidate(t, d, "sess-pending", 5*time.Hour, nil)
 	seedExtractCandidate(t, d, "sess-partial", 4*time.Hour, nil)
@@ -1805,7 +1806,7 @@ func TestExtractCandidatesRespectsProgressState(t *testing.T) {
 	}
 	ids, err := d.ExtractCandidates(ctx, query)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"sess-new", "sess-pending", "sess-partial", "sess-failed-stale"},
+	assert.Equal(t, []string{"sess-failed-stale", "sess-partial", "sess-pending", "sess-new"},
 		ids, "done stays done, fresh failures wait out the backoff")
 
 	// A done session whose transcript has not changed since extraction is
@@ -1829,7 +1830,7 @@ func TestExtractCandidatesRespectsProgressState(t *testing.T) {
 	query.Limit = 2
 	ids, err = d.ExtractCandidates(ctx, query)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"sess-new", "sess-pending"}, ids)
+	assert.Equal(t, []string{"sess-failed-stale", "sess-partial"}, ids)
 }
 
 func TestExtractCandidatesZeroFailedCutoffSkipsFailedRows(t *testing.T) {
@@ -3012,32 +3013,39 @@ func TestCommitExtractedUnitRefusesCursorMismatch(t *testing.T) {
 }
 
 // TestActivateExtractGenerationRefusesUncoveredEligibleSessions pins the
-// in-tx discovery gate: an eligible session with no progress row (for
-// example after a single-session run) is uncovered work, and activating
-// around it would retire the served corpus for an incomplete generation.
+// in-tx discovery gate: while a corpus is serving, an eligible session with
+// no progress row (for example after a single-session run) is uncovered work,
+// and activating around it would retire the served corpus for an incomplete
+// generation. The gate applies to a replacement generation, so the fixture
+// has one serving; the first corpus's own rule is pinned by
+// TestActivateExtractGenerationServesFirstPartialCorpus.
 func TestActivateExtractGenerationRefusesUncoveredEligibleSessions(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
-	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
-		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
-	})
-	require.NoError(t, err)
-	seedExtractCandidate(t, d, "sess-1", 2*time.Hour, nil)
+	for _, fp := range []string{"fp-old", "fp-a"} {
+		_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+			Fingerprint: fp, Model: "m", Segmenter: "turns-v1",
+		})
+		require.NoError(t, err)
+	}
+	// sess-1 is covered under both generations, so what the gate refuses is
+	// attributable to sess-2 alone.
+	seedCoveredExtractSession(t, d, "sess-1", "fp-old", "fp-a")
+	seedServableExtractEntry(t, d, "fp-old", "sess-1", "e-old")
 	seedServableExtractEntry(t, d, "fp-a", "sess-1", "e-a")
-	// Fixture timestamps are explicitly backdated by seedExtractCandidate.
-	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
-		SessionID: "sess-1", Fingerprint: "fp-a",
-		ContentDigest: "dg", UnitsTotal: 0, StampedAt: time.Now(),
-	})
-	require.NoError(t, err)
+	require.NoError(t, d.ActivateExtractGeneration(
+		ctx, "fp-old", []string{"rules-v1"}, time.Now()))
 	seedExtractCandidate(t, d, "sess-2", 2*time.Hour, nil)
 	// Fixture timestamps are explicitly backdated by seedExtractCandidate.
 
-	err = d.ActivateExtractGeneration(
+	err := d.ActivateExtractGeneration(
 		ctx, "fp-a", []string{"rules-v1"}, time.Now())
 	require.ErrorIs(t, err, ErrExtractActivationBlocked,
 		"an eligible session with no progress row is uncovered work")
-	assert.Equal(t, ExtractGenerationBuilding, generationStates(t, d)["fp-a"])
+	states := generationStates(t, d)
+	assert.Equal(t, ExtractGenerationBuilding, states["fp-a"])
+	assert.Equal(t, ExtractGenerationActive, states["fp-old"],
+		"a blocked activation must leave the served corpus in place")
 
 	// Covering the session unblocks activation.
 	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
@@ -3047,7 +3055,9 @@ func TestActivateExtractGenerationRefusesUncoveredEligibleSessions(t *testing.T)
 	require.NoError(t, err)
 	require.NoError(t, d.ActivateExtractGeneration(
 		ctx, "fp-a", []string{"rules-v1"}, time.Now()))
-	assert.Equal(t, ExtractGenerationActive, generationStates(t, d)["fp-a"])
+	states = generationStates(t, d)
+	assert.Equal(t, ExtractGenerationActive, states["fp-a"])
+	assert.Equal(t, ExtractGenerationRetired, states["fp-old"])
 }
 
 // TestUpsertExtractProgressDigestChangeRemovesEntriesAtomically pins the
@@ -3291,4 +3301,236 @@ func TestReconcileIneligibleKeepsCandidateOnlySessionsWhenAllowed(t *testing.T) 
 	gone, err := d.GetRecallEntry(ctx, "e-sess-definite")
 	require.NoError(t, err)
 	assert.Nil(t, gone)
+}
+
+// TestActivateExtractGenerationServesFirstPartialCorpus pins the first
+// corpus's early switch. The coverage gates protect a served corpus from
+// being retired around a fragment, and while no generation is active there
+// is no served corpus to protect: nothing is being served, so entries
+// already extracted may start serving before the archive is fully covered.
+// Both shapes of incomplete coverage are present — a session still being
+// extracted, and an eligible session never started.
+func TestActivateExtractGenerationServesFirstPartialCorpus(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	// Done and covered: what this generation has to offer so far.
+	seedCoveredExtractSession(t, d, "sess-done", "fp-a")
+	seedServableExtractEntry(t, d, "fp-a", "sess-done", "e-done")
+	// Still being extracted: one of two units committed.
+	seedExtractCandidate(t, d, "sess-partial", 2*time.Hour, nil)
+	// Fixture timestamps are explicitly backdated by seedExtractCandidate.
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-partial", Fingerprint: "fp-a",
+		ContentDigest: "dg", UnitsTotal: 2, StampedAt: time.Now(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, d.AdvanceExtractCursor(
+		ctx, "sess-partial", "fp-a", "dg", 1))
+	// Never started: eligible with no progress row at all.
+	seedExtractCandidate(t, d, "sess-uncovered", 2*time.Hour, nil)
+
+	require.NoError(t, d.ActivateExtractGeneration(
+		ctx, "fp-a", []string{"rules-v1"}, time.Now()))
+	assert.Equal(t, ExtractGenerationActive, generationStates(t, d)["fp-a"],
+		"with nothing serving, the first corpus activates on partial coverage")
+	entry, err := d.GetRecallEntry(ctx, "e-done")
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	assert.Equal(t, "accepted", entry.Status,
+		"the first corpus's extracted entries must start serving")
+
+	// Nothing is skipped: the unfinished and unstarted sessions keep their
+	// place in the backlog and are extracted by later passes.
+	ids, err := d.ExtractCandidates(ctx, ExtractCandidateQuery{
+		Fingerprint:  "fp-a",
+		QuietCutoff:  time.Now(),
+		ScanVersions: []string{"rules-v1"},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, ids, "sess-partial",
+		"an early activation must not drop unfinished work")
+	assert.Contains(t, ids, "sess-uncovered",
+		"an early activation must not drop unstarted work")
+}
+
+// TestActivateExtractGenerationRefusesPartialReplacementCorpus pins the
+// other half of the same rule: once a corpus is serving, a replacement
+// generation must still cover everything eligible before it takes over, so
+// a complete corpus is never retired around a fragment.
+func TestActivateExtractGenerationRefusesPartialReplacementCorpus(t *testing.T) {
+	for name, incomplete := range map[string]func(*testing.T, *DB){
+		"a session never extracted": func(t *testing.T, d *DB) {
+			t.Helper()
+			seedExtractCandidate(t, d, "sess-new", 2*time.Hour, nil)
+		},
+		"a session still being extracted": func(t *testing.T, d *DB) {
+			t.Helper()
+			seedExtractCandidate(t, d, "sess-new", 2*time.Hour, nil)
+			// Fixture timestamps are backdated by seedExtractCandidate.
+			_, err := d.UpsertExtractProgress(
+				t.Context(), ExtractProgressUpsert{
+					SessionID: "sess-new", Fingerprint: "fp-b",
+					ContentDigest: "dg", UnitsTotal: 2,
+					StampedAt: time.Now(),
+				})
+			require.NoError(t, err)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			for _, fp := range []string{"fp-old", "fp-b"} {
+				_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+					Fingerprint: fp, Model: "m", Segmenter: "turns-v1",
+				})
+				require.NoError(t, err)
+			}
+			// sess-old is covered under both generations, so the refusal
+			// below is attributable to sess-new alone.
+			seedCoveredExtractSession(t, d, "sess-old", "fp-old", "fp-b")
+			seedServableExtractEntry(t, d, "fp-old", "sess-old", "e-old")
+			seedServableExtractEntry(t, d, "fp-b", "sess-old", "e-b")
+			require.NoError(t, d.ActivateExtractGeneration(
+				ctx, "fp-old", []string{"rules-v1"}, time.Now()))
+			incomplete(t, d)
+
+			err := d.ActivateExtractGeneration(
+				ctx, "fp-b", []string{"rules-v1"}, time.Now())
+			require.ErrorIs(t, err, ErrExtractActivationBlocked,
+				"a replacement generation still requires full coverage")
+			states := generationStates(t, d)
+			assert.Equal(t, ExtractGenerationActive, states["fp-old"],
+				"a blocked activation must leave the served corpus in place")
+			assert.Equal(t, ExtractGenerationBuilding, states["fp-b"])
+			replacement, err := d.GetRecallEntry(ctx, "e-b")
+			require.NoError(t, err)
+			require.NotNil(t, replacement)
+			assert.Equal(t, "archived", replacement.Status,
+				"the refused generation's entries stay staged")
+			served, err := d.GetRecallEntry(ctx, "e-old")
+			require.NoError(t, err)
+			require.NotNil(t, served)
+			assert.Equal(t, "accepted", served.Status,
+				"the served generation's entries must keep serving")
+		})
+	}
+}
+
+// TestActivateExtractGenerationFirstCorpusRefusesEmptyPromotion pins the
+// guard the partial-coverage allowance must never reach: a generation whose
+// staged output has all been cleared — its sessions turned ineligible —
+// has nothing to promote, and activating it would serve an empty corpus
+// while reporting itself healthy. Partial coverage no longer blocks, so
+// this guard is the only thing left standing between an empty generation
+// and the Recall page.
+func TestActivateExtractGenerationFirstCorpusRefusesEmptyPromotion(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	seedCoveredExtractSession(t, d, "sess-gone", "fp-a")
+	seedServableExtractEntry(t, d, "fp-a", "sess-gone", "e-gone")
+	require.NoError(t, d.SoftDeleteSession(ctx, "sess-gone"))
+	// Coverage is partial, so only the no-servable-entries guard can refuse.
+	seedExtractCandidate(t, d, "sess-uncovered", 2*time.Hour, nil)
+
+	err = d.ActivateExtractGeneration(
+		ctx, "fp-a", []string{"rules-v1"}, time.Now())
+	require.ErrorIs(t, err, ErrExtractActivationBlocked,
+		"a generation with nothing servable must not activate")
+	require.ErrorContains(t, err, "no servable entries",
+		"the no-servable-entries guard must be what refuses, not a "+
+			"coverage gate that no longer applies to a first corpus")
+	assert.Equal(t, ExtractGenerationBuilding, generationStates(t, d)["fp-a"])
+}
+
+// TestActivateExtractGenerationFirstCorpusClearsIneligibleStagedOutput pins
+// privacy retraction across the early switch: activating on partial
+// coverage still deletes — not merely skips — the staged entries and
+// progress rows of sessions that have since become ineligible, so a trashed
+// session's distilled content cannot reach the served corpus and cannot sit
+// staged under a surviving progress row that no later pass would revisit.
+func TestActivateExtractGenerationFirstCorpusClearsIneligibleStagedOutput(
+	t *testing.T,
+) {
+	d := testDB(t)
+	ctx := t.Context()
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	seedCoveredExtractSession(t, d, "sess-keep", "fp-a")
+	seedServableExtractEntry(t, d, "fp-a", "sess-keep", "e-keep")
+	seedCoveredExtractSession(t, d, "sess-trashed", "fp-a")
+	seedServableExtractEntry(t, d, "fp-a", "sess-trashed", "e-trashed")
+	require.NoError(t, d.SoftDeleteSession(ctx, "sess-trashed"))
+	// Coverage stays partial: the cleanup must run on the early switch too.
+	seedExtractCandidate(t, d, "sess-uncovered", 2*time.Hour, nil)
+
+	require.NoError(t, d.ActivateExtractGeneration(
+		ctx, "fp-a", []string{"rules-v1"}, time.Now()))
+	assert.Equal(t, ExtractGenerationActive, generationStates(t, d)["fp-a"])
+	kept, err := d.GetRecallEntry(ctx, "e-keep")
+	require.NoError(t, err)
+	require.NotNil(t, kept)
+	assert.Equal(t, "accepted", kept.Status)
+	gone, err := d.GetRecallEntry(ctx, "e-trashed")
+	require.NoError(t, err)
+	assert.Nil(t, gone,
+		"a trashed session's staged entry must be deleted, not promoted")
+	_, ok, err := d.ExtractProgress(ctx, "sess-trashed", "fp-a")
+	require.NoError(t, err)
+	assert.False(t, ok,
+		"a trashed session's progress row must be cleared so a restore "+
+			"re-extracts from scratch")
+}
+
+// TestExtractCandidatesReturnNewestEndedFirst pins backlog order: the
+// archive is walked from the most recently ended session backward, so the
+// sessions the operator worked on most recently are distilled first instead
+// of last. The tie pair pins the secondary key, which reverses with the
+// primary one so the whole order is deterministic.
+func TestExtractCandidatesReturnNewestEndedFirst(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	seedExtractCandidate(t, d, "sess-newest", 1*time.Hour, nil)
+	seedExtractCandidate(t, d, "sess-middle", 2*time.Hour, nil)
+	tied := time.Now().Add(-3 * time.Hour).UTC().Format(extractTimeLayout)
+	for _, id := range []string{"sess-tie-a", "sess-tie-b"} {
+		seedExtractCandidate(t, d, id, 3*time.Hour, func(s *Session) {
+			s.EndedAt = &tied
+		})
+	}
+	seedExtractCandidate(t, d, "sess-oldest", 4*time.Hour, nil)
+
+	ids, err := d.ExtractCandidates(ctx, ExtractCandidateQuery{
+		Fingerprint:  "fp-a",
+		QuietCutoff:  time.Now(),
+		ScanVersions: []string{"rules-v1"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		"sess-newest", "sess-middle", "sess-tie-b", "sess-tie-a",
+		"sess-oldest",
+	}, ids, "the backlog is walked newest ended first")
+
+	// A bounded pass takes the newest end of the backlog, not the oldest.
+	ids, err = d.ExtractCandidates(ctx, ExtractCandidateQuery{
+		Fingerprint:  "fp-a",
+		QuietCutoff:  time.Now(),
+		ScanVersions: []string{"rules-v1"},
+		Limit:        2,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"sess-newest", "sess-middle"}, ids)
 }
