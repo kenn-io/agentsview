@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -49,6 +50,7 @@ type chAnalyticsSession struct {
 	noCodeContextCount          int
 	runawayToolLoopCount        int
 	frustrationMarkerCount      int
+	pushVersion                 uint64
 }
 
 func (s *Store) analyticsSessions(
@@ -92,7 +94,7 @@ func (s *Store) analyticsSessionsFiltered(
 			quality_signal_version, short_prompt_count,
 			unstructured_start, missing_success_criteria_count,
 			missing_verification_count, duplicate_prompt_count,
-			no_code_context_count, runaway_tool_loop_count
+			no_code_context_count, runaway_tool_loop_count, push_version
 		FROM sessions s
 		WHERE `+where, args...)
 	if err != nil {
@@ -118,7 +120,7 @@ func (s *Store) analyticsSessionsFiltered(
 			&r.shortPromptCount, &r.unstructuredStart,
 			&r.missingSuccessCriteriaCount, &r.missingVerificationCount,
 			&r.duplicatePromptCount, &r.noCodeContextCount,
-			&r.runawayToolLoopCount,
+			&r.runawayToolLoopCount, &r.pushVersion,
 		); err != nil {
 			return nil, fmt.Errorf("scanning clickhouse analytics session: %w", err)
 		}
@@ -2484,7 +2486,7 @@ func (s *Store) GetAnalyticsSignals(
 		return db.SignalsAnalyticsResponse{}, err
 	}
 	rows := chSignalRowsFromSessions(sessions, f)
-	if err := s.chPopulateFrustrationMarkers(ctx, rows); err != nil {
+	if err := s.chPopulateFrustrationMarkers(ctx, rows, chSessionPushVersions(sessions)); err != nil {
 		return db.SignalsAnalyticsResponse{}, err
 	}
 	return db.AggregateSignals(rows), nil
@@ -2507,7 +2509,7 @@ func (s *Store) GetAnalyticsSignalSessions(
 		return db.SignalSessionsResponse{}, err
 	}
 	rows := chSignalRowsFromSessions(sessions, f)
-	if err := s.chPopulateFrustrationMarkers(ctx, rows); err != nil {
+	if err := s.chPopulateFrustrationMarkers(ctx, rows, chSessionPushVersions(sessions)); err != nil {
 		return db.SignalSessionsResponse{}, err
 	}
 	candidates := db.SignalCandidates(rows, signal, limit)
@@ -2558,20 +2560,74 @@ func chSignalRowsFromSessions(
 	return rows
 }
 
+func chSessionPushVersions(sessions []chAnalyticsSession) map[string]uint64 {
+	versions := make(map[string]uint64, len(sessions))
+	for _, session := range sessions {
+		versions[session.id] = session.pushVersion
+	}
+	return versions
+}
+
+// frustrationMarkerMemo remembers each session's marker count under the
+// session push version it was read at. A push republishes every message of a
+// changed session under a newer version, so a stale count is never reused,
+// while unchanged sessions skip reading and scanning their prompts again.
+type frustrationMarkerMemo struct {
+	mu     sync.Mutex
+	counts map[string]frustrationMarkerEntry
+}
+
+type frustrationMarkerEntry struct {
+	pushVersion uint64
+	count       int
+}
+
+func (m *frustrationMarkerMemo) lookup(id string, pushVersion uint64) (int, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	entry, ok := m.counts[id]
+	if !ok || entry.pushVersion != pushVersion {
+		return 0, false
+	}
+	return entry.count, true
+}
+
+func (m *frustrationMarkerMemo) store(id string, pushVersion uint64, count int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.counts == nil {
+		m.counts = make(map[string]frustrationMarkerEntry)
+	}
+	m.counts[id] = frustrationMarkerEntry{pushVersion: pushVersion, count: count}
+}
+
+// chPopulateFrustrationMarkers counts frustration markers for rows whose
+// session version is not memoized. versions maps session IDs to the push
+// version their row was read at; a session absent from it is always scanned.
 func (s *Store) chPopulateFrustrationMarkers(
 	ctx context.Context,
 	rows []db.SignalRow,
+	versions map[string]uint64,
 ) error {
 	if len(rows) == 0 {
 		return nil
 	}
 	idx := make(map[string]int, len(rows))
-	ids := make([]string, len(rows))
+	ids := make([]string, 0, len(rows))
 	for i := range rows {
+		if version, ok := versions[rows[i].ID]; ok {
+			if count, hit := s.frustrationMarkers.lookup(rows[i].ID, version); hit {
+				rows[i].FrustrationMarkerCount = count
+				continue
+			}
+		}
 		idx[rows[i].ID] = i
-		ids[i] = rows[i].ID
+		ids = append(ids, rows[i].ID)
 	}
-	return chQueryChunked(ids, func(chunk []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	err := chQueryChunked(ids, func(chunk []string) error {
 		ph, args := chInPlaceholders(chunk)
 		q := `SELECT session_id, content, is_system
 			FROM messages
@@ -2602,6 +2658,17 @@ func (s *Store) chPopulateFrustrationMarkers(
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	// Only a complete scan is memoized; a failed or canceled read leaves
+	// every session in the batch to be scanned again next time.
+	for id, i := range idx {
+		if version, ok := versions[id]; ok {
+			s.frustrationMarkers.store(id, version, rows[i].FrustrationMarkerCount)
+		}
+	}
+	return nil
 }
 
 func (s *Store) chSignalMessages(

@@ -98,10 +98,73 @@ func IsFrustrationMarker(content string) bool {
 	if len(normalized) < 10 {
 		return false
 	}
-	if frustrationPhraseRe.MatchString(normalized) {
+	if mayContainFrustrationPhrase(normalized) && frustrationPhraseRe.MatchString(normalized) {
 		return true
 	}
 	return capsWordRatio(content, 3) >= 0.4
+}
+
+// frustrationPhraseLiterals are substrings that every alternative of
+// frustrationPhraseRe requires. Checking them first skips the regular
+// expression for the common prompt that cannot match; the expression is
+// an unanchored alternation that the Go engine runs as a full NFA over the
+// whole prompt, which dominates signals analytics for long prompts.
+var frustrationPhraseLiterals = foldedLiterals(frustrationPhraseLowercase...)
+
+// mayContainFrustrationPhrase reports whether frustrationPhraseRe can match
+// normalized. The expression matches case-insensitively with Unicode simple
+// case folding, so the check compares case-fold canonical forms rather than
+// lowercase text; every match then contains one of the literals verbatim.
+// normalized is already lowercase, so folding only matters for the two
+// non-ASCII runes whose fold orbit reaches an ASCII letter: long s and the
+// Kelvin sign. Without them a plain substring search is exact.
+func mayContainFrustrationPhrase(normalized string) bool {
+	if strings.ContainsAny(normalized, nonASCIIFoldRunes) {
+		normalized = foldCanonical(normalized)
+		for _, literal := range frustrationPhraseLiterals {
+			if strings.Contains(normalized, literal) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, literal := range frustrationPhraseLowercase {
+		if strings.Contains(normalized, literal) {
+			return true
+		}
+	}
+	return false
+}
+
+const nonASCIIFoldRunes = "\u017f\u212a"
+
+var frustrationPhraseLowercase = []string{
+	"!!!", "???", "wtf", "come on", "why won't", "this is broken",
+	"doesn't work", "does not work", "still broken", "same error",
+	"you broke", "fuck",
+}
+
+func foldedLiterals(literals ...string) []string {
+	out := make([]string, len(literals))
+	for i, literal := range literals {
+		out[i] = foldCanonical(literal)
+	}
+	return out
+}
+
+// foldCanonical maps every rune to the smallest member of its simple
+// case-folding orbit, so two strings that match case-insensitively fold to
+// identical bytes.
+func foldCanonical(s string) string {
+	return strings.Map(func(r rune) rune {
+		smallest := r
+		for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+			if f < smallest {
+				smallest = f
+			}
+		}
+		return smallest
+	}, s)
 }
 
 // CountFrustrationMarkers counts user prompts that indicate the
@@ -237,12 +300,37 @@ func parsePromptTime(raw string) (time.Time, bool) {
 }
 
 func normalizePrompt(content string) string {
-	withoutCode := content
-	if strings.Contains(content, "```") {
-		withoutCode = codeFenceRe.ReplaceAllString(content, " ")
-	}
+	withoutCode := stripCodeFences(content)
 	lower := strings.ToLower(strings.TrimSpace(withoutCode))
 	return collapseWhitespace(lower)
+}
+
+// stripCodeFences replaces every fenced block with one space, matching
+// codeFenceRe.ReplaceAllString(content, " "): each match starts at the
+// leftmost unconsumed fence and ends at the next fence, and an opening fence
+// without a closer is left as is. The scan avoids running the regular
+// expression over long pasted prompts.
+func stripCodeFences(content string) string {
+	const fence = "```"
+	start := strings.Index(content, fence)
+	if start < 0 {
+		return content
+	}
+	var b strings.Builder
+	b.Grow(len(content))
+	rest := content
+	for start >= 0 {
+		end := strings.Index(rest[start+len(fence):], fence)
+		if end < 0 {
+			break
+		}
+		b.WriteString(rest[:start])
+		b.WriteByte(' ')
+		rest = rest[start+len(fence)+end+len(fence):]
+		start = strings.Index(rest, fence)
+	}
+	b.WriteString(rest)
+	return b.String()
 }
 
 func collapseWhitespace(s string) string {
@@ -282,7 +370,7 @@ func promptTokens(normalized string) []string {
 }
 
 func capsWordRatio(content string, minWords int) float64 {
-	withoutCode := codeFenceRe.ReplaceAllString(content, " ")
+	withoutCode := stripCodeFences(content)
 	words := strings.FieldsFunc(withoutCode, func(r rune) bool {
 		return !unicode.IsLetter(r)
 	})

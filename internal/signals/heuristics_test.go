@@ -3,7 +3,9 @@ package signals
 import (
 	"fmt"
 	"math/rand"
+	"strings"
 	"testing"
+	"unicode"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -461,4 +463,61 @@ func TestCountFrustrationMarkers(t *testing.T) {
 	}
 
 	assert.Equal(t, 2, CountFrustrationMarkers(msgs))
+}
+
+// The prefilter must never reject a prompt the regular expression flags,
+// including prompts whose letters only match under Unicode case folding.
+func TestFrustrationPrefilterAcceptsEveryRegexMatch(t *testing.T) {
+	prompts := []string{
+		"WHY WON'T THIS WORK???!!!",
+		"this is broken after the retry",
+		"Come On, it still fails",
+		"doe\u017f not work",       // long s folds to s
+		"you bro\u212ae the build", // Kelvin sign folds to k
+		"the SAME ERROR shows up",
+		"doesn\u2019t work", // curly apostrophe: regex requires ASCII
+		"Please run the focused test again.",
+		strings.Repeat("a", 5000) + " wtf " + strings.Repeat("b", 5000),
+	}
+	for _, prompt := range prompts {
+		normalized := normalizePrompt(prompt)
+		if frustrationPhraseRe.MatchString(normalized) {
+			assert.True(t, mayContainFrustrationPhrase(normalized), prompt)
+		}
+	}
+	assert.True(t, frustrationPhraseRe.MatchString(normalizePrompt("doe\u017f not work")))
+	assert.False(t, mayContainFrustrationPhrase(normalizePrompt("Please run the focused test again.")))
+}
+
+// Only long s and the Kelvin sign fold to ASCII letters; the fast path in
+// mayContainFrustrationPhrase depends on that set staying exact.
+func TestNonASCIIFoldRunesCoverEveryASCIIFold(t *testing.T) {
+	var found []rune
+	for r := rune(0x80); r <= unicode.MaxRune; r++ {
+		for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+			if f < 0x80 {
+				found = append(found, r)
+				break
+			}
+		}
+	}
+	assert.Equal(t, []rune(nonASCIIFoldRunes), found)
+}
+
+func TestStripCodeFencesMatchesRegexp(t *testing.T) {
+	inputs := []string{
+		"",
+		"no fences",
+		"```go\nfunc main() {}\n```",
+		"a ```one``` b ```two``` c",
+		"open ``` never closed",
+		"```a``````b```",
+		"``` ```",
+		"x``````y",
+		"tail ```\n",
+		strings.Repeat("`", 7),
+	}
+	for _, input := range inputs {
+		assert.Equal(t, codeFenceRe.ReplaceAllString(input, " "), stripCodeFences(input), "%q", input)
+	}
 }

@@ -44,6 +44,8 @@ type Store struct {
 	closeOnce                 sync.Once
 	closeErr                  error
 	probeCache                activityProbeCache
+	// frustrationMarkers memoizes signals marker counts per session version.
+	frustrationMarkers frustrationMarkerMemo
 }
 
 // NewStore connects to the mirror named by t and refuses schemas or data
