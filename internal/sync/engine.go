@@ -6649,23 +6649,34 @@ func sameReconciliationSourcePath(left, right string) bool {
 // member gone from its own container, but the same logical member may have
 // moved to another configured root the pass never streamed; a deletion
 // claimed here would outlive the move until that root happens to sync. The
-// lookup passes only the session identity — a stored-path probe could
-// resolve the stale spelling without verifying the row exists.
-func reconciliationMemberRelocated(
-	ctx context.Context, provider parser.Provider, fullSessionID string,
+// The lookup uses the session identity and compares any result with the
+// archived source path before treating it as a move.
+func (e *Engine) reconciliationMemberRelocated(
+	ctx context.Context,
+	provider parser.Provider,
+	fullSessionID, storedPath string,
 ) (bool, error) {
 	if provider == nil {
 		// Without a provider the move cannot be ruled out; report the member
 		// as possibly relocated so deletion is withheld.
 		return true, nil
 	}
-	_, found, err := provider.FindSource(ctx, parser.FindSourceRequest{
+	source, found, err := provider.FindSource(ctx, parser.FindSourceRequest{
 		FullSessionID: fullSessionID,
 	})
 	if err != nil {
 		return false, fmt.Errorf(
 			"resolve possibly relocated member %s: %w", fullSessionID, err,
 		)
+	}
+	lowerRanked, err := e.storedSourceRanksHigher(
+		ctx, provider, storedPath, source,
+	)
+	if err != nil {
+		return false, err
+	}
+	if lowerRanked {
+		return false, nil
 	}
 	return found, nil
 }
@@ -7070,8 +7081,8 @@ func (e *Engine) tombstoneMissingWatchSourceScopesLocked(
 								// container proof; a same-ID copy under another
 								// configured root would make this a move, not a
 								// deletion.
-								relocated, err := reconciliationMemberRelocated(
-									ctx, provider, ownership.ID,
+								relocated, err := e.reconciliationMemberRelocated(
+									ctx, provider, ownership.ID, ownership.FilePath,
 								)
 								if err != nil {
 									return deleted, err
@@ -7296,8 +7307,8 @@ func (e *Engine) tombstoneMissingWatchSourceScopesLocked(
 							if _, _, virtual := parser.ParseVirtualSourcePath(
 								ownership.FilePath,
 							); virtual {
-								relocated, err := reconciliationMemberRelocated(
-									ctx, provider, ownership.ID,
+								relocated, err := e.reconciliationMemberRelocated(
+									ctx, provider, ownership.ID, ownership.FilePath,
 								)
 								if err != nil {
 									return deleted, err
@@ -11693,6 +11704,17 @@ func (e *Engine) processProviderFile(
 			),
 		}, failurecache.Identity{Missing: true}, e.sourcePathMissing(file)), true
 	}
+	if lowerRanked, err := e.providerSourceLowerRanked(
+		ctx, provider, file.Agent, source,
+	); err != nil {
+		return processResult{
+			err: fmt.Errorf("rank %s source %s: %w", file.Agent, providerDiscoveredPath(source), err),
+		}, true
+	} else if lowerRanked {
+		return processResult{
+			skip: true, suppressPresenceSweep: true,
+		}, true
+	}
 	if source.ConfiguredRoot != "" {
 		if sourceMachine, ok := e.configuredMachineForPath(
 			file.Agent, source.ConfiguredRoot,
@@ -13611,6 +13633,72 @@ func providerOutcomeAllowsCleanSkipCache(outcome parser.ParseOutcome) bool {
 		}
 	}
 	return true
+}
+
+func reconciliationMemberIdentity(
+	agent parser.AgentType, source parser.SourceRef,
+) string {
+	if source.ReconciliationIdentity != "" {
+		return source.ReconciliationIdentity
+	}
+	return reconciliationSourceIdentity(agent, source)
+}
+
+func reconciliationSourceRankLower(
+	candidate, stored parser.ReconciliationSourceRank,
+) bool {
+	if candidate.Class != stored.Class {
+		return candidate.Class < stored.Class
+	}
+	return candidate.Recency < stored.Recency
+}
+
+func (e *Engine) storedSourceRanksHigher(
+	ctx context.Context,
+	provider parser.Provider,
+	storedPath string,
+	candidate parser.SourceRef,
+) (bool, error) {
+	resolver, resolves := provider.(parser.ReconciliationSourceResolver)
+	ranker, ranks := provider.(parser.ReconciliationSourceRanker)
+	if !resolves || !ranks || storedPath == "" {
+		return false, nil
+	}
+	if e.storedPathResolver != nil {
+		resolvedPath, ok := e.storedPathResolver(storedPath)
+		if !ok || resolvedPath == "" {
+			return false, fmt.Errorf("resolve stored source path %s", storedPath)
+		}
+		storedPath = resolvedPath
+	}
+	stored, found, err := resolver.SourceForReconciliation(
+		ctx, storedPath, candidate.ProjectHint,
+	)
+	if err != nil || !found {
+		return false, err
+	}
+	return reconciliationSourceRankLower(
+		ranker.ReconciliationSourceRank(candidate),
+		ranker.ReconciliationSourceRank(stored),
+	), nil
+}
+
+func (e *Engine) providerSourceLowerRanked(
+	ctx context.Context,
+	provider parser.Provider,
+	agent parser.AgentType,
+	candidate parser.SourceRef,
+) (bool, error) {
+	identity := reconciliationMemberIdentity(agent, candidate)
+	if identity == "" {
+		return false, nil
+	}
+	fullSessionID := applyIDPrefixToID(
+		provider.Definition().IDPrefix, identity,
+	)
+	fullSessionID = applyIDPrefixToID(e.idPrefix, fullSessionID)
+	storedPath := e.db.GetSessionFilePath(ctx, fullSessionID)
+	return e.storedSourceRanksHigher(ctx, provider, storedPath, candidate)
 }
 
 func (e *Engine) providerSourceForDiscoveredFile(

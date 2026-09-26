@@ -152,6 +152,12 @@ Key assumptions reviewers MUST account for:
     correct behavior, not a defect. Flag only changes that stop a
     readable file from being served.
 
+20. ARCHIVE RETENTION: AgentsView keeps every transcript it has stored.
+    A session that disappears from disk is marked source-missing and
+    its stored messages remain; no sync path removes or replaces them
+    because the source went away. Only a user's explicit delete removes
+    stored data.
+
 For local/legacy modes, do not impose requirements that apply only to
 public-facing multi-tenant services. For opt-in hosted raw processing,
 review its actual tenant/role/catalog boundary, immutable source provenance,

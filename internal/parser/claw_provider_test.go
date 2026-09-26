@@ -200,7 +200,13 @@ func assertClawProviderSourceMethods(t *testing.T, spec clawProviderTestSpec) {
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, root, plan.Roots[0].Path)
 	assert.True(t, plan.Roots[0].Recursive)
-	assert.Equal(t, []string{"*.jsonl", "*.jsonl.*"}, plan.Roots[0].IncludeGlobs)
+	wantGlobs := []string{"*.jsonl", "*.jsonl.*"}
+	if spec.agent == AgentOpenClaw {
+		wantGlobs = append(wantGlobs,
+			"openclaw-agent.sqlite", "openclaw-agent.sqlite-*",
+		)
+	}
+	assert.ElementsMatch(t, wantGlobs, plan.Roots[0].IncludeGlobs)
 
 	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)

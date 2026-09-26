@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
 )
@@ -358,6 +359,61 @@ func TestParseDiffDBBackedLimitOrdersByPerSessionMtime(t *testing.T) {
 		"the older conversation must be the one cut by --limit")
 	assert.Contains(t, skipped[0].Reason, "limit",
 		"cut session reads as not-sampled")
+}
+
+func TestParseDiffOpenClawSQLiteLimitNewestFirst(t *testing.T) {
+	root := t.TempDir()
+	dbPath := createOpenClawSyncSQLiteFixture(t, root, "a-older")
+	addOpenClawSyncSQLiteSession(t, dbPath, "z-newer")
+	setOpenClawSyncSQLiteSessionCreatedAt(t, dbPath, "a-older", 1_700_000_000_100)
+	setOpenClawSyncSQLiteSessionCreatedAt(t, dbPath, "z-newer", 1_700_000_000_300)
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentOpenClaw: {root}},
+		Machine:   "local",
+	})
+	stats := engine.SyncAll(t.Context(), nil)
+	require.False(t, stats.Aborted, "initial sync aborted: %+v", stats)
+	require.Equal(t, 2, stats.Synced)
+	engine.Close()
+
+	diffEngine := sync.NewDiffEngine(t.Context(), database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentOpenClaw: {root}},
+		Machine:   "local",
+	})
+	defer diffEngine.Close()
+	report, err := diffEngine.ParseDiff(t.Context(), sync.ParseDiffOptions{
+		Agents: []parser.AgentType{parser.AgentOpenClaw},
+		Limit:  1,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, report)
+
+	assert.True(t, report.FilesLimited)
+	assert.Equal(t, sync.ParseDiffTotals{
+		Examined: 1, Identical: 1, Skipped: 1,
+	}, report.Totals)
+	assert.Zero(t, report.Totals.Changed)
+
+	skipped := findSessionDiff(report, "openclaw:main:a-older")
+	require.NotNil(t, skipped)
+	assert.Equal(t, sync.DiffSkipped, skipped.Class)
+	assert.Contains(t, skipped.Reason, "limit")
+	assert.Nil(t, findSessionDiff(report, "openclaw:main:z-newer"))
+}
+
+func setOpenClawSyncSQLiteSessionCreatedAt(
+	t *testing.T, dbPath, sessionID string, createdAt int64,
+) {
+	t.Helper()
+	database, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	defer database.Close()
+	_, err = database.ExecContext(t.Context(), `
+		UPDATE transcript_events SET created_at = ? WHERE session_id = ?
+	`, createdAt, sessionID)
+	require.NoError(t, err)
 }
 
 func TestParseDiffWindsurfLimitScopesPerSession(t *testing.T) {
