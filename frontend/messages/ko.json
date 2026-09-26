@@ -2282,5 +2282,19 @@
   "go_to_session_ambiguous": "여러 세션 ID 또는 UUID가 일치합니다. 기존 링크에서 원하는 세션을 여세요.",
   "go_to_session_capped": "일치하는 세션 ID 또는 UUID가 너무 많습니다. 기존 링크에서 원하는 세션을 여세요.",
   "go_to_session_failed": "세션을 조회하지 못했습니다. 다시 시도하세요.",
-  "shortcuts_go_to_session": "찾기를 닫았을 때 세션으로 이동"
+  "shortcuts_go_to_session": "찾기를 닫았을 때 세션으로 이동",
+  "analytics_outcome_title": "성과",
+  "analytics_outcome_repositories": "저장소",
+  "analytics_outcome_commits": "커밋",
+  "analytics_outcome_loc_added": "추가된 줄",
+  "analytics_outcome_loc_removed": "삭제된 줄",
+  "analytics_outcome_files_changed": "변경된 파일",
+  "analytics_outcome_prs_opened": "생성된 풀 리퀘스트",
+  "analytics_outcome_prs_merged": "병합된 풀 리퀘스트",
+  "analytics_outcome_include_prs": "풀 리퀘스트 포함",
+  "analytics_outcome_include_prs_hint": "저장소마다 GitHub에 조회하므로 몇 분이 걸릴 수 있습니다.",
+  "analytics_outcome_loading": "git 기록을 읽는 중...",
+  "analytics_outcome_empty": "이 기간에 git 활동이 없습니다.",
+  "analytics_outcome_partial": "집계되지 않음:",
+  "analytics_outcome_partial_entry": "{repo} ({op}): {reason}"
 }

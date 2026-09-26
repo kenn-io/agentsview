@@ -2282,5 +2282,19 @@
   "go_to_session_ambiguous": "有多个会话匹配此 ID 或 UUID。请通过现有链接打开目标会话。",
   "go_to_session_capped": "匹配此 ID 或 UUID 的会话太多。请通过现有链接打开目标会话。",
   "go_to_session_failed": "无法查找该会话。请重试。",
-  "shortcuts_go_to_session": "关闭查找后跳转到会话"
+  "shortcuts_go_to_session": "关闭查找后跳转到会话",
+  "analytics_outcome_title": "产出",
+  "analytics_outcome_repositories": "仓库",
+  "analytics_outcome_commits": "提交",
+  "analytics_outcome_loc_added": "新增行数",
+  "analytics_outcome_loc_removed": "删除行数",
+  "analytics_outcome_files_changed": "改动文件",
+  "analytics_outcome_prs_opened": "已开启的拉取请求",
+  "analytics_outcome_prs_merged": "已合并的拉取请求",
+  "analytics_outcome_include_prs": "包含拉取请求",
+  "analytics_outcome_include_prs_hint": "会按仓库逐个查询 GitHub，可能需要几分钟。",
+  "analytics_outcome_loading": "正在读取 git 历史...",
+  "analytics_outcome_empty": "此时间范围内没有 git 活动。",
+  "analytics_outcome_partial": "未计入：",
+  "analytics_outcome_partial_entry": "{repo}（{op}）：{reason}"
 }

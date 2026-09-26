@@ -2365,5 +2365,19 @@
   "go_to_session_ambiguous": "Multiple sessions match that ID or UUID. Open the desired session from an existing link.",
   "go_to_session_capped": "Too many sessions match that ID or UUID. Open the desired session from an existing link.",
   "go_to_session_failed": "Could not look up that session. Try again.",
-  "shortcuts_go_to_session": "Go to session when find is closed"
+  "shortcuts_go_to_session": "Go to session when find is closed",
+  "analytics_outcome_title": "Outcomes",
+  "analytics_outcome_repositories": "Repositories",
+  "analytics_outcome_commits": "Commits",
+  "analytics_outcome_loc_added": "Lines added",
+  "analytics_outcome_loc_removed": "Lines removed",
+  "analytics_outcome_files_changed": "Files changed",
+  "analytics_outcome_prs_opened": "Pull requests opened",
+  "analytics_outcome_prs_merged": "Pull requests merged",
+  "analytics_outcome_include_prs": "Include pull requests",
+  "analytics_outcome_include_prs_hint": "Asks GitHub once per repository, which can take minutes.",
+  "analytics_outcome_loading": "Reading git history...",
+  "analytics_outcome_empty": "No git activity in this window.",
+  "analytics_outcome_partial": "Not counted:",
+  "analytics_outcome_partial_entry": "{repo} ({op}): {reason}"
 }
