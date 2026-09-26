@@ -143,6 +143,59 @@ func TestLiveActivityColdResumeAndOngoingAppend(t *testing.T) {
 	assert.Zero(t, provider.findSourceCalls)
 }
 
+func TestLiveActivityRecentSessionFollowsStoredPathMove(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0).UTC()
+	dir := t.TempDir()
+	original := filepath.Join(dir, "rollout-original.jsonl")
+	revert := filepath.Join(dir, "rollout-revert.jsonl")
+	require.NoError(t, os.WriteFile(original, []byte("seed\n"), 0o644))
+	require.NoError(t, os.WriteFile(revert, []byte("seed\n"), 0o644))
+	stored := func(path string) LiveActivitySource {
+		info, err := os.Stat(path)
+		require.NoError(t, err)
+		return LiveActivitySource{
+			Path:          path,
+			StoredSize:    info.Size(),
+			StoredMTimeNS: info.ModTime().UnixNano(),
+			HasStoredStat: true,
+		}
+	}
+	provider := newLiveActivityTestProvider(filepath.Join(dir, "history.jsonl"))
+	storedSource := stored(original)
+	// An unknown ended_at arrives as the zero time and must still be polled.
+	recent := func(
+		context.Context, parser.AgentType, time.Time, int,
+	) ([]LiveActivityRecentSession, error) {
+		return []LiveActivityRecentSession{{
+			FullID: "codex:moved", Source: storedSource,
+		}}, nil
+	}
+	var syncCalls [][]string
+	poller := NewLiveActivityPoller([]LiveActivityTarget{{
+		Provider: provider, Hints: provider,
+	}}, nil, func(_ context.Context, paths []string) error {
+		syncCalls = append(syncCalls, append([]string(nil), paths...))
+		return nil
+	}, nil)
+	poller.SetRecentLookup(recent)
+
+	_, err := poller.PollOnce(t.Context(), now)
+	require.NoError(t, err)
+	assert.Empty(t, syncCalls, "an unchanged stored source is not synced")
+
+	// The session moves to a revert rollout that keeps growing; the old
+	// file stays on disk unchanged.
+	storedSource = stored(revert)
+	_, err = poller.PollOnce(t.Context(), now.Add(30*time.Second))
+	require.NoError(t, err)
+	assert.Empty(t, syncCalls)
+	appendFile(t, revert, "growth\n")
+	_, err = poller.PollOnce(t.Context(), now.Add(time.Minute))
+	require.NoError(t, err)
+	assert.Equal(t, [][]string{{revert}}, syncCalls,
+		"the poller must stat the session's current file, not the old one")
+}
+
 func TestLiveActivityBoundsRetriesAndExpiration(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0).UTC()
 	history := filepath.Join(t.TempDir(), "history.jsonl")

@@ -134,5 +134,8 @@ func startLiveActivityPoller(
 		trackLiveActivitySync(idleTracker, engine.SyncPathsContext),
 		log.Printf,
 	)
+	poller.SetRecentLookup(
+		agentsync.DBRecentSessionLookup(database, cfg.InstallationID),
+	)
 	return startLiveActivityRun(runCtx, cancel, poller)
 }
