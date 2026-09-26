@@ -152,6 +152,11 @@ Key assumptions reviewers MUST account for:
     correct behavior, not a defect. Flag only changes that stop a
     readable file from being served.
 
+20. SCHEMA COMPATIBILITY: Migrations must upgrade databases created by
+    main or a release without losing data. Databases created by an
+    unmerged branch carry no such promise, so don't flag a missing
+    migration for schema that only existed on that branch.
+
 For local/legacy modes, do not impose requirements that apply only to
 public-facing multi-tenant services. For opt-in hosted raw processing,
 review its actual tenant/role/catalog boundary, immutable source provenance,
