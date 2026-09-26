@@ -24,14 +24,12 @@ type activityProbeCache struct {
 func (s *Store) ActivityReportSourceProbe(
 	ctx context.Context,
 ) (activity.SourceProbe, error) {
-	var fingerprint string
-	err := s.queryRowContext(ctx, `SELECT
-		hex(SHA256(toString(arraySort(groupArray((table, name, hash_of_all_files))))))
-		FROM system.parts
-		WHERE database = currentDatabase() AND active
-		AND table IN ('sessions', 'messages', 'usage_events', 'model_pricing', 'genai_pricing', 'sync_metadata', 'usage_session_snapshots', 'prepared_usage')`).Scan(&fingerprint)
+	fingerprint, err := s.tablePartsFingerprint(ctx, []string{
+		"sessions", "messages", "usage_events",
+		"model_pricing", "genai_pricing", "sync_metadata", "usage_session_snapshots", "prepared_usage",
+	})
 	if err != nil {
-		return activity.SourceProbe{}, fmt.Errorf("reading clickhouse activity source parts: %w", err)
+		return activity.SourceProbe{}, err
 	}
 	s.probeCache.mu.Lock()
 	probe, cached := s.probeCache.probe, s.probeCache.fingerprint == fingerprint
@@ -132,15 +130,16 @@ func (st preparedUsageState) replaced() []string {
 }
 
 func (s *Store) preparedUsageState(ctx context.Context) (preparedUsageState, error) {
+	fingerprint, err := s.tablePartsFingerprint(ctx, []string{"sessions", "usage_session_snapshots", "usage_event_prices"})
+	if err != nil {
+		return preparedUsageState{}, err
+	}
 	var filled uint64
-	var fingerprint, comment string
-	err := s.queryRowContext(ctx, `SELECT
+	var comment string
+	err = s.queryRowContext(ctx, `SELECT
 		(SELECT ifNull(max(toUInt64OrZero(value)),0) FROM sync_metadata WHERE startsWith(key,?)),
-		(SELECT hex(SHA256(toString(arraySort(groupArray((table, name, hash_of_all_files))))))
-		 FROM system.parts WHERE database = currentDatabase() AND active
-		 AND table IN ('sessions', 'usage_session_snapshots', 'usage_event_prices')),
 		ifNull((SELECT comment FROM system.tables WHERE database = currentDatabase() AND name = 'prepared_usage'), '')`,
-		usageSnapshotReadyKeyBase+":").Scan(&filled, &fingerprint, &comment)
+		usageSnapshotReadyKeyBase+":").Scan(&filled, &comment)
 	if err != nil {
 		return preparedUsageState{}, fmt.Errorf("checking prepared usage readiness: %w", err)
 	}

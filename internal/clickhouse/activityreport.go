@@ -2,10 +2,15 @@ package clickhouse
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	chdriver "github.com/ClickHouse/clickhouse-go/v2"
@@ -58,13 +63,47 @@ func (s *Store) BuildActivityReportArtifacts(
 	onProgress activity.ProgressFunc,
 ) (activity.CandidateArtifacts, error) {
 	clickReportProgress(onProgress, activity.Progress{Phase: activity.ProgressLoadingSessions})
+	ctx, err := s.withPartsSnapshot(ctx)
+	if err != nil {
+		return activity.CandidateArtifacts{}, err
+	}
 	f.IncludeSubagents = true
 	f.IncludeForks = true
 	rangeStartUTC, rangeEndUTC := activityReportRangeBoundsUTC(q)
+	// An ended range whose kept report was checked against these exact
+	// parts needs no further read.
+	var selection, fingerprint string
+	if !q.Partial {
+		selection = activityReportSelection(f, q)
+		if fingerprint, err = s.partsFingerprint(ctx); err != nil {
+			return activity.CandidateArtifacts{}, err
+		}
+		if kept, ok := s.checkedActivityReport(selection, fingerprint); ok {
+			clickReportProgress(onProgress, kept.done)
+			return kept.artifacts, nil
+		}
+	}
 
 	candidateWhere, candidateArgs := clickActivityReportCandidateWhere(
 		f, rangeStartUTC, rangeEndUTC)
-	sessions, ids, err := s.activityReportSessions(ctx, candidateWhere, candidateArgs)
+	// A range that has ended does not depend on the time of the request, so
+	// its report is kept per the rows it reads; a range in progress moves its
+	// effective end with every request and is always built. The key is taken
+	// before any read the report depends on, so a push that lands after it
+	// makes the next request miss.
+	var memoKey string
+	if !q.Partial {
+		memoKey, err = s.endedActivityReportKey(ctx, f, q, candidateWhere, candidateArgs, rangeStartUTC, rangeEndUTC)
+		if err != nil {
+			return activity.CandidateArtifacts{}, err
+		}
+		if kept, ok := s.activityReports.get(selection, memoKey); ok && memoKey != "" {
+			s.markActivityReportChecked(selection, fingerprint, memoKey)
+			clickReportProgress(onProgress, kept[0].done)
+			return kept[0].artifacts, nil
+		}
+	}
+	sessions, ids, versions, err := s.activityReportSessions(ctx, candidateWhere, candidateArgs)
 	if err != nil {
 		return activity.CandidateArtifacts{}, err
 	}
@@ -88,7 +127,7 @@ func (s *Store) BuildActivityReportArtifacts(
 	// set, so pair while usage loads instead of serializing the two stages.
 	pairCtx, cancelPairs := context.WithCancel(ctx)
 	defer cancelPairs()
-	pairs := s.startActivityReportPairs(pairCtx, candidates, ids, q)
+	pairs := s.startActivityReportPairs(pairCtx, candidates, ids, versions, q)
 	usage, pricing, err := s.activityReportUsage(
 		ctx, candidates, ids, rangeStartUTC, rangeEndUTC, q)
 	if err != nil {
@@ -138,11 +177,141 @@ func (s *Store) BuildActivityReportArtifacts(
 	artifacts.Sessions = artifacts.Report.BySession
 	artifacts.Report.BySession = []activity.SessionRow{}
 	artifacts.Report.Projects = export.ProjectMapForWire(projects)
-	clickReportProgress(onProgress, activity.Progress{
+	done := activity.Progress{
 		Phase: activity.ProgressDone, SessionsTotal: len(sessions),
 		SessionsProcessed: len(sessions), RowsProcessed: rowsProcessed,
-	})
+	}
+	clickReportProgress(onProgress, done)
+	if memoKey != "" {
+		entry := activityReportEntry{artifacts: artifacts, done: done}
+		s.activityReports.put(selection, memoKey, []activityReportEntry{entry})
+		s.markActivityReportChecked(selection, fingerprint, memoKey)
+	}
 	return artifacts, nil
+}
+
+// activityReportCheck records the key an ended range's kept report was
+// kept under; its memo version is the parts it was last checked against.
+type activityReportCheck struct {
+	key string
+}
+
+func (s *Store) markActivityReportChecked(selection, fingerprint, key string) {
+	s.activityChecks.put(selection, fingerprint, []activityReportCheck{{key: key}})
+}
+
+// checkedActivityReport returns the kept report for a selection checked
+// against exactly these parts. The parts name every row the report reads,
+// so the report's key cannot have changed.
+func (s *Store) checkedActivityReport(selection, fingerprint string) (activityReportEntry, bool) {
+	check, ok := s.activityChecks.get(selection, fingerprint)
+	if !ok {
+		return activityReportEntry{}, false
+	}
+	kept, ok := s.activityReports.get(selection, check[0].key)
+	if !ok {
+		return activityReportEntry{}, false
+	}
+	return kept[0], true
+}
+
+// endedActivityReportKey identifies everything the report of an ended
+// range reads, or is empty when the usage comes from the raw rows. The
+// candidate sessions name their pairing inputs by push version; the usage
+// rows in the range are named by the snapshots they were prepared from,
+// whichever session they belong to, so a push that touches no session with
+// usage in the range leaves the key, and the kept report, in place.
+func (s *Store) endedActivityReportKey(
+	ctx context.Context, f db.AnalyticsFilter, q activity.Query,
+	candidateWhere string, candidateArgs []any, lowerBound, upperBound string,
+) (string, error) {
+	// The candidate sessions are named by their push versions, which name
+	// the messages and tool events their pairing reads. Two independent
+	// hash sums and the count identify the set without listing it. The read
+	// depends on nothing below, so it runs while they do.
+	var candidates activityCandidateDigest
+	candidatesRead := make(chan error, 1)
+	go func() {
+		err := s.queryRowContext(ctx, `SELECT `+chActivityCandidateDigestSQL("s.id", "s.push_version")+`
+			FROM sessions s WHERE `+candidateWhere, candidateArgs...).Scan(&candidates.hash, &candidates.count)
+		if err != nil {
+			err = fmt.Errorf("reading activity candidate sessions: %w", err)
+		}
+		candidatesRead <- err
+	}()
+	key, err := s.endedActivityReportRowsKey(ctx, f, q, lowerBound, upperBound)
+	if err := errors.Join(err, <-candidatesRead); err != nil || key == "" {
+		return "", err
+	}
+	sum := sha256.Sum256(fmt.Appendf(nil, "%s|%s|%d", key, candidates.hash, candidates.count))
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// endedActivityReportRowsKey identifies everything but the candidate
+// sessions that an ended range's report reads; see endedActivityReportKey.
+func (s *Store) endedActivityReportRowsKey(
+	ctx context.Context, f db.AnalyticsFilter, q activity.Query, lowerBound, upperBound string,
+) (string, error) {
+	state, err := s.preparedUsageState(ctx)
+	if err != nil || !state.ready {
+		return "", err
+	}
+	pricing, err := s.pricingSnapshot(ctx)
+	if err != nil {
+		return "", err
+	}
+	identity, err := s.tablePartsFingerprint(ctx, []string{"source_project_identity_observations", "source_archives"})
+	if err != nil {
+		return "", err
+	}
+	stored, err := s.readActivityPrepared(ctx, state, lowerBound, upperBound)
+	if err != nil {
+		return "", err
+	}
+	storedHash, storedCount := stored.hash, stored.count
+	lower, err := time.Parse(time.RFC3339Nano, lowerBound)
+	if err != nil {
+		return "", fmt.Errorf("parsing activity range start: %w", err)
+	}
+	upper, err := time.Parse(time.RFC3339Nano, upperBound)
+	if err != nil {
+		return "", fmt.Errorf("parsing activity range end: %w", err)
+	}
+	var delta []string
+	for _, row := range state.deltaRows {
+		ts, ok := chDeltaRowTime(row[2])
+		if ok && !ts.Before(lower) && !ts.After(upper) {
+			delta = append(delta, fmt.Sprintf("%s@%v", row[0], row[23]))
+		}
+	}
+	slices.Sort(delta)
+	delta = slices.Compact(delta)
+	sum := sha256.Sum256(fmt.Appendf(nil, "%s|%s|%s|%s|%s|%s|%d|%q|%#v|%s|%s|%s|%s|%#v|%v",
+		chPreparedUsageComment(), state.pricingDigest, pricing.digest, pricing.catalog.digest, identity,
+		storedHash, storedCount, delta, f, q.Timezone,
+		q.RangeStart.UTC().Format(time.RFC3339Nano), q.RangeEnd.UTC().Format(time.RFC3339Nano),
+		q.EffectiveEnd.UTC().Format(time.RFC3339Nano), q.Bucket, q.GapCapSeconds))
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// chDeltaRowTime reads a prepared delta row's timestamp.
+func chDeltaRowTime(value any) (time.Time, bool) {
+	switch t := value.(type) {
+	case time.Time:
+		return t, true
+	case *time.Time:
+		if t != nil {
+			return *t, true
+		}
+	}
+	return time.Time{}, false
+}
+
+// activityReportEntry is a kept report of a range that has ended and the
+// final progress its build reported. Callers only read the artifacts.
+type activityReportEntry struct {
+	artifacts activity.CandidateArtifacts
+	done      activity.Progress
 }
 
 func clickReportProgress(callback activity.ProgressFunc, progress activity.Progress) {
@@ -168,9 +337,38 @@ func sortedBoolKeys(m map[string]bool) []string {
 	return out
 }
 
+// chSessionIDsDigest names a session set independent of its order.
+func chSessionIDsDigest(ids []string) string {
+	sorted := slices.Clone(ids)
+	slices.Sort(sorted)
+	sum := sha256.Sum256([]byte(strings.Join(sorted, "\n")))
+	return hex.EncodeToString(sum[:])
+}
+
+// activitySessionListing is one candidate listing kept per parts and predicate.
+type activitySessionListing struct {
+	sessions []activity.SessionMeta
+	ids      []string
+	versions map[string]uint64
+}
+
+// activityReportSessions lists the candidate sessions with the push version
+// each was read at, which names the messages and tool events it carries.
+// The listing reads sessions and terminal event snapshots only, so it is
+// kept per their parts and the predicate.
 func (s *Store) activityReportSessions(
 	ctx context.Context, where string, args []any,
-) ([]activity.SessionMeta, []string, error) {
+) ([]activity.SessionMeta, []string, map[string]uint64, error) {
+	fingerprint, err := s.tablePartsFingerprint(ctx, []string{"sessions", "terminal_event_snapshots"})
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	memoKey := fmt.Sprintf("%s|%#v", where, args)
+	if cached, ok := s.activitySessionListings.get(memoKey, fingerprint); ok && len(cached) == 1 {
+		listing := cached[0]
+		return slices.Clone(listing.sessions), slices.Clone(listing.ids), maps.Clone(listing.versions), nil
+	}
+	s.activitySessionQueries.Add(1)
 	query := `SELECT
 		s.id,
 		COALESCE(NULLIF(s.display_name, ''), NULLIF(s.session_name, ''), NULLIF(s.project, ''), s.id) AS display_name,
@@ -180,39 +378,46 @@ func (s *Store) activityReportSessions(
 		s.started_at,
 		s.ended_at,
 		s.is_automated AS is_automated,
-		s.relationship_type = 'subagent' AS is_subagent
+		s.relationship_type = 'subagent' AS is_subagent,
+		s.push_version
 	FROM sessions s
 	WHERE ` + where
 
 	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
-		return nil, nil, fmt.Errorf(
+		return nil, nil, nil, fmt.Errorf(
 			"querying clickhouse activity report sessions: %w", err)
 	}
 	defer rows.Close()
 
 	var sessions []activity.SessionMeta
 	var ids []string
+	versions := map[string]uint64{}
 	for rows.Next() {
 		var m activity.SessionMeta
 		var startedAt, endedAt any
+		var version uint64
 		if err := rows.Scan(
 			&m.SessionID, &m.Title, &m.Project, &m.Agent,
-			&m.Machine, &startedAt, &endedAt, &m.IsAutomated, &m.IsSubagent,
+			&m.Machine, &startedAt, &endedAt, &m.IsAutomated, &m.IsSubagent, &version,
 		); err != nil {
-			return nil, nil, fmt.Errorf(
+			return nil, nil, nil, fmt.Errorf(
 				"scanning clickhouse activity report session: %w", err)
 		}
 		m.StartedAt = formatDBTime(startedAt)
 		m.EndedAt = formatDBTime(endedAt)
 		sessions = append(sessions, m)
 		ids = append(ids, m.SessionID)
+		versions[m.SessionID] = version
 	}
 	if err := rows.Err(); err != nil {
-		return nil, nil, fmt.Errorf(
+		return nil, nil, nil, fmt.Errorf(
 			"iterating clickhouse activity report sessions: %w", err)
 	}
-	return sessions, ids, nil
+	s.activitySessionListings.put(memoKey, fingerprint, []activitySessionListing{{
+		sessions: slices.Clone(sessions), ids: slices.Clone(ids), versions: maps.Clone(versions),
+	}})
+	return sessions, ids, versions, nil
 }
 
 func clickActivityReportCandidateWhere(
@@ -231,6 +436,54 @@ func clickActivityReportCandidateWhere(
 	return where, append(args, rangeStartUTC, rangeStartUTC, rangeEndUTC)
 }
 
+// activityReportSelection names an ended range's report by everything the
+// request chose: the filter as the build applies it, and the range.
+func activityReportSelection(f db.AnalyticsFilter, q activity.Query) string {
+	f.IncludeSubagents = true
+	f.IncludeForks = true
+	return fmt.Sprintf("%#v|%s|%s|%s|%s|%#v|%v", f, q.Timezone,
+		q.RangeStart.UTC().Format(time.RFC3339Nano), q.RangeEnd.UTC().Format(time.RFC3339Nano),
+		q.EffectiveEnd.UTC().Format(time.RFC3339Nano), q.Bucket, q.GapCapSeconds)
+}
+
+// chActivityCandidateDigestSQL selects the digest that identifies a set of
+// candidate sessions by their push versions: two independent hash sums,
+// then the count.
+func chActivityCandidateDigestSQL(id, version string) string {
+	return "toString(sum(sipHash64(" + id + ", " + version + "))) || ':' || toString(sum(cityHash64(" +
+		id + ", " + version + "))), count()"
+}
+
+type activityCandidateDigest struct {
+	hash  string
+	count uint64
+}
+
+// readActivityPrepared reads the digest of the prepared snapshots the
+// range's stored usage rows come from, whichever session they belong to.
+func (s *Store) readActivityPrepared(
+	ctx context.Context, state preparedUsageState, lowerBound, upperBound string,
+) (activityCandidateDigest, error) {
+	query := `SELECT toString(sum(sipHash64(session_id, snapshot_revision))), count()
+		FROM (SELECT DISTINCT session_id, snapshot_revision FROM prepared_usage
+		WHERE ` + chPreparedUsageKeyColumn + ` >= ` + chTimestampSQL + ` AND ` + chPreparedUsageKeyColumn + ` <= ` + chTimestampSQL + `
+		AND ts >= ` + chTimestampSQL + ` AND ts <= ` + chTimestampSQL
+	if replaced := state.replaced(); len(replaced) > 0 {
+		table, err := usageSessionListTable("usage_replaced_sessions", replaced)
+		if err != nil {
+			return activityCandidateDigest{}, err
+		}
+		ctx = chdriver.Context(ctx, chdriver.WithExternalTable(table))
+		query += " AND session_id NOT IN (SELECT id FROM usage_replaced_sessions)"
+	}
+	var digest activityCandidateDigest
+	if err := s.queryRowContext(ctx, query+") SETTINGS final=0",
+		lowerBound, upperBound, lowerBound, upperBound).Scan(&digest.hash, &digest.count); err != nil {
+		return activityCandidateDigest{}, fmt.Errorf("reading activity usage snapshots: %w", err)
+	}
+	return digest, nil
+}
+
 // activityReportPairing holds pairing started ahead of its consumer.
 type activityReportPairing struct {
 	done     chan struct{}
@@ -246,7 +499,7 @@ type activityReportPairing struct {
 // the metadata the aggregator was given even if a push lands between the
 // two queries.
 func (s *Store) startActivityReportPairs(
-	ctx context.Context, candidates chSessionSet, ids []string, q activity.Query,
+	ctx context.Context, candidates chSessionSet, ids []string, versions map[string]uint64, q activity.Query,
 ) *activityReportPairing {
 	pairing := &activityReportPairing{done: make(chan struct{})}
 	if len(ids) == 0 {
@@ -255,7 +508,7 @@ func (s *Store) startActivityReportPairs(
 	}
 	go func() {
 		defer close(pairing.done)
-		pairing.paired, pairing.terminal, pairing.err = s.activityReportPairs(ctx, candidates, q)
+		pairing.paired, pairing.terminal, pairing.err = s.activityReportPairs(ctx, candidates, ids, versions, q)
 	}()
 	return pairing
 }
@@ -298,7 +551,7 @@ func (s *Store) ActivityReportCandidateSource(
 	ids []string, q activity.Query,
 ) activity.CandidateSource {
 	return func(ctx context.Context, yield func(activity.IntervalCandidate) error) error {
-		return s.startActivityReportPairs(ctx, chSessionSetFromIDs(ids), ids, q).candidateSource()(ctx, yield)
+		return s.startActivityReportPairs(ctx, chSessionSetFromIDs(ids), ids, nil, q).candidateSource()(ctx, yield)
 	}
 }
 
@@ -500,21 +753,34 @@ func (s *Store) activityReportUsage(
 		return out, &block, nil
 	}
 
-	query, args := clickActivityReportUsageQuery(candidates, lowerBound, upperBound)
 	state, err := s.preparedUsageState(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
-	if state.ready {
-		query, args = clickPreparedActivityUsageQuery(state, candidates, lowerBound, upperBound)
-	}
-	readCtx, err := withUsageDeltaTables(ctx, state)
+	// The rows depend on the usage source, the candidate set, and the
+	// range; the same key between pushes serves the kept rows unchanged.
+	fingerprint, err := s.usageReadFingerprint(ctx, state)
 	if err != nil {
 		return nil, nil, err
 	}
-	rowsAcc, err := s.scanActivityUsageRows(readCtx, query, args)
-	if err != nil {
-		return nil, nil, err
+	memoSlot := fmt.Sprintf("%s|%s|%s", lowerBound, upperBound, chSessionIDsDigest(ids))
+	memoVersion := fmt.Sprintf("%v|%s", state.ready, fingerprint)
+	rowsAcc, cached := s.activityUsageRows.get(memoSlot, memoVersion)
+	if !cached {
+		query, args := clickActivityReportUsageQuery(candidates, lowerBound, upperBound)
+		if state.ready {
+			query, args = clickPreparedActivityUsageQuery(state, candidates, lowerBound, upperBound)
+		}
+		readCtx, err := withUsageDeltaTables(ctx, state)
+		if err != nil {
+			return nil, nil, err
+		}
+		s.activityUsageQueries.Add(1)
+		rowsAcc, err = s.scanActivityUsageRows(readCtx, query, args)
+		if err != nil {
+			return nil, nil, err
+		}
+		s.activityUsageRows.put(memoSlot, memoVersion, rowsAcc)
 	}
 
 	// Keep the wide scanned rows in place while ordering their indexes.

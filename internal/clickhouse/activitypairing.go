@@ -5,8 +5,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"maps"
 	"slices"
+	"sync"
 	"time"
+
+	chdriver "github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/ClickHouse/clickhouse-go/v2/ext"
 
 	"go.kenn.io/agentsview/internal/activity"
 )
@@ -27,64 +32,194 @@ type clickOrderedCandidate struct {
 	callIndex, eventIndex int
 }
 
-func (s *Store) activityReportPairs(ctx context.Context, candidates chSessionSet, q activity.Query) ([]activity.IntervalCandidate, []activity.IntervalCandidate, error) {
+// activitySessionInputs are one session's pairing inputs: every message
+// in ordinal order and every terminal tool event with a timestamp in time
+// order. They depend only on the session's push version, not on the query.
+type activitySessionInputs struct {
+	pushVersion uint64
+	messages    []clickActivityMessage
+	events      []clickActivityTerminal
+}
+
+// activitySessionMemo keeps pairing inputs per session and push version, so
+// a report re-reads only the sessions a push changed.
+type activitySessionMemo struct {
+	mu      sync.Mutex
+	entries map[string]activitySessionInputs
+	order   []string
+}
+
+const activitySessionMemoLimit = 8000
+
+func (m *activitySessionMemo) lookup(id string, pushVersion uint64) (activitySessionInputs, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	entry, ok := m.entries[id]
+	if !ok || entry.pushVersion != pushVersion {
+		return activitySessionInputs{}, false
+	}
+	return entry, true
+}
+
+func (m *activitySessionMemo) store(id string, entry activitySessionInputs) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.entries == nil {
+		m.entries = map[string]activitySessionInputs{}
+	}
+	if _, ok := m.entries[id]; !ok {
+		m.order = append(m.order, id)
+		if len(m.order) > activitySessionMemoLimit {
+			delete(m.entries, m.order[0])
+			m.order = m.order[1:]
+		}
+	}
+	m.entries[id] = entry
+}
+
+// activityReportPairs pairs tool events with the messages that follow them
+// for the candidate sessions. versions gives each candidate's push version;
+// sessions memoized at that version are not read again. Without versions
+// every candidate is read through the candidates set.
+func (s *Store) activityReportPairs(
+	ctx context.Context, candidates chSessionSet, ids []string, versions map[string]uint64, q activity.Query,
+) ([]activity.IntervalCandidate, []activity.IntervalCandidate, error) {
 	lower := q.RangeStart.Add(-time.Duration(q.GapCapSeconds) * time.Second)
 	end := q.EffectiveEnd
-	var transcript []activity.ActivityEvent
+	inputs := make(map[string]activitySessionInputs, len(ids))
+	var uncached []string
+	for _, id := range ids {
+		if version, ok := versions[id]; ok {
+			if entry, hit := s.activitySessions.lookup(id, version); hit {
+				inputs[id] = entry
+				continue
+			}
+		}
+		uncached = append(uncached, id)
+	}
+	if versions != nil {
+		if len(uncached) == 0 {
+			return s.pairActivitySessions(inputs, ids, lower, end, q)
+		}
+		table, err := ext.NewTable("activity_uncached_ids", ext.Column("id", "String"))
+		if err != nil {
+			return nil, nil, fmt.Errorf("creating activity pairing table: %w", err)
+		}
+		for _, id := range uncached {
+			if err := table.Append(id); err != nil {
+				return nil, nil, fmt.Errorf("adding activity pairing session: %w", err)
+			}
+		}
+		ctx = chdriver.Context(ctx, chdriver.WithExternalTable(table))
+		candidates = chSessionSet{body: "SELECT id FROM activity_uncached_ids"}
+	}
+	read, err := s.readActivitySessionInputs(ctx, candidates)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, id := range uncached {
+		entry := read[id]
+		if version, ok := versions[id]; ok {
+			entry.pushVersion = version
+			s.activitySessions.store(id, entry)
+		}
+		inputs[id] = entry
+	}
+	if versions == nil {
+		maps.Copy(inputs, read)
+	}
+	return s.pairActivitySessions(inputs, ids, lower, end, q)
+}
+
+// readActivitySessionInputs reads every message and every timestamped
+// terminal tool event of the candidate sessions.
+func (s *Store) readActivitySessionInputs(ctx context.Context, candidates chSessionSet) (map[string]activitySessionInputs, error) {
+	s.activityInputQueries.Add(1)
 	ctes := "WITH candidate_sessions AS (" + candidates.body + ") "
 	const settings = " SETTINGS optimize_move_to_prewhere_if_final=1"
 	rows, err := s.queryContext(ctx, ctes+`SELECT session_id,ordinal,timestamp,role,model FROM messages
 		WHERE session_id IN (SELECT id FROM candidate_sessions) ORDER BY session_id,ordinal`+settings, candidates.args...)
 	if err != nil {
-		return nil, nil, fmt.Errorf("querying pairing messages: %w", err)
+		return nil, fmt.Errorf("querying pairing messages: %w", err)
 	}
 	defer rows.Close()
-	messages := make(map[string][]clickActivityMessage)
+	read := map[string]activitySessionInputs{}
 	for rows.Next() {
 		var id string
 		var m clickActivityMessage
 		if err := rows.Scan(&id, &m.ordinal, &m.ts, &m.role, &m.model); err != nil {
-			return nil, nil, fmt.Errorf("scanning pairing message: %w", err)
+			return nil, fmt.Errorf("scanning pairing message: %w", err)
 		}
-		messages[id] = append(messages[id], m)
-		if m.ts.Valid {
-			transcript = append(transcript, activity.ActivityEvent{SessionID: id, Ordinal: m.ordinal, Timestamp: m.ts.Time.UTC().Format(time.RFC3339Nano), Role: m.role, Model: m.model})
-		}
+		entry := read[id]
+		entry.messages = append(entry.messages, m)
+		read[id] = entry
 	}
 	if err := rows.Err(); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if err := rows.Close(); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	args := append(slices.Clone(candidates.args), lower.UTC().Format(time.RFC3339Nano))
 	rows, err = s.queryContext(ctx, ctes+`SELECT session_id,tool_call_message_ordinal,call_index,event_index,timestamp FROM tool_result_events
 		WHERE session_id IN (SELECT id FROM candidate_sessions) AND source='tool_execution' AND status IN ('completed','errored')
-		AND timestamp IS NOT NULL AND timestamp >= `+chTimestampSQL+` ORDER BY session_id,timestamp,call_index,event_index`+settings, args...)
+		AND timestamp IS NOT NULL ORDER BY session_id,timestamp,call_index,event_index`+settings, slices.Clone(candidates.args)...)
 	if err != nil {
-		return nil, nil, fmt.Errorf("querying pairing tool events: %w", err)
+		return nil, fmt.Errorf("querying pairing tool events: %w", err)
 	}
 	defer rows.Close()
-	events := make(map[string][]clickActivityTerminal)
 	for rows.Next() {
 		var id string
 		var e clickActivityTerminal
 		if err := rows.Scan(&id, &e.ordinal, &e.callIndex, &e.eventIndex, &e.ts); err != nil {
-			return nil, nil, fmt.Errorf("scanning pairing tool event: %w", err)
+			return nil, fmt.Errorf("scanning pairing tool event: %w", err)
 		}
-		events[id] = append(events[id], e)
+		entry := read[id]
+		entry.events = append(entry.events, e)
+		read[id] = entry
 	}
 	if err := rows.Err(); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	if err := rows.Close(); err != nil {
-		return nil, nil, err
+	return read, rows.Close()
+}
+
+// pairActivitySessions runs the pairing over the sessions' inputs. Events
+// before lower are left out here rather than by the read, so the inputs
+// stay query-independent.
+func (s *Store) pairActivitySessions(
+	inputs map[string]activitySessionInputs, ids []string, lower, end time.Time, q activity.Query,
+) ([]activity.IntervalCandidate, []activity.IntervalCandidate, error) {
+	// A DateTime64(6) comparison in the read saw the bound at microseconds.
+	lower = lower.Truncate(time.Microsecond)
+	var transcript []activity.ActivityEvent
+	messages := make(map[string][]clickActivityMessage, len(inputs))
+	events := make(map[string][]clickActivityTerminal, len(inputs))
+	for _, id := range ids {
+		entry, ok := inputs[id]
+		if !ok {
+			continue
+		}
+		for _, m := range entry.messages {
+			if m.ts.Valid {
+				transcript = append(transcript, activity.ActivityEvent{SessionID: id, Ordinal: m.ordinal, Timestamp: m.ts.Time.UTC().Format(time.RFC3339Nano), Role: m.role, Model: m.model})
+			}
+		}
+		var es []clickActivityTerminal
+		for _, e := range entry.events {
+			if !e.ts.Before(lower) {
+				es = append(es, e)
+			}
+		}
+		if len(es) == 0 {
+			continue
+		}
+		// The pairing annotates messages in place; work on a copy so the
+		// memoized rows stay shared and unchanged.
+		messages[id] = slices.Clone(entry.messages)
+		events[id] = es
 	}
 	var out []clickOrderedCandidate
 	for id, es := range events {
-		if err := ctx.Err(); err != nil {
-			return nil, nil, err
-		}
 		ms := messages[id]
 		if ms == nil {
 			// A session can carry tool events without stamped messages.

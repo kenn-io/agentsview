@@ -520,14 +520,9 @@ type pricingCache struct {
 // insert or merge on a pricing table changes the fingerprint, so a stale
 // snapshot is never served; a merge only costs one reload.
 func (s *Store) pricingSnapshot(ctx context.Context) (*pricingSnapshot, error) {
-	var fingerprint string
-	err := s.queryRowContext(ctx, `SELECT
-		hex(SHA256(toString(arraySort(groupArray((table, name, hash_of_all_files))))))
-		FROM system.parts
-		WHERE database = currentDatabase() AND active
-		AND table IN ('model_pricing', 'model_pricing_bands', 'genai_pricing')`).Scan(&fingerprint)
+	fingerprint, err := s.tablePartsFingerprint(ctx, []string{"model_pricing", "model_pricing_bands", "genai_pricing"})
 	if err != nil {
-		return nil, fmt.Errorf("reading clickhouse pricing parts: %w", err)
+		return nil, err
 	}
 	s.pricing.mu.Lock()
 	defer s.pricing.mu.Unlock()
