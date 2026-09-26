@@ -113,11 +113,16 @@ func (p *claudeProvider) joinClaudeSubagentContinuations(
 	if len(siblings) == 0 {
 		return results, false, nil
 	}
+	// headResult is captured inside the search loop rather than re-indexed as
+	// results[head] afterwards: the loop bound is what proves the index is in
+	// range, so reading the element here keeps that proof local.
 	head := -1
+	var headResult ParseResult
 	for i := range results {
 		if results[i].Session.File.Path == path &&
 			strings.HasPrefix(results[i].Session.ID, "agent-") {
 			head = i
+			headResult = results[i]
 			break
 		}
 	}
@@ -125,7 +130,7 @@ func (p *claudeProvider) joinClaudeSubagentContinuations(
 		return results, false, nil
 	}
 
-	members := []claudeSubagentChainMember{{path: path, result: results[head]}}
+	members := []claudeSubagentChainMember{{path: path, result: headResult}}
 	for _, sibling := range siblings {
 		if err := ctx.Err(); err != nil {
 			return nil, false, err
@@ -143,7 +148,7 @@ func (p *claudeProvider) joinClaudeSubagentContinuations(
 			continue
 		}
 		for _, siblingResult := range siblingResults {
-			if siblingResult.Session.ID != results[head].Session.ID {
+			if siblingResult.Session.ID != headResult.Session.ID {
 				// Entries of another session inside a companion transcript are
 				// not this session's to claim.
 				continue
@@ -167,7 +172,7 @@ func (p *claudeProvider) joinClaudeSubagentContinuations(
 		return strings.Compare(a.path, b.path)
 	})
 
-	joined := results[head]
+	joined := headResult
 	joined.Messages = nil
 	joined.Session.MessageCount = 0
 	joined.Session.UserMessageCount = 0
