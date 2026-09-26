@@ -45,7 +45,7 @@ type LiveActivityLookup func(
 type LiveActivitySync func(context.Context, []string) error
 
 // LiveActivityRecentSession is a stored session whose source may still be
-// growing. LastActivity is its latest recorded activity.
+// growing. LastActivity is its latest recorded activity; zero means unknown.
 type LiveActivityRecentSession struct {
 	FullID       string
 	Source       LiveActivitySource
@@ -165,10 +165,9 @@ func DBRecentSessionLookup(
 				source.StoredDevice = row.FileDevice.Int64
 				source.HasStoredIdentity = true
 			}
-			lastActivity, err := time.Parse(time.RFC3339Nano, row.EndedAt)
-			if err != nil {
-				lastActivity = since
-			}
+			// An unparseable ended_at leaves the zero time, which the poller
+			// treats as now.
+			lastActivity, _ := time.Parse(time.RFC3339Nano, row.EndedAt)
 			sessions = append(sessions, LiveActivityRecentSession{
 				FullID: row.ID, Source: source, LastActivity: lastActivity,
 			})
@@ -209,13 +208,18 @@ func (p *LiveActivityPoller) addRecentSessions(
 			if session.FullID == "" || session.Source.Path == "" {
 				continue
 			}
-			// A hot entry's stat is newer than the stored row's.
-			if _, hot := p.hot[session.FullID]; hot {
+			// A hot entry's stat is newer than the stored row's unless the
+			// session has moved to another file, such as a Codex revert rollout.
+			if entry, hot := p.hot[session.FullID]; hot &&
+				entry.source.Path == filepath.Clean(session.Source.Path) {
 				continue
 			}
+			lastActivity := session.LastActivity
+			if lastActivity.IsZero() {
+				lastActivity = now
+			}
 			p.setHot(
-				session.FullID, targetIndex, session.Source,
-				session.LastActivity,
+				session.FullID, targetIndex, session.Source, lastActivity,
 			)
 		}
 	}
