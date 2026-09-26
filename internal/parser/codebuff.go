@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -62,7 +63,7 @@ func parseCodebuffSession(
 	sessionID := filepath.Base(dir)
 	sessionDate := parseCodebuffSessionDate(sessionID)
 
-	msgs, startedAt, endedAt, err := parseCodebuffMessages(data, sessionDate)
+	msgs, turnFacts, startedAt, endedAt, err := parseCodebuffMessages(data, sessionDate)
 	if err != nil {
 		return nil, nil, fmt.Errorf("parse chat-messages %s: %w", chatMessagesPath, err)
 	}
@@ -226,47 +227,25 @@ func parseCodebuffSession(
 	// the true peak, so we cannot reliably derive PeakContextTokens from
 	// this value. Leave peak context unavailable.
 
-	// Emit usage event for reported credits. The actual LLM is
-	// unknown (selected server-side, can change mid-session), so we
-	// attribute the cost to the agent template (e.g. "base2-deepseek",
-	// "base2-free-minimax-m3") rather than the agent name. The
-	// template is granular enough to bucket similar sessions
-	// separately in the daily model breakdown of the usage report
-	// while remaining non-empty so the ue.model != '' eligibility
-	// filter accepts the row. Skip emitting when the template is
-	// missing so sessions with empty agentType don't surface as
-	// empty-model rows. Freebuff vs codebuff distinction is kept in
-	// the agent breakdown via sess.Agent. One codebuff credit =
-	// $0.01 = 10_000 microdollars, rounded to the nearest microdollar
-	// with halves away from zero.
-	if rs.CreditsUsed > 0 && rs.AgentType != "" {
-		cost, costErr := money.FromFloatDollars(rs.CreditsUsed * 0.01)
-		if costErr != nil {
-			cost = money.Money{}
-		}
-		// Determine occurred_at: prefer message timestamps, then fall
-		// back to the session directory timestamp, then source mtime.
-		occurredAt := startedAt
-		if !endedAt.IsZero() {
-			occurredAt = endedAt
-		}
-		if occurredAt.IsZero() && !sessionDate.IsZero() {
-			occurredAt = sessionDate
-		}
-		if occurredAt.IsZero() && fileInfo.Mtime > 0 {
-			occurredAt = time.Unix(0, fileInfo.Mtime)
-		}
-		sess.UsageEvents = []ParsedUsageEvent{{
-			SessionID:  fullID,
-			Source:     "session",
-			Model:      rs.AgentType,
-			OccurredAt: occurredAt.Format(time.RFC3339Nano),
-			Cost:       &cost,
-			CostStatus: "reported",
-			CostSource: "session",
-			DedupKey:   "session:" + fullID,
-		}}
+	// Determine occurred_at: prefer message timestamps, then fall
+	// back to the session directory timestamp, then source mtime.
+	occurredAt := startedAt
+	if !endedAt.IsZero() {
+		occurredAt = endedAt
 	}
+	if occurredAt.IsZero() && !sessionDate.IsZero() {
+		occurredAt = sessionDate
+	}
+	if occurredAt.IsZero() && fileInfo.Mtime > 0 {
+		occurredAt = time.Unix(0, fileInfo.Mtime)
+	}
+	runStateRaw := gjson.Parse("")
+	if runStateData, err := os.ReadFile(filepath.Join(dir, codebuffRunStateName)); err == nil {
+		runStateRaw = gjson.ParseBytes(runStateData)
+	}
+	sess.UsageEvents = codebuffUsageEvents(
+		fullID, turnFacts, rs, runStateRaw, occurredAt,
+	)
 
 	// Termination classification uses the shared classifier with an empty
 	// stop reason: the format carries no assistant stop-reason signal, so
@@ -545,6 +524,192 @@ func readCodebuffChatMeta(
 	return m
 }
 
+// codebuffTurnModel resolves the model one billed turn ran, in this order:
+//
+//  1. metadata.runState.inference.model when inference.source == "byok" --
+//     the only place a concrete model string is recorded (BYOK runs pin it
+//     for resumed conversations; hosted runs carry {source:'codebuff'} and
+//     no model);
+//  2. the message runState's agentTemplates[agentType].model -- the
+//     template definition the server executed for that turn;
+//  3. the same two lookups against the standalone run-state.json, which
+//     feeds the legacy fallback path;
+//  4. the run-state agentType itself (a template id, what AgentsView has
+//     always stored for Codebuff).
+//
+// contextTokenBaseline.model and contextTokenCount are deliberately not
+// consulted: they anchor context occupancy, not the model the turn billed.
+// An empty result means unresolvable, and callers must emit no event for
+// that turn -- the usage report filters on a non-empty model, so an
+// empty-model row would silently drop the cost everywhere.
+func codebuffTurnModel(
+	msgRunState gjson.Result, fileRunState gjson.Result, agentType string,
+) string {
+	for _, rs := range []gjson.Result{msgRunState, fileRunState} {
+		if !rs.Exists() {
+			continue
+		}
+		inference := rs.Get(
+			"sessionState.mainAgentState.inference")
+		if !inference.Exists() {
+			inference = rs.Get("inference")
+		}
+		if inference.Get("source").Str == "byok" &&
+			inference.Get("model").Str != "" {
+			return inference.Get("model").Str
+		}
+		agentTypeHere := rs.Get(
+			"sessionState.mainAgentState.agentType").Str
+		if agentTypeHere == "" {
+			agentTypeHere = rs.Get("agentType").Str
+		}
+		if model := rs.Get(
+			"sessionState.fileContext.agentTemplates." + agentTypeHere + ".model",
+		).Str; model != "" {
+			return model
+		}
+		if model := rs.Get(
+			"fileContext.agentTemplates." + agentTypeHere + ".model",
+		).Str; model != "" {
+			return model
+		}
+		if agentTypeHere != "" {
+			return agentTypeHere
+		}
+	}
+	return agentType
+}
+
+// codebuffTurnCost converts one message's credits number into a reported
+// cost. Upstream writes a JSON number of credits; using the raw decimal
+// text keeps the value's original representation out of float rounding.
+// One credit is one cent ($0.01 = 10_000 microdollars), matching the
+// money.ParseScaledDecimal shape the Grok parser uses for its own
+// upstream-supplied cost. A negative value fails closed (ParseScaledDecimal
+// accepts a sign), and any parse error means no event rather than a $0.00
+// row. A nil result means "emit nothing for this turn".
+func codebuffTurnCost(creditsRaw string) *money.Money {
+	if creditsRaw == "" || strings.HasPrefix(creditsRaw, "-") {
+		return nil
+	}
+	microdollars, err := money.ParseScaledDecimal(creditsRaw+"e-2", 6)
+	if err != nil {
+		return nil
+	}
+	cost := money.Money{Microdollars: microdollars}
+	return &cost
+}
+
+// codebuffUsageEvents builds the session's reported-cost rows.
+//
+// Per-turn path: every AI message carrying a credits field greater than
+// zero emits one event bound to that message's ordinal, so a multi-prompt
+// session attributes each prompt's spend to the prompt that incurred it
+// under the model that turn ran.
+//
+// Zero-credit turn: a present credits of exactly zero is a real, unbilled
+// turn. It emits nothing but still counts as "the transcript carries
+// credits", which is what suppresses the legacy fallback below.
+//
+// Partial final turn: if any message carried credits but the last AI
+// message did not, no residual event is added from run-state's creditsUsed.
+// Upstream resets that counter to zero at each prompt and writes it back
+// only on completion, so an in-flight prompt leaves a partial total there;
+// adding it as a separate row would double count spend the transcript
+// already recorded. Deliberately dropping a present number is the one
+// non-obvious call here: the alternative double counts.
+//
+// Legacy path: only when no message in the transcript carried a credits
+// field at all, one event is emitted from run-state creditsUsed with the
+// old dedup key, keeping pre-credits archives on their existing row count.
+// When the model is unresolvable on either path, no event is emitted: the
+// usage report filters on a non-empty model (ue.model != ” in every read
+// path), so an empty-model row would lose the cost silently instead of
+// surfacing it.
+func codebuffUsageEvents(
+	sessionID string,
+	turns []codebuffTurnFact,
+	rs codebuffRunState,
+	fileRunState gjson.Result,
+	fallbackOccurredAt time.Time,
+) []ParsedUsageEvent {
+	var events []ParsedUsageEvent
+
+	carryCredits := false
+	for _, turn := range turns {
+		carryCredits = true
+		if turn.Credits <= 0 {
+			// Present zero: real unbilled turn, no row.
+			continue
+		}
+		model := codebuffTurnModel(turn.RunState, fileRunState, rs.AgentType)
+		if model == "" {
+			continue
+		}
+		cost := codebuffTurnCost(turn.CreditsRaw)
+		if cost == nil {
+			continue
+		}
+		ordinal := turn.Ordinal
+		events = append(events, ParsedUsageEvent{
+			SessionID:      sessionID,
+			MessageOrdinal: &ordinal,
+			Source:         "session",
+			Model:          model,
+			OccurredAt:     turn.Timestamp.Format(time.RFC3339Nano),
+			Cost:           cost,
+			CostStatus:     "reported",
+			CostSource:     "session",
+			DedupKey:       "turn:" + sessionID + ":" + codebuffTurnKey(turn),
+		})
+	}
+
+	if len(events) > 0 {
+		sort.Slice(events, func(i, j int) bool {
+			if events[i].OccurredAt != events[j].OccurredAt {
+				return events[i].OccurredAt < events[j].OccurredAt
+			}
+			return events[i].DedupKey < events[j].DedupKey
+		})
+		return events
+	}
+
+	// Legacy fallback: no message carried a credits field (or none parsed),
+	// so the run-state total is the only accounting signal. creditsUsed is
+	// the last prompt's spend, but for pre-credits archives it is the only
+	// number available and matches today's single-row behavior.
+	if !carryCredits && rs.CreditsUsed > 0 {
+		if model := codebuffTurnModel(gjson.Parse(""), fileRunState, rs.AgentType); model != "" {
+			creditsRaw := strconv.FormatFloat(
+				rs.CreditsUsed, 'f', -1, 64,
+			)
+			if cost := codebuffTurnCost(creditsRaw); cost != nil {
+				events = append(events, ParsedUsageEvent{
+					SessionID:  sessionID,
+					Source:     "session",
+					Model:      model,
+					OccurredAt: fallbackOccurredAt.Format(time.RFC3339Nano),
+					Cost:       cost,
+					CostStatus: "reported",
+					CostSource: "session",
+					DedupKey:   "session:" + sessionID,
+				})
+			}
+		}
+	}
+	return events
+}
+
+// codebuffTurnKey derives the stable per-turn identity for the dedup key.
+// The message's own id is preferred because it is stable across reparses;
+// the ordinal is the fallback for messages that never carried an id.
+func codebuffTurnKey(turn codebuffTurnFact) string {
+	if turn.MessageID != "" {
+		return turn.MessageID
+	}
+	return strconv.Itoa(turn.Ordinal)
+}
+
 // IsCodebuffTimestamp reports whether s matches one of the
 // on-disk session-directory timestamp shapes that parseCodebuffSession
 // treats as the bare session ID suffix of the canonical
@@ -592,21 +757,55 @@ func parseCodebuffSessionDate(sessionID string) time.Time {
 	return time.Time{}
 }
 
-// parseCodebuffMessages parses chat-messages.json data into ParsedMessages.
+// codebuffTurnFact carries one AI message's billing facts out of the
+// transcript walk. Upstream resets creditsUsed at every user prompt and
+// stamps each completed AI message with that prompt's credits
+// (cli/src/hooks/helpers/send-message.ts) plus its runState
+// (metadata.runState, "RunState stored after completion"), so a completed
+// AI message is the unit of billing. Absent, zero, and positive credits
+// are three distinct states: gjson Exists() separates absent from 0, and
+// zero is a real unbilled turn that must still suppress the legacy
+// run-state fallback. RunState keeps the raw gjson result so the model
+// resolution in parseCodebuffSession can dig inference/agentTemplates
+// without the walk knowing their shapes.
+type codebuffTurnFact struct {
+	MessageID      string
+	Ordinal        int
+	Timestamp      time.Time
+	CreditsPresent bool
+	Credits        float64
+	CreditsRaw     string
+	RunState       gjson.Result
+}
+
+// codebuffMessageCredits extracts the message's credits field, reporting
+// presence separately from the value so a recorded zero stays
+// distinguishable from a message that never carried the field.
+func codebuffMessageCredits(msg gjson.Result) (float64, bool) {
+	v := msg.Get("credits")
+	if !v.Exists() {
+		return 0, false
+	}
+	return v.Float(), true
+}
+
+// parseCodebuffMessages parses chat-messages.json data into ParsedMessages
+// plus one codebuffTurnFact per AI message that carries a credits field.
 // sessionDate provides the date context for time-only timestamps. Message
 // Model stays empty: the LLM is selected server-side per agentType template
-// and is not persisted in the on-disk format.
+// and is not persisted as a plain message field.
 func parseCodebuffMessages(
 	data []byte, sessionDate time.Time,
-) ([]ParsedMessage, time.Time, time.Time, error) {
+) ([]ParsedMessage, []codebuffTurnFact, time.Time, time.Time, error) {
 	root := gjson.ParseBytes(data)
 	if !root.IsArray() {
-		return nil, time.Time{}, time.Time{},
+		return nil, nil, time.Time{}, time.Time{},
 			errors.New("chat-messages.json root is not an array")
 	}
 
 	var (
 		messages  []ParsedMessage
+		turnFacts []codebuffTurnFact
 		startedAt time.Time
 		endedAt   time.Time
 		ordinal   int
@@ -714,8 +913,23 @@ func parseCodebuffMessages(
 			ordinal++
 
 		case "ai":
+			firstOrdinal := ordinal
 			parsed := parseCodebuffAIMessage(msg, ts)
 			if len(parsed) == 0 {
+				// An AI message with no displayable content still counts as a
+				// turn boundary for billing: its credits field describes spend
+				// even when nothing rendered. Record the fact before skipping.
+				if credits, present := codebuffMessageCredits(msg); present {
+					turnFacts = append(turnFacts, codebuffTurnFact{
+						MessageID:      msg.Get("id").Str,
+						Ordinal:        firstOrdinal,
+						Timestamp:      ts,
+						CreditsPresent: true,
+						Credits:        credits,
+						CreditsRaw:     msg.Get("credits").Raw,
+						RunState:       msg.Get("metadata.runState"),
+					})
+				}
 				return true
 			}
 			for i := range parsed {
@@ -723,6 +937,17 @@ func parseCodebuffMessages(
 				ordinal++
 			}
 			messages = append(messages, parsed...)
+			if credits, present := codebuffMessageCredits(msg); present {
+				turnFacts = append(turnFacts, codebuffTurnFact{
+					MessageID:      msg.Get("id").Str,
+					Ordinal:        firstOrdinal,
+					Timestamp:      ts,
+					CreditsPresent: true,
+					Credits:        credits,
+					CreditsRaw:     msg.Get("credits").Raw,
+					RunState:       msg.Get("metadata.runState"),
+				})
+			}
 
 		case "error":
 			// Error messages from the upstream CLI (API failures, rate
@@ -746,7 +971,7 @@ func parseCodebuffMessages(
 		return true
 	})
 
-	return messages, startedAt, endedAt, nil
+	return messages, turnFacts, startedAt, endedAt, nil
 }
 
 // parseCodebuffAIMessage parses an AI-variant message into one or more

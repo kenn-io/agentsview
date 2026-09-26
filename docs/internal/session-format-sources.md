@@ -3289,21 +3289,31 @@ schemas keep their existing ordering behavior.
   for the sidecar schema and its size/mtime validation rule. Freebuff shares
   the same layout and is distinguished by the `agentType` field in
   `run-state.json`.
-- **Usage and cost:** The `contextTokenCount` field in `run-state.json` is
-  context occupancy -- upstream documents it as the latest model call's
-  reported tokens adjusted with length estimates, never accumulated or billed
-  usage -- so it is not a peak or a billing figure. The `creditsUsed` and
-  `directCreditsUsed` fields provide session-level billing totals (1 credit =
-  $0.01). Each transcript message can carry per-message `credits`, and a
-  completed transcript stores a per-message `metadata.runState` snapshot; the
-  parser does not yet consume either. The `agentType` field records the agent
-  template name (e.g. `base2-deepseek`, `base2-free-mimo`), which encodes the
-  model family but is not the actual LLM model -- the real model is selected
-  server-side and can change mid-session; mid-session model switches are not
-  detectable from the on-disk format. Per-message token breakdown
-  (input/output/cache) is not available; only context occupancy size and
-  billing credits are persisted. Freebuff (free tier) has no credits -- it is
-  ad-supported with daily session limits.
+- **Usage and cost:** Upstream resets `creditsUsed` to zero at the start of
+  every user prompt and writes the prompt's total back into `run-state.json`
+  only on completion, so that file holds the last prompt's spend, never a
+  session total. Each completed AI message carries its own prompt's spend as
+  a `credits` field plus a `metadata.runState` snapshot of the run state as
+  of that completion; the parser turns each positive per-message `credits`
+  into its own reported-cost event (1 credit = $0.01) bound to that message,
+  and falls back to the single `creditsUsed` row only for transcripts that
+  carry no per-message credits at all. The model a turn ran resolves in this
+  order: a BYOK run's `metadata.runState.inference.model` (hosted runs carry
+  `{source: 'codebuff'}` and no model), then the run state's
+  `fileContext.agentTemplates[agentType].model`, then the standalone
+  `run-state.json` equivalents, then the `agentType` template id itself;
+  `contextTokenBaseline.model` is a context-occupancy anchor and is never
+  used for billing attribution. The `contextTokenCount` field in
+  `run-state.json` is context occupancy -- upstream documents it as the
+  latest model call's reported tokens adjusted with length estimates, never
+  accumulated or billed usage -- so it is not a peak or a billing figure.
+  The `agentType` field records the agent template name (e.g.
+  `base2-deepseek`, `base2-free-mimo`), which encodes the model family but
+  is not the actual LLM model; the real model is selected server-side and
+  can change mid-session. Per-message token breakdown (input/output/cache)
+  is not available; only context occupancy size and billing credits are
+  persisted. Freebuff (free tier) has no credits -- it is ad-supported with
+  daily session limits.
 - **Agentsview:** `internal/parser/codebuff.go` and
   `internal/parser/codebuff_provider.go`; single-file provider with JSON array
   parsing. The parser reads `chat-messages.json`, `run-state.json`, and

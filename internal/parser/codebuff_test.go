@@ -1588,6 +1588,355 @@ func TestParseCodebuffSession_ErrorVariant(t *testing.T) {
 	assert.Contains(t, msgs[1].Content, "Rate limit exceeded")
 }
 
+// TestParseCodebuffSessionTurnCostTable pins the per-turn cost contract:
+// each AI message carrying a positive credits field emits exactly one
+// reported-cost event bound to that message, under the model the turn ran;
+// present-zero credits emit nothing but suppress the legacy fallback; a
+// partial final turn emits no residual; negative or unparsable credits
+// produce no row; and transcripts with no credits anywhere keep today's
+// single legacy row. See codebuffUsageEvents for the reasoning behind the
+// partial-final-turn suppression.
+func TestParseCodebuffSessionTurnCostTable(t *testing.T) {
+	baseRunState := `{
+		"sessionState": {
+			"mainAgentState": {"agentType": "base2-deepseek"}
+		}
+	}`
+
+	// msg builds one AI message with an optional credits value. creditsRaw
+	// is injected verbatim so absent/zero/negative/string states are all
+	// expressible. A text block is included so the message emits its own
+	// ParsedMessage row and the ordinal binding is observable.
+	msg := func(id string, creditsRaw string) string {
+		credits := ""
+		if creditsRaw != "" {
+			credits = `"credits":` + creditsRaw + ","
+		}
+		return `{
+			"id": "` + id + `",
+			"variant": "ai",
+			"content": "done for ` + id + `",
+			"timestamp": "03:04 PM",
+			` + credits + `"blocks": [
+				{"type": "text", "textType": "text", "content": "done for ` + id + `"}
+			]
+		}`
+	}
+
+	// session runs parseCodebuffSession over the given transcript.
+	session := func(t *testing.T, chatMessages, runState string) *ParsedSession {
+		t.Helper()
+		dir := codebuffTestSession(t, chatMessages, runState, "")
+		sess, _, err := parseCodebuffSession(dir, "p", "local")
+		require.NoError(t, err)
+		require.NotNil(t, sess)
+		return sess
+	}
+
+	total := func(t *testing.T, sess *ParsedSession) int64 {
+		t.Helper()
+		var sum int64
+		for _, evt := range sess.UsageEvents {
+			require.NotNil(t, evt.Cost,
+				"every emitted event carries a reported cost")
+			sum += evt.Cost.Microdollars
+		}
+		return sum
+	}
+
+	t.Run("one billed turn", func(t *testing.T) {
+		sess := session(t, "["+msg("ai-1", "150")+"]", baseRunState)
+		require.Len(t, sess.UsageEvents, 1)
+		evt := sess.UsageEvents[0]
+		require.NotNil(t, evt.Cost)
+		assert.Equal(t, int64(1_500_000), evt.Cost.Microdollars,
+			"150 credits = $1.50 = 1_500_000 microdollars")
+		assert.Equal(t, "base2-deepseek", evt.Model)
+		assert.Equal(t, "turn:codebuff:p:001:ai-1", evt.DedupKey)
+		require.NotNil(t, evt.MessageOrdinal)
+		assert.GreaterOrEqual(t, *evt.MessageOrdinal, 0)
+	})
+
+	t.Run("decimal credits keep the decimal path", func(t *testing.T) {
+		sess := session(t, "["+msg("ai-1", "0.5")+"]", baseRunState)
+		require.Len(t, sess.UsageEvents, 1)
+		require.NotNil(t, sess.UsageEvents[0].Cost)
+		assert.Equal(t, int64(5_000), sess.UsageEvents[0].Cost.Microdollars,
+			"0.5 credits = $0.005 = 5_000 microdollars via the raw "+
+				"decimal text, not float math")
+	})
+
+	t.Run("three billed turns ignore run-state total", func(t *testing.T) {
+		runState := `{
+			"sessionState": {
+				"mainAgentState": {"agentType": "base2-deepseek", "creditsUsed": 999}
+			}
+		}`
+		sess := session(t,
+			"["+msg("ai-1", "1")+","+msg("ai-2", "1")+","+msg("ai-3", "1")+"]",
+			runState)
+		require.Len(t, sess.UsageEvents, 3,
+			"three prompts, three rows")
+		assert.Equal(t, int64(30_000), total(t, sess))
+		keys := map[string]bool{}
+		ordinals := map[int]bool{}
+		for _, evt := range sess.UsageEvents {
+			keys[evt.DedupKey] = true
+			require.NotNil(t, evt.MessageOrdinal)
+			ordinals[*evt.MessageOrdinal] = true
+		}
+		assert.Len(t, keys, 3, "dedup keys must be distinct per turn")
+		assert.Len(t, ordinals, 3, "each row binds to its own message ordinal")
+		assert.NotContains(t, keys, "session:codebuff:p:001",
+			"the run-state total must not leak in as a session row")
+	})
+
+	t.Run("mixed transcript emits only billed turns", func(t *testing.T) {
+		sess := session(t,
+			"["+msg("ai-1", "10")+","+msg("ai-2", "")+","+msg("ai-3", "10")+"]",
+			baseRunState)
+		require.Len(t, sess.UsageEvents, 2,
+			"an AI message without a credits field is not a billed turn")
+		assert.Equal(t, int64(200_000), total(t, sess))
+	})
+
+	t.Run("partial final turn emits no residual", func(t *testing.T) {
+		runState := `{
+			"sessionState": {
+				"mainAgentState": {"agentType": "base2-deepseek", "creditsUsed": 33}
+			}
+		}`
+		sess := session(t,
+			"["+msg("ai-1", "10")+","+msg("ai-2", "10")+","+msg("ai-3", "")+"]",
+			runState)
+		require.Len(t, sess.UsageEvents, 2,
+			"creditsUsed after an unbilled final message is an in-flight "+
+				"prompt's partial total; adding it would double count")
+		assert.Equal(t, int64(200_000), total(t, sess))
+		for _, evt := range sess.UsageEvents {
+			assert.NotEqual(t, "session:codebuff:p:001", evt.DedupKey)
+		}
+	})
+
+	t.Run("present zero suppresses legacy fallback", func(t *testing.T) {
+		runState := `{
+			"sessionState": {
+				"mainAgentState": {"agentType": "base2-deepseek", "creditsUsed": 42}
+			}
+		}`
+		sess := session(t, "["+msg("ai-1", "0")+"]", runState)
+		assert.Empty(t, sess.UsageEvents,
+			"a recorded zero is a real unbilled turn and must not fall "+
+				"back to the run-state total")
+	})
+
+	t.Run("legacy transcript keeps single session row", func(t *testing.T) {
+		runState := `{
+			"sessionState": {
+				"mainAgentState": {"agentType": "base2-deepseek", "creditsUsed": 42}
+			}
+		}`
+		sess := session(t,
+			`[{"id":"user-1","variant":"user","content":"hi","timestamp":"03:04 PM"}]`,
+			runState)
+		require.Len(t, sess.UsageEvents, 1,
+			"no credits anywhere keeps the pre-credits single-row shape")
+		evt := sess.UsageEvents[0]
+		require.NotNil(t, evt.Cost)
+		assert.Equal(t, int64(420_000), evt.Cost.Microdollars)
+		assert.Equal(t, "session:codebuff:p:001", evt.DedupKey,
+			"the legacy dedup key keeps existing archives stable")
+		assert.Nil(t, evt.MessageOrdinal,
+			"a session-level row binds to no message")
+	})
+
+	t.Run("legacy zero credits emits nothing", func(t *testing.T) {
+		runState := `{
+			"sessionState": {
+				"mainAgentState": {"agentType": "base2-deepseek", "creditsUsed": 0}
+			}
+		}`
+		sess := session(t,
+			`[{"id":"user-1","variant":"user","content":"hi","timestamp":"03:04 PM"}]`,
+			runState)
+		assert.Empty(t, sess.UsageEvents)
+	})
+
+	t.Run("negative credits emit no row", func(t *testing.T) {
+		sess := session(t, "["+msg("ai-1", "-5")+"]", baseRunState)
+		assert.Empty(t, sess.UsageEvents,
+			"a negative credit value must not produce a negative or "+
+				"zero-cost row")
+	})
+
+	t.Run("non-numeric credits emit no row", func(t *testing.T) {
+		sess := session(t, "["+msg("ai-1", `"abc"`)+"]", baseRunState)
+		assert.Empty(t, sess.UsageEvents)
+	})
+
+	t.Run("unresolvable model emits nothing on per-turn path", func(t *testing.T) {
+		emptyRunState := `{
+			"sessionState": {
+				"mainAgentState": {"agentType": ""}
+			}
+		}`
+		sess := session(t, "["+msg("ai-1", "150")+"]", emptyRunState)
+		assert.Empty(t, sess.UsageEvents,
+			"an empty-model row would be dropped by every read path's "+
+				"model filter; emitting nothing is the honest outcome")
+	})
+
+	t.Run("unresolvable model emits nothing on legacy path", func(t *testing.T) {
+		runState := `{
+			"sessionState": {
+				"mainAgentState": {"agentType": "", "creditsUsed": 42}
+			}
+		}`
+		sess := session(t,
+			`[{"id":"user-1","variant":"user","content":"hi","timestamp":"03:04 PM"}]`,
+			runState)
+		assert.Empty(t, sess.UsageEvents,
+			"today's rs.AgentType guard, pinned")
+	})
+
+	t.Run("every emitted event has a model", func(t *testing.T) {
+		sess := session(t,
+			"["+msg("ai-1", "10")+","+msg("ai-2", "20")+"]", baseRunState)
+		require.Len(t, sess.UsageEvents, 2)
+		for _, evt := range sess.UsageEvents {
+			assert.NotEmpty(t, evt.Model)
+			assert.Equal(t, "session", evt.Source)
+			assert.Equal(t, "reported", evt.CostStatus)
+			assert.Equal(t, "session", evt.CostSource)
+		}
+	})
+}
+
+// TestParseCodebuffSessionTurnModelResolution pins the model precedence for
+// one billed turn: BYOK inference.model first, then the message runState's
+// agentTemplates lookup, then the standalone run-state.json, then the
+// template id itself. contextTokenBaseline.model is never consulted.
+func TestParseCodebuffSessionTurnModelResolution(t *testing.T) {
+	msg := func(metadata string) string {
+		meta := ""
+		if metadata != "" {
+			meta = `"metadata": {"runState": ` + metadata + `},`
+		}
+		return `{
+			"id": "ai-1",
+			"variant": "ai",
+			"content": "done",
+			"timestamp": "03:04 PM",
+			"credits": 10,
+			` + meta + `"blocks": []
+		}`
+	}
+	session := func(t *testing.T, chatMessages, runState string) *ParsedSession {
+		t.Helper()
+		dir := codebuffTestSession(t, chatMessages, runState, "")
+		sess, _, err := parseCodebuffSession(dir, "p", "local")
+		require.NoError(t, err)
+		require.NotNil(t, sess)
+		return sess
+	}
+
+	t.Run("byok inference model wins", func(t *testing.T) {
+		meta := `{
+			"sessionState": {
+				"mainAgentState": {
+					"agentType": "base2-deepseek",
+					"inference": {"source": "byok", "model": "claude-sonnet-4"}
+				}
+			}
+		}`
+		sess := session(t, "["+msg(meta)+"]",
+			`{"sessionState":{"mainAgentState":{"agentType":"base2-deepseek"}}}`)
+		require.Len(t, sess.UsageEvents, 1)
+		assert.Equal(t, "claude-sonnet-4", sess.UsageEvents[0].Model)
+	})
+
+	t.Run("hosted run resolves through agentTemplates", func(t *testing.T) {
+		meta := `{
+			"sessionState": {
+				"mainAgentState": {
+					"agentType": "base2-deepseek",
+					"inference": {"source": "codebuff"}
+				},
+				"fileContext": {
+					"agentTemplates": {
+						"base2-deepseek": {"model": "deepseek-v3"}
+					}
+				}
+			}
+		}`
+		sess := session(t, "["+msg(meta)+"]",
+			`{"sessionState":{"mainAgentState":{"agentType":"base2-deepseek"}}}`)
+		require.Len(t, sess.UsageEvents, 1)
+		assert.Equal(t, "deepseek-v3", sess.UsageEvents[0].Model,
+			"the template definition the server executed names the model")
+	})
+
+	t.Run("no message metadata falls back to run-state.json", func(t *testing.T) {
+		runState := `{
+			"sessionState": {
+				"mainAgentState": {"agentType": "base2-deepseek"},
+				"fileContext": {
+					"agentTemplates": {
+						"base2-deepseek": {"model": "deepseek-chat"}
+					}
+				}
+			}
+		}`
+		sess := session(t, "["+msg("")+"]", runState)
+		require.Len(t, sess.UsageEvents, 1)
+		assert.Equal(t, "deepseek-chat", sess.UsageEvents[0].Model)
+	})
+
+	t.Run("unresolvable everywhere falls back to template id", func(t *testing.T) {
+		sess := session(t, "["+msg("")+"]",
+			`{"sessionState":{"mainAgentState":{"agentType":"base2-deepseek"}}}`)
+		require.Len(t, sess.UsageEvents, 1)
+		assert.Equal(t, "base2-deepseek", sess.UsageEvents[0].Model,
+			"the template id keeps the row eligible and buckets like today")
+	})
+
+	t.Run("contextTokenBaseline.model is never used", func(t *testing.T) {
+		runState := `{
+			"sessionState": {
+				"mainAgentState": {
+					"agentType": "base2-deepseek",
+					"contextTokenBaseline": {"model": "wrong-model", "tokens": 5000}
+				}
+			}
+		}`
+		sess := session(t, "["+msg("")+"]", runState)
+		require.Len(t, sess.UsageEvents, 1)
+		assert.Equal(t, "base2-deepseek", sess.UsageEvents[0].Model,
+			"the occupancy anchor must not become the billed model")
+	})
+
+	t.Run("legacy path prefers run-state model over template id", func(t *testing.T) {
+		runState := `{
+			"sessionState": {
+				"mainAgentState": {
+					"agentType": "base2-deepseek",
+					"creditsUsed": 42
+				},
+				"fileContext": {
+					"agentTemplates": {
+						"base2-deepseek": {"model": "deepseek-v3"}
+					}
+				}
+			}
+		}`
+		sess := session(t,
+			`[{"id":"user-1","variant":"user","content":"hi","timestamp":"03:04 PM"}]`,
+			runState)
+		require.Len(t, sess.UsageEvents, 1)
+		assert.Equal(t, "deepseek-v3", sess.UsageEvents[0].Model)
+	})
+}
+
 func TestParseCodebuffSession_CreditsExtraction(t *testing.T) {
 	chatMessages := `[
 		{
@@ -1862,7 +2211,7 @@ func TestParseCodebuffMixedFormatMidnightRollover(t *testing.T) {
 		{"id":"u5","variant":"user","content":"after","timestamp":"02:00 PM"}
 	]`)
 
-	msgs, _, _, err := parseCodebuffMessages(data, sessionDate)
+	msgs, _, _, _, err := parseCodebuffMessages(data, sessionDate)
 	require.NoError(t, err)
 	require.Len(t, msgs, 5)
 
@@ -1921,7 +2270,7 @@ func TestParseCodebuffMessages_FirstMessageMidnightRollover(t *testing.T) {
 		{"id":"u2","variant":"user","content":"more","timestamp":"12:30 AM"}
 	]`)
 
-	msgs, startedAt, _, err := parseCodebuffMessages(data, sessionDate)
+	msgs, _, startedAt, _, err := parseCodebuffMessages(data, sessionDate)
 	require.NoError(t, err)
 	require.Len(t, msgs, 2)
 

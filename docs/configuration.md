@@ -714,13 +714,19 @@ This is the classification label used server-side to pick the per-step LLM; the
 literal LLM is not persisted by the CLI and is not visible in the UI. Project
 names are derived from the session's working directory via git-root detection.
 
-Codebuff and Freebuff sessions report cost only. The CLI's on-disk format does
-not persist per-message input/output/cache tokens, so the daily usage model
-breakdown shows the cost-attributed agent template (e.g. `base2-deepseek`,
-`base2-free-minimax-m3`) without per-message token figures. Reported-cost rows
-ride as microdollars on `money.Money` like every other agent, and per-model
-rates for `base2-*` templates are not in the embedded pricing tables, so cache
-savings for these rows resolve to zero by design rather than an aggregator bug.
+Codebuff and Freebuff sessions report cost per prompt. The CLI resets its credit
+counter at every prompt and stamps each completed AI message with that prompt's
+credits, so each prompt's spend is recorded as its own reported-cost row in the
+daily usage breakdown — a multi-prompt session's totals now sum every prompt
+instead of only the last one. Each row is attributed to the model the turn ran
+when the format records one (a BYOK connection's model, or the agent template's
+costed model), and to the agent template (e.g. `base2-deepseek`,
+`base2-free-minimax-m3`) otherwise. The CLI's on-disk format still does not
+persist per-message input/output/cache tokens, so per-turn token figures remain
+unavailable. Reported-cost rows ride as microdollars on `money.Money` like every
+other agent, and per-model rates for `base2-*` templates are not in the embedded
+pricing tables, so cache savings for these rows resolve to zero by design rather
+than an aggregator bug.
 
 Freebuff does not have its own environment variable or config key — it shares
 the Codebuff provider for discovery and the parser auto-classifies sessions. Set

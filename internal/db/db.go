@@ -526,6 +526,11 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // chat-meta.json sidecar whose recorded size and mtime still match the
 // transcript. Re-parse unchanged Codebuff/Freebuff sources to backfill the
 // two columns and to drop names or counts that a stale sidecar invented.)
+// (116 also: Codebuff and Freebuff reported-cost rows are now per prompt --
+// each completed AI message's credits field becomes its own usage event
+// under the model that turn ran, replacing the single last-prompt row the
+// run-state creditsUsed total used to produce. Re-parse unchanged
+// Codebuff/Freebuff sources to replace their usage rows.)
 const dataVersion = 116
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
