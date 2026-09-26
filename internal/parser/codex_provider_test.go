@@ -1975,12 +1975,18 @@ func TestCodexProviderPrefersRevertRollout(t *testing.T) {
 	}{
 		{"same day directory", "22", "22"},
 		{"revert rollout in a later day directory", "22", "23"},
+		{"flat revert beats dated original", "22", ""},
+		{"dated revert beats flat original", "", "23"},
+		{"stored original outside standard layout", "legacy", "23"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			root := t.TempDir()
 			write := func(day, name, prompt string) string {
 				path := filepath.Join(root, "2026", "09", day, name)
+				if day == "" {
+					path = filepath.Join(root, name)
+				}
 				require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 				require.NoError(t, os.WriteFile(path, []byte(testjsonl.JoinJSONL(
 					testjsonl.CodexSessionMetaJSON(
@@ -1990,7 +1996,7 @@ func TestCodexProviderPrefersRevertRollout(t *testing.T) {
 				)), 0o644))
 				return path
 			}
-			write(tt.origDay,
+			originalPath := write(tt.origDay,
 				"rollout-2026-09-22T11-32-24-"+uuid+".jsonl", "aborted first try")
 			contPath := write(tt.contDay,
 				"rollout-2026-09-22T11-34-12-"+uuid+"_"+contUUID+".jsonl", "retry")
@@ -2007,6 +2013,17 @@ func TestCodexProviderPrefersRevertRollout(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, ok)
 			assert.Equal(t, contPath, found.DisplayPath)
+			for _, request := range []FindSourceRequest{
+				{StoredFilePath: originalPath},
+				{StoredFilePath: originalPath, RequireFreshSource: true, PreferStoredSource: true},
+				{FingerprintKey: originalPath, RequireFreshSource: true, PreferStoredSource: true},
+			} {
+				request.FullSessionID = "codex:" + uuid
+				found, ok, err := provider.FindSource(t.Context(), request)
+				require.NoError(t, err)
+				require.True(t, ok)
+				assert.Equal(t, contPath, found.DisplayPath)
+			}
 		})
 	}
 }

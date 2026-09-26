@@ -479,9 +479,13 @@ fixtures retain this field; missing identities remain source-local.
   inherited all of its original except the aborted tail. Agentsview reads
   the leading UUID as the session. Every sync path, including startup
   reconciliation and title-index refreshes, prefers the revert rollout with
-  the newest filename timestamp. Source lookup also finds one in a later day
-  directory, and a late watcher event for a superseded rollout is ignored
-  once a newer one is stored. Agentsview does not read `history_base`, so
+  the newest filename timestamp. Source lookup compares flat archives and
+  dated directories even when a stored source is preferred, including stored
+  rollout paths outside the standard layout. Ordinary archived duplicates
+  remain pinned when requested. The filename evidence above was rechecked
+  against the pinned upstream parser on 2026-09-26. A late watcher event for a
+  superseded rollout is ignored once a newer one is stored. Agentsview does
+  not read `history_base`, so
   inherited turns are missing from the session.
   `TestPreferCodexRevertRollout`,
   `TestCodexProviderPrefersRevertRollout`,
