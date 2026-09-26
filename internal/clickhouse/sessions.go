@@ -261,7 +261,7 @@ func (s *Store) GetSidebarSessionIndex(ctx context.Context, f db.SessionFilter) 
 
 func (s *Store) GetSession(ctx context.Context, id string) (*db.Session, error) {
 	row := s.queryRowContext(ctx,
-		"SELECT "+sessionCols+" FROM sessions WHERE id = ? AND deleted_at IS NULL", id)
+		"SELECT "+sessionCols+" FROM sessions PREWHERE id = ? WHERE deleted_at IS NULL", id)
 	sess, err := scanSession(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -273,7 +273,7 @@ func (s *Store) GetSession(ctx context.Context, id string) (*db.Session, error) 
 }
 
 func (s *Store) GetSessionFull(ctx context.Context, id string) (*db.Session, error) {
-	row := s.queryRowContext(ctx, "SELECT "+sessionFullCols+" FROM sessions WHERE id = ?", id)
+	row := s.queryRowContext(ctx, "SELECT "+sessionFullCols+" FROM sessions PREWHERE id = ?", id)
 	sess, err := scanSessionWithSource(row, true)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
