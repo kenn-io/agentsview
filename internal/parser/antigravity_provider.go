@@ -135,14 +135,24 @@ type antigravitySource struct {
 	Root string
 	Path string
 	ID   string
+	// SubagentParentID and SubagentRole carry the resolved
+	// brain/<parent>/.system_generated/subagents/<id>.json link when one
+	// claims this session. In-memory only; lookup fallbacks re-resolve
+	// them when the cache missed at ref construction.
+	SubagentParentID string
+	SubagentRole     string
 }
 
 type antigravitySourceSet struct {
-	roots []string
+	roots     []string
+	subagents *antigravitySubagentIndex
 }
 
 func newAntigravitySourceSet(roots []string) antigravitySourceSet {
-	return antigravitySourceSet{roots: cleanJSONLRoots(roots)}
+	return antigravitySourceSet{
+		roots:     cleanJSONLRoots(roots),
+		subagents: newAntigravitySubagentIndex(),
+	}
 }
 
 func (s antigravitySourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
@@ -152,6 +162,7 @@ func (s antigravitySourceSet) Discover(ctx context.Context) ([]SourceRef, error)
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
+		s.subagents.scan(root)
 		for _, path := range s.discoverSessionPaths(root) {
 			source, ok := s.sourceRef(root, path, false)
 			if ok {
@@ -168,6 +179,7 @@ func (s antigravitySourceSet) DiscoverEach(ctx context.Context, yield func(Sourc
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		s.subagents.scan(root)
 		dir := filepath.Join(root, "conversations")
 		err := streamDirectoryEntries(ctx, dir, func(entry os.DirEntry) error {
 			name := entry.Name()
@@ -244,10 +256,13 @@ func (s antigravitySourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 				DebounceKey:  string(AgentAntigravity) + ":annotations:" + root,
 			},
 			WatchRoot{
-				Path:         filepath.Join(root, "brain"),
-				Recursive:    true,
-				IncludeGlobs: []string{"*.md", "*.md.metadata.json"},
-				DebounceKey:  string(AgentAntigravity) + ":brain:" + root,
+				Path:      filepath.Join(root, "brain"),
+				Recursive: true,
+				IncludeGlobs: []string{
+					"*.md", "*.md.metadata.json",
+					"*/.system_generated/subagents/*.json",
+				},
+				DebounceKey: string(AgentAntigravity) + ":brain:" + root,
 			},
 			WatchRoot{
 				Path:         filepath.Join(root, "conversations"),
@@ -342,10 +357,15 @@ func (s antigravitySourceSet) Fingerprint(
 		}
 		return SourceFingerprint{}, err
 	}
-	hash, err := antigravityCompositeHash(
-		src.Path,
-		antigravityIDECompanionPaths(src.Path)...,
-	)
+	companions := antigravityIDECompanionPaths(src.Path)
+	// A resolved subagent descriptor is hashed as a companion of the
+	// child it claims so a descriptor write/delete alone re-syncs the
+	// child's parent link. The parent's companions never include it:
+	// parent parse does not read .system_generated.
+	if d, ok := s.subagentDescriptor(src.Root, src.ID); ok {
+		companions = append(companions, d.path)
+	}
+	hash, err := antigravityCompositeHash(src.Path, companions...)
 	if err != nil {
 		return SourceFingerprint{}, err
 	}
@@ -382,6 +402,17 @@ func (s antigravitySourceSet) sourceForChangedPath(root, path string) (SourceRef
 	path = filepath.Clean(path)
 	if dbPath, id, ok := antigravityConversationDBForPath(root, path); ok {
 		return s.newSourceRef(root, dbPath, id), true
+	}
+	if childID, ok := antigravitySubagentDescriptorID(root, path); ok {
+		// A descriptor create/write/remove can change the child's
+		// parent link, so refresh the cached entry before the
+		// returned source ref is built.
+		s.subagents.refresh(root, childID)
+		dbPath := filepath.Join(root, "conversations", childID+".db")
+		if IsRegularFile(dbPath) {
+			return s.newSourceRef(root, dbPath, childID), true
+		}
+		return SourceRef{}, false
 	}
 	if id, ok := antigravityIDETrajectoryID(root, path); ok {
 		dbPath := filepath.Join(root, "conversations", id+".db")
@@ -421,16 +452,17 @@ func (s antigravitySourceSet) sourceRef(
 }
 
 func (s antigravitySourceSet) newSourceRef(root, path, id string) SourceRef {
+	src := antigravitySource{Root: root, Path: path, ID: id}
+	if d, ok := s.subagents.lookup(root, id); ok {
+		src.SubagentParentID = d.parentID
+		src.SubagentRole = d.role
+	}
 	return SourceRef{
 		Provider:       AgentAntigravity,
 		Key:            path,
 		DisplayPath:    path,
 		FingerprintKey: path,
-		Opaque: antigravitySource{
-			Root: root,
-			Path: path,
-			ID:   id,
-		},
+		Opaque:         src,
 	}
 }
 

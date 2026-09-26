@@ -397,7 +397,9 @@ func loadAntigravityCLIDBSteps(ctx context.Context,
 	// back to the trajectory sidecar (antigravitySourceVersion returns "" when
 	// the schema itself is unreadable, so an undecodable .db is never labeled).
 	sourceVersion := antigravitySourceVersion(ctx, db)
-	result, err := loadAntigravityStepsWithRawCount(ctx, db)
+	result, err := loadAntigravityStepsWithRawCount(
+		ctx, db, antigravityCLIIDPrefix,
+	)
 	result.sourceVersion = sourceVersion
 	if err != nil {
 		return result, err

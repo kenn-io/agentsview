@@ -521,7 +521,13 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // {thinking, signature, signature_type} object instead of a plain string
 // that Devin never writes. Re-parse Devin sessions to restore dropped
 // thinking text on assistant messages.)
-const dataVersion = 115
+// (120: the Antigravity IDE parser now reads
+// brain/<parent>/.system_generated/subagents/<child>.json descriptors and
+// invoke_subagent result steps to link spawned subagent sessions to their
+// parent. Re-parse Antigravity sessions so stored rows gain
+// parent_session_id, relationship_type, subagent session names, and
+// tool-call spawn edges.)
+const dataVersion = 120
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
