@@ -211,6 +211,12 @@ func (s *Sync) PushWithOptions(
 		}); err != nil {
 			return result, err
 		}
+		// Prepared usage serves reads only while it reflects the current
+		// snapshot set, so start the refresh now instead of waiting for the
+		// schedule. The scheduled refresh still covers a failed trigger.
+		if _, err := conn.ExecContext(ctx, "SYSTEM REFRESH VIEW prepare_usage"); err != nil {
+			log.Printf("clickhouse push: scheduling prepared usage refresh: %v", err)
+		}
 	}
 	result.Duration = time.Since(start)
 	return result, nil

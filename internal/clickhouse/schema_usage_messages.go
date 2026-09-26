@@ -2,7 +2,9 @@ package clickhouse
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -143,22 +145,77 @@ func ensureUsageSessionSnapshots(ctx context.Context, conn *sql.DB) error {
 	return ensurePreparedUsage(ctx, conn)
 }
 
-func ensurePreparedUsage(ctx context.Context, conn *sql.DB) error {
+// chPreparedUsageKeyColumn is the non-null time column prepared_usage sorts
+// by. ClickHouse cannot prune granules through a key expression such as
+// ifNull(ts, epoch), so a range on the nullable ts column reads the whole
+// table; a stored column keyed on the same value lets a day read its slice.
+const chPreparedUsageKeyColumn = "ts_key"
+
+const chPreparedUsageSortingKey = chPreparedUsageKeyColumn + ", session_id"
+
+// chPreparedUsageRefresh is the scheduled rebuild. Every push also starts a
+// refresh, so the schedule only covers a trigger that failed.
+const chPreparedUsageRefresh = "EVERY 15 MINUTE"
+
+// chSnapshotStampSQL identifies the complete snapshot set as a row count and
+// a sum of per-row hashes, so any republished or deleted session changes it.
+// The refresh stores it on every prepared row; scalar subqueries are
+// evaluated before the refresh scans, so a push that lands mid-refresh can
+// only make the stored stamp older than the rows, never newer.
+const chSnapshotStampSQL = `(SELECT count() FROM usage_session_snapshots) AS snapshot_count,
+	(SELECT sum(sipHash64(id, revision)) FROM usage_session_snapshots) AS snapshot_hash`
+
+// chPreparedUsageColumns lists the prepared columns in the order
+// scanActivityUsageRows reads them; ts_key is not part of a usage row.
+const chPreparedUsageColumns = `session_id, message_ordinal, ts, pricing_ts, source, model,
+	provider_id, agent, claude_message_id, claude_request_id, source_uuid, usage_dedup_key,
+	input_tokens_norm, output_tokens_norm, cache_create_norm, cache_create_1h_norm,
+	cache_read_norm, reasoning_tokens_norm, web_search_requests_norm, cost_microdollars, cost_source`
+
+// chPreparedUsagePricingDigestSQL reads the digest the mirror was last priced
+// under. A push writes every price record for a digest before this key, so a
+// refresh that reads the key joins a complete set of records for it.
+const chPreparedUsagePricingDigestSQL = "(SELECT ifNull(max(value), '') FROM sync_metadata WHERE key = '" +
+	usagePricedDigestKey + "')"
+
+// chPriceStampSQL identifies the price records under the digest the refresh
+// joins, so a mirror whose records were replaced or cleared is not read
+// through the stored copies.
+const chPriceStampSQL = `(SELECT count() FROM usage_event_prices WHERE pricing_digest = ` +
+	chPreparedUsagePricingDigestSQL + `) AS price_count,
+	(SELECT sum(sipHash64(price_key)) FROM usage_event_prices WHERE pricing_digest = ` +
+	chPreparedUsagePricingDigestSQL + `) AS price_hash`
+
+// chPreparedUsageQuery is the refresh query. Besides the normalized facts it
+// stores the price model, the price key, and the price record for the
+// current digest, so range reads skip the per-request join against every
+// price record. Like the snapshot stamp, the price stamp is taken before the
+// refresh scans, so records added during a refresh are also in the join.
+func chPreparedUsageQuery() string {
 	selection := clickUsageNormalizedQueryFrom("", chUsageStoredMessageEligibility, chUsageEventEligibility,
 		"usage_session_snapshots s ARRAY JOIN s.usage_facts AS m",
 		"usage_session_snapshots s ARRAY JOIN s.usage_events AS ue", "1")
-	if _, err := conn.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS prepared_usage ENGINE=MergeTree
-		ORDER BY (ifNull(ts,toDateTime64(0,6,'UTC')),session_id) AS `+selection+" LIMIT 0"); err != nil {
-		return fmt.Errorf("creating prepared usage: %w", err)
+	stored := make([]string, 0, len(chUsageStoredPriceColumns))
+	for _, column := range chUsageStoredPriceColumns {
+		stored = append(stored, "p."+column.joined+" AS "+column.stored)
 	}
-	if err := ensurePreparedUsageProjections(ctx, conn); err != nil {
-		return err
-	}
-	if _, err := conn.ExecContext(ctx, `CREATE MATERIALIZED VIEW IF NOT EXISTS prepare_usage REFRESH EVERY 1 MINUTE
-		TO prepared_usage EMPTY AS `+selection+" SETTINGS final=1,max_threads=4"); err != nil {
-		return fmt.Errorf("creating prepared usage: %w", err)
-	}
-	return nil
+	return `SELECT n.*, ifNull(n.ts, toDateTime64(0,6,'UTC')) AS ` + chPreparedUsageKeyColumn + `,
+		` + chSnapshotStampSQL + `,
+		` + chPreparedUsagePricingDigestSQL + ` AS pricing_digest,
+		` + chPriceStampSQL + `,
+		` + strings.Join(stored, ", ") + `
+	FROM (SELECT *, ` + chPriceModelCaseSQL() + ` AS price_model, ` + chUsagePriceKeySQL + ` AS price_key
+		FROM (` + selection + `)) n
+	LEFT JOIN (` + chUsagePriceRowsSQL() + ` WHERE pricing_digest = ` + chPreparedUsagePricingDigestSQL + `) p
+		ON p.p_price_key = n.price_key`
+}
+
+// chPreparedUsageComment identifies the table shape and refresh query, so an
+// installation prepared by a binary with a different query is rebuilt and
+// never read.
+func chPreparedUsageComment() string {
+	sum := sha256.Sum256([]byte(chPreparedUsageSortingKey + "\n" + chPreparedUsageRefresh + "\n" + chPreparedUsageQuery()))
+	return "agentsview prepared usage " + hex.EncodeToString(sum[:])
 }
 
 // chPreparedUsageProjections are the projections of prepared_usage, by
@@ -224,6 +281,62 @@ func ensurePreparedUsageProjections(ctx context.Context, conn *sql.DB) (err erro
 	for _, query := range queries {
 		if _, err := conn.ExecContext(ctx, query); err != nil {
 			return fmt.Errorf("adding prepared usage projections: %w", err)
+		}
+	}
+	return nil
+}
+
+func ensurePreparedUsage(ctx context.Context, conn *sql.DB) error {
+	prepared := chPreparedUsageQuery()
+	var comment string
+	err := conn.QueryRowContext(ctx, `SELECT comment FROM system.tables
+		WHERE database = currentDatabase() AND name = 'prepared_usage'`).Scan(&comment)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("reading prepared usage shape: %w", err)
+	}
+	rebuild := errors.Is(err, sql.ErrNoRows) || comment != chPreparedUsageComment()
+	if err == nil && rebuild {
+		// The table is derived from the snapshots, so replacing it loses
+		// nothing; the next refresh fills it, and reads use the raw rows
+		// until it has. Stop the refresh first so it cannot block the drop.
+		// An earlier rebuild may have dropped the view and stopped before
+		// the table, so stop it only when it exists.
+		log.Print("ClickHouse: rebuilding prepared usage for the current refresh query")
+		var hasView uint8
+		if err := conn.QueryRowContext(ctx, `SELECT count() > 0 FROM system.tables
+			WHERE database = currentDatabase() AND name = 'prepare_usage'`).Scan(&hasView); err != nil {
+			return fmt.Errorf("checking prepared usage view: %w", err)
+		}
+		queries := []string{
+			"DROP VIEW IF EXISTS prepare_usage SYNC",
+			"DROP TABLE IF EXISTS prepared_usage SYNC",
+		}
+		if hasView != 0 {
+			queries = append([]string{"SYSTEM STOP VIEW prepare_usage"}, queries...)
+		}
+		for _, query := range queries {
+			if _, err := conn.ExecContext(ctx, query); err != nil {
+				return fmt.Errorf("replacing prepared usage: %w", err)
+			}
+		}
+	}
+	if _, err := conn.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS prepared_usage ENGINE=MergeTree
+		ORDER BY (`+chPreparedUsageSortingKey+`) COMMENT `+chSQLString(chPreparedUsageComment())+
+		` AS `+prepared+" LIMIT 0"); err != nil {
+		return fmt.Errorf("creating prepared usage: %w", err)
+	}
+	if err := ensurePreparedUsageProjections(ctx, conn); err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, `CREATE MATERIALIZED VIEW IF NOT EXISTS prepare_usage REFRESH `+chPreparedUsageRefresh+`
+		TO prepared_usage EMPTY AS `+prepared+" SETTINGS final=1,max_threads=4"); err != nil {
+		return fmt.Errorf("creating prepared usage: %w", err)
+	}
+	// A new table serves reads only once filled; start that now rather
+	// than after the schedule or the next push.
+	if rebuild {
+		if _, err := conn.ExecContext(ctx, "SYSTEM REFRESH VIEW prepare_usage"); err != nil {
+			return fmt.Errorf("filling prepared usage: %w", err)
 		}
 	}
 	return nil

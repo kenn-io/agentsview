@@ -628,17 +628,22 @@ func clickActivityReportUsageQuery(
 }
 
 func clickPreparedActivityUsageQuery(candidates chSessionSet, lowerBound, upperBound string) (string, []any) {
+	// The sort column agrees with ts for every stored timestamp and is the
+	// epoch otherwise, so bounding both reads only the range's granules while
+	// keeping the null-timestamp exclusion of the ts predicate.
+	rangeSQL := chPreparedUsageKeyColumn + " >= " + chTimestampSQL + " AND " + chPreparedUsageKeyColumn + " <= " + chTimestampSQL +
+		" AND ts >= " + chTimestampSQL + " AND ts <= " + chTimestampSQL
 	query := `WITH candidate_sessions AS (` + candidates.body + `), candidate_keys AS (
 		SELECT DISTINCT claude_message_id,claude_request_id FROM prepared_usage
 		WHERE session_id IN (SELECT id FROM candidate_sessions)
 		AND claude_message_id != '' AND claude_request_id != ''
-		AND ts >= ` + chTimestampSQL + ` AND ts <= ` + chTimestampSQL + `)
-		SELECT * FROM prepared_usage WHERE ts >= ` + chTimestampSQL + ` AND ts <= ` + chTimestampSQL + `
+		AND ` + rangeSQL + `)
+		SELECT ` + chPreparedUsageColumns + ` FROM prepared_usage WHERE ` + rangeSQL + `
 		AND (session_id IN (SELECT id FROM candidate_sessions)
 		OR (source='message' AND (claude_message_id,claude_request_id) IN (SELECT * FROM candidate_keys)))
 		SETTINGS final=0`
 	args := slices.Clone(candidates.args)
-	for range 2 {
+	for range 4 {
 		args = append(args, lowerBound, upperBound)
 	}
 	return query, args

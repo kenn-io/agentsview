@@ -2,6 +2,8 @@ package clickhouse
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -87,48 +89,102 @@ func (s *Store) readActivitySourceProbe(ctx context.Context) (activity.SourcePro
 	return probe, nil
 }
 
-func (s *Store) preparedUsageReady(ctx context.Context) (bool, error) {
-	var refreshed, filled uint64
-	var fingerprint string
+// preparedUsageState reports whether prepared_usage can answer reads in
+// place of the raw messages and usage events, and which pricing digest its
+// stored price records serve. It is ready when an archive has published
+// complete snapshots, the table was prepared by this binary's query, every
+// session has a current snapshot, and the rows were derived from exactly
+// the snapshot set that exists now. Between a push and the refresh that
+// follows it, reads fall back to the raw rows rather than serve the
+// previous push's usage. The stored price records serve reads only while
+// the mirror still holds exactly the records they were copied from.
+type preparedUsageState struct {
+	ready         bool
+	pricingDigest string
+}
+
+func (s *Store) preparedUsageState(ctx context.Context) (preparedUsageState, error) {
+	var filled uint64
+	var fingerprint, comment string
 	err := s.queryRowContext(ctx, `SELECT
-		(SELECT ifNull(max(toUnixTimestamp(last_success_time)),0) FROM system.view_refreshes
-		 WHERE database=currentDatabase() AND view='prepare_usage'),
 		(SELECT ifNull(max(toUInt64OrZero(value)),0) FROM sync_metadata WHERE startsWith(key,?)),
 		(SELECT hex(SHA256(toString(arraySort(groupArray((table, name, hash_of_all_files))))))
 		 FROM system.parts WHERE database = currentDatabase() AND active
-		 AND table IN ('sessions', 'usage_session_snapshots'))`,
-		usageSnapshotReadyKeyBase+":").Scan(&refreshed, &filled, &fingerprint)
+		 AND table IN ('sessions', 'usage_session_snapshots', 'usage_event_prices')),
+		ifNull((SELECT comment FROM system.tables WHERE database = currentDatabase() AND name = 'prepared_usage'), '')`,
+		usageSnapshotReadyKeyBase+":").Scan(&filled, &fingerprint, &comment)
 	if err != nil {
-		return false, fmt.Errorf("checking prepared usage refresh: %w", err)
+		return preparedUsageState{}, fmt.Errorf("checking prepared usage readiness: %w", err)
 	}
 	// Existing reports remain available while every archive prepares its first
-	// complete snapshot. The refresh must start after the backfill finishes.
-	if filled == 0 || refreshed <= filled {
-		return false, nil
+	// complete snapshot. A table prepared by another query may lack the
+	// stamp columns, so it is checked before they are read.
+	if filled == 0 || comment != chPreparedUsageComment() {
+		return preparedUsageState{}, nil
 	}
-	// Coverage joins every session with its snapshot; both tables are named
-	// in the fingerprint, so the answer only changes when their parts do.
-	s.coverageCache.mu.Lock()
-	covered, cached := s.coverageCache.covered, s.coverageCache.fingerprint == fingerprint
-	s.coverageCache.mu.Unlock()
-	if cached {
-		return covered, nil
+	var stored usageStamp
+	err = s.queryRowContext(ctx, `SELECT snapshot_count, snapshot_hash, pricing_digest, price_count, price_hash
+		FROM prepared_usage LIMIT 1 SETTINGS final=0`).Scan(
+		&stored.snapshotCount, &stored.snapshotHash, &stored.pricingDigest, &stored.priceCount, &stored.priceHash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return preparedUsageState{}, nil
 	}
-	var missing uint64
-	err = s.queryRowContext(ctx, `SELECT count() FROM sessions s
-		LEFT JOIN usage_session_snapshots u ON u.id=s.id
-		WHERE u.id='' OR u.push_version<s.push_version`).Scan(&missing)
 	if err != nil {
-		return false, fmt.Errorf("checking complete usage coverage: %w", err)
+		return preparedUsageState{}, fmt.Errorf("reading prepared usage stamp: %w", err)
 	}
+	// Coverage and the live stamp read the tables named in the fingerprint,
+	// so they only change when their parts do.
 	s.coverageCache.mu.Lock()
-	s.coverageCache.fingerprint, s.coverageCache.covered = fingerprint, missing == 0
+	live, cached := s.coverageCache.live, s.coverageCache.fingerprint == fingerprint &&
+		s.coverageCache.live.pricingDigest == stored.pricingDigest
 	s.coverageCache.mu.Unlock()
-	return missing == 0, nil
+	if !cached {
+		live = usageStamp{pricingDigest: stored.pricingDigest}
+		err = s.queryRowContext(ctx, `SELECT
+			(SELECT count() FROM sessions s
+			 LEFT JOIN usage_session_snapshots u ON u.id=s.id
+			 WHERE u.id='' OR u.push_version<s.push_version),
+			(SELECT count() FROM usage_session_snapshots),
+			(SELECT sum(sipHash64(id, revision)) FROM usage_session_snapshots),
+			(SELECT count() FROM usage_event_prices WHERE pricing_digest = ?),
+			(SELECT sum(sipHash64(price_key)) FROM usage_event_prices WHERE pricing_digest = ?)`,
+			stored.pricingDigest, stored.pricingDigest).
+			Scan(&live.missing, &live.snapshotCount, &live.snapshotHash, &live.priceCount, &live.priceHash)
+		if err != nil {
+			return preparedUsageState{}, fmt.Errorf("checking complete usage coverage: %w", err)
+		}
+		s.coverageCache.mu.Lock()
+		s.coverageCache.fingerprint, s.coverageCache.live = fingerprint, live
+		s.coverageCache.mu.Unlock()
+	}
+	state := preparedUsageState{
+		ready: live.missing == 0 && live.snapshotCount == stored.snapshotCount &&
+			live.snapshotHash == stored.snapshotHash,
+	}
+	if state.ready && stored.pricingDigest != "" &&
+		live.priceCount == stored.priceCount && live.priceHash == stored.priceHash {
+		state.pricingDigest = stored.pricingDigest
+	}
+	return state, nil
 }
 
+func (s *Store) preparedUsageReady(ctx context.Context) (bool, error) {
+	state, err := s.preparedUsageState(ctx)
+	return state.ready, err
+}
+
+// usageCoverageCache memoizes the live stamp and coverage per parts of
+// the sessions, snapshot, and price record tables.
 type usageCoverageCache struct {
 	mu          sync.Mutex
 	fingerprint string
-	covered     bool
+	live        usageStamp
+}
+
+// usageStamp identifies a snapshot set and the price records under one
+// digest, as stored on prepared rows or as read from the live tables.
+type usageStamp struct {
+	missing, snapshotCount, snapshotHash uint64
+	pricingDigest                        string
+	priceCount, priceHash                uint64
 }
