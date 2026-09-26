@@ -138,6 +138,7 @@ export * from "./dbStatsModelMix.ts";
 export * from "./dbStatsModelMixByTokens.ts";
 export * from "./dbStatsOutcomes.ts";
 export * from "./dbStatsOutcomesGradeDistribution.ts";
+export * from "./dbStatsOutcomeSkippedRepo.ts";
 export * from "./dbStatsOutcomeStats.ts";
 export * from "./dbStatsPercentiles.ts";
 export * from "./dbStatsTemporal.ts";
