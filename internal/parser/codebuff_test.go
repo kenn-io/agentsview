@@ -2348,3 +2348,368 @@ func TestParseCodebuffSession_SessionNameRuneSafeTruncation(t *testing.T) {
 		"session name must remain valid UTF-8 after truncation")
 	assert.Equal(t, strings.Repeat("é", 77)+"...", sess.SessionName)
 }
+
+// TestParseCodebuffSessionAgentVariant covers plan 022's variant routing:
+// agent messages render as assistant content (upstream's roleHeading maps
+// the unlisted variants to "## Assistant"), an agent message with no content
+// produces nothing, and an unknown future variant is rendered rather than
+// dropped.
+func TestParseCodebuffSessionAgentVariant(t *testing.T) {
+	runState := `{"sessionState":{"mainAgentState":{"agentType":"base2-free-mimo"}}}`
+
+	t.Run("agent content renders as assistant", func(t *testing.T) {
+		dir := codebuffTestSession(t,
+			`[{"id":"ag-1","variant":"agent","content":"subagent finished the task","timestamp":"03:04 PM"}]`,
+			runState, "")
+		sess, msgs, err := parseCodebuffSession(dir, "p", "local")
+		require.NoError(t, err)
+		require.Len(t, msgs, 1)
+		assert.Equal(t, RoleAssistant, msgs[0].Role)
+		assert.Equal(t, "subagent finished the task", msgs[0].Content)
+		assert.False(t, msgs[0].IsSystem)
+		assert.Empty(t, sess.UsageEvents)
+	})
+
+	t.Run("agent empty content produces nothing", func(t *testing.T) {
+		dir := codebuffTestSession(t,
+			`[{"id":"ag-1","variant":"agent","content":"","timestamp":"03:04 PM"}]`,
+			runState, "")
+		_, msgs, err := parseCodebuffSession(dir, "p", "local")
+		require.NoError(t, err)
+		assert.Empty(t, msgs)
+	})
+
+	t.Run("unknown variant renders like agent", func(t *testing.T) {
+		dir := codebuffTestSession(t,
+			`[{"id":"x-1","variant":"workflow-step","content":"from a future build","timestamp":"03:04 PM"}]`,
+			runState, "")
+		_, msgs, err := parseCodebuffSession(dir, "p", "local")
+		require.NoError(t, err)
+		require.Len(t, msgs, 1)
+		assert.Equal(t, RoleAssistant, msgs[0].Role)
+		assert.Equal(t, "from a future build", msgs[0].Content)
+	})
+}
+
+// TestParseCodebuffSessionUserErrorEnvelope covers the runtime-error
+// envelope: userError is a notice the app displayed, so it emits its own
+// system message and never merges into the user message's Content.
+func TestParseCodebuffSessionUserErrorEnvelope(t *testing.T) {
+	runState := `{"sessionState":{"mainAgentState":{"agentType":"base2-free-mimo"}}}`
+	transcript := `[
+		{"id":"u1","variant":"user","content":"go ahead","timestamp":"03:04 PM",
+		 "userError":"connection dropped mid-run"}
+	]`
+	dir := codebuffTestSession(t, transcript, runState, "")
+	sess, msgs, err := parseCodebuffSession(dir, "p", "local")
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, RoleUser, msgs[0].Role)
+	assert.Equal(t, "go ahead", msgs[0].Content,
+		"the user message's own content must stay untouched")
+	assert.Equal(t, RoleSystem, msgs[1].Role)
+	assert.True(t, msgs[1].IsSystem)
+	assert.Equal(t, "connection dropped mid-run", msgs[1].Content)
+	assert.Equal(t, 0, sess.MalformedLines)
+}
+
+// TestParseCodebuffSessionValidationErrors covers one system message per
+// validation entry, with the id never rendered.
+func TestParseCodebuffSessionValidationErrors(t *testing.T) {
+	runState := `{"sessionState":{"mainAgentState":{"agentType":"base2-free-mimo"}}}`
+	transcript := `[
+		{"id":"u1","variant":"user","content":"hi","timestamp":"03:04 PM",
+		 "validationErrors":[
+			{"id":"v1","message":"first failure"},
+			{"id":"v2","message":"second failure"}
+		 ]}
+	]`
+	dir := codebuffTestSession(t, transcript, runState, "")
+	_, msgs, err := parseCodebuffSession(dir, "p", "local")
+	require.NoError(t, err)
+	require.Len(t, msgs, 3)
+	assert.Equal(t, "[Validation error] first failure", msgs[1].Content)
+	assert.Equal(t, "[Validation error] second failure", msgs[2].Content)
+	assert.True(t, msgs[1].IsSystem && msgs[2].IsSystem)
+	for _, m := range msgs {
+		assert.NotContains(t, m.Content, "v1", "validation ids are not stored")
+		assert.NotContains(t, m.Content, "v2")
+	}
+}
+
+// TestParseCodebuffSessionErrorVariantEnvelope pins that the attachment
+// envelope renders on error-variant messages too: upstream puts attachments
+// on the message envelope, not on a single variant.
+func TestParseCodebuffSessionErrorVariantEnvelope(t *testing.T) {
+	runState := `{"sessionState":{"mainAgentState":{"agentType":"base2-free-mimo"}}}`
+	transcript := `[
+		{"id":"e1","variant":"error","content":"run failed","timestamp":"03:04 PM",
+		 "attachments":[{"filename":"crash.png"}]}
+	]`
+	dir := codebuffTestSession(t, transcript, runState, "")
+	_, msgs, err := parseCodebuffSession(dir, "p", "local")
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, RoleSystem, msgs[0].Role)
+	assert.Contains(t, msgs[0].Content, "run failed")
+	assert.Contains(t, msgs[0].Content, "[Image: crash.png]")
+}
+
+// TestParseCodebuffSessionAttachmentEnvelope covers image, pasted-text, and
+// file attachment markers, the privacy exclusions (no paths, no full pasted
+// content), and the envelope-only message counting as a user message.
+func TestParseCodebuffSessionAttachmentEnvelope(t *testing.T) {
+	runState := `{"sessionState":{"mainAgentState":{"agentType":"base2-free-mimo"}}}`
+
+	t.Run("image attachments with and without filename", func(t *testing.T) {
+		transcript := `[
+			{"id":"u1","variant":"user","content":"look","timestamp":"03:04 PM",
+			 "attachments":[{"filename":"shot.png","path":"/home/x/Pictures/shot.png"},{"path":"/tmp/no-name.png"}]}
+		]`
+		dir := codebuffTestSession(t, transcript, runState, "")
+		_, msgs, err := parseCodebuffSession(dir, "p", "local")
+		require.NoError(t, err)
+		require.Len(t, msgs, 1)
+		assert.Contains(t, msgs[0].Content, "[Image: shot.png]")
+		assert.Contains(t, msgs[0].Content, "[Image attached]")
+		assert.NotContains(t, msgs[0].Content, "/home/x", "local paths are never stored")
+		assert.NotContains(t, msgs[0].Content, "/tmp/")
+	})
+
+	t.Run("text attachment stores label and preview only", func(t *testing.T) {
+		full := strings.Repeat("pasted ", 500) + "SECRET-TAIL"
+		previewBytes, err := json.Marshal(full[:300])
+		require.NoError(t, err)
+		transcript := fmt.Sprintf(
+			`[{"id":"u1","variant":"user","content":"","timestamp":"03:04 PM",
+			  "textAttachments":[{"id":"t1","content":%s,"preview":%s,"charCount":3500}]}]`,
+			previewBytes, previewBytes,
+		)
+		dir := codebuffTestSession(t, transcript, runState, "")
+		_, msgs, err := parseCodebuffSession(dir, "p", "local")
+		require.NoError(t, err)
+		require.Len(t, msgs, 1)
+		assert.Contains(t, msgs[0].Content, "[Text attachment: 3500 chars]")
+		assert.NotContains(t, msgs[0].Content, "SECRET-TAIL",
+			"the attachment's full content must never be stored")
+		assert.NotContains(t, msgs[0].Content, `"content"`,
+			"the content member is not even decoded")
+	})
+
+	t.Run("file attachments plain, directory, and with note", func(t *testing.T) {
+		transcript := `[
+			{"id":"u1","variant":"user","content":"","timestamp":"03:04 PM",
+			 "fileAttachments":[
+				{"path":"/home/x/report.pdf","filename":"report.pdf","isDirectory":false},
+				{"path":"/home/x/src","filename":"src","isDirectory":true},
+				{"path":"/home/x/notes.md","filename":"notes.md","isDirectory":false,"note":"edited today"}
+			 ]}
+		]`
+		dir := codebuffTestSession(t, transcript, runState, "")
+		_, msgs, err := parseCodebuffSession(dir, "p", "local")
+		require.NoError(t, err)
+		require.Len(t, msgs, 1)
+		assert.Contains(t, msgs[0].Content, "[File: report.pdf]")
+		assert.Contains(t, msgs[0].Content, "[File: src] (directory)")
+		assert.Contains(t, msgs[0].Content, "[File: notes.md] edited today")
+		assert.NotContains(t, msgs[0].Content, "/home/x", "local paths are never stored")
+	})
+
+	t.Run("envelope-only user message counts as a user message", func(t *testing.T) {
+		transcript := `[
+			{"id":"u1","variant":"user","content":"","timestamp":"03:04 PM",
+			 "attachments":[{"filename":"only.png"}]}
+		]`
+		dir := codebuffTestSession(t, transcript, runState, "")
+		sess, msgs, err := parseCodebuffSession(dir, "p", "local")
+		require.NoError(t, err)
+		require.Len(t, msgs, 1)
+		assert.Equal(t, RoleUser, msgs[0].Role)
+		assert.Equal(t, 1, sess.UserMessageCount,
+			"upstream counts the message, not the text")
+		assert.Equal(t, 1, sess.MessageCount)
+	})
+}
+
+// TestParseCodebuffSessionAskUserAnswers covers answer rendering: single
+// option, multi-option, otherText, skipped, and an out-of-range
+// questionIndex that must not panic.
+func TestParseCodebuffSessionAskUserAnswers(t *testing.T) {
+	runState := `{"sessionState":{"mainAgentState":{"agentType":"base2-free-mimo"}}}`
+	askBlock := func(answers, extra string) string {
+		return `{"type":"ask-user","toolCallId":"au-1","questions":[
+			{"question":"Which database?","header":"Database"},
+			{"question":"` + strings.Repeat("long question ", 10) + `"}],
+			` + answers + extra + `}`
+	}
+
+	t.Run("selected option labeled by header", func(t *testing.T) {
+		transcript := `[
+			{"id":"ai-1","variant":"ai","timestamp":"03:04 PM","credits":1,
+			 "metadata":{"runState":{"sessionState":{"mainAgentState":{"agentType":"base2-free-mimo"}}}},
+			 "blocks":[` + askBlock(
+			`"answers":[{"questionIndex":0,"selectedOption":"Postgres"}]`, "") + `]}]
+		`
+		dir := codebuffTestSession(t, transcript, runState, "")
+		_, msgs, err := parseCodebuffSession(dir, "p", "local")
+		require.NoError(t, err)
+		var sys *ParsedMessage
+		for i := range msgs {
+			if strings.Contains(msgs[i].Content, "[Agent asked]") {
+				sys = &msgs[i]
+			}
+		}
+		require.NotNil(t, sys)
+		assert.Contains(t, sys.Content, "[Agent asked] Which database?")
+		assert.Contains(t, sys.Content, "[Answer: Database] Postgres")
+	})
+
+	t.Run("multi-option and otherText", func(t *testing.T) {
+		transcript := `[
+			{"id":"ai-1","variant":"ai","timestamp":"03:04 PM","credits":1,
+			 "metadata":{"runState":{"sessionState":{"mainAgentState":{"agentType":"base2-free-mimo"}}}},
+			 "blocks":[` + askBlock(
+			`"answers":[{"questionIndex":1,"selectedOptions":["a","b"]},{"questionIndex":9,"otherText":"none of these"}]`, "") + `]}]
+		`
+		dir := codebuffTestSession(t, transcript, runState, "")
+		_, msgs, err := parseCodebuffSession(dir, "p", "local")
+		require.NoError(t, err)
+		var sys *ParsedMessage
+		for i := range msgs {
+			if strings.Contains(msgs[i].Content, "[Agent asked]") {
+				sys = &msgs[i]
+			}
+		}
+		require.NotNil(t, sys)
+		assert.Contains(t, sys.Content, "a, b",
+			"multi-option answers join with a comma")
+		assert.Contains(t, sys.Content, "[Answer: long question",
+			"a headerless question labels with its truncated text")
+		assert.Contains(t, sys.Content, "[Answer] none of these",
+			"an out-of-range index renders without a label and must not panic")
+	})
+
+	t.Run("skipped block", func(t *testing.T) {
+		transcript := `[
+			{"id":"ai-1","variant":"ai","timestamp":"03:04 PM","credits":1,
+			 "metadata":{"runState":{"sessionState":{"mainAgentState":{"agentType":"base2-free-mimo"}}}},
+			 "blocks":[` + askBlock(``, `"skipped":true`) + `]}]
+		`
+		dir := codebuffTestSession(t, transcript, runState, "")
+		_, msgs, err := parseCodebuffSession(dir, "p", "local")
+		require.NoError(t, err)
+		found := false
+		for _, m := range msgs {
+			if strings.Contains(m.Content, "[Skipped]") {
+				found = true
+			}
+		}
+		assert.True(t, found, "a skipped ask-user block must record the skip")
+	})
+}
+
+// TestParseCodebuffSessionSponsoredAndAgentList covers the two new block
+// types and their privacy exclusions.
+func TestParseCodebuffSessionSponsoredAndAgentList(t *testing.T) {
+	runState := `{"sessionState":{"mainAgentState":{"agentType":"base2-free-mimo"}}}`
+
+	t.Run("sponsored proposal with consent", func(t *testing.T) {
+		transcript := `[
+			{"id":"ai-1","variant":"ai","timestamp":"03:04 PM","credits":1,
+			 "metadata":{"runState":{"sessionState":{"mainAgentState":{"agentType":"base2-free-mimo"}}}},
+			 "blocks":[{
+				"type":"sponsored-proposal",
+				"proposal":{"id":"p1","name":"Super Deal"},
+				"target":"this repository",
+				"consent":{"advertiserName":"AdCo","headline":"Try AdCo Free",
+					"body":"long sales pitch","folder":"/home/x/ads",
+					"branch":"secret-branch","runId":"run-123"}
+			 }]}]
+		`
+		dir := codebuffTestSession(t, transcript, runState, "")
+		_, msgs, err := parseCodebuffSession(dir, "p", "local")
+		require.NoError(t, err)
+		require.Len(t, msgs, 1)
+		assert.Equal(t, RoleSystem, msgs[0].Role,
+			"a sponsored-proposal notice is a record, not agent speech")
+		assert.True(t, msgs[0].IsSystem)
+		assert.Contains(t, msgs[0].Content, "[Sponsored proposal] this repository")
+		assert.Contains(t, msgs[0].Content, "Try AdCo Free")
+		assert.NotContains(t, msgs[0].Content, "Super Deal", "the proposal payload is never stored")
+		assert.NotContains(t, msgs[0].Content, "long sales pitch")
+		assert.NotContains(t, msgs[0].Content, "/home/x/ads")
+		assert.NotContains(t, msgs[0].Content, "secret-branch")
+		assert.NotContains(t, msgs[0].Content, "run-123")
+	})
+
+	t.Run("sponsored proposal without consent", func(t *testing.T) {
+		transcript := `[
+			{"id":"ai-1","variant":"ai","timestamp":"03:04 PM","credits":1,
+			 "metadata":{"runState":{"sessionState":{"mainAgentState":{"agentType":"base2-free-mimo"}}}},
+			 "blocks":[{"type":"sponsored-proposal","target":"that repository"}]}]
+		`
+		dir := codebuffTestSession(t, transcript, runState, "")
+		_, msgs, err := parseCodebuffSession(dir, "p", "local")
+		require.NoError(t, err)
+		require.Len(t, msgs, 1)
+		assert.Equal(t, "[Sponsored proposal] that repository", msgs[0].Content)
+	})
+
+	t.Run("agent list renders display names, never agentsDir", func(t *testing.T) {
+		transcript := `[
+			{"id":"ai-1","variant":"ai","timestamp":"03:04 PM","credits":1,
+			 "metadata":{"runState":{"sessionState":{"mainAgentState":{"agentType":"base2-free-mimo"}}}},
+			 "blocks":[{
+				"type":"agent-list",
+				"id":"al-1",
+				"agents":[{"id":"a1","displayName":"Reviewer"},{"id":"a2"}],
+				"agentsDir":"/home/x/.codebuff/agents"
+			 }]}]
+		`
+		dir := codebuffTestSession(t, transcript, runState, "")
+		_, msgs, err := parseCodebuffSession(dir, "p", "local")
+		require.NoError(t, err)
+		require.Len(t, msgs, 1)
+		assert.Equal(t, RoleSystem, msgs[0].Role,
+			"an agent-list roster is a record, not agent speech")
+		assert.True(t, msgs[0].IsSystem)
+		assert.Equal(t, "[Agents: Reviewer, a2]", msgs[0].Content,
+			"display name preferred, id fallback, order preserved")
+		assert.NotContains(t, msgs[0].Content, "/home/x", "agentsDir is never stored")
+	})
+}
+
+// TestParseCodebuffSessionEnvelopeOrdinalContinuity pins ordinals across a
+// transcript mixing envelope messages, new blocks, text, and tools.
+func TestParseCodebuffSessionEnvelopeOrdinalContinuity(t *testing.T) {
+	runState := `{"sessionState":{"mainAgentState":{"agentType":"base2-free-mimo"}}}`
+	transcript := `[
+		{"id":"u1","variant":"user","content":"start","timestamp":"03:04 PM",
+		 "attachments":[{"filename":"ctx.png"}]},
+		{"id":"ai-1","variant":"ai","timestamp":"03:05 PM","credits":1,
+		 "metadata":{"runState":{"sessionState":{"mainAgentState":{"agentType":"base2-free-mimo"}}}},
+		 "blocks":[
+			{"type":"text","textType":"text","content":"working"},
+			{"type":"tool","toolName":"read_file","toolCallId":"tc-1","input":{"path":"a.go"},"output":"ok"},
+			{"type":"agent-list","agents":[{"id":"a1","displayName":"Helper"}]},
+			{"type":"text","textType":"text","content":"done"}
+		 ]},
+		{"id":"ag-1","variant":"agent","content":"helper finished","timestamp":"03:06 PM"}
+	]`
+	dir := codebuffTestSession(t, transcript, runState, "")
+	_, msgs, err := parseCodebuffSession(dir, "p", "local")
+	require.NoError(t, err)
+	for i, m := range msgs {
+		assert.Equal(t, i, m.Ordinal, "ordinals must stay sequential and gapless")
+	}
+	// Spot-check the interleaving order: user, text, tool-call, tool-result,
+	// agent-list, text, agent-variant.
+	require.Len(t, msgs, 7)
+	assert.Equal(t, RoleUser, msgs[0].Role)
+	assert.Equal(t, "working", msgs[1].Content)
+	assert.True(t, msgs[2].HasToolUse)
+	assert.Equal(t, RoleUser, msgs[3].Role, "tool results render as user messages")
+	assert.Equal(t, "[Agents: Helper]", msgs[4].Content)
+	assert.Equal(t, "done", msgs[5].Content)
+	assert.Equal(t, "helper finished", msgs[6].Content)
+}

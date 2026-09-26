@@ -728,6 +728,14 @@ other agent, and per-model rates for `base2-*` templates are not in the embedded
 pricing tables, so cache savings for these rows resolve to zero by design rather
 than an aggregator bug.
 
+Subagent status messages and every other content-bearing message variant appear
+in the transcript as assistant messages. Attached images, pasted text, and files
+show up as labeled markers (`[Image: ...]`, `[Text attachment: N chars]`,
+`[File: ...]`) in the prompt they belonged to — a session that was mostly an
+attachment no longer reads as nearly empty. A runtime error the app displayed
+and answers the user gave to "ask user" prompts are preserved too, so the
+transcript shows both the question and the reply.
+
 Freebuff does not have its own environment variable or config key — it shares
 the Codebuff provider for discovery and the parser auto-classifies sessions. Set
 `CODEBUFF_DIR` or `agents.codebuff.dirs` when manicode stores its projects

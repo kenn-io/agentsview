@@ -531,6 +531,12 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // under the model that turn ran, replacing the single last-prompt row the
 // run-state creditsUsed total used to produce. Re-parse unchanged
 // Codebuff/Freebuff sources to replace their usage rows.)
+// (116 also: Codebuff and Freebuff transcripts keep what the parser used to
+// drop -- the agent message variant, the runtime error the app displayed,
+// attached images, pasted text, and files as labeled markers, answers to
+// "ask user" blocks, sponsored-proposal notices, and agent-list rosters.
+// Re-parse unchanged Codebuff/Freebuff sources to restore the missing
+// conversation content.)
 const dataVersion = 116
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"

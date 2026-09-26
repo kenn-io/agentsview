@@ -3260,14 +3260,26 @@ schemas keep their existing ordering behavior.
 
 - **Format:** Per-session JSON files under
   `<root>/<project>/chats/<timestamp>/`. Each session directory contains
-  `chat-messages.json` (JSON array of user/ai/error message objects with text,
-  tool, agent, mode-divider, plan, ask-user, and image blocks; append-only in
-  practice), `run-state.json` (agent type, context token count, credits used,
-  cwd, git branch, and skill catalog), and optional `chat-meta.json` (message
-  count, first prompt, transcript size, and transcript mtime in milliseconds),
-  which is rewritten atomically after each transcript save. Freebuff sessions
-  share the same layout and are distinguished by the `agentType` field
-  containing `"free"`.
+  `chat-messages.json` (JSON array of message objects with user/ai/agent/error
+  variants -- any other future variant carries `content` too and is rendered
+  as an assistant message -- and text, tool, agent, mode-divider, plan,
+  ask-user with answers, image, sponsored-proposal, and agent-list blocks;
+  append-only in practice). The message envelope also carries `userError`
+  (a UI-only runtime error), `validationErrors`, and image/text/file
+  attachment lists; the parser renders attachment metadata as stable marker
+  lines and stores the text attachment's byte-limited preview plus its
+  declared `charCount`, never its full `content`. Deliberately undeclared in
+  the decode structs and therefore never stored: attachment and block
+  filesystem paths (`attachments[].path`, `fileAttachments[].path`,
+  `agentsDir`), the text attachment's full `content`, the sponsored-proposal
+  `proposal` row and `consent.body`, and `consent.folder`/`branch`/`runId` --
+  local paths, pasted documents, and advertiser payloads are not stored.
+  `run-state.json` (agent type, context token count, credits used, cwd, git
+  branch, and skill catalog) and optional `chat-meta.json` (message count,
+  first prompt, transcript size, and transcript mtime in milliseconds) round
+  out the directory; the sidecar is rewritten atomically after each
+  transcript save. Freebuff sessions share the same layout and are
+  distinguished by the `agentType` field containing `"free"`.
 - **Evidence:** `source`.
 - **Upstream:** Clone `https://github.com/CodebuffAI/freebuff.git` at
   `ab18ec9d88d449e8766f9c25db52cf5c5ae3c869`, checked 2026-09-26. That

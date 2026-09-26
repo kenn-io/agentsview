@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tidwall/gjson"
+	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 // Wire structs for chat-messages.json.
@@ -43,22 +44,48 @@ type codebuffWireMessage struct {
 	Metadata *codebuffWireMeta   `json:"metadata"`
 	Blocks   []codebuffWireBlock `json:"blocks"`
 
-	// Fields plans 022-023 build on: declared now so the decode path is
-	// stable, consumed by later plans. Attachment member shapes are
-	// refined when plan 022 lands.
-	UserError       *bool                    `json:"userError"`
-	IsComplete      *bool                    `json:"isComplete"`
-	CompletionTime  string                   `json:"completionTime"`
-	IsCompletion    *bool                    `json:"isCompletion"`
-	Attachments     []codebuffWireAttachment `json:"attachments"`
-	TextAttachments []codebuffWireAttachment `json:"textAttachments"`
-	FileAttachments []codebuffWireAttachment `json:"fileAttachments"`
+	// Fields plan 022 consumes: the message envelope beyond content and
+	// blocks. userError is a runtime notice the app displayed via
+	// setError(); an empty string means absent, matching upstream's
+	// clearUserError() reset.
+	UserError        string                        `json:"userError"`
+	ValidationErrors []codebuffWireValidationError `json:"validationErrors"`
+	Attachments      []codebuffWireImageAttachment `json:"attachments"`
+	TextAttachments  []codebuffWireTextAttachment  `json:"textAttachments"`
+	FileAttachments  []codebuffWireFileAttachment  `json:"fileAttachments"`
+	IsComplete       *bool                         `json:"isComplete"`
+	CompletionTime   string                        `json:"completionTime"`
+	IsCompletion     *bool                         `json:"isCompletion"`
 }
 
-type codebuffWireAttachment struct {
-	Name    string `json:"name"`
-	Path    string `json:"path"`
-	Content string `json:"content"`
+// codebuffWireValidationError is one upstream validation entry; only the
+// message text is rendered, never the id.
+type codebuffWireValidationError struct {
+	ID      string `json:"id"`
+	Message string `json:"message"`
+}
+
+// codebuffWireImageAttachment is upstream ImageAttachment. The path member
+// is deliberately undeclared: local filesystem paths are never stored.
+type codebuffWireImageAttachment struct {
+	Filename string `json:"filename"`
+}
+
+// codebuffWireTextAttachment is upstream TextAttachment. The full content
+// member is deliberately undeclared -- storing a whole pasted document in
+// the transcript is both a memory hazard and out of scope; only the
+// preview (byte-limited at render time) and its charCount are kept.
+type codebuffWireTextAttachment struct {
+	Preview   string `json:"preview"`
+	CharCount int64  `json:"charCount"`
+}
+
+// codebuffWireFileAttachment is upstream FileAttachment. The path member is
+// deliberately undeclared: local filesystem paths are never stored.
+type codebuffWireFileAttachment struct {
+	Filename    string `json:"filename"`
+	IsDirectory bool   `json:"isDirectory"`
+	Note        string `json:"note"`
 }
 
 type codebuffWireMeta struct {
@@ -138,10 +165,45 @@ type codebuffWireBlock struct {
 
 	// ask-user
 	Questions []codebuffWireQuestion `json:"questions"`
+	Answers   []codebuffWireAnswer   `json:"answers"`
+	Skipped   bool                   `json:"skipped"`
+
+	// sponsored-proposal: target and consent.headline only. proposal,
+	// consent.body, consent.folder, consent.branch, and consent.runId are
+	// deliberately undeclared -- advertiser payloads and local paths or
+	// branch names are never stored.
+	Target  string               `json:"target"`
+	Consent *codebuffWireConsent `json:"consent"`
+
+	// agent-list: display names and ids only; agentsDir is deliberately
+	// undeclared (local filesystem path).
+	Agents []codebuffWireAgentEntry `json:"agents"`
+}
+
+// codebuffWireConsent retains only the headline an operator would see in a
+// consent banner; body, folder, branch, and runId stay undeclared.
+type codebuffWireConsent struct {
+	AdvertiserName string `json:"advertiserName"`
+	Headline       string `json:"headline"`
+}
+
+type codebuffWireAgentEntry struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"displayName"`
 }
 
 type codebuffWireQuestion struct {
 	Question string `json:"question"`
+	Header   string `json:"header"`
+}
+
+// codebuffWireAnswer is one user answer to an ask-user block, resolved by
+// questionIndex against the questions array.
+type codebuffWireAnswer struct {
+	QuestionIndex   int      `json:"questionIndex"`
+	SelectedOption  string   `json:"selectedOption"`
+	SelectedOptions []string `json:"selectedOptions"`
+	OtherText       string   `json:"otherText"`
 }
 
 // codebuffTranscript carries everything parseCodebuffSession needs from the
@@ -349,11 +411,89 @@ func codebuffFoldTimestamp(
 		}
 	}
 	return ts, cur, nextHour
+} // codebuffTextPreviewMaxBytes caps a pasted-text attachment's stored
+
+// preview, including the ellipsis marker appended at the call site when
+// truncation happens (its bytes are reserved from the limit).
+const codebuffTextPreviewMaxBytes = 200
+
+// codebuffAskUserLabelMaxBytes caps an ask-user answer's question label when
+// the question has no header.
+const codebuffAskUserLabelMaxBytes = 80
+
+// codebuffEnvelopeAttachmentLines renders the attachment envelope (image,
+// pasted-text, and file attachments) as the marker lines the parser stores,
+// in plan-022 order: images, then text, then files. Local paths and full
+// pasted content are never rendered -- the wire struct does not declare
+// them, so they cannot leak here.
+func codebuffEnvelopeAttachmentLines(m *codebuffWireMessage) []string {
+	var lines []string
+	for _, a := range m.Attachments {
+		if a.Filename != "" {
+			lines = append(lines, "[Image: "+a.Filename+"]")
+		} else {
+			lines = append(lines, "[Image attached]")
+		}
+	}
+	for _, a := range m.TextAttachments {
+		lines = append(lines, fmt.Sprintf(
+			"[Text attachment: %d chars]", a.CharCount))
+		if a.Preview != "" {
+			preview := a.Preview
+			if len(preview) > codebuffTextPreviewMaxBytes {
+				// The ellipsis marker's bytes are reserved from the
+				// limit, per the repo truncation convention, so the
+				// stored line stays within the cap.
+				preview = stringutil.SafeTruncate(
+					preview, codebuffTextPreviewMaxBytes-3) + "…"
+			}
+			lines = append(lines, preview)
+		}
+	}
+	for _, a := range m.FileAttachments {
+		line := "[File: " + a.Filename + "]"
+		if a.IsDirectory {
+			line += " (directory)"
+		}
+		if a.Note != "" {
+			line += " " + a.Note
+		}
+		lines = append(lines, line)
+	}
+	return lines
+}
+
+// codebuffEmitSystem appends one system message, the shape the parser uses
+// for non-conversation events ([Mode: ...], variant error, runtime errors).
+func codebuffEmitSystem(
+	t *codebuffTranscript, content string, ts time.Time, ordinal *int,
+) {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return
+	}
+	t.Messages = append(t.Messages, ParsedMessage{
+		Ordinal:       *ordinal,
+		Role:          RoleSystem,
+		Content:       content,
+		Timestamp:     ts,
+		ContentLength: len(content),
+		IsSystem:      true,
+	})
+	*ordinal++
 }
 
 // appendCodebuffWireMessage converts one decoded wire message into zero or
-// more ParsedMessages plus its plan-020 turn fact, preserving
-// parseCodebuffMessages' variant handling and ordinal assignment.
+// more ParsedMessages plus its plan-020 turn fact. Variant handling: user
+// renders as a user message, ai through the block walker, error as a system
+// message, and every other variant -- including agent and anything upstream
+// adds later -- as an assistant message, matching upstream's roleHeading
+// default, so a variant whose only payload is content is never dropped.
+// Envelope handling (plan 022): attachment markers append to the
+// content-bearing paths' Content; userError and validationErrors are runtime
+// notices, not conversation content, so they emit their own system messages
+// for any variant. An ai message skips the attachment markers: its transcript
+// payload is the block stream, and upstream stamps attachments on prompts.
 func appendCodebuffWireMessage(
 	t *codebuffTranscript, m *codebuffWireMessage, ts time.Time, ordinal *int,
 ) {
@@ -373,22 +513,32 @@ func appendCodebuffWireMessage(
 				}
 			}
 		}
-		if len(imageRefs) > 0 {
+		// Attachment envelope markers come after the image-block markers,
+		// in plan-022 order: images, pasted text, files. An envelope-only
+		// user message (attachments but no text) still counts as a user
+		// message: upstream counts the message, not the text, and the
+		// markers make the content non-empty here.
+		envelope := codebuffEnvelopeAttachmentLines(m)
+		if len(envelope) > 0 {
+			all := append(append([]string{}, imageRefs...), envelope...)
+			content = strings.TrimSpace(
+				content + "\n" + strings.Join(all, "\n"),
+			)
+		} else if len(imageRefs) > 0 {
 			content = strings.TrimSpace(
 				content + "\n" + strings.Join(imageRefs, "\n"),
 			)
 		}
-		if content == "" {
-			return
+		if content != "" {
+			t.Messages = append(t.Messages, ParsedMessage{
+				Ordinal:       *ordinal,
+				Role:          RoleUser,
+				Content:       content,
+				Timestamp:     ts,
+				ContentLength: len(content),
+			})
+			*ordinal++
 		}
-		t.Messages = append(t.Messages, ParsedMessage{
-			Ordinal:       *ordinal,
-			Role:          RoleUser,
-			Content:       content,
-			Timestamp:     ts,
-			ContentLength: len(content),
-		})
-		*ordinal++
 
 	case "ai":
 		firstOrdinal := *ordinal
@@ -421,20 +571,53 @@ func appendCodebuffWireMessage(
 	case "error":
 		// Error messages from the upstream CLI (API failures, rate
 		// limits, country blocks). Emit as a system message so the error
-		// is visible in the transcript.
+		// is visible in the transcript. The attachment envelope rides on
+		// every variant upstream, so an error message that carries one
+		// keeps its markers too.
 		content := strings.TrimSpace(m.Content)
-		if content == "" {
-			return
+		envelope := codebuffEnvelopeAttachmentLines(m)
+		if len(envelope) > 0 {
+			content = strings.TrimSpace(
+				content + "\n" + strings.Join(envelope, "\n"),
+			)
 		}
-		t.Messages = append(t.Messages, ParsedMessage{
-			Ordinal:       *ordinal,
-			Role:          RoleSystem,
-			Content:       content,
-			Timestamp:     ts,
-			ContentLength: len(content),
-			IsSystem:      true,
-		})
-		*ordinal++
+		codebuffEmitSystem(t, content, ts, ordinal)
+
+	default:
+		// agent and any future variant: content-bearing, rendered as an
+		// assistant message (upstream's roleHeading maps everything
+		// unlisted to "## Assistant"). Empty content and no blocks still
+		// produce nothing, as before.
+		content := strings.TrimSpace(m.Content)
+		envelope := codebuffEnvelopeAttachmentLines(m)
+		if len(envelope) > 0 {
+			content = strings.TrimSpace(
+				content + "\n" + strings.Join(envelope, "\n"),
+			)
+		}
+		if content != "" {
+			t.Messages = append(t.Messages, ParsedMessage{
+				Ordinal:       *ordinal,
+				Role:          RoleAssistant,
+				Content:       content,
+				Timestamp:     ts,
+				ContentLength: len(content),
+			})
+			*ordinal++
+		}
+	}
+
+	// Runtime notices, any variant: userError is the error banner the app
+	// displayed; validationErrors are per-entry validation failures. Both
+	// are system messages so they never read as conversation content, and
+	// they emit even when the message itself rendered nothing, because a
+	// notice with no surrounding context is still a record of what the
+	// user saw.
+	if m.UserError != "" {
+		codebuffEmitSystem(t, m.UserError, ts, ordinal)
+	}
+	for _, v := range m.ValidationErrors {
+		codebuffEmitSystem(t, "[Validation error] "+v.Message, ts, ordinal)
 	}
 }
 
@@ -470,6 +653,66 @@ func runStateResultFor(m *codebuffWireMessage) gjson.Result {
 		return gjson.Parse("")
 	}
 	return gjson.Parse(string(raw))
+}
+
+// codebuffAskUserAnswerLines renders the user's answers below the questions,
+// resolved by questionIndex. The question's header labels the answer when
+// present, else its truncated question text; an out-of-range index renders
+// without a label rather than panicking. A skipped block with no answers
+// renders [Skipped].
+func codebuffAskUserAnswerLines(b *codebuffWireBlock) []string {
+	if b.Skipped && len(b.Answers) == 0 {
+		return []string{"[Skipped]"}
+	}
+	var lines []string
+	for _, a := range b.Answers {
+		var choice string
+		switch {
+		case a.SelectedOption != "":
+			choice = a.SelectedOption
+		case len(a.SelectedOptions) > 0:
+			choice = strings.Join(a.SelectedOptions, ", ")
+		case a.OtherText != "":
+			choice = a.OtherText
+		}
+		if choice == "" {
+			continue
+		}
+		label := ""
+		if a.QuestionIndex >= 0 && a.QuestionIndex < len(b.Questions) {
+			q := b.Questions[a.QuestionIndex]
+			if q.Header != "" {
+				label = q.Header
+			} else {
+				label = stringutil.SafeTruncate(
+					q.Question, codebuffAskUserLabelMaxBytes)
+			}
+		}
+		if label != "" {
+			lines = append(lines, "[Answer: "+label+"] "+choice)
+		} else {
+			lines = append(lines, "[Answer] "+choice)
+		}
+	}
+	return lines
+}
+
+// codebuffEmitSystemBlock appends one system message to a block walk's
+// output, the immediate-emission shape mode-divider and plan use. Notices
+// (sponsored-proposal, agent-list) are records, not agent speech, so they
+// never classify as the transcript's final assistant turn.
+func codebuffEmitSystemBlock(out *[]ParsedMessage, content string, ts time.Time) {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return
+	}
+	*out = append(*out, ParsedMessage{
+		Role:          RoleSystem,
+		Content:       content,
+		Timestamp:     ts,
+		ContentLength: len(content),
+		IsSystem:      true,
+	})
 }
 
 // codebuffParsedAIMessages re-shapes parseCodebuffAIMessage's block loop onto
@@ -718,6 +961,7 @@ func codebuffParsedAIMessages(m *codebuffWireMessage, ts time.Time) []ParsedMess
 					parts = append(parts, "[Agent asked] "+q.Question)
 				}
 			}
+			parts = append(parts, codebuffAskUserAnswerLines(&block)...)
 			if len(parts) > 0 {
 				content := strings.Join(parts, "\n")
 				out = append(out, ParsedMessage{
@@ -727,6 +971,34 @@ func codebuffParsedAIMessages(m *codebuffWireMessage, ts time.Time) []ParsedMess
 					ContentLength: len(content),
 					IsSystem:      true,
 				})
+			}
+
+		case "sponsored-proposal":
+			flushText()
+			flushTools()
+			// target plus consent headline only; the proposal payload and
+			// consent body/folder/branch/runId are structurally excluded.
+			content := "[Sponsored proposal] " + block.Target
+			if block.Consent != nil && block.Consent.Headline != "" {
+				content += "\n" + block.Consent.Headline
+			}
+			codebuffEmitSystemBlock(&out, content, ts)
+
+		case "agent-list":
+			flushText()
+			flushTools()
+			// Display names with id fallback, in the order given; agentsDir
+			// is structurally excluded.
+			names := make([]string, 0, len(block.Agents))
+			for _, a := range block.Agents {
+				if a.DisplayName != "" {
+					names = append(names, a.DisplayName)
+				} else {
+					names = append(names, a.ID)
+				}
+			}
+			if len(names) > 0 {
+				codebuffEmitSystemBlock(&out, "[Agents: "+strings.Join(names, ", ")+"]", ts)
 			}
 
 		case "image":
