@@ -88,7 +88,8 @@ func parseSubagentTranscript(t *testing.T, root, path string) ParseResult {
 			return result.Result
 		}
 	}
-	t.Fatalf("no %s session parsed from %s", subagentAgentID, path)
+	require.FailNowf(t, "sub-agent session not parsed",
+		"no %s session parsed from %s", subagentAgentID, path)
 	return ParseResult{}
 }
 
