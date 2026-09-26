@@ -470,6 +470,10 @@ func (p *codexProvider) PlanRawCapture(
 // Fingerprint performs for every unchanged rollout.
 func (p *codexProvider) ComputeMultiFileStatHash(chatPath string) uint64 {
 	paths := append([]string{chatPath}, p.sources.metadata.IndexPaths(chatPath)...)
+	// A paginated continuation is part of this thread's parse input, so a
+	// continuation that grows must break the warm short-circuit exactly as a
+	// sidecar rewrite does.
+	paths = append(paths, codexContinuationPathsFor(chatPath)...)
 	if len(paths) == 1 {
 		paths = append(paths, "")
 	}
@@ -508,6 +512,23 @@ func (p *codexProvider) Parse(
 	}
 	if req.Fingerprint.Hash != "" {
 		sess.File.Hash = req.Fingerprint.Hash
+	}
+	continuations := codexContinuationPathsFor(path)
+	if len(continuations) > 0 {
+		var joined bool
+		msgs, joined, err = p.joinCodexContinuations(
+			ctx, path, machine, sess, msgs, continuations,
+		)
+		if err != nil {
+			return ParseOutcome{}, err
+		}
+		if joined {
+			// The cursor describes a resume point inside this one file, and the
+			// transcript now ends in a companion. Refusing the checkpoint keeps
+			// the chain on the full-parse path, where the appended entries
+			// cannot be mistaken for a tail of the head rollout.
+			safe = false
+		}
 	}
 	var checkpoint []byte
 	if safe {
@@ -622,6 +643,14 @@ func (p *codexProvider) ParseIncremental(
 			errors.New("codex source path unavailable")
 	}
 	if req.Offset < 0 || req.Fingerprint.Size < req.Offset {
+		return IncrementalOutcome{ForceReplace: true},
+			IncrementalNeedsFullParse, nil
+	}
+	if len(codexContinuationPathsFor(path)) > 0 {
+		// The stored transcript of a continued thread ends in a companion file,
+		// so an offset into this rollout is not the end of the session's
+		// messages: appending its tail would interleave with entries that
+		// already carry later ordinals. The chain rebuilds authoritatively.
 		return IncrementalOutcome{ForceReplace: true},
 			IncrementalNeedsFullParse, nil
 	}
@@ -871,6 +900,15 @@ func (s codexSourceSet) discover(
 			continue
 		}
 		for _, path := range s.discoverSessionPaths(root) {
+			if codexContinuationHeadFor(path) != "" {
+				// A paginated continuation is a companion of the thread's own
+				// rollout, not a source of its own: its entries are appended to
+				// that thread's session when the thread is parsed. Giving it a
+				// second source would give one session id two sources, and the
+				// source written last would decide which half of the thread the
+				// archive kept.
+				continue
+			}
 			source, ok := s.sourceRef(root, path, true)
 			if !ok {
 				source, ok = s.directPathSource(root, path, true)
@@ -1036,6 +1074,16 @@ func (s codexSourceSet) SourcesForChangedPath(
 		filepath.Base(req.Path) == CodexSessionIndexFilename {
 		return s.sourcesForIndexPath(ctx, req.Path)
 	}
+	if head := codexContinuationHeadFor(req.Path); head != "" {
+		// A continuation that grew is a change to its thread, so the watcher
+		// must re-parse the thread rather than the companion on its own.
+		for _, root := range s.roots {
+			if source, ok := s.sourceRef(root, head, true); ok {
+				return []SourceRef{source}, nil
+			}
+		}
+		return nil, nil
+	}
 	for _, root := range s.roots {
 		source, ok := s.sourceRef(root, req.Path, true)
 		if !ok {
@@ -1117,7 +1165,12 @@ func (s codexSourceSet) Fingerprint(
 	if info.IsDir() {
 		return SourceFingerprint{}, fmt.Errorf("stat %s: source is a directory", path)
 	}
-	hash, err := hashJSONLSourceFileContext(ctx, path)
+	// A thread whose history continued in a second rollout hashes the chain:
+	// the head's own bytes are unchanged while a continuation grows, and both
+	// freshness gates require a matching stored hash for this provider, so a
+	// head-only hash would skip the thread and leave the new entries unread.
+	// A thread with no continuation keeps its plain transcript hash.
+	hash, err := codexChainSourceHash(ctx, path, codexContinuationPathsFor(path))
 	if err != nil {
 		return SourceFingerprint{}, err
 	}

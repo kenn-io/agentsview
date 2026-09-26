@@ -517,7 +517,12 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (114: Codex `apply_patch` calls record the files named in the patch body,
 // one tool call per file, so file-keyed views such as Recent Edits include
 // them. Re-parse unchanged Codex sources to backfill file_path.)
-const dataVersion = 114
+// (115: a Codex thread continued in a paginated continuation rollout
+// (`rollout-<timestamp>-<thread>_<rollout>.jsonl`) is parsed as one session:
+// the continuation's entries are appended to the thread its session_meta
+// names. Re-parse unchanged Codex sources so a continued thread reaches its
+// continuation's last entry.)
+const dataVersion = 115
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
