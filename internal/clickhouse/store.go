@@ -54,6 +54,8 @@ type Store struct {
 	dailyUsageRows       usageRowMemo[chDailyUsageGroupRow]
 	sessionAggregateRows usageRowMemo[chUsageAggregateRow]
 	usageSessionRows     usageRowMemo[chUsageSessionRow]
+	// analyticsSessionRows keeps recent analytics session listings.
+	analyticsSessionRows usageRowMemo[chAnalyticsSession]
 }
 
 // NewStore connects to the mirror named by t and refuses schemas or data

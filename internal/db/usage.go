@@ -346,17 +346,23 @@ func buildUsageTerminationPredSQLite(status string) (string, []any) {
 var usageLocationCache sync.Map
 
 func (f UsageFilter) location() *time.Location {
-	if f.Timezone == "" {
-		return time.Local //nolint:forbidigo // Usage reports group UTC timestamps into local calendar dates when no timezone is selected.
+	return LoadLocationOr(f.Timezone, time.Local) //nolint:forbidigo // Usage reports group UTC timestamps into local calendar dates when no timezone is selected.
+}
+
+// LoadLocationOr resolves a timezone name once per process and returns
+// fallback for an empty or unknown name.
+func LoadLocationOr(name string, fallback *time.Location) *time.Location {
+	if name == "" {
+		return fallback
 	}
-	if cached, ok := usageLocationCache.Load(f.Timezone); ok {
+	if cached, ok := usageLocationCache.Load(name); ok {
 		return cached.(*time.Location)
 	}
-	loc, err := time.LoadLocation(f.Timezone)
+	loc, err := time.LoadLocation(name)
 	if err != nil {
-		return time.Local //nolint:forbidigo // Usage reports group UTC timestamps into local calendar dates when no timezone is selected.
+		return fallback
 	}
-	actual, _ := usageLocationCache.LoadOrStore(f.Timezone, loc)
+	actual, _ := usageLocationCache.LoadOrStore(name, loc)
 	return actual.(*time.Location)
 }
 
