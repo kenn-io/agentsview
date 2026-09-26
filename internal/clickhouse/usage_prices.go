@@ -104,12 +104,18 @@ var chUsageStoredPriceColumns = []struct{ source, joined, stored, zero string }{
 
 // chUsagePriceRowsSQL selects the price records under their joined names.
 func chUsagePriceRowsSQL() string {
+	return chUsagePriceRowsSQLFrom("usage_event_prices")
+}
+
+// chUsagePriceRowsSQLFrom selects the price records of table, which has the
+// record columns of usage_event_prices, under their joined names.
+func chUsagePriceRowsSQLFrom(table string) string {
 	columns := make([]string, 0, len(chUsageStoredPriceColumns)+1)
 	columns = append(columns, "price_key AS p_price_key")
 	for _, column := range chUsageStoredPriceColumns {
 		columns = append(columns, column.source+" AS "+column.joined)
 	}
-	return "SELECT " + strings.Join(columns, ", ") + " FROM usage_event_prices"
+	return "SELECT " + strings.Join(columns, ", ") + " FROM " + table
 }
 
 const (

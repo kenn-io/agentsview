@@ -50,6 +50,8 @@ type Store struct {
 	pricing pricingCache
 	// coverageCache memoizes complete usage snapshot coverage per parts.
 	coverageCache usageCoverageCache
+	// deltaCache keeps the prepared rows of changed snapshots.
+	deltaCache usageDeltaCache
 	// The usage row memos keep recent range reads per parts and filter.
 	dailyUsageRows       usageRowMemo[chDailyUsageGroupRow]
 	sessionAggregateRows usageRowMemo[chUsageAggregateRow]

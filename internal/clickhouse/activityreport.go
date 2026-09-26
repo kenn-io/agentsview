@@ -501,14 +501,18 @@ func (s *Store) activityReportUsage(
 	}
 
 	query, args := clickActivityReportUsageQuery(candidates, lowerBound, upperBound)
-	ready, err := s.preparedUsageReady(ctx)
+	state, err := s.preparedUsageState(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
-	if ready {
-		query, args = clickPreparedActivityUsageQuery(candidates, lowerBound, upperBound)
+	if state.ready {
+		query, args = clickPreparedActivityUsageQuery(state, candidates, lowerBound, upperBound)
 	}
-	rowsAcc, err := s.scanActivityUsageRows(ctx, query, args)
+	readCtx, err := withUsageDeltaTables(ctx, state)
+	if err != nil {
+		return nil, nil, err
+	}
+	rowsAcc, err := s.scanActivityUsageRows(readCtx, query, args)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -627,25 +631,26 @@ func clickActivityReportUsageQuery(
 	return query + " SETTINGS optimize_move_to_prewhere_if_final = 0, use_skip_indexes_if_final_exact_mode = 1", args
 }
 
-func clickPreparedActivityUsageQuery(candidates chSessionSet, lowerBound, upperBound string) (string, []any) {
+func clickPreparedActivityUsageQuery(
+	state preparedUsageState, candidates chSessionSet, lowerBound, upperBound string,
+) (string, []any) {
 	// The sort column agrees with ts for every stored timestamp and is the
 	// epoch otherwise, so bounding both reads only the range's granules while
 	// keeping the null-timestamp exclusion of the ts predicate.
 	rangeSQL := chPreparedUsageKeyColumn + " >= " + chTimestampSQL + " AND " + chPreparedUsageKeyColumn + " <= " + chTimestampSQL +
 		" AND ts >= " + chTimestampSQL + " AND ts <= " + chTimestampSQL
-	query := `WITH candidate_sessions AS (` + candidates.body + `), candidate_keys AS (
-		SELECT DISTINCT claude_message_id,claude_request_id FROM prepared_usage
+	sourceSQL, sourceArgs := chPreparedUsageSourceSQL(state, rangeSQL,
+		[]any{lowerBound, upperBound, lowerBound, upperBound})
+	query := `WITH candidate_sessions AS (` + candidates.body + `), prepared_rows AS (` + sourceSQL + `),
+		candidate_keys AS (
+		SELECT DISTINCT claude_message_id,claude_request_id FROM prepared_rows
 		WHERE session_id IN (SELECT id FROM candidate_sessions)
-		AND claude_message_id != '' AND claude_request_id != ''
-		AND ` + rangeSQL + `)
-		SELECT ` + chPreparedUsageColumns + ` FROM prepared_usage WHERE ` + rangeSQL + `
-		AND (session_id IN (SELECT id FROM candidate_sessions)
-		OR (source='message' AND (claude_message_id,claude_request_id) IN (SELECT * FROM candidate_keys)))
-		SETTINGS final=0`
+		AND claude_message_id != '' AND claude_request_id != '')
+		SELECT ` + chPreparedUsageColumns + ` FROM prepared_rows
+		WHERE session_id IN (SELECT id FROM candidate_sessions)
+		OR (source='message' AND (claude_message_id,claude_request_id) IN (SELECT * FROM candidate_keys))`
 	args := slices.Clone(candidates.args)
-	for range 4 {
-		args = append(args, lowerBound, upperBound)
-	}
+	args = append(args, sourceArgs...)
 	return query, args
 }
 
@@ -672,10 +677,19 @@ func clickUsageNormalizedQuery(messageWhere, eventWhere string) string {
 func clickUsageNormalizedQueryWith(ctes, messageWhere, eventWhere string) string {
 	return clickUsageNormalizedQueryFrom(ctes, messageWhere, eventWhere,
 		"usage_messages m JOIN sessions s ON s.id = m.session_id",
-		"usage_events ue JOIN sessions s ON s.id = ue.session_id", chUsageMessageCurrent)
+		"usage_events ue JOIN sessions s ON s.id = ue.session_id", chUsageMessageCurrent, "")
 }
 
-func clickUsageNormalizedQueryFrom(ctes, messageWhere, eventWhere, messageFrom, eventFrom, currentVersion string) string {
+// clickUsageNormalizedQueryFrom renders the normalized usage rows read from
+// the message and event sources. A non-empty revision expression is carried
+// on every row as snapshot_revision, naming the session snapshot the row was
+// derived from.
+func clickUsageNormalizedQueryFrom(ctes, messageWhere, eventWhere, messageFrom, eventFrom, currentVersion, revision string) string {
+	revisionColumn, revisionSelect := "", ""
+	if revision != "" {
+		revisionColumn = ",\n\t\t\t\t" + revision + " AS snapshot_revision"
+		revisionSelect = ", snapshot_revision"
+	}
 	return fmt.Sprintf(`
 		WITH %[3]susage_raw AS (
 			SELECT s.id AS session_id,
@@ -702,7 +716,7 @@ func clickUsageNormalizedQueryFrom(ctes, messageWhere, eventWhere, messageFrom, 
 				CAST(NULL AS Nullable(Int64)) AS cost_microdollars,
 				CAST('' AS String) AS cost_source,
 				COALESCE(m.timestamp, s.started_at) AS ts_raw,
-				s.started_at AS started_at_raw
+				s.started_at AS started_at_raw%[7]s
 			FROM %[5]s
 			WHERE %[4]s AND %[1]s
 			UNION ALL
@@ -734,12 +748,12 @@ func clickUsageNormalizedQueryFrom(ctes, messageWhere, eventWhere, messageFrom, 
 				ue.cost_microdollars AS cost_microdollars,
 				ue.cost_source AS cost_source,
 				COALESCE(ue.occurred_at, s.started_at) AS ts_raw,
-				s.started_at AS started_at_raw
+				s.started_at AS started_at_raw%[7]s
 			FROM %[6]s
 			WHERE %[2]s
 		)`,
-		messageWhere, eventWhere, ctes, currentVersion, messageFrom, eventFrom,
-	) + " SELECT " + clickUsageNormalizedColumns() + " FROM usage_raw"
+		messageWhere, eventWhere, ctes, currentVersion, messageFrom, eventFrom, revisionColumn,
+	) + " SELECT " + clickUsageNormalizedColumns() + revisionSelect + " FROM usage_raw"
 }
 
 func clickUsageNormalizedColumns() string {
