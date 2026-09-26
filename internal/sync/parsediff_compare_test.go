@@ -2151,6 +2151,66 @@ func TestParseDiffProviderVirtualSQLiteErrorUsesExactSource(t *testing.T) {
 	assert.Equal(t, ParseDiffTotals{ParseErrors: 1}, report.Totals)
 }
 
+func TestParseDiffProviderVirtualSQLiteErrorUsesExactSourceOpenClaw(
+	t *testing.T,
+) {
+	dbPath := "/tmp/openclaw-agent.sqlite"
+	firstPath := parser.VirtualSourcePath(dbPath, "main:ses_one")
+	secondPath := parser.VirtualSourcePath(dbPath, "main:ses_two")
+	first := &db.Session{
+		ID:          "openclaw:main:ses_one",
+		Agent:       string(parser.AgentOpenClaw),
+		Machine:     "devbox",
+		Project:     "project",
+		FilePath:    &firstPath,
+		DataVersion: db.CurrentDataVersion(),
+	}
+	second := &db.Session{
+		ID:          "openclaw:main:ses_two",
+		Agent:       string(parser.AgentOpenClaw),
+		Machine:     "devbox",
+		Project:     "project",
+		FilePath:    &secondPath,
+		DataVersion: db.CurrentDataVersion(),
+	}
+	storedByPath := map[string][]*db.Session{
+		parseDiffSourceKey(parser.AgentOpenClaw, firstPath):  {first},
+		parseDiffSourceKey(parser.AgentOpenClaw, secondPath): {second},
+	}
+	job := syncJob{
+		path: firstPath,
+		err:  errors.New("bad OpenClaw virtual session"),
+	}
+	engine := &Engine{db: dbtest.OpenTestDB(t)}
+	report := &ParseDiffReport{FieldCounts: map[string]int{}}
+	visited := map[string]bool{}
+	var presencePaths []string
+
+	err := engine.parseDiffCollectFile(
+		t.Context(),
+		report,
+		job,
+		map[string]parser.AgentType{firstPath: parser.AgentOpenClaw},
+		map[string]*db.Session{
+			first.ID:  first,
+			second.ID: second,
+		},
+		storedByPath,
+		visited,
+		engine.loadWorktreeProjectResolver(),
+		&presencePaths,
+	)
+	require.NoError(t, err)
+
+	require.Len(t, report.Sessions, 1)
+	assert.Equal(t, first.ID, report.Sessions[0].SessionID)
+	assert.Equal(t, DiffParseError, report.Sessions[0].Class)
+	assert.True(t, visited[first.ID])
+	assert.False(t, visited[second.ID])
+	assert.Empty(t, presencePaths)
+	assert.Equal(t, ParseDiffTotals{ParseErrors: 1}, report.Totals)
+}
+
 func TestParseDiffProviderVirtualSQLitePresenceUsesExactSource(t *testing.T) {
 	dbPath := "/tmp/opencode.db"
 	firstPath := parser.OpenCodeSQLiteVirtualPath(dbPath, "ses_one")

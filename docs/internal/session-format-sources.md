@@ -2203,7 +2203,14 @@ schemas keep their existing ordering behavior.
   model identity, and sometimes `usage.cost.total`. Agentsview intentionally
   ignores the reported cost and catalog-prices normalized token fields to keep
   pricing attribution consistent.
-- **Agentsview:** `internal/parser/openclaw.go`.
+- **SQLite layout:** OpenClaw 2026.9.5 also stores each agent's transcript in
+  `agent/openclaw-agent.sqlite`. Agentsview reads the ordered
+  `transcript_events(session_id, seq, event_json, created_at)` rows and sends
+  the event JSON through the same decoder as JSONL. This layout was measured
+  on 2026-09-22; a database missing required columns is reported as
+  unsupported.
+- **Agentsview:** `internal/parser/openclaw.go` and
+  `internal/parser/openclaw_sqlite.go`.
 
 ## QClaw (`qclaw`)
 

@@ -5,6 +5,7 @@ package parser
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -33,158 +34,15 @@ func (p *openClawProvider) parseSession(
 
 	lr := newLineReader(f, maxLineSize)
 	defer releaseLineReader(lr)
-	var (
-		messages      []ParsedMessage
-		startedAt     time.Time
-		endedAt       time.Time
-		ordinal       int
-		realUserCount int
-		firstMsg      string
-		sessionID     string
-		cwd           string
-	)
+	builder := newOpenClawRecordBuilder()
 
 	for {
 		line, ok := lr.next()
 		if !ok {
 			break
 		}
-		if !gjson.Valid(line) {
-			continue
-		}
-
-		entryType := gjson.Get(line, "type").Str
-
-		// Track timestamps from all entries for session bounds.
-		if ts := parseOpenClawTimestamp(line); !ts.IsZero() {
-			if startedAt.IsZero() || ts.Before(startedAt) {
-				startedAt = ts
-			}
-			if ts.After(endedAt) {
-				endedAt = ts
-			}
-		}
-
-		switch entryType {
-		case "session":
-			// Session header — extract session ID and cwd.
-			if sessionID == "" {
-				sessionID = gjson.Get(line, "id").Str
-			}
-			if cwd == "" {
-				cwd = gjson.Get(line, "cwd").Str
-			}
-			continue
-
-		case "model_change", "thinking_level_change", "custom",
-			"compaction":
-			// Metadata entries — skip for message extraction.
-			continue
-
-		case "message":
-			// Actual message entry.
-		default:
-			continue
-		}
-
-		msg := gjson.Get(line, "message")
-		if !msg.Exists() {
-			continue
-		}
-
-		role := msg.Get("role").Str
-		ts := parseTimestamp(msg.Get("timestamp").Str)
-		if ts.IsZero() {
-			ts = parseTimestamp(gjson.Get(line, "timestamp").Str)
-		}
-
-		switch role {
-		case "user":
-			content := msg.Get("content")
-			text, thinkingText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(context.Background(), content)
-			text = strings.TrimSpace(text)
-			if text == "" && len(tcs) == 0 && len(trs) == 0 {
-				continue
-			}
-
-			if firstMsg == "" && text != "" {
-				firstMsg = truncate(
-					strings.ReplaceAll(
-						stripOpenClawDatePrefix(text),
-						"\n", " ",
-					), 300,
-				)
-			}
-
-			messages = append(messages, ParsedMessage{
-				Ordinal:       ordinal,
-				Role:          RoleUser,
-				Content:       text,
-				Timestamp:     ts,
-				HasThinking:   hasThinking,
-				ThinkingText:  thinkingText,
-				HasToolUse:    hasToolUse,
-				ContentLength: len(text),
-				ToolCalls:     tcs,
-				ToolResults:   trs,
-			})
-			ordinal++
-			realUserCount++
-
-		case "assistant":
-			content := msg.Get("content")
-			text, thinkingText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(context.Background(), content)
-			text = strings.TrimSpace(text)
-			if text == "" && len(tcs) == 0 && len(trs) == 0 {
-				continue
-			}
-
-			pm := ParsedMessage{
-				Ordinal:            ordinal,
-				Role:               RoleAssistant,
-				Content:            text,
-				Timestamp:          ts,
-				HasThinking:        hasThinking,
-				ThinkingText:       thinkingText,
-				HasToolUse:         hasToolUse,
-				ContentLength:      len(text),
-				ToolCalls:          tcs,
-				ToolResults:        trs,
-				tokenPresenceKnown: true,
-			}
-			applyOpenClawAssistantUsage(&pm, msg)
-			messages = append(messages, pm)
-			ordinal++
-
-		case "toolResult":
-			// Tool results in OpenClaw are separate messages.
-			// Emit as a user message with empty Content so
-			// pairAndFilter removes it after pairToolResults
-			// copies ResultContentLength to the matching call.
-			toolCallID := msg.Get("toolCallId").Str
-			if toolCallID == "" {
-				continue
-			}
-
-			content := msg.Get("content")
-			resultText := extractToolResultText(content)
-			contentLen := len(resultText)
-
-			messages = append(messages, ParsedMessage{
-				Ordinal:       ordinal,
-				Role:          RoleUser,
-				Content:       "",
-				Timestamp:     ts,
-				HasThinking:   false,
-				HasToolUse:    false,
-				ContentLength: contentLen,
-				ToolResults: []ParsedToolResult{{
-					ToolUseID:     toolCallID,
-					ContentLength: contentLen,
-					ContentRaw:    content.Raw,
-				}},
-			})
-			ordinal++
+		if err := builder.consume(line, false); err != nil {
+			return nil, nil, err
 		}
 	}
 
@@ -192,46 +50,189 @@ func (p *openClawProvider) parseSession(
 		return nil, nil, fmt.Errorf("reading %s: %w", path, err)
 	}
 
-	if len(messages) == 0 {
+	return builder.finish(
+		path, project, machine, info,
+		openClawAgentIDFromPath(path),
+		OpenClawSessionID(filepath.Base(path)),
+	)
+}
+
+// openClawRecordBuilder contains the format decoder shared by JSONL files and
+// SQLite transcript rows. The source adapters own framing, identity, and
+// error policy; this type only turns one OpenClaw record into normalized data.
+type openClawRecordBuilder struct {
+	messages      []ParsedMessage
+	startedAt     time.Time
+	endedAt       time.Time
+	ordinal       int
+	realUserCount int
+	firstMsg      string
+	sessionID     string
+	cwd           string
+}
+
+func newOpenClawRecordBuilder() *openClawRecordBuilder {
+	return &openClawRecordBuilder{}
+}
+
+func (b *openClawRecordBuilder) consume(line string, rejectInvalid bool) error {
+	if !gjson.Valid(line) {
+		if rejectInvalid {
+			return errors.New("invalid OpenClaw event JSON")
+		}
+		return nil
+	}
+
+	entryType := gjson.Get(line, "type").Str
+	if ts := parseOpenClawTimestamp(line); !ts.IsZero() {
+		if b.startedAt.IsZero() || ts.Before(b.startedAt) {
+			b.startedAt = ts
+		}
+		if ts.After(b.endedAt) {
+			b.endedAt = ts
+		}
+	}
+
+	switch entryType {
+	case "session":
+		if b.sessionID == "" {
+			b.sessionID = gjson.Get(line, "id").Str
+		}
+		if b.cwd == "" {
+			b.cwd = gjson.Get(line, "cwd").Str
+		}
+		return nil
+	case "model_change", "thinking_level_change", "custom", "compaction":
+		return nil
+	case "message":
+	default:
+		return nil
+	}
+
+	msg := gjson.Get(line, "message")
+	if !msg.Exists() {
+		return nil
+	}
+	role := msg.Get("role").Str
+	ts := parseTimestamp(msg.Get("timestamp").Str)
+	if ts.IsZero() {
+		ts = parseTimestamp(gjson.Get(line, "timestamp").Str)
+	}
+
+	switch role {
+	case "user":
+		content := msg.Get("content")
+		text, thinkingText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(context.Background(), content)
+		text = strings.TrimSpace(text)
+		if text == "" && len(tcs) == 0 && len(trs) == 0 {
+			return nil
+		}
+		if b.firstMsg == "" && text != "" {
+			b.firstMsg = truncate(strings.ReplaceAll(
+				stripOpenClawDatePrefix(text), "\n", " "), 300)
+		}
+		b.messages = append(b.messages, ParsedMessage{
+			Ordinal:       b.ordinal,
+			Role:          RoleUser,
+			Content:       text,
+			Timestamp:     ts,
+			HasThinking:   hasThinking,
+			ThinkingText:  thinkingText,
+			HasToolUse:    hasToolUse,
+			ContentLength: len(text),
+			ToolCalls:     tcs,
+			ToolResults:   trs,
+		})
+		b.ordinal++
+		b.realUserCount++
+
+	case "assistant":
+		content := msg.Get("content")
+		text, thinkingText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(context.Background(), content)
+		text = strings.TrimSpace(text)
+		if text == "" && len(tcs) == 0 && len(trs) == 0 {
+			return nil
+		}
+		pm := ParsedMessage{
+			Ordinal:            b.ordinal,
+			Role:               RoleAssistant,
+			Content:            text,
+			Timestamp:          ts,
+			HasThinking:        hasThinking,
+			ThinkingText:       thinkingText,
+			HasToolUse:         hasToolUse,
+			ContentLength:      len(text),
+			ToolCalls:          tcs,
+			ToolResults:        trs,
+			tokenPresenceKnown: true,
+		}
+		applyOpenClawAssistantUsage(&pm, msg)
+		b.messages = append(b.messages, pm)
+		b.ordinal++
+
+	case "toolResult":
+		toolCallID := msg.Get("toolCallId").Str
+		if toolCallID == "" {
+			return nil
+		}
+		content := msg.Get("content")
+		resultText := extractToolResultText(content)
+		contentLen := len(resultText)
+		b.messages = append(b.messages, ParsedMessage{
+			Ordinal:       b.ordinal,
+			Role:          RoleUser,
+			Content:       "",
+			Timestamp:     ts,
+			ContentLength: contentLen,
+			ToolResults: []ParsedToolResult{{
+				ToolUseID:     toolCallID,
+				ContentLength: contentLen,
+				ContentRaw:    content.Raw,
+			}},
+		})
+		b.ordinal++
+	}
+	return nil
+}
+
+func (b *openClawRecordBuilder) finish(
+	path, project, machine string, info os.FileInfo,
+	agentID, fallbackSessionID string,
+) (*ParsedSession, []ParsedMessage, error) {
+	if len(b.messages) == 0 {
 		return nil, nil, nil
 	}
-
-	// Build session ID with prefix, including the agent
-	// subdirectory to avoid collisions across agents.
+	sessionID := b.sessionID
 	if sessionID == "" {
-		sessionID = OpenClawSessionID(filepath.Base(path))
+		sessionID = fallbackSessionID
 	}
-	agentID := openClawAgentIDFromPath(path)
-	fullID := "openclaw:" + agentID + ":" + sessionID
-
-	// Derive project from cwd if not provided.
-	if project == "" && cwd != "" {
-		project = ExtractProjectFromCwd(cwd)
+	if agentID == "" {
+		agentID = "unknown"
+	}
+	if project == "" && b.cwd != "" {
+		project = ExtractProjectFromCwd(b.cwd)
 	}
 	if project == "" {
 		project = "openclaw"
 	}
-
 	sess := &ParsedSession{
-		ID:               fullID,
+		ID:               "openclaw:" + agentID + ":" + sessionID,
 		Project:          project,
 		Machine:          machine,
 		Agent:            AgentOpenClaw,
-		FirstMessage:     firstMsg,
-		StartedAt:        startedAt,
-		EndedAt:          endedAt,
-		MessageCount:     len(messages),
-		UserMessageCount: realUserCount,
-		File: FileInfo{
-			Path:  path,
-			Size:  info.Size(),
-			Mtime: info.ModTime().UnixNano(),
-		},
+		FirstMessage:     b.firstMsg,
+		StartedAt:        b.startedAt,
+		EndedAt:          b.endedAt,
+		MessageCount:     len(b.messages),
+		UserMessageCount: b.realUserCount,
+		File:             FileInfo{Path: path},
 	}
-
-	accumulateMessageTokenUsage(sess, messages)
-
-	return sess, messages, nil
+	if info != nil {
+		sess.File.Size = info.Size()
+		sess.File.Mtime = info.ModTime().UnixNano()
+	}
+	accumulateMessageTokenUsage(sess, b.messages)
+	return sess, b.messages, nil
 }
 
 // applyOpenClawAssistantUsage copies the assistant turn's model id

@@ -432,6 +432,7 @@ func parseDiffSourceKey(agent parser.AgentType, path string) string {
 var perSessionDBVirtualSourceBases = []string{
 	"opencode.db", "kilo.db", "mimocode.db", "sessions.db",
 	parser.WarpDBFilename, parser.ForgeDBFilename, parser.PiebaldDBFilename,
+	"openclaw-agent.sqlite",
 }
 
 func isPerSessionDBVirtualSource(agent parser.AgentType, path string) bool {

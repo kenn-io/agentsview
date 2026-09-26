@@ -135,6 +135,10 @@ func TestProviderSyncSemanticsDeclarations(t *testing.T) {
 		AgentCopilot: {
 			FingerprintHashRequiredForFreshness: true,
 		},
+		AgentOpenClaw: {
+			FingerprintHashInCacheKey:           true,
+			FingerprintHashRequiredForFreshness: true,
+		},
 	}
 
 	for _, factory := range ProviderFactories() {
