@@ -448,6 +448,88 @@ func TestCanWriteRawSyncSchemaAcceptsSequenceFreeJobIDs(t *testing.T) {
 	assert.True(t, writable)
 }
 
+// Concurrent pushers each re-run the append-only guard DDL. Before the raw
+// custody schema lock, two of them replaced the shared guard function at the
+// same time and one failed with SQLSTATE XX000 ("tuple concurrently updated").
+func TestEnsureRawIngestSchemaPGSerializesConcurrentGuardInstallers(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanSchemaTestPG(t, pgURL)
+	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
+
+	pg, err := Open(pgURL, schemaTestSchema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, pg.Close()) })
+	require.NoError(t, EnsureSchema(t.Context(), pg, schemaTestSchema))
+
+	// Drop the guards so the installer's trigger creation is part of the
+	// window, then hold raw_manifests so that creation blocks and both
+	// installers sit inside the guard DDL at once.
+	_, err = pg.ExecContext(t.Context(), `
+		DROP TRIGGER raw_manifests_append_only ON raw_manifests;
+		DROP TRIGGER raw_manifest_entries_append_only ON raw_manifest_entries;
+		DROP TRIGGER raw_manifest_objects_append_only ON raw_manifest_objects`)
+	require.NoError(t, err)
+
+	blocker, err := pg.BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+	defer func() { _ = blocker.Rollback() }()
+	_, err = blocker.ExecContext(t.Context(),
+		`LOCK TABLE raw_manifests IN ACCESS EXCLUSIVE MODE`)
+	require.NoError(t, err)
+
+	dsnA, err := appendConnParams(pgURL, map[string]string{
+		"application_name": "raw-guard-a",
+	})
+	require.NoError(t, err)
+	dsnB, err := appendConnParams(pgURL, map[string]string{
+		"application_name": "raw-guard-b",
+	})
+	require.NoError(t, err)
+	installerA, err := Open(dsnA, schemaTestSchema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, installerA.Close()) })
+	installerB, err := Open(dsnB, schemaTestSchema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, installerB.Close()) })
+
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for _, installer := range []*sql.DB{installerA, installerB} {
+		go func(conn *sql.DB) {
+			<-start
+			results <- ensureRawIngestSchemaPG(t.Context(), conn)
+		}(installer)
+	}
+	close(start)
+	require.Eventually(t, func() bool {
+		var waiting int
+		err := pg.QueryRowContext(t.Context(), `
+			SELECT COUNT(*)
+			FROM pg_stat_activity
+			WHERE application_name IN ('raw-guard-a', 'raw-guard-b')
+				AND wait_event_type = 'Lock'
+		`).Scan(&waiting)
+		return err == nil && waiting == 2
+	}, 5*time.Second, 10*time.Millisecond,
+		"both installers should reach the locked guard DDL")
+
+	require.NoError(t, blocker.Commit(), "release raw_manifests")
+	require.NoError(t, <-results, "first concurrent installer")
+	require.NoError(t, <-results, "second concurrent installer")
+
+	var guards int
+	require.NoError(t, pg.QueryRowContext(t.Context(), `
+		SELECT COUNT(*)
+		FROM pg_trigger
+		WHERE tgrelid IN (
+			'raw_manifests'::regclass,
+			'raw_manifest_entries'::regclass,
+			'raw_manifest_objects'::regclass
+		) AND NOT tgisinternal`).Scan(&guards))
+	assert.Equal(t, 3, guards,
+		"concurrent installers must leave every append-only guard installed")
+}
+
 func repeatedHex(value string) string {
 	return strings.Repeat(value, 64)
 }

@@ -107,6 +107,19 @@ func (c *schemaProbeConn) Begin() (driver.Tx, error) {
 	return nil, driver.ErrSkip
 }
 
+func (c *schemaProbeConn) BeginTx(
+	context.Context, driver.TxOptions,
+) (driver.Tx, error) {
+	return schemaProbeTx{}, nil
+}
+
+// schemaProbeTx records nothing on its own; the probe conn keeps recording the
+// statements a transaction runs.
+type schemaProbeTx struct{}
+
+func (schemaProbeTx) Commit() error   { return nil }
+func (schemaProbeTx) Rollback() error { return nil }
+
 func (c *schemaProbeConn) ExecContext(
 	_ context.Context, query string, args []driver.NamedValue,
 ) (driver.Result, error) {

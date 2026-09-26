@@ -347,7 +347,7 @@ func ensureRawIngestSchemaPG(ctx context.Context, db *sql.DB) error {
 	if err := ensureRawProjectionJobColumns(ctx, db); err != nil {
 		return err
 	}
-	if _, err := db.ExecContext(ctx, rawIngestAppendOnlyDDL); err != nil {
+	if err := installRawIngestAppendOnlyGuardsPG(ctx, db); err != nil {
 		if !rawIngestAppendOnlyUnsupported(err) {
 			return fmt.Errorf("installing raw ingest append-only guards: %w", err)
 		}
@@ -376,6 +376,56 @@ func ensureRawProjectionJobColumns(ctx context.Context, q interface {
 	}
 	_, err = q.ExecContext(ctx, `ALTER TABLE raw_ingest_jobs ADD COLUMN IF NOT EXISTS projection_generation BIGINT NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS projection_selected BOOLEAN NOT NULL DEFAULT true`)
 	return err
+}
+
+// installRawIngestAppendOnlyGuardsPG installs the append-only guard function
+// and triggers under the raw custody schema lock. Every push re-runs the guard
+// DDL, and concurrent pushers otherwise update the shared guard function's
+// pg_proc row at the same time, which fails all but one with SQLSTATE XX000
+// ("tuple concurrently updated").
+func installRawIngestAppendOnlyGuardsPG(
+	ctx context.Context, db *sql.DB,
+) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning raw ingest guard installation: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := lockRawIngestSchemaPG(ctx, tx); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, rawIngestAppendOnlyDDL); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing raw ingest guard installation: %w", err)
+	}
+	return nil
+}
+
+// rawIngestSchemaLockKey names the sync_metadata row that serializes raw
+// custody guard installation across concurrent pushers.
+const rawIngestSchemaLockKey = "raw_ingest_schema_lock"
+
+// lockRawIngestSchemaPG holds the raw custody schema lock until tx ends. A
+// row lock is used instead of pg_advisory_xact_lock because supported
+// CockroachDB versions do not implement advisory locks, and sync_metadata
+// lives in the target schema, so the lock is schema-scoped on both engines.
+func lockRawIngestSchemaPG(ctx context.Context, tx *sql.Tx) error {
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO sync_metadata (key, value) VALUES ($1, '')
+		 ON CONFLICT (key) DO NOTHING`,
+		rawIngestSchemaLockKey,
+	); err != nil {
+		return fmt.Errorf("creating raw ingest schema lock row: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`SELECT value FROM sync_metadata WHERE key = $1 FOR UPDATE`,
+		rawIngestSchemaLockKey,
+	); err != nil {
+		return fmt.Errorf("locking raw ingest schema installation: %w", err)
+	}
+	return nil
 }
 
 func rawIngestAppendOnlyUnsupported(err error) bool {
