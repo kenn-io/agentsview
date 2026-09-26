@@ -3418,6 +3418,67 @@ schemas keep their existing ordering behavior.
   deletes them in AgentsView. A malformed `parts` value fails that session's
   parse rather than degrading silently, matching the goose parser's policy.
 
+## JetBrains Junie (`junie`)
+
+- **Format:** Junie CLI stores one append-only `events.jsonl` stream per session
+  below `${JUNIE_HOME:-~/.junie}/sessions/<session-id>/`. The sibling
+  `sessions/index.jsonl` contains `sessionId`, `createdAt`, `updatedAt`,
+  `projectDir`, `taskName`, and `status` summary records. Event records use a
+  polymorphic `kind` discriminator and a producer-added `timestampMs` Unix
+  millisecond field.
+
+- **Evidence:** `no-public-source`.
+
+- **Upstream:** The first-party [Junie CLI Quickstart](https://junie.jetbrains.com/docs/junie-cli.html),
+  [slash-command reference](https://junie.jetbrains.com/docs/slash-commands.html),
+  and [JetBrains Marketplace listing](https://plugins.jetbrains.com/plugin/26104-junie-the-ai-coding-agent-by-jetbrains)
+  were searched 2026-09-24; no public persistence source or authoritative event
+  schema was found. The format was reverified from the installed Junie CLI
+  26.7.13 producer jar `junie-release-2285.4.jar`, SHA-256
+  `51548cbe893b5e69e53ff49d5deaa1aa0ac6ebff8017b4ffc228a41681811323`.
+  To reproduce, extract that jar with `jar xf`, read
+  `agent-skills/junie-cli-docs/junie-cli-user-disk-storage.md`, and inspect
+  `com.intellij.ml.llm.matterhorn.ej.app.cli.standalone.tui.app.state.SessionStore`,
+  `SessionSummary`, `SessionEvent`, `org.jetbrains.a2ux.api.LlmResponseMetadataEvent`,
+  and `org.jetbrains.a2ux.api.ModelUsage` with `javap -p`.
+  The bundled storage document defines `JUNIE_HOME`; `SessionStore` bytecode
+  defines `sessions/index.jsonl`, `sessions/<sessionId>/events.jsonl`, and the
+  timestamp append. Producer serializers generated representative records for
+  `SessionStore` atomically replaces the complete index rather than appending
+  changed rows, so watcher ingestion compares complete normalized snapshots;
+  the filesystem event does not identify which summary row changed.
+  `UserPromptEvent`, `UserResponseEvent`, `UserAsyncResponseEvent`,
+  `SessionTitleSetEvent`, and nested `SessionA2uxEvent` values.
+
+- **Conversation mapping:** `UserPromptEvent` prefers `presentablePrompt` over
+  its internal prompt. Synchronous and asynchronous user-response events become
+  user messages. History committed, dropped, and failed records reconcile
+  queued prompts by `requestId`. Nested A2UX `MarkdownBlockUpdatedEvent` and
+  `ResultBlockUpdatedEvent` records become assistant messages; repeated block
+  updates replace the prior content with the same `stepId`, so active streaming
+  text remains visible without duplicating the final answer. The index supplies
+  timestamps.
+
+- **IDE boundary:** The JetBrains ACP registry and local
+  `junie-chronicles.csv` files were inspected on 2026-09-24. Chronicles contain
+  project edit activity, not conversations, and no separate IDE transcript
+  source was found. This provider therefore ingests the shared Junie CLI
+  `SessionStore` only. It does not claim support for IDE-only conversations
+  until JetBrains exposes a reproducible conversation artifact.
+
+- **Usage and cost:** Nested A2UX `LlmResponseMetadataEvent.modelUsage` records
+  persist the model, producer-reported USD cost, uncached input, cache-read,
+  cache-creation, and output tokens for each model response. Agentsview emits
+  one aggregate usage row per record and uses the producer-reported cost rather
+  than catalog pricing. `SessionCostTrajectorySnapshotEvent` totals and
+  `completion.taskCostUsd` overlap those response records, so they are not
+  emitted separately.
+
+- **Agentsview:** `internal/parser/junie.go` and
+  `internal/parser/junie_provider.go` discover only direct
+  `sessions/<session-id>/events.jsonl` members, use content hashing for
+  freshness, normalize final messages and model usage, and treat discovery as
+  authoritative for provider membership.
 [evener-source-1]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/transcript/transcript.go
 [evener-source-2]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/schema/turn.go
 [evener-source-3]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/llm/types.go

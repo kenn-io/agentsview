@@ -1816,6 +1816,8 @@ agentsview help
 | ------------------------------------- | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
 | `AIDER_DIR`                           | unset                                                | Aider discovery root; set this to opt into scanning a code root                                     |
 | `AMP_DIR`                             | `~/.local/share/amp/threads`                         | Deprecated; historical local Amp thread JSON files only                                             |
+| `JUNIE_DIR`                           | `~/.junie/sessions`                                 | Junie CLI session store directory                                                                   |
+| `JUNIE_HOME`                          | `~/.junie`                                          | Junie home that re-roots the default `sessions/` discovery path                                    |
 | `ANTIGRAVITY_DIR`                     | `~/.gemini/antigravity`                              | Google Antigravity IDE sessions directory                                                           |
 | `ANTIGRAVITY_CLI_DIR`                 | `~/.gemini/antigravity-cli`                          | Google Antigravity CLI sessions directory                                                           |
 | `ANTIGRAVITY_KEY`                     |                                                      | Optional key for decrypting Antigravity CLI `.pb` transcripts (defaults to summary mode without it) |

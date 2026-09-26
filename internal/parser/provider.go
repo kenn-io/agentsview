@@ -842,6 +842,12 @@ type ChangedPathRelevanceProvider interface {
 	ChangedPathRelevance(context.Context, ChangedPathRequest) (ChangedPathRelevance, error)
 }
 
+// SourceSyncAcknowledger is notified after one source's parsed projection is
+// durably written or confirmed fresh in the archive.
+type SourceSyncAcknowledger interface {
+	AcknowledgeSourceSync(SourceRef)
+}
+
 // ResolveChangedPathRelevance returns the optional path-relevance contract
 // only when the provider explicitly advertises it.
 func ResolveChangedPathRelevance(
@@ -1150,6 +1156,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newAiderProviderFactory(def)
 	case AgentAmp:
 		return newAmpProviderFactory(def)
+	case AgentJunie:
+		return newJunieProviderFactory(def)
 	case AgentClaude:
 		return newClaudeProviderFactory(def)
 	case AgentOpenClaude:

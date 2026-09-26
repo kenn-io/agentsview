@@ -2474,6 +2474,16 @@ func providerDiscoveredPath(source parser.SourceRef) string {
 	return ""
 }
 
+func providerSourceSyncAck(provider parser.Provider, source parser.SourceRef) func() {
+	acknowledger, ok := provider.(parser.SourceSyncAcknowledger)
+	if !ok {
+		return nil
+	}
+	return func() {
+		acknowledger.AcknowledgeSourceSync(source)
+	}
+}
+
 func providerVirtualSourceContainerExists(path string) bool {
 	container := validatedProviderSourceStatPath(path)
 	return container != path && parser.IsRegularFile(container)
@@ -10233,6 +10243,11 @@ func (e *Engine) collectAndBatchWithOptions(
 					e.promoteSkipCacheWrites(pendingCacheWrites)
 				}
 			}
+			for i := range pending {
+				if i < len(outcome.written) && outcome.written[i] && pending[i].providerSyncAck != nil {
+					pending[i].providerSyncAck()
+				}
+			}
 			stats.RecordSynced(outcome.writtenSessions)
 			for range outcome.failedSessions {
 				stats.RecordFailed()
@@ -10672,6 +10687,7 @@ func (e *Engine) collectAndBatchWithOptions(
 				}
 				if i == 0 {
 					pw.staged = r.staged
+					pw.providerSyncAck = r.providerSyncAck
 				}
 				pending = append(pending, pw)
 				pendingBytes += pw.sourceBytes
@@ -11169,6 +11185,7 @@ type processResult struct {
 	// retrySessionIDs carries provider per-result data-version state.
 	// Legacy parsers use needsRetry as a source-wide fallback.
 	retrySessionIDs map[string]bool
+	providerSyncAck func()
 	deferredCount   int
 	// suppressPresenceSweep marks a source result that must not authorize
 	// presence or tombstone reconciliation, including clean unsupported skips.
@@ -12119,6 +12136,9 @@ func (e *Engine) processProviderFile(
 	if cacheSkip && !forceSourceCwdParse && e.shouldSkipProviderSource(ctx,
 		file, source, fingerprint, providerSemantics,
 	) {
+		if acknowledge := providerSourceSyncAck(provider, source); acknowledge != nil {
+			acknowledge()
+		}
 		return processResult{
 			skip:      true,
 			mtime:     fingerprint.MTimeNS,
@@ -12587,6 +12607,9 @@ func (e *Engine) processProviderFile(
 		sourceCwdResolution:      cwdDecision.resolution,
 		sourceCwdStored:          cwdDecision.storedCwd,
 		sourceCwdStoredOK:        cwdDecision.storedOK,
+	}
+	if len(filteredResults) == 1 {
+		res.providerSyncAck = providerSourceSyncAck(provider, source)
 	}
 	if (file.Agent == parser.AgentOmnigent ||
 		file.Agent == parser.AgentCursorIDE) && cacheSkip && cleanCache &&
@@ -16819,6 +16842,7 @@ type pendingWrite struct {
 	sourceCwdResolution parser.SourceCwdResolution
 	sourceCwdStored     string
 	sourceCwdStoredOK   bool
+	providerSyncAck     func()
 }
 
 type sessionWriteIdentityReader interface {
@@ -20446,7 +20470,11 @@ func (e *Engine) processAndWriteSessionFile(
 	if sourceComplete && res.providerStatHash != nil {
 		e.recordProviderStatHash(ctx, *res.providerStatHash)
 	}
-
+	// Mirror the batch write path: acknowledge the source only after its write and
+	// link steps succeeded, so a targeted resync does not leave pending work.
+	if res.providerSyncAck != nil && resolved == len(res.results) && !preserved {
+		res.providerSyncAck()
+	}
 	return preserved, sessionsChanged, nil
 }
 

@@ -32,7 +32,7 @@ harnesses include Claude Code, OpenClaude, Codex, Augure Code, Augure Desktop,
 Cline CLI, Crush, CodeBuddy CN, Gemini, Copilot (CLI, VS Code, and Visual
 Studio), Cursor, Cursor IDE, IcodeMate, Qwen Code, DeepSeek TUI and Harness,
 Mistral Vibe, Zed, Warp, OpenCode, Positron, Posit Assistant, Claude Cowork,
-Aider, Antigravity, gptme, Kilo, Kimi, Kiro, OpenHands, Goose, Grok, RooCode,
+Aider, Antigravity, gptme, Junie, Kilo, Kimi, Kiro, OpenHands, Goose, Grok, RooCode,
 Trae, Windsurf, and dozens more. Every supported source is listed in
 [session discovery](/docs/configuration/#session-discovery).
 

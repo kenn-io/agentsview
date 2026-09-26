@@ -436,6 +436,7 @@ keeps its default directories.
 | Hermes Agent          | `~/.hermes/sessions/` (macOS and Linux), `~/AppData/Local/hermes/sessions/` (Windows)                                                                            | SQLite `state.db`; JSONL / JSON transcripts remain supported                                                                                                 |
 | iFlow                 | `~/.iflow/projects/`                                                                                                                                             | JSONL per session                                                                                                                                             |
 | IcodeMate             | `~/.local/share/icodemate/` and `~/.icodemate/cli/projects/`                                                                                                     | OpenCode-family storage, including per-session usage events                                                                                                   |
+| Junie                 | `~/.junie/sessions/` (or `$JUNIE_HOME/sessions/`)                                                                                                             | Per-session `events.jsonl` plus sibling `index.jsonl` metadata; CLI `SessionStore` only                                                                     |
 | Kilo                  | `~/.local/share/kilo/`                                                                                                                                           | SQLite DB or `storage/` JSON files                                                                                                                            |
 | Kimi                  | `~/.kimi/sessions/` and `~/.kimi-code/sessions/`                                                                                                                 | JSONL per session                                                                                                                                             |
 | Kimi Work             | (platform-specific, see below)                                                                                                                                   | JSONL per session (kimi-code kernel wire logs)                                                                                                                |
@@ -923,6 +924,8 @@ export GPTME_DIR=~/custom/gptme/logs
 export GROK_DIR=~/custom/grok/sessions
 export HERMES_SESSIONS_DIR=~/custom/hermes
 export IFLOW_DIR=~/custom/iflow
+export JUNIE_DIR=~/custom/junie/sessions
+export JUNIE_HOME=~/custom/junie-home # re-roots the default sessions/ path
 export KILO_DIR=~/custom/kilo
 export KIMI_DIR=~/custom/kimi
 export KIMI_WORK_DIR=~/custom/kimi-work
@@ -1082,7 +1085,7 @@ default; an empty array clears it. With no overrides, Pi uses
 
 ### Alternate Agent Homes
 
-Claude Code, Codex, and Pi support alternate homes. Each home can hold a
+Claude Code, Codex, Junie, and Pi support alternate homes. Each home can hold a
 separate account or settings profile. Register the home directories themselves
 in `homes`; AgentsView derives their native session directories:
 
@@ -1093,6 +1096,9 @@ homes = ["~/.claude-work", "~/.t3code/instances/alpha/claude"]
 [agents.codex]
 homes = ["~/.codex-work", "~/.t3code/instances/alpha/codex"]
 
+[agents.junie]
+homes = ["~/.junie-work", "~/.junie-personal"]
+
 [agents.pi]
 homes = ["~/.pi-work/agent", "~/.pi-personal/agent"]
 ```
@@ -1101,6 +1107,7 @@ homes = ["~/.pi-work/agent", "~/.pi-personal/agent"]
 | ----------- | --------------------- | ----------------------------------------------- | -------------------------------------- |
 | Claude Code | `CLAUDE_CONFIG_DIR`   | `<home>/projects/`                              | none                                   |
 | Codex       | `CODEX_HOME`          | `<home>/sessions/`, `<home>/archived_sessions/` | `history.jsonl`, `session_index.jsonl` |
+| Junie       | `JUNIE_HOME`          | `<home>/sessions/*/events.jsonl`                | `sessions/index.jsonl`                |
 | Pi          | `PI_CODING_AGENT_DIR` | `<home>/sessions/`                              | none                                   |
 
 Homes are additive to defaults, environment overrides, the same table's `dirs`,

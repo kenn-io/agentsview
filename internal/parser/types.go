@@ -32,6 +32,7 @@ const (
 	AgentCursor         AgentType = "cursor"
 	AgentCursorIDE      AgentType = "cursor-ide"
 	AgentIflow          AgentType = "iflow"
+	AgentJunie          AgentType = "junie"
 	AgentAmp            AgentType = "amp"
 	AgentZencoder       AgentType = "zencoder"
 	AgentVSCodeCopilot  AgentType = "vscode-copilot"
@@ -394,6 +395,18 @@ var Registry = []AgentDef{
 		DefaultDirs: []string{".local/share/amp/threads"},
 		IDPrefix:    "amp:",
 		FileBased:   true,
+	},
+	{
+		Type:              AgentJunie,
+		DisplayName:       "Junie",
+		EnvVar:            "JUNIE_DIR",
+		DefaultRootEnvVar: "JUNIE_HOME",
+		DefaultRootDir:    ".junie",
+		ConfigKey:         "junie_dirs",
+		HomesSupported:    true,
+		DefaultDirs:       []string{".junie/sessions"},
+		IDPrefix:          "junie:",
+		FileBased:         true,
 	},
 	{
 		Type:        AgentZencoder,
@@ -1605,18 +1618,16 @@ func accumulateMessageTokenUsageContext(
 // applyUsageEventTokenTotals recomputes session token totals from the
 // usage-event set whenever events exist. Callers must only use it when
 // events are a superset of per-message token metadata — true for the
-// Antigravity gen_metadata parsers, where every token-bearing message
-// derives from a gen row that also emits an event and undecodable
-// steps emit events with no message. Deriving totals from events
-// therefore covers transcripts that dropped steps (sidecar wins,
-// undecodable rows) without double counting. Message-derived totals
-// are kept where the events are silent.
+// Antigravity gen_metadata and Junie model-usage parsers. Deriving totals
+// from events covers token-bearing steps without normalized messages
+// (sidecar wins, undecodable rows) without double counting. Message-derived
+// totals are kept where the events are silent.
 //
 // Peak context counts the full context window per event: fresh input
 // plus cache-creation and cache-read tokens. That keeps event-derived
 // session totals consistent with per-message ContextTokens attribution
-// (input + cacheRead) from parsers whose events carry cache fields,
-// such as the Antigravity CLI sidecar parser.
+// (input + cacheRead) from parsers whose events carry cache fields, such as
+// Antigravity and Junie.
 func applyUsageEventTokenTotals(
 	sess *ParsedSession,
 	events []ParsedUsageEvent,
