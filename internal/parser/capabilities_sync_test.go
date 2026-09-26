@@ -135,6 +135,12 @@ func TestProviderSyncSemanticsDeclarations(t *testing.T) {
 		AgentCopilot: {
 			FingerprintHashRequiredForFreshness: true,
 		},
+		// Grok companion edits can keep the summary's size and mtime, so
+		// freshness depends on the content fingerprint.
+		AgentGrok: {
+			FingerprintHashInCacheKey:           true,
+			FingerprintHashRequiredForFreshness: true,
+		},
 	}
 
 	for _, factory := range ProviderFactories() {

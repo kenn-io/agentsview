@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"slices"
 	"time"
 
 	"go.kenn.io/agentsview/internal/parser"
@@ -135,7 +134,7 @@ func (e *Engine) SyncChangedPathPlanWithOptionsContext(
 	processingCtx := context.WithValue(ctx, deferGlobalLinkContextKey{}, true)
 	processingCtx = parser.WithProjectRootMemo(processingCtx)
 	results := e.startWorkers(processingCtx, files)
-	affectedSessionIDs := make(map[string]struct{})
+	affectedSessionIDs := make(changedSessionLinks)
 	stats = e.collectAndBatchWithOptions(
 		processingCtx, results, len(files), len(files), func(progress Progress) {
 			progress.FallbackProviders = len(plan.FallbackProviders)
@@ -146,15 +145,7 @@ func (e *Engine) SyncChangedPathPlanWithOptionsContext(
 		}, syncWriteDefault, collectAndBatchOptions{
 			observeResult: func(job syncJob) {
 				result.FilesProcessed++
-				if job.incremental != nil {
-					affectedSessionIDs[job.incremental.sessionID] = struct{}{}
-				}
-				for _, parsed := range job.results {
-					affectedSessionIDs[applyIDPrefixToID(e.idPrefix, parsed.Session.ID)] = struct{}{}
-				}
-				for _, id := range job.excludedSessionIDs {
-					affectedSessionIDs[applyIDPrefixToID(e.idPrefix, id)] = struct{}{}
-				}
+				affectedSessionIDs.observe(job, e.idPrefix)
 				if !job.cachedSkip {
 					return
 				}
@@ -171,20 +162,10 @@ func (e *Engine) SyncChangedPathPlanWithOptionsContext(
 			},
 		},
 	)
-	if len(affectedSessionIDs) > 0 && !stats.Aborted {
-		ids := make([]string, 0, len(affectedSessionIDs))
-		for id := range affectedSessionIDs {
-			ids = append(ids, id)
-		}
-		slices.Sort(ids)
-		if err := e.db.LinkSubagentSessionsForSessions(ctx, ids); err != nil {
+	if !stats.Aborted {
+		if err := affectedSessionIDs.link(ctx, e); err != nil {
 			stats.RecordFailed()
-			processErr = errors.Join(processErr,
-				fmt.Errorf("link affected subagent sessions: %w", err))
-			if queueErr := e.db.QueueSubagentParentRepairs(ctx, ids); queueErr != nil {
-				processErr = errors.Join(processErr,
-					fmt.Errorf("queue affected subagent parent repairs: %w", queueErr))
-			}
+			processErr = errors.Join(processErr, err)
 		}
 	}
 	e.anomalies.applyTo(&stats)

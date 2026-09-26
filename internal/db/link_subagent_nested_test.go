@@ -115,7 +115,7 @@ func TestSubagentFinalizationHonorsCanceledContext(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
 
-		err := d.LinkSubagentSessionsContext(ctx)
+		_, err := d.LinkSubagentSessionsContext(ctx)
 
 		require.ErrorIs(t, err, context.Canceled)
 		kid, getErr := d.GetSession(t.Context(), "kid")

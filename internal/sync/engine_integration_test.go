@@ -16368,6 +16368,15 @@ func TestSyncSingleSessionIncrementalAppendLinksSpawnedChild(t *testing.T) {
 }
 
 func TestSyncChangedPathPlanIncrementalAppendLinksSpawnedChild(t *testing.T) {
+	for _, watcher := range []bool{false, true} {
+		t.Run(fmt.Sprintf("watcher=%t", watcher), func(t *testing.T) {
+			syncChangedPathPlanIncrementalAppendLinksSpawnedChild(t, watcher)
+		})
+	}
+}
+
+func syncChangedPathPlanIncrementalAppendLinksSpawnedChild(t *testing.T, watcher bool) {
+	t.Helper()
 	env := setupTestEnv(t)
 	env.writeClaudeSession(
 		t, "changed-path-link", "main-changed-path.jsonl",
@@ -16415,13 +16424,15 @@ func TestSyncChangedPathPlanIncrementalAppendLinksSpawnedChild(t *testing.T) {
 	require.NoError(t, file.Close())
 	require.NoError(t, writeErr)
 
-	plan, err := env.engine.PlanChangedPathsContext(
-		t.Context(), []string{orchestratorPath},
-	)
-	require.NoError(t, err)
-	result, err := env.engine.SyncChangedPathPlanContext(t.Context(), plan, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, result.Stats.Synced)
+	if watcher {
+		require.NoError(t, env.engine.SyncPathsContext(t.Context(), []string{orchestratorPath}))
+	} else {
+		plan, err := env.engine.PlanChangedPathsContext(t.Context(), []string{orchestratorPath})
+		require.NoError(t, err)
+		result, err := env.engine.SyncChangedPathPlanContext(t.Context(), plan, nil)
+		require.NoError(t, err)
+		assert.Equal(t, 1, result.Stats.Synced)
+	}
 
 	var gotFirstMessageID int64
 	require.NoError(t, env.db.Reader().QueryRow(t.Context(), `
@@ -16437,7 +16448,18 @@ func TestSyncChangedPathPlanIncrementalAppendLinksSpawnedChild(t *testing.T) {
 }
 
 func TestSyncChangedPathPlanLinkFailureQueuesDurableRepair(t *testing.T) {
-	env := setupTestEnv(t)
+	for _, watcher := range []bool{false, true} {
+		t.Run(fmt.Sprintf("watcher=%t", watcher), func(t *testing.T) {
+			syncChangedPathPlanLinkFailureQueuesDurableRepair(t, watcher)
+		})
+	}
+}
+
+// writeChangedPathLinkRetryFixture syncs a main session with an orchestrator
+// and a child subagent, then appends a spawn edge from the orchestrator to the
+// child so the next changed-path sync must relink the child.
+func writeChangedPathLinkRetryFixture(t *testing.T, env *testEnv) string {
+	t.Helper()
 	env.writeClaudeSession(
 		t, "changed-path-link-retry", "main-changed-path-retry.jsonl",
 		testjsonl.JoinJSONL(
@@ -16477,6 +16499,14 @@ func TestSyncChangedPathPlanLinkFailureQueuesDurableRepair(t *testing.T) {
 	require.NoError(t, file.Close())
 	require.NoError(t, writeErr)
 
+	return orchestratorPath
+}
+
+func syncChangedPathPlanLinkFailureQueuesDurableRepair(t *testing.T, watcher bool) {
+	t.Helper()
+	env := setupTestEnv(t)
+	orchestratorPath := writeChangedPathLinkRetryFixture(t, env)
+
 	raw, err := sql.Open("sqlite3", env.db.Path())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, raw.Close()) })
@@ -16490,11 +16520,14 @@ func TestSyncChangedPathPlanLinkFailureQueuesDurableRepair(t *testing.T) {
 		END`)
 	require.NoError(t, err)
 
-	plan, err := env.engine.PlanChangedPathsContext(
-		t.Context(), []string{orchestratorPath},
-	)
-	require.NoError(t, err)
-	_, err = env.engine.SyncChangedPathPlanContext(t.Context(), plan, nil)
+	if watcher {
+		err = env.engine.SyncPathsContext(t.Context(), []string{orchestratorPath})
+	} else {
+		var plan sync.ChangedPathPlan
+		plan, err = env.engine.PlanChangedPathsContext(t.Context(), []string{orchestratorPath})
+		require.NoError(t, err)
+		_, err = env.engine.SyncChangedPathPlanContext(t.Context(), plan, nil)
+	}
 	require.ErrorContains(t, err, "injected changed-path link failure")
 
 	var queued int
@@ -16510,6 +16543,66 @@ func TestSyncChangedPathPlanLinkFailureQueuesDurableRepair(t *testing.T) {
 	require.NoError(t, env.db.RepairQueuedSubagentParents())
 	assert.Equal(t, "agent-orchestrator-retry",
 		parentSessionIDOf(t, env, "agent-child-retry"))
+}
+
+// TestChangedPathLinkAndQueueFailureRetriesOnUnchangedPoll covers a
+// changed-path batch whose scoped link and durable repair queue both fail.
+// The retried sources are unchanged, so the next poll finds no session
+// changes; it must still run the global link pass the failed batch owes.
+func TestChangedPathLinkAndQueueFailureRetriesOnUnchangedPoll(t *testing.T) {
+	for _, watcher := range []bool{false, true} {
+		t.Run(fmt.Sprintf("watcher=%t", watcher), func(t *testing.T) {
+			env := setupTestEnv(t)
+			orchestratorPath := writeChangedPathLinkRetryFixture(t, env)
+
+			raw, err := sql.Open("sqlite3", env.db.Path())
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, raw.Close()) })
+			_, err = raw.Exec(`
+				CREATE TRIGGER fail_changed_path_child_link
+				BEFORE UPDATE OF parent_session_id ON sessions
+				WHEN NEW.id = 'agent-child-retry'
+				  AND NEW.parent_session_id = 'agent-orchestrator-retry'
+				BEGIN
+					SELECT RAISE(FAIL, 'injected changed-path link failure');
+				END`)
+			require.NoError(t, err)
+			_, err = raw.Exec(`
+				CREATE TRIGGER fail_changed_path_repair_queue
+				BEFORE INSERT ON subagent_parent_repair_queue
+				BEGIN
+					SELECT RAISE(FAIL, 'injected repair queue failure');
+				END`)
+			require.NoError(t, err)
+
+			if watcher {
+				err = env.engine.SyncPathsContext(t.Context(), []string{orchestratorPath})
+			} else {
+				var plan sync.ChangedPathPlan
+				plan, err = env.engine.PlanChangedPathsContext(
+					t.Context(), []string{orchestratorPath},
+				)
+				require.NoError(t, err)
+				_, err = env.engine.SyncChangedPathPlanContext(t.Context(), plan, nil)
+			}
+			require.ErrorContains(t, err, "injected repair queue failure")
+			require.Equal(t, "main-changed-path-retry",
+				parentSessionIDOf(t, env, "agent-child-retry"))
+
+			_, err = raw.Exec("DROP TRIGGER fail_changed_path_child_link")
+			require.NoError(t, err)
+			_, err = raw.Exec("DROP TRIGGER fail_changed_path_repair_queue")
+			require.NoError(t, err)
+			require.NoError(t, env.engine.ReconcileProviderRootsGrouped(
+				t.Context(), []sync.ProviderRootsGroup{{
+					Agent: parser.AgentClaude, Roots: []string{env.claudeDir},
+				}},
+			))
+			assert.Equal(t, "agent-orchestrator-retry",
+				parentSessionIDOf(t, env, "agent-child-retry"),
+				"an unchanged poll must retry the failed changed-path link")
+		})
+	}
 }
 
 // TestSyncSingleSessionNewEdgeLinkFailureRetriesFromDurableQueue covers the

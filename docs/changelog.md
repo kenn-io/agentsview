@@ -241,6 +241,8 @@ The latest published release is
 - Sync avoids repeatedly parsing unchanged malformed or missing source files
   where failure caching applies. Unrelated file events no longer bypass retry
   delays, and temporary lock-file changes no longer trigger session syncing.
+- The session list refreshes when a background poll repairs a subagent parent
+  link and no transcript changed.
 - Configuration loading rejects unknown keys under `[vector]`, including
   misspelled or misplaced settings. Previously accepted configurations may now
   fail; correct or remove the named keys, even if vector search is disabled.

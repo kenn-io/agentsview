@@ -240,11 +240,15 @@ func TestUnwatchedPollDoesNotDragUnrelatedProvidersThroughOneProvidersGap(t *tes
 		requirePollWithin(t, syncer.wake, time.Second)
 		requirePollWithin(t, syncer.wake, time.Second)
 
+		coordinator.Stop()
 		logMu.Lock()
 		output := logBuf.String()
 		logMu.Unlock()
 		assert.Contains(t, output, "polling 2 unwatched root(s)",
 			"log must report total root count, not per-group count")
+		assert.Contains(t, output, fmt.Sprintf("claude=[%s]", rootA))
+		assert.Contains(t, output, fmt.Sprintf("openhands=[%s]", rootB))
+		assert.Contains(t, output, "polled 2 unwatched root(s) in ")
 	})
 }
 

@@ -224,6 +224,16 @@ On startup, the server:
 The server shuts down cleanly on `Ctrl+C`, flushing the database and stopping
 file watchers.
 
+On current `main`, watcher batches link subagent relationships only for affected
+sessions. Unchanged polls skip archive-wide linking. Poll logs identify the
+provider roots being checked and report how long the pass took.
+
+Unchanged broken or missing source files are skipped through the failure cache
+described in [Sync Behavior](configuration.md#sync-behavior). Grok
+companion-file events use normal content-fingerprint checks, so repeated
+companion removal events do not clear a cached missing-summary failure. Actual
+companion edits still trigger sync.
+
 #### Background Mode
 
 The existing `serve` background and lifecycle forms remain available:

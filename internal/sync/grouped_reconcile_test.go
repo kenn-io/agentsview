@@ -191,6 +191,13 @@ func TestReconcileProviderRootsGroupedSkipsEpilogueOnCancellation(t *testing.T) 
 		"a canceled batch must not persist the archive-sized skip cache")
 	requireGroupedChildParent(t, database, false,
 		"a canceled batch must not run global subagent linking")
+
+	engine.reconciliationSpoolFactory = defaultFactory
+	require.NoError(t, engine.ReconcileProviderRootsGrouped(t.Context(),
+		[]ProviderRootsGroup{{Agent: parser.AgentClaude, Roots: []string{rootA}}},
+	))
+	requireGroupedChildParent(t, database, true,
+		"an unchanged retry must finish linking writes committed before cancellation")
 }
 
 // TestGroupedReconcileContainerProbesDoNotScaleWithProviderGroups is the

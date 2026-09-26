@@ -267,7 +267,8 @@ func (c *sharedUnwatchedPollCoordinator) runPollWorker() {
 					return
 				}
 				if err := pollUnwatchedScopesOnce(c.workerCtx, c.engine, groups); err != nil {
-					log.Printf("polling unwatched roots: %v", err)
+					log.Printf("polling unwatched roots failed after %s: %v",
+						c.now().Sub(startedAt).Round(time.Millisecond), err)
 				}
 			})
 			completedAt := c.now()

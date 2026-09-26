@@ -1883,16 +1883,18 @@ const linkSubagentSessionsQuery = `
 // use LinkSubagentSessionsForSessions instead, which further bounds the
 // pass to the changed batch.
 func (db *DB) LinkSubagentSessions() error {
-	return db.LinkSubagentSessionsContext(context.Background())
+	_, err := db.LinkSubagentSessionsContext(context.Background())
+	return err
 }
 
 // LinkSubagentSessionsContext is LinkSubagentSessions with caller-controlled
-// cancellation for bounded sync paths.
-func (db *DB) LinkSubagentSessionsContext(ctx context.Context) error {
+// cancellation for bounded sync paths. The count is the number of session
+// rows whose parent link changed.
+func (db *DB) LinkSubagentSessionsContext(ctx context.Context) (int, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	if err := db.repairLegacySelfParentedSessions(ctx); err != nil {
-		return err
+		return 0, err
 	}
 
 	// local_modified_at is bumped so the sync_marker trigger fires and
@@ -1902,11 +1904,15 @@ func (db *DB) LinkSubagentSessionsContext(ctx context.Context) error {
 	// session after a mirror's cutoff would otherwise never re-push it
 	// (see updateSessionSignalsTx and ReplaceSessionUsageEvents for the
 	// same pattern).
-	_, err := db.getWriter().ExecContext(ctx, linkSubagentSessionsQuery)
+	res, err := db.getWriter().ExecContext(ctx, linkSubagentSessionsQuery)
 	if err != nil {
-		return fmt.Errorf("linking subagent sessions: %w", err)
+		return 0, fmt.Errorf("linking subagent sessions: %w", err)
 	}
-	return nil
+	updated, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("counting linked subagent sessions: %w", err)
+	}
+	return int(updated), nil
 }
 
 // selfParentRepairStateKey marks the archive as having cleared the

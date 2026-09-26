@@ -1004,6 +1004,15 @@ fixtures retain this field; missing identities remain source-local.
   colocated tests, and the sanitized upstream-generated fixtures in
   `internal/parser/testdata/grok-build`.
 
+- **Watcher evidence (2026-09-20):** Rechecked the pinned session guide above:
+  `summary.json` indexes the session, while transcript and signal files are
+  separate inputs. Grok watcher events use the complete content fingerprint
+  instead of forcing a parse. Regression coverage in
+  `internal/sync/grok_watcher_retry_test.go` verifies retry suppression for
+  missing summaries after companion removal, immediate recovery when the
+  summary appears, and same-size, same-mtime companion edits. Parsed formats
+  and usage accounting are unchanged.
+
 ## MiMo Code (`mimocode`)
 
 - **Format:** OpenCode-compatible SQLite or legacy `storage/session`,
