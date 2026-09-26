@@ -51,6 +51,11 @@ func AntigravityFileInfo(path string) (os.FileInfo, error) {
 }
 
 func antigravityIDECompanionPaths(path string) []string {
+	if _, _, ok := antigravityBrainTranscriptConversation(path); ok {
+		// A brain transcript standing as its own session has no companions:
+		// it is the whole of what that session is parsed from.
+		return nil
+	}
 	id := strings.TrimSuffix(filepath.Base(path), ".db")
 	root := filepath.Dir(filepath.Dir(path))
 	companions := []string{
@@ -62,6 +67,10 @@ func antigravityIDECompanionPaths(path string) []string {
 		// change the fingerprint even when the database files themselves
 		// are untouched.
 		strings.TrimSuffix(path, ".db") + ".trajectory.json",
+		// The brain transcript is folded into this session's messages (see
+		// parseSession), so a transcript write must reparse the session even
+		// when the database files are untouched.
+		antigravityBrainTranscriptPath(root, id),
 	}
 	return append(companions, antigravityBrainCompanions(
 		filepath.Join(root, "brain", id),
@@ -74,6 +83,14 @@ func antigravityIDECompanionPaths(path string) []string {
 func (p *antigravityProvider) parseSession(ctx context.Context,
 	path, project, machine string,
 ) (*ParsedSession, []ParsedMessage, []ParsedUsageEvent, error) {
+	if root, id, ok := antigravityBrainTranscriptConversation(path); ok {
+		// A conversation with no readable database of its own: the brain's
+		// plaintext transcript is the session. It carries no token usage.
+		sess, msgs, err := parseAntigravityBrainTranscriptSession(
+			path, root, id, project, machine,
+		)
+		return sess, msgs, nil, err
+	}
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("stat %s: %w", path, err)
@@ -163,6 +180,14 @@ func (p *antigravityProvider) parseSession(ctx context.Context,
 	messages = append(messages,
 		collectAntigravityBrainMessages(
 			filepath.Join(root, "brain", id),
+		)...,
+	)
+	// The brain's own transcript of this conversation, when it wrote one. It is
+	// folded in here rather than stored as a second session so one conversation
+	// stays one session.
+	messages = append(messages,
+		collectAntigravityBrainTranscriptMessages(
+			antigravityBrainTranscriptPath(root, id),
 		)...,
 	)
 

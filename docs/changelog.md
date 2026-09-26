@@ -58,6 +58,15 @@ The latest published release is
 - Agents can open recalled evidence against the exact transcript revision that
   produced it. MCP message reads reject stale citations with `source_changed`,
   and oversized messages now provide a revision-bound continuation cursor.
+- Antigravity conversations that have no readable session database are now
+  stored from the plaintext transcript Antigravity's agent brain wrote beside
+  them, with the user's turns, the model's turns, its reasoning and its tool
+  calls. Until now those conversations were invisible: the only other copy is
+  an encrypted `.pb` stream that needs a key. `~/.gemini/antigravity-ide`, the
+  directory the IDE build uses, is also collected by default now. A
+  conversation that does have a database keeps one session, with the
+  transcript's entries folded into it. Antigravity sources re-parse once on
+  upgrade to pick the transcripts up.
 
 **Improvements**
 
