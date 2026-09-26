@@ -961,8 +961,8 @@ func (s codexSourceSet) findSourceFile(sessionsDir, sessionID string) string {
 		}
 	}
 
-	// A continuation rollout can land in a later day directory than the
-	// original, so the whole tree is scanned once a match is found.
+	// A revert rollout can land in a later day directory than the original, so
+	// the scan does not stop at the first match.
 	var live string
 	walkCodexDayDirs(sessionsDir, func(dayPath string) bool {
 		dayEntries, err := os.ReadDir(dayPath)
@@ -990,8 +990,8 @@ func (s codexSourceSet) findSourceFile(sessionsDir, sessionID string) string {
 	return archived
 }
 
-// preferCodexRolloutPath keeps the first match unless name is a continuation
-// that supersedes the current pick.
+// preferCodexRolloutPath keeps the first match unless name is a newer revert
+// rollout than the current pick.
 func preferCodexRolloutPath(name, currentPath string) bool {
 	if currentPath == "" {
 		return true

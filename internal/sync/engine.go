@@ -1956,6 +1956,9 @@ func (e *Engine) classifyPaths(
 		classificationErr = errors.Join(classificationErr, err)
 	}
 	files = dedupeDiscoveredFiles(files)
+	files = slices.DeleteFunc(files, func(file parser.DiscoveredFile) bool {
+		return e.supersededCodexRollout(ctx, file)
+	})
 	return e.dedupeClaudeDiscoveredFiles(ctx, files), classificationErr
 }
 
@@ -6266,9 +6269,8 @@ func (e *Engine) reconciliationCandidate(ctx context.Context,
 		}
 	}
 	if isCodexFormatAgent(agent) {
-		if prefer, _ := parser.PreferCodexContinuation(filepath.Base(path), ""); prefer {
-			preference1 = 1
-		}
+		// Same order as parser.PreferCodexContinuation, then the dated layout.
+		preference1 = parser.CodexContinuationRank(filepath.Base(path))
 		preference2 = boolPreference(
 			codexLayoutForPath(path) == parser.CodexLayoutDated,
 		)
@@ -16332,7 +16334,7 @@ func pickPreferredCodexDiscoveredFile(ctx context.Context,
 				if filepath.Clean(candidate.Path) != storedPath {
 					continue
 				}
-				// A stored original rollout must not outlive its continuation.
+				// A stored rollout must not outlive a newer revert rollout.
 				if prefer, _ := parser.PreferCodexContinuation(
 					filepath.Base(best.Path), filepath.Base(candidate.Path),
 				); prefer {
@@ -16343,6 +16345,35 @@ func pickPreferredCodexDiscoveredFile(ctx context.Context,
 		}
 	}
 	return best
+}
+
+// supersededCodexRollout reports whether the archive already stores a newer
+// revert rollout of file's thread. Codex never writes a rollout again after a
+// revert moves the thread off it, so a late event for it (such as the close
+// after the switch) must not restore it.
+func (e *Engine) supersededCodexRollout(
+	ctx context.Context, file parser.DiscoveredFile,
+) bool {
+	if !isCodexFormatAgent(file.Agent) || isS3SourcePath(file.Path) {
+		return false
+	}
+	name := filepath.Base(file.Path)
+	uuid := parser.CodexSessionUUIDFromFilename(name)
+	def, ok := parser.AgentByType(file.Agent)
+	if uuid == "" || !ok {
+		return false
+	}
+	storedPath := e.db.GetSessionFilePath(ctx, e.idPrefix+def.IDPrefix+uuid)
+	storedName := filepath.Base(storedPath)
+	if storedPath == "" ||
+		parser.CodexSessionUUIDFromFilename(storedName) != uuid {
+		return false
+	}
+	if prefer, _ := parser.PreferCodexContinuation(storedName, name); !prefer {
+		return false
+	}
+	// A rewritten stored path is not a local path, so only a local one is checked.
+	return e.pathRewriter != nil || parser.IsRegularFile(storedPath)
 }
 
 // roocodeEffectiveStat returns the composite size and latest mtime of

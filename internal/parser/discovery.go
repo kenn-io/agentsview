@@ -19,8 +19,8 @@ import (
 )
 
 // uuidRe matches a standard UUID (8-4-4-4-12 hex) at the end of a rollout
-// filename stem, optionally followed by "_<uuid>", which Codex Desktop uses
-// for a continuation rollout of the same thread.
+// filename stem, optionally followed by "_<uuid>": after thread/revert, Codex
+// names the thread's new rollout file "<thread id>_<rollout id>".
 var uuidRe = regexp.MustCompile(
 	`^rollout-.*-([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-` +
 		`[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})` +
@@ -890,23 +890,40 @@ func extractUUIDFromRollout(filename string) string {
 	return match[1]
 }
 
-func isCodexContinuationRollout(filename string) bool {
+// CodexContinuationRank returns the Unix seconds of a revert rollout's
+// filename timestamp ("...-<thread id>_<rollout id>.jsonl"), or 0 for an
+// ordinary rollout. Codex stamps each revert rollout when it is created, so a
+// higher rank is a newer rollout of the thread. A revert rollout whose
+// timestamp does not parse ranks 1.
+func CodexContinuationRank(filename string) int64 {
 	stem := strings.TrimSuffix(filename, ".jsonl")
 	match := uuidRe.FindStringSubmatch(stem)
-	return len(match) == 3 && match[2] != ""
+	if len(match) != 3 || match[2] == "" {
+		return 0
+	}
+	core := strings.TrimPrefix(stem, "rollout-")
+	if len(core) >= 19 {
+		ts, err := time.Parse("2006-01-02T15-04-05", core[:19])
+		if err == nil && ts.Unix() > 1 {
+			return ts.Unix()
+		}
+	}
+	return 1
 }
 
 // PreferCodexContinuation compares two rollout filenames for the same Codex
-// session UUID. A continuation rollout ("...-<uuid>_<uuid>.jsonl") holds the
-// thread after Codex Desktop restarted it, so it wins over the original
-// rollout. decided is false when both or neither are continuations and the
+// session UUID. After thread/revert the thread continues in a new rollout
+// ("...-<thread id>_<rollout id>.jsonl"), so a revert rollout wins over the
+// original and a newer revert rollout wins over an older one. decided is
+// false when neither is a revert rollout, or both share a timestamp, and the
 // caller's existing order applies.
 func PreferCodexContinuation(candidate, current string) (prefer, decided bool) {
-	candCont := isCodexContinuationRollout(candidate)
-	if candCont == isCodexContinuationRollout(current) {
+	candRank := CodexContinuationRank(candidate)
+	currRank := CodexContinuationRank(current)
+	if candRank == currRank {
 		return false, false
 	}
-	return candCont, true
+	return candRank > currRank, true
 }
 
 // IsDigits reports whether s is non-empty and contains only

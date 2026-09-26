@@ -107,12 +107,13 @@ The latest published release is
 
 **Bug fixes**
 
-- Codex Desktop sessions that Codex restarted into a second file no longer
-  lose their later messages when AgentsView restarts. Codex names that file
-  `rollout-<time>-<id>_<id>.jsonl`. AgentsView now treats it as the same
-  session and always keeps it, so a Full Resync no longer "finds" the same
-  messages again. Earlier turns that exist only in the first file are still
-  not merged in.
+- Reverted Codex threads no longer lose their later messages when AgentsView
+  restarts, and a Full Resync no longer "finds" them again. After a revert,
+  Codex continues the thread in a new file named
+  `rollout-<time>-<thread id>_<rollout id>.jsonl` and leaves the old file in
+  place. AgentsView now treats the new file as the same session and always
+  keeps the newest one. Turns that the new file inherits from the old one are
+  not shown yet.
 
 ## 0.44.0
 

@@ -2597,8 +2597,9 @@ func TestReconcileWatchRootsPreservesCodexLiveDuplicatePreference(t *testing.T) 
 func TestReconcileWatchRootsPrefersCodexContinuationRollout(t *testing.T) {
 	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
 	const (
-		uuid     = "019eb791-cf7d-75c1-8439-9ed74c1229c3"
-		contUUID = "019eb791-cf7d-75c1-8439-9ed74c1229c4"
+		uuid      = "019eb791-cf7d-75c1-8439-9ed74c1229c3"
+		contUUID  = "019eb791-cf7d-75c1-8439-9ed74c1229c4"
+		cont2UUID = "019eb791-cf7d-75c1-8439-9ed74c1229c5"
 	)
 	day := filepath.Join("2026", "09", "22")
 	env.writeCodexSession(t, day,
@@ -2607,11 +2608,18 @@ func TestReconcileWatchRootsPrefersCodexContinuationRollout(t *testing.T) {
 			AddCodexMeta(tsEarly, uuid, "/workspace/project", "user").
 			AddCodexMessage(tsEarlyS1, "user", "aborted first try").
 			String())
-	contPath := env.writeCodexSession(t, day,
+	env.writeCodexSession(t, day,
 		"rollout-2026-09-22T11-34-12-"+uuid+"_"+contUUID+".jsonl",
 		testjsonl.NewSessionBuilder().
 			AddCodexMeta(tsEarly, uuid, "/workspace/project", "user").
 			AddCodexMessage(tsEarlyS1, "user", "retry").
+			String())
+	// A second revert names a new rollout ID after the same thread ID.
+	cont2Path := env.writeCodexSession(t, day,
+		"rollout-2026-09-22T11-40-00-"+uuid+"_"+cont2UUID+".jsonl",
+		testjsonl.NewSessionBuilder().
+			AddCodexMeta(tsEarly, uuid, "/workspace/project", "user").
+			AddCodexMessage(tsEarlyS1, "user", "retry again").
 			AddCodexMessage(tsEarlyS5, "assistant", "done").
 			String())
 
@@ -2619,7 +2627,7 @@ func TestReconcileWatchRootsPrefersCodexContinuationRollout(t *testing.T) {
 		t.Context(), []string{env.codexDir}, false,
 	))
 
-	assert.Equal(t, contPath, env.db.GetSessionFilePath(t.Context(), "codex:"+uuid))
+	assert.Equal(t, cont2Path, env.db.GetSessionFilePath(t.Context(), "codex:"+uuid))
 	assertSessionMessageCount(t, env.db, "codex:"+uuid, 2)
 }
 
@@ -6203,10 +6211,11 @@ func TestSyncAllSinceCodexKeepsChangedArchivedDuplicate(t *testing.T) {
 	assert.Equal(t, archivedPath, env.db.GetSessionFilePath(t.Context(), "codex:"+uuid))
 }
 
-// Codex Desktop can restart a thread into "rollout-<ts>-<A>_<B>.jsonl" while
-// the original "rollout-<ts>-<A>.jsonl" stays on disk. Both files carry session
-// A. Every sync path must keep the continuation, or a restart puts the aborted
-// original back and a full resync is never a no-op.
+// After thread/revert, Codex continues a thread in
+// "rollout-<ts>-<A>_<B>.jsonl" while the original "rollout-<ts>-<A>.jsonl"
+// stays on disk. Both files carry session A. Every sync path must keep the
+// newest rollout, or a restart puts the superseded original back and a full
+// resync is never a no-op.
 func TestSyncKeepsCodexContinuationRolloutAcrossRestartAndResync(t *testing.T) {
 	root := t.TempDir()
 	codexDir := filepath.Join(root, "sessions")
@@ -6240,26 +6249,47 @@ func TestSyncKeepsCodexContinuationRolloutAcrossRestartAndResync(t *testing.T) {
 		"the watcher event for the continuation must store it")
 	assertSessionMessageCount(t, env.db, sessionID, 2)
 
+	// Codex closing the superseded original also produces a watcher event.
+	env.engine.SyncPaths([]string{originalPath})
+	require.Equal(t, contPath, env.db.GetSessionFilePath(t.Context(), sessionID),
+		"a watcher event for the original must not restore it")
+	assertSessionMessageCount(t, env.db, sessionID, 2)
+
+	// A second revert on a later day supersedes the first continuation.
+	const cont2UUID = "019eb791-cf7d-75c1-8439-9ed74c1229c6"
+	cont2Path := env.writeCodexSession(t, filepath.Join("2026", "09", "23"),
+		"rollout-2026-09-23T08-00-00-"+uuid+"_"+cont2UUID+".jsonl",
+		testjsonl.NewSessionBuilder().
+			AddCodexMeta(tsEarly, uuid, "/home/user/code/api", "user").
+			AddCodexMessage(tsEarlyS1, "user", "retry").
+			AddCodexMessage(tsEarlyS5, "assistant", "done").
+			AddCodexMessage("2024-01-01T10:00:09Z", "user", "follow-up").
+			String())
+	env.engine.SyncPaths([]string{cont2Path})
+	require.Equal(t, cont2Path, env.db.GetSessionFilePath(t.Context(), sessionID))
+	assertSessionMessageCount(t, env.db, sessionID, 3)
+
 	restarted := sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {codexDir}},
 		Machine:   "local",
 	})
 	t.Cleanup(restarted.Close)
 	assert.Equal(t, 0, restarted.SyncAll(t.Context(), nil).Synced,
-		"a restart must not reparse the superseded original")
-	assert.Equal(t, contPath, env.db.GetSessionFilePath(t.Context(), sessionID))
+		"a restart must not reparse a superseded rollout")
+	assert.Equal(t, cont2Path, env.db.GetSessionFilePath(t.Context(), sessionID))
 
-	// Quick sync prefers the newest mtime for duplicates; a touched original
-	// must still lose to its continuation.
+	// Quick sync prefers the newest mtime for duplicates; touched older
+	// rollouts must still lose to the newest revert rollout.
 	newer := time.Now().Add(time.Minute)
 	require.NoError(t, os.Chtimes(originalPath, newer, newer))
+	require.NoError(t, os.Chtimes(contPath, newer, newer))
 	restarted.SyncAllSince(t.Context(), time.Now().Add(-time.Hour), nil)
-	assert.Equal(t, contPath, env.db.GetSessionFilePath(t.Context(), sessionID))
+	assert.Equal(t, cont2Path, env.db.GetSessionFilePath(t.Context(), sessionID))
 
 	stats := restarted.ResyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "ResyncAll aborted: %+v", stats)
-	assert.Equal(t, contPath, env.db.GetSessionFilePath(t.Context(), sessionID))
-	assertSessionMessageCount(t, env.db, sessionID, 2)
+	assert.Equal(t, cont2Path, env.db.GetSessionFilePath(t.Context(), sessionID))
+	assertSessionMessageCount(t, env.db, sessionID, 3)
 }
 
 func TestSyncAllSinceCodexRefreshesSessionNameFromIndex(t *testing.T) {

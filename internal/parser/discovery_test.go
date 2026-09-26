@@ -492,6 +492,7 @@ func TestPreferCodexContinuation(t *testing.T) {
 		original = "rollout-2026-09-22T11-32-24-abc12345-1234-5678-9abc-def012345678.jsonl"
 		first    = "rollout-2026-09-22T11-34-12-abc12345-1234-5678-9abc-def012345678_fed01234-5678-9abc-def0-123456789abc.jsonl"
 		second   = "rollout-2026-09-23T08-00-00-abc12345-1234-5678-9abc-def012345678_0123abcd-5678-9abc-def0-123456789abc.jsonl"
+		sameTime = "rollout-2026-09-22T11-34-12-abc12345-1234-5678-9abc-def012345678_0123abcd-5678-9abc-def0-123456789abc.jsonl"
 	)
 	tests := []struct {
 		name        string
@@ -502,7 +503,9 @@ func TestPreferCodexContinuation(t *testing.T) {
 	}{
 		{"continuation beats original", first, original, true, true},
 		{"original loses to continuation", original, first, false, true},
-		{"two continuations are undecided", second, first, false, false},
+		{"newer continuation beats older", second, first, true, true},
+		{"older continuation loses to newer", first, second, false, true},
+		{"same-second continuations are undecided", sameTime, first, false, false},
 		{"two originals are undecided", original, original, false, false},
 	}
 	for _, tt := range tests {

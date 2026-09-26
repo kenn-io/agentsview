@@ -459,22 +459,36 @@ fixtures retain this field; missing identities remain source-local.
   call per file. `custom_tool_call` items carry the same patch text under
   `input` instead of a JSON `patch` argument.
 
-- **Continuation rollouts (observed 2026-09-26):** Codex Desktop can restart a
-  thread into a second file named `rollout-<ts>-<A>_<B>.jsonl` while the
-  original `rollout-<ts>-<A>.jsonl` stays on disk. Both files' `session_meta`
-  carry `id` and `session_id` `A`. In three observed pairs the original ended
-  with `turn_aborted`, and the continuation re-sent that prompt and carried on
-  in the same day directory. Earlier completed turns can exist only in the
-  original. Agentsview reads the leading UUID as the session and prefers the
-  continuation in every sync path, including startup reconciliation; source
-  lookup also finds a continuation in a later day directory. The original's
-  earlier turns are not merged. This is local observation of a desktop build;
-  no upstream producer of the `_<B>` suffix has been located.
-  `TestPreferCodexContinuation`, `TestCodexProviderPrefersContinuationRollout`,
-  `TestReconcileWatchRootsPrefersCodexContinuationRollout`, and
+- **Revert rollouts (reverified 2026-09-26):** `thread/revert` keeps the thread
+  ID but moves the thread to a new, immutable rollout file named
+  `rollout-<ts>-<thread id>_<rollout id>.jsonl`; the timestamp is the new
+  file's creation time, and repeated reverts add more `<thread id>_<new id>`
+  files. Older rollouts stay on disk, and Codex tracks the current one in its
+  own state database, so a filesystem scan can find superseded copies. The
+  new file's `session_meta` has `history_mode: "paginated"` and may carry
+  `history_base` (`thread_id`, `end_ordinal_exclusive`, `end_byte_offset`).
+  That names the rollout ID and byte prefix of the previous file the thread
+  still inherits. It is null when the revert discards everything before it.
+  See the pinned
+  [filename parser](https://github.com/openai/codex/blob/12de0e395d3313bc564190d983cb4f5acf0be713/codex-rs/rollout/src/rollout_file_name.rs),
+  [rollout resolver](https://github.com/openai/codex/blob/12de0e395d3313bc564190d983cb4f5acf0be713/codex-rs/thread-store/src/local/thread_rollout_resolver.rs),
+  and
+  [lineage reader](https://github.com/openai/codex/blob/12de0e395d3313bc564190d983cb4f5acf0be713/codex-rs/thread-store/src/local/rollout_lineage.rs).
+  Three local Codex Desktop pairs match: in each, the original ended with
+  `turn_aborted`. Two revert rollouts had a null `history_base`. The third
+  inherited all of its original except the aborted tail. Agentsview reads
+  the leading UUID as the session. Every sync path, including startup
+  reconciliation, prefers the revert rollout with the newest filename
+  timestamp. Source lookup also finds one in a later day directory, and a
+  late watcher event for a superseded rollout is ignored once a newer one is
+  stored. Agentsview does not read `history_base`, so inherited turns are
+  missing from the session. `TestPreferCodexContinuation`,
+  `TestCodexProviderPrefersContinuationRollout`,
+  `TestReconcileWatchRootsPrefersCodexContinuationRollout`,
+  `TestPlanChangedPathsDropsCodexRolloutSupersededByStoredRevert`, and
   `TestSyncKeepsCodexContinuationRolloutAcrossRestartAndResync` cover it.
   Before this, the suffixed file got no session key: full resync kept the
-  continuation, and every restart put the original back.
+  revert rollout, and every restart put the original back.
 
 - **Evidence:** `source`.
 
