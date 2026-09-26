@@ -15658,6 +15658,28 @@ func (e *Engine) tryIncrementalJSONL(
 	// info.Size(), so partial lines at EOF are retried on
 	// the next sync.
 	newOffset := inc.FileSize + consumed
+	// A read that reached bytes the pre-parse stat did not see makes that
+	// stat's mtime describe the earlier, shorter file. A writer that appends
+	// between the stat and the read therefore leaves file_size describing
+	// the later state and file_mtime the earlier one; on the next sync the
+	// size matches and the mtime doesn't, which lands in the size-unchanged
+	// branch above and forces a full re-parse. Re-stat once the read has
+	// finished and adopt it when the file still ends at newOffset, so the
+	// stored pair describes one moment. Only a read past the stat is
+	// refreshed, which leaves a same-size in-place rewrite's mtime change
+	// visible to the next sync.
+	if newOffset > info.Size() {
+		if after, statErr := os.Stat(file.Path); statErr == nil &&
+			after.Size() == newOffset {
+			info = after
+			incMtime = after.ModTime().UnixNano()
+			if agent == parser.AgentCodex {
+				incMtime = e.codexMetadata().EffectiveMtime(
+					file.Path, incMtime,
+				)
+			}
+		}
+	}
 	var incHash string
 	resumeOK := false
 	// Refresh the stored content fingerprint on the incremental path. Codex
