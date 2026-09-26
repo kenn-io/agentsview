@@ -52,8 +52,10 @@ describe("ActivityTimeline", () => {
     const chart = document.querySelector<SVGSVGElement>("svg");
     expect(chart).not.toBeNull();
     expect(Number(chart!.getAttribute("width"))).toBe(800);
+    expect(document.querySelectorAll<SVGRectElement>("rect.bar-user")).toHaveLength(120);
+    expect(document.querySelectorAll<SVGRectElement>("rect.bar-assistant")).toHaveLength(120);
+    expect(document.querySelectorAll<SVGRectElement>("rect.bar-other")).toHaveLength(120);
     const bars = document.querySelectorAll<SVGRectElement>("rect.bar");
-    expect(bars).toHaveLength(120);
     expect(Number(bars[0]!.getAttribute("width"))).toBeGreaterThan(0);
 
     unmount(component);
@@ -88,13 +90,18 @@ describe("ActivityTimeline", () => {
     };
     analytics.errors.activity = "stale activity error";
     const fetch = vi.spyOn(analytics, "fetchActivity").mockResolvedValue("ok");
-    const component = mount(ActivityTimeline, { target: document.body, props: { deferInitialFetch: true } });
+    const component = mount(ActivityTimeline, {
+      target: document.body,
+      props: { deferInitialFetch: true },
+    });
     await tick();
     expect(analytics.granularity).toBe("week");
     expect(analytics.activity).toBeNull();
     expect(analytics.errors.activity).toBeNull();
     expect(fetch).not.toHaveBeenCalled();
-    const month = [...document.querySelectorAll<HTMLButtonElement>(".granularity-toggle button")].find((button) => button.textContent?.trim() === "Month");
+    const month = [
+      ...document.querySelectorAll<HTMLButtonElement>(".granularity-toggle button"),
+    ].find((button) => button.textContent?.trim() === "Month");
     month!.click();
     await tick();
     expect(analytics.granularity).toBe("month");
@@ -167,7 +174,214 @@ describe("ActivityTimeline", () => {
     const component = mount(ActivityTimeline, { target: document.body });
     await tick();
 
-    expect(document.querySelectorAll("rect.bar")).toHaveLength(30);
+    expect(document.querySelectorAll("rect.bar-user")).toHaveLength(30);
+    expect(document.querySelectorAll("rect.bar-assistant")).toHaveLength(30);
+    expect(document.querySelectorAll("rect.bar-other")).toHaveLength(30);
+
+    unmount(component);
+  });
+
+  it("stacks assistant messages on top of user messages in Messages view", async () => {
+    analytics.from = "2026-08-01";
+    analytics.to = "2026-08-01";
+    analytics.activity = {
+      granularity: "day",
+      series: [
+        {
+          date: "2026-08-01",
+          sessions: 1,
+          // 5 user/assistant messages plus 2 tool-result carrier rows.
+          messages: 7,
+          user_messages: 2,
+          assistant_messages: 3,
+          tool_calls: 0,
+          thinking_messages: 0,
+          by_agent: {},
+        },
+      ],
+    };
+
+    const component = mount(ActivityTimeline, { target: document.body });
+    await tick();
+    await tick();
+
+    const user = document.querySelector<SVGRectElement>("rect.bar-user");
+    const assistant = document.querySelector<SVGRectElement>("rect.bar-assistant");
+    const other = document.querySelector<SVGRectElement>("rect.bar-other");
+    expect(user).not.toBeNull();
+    expect(assistant).not.toBeNull();
+    expect(other).not.toBeNull();
+    // All segments share the same column.
+    expect(Number(assistant!.getAttribute("x"))).toBeCloseTo(Number(user!.getAttribute("x")));
+    expect(Number(other!.getAttribute("x"))).toBeCloseTo(Number(user!.getAttribute("x")));
+    expect(Number(assistant!.getAttribute("width"))).toBeCloseTo(
+      Number(user!.getAttribute("width")),
+    );
+    // Each segment's bottom edge meets the segment below its top edge.
+    expect(
+      Number(assistant!.getAttribute("y")) + Number(assistant!.getAttribute("height")),
+    ).toBeCloseTo(Number(user!.getAttribute("y")));
+    expect(Number(other!.getAttribute("y")) + Number(other!.getAttribute("height"))).toBeCloseTo(
+      Number(assistant!.getAttribute("y")),
+    );
+    // The user segment sits on the chart baseline (plot height = 164 - 20 - 20)
+    // and the other segment reaches the plot top.
+    expect(Number(user!.getAttribute("y")) + Number(user!.getAttribute("height"))).toBeCloseTo(124);
+    expect(Number(other!.getAttribute("y"))).toBeCloseTo(0);
+    // Segment heights follow the 2 user - 3 assistant - 2 other split of 7 messages.
+    expect(Number(user!.getAttribute("height"))).toBeCloseTo(124 * (2 / 7));
+    expect(Number(assistant!.getAttribute("height"))).toBeCloseTo(124 * (3 / 7));
+    expect(Number(other!.getAttribute("height"))).toBeCloseTo(124 * (2 / 7));
+
+    unmount(component);
+  });
+
+  it("renders carrier-only buckets through the Other segment", async () => {
+    analytics.from = "2026-08-01";
+    analytics.to = "2026-08-01";
+    analytics.activity = {
+      granularity: "day",
+      series: [
+        {
+          date: "2026-08-01",
+          sessions: 1,
+          // Only tool-result carrier and system rows: no user or assistant.
+          messages: 2,
+          user_messages: 0,
+          assistant_messages: 0,
+          tool_calls: 0,
+          thinking_messages: 0,
+          by_agent: {},
+        },
+      ],
+    };
+
+    const component = mount(ActivityTimeline, { target: document.body });
+    await tick();
+    await tick();
+
+    const user = document.querySelector<SVGRectElement>("rect.bar-user")!;
+    const assistant = document.querySelector<SVGRectElement>("rect.bar-assistant")!;
+    const other = document.querySelector<SVGRectElement>("rect.bar-other")!;
+    expect(Number(user.getAttribute("height"))).toBeCloseTo(0);
+    expect(Number(assistant.getAttribute("height"))).toBeCloseTo(0);
+    // The bucket stays visible: the Other segment fills the whole bar.
+    expect(Number(other.getAttribute("y"))).toBeCloseTo(0);
+    expect(Number(other.getAttribute("height"))).toBeCloseTo(124);
+    expect(other.classList.contains("empty")).toBe(false);
+
+    unmount(component);
+  });
+
+  it("normalizes stacked segments in Percent view to expose split trends", async () => {
+    analytics.from = "2026-08-01";
+    analytics.to = "2026-08-02";
+    analytics.activity = {
+      granularity: "day",
+      series: [
+        {
+          date: "2026-08-01",
+          sessions: 1,
+          messages: 5,
+          user_messages: 2,
+          assistant_messages: 3,
+          tool_calls: 0,
+          thinking_messages: 0,
+          by_agent: {},
+        },
+        {
+          date: "2026-08-02",
+          sessions: 1,
+          // 8 user/assistant messages plus 2 tool-result carrier rows.
+          messages: 10,
+          user_messages: 6,
+          assistant_messages: 2,
+          tool_calls: 0,
+          thinking_messages: 0,
+          by_agent: {},
+        },
+      ],
+    };
+
+    const component = mount(ActivityTimeline, { target: document.body });
+    await tick();
+
+    const percentButton = [
+      ...document.querySelectorAll<HTMLButtonElement>(".scale-toggle button"),
+    ].find((button) => button.textContent?.trim() === "Percent");
+    percentButton!.click();
+    await tick();
+    await tick();
+
+    const users = document.querySelectorAll<SVGRectElement>("rect.bar-user");
+    const assistants = document.querySelectorAll<SVGRectElement>("rect.bar-assistant");
+    const others = document.querySelectorAll<SVGRectElement>("rect.bar-other");
+    expect(users).toHaveLength(2);
+    expect(assistants).toHaveLength(2);
+    expect(others).toHaveLength(2);
+
+    // Every bar spans the full plot height regardless of its absolute total
+    // (plot height = 164 - 20 - 20; day totals 5 and 10 no longer matter).
+    for (let index = 0; index < 2; index++) {
+      expect(
+        Number(users[index]!.getAttribute("y")) + Number(users[index]!.getAttribute("height")),
+      ).toBeCloseTo(124);
+      expect(Number(others[index]!.getAttribute("y"))).toBeCloseTo(0);
+    }
+
+    // Segment heights reflect each day's share of the full message total.
+    expect(Number(users[0]!.getAttribute("height"))).toBeCloseTo(124 * 0.4);
+    expect(Number(assistants[0]!.getAttribute("height"))).toBeCloseTo(124 * 0.6);
+    expect(Number(others[0]!.getAttribute("height"))).toBeCloseTo(0);
+    expect(Number(users[1]!.getAttribute("height"))).toBeCloseTo(124 * 0.6);
+    expect(Number(assistants[1]!.getAttribute("height"))).toBeCloseTo(124 * 0.2);
+    expect(Number(others[1]!.getAttribute("height"))).toBeCloseTo(124 * 0.2);
+
+    unmount(component);
+  });
+
+  it("keeps a single bar per day in Sessions view", async () => {
+    analytics.from = "2026-08-01";
+    analytics.to = "2026-08-02";
+    analytics.activity = {
+      granularity: "day",
+      series: [
+        {
+          date: "2026-08-01",
+          sessions: 1,
+          messages: 5,
+          user_messages: 2,
+          assistant_messages: 3,
+          tool_calls: 0,
+          thinking_messages: 0,
+          by_agent: {},
+        },
+        {
+          date: "2026-08-02",
+          sessions: 1,
+          messages: 4,
+          user_messages: 1,
+          assistant_messages: 3,
+          tool_calls: 0,
+          thinking_messages: 0,
+          by_agent: {},
+        },
+      ],
+    };
+
+    const component = mount(ActivityTimeline, { target: document.body });
+    await tick();
+
+    const sessionsButton = [
+      ...document.querySelectorAll<HTMLButtonElement>(".metric-toggle button"),
+    ].find((button) => button.textContent?.trim() === "Sessions");
+    sessionsButton!.click();
+    await tick();
+
+    expect(document.querySelectorAll("rect.bar")).toHaveLength(2);
+    expect(document.querySelector("rect.bar-user")).toBeNull();
+    expect(document.querySelector("rect.bar-assistant")).toBeNull();
+    expect(document.querySelector("rect.bar-other")).toBeNull();
 
     unmount(component);
   });
