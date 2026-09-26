@@ -502,9 +502,7 @@ func TestPreferCodexContinuation(t *testing.T) {
 	}{
 		{"continuation beats original", first, original, true, true},
 		{"original loses to continuation", original, first, false, true},
-		{"later continuation wins", second, first, true, true},
-		{"earlier continuation loses", first, second, false, true},
-		{"same continuation is undecided", first, first, false, false},
+		{"two continuations are undecided", second, first, false, false},
 		{"two originals are undecided", original, original, false, false},
 	}
 	for _, tt := range tests {

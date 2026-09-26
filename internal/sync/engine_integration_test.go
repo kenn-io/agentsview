@@ -2594,6 +2594,35 @@ func TestReconcileWatchRootsPreservesCodexLiveDuplicatePreference(t *testing.T) 
 	assert.Equal(t, livePath, env.db.GetSessionFilePath(t.Context(), "codex:"+uuid))
 }
 
+func TestReconcileWatchRootsPrefersCodexContinuationRollout(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
+	const (
+		uuid     = "019eb791-cf7d-75c1-8439-9ed74c1229c3"
+		contUUID = "019eb791-cf7d-75c1-8439-9ed74c1229c4"
+	)
+	day := filepath.Join("2026", "09", "22")
+	env.writeCodexSession(t, day,
+		"rollout-2026-09-22T11-32-24-"+uuid+".jsonl",
+		testjsonl.NewSessionBuilder().
+			AddCodexMeta(tsEarly, uuid, "/workspace/project", "user").
+			AddCodexMessage(tsEarlyS1, "user", "aborted first try").
+			String())
+	contPath := env.writeCodexSession(t, day,
+		"rollout-2026-09-22T11-34-12-"+uuid+"_"+contUUID+".jsonl",
+		testjsonl.NewSessionBuilder().
+			AddCodexMeta(tsEarly, uuid, "/workspace/project", "user").
+			AddCodexMessage(tsEarlyS1, "user", "retry").
+			AddCodexMessage(tsEarlyS5, "assistant", "done").
+			String())
+
+	require.NoError(t, env.engine.ReconcileWatchRoots(
+		t.Context(), []string{env.codexDir}, false,
+	))
+
+	assert.Equal(t, contPath, env.db.GetSessionFilePath(t.Context(), "codex:"+uuid))
+	assertSessionMessageCount(t, env.db, "codex:"+uuid, 2)
+}
+
 func TestReconcileWatchRootsOpenClawUsesCanonicalArchiveOrdering(t *testing.T) {
 	root := t.TempDir()
 	sessionsDir := filepath.Join(root, "main", "sessions")

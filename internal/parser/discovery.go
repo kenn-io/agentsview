@@ -899,19 +899,14 @@ func isCodexContinuationRollout(filename string) bool {
 // PreferCodexContinuation compares two rollout filenames for the same Codex
 // session UUID. A continuation rollout ("...-<uuid>_<uuid>.jsonl") holds the
 // thread after Codex Desktop restarted it, so it wins over the original
-// rollout, and the later of two continuations wins. decided is false when the
-// names give no preference and the caller's existing order applies.
+// rollout. decided is false when both or neither are continuations and the
+// caller's existing order applies.
 func PreferCodexContinuation(candidate, current string) (prefer, decided bool) {
 	candCont := isCodexContinuationRollout(candidate)
-	currCont := isCodexContinuationRollout(current)
-	switch {
-	case candCont != currCont:
-		return candCont, true
-	case candCont && candidate != current:
-		return candidate > current, true
-	default:
+	if candCont == isCodexContinuationRollout(current) {
 		return false, false
 	}
+	return candCont, true
 }
 
 // IsDigits reports whether s is non-empty and contains only

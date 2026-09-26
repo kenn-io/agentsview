@@ -6265,8 +6265,13 @@ func (e *Engine) reconciliationCandidate(ctx context.Context,
 			}
 		}
 	}
-	if isCodexFormatAgent(agent) && codexLayoutForPath(path) == parser.CodexLayoutDated {
-		preference1 = 1
+	if isCodexFormatAgent(agent) {
+		if prefer, _ := parser.PreferCodexContinuation(filepath.Base(path), ""); prefer {
+			preference1 = 1
+		}
+		preference2 = boolPreference(
+			codexLayoutForPath(path) == parser.CodexLayoutDated,
+		)
 	}
 	if isOpenCodeFormatAgent(agent) && !claudeFormat {
 		if statPath == path {
