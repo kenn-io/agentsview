@@ -122,6 +122,16 @@ type Client struct {
 // each do request with scoped avdt_ bearer tokens, exchanged on demand for
 // the device credential. A zero TokenMargin falls back to defaultTokenMargin.
 func NewClient(cfg Config) (*Client, error) {
+	return newClient(cfg, tokenScopes)
+}
+
+// NewStatusClient validates configuration and returns a Client that requests
+// only the hosted status scope.
+func NewStatusClient(cfg Config) (*Client, error) {
+	return newClient(cfg, statusTokenScopes)
+}
+
+func newClient(cfg Config, scopes []string) (*Client, error) {
 	base, err := url.Parse(strings.TrimRight(cfg.BaseURL, "/"))
 	if err != nil || base.Scheme == "" || base.Host == "" {
 		return nil, fmt.Errorf("rawclient: invalid base URL %q", cfg.BaseURL)
@@ -158,7 +168,9 @@ func NewClient(cfg Config) (*Client, error) {
 	if margin <= 0 {
 		margin = defaultTokenMargin
 	}
-	client.tokens = newTokenProvider(client, cfg.DeviceID, cfg.Credential, margin)
+	client.tokens = newTokenProvider(
+		client, cfg.DeviceID, cfg.Credential, margin, scopes,
+	)
 	return client, nil
 }
 

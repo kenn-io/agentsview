@@ -54,10 +54,12 @@ func readRawSyncStatusHeads(
 	tenantID string,
 	status *rawsync.Status,
 ) error {
+	// A complete parse job is terminal, so its updated_at is its completion time.
 	rows, err := tx.QueryContext(ctx, `
 		SELECT head.device_id, head.configured_root_id, head.provider,
 			head.source_key, head.generation, manifest.accepted_at,
-			jobs.parse_pending, jobs.parse_leased, jobs.parse_failed
+			jobs.parse_pending, jobs.parse_leased, jobs.parse_failed,
+			jobs.parse_completed_at
 		FROM raw_source_heads AS head
 		LEFT JOIN raw_manifests AS manifest
 			ON manifest.tenant_id = head.tenant_id
@@ -66,7 +68,8 @@ func readRawSyncStatusHeads(
 			SELECT
 				COALESCE(BOOL_OR(state IN ('ready', 'retrying')), false) AS parse_pending,
 				COALESCE(BOOL_OR(state = 'leased'), false) AS parse_leased,
-				COALESCE(BOOL_OR(state = 'failed'), false) AS parse_failed
+				COALESCE(BOOL_OR(state = 'failed'), false) AS parse_failed,
+				MAX(updated_at) FILTER (WHERE state = 'complete') AS parse_completed_at
 			FROM raw_ingest_jobs AS job
 			WHERE job.tenant_id = head.tenant_id
 				AND job.manifest_id = head.manifest_id
@@ -80,14 +83,16 @@ func readRawSyncStatusHeads(
 	}
 	for rows.Next() {
 		var (
-			head           rawsync.SourceHeadStatus
-			provider       string
-			lastAcceptedAt *time.Time
+			head            rawsync.SourceHeadStatus
+			provider        string
+			lastAcceptedAt  *time.Time
+			lastCompletedAt *time.Time
 		)
 		if err := rows.Scan(
 			&head.DeviceID, &head.ConfiguredRootID, &provider,
 			&head.SourceKey, &head.Generation, &lastAcceptedAt,
 			&head.ParsePending, &head.ParseLeased, &head.ParseFailed,
+			&lastCompletedAt,
 		); err != nil {
 			return fmt.Errorf(
 				"scanning raw source head: %w",
@@ -98,6 +103,10 @@ func readRawSyncStatusHeads(
 		if lastAcceptedAt != nil {
 			acceptedAt := lastAcceptedAt.UTC()
 			head.LastAcceptedAt = &acceptedAt
+		}
+		if lastCompletedAt != nil {
+			completedAt := lastCompletedAt.UTC()
+			head.LastParseCompletedAt = &completedAt
 		}
 		status.SourceHeads = append(status.SourceHeads, head)
 	}
