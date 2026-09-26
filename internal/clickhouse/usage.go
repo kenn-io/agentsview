@@ -122,11 +122,11 @@ func chLoadPricingRows(
 func (s *Store) loadPricingResolver(
 	ctx context.Context,
 ) (*export.PricingResolver, error) {
-	rows, _, err := chLoadPricingRows(ctx, s.conn, s.customPricing)
+	snapshot, err := s.pricingSnapshot(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return export.NewPricingResolver(rows), nil
+	return export.NewPricingResolverWithDigest(snapshot.rows, snapshot.digest), nil
 }
 
 func chCustomPricingSource() export.PricingRowSource {
@@ -1514,12 +1514,12 @@ var errUsagePriceContextChanged = errors.New("usage price context changed during
 func (s *Store) GetDailyUsage(
 	ctx context.Context, f db.UsageFilter,
 ) (db.DailyUsageResult, error) {
-	catalog, err := chLoadPricingCatalog(ctx, s.conn, s.customPricing)
+	snapshot, err := s.pricingSnapshot(ctx)
 	if err != nil {
 		return db.DailyUsageResult{}, err
 	}
 	for attempt := 1; ; attempt++ {
-		result, err := s.dailyUsageForCatalog(ctx, f, catalog)
+		result, err := s.dailyUsageForCatalog(ctx, f, snapshot)
 		if !errors.Is(err, errUsagePriceContextChanged) || attempt == chDailyUsageLoadAttempts {
 			return result, err
 		}
@@ -1529,9 +1529,10 @@ func (s *Store) GetDailyUsage(
 // Each attempt owns its accumulator and resolver. If a push adds a context
 // during the query, retry with fresh contexts instead of retaining raw rows.
 func (s *Store) dailyUsageForCatalog(
-	ctx context.Context, f db.UsageFilter, catalog chPricingCatalog,
+	ctx context.Context, f db.UsageFilter, snapshot *pricingSnapshot,
 ) (db.DailyUsageResult, error) {
-	rateResolver := export.NewPricingResolver(catalog.rows)
+	catalog := snapshot.catalog
+	rateResolver := export.NewPricingResolverWithDigest(catalog.rows, snapshot.catalogDigest)
 	priceContexts, err := loadUsagePriceContexts(ctx, s.conn, catalog.digest)
 	if err != nil {
 		return db.DailyUsageResult{}, err
