@@ -3481,6 +3481,20 @@ components:
       required:
         - by_tokens
       type: object
+    DbStatsOutcomeSkippedRepo:
+      additionalProperties: false
+      properties:
+        op:
+          type: string
+        reason:
+          type: string
+        repo:
+          type: string
+      required:
+        - repo
+        - op
+        - reason
+      type: object
     DbStatsOutcomeStats:
       additionalProperties: false
       properties:
@@ -3505,6 +3519,10 @@ components:
         repos_active:
           format: int64
           type: integer
+        skipped:
+          items:
+            $ref: "#/components/schemas/DbStatsOutcomeSkippedRepo"
+          type: array
       required:
         - repos_active
         - commits

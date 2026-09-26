@@ -2353,5 +2353,19 @@
   "go_to_session_ambiguous": "複数のセッションIDまたはUUIDが一致します。既存のリンクから目的のセッションを開いてください。",
   "go_to_session_capped": "一致するセッションIDまたはUUIDが多すぎます。既存のリンクから目的のセッションを開いてください。",
   "go_to_session_failed": "セッションを検索できませんでした。もう一度お試しください。",
-  "shortcuts_go_to_session": "検索を閉じてセッションへ移動"
+  "shortcuts_go_to_session": "検索を閉じてセッションへ移動",
+  "analytics_outcome_title": "成果",
+  "analytics_outcome_repositories": "リポジトリ",
+  "analytics_outcome_commits": "コミット",
+  "analytics_outcome_loc_added": "追加行数",
+  "analytics_outcome_loc_removed": "削除行数",
+  "analytics_outcome_files_changed": "変更ファイル数",
+  "analytics_outcome_prs_opened": "作成されたプルリクエスト",
+  "analytics_outcome_prs_merged": "マージされたプルリクエスト",
+  "analytics_outcome_include_prs": "プルリクエストを含める",
+  "analytics_outcome_include_prs_hint": "リポジトリごとに GitHub へ問い合わせるため、数分かかることがあります。",
+  "analytics_outcome_loading": "git 履歴を読み込み中...",
+  "analytics_outcome_empty": "この期間に git の活動はありません。",
+  "analytics_outcome_partial": "未集計:",
+  "analytics_outcome_partial_entry": "{repo} ({op}): {reason}"
 }

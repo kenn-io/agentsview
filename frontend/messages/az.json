@@ -2367,5 +2367,19 @@
   "go_to_session_ambiguous": "Bu ID-yə və ya UUID-yə bir neçə sessiya uyğun gəlir. İstədiyiniz sessiyanı mövcud keçiddən açın.",
   "go_to_session_capped": "Bu ID-yə və ya UUID-yə həddindən çox sessiya uyğun gəlir. İstədiyiniz sessiyanı mövcud keçiddən açın.",
   "go_to_session_failed": "Həmin sessiyanı tapmaq mümkün olmadı. Yenidən cəhd edin.",
-  "shortcuts_go_to_session": "Tapma pəncərəsi bağlı olduqda sessiyaya keç"
+  "shortcuts_go_to_session": "Tapma pəncərəsi bağlı olduqda sessiyaya keç",
+  "analytics_outcome_title": "Nəticələr",
+  "analytics_outcome_repositories": "Depolar",
+  "analytics_outcome_commits": "Commitlər",
+  "analytics_outcome_loc_added": "Əlavə olunan sətirlər",
+  "analytics_outcome_loc_removed": "Silinən sətirlər",
+  "analytics_outcome_files_changed": "Dəyişən fayllar",
+  "analytics_outcome_prs_opened": "Açılan pull request-lər",
+  "analytics_outcome_prs_merged": "Birləşdirilən pull request-lər",
+  "analytics_outcome_include_prs": "Pull request-ləri daxil et",
+  "analytics_outcome_include_prs_hint": "Hər depo üçün GitHub-a ayrıca sorğu göndərir, bu bir neçə dəqiqə çəkə bilər.",
+  "analytics_outcome_loading": "git tarixçəsi oxunur...",
+  "analytics_outcome_empty": "Bu dövrdə git fəaliyyəti yoxdur.",
+  "analytics_outcome_partial": "Hesaba alınmayan:",
+  "analytics_outcome_partial_entry": "{repo} ({op}): {reason}"
 }

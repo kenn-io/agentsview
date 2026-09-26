@@ -2364,5 +2364,19 @@
   "go_to_session_ambiguous": "Plusieurs sessions correspondent à cet ID ou UUID. Ouvrez la session souhaitée avec un lien existant.",
   "go_to_session_capped": "Trop de sessions correspondent à cet ID ou UUID. Ouvrez la session souhaitée avec un lien existant.",
   "go_to_session_failed": "Impossible de rechercher cette session. Réessayez.",
-  "shortcuts_go_to_session": "Accéder à une session lorsque la recherche est fermée"
+  "shortcuts_go_to_session": "Accéder à une session lorsque la recherche est fermée",
+  "analytics_outcome_title": "Résultats",
+  "analytics_outcome_repositories": "Dépôts",
+  "analytics_outcome_commits": "Commits",
+  "analytics_outcome_loc_added": "Lignes ajoutées",
+  "analytics_outcome_loc_removed": "Lignes supprimées",
+  "analytics_outcome_files_changed": "Fichiers modifiés",
+  "analytics_outcome_prs_opened": "Pull requests ouvertes",
+  "analytics_outcome_prs_merged": "Pull requests fusionnées",
+  "analytics_outcome_include_prs": "Inclure les pull requests",
+  "analytics_outcome_include_prs_hint": "Interroge GitHub une fois par dépôt, ce qui peut prendre plusieurs minutes.",
+  "analytics_outcome_loading": "Lecture de l'historique git...",
+  "analytics_outcome_empty": "Aucune activité git sur cette période.",
+  "analytics_outcome_partial": "Non comptabilisé :",
+  "analytics_outcome_partial_entry": "{repo} ({op}) : {reason}"
 }
