@@ -2799,10 +2799,10 @@ func statsCanonPath(t *testing.T, path string) string {
 // The test process's PATH is changed, so the caller must not run in parallel.
 func statsFakeToolOnPath(t *testing.T, tool, body string) {
 	t.Helper()
-	real, err := exec.LookPath(tool)
+	realPath, err := exec.LookPath(tool)
 	require.NoError(t, err, "locate real %s", tool)
 	dir := t.TempDir()
-	script := "#!/bin/sh\nREAL=" + strconv.Quote(real) + "\n" + body
+	script := "#!/bin/sh\nREAL=" + strconv.Quote(realPath) + "\n" + body
 	require.NoError(t,
 		os.WriteFile(filepath.Join(dir, tool), []byte(script), 0o700),
 		"write fake %s", tool)
