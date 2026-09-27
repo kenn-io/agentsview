@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -13,6 +14,53 @@ import (
 func TestOpenClawProviderSourceMethods(t *testing.T) {
 	spec := openClawProviderTestSpec()
 	assertClawProviderSourceMethods(t, spec)
+}
+
+func TestOpenClawLegacyLookupUsesDiscoveryRanking(t *testing.T) {
+	for _, tc := range []struct {
+		name, firstName, secondName string
+		symlink                     bool
+	}{
+		{"live over archive", "duplicate.jsonl.deleted.2026-01-01T00-00-00.000Z", "duplicate.jsonl", false},
+		{"newer live copy", "duplicate.jsonl", "duplicate.jsonl", false},
+		{"newer archive", "duplicate.jsonl.deleted.2026-01-01T00-00-00.000Z", "duplicate.jsonl.deleted.2026-02-01T00-00-00.000Z", false},
+		{"newer symlink to older transcript", "duplicate.jsonl", "duplicate.jsonl", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			first, second := t.TempDir(), t.TempDir()
+			older := filepath.Join(first, "main", "sessions", tc.firstName)
+			newer := filepath.Join(second, "main", "sessions", tc.secondName)
+			writeSourceFile(t, older, clawProviderFixture("duplicate", "old copy"))
+			writeSourceFile(t, newer, clawProviderFixture("duplicate", "current copy"))
+			oldTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+			newTime := oldTime.Add(time.Hour)
+			require.NoError(t, os.Chtimes(older, oldTime, oldTime))
+			require.NoError(t, os.Chtimes(newer, newTime, newTime))
+			if tc.symlink {
+				target := filepath.Join(t.TempDir(), "transcript.jsonl")
+				require.NoError(t, os.Rename(newer, target))
+				targetTime := oldTime.Add(-time.Hour)
+				require.NoError(t, os.Chtimes(target, targetTime, targetTime))
+				if err := os.Symlink(target, newer); err != nil {
+					t.Skipf("symlink not supported: %v", err)
+				}
+			}
+			for _, roots := range [][]string{{first, second}, {second, first}} {
+				provider, ok := NewProvider(AgentOpenClaw, ProviderConfig{Roots: roots})
+				require.True(t, ok)
+				sources, err := provider.Discover(t.Context())
+				require.NoError(t, err)
+				require.Len(t, sources, 1)
+				assert.Equal(t, newer, sources[0].DisplayPath)
+				found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
+					RawSessionID: "main:duplicate",
+				})
+				require.NoError(t, err)
+				require.True(t, ok)
+				assert.Equal(t, newer, found.DisplayPath)
+			}
+		})
+	}
 }
 
 func TestQClawProviderSourceMethods(t *testing.T) {

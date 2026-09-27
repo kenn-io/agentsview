@@ -2211,6 +2211,10 @@ schemas keep their existing ordering behavior.
   unsupported.
 - **Agentsview:** `internal/parser/openclaw.go` and
   `internal/parser/openclaw_sqlite.go`.
+- **Source selection (rechecked 2026-09-27):** Isolated duplicate-file fixtures
+  verify that discovery and session-ID lookup select the same legacy copy
+  across configured roots: live files before archives, then the newer copy.
+  Explicit stored-source requests retain their existing preference.
 
 ## QClaw (`qclaw`)
 

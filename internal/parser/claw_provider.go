@@ -589,6 +589,26 @@ func (s openClawSourceSet) FindSource(
 	} else if found {
 		return sqlite, true, nil
 	}
+	var winner SourceRef
+	for _, root := range s.legacy.roots {
+		if err := ctx.Err(); err != nil {
+			return SourceRef{}, false, err
+		}
+		path := s.legacy.sourcePathForRawID(root, rawID)
+		source, ok := s.legacy.sourceRef(root, path)
+		if !ok {
+			continue
+		}
+		if info, err := os.Lstat(path); err == nil {
+			source.DiscoveryMTimeNS = info.ModTime().UnixNano()
+		}
+		if winner.Key == "" || openClawLegacySourcePreferred(source, winner) {
+			winner = source
+		}
+	}
+	if winner.Key != "" {
+		return winner, true, nil
+	}
 	return legacy, true, nil
 }
 
