@@ -288,7 +288,9 @@ func isImageOnlySummary(content string) bool {
 
 func isImageOnlySummaryPart(content string) bool {
 	content = strings.TrimSpace(content)
-	return content == "[binary content]" || content == "[image]" || isImageOnlyJSON(content) ||
+	imageMarkersOnly := strings.Contains(content, "[image]") &&
+		strings.TrimSpace(strings.ReplaceAll(content, "[image]", "")) == ""
+	return content == "[binary content]" || imageMarkersOnly || isImageOnlyJSON(content) ||
 		isOffloadedImageReference(content)
 }
 
