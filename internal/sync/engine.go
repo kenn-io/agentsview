@@ -6669,6 +6669,9 @@ func (e *Engine) reconciliationMemberRelocated(
 			"resolve possibly relocated member %s: %w", fullSessionID, err,
 		)
 	}
+	if !found {
+		return false, nil
+	}
 	lowerRanked, err := e.storedSourceRanksHigher(
 		ctx, provider, storedPath, source,
 	)
@@ -11704,17 +11707,6 @@ func (e *Engine) processProviderFile(
 			),
 		}, failurecache.Identity{Missing: true}, e.sourcePathMissing(file)), true
 	}
-	if lowerRanked, err := e.providerSourceLowerRanked(
-		ctx, provider, file.Agent, source,
-	); err != nil {
-		return processResult{
-			err: fmt.Errorf("rank %s source %s: %w", file.Agent, providerDiscoveredPath(source), err),
-		}, true
-	} else if lowerRanked {
-		return processResult{
-			skip: true, suppressPresenceSweep: true,
-		}, true
-	}
 	if source.ConfiguredRoot != "" {
 		if sourceMachine, ok := e.configuredMachineForPath(
 			file.Agent, source.ConfiguredRoot,
@@ -12263,6 +12255,20 @@ func (e *Engine) processProviderFile(
 		} else if cached, ok := e.cachedSourceFailure(ctx, cacheFile, failureIdentity); ok {
 			return cached, true
 		}
+	}
+
+	// Unchanged sources cannot replace the preferred copy, so resolve its
+	// rank only after the freshness gates have declined.
+	if lowerRanked, err := e.providerSourceLowerRanked(
+		ctx, provider, file.Agent, source,
+	); err != nil {
+		return processResult{
+			err: fmt.Errorf("rank %s source %s: %w", file.Agent, providerDiscoveredPath(source), err),
+		}, true
+	} else if lowerRanked {
+		return processResult{
+			skip: true, suppressPresenceSweep: true,
+		}, true
 	}
 
 	// Provider parse seam: every gate above returns a lease-free skip. From
@@ -13667,10 +13673,13 @@ func (e *Engine) storedSourceRanksHigher(
 	if !resolves || !ranks || storedPath == "" {
 		return false, nil
 	}
-	if e.storedPathResolver != nil {
+	if e.pathRewriter != nil {
+		if e.storedPathResolver == nil {
+			return false, nil
+		}
 		resolvedPath, ok := e.storedPathResolver(storedPath)
 		if !ok || resolvedPath == "" {
-			return false, fmt.Errorf("resolve stored source path %s", storedPath)
+			return false, nil
 		}
 		storedPath = resolvedPath
 	}
@@ -13692,6 +13701,9 @@ func (e *Engine) providerSourceLowerRanked(
 	agent parser.AgentType,
 	candidate parser.SourceRef,
 ) (bool, error) {
+	if _, ok := provider.(parser.ReconciliationSourceRanker); !ok {
+		return false, nil
+	}
 	identity := reconciliationMemberIdentity(agent, candidate)
 	if identity == "" {
 		return false, nil
@@ -15452,6 +15464,18 @@ func (e *Engine) tryProviderIncrementalAppend(
 	if provider.Capabilities().Source.IncrementalAppend !=
 		parser.CapabilitySupported {
 		return processResult{}, false
+	}
+	// Incremental appends can write before the full-parse rank gate.
+	if lowerRanked, err := e.providerSourceLowerRanked(
+		ctx, provider, file.Agent, source,
+	); err != nil {
+		return processResult{
+			err: fmt.Errorf("rank %s source %s: %w", file.Agent, providerDiscoveredPath(source), err),
+		}, true
+	} else if lowerRanked {
+		return processResult{
+			skip: true, suppressPresenceSweep: true,
+		}, true
 	}
 	path := providerDiscoveredPath(source)
 	if path == "" {
