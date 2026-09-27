@@ -421,6 +421,31 @@ func TestExtractToolSequences_Example(t *testing.T) {
 	}}, got.Sequences)
 }
 
+func TestExtractToolSequences_OpenCodeEmptyResults(t *testing.T) {
+	for _, tt := range []struct {
+		toolName string
+		category string
+		outcome  ToolOutcome
+		ending   ToolSequenceEnding
+	}{
+		{"grep", "Grep", ToolOutcomeEmpty, ToolSequenceEndingAbandoned},
+		{"glob", "Glob", ToolOutcomeEmpty, ToolSequenceEndingAbandoned},
+		{"ripgrep", "Grep", ToolOutcomeContent, ToolSequenceEndingRecovered},
+	} {
+		t.Run(tt.toolName, func(t *testing.T) {
+			got := ExtractToolSequences([]ToolCallRow{
+				{ToolName: tt.toolName, Category: tt.category, EventStatus: "errored"},
+				{
+					ToolName: tt.toolName, Category: tt.category, EventStatus: "completed",
+					ResultContent: "No files found", ResultContentLength: 14,
+				},
+			}, true)
+			assert.Equal(t, tt.outcome, got.Calls[1].Outcome)
+			assert.Equal(t, []ToolSequence{{Start: 0, End: 2, Ending: tt.ending}}, got.Sequences)
+		})
+	}
+}
+
 func TestExtractToolSequences_Repeats(t *testing.T) {
 	calls := []ToolCallRow{
 		{

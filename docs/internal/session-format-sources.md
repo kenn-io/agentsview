@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-09-11
+last_edited: 2026-09-27
 ---
 
 # Session Format Source Inventory
@@ -1074,6 +1074,15 @@ fixtures retain this field; missing identities remain source-local.
   `internal/parser/opencodereview_provider.go`.
 
 ## OpenCode (`opencode`)
+
+**Empty-search reply check (2026-09-27):** The pinned
+[`grep` tool](https://github.com/anomalyco/opencode/blob/dff8fbc149fb7492e4f07b713ac31ea70d9a541c/packages/core/src/tool/grep.ts#L39)
+and
+[`glob` tool](https://github.com/anomalyco/opencode/blob/dff8fbc149fb7492e4f07b713ac31ea70d9a541c/packages/core/src/tool/glob.ts#L33)
+emit the exact text `No files found` when their result lists are empty.
+Agentsview's v2 parser preserves these lowercase tool names and text replies.
+The sequence extractor treats these specific replies as empty results; category
+aliases alone do not establish that a provider uses the same reply text.
 
 **Projection detail check (2026-09-12):** Rechecked the pinned
 [beta read tool](https://github.com/anomalyco/opencode/blob/d461154a8d2b24c4ad24a89b589069cf08ab168c/packages/core/src/tool/plugin/read.ts#L169),

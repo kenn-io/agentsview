@@ -186,7 +186,7 @@ func isMeasuredEmptyToolResult(toolName, content string) bool {
 	switch toolName {
 	case "Grep":
 		return content == "No matches found" || content == "No files found"
-	case "Glob":
+	case "Glob", "grep", "glob":
 		return content == "No files found"
 	default:
 		return false
