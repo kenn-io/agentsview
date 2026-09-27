@@ -1,9 +1,6 @@
 name: CI (macOS)
 
 on:
-  # Persistent self-hosted runners must never be selectable from a workflow
-  # definition controlled by a pull request. The ci-runners group must allow
-  # this exact workflow path only from refs/heads/main.
   push:
     branches: [main]
     paths:
@@ -24,9 +21,7 @@ concurrency:
 jobs:
   test-macos-fsevents:
     name: Go Test (macOS FSEvents)
-    runs-on:
-      group: ci-runners
-      labels: [self-hosted, macOS, ARM64]
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:

@@ -1,8 +1,6 @@
 name: Desktop Artifacts (macOS)
 
 on:
-  # macOS self-hosted workflows are push-only for main. The organization
-  # runner-group policy must pin access to their exact workflow paths on main.
   push:
     branches: [main]
     paths:
@@ -23,21 +21,19 @@ concurrency:
 jobs:
   build:
     name: Desktop Build (${{ matrix.name }})
-    runs-on:
-      group: ci-runners
-      labels: [self-hosted, macOS, "${{ matrix.runner_arch }}"]
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: macOS (aarch64)
-            runner_arch: ARM64
+            os: macos-26
             bundle: app
             target_triple: aarch64-apple-darwin
             artifact_name: agentsview-desktop-macos-aarch64
             artifact_dir: desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/
           - name: macOS (x86_64)
-            runner_arch: X64
+            os: macos-26-intel
             bundle: app
             target_triple: x86_64-apple-darwin
             artifact_name: agentsview-desktop-macos-x86_64
