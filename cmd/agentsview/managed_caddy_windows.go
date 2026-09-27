@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"unsafe"
@@ -30,7 +31,7 @@ func (g jobCaddyGuard) Close() error {
 // caller can keep running with the prior (leak-prone) behavior.
 func newCaddyGuard(cmd *exec.Cmd) (caddyGuard, error) {
 	if cmd == nil || cmd.Process == nil {
-		return noopCaddyGuard{}, fmt.Errorf("caddy process not started")
+		return noopCaddyGuard{}, errors.New("caddy process not started")
 	}
 
 	job, err := windows.CreateJobObject(nil, nil)

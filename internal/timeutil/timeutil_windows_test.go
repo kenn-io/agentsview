@@ -12,15 +12,8 @@ import (
 )
 
 func TestBestEffortLocalTimezoneRuntime(t *testing.T) {
-	previousTZ, hadTZ := os.LookupEnv("TZ")
+	t.Setenv("TZ", os.Getenv("TZ"))
 	require.NoError(t, os.Unsetenv("TZ"))
-	t.Cleanup(func() {
-		if hadTZ {
-			_ = os.Setenv("TZ", previousTZ)
-		} else {
-			_ = os.Unsetenv("TZ")
-		}
-	})
 
 	nativeMapped, err := tzlocal.LocalTZ()
 	require.NoError(t, err)

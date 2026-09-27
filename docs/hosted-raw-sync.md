@@ -338,12 +338,16 @@ Replace `agentsview` and `raw_sync_runtime` with your schema and runtime role.
 Until these grants are applied, the normal session UI continues to work, but
 raw-sync HTTP routes are omitted.
 
+The health read uses `SELECT` on the raw-sync metadata tables and adds no
+privilege beyond the grants above.
+
 The implemented routes are:
 
 | Route                                   | Authentication                          | Operation                               |
 | --------------------------------------- | --------------------------------------- | --------------------------------------- |
 | `POST /api/v1/raw-sync/tokens`          | Device credential and device ID         | Issue a 15-minute scoped access token   |
 | `GET /api/v1/raw-sync/status`           | Access token with the `status` scope    | Read tenant-scoped raw custody metadata |
+| `GET /api/v1/raw-sync/health`           | Access token with the `status` scope    | Report tenant-scoped parse-job health   |
 | `POST /api/v1/raw-sync/objects/missing` | Access token with the `negotiate` scope | Return object references not in custody |
 | `POST /api/v1/raw-sync/uploads`         | Access token with the `upload` scope    | Start or resume an object upload        |
 | `HEAD /api/v1/raw-sync/uploads/{id}`    | Access token with the `upload` scope    | Read the accepted upload offset         |
@@ -376,6 +380,16 @@ Empty `source_heads` and `devices` values are `[]`. A generation-zero head has a
 PostgreSQL transaction and do not expire uploads, alter leases, or change any
 raw-sync state. `agentsview raw-sync status` remains a local command that reads
 the laptop checkpoint.
+
+A status-scoped token can call the health route with positive `max_attempts` and
+`stale_after_seconds` query values. The report covers current accepted manifests
+without parse jobs, expired leased parse jobs, failed parse jobs grouped by
+their stored error class, retrying jobs at or above
+`greatest(1, max_attempts - 1)`, and committed source heads whose `updated_at`
+is older than the requested window. Each affected-row list holds at most 50
+rows, failure classes hold at most 20 rows, and totals stay exact. The read is
+tenant-wide, excludes raw error messages, and leaves custody and worker state
+unchanged. The local status command still reads the laptop checkpoint.
 
 PostgreSQL stores device, token, manifest, receipt, source-head, and parse-job
 metadata. The raw object repository is opened lazily under `raw-sync/` in the

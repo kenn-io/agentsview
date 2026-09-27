@@ -36,6 +36,7 @@ func (s *Server) registerRawSyncRoutes() {
 			s.humaRawSyncStatus, s.humaTimeout(),
 		)
 	}
+	s.registerRawSyncHealthRoute(group)
 	if s.rawSyncCustody == nil && !s.rawSyncSchemaOnly {
 		return
 	}
