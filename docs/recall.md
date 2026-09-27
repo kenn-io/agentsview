@@ -133,11 +133,14 @@ Both decisions are durable human states and are not reversed by later
 extraction-generation changes. This surface deliberately has no entry editing,
 bulk review, or undo action.
 
-Recall requires SQLite FTS5, which all standard builds include. The first
-writable open upgrades the previous review-state schema and converts any old
-FTS4 Recall search indexes to FTS5 in the same transaction. Entries and evidence
-are preserved; existing FTS5 indexes do not need rebuilding. This migration
-blocks startup until it finishes and does not run again on later opens.
+Recall requires SQLite FTS5, which all standard builds include. Writable open
+upgrades the previous review-state schema when present and converts any old FTS4
+Recall search indexes to FTS5 in the same transaction. Index conversion also
+runs when the review-state schema is already current. Entries and evidence are
+preserved; existing FTS5 indexes do not need rebuilding. The migration blocks
+startup until it finishes and does not run again on later opens. Read-only
+archives keep their existing indexes and use a slower text lookup when legacy
+indexes cannot run the ranked entry search.
 
 ## Vector and hybrid retrieval
 

@@ -12,6 +12,111 @@ import (
 	corerecall "go.kenn.io/agentsview/internal/recall"
 )
 
+func TestOpenLegacyRecallFTS4WithoutReviewConstraint(t *testing.T) {
+	for _, readOnly := range []bool{true, false} {
+		name := "writable"
+		if readOnly {
+			name = "read_only"
+		}
+		t.Run(name, func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			path := d.Path()
+			insertSession(t, d, "legacy-session", "project-a")
+			_, err := d.InsertRecallEntry(ctx, RecallEntry{
+				ID: "legacy-entry", Type: "fact", Scope: "project",
+				Title: "orchid marker", Body: "Preserved archive content.",
+				SourceSessionID: "legacy-session", ProvenanceOK: true,
+				Evidence: []RecallEvidence{{
+					SessionID: "legacy-session", MessageStartOrdinal: 1,
+					MessageEndOrdinal: 1, Snippet: "heliotrope evidence",
+				}},
+			})
+			require.NoError(t, err)
+			// Older builds could create FTS4 indexes without a review-state CHECK.
+			// Keep the current entry schema and reproduce their indexes and triggers.
+			_, err = d.getWriter().ExecContext(ctx, `
+				DROP TRIGGER recall_entries_ai;
+				DROP TRIGGER recall_entries_ad;
+				DROP TRIGGER recall_entries_au;
+				DROP TABLE recall_entries_fts;
+				CREATE VIRTUAL TABLE recall_entries_fts USING fts4(
+					title, body, trigger, tokenize=porter
+				);
+				INSERT INTO recall_entries_fts(rowid, title, body, trigger)
+					SELECT rowid, title, body, trigger FROM recall_entries;
+				CREATE TRIGGER recall_entries_ai AFTER INSERT ON recall_entries BEGIN
+					INSERT INTO recall_entries_fts(rowid, title, body, trigger)
+						VALUES (new.rowid, new.title, new.body, new.trigger);
+				END;
+				CREATE TRIGGER recall_entries_ad AFTER DELETE ON recall_entries BEGIN
+					DELETE FROM recall_entries_fts WHERE rowid = old.rowid;
+				END;
+				CREATE TRIGGER recall_entries_au AFTER UPDATE ON recall_entries BEGIN
+					DELETE FROM recall_entries_fts WHERE rowid = old.rowid;
+					INSERT INTO recall_entries_fts(rowid, title, body, trigger)
+						VALUES (new.rowid, new.title, new.body, new.trigger);
+				END;
+				DROP TRIGGER recall_evidence_ai;
+				DROP TRIGGER recall_evidence_ad;
+				DROP TRIGGER recall_evidence_au;
+				DROP TABLE recall_evidence_fts;
+				CREATE VIRTUAL TABLE recall_evidence_fts USING fts4(snippet, tokenize=porter);
+				INSERT INTO recall_evidence_fts(rowid, snippet)
+					SELECT id, snippet FROM recall_evidence;
+				CREATE TRIGGER recall_evidence_ai AFTER INSERT ON recall_evidence BEGIN
+					INSERT INTO recall_evidence_fts(rowid, snippet) VALUES (new.id, new.snippet);
+				END;
+				CREATE TRIGGER recall_evidence_ad AFTER DELETE ON recall_evidence BEGIN
+					DELETE FROM recall_evidence_fts WHERE rowid = old.id;
+				END;
+				CREATE TRIGGER recall_evidence_au AFTER UPDATE ON recall_evidence BEGIN
+					DELETE FROM recall_evidence_fts WHERE rowid = old.id;
+					INSERT INTO recall_evidence_fts(rowid, snippet) VALUES (new.id, new.snippet);
+				END;
+			`)
+			require.NoError(t, err)
+			require.NoError(t, d.Close())
+
+			// A second open must preserve the entries and working search indexes.
+			for pass := range 2 {
+				open := Open
+				wantModule := "using fts5"
+				if readOnly {
+					open = OpenReadOnly
+					wantModule = "using fts4"
+				}
+				reopened, err := open(ctx, path)
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+				if !readOnly && pass == 0 {
+					reviewed, err := reopened.ReviewRecallEntry(ctx, "legacy-entry", RecallReviewApprove)
+					require.NoError(t, err)
+					assert.Equal(t, corerecall.ReviewStateHumanReviewed, reviewed.ReviewState)
+				}
+				for _, table := range []string{"recall_entries_fts", "recall_evidence_fts"} {
+					var ddl string
+					require.NoError(t, reopened.getReader().QueryRowContext(ctx,
+						`SELECT sql FROM sqlite_master WHERE name = ?`, table,
+					).Scan(&ddl))
+					assert.Contains(t, strings.ToLower(ddl), wantModule)
+				}
+				for _, text := range []string{"orchid", "heliotrope"} {
+					matches, err := reopened.ListRecallEntryTextCandidates(ctx, RecallQuery{
+						Text: text, Limit: 10,
+					})
+					require.NoError(t, err)
+					require.Len(t, matches, 1)
+					assert.Equal(t, "legacy-entry", matches[0].ID)
+					require.Len(t, matches[0].Evidence, 1)
+					assert.Equal(t, "heliotrope evidence", matches[0].Evidence[0].Snippet)
+				}
+				require.NoError(t, reopened.Close())
+			}
+		})
+	}
+}
+
 func TestOpenMigratesLegacyRecallReviewConstraint(t *testing.T) {
 	for _, ftsModule := range []string{"fts5", "fts4"} {
 		t.Run(ftsModule, func(t *testing.T) {

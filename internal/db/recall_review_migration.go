@@ -10,7 +10,8 @@ import (
 )
 
 // migrateRecallReviewStateConstraintLocked removes the legacy SQL enum from
-// recall_entries. Review-state policy belongs to the shared Go write boundary;
+// recall_entries and upgrades legacy Recall search indexes to FTS5.
+// Review-state policy belongs to the shared Go write boundary;
 // keeping it in the table would require a table migration for every new state.
 // The caller must hold db.mu and invoke this before schema initialization so
 // schema.sql can recreate the dropped indexes and triggers canonically.
@@ -31,8 +32,22 @@ func migrateRecallReviewStateConstraintLocked(
 			"probing recall_entries review constraint: %w", err,
 		)
 	}
-	if !strings.Contains(tableSQL, "CHECK (review_state IN") {
-		return nil
+	migrateReviewState := strings.Contains(tableSQL, "CHECK (review_state IN")
+	if !migrateReviewState {
+		// FTS4 indexes also exist in archives created after the CHECK was removed.
+		var hasFTS4 bool
+		if err := w.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM sqlite_master WHERE type = 'table'
+				AND name IN ('recall_entries_fts', 'recall_evidence_fts')
+				AND lower(sql) LIKE '%using fts4%'
+			)
+		`).Scan(&hasFTS4); err != nil {
+			return fmt.Errorf("probing legacy recall search indexes: %w", err)
+		}
+		if !hasFTS4 {
+			return nil
+		}
 	}
 
 	conn, err := w.Conn(ctx)
@@ -82,29 +97,31 @@ func migrateRecallReviewStateConstraintLocked(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.ExecContext(
-		ctx, recallReviewStateMigrationPrepareSQL,
-	); err != nil {
-		return fmt.Errorf("preparing recall review migration: %w", err)
-	}
-	var sourceCount, replacementCount int64
-	if err := tx.QueryRowContext(ctx, `
+	if migrateReviewState {
+		if _, err := tx.ExecContext(
+			ctx, recallReviewStateMigrationPrepareSQL,
+		); err != nil {
+			return fmt.Errorf("preparing recall review migration: %w", err)
+		}
+		var sourceCount, replacementCount int64
+		if err := tx.QueryRowContext(ctx, `
 		SELECT
 			(SELECT count(*) FROM recall_entries),
 			(SELECT count(*) FROM recall_entries_review_state_v2)
 	`).Scan(&sourceCount, &replacementCount); err != nil {
-		return fmt.Errorf("counting migrated recall entries: %w", err)
-	}
-	if sourceCount != replacementCount {
-		return fmt.Errorf(
-			"migrating recall review state copied %d of %d entries",
-			replacementCount, sourceCount,
-		)
-	}
-	if _, err := tx.ExecContext(
-		ctx, recallReviewStateMigrationSwapSQL,
-	); err != nil {
-		return fmt.Errorf("swapping migrated recall entries: %w", err)
+			return fmt.Errorf("counting migrated recall entries: %w", err)
+		}
+		if sourceCount != replacementCount {
+			return fmt.Errorf(
+				"migrating recall review state copied %d of %d entries",
+				replacementCount, sourceCount,
+			)
+		}
+		if _, err := tx.ExecContext(
+			ctx, recallReviewStateMigrationSwapSQL,
+		); err != nil {
+			return fmt.Errorf("swapping migrated recall entries: %w", err)
+		}
 	}
 	if err := migrateRecallSearchIndexesTx(ctx, tx); err != nil {
 		return err
@@ -126,8 +143,7 @@ func migrateRecallReviewStateConstraintLocked(
 	return nil
 }
 
-// The released review-state constraint also predates the FTS5 requirement.
-// Convert its old search indexes once while the archive migration is atomic;
+// Convert old search indexes once while the archive migration is atomic;
 // existing FTS5 indexes keep their contents and preserved rowid associations.
 func migrateRecallSearchIndexesTx(ctx context.Context, tx *sql.Tx) error {
 	for _, index := range []struct {

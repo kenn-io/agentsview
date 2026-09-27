@@ -1653,6 +1653,7 @@ func recallFTSUnavailable(err error) bool {
 	return strings.Contains(msg, "no such table: recall_entries_fts") ||
 		strings.Contains(msg, "no such table: recall_evidence_fts") ||
 		strings.Contains(msg, "no such module") ||
+		strings.Contains(msg, "unable to use function bm25 in the requested context") ||
 		strings.Contains(msg, "unable to use function MATCH")
 }
 
