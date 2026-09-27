@@ -453,9 +453,9 @@ func TestOpenClawSQLitePartialDiscoveryReturnsIncomplete(t *testing.T) {
 			got = append(got, sources.sqlite.sourceRef(root, match))
 			return nil
 		}, func(
-			ctx context.Context, path string, yield func(string, int64) error,
+			ctx context.Context, path string, yield func(string, SourceFingerprint) error,
 		) error {
-			if err := yield("partial", 0); err != nil {
+			if err := yield("partial", SourceFingerprint{}); err != nil {
 				return err
 			}
 			return sentinel
@@ -480,7 +480,7 @@ func TestOpenClawSQLiteChangedContainerEnumerationBoundaries(t *testing.T) {
 	beforeErr := errors.New("listing failed before first member")
 	got, err := sources.expandSQLiteChangedContainer(
 		t.Context(), container,
-		func(context.Context, string, func(string, int64) error) error {
+		func(context.Context, string, func(string, SourceFingerprint) error) error {
 			return beforeErr
 		},
 	)
@@ -492,9 +492,9 @@ func TestOpenClawSQLiteChangedContainerEnumerationBoundaries(t *testing.T) {
 	got, err = sources.expandSQLiteChangedContainer(
 		t.Context(), container,
 		func(
-			_ context.Context, _ string, yield func(string, int64) error,
+			_ context.Context, _ string, yield func(string, SourceFingerprint) error,
 		) error {
-			if err := yield("member", 0); err != nil {
+			if err := yield("member", SourceFingerprint{}); err != nil {
 				return err
 			}
 			return afterErr
@@ -533,9 +533,9 @@ func TestOpenClawSQLiteChangedPathRootErrors(t *testing.T) {
 	_, err = openClaw.sources.expandSQLiteChangedContainer(
 		t.Context(), container,
 		func(
-			_ context.Context, _ string, yield func(string, int64) error,
+			_ context.Context, _ string, yield func(string, SourceFingerprint) error,
 		) error {
-			return yield("missing", 0)
+			return yield("missing", SourceFingerprint{})
 		},
 	)
 	require.Error(t, err)
@@ -554,9 +554,9 @@ func TestOpenClawSQLiteChangedContainerStopsOnDeadlineAfterMember(t *testing.T) 
 	got, err := sources.expandSQLiteChangedContainer(
 		t.Context(), container,
 		func(
-			_ context.Context, _ string, yield func(string, int64) error,
+			_ context.Context, _ string, yield func(string, SourceFingerprint) error,
 		) error {
-			if err := yield("member", 0); err != nil {
+			if err := yield("member", SourceFingerprint{}); err != nil {
 				return err
 			}
 			return context.DeadlineExceeded
@@ -580,15 +580,15 @@ func TestOpenClawSQLitePartialDatabaseKeepsHealthySibling(t *testing.T) {
 			got = append(got, match)
 			return nil
 		}, func(
-			_ context.Context, path string, yield func(string, int64) error,
+			_ context.Context, path string, yield func(string, SourceFingerprint) error,
 		) error {
 			if path == partialDB {
-				if err := yield("partial", 0); err != nil {
+				if err := yield("partial", SourceFingerprint{}); err != nil {
 					return err
 				}
 				return sentinel
 			}
-			return yield("healthy", 0)
+			return yield("healthy", SourceFingerprint{})
 		},
 	)
 	var incomplete DiscoveryIncompleteError
@@ -1231,7 +1231,7 @@ func TestOpenClawSQLiteSessionIDStreamingStopsOnYieldError(t *testing.T) {
 	wantErr := errors.New("stop")
 	yields := 0
 
-	err := openClawSQLiteSessionIDsEach(t.Context(), dbPath, func(string, int64) error {
+	err := openClawSQLiteSessionIDsEach(t.Context(), dbPath, func(string, SourceFingerprint) error {
 		yields++
 		return wantErr
 	})
@@ -1351,6 +1351,7 @@ func TestOpenClawSQLiteStoreFingerprints(t *testing.T) {
 	second, err := provider.Fingerprint(t.Context(), sources[1])
 	require.NoError(t, err)
 	require.NotEqual(t, first.Hash, second.Hash)
+	initialSource := sources[0]
 
 	info, err := os.Stat(dbPath)
 	require.NoError(t, err)
@@ -1361,12 +1362,30 @@ func TestOpenClawSQLiteStoreFingerprints(t *testing.T) {
 	updateOpenClawSQLiteEvent(t, dbPath, "one", 1, updated)
 	require.NoError(t, os.Chtimes(dbPath, info.ModTime(), info.ModTime()))
 
+	// Discovery carries its snapshot; a later scan must still detect an edit
+	// that changes neither the content length nor any source timestamp.
+	captured, err := provider.Fingerprint(t.Context(), sources[0])
+	require.NoError(t, err)
+	assert.Equal(t, first, captured)
+	sources, err = provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 2)
 	updatedFingerprint, err := provider.Fingerprint(t.Context(), sources[0])
 	require.NoError(t, err)
 	assert.NotEqual(t, first.Hash, updatedFingerprint.Hash)
+	assert.Equal(t, first.Size, updatedFingerprint.Size)
+	assert.Equal(t, first.MTimeNS, updatedFingerprint.MTimeNS)
+	parsedAfterEdit, err := provider.Parse(t.Context(), ParseRequest{
+		Source: initialSource, Fingerprint: first,
+	})
+	require.NoError(t, err)
+	require.Len(t, parsedAfterEdit.Results, 1)
+	assert.Equal(t, "hello from sqlitE", parsedAfterEdit.Results[0].Result.Messages[0].Content)
+	assert.Equal(t, updatedFingerprint.Hash, parsedAfterEdit.Results[0].Result.Session.File.Hash,
+		"the saved hash must describe the parsed messages if discovery raced with an edit")
 	unchanged, err := provider.Fingerprint(t.Context(), sources[1])
 	require.NoError(t, err)
-	assert.Equal(t, second.Hash, unchanged.Hash)
+	assert.Equal(t, second, unchanged)
 
 	walDB, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
@@ -1381,17 +1400,36 @@ func TestOpenClawSQLiteStoreFingerprints(t *testing.T) {
 		1_700_000_000_099,
 	)
 	require.NoError(t, err)
-	walFingerprint, err := provider.Fingerprint(t.Context(), sources[0])
+	// Sources restored from a stored path have no discovery snapshot.
+	pathOnly := SourceRef{DisplayPath: sources[0].DisplayPath}
+	walFingerprint, err := provider.Fingerprint(t.Context(), pathOnly)
 	require.NoError(t, err)
 	walOutcome, err := provider.Parse(t.Context(), ParseRequest{
-		Source: sources[0], Fingerprint: walFingerprint,
+		Source: pathOnly, Fingerprint: walFingerprint,
 	})
 	require.NoError(t, err)
 	require.Len(t, walOutcome.Results, 1)
 	assert.Equal(t, walFingerprint.MTimeNS,
 		walOutcome.Results[0].Result.Session.File.Mtime)
+	assert.Equal(t, walFingerprint.Size,
+		walOutcome.Results[0].Result.Session.File.Size)
 	assert.Equal(t, "wal append", walOutcome.Results[0].Result.Messages[len(
 		walOutcome.Results[0].Result.Messages)-1].Content)
+
+	_, err = walDB.ExecContext(t.Context(), `
+		DELETE FROM transcript_events WHERE session_id = 'one' AND seq = 1
+	`)
+	require.NoError(t, err)
+	sources, err = provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 2)
+	deletedFingerprint, err := provider.Fingerprint(t.Context(), sources[0])
+	require.NoError(t, err)
+	assert.NotEqual(t, walFingerprint.Hash, deletedFingerprint.Hash)
+	assert.Equal(t, walFingerprint.MTimeNS, deletedFingerprint.MTimeNS)
+	unchanged, err = provider.Fingerprint(t.Context(), sources[1])
+	require.NoError(t, err)
+	assert.Equal(t, second, unchanged)
 }
 
 func TestOpenClawSQLiteStoreMalformedMemberIsolation(t *testing.T) {

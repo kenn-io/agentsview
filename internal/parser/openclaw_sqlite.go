@@ -73,7 +73,7 @@ func openClawSQLiteDiscoverEach(
 }
 
 type openClawSQLiteSessionEnumerator func(
-	context.Context, string, func(string, int64) error,
+	context.Context, string, func(string, SourceFingerprint) error,
 ) error
 
 func openClawSQLiteDiscoverEachWithEnumerator(
@@ -115,7 +115,7 @@ func openClawSQLiteDiscoverEachWithEnumerator(
 		}
 		emitted := 0
 		err = enumerate(ctx, dbPath, func(
-			sessionID string, discoveryMTimeNS int64,
+			sessionID string, fingerprint SourceFingerprint,
 		) error {
 			callbackErr = yield(multiSessionMatch{
 				Path:                   VirtualSourcePath(dbPath, entry.Name()+":"+sessionID),
@@ -123,7 +123,8 @@ func openClawSQLiteDiscoverEachWithEnumerator(
 				MemberID:               entry.Name() + ":" + sessionID,
 				ReconciliationIdentity: entry.Name() + ":" + sessionID,
 				ProjectHint:            entry.Name(),
-				DiscoveryMTimeNS:       discoveryMTimeNS,
+				DiscoveryMTimeNS:       fingerprint.MTimeNS,
+				DiscoveryFingerprint:   &fingerprint,
 			})
 			if callbackErr != nil {
 				return callbackErr
@@ -472,18 +473,21 @@ func openClawSQLiteFingerprint(
 	if !info.Mode().IsRegular() {
 		return SourceFingerprint{}, fmt.Errorf("stat %s: source is not a file", src.Container)
 	}
-	mtime := info.ModTime().UnixNano()
-	if composite, err := sqliteDBCompositeMtime(
-		src.Container, sqliteDBJournalSuffixes,
-	); err == nil {
-		mtime = composite
-	}
 	if src.MemberID == "" {
+		mtime := info.ModTime().UnixNano()
+		if composite, err := sqliteDBCompositeMtime(
+			src.Container, sqliteDBJournalSuffixes,
+		); err == nil {
+			mtime = composite
+		}
 		hash, err := hashJSONLSourceFileContext(ctx, src.Container)
 		if err != nil {
 			return SourceFingerprint{}, err
 		}
 		return SourceFingerprint{Size: info.Size(), MTimeNS: mtime, Hash: hash}, nil
+	}
+	if src.DiscoveryFingerprint != nil {
+		return *src.DiscoveryFingerprint, nil
 	}
 
 	db, tx, err := openOpenClawSQLiteTx(ctx, src.Container)
@@ -495,20 +499,9 @@ func openClawSQLiteFingerprint(
 	if err := openClawSQLiteInspectSchema(ctx, tx); err != nil {
 		return SourceFingerprint{}, err
 	}
-	digest, count, err := openClawSQLiteMemberDigest(
+	return openClawSQLiteMemberFingerprint(
 		ctx, tx, openClawSQLiteSessionID(src.MemberID), nil,
 	)
-	if err != nil {
-		return SourceFingerprint{}, err
-	}
-	if count == 0 {
-		return SourceFingerprint{}, nil
-	}
-	return SourceFingerprint{
-		Size:    info.Size(),
-		MTimeNS: mtime,
-		Hash:    digest,
-	}, nil
 }
 
 func openClawSQLiteParseMember(
@@ -633,7 +626,7 @@ func openClawSQLiteParseMemberTx(
 	agentID, sessionID string,
 ) (*ParseResult, string, error) {
 	builder := newOpenClawRecordBuilder()
-	digest, count, err := openClawSQLiteMemberDigest(
+	fingerprint, err := openClawSQLiteMemberFingerprint(
 		ctx, tx, sessionID, builder,
 	)
 	if err != nil {
@@ -647,7 +640,7 @@ func openClawSQLiteParseMemberTx(
 			),
 		}
 	}
-	if count == 0 {
+	if fingerprint.Hash == "" {
 		return nil, "", nil
 	}
 	sess, messages, err := builder.finish(
@@ -659,69 +652,97 @@ func openClawSQLiteParseMemberTx(
 	if sess == nil {
 		return nil, "", nil
 	}
-	if mtime, err := sqliteDBCompositeMtime(
-		src.Container, sqliteDBJournalSuffixes,
-	); err == nil {
-		sess.File.Mtime = mtime
-	}
-	return &ParseResult{Session: *sess, Messages: messages}, digest, nil
+	sess.File.Size = fingerprint.Size
+	sess.File.Mtime = fingerprint.MTimeNS
+	sess.File.Hash = fingerprint.Hash
+	return &ParseResult{Session: *sess, Messages: messages}, fingerprint.Hash, nil
 }
 
-func openClawSQLiteMemberDigest(
+func openClawSQLiteMemberFingerprint(
 	ctx context.Context,
 	tx *sql.Tx,
 	sessionID string,
 	builder *openClawRecordBuilder,
-) (string, int, error) {
-	rows, err := tx.QueryContext(ctx, `
-		SELECT seq, event_json, created_at
-		FROM transcript_events
-		WHERE session_id = ?
-		ORDER BY seq
-	`, sessionID)
+) (SourceFingerprint, error) {
+	var fingerprint SourceFingerprint
+	err := openClawSQLiteFingerprintsEachTx(ctx, tx, sessionID, builder,
+		func(_ string, current SourceFingerprint) error {
+			fingerprint = current
+			return nil
+		},
+	)
+	return fingerprint, err
+}
+
+// Stream one member at a time so discovery opens the database once, while
+// retaining a content digest that detects timestamp-preserving edits and deletes.
+func openClawSQLiteFingerprintsEachTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	sessionID string,
+	builder *openClawRecordBuilder,
+	yield func(string, SourceFingerprint) error,
+) error {
+	query := `SELECT session_id, seq, event_json, created_at FROM transcript_events`
+	var args []any
+	if sessionID != "" {
+		query += ` WHERE session_id = ?`
+		args = append(args, sessionID)
+	}
+	rows, err := tx.QueryContext(ctx, query+` ORDER BY session_id, seq`, args...)
 	if err != nil {
-		return "", 0, fmt.Errorf(
-			"reading OpenClaw SQLite session %s: %w", sessionID, err,
-		)
+		return fmt.Errorf("reading OpenClaw SQLite events: %w", err)
 	}
 	defer rows.Close()
 	hash := sha256.New()
-	count := 0
+	var memberID string
+	var fingerprint SourceFingerprint
+	finish := func() error {
+		if memberID == "" {
+			return nil
+		}
+		fingerprint.Hash = hex.EncodeToString(hash.Sum(nil))
+		return yield(memberID, fingerprint)
+	}
 	for rows.Next() {
 		if err := ctx.Err(); err != nil {
-			return "", 0, err
+			return err
 		}
 		var (
+			id        string
 			seq       int64
 			eventJSON string
 			createdAt any
 		)
-		if err := rows.Scan(&seq, &eventJSON, &createdAt); err != nil {
-			return "", 0, fmt.Errorf(
-				"scanning OpenClaw SQLite session %s: %w", sessionID, err,
-			)
+		if err := rows.Scan(&id, &seq, &eventJSON, &createdAt); err != nil {
+			return fmt.Errorf("scanning OpenClaw SQLite event: %w", err)
+		}
+		if !IsValidSessionID(id) {
+			continue
+		}
+		if id != memberID {
+			if err := finish(); err != nil {
+				return err
+			}
+			memberID = id
+			fingerprint = SourceFingerprint{}
+			hash.Reset()
 		}
 		openClawSQLiteHashField(hash, strconv.FormatInt(seq, 10))
 		openClawSQLiteHashField(hash, openClawSQLiteValueString(createdAt))
 		openClawSQLiteHashField(hash, eventJSON)
+		fingerprint.Size += int64(len(eventJSON))
+		fingerprint.MTimeNS = max(fingerprint.MTimeNS, openClawSQLiteCreatedAtMTimeNS(createdAt))
 		if builder != nil {
 			if err := builder.consume(eventJSON, true); err != nil {
-				return "", 0, openClawSQLiteMalformedMemberError{
-					reason: err.Error(),
-				}
+				return openClawSQLiteMalformedMemberError{reason: err.Error()}
 			}
 		}
-		count++
 	}
 	if err := rows.Err(); err != nil {
-		return "", 0, fmt.Errorf(
-			"reading OpenClaw SQLite session %s: %w", sessionID, err,
-		)
+		return fmt.Errorf("reading OpenClaw SQLite events: %w", err)
 	}
-	if count == 0 {
-		return "", 0, nil
-	}
-	return hex.EncodeToString(hash.Sum(nil)), count, nil
+	return finish()
 }
 
 func openClawSQLiteHashField(hash interface{ Write([]byte) (int, error) }, value string) {
@@ -812,7 +833,7 @@ func openClawSQLiteInspectSchema(
 }
 
 func openClawSQLiteSessionIDsEach(
-	ctx context.Context, path string, yield func(string, int64) error,
+	ctx context.Context, path string, yield func(string, SourceFingerprint) error,
 ) error {
 	db, tx, err := openOpenClawSQLiteTx(ctx, path)
 	if err != nil {
@@ -823,7 +844,7 @@ func openClawSQLiteSessionIDsEach(
 	if err := openClawSQLiteInspectSchema(ctx, tx); err != nil {
 		return err
 	}
-	return openClawSQLiteSessionIDsEachTx(ctx, tx, yield)
+	return openClawSQLiteFingerprintsEachTx(ctx, tx, "", nil, yield)
 }
 
 func openClawSQLiteSessionIDsTx(

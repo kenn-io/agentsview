@@ -28,6 +28,9 @@ type multiSessionSource struct {
 	Path      string
 	Container string
 	MemberID  string
+	// DiscoveryFingerprint is the member snapshot captured during discovery.
+	// Path-only sources leave it nil and resolve their fingerprint on demand.
+	DiscoveryFingerprint *SourceFingerprint
 }
 
 // multiSessionMatch is what a classifier or member lookup resolves to: the
@@ -41,6 +44,7 @@ type multiSessionMatch struct {
 	ReconciliationIdentity string
 	ProjectHint            string
 	DiscoveryMTimeNS       int64
+	DiscoveryFingerprint   *SourceFingerprint
 }
 
 // classifySQLiteContainerPath maps a stored or changed path to its database
@@ -760,7 +764,9 @@ func (s multiSessionContainerSourceSet) parse(
 		if result == nil {
 			return s.skipOutcome(src), nil
 		}
-		if fingerprintHash != "" {
+		// A member parser can hash the same snapshot as its messages. Keep
+		// that digest when the source changed after discovery.
+		if result.Session.File.Hash == "" && fingerprintHash != "" {
 			result.Session.File.Hash = fingerprintHash
 		}
 		return ParseOutcome{
@@ -906,10 +912,11 @@ func (s multiSessionContainerSourceSet) sourceRef(
 
 func (m multiSessionMatch) toSource(root string) multiSessionSource {
 	return multiSessionSource{
-		Root:      root,
-		Path:      m.Path,
-		Container: m.Container,
-		MemberID:  m.MemberID,
+		Root:                 root,
+		Path:                 m.Path,
+		Container:            m.Container,
+		MemberID:             m.MemberID,
+		DiscoveryFingerprint: m.DiscoveryFingerprint,
 	}
 }
 

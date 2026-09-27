@@ -425,7 +425,7 @@ func (s openClawSourceSet) expandSQLiteChangedContainer(
 	var callbackErr error
 	emitted := 0
 	err := enumerate(ctx, src.Container, func(
-		sessionID string, _ int64,
+		sessionID string, fingerprint SourceFingerprint,
 	) error {
 		memberID := agentID + ":" + sessionID
 		winner, found, err := s.findSQLiteMember(ctx, memberID)
@@ -435,6 +435,11 @@ func (s openClawSourceSet) expandSQLiteChangedContainer(
 		}
 		if !found {
 			return nil
+		}
+		if member, ok := s.sqlite.sourceFromRef(winner); ok && member.Container == src.Container {
+			member.DiscoveryFingerprint = &fingerprint
+			winner.Opaque = member
+			winner.DiscoveryMTimeNS = fingerprint.MTimeNS
 		}
 		winner.ProjectHint = agentID
 		sources = append(sources, winner)

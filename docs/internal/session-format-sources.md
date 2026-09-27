@@ -2218,6 +2218,16 @@ schemas keep their existing ordering behavior.
   older or equally dated lower-ranked duplicate cannot replace the preferred
   copy's saved messages. Explicit stored-source requests retain their existing
   preference.
+- **SQLite freshness (rechecked 2026-09-27):** Isolated fixtures with 2 and 50
+  sessions verify that appending to one member syncs only that member.
+  Discovery carries each member's content size, latest event time, and hash.
+  It still scans event payloads once per discovery to detect edits and
+  deletions that leave event timestamps unchanged.
+- **SQLite retention:** While configured roots and remote-path mappings still
+  identify the stored SQLite source, a JSONL copy cannot replace it, even if
+  the database disappears. Returning to a JSONL-writing OpenClaw version then
+  leaves that session at its last SQLite snapshot; later JSONL messages for
+  the same ID are not imported.
 
 ## QClaw (`qclaw`)
 
