@@ -5,90 +5,91 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestClaudeSplitRunStart(t *testing.T) {
 	line := func(s string) string { return s + "\n" }
-	offsetAfter := func(parts ...string) int64 {
-		return int64(len(strings.Join(parts, "")))
+	user := line(`{"type":"user","uuid":"u1","message":{"content":"hi"}}`)
+	run1 := line(`{"type":"assistant","uuid":"a1","message":{"id":"m","content":[{"type":"tool_use","id":"t1","name":"Read","input":{}}]}}`)
+	run2 := line(`{"type":"assistant","uuid":"a2","message":{"id":"m","content":[{"type":"tool_use","id":"t2","name":"Read","input":{}}]}}`)
+	result := line(`{"type":"user","uuid":"r1","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}`)
+	attach := line(`{"type":"attachment","uuid":"at1","content":"queued"}`)
+	other := line(`{"type":"assistant","uuid":"o1","message":{"id":"m2","content":[{"type":"text","text":"other"}]}}`)
+	broken := line(`{"type":"assistant","uuid":"a1"`)
+
+	var long strings.Builder
+	long.WriteString(user)
+	for range 4096 {
+		long.WriteString(line(`{"type":"assistant","uuid":"a` + strings.Repeat("x", 8) +
+			`","message":{"id":"m","content":[{"type":"text","text":"` +
+			strings.Repeat("y", 40) + `"}]}}`))
 	}
 
-	t.Run("returns the first record of the run", func(t *testing.T) {
-		user := line(`{"type":"user","uuid":"u1","message":{"content":"hi"}}`)
-		run1 := line(`{"type":"assistant","uuid":"a1","message":{"id":"m","content":[{"type":"text","text":"one"}]}}`)
-		run2 := line(`{"type":"assistant","uuid":"a2","message":{"id":"m","content":[{"type":"text","text":"one two"}]}}`)
-		path := createTestFile(t, "split.jsonl", user+run1+run2)
+	tests := []struct {
+		name        string
+		stored      []string // records before the sync offset
+		appended    []string // records after it
+		wantVerdict ClaudeSplitVerdict
+		wantStart   int64
+	}{
+		{
+			name:        "run straddles the offset",
+			stored:      []string{user, run1},
+			appended:    []string{run2},
+			wantVerdict: ClaudeSplitFound,
+			wantStart:   int64(len(user)),
+		},
+		{
+			name:        "attachment inside the run is skipped",
+			stored:      []string{user, run1, attach},
+			appended:    []string{run2},
+			wantVerdict: ClaudeSplitFound,
+			wantStart:   int64(len(user)),
+		},
+		{
+			name:        "run starting at the file start",
+			stored:      []string{run1},
+			appended:    []string{run2},
+			wantVerdict: ClaudeSplitFound,
+			wantStart:   0,
+		},
+		{
+			name:        "tool result between parallel tool calls ends the run",
+			stored:      []string{user, run1, result},
+			appended:    []string{run2},
+			wantVerdict: ClaudeSplitNone,
+		},
+		{
+			name:        "different message id before the offset",
+			stored:      []string{user, run1, other},
+			appended:    []string{run2},
+			wantVerdict: ClaudeSplitNone,
+		},
+		{
+			name:        "malformed record",
+			stored:      []string{user, broken},
+			appended:    []string{run2},
+			wantVerdict: ClaudeSplitUnknown,
+		},
+		{
+			name:        "run spans a read chunk",
+			stored:      []string{long.String()},
+			appended:    []string{run2},
+			wantVerdict: ClaudeSplitFound,
+			wantStart:   int64(len(user)),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stored := strings.Join(tt.stored, "")
+			path := createTestFile(t, "split.jsonl",
+				stored+strings.Join(tt.appended, ""))
 
-		got, ok := ClaudeSplitRunStart(path, offsetAfter(user, run1), "m")
-		require.True(t, ok)
-		assert.Equal(t, offsetAfter(user), got)
-	})
-
-	t.Run("skips attachment records between run chunks", func(t *testing.T) {
-		user := line(`{"type":"user","uuid":"u1","message":{"content":"hi"}}`)
-		run1 := line(`{"type":"assistant","uuid":"a1","message":{"id":"m","content":[{"type":"text","text":"one"}]}}`)
-		attach := line(`{"type":"attachment","uuid":"at1","content":"queued"}`)
-		run2 := line(`{"type":"assistant","uuid":"a2","message":{"id":"m","content":[{"type":"text","text":"one two"}]}}`)
-		path := createTestFile(t, "split.jsonl", user+run1+attach+run2)
-
-		got, ok := ClaudeSplitRunStart(path, offsetAfter(user, run1, attach), "m")
-		require.True(t, ok)
-		assert.Equal(t, offsetAfter(user), got)
-	})
-
-	t.Run("stops at a user record", func(t *testing.T) {
-		user := line(`{"type":"user","uuid":"u1","message":{"content":"hi"}}`)
-		run1 := line(`{"type":"assistant","uuid":"a1","message":{"id":"m","content":[{"type":"text","text":"one"}]}}`)
-		path := createTestFile(t, "split.jsonl", user+run1)
-
-		got, ok := ClaudeSplitRunStart(path, offsetAfter(user, run1), "m")
-		require.True(t, ok)
-		assert.Equal(t, offsetAfter(user), got)
-	})
-
-	t.Run("run starting at the file start", func(t *testing.T) {
-		run1 := line(`{"type":"assistant","uuid":"a1","message":{"id":"m","content":[{"type":"text","text":"one"}]}}`)
-		run2 := line(`{"type":"assistant","uuid":"a2","message":{"id":"m","content":[{"type":"text","text":"one two"}]}}`)
-		path := createTestFile(t, "split.jsonl", run1+run2)
-
-		got, ok := ClaudeSplitRunStart(path, offsetAfter(run1), "m")
-		require.True(t, ok)
-		assert.Equal(t, int64(0), got)
-	})
-
-	t.Run("stored tail is not part of the run", func(t *testing.T) {
-		user := line(`{"type":"user","uuid":"u1","message":{"content":"hi"}}`)
-		run1 := line(`{"type":"assistant","uuid":"a1","message":{"id":"m","content":[{"type":"text","text":"one"}]}}`)
-		other := line(`{"type":"assistant","uuid":"a2","message":{"id":"m2","content":[{"type":"text","text":"other"}]}}`)
-		path := createTestFile(t, "split.jsonl", user+run1+other)
-
-		_, ok := ClaudeSplitRunStart(path, offsetAfter(user, run1, other), "m")
-		assert.False(t, ok)
-	})
-
-	t.Run("malformed record keeps the fallback", func(t *testing.T) {
-		user := line(`{"type":"user","uuid":"u1","message":{"content":"hi"}}`)
-		broken := line(`{"type":"assistant","uuid":"a1"`)
-		path := createTestFile(t, "split.jsonl", user+broken)
-
-		_, ok := ClaudeSplitRunStart(path, offsetAfter(user, broken), "m")
-		assert.False(t, ok)
-	})
-
-	t.Run("run spans a read chunk", func(t *testing.T) {
-		user := line(`{"type":"user","uuid":"u1","message":{"content":"hi"}}`)
-		var b strings.Builder
-		b.WriteString(user)
-		for range 4096 {
-			b.WriteString(line(`{"type":"assistant","uuid":"a` + strings.Repeat("x", 8) +
-				`","message":{"id":"m","content":[{"type":"text","text":"` +
-				strings.Repeat("y", 40) + `"}]}}`))
-		}
-		path := createTestFile(t, "split.jsonl", b.String())
-
-		got, ok := ClaudeSplitRunStart(path, int64(b.Len()), "m")
-		require.True(t, ok)
-		assert.Equal(t, offsetAfter(user), got)
-	})
+			start, verdict := ClaudeSplitRunStart(path, int64(len(stored)), "m")
+			assert.Equal(t, tt.wantVerdict, verdict)
+			if tt.wantVerdict == ClaudeSplitFound {
+				assert.Equal(t, tt.wantStart, start)
+			}
+		})
+	}
 }

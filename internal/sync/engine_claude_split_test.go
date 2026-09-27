@@ -195,6 +195,54 @@ var claudeSplitShapes = map[string]struct {
 		},
 		splitAfter: 3,
 	},
+	// A completed earlier turn with a tool call sits below the replaced
+	// range, so the ranged write must keep its rows and aggregates.
+	"earlier_turn_kept": {
+		lines: []string{
+			`{"type":"attachment","timestamp":"2024-01-01T10:00:00Z","uuid":"at0","content":"context"}`,
+			`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"u1","message":{"content":"hello"},"cwd":"/tmp"}`,
+			`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","uuid":"p1","parentUuid":"at0","message":{"id":"p","model":"claude-sonnet-4-20250514","content":[{"type":"tool_use","id":"t0","name":"Read","input":{"file_path":"a.go"}}],"usage":{"input_tokens":40,"output_tokens":7},"stop_reason":"tool_use"}}`,
+			`{"type":"user","timestamp":"2024-01-01T10:00:02Z","uuid":"r0","parentUuid":"p1","message":{"content":[{"type":"tool_result","tool_use_id":"t0","content":"package a"}]},"cwd":"/tmp"}`,
+			`{"type":"assistant","timestamp":"2024-01-01T10:00:03Z","uuid":"a1","parentUuid":"r0","message":{"id":"m","model":"claude-sonnet-4-20250514","content":[{"type":"text","text":"Reading"}],"usage":{"input_tokens":50,"output_tokens":1},"stop_reason":"tool_use"}}`,
+			`{"type":"assistant","timestamp":"2024-01-01T10:00:04Z","uuid":"a2","parentUuid":"a1","message":{"id":"m","model":"claude-sonnet-4-20250514","content":[{"type":"text","text":"Reading done"}],"usage":{"input_tokens":50,"output_tokens":3},"stop_reason":"end_turn"}}`,
+		},
+		splitAfter: 5,
+	},
+	// The stored partial run carries a larger context than the finished
+	// run, and the earlier turn a smaller one, so the session peak must be
+	// recomputed rather than kept from the replaced row.
+	"shrinking_context_usage": {
+		lines: []string{
+			`{"type":"attachment","timestamp":"2024-01-01T10:00:00Z","uuid":"at0","content":"context"}`,
+			`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"u1","message":{"content":"hello"},"cwd":"/tmp"}`,
+			`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","uuid":"p1","parentUuid":"at0","message":{"id":"p","model":"claude-sonnet-4-20250514","content":[{"type":"text","text":"Earlier"}],"usage":{"input_tokens":15,"output_tokens":2},"stop_reason":"end_turn"}}`,
+			`{"type":"user","timestamp":"2024-01-01T10:00:02Z","uuid":"u2","parentUuid":"p1","message":{"content":"again"},"cwd":"/tmp"}`,
+			`{"type":"assistant","timestamp":"2024-01-01T10:00:03Z","uuid":"a1","parentUuid":"u2","message":{"id":"m","model":"claude-sonnet-4-20250514","content":[{"type":"text","text":"Later"}],"usage":{"input_tokens":30,"output_tokens":1},"stop_reason":"tool_use"}}`,
+			`{"type":"assistant","timestamp":"2024-01-01T10:00:04Z","uuid":"a2","parentUuid":"a1","message":{"id":"m","model":"claude-sonnet-4-20250514","content":[{"type":"text","text":"Later still"}],"usage":{"input_tokens":20,"output_tokens":2},"stop_reason":"end_turn"}}`,
+		},
+		splitAfter: 5,
+	},
+	// Parallel tool calls: the tool_result lands between two records of
+	// the same response, so the full parser keeps them apart and the
+	// second sync is a plain append.
+	"parallel_tool_results": claudeParallelToolShape,
+}
+
+// claudeParallelToolShape interleaves a tool_result between two
+// assistant records that share message.id, and splits after it.
+var claudeParallelToolShape = struct {
+	lines      []string
+	splitAfter int
+}{
+	lines: []string{
+		`{"type":"attachment","timestamp":"2024-01-01T10:00:00Z","uuid":"at0","content":"context"}`,
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"u1","message":{"content":"hello"},"cwd":"/tmp"}`,
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","uuid":"a1","parentUuid":"at0","message":{"id":"m","model":"claude-sonnet-4-20250514","content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"a.go"}}],"usage":{"input_tokens":10,"output_tokens":1},"stop_reason":"tool_use"}}`,
+		`{"type":"user","timestamp":"2024-01-01T10:00:02Z","uuid":"r1","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"package a"}]},"cwd":"/tmp"}`,
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:03Z","uuid":"a2","parentUuid":"r1","message":{"id":"m","model":"claude-sonnet-4-20250514","content":[{"type":"tool_use","id":"t2","name":"Read","input":{"file_path":"b.go"}}],"usage":{"input_tokens":10,"output_tokens":2},"stop_reason":"tool_use"}}`,
+		`{"type":"user","timestamp":"2024-01-01T10:00:04Z","uuid":"r2","parentUuid":"a2","message":{"content":[{"type":"tool_result","tool_use_id":"t2","content":"package b"}]},"cwd":"/tmp"}`,
+	},
+	splitAfter: 4,
 }
 
 type splitMessageSnapshot struct {
@@ -333,36 +381,75 @@ func TestClaudeIncrementalSplitReparsesOnlyTheOpenRun(t *testing.T) {
 	assert.Equal(t, "Hello world", msgs[1].Content)
 }
 
-// TestClaudeIncrementalSplitFallsBackWhenRunCannotBeLocated covers the
-// narrowed fallback: when the stored tail shares the appended message id
-// but the run cannot be reconstructed, the engine still re-parses the
-// whole transcript rather than storing a duplicate.
-func TestClaudeIncrementalSplitFallsBackWhenRunCannotBeLocated(t *testing.T) {
+// TestClaudeIncrementalSameIDAfterToolResultAppends covers parallel tool
+// calls: the appended record shares the stored tail's message.id, but a
+// tool_result sits between them, so the full parser keeps them apart and
+// the sync must append without re-parsing the whole transcript.
+func TestClaudeIncrementalSameIDAfterToolResultAppends(t *testing.T) {
 	counter := &claudeFullParseCounter{inner: claudeSplitFactory(t)}
 	env, dir := newClaudeSplitTestEnv(t, counter)
 
-	path := filepath.Join(dir, "proj", "interrupted.jsonl")
+	shape := claudeParallelToolShape
+	path := filepath.Join(dir, "proj", "parallel.jsonl")
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-	require.NoError(t, os.WriteFile(path, []byte(strings.Join([]string{
-		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"u1","message":{"content":"hello"},"cwd":"/tmp"}`,
-		`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","uuid":"a1","parentUuid":"u1","message":{"id":"m","model":"claude-sonnet-4-20250514","content":[{"type":"text","text":"Hello"}],"usage":{"input_tokens":10,"output_tokens":1},"stop_reason":"end_turn"}}`,
-		`{"type":"user","timestamp":"2024-01-01T10:00:02Z","uuid":"u2","parentUuid":"a1","message":{"content":"more"},"cwd":"/tmp"}`,
-	}, "\n")+"\n"), 0o644))
-
+	require.NoError(t, os.WriteFile(
+		path,
+		[]byte(strings.Join(shape.lines[:shape.splitAfter], "\n")+"\n"),
+		0o644,
+	))
 	env.engine.SyncAll(t.Context(), nil)
 
 	counter.full.Store(0)
-	appendClaudeSplitLines(t, path,
-		`{"type":"assistant","timestamp":"2024-01-01T10:00:03Z","uuid":"a2","parentUuid":"u2","message":{"id":"m","model":"claude-sonnet-4-20250514","content":[{"type":"text","text":"Late"}],"usage":{"input_tokens":10,"output_tokens":2},"stop_reason":"end_turn"}}`,
-	)
+	appendClaudeSplitLines(t, path, shape.lines[shape.splitAfter:]...)
 	env.engine.SyncPaths([]string{path})
 
-	assert.Equal(t, int64(1), counter.full.Load(),
-		"an unidentifiable run keeps the whole-transcript fallback")
-	msgs := fetchMessages(t, env.db, "interrupted")
-	require.Len(t, msgs, 4,
-		"a user turn between the two assistant records keeps them separate")
-	assert.Equal(t, "Late", msgs[3].Content)
+	assert.Zero(t, counter.full.Load(),
+		"a same-id record after a tool_result is a plain append")
+	msgs := fetchMessages(t, env.db, "parallel")
+	require.Len(t, msgs, 3, "the two tool calls stay separate messages")
+	assert.Equal(t, "m", msgs[1].ClaudeMessageID)
+	assert.Equal(t, "m", msgs[2].ClaudeMessageID)
+}
+
+// TestClaudeIncrementalSplitLeavesEarlierRowsInPlace checks that finishing
+// a split response rewrites only the rows from the run onward: earlier
+// rows keep their row identity and their pins.
+func TestClaudeIncrementalSplitLeavesEarlierRowsInPlace(t *testing.T) {
+	counter := &claudeFullParseCounter{inner: claudeSplitFactory(t)}
+	env, dir := newClaudeSplitTestEnv(t, counter)
+
+	shape := claudeSplitShapes["earlier_turn_kept"]
+	path := filepath.Join(dir, "proj", "kept.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(
+		path,
+		[]byte(strings.Join(shape.lines[:shape.splitAfter], "\n")+"\n"),
+		0o644,
+	))
+	env.engine.SyncAll(t.Context(), nil)
+
+	before := fetchMessages(t, env.db, "kept")
+	require.Len(t, before, 3)
+	_, err := env.db.PinMessage(t.Context(), "kept", before[1].ID, nil)
+	require.NoError(t, err)
+
+	counter.full.Store(0)
+	appendClaudeSplitLines(t, path, shape.lines[shape.splitAfter:]...)
+	env.engine.SyncPaths([]string{path})
+
+	assert.Zero(t, counter.full.Load(),
+		"finishing one response must not re-parse the whole transcript")
+	after := fetchMessages(t, env.db, "kept")
+	require.Len(t, after, 3)
+	for i := range 2 {
+		assert.Equal(t, before[i].ID, after[i].ID,
+			"row at ordinal %d below the run was rewritten", before[i].Ordinal)
+	}
+	assert.Equal(t, "Reading done", after[2].Content)
+	pins, err := env.db.ListPinnedMessages(t.Context(), "kept", "")
+	require.NoError(t, err)
+	require.Len(t, pins, 1)
+	assert.Equal(t, before[1].ID, pins[0].MessageID)
 }
 
 // TestClaudeIncrementalToolUseRunIsNotReparsedEverySync checks that a

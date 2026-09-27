@@ -29,26 +29,43 @@ const (
 	claudeSplitUnknown
 )
 
-// ClaudeSplitRunStart finds where the same-message.id assistant run
-// that straddles offset begins. Claude Code writes one API response as
-// several JSONL records that share message.id, and a sync that stops
-// inside the run stores only the records it read, collapsed into one
-// message. Re-parsing from the run's first record reproduces the merge a
-// full parse performs over the whole file.
+// ClaudeSplitVerdict is the backward scan's answer about the records just
+// before a stored offset.
+type ClaudeSplitVerdict int
+
+const (
+	// ClaudeSplitUnknown means the scan could not classify the records,
+	// such as a malformed line; only a whole-transcript parse is safe.
+	ClaudeSplitUnknown ClaudeSplitVerdict = iota
+	// ClaudeSplitNone means the last message-producing record before the
+	// offset is not part of the run, so the full parser would not merge
+	// across the offset either and the appended window is a plain append.
+	// Parallel tool calls produce this shape: a tool_result user record
+	// sits between two assistant records that share message.id.
+	ClaudeSplitNone
+	// ClaudeSplitFound means the run straddles the offset and starts at
+	// the returned byte offset.
+	ClaudeSplitFound
+)
+
+// ClaudeSplitRunStart reports whether the same-message.id assistant run
+// continued after offset already began before it, and where. Claude Code
+// writes one API response as several JSONL records that share message.id,
+// and a sync that stops inside the run stores only the records it read,
+// collapsed into one message. Re-parsing from the run's first record
+// reproduces the merge a full parse performs over the whole file.
 //
 // The scan walks records backwards from offset, skipping records that
 // produce no message, and stops at the first record that ends the run.
-// It returns the byte offset of the run's first record. ok is false when
-// the scan cannot prove the boundary, such as a malformed record or a
-// stored tail that is not part of the run; the caller then falls back to
-// a whole-transcript parse.
-func ClaudeSplitRunStart(path string, offset int64, messageID string) (int64, bool) {
+func ClaudeSplitRunStart(
+	path string, offset int64, messageID string,
+) (int64, ClaudeSplitVerdict) {
 	if offset <= 0 || messageID == "" {
-		return 0, false
+		return 0, ClaudeSplitUnknown
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		return 0, false
+		return 0, ClaudeSplitUnknown
 	}
 	defer f.Close()
 
@@ -57,7 +74,7 @@ func ClaudeSplitRunStart(path string, offset int64, messageID string) (int64, bo
 	for {
 		line, lineStart, ok, err := reader.prev()
 		if err != nil {
-			return 0, false
+			return 0, ClaudeSplitUnknown
 		}
 		if !ok {
 			break
@@ -67,23 +84,21 @@ func ClaudeSplitRunStart(path string, offset int64, messageID string) (int64, bo
 		}
 		switch claudeSplitRecordClass(line, messageID) {
 		case claudeSplitUnknown:
-			return 0, false
+			return 0, ClaudeSplitUnknown
 		case claudeSplitRun:
 			runStart = lineStart
 		case claudeSplitBoundary:
 			if runStart < 0 {
-				// The stored tail is not part of this run, so the run
-				// cannot be reconstructed from the stored offset.
-				return 0, false
+				return 0, ClaudeSplitNone
 			}
-			return runStart, true
+			return runStart, ClaudeSplitFound
 		case claudeSplitSkip:
 		}
 	}
 	if runStart < 0 {
-		return 0, false
+		return 0, ClaudeSplitNone
 	}
-	return runStart, true
+	return runStart, ClaudeSplitFound
 }
 
 func claudeSplitRecordClass(line []byte, messageID string) claudeSplitRecord {

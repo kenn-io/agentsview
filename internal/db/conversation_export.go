@@ -10,6 +10,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -341,7 +342,13 @@ type conversationRow struct {
 }
 
 func conversationRowsTx(tx transactionQueries, sessionID string) ([]conversationRow, error) {
-	rows, err := tx.Query(`SELECT `+conversationChangeColumns+`, source_id FROM conversation_messages WHERE session_id = ? AND removed = 0 ORDER BY ordinal`, sessionID)
+	return conversationRowsFromTx(tx, sessionID, math.MinInt)
+}
+
+// conversationRowsFromTx returns the live projection rows at or after
+// fromOrdinal.
+func conversationRowsFromTx(tx transactionQueries, sessionID string, fromOrdinal int) ([]conversationRow, error) {
+	rows, err := tx.Query(`SELECT `+conversationChangeColumns+`, source_id FROM conversation_messages WHERE session_id = ? AND removed = 0 AND ordinal >= ? ORDER BY ordinal`, sessionID, fromOrdinal)
 	if err != nil {
 		return nil, err
 	}
@@ -379,6 +386,13 @@ func conversationRowFromMessage(m Message) (conversationRow, bool) {
 // native source identity or an unchanged complete projection preserves IDs;
 // content digests are equality evidence, never logical message identifiers.
 func reconcileConversationMessagesTx(tx transactionQueries, sessionID string, msgs []Message, replace, usageOnly bool) error {
+	return reconcileConversationRangeTx(tx, sessionID, msgs, replace, usageOnly, math.MinInt)
+}
+
+// reconcileConversationRangeTx reconciles the projection for a replacement
+// of only the rows at or after fromOrdinal; rows below it are kept as
+// stored. The whole-session reconciler is the same call with no lower bound.
+func reconcileConversationRangeTx(tx transactionQueries, sessionID string, msgs []Message, replace, usageOnly bool, fromOrdinal int) error {
 	if replace && usageOnly {
 		// Usage storage omits messages and text, so its projection cannot prove
 		// deletion or changed identity. Preserve existing IDs as policy gaps;
@@ -401,7 +415,7 @@ func reconcileConversationMessagesTx(tx transactionQueries, sessionID string, ms
 	var old []conversationRow
 	var err error
 	if replace {
-		old, err = conversationRowsTx(tx, sessionID)
+		old, err = conversationRowsFromTx(tx, sessionID, fromOrdinal)
 		if err != nil {
 			return err
 		}
@@ -443,9 +457,18 @@ func reconcileConversationMessagesTx(tx transactionQueries, sessionID string, ms
 			if err != nil {
 				return err
 			}
-			if count == 1 && counts[row.sourceID] == 1 && (replace || removed) {
+			// A kept row below the range that shares this source ID is an
+			// occurrence the whole-session replace would also have counted.
+			var kept int
+			if fromOrdinal != math.MinInt {
+				if err := tx.QueryRow(`SELECT COUNT(*) FROM conversation_messages
+				 WHERE session_id=? AND source_id=? AND removed=0 AND ordinal < ?`, sessionID, row.sourceID, fromOrdinal).Scan(&kept); err != nil {
+					return err
+				}
+			}
+			if count == 1 && counts[row.sourceID]+kept == 1 && (replace || removed) {
 				row.MessageID = id
-			} else if count > 0 || counts[row.sourceID] > 1 {
+			} else if count > 0 || counts[row.sourceID]+kept > 1 {
 				// A native ID can restore its sole tombstone, but a reused source
 				// ID cannot identify which occurrence survived a replacement.
 				if !replace {

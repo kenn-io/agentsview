@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -1676,15 +1677,26 @@ func (db *DB) writeSessionIncremental(ctx context.Context,
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if err := reconcileConversationMessagesTx(tx, sessionID, msgs, update.ReplaceMessages, db.usageOnlyStorage()); err != nil {
-		return false, err
-	}
-	if update.ReplaceMessages {
-		if err := replaceSessionMessagesTx(tx, sessionID, msgs); err != nil {
+	var replaced *messageRangeTotals
+	if from := update.ReplaceFromOrdinal; from != nil {
+		if err := reconcileConversationRangeTx(tx, sessionID, msgs, true, db.usageOnlyStorage(), *from); err != nil {
 			return false, err
 		}
-	} else if err := writeMessagesTx(tx, msgs); err != nil {
-		return false, err
+		removed, err := messageRangeTotalsTx(ctx, tx, sessionID, *from)
+		if err != nil {
+			return false, err
+		}
+		if err := replaceSessionMessagesFromTx(ctx, tx, sessionID, *from, msgs); err != nil {
+			return false, err
+		}
+		replaced = &removed
+	} else {
+		if err := reconcileConversationMessagesTx(tx, sessionID, msgs, false, db.usageOnlyStorage()); err != nil {
+			return false, err
+		}
+		if err := writeMessagesTx(tx, msgs); err != nil {
+			return false, err
+		}
 	}
 	transcriptChanged := len(msgs) > 0
 	var updatedMessageUsageOrdinals map[int]struct{}
@@ -1737,7 +1749,12 @@ func (db *DB) writeSessionIncremental(ctx context.Context,
 			return false, err
 		}
 	}
-	if err := updateSessionIncrementalTx(ctx, tx, sessionID, update); err != nil {
+	if replaced != nil {
+		err = replaceSessionIncrementalTx(ctx, tx, sessionID, update, *replaced)
+	} else {
+		err = updateSessionIncrementalTx(ctx, tx, sessionID, update)
+	}
+	if err != nil {
 		return false, err
 	}
 	if update.Checkpoint != nil && update.CheckpointBlobs != nil {
@@ -1867,33 +1884,6 @@ func (db *DB) LastClaudeAssistantOrdinal(
 		return 0, false
 	}
 	return int(ordinal.Int64), true
-}
-
-// MessagesBelowOrdinal returns a session's messages with an ordinal
-// below the given bound, in ordinal order, with tool calls attached.
-// The sync engine uses it to rebuild the stored prefix before a
-// suffix replacement re-inserts the whole row set through the full
-// replace path.
-func (db *DB) MessagesBelowOrdinal(ctx context.Context,
-	sessionID string, ordinal int,
-) ([]Message, error) {
-	rows, err := db.getReader().QueryContext(ctx, fmt.Sprintf(`
-		SELECT %s
-		FROM messages
-		WHERE session_id = ? AND ordinal < ?
-		ORDER BY ordinal ASC`, selectMessageCols), sessionID, ordinal)
-	if err != nil {
-		return nil, fmt.Errorf("querying messages below ordinal: %w", err)
-	}
-	defer rows.Close()
-	msgs, err := scanMessages(rows)
-	if err != nil {
-		return nil, err
-	}
-	if err := db.attachToolCalls(ctx, msgs); err != nil {
-		return nil, err
-	}
-	return msgs, nil
 }
 
 // savedPin captures the message identity needed to re-attach a pin
@@ -2062,6 +2052,52 @@ func (db *DB) replaceSessionMessages(ctx context.Context,
 // tool_result_events / messages (with FTS optimisation), inserts new messages
 // + tool_calls + tool_result_events, then restores pins. Caller owns the lock
 // and transaction lifecycle.
+// replaceSessionMessagesFromTx replaces only the session's rows at or
+// after fromOrdinal with msgs, leaving earlier rows, their tool calls,
+// result events, and FTS entries untouched. Pins on replaced rows are
+// re-attached by the same identity rules as the full replace.
+func replaceSessionMessagesFromTx(ctx context.Context,
+	tx *sql.Tx, sessionID string, fromOrdinal int, msgs []Message,
+) error {
+	pins, err := savePinsFromTx(tx, sessionID, fromOrdinal)
+	if err != nil {
+		return err
+	}
+	for _, stmt := range []struct{ query, what string }{
+		{
+			`DELETE FROM tool_calls WHERE message_id IN (
+			SELECT id FROM messages WHERE session_id = ? AND ordinal >= ?)`,
+			"tool_calls",
+		},
+		{
+			`DELETE FROM tool_result_events
+			WHERE session_id = ? AND tool_call_message_ordinal >= ?`,
+			"tool_result_events",
+		},
+		{
+			`DELETE FROM tool_call_occurrence_agent_state
+			WHERE session_id = ? AND message_ordinal >= ?`,
+			"tool call agent state",
+		},
+		{
+			`DELETE FROM messages WHERE session_id = ? AND ordinal >= ?`,
+			"messages",
+		},
+	} {
+		if _, err := tx.ExecContext(
+			ctx, stmt.query, sessionID, fromOrdinal,
+		); err != nil {
+			return fmt.Errorf(
+				"deleting %s from ordinal %d: %w", stmt.what, fromOrdinal, err,
+			)
+		}
+	}
+	if err := writeMessagesTx(tx, msgs); err != nil {
+		return err
+	}
+	return restorePinsTx(tx, sessionID, pins)
+}
+
 func replaceSessionMessagesTx(
 	tx *sql.Tx, sessionID string, msgs []Message,
 ) error {
@@ -2555,6 +2591,14 @@ func setSessionAutomationTx(
 }
 
 func savePinsTx(tx transactionQueries, sessionID string) ([]savedPin, error) {
+	return savePinsFromTx(tx, sessionID, math.MinInt)
+}
+
+// savePinsFromTx saves the pins whose message sits at or after
+// fromOrdinal, the rows a ranged replacement deletes.
+func savePinsFromTx(
+	tx transactionQueries, sessionID string, fromOrdinal int,
+) ([]savedPin, error) {
 	// Save existing pins before deletion. The ON DELETE CASCADE on
 	// pinned_messages.message_id would otherwise wipe them when
 	// messages are deleted below. source_uuid comes from the joined
@@ -2612,8 +2656,8 @@ func savePinsTx(tx transactionQueries, sessionID string) ([]savedPin, error) {
 			p.note, p.created_at
 		FROM pinned_messages p
 		LEFT JOIN messages m ON m.id = p.message_id
-		WHERE p.session_id = ?`,
-		sessionID,
+		WHERE p.session_id = ? AND (m.id IS NULL OR m.ordinal >= ?)`,
+		sessionID, fromOrdinal,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("saving pins: %w", err)
