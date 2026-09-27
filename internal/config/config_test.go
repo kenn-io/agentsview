@@ -3089,3 +3089,85 @@ func TestResolveDirs_EvenerPrecedence(t *testing.T) {
 		assert.True(t, cfg.IsUserConfigured(parser.AgentType("evener")))
 	})
 }
+
+func TestResolveDirs_CodebuffRootEnvVar(t *testing.T) {
+	t.Run("FREEBUFF_CONFIG_DIR re-roots the projects default", func(t *testing.T) {
+		dir := setupTestEnv(t)
+		home := canonicalTempDir(t)
+		setTestHome(t, home)
+		root := filepath.Join(dir, "freebuff-root")
+		t.Setenv("CLAUDE_CONFIG_DIR", "")
+		t.Setenv("CODEX_HOME", "")
+		t.Setenv("CODEBUFF_DIR", "")
+		t.Setenv("FREEBUFF_CONFIG_DIR", root)
+		writeConfig(t, dir, map[string]any{})
+
+		cfg, err := LoadMinimal()
+		require.NoError(t, err)
+
+		assert.Equal(t, []string{filepath.Join(root, "projects")},
+			cfg.ResolveDirs(parser.AgentCodebuff))
+		assert.NotContains(t, cfg.ResolveDirs(parser.AgentCodebuff),
+			filepath.Join(home, ".config", "manicode", "projects"),
+			"the rooted variable replaces the home-relative default, it does not add to it")
+	})
+
+	t.Run("unset keeps the home-relative default", func(t *testing.T) {
+		dir := setupTestEnv(t)
+		home := canonicalTempDir(t)
+		setTestHome(t, home)
+		t.Setenv("CLAUDE_CONFIG_DIR", "")
+		t.Setenv("CODEX_HOME", "")
+		t.Setenv("CODEBUFF_DIR", "")
+		t.Setenv("FREEBUFF_CONFIG_DIR", "")
+		writeConfig(t, dir, map[string]any{})
+
+		cfg, err := LoadMinimal()
+		require.NoError(t, err)
+
+		assert.Equal(t,
+			[]string{filepath.Join(home, ".config", "manicode", "projects")},
+			cfg.ResolveDirs(parser.AgentCodebuff))
+	})
+
+	t.Run("CODEBUFF_DIR wins over FREEBUFF_CONFIG_DIR", func(t *testing.T) {
+		dir := setupTestEnv(t)
+		setTestHome(t, canonicalTempDir(t))
+		t.Setenv("CLAUDE_CONFIG_DIR", "")
+		t.Setenv("CODEX_HOME", "")
+		t.Setenv("CODEBUFF_DIR", filepath.Join(dir, "override"))
+		t.Setenv("FREEBUFF_CONFIG_DIR", filepath.Join(dir, "freebuff-root"))
+		writeConfig(t, dir, map[string]any{})
+
+		cfg, err := LoadMinimal()
+		require.NoError(t, err)
+
+		assert.Equal(t, []string{filepath.Join(dir, "override")},
+			cfg.ResolveDirs(parser.AgentCodebuff),
+			"AgentsView's own override keeps precedence over the vendor root")
+		assert.NotContains(t, cfg.ResolveDirs(parser.AgentCodebuff),
+			filepath.Join(dir, "freebuff-root", "projects"),
+			"the two roots must not both be scanned")
+	})
+
+	t.Run("relative value resolves against the working directory", func(t *testing.T) {
+		// Upstream's CLI refuses to start on a relative value; the shared
+		// root handling deliberately does not validate. Pin the current
+		// behavior so it stays a decision, not an accident.
+		dir := setupTestEnv(t)
+		setTestHome(t, canonicalTempDir(t))
+		t.Setenv("CLAUDE_CONFIG_DIR", "")
+		t.Setenv("CODEX_HOME", "")
+		t.Setenv("CODEBUFF_DIR", "")
+		t.Setenv("FREEBUFF_CONFIG_DIR", "relative-freebuff")
+		writeConfig(t, dir, map[string]any{})
+
+		cfg, err := LoadMinimal()
+		require.NoError(t, err)
+
+		wd, err := os.Getwd()
+		require.NoError(t, err)
+		assert.Equal(t, []string{filepath.Join(wd, "relative-freebuff", "projects")},
+			cfg.ResolveDirs(parser.AgentCodebuff))
+	})
+}

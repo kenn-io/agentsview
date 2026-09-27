@@ -1834,6 +1834,7 @@ agentsview help
 | `CODEX_SESSIONS_DIR`                  | `~/.codex/sessions`                                  | Codex sessions directory                                                                            |
 | `CODEX_HOME`                          | unset                                                | Codex home that re-roots the default `sessions/` and `archived_sessions/` discovery paths           |
 | `CLINE_DIR`                           | `~/.cline`                                           | Cline CLI sessions directory (discovers under `<root>/data/sessions/` or direct sessions root)      |
+| `CODEBUFF_DIR`                        | `~/.config/manicode/projects`                        | Codebuff/Freebuff sessions directory                                                                |
 | `COMMANDCODE_PROJECTS_DIR`            | `~/.commandcode/projects`                            | Command Code projects directory                                                                     |
 | `COPILOT_DIR`                         | `~/.copilot`                                         | Copilot CLI sessions directory                                                                      |
 | `CRUSH_DIR`                           | (platform-specific)                                  | Crush registry, project data directory, or `crush.db` path                                          |
@@ -1844,6 +1845,7 @@ agentsview help
 | `DEEPSEEK_HARNESS_SESSIONS_DIR`       | `~/.dsh/sessions`                                    | DeepSeek Harness sessions directory                                                                 |
 | `DSH_HOME`                            | unset                                                | DeepSeek Harness home that re-roots the default `sessions/` discovery path                          |
 | `FORGE_DIR`                           | `~/.forge`                                           | Forge directory (contains `.forge.db`)                                                              |
+| `FREEBUFF_CONFIG_DIR`                 | unset                                                | Freebuff config home that re-roots the default `projects/` discovery path                           |
 | `GEMINI_DIR`                          | `~/.gemini`                                          | Gemini CLI directory                                                                                |
 | `GOOSE_PATH_ROOT`                     | (platform-specific)                                  | Goose path root; sessions are read from `<root>/data/sessions/sessions.db`                          |
 | `GPTME_DIR`                           | `~/.local/share/gptme/logs`                          | gptme logs directory                                                                                |

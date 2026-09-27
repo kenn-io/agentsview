@@ -1423,3 +1423,14 @@ func TestFreebuffNotRegistered(t *testing.T) {
 			"AgentFreebuff must not be registered — it shares the Codebuff provider")
 	}
 }
+
+func TestCodebuffDefConfigDirRoot(t *testing.T) {
+	def, ok := AgentByType(AgentCodebuff)
+	require.True(t, ok)
+
+	assert.Equal(t, "FREEBUFF_CONFIG_DIR", def.DefaultRootEnvVar)
+	assert.Equal(t, ".config/manicode", def.DefaultRootDir,
+		"the vendor variable names the config dir, so the tail must keep projects/")
+	assert.Equal(t, "CODEBUFF_DIR", def.EnvVar,
+		"AgentsView's own override must stay separate from the vendor root variable")
+}

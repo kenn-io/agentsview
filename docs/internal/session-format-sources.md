@@ -3259,7 +3259,10 @@ schemas keep their existing ordering behavior.
 ## Codebuff (`codebuff`)
 
 - **Format:** Per-session JSON files under
-  `<root>/<project>/chats/<timestamp>/`. Each session directory contains
+  `<root>/<project>/chats/<timestamp>/`, where `<root>` is
+  `<config-dir>/projects` and the config directory defaults to
+  `~/.config/manicode` but is overridable through the Freebuff CLI's
+  `FREEBUFF_CONFIG_DIR`. Each session directory contains
   `chat-messages.json` (JSON array of message objects with user/ai/agent/error
   variants -- any other future variant carries `content` too and is rendered
   as an assistant message -- and text, tool, agent, mode-divider, plan,

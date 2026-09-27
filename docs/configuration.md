@@ -736,11 +736,13 @@ attachment no longer reads as nearly empty. A runtime error the app displayed
 and answers the user gave to "ask user" prompts are preserved too, so the
 transcript shows both the question and the reply.
 
-Freebuff does not have its own environment variable or config key — it shares
-the Codebuff provider for discovery and the parser auto-classifies sessions. Set
-`CODEBUFF_DIR` or `agents.codebuff.dirs` when manicode stores its projects
-directory somewhere other than `~/.config/manicode/projects`; this covers both
-Codebuff and Freebuff sessions.
+Freebuff does not have its own config key — it shares the Codebuff provider for
+discovery and the parser auto-classifies sessions. The Freebuff CLI reads its
+configuration root from `FREEBUFF_CONFIG_DIR`, and AgentsView honors it: setting
+it re-roots the default `projects/` discovery path to `<FREEBUFF_CONFIG_DIR>/projects`
+(the value must be an absolute path). `CODEBUFF_DIR` or `agents.codebuff.dirs`
+still take precedence when manicode stores its projects directory somewhere else;
+this covers both Codebuff and Freebuff sessions.
 
 **OpenHands CLI shallow watch:** OpenHands stores each conversation in its own
 subdirectory, which would consume one recursive file watch per session and can
@@ -923,6 +925,7 @@ export OPENCLAUDE_PROJECTS_DIR=~/custom/openclaude/projects
 export OPENCLAUDE_CONFIG_DIR=~/custom/openclaude
 export COWORK_DIR=~/custom/cowork
 export CODEBUFF_DIR=~/custom/manicode/projects
+export FREEBUFF_CONFIG_DIR=~/custom/freebuff-config # re-roots the default projects/ path
 export CODEX_SESSIONS_DIR=~/custom/codex
 export CODEX_HOME=~/custom/codex-home # re-roots the default sessions/ paths
 export CLINE_DIR=~/custom/cline/data/sessions
