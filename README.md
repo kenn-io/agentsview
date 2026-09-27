@@ -204,6 +204,10 @@ Keep Quack on loopback or behind TLS. Plain HTTP Quack on a non-loopback bind
 requires `--allow-insecure` and should only be used behind a trusted tunnel or
 reverse proxy.
 
+## ☁️ One-Click Deploy
+
+[![Deploy on RepoCloud](https://d16t0pc4846x52.cloudfront.net/deploylobe.svg)](https://repocloud.io/details/agentsview/)
+
 ## Token Usage and Cost Tracking
 
 `agentsview usage` tracks token consumption and compute costs across **all**
