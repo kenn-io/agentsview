@@ -16,6 +16,31 @@ func TestClassifyToolOutcome(t *testing.T) {
 		want ToolOutcome
 	}{
 		{
+			name: "success supported empty",
+			call: ToolCallRow{ToolName: "read", Category: "Read", EventStatus: "success"},
+			want: ToolOutcomeEmpty,
+		},
+		{
+			name: "success omitted retained content",
+			call: ToolCallRow{ToolName: "read", Category: "Read", EventStatus: "success", ResultContentLength: 17},
+			want: ToolOutcomeUnknown,
+		},
+		{
+			name: "image placeholder",
+			call: ToolCallRow{ToolName: "Read", ResultContent: "\n[image]"},
+			want: ToolOutcomeUnknown,
+		},
+		{
+			name: "labeled image placeholder",
+			call: ToolCallRow{ToolName: "Read", ResultContent: "agent-a:\n[image]"},
+			want: ToolOutcomeUnknown,
+		},
+		{
+			name: "mixed image placeholder text",
+			call: ToolCallRow{ToolName: "Read", ResultContent: "file contents\n[image]"},
+			want: ToolOutcomeContent,
+		},
+		{
 			name: "status error",
 			call: ToolCallRow{EventStatus: "errored", ResultContent: "ok"},
 			want: ToolOutcomeErrored,
@@ -458,7 +483,7 @@ func TestExtractToolSequences_Endings(t *testing.T) {
 	}}, recovered.Sequences)
 
 	unknown := ToolCallRow{ToolName: "Read", EventStatus: "running"}
-	for _, content := range []string{"file contents", "", "[binary content]", "staged:7"} {
+	for _, content := range []string{"file contents", "", "[binary content]", "staged:7", "[image]"} {
 		got := ExtractToolSequences([]ToolCallRow{
 			empty, {ToolName: "Read", Category: "Read", EventStatus: "success", ResultContent: content},
 		}, true)

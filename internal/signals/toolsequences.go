@@ -144,15 +144,14 @@ func classifyToolOutcome(call ToolCallRow) ToolOutcome {
 	if IsFailure(call) || call.EventStatus == "error" || call.EventStatus == "denied" {
 		return ToolOutcomeErrored
 	}
-	if call.EventStatus != "" && call.EventStatus != "completed" && call.EventStatus != "success" &&
-		call.EventStatus != "errored" && call.EventStatus != "cancelled" {
+	if call.EventStatus != "" && !isCompletedToolStatus(call.EventStatus) {
 		return ToolOutcomeUnknown
 	}
 
 	if isStagedOnlySummary(call.ResultContent) {
 		return ToolOutcomeUnknown
 	}
-	if call.EventStatus == "completed" && call.ResultContentLength == 0 &&
+	if isCompletedToolStatus(call.EventStatus) && call.ResultContentLength == 0 &&
 		call.ResultContent == "" && isSupportedEmptyTool(call) {
 		return ToolOutcomeEmpty
 	}
@@ -163,6 +162,10 @@ func classifyToolOutcome(call ToolCallRow) ToolOutcome {
 		return ToolOutcomeUnknown
 	}
 	return ToolOutcomeContent
+}
+
+func isCompletedToolStatus(status string) bool {
+	return status == "completed" || status == "success"
 }
 
 func isSupportedEmptyTool(call ToolCallRow) bool {
@@ -285,7 +288,7 @@ func isImageOnlySummary(content string) bool {
 
 func isImageOnlySummaryPart(content string) bool {
 	content = strings.TrimSpace(content)
-	return content == "[binary content]" || isImageOnlyJSON(content) ||
+	return content == "[binary content]" || content == "[image]" || isImageOnlyJSON(content) ||
 		isOffloadedImageReference(content)
 }
 
