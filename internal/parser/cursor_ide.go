@@ -528,9 +528,20 @@ func parseCursorIDEComposer(
 		}
 	}
 
-	startedAt := cursorIDETime(doc.CreatedAt)
-	if startedAt.IsZero() && len(messages) > 0 {
-		startedAt = messages[0].Timestamp
+	// The session starts at its earliest timestamped message. composerData
+	// createdAt has been observed days or months away from every bubble in
+	// either direction, and header order does not guarantee chronological
+	// order, so the composer stamp is only a fallback for composers whose
+	// bubbles carry no timestamp.
+	var startedAt time.Time
+	for _, m := range messages {
+		if !m.Timestamp.IsZero() &&
+			(startedAt.IsZero() || m.Timestamp.Before(startedAt)) {
+			startedAt = m.Timestamp
+		}
+	}
+	if startedAt.IsZero() {
+		startedAt = cursorIDETime(doc.CreatedAt)
 	}
 	// lastUpdatedAt has been observed lagging behind the bubbles' own
 	// timestamps, so the session ends at the later of the two: a stale

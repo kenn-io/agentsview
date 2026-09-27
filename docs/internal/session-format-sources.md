@@ -1735,6 +1735,19 @@ schemas keep their existing ordering behavior.
   archived transcript in the recoverable source-missing state; a bubble
   becomes a gap and marks the transcript truncated. Nonempty malformed JSON
   still errors.
+- **Session bounds:**
+  [Issue #2003](https://github.com/kenn-io/agentsview/issues/2003):
+  `composerData.createdAt` is not a reliable conversation start. Read-only
+  inspection of one live Windows `state.vscdb` on 2026-09-27
+  found 735 composers with both a nonzero `createdAt` and at least one
+  timestamped bubble. In 93 of them `createdAt` was more than an hour from the
+  earliest bubble, in 30 more than a day, and in 7 more than a week, up to about
+  235 days. It preceded the earliest bubble in 25 of the day-plus cases and
+  followed it in 5; 6 composers had `createdAt` after their last bubble.
+  Header order also differed from chronological order in 38 composers.
+  Agentsview therefore starts a session at its earliest timestamped message and
+  uses `createdAt` only when no bubble carries a timestamp. The session ends at
+  the later of `lastUpdatedAt` and the latest message timestamp.
 - **Usage and cost:** No per-message or per-session token, cache, reasoning,
   credit, or monetary-cost fields were observed in `composerData` or bubble
   documents. Agentsview emits no usage events for this agent; cost is

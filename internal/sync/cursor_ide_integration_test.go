@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -959,4 +960,82 @@ func TestSyncAllCursorIDENullComposerKeepsArchivedTranscript(t *testing.T) {
 		"a NULL composer value must not truncate the archived transcript")
 	assert.False(t, database.IsSessionExcluded(t.Context(), "cursor-ide:goes-null-composer"),
 		"the archived session must not be permanently deleted")
+}
+
+// TestSyncCursorIDEDataVersionUpgradeRefreshesSessionStart pins the upgrade
+// path for archives written while StartedAt came from
+// composerData.createdAt. The archive is rewound to what the previous parser
+// version persisted (the old start, one data version behind, and a container
+// skip entry keyed to that version); a fresh engine must then re-parse the
+// unchanged state.vscdb and move the start to the earliest bubble.
+func TestSyncCursorIDEDataVersionUpgradeRefreshesSessionStart(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "state.vscdb")
+	createCursorIDEStateDB(t, dbPath, []cursorIDESyncComposer{{
+		id: "early-stamp-composer", name: "Early stamp",
+		// 2026-06-14T09:00:00Z, a week before the first bubble.
+		createdAt: 1781427600000, updatedAt: 1782026801522,
+		bubbles: []cursorIDESyncBubble{
+			{id: "b1", bubbleType: 1, text: "ask", createdAt: "2026-06-21T07:27:29.606Z"},
+			{id: "b2", bubbleType: 2, text: "reply", createdAt: "2026-06-21T07:27:31.522Z"},
+		},
+	}})
+	const id = "cursor-ide:early-stamp-composer"
+	const wantStart = "2026-06-21T07:27:29.606Z"
+
+	database := dbtest.OpenTestDB(t)
+	first := sync.NewEngine(t.Context(), database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCursorIDE: {root},
+		},
+		Machine: "local",
+	})
+	require.Equal(t, 1, first.SyncAll(t.Context(), nil).Synced)
+	first.Close()
+	synced, err := database.GetSession(t.Context(), id)
+	require.NoError(t, err)
+	require.NotNil(t, synced)
+	require.NotNil(t, synced.StartedAt)
+	require.Equal(t, wantStart, *synced.StartedAt)
+
+	current := strconv.Itoa(db.CurrentDataVersion())
+	previous := strconv.Itoa(db.CurrentDataVersion() - 1)
+	var rewound int64
+	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(t.Context(),
+			"UPDATE sessions SET started_at = ?, data_version = ? WHERE id = ?",
+			"2026-06-14T09:00:00.000Z", db.CurrentDataVersion()-1, id,
+		); err != nil {
+			return err
+		}
+		res, err := tx.ExecContext(t.Context(),
+			`UPDATE skipped_files SET file_path = replace(file_path, ?, ?)
+			WHERE file_path LIKE ?`,
+			"data_version="+current, "data_version="+previous,
+			"%data_version="+current+"%",
+		)
+		if err != nil {
+			return err
+		}
+		rewound, err = res.RowsAffected()
+		return err
+	}))
+	require.Equal(t, int64(1), rewound,
+		"the container skip entry must exist so the upgrade path is exercised")
+
+	upgraded := sync.NewEngine(t.Context(), database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCursorIDE: {root},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(func() { upgraded.Close() })
+	stats := upgraded.SyncAll(t.Context(), nil)
+	assert.Zero(t, stats.Failed)
+	refreshed, err := database.GetSession(t.Context(), id)
+	require.NoError(t, err)
+	require.NotNil(t, refreshed)
+	require.NotNil(t, refreshed.StartedAt)
+	assert.Equal(t, wantStart, *refreshed.StartedAt)
+	assert.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(t.Context(), id))
 }

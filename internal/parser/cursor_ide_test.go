@@ -242,11 +242,12 @@ func TestCursorIDEProviderDiscoverAndParse(t *testing.T) {
 	assert.Equal(t, 1, sess.UserMessageCount)
 	assert.Equal(t, "give me an overview on the development status", sess.FirstMessage)
 
-	// composerData createdAt/lastUpdatedAt are epoch milliseconds; the parser
-	// must not confuse them with the bubbles' ISO-8601 createdAt encoding.
-	// This fixture's lastUpdatedAt (07:26:31.522Z) lags the final bubble, so
-	// EndedAt comes from the latest message timestamp instead.
-	assert.Equal(t, time.UnixMilli(1782026756842).UTC(), sess.StartedAt)
+	// Bubble createdAt values are ISO-8601 strings, unlike composerData's
+	// epoch milliseconds. StartedAt is the earliest bubble, not the earlier
+	// composer stamp (07:25:56.842Z). This fixture's lastUpdatedAt
+	// (07:26:31.522Z) lags the final bubble, so EndedAt comes from the latest
+	// message timestamp instead.
+	assert.Equal(t, time.Date(2026, 6, 21, 7, 27, 29, 606_000_000, time.UTC), sess.StartedAt)
 	assert.Equal(t, time.Date(2026, 6, 21, 7, 27, 32, 0, time.UTC), sess.EndedAt)
 	// Both encodings describe the same real conversation, so they must land
 	// within the same window rather than merely both parsing without error.
@@ -602,6 +603,126 @@ func TestParseCursorIDEComposer_EndedAtNotBeforeLastMessage(t *testing.T) {
 	assert.Equal(t, time.Date(2026, 6, 21, 7, 28, 5, 0, time.UTC), result.Session.EndedAt,
 		"a stale lastUpdatedAt must not place EndedAt before the final message")
 	assert.False(t, result.Session.EndedAt.Before(result.Session.StartedAt))
+}
+
+func TestParseCursorIDEComposer_SessionBounds(t *testing.T) {
+	const composerID = "session-bounds-0000-0000-000000000000"
+	tests := []struct {
+		name      string
+		createdAt int64
+		updatedAt int64
+		bubbles   []cursorIDETestBubble
+		wantStart time.Time
+		wantEnd   time.Time
+	}{
+		{
+			name:      "composer stamp days before the first bubble",
+			createdAt: time.Date(2026, 6, 14, 9, 0, 0, 0, time.UTC).UnixMilli(),
+			updatedAt: time.Date(2026, 6, 21, 7, 28, 0, 0, time.UTC).UnixMilli(),
+			bubbles: []cursorIDETestBubble{
+				{id: "b1", bubbleType: cursorIDEBubbleTypeUser, text: "ask", createdAt: "2026-06-21T07:27:29.606Z"},
+				{id: "b2", bubbleType: cursorIDEBubbleTypeAssistant, text: "reply", createdAt: "2026-06-21T07:27:31.522Z"},
+			},
+			wantStart: time.Date(2026, 6, 21, 7, 27, 29, 606_000_000, time.UTC),
+			wantEnd:   time.Date(2026, 6, 21, 7, 28, 0, 0, time.UTC),
+		},
+		{
+			name:      "composer stamp days after the last bubble",
+			createdAt: time.Date(2026, 6, 28, 9, 0, 0, 0, time.UTC).UnixMilli(),
+			updatedAt: time.Date(2026, 6, 21, 7, 28, 0, 0, time.UTC).UnixMilli(),
+			bubbles: []cursorIDETestBubble{
+				{id: "b1", bubbleType: cursorIDEBubbleTypeUser, text: "ask", createdAt: "2026-06-21T07:27:29.606Z"},
+				{id: "b2", bubbleType: cursorIDEBubbleTypeAssistant, text: "reply", createdAt: "2026-06-21T07:27:31.522Z"},
+			},
+			wantStart: time.Date(2026, 6, 21, 7, 27, 29, 606_000_000, time.UTC),
+			wantEnd:   time.Date(2026, 6, 21, 7, 28, 0, 0, time.UTC),
+		},
+		{
+			name:      "earliest bubble is not first in header order",
+			createdAt: time.Date(2026, 6, 21, 7, 0, 0, 0, time.UTC).UnixMilli(),
+			bubbles: []cursorIDETestBubble{
+				{id: "b1", bubbleType: cursorIDEBubbleTypeUser, text: "ask", createdAt: "2026-06-21T07:27:29.606Z"},
+				{id: "b2", bubbleType: cursorIDEBubbleTypeAssistant, text: "reply", createdAt: "2026-06-21T07:20:00.000Z"},
+				{id: "b3", bubbleType: cursorIDEBubbleTypeUser, text: "follow up", createdAt: "2026-06-21T07:30:00.000Z"},
+			},
+			wantStart: time.Date(2026, 6, 21, 7, 20, 0, 0, time.UTC),
+			wantEnd:   time.Date(2026, 6, 21, 7, 30, 0, 0, time.UTC),
+		},
+		{
+			name:      "untimestamped first bubble is skipped",
+			createdAt: time.Date(2026, 6, 14, 9, 0, 0, 0, time.UTC).UnixMilli(),
+			bubbles: []cursorIDETestBubble{
+				{id: "b1", bubbleType: cursorIDEBubbleTypeUser, text: "ask"},
+				{id: "b2", bubbleType: cursorIDEBubbleTypeAssistant, text: "reply", createdAt: "2026-06-21T07:27:31.522Z"},
+			},
+			wantStart: time.Date(2026, 6, 21, 7, 27, 31, 522_000_000, time.UTC),
+			wantEnd:   time.Date(2026, 6, 21, 7, 27, 31, 522_000_000, time.UTC),
+		},
+		{
+			name:      "composer stamp on the next UTC date",
+			createdAt: time.Date(2026, 6, 22, 0, 30, 0, 0, time.UTC).UnixMilli(),
+			bubbles: []cursorIDETestBubble{
+				{id: "b1", bubbleType: cursorIDEBubbleTypeUser, text: "ask", createdAt: "2026-06-21T23:58:00.000Z"},
+				{id: "b2", bubbleType: cursorIDEBubbleTypeAssistant, text: "reply", createdAt: "2026-06-22T00:02:00.000Z"},
+			},
+			wantStart: time.Date(2026, 6, 21, 23, 58, 0, 0, time.UTC),
+			wantEnd:   time.Date(2026, 6, 22, 0, 2, 0, 0, time.UTC),
+		},
+		{
+			name:      "zero composer stamp",
+			createdAt: 0,
+			bubbles: []cursorIDETestBubble{
+				{id: "b1", bubbleType: cursorIDEBubbleTypeUser, text: "ask", createdAt: "2026-06-21T07:27:29.606Z"},
+				{id: "b2", bubbleType: cursorIDEBubbleTypeAssistant, text: "reply", createdAt: "2026-06-21T07:27:31.522Z"},
+			},
+			wantStart: time.Date(2026, 6, 21, 7, 27, 29, 606_000_000, time.UTC),
+			wantEnd:   time.Date(2026, 6, 21, 7, 27, 31, 522_000_000, time.UTC),
+		},
+		{
+			name:      "no bubble timestamps falls back to composer stamps",
+			createdAt: time.Date(2026, 6, 21, 7, 25, 56, 842_000_000, time.UTC).UnixMilli(),
+			updatedAt: time.Date(2026, 6, 21, 7, 40, 0, 0, time.UTC).UnixMilli(),
+			bubbles: []cursorIDETestBubble{
+				{id: "b1", bubbleType: cursorIDEBubbleTypeUser, text: "ask"},
+				{id: "b2", bubbleType: cursorIDEBubbleTypeAssistant, text: "reply"},
+			},
+			wantStart: time.Date(2026, 6, 21, 7, 25, 56, 842_000_000, time.UTC),
+			wantEnd:   time.Date(2026, 6, 21, 7, 40, 0, 0, time.UTC),
+		},
+		{
+			name:      "no timestamps at all",
+			createdAt: 0,
+			bubbles: []cursorIDETestBubble{
+				{id: "b1", bubbleType: cursorIDEBubbleTypeUser, text: "ask"},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dbPath := createCursorIDEDB(t, []cursorIDETestComposer{{
+				id:        composerID,
+				name:      "Session bounds",
+				createdAt: tt.createdAt,
+				updatedAt: tt.updatedAt,
+				bubbles:   tt.bubbles,
+			}})
+			conn, err := openCursorIDEDB(dbPath)
+			require.NoError(t, err)
+			defer conn.Close()
+			info, err := os.Stat(dbPath)
+			require.NoError(t, err)
+
+			result, err := parseCursorIDEComposer(
+				t.Context(), conn, dbPath, composerID, "devbox", info,
+			)
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			assert.Equal(t,
+				[2]time.Time{tt.wantStart, tt.wantEnd},
+				[2]time.Time{result.Session.StartedAt, result.Session.EndedAt},
+			)
+		})
+	}
 }
 
 func TestCursorIDEParseContainerKeepsSiblingsPastNullComposer(t *testing.T) {

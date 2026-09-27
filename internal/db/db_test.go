@@ -1096,6 +1096,11 @@ func TestCurrentDataVersionCursorTurnTimestamps(t *testing.T) {
 		"Cursor turn timestamps require re-parsing existing sessions")
 }
 
+func TestCurrentDataVersionCursorIDESessionStart(t *testing.T) {
+	assert.GreaterOrEqual(t, CurrentDataVersion(), 115,
+		"Cursor IDE session starts from bubble timestamps require re-parsing unchanged containers")
+}
+
 func TestCurrentDataVersionReasoningEffort(t *testing.T) {
 	assert.GreaterOrEqual(t, CurrentDataVersion(), 106,
 		"reasoning effort persistence requires re-parsing unchanged transcripts")
