@@ -5401,6 +5401,9 @@ components:
     RawsyncStaleSourceHead:
       additionalProperties: false
       properties:
+        accepted_at:
+          format: date-time
+          type: string
         configured_root_id:
           type: string
         device_id:
@@ -5416,9 +5419,6 @@ components:
           type: string
         source_key_sha256:
           type: string
-        updated_at:
-          format: date-time
-          type: string
       required:
         - device_id
         - provider
@@ -5427,7 +5427,7 @@ components:
         - manifest_id
         - generation
         - kind
-        - updated_at
+        - accepted_at
       type: object
     RawsyncStatus:
       additionalProperties: false

@@ -37,9 +37,6 @@ func (s *Server) humaRawSyncJobHealth(
 		MaxAttempts:       in.MaxAttempts,
 		StaleAfterSeconds: in.StaleAfterSeconds,
 	}
-	if err := query.Validate(); err != nil {
-		return nil, rawSyncHTTPError(err)
-	}
 	report, err := s.rawSyncJobHealth.RawJobHealth(ctx, identity, query)
 	if err != nil {
 		return nil, rawSyncHTTPError(err)

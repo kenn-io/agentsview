@@ -151,7 +151,7 @@ func TestRawJobHealthExpiredLeases(t *testing.T) {
 	)
 	require.NoError(t, err)
 	exactReport, err := rawJobHealth(
-		t.Context(), tx, identity,
+		t.Context(), tx, identity.TenantID,
 		rawsync.JobHealthQuery{MaxAttempts: 5, StaleAfterSeconds: 3600},
 	)
 	require.NoError(t, err)
@@ -197,8 +197,8 @@ func TestRawJobHealthFailureClasses(t *testing.T) {
 		"health-failure-parse-2", "failed", 1, "parse", "another secret")
 
 	report := rawHealthReport(t, store, identity, 5, 3600)
-	assert.Equal(t, int64(4), report.FailedJobCount)
-	require.Len(t, report.FailedJobsByErrorClass, 3)
+	assert.Equal(t, int64(3), report.FailedJobCount)
+	require.Len(t, report.FailedJobsByErrorClass, 2)
 	classes := make(map[string]int64, len(report.FailedJobsByErrorClass))
 	for _, row := range report.FailedJobsByErrorClass {
 		classes[row.ErrorClass] = row.JobCount
@@ -206,8 +206,119 @@ func TestRawJobHealthFailureClasses(t *testing.T) {
 	}
 	assert.Equal(t, int64(2), classes["parse"])
 	assert.Equal(t, int64(1), classes[""])
-	assert.Equal(t, int64(1), classes["historical"])
+	assert.NotContains(t, classes, "historical")
 	assert.NotContains(t, string(mustMarshalJSON(t, report)), `"last_error"`+`:`)
+}
+
+func TestRawJobHealthClearsAfterHeadAdvances(t *testing.T) {
+	pg, store := newRawIngestTestStore(t)
+	identity := rawIngestIdentity(t, "tenant-a")
+	object := rawIngestObject(t, "a", 7)
+	first := rawHealthCommit(t, store, identity, "capture-a", "", "sessions/recovery",
+		rawsync.ManifestSnapshot, rawIngestCapturedAt(), object)
+	lease := claimOneRawParseJob(t, store)
+	require.NoError(t, store.FailRawParseJob(t.Context(), lease, "parse", "invalid source"))
+	// Advancing the head supersedes only one pending job. Extra versions
+	// remain until claim-time cleanup, but must stop contributing to health.
+	insertRawHealthJob(t, pg, identity, first.ManifestID, "pending", "ready", 0, "", "")
+	insertRawHealthJob(t, pg, identity, first.ManifestID, "retry", "retrying", 4, "parse", "retry")
+	insertRawHealthJob(t, pg, identity, first.ManifestID, "expired", "leased", 2, "", "")
+	before := rawHealthReport(t, store, identity, 5, 3600)
+	assert.EqualValues(t, 1, before.FailedJobCount)
+	assert.EqualValues(t, 1, before.RetryingNearLimitCount)
+	assert.EqualValues(t, 1, before.ExpiredLeaseCount)
+
+	rawHealthCommit(t, store, identity, "capture-b", first.Receipt, "sessions/recovery",
+		rawsync.ManifestSnapshot, rawIngestCapturedAt().Add(time.Minute), object)
+	after := rawHealthReport(t, store, identity, 5, 3600)
+	assert.Zero(t, after.FailedJobCount)
+	assert.Zero(t, after.RetryingNearLimitCount)
+	assert.Zero(t, after.ExpiredLeaseCount)
+	require.NoError(t, store.CompleteRawParseJob(t.Context(), claimOneRawParseJob(t, store)))
+	assert.Zero(t, rawHealthReport(t, store, identity, 5, 3600).FailedJobCount)
+}
+
+func TestRawJobHealthIgnoresReplacedProcessingVersion(t *testing.T) {
+	f := newProjectionFixture(t)
+	setRawHealthAcceptedAt(t, f.admin, time.Now().Add(-24*time.Hour))
+	manifest, _ := f.accept(t, "device-a", "capture-a", "")
+	lease := f.lease(t, manifest)
+	require.NoError(t, f.jobs.FailRawParseJob(t.Context(), lease, "parse", "old parser failed"))
+	assert.EqualValues(t, 1, rawHealthReport(t, f.jobs, manifest.Identity, 5, 3600).FailedJobCount)
+
+	_, err := f.sink.SelectSourceGeneration(t.Context(), manifest, "parser-2")
+	require.NoError(t, err)
+	lease = claimOneRawParseJob(t, f.jobs)
+	require.Equal(t, "parser-2", lease.ProcessingVersion)
+	require.NoError(t, f.jobs.CompleteRawParseJob(t.Context(), lease))
+	assert.Zero(t, rawHealthReport(t, f.jobs, manifest.Identity, 5, 3600).FailedJobCount)
+	assert.Zero(t, rawHealthReport(t, f.jobs, manifest.Identity, 5, 3600).StaleSourceHeadCount)
+	_, err = f.sink.SelectSourceGeneration(t.Context(), manifest, "parser-3")
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, rawHealthReport(t, f.jobs, manifest.Identity, 5, 3600).StaleSourceHeadCount,
+		"completion by a replaced parser must not hide pending work")
+}
+
+func TestRawJobHealthIgnoresLegacyJobAfterHostedSelection(t *testing.T) {
+	for _, state := range []string{"failed", "complete"} {
+		t.Run(state, func(t *testing.T) {
+			f := newProjectionFixture(t)
+			setRawHealthAcceptedAt(t, f.admin, time.Now().Add(-24*time.Hour))
+			manifest, _ := f.accept(t, "device-a", "capture-a", "")
+			lease := claimOneRawParseJob(t, f.jobs)
+			if state == "failed" {
+				require.NoError(t, f.jobs.FailRawParseJob(t.Context(), lease, "parse", "old parser failed"))
+			} else {
+				require.NoError(t, f.jobs.CompleteRawParseJob(t.Context(), lease))
+			}
+			_, err := f.sink.SelectSourceGeneration(t.Context(), manifest, "parser-2")
+			require.NoError(t, err)
+			report := rawHealthReport(t, f.jobs, manifest.Identity, 5, 3600)
+			assert.Zero(t, report.FailedJobCount)
+			assert.EqualValues(t, 1, report.StaleSourceHeadCount)
+		})
+	}
+}
+
+func TestRawJobHealthTimestampsUTC(t *testing.T) {
+	pg, store := newRawIngestTestStore(t)
+	pg.SetMaxOpenConns(1)
+	setRawHealthAcceptedAt(t, pg, time.Date(2026, 8, 19, 1, 35, 6, 0, time.UTC))
+	_, err := pg.ExecContext(t.Context(), `SET TIME ZONE 'Asia/Kolkata'`)
+	require.NoError(t, err)
+	identity := rawIngestIdentity(t, "tenant-a")
+	object := rawIngestObject(t, "a", 7)
+	orphan := rawHealthCommit(t, store, identity, "orphan", "", "sessions/orphan",
+		rawsync.ManifestSnapshot, rawIngestCapturedAt(), object)
+	manifest := rawHealthCommit(t, store, identity, "jobs", "", "sessions/jobs",
+		rawsync.ManifestSnapshot, rawIngestCapturedAt(), object)
+	_, err = pg.ExecContext(t.Context(), `DELETE FROM raw_ingest_jobs WHERE manifest_id = $1`, orphan.ManifestID)
+	require.NoError(t, err)
+	setHealthJobState(t, pg, identity, manifest.ManifestID, "leased", 2, "worker", "", "")
+	insertRawHealthJob(t, pg, identity, manifest.ManifestID, "failed", "failed", 1, "parse", "hidden")
+	insertRawHealthJob(t, pg, identity, manifest.ManifestID, "retry", "retrying", 4, "parse", "hidden")
+	_, err = pg.ExecContext(t.Context(), `
+		UPDATE raw_source_heads SET updated_at = TIMESTAMPTZ '2026-08-19 07:05:06+05:30';
+		UPDATE raw_ingest_jobs SET updated_at = TIMESTAMPTZ '2026-08-19 07:05:06+05:30',
+			lease_expires_at = TIMESTAMPTZ '2026-08-19 07:05:06+05:30',
+			available_at = TIMESTAMPTZ '2026-08-19 07:05:06+05:30'`)
+	require.NoError(t, err)
+	report := rawHealthReport(t, store, identity, 5, 3600)
+	require.Len(t, report.OrphanedManifests, 1)
+	require.Len(t, report.ExpiredLeases, 1)
+	require.Len(t, report.FailedJobsByErrorClass, 1)
+	require.Len(t, report.RetryingNearLimit, 1)
+	require.Len(t, report.StaleSourceHeads, 2)
+	assert.Equal(t, "UTC", report.ObservedAt.Location().String())
+	for _, timestamp := range []time.Time{
+		report.OrphanedManifests[0].AcceptedAt,
+		report.StaleSourceHeads[0].AcceptedAt, report.StaleSourceHeads[1].AcceptedAt,
+		report.ExpiredLeases[0].LeaseExpiresAt, report.ExpiredLeases[0].UpdatedAt,
+		report.FailedJobsByErrorClass[0].LatestFailureAt,
+		report.RetryingNearLimit[0].AvailableAt, report.RetryingNearLimit[0].UpdatedAt,
+	} {
+		assert.Equal(t, "2026-08-19T01:35:06Z", timestamp.Format(time.RFC3339))
+	}
 }
 
 func TestRawJobHealthRetryThreshold(t *testing.T) {
@@ -256,85 +367,40 @@ func TestRawJobHealthRetryThreshold(t *testing.T) {
 	assert.Equal(t, 3, report.RetryingNearLimit[2].AttemptCount)
 }
 
-func TestRawJobHealthStaleHeads(t *testing.T) {
+func TestRawJobHealthParseLag(t *testing.T) {
 	pg, store := newRawIngestTestStore(t)
 	identity := rawIngestIdentity(t, "tenant-a")
 	object := rawIngestObject(t, "a", 7)
-	require.NoError(t, store.RecordVerifiedObject(t.Context(), identity, object))
-	old := rawHealthCommit(
-		t, store, identity, "capture-old", "", "sessions/old",
-		rawsync.ManifestSnapshot, rawIngestCapturedAt(), object,
-	)
-	boundary := rawHealthCommit(
-		t, store, identity, "capture-boundary", "", "sessions/boundary",
-		rawsync.ManifestSnapshot, rawIngestCapturedAt(), object,
-	)
-	recent := rawHealthCommit(
-		t, store, identity, "capture-recent", "", "sessions/recent",
-		rawsync.ManifestSnapshot, rawIngestCapturedAt(), object,
-	)
-	tombstone := rawHealthCommit(
-		t, store, identity, "capture-tombstone", "", "sessions/removed",
-		rawsync.ManifestTombstone, rawIngestCapturedAt(), object,
-	)
-
-	_, err := pg.ExecContext(t.Context(), `
-		UPDATE raw_source_heads
-		SET updated_at = CASE source_key
-			WHEN 'sessions/old' THEN statement_timestamp() - interval '10 seconds'
-			WHEN 'sessions/boundary' THEN statement_timestamp() - interval '1 second'
-			WHEN 'sessions/recent' THEN statement_timestamp()
-			WHEN 'sessions/removed' THEN statement_timestamp() - interval '10 seconds'
-			ELSE updated_at
-		END
-		WHERE tenant_id = $1`, identity.TenantID,
-	)
-	require.NoError(t, err)
-	_, err = pg.ExecContext(t.Context(), `
-		INSERT INTO raw_source_heads (
-			tenant_id, device_id, provider, configured_root_id, source_key,
-			source_key_sha256, generation, updated_at
-		) VALUES ($1, 'device-a', 'codex', 'root-a', 'sessions/zero', $2,
-			0, statement_timestamp() - interval '1 day')`,
-		identity.TenantID, rawIngestKeyDigest("sessions/zero"),
-	)
-	require.NoError(t, err)
-
-	tx, err := pg.BeginTx(t.Context(), nil)
-	require.NoError(t, err)
-	_, err = tx.ExecContext(
-		t.Context(),
-		"UPDATE raw_source_heads "+
-			"SET updated_at = CURRENT_TIMESTAMP - interval '1 second' "+
-			"WHERE tenant_id = $1 AND manifest_id = $2",
-		identity.TenantID, boundary.ManifestID,
-	)
-	require.NoError(t, err)
-	exactReport, err := rawJobHealth(
-		t.Context(), tx, identity,
-		rawsync.JobHealthQuery{MaxAttempts: 5, StaleAfterSeconds: 1},
-	)
-	require.NoError(t, err)
-	require.NotEmpty(t, exactReport.StaleSourceHeads)
-	var boundaryFound bool
-	for _, row := range exactReport.StaleSourceHeads {
-		boundaryFound = boundaryFound || row.ManifestID == boundary.ManifestID
+	ids := map[string]string{}
+	for _, tc := range []struct {
+		name          string
+		old, complete bool
+		kind          rawsync.ManifestKind
+	}{
+		{"pending", true, false, rawsync.ManifestSnapshot},
+		{"completed", true, true, rawsync.ManifestSnapshot},
+		{"recent", false, false, rawsync.ManifestSnapshot},
+		{"tombstone", true, false, rawsync.ManifestTombstone},
+	} {
+		acceptedAt := time.Now()
+		if tc.old {
+			acceptedAt = acceptedAt.Add(-24 * time.Hour)
+		}
+		setRawHealthAcceptedAt(t, pg, acceptedAt)
+		manifest := rawHealthCommit(t, store, identity, tc.name, "", "sessions/"+tc.name,
+			tc.kind, rawIngestCapturedAt(), object)
+		ids[tc.name] = manifest.ManifestID
+		if tc.complete {
+			setHealthJobState(t, pg, identity, manifest.ManifestID, "complete", 1, "", "", "")
+		}
 	}
-	assert.True(t, boundaryFound)
-	require.NoError(t, tx.Commit())
-
-	report := rawHealthReport(t, store, identity, 5, 1)
-	assert.Equal(t, int64(3), report.StaleSourceHeadCount)
-	require.Len(t, report.StaleSourceHeads, 3)
-	ids := make(map[string]rawsync.StaleSourceHead, len(report.StaleSourceHeads))
+	report := rawHealthReport(t, store, identity, 5, 3600)
+	assert.EqualValues(t, 2, report.StaleSourceHeadCount)
+	var lagging []string
 	for _, row := range report.StaleSourceHeads {
-		ids[row.ManifestID] = row
+		lagging = append(lagging, row.ManifestID)
 	}
-	assert.Contains(t, ids, old.ManifestID)
-	assert.Contains(t, ids, boundary.ManifestID)
-	assert.Contains(t, ids, tombstone.ManifestID)
-	assert.NotContains(t, ids, recent.ManifestID)
-	assert.Equal(t, rawsync.ManifestTombstone, ids[tombstone.ManifestID].Kind)
+	assert.ElementsMatch(t, []string{ids["pending"], ids["tombstone"]}, lagging)
 }
 
 func TestRawJobHealthIsolation(t *testing.T) {
@@ -364,6 +430,7 @@ func TestRawJobHealthIsolation(t *testing.T) {
 		t, store, identityB, "capture-nonparse", "", "sessions/nonparse",
 		rawsync.ManifestSnapshot, rawIngestCapturedAt(), object,
 	)
+	setRawHealthAcceptedAt(t, pg, time.Now().Add(-time.Hour))
 	staleAOther := rawHealthCommit(
 		t, store, identityAOther, "capture-stale", "", "sessions/stale",
 		rawsync.ManifestSnapshot, rawIngestCapturedAt(), object,
@@ -407,23 +474,6 @@ func TestRawJobHealthIsolation(t *testing.T) {
 		)
 		require.NoError(t, err)
 	}
-	for _, fixture := range []struct {
-		identity rawsync.AuthIdentity
-		manifest string
-	}{
-		{identityAOther, staleAOther.ManifestID},
-		{identityB, staleB.ManifestID},
-	} {
-		_, err = pg.ExecContext(
-			t.Context(),
-			"UPDATE raw_source_heads "+
-				"SET updated_at = CURRENT_TIMESTAMP - interval '1 hour' "+
-				"WHERE tenant_id = $1 AND manifest_id = $2",
-			fixture.identity.TenantID, fixture.manifest,
-		)
-		require.NoError(t, err)
-	}
-
 	reportA := rawHealthReport(t, store, identityA, 5, 1)
 	assert.Equal(t, int64(1), reportA.OrphanedManifestCount)
 	assert.Equal(t, int64(1), reportA.ExpiredLeaseCount)
@@ -568,6 +618,7 @@ func TestRawJobHealthCaps(t *testing.T) {
 	identity := rawIngestIdentity(t, "tenant-a")
 	object := rawIngestObject(t, "a", 7)
 	require.NoError(t, store.RecordVerifiedObject(t.Context(), identity, object))
+	setRawHealthAcceptedAt(t, pg, time.Now().Add(-time.Hour))
 	for i := range rawJobHealthMaxRows + 1 {
 		rawHealthCommit(
 			t, store, identity, fmt.Sprintf("capture-cap-%03d", i), "",
@@ -575,6 +626,7 @@ func TestRawJobHealthCaps(t *testing.T) {
 			rawIngestCapturedAt(), object,
 		)
 	}
+	setRawHealthAcceptedAt(t, pg, time.Now())
 	capManifest := rawHealthCommit(
 		t, store, identity, "capture-job-cap", "", "sessions/job-cap",
 		rawsync.ManifestSnapshot, rawIngestCapturedAt(), object,
@@ -583,13 +635,6 @@ func TestRawJobHealthCaps(t *testing.T) {
 		DELETE FROM raw_ingest_jobs
 		WHERE tenant_id = $1 AND manifest_id <> $2`,
 		identity.TenantID, capManifest.ManifestID,
-	)
-	require.NoError(t, err)
-	_, err = pg.ExecContext(t.Context(), `
-		UPDATE raw_source_heads
-		SET updated_at = statement_timestamp() - interval '1 hour'
-		WHERE tenant_id = $1 AND source_key LIKE 'sessions/cap-%'`,
-		identity.TenantID,
 	)
 	require.NoError(t, err)
 	for i := range 60 {
@@ -791,4 +836,12 @@ func rawHealthMutationFingerprint(t *testing.T, pg *sql.DB) string {
 		)`).Scan(&fingerprint)
 	require.NoError(t, err)
 	return fingerprint
+}
+
+// Seed acceptance time at insertion; accepted custody metadata cannot be edited.
+func setRawHealthAcceptedAt(t *testing.T, pg *sql.DB, acceptedAt time.Time) {
+	t.Helper()
+	_, err := pg.ExecContext(t.Context(), "ALTER TABLE raw_manifests ALTER COLUMN accepted_at SET DEFAULT '"+
+		acceptedAt.Format(time.RFC3339Nano)+"'::timestamptz")
+	require.NoError(t, err)
 }

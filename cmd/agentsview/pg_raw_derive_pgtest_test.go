@@ -95,17 +95,20 @@ func TestHostedRuntimeHealthRequiresStatusToken(t *testing.T) {
 	t.Cleanup(startup.cleanup)
 
 	for _, tc := range []struct {
-		name, token string
-		wantStatus  int
+		name, token, query string
+		wantStatus         int
 	}{
-		{"status", statusToken.Token, http.StatusOK},
-		{"upload", uploadToken.Token, http.StatusUnauthorized},
-		{"viewer", cfg.AuthToken, http.StatusUnauthorized},
-		{"anonymous", "", http.StatusUnauthorized},
+		{"status", statusToken.Token, "max_attempts=5&stale_after_seconds=3600", http.StatusOK},
+		{"upload", uploadToken.Token, "max_attempts=5&stale_after_seconds=3600", http.StatusUnauthorized},
+		{"viewer", cfg.AuthToken, "max_attempts=5&stale_after_seconds=3600", http.StatusUnauthorized},
+		{"anonymous", "", "max_attempts=5&stale_after_seconds=3600", http.StatusUnauthorized},
+		{"overflow attempts", statusToken.Token, "max_attempts=4294967297&stale_after_seconds=3600", http.StatusBadRequest},
+		{"zero attempts", statusToken.Token, "max_attempts=0&stale_after_seconds=3600", http.StatusBadRequest},
+		{"negative window", statusToken.Token, "max_attempts=5&stale_after_seconds=-1", http.StatusBadRequest},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			request := httptest.NewRequestWithContext(t.Context(), http.MethodGet,
-				"http://127.0.0.1/api/v1/raw-sync/health?max_attempts=5&stale_after_seconds=3600", nil)
+				"http://127.0.0.1/api/v1/raw-sync/health?"+tc.query, nil)
 			if tc.token != "" {
 				request.Header.Set("Authorization", "Bearer "+tc.token)
 			}

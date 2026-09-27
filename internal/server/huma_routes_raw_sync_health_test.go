@@ -92,6 +92,7 @@ func TestRawSyncHealthValidation(t *testing.T) {
 		"max_attempts=1&stale_after_seconds=0",
 		"max_attempts=-1&stale_after_seconds=1",
 		"max_attempts=2147483648&stale_after_seconds=1",
+		"max_attempts=4294967297&stale_after_seconds=1",
 		"max_attempts=1&stale_after_seconds=2147483648",
 	} {
 		recorder := serveRawSyncJSON(

@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json/v2"
 	"fmt"
 	"time"
@@ -19,6 +20,25 @@ const (
 const rawJobHealthSQL = `
 WITH snapshot AS MATERIALIZED (
 	SELECT CURRENT_TIMESTAMP AS observed_at
+), current_jobs AS (
+	-- A first hosted selection can leave generation-zero legacy jobs marked
+	-- selected. Only the newest selected generation represents current work.
+	SELECT job.*
+	FROM raw_ingest_jobs AS job
+	JOIN raw_source_heads AS head
+		ON head.tenant_id = job.tenant_id
+		AND head.manifest_id = job.manifest_id
+	WHERE job.tenant_id = $1
+		AND job.stage = 'parse'
+		AND job.projection_selected
+		AND NOT EXISTS (
+			SELECT 1 FROM raw_ingest_jobs AS newer
+			WHERE newer.tenant_id = job.tenant_id
+				AND newer.manifest_id = job.manifest_id
+				AND newer.stage = 'parse'
+				AND newer.projection_selected
+				AND newer.projection_generation > job.projection_generation
+		)
 ), orphaned AS (
 	SELECT
 		head.device_id,
@@ -42,10 +62,9 @@ WITH snapshot AS MATERIALIZED (
 		AND head.manifest_id IS NOT NULL
 		AND NOT EXISTS (
 			SELECT 1
-			FROM raw_ingest_jobs AS job
+			FROM current_jobs AS job
 			WHERE job.tenant_id = manifest.tenant_id
 				AND job.manifest_id = manifest.manifest_id
-				AND job.stage = 'parse'
 		)
 ), orphaned_capped AS (
 	SELECT *
@@ -65,14 +84,12 @@ WITH snapshot AS MATERIALIZED (
 		job.attempt_count,
 		job.lease_expires_at,
 		job.updated_at
-	FROM raw_ingest_jobs AS job
+	FROM current_jobs AS job
 	JOIN raw_manifests AS manifest
 		ON manifest.tenant_id = job.tenant_id
 		AND manifest.manifest_id = job.manifest_id
 	CROSS JOIN snapshot
-	WHERE job.tenant_id = $1
-		AND job.stage = 'parse'
-		AND job.state = 'leased'
+	WHERE job.state = 'leased'
 		AND job.lease_expires_at IS NOT NULL
 		AND job.lease_expires_at <= snapshot.observed_at
 ), expired_capped AS (
@@ -85,10 +102,8 @@ WITH snapshot AS MATERIALIZED (
 		job.last_error_class AS error_class,
 		count(*)::bigint AS job_count,
 		max(job.updated_at) AS latest_failure_at
-	FROM raw_ingest_jobs AS job
-	WHERE job.tenant_id = $1
-		AND job.stage = 'parse'
-		AND job.state = 'failed'
+	FROM current_jobs AS job
+	WHERE job.state = 'failed'
 	GROUP BY job.last_error_class
 ), failed_capped AS (
 	SELECT *
@@ -108,13 +123,11 @@ WITH snapshot AS MATERIALIZED (
 		job.available_at,
 		job.updated_at,
 		job.last_error_class
-	FROM raw_ingest_jobs AS job
+	FROM current_jobs AS job
 	JOIN raw_manifests AS manifest
 		ON manifest.tenant_id = job.tenant_id
 		AND manifest.manifest_id = job.manifest_id
-	WHERE job.tenant_id = $1
-		AND job.stage = 'parse'
-		AND job.state = 'retrying'
+	WHERE job.state = 'retrying'
 		AND job.attempt_count >= GREATEST(1, $2::integer - 1)
 ), retrying_capped AS (
 	SELECT *
@@ -130,7 +143,7 @@ WITH snapshot AS MATERIALIZED (
 		head.manifest_id,
 		head.generation,
 		manifest.kind,
-		head.updated_at
+		manifest.accepted_at
 	FROM raw_source_heads AS head
 	JOIN raw_manifests AS manifest
 		ON manifest.tenant_id = head.tenant_id
@@ -142,12 +155,18 @@ WITH snapshot AS MATERIALIZED (
 	CROSS JOIN snapshot
 	WHERE head.tenant_id = $1
 		AND head.generation > 0
-		AND head.updated_at <= snapshot.observed_at -
+		AND manifest.accepted_at <= snapshot.observed_at -
 			($3::bigint * interval '1 second')
+		AND NOT EXISTS (
+			SELECT 1 FROM current_jobs AS job
+			WHERE job.tenant_id = manifest.tenant_id
+				AND job.manifest_id = manifest.manifest_id
+				AND job.state = 'complete'
+		)
 ), stale_capped AS (
 	SELECT *
 	FROM stale
-	ORDER BY updated_at, device_id, provider, configured_root_id,
+	ORDER BY accepted_at, device_id, provider, configured_root_id,
 		source_key_sha256, manifest_id
 	LIMIT $4
 	)
@@ -220,8 +239,8 @@ SELECT
 			'manifest_id', manifest_id,
 			'generation', generation,
 			'kind', kind,
-			'updated_at', updated_at
-		) ORDER BY updated_at, device_id, provider, configured_root_id,
+			'accepted_at', accepted_at
+		) ORDER BY accepted_at, device_id, provider, configured_root_id,
 			source_key_sha256, manifest_id)::text
 		FROM stale_capped
 	), '[]')
@@ -236,18 +255,17 @@ func (s *RawIngestStore) RawJobHealth(
 	if err := s.validateIdentity(identity); err != nil {
 		return rawsync.JobHealthReport{}, err
 	}
-	return rawJobHealth(ctx, s.db, identity, query)
+	return rawJobHealth(ctx, s.db, identity.TenantID, query)
 }
 
 func rawJobHealth(
 	ctx context.Context,
-	queryer pgGenAIPricingQuerier,
-	identity rawsync.AuthIdentity,
+	queryer interface {
+		QueryRowContext(context.Context, string, ...any) *sql.Row
+	},
+	tenant string,
 	query rawsync.JobHealthQuery,
 ) (rawsync.JobHealthReport, error) {
-	if err := validateRawIngestIdentity(identity); err != nil {
-		return rawsync.JobHealthReport{}, err
-	}
 	if err := query.Validate(); err != nil {
 		return rawsync.JobHealthReport{}, err
 	}
@@ -266,7 +284,7 @@ func rawJobHealth(
 		staleSourceHeadsJSON   string
 	)
 	if err := queryer.QueryRowContext(
-		ctx, rawJobHealthSQL, identity.TenantID,
+		ctx, rawJobHealthSQL, tenant,
 		query.MaxAttempts, query.StaleAfterSeconds,
 		rawJobHealthMaxRows, rawJobHealthMaxErrorClasses,
 	).Scan(
@@ -281,7 +299,7 @@ func rawJobHealth(
 	}
 
 	report := rawsync.JobHealthReport{
-		ObservedAt:             observedAt,
+		ObservedAt:             observedAt.UTC(),
 		MaxAttempts:            query.MaxAttempts,
 		StaleAfterSeconds:      query.StaleAfterSeconds,
 		OrphanedManifests:      make([]rawsync.OrphanedManifest, 0),
@@ -309,6 +327,26 @@ func rawJobHealth(
 	}
 	if err := json.Unmarshal([]byte(staleSourceHeadsJSON), &report.StaleSourceHeads); err != nil {
 		return rawsync.JobHealthReport{}, fmt.Errorf("decoding stale raw heads: %w", err)
+	}
+	for i := range report.OrphanedManifests {
+		report.OrphanedManifests[i].AcceptedAt = report.OrphanedManifests[i].AcceptedAt.UTC()
+	}
+	for i := range report.ExpiredLeases {
+		row := &report.ExpiredLeases[i]
+		row.LeaseExpiresAt = row.LeaseExpiresAt.UTC()
+		row.UpdatedAt = row.UpdatedAt.UTC()
+	}
+	for i := range report.FailedJobsByErrorClass {
+		row := &report.FailedJobsByErrorClass[i]
+		row.LatestFailureAt = row.LatestFailureAt.UTC()
+	}
+	for i := range report.RetryingNearLimit {
+		row := &report.RetryingNearLimit[i]
+		row.AvailableAt = row.AvailableAt.UTC()
+		row.UpdatedAt = row.UpdatedAt.UTC()
+	}
+	for i := range report.StaleSourceHeads {
+		report.StaleSourceHeads[i].AcceptedAt = report.StaleSourceHeads[i].AcceptedAt.UTC()
 	}
 	return report, nil
 }

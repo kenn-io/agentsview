@@ -3,6 +3,7 @@
  */
 
 export interface RawsyncStaleSourceHead {
+  accepted_at: string;
   configured_root_id: string;
   device_id: string;
   generation: number;
@@ -10,5 +11,4 @@ export interface RawsyncStaleSourceHead {
   manifest_id: string;
   provider: string;
   source_key_sha256: string;
-  updated_at: string;
 }

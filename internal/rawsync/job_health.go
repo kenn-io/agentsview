@@ -91,7 +91,8 @@ type JobAttemptWarning struct {
 	LastErrorClass    string           `json:"last_error_class"`
 }
 
-// StaleSourceHead identifies a committed source head older than the query.
+// StaleSourceHead identifies a current manifest accepted before the query
+// window with no completed parse job for a selected processing version.
 type StaleSourceHead struct {
 	DeviceID         string           `json:"device_id"`
 	Provider         parser.AgentType `json:"provider"`
@@ -100,5 +101,5 @@ type StaleSourceHead struct {
 	ManifestID       string           `json:"manifest_id"`
 	Generation       int64            `json:"generation"`
 	Kind             ManifestKind     `json:"kind"`
-	UpdatedAt        time.Time        `json:"updated_at"`
+	AcceptedAt       time.Time        `json:"accepted_at"`
 }

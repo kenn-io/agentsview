@@ -384,12 +384,21 @@ the laptop checkpoint.
 A status-scoped token can call the health route with positive `max_attempts` and
 `stale_after_seconds` query values. The report covers current accepted manifests
 without parse jobs, expired leased parse jobs, failed parse jobs grouped by
-their stored error class, retrying jobs at or above
-`greatest(1, max_attempts - 1)`, and committed source heads whose `updated_at`
-is older than the requested window. Each affected-row list holds at most 50
-rows, failure classes hold at most 20 rows, and totals stay exact. The read is
-tenant-wide, excludes raw error messages, and leaves custody and worker state
-unchanged. The local status command still reads the laptop checkpoint.
+their stored error class, and retrying jobs at or above
+`greatest(1, max_attempts - 1)`. These counts include only current source heads
+and selected processing versions, so replacing a manifest or parser version
+clears obsolete job warnings.
+
+`stale_source_heads` reports parse lag: current manifests accepted at least
+`stale_after_seconds` ago with no completed parse job for a selected processing
+version. It includes pending tombstones but excludes successfully parsed idle
+sessions. Rows expose `accepted_at`, the time used for this threshold. All
+response timestamps use UTC.
+
+Each affected-row list holds at most 50 rows, failure classes hold at most 20
+rows, and totals stay exact. The read is tenant-wide, excludes raw error
+messages, and leaves custody and worker state unchanged. The local status
+command still reads the laptop checkpoint.
 
 PostgreSQL stores device, token, manifest, receipt, source-head, and parse-job
 metadata. The raw object repository is opened lazily under `raw-sync/` in the
