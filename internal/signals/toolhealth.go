@@ -7,13 +7,15 @@ import (
 
 // ToolCallRow is populated from a JOIN of tool_calls + messages.
 type ToolCallRow struct {
-	ToolName       string
-	Category       string // "Bash", "Edit", "Write", "Read", "Search"
-	InputJSON      string
-	ResultContent  string
-	MessageOrdinal int
-	CallIndex      int
-	EventStatus    string // "", "completed", "errored", "cancelled", "running"
+	ToolName            string
+	Category            string // "Bash", "Edit", "Write", "Read", "Search"
+	InputJSON           string
+	ResultContent       string
+	MessageOrdinal      int
+	CallIndex           int
+	ToolUseID           string
+	ResultContentLength int
+	EventStatus         string // "", "completed", "errored", "cancelled", "running"
 	// ContentFailure is a pre-computed content-heuristic verdict used by
 	// streaming writers whose rows carry placeholder result content (the
 	// real summary lives in staging). When the last event carries no
