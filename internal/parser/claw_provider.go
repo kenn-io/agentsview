@@ -715,6 +715,12 @@ func (s openClawSourceSet) ReconciliationSourceRank(
 			Recency: source.DiscoveryMTimeNS,
 		}
 	}
+	// Changed-path and stored sources have no discovery timestamp.
+	if path, ok := s.legacy.pathFromSource(source); ok && source.DiscoveryMTimeNS == 0 {
+		if info, err := os.Lstat(path); err == nil {
+			source.DiscoveryMTimeNS = info.ModTime().UnixNano()
+		}
+	}
 	return s.legacy.reconciliationSourceRank(source)
 }
 

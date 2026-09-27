@@ -2598,6 +2598,45 @@ func TestReconcileWatchRootsPreservesCodexLiveDuplicatePreference(t *testing.T) 
 	assert.Equal(t, livePath, env.db.GetSessionFilePath(t.Context(), "codex:"+uuid))
 }
 
+func TestOpenClawChangedPathKeepsNewerLegacyDuplicate(t *testing.T) {
+	first, second := t.TempDir(), t.TempDir()
+	canonical := filepath.Join(first, "main", "sessions", "duplicate.jsonl")
+	older := filepath.Join(second, "main", "sessions", "duplicate.jsonl")
+	content := strings.Join([]string{
+		`{"type":"session","version":3,"id":"duplicate","timestamp":"2026-09-22T10:00:00Z","cwd":"/workspace/project-a"}`,
+		`{"type":"message","id":"m1","timestamp":"2026-09-22T10:00:01Z","message":{"role":"user","content":"canonical question","timestamp":"2026-09-22T10:00:01Z"}}`,
+	}, "\n") + "\n"
+	for _, path := range []string{canonical, older} {
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	}
+	newTime := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+	oldTime := newTime.Add(-time.Hour)
+	require.NoError(t, os.Chtimes(canonical, newTime, newTime))
+	require.NoError(t, os.Chtimes(older, oldTime, oldTime))
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentOpenClaw: {first, second}},
+		Machine:   "local",
+	})
+	t.Cleanup(engine.Close)
+	stats := engine.SyncAll(t.Context(), nil)
+	require.False(t, stats.Aborted)
+	assert.Equal(t, canonical, database.GetSessionFilePath(t.Context(), "openclaw:main:duplicate"))
+	assertMessageContent(t, database, "openclaw:main:duplicate", "canonical question")
+	require.NoError(t, os.WriteFile(older, []byte(strings.ReplaceAll(content, "canonical question", "older duplicate update")), 0o600))
+	require.NoError(t, os.Chtimes(older, oldTime, oldTime))
+	require.NoError(t, engine.SyncPathsContext(t.Context(), []string{older}))
+	assert.Equal(t, canonical, database.GetSessionFilePath(t.Context(), "openclaw:main:duplicate"))
+	assertMessageContent(t, database, "openclaw:main:duplicate", "canonical question")
+
+	newestTime := newTime.Add(time.Hour)
+	require.NoError(t, os.Chtimes(older, newestTime, newestTime))
+	require.NoError(t, engine.SyncPathsContext(t.Context(), []string{older}))
+	assert.Equal(t, older, database.GetSessionFilePath(t.Context(), "openclaw:main:duplicate"))
+	assertMessageContent(t, database, "openclaw:main:duplicate", "older duplicate update")
+}
+
 func TestReconcileWatchRootsOpenClawUsesCanonicalArchiveOrdering(t *testing.T) {
 	root := t.TempDir()
 	sessionsDir := filepath.Join(root, "main", "sessions")
