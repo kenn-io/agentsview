@@ -935,9 +935,7 @@ func (s codexSourceSet) discoverSessionPaths(sessionsDir string) []string {
 }
 
 // findSourceFile resolves a Codex session file by UUID under sessionsDir.
-// It prefers the standard year/month/day live path when present, then falls
-// back to a flat archived directory entry, matching the lookup precedence the
-// package-level entrypoint provided before the fold.
+// It prefers newer revert rollouts, then the standard year/month/day layout.
 func (s codexSourceSet) findSourceFile(sessionsDir, sessionID string) string {
 	if !IsValidSessionID(sessionID) {
 		return ""
@@ -954,18 +952,17 @@ func (s codexSourceSet) findSourceFile(sessionsDir, sessionID string) string {
 			if !isCodexSessionFilename(name) {
 				continue
 			}
-			if extractUUIDFromRollout(name) == sessionID {
+			if extractUUIDFromRollout(name) == sessionID &&
+				preferCodexRolloutPath(name, archived) {
 				archived = filepath.Join(sessionsDir, name)
-				break
 			}
 		}
 	}
 
+	// A revert rollout can land in a later day directory than the original, so
+	// the scan does not stop at the first match.
 	var live string
 	walkCodexDayDirs(sessionsDir, func(dayPath string) bool {
-		if live != "" {
-			return false
-		}
 		dayEntries, err := os.ReadDir(dayPath)
 		if err != nil {
 			return true
@@ -978,17 +975,30 @@ func (s codexSourceSet) findSourceFile(sessionsDir, sessionID string) string {
 			if !isCodexSessionFilename(name) {
 				continue
 			}
-			if extractUUIDFromRollout(name) == sessionID {
+			if extractUUIDFromRollout(name) == sessionID &&
+				preferCodexRolloutPath(name, live) {
 				live = filepath.Join(dayPath, name)
-				return false
 			}
 		}
 		return true
 	})
+	if archived != "" && preferCodexRolloutPath(filepath.Base(archived), live) {
+		return archived
+	}
 	if live != "" {
 		return live
 	}
 	return archived
+}
+
+// preferCodexRolloutPath keeps the first match unless name is a newer revert
+// rollout than the current pick.
+func preferCodexRolloutPath(name, currentPath string) bool {
+	if currentPath == "" {
+		return true
+	}
+	prefer, _ := PreferCodexRevertRollout(name, filepath.Base(currentPath))
+	return prefer
 }
 
 func (s codexSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
@@ -1071,16 +1081,10 @@ func (s codexSourceSet) FindSource(
 		}
 		for _, root := range s.roots {
 			if source, ok := s.sourceRef(root, path, true); ok {
-				if !req.RequireFreshSource || req.PreferStoredSource {
-					return source, true, nil
-				}
-				return s.canonicalSource(ctx, source)
+				return s.canonicalSource(ctx, source, !req.RequireFreshSource || req.PreferStoredSource)
 			}
 			if source, ok := s.directPathSource(root, path, true); ok {
-				if !req.RequireFreshSource || req.PreferStoredSource {
-					return source, true, nil
-				}
-				return s.canonicalSource(ctx, source)
+				return s.canonicalSource(ctx, source, !req.RequireFreshSource || req.PreferStoredSource)
 			}
 		}
 	}
@@ -1093,7 +1097,7 @@ func (s codexSourceSet) FindSource(
 			continue
 		}
 		if source, ok := s.sourceRef(root, path, true); ok {
-			return s.canonicalSource(ctx, source)
+			return s.canonicalSource(ctx, source, false)
 		}
 	}
 	return SourceRef{}, false, nil
@@ -1235,13 +1239,19 @@ func (s codexSourceSet) directPathSource(
 func (s codexSourceSet) canonicalSource(
 	ctx context.Context,
 	source SourceRef,
+	preferStored bool,
 ) (SourceRef, bool, error) {
 	src, ok := source.Opaque.(codexSource)
-	if !ok || src.UUID == "" {
+	if !ok {
 		return source, true, nil
 	}
-	var best SourceRef
-	foundExisting := false
+	if src.UUID == "" {
+		src.UUID = CodexSessionUUIDFromFilename(filepath.Base(src.Path))
+	}
+	if src.UUID == "" {
+		return source, true, nil
+	}
+	best := source
 	for _, root := range s.roots {
 		if err := ctx.Err(); err != nil {
 			return SourceRef{}, false, err
@@ -1254,13 +1264,13 @@ func (s codexSourceSet) canonicalSource(
 		if !ok {
 			continue
 		}
-		if !foundExisting || preferCodexSource(candidate, best) {
+		if preferStored {
+			if preferCodexRolloutPath(filepath.Base(path), best.DisplayPath) {
+				best = candidate
+			}
+		} else if preferCodexSource(candidate, best) {
 			best = candidate
-			foundExisting = true
 		}
-	}
-	if !foundExisting {
-		return source, true, nil
 	}
 	return best, true, nil
 }
@@ -1282,6 +1292,11 @@ func CodexSourceKey(agent AgentType, uuid string) string {
 func preferCodexSource(candidate, current SourceRef) bool {
 	cand := candidate.Opaque.(codexSource)
 	curr := current.Opaque.(codexSource)
+	if prefer, decided := PreferCodexRevertRollout(
+		filepath.Base(cand.Path), filepath.Base(curr.Path),
+	); decided {
+		return prefer
+	}
 	if cand.Layout != curr.Layout {
 		return cand.Layout == CodexLayoutDated
 	}

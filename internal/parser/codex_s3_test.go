@@ -153,6 +153,20 @@ func TestFindCodexS3ParentSessionURI(t *testing.T) {
 			wantList: true,
 		},
 		{
+			name: "revert rollout wins over the original",
+			childURI: root + "/sessions/2026/08/13/" +
+				"rollout-2026-08-13T00-00-00-22222222-2222-4222-8222-222222222222.jsonl",
+			parentID: parentID,
+			objects: []S3Object{
+				{URI: parentSessions},
+				{URI: root + "/sessions/2026/08/12/rollout-2026-08-12T00-05-00-" +
+					parentID + "_33333333-3333-4333-8333-333333333333.jsonl"},
+			},
+			want: root + "/sessions/2026/08/12/rollout-2026-08-12T00-05-00-" +
+				parentID + "_33333333-3333-4333-8333-333333333333.jsonl",
+			wantList: true,
+		},
+		{
 			name: "custom configured root at arbitrary depth",
 			childURI: customRoot + "/team/a/" +
 				"rollout-2026-08-13T00-00-00-22222222-2222-4222-8222-222222222222.jsonl",

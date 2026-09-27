@@ -1956,6 +1956,9 @@ func (e *Engine) classifyPaths(
 		classificationErr = errors.Join(classificationErr, err)
 	}
 	files = dedupeDiscoveredFiles(files)
+	files = slices.DeleteFunc(files, func(file parser.DiscoveredFile) bool {
+		return e.supersededCodexRollout(ctx, file)
+	})
 	return e.dedupeClaudeDiscoveredFiles(ctx, files), classificationErr
 }
 
@@ -2573,6 +2576,11 @@ func preferDiscoveredFile(
 	candidate, current parser.DiscoveredFile,
 ) bool {
 	if candidate.Agent == current.Agent && isCodexFormatAgent(candidate.Agent) {
+		if prefer, decided := parser.PreferCodexRevertRollout(
+			filepath.Base(candidate.Path), filepath.Base(current.Path),
+		); decided {
+			return prefer
+		}
 		candLayout := codexLayoutForPath(candidate.Path)
 		currLayout := codexLayoutForPath(current.Path)
 		if candLayout != currLayout {
@@ -2586,6 +2594,12 @@ func preferNewestCodexDiscoveredFile(
 	candidate, current parser.DiscoveredFile,
 ) bool {
 	if candidate.Agent == current.Agent && isCodexFormatAgent(candidate.Agent) {
+		// Full sync always keeps the newest revert rollout; quick sync must agree.
+		if prefer, decided := parser.PreferCodexRevertRollout(
+			filepath.Base(candidate.Path), filepath.Base(current.Path),
+		); decided {
+			return prefer
+		}
 		candMTime, candOK := discoveredFileMTime(candidate.Path)
 		currMTime, currOK := discoveredFileMTime(current.Path)
 		if candOK && currOK && candMTime != currMTime {
@@ -6254,8 +6268,12 @@ func (e *Engine) reconciliationCandidate(ctx context.Context,
 			}
 		}
 	}
-	if isCodexFormatAgent(agent) && codexLayoutForPath(path) == parser.CodexLayoutDated {
-		preference1 = 1
+	if isCodexFormatAgent(agent) {
+		// Same order as parser.PreferCodexRevertRollout, then the dated layout.
+		preference1 = parser.CodexRevertRolloutRank(filepath.Base(path))
+		preference2 = boolPreference(
+			codexLayoutForPath(path) == parser.CodexLayoutDated,
+		)
 	}
 	if isOpenCodeFormatAgent(agent) && !claudeFormat {
 		if statPath == path {
@@ -16195,7 +16213,17 @@ func (e *Engine) pickPreferredCodexIndexDiscoveredFile(ctx context.Context,
 		if uuid != "" && storedPath != "" {
 			storedPath = filepath.Clean(storedPath)
 			for _, candidate := range candidates {
-				if filepath.Clean(e.effectiveSourcePath(candidate.Path)) == storedPath {
+				if filepath.Clean(e.effectiveSourcePath(candidate.Path)) != storedPath {
+					continue
+				}
+				superseded := slices.ContainsFunc(candidates,
+					func(other parser.DiscoveredFile) bool {
+						prefer, _ := parser.PreferCodexRevertRollout(
+							filepath.Base(other.Path), filepath.Base(candidate.Path),
+						)
+						return prefer
+					})
+				if !superseded {
 					return candidate
 				}
 			}
@@ -16294,6 +16322,12 @@ func pickPreferredCodexDiscoveredFile(ctx context.Context,
 	if len(candidates) == 0 {
 		return parser.DiscoveredFile{}
 	}
+	best := candidates[0]
+	for _, candidate := range candidates[1:] {
+		if preferDiscoveredFile(candidate, best) {
+			best = candidate
+		}
+	}
 	if id := parser.CodexSessionUUIDFromFilename(
 		filepath.Base(candidates[0].Path),
 	); id != "" {
@@ -16307,19 +16341,49 @@ func pickPreferredCodexDiscoveredFile(ctx context.Context,
 			}
 			storedPath = filepath.Clean(storedPath)
 			for _, candidate := range candidates {
-				if filepath.Clean(candidate.Path) == storedPath {
-					return candidate
+				if filepath.Clean(candidate.Path) != storedPath {
+					continue
 				}
+				// A stored rollout must not outlive a newer revert rollout.
+				if prefer, _ := parser.PreferCodexRevertRollout(
+					filepath.Base(best.Path), filepath.Base(candidate.Path),
+				); prefer {
+					return best
+				}
+				return candidate
 			}
 		}
 	}
-	chosen := candidates[0]
-	for _, candidate := range candidates[1:] {
-		if preferDiscoveredFile(candidate, chosen) {
-			chosen = candidate
-		}
+	return best
+}
+
+// supersededCodexRollout reports whether the archive already stores a newer
+// revert rollout of file's thread. Codex never writes a rollout again after a
+// revert moves the thread off it, so a late event for it (such as the close
+// after the switch) must not restore it.
+func (e *Engine) supersededCodexRollout(
+	ctx context.Context, file parser.DiscoveredFile,
+) bool {
+	if !isCodexFormatAgent(file.Agent) || isS3SourcePath(file.Path) {
+		return false
 	}
-	return chosen
+	name := filepath.Base(file.Path)
+	uuid := parser.CodexSessionUUIDFromFilename(name)
+	def, ok := parser.AgentByType(file.Agent)
+	if uuid == "" || !ok {
+		return false
+	}
+	storedPath := e.db.GetSessionFilePath(ctx, e.idPrefix+def.IDPrefix+uuid)
+	storedName := filepath.Base(storedPath)
+	if storedPath == "" ||
+		parser.CodexSessionUUIDFromFilename(storedName) != uuid {
+		return false
+	}
+	if prefer, _ := parser.PreferCodexRevertRollout(storedName, name); !prefer {
+		return false
+	}
+	// A rewritten stored path is not a local path, so only a local one is checked.
+	return e.pathRewriter != nil || parser.IsRegularFile(storedPath)
 }
 
 // roocodeEffectiveStat returns the composite size and latest mtime of

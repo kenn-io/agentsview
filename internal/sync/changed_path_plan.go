@@ -58,6 +58,13 @@ func (e *Engine) PlanChangedPathsContext(
 	if err := e.resolveClaudeDuplicateAttribution(ctx, &plan); err != nil {
 		return ChangedPathPlan{}, err
 	}
+	for path, attribution := range plan.attribution {
+		attribution.files = slices.DeleteFunc(attribution.files,
+			func(file parser.DiscoveredFile) bool {
+				return e.supersededCodexRollout(ctx, file)
+			})
+		plan.attribution[path] = attribution
+	}
 	plan.rebuildAggregates()
 	return plan, nil
 }

@@ -459,6 +459,43 @@ fixtures retain this field; missing identities remain source-local.
   call per file. `custom_tool_call` items carry the same patch text under
   `input` instead of a JSON `patch` argument.
 
+- **Revert rollouts (reverified 2026-09-26):** `thread/revert` keeps the thread
+  ID but moves the thread to a new, immutable rollout file named
+  `rollout-<ts>-<thread id>_<rollout id>.jsonl`; the timestamp is the new
+  file's creation time, and repeated reverts add more `<thread id>_<new id>`
+  files. Older rollouts stay on disk, and Codex tracks the current one in its
+  own state database, so a filesystem scan can find superseded copies. The
+  new file's `session_meta` has `history_mode: "paginated"` and may carry
+  `history_base` (`thread_id`, `end_ordinal_exclusive`, `end_byte_offset`).
+  That names the rollout ID and byte prefix of the previous file the thread
+  still inherits. It is null when the revert discards everything before it.
+  See the pinned
+  [filename parser](https://github.com/openai/codex/blob/12de0e395d3313bc564190d983cb4f5acf0be713/codex-rs/rollout/src/rollout_file_name.rs),
+  [rollout resolver](https://github.com/openai/codex/blob/12de0e395d3313bc564190d983cb4f5acf0be713/codex-rs/thread-store/src/local/thread_rollout_resolver.rs),
+  and
+  [lineage reader](https://github.com/openai/codex/blob/12de0e395d3313bc564190d983cb4f5acf0be713/codex-rs/thread-store/src/local/rollout_lineage.rs).
+  Three local Codex Desktop pairs match: in each, the original ended with
+  `turn_aborted`. Two revert rollouts had a null `history_base`. The third
+  inherited all of its original except the aborted tail. Agentsview reads
+  the leading UUID as the session. Every sync path, including startup
+  reconciliation and title-index refreshes, prefers the revert rollout with
+  the newest filename timestamp. Source lookup compares flat archives and
+  dated directories even when a stored source is preferred, including stored
+  rollout paths outside the standard layout. Ordinary archived duplicates
+  remain pinned when requested. The filename evidence above was rechecked
+  against the pinned upstream parser on 2026-09-26. A late watcher event for a
+  superseded rollout is ignored once a newer one is stored. Agentsview does
+  not read `history_base`, so
+  inherited turns are missing from the session.
+  `TestPreferCodexRevertRollout`,
+  `TestCodexProviderPrefersRevertRollout`,
+  `TestReconcileWatchRootsPrefersCodexRevertRollout`,
+  `TestPlanChangedPathsDropsCodexRolloutSupersededByStoredRevert`,
+  `TestSyncPathsCodexIndexEventPrefersRevertRolloutInAnotherRoot`, and
+  `TestSyncKeepsCodexRevertRolloutAcrossRestartAndResync` cover it.
+  Before this, the suffixed file got no session key: full resync kept the
+  revert rollout, and every restart put the original back.
+
 - **Evidence:** `source`.
 
 - **Upstream:** Clone `https://github.com/openai/codex.git` at
