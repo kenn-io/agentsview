@@ -10,6 +10,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
@@ -76,6 +77,51 @@ func TestHostedRuntimePreparationOffRetainsPublicReads(t *testing.T) {
 	_, err = prepareReplicaServeImpl(pgReplica{}, cfg, "")
 	require.ErrorContains(t, err, "raw_tenant")
 }
+
+func TestHostedRuntimeHealthRequiresStatusToken(t *testing.T) {
+	cfg, admin := hostedRuntimeConfig(t)
+	authStore, err := postgres.NewTenantRawDeviceAuthStore(admin, cfg.PG.RawTenant)
+	require.NoError(t, err)
+	auth, err := rawsync.NewDeviceAuthService(authStore, time.Minute)
+	require.NoError(t, err)
+	device, err := auth.EnrollDevice(t.Context(), cfg.PG.RawTenant, "synthetic device")
+	require.NoError(t, err)
+	statusToken, err := auth.IssueToken(t.Context(), device.Identity.DeviceID, device.Credential, rawsync.ScopeStatus)
+	require.NoError(t, err)
+	uploadToken, err := auth.IssueToken(t.Context(), device.Identity.DeviceID, device.Credential, rawsync.ScopeUpload)
+	require.NoError(t, err)
+	startup, err := prepareReplicaServeImpl(pgReplica{}, cfg, "")
+	require.NoError(t, err)
+	t.Cleanup(startup.cleanup)
+
+	for _, tc := range []struct {
+		name, token string
+		wantStatus  int
+	}{
+		{"status", statusToken.Token, http.StatusOK},
+		{"upload", uploadToken.Token, http.StatusUnauthorized},
+		{"viewer", cfg.AuthToken, http.StatusUnauthorized},
+		{"anonymous", "", http.StatusUnauthorized},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			request := httptest.NewRequestWithContext(t.Context(), http.MethodGet,
+				"http://127.0.0.1/api/v1/raw-sync/health?max_attempts=5&stale_after_seconds=3600", nil)
+			if tc.token != "" {
+				request.Header.Set("Authorization", "Bearer "+tc.token)
+			}
+			response := httptest.NewRecorder()
+			startup.srv.Handler().ServeHTTP(response, request)
+			require.Equal(t, tc.wantStatus, response.Code, response.Body.String())
+			if tc.wantStatus == http.StatusOK {
+				var report rawsync.JobHealthReport
+				require.NoError(t, json.Unmarshal(response.Body.Bytes(), &report))
+				assert.EqualValues(t, 5, report.MaxAttempts)
+				assert.EqualValues(t, 3600, report.StaleAfterSeconds)
+			}
+		})
+	}
+}
+
 func TestHostedRuntimePreparationSandboxAndIdle(t *testing.T) {
 	cfg, _ := hostedRuntimeConfig(t)
 	cfg.PG.RawDerivation = true

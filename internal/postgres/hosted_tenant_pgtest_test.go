@@ -192,6 +192,13 @@ func TestHostedTenantAuthAndJobFences(t *testing.T) {
 	status, err = bound.ReadRawSyncStatus(t.Context(), second.Identity)
 	assert.ErrorIs(t, err, rawsync.ErrUnauthorized)
 	assert.Equal(t, rawsync.Status{}, status)
+	query := rawsync.JobHealthQuery{MaxAttempts: 5, StaleAfterSeconds: 3600}
+	health, err := bound.RawJobHealth(t.Context(), first.Identity, query)
+	require.NoError(t, err)
+	assert.EqualValues(t, 5, health.MaxAttempts)
+	health, err = bound.RawJobHealth(t.Context(), second.Identity, query)
+	assert.ErrorIs(t, err, rawsync.ErrUnauthorized)
+	assert.Equal(t, rawsync.JobHealthReport{}, health)
 	leases, err := bound.ClaimRawParseJobs(t.Context(), "worker", 2, time.Minute)
 	require.NoError(t, err)
 	require.Len(t, leases, 1)

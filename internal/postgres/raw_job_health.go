@@ -233,6 +233,9 @@ func (s *RawIngestStore) RawJobHealth(
 	identity rawsync.AuthIdentity,
 	query rawsync.JobHealthQuery,
 ) (rawsync.JobHealthReport, error) {
+	if err := s.validateIdentity(identity); err != nil {
+		return rawsync.JobHealthReport{}, err
+	}
 	return rawJobHealth(ctx, s.db, identity, query)
 }
 
