@@ -278,11 +278,18 @@ export AGENTSVIEW_RAW_SYNC_CREDENTIAL=device-credential
 agentsview raw-sync watch
 ```
 
-The command performs an initial bounded audit, watches for changes, repeats the
-audit every 15 minutes by default, and retries uploads every minute. Captures
-and upload state are kept under `raw-sync/` in the configured AgentsView data
-directory. `agentsview raw-sync status` prints path-free JSON describing the
-local checkpoint, pending work, retry time, failures, and coverage.
+To read hosted status without starting the watcher, run:
+
+```bash
+agentsview raw-sync server-status
+```
+
+`raw-sync watch` performs an initial bounded audit, watches for changes, repeats
+the audit every 15 minutes by default, and retries uploads every minute.
+Captures and upload state are kept under `raw-sync/` in the configured
+AgentsView data directory. `agentsview raw-sync status` prints path-free JSON
+describing the local checkpoint, pending work, retry time, failures, and
+coverage.
 
 The normal writable `agentsview serve` daemon has its own parser watcher. Run
 both only when local parsed sessions and hosted raw custody are both required;
@@ -362,7 +369,10 @@ returned token as `Authorization: Bearer <token>` to
 
 - `source_heads` lists each device, configured root, provider, source key,
   generation, current manifest acceptance time, and independent parse-pending,
-  parse-leased, and parse-failed flags.
+  parse-leased, and parse-failed flags. `last_parse_completed_at` is the
+  latest `updated_at` of a completed parse job for the current manifest,
+  across processing versions. It is `null` for generation-zero heads or when
+  no current parse job has completed.
 - `parse_jobs` counts `ready`, `leased`, `retrying`, `complete`, `failed`, and
   `superseded` parse jobs, including historical generations.
 - `active_device_count` and `devices` report unrevoked devices. Each device's
@@ -374,8 +384,23 @@ returned token as `Authorization: Bearer <token>` to
 Empty `source_heads` and `devices` values are `[]`. A generation-zero head has a
 `null` `last_accepted_at` and false parse flags. Status reads use one read-only
 PostgreSQL transaction and do not expire uploads, alter leases, or change any
-raw-sync state. `agentsview raw-sync status` remains a local command that reads
-the laptop checkpoint.
+raw-sync state. `agentsview raw-sync server-status` adds `pipeline_depth`, the
+sum of `ready`, `leased`, and `retrying` parse jobs, including jobs from
+historical generations that the server has not yet superseded. It also adds
+`last_parse_latency_seconds`, the time from manifest acceptance to completion
+for the most recently completed current head. It includes time waiting to parse
+and is `null` when no current head has both timestamps. It does not measure the
+age of pending work or increase when parsing stalls. A new generation replaces
+its head's previous completion. If the same manifest is parsed again under a new
+processing version, the interval still starts at its original acceptance.
+`last_parse_completed_at` and `last_parse_latency_seconds` stay `null` until
+hosted parsing records completions, while `pipeline_depth` remains the numeric
+sum.
+
+`agentsview raw-sync status` reads the laptop checkpoint. `server-status`
+reports HTTP 404 as an error and directs the operator to that local command.
+Request failures include their underlying cause; HTTP errors also include the
+server's error code and message when available.
 
 PostgreSQL stores device, token, manifest, receipt, source-head, and parse-job
 metadata. The raw object repository is opened lazily under `raw-sync/` in the

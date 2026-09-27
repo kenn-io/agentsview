@@ -44,6 +44,7 @@ export AGENTSVIEW_RAW_SYNC_DEVICE_ID=device-id
 export AGENTSVIEW_RAW_SYNC_CREDENTIAL=device-credential
 agentsview raw-sync watch
 agentsview raw-sync status
+agentsview raw-sync server-status
 ```
 
 `raw-sync watch` runs an initial bounded audit, watches for filesystem changes,
@@ -52,21 +53,25 @@ credential is accepted only through `AGENTSVIEW_RAW_SYNC_CREDENTIAL`, never as a
 command-line flag. `--server` and `--device-id` override their corresponding
 environment variables.
 
-| Flag                    | Default     | Description                                |
-| ----------------------- | ----------- | ------------------------------------------ |
-| `--server`              | environment | Raw-sync server URL                        |
-| `--device-id`           | environment | Provisioned device ID                      |
-| `--allow-insecure-http` | `false`     | Allow HTTP for a loopback server only      |
-| `--debounce`            | `2s`        | Coalescing window for filesystem changes   |
-| `--interval`            | `15m`       | Interval between bounded provider audits   |
-| `--audit-limit`         | `128`       | Maximum source work in each provider audit |
+| Flag                    | Default     | Description                           |
+| ----------------------- | ----------- | ------------------------------------- |
+| `--server`              | environment | Raw-sync server URL                   |
+| `--device-id`           | environment | Provisioned device ID                 |
+| `--allow-insecure-http` | `false`     | Allow HTTP for a loopback server only |
+| `--debounce`            | `2s`        | Watch only, filesystem coalescing     |
+| `--interval`            | `15m`       | Watch only, bounded audit interval    |
+| `--audit-limit`         | `128`       | Watch only, max source work per audit |
 
 `raw-sync status` reads the checkpoint without creating one and prints path-free
 JSON containing capture, queue, retry, failure, and coverage state. S3 roots are
-not captured. A deployment operator must provision the device ID and credential;
-there is no public enrollment command yet. Accepted raw generations are not yet
-parsed into hosted sessions. See [Hosted Raw Sync](/docs/hosted-raw-sync/) for
-the current boundary.
+not captured. `raw-sync server-status` reads hosted status with the `status`
+token scope and prints the server fields plus `pipeline_depth` and
+`last_parse_latency_seconds`. The latency describes the most recently completed
+current head, not the age of pending work. Its credential is read only from
+`AGENTSVIEW_RAW_SYNC_CREDENTIAL`. A server HTTP 404 is an error; use
+`raw-sync status` to read local state. A deployment operator must provision the
+device ID and credential; there is no public enrollment command yet. See
+[Hosted Raw Sync](/docs/hosted-raw-sync/) for the current boundary.
 
 `raw-sync clean-uploads` runs one server-side cleanup pass for the PostgreSQL
 upload sessions and private spool used by `agentsview pg serve`:

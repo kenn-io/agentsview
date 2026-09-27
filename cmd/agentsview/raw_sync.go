@@ -67,6 +67,7 @@ func newRawSyncCommand() *cobra.Command {
 	cmd.AddCommand(newRawSyncWatchCommand())
 	cmd.AddCommand(newRawSyncStatusCommand())
 	cmd.AddCommand(newRawSyncCleanUploadsCommand())
+	cmd.AddCommand(newRawSyncServerStatusCommand())
 	return cmd
 }
 
@@ -273,10 +274,25 @@ func refreshRawSyncRoots(
 }
 
 func validateRawSyncWatchConfig(cfg rawSyncWatchConfig, credential string) error {
-	if strings.TrimSpace(cfg.Server) == "" {
+	if err := validateRawSyncConnection(
+		cfg.Server, cfg.DeviceID, credential, cfg.AllowInsecureHTTP,
+	); err != nil {
+		return err
+	}
+	if cfg.Debounce <= 0 || cfg.Interval <= 0 || cfg.AuditLimit <= 0 {
+		return errors.New("debounce, interval, and audit-limit must be positive")
+	}
+	return nil
+}
+
+func validateRawSyncConnection(
+	server, deviceID, credential string,
+	allowInsecureHTTP bool,
+) error {
+	if strings.TrimSpace(server) == "" {
 		return errors.New("--server or AGENTSVIEW_RAW_SYNC_URL is required")
 	}
-	parsed, err := url.Parse(cfg.Server)
+	parsed, err := url.Parse(server)
 	if err != nil || parsed.Host == "" ||
 		(parsed.Scheme != "http" && parsed.Scheme != "https") {
 		return errors.New("raw-sync server URL is invalid")
@@ -285,21 +301,18 @@ func validateRawSyncWatchConfig(cfg rawSyncWatchConfig, credential string) error
 		return errors.New("raw-sync server URL must not contain credentials")
 	}
 	if parsed.Scheme == "http" {
-		if !cfg.AllowInsecureHTTP {
+		if !allowInsecureHTTP {
 			return errors.New("raw-sync server URL must use HTTPS")
 		}
 		if !rawSyncLoopbackHost(parsed.Hostname()) {
 			return errors.New("insecure raw-sync HTTP is limited to loopback")
 		}
 	}
-	if strings.TrimSpace(cfg.DeviceID) == "" {
+	if strings.TrimSpace(deviceID) == "" {
 		return errors.New("--device-id or AGENTSVIEW_RAW_SYNC_DEVICE_ID is required")
 	}
 	if credential == "" {
 		return errors.New("AGENTSVIEW_RAW_SYNC_CREDENTIAL is required")
-	}
-	if cfg.Debounce <= 0 || cfg.Interval <= 0 || cfg.AuditLimit <= 0 {
-		return errors.New("debounce, interval, and audit-limit must be positive")
 	}
 	return nil
 }
@@ -465,7 +478,7 @@ func runRawSyncStatus(ctx context.Context, out io.Writer) error {
 	return writeRawSyncStatus(out, status)
 }
 
-func writeRawSyncStatus(out io.Writer, status rawcheckpoint.ClientStatus) error {
+func writeRawSyncStatus(out io.Writer, status any) error {
 	payload, err := json.Marshal(status)
 	if err != nil {
 		return err
