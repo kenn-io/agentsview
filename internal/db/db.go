@@ -537,6 +537,12 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // "ask user" blocks, sponsored-proposal notices, and agent-list rosters.
 // Re-parse unchanged Codebuff/Freebuff sources to restore the missing
 // conversation content.)
+// (116 also: a Codebuff or Freebuff subagent tool call's single result body
+// now carries the subagent's final answer followed by its nested
+// transcript -- the child reasoning, tool calls, and results -- under a
+// [Subagent transcript] header, bounded by nesting depth and rendered
+// size. Re-parse unchanged Codebuff/Freebuff sources to restore the nested
+// work.)
 const dataVersion = 116
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"

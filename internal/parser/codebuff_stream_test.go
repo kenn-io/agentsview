@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"go.kenn.io/agentsview/internal/stringutil"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -430,11 +432,27 @@ func refParseCodebuffAIMessage(
 			// this, agent-block output stored as ordinary assistant
 			// text survives blocking and retains content the operator
 			// explicitly configured agentsview not to store.
-			if output := block.Get("content"); output.Exists() && output.Str != "" {
+			body := block.Get("content").Str
+			if nb := block.Get("blocks"); nb.IsArray() {
+				var childBlocks []gjson.Result
+				nb.ForEach(func(_, cb gjson.Result) bool {
+					childBlocks = append(childBlocks, cb)
+					return true
+				})
+				rendered := refCodebuffRenderChildBlocks(childBlocks, 1, 0)
+				if rendered != "" {
+					if body != "" {
+						body += "\n\n" + codebuffSubagentTranscriptHeader + "\n"
+					}
+					body += rendered
+				}
+			}
+			if body != "" {
+				quoted, _ := json.Marshal(body)
 				toolResults = append(toolResults, ParsedToolResult{
 					ToolUseID:     agentID,
-					ContentRaw:    output.Raw,
-					ContentLength: len(output.Raw),
+					ContentRaw:    string(quoted),
+					ContentLength: len(body),
 				})
 			}
 
@@ -541,6 +559,201 @@ func refParseCodebuffToolCall(block gjson.Result) *ParsedToolCall {
 	}
 }
 
+func refCodebuffAskUserAnswerLines(b gjson.Result) []string {
+	var lines []string
+	b.Get("answers").ForEach(func(_, a gjson.Result) bool {
+		var choice string
+		switch {
+		case a.Get("selectedOption").Str != "":
+			choice = a.Get("selectedOption").Str
+		case len(a.Get("selectedOptions").Array()) > 0:
+			var opts []string
+			a.Get("selectedOptions").ForEach(func(_, o gjson.Result) bool {
+				opts = append(opts, o.Str)
+				return true
+			})
+			choice = strings.Join(opts, ", ")
+		case a.Get("otherText").Str != "":
+			choice = a.Get("otherText").Str
+		}
+		if choice == "" {
+			return true
+		}
+		label := ""
+		qIndex := int(a.Get("questionIndex").Int())
+		questions := b.Get("questions").Array()
+		if qIndex >= 0 && qIndex < len(questions) {
+			q := questions[qIndex]
+			if q.Get("header").Str != "" {
+				label = q.Get("header").Str
+			} else {
+				label = stringutil.SafeTruncate(
+					q.Get("question").Str, codebuffAskUserLabelMaxBytes)
+			}
+		}
+		if label != "" {
+			lines = append(lines, "[Answer: "+label+"] "+choice)
+		} else {
+			lines = append(lines, "[Answer] "+choice)
+		}
+		return true
+	})
+	if b.Get("skipped").Bool() && len(lines) == 0 {
+		return []string{"[Skipped]"}
+	}
+	return lines
+}
+
+// refCodebuffRenderChildBlocks mirrors codebuffRenderChildBlocks over gjson
+// values so the equivalence test proves the renderer's recursion, ordering,
+// bounds, and marker text -- not just its output on the golden fixture.
+// Keep the bounds, marker strings, separator, and truncation arithmetic in
+// lockstep with the production renderer; delete this mirror if the
+// production renderer is ever removed.
+func refCodebuffRenderChildBlocks(
+	blocks []gjson.Result, depth int, budget int,
+) string {
+	if budget <= 0 {
+		budget = codebuffSubagentMaxRenderedBytes
+	}
+	var b strings.Builder
+	sizeMarker := "[Subagent transcript truncated: exceeded " +
+		strconv.Itoa(codebuffSubagentMaxRenderedBytes/1024) + " KB size bound]"
+	depthMarker := "[Subagent transcript truncated: exceeded depth bound]"
+	exhausted := false
+	write := func(s string) {
+		if exhausted || s == "" {
+			return
+		}
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		remaining := budget - b.Len()
+		if remaining <= 0 || len(s) > remaining {
+			if remaining > 0 {
+				b.WriteString(stringutil.SafeTruncate(s, remaining-1))
+				b.WriteString("\n")
+			}
+			b.WriteString(sizeMarker)
+			exhausted = true
+			return
+		}
+		b.WriteString(s)
+	}
+	for _, block := range blocks {
+		if exhausted {
+			return b.String()
+		}
+		blockType := block.Get("type").Str
+		switch blockType {
+		case "text":
+			if strings.TrimSpace(block.Get("content").Str) == "" {
+				continue
+			}
+			if block.Get("textType").Str == "reasoning" {
+				write("[Thinking]\n" + block.Get("content").Str + "\n[/Thinking]")
+			} else {
+				write(block.Get("content").Str)
+			}
+		case "tool":
+			toolName := block.Get("toolName").Str
+			if toolName == "" {
+				continue
+			}
+			parts := []string{"[Tool: " + toolName + "]"}
+			if in := block.Get("input"); in.Exists() && in.Raw != "null" {
+				parts = append(parts, "input: "+in.Raw)
+			}
+			if out := block.Get("output"); out.Exists() {
+				parts = append(parts, "output: "+out.Raw)
+			}
+			write(strings.Join(parts, " "))
+		case "agent":
+			if depth >= codebuffSubagentMaxDepth {
+				write(depthMarker)
+				return b.String()
+			}
+			name := block.Get("agentName").Str
+			if name == "" {
+				name = block.Get("agentType").Str
+			}
+			write("[Subagent: " + name + " (" + block.Get("agentType").Str + ")]")
+			if prompt := block.Get("initialPrompt").Str; prompt != "" {
+				write("prompt: " + prompt)
+			}
+			if content := block.Get("content").Str; content != "" {
+				write(content)
+			}
+			if children := block.Get("blocks").Array(); len(children) > 0 {
+				if remaining := budget - b.Len(); remaining <= 0 {
+					write(sizeMarker)
+					return b.String()
+				}
+				child := refCodebuffRenderChildBlocks(
+					children, depth+1, budget-b.Len())
+				if child != "" {
+					if b.Len() > 0 {
+						b.WriteString("\n")
+					}
+					b.WriteString(child)
+				}
+				if strings.Contains(child, sizeMarker) ||
+					strings.Contains(child, depthMarker) {
+					return b.String()
+				}
+			}
+		case "mode-divider":
+			if mode := block.Get("mode").Str; mode != "" {
+				write("[Mode: " + mode + "]")
+			}
+		case "plan":
+			if strings.TrimSpace(block.Get("content").Str) != "" {
+				write("[Plan]\n" + block.Get("content").Str)
+			}
+		case "ask-user":
+			var parts []string
+			block.Get("questions").ForEach(func(_, q gjson.Result) bool {
+				if strings.TrimSpace(q.Get("question").Str) != "" {
+					parts = append(parts, "[Agent asked] "+q.Get("question").Str)
+				}
+				return true
+			})
+			parts = append(parts, refCodebuffAskUserAnswerLines(block)...)
+			if len(parts) > 0 {
+				write(strings.Join(parts, "\n"))
+			}
+		case "image":
+			if fn := block.Get("filename").Str; fn != "" {
+				write("[Image: " + fn + "]")
+			} else {
+				write("[Image attached]")
+			}
+		case "sponsored-proposal":
+			content := "[Sponsored proposal] " + block.Get("target").Str
+			if headline := block.Get("consent.headline").Str; headline != "" {
+				content += "\n" + headline
+			}
+			write(content)
+		case "agent-list":
+			var names []string
+			block.Get("agents").ForEach(func(_, a gjson.Result) bool {
+				if dn := a.Get("displayName").Str; dn != "" {
+					names = append(names, dn)
+				} else {
+					names = append(names, a.Get("id").Str)
+				}
+				return true
+			})
+			if len(names) > 0 {
+				write("[Agents: " + strings.Join(names, ", ") + "]")
+			}
+		default:
+			continue
+		}
+	}
+	return b.String()
+}
+
 // codebuffGoldenTranscript builds a transcript exercising every block type
 // the decoder models: text (regular and reasoning), tool with and without
 // output, agent with params/prompt/status/content, mode-divider, plan,
@@ -565,7 +778,12 @@ func codebuffGoldenTranscript() string {
 			{"type":"unknown-future-type","content":"skip me"},
 			{"type":"tool","toolName":"run_terminal_command","toolCallId":"tc-1","input":{"command":"ls"},"output":"file1\nfile2"},
 			{"type":"tool","toolName":"read_file","toolCallId":"tc-2","input":{"path":"a.go"}},
-			{"type":"agent","agentType":"code-review","agentName":"Reviewer","agentId":"ag-1","status":"complete","params":{"model":"m1"},"initialPrompt":"review it","content":"agent said hi"},
+			{"type":"agent","agentType":"code-review","agentName":"Reviewer","agentId":"ag-1","status":"complete","params":{"model":"m1"},"initialPrompt":"review it","content":"agent said hi",
+		 "blocks":[{"type":"text","textType":"reasoning","content":"nest think"},{"type":"text","textType":"text","content":"nest work"},
+		  {"type":"tool","toolName":"read_file","toolCallId":"nc-1","input":{"path":"n.go"},"output":"nested out"},
+		  {"type":"ask-user","questions":[{"question":"nested q?","header":"Scope"}],"answers":[{"questionIndex":0,"selectedOption":"yes"}],"skipped":false},
+		  {"type":"agent","agentId":"ag-1-1","agentName":"inner","agentType":"basher","status":"complete","content":"inner says hi",
+		   "blocks":[{"type":"text","textType":"text","content":"innermost"}]}]},
 			{"type":"image","filename":"shot.png"},
 			{"type":"image"},
 			{"type":"ask-user","questions":[{"question":"continue?"},{"question":""},{"question":"sure?"}]},
@@ -717,8 +935,20 @@ func TestDecodeCodebuffMessagesGolden(t *testing.T) {
 	assert.Equal(t, `"file1\nfile2"`, results[0].ContentRaw,
 		"tool output raw stays the JSON-encoded value gjson stored")
 	assert.Equal(t, "ag-1", results[1].ToolUseID)
-	assert.Equal(t, `"agent said hi"`, results[1].ContentRaw,
-		"agent content is re-encoded as a JSON string like gjson .Raw")
+	var agBody string
+	require.NoError(t, json.Unmarshal([]byte(results[1].ContentRaw), &agBody))
+	assert.True(t, strings.HasPrefix(agBody, "agent said hi"),
+		"the final answer stays first byte-for-byte")
+	assert.Contains(t, agBody, "[Subagent transcript]")
+	assert.Contains(t, agBody, "[Thinking]\nnest think\n[/Thinking]")
+	assert.Contains(t, agBody, "nest work")
+	assert.Contains(t, agBody, "[Tool: read_file] input: {\"path\":\"n.go\"} output: \"nested out\"",
+		"nested tool output keeps its raw JSON text, quotes included")
+	assert.Contains(t, agBody, "[Answer: Scope] yes")
+	assert.Contains(t, agBody, "[Subagent: inner (basher)]")
+	assert.Contains(t, agBody, "innermost")
+	assert.Equal(t, len(agBody), results[1].ContentLength,
+		"agent result length sizes the decoded body")
 
 	// Usage rows: two billed turns under their resolved models.
 	require.Len(t, streamed.TurnFacts, 2)

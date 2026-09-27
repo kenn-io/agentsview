@@ -1915,3 +1915,78 @@ func TestSyncCodebuffPersistsGitBranch(t *testing.T) {
 	assert.Empty(t, noBranchSess.GitBranch,
 		"no gitChanges means an empty branch, not the project name")
 }
+
+// TestSyncCodebuffNestedSubagentResultPersists is plan 023's end-to-end
+// check: a subagent with child blocks must store its single result body
+// containing both the final answer and the rendered nested transcript. This
+// is the test that would have caught a two-results design, because
+// parser-level assertions cannot see the archive's last-wins pairing.
+func TestSyncCodebuffNestedSubagentResultPersists(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	root, chatPath := createCodebuffSingleSession(t)
+	transcript := `[
+		{"id":"ai-1","variant":"ai","timestamp":"03:04 PM","credits":1,
+		 "metadata":{"runState":{"sessionState":{"mainAgentState":{"agentType":"base2-free-mimo"}}}},
+		 "blocks":[{
+			"type":"agent","agentId":"agent-1","agentName":"basher",
+			"agentType":"basher","status":"complete",
+			"initialPrompt":"run tests","content":"All tests passed.",
+			"blocks":[
+				{"type":"text","textType":"text","content":"checking main.go"},
+				{"type":"tool","toolName":"run_terminal_command","toolCallId":"t1",
+				 "input":{"command":"go test"},"output":"ok"}
+			]}
+		 ]}
+	]`
+	require.NoError(t, os.WriteFile(chatPath, []byte(transcript), 0o644))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(filepath.Dir(chatPath), "run-state.json"),
+		[]byte(`{"sessionState":{"mainAgentState":{"agentType":"base2-free-mimo"}}}`),
+		0o644,
+	))
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodebuff: {root},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+
+	synced := engine.SyncAll(t.Context(), nil).Synced
+	require.Equal(t, 1, synced,
+		"the single-session archive must sync; 0 means discovery or the\n"+
+			"// freshness gate skipped it -- check the transcript fixture")
+
+	var stored string
+	// The fixture's agentType (base2-free-mimo) contains "free", so the
+	// parser classifies the session as Freebuff and the canonical ID
+	// carries the freebuff: prefix.
+	require.NoError(t, database.Reader().QueryRow(t.Context(),
+		`SELECT COALESCE(result_content, '') FROM tool_calls
+		 WHERE session_id = ? AND tool_use_id = 'agent-1'`,
+		"freebuff:project-0:2026-07-15T10-00-00.000Z",
+	).Scan(&stored))
+	require.NotEmpty(t, stored, "the subagent result must reach the archive")
+
+	// The engine stores the DECODED body (parser.DecodeContent over the
+	// JSON string ContentRaw), so the archive holds the plain text.
+	body := stored
+	assert.Contains(t, body, "All tests passed.",
+		"the final answer is in the stored result")
+	assert.Contains(t, body, "[Subagent transcript]")
+	assert.Contains(t, body, "checking main.go",
+		"a child block's content survives to the archive")
+
+	var count int
+	require.NoError(t, database.Reader().QueryRow(t.Context(),
+		`SELECT COUNT(*) FROM tool_calls
+		 WHERE session_id = ? AND tool_use_id = 'agent-1'`,
+		"freebuff:project-0:2026-07-15T10-00-00.000Z",
+	).Scan(&count))
+	assert.Equal(t, 1, count, "exactly one tool_calls row for the subagent call")
+}

@@ -3278,8 +3278,14 @@ schemas keep their existing ordering behavior.
   branch, and skill catalog) and optional `chat-meta.json` (message count,
   first prompt, transcript size, and transcript mtime in milliseconds) round
   out the directory; the sidecar is rewritten atomically after each
-  transcript save. Freebuff sessions share the same layout and are
-  distinguished by the `agentType` field containing `"free"`.
+  transcript save. An agent block's nested `blocks` array (the same
+  `ContentBlock` union, recursive by type) is rendered into the agent tool
+  call's single result body after the block's own content, under a
+  `[Subagent transcript]` header; rendering is bounded by nesting depth and
+  rendered size, with a marker naming the bound when it trips.
+  `spawnToolCallId` and `spawnIndex` are not used. Freebuff sessions share
+  the same layout and are distinguished by the `agentType` field containing
+  `"free"`.
 - **Evidence:** `source`.
 - **Upstream:** Clone `https://github.com/CodebuffAI/freebuff.git` at
   `ab18ec9d88d449e8766f9c25db52cf5c5ae3c869`, checked 2026-09-26. That
