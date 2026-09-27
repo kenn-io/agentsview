@@ -97,8 +97,8 @@ func parsePiLikeSession(
 	if branchedFrom := gjson.Get(headerLine, "branchedFrom").Str; branchedFrom != "" {
 		parentSessionID = idPrefix + piPersistedPathSessionID(branchedFrom)
 	} else if parentSession := gjson.Get(headerLine, "parentSession").Str; parentSession != "" &&
-		(agent == AgentPi || agent == AgentOMP || agent == AgentPrimeAgent) {
-		if agent == AgentPrimeAgent || agent == AgentPi {
+		(agent == AgentPi || agent == AgentOMP || agent == AgentPrimeAgent || agent == AgentOMO) {
+		if agent == AgentPrimeAgent || agent == AgentPi || agent == AgentOMO {
 			parentSession = primeParentSessionID(path, parentSession)
 		}
 		parentSessionID = idPrefix + parentSession
@@ -121,7 +121,7 @@ func parsePiLikeSession(
 	// <project>/<parent>/<runId>/run-N/session.jsonl with no parentSession in
 	// its header, so lineage comes from the parent transcript three levels up.
 	var isPiSubagent bool
-	if agent == AgentPi && parentSessionID == "" {
+	if (agent == AgentPi || agent == AgentOMO) && parentSessionID == "" {
 		if parentID := piSubagentParentSessionID(path); parentID != "" {
 			parentSessionID = idPrefix + parentID
 			isPiSubagent = true
@@ -360,8 +360,11 @@ func parsePiLikeSession(
 			Mtime: info.ModTime().UnixNano(),
 		},
 	}
-	if (agent == AgentPrimeAgent || agent == AgentPi) && parentSessionID != "" {
+	if (agent == AgentPrimeAgent || agent == AgentPi || agent == AgentOMO) && parentSessionID != "" {
 		sess.RelationshipType = RelFork
+	}
+	if agent == AgentOMO {
+		sess.Entrypoint = "pi-compatible"
 	}
 	if isOMPSubagent || isPiSubagent {
 		sess.RelationshipType = RelSubagent

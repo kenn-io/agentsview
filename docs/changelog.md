@@ -18,6 +18,8 @@ The latest published release is
   Copilot CLI, VS Code Copilot, Positron, and Windsurf titles move out of the
   first-message field, so previews and search show what you first typed. The
   first sync after upgrading re-reads each session once.
+- Index OMO sessions from `~/.omo/agent/sessions` as agent `omo`, with
+  `entrypoint=pi-compatible`. They are not stored as Pi sessions.
 - Verify conversation memory through an opt-in live release gate that records a
   synthetic decision, starts a fresh Claude Code or Codex session, and requires
   the client to search, read, answer accurately, and cite the source. Raw

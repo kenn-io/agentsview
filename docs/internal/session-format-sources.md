@@ -2157,6 +2157,15 @@ schemas keep their existing ordering behavior.
   Support targets v0.7.0's current flat layout; that producer migrates older
   per-project sessions before normal session listing.
 
+## OMO (`omo`)
+
+OMO writes the same session JSONL as [Pi](#pi-pi) under
+`~/.omo/agent/sessions`. Indexing uses the Pi producer and stamps agent `omo`,
+ID prefix `omo:`, and `entrypoint=pi-compatible`. It does not share the Pi or
+Oh My Pi agent id. Default directory override is `OMO_DIR` / `omo_dirs`.
+Evidence class: source. The on-disk shape was checked against the pinned Pi
+session format above and a local `~/.omo/agent/sessions` transcript.
+
 ## Oh My Pi (`omp`)
 
 - **Format:** Pi-family JSONL with Oh My Pi session entry and persistence

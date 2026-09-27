@@ -129,7 +129,7 @@ func (p *piProvider) FindSource(
 	// UUID lookup finds nothing by filename. Fall back to scanning session
 	// headers only after the filename/directory lookup misses, so files with
 	// no header still resolve by their filename-derived identity.
-	if p.Def.Type == AgentPi {
+	if p.Def.Type == AgentPi || p.Def.Type == AgentOMO {
 		return p.sourceForHeaderSessionID(ctx, req.RawSessionID)
 	}
 	return SourceRef{}, false, nil
@@ -300,7 +300,7 @@ func newPiSourceSet(agent AgentType, roots []string) JSONLSourceSet {
 	// chosen directory, and default homes group them by project. The
 	// pi-subagents extension nests subagent runs several levels below the
 	// project directory, so transcript depth is not capped.
-	if agent == AgentPi {
+	if agent == AgentPi || agent == AgentOMO {
 		return NewJSONLSourceSet(agent, roots,
 			WithRecursive(),
 			WithSymlinkFollowing(),

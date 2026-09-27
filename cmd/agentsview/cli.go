@@ -858,6 +858,7 @@ func writeRootHelp(w io.Writer, root *cobra.Command) {
 	fmt.Fprintln(w, "  ZED_DIR                 Zed data directory")
 	fmt.Fprintln(w, "  QWEN_PROJECTS_DIR       Qwen Code projects directory")
 	fmt.Fprintln(w, "  QWENPAW_DIR             QwenPaw workspaces directory")
+	fmt.Fprintln(w, "  OMO_DIR                 OMO sessions directory")
 	fmt.Fprintln(w, "  OMP_DIR                 OhMyPi sessions directory")
 	fmt.Fprintln(w, "  DEEPSEEK_TUI_SESSIONS_DIR")
 	fmt.Fprintln(w, "                          DeepSeek TUI sessions directory")

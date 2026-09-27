@@ -11,6 +11,49 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestOMOProviderKeepsPiLineageAndOMOIdentity(t *testing.T) {
+	root := t.TempDir()
+	sourcePath := filepath.Join(root, "encoded-cwd", "session-omo.jsonl")
+	writeSourceFile(t, sourcePath, strings.Join([]string{
+		`{"type":"session","version":3,"id":"session-omo","timestamp":"2025-01-01T10:00:00Z","cwd":"/Users/alice/code/pi-project"}`,
+		`{"type":"message","id":"msg-1","timestamp":"2025-01-01T10:00:01Z","message":{"role":"user","content":[{"type":"text","text":"Inspect the source."}]}}`,
+		`{"type":"message","id":"msg-2","timestamp":"2025-01-01T10:00:02Z","message":{"role":"assistant","content":[{"type":"text","text":"Looks ready."},{"type":"toolCall","id":"t1","name":"bash","arguments":{"command":"ls"}}],"model":"claude-opus-4-5"}}`,
+	}, "\n"))
+
+	provider, ok := NewProvider(AgentOMO, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	discovered, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	assert.Equal(t, AgentOMO, discovered[0].Provider)
+	assert.Equal(t, sourcePath, discovered[0].DisplayPath)
+
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: discovered[0]})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	sess := outcome.Results[0].Result.Session
+	assert.Equal(t, "omo:session-omo", sess.ID)
+	assert.Equal(t, AgentOMO, sess.Agent)
+	assert.NotEqual(t, AgentPi, sess.Agent)
+	assert.Equal(t, "pi-compatible", sess.Entrypoint)
+	assert.Equal(t, "pi_project", sess.Project)
+	assert.Equal(t, sourcePath, sess.File.Path)
+	require.NotEmpty(t, outcome.Results[0].Result.Messages)
+	foundTool := false
+	for _, msg := range outcome.Results[0].Result.Messages {
+		for _, call := range msg.ToolCalls {
+			if call.ToolName == "bash" {
+				foundTool = true
+			}
+		}
+	}
+	assert.True(t, foundTool)
+}
+
 func TestOMPProviderSourceMethods(t *testing.T) {
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "encoded-cwd", "session-123.jsonl")
