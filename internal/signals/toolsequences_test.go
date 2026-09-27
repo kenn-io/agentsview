@@ -458,6 +458,16 @@ func TestExtractToolSequences_Endings(t *testing.T) {
 	}}, recovered.Sequences)
 
 	unknown := ToolCallRow{ToolName: "Read", EventStatus: "running"}
+	for _, content := range []string{"file contents", "", "[binary content]", "staged:7"} {
+		got := ExtractToolSequences([]ToolCallRow{
+			empty, {ToolName: "Read", Category: "Read", EventStatus: "success", ResultContent: content},
+		}, true)
+		ending := ToolSequenceEndingAbandoned
+		if content == "file contents" {
+			ending = ToolSequenceEndingRecovered
+		}
+		assert.Equal(t, []ToolSequence{{Start: 0, End: 2, ToolChanged: true, Ending: ending}}, got.Sequences, content)
+	}
 	assert.Empty(t, ExtractToolSequences([]ToolCallRow{unknown}, true).Sequences)
 	assert.Empty(t, ExtractToolSequences([]ToolCallRow{
 		unknown, {ToolName: "Bash", ResultContent: "done"},

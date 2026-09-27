@@ -144,7 +144,7 @@ func classifyToolOutcome(call ToolCallRow) ToolOutcome {
 	if IsFailure(call) || call.EventStatus == "error" || call.EventStatus == "denied" {
 		return ToolOutcomeErrored
 	}
-	if call.EventStatus != "" && call.EventStatus != "completed" &&
+	if call.EventStatus != "" && call.EventStatus != "completed" && call.EventStatus != "success" &&
 		call.EventStatus != "errored" && call.EventStatus != "cancelled" {
 		return ToolOutcomeUnknown
 	}
