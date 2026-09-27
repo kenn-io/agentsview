@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -103,6 +104,14 @@ func TestStatusClientResponses(t *testing.T) {
 		{name: "malformed 200", statusCode: http.StatusOK, body: "{"},
 		{name: "empty 200", statusCode: http.StatusOK, body: ""},
 		{name: "null 200", statusCode: http.StatusOK, body: "null"},
+		{name: "empty object 200", statusCode: http.StatusOK, body: `{}`},
+		{name: "partial object 200", statusCode: http.StatusOK, body: `{"source_heads":[]}`},
+		{
+			name: "null count 200", statusCode: http.StatusOK,
+			body: `{"source_heads":[],"devices":[],"active_device_count":0,` +
+				`"parse_jobs":{"ready":null,"leased":0,"retrying":0,"complete":0,"failed":0,"superseded":0},` +
+				`"uploads":{"open_count":0,"pending_bytes":0,"oldest_open_session":null}}`,
+		},
 		{
 			name:        "unknown members and missing completion",
 			wantSuccess: true,
@@ -110,8 +119,10 @@ func TestStatusClientResponses(t *testing.T) {
 			body: `{"source_heads":[{"device_id":"device-a","configured_root_id":"root-a",` +
 				`"provider":"codex","source_key":"source.jsonl","generation":1,` +
 				`"last_accepted_at":null,"parse_pending":false,"parse_leased":false,` +
-				`"parse_failed":false,"unknown_member":true}],"parse_jobs":{},` +
-				`"active_device_count":0,"devices":[],"uploads":{}}`,
+				`"parse_failed":false,"unknown_member":true}],` +
+				`"parse_jobs":{"ready":0,"leased":0,"retrying":0,"complete":0,"failed":0,"superseded":0},` +
+				`"active_device_count":0,"devices":[],` +
+				`"uploads":{"open_count":0,"pending_bytes":0,"oldest_open_session":null}}`,
 		},
 		{name: "201", statusCode: http.StatusCreated, body: `{}`},
 		{name: "204", statusCode: http.StatusNoContent, body: ""},
@@ -174,6 +185,85 @@ func TestStatusClientResponses(t *testing.T) {
 		require.NoError(t, err)
 		_, err = client.Status(ctx)
 		assert.ErrorIs(t, err, context.Canceled)
+	})
+}
+
+func TestStatusClientRequiredFields(t *testing.T) {
+	const body = `{
+		"source_heads":[{"device_id":"device-a","configured_root_id":"root-a",
+			"provider":"codex","source_key":"source.jsonl","generation":0,
+			"last_accepted_at":null,"parse_pending":false,"parse_leased":false,"parse_failed":false}],
+		"parse_jobs":{"ready":0,"leased":0,"retrying":0,"complete":0,"failed":0,"superseded":0},
+		"active_device_count":1,"devices":[{"device_id":"device-a","last_seen_at":null}],
+		"uploads":{"open_count":1,"pending_bytes":64,"oldest_open_session":{
+			"upload_id":"upload-a","created_at":"2026-09-18T10:00:00Z"}}
+	}`
+	for _, path := range []string{
+		"source_heads", "parse_jobs", "active_device_count", "devices", "uploads",
+		"parse_jobs.ready", "parse_jobs.leased", "parse_jobs.retrying",
+		"parse_jobs.complete", "parse_jobs.failed", "parse_jobs.superseded",
+		"uploads.open_count", "uploads.pending_bytes", "uploads.oldest_open_session",
+		"uploads.oldest_open_session.upload_id", "uploads.oldest_open_session.created_at",
+		"source_heads.device_id", "source_heads.configured_root_id", "source_heads.provider",
+		"source_heads.source_key", "source_heads.generation", "source_heads.last_accepted_at",
+		"source_heads.parse_pending", "source_heads.parse_leased", "source_heads.parse_failed",
+		"devices.device_id", "devices.last_seen_at",
+	} {
+		t.Run(path, func(t *testing.T) {
+			var payload map[string]any
+			require.NoError(t, json.Unmarshal([]byte(body), &payload))
+			parts := strings.Split(path, ".")
+			object := payload
+			for _, part := range parts[:len(parts)-1] {
+				value := object[part]
+				if array, ok := value.([]any); ok {
+					value = array[0]
+				}
+				object = value.(map[string]any)
+			}
+			delete(object, parts[len(parts)-1])
+			invalid, err := json.Marshal(payload)
+			require.NoError(t, err)
+			server := newStatusResponseServer(t, http.StatusOK, string(invalid))
+			client, err := NewStatusClient(Config{
+				BaseURL: server.URL, DeviceID: "device-a", Credential: "credential-value",
+			})
+			require.NoError(t, err)
+			_, err = client.Status(t.Context())
+			require.ErrorContains(t, err, parts[len(parts)-1])
+		})
+	}
+
+	t.Run("valid populated tenant", func(t *testing.T) {
+		server := newStatusResponseServer(t, http.StatusOK, body)
+		client, err := NewStatusClient(Config{
+			BaseURL: server.URL, DeviceID: "device-a", Credential: "credential-value",
+		})
+		require.NoError(t, err)
+		status, err := client.Status(t.Context())
+		require.NoError(t, err)
+		require.Len(t, status.Devices, 1)
+		assert.Nil(t, status.Devices[0].LastSeenAt)
+		require.NotNil(t, status.Uploads.OldestOpenSession)
+		assert.Equal(t, "upload-a", status.Uploads.OldestOpenSession.UploadID)
+	})
+
+	t.Run("valid empty tenant", func(t *testing.T) {
+		server := newStatusResponseServer(t, http.StatusOK, `{
+			"source_heads":[],"devices":[],"active_device_count":0,
+			"parse_jobs":{"ready":0,"leased":0,"retrying":0,"complete":0,"failed":0,"superseded":0},
+			"uploads":{"open_count":0,"pending_bytes":0,"oldest_open_session":null},
+			"future_field":true}`)
+		client, err := NewStatusClient(Config{
+			BaseURL: server.URL, DeviceID: "device-a", Credential: "credential-value",
+		})
+		require.NoError(t, err)
+		status, err := client.Status(t.Context())
+		require.NoError(t, err)
+		assert.Empty(t, status.SourceHeads)
+		assert.Empty(t, status.Devices)
+		assert.Zero(t, status.ParseJobs)
+		assert.Zero(t, status.Uploads)
 	})
 }
 
