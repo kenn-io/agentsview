@@ -13650,7 +13650,10 @@ func reconciliationSourceRankLower(
 	if candidate.Class != stored.Class {
 		return candidate.Class < stored.Class
 	}
-	return candidate.Recency < stored.Recency
+	if candidate.Recency != stored.Recency {
+		return candidate.Recency < stored.Recency
+	}
+	return candidate.Path > stored.Path
 }
 
 func (e *Engine) storedSourceRanksHigher(

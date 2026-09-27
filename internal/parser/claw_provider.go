@@ -721,7 +721,9 @@ func (s openClawSourceSet) ReconciliationSourceRank(
 			source.DiscoveryMTimeNS = info.ModTime().UnixNano()
 		}
 	}
-	return s.legacy.reconciliationSourceRank(source)
+	rank := s.legacy.reconciliationSourceRank(source)
+	rank.Path = source.DisplayPath
+	return rank
 }
 
 func (s openClawSourceSet) SourceForReconciliation(

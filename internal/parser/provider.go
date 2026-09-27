@@ -220,6 +220,9 @@ type ReconciliationSourceStateProvider interface {
 type ReconciliationSourceRank struct {
 	Class   int64
 	Recency int64
+	// Path breaks otherwise equal ranks in favor of the smaller path.
+	// Providers that do not rank by path leave it empty.
+	Path string
 }
 
 // ReconciliationSourceRanker declares provider-specific duplicate ordering so

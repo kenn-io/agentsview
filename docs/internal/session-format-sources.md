@@ -2214,9 +2214,10 @@ schemas keep their existing ordering behavior.
 - **Source selection (rechecked 2026-09-27):** Isolated duplicate-file fixtures
   verify that discovery and session-ID lookup select the same legacy copy
   across configured roots: live files before archives, then the newer copy.
-  Changed-file sync also checks file timestamps so an older live duplicate
-  cannot replace a newer copy's saved messages. Explicit stored-source
-  requests retain their existing preference.
+  Changed-file sync also checks file timestamps and breaks ties by path, so an
+  older or equally dated lower-ranked duplicate cannot replace the preferred
+  copy's saved messages. Explicit stored-source requests retain their existing
+  preference.
 
 ## QClaw (`qclaw`)
 

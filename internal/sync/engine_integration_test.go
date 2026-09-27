@@ -2598,7 +2598,7 @@ func TestReconcileWatchRootsPreservesCodexLiveDuplicatePreference(t *testing.T) 
 	assert.Equal(t, livePath, env.db.GetSessionFilePath(t.Context(), "codex:"+uuid))
 }
 
-func TestOpenClawChangedPathKeepsNewerLegacyDuplicate(t *testing.T) {
+func TestOpenClawChangedPathKeepsPreferredLegacyDuplicate(t *testing.T) {
 	first, second := t.TempDir(), t.TempDir()
 	canonical := filepath.Join(first, "main", "sessions", "duplicate.jsonl")
 	older := filepath.Join(second, "main", "sessions", "duplicate.jsonl")
@@ -2616,7 +2616,7 @@ func TestOpenClawChangedPathKeepsNewerLegacyDuplicate(t *testing.T) {
 	require.NoError(t, os.Chtimes(older, oldTime, oldTime))
 	database := dbtest.OpenTestDB(t)
 	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{parser.AgentOpenClaw: {first, second}},
+		AgentDirs: map[parser.AgentType][]string{parser.AgentOpenClaw: {second, first}},
 		Machine:   "local",
 	})
 	t.Cleanup(engine.Close)
@@ -2626,6 +2626,11 @@ func TestOpenClawChangedPathKeepsNewerLegacyDuplicate(t *testing.T) {
 	assertMessageContent(t, database, "openclaw:main:duplicate", "canonical question")
 	require.NoError(t, os.WriteFile(older, []byte(strings.ReplaceAll(content, "canonical question", "older duplicate update")), 0o600))
 	require.NoError(t, os.Chtimes(older, oldTime, oldTime))
+	require.NoError(t, engine.SyncPathsContext(t.Context(), []string{older}))
+	assert.Equal(t, canonical, database.GetSessionFilePath(t.Context(), "openclaw:main:duplicate"))
+	assertMessageContent(t, database, "openclaw:main:duplicate", "canonical question")
+
+	require.NoError(t, os.Chtimes(older, newTime, newTime))
 	require.NoError(t, engine.SyncPathsContext(t.Context(), []string{older}))
 	assert.Equal(t, canonical, database.GetSessionFilePath(t.Context(), "openclaw:main:duplicate"))
 	assertMessageContent(t, database, "openclaw:main:duplicate", "canonical question")
