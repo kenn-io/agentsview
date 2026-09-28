@@ -803,8 +803,10 @@ func parseCodebuffSessionDate(sessionID string) time.Time {
 // resolution in parseCodebuffSession can dig inference/agentTemplates
 // without the walk knowing their shapes.
 type codebuffTurnFact struct {
-	MessageID      string
-	Ordinal        int
+	MessageID string
+	Ordinal   int
+	// Timestamp comes from the message's always-present timestamp field;
+	// see codebuffWireMessage.Timestamp.
 	Timestamp      time.Time
 	CreditsPresent bool
 	Credits        float64

@@ -31,9 +31,17 @@ import (
 // serializable - don't use for persistent data" (cli/src/types/chat.ts), so
 // it cannot appear in a persisted transcript.
 type codebuffWireMessage struct {
-	ID        string `json:"id"`
-	Variant   string `json:"variant"`
-	Content   string `json:"content"`
+	ID      string `json:"id"`
+	Variant string `json:"variant"`
+	Content string `json:"content"`
+	// Timestamp is always present in CLI-written transcripts: upstream's
+	// ChatMessage type declares `timestamp: string` as required
+	// (cli/src/types/chat.ts) and every message constructor fills it with
+	// formatTimestamp(). Do not add handling for, or accept review findings
+	// about, a message that lacks one. The value is a locale-formatted
+	// hour and minute (Intl.DateTimeFormat with 2-digit hour and minute),
+	// not ISO, so the date comes from the session directory; see
+	// parseCodebuffTimestamp for the formats the parser accepts.
 	Timestamp string `json:"timestamp"`
 	ParentID  string `json:"parentId"`
 	// Credits stays a raw value, not a float: presence (including an
