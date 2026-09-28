@@ -587,6 +587,12 @@ func (s openClawSourceSet) FindSource(
 	if preferredLegacyFound {
 		return preferredLegacy, true, nil
 	}
+	if req.RawSessionID != "" {
+		// Valid preferred hints were handled above. Other hints must not
+		// override the requested session's identity during legacy lookup.
+		req.StoredFilePath = ""
+		req.FingerprintKey = ""
+	}
 	legacy, found, err := s.legacy.FindSource(ctx, req)
 	if err != nil || !found {
 		return legacy, found, err

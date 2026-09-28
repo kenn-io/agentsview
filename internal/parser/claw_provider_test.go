@@ -121,6 +121,44 @@ func TestOpenClawLegacyLookupUsesDiscoveryRanking(t *testing.T) {
 	}
 }
 
+func TestOpenClawLegacyLookupValidatesStoredHintIdentity(t *testing.T) {
+	root := t.TempDir()
+	wanted := filepath.Join(root, "main", "sessions", "wanted.jsonl")
+	other := filepath.Join(root, "main", "sessions", "other.jsonl")
+	archive := wanted + ".deleted.2026-01-01T00-00-00.000Z"
+	writeSourceFile(t, wanted, clawProviderFixture("wanted", "current question"))
+	writeSourceFile(t, other, clawProviderFixture("other", "other question"))
+	writeSourceFile(t, archive, clawProviderFixture("wanted", "archived question"))
+	provider, ok := NewProvider(AgentOpenClaw, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	for _, field := range []string{"StoredFilePath", "FingerprintKey"} {
+		for _, tc := range []struct {
+			name, hint string
+			prefer     bool
+			want       string
+		}{
+			{"mismatched", other, false, wanted},
+			{"preferred mismatched", other, true, wanted},
+			{"matching", archive, false, wanted},
+			{"preferred matching", archive, true, archive},
+		} {
+			t.Run(field+"/"+tc.name, func(t *testing.T) {
+				req := FindSourceRequest{RawSessionID: "main:wanted", PreferStoredSource: tc.prefer}
+				if field == "StoredFilePath" {
+					req.StoredFilePath = tc.hint
+				} else {
+					req.FingerprintKey = tc.hint
+				}
+				source, found, err := provider.FindSource(t.Context(), req)
+				require.NoError(t, err)
+				require.True(t, found)
+				assert.Equal(t, "main:wanted", source.Key)
+				assert.Equal(t, tc.want, source.DisplayPath)
+			})
+		}
+	}
+}
+
 func TestQClawProviderSourceMethods(t *testing.T) {
 	spec := qClawProviderTestSpec()
 	assertClawProviderSourceMethods(t, spec)

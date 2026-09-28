@@ -2217,9 +2217,9 @@ schemas keep their existing ordering behavior.
   Changed-file sync also checks file timestamps and breaks ties by path, so an
   older or equally dated lower-ranked duplicate cannot replace the preferred
   copy's saved messages. Explicit stored-source requests retain their existing
-  preference. Legacy streaming discovery yields candidates as directories are
-  read; collecting discovery and reconciliation still select the preferred
-  copy.
+  preference. A stored hint cannot override a requested session ID. Legacy
+  streaming discovery yields candidates as directories are read; collecting
+  discovery and reconciliation still select the preferred copy.
 - **Legacy JSONL retention (rechecked 2026-09-27):** Sync keeps archived
   messages when the same file parses to fewer messages than were saved. A
   newer, different copy can still replace the saved transcript. A shorter
