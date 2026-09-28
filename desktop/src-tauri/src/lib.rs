@@ -3607,7 +3607,9 @@ fn backend_endpoint_ready(port: u16) -> bool {
         Some(resp) => resp,
         None => return false,
     };
-    version_response_looks_valid(response.as_slice())
+    response.starts_with(b"HTTP/1.1 401 ")
+        || response.starts_with(b"HTTP/1.0 401 ")
+        || version_response_looks_valid(response.as_slice())
 }
 
 fn read_http_response(port: u16, request: &str) -> Option<Vec<u8>> {
@@ -3659,6 +3661,7 @@ mod tests {
     use serde_json::Value;
     use std::collections::{HashMap, VecDeque};
     use std::fs;
+    use std::net::TcpListener;
     #[cfg(unix)]
     use std::os::unix::ffi::OsStrExt;
     #[cfg(unix)]
@@ -5088,6 +5091,126 @@ agentsview running at http://127.0.0.1:18082
 
         let wrong_status = b"HTTP/1.1 404 Not Found\r\n\r\n{}";
         assert!(!version_response_looks_valid(wrong_status));
+    }
+
+    #[test]
+    fn wait_for_server_accepts_auth_challenge() {
+        let response =
+            b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 13\r\nConnection: close\r\n\r\nUnauthorized\n";
+        let (port, request) = spawn_response_server(response);
+        let ready = wait_for_server(port, Duration::from_secs(1));
+        let request = request.join().expect("response server should finish");
+
+        assert!(request.starts_with("GET /api/v1/version HTTP/1.1\r\n"));
+        assert!(request.contains(&format!("Host: {HOST}:{port}\r\n")));
+        assert!(!request.contains("Authorization:"));
+        assert!(ready);
+    }
+
+    #[test]
+    fn wait_for_server_stopped_rejects_auth_challenge() {
+        let response = b"HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\nUnauthorized\n";
+        let (port, request) = spawn_response_server(response);
+        let stopped = wait_for_server_stopped(port, Duration::ZERO);
+        request.join().expect("response server should finish");
+
+        assert!(!stopped);
+    }
+
+    #[test]
+    fn backend_endpoint_ready_preserves_status_boundaries() {
+        let cases: &[(&str, &[u8], bool)] = &[
+            (
+                "HTTP/1.0 401",
+                b"HTTP/1.0 401 Unauthorized\r\nConnection: close\r\n\r\nUnauthorized\n",
+                true,
+            ),
+            (
+                "HTTP/1.1 401",
+                b"HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\nUnauthorized\n",
+                true,
+            ),
+            (
+                "valid 200",
+                b"HTTP/1.1 200 OK\r\n\r\n{\"version\":\"1.0.0\",\"commit\":\"abc\",\"build_date\":\"2026-01-01T00:00:00Z\",\"api_version\":1,\"data_version\":50}",
+                true,
+            ),
+            ("unrelated HTML 200", b"HTTP/1.1 200 OK\r\n\r\n<html></html>", false),
+            ("403", b"HTTP/1.1 403 Forbidden\r\n\r\n", false),
+            ("503", b"HTTP/1.1 503 Service Unavailable\r\n\r\n", false),
+            ("HTTP/1.1 4010", b"HTTP/1.1 4010 Invalid\r\n\r\n", false),
+        ];
+
+        for &(name, response, expected) in cases {
+            let (port, request) = spawn_response_server(response);
+            let ready = backend_endpoint_ready(port);
+            request.join().expect("response server should finish");
+            assert_eq!(ready, expected, "{name}");
+        }
+
+        let (port, request) = spawn_response_server(b"");
+        let ready = backend_endpoint_ready(port);
+        request.join().expect("response server should finish");
+        assert!(!ready, "empty response");
+    }
+
+    fn spawn_response_server(response: &[u8]) -> (u16, std::thread::JoinHandle<String>) {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind response server");
+        listener
+            .set_nonblocking(true)
+            .expect("set response server nonblocking");
+        let port = listener
+            .local_addr()
+            .expect("get response server address")
+            .port();
+        let response = response.to_vec();
+        let handle = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(err)
+                        if err.kind() == io::ErrorKind::WouldBlock && Instant::now() < deadline =>
+                    {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(err) => panic!("accept response request: {err}"),
+                }
+            };
+            stream
+                .set_nonblocking(false)
+                .expect("set response stream blocking");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(1)))
+                .expect("set response read timeout");
+
+            let mut request = Vec::new();
+            let mut buf = [0; 1024];
+            loop {
+                match stream.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(size) => {
+                        request.extend_from_slice(&buf[..size]);
+                        if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                            break;
+                        }
+                    }
+                    Err(err)
+                        if err.kind() == io::ErrorKind::TimedOut
+                            || err.kind() == io::ErrorKind::WouldBlock =>
+                    {
+                        break;
+                    }
+                    Err(err) => panic!("read response request: {err}"),
+                }
+            }
+
+            if !response.is_empty() {
+                stream.write_all(&response).expect("write response");
+            }
+            String::from_utf8_lossy(&request).into_owned()
+        });
+        (port, handle)
     }
 
     #[test]
