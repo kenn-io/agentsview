@@ -8536,6 +8536,15 @@ func (e *Engine) filterFilesByMtime(
 			out = append(out, f)
 			continue
 		}
+		if f.Agent == parser.AgentOpenClaw {
+			if _, _, member := parser.ParseVirtualSourcePathForBase(f.Path, "openclaw-agent.sqlite"); member {
+				// Edits and deletions need not advance event timestamps.
+				// Discovery already computed each member's fingerprint;
+				// let normal freshness checks skip unchanged members.
+				out = append(out, f)
+				continue
+			}
+		}
 		mtime, err := e.discoveredFileEffectiveMtime(ctx, f)
 		if err != nil {
 			out = append(out, f)

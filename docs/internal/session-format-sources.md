@@ -2228,7 +2228,10 @@ schemas keep their existing ordering behavior.
   sessions verify that appending to one member syncs only that member.
   Discovery carries each member's content size, latest event time, and hash.
   It still scans event payloads once per discovery to detect edits and
-  deletions that leave event timestamps unchanged.
+  deletions that leave event timestamps unchanged. Quick sync retains SQLite
+  members through timestamp filtering and compares their fingerprints, so old
+  event times cannot hide changed content. Unchanged members still skip
+  parsing and writes.
 - **SQLite retention:** While configured roots and remote-path mappings still
   identify the stored SQLite source, a JSONL copy cannot replace it, even if
   the database disappears. Returning to a JSONL-writing OpenClaw version then
