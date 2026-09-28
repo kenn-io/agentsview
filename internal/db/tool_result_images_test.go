@@ -42,6 +42,15 @@ func testImageMessage(sessionID string) Message {
 	}
 }
 
+func testTimedImageMessage(sessionID string) Message {
+	message := testImageMessage(sessionID)
+	message.ToolCalls[0].ResultEvents = append(
+		[]ToolResultEvent{{ToolUseID: "call-1", Source: "tool_execution", Status: "started"}},
+		message.ToolCalls[0].ResultEvents...,
+	)
+	return message
+}
+
 func TestStripToolResultImages(t *testing.T) {
 	content := testInlineImageContent()
 	got, stats := StripToolResultImages(content)
