@@ -3285,7 +3285,11 @@ schemas keep their existing ordering behavior.
   `ContentBlock` union, recursive by type) is rendered into the agent tool
   call's single result body after the block's own content, under a
   `[Subagent transcript]` header; rendering is bounded by nesting depth and
-  rendered size, with a marker naming the bound when it trips.
+  rendered size, with a marker naming the bound when it trips, and omits a
+  nested tool's output when that tool's normalized category is
+  `result_content_blocked_categories`-blocked (headers and inputs stay, so
+  the operator policy reaches inside the composed body the way the archive
+  applies it to standalone results).
   `spawnToolCallId` and `spawnIndex` are not used. Freebuff sessions share
   the same layout and are distinguished by the `agentType` field containing
   `"free"`.

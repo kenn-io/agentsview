@@ -541,8 +541,10 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // now carries the subagent's final answer followed by its nested
 // transcript -- the child reasoning, tool calls, and results -- under a
 // [Subagent transcript] header, bounded by nesting depth and rendered
-// size. Re-parse unchanged Codebuff/Freebuff sources to restore the nested
-// work.)
+// size. The rendered body omits a nested tool's output when that tool's
+// category is result-content blocked, the same rule the archive applies to
+// standalone results. Re-parse unchanged Codebuff/Freebuff sources to
+// restore the nested work.)
 const dataVersion = 116
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"

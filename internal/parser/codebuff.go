@@ -32,11 +32,14 @@ type codebuffSessionDir struct {
 }
 
 // parseCodebuffSession parses a single codebuff/freebuff session directory
-// and returns the parsed session with messages.
+// and returns the parsed session with messages. blocked carries the
+// operator's result-content categories for the nested-transcript renderer;
+// nil keeps every category.
 func parseCodebuffSession(
 	dir string,
 	projectHint string,
 	machine string,
+	blocked map[string]bool,
 ) (*ParsedSession, []ParsedMessage, error) {
 	chatMessagesPath := filepath.Join(dir, codebuffPrimaryTranscriptName)
 	runStatePath := filepath.Join(dir, codebuffRunStateName)
@@ -67,7 +70,9 @@ func parseCodebuffSession(
 	if err != nil {
 		return nil, nil, fmt.Errorf("read chat-messages %s: %w", chatMessagesPath, err)
 	}
-	transcript, err := decodeCodebuffMessages(context.Background(), f, sessionDate)
+	transcript, err := decodeCodebuffMessages(
+		context.Background(), f, sessionDate, blocked,
+	)
 	closeErr := f.Close()
 	if err != nil {
 		return nil, nil, fmt.Errorf("parse chat-messages %s: %w", chatMessagesPath, err)
@@ -555,14 +560,22 @@ func readCodebuffChatMeta(
 //  4. the run-state agentType itself (a template id, what AgentsView has
 //     always stored for Codebuff).
 //
-// contextTokenBaseline.model and contextTokenCount are deliberately not
-// consulted: they anchor context occupancy, not the model the turn billed.
+// Step 4 is deferred: the per-run-state agentType is remembered and only
+// returned after BOTH run states' inference and template tiers have been
+// consulted. Returning it from inside the first iteration would skip the
+// message's BYOK and template lookups against the standalone run-state.json
+// whenever the message metadata carries an agentType but no usable
+// inference or template model, misattributing a resolvable turn to the
+// fallback. contextTokenBaseline.model and contextTokenCount are
+// deliberately not consulted: they anchor context occupancy, not the model
+// the turn billed.
 // An empty result means unresolvable, and callers must emit no event for
 // that turn -- the usage report filters on a non-empty model, so an
 // empty-model row would silently drop the cost everywhere.
 func codebuffTurnModel(
 	msgRunState gjson.Result, fileRunState gjson.Result, agentType string,
 ) string {
+	deferredFallback := ""
 	for _, rs := range []gjson.Result{msgRunState, fileRunState} {
 		if !rs.Exists() {
 			continue
@@ -591,9 +604,12 @@ func codebuffTurnModel(
 		).Str; model != "" {
 			return model
 		}
-		if agentTypeHere != "" {
-			return agentTypeHere
+		if deferredFallback == "" && agentTypeHere != "" {
+			deferredFallback = agentTypeHere
 		}
+	}
+	if deferredFallback != "" {
+		return deferredFallback
 	}
 	return agentType
 }

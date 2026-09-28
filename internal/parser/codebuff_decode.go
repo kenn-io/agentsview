@@ -245,6 +245,7 @@ type codebuffTranscript struct {
 // is what keeps the gap safe when someone threads a real context later.
 func decodeCodebuffMessages(
 	ctx context.Context, r io.Reader, sessionDate time.Time,
+	blocked map[string]bool,
 ) (codebuffTranscript, error) {
 	dec := jsontext.NewDecoder(r)
 
@@ -265,6 +266,13 @@ func decodeCodebuffMessages(
 		ordinal     int
 		currentDate = sessionDate
 		prevHour    = -1
+		// decodedElements counts message objects that survived the wire
+		// decode, whether or not they rendered a ParsedMessage. Truncation
+		// detection must not key on len(t.Messages): a valid AI element
+		// with credits but no displayable blocks renders nothing, so a
+		// transcript of such elements would look empty and a later cut
+		// would become a hard parse error that discards the session.
+		decodedElements int
 	)
 	// Seed the rollover state from the session creation time-of-day so the
 	// first time-only message can roll past midnight (see
@@ -281,7 +289,7 @@ func decodeCodebuffMessages(
 		}
 		var raw jsontext.Value
 		if err := json.UnmarshalDecode(dec, &raw); err != nil {
-			if len(t.Messages) > 0 && decodeIsTruncation(err) {
+			if decodedElements > 0 && decodeIsTruncation(err) {
 				t.Truncated = true
 				t.StartedAt, t.EndedAt = startedAt, endedAt
 				return t, nil
@@ -314,6 +322,7 @@ func decodeCodebuffMessages(
 			release()
 			continue
 		}
+		decodedElements++
 
 		var ts time.Time
 		ts, currentDate, prevHour = codebuffFoldTimestamp(
@@ -327,13 +336,13 @@ func decodeCodebuffMessages(
 				endedAt = ts
 			}
 		}
-		appendCodebuffWireMessage(&t, &m, ts, &ordinal)
+		appendCodebuffWireMessage(&t, &m, ts, &ordinal, blocked)
 		release()
 	}
 	if _, err := dec.ReadToken(); err != nil {
 		// Consumes the closing bracket. An EOF or syntax error here means
 		// the file was cut off after at least one complete element.
-		if len(t.Messages) > 0 && decodeIsTruncation(err) {
+		if decodedElements > 0 && decodeIsTruncation(err) {
 			t.Truncated = true
 			t.StartedAt, t.EndedAt = startedAt, endedAt
 			return t, nil
@@ -496,6 +505,7 @@ func codebuffEmitSystem(
 // payload is the block stream, and upstream stamps attachments on prompts.
 func appendCodebuffWireMessage(
 	t *codebuffTranscript, m *codebuffWireMessage, ts time.Time, ordinal *int,
+	blocked map[string]bool,
 ) {
 	switch m.Variant {
 	case "user":
@@ -542,7 +552,7 @@ func appendCodebuffWireMessage(
 
 	case "ai":
 		firstOrdinal := *ordinal
-		parsed := codebuffParsedAIMessages(m, ts)
+		parsed := codebuffParsedAIMessages(m, ts, blocked)
 		if len(parsed) > 0 {
 			for i := range parsed {
 				parsed[i].Ordinal = *ordinal
@@ -749,6 +759,7 @@ const codebuffSubagentTranscriptHeader = "[Subagent transcript]"
 // rendering stops.
 func codebuffRenderChildBlocks(
 	blocks []codebuffWireBlock, depth int, budget int,
+	blocked map[string]bool,
 ) string {
 	if budget <= 0 {
 		budget = codebuffSubagentMaxRenderedBytes
@@ -807,7 +818,13 @@ func codebuffRenderChildBlocks(
 			if len(block.Input) > 0 && string(block.Input) != "null" {
 				parts = append(parts, "input: "+string(block.Input))
 			}
-			if len(block.Output) > 0 {
+			// Result-content policy: a child tool whose normalized
+			// category is blocked keeps its header and input but loses
+			// its output, mirroring the db's per-call category check that
+			// the parent Task result body otherwise bypasses. The parent's
+			// own Task category is the db's business, not this renderer's.
+			if len(block.Output) > 0 &&
+				!blocked[NormalizeToolCategory(block.ToolName)] {
 				parts = append(parts, "output: "+string(block.Output))
 			}
 			write(strings.Join(parts, " "))
@@ -838,7 +855,7 @@ func codebuffRenderChildBlocks(
 					return b.String()
 				}
 				child := codebuffRenderChildBlocks(
-					block.Blocks, depth+1, budget-b.Len())
+					block.Blocks, depth+1, budget-b.Len(), blocked)
 				if child != "" {
 					if b.Len() > 0 {
 						b.WriteString("\n")
@@ -908,7 +925,9 @@ func codebuffRenderChildBlocks(
 // codebuffParsedAIMessages re-shapes parseCodebuffAIMessage's block loop onto
 // the decoded wire structs, preserving text grouping, the [Thinking] wrapper,
 // tool-run batching, and per-block emission order.
-func codebuffParsedAIMessages(m *codebuffWireMessage, ts time.Time) []ParsedMessage {
+func codebuffParsedAIMessages(
+	m *codebuffWireMessage, ts time.Time, blocked map[string]bool,
+) []ParsedMessage {
 	if len(m.Blocks) == 0 {
 		return nil
 	}
@@ -1116,7 +1135,7 @@ func codebuffParsedAIMessages(m *codebuffWireMessage, ts time.Time) []ParsedMess
 			// blocked-result categories as the parent's own output.
 			body := block.Content
 			if len(block.Blocks) > 0 {
-				rendered := codebuffRenderChildBlocks(block.Blocks, 1, 0)
+				rendered := codebuffRenderChildBlocks(block.Blocks, 1, 0, blocked)
 				if rendered != "" {
 					if body != "" {
 						body += "\n\n" + codebuffSubagentTranscriptHeader + "\n"

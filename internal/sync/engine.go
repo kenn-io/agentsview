@@ -9562,6 +9562,8 @@ func (e *Engine) syncProviderDBBacked(
 			Fingerprint: fingerprint,
 			Machine:     machine,
 			ForceParse:  e.forceParse || e.forceFullParse || piebaldRetry,
+
+			BlockedResultCategories: e.blockedResultCategories,
 		})
 		if err != nil {
 			if agent == parser.AgentPiebald &&
@@ -12324,6 +12326,8 @@ func (e *Engine) processProviderFile(
 			Machine:            machine,
 			ForceParse:         e.forceParseRequested(file),
 			StoredPathResolver: e.storedPathResolver,
+
+			BlockedResultCategories: e.blockedResultCategories,
 		})
 	}
 	if err != nil {
@@ -19593,6 +19597,9 @@ func (e *Engine) findProviderSourceFile(
 		outcome, err := provider.Parse(ctx, parser.ParseRequest{
 			Source:  source,
 			Machine: machine,
+
+			// No BlockedResultCategories: this parse only verifies the
+			// fork is produced, nothing is stored from it.
 		})
 		if err != nil || !providerOutcomeContainsSession(outcome, sessionID) {
 			return ""
@@ -19656,6 +19663,9 @@ func (e *Engine) providerSessionSourceMtime(
 		outcome, err := provider.Parse(ctx, parser.ParseRequest{
 			Source:  source,
 			Machine: machine,
+
+			// No BlockedResultCategories: this parse only verifies the
+			// fork exists, nothing is stored from it.
 		})
 		if err != nil || !providerOutcomeContainsSession(outcome, sessionID) {
 			return 0

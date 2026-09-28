@@ -508,7 +508,7 @@ func codebuffParseFile(
 	}
 
 	sess, msgs, err := parseCodebuffSession(
-		dir, projectHint, req.Machine,
+		dir, projectHint, req.Machine, req.BlockedResultCategories,
 	)
 	if err != nil {
 		return nil, nil, err

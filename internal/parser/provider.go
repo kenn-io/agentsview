@@ -970,6 +970,14 @@ type ParseRequest struct {
 	Fingerprint SourceFingerprint
 	Machine     string
 	ForceParse  bool
+	// BlockedResultCategories carries the operator's result-content blocking
+	// policy into providers that inline tool output into stored bodies
+	// (Codebuff and Freebuff render a subagent's nested transcript, including
+	// child tool outputs, into one result body the db's per-call category
+	// check cannot see into). Nil or empty keeps every category. Entries are
+	// normalized to the parser taxonomy, so providers compare against
+	// NormalizeToolCategory output.
+	BlockedResultCategories map[string]bool
 	// StoredPathResolver maps a canonical remote companion path back to the
 	// materialized file used by this parse.
 	StoredPathResolver func(string) (string, bool)
