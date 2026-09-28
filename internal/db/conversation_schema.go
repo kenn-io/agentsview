@@ -20,10 +20,11 @@ BEGIN
  UPDATE conversation_messages SET revision=(SELECT CAST(value AS INTEGER) FROM archive_metadata WHERE key='conversation_publication_revision')
  WHERE session_id=NEW.session_id AND message_id=NEW.message_id;
 END;
-CREATE TRIGGER IF NOT EXISTS conversation_messages_update
-AFTER UPDATE OF ordinal,role,timestamp,source_id,body,digest,text_bytes,gap,deleted,removed ON conversation_messages
+DROP TRIGGER IF EXISTS conversation_messages_update;
+CREATE TRIGGER IF NOT EXISTS conversation_messages_revise
+AFTER UPDATE OF ordinal,role,timestamp,source_id,digest,text_bytes,gap,deleted,removed ON conversation_messages
 WHEN OLD.ordinal IS NOT NEW.ordinal OR OLD.role IS NOT NEW.role OR OLD.timestamp IS NOT NEW.timestamp
- OR OLD.source_id IS NOT NEW.source_id OR OLD.body IS NOT NEW.body OR OLD.digest IS NOT NEW.digest
+ OR OLD.source_id IS NOT NEW.source_id OR OLD.digest IS NOT NEW.digest
  OR OLD.text_bytes IS NOT NEW.text_bytes OR OLD.gap IS NOT NEW.gap OR OLD.deleted IS NOT NEW.deleted
  OR OLD.removed IS NOT NEW.removed
 BEGIN
@@ -124,7 +125,7 @@ func ensureConversationSchemaLocked(ctx context.Context, w *writerHandle, usageO
 	return tx.Commit()
 }
 
-const conversationCopyColumns = `session_id,message_id,ordinal,role,timestamp,source_id,body,digest,text_bytes,gap,deleted,removed`
+const conversationCopyColumns = `session_id,message_id,ordinal,role,timestamp,source_id,digest,text_bytes,gap,deleted,removed`
 
 // Initialize exports or refresh copied rows after archive policy has changed
 // their stored content. These are the same archived messages, so keep their IDs.
@@ -241,6 +242,28 @@ func copyConversationSessionStatesTx(ctx context.Context, tx *sql.Tx, where stri
 	return nil
 }
 
+// conversationMessagesTx rebuilds the parsed messages behind a session's live
+// projection rows, reading text from the archived message at the same ordinal.
+func conversationMessagesTx(ctx context.Context, tx *sql.Tx, sessionID string) ([]Message, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT c.ordinal,c.role,c.timestamp,c.source_id,
+	 CASE WHEN c.digest='' THEN '' ELSE COALESCE(m.content,'') END
+	 FROM main.conversation_messages c LEFT JOIN main.messages m ON m.session_id=c.session_id AND m.ordinal=c.ordinal
+	 WHERE c.session_id=? AND c.removed=0 ORDER BY c.ordinal`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var msgs []Message
+	for rows.Next() {
+		msg := Message{SessionID: sessionID}
+		if err := rows.Scan(&msg.Ordinal, &msg.Role, &msg.Timestamp, &msg.SourceUUID, &msg.Content); err != nil {
+			return nil, err
+		}
+		msgs = append(msgs, msg)
+	}
+	return msgs, rows.Err()
+}
+
 // Rebuilt archives preserve opaque IDs from the old projection before matching
 // freshly parsed messages. The new database keeps its own publication counter.
 func reconcileConversationResyncTx(ctx context.Context, tx *sql.Tx, usageOnly bool) error {
@@ -268,20 +291,9 @@ func reconcileConversationResyncTx(ctx context.Context, tx *sql.Tx, usageOnly bo
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		current, err := conversationRowsTx(tx, id)
+		msgs, err := conversationMessagesTx(ctx, tx, id)
 		if err != nil {
 			return err
-		}
-		msgs := make([]Message, 0, len(current))
-		for _, row := range current {
-			msg := Message{SessionID: id, Ordinal: row.Ordinal, Role: row.Role, SourceUUID: row.sourceID}
-			if row.body != nil {
-				msg.Content = *row.body
-			}
-			if row.Timestamp != nil {
-				msg.Timestamp = *row.Timestamp
-			}
-			msgs = append(msgs, msg)
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM main.conversation_messages WHERE session_id=?`, id); err != nil {
 			return err

@@ -1450,7 +1450,8 @@ CREATE TABLE IF NOT EXISTS session_signal_state (
 );
 
 -- SQLite-only parser-proven conversation projection and compact latest changes.
--- Bodies are stored once here; removed rows retain metadata, not old text.
+-- Text lives in messages and is read back by ordinal; body is retired and
+-- stays NULL. Removed rows retain metadata, not old text.
 CREATE TABLE IF NOT EXISTS conversation_messages (
     session_id TEXT NOT NULL, message_id TEXT NOT NULL,
     ordinal INTEGER NOT NULL, role TEXT NOT NULL, timestamp TEXT NOT NULL DEFAULT '',
