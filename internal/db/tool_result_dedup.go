@@ -11,17 +11,33 @@ import "fmt"
 // Such a summary is no longer stored at all. result_content_length still
 // records the summary's size, so a cleared column with a non-zero length is
 // the signal that the read side must re-derive the summary from the call's
-// single event. A call whose summary is genuinely empty keeps length zero and
+// sole content-bearing event. A genuinely empty summary keeps length zero and
 // is left alone, and a blocked category (whose event content is blanked as
 // well) re-derives an empty string, which is exactly what it stores today.
 
+// SoleToolResultContent ignores empty timing events when finding one payload.
+func SoleToolResultContent(events []ToolResultEvent) (ToolResultEvent, bool) {
+	var sole ToolResultEvent
+	found := false
+	for _, event := range events {
+		if event.Content == "" {
+			continue
+		}
+		if found {
+			return ToolResultEvent{}, false
+		}
+		sole, found = event, true
+	}
+	return sole, found
+}
+
 // ResultContentDuplicatesSingleEvent reports whether a summary repeats the
-// content of the call's only result event verbatim.
+// content of the call's sole content-bearing event verbatim.
 func ResultContentDuplicatesSingleEvent(
 	summary string, events []ToolResultEvent,
 ) bool {
-	return summary != "" && len(events) == 1 &&
-		events[0].Content == summary
+	sole, ok := SoleToolResultContent(events)
+	return summary != "" && ok && sole.Content == summary
 }
 
 // DedupToolCallResultSummary returns the result summary to persist for a call
@@ -40,11 +56,12 @@ func DedupToolCallResultSummary(
 // dropped, so every consumer of a loaded tool call sees the same
 // ResultContent it saw when the summary was stored twice.
 func RestoreToolCallResultContent(tc *ToolCall) {
-	if tc.ResultContent != "" || tc.ResultContentLength == 0 ||
-		len(tc.ResultEvents) != 1 {
+	if tc.ResultContent != "" || tc.ResultContentLength == 0 {
 		return
 	}
-	tc.ResultContent = tc.ResultEvents[0].Content
+	if sole, ok := SoleToolResultContent(tc.ResultEvents); ok {
+		tc.ResultContent = sole.Content
+	}
 }
 
 // RestoreMessageResultContent applies RestoreToolCallResultContent across a
@@ -74,6 +91,7 @@ func ToolCallResultContentSQL(callAlias, ordinalExpr string) string {
 				WHERE tre_rc.session_id = %[1]s.session_id
 				  AND tre_rc.tool_call_message_ordinal = %[2]s
 				  AND tre_rc.call_index = COALESCE(%[1]s.call_index, 0)
+				  AND COALESCE(tre_rc.content, '') <> ''
 				LIMIT 2
 			) sole_rc
 		), '')

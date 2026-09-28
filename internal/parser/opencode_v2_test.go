@@ -294,16 +294,11 @@ func TestOpenCodeV2DispatchTiming(t *testing.T) {
 		wantEvents     int
 		wantTerminal   string
 	}{
-		{name: "completed", status: "completed", ran: 1700000005000, completed: 1700000027000,
-			wantEvents: 2, wantTerminal: "completed"},
-		{name: "errored", status: "error", ran: 1700000030000, completed: 1700000030000,
-			wantEvents: 2, wantTerminal: "errored"},
-		{name: "missing-ran", status: "completed", completed: 1700000040000,
-			wantEvents: 1, wantTerminal: "completed"},
-		{name: "reversed", status: "completed", ran: 1700000060000, completed: 1700000050000,
-			wantEvents: 1, wantTerminal: "completed"},
-		{name: "zero-ran", status: "completed", completed: 1700000070000,
-			wantEvents: 1, wantTerminal: "completed"},
+		{name: "completed", status: "completed", ran: 1700000005000, completed: 1700000027000, wantEvents: 2, wantTerminal: "completed"},
+		{name: "errored", status: "error", ran: 1700000030000, completed: 1700000030000, wantEvents: 2, wantTerminal: "errored"},
+		{name: "missing-ran", status: "completed", completed: 1700000040000, wantEvents: 1, wantTerminal: "completed"},
+		{name: "reversed", status: "completed", ran: 1700000060000, completed: 1700000050000, wantEvents: 1, wantTerminal: "completed"},
+		{name: "zero-ran", status: "completed", completed: 1700000070000, wantEvents: 1, wantTerminal: "completed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path, seed, writer := newTestDB(t)
@@ -315,6 +310,12 @@ func TestOpenCodeV2DispatchTiming(t *testing.T) {
 				`{"content":[{"type":"tool","id":"call_timing","name":"read","state":{"status":%q,"input":{"path":"file.txt"},"content":[{"type":"text","text":"done"}]},"time":{"created":1700000000000,"ran":%d,"completed":%d}}]}`,
 				tc.status, tc.ran, tc.completed,
 			)
+			if tc.name == "missing-ran" {
+				data = fmt.Sprintf(
+					`{"content":[{"type":"tool","id":"call_timing","name":"read","state":{"status":%q,"input":{"path":"file.txt"},"content":[{"type":"text","text":"done"}]},"time":{"created":1700000000000,"completed":%d}}]}`,
+					tc.status, tc.completed,
+				)
+			}
 			_, err = writer.ExecContext(t.Context(), `INSERT INTO session_message VALUES ('msg_timing', 'ses_timing', 'assistant', 1, 1700000000000, 1700000080000, ?)`, data)
 			require.NoError(t, err)
 			_, messages, err := parseOpenCodeDBSession(path, "ses_timing", "host-a")

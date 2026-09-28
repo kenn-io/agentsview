@@ -1766,9 +1766,9 @@ func extractOpenCodeToolCall(data, cwd string) ParsedToolCall {
 	started := state.Time.Start > 0
 	ordered := state.Time.End >= state.Time.Start
 	interrupted := metadataValid && metadata.Interrupted
+	syntheticInterrupted := state.Status == "error" && interrupted && state.Time.Start == state.Time.End
 	// Interrupted calls can carry equal synthetic bounds without running.
-	if terminal && started && ordered && state.Time.End > 0 &&
-		!(interrupted && state.Time.Start == state.Time.End) {
+	if terminal && started && ordered && !syntheticInterrupted {
 		status := "completed"
 		if state.Status == "error" || isFailure {
 			status = "errored"

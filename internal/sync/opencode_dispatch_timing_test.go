@@ -1,11 +1,15 @@
 package sync_test
 
 import (
+	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -43,7 +47,7 @@ func TestOpenCodeDispatchTiming(t *testing.T) {
 		`INSERT INTO part (id, session_id, message_id, data, time_created, time_updated)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		"part_interrupted", "dispatch-timing", "msg_assistant_interrupted",
-		fmt.Sprintf(`{"type":"tool","tool":"read","callID":"call_interrupted","state":{"status":"completed","input":{"path":"cancelled.txt"},"metadata":{"interrupted":true},"time":{"start":%d,"end":%d}}}`, base+31000, base+31000),
+		fmt.Sprintf(`{"type":"tool","tool":"read","callID":"call_interrupted","state":{"status":"error","input":{"path":"cancelled.txt"},"error":"interrupted","metadata":{"interrupted":true},"time":{"start":%d,"end":%d}}}`, base+31000, base+31000),
 		base+30500, base+30500)
 
 	stats := env.engine.SyncAll(t.Context(), nil)
@@ -100,4 +104,55 @@ func TestOpenCodeDispatchTiming(t *testing.T) {
 	assert.True(t, foundWait)
 	assert.True(t, foundMissing)
 	assert.True(t, foundInterrupted)
+
+	// Simulate an archive written before timing pairs while the native source stays unchanged.
+	sourceBefore, err := os.ReadFile(oc.path)
+	require.NoError(t, err)
+	require.NoError(t, env.db.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `DELETE FROM tool_result_events WHERE session_id = ?`, "opencode:dispatch-timing")
+		return err
+	}))
+	require.NoError(t, env.db.SetSessionDataVersion(t.Context(), "opencode:dispatch-timing", db.CurrentDataVersion()-1))
+	stats = env.engine.SyncAll(t.Context(), nil)
+	require.False(t, stats.Aborted)
+	assert.Equal(t, 1, stats.Synced)
+	sourceAfter, err := os.ReadFile(oc.path)
+	require.NoError(t, err)
+	assert.Equal(t, sourceBefore, sourceAfter)
+	assert.Equal(t, db.CurrentDataVersion(), env.db.GetSessionDataVersion(t.Context(), "opencode:dispatch-timing"))
+	messages, err = env.db.GetAllMessages(t.Context(), "opencode:dispatch-timing")
+	require.NoError(t, err)
+	var eventCount int
+	for _, message := range messages {
+		for _, call := range message.ToolCalls {
+			eventCount += len(call.ResultEvents)
+		}
+	}
+	assert.Equal(t, 2, eventCount)
+	revision, err := env.db.TranscriptRevision(t.Context(), "opencode:dispatch-timing")
+	require.NoError(t, err)
+	stats = env.engine.SyncAll(t.Context(), nil)
+	require.False(t, stats.Aborted)
+	assert.Zero(t, stats.Synced)
+	again, err := env.db.TranscriptRevision(t.Context(), "opencode:dispatch-timing")
+	require.NoError(t, err)
+	assert.Equal(t, revision, again)
+
+	orphanPath := filepath.Join(t.TempDir(), "removed-opencode.db")
+	require.NoError(t, env.db.UpsertSession(t.Context(), db.Session{
+		ID: "opencode:orphan", Project: "project-a", Machine: "local", Agent: "opencode",
+		FilePath: &orphanPath, MessageCount: 1,
+	}))
+	require.NoError(t, env.db.InsertMessages(t.Context(), []db.Message{{
+		SessionID: "opencode:orphan", Ordinal: 0, Role: "user", Content: "archived prompt",
+	}}))
+	rebuild := env.engine.ResyncAll(t.Context(), nil)
+	require.False(t, rebuild.Aborted)
+	orphan, err := env.db.GetSession(t.Context(), "opencode:orphan")
+	require.NoError(t, err)
+	require.NotNil(t, orphan)
+	orphanMessages, err := env.db.GetAllMessages(t.Context(), "opencode:orphan")
+	require.NoError(t, err)
+	require.Len(t, orphanMessages, 1)
+	assert.Equal(t, "archived prompt", orphanMessages[0].Content)
 }

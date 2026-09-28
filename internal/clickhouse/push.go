@@ -846,8 +846,8 @@ func toolCallRow(m db.Message, tc db.ToolCall, callIndex int, version uint64) []
 	if length == 0 {
 		if stored != "" {
 			length = len(stored)
-		} else if len(tc.ResultEvents) == 1 {
-			length = len(tc.ResultEvents[0].Content)
+		} else if sole, ok := db.SoleToolResultContent(tc.ResultEvents); ok {
+			length = len(sole.Content)
 		}
 	}
 	return []any{
