@@ -186,6 +186,13 @@ func TestToolCallResultSummaryStorage(t *testing.T) {
 				"loaded ToolCall.ResultContent")
 			assert.Len(t, msgs[0].ToolCalls[0].ResultEvents,
 				len(call.ResultEvents), "result events survive")
+			tx, err := d.getWriter().Begin(t.Context())
+			require.NoError(t, err)
+			defer func() { require.NoError(t, tx.Rollback()) }()
+			facts, err := (signalTxQuery{tx: tx, sessionID: "s-dedup"}).TrailingToolCalls(t.Context(), 1)
+			require.NoError(t, err)
+			require.Len(t, facts, 1)
+			assert.Equal(t, tt.wantLoaded, facts[0].ResultContent, "signal SQL result content")
 		})
 	}
 }
