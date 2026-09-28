@@ -523,11 +523,10 @@ func projectToolResultImagesWithPut(
 					event.Content, event.ContentLength,
 				)
 			}
-			// A deduplicated summary keeps its text in the sole event, so its
-			// retained length must follow that event's projected content.
-			if call.ResultContent == "" && call.ResultContentLength > 0 &&
-				len(call.ResultEvents) == 1 && call.ResultEvents[0].Content != "" {
-				call.ResultContentLength = call.ResultEvents[0].ContentLength
+			// A deduplicated summary's retained length follows its projected payload.
+			sole, ok := SoleToolResultContent(call.ResultEvents)
+			if call.ResultContent == "" && call.ResultContentLength > 0 && ok {
+				call.ResultContentLength = sole.ContentLength
 			}
 		}
 	}

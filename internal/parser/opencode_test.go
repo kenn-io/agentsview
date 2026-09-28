@@ -1505,7 +1505,31 @@ func TestParseOpenCodeDB_DispatchTiming(t *testing.T) {
 		{
 			name:       "interrupted-equal-bounds",
 			tool:       "read",
-			state:      `{"status":"completed","input":{"path":"b-aborted"},"metadata":{"interrupted":true},"time":{"start":45000,"end":45000}}`,
+			state:      `{"status":"error","input":{"path":"b-aborted"},"error":"interrupted","metadata":{"interrupted":true},"time":{"start":45000,"end":45000}}`,
+			wantEvents: 0,
+		},
+		{
+			name:       "completed-equal-bounds",
+			tool:       "read",
+			state:      `{"status":"completed","input":{"path":"instant"},"time":{"start":45000,"end":45000}}`,
+			wantEvents: 2, wantStatus: "completed", wantStart: 45000, wantEnd: 45000,
+		},
+		{
+			name:       "bash-nonzero-exit",
+			tool:       "bash",
+			state:      `{"status":"completed","input":{"command":"false"},"metadata":{"exit":1},"time":{"start":46000,"end":47000}}`,
+			wantEvents: 2, wantStatus: "errored", wantStart: 46000, wantEnd: 47000,
+		},
+		{
+			name:       "invalid-tool",
+			tool:       "invalid",
+			state:      `{"status":"completed","input":{},"time":{"start":48000,"end":49000}}`,
+			wantEvents: 2, wantStatus: "errored", wantStart: 48000, wantEnd: 49000,
+		},
+		{
+			name:       "pending",
+			tool:       "read",
+			state:      `{"status":"pending","input":{"path":"pending"},"time":{"start":50000,"end":51000}}`,
 			wantEvents: 0,
 		},
 		{

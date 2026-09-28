@@ -3592,11 +3592,11 @@ func (db *DB) SetToolCallSubagentSession(ctx context.Context,
 
 // soleToolResultEventTx returns a one-element slice when the call
 // identified by (session, owning message ordinal, call index) has exactly
-// one stored result event, and nil for every other count, which never
+// one content-bearing result event, and nil for every other count, which never
 // dedups. The key is the same triple attachToolResultEvents and
 // ToolCallResultContentSQL use, so every site agrees on which event a
-// summary is compared against. Inspect at most two index entries before
-// loading content so repeated appends do not rescan the event history.
+// summary is compared against. Inspect at most two payload rows before
+// loading content so repeated appends do not load the event history.
 func soleToolResultEventTx(ctx context.Context,
 	tx *sql.Tx, sessionID string, messageOrdinal, callIndex int,
 	imagePolicy config.ToolResultImages,
@@ -3608,6 +3608,7 @@ func soleToolResultEventTx(ctx context.Context,
 			SELECT 1 FROM tool_result_events
 			WHERE session_id = ? AND tool_call_message_ordinal = ?
 			  AND call_index = ?
+			  AND COALESCE(content, '') <> ''
 			LIMIT 2
 		)`,
 		sessionID, messageOrdinal, callIndex,
@@ -3623,7 +3624,7 @@ func soleToolResultEventTx(ctx context.Context,
 	if err := tx.QueryRowContext(ctx,
 		`SELECT content FROM tool_result_events
 		 WHERE session_id = ? AND tool_call_message_ordinal = ?
-		   AND call_index = ?`,
+		   AND call_index = ? AND COALESCE(content, '') <> ''`,
 		sessionID, messageOrdinal, callIndex,
 	).Scan(&content); err != nil {
 		return nil, fmt.Errorf(
