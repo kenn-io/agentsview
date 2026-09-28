@@ -64,6 +64,7 @@ func TestClockShiftedRuntimeRecordStaysVisibleToDiscovery(t *testing.T) {
 		{
 			name: "find daemon",
 			check: func(t *testing.T, dir string, rec daemon.RuntimeRecord) {
+				t.Helper()
 				rt := FindDaemonRuntime(dir)
 				require.NotNil(t, rt)
 				assert.Equal(t, rec.PID, rt.Record.PID)
@@ -72,6 +73,7 @@ func TestClockShiftedRuntimeRecordStaysVisibleToDiscovery(t *testing.T) {
 		{
 			name: "find incompatible daemon",
 			check: func(t *testing.T, dir string, rec daemon.RuntimeRecord) {
+				t.Helper()
 				rec.Metadata[runtimeAPIVersion] = "0"
 				_, err := runtimeStore(dir).Write(rec)
 				require.NoError(t, err)
@@ -84,6 +86,7 @@ func TestClockShiftedRuntimeRecordStaysVisibleToDiscovery(t *testing.T) {
 		{
 			name: "writable records",
 			check: func(t *testing.T, dir string, rec daemon.RuntimeRecord) {
+				t.Helper()
 				records, err := writableDaemonRecordsFromStore(runtimeStore(dir))
 				require.NoError(t, err)
 				require.Len(t, records, 1)
@@ -93,6 +96,7 @@ func TestClockShiftedRuntimeRecordStaysVisibleToDiscovery(t *testing.T) {
 		{
 			name: "writable records with fallback",
 			check: func(t *testing.T, _ string, rec daemon.RuntimeRecord) {
+				t.Helper()
 				resolved := false
 				records, fallback := writableDaemonRecordsWithFallback(
 					[]daemon.RuntimeRecord{rec}, func() *DaemonRuntime {
@@ -109,12 +113,14 @@ func TestClockShiftedRuntimeRecordStaysVisibleToDiscovery(t *testing.T) {
 		{
 			name: "live daemon",
 			check: func(t *testing.T, dir string, _ daemon.RuntimeRecord) {
+				t.Helper()
 				assert.True(t, hasLiveDaemonRuntime(dir))
 			},
 		},
 		{
 			name: "live writable daemon",
 			check: func(t *testing.T, dir string, _ daemon.RuntimeRecord) {
+				t.Helper()
 				assert.True(t, hasLiveWritableDaemonRuntime(dir))
 			},
 		},
