@@ -341,10 +341,6 @@ type conversationRow struct {
 	body     *string
 }
 
-func conversationRowsTx(tx transactionQueries, sessionID string) ([]conversationRow, error) {
-	return conversationRowsFromTx(tx, sessionID, math.MinInt)
-}
-
 // conversationRowsFromTx returns the live projection rows at or after
 // fromOrdinal.
 func conversationRowsFromTx(tx transactionQueries, sessionID string, fromOrdinal int) ([]conversationRow, error) {
