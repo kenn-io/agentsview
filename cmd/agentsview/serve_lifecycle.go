@@ -273,7 +273,7 @@ func serveIncompatibleDaemonStatusLines(
 
 // runServeStop terminates every agentsview server owning this data dir whose
 // identity it can confirm. A record is signalled only once its PID is confirmed
-// to be the recorded daemon -- either it answers the ping probe, or its process
+// to be the recorded daemon -- either it answers the ping probe, or its
 // process identity matches the record (proving the PID was not reused by an
 // unrelated process). This keeps a hung-but-alive daemon stoppable while never
 // signalling a stale record whose PID belongs to something else.
@@ -390,8 +390,8 @@ func stopWritableDaemonsForUpdate(ctx context.Context,
 
 // stopTargetConfirmed reports whether rec's live PID is safe to signal as the
 // recorded agentsview daemon. It accepts the target when the daemon answers the
-// ping probe, or, for a daemon that is alive but no longer answering, when the
-// process create time exactly matches the one recorded at startup. Either check
+// ping probe, or, for a daemon that is alive but no longer answering, when its
+// recorded process identity matches the live process. Either check
 // rules out a PID that an unrelated process reused after the record was
 // written.
 func stopTargetConfirmed(rec daemon.RuntimeRecord, authToken string) bool {

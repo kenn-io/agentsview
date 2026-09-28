@@ -169,6 +169,27 @@ func TestStopTargetConfirmedHungDaemonAfterClockStep(t *testing.T) {
 	assert.True(t, stopTargetConfirmed(rec, ""))
 }
 
+func TestStopTargetConfirmedRejectsMismatchedV2(t *testing.T) {
+	pid := startSleepProcess(t)
+	identity, ok := daemon.ReadProcessIdentity(pid)
+	require.True(t, ok)
+	createTime, ok := processCreateTimeMillis(pid)
+	require.True(t, ok)
+	rec := daemon.RuntimeRecord{
+		PID:               pid,
+		Network:           daemon.NetworkTCP,
+		Address:           "127.0.0.1:1",
+		Service:           daemonService,
+		ProcessIdentityV2: mismatchedProcessIdentityForTest(t, identity),
+		Metadata: map[string]string{
+			runtimeCreateTime: strconv.FormatInt(createTime, 10),
+		},
+	}
+
+	assert.False(t, daemonRecordPingConfirmed(rec, ""))
+	assert.False(t, stopTargetConfirmed(rec, ""))
+}
+
 func TestStopTargetConfirmedMatchingPingBypassesIdentityState(t *testing.T) {
 	endpoint := newPingDaemonWithPID(t, os.Getpid())
 	rec := daemon.RuntimeRecord{
