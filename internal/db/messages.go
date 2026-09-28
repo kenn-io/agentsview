@@ -3547,10 +3547,16 @@ func applyToolCallSubagentLinkTx(ctx context.Context,
 		return err == nil, err
 	}
 	if len(link.ResultEvents) > 0 {
+		events := slices.Clone(link.ResultEvents)
+		for i := range events {
+			if events[i].SubagentSessionID == "" {
+				events[i].SubagentSessionID = currentSubagent
+			}
+		}
 		changed, _, err := applyToolCallResultUpdateTx(ctx, tx, sessionID, ToolCallResultUpdate{
 			ToolUseID: link.ToolUseID,
 			Position:  ToolCallPosition{MessageOrdinal: messageOrdinal, CallIndex: callIndex},
-			Events:    link.ResultEvents,
+			Events:    events,
 		}, blockedResultCategories, imagePolicy, assetsDir)
 		if err != nil || currentSubagent == storedSubagent {
 			return changed, err

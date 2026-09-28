@@ -170,7 +170,10 @@ fixtures retain this field; missing identities remain source-local.
   found this field on persisted tool results. Agentsview retains it as an
   `errored` result event during full parsing and incremental result pairing;
   an absent or false flag does not invent a success status. Data version 116
-  reparses stored sources to recover the previously discarded status.
+  reparses stored sources to recover the previously discarded status. Late
+  result events inherit the call's resolved subagent session ID when they do
+  not carry an explicit one, matching full imports. Reverified with full and
+  incremental Claude imports into separate temporary archives.
 
 - **Empty search replies (2026-09-28):** The contributor to
   [PR #1859](https://github.com/kenn-io/agentsview/pull/1859) reported `Grep`
@@ -1783,16 +1786,16 @@ schemas keep their existing ordering behavior.
 - **Session bounds:**
   [Issue #2003](https://github.com/kenn-io/agentsview/issues/2003):
   `composerData.createdAt` is not a reliable conversation start. Read-only
-  inspection of one live Windows `state.vscdb` on 2026-09-27
-  found 735 composers with both a nonzero `createdAt` and at least one
-  timestamped bubble. In 93 of them `createdAt` was more than an hour from the
-  earliest bubble, in 30 more than a day, and in 7 more than a week, up to about
-  235 days. It preceded the earliest bubble in 25 of the day-plus cases and
+  inspection of one live Windows `state.vscdb` on 2026-09-27 found 735
+  composers with both a nonzero `createdAt` and at least one timestamped
+  bubble. In 93 of them `createdAt` was more than an hour from the earliest
+  bubble, in 30 more than a day, and in 7 more than a week, up to about 235
+  days. It preceded the earliest bubble in 25 of the day-plus cases and
   followed it in 5; 6 composers had `createdAt` after their last bubble.
   Header order also differed from chronological order in 38 composers.
-  Agentsview therefore starts a session at its earliest timestamped message and
-  uses `createdAt` only when no bubble carries a timestamp. The session ends at
-  the later of `lastUpdatedAt` and the latest message timestamp.
+  Agentsview therefore starts a session at its earliest timestamped message
+  and uses `createdAt` only when no bubble carries a timestamp. The session
+  ends at the later of `lastUpdatedAt` and the latest message timestamp.
 - **Usage and cost:** No per-message or per-session token, cache, reasoning,
   credit, or monetary-cost fields were observed in `composerData` or bubble
   documents. Agentsview emits no usage events for this agent; cost is

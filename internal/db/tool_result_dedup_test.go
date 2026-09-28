@@ -266,6 +266,46 @@ func TestRestoreToolCallResultContent(t *testing.T) {
 	}
 }
 
+func TestSubagentLinkResultEventInheritsChild(t *testing.T) {
+	for _, tt := range []struct {
+		name, storedChild, linkedChild, eventChild, want string
+	}{
+		{"new link", "", "imported:agent-child", "", "imported:agent-child"},
+		{"existing link", "imported:agent-child", "", "", "imported:agent-child"},
+		{"explicit event link", "imported:agent-child", "", "imported:agent-other", "imported:agent-other"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "parent", "project")
+			require.NoError(t, d.InsertMessages(t.Context(), []Message{{
+				SessionID: "parent", Ordinal: 0, Role: "assistant",
+				ToolCalls: []ToolCall{{
+					ToolUseID: "call-1", ToolName: "Agent", Category: "Task",
+					SubagentSessionID: tt.storedChild,
+				}},
+			}}))
+			_, err := d.WriteSessionIncremental(t.Context(), "parent", nil, IncrementalSessionUpdate{
+				MsgCount: 1, NextOrdinal: 1,
+				SubagentLinks: []ToolCallSubagentLink{{
+					ToolUseID: "call-1", SubagentSessionID: tt.linkedChild, HasResult: true,
+					ResultEvents: []ToolResultEvent{{
+						Source: "tool_result", Content: "done", SubagentSessionID: tt.eventChild,
+					}},
+				}},
+			})
+			require.NoError(t, err)
+			messages, err := d.GetAllMessages(t.Context(), "parent")
+			require.NoError(t, err)
+			require.Len(t, messages, 1)
+			require.Len(t, messages[0].ToolCalls, 1)
+			call := messages[0].ToolCalls[0]
+			assert.Equal(t, "imported:agent-child", call.SubagentSessionID)
+			require.Len(t, call.ResultEvents, 1)
+			assert.Equal(t, tt.want, call.ResultEvents[0].SubagentSessionID)
+		})
+	}
+}
+
 // TestSubagentLinkKeepsDedupedSummary pins the incremental link path: a
 // linked result that repeats the call's single stored event must not
 // re-inflate result_content, while a summary the event does not carry is
