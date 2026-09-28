@@ -1535,6 +1535,12 @@ schemas keep their existing ordering behavior.
 
 ## Cline CLI (`cline`)
 
+- **Tool-result images (2026-09-28):** Rechecked the parser with synthetic
+  image-only and mixed text/image results through ingestion and SQLite.
+  Decoded result events retain an `[image]` marker for each image block,
+  including single-object results. Image-only outcomes remain unknown;
+  ordinary text and empty results keep their classifications. Data version 116
+  reparses stored sources to restore this evidence.
 - **Format:** One session directory per task under
   `~/.cline/data/sessions/<id>/` containing `<id>.json` (session metadata and
   aggregate usage) and `<id>.messages.json` (transcript array with text,
@@ -1818,13 +1824,16 @@ schemas keep their existing ordering behavior.
 
 - **Format:** One JSON thread document per session.
 - **Evidence:** `no-public-source`.
-- **Tool-result failures (2026-09-28):** Rechecked the existing parser and
+- **Tool-result status (2026-09-28):** Rechecked the existing parser and
   synthetic regression fixtures for `tool_result` blocks: `run.status` of
   `error` and `run.result.success: false` now retain an `errored` event;
   `run.status: cancelled` retains `cancelled`. Result text such as `failed` is
-  preserved alongside that status. Missing failure metadata does not invent a
-  success status. These fields are consumer evidence, not a newly verified
-  producer schema. Data version 116 reparses stored sources.
+  preserved alongside that status. Explicit `run.status: done` retains
+  `completed`, including empty string and array results; failure metadata
+  takes precedence. Missing status does not invent success. Reverified these
+  cases through the provider parser, ingestion, and SQLite. These fields are
+  consumer evidence, not a newly verified producer schema. Data version 116
+  reparses stored sources.
 - **Upstream:** The first-party [Amp manual](https://ampcode.com/manual), its
   [appendix](https://ampcode.com/manual/appendix), the
   [CLI guide](https://github.com/sourcegraph/amp-examples-and-guides/blob/main/guides/cli/README.md),

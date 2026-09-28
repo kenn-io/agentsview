@@ -520,8 +520,9 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (115: Cursor IDE sessions start at their earliest timestamped bubble;
 // composerData.createdAt is only a fallback for composers without bubble
 // timestamps. Re-parse unchanged state.vscdb containers to correct started_at.)
-// (116: Claude and Amp tool results retain explicit failure status as result
-// events. Re-parse unchanged sources to restore errors lost from summaries.)
+// (116: Claude and Amp tool results retain explicit failure/completion status,
+// and Cline results retain image markers. Re-parse unchanged sources to restore
+// outcome evidence lost from summaries.)
 const dataVersion = 116
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"

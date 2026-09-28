@@ -376,6 +376,8 @@ func extractAmpToolResults(content gjson.Result) []ParsedToolResult {
 
 		var text, status string
 		switch block.Get("run.status").Str {
+		case "done":
+			status = "completed"
 		case "error":
 			status = "errored"
 		case "cancelled":
