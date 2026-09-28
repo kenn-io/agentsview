@@ -156,7 +156,23 @@ func newOpenClawSourceSet(roots []string) openClawSourceSet {
 }
 
 func (s openClawSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
-	return collectDiscoveredSources(ctx, s.DiscoverEach)
+	winners := make(map[string]SourceRef)
+	err := s.DiscoverEach(ctx, func(source SourceRef) error {
+		previous, exists := winners[source.Key]
+		if !exists || openClawLegacySourcePreferred(source, previous) {
+			winners[source.Key] = source
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sources := make([]SourceRef, 0, len(winners))
+	for _, source := range winners {
+		sources = append(sources, source)
+	}
+	sortJSONLSources(sources)
+	return sources, nil
 }
 
 func (s openClawSourceSet) DiscoverEach(
@@ -203,7 +219,9 @@ func (s openClawSourceSet) DiscoverEach(
 		return err
 	}
 
-	legacy := make(map[string]SourceRef)
+	// Reconciliation already ranks candidates in its disk-backed spool.
+	// Yield legacy entries directly; Discover selects winners for collecting callers.
+	var yieldErr error
 	legacyErr := s.legacy.DiscoverEach(ctx, func(source SourceRef) error {
 		logicalID, ok := openClawLogicalSourceID(source)
 		if !ok {
@@ -212,12 +230,12 @@ func (s openClawSourceSet) DiscoverEach(
 		if _, shadowed := sqliteIDs[logicalID]; shadowed {
 			return nil
 		}
-		previous, exists := legacy[logicalID]
-		if !exists || openClawLegacySourcePreferred(source, previous) {
-			legacy[logicalID] = source
-		}
-		return nil
+		yieldErr = yield(source)
+		return yieldErr
 	})
+	if yieldErr != nil {
+		return yieldErr
+	}
 	if legacyErr != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
@@ -231,16 +249,6 @@ func (s openClawSourceSet) DiscoverEach(
 			incomplete = errors.Join(incomplete, legacyErr)
 		} else {
 			return legacyErr
-		}
-	}
-	legacySources := make([]SourceRef, 0, len(legacy))
-	for _, source := range legacy {
-		legacySources = append(legacySources, source)
-	}
-	sortJSONLSources(legacySources)
-	for _, source := range legacySources {
-		if err := yield(source); err != nil {
-			return err
 		}
 	}
 	return incomplete

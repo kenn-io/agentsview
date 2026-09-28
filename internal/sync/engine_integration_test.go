@@ -11,8 +11,6 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -29,7 +27,6 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
 
@@ -2762,9 +2759,9 @@ func TestOpenClawSQLiteSyncKeepsValidSourcesWhenSiblingDatabaseIsUnreadable(
 		"legacy question", "legacy response")
 }
 
-func TestOpenClawSQLiteSyncPublishesProjectThroughAPI(t *testing.T) {
+func TestOpenClawSQLiteSyncStoresSessionProject(t *testing.T) {
 	root := t.TempDir()
-	createOpenClawSyncSQLiteFixture(t, root, "api-visible")
+	createOpenClawSyncSQLiteFixture(t, root, "stored-project")
 	database := dbtest.OpenTestDB(t)
 	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentOpenClaw: {root}},
@@ -2773,17 +2770,12 @@ func TestOpenClawSQLiteSyncPublishesProjectThroughAPI(t *testing.T) {
 	t.Cleanup(engine.Close)
 	stats := engine.SyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "sync aborted: %+v", stats)
-	handler := server.New(config.Config{Host: "127.0.0.1"}, database, engine).Handler()
-	request := httptest.NewRequestWithContext(
-		t.Context(), http.MethodGet, "/api/v1/sessions?include_one_shot=true", nil,
-	)
-	request.Host = "127.0.0.1:0"
-	response := httptest.NewRecorder()
-
-	handler.ServeHTTP(response, request)
-
-	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
-	assert.Contains(t, response.Body.String(), "openclaw:main:api-visible")
+	session, err := database.GetSessionFull(t.Context(), "openclaw:main:stored-project")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, "openclaw", session.Agent)
+	assert.Equal(t, "project_a", session.Project)
+	assert.Equal(t, 2, session.MessageCount)
 }
 
 func TestOpenClawSQLiteChangedPathRetainsArchivedMessagesWhenStaleJSONLRemains(

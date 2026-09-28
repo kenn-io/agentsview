@@ -6261,7 +6261,7 @@ func (e *Engine) reconciliationCandidate(ctx context.Context,
 		if statPath == path {
 			preference1 = 1
 		}
-	} else if !claudeFormat && !isCodexFormatAgent(agent) {
+	} else if !claudeFormat && !isCodexFormatAgent(agent) && agent != parser.AgentOpenClaw {
 		preference1 = configuredRootPreference(statPath, roots)
 	}
 	if ranker, ok := provider.(parser.ReconciliationSourceRanker); ok {
@@ -17809,6 +17809,27 @@ func (e *Engine) reconcileProviderHistoryContext(
 	}
 	var prior *ingest.PriorSession
 	switch agent {
+	case parser.AgentOpenClaw:
+		path := candidate.Parsed.Session.File.Path
+		_, _, sqliteMember := parser.ParseVirtualSourcePathForBase(path, "openclaw-agent.sqlite")
+		if sqliteMember || !parser.IsOpenClawSessionFile(filepath.Base(path)) || candidate.Session.FilePath == nil {
+			break
+		}
+		store := e.archiveStore
+		if store == nil {
+			store = e.db
+		}
+		stored, err := store.GetSessionFull(ctx, candidate.Session.ID)
+		if err != nil {
+			return ingest.HistoryResult{}, err
+		}
+		if stored != nil && stored.FilePath != nil &&
+			sameReconciliationSourcePath(*candidate.Session.FilePath, *stored.FilePath) &&
+			len(candidate.Messages) < stored.MessageCount {
+			// A shortened copy of the same legacy file is incomplete history.
+			// Different sources and SQLite members remain authoritative.
+			return ingest.HistoryResult{Action: ingest.HistoryPreserve}, nil
+		}
 	case parser.AgentRooCode, parser.AgentKiloLegacy, parser.AgentCline:
 		if len(candidate.Messages) > 0 {
 			break

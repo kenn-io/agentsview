@@ -1,9 +1,11 @@
 package parser
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"testing"
 	"time"
 
@@ -14,6 +16,62 @@ import (
 func TestOpenClawProviderSourceMethods(t *testing.T) {
 	spec := openClawProviderTestSpec()
 	assertClawProviderSourceMethods(t, spec)
+}
+
+func TestOpenClawLegacyDiscoveryStopsBeforeNextEntry(t *testing.T) {
+	for _, members := range []int{2, 200} {
+		for _, cancelDiscovery := range []bool{false, true} {
+			t.Run(strconv.Itoa(members)+"/cancel="+strconv.FormatBool(cancelDiscovery), func(t *testing.T) {
+				root := t.TempDir()
+				sessionsDir := filepath.Join(root, "main", "sessions")
+				for i := range members {
+					id := "session-" + strconv.Itoa(i)
+					writeSourceFile(t, filepath.Join(sessionsDir, id+".jsonl"), clawProviderFixture(id, "hello"))
+				}
+				laterRoot := t.TempDir()
+				laterDir := filepath.Join(laterRoot, "main", "sessions")
+				writeSourceFile(t, filepath.Join(laterDir, "later.jsonl"), clawProviderFixture("later", "later"))
+				provider, ok := NewProvider(AgentOpenClaw, ProviderConfig{Roots: []string{root, laterRoot}})
+				require.True(t, ok)
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				visited, opened, laterOpened := 0, 0, 0
+				ctx = withStreamingDirectoryReader(ctx, func(ctx context.Context, dir string, yield func(os.DirEntry) error) error {
+					if dir == sessionsDir {
+						opened++
+					}
+					if dir == laterDir {
+						laterOpened++
+					}
+					return streamDirectoryEntriesDirect(ctx, dir, func(entry os.DirEntry) error {
+						if dir == sessionsDir {
+							visited++
+						}
+						return yield(entry)
+					})
+				})
+				consumerErr := DiscoveryIncompleteError{Provider: AgentOpenClaw, Reason: "consumer stopped"}
+				yielded := 0
+				err := provider.(StreamingDiscoverer).DiscoverEach(ctx, func(SourceRef) error {
+					yielded++
+					if cancelDiscovery {
+						cancel()
+						return ctx.Err()
+					}
+					return consumerErr
+				})
+				if cancelDiscovery {
+					require.ErrorIs(t, err, context.Canceled)
+				} else {
+					require.Equal(t, consumerErr, err)
+				}
+				assert.Equal(t, 1, yielded)
+				assert.Equal(t, 1, opened)
+				assert.Zero(t, laterOpened)
+				assert.Equal(t, 1, visited, "discovery must stop before visiting the rest of the archive")
+			})
+		}
+	}
 }
 
 func TestOpenClawLegacyLookupUsesDiscoveryRanking(t *testing.T) {

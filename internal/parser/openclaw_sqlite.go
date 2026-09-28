@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -747,10 +748,7 @@ func openClawSQLiteFingerprintsEachTx(
 
 func openClawSQLiteHashField(hash interface{ Write([]byte) (int, error) }, value string) {
 	var length [8]byte
-	length[0] = byte(len(value))
-	length[1] = byte(len(value) >> 8)
-	length[2] = byte(len(value) >> 16)
-	length[3] = byte(len(value) >> 24)
+	binary.LittleEndian.PutUint64(length[:], uint64(len(value)))
 	_, _ = hash.Write(length[:])
 	_, _ = hash.Write([]byte(value))
 }

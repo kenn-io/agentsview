@@ -2217,7 +2217,13 @@ schemas keep their existing ordering behavior.
   Changed-file sync also checks file timestamps and breaks ties by path, so an
   older or equally dated lower-ranked duplicate cannot replace the preferred
   copy's saved messages. Explicit stored-source requests retain their existing
-  preference.
+  preference. Legacy streaming discovery yields candidates as directories are
+  read; collecting discovery and reconciliation still select the preferred
+  copy.
+- **Legacy JSONL retention (rechecked 2026-09-27):** Sync keeps archived
+  messages when the same file parses to fewer messages than were saved. A
+  newer, different copy can still replace the saved transcript. A shorter
+  reset at the same path is treated as incomplete history too.
 - **SQLite freshness (rechecked 2026-09-27):** Isolated fixtures with 2 and 50
   sessions verify that appending to one member syncs only that member.
   Discovery carries each member's content size, latest event time, and hash.

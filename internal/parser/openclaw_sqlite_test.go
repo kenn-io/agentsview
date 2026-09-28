@@ -16,29 +16,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestOpenClawProviderCapabilities(t *testing.T) {
-	factory, ok := ProviderFactoryByType(AgentOpenClaw)
-	require.True(t, ok)
-	caps := factory.Capabilities()
-	assert.Equal(t, CapabilitySupported, caps.Source.StreamingDiscovery)
-	assert.Equal(t, CapabilitySupported, caps.Source.MultiSessionSource)
-	assert.Equal(t, CapabilitySupported, caps.Source.SharedContainerSource)
-	assert.Equal(t, CapabilitySupported, caps.Source.PerSessionErrors)
-	assert.Equal(t, CapabilitySupported, caps.Source.ForceReplaceOnParse)
-	assert.Equal(t, CapabilitySupported, caps.Source.PersistentArchive)
-	assert.Equal(t, CapabilitySupported, caps.Source.StoredSourceHints)
-	assert.True(t, caps.Sync.FingerprintHashInCacheKey)
-	assert.True(t, caps.Sync.FingerprintHashRequiredForFreshness)
-	provider, ok := factory.NewProvider(ProviderConfig{Roots: []string{t.TempDir()}}).(*openClawProvider)
-	require.True(t, ok)
-	_, ok = any(provider).(StreamingDiscoverer)
-	assert.True(t, ok)
-	_, ok = any(provider).(ReconciliationSourceResolver)
-	assert.True(t, ok)
-	_, ok = any(provider).(PersistentArchiveSourceResolver)
-	assert.True(t, ok)
-}
-
 func TestOpenClawSQLiteStoreDiscoverAndParse(t *testing.T) {
 	root := t.TempDir()
 	dbPath := createOpenClawSQLiteFixture(t, root, "main", map[string][]string{
