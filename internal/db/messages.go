@@ -1678,6 +1678,7 @@ func (db *DB) writeSessionIncremental(ctx context.Context,
 	defer func() { _ = tx.Rollback() }()
 
 	var replaced *messageRangeTotals
+	var pendingRecallRevocations recallEvidenceRevocationEvents
 	if from := update.ReplaceFromOrdinal; from != nil {
 		if err := reconcileConversationRangeTx(tx, sessionID, msgs, true, db.usageOnlyStorage(), *from); err != nil {
 			return false, err
@@ -1687,6 +1688,13 @@ func (db *DB) writeSessionIncremental(ctx context.Context,
 			return false, err
 		}
 		if err := replaceSessionMessagesFromTx(ctx, tx, sessionID, *from, msgs); err != nil {
+			return false, err
+		}
+		// The rewritten rows may sit inside trusted recall evidence, so
+		// re-verify it as the whole-session replacement does.
+		if err := reconcileRecallEvidenceForSessionTx(
+			ctx, tx, sessionID, &pendingRecallRevocations,
+		); err != nil {
 			return false, err
 		}
 		replaced = &removed
@@ -1805,6 +1813,7 @@ func (db *DB) writeSessionIncremental(ctx context.Context,
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("committing incremental write tx: %w", err)
 	}
+	pendingRecallRevocations.flush()
 	db.notifyUsageSessions([]string{sessionID})
 	return signalsMaintained, nil
 }

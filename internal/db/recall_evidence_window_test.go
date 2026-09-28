@@ -433,6 +433,39 @@ func TestRecallEvidenceReplaceSessionContentLogsCommittedRevocation(t *testing.T
 	)
 }
 
+// A ranged incremental replacement rewrites the rows from one ordinal
+// onward, so evidence covering a rewritten row must be re-verified just as
+// a whole-session replacement would.
+func TestRecallEvidenceRangedIncrementalReplaceRevokesChangedContent(t *testing.T) {
+	d := testDB(t)
+	seedRecallEvidenceWindow(t, d, "ranged", 10, "stable", "")
+	insertVerifiedRecallSelection(
+		t, d, "ranged-entry", "ranged", 10, 11, []string{"tool-a"},
+	)
+	messages, err := d.GetAllMessages(t.Context(), "ranged")
+	require.NoError(t, err)
+	suffix := messages[1:]
+	suffix[0].Content = "I will inspect the files, then the tests."
+	suffix[0].ContentLength = len(suffix[0].Content)
+	logs := captureRecallEvidenceLog(t)
+
+	_, err = d.WriteSessionIncremental(t.Context(), "ranged", suffix,
+		IncrementalSessionUpdate{
+			NextOrdinal:        13,
+			ReplaceFromOrdinal: new(11),
+		},
+	)
+
+	require.NoError(t, err)
+	entry := requireRecallEntry(t, d, "ranged-entry")
+	assert.False(t, entry.ProvenanceOK)
+	assert.Equal(t,
+		"recall: revoked provenance entry=ranged-entry "+
+			"session=ranged reason=content_digest_mismatch",
+		strings.TrimSpace(logs.String()),
+	)
+}
+
 func TestRecallEvidenceReplaceKeepsOrdinalFallbackWhenDigestMatches(t *testing.T) {
 	d := testDB(t)
 	seedRecallEvidenceWindow(t, d, "legacy", 10, "", "")

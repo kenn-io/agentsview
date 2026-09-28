@@ -381,6 +381,43 @@ func TestClaudeIncrementalSplitReparsesOnlyTheOpenRun(t *testing.T) {
 	assert.Equal(t, "Hello world", msgs[1].Content)
 }
 
+// TestClaudeIncrementalSplitStaysOnRunInDAGSession covers a transcript
+// whose uuid chain resolves, so the stored verdict is a DAG parse and the
+// re-parse runs the fork check. The merged run keeps its last chunk's uuid
+// and parent, which chain from the stored tail, so the check passes and
+// the sync still re-parses only the open run.
+func TestClaudeIncrementalSplitStaysOnRunInDAGSession(t *testing.T) {
+	counter := &claudeFullParseCounter{inner: claudeSplitFactory(t)}
+	env, dir := newClaudeSplitTestEnv(t, counter)
+
+	lines := []string{
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"u1","message":{"content":"hello"},"cwd":"/tmp"}`,
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","uuid":"a1","parentUuid":"u1","message":{"id":"m","model":"claude-sonnet-4-20250514","content":[{"type":"text","text":"Hello"}],"usage":{"input_tokens":10,"output_tokens":1},"stop_reason":"tool_use"}}`,
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:02Z","uuid":"a2","parentUuid":"a1","message":{"id":"m","model":"claude-sonnet-4-20250514","content":[{"type":"text","text":"Hello world"}],"usage":{"input_tokens":10,"output_tokens":2},"stop_reason":"end_turn"}}`,
+	}
+	path := filepath.Join(dir, "proj", "dag.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(
+		path, []byte(strings.Join(lines[:2], "\n")+"\n"), 0o644,
+	))
+	env.engine.SyncAll(t.Context(), nil)
+	var linear bool
+	require.NoError(t, env.db.Reader().QueryRow(t.Context(),
+		`SELECT claude_linear_parse FROM sessions WHERE id = ?`, "dag",
+	).Scan(&linear))
+	require.False(t, linear, "the fixture must be stored as a DAG parse")
+
+	counter.full.Store(0)
+	appendClaudeSplitLines(t, path, lines[2:]...)
+	env.engine.SyncPaths([]string{path})
+
+	assert.Zero(t, counter.full.Load(),
+		"a DAG session must not re-parse the whole transcript")
+	msgs := fetchMessages(t, env.db, "dag")
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "Hello world", msgs[1].Content)
+}
+
 // TestClaudeIncrementalSameIDAfterToolResultAppends covers parallel tool
 // calls: the appended record shares the stored tail's message.id, but a
 // tool_result sits between them, so the full parser keeps them apart and
