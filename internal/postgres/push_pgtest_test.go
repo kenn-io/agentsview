@@ -3551,3 +3551,77 @@ func TestSessionProvenanceBackfillCompletesPerFilterScope(t *testing.T) {
 	assert.Equal(t, "1", marker,
 		"unfiltered push must complete the provenance marker")
 }
+
+func TestOpenCodeDispatchTiming(t *testing.T) {
+	pgURL := testPGURL(t)
+	const schema = "agentsview_opencode_timing_test"
+	cleanNamedPGSchema(t, pgURL, schema)
+	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+
+	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err)
+	defer local.Close()
+	started := "2026-04-26T10:00:00Z"
+	ended := "2026-04-26T10:00:32Z"
+	require.NoError(t, local.UpsertSession(t.Context(), db.Session{
+		ID: "opencode:dispatch-timing", Project: "project", Machine: "machine", Agent: "opencode",
+		StartedAt: &started, EndedAt: &ended, MessageCount: 2, UserMessageCount: 1,
+	}))
+	require.NoError(t, local.InsertMessages(t.Context(), []db.Message{
+		{SessionID: "opencode:dispatch-timing", Ordinal: 0, Role: "user", Content: "run the tool", Timestamp: started},
+		{
+			SessionID: "opencode:dispatch-timing", Ordinal: 1,
+			Role: "assistant", Content: "", Timestamp: "2026-04-26T10:00:01Z", HasToolUse: true,
+			ToolCalls: []db.ToolCall{{
+				ToolName: "read", Category: "Read", ToolUseID: "call_wait",
+				ResultEvents: []db.ToolResultEvent{
+					{ToolUseID: "call_wait", Source: "tool_execution", Status: "started", Timestamp: "2026-04-26T10:00:05Z", EventIndex: 0},
+					{ToolUseID: "call_wait", Source: "tool_execution", Status: "completed", Timestamp: "2026-04-26T10:00:27Z", EventIndex: 1},
+				},
+			}, {
+				ToolName: "read", Category: "Read", ToolUseID: "call_missing",
+			}, {
+				ToolName: "read", Category: "Read", ToolUseID: "call_error",
+				ResultEvents: []db.ToolResultEvent{
+					{ToolUseID: "call_error", Source: "tool_execution", Status: "started", Timestamp: "2026-04-26T10:00:28Z", EventIndex: 0},
+					{ToolUseID: "call_error", Source: "tool_execution", Status: "errored", Timestamp: "2026-04-26T10:00:28Z", EventIndex: 1},
+				},
+			}, {
+				ToolName: "read", Category: "Read", ToolUseID: "call_zero",
+				ResultEvents: []db.ToolResultEvent{
+					{ToolUseID: "call_zero", Source: "tool_execution", Status: "started", Timestamp: "2026-04-26T10:00:29Z", EventIndex: 0},
+					{ToolUseID: "call_zero", Source: "tool_execution", Status: "completed", Timestamp: "2026-04-26T10:00:29Z", EventIndex: 1},
+				},
+			}},
+		},
+	}), "insert messages")
+
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err)
+	defer pg.Close()
+	require.NoError(t, EnsureSchema(t.Context(), pg, schema))
+	syncer := &Sync{pg: pg, local: local, machine: "machine", schema: schema, schemaDone: true}
+	_, err = syncer.Push(t.Context(), true, nil)
+	require.NoError(t, err)
+
+	store, err := NewStore(pgURL, schema, true)
+	require.NoError(t, err)
+	defer store.Close()
+	timing, err := store.GetSessionTiming(t.Context(), "opencode:dispatch-timing")
+	require.NoError(t, err)
+	require.Len(t, timing.Turns, 1)
+	require.Len(t, timing.Turns[0].Calls, 4)
+	for _, call := range timing.Turns[0].Calls {
+		switch call.ToolUseID {
+		case "call_wait":
+			require.NotNil(t, call.DurationMs)
+			assert.Equal(t, int64(22000), *call.DurationMs)
+		case "call_missing":
+			assert.Nil(t, call.DurationMs)
+		case "call_error", "call_zero":
+			require.NotNil(t, call.DurationMs)
+			assert.Zero(t, *call.DurationMs)
+		}
+	}
+	t.Log("call_wait duration_ms=22000; call_missing duration_ms=<nil>; call_error duration_ms=0; call_zero duration_ms=0")
+}

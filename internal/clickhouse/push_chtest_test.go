@@ -96,6 +96,76 @@ func TestPushMirrorsEveryTableAndSkipsUnchanged(t *testing.T) {
 	assert.NotEmpty(t, status.LastPushAt)
 }
 
+func TestOpenCodeDispatchTiming(t *testing.T) {
+	ctx := t.Context()
+	local, target := seedFixture(t)
+	const sessionID = "opencode:dispatch-timing"
+	startedAt := "2026-01-20T00:00:00.000Z"
+	endedAt := "2026-01-20T00:00:32.000Z"
+	sess := fixtureSession(sessionID, "opencode", "run the tool", startedAt, 2)
+	sess.Agent = "opencode"
+	sess.EndedAt = &endedAt
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+		Session: sess,
+		Messages: []db.Message{
+			fixtureMessage(sessionID, 0, "user", "run the tool", startedAt),
+			fixtureMessage(sessionID, 1, "assistant", "", "2026-01-20T00:00:01.000Z",
+				db.ToolCall{
+					ToolName:  "read",
+					Category:  "Read",
+					ToolUseID: "call_wait",
+					ResultEvents: []db.ToolResultEvent{
+						{ToolUseID: "call_wait", Source: "tool_execution", Status: "started", Timestamp: "2026-01-20T00:00:05.000Z"},
+						{ToolUseID: "call_wait", Source: "tool_execution", Status: "completed", Timestamp: "2026-01-20T00:00:27.000Z"},
+					},
+				},
+				db.ToolCall{ToolName: "read", Category: "Read", ToolUseID: "call_missing"},
+				db.ToolCall{
+					ToolName: "read", Category: "Read", ToolUseID: "call_error",
+					ResultEvents: []db.ToolResultEvent{
+						{ToolUseID: "call_error", Source: "tool_execution", Status: "started", Timestamp: "2026-01-20T00:00:28.000Z"},
+						{ToolUseID: "call_error", Source: "tool_execution", Status: "errored", Timestamp: "2026-01-20T00:00:28.000Z"},
+					},
+				},
+				db.ToolCall{
+					ToolName: "read", Category: "Read", ToolUseID: "call_zero",
+					ResultEvents: []db.ToolResultEvent{
+						{ToolUseID: "call_zero", Source: "tool_execution", Status: "started", Timestamp: "2026-01-20T00:00:29.000Z"},
+						{ToolUseID: "call_zero", Source: "tool_execution", Status: "completed", Timestamp: "2026-01-20T00:00:29.000Z"},
+					},
+				},
+			),
+		},
+		DataVersion:     1,
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+	syncer := newTestSync(t, local, target, storage.PusherOptions{})
+	result, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	assert.Zero(t, result.Errors)
+	store, err := NewStore(ctx, target)
+	require.NoError(t, err)
+	defer store.Close()
+	timing, err := store.GetSessionTiming(ctx, sessionID)
+	require.NoError(t, err)
+	require.Len(t, timing.Turns, 1)
+	require.Len(t, timing.Turns[0].Calls, 4)
+	for _, call := range timing.Turns[0].Calls {
+		switch call.ToolUseID {
+		case "call_wait":
+			require.NotNil(t, call.DurationMs)
+			assert.Equal(t, int64(22000), *call.DurationMs)
+		case "call_missing":
+			assert.Nil(t, call.DurationMs)
+		case "call_error", "call_zero":
+			require.NotNil(t, call.DurationMs)
+			assert.Zero(t, *call.DurationMs)
+		}
+	}
+	t.Log("call_wait duration_ms=22000; call_missing duration_ms=<nil>; call_error duration_ms=0; call_zero duration_ms=0")
+}
+
 func TestPushReplacesChangedSessionsWithoutLeavingOldRows(t *testing.T) {
 	ctx := context.Background()
 	local, target := seedFixture(t)

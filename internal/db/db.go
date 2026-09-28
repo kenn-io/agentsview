@@ -551,7 +551,9 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // that second transcript's entries appended to the same sub-agent session.
 // Re-parse unchanged Claude sources so a sub-agent session reaches its later
 // run's last entry.)
-const dataVersion = 122
+// (123: OpenCode dispatch timestamps are retained as tool-execution events so
+// unchanged sessions gain dispatch-to-completion timing.)
+const dataVersion = 123
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
