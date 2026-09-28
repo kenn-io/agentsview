@@ -555,7 +555,9 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // cache_creation_input_tokens so GPT-5.6 and later writes price at the
 // cache-write rate. Re-parse unchanged Codex-format sources because the
 // stored token_usage changes while source bytes do not.)
-const dataVersion = 123
+// (124: OpenCode dispatch timestamps are retained as tool-execution events so
+// unchanged sessions gain dispatch-to-completion timing.)
+const dataVersion = 124
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

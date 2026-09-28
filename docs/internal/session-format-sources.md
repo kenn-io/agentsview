@@ -1382,6 +1382,23 @@ completed bash calls also expose nonzero exits in `state.structured.exit`. The
 latter is verified against the upstream
 [bash tool](https://github.com/anomalyco/opencode/blob/dff8fbc149fb7492e4f07b713ac31ea70d9a541c/packages/core/src/tool/bash.ts).
 
+OpenCode timing uses the native dispatch fields. Legacy tool parts store
+`state.time.start` and `state.time.end`; v2 tool items store
+`time.ran` and `time.completed`. AgentsView measures dispatch through
+completion, so time spent waiting for approval is included. `time.created` is
+not a fallback. A missing, zero, or reversed dispatch boundary leaves the
+duration unknown. An interrupted legacy record with
+`state.metadata.interrupted=true` and equal positive bounds is synthetic and
+also remains unknown; equal positive bounds without that flag are valid zero
+duration. Standalone shell rows have no `ran` field and retain
+unknown timing. The legacy start is written before the producer's permission
+request in the
+[v1 processor](https://github.com/anomalyco/opencode/blob/67caf894e0843ee370e72839e8265e483233479b/packages/opencode/src/session/processor.ts#L331-L378).
+The v2 updater records `ran` when the tool is called in the
+[message updater](https://github.com/anomalyco/opencode/blob/dff8fbc149fb7492e4f07b713ac31ea70d9a541c/packages/core/src/session/message-updater.ts#L271-L281).
+The waiting-call regression uses constructed timestamps because OpenCode does
+not persist the approval instant.
+
 V2 change detection includes projection timestamps, row counts, and ordered
 `id/seq/time_updated` identities. Earlier previews add these to the v1 composite
 described below; current beta databases combine them with session/project
