@@ -33,6 +33,7 @@ import (
 	"go.kenn.io/agentsview/internal/pathutil"
 	"go.kenn.io/agentsview/internal/secrets"
 	"go.kenn.io/agentsview/internal/sync/failurecache"
+	"go.kenn.io/agentsview/internal/timeutil"
 )
 
 const (
@@ -18871,16 +18872,23 @@ func (e *Engine) writeIncremental(ctx context.Context,
 			HasResult:        link.HasResult,
 			ResultContentLen: link.ResultContentLen,
 		}
-		if e.db.ArchiveContent().OmitsToolContent() {
-			continue
-		}
 		toolCall := db.ToolCall{
 			ResultContent:       parser.DecodeContent(link.ResultContentRaw),
 			ResultContentLength: link.ResultContentLen,
 		}
+		if link.HasResult {
+			event := db.ToolResultEvent{
+				ToolUseID: link.ToolUseID, Source: "tool_result", Status: link.ResultStatus,
+				Content: toolCall.ResultContent, ContentLength: link.ResultContentLen,
+				Timestamp: timeutil.Format(link.ResultTimestamp),
+			}
+			db.PrepareToolResultEvent(&event)
+			toolCall.ResultEvents = []db.ToolResultEvent{event}
+		}
 		e.anomalies.recordSanitize(db.SanitizeToolCall(&toolCall))
 		subagentLinks[i].ResultContent = toolCall.ResultContent
 		subagentLinks[i].ResultContentLen = toolCall.ResultContentLength
+		subagentLinks[i].ResultEvents = toolCall.ResultEvents
 	}
 	toolCallResultUpdates := make(
 		[]db.ToolCallResultUpdate, len(inc.toolCallUpdates),

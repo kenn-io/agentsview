@@ -665,7 +665,7 @@ func TestFoldRunawayWindowCrossingNewRetainedBoundaryLatches(t *testing.T) {
 func TestIncrementalStateUnmarshalInitializesMutableMaps(t *testing.T) {
 	var state IncrementalState
 	require.NoError(t, state.UnmarshalBinary([]byte(
-		`{"codec_version":3,"total_calls":0}`,
+		fmt.Sprintf(`{"codec_version":%d,"total_calls":0}`, IncrementalStateCodecVersion),
 	)))
 	require.NotNil(t, state.EditLast)
 	require.NotNil(t, state.ModelCounts)

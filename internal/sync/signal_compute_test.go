@@ -150,6 +150,7 @@ func TestExtractToolCallRowsStagedSummary(t *testing.T) {
 			ToolCalls: []db.ToolCall{{
 				ToolUseID: "staged-call", ToolName: "Read", Category: "Read",
 				ResultContent: "agent-a:\nstaged:7\n\nagent-b:\nstaged:8",
+				ResultEvents:  []db.ToolResultEvent{{AgentID: "agent-a", Content: "staged:7"}, {AgentID: "agent-b", Content: "staged:8"}},
 			}},
 		},
 	}
@@ -327,6 +328,16 @@ func TestComputeSignalsFromMessages_Errors(t *testing.T) {
 	require.NotNil(t, got.HealthGrade, "HealthGrade = nil, want non-empty")
 	assert.NotEmpty(t, *got.HealthGrade, "HealthGrade = %v, want non-empty", got.HealthGrade)
 	assert.Equal(t, "assistant", got.EndedWithRole)
+}
+
+func TestComputeSignalsFromMessages_ProviderFailureStatuses(t *testing.T) {
+	msgs := []db.Message{{Ordinal: 1, Role: "assistant", ToolCalls: []db.ToolCall{
+		{ToolName: "Read", Category: "Read", ResultEvents: []db.ToolResultEvent{{Status: "error"}}},
+		{ToolName: "Read", Category: "Read", ResultEvents: []db.ToolResultEvent{{Status: "denied"}}},
+	}}}
+	got := computeSignalsFromMessages(db.Session{ID: "session-a", MessageCount: 1}, msgs)
+	assert.Equal(t, 2, got.ToolFailureSignalCount)
+	assert.Equal(t, 2, got.FinalFailureStreak)
 }
 
 func TestComputeSignalsFromMessages_ExplicitBoundariesOverrideHeuristic(t *testing.T) {

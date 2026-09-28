@@ -1469,6 +1469,8 @@ type ParsedMessageTokenUsageUpdate struct {
 // user message (the response to a prior tool_use).
 type ParsedToolResult struct {
 	ToolUseID     string
+	Source        string
+	Status        string
 	ContentLength int
 	ContentRaw    string // raw JSON of the content field; decode with DecodeContent
 }

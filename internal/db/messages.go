@@ -83,6 +83,8 @@ type ToolCall struct {
 // ToolResult holds a tool_result content block for pairing.
 type ToolResult struct {
 	ToolUseID     string
+	Source        string
+	Status        string
 	ContentLength int
 	ContentRaw    string // raw JSON of the content field; decode lazily
 }
@@ -3538,6 +3540,22 @@ func applyToolCallSubagentLinkTx(ctx context.Context,
 			return false, nil
 		}
 		_, err := tx.ExecContext(ctx,
+			`UPDATE tool_calls SET subagent_session_id = ?
+			 WHERE session_id = ? AND tool_use_id = ?`,
+			nilIfEmpty(currentSubagent), sessionID, link.ToolUseID,
+		)
+		return err == nil, err
+	}
+	if len(link.ResultEvents) > 0 {
+		changed, _, err := applyToolCallResultUpdateTx(ctx, tx, sessionID, ToolCallResultUpdate{
+			ToolUseID: link.ToolUseID,
+			Position:  ToolCallPosition{MessageOrdinal: messageOrdinal, CallIndex: callIndex},
+			Events:    link.ResultEvents,
+		}, blockedResultCategories, imagePolicy, assetsDir)
+		if err != nil || currentSubagent == storedSubagent {
+			return changed, err
+		}
+		_, err = tx.ExecContext(ctx,
 			`UPDATE tool_calls SET subagent_session_id = ?
 			 WHERE session_id = ? AND tool_use_id = ?`,
 			nilIfEmpty(currentSubagent), sessionID, link.ToolUseID,

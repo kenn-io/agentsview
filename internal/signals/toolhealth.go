@@ -15,7 +15,10 @@ type ToolCallRow struct {
 	CallIndex           int
 	ToolUseID           string
 	ResultContentLength int
-	EventStatus         string // "", "completed", "errored", "cancelled", "running"
+	EventStatus         string // Provider status; empty when no status was retained.
+	// ResultContentUnknown is set by ingestion for image-only or staged evidence.
+	// Callers constructing rows directly must also set it for non-text results.
+	ResultContentUnknown bool
 	// ContentFailure is a pre-computed content-heuristic verdict used by
 	// streaming writers whose rows carry placeholder result content (the
 	// real summary lives in staging). When the last event carries no
@@ -62,7 +65,7 @@ func ComputeToolHealth(calls []ToolCallRow) ToolHealthSignals {
 func IsFailure(c ToolCallRow) bool {
 	if c.EventStatus != "" {
 		return c.EventStatus == "errored" ||
-			c.EventStatus == "cancelled"
+			c.EventStatus == "cancelled" || c.EventStatus == "error" || c.EventStatus == "denied"
 	}
 	if c.ContentFailureKnown || c.ContentFailure {
 		return c.ContentFailure

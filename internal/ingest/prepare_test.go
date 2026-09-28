@@ -55,14 +55,12 @@ func TestToolSequencePairedImageResults(t *testing.T) {
 		raw    string
 		ending signals.ToolSequenceEnding
 	}{
-		{`[{"type":"text","text":"[image]"},{"type":"text","text":"[image]"}]`, signals.ToolSequenceEndingAbandoned},
+		{`[{"type":"text","text":"[image]"},{"type":"text","text":"[image]"}]`, signals.ToolSequenceEndingUnknown},
 		{`[{"type":"text","text":"[image]"},{"type":"text","text":"file contents"}]`, signals.ToolSequenceEndingRecovered},
 	} {
 		messages := []db.Message{
-			{ToolCalls: []db.ToolCall{
-				{ToolUseID: "empty", ToolName: "Grep", Category: "Grep", ResultContent: "No matches found"},
-				{ToolUseID: "images", ToolName: "Read", Category: "Read"},
-			}},
+			{Ordinal: 1, ToolCalls: []db.ToolCall{{ToolUseID: "empty", ToolName: "Grep", Category: "Grep", ResultContent: "No matches found"}}},
+			{Ordinal: 2, ToolCalls: []db.ToolCall{{ToolUseID: "images", ToolName: "Read", Category: "Read"}}},
 			{ToolResults: []db.ToolResult{{ToolUseID: "images", ContentRaw: tt.raw}}},
 		}
 		require.NoError(t, ingest.PairToolResultsContext(t.Context(), messages, nil))

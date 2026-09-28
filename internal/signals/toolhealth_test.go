@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestComputeToolHealth_NoCalls(t *testing.T) {
@@ -570,4 +571,21 @@ func TestComputeToolHealth_Combined(t *testing.T) {
 	assert.Equal(t, 2, got.RetryCount)
 	assert.Equal(t, 1, got.EditChurnCount)
 	assert.Equal(t, 3, got.ConsecutiveFailureMax)
+}
+
+func TestProviderFailureStatuses_FullAndIncremental(t *testing.T) {
+	calls := []ToolCallRow{
+		{MessageOrdinal: 0, ToolName: "Read", Category: "Read", EventStatus: "completed"},
+		{MessageOrdinal: 1, ToolName: "Read", Category: "Read", EventStatus: "error"},
+		{MessageOrdinal: 2, ToolName: "Read", Category: "Read", EventStatus: "denied"},
+	}
+	full := ComputeToolHealth(calls)
+	assert.Equal(t, 2, full.FailureSignalCount)
+	assert.Equal(t, 2, full.ConsecutiveFailureMax)
+	state := SeedIncrementalState(calls[:1], nil, "", "", nil, nil, 0, 0, 0)
+	_, got, ok := state.FoldToolHealth(calls[1:], nil, ToolHealthRow{})
+	require.True(t, ok)
+	assert.Equal(t, 2, got.FailureCount)
+	assert.Equal(t, 2, got.ConsecutiveFailureMax)
+	assert.Equal(t, 2, got.FinalFailureStreak)
 }

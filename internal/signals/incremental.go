@@ -29,7 +29,8 @@ const (
 	// Bump when the struct or any detector semantics change; a mismatch
 	// makes the caller fall back to a full recompute.
 	// v3 added LastValidTokensOrdinal.
-	IncrementalStateCodecVersion = 3
+	// v4 recognizes provider error and denied statuses in failure facts.
+	IncrementalStateCodecVersion = 4
 
 	// TrailingFactCount is the size of the trailing facts window. It must
 	// cover every window any delta can affect: a modified call in the last

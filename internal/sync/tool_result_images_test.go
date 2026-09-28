@@ -245,15 +245,16 @@ func TestEngineImagePolicyDeduplicatesHistoricalRawLinkedResult(t *testing.T) {
 		ID: "historical-link", Agent: string(parser.AgentClaude), Project: "project",
 		Machine: "local", MessageCount: 1,
 	}))
+	event := db.ToolResultEvent{
+		ToolUseID: "link-call", Source: "tool", Status: "completed", Content: raw,
+	}
+	db.PrepareToolResultEvent(&event)
 	require.NoError(t, database.InsertMessages(t.Context(), []db.Message{{
 		SessionID: "historical-link", Ordinal: 0, Role: "assistant",
 		ToolCalls: []db.ToolCall{{
 			ToolUseID: "link-call", ToolName: "Task", Category: "Task",
 			ResultContent: raw,
-			ResultEvents: []db.ToolResultEvent{{
-				ToolUseID: "link-call", Source: "tool", Status: "completed",
-				Content: raw,
-			}},
+			ResultEvents:  []db.ToolResultEvent{event},
 		}},
 	}}))
 

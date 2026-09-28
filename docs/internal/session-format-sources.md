@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-09-27
+last_edited: 2026-09-28
 ---
 
 # Session Format Source Inventory
@@ -103,6 +103,24 @@ discovered exact URLs, releases, and queries in the provider entry. If a
 repository or document disappears, retain its original URL and commit hash and
 add an archived or maintained mirror without replacing the original identity.
 
+## Tool Sequence Evidence
+
+The sequence extractor uses provider failure statuses and the empty-result
+observations recorded below. Its completed-with-empty-body rule is analyzer
+policy, not a provider format guarantee: a `completed` or `success` status, zero
+retained content length, and an empty body count as empty for the `Read`,
+`Grep`, and `Glob` categories, or tools named `search`, `WebSearch`,
+`search_web`, and `web_search`. Categories use the shared tool normalization, so
+`Read` includes tools such as `fetch`, `read_web_page`, and `list_files`.
+Missing status alone does not satisfy this rule. In particular, ordinary Claude
+Code `WebSearch` results do not gain a completion status from their name.
+
+Ingestion marks image-only and staged results from individual result events,
+before the display summary adds agent labels. When no events exist, it checks
+the retained result body. Missing content, nonterminal statuses, and these
+non-text results remain unknown. These classifications describe retained
+evidence; they do not establish whether a tool helped the task.
+
 ## Claude Code (`claude`)
 
 Rechecked 2026-09-11 against the existing provider parser and its metadata
@@ -144,6 +162,24 @@ fixtures retain this field; missing identities remain source-local.
   and
   [parser](https://github.com/getagentseal/codeburn/blob/3472885629c41725b40c19c0780ecce148b067bf/src/providers/claude.ts);
   these are consumer observations, not Anthropic authority.
+
+- **Tool-result failures (2026-09-28):** Anthropic's
+  [tool-result documentation](https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls)
+  defines `is_error: true` for failed tool results. This documents the API
+  field, not the CLI's persistence schema. Local transcript inspection also
+  found this field on persisted tool results. Agentsview retains it as an
+  `errored` result event during full parsing and incremental result pairing;
+  an absent or false flag does not invent a success status. Data version 116
+  reparses stored sources to recover the previously discarded status.
+
+- **Empty search replies (2026-09-28):** The contributor to
+  [PR #1859](https://github.com/kenn-io/agentsview/pull/1859) reported `Grep`
+  results containing `No matches found` or `No files found`, and `Glob`
+  results containing `No files found`. The extractor recognizes these exact
+  bodies after trimming whitespace. These are contributor-reported corpus
+  observations, not a documented producer contract; a bounded local corpus
+  check did not independently reproduce those replies. The completed-empty
+  rule above is separate analyzer policy.
 
 - **Usage and cost:** Assistant messages persist input, output, cache-creation,
   and cache-read tokens. Model IDs are present. No authoritative persisted USD
@@ -1779,6 +1815,13 @@ schemas keep their existing ordering behavior.
 
 - **Format:** One JSON thread document per session.
 - **Evidence:** `no-public-source`.
+- **Tool-result failures (2026-09-28):** Rechecked the existing parser and
+  synthetic regression fixtures for `tool_result` blocks: `run.status` of
+  `error` and `run.result.success: false` now retain an `errored` event;
+  `run.status: cancelled` retains `cancelled`. Result text such as `failed` is
+  preserved alongside that status. Missing failure metadata does not invent a
+  success status. These fields are consumer evidence, not a newly verified
+  producer schema. Data version 116 reparses stored sources.
 - **Upstream:** The first-party [Amp manual](https://ampcode.com/manual), its
   [appendix](https://ampcode.com/manual/appendix), the
   [CLI guide](https://github.com/sourcegraph/amp-examples-and-guides/blob/main/guides/cli/README.md),

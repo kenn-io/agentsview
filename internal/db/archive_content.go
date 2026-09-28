@@ -302,6 +302,11 @@ func transcriptSubagentLinks(
 	stored := slices.Clone(links)
 	for i := range stored {
 		stored[i].ResultContent = ""
+		stored[i].ResultEvents = slices.Clone(stored[i].ResultEvents)
+		for j := range stored[i].ResultEvents {
+			PrepareToolResultEvent(&stored[i].ResultEvents[j])
+			stored[i].ResultEvents[j].Content = ""
+		}
 	}
 	return stored
 }

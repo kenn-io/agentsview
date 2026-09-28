@@ -212,7 +212,8 @@ func ExtractToolCallRows(messages []db.Message) []signals.ToolCallRow {
 				InputJSON: call.InputJSON, ResultContent: call.ResultContent,
 				MessageOrdinal: message.Ordinal, CallIndex: callIndex,
 				ToolUseID: call.ToolUseID, ResultContentLength: call.ResultContentLength,
-				EventStatus: status,
+				EventStatus:          status,
+				ResultContentUnknown: toolResultContentUnknown(call),
 			})
 		}
 	}

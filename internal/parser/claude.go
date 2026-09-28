@@ -744,6 +744,8 @@ type ClaudeSubagentLink struct {
 	SubagentSessionID string
 	ResultContentRaw  string
 	ResultContentLen  int
+	ResultStatus      string
+	ResultTimestamp   time.Time
 	HasResult         bool
 }
 
@@ -1102,6 +1104,8 @@ func collectClaudeUnmatchedToolResults(
 				ToolUseID:        result.ToolUseID,
 				ResultContentRaw: result.ContentRaw,
 				ResultContentLen: result.ContentLength,
+				ResultStatus:     result.Status,
+				ResultTimestamp:  parseTimestamp(gjson.Get(e.line, "timestamp").Str),
 				HasResult:        true,
 			})
 			return true
@@ -1123,6 +1127,8 @@ func collectClaudeSubagentLinks(entries []dagEntry) []ClaudeSubagentLink {
 		if gjson.Get(entry.line, "isMeta").Bool() {
 			link.ResultContentRaw = ""
 			link.ResultContentLen = 0
+			link.ResultStatus = ""
+			link.ResultTimestamp = time.Time{}
 			link.HasResult = false
 		}
 		links = append(links, link)
@@ -1733,6 +1739,8 @@ func extractToolResultAgentIDLink(line string) (ClaudeSubagentLink, bool) {
 		SubagentSessionID: sessionID,
 		ResultContentRaw:  toolResult.ContentRaw,
 		ResultContentLen:  toolResult.ContentLength,
+		ResultStatus:      toolResult.Status,
+		ResultTimestamp:   parseTimestamp(gjson.Get(line, "timestamp").Str),
 		HasResult:         true,
 	}, true
 }

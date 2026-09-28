@@ -4,12 +4,10 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestClassifyToolOutcome(t *testing.T) {
-	image := `[ {"type":"input_image","image_url":"data:image/png;base64,AAEC"} ]`
-	projectedImage := `[{"byte_size":3,"media_type":"image/png","sha256":"","text":"[Image: image/png, 3 bytes]","type":"agentsview_image","version":1}]`
-	offloadedImage := `[{"byte_size":3,"image_ref":"asset://abc.png","media_type":"image/png","sha256":"abc","text":"![Image: image/png, 3 bytes](asset://abc.png)","type":"agentsview_image","version":1}]`
 	tests := []struct {
 		name string
 		call ToolCallRow
@@ -24,21 +22,6 @@ func TestClassifyToolOutcome(t *testing.T) {
 			name: "success omitted retained content",
 			call: ToolCallRow{ToolName: "read", Category: "Read", EventStatus: "success", ResultContentLength: 17},
 			want: ToolOutcomeUnknown,
-		},
-		{
-			name: "image placeholder",
-			call: ToolCallRow{ToolName: "Read", ResultContent: "\n[image]"},
-			want: ToolOutcomeUnknown,
-		},
-		{
-			name: "labeled image placeholder",
-			call: ToolCallRow{ToolName: "Read", ResultContent: "agent-a:\n[image]"},
-			want: ToolOutcomeUnknown,
-		},
-		{
-			name: "mixed image placeholder text",
-			call: ToolCallRow{ToolName: "Read", ResultContent: "file contents\n[image]"},
-			want: ToolOutcomeContent,
 		},
 		{
 			name: "status error",
@@ -159,180 +142,6 @@ func TestClassifyToolOutcome(t *testing.T) {
 			want: ToolOutcomeUnknown,
 		},
 		{
-			name: "direct staged marker",
-			call: ToolCallRow{
-				ToolName: "Bash", EventStatus: "completed",
-				ResultContent: "staged:7",
-			},
-			want: ToolOutcomeUnknown,
-		},
-		{
-			name: "labeled staged marker",
-			call: ToolCallRow{
-				ToolName: "Bash", ResultContent: "agent-a:\nstaged:7\n\nagent-b:\nstaged:8",
-			},
-			want: ToolOutcomeUnknown,
-		},
-		{
-			name: "anonymous joined staged markers",
-			call: ToolCallRow{
-				ToolName: "Bash", ResultContent: "staged:7\n\nstaged:8",
-			},
-			want: ToolOutcomeUnknown,
-		},
-		{
-			name: "ordinary staged text",
-			call: ToolCallRow{
-				ToolName: "Bash", ResultContent: "saved staged:7 output",
-			},
-			want: ToolOutcomeContent,
-		},
-		{
-			name: "direct inline image",
-			call: ToolCallRow{ToolName: "Read", ResultContent: image},
-			want: ToolOutcomeUnknown,
-		},
-		{
-			name: "Amp binary placeholder",
-			call: ToolCallRow{ToolName: "Read", ResultContent: "[binary content]"},
-			want: ToolOutcomeUnknown,
-		},
-		{
-			name: "labeled binary placeholder",
-			call: ToolCallRow{
-				ToolName: "Read", ResultContent: "agent-a:\n[binary content]",
-			},
-			want: ToolOutcomeUnknown,
-		},
-		{
-			name: "same-line labeled binary placeholder",
-			call: ToolCallRow{
-				ToolName: "Read", ResultContent: "agent-a: [binary content]",
-			},
-			want: ToolOutcomeUnknown,
-		},
-		{
-			name: "joined binary placeholders",
-			call: ToolCallRow{
-				ToolName:      "Read",
-				ResultContent: "[binary content]\n\n[binary content]",
-			},
-			want: ToolOutcomeUnknown,
-		},
-		{
-			name: "joined binary and image placeholders",
-			call: ToolCallRow{
-				ToolName:      "Read",
-				ResultContent: "agent-a:\n[binary content]\n\nagent-b:\n" + projectedImage,
-			},
-			want: ToolOutcomeUnknown,
-		},
-		{
-			name: "joined binary and retained text",
-			call: ToolCallRow{
-				ToolName:      "Read",
-				ResultContent: "[binary content]\n\nagent-b:\nkept text",
-			},
-			want: ToolOutcomeContent,
-		},
-		{
-			name: "Amp image block",
-			call: ToolCallRow{
-				ToolName:      "Read",
-				ResultContent: `[{"type":"image","data":"..."}]`,
-			},
-			want: ToolOutcomeUnknown,
-		},
-		{
-			name: "image with empty Codex input text",
-			call: ToolCallRow{
-				ToolName:      "Read",
-				ResultContent: `[ {"type":"input_text","text":""},{"type":"input_image","image_url":"data:image/png;base64,AAEC"} ]`,
-			},
-			want: ToolOutcomeUnknown,
-		},
-		{
-			name: "image with Codex output text",
-			call: ToolCallRow{
-				ToolName:      "Read",
-				ResultContent: `[ {"type":"output_text","text":"kept text"},{"type":"input_image","image_url":"data:image/png;base64,AAEC"} ]`,
-			},
-			want: ToolOutcomeContent,
-		},
-		{
-			name: "direct inline image with blank lines",
-			call: ToolCallRow{ToolName: "Read", ResultContent: "[\n\n{\"type\":\"input_image\",\"image_url\":\"data:image/png;base64,AAEC\"}\n]"},
-			want: ToolOutcomeUnknown,
-		},
-		{
-			name: "direct projected image",
-			call: ToolCallRow{ToolName: "Read", ResultContent: projectedImage},
-			want: ToolOutcomeUnknown,
-		},
-		{
-			name: "direct offloaded image",
-			call: ToolCallRow{ToolName: "Read", ResultContent: offloadedImage},
-			want: ToolOutcomeUnknown,
-		},
-		{
-			name: "labeled image",
-			call: ToolCallRow{
-				ToolName: "Read",
-				ResultContent: "agent-a:\n" + projectedImage +
-					"\n\nagent-b:\n" + offloadedImage,
-			},
-			want: ToolOutcomeUnknown,
-		},
-		{
-			name: "labeled offload reference",
-			call: ToolCallRow{
-				ToolName:      "Read",
-				ResultContent: "agent-a:\n![Image: image/png, 3 bytes](asset://abc.png)",
-			},
-			want: ToolOutcomeUnknown,
-		},
-		{
-			name: "labeled inline image with blank lines",
-			call: ToolCallRow{
-				ToolName:      "Read",
-				ResultContent: "agent-a:\n[\n\n{\"type\":\"input_image\",\"image_url\":\"data:image/png;base64,AAEC\"}\n]",
-			},
-			want: ToolOutcomeUnknown,
-		},
-		{
-			name: "joined labeled images with blank lines",
-			call: ToolCallRow{
-				ToolName: "Read",
-				ResultContent: "agent-a:\n[\n\n{\"type\":\"input_image\",\"image_url\":\"data:image/png;base64,AAEC\"}\n]" +
-					"\n\nagent-b:\n[\n\n{\"type\":\"agentsview_image\",\"text\":\"![Image: image/png, 3 bytes](asset://abc.png)\"}\n]",
-			},
-			want: ToolOutcomeUnknown,
-		},
-		{
-			name: "offload reference followed by text",
-			call: ToolCallRow{
-				ToolName:      "Read",
-				ResultContent: "![Image: image/png, 3 bytes](asset://abc.png)\nFound target in src/main.go (line 12)",
-			},
-			want: ToolOutcomeContent,
-		},
-		{
-			name: "same-line image references with text",
-			call: ToolCallRow{
-				ToolName:      "Read",
-				ResultContent: "![Image: image/png, 3 bytes](asset://a.png) Found target ![Image: image/png, 3 bytes](asset://b.png)",
-			},
-			want: ToolOutcomeContent,
-		},
-		{
-			name: "mixed image and text",
-			call: ToolCallRow{
-				ToolName:      "Read",
-				ResultContent: `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"},{"type":"text","text":"kept text"}]`,
-			},
-			want: ToolOutcomeContent,
-		},
-		{
 			name: "bash no matches is content",
 			call: ToolCallRow{ToolName: "Bash", ResultContent: "No matches found"},
 			want: ToolOutcomeContent,
@@ -434,9 +243,9 @@ func TestExtractToolSequences_OpenCodeEmptyResults(t *testing.T) {
 	} {
 		t.Run(tt.toolName, func(t *testing.T) {
 			got := ExtractToolSequences([]ToolCallRow{
-				{ToolName: tt.toolName, Category: tt.category, EventStatus: "errored"},
+				{MessageOrdinal: 1, ToolName: tt.toolName, Category: tt.category, EventStatus: "errored"},
 				{
-					ToolName: tt.toolName, Category: tt.category, EventStatus: "completed",
+					MessageOrdinal: 2, ToolName: tt.toolName, Category: tt.category, EventStatus: "completed",
 					ResultContent: "No files found", ResultContentLength: 14,
 				},
 			}, true)
@@ -449,23 +258,28 @@ func TestExtractToolSequences_OpenCodeEmptyResults(t *testing.T) {
 func TestExtractToolSequences_Repeats(t *testing.T) {
 	calls := []ToolCallRow{
 		{
-			ToolName: "Grep", InputJSON: `{"path":"/tmp","line":1}`,
+			MessageOrdinal: 1,
+			ToolName:       "Grep", InputJSON: `{"path":"/tmp","line":1}`,
 			EventStatus: "errored",
 		},
 		{
-			ToolName: "Grep", InputJSON: `{"path":"/tmp","line":1}`,
+			MessageOrdinal: 2,
+			ToolName:       "Grep", InputJSON: `{"path":"/tmp","line":1}`,
 			EventStatus: "errored",
 		},
 		{
-			ToolName: "Grep", InputJSON: "{\n  \"line\": 1,\n  \"path\": \"/tmp\"\n}",
+			MessageOrdinal: 3,
+			ToolName:       "Grep", InputJSON: "{\n  \"line\": 1,\n  \"path\": \"/tmp\"\n}",
 			EventStatus: "errored",
 		},
 		{
-			ToolName: "Read", InputJSON: `{"path":"/tmp"}`,
+			MessageOrdinal: 4,
+			ToolName:       "Read", InputJSON: `{"path":"/tmp"}`,
 			EventStatus: "errored",
 		},
 		{
-			ToolName: "Read", InputJSON: `{"path":"/tmp"}`,
+			MessageOrdinal: 5,
+			ToolName:       "Read", InputJSON: `{"path":"/tmp"}`,
 			ResultContent: "content",
 		},
 	}
@@ -490,75 +304,33 @@ func TestExtractToolSequences_Repeats(t *testing.T) {
 }
 
 func TestExtractToolSequences_Endings(t *testing.T) {
-	empty := ToolCallRow{
-		ToolName: "Grep", Category: "Grep", EventStatus: "completed",
+	empty := ToolCallRow{MessageOrdinal: 1, ToolName: "Grep", Category: "Grep", EventStatus: "completed"}
+	assert.Equal(t, []ToolSequence{{Start: 0, End: 1, Ending: ToolSequenceEndingAbandoned}}, ExtractToolSequences([]ToolCallRow{empty}, true).Sequences)
+	assert.Equal(t, []ToolSequence{{Start: 0, End: 1, Ending: ToolSequenceEndingOpen}}, ExtractToolSequences([]ToolCallRow{empty}, false).Sequences)
+	for _, tt := range []struct {
+		name     string
+		call     ToolCallRow
+		complete bool
+		ending   ToolSequenceEnding
+	}{
+		{"recovered", ToolCallRow{EventStatus: "success", ResultContent: "file contents"}, true, ToolSequenceEndingRecovered},
+		{"completed empty", ToolCallRow{EventStatus: "success"}, true, ToolSequenceEndingAbandoned},
+		{"unobserved content", ToolCallRow{EventStatus: "success", ResultContentUnknown: true}, true, ToolSequenceEndingUnknown},
+		{"running", ToolCallRow{EventStatus: "running", ResultContent: "partial"}, true, ToolSequenceEndingUnknown},
+		{"incomplete", ToolCallRow{ResultContentUnknown: true}, false, ToolSequenceEndingOpen},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.call.MessageOrdinal = 2
+			tt.call.ToolName = "Read"
+			tt.call.Category = "Read"
+			got := ExtractToolSequences([]ToolCallRow{empty, tt.call}, tt.complete)
+			assert.Equal(t, []ToolSequence{{Start: 0, End: 2, ToolChanged: true, Ending: tt.ending}}, got.Sequences)
+		})
 	}
-	assert.Equal(t, []ToolSequence{{
-		Start: 0, End: 1, Ending: ToolSequenceEndingAbandoned,
-	}}, ExtractToolSequences([]ToolCallRow{empty}, true).Sequences)
-	assert.Equal(t, []ToolSequence{{
-		Start: 0, End: 1, Ending: ToolSequenceEndingOpen,
-	}}, ExtractToolSequences([]ToolCallRow{empty}, false).Sequences)
-
-	recovered := ExtractToolSequences([]ToolCallRow{
-		empty, {ToolName: "Bash", ResultContent: "done"},
-	}, true)
-	assert.Equal(t, []ToolSequence{{
-		Start: 0, End: 2, ToolChanged: true, Ending: ToolSequenceEndingRecovered,
-	}}, recovered.Sequences)
-
-	unknown := ToolCallRow{ToolName: "Read", EventStatus: "running"}
-	for _, content := range []string{"file contents", "", "[binary content]", "staged:7", "[image]"} {
-		got := ExtractToolSequences([]ToolCallRow{
-			empty, {ToolName: "Read", Category: "Read", EventStatus: "success", ResultContent: content},
-		}, true)
-		ending := ToolSequenceEndingAbandoned
-		if content == "file contents" {
-			ending = ToolSequenceEndingRecovered
-		}
-		assert.Equal(t, []ToolSequence{{Start: 0, End: 2, ToolChanged: true, Ending: ending}}, got.Sequences, content)
-	}
+	unknown := ToolCallRow{MessageOrdinal: 2, ToolName: "Read", EventStatus: "running"}
 	assert.Empty(t, ExtractToolSequences([]ToolCallRow{unknown}, true).Sequences)
-	assert.Empty(t, ExtractToolSequences([]ToolCallRow{
-		unknown, {ToolName: "Bash", ResultContent: "done"},
-	}, true).Sequences)
-
-	activeUnknown := ExtractToolSequences([]ToolCallRow{
-		empty,
-		{ToolName: "Read", ResultContent: "staged:7\n\nstaged:8"},
-	}, false)
-	assert.Equal(t, []ToolSequence{{
-		Start: 0, End: 2, ToolChanged: true,
-		Ending: ToolSequenceEndingOpen,
-	}}, activeUnknown.Sequences)
-
-	activeUnknownRecovered := ExtractToolSequences([]ToolCallRow{
-		empty,
-		{ToolName: "Read", EventStatus: "running", ResultContent: "partial"},
-		{ToolName: "Bash", ResultContent: "done"},
-	}, false)
-	assert.Equal(t, []ToolSequence{{
-		Start: 0, End: 3, ToolChanged: true,
-		Ending: ToolSequenceEndingRecovered,
-	}}, activeUnknownRecovered.Sequences)
-
-	ampImage := ExtractToolSequences([]ToolCallRow{
-		empty,
-		{ToolName: "Read", ResultContent: "[binary content]"},
-	}, true)
-	assert.Equal(t, []ToolSequence{{
-		Start: 0, End: 2, ToolChanged: true,
-		Ending: ToolSequenceEndingAbandoned,
-	}}, ampImage.Sequences)
-
-	labeledBinary := ExtractToolSequences([]ToolCallRow{
-		empty,
-		{ToolName: "Read", ResultContent: "agent-a:\n[binary content]"},
-	}, true)
-	assert.Equal(t, []ToolSequence{{
-		Start: 0, End: 2, ToolChanged: true,
-		Ending: ToolSequenceEndingAbandoned,
-	}}, labeledBinary.Sequences)
+	got := ExtractToolSequences([]ToolCallRow{empty, unknown, {MessageOrdinal: 3, ToolName: "Bash", ResultContent: "done"}}, false)
+	assert.Equal(t, []ToolSequence{{Start: 0, End: 3, ToolChanged: true, Ending: ToolSequenceEndingRecovered}}, got.Sequences)
 }
 
 func TestExtractToolSequences_Invariants(t *testing.T) {
@@ -589,7 +361,8 @@ func TestExtractToolSequences_Invariants(t *testing.T) {
 		got.Calls[2].MessageOrdinal,
 	})
 
-	assert.Equal(t, ToolSequences{}, ExtractToolSequences(nil, false))
+	assert.Equal(t, ToolSequences{Calls: []ToolCallOutcome{}, Sequences: []ToolSequence{}}, ExtractToolSequences(nil, false))
+	assert.Equal(t, ExtractToolSequences(nil, false), ExtractToolSequences([]ToolCallRow{}, false))
 }
 
 func TestNormalizeToolInputPreservesLargeNumbers(t *testing.T) {
@@ -614,4 +387,28 @@ func TestClassifyToolRepeatMalformedInputs(t *testing.T) {
 		ToolCallRow{ToolName: "Grep"},
 		ToolCallRow{ToolName: "Grep"},
 	))
+}
+
+func TestExtractToolSequences_MessageBoundaries(t *testing.T) {
+	calls := []ToolCallRow{
+		{MessageOrdinal: 1, ToolName: "Grep", InputJSON: `{"q":"a"}`, ResultContent: "No matches found"},
+		{MessageOrdinal: 1, CallIndex: 1, ToolName: "Grep", InputJSON: `{"q":"a"}`, ResultContent: "No matches found"},
+		{MessageOrdinal: 1, CallIndex: 2, ToolName: "Glob", ResultContent: "src/a.go"},
+	}
+	got := ExtractToolSequences(calls, true)
+	require.Len(t, got.Sequences, 1)
+	assert.Equal(t, ToolRepeatNone, got.Calls[1].Repeat)
+	assert.False(t, got.Calls[2].ToolChanged)
+	assert.NotEqual(t, ToolSequenceEndingRecovered, got.Sequences[0].Ending)
+	calls = append(calls, ToolCallRow{MessageOrdinal: 2, ToolName: "Read", ResultContent: "file contents"})
+	got = ExtractToolSequences(calls, true)
+	assert.Equal(t, []ToolSequence{{Start: 0, End: 4, ToolChanged: true, Ending: ToolSequenceEndingRecovered}}, got.Sequences)
+}
+
+func TestExtractToolSequences_UnknownTail(t *testing.T) {
+	got := ExtractToolSequences([]ToolCallRow{
+		{MessageOrdinal: 1, ToolName: "Grep", ResultContent: "No matches found"},
+		{MessageOrdinal: 2, ToolName: "Read", EventStatus: "running"},
+	}, true)
+	assert.Equal(t, []ToolSequence{{Start: 0, End: 2, ToolChanged: true, Ending: ToolSequenceEndingUnknown}}, got.Sequences)
 }
