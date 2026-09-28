@@ -120,10 +120,9 @@ func WriteDaemonRuntimeWithAuthAndNoSync(
 	if explicitPort != nil {
 		rec.Metadata[runtimeExplicitPort] = strconv.Itoa(*explicitPort)
 	}
-	// Persist this process's OS create time so `serve stop` can confirm a
-	// PID still belongs to the recorded daemon (and was not reused) by
-	// matching create times exactly. Best-effort: if it cannot be read, stop
-	// falls back to ping confirmation only.
+	// Persist the OS create time for compatibility with older runtime records
+	// and platforms without the stronger Kit process identity. Best-effort: if
+	// it cannot be read, stop falls back to the other identity evidence.
 	if ct, ok := processCreateTimeMillis(os.Getpid()); ok {
 		rec.Metadata[runtimeCreateTime] = strconv.FormatInt(ct, 10)
 	}
@@ -192,6 +191,22 @@ func processCreateTimeStateForPID(
 	return compareProcessCreateTime(recorded, live, ok)
 }
 
+func runtimeRecordIdentityState(rec daemon.RuntimeRecord) processCreateTimeState {
+	if rec.ProcessIdentityV2 != "" {
+		switch daemon.CompareRuntimeProcessIdentity(rec) {
+		case daemon.ProcessIdentityMatch:
+			return processCreateTimeMatch
+		case daemon.ProcessIdentityMismatch:
+			return processCreateTimeMismatch
+		default:
+			return processCreateTimeUnknown
+		}
+	}
+	return processCreateTimeStateForPID(
+		rec.PID, rec.Metadata[runtimeCreateTime],
+	)
+}
+
 // RemoveDaemonRuntime removes the current process's kit daemon runtime record.
 func RemoveDaemonRuntime(dataDir string) {
 	path, err := runtimeStore(dataDir).Path(os.Getpid())
@@ -234,7 +249,7 @@ func FindDaemonRuntime(dataDir string, authToken ...string) *DaemonRuntime {
 		if !daemon.ProcessAlive(rec.PID) {
 			continue
 		}
-		if runtimeRecordHasMismatchedCreateTime(store, rec) {
+		if runtimeRecordHasMismatchedIdentity(store, rec) {
 			continue
 		}
 		if !daemonRuntimeFromRecord(rec).ReadOnly {
@@ -292,9 +307,7 @@ func writableDaemonRecordsWithFallback(
 	hasWritable := false
 	for _, rec := range records {
 		rt := daemonRuntimeFromRecord(rec)
-		if !rt.ReadOnly && processCreateTimeStateForPID(
-			rec.PID, rec.Metadata[runtimeCreateTime],
-		) == processCreateTimeMismatch {
+		if !rt.ReadOnly && runtimeRecordIdentityState(rec) == processCreateTimeMismatch {
 			continue
 		}
 		filtered = append(filtered, rec)
@@ -340,6 +353,8 @@ func findStartupStateFallback(dataDir, authToken string) *DaemonRuntime {
 		Address: net.JoinHostPort(probeHostForDial(st.Host), strconv.Itoa(st.Port)),
 	})
 	rec.PID = st.PID
+	rec.ProcessIdentity = ""
+	rec.ProcessIdentityV2 = ""
 	rec.StartedAt = st.StartedAt
 	rec.Metadata = map[string]string{
 		runtimeHost:        st.Host,
@@ -423,7 +438,7 @@ func findIncompatibleDaemonRuntime(
 		if !daemon.ProcessAlive(rec.PID) {
 			continue
 		}
-		if runtimeRecordHasMismatchedCreateTime(store, rec) {
+		if runtimeRecordHasMismatchedIdentity(store, rec) {
 			continue
 		}
 		if !daemonRuntimeFromRecord(rec).ReadOnly {
@@ -645,9 +660,7 @@ func writableDaemonRecordsFromStore(
 		if !daemon.ProcessAlive(rec.PID) {
 			continue
 		}
-		if processCreateTimeStateForPID(
-			rec.PID, rec.Metadata[runtimeCreateTime],
-		) == processCreateTimeMismatch {
+		if runtimeRecordIdentityState(rec) == processCreateTimeMismatch {
 			if rec.SourcePath != "" {
 				if err := os.Remove(rec.SourcePath); err != nil &&
 					!errors.Is(err, os.ErrNotExist) {
@@ -683,7 +696,7 @@ func hasLiveDaemonRuntime(dataDir string, authToken ...string) bool {
 		if !daemon.ProcessAlive(rec.PID) {
 			continue
 		}
-		if runtimeRecordHasMismatchedCreateTime(store, rec) {
+		if runtimeRecordHasMismatchedIdentity(store, rec) {
 			continue
 		}
 		return true
@@ -799,7 +812,7 @@ func hasLiveWritableDaemonRuntime(dataDir string, authToken ...string) bool {
 		if !daemon.ProcessAlive(rec.PID) {
 			continue
 		}
-		if runtimeRecordHasMismatchedCreateTime(store, rec) {
+		if runtimeRecordHasMismatchedIdentity(store, rec) {
 			continue
 		}
 		if !daemonRuntimeFromRecord(rec).ReadOnly {
@@ -809,13 +822,11 @@ func hasLiveWritableDaemonRuntime(dataDir string, authToken ...string) bool {
 	return false
 }
 
-func runtimeRecordHasMismatchedCreateTime(
+func runtimeRecordHasMismatchedIdentity(
 	store daemon.RuntimeStore,
 	rec daemon.RuntimeRecord,
 ) bool {
-	if processCreateTimeStateForPID(
-		rec.PID, rec.Metadata[runtimeCreateTime],
-	) != processCreateTimeMismatch {
+	if runtimeRecordIdentityState(rec) != processCreateTimeMismatch {
 		return false
 	}
 	path := rec.SourcePath
