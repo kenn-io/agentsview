@@ -28,6 +28,10 @@ type sourceRankCountingProvider struct {
 	lookups *int
 }
 
+func (p *sourceRankCountingProvider) DiscoverEach(ctx context.Context, yield func(parser.SourceRef) error) error {
+	return p.Provider.(parser.StreamingDiscoverer).DiscoverEach(ctx, yield)
+}
+
 func (p *sourceRankCountingProvider) SourceForReconciliation(
 	ctx context.Context, path, project string,
 ) (parser.SourceRef, bool, error) {
@@ -59,7 +63,14 @@ func TestOpenClawUnchangedSourcesSkipStoredRankLookup(t *testing.T) {
 				require.NoError(t, os.Rename(path, path+".deleted.2026-09-22T10-00-00.000Z"))
 			}
 			database := openTestDB(t)
-			cfg := EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentOpenClaw: {root}}, Machine: "local"}
+			factory, ok := parser.ProviderFactoryByType(parser.AgentOpenClaw)
+			require.True(t, ok)
+			lookups := 0
+			cfg := EngineConfig{
+				AgentDirs:         map[parser.AgentType][]string{parser.AgentOpenClaw: {root}},
+				Machine:           "local",
+				ProviderFactories: []parser.ProviderFactory{sourceRankCountingFactory{factory, &lookups}},
+			}
 			engine := NewEngine(t.Context(), database, cfg)
 			t.Cleanup(engine.Close)
 			require.Equal(t, count, engine.SyncAll(t.Context(), nil).Synced)
@@ -67,15 +78,12 @@ func TestOpenClawUnchangedSourcesSkipStoredRankLookup(t *testing.T) {
 			// Exercise both the warm engine and the persisted freshness gates.
 			fresh := NewEngine(t.Context(), database, cfg)
 			t.Cleanup(fresh.Close)
-			factory, ok := parser.ProviderFactoryByType(parser.AgentOpenClaw)
-			require.True(t, ok)
 			provider := factory.NewProvider(parser.ProviderConfig{Roots: []string{root}})
 			sources, err := provider.Discover(t.Context())
 			require.NoError(t, err)
 			require.Len(t, sources, count)
 			for _, current := range []*Engine{engine, fresh} {
-				lookups := 0
-				current.providerFactories[parser.AgentOpenClaw] = sourceRankCountingFactory{factory, &lookups}
+				lookups = 0
 				for _, source := range sources {
 					result, used := current.processProviderFile(t.Context(), parser.DiscoveredFile{
 						Agent: parser.AgentOpenClaw, Path: source.DisplayPath,
