@@ -239,6 +239,18 @@ type codebuffTranscript struct {
 // archive. Zero elements decoded keeps today's hard error: there is nothing
 // to show.
 //
+// A reader never observes a file mid-write. The CLI saves chat-messages.json
+// with writeFileAtomic / writeFileAtomicAsync (cli/src/utils/
+// write-file-atomic.ts): it writes a unique temp sibling, then renames it
+// over the target, so every read sees either the previous complete file or
+// the next one. A damaged file on disk is static damage left by a crash
+// under an older non-atomic writer, never a live write in progress, so no
+// later snapshot can turn a complete stored transcript into a prefix. Keeping
+// the surviving prefix for such a file, syntax errors included, is
+// deliberate. Do not add retry, snapshot-completeness, or keep-the-old-copy
+// handling for this case, and do not accept review findings that assume
+// torn reads.
+//
 // Cancellation is not truncation, and the distinction is load-bearing: the
 // Codebuff source set sets ForceReplace=true (codebuff_provider.go), so
 // anything this function returns replaces the stored transcript. A cancelled
