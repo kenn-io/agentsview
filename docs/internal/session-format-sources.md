@@ -173,7 +173,9 @@ fixtures retain this field; missing identities remain source-local.
   reparses stored sources to recover the previously discarded status. Late
   result events inherit the call's resolved subagent session ID when they do
   not carry an explicit one, matching full imports. Reverified with full and
-  incremental Claude imports into separate temporary archives.
+  incremental Claude imports into separate temporary archives, including a
+  repeated result whose child identity arrives later. Deduplication fills
+  missing event links without replacing existing explicit links.
 
 - **Empty search replies (2026-09-28):** The contributor to
   [PR #1859](https://github.com/kenn-io/agentsview/pull/1859) reported `Grep`

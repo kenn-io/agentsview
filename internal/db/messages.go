@@ -3709,6 +3709,7 @@ func applyToolCallResultUpdateTx(ctx context.Context,
 
 	insertRows := make([]toolResultEventRow, 0, len(incoming))
 	var inserted []ToolResultEvent
+	var metadataChanged bool
 	for _, candidate := range incoming {
 		stored := candidate
 		if blocked {
@@ -3725,6 +3726,28 @@ func applyToolCallResultUpdateTx(ctx context.Context,
 			nilIfEmpty(stored.AgentID), stored.Status, stored.RawContentDigest,
 		).Scan(&exists)
 		if err == nil {
+			if stored.SubagentSessionID != "" {
+				result, err := tx.ExecContext(ctx,
+					`UPDATE tool_result_events SET subagent_session_id = ?
+					 WHERE session_id = ? AND tool_call_message_ordinal = ?
+					   AND call_index = ? AND agent_id IS ? AND status = ?
+					   AND raw_content_digest = ?
+					   AND COALESCE(subagent_session_id, '') = ''`,
+					stored.SubagentSessionID,
+					sessionID, position.MessageOrdinal, position.CallIndex,
+					nilIfEmpty(stored.AgentID), stored.Status, stored.RawContentDigest,
+				)
+				if err != nil {
+					return false, nil, fmt.Errorf("linking existing tool result for %s/%s: %w",
+						sessionID, update.ToolUseID, err)
+				}
+				count, err := result.RowsAffected()
+				if err != nil {
+					return false, nil, fmt.Errorf("counting linked tool results for %s/%s: %w",
+						sessionID, update.ToolUseID, err)
+				}
+				metadataChanged = metadataChanged || count > 0
+			}
 			continue // equivalent event already stored
 		}
 		if !errors.Is(err, sql.ErrNoRows) {
@@ -3744,7 +3767,7 @@ func applyToolCallResultUpdateTx(ctx context.Context,
 		})
 	}
 	if len(insertRows) == 0 {
-		return false, nil, nil
+		return metadataChanged, nil, nil
 	}
 	if err := insertToolResultEventsTx(tx, insertRows); err != nil {
 		return false, nil, err
