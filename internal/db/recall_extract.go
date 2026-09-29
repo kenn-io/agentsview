@@ -373,10 +373,10 @@ func (db *DB) ActivateExtractGeneration(
 //
 // Staleness always blocks: no completed session — still extraction-eligible
 // — may have transcript writes past its coverage stamp or a scan stamp
-// outside the current rules versions, and no failed session may hold staged
-// output made stale by a later session write. Those describe output that no
-// longer matches the transcript it came from, which disqualifies a first
-// corpus exactly as much as a replacement.
+// outside the current rules versions, and no partial or failed session may
+// hold staged output made stale by a later session write. That output no
+// longer matches its transcript, which disqualifies a first corpus exactly
+// as much as a replacement.
 //
 // Completeness blocks only while a corpus is serving: no fully eligible
 // session may be pending or partial, and none may lack a progress row
@@ -452,25 +452,21 @@ func verifyExtractActivationCoverageTx(
 			"generation %s has %d completed sessions whose coverage went "+
 				"stale: %w", fingerprint, stale, ErrExtractActivationBlocked)
 	}
-	failedArgs := make([]any, 0, len(scanVersions)+3)
-	failedArgs = append(failedArgs, fingerprint, ExtractProgressFailed)
+	stagedArgs := make([]any, 0, len(scanVersions)+4)
+	stagedArgs = append(stagedArgs, fingerprint, ExtractProgressPartial, ExtractProgressFailed)
 	for _, version := range scanVersions {
-		failedArgs = append(failedArgs, version)
+		stagedArgs = append(stagedArgs, version)
 	}
-	failedArgs = append(failedArgs, quietCutoff.UTC().Format(extractTimeLayout))
-	// Failed rows do not block in general — they retry and top the corpus
-	// up later — but a failed partial row keeps its staged entries behind
-	// the failure backoff, and a session write past its stamp (content, or
-	// a remap to another project, cwd, or branch) leaves them stale in
-	// ways only the retry's refresh repairs. Only fully eligible sessions
-	// count: staged output of every other session is deleted by the
-	// cleanup later in this transaction, and a failed row with nothing
-	// staged promotes nothing.
-	var staleFailed int
+	stagedArgs = append(stagedArgs, quietCutoff.UTC().Format(extractTimeLayout))
+	// Partial and failed rows can hold staged entries until extraction
+	// resumes. A session write after their coverage stamp makes that output
+	// stale. Only eligible sessions with staged output count: the cleanup
+	// below deletes ineligible output, and empty rows promote nothing.
+	var staleStaged int
 	if err := tx.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM recall_extract_progress p
 		JOIN sessions s ON s.id = p.session_id
-		WHERE p.generation_fingerprint = ? AND p.state = ?
+		WHERE p.generation_fingerprint = ? AND p.state IN (?, ?)
 		  AND `+fmt.Sprintf(extractEligibleSessionSQL, versionMarks, gate)+`
 		  AND ((s.local_modified_at IS NULL AND p.content_stamped_at = '')
 			OR s.local_modified_at >= p.content_stamped_at)
@@ -482,15 +478,15 @@ func verifyExtractActivationCoverageTx(
 			  AND e.review_state = 'unreviewed_auto'
 			  AND e.superseded_by_entry_id = ''
 		  )`,
-		failedArgs...,
-	).Scan(&staleFailed); err != nil {
-		return fmt.Errorf("counting stale failed coverage: %w", err)
+		stagedArgs...,
+	).Scan(&staleStaged); err != nil {
+		return fmt.Errorf("counting stale staged coverage: %w", err)
 	}
-	if staleFailed > 0 {
+	if staleStaged > 0 {
 		return fmt.Errorf(
-			"generation %s has %d failed sessions whose staged output "+
+			"generation %s has %d incomplete sessions whose staged output "+
 				"went stale: %w",
-			fingerprint, staleFailed, ErrExtractActivationBlocked)
+			fingerprint, staleStaged, ErrExtractActivationBlocked)
 	}
 	if serving {
 		if err := refuseUncoveredEligibleSessionsTx(

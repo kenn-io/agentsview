@@ -2088,8 +2088,8 @@ func TestManagerChangedDoneSessionBlocksActivation(t *testing.T) {
 	d := newTestArchive(t)
 	ctx := t.Context()
 	server, _ := modelServer(t, alwaysEntries(t, "x"))
-	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
-	seedSession(t, d, "sess-2", turnMessages("c", "d"), nil)
+	seedSession(t, d, "sess-1", turnMessages("a", "b"), endedAgo(time.Hour))
+	seedSession(t, d, "sess-2", turnMessages("c", "d"), endedAgo(2*time.Hour))
 	m := newManager(t, d, server.URL, nil)
 
 	result, err := m.RunPass(ctx, PassOptions{Limit: 1})
@@ -2099,6 +2099,10 @@ func TestManagerChangedDoneSessionBlocksActivation(t *testing.T) {
 	if result.Sessions != 1 || result.Activated {
 		require.FailNowf(t, "test failed", "result = %+v, want 1 session and no activation", result)
 	}
+	progress, ok, err := d.ExtractProgress(ctx, "sess-1", m.Fingerprint())
+	require.NoError(t, err)
+	require.True(t, ok, "sess-1 must be extracted before its transcript changes")
+	require.Equal(t, db.ExtractProgressDone, progress.State)
 
 	// The completed session's transcript changes: its extracted corpus is
 	// stale, so the generation is not actually covered.
