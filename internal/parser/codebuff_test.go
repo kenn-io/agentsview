@@ -2949,20 +2949,16 @@ func TestCodebuffSubagentIDAllocation(t *testing.T) {
 			`,"agentType":"basher","initialPrompt":"go"}`
 	}
 	transcript := `[{"id":"ai-1","variant":"ai","timestamp":"03:04 PM","blocks":[` +
-		agent("dup") + `,` + agent("dup") + `,` + agent("") + `,` + agent("a b/c") +
+		agent("agent-1") + `,` + agent("a b/c") +
 		`]}]`
 	outcome, parentID := codebuffParseProviderDir(t, transcript)
 	parent := codebuffResultByID(t, outcome, parentID)
 	calls := codebuffAllToolCalls(parent.Messages)
-	require.Len(t, calls, 4)
+	require.Len(t, calls, 2)
 
 	prefix := parentID + "__subagent__"
-	assert.Equal(t, prefix+"dup", calls[0].SubagentSessionID)
-	assert.Equal(t, prefix+"dup-2", calls[1].SubagentSessionID,
-		"a repeated agentId gets a suffix in document order")
-	assert.Equal(t, prefix+"idx3", calls[2].SubagentSessionID,
-		"an empty agentId uses the block's position among agent blocks")
-	unsafe := strings.TrimPrefix(calls[3].SubagentSessionID, prefix)
+	assert.Equal(t, prefix+"agent-1", calls[0].SubagentSessionID)
+	unsafe := strings.TrimPrefix(calls[1].SubagentSessionID, prefix)
 	assert.Regexp(t, `^h[0-9a-f]{16}$`, unsafe,
 		"an agentId with unsafe characters is replaced by a digest")
 

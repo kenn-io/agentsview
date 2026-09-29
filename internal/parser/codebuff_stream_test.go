@@ -44,7 +44,7 @@ func refParseCodebuffMessages(
 		return nil, nil, time.Time{}, time.Time{}, nil,
 			errors.New("chat-messages.json root is not an array")
 	}
-	subs := &refCodebuffSubagentSink{rootID: sessionID, used: map[string]bool{}}
+	subs := &refCodebuffSubagentSink{rootID: sessionID}
 
 	var (
 		messages  []ParsedMessage
@@ -219,18 +219,14 @@ func refParseCodebuffMessages(
 }
 
 // refCodebuffSubagentSink mirrors codebuffSubagentSink over gjson values:
-// the same ID allocation (agentId key, digest for unsafe ids, positional key
-// for empty ids, -N suffix for repeats) and the same document-order
-// collection. Keep it in lockstep with the production sink.
+// the same ID allocation (agentId key, digest for unsafe ids) and the same
+// document-order collection. Keep it in lockstep with the production sink.
 type refCodebuffSubagentSink struct {
 	rootID string
-	used   map[string]bool
-	seen   int
 	out    []codebuffSubagent
 }
 
 func (s *refCodebuffSubagentSink) allocate(agentID string) string {
-	s.seen++
 	key := agentID
 	for _, r := range agentID {
 		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') &&
@@ -240,15 +236,7 @@ func (s *refCodebuffSubagentSink) allocate(agentID string) string {
 			break
 		}
 	}
-	if key == "" {
-		key = "idx" + strconv.Itoa(s.seen)
-	}
-	candidate := key
-	for n := 2; s.used[candidate]; n++ {
-		candidate = key + "-" + strconv.Itoa(n)
-	}
-	s.used[candidate] = true
-	return s.rootID + "__subagent__" + candidate
+	return s.rootID + "__subagent__" + key
 }
 
 func (s *refCodebuffSubagentSink) collect(

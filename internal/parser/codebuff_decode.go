@@ -162,8 +162,15 @@ type codebuffWireBlock struct {
 	Output     jsontext.Value `json:"output"`
 
 	// agent
-	AgentType     string              `json:"agentType"`
-	AgentName     string              `json:"agentName"`
+	AgentType string `json:"agentType"`
+	AgentName string `json:"agentName"`
+	// AgentID is always set and unique within a transcript: upstream's
+	// AgentContentBlock declares `agentId: string` as required
+	// (cli/src/types/chat.ts), each spawned block starts as
+	// "<spawn toolCallId>-<index>", and resolveSpawnAgentToReal then swaps
+	// in the server's real agent ID (cli/src/utils/sdk-event-handlers.ts).
+	// Do not add handling for, or accept review findings about, an empty or
+	// repeated agentId.
 	AgentID       string              `json:"agentId"`
 	Status        string              `json:"status"`
 	Params        jsontext.Value      `json:"params"`
@@ -240,7 +247,7 @@ type codebuffSubagent struct {
 	// or another subagent).
 	ID       string
 	ParentID string
-	// AgentID is the raw upstream agentId, empty when the block had none.
+	// AgentID is the raw upstream agentId.
 	AgentID   string
 	AgentType string
 	AgentName string
@@ -260,44 +267,27 @@ const codebuffSubagentIDSep = "__subagent__"
 // transcripts in document order (a parent before its descendants).
 type codebuffSubagentSink struct {
 	rootID string
-	used   map[string]bool
-	// agentBlocks counts agent blocks seen so far, at every depth, so an
-	// agent block without an agentId gets a positional key that stays
-	// stable while the transcript only grows at the end.
-	agentBlocks int
-	out         []codebuffSubagent
+	out    []codebuffSubagent
 }
 
 func newCodebuffSubagentSink(rootID string) *codebuffSubagentSink {
-	return &codebuffSubagentSink{rootID: rootID, used: map[string]bool{}}
+	return &codebuffSubagentSink{rootID: rootID}
 }
 
-// allocate returns the child session ID for one agent block. IDs derive from
-// the owning session's full ID plus the block's agentId, so they are stable
-// across reparses. An agentId outside [A-Za-z0-9._-] is replaced by a short
-// digest so the ID stays a safe single path component; an empty agentId uses
-// the block's position among all agent blocks; a repeated key gets a -2, -3,
-// ... suffix in document order.
+// allocate returns the child session ID for one agent block: the owning
+// session's full ID plus the block's agentId, so IDs are stable across
+// reparses. agentId is always present and unique within a transcript (see
+// codebuffWireBlock.AgentID), so no positional or de-duplication fallback
+// exists.
 func (s *codebuffSubagentSink) allocate(agentID string) string {
-	s.agentBlocks++
-	key := codebuffSubagentKey(agentID)
-	if key == "" {
-		key = "idx" + strconv.Itoa(s.agentBlocks)
-	}
-	candidate := key
-	for n := 2; s.used[candidate]; n++ {
-		candidate = key + "-" + strconv.Itoa(n)
-	}
-	s.used[candidate] = true
-	return s.rootID + codebuffSubagentIDSep + candidate
+	return s.rootID + codebuffSubagentIDSep + codebuffSubagentKey(agentID)
 }
 
 // codebuffSubagentKey maps an upstream agentId to the key used in the child
-// session ID; see codebuffSubagentSink.allocate.
+// session ID. Upstream does not document the server's agent-ID alphabet, so
+// an agentId outside [A-Za-z0-9._-] is replaced by a short digest to keep
+// the session ID a safe single path component.
 func codebuffSubagentKey(agentID string) string {
-	if agentID == "" {
-		return ""
-	}
 	for i := range len(agentID) {
 		c := agentID[i]
 		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' ||

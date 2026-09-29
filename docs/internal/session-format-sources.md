@@ -3288,11 +3288,14 @@ schemas keep their existing ordering behavior.
   by the same block walker as a top-level AI message, stamped with the
   containing message's timestamp because nested blocks carry none. The child
   ID is the owning transcript's full session ID plus `__subagent__<agentId>`
-  (a digest replaces an `agentId` with characters outside `[A-Za-z0-9._-]`, an
-  empty one uses the block's position among agent blocks, and a repeat gets a
-  `-2`, `-3` suffix). The spawning Task call's `SubagentSessionID` names the
-  child and its single result is the block's own `content` (the final answer),
-  so `result_content_blocked_categories` applies to every nested tool call per
+  (a digest replaces an `agentId` with characters outside `[A-Za-z0-9._-]`).
+  Upstream always sets `agentId` and keeps it unique within a transcript: the
+  type declares it required, each spawned block starts as
+  `<spawn toolCallId>-<index>`, and `resolveSpawnAgentToReal` swaps in the
+  server's agent ID (`cli/src/utils/sdk-event-handlers.ts`). The spawning Task
+  call's `SubagentSessionID` names the child and its single result is the
+  block's own `content` (the final answer), so
+  `result_content_blocked_categories` applies to every nested tool call per
   call, as for any stored result. An agent block with no prompt and no
   renderable child blocks yields no child session. Every session in the tree
   shares the transcript's source identity; credits stay on the top-level
