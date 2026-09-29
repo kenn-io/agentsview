@@ -39,7 +39,7 @@ func TestOMOProviderKeepsPiLineageAndOMOIdentity(t *testing.T) {
 	assert.Equal(t, "omo:session-omo", sess.ID)
 	assert.Equal(t, AgentOMO, sess.Agent)
 	assert.NotEqual(t, AgentPi, sess.Agent)
-	assert.Equal(t, "pi-compatible", sess.Entrypoint)
+	assert.Empty(t, sess.Entrypoint)
 	assert.Equal(t, "pi_project", sess.Project)
 	assert.Equal(t, sourcePath, sess.File.Path)
 	require.NotEmpty(t, outcome.Results[0].Result.Messages)

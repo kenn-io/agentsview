@@ -49,7 +49,7 @@ func TestOMOSyncIndexesOneOMORowAndStaysIdempotent(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Equal(t, string(parser.AgentOMO), sess.Agent)
-	assert.Equal(t, "pi-compatible", sess.Entrypoint)
+	assert.Empty(t, sess.Entrypoint)
 	assert.Equal(t, "pi_project", sess.Project)
 	var storedPath string
 	err = database.Reader().QueryRow(t.Context(),
@@ -72,7 +72,6 @@ func TestOMOSyncIndexesOneOMORowAndStaysIdempotent(t *testing.T) {
 	).Scan(&storedPathAgain)
 	require.NoError(t, err)
 	assert.Equal(t, sessionPath, storedPathAgain)
-	assert.Equal(t, "pi-compatible", again.Entrypoint)
 	assert.Equal(t, sess.Project, again.Project)
 }
 

@@ -2159,12 +2159,34 @@ schemas keep their existing ordering behavior.
 
 ## OMO (`omo`)
 
-OMO writes the same session JSONL as [Pi](#pi-pi) under
-`~/.omo/agent/sessions`. Indexing uses the Pi producer and stamps agent `omo`,
-ID prefix `omo:`, and `entrypoint=pi-compatible`. It does not share the Pi or
-Oh My Pi agent id. Default directory override is `OMO_DIR` / `omo_dirs`.
-Evidence class: source. The on-disk shape was checked against the pinned Pi
-session format above and a local `~/.omo/agent/sessions` transcript.
+- **Format:** Pi-family, tree-structured JSONL, one file per session under an
+  encoded working-directory folder below `~/.omo/agent/sessions/`.
+- **Evidence:** `source`.
+- **Upstream:** The `omo` command from oh-my-openagent runs senpi, a Pi fork,
+  under an OMO brand profile. Clone `https://github.com/code-yeongyu/senpi.git`
+  at `b50f58c8a21b0e94b12c4269a9a8c608e03d308c` (tag `v2026.9.28-7`, the engine omo-ai 5.1.0 pins); see the pinned
+  [session format](https://github.com/code-yeongyu/senpi/blob/b50f58c8a21b0e94b12c4269a9a8c608e03d308c/packages/coding-agent/docs/session-format.md),
+  [session manager](https://github.com/code-yeongyu/senpi/blob/b50f58c8a21b0e94b12c4269a9a8c608e03d308c/packages/coding-agent/src/core/session-manager.ts),
+  and
+  [configuration paths](https://github.com/code-yeongyu/senpi/blob/b50f58c8a21b0e94b12c4269a9a8c608e03d308c/packages/coding-agent/src/config.ts).
+  The brand profile comes from
+  `https://github.com/code-yeongyu/oh-my-openagent.git` at
+  `d69d696acb3a2fddffc6a4a8bdfa7b94c6f4aef0`: its
+  [launcher](https://github.com/code-yeongyu/oh-my-openagent/blob/d69d696acb3a2fddffc6a4a8bdfa7b94c6f4aef0/packages/omo-native/bin/lib/launcher.js)
+  sets config directory `.omo`, the nested `agent` layout, and environment
+  prefix `OMO`, and its
+  [package manifest](https://github.com/code-yeongyu/oh-my-openagent/blob/d69d696acb3a2fddffc6a4a8bdfa7b94c6f4aef0/packages/omo-native/package.json)
+  pins the senpi version.
+- **Usage and cost:** Assistant messages persist input, output, cache-read, and
+  cache-write tokens with a model ID and a producer cost object, the same shape
+  as Pi. Agentsview catalog-prices the tokens.
+- **Agentsview:** OMO is registered through the Pi-family provider in
+  `internal/parser/pi.go` and `internal/parser/pi_provider.go` with its own
+  `omo:` session identity, so its sessions never share the Pi or Oh My Pi
+  agent. It reuses Pi's recursive discovery, header-ID lookup, and
+  `parentSession` fork and subagent lineage. `OMO_DIR` or `omo_dirs` override
+  the default directory. Sessions indexed earlier through a `PI_DIR` override
+  that pointed at `~/.omo` keep their `pi:` rows.
 
 ## Oh My Pi (`omp`)
 
