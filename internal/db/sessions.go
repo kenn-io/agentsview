@@ -208,8 +208,8 @@ func scanSessionRowWithSource(rs rowScanner, includeSource bool) (Session, error
 	return s, err
 }
 
-// Version 4 counts provider error and denied statuses as failures.
-const CurrentQualitySignalVersion = 4
+// Version 5 recomputes edit churn from normalized paths and all input path keys.
+const CurrentQualitySignalVersion = 5
 
 // QualitySignals groups persisted deterministic quality-signal
 // columns for API callers while keeping the database representation

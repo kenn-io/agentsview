@@ -3,6 +3,8 @@ package signals
 import (
 	"regexp"
 	"strings"
+
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 // ToolCallRow is populated from a JOIN of tool_calls + messages.
@@ -10,6 +12,7 @@ type ToolCallRow struct {
 	ToolName            string
 	Category            string // "Bash", "Edit", "Write", "Read", "Search"
 	InputJSON           string
+	FilePath            string // Normalized archive path, including raw patch inputs.
 	ResultContent       string
 	MessageOrdinal      int
 	CallIndex           int
@@ -251,7 +254,7 @@ func EditChurnFiles(calls []ToolCallRow) []EditChurn {
 		if c.Category != "Edit" && c.Category != "Write" {
 			continue
 		}
-		path := extractFilePath(c.InputJSON)
+		path := c.filePath()
 		if path == "" {
 			continue
 		}
@@ -319,20 +322,11 @@ func churnCluster(
 	return 0, 0, false
 }
 
-// extractFilePath extracts file_path from InputJSON using simple
-// string search to avoid JSON parsing overhead.
-func extractFilePath(input string) string {
-	marker := `"file_path":"`
-	idx := strings.Index(input, marker)
-	if idx < 0 {
-		return ""
+func (c ToolCallRow) filePath() string {
+	if c.FilePath != "" {
+		return c.FilePath
 	}
-	start := idx + len(marker)
-	end := strings.Index(input[start:], `"`)
-	if end < 0 {
-		return ""
-	}
-	return input[start : start+end]
+	return parser.ResolveFilePathFromJSON(c.InputJSON)
 }
 
 // hasChurnWindow checks whether any sliding window of size

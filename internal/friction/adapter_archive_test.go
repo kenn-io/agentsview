@@ -1,6 +1,10 @@
 package friction_test
 
 import (
+	"encoding/json/v2"
+	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -11,6 +15,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/friction"
+	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -84,7 +89,7 @@ func rawFromDB(t *testing.T, msgs []db.Message) ([]friction.RawMessage, []fricti
 				MessageOrdinal: m.Ordinal, CallIndex: i,
 				ToolName: tc.ToolName, Category: tc.Category,
 				InputJSON: tc.InputJSON, ResultContent: tc.ResultContent,
-				Timestamp: at,
+				Timestamp: at, FilePath: tc.FilePath,
 			}
 			if n := len(tc.ResultEvents); n > 0 {
 				c.LastEventContent = tc.ResultEvents[n-1].Content
@@ -248,4 +253,97 @@ func TestArchivedClaudeSession(t *testing.T) {
 		require.Len(t, got, 1)
 		assert.Equal(t, "for now", got[0].Label)
 	})
+}
+
+func TestArchivedOpenHandsActionSummary(t *testing.T) {
+	for _, tt := range []struct {
+		name, tool, summary, thought string
+		wantWorkaround, emptyCommand bool
+	}{
+		{"terminal", "terminal", "Inspect output", "Inspecting output.", false, false},
+		{"multiline summary", "terminal", "Inspect output\nfor now", "Inspecting output.", false, false},
+		{"empty terminal poll", "terminal", "Wait for now", "Inspecting output.", false, true},
+		{"custom tool", "custom_tool", "Use a temporary hack for now", "Inspecting output.", false, false},
+		{"real workaround remains", "terminal", "Inspect output", "Using a hardcoded value for now.", true, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			session := filepath.Join(root, sid)
+			require.NoError(t, os.MkdirAll(filepath.Join(session, "events"), 0o700))
+			require.NoError(t, os.WriteFile(filepath.Join(session, "base_state.json"), []byte(`{"id":"`+sid+`"}`), 0o600))
+			command := "echo temporary hack for now"
+			if tt.emptyCommand {
+				command = ""
+			}
+			arguments, err := json.Marshal(map[string]string{"command": command})
+			require.NoError(t, err)
+			event, err := json.Marshal(map[string]any{
+				"id": "event-1", "timestamp": ts(0), "source": "agent", "kind": "ActionEvent",
+				"thought":   []map[string]string{{"type": "text", "text": tt.thought}},
+				"action":    map[string]string{"command": command, "kind": "TerminalAction"},
+				"tool_name": tt.tool, "tool_call_id": "call-1", "summary": tt.summary,
+				"tool_call":       map[string]string{"name": tt.tool, "arguments": string(arguments)},
+				"thinking_blocks": []map[string]string{{"thinking": "Use a temporary hack for now"}},
+			})
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(filepath.Join(session, "events", "event-00001-action.json"), event, 0o600))
+			provider, ok := parser.NewProvider(parser.AgentOpenHands, parser.ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+			ref, found, err := provider.FindSource(t.Context(), parser.FindSourceRequest{StoredFilePath: session})
+			require.NoError(t, err)
+			require.True(t, found)
+			outcome, err := provider.Parse(t.Context(), parser.ParseRequest{Source: ref})
+			require.NoError(t, err)
+			require.Len(t, outcome.Results, 1)
+			parsed := outcome.Results[0].Result.Messages
+			require.Len(t, parsed, 1)
+			require.Len(t, parsed[0].ToolCalls, 1)
+			call := parsed[0].ToolCalls[0]
+			row := dbtest.AsstMsg(sid, 0, parsed[0].Content)
+			row.Timestamp = ts(0)
+			row.HasToolUse, row.HasThinking = true, parsed[0].HasThinking
+			row.ToolCalls = []db.ToolCall{{
+				SessionID: sid, ToolName: call.ToolName, Category: call.Category,
+				InputJSON: call.InputJSON, Rendering: call.Rendering,
+			}}
+			d := dbtest.OpenTestDB(t)
+			dbtest.SeedSession(t, d, sid, "app")
+			dbtest.SeedMessages(t, d, row)
+			stored, err := d.GetAllMessages(t.Context(), sid)
+			require.NoError(t, err)
+			msgs, calls := rawFromDB(t, stored)
+			in := friction.BuildSessionInput(sid, friction.Dims{Agent: "openhands"}, false, msgs, calls, friction.BuildOptions{})
+			require.NotEmpty(t, in.Messages)
+			assert.Equal(t, tt.thought, in.Messages[0].Text)
+			if tt.wantWorkaround {
+				assert.Equal(t, []string{friction.DetectorWorkaround}, detectors(friction.Review(in)))
+			} else {
+				assert.Empty(t, friction.Review(in))
+			}
+		})
+	}
+}
+
+func TestArchivedPatchEditChurn(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	dbtest.SeedSession(t, d, sid, "app")
+	for i := range 3 {
+		row := dbtest.AsstMsg(sid, i, "Updating the file.")
+		row.Timestamp = ts(i)
+		row.ToolCalls = []db.ToolCall{{
+			SessionID: sid, ToolName: "apply_patch", Category: "Edit", FilePath: "src/main.go",
+			InputJSON: fmt.Sprintf("*** Begin Patch\n*** Update File: src/main.go\n@@\n-value%d\n+value%d\n*** End Patch", i, i+1),
+		}}
+		dbtest.SeedMessages(t, d, row)
+	}
+	stored, err := d.GetAllMessages(t.Context(), sid)
+	require.NoError(t, err)
+	msgs, calls := rawFromDB(t, stored)
+	in := friction.BuildSessionInput(sid, friction.Dims{Agent: "codex"}, false, msgs, calls, friction.BuildOptions{})
+	got := friction.Review(in)
+	require.Len(t, got, 1)
+	assert.Equal(t, "pattern.edit_churn", got[0].Detector)
+	assert.Equal(t, "edit churn: `main.go` edited 3 times within 10 messages", got[0].Text)
+	update := ingest.ComputeSignalsFromMessages(db.Session{}, stored)
+	assert.Equal(t, 1, update.EditChurnCount)
 }

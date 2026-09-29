@@ -210,6 +210,7 @@ func ExtractToolCallRows(messages []db.Message) []signals.ToolCallRow {
 			rows = append(rows, signals.ToolCallRow{
 				ToolName: call.ToolName, Category: call.Category,
 				InputJSON: call.InputJSON, ResultContent: call.ResultContent,
+				FilePath:       call.FilePath,
 				MessageOrdinal: message.Ordinal, CallIndex: callIndex,
 				ToolUseID: call.ToolUseID, ResultContentLength: call.ResultContentLength,
 				EventStatus:          status,

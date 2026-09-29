@@ -30,7 +30,8 @@ const (
 	// makes the caller fall back to a full recompute.
 	// v3 added LastValidTokensOrdinal.
 	// v4 recognizes provider error and denied statuses in failure facts.
-	IncrementalStateCodecVersion = 4
+	// v5 uses normalized file paths and all supported JSON path keys for churn.
+	IncrementalStateCodecVersion = 5
 
 	// TrailingFactCount is the size of the trailing facts window. It must
 	// cover every window any delta can affect: a modified call in the last
@@ -250,7 +251,7 @@ func SeedIncrementalState(
 		if c.Category != "Edit" && c.Category != "Write" {
 			continue
 		}
-		path := extractFilePath(c.InputJSON)
+		path := c.filePath()
 		if path == "" {
 			continue
 		}
@@ -520,7 +521,7 @@ func (s *IncrementalState) FoldToolHealth(
 		if c.Category != "Edit" && c.Category != "Write" {
 			continue
 		}
-		path := extractFilePath(c.InputJSON)
+		path := c.filePath()
 		if path == "" {
 			continue
 		}

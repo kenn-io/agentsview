@@ -164,7 +164,7 @@ func TestAssistantText(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want,
-				AssistantText(tt.content, tt.thinking, tt.calls, tt.redacted))
+				AssistantText("", tt.content, tt.thinking, tt.calls, tt.redacted))
 		})
 	}
 }

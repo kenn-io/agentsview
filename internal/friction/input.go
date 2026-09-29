@@ -37,6 +37,7 @@ type RawToolCall struct {
 	ToolName            string
 	Category            string
 	InputJSON           string
+	FilePath            string
 	ResultContent       string
 	LastEventContent    string
 	EventStatus         string
@@ -76,6 +77,7 @@ func (c RawToolCall) row() signals.ToolCallRow {
 		ToolName:            c.ToolName,
 		Category:            c.Category,
 		InputJSON:           c.InputJSON,
+		FilePath:            c.FilePath,
 		ResultContent:       c.ResultContent,
 		MessageOrdinal:      c.MessageOrdinal,
 		CallIndex:           c.CallIndex,
@@ -161,7 +163,7 @@ func BuildSessionInput(subjectID string, dims Dims, isSubAgent bool, msgs []RawM
 		case m.Role == "assistant":
 			in.Messages = append(in.Messages, Message{
 				Ordinal: m.Ordinal, Role: m.Role,
-				Text:      AssistantText(m.Content, m.ThinkingText, own, opts.RedactedToolRenderings),
+				Text:      AssistantText(dims.Agent, m.Content, m.ThinkingText, own, opts.RedactedToolRenderings),
 				Timestamp: m.Timestamp,
 			})
 		}
