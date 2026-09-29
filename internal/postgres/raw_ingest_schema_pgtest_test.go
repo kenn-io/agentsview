@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"log"
 	"net/url"
@@ -528,6 +529,52 @@ func TestEnsureRawIngestSchemaPGSerializesConcurrentGuardInstallers(t *testing.T
 		) AND NOT tgisinternal`).Scan(&guards))
 	assert.Equal(t, 3, guards,
 		"concurrent installers must leave every append-only guard installed")
+}
+
+// A pusher against a schema whose guards are already current must not wait
+// for, or contend with, another process installing them.
+func TestEnsureRawIngestSchemaPGSkipsInstallerLockWhenGuardsAreCurrent(t *testing.T) {
+	pg, _ := newRawIngestTestStore(t)
+
+	installer, err := pg.BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+	defer func() { _ = installer.Rollback() }()
+	require.NoError(t, lockSyncMetadataRow(
+		t.Context(), installer, rawIngestSchemaLockKey,
+	))
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, ensureRawIngestSchemaPG(ctx, pg),
+		"current guards must not wait on the installer lock")
+}
+
+// A guard function whose body no longer matches the shipped source must be
+// replaced, even though the function and every trigger already exist.
+func TestEnsureRawIngestSchemaPGReplacesStaleGuardFunction(t *testing.T) {
+	pg, store := newRawIngestTestStore(t)
+	identity := rawIngestIdentity(t, "tenant-a")
+	object := rawIngestObject(t, "a", 7)
+	require.NoError(t, store.RecordVerifiedObject(t.Context(), identity, object))
+	manifest := rawIngestManifest(
+		t, identity, "capture-a", "", rawIngestCapturedAt(), object,
+	)
+	_, err := store.CommitManifest(t.Context(), manifest, "parser-data-17")
+	require.NoError(t, err)
+
+	_, err = pg.ExecContext(t.Context(), `
+		CREATE OR REPLACE FUNCTION raw_ingest_reject_accepted_mutation()
+		RETURNS trigger LANGUAGE plpgsql
+		AS $stale$ BEGIN RETURN OLD; END; $stale$`)
+	require.NoError(t, err)
+
+	require.NoError(t, ensureRawIngestSchemaPG(t.Context(), pg))
+
+	_, err = pg.ExecContext(t.Context(), `DELETE FROM raw_manifest_objects`)
+	var pgErr *pgconn.PgError
+	require.ErrorAs(t, err, &pgErr,
+		"the reinstalled guard must reject accepted manifest mutations")
+	assert.Equal(t, "55000", pgErr.Code)
 }
 
 func repeatedHex(value string) string {
