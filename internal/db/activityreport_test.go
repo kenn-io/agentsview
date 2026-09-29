@@ -40,6 +40,84 @@ func dayQuery(t *testing.T, date, tz string) activity.Query {
 	return q
 }
 
+func TestActivityReportMessageCounts(t *testing.T) {
+	d := testDB(t)
+	for _, id := range []string{"conversation", "lone", "automated", "subagent", "other-project"} {
+		insertSession(t, d, id, "project-a", func(s *Session) {
+			s.StartedAt = Ptr("2026-06-14T09:00:00Z")
+			s.EndedAt = Ptr("2026-06-14T11:00:00Z")
+			if id == "automated" {
+				s.IsAutomated = true
+			}
+			if id == "subagent" {
+				s.RelationshipType = "subagent"
+			}
+			if id == "other-project" {
+				s.Project = "project-b"
+			}
+		})
+	}
+	messages := []Message{
+		{Role: "user", Timestamp: "2026-06-14T09:59:59Z"},
+		{Role: "user", Timestamp: "2026-06-14T10:00:00Z"},
+		{Role: "assistant", Timestamp: "2026-06-14T10:04:59.999999Z"},
+		{Role: "user", Timestamp: "2026-06-14T10:05:00Z"},
+		{Role: "assistant", Timestamp: "2026-06-14T10:10:00Z"},
+		{Role: "assistant", Timestamp: "2026-06-14T10:10:30.499Z"},
+		{Role: "assistant", Timestamp: "2026-06-14T10:10:30.500Z"},
+		{Role: "user"},
+		{Role: "user", Timestamp: "2026-06-14T10:01:00Z", SourceSubtype: "tool_result"},
+		{Role: "assistant", Timestamp: "2026-06-14T10:02:00Z", IsSystem: true},
+		{Role: "user", Timestamp: "2026-06-14T10:03:00Z", IsSystem: true},
+		{Role: "tool", Timestamp: "2026-06-14T10:04:00Z"},
+		{Role: "user", Timestamp: "2026-06-14T10:invalid"},
+	}
+	for i := range messages {
+		messages[i].SessionID = "conversation"
+		messages[i].Ordinal = i
+		messages[i].Content = "message"
+	}
+	insertMessages(t, d, messages...)
+	seedMessage(t, d, "lone", 0, "user", "2026-06-14T10:08:00Z", "")
+	seedMessage(t, d, "other-project", 0, "user", "2026-06-14T10:00:00Z", "")
+	for _, id := range []string{"automated", "subagent"} {
+		seedMessage(t, d, id, 0, "user", "2026-06-14T10:00:00Z", "")
+		seedMessage(t, d, id, 1, "assistant", "2026-06-14T10:00:00Z", "")
+	}
+	q, err := activity.ResolveQuery(activity.QueryInput{
+		Preset: "custom", Timezone: "UTC", BucketOverride: "5m",
+		From: "2026-06-14T10:00:00Z", To: "2026-06-14T10:15:00Z",
+	}, time.Date(2026, 6, 14, 10, 10, 30, 500_000_000, time.UTC))
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name            string
+		filter          AnalyticsFilter
+		user, assistant []int
+	}{
+		{"all", AnalyticsFilter{}, []int{2, 2, 0}, []int{3, 0, 2}},
+		{"project", AnalyticsFilter{Project: "project-a"}, []int{1, 2, 0}, []int{3, 0, 2}},
+		{"interactive", AnalyticsFilter{Project: "project-a", ExcludeAutomated: true}, []int{1, 2, 0}, []int{2, 0, 2}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			artifacts, err := d.BuildActivityReportArtifacts(t.Context(), tc.filter, q, nil)
+			require.NoError(t, err)
+			var user, assistant []int
+			for _, bucket := range artifacts.Report.Buckets {
+				user = append(user, bucket.UserMessages)
+				assistant = append(assistant, bucket.AssistantMessages)
+			}
+			assert.Equal(t, tc.user, user)
+			assert.Equal(t, tc.assistant, assistant)
+			page, err := activity.PageSessions(artifacts.Sessions, artifacts.Membership,
+				activity.SessionPageOptions{BucketRange: &activity.BucketRange{Start: 1, End: 2}})
+			require.NoError(t, err)
+			assert.Contains(t, reportSessionIDs(page.Sessions), "lone")
+			assert.False(t, artifacts.Membership["lone"].Contains(0))
+		})
+	}
+}
+
 func seedMessage(
 	t *testing.T, d *DB, sid string, ordinal int, role, ts, model string,
 ) {

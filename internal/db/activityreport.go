@@ -116,6 +116,9 @@ func (db *DB) BuildActivityReportArtifacts(
 	if err != nil {
 		return activity.CandidateArtifacts{}, fmt.Errorf("aggregating activity report: %w", err)
 	}
+	if err := db.activityReportMessageCounts(ctx, ids, q, &artifacts); err != nil {
+		return activity.CandidateArtifacts{}, err
+	}
 	reportProgress(onProgress, activity.Progress{
 		Phase: activity.ProgressFinalizing, SessionsTotal: len(sessions),
 		SessionsProcessed: len(sessions), RowsProcessed: rowsProcessed,
@@ -143,6 +146,40 @@ func reportProgress(callback activity.ProgressFunc, progress activity.Progress) 
 	if callback != nil {
 		callback(progress)
 	}
+}
+
+func (db *DB) activityReportMessageCounts(
+	ctx context.Context, ids []string, q activity.Query, artifacts *activity.CandidateArtifacts,
+) error {
+	counts := activity.NewMessageAccumulator(q, artifacts)
+	return queryChunked(ids, func(chunk []string) error {
+		ph, args := inPlaceholders(chunk)
+		args = append(args,
+			paddedUTCBound(q.RangeStart.Format(time.RFC3339Nano), -14),
+			paddedUTCBound(q.EffectiveEnd.Format(time.RFC3339Nano), 14),
+		)
+		rows, err := db.getReader().QueryContext(ctx, `
+			SELECT session_id, role, timestamp
+			FROM messages INDEXED BY idx_messages_velocity
+			WHERE session_id IN `+ph+`
+				AND role IN ('user', 'assistant') AND is_system = 0
+				AND COALESCE(source_subtype, '') <> 'tool_result'
+				AND timestamp >= ? AND timestamp < ?`, args...)
+		if err != nil {
+			return fmt.Errorf("querying activity message counts: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var sessionID, role, timestamp string
+			if err := rows.Scan(&sessionID, &role, &timestamp); err != nil {
+				return fmt.Errorf("scanning activity message counts: %w", err)
+			}
+			if parsed, err := parseTimestamp(timestamp); err == nil {
+				counts.Add(sessionID, role, parsed)
+			}
+		}
+		return rows.Err()
+	})
 }
 
 // GetSessionUsageRows returns the backend-priced usage rows for the supplied

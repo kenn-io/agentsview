@@ -115,6 +115,8 @@
       "end": "2026-07-03T11:00:00Z",
       "max_agents": 1,
       "agent_minutes": 3,
+      "user_messages": 2,
+      "assistant_messages": 2,
       "input_tokens": 1200,
       "output_tokens": 240,
       "cost": {
@@ -132,6 +134,8 @@
       "end": "2026-07-03T12:00:00Z",
       "max_agents": 1,
       "agent_minutes": 3,
+      "user_messages": 2,
+      "assistant_messages": 2,
       "input_tokens": 300,
       "output_tokens": 60,
       "cost": {
@@ -149,6 +153,8 @@
       "end": "2026-07-03T13:00:00Z",
       "max_agents": 0,
       "agent_minutes": 0,
+      "user_messages": 0,
+      "assistant_messages": 0,
       "input_tokens": 0,
       "output_tokens": 0,
       "cost": {

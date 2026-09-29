@@ -285,6 +285,8 @@ type Bucket struct {
 	MaxSubagentAgents    int         `json:"max_subagent_agents"`
 	MaxAutomatedAgents   int         `json:"max_automated_agents"`
 	AgentMinutes         float64     `json:"agent_minutes"`
+	UserMessages         int         `json:"user_messages"`
+	AssistantMessages    int         `json:"assistant_messages"`
 	InputTokens          int         `json:"input_tokens,omitempty"`
 	OutputTokens         int         `json:"output_tokens"`
 	Cost                 money.Money `json:"cost"`
