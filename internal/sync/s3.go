@@ -480,8 +480,6 @@ func (e *Engine) parseMaterializedS3Source(
 		Source:     source,
 		Machine:    machine,
 		ForceParse: true,
-
-		BlockedResultCategories: e.blockedResultCategories,
 	})
 	if err != nil {
 		return processResult{}, err

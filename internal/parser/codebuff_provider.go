@@ -371,7 +371,9 @@ func isWithinRoot(root, path string) bool {
 
 // codebuffFindFile finds a session by raw session ID under the root.
 // The rawID may be either "project:timestamp" (new format) or just
-// "timestamp" (legacy compatibility). For the new format, it searches
+// "timestamp" (legacy compatibility). A subagent ID
+// "project:timestamp__subagent__<key>" resolves to the parent transcript
+// that holds it. For the new format, it searches
 // the specific project directory. For legacy format, it searches all
 // project subdirectories.
 //
@@ -386,6 +388,13 @@ func codebuffFindFile(root, rawID string) (singleFileMatch, bool) {
 	if len(parts) == 2 {
 		projectName := parts[0]
 		timestamp := parts[1]
+		// A subagent session ID resolves to the transcript that holds it.
+		if before, key, found := strings.Cut(timestamp, codebuffSubagentIDSep); found {
+			if key == "" {
+				return singleFileMatch{}, false
+			}
+			timestamp = before
+		}
 		// Reject traversal: project and timestamp must each be a single
 		// safe path component so filepath.Join does not escape root.
 		if !isSafeSinglePathComponent(projectName) ||
@@ -496,7 +505,11 @@ func codebuffFingerprintSource(src singleFileSource) (SourceFingerprint, error) 
 	return fingerprint, nil
 }
 
-// codebuffParseFile parses a single session from chat-messages.json.
+// codebuffParseFile parses a single session from chat-messages.json, plus
+// one linked child session per nested subagent. Every result shares the
+// transcript's source identity: the tree lives in that one file, which is
+// what the engine fingerprints, watches, and reparses (with ForceReplace)
+// for all of them together.
 func codebuffParseFile(
 	src singleFileSource, req ParseRequest,
 ) ([]ParseResult, []string, error) {
@@ -507,8 +520,8 @@ func codebuffParseFile(
 		projectHint = codebuffProjectFromPath(src.Path)
 	}
 
-	sess, msgs, err := parseCodebuffSession(
-		dir, projectHint, req.Machine, req.BlockedResultCategories,
+	sess, msgs, children, err := parseCodebuffSession(
+		dir, projectHint, req.Machine,
 	)
 	if err != nil {
 		return nil, nil, err
@@ -517,22 +530,28 @@ func codebuffParseFile(
 		return nil, nil, nil
 	}
 
-	// Apply fingerprint metadata.
-	if req.Fingerprint.Size > 0 {
-		sess.File.Size = req.Fingerprint.Size
-	}
-	if req.Fingerprint.MTimeNS > 0 {
-		sess.File.Mtime = req.Fingerprint.MTimeNS
-	}
-	if req.Fingerprint.Hash != "" {
-		sess.File.Hash = req.Fingerprint.Hash
-	}
-
-	return []ParseResult{{
+	results := make([]ParseResult, 0, 1+len(children))
+	results = append(results, ParseResult{
 		Session:     *sess,
 		Messages:    msgs,
 		UsageEvents: sess.UsageEvents,
-	}}, nil, nil
+	})
+	results = append(results, children...)
+
+	// Apply fingerprint metadata.
+	for i := range results {
+		file := &results[i].Session.File
+		if req.Fingerprint.Size > 0 {
+			file.Size = req.Fingerprint.Size
+		}
+		if req.Fingerprint.MTimeNS > 0 {
+			file.Mtime = req.Fingerprint.MTimeNS
+		}
+		if req.Fingerprint.Hash != "" {
+			file.Hash = req.Fingerprint.Hash
+		}
+	}
+	return results, nil, nil
 }
 
 func codebuffProviderCapabilities() Capabilities {
@@ -589,7 +608,10 @@ func codebuffProviderCapabilities() Capabilities {
 			ToolResults:          CapabilitySupported,
 			Model:                CapabilityNotApplicable,
 			AggregateUsageEvents: CapabilitySupported,
-			Relationships:        CapabilityNotApplicable,
+			// Nested agent blocks become child sessions linked with
+			// RelSubagent, and the spawning Task call carries the
+			// child's SubagentSessionID.
+			Relationships: CapabilitySupported,
 			// The transcript's final assistant turn is classified: an
 			// unresolved tool call reports tool_call_pending, anything else
 			// clean. The format carries no stop-reason signal, so

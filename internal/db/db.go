@@ -537,14 +537,12 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // "ask user" blocks, sponsored-proposal notices, and agent-list rosters.
 // Re-parse unchanged Codebuff/Freebuff sources to restore the missing
 // conversation content.)
-// (116 also: a Codebuff or Freebuff subagent tool call's single result body
-// now carries the subagent's final answer followed by its nested
-// transcript -- the child reasoning, tool calls, and results -- under a
-// [Subagent transcript] header, bounded by nesting depth and rendered
-// size. The rendered body omits a nested tool's output when that tool's
-// category is result-content blocked, the same rule the archive applies to
-// standalone results. Re-parse unchanged Codebuff/Freebuff sources to
-// restore the nested work.)
+// (116 also: each Codebuff or Freebuff subagent's nested transcript -- its
+// prompt, reasoning, tool calls, and results -- is stored as its own
+// subagent session linked to the session that spawned it, and the spawning
+// Task call links to it. Result-content blocking applies to the nested tool
+// calls per call. Re-parse unchanged Codebuff/Freebuff sources to restore
+// the nested work.)
 const dataVersion = 116
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"

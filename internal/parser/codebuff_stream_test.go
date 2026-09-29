@@ -3,6 +3,8 @@ package parser
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
@@ -35,13 +37,14 @@ type refCodebuffTurnFact = codebuffTurnFact
 // preserved verbatim as the streaming decoder's reference. Any change to
 // block handling here must be mirrored in codebuff_decode.go and vice versa.
 func refParseCodebuffMessages(
-	data []byte, sessionDate time.Time, blocked map[string]bool,
-) ([]ParsedMessage, []codebuffTurnFact, time.Time, time.Time, error) {
+	data []byte, sessionDate time.Time, sessionID string,
+) ([]ParsedMessage, []codebuffTurnFact, time.Time, time.Time, []codebuffSubagent, error) {
 	root := gjson.ParseBytes(data)
 	if !root.IsArray() {
-		return nil, nil, time.Time{}, time.Time{},
+		return nil, nil, time.Time{}, time.Time{}, nil,
 			errors.New("chat-messages.json root is not an array")
 	}
+	subs := &refCodebuffSubagentSink{rootID: sessionID, used: map[string]bool{}}
 
 	var (
 		messages  []ParsedMessage
@@ -154,7 +157,7 @@ func refParseCodebuffMessages(
 
 		case "ai":
 			firstOrdinal := ordinal
-			parsed := refParseCodebuffAIMessage(msg, ts, blocked)
+			parsed := refParseCodebuffAIMessage(msg.Get("blocks"), ts, sessionID, subs)
 			if len(parsed) == 0 {
 				// An AI message with no displayable content still counts
 				// as a turn boundary for billing: its credits field
@@ -212,7 +215,72 @@ func refParseCodebuffMessages(
 		return true
 	})
 
-	return messages, turnFacts, startedAt, endedAt, nil
+	return messages, turnFacts, startedAt, endedAt, subs.out, nil
+}
+
+// refCodebuffSubagentSink mirrors codebuffSubagentSink over gjson values:
+// the same ID allocation (agentId key, digest for unsafe ids, positional key
+// for empty ids, -N suffix for repeats) and the same document-order
+// collection. Keep it in lockstep with the production sink.
+type refCodebuffSubagentSink struct {
+	rootID string
+	used   map[string]bool
+	seen   int
+	out    []codebuffSubagent
+}
+
+func (s *refCodebuffSubagentSink) allocate(agentID string) string {
+	s.seen++
+	key := agentID
+	for _, r := range agentID {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') &&
+			(r < '0' || r > '9') && r != '.' && r != '_' && r != '-' {
+			sum := sha256.Sum256([]byte(agentID))
+			key = "h" + hex.EncodeToString(sum[:8])
+			break
+		}
+	}
+	if key == "" {
+		key = "idx" + strconv.Itoa(s.seen)
+	}
+	candidate := key
+	for n := 2; s.used[candidate]; n++ {
+		candidate = key + "-" + strconv.Itoa(n)
+	}
+	s.used[candidate] = true
+	return s.rootID + "__subagent__" + candidate
+}
+
+func (s *refCodebuffSubagentSink) collect(
+	block gjson.Result, ts time.Time, parentID string,
+) string {
+	id := s.allocate(block.Get("agentId").Str)
+	idx := len(s.out)
+	s.out = append(s.out, codebuffSubagent{
+		ID:        id,
+		ParentID:  parentID,
+		AgentID:   block.Get("agentId").Str,
+		AgentType: block.Get("agentType").Str,
+		AgentName: block.Get("agentName").Str,
+		Timestamp: ts,
+	})
+	var msgs []ParsedMessage
+	if prompt := strings.TrimSpace(block.Get("initialPrompt").Str); prompt != "" {
+		msgs = append(msgs, ParsedMessage{
+			Role: RoleUser, Content: prompt, Timestamp: ts,
+			ContentLength: len(prompt),
+		})
+	}
+	msgs = append(msgs, refParseCodebuffAIMessage(block.Get("blocks"), ts, id, s)...)
+	if len(msgs) == 0 {
+		s.out = s.out[:idx]
+		return ""
+	}
+	for i := range msgs {
+		msgs[i].Ordinal = i
+	}
+	s.out[idx].Messages = msgs
+	return id
 }
 
 // refCodebuffMessageCredits is the reference implementation of the credits
@@ -228,11 +296,11 @@ func refCodebuffMessageCredits(msg gjson.Result) (float64, bool) {
 // refParseCodebuffAIMessage is the pre-plan-021 gjson block walker,
 // preserved as the streaming decoder's reference.
 func refParseCodebuffAIMessage(
-	msg gjson.Result,
+	blocks gjson.Result,
 	ts time.Time,
-	blocked map[string]bool,
+	sessionID string,
+	subs *refCodebuffSubagentSink,
 ) []ParsedMessage {
-	blocks := msg.Get("blocks")
 	if !blocks.IsArray() {
 		return nil
 	}
@@ -418,42 +486,22 @@ func refParseCodebuffAIMessage(
 			inputJSON, _ := json.Marshal(inputParts, json.Deterministic(true))
 
 			tc := ParsedToolCall{
-				ToolUseID: agentID,
-				ToolName:  agentType,
-				Category:  "Task",
-				InputJSON: string(inputJSON),
+				ToolUseID:         agentID,
+				ToolName:          agentType,
+				Category:          "Task",
+				InputJSON:         string(inputJSON),
+				SubagentSessionID: subs.collect(block, ts, sessionID),
 			}
 			toolCalls = append(toolCalls, tc)
 
-			// Emit agent output as a linked ParsedToolResult rather
-			// than an ordinary assistant text message. Representing
-			// the output as a tool result lets the configured result-
-			// content blocking system (BlockedResultCategories)
-			// strip it when the Task category is blocked. Without
-			// this, agent-block output stored as ordinary assistant
-			// text survives blocking and retains content the operator
-			// explicitly configured agentsview not to store.
-			body := block.Get("content").Str
-			if nb := block.Get("blocks"); nb.IsArray() {
-				var childBlocks []gjson.Result
-				nb.ForEach(func(_, cb gjson.Result) bool {
-					childBlocks = append(childBlocks, cb)
-					return true
-				})
-				rendered := refCodebuffRenderChildBlocks(childBlocks, 1, 0, blocked)
-				if rendered != "" {
-					if body != "" {
-						body += "\n\n" + codebuffSubagentTranscriptHeader + "\n"
-					}
-					body += rendered
-				}
-			}
-			if body != "" {
-				quoted, _ := json.Marshal(body)
+			// The final answer is the Task call's single result; the nested
+			// blocks live in the linked child session.
+			if content := block.Get("content").Str; content != "" {
+				quoted, _ := json.Marshal(content)
 				toolResults = append(toolResults, ParsedToolResult{
 					ToolUseID:     agentID,
 					ContentRaw:    string(quoted),
-					ContentLength: len(body),
+					ContentLength: len(content),
 				})
 			}
 
@@ -490,26 +538,24 @@ func refParseCodebuffAIMessage(
 		case "ask-user":
 			flushText()
 			flushTools()
-			questions := block.Get("questions")
-			if questions.IsArray() {
-				var parts []string
-				questions.ForEach(func(_, q gjson.Result) bool {
-					questionText := q.Get("question").Str
-					if strings.TrimSpace(questionText) != "" {
-						parts = append(parts, "[Agent asked] "+questionText)
-					}
-					return true
-				})
-				if len(parts) > 0 {
-					content := strings.Join(parts, "\n")
-					out = append(out, ParsedMessage{
-						Role:          RoleSystem,
-						Content:       content,
-						Timestamp:     ts,
-						ContentLength: len(content),
-						IsSystem:      true,
-					})
+			var parts []string
+			block.Get("questions").ForEach(func(_, q gjson.Result) bool {
+				questionText := q.Get("question").Str
+				if strings.TrimSpace(questionText) != "" {
+					parts = append(parts, "[Agent asked] "+questionText)
 				}
+				return true
+			})
+			parts = append(parts, refCodebuffAskUserAnswerLines(block)...)
+			if len(parts) > 0 {
+				content := strings.Join(parts, "\n")
+				out = append(out, ParsedMessage{
+					Role:          RoleSystem,
+					Content:       content,
+					Timestamp:     ts,
+					ContentLength: len(content),
+					IsSystem:      true,
+				})
 			}
 
 		case "image":
@@ -605,161 +651,6 @@ func refCodebuffAskUserAnswerLines(b gjson.Result) []string {
 	return lines
 }
 
-// refCodebuffRenderChildBlocks mirrors codebuffRenderChildBlocks over gjson
-// values so the equivalence test proves the renderer's recursion, ordering,
-// bounds, and marker text -- not just its output on the golden fixture.
-// Keep the bounds, marker strings, separator, and truncation arithmetic in
-// lockstep with the production renderer; delete this mirror if the
-// production renderer is ever removed.
-func refCodebuffRenderChildBlocks(
-	blocks []gjson.Result, depth int, budget int,
-	blocked map[string]bool,
-) string {
-	if budget <= 0 {
-		budget = codebuffSubagentMaxRenderedBytes
-	}
-	var b strings.Builder
-	sizeMarker := "[Subagent transcript truncated: exceeded " +
-		strconv.Itoa(codebuffSubagentMaxRenderedBytes/1024) + " KB size bound]"
-	depthMarker := "[Subagent transcript truncated: exceeded depth bound]"
-	exhausted := false
-	write := func(s string) {
-		if exhausted || s == "" {
-			return
-		}
-		if b.Len() > 0 {
-			b.WriteString("\n")
-		}
-		remaining := budget - b.Len()
-		if remaining <= 0 || len(s) > remaining {
-			if remaining > 0 {
-				b.WriteString(stringutil.SafeTruncate(s, remaining-1))
-				b.WriteString("\n")
-			}
-			b.WriteString(sizeMarker)
-			exhausted = true
-			return
-		}
-		b.WriteString(s)
-	}
-	for _, block := range blocks {
-		if exhausted {
-			return b.String()
-		}
-		blockType := block.Get("type").Str
-		switch blockType {
-		case "text":
-			if strings.TrimSpace(block.Get("content").Str) == "" {
-				continue
-			}
-			if block.Get("textType").Str == "reasoning" {
-				write("[Thinking]\n" + block.Get("content").Str + "\n[/Thinking]")
-			} else {
-				write(block.Get("content").Str)
-			}
-		case "tool":
-			toolName := block.Get("toolName").Str
-			if toolName == "" {
-				continue
-			}
-			parts := []string{"[Tool: " + toolName + "]"}
-			if in := block.Get("input"); in.Exists() && in.Raw != "null" {
-				parts = append(parts, "input: "+in.Raw)
-			}
-			// Mirror of the production renderer's blocked-category filter:
-			// a child tool whose normalized category is blocked keeps its
-			// header and input but loses its output.
-			if out := block.Get("output"); out.Exists() &&
-				!blocked[NormalizeToolCategory(toolName)] {
-				parts = append(parts, "output: "+out.Raw)
-			}
-			write(strings.Join(parts, " "))
-		case "agent":
-			if depth >= codebuffSubagentMaxDepth {
-				write(depthMarker)
-				return b.String()
-			}
-			name := block.Get("agentName").Str
-			if name == "" {
-				name = block.Get("agentType").Str
-			}
-			write("[Subagent: " + name + " (" + block.Get("agentType").Str + ")]")
-			if prompt := block.Get("initialPrompt").Str; prompt != "" {
-				write("prompt: " + prompt)
-			}
-			if content := block.Get("content").Str; content != "" {
-				write(content)
-			}
-			if children := block.Get("blocks").Array(); len(children) > 0 {
-				if remaining := budget - b.Len(); remaining <= 0 {
-					write(sizeMarker)
-					return b.String()
-				}
-				child := refCodebuffRenderChildBlocks(
-					children, depth+1, budget-b.Len(), blocked)
-				if child != "" {
-					if b.Len() > 0 {
-						b.WriteString("\n")
-					}
-					b.WriteString(child)
-				}
-				if strings.Contains(child, sizeMarker) ||
-					strings.Contains(child, depthMarker) {
-					return b.String()
-				}
-			}
-		case "mode-divider":
-			if mode := block.Get("mode").Str; mode != "" {
-				write("[Mode: " + mode + "]")
-			}
-		case "plan":
-			if strings.TrimSpace(block.Get("content").Str) != "" {
-				write("[Plan]\n" + block.Get("content").Str)
-			}
-		case "ask-user":
-			var parts []string
-			block.Get("questions").ForEach(func(_, q gjson.Result) bool {
-				if strings.TrimSpace(q.Get("question").Str) != "" {
-					parts = append(parts, "[Agent asked] "+q.Get("question").Str)
-				}
-				return true
-			})
-			parts = append(parts, refCodebuffAskUserAnswerLines(block)...)
-			if len(parts) > 0 {
-				write(strings.Join(parts, "\n"))
-			}
-		case "image":
-			if fn := block.Get("filename").Str; fn != "" {
-				write("[Image: " + fn + "]")
-			} else {
-				write("[Image attached]")
-			}
-		case "sponsored-proposal":
-			content := "[Sponsored proposal] " + block.Get("target").Str
-			if headline := block.Get("consent.headline").Str; headline != "" {
-				content += "\n" + headline
-			}
-			write(content)
-		case "agent-list":
-			var names []string
-			block.Get("agents").ForEach(func(_, a gjson.Result) bool {
-				if dn := a.Get("displayName").Str; dn != "" {
-					names = append(names, dn)
-				} else {
-					names = append(names, a.Get("id").Str)
-				}
-				return true
-			})
-			if len(names) > 0 {
-				write("[Agents: " + strings.Join(names, ", ") + "]")
-			}
-		default:
-			continue
-		}
-	}
-	return b.String()
-}
-
 // codebuffGoldenTranscript builds a transcript exercising every block type
 // the decoder models: text (regular and reasoning), tool with and without
 // output, agent with params/prompt/status/content, mode-divider, plan,
@@ -832,6 +723,25 @@ func requireEqualMessages(
 	}
 }
 
+// requireEqualSubagents compares the two decoders' child sessions: identity,
+// linkage, and the full message content of each.
+func requireEqualSubagents(
+	t *testing.T, label string, got, want []codebuffSubagent,
+) {
+	t.Helper()
+	require.Len(t, got, len(want), label)
+	for i := range want {
+		l := label + " subagent " + strconv.Itoa(i)
+		assert.Equal(t, want[i].ID, got[i].ID, l+" id")
+		assert.Equal(t, want[i].ParentID, got[i].ParentID, l+" parent")
+		assert.Equal(t, want[i].AgentID, got[i].AgentID, l+" agent id")
+		assert.Equal(t, want[i].AgentType, got[i].AgentType, l+" agent type")
+		assert.Equal(t, want[i].AgentName, got[i].AgentName, l+" agent name")
+		assert.Equal(t, want[i].Timestamp, got[i].Timestamp, l+" ts")
+		requireEqualMessages(t, l, got[i].Messages, want[i].Messages)
+	}
+}
+
 // requireEqualTurnFacts compares turn facts including the gjson run-state
 // model resolution outcome, which is the only part of the run state the
 // parser keeps.
@@ -863,8 +773,9 @@ func requireEqualTurnFacts(
 // ..._SubagentToolCall, so a reviewer can diff against today's behavior.
 func TestDecodeCodebuffMessagesGolden(t *testing.T) {
 	sessionDate := time.Date(2026, 9, 20, 10, 0, 0, 0, time.UTC)
-	refMsgs, refFacts, refStart, refEnd, err := refParseCodebuffMessages(
-		[]byte(codebuffGoldenTranscript()), sessionDate, nil,
+	const sessionID = "codebuff:p:s"
+	refMsgs, refFacts, refStart, refEnd, refSubs, err := refParseCodebuffMessages(
+		[]byte(codebuffGoldenTranscript()), sessionDate, sessionID,
 	)
 	require.NoError(t, err)
 	require.NotEmpty(t, refMsgs)
@@ -872,13 +783,14 @@ func TestDecodeCodebuffMessagesGolden(t *testing.T) {
 	streamed, err := decodeCodebuffMessages(
 		t.Context(),
 		strings.NewReader(codebuffGoldenTranscript()),
-		sessionDate, nil)
+		sessionDate, sessionID)
 	require.NoError(t, err)
 	assert.False(t, streamed.Truncated)
 	assert.Equal(t, refStart, streamed.StartedAt)
 	assert.Equal(t, refEnd, streamed.EndedAt)
 	requireEqualMessages(t, "golden", streamed.Messages, refMsgs)
 	requireEqualTurnFacts(t, "golden", streamed.TurnFacts, refFacts)
+	requireEqualSubagents(t, "golden", streamed.Subagents, refSubs)
 
 	// Golden specifics the reference comparison cannot name. The fixture
 	// alternates reasoning and regular text, so each thinking entry flushes
@@ -940,20 +852,48 @@ func TestDecodeCodebuffMessagesGolden(t *testing.T) {
 	assert.Equal(t, `"file1\nfile2"`, results[0].ContentRaw,
 		"tool output raw stays the JSON-encoded value gjson stored")
 	assert.Equal(t, "ag-1", results[1].ToolUseID)
-	var agBody string
-	require.NoError(t, json.Unmarshal([]byte(results[1].ContentRaw), &agBody))
-	assert.True(t, strings.HasPrefix(agBody, "agent said hi"),
-		"the final answer stays first byte-for-byte")
-	assert.Contains(t, agBody, "[Subagent transcript]")
-	assert.Contains(t, agBody, "[Thinking]\nnest think\n[/Thinking]")
-	assert.Contains(t, agBody, "nest work")
-	assert.Contains(t, agBody, "[Tool: read_file] input: {\"path\":\"n.go\"} output: \"nested out\"",
-		"nested tool output keeps its raw JSON text, quotes included")
-	assert.Contains(t, agBody, "[Answer: Scope] yes")
-	assert.Contains(t, agBody, "[Subagent: inner (basher)]")
-	assert.Contains(t, agBody, "innermost")
-	assert.Equal(t, len(agBody), results[1].ContentLength,
-		"agent result length sizes the decoded body")
+	assert.Equal(t, `"agent said hi"`, results[1].ContentRaw,
+		"the Task result is the subagent's final answer only")
+	assert.Equal(t, len("agent said hi"), results[1].ContentLength)
+
+	// The nested blocks are a linked child session, parsed like the main
+	// agent's blocks, and the nested agent inside it is a grandchild.
+	childID := sessionID + "__subagent__ag-1"
+	grandchildID := sessionID + "__subagent__ag-1-1"
+	assert.Equal(t, childID, toolMsg.ToolCalls[2].SubagentSessionID)
+	require.Len(t, streamed.Subagents, 2)
+	child, grandchild := streamed.Subagents[0], streamed.Subagents[1]
+	assert.Equal(t, childID, child.ID)
+	assert.Equal(t, sessionID, child.ParentID)
+	assert.Equal(t, grandchildID, grandchild.ID)
+	assert.Equal(t, childID, grandchild.ParentID)
+
+	var childTexts []string
+	var childCalls []ParsedToolCall
+	var childResults []ParsedToolResult
+	for _, m := range child.Messages {
+		childTexts = append(childTexts, m.Content)
+		childCalls = append(childCalls, m.ToolCalls...)
+		childResults = append(childResults, m.ToolResults...)
+	}
+	require.NotEmpty(t, child.Messages)
+	assert.Equal(t, RoleUser, child.Messages[0].Role)
+	assert.Equal(t, "review it", child.Messages[0].Content,
+		"the initial prompt opens the child session")
+	assert.Contains(t, childTexts, "[Thinking]\nnest think\n[/Thinking]")
+	assert.Contains(t, childTexts, "nest work")
+	assert.Contains(t, childTexts, "[Agent asked] nested q?\n[Answer: Scope] yes")
+	require.Len(t, childCalls, 2)
+	assert.Equal(t, "read_file", childCalls[0].ToolName)
+	assert.Equal(t, "Read", childCalls[0].Category)
+	assert.Equal(t, "Task", childCalls[1].Category)
+	assert.Equal(t, grandchildID, childCalls[1].SubagentSessionID)
+	require.Len(t, childResults, 2)
+	assert.Equal(t, "nc-1", childResults[0].ToolUseID)
+	assert.Equal(t, `"nested out"`, childResults[0].ContentRaw)
+	assert.Equal(t, `"inner says hi"`, childResults[1].ContentRaw)
+	require.Len(t, grandchild.Messages, 1)
+	assert.Equal(t, "innermost", grandchild.Messages[0].Content)
 
 	// Usage rows: two billed turns under their resolved models.
 	require.Len(t, streamed.TurnFacts, 2)
@@ -980,13 +920,13 @@ func TestDecodeCodebuffMessagesEquivalenceProperty(t *testing.T) {
 		 "metadata":{"runState":{"sessionState":{"mainAgentState":{"agentType":"base2-deepseek"}}}}},
 		{"id":"u2","variant":"user","content":"morning","timestamp":"08:05 AM"}
 	]`
-	refMsgs, refFacts, refStart, refEnd, err := refParseCodebuffMessages(
-		[]byte(transcript), sessionDate, nil,
+	refMsgs, refFacts, refStart, refEnd, _, err := refParseCodebuffMessages(
+		[]byte(transcript), sessionDate, "codebuff:p:s",
 	)
 	require.NoError(t, err)
 
 	streamed, err := decodeCodebuffMessages(
-		t.Context(), strings.NewReader(transcript), sessionDate, nil)
+		t.Context(), strings.NewReader(transcript), sessionDate, "codebuff:p:s")
 	require.NoError(t, err)
 	requireEqualMessages(t, "equiv", streamed.Messages, refMsgs)
 	requireEqualTurnFacts(t, "equiv", streamed.TurnFacts, refFacts)
@@ -1018,7 +958,7 @@ func TestDecodeCodebuffMessagesTruncatedTail(t *testing.T) {
 
 	t.Run("tail cut off after real messages", func(t *testing.T) {
 		streamed, err := decodeCodebuffMessages(
-			t.Context(), strings.NewReader(prefix), sessionDate, nil)
+			t.Context(), strings.NewReader(prefix), sessionDate, "codebuff:p:s")
 		require.NoError(t, err, "a truncated tail is not a parse failure")
 		assert.True(t, streamed.Truncated)
 		// The AI message carries no blocks, so it emits no ParsedMessage
@@ -1032,7 +972,7 @@ func TestDecodeCodebuffMessagesTruncatedTail(t *testing.T) {
 	t.Run("truncated session keeps TerminationTruncated end to end", func(t *testing.T) {
 		runState := `{"sessionState":{"mainAgentState":{"agentType":"base2-deepseek"}}}`
 		dir := codebuffTestSession(t, prefix, runState, "")
-		sess, msgs, err := parseCodebuffSession(dir, "p", "local", nil)
+		sess, msgs, _, err := parseCodebuffSession(dir, "p", "local")
 		require.NoError(t, err)
 		require.Len(t, msgs, 2)
 		assert.True(t, sess.IsTruncated)
@@ -1042,7 +982,7 @@ func TestDecodeCodebuffMessagesTruncatedTail(t *testing.T) {
 	t.Run("zero messages then garbage errors", func(t *testing.T) {
 		_, err := decodeCodebuffMessages(
 			t.Context(),
-			strings.NewReader(`[{"broken`), sessionDate, nil)
+			strings.NewReader(`[{"broken`), sessionDate, "codebuff:p:s")
 		require.Error(t, err, "nothing survived: a hard error is correct")
 	})
 
@@ -1056,7 +996,7 @@ func TestDecodeCodebuffMessagesTruncatedTail(t *testing.T) {
 			{"id":"ai-1","variant":"ai","timestamp":"10:01 AM","credits":3,
 			 "metadata":{"runState":{"sessionState":{"mainAgentState":{"agentType":"base2-deepseek"}}}}}` + "\n"
 		streamed, err := decodeCodebuffMessages(
-			t.Context(), strings.NewReader(creditsOnly), sessionDate, nil)
+			t.Context(), strings.NewReader(creditsOnly), sessionDate, "codebuff:p:s")
 		require.NoError(t, err, "a truncated tail after a credits-only element is not a parse failure")
 		assert.True(t, streamed.Truncated)
 		assert.Empty(t, streamed.Messages,
@@ -1070,7 +1010,7 @@ func TestDecodeCodebuffMessagesTruncatedTail(t *testing.T) {
 			{"id":"ai-1","variant":"ai","timestamp":"10:01 AM","credits":3,
 			 "metadata":{"runState":{"sessionState":{"mainAgentState":{"agentType":"base2-deepseek"}}}}}` + "]"
 		streamed, err := decodeCodebuffMessages(
-			t.Context(), strings.NewReader(closed), sessionDate, nil)
+			t.Context(), strings.NewReader(closed), sessionDate, "codebuff:p:s")
 		require.NoError(t, err)
 		assert.False(t, streamed.Truncated)
 		assert.Empty(t, streamed.Messages)
@@ -1079,7 +1019,7 @@ func TestDecodeCodebuffMessagesTruncatedTail(t *testing.T) {
 
 	t.Run("empty array errors", func(t *testing.T) {
 		_, err := decodeCodebuffMessages(
-			t.Context(), strings.NewReader(`[]`), sessionDate, nil)
+			t.Context(), strings.NewReader(`[]`), sessionDate, "codebuff:p:s")
 		// Today's parser kept an empty array alive (no messages, no error,
 		// meta counts fill the session in). The decoder must keep that
 		// shape: no error, nothing truncated, nothing returned.
@@ -1089,7 +1029,7 @@ func TestDecodeCodebuffMessagesTruncatedTail(t *testing.T) {
 	t.Run("session from empty array stays alive", func(t *testing.T) {
 		runState := `{"sessionState":{"mainAgentState":{"agentType":"base2-deepseek"}}}`
 		dir := codebuffTestSession(t, `[]`, runState, "")
-		sess, msgs, err := parseCodebuffSession(dir, "p", "local", nil)
+		sess, msgs, _, err := parseCodebuffSession(dir, "p", "local")
 		require.NoError(t, err)
 		assert.Empty(t, msgs)
 		assert.False(t, sess.IsTruncated)
@@ -1104,7 +1044,7 @@ func TestDecodeCodebuffMessagesShapeErrors(t *testing.T) {
 	t.Run("object root", func(t *testing.T) {
 		_, err := decodeCodebuffMessages(
 			t.Context(),
-			strings.NewReader(`{"messages":[]}`), sessionDate, nil)
+			strings.NewReader(`{"messages":[]}`), sessionDate, "codebuff:p:s")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "root is not an array")
 	})
@@ -1112,13 +1052,13 @@ func TestDecodeCodebuffMessagesShapeErrors(t *testing.T) {
 	t.Run("malformed before first element", func(t *testing.T) {
 		_, err := decodeCodebuffMessages(
 			t.Context(),
-			strings.NewReader(`[not json`), sessionDate, nil)
+			strings.NewReader(`[not json`), sessionDate, "codebuff:p:s")
 		require.Error(t, err)
 	})
 
 	t.Run("empty file", func(t *testing.T) {
 		_, err := decodeCodebuffMessages(
-			t.Context(), strings.NewReader(``), sessionDate, nil)
+			t.Context(), strings.NewReader(``), sessionDate, "codebuff:p:s")
 		require.Error(t, err)
 	})
 }
@@ -1142,7 +1082,7 @@ func TestDecodeCodebuffMessagesCancellation(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
 		out, err := decodeCodebuffMessages(ctx,
-			strings.NewReader(transcript), sessionDate, nil)
+			strings.NewReader(transcript), sessionDate, "codebuff:p:s")
 		require.ErrorIs(t, err, context.Canceled)
 		assert.Empty(t, out.Messages, "no results on cancellation")
 		assert.Empty(t, out.TurnFacts)
@@ -1160,7 +1100,7 @@ func TestDecodeCodebuffMessagesCancellation(t *testing.T) {
 			budget: &budget,
 			source: strings.NewReader(transcript),
 		}
-		out, err := decodeCodebuffMessages(ctx, r, sessionDate, nil)
+		out, err := decodeCodebuffMessages(ctx, r, sessionDate, "codebuff:p:s")
 		require.ErrorIs(t, err, context.Canceled)
 		assert.Empty(t, out.Messages,
 			"the partial buffer must never be returned: ForceReplace would commit it")
@@ -1223,7 +1163,7 @@ func TestDecodeCodebuffMessagesRetainedBytes(t *testing.T) {
 		retained += delta
 		peak = max(peak, retained)
 	})
-	out, err := decodeCodebuffMessages(ctx, strings.NewReader(transcript), sessionDate, nil)
+	out, err := decodeCodebuffMessages(ctx, strings.NewReader(transcript), sessionDate, "codebuff:p:s")
 	require.NoError(t, err)
 	assert.False(t, out.Truncated)
 	require.Len(t, out.Messages, 200)
@@ -1263,7 +1203,7 @@ func TestDecodeCodebuffMessagesSkipsRunStateBytes(t *testing.T) {
 		retained += delta
 		peak = max(peak, retained)
 	})
-	out, err := decodeCodebuffMessages(ctx, strings.NewReader(transcript), sessionDate, nil)
+	out, err := decodeCodebuffMessages(ctx, strings.NewReader(transcript), sessionDate, "codebuff:p:s")
 	require.NoError(t, err)
 	require.Len(t, out.TurnFacts, 1)
 	assert.Equal(t, "deepseek-v3",
@@ -1288,7 +1228,7 @@ func TestDecodeCodebuffMessagesReaderErrorsAreHard(t *testing.T) {
 		bytes.NewReader([]byte(transcript[:40])),
 		&errReader{err: boom},
 	)
-	_, err := decodeCodebuffMessages(t.Context(), r, sessionDate, nil)
+	_, err := decodeCodebuffMessages(t.Context(), r, sessionDate, "codebuff:p:s")
 	require.ErrorIs(t, err, boom, "an environment failure must not become truncation")
 }
 
@@ -1304,7 +1244,7 @@ func TestDecodeCodebuffMessagesDecodesTrailingToken(t *testing.T) {
 	sessionDate := time.Date(2026, 9, 20, 10, 0, 0, 0, time.UTC)
 	transcript := `[{"id":"u1","variant":"user","content":"hello","timestamp":"10:00 AM"}] oops`
 	_, err := decodeCodebuffMessages(
-		t.Context(), strings.NewReader(transcript), sessionDate, nil)
+		t.Context(), strings.NewReader(transcript), sessionDate, "codebuff:p:s")
 	require.Error(t, err,
 		"trailing garbage after a complete array must fail like the whole-file validation did")
 }

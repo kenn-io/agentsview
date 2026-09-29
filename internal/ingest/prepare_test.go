@@ -1,6 +1,8 @@
 package ingest_test
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -179,4 +181,93 @@ func TestFinalizeProjectsStoredContentBeforeSecretFindings(t *testing.T) {
 	assert.Empty(t, projected.Messages[0].ToolCalls[0].InputJSON)
 	assert.Empty(t, projected.Findings,
 		"findings must describe only content retained by storage policy")
+}
+
+// parseCodebuffFixture parses one Codebuff session directory through the
+// registered provider and returns its results keyed by session ID.
+func parseCodebuffFixture(t *testing.T, chatMessages string) map[string]parser.ParseResult {
+	t.Helper()
+	root := t.TempDir()
+	dir := filepath.Join(root, "proj", "chats", "2026-07-15T20-01-32.065Z")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "chat-messages.json"), []byte(chatMessages), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "run-state.json"),
+		[]byte(`{"sessionState":{"mainAgentState":{"agentType":"base2-deepseek"}}}`), 0o644))
+
+	var factory parser.ProviderFactory
+	for _, f := range parser.ProviderFactories() {
+		if f.Definition().Type == parser.AgentCodebuff {
+			factory = f
+		}
+	}
+	require.NotNil(t, factory)
+	provider := factory.NewProvider(parser.ProviderConfig{Roots: []string{root}})
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	outcome, err := provider.Parse(t.Context(), parser.ParseRequest{Source: sources[0]})
+	require.NoError(t, err)
+	out := map[string]parser.ParseResult{}
+	for _, r := range outcome.Results {
+		out[r.Result.Session.ID] = r.Result
+	}
+	return out
+}
+
+func toolCallsByName(messages []db.Message) map[string]db.ToolCall {
+	out := map[string]db.ToolCall{}
+	for _, m := range messages {
+		for _, tc := range m.ToolCalls {
+			out[tc.ToolName] = tc
+		}
+	}
+	return out
+}
+
+// A Codebuff subagent's nested read_files output is an ordinary tool result
+// in the subagent's own session, so the result-content policy drops it with
+// no provider-specific plumbing.
+func TestPrepareCandidateBlocksCodebuffSubagentReadOutput(t *testing.T) {
+	results := parseCodebuffFixture(t, `[
+		{"id":"ai-1","variant":"ai","timestamp":"03:04 PM","blocks":[
+			{"type":"agent","agentId":"agent-1","agentType":"file-explorer",
+			 "initialPrompt":"find the config","content":"config is in cfg.toml",
+			 "blocks":[
+				{"type":"tool","toolName":"read_files","toolCallId":"rf-1",
+				 "input":{"paths":["cfg.toml"]},"output":"SECRET FILE CONTENTS"},
+				{"type":"tool","toolName":"run_terminal_command","toolCallId":"sh-1",
+				 "input":{"command":"ls"},"output":"file-a"}
+			 ]}
+		]}
+	]`)
+	parentID := "codebuff:proj:2026-07-15T20-01-32.065Z"
+	childID := parentID + "__subagent__agent-1"
+	require.Contains(t, results, parentID)
+	require.Contains(t, results, childID)
+
+	prepare := func(id string, blocked map[string]bool) map[string]db.ToolCall {
+		t.Helper()
+		candidate, err := ingest.PrepareCandidate(t.Context(), results[id],
+			ingest.ContentOptions{BlockedResultCategories: blocked})
+		require.NoError(t, err)
+		return toolCallsByName(candidate.Messages)
+	}
+
+	open := prepare(childID, nil)
+	assert.Equal(t, "SECRET FILE CONTENTS", open["read_files"].ResultContent,
+		"without a policy the subagent's read output is stored")
+
+	child := prepare(childID, map[string]bool{"Read": true})
+	require.Contains(t, child, "read_files")
+	assert.Equal(t, "Read", child["read_files"].Category)
+	assert.Empty(t, child["read_files"].ResultContent,
+		"a blocked Read category drops the subagent's file contents")
+	assert.Equal(t, "file-a", child["run_terminal_command"].ResultContent,
+		"unblocked categories keep their output")
+
+	parent := prepare(parentID, map[string]bool{"Read": true})
+	require.Contains(t, parent, "file-explorer")
+	assert.Equal(t, childID, parent["file-explorer"].SubagentSessionID)
+	assert.Equal(t, "config is in cfg.toml", parent["file-explorer"].ResultContent)
 }

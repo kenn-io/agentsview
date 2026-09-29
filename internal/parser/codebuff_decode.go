@@ -2,6 +2,8 @@ package parser
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
@@ -216,13 +218,138 @@ type codebuffWireAnswer struct {
 
 // codebuffTranscript carries everything parseCodebuffSession needs from the
 // transcript: parsed messages, per-turn billing facts (plan 020), the
-// timestamp envelope, and whether the file ended mid-write.
+// timestamp envelope, whether the file ended mid-write, and the nested
+// subagents lifted into their own sessions.
 type codebuffTranscript struct {
 	Messages  []ParsedMessage
 	TurnFacts []codebuffTurnFact
+	Subagents []codebuffSubagent
 	StartedAt time.Time
 	EndedAt   time.Time
 	Truncated bool
+}
+
+// codebuffSubagent is one nested `agent` block stored as its own session.
+// Upstream records a subagent's whole exchange (reasoning, tool calls and
+// their outputs, further subagents) in the block's recursive `blocks` array;
+// each block becomes a child session linked to the session that spawned it,
+// so its tool calls are stored and result-blocked per call like any other.
+type codebuffSubagent struct {
+	// ID is the child's full session ID; ParentID is the full session ID of
+	// the session whose transcript holds the agent block (the root session
+	// or another subagent).
+	ID       string
+	ParentID string
+	// AgentID is the raw upstream agentId, empty when the block had none.
+	AgentID   string
+	AgentType string
+	AgentName string
+	// Timestamp is the containing message's timestamp: nested blocks carry
+	// none of their own.
+	Timestamp time.Time
+	Messages  []ParsedMessage
+}
+
+// codebuffSubagentIDSep joins the owning session's full ID and a subagent
+// key into the child session ID. It contains no ':' so raw-ID lookup can
+// still split "<project>:<timestamp>", and no '~' (the host-prefix
+// separator).
+const codebuffSubagentIDSep = "__subagent__"
+
+// codebuffSubagentSink allocates child session IDs and collects child
+// transcripts in document order (a parent before its descendants).
+type codebuffSubagentSink struct {
+	rootID string
+	used   map[string]bool
+	// agentBlocks counts agent blocks seen so far, at every depth, so an
+	// agent block without an agentId gets a positional key that stays
+	// stable while the transcript only grows at the end.
+	agentBlocks int
+	out         []codebuffSubagent
+}
+
+func newCodebuffSubagentSink(rootID string) *codebuffSubagentSink {
+	return &codebuffSubagentSink{rootID: rootID, used: map[string]bool{}}
+}
+
+// allocate returns the child session ID for one agent block. IDs derive from
+// the owning session's full ID plus the block's agentId, so they are stable
+// across reparses. An agentId outside [A-Za-z0-9._-] is replaced by a short
+// digest so the ID stays a safe single path component; an empty agentId uses
+// the block's position among all agent blocks; a repeated key gets a -2, -3,
+// ... suffix in document order.
+func (s *codebuffSubagentSink) allocate(agentID string) string {
+	s.agentBlocks++
+	key := codebuffSubagentKey(agentID)
+	if key == "" {
+		key = "idx" + strconv.Itoa(s.agentBlocks)
+	}
+	candidate := key
+	for n := 2; s.used[candidate]; n++ {
+		candidate = key + "-" + strconv.Itoa(n)
+	}
+	s.used[candidate] = true
+	return s.rootID + codebuffSubagentIDSep + candidate
+}
+
+// codebuffSubagentKey maps an upstream agentId to the key used in the child
+// session ID; see codebuffSubagentSink.allocate.
+func codebuffSubagentKey(agentID string) string {
+	if agentID == "" {
+		return ""
+	}
+	for i := range len(agentID) {
+		c := agentID[i]
+		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' ||
+			c >= '0' && c <= '9' || c == '.' || c == '_' || c == '-' {
+			continue
+		}
+		sum := sha256.Sum256([]byte(agentID))
+		return "h" + hex.EncodeToString(sum[:8])
+	}
+	return agentID
+}
+
+// collect lifts one agent block into a child session and returns its ID, or
+// "" when the block carries nothing to show (no prompt and no child blocks
+// that render), in which case no child session exists to link to. The
+// child's messages are a user message from initialPrompt, then the child
+// blocks through the same walker the main agent's AI messages use, so nested
+// agents become further children linked to this one.
+func (s *codebuffSubagentSink) collect(
+	b *codebuffWireBlock, ts time.Time, parentID string,
+) string {
+	id := s.allocate(b.AgentID)
+	idx := len(s.out)
+	s.out = append(s.out, codebuffSubagent{
+		ID:        id,
+		ParentID:  parentID,
+		AgentID:   b.AgentID,
+		AgentType: b.AgentType,
+		AgentName: b.AgentName,
+		Timestamp: ts,
+	})
+	var msgs []ParsedMessage
+	if prompt := strings.TrimSpace(b.InitialPrompt); prompt != "" {
+		msgs = append(msgs, ParsedMessage{
+			Role:          RoleUser,
+			Content:       prompt,
+			Timestamp:     ts,
+			ContentLength: len(prompt),
+		})
+	}
+	msgs = append(msgs, codebuffBlockMessages(b.Blocks, ts, id, s)...)
+	if len(msgs) == 0 {
+		// Nothing rendered, so no nested agent block was seen either and
+		// nothing was appended after idx.
+		s.out = s.out[:idx]
+		return ""
+	}
+	for i := range msgs {
+		msgs[i].Ordinal = i
+	}
+	s.out[idx].Messages = msgs
+	return id
 }
 
 // decodeCodebuffMessages streams chat-messages.json element by element with
@@ -232,6 +359,9 @@ type codebuffTranscript struct {
 // (guarded by the reference-decoder equivalence test); any difference in
 // ParsedMessage content would be a stored-data change requiring a
 // dataVersion bump, which plan 021 must not do.
+//
+// sessionID is the full ID of the session being decoded; nested agent blocks
+// become child sessions whose IDs derive from it (codebuffSubagentSink).
 //
 // Truncation: an unexpected-EOF or syntax error after at least one element
 // decoded yields the messages so far with Truncated=true -- a transcript
@@ -264,10 +394,10 @@ type codebuffTranscript struct {
 // reachable only from tests. That is a known gap, not a guarantee; the rule
 // is what keeps the gap safe when someone threads a real context later.
 func decodeCodebuffMessages(
-	ctx context.Context, r io.Reader, sessionDate time.Time,
-	blocked map[string]bool,
+	ctx context.Context, r io.Reader, sessionDate time.Time, sessionID string,
 ) (codebuffTranscript, error) {
 	dec := jsontext.NewDecoder(r)
+	subs := newCodebuffSubagentSink(sessionID)
 
 	tok, err := dec.ReadToken()
 	if err != nil {
@@ -312,6 +442,7 @@ func decodeCodebuffMessages(
 			if decodedElements > 0 && decodeIsTruncation(err) {
 				t.Truncated = true
 				t.StartedAt, t.EndedAt = startedAt, endedAt
+				t.Subagents = subs.out
 				return t, nil
 			}
 			return codebuffTranscript{}, fmt.Errorf("decode chat-messages: %w", err)
@@ -356,7 +487,7 @@ func decodeCodebuffMessages(
 				endedAt = ts
 			}
 		}
-		appendCodebuffWireMessage(&t, &m, ts, &ordinal, blocked)
+		appendCodebuffWireMessage(&t, &m, ts, &ordinal, sessionID, subs)
 		release()
 	}
 	if _, err := dec.ReadToken(); err != nil {
@@ -365,6 +496,7 @@ func decodeCodebuffMessages(
 		if decodedElements > 0 && decodeIsTruncation(err) {
 			t.Truncated = true
 			t.StartedAt, t.EndedAt = startedAt, endedAt
+			t.Subagents = subs.out
 			return t, nil
 		}
 		return codebuffTranscript{}, fmt.Errorf("decode chat-messages: %w", err)
@@ -382,6 +514,7 @@ func decodeCodebuffMessages(
 	}
 
 	t.StartedAt, t.EndedAt = startedAt, endedAt
+	t.Subagents = subs.out
 	return t, nil
 }
 
@@ -525,7 +658,7 @@ func codebuffEmitSystem(
 // payload is the block stream, and upstream stamps attachments on prompts.
 func appendCodebuffWireMessage(
 	t *codebuffTranscript, m *codebuffWireMessage, ts time.Time, ordinal *int,
-	blocked map[string]bool,
+	sessionID string, subs *codebuffSubagentSink,
 ) {
 	switch m.Variant {
 	case "user":
@@ -572,7 +705,7 @@ func appendCodebuffWireMessage(
 
 	case "ai":
 		firstOrdinal := *ordinal
-		parsed := codebuffParsedAIMessages(m, ts, blocked)
+		parsed := codebuffBlockMessages(m.Blocks, ts, sessionID, subs)
 		if len(parsed) > 0 {
 			for i := range parsed {
 				parsed[i].Ordinal = *ordinal
@@ -745,210 +878,17 @@ func codebuffEmitSystemBlock(out *[]ParsedMessage, content string, ts time.Time)
 	})
 }
 
-const (
-	// codebuffSubagentMaxDepth bounds how deep nested agent blocks render.
-	// Upstream nests a subagent inside a subagent at most, so four levels
-	// is generous; the bound exists so a pathological or future-format
-	// transcript cannot recurse unbounded.
-	codebuffSubagentMaxDepth = 4
-
-	// codebuffSubagentMaxRenderedBytes bounds the rendered child
-	// transcript per agent block, so one subagent-heavy message cannot
-	// dominate archive size. Generous enough for real subagent work
-	// (tool inputs and outputs, text); the marker names the bound when it
-	// trips.
-	codebuffSubagentMaxRenderedBytes = 256 * 1024
-)
-
-// codebuffSubagentTranscriptHeader separates a subagent tool call's final
-// answer from the rendered nested transcript appended after it. Stored data:
-// changing it invalidates every archived transcript that matched the old
-// text (and needs a data version bump).
-const codebuffSubagentTranscriptHeader = "[Subagent transcript]"
-
-// codebuffRenderChildBlocks renders a nested agent block's child blocks to
-// text, modeled on upstream's copy-conversation.ts renderBlock, so a nested
-// block reads the same as a top-level one (one shared marker vocabulary, no
-// second set). Bounded on two axes: nesting depth and rendered size. Every
-// write, including the line separator before it, is charged against the
-// remaining budget, so a single oversized child (a huge tool output, a long
-// text block) is truncated mid-line with the size marker rather than
-// blowing past the bound; an exact fill leaves the next write no room, and
-// that write takes the marker path instead of slicing a negative remainder.
-// Once the budget is exhausted, a marker names which bound tripped and
-// rendering stops.
-func codebuffRenderChildBlocks(
-	blocks []codebuffWireBlock, depth int, budget int,
-	blocked map[string]bool,
-) string {
-	if budget <= 0 {
-		budget = codebuffSubagentMaxRenderedBytes
-	}
-	var b strings.Builder
-	sizeMarker := "[Subagent transcript truncated: exceeded " +
-		strconv.Itoa(codebuffSubagentMaxRenderedBytes/1024) + " KB size bound]"
-	depthMarker := "[Subagent transcript truncated: exceeded depth bound]"
-	// exhausted reports whether anything more should render; when it
-	// flips true the caller stops and the marker is appended once.
-	exhausted := false
-	write := func(s string) {
-		if exhausted || s == "" {
-			return
-		}
-		if b.Len() > 0 {
-			b.WriteString("\n")
-		}
-		remaining := budget - b.Len()
-		// remaining can drop to zero exactly at the bound: the exact
-		// fill completes without flipping exhausted, and the separator
-		// above leaves the next write negative. SafeTruncate requires a
-		// nonnegative limit (a negative one panicked here), so anything
-		// at or past the bound takes the marker path with no slice.
-		if remaining <= 0 || len(s) > remaining {
-			if remaining > 0 {
-				b.WriteString(stringutil.SafeTruncate(s, remaining-1))
-				b.WriteString("\n")
-			}
-			b.WriteString(sizeMarker)
-			exhausted = true
-			return
-		}
-		b.WriteString(s)
-	}
-	for i := range blocks {
-		if exhausted {
-			return b.String()
-		}
-		block := &blocks[i]
-		switch block.Type {
-		case "text":
-			if strings.TrimSpace(block.Content) == "" {
-				continue
-			}
-			if block.TextType == "reasoning" {
-				write("[Thinking]\n" + block.Content + "\n[/Thinking]")
-			} else {
-				write(block.Content)
-			}
-		case "tool":
-			if block.ToolName == "" {
-				continue
-			}
-			parts := []string{"[Tool: " + block.ToolName + "]"}
-			if len(block.Input) > 0 && string(block.Input) != "null" {
-				parts = append(parts, "input: "+string(block.Input))
-			}
-			// Result-content policy: a child tool whose normalized
-			// category is blocked keeps its header and input but loses
-			// its output, mirroring the db's per-call category check that
-			// the parent Task result body otherwise bypasses. The parent's
-			// own Task category is the db's business, not this renderer's.
-			if len(block.Output) > 0 &&
-				!blocked[NormalizeToolCategory(block.ToolName)] {
-				parts = append(parts, "output: "+string(block.Output))
-			}
-			write(strings.Join(parts, " "))
-		case "agent":
-			if depth >= codebuffSubagentMaxDepth {
-				write(depthMarker)
-				return b.String()
-			}
-			name := block.AgentName
-			if name == "" {
-				name = block.AgentType
-			}
-			write("[Subagent: " + name + " (" + block.AgentType + ")]")
-			if block.InitialPrompt != "" {
-				write("prompt: " + block.InitialPrompt)
-			}
-			if block.Content != "" {
-				write(block.Content)
-			}
-			if len(block.Blocks) > 0 {
-				// Recursing with budget <= 0 would reset it to the
-				// full bound and let a nested transcript exceed the
-				// parent's, so an exhausted budget stops here with
-				// the marker instead of handing the child a fresh
-				// one.
-				if remaining := budget - b.Len(); remaining <= 0 {
-					write(sizeMarker)
-					return b.String()
-				}
-				child := codebuffRenderChildBlocks(
-					block.Blocks, depth+1, budget-b.Len(), blocked)
-				if child != "" {
-					if b.Len() > 0 {
-						b.WriteString("\n")
-					}
-					b.WriteString(child)
-				}
-				if strings.Contains(child, sizeMarker) ||
-					strings.Contains(child, depthMarker) {
-					// The subtree already carries its truncation
-					// marker; the budget it reports is shared, so
-					// stop here rather than appending another.
-					return b.String()
-				}
-			}
-		case "mode-divider":
-			if block.Mode != "" {
-				write("[Mode: " + block.Mode + "]")
-			}
-		case "plan":
-			if strings.TrimSpace(block.Content) != "" {
-				write("[Plan]\n" + block.Content)
-			}
-		case "ask-user":
-			var parts []string
-			for _, q := range block.Questions {
-				if strings.TrimSpace(q.Question) != "" {
-					parts = append(parts, "[Agent asked] "+q.Question)
-				}
-			}
-			parts = append(parts, codebuffAskUserAnswerLines(block)...)
-			if len(parts) > 0 {
-				write(strings.Join(parts, "\n"))
-			}
-		case "image":
-			if block.Filename != "" {
-				write("[Image: " + block.Filename + "]")
-			} else {
-				write("[Image attached]")
-			}
-		case "sponsored-proposal":
-			content := "[Sponsored proposal] " + block.Target
-			if block.Consent != nil && block.Consent.Headline != "" {
-				content += "\n" + block.Consent.Headline
-			}
-			write(content)
-		case "agent-list":
-			names := make([]string, 0, len(block.Agents))
-			for _, a := range block.Agents {
-				if a.DisplayName != "" {
-					names = append(names, a.DisplayName)
-				} else {
-					names = append(names, a.ID)
-				}
-			}
-			if len(names) > 0 {
-				write("[Agents: " + strings.Join(names, ", ") + "]")
-			}
-		default:
-			// Unknown child block type: skip, keep rendering the rest
-			// (upstream adds block types without warning).
-			continue
-		}
-	}
-	return b.String()
-}
-
-// codebuffParsedAIMessages re-shapes parseCodebuffAIMessage's block loop onto
-// the decoded wire structs, preserving text grouping, the [Thinking] wrapper,
-// tool-run batching, and per-block emission order.
-func codebuffParsedAIMessages(
-	m *codebuffWireMessage, ts time.Time, blocked map[string]bool,
+// codebuffBlockMessages converts one block stream into ParsedMessages,
+// preserving text grouping, the [Thinking] wrapper, tool-run batching, and
+// per-block emission order. The main agent's AI messages and every subagent's
+// nested blocks share it, so a subagent's work is stored the same way as the
+// main agent's. sessionID is the session that owns the blocks; agent blocks
+// become child sessions of it through subs.
+func codebuffBlockMessages(
+	blocks []codebuffWireBlock, ts time.Time, sessionID string,
+	subs *codebuffSubagentSink,
 ) []ParsedMessage {
-	if len(m.Blocks) == 0 {
+	if len(blocks) == 0 {
 		return nil
 	}
 
@@ -1053,7 +993,7 @@ func codebuffParsedAIMessages(
 	// consecutive tool blocks together.
 	inToolRun := false
 
-	for _, block := range m.Blocks {
+	for _, block := range blocks {
 		blockType := block.Type
 		isTool := blockType == "tool" || blockType == "agent"
 
@@ -1132,49 +1072,31 @@ func codebuffParsedAIMessages(
 				ToolName:  block.AgentType,
 				Category:  "Task",
 				InputJSON: string(inputJSON),
+				// The nested blocks become a linked child session; its tool
+				// calls carry their own categories, so result blocking
+				// applies to them per call like any other stored result.
+				SubagentSessionID: subs.collect(&block, ts, sessionID),
 			}
 			toolCalls = append(toolCalls, tc)
 
-			// Emit the subagent's output as ONE linked ParsedToolResult
-			// rather than an ordinary assistant text message or a second
-			// result. Representing the output as a tool result lets the
-			// configured result-content blocking system
-			// (BlockedResultCategories) strip it when the Task category is
-			// blocked; keeping it to one result matches the archive, whose
-			// db.ToolCall carries a single ResultContent and whose pairing
-			// loop keeps the LAST result per tool_use_id -- a second result
-			// for the same call would silently overwrite the first in the
-			// archive while parser-level tests still passed.
-			//
-			// The body composes the block's own content (the final answer,
-			// first, byte for byte as before) and, when the block carries
-			// child blocks, the bounded rendering of the nested transcript
-			// under an explicit header. Two consequences to know: the child
-			// content is stored but NOT full-text searchable (the FTS index
-			// covers messages.content only), and it is subject to the same
-			// blocked-result categories as the parent's own output.
-			body := block.Content
-			if len(block.Blocks) > 0 {
-				rendered := codebuffRenderChildBlocks(block.Blocks, 1, 0, blocked)
-				if rendered != "" {
-					if body != "" {
-						body += "\n\n" + codebuffSubagentTranscriptHeader + "\n"
-					}
-					body += rendered
-				}
-			}
-			if body != "" {
+			// Emit the subagent's final answer as ONE linked
+			// ParsedToolResult rather than an ordinary assistant text
+			// message, so the configured result-content blocking strips it
+			// when the Task category is blocked. One result per call
+			// matches the archive: db.ToolCall carries a single
+			// ResultContent and the pairing loop keeps the LAST result per
+			// tool_use_id.
+			if block.Content != "" {
 				// The upstream content member is a JSON string, so encode
-				// the composed body as a JSON string value and size it by
-				// the decoded length, matching how tool blocks store
-				// output.Raw and how convertToolResultsContext consumes
-				// ContentRaw.
-				quoted, err := json.Marshal(body)
+				// it as a JSON string value and size it by the decoded
+				// length, matching how tool blocks store output.Raw and
+				// how convertToolResultsContext consumes ContentRaw.
+				quoted, err := json.Marshal(block.Content)
 				if err == nil {
 					toolResults = append(toolResults, ParsedToolResult{
 						ToolUseID:     block.AgentID,
 						ContentRaw:    string(quoted),
-						ContentLength: len(body),
+						ContentLength: len(block.Content),
 					})
 				}
 			}

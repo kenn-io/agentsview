@@ -1916,12 +1916,11 @@ func TestSyncCodebuffPersistsGitBranch(t *testing.T) {
 		"no gitChanges means an empty branch, not the project name")
 }
 
-// TestSyncCodebuffNestedSubagentResultPersists is plan 023's end-to-end
-// check: a subagent with child blocks must store its single result body
-// containing both the final answer and the rendered nested transcript. This
-// is the test that would have caught a two-results design, because
-// parser-level assertions cannot see the archive's last-wins pairing.
-func TestSyncCodebuffNestedSubagentResultPersists(t *testing.T) {
+// TestSyncCodebuffNestedSubagentSessionsPersist is the end-to-end check that
+// a subagent's nested blocks reach the archive as a linked child session
+// from the same transcript, and that the result-content policy drops the
+// child's blocked tool output like any other tool result.
+func TestSyncCodebuffNestedSubagentSessionsPersist(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -1936,6 +1935,8 @@ func TestSyncCodebuffNestedSubagentResultPersists(t *testing.T) {
 			"initialPrompt":"run tests","content":"All tests passed.",
 			"blocks":[
 				{"type":"text","textType":"text","content":"checking main.go"},
+				{"type":"tool","toolName":"read_files","toolCallId":"r1",
+				 "input":{"paths":["main.go"]},"output":"SECRET FILE CONTENTS"},
 				{"type":"tool","toolName":"run_terminal_command","toolCallId":"t1",
 				 "input":{"command":"go test"},"output":"ok"}
 			]}
@@ -1953,40 +1954,50 @@ func TestSyncCodebuffNestedSubagentResultPersists(t *testing.T) {
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {root},
 		},
-		Machine: "local",
+		Machine:                 "local",
+		BlockedResultCategories: []string{"Read"},
 	})
 	t.Cleanup(engine.Close)
 
-	synced := engine.SyncAll(t.Context(), nil).Synced
-	require.Equal(t, 1, synced,
-		"the single-session archive must sync; 0 means discovery or the\n"+
-			"// freshness gate skipped it -- check the transcript fixture")
+	engine.SyncAll(t.Context(), nil)
 
-	var stored string
 	// The fixture's agentType (base2-free-mimo) contains "free", so the
-	// parser classifies the session as Freebuff and the canonical ID
-	// carries the freebuff: prefix.
-	require.NoError(t, database.Reader().QueryRow(t.Context(),
-		`SELECT COALESCE(result_content, '') FROM tool_calls
-		 WHERE session_id = ? AND tool_use_id = 'agent-1'`,
-		"freebuff:project-0:2026-07-15T10-00-00.000Z",
-	).Scan(&stored))
-	require.NotEmpty(t, stored, "the subagent result must reach the archive")
+	// parser classifies the session as Freebuff.
+	parentID := "freebuff:project-0:2026-07-15T10-00-00.000Z"
+	childID := parentID + "__subagent__agent-1"
 
-	// The engine stores the DECODED body (parser.DecodeContent over the
-	// JSON string ContentRaw), so the archive holds the plain text.
-	body := stored
-	assert.Contains(t, body, "All tests passed.",
-		"the final answer is in the stored result")
-	assert.Contains(t, body, "[Subagent transcript]")
-	assert.Contains(t, body, "checking main.go",
-		"a child block's content survives to the archive")
+	parent, err := database.GetSession(t.Context(), parentID)
+	require.NoError(t, err)
+	require.NotNil(t, parent)
+	child, err := database.GetSession(t.Context(), childID)
+	require.NoError(t, err)
+	require.NotNil(t, child, "the subagent must be stored as its own session")
+	require.NotNil(t, child.ParentSessionID)
+	assert.Equal(t, parentID, *child.ParentSessionID)
+	assert.Equal(t, "subagent", child.RelationshipType)
 
-	var count int
+	var answer, link string
 	require.NoError(t, database.Reader().QueryRow(t.Context(),
-		`SELECT COUNT(*) FROM tool_calls
-		 WHERE session_id = ? AND tool_use_id = 'agent-1'`,
-		"freebuff:project-0:2026-07-15T10-00-00.000Z",
-	).Scan(&count))
-	assert.Equal(t, 1, count, "exactly one tool_calls row for the subagent call")
+		`SELECT COALESCE(result_content, ''), COALESCE(subagent_session_id, '')
+		 FROM tool_calls WHERE session_id = ? AND tool_use_id = 'agent-1'`,
+		parentID,
+	).Scan(&answer, &link))
+	assert.Equal(t, "All tests passed.", answer,
+		"the Task result is the subagent's final answer")
+	assert.Equal(t, childID, link)
+
+	childResult := func(toolUseID string) string {
+		t.Helper()
+		var content string
+		require.NoError(t, database.Reader().QueryRow(t.Context(),
+			`SELECT COALESCE(result_content, '') FROM tool_calls
+			 WHERE session_id = ? AND tool_use_id = ?`,
+			childID, toolUseID,
+		).Scan(&content))
+		return content
+	}
+	assert.Empty(t, childResult("r1"),
+		"a blocked Read category drops the subagent's file contents")
+	assert.Equal(t, "ok", childResult("t1"),
+		"unblocked categories keep their output")
 }

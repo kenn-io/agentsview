@@ -32,15 +32,13 @@ type codebuffSessionDir struct {
 }
 
 // parseCodebuffSession parses a single codebuff/freebuff session directory
-// and returns the parsed session with messages. blocked carries the
-// operator's result-content categories for the nested-transcript renderer;
-// nil keeps every category.
+// and returns the parsed session with messages, plus one linked child result
+// per nested subagent (see codebuffSubagentResults).
 func parseCodebuffSession(
 	dir string,
 	projectHint string,
 	machine string,
-	blocked map[string]bool,
-) (*ParsedSession, []ParsedMessage, error) {
+) (*ParsedSession, []ParsedMessage, []ParseResult, error) {
 	chatMessagesPath := filepath.Join(dir, codebuffPrimaryTranscriptName)
 	runStatePath := filepath.Join(dir, codebuffRunStateName)
 	chatMetaPath := filepath.Join(dir, codebuffChatMetaName)
@@ -48,12 +46,33 @@ func parseCodebuffSession(
 	// Read run-state.json for model, token, agent-type, and skills data.
 	rs, err := readCodebuffRunState(runStatePath)
 	if err != nil && !os.IsNotExist(err) {
-		return nil, nil, fmt.Errorf("read run-state %s: %w", runStatePath, err)
+		return nil, nil, nil, fmt.Errorf("read run-state %s: %w", runStatePath, err)
 	}
 
 	// Session ID is the timestamp directory name (ISO 8601).
 	sessionID := filepath.Base(dir)
 	sessionDate := parseCodebuffSessionDate(sessionID)
+
+	// Determine agent type from run-state agentType field.
+	// Sessions with "free" in the agentType are Freebuff, others are Codebuff.
+	// Both share the same on-disk layout; the parser splits them by type
+	// so the UI can filter each agent independently.
+	agent := AgentCodebuff
+	agentLabel := "Codebuff"
+	if strings.Contains(strings.ToLower(rs.AgentType), "free") {
+		agent = AgentFreebuff
+		agentLabel = "Freebuff"
+	}
+
+	// Use projectHint (the storage directory name) for the session ID
+	// to ensure stability. The cwd-derived project name can change if
+	// the git root changes, which would break source lookup and cause
+	// session ID instability.
+	projectID := projectHint
+	if projectID == "" {
+		projectID = "unknown"
+	}
+	fullID := string(agent) + ":" + projectID + ":" + sessionID
 
 	// Read and parse the chat messages. The transcript is streamed element
 	// by element: each AI message embeds the full project context in its
@@ -68,17 +87,17 @@ func parseCodebuffSession(
 	// keeps that gap safe if a real context is threaded later.
 	f, err := os.Open(chatMessagesPath)
 	if err != nil {
-		return nil, nil, fmt.Errorf("read chat-messages %s: %w", chatMessagesPath, err)
+		return nil, nil, nil, fmt.Errorf("read chat-messages %s: %w", chatMessagesPath, err)
 	}
 	transcript, err := decodeCodebuffMessages(
-		context.Background(), f, sessionDate, blocked,
+		context.Background(), f, sessionDate, fullID,
 	)
 	closeErr := f.Close()
 	if err != nil {
-		return nil, nil, fmt.Errorf("parse chat-messages %s: %w", chatMessagesPath, err)
+		return nil, nil, nil, fmt.Errorf("parse chat-messages %s: %w", chatMessagesPath, err)
 	}
 	if closeErr != nil {
-		return nil, nil, fmt.Errorf("close chat-messages %s: %w", chatMessagesPath, closeErr)
+		return nil, nil, nil, fmt.Errorf("close chat-messages %s: %w", chatMessagesPath, closeErr)
 	}
 	msgs := transcript.Messages
 	turnFacts := transcript.TurnFacts
@@ -132,17 +151,6 @@ func parseCodebuffSession(
 		}
 	}
 
-	// Determine agent type from run-state agentType field.
-	// Sessions with "free" in the agentType are Freebuff, others are Codebuff.
-	// Both share the same on-disk layout; the parser splits them by type
-	// so the UI can filter each agent independently.
-	agent := AgentCodebuff
-	agentLabel := "Codebuff"
-	if strings.Contains(strings.ToLower(rs.AgentType), "free") {
-		agent = AgentFreebuff
-		agentLabel = "Freebuff"
-	}
-
 	// Count user messages.
 	userMsgCount := 0
 	for _, msg := range msgs {
@@ -182,16 +190,6 @@ func parseCodebuffSession(
 		fileInfo.Size = info.Size()
 		fileInfo.Mtime = info.ModTime().UnixNano()
 	}
-
-	// Use projectHint (the storage directory name) for the session ID
-	// to ensure stability. The cwd-derived project name can change if
-	// the git root changes, which would break source lookup and cause
-	// session ID instability.
-	projectID := projectHint
-	if projectID == "" {
-		projectID = "unknown"
-	}
-	fullID := string(agent) + ":" + projectID + ":" + sessionID
 
 	// Derive display project from run-state cwd for UI display.
 	// Use ExtractProjectFromCwd (git-root aware) rather than
@@ -279,7 +277,82 @@ func parseCodebuffSession(
 	sess.IsTruncated = fileTruncated
 	sess.TerminationStatus = Classify(msgs, "", fileTruncated)
 
-	return sess, msgs, nil
+	children := codebuffSubagentResults(sess, transcript.Subagents, rs.Skills)
+	return sess, msgs, children, nil
+}
+
+// codebuffSubagentResults turns the decoder's nested subagents into linked
+// child sessions. Each child inherits the parent's project, machine, agent,
+// working directory, branch, and source file (one chat-messages.json holds
+// the whole tree, as a Claude transcript holds its forks); ParentSessionID
+// names the session whose transcript held the agent block. Usage events stay
+// on the parent: upstream bills credits per top-level AI message, not per
+// subagent.
+func codebuffSubagentResults(
+	parent *ParsedSession, subs []codebuffSubagent, skills []codebuffSkill,
+) []ParseResult {
+	if len(subs) == 0 {
+		return nil
+	}
+	out := make([]ParseResult, 0, len(subs))
+	for _, sub := range subs {
+		msgs := sub.Messages
+		codebuffAttachSkillNames(msgs, skills)
+
+		firstMsg := ""
+		userCount := 0
+		for _, msg := range msgs {
+			if msg.Role == RoleUser && !msg.IsSystem &&
+				strings.TrimSpace(msg.Content) != "" {
+				userCount++
+				if firstMsg == "" {
+					firstMsg = truncate(
+						strings.ReplaceAll(msg.Content, "\n", " "), 300,
+					)
+				}
+			}
+		}
+		name := sub.AgentName
+		if name == "" {
+			name = sub.AgentType
+		}
+		if name == "" {
+			name = "subagent"
+		}
+		startedAt := sub.Timestamp
+		if startedAt.IsZero() {
+			startedAt = parent.StartedAt
+		}
+		sourceSessionID := sub.AgentID
+		if sourceSessionID == "" {
+			sourceSessionID = strings.TrimPrefix(sub.ID, string(parent.Agent)+":")
+		}
+		out = append(out, ParseResult{
+			Session: ParsedSession{
+				ID:                sub.ID,
+				Project:           parent.Project,
+				Machine:           parent.Machine,
+				Agent:             parent.Agent,
+				AgentLabel:        parent.AgentLabel,
+				Cwd:               parent.Cwd,
+				GitBranch:         parent.GitBranch,
+				ParentSessionID:   sub.ParentID,
+				RelationshipType:  RelSubagent,
+				FirstMessage:      firstMsg,
+				SessionName:       "Subagent: " + name,
+				StartedAt:         startedAt,
+				EndedAt:           startedAt,
+				MessageCount:      len(msgs),
+				UserMessageCount:  userCount,
+				SourceSessionID:   sourceSessionID,
+				SourceVersion:     parent.SourceVersion,
+				File:              parent.File,
+				TerminationStatus: Classify(msgs, "", false),
+			},
+			Messages: msgs,
+		})
+	}
+	return out
 }
 
 // codebuffRunState holds extracted fields from run-state.json.
