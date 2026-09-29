@@ -11593,9 +11593,16 @@ func TestResyncAllConsumesCopiedHierarchyRepairs(t *testing.T) {
 		[]string{"queued-cleanup"},
 	))
 
-	stats := env.engine.ResyncAll(t.Context(), nil)
+	var repairCounts [][2]int
+	stats := env.engine.ResyncAll(t.Context(), func(p sync.Progress) {
+		if p.Phase == sync.PhaseFinalizing && p.SessionsTotal > 0 {
+			assert.True(t, p.Resync)
+			repairCounts = append(repairCounts, [2]int{p.SessionsDone, p.SessionsTotal})
+		}
+	})
 
 	require.False(t, stats.Aborted, "resync aborted: %v", stats.Warnings)
+	assert.Equal(t, [][2]int{{0, 2}, {2, 2}}, repairCounts)
 	for _, table := range []string{
 		"subagent_parent_repair_queue",
 		"subagent_parent_cleanup_queue",

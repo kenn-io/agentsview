@@ -622,6 +622,33 @@ func TestBulkCollectorBoundsPendingParsedBytesBetweenWrites(t *testing.T) {
 	assert.Equal(t, 2, stats.Synced)
 }
 
+func TestCollectAndBatchReportsSubagentRepairProgress(t *testing.T) {
+	database := openTestDB(t)
+	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local"})
+	t.Cleanup(engine.Close)
+	ids := make([]string, 501)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("queued-%03d", i)
+	}
+	require.NoError(t, database.QueueSubagentParentRepairs(t.Context(), ids))
+	results := make(chan syncJob)
+	close(results)
+	var counts [][2]int
+	var details []string
+	stats := engine.collectAndBatch(t.Context(), results, 0, 0, func(p Progress) {
+		if p.Detail == "Finalizing sync: repairing subagent relationships" && p.SessionsTotal > 0 {
+			counts = append(counts, [2]int{p.SessionsDone, p.SessionsTotal})
+			current, ok := engine.CurrentProgress()
+			require.True(t, ok)
+			assert.Equal(t, p.SessionsDone, current.SessionsDone)
+		}
+		details = append(details, p.Detail)
+	}, syncWriteBulk)
+	assert.Zero(t, stats.Failed)
+	assert.Equal(t, [][2]int{{0, 501}, {250, 501}, {500, 501}, {501, 501}}, counts)
+	assert.Contains(t, details, "Finalizing sync: saving repaired subagent relationships")
+}
+
 func TestCollectAndBatchReportsFinalizingOnlyBeforeBulkTerminalFlush(t *testing.T) {
 	tests := []struct {
 		name       string

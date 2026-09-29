@@ -138,7 +138,7 @@ func TestSubagentFinalizationHonorsCanceledContext(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
 
-		err := d.RepairQueuedSubagentParentsContext(ctx)
+		err := d.RepairQueuedSubagentParentsContext(ctx, nil)
 
 		require.ErrorIs(t, err, context.Canceled)
 		assert.Equal(t, "wrong-parent", parentOfSession(t, d, "kid"))
@@ -148,6 +148,48 @@ func TestSubagentFinalizationHonorsCanceledContext(t *testing.T) {
 		).Scan(&queued))
 		assert.Equal(t, 1, queued, "canceled repair must remain recoverable")
 	})
+}
+
+func TestQueuedSubagentRepairProgressAndRollback(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "spawner", "p")
+	insertSession(t, d, "a-kid", "p", func(s *Session) {
+		s.ParentSessionID = Ptr("wrong-parent")
+		s.RelationshipType = "subagent"
+	})
+	insertMessages(t, d, spawnEdgeTo("spawner", "a-kid", "spawn"))
+	ids := []string{"a-kid"}
+	for i := range 250 {
+		ids = append(ids, fmt.Sprintf("missing-%03d", i))
+	}
+	require.NoError(t, d.QueueSubagentParentRepairs(t.Context(), ids))
+	// Overlap between queues must not inflate the total.
+	require.NoError(t, d.QueueSubagentParentCleanupRepairs(t.Context(), []string{"a-kid"}))
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var counts [][2]int
+	err := d.RepairQueuedSubagentParentsContext(ctx, func(done, total int) {
+		counts = append(counts, [2]int{done, total})
+		if done > 0 {
+			cancel()
+		}
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, [][2]int{{0, 251}, {250, 251}}, counts)
+	assert.Equal(t, "wrong-parent", parentOfSession(t, d, "a-kid"))
+
+	counts = nil
+	require.NoError(t, d.RepairQueuedSubagentParentsContext(t.Context(), func(done, total int) {
+		counts = append(counts, [2]int{done, total})
+	}))
+	assert.Equal(t, [][2]int{{0, 251}, {250, 251}, {251, 251}}, counts,
+		"cancellation must retain the entire queue for retry")
+	assert.Equal(t, "spawner", parentOfSession(t, d, "a-kid"))
+	counts = nil
+	require.NoError(t, d.RepairQueuedSubagentParentsContext(t.Context(), func(done, total int) {
+		counts = append(counts, [2]int{done, total})
+	}))
+	assert.Empty(t, counts, "a committed repair must drain both queues")
 }
 
 // TestLinkSubagentSessionsUpgradesTypeWhenParentAlreadyMatches guards the

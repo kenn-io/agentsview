@@ -2151,12 +2151,17 @@ func (db *DB) queueSubagentParentRepairs(ctx context.Context, ids []string, clea
 // back both the hierarchy changes and queue deletion so a later sync retries
 // the exact IDs even when their original spawn edges have disappeared.
 func (db *DB) RepairQueuedSubagentParents() error {
-	return db.RepairQueuedSubagentParentsContext(context.Background())
+	return db.RepairQueuedSubagentParentsContext(context.Background(), nil)
 }
 
 // RepairQueuedSubagentParentsContext is RepairQueuedSubagentParents with
-// caller-controlled cancellation for bounded sync paths.
-func (db *DB) RepairQueuedSubagentParentsContext(ctx context.Context) error {
+// caller-controlled cancellation and optional batch progress. Progress counts
+// checked queue entries, including missing sessions and unchanged parents. The
+// final callback precedes commit; an error still rolls back the entire repair.
+// The callback runs under the writer lock and must not call back into DB.
+func (db *DB) RepairQueuedSubagentParentsContext(
+	ctx context.Context, onProgress func(done, total int),
+) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -2180,6 +2185,20 @@ func (db *DB) RepairQueuedSubagentParentsContext(ctx context.Context) error {
 	defer func() { _ = tx.Rollback() }()
 	if err := migrateLegacySubagentParentRepairQueueTx(ctx, tx); err != nil {
 		return err
+	}
+	var done, total int
+	if onProgress != nil {
+		if err := tx.QueryRowContext(ctx, `
+			SELECT count(*) FROM (
+				SELECT session_id FROM subagent_parent_repair_queue
+				UNION
+				SELECT session_id FROM subagent_parent_cleanup_queue
+			)`).Scan(&total); err != nil {
+			return fmt.Errorf("counting queued subagent parent repairs: %w", err)
+		}
+		if total > 0 {
+			onProgress(0, total)
+		}
 	}
 	for {
 		ids, err := func() ([]string, error) {
@@ -2254,6 +2273,10 @@ func (db *DB) RepairQueuedSubagentParentsContext(ctx context.Context) error {
 				"clearing %d queued subagent parent repairs: %w",
 				len(chunk), err,
 			)
+		}
+		done += len(chunk)
+		if onProgress != nil {
+			onProgress(done, total)
 		}
 	}
 	if err := tx.Commit(); err != nil {

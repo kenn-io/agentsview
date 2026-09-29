@@ -1582,6 +1582,17 @@ func (e *Engine) reportFinalizingProgress(
 	})
 }
 
+func (e *Engine) reportSubagentRepairProgress(onProgress ProgressFunc, done, total int) {
+	e.reportProgress(onProgress, Progress{
+		Phase: PhaseFinalizing, Detail: finalizingParentRepairDetail,
+		SessionsDone: done, SessionsTotal: total,
+	})
+	if done == total {
+		e.reportFinalizingProgress(onProgress, syncWriteBulk,
+			"Finalizing sync: saving repaired subagent relationships")
+	}
+}
+
 func (e *Engine) clearCurrentProgress() {
 	e.mu.Lock()
 	e.currentProgress = nil
@@ -3598,7 +3609,9 @@ func (e *Engine) resyncBuildLocked(
 	// Wait until orphan restoration is complete so every queued session and
 	// copied spawn edge is present. A failed repair leaves hierarchy state
 	// uncertain and must abort before the replacement can be installed.
-	if err := newDB.RepairQueuedSubagentParents(); err != nil {
+	if err := newDB.RepairQueuedSubagentParentsContext(ctx, func(done, total int) {
+		e.reportSubagentRepairProgress(reportResyncProgress, done, total)
+	}); err != nil {
 		log.Printf("resync: repair copied subagent parents: %v", err)
 		stats.Aborted = true
 		stats.Warnings = append(stats.Warnings,
@@ -10797,7 +10810,13 @@ flush:
 	e.reportFinalizingProgress(
 		onProgress, writeMode, finalizingParentRepairDetail,
 	)
-	if err := e.db.RepairQueuedSubagentParentsContext(postWriteCtx); err != nil {
+	var repairProgress func(int, int)
+	if writeMode == syncWriteBulk {
+		repairProgress = func(done, total int) {
+			e.reportSubagentRepairProgress(onProgress, done, total)
+		}
+	}
+	if err := e.db.RepairQueuedSubagentParentsContext(postWriteCtx, repairProgress); err != nil {
 		log.Printf("repair queued subagent parents: %v", err)
 		stats.RecordFailed()
 	}
