@@ -5,6 +5,8 @@ import (
 	"fmt"
 
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/friction/filing"
+	"go.kenn.io/agentsview/internal/kata"
 	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/storage"
@@ -48,5 +50,8 @@ func (pgReplica) serveOptions(
 	if rawSyncOption != nil {
 		opts = append(opts, rawSyncOption)
 	}
+	opts = append(opts, server.WithKataConn(kata.NewConn(kata.ConfigFrom(
+		appCfg.Kata, filing.EligibleHost(true, false),
+	))))
 	return opts, closeRawSync, nil
 }

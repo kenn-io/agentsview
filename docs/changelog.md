@@ -40,6 +40,10 @@ The latest published release is
   `agentsview serve --base-path`, including background serves. Keep
   `--public-url` set to the browser origin; AgentsView adds the mount path to
   assets, API requests, navigation, and its published browser URL.
+- AgentsView can check an optional Kata issue tracker connection, through a
+  local daemon or an HTTPS hub. Configure `[kata]`, then run
+  `agentsview kata status` or request `GET /api/v1/kata/status`. Issue filing is
+  not available yet. See [Kata](/docs/kata/).
 - Coding agents can now consult prior conversation evidence proactively when
   earlier decisions or solutions may help. `agentsview skills install`
   upgrades the existing recall skill for Claude and Agents/Codex, and Claude
