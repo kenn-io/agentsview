@@ -18909,10 +18909,10 @@ func shouldReplaceFullParseMessages(
 // rewrites. Other agents pass an empty hash, which COALESCE leaves
 // untouched.
 //
-// A suffix-replacement delta (suffixReplace) rebuilds the whole row set
-// from the stored prefix plus the re-parsed run and routes it through
-// the full replace writer, which recomputes the session aggregates from
-// the stored rows.
+// A suffix-replacement delta (suffixReplace) replaces only the stored
+// rows from replaceFromOrdinal onward. The database adjusts the session
+// aggregates by what the removed and inserted rows contribute, so the
+// count and token fields computed here are ignored on that path.
 func (e *Engine) writeIncremental(ctx context.Context,
 	inc *incrementalUpdate,
 ) error {

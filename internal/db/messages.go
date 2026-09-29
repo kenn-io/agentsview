@@ -2056,11 +2056,6 @@ func (db *DB) replaceSessionMessages(ctx context.Context,
 	return nil
 }
 
-// replaceSessionMessagesTx performs the full message-replace sequence within
-// an existing transaction: saves pins, deletes old tool_calls /
-// tool_result_events / messages (with FTS optimisation), inserts new messages
-// + tool_calls + tool_result_events, then restores pins. Caller owns the lock
-// and transaction lifecycle.
 // replaceSessionMessagesFromTx replaces only the session's rows at or
 // after fromOrdinal with msgs, leaving earlier rows, their tool calls,
 // result events, and FTS entries untouched. Pins on replaced rows are
@@ -2107,6 +2102,11 @@ func replaceSessionMessagesFromTx(ctx context.Context,
 	return restorePinsTx(tx, sessionID, pins)
 }
 
+// replaceSessionMessagesTx performs the full message-replace sequence within
+// an existing transaction: saves pins, deletes old tool_calls /
+// tool_result_events / messages (with FTS optimisation), inserts new messages
+// + tool_calls + tool_result_events, then restores pins. Caller owns the lock
+// and transaction lifecycle.
 func replaceSessionMessagesTx(
 	tx *sql.Tx, sessionID string, msgs []Message,
 ) error {
