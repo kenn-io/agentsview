@@ -6,6 +6,9 @@ components:
         agent_minutes:
           format: double
           type: number
+        assistant_messages:
+          format: int64
+          type: integer
         automated_at_peak:
           format: int64
           type: integer
@@ -39,6 +42,9 @@ components:
         subagent_at_peak:
           format: int64
           type: integer
+        user_messages:
+          format: int64
+          type: integer
       required:
         - start
         - end
@@ -47,6 +53,8 @@ components:
         - max_subagent_agents
         - max_automated_agents
         - agent_minutes
+        - user_messages
+        - assistant_messages
         - output_tokens
         - cost
         - subagent_at_peak

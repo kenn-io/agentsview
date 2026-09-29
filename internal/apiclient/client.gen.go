@@ -18437,6 +18437,7 @@ type GetAPIV1VersionResp struct {
 
 type ActivityBucket struct {
 	AgentMinutes         float64    `json:"agent_minutes"`
+	AssistantMessages    int64      `json:"assistant_messages"`
 	AutomatedAtPeak      int64      `json:"automated_at_peak"`
 	Cost                 MoneyMoney `json:"cost"`
 	End                  string     `json:"end" validate:"required"`
@@ -18449,6 +18450,7 @@ type ActivityBucket struct {
 	OutputTokens         int64      `json:"output_tokens"`
 	Start                string     `json:"start" validate:"required"`
 	SubagentAtPeak       int64      `json:"subagent_at_peak"`
+	UserMessages         int64      `json:"user_messages"`
 }
 
 func (a ActivityBucket) Validate() error {

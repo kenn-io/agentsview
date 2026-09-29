@@ -5,6 +5,7 @@ import type { MoneyMoney } from "./moneyMoney.ts";
 
 export interface ActivityBucket {
   agent_minutes: number;
+  assistant_messages: number;
   automated_at_peak: number;
   cost: MoneyMoney;
   end: string;
@@ -17,4 +18,5 @@ export interface ActivityBucket {
   output_tokens: number;
   start: string;
   subagent_at_peak: number;
+  user_messages: number;
 }
