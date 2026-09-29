@@ -283,6 +283,14 @@ ladder:
 There is no "retry with a compact prompt" path: a capped response silently loses
 entries, so truncation always splits or fails.
 
+An action unit whose messages ran no tool call is sent with `procedure` removed
+from the allowed entry types and a one-sentence preamble on the action prompt. A
+response that still uses `procedure` marks that session failed and retries it
+after the failure backoff while the pass continues with other sessions; a type
+outside all six stays a schema violation that aborts the pass. `recall extract
+doctor` probes only the unrestricted intent request, so it does not surface
+this.
+
 ## Scheduling
 
 The daemon scheduler mirrors the embedding scheduler's shape:

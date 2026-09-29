@@ -3,6 +3,7 @@ package extract
 import (
 	"encoding/json/v2"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -156,5 +157,173 @@ func TestTurnsV1PacksRunsAcrossSkippedRows(t *testing.T) {
 	if units[0].OrdinalStart != 0 || units[0].OrdinalEnd != 3 {
 		assert.Failf(t, "test failed", "unit range = (%d,%d), want (0,3)",
 			units[0].OrdinalStart, units[0].OrdinalEnd)
+	}
+}
+
+// TestTurnsV1ToolUse pins which units carry execution evidence. Only flags
+// change: text, roles, and ordinal ranges must match the same transcript
+// with every ToolUse cleared.
+func TestTurnsV1ToolUse(t *testing.T) {
+	cases := []struct {
+		name     string
+		messages []Message
+		want     []bool
+	}{
+		{
+			name: "assistant row with a tool call",
+			messages: []Message{
+				{Ordinal: 0, Role: "assistant", Content: "ran it", ToolUse: true},
+			},
+			want: []bool{true},
+		},
+		{
+			name: "no tool anywhere",
+			messages: []Message{
+				{Ordinal: 0, Role: "user", Content: "set up CI"},
+				{Ordinal: 1, Role: "assistant", Content: "I suggest a workflow"},
+			},
+			want: []bool{false, false},
+		},
+		{
+			name: "tool-only row after a block",
+			messages: []Message{
+				{Ordinal: 0, Role: "assistant", Content: "checking"},
+				{Ordinal: 1, Role: "assistant", Content: "", ToolUse: true},
+			},
+			want: []bool{true},
+		},
+		{
+			name: "tool-only row before a block",
+			messages: []Message{
+				{Ordinal: 0, Role: "user", Content: "fix it"},
+				{Ordinal: 1, Role: "assistant", Content: " ", ToolUse: true},
+				{Ordinal: 2, Role: "assistant", Content: "fixed"},
+			},
+			want: []bool{false, true},
+		},
+		{
+			name: "tool-only row alone before a user message",
+			messages: []Message{
+				{Ordinal: 0, Role: "assistant", Content: "", ToolUse: true},
+				{Ordinal: 1, Role: "user", Content: "thanks"},
+				{Ordinal: 2, Role: "assistant", Content: "I suggest more tests"},
+			},
+			want: []bool{false, false},
+		},
+		{
+			name: "tool-only row across an ordinal gap",
+			messages: []Message{
+				{Ordinal: 0, Role: "assistant", Content: "", ToolUse: true},
+				{Ordinal: 2, Role: "assistant", Content: "I suggest more tests"},
+			},
+			want: []bool{false},
+		},
+		{
+			name: "tool-only row ending a run before a gap",
+			messages: []Message{
+				{Ordinal: 0, Role: "assistant", Content: "checking"},
+				{Ordinal: 1, Role: "assistant", Content: "", ToolUse: true},
+				{Ordinal: 3, Role: "assistant", Content: "I suggest more tests"},
+			},
+			want: []bool{true, false},
+		},
+		{
+			name: "tool-role row marks the preceding block",
+			messages: []Message{
+				{Ordinal: 0, Role: "assistant", Content: "running tests"},
+				{Ordinal: 1, Role: "tool", Content: "ok", ToolUse: true},
+			},
+			want: []bool{true},
+		},
+		{
+			name: "system row without evidence marks nothing",
+			messages: []Message{
+				{Ordinal: 0, Role: "user", Content: "note", IsSystem: true},
+				{Ordinal: 1, Role: "assistant", Content: "I suggest more tests"},
+			},
+			want: []bool{false},
+		},
+		{
+			name: "system tool-result row inside a run marks it without flushing",
+			messages: []Message{
+				{Ordinal: 0, Role: "assistant", Content: "I will run the tests."},
+				{Ordinal: 1, Role: "user", Content: "ok", IsSystem: true, ToolUse: true},
+				{Ordinal: 2, Role: "assistant", Content: "Tests pass."},
+			},
+			want: []bool{true},
+		},
+		{
+			name: "visible user tool result hands evidence to the next block",
+			messages: []Message{
+				{Ordinal: 0, Role: "assistant", Content: "writing config", ToolUse: true},
+				{Ordinal: 1, Role: "user", Content: "[1 tool result(s)]", ToolUse: true},
+				{Ordinal: 2, Role: "assistant", Content: "Done, I added the config."},
+			},
+			want: []bool{true, false, true},
+		},
+		{
+			name: "ordinary user message clears pending evidence",
+			messages: []Message{
+				{Ordinal: 0, Role: "assistant", Content: "writing config", ToolUse: true},
+				{Ordinal: 1, Role: "user", Content: "thanks"},
+				{Ordinal: 2, Role: "assistant", Content: "Done, I added the config."},
+			},
+			want: []bool{true, false, false},
+		},
+	}
+	segmenter := TurnsV1{MaxWindowChars: 50000}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			units := segmenter.Units(tc.messages)
+			got := make([]bool, 0, len(units))
+			for _, unit := range units {
+				got = append(got, unit.ToolUse)
+			}
+			assert.Equal(t, tc.want, got)
+
+			stripped := make([]Message, len(tc.messages))
+			copy(stripped, tc.messages)
+			for i := range stripped {
+				stripped[i].ToolUse = false
+			}
+			plain := segmenter.Units(stripped)
+			require.Len(t, units, len(plain))
+			for i := range units {
+				unit := units[i]
+				unit.ToolUse = false
+				assert.Equal(t, plain[i], unit, "unit %d", i)
+			}
+		})
+	}
+}
+
+// TestTurnsV1ToolUseCarriesAcrossWindows pins that evidence in an earlier
+// window of one assistant run reaches later windows, but never earlier ones.
+func TestTurnsV1ToolUseCarriesAcrossWindows(t *testing.T) {
+	long := strings.Repeat("x", 40)
+	cases := []struct {
+		name  string
+		tools []bool
+		want  []bool
+	}{
+		{name: "call in the first window", tools: []bool{true, false}, want: []bool{true, true}},
+		{name: "call in the second window", tools: []bool{false, true}, want: []bool{false, true}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			messages := make([]Message, 0, len(tc.tools))
+			for i, tool := range tc.tools {
+				messages = append(messages, Message{
+					Ordinal: i, Role: "assistant", Content: long, ToolUse: tool,
+				})
+			}
+			units := TurnsV1{MaxWindowChars: 60}.Units(messages)
+			require.Len(t, units, len(tc.want), "each block must land in its own window")
+			got := make([]bool, 0, len(units))
+			for _, unit := range units {
+				got = append(got, unit.ToolUse)
+			}
+			assert.Equal(t, tc.want, got)
+		})
 	}
 }

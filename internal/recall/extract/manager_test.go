@@ -1,13 +1,19 @@
 package extract
 
 import (
+	"bytes"
 	"database/sql"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,6 +26,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/secrets"
 )
 
@@ -250,16 +257,46 @@ func turnMessages(pairs ...string) []db.Message {
 	return msgs
 }
 
+// callLog records each distillation call's unit text, decoded request, and
+// raw request body.
 type callLog struct {
-	mu    sync.Mutex
-	texts []string
+	mu       sync.Mutex
+	texts    []string
+	requests []map[string]any
+	bodies   [][]byte
 }
 
-func (c *callLog) add(text string) int {
+func (c *callLog) add(text string, request map[string]any, body []byte) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.texts = append(c.texts, text)
+	c.requests = append(c.requests, request)
+	c.bodies = append(c.bodies, body)
 	return len(c.texts)
+}
+
+func (c *callLog) all() []map[string]any {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.requests)
+}
+
+// byUserText returns the one recorded request whose unit text contains
+// marker, with its raw body.
+func (c *callLog) byUserText(t *testing.T, marker string) (map[string]any, []byte) {
+	t.Helper()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var found map[string]any
+	var body []byte
+	for i, text := range c.texts {
+		if strings.Contains(text, marker) {
+			require.Nil(t, found, "more than one request carries %q", marker)
+			found, body = c.requests[i], c.bodies[i]
+		}
+	}
+	require.NotNil(t, found, "no request carries %q", marker)
+	return found, body
 }
 
 func (c *callLog) count() int {
@@ -292,19 +329,27 @@ func modelServer(
 	log := &callLog{}
 	server := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				assert.Failf(t, "test failed", "reading request: %v", err)
+			}
 			var payload struct {
 				Messages []struct {
 					Content string `json:"content"`
 				} `json:"messages"`
 			}
-			if err := json.UnmarshalRead(r.Body, &payload); err != nil {
+			if err := json.Unmarshal(body, &payload); err != nil {
+				assert.Failf(t, "test failed", "decoding request: %v", err)
+			}
+			var request map[string]any
+			if err := json.Unmarshal(body, &request); err != nil {
 				assert.Failf(t, "test failed", "decoding request: %v", err)
 			}
 			text := payload.Messages[len(payload.Messages)-1].Content
-			call := log.add(text)
-			status, body := respond(text, call)
+			call := log.add(text, request, body)
+			status, reply := respond(text, call)
 			w.WriteHeader(status)
-			_, _ = w.Write([]byte(body))
+			_, _ = w.Write([]byte(reply))
 		}))
 	t.Cleanup(server.Close)
 	return server, log
@@ -717,6 +762,17 @@ func TestManagerExtractsBenignHighEntropyAssistantToken(t *testing.T) {
 // one transcript message. The budget caps the recovery and fails the
 // session closed instead.
 func TestManagerBoundsOversizedUnitSplitWork(t *testing.T) {
+	// The assistant row is a zero-tool action unit, so its leaves go out
+	// restricted through the same shared call budget.
+	for _, role := range []string{"user", "assistant"} {
+		t.Run(role, func(t *testing.T) {
+			testManagerBoundsOversizedUnitSplitWork(t, role)
+		})
+	}
+}
+
+func testManagerBoundsOversizedUnitSplitWork(t *testing.T, role string) {
+	t.Helper()
 	d := newTestArchive(t)
 	server, log := modelServer(t, func(text string, _ int) (int, string) {
 		if utf8.RuneCountInString(text) > 120 {
@@ -727,7 +783,7 @@ func TestManagerBoundsOversizedUnitSplitWork(t *testing.T) {
 	})
 	big := strings.Repeat("word ", 6000)
 	seedSession(t, d, "sess-1",
-		[]db.Message{{Role: "user", Content: big}}, nil)
+		[]db.Message{{Role: role, Content: big}}, nil)
 	m := newManager(t, d, server.URL, func(cfg *ManagerConfig) {
 		cfg.Segmenter = TurnsV1{MaxWindowChars: 400}
 	})
@@ -3313,4 +3369,500 @@ func TestManagerNewestFirstPassesLeaveNoOlderSessionBehind(t *testing.T) {
 	assert.Equal(t, []string{"sess-late-arrival"},
 		coveredSessions(t, d, m.Fingerprint(), "sess-late-arrival"),
 		"a late-arriving old session must not be stranded by the watermark")
+}
+
+// requestText returns the content of the request message with role.
+func requestText(t *testing.T, request map[string]any, role string) string {
+	t.Helper()
+	messages, ok := request["messages"].([]any)
+	require.True(t, ok, "request has no messages array")
+	for _, raw := range messages {
+		message, ok := raw.(map[string]any)
+		require.True(t, ok, "request message is not an object")
+		if message["role"] == role {
+			content, ok := message["content"].(string)
+			require.True(t, ok, "request message content is not a string")
+			return content
+		}
+	}
+	require.FailNowf(t, "test failed", "request has no %s message", role)
+	return ""
+}
+
+// requestEntryTypes returns the entry type enum the request schema offers.
+func requestEntryTypes(t *testing.T, request map[string]any) []string {
+	t.Helper()
+	node := any(request)
+	for _, key := range []string{
+		"response_format", "json_schema", "schema", "properties", "entries",
+		"items", "properties", "type",
+	} {
+		object, ok := node.(map[string]any)
+		require.True(t, ok, "request schema has no object at %q", key)
+		node = object[key]
+	}
+	object, ok := node.(map[string]any)
+	require.True(t, ok, "request schema has no type property")
+	raw, ok := object["enum"].([]any)
+	require.True(t, ok, "type property has no enum")
+	types := make([]string, 0, len(raw))
+	for _, value := range raw {
+		name, ok := value.(string)
+		require.True(t, ok, "enum value %v is not a string", value)
+		types = append(types, name)
+	}
+	return types
+}
+
+var (
+	allEntryTypesLiteral = []string{
+		"fact", "decision", "procedure", "warning", "preference", "open_question",
+	}
+	unexecutedEntryTypesLiteral = []string{
+		"fact", "decision", "warning", "preference", "open_question",
+	}
+)
+
+func toolUnitSession() []db.Message {
+	return []db.Message{
+		{Role: "user", Content: "tool-unit marker: set up CI for this repo"},
+		{Role: "assistant", Content: "I'll look at the existing workflows first."},
+		{
+			Role:    "assistant",
+			Content: "Listing the workflow directory.\n[Bash: ls .github/workflows]",
+			ToolCalls: []db.ToolCall{{
+				ToolName:  "Bash",
+				Category:  "Bash",
+				ToolUseID: "call-1",
+				InputJSON: `{"command":"ls .github/workflows"}`,
+			}},
+		},
+		{Role: "assistant", Content: "There is no deploy workflow yet. I suggest adding " +
+			".github/workflows/deploy.yml with staging and production jobs."},
+	}
+}
+
+// TestManagerUnexecutedActionUnitRequest reproduces the issue: a proposal-only
+// assistant turn with no stored tool call must not be offered 'procedure',
+// while a tool-using unit and the intent unit keep today's request.
+func TestManagerUnexecutedActionUnitRequest(t *testing.T) {
+	fixture, err := os.ReadFile(filepath.Join("testdata", "proposal_only.txt"))
+	require.NoError(t, err)
+	d := newTestArchive(t)
+	server, log := modelServer(t, func(string, int) (int, string) {
+		return http.StatusOK, completionBody(t, `{"entries":[]}`)
+	})
+	seedSession(t, d, "sess-proposal", []db.Message{
+		{Role: "user", Content: "proposal marker: how should CI deploy?"},
+		{Role: "assistant", Content: string(fixture)},
+	}, nil)
+	seedSession(t, d, "sess-tool", toolUnitSession(), nil)
+	m := newManager(t, d, server.URL, nil)
+
+	_, err = m.RunPass(t.Context(), PassOptions{})
+	require.NoError(t, err)
+
+	action, _ := log.byUserText(t, "Here's what I'd suggest for CI.")
+	assert.Equal(t, unexecutedEntryTypesLiteral, requestEntryTypes(t, action))
+	system := requestText(t, action, "system")
+	assert.True(t, strings.HasPrefix(system, "No tool ran in this segment"),
+		"system prompt = %q", system)
+	assert.True(t, strings.HasSuffix(system, "\n\naction prompt"), "system prompt = %q", system)
+
+	intent, _ := log.byUserText(t, "proposal marker")
+	assert.Equal(t, "intent prompt", requestText(t, intent, "system"))
+	assert.Equal(t, allEntryTypesLiteral, requestEntryTypes(t, intent))
+
+	_, body := log.byUserText(t, "Listing the workflow directory.")
+	golden, err := os.ReadFile(filepath.Join("testdata", "tool_unit_request.golden.json"))
+	require.NoError(t, err)
+	var want, got map[string]any
+	require.NoError(t, json.Unmarshal(golden, &want))
+	require.NoError(t, json.Unmarshal(body, &got))
+	assert.Equal(t, want["messages"], got["messages"])
+	assert.Equal(t, want["response_format"], got["response_format"])
+	assert.ElementsMatch(t, slices.Collect(maps.Keys(want)), slices.Collect(maps.Keys(got)))
+}
+
+// TestManagerToolResultRowsKeepRequest pins that tool output stored without
+// a call, inside the run or as a visible user row just before it, keeps the
+// action unit on today's request.
+func TestManagerToolResultRowsKeepRequest(t *testing.T) {
+	cases := []struct {
+		name       string
+		messages   []db.Message
+		marker     string
+		restricted bool
+	}{
+		{
+			name: "assistant tool-result row in the run",
+			messages: []db.Message{
+				{Role: "user", Content: "add retries"},
+				{Role: "assistant", Content: "I will add retries to the client."},
+				{
+					Role: "assistant", Content: "ran tests\nok",
+					SourceSubtype: parser.SourceSubtypeToolResult,
+				},
+			},
+			marker: "I will add retries",
+		},
+		{
+			name: "assistant row with only the tool-use flag",
+			messages: []db.Message{
+				{Role: "user", Content: "check the build"},
+				{Role: "assistant", Content: "I suggest running the build.", HasToolUse: true},
+			},
+			marker: "I suggest running the build.",
+		},
+		{
+			name: "empty tool-role row after a proposal block",
+			messages: []db.Message{
+				{Role: "user", Content: "check the build"},
+				{Role: "assistant", Content: "I suggest running the build."},
+				{Role: string(parser.RoleTool), Content: ""},
+			},
+			marker: "I suggest running the build.",
+		},
+		{
+			name: "system tool-result row between proposal and narration",
+			messages: []db.Message{
+				{Role: "user", Content: "run the tests"},
+				{Role: "assistant", Content: "I will run the tests."},
+				{
+					Role: "user", Content: "ok", IsSystem: true,
+					SourceSubtype: parser.SourceSubtypeToolResult,
+				},
+				{Role: "assistant", Content: "Tests pass."},
+			},
+			marker: "Tests pass.",
+		},
+		{
+			name: "user tool-result row before the narration",
+			messages: []db.Message{
+				{Role: "user", Content: "add the config"},
+				{
+					Role: "assistant", Content: "Writing the config.",
+					ToolCalls: []db.ToolCall{{ToolName: "Write", Category: "Write"}},
+				},
+				{
+					Role: "user", Content: "[1 tool result(s)]",
+					SourceSubtype: parser.SourceSubtypeToolResult,
+				},
+				{Role: "assistant", Content: "Done, I added the config."},
+			},
+			marker: "Done, I added the config.",
+		},
+		{
+			name: "ordinary user message before the narration",
+			messages: []db.Message{
+				{Role: "user", Content: "add the config"},
+				{
+					Role: "assistant", Content: "Writing the config.",
+					ToolCalls: []db.ToolCall{{ToolName: "Write", Category: "Write"}},
+				},
+				{Role: "user", Content: "thanks"},
+				{Role: "assistant", Content: "Done, I added the config."},
+			},
+			marker:     "Done, I added the config.",
+			restricted: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := newTestArchive(t)
+			server, log := modelServer(t, func(string, int) (int, string) {
+				return http.StatusOK, completionBody(t, `{"entries":[]}`)
+			})
+			seedSession(t, d, "sess-1", tc.messages, nil)
+			m := newManager(t, d, server.URL, nil)
+
+			_, err := m.RunPass(t.Context(), PassOptions{})
+			require.NoError(t, err)
+
+			request, _ := log.byUserText(t, tc.marker)
+			system := requestText(t, request, "system")
+			if tc.restricted {
+				assert.Equal(t, unexecutedEntryTypesLiteral, requestEntryTypes(t, request))
+				assert.Equal(t, unexecutedActionPreamble+"\n\naction prompt", system)
+				return
+			}
+			assert.Equal(t, allEntryTypesLiteral, requestEntryTypes(t, request))
+			assert.Equal(t, "action prompt", system)
+		})
+	}
+}
+
+// TestManagerUnexecutedPreambleWrapsOverride pins that the preamble prepends
+// to whatever action prompt resolution produced, including an override.
+func TestManagerUnexecutedPreambleWrapsOverride(t *testing.T) {
+	d := newTestArchive(t)
+	server, log := modelServer(t, func(string, int) (int, string) {
+		return http.StatusOK, completionBody(t, `{"entries":[]}`)
+	})
+	seedSession(t, d, "sess-1", []db.Message{
+		{Role: "assistant", Content: "I suggest adding a cache."},
+	}, nil)
+	m := newManager(t, d, server.URL, func(cfg *ManagerConfig) {
+		cfg.Prompts[RoleAction] = "custom override"
+	})
+
+	_, err := m.RunPass(t.Context(), PassOptions{})
+	require.NoError(t, err)
+
+	requests := log.all()
+	require.Len(t, requests, 1)
+	assert.Equal(t, unexecutedActionPreamble+"\n\ncustom override",
+		requestText(t, requests[0], "system"))
+}
+
+// TestManagerRestrictedProcedureFailsSessionOnly pins that a response using
+// 'procedure' for a restricted unit fails only that session: the violation
+// follows the unit's content, so aborting would stall every later pass on it.
+func TestManagerRestrictedProcedureFailsSessionOnly(t *testing.T) {
+	d := newTestArchive(t)
+	ctx := t.Context()
+	server, log := modelServer(t, func(text string, _ int) (int, string) {
+		if strings.Contains(text, "deploy.yml") {
+			return http.StatusOK, completionBody(t, `{"entries":[{"type":"procedure",`+
+				`"title":"Added deploy.yml","body":"Added the workflow.","entities":[]}]}`)
+		}
+		return http.StatusOK, completionBody(t, entriesJSON(t, "cache idea"))
+	})
+	seedSession(t, d, "sess-a", []db.Message{
+		{Role: "assistant", Content: "I suggest adding .github/workflows/deploy.yml."},
+	}, nil)
+	seedSession(t, d, "sess-b", []db.Message{
+		{Role: "assistant", Content: "I suggest adding a cache."},
+	}, nil)
+	m := newManager(t, d, server.URL, nil)
+
+	result, err := m.RunPass(ctx, PassOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Failed)
+	assert.Len(t, log.all(), 2, "the pass must continue to the next session")
+
+	progress, found, err := d.ExtractProgress(ctx, "sess-a", m.Fingerprint())
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, db.ExtractProgressFailed, progress.State)
+	assert.Equal(t, 0, progress.UnitCursor)
+	assert.Contains(t, progress.LastError, errRestrictedEntryType.Error())
+	progress, found, err = d.ExtractProgress(ctx, "sess-b", m.Fingerprint())
+	require.NoError(t, err)
+	require.True(t, found, "the second session must be visited")
+	assert.Equal(t, db.ExtractProgressDone, progress.State)
+}
+
+// TestManagerUnexecutedActionUnitAcceptsEmpty pins that an empty response
+// still completes a restricted unit.
+func TestManagerUnexecutedActionUnitAcceptsEmpty(t *testing.T) {
+	d := newTestArchive(t)
+	ctx := t.Context()
+	server, log := modelServer(t, func(string, int) (int, string) {
+		return http.StatusOK, completionBody(t, `{"entries":[]}`)
+	})
+	seedSession(t, d, "sess-1", []db.Message{
+		{Role: "assistant", Content: "I suggest adding a cache."},
+	}, nil)
+	m := newManager(t, d, server.URL, nil)
+
+	result, err := m.RunPass(ctx, PassOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Sessions)
+	assert.Equal(t, 0, result.Failed)
+	assert.Equal(t, 0, result.Entries)
+	require.Len(t, log.all(), 1)
+	progress, found, err := d.ExtractProgress(ctx, "sess-1", m.Fingerprint())
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, db.ExtractProgressDone, progress.State)
+}
+
+// TestManagerSplitCarriesToolUse pins that every leaf of a split restricted
+// unit is sent restricted.
+func TestManagerSplitCarriesToolUse(t *testing.T) {
+	d := newTestArchive(t)
+	server, log := modelServer(t, func(text string, _ int) (int, string) {
+		if utf8.RuneCountInString(text) > 80 {
+			return http.StatusBadRequest,
+				`{"error":{"code":"context_length_exceeded","message":"too long"}}`
+		}
+		return http.StatusOK, completionBody(t, entriesJSON(t, "leaf"))
+	})
+	seedSession(t, d, "sess-1", []db.Message{
+		{Role: "assistant", Content: strings.Repeat("abcde ", 30)},
+	}, nil)
+	m := newManager(t, d, server.URL, func(cfg *ManagerConfig) {
+		cfg.Segmenter = TurnsV1{MaxWindowChars: 400}
+	})
+
+	result, err := m.RunPass(t.Context(), PassOptions{})
+	require.NoError(t, err)
+	require.Equal(t, 0, result.Failed)
+	requests := log.all()
+	require.Greater(t, len(requests), 2, "the unit must split into several leaves")
+	for i, request := range requests {
+		assert.Equal(t, unexecutedEntryTypesLiteral, requestEntryTypes(t, request), "request %d", i)
+		assert.Equal(t, unexecutedActionPreamble+"\n\naction prompt",
+			requestText(t, request, "system"), "request %d", i)
+	}
+}
+
+func TestUnitsDigestCoversToolUse(t *testing.T) {
+	units := func(toolUse bool) []Unit {
+		return []Unit{
+			{Role: RoleIntent, Text: "ask", OrdinalStart: 0, OrdinalEnd: 0},
+			{Role: RoleAction, Text: "did it", OrdinalStart: 1, OrdinalEnd: 1, ToolUse: toolUse},
+		}
+	}
+	without, with := unitsDigest(units(false)), unitsDigest(units(true))
+	assert.Equal(t, without, unitsDigest(units(false)))
+	assert.Equal(t, with, unitsDigest(units(true)))
+	assert.NotEqual(t, without, with)
+}
+
+// captureTransport records each live request and response body so a reviewer
+// can read exactly what the model saw and returned.
+type captureTransport struct {
+	mu        sync.Mutex
+	exchanges []map[string]jsontext.Value
+}
+
+func (c *captureTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	var request []byte
+	if r.Body != nil {
+		var err error
+		if request, err = io.ReadAll(r.Body); err != nil {
+			return nil, err
+		}
+		r.Body = io.NopCloser(bytes.NewReader(request))
+	}
+	resp, err := http.DefaultTransport.RoundTrip(r)
+	if err != nil {
+		return nil, err
+	}
+	response, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		return nil, err
+	}
+	resp.Body = io.NopCloser(bytes.NewReader(response))
+	c.mu.Lock()
+	c.exchanges = append(c.exchanges, map[string]jsontext.Value{
+		"request": rawOrString(request), "response": rawOrString(response),
+	})
+	c.mu.Unlock()
+	return resp, nil
+}
+
+func rawOrString(body []byte) jsontext.Value {
+	if jsontext.Value(body).IsValid() {
+		return jsontext.Value(body)
+	}
+	quoted, _ := json.Marshal(string(body))
+	return quoted
+}
+
+// TestUnexecutedActionUnitsLive sends real units through a configured model.
+// It asserts only the schema guarantee; wording is left to human review of
+// the captured exchanges. Opt in with AGENTSVIEW_RECALL_TEST_ENDPOINT and
+// AGENTSVIEW_RECALL_TEST_MODEL (optional AGENTSVIEW_RECALL_TEST_API_KEY).
+// The committed proposal fixture always runs as a zero-tool unit.
+// AGENTSVIEW_RECALL_TEST_CASES names an extra JSON case file shaped as
+//
+//	[["name", "assistant text", "what a reviewer should expect"], ...]
+//
+// and each case runs as a zero-tool unit, with its expectation logged beside
+// the entries. AGENTSVIEW_RECALL_TEST_TOOL_CASES is a comma-separated list of
+// case names also sent as tool-using units, and
+// AGENTSVIEW_RECALL_TEST_CAPTURE_DIR receives the raw exchanges.
+func TestUnexecutedActionUnitsLive(t *testing.T) {
+	endpoint := strings.TrimSpace(os.Getenv("AGENTSVIEW_RECALL_TEST_ENDPOINT"))
+	model := strings.TrimSpace(os.Getenv("AGENTSVIEW_RECALL_TEST_MODEL"))
+	if endpoint == "" || model == "" {
+		t.Skip("set AGENTSVIEW_RECALL_TEST_ENDPOINT and AGENTSVIEW_RECALL_TEST_MODEL")
+	}
+	profile, err := ResolveProfile("", model)
+	require.NoError(t, err)
+	prompts := PromptsFor(profile, nil)
+	captureDir := os.Getenv("AGENTSVIEW_RECALL_TEST_CAPTURE_DIR")
+
+	fixture, err := os.ReadFile(filepath.Join("testdata", "proposal_only.txt"))
+	require.NoError(t, err)
+	type liveCase struct {
+		name        string
+		text        string
+		expectation string
+		toolUse     bool
+	}
+	cases := []liveCase{{
+		name: "proposal_only_fixture", text: string(fixture),
+		expectation: "no procedure entry and no claim that the proposed work exists",
+	}}
+	if path := os.Getenv("AGENTSVIEW_RECALL_TEST_CASES"); path != "" {
+		raw, err := os.ReadFile(path)
+		require.NoError(t, err)
+		var triples [][]string
+		require.NoError(t, json.Unmarshal(raw, &triples))
+		toolCases := strings.Split(os.Getenv("AGENTSVIEW_RECALL_TEST_TOOL_CASES"), ",")
+		for _, triple := range triples {
+			require.Len(t, triple, 3, "case must be [name, text, expectation]")
+			cases = append(cases, liveCase{name: triple[0], text: triple[1], expectation: triple[2]})
+			if slices.Contains(toolCases, triple[0]) {
+				cases = append(cases, liveCase{
+					name: triple[0], text: triple[1], expectation: triple[2], toolUse: true,
+				})
+			}
+		}
+	}
+
+	for _, tc := range cases {
+		mode := "notool"
+		if tc.toolUse {
+			mode = "tool"
+		}
+		t.Run(tc.name+"/"+mode, func(t *testing.T) {
+			transport := &captureTransport{}
+			client := &Client{
+				BaseURL: endpoint,
+				APIKey:  os.Getenv("AGENTSVIEW_RECALL_TEST_API_KEY"),
+				Model:   model,
+				Request: profile.Request,
+				HTTPClient: &http.Client{
+					Timeout:       5 * time.Minute,
+					CheckRedirect: RefuseRedirects,
+					Transport:     transport,
+				},
+			}
+			m := &Manager{
+				cfg:        ManagerConfig{Client: client, MaxAttempts: 1},
+				splitFloor: SplitFloorChars(50000),
+			}
+			units := TurnsV1{MaxWindowChars: 50000}.Units([]Message{{
+				Ordinal: 0, Role: "assistant", Content: tc.text, ToolUse: tc.toolUse,
+			}})
+			require.Len(t, units, 1)
+			unit := units[0]
+			noToolUse := unit.Role == RoleAction && !unit.ToolUse
+
+			entries, err := m.distillSplit(t.Context(), prompts[unit.Role], unit.Text, noToolUse)
+			if captureDir != "" {
+				name := strings.NewReplacer(":", "_", "/", "_").Replace(model) +
+					"-" + tc.name + "-" + mode + ".json"
+				raw, marshalErr := json.Marshal(transport.exchanges, jsontext.Multiline(true))
+				require.NoError(t, marshalErr)
+				require.NoError(t, os.WriteFile(filepath.Join(captureDir, name), raw, 0o644))
+			}
+			require.NoError(t, err)
+			raw, err := json.Marshal(entries)
+			require.NoError(t, err)
+			t.Logf("model=%s case=%s mode=%s entries=%s expectation=%q",
+				model, tc.name, mode, raw, tc.expectation)
+			if noToolUse {
+				for _, entry := range entries {
+					assert.NotEqual(t, "procedure", entry.Type)
+				}
+			}
+		})
+	}
 }

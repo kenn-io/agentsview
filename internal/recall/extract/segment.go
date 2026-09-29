@@ -36,6 +36,11 @@ type Message struct {
 	Role     string
 	Content  string
 	IsSystem bool
+	// ToolUse reports stored execution evidence on a row: a tool call, a
+	// tool-role row, or tool output, including tool output stored as a system
+	// row. A visible user row passes it to the next assistant block; rows
+	// with no visible text mark the neighbouring block.
+	ToolUse bool
 }
 
 // Unit is one model call's worth of transcript, with the ordinal range it
@@ -45,6 +50,9 @@ type Unit struct {
 	Text         string
 	OrdinalStart int
 	OrdinalEnd   int
+	// ToolUse reports that some assistant message in an action unit ran a
+	// tool. Extraction restricts action units without one.
+	ToolUse bool
 }
 
 // Segmenter derives units from a session deterministically. Name and Params
@@ -130,6 +138,7 @@ func (s TurnsV1) Units(messages []Message) []Unit {
 	var units []Unit
 	var run []ordinalBlock
 	prevOrdinal := -1
+	pendingToolUse := false
 	for _, message := range messages {
 		// Ingest filtering can drop rows after ordinals are assigned, so
 		// the stored transcript may skip ordinals. Evidence provenance
@@ -142,10 +151,19 @@ func (s TurnsV1) Units(messages []Message) []Unit {
 		if prevOrdinal >= 0 && message.Ordinal != prevOrdinal+1 {
 			units = packRun(run, s.MaxWindowChars, units)
 			run = nil
+			pendingToolUse = false
 		}
 		prevOrdinal = message.Ordinal
 		content, ok := visibleContent(message)
 		if !ok {
+			// A row with no visible text can still carry execution evidence.
+			if message.ToolUse {
+				if len(run) > 0 {
+					run[len(run)-1].toolUse = true
+				} else {
+					pendingToolUse = true
+				}
+			}
 			continue
 		}
 		switch message.Role {
@@ -159,12 +177,15 @@ func (s TurnsV1) Units(messages []Message) []Unit {
 				OrdinalStart: message.Ordinal,
 				OrdinalEnd:   message.Ordinal,
 			})
+			pendingToolUse = message.ToolUse
 		case "assistant":
 			run = append(run, ordinalBlock{
 				ordinal: message.Ordinal,
 				text: fmt.Sprintf("[%d] ASSISTANT:\n%s",
 					message.Ordinal, content),
+				toolUse: message.ToolUse || pendingToolUse,
 			})
+			pendingToolUse = false
 		}
 	}
 	return packRun(run, s.MaxWindowChars, units)
@@ -173,6 +194,7 @@ func (s TurnsV1) Units(messages []Message) []Unit {
 type ordinalBlock struct {
 	ordinal int
 	text    string
+	toolUse bool
 }
 
 // packRun appends action units built from consecutive assistant blocks,
@@ -182,6 +204,7 @@ type ordinalBlock struct {
 func packRun(blocks []ordinalBlock, maxChars int, units []Unit) []Unit {
 	var current []ordinalBlock
 	currentChars := 0
+	runToolUse := false
 	flush := func() {
 		if len(current) == 0 {
 			return
@@ -189,12 +212,14 @@ func packRun(blocks []ordinalBlock, maxChars int, units []Unit) []Unit {
 		texts := make([]string, 0, len(current))
 		for _, block := range current {
 			texts = append(texts, block.text)
+			runToolUse = runToolUse || block.toolUse
 		}
 		units = append(units, Unit{
 			Role:         RoleAction,
 			Text:         strings.Join(texts, "\n\n"),
 			OrdinalStart: current[0].ordinal,
 			OrdinalEnd:   current[len(current)-1].ordinal,
+			ToolUse:      runToolUse,
 		})
 	}
 	for _, block := range blocks {

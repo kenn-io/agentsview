@@ -45,6 +45,11 @@ Rules:
 - title: one specific sentence, at most 120 characters.
 - body: 1-4 dense sentences with the exact identifiers and values.
 - entities: the exact searchable strings (file paths, function names, commands, error strings, URLs) the entry is about.`
+
+	// unexecutedActionPreamble opens the resolved action prompt for units
+	// whose messages ran no tool. Editing it changes output, so bump
+	// extractionProtocolVersion with it.
+	unexecutedActionPreamble = `No tool ran in this segment, so nothing in it was executed and no procedure entry applies; record only observations, findings, warnings, and settled choices, and never state that proposed or planned work was done.`
 )
 
 // basePrompts returns the embedded defaults for every prompt role. The

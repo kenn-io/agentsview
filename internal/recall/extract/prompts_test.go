@@ -134,6 +134,7 @@ func TestFingerprintIsStableAndSensitive(t *testing.T) {
 	if a != b {
 		require.FailNowf(t, "test failed", "fingerprint not stable: %s vs %s", a, b)
 	}
+	t.Logf("fixed-config fingerprint: %s", a)
 
 	changedModel, _ := Fingerprint(
 		ModelIdentity{Model: "model-y"}, seg, prompts, shape,

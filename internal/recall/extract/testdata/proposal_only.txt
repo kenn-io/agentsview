@@ -1,0 +1,6 @@
+Here's what I'd suggest for CI. I'd add .github/workflows/deploy.yml with two jobs,
+deploy-staging on push to main and deploy-production gated on a manual approval, and
+I'd move the build step into a reusable workflow so both jobs share it.
+
+Two questions before I start: do you want staging to deploy on every push, and should
+production require a second approver?
