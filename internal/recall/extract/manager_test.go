@@ -1,9 +1,7 @@
 package extract
 
 import (
-	"bytes"
 	"database/sql"
-	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -3721,61 +3719,11 @@ func TestUnitsDigestCoversToolUse(t *testing.T) {
 	assert.NotEqual(t, without, with)
 }
 
-// captureTransport records each live request and response body so a reviewer
-// can read exactly what the model saw and returned.
-type captureTransport struct {
-	mu        sync.Mutex
-	exchanges []map[string]jsontext.Value
-}
-
-func (c *captureTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	var request []byte
-	if r.Body != nil {
-		var err error
-		if request, err = io.ReadAll(r.Body); err != nil {
-			return nil, err
-		}
-		r.Body = io.NopCloser(bytes.NewReader(request))
-	}
-	resp, err := http.DefaultTransport.RoundTrip(r)
-	if err != nil {
-		return nil, err
-	}
-	response, err := io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
-	if err != nil {
-		return nil, err
-	}
-	resp.Body = io.NopCloser(bytes.NewReader(response))
-	c.mu.Lock()
-	c.exchanges = append(c.exchanges, map[string]jsontext.Value{
-		"request": rawOrString(request), "response": rawOrString(response),
-	})
-	c.mu.Unlock()
-	return resp, nil
-}
-
-func rawOrString(body []byte) jsontext.Value {
-	if jsontext.Value(body).IsValid() {
-		return jsontext.Value(body)
-	}
-	quoted, _ := json.Marshal(string(body))
-	return quoted
-}
-
-// TestUnexecutedActionUnitsLive sends real units through a configured model.
-// It asserts only the schema guarantee; wording is left to human review of
-// the captured exchanges. Opt in with AGENTSVIEW_RECALL_TEST_ENDPOINT and
-// AGENTSVIEW_RECALL_TEST_MODEL (optional AGENTSVIEW_RECALL_TEST_API_KEY).
-// The committed proposal fixture always runs as a zero-tool unit.
-// AGENTSVIEW_RECALL_TEST_CASES names an extra JSON case file shaped as
-//
-//	[["name", "assistant text", "what a reviewer should expect"], ...]
-//
-// and each case runs as a zero-tool unit, with its expectation logged beside
-// the entries. AGENTSVIEW_RECALL_TEST_TOOL_CASES is a comma-separated list of
-// case names also sent as tool-using units, and
-// AGENTSVIEW_RECALL_TEST_CAPTURE_DIR receives the raw exchanges.
+// TestUnexecutedActionUnitsLive runs the issue's proposal-only fixture through
+// a real manager pass against a configured model, so the extractSession gate
+// decides the request. It asserts only the schema guarantee; wording is left
+// to review of the logged entries. Opt in with AGENTSVIEW_RECALL_TEST_ENDPOINT
+// and AGENTSVIEW_RECALL_TEST_MODEL (optional AGENTSVIEW_RECALL_TEST_API_KEY).
 func TestUnexecutedActionUnitsLive(t *testing.T) {
 	endpoint := strings.TrimSpace(os.Getenv("AGENTSVIEW_RECALL_TEST_ENDPOINT"))
 	model := strings.TrimSpace(os.Getenv("AGENTSVIEW_RECALL_TEST_MODEL"))
@@ -3784,85 +3732,33 @@ func TestUnexecutedActionUnitsLive(t *testing.T) {
 	}
 	profile, err := ResolveProfile("", model)
 	require.NoError(t, err)
-	prompts := PromptsFor(profile, nil)
-	captureDir := os.Getenv("AGENTSVIEW_RECALL_TEST_CAPTURE_DIR")
-
 	fixture, err := os.ReadFile(filepath.Join("testdata", "proposal_only.txt"))
 	require.NoError(t, err)
-	type liveCase struct {
-		name        string
-		text        string
-		expectation string
-		toolUse     bool
-	}
-	cases := []liveCase{{
-		name: "proposal_only_fixture", text: string(fixture),
-		expectation: "no procedure entry and no claim that the proposed work exists",
-	}}
-	if path := os.Getenv("AGENTSVIEW_RECALL_TEST_CASES"); path != "" {
-		raw, err := os.ReadFile(path)
+
+	d := newTestArchive(t)
+	ctx := t.Context()
+	seedSession(t, d, "sess-live", []db.Message{
+		{Role: "assistant", Content: string(fixture)},
+	}, nil)
+	m := newManager(t, d, endpoint, func(cfg *ManagerConfig) {
+		cfg.Client.APIKey = os.Getenv("AGENTSVIEW_RECALL_TEST_API_KEY")
+		cfg.Client.Model = model
+		cfg.Client.Request = profile.Request
+		cfg.Prompts = PromptsFor(profile, nil)
+		cfg.Identity = ModelIdentity{Model: model}
+		cfg.MaxAttempts = 1
+	})
+
+	result, err := m.RunPass(ctx, PassOptions{})
+	require.NoError(t, err)
+	require.Equal(t, 0, result.Failed, "a restricted unit answered with procedure fails its session")
+	for i := range maxResponseEntries {
+		entry, err := d.GetRecallEntry(ctx, EntryID(m.Fingerprint(), "sess-live", 0, i))
 		require.NoError(t, err)
-		var triples [][]string
-		require.NoError(t, json.Unmarshal(raw, &triples))
-		toolCases := strings.Split(os.Getenv("AGENTSVIEW_RECALL_TEST_TOOL_CASES"), ",")
-		for _, triple := range triples {
-			require.Len(t, triple, 3, "case must be [name, text, expectation]")
-			cases = append(cases, liveCase{name: triple[0], text: triple[1], expectation: triple[2]})
-			if slices.Contains(toolCases, triple[0]) {
-				cases = append(cases, liveCase{
-					name: triple[0], text: triple[1], expectation: triple[2], toolUse: true,
-				})
-			}
+		if entry == nil {
+			break
 		}
-	}
-
-	for _, tc := range cases {
-		mode := "notool"
-		if tc.toolUse {
-			mode = "tool"
-		}
-		t.Run(tc.name+"/"+mode, func(t *testing.T) {
-			transport := &captureTransport{}
-			client := &Client{
-				BaseURL: endpoint,
-				APIKey:  os.Getenv("AGENTSVIEW_RECALL_TEST_API_KEY"),
-				Model:   model,
-				Request: profile.Request,
-				HTTPClient: &http.Client{
-					Timeout:       5 * time.Minute,
-					CheckRedirect: RefuseRedirects,
-					Transport:     transport,
-				},
-			}
-			m := &Manager{
-				cfg:        ManagerConfig{Client: client, MaxAttempts: 1},
-				splitFloor: SplitFloorChars(50000),
-			}
-			units := TurnsV1{MaxWindowChars: 50000}.Units([]Message{{
-				Ordinal: 0, Role: "assistant", Content: tc.text, ToolUse: tc.toolUse,
-			}})
-			require.Len(t, units, 1)
-			unit := units[0]
-			noToolUse := unit.Role == RoleAction && !unit.ToolUse
-
-			entries, err := m.distillSplit(t.Context(), prompts[unit.Role], unit.Text, noToolUse)
-			if captureDir != "" {
-				name := strings.NewReplacer(":", "_", "/", "_").Replace(model) +
-					"-" + tc.name + "-" + mode + ".json"
-				raw, marshalErr := json.Marshal(transport.exchanges, jsontext.Multiline(true))
-				require.NoError(t, marshalErr)
-				require.NoError(t, os.WriteFile(filepath.Join(captureDir, name), raw, 0o644))
-			}
-			require.NoError(t, err)
-			raw, err := json.Marshal(entries)
-			require.NoError(t, err)
-			t.Logf("model=%s case=%s mode=%s entries=%s expectation=%q",
-				model, tc.name, mode, raw, tc.expectation)
-			if noToolUse {
-				for _, entry := range entries {
-					assert.NotEqual(t, "procedure", entry.Type)
-				}
-			}
-		})
+		t.Logf("model=%s entry=%d type=%s title=%q body=%q", model, i, entry.Type, entry.Title, entry.Body)
+		assert.NotEqual(t, "procedure", entry.Type)
 	}
 }
