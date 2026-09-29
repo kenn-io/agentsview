@@ -2645,6 +2645,18 @@ var (
 
 func statsOutcomeRepo(t *testing.T) string {
 	t.Helper()
+	// Keep fixture commands and outcome lookups independent of host Git state.
+	for _, entry := range os.Environ() {
+		name, _, _ := strings.Cut(entry, "=")
+		if strings.HasPrefix(strings.ToUpper(name), "GIT_") {
+			t.Setenv(name, "")
+			require.NoError(t, os.Unsetenv(name))
+		}
+	}
+	globalConfig := filepath.Join(t.TempDir(), "gitconfig")
+	require.NoError(t, os.WriteFile(globalConfig, nil, 0o600))
+	t.Setenv("GIT_CONFIG_GLOBAL", globalConfig)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	statsOutcomeRepoOnce.Do(func() {
 		dir := filepath.Join(testDBFixtureTempDir, "stats-outcome")
 		require.NoError(t, os.MkdirAll(dir, 0o700), "create stats outcome repo dir")
@@ -2792,17 +2804,12 @@ func statsCanonPath(t *testing.T, path string) string {
 	return resolved
 }
 
-// statsFakeToolOnPath puts a script named tool at the front of PATH. The
-// script receives the real tool's absolute path as its first argument so it
-// can pass through the subcommands the test still needs to work.
-//
+// statsFakeToolOnPath puts a shell script named tool at the front of PATH.
 // The test process's PATH is changed, so the caller must not run in parallel.
 func statsFakeToolOnPath(t *testing.T, tool, body string) {
 	t.Helper()
-	realPath, err := exec.LookPath(tool)
-	require.NoError(t, err, "locate real %s", tool)
 	dir := t.TempDir()
-	script := "#!/bin/sh\nREAL=" + strconv.Quote(realPath) + "\n" + body
+	script := "#!/bin/sh\n" + body
 	require.NoError(t,
 		os.WriteFile(filepath.Join(dir, tool), []byte(script), 0o700),
 		"write fake %s", tool)
@@ -2849,9 +2856,11 @@ exit 1
 func TestOutcomeStatsNamesRepoWhoseGitLogFailed(t *testing.T) {
 	skipIfNoGit(t)
 	repo := statsOutcomeRepo(t)
+	realPath, err := exec.LookPath("git")
+	require.NoError(t, err, "locate real git")
 	// Pass every subcommand through to the real git except `log`, so the
 	// repository is still discovered and its author email still resolves.
-	statsFakeToolOnPath(t, "git", `
+	statsFakeToolOnPath(t, "git", "REAL='"+strings.ReplaceAll(realPath, "'", "'\\''")+"'\n"+`
 for arg in "$@"; do
   case "$arg" in
     log)
