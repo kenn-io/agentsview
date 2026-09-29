@@ -1,3 +1,6 @@
+---
+last_edited: 2026-09-29
+---
 # jilog adaptation provenance
 
 AgentsView's Friction Log adapts the session review from
@@ -6,8 +9,8 @@ AgentsView's Friction Log adapts the session review from
 behavioral reference. This page records the source, the changes, and the MIT
 notice. Source paths below are relative to that jilog commit.
 
-The pure detection, signal, formatting, JSON, archived-row adapter, and session
-review packages are built. Persistence, digest rendering, scheduling, NanoClaw
+The pure detection, signal, formatting, JSON, archived-row adapter, session
+review, and digest renderer are built. Persistence, scheduling, NanoClaw
 integration, and Kata filing remain planned. Sections marked planned record the
 approved mapping, not current behavior.
 
@@ -153,13 +156,74 @@ Additions beyond jilog:
   them exactly, so those values print differently.
 - `friction.ParseUSD` accepts plain decimals only. rust_decimal also accepts
   exponents and underscores, which AgentsView does not produce.
-- An empty tool name becomes `unknown`; jilog does this only for a missing name.
+- An empty tool name becomes `unknown`; jilog does this only for a missing
+  name.
+- Observed-spend role and model names are sanitized in Markdown so a backtick
+  or control character cannot break a line. JSON keeps the original map keys.
 
-## Digest golden deltas
+## Digest goldens
 
-The digest renderer is planned. When it lands, this section will list every
-difference between AgentsView's golden digest and jilog's
-`tests/golden/learning-digest.md`.
+`internal/friction/testdata/golden/friction-log.md` is jilog's
+`crates/jilog-review/tests/golden/learning-digest.md` (at `9e8e094`), and
+`summary.json` is `crates/jilog/tests/golden/review-nightly.json`. The fixture
+builders port `tests/golden_digest.rs` and `digest_report()` in
+`crates/jilog/src/commands/review.rs`. The only Markdown differences are the D8
+heading, scrubbed fixture strings, the two D36 frontmatter keys and the two D36
+sections, which are empty here. Every jilog line keeps its bytes. The JSON
+differences are the `kata` backend, the `digest_path` meaning, `schema_version`
+3 and the two D36 count keys:
+
+```diff
+ patterns: 1
++frustrations: 0
++interruptions: 0
+ ---
+-# Learning Digest — 2026-09-16
++# Friction Log — 2026-09-16
++- `842c45ce-77b2-4d72-b995-f2a10466eb40` — 'do calendar re-auth' (recurred in sessions totaling $4.20)
++- `helper@general` `seat:seat-02` `chat-1` — 'no, use the gh cli'
+ - `seat:seat-03` `ee58d934-1049-4da0-b5b3-9a00f50efcc7` kind=`stuck_loop`: `bash` x6 identical arguments 01:35-01:54
+
++## Frustration
++
++_No frustration detected._
++
++## Interruptions
++
++_No interruptions detected._
++
++- `helper@general`: 1 corrections, …
+```
+
+```diff
+-      "backend": "github",
++      "backend": "kata",
+-  "digest_path": "/tmp/learning-digest-2026-05-10.md",
++  "digest_path": "friction:2026-05-10",
++  "frustrations": 0,
++  "interruptions": 0,
++    "helper@general": {
++      "channel": "general",
++      "persona": "helper",
+-  "schema_version": 2,
++  "schema_version": 3,
+```
+
+`friction-log-extra-kinds.md` has no jilog counterpart. It pins the D36 sections
+with content: a frustration line with both annotations, a persona frustration
+line, and interruptions counted per session.
+
+The pattern line keeps jilog's `stuck_loop` kind. The renderer prints the kind
+verbatim, and agentsview's `retry_loop` evidence has the same shape. Ported unit
+tests scrub personal, channel and machine names the same way, and replace the
+fixture time zone with another UTC+06 zone. The `+` lines above show the
+scrubbed fixture strings; jilog's originals are not reproduced here.
+
+Zone resolution differs from jilog `zone.rs`. `AGENTSVIEW_FRICTION_TZ` and
+`[friction] timezone` replace `JILOG_TZ` and the config key. After them,
+`timeutil.LocalLocation()` covers jilog's `TZ` and system-zone steps and falls
+back to the process zone instead of UTC. An empty configured timezone means
+unset rather than an error.
 
 ## License
 
