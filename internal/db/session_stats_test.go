@@ -2808,6 +2808,9 @@ func statsCanonPath(t *testing.T, path string) string {
 // The test process's PATH is changed, so the caller must not run in parallel.
 func statsFakeToolOnPath(t *testing.T, tool, body string) {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script mock unsupported on windows")
+	}
 	dir := t.TempDir()
 	script := "#!/bin/sh\n" + body
 	require.NoError(t,
