@@ -1497,9 +1497,9 @@ func (db *DB) accumulateAdoption(
 // missing git, unreadable config) is logged via the error path but does
 // not abort the aggregation — per-repo errors are swallowed so a single
 // broken checkout can't erase every other repo's numbers. Repos with no
-// resolvable author email are skipped; without an author filter the log
-// aggregation would attribute every other contributor's commits to the
-// local user.
+// resolvable author email are reported as skipped; without an author filter
+// the log aggregation would attribute every other contributor's commits to
+// the local user.
 //
 // PR counts are only populated when f.GHToken is set. When gh is
 // configured, PRsOpened and PRsMerged accumulate across every repo that
@@ -1547,6 +1547,9 @@ func (db *DB) computeOutcomeStats(
 	for _, repo := range repos {
 		email := git.AuthorEmail(ctx, repo)
 		if email == "" {
+			out.Skipped = append(out.Skipped, StatsOutcomeSkippedRepo{
+				Repo: repo, Op: "author", Reason: "no author email configured",
+			})
 			continue
 		}
 		logRes, err := git.AggregateLogCached(

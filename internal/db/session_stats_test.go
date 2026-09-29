@@ -2917,3 +2917,38 @@ func TestOutcomeStatsSkippedEmptyWhenNothingFailed(t *testing.T) {
 	require.NotNil(t, stats.OutcomeStats, "OutcomeStats")
 	assert.Empty(t, stats.OutcomeStats.Skipped, "Skipped")
 }
+
+func TestOutcomeStatsNamesRepoWithoutAuthorEmail(t *testing.T) {
+	skipIfNoGit(t)
+	repo := statsOutcomeRepo(t)
+	// AuthorEmail reads global configuration, so give it an empty home as
+	// well as the Git-specific configuration isolated by statsOutcomeRepo.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	missingAuthor := t.TempDir()
+	statsInitRepoAt(t, missingAuthor)
+	statsCommitFile(t, missingAuthor, "a.txt", "one line\n", "initial commit")
+	statsRunGit(t, missingAuthor, nil, "config", "--unset", "user.email")
+
+	d := testDB(t)
+	for i, cwd := range []string{repo, missingAuthor} {
+		insertSessionFixture(t, d, sessionFixture{
+			id: "author-" + strconv.Itoa(i), agent: "claude", userMsgs: 5,
+			startedAt: hoursAgo(5), cwd: cwd,
+		})
+	}
+
+	stats, err := d.GetSessionStats(t.Context(), StatsFilter{
+		Since: "28d", IncludeGitOutcomes: true,
+	})
+	require.NoError(t, err, "GetSessionStats")
+	require.NotNil(t, stats.OutcomeStats, "OutcomeStats")
+	out := stats.OutcomeStats
+	assert.Equal(t, 1, out.ReposActive)
+	assert.Equal(t, 3, out.Commits, "the configured repository still contributes")
+	require.Len(t, out.Skipped, 1)
+	assert.Equal(t, statsCanonPath(t, missingAuthor), out.Skipped[0].Repo)
+	assert.Equal(t, "author", out.Skipped[0].Op)
+	assert.Equal(t, "no author email configured", out.Skipped[0].Reason)
+}

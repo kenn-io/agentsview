@@ -192,10 +192,10 @@ type StatsOutcomeStats struct {
 type StatsOutcomeSkippedRepo struct {
 	// Repo is the local repository toplevel the lookup ran in.
 	Repo string `json:"repo"`
-	// Op is the lookup that failed: "log" for commit and line aggregation,
-	// "pr" for the pull-request counts.
+	// Op is the lookup that failed: "author" for the author email,
+	// "log" for commit and line aggregation, "pr" for pull-request counts.
 	Op string `json:"op"`
-	// Reason is the error the lookup returned.
+	// Reason explains why the lookup could not contribute to the totals.
 	Reason string `json:"reason"`
 }
 
