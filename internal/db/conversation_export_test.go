@@ -406,8 +406,7 @@ func TestConversationExportUpgradeRetiresStoredBodies(t *testing.T) {
 }
 
 func TestConversationExportCopiedUsagePolicyDropsBody(t *testing.T) {
-	// An active source activates the usage-only destination during the copy;
-	// its own stored text must get the same policy gap as the copied session.
+	// A rebuild takes its source's cold or active state before copying.
 	for _, sourceExported := range []bool{false, true} {
 		t.Run(fmt.Sprintf("sourceExported=%t", sourceExported), func(t *testing.T) {
 			ctx := t.Context()
@@ -419,8 +418,7 @@ func TestConversationExportCopiedUsagePolicyDropsBody(t *testing.T) {
 				require.NoError(t, err)
 			}
 			destination := testDB(t)
-			require.NoError(t, destination.UpsertSession(ctx, Session{ID: "own", Project: "sample", Machine: "local", Agent: "claude"}))
-			require.NoError(t, destination.InsertMessages(ctx, []Message{{SessionID: "own", Role: "user", Content: "Stored before the policy changed", SourceUUID: "two"}}))
+			require.NoError(t, destination.CopyArchiveIdentityFrom(source.Path()))
 			destination.SetArchiveContent(config.ArchiveContentUsage)
 			_, err := destination.CopyOrphanedDataFrom(source.Path())
 			require.NoError(t, err)
@@ -433,7 +431,7 @@ func TestConversationExportCopiedUsagePolicyDropsBody(t *testing.T) {
 					messages[change.SessionID] = change
 				}
 			}
-			require.Len(t, messages, 2)
+			require.Len(t, messages, 1)
 			change := messages["orphan"]
 			reader, err := OpenReadOnly(ctx, destination.Path())
 			require.NoError(t, err)
@@ -462,6 +460,7 @@ func TestConversationExportUsesFinalCopiedContent(t *testing.T) {
 				require.NoError(t, source.SoftDeleteSession(t.Context(), "chat"))
 			}
 			destination := testDB(t)
+			require.NoError(t, destination.CopyArchiveIdentityFrom(source.Path()))
 			destination.SetArchiveContent(config.ArchiveContentTranscripts)
 			_, err = destination.CopyTrashedDataFrom(source.Path())
 			require.NoError(t, err)
@@ -989,6 +988,7 @@ func TestConversationExportResyncRetainsHardDeletion(t *testing.T) {
 			require.NoError(t, source.DeleteSession(t.Context(), "chat"))
 			require.NoError(t, source.DeleteSession(t.Context(), "empty"))
 			destination := testDB(t)
+			require.NoError(t, destination.CopyArchiveIdentityFrom(source.Path()))
 			_, err := destination.CopyOrphanedDataFrom(source.Path())
 			require.NoError(t, err)
 			changes, err := destination.ExportConversationChanges(t.Context(), ConversationExportOptions{})
@@ -1188,15 +1188,15 @@ func TestConversationExportColdCopyKeepsSessionEvidence(t *testing.T) {
 	require.NoError(t, source.UpsertSession(ctx, Session{ID: "gone", Project: "sample", Machine: "local", Agent: "codex"}))
 	require.NoError(t, source.DeleteSession(ctx, "gone"))
 	destination := testDB(t)
-	require.NoError(t, destination.UpsertSession(ctx, Session{ID: "own", Project: "sample", Machine: "local", Agent: "codex"}))
-	require.NoError(t, destination.InsertMessages(ctx, []Message{{SessionID: "own", Role: "user", Content: "Kept", SourceUUID: "one"}}))
-	initial, err := destination.ExportConversationChanges(ctx, ConversationExportOptions{})
+	require.NoError(t, destination.CopyArchiveIdentityFrom(source.Path()))
+	_, err := destination.CopyOrphanedDataFrom(source.Path())
 	require.NoError(t, err)
-	_, err = destination.CopyOrphanedDataFrom(source.Path())
-	require.NoError(t, err)
-	// A cold source has no projected messages, yet its session records reach
-	// an active destination: the policy gap and the hard deletion.
-	copied, err := destination.ExportConversationChanges(ctx, ConversationExportOptions{Checkpoint: initial.Checkpoint})
+	// Neither archive has projected messages, yet the first export of the
+	// rebuild carries the source's policy gap and hard deletion.
+	rows, active := conversationProjectionState(t, destination)
+	assert.Zero(t, rows)
+	assert.False(t, active)
+	copied, err := destination.ExportConversationChanges(ctx, ConversationExportOptions{})
 	require.NoError(t, err)
 	bySession := map[string]ConversationChange{}
 	for _, change := range copied.Changes {
@@ -1206,6 +1206,23 @@ func TestConversationExportColdCopyKeepsSessionEvidence(t *testing.T) {
 	}
 	assert.Equal(t, "archive_content_excluded", bySession["usage"].Gap)
 	assert.True(t, bySession["gone"].Deleted)
+}
+
+func TestConversationExportCopyRejectsMismatchedState(t *testing.T) {
+	ctx := t.Context()
+	source := testDB(t)
+	require.NoError(t, source.UpsertSession(ctx, Session{ID: "orphan", Project: "sample", Machine: "local", Agent: "claude"}))
+	require.NoError(t, source.InsertMessages(ctx, []Message{{SessionID: "orphan", Role: "assistant", Content: "Reply", SourceUUID: "one"}}))
+	_, err := source.ExportConversationChanges(ctx, ConversationExportOptions{})
+	require.NoError(t, err)
+	// Without the source's identity the destination stays cold, and copying
+	// active rows into it would publish them without their stored messages.
+	destination := testDB(t)
+	_, err = destination.CopyOrphanedDataFrom(source.Path())
+	require.ErrorContains(t, err, "conversation export state differs")
+	session, err := destination.GetSession(ctx, "orphan")
+	require.NoError(t, err)
+	assert.Nil(t, session, "a rejected copy leaves the destination unchanged")
 }
 
 func TestConversationExportReopenKeepsColdArchiveCold(t *testing.T) {

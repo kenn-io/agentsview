@@ -123,6 +123,9 @@ func (db *DB) ExportConversationChanges(ctx context.Context, opts ConversationEx
 		}
 	}
 	// The first export pays for the projection instead of every sync write.
+	// Only writable handles (embedders and tests) build it here; the CLI reads
+	// read-only and builds through the writer owner on
+	// ErrConversationInitializationRequired.
 	if !db.readOnly {
 		var active bool
 		if err := db.getReader().QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM archive_metadata WHERE key=?)`, conversationExportInitializedKey).Scan(&active); err != nil {

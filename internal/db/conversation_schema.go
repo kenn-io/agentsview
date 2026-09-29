@@ -226,7 +226,10 @@ func refreshConversationMessagesFromArchiveTx(ctx context.Context, tx *sql.Tx, w
 	return flush()
 }
 
-func copyConversationRowsTx(ctx context.Context, tx *sql.Tx, where string, usageOnly bool) error {
+// copyConversationRowsTx copies conversation state between archives in the
+// same cold or active state. A rebuild takes its source's state from
+// CopyArchiveIdentityFrom before any copy, so a mismatch is a caller bug.
+func copyConversationRowsTx(ctx context.Context, tx *sql.Tx, where string) error {
 	var initialized bool
 	if oldDBHasTable(ctx, tx, "conversation_messages") {
 		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM old_db.archive_metadata WHERE key=?)`, conversationExportInitializedKey).Scan(&initialized); err != nil {
@@ -237,45 +240,28 @@ func copyConversationRowsTx(ctx context.Context, tx *sql.Tx, where string, usage
 	if err != nil {
 		return err
 	}
-	if !active && !initialized {
+	if active != initialized {
+		return fmt.Errorf("conversation export state differs (source active=%t, destination active=%t); copy the archive identity first", initialized, active)
+	}
+	if !active {
 		// Session evidence outlives the messages a later scan rebuilds from.
 		if oldDBHasTable(ctx, tx, "conversation_session_changes") {
 			return copyConversationSessionStatesTx(ctx, tx, where)
 		}
 		return nil
 	}
-	if !initialized {
-		if err := refreshConversationMessagesFromArchiveTx(ctx, tx, where); err != nil {
-			return err
-		}
-		if !oldDBHasTable(ctx, tx, "conversation_session_changes") {
-			return nil
-		}
-		if err := copyConversationSessionStatesTx(ctx, tx, where); err != nil {
-			return err
-		}
-		return applyConversationPolicyGapsTx(ctx, tx, where)
-	}
 	_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO main.conversation_messages (`+conversationCopyColumns+`) SELECT `+conversationCopyColumns+` FROM old_db.conversation_messages WHERE `+where)
 	if err != nil {
 		return err
 	}
-	if err := copyConversationSessionStatesTx(ctx, tx, where); err != nil {
-		return err
-	}
-	if active {
-		return nil
-	}
-	// Published identities only survive in an active archive, so activate the
-	// destination around the copied rows; the scan keeps their IDs by ordinal.
-	return initializeConversationExportTx(ctx, tx, usageOnly)
+	return copyConversationSessionStatesTx(ctx, tx, where)
 }
 
-func retainConversationTombstonesTx(ctx context.Context, tx *sql.Tx, usageOnly bool) error {
+func retainConversationTombstonesTx(ctx context.Context, tx *sql.Tx) error {
 	if !oldDBHasTable(ctx, tx, "conversation_messages") {
 		return nil
 	}
-	if err := copyConversationRowsTx(ctx, tx, "session_id NOT IN (SELECT id FROM main.sessions)", usageOnly); err != nil {
+	if err := copyConversationRowsTx(ctx, tx, "session_id NOT IN (SELECT id FROM main.sessions)"); err != nil {
 		return err
 	}
 	_, err := tx.ExecContext(ctx, `UPDATE main.conversation_messages SET deleted=1,removed=1,body=NULL

@@ -69,7 +69,25 @@ func TestExportConversationSchemaIsRequiredOnlyForConversations(t *testing.T) {
 }
 
 func TestExportConversationsFirstExportBuildsProjection(t *testing.T) {
-	path := filepath.Join(testDataDir(t), "sessions.db")
+	for name, replicaServing := range map[string]bool{
+		"no daemon": false,
+		// A replica serve does not own the SQLite archive, so the export
+		// builds the index directly instead of asking it.
+		"read-only replica serving": true,
+	} {
+		t.Run(name, func(t *testing.T) {
+			dataDir := testDataDir(t)
+			if replicaServing {
+				host, port := testPingServer(t)
+				writeRuntimeRecordFixture(t, dataDir, daemonRuntimeRecord(host, port, withRuntimeReadOnly(true)))
+			}
+			assertFirstConversationExportBuildsProjection(t, filepath.Join(dataDir, "sessions.db"))
+		})
+	}
+}
+
+func assertFirstConversationExportBuildsProjection(t *testing.T, path string) {
+	t.Helper()
 	database := dbtest.OpenTestDBAt(t, path)
 	insertExportSessionsTestSession(t, database, db.Session{
 		ID: "chat", Project: "sample", Machine: "local", Agent: "gemini",

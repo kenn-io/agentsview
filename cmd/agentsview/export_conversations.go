@@ -124,10 +124,10 @@ func initializeConversationExport(command *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	if tr.Mode == transportHTTP {
-		if tr.ReadOnly {
-			return errors.New("the local daemon serves a read-only archive; conversation exports need a writable archive")
-		}
+	// A read-only runtime (pg serve, duckdb serve) does not own the SQLite
+	// archive, so it is treated like no daemon; openWriteDB still refuses when
+	// a writable daemon holds the archive.
+	if tr.Mode == transportHTTP && !tr.ReadOnly {
 		api, err := apiclient.NewHTTPClient(tr.URL, cfg.AuthToken, &http.Client{Timeout: 0})
 		if err != nil {
 			return err
@@ -141,10 +141,10 @@ func initializeConversationExport(command *cobra.Command) error {
 		}
 		return nil
 	}
-	if tr.DirectReadOnly || tr.DirectIncompatible {
-		if tr.DirectReason != "" {
-			return appendDaemonCompatibilityHint(tr, errors.New(tr.DirectReason))
-		}
+	if tr.DirectIncompatible {
+		return directIncompatibleDaemonError(tr)
+	}
+	if tr.DirectReadOnly {
 		return errLocalDaemonUnreachable
 	}
 	database, lock, err := openWriteDB(ctx, cfg)
@@ -161,8 +161,8 @@ func openConversationExportDB(command *cobra.Command) (*db.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("loading config: %w", err)
 	}
-	// Exports do not migrate or reparse the archive. The normal writable
-	// database initialization establishes the stored export index.
+	// Exports read without migrating or reparsing the archive. The first
+	// changes call builds a cold archive's index through the writer owner.
 	database, err := openReadOnlyDB(command.Context(), appConfig)
 	if err != nil {
 		return nil, fmt.Errorf("open local archive: %w", err)
