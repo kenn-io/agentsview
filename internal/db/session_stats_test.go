@@ -2918,11 +2918,13 @@ func TestOutcomeStatsSkippedEmptyWhenNothingFailed(t *testing.T) {
 	assert.Empty(t, stats.OutcomeStats.Skipped, "Skipped")
 }
 
+// TestOutcomeStatsNamesRepoWithoutAuthorEmail verifies that a missing author
+// is reported while another repository still contributes its commit counts.
 func TestOutcomeStatsNamesRepoWithoutAuthorEmail(t *testing.T) {
 	skipIfNoGit(t)
 	repo := statsOutcomeRepo(t)
-	// AuthorEmail reads global configuration, so give it an empty home as
-	// well as the Git-specific configuration isolated by statsOutcomeRepo.
+	// AuthorEmail's runner strips GIT_CONFIG_GLOBAL and reads global config,
+	// so isolate HOME and XDG_CONFIG_HOME as well as the fixture commands.
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))

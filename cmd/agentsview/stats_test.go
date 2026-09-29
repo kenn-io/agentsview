@@ -911,8 +911,8 @@ func addDuration(ts string, d time.Duration) string {
 }
 
 // TestStatsHumanNamesSkippedRepos pins that the command tells the reader when
-// the totals are short. A lookup that fails drops a repository's numbers; if
-// the render stays silent the reader takes a partial total for a complete one.
+// the totals are short. A failed PR lookup leaves commit counts intact, and
+// multiline errors must stay indented within the affected repository's entry.
 func TestStatsHumanNamesSkippedRepos(t *testing.T) {
 	prsOpened := 25
 	out := renderStatsHuman(t, &db.SessionStats{
@@ -923,14 +923,14 @@ func TestStatsHumanNamesSkippedRepos(t *testing.T) {
 			PRsOpened:   &prsOpened,
 			Skipped: []db.StatsOutcomeSkippedRepo{
 				{Repo: "/repos/first", Op: "pr", Reason: "no git remotes found"},
-				{Repo: "/repos/second", Op: "log", Reason: "signal: killed"},
+				{Repo: "/repos/second", Op: "log", Reason: "git log in /repos/second: exit status 128:\nfatal: repository unavailable\ncheck repository permissions"},
 			},
 		},
 	})
 
-	assert.Contains(t, out, "Not counted:")
+	assert.Contains(t, out, "Incomplete:")
 	assert.Contains(t, out, "/repos/first (pr): no git remotes found")
-	assert.Contains(t, out, "/repos/second (log): signal: killed")
+	assert.Contains(t, out, "    /repos/second (log): git log in /repos/second: exit status 128:\n      fatal: repository unavailable\n      check repository permissions\n")
 }
 
 // TestStatsHumanSilentWhenNothingSkipped pins that the new lines appear only
@@ -940,5 +940,5 @@ func TestStatsHumanSilentWhenNothingSkipped(t *testing.T) {
 		Totals:       db.StatsTotals{SessionsAll: 1},
 		OutcomeStats: &db.StatsOutcomeStats{ReposActive: 2, Commits: 84},
 	})
-	assert.NotContains(t, out, "Not counted:")
+	assert.NotContains(t, out, "Incomplete:")
 }

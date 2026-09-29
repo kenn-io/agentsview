@@ -18,29 +18,29 @@ default and can also emit JSON for scripts and downstream tooling.
 The command pulls together several categories of information:
 
 - **Session totals** — total sessions, human versus automation sessions, total
-  messages, total user messages
+    messages, total user messages
 - **Session archetypes** — automation, quick, standard, deep, and marathon
-  buckets
+    buckets
 - **Session shape** — mean duration, user-message counts, peak context, and
-  tools-per-turn
+    tools-per-turn
 - **Velocity** — turn-cycle timing, first-response timing, and messages per
-  active hour
+    active hour
 - **Tool, model, and agent mix** — top tool categories plus token and session
-  mix by model and agent
+    mix by model and agent
 - **Claude-only optional sections** — cache economics, plan-mode adoption,
-  subagent activity, and skill counts when the window has compatible data
+    subagent activity, and skill counts when the window has compatible data
 - **Temporal activity** — active UTC-hour buckets plus the reporter timezone
 - **Git outcomes** — commit, LOC, file-change, and optional PR totals for repos
-  enclosing session working directories
+    enclosing session working directories
 - **Session outcomes** — aggregate counts, grade distribution, retry rate,
-  compactions per session, and edit churn. The raw
-  [four outcomes](/docs/session-intelligence/#outcome-classification)
-  (`completed`, `abandoned`, `errored`, `unknown`) are rolled up here into
-  three buckets: `success` (= `completed`), `failure` (= `abandoned` or
-  `errored`), and `unknown` (= `unknown` plus any unrecognized value). The
-  rollup applies to both the human summary and the JSON `outcomes` block.
+    compactions per session, and edit churn. The raw
+    [four outcomes](/docs/session-intelligence/#outcome-classification)
+    (`completed`, `abandoned`, `errored`, `unknown`) are rolled up here into
+    three buckets: `success` (= `completed`), `failure` (= `abandoned` or
+    `errored`), and `unknown` (= `unknown` plus any unrecognized value). The
+    rollup applies to both the human summary and the JSON `outcomes` block.
 - **Code attribution** — optional AI-authored code attribution from host-local
-  attribution sources such as Cursor.
+    attribution sources such as Cursor.
 
 ## Automation Scope
 
@@ -126,6 +126,12 @@ when AgentsView cannot derive any repos from the sessions in the selected
 window, and Claude-only sections are omitted when the window has no compatible
 data.
 
+The `Incomplete:` output and `skipped` field described below are unreleased.
+When a repository lookup fails, the outcome section lists its path, operation,
+and reason under `Incomplete:`. Multiline reasons keep their continuation lines
+indented. A `pr` entry means only that repository's pull-request counts are
+missing; its commit, line, file, and active-repository counts still contribute.
+
 ## JSON Output
 
 JSON output currently carries `schema_version: 1` and is divided into top-level
@@ -150,6 +156,25 @@ Optional blocks may also appear:
 - `outcome_stats`
 - `outcomes`
 - `code_attribution`
+
+`outcome_stats.skipped` lists repository operations that could not contribute to
+the totals. It is omitted when no lookups were skipped. Each entry contains:
+
+- `repo`: the local repository's root path
+- `op`: the operation that could not contribute, as listed below
+- `reason`: the full diagnostic text, which may contain multiple lines
+
+| `op`     | Meaning                           | Counts missing for this repository          |
+| -------- | --------------------------------- | ------------------------------------------- |
+| `author` | No author email could be resolved | All git and PR counts                       |
+| `log`    | The commit lookup failed          | All git and PR counts                       |
+| `pr`     | The pull-request lookup failed    | Only PR counts; git counts still contribute |
+
+Other repositories still contribute their available counts. If none can
+contribute, `outcome_stats` remains present with zero git counters and the
+`skipped` entries explaining them. Check `skipped` before interpreting zeros as
+no activity: the presence of the block alone does not mean data was available.
+The block is omitted when no repositories can be discovered.
 
 `code_attribution.sources` lists attribution sources that contributed to the
 selected stats request. Each source carries `provider`, `scope`, `status`,
@@ -182,10 +207,14 @@ Pull-request counts are optional and use CLI-oriented GitHub token sources:
 - If `AGENTSVIEW_GITHUB_TOKEN` is set, AgentsView uses it.
 - Otherwise it tries `gh auth token`.
 - If neither source yields a token, PR counts are omitted instead of being
-  reported as zero.
+    reported as zero.
 
-This distinction matters in JSON output: a missing PR field means "GitHub lookup
-not configured", not "configured and zero PRs found".
+This distinction matters in JSON output: a missing PR field means no repository
+returned PR counts, either because the lookup was not configured or because
+repositories could not contribute. Check `outcome_stats.skipped` for failures. A
+present PR field containing zero means the successful lookups found no matching
+PRs; check `skipped` to see whether any repositories are missing from that
+total.
 
 ## Relationship To Session Intelligence
 

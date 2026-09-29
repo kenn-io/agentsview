@@ -444,10 +444,11 @@ func printOutcomeStats(w io.Writer, o *db.StatsOutcomeStats) {
 	if len(o.Skipped) > 0 {
 		// Without these lines a total missing an unknown number of
 		// repositories reads exactly like a complete one.
-		fmt.Fprintln(w, "  Not counted:")
+		fmt.Fprintln(w, "  Incomplete:")
 		for _, skipped := range o.Skipped {
 			fmt.Fprintf(w, "    %s (%s): %s\n",
-				skipped.Repo, skipped.Op, skipped.Reason)
+				skipped.Repo, skipped.Op,
+				strings.ReplaceAll(skipped.Reason, "\n", "\n      "))
 		}
 	}
 	fmt.Fprintln(w)

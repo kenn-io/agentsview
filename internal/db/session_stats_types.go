@@ -179,16 +179,16 @@ type StatsOutcomeStats struct {
 	LOCAdded     int  `json:"loc_added"`
 	LOCRemoved   int  `json:"loc_removed"`
 	FilesChanged int  `json:"files_changed"`
-	PRsOpened    *int `json:"prs_opened,omitempty"` // nil when gh not configured
+	PRsOpened    *int `json:"prs_opened,omitempty"` // nil when no PR lookup succeeded
 	PRsMerged    *int `json:"prs_merged,omitempty"`
-	// Skipped names every repository a lookup could not read, so a caller can
-	// tell a complete total from one missing an unknown number of
-	// repositories. Empty means nothing was missed.
+	// Skipped lists repository operations whose results are missing from the
+	// totals. Successful operations still contribute to their respective totals.
 	Skipped []StatsOutcomeSkippedRepo `json:"skipped,omitempty"`
 }
 
-// StatsOutcomeSkippedRepo records one repository that did not contribute to
-// the outcome totals, and why.
+// StatsOutcomeSkippedRepo records a repository operation that could not
+// contribute to the outcome totals, and why. A "pr" entry affects only PR
+// counts; that repository's commit, line, file and active-repo counts remain.
 type StatsOutcomeSkippedRepo struct {
 	// Repo is the local repository toplevel the lookup ran in.
 	Repo string `json:"repo"`
