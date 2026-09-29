@@ -7421,7 +7421,7 @@ func (e *Engine) reconcileSourceMissingMembers(
 		if reject != nil {
 			reject(db.SessionSourceOwnership{
 				Machine:  member.machine,
-				Agent:    string(agent),
+				Agent:    string(member.ownerAgent(agent)),
 				ID:       member.sessionID,
 				FilePath: member.filePath,
 			})
@@ -7436,7 +7436,7 @@ func (e *Engine) reconcileSourceMissingMembers(
 		}
 		ownership := db.SessionSourceOwnership{
 			Machine:  member.machine,
-			Agent:    string(agent),
+			Agent:    string(member.ownerAgent(agent)),
 			ID:       member.sessionID,
 			FilePath: member.filePath,
 		}
@@ -7454,7 +7454,7 @@ func (e *Engine) reconcileSourceMissingMembers(
 			}
 		}
 		changed, err := e.markSessionSourceMissing(
-			ctx, member.machine, string(agent),
+			ctx, member.machine, string(member.ownerAgent(agent)),
 			member.sessionID, member.filePath,
 		)
 		if err != nil {
@@ -11098,6 +11098,16 @@ type sourceMissingMember struct {
 	agent     parser.AgentType
 }
 
+// ownerAgent returns the stored agent label that owns the member. It can
+// differ from the discovering provider's agent: Codebuff discovers sessions
+// stored as Freebuff.
+func (m sourceMissingMember) ownerAgent(fallback parser.AgentType) parser.AgentType {
+	if m.agent != "" {
+		return m.agent
+	}
+	return fallback
+}
+
 type processResult struct {
 	// sourceBytes is the physical source size used to acquire the retention
 	// lease and to account this result against the pending write batch byte
@@ -12553,6 +12563,27 @@ func (e *Engine) processProviderFile(
 				retentionLease: lease,
 			}, true
 		}
+	} else if file.Agent == parser.AgentCodebuff && outcome.ForceReplace &&
+		outcome.ResultSetComplete && len(outcome.SourceErrors) == 0 &&
+		!slices.ContainsFunc(parsedResults, func(r parser.ParseResult) bool {
+			return r.Session.IsTruncated
+		}) {
+		// A transcript cut off mid-write still stores its partial buffer, but
+		// it cannot prove that later agent blocks are gone, so only a clean
+		// parse reconciles missing subagent sessions.
+		missingMembers, err = e.codebuffSourceMissingMembers(
+			ctx, file.Path, outcome.ExcludedSessionIDs, parsedResults,
+		)
+		if err != nil {
+			return processResult{
+				err:            err,
+				mtime:          fingerprint.MTimeNS,
+				cacheSkip:      cacheSkip,
+				cacheKey:       cacheKey,
+				noCacheSkip:    true,
+				retentionLease: lease,
+			}, true
+		}
 	} else if file.Agent == parser.AgentClaude &&
 		outcome.ResultSetComplete && len(outcome.SourceErrors) == 0 {
 		missingMembers, err = e.claudeSourceMissingSessionOwnershipsForCompleteResult(
@@ -13049,6 +13080,151 @@ func (e *Engine) completeMultiSessionSourceMissingMembers(
 	return members, nil
 }
 
+// codebuffSourceMissingMembers lists stored sessions a complete Codebuff
+// transcript parse no longer emits, such as a subagent whose agent block was
+// removed. Codebuff and Freebuff share one provider and a transcript's
+// classification can change, so both stored agent labels are checked. A row
+// whose other-classification counterpart is emitted is a reclassification,
+// not a missing member; applyCodebuffClassificationPolicies replaces it.
+func (e *Engine) codebuffSourceMissingMembers(
+	ctx context.Context,
+	sourcePath string,
+	excludedSessionIDs []string,
+	results []parser.ParseResult,
+) ([]sourceMissingMember, error) {
+	emitted := make(map[string]struct{}, len(results))
+	for _, result := range results {
+		if id := applyIDPrefixToID(e.idPrefix, result.Session.ID); id != "" {
+			emitted[id] = struct{}{}
+		}
+	}
+	var missing []sourceMissingMember
+	for _, agent := range []parser.AgentType{
+		parser.AgentCodebuff, parser.AgentFreebuff,
+	} {
+		members, err := e.completeMultiSessionSourceMissingMembers(
+			ctx, agent, sourcePath, excludedSessionIDs, results,
+		)
+		if err != nil {
+			return nil, err
+		}
+		for _, member := range members {
+			counterpart, ok := e.codebuffCounterpartID(member.sessionID)
+			if ok {
+				if _, reclassified := emitted[counterpart]; reclassified {
+					continue
+				}
+			}
+			missing = append(missing, member)
+		}
+	}
+	return missing, nil
+}
+
+// codebuffCounterpartID returns the stored ID the same Codebuff transcript
+// session carries under the other classification: a codebuff: ID maps to its
+// freebuff: twin and back. Subagent IDs embed the parent's full ID, so the
+// swap covers them too.
+func (e *Engine) codebuffCounterpartID(storedID string) (string, bool) {
+	id := strings.TrimPrefix(storedID, e.idPrefix)
+	codebuffPrefix := string(parser.AgentCodebuff) + ":"
+	freebuffPrefix := string(parser.AgentFreebuff) + ":"
+	if rest, ok := strings.CutPrefix(id, codebuffPrefix); ok {
+		return applyIDPrefixToID(e.idPrefix, freebuffPrefix+rest), true
+	}
+	if rest, ok := strings.CutPrefix(id, freebuffPrefix); ok {
+		return applyIDPrefixToID(e.idPrefix, codebuffPrefix+rest), true
+	}
+	return "", false
+}
+
+// applyCodebuffClassificationPolicies keeps one live classification per
+// Codebuff session. Parent and subagent sessions share one transcript path,
+// so trash and cleanup are decided per session ID, never per path. For each
+// emitted session, the same session stored under the other classification
+// (Codebuff or Freebuff) is the only alternate identity:
+//
+//   - If the user trashed or permanently deleted that counterpart, the new
+//     classification is not written, so a reclassification cannot bring back
+//     a session the user removed.
+//   - Otherwise a live counterpart is superseded and deleted as a parser
+//     exclusion.
+//
+// Sessions the parse no longer emits are handled separately as source-missing
+// members (codebuffSourceMissingMembers).
+func (e *Engine) applyCodebuffClassificationPolicies(
+	ctx context.Context, filePath string, res *processResult,
+) {
+	lookupPath := filePath
+	if e.pathRewriter != nil {
+		lookupPath = e.pathRewriter(filePath)
+	}
+	live := make(map[string]struct{})
+	var failed []error
+	for _, agent := range []parser.AgentType{
+		parser.AgentCodebuff, parser.AgentFreebuff,
+	} {
+		ids, err := e.db.ListSessionIDsByFilePath(ctx, lookupPath, string(agent))
+		if err != nil {
+			// One retry absorbs a transient read failure.
+			ids, err = e.db.ListSessionIDsByFilePath(ctx, lookupPath, string(agent))
+		}
+		if err != nil {
+			failed = append(failed, fmt.Errorf("%s: %w", agent, err))
+			continue
+		}
+		for _, id := range ids {
+			live[id] = struct{}{}
+		}
+	}
+	if len(failed) > 0 {
+		// Without both lookups the engine could restore a trashed session
+		// under its other classification or leave both classifications live.
+		res.err = fmt.Errorf(
+			"list session IDs by file path %q: %w",
+			lookupPath, errors.Join(failed...),
+		)
+		res.noCacheSkip = true
+		res.results = res.results[:0]
+		return
+	}
+
+	excluded := make(map[string]struct{}, len(res.excludedSessionIDs))
+	for _, id := range e.applyIDPrefixToSessionIDs(res.excludedSessionIDs) {
+		excluded[id] = struct{}{}
+	}
+	addExclusion := func(id string) {
+		if _, ok := excluded[id]; ok {
+			return
+		}
+		excluded[id] = struct{}{}
+		res.excludedSessionIDs = append(res.excludedSessionIDs, id)
+	}
+	kept := res.results[:0]
+	for _, result := range res.results {
+		currentID := applyIDPrefixToID(e.idPrefix, result.Session.ID)
+		counterpart, ok := e.codebuffCounterpartID(currentID)
+		if !ok {
+			kept = append(kept, result)
+			continue
+		}
+		if e.db.IsSessionExcluded(ctx, counterpart) ||
+			e.db.IsSessionTrashed(ctx, counterpart) {
+			// Keep a trashed current ID trashed rather than converting it to
+			// a parser deletion; the upsert's trash guard already hides it.
+			if !e.db.IsSessionTrashed(ctx, currentID) {
+				addExclusion(currentID)
+			}
+			continue
+		}
+		if _, stale := live[counterpart]; stale {
+			addExclusion(counterpart)
+		}
+		kept = append(kept, result)
+	}
+	res.results = kept
+}
+
 // claudeSourceMissingSessionOwnershipsForCompleteResult lists stored active
 // Claude fork sessions written by an older parser version under this
 // transcript's exact stored path that a complete full parse no longer derives
@@ -13362,6 +13538,9 @@ func (e *Engine) claudeRowlessFreshnessMarked(
 // appears or is removed). Multi-session sources are skipped, where several
 // distinct sessions legitimately share one path; for stable-ID providers it is
 // a no-op because the stored ID always matches the freshly parsed one.
+// Codebuff is multi-session (a transcript holds its subagent sessions) and gets
+// its per-session classification policy instead; see
+// applyCodebuffClassificationPolicies.
 //
 // Two policies are applied per result, keyed by the (path-rewritten) file_path:
 //
@@ -13380,10 +13559,17 @@ func (e *Engine) applyProviderFilePathPolicies(
 	filePath string,
 	res *processResult,
 ) {
-	if provider.Capabilities().Source.MultiSessionSource == parser.CapabilitySupported {
+	if len(res.results) == 0 {
 		return
 	}
-	if len(res.results) == 0 {
+	if provider.Capabilities().Source.MultiSessionSource == parser.CapabilitySupported {
+		if agent == parser.AgentCodebuff {
+			e.applyCodebuffClassificationPolicies(ctx, filePath, res)
+			if res.err != nil {
+				return
+			}
+			e.stageProviderStatHash(agent, filePath, res)
+		}
 		return
 	}
 
@@ -13431,12 +13617,7 @@ func (e *Engine) applyProviderFilePathPolicies(
 		currentID := result.Session.ID
 		currentPrefixedID := e.idPrefix + result.Session.ID
 
-		// Freebuff shares the Codebuff provider. Query both agent types
-		// so stale rows and resurrection guards work for both.
 		agentsToQuery := []string{string(agent)}
-		if agent == parser.AgentCodebuff {
-			agentsToQuery = append(agentsToQuery, string(parser.AgentFreebuff))
-		}
 		var existingIDs []string
 		primaryErr := make(map[string]error, len(agentsToQuery))
 		for _, agentStr := range agentsToQuery {
@@ -13463,8 +13644,8 @@ func (e *Engine) applyProviderFilePathPolicies(
 		}
 		// Bail when any agent's identity lookup remains unsuccessful
 		// after retry. Continuing with partial lifecycle information
-		// can recreate a trashed identity or leave both Codebuff and
-		// Freebuff classifications active for the same file.
+		// can recreate a trashed identity or leave a stale identity
+		// active for the same file.
 		if len(primaryErr) > 0 {
 			var failedAgents []string
 			var failedErrs []error
@@ -13541,56 +13722,65 @@ func (e *Engine) applyProviderFilePathPolicies(
 		kept = append(kept, result)
 	}
 	res.results = kept
-	if len(kept) > 0 && filePath != "" {
-		// Per-event work gates the digest stage by what actually got kept
-		// (an empty kept must not stamp a row that would suppress real
-		// drift on the next warm sync). The digest itself is the pre-parse
-		// snapshot processProviderFile captured before fingerprinting or
-		// parsing (preParseStatHash), so it cannot describe a file state
-		// the parse never read; the fallback below recomputes from the
-		// physical on-disk chat path only for paths that bypassed
-		// processProviderFile's capture. The cache key uses the
-		// pathRewriter's "host:/remote/path" form so remote-synced
-		// sources keep hashing a real local file but read back under
-		// the canonical logical key.
-		//
-		// The digest is persisted only after the matching source's
-		// sessions-table write commits successfully. The per-row persist
-		// gate in flushPending and the single-session writeSessionFull
-		// loop is what guarantees provider_freshness only sees digests
-		// whose matching session row actually committed; a CWD-filter
-		// veto, a failed upsert, or a parser-skipped session all bypass
-		// the persist call and keep the side-table clean.
-		// Fallback staging for results that bypassed processProviderFile's
-		// pre-parse capture (res.providerStatHash == nil), applying the
-		// same digest-eligibility rule so a path-rewritten import of a
-		// content-authority provider never re-stages what the pre-parse
-		// site deliberately withheld.
-		if res.providerStatHash == nil &&
-			e.providerStatDigestEligible(agent) {
-			if hasher, ok := e.sources().providerStatHashers[agent]; ok {
-				targetKey := filePath
-				if e.pathRewriter != nil {
-					targetKey = e.pathRewriter(filePath)
-				}
-				if targetKey != "" {
-					res.providerStatHash = &pendingProviderStatHash{
-						agent:        agent,
-						physicalPath: filePath,
-						targetKey:    targetKey,
-						digest:       hasher.ComputeMultiFileStatHash(filePath),
-					}
+	e.stageProviderStatHash(agent, filePath, res)
+}
+
+// stageProviderStatHash stages the per-component provider_freshness digest for
+// a source whose parse kept at least one result.
+func (e *Engine) stageProviderStatHash(
+	agent parser.AgentType, filePath string, res *processResult,
+) {
+	if len(res.results) == 0 || filePath == "" {
+		return
+	}
+	// Per-event work gates the digest stage by what actually got kept
+	// (an empty kept must not stamp a row that would suppress real
+	// drift on the next warm sync). The digest itself is the pre-parse
+	// snapshot processProviderFile captured before fingerprinting or
+	// parsing (preParseStatHash), so it cannot describe a file state
+	// the parse never read; the fallback below recomputes from the
+	// physical on-disk chat path only for paths that bypassed
+	// processProviderFile's capture. The cache key uses the
+	// pathRewriter's "host:/remote/path" form so remote-synced
+	// sources keep hashing a real local file but read back under
+	// the canonical logical key.
+	//
+	// The digest is persisted only after the matching source's
+	// sessions-table write commits successfully. The per-row persist
+	// gate in flushPending and the single-session writeSessionFull
+	// loop is what guarantees provider_freshness only sees digests
+	// whose matching session row actually committed; a CWD-filter
+	// veto, a failed upsert, or a parser-skipped session all bypass
+	// the persist call and keep the side-table clean.
+	// Fallback staging for results that bypassed processProviderFile's
+	// pre-parse capture (res.providerStatHash == nil), applying the
+	// same digest-eligibility rule so a path-rewritten import of a
+	// content-authority provider never re-stages what the pre-parse
+	// site deliberately withheld.
+	if res.providerStatHash == nil &&
+		e.providerStatDigestEligible(agent) {
+		if hasher, ok := e.sources().providerStatHashers[agent]; ok {
+			targetKey := filePath
+			if e.pathRewriter != nil {
+				targetKey = e.pathRewriter(filePath)
+			}
+			if targetKey != "" {
+				res.providerStatHash = &pendingProviderStatHash{
+					agent:        agent,
+					physicalPath: filePath,
+					targetKey:    targetKey,
+					digest:       hasher.ComputeMultiFileStatHash(filePath),
 				}
 			}
 		}
-		// Test observability: this counter lets tests distinguish a
-		// regression that drops just the staging block from one that
-		// drops the entire freshness gate. See stagedProviderStatHashes
-		// on Engine and the per-row suppress test in
-		// codebuff_integration_test.go.
-		if res.providerStatHash != nil {
-			e.stagedProviderStatHashes.Add(1)
-		}
+	}
+	// Test observability: this counter lets tests distinguish a
+	// regression that drops just the staging block from one that
+	// drops the entire freshness gate. See stagedProviderStatHashes
+	// on Engine and the per-row suppress test in
+	// codebuff_integration_test.go.
+	if res.providerStatHash != nil {
+		e.stagedProviderStatHashes.Add(1)
 	}
 }
 

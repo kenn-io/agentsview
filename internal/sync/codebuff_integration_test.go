@@ -2001,3 +2001,309 @@ func TestSyncCodebuffNestedSubagentSessionsPersist(t *testing.T) {
 	assert.Equal(t, "ok", childResult("t1"),
 		"unblocked categories keep their output")
 }
+
+// writeCodebuffSubagentTranscript writes a free-tier transcript whose first AI
+// message holds one agent block per agentIDs entry, followed by extraPrompts
+// additional user messages. Parent and subagent sessions all come from this
+// one chat-messages.json, so the tests below exercise per-session lifecycle
+// state for sessions that share a source file.
+func writeCodebuffSubagentTranscript(
+	t *testing.T, chatPath string, agentIDs []string, extraPrompts int,
+) {
+	t.Helper()
+	blocks := make([]string, 0, len(agentIDs))
+	for _, id := range agentIDs {
+		blocks = append(blocks, fmt.Sprintf(`{
+			"type":"agent","agentId":%q,"agentName":"basher",
+			"agentType":"basher","status":"complete",
+			"initialPrompt":"run tests","content":"done",
+			"blocks":[{"type":"text","textType":"text","content":"working"}]
+		}`, id))
+	}
+	messages := []string{
+		`{"id":"user-1","variant":"user","content":"start","timestamp":"03:04 PM"}`,
+		`{"id":"ai-1","variant":"ai","timestamp":"03:05 PM","blocks":[` +
+			strings.Join(blocks, ",") + `]}`,
+	}
+	for i := range extraPrompts {
+		messages = append(messages, fmt.Sprintf(
+			`{"id":"user-%d","variant":"user","content":"follow up %d","timestamp":"03:06 PM"}`,
+			i+2, i+2,
+		))
+	}
+	require.NoError(t, os.WriteFile(
+		chatPath, []byte("["+strings.Join(messages, ",")+"]"), 0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(filepath.Dir(chatPath), "run-state.json"),
+		[]byte(`{"sessionState":{"mainAgentState":{"agentType":"base2-free-mimo"}}}`),
+		0o644,
+	))
+	// Every rewrite must look changed to the stat and content gates.
+	future := time.Now().Add(time.Duration(extraPrompts+len(agentIDs)) * time.Second)
+	require.NoError(t, os.Chtimes(chatPath, future, future))
+}
+
+// TestSyncCodebuffSubagentSessionLifecycleIsPerSession pins that parent and
+// subagent sessions keep independent trash and cleanup state even though they
+// share one transcript file: trashing one session never removes another, a
+// resync never resurrects a trashed session, and a subagent whose block left
+// the transcript is kept as a source-missing archive row.
+func TestSyncCodebuffSubagentSessionLifecycleIsPerSession(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	const parentID = "freebuff:project-0:2026-07-15T10-00-00.000Z"
+	childA := parentID + "__subagent__agent-a"
+	childB := parentID + "__subagent__agent-b"
+
+	tests := []struct {
+		name       string
+		trash      string
+		rewriteIDs []string
+		// live lists sessions that must be active after the resync with
+		// the given message count.
+		live map[string]int
+		// trashed lists sessions that must still be in trash.
+		trashed []string
+		// sourceMissing lists sessions that must be kept as source-missing
+		// archive rows.
+		sourceMissing []string
+	}{
+		{
+			name:       "plain edit keeps every session",
+			rewriteIDs: []string{"agent-a", "agent-b"},
+			live:       map[string]int{parentID: 3, childA: 2, childB: 2},
+		},
+		{
+			name:       "trashed subagent does not remove its parent",
+			trash:      childA,
+			rewriteIDs: []string{"agent-a", "agent-b"},
+			live:       map[string]int{parentID: 3, childB: 2},
+			trashed:    []string{childA},
+		},
+		{
+			name:       "trashed parent does not remove its subagents",
+			trash:      parentID,
+			rewriteIDs: []string{"agent-a", "agent-b"},
+			live:       map[string]int{childA: 2, childB: 2},
+			trashed:    []string{parentID},
+		},
+		{
+			name:          "removed agent block is marked source-missing",
+			rewriteIDs:    []string{"agent-b"},
+			live:          map[string]int{parentID: 3, childB: 2},
+			sourceMissing: []string{childA},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root, chatPath := createCodebuffSingleSession(t)
+			writeCodebuffSubagentTranscript(
+				t, chatPath, []string{"agent-a", "agent-b"}, 0,
+			)
+
+			database := dbtest.OpenTestDB(t)
+			engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{
+					parser.AgentCodebuff: {root},
+				},
+				Machine: "local",
+			})
+			t.Cleanup(engine.Close)
+
+			first := engine.SyncAll(t.Context(), nil)
+			require.Zero(t, first.Failed)
+			codebuffAssertSessionMessageCount(t, database, parentID, 2)
+			codebuffAssertSessionMessageCount(t, database, childA, 2)
+			codebuffAssertSessionMessageCount(t, database, childB, 2)
+
+			if tt.trash != "" {
+				require.NoError(t, database.SoftDeleteSession(
+					t.Context(), tt.trash,
+				))
+			}
+			writeCodebuffSubagentTranscript(t, chatPath, tt.rewriteIDs, 1)
+			second := engine.SyncAll(t.Context(), nil)
+			require.Zero(t, second.Failed)
+			// The per-session outcome is stable: an unchanged transcript
+			// rewrites nothing on the next pass.
+			third := engine.SyncAll(t.Context(), nil)
+			require.Zero(t, third.Failed)
+			assert.Zero(t, third.Synced)
+
+			for id, want := range tt.live {
+				codebuffAssertSessionMessageCount(t, database, id, want)
+				full, err := database.GetSessionFull(t.Context(), id)
+				require.NoError(t, err)
+				require.NotNil(t, full)
+				assert.Nil(t, full.DeletedAt, "%s must not be trashed", id)
+				assert.Nil(t, full.SourceMissingAt,
+					"%s must not be source-missing", id)
+			}
+			for _, id := range tt.trashed {
+				full, err := database.GetSessionFull(t.Context(), id)
+				require.NoError(t, err)
+				require.NotNil(t, full, "trashed %s must be kept", id)
+				assert.NotNil(t, full.DeletedAt, "%s must stay trashed", id)
+			}
+			for _, id := range tt.sourceMissing {
+				full, err := database.GetSessionFull(t.Context(), id)
+				require.NoError(t, err)
+				assertSourceMissingState(t, full)
+			}
+		})
+	}
+}
+
+// TestSyncCodebuffReclassificationKeepsOneLiveIdentity pins what happens when
+// run-state.json moves a transcript from Freebuff to Codebuff: every session in
+// the tree changes ID prefix. The old classification is replaced rather than
+// left live beside the new one, and a session the user trashed under the old
+// classification is not brought back under the new one.
+func TestSyncCodebuffReclassificationKeepsOneLiveIdentity(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	const (
+		freeParent = "freebuff:project-0:2026-07-15T10-00-00.000Z"
+		paidParent = "codebuff:project-0:2026-07-15T10-00-00.000Z"
+		freeChild  = freeParent + "__subagent__agent-a"
+		paidChild  = paidParent + "__subagent__agent-a"
+	)
+	tests := []struct {
+		name    string
+		trash   string
+		live    []string
+		absent  []string
+		trashed []string
+	}{
+		{
+			name:   "reclassified tree replaces the old identities",
+			live:   []string{paidParent, paidChild},
+			absent: []string{freeParent, freeChild},
+		},
+		{
+			name:    "trashed parent stays removed after reclassification",
+			trash:   freeParent,
+			live:    []string{paidChild},
+			absent:  []string{paidParent, freeChild},
+			trashed: []string{freeParent},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root, chatPath := createCodebuffSingleSession(t)
+			writeCodebuffSubagentTranscript(
+				t, chatPath, []string{"agent-a"}, 0,
+			)
+
+			database := dbtest.OpenTestDB(t)
+			engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{
+					parser.AgentCodebuff: {root},
+				},
+				Machine: "local",
+			})
+			t.Cleanup(engine.Close)
+
+			require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+			codebuffAssertSessionMessageCount(t, database, freeParent, 2)
+			codebuffAssertSessionMessageCount(t, database, freeChild, 2)
+			if tt.trash != "" {
+				require.NoError(t, database.SoftDeleteSession(
+					t.Context(), tt.trash,
+				))
+			}
+
+			writeCodebuffSubagentTranscript(
+				t, chatPath, []string{"agent-a"}, 1,
+			)
+			require.NoError(t, os.WriteFile(
+				filepath.Join(filepath.Dir(chatPath), "run-state.json"),
+				[]byte(`{"sessionState":{"mainAgentState":{"agentType":"base2"}}}`),
+				0o644,
+			))
+			require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+
+			for _, id := range tt.live {
+				sess, err := database.GetSession(t.Context(), id)
+				require.NoError(t, err)
+				assert.NotNil(t, sess, "%s must be live", id)
+			}
+			for _, id := range tt.absent {
+				full, err := database.GetSessionFull(t.Context(), id)
+				require.NoError(t, err)
+				assert.Nil(t, full, "%s must not be stored", id)
+			}
+			for _, id := range tt.trashed {
+				full, err := database.GetSessionFull(t.Context(), id)
+				require.NoError(t, err)
+				require.NotNil(t, full, "trashed %s must be kept", id)
+				assert.NotNil(t, full.DeletedAt, "%s must stay trashed", id)
+			}
+		})
+	}
+}
+
+// TestSyncCodebuffTruncatedTranscriptKeepsLaterSubagents pins that a
+// transcript cut off mid-element does not mark subagents past the cut as
+// source-missing: the partial parse stores what survived but cannot prove the
+// later agent blocks are gone.
+func TestSyncCodebuffTruncatedTranscriptKeepsLaterSubagents(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	const parentID = "freebuff:project-0:2026-07-15T10-00-00.000Z"
+	childA := parentID + "__subagent__agent-a"
+	childB := parentID + "__subagent__agent-b"
+	agentMessage := func(id, agentID string) string {
+		return fmt.Sprintf(`{"id":%q,"variant":"ai","timestamp":"03:05 PM","blocks":[{
+			"type":"agent","agentId":%q,"agentName":"basher",
+			"agentType":"basher","status":"complete",
+			"initialPrompt":"run tests","content":"done",
+			"blocks":[{"type":"text","textType":"text","content":"working"}]
+		}]}`, id, agentID)
+	}
+	userMessage := `{"id":"user-1","variant":"user","content":"start","timestamp":"03:04 PM"}`
+
+	root, chatPath := createCodebuffSingleSession(t)
+	require.NoError(t, os.WriteFile(chatPath, []byte("["+strings.Join([]string{
+		userMessage, agentMessage("ai-1", "agent-a"), agentMessage("ai-2", "agent-b"),
+	}, ",")+"]"), 0o644))
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodebuff: {root},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+
+	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+	codebuffAssertSessionMessageCount(t, database, childB, 2)
+
+	truncated := "[" + userMessage + "," + agentMessage("ai-1", "agent-a") +
+		`,{"id":"ai-2","vari`
+	require.NoError(t, os.WriteFile(chatPath, []byte(truncated), 0o644))
+	future := time.Now().Add(time.Minute)
+	require.NoError(t, os.Chtimes(chatPath, future, future))
+	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+
+	parent, err := database.GetSession(t.Context(), parentID)
+	require.NoError(t, err)
+	require.NotNil(t, parent)
+	assert.True(t, parent.IsTruncated,
+		"the partial transcript must be stored as truncated")
+	for _, id := range []string{childA, childB} {
+		full, err := database.GetSessionFull(t.Context(), id)
+		require.NoError(t, err)
+		require.NotNil(t, full, "%s must be kept", id)
+		assert.Nil(t, full.SourceMissingAt,
+			"a truncated parse must not mark %s source-missing", id)
+	}
+}

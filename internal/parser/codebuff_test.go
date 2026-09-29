@@ -1222,6 +1222,8 @@ func TestCodebuffProviderCapabilities(t *testing.T) {
 	assert.Equal(t, CapabilitySupported, caps.Content.AggregateUsageEvents)
 	assert.Equal(t, CapabilitySupported, caps.Content.Relationships,
 		"nested agent blocks become linked subagent sessions")
+	assert.Equal(t, CapabilitySupported, caps.Source.MultiSessionSource,
+		"a transcript holds the root session and its subagent sessions")
 	assert.Equal(t, CapabilitySupported, caps.Content.TerminationStatus,
 		"the last assistant turn's tool-call state classifies the ending")
 	assert.Equal(t, CapabilityNotApplicable, caps.Content.MalformedLineCount)

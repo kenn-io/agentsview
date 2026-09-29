@@ -3360,7 +3360,14 @@ schemas keep their existing ordering behavior.
   writes to debug siblings (`log.jsonl`, `trace.jsonl`) or atomic-write temp
   siblings no longer reparse a session; periodic reconcile still reparses a
   session whose directory mtime moved, which keeps companion-file deletions
-  detectable.
+  detectable. Sync treats the transcript as a multi-session source: trash and
+  cleanup apply per session ID, so trashing a subagent or its parent leaves
+  the other sessions syncing. A subagent whose agent block is gone from a
+  clean parse is kept as a source-missing archive row; a truncated parse
+  leaves stored subagents unchanged. When `agentType` moves a transcript
+  between Codebuff and Freebuff, each session's old-classification row is
+  replaced, unless the user trashed it, in which case the new row is not
+  written.
 
 ## Evener (`evener`)
 

@@ -560,6 +560,10 @@ func codebuffProviderCapabilities() Capabilities {
 	// so force full message replacement to avoid stale ordinals and
 	// missed in-place block updates.
 	caps.ForceReplaceOnParse = CapabilitySupported
+	// One transcript holds the root session and a linked session per
+	// nested subagent. The engine must treat trash, stale-row cleanup, and
+	// missing members per session ID rather than per file path.
+	caps.MultiSessionSource = CapabilitySupported
 	// The Codebuff source layout folds chat-messages.json with its
 	// sibling companions run-state.json and chat-meta.json, so the
 	// engine's stat-only freshness gate must consult the per-component
