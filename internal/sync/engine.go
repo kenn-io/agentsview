@@ -16090,6 +16090,12 @@ func (e *Engine) tryClaudeSplitSuffixUpdate(
 	incHash string,
 	parseFn incrementalParseFunc,
 ) (*incrementalUpdate, error) {
+	// The ranged write recounts the session from stored rows. Usage-only
+	// storage drops most user rows while message counts still follow the
+	// source transcript, so those archives keep the full parse.
+	if e.db.ArchiveContent().UsageOnly() {
+		return nil, nil
+	}
 	runOrdinal, ok := e.db.LastClaudeAssistantOrdinal(ctx, inc.ID)
 	if !ok {
 		return nil, nil
@@ -16124,8 +16130,7 @@ func (e *Engine) tryClaudeSplitSuffixUpdate(
 		len(toolCallUpdates) > 0 || len(messageUsageUpdates) > 0 {
 		return nil, nil
 	}
-	if !e.db.ArchiveContent().UsageOnly() && inc.FirstMessage == "" &&
-		chunkHasRealUserPrompt(suffix) {
+	if inc.FirstMessage == "" && chunkHasRealUserPrompt(suffix) {
 		return nil, nil
 	}
 	return &incrementalUpdate{

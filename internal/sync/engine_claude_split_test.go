@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
@@ -115,6 +116,7 @@ func claudeSplitFactory(t *testing.T) parser.ProviderFactory {
 
 func newClaudeSplitTestEnv(
 	t *testing.T, factory parser.ProviderFactory,
+	archive config.ArchiveContent,
 ) (*testEnv, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -124,6 +126,7 @@ func newClaudeSplitTestEnv(
 			parser.AgentClaude: {dir},
 		},
 		Machine:           "local",
+		ArchiveContent:    archive,
 		ProviderFactories: []parser.ProviderFactory{factory},
 	})
 	t.Cleanup(env.engine.Close)
@@ -222,6 +225,19 @@ var claudeSplitShapes = map[string]struct {
 		},
 		splitAfter: 5,
 	},
+	// The appended window finishes the run and then starts a new user
+	// turn, so the session counts must grow by the new rows too.
+	"user_turn_after_run": {
+		lines: []string{
+			`{"type":"attachment","timestamp":"2024-01-01T10:00:00Z","uuid":"at0","content":"context"}`,
+			`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"u1","message":{"content":"hello"},"cwd":"/tmp"}`,
+			`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","uuid":"a1","parentUuid":"at0","message":{"id":"m","model":"claude-sonnet-4-20250514","content":[{"type":"text","text":"Hello"}],"usage":{"input_tokens":10,"output_tokens":1},"stop_reason":"tool_use"}}`,
+			`{"type":"assistant","timestamp":"2024-01-01T10:00:02Z","uuid":"a2","parentUuid":"a1","message":{"id":"m","model":"claude-sonnet-4-20250514","content":[{"type":"text","text":"Hello world"}],"usage":{"input_tokens":10,"output_tokens":2},"stop_reason":"end_turn"}}`,
+			`{"type":"user","timestamp":"2024-01-01T10:00:03Z","uuid":"u2","parentUuid":"a2","message":{"content":"next question"},"cwd":"/tmp"}`,
+			`{"type":"assistant","timestamp":"2024-01-01T10:00:04Z","uuid":"a3","parentUuid":"u2","message":{"id":"n","model":"claude-sonnet-4-20250514","content":[{"type":"text","text":"Answer"}],"usage":{"input_tokens":20,"output_tokens":3},"stop_reason":"end_turn"}}`,
+		},
+		splitAfter: 3,
+	},
 	// Parallel tool calls: the tool_result lands between two records of
 	// the same response, so the full parser keeps them apart and the
 	// second sync is a plain append.
@@ -310,45 +326,59 @@ func snapshotSplitSession(t *testing.T, database *db.DB, sessionID string) split
 // TestClaudeIncrementalSplitMatchesFullParse is the equivalence guard for
 // the split path: syncing a transcript in two pieces must store exactly
 // the rows and session aggregates a single full parse of the finished
-// file stores, for cumulative and additive run shapes.
+// file stores, for cumulative and additive run shapes. Usage-only
+// archives drop most user rows, so they must match too.
 func TestClaudeIncrementalSplitMatchesFullParse(t *testing.T) {
-	for name, shape := range claudeSplitShapes {
-		t.Run(name, func(t *testing.T) {
-			incrementalEnv, incrementalDir := newClaudeSplitTestEnv(t, claudeSplitFactory(t))
-			fullEnv, fullDir := newClaudeSplitTestEnv(t, claudeSplitFactory(t))
-
-			const proj = "proj"
-			const file = "split.jsonl"
-			initial := strings.Join(shape.lines[:shape.splitAfter], "\n") + "\n"
-			rest := strings.Join(shape.lines[shape.splitAfter:], "\n") + "\n"
-
-			// Incremental: store the partial run, then append the rest.
-			path := filepath.Join(incrementalDir, proj, file)
-			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-			require.NoError(t, os.WriteFile(path, []byte(initial), 0o644))
-			incrementalEnv.engine.SyncAll(t.Context(), nil)
-			appendClaudeSplitLines(t, path, strings.TrimSuffix(rest, "\n"))
-			incrementalEnv.engine.SyncPaths([]string{path})
-
-			// Baseline: one full parse of the finished transcript.
-			fullPath := filepath.Join(fullDir, proj, file)
-			require.NoError(t, os.MkdirAll(filepath.Dir(fullPath), 0o755))
-			require.NoError(t, os.WriteFile(fullPath, []byte(initial+rest), 0o644))
-			fullEnv.engine.SyncAll(t.Context(), nil)
-
-			sessionID := strings.TrimSuffix(file, ".jsonl")
-			assert.Equal(t,
-				snapshotSplitMessages(t, fullEnv.db, sessionID),
-				snapshotSplitMessages(t, incrementalEnv.db, sessionID),
-				"stored rows differ from a full parse",
-			)
-			assert.Equal(t,
-				snapshotSplitSession(t, fullEnv.db, sessionID),
-				snapshotSplitSession(t, incrementalEnv.db, sessionID),
-				"session aggregates differ from a full parse",
-			)
-		})
+	archives := []config.ArchiveContent{
+		config.ArchiveContentFull, config.ArchiveContentUsage,
 	}
+	for _, archive := range archives {
+		for name, shape := range claudeSplitShapes {
+			t.Run(string(archive)+"/"+name, func(t *testing.T) {
+				testClaudeSplitMatchesFullParse(t, archive, shape.lines, shape.splitAfter)
+			})
+		}
+	}
+}
+
+func testClaudeSplitMatchesFullParse(
+	t *testing.T, archive config.ArchiveContent,
+	lines []string, splitAfter int,
+) {
+	t.Helper()
+	incrementalEnv, incrementalDir := newClaudeSplitTestEnv(t, claudeSplitFactory(t), archive)
+	fullEnv, fullDir := newClaudeSplitTestEnv(t, claudeSplitFactory(t), archive)
+
+	const proj = "proj"
+	const file = "split.jsonl"
+	initial := strings.Join(lines[:splitAfter], "\n") + "\n"
+	rest := strings.Join(lines[splitAfter:], "\n") + "\n"
+
+	// Incremental: store the partial run, then append the rest.
+	path := filepath.Join(incrementalDir, proj, file)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(initial), 0o644))
+	incrementalEnv.engine.SyncAll(t.Context(), nil)
+	appendClaudeSplitLines(t, path, strings.TrimSuffix(rest, "\n"))
+	incrementalEnv.engine.SyncPaths([]string{path})
+
+	// Baseline: one full parse of the finished transcript.
+	fullPath := filepath.Join(fullDir, proj, file)
+	require.NoError(t, os.MkdirAll(filepath.Dir(fullPath), 0o755))
+	require.NoError(t, os.WriteFile(fullPath, []byte(initial+rest), 0o644))
+	fullEnv.engine.SyncAll(t.Context(), nil)
+
+	sessionID := strings.TrimSuffix(file, ".jsonl")
+	assert.Equal(t,
+		snapshotSplitMessages(t, fullEnv.db, sessionID),
+		snapshotSplitMessages(t, incrementalEnv.db, sessionID),
+		"stored rows differ from a full parse",
+	)
+	assert.Equal(t,
+		snapshotSplitSession(t, fullEnv.db, sessionID),
+		snapshotSplitSession(t, incrementalEnv.db, sessionID),
+		"session aggregates differ from a full parse",
+	)
 }
 
 // TestClaudeIncrementalSplitReparsesOnlyTheOpenRun covers issue #1963:
@@ -356,7 +386,7 @@ func TestClaudeIncrementalSplitMatchesFullParse(t *testing.T) {
 // whole transcript to finish it.
 func TestClaudeIncrementalSplitReparsesOnlyTheOpenRun(t *testing.T) {
 	counter := &claudeFullParseCounter{inner: claudeSplitFactory(t)}
-	env, dir := newClaudeSplitTestEnv(t, counter)
+	env, dir := newClaudeSplitTestEnv(t, counter, config.ArchiveContentFull)
 
 	shape := claudeSplitShapes["cumulative_text"]
 	path := filepath.Join(dir, "proj", "split.jsonl")
@@ -388,7 +418,7 @@ func TestClaudeIncrementalSplitReparsesOnlyTheOpenRun(t *testing.T) {
 // the sync still re-parses only the open run.
 func TestClaudeIncrementalSplitStaysOnRunInDAGSession(t *testing.T) {
 	counter := &claudeFullParseCounter{inner: claudeSplitFactory(t)}
-	env, dir := newClaudeSplitTestEnv(t, counter)
+	env, dir := newClaudeSplitTestEnv(t, counter, config.ArchiveContentFull)
 
 	lines := []string{
 		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"u1","message":{"content":"hello"},"cwd":"/tmp"}`,
@@ -424,7 +454,7 @@ func TestClaudeIncrementalSplitStaysOnRunInDAGSession(t *testing.T) {
 // the sync must append without re-parsing the whole transcript.
 func TestClaudeIncrementalSameIDAfterToolResultAppends(t *testing.T) {
 	counter := &claudeFullParseCounter{inner: claudeSplitFactory(t)}
-	env, dir := newClaudeSplitTestEnv(t, counter)
+	env, dir := newClaudeSplitTestEnv(t, counter, config.ArchiveContentFull)
 
 	shape := claudeParallelToolShape
 	path := filepath.Join(dir, "proj", "parallel.jsonl")
@@ -453,7 +483,7 @@ func TestClaudeIncrementalSameIDAfterToolResultAppends(t *testing.T) {
 // rows keep their row identity and their pins.
 func TestClaudeIncrementalSplitLeavesEarlierRowsInPlace(t *testing.T) {
 	counter := &claudeFullParseCounter{inner: claudeSplitFactory(t)}
-	env, dir := newClaudeSplitTestEnv(t, counter)
+	env, dir := newClaudeSplitTestEnv(t, counter, config.ArchiveContentFull)
 
 	shape := claudeSplitShapes["earlier_turn_kept"]
 	path := filepath.Join(dir, "proj", "kept.jsonl")
@@ -494,7 +524,7 @@ func TestClaudeIncrementalSplitLeavesEarlierRowsInPlace(t *testing.T) {
 // the same file neither re-parse it nor leave it unarchived.
 func TestClaudeIncrementalToolUseRunIsNotReparsedEverySync(t *testing.T) {
 	counter := &claudeFullParseCounter{inner: claudeSplitFactory(t)}
-	env, dir := newClaudeSplitTestEnv(t, counter)
+	env, dir := newClaudeSplitTestEnv(t, counter, config.ArchiveContentFull)
 
 	path := filepath.Join(dir, "proj", "tool-use.jsonl")
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
@@ -542,7 +572,7 @@ func TestClaudeIncrementalSplitPropagatesReParseFailure(t *testing.T) {
 		// Call 1 parses the appended window, call 2 re-parses the run.
 		failAt: 2,
 	}
-	env, dir := newClaudeSplitTestEnv(t, factory)
+	env, dir := newClaudeSplitTestEnv(t, factory, config.ArchiveContentFull)
 
 	shape := claudeSplitShapes["cumulative_text"]
 	path := filepath.Join(dir, "proj", "split.jsonl")
