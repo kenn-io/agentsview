@@ -680,8 +680,24 @@ func TestParseWindowPoint(t *testing.T) {
 			want: time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC),
 		},
 		{
+			name: "RFC3339 UTC timestamp", in: "2026-04-01T12:30:00.123Z",
+			want: time.Date(2026, 4, 1, 12, 30, 0, 123000000, time.UTC),
+		},
+		{
+			name: "RFC3339 negative offset", in: "2026-04-01T00:00:00-05:00",
+			want: time.Date(2026, 4, 1, 5, 0, 0, 0, time.UTC),
+		},
+		{
+			name: "RFC3339 positive offset", in: "2026-04-01T00:00:00+09:30",
+			want: time.Date(2026, 3, 31, 14, 30, 0, 0, time.UTC),
+		},
+		{
 			name: "garbage is a hard error", in: "7x",
-			wantErrSubstring: "Nd, Nh, or YYYY-MM-DD",
+			wantErrSubstring: "expected Nd, Nh, YYYY-MM-DD, or RFC3339",
+		},
+		{
+			name: "timestamp requires a timezone", in: "2026-04-01T00:00:00",
+			wantErrSubstring: "expected Nd, Nh, YYYY-MM-DD, or RFC3339",
 		},
 	}
 	for _, tc := range tests {
@@ -696,6 +712,32 @@ func TestParseWindowPoint(t *testing.T) {
 			assert.True(t, got.Equal(tc.want), "got %v want %v", got, tc.want)
 		})
 	}
+}
+
+func TestGetSessionStats_WindowOffsets(t *testing.T) {
+	d := testDB(t)
+	for _, fixture := range []sessionFixture{
+		{id: "before", startedAt: "2026-03-08T04:59:59Z", userMsgs: 1},
+		{id: "start", startedAt: "2026-03-08T05:00:00Z", userMsgs: 2},
+		{id: "inside", startedAt: "2026-03-09T03:59:59Z", userMsgs: 9},
+		{id: "end", startedAt: "2026-03-09T04:00:00Z", userMsgs: 32},
+	} {
+		insertSessionFixture(t, d, fixture)
+	}
+
+	// Local midnights span 23 hours when daylight saving time starts.
+	stats, err := d.GetSessionStats(t.Context(), StatsFilter{
+		Since: "2026-03-08T00:00:00-05:00",
+		Until: "2026-03-09T00:00:00-04:00",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, StatsWindow{
+		Since: "2026-03-08T05:00:00Z",
+		Until: "2026-03-09T04:00:00Z",
+		Days:  1,
+	}, stats.Window)
+	assert.Equal(t, 2, stats.Totals.SessionsAll)
+	assert.Equal(t, 11, stats.Totals.UserMessagesTotal)
 }
 
 func TestGetSessionStats_Distributions(t *testing.T) {
@@ -2804,21 +2846,6 @@ func statsCanonPath(t *testing.T, path string) string {
 	return resolved
 }
 
-// statsFakeToolOnPath puts a shell script named tool at the front of PATH.
-// The test process's PATH is changed, so the caller must not run in parallel.
-func statsFakeToolOnPath(t *testing.T, tool, body string) {
-	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("shell-script mock unsupported on windows")
-	}
-	dir := t.TempDir()
-	script := "#!/bin/sh\n" + body
-	require.NoError(t,
-		os.WriteFile(filepath.Join(dir, tool), []byte(script), 0o700),
-		"write fake %s", tool)
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-}
-
 // TestOutcomeStatsNamesRepoWhoseGHLookupFailed pins that a pull-request
 // lookup which fails is reported rather than dropped. Before this, the
 // failure went to the daemon log and the response was an ordinary-looking
@@ -2826,11 +2853,12 @@ func statsFakeToolOnPath(t *testing.T, tool, body string) {
 // one missing an unknown number of repositories.
 func TestOutcomeStatsNamesRepoWhoseGHLookupFailed(t *testing.T) {
 	skipIfNoGit(t)
+	if _, err := exec.LookPath("gh"); err != nil {
+		t.Skipf("gh not available on PATH: %v", err)
+	}
+	t.Setenv("GH_REPO", "")
+	// This repository has no remotes, so gh fails before any network lookup.
 	repo := statsOutcomeRepo(t)
-	statsFakeToolOnPath(t, "gh", `
-echo "no git remotes found" >&2
-exit 1
-`)
 	d := testDB(t)
 	insertSessionFixture(t, d, sessionFixture{
 		id: "gh-failed", agent: "claude", userMsgs: 5,

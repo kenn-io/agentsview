@@ -291,7 +291,7 @@ func resolveTimezone(name string) (*time.Location, error) {
 }
 
 // windowBounds resolves Since/Until into absolute time bounds.
-// Supported inputs: "Nd" (days), "Nh" (hours), or "YYYY-MM-DD".
+// Supported inputs: "Nd" (days), "Nh" (hours), "YYYY-MM-DD", or RFC3339.
 // Until defaults to now; Since defaults to 28 days before Until.
 // Returned days is the calendar-style span in whole days, rounded
 // up when Since is a non-integer-day duration (e.g. "48h" → 2).
@@ -341,9 +341,9 @@ func windowBounds(
 }
 
 // ParseWindowPoint resolves a single window bound — a compact
-// duration-relative-to-now form ("28d", "12h") or an absolute YYYY-MM-DD
-// date (the start of that UTC day) — to an instant. A duration anchors at
-// now; passing a resolved bound as now lets a caller anchor a duration
+// duration-relative-to-now form ("28d", "12h"), an absolute YYYY-MM-DD
+// date (the start of that UTC day), or an RFC3339 timestamp — to an instant.
+// A duration anchors at now; passing a resolved bound as now anchors it
 // against it (as usage daily anchors --since to --until). Shared by stats'
 // windowBounds and the usage CLI.
 func ParseWindowPoint(s string, now time.Time) (time.Time, error) {
@@ -353,8 +353,11 @@ func ParseWindowPoint(s string, now time.Time) (time.Time, error) {
 	if t, err := time.Parse("2006-01-02", s); err == nil {
 		return t.UTC(), nil
 	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t.UTC(), nil
+	}
 	return time.Time{}, fmt.Errorf(
-		"expected Nd, Nh, or YYYY-MM-DD, got %q", s,
+		"expected Nd, Nh, YYYY-MM-DD, or RFC3339, got %q", s,
 	)
 }
 
