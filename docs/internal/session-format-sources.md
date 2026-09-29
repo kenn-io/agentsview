@@ -3363,11 +3363,10 @@ schemas keep their existing ordering behavior.
   detectable. Sync treats the transcript as a multi-session source: trash and
   cleanup apply per session ID, so trashing a subagent or its parent leaves
   the other sessions syncing. A subagent whose agent block is gone from a
-  clean parse is kept as a source-missing archive row; a truncated parse
-  leaves stored subagents unchanged. When `agentType` moves a transcript
-  between Codebuff and Freebuff, each session's old-classification row is
-  replaced, unless the user trashed it, in which case the new row is not
-  written.
+  parse, including one past the damage in a truncated transcript, is kept as a
+  source-missing archive row. When `agentType` moves a transcript between
+  Codebuff and Freebuff, each session's old-classification row is replaced,
+  unless the user trashed it, in which case the new row is not written.
 
 ## Evener (`evener`)
 

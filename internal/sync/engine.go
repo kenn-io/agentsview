@@ -12564,13 +12564,11 @@ func (e *Engine) processProviderFile(
 			}, true
 		}
 	} else if file.Agent == parser.AgentCodebuff && outcome.ForceReplace &&
-		outcome.ResultSetComplete && len(outcome.SourceErrors) == 0 &&
-		!slices.ContainsFunc(parsedResults, func(r parser.ParseResult) bool {
-			return r.Session.IsTruncated
-		}) {
-		// A transcript cut off mid-write still stores its partial buffer, but
-		// it cannot prove that later agent blocks are gone, so only a clean
-		// parse reconciles missing subagent sessions.
+		outcome.ResultSetComplete && len(outcome.SourceErrors) == 0 {
+		// A truncated transcript reconciles like any other parse. The CLI
+		// writes chat-messages.json atomically, so a truncated file is static
+		// damage, not a write in progress (see decodeCodebuffMessages);
+		// subagents past the damage are marked source-missing.
 		missingMembers, err = e.codebuffSourceMissingMembers(
 			ctx, file.Path, outcome.ExcludedSessionIDs, parsedResults,
 		)
