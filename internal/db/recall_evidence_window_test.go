@@ -466,6 +466,51 @@ func TestRecallEvidenceRangedIncrementalReplaceRevokesChangedContent(t *testing.
 	)
 }
 
+// A subagent link in the same ranged write can change a covered tool call
+// after its rows are rewritten, so the evidence check must see the final
+// rows.
+func TestRecallEvidenceRangedIncrementalReplaceSeesLinkedToolCall(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "ranged-link", "agentsview")
+	delegating := recallEvidenceMessage(
+		"ranged-link", 11, "assistant", "Delegating.", "ranged-link-11",
+	)
+	delegating.ToolCalls = []ToolCall{{
+		ToolName:  "Agent",
+		Category:  "Task",
+		ToolUseID: "task-1",
+		InputJSON: `{"description":"inspect"}`,
+	}}
+	insertMessages(t, d,
+		recallEvidenceMessage(
+			"ranged-link", 10, "user", "Inspect the schema.", "ranged-link-10",
+		),
+		delegating,
+	)
+	insertVerifiedRecallSelection(
+		t, d, "link-entry", "ranged-link", 10, 11, []string{"task-1"},
+	)
+	messages, err := d.GetAllMessages(t.Context(), "ranged-link")
+	require.NoError(t, err)
+
+	_, err = d.WriteSessionIncremental(t.Context(), "ranged-link", messages[1:],
+		IncrementalSessionUpdate{
+			NextOrdinal:        12,
+			ReplaceFromOrdinal: new(11),
+			SubagentLinks: []ToolCallSubagentLink{{
+				ToolUseID: "task-1", SubagentSessionID: "sub-1",
+			}},
+		},
+	)
+
+	require.NoError(t, err)
+	stored, err := d.GetAllMessages(t.Context(), "ranged-link")
+	require.NoError(t, err)
+	require.Len(t, stored[1].ToolCalls, 1)
+	require.Equal(t, "sub-1", stored[1].ToolCalls[0].SubagentSessionID)
+	assert.False(t, requireRecallEntry(t, d, "link-entry").ProvenanceOK)
+}
+
 func TestRecallEvidenceReplaceKeepsOrdinalFallbackWhenDigestMatches(t *testing.T) {
 	d := testDB(t)
 	seedRecallEvidenceWindow(t, d, "legacy", 10, "", "")

@@ -1690,13 +1690,6 @@ func (db *DB) writeSessionIncremental(ctx context.Context,
 		if err := replaceSessionMessagesFromTx(ctx, tx, sessionID, *from, msgs); err != nil {
 			return false, err
 		}
-		// The rewritten rows may sit inside trusted recall evidence, so
-		// re-verify it as the whole-session replacement does.
-		if err := reconcileRecallEvidenceForSessionTx(
-			ctx, tx, sessionID, &pendingRecallRevocations,
-		); err != nil {
-			return false, err
-		}
 		replaced = &removed
 	} else {
 		if err := reconcileConversationMessagesTx(tx, sessionID, msgs, false, db.usageOnlyStorage()); err != nil {
@@ -1758,6 +1751,15 @@ func (db *DB) writeSessionIncremental(ctx context.Context,
 		}
 	}
 	if replaced != nil {
+		// The rewritten rows may sit inside trusted recall evidence, so
+		// re-verify it as the whole-session replacement does. Links and
+		// result updates above can change covered tool calls, so the
+		// check runs on the final rows.
+		if err := reconcileRecallEvidenceForSessionTx(
+			ctx, tx, sessionID, &pendingRecallRevocations,
+		); err != nil {
+			return false, err
+		}
 		err = replaceSessionIncrementalTx(ctx, tx, sessionID, update, *replaced)
 	} else {
 		err = updateSessionIncrementalTx(ctx, tx, sessionID, update)
