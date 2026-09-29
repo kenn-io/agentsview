@@ -80,12 +80,13 @@ func originURL(ctx context.Context, root string) string {
 }
 
 // normalizeRemoteURL reduces the spellings of one remote to a single key:
-// scheme, credentials, a trailing `.git` and a trailing slash are dropped, the
-// host is lowercased, and the SSH shorthand `git@host:owner/repo` is rewritten
-// to `host/owner/repo`. Host case is normalised because hosts are
+// scheme, credentials, default ports, a trailing `.git` and a trailing slash
+// are dropped, the host is lowercased, and the SSH shorthand
+// `git@host:owner/repo` is rewritten to `host/owner/repo`. Hosts are
 // case-insensitive; the path is left as written because repository paths are
-// not case-insensitive everywhere. Filesystem remotes resolve against root
-// and retain their full directory names, including a `.git` suffix.
+// not case-insensitive everywhere. Query and fragment data are preserved.
+// Filesystem remotes resolve against root and retain their full directory
+// names, including a `.git` suffix.
 // Returns "" for an empty or unparseable URL, which makes the caller fall back
 // to the local path rather than merge repositories it cannot tell apart.
 func normalizeRemoteURL(raw, root string) string {
@@ -127,10 +128,25 @@ func normalizeRemoteURL(raw, root string) string {
 			raw = raw[:colon] + "/" + raw[colon+1:]
 		}
 	} else {
-		raw = raw[strings.Index(raw, "://")+len("://"):]
-		if at := strings.LastIndex(raw, "@"); at >= 0 {
-			raw = raw[at+1:]
+		u, err := url.Parse(raw)
+		if err != nil || u.Host == "" {
+			return ""
 		}
+		switch u.Scheme + ":" + u.Port() {
+		case "http:80", "https:443", "ssh:22", "git:9418":
+			u.Host = strings.TrimSuffix(u.Host, ":"+u.Port())
+		}
+		u.RawPath = strings.TrimSuffix(strings.TrimSuffix(strings.TrimRight(u.EscapedPath(), "/"), ".git"), "/")
+		if u.RawPath == "" {
+			return ""
+		}
+		u.Path, err = url.PathUnescape(u.RawPath)
+		if err != nil {
+			return ""
+		}
+		u.User = nil
+		u.Host = strings.ToLower(u.Host)
+		return strings.TrimPrefix(u.String(), u.Scheme+"://")
 	}
 	raw = strings.TrimSuffix(strings.TrimSuffix(strings.TrimRight(raw, "/"), ".git"), "/")
 	host, path, found := strings.Cut(raw, "/")

@@ -164,6 +164,8 @@ func TestDiscoverRepos_DedupByOriginAcrossURLForms(t *testing.T) {
 		"git@github.com:example-org/example-repo.git",
 		"ssh://git@github.com/example-org/example-repo",
 		"https://GitHub.com/example-org/example-repo/",
+		"https://github.com:443/example-org/example-repo.git",
+		"ssh://git@github.com:22/example-org/example-repo.git",
 	}
 	cwds := make([]string, 0, len(forms))
 	for _, form := range forms {
@@ -291,9 +293,44 @@ func TestNormalizeRemoteURL(t *testing.T) {
 			want: "github.com/example-org/example-repo",
 		},
 		{
-			name: "ssh scheme with port",
+			name: "ssh scheme with default port",
 			raw:  "ssh://git@github.com:22/example-org/example-repo.git",
-			want: "github.com:22/example-org/example-repo",
+			want: "github.com/example-org/example-repo",
+		},
+		{
+			name: "https default port",
+			raw:  "https://example.com:443/team/repo.git",
+			want: "example.com/team/repo",
+		},
+		{
+			name: "http default port",
+			raw:  "http://example.com:80/team/repo.git",
+			want: "example.com/team/repo",
+		},
+		{
+			name: "git default port",
+			raw:  "git://example.com:9418/team/repo.git",
+			want: "example.com/team/repo",
+		},
+		{
+			name: "nondefault port is preserved",
+			raw:  "https://example.com:8443/team/repo.git",
+			want: "example.com:8443/team/repo",
+		},
+		{
+			name: "IPv6 default port",
+			raw:  "https://[2001:db8::1]:443/team/repo.git",
+			want: "[2001:db8::1]/team/repo",
+		},
+		{
+			name: "path query and fragment are preserved",
+			raw:  "https://git@example.com:443/team/repo%2Fname?ref=a@b#section",
+			want: "example.com/team/repo%2Fname?ref=a@b#section",
+		},
+		{
+			name: "git suffix in query and fragment is preserved",
+			raw:  "https://example.com:443/team/repo.git?ref=release.git#docs.git",
+			want: "example.com/team/repo?ref=release.git#docs.git",
 		},
 		{
 			name: "nested path is preserved",
