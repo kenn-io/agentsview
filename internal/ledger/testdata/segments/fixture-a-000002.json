@@ -1,0 +1,56 @@
+{
+  "source": "fixture-a",
+  "source_seq": 2,
+  "checksum": 3548185085,
+  "created_at": "2026-01-02T04:04:05.000000001Z",
+  "events": [
+    {
+      "event_id": "0190f5a2-7c3e-7000-8000-000000000006",
+      "zone": "default",
+      "source": "fixture-a",
+      "source_seq": 1,
+      "timestamp": "2026-01-02T03:54:05Z",
+      "correlation_id": null,
+      "causation_id": null,
+      "actor_ref": null,
+      "object_ref": "subsystem:from-object",
+      "event_class": "decision",
+      "payload_tier": "metadata_only",
+      "payload": null
+    },
+    {
+      "event_id": "0190f5a2-7c3e-7000-8000-000000000007",
+      "zone": "default",
+      "source": "fixture-a",
+      "source_seq": 2,
+      "timestamp": "2026-01-02T03:54:06Z",
+      "correlation_id": null,
+      "causation_id": null,
+      "actor_ref": null,
+      "object_ref": "subsystem:ignored",
+      "event_class": "claim",
+      "payload_tier": "metadata_only",
+      "payload": {
+        "subsystem": 7,
+        "summary": 9
+      }
+    },
+    {
+      "event_id": "0190f5a2-7c3e-7000-8000-000000000008",
+      "zone": "default",
+      "source": "fixture-a",
+      "source_seq": 3,
+      "timestamp": "2026-01-02T03:54:07Z",
+      "correlation_id": null,
+      "causation_id": null,
+      "actor_ref": null,
+      "object_ref": "kata:proj#1",
+      "event_class": "approval",
+      "payload_tier": "metadata_only",
+      "payload": [
+        "subsystem",
+        "x"
+      ]
+    }
+  ]
+}
