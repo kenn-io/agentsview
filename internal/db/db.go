@@ -523,7 +523,11 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (116: Claude and Amp tool results retain explicit failure/completion status,
 // and Cline results retain image markers. Re-parse unchanged sources to restore
 // outcome evidence lost from summaries.)
-const dataVersion = 116
+// (117: an Antigravity conversation whose own stream is encrypted is stored
+// from the plaintext transcript its agent brain wrote, and .gemini/antigravity-ide
+// is a default Antigravity root. Re-parse unchanged Antigravity sources so those
+// conversations reach the archive.)
+const dataVersion = 117
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

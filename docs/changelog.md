@@ -63,6 +63,17 @@ The latest published release is
   or `kiro`; the Web UI picker and generation requests that name no agent use
   it. Leaving it unset keeps the previous `claude` default, and an unknown name
   fails configuration validation at startup.
+- Antigravity conversations that have no session database are now
+  stored from the plaintext transcript Antigravity's agent brain wrote beside
+  them, with the user's turns, the model's turns, its reasoning and its tool
+  calls. Until now those conversations were invisible: the only other copy is
+  an encrypted `.pb` stream that needs a key. `~/.gemini/antigravity-ide`, the
+  directory the IDE build uses, is also collected by default now. A
+  conversation that does have a database keeps one session, with the
+  transcript's entries folded into it. Both formats and copies across source
+  directories share the conversation ID. Transcript read failures preserve
+  archived messages. Antigravity sources re-parse once on upgrade to pick the
+  transcripts up.
 
 **Improvements**
 
