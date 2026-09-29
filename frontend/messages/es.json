@@ -2400,6 +2400,7 @@
   "analytics_outcome_include_prs_hint": "Consulta GitHub una vez por repositorio, lo que puede tardar minutos.",
   "analytics_outcome_loading": "Leyendo el historial de git...",
   "analytics_outcome_empty": "Sin actividad de git en este periodo.",
+  "analytics_outcome_filters_unsupported": "Quita los filtros de máquina, modelo, finalización, mínimo de mensajes, actividad reciente y hora del día para ver los totales de resultados.",
   "analytics_outcome_partial": "No contabilizado:",
   "analytics_outcome_partial_entry": "{repo} ({op}): {reason}"
 }

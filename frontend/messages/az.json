@@ -2400,6 +2400,7 @@
   "analytics_outcome_include_prs_hint": "Hər depo üçün GitHub-a ayrıca sorğu göndərir, bu bir neçə dəqiqə çəkə bilər.",
   "analytics_outcome_loading": "git tarixçəsi oxunur...",
   "analytics_outcome_empty": "Bu dövrdə git fəaliyyəti yoxdur.",
+  "analytics_outcome_filters_unsupported": "Nəticə cəmlərini görmək üçün maşın, model, bitmə, minimum mesaj sayı, son fəaliyyət və günün vaxtı filtrlərini təmizləyin.",
   "analytics_outcome_partial": "Hesaba alınmayan:",
   "analytics_outcome_partial_entry": "{repo} ({op}): {reason}"
 }

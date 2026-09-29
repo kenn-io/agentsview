@@ -48,7 +48,7 @@
     sessionParamsToPanelDate,
     type PanelDateState,
   } from "../../stores/yokedDates.svelte.js";
-  import { rollingRange } from "../../utils/dates.js";
+  import { parseLocalDate, rollingRange } from "../../utils/dates.js";
   import { exportAnalyticsCSV } from "../../utils/csv-export.js";
   import RefreshControl from "../shared/RefreshControl.svelte";
   import { m } from "../../i18n/index.js";
@@ -353,20 +353,38 @@
   // The outcome totals are read on their own, not through analytics.fetchAll,
   // because the GitHub half of the aggregation shells out once per repository
   // and must never be pulled into the page's normal refresh.
-  const outcomeWindow = $derived({
-    since: analytics.from,
-    until: analytics.to,
-    timezone: analytics.timezone,
-    agent: analytics.agent || undefined,
-    includeProject: analytics.project ? [analytics.project] : undefined,
-    includeOneShot: analytics.includeOneShot,
-    includeAutomated: analytics.includeAutomated,
+  const outcomeFiltersUnsupported = $derived(Boolean(
+    analytics.machine || analytics.model || analytics.termination ||
+    analytics.minUserMessages > 0 || analytics.recentlyActive ||
+    analytics.selectedDow !== null || analytics.selectedHour !== null,
+  ));
+
+  const outcomeWindow = $derived.by(() => {
+    const from = analytics.selectedDate ?? analytics.selectedActivityRange?.from ?? analytics.from;
+    const to = analytics.selectedDate ?? analytics.selectedActivityRange?.to ?? analytics.to;
+    const start = parseLocalDate(from);
+    const end = parseLocalDate(to);
+    if (!start || !end) return null;
+    // Dashboard dates include the last day; stats bounds exclude the end.
+    // Advance by a local calendar day so DST changes keep midnight aligned.
+    end.setDate(end.getDate() + 1);
+    return {
+      since: start.toISOString(),
+      until: end.toISOString(),
+      timezone: analytics.timezone,
+      agent: analytics.agent || undefined,
+      includeProject: analytics.project ? [analytics.project] : undefined,
+      includeOneShot: analytics.includeOneShot,
+      includeAutomated: analytics.includeAutomated,
+    };
   });
 
   $effect(() => {
     const window = outcomeWindow;
+    const unsupported = outcomeFiltersUnsupported;
     untrack(() => {
-      void outcomeTotals.load(window);
+      if (!window || unsupported) outcomeTotals.reset();
+      else void outcomeTotals.load(window);
     });
   });
 
@@ -729,10 +747,12 @@
         <OutcomeTotals
           stats={outcomeTotals.stats}
           loading={outcomeTotals.loading}
+          unavailable={outcomeFiltersUnsupported}
           error={outcomeTotals.error}
           includePullRequests={outcomeTotals.includePullRequests}
-          onIncludePullRequests={() =>
-            void outcomeTotals.loadWithPullRequests(outcomeWindow)}
+          onIncludePullRequests={() => {
+            if (outcomeWindow) void outcomeTotals.loadWithPullRequests(outcomeWindow);
+          }}
         />
       </Card>
     </div>

@@ -6,6 +6,7 @@
   interface Props {
     stats: DbStatsOutcomeStats | null;
     loading: boolean;
+    unavailable?: boolean;
     error: string | null;
     /** True once the caller has asked for the GitHub lookups too. */
     includePullRequests: boolean;
@@ -15,6 +16,7 @@
   let {
     stats,
     loading,
+    unavailable = false,
     error,
     includePullRequests,
     onIncludePullRequests,
@@ -61,7 +63,7 @@
 <div class="outcome-container">
   <div class="outcome-header">
     <h3 class="chart-title">{m.analytics_outcome_title()}</h3>
-    {#if !includePullRequests}
+    {#if !unavailable && !includePullRequests}
       <button
         class="outcome-load-prs"
         title={m.analytics_outcome_include_prs_hint()}
@@ -72,7 +74,9 @@
     {/if}
   </div>
 
-  {#if error}
+  {#if unavailable}
+    <div class="outcome-empty">{m.analytics_outcome_filters_unsupported()}</div>
+  {:else if error}
     <div class="outcome-error">{error}</div>
   {:else if loading && !stats}
     <div class="outcome-loading">{m.analytics_outcome_loading()}</div>

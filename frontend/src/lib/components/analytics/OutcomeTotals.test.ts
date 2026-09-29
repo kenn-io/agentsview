@@ -11,6 +11,7 @@ import type { DbStatsOutcomeStats } from "../../api/generated/index.js";
 async function render(props: {
   stats: DbStatsOutcomeStats | null;
   loading?: boolean;
+  unavailable?: boolean;
   error?: string | null;
   includePullRequests?: boolean;
   onIncludePullRequests?: () => void;
@@ -124,5 +125,17 @@ describe("OutcomeTotals", () => {
     const target = await render({ stats: null });
     expect(target.querySelector(".outcome-empty")).not.toBeNull();
     expect(metric(target, "Commits")).toBe("");
+  });
+
+  it("explains unsupported filters without showing totals or offering a lookup", async () => {
+    const target = await render({
+      unavailable: true,
+      stats: { repos_active: 1, commits: 7, loc_added: 0, loc_removed: 0, files_changed: 1 },
+    });
+    expect(target.textContent).toContain(
+      "Clear machine, model, termination, minimum-message, recent-activity, and time-of-day filters",
+    );
+    expect(metric(target, "Commits")).toBe("");
+    expect(target.querySelector(".outcome-load-prs")).toBeNull();
   });
 });

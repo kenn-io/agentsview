@@ -121,4 +121,26 @@ describe("OutcomeTotalsStore", () => {
 
     expect(store.stats?.commits).toBe(2);
   });
+
+  it("clears previous totals and errors while a new window loads", async () => {
+    let finish!: (response: DbSessionStats) => void;
+    const fetchStats = vi.fn(
+      () =>
+        new Promise<DbSessionStats>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const store = new OutcomeTotalsStore(fetchStats);
+    store.stats = { repos_active: 1, commits: 7, loc_added: 0, loc_removed: 0, files_changed: 1 };
+    store.error = "previous request failed";
+
+    const pending = store.load({ since: "2026-08-02", until: "2026-09-01" });
+
+    expect(store.loading).toBe(true);
+    expect(store.stats).toBeNull();
+    expect(store.error).toBeNull();
+    finish({ generated_at: "2026-09-01T00:00:00Z" } as DbSessionStats);
+    await pending;
+    expect(store.loading).toBe(false);
+  });
 });

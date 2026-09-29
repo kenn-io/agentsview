@@ -2398,6 +2398,7 @@
   "analytics_outcome_include_prs_hint": "Asks GitHub once per repository, which can take minutes.",
   "analytics_outcome_loading": "Reading git history...",
   "analytics_outcome_empty": "No git activity in this window.",
+  "analytics_outcome_filters_unsupported": "Clear machine, model, termination, minimum-message, recent-activity, and time-of-day filters to view outcome totals.",
   "analytics_outcome_partial": "Not counted:",
   "analytics_outcome_partial_entry": "{repo} ({op}): {reason}"
 }

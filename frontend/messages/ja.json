@@ -2386,6 +2386,7 @@
   "analytics_outcome_include_prs_hint": "リポジトリごとに GitHub へ問い合わせるため、数分かかることがあります。",
   "analytics_outcome_loading": "git 履歴を読み込み中...",
   "analytics_outcome_empty": "この期間に git の活動はありません。",
+  "analytics_outcome_filters_unsupported": "成果の合計を表示するには、マシン、モデル、終了状態、最小メッセージ数、最近のアクティビティ、時間帯のフィルターを解除してください。",
   "analytics_outcome_partial": "未集計:",
   "analytics_outcome_partial_entry": "{repo} ({op}): {reason}"
 }

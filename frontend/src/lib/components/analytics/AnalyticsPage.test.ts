@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { analytics } from "../../stores/analytics.svelte.js";
+import { outcomeTotals } from "../../stores/outcomeTotals.svelte.js";
 import { analyticsPageDates } from "../../stores/analyticsPageDates.js";
 import { insights } from "../../stores/insights.svelte.js";
 import { router } from "../../stores/router.svelte.js";
@@ -46,6 +47,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   document.body.innerHTML = "";
   localStorage.clear();
   window.history.replaceState(null, "", "/");
@@ -59,6 +61,13 @@ afterEach(() => {
   analytics.from = "";
   analytics.to = "";
   analytics.selectedDate = null;
+  analytics.selectedActivityRange = null;
+  analytics.machine = "";
+  analytics.model = "";
+  analytics.termination = "";
+  analytics.minUserMessages = 0;
+  analytics.recentlyActive = false;
+  outcomeTotals.reset();
   analytics.selectedDow = null;
   analytics.selectedHour = null;
   sessions.filters.date = "";
@@ -71,10 +80,105 @@ afterEach(() => {
   ui.isMobileViewport = false;
 });
 
+describe("AnalyticsPage outcome window", () => {
+  async function start() {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(analytics, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    const load = vi.spyOn(outcomeTotals, "load").mockResolvedValue();
+    router.route = "sessions";
+    router.isRootPath = false;
+    router.params = { date_from: "2026-03-01", date_to: "2026-03-31" };
+    analytics.from = "2026-03-01";
+    analytics.to = "2026-03-31";
+    component = mount(AnalyticsPage, { target: document.body });
+    await flushEffects();
+    return load;
+  }
+
+  it("uses local days for the range and follows selected days and activity ranges", async () => {
+    vi.stubEnv("TZ", "America/New_York");
+    const load = await start();
+    expect(load).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        since: "2026-03-01T05:00:00.000Z",
+        until: "2026-04-01T04:00:00.000Z",
+      }),
+    );
+
+    analytics.selectedDate = "2026-03-08";
+    await flushEffects();
+    expect(load).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        since: "2026-03-08T05:00:00.000Z",
+        until: "2026-03-09T04:00:00.000Z",
+      }),
+    );
+
+    analytics.selectedDate = null;
+    analytics.selectedActivityRange = { from: "2026-03-09", to: "2026-03-15" };
+    await flushEffects();
+    expect(load).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        since: "2026-03-09T04:00:00.000Z",
+        until: "2026-03-16T04:00:00.000Z",
+      }),
+    );
+
+    analytics.selectedActivityRange = null;
+    await flushEffects();
+    expect(load).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        since: "2026-03-01T05:00:00.000Z",
+        until: "2026-04-01T04:00:00.000Z",
+      }),
+    );
+  });
+
+  it.each([
+    ["machine", "demo-machine", ""],
+    ["model", "demo-model", ""],
+    ["termination", "completed", ""],
+    ["minUserMessages", 2, 0],
+    ["recentlyActive", true, false],
+    ["selectedDow", 0, null],
+    ["selectedHour", 0, null],
+  ] as const)(
+    "withholds totals while %s is active and reloads when cleared",
+    async (key, value, cleared) => {
+      const load = await start();
+      load.mockClear();
+      Object.assign(analytics, { [key]: value });
+      await flushEffects();
+      expect(document.querySelector(".outcome-empty")?.textContent).toContain(
+        "Clear machine, model",
+      );
+      expect(load).not.toHaveBeenCalled();
+
+      Object.assign(analytics, { [key]: cleared });
+      await flushEffects();
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(document.querySelector(".outcome-load-prs")).not.toBeNull();
+    },
+  );
+});
+
 describe("AnalyticsPage initial load", () => {
   async function start() {
     vi.useFakeTimers();
-    vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
     const fetch = vi.spyOn(analytics, "fetchAll").mockResolvedValue();
     vi.spyOn(sessions, "load").mockResolvedValue();
     router.isRootPath = true;
@@ -134,17 +238,20 @@ describe("AnalyticsPage initial load", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
-  it.each([true, false])("unmount cancels pending load and reads with loading=%s", async (loading) => {
-    const fetch = await start();
-    const cancel = vi.spyOn(analytics, "cancelInFlightReads");
-    sessions.loading = loading;
-    await flushEffects();
-    await unmount(component!);
-    component = undefined;
-    await vi.advanceTimersByTimeAsync(2000);
-    expect(fetch).not.toHaveBeenCalled();
-    expect(cancel).toHaveBeenCalledTimes(1);
-  });
+  it.each([true, false])(
+    "unmount cancels pending load and reads with loading=%s",
+    async (loading) => {
+      const fetch = await start();
+      const cancel = vi.spyOn(analytics, "cancelInFlightReads");
+      sessions.loading = loading;
+      await flushEffects();
+      await unmount(component!);
+      component = undefined;
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(fetch).not.toHaveBeenCalled();
+      expect(cancel).toHaveBeenCalledTimes(1);
+    },
+  );
 });
 
 describe("AnalyticsPage sidebar controls", () => {

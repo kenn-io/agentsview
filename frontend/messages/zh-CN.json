@@ -2315,6 +2315,7 @@
   "analytics_outcome_include_prs_hint": "会按仓库逐个查询 GitHub，可能需要几分钟。",
   "analytics_outcome_loading": "正在读取 git 历史...",
   "analytics_outcome_empty": "此时间范围内没有 git 活动。",
+  "analytics_outcome_filters_unsupported": "清除机器、模型、终止状态、最少消息数、近期活动和时段筛选条件，以查看成果总计。",
   "analytics_outcome_partial": "未计入：",
   "analytics_outcome_partial_entry": "{repo}（{op}）：{reason}"
 }

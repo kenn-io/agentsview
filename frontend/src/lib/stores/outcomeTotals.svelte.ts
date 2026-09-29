@@ -64,6 +64,8 @@ export class OutcomeTotalsStore {
 
   private async read(window: OutcomeWindow, withPullRequests: boolean): Promise<void> {
     const seq = ++this.requestSeq;
+    this.stats = null;
+    this.error = null;
     this.loading = true;
     this.includePullRequests = withPullRequests;
     try {

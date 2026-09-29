@@ -2315,6 +2315,7 @@
   "analytics_outcome_include_prs_hint": "會逐一向 GitHub 查詢每個儲存庫，可能需要數分鐘。",
   "analytics_outcome_loading": "正在讀取 git 歷史...",
   "analytics_outcome_empty": "此時間範圍內沒有 git 活動。",
+  "analytics_outcome_filters_unsupported": "清除機器、模型、終止狀態、最少訊息數、近期活動和時段篩選條件，以查看成果總計。",
   "analytics_outcome_partial": "未計入：",
   "analytics_outcome_partial_entry": "{repo}（{op}）：{reason}"
 }
