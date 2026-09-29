@@ -415,7 +415,7 @@ func reconcileConversationRangeTx(tx transactionQueries, sessionID string, msgs 
 		return err
 	}
 	if active {
-		if err := projectConversationMessagesTx(tx, sessionID, msgs, replace, usageOnly); err != nil {
+		if err := projectConversationMessagesTx(tx, sessionID, msgs, replace, usageOnly, fromOrdinal); err != nil {
 			return err
 		}
 	}
@@ -432,8 +432,9 @@ func reconcileConversationRangeTx(tx transactionQueries, sessionID string, msgs 
 	return nil
 }
 
-// projectConversationMessagesTx writes the message rows of an active archive.
-func projectConversationMessagesTx(tx transactionQueries, sessionID string, msgs []Message, replace, usageOnly bool) error {
+// projectConversationMessagesTx writes the message rows of an active archive
+// at or after fromOrdinal.
+func projectConversationMessagesTx(tx transactionQueries, sessionID string, msgs []Message, replace, usageOnly bool, fromOrdinal int) error {
 	var incoming []conversationRow
 	counts := map[string]int{}
 	for _, msg := range msgs {
