@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -117,14 +119,26 @@ type preparedUsageState struct {
 	// and priced under the catalog digest the state's pricingDigest names,
 	// in chPreparedUsageDeltaColumns order.
 	deltaRows [][]any
+	// revisions maps every session with a snapshot to its current snapshot
+	// revision. A ready state's rows for a session are derived from that
+	// snapshot alone, whether stored or in the delta. A session of a host
+	// that is not ready maps to "raw:" and its push version instead.
+	// Shared; not modified.
+	revisions map[string]string
+	// raw lists the sessions of the hosts that are not ready: some of
+	// their sessions lack a current snapshot. Reads take these sessions
+	// from the raw message and event tables and every other session from
+	// the prepared rows, so one host that has not published snapshots
+	// does not turn prepared reads off for the others.
+	raw []string
 }
 
 // replaced lists the sessions whose stored prepared rows a read skips: the
-// stale ones, and every one the delta supplies. A refresh that lands after
+// stale ones, the raw hosts' ones, and every one the delta supplies. A refresh that lands after
 // the state was taken may already hold a changed session's rows, and the
 // delta supplies them too.
 func (st preparedUsageState) replaced() []string {
-	ids := slices.Concat(st.changed, st.stale)
+	ids := slices.Concat(st.changed, st.stale, st.raw)
 	slices.Sort(ids)
 	return slices.Compact(ids)
 }
@@ -147,6 +161,8 @@ func (s *Store) preparedUsageState(ctx context.Context) (preparedUsageState, err
 	// complete snapshot. A table prepared by another query may lack the
 	// stamp columns, so it is checked before they are read.
 	if filled == 0 || comment != chPreparedUsageComment() {
+		s.logUsageReadiness(fmt.Sprintf("not ready: snapshots published=%v, prepared table from this binary=%v",
+			filled != 0, comment == chPreparedUsageComment()))
 		return preparedUsageState{}, nil
 	}
 	var stored usageStamp
@@ -154,6 +170,7 @@ func (s *Store) preparedUsageState(ctx context.Context) (preparedUsageState, err
 		FROM prepared_usage LIMIT 1 SETTINGS final=0`).Scan(
 		&stored.snapshotCount, &stored.snapshotHash, &stored.pricingDigest, &stored.priceCount)
 	if errors.Is(err, sql.ErrNoRows) {
+		s.logUsageReadiness("not ready: prepared table is empty")
 		return preparedUsageState{}, nil
 	}
 	if err != nil {
@@ -187,12 +204,26 @@ func (s *Store) preparedUsageState(ctx context.Context) (preparedUsageState, err
 		s.coverageCache.fingerprint, s.coverageCache.stamp, s.coverageCache.live = fingerprint, stamp, live
 		s.coverageCache.mu.Unlock()
 	}
+	switch {
+	case live.missing == 0:
+		s.logUsageReadiness("ready (" + describeHosts(live.hosts) + ")")
+	case len(live.raw) > 0:
+		s.logUsageReadiness(fmt.Sprintf("ready except %d sessions of hosts without complete snapshots, read raw (%s)",
+			len(live.raw), describeHosts(live.hosts)))
+	default:
+		s.logUsageReadiness(fmt.Sprintf("not ready: %d sessions lack a current usage snapshot (%s)",
+			live.missing, describeHosts(live.hosts)))
+	}
 	state := preparedUsageState{
-		ready:     live.missing == 0,
+		// A host is ready once every one of its sessions has a current
+		// snapshot. The others' sessions are read raw.
+		ready:     live.missing == 0 || len(live.raw) > 0,
 		stamp:     stamp,
 		changed:   live.changed,
 		stale:     live.stale,
 		deltaRows: live.deltaRows,
+		revisions: live.revisions,
+		raw:       live.raw,
 	}
 	// The stored records and the delta's must be under the same digest for
 	// a read to take either in place of the join.
@@ -291,7 +322,7 @@ func (s *Store) preparedCoveredSnapshots(ctx context.Context, stamp string) (map
 // array sizes come from the size subcolumns, since under FINAL length()
 // reads the arrays.
 func (s *Store) compareUsageCoverage(ctx context.Context, covered map[usageSnapshotKey]bool, live *usageCoverage) error {
-	rows, err := s.queryContext(ctx, `SELECT 0, id, push_version, '', false FROM sessions
+	rows, err := s.queryContext(ctx, `SELECT 0, id, push_version, machine, false FROM sessions
 		UNION ALL
 		SELECT 1, id, push_version, toString(revision),
 			usage_messages.size0 != 0 OR usage_events.size0 != 0 FROM usage_session_snapshots`)
@@ -300,8 +331,10 @@ func (s *Store) compareUsageCoverage(ctx context.Context, covered map[usageSnaps
 	}
 	defer rows.Close()
 	sessions := map[string]uint64{}
+	machines := map[string]string{}
 	snapshots := map[string]uint64{}
 	current := map[usageSnapshotKey]bool{}
+	live.revisions = map[string]string{}
 	for rows.Next() {
 		var table uint8
 		var id, revision string
@@ -311,10 +344,14 @@ func (s *Store) compareUsageCoverage(ctx context.Context, covered map[usageSnaps
 			return fmt.Errorf("scanning usage coverage: %w", err)
 		}
 		if table == 0 {
+			// The fourth column is the session's machine here and the
+			// snapshot's revision below.
 			sessions[id] = version
+			machines[id] = revision
 			continue
 		}
 		snapshots[id] = version
+		live.revisions[id] = revision
 		key := usageSnapshotKey{id: id, revision: revision}
 		current[key] = true
 		if hasUsage && !covered[key] {
@@ -325,10 +362,46 @@ func (s *Store) compareUsageCoverage(ctx context.Context, covered map[usageSnaps
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("iterating usage coverage: %w", err)
 	}
+	live.hosts = map[string]hostCoverage{}
 	for id, version := range sessions {
-		if snapshot, ok := snapshots[id]; !ok || snapshot < version {
+		host := live.hosts[machines[id]]
+		host.sessions++
+		if snapshot, ok := snapshots[id]; !ok {
+			host.noSnapshot++
+			live.missing++
+		} else if snapshot < version {
+			host.olderSnapshot++
 			live.missing++
 		}
+		live.hosts[machines[id]] = host
+	}
+	anyReady := false
+	for _, host := range live.hosts {
+		if !host.stale() {
+			anyReady = true
+			break
+		}
+	}
+	if live.missing > 0 && anyReady {
+		raw := map[string]bool{}
+		for id, version := range sessions {
+			if live.hosts[machines[id]].stale() {
+				raw[id] = true
+				live.raw = append(live.raw, id)
+				live.revisions[id] = fmt.Sprintf("raw:%d", version)
+			}
+		}
+		slices.Sort(live.raw)
+		// The raw hosts' sessions take no prepared rows, so none are
+		// prepared for them at read time either.
+		kept := live.changedKeys[:0]
+		for _, key := range live.changedKeys {
+			if !raw[key.id] {
+				kept = append(kept, key)
+			}
+		}
+		live.changedKeys = kept
+		live.changed = slices.DeleteFunc(live.changed, func(id string) bool { return raw[id] })
 	}
 	for key := range covered {
 		if !current[key] {
@@ -550,4 +623,44 @@ type usageCoverage struct {
 	changedKeys []usageSnapshotKey
 	deltaRows   [][]any
 	deltaDigest string
+	// revisions maps each session to its current snapshot revision.
+	revisions map[string]string
+	// hosts counts each machine's sessions and those without a current
+	// snapshot.
+	hosts map[string]hostCoverage
+	// raw lists the sessions of the hosts that are not ready, when at least
+	// one host is.
+	raw []string
+}
+
+// hostCoverage counts one machine's sessions by snapshot state.
+type hostCoverage struct {
+	sessions, noSnapshot, olderSnapshot int
+}
+
+// stale reports whether some of the machine's sessions lack a current
+// snapshot.
+func (h hostCoverage) stale() bool { return h.noSnapshot+h.olderSnapshot > 0 }
+
+// describeHosts renders each machine's snapshot coverage for the log.
+func describeHosts(hosts map[string]hostCoverage) string {
+	var parts []string
+	for _, machine := range slices.Sorted(maps.Keys(hosts)) {
+		h := hosts[machine]
+		parts = append(parts, fmt.Sprintf("%s: %d sessions, %d without a snapshot, %d with an older snapshot",
+			machine, h.sessions, h.noSnapshot, h.olderSnapshot))
+	}
+	return strings.Join(parts, "; ")
+}
+
+// logUsageReadiness logs whether prepared usage answers reads, and which
+// hosts' sessions are read raw instead, once per change.
+func (s *Store) logUsageReadiness(reason string) {
+	s.readinessLog.Lock()
+	defer s.readinessLog.Unlock()
+	if s.readinessLog.last == reason {
+		return
+	}
+	s.readinessLog.last = reason
+	log.Printf("clickhouse: prepared usage %s", reason)
 }

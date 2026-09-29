@@ -211,14 +211,31 @@ func chPreparedUsageKeyedSQL(sessionWhere string) string {
 		FROM (` + selection + `)`
 }
 
-// chPreparedUsageRowsSQL renders prepared rows from the complete snapshots
-// that sessionWhere selects, joined with the price records priceRowsSQL
-// selects. Besides the normalized facts a row stores the snapshot revision
-// it was derived from, the price model, the price key, and the price record,
-// so range reads skip the per-request join against every price record. A
-// stamped query, the refresh, also stores the snapshot set, the pricing
-// digest, and the price count it read.
-func chPreparedUsageRowsSQL(sessionWhere, priceRowsSQL string, stamped bool) string {
+// chRawHostUsageRowsSQL renders prepared rows, as a refresh would store
+// them, from the raw message and event tables for the sessions in the
+// usage_raw_host_sessions external table: the sessions of hosts that have
+// not published complete snapshots. Messages follow the raw reads' version
+// rule, and the rows join the price records under the digest the one query
+// parameter names. A row derived from no snapshot has revision zero.
+func chRawHostUsageRowsSQL() string {
+	const sessions = " AND s.id IN (SELECT id FROM usage_raw_host_sessions)"
+	selection := clickUsageNormalizedQueryFrom("",
+		chUsageStoredMessageEligibility+sessions, chUsageEventEligibility+sessions,
+		"usage_messages m JOIN sessions s ON s.id = m.session_id",
+		"usage_events ue JOIN sessions s ON s.id = ue.session_id", chUsageMessageCurrent, "toUInt128(0)")
+	keyed := `SELECT *, ` + chPriceModelCaseSQL() + ` AS price_model, ` + chUsagePriceKeySQL + ` AS price_key
+		FROM (` + selection + `)`
+	// Exact index filtering also reads overlapping newer parts before FINAL,
+	// as the raw activity read does, so a range filter pushed into these
+	// tables cannot bring back an older version of a row.
+	return chUsageRowsFromKeyedSQL(keyed, chUsagePriceRowsSQL()+" WHERE pricing_digest = ?", false) +
+		" SETTINGS optimize_move_to_prewhere_if_final = 0, use_skip_indexes_if_final_exact_mode = 1"
+}
+
+// chUsageRowsFromKeyedSQL renders prepared rows from keyed normalized rows,
+// joined with the price records priceRowsSQL selects; see
+// chPreparedUsageQuery.
+func chUsageRowsFromKeyedSQL(keyedSQL, priceRowsSQL string, stamped bool) string {
 	stored := make([]string, 0, len(chUsageStoredPriceColumns))
 	for _, column := range chUsageStoredPriceColumns {
 		stored = append(stored, "p."+column.joined+" AS "+column.stored)
@@ -235,14 +252,21 @@ func chPreparedUsageRowsSQL(sessionWhere, priceRowsSQL string, stamped bool) str
 	}
 	return `SELECT n.*, ifNull(n.ts, toDateTime64(0,6,'UTC')) AS ` + chPreparedUsageKeyColumn + `,
 		` + stamps + strings.Join(stored, ", ") + `
-	FROM (` + chPreparedUsageKeyedSQL(sessionWhere) + `) n
+	FROM (` + keyedSQL + `) n
 	LEFT JOIN (` + priceRowsSQL + `) p
 		ON p.p_price_key = n.price_key`
 }
 
 // chPreparedUsageQuery is the refresh query over every complete snapshot.
+// It renders prepared rows joined with the price records of the current
+// pricing digest. Besides the normalized facts a row stores the snapshot
+// revision it was derived from, the price model, the price key, and the
+// price record, so range reads skip the per-request join against every
+// price record. It also stores the snapshot set, the pricing digest, and
+// the price count it read.
 func chPreparedUsageQuery() string {
-	return chPreparedUsageRowsSQL("", chUsagePriceRowsSQL()+" WHERE pricing_digest = "+chPreparedUsagePricingDigestSQL, true)
+	return chUsageRowsFromKeyedSQL(chPreparedUsageKeyedSQL(""),
+		chUsagePriceRowsSQL()+" WHERE pricing_digest = "+chPreparedUsagePricingDigestSQL, true)
 }
 
 // chUsageChangedSessionsWhere selects the snapshots of the sessions in the

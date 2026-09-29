@@ -136,6 +136,11 @@ func (Backend) OpenServeStore(
 	if err != nil {
 		return nil, err
 	}
+	// The kept reports only save work; without them every report is built
+	// on request, so serve starts anyway.
+	if err := store.openActivityReportDisk(target(t)); err != nil {
+		log.Printf("clickhouse: keeping activity reports in memory only: %v", err)
+	}
 	return store, nil
 }
 

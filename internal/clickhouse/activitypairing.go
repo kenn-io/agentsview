@@ -5,9 +5,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"slices"
 	"sync"
 	"time"
+	"unique"
 
 	chdriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/ext"
@@ -15,16 +17,36 @@ import (
 	"go.kenn.io/agentsview/internal/activity"
 )
 
+// clickActivityMessage is one message's pairing input. Role and model
+// repeat across messages, so they are interned handles. Timestamps are
+// kept as microseconds since the epoch, the precision of the UTC
+// DateTime64(6) columns they are read from. counted marks a message the
+// Activity message counts include: neither a system entry nor a tool result.
 type clickActivityMessage struct {
-	ordinal            int
-	ts                 sql.NullTime
-	role, model, prior string
+	ordinal     int
+	us          int64
+	role, model unique.Handle[string]
+	counted     bool
 }
+
+// noTimestamp marks a message without a timestamp.
+const noTimestamp = math.MinInt64
+
+var (
+	assistantRole = unique.Make("assistant")
+	noModel       = unique.Make("")
+)
+
+func (m clickActivityMessage) stamped() bool { return m.us != noTimestamp }
+
+func (m clickActivityMessage) at() time.Time { return time.UnixMicro(m.us).UTC() }
 
 type clickActivityTerminal struct {
 	ordinal, callIndex, eventIndex int
-	ts                             time.Time
+	us                             int64
 }
+
+func (e clickActivityTerminal) at() time.Time { return time.UnixMicro(e.us).UTC() }
 
 type clickOrderedCandidate struct {
 	activity.IntervalCandidate
@@ -46,9 +68,15 @@ type activitySessionMemo struct {
 	mu      sync.Mutex
 	entries map[string]activitySessionInputs
 	order   []string
+	// rows counts the messages and events of the kept entries.
+	rows int
 }
 
-const activitySessionMemoLimit = 8000
+// activitySessionMemoRows bounds the kept messages and events, 32 bytes
+// each. A report over every session must find them all kept: a bound on
+// sessions below the number a report reads evicts each session before
+// the next report reaches it, so every report reads them all again.
+const activitySessionMemoRows = 2_000_000
 
 func (m *activitySessionMemo) lookup(id string, pushVersion uint64) (activitySessionInputs, bool) {
 	m.mu.Lock()
@@ -66,25 +94,43 @@ func (m *activitySessionMemo) store(id string, entry activitySessionInputs) {
 	if m.entries == nil {
 		m.entries = map[string]activitySessionInputs{}
 	}
-	if _, ok := m.entries[id]; !ok {
+	if old, ok := m.entries[id]; ok {
+		m.rows -= len(old.messages) + len(old.events)
+	} else {
 		m.order = append(m.order, id)
-		if len(m.order) > activitySessionMemoLimit {
-			delete(m.entries, m.order[0])
-			m.order = m.order[1:]
-		}
 	}
 	m.entries[id] = entry
+	m.rows += len(entry.messages) + len(entry.events)
+	for m.rows > activitySessionMemoRows && len(m.order) > 1 {
+		oldest := m.entries[m.order[0]]
+		m.rows -= len(oldest.messages) + len(oldest.events)
+		delete(m.entries, m.order[0])
+		m.order = m.order[1:]
+	}
 }
 
 // activityReportPairs pairs tool events with the messages that follow them
-// for the candidate sessions. versions gives each candidate's push version;
-// sessions memoized at that version are not read again. Without versions
-// every candidate is read through the candidates set.
+// for the candidate sessions, and returns the inputs it paired so the report
+// can count messages without reading them again.
 func (s *Store) activityReportPairs(
 	ctx context.Context, candidates chSessionSet, ids []string, versions map[string]uint64, q activity.Query,
-) ([]activity.IntervalCandidate, []activity.IntervalCandidate, error) {
+) ([]activity.IntervalCandidate, []activity.IntervalCandidate, map[string]activitySessionInputs, error) {
+	inputs, err := s.activityReportInputs(ctx, candidates, ids, versions)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	lower := q.RangeStart.Add(-time.Duration(q.GapCapSeconds) * time.Second)
-	end := q.EffectiveEnd
+	paired, terminal, err := s.pairActivitySessions(ctx, inputs, ids, lower, q.EffectiveEnd, q)
+	return paired, terminal, inputs, err
+}
+
+// activityReportInputs returns the pairing inputs of the candidate
+// sessions. versions gives each candidate's push version; sessions memoized
+// at that version are not read again. Without versions every candidate is
+// read through the candidates set.
+func (s *Store) activityReportInputs(
+	ctx context.Context, candidates chSessionSet, ids []string, versions map[string]uint64,
+) (map[string]activitySessionInputs, error) {
 	inputs := make(map[string]activitySessionInputs, len(ids))
 	var uncached []string
 	for _, id := range ids {
@@ -98,15 +144,15 @@ func (s *Store) activityReportPairs(
 	}
 	if versions != nil {
 		if len(uncached) == 0 {
-			return s.pairActivitySessions(ctx, inputs, ids, lower, end, q)
+			return inputs, nil
 		}
 		table, err := ext.NewTable("activity_uncached_ids", ext.Column("id", "String"))
 		if err != nil {
-			return nil, nil, fmt.Errorf("creating activity pairing table: %w", err)
+			return nil, fmt.Errorf("creating activity pairing table: %w", err)
 		}
 		for _, id := range uncached {
 			if err := table.Append(id); err != nil {
-				return nil, nil, fmt.Errorf("adding activity pairing session: %w", err)
+				return nil, fmt.Errorf("adding activity pairing session: %w", err)
 			}
 		}
 		ctx = chdriver.Context(ctx, chdriver.WithExternalTable(table))
@@ -114,17 +160,20 @@ func (s *Store) activityReportPairs(
 	}
 	read, err := s.readActivitySessionInputs(ctx, candidates)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	for _, id := range uncached {
 		entry := read[id]
 		if version, ok := versions[id]; ok {
+			// Keep exact-length copies: the read's slices grew by doubling.
 			entry.pushVersion = version
+			entry.messages = slices.Clone(entry.messages)
+			entry.events = slices.Clone(entry.events)
 			s.activitySessions.store(id, entry)
 		}
 		inputs[id] = entry
 	}
-	return s.pairActivitySessions(ctx, inputs, ids, lower, end, q)
+	return inputs, nil
 }
 
 // readActivitySessionInputs reads every message and every timestamped
@@ -133,20 +182,37 @@ func (s *Store) readActivitySessionInputs(ctx context.Context, candidates chSess
 	s.activityInputQueries.Add(1)
 	ctes := "WITH candidate_sessions AS (" + candidates.body + ") "
 	const settings = " SETTINGS optimize_move_to_prewhere_if_final=1"
-	rows, err := s.queryContext(ctx, ctes+`SELECT session_id,ordinal,timestamp,role,model FROM messages
+	rows, err := s.queryContext(ctx, ctes+`SELECT session_id,ordinal,timestamp,role,model,
+		toBool(is_system = false AND COALESCE(source_subtype, '') <> 'tool_result') FROM messages
 		WHERE session_id IN (SELECT id FROM candidate_sessions) ORDER BY session_id,ordinal`+settings, candidates.args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying pairing messages: %w", err)
 	}
 	defer rows.Close()
 	read := map[string]activitySessionInputs{}
+	// Roles and models take few values; look each up in the global table once.
+	handles := map[string]unique.Handle[string]{}
+	handle := func(v string) unique.Handle[string] {
+		h, ok := handles[v]
+		if !ok {
+			h = unique.Make(v)
+			handles[v] = h
+		}
+		return h
+	}
 	for rows.Next() {
-		var id string
-		var m clickActivityMessage
-		if err := rows.Scan(&id, &m.ordinal, &m.ts, &m.role, &m.model); err != nil {
+		var id, role, model string
+		var ordinal int
+		var ts sql.NullTime
+		var counted bool
+		if err := rows.Scan(&id, &ordinal, &ts, &role, &model, &counted); err != nil {
 			return nil, fmt.Errorf("scanning pairing message: %w", err)
 		}
 		entry := read[id]
+		m := clickActivityMessage{ordinal: ordinal, us: noTimestamp, role: handle(role), model: handle(model), counted: counted}
+		if ts.Valid {
+			m.us = ts.Time.UnixMicro()
+		}
 		entry.messages = append(entry.messages, m)
 		read[id] = entry
 	}
@@ -166,9 +232,11 @@ func (s *Store) readActivitySessionInputs(ctx context.Context, candidates chSess
 	for rows.Next() {
 		var id string
 		var e clickActivityTerminal
-		if err := rows.Scan(&id, &e.ordinal, &e.callIndex, &e.eventIndex, &e.ts); err != nil {
+		var ts time.Time
+		if err := rows.Scan(&id, &e.ordinal, &e.callIndex, &e.eventIndex, &ts); err != nil {
 			return nil, fmt.Errorf("scanning pairing tool event: %w", err)
 		}
+		e.us = ts.UnixMicro()
 		entry := read[id]
 		entry.events = append(entry.events, e)
 		read[id] = entry
@@ -181,15 +249,28 @@ func (s *Store) readActivitySessionInputs(ctx context.Context, candidates chSess
 
 // pairActivitySessions runs the pairing over the sessions' inputs. Events
 // before lower are left out here rather than by the read, so the inputs
-// stay query-independent.
+// stay query-independent. The memoized inputs are shared and only read.
 func (s *Store) pairActivitySessions(
 	ctx context.Context, inputs map[string]activitySessionInputs, ids []string, lower, end time.Time, q activity.Query,
 ) ([]activity.IntervalCandidate, []activity.IntervalCandidate, error) {
 	// A DateTime64(6) comparison in the read saw the bound at microseconds.
 	lower = lower.Truncate(time.Microsecond)
-	var transcript []activity.ActivityEvent
-	messages := make(map[string][]clickActivityMessage, len(inputs))
-	events := make(map[string][]clickActivityTerminal, len(inputs))
+	gapCap := time.Duration(q.GapCapSeconds) * time.Second
+	pairLower := q.RangeStart.Add(-gapCap)
+	// A message pair starts at a stamped message inside the pairing window,
+	// so their count bounds the pairs; reserving it avoids regrowing.
+	pairs := 0
+	for _, id := range ids {
+		for _, m := range inputs[id].messages {
+			if m.stamped() && !m.at().Before(pairLower) && m.at().Before(q.EffectiveEnd) {
+				pairs++
+			}
+		}
+	}
+	transcript := make([]activity.IntervalCandidate, 0, pairs)
+	var out []clickOrderedCandidate
+	var tree []int
+	var priorAt []int
 	for _, id := range ids {
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
@@ -198,43 +279,30 @@ func (s *Store) pairActivitySessions(
 		if !ok {
 			continue
 		}
-		for _, m := range entry.messages {
-			if m.ts.Valid {
-				transcript = append(transcript, activity.ActivityEvent{SessionID: id, Ordinal: m.ordinal, Timestamp: m.ts.Time.UTC().Format(time.RFC3339Nano), Role: m.role, Model: m.model})
+		ms := entry.messages
+		transcript = appendMessagePairs(transcript, id, ms, pairLower, q.EffectiveEnd)
+		first := len(entry.events)
+		for i, e := range entry.events {
+			if !e.at().Before(lower) {
+				first = i
+				break
 			}
 		}
-		var es []clickActivityTerminal
-		for _, e := range entry.events {
-			if !e.ts.Before(lower) {
-				es = append(es, e)
-			}
-		}
+		es := entry.events[first:]
 		if len(es) == 0 {
 			continue
 		}
-		// The pairing annotates messages in place; work on a copy so the
-		// memoized rows stay shared and unchanged.
-		messages[id] = slices.Clone(entry.messages)
-		events[id] = es
-	}
-	var out []clickOrderedCandidate
-	for id, es := range events {
-		if err := ctx.Err(); err != nil {
-			return nil, nil, err
-		}
-		ms := messages[id]
-		if ms == nil {
-			// A session can carry tool events without stamped messages.
-			ms = []clickActivityMessage{}
-		}
-		prior := "unknown"
+		// priorAt[i] is the latest assistant message with a model at or
+		// before message i, or -1.
+		priorAt = slices.Grow(priorAt[:0], len(ms))[:len(ms)]
+		prior := -1
 		lastStamped := -1
 		for i := range ms {
-			if ms[i].role == "assistant" && ms[i].model != "" {
-				prior = ms[i].model
+			if ms[i].role == assistantRole && ms[i].model != noModel {
+				prior = i
 			}
-			ms[i].prior = prior
-			if ms[i].ts.Valid {
+			priorAt[i] = prior
+			if ms[i].stamped() {
 				lastStamped = i
 			}
 		}
@@ -242,48 +310,52 @@ func (s *Store) pairActivitySessions(
 		// left first to find the lowest eligible ordinal, even for clock reversals.
 		// This takes linear memory and logarithmic work per tool event instead
 		// of comparing every tool event with every message in its session.
-		tree := slices.Repeat([]int{-1}, max(1, 4*len(ms)))
+		size := max(1, 4*len(ms))
+		tree = slices.Grow(tree[:0], size)[:size]
+		for i := range tree {
+			tree[i] = -1
+		}
 		var build func(int, int, int) int
 		build = func(node, lo, hi int) int {
 			if lo == hi {
 				return -1
 			}
 			if hi-lo == 1 {
-				if ms[lo].ts.Valid {
+				if ms[lo].stamped() {
 					tree[node] = lo
 				}
 				return tree[node]
 			}
 			mid := (lo + hi) / 2
 			a, b := build(node*2, lo, mid), build(node*2+1, mid, hi)
-			if a == -1 || (b != -1 && ms[b].ts.Time.After(ms[a].ts.Time)) {
+			if a == -1 || (b != -1 && ms[b].us > ms[a].us) {
 				a = b
 			}
 			tree[node] = a
 			return a
 		}
 		build(1, 0, len(ms))
-		var next func(int, int, int, int, time.Time) int
-		next = func(node, lo, hi, start int, ts time.Time) int {
-			if lo == hi || hi <= start || tree[node] == -1 || !ms[tree[node]].ts.Time.After(ts) {
+		var next func(int, int, int, int, int64) int
+		next = func(node, lo, hi, start int, us int64) int {
+			if lo == hi || hi <= start || tree[node] == -1 || ms[tree[node]].us <= us {
 				return -1
 			}
 			if hi-lo == 1 {
 				return lo
 			}
 			mid := (lo + hi) / 2
-			if i := next(node*2, lo, mid, start, ts); i != -1 {
+			if i := next(node*2, lo, mid, start, us); i != -1 {
 				return i
 			}
-			return next(node*2+1, mid, hi, start, ts)
+			return next(node*2+1, mid, hi, start, us)
 		}
 		appendCandidate := func(c activity.IntervalCandidate, e clickActivityTerminal, start int) {
 			if !c.Start.Before(end) {
 				return
 			}
 			c.PriorModel = "unknown"
-			if start > 0 {
-				c.PriorModel = ms[start-1].prior
+			if start > 0 && priorAt[start-1] != -1 {
+				c.PriorModel = ms[priorAt[start-1]].model.Value()
 			}
 			out = append(out, clickOrderedCandidate{c, e.callIndex, e.eventIndex})
 		}
@@ -292,12 +364,12 @@ func (s *Store) pairActivitySessions(
 			if start < len(ms) && ms[start].ordinal == e.ordinal {
 				start++
 			}
-			j := next(1, 0, len(ms), start, e.ts)
-			c := activity.IntervalCandidate{SessionID: id, StartOrdinal: e.ordinal, Start: e.ts}
-			if i+1 < len(es) && (j == -1 || es[i+1].ts.Before(ms[j].ts.Time)) {
-				c.EndOrdinal, c.End, c.ClosingRole = es[i+1].ordinal, es[i+1].ts, "tool"
+			j := next(1, 0, len(ms), start, e.us)
+			c := activity.IntervalCandidate{SessionID: id, StartOrdinal: e.ordinal, Start: e.at()}
+			if i+1 < len(es) && (j == -1 || es[i+1].us < ms[j].us) {
+				c.EndOrdinal, c.End, c.ClosingRole = es[i+1].ordinal, es[i+1].at(), "tool"
 			} else if j != -1 {
-				c.EndOrdinal, c.End, c.ClosingRole, c.ClosingModel = ms[j].ordinal, ms[j].ts.Time, ms[j].role, ms[j].model
+				c.EndOrdinal, c.End, c.ClosingRole, c.ClosingModel = ms[j].ordinal, ms[j].at(), ms[j].role.Value(), ms[j].model.Value()
 			} else {
 				continue
 			}
@@ -306,8 +378,8 @@ func (s *Store) pairActivitySessions(
 		if lastStamped != -1 {
 			m := ms[lastStamped]
 			for _, e := range es {
-				if e.ts.After(m.ts.Time) {
-					appendCandidate(activity.IntervalCandidate{SessionID: id, StartOrdinal: m.ordinal, EndOrdinal: m.ordinal, Start: m.ts.Time, End: e.ts, ClosingRole: "tool"}, e, lastStamped+1)
+				if e.us > m.us {
+					appendCandidate(activity.IntervalCandidate{SessionID: id, StartOrdinal: m.ordinal, EndOrdinal: m.ordinal, Start: m.at(), End: e.at(), ClosingRole: "tool"}, e, lastStamped+1)
 					break
 				}
 			}
@@ -325,5 +397,54 @@ func (s *Store) pairActivitySessions(
 	for i, c := range out {
 		result[i] = c.IntervalCandidate
 	}
-	return activity.PairActivityEvents(transcript, q.RangeStart, q.EffectiveEnd, time.Duration(q.GapCapSeconds)*time.Second), result, nil
+	if len(transcript) == 0 {
+		// activity.PairActivityEvents returns nil for no pairs.
+		transcript = nil
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	slices.SortFunc(transcript, func(a, b activity.IntervalCandidate) int {
+		return cmp.Or(a.Start.Compare(b.Start), cmp.Compare(a.SessionID, b.SessionID),
+			cmp.Compare(a.StartOrdinal, b.StartOrdinal))
+	})
+	return transcript, result, nil
+}
+
+// appendMessagePairs pairs each stamped message with the next stamped one
+// in ordinal order, the way activity.PairActivityEvents pairs a session's
+// transcript, without rendering and reparsing every timestamp.
+func appendMessagePairs(
+	out []activity.IntervalCandidate, id string, ms []clickActivityMessage, lower, calculationEnd time.Time,
+) []activity.IntervalCandidate {
+	lastModel := "unknown"
+	previous := -1
+	for i := range ms {
+		// PairActivityEvents keeps only timestamps that render as RFC 3339.
+		if !ms[i].stamped() || ms[i].at().Year() < 0 || ms[i].at().Year() > 9999 {
+			continue
+		}
+		if previous == -1 {
+			previous = i
+			continue
+		}
+		prev, cur := ms[previous].at(), ms[i].at()
+		if !prev.Before(lower) && prev.Before(calculationEnd) {
+			out = append(out, activity.IntervalCandidate{
+				SessionID:    id,
+				StartOrdinal: ms[previous].ordinal,
+				EndOrdinal:   ms[i].ordinal,
+				Start:        prev,
+				End:          cur,
+				ClosingRole:  ms[i].role.Value(),
+				ClosingModel: ms[i].model.Value(),
+				PriorModel:   lastModel,
+			})
+		}
+		if cur.After(prev) && ms[i].role == assistantRole && ms[i].model != noModel {
+			lastModel = ms[i].model.Value()
+		}
+		previous = i
+	}
+	return out
 }

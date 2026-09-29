@@ -247,18 +247,34 @@ snapshot, reads use raw rows. When the stored price copies no longer match the
 price records, for example after the records were cleared, reads keep the
 prepared rows and price them through the per-request join.
 
-**Kept reads.** Serve keeps the results of recent reads in memory so a repeat
-request between pushes reads no rows from ClickHouse; it still runs the small
-metadata queries that check whether its inputs changed. Each kept read has one
-slot per selection (filter, range, and similar inputs), and its key names the
-rows it read: the prepared usage stamp and the parts of the small tables it
-joins, the candidate sessions and their push versions, or the parts of the
-tables it scanned. A push that changes those replaces the slot; a push that does
-not leaves it in place. Usage reads filtered by `active`, `stale`, or `unclean`
-termination compare session times with the current time, so their rows are never
-kept. Kept reads include usage rows, analytics session listings, Activity
-pairing inputs per session version, candidate listings, and the whole report of
+## Kept reads
+
+Serve keeps the results of recent reads in memory so a repeat request between
+pushes reads no rows from ClickHouse; it still runs the small metadata queries
+that check whether its inputs changed. Each kept read has one slot per selection
+(filter, range, and similar inputs), and its key names the rows it read: the
+prepared usage stamp and the parts of the small tables it joins, the candidate
+sessions and their push versions, or the parts of the tables it scanned. A push
+that changes those replaces the slot; a push that does not leaves it in place.
+Usage reads filtered by `active`, `stale`, or `unclean` termination compare
+session times with the current time, so their rows are never kept. Kept reads
+include usage rows, analytics session listings, Activity pairing inputs per
+session version, candidate listings, project label maps, and the whole report of
 an ended range.
+
+Nothing rebuilds kept reads in the background. The first request after a push
+that changes a read's rows pays for that read.
+
+**Reports on disk.** When a client opens an ended day, its report is written to
+the report cache described in
+[ClickHouse sync](../clickhouse-sync.md#agentsview-clickhouse-serve), one file
+per selection and one directory per mirror. Nothing prepares days ahead of time,
+so a day no one opens costs no disk. A file names the binary that wrote it and
+the report's key, so a new build or a change to that day's rows rebuilds it.
+Every open, whether served from memory or from the file, refreshes the file's
+modification time. At startup and about once a day serve removes reports no one
+has opened for 30 days, and temporary files that interrupted writes left more
+than an hour ago; there is no other size or count limit.
 
 ## Tradeoffs
 

@@ -17,6 +17,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -58,24 +59,49 @@ type Store struct {
 	dailyUsageRows       usageRowMemo[chDailyUsageGroupRow]
 	sessionAggregateRows usageRowMemo[chUsageAggregateRow]
 	usageSessionRows     usageRowMemo[chUsageSessionRow]
+	// topSessionTotals keeps each session's totals per top-sessions read.
+	topSessionTotals usageRowMemo[db.TopSessionEntry]
 	// analyticsSessionRows keeps recent analytics session listings.
 	analyticsSessionRows usageRowMemo[chAnalyticsSession]
 	// analyticsListings shares one listing read among concurrent requests.
 	analyticsListings singleflight.Group
+	// background runs the kept reports' sweep until Close.
+	background storeBackground
 	// activitySessions keeps activity pairing inputs per session version.
 	activitySessions activitySessionMemo
 	// activityInputQueries counts pairing input reads that reached ClickHouse.
 	activityInputQueries atomic.Int64
 	// activityUsageRows keeps activity usage reads per source, set, and range.
-	activityUsageRows usageRowMemo[clickSessionUsageOrderedRow]
+	activityUsageRows usageRowMemo[*activityUsageKept]
+	// activityUsageRanges keeps every session's prepared usage rows per
+	// range in progress; see activityUsageRange.
+	activityUsageRanges usageRowMemo[activityUsageRange]
+	// readinessLog holds the last prepared usage readiness logged.
+	readinessLog struct {
+		sync.Mutex
+		last string
+	}
+	// keeping tracks the encodes of activity usage reads being kept; see
+	// activityReportUsage. Close waits for them.
+	keeping sync.WaitGroup
 	// activitySessionListings keeps candidate listings per parts and predicate.
 	activitySessionListings usageRowMemo[activitySessionListing]
+	projectIdentityMaps     usageRowMemo[map[string]export.ProjectMapEntry]
 	// activityReports keeps the reports of ended ranges per the rows they read.
 	activityReports usageRowMemo[activityReportEntry]
+	// diskReports keeps the few latest reports that are also on disk. A
+	// load from disk costs about what a memory hit does, so the rest are
+	// read back from there.
+	diskReports usageRowMemo[activityReportEntry]
 	// activityChecks records per selection the parts its kept report was
 	// last checked against.
-	activityChecks         usageRowMemo[string]
-	activityUsageQueries   atomic.Int64
+	activityChecks usageRowMemo[string]
+	// reportDisk keeps ended ranges' reports on disk; see
+	// openActivityReportDisk. Empty, reports are kept in memory only.
+	reportDisk           activityReportDisk
+	activityUsageQueries atomic.Int64
+	// activityUsageRowsRead counts the activity usage rows scanned.
+	activityUsageRowsRead  atomic.Int64
 	activitySessionQueries atomic.Int64
 }
 
@@ -111,14 +137,31 @@ func NewStore(ctx context.Context, t Target) (*Store, error) {
 // NewStoreFromDB wraps an already open connection. The caller owns the
 // connection's compatibility checks.
 func NewStoreFromDB(conn *sql.DB) *Store {
-	return &Store{conn: conn}
+	s := &Store{conn: conn}
+	s.dailyUsageRows.size, s.dailyUsageRows.maxBytes = dailyUsageRowBytes, dailyUsageRowsBytes
+	s.sessionAggregateRows.size = aggregateRowBytes
+	s.usageSessionRows.size = usageSessionRowBytes
+	s.topSessionTotals.size = topSessionBytes
+	s.analyticsSessionRows.size = analyticsSessionBytes
+	s.activityUsageRows.size, s.activityUsageRows.maxBytes = keptUsageBytes, activityUsageRowsBytes
+	s.activityUsageRanges.size, s.activityUsageRanges.maxBytes = usageRangeBytes, activityUsageRangeBytes
+	s.activityUsageRanges.limit = activityUsageRangeLimit
+	s.activitySessionListings.size = sessionListingBytes
+	s.activityReports.size, s.activityReports.maxBytes = reportEntryBytes, activityReportMemoBytes
+	s.diskReports.size, s.diskReports.maxBytes = reportEntryBytes, activityReportMemoBytes
+	s.diskReports.limit = activityDiskReportMemoLimit
+	return s
 }
 
 // DB exposes the underlying connection for tests and status commands.
 func (s *Store) DB() *sql.DB { return s.conn }
 
 func (s *Store) Close() error {
-	s.closeOnce.Do(func() { s.closeErr = s.conn.Close() })
+	s.closeOnce.Do(func() {
+		s.stopBackground()
+		s.keeping.Wait()
+		s.closeErr = s.conn.Close()
+	})
 	return s.closeErr
 }
 
@@ -134,6 +177,8 @@ func (s *Store) ReadOnly() bool { return true }
 
 func (s *Store) HasFTS(_ context.Context) bool { return true }
 
+// SetCustomPricing installs the operator's model rates. Call it before
+// StartBackground: the background work caches the pricing catalog.
 func (s *Store) SetCustomPricing(p map[string]config.CustomModelRate) {
 	s.customPricing = p
 }

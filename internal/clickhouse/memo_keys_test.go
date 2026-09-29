@@ -56,3 +56,29 @@ func TestUsageRowMemoSkipsTimeDependentTermination(t *testing.T) {
 		require.Equal(t, c.kept, ok, c.termination)
 	}
 }
+
+// A memo with a size keeps no more than its byte cap: the oldest written
+// slots go first, and rows larger than the cap are not kept at all.
+func TestUsageRowMemoKeepsWithinItsByteCap(t *testing.T) {
+	memo := usageRowMemo[int]{size: func(n int) int64 { return int64(n) }, maxBytes: 10}
+	memo.put("a", "v", []int{4})
+	memo.put("b", "v", []int{4})
+	memo.put("a", "v", []int{4})
+	memo.put("c", "v", []int{4})
+	_, ok := memo.get("b", "v")
+	require.False(t, ok, "b was written longest ago")
+	for _, slot := range []string{"a", "c"} {
+		_, ok := memo.get(slot, "v")
+		require.True(t, ok, slot)
+	}
+	memo.put("a", "v", []int{11})
+	_, ok = memo.get("a", "v")
+	require.False(t, ok, "rows over the cap replace the slot's older rows with nothing")
+	_, ok = memo.get("c", "v")
+	require.True(t, ok)
+
+	memo.deleteSlots(func(slot string) bool { return slot == "c" })
+	_, ok = memo.get("c", "v")
+	require.False(t, ok)
+	require.Zero(t, memo.bytes)
+}
