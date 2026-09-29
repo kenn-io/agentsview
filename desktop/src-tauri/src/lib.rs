@@ -115,7 +115,7 @@ struct DeepLinkState {
 enum DeepLinkDispatch {
     Deferred(Option<String>),
     Redirecting(Option<String>),
-    Live,
+    Live(BackendProbeState),
 }
 
 impl DeepLinkDispatch {
@@ -126,7 +126,7 @@ impl DeepLinkDispatch {
                 *pending = Some(route);
                 None
             }
-            DeepLinkDispatch::Live => match port {
+            DeepLinkDispatch::Live(_) => match port {
                 Some(port) => Some((port, route)),
                 // Sidecar is down; hold the route for the next redirect.
                 None => {
@@ -144,7 +144,7 @@ impl DeepLinkDispatch {
                 *self = DeepLinkDispatch::Redirecting(None);
                 route
             }
-            DeepLinkDispatch::Live => None,
+            DeepLinkDispatch::Live(_) => None,
         }
     }
 
@@ -158,10 +158,10 @@ impl DeepLinkDispatch {
         match self {
             DeepLinkDispatch::Redirecting(pending) => {
                 let route = pending.take();
-                *self = DeepLinkDispatch::Live;
+                *self = DeepLinkDispatch::Live(BackendProbeState::default());
                 route
             }
-            DeepLinkDispatch::Deferred(_) | DeepLinkDispatch::Live => None,
+            DeepLinkDispatch::Deferred(_) | DeepLinkDispatch::Live(_) => None,
         }
     }
 
@@ -170,12 +170,21 @@ impl DeepLinkDispatch {
     // redirect's fallback root navigation; hold routes until it runs.
     fn defer(&mut self) {
         match self {
-            DeepLinkDispatch::Live => *self = DeepLinkDispatch::Deferred(None),
+            DeepLinkDispatch::Live(_) => *self = DeepLinkDispatch::Deferred(None),
             DeepLinkDispatch::Redirecting(pending) => {
                 let route = pending.take();
                 *self = DeepLinkDispatch::Deferred(route);
             }
             DeepLinkDispatch::Deferred(_) => {}
+        }
+    }
+
+    // Startup owns navigation until its redirect finishes. Completing that
+    // redirect starts fresh probe history so a later probe cannot repeat it.
+    fn observe_backend(&mut self, port: u16, reachable: bool) -> bool {
+        match self {
+            DeepLinkDispatch::Live(probe) => probe.observe(port, reachable),
+            DeepLinkDispatch::Deferred(_) | DeepLinkDispatch::Redirecting(_) => false,
         }
     }
 }
@@ -3710,19 +3719,19 @@ struct BackendProbeState {
 }
 
 impl BackendProbeState {
-    /// Records one probe result and reports whether the window has to be
-    /// navigated back to the dashboard.
+    /// Records one probe result and reports whether the current page needs
+    /// to be reloaded.
     ///
-    /// The window is navigated when a reachable backend is not the one the
+    /// The window is reloaded when a reachable backend is not the one the
     /// window was last known to be on: it answers on a different port, or it
     /// answers again after having been unreachable. A backend that comes back
     /// on the same port may be a different process, and the version endpoint
     /// carries no per-process identity to tell them apart, so the
     /// down-then-up transition is the signal. Recovery fires once per
     /// transition, never on every probe, and never while the backend is down,
-    /// because there would be nothing to navigate to.
+    /// because there would be nothing to reload.
     ///
-    /// The first observation never navigates: start-up has already pointed the
+    /// The first observation never reloads: start-up has already pointed the
     /// window at the backend.
     fn observe(&mut self, port: u16, reachable: bool) -> bool {
         let previous = self.last.replace((port, reachable));
@@ -3746,57 +3755,27 @@ impl BackendProbeState {
 /// started again. This probe runs on the side that keeps executing.
 fn spawn_backend_probe(window: WebviewWindow, handle: AppHandle) {
     thread::spawn(move || {
-        let never_stop = AtomicBool::new(false);
-        backend_probe_loop(
-            BACKEND_PROBE_INTERVAL,
-            &never_stop,
-            || {
-                handle
-                    .state::<SidecarState>()
-                    .backend_port
-                    .lock()
-                    .ok()
-                    .and_then(|port| *port)
-            },
-            backend_endpoint_ready,
-            |port| {
-                eprintln!(
-                    "[agentsview] backend moved or returned on port {port}, reloading window"
-                );
-                match Url::parse(desktop_redirect_url(port).as_str()) {
-                    Ok(url) => {
-                        if let Err(err) = window.navigate(url) {
-                            eprintln!("[agentsview] backend recovery navigate failed: {err}");
+        loop {
+            if let Some(port) = current_backend_port(&handle) {
+                let reachable = backend_endpoint_ready(port);
+                let deep_link_state = handle.state::<DeepLinkState>();
+                if let Ok(mut dispatch) = deep_link_state.dispatch.lock() {
+                    // Recheck after HTTP: startup may have published a new port.
+                    // Hold dispatch through the asynchronous reload request so
+                    // a new deep link or startup redirect always follows it.
+                    if current_backend_port(&handle) == Some(port)
+                        && dispatch.observe_backend(port, reachable)
+                    {
+                        eprintln!("[agentsview] backend returned on port {port}, reloading window");
+                        if let Err(err) = window.reload() {
+                            eprintln!("[agentsview] backend recovery reload failed: {err}");
                         }
                     }
-                    Err(err) => {
-                        eprintln!("[agentsview] backend recovery URL invalid: {err}");
-                    }
-                }
-            },
-        );
-    });
-}
-
-/// Probes the backend every interval until stop is set, navigating the window
-/// whenever the backend has moved or come back.
-fn backend_probe_loop(
-    interval: Duration,
-    stop: &AtomicBool,
-    mut current_port: impl FnMut() -> Option<u16>,
-    mut probe: impl FnMut(u16) -> bool,
-    mut navigate: impl FnMut(u16),
-) {
-    let mut state = BackendProbeState::default();
-    while !stop.load(Ordering::SeqCst) {
-        if let Some(port) = current_port() {
-            let reachable = probe(port);
-            if state.observe(port, reachable) {
-                navigate(port);
+                };
             }
+            thread::sleep(BACKEND_PROBE_INTERVAL);
         }
-        thread::sleep(interval);
-    }
+    });
 }
 
 fn wait_for_server(port: u16, timeout: Duration) -> bool {
@@ -6162,75 +6141,50 @@ agentsview running at http://127.0.0.1:18082
     }
 
     #[test]
-    fn backend_probe_loop_recovers_after_an_outage_and_stops_when_asked() {
-        // The reachability sequence a longer outage produces: up, then down
-        // for several cycles (past any front-end retry window), then up again.
-        let readings = Arc::new(Mutex::new(VecDeque::from(vec![
-            true, false, false, false, true, true,
-        ])));
-        let navigated = Arc::new(Mutex::new(Vec::new()));
-        let stop = Arc::new(AtomicBool::new(false));
-
-        let probe_readings = Arc::clone(&readings);
-        let probe_stop = Arc::clone(&stop);
-        let recorded = Arc::clone(&navigated);
-        backend_probe_loop(
-            Duration::from_millis(1),
-            &stop,
-            || Some(8080),
-            move |_port| {
-                let mut queue = probe_readings.lock().expect("probe readings");
-                match queue.pop_front() {
-                    Some(reachable) => reachable,
-                    None => {
-                        probe_stop.store(true, Ordering::SeqCst);
-                        true
-                    }
-                }
-            },
-            move |port| recorded.lock().expect("navigated").push(port),
-        );
-
-        assert_eq!(
-            *navigated.lock().expect("navigated"),
-            vec![8080],
-            "the window is navigated exactly once, when the backend returns"
-        );
-        assert!(
-            stop.load(Ordering::SeqCst),
-            "the loop must return when it is asked to stop"
-        );
+    fn backend_probe_preserves_startup_deep_link() {
+        let mut dispatch = DeepLinkDispatch::Deferred(Some("/sessions/a".to_string()));
+        assert!(!dispatch.observe_backend(8080, false));
+        assert!(!dispatch.observe_backend(8080, true));
+        assert_eq!(dispatch.take_pending().as_deref(), Some("/sessions/a"));
+        assert!(!dispatch.observe_backend(8080, true));
+        assert_eq!(dispatch.finish_redirect(), None);
+        assert!(!dispatch.observe_backend(8080, true));
     }
 
     #[test]
-    fn backend_probe_loop_waits_for_a_port_before_probing() {
-        let probes = Arc::new(AtomicUsize::new(0));
-        let stop = Arc::new(AtomicBool::new(false));
-        let cycles = Arc::new(AtomicUsize::new(0));
-
-        let counted = Arc::clone(&probes);
-        let loop_stop = Arc::clone(&stop);
-        let loop_cycles = Arc::clone(&cycles);
-        backend_probe_loop(
-            Duration::from_millis(1),
-            &stop,
-            move || {
-                if loop_cycles.fetch_add(1, Ordering::SeqCst) >= 3 {
-                    loop_stop.store(true, Ordering::SeqCst);
-                }
+    fn backend_probe_does_not_repeat_completed_restart_redirect() {
+        for port in [8080, 9090] {
+            let mut dispatch = DeepLinkDispatch::Live(BackendProbeState::default());
+            assert!(!dispatch.observe_backend(8080, true));
+            assert!(!dispatch.observe_backend(8080, false));
+            dispatch.defer();
+            assert_eq!(
+                dispatch.route_for_navigation("/sessions/a".to_string(), Some(port)),
                 None
-            },
-            move |_port| {
-                counted.fetch_add(1, Ordering::SeqCst);
-                true
-            },
-            |_port| panic!("nothing to navigate to without a port"),
-        );
+            );
+            assert_eq!(dispatch.take_pending().as_deref(), Some("/sessions/a"));
+            assert_eq!(dispatch.finish_redirect(), None);
+            // The whole redirect can complete between scheduled probes.
+            assert!(!dispatch.observe_backend(port, true));
 
+            // A later outage still reloads the current page exactly once.
+            assert!(!dispatch.observe_backend(port, false));
+            assert!(dispatch.observe_backend(port, true));
+            assert!(!dispatch.observe_backend(port, true));
+        }
+    }
+
+    #[test]
+    fn backend_probe_recovers_live_deep_link_after_outage() {
+        let mut dispatch = DeepLinkDispatch::Live(BackendProbeState::default());
+        assert!(!dispatch.observe_backend(8080, true));
+        assert!(!dispatch.observe_backend(8080, false));
         assert_eq!(
-            probes.load(Ordering::SeqCst),
-            0,
-            "no port means no backend to probe yet"
+            dispatch.route_for_navigation("/sessions/a".to_string(), Some(8080)),
+            Some((8080, "/sessions/a".to_string()))
         );
+        // Opening a link does not establish readiness; the navigation can
+        // fail while the backend is down and still needs recovery afterward.
+        assert!(dispatch.observe_backend(8080, true));
     }
 }
