@@ -2588,6 +2588,18 @@ func TestGetSessionStats_Adoption_NoClaude(t *testing.T) {
 // require the binary.
 func skipIfNoGit(t *testing.T) {
 	t.Helper()
+	// Keep Git fixture commands and production reads inside test-owned state.
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if strings.HasPrefix(key, "GIT_") {
+			t.Setenv(key, "")
+			require.NoError(t, os.Unsetenv(key))
+		}
+	}
+	globalConfig := filepath.Join(t.TempDir(), "gitconfig")
+	require.NoError(t, os.WriteFile(globalConfig, nil, 0o600))
+	t.Setenv("GIT_CONFIG_GLOBAL", globalConfig)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skipf("git not available on PATH: %v", err)
 	}
@@ -2953,4 +2965,44 @@ func TestOutcomeStatsNamesRepoWithoutAuthorEmail(t *testing.T) {
 	assert.Equal(t, statsCanonPath(t, missingAuthor), out.Skipped[0].Repo)
 	assert.Equal(t, "author", out.Skipped[0].Op)
 	assert.Equal(t, "no author email configured", out.Skipped[0].Reason)
+}
+
+func TestGetSessionStats_OutcomeStatsUnionsCheckouts(t *testing.T) {
+	skipIfNoGit(t)
+	for _, linked := range []bool{false, true} {
+		t.Run(fmt.Sprintf("linked=%t", linked), func(t *testing.T) {
+			d := testDB(t)
+			main := filepath.Join(t.TempDir(), "main")
+			statsInitRepoAt(t, main)
+			statsCommitFile(t, main, "base.txt", "base\n", "base")
+			other := filepath.Join(t.TempDir(), "feature")
+			if linked {
+				statsRunGit(t, main, nil, "worktree", "add", "-b", "feature", other)
+			} else {
+				statsRunGit(t, main, nil, "clone", "--quiet", main, other)
+				statsRunGit(t, other, nil, "config", "user.email", "test@example.com")
+				statsRunGit(t, other, nil, "config", "commit.gpgsign", "false")
+			}
+			statsCommitFile(t, main, "main.txt", "one\ntwo\n", "main work")
+			statsCommitFile(t, other, "feature.txt", "feature\n", "feature work")
+			for i, repo := range []string{main, other} {
+				statsRunGit(t, repo, nil, "config", "remote.origin.url", "https://example.com/team/repo.git")
+				insertSessionFixture(t, d, sessionFixture{
+					id: fmt.Sprintf("checkout-%d", i), agent: "claude", userMsgs: 1,
+					startedAt: hoursAgo(1), cwd: repo,
+				})
+			}
+			filter := StatsFilter{
+				Since:              time.Now().Add(-24 * time.Hour).UTC().Format(time.DateOnly),
+				Until:              time.Now().Add(24 * time.Hour).UTC().Format(time.DateOnly),
+				IncludeGitOutcomes: true,
+			}
+			for range 2 { // Check both fresh computation and cached commit data.
+				stats, err := d.GetSessionStats(t.Context(), filter)
+				require.NoError(t, err)
+				require.NotNil(t, stats.OutcomeStats)
+				assert.Equal(t, &StatsOutcomeStats{ReposActive: 1, Commits: 3, LOCAdded: 4, FilesChanged: 3}, stats.OutcomeStats)
+			}
+		})
+	}
 }

@@ -159,21 +159,21 @@ func (c *Cache) store(
 	return err
 }
 
-// AggregateLogCached wraps AggregateLog with a TTL-bounded read-through
-// cache. The cache key is derived from ("log", repo, author, since, until).
-// On a cache miss, AggregateLog is invoked; its LogResult is JSON-encoded
-// before being stored. Errors from AggregateLog propagate unchanged.
+// AggregateLogCached caches each checkout's per-commit counts and adds only
+// commits not yet seen in this repository group. The separate cache kind keeps
+// old aggregate-only rows from being read as per-commit data.
 func AggregateLogCached(
 	ctx context.Context,
 	cache *Cache,
 	repo, author, since, until string,
 	ttl time.Duration,
+	seen map[string]struct{},
 ) (LogResult, error) {
-	key := CacheKey("log", repo, author, since, until)
+	key := CacheKey("log-commits", repo, author, since, until)
 	payload, err := cache.GetOrCompute(
-		ctx, key, "log", ttl,
+		ctx, key, "log-commits", ttl,
 		func() ([]byte, error) {
-			res, err := AggregateLog(ctx, repo, author, since, until)
+			res, err := logCommits(ctx, repo, author, since, until)
 			if err != nil {
 				return nil, err
 			}
@@ -183,11 +183,11 @@ func AggregateLogCached(
 	if err != nil {
 		return LogResult{}, err
 	}
-	var out LogResult
+	var out map[string]LogResult
 	if err := json.Unmarshal(payload, &out); err != nil {
 		return LogResult{}, fmt.Errorf("git_cache decode log payload: %w", err)
 	}
-	return out, nil
+	return aggregateCommits(out, seen), nil
 }
 
 // AggregatePRsCached wraps AggregatePRs with a TTL-bounded cache.

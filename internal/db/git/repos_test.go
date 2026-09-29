@@ -1,9 +1,12 @@
 package git
 
 import (
+	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -54,7 +57,7 @@ func TestDiscoverRepos_FindsRootAndFiltersMissing(t *testing.T) {
 
 	got := DiscoverRepos(t.Context(), []string{sub, outside})
 	want := []string{repoA}
-	assert.Equal(t, canonAll(want), canonAll(got), "DiscoverRepos")
+	assert.Equal(t, canonAll(want), canonAll(slices.Concat(got...)), "DiscoverRepos")
 }
 
 func TestDiscoverRepos_Dedup(t *testing.T) {
@@ -65,7 +68,7 @@ func TestDiscoverRepos_Dedup(t *testing.T) {
 
 	got := DiscoverRepos(t.Context(), []string{sub1, sub2, repoA})
 	require.Len(t, got, 1, "want exactly one entry (dedup)")
-	assert.Equal(t, canonAll([]string{repoA}), canonAll(got),
+	assert.Equal(t, canonAll([]string{repoA}), canonAll(slices.Concat(got...)),
 		"DiscoverRepos")
 }
 
@@ -99,7 +102,7 @@ func TestDiscoverRepos_LinkedWorktreeResolves(t *testing.T) {
 	require.Len(t, got, 1, "want one worktree root")
 	assert.Equal(t,
 		canonAll([]string{worktreeRoot}),
-		canonAll(got),
+		canonAll(slices.Concat(got...)),
 		"DiscoverRepos (worktree path)")
 }
 
@@ -121,7 +124,7 @@ func setOrigin(t *testing.T, repo, url string) {
 }
 
 // commitAt creates one empty commit in repo with a fixed author and commit
-// timestamp, so "which checkout is freshest" is deterministic.
+// timestamp.
 func commitAt(t *testing.T, repo, when, message string) {
 	t.Helper()
 	gitRun(t, repo, []string{
@@ -147,8 +150,8 @@ func TestDiscoverRepos_DedupByOrigin(t *testing.T) {
 	got := DiscoverRepos(t.Context(), []string{primary, mirror})
 	require.Len(t, got, 1,
 		"two checkouts of one remote must contribute one repository")
-	assert.Equal(t, canonAll([]string{primary}), canonAll(got),
-		"the first-seen checkout represents the remote")
+	assert.Equal(t, canonAll([]string{primary, mirror}), canonAll(slices.Concat(got...)),
+		"both checkouts remain available for commit aggregation")
 }
 
 // TestDiscoverRepos_DedupByOriginAcrossURLForms pins that the SSH and HTTPS
@@ -174,11 +177,8 @@ func TestDiscoverRepos_DedupByOriginAcrossURLForms(t *testing.T) {
 		"every spelling of one remote must collapse to one repository")
 }
 
-// TestDiscoverRepos_DedupByOriginKeepsFreshestCheckout pins which duplicate
-// represents the remote. A stale second clone is missing the newest commits,
-// so keeping it would undercount; the checkout whose HEAD commit is newest is
-// the one that can answer for the remote.
-func TestDiscoverRepos_DedupByOriginKeepsFreshestCheckout(t *testing.T) {
+// Keep both histories even when one checkout has a newer HEAD.
+func TestDiscoverRepos_DedupByOriginKeepsAllCheckouts(t *testing.T) {
 	skipIfNoGit(t)
 	const origin = "https://github.com/example-org/example-repo.git"
 
@@ -192,8 +192,8 @@ func TestDiscoverRepos_DedupByOriginKeepsFreshestCheckout(t *testing.T) {
 
 	got := DiscoverRepos(t.Context(), []string{stale, fresh})
 	require.Len(t, got, 1, "one remote, one repository")
-	assert.Equal(t, canonAll([]string{fresh}), canonAll(got),
-		"the checkout with the newest commit represents the remote")
+	assert.Equal(t, canonAll([]string{stale, fresh}), canonAll(slices.Concat(got...)),
+		"both checkout histories contribute")
 }
 
 // TestDiscoverRepos_DistinctOriginsBothKept pins that deduplication is by
@@ -207,7 +207,8 @@ func TestDiscoverRepos_DistinctOriginsBothKept(t *testing.T) {
 	setOrigin(t, second, "https://github.com/example-org/second.git")
 
 	got := DiscoverRepos(t.Context(), []string{first, second})
-	assert.Equal(t, canonAll([]string{first, second}), canonAll(got),
+	require.Len(t, got, 2)
+	assert.Equal(t, canonAll([]string{first, second}), canonAll(slices.Concat(got...)),
 		"two remotes must stay two repositories")
 }
 
@@ -220,7 +221,8 @@ func TestDiscoverRepos_NoRemoteFallsBackToPath(t *testing.T) {
 	second := initBareRepo(t)
 
 	got := DiscoverRepos(t.Context(), []string{first, second})
-	assert.Equal(t, canonAll([]string{first, second}), canonAll(got),
+	require.Len(t, got, 2)
+	assert.Equal(t, canonAll([]string{first, second}), canonAll(slices.Concat(got...)),
 		"remote-less repositories must not collapse into each other")
 }
 
@@ -303,23 +305,65 @@ func TestNormalizeRemoteURL(t *testing.T) {
 			raw:  "https://github.com/Example-Org/Example-Repo.git",
 			want: "github.com/Example-Org/Example-Repo",
 		},
-		{
-			name: "local filesystem remote keeps its path",
-			raw:  "/srv/mirrors/example-repo.git",
-			want: "/srv/mirrors/example-repo",
-		},
-		{
-			name: "file scheme reduces to the same path",
-			raw:  "file:///srv/mirrors/example-repo.git",
-			want: "/srv/mirrors/example-repo",
-		},
 		{name: "host only", raw: "https://github.com", want: ""},
 		{name: "host only with slash", raw: "https://github.com/", want: ""},
-		{name: "no separator", raw: "example-repo", want: ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, normalizeRemoteURL(tt.raw))
+			assert.Equal(t, tt.want, normalizeRemoteURL(tt.raw, t.TempDir()))
 		})
 	}
+}
+
+func TestDiscoverRepos_LocalRemotePaths(t *testing.T) {
+	skipIfNoGit(t)
+	for _, tc := range []struct {
+		name    string
+		origins func(string, string) (string, string)
+		want    int
+	}{
+		{"relative paths in different parents", func(a, b string) (string, string) { return "../mirror.git", "../mirror.git" }, 2},
+		{"absolute suffixes stay distinct", func(a, b string) (string, string) { return filepath.Join(a, "mirror"), filepath.Join(a, "mirror.git") }, 2},
+		{"file URL host and absolute same path", func(a, b string) (string, string) {
+			path := filepath.Join(a, "mirror.git")
+			u := url.URL{Scheme: "file", Host: "mirror-host", Path: "/" + strings.TrimPrefix(filepath.ToSlash(path), "/")}
+			return u.String(), path
+		}, 1},
+		{"file URL and absolute same path", func(a, b string) (string, string) {
+			path := filepath.Join(a, "mirror.git")
+			u := url.URL{Scheme: "file", Path: "/" + strings.TrimPrefix(filepath.ToSlash(path), "/")}
+			return u.String(), path
+		}, 1},
+		{"relative and absolute same path", func(a, b string) (string, string) {
+			return "../mirror.git", filepath.Join(filepath.Dir(a), "mirror.git")
+		}, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := mkdirIn(t, t.TempDir(), "checkout")
+			b := mkdirIn(t, t.TempDir(), "checkout")
+			for _, root := range []string{a, b} {
+				gitRun(t, root, nil, "init", "-q", "-b", "main")
+			}
+			first, second := tc.origins(a, b)
+			for _, remote := range []struct{ root, origin string }{{a, first}, {b, second}} {
+				path := remote.origin
+				if strings.HasPrefix(path, "file://") {
+					path = filepath.Join(a, "mirror.git")
+				} else if !filepath.IsAbs(path) {
+					path = filepath.Join(remote.root, path)
+				}
+				require.NoError(t, os.MkdirAll(path, 0o755))
+				gitRun(t, path, nil, "init", "--bare", "-q")
+				setOrigin(t, remote.root, remote.origin)
+			}
+			assert.Len(t, DiscoverRepos(t.Context(), []string{a, b}), tc.want)
+		})
+	}
+}
+
+func TestDiscoverRepos_UsesGlobalOrigin(t *testing.T) {
+	skipIfNoGit(t)
+	require.NoError(t, os.WriteFile(os.Getenv("GIT_CONFIG_GLOBAL"), []byte("[remote \"origin\"]\n url = https://example.com/team/repo.git\n"), 0o600))
+	a, b := initRepo(t), initRepo(t)
+	assert.Len(t, DiscoverRepos(t.Context(), []string{a, b}), 1)
 }

@@ -1544,54 +1544,61 @@ func (db *DB) computeOutcomeStats(
 	}
 	out := &StatsOutcomeStats{}
 	contributed := false
-	for _, repo := range repos {
-		email := git.AuthorEmail(ctx, repo)
-		if email == "" {
-			out.Skipped = append(out.Skipped, StatsOutcomeSkippedRepo{
-				Repo: repo, Op: "author", Reason: "no author email configured",
-			})
-			continue
-		}
-		logRes, err := git.AggregateLogCached(
-			ctx, cache, repo, email, since, until, time.Hour,
-		)
-		if err != nil {
-			// Per-repo failures are logged but don't abort
-			// aggregation across other repos. They are also named in
-			// the output, so a caller can tell a complete total from
-			// one missing this repository's commits.
-			log.Printf(
-				"computeOutcomeStats: repo=%s op=log err=%v",
-				repo, err,
-			)
-			out.Skipped = append(out.Skipped, StatsOutcomeSkippedRepo{
-				Repo: repo, Op: "log", Reason: err.Error(),
-			})
-			continue
-		}
-		contributed = true
-		out.ReposActive++
-		out.Commits += logRes.Commits
-		out.LOCAdded += logRes.LOCAdded
-		out.LOCRemoved += logRes.LOCRemoved
-		out.FilesChanged += logRes.FilesChanged
-
-		if f.GHToken != "" {
-			prRes, err := git.AggregatePRsCached(
-				ctx, cache, repo, since, until,
-				f.GHToken, time.Hour,
+	for _, checkouts := range repos {
+		seen := make(map[string]struct{})
+		counted := false
+		for _, repo := range checkouts {
+			email := git.AuthorEmail(ctx, repo)
+			if email == "" {
+				out.Skipped = append(out.Skipped, StatsOutcomeSkippedRepo{
+					Repo: repo, Op: "author", Reason: "no author email configured",
+				})
+				continue
+			}
+			logRes, err := git.AggregateLogCached(
+				ctx, cache, repo, email, since, until, time.Hour, seen,
 			)
 			if err != nil {
+				// Per-repo failures are logged but don't abort
+				// aggregation across other repos. Report the skipped checkout
+				// so callers know its commits are missing from the totals.
 				log.Printf(
-					"computeOutcomeStats: repo=%s op=pr err=%v",
+					"computeOutcomeStats: repo=%s op=log err=%v",
 					repo, err,
 				)
 				out.Skipped = append(out.Skipped, StatsOutcomeSkippedRepo{
-					Repo: repo, Op: "pr", Reason: err.Error(),
+					Repo: repo, Op: "log", Reason: err.Error(),
 				})
-			} else if prRes != nil {
-				addPtr(&out.PRsOpened, prRes.Opened)
-				addPtr(&out.PRsMerged, prRes.Merged)
+				continue
+			}
+			contributed = true
+			out.Commits += logRes.Commits
+			out.LOCAdded += logRes.LOCAdded
+			out.LOCRemoved += logRes.LOCRemoved
+			out.FilesChanged += logRes.FilesChanged
+
+			if counted {
+				continue
+			}
+			counted = true
+			out.ReposActive++
+			if f.GHToken != "" {
+				prRes, err := git.AggregatePRsCached(
+					ctx, cache, repo, since, until,
+					f.GHToken, time.Hour,
+				)
+				if err != nil {
+					log.Printf(
+						"computeOutcomeStats: repo=%s op=pr err=%v",
+						repo, err,
+					)
+					out.Skipped = append(out.Skipped, StatsOutcomeSkippedRepo{
+						Repo: repo, Op: "pr", Reason: err.Error(),
+					})
+				} else if prRes != nil {
+					addPtr(&out.PRsOpened, prRes.Opened)
+					addPtr(&out.PRsMerged, prRes.Merged)
+				}
 			}
 		}
 	}

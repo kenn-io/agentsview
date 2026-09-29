@@ -15,6 +15,18 @@ import (
 // of failing the package.
 func skipIfNoGit(t *testing.T) {
 	t.Helper()
+	// Keep Git fixture commands and production reads inside test-owned state.
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if strings.HasPrefix(key, "GIT_") {
+			t.Setenv(key, "")
+			require.NoError(t, os.Unsetenv(key))
+		}
+	}
+	globalConfig := filepath.Join(t.TempDir(), "gitconfig")
+	require.NoError(t, os.WriteFile(globalConfig, nil, 0o600))
+	t.Setenv("GIT_CONFIG_GLOBAL", globalConfig)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skipf("git not available on PATH: %v", err)
 	}

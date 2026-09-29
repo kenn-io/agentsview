@@ -34,6 +34,11 @@ type LogResult struct {
 func AggregateLog(
 	ctx context.Context, repo, authorEmail, since, until string,
 ) (LogResult, error) {
+	commits, err := logCommits(ctx, repo, authorEmail, since, until)
+	return aggregateCommits(commits, make(map[string]struct{})), err
+}
+
+func logCommits(ctx context.Context, repo, authorEmail, since, until string) (map[string]LogResult, error) {
 	runner := gitcmd.New()
 	runner.NullGlobalConfig = false
 	out, stderr, err := runner.Run(
@@ -53,16 +58,16 @@ func AggregateLog(
 		// zero result so callers don't spam the user with errors
 		// for every checkout that hasn't been used yet.
 		if isEmptyRepoErr(msg) {
-			return LogResult{}, nil
+			return nil, nil
 		}
 		if msg == "" {
-			return LogResult{}, fmt.Errorf("git log in %s: %w", repo, err)
+			return nil, fmt.Errorf("git log in %s: %w", repo, err)
 		}
-		return LogResult{}, fmt.Errorf(
+		return nil, fmt.Errorf(
 			"git log in %s: %w: %s", repo, err, msg,
 		)
 	}
-	return parseNumstat(out), nil
+	return parseCommitNumstat(out), nil
 }
 
 // isEmptyRepoErr reports whether a `git log` stderr message indicates
@@ -85,7 +90,12 @@ func isEmptyRepoErr(stderr string) bool {
 //	<added>\t<removed>\t<path>
 //	-\t-\t<binary-path>
 func parseNumstat(out []byte) LogResult {
-	var result LogResult
+	return aggregateCommits(parseCommitNumstat(out), make(map[string]struct{}))
+}
+
+func parseCommitNumstat(out []byte) map[string]LogResult {
+	commits := make(map[string]LogResult)
+	var sha string
 	scanner := bufio.NewScanner(bytes.NewReader(out))
 	// Allow long paths; 1 MiB is generous but keeps a hard ceiling.
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -95,18 +105,36 @@ func parseNumstat(out []byte) LogResult {
 			continue
 		}
 		if isSHALine(line) {
-			result.Commits++
+			sha = line
+			commits[sha] = LogResult{Commits: 1}
 			continue
 		}
 		added, removed, ok := parseNumstatLine(line)
-		if !ok {
+		if !ok || sha == "" {
 			continue
 		}
+		result := commits[sha]
 		result.FilesChanged++
 		result.LOCAdded += added
 		result.LOCRemoved += removed
+		commits[sha] = result
 	}
-	return result
+	return commits
+}
+
+func aggregateCommits(commits map[string]LogResult, seen map[string]struct{}) LogResult {
+	var total LogResult
+	for sha, result := range commits {
+		if _, ok := seen[sha]; ok {
+			continue
+		}
+		seen[sha] = struct{}{}
+		total.Commits += result.Commits
+		total.LOCAdded += result.LOCAdded
+		total.LOCRemoved += result.LOCRemoved
+		total.FilesChanged += result.FilesChanged
+	}
+	return total
 }
 
 // isSHALine reports whether s is a 40-character lowercase hex SHA, as emitted

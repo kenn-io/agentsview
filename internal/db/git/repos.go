@@ -4,10 +4,10 @@ package git
 
 import (
 	"context"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -15,9 +15,9 @@ import (
 )
 
 // DiscoverRepos resolves each cwd to its enclosing git repository toplevel and
-// returns one entry per repository. Cwds with no enclosing repo (or whose
-// resolution fails) are silently dropped. Order follows first-seen order in
-// the input.
+// returns one group of checkout paths per repository. Cwds with no enclosing
+// repo (or whose resolution fails) are silently dropped. Order follows
+// first-seen order in the input.
 //
 // Resolution prefers `git rev-parse --show-toplevel`, which handles standard
 // `.git` directories, linked worktrees (`.git` is a file pointing at the
@@ -26,21 +26,13 @@ import (
 // invoking `git rev-parse` from there — that mirrors how the parser package
 // recovers repo roots for archived sessions whose cwd has been deleted.
 //
-// A repository is identified by its `origin` remote, not by its local
-// directory. Callers aggregate per returned entry, and commit and
-// pull-request counts come from the remote: a mirror, a second clone, or a
-// linked worktree resolving to its own toplevel would each add the remote's
-// numbers again. When two checkouts share a remote, the one whose HEAD commit
-// is newest represents it, because a stale checkout is missing the newest
-// commits and would undercount. A repository with no resolvable origin falls
-// back to its local path, so local-only work stays its own repository.
-func DiscoverRepos(ctx context.Context, cwds []string) []string {
+// Checkouts with the same origin form one group. Keep every checkout so
+// callers can count the union of their commits, including diverged branches.
+// Repositories without an origin stay separate by local path.
+func DiscoverRepos(ctx context.Context, cwds []string) [][]string {
 	seen := map[string]struct{}{}
-	// position records, per identity key, the index in out that the
-	// identity's representative occupies, so replacing a stale checkout with
-	// a fresher one keeps first-seen order.
 	position := map[string]int{}
-	out := []string{}
+	out := [][]string{}
 	for _, cwd := range cwds {
 		root := findRepoRoot(ctx, cwd)
 		if root == "" {
@@ -54,12 +46,10 @@ func DiscoverRepos(ctx context.Context, cwds []string) []string {
 		at, ok := position[key]
 		if !ok {
 			position[key] = len(out)
-			out = append(out, root)
+			out = append(out, []string{root})
 			continue
 		}
-		if headCommitTime(ctx, root).After(headCommitTime(ctx, out[at])) {
-			out[at] = root
-		}
+		out[at] = append(out[at], root)
 	}
 	return out
 }
@@ -68,7 +58,7 @@ func DiscoverRepos(ctx context.Context, cwds []string) []string {
 // its normalised `origin` URL, or the root itself when no origin resolves. The
 // path fallback is prefixed so a directory can never collide with a remote URL.
 func repoIdentity(ctx context.Context, root string) string {
-	if origin := normalizeRemoteURL(originURL(ctx, root)); origin != "" {
+	if origin := normalizeRemoteURL(originURL(ctx, root), root); origin != "" {
 		return "origin:" + origin
 	}
 	return "path:" + root
@@ -94,14 +84,39 @@ func originURL(ctx context.Context, root string) string {
 // host is lowercased, and the SSH shorthand `git@host:owner/repo` is rewritten
 // to `host/owner/repo`. Host case is normalised because hosts are
 // case-insensitive; the path is left as written because repository paths are
-// not case-insensitive everywhere. A remote that is an absolute filesystem
-// path, written directly or as `file://`, keeps that path as its key.
+// not case-insensitive everywhere. Filesystem remotes resolve against root
+// and retain their full directory names, including a `.git` suffix.
 // Returns "" for an empty or unparseable URL, which makes the caller fall back
 // to the local path rather than merge repositories it cannot tell apart.
-func normalizeRemoteURL(raw string) string {
+func normalizeRemoteURL(raw, root string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return ""
+	}
+	local := false
+	if strings.HasPrefix(raw, "file://") {
+		u, err := url.Parse(raw)
+		if err != nil || u.Path == "" {
+			return ""
+		}
+		raw = filepath.FromSlash(u.Path)
+		// file:///C:/... names an absolute Windows drive path.
+		if strings.HasPrefix(raw, string(filepath.Separator)) && filepath.VolumeName(raw[1:]) != "" {
+			raw = raw[1:]
+		}
+		local = true
+	} else if !strings.Contains(raw, "://") {
+		colon, slash := strings.IndexByte(raw, ':'), strings.IndexAny(raw, `/\`)
+		local = filepath.VolumeName(raw) != "" || colon < 0 || (slash >= 0 && slash < colon)
+	}
+	if local {
+		if !filepath.IsAbs(raw) {
+			raw = filepath.Join(root, raw)
+		}
+		if resolved, err := filepath.EvalSymlinks(raw); err == nil {
+			raw = resolved
+		}
+		return "file:" + filepath.ToSlash(filepath.Clean(raw))
 	}
 	// scp-like shorthand: [user@]host:path, which has no "//" after a scheme.
 	if !strings.Contains(raw, "://") {
@@ -118,35 +133,11 @@ func normalizeRemoteURL(raw string) string {
 		}
 	}
 	raw = strings.TrimSuffix(strings.TrimSuffix(strings.TrimRight(raw, "/"), ".git"), "/")
-	if strings.HasPrefix(raw, "/") {
-		// An absolute filesystem remote — a local bare mirror — has no host to
-		// normalise, and the path alone already identifies it.
-		return raw
-	}
 	host, path, found := strings.Cut(raw, "/")
 	if !found || host == "" || path == "" {
 		return ""
 	}
 	return strings.ToLower(host) + "/" + path
-}
-
-// headCommitTime returns the committer time of root's HEAD commit, or the zero
-// time when the repository has no commits or git fails. It decides which of
-// several checkouts of one remote is the freshest.
-func headCommitTime(ctx context.Context, root string) time.Time {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "log", "-1", "--format=%ct", "HEAD")
-	cmd.Dir = root
-	out, err := cmd.Output()
-	if err != nil {
-		return time.Time{}
-	}
-	secs, err := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64)
-	if err != nil {
-		return time.Time{}
-	}
-	return time.Unix(secs, 0)
 }
 
 // findRepoRoot returns the absolute repo toplevel for start, or "" when no
