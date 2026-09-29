@@ -279,6 +279,20 @@ func TestHostedTenantAdoptsLegacyAndEnforcesRelationships(t *testing.T) {
 	_, err := pg.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent) VALUES('preserved','project','device','claude'); INSERT INTO starred_sessions(session_id) VALUES('preserved')`)
 	require.NoError(t, err)
 	require.NoError(t, EnsureHostedTenant(t.Context(), pg, schema, "tenant-a"))
+	for _, table := range hostedOptionalTables {
+		var protected bool
+		require.NoError(t, pg.QueryRowContext(t.Context(), `
+			SELECT c.relrowsecurity AND c.relforcerowsecurity
+				AND EXISTS (
+					SELECT 1 FROM pg_attribute a
+					WHERE a.attrelid = c.oid AND a.attname = 'tenant_id'
+						AND a.attnotnull AND NOT a.attisdropped
+				)
+			FROM pg_class c
+			JOIN pg_namespace n ON n.oid = c.relnamespace
+			WHERE n.nspname = $1 AND c.relname = $2`, schema, table.Name).Scan(&protected))
+		assert.True(t, protected, "%s should be protected when present", table.Name)
+	}
 	var id, tenant string
 	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT session_id,tenant_id FROM starred_sessions`).Scan(&id, &tenant))
 	assert.Equal(t, "preserved", id)

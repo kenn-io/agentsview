@@ -112,10 +112,14 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
 	if _, err = tx.ExecContext(ctx, `INSERT INTO hosted_tenant_binding(singleton,tenant_id) VALUES (1,$1)`, tenant); err != nil {
 		return err
 	}
+	tables, err := hostedTablesForSchema(ctx, tx, schema)
+	if err != nil {
+		return err
+	}
 	if err = checkHostedInventory(ctx, tx, schema); err != nil {
 		return err
 	}
-	if err = InstallHostedTables(ctx, tx, schema, tenant, hostedTables); err != nil {
+	if err = InstallHostedTables(ctx, tx, schema, tenant, tables); err != nil {
 		return fmt.Errorf("installing hosted tenant constraints: %w", err)
 	}
 	if _, err = tx.ExecContext(ctx, rawProjectionIndexesDDL); err != nil {
@@ -140,6 +144,20 @@ type hostedQuerier interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
+func hostedTablesForSchema(ctx context.Context, q hostedQuerier, schema string) ([]HostedTable, error) {
+	tables := append([]HostedTable(nil), hostedTables...)
+	for _, table := range hostedOptionalTables {
+		var exists bool
+		if err := q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=$2 AND c.relkind IN ('r','p','v','m','f'))`, schema, table.Name).Scan(&exists); err != nil {
+			return nil, err
+		}
+		if exists {
+			tables = append(tables, table)
+		}
+	}
+	return tables, nil
+}
+
 func checkHostedBinding(ctx context.Context, q hostedQuerier, schema, tenant string) error {
 	qs, _ := quoteIdentifier(schema)
 	var got string
@@ -154,8 +172,13 @@ func checkHostedBinding(ctx context.Context, q hostedQuerier, schema, tenant str
 
 func checkHostedInventory(ctx context.Context, q hostedQuerier, schema string) error {
 	expected := make(map[string]bool, len(hostedTables))
+	known := make(map[string]bool, len(hostedTables)+len(hostedOptionalTables))
 	for _, t := range hostedTables {
 		expected[t.Name] = true
+		known[t.Name] = true
+	}
+	for _, t := range hostedOptionalTables {
+		known[t.Name] = true
 	}
 	rows, err := q.QueryContext(ctx, `SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relkind IN ('r','p','v','m','f')`, schema)
 	if err != nil {
@@ -167,10 +190,10 @@ func checkHostedInventory(ctx context.Context, q hostedQuerier, schema string) e
 		if err = rows.Scan(&name); err != nil {
 			return err
 		}
-		if !expected[name] && strings.HasPrefix(name, "vector_") {
+		if !known[name] && strings.HasPrefix(name, "vector_") {
 			return errors.New("hosted vector schema is unsupported")
 		}
-		if !expected[name] {
+		if !known[name] {
 			return fmt.Errorf("hosted schema contains uninventoried relation %s", name)
 		}
 		delete(expected, name)
@@ -188,7 +211,11 @@ func checkHostedCatalog(ctx context.Context, q hostedQuerier, schema, tenant str
 	if err := checkHostedInventory(ctx, q, schema); err != nil {
 		return err
 	}
-	for _, table := range hostedTables {
+	tables, err := hostedTablesForSchema(ctx, q, schema)
+	if err != nil {
+		return err
+	}
+	for _, table := range tables {
 		var good bool
 		err := q.QueryRowContext(ctx, `SELECT c.relkind='r' AND c.relrowsecurity AND c.relforcerowsecurity
    AND EXISTS(SELECT 1 FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attname='tenant_id' AND a.attnotnull AND a.atttypid='text'::regtype)
@@ -276,8 +303,11 @@ func CheckHostedTenant(ctx context.Context, database *sql.DB, schema, tenant str
 }
 
 func preflightHostedAdoption(ctx context.Context, q hostedQuerier, schema, tenant string) error {
-	known := make(map[string]bool)
+	known := make(map[string]bool, len(hostedTables)+len(hostedOptionalTables))
 	for _, table := range hostedTables {
+		known[table.Name] = true
+	}
+	for _, table := range hostedOptionalTables {
 		known[table.Name] = true
 	}
 	rows, err := q.QueryContext(ctx, `SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relkind IN ('r','p','v','m','f')`, schema)

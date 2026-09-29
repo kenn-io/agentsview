@@ -855,6 +855,7 @@ type Config struct {
 	Vector               VectorConfig                `json:"vector,omitempty" toml:"vector"`
 	Recall               RecallConfig                `json:"recall,omitempty" toml:"recall"`
 	Insights             InsightsConfig              `json:"insights,omitempty" toml:"insights"`
+	Ledger               LedgerConfig                `json:"ledger,omitempty" toml:"ledger"`
 	Automated            AutomatedConfig             `json:"automated,omitempty" toml:"automated"`
 	Agent                map[string]AgentConfig      `json:"agent,omitempty" toml:"agent"`
 	WriteTimeout         time.Duration               `json:"-" toml:"-"`
@@ -1653,6 +1654,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		Vector                         VectorConfig           `toml:"vector"`
 		Recall                         RecallConfig           `toml:"recall"`
 		Insights                       InsightsConfig         `toml:"insights"`
+		Ledger                         LedgerConfig           `toml:"ledger"`
 		Automated                      AutomatedConfig        `toml:"automated"`
 		Agent                          map[string]AgentConfig `toml:"agent"`
 		EventsCoalesceInterval         time.Duration          `toml:"events_coalesce_interval"`
@@ -1927,6 +1929,9 @@ func (c *Config) applyConfigTOML(data string) error {
 		c.Insights.DefaultAgent = strings.ToLower(
 			strings.TrimSpace(c.Insights.DefaultAgent),
 		)
+	}
+	if meta.IsDefined("ledger") {
+		c.Ledger = file.Ledger.normalized()
 	}
 	// IsDefined distinguishes "unset" (leave default 10s) from an
 	// explicit "0s" (disable coalescing). Checking != 0 would silently
@@ -2504,6 +2509,9 @@ func finalize(cfg *Config) error {
 		return err
 	}
 	if err := cfg.Insights.Validate(); err != nil {
+		return err
+	}
+	if err := cfg.Ledger.Validate(); err != nil {
 		return err
 	}
 	return nil

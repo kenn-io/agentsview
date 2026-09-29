@@ -415,6 +415,12 @@ func (s *Sync) ensureSchemaLocked(ctx context.Context) error {
 			}
 			log.Printf("pg schema: raw custody schema skipped, insufficient privilege: %v", err)
 		}
+		if err := ensureLedgerSchemaPG(ctx, s.pg); err != nil {
+			if !isInsufficientPrivilege(err) {
+				return err
+			}
+			log.Printf("pg schema: ledger schema skipped, insufficient privilege: %v", err)
+		}
 		s.schemaDone = true
 		return nil
 	}
