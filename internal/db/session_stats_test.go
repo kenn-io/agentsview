@@ -2858,24 +2858,11 @@ exit 1
 // response has to say so.
 func TestOutcomeStatsNamesRepoWhoseGitLogFailed(t *testing.T) {
 	skipIfNoGit(t)
-	repo := statsOutcomeRepo(t)
-	realPath, err := exec.LookPath("git")
-	require.NoError(t, err, "locate real git")
-	// Pass every subcommand through to the real git except `log`, so the
-	// repository is still discovered and its author email still resolves.
-	statsFakeToolOnPath(t, "git", "REAL='"+strings.ReplaceAll(realPath, "'", "'\\''")+"'\n"+`
-for arg in "$@"; do
-  case "$arg" in
-    log)
-      echo "fatal: simulated git log failure" >&2
-      exit 128
-      ;;
-    -*) continue ;;
-    *) break ;;
-  esac
-done
-exec "$REAL" "$@"
-`)
+	repo := t.TempDir()
+	statsInitRepoAt(t, repo)
+	// This log-only setting fails on every platform while repository
+	// discovery and author lookup still work.
+	statsRunGit(t, repo, nil, "config", "log.showSignature", "invalid")
 	d := testDB(t)
 	insertSessionFixture(t, d, sessionFixture{
 		id: "log-failed", agent: "claude", userMsgs: 5,
@@ -2895,7 +2882,7 @@ exec "$REAL" "$@"
 		"the repository whose git log failed must be named")
 	assert.Equal(t, statsCanonPath(t, repo), out.Skipped[0].Repo, "Skipped[0].Repo")
 	assert.Equal(t, "log", out.Skipped[0].Op, "Skipped[0].Op")
-	assert.Contains(t, out.Skipped[0].Reason, "simulated git log failure",
+	assert.Contains(t, out.Skipped[0].Reason, "bad boolean config value",
 		"Skipped[0].Reason must carry why the lookup failed")
 }
 
