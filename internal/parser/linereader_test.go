@@ -14,22 +14,25 @@ import (
 
 func TestLineReader(t *testing.T) {
 	tests := []struct {
-		name   string
-		input  string
-		maxLen int
-		want   []string
+		name          string
+		input         string
+		maxLen        int
+		want          []string
+		wantOversized bool
 	}{
 		{
 			"normal lines",
 			"aaa\nbbb\nccc\n",
 			100,
 			[]string{"aaa", "bbb", "ccc"},
+			false,
 		},
 		{
 			"skips oversized line",
 			"short\n" + strings.Repeat("x", 50) + "\nafter\n",
 			30,
 			[]string{"short", "after"},
+			true,
 		},
 		{
 			"all lines oversized",
@@ -37,36 +40,49 @@ func TestLineReader(t *testing.T) {
 				strings.Repeat("b", 50) + "\n",
 			30,
 			nil,
+			true,
 		},
 		{
 			"empty input",
 			"",
 			100,
 			nil,
+			false,
 		},
 		{
 			"blank lines skipped",
 			"aaa\n\n\nbbb\n",
 			100,
 			[]string{"aaa", "bbb"},
+			false,
 		},
 		{
 			"line without trailing newline",
 			"aaa\nbbb",
 			100,
 			[]string{"aaa", "bbb"},
+			false,
 		},
 		{
 			"exact limit kept",
 			strings.Repeat("x", 30) + "\n",
 			30,
 			[]string{strings.Repeat("x", 30)},
+			false,
 		},
 		{
 			"one over limit skipped",
 			strings.Repeat("x", 31) + "\n",
 			30,
 			nil,
+			true,
+		},
+		{
+			"oversized across buffers without trailing newline",
+			strings.Repeat("x", initialScanBufSize*2),
+			30,
+			nil,
+			true,
 		},
 	}
 
@@ -86,6 +102,7 @@ func TestLineReader(t *testing.T) {
 			}
 			require.NoError(t, lr.Err())
 			assert.Equal(t, tt.want, got)
+			assert.Equal(t, tt.wantOversized, lr.skippedOversized)
 		})
 	}
 }

@@ -42,6 +42,12 @@ Initialize a missing conversation index from existing database messages on
 writable open. Copied orphans and trash use the same stored records; absent
 source files do not make their archived text unavailable.
 
+Archive refresh seeks live conversation rows by `(session_id, ordinal)` through
+`idx_conversation_messages_ordinal`, which excludes removed rows. Keep this
+index available during orphan and trash copies so each message lookup does not
+scan the session's entire retained history. The next writable open builds it
+once for existing archives; no parser resync is required.
+
 Keep only digests and compact latest changes, not a body event log; bounded body
 reads take text from the archived message at the projected ordinal and reject it
 when its digest no longer matches the pinned revision. Project-only changes

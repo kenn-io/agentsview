@@ -206,6 +206,7 @@ func ConvertToolResultsContext(
 		}
 		results[i] = db.ToolResult{
 			ToolUseID: result.ToolUseID, ContentLength: result.ContentLength,
+			Source: result.Source, Status: result.Status,
 			ContentRaw: result.ContentRaw,
 		}
 	}

@@ -279,6 +279,59 @@ func runtimeTestDir(t *testing.T) string {
 	return dir
 }
 
+func mismatchedProcessIdentityForTest(
+	t *testing.T, identity daemon.ProcessIdentity,
+) daemon.ProcessIdentity {
+	t.Helper()
+	if runtime.GOOS == "linux" {
+		fields := strings.Split(string(identity), ":")
+		require.Len(t, fields, 4)
+		startTicks, err := strconv.ParseUint(fields[3], 10, 64)
+		require.NoError(t, err)
+		fields[3] = strconv.FormatUint(startTicks+1, 10)
+		return daemon.ProcessIdentity(strings.Join(fields, ":"))
+	}
+	created, err := strconv.ParseUint(string(identity), 10, 64)
+	require.NoError(t, err)
+	return daemon.ProcessIdentity(strconv.FormatUint(created+1, 10))
+}
+
+func TestRuntimeRecordIdentityState(t *testing.T) {
+	identity, ok := daemon.ReadProcessIdentity(os.Getpid())
+	require.True(t, ok, "must be able to read this process identity")
+	createTime, ok := processCreateTimeMillis(os.Getpid())
+	require.True(t, ok, "must be able to read this process create time")
+
+	mismatched := mismatchedProcessIdentityForTest(t, identity)
+
+	legacy := strconv.FormatInt(createTime, 10)
+	tests := []struct {
+		name       string
+		v2         daemon.ProcessIdentity
+		createTime string
+		want       processCreateTimeState
+	}{
+		{name: "v2 match overrides legacy mismatch", v2: identity, createTime: "1", want: processCreateTimeMatch},
+		{name: "v2 mismatch overrides legacy match", v2: mismatched, createTime: legacy, want: processCreateTimeMismatch},
+		{name: "present malformed v2 stays unknown", v2: "future-v1:12345", createTime: legacy, want: processCreateTimeUnknown},
+		{name: "legacy match", createTime: legacy, want: processCreateTimeMatch},
+		{name: "legacy mismatch", createTime: "1", want: processCreateTimeMismatch},
+		{name: "legacy unknown", createTime: "not-a-time", want: processCreateTimeUnknown},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := daemon.RuntimeRecord{
+				PID:               os.Getpid(),
+				ProcessIdentityV2: tt.v2,
+				Metadata: map[string]string{
+					runtimeCreateTime: tt.createTime,
+				},
+			}
+			assert.Equal(t, tt.want, runtimeRecordIdentityState(rec))
+		})
+	}
+}
+
 // TestSameProcessStartMarkerNeverReportsExternal hammers the race between
 // markDaemonStarting's flock-acquire-then-register sequence and the
 // isExternalDaemonStarting probe: a start marker owned by this process must

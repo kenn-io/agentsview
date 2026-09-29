@@ -1555,6 +1555,33 @@ func TestResolveDirs_DeepSeekHarnessPrecedence(t *testing.T) {
 	})
 }
 
+func TestResolveDirs_JunieHomeAndExplicitOverride(t *testing.T) {
+	t.Run("JUNIE_HOME re-roots implicit sessions directory", func(t *testing.T) {
+		dir := setupTestEnv(t)
+		root := canonicalTempDir(t)
+		t.Setenv("JUNIE_HOME", root)
+		writeConfig(t, dir, map[string]any{})
+
+		cfg, err := LoadMinimal()
+		require.NoError(t, err)
+		assert.Equal(t, []string{filepath.Join(root, "sessions")}, cfg.ResolveDirs(parser.AgentJunie))
+		assert.False(t, cfg.IsUserConfigured(parser.AgentJunie))
+	})
+
+	t.Run("JUNIE_DIR beats JUNIE_HOME", func(t *testing.T) {
+		dir := setupTestEnv(t)
+		t.Setenv("JUNIE_HOME", canonicalTempDir(t))
+		explicit := absoluteTestPath(t, "/from/env/junie-sessions")
+		t.Setenv("JUNIE_DIR", explicit)
+		writeConfig(t, dir, map[string]any{})
+
+		cfg, err := LoadMinimal()
+		require.NoError(t, err)
+		assert.Equal(t, []string{explicit}, cfg.ResolveDirs(parser.AgentJunie))
+		assert.True(t, cfg.IsUserConfigured(parser.AgentJunie))
+	})
+}
+
 func TestResolveDirs_DevinPrecedenceAndMergeRules(t *testing.T) {
 	t.Run("config overrides defaults", func(t *testing.T) {
 		cfg := loadMinimalWithConfig(t, map[string]any{

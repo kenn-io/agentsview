@@ -374,9 +374,20 @@ func extractAmpToolResults(content gjson.Result) []ParsedToolResult {
 			continue
 		}
 
-		var text string
+		var text, status string
+		switch block.Get("run.status").Str {
+		case "done":
+			status = "completed"
+		case "error":
+			status = "errored"
+		case "cancelled":
+			status = "cancelled"
+		}
 		hasResult := false
 		result := block.Get("run.result")
+		if result.Get("success").Type == gjson.False {
+			status = "errored"
+		}
 		if result.Exists() && result.Type != gjson.Null {
 			text = serializeAmpResult(result)
 			hasResult = true
@@ -405,6 +416,8 @@ func extractAmpToolResults(content gjson.Result) []ParsedToolResult {
 
 		results = append(results, ParsedToolResult{
 			ToolUseID:     toolUseID,
+			Source:        "tool_result",
+			Status:        status,
 			ContentRaw:    string(quoted),
 			ContentLength: len(text),
 		})

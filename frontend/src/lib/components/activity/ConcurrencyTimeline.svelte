@@ -3,7 +3,7 @@
   import { scaleLinear } from "d3-scale";
   import { formatDateTime, getLocale, m } from "../../i18n/index.js";
   import type { Report } from "../../api/types.js";
-  import { Button, Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
+  import { Button, SegmentedControl, Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
   import type { ActivityBucket } from "../../api/generated/index";
   import { formatMoney, moneyFromMicrodollars } from "../../money.js";
 
@@ -29,6 +29,24 @@
   const PLOT_BOTTOM = TOP_PAD + PLOT_H;
 
   const buckets = $derived(report.buckets ?? []);
+  type TimelineMetric = "concurrency" | "user_messages" | "assistant_messages";
+  let metric = $state<TimelineMetric>("concurrency");
+  const metricOptions = $derived([
+    { value: "concurrency", label: m.activity_concurrency() },
+    { value: "user_messages", label: m.activity_user_messages(), title: m.activity_user_messages_help() },
+    { value: "assistant_messages", label: m.activity_assistant_messages(), title: m.activity_assistant_messages_help() },
+  ]);
+  const metricLabel = $derived(metricOptions.find((option) => option.value === metric)!.label);
+  const messageTotal = $derived.by(() => {
+    if (metric === "concurrency") return 0;
+    const key = metric;
+    return buckets.reduce((total, bucket) => total + bucket[key], 0);
+  });
+  const messageInterval = $derived(new Intl.NumberFormat(getLocale(), {
+    style: "unit",
+    unit: report.bucket_unit,
+    unitDisplay: "short",
+  }).format(report.bucket_unit === "minute" ? report.bucket_seconds / 60 : 1));
 
   let tooltip = $state<{ x: number; y: number; bucket: ActivityBucket } | null>(null);
   let tooltipEl = $state<HTMLDivElement>();
@@ -129,6 +147,7 @@
   // report before the new bars paint.
   $effect.pre(() => {
     void report;
+    void metric;
     hideTip();
   });
 
@@ -395,9 +414,11 @@
     },
   ]);
 
-  // One shared y-axis from zero to the tallest stacked bar.
+  // Each metric gets its own scale so assistant volume cannot hide user prompts.
   const yScale = $derived(
-    niceScale(Math.max(0, ...buckets.map((bucket) => bucket.max_agents))),
+    niceScale(Math.max(0, ...buckets.map((bucket) =>
+      metric === "concurrency" ? bucket.max_agents : bucket[metric],
+    ))),
   );
   const yTicks = $derived(
     Array.from({ length: Math.round(yScale.max / yScale.step) + 1 }, (_, i) => ({
@@ -420,13 +441,17 @@
     const cellW = Math.max(((end - start) / rangeSpanMs) * plotWidth, 1);
     const gap = Math.min(cellW * 0.2, 2);
     let top = PLOT_BOTTOM;
-    const segments = classes.flatMap((cls) => {
+    const segments = metric === "concurrency" ? classes.flatMap((cls) => {
       const count = bucket[cls.atPeak];
       if (count <= 0) return [];
       const height = segmentHeight(count);
       top -= height;
       return [{ kind: cls.kind, y: top, height }];
-    });
+    }) : bucket[metric] > 0 ? [{
+      kind: metric,
+      y: PLOT_BOTTOM - segmentHeight(bucket[metric]),
+      height: segmentHeight(bucket[metric]),
+    }] : [];
     return {
       x: cellX + gap / 2,
       w: Math.max(cellW - gap, 1),
@@ -574,7 +599,19 @@
 
 <div class="timeline">
   <div class="timeline-header">
-    <h3 class="timeline-title">{m.activity_concurrency()}</h3>
+    <SegmentedControl
+      options={metricOptions}
+      value={metric}
+      ariaLabel={m.activity_timeline_metric()}
+      onchange={(value) => metric = value as TimelineMetric}
+    >
+      {#snippet segment(option)}
+        <span class="metric-label-full">{option.label}</span>
+        <span class="metric-label-short">{option.value === "user_messages"
+          ? m.message_content_role_user()
+          : option.value === "assistant_messages" ? m.message_content_role_assistant() : option.label}</span>
+      {/snippet}
+    </SegmentedControl>
     <div class="panel-actions">
       {#if selectedRange}
         <Button
@@ -591,7 +628,7 @@
           value={overlayMetric}
           fallbackLabel={m.activity_overlay_none()}
           placeholder={m.activity_overlay_placeholder()}
-          title={m.activity_overlay_metric()}
+          title={m.activity_overlay()}
           emptyLabel={m.activity_no_metrics()}
           onselect={setOverlayMetric}
         />
@@ -601,19 +638,27 @@
 
   <div class="chart-meta">
     <div class="legend" aria-hidden="true">
-      {#each classes as cls (cls.kind)}
+      {#if metric === "concurrency"}
+        {#each classes as cls (cls.kind)}
+          <span class="legend-item">
+            <span class={`swatch ${cls.kind}`}></span>{cls.label}
+          </span>
+        {/each}
+      {:else}
         <span class="legend-item">
-          <span class={`swatch ${cls.kind}`}></span>{cls.label}
+          <span class={`swatch ${metric}`}></span>{m.activity_messages_per_interval({ interval: messageInterval })}
         </span>
-      {/each}
+      {/if}
     </div>
-    <span class="chart-peak">{peakLabel}</span>
+    <span class="chart-peak">{metric === "concurrency"
+      ? peakLabel
+      : m.activity_total_count({ count: messageTotal.toLocaleString(getLocale()) })}</span>
   </div>
 
   <div
     class="timeline-body"
     role="group"
-    aria-label={m.activity_concurrency()}
+    aria-label={metricLabel}
     bind:this={containerEl}
     onpointermove={moveRangeDrag}
   >
@@ -742,7 +787,9 @@
             role="button"
             tabindex={0}
             aria-pressed={activeRange !== null && bar.idx >= activeRange.start && bar.idx < activeRange.end}
-            aria-label={m.activity_filter_active_in_range()}
+            aria-label={metric === "concurrency" ? m.activity_filter_active_in_range() : m.activity_message_bucket_label({
+              range: fmtBucketRange(b!), metric: metricLabel, count: b![metric].toLocaleString(getLocale()),
+            })}
             onmouseenter={(event) => b && showSlotTip(event, b)}
             onmouseleave={hideTip}
             onpointerdown={(event) => beginRangeDrag(event, bar.idx)}
@@ -763,26 +810,37 @@
       >
         <div class="tooltip-date">{fmtBucketRange(tooltip.bucket)}</div>
         <dl class="tooltip-metrics">
-          {#each classes as cls (cls.kind)}
+          {#if metric === "concurrency"}
+            {#each classes as cls (cls.kind)}
+              <div>
+                <dt>{cls.label}</dt>
+                <dd>{tooltip.bucket[cls.atPeak].toLocaleString(getLocale())}</dd>
+              </div>
+            {/each}
             <div>
-              <dt>{cls.label}</dt>
-              <dd>{tooltip.bucket[cls.atPeak].toLocaleString(getLocale())}</dd>
+              <dt>{m.activity_combined_peak()}</dt>
+              <dd>{tooltip.bucket.max_agents.toLocaleString(getLocale())}</dd>
             </div>
-          {/each}
-          <div>
-            <dt>{m.activity_combined_peak()}</dt>
-            <dd>{tooltip.bucket.max_agents.toLocaleString(getLocale())}</dd>
-          </div>
-          {#each classes as cls (cls.kind)}
+            {#each classes as cls (cls.kind)}
+              <div>
+                <dt>{cls.peakLabel}</dt>
+                <dd>{tooltip.bucket[cls.max].toLocaleString(getLocale())}</dd>
+              </div>
+            {/each}
             <div>
-              <dt>{cls.peakLabel}</dt>
-              <dd>{tooltip.bucket[cls.max].toLocaleString(getLocale())}</dd>
+              <dt>{m.activity_agent_min()}</dt>
+              <dd>{fmtCompactValue(tooltip.bucket.agent_minutes)}</dd>
             </div>
-          {/each}
-          <div>
-            <dt>{m.activity_agent_min()}</dt>
-            <dd>{fmtCompactValue(tooltip.bucket.agent_minutes)}</dd>
-          </div>
+          {:else}
+            <div>
+              <dt>{m.activity_user_messages()}</dt>
+              <dd>{tooltip.bucket.user_messages.toLocaleString(getLocale())}</dd>
+            </div>
+            <div>
+              <dt>{m.activity_assistant_messages()}</dt>
+              <dd>{tooltip.bucket.assistant_messages.toLocaleString(getLocale())}</dd>
+            </div>
+          {/if}
           <div>
             <dt>{m.usage_input_tokens()}</dt>
             <dd>{fmtCompactValue(tooltip.bucket.input_tokens ?? 0)}</dd>
@@ -816,10 +874,18 @@
     margin-bottom: 8px;
   }
 
-  .timeline-title {
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--text-primary);
+  .metric-label-short {
+    display: none;
+  }
+
+  @media (max-width: 640px) {
+    .metric-label-full {
+      display: none;
+    }
+
+    .metric-label-short {
+      display: inline;
+    }
   }
 
   .panel-actions {
@@ -865,11 +931,13 @@
     border-radius: 2px;
   }
 
-  .swatch.interactive {
+  .swatch.interactive,
+  .swatch.user_messages {
     background: var(--accent-blue);
   }
 
-  .swatch.subagent {
+  .swatch.subagent,
+  .swatch.assistant_messages {
     background: var(--accent-violet);
   }
 
@@ -937,16 +1005,24 @@
     stroke-width: 1;
   }
 
-  .timeline :global(.concurrency-seg.interactive) {
+  .timeline :global(.concurrency-seg.interactive),
+  .timeline :global(.concurrency-seg.user_messages) {
     fill: var(--accent-blue);
   }
 
-  .timeline :global(.concurrency-seg.subagent) {
+  .timeline :global(.concurrency-seg.subagent),
+  .timeline :global(.concurrency-seg.assistant_messages) {
     fill: var(--accent-violet);
   }
 
   .timeline :global(.concurrency-seg.automated) {
     fill: var(--accent-orange);
+  }
+
+  /* Keep single-series bars visible even when a bucket is only one pixel wide. */
+  .timeline :global(.concurrency-seg.user_messages),
+  .timeline :global(.concurrency-seg.assistant_messages) {
+    stroke: none;
   }
 
   .timeline :global(.concurrency-seg.selected) {

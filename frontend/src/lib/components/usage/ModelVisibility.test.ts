@@ -52,9 +52,13 @@ const api = vi.hoisted(() => {
   };
 });
 vi.mock("../../api/generated/index", () => ({ UsageService: api }));
-vi.mock("../../api/runtime.js", () => ({
-  isAbortError: () => false,
-}));
+vi.mock("../../api/runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../api/runtime.js")>();
+  return {
+    ...actual,
+    isAbortError: () => false,
+  };
+});
 
 import UsagePage from "./UsagePage.svelte";
 import { usage } from "../../stores/usage.svelte.js";

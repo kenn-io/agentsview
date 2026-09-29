@@ -83,6 +83,8 @@ type ToolCall struct {
 // ToolResult holds a tool_result content block for pairing.
 type ToolResult struct {
 	ToolUseID     string
+	Source        string
+	Status        string
 	ContentLength int
 	ContentRaw    string // raw JSON of the content field; decode lazily
 }
@@ -3544,6 +3546,28 @@ func applyToolCallSubagentLinkTx(ctx context.Context,
 		)
 		return err == nil, err
 	}
+	if len(link.ResultEvents) > 0 {
+		events := slices.Clone(link.ResultEvents)
+		for i := range events {
+			if events[i].SubagentSessionID == "" {
+				events[i].SubagentSessionID = currentSubagent
+			}
+		}
+		changed, _, err := applyToolCallResultUpdateTx(ctx, tx, sessionID, ToolCallResultUpdate{
+			ToolUseID: link.ToolUseID,
+			Position:  ToolCallPosition{MessageOrdinal: messageOrdinal, CallIndex: callIndex},
+			Events:    events,
+		}, blockedResultCategories, imagePolicy, assetsDir)
+		if err != nil || currentSubagent == storedSubagent {
+			return changed, err
+		}
+		_, err = tx.ExecContext(ctx,
+			`UPDATE tool_calls SET subagent_session_id = ?
+			 WHERE session_id = ? AND tool_use_id = ?`,
+			nilIfEmpty(currentSubagent), sessionID, link.ToolUseID,
+		)
+		return err == nil, err
+	}
 	resultContent := link.ResultContent
 	resultContentLen := ResolveResultContentLength(
 		resultContent, link.ResultContentLen,
@@ -3685,6 +3709,7 @@ func applyToolCallResultUpdateTx(ctx context.Context,
 
 	insertRows := make([]toolResultEventRow, 0, len(incoming))
 	var inserted []ToolResultEvent
+	var metadataChanged bool
 	for _, candidate := range incoming {
 		stored := candidate
 		if blocked {
@@ -3701,6 +3726,28 @@ func applyToolCallResultUpdateTx(ctx context.Context,
 			nilIfEmpty(stored.AgentID), stored.Status, stored.RawContentDigest,
 		).Scan(&exists)
 		if err == nil {
+			if stored.SubagentSessionID != "" {
+				result, err := tx.ExecContext(ctx,
+					`UPDATE tool_result_events SET subagent_session_id = ?
+					 WHERE session_id = ? AND tool_call_message_ordinal = ?
+					   AND call_index = ? AND agent_id IS ? AND status = ?
+					   AND raw_content_digest = ?
+					   AND COALESCE(subagent_session_id, '') = ''`,
+					stored.SubagentSessionID,
+					sessionID, position.MessageOrdinal, position.CallIndex,
+					nilIfEmpty(stored.AgentID), stored.Status, stored.RawContentDigest,
+				)
+				if err != nil {
+					return false, nil, fmt.Errorf("linking existing tool result for %s/%s: %w",
+						sessionID, update.ToolUseID, err)
+				}
+				count, err := result.RowsAffected()
+				if err != nil {
+					return false, nil, fmt.Errorf("counting linked tool results for %s/%s: %w",
+						sessionID, update.ToolUseID, err)
+				}
+				metadataChanged = metadataChanged || count > 0
+			}
 			continue // equivalent event already stored
 		}
 		if !errors.Is(err, sql.ErrNoRows) {
@@ -3720,7 +3767,7 @@ func applyToolCallResultUpdateTx(ctx context.Context,
 		})
 	}
 	if len(insertRows) == 0 {
-		return false, nil, nil
+		return metadataChanged, nil, nil
 	}
 	if err := insertToolResultEventsTx(tx, insertRows); err != nil {
 		return false, nil, err

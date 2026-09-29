@@ -259,3 +259,55 @@ func TestLateResultIdentitySurvivesTranscriptReplacement(t *testing.T) {
 	assert.Len(t, msgs[0].ToolCalls[0].ResultEvents, 2, "raw identity survives sanitation, archive loading, and no-op replacement")
 	assert.Equal(t, "x", msgs[0].ToolCalls[0].ResultContent)
 }
+
+func TestRepeatedResultFillsMissingSubagentIdentity(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "parent", "project-a")
+	events := []ToolResultEvent{
+		{Content: "done", Source: "tool_result", EventIndex: 0},
+		{Content: "done", Source: "tool_result", EventIndex: 1},
+		{Content: "done", Source: "tool_result", EventIndex: 2, SubagentSessionID: "agent-other"},
+	}
+	for i := range events {
+		PrepareToolResultEvent(&events[i])
+	}
+	insertMessages(t, d, Message{
+		SessionID: "parent", Ordinal: 0, Role: "assistant",
+		ToolCalls: []ToolCall{{
+			ToolUseID: "call", ToolName: "Agent", Category: "Task", ResultEvents: events,
+		}},
+	})
+	before, err := d.TranscriptRevision(t.Context(), "parent")
+	require.NoError(t, err)
+	for _, step := range []struct {
+		child   string
+		changed bool
+	}{{"", false}, {"agent-child", true}, {"agent-child", false}} {
+		_, err = d.WriteSessionIncremental(t.Context(), "parent", nil, IncrementalSessionUpdate{
+			MsgCount: 1, NextOrdinal: 1,
+			ToolCallResultUpdates: []ToolCallResultUpdate{{
+				ToolUseID: "call", Events: []ToolResultEvent{{
+					Content: "done", Source: "tool_result", SubagentSessionID: step.child,
+				}},
+			}},
+		})
+		require.NoError(t, err)
+		messages, err := d.GetAllMessages(t.Context(), "parent")
+		require.NoError(t, err)
+		require.Len(t, messages, 1)
+		require.Len(t, messages[0].ToolCalls, 1)
+		call := messages[0].ToolCalls[0]
+		require.Len(t, call.ResultEvents, 3, "link updates must not add result events")
+		assert.Equal(t, step.child, call.ResultEvents[0].SubagentSessionID)
+		assert.Equal(t, step.child, call.ResultEvents[1].SubagentSessionID)
+		assert.Equal(t, "agent-other", call.ResultEvents[2].SubagentSessionID)
+		after, err := d.TranscriptRevision(t.Context(), "parent")
+		require.NoError(t, err)
+		if step.changed {
+			assert.NotEqual(t, before, after, "metadata-only updates refresh exports")
+		} else {
+			assert.Equal(t, before, after, "replay without new identity is a no-op")
+		}
+		before = after
+	}
+}

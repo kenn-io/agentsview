@@ -12,6 +12,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/signals"
 )
 
 func TestPrepareCandidatePairsToolResultsAndFiltersCarrier(t *testing.T) {
@@ -49,6 +50,26 @@ func TestPrepareCandidatePairsToolResultsAndFiltersCarrier(t *testing.T) {
 	assert.Equal(t, len("command output"),
 		candidate.Messages[0].ToolCalls[0].ResultContentLength)
 	assert.Equal(t, 1, candidate.Session.MessageCount)
+}
+
+func TestToolSequencePairedImageResults(t *testing.T) {
+	for _, tt := range []struct {
+		raw    string
+		ending signals.ToolSequenceEnding
+	}{
+		{`[{"type":"text","text":"[image]"},{"type":"text","text":"[image]"}]`, signals.ToolSequenceEndingUnknown},
+		{`[{"type":"text","text":"[image]"},{"type":"text","text":"file contents"}]`, signals.ToolSequenceEndingRecovered},
+	} {
+		messages := []db.Message{
+			{Ordinal: 1, ToolCalls: []db.ToolCall{{ToolUseID: "empty", ToolName: "Grep", Category: "Grep", ResultContent: "No matches found"}}},
+			{Ordinal: 2, ToolCalls: []db.ToolCall{{ToolUseID: "images", ToolName: "Read", Category: "Read"}}},
+			{ToolResults: []db.ToolResult{{ToolUseID: "images", ContentRaw: tt.raw}}},
+		}
+		require.NoError(t, ingest.PairToolResultsContext(t.Context(), messages, nil))
+		got := signals.ExtractToolSequences(ingest.ExtractToolCallRows(messages), true)
+		require.Len(t, got.Sequences, 1)
+		assert.Equal(t, tt.ending, got.Sequences[0].Ending, tt.raw)
+	}
 }
 
 func TestFinalizeClampsRowDerivedTokens(t *testing.T) {

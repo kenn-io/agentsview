@@ -14,6 +14,8 @@ export interface SettingsResponse {
   disabled_agents: string[];
   github_configured: boolean;
   host: string;
+  /** Agent CLI used when an insight generation request does not choose one */
+  insight_default_agent: string;
   port: number;
   read_only: boolean;
   require_auth: boolean;

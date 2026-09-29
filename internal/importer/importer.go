@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"slices"
 	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/assets"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 )
@@ -97,9 +99,10 @@ func (f *lazyFTS) restore(ctx context.Context) error {
 
 // ImportClaudeAI reads a Claude.ai conversations.json export
 // and upserts each conversation into the store. Existing
-// sessions are updated (messages replaced); user-renamed
-// display names are preserved. Excluded (deleted) sessions
-// are counted as skipped.
+// sessions are updated (messages replaced) unless the export
+// has fewer messages than the archive, which is refused.
+// User-renamed display names are preserved. Excluded (deleted)
+// sessions are counted as skipped.
 func ImportClaudeAI(
 	ctx context.Context,
 	store db.Store,
@@ -198,6 +201,15 @@ func upsertConversation(
 		return importNew, fmt.Errorf("checking session: %w", err)
 	}
 	isNew := existing == nil
+	// A shorter export (for example an older archive or one with deleted
+	// turns) would make the replacement below drop stored messages.
+	// Refuse it before touching the session row.
+	if existing != nil && len(msgs) < existing.MessageCount {
+		return importNew, fmt.Errorf(
+			"export has %d messages, archive has %d",
+			len(msgs), existing.MessageCount,
+		)
+	}
 
 	sess := db.Session{
 		ID:               s.ID,
@@ -240,7 +252,10 @@ func upsertConversation(
 				return importNew,
 					fmt.Errorf("loading existing messages: %w", err)
 			}
-			if sameMessages(existingMsgs, msgs) {
+			// Compare in stored form: the write path sanitizes and
+			// projects rows, so raw parser output can differ from an
+			// unchanged archived copy.
+			if sameMessages(existingMsgs, storedFormMessages(store, msgs)) {
 				return importSkipped, nil
 			}
 		}
@@ -281,8 +296,9 @@ func (a *assetResolverAdapter) Copy(
 
 // ImportChatGPT reads a ChatGPT export directory (containing
 // conversations-*.json files) and imports each conversation into
-// the store. Existing sessions are skipped to preserve archived
-// data.
+// the store. Existing sessions are extended when the export contains
+// their archived messages followed by new ones; see
+// upsertChatGPTConversation.
 func ImportChatGPT(
 	ctx context.Context,
 	store db.Store,
@@ -321,98 +337,31 @@ func ImportChatGPT(
 				return ctx.Err()
 			}
 
-			s := result.Session
-			s.Machine = resolvedImportMachine(s.Machine, machine)
-
-			existing, err := store.GetSession(ctx, s.ID)
+			result.Session.Machine = resolvedImportMachine(
+				result.Session.Machine, machine,
+			)
+			status, err := upsertChatGPTConversation(
+				ctx, store, result, fts,
+			)
 			if err != nil {
 				stats.Errors++
 				log.Printf(
-					"import: skipping %s: %v", s.ID, err,
+					"import: skipping %s: %v",
+					result.Session.ID, err,
 				)
 				cb.progress(stats)
 				return nil
 			}
-			if existing != nil {
-				// Refresh session_name without touching any other fields —
-				// a partial UpsertSession would overwrite first_message,
-				// timestamps, and counts with zero values.
-				if localDB, ok := store.(*db.DB); ok {
-					if err := localDB.RefreshSessionName(ctx, s.ID, db.ParsedSessionName(s)); err != nil {
-						stats.Errors++
-						log.Printf("import: refreshing session_name for %s: %v", s.ID, err)
-						cb.progress(stats)
-						return nil
-					}
-				}
+
+			switch status {
+			case importNew:
+				stats.Imported++
+			case importUpdated:
+				stats.Updated++
+			case importSkipped:
 				stats.Skipped++
-				cb.progress(stats)
-				return nil
 			}
 
-			sess := db.Session{
-				ID:               s.ID,
-				Project:          s.Project,
-				Machine:          s.Machine,
-				FirstMessage:     strPtr(s.FirstMessage),
-				SessionName:      db.ParsedSessionName(s),
-				StartedAt:        timeStr(s.StartedAt),
-				EndedAt:          timeStr(s.EndedAt),
-				MessageCount:     s.MessageCount,
-				UserMessageCount: s.UserMessageCount,
-			}
-			db.ApplyParsedSessionIdentity(&sess, s)
-
-			if err := store.UpsertSession(ctx, sess); err != nil {
-				if errors.Is(err, db.ErrSessionExcluded) {
-					stats.Skipped++
-					cb.progress(stats)
-					return nil
-				}
-				stats.Errors++
-				log.Printf(
-					"import: skipping %s: %v", s.ID, err,
-				)
-				cb.progress(stats)
-				return nil
-			}
-
-			fts.suspend(ctx)
-
-			msgs := make([]db.Message, len(result.Messages))
-			for i, m := range result.Messages {
-				msgs[i] = db.Message{
-					SessionID: s.ID,
-					Ordinal:   m.Ordinal,
-					Role:      string(m.Role),
-					Content:   m.Content,
-					Timestamp: m.Timestamp.UTC().Format(
-						time.RFC3339Nano,
-					),
-					HasThinking:   m.HasThinking,
-					HasToolUse:    m.HasToolUse,
-					ContentLength: m.ContentLength,
-					IsSystem:      m.IsSystem,
-					Model:         m.Model,
-					ToolCalls: convertToolCalls(
-						s.ID, m.ToolCalls,
-					),
-				}
-			}
-
-			if err := store.ReplaceSessionMessages(ctx,
-				s.ID, msgs,
-			); err != nil {
-				stats.Errors++
-				log.Printf(
-					"import: skipping messages for %s: %v",
-					s.ID, err,
-				)
-				cb.progress(stats)
-				return nil
-			}
-
-			stats.Imported++
 			cb.progress(stats)
 			return nil
 		},
@@ -420,6 +369,216 @@ func ImportChatGPT(
 
 	retErr = err
 	return
+}
+
+// upsertChatGPTConversation imports a new ChatGPT conversation or
+// appends new messages to an archived one. An existing session is only
+// extended when its archived messages are an exact prefix of the export;
+// shorter exports and exports that rewrite archived history are refused
+// so a re-import can never lose or silently change stored messages.
+func upsertChatGPTConversation(
+	ctx context.Context,
+	store db.Store,
+	result parser.ParseResult,
+	fts *lazyFTS,
+) (importStatus, error) {
+	s := result.Session
+	msgs := chatGPTMessages(s.ID, result.Messages)
+
+	existing, err := store.GetSession(ctx, s.ID)
+	if err != nil {
+		return importNew, fmt.Errorf("checking session: %w", err)
+	}
+	if existing == nil {
+		fts.suspend(ctx)
+		err := writeChatGPTSession(ctx, store, chatGPTSession(s), msgs)
+		if errors.Is(err, db.ErrSessionExcluded) {
+			return importSkipped, nil
+		}
+		if err != nil {
+			return importNew, fmt.Errorf("writing session: %w", err)
+		}
+		return importNew, nil
+	}
+
+	if existing.Agent != string(parser.AgentChatGPT) {
+		return importNew, fmt.Errorf(
+			"existing session belongs to agent %q", existing.Agent,
+		)
+	}
+	policy := storeArchiveContent(store)
+	if policy.UsageOnly() {
+		// A usage archive keeps no transcript text and drops rows without
+		// token usage, so the archived history cannot be verified as a
+		// prefix of the export. Leave the stored session untouched.
+		return importSkipped, nil
+	}
+	archived, err := store.GetAllMessages(ctx, s.ID)
+	if err != nil {
+		return importNew, fmt.Errorf("loading existing messages: %w", err)
+	}
+	// Compare against the export as it would be stored, not as parsed:
+	// the write path sanitizes and projects rows, so raw parser output
+	// can differ from an unchanged archived copy.
+	canonical := canonicalChatGPTMessages(store, chatGPTSession(s), msgs, policy)
+	if len(canonical) < len(archived) {
+		return importNew, fmt.Errorf(
+			"export has %d messages, archive has %d",
+			len(canonical), len(archived),
+		)
+	}
+	if len(canonical) != len(msgs) ||
+		!sameMessages(archived, canonical[:len(archived)]) {
+		return importNew, errors.New(
+			"export history diverges from the archived messages",
+		)
+	}
+
+	if len(msgs) == len(archived) {
+		// Refresh session_name without touching any other fields —
+		// a partial UpsertSession would overwrite first_message,
+		// timestamps, and counts with zero values.
+		if localDB, ok := store.(*db.DB); ok {
+			if err := localDB.RefreshSessionName(
+				ctx, s.ID, db.ParsedSessionName(s),
+			); err != nil {
+				return importNew, fmt.Errorf(
+					"refreshing session_name: %w", err,
+				)
+			}
+		}
+		return importSkipped, nil
+	}
+
+	// Insert only the rows past the verified prefix. A full replacement
+	// would delete and reinsert archived rows, changing message IDs and
+	// risking pins that cannot be re-matched without source UUIDs.
+	fts.suspend(ctx)
+	// The transcript grew, so stored quality signals and secret findings
+	// describe the shorter history. Clear them to version zero in the same
+	// write so the signal backfill recomputes them from the new rows.
+	if err := appendChatGPTMessages(
+		ctx, store, chatGPTSession(s), msgs[len(archived):],
+	); errors.Is(err, db.ErrSessionExcluded) {
+		return importSkipped, nil
+	} else if err != nil {
+		return importNew, fmt.Errorf("appending messages: %w", err)
+	}
+	return importUpdated, nil
+}
+
+func chatGPTSession(s parser.ParsedSession) db.Session {
+	sess := db.Session{
+		ID:               s.ID,
+		Project:          s.Project,
+		Machine:          s.Machine,
+		FirstMessage:     strPtr(s.FirstMessage),
+		SessionName:      db.ParsedSessionName(s),
+		StartedAt:        timeStr(s.StartedAt),
+		EndedAt:          timeStr(s.EndedAt),
+		MessageCount:     s.MessageCount,
+		UserMessageCount: s.UserMessageCount,
+	}
+	db.ApplyParsedSessionIdentity(&sess, s)
+	return sess
+}
+
+func chatGPTMessages(
+	sessionID string, parsed []parser.ParsedMessage,
+) []db.Message {
+	msgs := make([]db.Message, len(parsed))
+	for i, m := range parsed {
+		msgs[i] = db.Message{
+			SessionID: sessionID,
+			Ordinal:   m.Ordinal,
+			Role:      string(m.Role),
+			Content:   m.Content,
+			Timestamp: m.Timestamp.UTC().Format(
+				time.RFC3339Nano,
+			),
+			HasThinking:   m.HasThinking,
+			HasToolUse:    m.HasToolUse,
+			ContentLength: m.ContentLength,
+			IsSystem:      m.IsSystem,
+			Model:         m.Model,
+			ToolCalls:     convertToolCalls(sessionID, m.ToolCalls),
+		}
+	}
+	return msgs
+}
+
+// storeArchiveContent reports the content policy the store enforces.
+// Stores that do not expose one keep full content.
+func storeArchiveContent(store db.Store) config.ArchiveContent {
+	if s, ok := store.(interface {
+		ArchiveContent() config.ArchiveContent
+	}); ok {
+		return s.ArchiveContent()
+	}
+	return config.ArchiveContentFull
+}
+
+// canonicalChatGPTMessages applies the same validation and storage
+// projection the batch write applies, without writing anything.
+func canonicalChatGPTMessages(
+	store db.Store, sess db.Session, msgs []db.Message,
+	policy config.ArchiveContent,
+) []db.Message {
+	out := make([]db.Message, len(msgs))
+	copy(out, msgs)
+	for i := range out {
+		out[i].ToolCalls = slices.Clone(out[i].ToolCalls)
+	}
+	db.ValidateAndSanitize(&sess, out, nil)
+	if localDB, ok := store.(*db.DB); ok {
+		out, _ = localDB.ProjectToolResultImagesWithPolicy(
+			out, localDB.ToolResultImages(),
+		)
+	}
+	_, out = db.ProjectSessionForStoragePolicy(sess, out, policy)
+	return out
+}
+
+func writeChatGPTSession(
+	ctx context.Context, store db.Store, sess db.Session, msgs []db.Message,
+) error {
+	return writeChatGPTBatch(ctx, store, db.SessionBatchWrite{
+		Session:                    sess,
+		Messages:                   msgs,
+		SkipSignalUpdates:          true,
+		ReplaceMessages:            true,
+		RejectMessageCountDecrease: true,
+	})
+}
+
+// appendChatGPTMessages inserts rows after the archived transcript without
+// touching existing rows. Signals are written as zero values so the
+// backfill recomputes them for the longer transcript.
+func appendChatGPTMessages(
+	ctx context.Context, store db.Store, sess db.Session, tail []db.Message,
+) error {
+	return writeChatGPTBatch(ctx, store, db.SessionBatchWrite{
+		Session:  sess,
+		Messages: tail,
+	})
+}
+
+func writeChatGPTBatch(
+	ctx context.Context, store db.Store, write db.SessionBatchWrite,
+) error {
+	result, err := store.WriteSessionBatchAtomic(
+		ctx, []db.SessionBatchWrite{write},
+	)
+	if err != nil {
+		return err
+	}
+	if result.ExcludedSessions > 0 {
+		return db.ErrSessionExcluded
+	}
+	if result.FailedSessions > 0 && len(result.Errors) > 0 {
+		return result.Errors[0]
+	}
+	return nil
 }
 
 func resolvedImportMachine(current string, override []string) string {
@@ -437,6 +596,17 @@ func ptrEqual(a, b *string) bool {
 		return false
 	}
 	return *a == *b
+}
+
+// storedFormMessages applies the validation and archive-content
+// projection the message write applies, without writing anything.
+func storedFormMessages(store db.Store, msgs []db.Message) []db.Message {
+	out := slices.Clone(msgs)
+	db.ValidateAndSanitize(nil, out, nil)
+	_, out = db.ProjectSessionForStoragePolicy(
+		db.Session{}, out, storeArchiveContent(store),
+	)
+	return out
 }
 
 func sameMessages(existing, incoming []db.Message) bool {

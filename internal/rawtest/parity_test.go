@@ -30,7 +30,10 @@ func TestCaptureOracleLiteralContent(t *testing.T) {
 	call := messages[1].ToolCalls[0]
 	assert.Equal(t, "Bash", call.ToolName)
 	assert.Equal(t, "Error: synthetic build failure\n", call.ResultContent)
-	assert.Empty(t, call.ResultEvents, "Claude persists its summary without Codex lifecycle events")
+	require.Len(t, call.ResultEvents, 1)
+	assert.Equal(t, "tool_result", call.ResultEvents[0].Source)
+	assert.Equal(t, "errored", call.ResultEvents[0].Status)
+	assert.Equal(t, "Error: synthetic build failure\n", call.ResultEvents[0].Content)
 	assert.Equal(t, "Check the build first.", messages[1].ThinkingText)
 	assert.Equal(t, 7, messages[1].OutputTokens)
 	assert.Equal(t, 116, messages[1].ContextTokens)

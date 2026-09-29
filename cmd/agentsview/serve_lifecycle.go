@@ -273,8 +273,8 @@ func serveIncompatibleDaemonStatusLines(
 
 // runServeStop terminates every agentsview server owning this data dir whose
 // identity it can confirm. A record is signalled only once its PID is confirmed
-// to be the recorded daemon -- either it answers the ping probe, or its process
-// start time predates the record (proving the PID was not reused by an
+// to be the recorded daemon -- either it answers the ping probe, or its
+// process identity matches the record (proving the PID was not reused by an
 // unrelated process). This keeps a hung-but-alive daemon stoppable while never
 // signalling a stale record whose PID belongs to something else.
 func runServeStop(cfg config.Config) {
@@ -390,8 +390,8 @@ func stopWritableDaemonsForUpdate(ctx context.Context,
 
 // stopTargetConfirmed reports whether rec's live PID is safe to signal as the
 // recorded agentsview daemon. It accepts the target when the daemon answers the
-// ping probe, or, for a daemon that is alive but no longer answering, when the
-// process create time exactly matches the one recorded at startup. Either check
+// ping probe, or, for a daemon that is alive but no longer answering, when its
+// recorded process identity matches the live process. Either check
 // rules out a PID that an unrelated process reused after the record was
 // written.
 func stopTargetConfirmed(rec daemon.RuntimeRecord, authToken string) bool {
@@ -423,18 +423,16 @@ func probeDaemonRecord(
 }
 
 // processIdentityConfirmed reports whether the process now holding rec.PID is
-// the same one that wrote the record, by matching the OS create time persisted
-// at startup against the live process's current create time.
+// the same one that wrote the record. Kit's v2 identity takes precedence when
+// present; older records use the persisted create time.
 func processIdentityConfirmed(rec daemon.RuntimeRecord) bool {
-	return processCreateTimeMatches(rec.PID, rec.Metadata[runtimeCreateTime])
+	return runtimeRecordIdentityState(rec) == processCreateTimeMatch
 }
 
 // processCreateTimeMatches reports whether pid's current OS create time equals
-// recordedMillis. The match is exact: the create time is fixed for a given
-// process, so a PID reused by a different process yields a different value and
-// is rejected -- there is no slack window an impostor could fall into. An empty
-// or unparseable recordedMillis (legacy, or unreadable at write time) returns
-// false.
+// recordedMillis. This is the compatibility check for startup snapshots,
+// managed children, and records without a Kit v2 identity. The match is exact.
+// An empty or unparseable recordedMillis returns false.
 func processCreateTimeMatches(pid int, recordedMillis string) bool {
 	return processCreateTimeStateForPID(
 		pid, recordedMillis,
@@ -519,14 +517,14 @@ func caddyStopRecord(pid int, createTime string) daemon.RuntimeRecord {
 // one behind.
 func stopDaemonProcess(rec daemon.RuntimeRecord, grace time.Duration) error {
 	return stopDaemonProcessWithIdentity(
-		rec, grace, processCreateTimeStateForPID,
+		rec, grace, runtimeRecordIdentityState,
 	)
 }
 
 func stopDaemonProcessWithIdentity(
 	rec daemon.RuntimeRecord,
 	grace time.Duration,
-	identityStateForPID func(int, string) processCreateTimeState,
+	identityStateForRecord func(daemon.RuntimeRecord) processCreateTimeState,
 ) error {
 	proc, err := os.FindProcess(rec.PID)
 	if err != nil {
@@ -539,9 +537,7 @@ func stopDaemonProcessWithIdentity(
 		removeRuntimeRecordFile(rec)
 		return nil
 	}
-	identityState := identityStateForPID(
-		rec.PID, rec.Metadata[runtimeCreateTime],
-	)
+	identityState := identityStateForRecord(rec)
 	switch identityState {
 	case processCreateTimeMismatch:
 		// The PID is alive but its identity no longer matches the record: the
@@ -564,9 +560,7 @@ func stopDaemonProcessWithIdentity(
 		removeRuntimeRecordFile(rec)
 		return nil
 	}
-	identityState = identityStateForPID(
-		rec.PID, rec.Metadata[runtimeCreateTime],
-	)
+	identityState = identityStateForRecord(rec)
 	switch identityState {
 	case processCreateTimeMismatch:
 		// The daemon exited after SIGKILL and the PID was reused. The record

@@ -232,7 +232,7 @@ zoom_level = 120
 | `[clickhouse]`                      | ClickHouse sync configuration — see [ClickHouse Sync](/docs/clickhouse-sync/)                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `[vector]`                          | Opt-in semantic-search index; model settings live in `[vector.embeddings]`, named endpoints in `[vector.embeddings.servers.<name>]`, embedding schedule in `[vector.embed]` — see [Semantic Search](/docs/semantic-search/#enabling-vector) for every key                                                                                                                                                                                                                        |
 | `[recall.extract]`                  | Opt-in model-backed recall extraction; named endpoints in `[recall.extract.servers.<name>]`, prompt selection in `[recall.extract.prompts]`, request overrides in `[recall.extract.request]` — see [Recall](/docs/recall/#automatic-extraction)                                                                                                                                                                                                                                  |
-| `[insights]`                        | Optional generated-insights endpoint and model; local loopback HTTP is allowed, remote plaintext requires `allow_http = true`, and endpoint failures do not retry through a CLI — see [Recall](/docs/recall/#current-surface)                                                                                                                                                                                                                                                    |
+| `[insights]`                        | Optional generated-insights endpoint and model, plus `default_agent`, the agent CLI new reports start with; local loopback HTTP is allowed, remote plaintext requires `allow_http = true`, and endpoint failures do not retry through a CLI — see [Recall](/docs/recall/#current-surface)                                                                                                                                                                                          |
 | `[[remote_hosts]]`                  | Remote machines synced by a bare `agentsview sync` — see [CLI Reference](/docs/commands/#agentsview-sync)                                                                                                                                                                                                                                                                                                                                                                        |
 | `[[session_sources]]`               | Additional filesystem session roots with per-root machine keys — see [Filesystem Session Sync](/docs/filesystem-sync/)                                                                                                                                                                                                                                                                                                                                                           |
 | `[automated]`                       | Custom automated-session patterns — see [Automated Session Detection](#automated-session-detection)                                                                                                                                                                                                                                                                                                                                                                              |
@@ -436,6 +436,7 @@ keeps its default directories.
 | Hermes Agent          | `~/.hermes/sessions/` (macOS and Linux), `~/AppData/Local/hermes/sessions/` (Windows)                                                                            | SQLite `state.db`; JSONL / JSON transcripts remain supported                                                                                                 |
 | iFlow                 | `~/.iflow/projects/`                                                                                                                                             | JSONL per session                                                                                                                                             |
 | IcodeMate             | `~/.local/share/icodemate/` and `~/.icodemate/cli/projects/`                                                                                                     | OpenCode-family storage, including per-session usage events                                                                                                   |
+| Junie                 | `~/.junie/sessions/` (or `$JUNIE_HOME/sessions/`)                                                                                                             | Per-session `events.jsonl` plus sibling `index.jsonl` metadata; CLI `SessionStore` only                                                                     |
 | Kilo                  | `~/.local/share/kilo/`                                                                                                                                           | SQLite DB or `storage/` JSON files                                                                                                                            |
 | Kimi                  | `~/.kimi/sessions/` and `~/.kimi-code/sessions/`                                                                                                                 | JSONL per session                                                                                                                                             |
 | Kimi Work             | (platform-specific, see below)                                                                                                                                   | JSONL per session (kimi-code kernel wire logs)                                                                                                                |
@@ -947,6 +948,8 @@ export GPTME_DIR=~/custom/gptme/logs
 export GROK_DIR=~/custom/grok/sessions
 export HERMES_SESSIONS_DIR=~/custom/hermes
 export IFLOW_DIR=~/custom/iflow
+export JUNIE_DIR=~/custom/junie/sessions
+export JUNIE_HOME=~/custom/junie-home # re-roots the default sessions/ path
 export KILO_DIR=~/custom/kilo
 export KIMI_DIR=~/custom/kimi
 export KIMI_WORK_DIR=~/custom/kimi-work
@@ -1109,7 +1112,7 @@ default; an empty array clears it. With no overrides, Pi uses
 
 ### Alternate Agent Homes
 
-Claude Code, Codex, and Pi support alternate homes. Each home can hold a
+Claude Code, Codex, Junie, and Pi support alternate homes. Each home can hold a
 separate account or settings profile. Register the home directories themselves
 in `homes`; AgentsView derives their native session directories:
 
@@ -1120,6 +1123,9 @@ homes = ["~/.claude-work", "~/.t3code/instances/alpha/claude"]
 [agents.codex]
 homes = ["~/.codex-work", "~/.t3code/instances/alpha/codex"]
 
+[agents.junie]
+homes = ["~/.junie-work", "~/.junie-personal"]
+
 [agents.pi]
 homes = ["~/.pi-work/agent", "~/.pi-personal/agent"]
 ```
@@ -1128,6 +1134,7 @@ homes = ["~/.pi-work/agent", "~/.pi-personal/agent"]
 | ----------- | --------------------- | ----------------------------------------------- | -------------------------------------- |
 | Claude Code | `CLAUDE_CONFIG_DIR`   | `<home>/projects/`                              | none                                   |
 | Codex       | `CODEX_HOME`          | `<home>/sessions/`, `<home>/archived_sessions/` | `history.jsonl`, `session_index.jsonl` |
+| Junie       | `JUNIE_HOME`          | `<home>/sessions/*/events.jsonl`                | `sessions/index.jsonl`                |
 | Pi          | `PI_CODING_AGENT_DIR` | `<home>/sessions/`                              | none                                   |
 
 Homes are additive to defaults, environment overrides, the same table's `dirs`,
@@ -1755,8 +1762,8 @@ Optional features that send data externally when you enable them:
     only leaves the machine if you expose the mirror over a remote Quack
     endpoint.
 - [Generated insights](/docs/recall/#current-surface) sends scoped session
-    content to the configured endpoint when `[insights]` is set, or to the
-    selected agent CLI when it is absent.
+    content to the configured endpoint when `[insights]` sets `endpoint` and
+    `model`, or to the selected agent CLI when neither is set.
 - [Publish to Gist](/docs/usage/#publish-to-gist) uploads a session to GitHub.
 
 The automatic outbound requests are update checks and an anonymous daemon ping:

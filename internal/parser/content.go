@@ -118,8 +118,14 @@ func parseToolResult(block gjson.Result) (ParsedToolResult, bool) {
 		return ParsedToolResult{}, false
 	}
 	rc := block.Get("content")
+	status := ""
+	if block.Get("is_error").Type == gjson.True {
+		status = "errored"
+	}
 	return ParsedToolResult{
 		ToolUseID:     tuid,
+		Source:        "tool_result",
+		Status:        status,
 		ContentLength: toolResultContentLength(rc),
 		ContentRaw:    rc.Raw,
 	}, true

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestComputeToolHealth_NoCalls(t *testing.T) {
@@ -487,31 +488,32 @@ func TestEditChurn(t *testing.T) {
 	}
 }
 
-func TestExtractFilePath(t *testing.T) {
-	tests := []struct {
-		name  string
-		input string
-		want  string
+func TestEditChurnPathFormats(t *testing.T) {
+	for _, tt := range []struct {
+		name, input, path string
 	}{
-		{
-			"normal json",
-			`{"file_path":"foo/bar.go","old":"x"}`,
-			"foo/bar.go",
-		},
-		{
-			"no file_path",
-			`{"command":"ls"}`,
-			"",
-		},
-		{
-			"empty path",
-			`{"file_path":""}`,
-			"",
-		},
-	}
-	for _, tt := range tests {
+		{"file_path", `{"file_path": "src/main.go"}`, ""},
+		{"path", `{"path":"src/main.go"}`, ""},
+		{"filePath", `{"filePath":"src/main.go"}`, ""},
+		{"file", `{"file":"src/main.go"}`, ""},
+		{"normalized patch path", "*** Begin Patch\n*** Update File: src/main.go\n*** End Patch", "src/main.go"},
+		{"normalized path takes priority", `{"file_path":"different.go"}`, "src/main.go"},
+	} {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, extractFilePath(tt.input))
+			calls := []ToolCallRow{
+				{Category: "Edit", MessageOrdinal: 0, InputJSON: tt.input, FilePath: tt.path},
+				{Category: "Write", MessageOrdinal: 1, InputJSON: `{"path":"src/main.go"}`},
+				{Category: "Edit", MessageOrdinal: 2, InputJSON: tt.input, FilePath: tt.path},
+			}
+			assert.Equal(t, []EditChurn{{
+				FilePath: "src/main.go", Count: 3,
+				First: CallPos{MessageOrdinal: 0}, Last: CallPos{MessageOrdinal: 2},
+			}}, EditChurnFiles(calls))
+			assert.Equal(t, 1, ComputeToolHealth(calls).EditChurnCount)
+			state := SeedIncrementalState(calls[:2], nil, "", "", nil, nil, 0, 0, 0)
+			_, got, ok := state.FoldToolHealth(calls[2:], nil, ToolHealthRow{})
+			require.True(t, ok)
+			assert.Equal(t, 1, got.EditChurnCount)
 		})
 	}
 }
@@ -570,4 +572,21 @@ func TestComputeToolHealth_Combined(t *testing.T) {
 	assert.Equal(t, 2, got.RetryCount)
 	assert.Equal(t, 1, got.EditChurnCount)
 	assert.Equal(t, 3, got.ConsecutiveFailureMax)
+}
+
+func TestProviderFailureStatuses_FullAndIncremental(t *testing.T) {
+	calls := []ToolCallRow{
+		{MessageOrdinal: 0, ToolName: "Read", Category: "Read", EventStatus: "completed"},
+		{MessageOrdinal: 1, ToolName: "Read", Category: "Read", EventStatus: "error"},
+		{MessageOrdinal: 2, ToolName: "Read", Category: "Read", EventStatus: "denied"},
+	}
+	full := ComputeToolHealth(calls)
+	assert.Equal(t, 2, full.FailureSignalCount)
+	assert.Equal(t, 2, full.ConsecutiveFailureMax)
+	state := SeedIncrementalState(calls[:1], nil, "", "", nil, nil, 0, 0, 0)
+	_, got, ok := state.FoldToolHealth(calls[1:], nil, ToolHealthRow{})
+	require.True(t, ok)
+	assert.Equal(t, 2, got.FailureCount)
+	assert.Equal(t, 2, got.ConsecutiveFailureMax)
+	assert.Equal(t, 2, got.FinalFailureStreak)
 }

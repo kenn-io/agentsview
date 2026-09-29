@@ -243,7 +243,7 @@ func (s *Server) humaGenerateInsight(
 			"date_to must be >= date_from")
 	}
 	if req.Agent == "" {
-		req.Agent = "claude"
+		req.Agent = s.insightDefaultAgent()
 	}
 	if !insight.ValidAgents[req.Agent] {
 		return nil, apiError(http.StatusBadRequest,

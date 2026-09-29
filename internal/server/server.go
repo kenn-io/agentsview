@@ -297,6 +297,25 @@ func insightGenerateOptions(cfg config.Config) insight.GenerateOptions {
 	return opts
 }
 
+// resolvedInsightDefaultAgent reports the agent insight generation falls back
+// to when a request does not choose one: the configured [insights]
+// default_agent, or the built-in default. Config loading normalizes and
+// validates the configured name.
+func resolvedInsightDefaultAgent(cfg config.Config) string {
+	if cfg.Insights.DefaultAgent != "" {
+		return cfg.Insights.DefaultAgent
+	}
+	return config.DefaultInsightAgent
+}
+
+// insightDefaultAgent reports the default agent for generation requests on
+// this server's current configuration.
+func (s *Server) insightDefaultAgent() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return resolvedInsightDefaultAgent(s.cfg)
+}
+
 // ingestionConfig returns the configuration for local filesystem provider
 // selection as the running daemon applies it. Without an IngestionReloader,
 // settings updates are persisted and reflected by GET immediately, but the

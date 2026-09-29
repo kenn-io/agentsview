@@ -145,6 +145,6 @@ func TestDetectIterationRunawayMissingTimes(t *testing.T) {
 	in.CallTimes = nil
 	sig, ok := detectIterationRunaway("s1", false, in)
 	require.True(t, ok)
-	assert.Equal(t, "150 tool calls without a user message 00:00-00:00", sig.Evidence)
+	assert.Equal(t, "150 tool calls without a user message", sig.Evidence)
 	assert.True(t, sig.OccurredAt.IsZero())
 }

@@ -1463,6 +1463,8 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_conversation_messages_revision ON conversation_messages(revision);
 CREATE INDEX IF NOT EXISTS idx_conversation_messages_source ON conversation_messages(session_id, source_id);
+CREATE INDEX IF NOT EXISTS idx_conversation_messages_ordinal
+    ON conversation_messages(session_id, ordinal) WHERE removed = 0;
 CREATE TABLE IF NOT EXISTS conversation_session_changes (
     session_id TEXT PRIMARY KEY,
     revision INTEGER NOT NULL,

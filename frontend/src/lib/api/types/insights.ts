@@ -8,4 +8,7 @@ export type CannedInsightKind =
   | "model_cost_review"
   | "instruction_opportunity_review";
 
-export type AgentName = "claude" | "codex" | "copilot" | "gemini" | "kiro";
+/** Agent CLIs an insight request can name, mirroring the server set. */
+export const AGENT_NAMES = ["claude", "codex", "copilot", "gemini", "kiro"] as const;
+
+export type AgentName = (typeof AGENT_NAMES)[number];

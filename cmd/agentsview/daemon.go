@@ -841,7 +841,7 @@ func daemonStatusRecords(
 		if !daemon.ProcessAlive(rec.PID) {
 			continue
 		}
-		state := processCreateTimeStateForPID(rec.PID, rec.Metadata[runtimeCreateTime])
+		state := runtimeRecordIdentityState(rec)
 		if state == processCreateTimeMismatch {
 			if rec.SourcePath != "" {
 				if err := os.Remove(rec.SourcePath); err != nil && !errors.Is(err, os.ErrNotExist) {

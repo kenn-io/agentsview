@@ -1852,6 +1852,8 @@ agentsview help
 | `GROK_DIR`                            | `~/.grok/sessions`                                   | Grok sessions directory                                                                             |
 | `HERMES_SESSIONS_DIR`                 | `~/.hermes/sessions` (macOS/Linux), `~/AppData/Local/hermes/sessions` (Windows) | Hermes Agent sessions root; sibling SQLite `state.db` is discovered even when `sessions/` is absent |
 | `IFLOW_DIR`                           | `~/.iflow/projects`                                  | iFlow projects directory                                                                            |
+| `JUNIE_DIR`                           | `~/.junie/sessions`                                  | Junie CLI session store directory                                                                   |
+| `JUNIE_HOME`                          | `~/.junie`                                           | Junie home that re-roots the default `sessions/` discovery path                                     |
 | `KILO_DIR`                            | `~/.local/share/kilo`                                | Kilo data directory                                                                                 |
 | `KILO_LEGACY_DIR`                     | (platform-specific)                                  | Kilo legacy VS Code extension data directory                                                        |
 | `KIMI_DIR`                            | `~/.kimi/sessions` and `~/.kimi-code/sessions`       | Kimi sessions directory                                                                             |

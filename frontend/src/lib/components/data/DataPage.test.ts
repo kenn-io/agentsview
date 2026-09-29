@@ -36,9 +36,13 @@ vi.mock("../../api/generated/index", () => ({
     postApiV1SettingsWorktreeMappingsApply: api.applyMappings,
   },
 }));
-vi.mock("../../api/runtime.js", () => ({
-  isAbortError: () => false,
-}));
+vi.mock("../../api/runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../api/runtime.js")>();
+  return {
+    ...actual,
+    isAbortError: () => false,
+  };
+});
 vi.mock("../../stores/router.svelte.js", () => ({
   router: { params: {}, replaceParams: vi.fn() },
 }));

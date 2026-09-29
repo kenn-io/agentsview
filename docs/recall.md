@@ -53,14 +53,16 @@ links use `/recall?tab=generated&insight=<id>`.
 ![Generated insights](/docs/assets/generated/screenshots/recall-generated-insights.png)
 
 Generated insights use the configured OpenAI-compatible endpoint when
-`[insights]` has both an `endpoint` and `model`; when `[insights]` is absent,
-they use the selected agent CLI on your machine. Partial endpoint configuration
-is rejected during configuration validation. Endpoint mode sends one
-non-streaming `POST /chat/completions` request with the generated prompt as a
-user message. It accepts the first choice's `assistant` message with string
-`message.content` and optional response `model`. It does not support streaming,
-`/responses`, legacy completions, tool calls, or content-part arrays. An
-endpoint failure returns an error and does not retry through a CLI.
+`[insights]` has both an `endpoint` and `model`; when neither is set, they use
+the selected agent CLI on your machine. See
+[Choosing the default agent](#choosing-the-default-agent) to set the initial
+selection. Partial endpoint configuration is rejected during configuration
+validation. Endpoint mode sends one non-streaming `POST /chat/completions`
+request with the generated prompt as a user message. It accepts the first
+choice's `assistant` message with string `message.content` and optional response
+`model`. It does not support streaming, `/responses`, legacy completions, tool
+calls, or content-part arrays. An endpoint failure returns an error and does not
+retry through a CLI.
 
 ```toml
 [insights]
@@ -68,6 +70,7 @@ endpoint = "http://127.0.0.1:11434/v1"
 model = "llama3.1"
 api_key_env = "OPENAI_API_KEY" # optional; the value is read at runtime
 # allow_http = true            # required for non-loopback HTTP endpoints
+# default_agent = "codex"      # generator used when no endpoint is configured
 ```
 
 Loopback HTTP endpoints are allowed for local models. Remote endpoints must use
@@ -101,6 +104,22 @@ binary = "/usr/local/bin/gemini"
 Each known agent has an independent override. This setting affects report
 generation only; session discovery continues to read the configured session
 directories.
+
+### Choosing the default agent
+
+Select the agent a new report starts with through `[insights]`:
+
+```toml
+[insights]
+default_agent = "codex"
+```
+
+The Web UI picker and requests that do not name an agent use this value when it
+is set, and `claude` when it is not. `default_agent` accepts `claude`, `codex`,
+`copilot`, `gemini`, or `kiro`; another value fails configuration validation at
+startup. An explicit picker choice overrides the default until you switch
+servers. `default_agent` has no effect while `[insights]` also sets an
+`endpoint` and `model`, because endpoint mode never invokes an agent CLI.
 
 Reviewed JSONL import is a guarded laboratory inlet, not a stable or recommended
 end-user workflow. Use an isolated `AGENTSVIEW_DATA_DIR` for experiments. The

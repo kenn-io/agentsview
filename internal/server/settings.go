@@ -9,19 +9,20 @@ import (
 
 // settingsResponse is the JSON shape returned by GET /api/v1/settings.
 type settingsResponse struct {
-	AgentDirs        map[string][]string       `json:"agent_dirs"`
-	SessionProviders []sessionProviderResponse `json:"session_providers"`
-	DisabledAgents   []parser.AgentType        `json:"disabled_agents"`
-	Terminal         terminalResponse          `json:"terminal"`
-	GithubConfigured bool                      `json:"github_configured"`
-	Host             string                    `json:"host"`
-	Port             int                       `json:"port"`
-	ChartPalette     config.ChartPalette       `json:"chart_palette"`
-	ZoomLevel        *config.ZoomLevel         `json:"zoom_level,omitempty"`
-	ToolResultImages string                    `json:"tool_result_images" enum:"keep,drop,offload" doc:"Inline tool-result image retention applied to ingestion after a daemon restart"`
-	AuthToken        string                    `json:"auth_token,omitempty"`
-	RequireAuth      bool                      `json:"require_auth"`
-	ReadOnly         bool                      `json:"read_only"`
+	AgentDirs           map[string][]string       `json:"agent_dirs"`
+	SessionProviders    []sessionProviderResponse `json:"session_providers"`
+	DisabledAgents      []parser.AgentType        `json:"disabled_agents"`
+	Terminal            terminalResponse          `json:"terminal"`
+	GithubConfigured    bool                      `json:"github_configured"`
+	Host                string                    `json:"host"`
+	Port                int                       `json:"port"`
+	ChartPalette        config.ChartPalette       `json:"chart_palette"`
+	ZoomLevel           *config.ZoomLevel         `json:"zoom_level,omitempty"`
+	ToolResultImages    string                    `json:"tool_result_images" enum:"keep,drop,offload" doc:"Inline tool-result image retention applied to ingestion after a daemon restart"`
+	InsightDefaultAgent string                    `json:"insight_default_agent" doc:"Agent CLI used when an insight generation request does not choose one"`
+	AuthToken           string                    `json:"auth_token,omitempty"`
+	RequireAuth         bool                      `json:"require_auth"`
+	ReadOnly            bool                      `json:"read_only"`
 }
 
 type sessionProviderResponse struct {

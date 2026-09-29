@@ -108,6 +108,9 @@ func (s *Store) BuildActivityReportArtifacts(
 	if err != nil {
 		return activity.CandidateArtifacts{}, fmt.Errorf("aggregating duckdb activity report: %w", err)
 	}
+	if err := s.activityReportMessageCounts(ctx, ids, q, &artifacts); err != nil {
+		return activity.CandidateArtifacts{}, err
+	}
 	duckReportProgress(onProgress, activity.Progress{
 		Phase: activity.ProgressFinalizing, SessionsTotal: len(sessions),
 		SessionsProcessed: len(sessions), RowsProcessed: rowsProcessed,
@@ -135,6 +138,35 @@ func duckReportProgress(callback activity.ProgressFunc, progress activity.Progre
 	if callback != nil {
 		callback(progress)
 	}
+}
+
+func (s *Store) activityReportMessageCounts(
+	ctx context.Context, ids []string, q activity.Query, artifacts *activity.CandidateArtifacts,
+) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	rows, err := s.queryContext(ctx, `
+		SELECT session_id, role, timestamp FROM messages
+		WHERE session_id IN (SELECT unnest(?))
+			AND role IN ('user', 'assistant') AND is_system = false
+			AND COALESCE(source_subtype, '') <> 'tool_result'
+			AND timestamp >= CAST(? AS TIMESTAMP) AND timestamp < CAST(? AS TIMESTAMP)`,
+		ids, q.RangeStart.UTC().Format(time.RFC3339Nano), q.EffectiveEnd.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return fmt.Errorf("querying duckdb activity message counts: %w", err)
+	}
+	defer rows.Close()
+	counts := activity.NewMessageAccumulator(q, artifacts)
+	for rows.Next() {
+		var sessionID, role string
+		var timestamp time.Time
+		if err := rows.Scan(&sessionID, &role, &timestamp); err != nil {
+			return fmt.Errorf("scanning duckdb activity message counts: %w", err)
+		}
+		counts.Add(sessionID, role, timestamp)
+	}
+	return rows.Err()
 }
 
 // GetSessionUsageRows returns the backend-priced usage rows for the supplied

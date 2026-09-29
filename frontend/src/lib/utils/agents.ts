@@ -75,6 +75,7 @@ export const KNOWN_AGENTS: readonly AgentMeta[] = [
     label: "QClaw",
   },
   { name: "iflow", color: "var(--accent-sky)", label: "iFlow" },
+  { name: "junie", color: "var(--accent-lime)", label: "Junie" },
   { name: "kimi", color: "var(--accent-pink)", label: "Kimi" },
   {
     name: "kimi-work",

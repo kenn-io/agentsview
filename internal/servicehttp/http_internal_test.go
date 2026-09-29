@@ -159,6 +159,41 @@ func TestUsageSummaryUsesLongRunningClient(t *testing.T) {
 	})
 }
 
+// TestStatsUsesLongRunningClient pins that `agentsview stats` can outlast the
+// 30-second default client. Git and GitHub aggregation shells out to `git log`
+// and `gh pr list` once per repository, so the operation routinely runs for
+// minutes; the flags that request it are offered by the command, so the command
+// has to be able to wait for the answer.
+func TestStatsUsesLongRunningClient(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		srv := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, "/api/v1/session-stats", r.URL.Path)
+			assert.Equal(t, "true", r.URL.Query().Get("include_github_outcomes"))
+			time.Sleep(50 * time.Millisecond)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(
+				`{"generated_at":"2026-09-01T00:00:00Z",` +
+					`"outcome_stats":{"repos_active":2,"commits":7}}`,
+			))
+		}))
+		transport := srv.Client().Transport
+		backend := NewHTTPBackend(srv.URL, "", false, "").(*httpBackend)
+		backend.client.Transport = transport
+		backend.longRunningClient.Transport = transport
+		backend.client.Timeout = 10 * time.Millisecond
+		result, err := backend.Stats(t.Context(), service.StatsFilter{
+			Since:                 "30d",
+			IncludeGitOutcomes:    true,
+			IncludeGitHubOutcomes: true,
+		})
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		require.NotNil(t, result.OutcomeStats)
+		assert.Equal(t, 2, result.OutcomeStats.ReposActive)
+		assert.Equal(t, 7, result.OutcomeStats.Commits)
+	})
+}
+
 func TestUsagePairwiseComparisonUsesLongRunningClient(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		srv := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

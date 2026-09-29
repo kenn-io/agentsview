@@ -3814,6 +3814,26 @@ func TestSettingsToolResultImagesRoundTrip(t *testing.T) {
 	assert.Equal(t, config.ToolResultImagesKeep, loadedPolicy(t))
 }
 
+func TestSettingsInsightDefaultAgent(t *testing.T) {
+	readDefaultAgent := func(t *testing.T, te *testEnv) string {
+		t.Helper()
+		w := te.get(t, "/api/v1/settings")
+		assertStatus(t, w, http.StatusOK)
+		var body struct {
+			InsightDefaultAgent string `json:"insight_default_agent"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+		return body.InsightDefaultAgent
+	}
+
+	assert.Equal(t, "claude", readDefaultAgent(t, setup(t)))
+
+	configured := setup(t, func(c *config.Config) {
+		c.Insights.DefaultAgent = "codex"
+	})
+	assert.Equal(t, "codex", readDefaultAgent(t, configured))
+}
+
 func TestSettingsRejectsOutOfEnumToolResultImages(t *testing.T) {
 	te := setup(t)
 	putSettings := func(body string) *httptest.ResponseRecorder {

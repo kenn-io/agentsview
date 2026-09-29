@@ -791,6 +791,7 @@ fn launch_backend(app: &mut App) -> Result<(), DynError> {
     let handle = app.handle().clone();
     let (rx, child) = spawn_sidecar(&handle)?;
 
+    let sidecar_pid = child.pid();
     let generation = save_sidecar(&handle, child)?;
 
     let focus_window = window.clone();
@@ -809,7 +810,7 @@ fn launch_backend(app: &mut App) -> Result<(), DynError> {
         }
     });
 
-    forward_sidecar_logs(rx, window, generation);
+    forward_sidecar_logs(rx, window, generation, sidecar_pid);
 
     Ok(())
 }
@@ -817,8 +818,9 @@ fn launch_backend(app: &mut App) -> Result<(), DynError> {
 fn launch_backend_from_handle(handle: &AppHandle) -> Result<(), DynError> {
     let window = main_window_from_handle(handle)?;
     let (rx, child) = spawn_sidecar(handle)?;
+    let sidecar_pid = child.pid();
     let generation = save_sidecar(handle, child)?;
-    forward_sidecar_logs(rx, window, generation);
+    forward_sidecar_logs(rx, window, generation, sidecar_pid);
     Ok(())
 }
 
@@ -1580,11 +1582,26 @@ fn wait_for_sidecar_termination(state: &SidecarState, generation: u64, timeout: 
     }
 }
 
-fn forward_sidecar_logs(mut rx: CommandRx, window: WebviewWindow, generation: u64) {
+fn forward_sidecar_logs(
+    mut rx: CommandRx,
+    window: WebviewWindow,
+    generation: u64,
+    sidecar_pid: u32,
+) {
     let startup_handled = Arc::new(AtomicBool::new(false));
     let first_output = Arc::new(AtomicBool::new(false));
     let startup_output = Arc::new(Mutex::new(String::new()));
     let log_sender = spawn_sidecar_log_writer(window.app_handle().clone());
+    queue_startup_log_record(
+        &log_sender,
+        generation,
+        format!(
+            "started by desktop {} (pid {}), sidecar pid {sidecar_pid}",
+            window.app_handle().package_info().version,
+            std::process::id()
+        )
+        .as_str(),
+    );
     let timeout_window = window.clone();
     let timeout_state = startup_handled.clone();
     thread::spawn(move || {
@@ -1635,7 +1652,13 @@ fn forward_sidecar_logs(mut rx: CommandRx, window: WebviewWindow, generation: u6
                                 "window.__setStage(2); \
                                  window.__setStatus('Connecting to interface...');",
                             );
-                            redirect_when_ready(window.clone(), port);
+                            redirect_when_ready(
+                                window.clone(),
+                                port,
+                                generation,
+                                "sidecar stdout",
+                                log_sender.clone(),
+                            );
                         }
                     }
                 }
@@ -1694,7 +1717,11 @@ fn forward_sidecar_logs(mut rx: CommandRx, window: WebviewWindow, generation: u6
                             "window.__setStatus(\
                              'Waiting for background daemon to become ready...');",
                         );
-                        poll_background_status_after_launcher_exit(window.clone(), generation);
+                        poll_background_status_after_launcher_exit(
+                            window.clone(),
+                            generation,
+                            log_sender.clone(),
+                        );
                         break;
                     }
                     if handle_sidecar_terminated(&state, startup_handled.as_ref(), generation) {
@@ -1997,9 +2024,15 @@ fn recover_webview(window: &WebviewWindow, port: u16) {
     }
 }
 
-fn redirect_when_ready(window: WebviewWindow, port: u16) {
+fn redirect_when_ready(
+    window: WebviewWindow,
+    port: u16,
+    generation: u64,
+    source: &'static str,
+    log_sender: SyncSender<SidecarLogRecord>,
+) {
     thread::spawn(move || {
-        if wait_for_server(port, READY_TIMEOUT) {
+        if wait_for_selected_backend(&log_sender, generation, source, port, READY_TIMEOUT) {
             let deferred_route = take_pending_deep_link_route(window.app_handle());
             let target_url = match deferred_route.as_deref() {
                 Some(route) => {
@@ -2011,12 +2044,16 @@ fn redirect_when_ready(window: WebviewWindow, port: u16) {
                 }
                 None => desktop_redirect_url(port),
             };
-            // Failures after a deferred route was consumed go to the
-            // desktop log: packaged builds discard stderr, and the
-            // "redirecting" line above would otherwise read as success.
+            // Packaged builds discard stderr, so record navigation
+            // failures in the desktop log as well.
             match Url::parse(target_url.as_str()) {
                 Ok(url) => {
                     if let Err(err) = window.navigate(url) {
+                        queue_startup_log_record(
+                            &log_sender,
+                            generation,
+                            format!("port {port} navigation failed: {err}").as_str(),
+                        );
                         if deferred_route.is_some() {
                             log_deep_link_event(
                                 window.app_handle(),
@@ -2035,6 +2072,11 @@ fn redirect_when_ready(window: WebviewWindow, port: u16) {
                     spawn_webview_health_fallback(window.clone(), port);
                 }
                 Err(err) => {
+                    queue_startup_log_record(
+                        &log_sender,
+                        generation,
+                        format!("port {port} invalid redirect URL: {err}").as_str(),
+                    );
                     if deferred_route.is_some() {
                         log_deep_link_event(
                             window.app_handle(),
@@ -2066,7 +2108,11 @@ fn redirect_when_ready(window: WebviewWindow, port: u16) {
     });
 }
 
-fn poll_background_status_after_launcher_exit(window: WebviewWindow, generation: u64) {
+fn poll_background_status_after_launcher_exit(
+    window: WebviewWindow,
+    generation: u64,
+    log_sender: SyncSender<SidecarLogRecord>,
+) {
     let handle = window.app_handle().clone();
     handle
         .state::<SidecarState>()
@@ -2082,7 +2128,7 @@ fn poll_background_status_after_launcher_exit(window: WebviewWindow, generation:
             if !background_status_poll_is_current(&handle, generation) {
                 return;
             }
-            let status = probe_backend_status(&handle).await;
+            let status = probe_backend_status(&handle, &log_sender, generation).await;
             status_poll_backoff_attempts =
                 next_background_status_poll_attempts(&status, status_poll_backoff_attempts);
             match status {
@@ -2095,7 +2141,13 @@ fn poll_background_status_after_launcher_exit(window: WebviewWindow, generation:
                         "window.__setStage(2); \
                          window.__setStatus('Connecting to interface...');",
                     );
-                    redirect_when_ready(window.clone(), port);
+                    redirect_when_ready(
+                        window.clone(),
+                        port,
+                        generation,
+                        "serve status",
+                        log_sender.clone(),
+                    );
                     return;
                 }
                 BackendStatusProbe::Starting(status) => {
@@ -2253,42 +2305,24 @@ fn status_probe_failures_should_stop(failed_status_probes: u32) -> bool {
     failed_status_probes >= STATUS_PROBE_FAILURE_FAIL_AFTER
 }
 
-async fn probe_backend_status(handle: &AppHandle) -> BackendStatusProbe {
+async fn probe_backend_status(
+    handle: &AppHandle,
+    log_sender: &SyncSender<SidecarLogRecord>,
+    generation: u64,
+) -> BackendStatusProbe {
     let Ok(mut command) = handle.shell().sidecar("agentsview") else {
         return BackendStatusProbe::Unavailable;
     };
     for (key, value) in sidecar_env() {
         command = command.env(key, value);
     }
-    let Ok((mut rx, child)) = command.args(sidecar_status_args()).spawn() else {
+    let Ok((rx, child)) = command.args(sidecar_status_args()).spawn() else {
         return BackendStatusProbe::Unavailable;
     };
-    let mut stdout_buffer = String::new();
-    let mut stderr_buffer = String::new();
-    let status = tokio::time::timeout(STATUS_PROBE_TIMEOUT, async {
-        while let Some(event) = rx.recv().await {
-            match event {
-                CommandEvent::Stdout(bytes) => {
-                    stdout_buffer.push_str(String::from_utf8_lossy(&bytes).as_ref());
-                }
-                CommandEvent::Stderr(bytes) => {
-                    stderr_buffer.push_str(String::from_utf8_lossy(&bytes).as_ref());
-                }
-                CommandEvent::Terminated(_) => {
-                    return Ok(classify_backend_status_output(
-                        stdout_buffer.as_str(),
-                        stderr_buffer.as_str(),
-                    ));
-                }
-                CommandEvent::Error(err) => {
-                    eprintln!("[agentsview:error] {err}");
-                    return Err(());
-                }
-                _ => {}
-            }
-        }
-        Ok(BackendStatusProbe::Unavailable)
-    })
+    let status = tokio::time::timeout(
+        STATUS_PROBE_TIMEOUT,
+        read_backend_status(rx, log_sender, generation),
+    )
     .await;
     match status {
         Ok(Ok(status)) => status,
@@ -2297,6 +2331,47 @@ async fn probe_backend_status(handle: &AppHandle) -> BackendStatusProbe {
             BackendStatusProbe::Unavailable
         }
     }
+}
+
+async fn read_backend_status(
+    mut rx: CommandRx,
+    log_sender: &SyncSender<SidecarLogRecord>,
+    generation: u64,
+) -> Result<BackendStatusProbe, ()> {
+    let mut stdout_buffer = String::new();
+    let mut stderr_buffer = String::new();
+    while let Some(event) = rx.recv().await {
+        match event {
+            CommandEvent::Stdout(bytes) => {
+                stdout_buffer.push_str(String::from_utf8_lossy(&bytes).as_ref());
+            }
+            CommandEvent::Stderr(bytes) => {
+                stderr_buffer.push_str(String::from_utf8_lossy(&bytes).as_ref());
+            }
+            CommandEvent::Terminated(_) => {
+                let status =
+                    classify_backend_status_output(stdout_buffer.as_str(), stderr_buffer.as_str());
+                if matches!(status, BackendStatusProbe::Ready(_)) {
+                    queue_startup_log_record(
+                        log_sender,
+                        generation,
+                        format!(
+                            "serve status: {}",
+                            redact_sidecar_log_line(stdout_buffer.trim())
+                        )
+                        .as_str(),
+                    );
+                }
+                return Ok(status);
+            }
+            CommandEvent::Error(err) => {
+                eprintln!("[agentsview:error] {err}");
+                return Err(());
+            }
+            _ => {}
+        }
+    }
+    Ok(BackendStatusProbe::Unavailable)
 }
 
 fn classify_backend_status_output(stdout: &str, stderr: &str) -> BackendStatusProbe {
@@ -2930,6 +3005,46 @@ fn try_send_sidecar_log_record(
             );
         }
     }
+}
+
+fn queue_startup_log_record(
+    log_sender: &SyncSender<SidecarLogRecord>,
+    generation: u64,
+    message: &str,
+) {
+    try_send_sidecar_log_record(
+        log_sender,
+        SidecarLogRecord::new("startup", format!("launch {generation}: {message}")),
+    );
+}
+
+fn wait_for_selected_backend(
+    log_sender: &SyncSender<SidecarLogRecord>,
+    generation: u64,
+    source: &str,
+    port: u16,
+    timeout: Duration,
+) -> bool {
+    queue_startup_log_record(
+        log_sender,
+        generation,
+        format!("selected port {port} from {source}").as_str(),
+    );
+    let ready = wait_for_server(port, timeout);
+    if ready {
+        queue_startup_log_record(
+            log_sender,
+            generation,
+            format!("port {port} ready").as_str(),
+        );
+    } else {
+        queue_startup_log_record(
+            log_sender,
+            generation,
+            format!("port {port} did not respond within {timeout:?}").as_str(),
+        );
+    }
+    ready
 }
 
 #[cfg(test)]
@@ -3607,7 +3722,9 @@ fn backend_endpoint_ready(port: u16) -> bool {
         Some(resp) => resp,
         None => return false,
     };
-    version_response_looks_valid(response.as_slice())
+    response.starts_with(b"HTTP/1.1 401 ")
+        || response.starts_with(b"HTTP/1.0 401 ")
+        || version_response_looks_valid(response.as_slice())
 }
 
 fn read_http_response(port: u16, request: &str) -> Option<Vec<u8>> {
@@ -3659,6 +3776,8 @@ mod tests {
     use serde_json::Value;
     use std::collections::{HashMap, VecDeque};
     use std::fs;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
     #[cfg(unix)]
     use std::os::unix::ffi::OsStrExt;
     #[cfg(unix)]
@@ -4253,25 +4372,95 @@ mod tests {
     }
 
     #[test]
-    fn forward_sidecar_logs_stdout_path_keeps_status_and_port_parsing() {
-        let source = include_str!("lib.rs");
-        let stdout_arm = source
-            .split("CommandEvent::Stdout(chunk_bytes) => {")
-            .nth(1)
-            .and_then(|segment| {
-                segment
-                    .split("CommandEvent::Stderr(line_bytes) => {")
-                    .next()
-            })
-            .expect("stdout arm");
+    fn wait_for_selected_backend_logs_readiness_timeout() {
+        let (log_sender, log_receiver) = sync_channel(DESKTOP_LOG_QUEUE_CAPACITY);
+        let listener = TcpListener::bind((HOST, 0)).expect("bind closed port");
+        let port = listener.local_addr().expect("local address").port();
+        drop(listener);
 
-        assert!(stdout_arm.contains("prepare_sidecar_stdout_update("));
-        assert!(stdout_arm.contains("stdout_update.status"));
-        assert!(stdout_arm.contains("stdout_update.port"));
-        assert!(stdout_arm.contains("window.__setStage(2)"));
-        assert!(source.contains(
-            "flush_pending_sidecar_log_record(&log_sender, \"stdout\", &mut stdout_log_buffer)"
+        assert!(!wait_for_selected_backend(
+            &log_sender,
+            1,
+            "serve status",
+            port,
+            Duration::from_millis(300),
         ));
+        let records: Vec<_> = log_receiver.try_iter().collect();
+        assert!(records.iter().any(|record| record.label == "startup"
+            && record.record == format!("launch 1: port {port} did not respond within 300ms")));
+    }
+
+    #[test]
+    fn wait_for_selected_backend_logs_stdout_decision_and_readiness() {
+        let (log_sender, log_receiver) = sync_channel(DESKTOP_LOG_QUEUE_CAPACITY);
+        let response = concat!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n",
+            r#"{"version":"1.0.0","commit":"abc","build_date":"2026-01-01T00:00:00Z","#,
+            r#""api_version":1,"data_version":50}"#,
+        );
+        let (port, server) = spawn_response_server(response.as_bytes());
+
+        assert!(wait_for_selected_backend(
+            &log_sender,
+            2,
+            "sidecar stdout",
+            port,
+            Duration::from_secs(5),
+        ));
+        server.join().expect("join server");
+
+        let selected = log_receiver.try_recv().expect("port decision");
+        assert_eq!(selected.label, "startup");
+        assert_eq!(
+            selected.record,
+            format!("launch 2: selected port {port} from sidecar stdout")
+        );
+        let ready = log_receiver.try_recv().expect("readiness record");
+        assert_eq!(ready.label, "startup");
+        assert_eq!(ready.record, format!("launch 2: port {port} ready"));
+    }
+
+    #[test]
+    fn read_backend_status_logs_daemon_identity() {
+        let (log_sender, log_receiver) = sync_channel(DESKTOP_LOG_QUEUE_CAPACITY);
+        let (sender, receiver) = tauri::async_runtime::channel(3);
+        let status = tauri::async_runtime::block_on(async {
+            sender
+                .send(CommandEvent::Stdout(
+                    b"agentsview running at http://127.0.0.1:8080\n  pid:     123\n".to_vec(),
+                ))
+                .await
+                .expect("send status");
+            sender
+                .send(CommandEvent::Stdout(
+                    b"  Authorization: Bearer test-token\n".to_vec(),
+                ))
+                .await
+                .expect("send status detail");
+            sender
+                .send(CommandEvent::Terminated(
+                    tauri_plugin_shell::process::TerminatedPayload {
+                        code: Some(0),
+                        signal: None,
+                    },
+                ))
+                .await
+                .expect("terminate status command");
+            read_backend_status(receiver, &log_sender, 3)
+                .await
+                .expect("status probe")
+        });
+
+        assert_eq!(status, BackendStatusProbe::Ready(8080));
+        let logged = log_receiver.try_recv().expect("daemon status record");
+        assert_eq!(logged.label, "startup");
+        assert_eq!(
+            logged.record,
+            concat!(
+                "launch 3: serve status: agentsview running at http://127.0.0.1:8080\n",
+                "  pid:     123\n  Authorization: Bearer <redacted>",
+            )
+        );
     }
 
     #[test]
@@ -5088,6 +5277,126 @@ agentsview running at http://127.0.0.1:18082
 
         let wrong_status = b"HTTP/1.1 404 Not Found\r\n\r\n{}";
         assert!(!version_response_looks_valid(wrong_status));
+    }
+
+    #[test]
+    fn wait_for_server_accepts_auth_challenge() {
+        let response =
+            b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 13\r\nConnection: close\r\n\r\nUnauthorized\n";
+        let (port, request) = spawn_response_server(response);
+        let ready = wait_for_server(port, Duration::from_secs(1));
+        let request = request.join().expect("response server should finish");
+
+        assert!(request.starts_with("GET /api/v1/version HTTP/1.1\r\n"));
+        assert!(request.contains(&format!("Host: {HOST}:{port}\r\n")));
+        assert!(!request.contains("Authorization:"));
+        assert!(ready);
+    }
+
+    #[test]
+    fn wait_for_server_stopped_rejects_auth_challenge() {
+        let response = b"HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\nUnauthorized\n";
+        let (port, request) = spawn_response_server(response);
+        let stopped = wait_for_server_stopped(port, Duration::ZERO);
+        request.join().expect("response server should finish");
+
+        assert!(!stopped);
+    }
+
+    #[test]
+    fn backend_endpoint_ready_preserves_status_boundaries() {
+        let cases: &[(&str, &[u8], bool)] = &[
+            (
+                "HTTP/1.0 401",
+                b"HTTP/1.0 401 Unauthorized\r\nConnection: close\r\n\r\nUnauthorized\n",
+                true,
+            ),
+            (
+                "HTTP/1.1 401",
+                b"HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\nUnauthorized\n",
+                true,
+            ),
+            (
+                "valid 200",
+                b"HTTP/1.1 200 OK\r\n\r\n{\"version\":\"1.0.0\",\"commit\":\"abc\",\"build_date\":\"2026-01-01T00:00:00Z\",\"api_version\":1,\"data_version\":50}",
+                true,
+            ),
+            ("unrelated HTML 200", b"HTTP/1.1 200 OK\r\n\r\n<html></html>", false),
+            ("403", b"HTTP/1.1 403 Forbidden\r\n\r\n", false),
+            ("503", b"HTTP/1.1 503 Service Unavailable\r\n\r\n", false),
+            ("HTTP/1.1 4010", b"HTTP/1.1 4010 Invalid\r\n\r\n", false),
+        ];
+
+        for &(name, response, expected) in cases {
+            let (port, request) = spawn_response_server(response);
+            let ready = backend_endpoint_ready(port);
+            request.join().expect("response server should finish");
+            assert_eq!(ready, expected, "{name}");
+        }
+
+        let (port, request) = spawn_response_server(b"");
+        let ready = backend_endpoint_ready(port);
+        request.join().expect("response server should finish");
+        assert!(!ready, "empty response");
+    }
+
+    fn spawn_response_server(response: &[u8]) -> (u16, std::thread::JoinHandle<String>) {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind response server");
+        listener
+            .set_nonblocking(true)
+            .expect("set response server nonblocking");
+        let port = listener
+            .local_addr()
+            .expect("get response server address")
+            .port();
+        let response = response.to_vec();
+        let handle = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(err)
+                        if err.kind() == io::ErrorKind::WouldBlock && Instant::now() < deadline =>
+                    {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(err) => panic!("accept response request: {err}"),
+                }
+            };
+            stream
+                .set_nonblocking(false)
+                .expect("set response stream blocking");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(1)))
+                .expect("set response read timeout");
+
+            let mut request = Vec::new();
+            let mut buf = [0; 1024];
+            loop {
+                match stream.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(size) => {
+                        request.extend_from_slice(&buf[..size]);
+                        if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                            break;
+                        }
+                    }
+                    Err(err)
+                        if err.kind() == io::ErrorKind::TimedOut
+                            || err.kind() == io::ErrorKind::WouldBlock =>
+                    {
+                        break;
+                    }
+                    Err(err) => panic!("read response request: {err}"),
+                }
+            }
+
+            if !response.is_empty() {
+                stream.write_all(&response).expect("write response");
+            }
+            String::from_utf8_lossy(&request).into_owned()
+        });
+        (port, handle)
     }
 
     #[test]

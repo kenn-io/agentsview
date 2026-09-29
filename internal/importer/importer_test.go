@@ -2,6 +2,8 @@ package importer
 
 import (
 	"database/sql"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
@@ -598,7 +601,7 @@ func TestImportChatGPT_ReimportPreservesExistingFields(t *testing.T) {
 	assert.Equal(t, origMsgCount, after.MessageCount, "message_count must not change")
 }
 
-func TestImportChatGPT_SkipsExisting(t *testing.T) {
+func TestImportChatGPT_ReimportSkipsUnchanged(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 
@@ -617,5 +620,286 @@ func TestImportChatGPT_SkipsExisting(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Equal(t, 0, stats.Imported)
+	assert.Equal(t, 1, stats.Skipped)
+}
+
+func TestImportChatGPTAppendsVerifiedHistory(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "conversations-000.json")
+	assetsDir := filepath.Join(t.TempDir(), "assets")
+	require.NoError(t, os.WriteFile(path, []byte(testChatGPTConv), 0o644))
+	_, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
+	require.NoError(t, err)
+
+	name := "My saved title"
+	require.NoError(t, d.RenameSession(ctx, "chatgpt:cg-1", &name))
+	before, err := d.GetAllMessages(ctx, "chatgpt:cg-1")
+	require.NoError(t, err)
+	require.Len(t, before, 1)
+	_, err = d.PinMessage(ctx, "chatgpt:cg-1", before[0].ID, nil)
+	require.NoError(t, err)
+
+	appended := testChatGPTConvWithAppend()
+	require.NoError(t, os.WriteFile(path, []byte(appended), 0o644))
+
+	stats, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Updated)
+	assert.Zero(t, stats.Errors)
+	after, err := d.GetAllMessages(ctx, "chatgpt:cg-1")
+	require.NoError(t, err)
+	require.Len(t, after, 2)
+	assert.Equal(t, before[0].ID, after[0].ID)
+	assert.Equal(t, before[0].Content, after[0].Content)
+
+	session, err := d.GetSession(ctx, "chatgpt:cg-1")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	require.NotNil(t, session.DisplayName)
+	assert.Equal(t, name, *session.DisplayName)
+
+	pins, err := d.ListPinnedMessages(ctx, "chatgpt:cg-1", "")
+	require.NoError(t, err)
+	require.Len(t, pins, 1)
+	assert.Equal(t, before[0].ID, pins[0].MessageID)
+
+	results, err := d.SearchContent(ctx, db.ContentSearchFilter{
+		Pattern: "newly appended answer", Sources: []string{"messages"},
+		IncludeOneShot: true, IncludeAutomated: true, Limit: 10,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, results.Matches)
+	assert.Equal(t, "chatgpt:cg-1", results.Matches[0].SessionID)
+
+	stats, err = ImportChatGPT(ctx, d, dir, assetsDir, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Skipped)
+	assert.Zero(t, stats.Updated)
+}
+
+func TestImportChatGPTRejectsShorterOrDivergentHistory(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		initial string
+		data    string
+	}{
+		{name: "shorter", initial: testChatGPTConvWithAppend(), data: testChatGPTConv},
+		{name: "divergent", initial: testChatGPTConvWithAppend(), data: strings.Replace(testChatGPTConvWithAppend(), `"Hello"`, `"Changed archived message"`, 1)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			dir := t.TempDir()
+			path := filepath.Join(dir, "conversations-000.json")
+			assetsDir := filepath.Join(t.TempDir(), "assets")
+			require.NoError(t, os.WriteFile(path, []byte(tc.initial), 0o644))
+			_, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
+			require.NoError(t, err)
+			before, err := d.GetAllMessages(ctx, "chatgpt:cg-1")
+			require.NoError(t, err)
+
+			require.NoError(t, os.WriteFile(path, []byte(tc.data), 0o644))
+			stats, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
+			require.NoError(t, err)
+			assert.Equal(t, 1, stats.Errors)
+			assert.Zero(t, stats.Updated)
+			after, err := d.GetAllMessages(ctx, "chatgpt:cg-1")
+			require.NoError(t, err)
+			assert.Equal(t, before, after)
+		})
+	}
+}
+
+func testChatGPTConvWithAppend() string {
+	var conversations []map[string]any
+	if err := json.Unmarshal([]byte(testChatGPTConv), &conversations); err != nil {
+		panic(err)
+	}
+	conversation := conversations[0]
+	conversation["current_node"] = "n2"
+	mapping := conversation["mapping"].(map[string]any)
+	mapping["n1"].(map[string]any)["children"] = []any{"n2"}
+	mapping["n2"] = map[string]any{
+		"id": "n2", "parent": "n1", "children": []any{},
+		"message": map[string]any{
+			"id": "m2", "create_time": 1706745660.0,
+			"author":  map[string]any{"role": "assistant", "name": nil, "metadata": map[string]any{}},
+			"content": map[string]any{"content_type": "text", "parts": []any{"A newly appended answer with searchable phrase"}},
+			"status":  "finished_successfully", "metadata": map[string]any{},
+		},
+	}
+	encoded, err := json.Marshal(conversations)
+	if err != nil {
+		panic(err)
+	}
+	return string(encoded)
+}
+
+func TestImportChatGPTReimportComparesStoredForm(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "conversations-000.json")
+	assetsDir := filepath.Join(t.TempDir(), "assets")
+	// The control rune is stripped at the storage boundary, so the raw
+	// parsed message differs from the archived row.
+	data := strings.Replace(testChatGPTConv, `"Hello"`, `"Hel\u0001lo"`, 1)
+	require.NoError(t, os.WriteFile(path, []byte(data), 0o644))
+	_, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
+	require.NoError(t, err)
+
+	stats, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
+	require.NoError(t, err)
+	assert.Zero(t, stats.Errors)
+	assert.Equal(t, 1, stats.Skipped)
+}
+
+func TestImportChatGPTAppendInvalidatesSignals(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "conversations-000.json")
+	assetsDir := filepath.Join(t.TempDir(), "assets")
+	require.NoError(t, os.WriteFile(path, []byte(testChatGPTConv), 0o644))
+	_, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
+	require.NoError(t, err)
+	score := 42
+	require.NoError(t, d.UpdateSessionSignals(ctx, "chatgpt:cg-1", db.SessionSignalUpdate{
+		HealthScore:    &score,
+		QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion},
+	}))
+
+	require.NoError(t, os.WriteFile(path, []byte(testChatGPTConvWithAppend()), 0o644))
+	stats, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, stats.Updated)
+
+	session, err := d.GetSession(ctx, "chatgpt:cg-1")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Zero(t, session.QualitySignalVersion)
+	assert.Nil(t, session.HealthScore)
+}
+
+func TestImportChatGPTUsageArchiveSkipsAppend(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "conversations-000.json")
+	assetsDir := filepath.Join(t.TempDir(), "assets")
+	require.NoError(t, os.WriteFile(path, []byte(testChatGPTConv), 0o644))
+	_, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
+	require.NoError(t, err)
+	d.SetArchiveContent(config.ArchiveContentUsage)
+	before, err := d.GetAllMessages(ctx, "chatgpt:cg-1")
+	require.NoError(t, err)
+
+	require.NoError(t, os.WriteFile(path, []byte(testChatGPTConvWithAppend()), 0o644))
+	stats, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
+	require.NoError(t, err)
+	assert.Zero(t, stats.Errors)
+	assert.Zero(t, stats.Updated)
+	assert.Equal(t, 1, stats.Skipped)
+	after, err := d.GetAllMessages(ctx, "chatgpt:cg-1")
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+}
+
+// claudeAIConversationWithMessages returns testConversationsJSON trimmed or
+// extended to n messages; extra turns get unique text and timestamps.
+func claudeAIConversationWithMessages(t *testing.T, n int) string {
+	t.Helper()
+	var conversations []map[string]any
+	require.NoError(t, json.Unmarshal([]byte(testConversationsJSON), &conversations))
+	msgs := conversations[0]["chat_messages"].([]any)
+	for i := len(msgs); i < n; i++ {
+		text := fmt.Sprintf("Appended turn %d", i)
+		sender := "human"
+		if i%2 == 1 {
+			sender = "assistant"
+		}
+		ts := fmt.Sprintf("2026-02-01T09:0%d:00.000000Z", i)
+		msgs = append(msgs, map[string]any{
+			"uuid": fmt.Sprintf("m%d", i+1), "text": text,
+			"content": []any{map[string]any{"type": "text", "text": text}},
+			"sender":  sender, "created_at": ts, "updated_at": ts,
+			"attachments": []any{}, "files": []any{},
+		})
+	}
+	conversations[0]["chat_messages"] = msgs[:n]
+	encoded, err := json.Marshal(conversations)
+	require.NoError(t, err)
+	return string(encoded)
+}
+
+func TestImportClaudeAIRejectsShorterExport(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	_, err := ImportClaudeAI(ctx, d, strings.NewReader(testConversationsJSON), nil)
+	require.NoError(t, err)
+	before, err := d.GetAllMessages(ctx, "claude-ai:import-test-001")
+	require.NoError(t, err)
+	require.Len(t, before, 2)
+
+	stats, err := ImportClaudeAI(ctx, d,
+		strings.NewReader(claudeAIConversationWithMessages(t, 1)), nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Errors)
+	assert.Zero(t, stats.Updated)
+
+	after, err := d.GetAllMessages(ctx, "claude-ai:import-test-001")
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+	s, err := d.GetSession(ctx, "claude-ai:import-test-001")
+	require.NoError(t, err)
+	require.NotNil(t, s)
+	assert.Equal(t, 2, s.MessageCount)
+}
+
+func TestImportClaudeAIAppendKeepsArchivedRows(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	_, err := ImportClaudeAI(ctx, d, strings.NewReader(testConversationsJSON), nil)
+	require.NoError(t, err)
+	before, err := d.GetAllMessages(ctx, "claude-ai:import-test-001")
+	require.NoError(t, err)
+	_, err = d.PinMessage(ctx, "claude-ai:import-test-001", before[1].ID, nil)
+	require.NoError(t, err)
+
+	stats, err := ImportClaudeAI(ctx, d,
+		strings.NewReader(claudeAIConversationWithMessages(t, 4)), nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Updated)
+	assert.Zero(t, stats.Errors)
+
+	after, err := d.GetAllMessages(ctx, "claude-ai:import-test-001")
+	require.NoError(t, err)
+	require.Len(t, after, 4)
+	assert.Equal(t, before[0].ID, after[0].ID)
+	assert.Equal(t, before[1].ID, after[1].ID)
+	pins, err := d.ListPinnedMessages(ctx, "claude-ai:import-test-001", "")
+	require.NoError(t, err)
+	require.Len(t, pins, 1)
+	assert.Equal(t, before[1].ID, pins[0].MessageID)
+}
+
+func TestImportClaudeAIReimportComparesStoredForm(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	// The control rune is stripped at the storage boundary, so the raw
+	// parsed message differs from the archived row.
+	data := strings.Replace(testConversationsJSON,
+		`"text": "Hello",`, `"text": "Hel\u0001lo",`, 1)
+	data = strings.Replace(data,
+		`{"type":"text","text":"Hello"}`, `{"type":"text","text":"Hel\u0001lo"}`, 1)
+	_, err := ImportClaudeAI(ctx, d, strings.NewReader(data), nil)
+	require.NoError(t, err)
+
+	stats, err := ImportClaudeAI(ctx, d, strings.NewReader(data), nil)
+	require.NoError(t, err)
+	assert.Zero(t, stats.Errors)
+	assert.Zero(t, stats.Updated)
 	assert.Equal(t, 1, stats.Skipped)
 }

@@ -22,6 +22,9 @@ func TestInsightsConfigValidation(t *testing.T) {
 		{name: "partial model", config: InsightsConfig{Model: "local"}, wantErr: "required together"},
 		{name: "userinfo", config: InsightsConfig{Endpoint: "https://user:secret@models.example/v1", Model: "remote"}, wantErr: "credentials"},
 		{name: "remote http", config: InsightsConfig{Endpoint: "http://models.example/v1", Model: "remote"}, wantErr: "plaintext"},
+		{name: "default agent", config: InsightsConfig{DefaultAgent: "codex"}},
+		{name: "default agent ignores case", config: InsightsConfig{DefaultAgent: " Codex "}},
+		{name: "unknown default agent", config: InsightsConfig{DefaultAgent: "gpt"}, wantErr: "insight agent must be one of"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -48,16 +51,18 @@ func TestInsightsConfigAPIKey(t *testing.T) {
 func TestInsightsConfigTOMLLoadAndFinalize(t *testing.T) {
 	cfg := loadMinimalWithConfig(t, map[string]any{
 		"insights": map[string]any{
-			"endpoint":    " http://127.0.0.1:11434/v1 ",
-			"model":       " llama3.1 ",
-			"api_key_env": " AGENTSVIEW_INSIGHTS_KEY ",
-			"allow_http":  true,
+			"endpoint":      " http://127.0.0.1:11434/v1 ",
+			"model":         " llama3.1 ",
+			"api_key_env":   " AGENTSVIEW_INSIGHTS_KEY ",
+			"allow_http":    true,
+			"default_agent": " Codex ",
 		},
 	})
 	assert.Equal(t, "http://127.0.0.1:11434/v1", cfg.Insights.Endpoint)
 	assert.Equal(t, "llama3.1", cfg.Insights.Model)
 	assert.Equal(t, "AGENTSVIEW_INSIGHTS_KEY", cfg.Insights.APIKeyEnv)
 	assert.True(t, cfg.Insights.AllowHTTP)
+	assert.Equal(t, "codex", cfg.Insights.DefaultAgent)
 
 	err := loadMinimalErrWithConfig(t, map[string]any{
 		"insights": map[string]any{
@@ -67,4 +72,12 @@ func TestInsightsConfigTOMLLoadAndFinalize(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "plaintext")
+
+	err = loadMinimalErrWithConfig(t, map[string]any{
+		"insights": map[string]any{
+			"default_agent": "gpt",
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "insight agent must be one of")
 }

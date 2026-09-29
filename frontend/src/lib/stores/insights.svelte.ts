@@ -1,4 +1,5 @@
 import { m } from "../i18n/index.js";
+import { AGENT_NAMES } from "../api/types/insights.js";
 import type {
   InsightType,
   AgentName,
@@ -17,13 +18,20 @@ import {
 import { localDateStr } from "../utils/dates.js";
 import { LatestRead } from "../utils/latest-read.js";
 
+/** Agent used until the server reports a configured default. */
+const BUILT_IN_AGENT: AgentName = "claude";
+
+function isAgentName(value: string | undefined): value is AgentName {
+  return value !== undefined && (AGENT_NAMES as readonly string[]).includes(value);
+}
+
 export interface InsightTask {
   clientId: string;
   type: InsightType;
   dateFrom: string;
   dateTo: string;
   project: string;
-  agent: AgentName;
+  agent?: AgentName;
   kind?: CannedInsightKind;
   promptText: string;
   automatedScope: AutomatedScope;
@@ -43,7 +51,7 @@ interface GenerationSnapshot {
   dateFrom: string;
   dateTo: string;
   project: string;
-  agent: AgentName;
+  agent?: AgentName;
   kind?: CannedInsightKind;
   promptText: string;
   automatedScope: AutomatedScope;
@@ -57,7 +65,10 @@ class InsightsStore {
   type: InsightType = $state("daily_activity");
   cannedKind: CannedInsightKind = $state("prompt_maturity_review");
   project: string = $state("");
-  agent: AgentName = $state("claude");
+  agent: AgentName = $state(BUILT_IN_AGENT);
+  /** True once the picker chose an agent. The configured server default
+   *  stops replacing that choice. */
+  agentChosen = $state(false);
   sessionAgent: string = $state("");
   automatedScope: AutomatedScope = $state("human");
   items: DbInsight[] = $state([]);
@@ -136,6 +147,24 @@ class InsightsStore {
   }
 
   setAgent(agent: AgentName) {
+    this.agentChosen = true;
+    this.agent = agent;
+  }
+
+  get requestAgent(): AgentName | undefined {
+    return this.agentChosen ? this.agent : undefined;
+  }
+
+  resetAgent() {
+    this.agentChosen = false;
+    this.agent = BUILT_IN_AGENT;
+  }
+
+  /** applyDefaultAgent adopts the agent configured on the server. It is
+   *  ignored once the picker chose an agent, and for responses that omit the
+   *  field or name an agent this build does not support. */
+  applyDefaultAgent(agent: string | undefined) {
+    if (this.agentChosen || !isAgentName(agent)) return;
     this.agent = agent;
   }
 
@@ -163,7 +192,7 @@ class InsightsStore {
       dateFrom: this.dateFrom,
       dateTo: this.dateTo,
       project: this.project,
-      agent: this.agent,
+      agent: this.requestAgent,
       kind: this.type === "llm_canned" ? this.cannedKind : undefined,
       promptText: this.promptText,
       automatedScope: this.automatedScope,
@@ -186,7 +215,7 @@ class InsightsStore {
         dateFrom: date,
         dateTo: date,
         project: session.project || "",
-        agent: this.agent,
+        agent: this.requestAgent,
         promptText: this.promptText,
         automatedScope: "human",
         sessionId: session.id,

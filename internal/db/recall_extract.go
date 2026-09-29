@@ -197,6 +197,11 @@ func (db *DB) ExtractGenerations(
 // the set of current secret-scan rules and quietCutoff as the eligibility
 // cutoff — and any mismatch aborts with ErrExtractActivationBlocked instead
 // of retiring the served corpus around it.
+//
+// Coverage completeness is required only while some generation is active,
+// because that is the corpus those gates protect: see
+// verifyExtractActivationCoverageTx. Whether one is active is read inside
+// this transaction, so an activation racing another cannot see a stale answer.
 func (db *DB) ActivateExtractGeneration(
 	ctx context.Context, fingerprint string,
 	scanVersions []string, quietCutoff time.Time,
@@ -221,9 +226,13 @@ func (db *DB) ActivateExtractGeneration(
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	serving, err := extractCorpusServingTx(ctx, tx)
+	if err != nil {
+		return err
+	}
 	if err := verifyExtractActivationCoverageTx(
 		ctx, tx, fingerprint, scanVersions, quietCutoff,
-		db.ExtractCandidateFindingsAllowed(),
+		db.ExtractCandidateFindingsAllowed(), serving,
 	); err != nil {
 		return err
 	}
@@ -359,56 +368,57 @@ func (db *DB) ActivateExtractGeneration(
 }
 
 // verifyExtractActivationCoverageTx re-verifies, inside the activation
-// transaction, that the generation's coverage still supports serving: no
-// fully eligible session is pending or partial, no completed session —
-// still extraction-eligible — has transcript writes past its coverage
-// stamp or a scan stamp outside the current rules versions, and no eligible session
-// lacks a progress row entirely (a single-session run, or a session ending
-// after the caller's checks, leaves uncovered work that no progress-based
-// gate can see). Failed sessions do not block (they retry and top the
-// corpus up later) unless they hold staged output made stale by a later
-// session write, and sessions that turned ineligible are ignored by
-// every gate — including the unfinished count, since their extraction can
-// never finish and an explicit activation runs no retraction pass to clear
-// their rows first: promotion excludes their entries and the retraction
-// pass removes them.
+// transaction, that the generation's coverage still supports serving. Two
+// kinds of gate apply, and they answer different questions.
+//
+// Staleness always blocks: no completed session — still extraction-eligible
+// — may have transcript writes past its coverage stamp or a scan stamp
+// outside the current rules versions, and no partial or failed session may
+// hold staged output made stale by a later session write. That output no
+// longer matches its transcript, which disqualifies a first corpus exactly
+// as much as a replacement.
+//
+// Completeness blocks only while a corpus is serving: no fully eligible
+// session may be pending or partial, and none may lack a progress row
+// entirely (a single-session run, or a session ending after the caller's
+// checks, leaves uncovered work that no progress-based gate can see). What
+// those two gates protect is the served corpus — activation retires and
+// archives it in this same transaction, so promoting an incomplete
+// generation would replace a complete corpus with a fragment. While no
+// generation is active there is no such corpus: nothing is being served, and
+// the alternative to serving what has been extracted so far is serving
+// nothing at all until every eligible session in the archive has been
+// through the model. Quality is untouched either way — the entries promoted
+// early are the same entries, produced by the same model under the same
+// fingerprint — and the coverage a generation has is reported separately, so
+// an incomplete corpus does not present itself as a complete one.
+//
+// Nothing else is relaxed with them. The refusal to promote when nothing is
+// servable still applies, so an empty generation cannot take over, and the
+// cleanup of ineligible sessions' staged output and progress rows still runs
+// in the same transaction, so privacy retraction is unaffected.
+//
+// Failed sessions do not block (they retry and top the corpus up later)
+// unless they hold staged output made stale by a later session write, and
+// sessions that turned ineligible are ignored by every gate — including the
+// unfinished count, since their extraction can never finish and an explicit
+// activation runs no retraction pass to clear their rows first: promotion
+// excludes their entries and the retraction pass removes them.
 func verifyExtractActivationCoverageTx(
 	ctx context.Context, tx *sql.Tx, fingerprint string,
 	scanVersions []string, quietCutoff time.Time, allowCandidates bool,
+	serving bool,
 ) error {
 	gate := extractFindingsGateSQL(allowCandidates)
 	versionMarks := strings.TrimSuffix(
 		strings.Repeat("?,", len(scanVersions)), ",")
-	// Full eligibility, not merely "not hard-ineligible": a pending or
-	// partial row whose session is in transient flux (reopened, scan
-	// stamp lost) is skipped by candidate selection and left alone by
-	// reconciliation, so no pass can ever finish it — counting it here
-	// would block activation until the session happens to settle,
-	// possibly forever. The cleanup below deletes such rows with their
-	// staged output, and rediscovery re-extracts once the session
-	// settles.
-	buildingArgs := make([]any, 0, len(scanVersions)+4)
-	buildingArgs = append(buildingArgs,
-		fingerprint, ExtractProgressPending, ExtractProgressPartial)
-	for _, version := range scanVersions {
-		buildingArgs = append(buildingArgs, version)
-	}
-	buildingArgs = append(buildingArgs,
-		quietCutoff.UTC().Format(extractTimeLayout))
-	var building int
-	if err := tx.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM recall_extract_progress p
-		JOIN sessions s ON s.id = p.session_id
-		WHERE p.generation_fingerprint = ? AND p.state IN (?, ?)
-		  AND `+fmt.Sprintf(extractEligibleSessionSQL, versionMarks, gate),
-		buildingArgs...,
-	).Scan(&building); err != nil {
-		return fmt.Errorf("counting unfinished coverage: %w", err)
-	}
-	if building > 0 {
-		return fmt.Errorf(
-			"generation %s has %d sessions still being extracted: %w",
-			fingerprint, building, ErrExtractActivationBlocked)
+	if serving {
+		if err := refuseUnfinishedExtractCoverageTx(
+			ctx, tx, fingerprint, scanVersions, quietCutoff,
+			versionMarks, gate,
+		); err != nil {
+			return err
+		}
 	}
 	args := make([]any, 0, len(scanVersions)+2)
 	args = append(args, fingerprint, ExtractProgressDone)
@@ -442,25 +452,21 @@ func verifyExtractActivationCoverageTx(
 			"generation %s has %d completed sessions whose coverage went "+
 				"stale: %w", fingerprint, stale, ErrExtractActivationBlocked)
 	}
-	failedArgs := make([]any, 0, len(scanVersions)+3)
-	failedArgs = append(failedArgs, fingerprint, ExtractProgressFailed)
+	stagedArgs := make([]any, 0, len(scanVersions)+4)
+	stagedArgs = append(stagedArgs, fingerprint, ExtractProgressPartial, ExtractProgressFailed)
 	for _, version := range scanVersions {
-		failedArgs = append(failedArgs, version)
+		stagedArgs = append(stagedArgs, version)
 	}
-	failedArgs = append(failedArgs, quietCutoff.UTC().Format(extractTimeLayout))
-	// Failed rows do not block in general — they retry and top the corpus
-	// up later — but a failed partial row keeps its staged entries behind
-	// the failure backoff, and a session write past its stamp (content, or
-	// a remap to another project, cwd, or branch) leaves them stale in
-	// ways only the retry's refresh repairs. Only fully eligible sessions
-	// count: staged output of every other session is deleted by the
-	// cleanup later in this transaction, and a failed row with nothing
-	// staged promotes nothing.
-	var staleFailed int
+	stagedArgs = append(stagedArgs, quietCutoff.UTC().Format(extractTimeLayout))
+	// Partial and failed rows can hold staged entries until extraction
+	// resumes. A session write after their coverage stamp makes that output
+	// stale. Only eligible sessions with staged output count: the cleanup
+	// below deletes ineligible output, and empty rows promote nothing.
+	var staleStaged int
 	if err := tx.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM recall_extract_progress p
 		JOIN sessions s ON s.id = p.session_id
-		WHERE p.generation_fingerprint = ? AND p.state = ?
+		WHERE p.generation_fingerprint = ? AND p.state IN (?, ?)
 		  AND `+fmt.Sprintf(extractEligibleSessionSQL, versionMarks, gate)+`
 		  AND ((s.local_modified_at IS NULL AND p.content_stamped_at = '')
 			OR s.local_modified_at >= p.content_stamped_at)
@@ -472,21 +478,99 @@ func verifyExtractActivationCoverageTx(
 			  AND e.review_state = 'unreviewed_auto'
 			  AND e.superseded_by_entry_id = ''
 		  )`,
-		failedArgs...,
-	).Scan(&staleFailed); err != nil {
-		return fmt.Errorf("counting stale failed coverage: %w", err)
+		stagedArgs...,
+	).Scan(&staleStaged); err != nil {
+		return fmt.Errorf("counting stale staged coverage: %w", err)
 	}
-	if staleFailed > 0 {
+	if staleStaged > 0 {
 		return fmt.Errorf(
-			"generation %s has %d failed sessions whose staged output "+
+			"generation %s has %d incomplete sessions whose staged output "+
 				"went stale: %w",
-			fingerprint, staleFailed, ErrExtractActivationBlocked)
+			fingerprint, staleStaged, ErrExtractActivationBlocked)
 	}
-	eligibleArgs := make([]any, 0, len(scanVersions)+2)
+	if serving {
+		if err := refuseUncoveredEligibleSessionsTx(
+			ctx, tx, fingerprint, scanVersions, quietCutoff,
+			versionMarks, gate,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// extractCorpusServingTx reports whether any generation is currently active,
+// which is the same question as whether a machine-distilled corpus is being
+// served: only an active generation's entries are promoted to served status,
+// and activation retires whichever generation was active. Read inside the
+// activation transaction so the answer cannot change under the gates that
+// depend on it.
+func extractCorpusServingTx(ctx context.Context, tx *sql.Tx) (bool, error) {
+	var serving bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM recall_extract_generations WHERE state = ?
+		)`,
+		ExtractGenerationActive,
+	).Scan(&serving); err != nil {
+		return false, fmt.Errorf("probing the served generation: %w", err)
+	}
+	return serving, nil
+}
+
+// refuseUnfinishedExtractCoverageTx blocks activation while a fully eligible
+// session is still being extracted under the generation.
+//
+// Full eligibility, not merely "not hard-ineligible": a pending or partial
+// row whose session is in transient flux (reopened, scan stamp lost) is
+// skipped by candidate selection and left alone by reconciliation, so no pass
+// can ever finish it — counting it here would block activation until the
+// session happens to settle, possibly forever. The activation transaction's
+// cleanup deletes such rows with their staged output, and rediscovery
+// re-extracts once the session settles.
+func refuseUnfinishedExtractCoverageTx(
+	ctx context.Context, tx *sql.Tx, fingerprint string,
+	scanVersions []string, quietCutoff time.Time,
+	versionMarks, gate string,
+) error {
+	args := make([]any, 0, len(scanVersions)+4)
+	args = append(args,
+		fingerprint, ExtractProgressPending, ExtractProgressPartial)
 	for _, version := range scanVersions {
-		eligibleArgs = append(eligibleArgs, version)
+		args = append(args, version)
 	}
-	eligibleArgs = append(eligibleArgs,
+	args = append(args, quietCutoff.UTC().Format(extractTimeLayout))
+	var building int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM recall_extract_progress p
+		JOIN sessions s ON s.id = p.session_id
+		WHERE p.generation_fingerprint = ? AND p.state IN (?, ?)
+		  AND `+fmt.Sprintf(extractEligibleSessionSQL, versionMarks, gate),
+		args...,
+	).Scan(&building); err != nil {
+		return fmt.Errorf("counting unfinished coverage: %w", err)
+	}
+	if building > 0 {
+		return fmt.Errorf(
+			"generation %s has %d sessions still being extracted: %w",
+			fingerprint, building, ErrExtractActivationBlocked)
+	}
+	return nil
+}
+
+// refuseUncoveredEligibleSessionsTx blocks activation while an eligible
+// session has no progress row under the generation at all: it was never
+// extracted, and no progress-based gate can see work that left no row.
+func refuseUncoveredEligibleSessionsTx(
+	ctx context.Context, tx *sql.Tx, fingerprint string,
+	scanVersions []string, quietCutoff time.Time,
+	versionMarks, gate string,
+) error {
+	args := make([]any, 0, len(scanVersions)+2)
+	for _, version := range scanVersions {
+		args = append(args, version)
+	}
+	args = append(args,
 		quietCutoff.UTC().Format(extractTimeLayout), fingerprint)
 	var uncovered bool
 	if err := tx.QueryRowContext(ctx, `
@@ -499,7 +583,7 @@ func verifyExtractActivationCoverageTx(
 				  AND p.generation_fingerprint = ?
 			  )
 		)`,
-		eligibleArgs...,
+		args...,
 	).Scan(&uncovered); err != nil {
 		return fmt.Errorf("probing uncovered eligible sessions: %w", err)
 	}
@@ -1327,15 +1411,22 @@ func extractCandidateSQL(q ExtractCandidateQuery) (string, []any, error) {
 				q.DoneChangedSince.UTC().Format(extractTimeLayout))
 		}
 	}
+	// Newest ended first: a bounded pass, and the head of a long backlog,
+	// should distill the sessions whose content is still being worked on
+	// rather than the oldest corner of the archive. The order is independent
+	// of the watermark bookkeeping, which advances from the pass start time
+	// and only on a pass that took everything it found, never from the last
+	// row processed — so a bounded pass leaves the sessions it did not reach
+	// discoverable, whichever end it started from.
 	sb.WriteString(`
 		)
-		ORDER BY ended_at ASC, id ASC
+		ORDER BY ended_at DESC, id DESC
 		LIMIT ?`)
 	args = append(args, limit)
 	return sb.String(), args, nil
 }
 
-// ExtractCandidates returns eligible session ids, oldest ended first.
+// ExtractCandidates returns eligible session ids, newest ended first.
 // Eligibility encodes the extraction privacy boundary and is deliberately
 // not configurable: automated sessions, trashed sessions, and sessions with
 // any secret findings never reach the extraction model.

@@ -84,7 +84,7 @@ func TestProviderCapabilitiesChangedPathRelevanceMatchConsumers(t *testing.T) {
 		agent := factory.Definition().Type
 		got := factory.Capabilities().Source.ChangedPathRelevance
 		if agent == AgentOpenCode || agent == AgentKilo ||
-			agent == AgentMiMoCode || agent == AgentIcodemate ||
+			agent == AgentMiMoCode || agent == AgentIcodemate || agent == AgentJunie ||
 			agent == AgentCodebuff {
 			assert.Equal(t, CapabilitySupported, got)
 			provider := factory.NewProvider(ProviderConfig{

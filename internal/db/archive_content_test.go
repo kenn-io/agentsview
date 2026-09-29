@@ -236,7 +236,8 @@ func TestUsageOnlyStoragePreservesContentFreeIncrementalSubagentEdge(
 			SubagentLinks: []ToolCallSubagentLink{{
 				ToolUseID: "tool-use-1", SubagentSessionID: "child",
 				ResultContent: "private subagent result", ResultContentLen: 23,
-				HasResult: true,
+				ResultEvents: []ToolResultEvent{{Content: "private subagent result", ContentLength: 23, Status: "errored"}},
+				HasResult:    true,
 			}},
 		},
 	)
@@ -460,7 +461,8 @@ func TestTranscriptsArchiveContentKeepsTextAndDropsToolPayloads(t *testing.T) {
 			SubagentLinks: []ToolCallSubagentLink{{
 				ToolUseID: "tool-use-2", SubagentSessionID: "child",
 				ResultContent: "subagent result", ResultContentLen: 15,
-				HasResult: true,
+				ResultEvents: []ToolResultEvent{{Content: "subagent result", ContentLength: 15, Status: "errored"}},
+				HasResult:    true,
 			}},
 		},
 	)
@@ -475,6 +477,10 @@ func TestTranscriptsArchiveContentKeepsTextAndDropsToolPayloads(t *testing.T) {
 	assert.Empty(t, link.InputJSON)
 	assert.Empty(t, link.ResultContent)
 	assert.Equal(t, 15, link.ResultContentLength)
+	require.Len(t, link.ResultEvents, 1)
+	assert.Empty(t, link.ResultEvents[0].Content)
+	assert.Equal(t, 15, link.ResultEvents[0].ContentLength)
+	assert.Equal(t, "errored", link.ResultEvents[0].Status)
 }
 
 func TestTranscriptArchiveRedactsOverlappingToolRenderings(t *testing.T) {

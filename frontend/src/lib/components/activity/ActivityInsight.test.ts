@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   setAgent: vi.fn(),
   navigate: vi.fn(),
   agent: "claude" as string,
+  requestAgent: undefined as string | undefined,
   serverVersion: {
     read_only: false,
   } as {
@@ -46,6 +47,9 @@ vi.mock("../../stores/insights.svelte.js", () => ({
     get agent() {
       return mocks.agent;
     },
+    get requestAgent() {
+      return mocks.requestAgent;
+    },
   },
 }));
 vi.mock("../../stores/router.svelte.js", () => ({
@@ -75,6 +79,7 @@ beforeEach(() => {
   }
   mocks.serverVersion = { read_only: false };
   mocks.agent = "claude";
+  mocks.requestAgent = undefined;
   mocks.getInsights.mockResolvedValue({ insights: [] });
 });
 
@@ -115,7 +120,7 @@ describe("ActivityInsight", () => {
     expect(screen.getByRole("button", { name: /generate/i })).toBeTruthy();
   });
 
-  it("generates for the current range", async () => {
+  it("generates for the current range using the server's default agent", async () => {
     mocks.generateInsight.mockReturnValue({
       abort: vi.fn(),
       done: new Promise(() => {}),
@@ -128,7 +133,7 @@ describe("ActivityInsight", () => {
         type: "daily_activity",
         date_from: "2026-06-15",
         date_to: "2026-06-21",
-        agent: "claude",
+        agent: undefined,
       }),
       expect.any(Function),
     );
@@ -146,6 +151,7 @@ describe("ActivityInsight", () => {
 
   it("generates with the selected agent, not a hardcoded one", async () => {
     mocks.agent = "codex";
+    mocks.requestAgent = "codex";
     mocks.generateInsight.mockReturnValue({
       abort: vi.fn(),
       done: new Promise(() => {}),

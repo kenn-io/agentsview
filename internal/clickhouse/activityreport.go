@@ -118,6 +118,9 @@ func (s *Store) BuildActivityReportArtifacts(
 	if err != nil {
 		return activity.CandidateArtifacts{}, fmt.Errorf("aggregating clickhouse activity report: %w", err)
 	}
+	if err := s.activityReportMessageCounts(ctx, candidates, ids, q, &artifacts); err != nil {
+		return activity.CandidateArtifacts{}, err
+	}
 	clickReportProgress(onProgress, activity.Progress{
 		Phase: activity.ProgressFinalizing, SessionsTotal: len(sessions),
 		SessionsProcessed: len(sessions), RowsProcessed: rowsProcessed,
@@ -144,6 +147,38 @@ func clickReportProgress(callback activity.ProgressFunc, progress activity.Progr
 	if callback != nil {
 		callback(progress)
 	}
+}
+
+func (s *Store) activityReportMessageCounts(
+	ctx context.Context, candidates chSessionSet, ids []string, q activity.Query,
+	artifacts *activity.CandidateArtifacts,
+) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	args := append(slices.Clone(candidates.args),
+		q.RangeStart.UTC().Format(time.RFC3339Nano), q.EffectiveEnd.UTC().Format(time.RFC3339Nano))
+	rows, err := s.queryContext(ctx, `
+		SELECT session_id, role, timestamp FROM messages
+		WHERE session_id IN (`+candidates.body+`)
+			AND role IN ('user', 'assistant') AND is_system = false
+			AND COALESCE(source_subtype, '') <> 'tool_result'
+			AND timestamp >= `+chTimestampSQL+` AND timestamp < `+chTimestampSQL+`
+		SETTINGS optimize_move_to_prewhere_if_final=1`, args...)
+	if err != nil {
+		return fmt.Errorf("querying clickhouse activity message counts: %w", err)
+	}
+	defer rows.Close()
+	counts := activity.NewMessageAccumulator(q, artifacts)
+	for rows.Next() {
+		var sessionID, role string
+		var timestamp time.Time
+		if err := rows.Scan(&sessionID, &role, &timestamp); err != nil {
+			return fmt.Errorf("scanning clickhouse activity message counts: %w", err)
+		}
+		counts.Add(sessionID, role, timestamp)
+	}
+	return rows.Err()
 }
 
 func activityReportProjectLabels(sessions []activity.SessionMeta) []string {

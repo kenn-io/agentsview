@@ -1153,6 +1153,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newAiderProviderFactory(def)
 	case AgentAmp:
 		return newAmpProviderFactory(def)
+	case AgentJunie:
+		return newJunieProviderFactory(def)
 	case AgentClaude:
 		return newClaudeProviderFactory(def)
 	case AgentOpenClaude:

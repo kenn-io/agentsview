@@ -115,13 +115,14 @@ func (s *Server) humaGetSettings(
 			CustomBin:  tc.CustomBin,
 			CustomArgs: tc.CustomArgs,
 		},
-		Host:             s.cfg.Host,
-		Port:             s.cfg.Port,
-		ChartPalette:     s.cfg.ResolvedChartPalette(),
-		ZoomLevel:        s.cfg.ZoomLevel,
-		ToolResultImages: toolResultImagesValue(s.cfg.ToolResultImages),
-		RequireAuth:      s.cfg.RequireAuth,
-		ReadOnly:         s.db.ReadOnly(),
+		Host:                s.cfg.Host,
+		Port:                s.cfg.Port,
+		ChartPalette:        s.cfg.ResolvedChartPalette(),
+		ZoomLevel:           s.cfg.ZoomLevel,
+		ToolResultImages:    toolResultImagesValue(s.cfg.ToolResultImages),
+		InsightDefaultAgent: resolvedInsightDefaultAgent(s.cfg),
+		RequireAuth:         s.cfg.RequireAuth,
+		ReadOnly:            s.db.ReadOnly(),
 	}
 	if isLocalhostContext(ctx) {
 		resp.AuthToken = s.cfg.AuthToken

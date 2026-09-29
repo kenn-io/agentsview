@@ -307,6 +307,7 @@ export GPTME_DIR=~/custom/gptme/logs
 export GROK_DIR=~/custom/grok/sessions
 export HERMES_SESSIONS_DIR=~/custom/hermes
 export IFLOW_DIR=~/custom/iflow/projects
+export JUNIE_DIR=~/custom/junie/sessions
 export KILO_DIR=~/custom/kilo
 export KILO_LEGACY_DIR=~/custom/kilo-legacy
 export KIMI_DIR=~/custom/kimi/sessions

@@ -579,9 +579,9 @@ func TestStopDaemonProcessKeepsRecordWhenIdentityBecomesUnknownAfterForceKill(
 	rec := onlyLiveRuntimeRecord(t, dir)
 
 	identityCalls := 0
-	identityState := func(gotPID int, recorded string) processCreateTimeState {
-		assert.Equal(t, pid, gotPID)
-		assert.Equal(t, "1234", recorded)
+	identityState := func(got daemon.RuntimeRecord) processCreateTimeState {
+		assert.Equal(t, pid, got.PID)
+		assert.Equal(t, "1234", got.Metadata[runtimeCreateTime])
 		identityCalls++
 		if identityCalls == 1 {
 			return processCreateTimeMatch
@@ -617,9 +617,9 @@ func TestStopDaemonProcessKeepsRecordWhenMatchedProcessSurvivesForceKill(
 	rec := onlyLiveRuntimeRecord(t, dir)
 
 	identityCalls := 0
-	identityState := func(gotPID int, recorded string) processCreateTimeState {
-		assert.Equal(t, pid, gotPID)
-		assert.Equal(t, "1234", recorded)
+	identityState := func(got daemon.RuntimeRecord) processCreateTimeState {
+		assert.Equal(t, pid, got.PID)
+		assert.Equal(t, "1234", got.Metadata[runtimeCreateTime])
 		identityCalls++
 		return processCreateTimeMatch
 	}

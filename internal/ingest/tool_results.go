@@ -60,6 +60,16 @@ func PairToolResultsContext(
 			if !ok {
 				continue
 			}
+			if result.Source != "" {
+				event := db.ToolResultEvent{
+					ToolUseID: result.ToolUseID, Source: result.Source,
+					Status: result.Status, Content: parser.DecodeContent(result.ContentRaw),
+					Timestamp: message.Timestamp, EventIndex: len(call.ResultEvents),
+				}
+				event.ContentLength = db.ResolveResultContentLength(event.Content, result.ContentLength)
+				db.PrepareToolResultEvent(&event)
+				call.ResultEvents = append(call.ResultEvents, event)
+			}
 			call.ResultContentLength = result.ContentLength
 			if !blocked[call.Category] {
 				call.ResultContent = parser.DecodeContent(result.ContentRaw)

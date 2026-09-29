@@ -227,6 +227,7 @@ func TestAgentByType(t *testing.T) {
 		{AgentOpenHands, true},
 		{AgentCursor, true},
 		{AgentAmp, true},
+		{AgentJunie, true},
 		{AgentVSCodeCopilot, true},
 		{AgentPi, true},
 		{AgentPrimeAgent, true},
@@ -329,6 +330,12 @@ func TestAgentByPrefix(t *testing.T) {
 			"amp prefix",
 			"amp:T-019ca26f",
 			AgentAmp,
+			true,
+		},
+		{
+			"junie prefix",
+			"junie:session-260101-120000-abcd",
+			AgentJunie,
 			true,
 		},
 		{
@@ -468,6 +475,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentCursor,
 		AgentCursorIDE,
 		AgentAmp,
+		AgentJunie,
 		AgentVSCodeCopilot,
 		AgentWindsurf,
 		AgentTrae,

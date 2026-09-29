@@ -942,7 +942,7 @@ func annotateClineSubagentCalls(msgs []ParsedMessage, agentMap map[string]string
 	}
 }
 
-// parseClineToolResultContent extracts the text content and error indication from
+// parseClineToolResultContent extracts text, image markers, and error indications from
 // a Cline tool_result content field (which can be a JSON string, an array of content/result
 // blocks, or a single object).
 func parseClineToolResultContent(raw jsontext.Value) (string, bool) {
@@ -959,6 +959,9 @@ func parseClineToolResultContent(raw jsontext.Value) (string, bool) {
 		var parts []string
 		hasError := false
 		for _, item := range items {
+			if item["type"] == "image" {
+				parts = append(parts, "[image]")
+			}
 			if s, ok := item["success"].(bool); ok && !s {
 				hasError = true
 			}
@@ -989,6 +992,9 @@ func parseClineToolResultContent(raw jsontext.Value) (string, bool) {
 	if err := json.Unmarshal(raw, &item); err == nil {
 		var parts []string
 		hasError := false
+		if item["type"] == "image" {
+			parts = append(parts, "[image]")
+		}
 		if s, ok := item["success"].(bool); ok && !s {
 			hasError = true
 		}

@@ -368,6 +368,62 @@ func TestGenerateInsight_DefaultAgent(t *testing.T) {
 	assertBodyContains(t, w, "stub: no CLI")
 }
 
+func TestGenerateInsight_ConfiguredDefaultAgent(t *testing.T) {
+	stubGen := func(
+		_ context.Context, agent, _ string,
+	) (insight.Result, error) {
+		assert.Equal(t, "codex", agent, "expected configured default agent")
+		return insight.Result{}, errors.New("stub: no CLI")
+	}
+	te := setupWithServerOpts(t, []server.Option{
+		server.WithGenerateFunc(stubGen),
+	}, func(c *config.Config) { c.Insights.DefaultAgent = "codex" })
+
+	w := te.post(t, "/api/v1/insights/generate",
+		`{"type":"daily_activity","date_from":"2025-01-15","date_to":"2025-01-15"}`)
+	assertStatus(t, w, http.StatusOK)
+	assertBodyContains(t, w, "event: error")
+	assertBodyContains(t, w, "stub: no CLI")
+}
+
+func TestGenerateCannedInsight_ConfiguredDefaultAgent(t *testing.T) {
+	stubGen := func(
+		_ context.Context, agent, _ string, _ insight.LogFunc,
+	) (insight.Result, error) {
+		assert.Equal(t, "codex", agent, "expected configured default agent")
+		return insight.Result{}, errors.New("stub: no CLI")
+	}
+	te := setupWithServerOpts(t, []server.Option{
+		server.WithGenerateStreamFunc(stubGen),
+	}, func(c *config.Config) { c.Insights.DefaultAgent = "codex" })
+	te.seedSession(t, "session-1", "my-app", 2)
+
+	w := te.post(t, "/api/v1/insights/generate",
+		`{"type":"llm_canned","kind":"prompt_maturity_review","date_from":"2025-01-15","date_to":"2025-01-15","llm_opt_in":true}`)
+	assertStatus(t, w, http.StatusOK)
+	assertBodyContains(t, w, "event: error")
+	assertBodyContains(t, w, "stub: no CLI")
+}
+
+func TestGenerateInsight_InvalidConfiguredDefaultAgent(t *testing.T) {
+	for _, body := range []string{
+		`{"type":"daily_activity","date_from":"2025-01-15","date_to":"2025-01-15"}`,
+		`{"type":"llm_canned","kind":"prompt_maturity_review","date_from":"2025-01-15","date_to":"2025-01-15","llm_opt_in":true}`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			te := setupWithServerOpts(t, []server.Option{
+				server.WithGenerateFunc(func(context.Context, string, string) (insight.Result, error) {
+					return insight.Result{}, errors.New("stub: no CLI")
+				}),
+			}, func(c *config.Config) { c.Insights.DefaultAgent = "unknown" })
+
+			w := te.post(t, "/api/v1/insights/generate", body)
+			assertStatus(t, w, http.StatusBadRequest)
+			assertBodyContains(t, w, "invalid agent")
+		})
+	}
+}
+
 func TestGenerateInsight_SessionValidation(t *testing.T) {
 	te := setup(t)
 

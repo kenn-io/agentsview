@@ -32,10 +32,14 @@ vi.mock("../../api/generated/index", () => ({
     deleteApiV1SettingsSessionProjectAssignmentsBySessionId: api.clearSession,
   },
 }));
-vi.mock("../../api/runtime.js", () => ({
-  isAbortError: vi.fn(() => false),
-  isRemoteConnection: vi.fn(() => false),
-}));
+vi.mock("../../api/runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../api/runtime.js")>();
+  return {
+    ...actual,
+    isAbortError: vi.fn(() => false),
+    isRemoteConnection: vi.fn(() => false),
+  };
+});
 
 const candidate = {
   id: "candidate-1",

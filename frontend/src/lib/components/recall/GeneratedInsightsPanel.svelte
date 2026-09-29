@@ -8,6 +8,7 @@
     Typeahead,
   } from "@kenn-io/kit-ui";
   import { downloadInsightExport } from "../../api/client.js";
+  import { AGENT_NAMES } from "../../api/types/insights.js";
   import type {
     AgentName,
     AutomatedScope,
@@ -49,14 +50,7 @@
     sync.serverVersion === null || !insightGenerationAvailable,
   );
 
-  const generationAgentNames = [
-    "claude",
-    "codex",
-    "copilot",
-    "gemini",
-    "kiro",
-  ] satisfies AgentName[];
-  const generationAgentOptions = generationAgentNames.map((name) => ({
+  const generationAgentOptions = AGENT_NAMES.map((name) => ({
     name,
     label: agentLabel(name),
     displayLabel: agentLabel(name),

@@ -16,6 +16,8 @@
   import { loadAssetImages, renderMarkdown } from "../../utils/markdown.js";
   import { highlightCodeFences } from "../../utils/highlight-fences.js";
   import type { AgentName } from "../../api/types.js";
+  import { AGENT_NAMES } from "../../api/types/insights.js";
+  import { agentLabel } from "../../utils/agents.js";
   import { LightbulbIcon, PlusIcon } from "../../icons.js";
   import { LatestRead } from "../../utils/latest-read.js";
 
@@ -72,13 +74,11 @@
         ? m.activity_insight_waiting_server()
         : m.activity_insight_generate_insight(),
   );
-  const agentOptions: TypeaheadOption[] = [
-    { name: "claude", label: "Claude", displayLabel: "Claude" },
-    { name: "codex", label: "Codex", displayLabel: "Codex" },
-    { name: "copilot", label: "Copilot", displayLabel: "Copilot" },
-    { name: "gemini", label: "Gemini", displayLabel: "Gemini" },
-    { name: "kiro", label: "Kiro", displayLabel: "Kiro" },
-  ];
+  const agentOptions: TypeaheadOption[] = AGENT_NAMES.map((name) => ({
+    name,
+    label: agentLabel(name),
+    displayLabel: agentLabel(name),
+  }));
 
   function abortGeneration() {
     handle?.abort();
@@ -150,7 +150,7 @@
         date_from: dateFrom,
         date_to: dateTo,
         timezone,
-        agent: insights.agent,
+        agent: insights.requestAgent,
       },
       (p) => {
         if (v !== genVersion) return;

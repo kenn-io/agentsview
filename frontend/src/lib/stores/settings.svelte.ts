@@ -9,9 +9,11 @@ import {
   ApiError,
   generatedErrorMessage,
   setAuthToken,
+  getServerUrl,
   isRemoteConnection,
 } from "../api/runtime.js";
 import { DEFAULT_CHART_PALETTE, isChartPalette, type ChartPalette } from "../utils/chartPalette.js";
+import { insights } from "./insights.svelte.js";
 import { ui } from "./ui.svelte.js";
 
 export type ToolResultImagesPolicy = "keep" | "drop" | "offload";
@@ -56,6 +58,7 @@ function forbiddenMessage(serverMessage: string): string {
 class SettingsStore {
   private mutationQueue: Promise<void> | null = null;
   private loadVersion = 0;
+  private serverUrl = getServerUrl();
   agentDirs: Record<string, string[]> = $state({});
   sessionProviders: SessionProvider[] = $state([]);
   disabledAgents: string[] = $state([]);
@@ -80,6 +83,11 @@ class SettingsStore {
   needsAuth: boolean = $state(false);
 
   async load(): Promise<void> {
+    const serverUrl = getServerUrl();
+    if (serverUrl !== this.serverUrl) {
+      this.serverUrl = serverUrl;
+      insights.resetAgent();
+    }
     if (this.saving && this.mutationQueue) {
       await this.mutationQueue;
       return this.load();
@@ -111,6 +119,9 @@ class SettingsStore {
       this.readOnly = data.read_only === true;
       this.chartPalette = data.chart_palette;
       ui.applyZoomDefault(data.zoom_level);
+      // Older servers omit the field; applyDefaultAgent then keeps the
+      // built-in agent.
+      insights.applyDefaultAgent(data.insight_default_agent);
       // A response without the field, including every fixture that predates
       // it, reads as the default keep policy instead of failing the load.
       this.toolResultImages =

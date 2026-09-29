@@ -107,6 +107,9 @@ func (s *Store) BuildActivityReportArtifacts(
 	if err != nil {
 		return activity.CandidateArtifacts{}, fmt.Errorf("aggregating pg activity report: %w", err)
 	}
+	if err := s.activityReportMessageCounts(ctx, ids, q, &artifacts); err != nil {
+		return activity.CandidateArtifacts{}, err
+	}
 	pgReportProgress(onProgress, activity.Progress{
 		Phase: activity.ProgressFinalizing, SessionsTotal: len(sessions),
 		SessionsProcessed: len(sessions), RowsProcessed: rowsProcessed,
@@ -134,6 +137,34 @@ func pgReportProgress(callback activity.ProgressFunc, progress activity.Progress
 	if callback != nil {
 		callback(progress)
 	}
+}
+
+func (s *Store) activityReportMessageCounts(
+	ctx context.Context, ids []string, q activity.Query, artifacts *activity.CandidateArtifacts,
+) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	rows, err := s.pg.QueryContext(ctx, `
+		SELECT session_id, role, timestamp FROM messages
+		WHERE session_id = ANY($1)
+			AND role IN ('user', 'assistant') AND is_system = false
+			AND COALESCE(source_subtype, '') <> 'tool_result'
+			AND timestamp >= $2 AND timestamp < $3`, ids, q.RangeStart, q.EffectiveEnd)
+	if err != nil {
+		return fmt.Errorf("querying pg activity message counts: %w", err)
+	}
+	defer rows.Close()
+	counts := activity.NewMessageAccumulator(q, artifacts)
+	for rows.Next() {
+		var sessionID, role string
+		var timestamp time.Time
+		if err := rows.Scan(&sessionID, &role, &timestamp); err != nil {
+			return fmt.Errorf("scanning pg activity message counts: %w", err)
+		}
+		counts.Add(sessionID, role, timestamp)
+	}
+	return rows.Err()
 }
 
 // GetSessionUsageRows returns the backend-priced usage rows for the supplied

@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          "frontend/src/lib/components/activity/ActivityInsight.svelte"
+        ],
+        "createdAt": "2026-09-29T02:58:00.053Z",
+        "reason": "Agent review: the border marks Markdown blockquotes rather than cards; the blockquote rule predates this PR and remains unchanged."
+      }
+    ]
+  }
+}

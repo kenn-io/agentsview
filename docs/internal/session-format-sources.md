@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-09-11
+last_edited: 2026-09-28
 ---
 
 # Session Format Source Inventory
@@ -103,6 +103,24 @@ discovered exact URLs, releases, and queries in the provider entry. If a
 repository or document disappears, retain its original URL and commit hash and
 add an archived or maintained mirror without replacing the original identity.
 
+## Tool Sequence Evidence
+
+The sequence extractor uses provider failure statuses and the empty-result
+observations recorded below. Its completed-with-empty-body rule is analyzer
+policy, not a provider format guarantee: a `completed` or `success` status, zero
+retained content length, and an empty body count as empty for the `Read`,
+`Grep`, and `Glob` categories, or tools named `search`, `WebSearch`,
+`search_web`, and `web_search`. Categories use the shared tool normalization, so
+`Read` includes tools such as `fetch`, `read_web_page`, and `list_files`.
+Missing status alone does not satisfy this rule. In particular, ordinary Claude
+Code `WebSearch` results do not gain a completion status from their name.
+
+Ingestion marks image-only and staged results from individual result events,
+before the display summary adds agent labels. When no events exist, it checks
+the retained result body. Missing content, nonterminal statuses, and these
+non-text results remain unknown. These classifications describe retained
+evidence; they do not establish whether a tool helped the task.
+
 ## Claude Code (`claude`)
 
 Rechecked 2026-09-11 against the existing provider parser and its metadata
@@ -144,6 +162,29 @@ fixtures retain this field; missing identities remain source-local.
   and
   [parser](https://github.com/getagentseal/codeburn/blob/3472885629c41725b40c19c0780ecce148b067bf/src/providers/claude.ts);
   these are consumer observations, not Anthropic authority.
+
+- **Tool-result failures (2026-09-28):** Anthropic's
+  [tool-result documentation](https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls)
+  defines `is_error: true` for failed tool results. This documents the API
+  field, not the CLI's persistence schema. Local transcript inspection also
+  found this field on persisted tool results. Agentsview retains it as an
+  `errored` result event during full parsing and incremental result pairing;
+  an absent or false flag does not invent a success status. Data version 116
+  reparses stored sources to recover the previously discarded status. Late
+  result events inherit the call's resolved subagent session ID when they do
+  not carry an explicit one, matching full imports. Reverified with full and
+  incremental Claude imports into separate temporary archives, including a
+  repeated result whose child identity arrives later. Deduplication fills
+  missing event links without replacing existing explicit links.
+
+- **Empty search replies (2026-09-28):** The contributor to
+  [PR #1859](https://github.com/kenn-io/agentsview/pull/1859) reported `Grep`
+  results containing `No matches found` or `No files found`, and `Glob`
+  results containing `No files found`. The extractor recognizes these exact
+  bodies after trimming whitespace. These are contributor-reported corpus
+  observations, not a documented producer contract; a bounded local corpus
+  check did not independently reproduce those replies. The completed-empty
+  rule above is separate analyzer policy.
 
 - **Usage and cost:** Assistant messages persist input, output, cache-creation,
   and cache-read tokens. Model IDs are present. No authoritative persisted USD
@@ -1075,6 +1116,15 @@ fixtures retain this field; missing identities remain source-local.
 
 ## OpenCode (`opencode`)
 
+**Empty-search reply check (2026-09-27):** The pinned
+[`grep` tool](https://github.com/anomalyco/opencode/blob/dff8fbc149fb7492e4f07b713ac31ea70d9a541c/packages/core/src/tool/grep.ts#L39)
+and
+[`glob` tool](https://github.com/anomalyco/opencode/blob/dff8fbc149fb7492e4f07b713ac31ea70d9a541c/packages/core/src/tool/glob.ts#L33)
+emit the exact text `No files found` when their result lists are empty.
+Agentsview's v2 parser preserves these lowercase tool names and text replies.
+The sequence extractor treats these specific replies as empty results; category
+aliases alone do not establish that a provider uses the same reply text.
+
 **Projection detail check (2026-09-12):** Rechecked the pinned
 [beta read tool](https://github.com/anomalyco/opencode/blob/d461154a8d2b24c4ad24a89b589069cf08ab168c/packages/core/src/tool/plugin/read.ts#L169),
 [tool content schema](https://github.com/anomalyco/opencode/blob/d461154a8d2b24c4ad24a89b589069cf08ab168c/packages/schema/src/tool.ts#L73),
@@ -1487,6 +1537,12 @@ schemas keep their existing ordering behavior.
 
 ## Cline CLI (`cline`)
 
+- **Tool-result images (2026-09-28):** Rechecked the parser with synthetic
+  image-only and mixed text/image results through ingestion and SQLite.
+  Decoded result events retain an `[image]` marker for each image block,
+  including single-object results. Image-only outcomes remain unknown;
+  ordinary text and empty results keep their classifications. Data version 116
+  reparses stored sources to restore this evidence.
 - **Format:** One session directory per task under
   `~/.cline/data/sessions/<id>/` containing `<id>.json` (session metadata and
   aggregate usage) and `<id>.messages.json` (transcript array with text,
@@ -1770,6 +1826,16 @@ schemas keep their existing ordering behavior.
 
 - **Format:** One JSON thread document per session.
 - **Evidence:** `no-public-source`.
+- **Tool-result status (2026-09-28):** Rechecked the existing parser and
+  synthetic regression fixtures for `tool_result` blocks: `run.status` of
+  `error` and `run.result.success: false` now retain an `errored` event;
+  `run.status: cancelled` retains `cancelled`. Result text such as `failed` is
+  preserved alongside that status. Explicit `run.status: done` retains
+  `completed`, including empty string and array results; failure metadata
+  takes precedence. Missing status does not invent success. Reverified these
+  cases through the provider parser, ingestion, and SQLite. These fields are
+  consumer evidence, not a newly verified producer schema. Data version 116
+  reparses stored sources.
 - **Upstream:** The first-party [Amp manual](https://ampcode.com/manual), its
   [appendix](https://ampcode.com/manual/appendix), the
   [CLI guide](https://github.com/sourcegraph/amp-examples-and-guides/blob/main/guides/cli/README.md),
@@ -3540,6 +3606,110 @@ schemas keep their existing ordering behavior.
   the next snapshot is empty. Archived sessions remain active until the user
   deletes them in AgentsView. A malformed `parts` value fails that session's
   parse rather than degrading silently, matching the goose parser's policy.
+
+## JetBrains Junie (`junie`)
+
+- **Format:** Junie CLI stores one append-only `events.jsonl` stream per session
+  below `${JUNIE_HOME:-~/.junie}/sessions/<session-id>/`. The sibling
+  `sessions/index.jsonl` contains `sessionId`, `createdAt`, `updatedAt`,
+  `projectDir`, `taskName`, and `status` summary records. Event records use a
+  polymorphic `kind` discriminator and a producer-added `timestampMs` Unix
+  millisecond field.
+
+- **Evidence:** `no-public-source`.
+
+- **Upstream:** The first-party
+  [Junie CLI Quickstart](https://junie.jetbrains.com/docs/junie-cli.html),
+  [slash-command reference](https://junie.jetbrains.com/docs/slash-commands.html),
+  and
+  [JetBrains Marketplace listing](https://plugins.jetbrains.com/plugin/26104-junie-the-ai-coding-agent-by-jetbrains)
+  were searched 2026-09-24; no public persistence source or authoritative
+  event schema was found. Use the public
+  [Linux amd64 archive for release 2285.4](https://github.com/JetBrains/junie/releases/download/2285.4/junie-release-2285.4-linux-amd64.zip)
+  to reproduce this entry. Its `junie-app/lib/app/junie-release-2285.4.jar`
+  has SHA-256
+  `e7f7fdccb50ca32981c58f671ed60622f29790f4fa9f65d5b9644f8624b7b75a`. Storage
+  paths, index replacement, model usage, and shared step IDs were reverified
+  from this artifact on 2026-09-28. Extract the jar with `jar xf`, read
+  `agent-skills/junie-cli-docs/junie-cli-user-disk-storage.md`, and inspect
+  `com.intellij.ml.llm.matterhorn.ej.app.cli.standalone.tui.app.state.SessionStore`,
+  `SessionSummary`, `SessionEvent`,
+  `org.jetbrains.a2ux.api.LlmResponseMetadataEvent`, and
+  `org.jetbrains.a2ux.api.ModelUsage` with CFR 0.152 or `javap -p -c`. The
+  bundled storage document defines `JUNIE_HOME`; `SessionStore` bytecode
+  defines `sessions/index.jsonl`, `sessions/<sessionId>/events.jsonl`, and the
+  timestamp append. `SessionStore` atomically replaces the complete index
+  rather than appending changed rows, so the filesystem event does not
+  identify which summary row changed.
+
+    The initial investigation used an installed CLI 26.7.13 jar with the same
+    filename and SHA-256
+    `51548cbe893b5e69e53ff49d5deaa1aa0ac6ebff8017b4ffc228a41681811323`. Its
+    distribution archive was not recorded, so the reason for the different bytes
+    is unknown. That hash is historical evidence; use the public Linux artifact
+    above for reproduction. The initial producer serializers generated
+    representative `UserPromptEvent`, `UserResponseEvent`,
+    `UserAsyncResponseEvent`, `SessionTitleSetEvent`, and nested
+    `SessionA2uxEvent` records.
+
+    Decompile `com.intellij.ml.llm.matterhorn.a2ux.server.steps.StepEventData`
+    with CFR 0.152: `post` emits `MarkdownBlockUpdatedEvent` for `details`, but
+    emits `ResultBlockUpdatedEvent` instead when `result` is set. Both use the
+    same `stepId`. `JunieSessionSteps.post` also keys active blocks by `stepId`,
+    rather than event kind.
+
+- **Conversation mapping:** `UserPromptEvent` prefers `presentablePrompt` over
+  its internal prompt. Synchronous and asynchronous user-response events
+  become user messages. History committed, dropped, and failed records
+  reconcile queued prompts by `requestId`. Nested A2UX
+  `MarkdownBlockUpdatedEvent` and `ResultBlockUpdatedEvent` records become
+  assistant messages; repeated block updates replace the prior content with
+  the same `stepId`, so active streaming text remains visible without
+  duplicating the final answer. A result replaces earlier markdown for that
+  step, matching the producer's block model; markdown with a different step ID
+  remains a separate message. The index supplies session creation and update
+  times; events supply message times. Tool calls, tool results, and file edits
+  are not imported. Malformed event lines are counted and skipped, including a
+  truncated final line, so complete earlier messages remain available.
+  Agentsview rejects event streams and index snapshots containing a record
+  over 64 MiB, preserving the archived session and cached index. This is an
+  Agentsview limit, not a producer limit. When the index is absent, both full
+  and direct session syncs remove cached index metadata and use event data.
+
+- **IDE boundary:** The JetBrains ACP registry and local `junie-chronicles.csv`
+  files were inspected on 2026-09-24. Chronicles contain project edit
+  activity, not conversations, and no separate IDE transcript source was
+  found. This provider therefore ingests the shared Junie CLI `SessionStore`
+  only. It does not claim support for IDE-only conversations until JetBrains
+  exposes a reproducible conversation artifact.
+
+- **Usage and cost:** Nested A2UX `LlmResponseMetadataEvent.modelUsage` records
+  persist the model, producer-reported USD cost, uncached input, cache-read,
+  cache-creation, and output tokens for each model response. Agentsview emits
+  one aggregate usage row per record and uses the producer-reported cost
+  rather than catalog pricing. `SessionCostTrajectorySnapshotEvent` totals and
+  `completion.taskCostUsd` overlap those response records, so they are not
+  emitted separately. An invalid reported cost rejects the session parse,
+  matching the Goose policy; it is not silently replaced with zero or an
+  estimate.
+
+- **Agentsview:** `internal/parser/junie.go` and
+  `internal/parser/junie_provider.go` discover only direct
+  `sessions/<session-id>/events.jsonl` members, use content hashing for
+  freshness, normalize final messages and model usage, and treat discovery as
+  authoritative for provider membership. Missing roots do not block discovery
+  in other configured roots. A corrupt index keeps its last complete cached
+  snapshot and does not block healthy roots. Without a cached snapshot, that
+  root's sessions wait for a valid index; their archived data remains intact.
+  Direct session lookups and index watcher updates still report invalid
+  indexes. With an in-memory baseline, index watcher events select only
+  changed sessions. A fresh engine selects every session listed in the index.
+  Remote delta imports create a fresh planning engine each time, so an index
+  change re-hashes all listed transcripts even if only one summary changed.
+  The local daemon's startup sync establishes its baseline first. Failed
+  metadata-only updates recover on the next full sync (normally within 15
+  minutes) or transcript write. Direct session lookups refresh metadata
+  without consuming the watcher baseline.
 
 [evener-source-1]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/transcript/transcript.go
 [evener-source-2]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/schema/turn.go

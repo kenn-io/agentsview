@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/activity"
@@ -575,6 +576,97 @@ func TestGetActivityReportParityAcrossBackends(t *testing.T) {
 			if tc.name == "day-minute" {
 				assertDayMinuteFixtureSanity(t, sqliteReport)
 			}
+		})
+	}
+}
+
+func TestActivityReportMessageCountsAcrossBackends(t *testing.T) {
+	ctx := t.Context()
+	local := seedParitySQLite(t)
+	for _, id := range []string{"parity-a", "parity-b", "parity-c", "parity-d"} {
+		session, err := local.GetSession(ctx, id)
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		session.Project = "message-counts"
+		session.StartedAt = new("2026-06-14T09:00:00Z")
+		session.EndedAt = new("2026-06-14T11:00:00Z")
+		session.IsAutomated = id == "parity-b"
+		if id == "parity-c" {
+			session.RelationshipType = "subagent"
+		}
+		messages := []db.Message{
+			{Role: "user", Timestamp: "2026-06-14T10:00:00Z"},
+			{Role: "assistant", Timestamp: "2026-06-14T10:00:00Z"},
+		}
+		if id == "parity-a" {
+			messages = []db.Message{
+				{Role: "user", Timestamp: "2026-06-14T09:59:59Z"},
+				{Role: "user", Timestamp: "2026-06-14T12:00:00+02:00"},
+				{Role: "assistant", Timestamp: "2026-06-14T10:04:59.999999Z"},
+				{Role: "user", Timestamp: "2026-06-14T10:05:00Z"},
+				{Role: "assistant", Timestamp: "2026-06-14T10:10:30.499Z"},
+				{Role: "assistant", Timestamp: "2026-06-14T10:10:30.500Z"},
+				{Role: "user"},
+				{Role: "user", Timestamp: "2026-06-14T10:01:00Z", SourceSubtype: "tool_result"},
+				{Role: "assistant", Timestamp: "2026-06-14T10:02:00Z", IsSystem: true},
+				{Role: "user", Timestamp: "2026-06-14T10:03:00Z", IsSystem: true},
+				{Role: "tool", Timestamp: "2026-06-14T10:04:00Z"},
+			}
+		}
+		if id == "parity-d" {
+			messages = []db.Message{{Role: "user", Timestamp: "2026-06-14T10:08:00Z"}}
+		}
+		for i := range messages {
+			messages[i].SessionID, messages[i].Ordinal = id, i
+			messages[i].Content = "message"
+		}
+		if id == "parity-b" {
+			messages[0].Content = "You are a code reviewer. Review the code."
+		}
+		session.MessageCount = len(messages)
+		_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+			Session: *session, Messages: messages, DataVersion: 1, ReplaceMessages: true,
+		}})
+		require.NoError(t, err)
+		stored, err := local.GetSession(ctx, id)
+		require.NoError(t, err)
+		require.Equal(t, id == "parity-b", stored.IsAutomated)
+	}
+	stores := map[string]db.ActivityReportArtifactStore{
+		"sqlite": local,
+		"duckdb": pushParityDuckDB(t, ctx, local),
+	}
+	if os.Getenv("TEST_PG_URL") != "" {
+		stores["postgres"] = pushParityPostgres(t, ctx, local)
+	}
+	if store := pushParityClickHouse(t, ctx, local); store != nil {
+		stores["clickhouse"] = store
+	}
+	q, err := activity.ResolveQuery(activity.QueryInput{
+		Preset: "custom", Timezone: "UTC", BucketOverride: "5m",
+		From: "2026-06-14T10:00:00Z", To: "2026-06-14T10:15:00Z",
+	}, time.Date(2026, 6, 14, 10, 10, 30, 500_000_000, time.UTC))
+	require.NoError(t, err)
+	for name, store := range stores {
+		t.Run(name, func(t *testing.T) {
+			artifacts, err := store.BuildActivityReportArtifacts(ctx,
+				db.AnalyticsFilter{Project: "message-counts"}, q, nil)
+			require.NoError(t, err)
+			var user, assistant []int
+			for _, bucket := range artifacts.Report.Buckets {
+				user = append(user, bucket.UserMessages)
+				assistant = append(assistant, bucket.AssistantMessages)
+			}
+			assert.Equal(t, []int{1, 2, 0}, user)
+			assert.Equal(t, []int{3, 0, 1}, assistant)
+			page, err := activity.PageSessions(artifacts.Sessions, artifacts.Membership,
+				activity.SessionPageOptions{BucketRange: &activity.BucketRange{Start: 1, End: 2}})
+			require.NoError(t, err)
+			var ids []string
+			for _, session := range page.Sessions {
+				ids = append(ids, session.SessionID)
+			}
+			assert.ElementsMatch(t, []string{"parity-a", "parity-d"}, ids)
 		})
 	}
 }

@@ -83,13 +83,11 @@ func TestIncrementalClaudeLateResultLinkScansDefiniteSecret(t *testing.T) {
 	require.True(t, sess.LastWriteIncremental,
 		"the late result must take the incremental path")
 
-	var stored string
-	require.NoError(t, database.Reader().QueryRow(t.Context(),
-		`SELECT COALESCE(result_content, '') FROM tool_calls
-		 WHERE session_id = ? AND tool_use_id = ?`,
-		sessionID, "toolu_r",
-	).Scan(&stored))
-	require.Contains(t, stored, secret,
+	stored, err := database.GetAllMessages(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.Len(t, stored, 3)
+	require.Len(t, stored[2].ToolCalls, 1)
+	require.Contains(t, stored[2].ToolCalls[0].ResultContent, secret,
 		"the late link must update the stored result content")
 
 	findings, err := database.SessionSecretFindings(
@@ -98,7 +96,7 @@ func TestIncrementalClaudeLateResultLinkScansDefiniteSecret(t *testing.T) {
 	require.NoError(t, err)
 	found := false
 	for _, finding := range findings {
-		if finding.LocationKind == "tool_result" &&
+		if finding.LocationKind == "tool_result_event" &&
 			strings.Contains(finding.RedactedMatch, "AKIA") {
 			found = true
 			break

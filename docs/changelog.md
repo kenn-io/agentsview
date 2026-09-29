@@ -58,6 +58,11 @@ The latest published release is
 - Agents can open recalled evidence against the exact transcript revision that
   produced it. MCP message reads reject stale citations with `source_changed`,
   and oversized messages now provide a revision-bound continuation cursor.
+- Choose the agent CLI that a new generated insight starts with. Set
+  `default_agent` under `[insights]` to `claude`, `codex`, `copilot`, `gemini`,
+  or `kiro`; the Web UI picker and generation requests that name no agent use
+  it. Leaving it unset keeps the previous `claude` default, and an unknown name
+  fails configuration validation at startup.
 
 **Improvements**
 

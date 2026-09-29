@@ -579,6 +579,43 @@ type InsightsConfig struct {
 	Model     string `json:"model,omitempty" toml:"model"`
 	APIKeyEnv string `json:"api_key_env,omitempty" toml:"api_key_env"`
 	AllowHTTP bool   `json:"allow_http,omitempty" toml:"allow_http"`
+	// DefaultAgent selects the agent CLI insight generation uses when a
+	// request does not choose one. Empty keeps DefaultInsightAgent.
+	DefaultAgent string `json:"default_agent,omitempty" toml:"default_agent"`
+}
+
+// DefaultInsightAgent is the insight agent used when neither the request nor
+// [insights] default_agent selects one.
+const DefaultInsightAgent = "claude"
+
+// insightAgentNames lists the agent CLIs that can generate stored insights,
+// in display order. internal/insight re-exports the same names so config
+// validation and generation stay in step.
+var insightAgentNames = []string{
+	"claude",
+	"codex",
+	"copilot",
+	"gemini",
+	"kiro",
+}
+
+// InsightAgentNames returns the supported insight agent names in display
+// order.
+func InsightAgentNames() []string {
+	return slices.Clone(insightAgentNames)
+}
+
+// ParseInsightAgent normalizes an insight agent name and rejects names this
+// build cannot generate with.
+func ParseInsightAgent(value string) (string, error) {
+	name := strings.ToLower(strings.TrimSpace(value))
+	if slices.Contains(insightAgentNames, name) {
+		return name, nil
+	}
+	return "", fmt.Errorf(
+		"insight agent must be one of %s (got %q)",
+		strings.Join(insightAgentNames, ", "), value,
+	)
 }
 
 // APIKey reads the configured key from the environment. The key itself is
@@ -590,8 +627,13 @@ func (c InsightsConfig) APIKey() string {
 	return os.Getenv(strings.TrimSpace(c.APIKeyEnv))
 }
 
-// Validate checks endpoint intent and transport safety.
+// Validate checks endpoint intent, transport safety, and the default agent.
 func (c InsightsConfig) Validate() error {
+	if strings.TrimSpace(c.DefaultAgent) != "" {
+		if _, err := ParseInsightAgent(c.DefaultAgent); err != nil {
+			return fmt.Errorf("[insights] %w", err)
+		}
+	}
 	endpoint := strings.TrimSpace(c.Endpoint)
 	model := strings.TrimSpace(c.Model)
 	configured := endpoint != "" || model != "" ||
@@ -1882,6 +1924,9 @@ func (c *Config) applyConfigTOML(data string) error {
 		c.Insights.Endpoint = strings.TrimSpace(c.Insights.Endpoint)
 		c.Insights.Model = strings.TrimSpace(c.Insights.Model)
 		c.Insights.APIKeyEnv = strings.TrimSpace(c.Insights.APIKeyEnv)
+		c.Insights.DefaultAgent = strings.ToLower(
+			strings.TrimSpace(c.Insights.DefaultAgent),
+		)
 	}
 	// IsDefined distinguishes "unset" (leave default 10s) from an
 	// explicit "0s" (disable coalescing). Checking != 0 would silently

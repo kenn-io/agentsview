@@ -299,13 +299,13 @@ func TestParseDevinSession(t *testing.T) {
 	assert.Equal(t, RoleUser, carrier.Role)
 	assert.Empty(t, carrier.Content)
 	require.Len(t, carrier.ToolResults, 1)
-	assert.Equal(t, ParsedToolResult{ToolUseID: "tool-top-1", ContentLength: len("file1\nfile2"), ContentRaw: `"file1\nfile2"`}, carrier.ToolResults[0])
+	assert.Equal(t, ParsedToolResult{ToolUseID: "tool-top-1", Source: "tool_result", ContentLength: len("file1\nfile2"), ContentRaw: `"file1\nfile2"`}, carrier.ToolResults[0])
 
 	standalone := msgs[4]
 	assert.Equal(t, RoleTool, standalone.Role)
 	assert.Empty(t, standalone.Content)
 	require.Len(t, standalone.ToolResults, 1)
-	assert.Equal(t, ParsedToolResult{ToolUseID: "tool-top-2", ContentLength: len("patch applied"), ContentRaw: `[{"type":"text","text":"patch applied"}]`}, standalone.ToolResults[0])
+	assert.Equal(t, ParsedToolResult{ToolUseID: "tool-top-2", Source: "tool_result", ContentLength: len("patch applied"), ContentRaw: `[{"type":"text","text":"patch applied"}]`}, standalone.ToolResults[0])
 }
 
 func TestParseDevinSessionStepMetricsPopulateTokenUsage(t *testing.T) {

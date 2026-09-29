@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/stringutil"
 )
 
@@ -34,14 +35,9 @@ type Result struct {
 }
 
 // ValidAgentNames lists the supported insight agent names in display
-// order. ValidAgents is a lookup set derived from it.
-var ValidAgentNames = []string{
-	"claude",
-	"codex",
-	"copilot",
-	"gemini",
-	"kiro",
-}
+// order. ValidAgents is a lookup set derived from it. The names live in
+// internal/config so configuration validation accepts exactly this set.
+var ValidAgentNames = config.InsightAgentNames()
 
 // ValidAgents is the set of supported insight agent names.
 var ValidAgents = func() map[string]bool {
