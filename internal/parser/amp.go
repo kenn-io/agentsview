@@ -135,9 +135,12 @@ func parseAmpSession(
 		return nil, nil, nil
 	}
 
-	// Use title as FirstMessage when available.
-	if title != "" {
-		firstMessage = title
+	// The thread title is the session name; Amp generates it and
+	// Rename replaces it. It stands in for the first message only when
+	// the thread has no user text.
+	sessionName := strings.TrimSpace(title)
+	if firstMessage == "" {
+		firstMessage = truncate(sessionName, 300)
 	}
 
 	userCount := 0
@@ -153,6 +156,7 @@ func parseAmpSession(
 		Machine:          machine,
 		Agent:            AgentAmp,
 		FirstMessage:     firstMessage,
+		SessionName:      sessionName,
 		StartedAt:        startTime,
 		EndedAt:          endTime,
 		MessageCount:     len(messages),

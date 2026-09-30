@@ -1922,6 +1922,13 @@ schemas keep their existing ordering behavior.
   `cacheCreationInputTokens`, and `cacheReadInputTokens` fields, corroborating
   the field names from outside this project. It is not Amp's own producer
   source.
+- **Session names (2026-09-30):** The thread document's top-level `title` is the
+  thread title. The [threads documentation](https://ampcode.com/docs/threads),
+  checked 2026-09-30, says Rename "replaces the title the agent chose" and
+  lists `amp threads rename`; it does not say whether a rename made elsewhere
+  reaches the local thread file. Agentsview uses `title` as the session name.
+  The first message is the first user message and falls back to the title only
+  when there is none.
 - **Agentsview:** `internal/parser/amp.go` and
   `internal/parser/amp_provider.go`.
 

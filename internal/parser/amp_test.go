@@ -86,8 +86,10 @@ func TestAmpProviderParsesBasic(t *testing.T) {
 		"myproject", AgentAmp,
 	)
 
-	// Title takes precedence as FirstMessage.
-	assert.Equal(t, "Migrate database schema", sess.FirstMessage)
+	// The thread title is the session name; the first message stays the
+	// user's prompt.
+	assert.Equal(t, "Migrate database schema", sess.SessionName)
+	assert.Equal(t, "Migrate the DB schema.", sess.FirstMessage)
 	assertMessageCount(t, sess.MessageCount, 2)
 	assert.Equal(t, 1, sess.UserMessageCount)
 
