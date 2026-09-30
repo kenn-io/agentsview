@@ -877,6 +877,20 @@ fixtures retain this field; missing identities remain source-local.
   `assistant.message` can carry `data.model` and `data.outputTokens` when no
   usable `session.shutdown` metrics are present.
 
+- **Session names (2026-09-30):** A directory session's `workspace.yaml` carries
+  `name: <text>` and `user_named: <bool>`. The Copilot CLI
+  [changelog](https://github.com/github/copilot-cli/blob/8dfa6009c4a04b3a22a5ca4a7c36a056edd718dd/changelog.md)
+  at `8dfa6009c4a04b3a22a5ca4a7c36a056edd718dd` documents user naming
+  through `--name`, `/session rename`, and its `/rename` alias, and says
+  `/session rename` without an argument generates a name. The Copilot SDK's
+  generated
+  [`SessionWorkspacesGetWorkspaceResult`](https://github.com/github/copilot-sdk/blob/a2b2c18eb5a20417fc613eaaa93199f55ad22ea4/java/sdk/src/generated/java/com/github/copilot/generated/rpc/SessionWorkspacesGetWorkspaceResult.java)
+  at `a2b2c18eb5a20417fc613eaaa93199f55ad22ea4` describes `user_named` as
+  whether the user chose the name, and public `workspace.yaml` files show both
+  keys. No local Copilot session was available to check. Agentsview stores the
+  name as the session name when `user_named: true`; otherwise a generated name
+  keeps replacing the first user message.
+
 - **Store evidence:** Reverified 2026-09-10 against the published Copilot CLI
   1.0.83
   [native package](https://registry.npmjs.org/@github/copilot-darwin-arm64/-/copilot-darwin-arm64-1.0.83.tgz)

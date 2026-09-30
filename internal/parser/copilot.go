@@ -579,33 +579,35 @@ func normalizeCopilotModel(model string) string {
 }
 
 // readCopilotWorkspaceName reads the session name from the
-// workspace.yaml sibling file in a directory-format session.
-// Returns an empty string for flat .jsonl sessions or when
-// no name is present.
-func readCopilotWorkspaceName(eventsPath string) string {
+// workspace.yaml sibling file in a directory-format session, and
+// whether the user chose it (--name or /rename) rather than Copilot
+// generating it. Returns an empty name for flat .jsonl sessions or
+// when no name is present.
+func readCopilotWorkspaceName(eventsPath string) (name string, userNamed bool) {
 	if filepath.Base(eventsPath) != "events.jsonl" {
-		return ""
+		return "", false
 	}
 	yamlPath := filepath.Join(
 		filepath.Dir(eventsPath), "workspace.yaml",
 	)
 	data, err := os.ReadFile(yamlPath)
 	if err != nil {
-		return ""
+		return "", false
 	}
 	for line := range strings.SplitSeq(string(data), "\n") {
-		after, ok := strings.CutPrefix(line, "name: ")
-		if !ok {
+		if strings.TrimSpace(line) == "user_named: true" {
+			userNamed = true
 			continue
 		}
-		name := strings.TrimSpace(after)
-		if name != "" {
-			return truncate(
-				strings.ReplaceAll(name, "\n", " "), 300,
-			)
+		after, ok := strings.CutPrefix(line, "name: ")
+		if !ok || name != "" {
+			continue
+		}
+		if value := strings.TrimSpace(after); value != "" {
+			name = truncate(value, 300)
 		}
 	}
-	return ""
+	return name, userNamed
 }
 
 // parseSession parses a Copilot JSONL session file into the session, messages,
@@ -707,11 +709,13 @@ func (p *copilotProvider) parseSessionWithStore(ctx context.Context,
 
 	sessionID := "copilot:" + rawSessionID
 
-	// Prefer the workspace.yaml name (LLM-generated or user-set
-	// title) over the raw first user message. Falls back to the
-	// first user message when no name is present.
+	// A workspace.yaml name the user chose is the session name. A
+	// generated name still replaces the raw first user message.
 	firstMessage := b.firstMessage
-	if wsName := readCopilotWorkspaceName(path); wsName != "" {
+	var sessionName string
+	if wsName, userNamed := readCopilotWorkspaceName(path); userNamed {
+		sessionName = wsName
+	} else if wsName != "" {
 		firstMessage = wsName
 	}
 
@@ -728,6 +732,7 @@ func (p *copilotProvider) parseSessionWithStore(ctx context.Context,
 		Machine:          machine,
 		Agent:            AgentCopilot,
 		FirstMessage:     firstMessage,
+		SessionName:      sessionName,
 		StartedAt:        b.startedAt,
 		EndedAt:          b.endedAt,
 		MessageCount:     len(b.messages),
