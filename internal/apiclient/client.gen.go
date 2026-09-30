@@ -18950,10 +18950,8 @@ func (c ConfigDuckDBConfig) Validate() error {
 type ConfigRemoteHost struct {
 	Host      string  `json:"host" validate:"required"`
 	Interval  *int64  `json:"interval,omitempty"`
-	Port      *int64  `json:"port,omitempty"`
 	Transport *string `json:"transport,omitempty"`
 	URL       *string `json:"url,omitempty"`
-	User      *string `json:"user,omitempty"`
 }
 
 func (c ConfigRemoteHost) Validate() error {

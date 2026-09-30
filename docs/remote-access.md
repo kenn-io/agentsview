@@ -86,13 +86,13 @@ When `require_auth` is disabled, normal local loopback use remains ungated.
 
 ## HTTP Remote Sync
 
-Configured `[[remote_hosts]]` entries can use `transport = "http"` when the
-remote machine is already running an AgentsView daemon:
+HTTP is the only built-in remote sync transport. Each `[[remote_hosts]]` entry
+requires the URL and bearer token of a running AgentsView daemon:
 
 ```toml
 [[remote_hosts]]
 host = "devbox1"
-transport = "http"
+transport = "http" # optional; default
 url = "http://devbox1.tailnet.ts.net:8080"
 token = "remote-token"
 interval = "5m" # optional: sync periodically while the collector daemon runs
@@ -168,9 +168,7 @@ concurrent syncs of that host from the same data directory.
 
 The mirror adds an on-disk copy of the remote session sources to the collector,
 in addition to the indexed database. Budget roughly the size of each remote
-host's syncable source corpus for it. Incremental transfer applies only to the
-HTTP transport. SSH remote sync is deprecated, receives only critical fixes,
-and continues to copy a full session tree on each run.
+host's syncable source corpus for it.
 
 ### How A Sync Works
 
@@ -204,8 +202,8 @@ For a configured full sync that includes local sources, mirror preparation
 finishes before database work begins. The collector then ingests local sources
 and every prepared HTTP mirror through the same batched temporary-database path,
 with FTS maintenance suspended during ingest and rebuilt once before an atomic
-swap. Configured SSH hosts run afterward. A preparation, parser, batch-write, or
-FTS failure leaves the active archive unchanged and prevents the SSH phase.
+swap. A preparation, parser, batch-write, or FTS failure leaves the active
+archive unchanged.
 
 Remote-only syncs, including
 `agentsview sync --host <configured-http-host> --full`, continue to import into

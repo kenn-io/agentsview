@@ -36,7 +36,7 @@ AIR_BIN := $(shell if command -v air >/dev/null 2>&1; then command -v air; \
 	elif [ -x "$(GOPATH_FIRST)/bin/air" ]; then printf "%s" "$(GOPATH_FIRST)/bin/air"; \
 	fi)
 
-.PHONY: build build-release install install-cjk-fts simple-fts frontend frontend-dev dev check-air air-install desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app docs-install docs-build docs-serve docs-check docs-screenshots docs-assets-branch docs-generated-assets-branch docs-deploy-staging docs-deploy test test-short test-evalingest bench-backends bench-gate bench-gate-config bench-pg-usage test-postgres test-postgres-ci test-s3 postgres-up postgres-down test-clickhouse test-clickhouse-ci clickhouse-up clickhouse-down test-ssh test-ssh-ci ssh-up ssh-down e2e e2e-duckdb memory-e2e vet lint lint-ci lint-golangci lint-golangci-ci nilaway nilaway-golangci-build lint-tools tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir pricing-snapshot sqlite-vec-header dev-snapshot help check-timing-budgets
+.PHONY: build build-release install install-cjk-fts simple-fts frontend frontend-dev dev check-air air-install desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app docs-install docs-build docs-serve docs-check docs-screenshots docs-assets-branch docs-generated-assets-branch docs-deploy-staging docs-deploy test test-short test-evalingest bench-backends bench-gate bench-gate-config bench-pg-usage test-postgres test-postgres-ci test-s3 postgres-up postgres-down test-clickhouse test-clickhouse-ci clickhouse-up clickhouse-down e2e e2e-duckdb memory-e2e vet lint lint-ci lint-golangci lint-golangci-ci nilaway nilaway-golangci-build lint-tools tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir pricing-snapshot sqlite-vec-header dev-snapshot help check-timing-budgets
 
 # Ensure go:embed has at least one file (no-op if frontend is built)
 ensure-embed-dir:
@@ -446,26 +446,6 @@ test-clickhouse-ci: pricing-snapshot ensure-embed-dir
 test-s3: pricing-snapshot ensure-embed-dir
 	CGO_ENABLED=1 go test -tags "fts5,s3test" -v ./internal/sync/... -run TestS3 -count=1
 
-# Start test SSH container
-ssh-up:
-	docker compose -f docker-compose.test.yml up -d --build --wait sshd
-	docker cp "$$(docker compose -f docker-compose.test.yml ps -q sshd)":/tmp/test_ssh_key testdata/ssh/test_key
-	chmod 600 testdata/ssh/test_key
-
-# Stop test SSH container
-ssh-down:
-	docker compose -f docker-compose.test.yml down sshd
-
-# Run SSH integration tests (starts sshd automatically)
-test-ssh: pricing-snapshot ensure-embed-dir ssh-up
-	TEST_SSH_HOST=localhost TEST_SSH_PORT=2222 TEST_SSH_USER=testuser \
-		TEST_SSH_KEY=$(CURDIR)/testdata/ssh/test_key \
-		CGO_ENABLED=1 go test -tags "fts5,sshtest" -v ./internal/ssh/... -count=1
-
-# SSH integration tests for CI (sshd already running)
-test-ssh-ci: pricing-snapshot ensure-embed-dir
-	CGO_ENABLED=1 go test -tags "fts5,sshtest" -v ./internal/ssh/... -count=1
-
 # Local E2E builds enable the mapping workspace. Prebuilt servers must opt in
 # because their embedded frontend may not include the workspace yet.
 PROJECT_MAPPING_WORKSPACE_E2E_ENABLED ?= $(if $(E2E_PREBUILT_SERVER),,true)
@@ -730,9 +710,6 @@ help:
 	@echo "  postgres-down  - Stop test PostgreSQL container"
 	@echo "  clickhouse-up  - Start test ClickHouse container"
 	@echo "  clickhouse-down - Stop test ClickHouse container"
-	@echo "  test-ssh       - Run SSH integration tests"
-	@echo "  ssh-up         - Start test SSH container"
-	@echo "  ssh-down       - Stop test SSH container"
 	@echo "  e2e            - Run Playwright E2E tests"
 	@echo "  e2e-duckdb     - Run DuckDB-backed Playwright smoke tests"
 	@echo "  memory-e2e     - Run opt-in Claude Code and Codex memory recall gate"

@@ -211,7 +211,7 @@ func TestAiderEqualHeaderRunsGetStableDistinctIDs(t *testing.T) {
 }
 
 // TestAiderSessionIDStableAcrossExtractionDirs is the MEDIUM-1 regression
-// test for SSH sync. During remote sync the history file is extracted to a
+// test for remote sync. During remote sync the history file is extracted to a
 // RANDOM local temp dir, so hashing the on-disk path would re-key the run on
 // every sync. Passing a canonical identity path (the remote physical path)
 // to parseAiderRunsWithID must produce the SAME ID regardless of where the

@@ -2624,22 +2624,25 @@ func TestLoadFile_RemoteHosts(t *testing.T) {
 	f := newConfigFixture(t)
 	f.WriteConfigText(t, `[[remote_hosts]]
 host = "devbox1"
-user = "jesse"
-port = 22
+url = "https://devbox1.example.test"
+token = "remote-token"
 interval = "5m"
 
 [[remote_hosts]]
 host = "  laptop2  "
+url = " https://laptop2.example.test "
+token = " remote-token "
 `)
 
 	cfg := f.LoadMinimal(t)
 
 	require.Len(t, cfg.RemoteHosts, 2)
-	assert.Equal(t, RemoteHost{Host: "devbox1", User: "jesse", Port: 22, Interval: 5 * time.Minute}, cfg.RemoteHosts[0])
+	assert.Equal(t, RemoteHost{Host: "devbox1", URL: "https://devbox1.example.test", Token: "remote-token", Interval: 5 * time.Minute}, cfg.RemoteHosts[0])
 	assert.Equal(t, 5*time.Minute, cfg.RemoteHosts[0].Interval)
 	assert.Equal(t, time.Duration(0), cfg.RemoteHosts[1].Interval)
-	// host is trimmed at load so validation and SSH see the same value
-	assert.Equal(t, RemoteHost{Host: "laptop2"}, cfg.RemoteHosts[1])
+	// Remote values are trimmed before validation and sync.
+	assert.Equal(t, RemoteHost{Host: "laptop2", URL: "https://laptop2.example.test", Token: "remote-token"}, cfg.RemoteHosts[1])
+	require.NoError(t, cfg.ValidateRemoteHosts())
 }
 
 func TestLoadFile_RemoteHostsHTTP(t *testing.T) {
@@ -2692,23 +2695,17 @@ func TestValidateRemoteHosts(t *testing.T) {
 		hosts   []RemoteHost
 		wantErr []string // substrings expected in error; empty => no error
 	}{
-		{"valid", []RemoteHost{{Host: "a"}, {Host: "b", Port: 22}, {Host: "c", Port: 0}}, nil},
+		{"omitted transport uses http", []RemoteHost{{Host: "a", URL: "https://a.example.test", Token: "token"}}, nil},
+		{"omitted transport requires credentials", []RemoteHost{{Host: "a"}}, []string{"url is required", "token is required"}},
 		{"empty host", []RemoteHost{{Host: ""}}, []string{"host is required"}},
-		{"negative port", []RemoteHost{{Host: "a", Port: -1}}, []string{"invalid port"}},
-		{"port too large", []RemoteHost{{Host: "a", Port: 70000}}, []string{"invalid port"}},
-		{"aggregates both", []RemoteHost{{Host: ""}, {Host: "b", Port: 99999}}, []string{"host is required", "invalid port"}},
+		{"aggregates entries", []RemoteHost{{Host: ""}, {Host: "b", Interval: -1}}, []string{"entry 1: host is required", "entry 2 (\"b\"): invalid interval"}},
 		{"duplicate host", []RemoteHost{{Host: "a"}, {Host: "a"}}, []string{"duplicate host"}},
-		{"duplicate host different user or port", []RemoteHost{{Host: "box", User: "alice"}, {Host: "box", User: "bob", Port: 2222}}, []string{"duplicate host"}},
-		{"option shaped host", []RemoteHost{{Host: "-oProxyCommand=sh"}}, []string{"host must not begin with '-'"}},
-		{"option shaped user", []RemoteHost{{Host: "box", User: "-lroot"}}, []string{"user must not begin with '-'"}},
 		{"none configured", nil, nil},
 		{"negative interval", []RemoteHost{{Host: "a", Interval: -1}}, []string{"invalid interval"}},
-		{"zero interval ok", []RemoteHost{{Host: "a", Interval: 0}}, nil},
+		{"zero interval ok", []RemoteHost{{Host: "a", URL: "https://a.example.test", Token: "token", Interval: 0}}, nil},
 		{"http valid", []RemoteHost{{Host: "a", Transport: RemoteTransportHTTP, URL: "https://a.example.test", Token: "token"}}, nil},
 		{"http requires url", []RemoteHost{{Host: "a", Transport: RemoteTransportHTTP}}, []string{"url is required"}},
 		{"http requires token", []RemoteHost{{Host: "a", Transport: RemoteTransportHTTP, URL: "https://a.example.test"}}, []string{"token is required"}},
-		{"http rejects user", []RemoteHost{{Host: "a", Transport: RemoteTransportHTTP, URL: "https://a.example.test", User: "alice"}}, []string{"user is only valid for ssh"}},
-		{"http rejects port", []RemoteHost{{Host: "a", Transport: RemoteTransportHTTP, URL: "https://a.example.test", Port: 443}}, []string{"port is only valid for ssh"}},
 		{"http rejects bad scheme", []RemoteHost{{Host: "a", Transport: RemoteTransportHTTP, URL: "ftp://a.example.test"}}, []string{"url must use http or https"}},
 		{"http rejects empty hostname with port", []RemoteHost{{Host: "a", Transport: RemoteTransportHTTP, URL: "http://:8080"}}, []string{"url must include a host"}},
 		{"http rejects query", []RemoteHost{{Host: "a", Transport: RemoteTransportHTTP, URL: "https://a.example.test?token=x"}}, []string{"url must not include query"}},
@@ -2716,8 +2713,7 @@ func TestValidateRemoteHosts(t *testing.T) {
 		{"http rejects fragment", []RemoteHost{{Host: "a", Transport: RemoteTransportHTTP, URL: "https://a.example.test/#remote"}}, []string{"url must not include fragment"}},
 		{"http rejects empty fragment delimiter", []RemoteHost{{Host: "a", Transport: RemoteTransportHTTP, URL: "https://a.example.test#", Token: "token"}}, []string{"url must not include fragment"}},
 		{"http rejects userinfo", []RemoteHost{{Host: "a", Transport: RemoteTransportHTTP, URL: "https://alice@a.example.test"}}, []string{"url must not include userinfo"}},
-		{"ssh rejects url", []RemoteHost{{Host: "a", Transport: RemoteTransportSSH, URL: "https://a.example.test"}}, []string{"url is only valid for http"}},
-		{"ssh rejects token", []RemoteHost{{Host: "a", Transport: RemoteTransportSSH, Token: "token"}}, []string{"token is only valid for http"}},
+		{"retired transport", []RemoteHost{{Host: "a", Transport: "ssh", URL: "https://a.example.test", Token: "token"}}, []string{"invalid transport \"ssh\"", "use http with a url and token"}},
 		{"unknown transport", []RemoteHost{{Host: "a", Transport: RemoteTransport("sftp")}}, []string{"invalid transport"}},
 	}
 	for _, tt := range tests {

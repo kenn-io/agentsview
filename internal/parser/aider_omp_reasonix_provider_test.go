@@ -397,7 +397,7 @@ func TestAiderProviderFindSourceByRawID(t *testing.T) {
 
 // TestAiderProviderRemoteIdentityStable verifies the PathRewriter-seeded
 // identity keeps per-run session IDs stable when the same history file is read
-// from different (temp) locations, mirroring SSH remote sync.
+// from different (temp) locations, mirroring remote sync.
 func TestAiderProviderRemoteIdentityStable(t *testing.T) {
 	rootA := t.TempDir()
 	rootB := t.TempDir()

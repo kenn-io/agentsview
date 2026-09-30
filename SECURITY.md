@@ -30,11 +30,11 @@ risk via documented flags and config.
   attacker.
 - Parser crashes, excessive resource use, or active-content injection triggered
   by content inside supported session files. Session files often contain
-  web/tool output that agentsview did not author, and defensive parsing of that
-  content is a security-relevant concern.
+  web/tool output that agentsview did not author, and defensive parsing of
+  that content is a security-relevant concern.
 - Inadvertent exposure of secrets that appear in transcripts. agentsview ships a
-  best-effort secret detector and redacts findings in the UI and CLI by default
-  (see [Secrets subsystem](#secrets-subsystem)).
+  best-effort secret detector and redacts findings in the UI and CLI by
+  default (see [Secrets subsystem](#secrets-subsystem)).
 
 ### Explicitly out of scope (today)
 
@@ -54,24 +54,24 @@ risk via documented flags and config.
 
 ## Trust boundaries
 
-| Boundary                          | Posture                                                          | Notes                                                                |
-| --------------------------------- | ---------------------------------------------------------------- | -------------------------------------------------------------------- |
-| Session files → parser            | Treated as untrusted data                                        | Parsers should not exec/eval; bugs are security-relevant.            |
-| Imports and new readers           | Treated as untrusted structured data                             | Same posture as parsers; imported archives may be remote-origin.     |
-| SSH remote sync                   | Treated as user-provisioned and user-authenticated               | Pulled archives are parsed locally as untrusted data.                |
-| Parser → SQLite / FTS5            | Trusted                                                          | Indexed content is preserved verbatim.                               |
-| HTTP server → caller              | Loopback-trusted; bearer-gated for `/api/` when `--require-auth` | Static assets are not gated.                                         |
-| Browser → HTTP server             | Host-header allowlist + CORS + CSP + X-Frame-Options enforced    | DNS-rebinding, framing, and cross-origin defenses.                   |
-| agentsview → PostgreSQL (pg push) | TLS required for non-loopback hosts                              | Plaintext rejected unless `allow_insecure = true` is set explicitly. |
-| agentsview → update endpoint      | One-way outbound, opt-out                                        | Disable with `--no-update-check`.                                    |
-| agentsview → LiteLLM pricing      | One-way outbound, on-demand                                      | Public JSON fetched from GitHub raw; no session data sent.           |
+| Boundary                          | Posture                                                             | Notes                                                                |
+| --------------------------------- | ------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| Session files → parser            | Treated as untrusted data                                           | Parsers should not exec/eval; bugs are security-relevant.            |
+| Imports and new readers           | Treated as untrusted structured data                                | Same posture as parsers; imported archives may be remote-origin.     |
+| HTTP remote sync                  | User-configured endpoints authenticated with per-host bearer tokens | Pulled archives are parsed locally as untrusted data.                |
+| Parser → SQLite / FTS5            | Trusted                                                             | Indexed content is preserved verbatim.                               |
+| HTTP server → caller              | Loopback-trusted; bearer-gated for `/api/` when `--require-auth`    | Static assets are not gated.                                         |
+| Browser → HTTP server             | Host-header allowlist + CORS + CSP + X-Frame-Options enforced       | DNS-rebinding, framing, and cross-origin defenses.                   |
+| agentsview → PostgreSQL (pg push) | TLS required for non-loopback hosts                                 | Plaintext rejected unless `allow_insecure = true` is set explicitly. |
+| agentsview → update endpoint      | One-way outbound, opt-out                                           | Disable with `--no-update-check`.                                    |
+| agentsview → LiteLLM pricing      | One-way outbound, on-demand                                         | Public JSON fetched from GitHub raw; no session data sent.           |
 
 ## Data at rest
 
 - The local archive (SQLite + FTS5 index) stores indexed session data in
   plaintext. This includes assistant responses, user prompts, tool arguments,
-  command output, file contents fetched by agents, and any secrets that may have
-  been pasted into an agent session.
+  command output, file contents fetched by agents, and any secrets that may
+  have been pasted into an agent session.
 - File permissions follow the user's umask. agentsview does not chmod the data
   directory and does not encrypt at rest.
 - Treat the agentsview data directory with the same care you would treat your
@@ -80,7 +80,7 @@ risk via documented flags and config.
   permanent-delete path. Permanent delete removes rows from the primary tables
   and the FTS5 index; it does not promise erasure of SQLite pages, the WAL,
   on-disk backups, OS file caches, or any external copy that was made via
-  `pg push` or SSH sync.
+  `pg push` or HTTP remote sync.
 
 ## Data in transit
 
@@ -89,10 +89,10 @@ explicitly because "data stays on your machine" is the default but is not a
 complete description of the system once optional features are in use.
 
 - **Local UI / API.** The HTTP server binds to `127.0.0.1` by default. When
-  exposed beyond loopback, `--require-auth` should be enabled. Authentication is
-  a bearer token applied to `/api/` routes only; static assets remain ungated.
-  Browser-facing defenses (Host-header allowlist, CORS restrictions, CSP,
-  `X-Frame-Options: DENY`) are always on. See the CLI reference for token
+  exposed beyond loopback, `--require-auth` should be enabled. Authentication
+  is a bearer token applied to `/api/` routes only; static assets remain
+  ungated. Browser-facing defenses (Host-header allowlist, CORS restrictions,
+  CSP, `X-Frame-Options: DENY`) are always on. See the CLI reference for token
   configuration.
 - **PostgreSQL sync.** `agentsview pg push` exports the local archive to a
   user-supplied PostgreSQL instance. Non-loopback DSNs are rejected unless TLS
@@ -100,10 +100,12 @@ complete description of the system once optional features are in use.
   `allow_insecure = true` under `[pg]`. The destination database itself is
   treated as user-provisioned infrastructure; agentsview asserts nothing about
   its access controls.
-- **SSH remote sync.** agentsview can pull session archives from another machine
-  over SSH. Authentication is whatever the user's SSH configuration provides.
-  Pulled files are parsed locally as untrusted data and merged into the unified
-  archive.
+- **HTTP remote sync.** agentsview pulls session archives from configured remote
+  daemons using a per-host bearer token. Archive endpoints require that token
+  even when the remote daemon's other API routes do not require
+  authentication. Use a private network such as Tailscale. Pulled files are
+  parsed locally as untrusted data and merged into the unified archive. See
+  [HTTP Remote Sync](docs/remote-access.md#http-remote-sync).
 - **Imports.** Imported archives from other agentsview instances or third-party
   exports are treated as untrusted structured data, no different from session
   files written by local agents.
@@ -125,9 +127,9 @@ The HTTP server applies the following defenses unconditionally:
 - **CORS restrictions.** Cross-origin API requests must come from an allowed
   origin or carry the bearer token; preflight handling is explicit.
 - **Content-Security-Policy.** A policy pinning the server's exact origin for
-  script/style/image/font/default-src is set on non-API responses. `connect-src`
-  is intentionally widened to allow the remote-server feature in the SPA; this
-  is a documented tradeoff.
+  script/style/image/font/default-src is set on non-API responses.
+  `connect-src` is intentionally widened to allow the remote-server feature in
+  the SPA; this is a documented tradeoff.
 - **X-Frame-Options: DENY.** Framing is disallowed on non-API responses.
 
 ## Secrets subsystem
@@ -181,11 +183,12 @@ its own proposal.
 1. **Multi-user machine support.** Is agentsview ever meant to run on a shared
    host, and if so what are the minimum hardening steps?
 1. **`allow_insecure` UX.** Should setting `[pg] allow_insecure = true` require
-   an additional confirmation (e.g., a `--yes-really` flag) on first use, given
-   that it disables the only protection against plaintext PG egress?
+   an additional confirmation (e.g., a `--yes-really` flag) on first use,
+   given that it disables the only protection against plaintext PG egress?
 1. **Deletion guarantees.** Should "permanent delete" grow into a stronger
-   erasure path (VACUUM, WAL checkpoint + truncate, mirror propagation to PG/SSH
-   targets), or should the docs simply make the current limits clearer?
+   erasure path (VACUUM, WAL checkpoint + truncate, mirror propagation to
+   PG/HTTP targets), or should the docs simply make the current limits
+   clearer?
 1. **Secret detection scope.** Should the detector expand (more patterns,
    structured-secret types), should redacted-by-default extend to exports, and
    should there be a "scrub-on-import" pass?

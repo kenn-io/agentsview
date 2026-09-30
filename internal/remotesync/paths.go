@@ -235,8 +235,7 @@ func resolveSymlinksBestEffort(p string) string {
 
 // PathWithinForbiddenRoots reports whether path is a forbidden root or lies
 // beneath one. sep is the path separator of the caller's domain: '/' for
-// remote POSIX paths (see internal/ssh, which builds paths for the resolve
-// script and tar filter), or filepath.Separator for local OS paths. Roots
+// POSIX paths or filepath.Separator for local OS paths. Roots
 // and path are normalized (dot segments resolved, redundant separators
 // collapsed) before comparison, and matching requires a full path-component
 // boundary so sibling names such as .forbidden-provider-backup do not get

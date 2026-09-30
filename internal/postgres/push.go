@@ -968,7 +968,7 @@ func filterProjectIdentityObservations(
 // dropped or recreated) since this host last pushed, so a full re-push is
 // needed. Counting rows by machine cannot detect this reliably: another host
 // pushing to the same PG can repopulate rows under a machine value this host
-// also writes -- a remote host's sessions synced in over SSH, or this host's
+// also writes -- a remote host's sessions synced from a remote, or this host's
 // own renamed identity -- masking the loss of this host's own rows. The marker
 // is per-local-DB, so no other pusher can satisfy this check.
 func (s *Sync) pgPushMarkerMachineState(

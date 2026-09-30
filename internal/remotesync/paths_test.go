@@ -49,9 +49,7 @@ var forbiddenRootCases = []forbiddenRootCase{
 }
 
 // TestPathWithinForbiddenRootsSlashSeparator exercises PathWithinForbiddenRoots
-// with '/', the separator internal/ssh uses for remote POSIX paths, and the
-// separator internal/remotesync's local wrapper also uses on non-Windows
-// hosts (filepath.Separator == '/').
+// with '/', the separator used on non-Windows hosts.
 func TestPathWithinForbiddenRootsSlashSeparator(t *testing.T) {
 	for _, tc := range forbiddenRootCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -61,13 +59,7 @@ func TestPathWithinForbiddenRootsSlashSeparator(t *testing.T) {
 }
 
 // TestPathWithinForbiddenRootsBackslashSeparator exercises the same table
-// through the Windows-style separator ('\'). Neither pre-unification donor
-// implementation could be exercised against this separator on a non-Windows
-// runner: the old internal/remotesync predicate depended on
-// filepath.Separator, which is only '\' on an actual Windows GOOS build, and
-// the old internal/ssh predicate was hardcoded to '/'. Because the unified
-// predicate takes sep as an explicit parameter, local-filepath behavior is
-// now testable on any host OS.
+// through the Windows-style separator ('\') on any host OS.
 func TestPathWithinForbiddenRootsBackslashSeparator(t *testing.T) {
 	for _, tc := range forbiddenRootCases {
 		t.Run(tc.name, func(t *testing.T) {

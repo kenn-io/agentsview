@@ -272,36 +272,27 @@ both are set.
 
 ## Remote Hosts
 
-Add `[[remote_hosts]]` entries when a bare `agentsview sync` should pull raw
-session files from other machines after the local sync finishes. SSH remains the
-default transport:
-
-```toml
-[[remote_hosts]]
-host = "buildbox"
-transport = "ssh" # optional; default
-user = "wes"
-port = 2222
-```
-
-For daemon-backed HTTP sync, run an AgentsView daemon on the remote host and
-secure reachability with a private network such as Tailscale:
+Add `[[remote_hosts]]` entries when a bare `agentsview sync` should include raw
+session files from other machines. HTTP is the only remote sync transport and
+the default when `transport` is omitted. Run an AgentsView daemon on the remote
+host and secure reachability with a private network such as Tailscale:
 
 ```toml
 [[remote_hosts]]
 host = "devbox1"
-transport = "http"
+transport = "http" # optional; default
 url = "http://devbox1.tailnet.ts.net:8080"
 token = "remote-token"
 interval = "5m" # optional; zero or omitted means manual sync only
 ```
 
-HTTP remote sync calls the remote daemon's archive endpoints and always uses a
-bearer token, even when the rest of that daemon has `require_auth = false`. The
-per-host `token` is required and must match the remote daemon's `auth_token`. Do
-not reuse the collector daemon's own `auth_token` for untrusted remote
-endpoints. HTTP transfers use a persistent per-host mirror and request file
-deltas when fewer than half of the manifest files need fetching; see
+Each host requires a `url` and a `token`. Other transport values, including
+`"ssh"`, are rejected. HTTP remote sync calls the remote daemon's archive
+endpoints and always uses a bearer token, even when the rest of that daemon has
+`require_auth = false`. The per-host `token` must match the remote daemon's
+`auth_token`. Do not reuse the collector daemon's own `auth_token` for untrusted
+remote endpoints. HTTP transfers use a persistent per-host mirror and request
+file deltas when fewer than half of the manifest files need fetching; see
 [Remote Access — Incremental Sync](/docs/remote-access/#incremental-sync).
 
 When a full or automatic data-version rebuild includes local sources, configured
@@ -315,12 +306,11 @@ peers fail before targets or archive data are exchanged.
 Each `remote_hosts.host` value must be unique and stable. It namespaces imported
 session IDs, the database skip cache, and the persistent mirror; changing it for
 the same machine can duplicate sessions, while reusing it for another machine
-can reuse stale state. A configured HTTP host can be selected later with
-`agentsview sync --host <name>`, but ad hoc HTTP remotes are not supported;
-without a matching configured host, `--host` remains an SSH remote sync. HTTP
-remote sync is the recommended transport. SSH remote sync is deprecated and
-receives only critical fixes. HTTP failures are summarized with actionable
-messages for common cases such as token rejection, missing remote archive
+can reuse stale state. Select a configured host with
+`agentsview sync --host <name>`, including for direct sync with
+`AGENTSVIEW_NO_DAEMON=1`. Unknown host names are rejected; ad hoc remotes are not
+supported. HTTP failures are summarized with actionable messages for common
+cases such as token rejection, missing remote archive
 endpoints, connection refusal, DNS failures, and timeouts.
 
 Set `interval` to a positive duration such as `"5m"` to have a running collector
@@ -582,8 +572,8 @@ Omnigent sessions are read from `~/.omnigent/chat.db`. Set `OMNIGENT_DIR` or
 `agents.omnigent.dirs` to override the default directory. AgentsView creates one
 session per conversation and supports the split text-ID and current binary-UUID
 schema generations; the older single-table schema is detected and reported as
-unsupported without losing sessions already synced from it. Remote HTTP and SSH
-sync stay disabled for Omnigent because `chat.db` co-locates transcripts with
+unsupported without losing sessions already synced from it. HTTP remote sync
+stays disabled for Omnigent because `chat.db` co-locates transcripts with
 authentication secrets. A metadata-only edit made directly in `chat.db` can be
 deferred by the immediate filesystem-event sync; the next scheduled
 reconciliation pass or an explicit resync picks it up.
@@ -628,7 +618,7 @@ Trae stores chats in `workspaceStorage/<hash>/state.vscdb` and
 `globalStorage`, then reads chat records from those SQLite stores.
 
 Trae legacy inline-message parsing is supported. Modern encrypted transcript
-layouts are detected and reported as unsupported. Remote HTTP and SSH target
+layouts are detected and reported as unsupported. HTTP remote target
 resolution is still disabled. A Trae root is a full user profile, and AgentsView
 does not archive or ship that profile wholesale. The follow-up path is
 Windsurf-style curated file targets only: `state.vscdb`, `state.vscdb-wal`, and
@@ -1018,11 +1008,9 @@ identities still take precedence. Media that cannot be represented by the
 existing transcript view is shown as a descriptive placeholder, without fetching
 referenced files or URLs.
 
-Remote sync uses Agentsview's existing mechanisms. This provider does not
-connect to Evener hubs or add an S3/SSH transport. SSH transfers skip Evener
-files whose full paths contain backslashes, which tar can interpret as escape
-sequences. Remote sync skips files deleted after discovery, including metadata
-left behind when its transcript is deleted.
+Remote sync uses AgentsView's HTTP transport. This provider does not connect to
+Evener hubs or add an S3 transport. Remote sync skips files deleted after
+discovery, including metadata left behind when its transcript is deleted.
 
 ### Disabling Session Providers
 
@@ -1037,10 +1025,10 @@ Because Freebuff shares the Codebuff provider, listing `"codebuff"` disables
 local filesystem ingestion for both Codebuff and Freebuff.
 
 The setting applies only to local filesystem discovery, targeted local file
-sync, file watching, and scheduled polling. It does not affect HTTP or SSH
-remote imports, and it does not restrict HTTP, SSH, PostgreSQL, DuckDB, or
-archive exports. `RemoteSyncExcluded` is the separate provider capability that
-keeps unsafe source trees out of remote exports.
+sync, file watching, and scheduled polling. It does not affect HTTP remote
+imports, and it does not restrict HTTP, PostgreSQL, DuckDB, or archive exports.
+`RemoteSyncExcluded` is the separate provider capability that keeps unsafe
+source trees out of remote exports.
 
 A change saved on the Settings page applies to the running daemon right away:
 file watching and polling switch to the new provider set. Sessions already on
@@ -1087,7 +1075,7 @@ rewrites TOML formatting and comments.
 All listed directories are discovered, watched, and synced independently.
 
 Pi also honors its native `PI_CODING_AGENT_DIR` and
-`PI_CODING_AGENT_SESSION_DIR` variables in local and SSH discovery. The agent
+`PI_CODING_AGENT_SESSION_DIR` variables in local discovery. The agent
 home variable changes the default to `<agent-home>/sessions`; the session
 variable points directly at a session directory. `PI_DIR` takes precedence over
 `PI_CODING_AGENT_SESSION_DIR`, which takes precedence over `agents.pi.dirs` in
@@ -1200,9 +1188,8 @@ remote sync also transfers these indexes and preserves their associations with
 the shared transcripts, so imported sessions retain titles from alternate homes.
 When an index is removed or loses an entry, the next sync uses a title from the
 remaining configured indexes. If none names the session, AgentsView keeps its
-last known title. Deprecated SSH sync does not carry alternate-home index
-associations. Upgrade both ends of HTTP sync together; older protocol versions
-are rejected.
+last known title. Upgrade both ends of HTTP sync together; older protocol
+versions are rejected.
 
 The same shape works for Claude Code by linking `<alt>/projects` to
 `~/.claude/projects`. Claude keeps no title index, so there is nothing else to

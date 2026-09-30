@@ -64,9 +64,6 @@ docs/.env*.local
 .vercel
 .env*.local
 
-# SSH test key (extracted from Docker container)
-testdata/ssh/test_key
-
 # Local data
 /data/
 /sessions/

@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-09-29
+last_edited: 2026-09-30
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -77,6 +77,11 @@ The latest published release is
 
 **Improvements**
 
+- Remote session sync now uses HTTP only. Configure each remote host's daemon
+  URL and bearer token; omitting `transport` selects HTTP. SSH sync and the
+  `sync --user` and `sync --port` flags have been removed. `sync --host` selects
+  a configured host, including when syncing without a local daemon. Existing
+  archived sessions are preserved.
 - Full resync now shows how many queued sessions it has checked while repairing
   subagent relationships, then reports when it is saving those repairs.
 - Turning a session provider on or off, or adding or removing an alternate

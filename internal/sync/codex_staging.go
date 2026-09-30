@@ -42,7 +42,7 @@ type codexStagingSink struct {
 	// idPrefix is applied to subagent_session_id at publish time, mirroring
 	// applyRemoteRewrites on the collecting path: staged events are inserted
 	// directly from scratch and never pass through the in-memory rewrite
-	// that prefixes remote (SSH/S3) session ids.
+	// that prefixes remote (HTTP/S3) session ids.
 	idPrefix string
 
 	toolResultImages config.ToolResultImages

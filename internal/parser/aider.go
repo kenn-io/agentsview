@@ -106,29 +106,6 @@ var aiderProtectedHomeDirs = map[string]struct{}{
 	"Pictures":  {},
 }
 
-// AiderDiscoverySkipDirNames returns the directory basenames pruned by Aider
-// discovery. Remote SSH discovery uses this to mirror local discovery semantics.
-func AiderDiscoverySkipDirNames() []string {
-	names := make([]string, 0, len(aiderSkipDirs))
-	for name := range aiderSkipDirs {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
-}
-
-// AiderDiscoveryMaxWalkDepth returns the maximum directory depth local Aider
-// discovery descends below the configured root.
-func AiderDiscoveryMaxWalkDepth() int { return aiderMaxWalkDepth }
-
-// AiderDiscoveryMaxFiles returns the maximum number of Aider history files
-// local discovery returns from one configured root.
-func AiderDiscoveryMaxFiles() int { return aiderMaxFiles }
-
-// AiderDiscoveryMaxDirs returns the maximum number of directories local Aider
-// discovery visits below one configured root.
-func AiderDiscoveryMaxDirs() int { return aiderMaxDirs }
-
 // AiderHistoryFileName returns the fixed Markdown filename aider writes
 // per repo (".aider.chat.history.md"). The sync engine uses it to match
 // watched files back to the aider agent.
@@ -595,7 +572,7 @@ func parseAiderRun(
 
 // parseAiderRunWithID is parseAiderRun with an explicit canonical identity
 // path used to derive the stable session ID. idPath should be the run's
-// canonical physical history path (e.g. the remote path during SSH sync);
+// canonical physical history path (e.g. the original remote path);
 // pass "" to fall back to the on-disk path, which is the local behavior.
 // The file is always read from path; only the ID hash uses idPath.
 func parseAiderRunWithID(
@@ -711,7 +688,7 @@ func parseAiderRuns(path, machine string) ([]ParseResult, error) {
 // parseAiderRunsWithID is parseAiderRuns with an explicit canonical
 // identity path used to derive stable session IDs for every run. idPath
 // should be the file's canonical physical history path (e.g. the remote
-// path during SSH sync, where path is a random temp extraction dir); pass
+// path during remote sync, where path is a random temp extraction dir); pass
 // "" to fall back to the on-disk path, which is the local behavior. The
 // file is always read from path; only the per-run ID hash uses idPath, so
 // the IDs stay stable across syncs that extract the file to a different

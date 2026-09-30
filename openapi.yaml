@@ -638,14 +638,9 @@ components:
         interval:
           format: int64
           type: integer
-        port:
-          format: int64
-          type: integer
         transport:
           type: string
         url:
-          type: string
-        user:
           type: string
       required:
         - host

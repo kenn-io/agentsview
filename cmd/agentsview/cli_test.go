@@ -387,7 +387,7 @@ func TestRootHelpDocumentsRemoteHosts(t *testing.T) {
 	require.NoError(t, err, "Execute")
 	for _, want := range []string{
 		"remote_hosts",
-		"passwordless",
+		"remote-token",
 		"transport = \"http\"",
 		"daemon_idle_timeout",
 		"Top-level daemon_idle_timeout",
@@ -401,15 +401,13 @@ func TestRootHelpDocumentsRemoteHosts(t *testing.T) {
 func TestSyncHelpMentionsConfiguredHosts(t *testing.T) {
 	help, err := executeCommand(newRootCommand(), "sync", "--help")
 	require.NoError(t, err, "Execute")
-	for _, want := range []string{"remote_hosts", "--host", "passwordless"} {
+	for _, want := range []string{"remote_hosts", "--host", "HTTP URL", "auth token"} {
 		assert.Contains(t, help, want, "sync help missing %q", want)
 	}
 }
 
-func TestSyncHelpHostFlagDescribesBothTransports(t *testing.T) {
+func TestSyncHelpHostFlagDescribesConfiguredHTTPHost(t *testing.T) {
 	help, err := executeCommand(newRootCommand(), "sync", "--help")
 	require.NoError(t, err, "Execute")
 	assert.Contains(t, help, "Configured HTTP host name")
-	assert.Contains(t, help, "deprecated SSH hostname")
-	assert.NotContains(t, help, "SSH hostname for deprecated remote sync")
 }

@@ -770,7 +770,7 @@ CREATE INDEX IF NOT EXISTS idx_local_source_baselines_ownership
     ON local_session_source_baselines(machine, agent, file_path, session_id);
 
 -- Remote skip cache: tracks file mtimes per remote host
--- for SSH sync incremental optimization.
+-- for remote sync incremental optimization.
 CREATE TABLE IF NOT EXISTS remote_skipped_files (
     host       TEXT NOT NULL,
     path       TEXT NOT NULL,

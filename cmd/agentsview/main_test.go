@@ -1264,7 +1264,7 @@ func TestStartRemoteHostSync_NoEmitOnZeroSynced(t *testing.T) {
 func TestStartRemoteHostSync_NoEmitOnError(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		em := &fakeEmitter{}
-		syncFn := func() (int, error) { return 0, errors.New("ssh failure") }
+		syncFn := func() (int, error) { return 0, errors.New("remote sync failure") }
 
 		done := make(chan struct{})
 		exited := make(chan struct{})

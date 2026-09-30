@@ -1742,8 +1742,8 @@ schemas keep their existing ordering behavior.
   local provider metadata, automatically associated only with a resolved
   `.cursor/projects` root, with case-insensitive matching on Windows. Custom
   roots such as `.cursor/archive` remain transcript-only. The chats directory
-  stays outside remote, SSH, and S3 transfer targets. Store-only discovery,
-  native tool-call/result joining, encrypted blob payloads, and cross-version
+  stays outside HTTP and S3 transfer targets. Store-only discovery, native
+  tool-call/result joining, encrypted blob payloads, and cross-version
   field-number stability remain unsupported; the capture contained no tool
   result and the reader ignores `blobEncryptionKey`. Unknown reachable blobs
   do not discard decoded siblings. Missing required tables or columns,
@@ -3482,18 +3482,13 @@ schemas keep their existing ordering behavior.
   are synthetic and cover semantic content, usage, metadata and fork behavior.
   Capture discovery uses bounded directory batches and the raw-audit progress
   contract. Remote imports verify content hashes rather than trusting copied
-  filesystem timestamps. SSH discovery honors an absolute `XDG_STATE_HOME`
-  when `EVENER_DIR` is unset and transfers only transcript/metadata pairs,
-  excluding API logs, credentials, and symlinked descendants. These transport
-  selections do not change the producer format above. Remote Evener imports
-  derive project names from the recorded path without probing that directory
-  on the receiving machine. The shared remote-import engine applies this
-  policy during parsing and project metadata preservation. This can use a
-  subdirectory name instead of the Git repository name; local discovery is
-  unchanged. Tool-result bodies are stored through the existing category
-  filter, without an unfiltered copy in message text; result lengths remain
-  available. SSH roots remain file-scoped when invalid filename encodings are
-  skipped. Reverified 2026-09-10 with
+  filesystem timestamps. Remote Evener imports derive project names from the
+  recorded path without probing that directory on the receiving machine. The
+  shared remote-import engine applies this policy during parsing and project
+  metadata preservation. This can use a subdirectory name instead of the Git
+  repository name; local discovery is unchanged. Tool-result bodies are stored
+  through the existing category filter, without an unfiltered copy in message
+  text; result lengths remain available. Reverified 2026-09-10 with
   `TestProviderParserHostedEvenerMatchesLocal` that captures from both home
   and directly configured sessions roots replay with the local session
   identity and messages. Capture plans retain the sessions directory in their

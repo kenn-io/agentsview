@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-09-21
+last_edited: 2026-09-30
 title: CLI Reference
 description: All AgentsView commands, flags, and environment variables
 ---
@@ -327,13 +327,11 @@ that lock, syncs directly, and exits without leaving a server running.
 agentsview sync [flags]
 ```
 
-| Flag       | Default | Description                                          |
-| ---------- | ------- | ---------------------------------------------------- |
+| Flag       | Default | Description                                         |
+| ---------- | ------- | --------------------------------------------------- |
 | `--full`   | `false` | Force a full resync regardless of data version       |
-| `--target` |         | Exchange normalized artifacts with a trusted folder  |
-| `--host`   |         | Configured HTTP host name or deprecated SSH hostname |
-| `--user`   |         | SSH username for deprecated remote sync              |
-| `--port`   | `22`    | SSH port for deprecated remote sync                  |
+| `--target` |         | Exchange normalized artifacts with a trusted folder |
+| `--host`   |         | Configured HTTP remote host name                    |
 
 **Examples:**
 
@@ -341,8 +339,7 @@ agentsview sync [flags]
 agentsview sync           # incremental sync and exit
 agentsview sync --full    # full resync and exit
 agentsview sync --target /path/to/shared-folder
-agentsview sync --host buildbox.local
-agentsview sync --host buildbox.local --user wes --port 2222
+agentsview sync --host devbox1
 ```
 
 After syncing, a summary of session and message counts is printed to stdout.
@@ -351,38 +348,30 @@ exchange. See [Artifact Folder Sync](/docs/artifact-sync/) for the trust model,
 first-use requirements, and exclusions. `--target` cannot be combined with
 `--host`.
 
-When `--host` is set, AgentsView syncs only that remote host and fails fast on
-error. If the local daemon has a matching configured `[[remote_hosts]]` entry,
-the daemon uses that stored entry and its configured transport. Otherwise,
-`--host` performs an ad hoc SSH sync: it resolves the supported agent session
-directories on the remote machine, transfers the source session data locally,
-and indexes it into your local archive. SSH remote sync is deprecated and
-receives only critical fixes; use configured HTTP remote sync for new setups.
+When `--host` is set, AgentsView syncs only the matching configured
+`[[remote_hosts]]` entry and fails fast on error. This also applies to offline
+sync with `AGENTSVIEW_NO_DAEMON=1`: the local command contacts the configured
+remote daemon directly. Unknown host names are rejected; ad hoc remotes are not
+supported.
 
 Local sync can also read configured Claude, Codex, and Cursor roots from
 S3-compatible object storage. Add `s3://` entries to `agents.claude.dirs`,
 `agents.codex.dirs`, or `agents.cursor.dirs` in `~/.agentsview/config.toml`,
-then run `agentsview sync` normally. This is not SSH remote sync: object storage
-is treated as a read-only session source, using object size and `LastModified`
-metadata to skip unchanged sessions and downloading only objects that need
+then run `agentsview sync` normally. Object storage is treated as a read-only
+session source, using object size and `LastModified` metadata to skip unchanged
+sessions and downloading only objects that need
 parsing. See
 [Configuration — S3-Compatible Session Sources](/docs/configuration/#s3-compatible-session-sources).
 
 #### Configured Remote Hosts
 
-As of 0.33.0, remote hosts can also be declared in `~/.agentsview/config.toml`
-so a single bare `agentsview sync` covers a whole fleet:
+Declare remote hosts in `~/.agentsview/config.toml` so a single bare
+`agentsview sync` covers a whole fleet. HTTP is the only remote sync transport:
 
 ```toml
 [[remote_hosts]]
-host = "buildbox.local"
-transport = "ssh" # optional; default
-user = "wes"      # optional
-port = 2222       # optional, defaults to 22
-
-[[remote_hosts]]
 host = "devbox1"
-transport = "http"
+transport = "http" # optional; default
 url = "http://devbox1.tailnet.ts.net:8080"
 token = "remote-token"
 ```
@@ -391,8 +380,7 @@ With hosts configured, `agentsview sync` (no `--host`) includes local sources
 and configured HTTP hosts in one coordinated sync. During a full or automatic
 data-version rebuild, AgentsView prepares every HTTP mirror, bulk-ingests the
 local and HTTP sources into one temporary database with FTS updates suspended,
-rebuilds FTS once, and atomically swaps the completed archive into place. SSH
-hosts run through their existing active-archive path only after that swap.
+rebuilds FTS once, and atomically swaps the completed archive into place.
 
 `--full` reparses every discovered local and remote session, but it does not
 force unchanged manifest-capable files to transfer again. Directory-scoped and
@@ -402,22 +390,13 @@ and spokes must use the same remote-sync protocol version; incompatible peers
 fail before exchanging targets or archive data. A configured HTTP host that is
 offline, unreachable, or times out is skipped; reachable HTTP hosts still join
 the combined rebuild. Other HTTP preparation or contributor failures abort the
-combined rebuild without replacing the active archive or running SSH. Ordinary
-incremental and post-swap SSH failures retain per-host reporting, and the
-command exits non-zero for any failure other than an unavailable configured HTTP
-host. See [Incremental Sync](/docs/remote-access/#incremental-sync).
-
-`agentsview sync --host X` syncs one host, not the whole configured list. When
-the local daemon knows a configured host with that identity, it uses the stored
-entry and transport so HTTP hosts can be selected by host name. Without a
-matching configured host, `--host` remains an ad hoc SSH sync. SSH remote sync
-is deprecated and receives only critical fixes. It remains non-interactive in
-both forms — it requires key-based passwordless SSH and never prompts for a
-password. Prefer configured HTTP remote sync.
+combined rebuild without replacing the active archive. The command exits
+non-zero for any failure other than an unavailable configured HTTP host. See
+[Incremental Sync](/docs/remote-access/#incremental-sync).
 
 HTTP remote sync requires a reachable remote daemon, preferably over a private
 network such as Tailscale, and remote archive endpoints always require bearer
-auth. The per-host `token` is required and must match the remote daemon's
+auth. Every host requires a `url` and a `token` matching the remote daemon's
 `auth_token`; do not reuse the collector daemon's own token for untrusted remote
 endpoints. Ad hoc HTTP remotes are not supported. Hosts must be unique within
 the list, since remote sessions are namespaced by host.

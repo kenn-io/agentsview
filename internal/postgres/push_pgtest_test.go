@@ -2570,7 +2570,7 @@ func TestPushIncrementalWithOnlyForeignMachineSessions(t *testing.T) {
 // TestPushDetectsResetWhenCompetingMachineRowsExist verifies that a PG reset is
 // detected even when another pusher has repopulated rows under a machine value
 // this host also writes. The local session carries Machine "remote-host" (as a
-// remote host's sessions synced in over SSH would); after the first push the PG
+// remote host's sessions synced from a remote would); after the first push the PG
 // rows and this host's push marker are removed and a competing "remote-host"
 // row is inserted, simulating the remote host re-pushing first after a shared
 // PG reset. A machine-count check would see the competing row and skip the full

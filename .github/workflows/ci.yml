@@ -672,37 +672,6 @@ jobs:
           CGO_ENABLED: "1"
           TEST_CLICKHOUSE_URL: clickhouse://localhost:19000/default
 
-      - name: Build SSH test container
-        run: bash scripts/retry.sh 3 10 docker build -t agentsview-sshd -f testdata/ssh/Dockerfile .
-
-      - name: Start SSH test container
-        run: |
-          docker run -d --name sshd-test -p 2222:22 agentsview-sshd
-          for i in $(seq 1 10); do nc -z localhost 2222 && break || sleep 1; done
-          docker cp sshd-test:/tmp/test_ssh_key testdata/ssh/test_key
-          chmod 600 testdata/ssh/test_key
-
-      - name: Verify SSH connectivity
-        run: |
-          echo "=== Key file ==="
-          ls -la testdata/ssh/test_key
-          head -1 testdata/ssh/test_key
-          echo "=== Container sshd_config ==="
-          docker exec sshd-test cat /etc/ssh/sshd_config
-          echo "=== Container authorized_keys ==="
-          docker exec sshd-test cat /home/testuser/.ssh/authorized_keys
-          echo "=== Test SSH connection ==="
-          ssh -v -i testdata/ssh/test_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 testuser@localhost echo "SSH works" 2>&1 || true
-
-      - name: Run SSH integration tests
-        run: make test-ssh-ci
-        env:
-          CGO_ENABLED: "1"
-          TEST_SSH_HOST: localhost
-          TEST_SSH_PORT: "2222"
-          TEST_SSH_USER: testuser
-          TEST_SSH_KEY: ${{ github.workspace }}/testdata/ssh/test_key
-
   e2e:
     runs-on: namespace-profile-linux-8cpu
     steps:

@@ -205,7 +205,7 @@ func s3RelativePath(root, uri string) (string, bool) {
 // (string(Agent)), so the rule generalizes to any agent that adopts the same
 // layout rather than being limited to Claude/Codex. Returns "" when not found,
 // so callers fall back to the agentsview host machine name. This mirrors the
-// host prefix that SSH remote sync attaches to pulled sessions.
+// host prefix that remote sync attaches to pulled sessions.
 func s3MachineFromRoot(root, provider string) string {
 	// segs[0] is the bucket, so "raw" must be at index >= 2 for the
 	// preceding segment to be a machine directory rather than the bucket.

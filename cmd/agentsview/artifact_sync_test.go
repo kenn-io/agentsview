@@ -214,7 +214,7 @@ func TestDoSyncRunsArtifactExchangeAfterConfiguredRemoteFanout(t *testing.T) {
 	isolateDirectCLISources(t)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(env.DataDir, "config.toml"),
-		[]byte("[[remote_hosts]]\nhost = \"peer\"\n"),
+		[]byte("[[remote_hosts]]\nhost = \"peer\"\nurl = \"https://peer.example.test\"\ntoken = \"remote-token\"\n"),
 		0o600,
 	))
 	var order []string

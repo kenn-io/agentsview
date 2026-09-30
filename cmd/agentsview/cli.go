@@ -371,25 +371,17 @@ func newSyncCommandWithRunner(run func(SyncConfig)) *cobra.Command {
 			"stop the daemon first, then use `AGENTSVIEW_NO_DAEMON=1 agentsview sync`.\n\n" +
 			"With no --host, sync runs the local sync and then fans out to\n" +
 			"every host listed in the [[remote_hosts]] array in config.toml,\n" +
-			"syncing each by its configured transport. A failure on one\n" +
+			"syncing each over HTTP. A failure on one\n" +
 			"configured host is logged and the run continues; the command\n" +
 			"exits non-zero if any configured host failed.\n\n" +
-			"With --host, syncs only that host. A running local daemon may use a\n" +
-			"matching configured remote_hosts entry and transport; otherwise,\n" +
-			"ad hoc --host sync uses your existing SSH configuration and requires\n" +
-			"key-based (passwordless) auth; it never prompts for a password.",
+			"With --host, syncs only the matching configured remote_hosts entry.\n" +
+			"Each remote requires an HTTP URL and its daemon's auth token.",
 		GroupID:      groupCore,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		PreRunE: func(cmd *cobra.Command, _ []string) error {
 			if err := validateArtifactSyncConfig(cfg); err != nil {
 				return err
-			}
-			if cfg.Host == "" {
-				if cmd.Flags().Changed("user") ||
-					cmd.Flags().Changed("port") {
-					return errors.New("--user and --port require --host")
-				}
 			}
 			return nil
 		},
@@ -403,21 +395,13 @@ func newSyncCommandWithRunner(run func(SyncConfig)) *cobra.Command {
 	)
 	cmd.Flags().StringVar(
 		&cfg.Host, "host", "",
-		"Configured HTTP host name or deprecated SSH hostname",
+		"Configured HTTP host name",
 	)
 	cmd.Flags().StringVar(
 		&cfg.Target,
 		"target",
 		"",
 		"Exchange normalized session artifacts with a trusted folder",
-	)
-	cmd.Flags().StringVar(
-		&cfg.User, "user", "",
-		"SSH user for deprecated remote sync",
-	)
-	cmd.Flags().IntVar(
-		&cfg.Port, "port", 0,
-		"SSH port for deprecated remote sync (default: 22)",
 	)
 	cmd.Flags().StringVar(
 		&cfg.CPUProfile, "cpuprofile", "",
@@ -919,13 +903,6 @@ func writeRootHelp(w io.Writer, root *cobra.Command) {
 	fmt.Fprintln(w, "Remote hosts:")
 	fmt.Fprintln(w, "  Add a [[remote_hosts]] array to ~/.agentsview/config.toml so that")
 	fmt.Fprintln(w, "  \"agentsview sync\" (no --host) also syncs each configured host:")
-	fmt.Fprintln(w, "  [[remote_hosts]]")
-	fmt.Fprintln(w, "  host = \"devbox1\"")
-	fmt.Fprintln(w, "  transport = \"ssh\" # optional; default")
-	fmt.Fprintln(w, "  user = \"jesse\"  # optional")
-	fmt.Fprintln(w, "  port = 22        # optional")
-	fmt.Fprintln(w, "  Requires key-based (passwordless) SSH to each host.")
-	fmt.Fprintln(w)
 	fmt.Fprintln(w, "  For daemon-backed HTTP sync over a private network such as Tailscale:")
 	fmt.Fprintln(w, "  [[remote_hosts]]")
 	fmt.Fprintln(w, "  host = \"devbox1\"")

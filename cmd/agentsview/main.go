@@ -3129,7 +3129,7 @@ type remoteSyncRunner func(
 
 // remoteHostSyncFunc owns the HTTP cleanup registry around the engine lock.
 // Its injected transport must therefore run HTTP without acquiring that
-// registry recursively; SSH transports have no cleanup-registry ownership.
+// registry recursively.
 func remoteHostSyncFunc(
 	ctx context.Context,
 	cfg config.Config,
@@ -3153,13 +3153,7 @@ func remoteHostSyncFunc(
 			})
 			return stats, err
 		}
-		var stats remotesync.SyncStats
-		var err error
-		if rh.Transport == config.RemoteTransportHTTP {
-			stats, err = httpRemoteCleanupRegistry.Run(runExclusive)
-		} else {
-			stats, err = runExclusive()
-		}
+		stats, err := httpRemoteCleanupRegistry.Run(runExclusive)
 		return stats.SessionsSynced, err
 	}
 }

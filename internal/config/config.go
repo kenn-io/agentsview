@@ -699,12 +699,7 @@ func decodeCustomModelPricing(data string) (map[string]CustomModelRate, error) {
 
 type RemoteTransport string
 
-const (
-	// RemoteTransportSSH is retained for compatibility but deprecated. New
-	// remote sync configurations should use RemoteTransportHTTP.
-	RemoteTransportSSH  RemoteTransport = "ssh"
-	RemoteTransportHTTP RemoteTransport = "http"
-)
+const RemoteTransportHTTP RemoteTransport = "http"
 
 type ChartPalette string
 
@@ -772,17 +767,13 @@ func (a ArchiveContent) UsageOnly() bool {
 }
 
 // RemoteHost describes one target for config-driven `agentsview sync`
-// fan-out. Host is required. Deprecated SSH remotes may set User and Port
-// (Port 0 means the ssh default of 22). HTTP remotes must set URL
-// and Token. A zero/empty Interval disables periodic remote
-// sync for this host.
+// fan-out over HTTP. Host, URL, and Token are required. An omitted Transport
+// selects HTTP. A zero/empty Interval disables periodic remote sync for this host.
 //
 //nolint:recvcheck // Value encoding and pointer decoding intentionally implement distinct interfaces.
 type RemoteHost struct {
 	Host      string          `toml:"host" json:"host"`
 	Transport RemoteTransport `toml:"transport,omitempty" json:"transport,omitempty"`
-	User      string          `toml:"user,omitempty" json:"user,omitempty"`
-	Port      int             `toml:"port,omitempty" json:"port,omitzero"`
 	URL       string          `toml:"url,omitempty" json:"url,omitempty"`
 	Token     string          `toml:"token,omitempty" json:"-"`
 	Interval  time.Duration   `toml:"interval,omitempty" json:"interval,omitzero"`
@@ -1044,76 +1035,29 @@ func (c Config) ValidateRemoteHosts() error {
 	var problems []string
 	seen := make(map[string]int, len(c.RemoteHosts))
 	for i, h := range c.RemoteHosts {
-		transport := h.Transport
-		if transport == "" {
-			transport = RemoteTransportSSH
-		}
 		if h.Host == "" {
 			problems = append(problems,
 				fmt.Sprintf("entry %d: host is required", i+1))
-		}
-		if trimmed := strings.TrimSpace(h.Host); isSSHOptionShaped(h.Host) {
-			problems = append(problems,
-				fmt.Sprintf("entry %d: host must not begin with '-' (got %q)",
-					i+1, trimmed))
-		}
-		if trimmed := strings.TrimSpace(h.User); isSSHOptionShaped(h.User) {
-			problems = append(problems,
-				fmt.Sprintf("entry %d (%q): user must not begin with '-' (got %q)",
-					i+1, h.Host, trimmed))
-		}
-		if h.Port < 0 || h.Port > 65535 {
-			problems = append(problems,
-				fmt.Sprintf("entry %d (%q): invalid port %d",
-					i+1, h.Host, h.Port))
 		}
 		if h.Interval < 0 {
 			problems = append(problems,
 				fmt.Sprintf("entry %d (%q): invalid interval %s",
 					i+1, h.Host, h.Interval))
 		}
-		switch transport {
-		case RemoteTransportSSH:
-			if h.URL != "" {
-				problems = append(problems,
-					fmt.Sprintf("entry %d (%q): url is only valid for http",
-						i+1, h.Host))
-			}
-			if h.Token != "" {
-				problems = append(problems,
-					fmt.Sprintf("entry %d (%q): token is only valid for http",
-						i+1, h.Host))
-			}
-		case RemoteTransportHTTP:
-			if h.User != "" {
-				problems = append(problems,
-					fmt.Sprintf("entry %d (%q): user is only valid for ssh",
-						i+1, h.Host))
-			}
-			if h.Port != 0 {
-				problems = append(problems,
-					fmt.Sprintf("entry %d (%q): port is only valid for ssh",
-						i+1, h.Host))
-			}
-			if err := validateRemoteHTTPURL(h.URL); err != nil {
-				problems = append(problems,
-					fmt.Sprintf("entry %d (%q): %v",
-						i+1, h.Host, err))
-			}
-			if h.Token == "" {
-				problems = append(problems,
-					fmt.Sprintf("entry %d (%q): token is required for http",
-						i+1, h.Host))
-			}
-		default:
+		if h.Transport != "" && h.Transport != RemoteTransportHTTP {
 			problems = append(problems,
-				fmt.Sprintf("entry %d (%q): invalid transport %q",
+				fmt.Sprintf("entry %d (%q): invalid transport %q; use http with a url and token",
 					i+1, h.Host, h.Transport))
 		}
-		// Remote sync namespaces sessions and the skip cache by
-		// host alone (see ssh.RemoteSync), so two entries sharing a
-		// host collide regardless of user/port. Reject duplicates
-		// rather than silently share or overwrite cached state.
+		if err := validateRemoteHTTPURL(h.URL); err != nil {
+			problems = append(problems,
+				fmt.Sprintf("entry %d (%q): %v", i+1, h.Host, err))
+		}
+		if h.Token == "" {
+			problems = append(problems,
+				fmt.Sprintf("entry %d (%q): token is required for http", i+1, h.Host))
+		}
+		// Remote sync namespaces sessions and cached state by host.
 		if h.Host != "" {
 			if first, ok := seen[h.Host]; ok {
 				problems = append(problems,
@@ -1157,10 +1101,6 @@ func validateRemoteHTTPURL(raw string) error {
 		return errors.New("url must not include fragment")
 	}
 	return nil
-}
-
-func isSSHOptionShaped(value string) bool {
-	return strings.HasPrefix(strings.TrimSpace(value), "-")
 }
 
 // Default returns a Config with default values.
@@ -1968,8 +1908,6 @@ func (c *Config) applyConfigTOML(data string) error {
 			hosts[i] = RemoteHost{
 				Host:      strings.TrimSpace(h.Host),
 				Transport: RemoteTransport(strings.TrimSpace(string(h.Transport))),
-				User:      strings.TrimSpace(h.User),
-				Port:      h.Port,
 				URL:       strings.TrimSpace(h.URL),
 				Token:     strings.TrimSpace(h.Token),
 				Interval:  h.Interval,

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -17,7 +16,6 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/remotesync"
-	"go.kenn.io/agentsview/internal/ssh"
 )
 
 func resolveTargetsForTest(t *testing.T, cfg config.Config) remotesync.TargetSet {
@@ -546,99 +544,6 @@ func TestSelectAllowedTargetsRejectsUnresolvedValues(t *testing.T) {
 
 	assert.False(t, ok)
 	assert.False(t, remotesync.TargetSetAllowed(allowed, requested))
-}
-
-func TestResolveTargetsMatchesSSHResolverForRepresentativeHome(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("SSH resolver parity test compares Unix shell path dialects")
-	}
-	// The resolve script emits physical paths, so the parity fixture must
-	// live at a physical spelling (macOS t.TempDir() sits under the /var
-	// symlink).
-	home, err := filepath.EvalSymlinks(t.TempDir())
-	require.NoError(t, err)
-	claudeDir := filepath.Join(home, ".claude", "projects")
-	codexDir := filepath.Join(home, ".codex", "sessions")
-	devinDir := filepath.Join(home, ".local", "share", "devin")
-	aiderRoot := filepath.Join(home, "code")
-	aiderHistory := filepath.Join(aiderRoot, "repo", parser.AiderHistoryFileName())
-	windsurfUserRoot := filepath.Join(home, "AppData", "Roaming", "Windsurf", "User")
-	windsurfWorkspaceRoot := filepath.Join(windsurfUserRoot, "workspaceStorage")
-	windsurfWorkspaceDir := filepath.Join(windsurfWorkspaceRoot, "workspace-a")
-	windsurfStateDB := filepath.Join(windsurfWorkspaceDir, parser.WindsurfStateDBName)
-	windsurfWorkspaceJSON := filepath.Join(windsurfWorkspaceDir, "workspace.json")
-	poolsideRoot := filepath.Join(home, ".local", "state", "poolside")
-	poolsideTrajectories := filepath.Join(poolsideRoot, "trajectories")
-	clineRoot := filepath.Join(home, ".cline")
-	clineSessionDir := filepath.Join(clineRoot, "data", "sessions", "sess-test")
-	require.NoError(t, os.MkdirAll(claudeDir, 0o755))
-	require.NoError(t, os.MkdirAll(codexDir, 0o755))
-	require.NoError(t, os.MkdirAll(devinDir, 0o755))
-	require.NoError(t, os.MkdirAll(filepath.Dir(aiderHistory), 0o755))
-	require.NoError(t, os.MkdirAll(windsurfWorkspaceDir, 0o755))
-	require.NoError(t, os.MkdirAll(poolsideTrajectories, 0o755))
-	require.NoError(t, os.MkdirAll(clineSessionDir, 0o755))
-	require.NoError(t, os.WriteFile(aiderHistory, []byte("# aider\n"), 0o644))
-	require.NoError(t, os.WriteFile(windsurfStateDB, []byte("state"), 0o644))
-	require.NoError(t, os.WriteFile(windsurfWorkspaceJSON, []byte("{}\n"), 0o644))
-	clineMeta := filepath.Join(clineSessionDir, "sess-test.json")
-	clineMsg := filepath.Join(clineSessionDir, "sess-test.messages.json")
-	clineTm := filepath.Join(clineSessionDir, "sess-test__teamtask__git-scout__t1.messages.json")
-	require.NoError(t, os.WriteFile(clineMeta, []byte(`{"session_id":"sess-test"}`), 0o644))
-	require.NoError(t, os.WriteFile(clineMsg, []byte(`{"messages":[]}`), 0o644))
-	require.NoError(t, os.WriteFile(clineTm, []byte(`{"messages":[]}`), 0o644))
-	clineSecretDir := filepath.Join(clineRoot, "data", "sessions", ".secret")
-	require.NoError(t, os.MkdirAll(clineSecretDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(clineSecretDir, ".secret.json"), []byte(`{"session_id":".secret"}`), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(clineSecretDir, ".secret.messages.json"), []byte(`{"messages":[]}`), 0o644))
-	codexIndex := filepath.Join(home, ".codex", parser.CodexSessionIndexFilename)
-	require.NoError(t, os.WriteFile(codexIndex, []byte("{}\n"), 0o644))
-
-	cmd := exec.CommandContext(t.Context(), "sh")
-	cmd.Stdin = strings.NewReader(ssh.BuildResolveScriptForTest())
-	cmd.Env = []string{"HOME=" + home, "AIDER_DIR=" + aiderRoot, "DEVIN_DIR=" + devinDir}
-	out, err := cmd.CombinedOutput()
-	require.NoError(t, err, "ssh resolver output: %s", out)
-	sshDirs, sshFiles, sshExtra, _ := ssh.ParseResolvedTargetsWithFilesForTest(string(out))
-
-	goTargets := resolveTargetsForTest(t, config.Config{
-		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentClaude:   {claudeDir},
-			parser.AgentCodex:    {codexDir},
-			parser.AgentDevin:    {devinDir},
-			parser.AgentAider:    {aiderRoot},
-			parser.AgentWindsurf: {windsurfUserRoot},
-			parser.AgentPoolside: {poolsideRoot},
-			parser.AgentCline:    {clineRoot},
-		},
-	})
-	assert.ElementsMatch(t, sshDirs[parser.AgentClaude], goTargets.Dirs[parser.AgentClaude])
-	assert.ElementsMatch(t, sshDirs[parser.AgentCodex], goTargets.Dirs[parser.AgentCodex])
-	assert.NotContains(t, sshDirs, parser.AgentDevin)
-	assert.NotContains(t, goTargets.Dirs, parser.AgentDevin)
-	assert.ElementsMatch(t, sshDirs[parser.AgentAider], goTargets.Dirs[parser.AgentAider])
-	assert.ElementsMatch(t, []string{windsurfUserRoot}, sshDirs[parser.AgentWindsurf])
-	assert.ElementsMatch(t, sshDirs[parser.AgentWindsurf], goTargets.Dirs[parser.AgentWindsurf])
-	assert.ElementsMatch(t, []string{
-		windsurfStateDB,
-		windsurfWorkspaceJSON,
-	}, sshFiles[parser.AgentWindsurf])
-	assert.ElementsMatch(t, []string{
-		windsurfStateDB,
-		windsurfWorkspaceJSON,
-	}, goTargets.Files[parser.AgentWindsurf])
-	assert.ElementsMatch(t, sshFiles[parser.AgentWindsurf], goTargets.Files[parser.AgentWindsurf])
-	assert.NotContains(t, sshDirs[parser.AgentWindsurf], windsurfWorkspaceRoot)
-	assert.ElementsMatch(t, sshExtra, goTargets.AllExtraFiles())
-	// Poolside: both resolvers must narrow to the trajectories/
-	// subdirectory, not the application-data root.
-	assert.ElementsMatch(t, []string{poolsideTrajectories}, sshDirs[parser.AgentPoolside])
-	assert.ElementsMatch(t, sshDirs[parser.AgentPoolside], goTargets.Dirs[parser.AgentPoolside])
-	// Cline: both resolvers must emit only session files.
-	assert.ElementsMatch(t, []string{clineRoot}, sshDirs[parser.AgentCline])
-	assert.ElementsMatch(t, sshDirs[parser.AgentCline], goTargets.Dirs[parser.AgentCline])
-	assert.ElementsMatch(t, []string{clineMeta, clineMsg, clineTm}, sshFiles[parser.AgentCline])
-	assert.ElementsMatch(t, []string{clineMeta, clineMsg, clineTm}, goTargets.Files[parser.AgentCline])
 }
 
 func TestSelectAllowedFiles(t *testing.T) {
@@ -1416,7 +1321,7 @@ func TestClineRemoteSyncRejectsSymlinkedAncestorsAndSessions(t *testing.T) {
 	}
 }
 
-func TestClineRootSymlinkParity(t *testing.T) {
+func TestClineRemoteSyncRejectsSymlinkedRoots(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink semantics differ on Windows")
 	}
@@ -1445,17 +1350,6 @@ func TestClineRootSymlinkParity(t *testing.T) {
 	assert.Empty(t, goTargets1.Dirs[parser.AgentCline])
 	assert.Empty(t, goTargets1.Files[parser.AgentCline])
 
-	cmd1 := exec.CommandContext(t.Context(), "sh")
-	cmd1.Stdin = strings.NewReader(ssh.BuildResolveScriptForTest())
-	cmd1.Env = []string{"HOME=" + home1}
-	out1, err := cmd1.CombinedOutput()
-	require.NoError(t, err, "ssh output: %s", out1)
-	sshDirs1, sshFiles1, _, _ := ssh.ParseResolvedTargetsWithFilesForTest(string(out1))
-	assert.Empty(t, sshDirs1[parser.AgentCline])
-	assert.Empty(t, sshFiles1[parser.AgentCline])
-	assert.ElementsMatch(t, sshDirs1[parser.AgentCline], goTargets1.Dirs[parser.AgentCline])
-	assert.ElementsMatch(t, sshFiles1[parser.AgentCline], goTargets1.Files[parser.AgentCline])
-
 	// Case 2: The direct sessions root is a symlink.
 	home2, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
@@ -1469,20 +1363,9 @@ func TestClineRootSymlinkParity(t *testing.T) {
 	})
 	assert.Empty(t, goTargets2.Dirs[parser.AgentCline])
 	assert.Empty(t, goTargets2.Files[parser.AgentCline])
-
-	cmd2 := exec.CommandContext(t.Context(), "sh")
-	cmd2.Stdin = strings.NewReader(ssh.BuildResolveScriptForTest())
-	cmd2.Env = []string{"HOME=" + home2, "CLINE_DIR=" + symlinkedDirect}
-	out2, err := cmd2.CombinedOutput()
-	require.NoError(t, err, "ssh output: %s", out2)
-	sshDirs2, sshFiles2, _, _ := ssh.ParseResolvedTargetsWithFilesForTest(string(out2))
-	assert.Empty(t, sshDirs2[parser.AgentCline])
-	assert.Empty(t, sshFiles2[parser.AgentCline])
-	assert.ElementsMatch(t, sshDirs2[parser.AgentCline], goTargets2.Dirs[parser.AgentCline])
-	assert.ElementsMatch(t, sshFiles2[parser.AgentCline], goTargets2.Files[parser.AgentCline])
 }
 
-func TestClineLeafSymlinkParity(t *testing.T) {
+func TestClineRemoteSyncRejectsSymlinkedFiles(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink semantics differ on Windows")
 	}
@@ -1530,13 +1413,4 @@ func TestClineLeafSymlinkParity(t *testing.T) {
 	})
 	expectedFiles := []string{validMeta, validMsgs, validTm}
 	assert.ElementsMatch(t, expectedFiles, goTargets.Files[parser.AgentCline])
-
-	cmd := exec.CommandContext(t.Context(), "sh")
-	cmd.Stdin = strings.NewReader(ssh.BuildResolveScriptForTest())
-	cmd.Env = []string{"HOME=" + home}
-	out, err := cmd.CombinedOutput()
-	require.NoError(t, err, "ssh output: %s", out)
-	sshDirs, sshFiles, _, _ := ssh.ParseResolvedTargetsWithFilesForTest(string(out))
-	assert.ElementsMatch(t, sshDirs[parser.AgentCline], goTargets.Dirs[parser.AgentCline])
-	assert.ElementsMatch(t, sshFiles[parser.AgentCline], goTargets.Files[parser.AgentCline])
 }
