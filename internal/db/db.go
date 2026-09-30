@@ -534,7 +534,13 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (119: Codebuff and Freebuff sessions gain git_branch, termination status,
 // per-prompt cost rows, attachment and ask-user content, and linked subagent
 // sessions. Re-parse unchanged Codebuff/Freebuff sources to backfill them.)
-const dataVersion = 119
+// (120: each agent's own session title becomes the session name, preferring a
+// name the user chose: generated Qwen and OpenClaw titles, every Copilot
+// workspace name, OpenCode/Kilo/MiMo Code and Amp titles, VS Code customTitle,
+// Kimi state titles, Gemini summaries, and legacy Kiro titles. Titles no longer
+// replace the first message. Re-parse unchanged sources so existing sessions
+// pick up their titles.)
+const dataVersion = 120
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
