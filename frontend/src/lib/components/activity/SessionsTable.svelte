@@ -155,83 +155,88 @@
     </div>
   </div>
 
-  {#if rows.length > 0}
-    <div class="table-scroll" bind:this={scrollEl} onscroll={loadMoreIfNearEnd}>
-      <table class="table">
-        <thead>
-          <tr>
-            <TableHeaderCell label={m.activity_session()} />
-            <TableHeaderCell label={m.activity_model()} />
-            {#each sortColumns as col}
-              <TableHeaderCell
-                class="sort-{col.key}"
-                label={col.label}
-                sortable
-                numeric={col.key === "agent_minutes" || col.key === "cost"}
-                sortDirection={sortKey === col.key ? sortDir : null}
-                onsort={() => setSort(col.key)}
-              />
-            {/each}
-          </tr>
-        </thead>
-        <tbody>
-          {#each rows as row (row.session_id)}
-            <tr class="session-row" data-session-id={row.session_id}>
-              <td class="col-session">
-                <div class="session-cell">
-                  <a
-                    class="session-link"
-                    href={router.buildSessionHref(row.session_id)}
-                    title={row.title || row.session_id}
-                    onclick={(e) => {
-                      if (
-                        e.metaKey ||
-                        e.ctrlKey ||
-                        e.shiftKey ||
-                        e.altKey ||
-                        e.button !== 0
-                      )
-                        return;
-                      e.preventDefault();
-                      router.navigateToSession(row.session_id);
-                    }}
-                  >
-                    {row.title || row.session_id}
-                  </a>
-                  {#if row.is_subagent}
-                    <span class="subagent-badge">{m.activity_subagent()}</span>
-                  {:else if row.is_automated}
-                    <span class="auto-badge" title={m.activity_automated_session()}>{m.activity_auto()}</span>
-                  {/if}
-                </div>
-              </td>
-              <td class="col-model">{rowModel(row)}</td>
-              <td class="col-project" title={row.project}>
-                {row.project}
-              </td>
-              <td class="col-agent">{row.agent}</td>
-              <td class="col-num col-minutes">
-                {fmtMinutes(row.agent_minutes)}
-              </td>
-              <td class="col-num col-cost">{formatMoney(row.cost)}</td>
-              <td class="col-window">
-                {fmtWindow(row.first_active, row.last_active)}
-              </td>
+  <!-- Same thin query bar as the Analytics and Quality pages: it marks a load
+       without taking a row or moving the table. -->
+  <div class="table-frame" aria-busy={loading}>
+    {#if loading}
+      <div class="query-progress" aria-hidden="true"></div>
+    {/if}
+    {#if rows.length > 0}
+      <div class="table-scroll" bind:this={scrollEl} onscroll={loadMoreIfNearEnd}>
+        <table class="table">
+          <thead>
+            <tr>
+              <TableHeaderCell label={m.activity_session()} />
+              <TableHeaderCell label={m.activity_model()} />
+              {#each sortColumns as col}
+                <TableHeaderCell
+                  class="sort-{col.key}"
+                  label={col.label}
+                  sortable
+                  numeric={col.key === "agent_minutes" || col.key === "cost"}
+                  sortDirection={sortKey === col.key ? sortDir : null}
+                  onsort={() => setSort(col.key)}
+                />
+              {/each}
             </tr>
-          {/each}
-        </tbody>
-      </table>
-    </div>
-  {:else}
-    <div class="empty">
-      {filterActive
-        ? m.activity_no_sessions_selected_range()
-        : m.shared_no_sessions_in_range()}
-    </div>
-  {/if}
-  {#if loading}
-    <div class="page-status">{m.activity_loading_sessions()}</div>
-  {:else if error}
+          </thead>
+          <tbody>
+            {#each rows as row (row.session_id)}
+              <tr class="session-row" data-session-id={row.session_id}>
+                <td class="col-session">
+                  <div class="session-cell">
+                    <a
+                      class="session-link"
+                      href={router.buildSessionHref(row.session_id)}
+                      title={row.title || row.session_id}
+                      onclick={(e) => {
+                        if (
+                          e.metaKey ||
+                          e.ctrlKey ||
+                          e.shiftKey ||
+                          e.altKey ||
+                          e.button !== 0
+                        )
+                          return;
+                        e.preventDefault();
+                        router.navigateToSession(row.session_id);
+                      }}
+                    >
+                      {row.title || row.session_id}
+                    </a>
+                    {#if row.is_subagent}
+                      <span class="subagent-badge">{m.activity_subagent()}</span>
+                    {:else if row.is_automated}
+                      <span class="auto-badge" title={m.activity_automated_session()}>{m.activity_auto()}</span>
+                    {/if}
+                  </div>
+                </td>
+                <td class="col-model">{rowModel(row)}</td>
+                <td class="col-project" title={row.project}>
+                  {row.project}
+                </td>
+                <td class="col-agent">{row.agent}</td>
+                <td class="col-num col-minutes">
+                  {fmtMinutes(row.agent_minutes)}
+                </td>
+                <td class="col-num col-cost">{formatMoney(row.cost)}</td>
+                <td class="col-window">
+                  {fmtWindow(row.first_active, row.last_active)}
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    {:else}
+      <div class="empty">
+        {filterActive
+          ? m.activity_no_sessions_selected_range()
+          : m.shared_no_sessions_in_range()}
+      </div>
+    {/if}
+  </div>
+  {#if error}
     <div class="page-error">
       <span>{error}</span>
       <Button size="sm" onclick={() => onRetry?.()}>{m.shared_retry()}</Button>
@@ -294,6 +299,49 @@
     display: inline-flex;
     align-items: center;
     flex-shrink: 0;
+  }
+
+  .table-frame {
+    position: relative;
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+  }
+
+  .query-progress {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 2;
+    height: 2px;
+    overflow: hidden;
+    background: color-mix(in srgb, var(--accent-blue) 16%, transparent);
+  }
+
+  .query-progress::before {
+    content: "";
+    display: block;
+    width: 38%;
+    height: 100%;
+    background: var(--accent-blue);
+    border-radius: 999px;
+    animation: query-progress 1s ease-in-out infinite;
+  }
+
+  @keyframes query-progress {
+    0% {
+      transform: translateX(-105%);
+    }
+    100% {
+      transform: translateX(265%);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .query-progress::before {
+      width: 100%;
+      animation: none;
+    }
   }
 
   .table-scroll {
@@ -392,19 +440,13 @@
     text-align: center;
   }
 
-  .page-status,
-  .page-error {
-    padding-top: 8px;
-    text-align: center;
-    font-size: 11px;
-    color: var(--text-muted);
-  }
-
   .page-error {
     display: flex;
     align-items: center;
     justify-content: center;
     gap: 8px;
+    padding-top: 8px;
+    font-size: 11px;
     color: var(--accent-red);
   }
 </style>

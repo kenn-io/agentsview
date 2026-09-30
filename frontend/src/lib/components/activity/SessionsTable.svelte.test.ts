@@ -344,12 +344,12 @@ describe("SessionsTable", () => {
 
       scrollTo(1640);
       expect(onLoadMore).not.toHaveBeenCalled();
-      expect(document.querySelector(".page-status")?.textContent).toBe(
-        m.activity_loading_sessions(),
-      );
+      const table = document.querySelector("[aria-busy]")!;
+      expect(table.getAttribute("aria-busy")).toBe("true");
 
       props.loading = false;
       flushSync();
+      expect(table.getAttribute("aria-busy")).toBe("false");
       expect(onLoadMore).toHaveBeenCalledExactlyOnceWith("page-2");
 
       await unmount(c);
