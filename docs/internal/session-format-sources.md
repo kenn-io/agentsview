@@ -2139,6 +2139,18 @@ schemas keep their existing ordering behavior.
   cached-content, thoughts, and total tokens. Streaming records may repeat
   cumulative values, so Agentsview aggregates carefully. Price is
   catalog-derived.
+- **Session names (2026-09-30):** `/rename` and the title generator append
+  `{"type":"system","subtype":"custom_title","systemPayload":{"customTitle":"<name>","titleSource":"manual"|"auto"}}`
+  to the same chat JSONL, and the last record wins. Records written before
+  `titleSource` existed omit it, and upstream treats them as user renames. See
+  `renameSession` in
+  [sessionService.ts](https://github.com/QwenLM/qwen-code/blob/17a9c84dfbbc208e984cf82c4f9487bdefc7e83a/packages/core/src/services/sessionService.ts)
+  and `readSessionTitleInfoFromFileSync` in
+  [sessionStorageUtils.ts](https://github.com/QwenLM/qwen-code/blob/17a9c84dfbbc208e984cf82c4f9487bdefc7e83a/packages/core/src/utils/sessionStorageUtils.ts)
+  at `17a9c84dfbbc208e984cf82c4f9487bdefc7e83a`. Agentsview uses the last
+  record's `customTitle` as the session name unless its source is `auto`.
+  Managed sessions keep their title in a resource-store `session_metadata`
+  record, which Agentsview does not read.
 - **Agentsview:** `internal/parser/qwen.go` and
   `internal/parser/qwen_provider.go`.
 

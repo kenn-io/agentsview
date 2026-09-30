@@ -45,6 +45,7 @@ func parseQwenSession(
 		sessionID    string
 		cwd          string
 		firstMessage string
+		sessionName  string
 		startedAt    time.Time
 		endedAt      time.Time
 		ordinal      int
@@ -88,6 +89,21 @@ func parseQwenSession(
 		}
 
 		switch root.Get("type").Str {
+		case "system":
+			// /rename and the title generator append custom_title
+			// records; the last one wins. Show only a name the user
+			// chose: records written before titleSource existed are
+			// user renames.
+			if root.Get("subtype").Str != "custom_title" {
+				continue
+			}
+			sessionName = ""
+			if root.Get("systemPayload.titleSource").Str != "auto" {
+				sessionName = strings.TrimSpace(
+					root.Get("systemPayload.customTitle").Str,
+				)
+			}
+
 		case "user":
 			if root.Get("message.role").Str != "user" {
 				continue
@@ -179,6 +195,7 @@ func parseQwenSession(
 		Agent:            AgentQwen,
 		Cwd:              cwd,
 		FirstMessage:     firstMessage,
+		SessionName:      sessionName,
 		StartedAt:        startedAt,
 		EndedAt:          endedAt,
 		MessageCount:     len(messages),
