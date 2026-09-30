@@ -156,7 +156,8 @@
   </div>
 
   <!-- Same thin query bar as the Analytics and Quality pages: it marks a load
-       without taking a row or moving the table. -->
+       without taking a row or moving the table. It stays hidden for the first
+       half second, so a fast page just continues the scroll. -->
   <div class="table-frame" aria-busy={loading}>
     {#if loading}
       <div class="query-progress" aria-hidden="true"></div>
@@ -316,6 +317,14 @@
     height: 2px;
     overflow: hidden;
     background: color-mix(in srgb, var(--accent-blue) 16%, transparent);
+    opacity: 0;
+    animation: query-progress-reveal 150ms ease-out 500ms forwards;
+  }
+
+  @keyframes query-progress-reveal {
+    to {
+      opacity: 1;
+    }
   }
 
   .query-progress::before {
@@ -338,6 +347,10 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
+    .query-progress {
+      animation-duration: 0s;
+    }
+
     .query-progress::before {
       width: 100%;
       animation: none;
