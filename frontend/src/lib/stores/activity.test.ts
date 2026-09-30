@@ -417,6 +417,72 @@ describe("session paging", () => {
     expect(activity.report?.report_id).toBe("replacement-report");
   });
 
+  it("appends a cursor page and starts a new list on sort or reload", async () => {
+    activity.report = makeReport({
+      report_id: "signed-report",
+      by_session: [{ session_id: "first" }] as Report["by_session"],
+      sessions_next_cursor: "page-2",
+      sessions_total: 3,
+    });
+    const startVersion = activity.sessionsListVersion;
+
+    api.getActivitySessions.mockResolvedValueOnce({
+      report_id: "signed-report",
+      sessions: [{ session_id: "second" }],
+      next_cursor: "page-3",
+      total: 3,
+    });
+    await activity.loadSessionPage({ cursor: "page-2" });
+
+    expect(activity.report?.by_session).toEqual([
+      { session_id: "first" },
+      { session_id: "second" },
+    ]);
+    expect(activity.report?.sessions_next_cursor).toBe("page-3");
+    expect(activity.report?.sessions_total).toBe(3);
+    expect(activity.sessionsListVersion).toBe(startVersion);
+
+    api.getActivitySessions.mockResolvedValueOnce({
+      report_id: "signed-report",
+      sessions: [{ session_id: "cheapest" }],
+      next_cursor: "cost-page-2",
+      total: 3,
+    });
+    await activity.loadSessionPage({ sort: "cost", direction: "asc" });
+
+    expect(activity.report?.by_session).toEqual([{ session_id: "cheapest" }]);
+    expect(activity.report?.sessions_next_cursor).toBe("cost-page-2");
+    expect(activity.sessionsListVersion).toBe(startVersion + 1);
+
+    api.getActivityReport.mockResolvedValueOnce(
+      makeReport({
+        report_id: "next-day",
+        by_session: [{ session_id: "tomorrow" }] as Report["by_session"],
+      }),
+    );
+    await activity.load();
+
+    expect(activity.report?.by_session).toEqual([{ session_id: "tomorrow" }]);
+    expect(activity.sessionsSort).toBe("agent_minutes");
+    expect(activity.sessionsListVersion).toBe(startVersion + 2);
+  });
+
+  it("keeps the loaded rows when a cursor page fails", async () => {
+    activity.report = makeReport({
+      report_id: "signed-report",
+      by_session: [{ session_id: "first" }] as Report["by_session"],
+      sessions_next_cursor: "page-2",
+    });
+    api.getActivitySessions.mockRejectedValueOnce(new ApiError(503, "temporarily unavailable"));
+
+    expect(await activity.loadSessionPage({ cursor: "page-2" })).toBe(false);
+
+    expect(activity.report?.by_session).toEqual([{ session_id: "first" }]);
+    expect(activity.report?.sessions_next_cursor).toBe("page-2");
+    expect(activity.sessionsError).toBe("temporarily unavailable");
+    expect(activity.sessionsLoading).toBe(false);
+  });
+
   it("replaces the embedded page with a server-filtered bucket range", async () => {
     activity.report = makeReport({
       report_id: "signed-report",

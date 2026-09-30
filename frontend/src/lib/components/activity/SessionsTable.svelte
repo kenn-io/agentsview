@@ -4,7 +4,7 @@
   import type { ActivitySessionRow } from "../../api/generated/index";
   import { router } from "../../stores/router.svelte.js";
   import { XIcon } from "../../icons.js";
-  import { TableHeaderCell } from "@kenn-io/kit-ui";
+  import { Button, TableHeaderCell } from "@kenn-io/kit-ui";
   import { formatMoney } from "../../money.js";
   import type { ActivitySessionSort } from "../../api/activity-report.js";
 
@@ -16,9 +16,10 @@
     error = null,
     sortKey = "agent_minutes",
     sortDir = "desc",
+    listVersion = 0,
     onClearFilter,
     onSort,
-    onNext,
+    onLoadMore,
   }: {
     report: Report;
     filterActive?: boolean;
@@ -27,16 +28,47 @@
     error?: string | null;
     sortKey?: ActivitySessionSort;
     sortDir?: "asc" | "desc";
+    listVersion?: number;
     onClearFilter?: () => void;
     onSort?: (sort: ActivitySessionSort, direction: "asc" | "desc") => void;
-    onNext?: (cursor: string) => void;
+    onLoadMore?: (cursor: string) => void;
   } = $props();
+
+  // Start fetching the next page a few rows before the end of the list so
+  // scrolling rarely has to wait on it.
+  const LOAD_MORE_THRESHOLD_PX = 120;
+
+  let scrollEl: HTMLDivElement | undefined = $state();
 
   // by_session is typed `any[] | null` by the codegen; cast to the
   // generated element model for field-level type safety.
   const rows = $derived(
     report.by_session ?? [],
   );
+
+  // A failed page stops automatic loading so a persistent error cannot turn
+  // into a request loop; the retry button resumes it.
+  function loadMoreIfNearEnd() {
+    const cursor = report.sessions_next_cursor;
+    if (!scrollEl || !cursor || loading || error) return;
+    const remaining =
+      scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight;
+    if (remaining <= LOAD_MORE_THRESHOLD_PX) onLoadMore?.(cursor);
+  }
+
+  // Declared before the load check so a replaced list is back at the top
+  // before that check measures how close the user is to the end.
+  $effect(() => {
+    void listVersion;
+    if (scrollEl) scrollEl.scrollTop = 0;
+  });
+
+  // Re-check after every page lands or a load settles: the user may still be
+  // at the bottom, or the rows may not fill the scroll box.
+  $effect(() => {
+    void rows.length;
+    loadMoreIfNearEnd();
+  });
 
   function setSort(key: ActivitySessionSort) {
     const direction = sortKey === key
@@ -118,7 +150,7 @@
   </div>
 
   {#if rows.length > 0}
-    <div class="table-scroll">
+    <div class="table-scroll" bind:this={scrollEl} onscroll={loadMoreIfNearEnd}>
       <table class="table">
         <thead>
           <tr>
@@ -191,16 +223,19 @@
         : m.shared_no_sessions_in_range()}
     </div>
   {/if}
-  {#if error}
-    <div class="page-error">{error}</div>
-  {/if}
   {#if loading}
     <div class="page-status">{m.activity_loading_sessions()}</div>
-  {:else if report.sessions_next_cursor}
-    <div class="pager">
-      <button type="button" onclick={() => onNext?.(report.sessions_next_cursor!)}>
-        {m.activity_next_sessions_page()}
-      </button>
+  {:else if error}
+    <div class="page-error">
+      <span>{error}</span>
+      {#if report.sessions_next_cursor}
+        <Button
+          size="sm"
+          onclick={() => onLoadMore?.(report.sessions_next_cursor!)}
+        >
+          {m.shared_retry()}
+        </Button>
+      {/if}
     </div>
   {/if}
 </div>
@@ -359,8 +394,7 @@
   }
 
   .page-status,
-  .page-error,
-  .pager {
+  .page-error {
     padding-top: 8px;
     text-align: center;
     font-size: 11px;
@@ -368,18 +402,10 @@
   }
 
   .page-error {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
     color: var(--accent-red);
-  }
-
-  .pager button {
-    padding: 4px 10px;
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-sm);
-    color: var(--text-secondary);
-    cursor: pointer;
-  }
-
-  .pager button:hover {
-    background: var(--bg-surface-hover);
   }
 </style>

@@ -2210,7 +2210,6 @@
   "activity_loading_sessions": "세션 로드 중…",
   "activity_loading_usage": "사용량 로드 중…",
   "activity_finalizing_report": "보고서 마무리 중…",
-  "activity_next_sessions_page": "다음 세션",
   "activity_sessions_load_failed": "활동 세션을 불러오지 못했습니다",
   "activity_report_load_failed": "활동 보고서를 불러오지 못했습니다",
   "session_activity_load_failed": "활동을 불러오지 못했습니다",

@@ -2292,7 +2292,6 @@
   "activity_loading_sessions": "Chargement des sessions…",
   "activity_loading_usage": "Chargement des données d’utilisation…",
   "activity_finalizing_report": "Finalisation du rapport…",
-  "activity_next_sessions_page": "Sessions suivantes",
   "activity_sessions_load_failed": "Impossible de charger les sessions d’activité",
   "activity_report_load_failed": "Impossible de charger le rapport d’activité",
   "session_activity_load_failed": "Impossible de charger l’activité",

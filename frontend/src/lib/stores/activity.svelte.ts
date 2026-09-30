@@ -138,6 +138,9 @@ class ActivityStore {
   sessionsSort: ActivitySessionSort = $state("agent_minutes");
   sessionsDirection: "asc" | "desc" = $state("desc");
   sessionsBucketRange: ActivityBucketRange | null = $state(null);
+  // Bumped whenever report.by_session is replaced by a first page instead of
+  // extended by a cursor page, so the sessions table can scroll back to top.
+  sessionsListVersion = $state(0);
   // Epoch ms of the last successful report fetch, powering the "Updated Xm ago"
   // refresh label. null until the first load completes.
   lastUpdatedAt: number | null = $state(null);
@@ -271,6 +274,7 @@ class ActivityStore {
       this.sessionsBucketRange = null;
       this.report = res;
       this.reportGeneration++;
+      this.sessionsListVersion++;
       this.lastUpdatedAt = Date.now();
       const finishedAt = performance.now();
       this.lastQueryDurationMs = finishedAt - startedAt;
@@ -332,6 +336,7 @@ class ActivityStore {
       if (page.refresh_required && page.report) {
         this.report = page.report;
         this.reportGeneration++;
+        this.sessionsListVersion++;
         this.sessionsSort = "agent_minutes";
         this.sessionsDirection = "desc";
         this.sessionsBucketRange = null;
@@ -345,10 +350,12 @@ class ActivityStore {
       this.sessionsSort = sort;
       this.sessionsDirection = direction;
       this.sessionsBucketRange = bucketRange ? { ...bucketRange } : null;
+      // A cursor continues the loaded list; anything else starts a new one.
+      if (!options.cursor) this.sessionsListVersion++;
       this.report = {
         ...report,
         report_id: page.report_id,
-        by_session: page.sessions,
+        by_session: options.cursor ? [...report.by_session, ...page.sessions] : page.sessions,
         sessions_next_cursor: page.next_cursor,
         sessions_total: page.total,
       };

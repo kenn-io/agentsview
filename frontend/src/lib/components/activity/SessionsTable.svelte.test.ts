@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { mount, tick, unmount } from "svelte";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { flushSync, mount, tick, unmount } from "svelte";
 import SessionsTable from "./SessionsTable.svelte";
 import { m } from "../../i18n/index.js";
 import { router } from "../../stores/router.svelte.js";
@@ -122,7 +122,7 @@ describe("SessionsTable", () => {
 
     expect(rowOrder()).toEqual(["high-min", "low-min", "untimed"]);
 
-    unmount(c);
+    await unmount(c);
   });
 
   it("renders an em dash for an untimed row's minutes cell", async () => {
@@ -138,7 +138,7 @@ describe("SessionsTable", () => {
     expect(cells[2]).toBe("—");
     expect(cells[0]).not.toBe("—");
 
-    unmount(c);
+    await unmount(c);
   });
 
   it("requests a server sort when the Cost header is clicked", async () => {
@@ -158,7 +158,7 @@ describe("SessionsTable", () => {
     expect(onSort).toHaveBeenCalledWith("cost", "desc");
     expect(rowOrder()).toEqual(["high-min", "low-min", "untimed"]);
 
-    unmount(c);
+    await unmount(c);
   });
 
   it("intercepts a plain left-click on a session link for SPA navigation", async () => {
@@ -187,7 +187,7 @@ describe("SessionsTable", () => {
     expect(navSpy).toHaveBeenCalledWith("high-min");
     expect(click.defaultPrevented).toBe(true);
 
-    unmount(c);
+    await unmount(c);
   });
 
   it("renders the server-filtered bucket page and its total", async () => {
@@ -202,7 +202,7 @@ describe("SessionsTable", () => {
     expect(rowOrder()).toEqual(["high-min"]);
     expect(document.querySelector(".count")?.textContent).toContain("1 total");
 
-    unmount(c);
+    await unmount(c);
   });
 
   it("shows a dismissible filter badge that calls onClearFilter", async () => {
@@ -226,7 +226,7 @@ describe("SessionsTable", () => {
     await tick();
     expect(onClearFilter).toHaveBeenCalledTimes(1);
 
-    unmount(c);
+    await unmount(c);
   });
 
   it("shows a filter-aware empty message for a slot with no matches", async () => {
@@ -244,7 +244,7 @@ describe("SessionsTable", () => {
     );
     expect(document.querySelector(".filter-badge")).toBeTruthy();
 
-    unmount(c);
+    await unmount(c);
   });
 
   it("labels subagents before automation and leaves interactive sessions unbadged", async () => {
@@ -268,7 +268,118 @@ describe("SessionsTable", () => {
     expect(child?.querySelector(".subagent-badge")?.textContent).toBe("Subagent");
     expect(child?.querySelector(".auto-badge")).toBeNull();
 
-    unmount(c);
+    await unmount(c);
+  });
+
+  describe("infinite scroll", () => {
+    // jsdom does no layout; give the scroll box a fixed geometry so the
+    // distance to the bottom depends only on scrollTop.
+    beforeEach(() => {
+      vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(1000);
+      vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(360);
+    });
+
+    function pagedReport(cursor: string | undefined): Report {
+      const report = makeReport(fixtureRows());
+      report.sessions_next_cursor = cursor;
+      report.sessions_total = 500;
+      return report;
+    }
+
+    function scrollTo(top: number): HTMLElement {
+      const scroller = document.querySelector<HTMLElement>(".table-scroll")!;
+      scroller.scrollTop = top;
+      scroller.dispatchEvent(new Event("scroll"));
+      flushSync();
+      return scroller;
+    }
+
+    it("requests the next page only near the bottom", async () => {
+      const onLoadMore = vi.fn();
+      const c = mount(SessionsTable, {
+        target: document.body,
+        props: { report: pagedReport("page-2"), onLoadMore },
+      });
+      await tick();
+
+      scrollTo(400);
+      expect(onLoadMore).not.toHaveBeenCalled();
+
+      scrollTo(560);
+      expect(onLoadMore).toHaveBeenCalledExactlyOnceWith("page-2");
+
+      await unmount(c);
+    });
+
+    it("waits for an in-flight page, then continues if still at the bottom", async () => {
+      const onLoadMore = vi.fn();
+      const props = $state({ report: pagedReport("page-2"), loading: true, onLoadMore });
+      const c = mount(SessionsTable, { target: document.body, props });
+      await tick();
+
+      scrollTo(640);
+      expect(onLoadMore).not.toHaveBeenCalled();
+      expect(document.querySelector(".page-status")?.textContent).toBe(
+        m.activity_loading_sessions(),
+      );
+
+      props.loading = false;
+      flushSync();
+      expect(onLoadMore).toHaveBeenCalledExactlyOnceWith("page-2");
+
+      await unmount(c);
+    });
+
+    it("stops at the end of the list", async () => {
+      const onLoadMore = vi.fn();
+      const c = mount(SessionsTable, {
+        target: document.body,
+        props: { report: pagedReport(undefined), onLoadMore },
+      });
+      await tick();
+
+      scrollTo(640);
+      expect(onLoadMore).not.toHaveBeenCalled();
+
+      await unmount(c);
+    });
+
+    it("pauses after a failed page until the user retries", async () => {
+      const onLoadMore = vi.fn();
+      const c = mount(SessionsTable, {
+        target: document.body,
+        props: { report: pagedReport("page-2"), error: "server down", onLoadMore },
+      });
+      await tick();
+
+      scrollTo(640);
+      expect(onLoadMore).not.toHaveBeenCalled();
+
+      const error = document.querySelector(".page-error")!;
+      expect(error.textContent).toContain("server down");
+      error.querySelector("button")!.click();
+      expect(onLoadMore).toHaveBeenCalledExactlyOnceWith("page-2");
+
+      await unmount(c);
+    });
+
+    it("returns to the top without paging when the list is replaced", async () => {
+      const onLoadMore = vi.fn();
+      const props = $state({ report: pagedReport("page-2"), listVersion: 1, onLoadMore });
+      const c = mount(SessionsTable, { target: document.body, props });
+      await tick();
+
+      const scroller = scrollTo(640);
+      expect(onLoadMore).toHaveBeenCalledExactlyOnceWith("page-2");
+
+      props.report = pagedReport("cost-page-2");
+      props.listVersion = 2;
+      flushSync();
+      expect(scroller.scrollTop).toBe(0);
+      expect(onLoadMore).toHaveBeenCalledOnce();
+
+      await unmount(c);
+    });
   });
 
   it("renders no filter badge when no slot filter is active", async () => {
@@ -281,6 +392,6 @@ describe("SessionsTable", () => {
 
     expect(document.querySelector(".filter-badge")).toBeNull();
 
-    unmount(c);
+    await unmount(c);
   });
 });

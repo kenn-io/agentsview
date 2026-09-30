@@ -2281,7 +2281,6 @@
   "activity_loading_sessions": "セッションを読み込み中…",
   "activity_loading_usage": "使用状況を読み込み中…",
   "activity_finalizing_report": "レポートを仕上げています…",
-  "activity_next_sessions_page": "次のセッション",
   "activity_sessions_load_failed": "活動セッションのロードに失敗しました",
   "activity_report_load_failed": "アクティビティレポートを読み込めませんでした",
   "session_activity_load_failed": "アクティビティを読み込めませんでした",

@@ -2293,7 +2293,6 @@
   "activity_loading_sessions": "Loading sessions…",
   "activity_loading_usage": "Loading usage…",
   "activity_finalizing_report": "Finalizing report…",
-  "activity_next_sessions_page": "Next sessions",
   "activity_sessions_load_failed": "Failed to load activity sessions",
   "activity_report_load_failed": "Failed to load activity report",
   "session_activity_load_failed": "Failed to load activity",

@@ -2210,7 +2210,6 @@
   "activity_loading_sessions": "正在載入工作階段…",
   "activity_loading_usage": "正在載入用量…",
   "activity_finalizing_report": "正在完成報告…",
-  "activity_next_sessions_page": "下一頁工作階段",
   "activity_sessions_load_failed": "無法載入活動工作階段",
   "activity_report_load_failed": "無法載入活動報告",
   "session_activity_load_failed": "無法載入活動",

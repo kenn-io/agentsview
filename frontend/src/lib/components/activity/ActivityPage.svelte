@@ -481,9 +481,10 @@
           error={activity.sessionsError}
           sortKey={activity.sessionsSort}
           sortDir={activity.sessionsDirection}
+          listVersion={activity.sessionsListVersion}
           onClearFilter={() => selectRange(null)}
           onSort={sortSessions}
-          onNext={(cursor) => activity.loadSessionPage({ cursor })}
+          onLoadMore={(cursor) => activity.loadSessionPage({ cursor })}
         />
       </Card>
       <Card level="default" padding="none" class="chart-panel">
