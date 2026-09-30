@@ -422,13 +422,13 @@ func TestOpenCodeWatcherCatchesMetadataUpdateUnderChildDominatedComposite(
 	assert.Zero(t, parser.OpenCodeContainerChildScans()-scansBefore,
 		"the watcher pass must still not scan the container's child tables")
 
-	// OpenCode's LLM-generated title lands in first_message.
-	var firstMessage string
+	// OpenCode's session title lands in session_name.
+	var sessionName string
 	require.NoError(t, env.db.Reader().QueryRow(t.Context(),
-		"SELECT first_message FROM sessions WHERE id = ?",
+		"SELECT session_name FROM sessions WHERE id = ?",
 		"opencode:meta-mark",
-	).Scan(&firstMessage))
-	assert.Equal(t, "renamed by watcher", firstMessage,
+	).Scan(&sessionName))
+	assert.Equal(t, "renamed by watcher", sessionName,
 		"the watcher pass must archive the metadata update")
 }
 

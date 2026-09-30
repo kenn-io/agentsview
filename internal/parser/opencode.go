@@ -1403,16 +1403,21 @@ func finishOpenCodeSessionContext(
 	if len(parsed) == 0 {
 		return nil, nil, nil
 	}
+	// session.title holds both /rename names and generated titles; the
+	// placeholder OpenCode assigns before generating one is not a title.
+	sessionName := strings.TrimSpace(s.title)
+	if isOpenCodeDefaultTitle(sessionName) {
+		sessionName = ""
+	}
 	firstMsg := ""
-	if s.title != "" && !isOpenCodeDefaultTitle(s.title) {
-		firstMsg = truncate(s.title, 300)
-	} else {
-		for _, m := range parsed {
-			if m.Role == RoleUser && !m.IsSystem {
-				firstMsg = truncate(strings.ReplaceAll(m.Content, "\n", " "), 300)
-				break
-			}
+	for _, m := range parsed {
+		if m.Role == RoleUser && !m.IsSystem {
+			firstMsg = truncate(strings.ReplaceAll(m.Content, "\n", " "), 300)
+			break
 		}
+	}
+	if firstMsg == "" {
+		firstMsg = truncate(sessionName, 300)
 	}
 
 	project := ExtractProjectFromCwdWithBranchContext(ctx, projectWorktree, "")
@@ -1443,6 +1448,7 @@ func finishOpenCodeSessionContext(
 		Cwd:              cwd,
 		ParentSessionID:  parentID,
 		FirstMessage:     firstMsg,
+		SessionName:      sessionName,
 		StartedAt:        startedAt,
 		EndedAt:          endedAt,
 		MessageCount:     len(parsed),

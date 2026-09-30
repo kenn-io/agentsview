@@ -373,7 +373,8 @@ func TestParseOpenCodeDB_StandardSession(t *testing.T) {
 	assertEq(t, "Project", s.Session.Project, "myapp")
 	assertEq(t, "Cwd", s.Session.Cwd, "/home/user/code/myapp")
 	assertEq(t, "MessageCount", s.Session.MessageCount, 2)
-	assertEq(t, "FirstMessage", s.Session.FirstMessage, "Test Session")
+	assertEq(t, "SessionName", s.Session.SessionName, "Test Session")
+	assertEq(t, "FirstMessage", s.Session.FirstMessage, "Hello, help me with Go")
 
 	wantPath := dbPath + "#ses_abc"
 	assertEq(t, "File.Path", s.Session.File.Path, wantPath)
@@ -502,7 +503,8 @@ func TestParseOpenCodeFile_StorageSession(t *testing.T) {
 	assertEq(t, "Cwd", sess.Cwd, "/home/user/code/myapp")
 	assertEq(t, "Machine", sess.Machine, "testmachine")
 	assertEq(t, "MessageCount", sess.MessageCount, 2)
-	assertEq(t, "FirstMessage", sess.FirstMessage, "Storage Session")
+	assertEq(t, "SessionName", sess.SessionName, "Storage Session")
+	assertEq(t, "FirstMessage", sess.FirstMessage, "Hello from storage")
 	assertEq(t, "File.Path", sess.File.Path, sessionPath)
 	assertEq(t, "File.Mtime", sess.File.Mtime > 0, true)
 
@@ -1424,6 +1426,8 @@ func TestParseOpenCodeDB_TitleFallback(t *testing.T) {
 			assertEq(t, "placeholder title fallback",
 				s.Session.FirstMessage,
 				"Refactor the auth module")
+			assertEq(t, "placeholder is not a session name",
+				s.Session.SessionName, "")
 		}
 	}
 }

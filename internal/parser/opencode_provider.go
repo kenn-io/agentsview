@@ -2136,6 +2136,7 @@ func openCodeFormatProviderCapabilities() Capabilities {
 		},
 		Content: ContentCapabilities{
 			FirstMessage:         CapabilitySupported,
+			SessionName:          CapabilitySupported,
 			Cwd:                  CapabilitySupported,
 			Relationships:        CapabilitySupported,
 			Thinking:             CapabilitySupported,

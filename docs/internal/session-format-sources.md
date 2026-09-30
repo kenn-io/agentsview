@@ -1339,6 +1339,17 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   and
   [session.ts](https://github.com/anomalyco/opencode/blob/67caf894e0843ee370e72839e8265e483233479b/packages/opencode/src/session/session.ts).
   Channel database naming was reverified 2026-08-27 against `database.ts`.
+- **Session names (2026-09-30):** `session.title` holds both the name a user
+  sets in the TUI rename dialog and the title OpenCode generates while the
+  title is still a `New session - <ISO>` or `Child session - <ISO>`
+  placeholder; nothing marks which one it is. See
+  [dialog-session-rename.tsx](https://github.com/anomalyco/opencode/blob/2fa3363c924c5c3e367b84a87ae478296a0ed59b/packages/tui/src/component/dialog-session-rename.tsx)
+  and `ensureTitle` in
+  [prompt.ts](https://github.com/anomalyco/opencode/blob/2fa3363c924c5c3e367b84a87ae478296a0ed59b/packages/opencode/src/session/prompt.ts)
+  at `2fa3363c924c5c3e367b84a87ae478296a0ed59b`. Agentsview uses a
+  non-placeholder title as the session name. The first message is the first
+  user message and falls back to the title only when there is none. Kilo and
+  MiMo Code share this parser.
 - **Usage and cost:** Assistant messages persist input, output, cache-read, and
   cache-write tokens, plus model/provider identity. Agentsview computes price
   from those tokens rather than consuming a persisted USD total. Reverified
