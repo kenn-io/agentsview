@@ -168,6 +168,50 @@ describe("ToolSequencesPanel", () => {
     unmount(callsWithoutSequence);
   });
 
+  it("keeps unknown explanations aligned with the displayed calls", async () => {
+    const component = mount(ToolSequencesPanel, {
+      target: document.body,
+      props: {
+        data: makeData({
+          sequences: [
+            makeSequence({
+              ending: "unknown",
+              calls: [
+                makeCall({
+                  outcome: "errored",
+                  result_content_unknown: true,
+                  result_preview: "[image]",
+                }),
+                makeCall({
+                  ordinal: 5,
+                  tool_name: "Read",
+                  outcome: "content",
+                  result_content_unknown: false,
+                  result_preview: "Found the config",
+                }),
+              ],
+            }),
+          ],
+        }),
+        sessionId: "session-a",
+        loading: false,
+        failed: false,
+      },
+    });
+    document.querySelector<HTMLDetailsElement>("details.sequence")!.open = true;
+    await tick();
+
+    const calls = document.querySelectorAll(".sequence-call");
+    expect(calls[0]!.textContent).toContain("Error");
+    expect(calls[0]!.querySelector(".unknown-note")).toBeNull();
+    expect(calls[1]!.textContent).toContain("Content");
+    expect(document.body.textContent).toContain(
+      "The trace does not show how this sequence ended.",
+    );
+
+    unmount(component);
+  });
+
   it("renders loading and request errors separately", async () => {
     const component = mount(ToolSequencesPanel, {
       target: document.body,

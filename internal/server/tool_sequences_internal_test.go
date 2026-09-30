@@ -42,7 +42,7 @@ func TestBuildSessionToolSequences_UTF8AndCallCap(t *testing.T) {
 	assert.Equal(t, rows[11].ToolUseID, sequence.Calls[9].ToolUseID)
 
 	inputCall := sequence.Calls[0]
-	assert.Equal(t, 512, len(inputCall.InputPreview))
+	assert.Len(t, inputCall.InputPreview, 512)
 	assert.True(t, utf8.ValidString(inputCall.InputPreview))
 	assert.Equal(t, len(input)-512, inputCall.InputOmittedBytes)
 	resultCall := sequence.Calls[9]

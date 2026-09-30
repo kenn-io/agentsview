@@ -25,10 +25,9 @@ func TestToolSequencesHTTPParity(t *testing.T) {
 	}
 	_, dataDir := newPGE2ETestDatabase(t)
 	local := dbtest.OpenTestDB(t)
-	dbtest.SeedToolSequencesExample(t, local, "tool-sequences-parity")
+	sessionIDs := dbtest.SeedToolSequencesParity(t, local)
 
 	localHandler := server.New(config.Config{Host: "127.0.0.1", InstallationID: "local"}, local, nil).Handler()
-	localJSON := getToolSequencesDocument(t, localHandler, "tool-sequences-parity")
 
 	const schema = pgE2ESchema
 	store, err := postgres.NewStore(pgURL, schema, true)
@@ -42,8 +41,11 @@ func TestToolSequencesHTTPParity(t *testing.T) {
 	require.NoError(t, err)
 
 	remoteHandler := server.New(config.Config{Host: "127.0.0.1", DataDir: dataDir, InstallationID: "remote"}, store, nil).Handler()
-	remoteJSON := getToolSequencesDocument(t, remoteHandler, "tool-sequences-parity")
-	assert.Equal(t, localJSON, remoteJSON)
+	for _, sessionID := range sessionIDs {
+		localJSON := getToolSequencesDocument(t, localHandler, sessionID)
+		remoteJSON := getToolSequencesDocument(t, remoteHandler, sessionID)
+		assert.Equal(t, localJSON, remoteJSON, sessionID)
+	}
 }
 
 func getToolSequencesDocument(t *testing.T, handler http.Handler, sessionID string) map[string]any {

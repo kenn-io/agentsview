@@ -83,7 +83,7 @@
   let toolSequencesData = $state<SessionToolSequencesResponse | null>(null);
   let toolSequencesLoading = $state(false);
   let toolSequencesFailed = $state(false);
-  let toolSequencesFetchIdentity = "";
+  let toolSequencesLoadedIdentity = "";
   const openersRead = new LatestRead();
   const directoryRead = new LatestRead();
   const costRead = new LatestRead();
@@ -375,7 +375,7 @@
       toolSequencesData = null;
       toolSequencesLoading = false;
       toolSequencesFailed = false;
-      toolSequencesFetchIdentity = "";
+      toolSequencesLoadedIdentity = "";
       return;
     }
 
@@ -385,25 +385,22 @@
       currentSession.termination_status ?? "",
       sessions.activeSessionUsageVersion,
     ].join("\n");
-    toolSequencesFetchIdentity = identity;
-    toolSequencesData = null;
+    if (toolSequencesData?.session_id !== id) {
+      toolSequencesData = null;
+      toolSequencesLoadedIdentity = "";
+    }
+    if (identity === toolSequencesLoadedIdentity) return;
     toolSequencesLoading = true;
     toolSequencesFailed = false;
     const signal = toolSequencesRead.begin();
     SessionsService.getApiV1SessionsByIdToolSequences({ id }, { signal })
       .then((response) => {
-        if (
-          !toolSequencesRead.isCurrent(signal) ||
-          toolSequencesFetchIdentity !== identity
-        ) return;
+        if (!toolSequencesRead.isCurrent(signal)) return;
+        toolSequencesLoadedIdentity = identity;
         toolSequencesData = response;
       })
       .catch((error) => {
-        if (
-          isAbortError(error) ||
-          !toolSequencesRead.isCurrent(signal) ||
-          toolSequencesFetchIdentity !== identity
-        ) return;
+        if (isAbortError(error) || !toolSequencesRead.isCurrent(signal)) return;
         toolSequencesData = null;
         toolSequencesFailed = true;
       })
@@ -1179,7 +1176,7 @@
 {#if ui.signalPanelOpen && session}
   <SignalPanel {session} />
   <ToolSequencesPanel
-    data={toolSequencesData}
+    data={toolSequencesData?.session_id === session.id ? toolSequencesData : null}
     sessionId={session.id}
     loading={toolSequencesLoading}
     failed={toolSequencesFailed}

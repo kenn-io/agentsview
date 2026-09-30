@@ -20,9 +20,8 @@ import (
 
 func TestToolSequencesHTTPParity(t *testing.T) {
 	local := dbtest.OpenTestDB(t)
-	dbtest.SeedToolSequencesExample(t, local, "tool-sequences-parity")
+	sessionIDs := dbtest.SeedToolSequencesParity(t, local)
 	localHandler := server.New(config.Config{Host: "127.0.0.1", InstallationID: "local"}, local, nil).Handler()
-	localJSON := getToolSequencesDocument(t, localHandler, "tool-sequences-parity")
 
 	dsn, database := chtest.FreshDatabase(t)
 	target := clickhouse.Target{URL: dsn, Database: database}
@@ -36,8 +35,11 @@ func TestToolSequencesHTTPParity(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	remoteHandler := server.New(config.Config{Host: "127.0.0.1", InstallationID: "remote"}, store, nil).Handler()
-	remoteJSON := getToolSequencesDocument(t, remoteHandler, "tool-sequences-parity")
-	assert.Equal(t, localJSON, remoteJSON)
+	for _, sessionID := range sessionIDs {
+		localJSON := getToolSequencesDocument(t, localHandler, sessionID)
+		remoteJSON := getToolSequencesDocument(t, remoteHandler, sessionID)
+		assert.Equal(t, localJSON, remoteJSON, sessionID)
+	}
 }
 
 func getToolSequencesDocument(t *testing.T, handler http.Handler, sessionID string) map[string]any {

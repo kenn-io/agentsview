@@ -26,6 +26,102 @@ func SeedToolSequencesExample(
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), sessionID, ToolSequencesExampleMessages(sessionID)))
 }
 
+// SeedToolSequencesParity adds retained-evidence and child-timing cases to the
+// basic recovery example used by the backend parity tests.
+func SeedToolSequencesParity(t *testing.T, d *db.DB) []string {
+	t.Helper()
+	const exampleID = "tool-sequences-parity"
+	const evidenceID = "tool-sequences-parity-evidence"
+	const incompleteID = "tool-sequences-parity-incomplete"
+	const childID = "tool-sequences-parity-child"
+	const parentID = "tool-sequences-parity-parent"
+	SeedToolSequencesExample(t, d, exampleID)
+
+	evidenceMessages := []db.Message{
+		{SessionID: evidenceID, Ordinal: 0, Role: "user", Content: "Check the config", ContentLength: 16, Timestamp: "2026-04-26T10:00:00Z"},
+		toolSequenceParityMessage(evidenceID, 1, toolSequenceParityCall("Grep", "empty", "", 0, "completed")),
+		toolSequenceParityMessage(evidenceID, 2, toolSequenceParityCall("Read", "summary", "single-event summary", 20, "completed")),
+		toolSequenceParityMessage(evidenceID, 3, toolSequenceParityCall("Bash", "error", "command failed", 14, "errored")),
+		toolSequenceParityMessage(evidenceID, 4, toolSequenceParityCall("Read", "image", "[image]", len("[image]"), "completed")),
+		toolSequenceParityMessage(evidenceID, 5, db.ToolCall{
+			ToolName: "Read", Category: "Read", ToolUseID: "withheld",
+			ResultContentLength: 4096,
+		}),
+		toolSequenceParityMessage(evidenceID, 6, toolSequenceParityCall("Read", "recovery", "config loaded", 13, "completed")),
+	}
+	seedToolSequenceParitySession(t, d, evidenceID, "clean", evidenceMessages)
+
+	incompleteMessages := []db.Message{
+		{SessionID: incompleteID, Ordinal: 0, Role: "user", Content: "Run the command", ContentLength: len("Run the command"), Timestamp: "2026-04-26T10:00:00Z"},
+		toolSequenceParityMessage(incompleteID, 1, toolSequenceParityCall("Bash", "", "command failed", 14, "errored")),
+	}
+	seedToolSequenceParitySession(t, d, incompleteID, "tool_call_pending", incompleteMessages)
+
+	childStart := "2026-04-26T10:00:02Z"
+	childEnd := "2026-04-26T10:00:05Z"
+	SeedSession(t, d, childID, "tool-sequences-parity", func(s *db.Session) {
+		s.MessageCount = 0
+		s.StartedAt = &childStart
+		s.EndedAt = &childEnd
+		s.ParentSessionID = Ptr(parentID)
+		s.ParentSessionIDs = []string{parentID}
+		s.RelationshipType = "subagent"
+	})
+	parentMessages := []db.Message{
+		{SessionID: parentID, Ordinal: 0, Role: "user", Content: "Delegate the task", ContentLength: len("Delegate the task"), Timestamp: "2026-04-26T10:00:00Z"},
+		toolSequenceParityMessage(parentID, 1, db.ToolCall{
+			ToolName: "Task", Category: "Tool", ToolUseID: "delegated",
+			SubagentSessionID: childID,
+			ResultEvents: []db.ToolResultEvent{{
+				ToolUseID: "delegated", Source: "tool_execution", Status: "errored", EventIndex: 0,
+			}},
+		}),
+	}
+	seedToolSequenceParitySession(t, d, parentID, "tool_call_pending", parentMessages)
+
+	return []string{exampleID, evidenceID, incompleteID, parentID}
+}
+
+func seedToolSequenceParitySession(
+	t *testing.T, d *db.DB, sessionID, termination string, messages []db.Message,
+) {
+	t.Helper()
+	startedAt := "2026-04-26T10:00:00Z"
+	endedAt := "2026-04-26T10:00:10Z"
+	SeedSession(t, d, sessionID, "tool-sequences-parity", func(s *db.Session) {
+		s.MessageCount = len(messages)
+		s.UserMessageCount = 1
+		s.StartedAt = &startedAt
+		s.TerminationStatus = Ptr(termination)
+		if termination == "clean" {
+			s.EndedAt = &endedAt
+		}
+	})
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), sessionID, messages))
+}
+
+func toolSequenceParityMessage(sessionID string, ordinal int, call db.ToolCall) db.Message {
+	return db.Message{
+		SessionID: sessionID, Ordinal: ordinal, Role: "assistant", Content: "tool call",
+		ContentLength: len("tool call"), Timestamp: "2026-04-26T10:00:01Z",
+		HasToolUse: true, ToolCalls: []db.ToolCall{call},
+	}
+}
+
+func toolSequenceParityCall(tool, id, content string, length int, status string) db.ToolCall {
+	call := db.ToolCall{
+		ToolName: tool, Category: tool, ToolUseID: id,
+		ResultContent: content, ResultContentLength: length,
+	}
+	if status != "" {
+		call.ResultEvents = []db.ToolResultEvent{{
+			ToolUseID: id, Source: "tool_execution", Status: status,
+			Content: content, ContentLength: length, EventIndex: 0,
+		}}
+	}
+	return call
+}
+
 // ToolSequencesExampleMessages returns the transcript rows for the recovered
 // Grep-to-Read example without inserting them.
 func ToolSequencesExampleMessages(sessionID string) []db.Message {

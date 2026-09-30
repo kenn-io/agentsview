@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -103,9 +104,9 @@ func TestHandleToolSequences_Example(t *testing.T) {
 	assert.Contains(t, call, "duration_ms")
 	assert.Nil(t, call["duration_ms"])
 	assert.Contains(t, call, "result_bytes")
-	assert.Equal(t, float64(16), call["result_bytes"])
+	assert.InDelta(t, float64(16), call["result_bytes"], 0)
 	assert.Contains(t, call, "result_omitted_bytes")
-	assert.Equal(t, float64(0), call["result_omitted_bytes"])
+	assert.InDelta(t, float64(0), call["result_omitted_bytes"], 0)
 }
 
 func TestHandleToolSequences_NoSequences(t *testing.T) {
@@ -118,8 +119,14 @@ func TestHandleToolSequences_NoSequences(t *testing.T) {
 
 	seedSequenceSession(t, te.db, "tool-sequences-isolated", nil, []db.ToolCall{
 		{ToolName: "Bash", Category: "Bash", ToolUseID: "unknown", InputJSON: `{}`},
-		{ToolName: "Read", Category: "Read", ToolUseID: "content", InputJSON: `{"path":"x"}`, ResultContent: "text", ResultContentLength: 4,
-			ResultEvents: []db.ToolResultEvent{{ToolUseID: "content", Source: "tool_execution", Status: "completed", Content: "text", ContentLength: 4, EventIndex: 0}}},
+		{
+			ToolName: "Read", Category: "Read", ToolUseID: "content",
+			InputJSON: `{"path":"x"}`, ResultContent: "text", ResultContentLength: 4,
+			ResultEvents: []db.ToolResultEvent{{
+				ToolUseID: "content", Source: "tool_execution", Status: "completed",
+				Content: "text", ContentLength: 4, EventIndex: 0,
+			}},
+		},
 	})
 	got = fetchSessionToolSequences(t, te, "tool-sequences-isolated")
 	assert.Equal(t, 2, got.TotalToolCalls)
@@ -141,8 +148,15 @@ func TestHandleToolSequences_NoSequences(t *testing.T) {
 	assert.Equal(t, "open", got.Sequences[0].Ending, "parallel calls in one message do not recover each other")
 
 	unknown := []db.ToolCall{
-		{ToolName: "Grep", Category: "Grep", ToolUseID: "known-empty", InputJSON: `{}`, ResultContent: "No matches found", ResultContentLength: len("No matches found"),
-			ResultEvents: []db.ToolResultEvent{{ToolUseID: "known-empty", Source: "tool_execution", Status: "completed", Content: "No matches found", ContentLength: len("No matches found"), EventIndex: 0}}},
+		{
+			ToolName: "Grep", Category: "Grep", ToolUseID: "known-empty",
+			InputJSON: `{}`, ResultContent: "No matches found",
+			ResultContentLength: len("No matches found"),
+			ResultEvents: []db.ToolResultEvent{{
+				ToolUseID: "known-empty", Source: "tool_execution", Status: "completed",
+				Content: "No matches found", ContentLength: len("No matches found"), EventIndex: 0,
+			}},
+		},
 		{ToolName: "Bash", Category: "Bash", ToolUseID: "no-result", InputJSON: `{}`},
 	}
 	seedSequenceSession(t, te.db, "tool-sequences-result-size-unknown", nil, unknown)
@@ -219,7 +233,7 @@ func TestHandleToolSequences_Bounds(t *testing.T) {
 	assert.Equal(t, "attempt-08", sequence.Calls[8].ToolUseID)
 	assert.Equal(t, "attempt-11", sequence.Calls[9].ToolUseID)
 	assert.Equal(t, 600, sequence.Calls[0].InputBytes)
-	assert.Equal(t, 512, len(sequence.Calls[0].InputPreview))
+	assert.Len(t, sequence.Calls[0].InputPreview, 512)
 	assert.Equal(t, 88, sequence.Calls[0].InputOmittedBytes)
 
 	sequenceStarts := make([]db.ToolCall, 42)
@@ -247,12 +261,30 @@ func TestHandleToolSequences_Bounds(t *testing.T) {
 func TestHandleToolSequences_Timing(t *testing.T) {
 	te := setup(t)
 	duplicate := []db.ToolCall{
-		{ToolName: "Grep", Category: "Grep", ToolUseID: "same", InputJSON: `{}`, ResultContent: "No matches found", ResultContentLength: 15,
-			ResultEvents: []db.ToolResultEvent{{ToolUseID: "same", Source: "tool_execution", Status: "completed", Content: "No matches found", ContentLength: 15, EventIndex: 0}}},
-		{ToolName: "Grep", Category: "Grep", ToolUseID: "same", InputJSON: `{}`, ResultContent: "No matches found", ResultContentLength: 15,
-			ResultEvents: []db.ToolResultEvent{{ToolUseID: "same", Source: "tool_execution", Status: "completed", Content: "No matches found", ContentLength: 15, EventIndex: 1}}},
-		{ToolName: "Read", Category: "Read", ToolUseID: "", InputJSON: `{}`, ResultContent: "text", ResultContentLength: 4,
-			ResultEvents: []db.ToolResultEvent{{Source: "tool_execution", Status: "completed", Content: "text", ContentLength: 4, EventIndex: 0}}},
+		{
+			ToolName: "Grep", Category: "Grep", ToolUseID: "same",
+			InputJSON: `{}`, ResultContent: "No matches found", ResultContentLength: 15,
+			ResultEvents: []db.ToolResultEvent{{
+				ToolUseID: "same", Source: "tool_execution", Status: "completed",
+				Content: "No matches found", ContentLength: 15, EventIndex: 0,
+			}},
+		},
+		{
+			ToolName: "Grep", Category: "Grep", ToolUseID: "same",
+			InputJSON: `{}`, ResultContent: "No matches found", ResultContentLength: 15,
+			ResultEvents: []db.ToolResultEvent{{
+				ToolUseID: "same", Source: "tool_execution", Status: "completed",
+				Content: "No matches found", ContentLength: 15, EventIndex: 1,
+			}},
+		},
+		{
+			ToolName: "Read", Category: "Read", InputJSON: `{}`,
+			ResultContent: "text", ResultContentLength: 4,
+			ResultEvents: []db.ToolResultEvent{{
+				Source: "tool_execution", Status: "completed",
+				Content: "text", ContentLength: 4, EventIndex: 0,
+			}},
+		},
 	}
 	seedSequenceSession(t, te.db, "tool-sequences-ambiguous-timing", dbtest.Ptr("clean"), duplicate)
 	got := fetchSessionToolSequences(t, te, "tool-sequences-ambiguous-timing")
@@ -442,12 +474,18 @@ func TestHandleToolSequences_RetainedEvidence(t *testing.T) {
 	t.Run("withheld positive length stays known and deduplicated summary is restored", func(t *testing.T) {
 		id := "tool-sequences-retained-length"
 		calls := []db.ToolCall{
-			{ToolName: "Grep", Category: "Grep", ToolUseID: "start", InputJSON: `{}`, ResultContent: "No matches found", ResultContentLength: len("No matches found"),
-				ResultEvents: []db.ToolResultEvent{{ToolUseID: "start", Source: "tool_execution", Status: "completed", Content: "No matches found", ContentLength: len("No matches found"), EventIndex: 0}}},
-			{ToolName: "Read", Category: "Read", ToolUseID: "withheld", InputJSON: `{}`, ResultContentLength: 42,
-				ResultEvents: []db.ToolResultEvent{{ToolUseID: "withheld", Source: "tool_execution", Status: "completed", ContentLength: 42, EventIndex: 1}}},
-			{ToolName: "Read", Category: "Read", ToolUseID: "dedup", InputJSON: `{}`, ResultContent: "retained summary", ResultContentLength: len("retained summary"),
-				ResultEvents: []db.ToolResultEvent{{ToolUseID: "dedup", Source: "tool_execution", Status: "completed", Content: "retained summary", ContentLength: len("retained summary"), EventIndex: 2}}},
+			{
+				ToolName: "Grep", Category: "Grep", ToolUseID: "start", InputJSON: `{}`, ResultContent: "No matches found", ResultContentLength: len("No matches found"),
+				ResultEvents: []db.ToolResultEvent{{ToolUseID: "start", Source: "tool_execution", Status: "completed", Content: "No matches found", ContentLength: len("No matches found"), EventIndex: 0}},
+			},
+			{
+				ToolName: "Read", Category: "Read", ToolUseID: "withheld", InputJSON: `{}`, ResultContentLength: 42,
+				ResultEvents: []db.ToolResultEvent{{ToolUseID: "withheld", Source: "tool_execution", Status: "completed", ContentLength: 42, EventIndex: 1}},
+			},
+			{
+				ToolName: "Read", Category: "Read", ToolUseID: "dedup", InputJSON: `{}`, ResultContent: "retained summary", ResultContentLength: len("retained summary"),
+				ResultEvents: []db.ToolResultEvent{{ToolUseID: "dedup", Source: "tool_execution", Status: "completed", Content: "retained summary", ContentLength: len("retained summary"), EventIndex: 2}},
+			},
 		}
 		seedSequenceSession(t, te.db, id, dbtest.Ptr("tool_call_pending"), calls)
 		messages, err := te.db.GetAllMessages(t.Context(), id)
@@ -521,8 +559,24 @@ func TestHandleToolSequences_DuckDBParity(t *testing.T) {
 		t.Skip("duckdb-go-bindings does not ship a windows/arm64 library")
 	}
 	te := setup(t)
-	dbtest.SeedToolSequencesExample(t, te.db, "tool-sequences-duckdb")
-	source := fetchSessionToolSequences(t, te, "tool-sequences-duckdb")
+	sessionIDs := dbtest.SeedToolSequencesParity(t, te.db)
+	source := make(map[string]sessionToolSequencesResponse, len(sessionIDs))
+	for _, sessionID := range sessionIDs {
+		source[sessionID] = fetchSessionToolSequences(t, te, sessionID)
+	}
+	evidence := source["tool-sequences-parity-evidence"]
+	require.Len(t, evidence.Sequences, 2)
+	assert.Equal(t, "empty", evidence.Sequences[0].Calls[0].Outcome)
+	assert.Equal(t, "single-event summary", evidence.Sequences[0].Calls[1].ResultPreview)
+	assert.True(t, evidence.Sequences[1].Calls[1].ResultContentUnknown)
+	assert.Equal(t, 4096, *evidence.Sequences[1].Calls[2].ResultBytes)
+	incomplete := source["tool-sequences-parity-incomplete"]
+	require.Len(t, incomplete.Sequences, 1)
+	assert.Equal(t, "open", incomplete.Sequences[0].Ending)
+	assert.Empty(t, incomplete.Sequences[0].Calls[0].ToolUseID)
+	child := source["tool-sequences-parity-parent"]
+	require.Len(t, child.Sequences, 1)
+	assert.Equal(t, int64(3000), *child.Sequences[0].Calls[0].DurationMs)
 
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
 	_, err := duckdb.Push(t.Context(), path, te.db, "test-installation", storage.MirrorPushOptions{}, true, nil)
@@ -532,8 +586,10 @@ func TestHandleToolSequences_DuckDBParity(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	cfg := config.Config{Host: "127.0.0.1", InstallationID: "server-installation"}
 	te.handler = wrapTestHandler(cfg, server.New(cfg, store, nil).Handler())
-	mirror := fetchSessionToolSequences(t, te, "tool-sequences-duckdb")
-	assert.Equal(t, source, mirror)
+	for sessionID, sqlite := range source {
+		mirror := fetchSessionToolSequences(t, te, sessionID)
+		assert.Equal(t, sqlite, mirror, sessionID)
+	}
 }
 
 func TestHandleToolSequences_ReadErrors(t *testing.T) {
@@ -630,11 +686,7 @@ func containsCostKey(value any) bool {
 			}
 		}
 	case []any:
-		for _, nested := range value {
-			if containsCostKey(nested) {
-				return true
-			}
-		}
+		return slices.ContainsFunc(value, containsCostKey)
 	}
 	return false
 }

@@ -73,7 +73,7 @@
 >
   <header class="panel-header">
     <h2 id="tool-sequences-title">{m.tool_sequences_title()}</h2>
-    {#if data && !loading && !failed}
+    {#if data && !failed}
       <div class="panel-counts">
         <span>{m.tool_sequences_sequence_count(countArgs(data.total_sequences))}</span>
         <span>{m.tool_sequences_call_count(countArgs(data.total_tool_calls))}</span>
@@ -82,9 +82,9 @@
   </header>
   <p class="panel-description">{m.tool_sequences_description()}</p>
 
-  {#if loading}
+  {#if loading && !data}
     <p class="panel-state">{m.tool_sequences_loading()}</p>
-  {:else if failed}
+  {:else if failed && !data}
     <p class="panel-state panel-error" role="alert">{m.tool_sequences_error()}</p>
   {:else if data}
     {#if data.omitted_sequences > 0}
@@ -180,7 +180,7 @@
                     <div class="evidence-row">
                       <dt>{m.tool_sequences_result()}</dt>
                       <dd>
-                        {#if call.result_content_unknown}
+                        {#if call.result_content_unknown && call.outcome === "unknown"}
                           <span class="unknown-note">{m.tool_sequences_result_unknown()}</span>
                         {/if}
                         {#if call.result_preview}

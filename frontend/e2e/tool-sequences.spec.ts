@@ -50,6 +50,7 @@ test("renders, expands, and navigates observed sequences at desktop, tablet, and
     await expect(panel).toContainText("Same input as the previous call");
     await expect(panel).toContainText("A later call switched tools.");
     await expect(panel).toContainText("Not measured");
+    await expect(panel.locator(".duration").first()).toHaveText("2.0s");
     await expect(panel.locator("pre").first()).toContainText("pattern");
 
     const scroller = page.locator(".message-list-scroll");
@@ -82,4 +83,25 @@ test("renders, expands, and navigates observed sequences at desktop, tablet, and
     expect(geometry.transcriptHeight).toBeGreaterThan(100);
     await page.screenshot({ path: testInfo.outputPath(`tool-sequences-${width}.png`) });
   }
+});
+
+test("shows the empty state for a session with no messages", async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem("agentsview-signal-panel", "true");
+  });
+
+  await page.setViewportSize({ width: 768, height: 900 });
+  await page.goto("/sessions/test-session-empty-0", { waitUntil: "domcontentloaded" });
+  const panel = page.locator(".tool-sequences-panel");
+  await expect(panel).toBeVisible({ timeout: 10_000 });
+  const response = await page.request.get(
+    "/api/v1/sessions/test-session-empty-0/tool-sequences",
+  );
+  expect(response.ok()).toBe(true);
+  expect(await response.json()).toMatchObject({
+    session_id: "test-session-empty-0",
+    total_tool_calls: 0,
+    total_sequences: 0,
+  });
+  await expect(panel).toContainText("No tool calls recorded.");
 });

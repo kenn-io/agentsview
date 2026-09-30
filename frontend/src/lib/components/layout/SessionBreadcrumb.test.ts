@@ -2163,6 +2163,46 @@ describe("SessionBreadcrumb", () => {
       component.$destroy();
     });
 
+    it("keeps an expanded sequence visible while refreshing its timing", async () => {
+      const refresh = deferred<SessionToolSequencesResponse>();
+      const session = makeSession("claude", {
+        transcript_revision: "revision-1",
+        termination_status: "clean",
+      });
+      sessionsService.getApiV1SessionsByIdToolSequences
+        .mockResolvedValueOnce(makeToolSequences(2000))
+        .mockReturnValueOnce(refresh.promise);
+      ui.signalPanelOpen = true;
+      const component = createClassComponent({
+        component: SessionBreadcrumb,
+        target: document.body,
+        props: { session, onBack: () => {} },
+      });
+      await vi.waitFor(() => {
+        expect(document.body.textContent).toContain("2.0s");
+      });
+
+      const details = document.querySelector<HTMLDetailsElement>("details.sequence")!;
+      details.open = true;
+      await tick();
+      component.$set({ session: { ...session } });
+      await flushPromises();
+      expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(1);
+
+      sessions.activeSessionUsageVersion += 1;
+      await tick();
+      expect(document.body.textContent).toContain("2.0s");
+      expect(document.body.textContent).not.toContain("Loading tool sequences");
+      expect(document.querySelector<HTMLDetailsElement>("details.sequence")?.open).toBe(true);
+
+      refresh.resolve(makeToolSequences(4000));
+      await vi.waitFor(() => {
+        expect(document.body.textContent).toContain("4.0s");
+      });
+      expect(document.querySelector<HTMLDetailsElement>("details.sequence")?.open).toBe(true);
+      component.$destroy();
+    });
+
     it("refreshes tool sequences when the transcript revision or termination status changes", async () => {
       ui.signalPanelOpen = true;
       sessionsService.getApiV1SessionsByIdToolSequences
