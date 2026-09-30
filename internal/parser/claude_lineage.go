@@ -93,11 +93,13 @@ type claudeParseOptions struct {
 	siblingLineage bool
 	// uploadIdentity enables adoption of explicit rooted transcript IDs.
 	uploadIdentity bool
-	// compatibleTitleEvents enables the sessionName, custom-title, and
-	// ai-title fields written by compatible transcript producers.
+	// compatibleTitleEvents enables the sessionName and ai-title fields
+	// written by compatible transcript producers and ranks custom-title
+	// ahead of them.
 	compatibleTitleEvents bool
-	// aiTitleFallback enables native Claude ai-title metadata. /rename keeps
-	// priority; sessionName and custom-title remain compatible-only fields.
+	// aiTitleFallback enables native Claude ai-title metadata. A user rename
+	// (/rename command or custom-title) keeps priority; sessionName remains a
+	// compatible-only field.
 	aiTitleFallback bool
 }
 

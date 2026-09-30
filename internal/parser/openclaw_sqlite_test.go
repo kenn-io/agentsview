@@ -1558,3 +1558,72 @@ func openClawSQLiteFixtureEvents(sessionID string) []string {
 		`{"type":"message","id":"m4","timestamp":"2026-09-22T10:00:04Z","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"timestamp":"2026-09-22T10:00:04Z"}}`,
 	}
 }
+
+func TestOpenClawSQLiteSessionLabel(t *testing.T) {
+	root := t.TempDir()
+	dbPath := createOpenClawSQLiteFixture(t, root, "main", map[string][]string{
+		"named": openClawSQLiteFixtureEvents("named"),
+		"plain": openClawSQLiteFixtureEvents("plain"),
+	})
+	db, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	defer db.Close()
+	_, err = db.ExecContext(t.Context(), `
+		CREATE TABLE session_nodes (
+			session_key TEXT NOT NULL PRIMARY KEY,
+			current_session_id TEXT NOT NULL,
+			label TEXT,
+			display_name TEXT
+		);
+		CREATE TABLE session_windows (
+			session_id TEXT NOT NULL PRIMARY KEY,
+			session_key TEXT NOT NULL
+		);
+		INSERT INTO session_nodes VALUES
+			('agent:main:named', 'named', ' Chosen name ', 'Generated title'),
+			('agent:main:plain', 'plain', NULL, 'Generated title');
+		INSERT INTO session_windows VALUES
+			('named', 'agent:main:named'),
+			('plain', 'agent:main:plain');
+	`)
+	require.NoError(t, err)
+
+	provider, ok := NewProvider(AgentOpenClaw, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	parse := func() (map[string]string, map[string]string) {
+		sources, err := provider.Discover(t.Context())
+		require.NoError(t, err)
+		require.Len(t, sources, 2)
+		names := make(map[string]string)
+		hashes := make(map[string]string)
+		for _, source := range sources {
+			fingerprint, err := provider.Fingerprint(t.Context(), source)
+			require.NoError(t, err)
+			outcome, err := provider.Parse(t.Context(), ParseRequest{
+				Source: source, Fingerprint: fingerprint,
+			})
+			require.NoError(t, err)
+			require.Len(t, outcome.Results, 1)
+			session := outcome.Results[0].Result.Session
+			names[session.ID] = session.SessionName
+			hashes[session.ID] = fingerprint.Hash
+		}
+		return names, hashes
+	}
+
+	names, hashes := parse()
+	assert.Equal(t, map[string]string{
+		"openclaw:main:named": "Chosen name",
+		"openclaw:main:plain": "",
+	}, names)
+
+	_, err = db.ExecContext(t.Context(),
+		`UPDATE session_nodes SET label = 'Renamed' WHERE session_key = 'agent:main:named'`,
+	)
+	require.NoError(t, err)
+	renamed, renamedHashes := parse()
+	assert.Equal(t, "Renamed", renamed["openclaw:main:named"])
+	assert.NotEqual(t, hashes["openclaw:main:named"], renamedHashes["openclaw:main:named"],
+		"a rename must change the source digest so sync reparses the session")
+	assert.Equal(t, hashes["openclaw:main:plain"], renamedHashes["openclaw:main:plain"])
+}

@@ -344,17 +344,19 @@ Each session item shows:
 - **Session name** — display name if set, otherwise first message text. OpenCode
   sessions use their native session titles. As of 0.27.0, Copilot CLI sessions
   use the `name` field from the session's `workspace.yaml` when present,
-  falling back to the first user message otherwise. As of 0.33.0, labels are
+  falling back to the first user message otherwise. A name the user chose
+  with `--name` or `/rename` is the session name. As of 0.33.0, labels are
   no longer hard-truncated at 50 characters — the full label is clipped
   responsively to the sidebar width instead.
 - **Agent-provided session names** — several agents record a session title
-  themselves (Claude Code's `/rename`, Codex `session_index.jsonl` thread
-  names, Claude.ai and ChatGPT conversation names, Forge, Hermes, Kiro,
-  Piebald, Cortex Code, WorkBuddy, and Command Code's `.meta.json` titles). The
-  sidebar shows these titles automatically when present. Manual in-app
-  renames always take precedence and are never overwritten by an
-  agent-provided name. As of 0.34.0, Codex titles renamed by the agent are
-  imported from `session_index.jsonl` for both current and archived sessions.
+  themselves (Claude Code's and Qwen Code's `/rename`, OpenClaw's `/name`, Codex
+  `session_index.jsonl` thread names, Claude.ai and ChatGPT conversation names,
+  Forge, Hermes, Kiro, Piebald, Cortex Code, WorkBuddy, and Command Code's
+  `.meta.json` titles). The sidebar shows these titles automatically when
+  present. Manual in-app renames always take precedence and are never
+  overwritten by an agent-provided name. As of 0.34.0, Codex titles renamed by
+  the agent are imported from `session_index.jsonl` for both current and
+  archived sessions.
 - **Model name** — the AI model used for the session, shown when available
   (including Codex session models).
 - **Star button** — click the star icon or press `s` to star a session. Starred

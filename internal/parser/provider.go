@@ -1083,10 +1083,11 @@ type IncrementalRequest struct {
 	// StoredSessionName is the session_name already persisted for this
 	// session ("" when the row carries none), or nil when the call site
 	// cannot supply it. Claude adopts a generated ai-title only when no
-	// /rename is present, and the producer repeats the same record many
-	// times per transcript, so the incremental parser escalates on an
-	// appended title only when it could fill a still-empty stored name.
-	// nil keeps the append incremental.
+	// user rename is present, and the producer repeats its ai-title and
+	// custom-title records many times per transcript, so the incremental
+	// parser escalates on an appended ai-title only when it could fill a
+	// still-empty stored name, and on an appended custom-title only when it
+	// differs from the stored name. nil keeps the append incremental.
 	StoredSessionName *string
 	// StoredPendingUsageOrdinal is the last assistant message without token
 	// usage in the current turn, as resolved from the committed transcript.

@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-09-28
+last_edited: 2026-09-30
 ---
 
 # Session Format Source Inventory
@@ -141,12 +141,29 @@ fixtures retain this field; missing identities remain source-local.
   found 12,261 `ai-title` records, with a mean of 15.96 records per file and a
   maximum of 454. No sampled `aiTitle` value was empty. `custom-title`
   occurred in 7 files, and `sessionName` did not occur. Native Claude parsing
-  adopts non-empty `aiTitle` when no `/rename` is present; this target leaves
-  `custom-title` and `sessionName` to compatible producer parsing. A title
-  appended after the session is stored is persisted by one escalating full
-  parse while the stored name is still empty, and repeated records stay
-  incremental after that parse. A transcript that is no longer being written
-  is not re-read, so it re-titles on its next full parse.
+  adopts non-empty `aiTitle` when no user rename is present and leaves
+  `sessionName` to compatible producer parsing. A title appended after the
+  session is stored is persisted by one escalating full parse while the stored
+  name is still empty, and repeated records stay incremental after that parse.
+  A transcript that is no longer being written is not re-read, so it re-titles
+  on its next full parse.
+
+- **User rename evidence (2026-09-30):** Claude Code 2.1.285 records a user
+  rename as
+  `{"type":"custom-title","customTitle":"<name>","sessionId":"<id>"}` appended
+  to the session transcript. The installed bundle's `saveCustomTitle` writes
+  that record, its rename handler rejects an empty name, and its session
+  metadata re-append writes the current title again after later turns; one
+  local renamed transcript carried 18 copies. The bundle's resume picker
+  displays `customTitle ?? aiTitle`. Native parsing treats a non-empty
+  `customTitle` like a `/rename` command, where the last rename record in file
+  order wins, and both outrank `aiTitle`. An appended `custom-title` escalates
+  to a full parse only when it differs from the stored session name, so the
+  repeated copies stay incremental. The same release also writes
+  `{"type":"agent-name","agentName":...}` beside each rename, but the bundle
+  also sets that agent name automatically, so it is not treated as a user
+  title. Data version 118 reparses existing sessions once, so renames made
+  before the upgrade appear.
 
 - **Evidence:** `no-public-source`.
 
@@ -463,20 +480,24 @@ fixtures retain this field; missing identities remain source-local.
   response items and token-count events through the shared fixture builder.
   Its integration test checks parsed messages and aggregate output tokens.
 
-- **Format:** Rollout JSONL files, with a separate JSONL session index used by
-  older releases for discovery and metadata. Current releases no longer write
-  `session_index.jsonl`; thread titles live in `thread_history_*.sqlite`
-  databases that agentsview does not read, so an absent index is the normal
-  state, not a rename signal (reverified 2026-08-13 against a live `~/.codex`
-  with no `session_index.jsonl` and a populated `thread_history_1.sqlite`).
-  The TUI also maintains an append-oriented `history.jsonl` whose records
-  contain `session_id`, Unix-seconds `ts`, and submitted prompt `text`;
-  configured size enforcement can rewrite a retained tail in place. Agentsview
-  consumes only the first two fields as a live-activity hint. Subagent
-  rollouts carry a structural `source.subagent` marker and a top-level
-  `parent_thread_id`; that pair defines the parent edge. `thread_source` is a
-  legacy fallback, and `session_id` identifies the root or tree rather than
-  the parent.
+- **Format:** Rollout JSONL files, with a separate JSONL session index for
+  thread names. Current releases keep thread metadata in SQLite and still
+  append an `{"id","thread_name","updated_at"}` entry to `session_index.jsonl`
+  each time a thread is renamed; see `append_thread_name` in
+  [session_index.rs](https://github.com/openai/codex/blob/92bc601ad60542c92bf0bb1e7a2eb70b84ac49d2/codex-rs/rollout/src/session_index.rs)
+  and its caller in
+  [update_thread_metadata.rs](https://github.com/openai/codex/blob/92bc601ad60542c92bf0bb1e7a2eb70b84ac49d2/codex-rs/thread-store/src/local/update_thread_metadata.rs).
+  A Codex home where no thread was ever renamed has no index, so an absent
+  index is the normal state, not a rename signal. Reverified 2026-09-30: a
+  local `~/.codex` used by codex-cli 0.159.2 had both a
+  `thread_history_1.sqlite` and a `session_index.jsonl` written that day. The
+  TUI also maintains an append-oriented `history.jsonl` whose records contain
+  `session_id`, Unix-seconds `ts`, and submitted prompt `text`; configured
+  size enforcement can rewrite a retained tail in place. Agentsview consumes
+  only the first two fields as a live-activity hint. Subagent rollouts carry a
+  structural `source.subagent` marker and a top-level `parent_thread_id`; that
+  pair defines the parent edge. `thread_source` is a legacy fallback, and
+  `session_id` identifies the root or tree rather than the parent.
 
 - **Automation (reverified 2026-09-19):** `session_meta.payload.originator` of
   `codex_exec` is durable producer evidence of a non-interactive `codex exec`
@@ -859,6 +880,20 @@ fixtures retain this field; missing identities remain source-local.
   Reverified 2026-09-04 against current local transcripts: an
   `assistant.message` can carry `data.model` and `data.outputTokens` when no
   usable `session.shutdown` metrics are present.
+
+- **Session names (2026-09-30):** A directory session's `workspace.yaml` carries
+  `name: <text>` and `user_named: <bool>`. The Copilot CLI
+  [changelog](https://github.com/github/copilot-cli/blob/8dfa6009c4a04b3a22a5ca4a7c36a056edd718dd/changelog.md)
+  at `8dfa6009c4a04b3a22a5ca4a7c36a056edd718dd` documents user naming
+  through `--name`, `/session rename`, and its `/rename` alias, and says
+  `/session rename` without an argument generates a name. The Copilot SDK's
+  generated
+  [`SessionWorkspacesGetWorkspaceResult`](https://github.com/github/copilot-sdk/blob/a2b2c18eb5a20417fc613eaaa93199f55ad22ea4/java/sdk/src/generated/java/com/github/copilot/generated/rpc/SessionWorkspacesGetWorkspaceResult.java)
+  at `a2b2c18eb5a20417fc613eaaa93199f55ad22ea4` describes `user_named` as
+  whether the user chose the name, and public `workspace.yaml` files show both
+  keys. No local Copilot session was available to check. Agentsview stores the
+  name as the session name when `user_named: true`; otherwise a generated name
+  keeps replacing the first user message.
 
 - **Store evidence:** Reverified 2026-09-10 against the published Copilot CLI
   1.0.83
@@ -1492,12 +1527,15 @@ schemas keep their existing ordering behavior.
   `task_metadata.json` (files-in-context only), the Claude-shaped
   `api_conversation_history.json`, and the Cline-shaped `ui_messages.json`.
 - **Evidence:** `source`.
-- **Upstream:** Clone `https://github.com/Kilo-Org/kilocode.git` at
-  `938919ab72e3977d1512e0363417270e3337c7b1`. The pinned
-  [task persistence](https://github.com/Kilo-Org/kilocode/blob/938919ab72e3977d1512e0363417270e3337c7b1/src/core/task-persistence/TaskHistoryStore.ts)
-  and
-  [UI message reader](https://github.com/Kilo-Org/kilocode/blob/938919ab72e3977d1512e0363417270e3337c7b1/src/core/task-persistence/taskMessages.ts)
-  own the Cline-shaped transcript. The extension was superseded by the
+- **Upstream:** Clone `https://github.com/Kilo-Org/kilocode-legacy.git` at
+  `ae046acafd17993bdf12dce0f81d9ac948e17ee8`; the legacy extension source
+  moved to this archived repository. Its
+  [API history persistence](https://github.com/Kilo-Org/kilocode-legacy/blob/ae046acafd17993bdf12dce0f81d9ac948e17ee8/src/core/task-persistence/apiMessages.ts)
+  owns `api_conversation_history.json`, and its
+  [UI message persistence](https://github.com/Kilo-Org/kilocode-legacy/blob/ae046acafd17993bdf12dce0f81d9ac948e17ee8/src/core/task-persistence/taskMessages.ts)
+  owns `ui_messages.json`. Links rechecked 2026-09-30; the previous pins
+  pointed at a `Kilo-Org/kilocode` commit from the OpenCode-based rebuild,
+  which does not contain these files. The extension was superseded by the
   OpenCode-based rebuild (public beta 2026-03-10, GA 2026-04-02); new sessions
   stopped appearing around 2026-03-21.
 - **Usage and cost:** `ui_messages.json` carries per-request `api_req_started`
@@ -2122,6 +2160,18 @@ schemas keep their existing ordering behavior.
   cached-content, thoughts, and total tokens. Streaming records may repeat
   cumulative values, so Agentsview aggregates carefully. Price is
   catalog-derived.
+- **Session names (2026-09-30):** `/rename` and the title generator append
+  `{"type":"system","subtype":"custom_title","systemPayload":{"customTitle":"<name>","titleSource":"manual"|"auto"}}`
+  to the same chat JSONL, and the last record wins. Records written before
+  `titleSource` existed omit it, and upstream treats them as user renames. See
+  `renameSession` in
+  [sessionService.ts](https://github.com/QwenLM/qwen-code/blob/17a9c84dfbbc208e984cf82c4f9487bdefc7e83a/packages/core/src/services/sessionService.ts)
+  and `readSessionTitleInfoFromFileSync` in
+  [sessionStorageUtils.ts](https://github.com/QwenLM/qwen-code/blob/17a9c84dfbbc208e984cf82c4f9487bdefc7e83a/packages/core/src/utils/sessionStorageUtils.ts)
+  at `17a9c84dfbbc208e984cf82c4f9487bdefc7e83a`. Agentsview uses the last
+  record's `customTitle` as the session name unless its source is `auto`.
+  Managed sessions keep their title in a resource-store `session_metadata`
+  record, which Agentsview does not read.
 - **Agentsview:** `internal/parser/qwen.go` and
   `internal/parser/qwen_provider.go`.
 
@@ -2316,6 +2366,22 @@ schemas keep their existing ordering behavior.
   the database disappears. Returning to a JSONL-writing OpenClaw version then
   leaves that session at its last SQLite snapshot; later JSONL messages for
   the same ID are not imported.
+- **Session names (2026-09-30):** In the SQLite layout, `session_nodes.label`
+  holds the name a user sets with `/name` or the web UI rename, and
+  `session_nodes.display_name` holds a generated title. Each transcript
+  `session_windows.session_id` maps to its node through `session_key`. The
+  tables are in
+  [openclaw-agent-schema.sql](https://github.com/openclaw/openclaw/blob/03e179c755c987aaaf748a62a1d9dd90b8646642/src/state/openclaw-agent-schema.sql)
+  at `03e179c755c987aaaf748a62a1d9dd90b8646642`. The same commit sets the
+  label in
+  [commands-name.ts](https://github.com/openclaw/openclaw/blob/03e179c755c987aaaf748a62a1d9dd90b8646642/src/auto-reply/reply/commands-name.ts)
+  for `/name` and in
+  [session-rename.ts](https://github.com/openclaw/openclaw/blob/03e179c755c987aaaf748a62a1d9dd90b8646642/ui/src/lib/session-rename.ts)
+  for the web UI. Agentsview uses the node's label as the session name for
+  every window of that node and ignores `display_name`. A non-empty label is
+  part of the member digest, so a rename reparses that session; unlabeled
+  members keep their event-only digest. Databases without these tables have no
+  names. The legacy JSONL layout is not covered.
 
 ## QClaw (`qclaw`)
 

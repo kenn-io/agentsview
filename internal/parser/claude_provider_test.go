@@ -388,7 +388,11 @@ func TestClaudeProviderParseAdoptsAITitle(t *testing.T) {
 		{name: "rename after title", extra: []string{`{"type":"ai-title","aiTitle":"Generated"}`, `{"type":"system","content":"<command-name>/rename</command-name><command-args>Renamed</command-args>"}`}, want: "Renamed"},
 		{name: "empty rename clears title", extra: []string{`{"type":"ai-title","aiTitle":"Generated"}`, `{"type":"system","content":"<command-name>/rename</command-name><command-args></command-args>"}`}, want: ""},
 		{name: "invalid titles keep fallback", extra: []string{`{"type":"ai-title","aiTitle":""}`, `{"type":"ai-title","aiTitle":42}`, `{"type":"ai-title"}`, `{malformed`}, want: ""},
-		{name: "compatible fields stay decoys", extra: []string{`{"type":"custom-title","customTitle":"Custom"}`, `{"type":"user","sessionName":"Session"}`}, want: ""},
+		{name: "custom title beats ai title", extra: []string{`{"type":"custom-title","customTitle":" Custom "}`, `{"type":"ai-title","aiTitle":"Generated"}`}, want: "Custom"},
+		{name: "custom title after rename wins", extra: []string{`{"type":"system","content":"<command-name>/rename</command-name><command-args>Renamed</command-args>"}`, `{"type":"custom-title","customTitle":"Custom"}`}, want: "Custom"},
+		{name: "rename after custom title wins", extra: []string{`{"type":"custom-title","customTitle":"Custom"}`, `{"type":"system","content":"<command-name>/rename</command-name><command-args>Renamed</command-args>"}`}, want: "Renamed"},
+		{name: "invalid custom titles keep ai title", extra: []string{`{"type":"ai-title","aiTitle":"Generated"}`, `{"type":"custom-title","customTitle":""}`, `{"type":"custom-title","customTitle":42}`, `{"type":"custom-title"}`}, want: "Generated"},
+		{name: "agent name and session name stay decoys", extra: []string{`{"type":"agent-name","agentName":"Agent"}`, `{"type":"user","sessionName":"Session"}`}, want: ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -468,7 +472,7 @@ func TestClaudeProviderUploadAndTitleBoundaries(t *testing.T) {
 	assert.Equal(t, "Uploaded question", results[0].Session.FirstMessage)
 }
 
-func TestClaudeProviderIncrementalAITitleEscalation(t *testing.T) {
+func TestClaudeProviderIncrementalTitleEscalation(t *testing.T) {
 	emptyName := ""
 	existingName := "Existing title"
 	tests := []struct {
@@ -526,6 +530,37 @@ func TestClaudeProviderIncrementalAITitleEscalation(t *testing.T) {
 			appended:     `{"type":"ai-title"}`,
 			wantStatus:   IncrementalApplied,
 			wantConsumed: int64(len(`{"type":"ai-title"}`) + 1),
+			wantMessages: 0,
+		},
+		{
+			name:         "custom title differs from stored name",
+			storedName:   &existingName,
+			appended:     `{"type":"custom-title","customTitle":"Renamed"}`,
+			wantStatus:   IncrementalNeedsFullParse,
+			wantForce:    true,
+			wantMessages: 0,
+		},
+		{
+			name:         "custom title repeats stored name",
+			storedName:   &existingName,
+			appended:     `{"type":"custom-title","customTitle":"Existing title"}`,
+			wantStatus:   IncrementalApplied,
+			wantConsumed: int64(len(`{"type":"custom-title","customTitle":"Existing title"}`) + 1),
+			wantMessages: 0,
+		},
+		{
+			name:         "custom title without stored name",
+			appended:     `{"type":"custom-title","customTitle":"Renamed"}`,
+			wantStatus:   IncrementalApplied,
+			wantConsumed: int64(len(`{"type":"custom-title","customTitle":"Renamed"}`) + 1),
+			wantMessages: 0,
+		},
+		{
+			name:         "empty custom title",
+			storedName:   &existingName,
+			appended:     `{"type":"custom-title","customTitle":""}`,
+			wantStatus:   IncrementalApplied,
+			wantConsumed: int64(len(`{"type":"custom-title","customTitle":""}`) + 1),
 			wantMessages: 0,
 		},
 		{

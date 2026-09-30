@@ -3,6 +3,7 @@ package parser
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -376,4 +377,41 @@ func TestQwenProviderFindSourceFile(t *testing.T) {
 	assert.Empty(t, findQwenTestSourceFile(t, root, "not-a-session-id"))
 	assert.Empty(t, findQwenTestSourceFile(t, root, "b0a4eadd-cb99-4165-94d9-64cad5a66d99"))
 	assert.Empty(t, findQwenTestSourceFile(t, "", sessionID))
+}
+
+func TestParseQwenSession_CustomTitle(t *testing.T) {
+	t.Parallel()
+
+	title := func(name, source string) string {
+		payload := `"customTitle":"` + name + `"`
+		if source != "" {
+			payload += `,"titleSource":"` + source + `"`
+		}
+		return `{"uuid":"t","sessionId":"sess-title","type":"system","subtype":"custom_title","systemPayload":{` + payload + `}}`
+	}
+	tests := []struct {
+		name   string
+		titles []string
+		want   string
+	}{
+		{name: "manual rename", titles: []string{title(" Renamed ", "manual")}, want: "Renamed"},
+		{name: "legacy record without source", titles: []string{title("Legacy", "")}, want: "Legacy"},
+		{name: "auto title", titles: []string{title("Generated", "auto")}, want: ""},
+		{name: "last rename wins", titles: []string{title("Old", "manual"), title("New", "manual")}, want: "New"},
+		{name: "later auto title replaces rename", titles: []string{title("Renamed", "manual"), title("Generated", "auto")}, want: ""},
+		{name: "other system record", titles: []string{`{"type":"system","subtype":"ui_telemetry","systemPayload":{"customTitle":"Decoy"}}`}, want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			user := `{"uuid":"u1","sessionId":"sess-title","timestamp":"2026-05-15T10:25:42.212Z","type":"user","cwd":"/work","message":{"role":"user","parts":[{"text":"First question"}]}}`
+			content := strings.Join(append([]string{user}, tt.titles...), "\n")
+			path := createTestFile(t, "title.jsonl", content)
+
+			sess, _, err := parseQwenTestSession(t, path, "", "local")
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, sess.SessionName)
+			assert.Equal(t, "First question", sess.FirstMessage)
+		})
+	}
 }
