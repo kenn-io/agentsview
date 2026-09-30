@@ -523,29 +523,9 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (116: Claude and Amp tool results retain explicit failure/completion status,
 // and Cline results retain image markers. Re-parse unchanged sources to restore
 // outcome evidence lost from summaries.)
-// (117: Codebuff and Freebuff rows gain git_branch from run-state.json's
-// fileContext.gitChanges.branch and termination_status from the transcript's
-// final assistant turn, and session names and counts now come only from a
-// chat-meta.json sidecar whose recorded size and mtime still match the
-// transcript. Re-parse unchanged Codebuff/Freebuff sources to backfill the
-// two columns and to drop names or counts that a stale sidecar invented.)
-// (117 also: Codebuff and Freebuff reported-cost rows are now per prompt --
-// each completed AI message's credits field becomes its own usage event
-// under the model that turn ran, replacing the single last-prompt row the
-// run-state creditsUsed total used to produce. Re-parse unchanged
-// Codebuff/Freebuff sources to replace their usage rows.)
-// (117 also: Codebuff and Freebuff transcripts keep what the parser used to
-// drop -- the agent message variant, the runtime error the app displayed,
-// attached images, pasted text, and files as labeled markers, answers to
-// "ask user" blocks, sponsored-proposal notices, and agent-list rosters.
-// Re-parse unchanged Codebuff/Freebuff sources to restore the missing
-// conversation content.)
-// (117 also: each Codebuff or Freebuff subagent's nested transcript -- its
-// prompt, reasoning, tool calls, and results -- is stored as its own
-// subagent session linked to the session that spawned it, and the spawning
-// Task call links to it. Result-content blocking applies to the nested tool
-// calls per call. Re-parse unchanged Codebuff/Freebuff sources to restore
-// the nested work.)
+// (117: Codebuff and Freebuff sessions gain git_branch, termination status,
+// per-prompt cost rows, attachment and ask-user content, and linked subagent
+// sessions. Re-parse unchanged Codebuff/Freebuff sources to backfill them.)
 const dataVersion = 117
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"

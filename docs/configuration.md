@@ -212,7 +212,7 @@ zoom_level = 120
 | `cursor_admin_email`                | Optional default Cursor Admin usage filter by member email                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `cursor_admin_user_id`              | Optional default Cursor Admin usage filter by member user ID                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `github_token`                      | Optional saved GitHub token for Gist publishing                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `result_content_blocked_categories` | Tool categories whose result content is not stored (default: `["Read", "Glob"]`). Changes apply to new ingestion and full rebuilds; see [storage maintenance](/docs/data/#storage-maintenance) for existing source-backed sessions. Codebuff and Freebuff subagents are stored as their own linked sessions, so the policy applies to each of their tool calls like any other result.                                                                                            |
+| `result_content_blocked_categories` | Tool categories whose result content is not stored (default: `["Read", "Glob"]`). Changes apply to new ingestion and full rebuilds; see [storage maintenance](/docs/data/#storage-maintenance) for existing source-backed sessions.                                                                                                                                                                                                                                              |
 | `tool_result_images`                | Retain supported inline tool-result image blocks with `"keep"` (default), or store readable `agentsview_image` placeholders with `"drop"`, or move supported images to the local asset store with `"offload"`. The setting affects future ingestion and full resyncs; use `db migrate --images` to move existing images or `db strip --images` to remove them from stored results; also configurable under **Settings > Archive content**, and changes require a daemon restart. |
 | `archive_content`                   | How much of each session the archive stores: `"full"` (default), `"transcripts"`, or `"usage"`; changes require a daemon restart — see [Archive content](#archive-content)                                                                                                                                                                                                                                                                                                       |
 | `host`                              | Interface the server binds to (default `127.0.0.1`); non-loopback values require `require_auth = true`                                                                                                                                                                                                                                                                                                                                                                           |
@@ -715,38 +715,23 @@ This is the classification label used server-side to pick the per-step LLM; the
 literal LLM is not persisted by the CLI and is not visible in the UI. Project
 names are derived from the session's working directory via git-root detection.
 
-Codebuff and Freebuff sessions report cost per prompt. The CLI resets its credit
-counter at every prompt and stamps each completed AI message with that prompt's
-credits, so each prompt's spend is recorded as its own reported-cost row in the
-daily usage breakdown — a multi-prompt session's totals now sum every prompt
-instead of only the last one. Each row is attributed to the model the turn ran
-when the format records one (a BYOK connection's model, or the agent template's
-costed model), and to the agent template (e.g. `base2-deepseek`,
-`base2-free-minimax-m3`) otherwise. The CLI's on-disk format still does not
-persist per-message input/output/cache tokens, so per-turn token figures remain
-unavailable. Reported-cost rows ride as microdollars on `money.Money` like every
-other agent, and per-model rates for `base2-*` templates are not in the embedded
-pricing tables, so cache savings for these rows resolve to zero by design rather
-than an aggregator bug.
+Codebuff and Freebuff sessions report cost only, as one reported-cost row per
+prompt. The CLI's on-disk format does not persist per-message input/output/cache
+tokens. A row is attributed to the model the turn ran when the session records
+one, such as a bring-your-own-key model, and otherwise to the agent template
+(e.g. `base2-deepseek`, `base2-free-minimax-m3`). Per-model rates for `base2-*`
+templates are not in the embedded pricing tables, so cache savings for these
+rows are zero.
 
-Each subagent the agent spawned is stored as its own session, linked to the
-session that spawned it, with its prompt, reasoning, and tool calls; the
-spawning call's result is the subagent's final answer. Subagent status messages
-and every other content-bearing message variant appear in the transcript as
-assistant messages. Attached images, pasted text, and files
-show up as labeled markers (`[Image: ...]`, `[Text attachment: N chars]`,
-`[File: ...]`) in the prompt they belonged to — a session that was mostly an
-attachment no longer reads as nearly empty. A runtime error the app displayed
-and answers the user gave to "ask user" prompts are preserved too, so the
-transcript shows both the question and the reply.
+Each subagent a Codebuff or Freebuff session spawned is stored as its own
+session, linked to its parent. Attached images, pasted text, and files appear
+as labeled markers such as `[Image: ...]` and `[Text attachment: N chars]`.
 
-Freebuff does not have its own config key — it shares the Codebuff provider for
-discovery and the parser auto-classifies sessions. The Freebuff CLI reads its
-configuration root from `FREEBUFF_CONFIG_DIR`, and AgentsView honors it: setting
-it re-roots the default `projects/` discovery path to `<FREEBUFF_CONFIG_DIR>/projects`
-(the value must be an absolute path). `CODEBUFF_DIR` or `agents.codebuff.dirs`
-still take precedence when manicode stores its projects directory somewhere else;
-this covers both Codebuff and Freebuff sessions.
+Freebuff has no config key of its own. It shares the Codebuff provider, and the
+parser classifies each session. Both CLIs move their config directory to
+`FREEBUFF_CONFIG_DIR` when it is set, and AgentsView then discovers sessions
+under `<FREEBUFF_CONFIG_DIR>/projects` instead of `~/.config/manicode/projects`.
+`CODEBUFF_DIR` or `agents.codebuff.dirs` take precedence over both.
 
 **OpenHands CLI shallow watch:** OpenHands stores each conversation in its own
 subdirectory, which would consume one recursive file watch per session and can
