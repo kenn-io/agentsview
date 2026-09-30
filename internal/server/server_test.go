@@ -5379,6 +5379,36 @@ func TestGetVersion(t *testing.T) {
 	assert.Equal(t, db.CurrentDataVersion(), resp.DataVersion)
 }
 
+func TestGetVersionSessionStatsAvailability(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	reader, err := db.OpenReadOnly(t.Context(), database.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = reader.Close() })
+	for _, tc := range []struct {
+		name      string
+		store     db.Store
+		available bool
+		status    int
+	}{
+		{"sqlite", database, true, http.StatusOK},
+		{"read-only sqlite", reader, true, http.StatusOK},
+		{"mirror", readOnlyTestStore{database}, false, http.StatusNotImplemented},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.Config{Host: "127.0.0.1", Port: 0}
+			handler := wrapTestHandler(cfg, server.New(cfg, tc.store, nil).Handler())
+			version := httptest.NewRecorder()
+			handler.ServeHTTP(version, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/version", nil))
+			assertStatus(t, version, http.StatusOK)
+			assert.Equal(t, tc.available, decode[map[string]any](t, version)["session_stats_available"])
+
+			stats := httptest.NewRecorder()
+			handler.ServeHTTP(stats, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/session-stats?include_git_outcomes=true", nil))
+			assertStatus(t, stats, tc.status)
+		})
+	}
+}
+
 func TestGetVersion_Default(t *testing.T) {
 	te := setup(t)
 

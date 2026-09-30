@@ -2396,6 +2396,7 @@
   "analytics_outcome_prs_merged": "Pull requests merged",
   "analytics_outcome_include_prs": "Include pull requests",
   "analytics_outcome_include_prs_hint": "Asks GitHub once per repository, which can take minutes.",
+  "analytics_outcome_backend_unavailable": "Outcome totals are unavailable on this backend.",
   "analytics_outcome_configure_github": "Configure GitHub in Settings to load pull-request totals.",
   "analytics_outcome_loading": "Reading git history...",
   "analytics_outcome_empty": "No git activity in this window.",

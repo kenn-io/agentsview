@@ -7616,6 +7616,8 @@ components:
           type: boolean
         read_only:
           type: boolean
+        session_stats_available:
+          type: boolean
         version:
           type: string
       required:
@@ -7623,6 +7625,7 @@ components:
         - commit
         - build_date
         - insight_generation_available
+        - session_stats_available
         - api_version
         - data_version
       type: object

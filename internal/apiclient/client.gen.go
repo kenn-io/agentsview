@@ -21327,6 +21327,7 @@ type VersionInfo struct {
 	DataVersion                int64  `json:"data_version"`
 	InsightGenerationAvailable bool   `json:"insight_generation_available"`
 	ReadOnly                   *bool  `json:"read_only,omitempty"`
+	SessionStatsAvailable      bool   `json:"session_stats_available"`
 	Version                    string `json:"version" validate:"required"`
 }
 

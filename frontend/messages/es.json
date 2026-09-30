@@ -2398,6 +2398,7 @@
   "analytics_outcome_prs_merged": "Pull requests fusionados",
   "analytics_outcome_include_prs": "Incluir pull requests",
   "analytics_outcome_include_prs_hint": "Consulta GitHub una vez por repositorio, lo que puede tardar minutos.",
+  "analytics_outcome_backend_unavailable": "Los totales de resultados no están disponibles en este backend.",
   "analytics_outcome_configure_github": "Configura GitHub en Ajustes para cargar los totales de solicitudes de extracción.",
   "analytics_outcome_loading": "Leyendo el historial de git...",
   "analytics_outcome_empty": "Sin actividad de git en este periodo.",

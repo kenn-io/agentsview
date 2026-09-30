@@ -26,6 +26,7 @@ async function render(props: {
       error: null,
       includePullRequests: false,
       githubConfigured: true,
+      backendAvailable: true,
       onIncludePullRequests: () => {},
       ...props,
     },

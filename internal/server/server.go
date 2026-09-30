@@ -44,6 +44,7 @@ type VersionInfo struct {
 	BuildDate                  string `json:"build_date"`
 	ReadOnly                   bool   `json:"read_only,omitempty"`
 	InsightGenerationAvailable bool   `json:"insight_generation_available"`
+	SessionStatsAvailable      bool   `json:"session_stats_available"`
 	APIVersion                 int    `json:"api_version"`
 	DataVersion                int    `json:"data_version"`
 }

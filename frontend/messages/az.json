@@ -2398,6 +2398,7 @@
   "analytics_outcome_prs_merged": "Birləşdirilən pull request-lər",
   "analytics_outcome_include_prs": "Pull request-ləri daxil et",
   "analytics_outcome_include_prs_hint": "Hər depo üçün GitHub-a ayrıca sorğu göndərir, bu bir neçə dəqiqə çəkə bilər.",
+  "analytics_outcome_backend_unavailable": "Bu arxa sistemdə nəticə cəmləri əlçatan deyil.",
   "analytics_outcome_configure_github": "Pull request cəmlərini yükləmək üçün Ayarlarda GitHub-u konfiqurasiya edin.",
   "analytics_outcome_loading": "git tarixçəsi oxunur...",
   "analytics_outcome_empty": "Bu dövrdə git fəaliyyəti yoxdur.",

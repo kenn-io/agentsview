@@ -8,6 +8,7 @@ import { insights } from "../../stores/insights.svelte.js";
 import { router } from "../../stores/router.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
 import { settings } from "../../stores/settings.svelte.js";
+import { sync } from "../../stores/sync.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
 import { yokedDates } from "../../stores/yokedDates.svelte.js";
 import sourceRaw from "./AnalyticsPage.svelte?raw";
@@ -70,6 +71,7 @@ afterEach(() => {
   analytics.recentlyActive = false;
   outcomeTotals.reset();
   settings.githubConfigured = false;
+  sync.serverVersion = null;
   analytics.selectedDow = null;
   analytics.selectedHour = null;
   sessions.filters.date = "";
@@ -83,7 +85,7 @@ afterEach(() => {
 });
 
 describe("AnalyticsPage outcome window", () => {
-  async function start() {
+  async function start(backendAvailable: boolean | null = true) {
     vi.stubGlobal(
       "ResizeObserver",
       class {
@@ -95,6 +97,18 @@ describe("AnalyticsPage outcome window", () => {
     vi.spyOn(sessions, "load").mockResolvedValue();
     const load = vi.spyOn(outcomeTotals, "load").mockResolvedValue();
     settings.githubConfigured = true;
+    sync.serverVersion =
+      backendAvailable === null
+        ? null
+        : {
+            version: "test",
+            commit: "test",
+            build_date: "",
+            api_version: 10,
+            data_version: 1,
+            insight_generation_available: false,
+            session_stats_available: backendAvailable,
+          };
     router.route = "sessions";
     router.isRootPath = false;
     router.params = { date_from: "2026-03-01", date_to: "2026-03-31" };
@@ -104,6 +118,38 @@ describe("AnalyticsPage outcome window", () => {
     await flushEffects();
     return load;
   }
+
+  it.each([false, null])(
+    "skips outcome requests until backend support is known (%s)",
+    async (available) => {
+      const load = await start(available);
+      expect(load).not.toHaveBeenCalled();
+      expect(document.querySelector(".outcome-load-prs")).toBeNull();
+      expect(document.querySelector(".outcome-container")?.textContent).toContain(
+        available === false
+          ? "Outcome totals are unavailable on this backend."
+          : "Reading git history...",
+      );
+      analytics.selectedDate = "2026-03-08";
+      document.querySelector<HTMLButtonElement>('button[aria-label="Refresh analytics"]')!.click();
+      await flushEffects();
+      expect(load).not.toHaveBeenCalled();
+
+      sync.serverVersion = {
+        version: "test",
+        commit: "test",
+        build_date: "",
+        api_version: 10,
+        data_version: 1,
+        insight_generation_available: false,
+        session_stats_available: true,
+        read_only: true,
+      };
+      await flushEffects();
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(document.querySelector(".outcome-load-prs")).not.toBeNull();
+    },
+  );
 
   it("updates the PR action when GitHub configuration changes", async () => {
     await start();

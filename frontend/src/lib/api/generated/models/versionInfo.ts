@@ -9,5 +9,6 @@ export interface VersionInfo {
   data_version: number;
   insight_generation_available: boolean;
   read_only?: boolean;
+  session_stats_available: boolean;
   version: string;
 }

@@ -7,6 +7,7 @@
     stats: DbStatsOutcomeStats | null;
     loading: boolean;
     unavailable?: boolean;
+    backendAvailable: boolean | undefined;
     githubConfigured: boolean;
     error: string | null;
     /** True once the caller has asked for the GitHub lookups too. */
@@ -18,6 +19,7 @@
     stats,
     loading,
     unavailable = false,
+    backendAvailable,
     githubConfigured,
     error,
     includePullRequests,
@@ -60,12 +62,13 @@
   });
 
   const skipped = $derived(stats?.skipped ?? []);
+  const canLoad = $derived(backendAvailable === true && !unavailable);
 </script>
 
 <div class="outcome-container">
   <div class="outcome-header">
     <h3 class="chart-title">{m.analytics_outcome_title()}</h3>
-    {#if !unavailable && githubConfigured && !includePullRequests}
+    {#if canLoad && githubConfigured && !includePullRequests}
       <button
         class="outcome-load-prs"
         title={m.analytics_outcome_include_prs_hint()}
@@ -76,15 +79,17 @@
     {/if}
   </div>
 
-  {#if !unavailable && !githubConfigured}
+  {#if canLoad && !githubConfigured}
     <div class="outcome-empty">{m.analytics_outcome_configure_github()}</div>
   {/if}
 
-  {#if unavailable}
+  {#if backendAvailable === false}
+    <div class="outcome-empty">{m.analytics_outcome_backend_unavailable()}</div>
+  {:else if unavailable}
     <div class="outcome-empty">{m.analytics_outcome_filters_unsupported()}</div>
   {:else if error}
     <div class="outcome-error">{error}</div>
-  {:else if loading && !stats}
+  {:else if backendAvailable === undefined || (loading && !stats)}
     <div class="outcome-loading">{m.analytics_outcome_loading()}</div>
   {:else if !stats}
     <div class="outcome-empty">{m.analytics_outcome_empty()}</div>

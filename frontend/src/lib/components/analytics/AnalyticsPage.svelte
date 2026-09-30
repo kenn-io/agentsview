@@ -365,6 +365,7 @@
   ));
 
   const outcomeWindow = $derived.by(() => {
+    if (sync.serverVersion?.session_stats_available !== true) return null;
     const from = analytics.selectedDate ?? analytics.selectedActivityRange?.from ?? analytics.from;
     const to = analytics.selectedDate ?? analytics.selectedActivityRange?.to ?? analytics.to;
     const start = parseLocalDate(from);
@@ -753,6 +754,7 @@
           stats={outcomeTotals.stats}
           loading={outcomeTotals.loading}
           unavailable={outcomeFiltersUnsupported}
+          backendAvailable={sync.serverVersion?.session_stats_available}
           githubConfigured={settings.githubConfigured}
           error={outcomeTotals.error}
           includePullRequests={outcomeTotals.includePullRequests}
