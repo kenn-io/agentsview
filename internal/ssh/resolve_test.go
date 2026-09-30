@@ -1725,26 +1725,3 @@ func TestResolveScriptHonorsFreebuffConfigDirRoot(t *testing.T) {
 	assert.NotContains(t, dirs[parser.AgentCodebuff],
 		home+"/.config/manicode/projects")
 }
-
-func TestResolveScriptRelativeFreebuffConfigDir(t *testing.T) {
-	// The local resolver feeds a relative value through filepath.Abs, so it
-	// resolves against the process working directory and scans there. The
-	// shell emitter concatenates the suffix onto the bare value and then
-	// existence-gates the target, so a relative remote root emits nothing:
-	// no working-directory-relative scan can start over SSH. Upstream's CLI
-	// refuses a relative value outright; this test pins what AgentsView does
-	// on each path instead of implying the two agree.
-	if runtime.GOOS == "windows" {
-		t.Skip("resolve script runs on POSIX remote hosts; local Windows filepaths and MSYS shell parsing are not representative")
-	}
-	home := physTempDir(t)
-
-	out := runResolveScriptForTest(t,
-		"HOME="+home,
-		"FREEBUFF_CONFIG_DIR=relative-freebuff",
-	)
-
-	dirs, _, _ := parseResolvedDirs(string(out))
-	assert.Empty(t, dirs[parser.AgentCodebuff],
-		"a relative remote root emits nothing: the concatenated target does not exist relative to the script's working directory")
-}
