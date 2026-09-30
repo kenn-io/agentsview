@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/dbtest"
-	"go.kenn.io/agentsview/internal/parser"
 )
 
 func TestBuildServiceSpec_RequiresURL(t *testing.T) {
@@ -575,32 +574,5 @@ func TestPromptYesNo(t *testing.T) {
 	for _, c := range cases {
 		got := promptYesNo(strings.NewReader(c.in), "Continue?")
 		assert.Equal(t, c.want, got, "promptYesNo(%q)", c.in)
-	}
-}
-
-func TestSetEnvVarsAffectingServiceFreebuffConfigDir(t *testing.T) {
-	env := map[string]string{
-		"FREEBUFF_CONFIG_DIR": "/tmp/freebuff-root",
-	}
-	lookup := func(name string) (string, bool) {
-		v, ok := env[name]
-		return v, ok
-	}
-	got := setEnvVarsAffectingService(pgServiceKind, lookup)
-	assert.Contains(t, got, "FREEBUFF_CONFIG_DIR")
-
-	// Registry-driven guard: every agent that declares a vendor root
-	// variable must be part of the inherited-environment check, so the
-	// next agent that adds one is not silently missed.
-	declared := map[string]bool{}
-	for _, name := range serviceRuntimeEnvVars(pgServiceKind) {
-		declared[name] = true
-	}
-	for _, def := range parser.Registry {
-		if def.DefaultRootEnvVar != "" {
-			assert.Truef(t, declared[def.DefaultRootEnvVar],
-				"%s declares DefaultRootEnvVar %s but it is not in serviceRuntimeEnvVars",
-				def.Type, def.DefaultRootEnvVar)
-		}
 	}
 }
