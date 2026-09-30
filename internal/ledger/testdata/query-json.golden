@@ -1,0 +1,188 @@
+[
+  {
+    "event": {
+      "actor_ref": null,
+      "causation_id": null,
+      "correlation_id": null,
+      "event_class": "route",
+      "event_id": "0190f5a2-7c3e-7000-8000-000000000005",
+      "object_ref": null,
+      "payload": 42,
+      "payload_tier": "metadata_only",
+      "source": "fixture-a",
+      "source_seq": 5,
+      "timestamp": "2026-01-02T03:04:09.120Z",
+      "zone": "default"
+    },
+    "zone": "default"
+  },
+  {
+    "event": {
+      "actor_ref": null,
+      "causation_id": null,
+      "correlation_id": null,
+      "event_class": "ingest",
+      "event_id": "0190f5a2-7c3e-7000-8000-000000000004",
+      "object_ref": null,
+      "payload": "just a string",
+      "payload_tier": "metadata_only",
+      "source": "fixture-a",
+      "source_seq": 4,
+      "timestamp": "2026-01-02T03:04:08.123456789Z",
+      "zone": "default"
+    },
+    "zone": "default"
+  },
+  {
+    "event": {
+      "actor_ref": null,
+      "causation_id": null,
+      "correlation_id": null,
+      "event_class": "note_meta",
+      "event_id": "0190f5a2-7c3e-7000-8000-000000000003",
+      "object_ref": null,
+      "payload": {
+        "subsystem": "hook-unicode",
+        "summary": "unicode <>&  ",
+        "text": "café 日本 😀 <b>&amp;</b>    \"q\" \\ \t\n\r \u0001 \u001f  /"
+      },
+      "payload_tier": "confidential",
+      "source": "fixture-a",
+      "source_seq": 3,
+      "timestamp": "2026-01-02T03:04:07.123456Z",
+      "zone": "default"
+    },
+    "zone": "default"
+  },
+  {
+    "event": {
+      "actor_ref": "machine:fixture-a",
+      "causation_id": "0190f5a2-7c3e-7000-8000-000000000001",
+      "correlation_id": "0190f5a2-7c3e-7000-8000-0000000000c1",
+      "event_class": "state_change",
+      "event_id": "0190f5a2-7c3e-7000-8000-000000000002",
+      "object_ref": "subsystem:fixture",
+      "payload": {
+        "empty_arr": [],
+        "empty_obj": {},
+        "floats": [
+          1.0,
+          0.1,
+          -0.0,
+          1.5e-7,
+          1e+16,
+          1.2345678901234568e+20,
+          1e+300,
+          5e-324,
+          123456.789,
+          0.00001,
+          1234567890123456.0
+        ],
+        "ints": [
+          0,
+          -1,
+          9007199254740993,
+          18446744073709551615,
+          -9223372036854775808
+        ],
+        "kind": "fixture",
+        "nested": {
+          "a": {
+            "b": true,
+            "c": false,
+            "y": null
+          },
+          "z": 1
+        },
+        "subsystem": "fixture",
+        "summary": "floats and ints"
+      },
+      "payload_tier": "structured",
+      "source": "fixture-a",
+      "source_seq": 2,
+      "timestamp": "2026-01-02T03:04:06.100Z",
+      "zone": "default"
+    },
+    "zone": "default"
+  },
+  {
+    "event": {
+      "actor_ref": null,
+      "causation_id": null,
+      "correlation_id": null,
+      "event_class": "health",
+      "event_id": "0190f5a2-7c3e-7000-8000-000000000001",
+      "object_ref": null,
+      "payload": null,
+      "payload_tier": "metadata_only",
+      "source": "fixture-a",
+      "source_seq": 1,
+      "timestamp": "2026-01-02T03:04:05Z",
+      "zone": "default"
+    },
+    "zone": "default"
+  },
+  {
+    "event": {
+      "actor_ref": "machine:host-b",
+      "causation_id": null,
+      "correlation_id": null,
+      "event_class": "note_meta",
+      "event_id": "0190f5a2-7c3e-7000-8000-000000000109",
+      "object_ref": null,
+      "payload": {
+        "i": 9,
+        "subsystem": "sub-0",
+        "summary": "event 9"
+      },
+      "payload_tier": "metadata_only",
+      "source": "host-with-dash",
+      "source_seq": 10,
+      "timestamp": "2026-01-02T05:04:14.999999999Z",
+      "zone": "ops"
+    },
+    "zone": "ops"
+  },
+  {
+    "event": {
+      "actor_ref": "machine:host-b",
+      "causation_id": null,
+      "correlation_id": null,
+      "event_class": "approval",
+      "event_id": "0190f5a2-7c3e-7000-8000-000000000108",
+      "object_ref": null,
+      "payload": {
+        "i": 8,
+        "subsystem": "sub-2",
+        "summary": "event 8"
+      },
+      "payload_tier": "confidential",
+      "source": "host-with-dash",
+      "source_seq": 9,
+      "timestamp": "2026-01-02T05:04:13.000000005Z",
+      "zone": "ops"
+    },
+    "zone": "ops"
+  },
+  {
+    "event": {
+      "actor_ref": "machine:host-b",
+      "causation_id": null,
+      "correlation_id": null,
+      "event_class": "health",
+      "event_id": "0190f5a2-7c3e-7000-8000-000000000107",
+      "object_ref": null,
+      "payload": {
+        "i": 7,
+        "subsystem": "sub-1",
+        "summary": "event 7"
+      },
+      "payload_tier": "structured",
+      "source": "host-with-dash",
+      "source_seq": 8,
+      "timestamp": "2026-01-02T05:04:12.000005Z",
+      "zone": "ops"
+    },
+    "zone": "ops"
+  }
+]

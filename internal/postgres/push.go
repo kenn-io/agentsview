@@ -347,6 +347,10 @@ func (s *Sync) PushWithOptions(
 		func() error { return s.syncCursorUsageEvents(ctx) }); err != nil {
 		return result, err
 	}
+	if err := timedPushSetupStep("ledger segment sync",
+		func() error { return s.syncLedgerSegments(ctx, full) }); err != nil {
+		return result, err
+	}
 	cutoff := time.Now().UTC().Format(LocalSyncTimestampLayout)
 
 	// Candidate selection shares ListSessionsForMirrorWindow with the

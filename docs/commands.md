@@ -1663,6 +1663,54 @@ those files.
 
 ______________________________________________________________________
 
+### `agentsview ledger`
+
+Append to, inspect and maintain the optional [event ledger](/docs/event-ledger/).
+Appending, importing and rebuilding the index require `[ledger] enabled = true`.
+
+```bash
+agentsview ledger append --class <class> [--tier <tier>] [--zone <zone>] \
+  [--subsystem <name>] [--summary <text>] [--payload <json>] \
+  [--actor <ref>] [--object <ref>]
+agentsview ledger query [--since 7d] [--subsystem <glob>]... [--class <class>] \
+  [--zone <zone>] [--limit 100] [--format text|json]
+agentsview ledger status [--zone <zone>] [--format json]
+agentsview ledger verify [--zone <zone>] [--full]
+agentsview ledger import --zone <zone> --segments <dir>
+agentsview ledger export --zone <zone> --dir <dir> [--source <source>]
+agentsview ledger rebuild-index --zone <zone>
+```
+
+`ledger append` writes one event as a new sealed segment from this host's
+source. `--class` accepts `state-change`, `state_change` and `statechange`
+forms. The tier defaults to `structured` when the event has a payload and to
+`metadata-only` otherwise. `--subsystem` and `--summary` set
+`payload.subsystem` and `payload.summary`.
+
+`ledger status` prints segment and event counts, the latest sequence number per
+source, sequence gaps, remembered verify failures and the last import result
+for each zone. `ledger verify` checks checksums incrementally; `--full`
+re-reads every segment. Verification exits non-zero when a check fails.
+
+`ledger import` stores every new segment file from a jilog-format segments
+directory after checking its name and checksum, and exits non-zero when any
+file was refused. Refused files are retried on the next import. `ledger export`
+writes a zone as jilog-format files and never replaces an existing file.
+`ledger rebuild-index` rebuilds a zone's query index from its stored segments.
+
+`ledger query` prints matching events newest first per zone in the same text
+and JSON formats as `jilog query`. `--since` takes `24h`, `7d`, `4w` or a
+`YYYY-MM-DD` date (UTC midnight). `--subsystem` matches `payload.subsystem`,
+or `object_ref` after `subsystem:`; a trailing `*` matches a prefix, and
+repeated flags are OR-ed. Filters run before `--limit`, so older matches are
+never cut off. `--limit` accepts 1 to 1000 events per zone and defaults to 100.
+
+`query`, `status`, `append` and `verify` go through the local daemon when one
+is running, and open the archive directly otherwise. `import`, `export` and
+`rebuild-index` always open the archive directly; stop the daemon first.
+
+______________________________________________________________________
+
 ### `agentsview mcp`
 
 Run a read-only Model Context Protocol server for assistant clients that can
