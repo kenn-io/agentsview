@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"log"
 	"net/url"
@@ -446,6 +447,134 @@ func TestCanWriteRawSyncSchemaAcceptsSequenceFreeJobIDs(t *testing.T) {
 	writable, err := CanWriteRawSyncSchema(t.Context(), pg, schema)
 	require.NoError(t, err)
 	assert.True(t, writable)
+}
+
+// Concurrent pushers each re-run the append-only guard DDL. Before the raw
+// custody schema lock, two of them replaced the shared guard function at the
+// same time and one failed with SQLSTATE XX000 ("tuple concurrently updated").
+func TestEnsureRawIngestSchemaPGSerializesConcurrentGuardInstallers(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanSchemaTestPG(t, pgURL)
+	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
+
+	pg, err := Open(pgURL, schemaTestSchema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, pg.Close()) })
+	require.NoError(t, EnsureSchema(t.Context(), pg, schemaTestSchema))
+
+	// Drop the guards so the installer's trigger creation is part of the
+	// window, then hold raw_manifests so that creation blocks and both
+	// installers sit inside the guard DDL at once.
+	_, err = pg.ExecContext(t.Context(), `
+		DROP TRIGGER raw_manifests_append_only ON raw_manifests;
+		DROP TRIGGER raw_manifest_entries_append_only ON raw_manifest_entries;
+		DROP TRIGGER raw_manifest_objects_append_only ON raw_manifest_objects`)
+	require.NoError(t, err)
+
+	blocker, err := pg.BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+	defer func() { _ = blocker.Rollback() }()
+	_, err = blocker.ExecContext(t.Context(),
+		`LOCK TABLE raw_manifests IN ACCESS EXCLUSIVE MODE`)
+	require.NoError(t, err)
+
+	dsnA, err := appendConnParams(pgURL, map[string]string{
+		"application_name": "raw-guard-a",
+	})
+	require.NoError(t, err)
+	dsnB, err := appendConnParams(pgURL, map[string]string{
+		"application_name": "raw-guard-b",
+	})
+	require.NoError(t, err)
+	installerA, err := Open(dsnA, schemaTestSchema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, installerA.Close()) })
+	installerB, err := Open(dsnB, schemaTestSchema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, installerB.Close()) })
+
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for _, installer := range []*sql.DB{installerA, installerB} {
+		go func(conn *sql.DB) {
+			<-start
+			results <- ensureRawIngestSchemaPG(t.Context(), conn)
+		}(installer)
+	}
+	close(start)
+	require.Eventually(t, func() bool {
+		var waiting int
+		err := pg.QueryRowContext(t.Context(), `
+			SELECT COUNT(*)
+			FROM pg_stat_activity
+			WHERE application_name IN ('raw-guard-a', 'raw-guard-b')
+				AND wait_event_type = 'Lock'
+		`).Scan(&waiting)
+		return err == nil && waiting == 2
+	}, 5*time.Second, 10*time.Millisecond,
+		"both installers should reach the locked guard DDL")
+
+	require.NoError(t, blocker.Commit(), "release raw_manifests")
+	require.NoError(t, <-results, "first concurrent installer")
+	require.NoError(t, <-results, "second concurrent installer")
+
+	var guards int
+	require.NoError(t, pg.QueryRowContext(t.Context(), `
+		SELECT COUNT(*)
+		FROM pg_trigger
+		WHERE tgrelid IN (
+			'raw_manifests'::regclass,
+			'raw_manifest_entries'::regclass,
+			'raw_manifest_objects'::regclass
+		) AND NOT tgisinternal`).Scan(&guards))
+	assert.Equal(t, 3, guards,
+		"concurrent installers must leave every append-only guard installed")
+}
+
+// A pusher against a schema whose guards are already current must not wait
+// for, or contend with, another process installing them.
+func TestEnsureRawIngestSchemaPGSkipsInstallerLockWhenGuardsAreCurrent(t *testing.T) {
+	pg, _ := newRawIngestTestStore(t)
+
+	installer, err := pg.BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+	defer func() { _ = installer.Rollback() }()
+	require.NoError(t, lockSyncMetadataRow(
+		t.Context(), installer, rawIngestSchemaLockKey,
+	))
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, ensureRawIngestSchemaPG(ctx, pg),
+		"current guards must not wait on the installer lock")
+}
+
+// A guard function whose body no longer matches the shipped source must be
+// replaced, even though the function and every trigger already exist.
+func TestEnsureRawIngestSchemaPGReplacesStaleGuardFunction(t *testing.T) {
+	pg, store := newRawIngestTestStore(t)
+	identity := rawIngestIdentity(t, "tenant-a")
+	object := rawIngestObject(t, "a", 7)
+	require.NoError(t, store.RecordVerifiedObject(t.Context(), identity, object))
+	manifest := rawIngestManifest(
+		t, identity, "capture-a", "", rawIngestCapturedAt(), object,
+	)
+	_, err := store.CommitManifest(t.Context(), manifest, "parser-data-17")
+	require.NoError(t, err)
+
+	_, err = pg.ExecContext(t.Context(), `
+		CREATE OR REPLACE FUNCTION raw_ingest_reject_accepted_mutation()
+		RETURNS trigger LANGUAGE plpgsql
+		AS $stale$ BEGIN RETURN OLD; END; $stale$`)
+	require.NoError(t, err)
+
+	require.NoError(t, ensureRawIngestSchemaPG(t.Context(), pg))
+
+	_, err = pg.ExecContext(t.Context(), `DELETE FROM raw_manifest_objects`)
+	var pgErr *pgconn.PgError
+	require.ErrorAs(t, err, &pgErr,
+		"the reinstalled guard must reject accepted manifest mutations")
+	assert.Equal(t, "55000", pgErr.Code)
 }
 
 func repeatedHex(value string) string {

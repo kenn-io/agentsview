@@ -184,16 +184,20 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_raw_upload_sessions_open_object
     WHERE state = 'open';
 `
 
-const rawIngestAppendOnlyDDL = `
-CREATE OR REPLACE FUNCTION raw_ingest_reject_accepted_mutation()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $raw_ingest_immutable$
+// rawIngestAppendOnlyFunctionBody is the guard function source. The install
+// probe compares it with pg_proc.prosrc so a changed body is reinstalled.
+const rawIngestAppendOnlyFunctionBody = `
 BEGIN
     RAISE EXCEPTION 'accepted raw custody metadata is append-only'
         USING ERRCODE = '55000';
 END;
-$raw_ingest_immutable$;
+`
+
+const rawIngestAppendOnlyDDL = `
+CREATE OR REPLACE FUNCTION raw_ingest_reject_accepted_mutation()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $raw_ingest_immutable$` + rawIngestAppendOnlyFunctionBody + `$raw_ingest_immutable$;
 
 DO $raw_ingest_triggers$
 BEGIN
@@ -227,6 +231,27 @@ BEGIN
 END;
 $raw_ingest_triggers$;
 `
+
+// rawIngestAppendOnlyGuardsCurrentSQL reports whether the current guard
+// function and all three append-only triggers are installed.
+const rawIngestAppendOnlyGuardsCurrentSQL = `
+SELECT EXISTS (
+    SELECT 1
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = current_schema()
+        AND p.proname = 'raw_ingest_reject_accepted_mutation'
+        AND p.prosrc = $1
+) AND (
+    SELECT count(*)
+    FROM pg_trigger
+    WHERE (tgname = 'raw_manifests_append_only'
+            AND tgrelid = 'raw_manifests'::regclass)
+        OR (tgname = 'raw_manifest_entries_append_only'
+            AND tgrelid = 'raw_manifest_entries'::regclass)
+        OR (tgname = 'raw_manifest_objects_append_only'
+            AND tgrelid = 'raw_manifest_objects'::regclass)
+) = 3`
 
 const rawSyncWritePrivilegeSQL = `
 WITH required_table_privileges(table_name, privilege) AS (
@@ -347,7 +372,7 @@ func ensureRawIngestSchemaPG(ctx context.Context, db *sql.DB) error {
 	if err := ensureRawProjectionJobColumns(ctx, db); err != nil {
 		return err
 	}
-	if _, err := db.ExecContext(ctx, rawIngestAppendOnlyDDL); err != nil {
+	if err := installRawIngestAppendOnlyGuardsPG(ctx, db); err != nil {
 		if !rawIngestAppendOnlyUnsupported(err) {
 			return fmt.Errorf("installing raw ingest append-only guards: %w", err)
 		}
@@ -377,6 +402,47 @@ func ensureRawProjectionJobColumns(ctx context.Context, q interface {
 	_, err = q.ExecContext(ctx, `ALTER TABLE raw_ingest_jobs ADD COLUMN IF NOT EXISTS projection_generation BIGINT NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS projection_selected BOOLEAN NOT NULL DEFAULT true`)
 	return err
 }
+
+// installRawIngestAppendOnlyGuardsPG installs the append-only guard function
+// and triggers unless the current ones are already in place. Concurrent
+// installers would otherwise update the shared guard function's pg_proc row
+// at the same time, which fails all but one with SQLSTATE XX000 ("tuple
+// concurrently updated"), so installation runs under the raw custody schema
+// lock. CockroachDB commits the open transaction before DDL
+// (autocommit_before_ddl), so the lock serializes installers only on
+// PostgreSQL; the catalog race it prevents is PostgreSQL-specific.
+func installRawIngestAppendOnlyGuardsPG(
+	ctx context.Context, db *sql.DB,
+) error {
+	var current bool
+	if err := db.QueryRowContext(ctx, rawIngestAppendOnlyGuardsCurrentSQL,
+		rawIngestAppendOnlyFunctionBody,
+	).Scan(&current); err != nil {
+		return fmt.Errorf("probing raw ingest append-only guards: %w", err)
+	}
+	if current {
+		return nil
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning raw ingest guard installation: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := lockSyncMetadataRow(ctx, tx, rawIngestSchemaLockKey); err != nil {
+		return fmt.Errorf("locking raw ingest schema installation: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, rawIngestAppendOnlyDDL); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing raw ingest guard installation: %w", err)
+	}
+	return nil
+}
+
+// rawIngestSchemaLockKey names the sync_metadata row that serializes raw
+// custody guard installation across concurrent pushers.
+const rawIngestSchemaLockKey = "raw_ingest_schema_lock"
 
 func rawIngestAppendOnlyUnsupported(err error) bool {
 	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {

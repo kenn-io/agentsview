@@ -353,7 +353,7 @@ func (s antigravityCLISourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 			WatchRoot{
 				Path:         filepath.Join(root, "conversations"),
 				Recursive:    false,
-				IncludeGlobs: []string{"*.db", "*.db-*", "*.pb", "*.trajectory.json"},
+				IncludeGlobs: []string{"*.db", "*.db-wal", "*.pb", "*.trajectory.json"},
 				DebounceKey:  string(AgentAntigravityCLI) + ":conversations:" + root,
 			},
 			WatchRoot{
@@ -678,14 +678,16 @@ func antigravityCLISourcePathForEvent(root, path string) (string, string, bool) 
 	}
 	name := parts[1]
 	switch {
+	// A bare ".db-shm" event never resolves to the session: every parse's
+	// read-only open rewrites that index, so honoring it would make each
+	// parse schedule the next one. Committed writes land in the main file
+	// or the -wal.
 	case strings.HasSuffix(name, ".db") ||
-		strings.HasSuffix(name, ".db-wal") ||
-		strings.HasSuffix(name, ".db-shm"):
+		strings.HasSuffix(name, ".db-wal"):
 		if parts[0] != "conversations" {
 			return "", "", false
 		}
-		base := strings.TrimSuffix(strings.TrimSuffix(name, "-wal"), "-shm")
-		id := strings.TrimSuffix(base, ".db")
+		id := strings.TrimSuffix(strings.TrimSuffix(name, "-wal"), ".db")
 		if !IsValidSessionID(id) {
 			return "", "", false
 		}

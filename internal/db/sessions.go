@@ -2151,12 +2151,17 @@ func (db *DB) queueSubagentParentRepairs(ctx context.Context, ids []string, clea
 // back both the hierarchy changes and queue deletion so a later sync retries
 // the exact IDs even when their original spawn edges have disappeared.
 func (db *DB) RepairQueuedSubagentParents() error {
-	return db.RepairQueuedSubagentParentsContext(context.Background())
+	return db.RepairQueuedSubagentParentsContext(context.Background(), nil)
 }
 
 // RepairQueuedSubagentParentsContext is RepairQueuedSubagentParents with
-// caller-controlled cancellation for bounded sync paths.
-func (db *DB) RepairQueuedSubagentParentsContext(ctx context.Context) error {
+// caller-controlled cancellation and optional batch progress. Progress counts
+// checked queue entries, including missing sessions and unchanged parents. The
+// final callback precedes commit; an error still rolls back the entire repair.
+// The callback runs under the writer lock and must not call back into DB.
+func (db *DB) RepairQueuedSubagentParentsContext(
+	ctx context.Context, onProgress func(done, total int),
+) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -2180,6 +2185,20 @@ func (db *DB) RepairQueuedSubagentParentsContext(ctx context.Context) error {
 	defer func() { _ = tx.Rollback() }()
 	if err := migrateLegacySubagentParentRepairQueueTx(ctx, tx); err != nil {
 		return err
+	}
+	var done, total int
+	if onProgress != nil {
+		if err := tx.QueryRowContext(ctx, `
+			SELECT count(*) FROM (
+				SELECT session_id FROM subagent_parent_repair_queue
+				UNION
+				SELECT session_id FROM subagent_parent_cleanup_queue
+			)`).Scan(&total); err != nil {
+			return fmt.Errorf("counting queued subagent parent repairs: %w", err)
+		}
+		if total > 0 {
+			onProgress(0, total)
+		}
 	}
 	for {
 		ids, err := func() ([]string, error) {
@@ -2254,6 +2273,10 @@ func (db *DB) RepairQueuedSubagentParentsContext(ctx context.Context) error {
 				"clearing %d queued subagent parent repairs: %w",
 				len(chunk), err,
 			)
+		}
+		done += len(chunk)
+		if onProgress != nil {
+			onProgress(done, total)
 		}
 	}
 	if err := tx.Commit(); err != nil {
@@ -2818,6 +2841,12 @@ type IncrementalSessionUpdate struct {
 	Checkpoint              *ParserCheckpoint
 	CheckpointBlobs         *ParserCheckpointBlobs
 	BlockedResultCategories map[string]bool
+	// ReplaceFromOrdinal, when set, marks the caller's message slice as
+	// the replacement for every stored row at or after that ordinal
+	// rather than an append. Earlier rows are left untouched. The session
+	// aggregates are adjusted by the replaced and inserted rows' own
+	// totals, so the count and token fields above are ignored.
+	ReplaceFromOrdinal *int
 	// SignalMaintainer, when set, computes the incremental signal/secret
 	// delta inside the write transaction (after messages and result
 	// updates are applied). nil keeps the legacy behavior: signals are
@@ -3046,6 +3075,124 @@ func updateSessionIncrementalTx(ctx context.Context,
 	if rows != 1 {
 		return fmt.Errorf(
 			"incremental update session %s: updated %d rows", id, rows,
+		)
+	}
+	return nil
+}
+
+// messageRangeTotals is what the rows at or after one ordinal contribute
+// to a session's message-derived aggregates. The expressions mirror
+// ingest.ApplySessionMessageDerivedFieldsContext and
+// ingest.MessageTokenTotalsContext; keep them in step.
+type messageRangeTotals struct {
+	count        int
+	userCount    int
+	outputTokens int64
+	hasOutput    bool
+	peakContext  int64
+	hasContext   bool
+}
+
+func messageRangeTotalsTx(ctx context.Context,
+	tx *sql.Tx, sessionID string, fromOrdinal int,
+) (messageRangeTotals, error) {
+	var t messageRangeTotals
+	err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*),
+			COALESCE(SUM(role = 'user' AND is_system = 0
+				AND COALESCE(source_subtype, '') <> 'tool_result'), 0),
+			COALESCE(SUM(CASE WHEN has_output_tokens != 0
+				THEN output_tokens ELSE 0 END), 0),
+			COALESCE(MAX(has_output_tokens != 0), 0),
+			COALESCE(MAX(CASE WHEN has_context_tokens != 0
+				THEN context_tokens END), 0),
+			COALESCE(MAX(has_context_tokens != 0), 0)
+		FROM messages
+		WHERE session_id = ? AND ordinal >= ?`,
+		sessionID, fromOrdinal,
+	).Scan(&t.count, &t.userCount, &t.outputTokens,
+		&t.hasOutput, &t.peakContext, &t.hasContext)
+	if err != nil {
+		return messageRangeTotals{}, fmt.Errorf(
+			"totaling messages of %s from ordinal %d: %w",
+			sessionID, fromOrdinal, err,
+		)
+	}
+	return t, nil
+}
+
+// replaceSessionIncrementalTx advances the file cursor after a ranged
+// replacement and adjusts the session aggregates by the difference
+// between the removed and inserted rows, so the write reads only the
+// replaced range. Counts and output tokens are sums and adjust exactly.
+// The peak and presence flags are maxima: they adjust exactly unless the
+// removed rows held a maximum the inserted rows no longer reach, and only
+// then are they recomputed from every stored row.
+func replaceSessionIncrementalTx(ctx context.Context,
+	tx *sql.Tx, id string, update IncrementalSessionUpdate,
+	removed messageRangeTotals,
+) error {
+	added, err := messageRangeTotalsTx(ctx, tx, id, *update.ReplaceFromOrdinal)
+	if err != nil {
+		return err
+	}
+	recomputeOutput := removed.hasOutput && !added.hasOutput
+	recomputePeak := removed.hasContext &&
+		(!added.hasContext || added.peakContext < removed.peakContext)
+	var lastEntryUUID any
+	if update.LastEntryUUID != "" {
+		lastEntryUUID = update.LastEntryUUID
+	}
+	result, err := tx.ExecContext(ctx, `
+		UPDATE sessions SET
+			ended_at = COALESCE(?, ended_at),
+			message_count = message_count - ? + ?,
+			user_message_count = user_message_count - ? + ?,
+			total_output_tokens = total_output_tokens - ? + ?,
+			has_total_output_tokens = CASE WHEN ? THEN (
+				SELECT COALESCE(MAX(has_output_tokens != 0), 0)
+				FROM messages WHERE session_id = ?
+			) ELSE (has_total_output_tokens != 0 OR ?) END,
+			peak_context_tokens = CASE WHEN ? THEN (
+				SELECT COALESCE(MAX(context_tokens), 0) FROM messages
+				WHERE session_id = ? AND has_context_tokens != 0
+			) ELSE MAX(peak_context_tokens, ?) END,
+			has_peak_context_tokens = CASE WHEN ? THEN (
+				SELECT COALESCE(MAX(has_context_tokens != 0), 0)
+				FROM messages WHERE session_id = ?
+			) ELSE (has_peak_context_tokens != 0 OR ?) END,
+			file_size = ?,
+			file_mtime = ?,
+			file_hash = COALESCE(?, file_hash),
+			next_ordinal = ?,
+			last_entry_uuid = ?,
+			termination_status = ?,
+			last_write_incremental = 1
+		WHERE id = ?`,
+		update.EndedAt,
+		removed.count, added.count,
+		removed.userCount, added.userCount,
+		removed.outputTokens, added.outputTokens,
+		recomputeOutput, id, added.hasOutput,
+		recomputePeak, id, added.peakContext,
+		recomputePeak, id, added.hasContext,
+		update.FileSize, update.FileMtime, update.FileHash,
+		update.NextOrdinal, lastEntryUUID, update.TerminationStatus, id,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"ranged replacement update session %s: %w", id, err,
+		)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf(
+			"ranged replacement update session %s rows affected: %w", id, err,
+		)
+	}
+	if rows != 1 {
+		return fmt.Errorf(
+			"ranged replacement update session %s: updated %d rows", id, rows,
 		)
 	}
 	return nil

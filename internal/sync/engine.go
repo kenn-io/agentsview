@@ -1582,6 +1582,17 @@ func (e *Engine) reportFinalizingProgress(
 	})
 }
 
+func (e *Engine) reportSubagentRepairProgress(onProgress ProgressFunc, done, total int) {
+	e.reportProgress(onProgress, Progress{
+		Phase: PhaseFinalizing, Detail: finalizingParentRepairDetail,
+		SessionsDone: done, SessionsTotal: total,
+	})
+	if done == total {
+		e.reportFinalizingProgress(onProgress, syncWriteBulk,
+			"Finalizing sync: saving repaired subagent relationships")
+	}
+}
+
 func (e *Engine) clearCurrentProgress() {
 	e.mu.Lock()
 	e.currentProgress = nil
@@ -3598,7 +3609,9 @@ func (e *Engine) resyncBuildLocked(
 	// Wait until orphan restoration is complete so every queued session and
 	// copied spawn edge is present. A failed repair leaves hierarchy state
 	// uncertain and must abort before the replacement can be installed.
-	if err := newDB.RepairQueuedSubagentParents(); err != nil {
+	if err := newDB.RepairQueuedSubagentParentsContext(ctx, func(done, total int) {
+		e.reportSubagentRepairProgress(reportResyncProgress, done, total)
+	}); err != nil {
 		log.Printf("resync: repair copied subagent parents: %v", err)
 		stats.Aborted = true
 		stats.Warnings = append(stats.Warnings,
@@ -10796,7 +10809,13 @@ flush:
 	e.reportFinalizingProgress(
 		onProgress, writeMode, finalizingParentRepairDetail,
 	)
-	if err := e.db.RepairQueuedSubagentParentsContext(postWriteCtx); err != nil {
+	var repairProgress func(int, int)
+	if writeMode == syncWriteBulk {
+		repairProgress = func(done, total int) {
+			e.reportSubagentRepairProgress(onProgress, done, total)
+		}
+	}
+	if err := e.db.RepairQueuedSubagentParentsContext(postWriteCtx, repairProgress); err != nil {
 		log.Printf("repair queued subagent parents: %v", err)
 		stats.RecordFailed()
 	}
@@ -11036,6 +11055,15 @@ type incrementalUpdate struct {
 	hasTotalOutputTokens bool
 	hasPeakContextTokens bool
 	providerStatHash     *pendingProviderStatHash
+	// suffixReplace marks a delta that re-parses the open same-message.id
+	// assistant run from its first record. msgs replaces every stored row
+	// from replaceFromOrdinal onward; rows below it are left untouched and
+	// the write adjusts the session aggregates from the replaced range, so
+	// the count and token fields above are unused on this path.
+	suffixReplace bool
+	// replaceFromOrdinal is the ordinal of the run's merged message: the
+	// first stored ordinal the re-parsed suffix replaces.
+	replaceFromOrdinal int
 }
 
 // hasSubstantiveUserMessage reports whether the delta contains a user
@@ -16091,19 +16119,48 @@ func (e *Engine) tryIncrementalJSONL(
 	// Claude cross-sync split detection: when the first appended
 	// assistant message shares its provider message id with the
 	// last already-stored assistant message for this session, the
-	// previous sync stopped mid-stream. The incremental path would
-	// store the new chunk as a separate message instead of merging
-	// it into the existing one — fall back to a full parse so the
-	// chunk merge sees the whole run. forceReplace tells the
-	// downstream write path to use ReplaceSessionMessages: the
-	// merged tail reuses existing ordinals, so the default
-	// append-only writeMessages would silently drop it.
+	// previous sync may have stopped mid-stream. The backward scan
+	// settles it. When a user record sits between the stored record
+	// and the appended one (parallel tool calls), the full parser does
+	// not merge them either, so the window is a plain append. When the
+	// run straddles the offset, re-parse from its first record and
+	// replace only the rows from the run's ordinal onward. Anything the
+	// scan cannot classify falls back to a whole-transcript parse.
 	if agent == parser.AgentClaude {
 		first := newMsgs[0]
 		if first.Role == parser.RoleAssistant &&
-			first.ClaudeMessageID != "" {
-			if e.db.LastClaudeMessageID(ctx, inc.ID) ==
+			first.ClaudeMessageID != "" &&
+			e.db.LastClaudeMessageID(ctx, inc.ID) ==
 				first.ClaudeMessageID {
+			runStart, verdict := parser.ClaudeSplitRunStart(
+				file.Path, inc.FileSize, first.ClaudeMessageID,
+			)
+			var update *incrementalUpdate
+			if verdict == parser.ClaudeSplitFound {
+				var err error
+				update, err = e.tryClaudeSplitSuffixUpdate(
+					ctx, file, inc, first.ClaudeMessageID, runStart,
+					newOffset, incMtime, incHash, parseFn,
+				)
+				if err != nil {
+					lease.Release()
+					return processResult{err: err}, true
+				}
+			}
+			switch {
+			case update != nil:
+				log.Printf(
+					"incremental %s %s: appended chunk shares"+
+						" message.id with stored tail, "+
+						"re-parsed the open run only",
+					agent, file.Path,
+				)
+				return processResult{
+					sourceBytes:    sourceBytes,
+					incremental:    update,
+					retentionLease: lease,
+				}, true
+			case verdict != parser.ClaudeSplitNone:
 				log.Printf(
 					"incremental %s %s: appended chunk shares"+
 						" message.id with stored tail, full parse",
@@ -16184,6 +16241,87 @@ func (e *Engine) tryIncrementalJSONL(
 		},
 		retentionLease: lease,
 	}, true
+}
+
+// tryClaudeSplitSuffixUpdate re-parses the same-message.id assistant run
+// that starts at runStart and straddles inc.FileSize, at the ordinal the
+// stored partial run already occupies, and returns a delta that replaces
+// the stored rows from that ordinal onward. A nil update means the
+// re-parse cannot be trusted to match a full parse, leaving the caller
+// its whole-transcript fallback.
+func (e *Engine) tryClaudeSplitSuffixUpdate(
+	ctx context.Context,
+	file parser.DiscoveredFile,
+	inc *db.IncrementalInfo,
+	messageID string,
+	runStart int64,
+	newOffset int64,
+	incMtime int64,
+	incHash string,
+	parseFn incrementalParseFunc,
+) (*incrementalUpdate, error) {
+	// The ranged write recounts the session from stored rows. Usage-only
+	// storage drops most user rows while message counts still follow the
+	// source transcript, so those archives keep the full parse.
+	if e.db.ArchiveContent().UsageOnly() {
+		return nil, nil
+	}
+	runOrdinal, ok := e.db.LastClaudeAssistantOrdinal(ctx, inc.ID)
+	if !ok {
+		return nil, nil
+	}
+	scanInc := *inc
+	scanInc.FileSize = runStart
+	scanInc.NextOrdinal = runOrdinal
+	suffix, links, toolCallUpdates, messageUsageUpdates, endedAt, consumed,
+		terminationStatus, _, err := parseFn(file.Path, &scanInc)
+	if err != nil {
+		// Re-parsing from the run's start can be declined by the same
+		// fallbacks the window parse has: a queued command sorting ahead
+		// of the run head, a rename or ai-title append, or a fork verdict
+		// the run boundary makes unresolvable. Those mean "use the
+		// whole-transcript path". Anything else is a real read or
+		// database failure and propagates.
+		if parser.IsIncrementalFullParseFallback(err) ||
+			errors.Is(err, parser.ErrDAGDetected) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	// The re-parse must reproduce the stored commit boundary exactly and
+	// place the merged run on its existing ordinal. Anything else means
+	// the scan picked a boundary the parser disagrees with. Updates to
+	// rows below the run would change aggregates the ranged write does
+	// not recount, and a first real prompt must re-derive first_message
+	// through the full path, as the append path requires.
+	if runStart+consumed != newOffset || len(suffix) == 0 ||
+		suffix[0].Ordinal != runOrdinal ||
+		suffix[0].ClaudeMessageID != messageID ||
+		len(toolCallUpdates) > 0 || len(messageUsageUpdates) > 0 {
+		return nil, nil
+	}
+	if inc.FirstMessage == "" && chunkHasRealUserPrompt(suffix) {
+		return nil, nil
+	}
+	return &incrementalUpdate{
+		agent:              file.Agent,
+		sessionID:          inc.ID,
+		project:            inc.Project,
+		sourceProject:      inc.SourceProject,
+		machine:            inc.Machine,
+		cwd:                inc.Cwd,
+		msgs:               suffix,
+		links:              links,
+		endedAt:            endedAt,
+		terminationStatus:  terminationStatus,
+		fileSize:           newOffset,
+		fileMtime:          incMtime,
+		fileHash:           incHash,
+		nextOrdinal:        nextParsedOrdinal(runOrdinal, suffix),
+		lastEntryUUID:      lastParsedSourceUUID(inc.LastEntryUUID, suffix),
+		suffixReplace:      true,
+		replaceFromOrdinal: runOrdinal,
+	}, nil
 }
 
 // shouldSkipProviderSourceByDB reports whether a provider-dispatched source is
@@ -18940,6 +19078,11 @@ func shouldReplaceFullParseMessages(
 // stored hash as a content fingerprint against same-size in-place
 // rewrites. Other agents pass an empty hash, which COALESCE leaves
 // untouched.
+//
+// A suffix-replacement delta (suffixReplace) replaces only the stored
+// rows from replaceFromOrdinal onward. The database adjusts the session
+// aggregates by what the removed and inserted rows contribute, so the
+// count and token fields computed here are ignored on that path.
 func (e *Engine) writeIncremental(ctx context.Context,
 	inc *incrementalUpdate,
 ) error {
@@ -19082,6 +19225,10 @@ func (e *Engine) writeIncremental(ctx context.Context,
 		}
 	}
 
+	var replaceFromOrdinal *int
+	if inc.suffixReplace {
+		replaceFromOrdinal = new(inc.replaceFromOrdinal)
+	}
 	var signalsMaintained bool
 	var maintainer db.SignalMaintainer
 	// Fold checkpoint-backed Codex deltas transactionally. Other append paths
@@ -19128,6 +19275,7 @@ func (e *Engine) writeIncremental(ctx context.Context,
 			CheckpointBlobs:          inc.checkpointBlobs,
 			BlockedResultCategories:  e.blockedResultCategories,
 			SignalMaintainer:         maintainer,
+			ReplaceFromOrdinal:       replaceFromOrdinal,
 		},
 		e.toolResultImages,
 	)

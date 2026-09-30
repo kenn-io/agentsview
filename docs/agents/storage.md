@@ -38,9 +38,16 @@ Changed no-ID replacements must report identity ambiguity. Rebuilds retain these
 IDs and tombstones but use the new database generation for revisions and
 cursors.
 
-Initialize a missing conversation index from existing database messages on
-writable open. Copied orphans and trash use the same stored records; absent
-source files do not make their archived text unavailable.
+An archive is cold until its first conversation export: sync writes no message
+projection rows, and the first `export conversations changes` builds the index
+from stored messages in one writer transaction, through the daemon when one owns
+the archive. From then on the archive is active and message writes maintain the
+index in their own transactions. A rebuild copies the source's cold or active
+state with the archive identity before any other copy, and copies between
+archives in different states fail. Session-level records (policy gaps, deletion,
+project changes) stay transactional in both states. Copied orphans and trash use
+the same stored records; absent source files do not make their archived text
+unavailable.
 
 Archive refresh seeks live conversation rows by `(session_id, ordinal)` through
 `idx_conversation_messages_ordinal`, which excludes removed rows. Keep this

@@ -909,3 +909,36 @@ func addDuration(ts string, d time.Duration) string {
 	}
 	return parsed.Add(d).UTC().Format(time.RFC3339)
 }
+
+// TestStatsHumanNamesSkippedRepos pins that the command tells the reader when
+// the totals are short. A failed PR lookup leaves commit counts intact, and
+// multiline errors must stay indented within the affected repository's entry.
+func TestStatsHumanNamesSkippedRepos(t *testing.T) {
+	prsOpened := 25
+	out := renderStatsHuman(t, &db.SessionStats{
+		Totals: db.StatsTotals{SessionsAll: 1},
+		OutcomeStats: &db.StatsOutcomeStats{
+			ReposActive: 2,
+			Commits:     84,
+			PRsOpened:   &prsOpened,
+			Skipped: []db.StatsOutcomeSkippedRepo{
+				{Repo: "/repos/first", Op: "pr", Reason: "no git remotes found"},
+				{Repo: "/repos/second", Op: "log", Reason: "git log in /repos/second: exit status 128:\nfatal: repository unavailable\ncheck repository permissions"},
+			},
+		},
+	})
+
+	assert.Contains(t, out, "Incomplete:")
+	assert.Contains(t, out, "/repos/first (pr): no git remotes found")
+	assert.Contains(t, out, "    /repos/second (log): git log in /repos/second: exit status 128:\n      fatal: repository unavailable\n      check repository permissions\n")
+}
+
+// TestStatsHumanSilentWhenNothingSkipped pins that the new lines appear only
+// when something really was missed.
+func TestStatsHumanSilentWhenNothingSkipped(t *testing.T) {
+	out := renderStatsHuman(t, &db.SessionStats{
+		Totals:       db.StatsTotals{SessionsAll: 1},
+		OutcomeStats: &db.StatsOutcomeStats{ReposActive: 2, Commits: 84},
+	})
+	assert.NotContains(t, out, "Incomplete:")
+}

@@ -1781,13 +1781,14 @@ func printSyncSummary(stats sync.SyncStats, t time.Time) {
 }
 
 type resyncProgressPrinter struct {
-	w        io.Writer
-	now      func() time.Time
-	terminal bool
-	label    string
-	started  time.Time
-	inPlace  bool
-	finished bool
+	w         io.Writer
+	now       func() time.Time
+	terminal  bool
+	label     string
+	started   time.Time
+	inPlace   bool
+	finished  bool
+	lastPrint time.Time
 }
 
 func newResyncProgressPrinter(
@@ -1809,6 +1810,23 @@ func (p *resyncProgressPrinter) Print(progress sync.Progress) {
 	}
 	label := resyncProgressLabel(progress)
 	if label == "" {
+		return
+	}
+
+	if progress.Phase == sync.PhaseFinalizing && progress.SessionsTotal > 0 {
+		if p.label != label {
+			p.finishCurrent()
+			p.label = label
+			p.started = p.now()
+		}
+		p.inPlace = p.terminal
+		if p.terminal {
+			fmt.Fprintf(p.w, "\r  %s\x1b[K", formatSyncProgress(progress))
+		} else if p.lastPrint.IsZero() || p.now().Sub(p.lastPrint) >= 5*time.Second ||
+			progress.SessionsDone == progress.SessionsTotal {
+			fmt.Fprintf(p.w, "  %s\n", formatSyncProgress(progress))
+			p.lastPrint = p.now()
+		}
 		return
 	}
 
@@ -1871,6 +1889,7 @@ func (p *resyncProgressPrinter) finishCurrent() {
 	p.label = ""
 	p.started = time.Time{}
 	p.inPlace = false
+	p.lastPrint = time.Time{}
 }
 
 func resyncProgressLabel(p sync.Progress) string {
@@ -2010,11 +2029,16 @@ func formatSyncProgress(p sync.Progress) string {
 			detail = fmt.Sprintf("%s: %s", detail, formatByteProgress(p))
 		}
 		if p.SessionsTotal > 0 {
-			detail = fmt.Sprintf(
-				"%s: %d/%d sessions (%.0f%%) · %d messages",
-				detail, p.SessionsDone, p.SessionsTotal,
-				p.Percent(), p.MessagesIndexed,
-			)
+			if p.Phase == sync.PhaseFinalizing {
+				detail = fmt.Sprintf("%s: %d/%d sessions checked (%.0f%%)",
+					detail, p.SessionsDone, p.SessionsTotal, p.Percent())
+			} else {
+				detail = fmt.Sprintf(
+					"%s: %d/%d sessions (%.0f%%) · %d messages",
+					detail, p.SessionsDone, p.SessionsTotal,
+					p.Percent(), p.MessagesIndexed,
+				)
+			}
 		}
 		if p.Hint != "" {
 			detail += " - " + p.Hint

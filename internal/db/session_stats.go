@@ -1497,9 +1497,9 @@ func (db *DB) accumulateAdoption(
 // missing git, unreadable config) is logged via the error path but does
 // not abort the aggregation — per-repo errors are swallowed so a single
 // broken checkout can't erase every other repo's numbers. Repos with no
-// resolvable author email are skipped; without an author filter the log
-// aggregation would attribute every other contributor's commits to the
-// local user.
+// resolvable author email are reported as skipped; without an author filter
+// the log aggregation would attribute every other contributor's commits to
+// the local user.
 //
 // PR counts are only populated when f.GHToken is set. When gh is
 // configured, PRsOpened and PRsMerged accumulate across every repo that
@@ -1547,6 +1547,9 @@ func (db *DB) computeOutcomeStats(
 	for _, repo := range repos {
 		email := git.AuthorEmail(ctx, repo)
 		if email == "" {
+			out.Skipped = append(out.Skipped, StatsOutcomeSkippedRepo{
+				Repo: repo, Op: "author", Reason: "no author email configured",
+			})
 			continue
 		}
 		logRes, err := git.AggregateLogCached(
@@ -1554,11 +1557,16 @@ func (db *DB) computeOutcomeStats(
 		)
 		if err != nil {
 			// Per-repo failures are logged but don't abort
-			// aggregation across other repos.
+			// aggregation across other repos. They are also named in
+			// the output, so a caller can tell a complete total from
+			// one missing this repository's commits.
 			log.Printf(
 				"computeOutcomeStats: repo=%s op=log err=%v",
 				repo, err,
 			)
+			out.Skipped = append(out.Skipped, StatsOutcomeSkippedRepo{
+				Repo: repo, Op: "log", Reason: err.Error(),
+			})
 			continue
 		}
 		contributed = true
@@ -1578,17 +1586,21 @@ func (db *DB) computeOutcomeStats(
 					"computeOutcomeStats: repo=%s op=pr err=%v",
 					repo, err,
 				)
+				out.Skipped = append(out.Skipped, StatsOutcomeSkippedRepo{
+					Repo: repo, Op: "pr", Reason: err.Error(),
+				})
 			} else if prRes != nil {
 				addPtr(&out.PRsOpened, prRes.Opened)
 				addPtr(&out.PRsMerged, prRes.Merged)
 			}
 		}
 	}
-	// Leave OutcomeStats nil when every repo was skipped (missing
-	// author email) or every git command failed. Emitting an
-	// all-zero block would falsely advertise "no commits" when the
-	// real signal is "we couldn't derive any".
-	if !contributed {
+	// Leave OutcomeStats nil when no repo contributed and nothing failed —
+	// an all-zero block would falsely advertise "no commits" when the real
+	// signal is "we couldn't derive any". A recorded failure is different:
+	// the block then carries the reason the totals are short, which is the
+	// only way a caller learns the answer is partial.
+	if !contributed && len(out.Skipped) == 0 {
 		return nil
 	}
 	s.OutcomeStats = out

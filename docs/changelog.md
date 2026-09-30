@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-09-21
+last_edited: 2026-09-29
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -63,9 +63,22 @@ The latest published release is
   or `kiro`; the Web UI picker and generation requests that name no agent use
   it. Leaving it unset keeps the previous `claude` default, and an unknown name
   fails configuration validation at startup.
+- Antigravity conversations that have no session database are now
+  stored from the plaintext transcript Antigravity's agent brain wrote beside
+  them, with the user's turns, the model's turns, its reasoning and its tool
+  calls. Until now those conversations were invisible: the only other copy is
+  an encrypted `.pb` stream that needs a key. `~/.gemini/antigravity-ide`, the
+  directory the IDE build uses, is also collected by default now. A
+  conversation that does have a database keeps one session, with the
+  transcript's entries folded into it. Both formats and copies across source
+  directories share the conversation ID. Transcript read failures preserve
+  archived messages. Antigravity sources re-parse once on upgrade to pick the
+  transcripts up.
 
 **Improvements**
 
+- Full resync now shows how many queued sessions it has checked while repairing
+  subagent relationships, then reports when it is saving those repairs.
 - Turning a session provider on or off, or adding or removing an alternate
   home, on the Settings page now takes effect without restarting the daemon.
   New sessions in a newly enabled provider or home are picked up as they are
@@ -114,6 +127,15 @@ The latest published release is
   used about 99% less memory in AgentsView. Local dates and hours now come
   from the PostgreSQL server's time zone data, which matches AgentsView's for
   current time zones.
+
+**Bug fixes**
+
+- Antigravity IDE and Antigravity CLI sessions stop re-syncing in a loop.
+  Reading a session database rewrote its shared-memory (`-shm`) file, and
+  AgentsView counted that as a change, so every pass re-read and re-uploaded
+  every Antigravity session. Only changes to the database or its write-ahead
+  log now trigger a re-sync. The first sync after upgrading re-reads each
+  Antigravity session once.
 
 ## 0.44.0
 

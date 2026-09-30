@@ -670,7 +670,11 @@ func createAntigravityOvershortPromptDB(t *testing.T, path string) {
 		0, 14, userPayload)
 }
 
-func TestAntigravityCLIDBFileInfoIncludesSQLiteSidecars(t *testing.T) {
+// TestAntigravityCLIDBFileInfoIncludesWALButNotSHM pins the SQLite
+// sidecar set: the -wal carries committed writes and counts, while the
+// -shm index is rewritten by readers (including the parse itself) and must
+// not move the effective size or mtime.
+func TestAntigravityCLIDBFileInfoIncludesWALButNotSHM(t *testing.T) {
 	root := t.TempDir()
 	id := "44444444-5555-6666-7777-888888888888"
 
@@ -682,13 +686,14 @@ func TestAntigravityCLIDBFileInfoIncludesSQLiteSidecars(t *testing.T) {
 
 	early := time.Unix(1779000000, 0)
 	late := time.Unix(1779000300, 0)
+	latest := time.Unix(1779000600, 0)
 	require.NoError(t, os.Chtimes(dbPath, early, early))
 	require.NoError(t, os.Chtimes(dbPath+"-wal", late, late))
-	require.NoError(t, os.Chtimes(dbPath+"-shm", early, early))
+	require.NoError(t, os.Chtimes(dbPath+"-shm", latest, latest))
 
 	info, err := AntigravityCLIFileInfo(dbPath)
 	require.NoError(t, err)
-	assert.Equal(t, int64(len("dbwalshm")), info.Size())
+	assert.Equal(t, int64(len("dbwal")), info.Size())
 	assert.Equal(t, late.UnixNano(), info.ModTime().UnixNano())
 }
 
@@ -2819,11 +2824,12 @@ func TestAntigravitySessionFileMetadataIncludesWAL(t *testing.T) {
 	sess, _, _, err := parseAntigravityTestSession(t, dbPath, "p", "m")
 	require.NoError(t, err)
 
-	// The parse's own read-only open can create or touch -shm/-wal
-	// siblings, so the expected composite comes from post-parse disk
-	// state - the same state the next sync's skip check will stat.
+	// The parse's own read-only open can create or touch the -wal
+	// sibling, so the expected composite comes from post-parse disk
+	// state - the same state the next sync's skip check will stat. The
+	// -shm index is deliberately not part of the composite.
 	var wantSize int64
-	for _, p := range []string{dbPath, walPath, dbPath + "-shm"} {
+	for _, p := range []string{dbPath, walPath} {
 		fi, statErr := os.Stat(p)
 		if statErr != nil {
 			continue
@@ -2833,7 +2839,7 @@ func TestAntigravitySessionFileMetadataIncludesWAL(t *testing.T) {
 	require.Greater(t, wantSize, mainInfo.Size(),
 		"setup: WAL sidecar must contribute to the composite")
 	assert.Equal(t, wantSize, sess.File.Size,
-		"file size must include WAL/SHM sidecars")
+		"file size must include the WAL sidecar")
 	assert.Equal(t, walTime.UnixNano(), sess.File.Mtime,
 		"file mtime must reflect the newest sidecar")
 }

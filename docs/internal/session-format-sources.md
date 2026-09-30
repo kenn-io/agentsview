@@ -2883,7 +2883,9 @@ schemas keep their existing ordering behavior.
 ## Antigravity IDE (`antigravity`)
 
 - **Format:** Per-session SQLite databases, optionally supplemented by
-  trajectory JSON sidecars.
+  trajectory JSON sidecars, plus the agent brain's plaintext
+  `brain/<uuid>/.system_generated/logs/transcript.jsonl`, which is the session
+  itself for a conversation with no database.
 - **Evidence:** `no-public-source`.
 - **Upstream:** Google's first-party Antigravity product and documentation
   surfaces and public repositories were searched 2026-07-19; no application
@@ -2900,9 +2902,18 @@ schemas keep their existing ordering behavior.
   data. There is no separate reliable reasoning counter or reported USD cost;
   Agentsview catalog-prices tokens. Decode failures are surfaced explicitly.
 - **Agentsview:** `internal/parser/antigravity.go`,
-  `internal/parser/antigravity_proto.go`, and
+  `internal/parser/antigravity_proto.go`,
+  `internal/parser/antigravity_brain_transcript.go`, and
   `internal/parser/antigravity_provider.go`; field decoding is deliberately
-  marked as reverse engineering.
+  marked as reverse engineering. The brain transcript needs no such decoding:
+  it is line-delimited JSON with named fields, verified 2026-09-26 against
+  transcripts two Antigravity builds wrote, and it is read as untrusted
+  structured input. Rechecked 2026-09-29 with synthetic transcripts through
+  the parser and SQLite sync: read failures preserve archived messages, and
+  database creation/removal keeps one conversation ID and selects the
+  surviving source. Copies with the same conversation UUID across configured
+  roots share that ID. An unreadable database still reports an error instead
+  of replacing archived content with a potentially incomplete transcript.
 
 ## Antigravity CLI (`antigravity-cli`)
 

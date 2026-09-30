@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json/v2"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -1550,6 +1551,42 @@ func TestNonTerminalProgressOutputIsBounded(t *testing.T) {
 	assert.Equal(t, 1, strings.Count(out.String(), "Processing sessions..."))
 	assert.Equal(t, 1, strings.Count(out.String(), "Processing sessions completed in"))
 	assert.NotContains(t, out.String(), "after finish")
+}
+
+func TestResyncProgressPrinterShowsRepairCounts(t *testing.T) {
+	for _, terminal := range []bool{false, true} {
+		t.Run(fmt.Sprintf("terminal=%t", terminal), func(t *testing.T) {
+			var out bytes.Buffer
+			now := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
+			printer := newResyncProgressPrinter(&out, func() time.Time { return now })
+			printer.terminal = terminal
+			p := agentsync.Progress{
+				Phase: agentsync.PhaseFinalizing, Resync: true,
+				Detail: "Finalizing sync: repairing subagent relationships",
+			}
+			printer.Print(p)
+			p.SessionsTotal = 1000
+			printer.Print(p)
+			p.SessionsDone = 250
+			printer.Print(p)
+			now = now.Add(5 * time.Second)
+			p.SessionsDone = 500
+			printer.Print(p)
+			assert.Equal(t, "Finalizing sync: repairing subagent relationships: 500/1000 sessions checked (50%)", startupProgressDetail(p))
+			p.SessionsDone = 1000
+			printer.Print(p)
+			printer.Finish()
+			assert.Contains(t, out.String(), "0/1000 sessions checked (0%)")
+			assert.Contains(t, out.String(), "500/1000 sessions checked (50%)")
+			assert.Contains(t, out.String(), "1000/1000 sessions checked (100%)")
+			assert.NotContains(t, out.String(), "messages")
+			assert.Equal(t, 1, strings.Count(out.String(), "completed in"))
+			if !terminal {
+				assert.NotContains(t, out.String(), "250/1000")
+				assert.NotContains(t, out.String(), "\r")
+			}
+		})
+	}
 }
 
 func TestResyncProgressPrinterWritesPhaseTimingsOnNewLines(t *testing.T) {

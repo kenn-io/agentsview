@@ -523,10 +523,14 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (116: Claude and Amp tool results retain explicit failure/completion status,
 // and Cline results retain image markers. Re-parse unchanged sources to restore
 // outcome evidence lost from summaries.)
-// (117: Codebuff and Freebuff sessions gain git_branch, termination status,
+// (117: an Antigravity conversation whose own stream is encrypted is stored
+// from the plaintext transcript its agent brain wrote, and .gemini/antigravity-ide
+// is a default Antigravity root. Re-parse unchanged Antigravity sources so those
+// conversations reach the archive.)
+// (118: Codebuff and Freebuff sessions gain git_branch, termination status,
 // per-prompt cost rows, attachment and ask-user content, and linked subagent
 // sessions. Re-parse unchanged Codebuff/Freebuff sources to backfill them.)
-const dataVersion = 117
+const dataVersion = 118
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
@@ -1209,7 +1213,7 @@ func OpenFreshIsolatedContext(ctx context.Context, path string) (*DB, error) {
 		return nil, errors.Join(err, d.CloseContext(ctx))
 	}
 	d.mu.Lock()
-	err = ensureConversationSchemaLocked(ctx, d.getWriter(), d.usageOnlyStorage())
+	err = ensureConversationSchemaLocked(ctx, d.getWriter())
 	d.mu.Unlock()
 	if err != nil {
 		return closeOnError(fmt.Errorf("initializing conversation export state: %w", err))
@@ -2942,7 +2946,7 @@ func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc) err
 	if err := scopeLegacyDevinSourceUUIDsLocked(ctx, w); err != nil {
 		return err
 	}
-	if err := ensureConversationSchemaLocked(ctx, w, db.usageOnlyStorage()); err != nil {
+	if err := ensureConversationSchemaLocked(ctx, w); err != nil {
 		return err
 	}
 

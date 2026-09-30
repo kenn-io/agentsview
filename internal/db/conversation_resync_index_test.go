@@ -28,6 +28,9 @@ func TestConversationResyncSeeksOrdinalAndPreservesHistory(t *testing.T) {
 				}
 			}
 			require.NoError(t, source.InsertMessages(t.Context(), msgs))
+			// Publish the first messages so the rewrite below retires them.
+			_, err := source.ExportConversationChanges(t.Context(), ConversationExportOptions{})
+			require.NoError(t, err)
 			msgs = msgs[:tc.messages]
 			for i := range msgs {
 				msgs[i].Content = "Retained reply"
@@ -55,6 +58,7 @@ func TestConversationResyncSeeksOrdinalAndPreservesHistory(t *testing.T) {
 			path := source.Path()
 			require.NoError(t, source.Close())
 			destination := testDB(t)
+			require.NoError(t, destination.CopyArchiveIdentityFrom(path))
 			copied, err := destination.CopyOrphanedDataFrom(path)
 			require.NoError(t, err)
 			assert.Equal(t, 1, copied)

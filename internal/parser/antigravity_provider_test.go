@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1052,4 +1053,228 @@ func TestAntigravityProviderCapabilitiesAdvertiseSidecarContent(t *testing.T) {
 	assert.Equal(t, CapabilitySupported, caps.Content.ToolResults)
 	assert.Equal(t, CapabilitySupported, caps.Content.Model)
 	assert.Equal(t, CapabilitySupported, caps.Content.ToolCalls)
+}
+
+// antigravitySQLiteProviderCase describes one Antigravity provider whose
+// sessions are WAL-mode SQLite files under conversations/.
+type antigravitySQLiteProviderCase struct {
+	agent             AgentType
+	fixture           func(t *testing.T, root, id string)
+	fileInfo          func(path string) (os.FileInfo, error)
+	conversationGlobs []string
+}
+
+func antigravitySQLiteProviderCases() map[string]antigravitySQLiteProviderCase {
+	return map[string]antigravitySQLiteProviderCase{
+		"ide": {
+			agent:             AgentAntigravity,
+			fixture:           writeAntigravityIDEProviderFixture,
+			fileInfo:          AntigravityFileInfo,
+			conversationGlobs: []string{"*.db", "*.db-wal", "*.trajectory.json"},
+		},
+		"cli": {
+			agent:             AgentAntigravityCLI,
+			fixture:           writeAntigravityCLIProviderFixture,
+			fileInfo:          AntigravityCLIFileInfo,
+			conversationGlobs: []string{"*.db", "*.db-wal", "*.pb", "*.trajectory.json"},
+		},
+	}
+}
+
+// TestAntigravityProvidersIgnoreBareShmEvents pins that a -shm write
+// never resolves to a session. Every parse opens the session DB, and a
+// reader's open rewrites the -shm index, so honoring that event would make
+// each parse schedule the next one. Committed writes land in the main file
+// or the -wal and must keep resolving.
+func TestAntigravityProvidersIgnoreBareShmEvents(t *testing.T) {
+	for name, tc := range antigravitySQLiteProviderCases() {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			id := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+			conversations := filepath.Join(root, "conversations")
+			dbPath := filepath.Join(conversations, id+".db")
+			tc.fixture(t, root, id)
+			writeSourceFile(t, dbPath+"-wal", "wal")
+			writeSourceFile(t, dbPath+"-shm", "shm")
+
+			provider, ok := NewProvider(tc.agent, ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+
+			plan, err := provider.WatchPlan(t.Context())
+			require.NoError(t, err)
+			var globs []string
+			for _, watchRoot := range plan.Roots {
+				if watchRoot.Path == conversations {
+					globs = watchRoot.IncludeGlobs
+				}
+			}
+			assert.Equal(t, tc.conversationGlobs, globs)
+
+			for _, event := range []struct {
+				path string
+				want []string
+			}{
+				{path: dbPath, want: []string{dbPath}},
+				{path: dbPath + "-wal", want: []string{dbPath}},
+				{path: dbPath + "-shm", want: []string{}},
+			} {
+				changed, err := provider.SourcesForChangedPath(
+					t.Context(),
+					ChangedPathRequest{
+						Path:      event.path,
+						EventKind: "write",
+						WatchRoot: conversations,
+					},
+				)
+				require.NoError(t, err)
+				got := make([]string, 0, len(changed))
+				for _, source := range changed {
+					got = append(got, source.DisplayPath)
+				}
+				assert.Equal(t, event.want, got, "changed path %s", event.path)
+			}
+		})
+	}
+}
+
+// TestAntigravityProvidersFingerprintIgnoresShm pins that rewriting the
+// -shm index leaves both the provider fingerprint and the legacy effective
+// file info unchanged, while -wal and main-file writes still move them.
+func TestAntigravityProvidersFingerprintIgnoresShm(t *testing.T) {
+	for name, tc := range antigravitySQLiteProviderCases() {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			id := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+			dbPath := filepath.Join(root, "conversations", id+".db")
+			walPath := dbPath + "-wal"
+			shmPath := dbPath + "-shm"
+			tc.fixture(t, root, id)
+			writeSourceFile(t, walPath, "wal")
+			writeSourceFile(t, shmPath, "shm")
+			// Later than every fixture companion, so the database files
+			// decide the composite mtime.
+			base := time.Now().Add(time.Hour).Truncate(time.Second)
+			for _, path := range []string{dbPath, walPath, shmPath} {
+				require.NoError(t, os.Chtimes(path, base, base))
+			}
+
+			provider, ok := NewProvider(tc.agent, ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+			source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
+				RawSessionID: id,
+			})
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.Equal(t, dbPath, source.DisplayPath)
+			before, err := provider.Fingerprint(t.Context(), source)
+			require.NoError(t, err)
+			beforeInfo, err := tc.fileInfo(dbPath)
+			require.NoError(t, err)
+
+			// A reader's open rewrites the index: new bytes, newer mtime.
+			shmTime := base.Add(time.Hour)
+			writeSourceFile(t, shmPath, "wal-index rebuilt by a reader")
+			require.NoError(t, os.Chtimes(shmPath, shmTime, shmTime))
+			after, err := provider.Fingerprint(t.Context(), source)
+			require.NoError(t, err)
+			assert.Equal(t, before, after)
+			afterInfo, err := tc.fileInfo(dbPath)
+			require.NoError(t, err)
+			assert.Equal(t, beforeInfo, afterInfo)
+
+			walTime := base.Add(2 * time.Hour)
+			writeSourceFile(t, walPath, "wal with a committed frame")
+			require.NoError(t, os.Chtimes(walPath, walTime, walTime))
+			afterWAL, err := provider.Fingerprint(t.Context(), source)
+			require.NoError(t, err)
+			assert.NotEqual(t, before.Hash, afterWAL.Hash)
+			assert.Equal(t, walTime.UnixNano(), afterWAL.MTimeNS)
+
+			dbTime := base.Add(3 * time.Hour)
+			require.NoError(t, os.Chtimes(dbPath, dbTime, dbTime))
+			afterDB, err := provider.Fingerprint(t.Context(), source)
+			require.NoError(t, err)
+			assert.NotEqual(t, afterWAL.Hash, afterDB.Hash)
+			assert.Equal(t, dbTime.UnixNano(), afterDB.MTimeNS)
+		})
+	}
+}
+
+// TestAntigravityProvidersParseLeavesFingerprintStable reproduces the
+// resync loop end to end: a WAL-mode session DB left with -wal and -shm on
+// disk and no live connection, as after the app exits without a final
+// checkpoint. Each read-only open is then the first connection and rebuilds
+// the -shm index, so the parse must not move the fingerprint it was
+// scheduled from.
+func TestAntigravityProvidersParseLeavesFingerprintStable(t *testing.T) {
+	for name, tc := range antigravitySQLiteProviderCases() {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			id := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+			dbPath := filepath.Join(root, "conversations", id+".db")
+			tc.fixture(t, root, id)
+			leaveAntigravityWALSidecars(t, dbPath)
+
+			provider, ok := NewProvider(tc.agent, ProviderConfig{
+				Roots:   []string{root},
+				Machine: "devbox",
+			})
+			require.True(t, ok)
+			source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
+				RawSessionID: id,
+			})
+			require.NoError(t, err)
+			require.True(t, ok)
+			before, err := provider.Fingerprint(t.Context(), source)
+			require.NoError(t, err)
+
+			for range 2 {
+				outcome, err := provider.Parse(t.Context(), ParseRequest{
+					Source:      source,
+					Fingerprint: before,
+				})
+				require.NoError(t, err)
+				require.Len(t, outcome.Results, 1)
+				after, err := provider.Fingerprint(t.Context(), source)
+				require.NoError(t, err)
+				assert.Equal(t, before, after)
+			}
+		})
+	}
+}
+
+// leaveAntigravityWALSidecars converts the fixture DB at dbPath to WAL
+// mode and leaves a committed frame in its -wal plus a -shm index on disk
+// with no open connection. All three files are backdated so any rewrite
+// moves an mtime.
+func leaveAntigravityWALSidecars(t *testing.T, dbPath string) {
+	t.Helper()
+	staging := filepath.Join(t.TempDir(), "staging.db")
+	data, err := os.ReadFile(dbPath)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(staging, data, 0o644))
+
+	db, err := sql.Open("sqlite3", staging)
+	require.NoError(t, err)
+	conn, err := db.Conn(t.Context())
+	require.NoError(t, err)
+	for _, stmt := range []string{
+		"PRAGMA journal_mode=WAL",
+		"PRAGMA wal_autocheckpoint=0",
+		"PRAGMA user_version=1",
+	} {
+		_, err := conn.ExecContext(t.Context(), stmt)
+		require.NoError(t, err, stmt)
+	}
+	// Copy while the connection is open: closing the last connection
+	// checkpoints the WAL and deletes both sidecars.
+	old := time.Unix(1779000000, 0)
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		data, err := os.ReadFile(staging + suffix)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(dbPath+suffix, data, 0o644))
+		require.NoError(t, os.Chtimes(dbPath+suffix, old, old))
+	}
+	require.NoError(t, conn.Close())
+	require.NoError(t, db.Close())
 }

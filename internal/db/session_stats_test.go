@@ -2645,6 +2645,18 @@ var (
 
 func statsOutcomeRepo(t *testing.T) string {
 	t.Helper()
+	// Keep fixture commands and outcome lookups independent of host Git state.
+	for _, entry := range os.Environ() {
+		name, _, _ := strings.Cut(entry, "=")
+		if strings.HasPrefix(strings.ToUpper(name), "GIT_") {
+			t.Setenv(name, "")
+			require.NoError(t, os.Unsetenv(name))
+		}
+	}
+	globalConfig := filepath.Join(t.TempDir(), "gitconfig")
+	require.NoError(t, os.WriteFile(globalConfig, nil, 0o600))
+	t.Setenv("GIT_CONFIG_GLOBAL", globalConfig)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	statsOutcomeRepoOnce.Do(func() {
 		dir := filepath.Join(testDBFixtureTempDir, "stats-outcome")
 		require.NoError(t, os.MkdirAll(dir, 0o700), "create stats outcome repo dir")
@@ -2780,4 +2792,165 @@ func TestGetSessionStats_OutcomeStats_CwdOutsideRepo(t *testing.T) {
 	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
 	require.NoError(t, err, "GetSessionStats")
 	assert.Nil(t, stats.OutcomeStats, "OutcomeStats")
+}
+
+// statsCanonPath resolves symlinks so a fixture path compares equal to the
+// canonical path `git rev-parse --show-toplevel` prints. On macOS the test
+// temp root lives under /var, which is a symlink to /private/var.
+func statsCanonPath(t *testing.T, path string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(path)
+	require.NoError(t, err, "EvalSymlinks %s", path)
+	return resolved
+}
+
+// statsFakeToolOnPath puts a shell script named tool at the front of PATH.
+// The test process's PATH is changed, so the caller must not run in parallel.
+func statsFakeToolOnPath(t *testing.T, tool, body string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script mock unsupported on windows")
+	}
+	dir := t.TempDir()
+	script := "#!/bin/sh\n" + body
+	require.NoError(t,
+		os.WriteFile(filepath.Join(dir, tool), []byte(script), 0o700),
+		"write fake %s", tool)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// TestOutcomeStatsNamesRepoWhoseGHLookupFailed pins that a pull-request
+// lookup which fails is reported rather than dropped. Before this, the
+// failure went to the daemon log and the response was an ordinary-looking
+// block, so a caller reading prs_opened could not tell a genuine count from
+// one missing an unknown number of repositories.
+func TestOutcomeStatsNamesRepoWhoseGHLookupFailed(t *testing.T) {
+	skipIfNoGit(t)
+	repo := statsOutcomeRepo(t)
+	statsFakeToolOnPath(t, "gh", `
+echo "no git remotes found" >&2
+exit 1
+`)
+	d := testDB(t)
+	insertSessionFixture(t, d, sessionFixture{
+		id: "gh-failed", agent: "claude", userMsgs: 5,
+		startedAt: hoursAgo(5), cwd: repo,
+	})
+
+	stats, err := d.GetSessionStats(t.Context(), StatsFilter{
+		Since: "28d", IncludeGitOutcomes: true, GHToken: "test-token",
+	})
+	require.NoError(t, err, "GetSessionStats")
+	out := stats.OutcomeStats
+	require.NotNil(t, out, "OutcomeStats")
+	assert.Equal(t, 3, out.Commits,
+		"the git side of the repository still contributes")
+	require.Len(t, out.Skipped, 1,
+		"the repository whose gh lookup failed must be named")
+	assert.Equal(t, statsCanonPath(t, repo), out.Skipped[0].Repo, "Skipped[0].Repo")
+	assert.Equal(t, "pr", out.Skipped[0].Op, "Skipped[0].Op")
+	assert.Contains(t, out.Skipped[0].Reason, "no git remotes found",
+		"Skipped[0].Reason must carry why the lookup failed")
+}
+
+// TestOutcomeStatsNamesRepoWhoseGitLogFailed pins the same contract for the
+// commit side: a `git log` that fails drops the repository's commits, and the
+// response has to say so.
+func TestOutcomeStatsNamesRepoWhoseGitLogFailed(t *testing.T) {
+	skipIfNoGit(t)
+	repo := statsOutcomeRepo(t)
+	realPath, err := exec.LookPath("git")
+	require.NoError(t, err, "locate real git")
+	// Pass every subcommand through to the real git except `log`, so the
+	// repository is still discovered and its author email still resolves.
+	statsFakeToolOnPath(t, "git", "REAL='"+strings.ReplaceAll(realPath, "'", "'\\''")+"'\n"+`
+for arg in "$@"; do
+  case "$arg" in
+    log)
+      echo "fatal: simulated git log failure" >&2
+      exit 128
+      ;;
+    -*) continue ;;
+    *) break ;;
+  esac
+done
+exec "$REAL" "$@"
+`)
+	d := testDB(t)
+	insertSessionFixture(t, d, sessionFixture{
+		id: "log-failed", agent: "claude", userMsgs: 5,
+		startedAt: hoursAgo(5), cwd: repo,
+	})
+
+	stats, err := d.GetSessionStats(t.Context(), StatsFilter{
+		Since: "28d", IncludeGitOutcomes: true,
+	})
+	require.NoError(t, err, "GetSessionStats")
+	require.NotNil(t, stats.OutcomeStats,
+		"a block that reports the skip must be returned, not nil")
+	out := stats.OutcomeStats
+	assert.Zero(t, out.ReposActive,
+		"a repository whose log failed is not active")
+	require.Len(t, out.Skipped, 1,
+		"the repository whose git log failed must be named")
+	assert.Equal(t, statsCanonPath(t, repo), out.Skipped[0].Repo, "Skipped[0].Repo")
+	assert.Equal(t, "log", out.Skipped[0].Op, "Skipped[0].Op")
+	assert.Contains(t, out.Skipped[0].Reason, "simulated git log failure",
+		"Skipped[0].Reason must carry why the lookup failed")
+}
+
+// TestOutcomeStatsSkippedEmptyWhenNothingFailed pins that the new field stays
+// empty on the ordinary path, so its presence means something really was
+// missed.
+func TestOutcomeStatsSkippedEmptyWhenNothingFailed(t *testing.T) {
+	skipIfNoGit(t)
+	d := testDB(t)
+	insertSessionFixture(t, d, sessionFixture{
+		id: "nothing-failed", agent: "claude", userMsgs: 5,
+		startedAt: hoursAgo(5), cwd: statsOutcomeRepo(t),
+	})
+
+	stats, err := d.GetSessionStats(t.Context(), StatsFilter{
+		Since: "28d", IncludeGitOutcomes: true,
+	})
+	require.NoError(t, err, "GetSessionStats")
+	require.NotNil(t, stats.OutcomeStats, "OutcomeStats")
+	assert.Empty(t, stats.OutcomeStats.Skipped, "Skipped")
+}
+
+// TestOutcomeStatsNamesRepoWithoutAuthorEmail verifies that a missing author
+// is reported while another repository still contributes its commit counts.
+func TestOutcomeStatsNamesRepoWithoutAuthorEmail(t *testing.T) {
+	skipIfNoGit(t)
+	repo := statsOutcomeRepo(t)
+	// AuthorEmail's runner strips GIT_CONFIG_GLOBAL and reads global config,
+	// so isolate HOME and XDG_CONFIG_HOME as well as the fixture commands.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	missingAuthor := t.TempDir()
+	statsInitRepoAt(t, missingAuthor)
+	statsCommitFile(t, missingAuthor, "a.txt", "one line\n", "initial commit")
+	statsRunGit(t, missingAuthor, nil, "config", "--unset", "user.email")
+
+	d := testDB(t)
+	for i, cwd := range []string{repo, missingAuthor} {
+		insertSessionFixture(t, d, sessionFixture{
+			id: "author-" + strconv.Itoa(i), agent: "claude", userMsgs: 5,
+			startedAt: hoursAgo(5), cwd: cwd,
+		})
+	}
+
+	stats, err := d.GetSessionStats(t.Context(), StatsFilter{
+		Since: "28d", IncludeGitOutcomes: true,
+	})
+	require.NoError(t, err, "GetSessionStats")
+	require.NotNil(t, stats.OutcomeStats, "OutcomeStats")
+	out := stats.OutcomeStats
+	assert.Equal(t, 1, out.ReposActive)
+	assert.Equal(t, 3, out.Commits, "the configured repository still contributes")
+	require.Len(t, out.Skipped, 1)
+	assert.Equal(t, statsCanonPath(t, missingAuthor), out.Skipped[0].Repo)
+	assert.Equal(t, "author", out.Skipped[0].Op)
+	assert.Equal(t, "no author email configured", out.Skipped[0].Reason)
 }

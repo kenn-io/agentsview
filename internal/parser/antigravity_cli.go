@@ -799,7 +799,7 @@ func decryptAntigravityCLITranscript(
 
 // AntigravityCLIFileInfo returns a fake os.FileInfo whose size and
 // mtime combine the session file with everything else the parser
-// renders: SQLite WAL/SHM siblings, the .trajectory.json sidecar,
+// renders: the SQLite WAL sibling, the .trajectory.json sidecar,
 // history.jsonl, cache/last_conversations.json, and the brain/<id> artifacts.
 // History and the workspace cache stay here while legacy sync skip checks use
 // this effective file info; provider hashes additionally scope tagged history
@@ -826,11 +826,12 @@ func antigravityCLICompanionPaths(path string) []string {
 	if base, ok := strings.CutSuffix(path, ".db"); ok {
 		// The trajectory sidecar is a transcript source for .db sessions
 		// too, so an agy-reader sync must change the fingerprint even when
-		// the database files themselves are untouched.
+		// the database files themselves are untouched. The -shm index is
+		// left out because the parse's own read-only open rewrites it; see
+		// sqliteDBJournalSuffixes.
 		companions := []string{
 			historyPath,
 			path + "-wal",
-			path + "-shm",
 			base + ".trajectory.json",
 		}
 		return append(companions, antigravityBrainCompanions(

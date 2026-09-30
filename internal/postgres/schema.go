@@ -898,6 +898,28 @@ func ensureUsageJSONHelper(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
+// lockSyncMetadataRow holds a row lock on the sync_metadata row named key
+// until tx ends, creating the row first if needed. A row lock is used instead
+// of pg_advisory_xact_lock because supported CockroachDB versions do not
+// implement advisory locks, and sync_metadata lives in the target schema, so
+// the lock is schema-scoped.
+func lockSyncMetadataRow(ctx context.Context, tx *sql.Tx, key string) error {
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO sync_metadata (key, value) VALUES ($1, '')
+		 ON CONFLICT (key) DO NOTHING`,
+		key,
+	); err != nil {
+		return fmt.Errorf("creating sync_metadata lock row %q: %w", key, err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`SELECT value FROM sync_metadata WHERE key = $1 FOR UPDATE`,
+		key,
+	); err != nil {
+		return fmt.Errorf("locking sync_metadata row %q: %w", key, err)
+	}
+	return nil
+}
+
 // EnsureSchema creates the schema (if needed), then runs
 // idempotent CREATE TABLE / ALTER TABLE statements. The schema
 // parameter is the unquoted schema name (e.g. "agentsview").
