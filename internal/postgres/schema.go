@@ -2345,7 +2345,8 @@ func checkPushSchemaCompat(ctx context.Context, db *sql.DB) error {
 // explicitly. It also requires the cursor dedup index, which the cursor usage
 // insert relies on for ON CONFLICT dedup. When any of these is missing the
 // caller must run EnsureSchema so push migrates the schema instead of failing
-// or duplicating rows.
+// or duplicating rows. Ledger tables are ensured separately on the push
+// fast path so a ledger upgrade does not force unrelated schema maintenance.
 func pushSchemaCurrent(ctx context.Context, db *sql.DB) bool {
 	if err := CheckSchemaCompat(ctx, db); err != nil {
 		return false

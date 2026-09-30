@@ -10,8 +10,46 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/postgres"
 )
+
+func TestLedgerStatusShowsPushState(t *testing.T) {
+	dataDir := testDataDir(t)
+	writeLedgerTestConfig(t, dataDir, "[ledger]\nenabled = true\nsource = \"host-a\"\n")
+	_, err := runLedger(t, "append", "--class", "health")
+	require.NoError(t, err)
+
+	database, err := db.Open(t.Context(), filepath.Join(dataDir, "sessions.db"))
+	require.NoError(t, err)
+	require.NoError(t, database.SetSyncState(t.Context(), postgres.LedgerPushStatusKeyPrefix+"hub",
+		`{"at":"2026-09-22T10:00:00.000000Z","zones":{"default":{"pushed":3,"identical":1,"held_back":2}},`+
+			`"failures":[["default","host-a","4","integrity check failed: checksum mismatch for host-a-000004.json"],["ops","host-b","1","x"]]}`))
+	require.NoError(t, database.Close())
+
+	out, err := runLedger(t, "status")
+	require.NoError(t, err)
+	assert.Contains(t, out, "  push [hub] at 2026-09-22T10:00:00.000000Z: 3 pushed, 1 already present, 2 held back, 1 refused\n")
+	assert.Contains(t, out, "    refused host-a-000004: integrity check failed: checksum mismatch for host-a-000004.json\n")
+	assert.NotContains(t, out, "host-b", "other zones' failures stay with their zone")
+
+	out, err = runLedger(t, "status", "--json")
+	require.NoError(t, err)
+	var reports []struct {
+		Push []struct {
+			Target   string      `json:"target"`
+			Pushed   int         `json:"pushed"`
+			Failures [][4]string `json:"failures"`
+		} `json:"push"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &reports))
+	require.Len(t, reports, 1)
+	require.Len(t, reports[0].Push, 1)
+	assert.Equal(t, "hub", reports[0].Push[0].Target)
+	assert.Equal(t, 3, reports[0].Push[0].Pushed)
+	assert.Equal(t, [][4]string{{"default", "host-a", "4", "integrity check failed: checksum mismatch for host-a-000004.json"}}, reports[0].Push[0].Failures)
+}
 
 func writeLedgerTestConfig(t *testing.T, dataDir, body string) {
 	t.Helper()

@@ -11,6 +11,10 @@ The latest published release is
 
 **New features**
 
+- `agentsview pg push` now copies the event ledger to PostgreSQL without
+  overwriting hub segments. Conflicting or damaged segments appear in
+  `agentsview ledger status`. Segments held back by zone or confidentiality
+  policy are retried on later pushes when policy allows replication.
 - Verify conversation memory through an opt-in live release gate that records a
   synthetic decision, starts a fresh Claude Code or Codex session, and requires
   the client to search, read, answer accurately, and cite the source. Raw

@@ -81,6 +81,28 @@ type PusherOptions struct {
 	// the local vectors.db active generation into the replica. Nil skips
 	// the phase.
 	VectorSource VectorPushSource
+	// Ledger, when non-nil, enables the event ledger push phase on PostgreSQL.
+	Ledger *LedgerPushPolicy
+}
+
+// LedgerPushPolicy selects which ledger segments a push replicates.
+type LedgerPushPolicy struct {
+	Zones                 []string
+	ReplicateConfidential bool
+}
+
+// LedgerPushPolicyFor builds the push policy from enabled ledger settings.
+func LedgerPushPolicyFor(cfg config.LedgerConfig) *LedgerPushPolicy {
+	if !cfg.Enabled {
+		return nil
+	}
+	p := &LedgerPushPolicy{ReplicateConfidential: cfg.ReplicateConfidential}
+	for _, id := range cfg.ZoneIDs() {
+		if zc, ok := cfg.Zone(id); ok && zc.Replicates() {
+			p.Zones = append(p.Zones, id)
+		}
+	}
+	return p
 }
 
 // Pusher is one connected push session from the SQLite archive to a replica.

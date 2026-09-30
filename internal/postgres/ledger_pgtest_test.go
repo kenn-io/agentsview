@@ -5,6 +5,7 @@ package postgres
 import (
 	"database/sql"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -15,6 +16,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/ledger"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 var ledgerPGT0 = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
@@ -166,6 +168,131 @@ func TestEnsureLedgerSchemaFastPathCreatesLedgerTables(t *testing.T) {
 	require.NoError(t, pg.QueryRowContext(ctx, ledgerAppendOnlyGuardsCurrentSQL,
 		ledgerAppendOnlyFunctionBody).Scan(&guardsCurrent))
 	assert.True(t, guardsCurrent, "fast path should install ledger append-only guards")
+}
+
+func TestEnsureLedgerSchemaFastPathRequiresExistingTablesForRestrictedRole(t *testing.T) {
+	pgURL := testPGURL(t)
+	const schema = "agentsview_ledger_privilege_test"
+	const role = "agentsview_ledger_restricted"
+	const rolePassword = "agentsview_ledger_restricted_pw"
+
+	admin, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open admin")
+	t.Cleanup(func() { _ = admin.Close() })
+	_, err = admin.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(t.Context(), admin, schema))
+	require.True(t, pushSchemaCurrent(t.Context(), admin),
+		"fixture must exercise the schema-current sync fast path")
+
+	_, _ = admin.Exec(`DROP OWNED BY ` + role)
+	_, _ = admin.Exec(`DROP ROLE IF EXISTS ` + role)
+	_, err = admin.Exec(`CREATE ROLE ` + role + ` LOGIN PASSWORD '` + rolePassword + `'`)
+	require.NoError(t, err, "create restricted role")
+	t.Cleanup(func() {
+		_, _ = admin.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+		_, _ = admin.Exec(`DROP OWNED BY ` + role)
+		_, _ = admin.Exec(`DROP ROLE IF EXISTS ` + role)
+	})
+	for _, grant := range []string{
+		`GRANT USAGE ON SCHEMA ` + schema + ` TO ` + role,
+		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ` + schema + ` TO ` + role,
+		`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA ` + schema + ` TO ` + role,
+	} {
+		_, err = admin.Exec(grant)
+		require.NoError(t, err, grant)
+	}
+
+	restrictedURL, err := url.Parse(pgURL)
+	require.NoError(t, err)
+	restrictedURL.User = url.UserPassword(role, rolePassword)
+	restricted, err := Open(restrictedURL.String(), schema, true)
+	require.NoError(t, err, "Open restricted")
+	t.Cleanup(func() { _ = restricted.Close() })
+
+	preprovisioned := &Sync{pg: restricted, schema: schema}
+	require.NoError(t, preprovisioned.EnsureSchema(t.Context()),
+		"a restricted push role may use a fully provisioned ledger schema")
+	require.True(t, preprovisioned.schemaDone)
+	policy := &storage.LedgerPushPolicy{Zones: []string{"default"}}
+	assertMissingGuardsRejected := func() {
+		t.Helper()
+		syncer := &Sync{pg: restricted, schema: schema, ledgerPolicy: policy}
+		err := syncer.EnsureSchema(t.Context())
+		require.Error(t, err,
+			"a restricted role must not mark a ledger schema without append-only guards ready")
+		assert.Contains(t, err.Error(), "append-only guards")
+		assert.Contains(t, err.Error(), "CREATE privilege")
+		assert.False(t, syncer.schemaDone,
+			"a ledger schema without append-only guards must remain retryable")
+	}
+	restoreGuards := func() {
+		t.Helper()
+		require.NoError(t, ensureLedgerSchemaPG(t.Context(), admin),
+			"restore ledger append-only guards")
+		guardsCurrent, err := ledgerAppendOnlyGuardsCurrentPG(t.Context(), admin)
+		require.NoError(t, err, "check restored ledger append-only guards")
+		assert.True(t, guardsCurrent,
+			"schema setup should repair invalid ledger append-only guards")
+	}
+
+	_, err = admin.Exec(`DROP FUNCTION ledger_reject_mutation() CASCADE`)
+	require.NoError(t, err, "remove the ledger guard function and triggers")
+	assertMissingGuardsRejected()
+	restoreGuards()
+
+	_, err = admin.Exec(`DROP TRIGGER ledger_events_append_only ON ledger_events`)
+	require.NoError(t, err, "remove one ledger guard trigger")
+	assertMissingGuardsRejected()
+	restoreGuards()
+
+	_, err = admin.Exec(`ALTER TABLE ledger_events
+		DISABLE TRIGGER ledger_events_append_only`)
+	require.NoError(t, err, "disable one ledger guard trigger")
+	assertMissingGuardsRejected()
+	restoreGuards()
+
+	_, err = admin.Exec(`
+		DROP TRIGGER ledger_events_append_only ON ledger_events;
+		CREATE TRIGGER ledger_events_append_only BEFORE UPDATE ON ledger_events
+		FOR EACH ROW EXECUTE FUNCTION ledger_reject_mutation()`)
+	require.NoError(t, err, "replace a ledger guard with an incomplete event mask")
+	assertMissingGuardsRejected()
+	restoreGuards()
+
+	_, err = admin.Exec(`
+		CREATE FUNCTION ledger_test_noop() RETURNS trigger
+		LANGUAGE plpgsql AS $ledger_test_noop$
+		BEGIN RETURN OLD; END;
+		$ledger_test_noop$;
+		DROP TRIGGER ledger_events_append_only ON ledger_events;
+		CREATE TRIGGER ledger_events_append_only
+		BEFORE UPDATE OR DELETE ON ledger_events
+		FOR EACH ROW EXECUTE FUNCTION ledger_test_noop()`)
+	require.NoError(t, err, "replace a ledger guard with another function")
+	assertMissingGuardsRejected()
+	restoreGuards()
+
+	_, err = admin.Exec(`DROP TABLE ledger_segments CASCADE`)
+	require.NoError(t, err, "simulate a partially provisioned ledger schema")
+
+	disabled := &Sync{pg: restricted, schema: schema}
+	require.NoError(t, disabled.EnsureSchema(t.Context()),
+		"missing optional ledger tables must not block a session-only push")
+	require.True(t, disabled.schemaDone)
+
+	syncer := &Sync{
+		pg: restricted, schema: schema,
+		ledgerPolicy: policy,
+	}
+	err = syncer.EnsureSchema(t.Context())
+	require.Error(t, err,
+		"a restricted role must not mark an incomplete ledger schema ready")
+	assert.Contains(t, err.Error(), "ledger")
+	assert.Contains(t, err.Error(), "CREATE privilege")
+	assert.Contains(t, err.Error(), "ledger_segments")
+	assert.False(t, syncer.schemaDone,
+		"an incomplete ledger schema must remain retryable")
 }
 
 func TestEnsureLedgerSchemaPGSerializesConcurrentGuardInstallers(t *testing.T) {

@@ -100,28 +100,15 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $ledger_immutable$` + ledgerAppendOnlyFunctionBody + `$ledger_immutable$;
 
-DO $ledger_triggers$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_trigger
-        WHERE tgname = 'ledger_segments_append_only'
-            AND tgrelid = 'ledger_segments'::regclass
-    ) THEN
-        CREATE TRIGGER ledger_segments_append_only
-        BEFORE UPDATE OR DELETE ON ledger_segments
-        FOR EACH ROW EXECUTE FUNCTION ledger_reject_mutation();
-    END IF;
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_trigger
-        WHERE tgname = 'ledger_events_append_only'
-            AND tgrelid = 'ledger_events'::regclass
-    ) THEN
-        CREATE TRIGGER ledger_events_append_only
-        BEFORE UPDATE OR DELETE ON ledger_events
-        FOR EACH ROW EXECUTE FUNCTION ledger_reject_mutation();
-    END IF;
-END;
-$ledger_triggers$;
+DROP TRIGGER IF EXISTS ledger_segments_append_only ON ledger_segments;
+CREATE TRIGGER ledger_segments_append_only
+BEFORE UPDATE OR DELETE ON ledger_segments
+FOR EACH ROW EXECUTE FUNCTION ledger_reject_mutation();
+
+DROP TRIGGER IF EXISTS ledger_events_append_only ON ledger_events;
+CREATE TRIGGER ledger_events_append_only
+BEFORE UPDATE OR DELETE ON ledger_events
+FOR EACH ROW EXECUTE FUNCTION ledger_reject_mutation();
 `
 
 const ledgerAppendOnlyGuardsCurrentSQL = `
@@ -131,14 +118,25 @@ SELECT EXISTS (
     JOIN pg_namespace n ON n.oid = p.pronamespace
     WHERE n.nspname = current_schema()
         AND p.proname = 'ledger_reject_mutation'
+        AND p.prorettype = 'trigger'::regtype
         AND p.prosrc = $1
 ) AND (
     SELECT count(*)
-    FROM pg_trigger
-    WHERE (tgname = 'ledger_segments_append_only'
-            AND tgrelid = 'ledger_segments'::regclass)
-        OR (tgname = 'ledger_events_append_only'
-            AND tgrelid = 'ledger_events'::regclass)
+    FROM pg_trigger t
+    JOIN pg_class c ON c.oid = t.tgrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    JOIN pg_proc p ON p.oid = t.tgfoid
+    WHERE n.nspname = current_schema()
+        AND p.pronamespace = n.oid
+        AND p.proname = 'ledger_reject_mutation'
+        AND p.prosrc = $1
+        AND t.tgenabled IN ('O', 'A')
+        -- ROW (1) | BEFORE (2) | DELETE (8) | UPDATE (16).
+        AND t.tgtype = 27
+        AND ((t.tgname = 'ledger_segments_append_only'
+                AND c.relname = 'ledger_segments')
+            OR (t.tgname = 'ledger_events_append_only'
+                AND c.relname = 'ledger_events'))
 ) = 2`
 
 // ensureLedgerSchemaPG creates the ledger tables and their append-only
@@ -158,14 +156,45 @@ func ensureLedgerSchemaPG(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
+func missingLedgerTablesPG(ctx context.Context, db *sql.DB) ([]string, error) {
+	missing := make([]string, 0)
+	for _, table := range []string{
+		"ledger_segments",
+		"ledger_events",
+		"ledger_verify_state",
+		"ledger_import_state",
+	} {
+		var exists bool
+		if err := db.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM information_schema.tables
+				WHERE table_schema = current_schema()
+					AND table_name = $1
+					AND table_type = 'BASE TABLE'
+			)`, table).Scan(&exists); err != nil {
+			return nil, fmt.Errorf("checking for ledger table %s: %w", table, err)
+		}
+		if !exists {
+			missing = append(missing, table)
+		}
+	}
+	return missing, nil
+}
+
+func ledgerAppendOnlyGuardsCurrentPG(ctx context.Context, db *sql.DB) (bool, error) {
+	var current bool
+	err := db.QueryRowContext(ctx, ledgerAppendOnlyGuardsCurrentSQL,
+		ledgerAppendOnlyFunctionBody,
+	).Scan(&current)
+	return current, err
+}
+
 // installLedgerAppendOnlyGuardsPG probes first to keep compatible schemas on
 // the fast path. When guards need repair, serialize installers using a
 // schema-scoped sync_metadata row, as the raw custody installer does.
 func installLedgerAppendOnlyGuardsPG(ctx context.Context, db *sql.DB) error {
-	var current bool
-	if err := db.QueryRowContext(ctx, ledgerAppendOnlyGuardsCurrentSQL,
-		ledgerAppendOnlyFunctionBody,
-	).Scan(&current); err != nil {
+	current, err := ledgerAppendOnlyGuardsCurrentPG(ctx, db)
+	if err != nil {
 		return fmt.Errorf("probing ledger append-only guards: %w", err)
 	}
 	if current {
