@@ -978,6 +978,17 @@ fixtures retain this field; missing identities remain source-local.
   older records, rather than inferring coverage from normalized zero-valued
   keys. The provider-wire-preparation regression is
   `TestSandboxGeminiWirePreservesTokenCoverage`.
+- **Session names (2026-09-30):** `saveSummary` records a generated `summary` in
+  the recording's metadata, as a top-level JSON field or a
+  `{"$set":{"summary":...}}` JSONL record where the latest wins. Gemini CLI
+  has no rename command and lists a session under its summary, falling back to
+  the first user message. See
+  [chatRecordingService.ts](https://github.com/google-gemini/gemini-cli/blob/38700b4b38bf387dafded6c97c3f190d084b49e9/packages/core/src/services/chatRecordingService.ts)
+  and
+  [sessionUtils.ts](https://github.com/google-gemini/gemini-cli/blob/38700b4b38bf387dafded6c97c3f190d084b49e9/packages/cli/src/utils/sessionUtils.ts)
+  at `38700b4b38bf387dafded6c97c3f190d084b49e9`. No local Gemini session was
+  available to check. Agentsview uses the summary as the session name. The
+  first message falls back to it only when there is no user message.
 
 ## Gemini Apps (`gemini-apps`)
 

@@ -656,3 +656,46 @@ func TestParseGeminiSession_ContextTokensDelta(t *testing.T) {
 		assert.Equal(t, 0, msgs[1].ContextTokens)
 	})
 }
+
+func TestParseGeminiSession_Summary(t *testing.T) {
+	user := `{"id":"u1","timestamp":"2026-04-23T16:12:43.085Z","type":"user","content":[{"text":"Fix the import path"}]}`
+	tests := []struct {
+		name    string
+		file    string
+		content string
+		want    string
+	}{
+		{
+			name:    "legacy json summary",
+			file:    "session.json",
+			content: `{"sessionId":"s1","startTime":"2026-04-23T16:12:42.783Z","summary":" Fix imports ","messages":[` + user + `]}`,
+			want:    "Fix imports",
+		},
+		{
+			name: "jsonl latest summary wins",
+			file: "session.jsonl",
+			content: strings.Join([]string{
+				`{"sessionId":"s1","startTime":"2026-04-23T16:12:42.783Z","summary":"Initial summary"}`,
+				user,
+				`{"$set":{"summary":"Updated summary"}}`,
+			}, "\n"),
+			want: "Updated summary",
+		},
+		{
+			name:    "no summary",
+			file:    "session.jsonl",
+			content: `{"sessionId":"s1","startTime":"2026-04-23T16:12:42.783Z"}` + "\n" + user,
+			want:    "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := createTestFile(t, tt.file, tt.content)
+			sess, _, err := parseGeminiTestSession(t, path, "my_project", "local")
+			require.NoError(t, err)
+			require.NotNil(t, sess)
+			assert.Equal(t, tt.want, sess.SessionName)
+			assert.Equal(t, "Fix the import path", sess.FirstMessage)
+		})
+	}
+}
