@@ -24,6 +24,10 @@ jobs:
   lint:
     runs-on: namespace-profile-linux-4cpu
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        linter: [golangci, nilaway]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -63,9 +67,15 @@ jobs:
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Run Go linters
-        run: make lint-ci
+        if: matrix.linter == 'golangci'
+        run: make lint-config-check lint-sql check-timing-budgets lint-golangci-ci
+
+      - name: Run NilAway
+        if: matrix.linter == 'nilaway'
+        run: make nilaway
 
       - name: Check Huma API contract
+        if: matrix.linter == 'golangci'
         run: go run go.kenn.io/kit/cmd/huma-check@e9840a327158da2559458186b253b0c15a5e2c2b -fix=false ./...
 
   frontend:
