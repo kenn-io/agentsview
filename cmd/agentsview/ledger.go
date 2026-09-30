@@ -38,6 +38,7 @@ func newLedgerCommand() *cobra.Command {
 	cmd.AddCommand(newLedgerImportCommand())
 	cmd.AddCommand(newLedgerExportCommand())
 	cmd.AddCommand(newLedgerRebuildIndexCommand())
+	cmd.AddCommand(newLedgerSpoolCommand())
 	return cmd
 }
 

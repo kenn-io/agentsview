@@ -40,6 +40,9 @@ The latest published release is
   `agentsview serve --base-path`, including background serves. Keep
   `--public-url` set to the browser origin; AgentsView adds the mount path to
   assets, API requests, navigation, and its published browser URL.
+- Ledger spool interop lets `agentsview ledger spool emit|ingest|status`
+  exchange segments with jilog and opsctl hosts through a shared directory.
+  It checks segment integrity and keeps the archive outside the synced spool.
 - An optional event ledger stores append-only, checksummed events in the
   archive. `agentsview ledger` appends, verifies, imports and exports segments
   that are byte-compatible with jilog ledgers, and a zone with `import_path`

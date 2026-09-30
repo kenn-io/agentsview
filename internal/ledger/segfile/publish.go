@@ -95,6 +95,104 @@ func PublishNew(path string, seg ledger.Segment) (ledger.PublishOutcome, error) 
 	}
 }
 
+// publishNewInRoot publishes one segment relative to a pinned incoming/
+// directory. The filename is one validated segment basename, so every
+// operation stays within the opened directory even if its configured path is
+// replaced while the write is running.
+func publishNewInRoot(root *os.Root, name string, seg ledger.Segment) (ledger.PublishOutcome, error) {
+	data, err := ledger.MarshalSegmentFile(seg)
+	if err != nil {
+		return ledger.Published, err
+	}
+	err = writeNoClobberInRoot(root, name, data)
+	if errors.Is(err, fs.ErrExist) {
+		existing, err := readSpoolFile(root, name)
+		if err != nil {
+			return ledger.Published, err
+		}
+		prior, err := parseSegmentFile(existing)
+		if err != nil {
+			return ledger.Published, fmt.Errorf("serialization error: %w", err)
+		}
+		if prior.ContentMatches(seg) {
+			return ledger.AlreadyIdentical, nil
+		}
+		return ledger.Published, fmt.Errorf(
+			"%w: no-clobber publish: %s already exists with DIFFERENT content — not overwriting",
+			ledger.ErrIntegrity, filepath.Join(root.Name(), name))
+	}
+	if err != nil {
+		return ledger.Published, fmt.Errorf(
+			"no-clobber publish of %s failed at hard_link: %w — publishing requires a filesystem with hard-link support (exFAT/FAT and some SMB/NFS/FUSE mounts do not have it)",
+			filepath.Join(root.Name(), name), err)
+	}
+	return ledger.Published, nil
+}
+
+// writeNoClobberInRoot writes and syncs a temp sibling, then links it into
+// place atomically. It leaves an existing destination untouched and reports
+// fs.ErrExist so callers can compare the stored bytes.
+func writeNoClobberInRoot(root *os.Root, name string, data []byte) error {
+	var tmp string
+	var f *os.File
+	var err error
+	for attempt := range tmpAttempts {
+		tmp = fmt.Sprintf("%s.%d.%d.%d.tmp", name, os.Getpid(), tmpCounter.Add(1)-1, time.Now().Nanosecond())
+		f, err = root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, fs.ErrExist) {
+			return err
+		}
+		if attempt == tmpAttempts-1 {
+			return fmt.Errorf("could not create a unique tmp file after %d attempts: %w", tmpAttempts, fs.ErrExist)
+		}
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		_ = root.Remove(tmp)
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = root.Remove(tmp)
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		_ = root.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = root.Remove(tmp)
+		return err
+	}
+	if err := root.Link(tmp, name); err != nil {
+		_ = root.Remove(tmp)
+		return err
+	}
+	published, err := root.Lstat(name)
+	if err != nil || published.Mode()&os.ModeSymlink != 0 || !published.Mode().IsRegular() ||
+		!os.SameFile(info, published) {
+		_ = root.Remove(name)
+		_ = root.Remove(tmp)
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("spool entry %q changed while it was being published", name)
+	}
+	cleanup := root.Remove(tmp)
+	syncSpoolDirBestEffort(root)
+	if cleanup != nil {
+		return fmt.Errorf(
+			"segment published to %s but its tmp alias %s could not be removed: %w — remove the alias manually",
+			filepath.Join(root.Name(), name), filepath.Join(root.Name(), tmp), cleanup)
+	}
+	return nil
+}
+
 // createNewWithRetry ports create_new_with_retry (segment.rs:189-209): an
 // existing candidate is skipped, never opened or truncated.
 func createNewWithRetry(namegen func(attempt int) string, attempts int) (string, *os.File, error) {
