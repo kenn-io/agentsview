@@ -137,6 +137,14 @@ fixtures retain this field; missing identities remain source-local.
 - **Format:** Project-scoped JSONL transcripts, including subagent JSONL, with
   `user`, `assistant`, `system`, and progress records.
 
+- **Continuation discovery and read failures (2026-09-29):** Rechecked the
+  native provider with the synthetic two-parent fixture in
+  `internal/parser/claude_subagent_parent_test.go`. An unreadable companion
+  fails the parse instead of returning a partial session for replacement.
+  Directory enumeration and candidate stat errors also fail full and
+  incremental parsing; restoring access lets a retry include both transcripts.
+  This verifies Agentsview behavior, not Claude's persistence format.
+
 - **Title evidence (2026-09-13):** A local corpus measure sampled 768 files and
   found 12,261 `ai-title` records, with a mean of 15.96 records per file and a
   maximum of 454. No sampled `aiTitle` value was empty. `custom-title`

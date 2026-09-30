@@ -546,7 +546,11 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // live Cursor IDE row to the new hash; until then the watcher parses the
 // whole container. Trashed rows keep their old hash and are vouched as
 // suppressed.)
-const dataVersion = 121
+// (122: a Claude sub-agent that ran again under a second parent session has
+// that second transcript's entries appended to the same sub-agent session.
+// Re-parse unchanged Claude sources so a sub-agent session reaches its later
+// run's last entry.)
+const dataVersion = 122
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
