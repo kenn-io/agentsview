@@ -69,6 +69,8 @@ type openClawRecordBuilder struct {
 	firstMsg      string
 	sessionID     string
 	cwd           string
+	// sessionName is a user-chosen label supplied by the SQLite adapter.
+	sessionName string
 }
 
 func newOpenClawRecordBuilder() *openClawRecordBuilder {
@@ -221,6 +223,7 @@ func (b *openClawRecordBuilder) finish(
 		Machine:          machine,
 		Agent:            AgentOpenClaw,
 		FirstMessage:     b.firstMsg,
+		SessionName:      b.sessionName,
 		StartedAt:        b.startedAt,
 		EndedAt:          b.endedAt,
 		MessageCount:     len(b.messages),

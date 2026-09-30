@@ -2359,6 +2359,22 @@ schemas keep their existing ordering behavior.
   the database disappears. Returning to a JSONL-writing OpenClaw version then
   leaves that session at its last SQLite snapshot; later JSONL messages for
   the same ID are not imported.
+- **Session names (2026-09-30):** In the SQLite layout, `session_nodes.label`
+  holds the name a user sets with `/name` or the web UI rename, and
+  `session_nodes.display_name` holds a generated title. Each transcript
+  `session_windows.session_id` maps to its node through `session_key`. The
+  tables are in
+  [openclaw-agent-schema.sql](https://github.com/openclaw/openclaw/blob/03e179c755c987aaaf748a62a1d9dd90b8646642/src/state/openclaw-agent-schema.sql)
+  at `03e179c755c987aaaf748a62a1d9dd90b8646642`. The same commit sets the
+  label in
+  [commands-name.ts](https://github.com/openclaw/openclaw/blob/03e179c755c987aaaf748a62a1d9dd90b8646642/src/auto-reply/reply/commands-name.ts)
+  for `/name` and in
+  [session-rename.ts](https://github.com/openclaw/openclaw/blob/03e179c755c987aaaf748a62a1d9dd90b8646642/ui/src/lib/session-rename.ts)
+  for the web UI. Agentsview uses the node's label as the session name for
+  every window of that node and ignores `display_name`. A non-empty label is
+  part of the member digest, so a rename reparses that session; unlabeled
+  members keep their event-only digest. Databases without these tables have no
+  names. The legacy JSONL layout is not covered.
 
 ## QClaw (`qclaw`)
 

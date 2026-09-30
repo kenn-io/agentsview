@@ -684,23 +684,43 @@ func openClawSQLiteFingerprintsEachTx(
 	builder *openClawRecordBuilder,
 	yield func(string, SourceFingerprint) error,
 ) error {
-	query := `SELECT session_id, seq, event_json, created_at FROM transcript_events`
+	// /name and the web UI store a user-chosen label on the session node
+	// that owns each transcript window. Schemas without session nodes
+	// have no labels.
+	hasLabels, err := openClawSQLiteHasSessionLabels(ctx, tx)
+	if err != nil {
+		return err
+	}
+	query := `SELECT e.session_id, e.seq, e.event_json, e.created_at, NULL
+		FROM transcript_events e`
+	if hasLabels {
+		query = `SELECT e.session_id, e.seq, e.event_json, e.created_at, n.label
+		FROM transcript_events e
+		LEFT JOIN session_windows w ON w.session_id = e.session_id
+		LEFT JOIN session_nodes n ON n.session_key = w.session_key`
+	}
 	var args []any
 	if sessionID != "" {
-		query += ` WHERE session_id = ?`
+		query += ` WHERE e.session_id = ?`
 		args = append(args, sessionID)
 	}
-	rows, err := tx.QueryContext(ctx, query+` ORDER BY session_id, seq`, args...)
+	rows, err := tx.QueryContext(ctx, query+` ORDER BY e.session_id, e.seq`, args...)
 	if err != nil {
 		return fmt.Errorf("reading OpenClaw SQLite events: %w", err)
 	}
 	defer rows.Close()
 	hash := sha256.New()
-	var memberID string
+	var memberID, label string
 	var fingerprint SourceFingerprint
 	finish := func() error {
 		if memberID == "" {
 			return nil
+		}
+		// A rename changes only the label, so it must change the digest.
+		// Unlabeled sessions keep their event-only digest.
+		if label != "" {
+			openClawSQLiteHashField(hash, "label")
+			openClawSQLiteHashField(hash, label)
 		}
 		fingerprint.Hash = hex.EncodeToString(hash.Sum(nil))
 		return yield(memberID, fingerprint)
@@ -714,8 +734,9 @@ func openClawSQLiteFingerprintsEachTx(
 			seq       int64
 			eventJSON string
 			createdAt any
+			rowLabel  sql.NullString
 		)
-		if err := rows.Scan(&id, &seq, &eventJSON, &createdAt); err != nil {
+		if err := rows.Scan(&id, &seq, &eventJSON, &createdAt, &rowLabel); err != nil {
 			return fmt.Errorf("scanning OpenClaw SQLite event: %w", err)
 		}
 		if !IsValidSessionID(id) {
@@ -726,8 +747,12 @@ func openClawSQLiteFingerprintsEachTx(
 				return err
 			}
 			memberID = id
+			label = rowLabel.String
 			fingerprint = SourceFingerprint{}
 			hash.Reset()
+			if builder != nil {
+				builder.sessionName = strings.TrimSpace(label)
+			}
 		}
 		openClawSQLiteHashField(hash, strconv.FormatInt(seq, 10))
 		openClawSQLiteHashField(hash, openClawSQLiteValueString(createdAt))
@@ -784,50 +809,67 @@ func openOpenClawSQLiteTx(
 func openClawSQLiteInspectSchema(
 	ctx context.Context, tx *sql.Tx,
 ) error {
-	rows, err := tx.QueryContext(ctx, `PRAGMA table_info(transcript_events)`)
+	columns, err := openClawSQLiteTableColumns(ctx, tx, "transcript_events")
 	if err != nil {
-		return fmt.Errorf(
-			"inspecting OpenClaw SQLite schema: %w", err,
-		)
+		return err
 	}
-	defer rows.Close()
-	required := map[string]bool{
-		"session_id": false,
-		"seq":        false,
-		"event_json": false,
-		"created_at": false,
-	}
-	for rows.Next() {
-		var (
-			cid          int
-			name, typ    string
-			notNull, pk  int
-			defaultValue any
-		)
-		if err := rows.Scan(
-			&cid, &name, &typ, &notNull, &defaultValue, &pk,
-		); err != nil {
-			return fmt.Errorf(
-				"scanning OpenClaw SQLite schema: %w", err,
-			)
-		}
-		if _, ok := required[name]; ok {
-			required[name] = true
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf(
-			"reading OpenClaw SQLite schema: %w", err,
-		)
-	}
-	for name, present := range required {
-		if !present {
+	for _, name := range []string{"session_id", "seq", "event_json", "created_at"} {
+		if !columns[name] {
 			return openClawSQLiteUnsupportedSchemaError{
 				reason: "missing transcript_events." + name,
 			}
 		}
 	}
 	return nil
+}
+
+// openClawSQLiteHasSessionLabels reports whether the database links
+// transcript sessions to session nodes that carry a label.
+func openClawSQLiteHasSessionLabels(
+	ctx context.Context, tx *sql.Tx,
+) (bool, error) {
+	windows, err := openClawSQLiteTableColumns(ctx, tx, "session_windows")
+	if err != nil {
+		return false, err
+	}
+	if !windows["session_id"] || !windows["session_key"] {
+		return false, nil
+	}
+	nodes, err := openClawSQLiteTableColumns(ctx, tx, "session_nodes")
+	if err != nil {
+		return false, err
+	}
+	return nodes["session_key"] && nodes["label"], nil
+}
+
+// openClawSQLiteTableColumns returns the column names of table, or an empty
+// set when the table does not exist.
+func openClawSQLiteTableColumns(
+	ctx context.Context, tx *sql.Tx, table string,
+) (map[string]bool, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"inspecting OpenClaw SQLite table %s: %w", table, err,
+		)
+	}
+	defer rows.Close()
+	columns := make(map[string]bool)
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf(
+				"scanning OpenClaw SQLite table %s: %w", table, err,
+			)
+		}
+		columns[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf(
+			"reading OpenClaw SQLite table %s: %w", table, err,
+		)
+	}
+	return columns, nil
 }
 
 func openClawSQLiteSessionIDsEach(
