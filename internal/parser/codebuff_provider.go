@@ -217,14 +217,11 @@ func (s codebuffSourceSet) ChangedPathRelevance(
 	if _, ok := codebuffDataFilenames[filepath.Base(clean)]; ok {
 		return ChangedPathDataBearing, nil
 	}
-	rel, err := filepath.Rel(root, clean)
-	if err != nil {
-		return ChangedPathUnclassified, nil
-	}
 	// Any other direct child of <project>/chats/<timestamp>/ is a debug log
 	// or temp file. Directory events stay unclassified because a new
 	// session's directory mtime also drives reconcile.
-	if len(strings.Split(rel, string(filepath.Separator))) == 4 {
+	rel, err := filepath.Rel(root, clean)
+	if err == nil && len(strings.Split(rel, string(filepath.Separator))) == 4 {
 		return ChangedPathNonData, nil
 	}
 	return ChangedPathUnclassified, nil
