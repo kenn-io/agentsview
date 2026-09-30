@@ -480,20 +480,24 @@ fixtures retain this field; missing identities remain source-local.
   response items and token-count events through the shared fixture builder.
   Its integration test checks parsed messages and aggregate output tokens.
 
-- **Format:** Rollout JSONL files, with a separate JSONL session index used by
-  older releases for discovery and metadata. Current releases no longer write
-  `session_index.jsonl`; thread titles live in `thread_history_*.sqlite`
-  databases that agentsview does not read, so an absent index is the normal
-  state, not a rename signal (reverified 2026-08-13 against a live `~/.codex`
-  with no `session_index.jsonl` and a populated `thread_history_1.sqlite`).
-  The TUI also maintains an append-oriented `history.jsonl` whose records
-  contain `session_id`, Unix-seconds `ts`, and submitted prompt `text`;
-  configured size enforcement can rewrite a retained tail in place. Agentsview
-  consumes only the first two fields as a live-activity hint. Subagent
-  rollouts carry a structural `source.subagent` marker and a top-level
-  `parent_thread_id`; that pair defines the parent edge. `thread_source` is a
-  legacy fallback, and `session_id` identifies the root or tree rather than
-  the parent.
+- **Format:** Rollout JSONL files, with a separate JSONL session index for
+  thread names. Current releases keep thread metadata in SQLite and still
+  append an `{"id","thread_name","updated_at"}` entry to `session_index.jsonl`
+  each time a thread is renamed; see `append_thread_name` in
+  [session_index.rs](https://github.com/openai/codex/blob/92bc601ad60542c92bf0bb1e7a2eb70b84ac49d2/codex-rs/rollout/src/session_index.rs)
+  and its caller in
+  [update_thread_metadata.rs](https://github.com/openai/codex/blob/92bc601ad60542c92bf0bb1e7a2eb70b84ac49d2/codex-rs/thread-store/src/local/update_thread_metadata.rs).
+  A Codex home where no thread was ever renamed has no index, so an absent
+  index is the normal state, not a rename signal. Reverified 2026-09-30: a
+  local `~/.codex` used by codex-cli 0.159.2 had both a
+  `thread_history_1.sqlite` and a `session_index.jsonl` written that day. The
+  TUI also maintains an append-oriented `history.jsonl` whose records contain
+  `session_id`, Unix-seconds `ts`, and submitted prompt `text`; configured
+  size enforcement can rewrite a retained tail in place. Agentsview consumes
+  only the first two fields as a live-activity hint. Subagent rollouts carry a
+  structural `source.subagent` marker and a top-level `parent_thread_id`; that
+  pair defines the parent edge. `thread_source` is a legacy fallback, and
+  `session_id` identifies the root or tree rather than the parent.
 
 - **Automation (reverified 2026-09-19):** `session_meta.payload.originator` of
   `codex_exec` is durable producer evidence of a non-interactive `codex exec`
