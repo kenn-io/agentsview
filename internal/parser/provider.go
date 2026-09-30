@@ -291,9 +291,9 @@ type StoredSourceHintScopeProvider interface {
 // asserts a constructed provider against MultiFileStatHasher and caches
 // the result. Single-file providers whose Fingerprint content-hashes the
 // source (Claude, Codex) also implement it: their digest folds the
-// change-time term, so a persisted stat digest preserves in-place-rewrite
-// detection across process restarts without re-reading unchanged content
-// on every pass. Providers that implement neither behavior take the
+// change-time and file-identity terms, so a persisted stat digest preserves
+// in-place-rewrite and replacement detection across process restarts
+// without re-reading unchanged content on every pass. Providers that implement neither behavior take the
 // existing stat-only composite path.
 type MultiFileStatHasher interface {
 	// ComputeMultiFileStatHash stats the chat path plus any companion
