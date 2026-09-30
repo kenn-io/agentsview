@@ -82,9 +82,11 @@ func TestDaemonIngestionReloadAppliesProviderSettings(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, reloaded.DisabledAgents)
 
-	// The engine switches before the replacement watcher is ready.
+	// The engine switches before the replacement watcher registers, so wait
+	// for the whole apply; a file written in between would go unseen.
 	ingestion.applying.Wait()
-	require.Equal(t, []string{primary, alternate},
+	require.Equal(t,
+		[]string{primary, alternate},
 		engine.ReconciliationRootsForAgent(string(parser.AgentGemini)),
 		"the engine switches to the saved provider set")
 	assert.False(t, sessionImported(t, database, "gemini:primary"),
