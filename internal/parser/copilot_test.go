@@ -296,10 +296,10 @@ func TestParseCopilotSession_WorkspaceName(t *testing.T) {
 	path := writeDirSession(t, "ws-name", events, yaml)
 	sess, _ := parseAndValidateHelper(t, path, "m", 2)
 
-	// A generated name replaces the first user message but is not a
-	// session name.
-	assertEqual(t, "Fix Login Authentication Bug", sess.FirstMessage, "FirstMessage")
-	assert.Empty(t, sess.SessionName)
+	// A generated name is the session name; the first message stays
+	// the user's prompt.
+	assert.Equal(t, "Fix Login Authentication Bug", sess.SessionName)
+	assert.Equal(t, "Fix the login bug", sess.FirstMessage)
 }
 
 func TestParseCopilotSession_WorkspaceNameUserNamed(t *testing.T) {

@@ -891,9 +891,10 @@ fixtures retain this field; missing identities remain source-local.
   [`SessionWorkspacesGetWorkspaceResult`](https://github.com/github/copilot-sdk/blob/a2b2c18eb5a20417fc613eaaa93199f55ad22ea4/java/sdk/src/generated/java/com/github/copilot/generated/rpc/SessionWorkspacesGetWorkspaceResult.java)
   at `a2b2c18eb5a20417fc613eaaa93199f55ad22ea4` describes `user_named` as
   whether the user chose the name, and public `workspace.yaml` files show both
-  keys. No local Copilot session was available to check. Agentsview stores the
-  name as the session name when `user_named: true`; otherwise a generated name
-  keeps replacing the first user message.
+  keys. No local Copilot session was available to check. Agentsview uses the
+  name as the session name whether the user chose it or Copilot generated it.
+  The first message falls back to the name only when the session has no user
+  message.
 
 - **Store evidence:** Reverified 2026-09-10 against the published Copilot CLI
   1.0.83
