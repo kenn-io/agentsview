@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json/jsontext"
@@ -9,69 +8,37 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strconv"
 	"strings"
 	"time"
 
-	"github.com/tidwall/gjson"
 	"go.kenn.io/agentsview/internal/stringutil"
 )
 
-// Wire structs for chat-messages.json.
-//
-// These are the memory contract: the whole point of the streaming decoder is
-// that the transcript's per-message metadata.runState embeds the full project
-// context (file tree, per-file token scores, knowledge files, agent templates
-// with their handleSteps source, custom tool definitions, message history),
-// which makes a transcript quadratic in conversation length. Only fields the
-// parser consumes are declared; the v2 decoder skips every undeclared
-// member's bytes instead of materializing them. Adding a field here for
-// convenience can reintroduce the entire problem -- read the structs before
-// the decode loop (plan 021).
-//
-// The `html` block type is deliberately absent: upstream marks it "NOT
-// serializable - don't use for persistent data" (cli/src/types/chat.ts), so
-// it cannot appear in a persisted transcript.
+// Wire structs for chat-messages.json. Only fields the parser consumes are
+// declared, so decoded messages stay small even though each AI message's
+// metadata.runState embeds the full project context.
 type codebuffWireMessage struct {
 	ID      string `json:"id"`
 	Variant string `json:"variant"`
 	Content string `json:"content"`
-	// Timestamp is always present in CLI-written transcripts: upstream's
-	// ChatMessage type declares `timestamp: string` as required
-	// (cli/src/types/chat.ts) and every message constructor fills it with
-	// formatTimestamp(). Do not add handling for, or accept review findings
-	// about, a message that lacks one. The value is a locale-formatted
-	// hour and minute (Intl.DateTimeFormat with 2-digit hour and minute),
-	// not ISO, so the date comes from the session directory; see
-	// parseCodebuffTimestamp for the formats the parser accepts.
+	// Timestamp is a locale-formatted hour and minute; the date comes from
+	// the session directory (see parseCodebuffTimestamp).
 	Timestamp string `json:"timestamp"`
-	ParentID  string `json:"parentId"`
-	// Credits stays a raw value, not a float: presence (including an
-	// explicit null or a non-numeric string) is what suppresses the legacy
-	// run-state fallback, and the raw text feeds plan 020's decimal-safe
-	// cost parsing exactly as gjson's .Raw did.
+	// Credits stays raw: presence (even null or a string) suppresses the
+	// legacy run-state fallback, and the raw text is parsed as a decimal.
 	Credits  jsontext.Value      `json:"credits"`
 	Metadata *codebuffWireMeta   `json:"metadata"`
 	Blocks   []codebuffWireBlock `json:"blocks"`
 
-	// Fields plan 022 consumes: the message envelope beyond content and
-	// blocks. userError is a runtime notice the app displayed via
-	// setError(); an empty string means absent, matching upstream's
-	// clearUserError() reset.
+	// UserError is a runtime notice the app displayed; empty means none.
 	UserError        string                        `json:"userError"`
 	ValidationErrors []codebuffWireValidationError `json:"validationErrors"`
 	Attachments      []codebuffWireImageAttachment `json:"attachments"`
 	TextAttachments  []codebuffWireTextAttachment  `json:"textAttachments"`
 	FileAttachments  []codebuffWireFileAttachment  `json:"fileAttachments"`
-	IsComplete       *bool                         `json:"isComplete"`
-	CompletionTime   string                        `json:"completionTime"`
-	IsCompletion     *bool                         `json:"isCompletion"`
 }
 
-// codebuffWireValidationError is one upstream validation entry; only the
-// message text is rendered, never the id.
 type codebuffWireValidationError struct {
-	ID      string `json:"id"`
 	Message string `json:"message"`
 }
 
@@ -82,9 +49,7 @@ type codebuffWireImageAttachment struct {
 }
 
 // codebuffWireTextAttachment is upstream TextAttachment. The full content
-// member is deliberately undeclared -- storing a whole pasted document in
-// the transcript is both a memory hazard and out of scope; only the
-// preview (byte-limited at render time) and its charCount are kept.
+// member is deliberately undeclared; only the preview and charCount are kept.
 type codebuffWireTextAttachment struct {
 	Preview   string `json:"preview"`
 	CharCount int64  `json:"charCount"`
@@ -102,18 +67,12 @@ type codebuffWireMeta struct {
 	RunState *codebuffWireRunState `json:"runState"`
 }
 
-// codebuffWireRunState retains only what plan 020's model resolution
-// consumes. Everything else in the upstream RunState -- fileTree,
-// fileTokenScores, tokenCallers, knowledgeFiles, userKnowledgeFiles,
-// messageHistory, systemPrompt, agentTemplates' handleSteps source,
-// customToolDefinitions, shellConfigFiles, systemInfo -- must stay absent
-// from this struct so the decoder skips those bytes rather than holding the
-// whole project context in memory.
+// codebuffWireRunState is the subset of upstream RunState (sdk/src/run-state.ts)
+// that model resolution reads. It decodes both a message's
+// metadata.runState and the standalone run-state.json.
 type codebuffWireRunState struct {
-	AgentType    string                    `json:"agentType"`
 	Inference    *codebuffWireInference    `json:"inference"`
 	SessionState *codebuffWireSessionState `json:"sessionState"`
-	FileContext  *codebuffWireFileContext  `json:"fileContext"`
 }
 
 type codebuffWireInference struct {
@@ -126,12 +85,8 @@ type codebuffWireSessionState struct {
 	FileContext    *codebuffWireFileContext    `json:"fileContext"`
 }
 
-// codebuffWireMainAgentState retains only the agent type and inference
-// source; the upstream AgentState's messageHistory and systemPrompt stay
-// undeclared so their bytes are skipped.
 type codebuffWireMainAgentState struct {
-	AgentType string                 `json:"agentType"`
-	Inference *codebuffWireInference `json:"inference"`
+	AgentType string `json:"agentType"`
 }
 
 type codebuffWireFileContext struct {
@@ -143,10 +98,8 @@ type codebuffWireTemplate struct {
 }
 
 // codebuffWireBlock is a tagged union over `type`: one struct whose members
-// cover the per-type shapes the parser reads. Members not present on a given
-// block type decode as zero values, matching the gjson Get("") behavior this
-// replaces. Params/Input/Output stay jsontext.Value so their raw bytes pass
-// through byte-identical to the gjson .Raw values the parser stores.
+// cover the per-type shapes the parser reads. Params/Input/Output stay raw so
+// their bytes are stored verbatim.
 type codebuffWireBlock struct {
 	Type string `json:"type"`
 
@@ -164,13 +117,8 @@ type codebuffWireBlock struct {
 	// agent
 	AgentType string `json:"agentType"`
 	AgentName string `json:"agentName"`
-	// AgentID is always set and unique within a transcript: upstream's
-	// AgentContentBlock declares `agentId: string` as required
-	// (cli/src/types/chat.ts), each spawned block starts as
-	// "<spawn toolCallId>-<index>", and resolveSpawnAgentToReal then swaps
-	// in the server's real agent ID (cli/src/utils/sdk-event-handlers.ts).
-	// Do not add handling for, or accept review findings about, an empty or
-	// repeated agentId.
+	// AgentID is required and unique within a transcript upstream
+	// (cli/src/types/chat.ts).
 	AgentID       string              `json:"agentId"`
 	Status        string              `json:"status"`
 	Params        jsontext.Value      `json:"params"`
@@ -200,8 +148,7 @@ type codebuffWireBlock struct {
 // codebuffWireConsent retains only the headline an operator would see in a
 // consent banner; body, folder, branch, and runId stay undeclared.
 type codebuffWireConsent struct {
-	AdvertiserName string `json:"advertiserName"`
-	Headline       string `json:"headline"`
+	Headline string `json:"headline"`
 }
 
 type codebuffWireAgentEntry struct {
@@ -224,16 +171,14 @@ type codebuffWireAnswer struct {
 }
 
 // codebuffTranscript carries everything parseCodebuffSession needs from the
-// transcript: parsed messages, per-turn billing facts (plan 020), the
-// timestamp envelope, whether the file ended mid-write, and the nested
-// subagents lifted into their own sessions.
+// transcript: parsed messages, per-turn billing facts, the timestamp
+// envelope, and the nested subagents lifted into their own sessions.
 type codebuffTranscript struct {
 	Messages  []ParsedMessage
 	TurnFacts []codebuffTurnFact
 	Subagents []codebuffSubagent
 	StartedAt time.Time
 	EndedAt   time.Time
-	Truncated bool
 }
 
 // codebuffSubagent is one nested `agent` block stored as its own session.
@@ -276,9 +221,7 @@ func newCodebuffSubagentSink(rootID string) *codebuffSubagentSink {
 
 // allocate returns the child session ID for one agent block: the owning
 // session's full ID plus the block's agentId, so IDs are stable across
-// reparses. agentId is always present and unique within a transcript (see
-// codebuffWireBlock.AgentID), so no positional or de-duplication fallback
-// exists.
+// reparses.
 func (s *codebuffSubagentSink) allocate(agentID string) string {
 	return s.rootID + codebuffSubagentIDSep + codebuffSubagentKey(agentID)
 }
@@ -342,49 +285,12 @@ func (s *codebuffSubagentSink) collect(
 	return id
 }
 
-// decodeCodebuffMessages streams chat-messages.json element by element with
-// the encoding/json/v2 jsontext decoder, so the megabytes of ignored
-// metadata.runState in each AI message are skipped instead of buffered. The
-// parsed output is byte-identical to the previous gjson implementation
-// (guarded by the reference-decoder equivalence test); any difference in
-// ParsedMessage content would be a stored-data change requiring a
-// dataVersion bump, which plan 021 must not do.
-//
-// sessionID is the full ID of the session being decoded; nested agent blocks
-// become child sessions whose IDs derive from it (codebuffSubagentSink).
-//
-// Truncation: an unexpected-EOF or syntax error after at least one element
-// decoded yields the messages so far with Truncated=true -- a transcript
-// interrupted mid-write shows what survived instead of disappearing from the
-// archive. Zero elements decoded keeps today's hard error: there is nothing
-// to show.
-//
-// A reader never observes a file mid-write. The CLI saves chat-messages.json
-// with writeFileAtomic / writeFileAtomicAsync (cli/src/utils/
-// write-file-atomic.ts): it writes a unique temp sibling, then renames it
-// over the target, so every read sees either the previous complete file or
-// the next one. A damaged file on disk is static damage left by a crash
-// under an older non-atomic writer, never a live write in progress, so no
-// later snapshot can turn a complete stored transcript into a prefix. Keeping
-// the surviving prefix for such a file, syntax errors included, is
-// deliberate. Do not add retry, snapshot-completeness, or keep-the-old-copy
-// handling for this case, and do not accept review findings that assume
-// torn reads.
-//
-// Cancellation is not truncation, and the distinction is load-bearing: the
-// Codebuff source set sets ForceReplace=true (codebuff_provider.go), so
-// anything this function returns replaces the stored transcript. A cancelled
-// decode that returned its partial buffer would commit half a conversation as
-// if it were the whole one, marked only by a truncation flag a reader may
-// read as "the agent stopped", with no error to notice because the parse
-// reports success. So a ctx error returns an empty transcript and the error
-// -- never the partial buffer, never Truncated=true. Note honestly: the
-// production caller passes context.Background() (WithFileParse has no ctx
-// and widening it is out of scope for plan 021), so the check is currently
-// reachable only from tests. That is a known gap, not a guarantee; the rule
-// is what keeps the gap safe when someone threads a real context later.
+// decodeCodebuffMessages streams chat-messages.json one array element at a
+// time, so peak memory is one message rather than the whole file. Any
+// malformed JSON is an error. sessionID is the full ID of the session being
+// decoded; nested agent blocks become child sessions whose IDs derive from it.
 func decodeCodebuffMessages(
-	ctx context.Context, r io.Reader, sessionDate time.Time, sessionID string,
+	r io.Reader, sessionDate time.Time, sessionID string,
 ) (codebuffTranscript, error) {
 	dec := jsontext.NewDecoder(r)
 	subs := newCodebuffSubagentSink(sessionID)
@@ -401,134 +307,60 @@ func decodeCodebuffMessages(
 
 	var (
 		t           codebuffTranscript
-		startedAt   time.Time
-		endedAt     time.Time
 		ordinal     int
 		currentDate = sessionDate
 		prevHour    = -1
-		// decodedElements counts message objects that survived the wire
-		// decode, whether or not they rendered a ParsedMessage. Truncation
-		// detection must not key on len(t.Messages): a valid AI element
-		// with credits but no displayable blocks renders nothing, so a
-		// transcript of such elements would look empty and a later cut
-		// would become a hard parse error that discards the session.
-		decodedElements int
 	)
 	// Seed the rollover state from the session creation time-of-day so the
-	// first time-only message can roll past midnight (see
-	// parseCodebuffMessages for the worked example).
+	// first time-only message can roll past midnight.
 	if !sessionDate.IsZero() {
 		prevHour = sessionDate.Hour()
 	}
 
 	for dec.PeekKind() != jsontext.KindEndArray {
-		if err := ctx.Err(); err != nil {
-			// Cancellation is not truncation: return no results, per the
-			// ForceReplace note above.
-			return codebuffTranscript{}, err
-		}
 		var raw jsontext.Value
 		if err := json.UnmarshalDecode(dec, &raw); err != nil {
-			if decodedElements > 0 && decodeIsTruncation(err) {
-				t.Truncated = true
-				t.StartedAt, t.EndedAt = startedAt, endedAt
-				t.Subagents = subs.out
-				return t, nil
-			}
 			return codebuffTranscript{}, fmt.Errorf("decode chat-messages: %w", err)
 		}
-		// Retention accounting: the element's raw bytes are transiently
-		// live while it is folded into the accumulator -- that is the
-		// decoder's true peak, one element at a time, independent of how
-		// many elements the transcript carries. The decoded subset is far
-		// smaller because the struct skips the undeclared run-state
-		// members; charging only that would under-report the transient.
-		charge := conservativeDecodedRetainedBytes(int64(len(raw)))
-		observeStreamingRetainedBytes(ctx, charge)
-		released := false
-		release := func() {
-			if !released {
-				observeStreamingRetainedBytes(ctx, -charge)
-				released = true
-			}
-		}
-
 		var m codebuffWireMessage
 		if err := json.Unmarshal(raw, &m); err != nil {
-			// A valid-JSON element that is not a message object (a bare
-			// number or string) -- the gjson implementation silently skipped
-			// such elements: Get("variant") returned empty and no case
-			// matched. Preserve that tolerance so stored output cannot
-			// change.
-			release()
+			// A valid element that is not a message object is skipped.
 			continue
 		}
-		decodedElements++
 
 		var ts time.Time
 		ts, currentDate, prevHour = codebuffFoldTimestamp(
 			m.Timestamp, currentDate, prevHour,
 		)
 		if !ts.IsZero() {
-			if startedAt.IsZero() || ts.Before(startedAt) {
-				startedAt = ts
+			if t.StartedAt.IsZero() || ts.Before(t.StartedAt) {
+				t.StartedAt = ts
 			}
-			if ts.After(endedAt) {
-				endedAt = ts
+			if ts.After(t.EndedAt) {
+				t.EndedAt = ts
 			}
 		}
 		appendCodebuffWireMessage(&t, &m, ts, &ordinal, sessionID, subs)
-		release()
 	}
 	if _, err := dec.ReadToken(); err != nil {
-		// Consumes the closing bracket. An EOF or syntax error here means
-		// the file was cut off after at least one complete element.
-		if decodedElements > 0 && decodeIsTruncation(err) {
-			t.Truncated = true
-			t.StartedAt, t.EndedAt = startedAt, endedAt
-			t.Subagents = subs.out
-			return t, nil
-		}
 		return codebuffTranscript{}, fmt.Errorf("decode chat-messages: %w", err)
 	}
-	// The whole-file validation this replaces (gjson.ValidBytes) rejected
-	// anything after the closing bracket; keep that hard error.
-	if _, err := dec.ReadToken(); err != nil {
-		if !errors.Is(err, io.EOF) {
-			return codebuffTranscript{}, fmt.Errorf(
-				"decode chat-messages: trailing data after array: %w", err)
-		}
-	} else {
+	if _, err := dec.ReadToken(); err == nil {
 		return codebuffTranscript{}, errors.New(
 			"decode chat-messages: trailing data after array")
+	} else if !errors.Is(err, io.EOF) {
+		return codebuffTranscript{}, fmt.Errorf(
+			"decode chat-messages: trailing data after array: %w", err)
 	}
 
-	t.StartedAt, t.EndedAt = startedAt, endedAt
 	t.Subagents = subs.out
 	return t, nil
 }
 
-// decodeIsTruncation reports whether a decode error means the file was cut
-// off mid-write: an unexpected EOF from a partial element, a clean EOF from
-// a missing closing bracket, or a syntax error from malformed bytes.
-func decodeIsTruncation(err error) bool {
-	return errors.Is(err, io.ErrUnexpectedEOF) ||
-		errors.Is(err, io.EOF) ||
-		isSyntaxDecodeErr(err)
-}
-
-// isSyntaxDecodeErr reports whether err is a JSON syntax error from the
-// jsontext decoder.
-func isSyntaxDecodeErr(err error) bool {
-	_, ok := errors.AsType[*jsontext.SyntacticError](err)
-	return ok
-}
-
 // codebuffFoldTimestamp applies the midnight-rollover state machine to one
-// raw timestamp string, mirroring parseCodebuffMessages' loop body exactly:
-// time-only timestamps roll the date forward when the hour wraps past
-// midnight; absolute timestamps anchor the current date to their own local
-// calendar date and reset the rollover tracker.
+// raw timestamp string: time-only timestamps roll the date forward when the
+// hour wraps past midnight; absolute timestamps anchor the current date to
+// their own local calendar date and reset the rollover tracker.
 func codebuffFoldTimestamp(
 	raw string, currentDate time.Time, prevHour int,
 ) (ts time.Time, nextDate time.Time, nextHour int) {
@@ -563,8 +395,9 @@ func codebuffFoldTimestamp(
 		}
 	}
 	return ts, cur, nextHour
-} // codebuffTextPreviewMaxBytes caps a pasted-text attachment's stored
+}
 
+// codebuffTextPreviewMaxBytes caps a pasted-text attachment's stored
 // preview, including the ellipsis marker appended at the call site when
 // truncation happens (its bytes are reserved from the limit).
 const codebuffTextPreviewMaxBytes = 200
@@ -573,11 +406,9 @@ const codebuffTextPreviewMaxBytes = 200
 // the question has no header.
 const codebuffAskUserLabelMaxBytes = 80
 
-// codebuffEnvelopeAttachmentLines renders the attachment envelope (image,
-// pasted-text, and file attachments) as the marker lines the parser stores,
-// in plan-022 order: images, then text, then files. Local paths and full
-// pasted content are never rendered -- the wire struct does not declare
-// them, so they cannot leak here.
+// codebuffEnvelopeAttachmentLines renders the attachment envelope as marker
+// lines: images, then pasted text, then files. Local paths and full pasted
+// content are not declared on the wire structs, so they are never stored.
 func codebuffEnvelopeAttachmentLines(m *codebuffWireMessage) []string {
 	var lines []string
 	for _, a := range m.Attachments {
@@ -593,9 +424,6 @@ func codebuffEnvelopeAttachmentLines(m *codebuffWireMessage) []string {
 		if a.Preview != "" {
 			preview := a.Preview
 			if len(preview) > codebuffTextPreviewMaxBytes {
-				// The ellipsis marker's bytes are reserved from the
-				// limit, per the repo truncation convention, so the
-				// stored line stays within the cap.
 				preview = stringutil.SafeTruncate(
 					preview, codebuffTextPreviewMaxBytes-3) + "…"
 			}
@@ -636,16 +464,11 @@ func codebuffEmitSystem(
 }
 
 // appendCodebuffWireMessage converts one decoded wire message into zero or
-// more ParsedMessages plus its plan-020 turn fact. Variant handling: user
-// renders as a user message, ai through the block walker, error as a system
-// message, and every other variant -- including agent and anything upstream
-// adds later -- as an assistant message, matching upstream's roleHeading
-// default, so a variant whose only payload is content is never dropped.
-// Envelope handling (plan 022): attachment markers append to the
-// content-bearing paths' Content; userError and validationErrors are runtime
-// notices, not conversation content, so they emit their own system messages
-// for any variant. An ai message skips the attachment markers: its transcript
-// payload is the block stream, and upstream stamps attachments on prompts.
+// more ParsedMessages plus its turn fact. user renders as a user message, ai
+// through the block walker, error as a system message, and every other
+// variant (agent, future ones) as an assistant message, matching upstream's
+// roleHeading default. userError and validationErrors become system messages
+// for any variant.
 func appendCodebuffWireMessage(
 	t *codebuffTranscript, m *codebuffWireMessage, ts time.Time, ordinal *int,
 	sessionID string, subs *codebuffSubagentSink,
@@ -653,9 +476,8 @@ func appendCodebuffWireMessage(
 	switch m.Variant {
 	case "user":
 		content := strings.TrimSpace(m.Content)
-		// User messages can also carry blocks (e.g. images). Collect
-		// image references from blocks to append to content, one per
-		// line, matching the gjson implementation's output byte for byte.
+		// User messages can also carry image blocks; append a marker line
+		// for each.
 		var imageRefs []string
 		for _, b := range m.Blocks {
 			if b.Type == "image" {
@@ -666,11 +488,8 @@ func appendCodebuffWireMessage(
 				}
 			}
 		}
-		// Attachment envelope markers come after the image-block markers,
-		// in plan-022 order: images, pasted text, files. An envelope-only
-		// user message (attachments but no text) still counts as a user
-		// message: upstream counts the message, not the text, and the
-		// markers make the content non-empty here.
+		// Attachment markers follow the image-block markers, so an
+		// attachment-only prompt still renders as a user message.
 		envelope := codebuffEnvelopeAttachmentLines(m)
 		if len(envelope) > 0 {
 			all := append(append([]string{}, imageRefs...), envelope...)
@@ -703,30 +522,19 @@ func appendCodebuffWireMessage(
 			}
 			t.Messages = append(t.Messages, parsed...)
 		}
-		// An AI message with no displayable content still counts as a
-		// turn boundary for billing: its credits field describes spend
-		// even when nothing rendered. Record the fact either way. A
-		// present-but-unusable credits value (null, a string) still marks
-		// presence, matching gjson's Exists() semantics this replaces.
+		// An AI message is a billing turn even when nothing rendered.
 		if len(m.Credits) > 0 {
-			credits, creditsRaw := codebuffWireCredits(m.Credits)
 			t.TurnFacts = append(t.TurnFacts, codebuffTurnFact{
-				MessageID:      m.ID,
-				Ordinal:        firstOrdinal,
-				Timestamp:      ts,
-				CreditsPresent: true,
-				Credits:        credits,
-				CreditsRaw:     creditsRaw,
-				RunState:       runStateResultFor(m),
+				MessageID:  m.ID,
+				Ordinal:    firstOrdinal,
+				Timestamp:  ts,
+				CreditsRaw: strings.TrimSpace(string(m.Credits)),
+				RunState:   codebuffMessageRunState(m),
 			})
 		}
 
 	case "error":
-		// Error messages from the upstream CLI (API failures, rate
-		// limits, country blocks). Emit as a system message so the error
-		// is visible in the transcript. The attachment envelope rides on
-		// every variant upstream, so an error message that carries one
-		// keeps its markers too.
+		// API failures, rate limits, and similar errors from the CLI.
 		content := strings.TrimSpace(m.Content)
 		envelope := codebuffEnvelopeAttachmentLines(m)
 		if len(envelope) > 0 {
@@ -737,10 +545,7 @@ func appendCodebuffWireMessage(
 		codebuffEmitSystem(t, content, ts, ordinal)
 
 	default:
-		// agent and any future variant: content-bearing, rendered as an
-		// assistant message (upstream's roleHeading maps everything
-		// unlisted to "## Assistant"). Empty content and no blocks still
-		// produce nothing, as before.
+		// agent and any future variant render as assistant text.
 		content := strings.TrimSpace(m.Content)
 		envelope := codebuffEnvelopeAttachmentLines(m)
 		if len(envelope) > 0 {
@@ -760,12 +565,6 @@ func appendCodebuffWireMessage(
 		}
 	}
 
-	// Runtime notices, any variant: userError is the error banner the app
-	// displayed; validationErrors are per-entry validation failures. Both
-	// are system messages so they never read as conversation content, and
-	// they emit even when the message itself rendered nothing, because a
-	// notice with no surrounding context is still a record of what the
-	// user saw.
 	if m.UserError != "" {
 		codebuffEmitSystem(t, m.UserError, ts, ordinal)
 	}
@@ -774,38 +573,12 @@ func appendCodebuffWireMessage(
 	}
 }
 
-// codebuffWireCredits mirrors the gjson semantics this decoder replaces for
-// the credits member: a JSON number keeps its literal text; a JSON string is
-// unwrapped and parsed as a number (zero on failure, like gjson's Float());
-// an explicit null counts as present with zero. The returned raw text is
-// what plan 020's codebuffTurnCost parses, so a string value flows through
-// as an unparsable raw and emits no row -- while still marking presence.
-func codebuffWireCredits(raw jsontext.Value) (float64, string) {
-	text := strings.TrimSpace(string(raw))
-	if len(text) > 1 && text[0] == '"' && text[len(text)-1] == '"' {
-		if inner, err := strconv.Unquote(text); err == nil {
-			f, _ := strconv.ParseFloat(inner, 64)
-			return f, text
-		}
-		return 0, text
+// codebuffMessageRunState returns the message's metadata.runState, or nil.
+func codebuffMessageRunState(m *codebuffWireMessage) *codebuffWireRunState {
+	if m.Metadata == nil {
+		return nil
 	}
-	f, _ := strconv.ParseFloat(text, 64)
-	return f, text
-}
-
-// runStateResultFor re-derives the plan-020 gjson view of one message's
-// metadata.runState from the decoded wire struct, so codebuffTurnModel's
-// resolution order is unchanged. Only the retained members can appear in the
-// re-encoded bytes; everything else was skipped at decode time.
-func runStateResultFor(m *codebuffWireMessage) gjson.Result {
-	if m.Metadata == nil || m.Metadata.RunState == nil {
-		return gjson.Parse("")
-	}
-	raw, err := json.Marshal(m.Metadata.RunState)
-	if err != nil {
-		return gjson.Parse("")
-	}
-	return gjson.Parse(string(raw))
+	return m.Metadata.RunState
 }
 
 // codebuffAskUserAnswerLines renders the user's answers below the questions,
@@ -1058,29 +831,17 @@ func codebuffBlockMessages(
 			inputJSON, _ := json.Marshal(inputParts, json.Deterministic(true))
 
 			tc := ParsedToolCall{
-				ToolUseID: block.AgentID,
-				ToolName:  block.AgentType,
-				Category:  "Task",
-				InputJSON: string(inputJSON),
-				// The nested blocks become a linked child session; its tool
-				// calls carry their own categories, so result blocking
-				// applies to them per call like any other stored result.
+				ToolUseID:         block.AgentID,
+				ToolName:          block.AgentType,
+				Category:          "Task",
+				InputJSON:         string(inputJSON),
 				SubagentSessionID: subs.collect(&block, ts, sessionID),
 			}
 			toolCalls = append(toolCalls, tc)
 
-			// Emit the subagent's final answer as ONE linked
-			// ParsedToolResult rather than an ordinary assistant text
-			// message, so the configured result-content blocking strips it
-			// when the Task category is blocked. One result per call
-			// matches the archive: db.ToolCall carries a single
-			// ResultContent and the pairing loop keeps the LAST result per
-			// tool_use_id.
+			// The subagent's final answer is the Task call's single result,
+			// so result-content blocking for Task applies to it.
 			if block.Content != "" {
-				// The upstream content member is a JSON string, so encode
-				// it as a JSON string value and size it by the decoded
-				// length, matching how tool blocks store output.Raw and
-				// how convertToolResultsContext consumes ContentRaw.
 				quoted, err := json.Marshal(block.Content)
 				if err == nil {
 					toolResults = append(toolResults, ParsedToolResult{
