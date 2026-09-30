@@ -20,6 +20,7 @@
     onClearFilter,
     onSort,
     onLoadMore,
+    onRetry,
   }: {
     report: Report;
     filterActive?: boolean;
@@ -32,6 +33,7 @@
     onClearFilter?: () => void;
     onSort?: (sort: ActivitySessionSort, direction: "asc" | "desc") => void;
     onLoadMore?: (cursor: string) => void;
+    onRetry?: () => void;
   } = $props();
 
   // Start fetching the next page while this many rows are still below the
@@ -48,8 +50,8 @@
     report.by_session ?? [],
   );
 
-  // A failed page stops automatic loading so a persistent error cannot turn
-  // into a request loop; the retry button resumes it.
+  // A failed request stops automatic loading so a persistent error cannot
+  // turn into a request loop; the retry button resumes it.
   function loadMoreIfNearEnd() {
     const cursor = report.sessions_next_cursor;
     if (!scrollEl || !cursor || loading || error) return;
@@ -232,14 +234,7 @@
   {:else if error}
     <div class="page-error">
       <span>{error}</span>
-      {#if report.sessions_next_cursor}
-        <Button
-          size="sm"
-          onclick={() => onLoadMore?.(report.sessions_next_cursor!)}
-        >
-          {m.shared_retry()}
-        </Button>
-      {/if}
+      <Button size="sm" onclick={() => onRetry?.()}>{m.shared_retry()}</Button>
     </div>
   {/if}
 </div>

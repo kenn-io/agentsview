@@ -369,11 +369,12 @@ describe("SessionsTable", () => {
       await unmount(c);
     });
 
-    it("pauses after a failed page until the user retries", async () => {
+    it("pauses after a failed request until the user retries", async () => {
       const onLoadMore = vi.fn();
+      const onRetry = vi.fn();
       const c = mount(SessionsTable, {
         target: document.body,
-        props: { report: pagedReport("page-2"), error: "server down", onLoadMore },
+        props: { report: pagedReport("page-2"), error: "server down", onLoadMore, onRetry },
       });
       await tick();
 
@@ -383,7 +384,8 @@ describe("SessionsTable", () => {
       const error = document.querySelector(".page-error")!;
       expect(error.textContent).toContain("server down");
       error.querySelector("button")!.click();
-      expect(onLoadMore).toHaveBeenCalledExactlyOnceWith("page-2");
+      expect(onRetry).toHaveBeenCalledOnce();
+      expect(onLoadMore).not.toHaveBeenCalled();
 
       await unmount(c);
     });

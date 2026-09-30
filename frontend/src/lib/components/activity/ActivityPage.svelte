@@ -76,9 +76,15 @@
     }
   });
 
+  // The last sessions request the user started: a time range, a sort, or the
+  // next page. Retry repeats it, so a failed sort or range change is retried
+  // instead of loading the next page of the list still on screen.
+  let retrySessions: (() => void) | null = null;
+
   async function selectRange(
     sel: { start: number; end: number; label: string } | null,
   ) {
+    retrySessions = () => void selectRange(sel);
     const generation = activity.reportGeneration;
     if (
       await activity.loadSessionPage({
@@ -94,7 +100,13 @@
     sort: import("../../api/activity-report.js").ActivitySessionSort,
     direction: "asc" | "desc",
   ) {
+    retrySessions = () => void sortSessions(sort, direction);
     await activity.loadSessionPage({ sort, direction });
+  }
+
+  function loadMoreSessions(cursor: string) {
+    retrySessions = () => loadMoreSessions(cursor);
+    void activity.loadSessionPage({ cursor });
   }
 
   function reportProgressLabel(progress: ActivityReportProgress | null): string {
@@ -484,7 +496,8 @@
           listVersion={activity.sessionsListVersion}
           onClearFilter={() => selectRange(null)}
           onSort={sortSessions}
-          onLoadMore={(cursor) => activity.loadSessionPage({ cursor })}
+          onLoadMore={loadMoreSessions}
+          onRetry={() => retrySessions?.()}
         />
       </Card>
       <Card level="default" padding="none" class="chart-panel">

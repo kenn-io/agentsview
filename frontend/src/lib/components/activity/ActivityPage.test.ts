@@ -261,6 +261,7 @@ describe("ActivityPage bucket drill-down", () => {
     document.body.innerHTML = "";
     activity.report = null;
     activity.reportGeneration = 0;
+    activity.sessionsError = null;
   });
 
   it("clears a selected bucket after a same-ID report refresh", async () => {
@@ -380,6 +381,104 @@ describe("ActivityPage bucket drill-down", () => {
     await flushEffects();
 
     expect(screen.queryByTitle("Clear time filter")).toBeNull();
+  });
+
+  it("retries a failed time-range selection instead of loading the next page", async () => {
+    stubActivityPageCollaborators();
+    const loadPage = vi
+      .spyOn(activity, "loadSessionPage")
+      .mockImplementationOnce(async () => {
+        activity.sessionsError = "temporarily unavailable";
+        return false;
+      })
+      .mockImplementationOnce(async () => {
+        activity.sessionsError = null;
+        return true;
+      });
+    activity.report = {
+      ...projectReport(),
+      report_id: "stable-report",
+      sessions_next_cursor: "next-page",
+      bucket_count: 1,
+      elapsed_bucket_count: 1,
+      buckets: [
+        {
+          start: "2026-07-01T00:00:00Z",
+          end: "2026-07-01T01:00:00Z",
+          max_agents: 1,
+          user_messages: 0,
+          assistant_messages: 0,
+          max_interactive_agents: 1,
+          max_subagent_agents: 0,
+          max_automated_agents: 0,
+          subagent_at_peak: 0,
+          interactive_at_peak: 1,
+          automated_at_peak: 0,
+          agent_minutes: 20,
+          output_tokens: 0,
+          cost: testMoney(0),
+        },
+      ],
+    } as Report;
+
+    component = mount(ActivityPage, { target: document.body });
+    await flushEffects();
+    await selectFirstActivityRange();
+    await flushEffects();
+    expect(screen.queryByTitle("Clear time filter")).toBeNull();
+
+    await fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await flushEffects();
+
+    expect(loadPage).toHaveBeenCalledTimes(2);
+    expect(loadPage).toHaveBeenLastCalledWith({
+      bucketRange: { start: 0, end: 1 },
+    });
+    expect(screen.getByTitle("Clear time filter")).toBeTruthy();
+  });
+
+  it("retries a failed sort with the requested order", async () => {
+    stubActivityPageCollaborators();
+    const loadPage = vi.spyOn(activity, "loadSessionPage").mockImplementation(async () => {
+      activity.sessionsError = "temporarily unavailable";
+      return false;
+    });
+    activity.report = {
+      ...projectReport(),
+      report_id: "stable-report",
+      by_session: [
+        {
+          session_id: "only",
+          title: "Only session",
+          project: "proj",
+          project_key: "pl1:sha256:proj",
+          agent: "claude",
+          primary_model: "opus",
+          models: ["opus"],
+          agent_minutes: 10,
+          cost: testMoney(1),
+          output_tokens: 0,
+          first_active: "2026-07-01T00:00:00Z",
+          last_active: "2026-07-01T00:10:00Z",
+          timing_quality: "high",
+          is_automated: false,
+          is_subagent: false,
+        },
+      ],
+      sessions_total: 400,
+    } as Report;
+
+    component = mount(ActivityPage, { target: document.body });
+    await flushEffects();
+    await fireEvent.click(document.querySelector("th.sort-cost button")!);
+    await flushEffects();
+    await fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await flushEffects();
+
+    expect(loadPage.mock.calls).toEqual([
+      [{ sort: "cost", direction: "desc" }],
+      [{ sort: "cost", direction: "desc" }],
+    ]);
   });
 
   it("keeps the active badge when clearing its page request fails", async () => {
