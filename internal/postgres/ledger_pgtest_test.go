@@ -3,6 +3,7 @@
 package postgres
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"net/url"
@@ -49,6 +50,75 @@ func newLedgerTestStore(t *testing.T) *Store {
 	return store
 }
 
+// writablePGTestStore bypasses Store's read-only db.Store contract for tests
+// that exercise the underlying PostgreSQL ledger writer and reader together.
+type writablePGTestStore struct {
+	*Store
+}
+
+func newWritablePGTestStore(t *testing.T) *writablePGTestStore {
+	t.Helper()
+	return &writablePGTestStore{Store: newLedgerTestStore(t)}
+}
+
+func (s *writablePGTestStore) AppendLedgerSegment(
+	ctx context.Context, zone string, seg ledger.Segment, origin string,
+) (ledger.PublishOutcome, error) {
+	return appendPGTestSegment(ctx, s.Store, zone, seg, origin)
+}
+
+func (s *writablePGTestStore) SaveLedgerVerifyState(
+	ctx context.Context, zone, source string, checkpoint ledger.VerifyCheckpoint,
+) error {
+	return savePGTestVerifyState(ctx, s.Store, zone, source, checkpoint)
+}
+
+func appendPGTestSegment(
+	ctx context.Context, store *Store, zone string, seg ledger.Segment, origin string,
+) (ledger.PublishOutcome, error) {
+	prepared, err := ledger.PrepareAppend(zone, seg, origin)
+	if err != nil {
+		return ledger.Published, err
+	}
+	tx, err := store.pg.BeginTx(ctx, nil)
+	if err != nil {
+		return ledger.Published, fmt.Errorf("beginning test ledger append: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	outcome, err := appendPreparedLedgerSegmentTx(ctx, tx, prepared)
+	if err != nil || outcome == ledger.AlreadyIdentical {
+		return outcome, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ledger.Published, mapLedgerPGError("committing test ledger append", err)
+	}
+	return outcome, nil
+}
+
+func savePGTestVerifyState(
+	ctx context.Context, store *Store, zone, source string, checkpoint ledger.VerifyCheckpoint,
+) error {
+	failures, missing, err := ledger.EncodeCheckpoint(checkpoint)
+	if err != nil {
+		return err
+	}
+	if checkpoint.VerifiedSeq > uint64(1<<63-1) {
+		return fmt.Errorf("ledger verify watermark %d exceeds i64::MAX", checkpoint.VerifiedSeq)
+	}
+	_, err = store.pg.ExecContext(ctx, `
+		INSERT INTO ledger_verify_state (
+			zone, source, verified_seq, failures_json, missing_json, updated_at
+		) VALUES ($1, $2, $3, $4, $5, now())
+		ON CONFLICT (zone, source) DO UPDATE SET
+			verified_seq = excluded.verified_seq,
+			failures_json = excluded.failures_json,
+			missing_json = excluded.missing_json,
+			updated_at = excluded.updated_at`,
+		zone, source, int64(checkpoint.VerifiedSeq), failures, missing,
+	)
+	return err
+}
+
 // ledgerParityStores returns the SQLite archive and the PG store so every
 // assertion below runs against both backends.
 type ledgerParityStore interface {
@@ -61,7 +131,7 @@ func ledgerParityStores(t *testing.T) map[string]ledgerParityStore {
 	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "sessions.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { local.Close() })
-	return map[string]ledgerParityStore{"sqlite": local, "postgres": newLedgerTestStore(t)}
+	return map[string]ledgerParityStore{"sqlite": local, "postgres": newWritablePGTestStore(t)}
 }
 
 func TestLedgerStoreParity(t *testing.T) {
@@ -86,6 +156,13 @@ func TestLedgerStoreParity(t *testing.T) {
 			segs, err := store.ListLedgerSegments(ctx, "zone-a", "host-a", 0, 0)
 			require.NoError(t, err)
 			require.Len(t, segs, 2)
+			assert.True(t, segs[0].ContentMatches(a1))
+			segs, err = store.ListLedgerSegments(ctx, "zone-a", "host-a", 0, -1)
+			require.NoError(t, err)
+			require.Len(t, segs, 2, "negative limits also mean all segments")
+			segs, err = store.ListLedgerSegments(ctx, "zone-a", "host-a", 0, 1)
+			require.NoError(t, err)
+			require.Len(t, segs, 1, "positive limits still cap the result")
 			assert.True(t, segs[0].ContentMatches(a1))
 			seqs, err := store.LedgerSegmentSeqs(ctx, "zone-a", "host-a")
 			require.NoError(t, err)
@@ -117,7 +194,7 @@ func TestLedgerStoreParity(t *testing.T) {
 }
 
 func TestLedgerPGAppendOnly(t *testing.T) {
-	store := newLedgerTestStore(t)
+	store := newWritablePGTestStore(t)
 	ctx := t.Context()
 	_, err := store.AppendLedgerSegment(ctx, "zone-a", pgLedgerSegment(t, "host-a", 1, 1), ledger.OriginLocal)
 	require.NoError(t, err)
@@ -369,7 +446,7 @@ func TestEnsureLedgerSchemaPGSerializesConcurrentGuardInstallers(t *testing.T) {
 }
 
 func TestLedgerPGRustFixturesRoundTrip(t *testing.T) {
-	store := newLedgerTestStore(t)
+	store := newWritablePGTestStore(t)
 	src := filepath.Join("..", "ledger", "testdata", "segments")
 	entries, err := os.ReadDir(src)
 	require.NoError(t, err)
@@ -380,13 +457,17 @@ func TestLedgerPGRustFixturesRoundTrip(t *testing.T) {
 			require.NoError(t, err)
 			seg, err := ledger.ParseSegmentFile(want)
 			require.NoError(t, err)
-			_, err = store.AppendLedgerSegment(t.Context(), "default", seg, ledger.OriginImport)
+			zone := "default"
+			if len(seg.Events) > 0 {
+				zone = seg.Events[0].Zone
+			}
+			_, err = store.AppendLedgerSegment(t.Context(), zone, seg, ledger.OriginImport)
 			if e.Name() == "fixture-bigseq-000001.json" {
 				require.Error(t, err, "an event seq above i64::MAX must be refused")
 				return
 			}
 			require.NoError(t, err)
-			gotSegs, err := store.ListLedgerSegments(t.Context(), "default", seg.Source, seg.SourceSeq-1, 1)
+			gotSegs, err := store.ListLedgerSegments(t.Context(), zone, seg.Source, seg.SourceSeq-1, 1)
 			require.NoError(t, err)
 			require.Len(t, gotSegs, 1)
 			got, err := ledger.MarshalSegmentFile(gotSegs[0])

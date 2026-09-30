@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/ledger"
 )
 
@@ -35,6 +36,9 @@ func mapLedgerPGError(action string, err error) error {
 func (s *Store) AppendLedgerSegment(
 	ctx context.Context, zone string, seg ledger.Segment, origin string,
 ) (ledger.PublishOutcome, error) {
+	if s.ReadOnly() {
+		return ledger.Published, db.ErrReadOnly
+	}
 	prep, err := ledger.PrepareAppend(zone, seg, origin)
 	if err != nil {
 		return ledger.Published, err
@@ -130,16 +134,17 @@ func (s *Store) ListLedgerSegments(
 	if afterSeq > uint64(1<<63-1) {
 		return []ledger.Segment{}, nil
 	}
-	var lim any
-	if limit > 0 {
-		lim = limit
-	}
-	rows, err := s.pg.QueryContext(ctx, `
+	query := `
 		SELECT source, source_seq, checksum, created_at, events_json
 		FROM ledger_segments
 		WHERE zone = $1 AND source = $2 AND source_seq > $3
-		ORDER BY source_seq
-		LIMIT $4`, zone, source, int64(afterSeq), lim)
+		ORDER BY source_seq`
+	args := []any{zone, source, int64(afterSeq)}
+	if limit > 0 {
+		query += "\nLIMIT $4"
+		args = append(args, limit)
+	}
+	rows, err := s.pg.QueryContext(ctx, query, args...)
 	if isUndefinedTable(err) {
 		return []ledger.Segment{}, nil
 	}
@@ -273,6 +278,9 @@ func (s *Store) GetLedgerVerifyState(ctx context.Context, zone, source string) (
 
 // SaveLedgerVerifyState mirrors (*db.DB).SaveLedgerVerifyState.
 func (s *Store) SaveLedgerVerifyState(ctx context.Context, zone, source string, c ledger.VerifyCheckpoint) error {
+	if s.ReadOnly() {
+		return db.ErrReadOnly
+	}
 	f, m, err := ledger.EncodeCheckpoint(c)
 	if err != nil {
 		return err

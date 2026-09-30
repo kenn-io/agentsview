@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"database/sql"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -18,6 +19,32 @@ import (
 )
 
 const ledgerPushSchema = "agentsview_ledger_push_test"
+
+func ledgerFixtureDirForZone(t *testing.T, src, zone string) string {
+	t.Helper()
+	dst := t.TempDir()
+	entries, err := os.ReadDir(src)
+	require.NoError(t, err)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		path := filepath.Join(src, entry.Name())
+		seg, err := segfile.ReadFile(path)
+		require.NoError(t, err)
+		segmentZone := "default"
+		if len(seg.Events) > 0 {
+			segmentZone = seg.Events[0].Zone
+		}
+		if segmentZone != zone {
+			continue
+		}
+		b, err := os.ReadFile(path)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(dst, entry.Name()), b, 0o644))
+	}
+	return dst
+}
 
 // ledgerPushEnv is one PostgreSQL hub schema plus helpers to build laptops.
 type ledgerPushEnv struct {
@@ -88,12 +115,16 @@ func TestLedgerPush(t *testing.T) {
 			ctx := t.Context()
 			// The fixtures include confidential-tier events; replicate them so
 			// both laptops end up with every segment on the hub.
-			all := &storage.LedgerPushPolicy{Zones: []string{"default"}, ReplicateConfidential: true}
+			all := &storage.LedgerPushPolicy{Zones: []string{"default", "ops"}, ReplicateConfidential: true}
 			a, syncA := env.laptop("machine-a", all)
 			b, syncB := env.laptop("machine-b", all)
 			fixtures := filepath.Join("..", "ledger", "testdata", "segments")
+			defaultFixtures := ledgerFixtureDirForZone(t, fixtures, "default")
+			opsFixtures := ledgerFixtureDirForZone(t, fixtures, "ops")
 			for _, local := range []*db.DB{a, b} {
-				_, err := segfile.ImportDir(ctx, fixtures, "default", local)
+				_, err := segfile.ImportDir(ctx, defaultFixtures, "default", local)
+				require.NoError(t, err)
+				_, err = segfile.ImportDir(ctx, opsFixtures, "ops", local)
 				require.NoError(t, err)
 			}
 			segA := appendLocal(t, a, "default", "av-a", ledger.TierStructured, "from a")
@@ -101,9 +132,11 @@ func TestLedgerPush(t *testing.T) {
 
 			require.NoError(t, syncA.syncLedgerSegments(ctx, false))
 			require.NoError(t, syncB.syncLedgerSegments(ctx, false))
-			assert.Equal(t, 6, pushStatus(t, a).Zones["default"].Pushed, "five fixtures plus av-a")
+			assert.Equal(t, 5, pushStatus(t, a).Zones["default"].Pushed, "four default fixtures plus av-a")
 			assert.Equal(t, 1, pushStatus(t, b).Zones["default"].Pushed, "only av-b is new to the hub")
-			assert.Equal(t, 5, pushStatus(t, b).Zones["default"].Identical, "the shared imports are identical")
+			assert.Equal(t, 4, pushStatus(t, b).Zones["default"].Identical, "the shared default imports are identical")
+			assert.Equal(t, 1, pushStatus(t, a).Zones["ops"].Pushed)
+			assert.Equal(t, 1, pushStatus(t, b).Zones["ops"].Identical)
 
 			hub := env.hub()
 			st, err := hub.LedgerStatus(ctx, "default")
@@ -123,10 +156,14 @@ func TestLedgerPush(t *testing.T) {
 				require.Len(t, got, 1)
 				assert.True(t, got[0].ContentMatches(want), source)
 			}
+			opsStatus, err := hub.LedgerStatus(ctx, "ops")
+			require.NoError(t, err)
+			assert.Equal(t, uint64(7), opsStatus.Sources["host-with-dash"])
 
 			require.NoError(t, syncA.syncLedgerSegments(ctx, false))
 			again := pushStatus(t, a).Zones["default"]
 			assert.Equal(t, 0, again.Pushed, "a re-push inserts nothing")
+			assert.Equal(t, 0, pushStatus(t, a).Zones["ops"].Pushed)
 		}},
 		{"confidential_stays_local_by_default", func(t *testing.T, env *ledgerPushEnv) {
 			t.Helper()
@@ -240,7 +277,7 @@ func TestLedgerPush(t *testing.T) {
 			ctx := t.Context()
 			other, _ := env.laptop("machine-b", defaultPolicy)
 			theirs := appendLocal(t, other, "default", "shared-name", ledger.TierStructured, "theirs")
-			_, err := env.hub().AppendLedgerSegment(ctx, "default", theirs, ledger.OriginPush)
+			_, err := appendPGTestSegment(ctx, env.hub(), "default", theirs, ledger.OriginPush)
 			require.NoError(t, err)
 
 			local, sync := env.laptop("machine-a", defaultPolicy)

@@ -12,6 +12,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/ledger"
 	"go.kenn.io/agentsview/internal/postgres"
 )
 
@@ -61,6 +62,32 @@ func runLedger(t *testing.T, args ...string) (string, error) {
 	return executeCommand(newRootCommand(), append([]string{"ledger"}, args...)...)
 }
 
+func ledgerTestFixtureDirForZone(t *testing.T, src, zone string) string {
+	t.Helper()
+	dst := t.TempDir()
+	entries, err := os.ReadDir(src)
+	require.NoError(t, err)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		path := filepath.Join(src, entry.Name())
+		raw, err := os.ReadFile(path)
+		require.NoError(t, err)
+		seg, err := ledger.ParseSegmentFile(raw)
+		require.NoError(t, err)
+		segmentZone := "default"
+		if len(seg.Events) > 0 {
+			segmentZone = seg.Events[0].Zone
+		}
+		if segmentZone != zone {
+			continue
+		}
+		require.NoError(t, os.WriteFile(filepath.Join(dst, entry.Name()), raw, 0o644))
+	}
+	return dst
+}
+
 func TestNewLedgerCommand_RegistersSubcommands(t *testing.T) {
 	root := newRootCommand()
 	cmd, _, err := root.Find([]string{"ledger"})
@@ -70,7 +97,7 @@ func TestNewLedgerCommand_RegistersSubcommands(t *testing.T) {
 	for _, sub := range cmd.Commands() {
 		names = append(names, sub.Name())
 	}
-	assert.ElementsMatch(t, []string{"append", "status", "verify", "import", "export", "rebuild-index"}, names)
+	assert.ElementsMatch(t, []string{"append", "status", "verify", "import", "export", "rebuild-index", "query"}, names)
 }
 
 func TestLedgerAppendStatusVerify(t *testing.T) {
@@ -108,6 +135,51 @@ func TestLedgerAppendStatusVerify(t *testing.T) {
 	assert.Equal(t, "verify [default]: 0 newly verified, 2 skipped, 0 failure(s)\n", out)
 }
 
+func TestLedgerReadCommandsIncludeStoredUnconfiguredZones(t *testing.T) {
+	dataDir := testDataDir(t)
+	writeLedgerTestConfig(t, dataDir, "[ledger]\nenabled = true\n\n[[ledger.zones]]\nid = \"ops\"\n")
+
+	fixtures := filepath.Join("..", "..", "internal", "ledger", "testdata", "segments")
+	opsFixtures := ledgerTestFixtureDirForZone(t, fixtures, "ops")
+	_, err := runLedger(t, "import", "--zone", "ops", "--segments", opsFixtures)
+	require.NoError(t, err)
+
+	// The zone remains in the archive after it is removed from configuration.
+	writeLedgerTestConfig(t, dataDir, "[ledger]\nenabled = true\n")
+	_, err = runLedger(t, "append", "--class", "health", "--zone", "ops")
+	require.ErrorContains(t, err, `zone "ops" is not configured`)
+
+	out, err := runLedger(t, "status")
+	require.NoError(t, err)
+	assert.Contains(t, out, "zone ops: 1 segment(s), 10 event(s)\n")
+
+	out, err = runLedger(t, "status", "--zone", "ops")
+	require.NoError(t, err)
+	assert.Contains(t, out, "zone ops: 1 segment(s), 10 event(s)\n")
+
+	out, err = runLedger(t, "verify")
+	require.NoError(t, err)
+	assert.Contains(t, out, "verify [ops]: 1 newly verified, 0 skipped, 0 failure(s)\n")
+
+	out, err = runLedger(t, "verify", "--zone", "ops")
+	require.NoError(t, err)
+	assert.Contains(t, out, "verify [ops]: 0 newly verified, 1 skipped, 0 failure(s)\n")
+
+	out, err = runLedger(t, "query", "--zone", "ops", "--since", "3650d", "--format", "json")
+	require.NoError(t, err)
+	var events []struct {
+		Zone string `json:"zone"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &events))
+	require.Len(t, events, 10)
+	assert.Equal(t, "ops", events[0].Zone)
+
+	exportDir := t.TempDir()
+	out, err = runLedger(t, "export", "--zone", "ops", "--dir", exportDir)
+	require.NoError(t, err)
+	assert.Equal(t, "ledger export [ops]: 1 written, 0 already identical, 0 failed\n", out)
+}
+
 func TestLedgerCommandErrors(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -135,22 +207,34 @@ func TestLedgerCommandErrors(t *testing.T) {
 
 func TestLedgerImportExportRebuild(t *testing.T) {
 	dataDir := testDataDir(t)
-	writeLedgerTestConfig(t, dataDir, "[ledger]\nenabled = true\n")
+	writeLedgerTestConfig(t, dataDir, "[ledger]\nenabled = true\n\n[[ledger.zones]]\nid = \"ops\"\n")
 	fixtures := filepath.Join("..", "..", "internal", "ledger", "testdata", "segments")
+	defaultFixtures := ledgerTestFixtureDirForZone(t, fixtures, "default")
+	opsFixtures := ledgerTestFixtureDirForZone(t, fixtures, "ops")
 
-	out, err := runLedger(t, "import", "--zone", "default", "--segments", fixtures)
+	out, err := runLedger(t, "import", "--zone", "default", "--segments", defaultFixtures)
 	require.ErrorContains(t, err, "ledger import finished with failed segments")
-	assert.Contains(t, out, "ledger import [default]: 5 segment(s) and 19 event(s) indexed, 0 skipped, 1 failed\n")
+	assert.Contains(t, out, "ledger import [default]: 4 segment(s) and 9 event(s) indexed, 0 skipped, 1 failed\n")
 	assert.Contains(t, out, "  fixture-bigseq-000001: projection error: an event's source_seq exceeds i64::MAX")
 
-	out, err = runLedger(t, "import", "--zone", "default", "--segments", fixtures)
+	out, err = runLedger(t, "import", "--zone", "ops", "--segments", opsFixtures)
+	require.NoError(t, err)
+	assert.Contains(t, out, "ledger import [ops]: 1 segment(s) and 10 event(s) indexed, 0 skipped, 0 failed\n")
+
+	out, err = runLedger(t, "import", "--zone", "default", "--segments", defaultFixtures)
 	require.Error(t, err, "the refused segment is retried and refused again")
-	assert.Contains(t, out, "0 segment(s) and 0 event(s) indexed, 5 skipped, 1 failed")
+	assert.Contains(t, out, "0 segment(s) and 0 event(s) indexed, 4 skipped, 1 failed")
+	out, err = runLedger(t, "import", "--zone", "ops", "--segments", opsFixtures)
+	require.NoError(t, err)
+	assert.Contains(t, out, "0 segment(s) and 0 event(s) indexed, 1 skipped, 0 failed")
 
 	exportDir := t.TempDir()
 	out, err = runLedger(t, "export", "--zone", "default", "--dir", exportDir)
 	require.NoError(t, err)
-	assert.Equal(t, "ledger export [default]: 5 written, 0 already identical, 0 failed\n", out)
+	assert.Equal(t, "ledger export [default]: 4 written, 0 already identical, 0 failed\n", out)
+	out, err = runLedger(t, "export", "--zone", "ops", "--dir", exportDir)
+	require.NoError(t, err)
+	assert.Equal(t, "ledger export [ops]: 1 written, 0 already identical, 0 failed\n", out)
 	entries, err := os.ReadDir(exportDir)
 	require.NoError(t, err)
 	for _, e := range entries {
@@ -163,7 +247,10 @@ func TestLedgerImportExportRebuild(t *testing.T) {
 
 	out, err = runLedger(t, "rebuild-index", "--zone", "default")
 	require.NoError(t, err)
-	assert.Equal(t, "ledger rebuild-index [default]: 19 event(s) projected from 5 segment(s)\n", out)
+	assert.Equal(t, "ledger rebuild-index [default]: 9 event(s) projected from 4 segment(s)\n", out)
+	out, err = runLedger(t, "rebuild-index", "--zone", "ops")
+	require.NoError(t, err)
+	assert.Equal(t, "ledger rebuild-index [ops]: 10 event(s) projected from 1 segment(s)\n", out)
 }
 
 func TestLedgerImportJob(t *testing.T) {

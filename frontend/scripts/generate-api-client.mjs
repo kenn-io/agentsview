@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { tmpdir } from "node:os";
 import { generate } from "orval";
 
 const frontendDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -67,6 +68,54 @@ function writeIndex() {
   writeFileSync(join(generatedDir, "index.ts"), `${exports.sort().join("\n")}\n`);
 }
 
+function orderLedgerPathsLast(spec) {
+  const lines = spec.split("\n");
+  const pathsIndex = lines.findIndex((line) => line === "paths:");
+  if (pathsIndex < 0) throw new Error("OpenAPI document has no paths section");
+
+  const pathsEnd = lines.findIndex(
+    (line, index) => index > pathsIndex && /^[A-Za-z][A-Za-z0-9_-]*:\s*$/.test(line),
+  );
+  const end = pathsEnd < 0 ? lines.length : pathsEnd;
+  const prefix = [];
+  const blocks = [];
+  let current = null;
+  for (const line of lines.slice(pathsIndex + 1, end)) {
+    const path = line.match(/^  (\/\S+):\s*$/)?.[1];
+    if (path) {
+      if (current) blocks.push(current);
+      current = { path, lines: [line] };
+    } else if (current) {
+      current.lines.push(line);
+    } else {
+      prefix.push(line);
+    }
+  }
+  if (current) blocks.push(current);
+
+  const ledgerPaths = new Set([
+    "/api/v1/ledger/events",
+    "/api/v1/ledger/status",
+    "/api/v1/ledger/verify",
+  ]);
+  const present = blocks.filter(({ path }) => ledgerPaths.has(path));
+  if (present.length === 0) return spec;
+  if (present.length !== ledgerPaths.size) {
+    throw new Error("OpenAPI document has an incomplete ledger path set");
+  }
+
+  const ordered = [
+    ...blocks.filter(({ path }) => !ledgerPaths.has(path)),
+    ...present,
+  ];
+  return [
+    ...lines.slice(0, pathsIndex + 1),
+    ...prefix,
+    ...ordered.flatMap(({ lines: block }) => block),
+    ...lines.slice(end),
+  ].join("\n");
+}
+
 const checkIfGoAvailable = process.argv.includes("--check-if-go-available");
 const verifyGenerated = process.argv.includes("--check") || checkIfGoAvailable;
 if (checkIfGoAvailable) {
@@ -97,17 +146,23 @@ writeFileSync(specPath, spec);
 const goClientPath = join(repoRoot, "internal/apiclient/client.gen.go");
 const previousGoClient =
   verifyGenerated && existsSync(goClientPath) ? readFileSync(goClientPath, "utf8") : null;
-run(
-  "go",
-  [
-    "run",
-    "github.com/doordash-oss/oapi-codegen-dd/v3/cmd/oapi-codegen@v3.75.15",
-    "--config",
-    "internal/apiclient/generate.yaml",
-    "openapi.yaml",
-  ],
-  { cwd: repoRoot },
-);
+const goClientSpecPath = join(tmpdir(), `agentsview-api-client-${process.pid}.yaml`);
+writeFileSync(goClientSpecPath, orderLedgerPathsLast(spec));
+try {
+  run(
+    "go",
+    [
+      "run",
+      "github.com/doordash-oss/oapi-codegen-dd/v3/cmd/oapi-codegen@v3.75.15",
+      "--config",
+      "internal/apiclient/generate.yaml",
+      goClientSpecPath,
+    ],
+    { cwd: repoRoot },
+  );
+} finally {
+  rmSync(goClientSpecPath, { force: true });
+}
 // The generator still emits the v1 import and an ambiguous tool name.
 // Keep generated code on the module's JSON v2 contract and record provenance.
 writeFileSync(

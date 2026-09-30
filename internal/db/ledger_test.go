@@ -24,13 +24,18 @@ var ledgerT0 = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 // like jilog's sealed_segment helpers (store.rs:593-600).
 func testLedgerSegment(t *testing.T, source string, seq uint64, n int) ledger.Segment {
 	t.Helper()
+	return testLedgerSegmentInZone(t, "zone-a", source, seq, n)
+}
+
+func testLedgerSegmentInZone(t *testing.T, zone, source string, seq uint64, n int) ledger.Segment {
+	t.Helper()
 	seg := ledger.NewSegment(source, seq, ledgerT0)
 	for i := range n {
 		obj := "claim:test-claim"
 		actor := "person:test-user"
 		seg.Append(ledger.Event{
 			EventID:     ledger.DeterministicEventID(source, fmt.Sprintf("%d/%d", seq, i)),
-			Zone:        "zone-a",
+			Zone:        zone,
 			Source:      source,
 			SourceSeq:   uint64(i),
 			Timestamp:   ledgerT0.Add(time.Duration(seq)*time.Hour + time.Duration(i)*time.Second),
@@ -155,7 +160,7 @@ func TestAppendLedgerSegment(t *testing.T) {
 		{"same_identity_in_another_zone_is_independent", func(t *testing.T, d *DB) {
 			t.Helper()
 			mustAppend(t, d, "zone-a", testLedgerSegment(t, "host-a", 1, 1))
-			assert.Equal(t, ledger.Published, mustAppend(t, d, "zone-b", testLedgerSegment(t, "host-a", 1, 2)))
+			assert.Equal(t, ledger.Published, mustAppend(t, d, "zone-b", testLedgerSegmentInZone(t, "zone-b", "host-a", 1, 2)))
 		}},
 		{"duplicate_event_id_counts_once", func(t *testing.T, d *DB) {
 			t.Helper()
@@ -172,6 +177,12 @@ func TestAppendLedgerSegment(t *testing.T) {
 		}},
 		{"invalid_inputs", func(t *testing.T, d *DB) {
 			t.Helper()
+			wrongZone := testLedgerSegment(t, "host-a", 1, 1)
+			wrongZone.Events[0].Zone = "zone-b"
+			require.NoError(t, wrongZone.Seal())
+			wrongSource := testLedgerSegment(t, "host-a", 1, 1)
+			wrongSource.Events[0].Source = "host-b"
+			require.NoError(t, wrongSource.Seal())
 			for _, c := range []struct {
 				zone, origin string
 				seg          ledger.Segment
@@ -182,6 +193,8 @@ func TestAppendLedgerSegment(t *testing.T) {
 				{"zone-a", "elsewhere", testLedgerSegment(t, "host-a", 1, 1), "invalid ledger segment origin"},
 				{"zone-a", ledger.OriginLocal, testLedgerSegment(t, "host-a", 0, 1), "at least 1"},
 				{"zone-a", ledger.OriginLocal, testLedgerSegment(t, "host-a", 1<<63, 1), "i64::MAX"},
+				{"zone-a", ledger.OriginImport, wrongZone, "does not match segment zone"},
+				{"zone-a", ledger.OriginPush, wrongSource, "does not match segment source"},
 			} {
 				_, err := d.AppendLedgerSegment(t.Context(), c.zone, c.seg, c.origin)
 				require.ErrorContains(t, err, c.want)
@@ -243,13 +256,17 @@ func TestLedgerRustFixtures(t *testing.T) {
 			require.NoError(t, err)
 			seg, err := ledger.ParseSegmentFile(raw)
 			require.NoError(t, err)
-			_, err = d.AppendLedgerSegment(t.Context(), "default", seg, ledger.OriginImport)
+			zone := "default"
+			if len(seg.Events) > 0 {
+				zone = seg.Events[0].Zone
+			}
+			_, err = d.AppendLedgerSegment(t.Context(), zone, seg, ledger.OriginImport)
 			if strings.HasPrefix(e.Name(), "fixture-bigseq") {
 				require.ErrorContains(t, err, "i64::MAX", "db.rs:366 refuses event seqs above i64::MAX")
 				return
 			}
 			require.NoError(t, err)
-			back, err := d.ListLedgerSegments(t.Context(), "default", seg.Source, seg.SourceSeq-1, 1)
+			back, err := d.ListLedgerSegments(t.Context(), zone, seg.Source, seg.SourceSeq-1, 1)
 			require.NoError(t, err)
 			require.Len(t, back, 1)
 			out, err := ledger.MarshalSegmentFile(back[0])
@@ -331,7 +348,7 @@ func TestRebuildLedgerIndex(t *testing.T) {
 	d := testDB(t)
 	mustAppend(t, d, "zone-a", testLedgerSegment(t, "host-a", 1, 2))
 	mustAppend(t, d, "zone-a", testLedgerSegment(t, "host-a", 2, 1))
-	mustAppend(t, d, "zone-b", testLedgerSegment(t, "host-b", 1, 4))
+	mustAppend(t, d, "zone-b", testLedgerSegmentInZone(t, "zone-b", "host-b", 1, 4))
 
 	events, segments, err := d.RebuildLedgerIndex(t.Context(), "zone-a")
 	require.NoError(t, err)

@@ -15,6 +15,14 @@ func TestHostedStoreLedgerReadsAreEmpty(t *testing.T) {
 	h := &HostedStore{}
 	ctx := t.Context()
 
+	query, err := h.QueryLedger(ctx, ledger.Query{})
+	require.NoError(t, err)
+	assert.Empty(t, query)
+
+	zones, err := h.LedgerZones(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, zones)
+
 	latest, err := h.LatestLedgerSeq(ctx, "zone-a", "host-a")
 	require.NoError(t, err)
 	assert.Zero(t, latest)
@@ -57,5 +65,17 @@ func TestHostedStoreLedgerWritesAreReadOnly(t *testing.T) {
 	require.ErrorIs(t, err, db.ErrReadOnly)
 
 	err = h.SaveLedgerVerifyState(t.Context(), "zone-a", "host-a", ledger.VerifyCheckpoint{})
+	require.ErrorIs(t, err, db.ErrReadOnly)
+}
+
+func TestStoreLedgerWritesAreReadOnly(t *testing.T) {
+	s := &Store{}
+	outcome, err := s.AppendLedgerSegment(
+		t.Context(), "zone-a", ledger.Segment{}, ledger.OriginLocal,
+	)
+	assert.Equal(t, ledger.Published, outcome)
+	require.ErrorIs(t, err, db.ErrReadOnly)
+
+	err = s.SaveLedgerVerifyState(t.Context(), "zone-a", "host-a", ledger.VerifyCheckpoint{})
 	require.ErrorIs(t, err, db.ErrReadOnly)
 }

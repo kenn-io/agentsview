@@ -7,6 +7,16 @@ import (
 	"go.kenn.io/agentsview/internal/ledger"
 )
 
+func (*HostedStore) QueryLedger(
+	_ context.Context, _ ledger.Query,
+) ([]ledger.ZoneEvents, error) {
+	return []ledger.ZoneEvents{}, nil
+}
+
+func (*HostedStore) LedgerZones(_ context.Context) ([]string, error) {
+	return []string{}, nil
+}
+
 // HostedStore has no tenant mapping for archive-wide ledger data. Keep the
 // public identity boundary by exposing no ledger rows and rejecting writes.
 func (*HostedStore) AppendLedgerSegment(

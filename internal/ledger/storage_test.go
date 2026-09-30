@@ -31,6 +31,42 @@ func TestPrepareAppendProjection(t *testing.T) {
 	assert.False(t, prep.SameContent(1796932786, "2026-01-02T03:05:01Z", prep.EventsJSON))
 }
 
+func TestPrepareAppendRejectsEventIdentityMismatch(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Event)
+		want   string
+	}{
+		{
+			name: "zone differs from segment zone",
+			mutate: func(e *Event) {
+				e.Zone = "other-zone"
+			},
+			want: "does not match segment zone",
+		},
+		{
+			name: "source differs from segment source",
+			mutate: func(e *Event) {
+				e.Source = "other-source"
+			},
+			want: "does not match segment source",
+		},
+	}
+	for _, origin := range []string{OriginImport, OriginPush} {
+		for _, tt := range tests {
+			t.Run(origin+"/"+tt.name, func(t *testing.T) {
+				seg := loadFixture(t, "fixture-a-000001.json")
+				tt.mutate(&seg.Events[0])
+				require.NoError(t, seg.Seal())
+
+				_, err := PrepareAppend("default", seg, origin)
+				require.ErrorContains(t, err, tt.want)
+				assert.ErrorIs(t, err, ErrIntegrity)
+			})
+		}
+	}
+}
+
 func TestStorageTimestampSortsLexically(t *testing.T) {
 	a := StorageTimestamp(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC))
 	b := StorageTimestamp(time.Date(2026, 1, 2, 3, 4, 5, 100_000_000, time.UTC))

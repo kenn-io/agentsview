@@ -33,6 +33,10 @@ A zone partitions segments and status. The default zone always exists. Zone ids 
 the source name must match `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$` because they
 become file names.
 
+Status, verification, queries and exports include zones with stored segments,
+even after a zone is removed from configuration. Appends, imports and index
+rebuilds still require a configured zone.
+
 This host writes as one source. The default source is `av-` plus the data
 directory's installation id, so it never collides with a jilog source named
 after the host.
@@ -53,6 +57,7 @@ By convention `payload.subsystem` names the component an event is about and
 
 ```bash
 agentsview ledger append --class state-change --subsystem deploy --summary "rolled out v2"
+agentsview ledger query --since 24h --subsystem 'hook-*'
 agentsview ledger status [--zone Z] [--json]
 agentsview ledger verify [--zone Z] [--full]
 agentsview ledger import --zone Z --segments DIR
@@ -61,6 +66,21 @@ agentsview ledger rebuild-index --zone Z
 ```
 
 See the [CLI Reference](/docs/commands/#agentsview-ledger) for every flag.
+
+## Querying
+
+`ledger query` filters events by time, subsystem, class and zone. It prints
+newest first per zone. Use `--format json` for the jilog-compatible event
+array.
+
+The same query is available as `GET /api/v1/ledger/events` (`since`, repeated
+`subsystem`, `class`, `zone`, `limit`) and as the MCP tool `query_ledger`.
+The CLI and API accept a limit from 1 to 1000 events per zone; the CLI defaults
+to 100.
+`GET /api/v1/ledger/status`, `POST /api/v1/ledger/events` (append as this
+machine's source) and `POST /api/v1/ledger/verify` complete the API. Writes
+need the auth token, or a localhost request when auth is off. Each event in an
+API response carries `serde`, its exact serialized form.
 
 ## Guarantees
 
@@ -73,6 +93,9 @@ See the [CLI Reference](/docs/commands/#agentsview-ledger) for every flag.
 - **Verified imports.** Imported files are checked against their file name and
   their checksum before they are stored. Bad files are reported and retried on
   the next import.
+- **Consistent segment identity.** Each event's embedded zone and source must
+  match the segment's stored zone and source. Imports and pushes with mismatches
+  are refused before storage.
 - **Single writer per source.** Only this host's own source is written
   locally; other sources arrive only by import.
 

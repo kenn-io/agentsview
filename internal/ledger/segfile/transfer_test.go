@@ -24,8 +24,8 @@ func sealed(t *testing.T, source string, seq uint64, classes ...ledger.EventClas
 	for i, c := range classes {
 		seg.Append(ledger.Event{
 			EventID:     ledger.DeterministicEventID(source, fmt.Sprintf("%d/%d", seq, i)),
-			Zone:        "test",
-			Source:      "test",
+			Zone:        "zone-a",
+			Source:      source,
 			SourceSeq:   uint64(i + 1),
 			Timestamp:   t0,
 			EventClass:  c,
@@ -42,6 +42,32 @@ func writeFile(t *testing.T, path string, seg ledger.Segment) {
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 	require.NoError(t, os.WriteFile(path, b, 0o644))
+}
+
+func fixtureDirForZone(t *testing.T, src, zone string) string {
+	t.Helper()
+	dst := t.TempDir()
+	entries, err := os.ReadDir(src)
+	require.NoError(t, err)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		path := filepath.Join(src, entry.Name())
+		seg, err := segfile.ReadFile(path)
+		require.NoError(t, err)
+		segmentZone := "default"
+		if len(seg.Events) > 0 {
+			segmentZone = seg.Events[0].Zone
+		}
+		if segmentZone != zone {
+			continue
+		}
+		b, err := os.ReadFile(path)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(dst, entry.Name()), b, 0o644))
+	}
+	return dst
 }
 
 func failedMessages(r segfile.ImportReport) []string {
@@ -127,7 +153,7 @@ func TestImportDir(t *testing.T) {
 			writeFile(t, filepath.Join(dir, huge.Filename()), huge)
 			badInner := ledger.NewSegment("host-a", 1, t0)
 			badInner.Append(ledger.Event{
-				EventID: ledger.DeterministicEventID("host-a", "inner"), Zone: "test", Source: "test",
+				EventID: ledger.DeterministicEventID("host-a", "inner"), Zone: "zone-a", Source: "host-a",
 				SourceSeq: ^uint64(0), Timestamp: t0, EventClass: ledger.ClassIngest, PayloadTier: ledger.TierMetadataOnly,
 			})
 			require.NoError(t, badInner.Seal())
@@ -165,18 +191,26 @@ func TestImportDir(t *testing.T) {
 func TestExportZoneReproducesRustFiles(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	src := filepath.Join("..", "testdata", "segments")
-	r, err := segfile.ImportDir(t.Context(), src, "default", d)
+	defaultSrc := fixtureDirForZone(t, src, "default")
+	opsSrc := fixtureDirForZone(t, src, "ops")
+	r, err := segfile.ImportDir(t.Context(), defaultSrc, "default", d)
 	require.NoError(t, err)
 	require.Len(t, r.Failed, 1, "only the event seq above i64::MAX is refused")
 	assert.Equal(t, "fixture-bigseq", r.Failed[0][0])
+	opsReport, err := segfile.ImportDir(t.Context(), opsSrc, "ops", d)
+	require.NoError(t, err)
+	assert.Empty(t, opsReport.Failed)
 
 	out := t.TempDir()
 	exp, err := segfile.ExportZone(t.Context(), d, "default", out, "")
 	require.NoError(t, err)
 	assert.Empty(t, exp.Failed)
+	opsExp, err := segfile.ExportZone(t.Context(), d, "ops", out, "")
+	require.NoError(t, err)
+	assert.Empty(t, opsExp.Failed)
 	entries, err := os.ReadDir(out)
 	require.NoError(t, err)
-	assert.Len(t, entries, exp.Written)
+	assert.Len(t, entries, exp.Written+opsExp.Written)
 	for _, e := range entries {
 		want, err := os.ReadFile(filepath.Join(src, e.Name()))
 		require.NoError(t, err)
@@ -189,16 +223,20 @@ func TestExportZoneReproducesRustFiles(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, again.Written)
 	assert.Equal(t, exp.Written, again.Identical)
+	againOps, err := segfile.ExportZone(t.Context(), d, "ops", out, "")
+	require.NoError(t, err)
+	assert.Equal(t, 0, againOps.Written)
+	assert.Equal(t, opsExp.Written, againOps.Identical)
 
 	one := t.TempDir()
-	only, err := segfile.ExportZone(t.Context(), d, "default", one, "host-with-dash")
+	only, err := segfile.ExportZone(t.Context(), d, "ops", one, "host-with-dash")
 	require.NoError(t, err)
 	assert.Equal(t, 1, only.Written)
 
 	conflictDir := t.TempDir()
 	stranger := sealed(t, "host-with-dash", 7, ledger.ClassHealth)
 	writeFile(t, filepath.Join(conflictDir, stranger.Filename()), stranger)
-	clash, err := segfile.ExportZone(t.Context(), d, "default", conflictDir, "host-with-dash")
+	clash, err := segfile.ExportZone(t.Context(), d, "ops", conflictDir, "host-with-dash")
 	require.NoError(t, err)
 	require.Len(t, clash.Failed, 1)
 	assert.Contains(t, clash.Failed[0][1], "DIFFERENT content")

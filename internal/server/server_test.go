@@ -233,7 +233,7 @@ func wrapTestHandler(cfg config.Config, base http.Handler) http.Handler {
 // broadcaster, mirroring the "pg serve" runtime mode where the
 // server reads from PostgreSQL and does not run a local sync
 // engine or live-refresh broadcaster.
-func setupPGMode(t *testing.T) *testEnv {
+func setupPGMode(t *testing.T, opts ...setupOption) *testEnv {
 	t.Helper()
 	dir := tempDirWithRetryCleanup(t)
 	dbPath := filepath.Join(dir, "test.db")
@@ -246,6 +246,9 @@ func setupPGMode(t *testing.T) *testEnv {
 		DataDir:      dir,
 		DBPath:       dbPath,
 		WriteTimeout: 30 * time.Second,
+	}
+	for _, opt := range opts {
+		opt(&cfg)
 	}
 	srv := server.New(cfg, readOnlyTestStore{Store: database}, nil)
 

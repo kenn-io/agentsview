@@ -7,9 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -18,7 +16,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/ledger"
 	"go.kenn.io/agentsview/internal/ledger/segfile"
-	"go.kenn.io/agentsview/internal/postgres"
+	"go.kenn.io/agentsview/internal/ledgerstatus"
 	"go.kenn.io/agentsview/internal/serdejson"
 )
 
@@ -35,6 +33,7 @@ func newLedgerCommand() *cobra.Command {
 	}
 	cmd.AddCommand(newLedgerAppendCommand())
 	cmd.AddCommand(newLedgerStatusCommand())
+	cmd.AddCommand(newLedgerQueryCommand())
 	cmd.AddCommand(newLedgerVerifyCommand())
 	cmd.AddCommand(newLedgerImportCommand())
 	cmd.AddCommand(newLedgerExportCommand())
@@ -58,16 +57,31 @@ func ledgerZones(cfg config.Config, zone string) ([]string, error) {
 	return []string{zone}, nil
 }
 
-func writeLedgerJSON(w io.Writer, v any) error {
-	return json.MarshalEncode(jsontext.NewEncoder(w, jsontext.WithIndent("  ")), v)
+type ledgerZoneStore interface {
+	LedgerZones(context.Context) ([]string, error)
 }
 
-func formatLedgerID(source, seq string) string {
-	n, err := strconv.ParseUint(seq, 10, 64)
+// ledgerReadZones resolves read filters against configured zones and zones
+// already present in the archive. Writes continue to use ledgerZones.
+func ledgerReadZones(
+	ctx context.Context, cfg config.Config, st ledgerZoneStore, zone string,
+) ([]string, error) {
+	stored, err := st.LedgerZones(ctx)
 	if err != nil {
-		return source + "-" + seq
+		return nil, fmt.Errorf("listing stored ledger zones: %w", err)
 	}
-	return fmt.Sprintf("%s-%06d", source, n)
+	zones := ledger.SortZones(stored, cfg.Ledger.ZoneIDs())
+	if zone == "" {
+		return zones, nil
+	}
+	if slices.Contains(zones, zone) {
+		return []string{zone}, nil
+	}
+	return nil, fmt.Errorf("zone %q is not configured or stored (known: %s)", zone, strings.Join(zones, ", "))
+}
+
+func writeLedgerJSON(w io.Writer, v any) error {
+	return json.MarshalEncode(jsontext.NewEncoder(w, jsontext.WithIndent("  ")), v)
 }
 
 func newLedgerAppendCommand() *cobra.Command {
@@ -95,6 +109,17 @@ func newLedgerAppendCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			tr, daemon, err := ledgerDaemon(cmd.Context(), cfg)
+			if err != nil {
+				return err
+			}
+			if daemon {
+				res, err := requestLedgerAppend(cmd.Context(), tr, cfg.AuthToken, zones[0], event)
+				if err != nil {
+					return err
+				}
+				return writeLedgerAppendResult(cmd.OutOrStdout(), res, outputFormat(cmd) == "json")
+			}
 			database, lock, err := openWriteDB(cmd.Context(), cfg)
 			if err != nil {
 				return err
@@ -106,7 +131,14 @@ func newLedgerAppendCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return writeLedgerAppendResult(cmd.OutOrStdout(), zones[0], seg, outputFormat(cmd) == "json")
+			ids := make([]string, 0, len(seg.Events))
+			for _, e := range seg.Events {
+				ids = append(ids, e.EventID.String())
+			}
+			return writeLedgerAppendResult(cmd.OutOrStdout(), ledgerAppendResult{
+				Zone: zones[0], Source: seg.Source, SourceSeq: seg.SourceSeq,
+				Checksum: seg.Checksum, EventIDs: ids,
+			}, outputFormat(cmd) == "json")
 		},
 	}
 	f := cmd.Flags()
@@ -168,42 +200,13 @@ func buildLedgerAppendEvent(class, tier, subsystem, summary, payload, actor, obj
 	return e, nil
 }
 
-func writeLedgerAppendResult(w io.Writer, zone string, seg ledger.Segment, jsonOut bool) error {
+func writeLedgerAppendResult(w io.Writer, res ledgerAppendResult, jsonOut bool) error {
 	if jsonOut {
-		ids := make([]string, 0, len(seg.Events))
-		for _, e := range seg.Events {
-			ids = append(ids, e.EventID.String())
-		}
-		return writeLedgerJSON(w, map[string]any{
-			"zone": zone, "source": seg.Source, "source_seq": seg.SourceSeq,
-			"checksum": seg.Checksum, "event_ids": ids,
-		})
+		return writeLedgerJSON(w, res)
 	}
-	_, err := fmt.Fprintf(w, "appended %d event(s) to %s as %s\n", len(seg.Events), zone, seg.Filename())
+	_, err := fmt.Fprintf(w, "appended %d event(s) to %s as %s-%06d.json\n",
+		len(res.EventIDs), res.Zone, res.Source, res.SourceSeq)
 	return err
-}
-
-// ledgerZoneReport is `ledger status` output for one zone.
-type ledgerZoneReport struct {
-	ledger.ZoneStatus `json:",inline"`
-	Imports           []ledgerImportReport `json:"imports"`
-	Push              []ledgerPushReport   `json:"push"`
-}
-
-// ledgerPushReport is one PostgreSQL target's last ledger push for a zone.
-type ledgerPushReport struct {
-	Target    string      `json:"target"`
-	At        string      `json:"at"`
-	Pushed    int         `json:"pushed"`
-	Identical int         `json:"identical"`
-	HeldBack  int         `json:"held_back"`
-	Failures  [][4]string `json:"failures"`
-}
-
-type ledgerImportReport struct {
-	Path      string         `json:"path"`
-	UpdatedAt string         `json:"updated_at"`
-	Report    jsontext.Value `json:"report"`
 }
 
 func newLedgerStatusCommand() *cobra.Command {
@@ -218,124 +221,42 @@ func newLedgerStatusCommand() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("loading config: %w", err)
 			}
-			zones, err := ledgerZones(cfg, zone)
+			tr, daemon, err := ledgerDaemon(cmd.Context(), cfg)
 			if err != nil {
 				return err
+			}
+			if daemon {
+				reports, enabled, err := requestLedgerStatus(cmd.Context(), tr, cfg.AuthToken, zone)
+				if err != nil {
+					return err
+				}
+				if outputFormat(cmd) == "json" {
+					return writeLedgerJSON(cmd.OutOrStdout(), reports)
+				}
+				return ledgerstatus.WriteText(cmd.OutOrStdout(), enabled, reports)
 			}
 			database, err := openReadOnlyDB(cmd.Context(), cfg)
 			if err != nil {
 				return err
 			}
 			defer database.Close()
-			reports, err := collectLedgerStatus(cmd.Context(), cfg, database, zones)
+			zones, err := ledgerReadZones(cmd.Context(), cfg, database, zone)
+			if err != nil {
+				return err
+			}
+			reports, err := ledgerstatus.Collect(cmd.Context(), cfg.Ledger, database, zones)
 			if err != nil {
 				return err
 			}
 			if outputFormat(cmd) == "json" {
 				return writeLedgerJSON(cmd.OutOrStdout(), reports)
 			}
-			return writeLedgerStatusText(cmd.OutOrStdout(), cfg, reports)
+			return ledgerstatus.WriteText(cmd.OutOrStdout(), cfg.Ledger.Enabled, reports)
 		},
 	}
 	cmd.Flags().StringVar(&zone, "zone", "", "Only this zone")
 	registerFormatFlags(cmd.Flags())
 	return cmd
-}
-
-func collectLedgerStatus(ctx context.Context, cfg config.Config, database *db.DB, zones []string) ([]ledgerZoneReport, error) {
-	pushes, err := database.ListSyncStateByPrefix(ctx, postgres.LedgerPushStatusKeyPrefix)
-	if err != nil {
-		return nil, err
-	}
-	reports := make([]ledgerZoneReport, 0, len(zones))
-	for _, z := range zones {
-		st, err := database.LedgerStatus(ctx, z)
-		if err != nil {
-			return nil, err
-		}
-		r := ledgerZoneReport{
-			ZoneStatus: st, Imports: []ledgerImportReport{},
-			Push: ledgerPushReports(pushes, z),
-		}
-		if zc, ok := cfg.Ledger.Zone(z); ok {
-			dir, err := zc.ImportSegmentsDir()
-			if err != nil {
-				return nil, err
-			}
-			if dir != "" {
-				imp, err := database.GetLedgerImportState(ctx, z, dir)
-				if err != nil {
-					return nil, err
-				}
-				if imp != nil {
-					r.Imports = append(r.Imports, ledgerImportReport{
-						Path: dir, UpdatedAt: imp.UpdatedAt, Report: jsontext.Value(imp.LastReportJSON),
-					})
-				}
-			}
-		}
-		reports = append(reports, r)
-	}
-	return reports, nil
-}
-
-// ledgerPushReports extracts one zone's push status in target name order.
-func ledgerPushReports(pushes map[string]string, zone string) []ledgerPushReport {
-	out := []ledgerPushReport{}
-	for _, target := range slices.Sorted(maps.Keys(pushes)) {
-		st, err := postgres.DecodeLedgerPushStatus(pushes[target])
-		if err != nil {
-			continue
-		}
-		counts := st.Zones[zone]
-		r := ledgerPushReport{
-			Target: target, At: st.At, Pushed: counts.Pushed,
-			Identical: counts.Identical, HeldBack: counts.HeldBack,
-			Failures: [][4]string{},
-		}
-		for _, f := range st.Failures {
-			if f[0] == zone {
-				r.Failures = append(r.Failures, f)
-			}
-		}
-		out = append(out, r)
-	}
-	return out
-}
-
-func writeLedgerStatusText(w io.Writer, cfg config.Config, reports []ledgerZoneReport) error {
-	var b strings.Builder
-	if !cfg.Ledger.Enabled {
-		b.WriteString("ledger: off ([ledger] enabled = false)\n")
-	}
-	for _, r := range reports {
-		fmt.Fprintf(&b, "zone %s: %d segment(s), %d event(s)\n", r.Zone, r.Segments, r.Events)
-		for _, source := range slices.Sorted(maps.Keys(r.Sources)) {
-			fmt.Fprintf(&b, "  source %s: latest seq %d\n", source, r.Sources[source])
-		}
-		for _, g := range r.Gaps {
-			fmt.Fprintf(&b, "  gap: %s\n", formatLedgerID(g[0], g[1]))
-		}
-		for _, f := range r.Failures {
-			fmt.Fprintf(&b, "  verify failure: %s: %s\n", formatLedgerID(f[0], f[1]), f[2])
-		}
-		for _, imp := range r.Imports {
-			fmt.Fprintf(&b, "  import %s at %s: %s\n", imp.Path, imp.UpdatedAt, string(imp.Report))
-		}
-		for _, p := range r.Push {
-			target := p.Target
-			if target == "" {
-				target = "(default)"
-			}
-			fmt.Fprintf(&b, "  push [%s] at %s: %d pushed, %d already present, %d held back, %d refused\n",
-				target, p.At, p.Pushed, p.Identical, p.HeldBack, len(p.Failures))
-			for _, f := range p.Failures {
-				fmt.Fprintf(&b, "    refused %s: %s\n", formatLedgerID(f[1], f[2]), f[3])
-			}
-		}
-	}
-	_, err := io.WriteString(w, b.String())
-	return err
 }
 
 func newLedgerVerifyCommand() *cobra.Command {
@@ -351,15 +272,38 @@ func newLedgerVerifyCommand() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("loading config: %w", err)
 			}
-			zones, err := ledgerZones(cfg, zone)
+			tr, daemon, err := ledgerDaemon(cmd.Context(), cfg)
 			if err != nil {
 				return err
+			}
+			if daemon {
+				reports, err := requestLedgerVerify(cmd.Context(), tr, cfg.AuthToken, zone, full)
+				if err != nil {
+					return err
+				}
+				failures := 0
+				for _, z := range reports {
+					fmt.Fprintf(cmd.OutOrStdout(), "verify [%s]: %d newly verified, %d skipped, %d failure(s)\n",
+						z.Zone, z.NewlyVerified, z.Skipped, len(z.Failures))
+					for _, f := range z.Failures {
+						fmt.Fprintf(cmd.OutOrStdout(), "  %s: %s\n", ledgerstatus.FormatID(f[0], f[1]), f[2])
+					}
+					failures += len(z.Failures)
+				}
+				if failures > 0 {
+					return fmt.Errorf("ledger verify found %d failure(s)", failures)
+				}
+				return nil
 			}
 			database, lock, err := openWriteDB(cmd.Context(), cfg)
 			if err != nil {
 				return err
 			}
 			defer closeWriteDB(database, lock)
+			zones, err := ledgerReadZones(cmd.Context(), cfg, database, zone)
+			if err != nil {
+				return err
+			}
 			failures := 0
 			for _, z := range zones {
 				rep, err := ledger.VerifyZone(cmd.Context(), database, z, full)
@@ -369,7 +313,7 @@ func newLedgerVerifyCommand() *cobra.Command {
 				fmt.Fprintf(cmd.OutOrStdout(), "verify [%s]: %d newly verified, %d skipped, %d failure(s)\n",
 					z, rep.NewlyVerified, rep.Skipped, len(rep.Failures))
 				for _, f := range rep.Failures {
-					fmt.Fprintf(cmd.OutOrStdout(), "  %s: %s\n", formatLedgerID(f[0], f[1]), f[2])
+					fmt.Fprintf(cmd.OutOrStdout(), "  %s: %s\n", ledgerstatus.FormatID(f[0], f[1]), f[2])
 				}
 				failures += len(rep.Failures)
 			}
@@ -448,7 +392,7 @@ func writeLedgerImportText(w io.Writer, zone string, r segfile.ImportReport) err
 	fmt.Fprintf(&b, "ledger import [%s]: %d segment(s) and %d event(s) indexed, %d skipped, %d failed\n",
 		zone, r.SegmentsIndexed, r.EventsIndexed, r.Skipped, len(r.Failed))
 	for _, f := range r.Failed {
-		fmt.Fprintf(&b, "  %s: %s\n", formatLedgerID(f[0], f[1]), f[2])
+		fmt.Fprintf(&b, "  %s: %s\n", ledgerstatus.FormatID(f[0], f[1]), f[2])
 	}
 	for _, e := range r.ListingErrors {
 		fmt.Fprintf(&b, "  %s\n", e)
@@ -472,14 +416,14 @@ func newLedgerExportCommand() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("loading config: %w", err)
 			}
-			if _, err := ledgerZones(cfg, zone); err != nil {
-				return err
-			}
 			database, err := openReadOnlyDB(cmd.Context(), cfg)
 			if err != nil {
 				return err
 			}
 			defer database.Close()
+			if _, err := ledgerReadZones(cmd.Context(), cfg, database, zone); err != nil {
+				return err
+			}
 			report, err := segfile.ExportZone(cmd.Context(), database, zone, dir, source)
 			if err != nil {
 				return err

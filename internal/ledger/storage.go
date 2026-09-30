@@ -119,7 +119,17 @@ func PrepareAppend(zone string, seg Segment, origin string) (PreparedSegment, er
 		return PreparedSegment{}, fmt.Errorf("serialization error: %s holds invalid UTF-8", seg.Filename())
 	}
 	rows := make([]EventRow, 0, len(seg.Events))
-	for _, e := range seg.Events {
+	for i, e := range seg.Events {
+		if e.Zone != zone {
+			return PreparedSegment{}, fmt.Errorf(
+				"%w: event %d zone %q does not match segment zone %q",
+				ErrIntegrity, i, e.Zone, zone)
+		}
+		if e.Source != seg.Source {
+			return PreparedSegment{}, fmt.Errorf(
+				"%w: event %d source %q does not match segment source %q",
+				ErrIntegrity, i, e.Source, seg.Source)
+		}
 		if e.SourceSeq > math.MaxInt64 {
 			return PreparedSegment{}, fmt.Errorf(
 				"an event's source_seq exceeds i64::MAX (%d) — not representable in the ledger tables", int64(math.MaxInt64))
@@ -162,7 +172,7 @@ func projectEvent(e Event) (EventRow, error) {
 		EventID:     e.EventID.String(),
 		Source:      e.Source,
 		SourceSeq:   int64(e.SourceSeq),
-		Timestamp:   e.Timestamp.UTC().Truncate(time.Microsecond),
+		Timestamp:   StorageTime(e.Timestamp),
 		ActorRef:    e.ActorRef,
 		ObjectRef:   e.ObjectRef,
 		EventClass:  string(e.EventClass),
@@ -194,7 +204,13 @@ func projectEvent(e Event) (EventRow, error) {
 // fixed six fractional digits, so lexical order is time order and matches
 // PostgreSQL's microsecond TIMESTAMPTZ.
 func StorageTimestamp(t time.Time) string {
-	return t.UTC().Truncate(time.Microsecond).Format("2006-01-02T15:04:05.000000Z")
+	return StorageTime(t).Format("2006-01-02T15:04:05.000000Z")
+}
+
+// StorageTime normalizes timestamps to UTC at the precision used by the
+// ledger tables in SQLite and PostgreSQL.
+func StorageTime(t time.Time) time.Time {
+	return t.UTC().Truncate(time.Microsecond)
 }
 
 // EncodeCheckpoint returns the failures_json and missing_json column

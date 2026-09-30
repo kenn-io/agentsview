@@ -67,3 +67,9 @@ func (s *Store) GetLedgerVerifyState(_ context.Context, _, _ string) (*ledger.Ve
 func (s *Store) SaveLedgerVerifyState(_ context.Context, _, _ string, _ ledger.VerifyCheckpoint) error {
 	return db.ErrReadOnly
 }
+
+func (s *Store) QueryLedger(_ context.Context, _ ledger.Query) ([]ledger.ZoneEvents, error) {
+	return []ledger.ZoneEvents{}, nil
+}
+
+func (s *Store) LedgerZones(_ context.Context) ([]string, error) { return []string{}, nil }

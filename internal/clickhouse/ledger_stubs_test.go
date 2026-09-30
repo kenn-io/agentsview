@@ -29,4 +29,10 @@ func TestLedgerStubs(t *testing.T) {
 	ckpt, err := s.GetLedgerVerifyState(ctx, "default", "host-a")
 	require.NoError(t, err)
 	assert.Nil(t, ckpt)
+	results, err := s.QueryLedger(ctx, ledger.Query{})
+	require.NoError(t, err)
+	assert.Empty(t, results)
+	zones, err := s.LedgerZones(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, zones)
 }

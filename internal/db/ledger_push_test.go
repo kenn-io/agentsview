@@ -10,7 +10,7 @@ import (
 func TestListLedgerSegmentsForPush(t *testing.T) {
 	d := testDB(t)
 	mustAppend(t, d, "zone-a", testLedgerSegment(t, "host-a", 1, 1))
-	mustAppend(t, d, "zone-b", testLedgerSegment(t, "host-b", 1, 2))
+	mustAppend(t, d, "zone-b", testLedgerSegmentInZone(t, "zone-b", "host-b", 1, 2))
 	mustAppend(t, d, "zone-a", testLedgerSegment(t, "host-a", 2, 1))
 
 	all, err := d.ListLedgerSegmentsForPush(t.Context(), "", nil, 0)
@@ -47,7 +47,7 @@ func TestListLedgerSegmentsForPush(t *testing.T) {
 func TestListLedgerSegmentsForPushIdentities(t *testing.T) {
 	d := testDB(t)
 	segA := testLedgerSegment(t, "host-a", 1, 1)
-	segB := testLedgerSegment(t, "host-b", 1, 2)
+	segB := testLedgerSegmentInZone(t, "zone-b", "host-b", 1, 2)
 	mustAppend(t, d, "zone-a", segA)
 	mustAppend(t, d, "zone-b", segB)
 

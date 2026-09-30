@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/ledger"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/secrets"
 	"go.kenn.io/agentsview/internal/sessionwatch"
@@ -134,6 +135,14 @@ func (b *directBackend) memoryStatusForSearch(
 	b.memoryStatus = status
 	b.memoryStatusAt = time.Now()
 	return status, nil
+}
+
+// SupportsLedgerQueries is true for every store: each backend implements
+// QueryLedger, and one without ledger tables answers empty.
+func (b *directBackend) SupportsLedgerQueries() bool { return b.db != nil }
+
+func (b *directBackend) LedgerQuery(ctx context.Context, q ledger.Query) ([]ledger.ZoneEvents, error) {
+	return b.db.QueryLedger(ctx, q)
 }
 
 func (b *directBackend) MachineLabels(

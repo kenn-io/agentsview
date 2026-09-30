@@ -14,6 +14,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/ledger"
+	"go.kenn.io/agentsview/internal/ledgerpushstatus"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
@@ -23,7 +24,7 @@ const (
 	ledgerPushWatermarkKey = "pg_ledger_push_watermark_v1"
 	// LedgerPushStatusKeyPrefix + target holds the last ledger phase
 	// outcome as JSON for `agentsview ledger status`.
-	LedgerPushStatusKeyPrefix = "pg_ledger_push_status_v1:"
+	LedgerPushStatusKeyPrefix = ledgerpushstatus.KeyPrefix
 	// ledgerPushLookback re-reads recently ingested segments so a clock
 	// step or a concurrent append at the watermark instant is never
 	// missed; re-pushing them is a no-op.
@@ -32,31 +33,14 @@ const (
 )
 
 // LedgerPushZoneCounts counts one zone's segments in one push.
-type LedgerPushZoneCounts struct {
-	Pushed    int `json:"pushed"`
-	Identical int `json:"identical"`
-	HeldBack  int `json:"held_back"`
-}
+type LedgerPushZoneCounts = ledgerpushstatus.ZoneCounts
 
 // LedgerPushStatus is the last ledger phase outcome for one target.
-// Failures are [zone, source, seq, message]: local segments that fail
-// their checksum, and identities the hub already holds with different
-// content. They are retried on every push until they succeed.
-type LedgerPushStatus struct {
-	At       string                          `json:"at"`
-	Zones    map[string]LedgerPushZoneCounts `json:"zones"`
-	Failures [][4]string                     `json:"failures"`
-	// HeldBackSegments are [zone, source, seq] identities retried on later pushes.
-	HeldBackSegments [][3]string `json:"held_back_segments,omitempty"`
-}
+type LedgerPushStatus = ledgerpushstatus.Status
 
 // DecodeLedgerPushStatus parses a stored LedgerPushStatus.
 func DecodeLedgerPushStatus(value string) (LedgerPushStatus, error) {
-	var st LedgerPushStatus
-	if err := json.Unmarshal([]byte(value), &st); err != nil {
-		return LedgerPushStatus{}, fmt.Errorf("decoding ledger push status: %w", err)
-	}
-	return st, nil
+	return ledgerpushstatus.Decode(value)
 }
 
 func ledgerStatusHasHeldBackSegments(status LedgerPushStatus) bool {
