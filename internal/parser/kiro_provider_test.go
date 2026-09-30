@@ -92,6 +92,7 @@ func TestKiroProviderParsePhysicalVirtualAndLegacySources(t *testing.T) {
 	)
 	legacyPath := filepath.Join(root, "legacy-session.jsonl")
 	writeSourceFile(t, legacyPath, kiroProviderJSONLFixture("Legacy question"))
+	writeSourceFile(t, filepath.Join(root, "legacy-session.json"), `{"title":"Legacy title"}`)
 
 	provider, ok := NewProvider(AgentKiro, ProviderConfig{
 		Roots:   []string{root},
@@ -136,6 +137,8 @@ func TestKiroProviderParsePhysicalVirtualAndLegacySources(t *testing.T) {
 	require.Len(t, legacyOutcome.Results, 1)
 	assert.Equal(t, "kiro:legacy-session", legacyOutcome.Results[0].Result.Session.ID)
 	assert.Equal(t, "legacy-hash", legacyOutcome.Results[0].Result.Session.File.Hash)
+	assert.Equal(t, "Legacy title", legacyOutcome.Results[0].Result.Session.SessionName)
+	assert.Equal(t, "Legacy question", legacyOutcome.Results[0].Result.Session.FirstMessage)
 
 	// Close the setup handle before deleting; Windows will not unlink a file
 	// this process still holds open.

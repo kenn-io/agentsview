@@ -235,7 +235,7 @@ func (p *kiroProvider) parseLegacySessionContext(
 		filepath.Base(path), ".jsonl",
 	)
 
-	var project, cwd string
+	var project, cwd, sessionName string
 	var startedAt, endedAt time.Time
 
 	if meta != nil {
@@ -246,8 +246,9 @@ func (p *kiroProvider) parseLegacySessionContext(
 		if cwd != "" {
 			project = ExtractProjectFromCwdWithBranchContext(ctx, cwd, "")
 		}
-		if meta.Title != "" && firstMessage == "" {
-			firstMessage = meta.Title
+		sessionName = strings.TrimSpace(meta.Title)
+		if firstMessage == "" {
+			firstMessage = sessionName
 		}
 		startedAt = parseTimestamp(meta.CreatedAt)
 		endedAt = parseTimestamp(meta.UpdatedAt)
@@ -273,6 +274,7 @@ func (p *kiroProvider) parseLegacySessionContext(
 		Agent:            AgentKiro,
 		Cwd:              cwd,
 		FirstMessage:     firstMessage,
+		SessionName:      sessionName,
 		StartedAt:        startedAt,
 		EndedAt:          endedAt,
 		MessageCount:     len(messages),

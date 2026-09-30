@@ -2609,7 +2609,10 @@ schemas keep their existing ordering behavior.
   recorded environment metadata as the fallback when the key is empty. Bulk
   and single-session parsing honor the caller's filesystem-discovery policy;
   `TestKiroProviderSQLiteProjectDiscoveryPolicy` verifies project names and
-  filesystem probes with discovery enabled and disabled.
+  filesystem probes with discovery enabled and disabled. Both the current
+  `session.json` and the legacy JSONL sidecar carry a `title`, which
+  Agentsview uses as the session name; the SQLite generation carries none. The
+  first message falls back to the title only when there is no user message.
 
 ## Kiro IDE (`kiro-ide`)
 

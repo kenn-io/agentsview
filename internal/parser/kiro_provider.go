@@ -1687,6 +1687,7 @@ func kiroProviderCapabilities() Capabilities {
 		Source: source,
 		Content: ContentCapabilities{
 			FirstMessage: CapabilitySupported,
+			SessionName:  CapabilitySupported,
 			Cwd:          CapabilitySupported,
 			ToolCalls:    CapabilitySupported,
 			ToolResults:  CapabilitySupported,
