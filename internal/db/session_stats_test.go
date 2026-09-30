@@ -2679,13 +2679,7 @@ func statsCommitFile(
 	statsRunGit(t, repo, env, "commit", "-q", "-m", message)
 }
 
-var (
-	statsOutcomeRepoOnce sync.Once
-	statsOutcomeRepoDir  string
-	statsOutcomeRepoPath string
-)
-
-func statsOutcomeRepo(t *testing.T) string {
+func statsIsolateGit(t *testing.T) {
 	t.Helper()
 	// Keep fixture commands and outcome lookups independent of host Git state.
 	for _, entry := range os.Environ() {
@@ -2699,6 +2693,17 @@ func statsOutcomeRepo(t *testing.T) string {
 	require.NoError(t, os.WriteFile(globalConfig, nil, 0o600))
 	t.Setenv("GIT_CONFIG_GLOBAL", globalConfig)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+}
+
+var (
+	statsOutcomeRepoOnce sync.Once
+	statsOutcomeRepoDir  string
+	statsOutcomeRepoPath string
+)
+
+func statsOutcomeRepo(t *testing.T) string {
+	t.Helper()
+	statsIsolateGit(t)
 	statsOutcomeRepoOnce.Do(func() {
 		dir := filepath.Join(testDBFixtureTempDir, "stats-outcome")
 		require.NoError(t, os.MkdirAll(dir, 0o700), "create stats outcome repo dir")
@@ -2721,6 +2726,46 @@ func statsOutcomeRepo(t *testing.T) string {
 	})
 
 	return statsOutcomeRepoPath
+}
+
+func TestGetSessionStats_OutcomeStats_ExclusiveEnd(t *testing.T) {
+	skipIfNoGit(t)
+	statsIsolateGit(t)
+	repo := t.TempDir()
+	statsInitRepoAt(t, repo)
+	// The selected local day spans 23 hours across the spring DST change.
+	for _, stamp := range []string{
+		"2026-03-08T04:59:59Z", // before the selected day
+		"2026-03-08T05:00:00Z", // first included second
+		"2026-03-09T03:59:59Z", // last included second
+		"2026-03-09T04:00:00Z", // next midnight
+	} {
+		statsRunGit(t, repo, []string{
+			"GIT_AUTHOR_DATE=" + stamp, "GIT_COMMITTER_DATE=" + stamp,
+		}, "commit", "--allow-empty", "-q", "-m", "boundary fixture")
+	}
+	d := testDB(t)
+	insertSessionFixture(t, d, sessionFixture{
+		id: "boundary", agent: "claude", userMsgs: 5,
+		startedAt: "2026-03-08T12:00:00Z", cwd: repo,
+	})
+	for _, tc := range []struct {
+		until   string
+		commits int
+	}{
+		{"2026-03-09T00:00:00-04:00", 2},
+		{"2026-03-09T00:00:00.5-04:00", 3},
+	} {
+		t.Run(tc.until, func(t *testing.T) {
+			stats, err := d.GetSessionStats(t.Context(), StatsFilter{
+				Since: "2026-03-08T00:00:00-05:00", Until: tc.until,
+				IncludeGitOutcomes: true,
+			})
+			require.NoError(t, err)
+			require.NotNil(t, stats.OutcomeStats)
+			assert.Equal(t, tc.commits, stats.OutcomeStats.Commits)
+		})
+	}
 }
 
 // TestGetSessionStats_OutcomeStats_Happy seeds sessions whose cwd

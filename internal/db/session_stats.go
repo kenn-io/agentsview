@@ -1532,7 +1532,9 @@ func (db *DB) computeOutcomeStats(
 		return nil
 	}
 	since := from.UTC().Format(time.RFC3339)
-	until := to.UTC().Format(time.RFC3339)
+	// Git and GitHub include the upper bound at second precision; stats
+	// windows exclude it. Keep the last whole second strictly before to.
+	until := to.Add(-time.Nanosecond).UTC().Format(time.RFC3339)
 	var cache *git.Cache
 	// Snapshot the writer pool once: CloseWriter can nil it concurrently for a
 	// worker maintenance pass, so a check-then-load would hand git.NewCache a nil
