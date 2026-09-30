@@ -86,7 +86,8 @@ func originURL(ctx context.Context, root string) string {
 // case-insensitive; the path is left as written because repository paths are
 // not case-insensitive everywhere. Query and fragment data are preserved.
 // Filesystem remotes resolve against root and retain their full directory
-// names, including a `.git` suffix.
+// names, including a `.git` suffix. Custom transports retain the full URL
+// because their helpers can assign different meanings to its components.
 // Returns "" for an empty or unparseable URL, which makes the caller fall back
 // to the local path rather than merge repositories it cannot tell apart.
 func normalizeRemoteURL(raw, root string) string {
@@ -131,6 +132,13 @@ func normalizeRemoteURL(raw, root string) string {
 		u, err := url.Parse(raw)
 		if err != nil || u.Host == "" {
 			return ""
+		}
+		switch u.Scheme {
+		case "http", "https", "ssh", "git":
+		case "git+ssh", "ssh+git":
+			u.Scheme = "ssh"
+		default:
+			return raw
 		}
 		switch u.Scheme + ":" + u.Port() {
 		case "http:80", "https:443", "ssh:22", "git:9418":

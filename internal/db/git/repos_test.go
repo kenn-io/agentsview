@@ -166,6 +166,8 @@ func TestDiscoverRepos_DedupByOriginAcrossURLForms(t *testing.T) {
 		"https://GitHub.com/example-org/example-repo/",
 		"https://github.com:443/example-org/example-repo.git",
 		"ssh://git@github.com:22/example-org/example-repo.git",
+		"git+ssh://git@github.com:22/example-org/example-repo.git",
+		"ssh+git://git@github.com:22/example-org/example-repo.git",
 	}
 	cwds := make([]string, 0, len(forms))
 	for _, form := range forms {
@@ -177,6 +179,22 @@ func TestDiscoverRepos_DedupByOriginAcrossURLForms(t *testing.T) {
 	got := DiscoverRepos(t.Context(), cwds)
 	assert.Len(t, got, 1,
 		"every spelling of one remote must collapse to one repository")
+}
+
+func TestDiscoverRepos_CustomSchemesStayDistinct(t *testing.T) {
+	skipIfNoGit(t)
+	var roots []string
+	for _, origin := range []string{
+		"https://example.com/team/repo.git",
+		"exampleproto://example.com/team/repo.git",
+		"exampleproto://example.com/team/repo.git",
+		"otherproto://example.com/team/repo.git",
+	} {
+		root := initRepo(t)
+		setOrigin(t, root, origin)
+		roots = append(roots, root)
+	}
+	assert.Equal(t, [][]string{canonAll(roots[:1]), canonAll(roots[1:3]), canonAll(roots[3:])}, DiscoverRepos(t.Context(), roots))
 }
 
 // Keep both histories even when one checkout has a newer HEAD.
@@ -257,6 +275,11 @@ func TestNormalizeRemoteURL(t *testing.T) {
 	}{
 		{name: "empty", raw: "", want: ""},
 		{name: "blank", raw: "   ", want: ""},
+		{
+			name: "custom scheme URL remains intact",
+			raw:  "exampleproto://user@Example.com/team/repo.git?ref=a@b#section",
+			want: "exampleproto://user@Example.com/team/repo.git?ref=a@b#section",
+		},
 		{
 			name: "https with .git",
 			raw:  "https://github.com/example-org/example-repo.git",
