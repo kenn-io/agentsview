@@ -272,11 +272,15 @@ describe("SessionsTable", () => {
   });
 
   describe("infinite scroll", () => {
-    // jsdom does no layout; give the scroll box a fixed geometry so the
-    // distance to the bottom depends only on scrollTop.
+    // jsdom does no layout; give the scroll box and its rows a fixed geometry
+    // so the distance to the bottom, 2000 - 360 - scrollTop px, depends only
+    // on scrollTop.
+    let rowHeight = 20;
     beforeEach(() => {
-      vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(1000);
+      rowHeight = 20;
+      vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(2000);
       vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(360);
+      vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(() => rowHeight);
     });
 
     function pagedReport(cursor: string | undefined): Report {
@@ -294,7 +298,7 @@ describe("SessionsTable", () => {
       return scroller;
     }
 
-    it("requests the next page only near the bottom", async () => {
+    it("requests the next page once 15 rows or fewer remain below the view", async () => {
       const onLoadMore = vi.fn();
       const c = mount(SessionsTable, {
         target: document.body,
@@ -302,10 +306,31 @@ describe("SessionsTable", () => {
       });
       await tick();
 
-      scrollTo(400);
+      // 310 px (15.5 rows of 20 px) left, then 300 px (15 rows).
+      scrollTo(1330);
       expect(onLoadMore).not.toHaveBeenCalled();
 
-      scrollTo(560);
+      scrollTo(1340);
+      expect(onLoadMore).toHaveBeenCalledExactlyOnceWith("page-2");
+
+      await unmount(c);
+    });
+
+    it("keeps the same row lead when rows are taller", async () => {
+      const onLoadMore = vi.fn();
+      const c = mount(SessionsTable, {
+        target: document.body,
+        props: { report: pagedReport("page-2"), onLoadMore },
+      });
+      await tick();
+
+      // 500 px left is 25 rows of 20 px but only 12.5 rows of 40 px, as when
+      // the interface is zoomed to 200%.
+      scrollTo(1140);
+      expect(onLoadMore).not.toHaveBeenCalled();
+
+      rowHeight = 40;
+      scrollTo(1140);
       expect(onLoadMore).toHaveBeenCalledExactlyOnceWith("page-2");
 
       await unmount(c);
@@ -317,7 +342,7 @@ describe("SessionsTable", () => {
       const c = mount(SessionsTable, { target: document.body, props });
       await tick();
 
-      scrollTo(640);
+      scrollTo(1640);
       expect(onLoadMore).not.toHaveBeenCalled();
       expect(document.querySelector(".page-status")?.textContent).toBe(
         m.activity_loading_sessions(),
@@ -338,7 +363,7 @@ describe("SessionsTable", () => {
       });
       await tick();
 
-      scrollTo(640);
+      scrollTo(1640);
       expect(onLoadMore).not.toHaveBeenCalled();
 
       await unmount(c);
@@ -352,7 +377,7 @@ describe("SessionsTable", () => {
       });
       await tick();
 
-      scrollTo(640);
+      scrollTo(1640);
       expect(onLoadMore).not.toHaveBeenCalled();
 
       const error = document.querySelector(".page-error")!;
@@ -369,7 +394,7 @@ describe("SessionsTable", () => {
       const c = mount(SessionsTable, { target: document.body, props });
       await tick();
 
-      const scroller = scrollTo(640);
+      const scroller = scrollTo(1640);
       expect(onLoadMore).toHaveBeenCalledExactlyOnceWith("page-2");
 
       props.report = pagedReport("cost-page-2");

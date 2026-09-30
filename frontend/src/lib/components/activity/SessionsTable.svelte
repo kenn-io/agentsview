@@ -34,9 +34,11 @@
     onLoadMore?: (cursor: string) => void;
   } = $props();
 
-  // Start fetching the next page a few rows before the end of the list so
-  // scrolling rarely has to wait on it.
-  const LOAD_MORE_THRESHOLD_PX = 120;
+  // Start fetching the next page while this many rows are still below the
+  // visible area, so on a reasonably fast connection it lands before the user
+  // reaches the end. Counting rows instead of pixels keeps the same lead at
+  // any interface zoom or text size.
+  const LOAD_AHEAD_ROWS = 15;
 
   let scrollEl: HTMLDivElement | undefined = $state();
 
@@ -51,9 +53,11 @@
   function loadMoreIfNearEnd() {
     const cursor = report.sessions_next_cursor;
     if (!scrollEl || !cursor || loading || error) return;
+    const rowHeight =
+      scrollEl.querySelector<HTMLElement>(".session-row")?.offsetHeight ?? 0;
     const remaining =
       scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight;
-    if (remaining <= LOAD_MORE_THRESHOLD_PX) onLoadMore?.(cursor);
+    if (remaining <= LOAD_AHEAD_ROWS * rowHeight) onLoadMore?.(cursor);
   }
 
   // Declared before the load check so a replaced list is back at the top
