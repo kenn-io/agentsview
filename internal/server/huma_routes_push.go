@@ -605,6 +605,7 @@ func (s *Server) humaReplicaPush(
 							SyncStateTarget:        body.SyncStateTarget,
 							MigrateLegacySyncState: body.MigrateLegacySyncState,
 							VectorSource:           vectorSource,
+							Ledger:                 storage.LedgerPushPolicyFor(s.cfg.Ledger),
 						},
 					)
 					if err != nil {

@@ -40,6 +40,7 @@ nav = [
   {"Filesystem Session Sync" = "filesystem-sync.md"},
   {"PostgreSQL Sync" = "pg-sync.md"},
   {"Hosted Raw Sync" = "hosted-raw-sync.md"},
+  {"Event Ledger" = "event-ledger.md"},
   {"DuckDB Mirror" = "duckdb.md"},
   {"ClickHouse Sync" = "clickhouse-sync.md"},
 ]

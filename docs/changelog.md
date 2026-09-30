@@ -11,6 +11,10 @@ The latest published release is
 
 **New features**
 
+- `agentsview pg push` now copies the event ledger to PostgreSQL without
+  overwriting hub segments. Conflicting or damaged segments appear in
+  `agentsview ledger status`. Segments held back by zone or confidentiality
+  policy are retried on later pushes when policy allows replication.
 - Verify conversation memory through an opt-in live release gate that records a
   synthetic decision, starts a fresh Claude Code or Codex session, and requires
   the client to search, read, answer accurately, and cite the source. Raw
@@ -40,6 +44,11 @@ The latest published release is
   `agentsview serve --base-path`, including background serves. Keep
   `--public-url` set to the browser origin; AgentsView adds the mount path to
   assets, API requests, navigation, and its published browser URL.
+- An optional event ledger stores append-only, checksummed events in the
+  archive. `agentsview ledger` appends, verifies, imports and exports segments
+  that are byte-compatible with jilog ledgers, and a zone with `import_path`
+  follows a jilog segments directory automatically. Enable it with
+  `[ledger] enabled = true`; see [Event Ledger](/docs/event-ledger/).
 - Coding agents can now consult prior conversation evidence proactively when
   earlier decisions or solutions may help. `agentsview skills install`
   upgrades the existing recall skill for Claude and Agents/Codex, and Claude

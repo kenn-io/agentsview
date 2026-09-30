@@ -179,6 +179,8 @@ type Sync struct {
 	// vectorSource, when set, supplies the local vectors.db active generation
 	// pushed as a phase at the end of Push. Nil disables the phase.
 	vectorSource storage.VectorPushSource
+	// ledgerPolicy enables the ledger phase when the ledger is configured.
+	ledgerPolicy *storage.LedgerPushPolicy
 	// afterVectorApply is a full/scoped post-apply test hook.
 	afterVectorApply func()
 	// beforeVectorWitnessRecord is a generation-wide pre-witness test hook.
@@ -287,6 +289,7 @@ func New(
 		projects:               opts.Projects,
 		excludeProjects:        opts.ExcludeProjects,
 		vectorSource:           opts.VectorSource,
+		ledgerPolicy:           opts.Ledger,
 	}, nil
 }
 
@@ -414,6 +417,40 @@ func (s *Sync) ensureSchemaLocked(ctx context.Context) error {
 				return err
 			}
 			log.Printf("pg schema: raw custody schema skipped, insufficient privilege: %v", err)
+		}
+		if err := ensureLedgerSchemaPG(ctx, s.pg); err != nil {
+			if !isInsufficientPrivilege(err) {
+				return err
+			}
+			if s.ledgerPolicy != nil {
+				missingTables, checkErr := missingLedgerTablesPG(ctx, s.pg)
+				if checkErr != nil {
+					return fmt.Errorf("verifying existing ledger schema after insufficient privilege: %w", checkErr)
+				}
+				if len(missingTables) != 0 {
+					return fmt.Errorf(
+						"cannot ensure ledger schema in %q: the PostgreSQL role lacks CREATE privilege and these tables are missing: %v; provision the ledger schema with a role that has CREATE privilege",
+						s.schema, missingTables,
+					)
+				}
+				// ensureLedgerSchemaPG consumes the unsupported-trigger error
+				// for CockroachDB itself. Reaching this insufficient-privilege
+				// path means a supported guard installation still needs checking.
+				guardsCurrent, checkErr := ledgerAppendOnlyGuardsCurrentPG(ctx, s.pg)
+				if checkErr != nil {
+					return fmt.Errorf(
+						"verifying ledger append-only guards after insufficient privilege: %w",
+						checkErr,
+					)
+				}
+				if !guardsCurrent {
+					return fmt.Errorf(
+						"cannot ensure ledger schema in %q: the PostgreSQL role lacks CREATE privilege and ledger append-only guards are missing or outdated; provision the ledger schema with a role that has CREATE privilege",
+						s.schema,
+					)
+				}
+			}
+			log.Printf("pg schema: ledger schema skipped, insufficient privilege: %v", err)
 		}
 		s.schemaDone = true
 		return nil

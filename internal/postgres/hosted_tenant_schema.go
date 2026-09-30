@@ -76,6 +76,16 @@ var hostedTables = append([]HostedTable{
 	{Name: "raw_ingest_jobs", Key: []string{"id"}, ForeignKeys: []HostedForeignKey{{Columns: []string{"manifest_id"}, Table: "raw_manifests", References: []string{"manifest_id"}, Delete: "RESTRICT"}}},
 }, rawProjectionTables...)
 
+// Ledger tables are optional in hosted schemas. Fresh hosted provisioning
+// omits them because HostedStore has no tenant mapping for archive-wide ledger
+// data, but schemas created by EnsureSchema may already contain them.
+var hostedOptionalTables = []HostedTable{
+	{Name: "ledger_segments", Key: []string{"zone", "source", "source_seq"}},
+	{Name: "ledger_events", Key: []string{"event_id"}},
+	{Name: "ledger_verify_state", Key: []string{"zone", "source"}},
+	{Name: "ledger_import_state", Key: []string{"zone", "path"}},
+}
+
 func sessionHostedFK() []HostedForeignKey {
 	return []HostedForeignKey{{Columns: []string{"session_id"}, Table: "sessions", References: []string{"id"}, Delete: "CASCADE"}}
 }
