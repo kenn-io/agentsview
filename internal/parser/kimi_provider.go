@@ -75,6 +75,14 @@ func kimiParseFile(
 	if req.Fingerprint.Hash != "" {
 		sess.File.Hash = req.Fingerprint.Hash
 	}
+	// The fingerprint folds in the title files; store the same size and mtime
+	// so an unchanged titled session stays fresh on the next sync.
+	if req.Fingerprint.Size > 0 {
+		sess.File.Size = req.Fingerprint.Size
+	}
+	if req.Fingerprint.MTimeNS > 0 {
+		sess.File.Mtime = req.Fingerprint.MTimeNS
+	}
 	// Kimi sessions with only session-level token aggregates emit a
 	// session-level usage event (parseKimiSession sets sess.UsageEvents);
 	// carry it through so the cost engine can price the session.
