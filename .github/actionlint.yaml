@@ -6,4 +6,5 @@ self-hosted-runner:
     - namespace-profile-windows-4cpu
     - namespace-profile-windows-8cpu
     - namespace-profile-windows-16cpu
+    - namespace-profile-mac-6cpu
     - windows-11-vs2026-arm
