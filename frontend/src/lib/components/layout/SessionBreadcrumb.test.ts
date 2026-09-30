@@ -5,7 +5,11 @@ import { createClassComponent } from "svelte/legacy";
 // @ts-ignore
 import SessionBreadcrumb from "./SessionBreadcrumb.svelte";
 import type { Session } from "../../api/types.js";
-import { OpenersService, SessionsService } from "../../api/generated/index";
+import {
+  OpenersService,
+  SessionsService,
+  type SessionToolSequencesResponse,
+} from "../../api/generated/index";
 import { messages } from "../../stores/messages.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
 import { setLocale } from "../../i18n/index.js";
@@ -48,6 +52,7 @@ vi.mock("../../api/generated/index", async (importOriginal) => {
       getApiV1SessionsByIdMessages: vi.fn(),
       getApiV1SessionsByIdDirectory: vi.fn(),
       getApiV1SessionsByIdUsage: vi.fn(),
+      getApiV1SessionsByIdToolSequences: vi.fn(),
       postApiV1SessionsByIdResume: vi.fn(),
       postApiV1SessionsByIdOpen: vi.fn(),
     },
@@ -61,6 +66,7 @@ const openersService = OpenersService as unknown as {
 const sessionsService = SessionsService as unknown as {
   getApiV1SessionsByIdDirectory: ReturnType<typeof vi.fn>;
   getApiV1SessionsByIdUsage: ReturnType<typeof vi.fn>;
+  getApiV1SessionsByIdToolSequences: ReturnType<typeof vi.fn>;
   postApiV1SessionsByIdResume: ReturnType<typeof vi.fn>;
 };
 
@@ -157,6 +163,49 @@ function makeUsage(overrides: Partial<SessionUsage> = {}): SessionUsage {
   };
 }
 
+function makeToolSequences(
+  duration: number | null,
+  sessionId = "run:123456789abcdef",
+): SessionToolSequencesResponse {
+  return {
+    session_id: sessionId,
+    total_tool_calls: 1,
+    total_sequences: 1,
+    omitted_sequences: 0,
+    total_sequence_calls: 1,
+    omitted_calls: 0,
+    sequences: [
+      {
+        ending: "recovered",
+        identical: false,
+        near_identical: false,
+        tool_changed: false,
+        total_calls: 1,
+        omitted_calls: 0,
+        calls: [
+          {
+            ordinal: 3,
+            call_index: 0,
+            tool_use_id: "tool-id",
+            tool_name: "Grep",
+            outcome: "empty",
+            repeat: "none",
+            tool_changed: false,
+            duration_ms: duration,
+            input_preview: "{}",
+            input_bytes: 2,
+            input_omitted_bytes: 0,
+            result_preview: "No matches found",
+            result_bytes: 15,
+            result_omitted_bytes: 0,
+            result_content_unknown: false,
+          },
+        ],
+      },
+    ],
+  };
+}
+
 async function openUsageBreakdown(): Promise<void> {
   const details = document.querySelector<HTMLDetailsElement>(".usage-breakdown");
   expect(details).not.toBeNull();
@@ -210,12 +259,16 @@ beforeEach(() => {
   openersService.getApiV1Openers.mockReset().mockResolvedValue({ openers: [] });
   sessionsService.getApiV1SessionsByIdDirectory.mockReset().mockResolvedValue({ path: "" });
   sessionsService.getApiV1SessionsByIdUsage.mockReset().mockResolvedValue(makeUsage());
+  sessionsService.getApiV1SessionsByIdToolSequences
+    .mockReset()
+    .mockResolvedValue(makeToolSequences(null));
   sessionsService.postApiV1SessionsByIdResume.mockReset();
   sessions.activeSessionId = null;
   sessions.activeSessionUsageVersion = 0;
   sessions.childSessions = new Map();
   ui.sidebarOpen = true;
   ui.isMobileViewport = false;
+  ui.signalPanelOpen = false;
 });
 
 afterEach(() => {
@@ -2078,6 +2131,123 @@ describe("SessionBreadcrumb", () => {
       });
 
       unmount(component);
+    });
+
+    it("loads tool sequences only while visible and refreshes for child usage changes", async () => {
+      const session = makeSession("claude", {
+        transcript_revision: "revision-1",
+        termination_status: "clean",
+      });
+      sessionsService.getApiV1SessionsByIdToolSequences
+        .mockResolvedValueOnce(makeToolSequences(null))
+        .mockResolvedValueOnce(makeToolSequences(0));
+      const component = createClassComponent({
+        component: SessionBreadcrumb,
+        target: document.body,
+        props: { session, onBack: () => {} },
+      });
+      await flushPromises();
+      expect(sessionsService.getApiV1SessionsByIdToolSequences).not.toHaveBeenCalled();
+
+      ui.signalPanelOpen = true;
+      await vi.waitFor(() => {
+        expect(document.body.textContent).toContain("Not measured");
+      });
+      expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(1);
+
+      sessions.activeSessionUsageVersion += 1;
+      await vi.waitFor(() => {
+        expect(document.body.textContent).toContain("0ms");
+      });
+      expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(2);
+      component.$destroy();
+    });
+
+    it("refreshes tool sequences when the transcript revision or termination status changes", async () => {
+      ui.signalPanelOpen = true;
+      sessionsService.getApiV1SessionsByIdToolSequences
+        .mockResolvedValueOnce(makeToolSequences(2000))
+        .mockResolvedValueOnce(makeToolSequences(4000));
+      const component = createClassComponent({
+        component: SessionBreadcrumb,
+        target: document.body,
+        props: {
+          session: makeSession("claude", {
+            transcript_revision: "revision-1",
+            termination_status: "tool_call_pending",
+          }),
+          onBack: () => {},
+        },
+      });
+      await vi.waitFor(() => {
+        expect(document.body.textContent).toContain("2.0s");
+      });
+
+      component.$set({
+        session: makeSession("claude", {
+          transcript_revision: "revision-2",
+          termination_status: "clean",
+        }),
+      });
+      await vi.waitFor(() => {
+        expect(document.body.textContent).toContain("4.0s");
+      });
+      expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(2);
+      component.$destroy();
+    });
+
+    it("does not let a closed-panel response replace the next read", async () => {
+      const first = deferred<SessionToolSequencesResponse>();
+      sessionsService.getApiV1SessionsByIdToolSequences
+        .mockReturnValueOnce(first.promise)
+        .mockResolvedValueOnce(makeToolSequences(2000));
+      ui.signalPanelOpen = true;
+      const component = createClassComponent({
+        component: SessionBreadcrumb,
+        target: document.body,
+        props: { session: makeSession("claude"), onBack: () => {} },
+      });
+      await flushPromises();
+      expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(1);
+
+      ui.signalPanelOpen = false;
+      await flushPromises();
+      ui.signalPanelOpen = true;
+      await vi.waitFor(() => {
+        expect(document.body.textContent).toContain("2.0s");
+      });
+      first.resolve(makeToolSequences(10000));
+      await flushPromises();
+      expect(document.body.textContent).toContain("2.0s");
+      expect(document.body.textContent).not.toContain("10.0s");
+      expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(2);
+      component.$destroy();
+    });
+
+    it("ignores a late tool-sequence response after switching sessions", async () => {
+      const first = deferred<SessionToolSequencesResponse>();
+      sessionsService.getApiV1SessionsByIdToolSequences
+        .mockReturnValueOnce(first.promise)
+        .mockResolvedValueOnce(makeToolSequences(2000, "run:bbb"));
+      ui.signalPanelOpen = true;
+      const component = createClassComponent({
+        component: SessionBreadcrumb,
+        target: document.body,
+        props: { session: makeSession("claude", { id: "run:aaa" }), onBack: () => {} },
+      });
+      await flushPromises();
+      component.$set({
+        session: makeSession("claude", { id: "run:bbb" }),
+      });
+      await vi.waitFor(() => {
+        expect(document.body.textContent).toContain("2.0s");
+      });
+
+      first.resolve(makeToolSequences(10000, "run:aaa"));
+      await flushPromises();
+      expect(document.body.textContent).toContain("2.0s");
+      expect(document.body.textContent).not.toContain("10.0s");
+      component.$destroy();
     });
   });
 });

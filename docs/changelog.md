@@ -30,6 +30,9 @@ The latest published release is
   them from `~/.omo/agent/sessions` with the Pi parser. Sessions you indexed
   earlier by pointing `PI_DIR` at `~/.omo` stay labeled Pi; remove that
   override so new OMO sessions are not indexed twice.
+- Inspect a session's observed tool-error and empty-result sequences, including
+  retries, recovery calls, retained evidence, measured durations, and transcript
+  links from the session health panel.
 - Verify conversation memory through an opt-in live release gate that records a
   synthetic decision, starts a fresh Claude Code or Codex session, and requires
   the client to search, read, answer accurately, and cite the source. Raw

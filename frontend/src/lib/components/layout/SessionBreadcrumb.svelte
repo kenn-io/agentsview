@@ -17,6 +17,7 @@
   } from "../../icons.js";
   import { onDestroy, onMount } from "svelte";
   import type { Session } from "../../api/types.js";
+  import type { SessionToolSequencesResponse } from "../../api/generated/index.js";
   import {
     OpenersService,
     SessionsService,
@@ -39,6 +40,7 @@
   import { normalizeMessagePreview } from "../../utils/messages.js";
   import { getGradeStyle, getGradeLabel } from "../../utils/grade.js";
   import SignalPanel from "../content/SignalPanel.svelte";
+  import ToolSequencesPanel from "../content/ToolSequencesPanel.svelte";
   import SessionFilterControl from "../filters/SessionFilterControl.svelte";
   import SidebarToggleButton from "./SidebarToggleButton.svelte";
   import { sessions } from "../../stores/sessions.svelte.js";
@@ -78,10 +80,15 @@
   let openFeedbackKind = $state<"success" | "error">("success");
   let feedbackTimer: ReturnType<typeof setTimeout> | undefined;
   let sessionDir = $state<string | null>(null);
+  let toolSequencesData = $state<SessionToolSequencesResponse | null>(null);
+  let toolSequencesLoading = $state(false);
+  let toolSequencesFailed = $state(false);
+  let toolSequencesFetchIdentity = "";
   const openersRead = new LatestRead();
   const directoryRead = new LatestRead();
   const costRead = new LatestRead();
   const breakdownRead = new LatestRead();
+  const toolSequencesRead = new LatestRead();
 
   interface SessionDirectoryResponse {
     path: string;
@@ -296,6 +303,7 @@
     directoryRead.cancel();
     costRead.cancel();
     breakdownRead.cancel();
+    toolSequencesRead.cancel();
   });
 
   let sessionCostLabel = $derived(
@@ -356,6 +364,54 @@
     if (ui.signalPanelOpen && session?.id) {
       sessions.fetchSignalDetail(session.id);
     }
+  });
+
+  $effect(() => {
+    const currentSession = session;
+    const id = currentSession?.id;
+    const visible = ui.signalPanelOpen;
+    if (!visible || !id || !currentSession) {
+      toolSequencesRead.cancel();
+      toolSequencesData = null;
+      toolSequencesLoading = false;
+      toolSequencesFailed = false;
+      toolSequencesFetchIdentity = "";
+      return;
+    }
+
+    const identity = [
+      id,
+      currentSession.transcript_revision ?? "",
+      currentSession.termination_status ?? "",
+      sessions.activeSessionUsageVersion,
+    ].join("\n");
+    toolSequencesFetchIdentity = identity;
+    toolSequencesData = null;
+    toolSequencesLoading = true;
+    toolSequencesFailed = false;
+    const signal = toolSequencesRead.begin();
+    SessionsService.getApiV1SessionsByIdToolSequences({ id }, { signal })
+      .then((response) => {
+        if (
+          !toolSequencesRead.isCurrent(signal) ||
+          toolSequencesFetchIdentity !== identity
+        ) return;
+        toolSequencesData = response;
+      })
+      .catch((error) => {
+        if (
+          isAbortError(error) ||
+          !toolSequencesRead.isCurrent(signal) ||
+          toolSequencesFetchIdentity !== identity
+        ) return;
+        toolSequencesData = null;
+        toolSequencesFailed = true;
+      })
+      .finally(() => {
+        if (toolSequencesRead.finish(signal)) toolSequencesLoading = false;
+      });
+
+    return () => toolSequencesRead.cancel();
   });
 
   function sessionDisplayId(id: string): string {
@@ -820,7 +876,8 @@
         style:color={gradeStyle.text}
         style:border-color={gradeStyle.border}
         onclick={() => ui.toggleSignalPanel()}
-        title={m.session_breadcrumb_session_health()}
+        title={m.session_breadcrumb_session_health_and_tool_sequences()}
+        aria-expanded={ui.signalPanelOpen}
       >
         {getGradeLabel(session.health_grade)}
       </button>
@@ -1121,6 +1178,12 @@
 
 {#if ui.signalPanelOpen && session}
   <SignalPanel {session} />
+  <ToolSequencesPanel
+    data={toolSequencesData}
+    sessionId={session.id}
+    loading={toolSequencesLoading}
+    failed={toolSequencesFailed}
+  />
 {/if}
 
 <style>

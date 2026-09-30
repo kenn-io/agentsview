@@ -1933,6 +1933,50 @@ func (o *GetAPIV1SessionsIDToolCallsRequestOptions) GetHeader() (map[string]stri
 	return nil, nil
 }
 
+// GetAPIV1SessionsIDToolSequencesRequestOptions is the options needed to make a request to GetAPIV1SessionsIDToolSequences.
+type GetAPIV1SessionsIDToolSequencesRequestOptions struct {
+	PathParams *GetAPIV1SessionsIDToolSequencesPath
+}
+
+// Validate validates all the fields in the options.
+// Use it if fields validation was not run.
+func (o *GetAPIV1SessionsIDToolSequencesRequestOptions) Validate() error {
+	var errors runtime.ValidationErrors
+
+	if o.PathParams != nil {
+		if v, ok := any(o.PathParams).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("PathParams", err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+
+	return errors
+}
+
+// GetPathParams returns the path params as a map.
+func (o *GetAPIV1SessionsIDToolSequencesRequestOptions) GetPathParams() (map[string]any, error) {
+	return runtime.AsMap[any](o.PathParams)
+}
+
+// GetQuery returns the query params as a map.
+func (o *GetAPIV1SessionsIDToolSequencesRequestOptions) GetQuery() (map[string]any, error) {
+	return nil, nil
+}
+
+// GetBody returns the payload in any type that can be marshalled to JSON by the client.
+func (o *GetAPIV1SessionsIDToolSequencesRequestOptions) GetBody() any {
+	return nil
+}
+
+// GetHeader returns the headers as a map.
+func (o *GetAPIV1SessionsIDToolSequencesRequestOptions) GetHeader() (map[string]string, error) {
+	return nil, nil
+}
+
 // GetAPIV1SessionsIDUsageRequestOptions is the options needed to make a request to GetAPIV1SessionsIDUsage.
 type GetAPIV1SessionsIDUsageRequestOptions struct {
 	PathParams *GetAPIV1SessionsIDUsagePath
@@ -4572,6 +4616,7 @@ type ClientInterface interface {
 	GetAPIV1SessionsIDWithResponse(ctx context.Context, options *GetAPIV1SessionsIDRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1SessionsIDResp, error)
 	GetAPIV1SessionsIDMessagesWithResponse(ctx context.Context, options *GetAPIV1SessionsIDMessagesRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1SessionsIDMessagesResp, error)
 	GetAPIV1SessionsIDToolCallsWithResponse(ctx context.Context, options *GetAPIV1SessionsIDToolCallsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1SessionsIDToolCallsResp, error)
+	GetAPIV1SessionsIDToolSequencesWithResponse(ctx context.Context, options *GetAPIV1SessionsIDToolSequencesRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1SessionsIDToolSequencesResp, error)
 	GetAPIV1SessionsIDUsageWithResponse(ctx context.Context, options *GetAPIV1SessionsIDUsageRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1SessionsIDUsageResp, error)
 	GetAPIV1SessionsIDWatchWithResponse(ctx context.Context, options *GetAPIV1SessionsIDWatchRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1SessionsIDWatchResp, error)
 	GetAPIV1SessionsIDWatchStreamWithResponse(ctx context.Context, options *GetAPIV1SessionsIDWatchRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1SessionsIDWatchResp, error)
@@ -13369,6 +13414,229 @@ func (c *Client) GetAPIV1SessionsIDToolCallsWithResponse(ctx context.Context, op
 	}
 }
 
+// GetAPIV1SessionsIDToolSequences Get session tool sequences
+func (c *Client) GetAPIV1SessionsIDToolSequencesWithResponse(ctx context.Context, options *GetAPIV1SessionsIDToolSequencesRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1SessionsIDToolSequencesResp, error) {
+	var err error
+	reqParams := runtime.RequestOptionsParameters{
+		RequestURL: c.apiClient.GetBaseURL() + "/api/v1/sessions/{id}/tool-sequences",
+		Method:     "GET",
+		Options:    options,
+	}
+
+	req, err := c.apiClient.CreateRequest(ctx, reqParams, reqEditors...)
+	if err != nil {
+		return nil, fmt.Errorf("error creating request: %w", err)
+	}
+
+	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/api/v1/sessions/{id}/tool-sequences")
+	if err != nil {
+		return nil, fmt.Errorf("error executing request: %w", err)
+	}
+
+	out := &GetAPIV1SessionsIDToolSequencesResp{
+		HTTPResponse: resp.Raw,
+		Body:         resp.Content,
+		StatusCode:   resp.StatusCode,
+	}
+
+	switch resp.StatusCode {
+	case 200:
+		out.JSON200 = new(GetAPIV1SessionsIDToolSequencesResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON200); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SessionsIDToolSequencesResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, nil
+	case 400:
+		out.JSON400 = new(GetAPIV1SessionsIDToolSequencesErrorResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON400); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SessionsIDToolSequencesErrorResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 401:
+		out.JSON401 = new(GetAPIV1SessionsIDToolSequencesErrorResponseJSON)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON401); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SessionsIDToolSequencesErrorResponseJSON",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 403:
+		out.JSON403 = new(GetAPIV1SessionsIDToolSequencesErrorResponseJSON403)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON403); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SessionsIDToolSequencesErrorResponseJSON403",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 404:
+		out.JSON404 = new(GetAPIV1SessionsIDToolSequencesErrorResponseJSON404)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON404); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SessionsIDToolSequencesErrorResponseJSON404",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 409:
+		out.JSON409 = new(GetAPIV1SessionsIDToolSequencesErrorResponseJSON409)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON409); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SessionsIDToolSequencesErrorResponseJSON409",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 422:
+		out.JSON422 = new(GetAPIV1SessionsIDToolSequencesErrorResponseJSON422)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON422); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SessionsIDToolSequencesErrorResponseJSON422",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 500:
+		out.JSON500 = new(GetAPIV1SessionsIDToolSequencesErrorResponseJSON500)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON500); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SessionsIDToolSequencesErrorResponseJSON500",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 501:
+		out.JSON501 = new(GetAPIV1SessionsIDToolSequencesErrorResponseJSON501)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON501); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SessionsIDToolSequencesErrorResponseJSON501",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 502:
+		out.JSON502 = new(GetAPIV1SessionsIDToolSequencesErrorResponseJSON502)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON502); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SessionsIDToolSequencesErrorResponseJSON502",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 503:
+		out.JSON503 = new(GetAPIV1SessionsIDToolSequencesErrorResponseJSON503)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON503); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SessionsIDToolSequencesErrorResponseJSON503",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 504:
+		out.JSON504 = new(GetAPIV1SessionsIDToolSequencesErrorResponseJSON504)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON504); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1SessionsIDToolSequencesErrorResponseJSON504",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	default:
+		return out, runtime.NewClientAPIError(fmt.Errorf("unexpected status code: %d", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	}
+}
+
 // GetAPIV1SessionsIDUsage Get session usage
 func (c *Client) GetAPIV1SessionsIDUsageWithResponse(ctx context.Context, options *GetAPIV1SessionsIDUsageRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1SessionsIDUsageResp, error) {
 	var err error
@@ -15173,6 +15441,62 @@ func (s ServiceMemoryVectorStatusStatus) Validate() error {
 	}
 }
 
+type SessionToolSequenceEnding string
+
+const (
+	Abandoned                        SessionToolSequenceEnding = "abandoned"
+	Open                             SessionToolSequenceEnding = "open"
+	Recovered                        SessionToolSequenceEnding = "recovered"
+	SessionToolSequenceEndingUnknown SessionToolSequenceEnding = "unknown"
+)
+
+// Validate checks if the SessionToolSequenceEnding value is valid
+func (s SessionToolSequenceEnding) Validate() error {
+	switch s {
+	case Abandoned, Open, Recovered, SessionToolSequenceEndingUnknown:
+		return nil
+	default:
+		return runtime.NewValidationErrorsFromString("Enum", fmt.Sprintf("must be a valid SessionToolSequenceEnding value, got: %v", s))
+	}
+}
+
+type SessionToolSequenceCallOutcome string
+
+const (
+	Content                               SessionToolSequenceCallOutcome = "content"
+	Empty                                 SessionToolSequenceCallOutcome = "empty"
+	Errored                               SessionToolSequenceCallOutcome = "errored"
+	SessionToolSequenceCallOutcomeUnknown SessionToolSequenceCallOutcome = "unknown"
+)
+
+// Validate checks if the SessionToolSequenceCallOutcome value is valid
+func (s SessionToolSequenceCallOutcome) Validate() error {
+	switch s {
+	case Content, Empty, Errored, SessionToolSequenceCallOutcomeUnknown:
+		return nil
+	default:
+		return runtime.NewValidationErrorsFromString("Enum", fmt.Sprintf("must be a valid SessionToolSequenceCallOutcome value, got: %v", s))
+	}
+}
+
+type SessionToolSequenceCallRepeat string
+
+const (
+	Identical     SessionToolSequenceCallRepeat = "identical"
+	NearIdentical SessionToolSequenceCallRepeat = "near_identical"
+	None          SessionToolSequenceCallRepeat = "none"
+)
+
+// Validate checks if the SessionToolSequenceCallRepeat value is valid
+func (s SessionToolSequenceCallRepeat) Validate() error {
+	switch s {
+	case Identical, NearIdentical, None:
+		return nil
+	default:
+		return runtime.NewValidationErrorsFromString("Enum", fmt.Sprintf("must be a valid SessionToolSequenceCallRepeat value, got: %v", s))
+	}
+}
+
 // GetAPIV1ActivityReportQueryPreset Range preset
 type GetAPIV1ActivityReportQueryPreset string
 
@@ -15461,6 +15785,15 @@ type GetAPIV1SessionsIDToolCallsPath struct {
 }
 
 func (g GetAPIV1SessionsIDToolCallsPath) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(g))
+}
+
+type GetAPIV1SessionsIDToolSequencesPath struct {
+	// ID Session ID
+	ID string `json:"id" validate:"required"`
+}
+
+func (g GetAPIV1SessionsIDToolSequencesPath) Validate() error {
 	return runtime.ConvertValidatorError(typesValidator.Struct(g))
 }
 
@@ -17560,6 +17893,30 @@ type GetAPIV1SessionsIDToolCallsErrorResponseJSON503 = APIErrorResponse
 
 type GetAPIV1SessionsIDToolCallsErrorResponseJSON504 = APIErrorResponse
 
+type GetAPIV1SessionsIDToolSequencesResponse = SessionToolSequencesResponse
+
+type GetAPIV1SessionsIDToolSequencesErrorResponse = APIErrorResponse
+
+type GetAPIV1SessionsIDToolSequencesErrorResponseJSON = APIErrorResponse
+
+type GetAPIV1SessionsIDToolSequencesErrorResponseJSON403 = APIErrorResponse
+
+type GetAPIV1SessionsIDToolSequencesErrorResponseJSON404 = APIErrorResponse
+
+type GetAPIV1SessionsIDToolSequencesErrorResponseJSON409 = APIErrorResponse
+
+type GetAPIV1SessionsIDToolSequencesErrorResponseJSON422 = APIErrorResponse
+
+type GetAPIV1SessionsIDToolSequencesErrorResponseJSON500 = APIErrorResponse
+
+type GetAPIV1SessionsIDToolSequencesErrorResponseJSON501 = APIErrorResponse
+
+type GetAPIV1SessionsIDToolSequencesErrorResponseJSON502 = APIErrorResponse
+
+type GetAPIV1SessionsIDToolSequencesErrorResponseJSON503 = APIErrorResponse
+
+type GetAPIV1SessionsIDToolSequencesErrorResponseJSON504 = APIErrorResponse
+
 type GetAPIV1SessionsIDUsageResponse = SessionUsageResponse
 
 type GetAPIV1SessionsIDUsageErrorResponse = APIErrorResponse
@@ -18538,6 +18895,24 @@ type GetAPIV1SessionsIDToolCallsResp struct {
 	JSON502      *GetAPIV1SessionsIDToolCallsErrorResponseJSON502
 	JSON503      *GetAPIV1SessionsIDToolCallsErrorResponseJSON503
 	JSON504      *GetAPIV1SessionsIDToolCallsErrorResponseJSON504
+}
+
+type GetAPIV1SessionsIDToolSequencesResp struct {
+	HTTPResponse *http.Response
+	Body         []byte
+	StatusCode   int
+	JSON200      *GetAPIV1SessionsIDToolSequencesResponse
+	JSON400      *GetAPIV1SessionsIDToolSequencesErrorResponse
+	JSON401      *GetAPIV1SessionsIDToolSequencesErrorResponseJSON
+	JSON403      *GetAPIV1SessionsIDToolSequencesErrorResponseJSON403
+	JSON404      *GetAPIV1SessionsIDToolSequencesErrorResponseJSON404
+	JSON409      *GetAPIV1SessionsIDToolSequencesErrorResponseJSON409
+	JSON422      *GetAPIV1SessionsIDToolSequencesErrorResponseJSON422
+	JSON500      *GetAPIV1SessionsIDToolSequencesErrorResponseJSON500
+	JSON501      *GetAPIV1SessionsIDToolSequencesErrorResponseJSON501
+	JSON502      *GetAPIV1SessionsIDToolSequencesErrorResponseJSON502
+	JSON503      *GetAPIV1SessionsIDToolSequencesErrorResponseJSON503
+	JSON504      *GetAPIV1SessionsIDToolSequencesErrorResponseJSON504
 }
 
 type GetAPIV1SessionsIDUsageResp struct {
@@ -20974,6 +21349,112 @@ func (s ServiceUsagePairwiseComparisonSide) Validate() error {
 		if err := v.Validate(); err != nil {
 			errors = errors.Append("TotalCost", err)
 		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
+
+type SessionToolSequence struct {
+	Calls         []SessionToolSequenceCall `json:"calls" validate:"required"`
+	Ending        SessionToolSequenceEnding `json:"ending" validate:"required"`
+	Identical     bool                      `json:"identical"`
+	NearIdentical bool                      `json:"near_identical"`
+	OmittedCalls  int64                     `json:"omitted_calls"`
+	ToolChanged   bool                      `json:"tool_changed"`
+	TotalCalls    int64                     `json:"total_calls"`
+}
+
+func (s SessionToolSequence) Validate() error {
+	var errors runtime.ValidationErrors
+	for i, item := range s.Calls {
+		if v, ok := any(item).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append(fmt.Sprintf("Calls[%d]", i), err)
+			}
+		}
+	}
+	if v, ok := any(s.Ending).(runtime.Validator); ok {
+		if err := v.Validate(); err != nil {
+			errors = errors.Append("Ending", err)
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
+
+type SessionToolSequenceCall struct {
+	CallIndex            int64                          `json:"call_index"`
+	DurationMs           *int64                         `json:"duration_ms,omitempty"`
+	InputBytes           int64                          `json:"input_bytes"`
+	InputOmittedBytes    int64                          `json:"input_omitted_bytes"`
+	InputPreview         string                         `json:"input_preview" validate:"required"`
+	Ordinal              int64                          `json:"ordinal"`
+	Outcome              SessionToolSequenceCallOutcome `json:"outcome" validate:"required"`
+	Repeat               SessionToolSequenceCallRepeat  `json:"repeat" validate:"required"`
+	ResultBytes          *int64                         `json:"result_bytes,omitempty"`
+	ResultContentUnknown bool                           `json:"result_content_unknown"`
+	ResultOmittedBytes   *int64                         `json:"result_omitted_bytes,omitempty"`
+	ResultPreview        string                         `json:"result_preview" validate:"required"`
+	ToolChanged          bool                           `json:"tool_changed"`
+	ToolName             string                         `json:"tool_name" validate:"required"`
+	ToolUseID            string                         `json:"tool_use_id" validate:"required"`
+}
+
+func (s SessionToolSequenceCall) Validate() error {
+	var errors runtime.ValidationErrors
+	if err := typesValidator.Var(s.InputPreview, "required"); err != nil {
+		errors = errors.Append("InputPreview", err)
+	}
+	if v, ok := any(s.Outcome).(runtime.Validator); ok {
+		if err := v.Validate(); err != nil {
+			errors = errors.Append("Outcome", err)
+		}
+	}
+	if v, ok := any(s.Repeat).(runtime.Validator); ok {
+		if err := v.Validate(); err != nil {
+			errors = errors.Append("Repeat", err)
+		}
+	}
+	if err := typesValidator.Var(s.ResultPreview, "required"); err != nil {
+		errors = errors.Append("ResultPreview", err)
+	}
+	if err := typesValidator.Var(s.ToolName, "required"); err != nil {
+		errors = errors.Append("ToolName", err)
+	}
+	if err := typesValidator.Var(s.ToolUseID, "required"); err != nil {
+		errors = errors.Append("ToolUseID", err)
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
+
+type SessionToolSequencesResponse struct {
+	OmittedCalls       int64                 `json:"omitted_calls"`
+	OmittedSequences   int64                 `json:"omitted_sequences"`
+	Sequences          []SessionToolSequence `json:"sequences" validate:"required"`
+	SessionID          string                `json:"session_id" validate:"required"`
+	TotalSequenceCalls int64                 `json:"total_sequence_calls"`
+	TotalSequences     int64                 `json:"total_sequences"`
+	TotalToolCalls     int64                 `json:"total_tool_calls"`
+}
+
+func (s SessionToolSequencesResponse) Validate() error {
+	var errors runtime.ValidationErrors
+	for i, item := range s.Sequences {
+		if v, ok := any(item).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append(fmt.Sprintf("Sequences[%d]", i), err)
+			}
+		}
+	}
+	if err := typesValidator.Var(s.SessionID, "required"); err != nil {
+		errors = errors.Append("SessionID", err)
 	}
 	if len(errors) == 0 {
 		return nil

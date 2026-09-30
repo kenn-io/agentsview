@@ -24,6 +24,7 @@ import type {
   GetApiV1SessionsByIdSearchPathParameters,
   GetApiV1SessionsByIdTimingPathParameters,
   GetApiV1SessionsByIdToolCallsPathParameters,
+  GetApiV1SessionsByIdToolSequencesPathParameters,
   GetApiV1SessionsByIdUsageParams,
   GetApiV1SessionsByIdUsagePathParameters,
   GetApiV1SessionsByIdWatchPathParameters,
@@ -50,6 +51,7 @@ import type {
   ServiceSessionList,
   ServiceToolCallList,
   SessionDirectoryResponse,
+  SessionToolSequencesResponse,
   SessionUsageResponse,
   TrashResponse,
   UploadSessionResponse,
@@ -671,6 +673,25 @@ export const getApiV1SessionsByIdToolCalls = async (
   options?: Parameters<typeof orvalFetch>[1],
 ): Promise<ServiceToolCallList> => {
   return orvalFetch<ServiceToolCallList>(getGetApiV1SessionsByIdToolCallsUrl({ id }), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetApiV1SessionsByIdToolSequencesUrl = ({
+  id,
+}: GetApiV1SessionsByIdToolSequencesPathParameters) => {
+  return `/api/v1/sessions/${encodeURIComponent(String(id))}/tool-sequences`;
+};
+
+/**
+ * @summary Get session tool sequences
+ */
+export const getApiV1SessionsByIdToolSequences = async (
+  { id }: GetApiV1SessionsByIdToolSequencesPathParameters,
+  options?: Parameters<typeof orvalFetch>[1],
+): Promise<SessionToolSequencesResponse> => {
+  return orvalFetch<SessionToolSequencesResponse>(getGetApiV1SessionsByIdToolSequencesUrl({ id }), {
     ...options,
     method: "GET",
   });

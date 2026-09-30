@@ -19,10 +19,12 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/sessionwatch"
+	"go.kenn.io/agentsview/internal/signals"
 	"go.kenn.io/agentsview/internal/stringutil"
 )
 
@@ -36,6 +38,7 @@ func (s *Server) registerSessionRoutes() {
 	s.get(group, "/sessions/{id}", "Get session", s.humaGetSession)
 	s.get(group, "/sessions/{id}/messages", "List session messages", s.humaGetMessages)
 	s.get(group, "/sessions/{id}/tool-calls", "List session tool calls", s.humaToolCalls)
+	s.get(group, "/sessions/{id}/tool-sequences", "Get session tool sequences", s.humaToolSequences)
 	s.get(group, "/sessions/{id}/children", "List child sessions", s.humaGetChildSessions)
 	s.get(group, "/sessions/{id}/activity", "Get session activity", s.humaGetSessionActivity)
 	s.get(group, "/sessions/{id}/timing", "Get session timing", s.humaSessionTiming)
@@ -432,6 +435,205 @@ func (s *Server) humaToolCalls(
 		return nil, serverError(err)
 	}
 	return &jsonOutput[*service.ToolCallList]{Body: list}, nil
+}
+
+const (
+	maxSessionToolSequences      = 20
+	maxSessionToolSequenceCalls  = 10
+	maxToolSequenceInputPreview  = 512
+	maxToolSequenceResultPreview = 1024
+)
+
+type sessionToolSequencesResponse struct {
+	SessionID          string                `json:"session_id"`
+	TotalToolCalls     int                   `json:"total_tool_calls"`
+	TotalSequences     int                   `json:"total_sequences"`
+	OmittedSequences   int                   `json:"omitted_sequences"`
+	TotalSequenceCalls int                   `json:"total_sequence_calls"`
+	OmittedCalls       int                   `json:"omitted_calls"`
+	Sequences          []sessionToolSequence `json:"sequences"`
+}
+
+type sessionToolSequence struct {
+	Ending        string                    `json:"ending" enum:"recovered,abandoned,open,unknown"`
+	Identical     bool                      `json:"identical"`
+	NearIdentical bool                      `json:"near_identical"`
+	ToolChanged   bool                      `json:"tool_changed"`
+	TotalCalls    int                       `json:"total_calls"`
+	OmittedCalls  int                       `json:"omitted_calls"`
+	Calls         []sessionToolSequenceCall `json:"calls"`
+}
+
+type sessionToolSequenceCall struct {
+	Ordinal              int    `json:"ordinal"`
+	CallIndex            int    `json:"call_index"`
+	ToolUseID            string `json:"tool_use_id"`
+	ToolName             string `json:"tool_name"`
+	Outcome              string `json:"outcome" enum:"errored,empty,content,unknown"`
+	Repeat               string `json:"repeat" enum:"none,identical,near_identical"`
+	ToolChanged          bool   `json:"tool_changed"`
+	DurationMs           *int64 `json:"duration_ms"`
+	InputPreview         string `json:"input_preview"`
+	InputBytes           int    `json:"input_bytes"`
+	InputOmittedBytes    int    `json:"input_omitted_bytes"`
+	ResultPreview        string `json:"result_preview"`
+	ResultBytes          *int   `json:"result_bytes"`
+	ResultOmittedBytes   *int   `json:"result_omitted_bytes"`
+	ResultContentUnknown bool   `json:"result_content_unknown"`
+}
+
+func (s *Server) humaToolSequences(
+	ctx context.Context,
+	in *idPathInput,
+) (*jsonOutput[sessionToolSequencesResponse], error) {
+	session, err := s.db.GetSession(ctx, in.ID)
+	if err != nil {
+		return nil, serverError(err)
+	}
+	if session == nil {
+		return nil, apiError(http.StatusNotFound, "session not found")
+	}
+
+	messages, err := s.db.GetAllMessages(ctx, in.ID)
+	if err != nil {
+		return nil, serverError(err)
+	}
+	rows := ingest.ExtractToolCallRows(messages)
+	timing, err := s.db.GetSessionTiming(ctx, in.ID)
+	if err != nil {
+		return nil, serverError(err)
+	}
+	if timing == nil {
+		return nil, apiError(http.StatusNotFound, "session not found")
+	}
+
+	return &jsonOutput[sessionToolSequencesResponse]{
+		Body: buildSessionToolSequences(session, rows, timing),
+	}, nil
+}
+
+type sessionToolTimingKey struct {
+	ordinal   int
+	toolUseID string
+}
+
+type sessionToolTimingMatch struct {
+	durationMs *int64
+	count      int
+}
+
+func buildSessionToolSequences(
+	session *db.Session,
+	rows []signals.ToolCallRow,
+	timing *db.SessionTiming,
+) sessionToolSequencesResponse {
+	complete := session.TerminationStatus != nil &&
+		(*session.TerminationStatus == string(parser.TerminationClean) ||
+			*session.TerminationStatus == string(parser.TerminationAwaitingUser))
+	extracted := signals.ExtractToolSequences(rows, complete)
+	timingMatches := make(map[sessionToolTimingKey]sessionToolTimingMatch)
+	if timing != nil {
+		for _, turn := range timing.Turns {
+			for i := range turn.Calls {
+				call := &turn.Calls[i]
+				if call.ToolUseID == "" {
+					continue
+				}
+				key := sessionToolTimingKey{ordinal: turn.Ordinal, toolUseID: call.ToolUseID}
+				match := timingMatches[key]
+				match.count++
+				match.durationMs = call.DurationMs
+				timingMatches[key] = match
+			}
+		}
+	}
+
+	response := sessionToolSequencesResponse{
+		SessionID:      session.ID,
+		TotalToolCalls: len(extracted.Calls),
+		TotalSequences: len(extracted.Sequences),
+		Sequences:      make([]sessionToolSequence, 0, min(len(extracted.Sequences), maxSessionToolSequences)),
+	}
+	response.OmittedSequences = response.TotalSequences - min(response.TotalSequences, maxSessionToolSequences)
+	for _, sequence := range extracted.Sequences {
+		response.TotalSequenceCalls += sequence.End - sequence.Start
+	}
+	for _, sequence := range extracted.Sequences[:min(len(extracted.Sequences), maxSessionToolSequences)] {
+		count := sequence.End - sequence.Start
+		indexes := make([]int, 0, min(count, maxSessionToolSequenceCalls))
+		if count <= maxSessionToolSequenceCalls {
+			for i := sequence.Start; i < sequence.End; i++ {
+				indexes = append(indexes, i)
+			}
+		} else {
+			for i := sequence.Start; i < sequence.Start+maxSessionToolSequenceCalls-1; i++ {
+				indexes = append(indexes, i)
+			}
+			indexes = append(indexes, sequence.End-1)
+		}
+
+		projected := sessionToolSequence{
+			Ending:        string(sequence.Ending),
+			Identical:     sequence.Identical,
+			NearIdentical: sequence.NearIdentical,
+			ToolChanged:   sequence.ToolChanged,
+			TotalCalls:    count,
+			OmittedCalls:  count - len(indexes),
+			Calls:         make([]sessionToolSequenceCall, 0, len(indexes)),
+		}
+		for _, index := range indexes {
+			row, outcome := rows[index], extracted.Calls[index]
+			projectedCall := projectSessionToolSequenceCall(row, outcome)
+			if row.ToolUseID != "" {
+				match := timingMatches[sessionToolTimingKey{
+					ordinal: outcome.MessageOrdinal, toolUseID: row.ToolUseID,
+				}]
+				if match.count == 1 {
+					projectedCall.DurationMs = match.durationMs
+				}
+			}
+			projected.Calls = append(projected.Calls, projectedCall)
+		}
+		response.Sequences = append(response.Sequences, projected)
+	}
+	returnedCalls := 0
+	for _, sequence := range response.Sequences {
+		returnedCalls += len(sequence.Calls)
+	}
+	response.OmittedCalls = response.TotalSequenceCalls - returnedCalls
+	return response
+}
+
+func projectSessionToolSequenceCall(
+	row signals.ToolCallRow,
+	outcome signals.ToolCallOutcome,
+) sessionToolSequenceCall {
+	inputPreview := stringutil.SafeTruncate(row.InputJSON, maxToolSequenceInputPreview)
+	resultPreview := stringutil.SafeTruncate(row.ResultContent, maxToolSequenceResultPreview)
+	call := sessionToolSequenceCall{
+		Ordinal:              outcome.MessageOrdinal,
+		CallIndex:            outcome.CallIndex,
+		ToolUseID:            outcome.ToolUseID,
+		ToolName:             outcome.ToolName,
+		Outcome:              string(outcome.Outcome),
+		Repeat:               string(outcome.Repeat),
+		ToolChanged:          outcome.ToolChanged,
+		InputPreview:         inputPreview,
+		InputBytes:           len(row.InputJSON),
+		InputOmittedBytes:    len(row.InputJSON) - len(inputPreview),
+		ResultPreview:        resultPreview,
+		ResultContentUnknown: row.ResultContentUnknown,
+	}
+	resultLength := db.ResolveResultContentLength(row.ResultContent, row.ResultContentLength)
+	knownEmpty := !row.ResultContentUnknown &&
+		(row.EventStatus == "completed" || row.EventStatus == "success" ||
+			(row.EventStatus != "" && signals.IsFailure(row)))
+	if resultLength > 0 || knownEmpty {
+		call.ResultBytes = &resultLength
+		omitted := resultLength - len(resultPreview)
+		call.ResultOmittedBytes = &omitted
+	}
+	return call
 }
 
 func (s *Server) humaGetSessionActivity(
