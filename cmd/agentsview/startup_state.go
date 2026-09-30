@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
+	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
 // startupStateFileName is the data-dir file holding the starting
@@ -62,12 +63,13 @@ func serveLogPath(dataDir string) string {
 // Write failures are logged once and otherwise ignored: startup
 // transparency must never break startup.
 type startupStateWriter struct {
-	mu        sync.Mutex
-	path      string
-	state     startupState
-	lastWrite time.Time
-	warnOnce  sync.Once
-	now       func() time.Time
+	mu           sync.Mutex
+	path         string
+	state        startupState
+	syncProgress syncpkg.Progress
+	lastWrite    time.Time
+	warnOnce     sync.Once
+	now          func() time.Time
 }
 
 func newStartupStateWriter(
@@ -140,6 +142,31 @@ func (w *startupStateWriter) SetCaddyProcess(pid int) {
 	w.write()
 }
 
+// SetSyncProgress publishes one-shot stages immediately; only repeated session
+// counters may be throttled. A dropped stage has no later callback to retry it.
+func (w *startupStateWriter) SetSyncProgress(p syncpkg.Progress) {
+	if w == nil {
+		return
+	}
+	phase := "initial sync"
+	if p.Resync {
+		phase = "full resync"
+	}
+	detail := startupProgressDetail(p)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	previous := w.syncProgress
+	w.syncProgress = p
+	if phase != w.state.Phase || p.Phase != previous.Phase ||
+		p.Detail != previous.Detail || p.Hint != previous.Hint ||
+		(p.SessionsTotal > 0) != (previous.SessionsTotal > 0) {
+		w.state.Phase, w.state.Detail = phase, detail
+		w.write()
+	} else {
+		w.setDetailLocked(detail)
+	}
+}
+
 // SetDetail records fine-grained progress within the current phase,
 // persisted at most once per startupDetailThrottle.
 func (w *startupStateWriter) SetDetail(detail string) {
@@ -148,6 +175,10 @@ func (w *startupStateWriter) SetDetail(detail string) {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.setDetailLocked(detail)
+}
+
+func (w *startupStateWriter) setDetailLocked(detail string) {
 	// state.Detail only changes when a write happens, so this dedup
 	// compares against what a reader can actually see. Storing a
 	// throttled detail in memory first would make a stable detail

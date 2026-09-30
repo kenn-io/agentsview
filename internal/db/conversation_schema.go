@@ -332,7 +332,8 @@ func reconcileConversationResyncTx(ctx context.Context, tx *sql.Tx, usageOnly bo
 		return nil
 	}
 	// Trash was copied without reparsing, so keep its original projection and gaps.
-	rows, err := tx.QueryContext(ctx, `SELECT id FROM main.sessions WHERE deleted_at IS NULL AND id IN (SELECT session_id FROM old_db.conversation_messages)`)
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM main.sessions s WHERE deleted_at IS NULL
+	 AND EXISTS (SELECT 1 FROM old_db.conversation_messages c WHERE c.session_id=s.id)`)
 	if err != nil {
 		return err
 	}

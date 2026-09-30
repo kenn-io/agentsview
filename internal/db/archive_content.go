@@ -491,12 +491,16 @@ func messagesForSession(messages []Message, sessionID string) []Message {
 // The SQL mirrors usageOnlyMessages and transcriptMessages column for column.
 func applyArchiveContentToCopiedSessionsTx(
 	ctx context.Context, tx *sql.Tx, tempIDsTable string,
-	policy config.ArchiveContent,
+	policy config.ArchiveContent, sourceVersion int,
 ) error {
 	var err error
 	switch policy {
 	case config.ArchiveContentFull:
-		// The copied content already matches the policy.
+		// Sanitized content and its conversation projection were copied
+		// together. Neither needs to be read and rewritten when unchanged.
+		if sourceVersion >= sanitizedSourceDataVersion {
+			return nil
+		}
 	case config.ArchiveContentTranscripts:
 		err = dropCopiedToolContentTx(ctx, tx, tempIDsTable)
 	case config.ArchiveContentUsage:

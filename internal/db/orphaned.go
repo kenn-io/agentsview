@@ -220,7 +220,7 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 			return nil, fmt.Errorf("sanitizing orphaned data: %w", err)
 		}
 		if err := applyArchiveContentToCopiedSessionsTx(
-			ctx, tx, "_orphaned_ids", d.ArchiveContent(),
+			ctx, tx, "_orphaned_ids", d.ArchiveContent(), sourceVersion,
 		); err != nil {
 			return nil, fmt.Errorf("projecting orphaned data: %w", err)
 		}
@@ -333,7 +333,7 @@ func (d *DB) CopyTrashedDataFrom(sourcePath string) ([]string, error) {
 		return nil, fmt.Errorf("sanitizing trashed data: %w", err)
 	}
 	if err := applyArchiveContentToCopiedSessionsTx(
-		ctx, tx, "_trashed_ids", d.ArchiveContent(),
+		ctx, tx, "_trashed_ids", d.ArchiveContent(), sourceVersion,
 	); err != nil {
 		return nil, fmt.Errorf("projecting trashed data: %w", err)
 	}

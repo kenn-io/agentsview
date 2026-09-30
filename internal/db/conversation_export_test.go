@@ -489,6 +489,59 @@ func TestConversationExportUsesFinalCopiedContent(t *testing.T) {
 	}
 }
 
+func TestConversationExportCopyRefreshesSanitizedMessages(t *testing.T) {
+	for _, trashed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("trashed=%t", trashed), func(t *testing.T) {
+			source := testDB(t)
+			insertSession(t, source, "chat", "sample")
+			insertMessages(t, source, Message{SessionID: "chat", Role: "assistant", Content: "Before", SourceUUID: "reply"})
+			initial, err := source.ExportConversationChanges(t.Context(), ConversationExportOptions{})
+			require.NoError(t, err)
+			require.Len(t, initial.Changes, 1)
+			// A pre-sanitization archive can contain bytes that its copied
+			// projection must no longer describe after resync cleans them.
+			_, err = source.getWriter().Exec(t.Context(), `UPDATE messages SET content=?`, "After\x00cleanup")
+			require.NoError(t, err)
+			_, err = source.getWriter().Exec(t.Context(), fmt.Sprintf("PRAGMA user_version=%d", sanitizedSourceDataVersion-1))
+			require.NoError(t, err)
+			if trashed {
+				require.NoError(t, source.SoftDeleteSession(t.Context(), "chat"))
+			}
+			path := source.Path()
+			require.NoError(t, source.Close())
+			destination := testDB(t)
+			require.NoError(t, destination.CopyArchiveIdentityFrom(path))
+			if trashed {
+				_, err = destination.CopyTrashedDataFrom(path)
+			} else {
+				_, err = destination.CopyOrphanedDataFrom(path)
+			}
+			require.NoError(t, err)
+			if trashed {
+				_, err = destination.RestoreSession(t.Context(), "chat")
+				require.NoError(t, err)
+			}
+			changes, err := destination.ExportConversationChanges(t.Context(), ConversationExportOptions{})
+			require.NoError(t, err)
+			messageCount := 0
+			for _, change := range changes.Changes {
+				if change.Type != "message" {
+					continue
+				}
+				messageCount++
+				assert.Equal(t, initial.Changes[0].MessageID, change.MessageID)
+				body, err := destination.GetConversationMessage(t.Context(), ConversationMessageOptions{
+					DatabaseID: changes.DatabaseID, SessionID: "chat", MessageID: change.MessageID, Revision: change.Revision,
+				})
+				require.NoError(t, err)
+				require.NotNil(t, body.Text)
+				assert.Equal(t, "Aftercleanup", *body.Text)
+			}
+			assert.Equal(t, 1, messageCount)
+		})
+	}
+}
+
 func TestConversationExportResyncPreservesCopiedPolicyGap(t *testing.T) {
 	for _, trashed := range []bool{false, true} {
 		t.Run(fmt.Sprintf("trashed=%t", trashed), func(t *testing.T) {

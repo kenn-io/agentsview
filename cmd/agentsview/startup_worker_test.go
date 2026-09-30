@@ -203,7 +203,7 @@ func TestStartupWorkerFailureFallsBackInProcess(t *testing.T) {
 
 func TestStartupWorkerPublishesEnrichedResyncProgress(t *testing.T) {
 	cfg := config.Config{DataDir: t.TempDir()}
-	now, step := fakeClock(time.Date(2026, 7, 22, 22, 0, 0, 0, time.UTC))
+	now, _ := fakeClock(time.Date(2026, 7, 22, 22, 0, 0, 0, time.UTC))
 	progress := newStartupStateWriter(cfg.DataDir, now)
 	progress.SetPhase("initial sync")
 
@@ -221,7 +221,6 @@ func TestStartupWorkerPublishesEnrichedResyncProgress(t *testing.T) {
 		assert.Equal(t, "full resync", state.Phase)
 		assert.Equal(t, "Preparing full resync", state.Detail)
 
-		step(startupDetailThrottle)
 		onLine(workerLine{Progress: &syncpkg.Progress{
 			Phase:           syncpkg.PhaseSyncing,
 			Detail:          "Syncing sessions into rebuilt database",
@@ -236,6 +235,28 @@ func TestStartupWorkerPublishesEnrichedResyncProgress(t *testing.T) {
 		assert.Equal(t, "Syncing sessions into rebuilt database: 25/100 sessions (25%) · 800 messages",
 			state.Detail,
 		)
+		onLine(workerLine{Progress: &syncpkg.Progress{
+			Phase: syncpkg.PhaseSyncing, Resync: true,
+			Detail:       "Syncing sessions into rebuilt database",
+			SessionsDone: 26, SessionsTotal: 100, MessagesIndexed: 810,
+		}})
+		assert.Equal(t, state.Detail, readStartupState(cfg.DataDir).Detail,
+			"counter-only updates must remain throttled")
+
+		// These one-shot transitions can all arrive within the counter throttle
+		// window, immediately before a long archive copy or index build.
+		for _, p := range []syncpkg.Progress{
+			{Phase: syncpkg.PhaseFinalizing, Detail: "Finalizing sync: repairing subagent relationships"},
+			{Phase: syncpkg.PhaseCopyingOrphans, Detail: "Copying archived sessions"},
+			{Phase: syncpkg.PhaseFinalizing, Detail: "Rebuilding full-text search index"},
+		} {
+			p.Resync = true
+			onLine(workerLine{Progress: &p})
+			state = readStartupState(cfg.DataDir)
+			require.NotNil(t, state)
+			assert.Equal(t, p.Detail, state.Detail,
+				"publish the actual stage before its work starts")
+		}
 
 		stats := syncpkg.SyncStats{}
 		return workerResult{

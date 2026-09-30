@@ -89,6 +89,15 @@ The latest published release is
   `sync --user` and `sync --port` flags have been removed. `sync --host` selects
   a configured host, including when syncing without a local daemon. Existing
   archived sessions are preserved.
+- Full remote imports after a data-version upgrade use less CPU. Checking
+  whether a source file was trashed now looks up that path directly instead of
+  scanning every session from the same agent.
+- Full resync does less work when preserving archived sessions. It keeps
+  unchanged conversation export records and uses indexed session lookups.
+- `agentsview sync` now reports when it is waiting for an ongoing sync,
+  including startup reconciliation.
+- Startup now reports archive copying and index rebuilding as soon as each
+  stage starts, instead of leaving the previous subagent-repair label visible.
 - Full resync now shows how many queued sessions it has checked while repairing
   subagent relationships, then reports when it is saving those repairs.
 - Turning a session provider on or off, or adding or removing an alternate

@@ -26,8 +26,9 @@ Conversation exports consume normalized SQLite message records for every agent.
 The database is the system of record: use stored content, roles, system markers,
 and source identities. Do not add agent allowlists, export-only parser fields,
 or source reparse requirements. Export metadata and message writes commit in the
-same transaction. After archive copies apply content policies, refresh the
-export index from the final stored messages while preserving their message IDs.
+same transaction. When sanitization or content policies change copied messages,
+refresh the export index from the final stored messages while preserving their
+message IDs. Unchanged full-content copies retain the copied export index.
 Usage-only writes publish a session-level coverage gap even when policy removes
 every message.
 

@@ -1299,17 +1299,18 @@ func (db *DB) IsSessionTrashed(ctx context.Context, id string) bool {
 	return n == 1
 }
 
+const hasTrashedSessionByFilePathQuery = "SELECT 1 FROM sessions" +
+	" INDEXED BY idx_sessions_file_path" +
+	" WHERE file_path = ? AND agent = ?" +
+	" AND deleted_at IS NOT NULL" +
+	" LIMIT 1"
+
 // HasTrashedSessionByFilePath returns true when a source path already belongs
-// to a trashed row for this agent.
+// to a trashed row for this agent. Use the path index so each parsed source
+// checks only its own rows, rather than scanning every session for the agent.
 func (db *DB) HasTrashedSessionByFilePath(ctx context.Context, path, agent string) bool {
 	var n int
-	_ = db.getReader().QueryRow(ctx,
-		"SELECT 1 FROM sessions"+
-			" WHERE file_path = ? AND agent = ?"+
-			" AND deleted_at IS NOT NULL"+
-			" LIMIT 1",
-		path, agent,
-	).Scan(&n)
+	_ = db.getReader().QueryRow(ctx, hasTrashedSessionByFilePathQuery, path, agent).Scan(&n)
 	return n == 1
 }
 

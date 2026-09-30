@@ -6,7 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestAgentScopedFreshnessQueriesSeekByFilePath(t *testing.T) {
+func TestAgentScopedSourceQueriesSeekByFilePath(t *testing.T) {
 	database := testDB(t)
 
 	tests := []struct {
@@ -16,6 +16,7 @@ func TestAgentScopedFreshnessQueriesSeekByFilePath(t *testing.T) {
 		{name: "file metadata", query: getFileInfoByAgentPathQuery},
 		{name: "file hash", query: getFileHashByAgentPathQuery},
 		{name: "data version", query: getDataVersionByAgentPathQuery},
+		{name: "trash", query: hasTrashedSessionByFilePathQuery},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -25,7 +26,7 @@ func TestAgentScopedFreshnessQueriesSeekByFilePath(t *testing.T) {
 
 			assert.Contains(t, plan,
 				"USING INDEX idx_sessions_file_path (file_path=?)",
-				"freshness work must be bounded by one source path\n%s", plan,
+				"source checks must be bounded by one source path\n%s", plan,
 			)
 			assert.NotContains(t, plan,
 				"idx_sessions_agent (agent=?)",

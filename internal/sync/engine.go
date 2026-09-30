@@ -4269,6 +4269,19 @@ func (e *Engine) LastSyncStartedAt(ctx context.Context) time.Time {
 	return t
 }
 
+func (e *Engine) lockSyncWithProgress(onProgress ProgressFunc) {
+	if e.syncMu.TryLock() {
+		return
+	}
+	// Only notify this caller: the lock owner still owns CurrentProgress.
+	if onProgress != nil {
+		onProgress(Progress{
+			Phase: PhaseSyncing, Detail: "Waiting for the current sync to finish",
+		})
+	}
+	e.syncMu.Lock()
+}
+
 // SyncThenRun runs the local sync/resync decision and invokes work while
 // syncMu is still held. Daemon-owned mirror pushes use this to keep local sync,
 // row scanning, and watermark writes serialized against watcher and periodic
@@ -4282,7 +4295,7 @@ func (e *Engine) SyncThenRun(
 	if e.refuseWriteInForceParse("SyncThenRun") {
 		return SyncStats{}, nil
 	}
-	e.syncMu.Lock()
+	e.lockSyncWithProgress(onProgress)
 	defer e.notifyStartupReconciled()
 	// Defers run LIFO: Unlock runs before emit.
 	defer func() {
@@ -4381,7 +4394,7 @@ func (e *Engine) SyncThenRunWithRebuild(
 	if e.refuseWriteInForceParse("SyncThenRunWithRebuild") {
 		return SyncStats{}, nil
 	}
-	e.syncMu.Lock()
+	e.lockSyncWithProgress(onProgress)
 	defer e.notifyStartupReconciled()
 	defer func() {
 		if stats.shouldEmitSync() {

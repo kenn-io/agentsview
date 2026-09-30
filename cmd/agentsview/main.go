@@ -774,13 +774,11 @@ func runStartupSyncViaWorker(
 		// Database opening ends before either the full resync or incremental
 		// session sync begins.
 		if p.Resync {
-			progress.SetPhase("full resync")
 			if !resyncAnnounced {
 				resyncAnnounced = true
 				fmt.Println("Data version changed, running full resync...")
 			}
 		} else {
-			progress.SetPhase("initial sync")
 			if !syncAnnounced {
 				syncAnnounced = true
 				fmt.Println("Running initial sync...")
@@ -789,7 +787,7 @@ func runStartupSyncViaWorker(
 		if writeSyncProgress(os.Stdout, terminal, p) {
 			progressShown = true
 		}
-		progress.SetDetail(startupProgressDetail(p))
+		progress.SetSyncProgress(p)
 	}
 	result, err := launchSyncWorker(ctx, cfg, "startup", onLine)
 	if err == nil && result.Stats != nil {
@@ -1668,7 +1666,7 @@ func runInitialSync(
 	progress := newSyncProgressPrinter(os.Stdout)
 	stats := engine.SyncAll(ctx, func(p sync.Progress) {
 		progress(p)
-		startupProgress.SetDetail(startupProgressDetail(p))
+		startupProgress.SetSyncProgress(p)
 	})
 	printSyncSummary(stats, t)
 	return stats
@@ -1687,7 +1685,7 @@ func runInitialResync(
 	progress := newResyncProgressPrinter(os.Stdout, time.Now)
 	stats := engine.ResyncAll(ctx, func(p sync.Progress) {
 		progress.Print(p)
-		startupProgress.SetDetail(startupProgressDetail(p))
+		startupProgress.SetSyncProgress(p)
 	})
 	progress.Finish()
 	printSyncSummary(stats, t)
@@ -1700,7 +1698,7 @@ func runInitialResync(
 		progress := newSyncProgressPrinter(os.Stdout)
 		stats = engine.SyncAll(ctx, func(p sync.Progress) {
 			progress(p)
-			startupProgress.SetDetail(startupProgressDetail(p))
+			startupProgress.SetSyncProgress(p)
 		})
 		printSyncSummary(stats, t)
 		fellBack = true
