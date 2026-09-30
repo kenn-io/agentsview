@@ -647,7 +647,7 @@ func TestDoSyncConfiguredFullUnifiedHTTPUsesManifestDeltaAndOrderedProgress(
 		previous = position
 	}
 	assert.Contains(t, progressOutput,
-		"Swapping rebuilt database into place completed in")
+		"Swapping rebuilt database into place: 1ms elapsed")
 
 	_, failures, err = runConfiguredLocalAndRemotes(
 		t.Context(), cfg, database, []config.RemoteHost{host},
@@ -1420,7 +1420,8 @@ func TestRemoteProgressPrinterStaysLineOrientedOnNonTerminalFile(t *testing.T) {
 	assert.Contains(t, out, "Processing sessions...")
 	assert.Contains(t, out, "Synced 2 sessions")
 	assert.Contains(t, out, "Skipped offline host")
-	assert.Contains(t, out, "Processing sessions completed in")
+	assert.Contains(t, out, "Processing sessions:")
+	assert.Contains(t, out, " elapsed\n")
 }
 
 func TestIsTerminalWriterClassifiesDestinations(t *testing.T) {
@@ -1487,7 +1488,7 @@ func TestNonTerminalProgressOutputIsBounded(t *testing.T) {
 	assert.NotContains(t, out.String(), "\r")
 	assert.NotContains(t, out.String(), "\x1b[K")
 	assert.Equal(t, 1, strings.Count(out.String(), "Processing sessions..."))
-	assert.Equal(t, 1, strings.Count(out.String(), "Processing sessions completed in"))
+	assert.Equal(t, 1, strings.Count(out.String(), "Processing sessions: 0s elapsed"))
 	assert.NotContains(t, out.String(), "after finish")
 }
 
@@ -1666,11 +1667,11 @@ func TestRemoteProgressPrinterWritesTimedStepLines(t *testing.T) {
 
 	got := out.String()
 	assert.Contains(t, got, "  Resolving agent directories on devbox...\n")
-	assert.Contains(t, got, "  Resolving agent directories on devbox completed in 150ms\n")
+	assert.Contains(t, got, "  Resolving agent directories on devbox: 150ms elapsed\n")
 	assert.Contains(t, got, "  Downloading session data from devbox (3 agents)...\n")
-	assert.Contains(t, got, "  Downloading session data from devbox (3 agents) completed in 2s\n")
+	assert.Contains(t, got, "  Downloading session data from devbox (3 agents): 2s elapsed\n")
 	assert.Contains(t, got, "\r  Processing sessions from devbox: 10/10 sessions (100%) · 100 messages\x1b[K")
-	assert.Contains(t, got, "\n  Processing sessions from devbox completed in 3.35s\n")
+	assert.Contains(t, got, "\n  Processing sessions from devbox: 3.35s elapsed\n")
 	assert.Contains(t, got, "  Synced 10 sessions from devbox (1 unchanged)\n")
 	assert.Contains(t, got, "  Skipped offline remote host laptop\n")
 	assert.NotContains(t, got, "Skipped offline remote host laptop completed")
@@ -1707,10 +1708,10 @@ func TestRemoteProgressPrinterRendersByteProgressInPlace(t *testing.T) {
 	assert.Contains(t, got,
 		"\r  Downloading session archive from devbox: 4.0 MB/4.0 MB (100%)\x1b[K")
 	assert.Contains(t, got,
-		"\n  Downloading session archive from devbox completed in 150ms\n")
+		"\n  Downloading session archive from devbox: 150ms elapsed\n")
 	assert.Contains(t, got, "  Extracting session archive from devbox...\n")
 	assert.Contains(t, got,
-		"  Extracting session archive from devbox completed in 850ms\n")
+		"  Extracting session archive from devbox: 850ms elapsed\n")
 }
 
 func TestRemoteProgressPrinterRendersLocalSyncProgressWithoutDetail(t *testing.T) {
@@ -1740,7 +1741,7 @@ func TestRemoteProgressPrinterRendersLocalSyncProgressWithoutDetail(t *testing.T
 	got := out.String()
 	assert.Contains(t, got, "\r  Syncing local sessions: 4/10 sessions (40%) · 40 messages\x1b[K")
 	assert.Contains(t, got, "\r  Syncing local sessions: 10/10 sessions (100%) · 100 messages\x1b[K")
-	assert.Contains(t, got, "\n  Syncing local sessions completed in 250ms\n")
+	assert.Contains(t, got, "\n  Syncing local sessions: 250ms elapsed\n")
 	assert.Contains(t, got, "  Resolving agent directories on devbox...\n")
 }
 
@@ -1771,7 +1772,7 @@ func TestRemoteProgressPrinterKeepsResyncLabelOnDoneProgress(t *testing.T) {
 	got := out.String()
 	assert.Contains(t, got, "\r  Syncing sessions into rebuilt database: 10/10 sessions (100%) · 100 messages\x1b[K")
 	assert.NotContains(t, got, "\r  Syncing local sessions: 10/10 sessions (100%) · 100 messages\x1b[K")
-	assert.Contains(t, got, "\n  Syncing sessions into rebuilt database completed in 250ms\n")
+	assert.Contains(t, got, "\n  Syncing sessions into rebuilt database: 250ms elapsed\n")
 }
 
 func TestRunLocalSyncUsesCallerContextForResync(t *testing.T) {
@@ -2199,6 +2200,50 @@ token = "remote-token"
 	assert.Contains(t, out, "Resolving agent directories on devbox")
 	assert.True(t, strings.HasSuffix(out, "\n"), "progress output should finish on a newline")
 	env.assertNoLocalDB(t)
+}
+
+func TestDoSyncRemoteHostReportsDaemonFailure(t *testing.T) {
+	for _, format := range []string{"json", "sse"} {
+		t.Run(format, func(t *testing.T) {
+			env := newSyncCLIEnv(t)
+			require.NoError(t, os.WriteFile(filepath.Join(env.DataDir, "config.toml"), []byte(`[[remote_hosts]]
+host = "devbox"
+url = "https://peer.example.test"
+token = "remote-token"
+`), 0o600))
+			const failure = `{"failures":[{"host":{"host":"devbox"},"error":"HTTP remote sync failed: cannot resolve the remote host name; check the url in this [[remote_hosts]] entry"}]}`
+			ts := remoteSyncRouteTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, "/api/v1/sync/remotes", r.URL.Path)
+				if format == "sse" {
+					w.Header().Set("Content-Type", "text/event-stream")
+					_, err := io.WriteString(w, "event: progress\ndata: {\"detail\":\"Resolving agent directories on devbox\"}\n\nevent: done\ndata: "+failure+"\n\n")
+					assert.NoError(t, err)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, err := io.WriteString(w, failure)
+				assert.NoError(t, err)
+			})
+			registerSyncRouteTestRuntime(t, env.DataDir, ts.URL)
+
+			var hadFailures bool
+			var stdout string
+			stderr := captureStderr(t, func() {
+				stdout = captureStdout(t, func() {
+					hadFailures = doSync(SyncConfig{Host: "devbox"})
+				})
+			})
+
+			assert.True(t, hadFailures)
+			assert.Contains(t, stderr, "devbox: HTTP remote sync failed: cannot resolve the remote host name; check the url in this [[remote_hosts]] entry")
+			if format == "sse" {
+				assert.Contains(t, stdout, "Resolving agent directories on devbox:")
+				assert.Contains(t, stdout, " elapsed\n")
+				assert.NotContains(t, stdout, "completed")
+			}
+			env.assertNoLocalDB(t)
+		})
+	}
 }
 
 func TestRunDaemonRemoteSyncTrimsBaseURLTrailingSlash(t *testing.T) {

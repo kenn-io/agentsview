@@ -379,7 +379,9 @@ func (p *remoteProgressPrinter) finishCurrent() {
 		fmt.Fprint(p.w, "\n")
 	}
 	elapsed := p.now().Sub(p.started).Round(time.Millisecond)
-	fmt.Fprintf(p.w, "  %s completed in %s\n", p.label, elapsed)
+	// A phase change or Finish also follows failures, so timing alone does not
+	// establish that the step completed successfully.
+	fmt.Fprintf(p.w, "  %s: %s elapsed\n", p.label, elapsed)
 	p.label = ""
 	p.started = time.Time{}
 	p.inPlace = false
@@ -532,6 +534,8 @@ var runHTTPRemoteSync = func(
 type remoteHostFailure struct {
 	Host config.RemoteHost
 	Err  error
+	// Summary is already sanitized by the daemon before crossing the API.
+	Summary string
 }
 
 // runRemoteHosts syncs each configured host in declared order via syncFn and
@@ -570,7 +574,7 @@ func runRemoteHosts(
 // reportRemoteFailures writes per-host failures to the debug log
 // and a summary to stderr, so unattended (cron) runs surface them
 // even though setupLogFile redirects log output to a file. The log
-// keeps the raw error; stderr gets the sanitized display form.
+// keeps the raw error for direct syncs; daemon failures arrive already sanitized.
 func reportRemoteFailures(failures []remoteHostFailure) {
 	if len(failures) == 0 {
 		return
@@ -581,8 +585,12 @@ func reportRemoteFailures(failures []remoteHostFailure) {
 	fmt.Fprintf(os.Stderr,
 		"sync: %d remote host(s) failed:\n", len(failures))
 	for _, f := range failures {
+		summary := f.Summary
+		if summary == "" {
+			summary = remotesync.FailureSummary(f.Err)
+		}
 		fmt.Fprintf(os.Stderr, "  %s: %s\n",
-			f.Host.Host, remotesync.FailureSummary(f.Err))
+			f.Host.Host, summary)
 	}
 }
 
@@ -1057,7 +1065,9 @@ func remoteFailuresFromResponse(
 		if f.Host.Transport != nil {
 			host.Transport = config.RemoteTransport(*f.Host.Transport)
 		}
-		failures = append(failures, remoteHostFailure{Host: host, Err: errors.New(f.ErrorData)})
+		failures = append(failures, remoteHostFailure{
+			Host: host, Err: errors.New(f.ErrorData), Summary: f.ErrorData,
+		})
 	}
 	return failures
 }
