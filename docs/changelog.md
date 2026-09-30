@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-09-29
+last_edited: 2026-09-30
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -11,6 +11,13 @@ The latest published release is
 
 **New features**
 
+- Sessions show the title their agent keeps for them, and a name you chose with
+  `/rename` or the agent's equivalent wins over a generated title. Current
+  Claude Code `/rename` names now appear, and Qwen Code, Gemini CLI, Kimi CLI,
+  and OpenClaw titles appear for the first time. OpenCode, Kilo, MiMo Code, Amp,
+  Copilot CLI, VS Code Copilot, Positron, and Windsurf titles move out of the
+  first-message field, so previews and search show what you first typed. The
+  first sync after upgrading re-reads each session once.
 - Verify conversation memory through an opt-in live release gate that records a
   synthetic decision, starts a fresh Claude Code or Codex session, and requires
   the client to search, read, answer accurately, and cite the source. Raw
