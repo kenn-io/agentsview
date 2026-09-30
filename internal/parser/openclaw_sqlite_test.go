@@ -1559,11 +1559,12 @@ func openClawSQLiteFixtureEvents(sessionID string) []string {
 	}
 }
 
-func TestOpenClawSQLiteSessionLabel(t *testing.T) {
+func TestOpenClawSQLiteSessionTitle(t *testing.T) {
 	root := t.TempDir()
 	dbPath := createOpenClawSQLiteFixture(t, root, "main", map[string][]string{
-		"named": openClawSQLiteFixtureEvents("named"),
-		"plain": openClawSQLiteFixtureEvents("plain"),
+		"named":     openClawSQLiteFixtureEvents("named"),
+		"generated": openClawSQLiteFixtureEvents("generated"),
+		"untitled":  openClawSQLiteFixtureEvents("untitled"),
 	})
 	db, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
@@ -1581,10 +1582,12 @@ func TestOpenClawSQLiteSessionLabel(t *testing.T) {
 		);
 		INSERT INTO session_nodes VALUES
 			('agent:main:named', 'named', ' Chosen name ', 'Generated title'),
-			('agent:main:plain', 'plain', NULL, 'Generated title');
+			('agent:main:generated', 'generated', NULL, 'Generated title'),
+			('agent:main:untitled', 'untitled', '', ' ');
 		INSERT INTO session_windows VALUES
 			('named', 'agent:main:named'),
-			('plain', 'agent:main:plain');
+			('generated', 'agent:main:generated'),
+			('untitled', 'agent:main:untitled');
 	`)
 	require.NoError(t, err)
 
@@ -1593,7 +1596,7 @@ func TestOpenClawSQLiteSessionLabel(t *testing.T) {
 	parse := func() (map[string]string, map[string]string) {
 		sources, err := provider.Discover(t.Context())
 		require.NoError(t, err)
-		require.Len(t, sources, 2)
+		require.Len(t, sources, 3)
 		names := make(map[string]string)
 		hashes := make(map[string]string)
 		for _, source := range sources {
@@ -1613,17 +1616,22 @@ func TestOpenClawSQLiteSessionLabel(t *testing.T) {
 
 	names, hashes := parse()
 	assert.Equal(t, map[string]string{
-		"openclaw:main:named": "Chosen name",
-		"openclaw:main:plain": "",
+		"openclaw:main:named":     "Chosen name",
+		"openclaw:main:generated": "Generated title",
+		"openclaw:main:untitled":  "",
 	}, names)
 
-	_, err = db.ExecContext(t.Context(),
-		`UPDATE session_nodes SET label = 'Renamed' WHERE session_key = 'agent:main:named'`,
-	)
+	_, err = db.ExecContext(t.Context(), `
+		UPDATE session_nodes SET label = 'Renamed' WHERE session_key = 'agent:main:named';
+		UPDATE session_nodes SET display_name = 'New title' WHERE session_key = 'agent:main:generated';
+	`)
 	require.NoError(t, err)
 	renamed, renamedHashes := parse()
 	assert.Equal(t, "Renamed", renamed["openclaw:main:named"])
-	assert.NotEqual(t, hashes["openclaw:main:named"], renamedHashes["openclaw:main:named"],
-		"a rename must change the source digest so sync reparses the session")
-	assert.Equal(t, hashes["openclaw:main:plain"], renamedHashes["openclaw:main:plain"])
+	assert.Equal(t, "New title", renamed["openclaw:main:generated"])
+	for _, id := range []string{"openclaw:main:named", "openclaw:main:generated"} {
+		assert.NotEqual(t, hashes[id], renamedHashes[id],
+			"a title change must change the source digest so sync reparses %s", id)
+	}
+	assert.Equal(t, hashes["openclaw:main:untitled"], renamedHashes["openclaw:main:untitled"])
 }

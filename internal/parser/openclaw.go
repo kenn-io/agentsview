@@ -69,7 +69,7 @@ type openClawRecordBuilder struct {
 	firstMsg      string
 	sessionID     string
 	cwd           string
-	// sessionName is a user-chosen label supplied by the SQLite adapter.
+	// sessionName is the session node title supplied by the SQLite adapter.
 	sessionName string
 }
 
@@ -217,12 +217,16 @@ func (b *openClawRecordBuilder) finish(
 	if project == "" {
 		project = "openclaw"
 	}
+	firstMsg := b.firstMsg
+	if firstMsg == "" {
+		firstMsg = truncate(b.sessionName, 300)
+	}
 	sess := &ParsedSession{
 		ID:               "openclaw:" + agentID + ":" + sessionID,
 		Project:          project,
 		Machine:          machine,
 		Agent:            AgentOpenClaw,
-		FirstMessage:     b.firstMsg,
+		FirstMessage:     firstMsg,
 		SessionName:      b.sessionName,
 		StartedAt:        b.startedAt,
 		EndedAt:          b.endedAt,

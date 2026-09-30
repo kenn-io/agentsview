@@ -2380,10 +2380,12 @@ schemas keep their existing ordering behavior.
   for `/name` and in
   [session-rename.ts](https://github.com/openclaw/openclaw/blob/03e179c755c987aaaf748a62a1d9dd90b8646642/ui/src/lib/session-rename.ts)
   for the web UI. Agentsview uses the node's label as the session name for
-  every window of that node and ignores `display_name`. A non-empty label is
-  part of the member digest, so a rename reparses that session; unlabeled
-  members keep their event-only digest. Databases without these tables have no
-  names. The legacy JSONL layout is not covered.
+  every window of that node, else its generated `display_name`. The first
+  message falls back to that title only when a session has no user message. A
+  non-empty title is part of the member digest, so a rename or new generated
+  title reparses that session; untitled members keep their event-only digest.
+  Databases without these tables have no titles. The legacy JSONL layout keeps
+  `label` in the `sessions.json` store, which Agentsview does not read.
 
 ## QClaw (`qclaw`)
 

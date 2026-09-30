@@ -684,17 +684,16 @@ func openClawSQLiteFingerprintsEachTx(
 	builder *openClawRecordBuilder,
 	yield func(string, SourceFingerprint) error,
 ) error {
-	// /name and the web UI store a user-chosen label on the session node
-	// that owns each transcript window. Schemas without session nodes
-	// have no labels.
-	hasLabels, err := openClawSQLiteHasSessionLabels(ctx, tx)
+	// Each transcript window belongs to a session node that carries the
+	// session's title. Schemas without session nodes have no titles.
+	titleExpr, err := openClawSQLiteTitleExpr(ctx, tx)
 	if err != nil {
 		return err
 	}
 	query := `SELECT e.session_id, e.seq, e.event_json, e.created_at, NULL
 		FROM transcript_events e`
-	if hasLabels {
-		query = `SELECT e.session_id, e.seq, e.event_json, e.created_at, n.label
+	if titleExpr != "" {
+		query = `SELECT e.session_id, e.seq, e.event_json, e.created_at, ` + titleExpr + `
 		FROM transcript_events e
 		LEFT JOIN session_windows w ON w.session_id = e.session_id
 		LEFT JOIN session_nodes n ON n.session_key = w.session_key`
@@ -710,17 +709,18 @@ func openClawSQLiteFingerprintsEachTx(
 	}
 	defer rows.Close()
 	hash := sha256.New()
-	var memberID, label string
+	var memberID, title string
 	var fingerprint SourceFingerprint
 	finish := func() error {
 		if memberID == "" {
 			return nil
 		}
-		// A rename changes only the label, so it must change the digest.
-		// Unlabeled sessions keep their event-only digest.
-		if label != "" {
-			openClawSQLiteHashField(hash, "label")
-			openClawSQLiteHashField(hash, label)
+		// A rename or a new generated title changes only the session node,
+		// so the title must change the digest. Untitled sessions keep their
+		// event-only digest.
+		if title != "" {
+			openClawSQLiteHashField(hash, "title")
+			openClawSQLiteHashField(hash, title)
 		}
 		fingerprint.Hash = hex.EncodeToString(hash.Sum(nil))
 		return yield(memberID, fingerprint)
@@ -734,9 +734,9 @@ func openClawSQLiteFingerprintsEachTx(
 			seq       int64
 			eventJSON string
 			createdAt any
-			rowLabel  sql.NullString
+			rowTitle  sql.NullString
 		)
-		if err := rows.Scan(&id, &seq, &eventJSON, &createdAt, &rowLabel); err != nil {
+		if err := rows.Scan(&id, &seq, &eventJSON, &createdAt, &rowTitle); err != nil {
 			return fmt.Errorf("scanning OpenClaw SQLite event: %w", err)
 		}
 		if !IsValidSessionID(id) {
@@ -747,11 +747,11 @@ func openClawSQLiteFingerprintsEachTx(
 				return err
 			}
 			memberID = id
-			label = rowLabel.String
+			title = rowTitle.String
 			fingerprint = SourceFingerprint{}
 			hash.Reset()
 			if builder != nil {
-				builder.sessionName = strings.TrimSpace(label)
+				builder.sessionName = title
 			}
 		}
 		openClawSQLiteHashField(hash, strconv.FormatInt(seq, 10))
@@ -823,23 +823,41 @@ func openClawSQLiteInspectSchema(
 	return nil
 }
 
-// openClawSQLiteHasSessionLabels reports whether the database links
-// transcript sessions to session nodes that carry a label.
-func openClawSQLiteHasSessionLabels(
+// openClawSQLiteTitleExpr returns the SQL expression that selects a session
+// node's title, or "" when the database does not link transcript sessions to
+// titled session nodes. The label the user set with /name or the web UI
+// rename wins over the generated display_name.
+func openClawSQLiteTitleExpr(
 	ctx context.Context, tx *sql.Tx,
-) (bool, error) {
+) (string, error) {
 	windows, err := openClawSQLiteTableColumns(ctx, tx, "session_windows")
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	if !windows["session_id"] || !windows["session_key"] {
-		return false, nil
+		return "", nil
 	}
 	nodes, err := openClawSQLiteTableColumns(ctx, tx, "session_nodes")
 	if err != nil {
-		return false, err
+		return "", err
 	}
-	return nodes["session_key"] && nodes["label"], nil
+	if !nodes["session_key"] {
+		return "", nil
+	}
+	var titles []string
+	for _, column := range []string{"label", "display_name"} {
+		if nodes[column] {
+			titles = append(titles, "NULLIF(TRIM(n."+column+"), '')")
+		}
+	}
+	switch len(titles) {
+	case 0:
+		return "", nil
+	case 1:
+		return titles[0], nil
+	default:
+		return "COALESCE(" + strings.Join(titles, ", ") + ")", nil
+	}
 }
 
 // openClawSQLiteTableColumns returns the column names of table, or an empty
