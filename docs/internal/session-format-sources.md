@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-09-28
+last_edited: 2026-09-30
 ---
 
 # Session Format Source Inventory
@@ -141,12 +141,29 @@ fixtures retain this field; missing identities remain source-local.
   found 12,261 `ai-title` records, with a mean of 15.96 records per file and a
   maximum of 454. No sampled `aiTitle` value was empty. `custom-title`
   occurred in 7 files, and `sessionName` did not occur. Native Claude parsing
-  adopts non-empty `aiTitle` when no `/rename` is present; this target leaves
-  `custom-title` and `sessionName` to compatible producer parsing. A title
-  appended after the session is stored is persisted by one escalating full
-  parse while the stored name is still empty, and repeated records stay
-  incremental after that parse. A transcript that is no longer being written
-  is not re-read, so it re-titles on its next full parse.
+  adopts non-empty `aiTitle` when no user rename is present and leaves
+  `sessionName` to compatible producer parsing. A title appended after the
+  session is stored is persisted by one escalating full parse while the stored
+  name is still empty, and repeated records stay incremental after that parse.
+  A transcript that is no longer being written is not re-read, so it re-titles
+  on its next full parse.
+
+- **User rename evidence (2026-09-30):** Claude Code 2.1.285 records a user
+  rename as
+  `{"type":"custom-title","customTitle":"<name>","sessionId":"<id>"}` appended
+  to the session transcript. The installed bundle's `saveCustomTitle` writes
+  that record, its rename handler rejects an empty name, and its session
+  metadata re-append writes the current title again after later turns; one
+  local renamed transcript carried 18 copies. The bundle's resume picker
+  displays `customTitle ?? aiTitle`. Native parsing treats a non-empty
+  `customTitle` like a `/rename` command, where the last rename record in file
+  order wins, and both outrank `aiTitle`. An appended `custom-title` escalates
+  to a full parse only when it differs from the stored session name, so the
+  repeated copies stay incremental. The same release also writes
+  `{"type":"agent-name","agentName":...}` beside each rename, but the bundle
+  also sets that agent name automatically, so it is not treated as a user
+  title. Existing idle sessions pick up their rename on their next full parse;
+  there is no data-version bump.
 
 - **Evidence:** `no-public-source`.
 

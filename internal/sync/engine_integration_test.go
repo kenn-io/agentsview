@@ -13458,6 +13458,38 @@ func TestIncrementalSync_ClaudeAITitleAppendPersistsSessionName(t *testing.T) {
 	assert.Equal(t, beforeMessages[0].Content, afterMessages[0].Content)
 }
 
+func TestIncrementalSync_ClaudeCustomTitleAppendReplacesSessionName(t *testing.T) {
+	env := setupTestEnv(t)
+	initial := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("First question", tsZero),
+		testjsonl.ClaudeAssistantJSON("First answer", tsZeroS1),
+		`{"type":"ai-title","aiTitle":"Generated title"}`,
+	)
+	path := env.writeClaudeSession(t, "proj", "custom-title-append.jsonl", initial)
+	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+	before, err := env.db.GetSessionFull(t.Context(), "custom-title-append")
+	require.NoError(t, err)
+	require.NotNil(t, before)
+	require.NotNil(t, before.SessionName)
+	assert.Equal(t, "Generated title", *before.SessionName)
+
+	appendFile, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = appendFile.WriteString(
+		`{"type":"custom-title","customTitle":"Renamed","sessionId":"custom-title-append"}` + "\n",
+	)
+	require.NoError(t, err)
+	require.NoError(t, appendFile.Close())
+	env.engine.SyncPaths([]string{path})
+
+	after, err := env.db.GetSessionFull(t.Context(), "custom-title-append")
+	require.NoError(t, err)
+	require.NotNil(t, after)
+	require.NotNil(t, after.SessionName)
+	assert.Equal(t, "Renamed", *after.SessionName)
+	assert.Equal(t, 2, after.MessageCount)
+}
+
 func TestIncrementalSync_ClaudeAITitleAndMessageAppendPersistsSessionName(
 	t *testing.T,
 ) {

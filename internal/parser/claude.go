@@ -202,16 +202,6 @@ func claudeParseFile(
 				}
 			}
 		}
-		if opts.compatibleTitleEvents {
-			switch entryType {
-			case "custom-title":
-				if value := strings.TrimSpace(
-					gjson.GetBytes(lineBytes, "customTitle").Str,
-				); value != "" {
-					compatibleCustom = strings.Clone(value)
-				}
-			}
-		}
 		if agentLabel == "" {
 			if value := gjson.GetBytes(lineBytes, "agentSetting").Str; strings.TrimSpace(value) != "" {
 				agentLabel = strings.Clone(value)
@@ -290,6 +280,20 @@ func claudeParseFile(
 			if qc, ok := extractQueuedCommand(string(lineBytes)); ok {
 				qc.prompt = strings.Clone(qc.prompt)
 				queuedCommands = append(queuedCommands, qc)
+			}
+			continue
+		}
+
+		// Current Claude Code records /rename as a custom-title
+		// record and repeats it after later turns. It rejects empty
+		// names, so an empty value is not a clear.
+		if entryType == "custom-title" {
+			if value := strings.TrimSpace(
+				gjson.GetBytes(lineBytes, "customTitle").Str,
+			); value != "" {
+				displayName = strings.Clone(value)
+				compatibleCustom = displayName
+				renameSeen = true
 			}
 			continue
 		}
@@ -786,9 +790,9 @@ type claudeIncrementalScan struct {
 	// storedSessionName is the session_name already persisted for this
 	// session ("" when the row carries none), or nil when the call site
 	// cannot supply it. An appended ai-title can only change the stored
-	// session while that name is still empty, so a session that already
-	// carries its title keeps repeated title records on the incremental
-	// path. nil keeps the append incremental.
+	// session while that name is still empty, and an appended custom-title
+	// only when it differs from that name, so repeated title records stay on
+	// the incremental path. nil keeps the append incremental.
 	storedSessionName *string
 }
 
@@ -812,6 +816,7 @@ func claudeParseSessionFrom(
 		sawRename              bool
 		sawAITitle             bool
 		sawSessionIdentityEdit bool
+		appendedCustomTitle    string
 	)
 
 	consumed, err := readJSONLFrom(
@@ -829,6 +834,14 @@ func claudeParseSessionFrom(
 			if entryType == "ai-title" &&
 				strings.TrimSpace(gjson.Get(line, "aiTitle").Str) != "" {
 				sawAITitle = true
+			}
+			if entryType == "custom-title" {
+				if value := strings.TrimSpace(
+					gjson.Get(line, "customTitle").Str,
+				); value != "" {
+					appendedCustomTitle = value
+				}
+				return
 			}
 			if entryType == "system" {
 				if _, ok := extractRenameName(
@@ -929,6 +942,12 @@ func claudeParseSessionFrom(
 	// full parse on every later window.
 	if sawAITitle && scan.storedSessionName != nil &&
 		*scan.storedSessionName == "" {
+		return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
+	}
+	// Claude Code repeats the custom-title record after later turns, so
+	// escalate only when the appended name differs from the stored one.
+	if appendedCustomTitle != "" && scan.storedSessionName != nil &&
+		*scan.storedSessionName != appendedCustomTitle {
 		return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
 	}
 	if sawSessionIdentityEdit {
