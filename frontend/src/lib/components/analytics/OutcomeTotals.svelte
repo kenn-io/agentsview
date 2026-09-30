@@ -7,6 +7,7 @@
     stats: DbStatsOutcomeStats | null;
     loading: boolean;
     unavailable?: boolean;
+    githubConfigured: boolean;
     error: string | null;
     /** True once the caller has asked for the GitHub lookups too. */
     includePullRequests: boolean;
@@ -17,6 +18,7 @@
     stats,
     loading,
     unavailable = false,
+    githubConfigured,
     error,
     includePullRequests,
     onIncludePullRequests,
@@ -63,7 +65,7 @@
 <div class="outcome-container">
   <div class="outcome-header">
     <h3 class="chart-title">{m.analytics_outcome_title()}</h3>
-    {#if !unavailable && !includePullRequests}
+    {#if !unavailable && githubConfigured && !includePullRequests}
       <button
         class="outcome-load-prs"
         title={m.analytics_outcome_include_prs_hint()}
@@ -73,6 +75,10 @@
       </button>
     {/if}
   </div>
+
+  {#if !unavailable && !githubConfigured}
+    <div class="outcome-empty">{m.analytics_outcome_configure_github()}</div>
+  {/if}
 
   {#if unavailable}
     <div class="outcome-empty">{m.analytics_outcome_filters_unsupported()}</div>

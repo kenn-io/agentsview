@@ -12,6 +12,7 @@ async function render(props: {
   stats: DbStatsOutcomeStats | null;
   loading?: boolean;
   unavailable?: boolean;
+  githubConfigured?: boolean;
   error?: string | null;
   includePullRequests?: boolean;
   onIncludePullRequests?: () => void;
@@ -24,6 +25,7 @@ async function render(props: {
       loading: false,
       error: null,
       includePullRequests: false,
+      githubConfigured: true,
       onIncludePullRequests: () => {},
       ...props,
     },
@@ -137,5 +139,17 @@ describe("OutcomeTotals", () => {
     );
     expect(metric(target, "Commits")).toBe("");
     expect(target.querySelector(".outcome-load-prs")).toBeNull();
+  });
+
+  it("explains how to enable PR totals while keeping Git totals visible", async () => {
+    const target = await render({
+      githubConfigured: false,
+      stats: { repos_active: 1, commits: 7, loc_added: 0, loc_removed: 0, files_changed: 1 },
+    });
+    expect(target.textContent).toContain(
+      "Configure GitHub in Settings to load pull-request totals.",
+    );
+    expect(target.querySelector(".outcome-load-prs")).toBeNull();
+    expect(metric(target, "Commits")).toBe("7");
   });
 });

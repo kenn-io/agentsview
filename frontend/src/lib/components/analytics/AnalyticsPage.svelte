@@ -30,6 +30,7 @@
     ANALYTICS_DEFAULT_WINDOW_DAYS,
   } from "../../stores/analytics.svelte.js";
   import { outcomeTotals } from "../../stores/outcomeTotals.svelte.js";
+  import { settings } from "../../stores/settings.svelte.js";
   import { analyticsPageDates } from "../../stores/analyticsPageDates.js";
   import {
     sessions,
@@ -244,16 +245,20 @@
     });
   }
 
-  function refreshAnalytics(): Promise<void> {
+  async function refreshAnalytics(): Promise<void> {
     cancelInitialLoad();
     const refresh = analytics.fetchAll();
-    if (router.isRootPath || suppressSessionDateRefresh) return refresh;
-    const state = currentAnalyticsPanelDate();
-    if (state && !analyticsDateYokeIsClear()) {
-      yokedDates.updateFromPanel(state);
-      writeSessionDateParams(state);
+    const outcomes = outcomeWindow && !outcomeFiltersUnsupported
+      ? outcomeTotals.load(outcomeWindow)
+      : undefined;
+    if (!router.isRootPath && !suppressSessionDateRefresh) {
+      const state = currentAnalyticsPanelDate();
+      if (state && !analyticsDateYokeIsClear()) {
+        yokedDates.updateFromPanel(state);
+        writeSessionDateParams(state);
+      }
     }
-    return refresh;
+    await Promise.all([refresh, outcomes]);
   }
 
   function handleActivityRangeSelect(from: string, to: string) {
@@ -748,6 +753,7 @@
           stats={outcomeTotals.stats}
           loading={outcomeTotals.loading}
           unavailable={outcomeFiltersUnsupported}
+          githubConfigured={settings.githubConfigured}
           error={outcomeTotals.error}
           includePullRequests={outcomeTotals.includePullRequests}
           onIncludePullRequests={() => {

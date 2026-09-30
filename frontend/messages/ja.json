@@ -2384,6 +2384,7 @@
   "analytics_outcome_prs_merged": "マージされたプルリクエスト",
   "analytics_outcome_include_prs": "プルリクエストを含める",
   "analytics_outcome_include_prs_hint": "リポジトリごとに GitHub へ問い合わせるため、数分かかることがあります。",
+  "analytics_outcome_configure_github": "プルリクエストの合計を読み込むには、設定で GitHub を構成してください。",
   "analytics_outcome_loading": "git 履歴を読み込み中...",
   "analytics_outcome_empty": "この期間に git の活動はありません。",
   "analytics_outcome_filters_unsupported": "成果の合計を表示するには、マシン、モデル、終了状態、最小メッセージ数、最近のアクティビティ、時間帯のフィルターを解除してください。",

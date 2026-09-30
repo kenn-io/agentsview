@@ -7,6 +7,7 @@ import { analyticsPageDates } from "../../stores/analyticsPageDates.js";
 import { insights } from "../../stores/insights.svelte.js";
 import { router } from "../../stores/router.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
+import { settings } from "../../stores/settings.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
 import { yokedDates } from "../../stores/yokedDates.svelte.js";
 import sourceRaw from "./AnalyticsPage.svelte?raw";
@@ -68,6 +69,7 @@ afterEach(() => {
   analytics.minUserMessages = 0;
   analytics.recentlyActive = false;
   outcomeTotals.reset();
+  settings.githubConfigured = false;
   analytics.selectedDow = null;
   analytics.selectedHour = null;
   sessions.filters.date = "";
@@ -92,6 +94,7 @@ describe("AnalyticsPage outcome window", () => {
     vi.spyOn(analytics, "fetchAll").mockResolvedValue();
     vi.spyOn(sessions, "load").mockResolvedValue();
     const load = vi.spyOn(outcomeTotals, "load").mockResolvedValue();
+    settings.githubConfigured = true;
     router.route = "sessions";
     router.isRootPath = false;
     router.params = { date_from: "2026-03-01", date_to: "2026-03-31" };
@@ -101,6 +104,35 @@ describe("AnalyticsPage outcome window", () => {
     await flushEffects();
     return load;
   }
+
+  it("updates the PR action when GitHub configuration changes", async () => {
+    await start();
+    settings.githubConfigured = false;
+    await flushEffects();
+    expect(document.querySelector(".outcome-container")?.textContent).toContain(
+      "Configure GitHub in Settings",
+    );
+    expect(document.querySelector(".outcome-load-prs")).toBeNull();
+    settings.githubConfigured = true;
+    await flushEffects();
+    expect(document.querySelector(".outcome-load-prs")).not.toBeNull();
+  });
+
+  it.each([false, true])(
+    "refreshes only Git totals, respecting unsupported filters (%s)",
+    async (unsupported) => {
+      const load = await start();
+      const loadPRs = vi.spyOn(outcomeTotals, "loadWithPullRequests").mockResolvedValue();
+      if (unsupported) analytics.model = "demo-model";
+      await flushEffects();
+      load.mockClear();
+      outcomeTotals.includePullRequests = true;
+      document.querySelector<HTMLButtonElement>('button[aria-label="Refresh analytics"]')!.click();
+      await flushEffects();
+      expect(load).toHaveBeenCalledTimes(unsupported ? 0 : 1);
+      expect(loadPRs).not.toHaveBeenCalled();
+    },
+  );
 
   it("uses local days for the range and follows selected days and activity ranges", async () => {
     vi.stubEnv("TZ", "America/New_York");

@@ -2313,6 +2313,7 @@
   "analytics_outcome_prs_merged": "병합된 풀 리퀘스트",
   "analytics_outcome_include_prs": "풀 리퀘스트 포함",
   "analytics_outcome_include_prs_hint": "저장소마다 GitHub에 조회하므로 몇 분이 걸릴 수 있습니다.",
+  "analytics_outcome_configure_github": "풀 리퀘스트 합계를 불러오려면 설정에서 GitHub를 구성하세요.",
   "analytics_outcome_loading": "git 기록을 읽는 중...",
   "analytics_outcome_empty": "이 기간에 git 활동이 없습니다.",
   "analytics_outcome_filters_unsupported": "결과 합계를 보려면 머신, 모델, 종료 상태, 최소 메시지 수, 최근 활동, 시간대 필터를 해제하세요.",
