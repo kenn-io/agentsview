@@ -2168,8 +2168,9 @@ schemas keep their existing ordering behavior.
   [sessionService.ts](https://github.com/QwenLM/qwen-code/blob/17a9c84dfbbc208e984cf82c4f9487bdefc7e83a/packages/core/src/services/sessionService.ts)
   and `readSessionTitleInfoFromFileSync` in
   [sessionStorageUtils.ts](https://github.com/QwenLM/qwen-code/blob/17a9c84dfbbc208e984cf82c4f9487bdefc7e83a/packages/core/src/utils/sessionStorageUtils.ts)
-  at `17a9c84dfbbc208e984cf82c4f9487bdefc7e83a`. Agentsview uses the last
-  record's `customTitle` as the session name unless its source is `auto`.
+  at `17a9c84dfbbc208e984cf82c4f9487bdefc7e83a`. Agentsview uses the latest
+  user title as the session name, else the latest generated title. The first
+  message falls back to that title only when the session has no user message.
   Managed sessions keep their title in a resource-store `session_metadata`
   record, which Agentsview does not read.
 - **Agentsview:** `internal/parser/qwen.go` and

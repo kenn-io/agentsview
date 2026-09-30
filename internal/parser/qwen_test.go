@@ -396,9 +396,10 @@ func TestParseQwenSession_CustomTitle(t *testing.T) {
 	}{
 		{name: "manual rename", titles: []string{title(" Renamed ", "manual")}, want: "Renamed"},
 		{name: "legacy record without source", titles: []string{title("Legacy", "")}, want: "Legacy"},
-		{name: "auto title", titles: []string{title("Generated", "auto")}, want: ""},
+		{name: "auto title", titles: []string{title("Generated", "auto")}, want: "Generated"},
 		{name: "last rename wins", titles: []string{title("Old", "manual"), title("New", "manual")}, want: "New"},
-		{name: "later auto title replaces rename", titles: []string{title("Renamed", "manual"), title("Generated", "auto")}, want: ""},
+		{name: "rename beats later auto title", titles: []string{title("Renamed", "manual"), title("Generated", "auto")}, want: "Renamed"},
+		{name: "rename beats earlier auto title", titles: []string{title("Generated", "auto"), title("Renamed", "manual")}, want: "Renamed"},
 		{name: "other system record", titles: []string{`{"type":"system","subtype":"ui_telemetry","systemPayload":{"customTitle":"Decoy"}}`}, want: ""},
 	}
 	for _, tt := range tests {
