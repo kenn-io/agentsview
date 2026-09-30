@@ -11,7 +11,6 @@ package parser
 import (
 	"context"
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -112,12 +111,8 @@ func parseCodebuffSession(
 	// known skill from the catalog.
 	codebuffAttachSkillNames(msgs, rs.Skills)
 
-	// The sidecar is rewritten after the transcript upstream, so a crash
-	// between the two writes (or an older CLI that skips the refresh)
-	// legitimately leaves it stale. The transcript has been fully read and
-	// stat'ed by now; validate the sidecar against that stat before any
-	// consumer trusts it.
-	meta := readCodebuffChatMeta(chatMetaPath, chatMessagesPath)
+	// Read chat-meta.json for session name and timing hints.
+	meta := readCodebuffChatMeta(chatMetaPath)
 
 	// Build session name from first user prompt.
 	firstMsg := ""
@@ -538,57 +533,13 @@ func containsSkillToken(lower, name string) bool {
 }
 
 // codebuffChatMeta holds extracted fields from chat-meta.json.
-// MessagesSize and MessagesMtimeMs are binding fields: they must match the
-// transcript's current stat or the whole sidecar is treated as absent.
-// MessagesSize also feeds the sidecar's own presence check, so it is kept
-// alongside the derived values.
 type codebuffChatMeta struct {
-	MessageCount     int
-	FirstPrompt      string
-	MessagesSize     int64
-	MessagesMtimeMs  float64
-	hasMessageCount  bool
-	hasFirstPrompt   bool
-	hasMessagesSize  bool
-	hasMessagesMtime bool
+	MessageCount int
+	FirstPrompt  string
+	MessagesSize int64
 }
 
-// trusted reports whether the sidecar may influence session naming or
-// counts. It mirrors upstream readChatMeta (cli/src/utils/chat-meta.ts):
-// the sidecar is usable only when it parses, carries all four required
-// fields, and its recorded messagesSize and messagesMtimeMs equal the
-// transcript file's current size and mtime in milliseconds. A stale
-// sidecar is treated exactly like a missing one -- upstream's own comment
-// explains the rule as binding the sidecar "to the exact messages file it
-// summarizes" so callers fall back to the full parse instead of showing
-// outdated data or hiding corruption. There is no retry or healing here:
-// the sidecar carries no durable value the transcript cannot regenerate.
-//
-// The recorded mtime is compared at whole-millisecond precision: upstream
-// writes Node's statSync().mtimeMs, which carries sub-millisecond
-// fractions on APFS and ext4, while Go's UnixMilli() truncates. Flooring
-// the stored float matches the two writers' common precision, so real
-// sidecars still validate on those filesystems while a transcript
-// rewritten in a later millisecond still fails the compare.
-func (m codebuffChatMeta) trusted(info os.FileInfo) bool {
-	if !m.hasMessageCount || !m.hasFirstPrompt ||
-		!m.hasMessagesSize || !m.hasMessagesMtime {
-		return false
-	}
-	return m.MessagesSize == info.Size() &&
-		math.Floor(m.MessagesMtimeMs) == float64(info.ModTime().UnixMilli())
-}
-
-// readCodebuffChatMeta reads chat-meta.json beside the transcript at
-// chatPath and returns it only when the trust rule passes. When the
-// sidecar is missing, unparsable, incomplete, or stale, the zero value is
-// returned and callers must treat the session as if no sidecar existed --
-// notably, an empty transcript plus an untrusted sidecar yields no counts
-// rather than counts invented from a summary that no longer describes the
-// transcript.
-func readCodebuffChatMeta(
-	path string, chatPath string,
-) codebuffChatMeta {
+func readCodebuffChatMeta(path string) codebuffChatMeta {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return codebuffChatMeta{}
@@ -596,28 +547,11 @@ func readCodebuffChatMeta(
 	if !gjson.ValidBytes(data) {
 		return codebuffChatMeta{}
 	}
-	var m codebuffChatMeta
-	if v := gjson.GetBytes(data, "messageCount"); v.Exists() {
-		m.MessageCount = int(v.Int())
-		m.hasMessageCount = true
+	return codebuffChatMeta{
+		MessageCount: int(gjson.GetBytes(data, "messageCount").Int()),
+		FirstPrompt:  gjson.GetBytes(data, "firstPrompt").Str,
+		MessagesSize: gjson.GetBytes(data, "messagesSize").Int(),
 	}
-	if v := gjson.GetBytes(data, "firstPrompt"); v.Exists() {
-		m.FirstPrompt = v.Str
-		m.hasFirstPrompt = true
-	}
-	if v := gjson.GetBytes(data, "messagesSize"); v.Exists() {
-		m.MessagesSize = v.Int()
-		m.hasMessagesSize = true
-	}
-	if v := gjson.GetBytes(data, "messagesMtimeMs"); v.Exists() {
-		m.MessagesMtimeMs = v.Float()
-		m.hasMessagesMtime = true
-	}
-	info, err := os.Stat(chatPath)
-	if err != nil || !m.trusted(info) {
-		return codebuffChatMeta{}
-	}
-	return m
 }
 
 // codebuffTurnModel resolves the model one billed turn ran, in this order:
