@@ -1939,6 +1939,15 @@ schemas keep their existing ordering behavior.
   `result.metadata.toolCallRounds`. Each assistant message records the model
   that served its turn (`result.metadata.resolvedModel`, falling back to the
   request's prefixed `modelId`).
+- **Session names (2026-09-30):** The session's `customTitle` holds both a name
+  set with `/rename` and the title VS Code generates after the first request;
+  nothing marks which one it is. See `setSessionTitle` and
+  `generateInitialChatTitleIfNeeded` in
+  [chatServiceImpl.ts](https://github.com/microsoft/vscode/blob/dbe8e0c73259d428bc817f504a47fba232b95aa1/src/vs/workbench/contrib/chat/common/chatService/chatServiceImpl.ts)
+  at `dbe8e0c73259d428bc817f504a47fba232b95aa1`. Agentsview uses
+  `customTitle` as the session name. The first message falls back to it only
+  when the session has no user text. Positron and Windsurf share this
+  decoding.
 
 ## Windsurf (`windsurf`)
 
@@ -1961,7 +1970,8 @@ schemas keep their existing ordering behavior.
   monetary cost.
 - **Agentsview:** `internal/parser/windsurf_provider.go` and the shared VS
   Code-state helpers; database keys are reverse-engineered implementation
-  evidence.
+  evidence. A tab's `chatTitle` becomes the shared `customTitle` and so the
+  session name; whether Windsurf ever sets it from a user rename is unknown.
 
 ## Trae (`trae`)
 
@@ -2782,7 +2792,8 @@ schemas keep their existing ordering behavior.
   Agentsview analytics for this provider.
 - **Agentsview:** `internal/parser/positron_provider.go` and the shared decoding
   in `internal/parser/vscode_copilot.go`; the lack of usage export is a parser
-  limitation, not proof that upstream never records metadata.
+  limitation, not proof that upstream never records metadata. Session names
+  follow the VS Code Copilot `customTitle` rule.
 
 ## Posit Assistant (`posit-assistant`)
 

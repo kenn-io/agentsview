@@ -611,6 +611,7 @@ func positronProviderCapabilities() Capabilities {
 		},
 		Content: ContentCapabilities{
 			FirstMessage:         CapabilitySupported,
+			SessionName:          CapabilitySupported,
 			ToolCalls:            CapabilitySupported,
 			ToolResults:          CapabilitySupported,
 			Thinking:             CapabilitySupported,

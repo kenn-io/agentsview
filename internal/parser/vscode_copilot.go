@@ -284,9 +284,11 @@ func parseVSCodeCopilotData(
 		)
 	}
 
-	// Use customTitle as first message if we have no user text
-	if firstMessage == "" && session.CustomTitle != "" {
-		firstMessage = session.CustomTitle
+	// customTitle holds both /rename names and generated titles. It
+	// stands in for the first message only when there is no user text.
+	sessionName := strings.TrimSpace(session.CustomTitle)
+	if firstMessage == "" {
+		firstMessage = sessionName
 	}
 
 	userCount := 0
@@ -307,6 +309,7 @@ func parseVSCodeCopilotData(
 		Project:          project,
 		Machine:          machine,
 		FirstMessage:     firstMessage,
+		SessionName:      sessionName,
 		StartedAt:        startedAt,
 		EndedAt:          endedAt,
 		MessageCount:     len(messages),

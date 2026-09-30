@@ -201,8 +201,11 @@ func TestParseVSCodeCopilotSession_MixedTextAndTools(t *testing.T) {
 	path := filepath.Join(dir, "test.json")
 	require.NoError(t, os.WriteFile(path, []byte(data), 0o644))
 
-	_, msgs, err := parseVSCodeCopilotTestSession(t, path, "proj", "local")
+	sess, msgs, err := parseVSCodeCopilotTestSession(t, path, "proj", "local")
 	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, "Mixed content", sess.SessionName)
+	assert.Equal(t, "Read the file", sess.FirstMessage)
 
 	// Find assistant message
 	var assistant *ParsedMessage
