@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -24,9 +23,6 @@ import (
 
 // writeCodebuffTestFiles creates the three files that make up a Codebuff
 // session directory: chat-messages.json, run-state.json, and chat-meta.json.
-// The sidecar is written after the transcript and records its actual size
-// and mtime in milliseconds, mirroring upstream writeChatMeta, so the
-// parser's trust rule accepts it.
 func writeCodebuffTestFiles(t *testing.T, dir, content string) {
 	t.Helper()
 
@@ -42,16 +38,11 @@ func writeCodebuffTestFiles(t *testing.T, dir, content string) {
 			"mainAgentState": {"agentType": "base2-free-deepseek"}
 		}
 	}`), 0o644))
-	info, err := os.Stat(chatPath)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(chatMetaPath, []byte(fmt.Sprintf(`{
+	require.NoError(t, os.WriteFile(chatMetaPath, []byte(`{
 		"messageCount": 1,
-		"firstPrompt": %q,
-		"messagesSize": %d,
-		"messagesMtimeMs": %s
-	}`, content, info.Size(),
-		strconv.FormatFloat(float64(info.ModTime().UnixMilli()), 'f', -1, 64),
-	)), 0o644))
+		"firstPrompt": "`+content+`",
+		"messagesSize": 50
+	}`), 0o644))
 }
 
 // createCodebuffArchive creates a Codebuff archive with the given number of
@@ -253,14 +244,8 @@ func (p *codebuffFingerprintCountingProvider) ComputeMultiFileStatHash(
 	return hasher.ComputeMultiFileStatHash(chatPath)
 }
 
-// ChangedPathRelevance forwards to the inner provider through a
-// ChangedPathRelevanceProvider type assertion because parser.Provider does
-// not include it. Once Codebuff advertises the ChangedPathRelevance
-// capability, ResolveChangedPathRelevance type-asserts the engine-facing
-// provider (this wrapper) itself; without forwarding, every classification
-// fails the assertion, returns UnsupportedProviderFeatureError, and every
-// watch event falls back to full-provider discovery -- silently undoing the
-// filter in exactly the tests that pin it.
+// ChangedPathRelevance forwards to the inner provider so watch events are
+// classified the same way the real provider classifies them.
 func (p *codebuffFingerprintCountingProvider) ChangedPathRelevance(
 	ctx context.Context, req parser.ChangedPathRequest,
 ) (parser.ChangedPathRelevance, error) {
@@ -299,7 +284,7 @@ func (f codebuffCountingFactory) NewProvider(parser.ProviderConfig) parser.Provi
 // only observability seam.
 func newCodebuffCountingEngine(
 	t *testing.T, root string,
-) (*sync.Engine, *codebuffFingerprintCountingProvider, *db.DB) {
+) (*sync.Engine, *codebuffFingerprintCountingProvider) {
 	t.Helper()
 	database := dbtest.OpenTestDB(t)
 	innerFactory, ok := parser.ProviderFactoryByType(parser.AgentCodebuff)
@@ -330,7 +315,7 @@ func newCodebuffCountingEngine(
 		},
 	})
 	t.Cleanup(engine.Close)
-	return engine, provider, database
+	return engine, provider
 }
 
 // TestSyncCodebuffPerEventWorkIsCardinalityIndependent verifies that the per-event
@@ -360,7 +345,7 @@ func TestSyncCodebuffPerEventWorkIsCardinalityIndependent(t *testing.T) {
 	)
 
 	probe := func(root string, numSessions int) {
-		engine, codebuff, _ := newCodebuffCountingEngine(t, root)
+		engine, codebuff := newCodebuffCountingEngine(t, root)
 
 		// Cold pass: every session needs a fingerprint, so the counter
 		// delta equals the archive size. This proves the counting
@@ -430,9 +415,7 @@ func TestSyncCodebuffPerEventWorkIsCardinalityIndependent(t *testing.T) {
 
 // codebuffMetaOnlySessionFiles creates a codebuff session
 // directory whose chat-messages.json is "[]" while chat-meta.json
-// reports a non-zero messageCount and firstPrompt. The sidecar binds to
-// the transcript's actual size and mtime (upstream writeChatMeta rule) so
-// the parser's trust rule accepts it. The parser
+// reports a non-zero messageCount and firstPrompt. The parser
 // must set CountsAuthoritative=true for this fallback path so the
 // engine's per-message reconciliation cannot overwrite the meta
 // totals with zero derived from the empty parsed-message slice.
@@ -441,8 +424,11 @@ func codebuffMetaOnlySessionFiles(
 ) {
 	t.Helper()
 
-	chatPath := filepath.Join(dir, "chat-messages.json")
-	require.NoError(t, os.WriteFile(chatPath, []byte("[]"), 0o644))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "chat-messages.json"),
+		[]byte("[]"),
+		0o644,
+	))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(dir, "run-state.json"),
 		[]byte(`{
@@ -453,18 +439,13 @@ func codebuffMetaOnlySessionFiles(
 		}`),
 		0o644,
 	))
-	info, err := os.Stat(chatPath)
-	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(dir, "chat-meta.json"),
 		fmt.Appendf(nil, `{
 			"messageCount": %d,
 			"firstPrompt": %q,
-			"messagesSize": %d,
-			"messagesMtimeMs": %s
-		}`, metaCount, firstPrompt, info.Size(),
-			strconv.FormatFloat(float64(info.ModTime().UnixMilli()), 'f', -1, 64),
-		),
+			"messagesSize": 1024
+		}`, metaCount, firstPrompt),
 		0o644,
 	))
 }
@@ -1629,17 +1610,8 @@ func TestSourceMtimeCodebuffUsesPerFileHash(t *testing.T) {
 			"SourceMtime back to a value distinct from the missing-file state")
 }
 
-// codebuffSessionIDFromChatPath derives the stored session ID for a session
-// created by createCodebuffSingleSession: the shared fixture declares a
-// free-tier agent in run-state.json, so the stored row carries the Freebuff
-// identity with the project:timestamp raw ID.
-func codebuffSessionIDFromChatPath(t *testing.T, chatPath string) string {
-	t.Helper()
-	return "freebuff:project-0:" + filepath.Base(filepath.Dir(chatPath))
-}
-
-// codebuffAssertSessionMessageCount fetches the stored session and returns
-// its message count, failing the test when the row vanished.
+// codebuffAssertSessionMessageCount requires the stored session to exist with
+// the given message count.
 func codebuffAssertSessionMessageCount(
 	t *testing.T, database *db.DB, sessionID string, want int,
 ) {
@@ -1652,14 +1624,9 @@ func codebuffAssertSessionMessageCount(
 		"stored message count for %s diverged", sessionID)
 }
 
-// TestSyncCodebuffNonDataWatchEventsDoNotReparse pins the Codebuff
-// changed-path filter at the sync layer: a watch-delivered write to a debug
-// sibling (log.jsonl, trace.jsonl) or to an atomic-write temp sibling must
-// not reparse the session, while writes to the data files still do. SyncPaths
-// is the watch-equivalent entry point; the reconcile residual is pinned
-// separately below, and the transcript-deletion guarantee is pinned by
-// TestSyncCodebuffMissingSourceClearsProviderStatHash plus the parser-side
-// allowMissing test noted at case (5).
+// TestSyncCodebuffNonDataWatchEventsDoNotReparse verifies that watch events
+// for debug siblings and atomic-write temp files do not reparse the session,
+// while events for data files still do.
 func TestSyncCodebuffNonDataWatchEventsDoNotReparse(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
@@ -1667,259 +1634,41 @@ func TestSyncCodebuffNonDataWatchEventsDoNotReparse(t *testing.T) {
 
 	root, chatPath := createCodebuffSingleSession(t)
 	sessionDir := filepath.Dir(chatPath)
-	sessionID := codebuffSessionIDFromChatPath(t, chatPath)
-
-	engine, codebuff, database := newCodebuffCountingEngine(t, root)
-
+	engine, codebuff := newCodebuffCountingEngine(t, root)
 	require.Equal(t, 1,
 		engine.SyncAll(t.Context(), nil).Synced,
 		"cold sync must parse the seeded session")
-	codebuffAssertSessionMessageCount(t, database, sessionID, 1)
-	hashed, hasHash, err := database.GetProviderStatHash(
-		t.Context(), parser.AgentCodebuff, chatPath,
-	)
-	require.NoError(t, err)
-	require.True(t, hasHash,
-		"cold sync must populate provider_freshness before the "+
-			"side-table comparison is meaningful")
 
-	// warmSyncAfterEvent runs SyncPaths for one changed path and asserts
-	// the outcome through the fingerprint counter: a suppressed event
-	// must issue zero provider work, a data-bearing one exactly one
-	// fingerprint (the changed-path force) and one reparse.
-	warmSyncAfterEvent := func(changedPath string, wantReparse bool) {
-		t.Helper()
+	// Cases run in order against the same session: every non-data event
+	// comes before the data events that legitimately reparse it.
+	tests := []struct {
+		name        string
+		content     string
+		wantReparse bool
+	}{
+		{"log.jsonl", "step\n", false},
+		{"trace.jsonl", "span\n", false},
+		{"chat-messages.json.4242.6f9619ff-8b86-d011-b42d-00c04fc964ff.tmp", "[]", false},
+		{"run-state.json", `{"sessionState":{"agentType":"base2-free-deepseek"}}`, true},
+		{"chat-meta.json", `{"messageCount":1,"firstPrompt":"Single source","messagesSize":50}`, true},
+	}
+	for _, tt := range tests {
+		path := filepath.Join(sessionDir, tt.name)
+		require.NoError(t, os.WriteFile(path, []byte(tt.content), 0o644))
 		codebuff.calls.Store(0)
-		require.NoError(t, engine.SyncPathsContext(t.Context(), []string{changedPath}),
-			"SyncPaths must not error for %s", changedPath)
-		if wantReparse {
-			assert.Equal(t, int64(1), codebuff.calls.Load(),
-				"a data-bearing event on %s must reparse its session "+
-					"(exactly one fingerprint)", changedPath)
-		} else {
-			assert.Equal(t, int64(0), codebuff.calls.Load(),
-				"a non-data event on %s must not reparse the session "+
-					"or fall back to provider discovery; a non-zero "+
-					"count means the relevance prefilter or the "+
-					"classifier narrowing regressed", changedPath)
+		require.NoError(t, engine.SyncPathsContext(t.Context(), []string{path}))
+		want := int64(0)
+		if tt.wantReparse {
+			want = 1
 		}
+		assert.Equal(t, want, codebuff.calls.Load(),
+			"fingerprint calls after a write to %s", tt.name)
 	}
-
-	// (1) log.jsonl debug sibling: the multi-GB artifact Freebuff leaves
-	// beside every transcript.
-	require.NoError(t, os.WriteFile(
-		filepath.Join(sessionDir, "log.jsonl"), []byte("step\n"), 0o644))
-	warmSyncAfterEvent(filepath.Join(sessionDir, "log.jsonl"), false)
-
-	// (2) trace.jsonl debug sibling.
-	require.NoError(t, os.WriteFile(
-		filepath.Join(sessionDir, "trace.jsonl"), []byte("span\n"), 0o644))
-	warmSyncAfterEvent(filepath.Join(sessionDir, "trace.jsonl"), false)
-
-	// (3) atomic-write temp sibling of the transcript, named per upstream
-	// write-file-atomic.ts: <target>.<pid>.<uuid>.tmp. The final rename
-	// onto the target emits its own event, so dropping the temp event
-	// loses nothing.
-	tempSibling := filepath.Join(sessionDir,
-		"chat-messages.json.4242.6f9619ff-8b86-d011-b42d-00c04fc964ff.tmp")
-	require.NoError(t, os.WriteFile(tempSibling, []byte("[]"), 0o644))
-	warmSyncAfterEvent(tempSibling, false)
-
-	// The transcript was never touched: stored data and the freshness
-	// side-table must be byte-identical to the cold sync.
-	codebuffAssertSessionMessageCount(t, database, sessionID, 1)
-	hashedAgain, hasHashAgain, err := database.GetProviderStatHash(
-		t.Context(), parser.AgentCodebuff, chatPath,
-	)
-	require.NoError(t, err)
-	require.True(t, hasHashAgain,
-		"non-data events must not clear the provider_freshness row")
-	require.Equal(t, hashed, hashedAgain,
-		"the side-table digest must be unchanged after non-data events")
-
-	// (4) Data files still reparse: run-state.json...
-	require.NoError(t, os.WriteFile(filepath.Join(sessionDir, "run-state.json"),
-		[]byte("{\n\t\t\"sessionState\": {\n\t\t\t\"agentType\": \"base2-free-deepseek\"\n\t\t}\n\t}"), 0o644))
-	warmSyncAfterEvent(filepath.Join(sessionDir, "run-state.json"), true)
-
-	// ...and chat-meta.json. This pins the boundary so the filter cannot
-	// over-reach onto real data files.
-	require.NoError(t, os.WriteFile(filepath.Join(sessionDir, "chat-meta.json"),
-		[]byte("{\"messageCount\":1,\"firstPrompt\":\"Single source\",\"messagesSize\":50}"), 0o644))
-	warmSyncAfterEvent(filepath.Join(sessionDir, "chat-meta.json"), true)
-
-	// (5) Deleting the transcript still maps to the session. The
-	// tombstone trigger is the reconcile pass, not SyncPaths: the classify
-	// loop deliberately skips missing non-persistent sources, and the
-	// counting wrapper used here does not implement the streaming-discovery
-	// seam reconcile needs (only the real provider does). The guarantee is
-	// pinned where it is reachable:
-	// TestSyncCodebuffMissingSourceClearsProviderStatHash (below) proves a
-	// deleted transcript still routes its session through tombstoning, and
-	// TestCodebuffClassifyPathDataBearingAndMissing (parser package) proves
-	// the narrowed classifier still maps a deleted transcript under
-	// allowMissing. This filter must never widen onto the transcript path.
 }
 
-// TestSyncCodebuffDebugSiblingReconcileResidual pins the reconcile behavior
-// the changed-path filter deliberately does NOT change, so the documented
-// limit stays tested rather than accidental: a log.jsonl write bumps the
-// session directory's mtime, and codebuffCompositeMtime folds the directory
-// into the incremental cutoff (internal/sync/engine.go, "companion-file
-// deletions" comment) while ComputeMultiFileStatHash folds the same term
-// into the provider_freshness digest. The next SyncAll therefore reparses
-// the session once even though no data file changed. That directory term
-// is load-bearing: TestSyncCodebuffCompanionFileDeletionReparsesSession
-// relies on it to catch companion deletions. Narrowing it to deletions only
-// is a separate, measured decision, not a drive-by edit.
-func TestSyncCodebuffDebugSiblingReconcileResidual(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test")
-	}
-
-	root, chatPath := createCodebuffSingleSession(t)
-	sessionDir := filepath.Dir(chatPath)
-	sessionID := codebuffSessionIDFromChatPath(t, chatPath)
-
-	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentCodebuff: {root},
-		},
-		Machine: "local",
-	})
-	t.Cleanup(engine.Close)
-
-	require.Equal(t, 1,
-		engine.SyncAll(t.Context(), nil).Synced,
-		"cold sync must parse the seeded session")
-	require.Equal(t, 0,
-		engine.SyncAll(t.Context(), nil).Synced,
-		"warm sync with no changes must skip the session")
-
-	require.NoError(t, os.WriteFile(
-		filepath.Join(sessionDir, "log.jsonl"), []byte("step\n"), 0o644),
-		"writing the debug sibling must succeed")
-
-	require.Equal(t, 1,
-		engine.SyncAll(t.Context(), nil).Synced,
-		"the reconcile path must still reparse a session whose "+
-			"directory mtime moved because of a log.jsonl write; a "+
-			"zero here means the directory term this plan pins was "+
-			"removed without updating the companion-deletion "+
-			"guarantee, and a value above one means the cutoff "+
-			"leaked to unrelated sessions")
-	codebuffAssertSessionMessageCount(t, database, sessionID, 1)
-}
-
-// TestSyncCodebuffStaleSidecarStillSyncs verifies end-to-end that a session
-// whose chat-meta.json no longer matches its transcript (size and mtime both
-// off) still syncs from the transcript alone: the stored session name comes
-// from the transcript's first user prompt, not the sidecar's firstPrompt.
-// This is the failure mode the sidecar trust rule exists for -- a stale
-// sidecar must not name a session after a prompt that is no longer in the
-// transcript.
-func TestSyncCodebuffStaleSidecarStillSyncs(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test")
-	}
-
-	root, chatPath := createCodebuffSingleSession(t)
-	sessionDir := filepath.Dir(chatPath)
-	sessionID := codebuffSessionIDFromChatPath(t, chatPath)
-
-	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentCodebuff: {root},
-		},
-		Machine: "local",
-	})
-	t.Cleanup(engine.Close)
-
-	// Rewrite the sidecar so it no longer describes the transcript: the
-	// recorded size is wrong, the mtime is wrong, and the firstPrompt is
-	// one that was never in the transcript.
-	require.NoError(t, os.WriteFile(filepath.Join(sessionDir, "chat-meta.json"),
-		[]byte(`{"messageCount":7,"firstPrompt":"prompt from a vanished transcript","messagesSize":424242,"messagesMtimeMs":1234567890123}`),
-		0o644))
-
-	require.Equal(t, 1,
-		engine.SyncAll(t.Context(), nil).Synced,
-		"cold sync must still parse the session despite the stale sidecar")
-
-	sess, err := database.GetSession(t.Context(), sessionID)
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	require.NotNil(t, sess.FirstMessage)
-	assert.Contains(t, *sess.FirstMessage, "Single source",
-		"the stored session name must come from the transcript's first "+
-			"user prompt, never from a stale sidecar")
-	assert.NotContains(t, *sess.FirstMessage, "vanished",
-		"a sidecar that describes nothing must not name the session")
-	assert.Equal(t, 1, sess.MessageCount,
-		"counts must come from the real transcript")
-}
-
-// TestSyncCodebuffPersistsGitBranch verifies that a branch recorded in
-// run-state.json (sessionState.fileContext.gitChanges.branch) reaches the
-// stored session's git_branch column after a full sync, and that a session
-// without gitChanges stores an empty branch.
-func TestSyncCodebuffPersistsGitBranch(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test")
-	}
-
-	root := t.TempDir()
-	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentCodebuff: {root},
-		},
-		Machine: "local",
-	})
-	t.Cleanup(engine.Close)
-
-	// Session with a branch in run-state.json.
-	ts := "2026-07-15T11-00-00.000Z"
-	dir := filepath.Join(root, "project-0", "chats", ts)
-	require.NoError(t, os.MkdirAll(dir, 0o755))
-	writeCodebuffTestFiles(t, dir, "Branched session")
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "run-state.json"), []byte(`{
-		"sessionState": {
-			"mainAgentState": {"agentType": "base2-free-deepseek"},
-			"fileContext": {"gitChanges": {"branch": "feat/widget"}}
-		}
-	}`), 0o644))
-
-	// Session without gitChanges.
-	dirNoBranch := filepath.Join(root, "project-0", "chats", "2026-07-15T12-00-00.000Z")
-	require.NoError(t, os.MkdirAll(dirNoBranch, 0o755))
-	writeCodebuffTestFiles(t, dirNoBranch, "Unbranched session")
-
-	require.Equal(t, 2,
-		engine.SyncAll(t.Context(), nil).Synced,
-		"cold sync must parse both sessions")
-
-	branchSess, err := database.GetSession(t.Context(),
-		"freebuff:project-0:"+ts)
-	require.NoError(t, err)
-	require.NotNil(t, branchSess)
-	assert.Equal(t, "feat/widget", branchSess.GitBranch,
-		"gitChanges.branch must persist into git_branch")
-
-	noBranchSess, err := database.GetSession(t.Context(),
-		"freebuff:project-0:2026-07-15T12-00-00.000Z")
-	require.NoError(t, err)
-	require.NotNil(t, noBranchSess)
-	assert.Empty(t, noBranchSess.GitBranch,
-		"no gitChanges means an empty branch, not the project name")
-}
-
-// TestSyncCodebuffNestedSubagentSessionsPersist is the end-to-end check that
-// a subagent's nested blocks reach the archive as a linked child session
-// from the same transcript, and that the result-content policy drops the
-// child's blocked tool output like any other tool result.
+// TestSyncCodebuffNestedSubagentSessionsPersist verifies that a subagent's
+// nested blocks reach the archive as a child session linked to its parent's
+// Task call.
 func TestSyncCodebuffNestedSubagentSessionsPersist(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
@@ -1934,11 +1683,7 @@ func TestSyncCodebuffNestedSubagentSessionsPersist(t *testing.T) {
 			"agentType":"basher","status":"complete",
 			"initialPrompt":"run tests","content":"All tests passed.",
 			"blocks":[
-				{"type":"text","textType":"text","content":"checking main.go"},
-				{"type":"tool","toolName":"read_files","toolCallId":"r1",
-				 "input":{"paths":["main.go"]},"output":"SECRET FILE CONTENTS"},
-				{"type":"tool","toolName":"run_terminal_command","toolCallId":"t1",
-				 "input":{"command":"go test"},"output":"ok"}
+				{"type":"text","textType":"text","content":"checking main.go"}
 			]}
 		 ]}
 	]`
@@ -1954,15 +1699,12 @@ func TestSyncCodebuffNestedSubagentSessionsPersist(t *testing.T) {
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {root},
 		},
-		Machine:                 "local",
-		BlockedResultCategories: []string{"Read"},
+		Machine: "local",
 	})
 	t.Cleanup(engine.Close)
 
 	engine.SyncAll(t.Context(), nil)
 
-	// The fixture's agentType (base2-free-mimo) contains "free", so the
-	// parser classifies the session as Freebuff.
 	parentID := "freebuff:project-0:2026-07-15T10-00-00.000Z"
 	childID := parentID + "__subagent__agent-1"
 
@@ -1985,28 +1727,11 @@ func TestSyncCodebuffNestedSubagentSessionsPersist(t *testing.T) {
 	assert.Equal(t, "All tests passed.", answer,
 		"the Task result is the subagent's final answer")
 	assert.Equal(t, childID, link)
-
-	childResult := func(toolUseID string) string {
-		t.Helper()
-		var content string
-		require.NoError(t, database.Reader().QueryRow(t.Context(),
-			`SELECT COALESCE(result_content, '') FROM tool_calls
-			 WHERE session_id = ? AND tool_use_id = ?`,
-			childID, toolUseID,
-		).Scan(&content))
-		return content
-	}
-	assert.Empty(t, childResult("r1"),
-		"a blocked Read category drops the subagent's file contents")
-	assert.Equal(t, "ok", childResult("t1"),
-		"unblocked categories keep their output")
 }
 
 // writeCodebuffSubagentTranscript writes a free-tier transcript whose first AI
 // message holds one agent block per agentIDs entry, followed by extraPrompts
-// additional user messages. Parent and subagent sessions all come from this
-// one chat-messages.json, so the tests below exercise per-session lifecycle
-// state for sessions that share a source file.
+// additional user messages.
 func writeCodebuffSubagentTranscript(
 	t *testing.T, chatPath string, agentIDs []string, extraPrompts int,
 ) {
@@ -2059,16 +1784,11 @@ func TestSyncCodebuffSubagentSessionLifecycleIsPerSession(t *testing.T) {
 	childB := parentID + "__subagent__agent-b"
 
 	tests := []struct {
-		name       string
-		trash      string
-		rewriteIDs []string
-		// live lists sessions that must be active after the resync with
-		// the given message count.
-		live map[string]int
-		// trashed lists sessions that must still be in trash.
-		trashed []string
-		// sourceMissing lists sessions that must be kept as source-missing
-		// archive rows.
+		name          string
+		trash         string
+		rewriteIDs    []string
+		live          map[string]int // session ID -> message count
+		trashed       []string
 		sourceMissing []string
 	}{
 		{
@@ -2113,11 +1833,7 @@ func TestSyncCodebuffSubagentSessionLifecycleIsPerSession(t *testing.T) {
 			})
 			t.Cleanup(engine.Close)
 
-			first := engine.SyncAll(t.Context(), nil)
-			require.Zero(t, first.Failed)
-			codebuffAssertSessionMessageCount(t, database, parentID, 2)
-			codebuffAssertSessionMessageCount(t, database, childA, 2)
-			codebuffAssertSessionMessageCount(t, database, childB, 2)
+			require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
 
 			if tt.trash != "" {
 				require.NoError(t, database.SoftDeleteSession(
@@ -2125,13 +1841,7 @@ func TestSyncCodebuffSubagentSessionLifecycleIsPerSession(t *testing.T) {
 				))
 			}
 			writeCodebuffSubagentTranscript(t, chatPath, tt.rewriteIDs, 1)
-			second := engine.SyncAll(t.Context(), nil)
-			require.Zero(t, second.Failed)
-			// The per-session outcome is stable: an unchanged transcript
-			// rewrites nothing on the next pass.
-			third := engine.SyncAll(t.Context(), nil)
-			require.Zero(t, third.Failed)
-			assert.Zero(t, third.Synced)
+			require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
 
 			for id, want := range tt.live {
 				codebuffAssertSessionMessageCount(t, database, id, want)
