@@ -2461,6 +2461,20 @@ schemas keep their existing ordering behavior.
 - **Agentsview:** `internal/parser/kimi.go` and
   `internal/parser/kimi_provider.go`.
 
+- **Session names (2026-09-30):** Kimi CLI keeps a session's title in
+  `custom_title` in the `state.json` beside `wire.jsonl`. `/title` (alias
+  `/rename`) sets it, and the title generator fills it while it is still null;
+  `title_generated` does not reliably tell the two apart. Sessions not opened
+  since that change still carry a `title` in `metadata.json`, where `Untitled`
+  is the placeholder. See `SessionState` and `_migrate_legacy_metadata` in
+  [session_state.py](https://github.com/MoonshotAI/kimi-cli/blob/9ab1286b8fe4e6bcd116949a27ce5e0ac3389c82/src/kimi_cli/session_state.py)
+  at `9ab1286b8fe4e6bcd116949a27ce5e0ac3389c82`. No local Kimi session was
+  available to check. Agentsview uses `custom_title`, else the legacy `title`,
+  as the session name, and watches both files so a rename resyncs the
+  transcript. The first message falls back to the title only when there is no
+  user text. The `.kimi-code` agents layout and Kimi Work have no known title
+  file.
+
 - **Archive projection (2026-09-04):** Rechecked `formatKimiToolUse` in
   `internal/parser/kimi.go`: its Glob header embeds the raw pattern. Copied
   transcript-only rows now use that formatter with path-only inputs to remove

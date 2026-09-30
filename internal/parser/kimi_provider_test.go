@@ -45,7 +45,7 @@ func TestKimiProviderSourceMethods(t *testing.T) {
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, root, plan.Roots[0].Path)
 	assert.True(t, plan.Roots[0].Recursive)
-	assert.Equal(t, []string{"*.jsonl"}, plan.Roots[0].IncludeGlobs)
+	assert.Equal(t, []string{"*.jsonl", "metadata.json", "state.json"}, plan.Roots[0].IncludeGlobs)
 
 	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
@@ -248,4 +248,67 @@ func TestKimiProviderFingerprintIncludesContentHash(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
 	assert.Equal(t, fp.Hash, outcome.Results[0].Result.Session.File.Hash)
+}
+
+func TestKimiProviderSessionTitle(t *testing.T) {
+	tests := []struct {
+		name     string
+		state    string
+		metadata string
+		want     string
+	}{
+		{name: "state title", state: `{"custom_title":" Chosen name ","title_generated":false}`, want: "Chosen name"},
+		{name: "state title beats legacy metadata", state: `{"custom_title":"Current"}`, metadata: `{"title":"Legacy"}`, want: "Current"},
+		{name: "legacy metadata title", state: `{"custom_title":null}`, metadata: `{"title":"Legacy"}`, want: "Legacy"},
+		{name: "untitled placeholder", metadata: `{"title":"Untitled"}`, want: ""},
+		{name: "no title files", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			sessionDir := filepath.Join(root, "abc123", "uuid-1")
+			writeSourceFile(t, filepath.Join(sessionDir, "wire.jsonl"), kimiProviderFixture("provider question"))
+			if tt.state != "" {
+				writeSourceFile(t, filepath.Join(sessionDir, "state.json"), tt.state)
+			}
+			if tt.metadata != "" {
+				writeSourceFile(t, filepath.Join(sessionDir, "metadata.json"), tt.metadata)
+			}
+			provider, ok := NewProvider(AgentKimi, ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+			sources, err := provider.Discover(t.Context())
+			require.NoError(t, err)
+			require.Len(t, sources, 1)
+			outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
+			require.NoError(t, err)
+			require.Len(t, outcome.Results, 1)
+			assert.Equal(t, tt.want, outcome.Results[0].Result.Session.SessionName)
+			assert.Equal(t, "provider question", outcome.Results[0].Result.Session.FirstMessage)
+		})
+	}
+
+	t.Run("state change resyncs the transcript", func(t *testing.T) {
+		root := t.TempDir()
+		sessionDir := filepath.Join(root, "abc123", "uuid-1")
+		wirePath := filepath.Join(sessionDir, "wire.jsonl")
+		statePath := filepath.Join(sessionDir, "state.json")
+		writeSourceFile(t, wirePath, kimiProviderFixture("provider question"))
+		writeSourceFile(t, statePath, `{"custom_title":"Before"}`)
+		provider, ok := NewProvider(AgentKimi, ProviderConfig{Roots: []string{root}})
+		require.True(t, ok)
+		sources, err := provider.Discover(t.Context())
+		require.NoError(t, err)
+		require.Len(t, sources, 1)
+		before, err := provider.Fingerprint(t.Context(), sources[0])
+		require.NoError(t, err)
+
+		writeSourceFile(t, statePath, `{"custom_title":"After rename"}`)
+		after, err := provider.Fingerprint(t.Context(), sources[0])
+		require.NoError(t, err)
+		assert.NotEqual(t, before.Hash, after.Hash)
+		changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{Path: statePath})
+		require.NoError(t, err)
+		require.Len(t, changed, 1)
+		assert.Equal(t, sources[0].Key, changed[0].Key)
+	})
 }

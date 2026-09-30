@@ -2,8 +2,15 @@ package parser
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+
+	"github.com/tidwall/gjson"
 )
 
 // Kimi stores each session as a wire.jsonl transcript under a per-workspace
@@ -14,9 +21,11 @@ import (
 // factory; RawSessionIDSourceFiles reconstructs the wire.jsonl path from a
 // colon-joined raw ID, which the standard filename-stem lookup cannot match.
 func newKimiProviderFactory(def AgentDef) ProviderFactory {
+	caps := kimiProviderCapabilities()
+	caps.Content.SessionName = CapabilitySupported
 	return NewSourceSetFactory(
 		def,
-		kimiProviderCapabilities(),
+		caps,
 		func(cfg ProviderConfig) SourceSet { return newKimiSourceSet(cfg.Roots) },
 	)
 }
@@ -35,6 +44,9 @@ func newKimiSourceSet(roots []string) JSONLSourceSet {
 		}),
 		WithRawSessionIDSourceFiles(kimiRawSessionIDSourceFiles),
 		WithParseFile(kimiParseFile),
+		// A rename or generated title rewrites state.json, not wire.jsonl.
+		WithCompanionFiles(kimiTitleCompanionFiles),
+		WithCompanionTranscript(kimiTitleCompanionTranscript),
 		// Kimi persisted a full-file content hash (file_hash) in the legacy
 		// per-agent parse. Without this the provider fingerprint hash is empty
 		// and a resync clears the stored file_hash to NULL.
@@ -51,6 +63,14 @@ func kimiParseFile(
 	}
 	if sess == nil {
 		return nil, nil, nil
+	}
+	title, err := kimiSessionTitle(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	sess.SessionName = title
+	if sess.FirstMessage == "" {
+		sess.FirstMessage = truncate(title, 300)
 	}
 	if req.Fingerprint.Hash != "" {
 		sess.File.Hash = req.Fingerprint.Hash
@@ -143,4 +163,56 @@ func kimiProviderCapabilities() Capabilities {
 			Cwd:          CapabilitySupported,
 		},
 	}
+}
+
+// Kimi CLI keeps a session's title in state.json beside its wire.jsonl.
+// Sessions not opened since Kimi moved titles there still carry it in
+// metadata.json. The .kimi-code agents layout has no known title file.
+var kimiTitleFileNames = []string{"state.json", "metadata.json"}
+
+func kimiTitleCompanionFiles(wirePath string) []string {
+	dir := filepath.Dir(wirePath)
+	if filepath.Base(filepath.Dir(dir)) == "agents" {
+		return nil
+	}
+	files := make([]string, 0, len(kimiTitleFileNames))
+	for _, name := range kimiTitleFileNames {
+		files = append(files, filepath.Join(dir, name))
+	}
+	return files
+}
+
+func kimiTitleCompanionTranscript(companionPath string) (string, bool) {
+	if !slices.Contains(kimiTitleFileNames, filepath.Base(companionPath)) {
+		return "", false
+	}
+	return filepath.Join(filepath.Dir(companionPath), "wire.jsonl"), true
+}
+
+// kimiSessionTitle returns the session title Kimi CLI stores beside
+// wirePath: state.json custom_title, which holds both /title renames and
+// generated titles, else the legacy metadata.json title. "Untitled" is
+// Kimi's placeholder, not a title. Missing files mean no title.
+func kimiSessionTitle(wirePath string) (string, error) {
+	if kimiTitleCompanionFiles(wirePath) == nil {
+		return "", nil
+	}
+	dir := filepath.Dir(wirePath)
+	for _, source := range []struct{ file, field string }{
+		{"state.json", "custom_title"},
+		{"metadata.json", "title"},
+	} {
+		data, err := os.ReadFile(filepath.Join(dir, source.file))
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("reading Kimi session title: %w", err)
+		}
+		title := strings.TrimSpace(gjson.GetBytes(data, source.field).Str)
+		if title != "" && title != "Untitled" {
+			return title, nil
+		}
+	}
+	return "", nil
 }
