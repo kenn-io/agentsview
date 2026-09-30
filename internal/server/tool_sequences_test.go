@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -185,7 +186,6 @@ func TestHandleToolSequences_Termination(t *testing.T) {
 		{name: "truncated", status: dbtest.Ptr("truncated"), endedAt: dbtest.Ptr("2026-04-26T10:00:08Z"), wantEnding: "open"},
 		{name: "unrecognized", status: dbtest.Ptr("future-status"), endedAt: dbtest.Ptr("2026-04-26T10:00:08Z"), wantEnding: "open"},
 		{name: "empty", endedAt: dbtest.Ptr("2026-04-26T10:00:08Z"), wantEnding: "open"},
-		{name: "empty status", status: dbtest.Ptr(""), endedAt: dbtest.Ptr("2026-04-26T10:00:08Z"), wantEnding: "open"},
 		{name: "empty status", status: dbtest.Ptr(""), endedAt: dbtest.Ptr("2026-04-26T10:00:08Z"), wantEnding: "open"},
 	}
 	for i, tt := range tests {
@@ -534,6 +534,26 @@ func TestHandleToolSequences_RetainedEvidence(t *testing.T) {
 		}})
 		got := fetchSessionToolSequences(t, te, id)
 		assert.Equal(t, 1, got.TotalToolCalls)
+		assert.Equal(t, 0, got.TotalSequences)
+	})
+
+	t.Run("orphan result event without a call is ignored", func(t *testing.T) {
+		id := "tool-sequences-orphan-result"
+		seedSequenceSession(t, te.db, id, nil, nil)
+		err := te.db.Update(t.Context(), func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(t.Context(), `
+				INSERT INTO tool_result_events
+					(session_id, tool_call_message_ordinal, call_index, tool_use_id,
+					 source, status, content, content_length, event_index)
+				VALUES (?, 0, 0, 'missing-call', 'tool_execution', 'completed',
+					 'orphan result', 13, 0)
+			`, id)
+			return err
+		})
+		require.NoError(t, err)
+
+		got := fetchSessionToolSequences(t, te, id)
+		assert.Equal(t, 0, got.TotalToolCalls)
 		assert.Equal(t, 0, got.TotalSequences)
 	})
 }

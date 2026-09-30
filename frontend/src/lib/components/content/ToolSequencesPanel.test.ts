@@ -114,7 +114,7 @@ describe("ToolSequencesPanel", () => {
     expect(text).toContain("Unknown outcome");
     expect(text).toContain("This result contains non-text evidence");
     expect(text).toContain("2 calls omitted; some tool names may be hidden");
-    expect(text).toContain("4 calls omitted across the displayed sequences");
+    expect(text).toContain("4 calls omitted from this view");
     expect(text).toContain("2 bytes omitted from the input preview");
     expect(text).toContain("3 bytes omitted from the result preview");
     expect(document.querySelectorAll(".call-fact")).toHaveLength(2);
@@ -209,6 +209,34 @@ describe("ToolSequencesPanel", () => {
       "The trace does not show how this sequence ended.",
     );
 
+    unmount(component);
+  });
+
+  it("describes open sequences without denying later results", async () => {
+    const component = mount(ToolSequencesPanel, {
+      target: document.body,
+      props: {
+        data: makeData({
+          sequences: [
+            makeSequence({
+              ending: "open",
+              calls: [
+                makeCall({ outcome: "empty", result_preview: "" }),
+                makeCall({ ordinal: 5, outcome: "content", result_preview: "later result" }),
+              ],
+            }),
+          ],
+        }),
+        sessionId: "session-a",
+        loading: false,
+        failed: false,
+      },
+    });
+    document.querySelector<HTMLDetailsElement>("details.sequence")!.open = true;
+    await tick();
+
+    expect(document.body.textContent).toContain("later result");
+    expect(document.body.textContent).toContain("The trace ends before the sequence is resolved.");
     unmount(component);
   });
 
