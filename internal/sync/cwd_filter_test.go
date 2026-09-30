@@ -227,6 +227,7 @@ func TestCollectAndBatchBaselinesAllowedMissingMemberForMixedCwdSource(
 				sessionID: "stale-allowed",
 				filePath:  path,
 				machine:   "local",
+				agent:     parser.AgentClaude,
 			}},
 		}
 		close(results)
@@ -286,8 +287,8 @@ func TestCollectAndBatchCancellationRevokesRejectedMissingMemberBaseline(
 	results <- syncJob{
 		agent: parser.AgentClaude, path: path, machine: "local",
 		sourceMissingMembers: []sourceMissingMember{
-			{sessionID: allowedID, machine: "local", filePath: path},
-			{sessionID: rejectedID, machine: "local", filePath: path},
+			{sessionID: allowedID, machine: "local", filePath: path, agent: parser.AgentClaude},
+			{sessionID: rejectedID, machine: "local", filePath: path, agent: parser.AgentClaude},
 		},
 	}
 	results <- syncJob{err: context.Canceled}
@@ -363,8 +364,8 @@ func TestCollectAndBatchFailureRevokesOnlyRejectedMissingMemberBaseline(
 	results <- syncJob{
 		agent: parser.AgentClaude, path: path, machine: "local",
 		sourceMissingMembers: []sourceMissingMember{
-			{sessionID: failingID, machine: "local", filePath: path},
-			{sessionID: rejectedID, machine: "local", filePath: path},
+			{sessionID: failingID, machine: "local", filePath: path, agent: parser.AgentClaude},
+			{sessionID: rejectedID, machine: "local", filePath: path, agent: parser.AgentClaude},
 		},
 	}
 	close(results)
