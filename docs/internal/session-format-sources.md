@@ -162,8 +162,8 @@ fixtures retain this field; missing identities remain source-local.
   repeated copies stay incremental. The same release also writes
   `{"type":"agent-name","agentName":...}` beside each rename, but the bundle
   also sets that agent name automatically, so it is not treated as a user
-  title. Existing idle sessions pick up their rename on their next full parse;
-  there is no data-version bump.
+  title. Data version 118 reparses existing sessions once, so renames made
+  before the upgrade appear.
 
 - **Evidence:** `no-public-source`.
 

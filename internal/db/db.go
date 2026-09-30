@@ -527,7 +527,11 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // from the plaintext transcript its agent brain wrote, and .gemini/antigravity-ide
 // is a default Antigravity root. Re-parse unchanged Antigravity sources so those
 // conversations reach the archive.)
-const dataVersion = 117
+// (118: Claude custom-title, Qwen custom_title, Copilot user_named, and OpenClaw
+// session labels now become session names, and a Copilot name the user chose no
+// longer replaces the first message. Re-parse unchanged sources so sessions
+// renamed before the upgrade show those names.)
+const dataVersion = 118
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
