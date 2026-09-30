@@ -1527,12 +1527,15 @@ schemas keep their existing ordering behavior.
   `task_metadata.json` (files-in-context only), the Claude-shaped
   `api_conversation_history.json`, and the Cline-shaped `ui_messages.json`.
 - **Evidence:** `source`.
-- **Upstream:** Clone `https://github.com/Kilo-Org/kilocode.git` at
-  `938919ab72e3977d1512e0363417270e3337c7b1`. The pinned
-  [task persistence](https://github.com/Kilo-Org/kilocode/blob/938919ab72e3977d1512e0363417270e3337c7b1/src/core/task-persistence/TaskHistoryStore.ts)
-  and
-  [UI message reader](https://github.com/Kilo-Org/kilocode/blob/938919ab72e3977d1512e0363417270e3337c7b1/src/core/task-persistence/taskMessages.ts)
-  own the Cline-shaped transcript. The extension was superseded by the
+- **Upstream:** Clone `https://github.com/Kilo-Org/kilocode-legacy.git` at
+  `ae046acafd17993bdf12dce0f81d9ac948e17ee8`; the legacy extension source
+  moved to this archived repository. Its
+  [API history persistence](https://github.com/Kilo-Org/kilocode-legacy/blob/ae046acafd17993bdf12dce0f81d9ac948e17ee8/src/core/task-persistence/apiMessages.ts)
+  owns `api_conversation_history.json`, and its
+  [UI message persistence](https://github.com/Kilo-Org/kilocode-legacy/blob/ae046acafd17993bdf12dce0f81d9ac948e17ee8/src/core/task-persistence/taskMessages.ts)
+  owns `ui_messages.json`. Links rechecked 2026-09-30; the previous pins
+  pointed at a `Kilo-Org/kilocode` commit from the OpenCode-based rebuild,
+  which does not contain these files. The extension was superseded by the
   OpenCode-based rebuild (public beta 2026-03-10, GA 2026-04-02); new sessions
   stopped appearing around 2026-03-21.
 - **Usage and cost:** `ui_messages.json` carries per-request `api_req_started`
