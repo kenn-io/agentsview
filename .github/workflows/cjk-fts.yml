@@ -33,7 +33,7 @@ permissions:
 jobs:
   test-cjk-fts:
     name: Go Test (CJK FTS sidecar)
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-linux-8cpu
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -44,6 +44,12 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
+          cache: false
+
+      - name: Configure Namespace Go cache
+        uses: namespacelabs/nscloud-cache-action@1124a6f3ce44e5cf84cc22111530961f4d2a15f9  # v1
+        with:
+          cache: go
 
       - name: Restore pricing snapshot
         run: go run ./internal/pricing/cmd/litellm-snapshot -restore
