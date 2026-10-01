@@ -88,6 +88,9 @@ The latest published release is
 
 **Improvements**
 
+- On Windows, each watched folder reserves 16 KiB for change notifications
+  instead of 64 KiB. At the 8192-folder budget, that reduces buffer capacity
+  from 512 MiB to 128 MiB.
 - Remote session sync now uses HTTP only. Configure each remote host's daemon
   URL and bearer token; omitting `transport` selects HTTP. SSH sync and the
   `sync --user` and `sync --port` flags have been removed. `sync --host` selects
