@@ -427,14 +427,19 @@ func upsertChatGPTConversation(
 			len(canonical), len(archived),
 		)
 	}
-	if len(canonical) != len(msgs) ||
-		!sameMessages(archived, canonical[:len(archived)]) {
+	if len(canonical) != len(msgs) {
+		return importNew, errors.New(
+			"export history diverges from the archived messages",
+		)
+	}
+	filled, ok := compareChatGPTPrefix(archived, canonical[:len(archived)])
+	if !ok {
 		return importNew, errors.New(
 			"export history diverges from the archived messages",
 		)
 	}
 
-	if len(msgs) == len(archived) {
+	if len(msgs) == len(archived) && len(filled) == 0 {
 		// Refresh session_name without touching any other fields —
 		// a partial UpsertSession would overwrite first_message,
 		// timestamps, and counts with zero values.
@@ -450,15 +455,21 @@ func upsertChatGPTConversation(
 		return importSkipped, nil
 	}
 
-	// Insert only the rows past the verified prefix. A full replacement
-	// would delete and reinsert archived rows, changing message IDs and
-	// risking pins that cannot be re-matched without source UUIDs.
-	fts.suspend(ctx)
-	// The transcript grew, so stored quality signals and secret findings
-	// describe the shorter history. Clear them to version zero in the same
+	// Fill results that were empty when archived and insert the rows past
+	// the verified prefix. A full replacement would delete and reinsert
+	// archived rows, changing message IDs and risking pins that cannot be
+	// re-matched without source UUIDs. A fill-only import is an update too.
+	// Full-text search indexes message rows only, so fills alone skip it.
+	if len(msgs) > len(archived) {
+		fts.suspend(ctx)
+	}
+	// The transcript changed, so stored quality signals and secret findings
+	// describe the older history. Clear them to version zero in the same
 	// write so the signal backfill recomputes them from the new rows.
+	rows := chatGPTFillRows(archived, msgs, filled)
+	rows = append(rows, msgs[len(archived):]...)
 	if err := appendChatGPTMessages(
-		ctx, store, chatGPTSession(s), msgs[len(archived):],
+		ctx, store, chatGPTSession(s), rows,
 	); errors.Is(err, db.ErrSessionExcluded) {
 		return importSkipped, nil
 	} else if err != nil {
@@ -551,16 +562,38 @@ func writeChatGPTSession(
 	})
 }
 
-// appendChatGPTMessages inserts rows after the archived transcript without
-// touching existing rows. Signals are written as zero values so the
-// backfill recomputes them for the longer transcript.
+// appendChatGPTMessages fills archived-empty tool results at stored
+// ordinals and inserts later rows, leaving other stored rows untouched.
+// Signals are written as zero values so the backfill recomputes them.
 func appendChatGPTMessages(
-	ctx context.Context, store db.Store, sess db.Session, tail []db.Message,
+	ctx context.Context, store db.Store, sess db.Session, msgs []db.Message,
 ) error {
 	return writeChatGPTBatch(ctx, store, db.SessionBatchWrite{
-		Session:  sess,
-		Messages: tail,
+		Session:              sess,
+		Messages:             msgs,
+		FillEmptyToolResults: true,
 	})
+}
+
+// chatGPTFillRows copies the export rows whose archived calls get a result,
+// keeping only the results being filled so nothing else reaches the write.
+func chatGPTFillRows(
+	archived, incoming []db.Message, filled []int,
+) []db.Message {
+	rows := make([]db.Message, 0, len(filled))
+	for _, i := range filled {
+		row := incoming[i]
+		row.ToolCalls = slices.Clone(row.ToolCalls[:len(archived[i].ToolCalls)])
+		for j := range row.ToolCalls {
+			if !emptyToolResult(archived[i].ToolCalls[j]) {
+				row.ToolCalls[j].ResultContent = ""
+				row.ToolCalls[j].ResultContentLength = 0
+				row.ToolCalls[j].ResultEvents = nil
+			}
+		}
+		rows = append(rows, row)
+	}
+	return rows
 }
 
 func writeChatGPTBatch(
@@ -569,11 +602,12 @@ func writeChatGPTBatch(
 	result, err := store.WriteSessionBatchAtomic(
 		ctx, []db.SessionBatchWrite{write},
 	)
-	if err != nil {
-		return err
-	}
+	// Trashed sessions count as excluded, so check before the returned error.
 	if result.ExcludedSessions > 0 {
 		return db.ErrSessionExcluded
+	}
+	if err != nil {
+		return err
 	}
 	if result.FailedSessions > 0 && len(result.Errors) > 0 {
 		return result.Errors[0]
@@ -623,6 +657,41 @@ func sameMessages(existing, incoming []db.Message) bool {
 		}
 	}
 	return true
+}
+
+// compareChatGPTPrefix reports whether the export still starts with the
+// archived messages and which rows hold archived-empty results the export
+// fills. Only fields no archive policy rewrites are compared: each archived
+// call's name and category, and whether its result is empty.
+func compareChatGPTPrefix(
+	existing, incoming []db.Message,
+) (filled []int, ok bool) {
+	if !sameMessages(existing, incoming) {
+		return nil, false
+	}
+	for i := range existing {
+		if len(incoming[i].ToolCalls) < len(existing[i].ToolCalls) {
+			return nil, false
+		}
+		fill := false
+		for j, tc := range existing[i].ToolCalls {
+			in := incoming[i].ToolCalls[j]
+			if tc.ToolName != in.ToolName || tc.Category != in.Category {
+				return nil, false
+			}
+			if emptyToolResult(tc) && !emptyToolResult(in) {
+				fill = true
+			}
+		}
+		if fill {
+			filled = append(filled, i)
+		}
+	}
+	return filled, true
+}
+
+func emptyToolResult(tc db.ToolCall) bool {
+	return tc.ResultContent == "" && tc.ResultContentLength == 0
 }
 
 func strPtr(s string) *string {

@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"go.kenn.io/kit/search/lexical"
 )
 
 const (
@@ -639,17 +641,17 @@ func PrepareFTSQuery(raw string) string {
 	if raw == "" || strings.HasPrefix(raw, `"`) {
 		return raw
 	}
-	var b strings.Builder
-	for i, term := range strings.Fields(raw) {
-		if i > 0 {
-			b.WriteByte(' ')
-		}
-		b.WriteByte('"')
-		b.WriteString(strings.ReplaceAll(term, `"`, `""`))
-		b.WriteByte('"')
+	prepared, err := literalFTSAnalyzer.PrepareLiteral(raw)
+	if err != nil {
+		// Only blank input fails, and it returned above.
+		return raw
 	}
-	return b.String()
+	return prepared.Match
 }
+
+// literalFTSAnalyzer quotes each whitespace-separated term, doubling embedded
+// quotes, and joins the terms with FTS5's implicit AND.
+var literalFTSAnalyzer = lexical.Literal()
 
 // FTSTerms decomposes a PrepareFTSQuery output back into its individual terms,
 // un-doubling escaped quotes inside quoted terms and collecting bare tokens. A

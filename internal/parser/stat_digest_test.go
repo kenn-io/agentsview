@@ -32,6 +32,29 @@ func TestFileStatTupleDigestRejectsUnavailableChangeTime(t *testing.T) {
 		"size and mtime alone must not produce a trusted digest")
 }
 
+func TestFileStatTupleDigestDetectsSameStatReplacement(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	writeStatDigestFile(t, path, "original\n")
+	mtime := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	require.NoError(t, os.Chtimes(path, mtime, mtime))
+	// A coarse clock can give the original and its replacement the same
+	// change time, so only the file identity tells them apart.
+	sameTick := func(string, os.FileInfo) (int64, bool) {
+		return 1, true
+	}
+	before := fileStatTupleDigestWithChangeTime(sameTick, 0xC1, path)
+	require.NotZero(t, before)
+
+	tmp := path + ".tmp"
+	writeStatDigestFile(t, tmp, "replaced\n")
+	require.NoError(t, os.Rename(tmp, path))
+	require.NoError(t, os.Chtimes(path, mtime, mtime))
+
+	assert.NotEqual(t, before,
+		fileStatTupleDigestWithChangeTime(sameTick, 0xC1, path),
+		"a same-size, same-time replacement must change the digest")
+}
+
 func TestClaudeProviderComputesMultiFileStatHash(t *testing.T) {
 	provider, ok := NewProvider(AgentClaude, ProviderConfig{
 		Machine: "local",

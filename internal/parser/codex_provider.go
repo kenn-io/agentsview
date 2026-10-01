@@ -463,7 +463,7 @@ func (p *codexProvider) PlanRawCapture(
 // sidecar folding of the verified-source gate: an index-only change (a
 // thread title rename) breaks the digest even when the transcript is
 // byte-identical, so the warm short-circuit can never mask a metadata
-// refresh. An absent index contributes a stable (0, 0, 0) tuple, which
+// refresh. An absent index contributes a stable all-zero tuple, which
 // matches modern Codex releases that no longer write the index. The
 // digest persists stat-verified freshness in provider_freshness across
 // process restarts, sparing a fresh engine the full-content hash that

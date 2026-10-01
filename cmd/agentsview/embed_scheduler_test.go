@@ -21,6 +21,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/kit/embedmodel"
 	kitvec "go.kenn.io/kit/vector"
 
 	"go.kenn.io/agentsview/internal/config"
@@ -827,7 +828,9 @@ func TestSearcherAdapterVersionMismatchedIndexReturnsSemanticUnavailable(t *test
 
 	enc, err := newVectorQueryEncoder(cfg.Vector.Embeddings, "")
 	require.NoError(t, err)
-	adapter := newSearcherAdapter(ix, enc, vectorGeneration(cfg.Vector.Embeddings))
+	adapter := newSearcherAdapter(ix, enc, vectorSpace(
+		cfg.Vector.Embeddings, vectorGeneration(cfg.Vector.Embeddings),
+	))
 
 	_, err = adapter.SemanticSearch(t.Context(), "any query", 5)
 	require.Error(t, err)
@@ -848,7 +851,7 @@ func TestSearcherAdapterSemanticReadinessCoverageAndCompatibility(t *testing.T) 
 		t.Context(), testPushUnitSource(), fakePushEncoder(), gen, vector.BuildOptions{},
 	)
 	require.NoError(t, err)
-	adapter := newSearcherAdapter(ix, fakePushEncoder(), gen)
+	adapter := newSearcherAdapter(ix, fakePushEncoder(), generationSpace(gen))
 
 	ready, err := adapter.SemanticReadiness(t.Context())
 	require.NoError(t, err)
@@ -868,13 +871,21 @@ func TestSearcherAdapterSemanticReadinessCoverageAndCompatibility(t *testing.T) 
 	assert.EqualValues(t, 2, partial.Embedded)
 	assert.EqualValues(t, 1, partial.Missing)
 
-	mismatched := newSearcherAdapter(ix, fakePushEncoder(), kitvec.Generation{
+	mismatched := newSearcherAdapter(ix, fakePushEncoder(), generationSpace(kitvec.Generation{
 		Model: "different-model", Dimensions: 4,
-	})
+	}))
 	status, err := mismatched.SemanticReadiness(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, "unavailable", status.State)
 	assert.Equal(t, "configuration_mismatch", status.Reason)
+}
+
+// generationSpace describes gen the way vectorSpace does for configured
+// embeddings: gen's own fingerprint is the descriptor's legacy entry.
+func generationSpace(gen kitvec.Generation) embedmodel.Descriptor {
+	return vectorSpace(config.VectorEmbeddingsConfig{
+		Model: gen.Model, Dimension: gen.Dimensions,
+	}, gen)
 }
 
 // --- integration: real serve/server construction path ---

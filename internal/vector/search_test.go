@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/kit/embedconfig"
 	kitvec "go.kenn.io/kit/vector"
 	"go.kenn.io/kit/vector/sqlitevec"
 )
@@ -207,11 +208,11 @@ func TestStaleActiveTrueWhenFingerprintsDiffer(t *testing.T) {
 	_, err := ix.Build(ctx, src, fakeSearchEncoder(), gen, BuildOptions{})
 	require.NoError(t, err)
 
-	stale, err := ix.StaleActive(ctx, "some-other-fingerprint", "")
+	stale, err := ix.StaleActive(ctx, legacySpace("some-other-fingerprint"), "")
 	require.NoError(t, err)
 	assert.True(t, stale)
 
-	stale, err = ix.StaleActive(ctx, gen.Fingerprint(), "")
+	stale, err = ix.StaleActive(ctx, legacySpace(gen.Fingerprint()), "")
 	require.NoError(t, err)
 	assert.False(t, stale, "matching fingerprint is not stale")
 }
@@ -227,11 +228,11 @@ func TestStaleActiveRejectsNewerCorpusRevision(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	stale, err := ix.StaleActive(ctx, gen.Fingerprint(), "revision-1")
+	stale, err := ix.StaleActive(ctx, legacySpace(gen.Fingerprint()), "revision-1")
 	require.NoError(t, err)
 	assert.False(t, stale)
 
-	stale, err = ix.StaleActive(ctx, gen.Fingerprint(), "revision-2")
+	stale, err = ix.StaleActive(ctx, legacySpace(gen.Fingerprint()), "revision-2")
 	require.NoError(t, err)
 	assert.True(t, stale)
 }
@@ -240,7 +241,7 @@ func TestStaleActiveFalseWhenNoActiveGeneration(t *testing.T) {
 	ix := openTestIndex(t)
 	ctx := t.Context()
 
-	stale, err := ix.StaleActive(ctx, "anything", "")
+	stale, err := ix.StaleActive(ctx, legacySpace("anything"), "")
 	require.NoError(t, err)
 	assert.False(t, stale, "no active generation means nothing to compare")
 }
@@ -919,14 +920,16 @@ func TestSearchReducedDimensionsEndToEnd(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	enc := NewEncoder(EncoderConfig{
-		Endpoint:          srv.URL + "/v1",
-		Model:             "matryoshka-model",
-		Dimension:         reducedDim,
-		RequestDimensions: true,
-		Timeout:           5 * time.Second,
-		MaxRetries:        1,
-	})
+	enc, err := NewEncoder(EncoderConfig{
+		Model: embedconfig.Model{
+			Name: "matryoshka-model", Dimensions: reducedDim, RequestDimensions: true,
+			Metric: embedconfig.MetricCosine, Normalization: embedconfig.NormalizationNone,
+		},
+		Deployment: embedconfig.Deployment{BaseURL: srv.URL + "/v1"},
+		Transport:  embedconfig.Transport{Timeout: 5 * time.Second},
+		MaxRetries: 1,
+	}, embedconfig.RoleDocument)
+	require.NoError(t, err)
 
 	ix := openTestIndex(t)
 	ctx := t.Context()

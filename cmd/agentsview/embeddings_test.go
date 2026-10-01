@@ -24,6 +24,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/kit/daemon"
+	"go.kenn.io/kit/embedclient"
+	"go.kenn.io/kit/embedconfig"
 	kitvec "go.kenn.io/kit/vector"
 	"go.kenn.io/kit/vector/sqlitevec"
 
@@ -245,7 +247,7 @@ func TestNewVectorEncoderWiresOllamaCPUFallback(t *testing.T) {
 				OllamaCPUFallback: true,
 			},
 		},
-	}, "local", "", false)
+	}, "local", embedconfig.RoleDocument, false)
 	require.NoError(t, err)
 
 	out, err := enc(t.Context(), []string{"alpha"})
@@ -643,10 +645,7 @@ func TestRunDirectBuildPrintsFailedAttemptResult(t *testing.T) {
 	require.NoError(t, raw.Close())
 
 	failingEncoder := func(context.Context, []string) ([][]float32, error) {
-		return nil, &vector.HTTPStatusError{
-			Status: http.StatusBadRequest,
-			Body:   "input exceeds token limit",
-		}
+		return nil, &embedclient.APIError{StatusCode: http.StatusBadRequest, Reason: embedclient.ReasonInputTooLong}
 	}
 	m := vector.NewManager(ix, src, vector.EncoderSet{
 		Default: "default",

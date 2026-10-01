@@ -202,3 +202,118 @@ func TestWriteSessionBatchInsertSkipsRedundantModifiedTouch(t *testing.T) {
 	require.True(t, modifiedAt.Valid && modifiedAt.String != "",
 		"batch-written session must carry local_modified_at")
 }
+
+func fillTestSnapshot(t *testing.T, d *DB, query string, args ...any) [][]any {
+	t.Helper()
+	rows, err := d.rawReader().QueryContext(t.Context(), query, args...)
+	require.NoError(t, err)
+	defer rows.Close()
+	cols, err := rows.Columns()
+	require.NoError(t, err)
+	var out [][]any
+	for rows.Next() {
+		vals := make([]any, len(cols))
+		ptrs := make([]any, len(cols))
+		for i := range vals {
+			ptrs[i] = &vals[i]
+		}
+		require.NoError(t, rows.Scan(ptrs...))
+		out = append(out, vals)
+	}
+	require.NoError(t, rows.Err())
+	return out
+}
+
+func TestWriteSessionBatchAtomicFillsEmptyToolResults(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	const id = "fill"
+	msg := func(ord int, calls ...ToolCall) Message {
+		content := fmt.Sprintf("message-%d", ord)
+		return Message{
+			SessionID: id, Ordinal: ord, Role: "assistant",
+			Content: content, ContentLength: len(content),
+			Timestamp:  time.Unix(int64(ord), 0).UTC().Format(time.RFC3339),
+			HasToolUse: len(calls) > 0, ToolCalls: calls,
+		}
+	}
+	call := func(name, result string) ToolCall {
+		return ToolCall{
+			SessionID: id, ToolName: name, Category: "Other",
+			ResultContent: result, ResultContentLength: len(result),
+		}
+	}
+	session := Session{
+		ID: id, Project: "project", Machine: defaultMachine,
+		Agent: "chatgpt", MessageCount: 3,
+	}
+	_, err := d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{{
+		Session: session,
+		Messages: []Message{
+			msg(0, call("a", "")),
+			msg(1, call("b", "done"), call("c", "")),
+			msg(2, call("d", "")),
+		},
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+	_, err = d.PinMessage(ctx, id, fillTestMessageID(t, d, id, 1), nil)
+	require.NoError(t, err)
+
+	const messagesQuery = `SELECT * FROM messages WHERE session_id = ? ORDER BY ordinal`
+	const unfilledCallsQuery = `SELECT tc.* FROM tool_calls tc
+		JOIN messages m ON m.id = tc.message_id
+		WHERE tc.session_id = ? AND NOT (m.ordinal = 0 AND tc.call_index = 0)
+		  AND NOT (m.ordinal = 1 AND tc.call_index = 1)
+		ORDER BY m.ordinal, tc.call_index`
+	beforeMessages := fillTestSnapshot(t, d, messagesQuery, id)
+	beforeCalls := fillTestSnapshot(t, d, unfilledCallsQuery, id)
+	require.Len(t, beforeCalls, 2)
+
+	// Two of three archived messages get a fill; the completed call on the
+	// second gets a different non-empty candidate, and the empty call there
+	// gets a transcripts-shaped candidate with a length and no text.
+	session.MessageCount = 4
+	transcriptsOnly := call("c", "")
+	transcriptsOnly.ResultContentLength = 10
+	_, err = d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{{
+		Session: session,
+		Messages: []Message{
+			msg(0, call("a", "filled")),
+			msg(1, call("b", "changed"), transcriptsOnly),
+			msg(3),
+		},
+		FillEmptyToolResults: true,
+	}})
+	require.NoError(t, err)
+
+	afterMessages := fillTestSnapshot(t, d, messagesQuery, id)
+	require.Len(t, afterMessages, 4)
+	require.Equal(t, beforeMessages, afterMessages[:3], "no archived message row may change")
+	require.Equal(t, beforeCalls, fillTestSnapshot(t, d, unfilledCallsQuery, id))
+
+	msgs, err := d.GetAllMessages(ctx, id)
+	require.NoError(t, err)
+	require.Len(t, msgs, 4)
+	require.Equal(t, "filled", msgs[0].ToolCalls[0].ResultContent)
+	require.Equal(t, 6, msgs[0].ToolCalls[0].ResultContentLength)
+	require.Equal(t, "done", msgs[1].ToolCalls[0].ResultContent)
+	require.Empty(t, msgs[1].ToolCalls[1].ResultContent)
+	require.Equal(t, 10, msgs[1].ToolCalls[1].ResultContentLength)
+	require.Empty(t, msgs[2].ToolCalls[0].ResultContent)
+	require.Equal(t, "message-3", msgs[3].Content)
+	pins, err := d.ListPinnedMessages(ctx, id, "")
+	require.NoError(t, err)
+	require.Len(t, pins, 1)
+	require.Equal(t, msgs[1].ID, pins[0].MessageID)
+}
+
+func fillTestMessageID(t *testing.T, d *DB, sessionID string, ordinal int) int64 {
+	t.Helper()
+	var id int64
+	require.NoError(t, d.rawReader().QueryRowContext(t.Context(),
+		`SELECT id FROM messages WHERE session_id = ? AND ordinal = ?`,
+		sessionID, ordinal,
+	).Scan(&id))
+	return id
+}

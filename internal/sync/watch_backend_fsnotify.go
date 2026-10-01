@@ -146,6 +146,14 @@ type fsnotifyWatchOps interface {
 	Remove(path string) error
 }
 
+type bufferedFSNotifyWatchOps struct {
+	*fsnotify.Watcher
+}
+
+func (w bufferedFSNotifyWatchOps) Add(path string) error {
+	return w.AddWith(path, fsnotify.WithBufferSize(16<<10))
+}
+
 type fsnotifyBackendLifecycle uint8
 
 const (
@@ -163,7 +171,7 @@ func newFSNotifyBackend(excludes []string) (*fsnotifyBackend, error) {
 		watcher:         watcher,
 		eventInput:      watcher.Events,
 		errorInput:      watcher.Errors,
-		watchOps:        watcher,
+		watchOps:        bufferedFSNotifyWatchOps{Watcher: watcher},
 		queue:           newNativeEventQueue(),
 		events:          make(chan backendEvent),
 		errors:          make(chan error, 1),

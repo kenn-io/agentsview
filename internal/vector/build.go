@@ -2,14 +2,16 @@ package vector
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"go.kenn.io/kit/embedclient"
+	"go.kenn.io/kit/embedmodel"
 	kitvec "go.kenn.io/kit/vector"
 	"go.kenn.io/kit/vector/sqlitevec"
 )
@@ -70,6 +72,11 @@ type BuildOptions struct {
 	// Progress, if non-nil, is called at most ~every 2s with incremental
 	// embedding progress, plus once more after the run completes.
 	Progress func(BuildProgress)
+	// Space, when set, recognizes existing generations of the configured
+	// embedding space (see embedmodel.Descriptor.Matches), so an active
+	// generation it matches is topped up instead of rebuilt. A zero Space
+	// matches only the generation's own fingerprint.
+	Space embedmodel.Descriptor
 }
 
 // BuildProgress reports incremental embedding progress during Build. Done
@@ -174,7 +181,7 @@ func (ix *Index) Build(
 		}
 	}
 
-	target, wasBuilding, err := ix.resolveBuildTarget(ctx, gen, fp, o.FullRebuild)
+	target, wasBuilding, err := ix.resolveBuildTarget(ctx, gen, fp, o.Space, o.FullRebuild)
 	if err != nil {
 		return BuildResult{}, err
 	}
@@ -185,7 +192,7 @@ func (ix *Index) Build(
 		return result, err
 	}
 
-	wrapped, finish := ix.wrapProgress(validatingEncoder(enc), total, o.Progress)
+	wrapped, finish := ix.wrapProgress(enc, total, o.Progress)
 	fillStore := &repairQueueCompletingStore{
 		Store: ix.store,
 		db:    ix.db,
@@ -272,7 +279,7 @@ func (ix *Index) buildInvalidRepair(
 		return result, errors.Join(err, countErr)
 	}
 
-	wrapped, finish := ix.wrapProgress(validatingEncoder(enc), total, o.Progress)
+	wrapped, finish := ix.wrapProgress(enc, total, o.Progress)
 	fill, fillErr := fillRepairQueue(ctx, store, target, wrapped, repairFillOptions{
 		Split:       ix.split,
 		Batch:       o.encodeBatchOptions(),
@@ -307,15 +314,22 @@ func (ix *Index) buildInvalidRepair(
 // conservative upper bound for every input. Providers may truncate oversized
 // inputs to that length, so the bound keeps the request within their aggregate
 // token cap without depending on provider tokenization.
+//
+// Without a configured budget, batch_size alone bounds a request: each input
+// is charged one token against a budget of batch_size, which leaves the batch
+// size as the only limit and keeps kit's default token estimate out of it.
 func (o BuildOptions) encodeBatchOptions() []kitvec.BatchOption {
 	options := []kitvec.BatchOption{
 		kitvec.WithBatchSize(o.BatchSize),
 		kitvec.WithBatchConcurrency(1),
 	}
-	if o.ModelContextTokens > 0 && o.MaxBatchTokens > 0 {
+	switch {
+	case o.ModelContextTokens > 0 && o.MaxBatchTokens > 0:
 		options = append(options, kitvec.WithBatchTokenBudget(
 			o.MaxBatchTokens, o.ModelContextTokens,
 		))
+	case o.BatchSize > 0:
+		options = append(options, kitvec.WithBatchTokenBudget(o.BatchSize, 1))
 	}
 	return options
 }
@@ -334,19 +348,6 @@ func repairRemaining(
 		return fallback, false, err
 	}
 	return remaining, true, nil
-}
-
-func validatingEncoder(enc kitvec.EncodeFunc) kitvec.EncodeFunc {
-	return func(ctx context.Context, texts []string) ([][]float32, error) {
-		vectors, err := enc(ctx, texts)
-		if err != nil {
-			return nil, err
-		}
-		if err := validateEmbeddings(vectors); err != nil {
-			return nil, err
-		}
-		return vectors, nil
-	}
 }
 
 // skipPermanentEncodeError handles WithFillEncodeError: a
@@ -372,18 +373,18 @@ func skipPermanentEncodeError(doc string, err error) bool {
 }
 
 // isPermanentEncodeError reports whether err rejects one specific input in a
-// way retrying can never fix. kitvec.ErrEmptyEmbeddingInput is kit's own
-// pre-flight refusal of blank chunk text; it is raised before any HTTP call
-// and replaces sniffing each provider's wording for the same rejection.
-// Ordinary fills never trigger it — kitvec.Split drops blank windows, so a
-// blank document is stamped with no vectors — but a chunk that reaches an
-// encode call blank is still permanently unembeddable, not a transient fault.
+// way retrying can never fix: kit's pre-flight refusal of blank chunk text, or
+// an endpoint response kit classifies as too long or refused by policy. A 400
+// kit cannot attribute to the input, such as a wrong model or an unsupported
+// field, is not an input rejection, so it aborts the fill. Credential,
+// route, rate-limit, and server failures are not input-specific and abort the
+// fill so a later build retries the document.
 func isPermanentEncodeError(err error) bool {
 	if errors.Is(err, kitvec.ErrEmptyEmbeddingInput) {
 		return true
 	}
-	statusErr, hasStatusErr := errors.AsType[*HTTPStatusError](err)
-	return hasStatusErr && statusErr != nil && statusErr.Permanent()
+	apiErr, ok := errors.AsType[*embedclient.APIError](err)
+	return ok && apiErr.InputRejected()
 }
 
 // noWatermarkYet reports whether Refresh has never advanced the stored
@@ -409,14 +410,22 @@ func (ix *Index) noWatermarkYet(ctx context.Context) (bool, error) {
 // document and silently reactivate stale embeddings instead of performing
 // the requested full rebuild.
 func (ix *Index) resolveBuildTarget(
-	ctx context.Context, gen kitvec.Generation, fp string, fullRebuild bool,
+	ctx context.Context, gen kitvec.Generation, fp string,
+	space embedmodel.Descriptor, fullRebuild bool,
 ) (target string, wasBuilding bool, err error) {
 	active, hasActive, err := ix.ActiveFingerprint(ctx)
 	if err != nil {
 		return "", false, err
 	}
+	activeMatches := hasActive && active == fp
+	if hasActive && !activeMatches && len(space.Legacy) > 0 {
+		if activeMatches, err = space.Matches(active); err != nil {
+			return "", false, fmt.Errorf("matching active generation: %w", err)
+		}
+	}
 
-	if hasActive && active == fp {
+	if activeMatches {
+		fp = active
 		if fullRebuild {
 			if err := ix.markActiveFullRebuildPending(ctx, fp); err != nil {
 				return "", false, err
@@ -491,16 +500,22 @@ func (ix *Index) clearCompletedCorpusRevision(ctx context.Context, fp string) er
 // abandoned generation's stale coverage as BuildingError's percent instead
 // of the generation actually being built.
 //
-// This only changes state; kit's store has no API to drop a generation's
-// vec0 table, chunk map, or stamps, so an abandoned generation's rows stay
-// on disk (bloating vectors.db) until an operator rebuilds vectors.db from
-// scratch or a future kit API adds reclamation.
+// This only changes state. Retired generations keep their storage so a later
+// build can revive them (see reviveRetiredGeneration).
 func (ix *Index) retireAbandonedBuildingGenerations(ctx context.Context, keep string) error {
-	if _, err := ix.db.ExecContext(ctx,
-		`UPDATE `+ix.spec.generationsTable()+` SET state = ? WHERE state = ? AND gen_key != ?`,
-		string(sqlitevec.StateRetired), string(sqlitevec.StateBuilding), keep,
-	); err != nil {
+	generations, err := ix.store.Generations(ctx)
+	if err != nil {
 		return fmt.Errorf("retire abandoned building generations: %w", err)
+	}
+	for _, generation := range generations {
+		if generation.State != sqlitevec.StateBuilding || generation.Key == keep {
+			continue
+		}
+		if err := ix.store.SetGenerationState(
+			ctx, generation.Key, sqlitevec.StateRetired,
+		); err != nil {
+			return fmt.Errorf("retire abandoned building generation: %w", err)
+		}
 	}
 	return nil
 }
@@ -508,17 +523,13 @@ func (ix *Index) retireAbandonedBuildingGenerations(ctx context.Context, keep st
 // generationExists reports whether a generation with fingerprint fp has
 // already been registered, in any state.
 func (ix *Index) generationExists(ctx context.Context, fp string) (bool, error) {
-	var ordinal int64
-	err := ix.db.QueryRowContext(ctx,
-		`SELECT ordinal FROM `+ix.spec.generationsTable()+` WHERE gen_key = ?`, fp,
-	).Scan(&ordinal)
-	if err == sql.ErrNoRows {
-		return false, nil
-	}
+	generations, err := ix.store.Generations(ctx)
 	if err != nil {
 		return false, fmt.Errorf("check generation exists for fingerprint %s: %w", fp, err)
 	}
-	return true, nil
+	return slices.ContainsFunc(generations, func(g sqlitevec.GenerationInfo[string]) bool {
+		return g.Key == fp
+	}), nil
 }
 
 // countPending returns the total number of chunks the documents not yet
@@ -528,7 +539,7 @@ func (ix *Index) generationExists(ctx context.Context, fp string) (bool, error) 
 // in the same unit as BuildProgress.Done (chunks encoded so far); see
 // BuildProgress's doc comment for why a per-document count isn't reachable
 // from the encoder wrapper. It applies the same s.revision = d.content_hash
-// predicate generationCoverageQuery's Missing column uses, so a document
+// freshness rule kit's Coverage applies to Missing, so a document
 // whose content changed since it was last stamped (a stale revision) counts
 // as pending rather than complete — kit's Fill treats it as pending re-embed
 // for the same reason.
@@ -626,36 +637,43 @@ func (ix *Index) resetGeneration(ctx context.Context, fp string) error {
 	return nil
 }
 
-// maybeActivate activates target (retiring the previous active generation)
-// when it was a building generation whose fill just brought its coverage
-// of the mirror to zero Missing documents. It is a no-op, returning false,
-// for the active-generation top-up and full-rebuild-in-place cases, which
-// never pass wasBuilding=true.
+// maybeActivate activates target through kit's checked publication when it
+// was a building generation whose fill just covered every mirror document.
+// kit retires the previous active generation in the same transaction and
+// refuses while any document is still pending, which leaves target building.
+// It is a no-op, returning false, for the active-generation top-up and
+// full-rebuild-in-place cases, which never pass wasBuilding=true.
 func (ix *Index) maybeActivate(ctx context.Context, target string, wasBuilding bool) (bool, error) {
 	if !wasBuilding {
 		return false, nil
 	}
-	ordinal, err := ix.ordinalForFingerprint(ctx, target)
-	if err != nil {
+	if err := ix.store.Activate(ctx, target); err != nil {
+		if errors.Is(err, sqlitevec.ErrUncovered) {
+			return false, nil
+		}
 		return false, err
 	}
-	info, err := ix.GenerationByID(ctx, ordinal)
-	if err != nil {
-		return false, err
-	}
-	if info.Missing != 0 {
-		return false, nil
-	}
-	if err := ix.activateGeneration(ctx, target); err != nil {
+	if err := ix.metaDeleteUnless(ctx, activeFullRebuildKey, target); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
-// activateGeneration retires whichever generation is currently active
-// (other than target, a no-op when there is none) and activates target,
-// in one transaction.
-func (ix *Index) activateGeneration(ctx context.Context, target string) error {
+// metaDeleteUnless deletes key unless it currently holds value.
+func (ix *Index) metaDeleteUnless(ctx context.Context, key, value string) error {
+	if _, err := ix.db.ExecContext(ctx,
+		`DELETE FROM `+ix.spec.MetaTable+` WHERE key = ? AND value != ?`, key, value,
+	); err != nil {
+		return fmt.Errorf("clear stale %s: %w", key, err)
+	}
+	return nil
+}
+
+// forceActivateGeneration retires whichever generation is currently active
+// (other than target) and activates target in one transaction, without kit's
+// coverage check. Operators use it through `embeddings activate --force` and
+// to reactivate a retired generation, which kit's Activate refuses.
+func (ix *Index) forceActivateGeneration(ctx context.Context, target string) error {
 	tx, err := ix.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin activate generation: %w", err)
