@@ -150,9 +150,7 @@ usually round-trip-bound rather than compute-bound — especially against a remo
 endpoint — so a few requests in flight at once multiply throughput. Servers that
 process one request at a time simply queue the extras; raise the value if your
 endpoint has spare parallel capacity, or set it to 1 to send one request at a
-time. Responses are requested in the compact base64 encoding automatically (with
-a transparent fallback for servers that reject or ignore `encoding_format`),
-which cuts response transfer roughly 4x on slow links.
+time.
 
 ### Role-aware task prefixes
 
@@ -297,26 +295,34 @@ The encoder POSTs to `<endpoint>/embeddings` with an OpenAI-style
 servers. A response whose embedding length doesn't match `dimension` is
 rejected. AgentsView also rejects non-finite components (`NaN` or infinity),
 JSON `null` components, and zero-norm vectors before they can be written to the
-index. Those failures are retried according to `max_retries`; if every attempt
-is invalid, the build stops and leaves the document pending.
+index. Such a response fails the request; the build stops and leaves the
+document pending for the next build.
 
-For Ollama on Apple Metal, `ollama_cpu_fallback = true` adds one explicit
-recovery attempt after those normal retries are exhausted. AgentsView keeps the
-valid vectors from the final Metal response and sends only the invalid inputs to
-Ollama's native `/api/embed` route with `options.num_gpu = 0`,
-`truncate = false`, and `keep_alive = "0s"`. This requests a CPU-only runner and
-asks Ollama to unload it immediately after the response. The configured endpoint
-must be an absolute HTTP(S) URL ending in `/v1`, from which AgentsView derives
-the native route while preserving proxy prefixes and query parameters.
+An endpoint must be an absolute HTTP(S) URL without credentials, a query string,
+or a fragment. Plain `http://` works for loopback, private-network addresses,
+and host names; an endpoint on a public IP address needs `https://`.
 
-Each CPU recovery can incur model-load and CPU-inference latency, followed by
-another model load for the next Metal request. AgentsView gates primary and
-fallback traffic only among fallback-enabled encoders whose derived native URL
-matches exactly. The process-local gate does not cover fallback-disabled server
-entries, differently spelled aliases or query strings, or external Ollama
-clients; reserve the endpoint for AgentsView during fallback, or configure every
-AgentsView entry for that Ollama instance with the same endpoint and opt-in.
-Canceled requests leave the gate queue promptly.
+For Ollama on Apple Metal, `ollama_cpu_fallback = true` recovers a response that
+contains invalid vectors instead of failing it. AgentsView keeps the valid
+vectors and sends only the invalid inputs to Ollama's native `/api/embed` route
+with `truncate = false`:
+
+1. The first request uses `keep_alive = "0s"`, so Ollama unloads the runner
+   after answering. AgentsView then waits up to 10 seconds for `/api/ps` to
+   stop listing the model.
+1. If the runner unloaded, one more request runs on a fresh Metal runner.
+1. If that still fails, one request runs with `options.num_gpu = 0` on the CPU.
+
+Recovery requests use a 30-minute timeout instead of the server's `timeout`,
+because a model reload or CPU pass can take minutes. The endpoint must end in
+`/v1`; AgentsView derives the native routes from it while keeping any proxy path
+prefix.
+
+Recoveries against the same Ollama instance run one at a time within the
+AgentsView process. Ordinary embedding requests are not paused during a recovery
+and can reload the Metal runner while it runs. Each CPU recovery can add
+model-load and CPU-inference latency, followed by another model load for the
+next Metal request. Canceled requests leave the recovery queue promptly.
 
 With Ollama 0.32.7 during diagnosis, the CPU request was observed to replace the
 Metal runner, unload after its response, and cause the next request to load a

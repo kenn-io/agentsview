@@ -28,13 +28,14 @@ var registerVecOnce sync.Once
 // them (see mirror.go) is still valid.
 //
 // The (doc_key, content_hash) index covers the stamp anti-join that
-// countPending and generationCoverageQuery run, so SQLite can answer "which
-// documents are not stamped at their current revision" from the index alone
-// instead of reading every mirror row's content. It is additive, and
-// prepareMirrorSchema replays MirrorDDL on every write-path open, so
-// existing vectors.db files gain it on their next build without bumping
-// MirrorSchemaVersion; a bump would drop and re-embed the whole corpus for
-// what is only an index addition.
+// countPending runs, so SQLite can answer "which documents are not stamped at
+// their current revision" from the index alone instead of reading every
+// mirror row's content. The (doc_key, content_hash, embed_gen) index does the
+// same for kit's sqlitevec Coverage, whose freshness rule also reads
+// embed_gen. Both are additive, and prepareMirrorSchema replays MirrorDDL on
+// every write-path open, so existing vectors.db files gain them on their next
+// build without bumping MirrorSchemaVersion; a bump would drop and re-embed
+// the whole corpus for what is only an index addition.
 const messageMirrorDDL = `
 CREATE TABLE IF NOT EXISTS vector_messages (
     doc_key      TEXT PRIMARY KEY,
@@ -52,6 +53,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_vector_messages_session_ordinal
     ON vector_messages(session_id, ordinal);
 CREATE INDEX IF NOT EXISTS idx_vector_messages_revision
     ON vector_messages(doc_key, content_hash);
+CREATE INDEX IF NOT EXISTS idx_vector_messages_coverage
+    ON vector_messages(doc_key, content_hash, embed_gen);
 CREATE TABLE IF NOT EXISTS vector_meta (
     key TEXT PRIMARY KEY, value TEXT NOT NULL
 );
@@ -74,6 +77,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_vector_recall_entries_identity
     ON vector_recall_entries(session_id, ordinal);
 CREATE INDEX IF NOT EXISTS idx_vector_recall_entries_revision
     ON vector_recall_entries(doc_key, content_hash);
+CREATE INDEX IF NOT EXISTS idx_vector_recall_entries_coverage
+    ON vector_recall_entries(doc_key, content_hash, embed_gen);
 CREATE TABLE IF NOT EXISTS vector_recall_meta (
     key TEXT PRIMARY KEY, value TEXT NOT NULL
 );
@@ -214,6 +219,8 @@ type GenerationInfo struct {
 	// "messages"). Populated by the CLI after fetching, not by the daemon
 	// API, since generation IDs are only unique within a store.
 	Store string `json:"store,omitempty"`
+
+	key string // kit generation key
 }
 
 // ChunkOverlap derives the SplitOptions.Overlap rune count from
@@ -526,6 +533,11 @@ func (ix *Index) EnsureGeneration(
 		return "", err
 	}
 	fingerprint := gen.Fingerprint()
+	if state != sqlitevec.StateRetired {
+		if err := ix.reviveRetiredGeneration(ctx, fingerprint, state); err != nil {
+			return "", err
+		}
+	}
 	if err := ix.store.EnsureGeneration(ctx, fingerprint, gen, state); err != nil {
 		return "", fmt.Errorf("ensure generation: %w", err)
 	}
@@ -535,21 +547,37 @@ func (ix *Index) EnsureGeneration(
 	return fingerprint, nil
 }
 
-// SetStateByID transitions the generation identified by its generations-table
-// ordinal (the CLI-facing ID) to state.
-func (ix *Index) SetStateByID(ctx context.Context, id int64, state sqlitevec.State) error {
+// reviveRetiredGeneration moves a retired generation named key back to state
+// so a build can top it up, for example after the configuration returns to an
+// earlier embedding space. kit's sqlitevec treats retirement as permanent
+// because Reclaim may have dropped the vectors; agentsview never reclaims, so
+// a retired generation still holds its vec0 table and stamps, and freshness
+// stamps keep stale documents pending. Revival stays local until kit offers
+// it.
+func (ix *Index) reviveRetiredGeneration(
+	ctx context.Context, key string, state sqlitevec.State,
+) error {
+	if _, err := ix.db.ExecContext(ctx,
+		`UPDATE `+ix.spec.generationsTable()+` SET state = ? WHERE gen_key = ? AND state = ?`,
+		string(state), key, string(sqlitevec.StateRetired),
+	); err != nil {
+		return fmt.Errorf("revive retired generation: %w", err)
+	}
+	return nil
+}
+
+// RetireByID retires the generation identified by its generations-table
+// ordinal (the CLI-facing ID).
+func (ix *Index) RetireByID(ctx context.Context, id int64) error {
 	if err := ix.requireWritable(); err != nil {
 		return err
 	}
-	res, err := ix.db.ExecContext(ctx,
-		`UPDATE `+ix.spec.generationsTable()+` SET state = ? WHERE ordinal = ?`, string(state), id)
+	info, err := ix.GenerationByID(ctx, id)
 	if err != nil {
-		return fmt.Errorf("set generation state: %w", err)
+		return err
 	}
-	if n, err := res.RowsAffected(); err != nil {
-		return fmt.Errorf("set generation state rows: %w", err)
-	} else if n == 0 {
-		return fmt.Errorf("generation %d: %w", id, ErrGenerationNotFound)
+	if err := ix.store.SetGenerationState(ctx, info.key, sqlitevec.StateRetired); err != nil {
+		return fmt.Errorf("retire generation: %w", err)
 	}
 	return nil
 }
@@ -557,46 +585,33 @@ func (ix *Index) SetStateByID(ctx context.Context, id int64, state sqlitevec.Sta
 // ActiveFingerprint returns the fingerprint of the generation currently in
 // the active state, if any.
 func (ix *Index) ActiveFingerprint(ctx context.Context) (string, bool, error) {
-	return ix.fingerprintByState(ctx, string(sqlitevec.StateActive))
-}
-
-// BuildingFingerprint returns the fingerprint of the generation currently in
-// the building state, if any.
-func (ix *Index) BuildingFingerprint(ctx context.Context) (string, bool, error) {
-	return ix.fingerprintByState(ctx, string(sqlitevec.StateBuilding))
-}
-
-func (ix *Index) fingerprintByState(ctx context.Context, state string) (string, bool, error) {
-	var fingerprint string
-	err := ix.db.QueryRowContext(ctx,
-		`SELECT gen_key FROM `+ix.spec.generationsTable()+` WHERE state = ? ORDER BY ordinal LIMIT 1`,
-		state).Scan(&fingerprint)
-	if err == sql.ErrNoRows {
-		return "", false, nil
-	}
+	active, ok, err := ix.store.ActiveGeneration(ctx)
 	if err != nil {
-		return "", false, fmt.Errorf("lookup %s generation: %w", state, err)
+		return "", false, err
 	}
-	return fingerprint, true, nil
+	return active.Key, ok, nil
 }
 
-// generationCoverageQuery is the exact join agentsview uses to report each
-// generation's coverage of the current mirror: Embedded counts stamps for
-// that generation ordinal whose revision still matches the mirror row's
-// current content_hash, Missing counts mirror documents with no such
-// matching-revision stamp. A stamp whose revision no longer matches (the
-// mirror row's content changed since it was embedded) counts as Missing
-// rather than Embedded, since kit's store treats it as pending re-embed.
-func (ix *Index) generationCoverageQuery() string {
-	return `
-SELECT g.ordinal, g.gen_key, g.fingerprint, g.dimension, g.state,
-       (SELECT COUNT(*) FROM ` + ix.spec.stampsTable() + ` s WHERE s.ordinal = g.ordinal
-          AND EXISTS (SELECT 1 FROM ` + ix.spec.DocsTable + ` d
-                      WHERE s.doc_key = d.doc_key AND s.revision = d.content_hash)),
-       (SELECT COUNT(*) FROM ` + ix.spec.DocsTable + ` d WHERE NOT EXISTS
-          (SELECT 1 FROM ` + ix.spec.stampsTable() + ` s
-           WHERE s.ordinal = g.ordinal AND s.doc_key = d.doc_key AND s.revision = d.content_hash))
-FROM ` + ix.spec.generationsTable() + ` g`
+// BuildingFingerprint returns the fingerprint of the oldest generation in the
+// building state, if any.
+func (ix *Index) BuildingFingerprint(ctx context.Context) (string, bool, error) {
+	generations, err := ix.store.Generations(ctx)
+	if err != nil {
+		return "", false, fmt.Errorf("lookup building generation: %w", err)
+	}
+	for _, generation := range generations {
+		if generation.State == sqlitevec.StateBuilding {
+			return generation.Key, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+// generationRowsQuery lists generation rows with their CLI-facing ordinal,
+// which kit's GenerationInfo does not carry. Coverage comes from kit.
+func (ix *Index) generationRowsQuery() string {
+	return `SELECT g.ordinal, g.gen_key, g.fingerprint, g.dimension, g.state FROM ` +
+		ix.spec.generationsTable() + ` g`
 }
 
 // Generations returns every generation with its coverage counts against the
@@ -608,7 +623,7 @@ func (ix *Index) Generations(ctx context.Context) ([]GenerationInfo, error) {
 	if ix.versionMismatch {
 		return nil, ErrMirrorVersionMismatch
 	}
-	rows, err := ix.db.QueryContext(ctx, ix.generationCoverageQuery()+` ORDER BY g.ordinal`)
+	rows, err := ix.db.QueryContext(ctx, ix.generationRowsQuery()+` ORDER BY g.ordinal`)
 	if err != nil {
 		return nil, fmt.Errorf("list generations: %w", err)
 	}
@@ -616,7 +631,7 @@ func (ix *Index) Generations(ctx context.Context) ([]GenerationInfo, error) {
 
 	var infos []GenerationInfo
 	for rows.Next() {
-		info, err := ix.scanGenerationInfo(ctx, rows)
+		info, err := scanGenerationRow(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -624,6 +639,14 @@ func (ix *Index) Generations(ctx context.Context) ([]GenerationInfo, error) {
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("list generations: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("list generations: %w", err)
+	}
+	for i := range infos {
+		if err := ix.fillGenerationInfo(ctx, &infos[i]); err != nil {
+			return nil, err
+		}
 	}
 	return infos, nil
 }
@@ -637,12 +660,15 @@ var ErrGenerationNotFound = errors.New("generation not found")
 // GenerationByID returns the single generation identified by its
 // generations-table ordinal.
 func (ix *Index) GenerationByID(ctx context.Context, id int64) (GenerationInfo, error) {
-	row := ix.db.QueryRowContext(ctx, ix.generationCoverageQuery()+` WHERE g.ordinal = ?`, id)
-	info, err := ix.scanGenerationInfo(ctx, row)
+	row := ix.db.QueryRowContext(ctx, ix.generationRowsQuery()+` WHERE g.ordinal = ?`, id)
+	info, err := scanGenerationRow(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return GenerationInfo{}, fmt.Errorf("generation %d: %w", id, ErrGenerationNotFound)
 	}
 	if err != nil {
+		return GenerationInfo{}, err
+	}
+	if err := ix.fillGenerationInfo(ctx, &info); err != nil {
 		return GenerationInfo{}, err
 	}
 	return info, nil
@@ -667,30 +693,39 @@ func (ix *Index) MissingEmbeddedDocs(
 }
 
 // genInfoScanner is the subset of *sql.Row / *sql.Rows Scan needs, letting
-// scanGenerationInfo serve both Generations (rows) and GenerationByID (row).
+// scanGenerationRow serve both Generations (rows) and GenerationByID (row).
 type genInfoScanner interface {
 	Scan(dest ...any) error
 }
 
-func (ix *Index) scanGenerationInfo(ctx context.Context, src genInfoScanner) (GenerationInfo, error) {
-	var (
-		info   GenerationInfo
-		genKey string
-	)
+func scanGenerationRow(src genInfoScanner) (GenerationInfo, error) {
+	var info GenerationInfo
 	if err := src.Scan(
-		&info.ID, &genKey, &info.Fingerprint, &info.Dimension, &info.State,
-		&info.Embedded, &info.Missing,
+		&info.ID, &info.key, &info.Fingerprint, &info.Dimension, &info.State,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return GenerationInfo{}, err
 		}
 		return GenerationInfo{}, fmt.Errorf("scan generation: %w", err)
 	}
+	return info, nil
+}
 
+// fillGenerationInfo adds kit's coverage of the current mirror and the
+// display model name. Embedded counts every document stamped at its current
+// revision, including stamp-only documents with no embeddable text; Missing
+// counts documents still pending for the generation.
+func (ix *Index) fillGenerationInfo(ctx context.Context, info *GenerationInfo) error {
+	coverage, err := ix.store.Coverage(ctx, info.key, "")
+	if err != nil {
+		return fmt.Errorf("generation %d coverage: %w", info.ID, err)
+	}
+	info.Embedded = coverage.Embedded + coverage.Skipped
+	info.Missing = coverage.Backlog
 	model, _, err := ix.metaGet(ctx, "gen_model:"+info.Fingerprint)
 	if err != nil {
-		return GenerationInfo{}, fmt.Errorf("lookup generation model: %w", err)
+		return fmt.Errorf("lookup generation model: %w", err)
 	}
 	info.Model = model
-	return info, nil
+	return nil
 }

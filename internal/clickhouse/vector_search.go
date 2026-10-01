@@ -111,7 +111,10 @@ func (v *vectorSearcher) SemanticSearch(
 	if err != nil {
 		return nil, err
 	}
-	docs := kitvec.RollupByDocument(chunks)
+	docs, err := kitvec.RollupByDocument(chunks)
+	if err != nil {
+		return nil, fmt.Errorf("rolling up vector hits: %w", err)
+	}
 	if limit >= 0 && len(docs) > limit {
 		docs = docs[:limit]
 	}

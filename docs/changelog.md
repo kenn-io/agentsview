@@ -91,6 +91,16 @@ The latest published release is
 - On Windows, each watched folder reserves 16 KiB for change notifications
   instead of 64 KiB. At the 8192-folder budget, that reduces buffer capacity
   from 512 MiB to 128 MiB.
+- Semantic search embedding requests now go through the shared Kenn embedding
+  client. Existing indexes keep working without re-embedding. Behavior that
+  changes:
+  - Requests use plain JSON float vectors instead of base64.
+  - A response with an invalid vector fails without retrying unless
+    `ollama_cpu_fallback` is on.
+  - Normal requests to an Ollama endpoint are no longer paused while
+    `ollama_cpu_fallback` recovers another request.
+  - Endpoints can no longer include a query string. Plain `http://` to a public
+    IP address now needs `https://`.
 - Remote session sync now uses HTTP only. Configure each remote host's daemon
   URL and bearer token; omitting `transport` selects HTTP. SSH sync and the
   `sync --user` and `sync --port` flags have been removed. `sync --host` selects

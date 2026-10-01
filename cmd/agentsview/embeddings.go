@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"go.kenn.io/kit/embedconfig"
+	"go.kenn.io/kit/embedmodel"
 	kitvec "go.kenn.io/kit/vector"
 
 	"go.kenn.io/agentsview/internal/apiclient"
@@ -292,34 +294,54 @@ func recallVectorGeneration(
 	return gen
 }
 
-// newVectorEncoder builds the OpenAI-compatible embeddings encoder for one
-// named server ("" means the default), combining the global model identity
-// and caller-selected role prefix with that server's transport settings.
+// vectorSpace describes gen's embedding space with kit's shared descriptor.
+// Generations stay keyed by agentsview's own fingerprint, which covers both
+// the vector space and the input recipe (unit scheme, chunk size and overlap,
+// corpus), so Legacy holds gen's fingerprint and existing generations keep
+// matching without a re-embed. A genuine model or recipe change produces a
+// different fingerprint and still cuts a new generation.
+func vectorSpace(c config.VectorEmbeddingsConfig, gen kitvec.Generation) embedmodel.Descriptor {
+	return embedmodel.Descriptor{
+		Model: c.EmbedModel(),
+		Roles: c.EmbedRoles(),
+		Input: embedconfig.InputLimits{
+			Recipe: fmt.Sprintf("agentsview/%s/max_input_chars=%s/chunk_overlap_chars=%s",
+				gen.Params["doc_unit_scheme"], gen.Params["max_input_chars"],
+				gen.Params["chunk_overlap_chars"]),
+			ContentID: gen.Params[vector.CorpusFingerprintParam],
+		},
+		Legacy: []string{gen.Fingerprint()},
+	}
+}
+
+// newVectorEncoder builds the embeddings encoder for role on one named
+// server ("" means the default), combining the global model identity with
+// that server's transport settings.
 func newVectorEncoder(
-	c config.VectorEmbeddingsConfig, serverName, inputPrefix string, retryRateLimits bool,
+	c config.VectorEmbeddingsConfig, serverName string, role embedconfig.Role, retryRateLimits bool,
 ) (kitvec.EncodeFunc, error) {
 	name, server, err := c.Server(serverName)
 	if err != nil {
 		return nil, err
 	}
-	timeout, err := time.ParseDuration(server.Timeout)
+	transport, err := server.EmbedTransport()
 	if err != nil {
-		return nil, fmt.Errorf(
-			"parsing [vector.embeddings.servers.%s] timeout %q: %w", name, server.Timeout, err)
+		return nil, fmt.Errorf("[vector.embeddings.servers.%s] %w", name, err)
 	}
-	return vector.NewEncoder(vector.EncoderConfig{
-		Endpoint:          server.Endpoint,
-		APIKey:            server.APIKey(),
-		OllamaCPUFallback: server.OllamaCPUFallback,
-		Model:             c.Model,
-		Dimension:         c.Dimension,
-		RequestDimensions: c.RequestDimensions,
-		Timeout:           timeout,
-		MaxRetries:        server.MaxRetries,
-		RetryRateLimits:   retryRateLimits,
-		InputPrefix:       inputPrefix,
-		InputSuffix:       c.InputSuffix,
-	}), nil
+	enc, err := vector.NewEncoder(vector.EncoderConfig{
+		Model:               c.EmbedModel(),
+		Roles:               c.EmbedRoles(),
+		Deployment:          server.EmbedDeployment(),
+		Transport:           transport,
+		APIKey:              server.APIKey(),
+		OllamaMetalRecovery: server.OllamaCPUFallback,
+		MaxRetries:          server.MaxRetries,
+		RetryRateLimits:     retryRateLimits,
+	}, role)
+	if err != nil {
+		return nil, fmt.Errorf("[vector.embeddings.servers.%s] %w", name, err)
+	}
+	return enc, nil
 }
 
 // newVectorQueryEncoder builds the default or named server encoder used only
@@ -328,7 +350,7 @@ func newVectorEncoder(
 func newVectorQueryEncoder(
 	c config.VectorEmbeddingsConfig, serverName string,
 ) (kitvec.EncodeFunc, error) {
-	return newVectorEncoder(c, serverName, c.QueryPrefix, false)
+	return newVectorEncoder(c, serverName, embedconfig.RoleQuery, false)
 }
 
 // newVectorDocumentEncoder builds the default or named server encoder used
@@ -338,7 +360,7 @@ func newVectorQueryEncoder(
 func newVectorDocumentEncoder(
 	c config.VectorEmbeddingsConfig, serverName string,
 ) (kitvec.EncodeFunc, error) {
-	return newVectorEncoder(c, serverName, c.DocumentPrefix, true)
+	return newVectorEncoder(c, serverName, embedconfig.RoleDocument, true)
 }
 
 // vectorDocumentEncoderSet builds one document encoder per configured
@@ -557,8 +579,14 @@ func embeddingManager(
 	cfg config.Config, store string,
 ) *vector.Manager {
 	if store != vector.RecallIndexSpec().Name {
-		return vector.NewManager(
-			ix, database, encoders, vectorGeneration(cfg.Vector.Embeddings),
+		gen := vectorGeneration(cfg.Vector.Embeddings)
+		target := vector.BuildTarget{
+			Source: database, Generation: gen,
+			Space: vectorSpace(cfg.Vector.Embeddings, gen),
+		}
+		return vector.NewResolvingManager(
+			ix, encoders, gen,
+			func(context.Context) (vector.BuildTarget, error) { return target, nil },
 		)
 	}
 	return vector.NewResolvingManager(
@@ -571,6 +599,7 @@ func embeddingManager(
 			)
 			return vector.BuildTarget{
 				Source: source, Generation: generation, CorpusRevision: revision,
+				Space: vectorSpace(cfg.Vector.Embeddings, generation),
 			}, err
 		},
 	)

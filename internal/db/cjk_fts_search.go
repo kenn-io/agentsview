@@ -5,7 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"unicode"
-	"unicode/utf8"
+
+	"go.kenn.io/kit/search/lexical"
 )
 
 type messageFTSQuery struct {
@@ -76,22 +77,11 @@ func (db *DB) prepareMessageFTSQuery(
 	return query, nil
 }
 
+// cjkScripts routes text containing Han, Hangul, Hiragana, or Katakana to the
+// CJK index. Only its script detection is used here; query preparation stays
+// with the simple tokenizer's jieba_query.
+var cjkScripts = lexical.EnableCharacterPhrase()
+
 func containsCJK(text string) bool {
-	for len(text) > 0 {
-		r, size := utf8.DecodeRuneInString(text)
-		if r == utf8.RuneError && size == 1 {
-			text = text[1:]
-			continue
-		}
-		if unicode.In(r,
-			unicode.Han,
-			unicode.Hangul,
-			unicode.Hiragana,
-			unicode.Katakana,
-		) {
-			return true
-		}
-		text = text[size:]
-	}
-	return false
+	return cjkScripts.IndexFor(text) == lexical.IndexCJK
 }

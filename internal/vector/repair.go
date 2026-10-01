@@ -348,7 +348,18 @@ func validateStoredEmbeddingBlob(blob []byte, dimension int) error {
 	if len(vector) != dimension {
 		return fmt.Errorf("invalid embedding dimension: got %d, want %d", len(vector), dimension)
 	}
-	return validateEmbedding(vector, 0)
+	var squaredNorm float64
+	for component, value := range vector {
+		f := float64(value)
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return fmt.Errorf("invalid embedding: non-finite component %d", component)
+		}
+		squaredNorm += f * f
+	}
+	if squaredNorm == 0 {
+		return errors.New("invalid embedding: zero norm")
+	}
+	return nil
 }
 
 // repairStore restricts kit's fill loop to the documents found by the repair

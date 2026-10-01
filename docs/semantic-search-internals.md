@@ -206,6 +206,27 @@ invalidating the generation.
   generation's stored fingerprint no longer matches the fingerprint computed
   from the current `[vector.embeddings]` config.
 
+Builds and the staleness gate compare fingerprints through kit's
+`embedmodel.Descriptor`. Its `Legacy` entry is the agentsview fingerprint above,
+so generations stored before agentsview adopted kit's embedding stack stay
+current and are not re-embedded. kit's own vector-space identity omits the input
+recipe (unit scheme, chunk size, overlap, corpus), so agentsview keeps keying
+new generations by its own fingerprint.
+
+Lifecycle bookkeeping uses kit's `sqlitevec` store: `Coverage` reports each
+generation's embedded and missing documents, and auto-activation calls
+`Activate`, which publishes a generation only when no document is pending and
+retires the previous active and building generations in the same transaction.
+Two operations stay local because kit treats a retired generation as permanent:
+
+- A build whose config returns to a retired generation's fingerprint revives it
+  and tops it up, reusing its stored vectors.
+- `embeddings activate <id>` can reactivate a retired generation, and `--force`
+  activates a generation that still has pending documents.
+
+Both rely on agentsview never calling kit's `Reclaim`, so a retired generation
+keeps its vectors until `vectors.db` is reset.
+
 ## Chunking and anchoring
 
 Unit content is chunked by kit's `Split` with `MaxRunes = max_input_chars`
@@ -261,22 +282,29 @@ Fill embeds every pending document (content changed, or never embedded, for the
 active generation). Within each scan page, up to `concurrency` (the building
 server's config, default 4) documents are split and encoded in parallel; saves
 into `vectors.db` stay serialized on one goroutine, preserving the single-writer
-model. Requests ask for `encoding_format: "base64"` (raw little-endian float32
-bytes, ~4x smaller than JSON float arrays); the encoder accepts either response
-shape, and a server that rejects the field downgrades the encoder to plain float
-requests for its lifetime. A document whose encode call fails with a permanent
-error — a 400, 413, or 422 whose error body describes the input itself, e.g. a
-token/context-length overflow or a content-policy rejection — is not retried in
-that fill or the next one: it's stamped for the generation with no vectors at
-its current `content_hash`, which marks it non-pending. It's logged (doc key
-plus the underlying error) and counted in the build summary's skipped count, but
-there is no separate poison list or periodic retry — the only way it embeds
-again is if the document's content itself changes later (a new `content_hash`,
-so a new pending row). Every other failure — 5xx, network errors, timeouts, 429,
-and any 4xx that looks like an auth, route, model, or media-type problem rather
-than a rejection of this document — aborts the fill and is retried on the next
-scheduled build, so a config mistake can't silently stamp the whole corpus as
-embedded-with-no-vectors.
+model. Requests go through kit's `embedclient`, which applies the role prefix
+and suffix, validates every vector, and retries 408, 429, 5xx, and network
+failures up to `max_retries` attempts. Document builds keep retrying a 429 until
+it clears or the build is canceled; 429s do not use up the `max_retries` budget
+for other failures in the same request.
+
+kit classifies every failed response from its status and the provider's error
+code or message. Only an input that is too long or refused by policy counts as a
+rejection of that document. A 400 kit cannot attribute to the input, such as a
+wrong model or an unsupported `dimensions` field, aborts the fill: documents
+stay pending and the active generation is unchanged. Every other failure — 401,
+403, 404, 5xx, network errors, timeouts, and 429 — also aborts the fill and is
+retried on the next scheduled build.
+
+When a rejection comes back for a request that batched several documents, the
+fill re-sends each document on its own to find the one at fault. A confirmed
+rejection is stamped for the generation with no vectors at its current
+`content_hash`, which marks it non-pending, and later builds of that generation
+do not send it again. It's logged (doc key plus the underlying error) and
+counted in the build summary's skipped count; there is no separate poison list
+or periodic retry. The document is attempted again only when its content changes
+(a new `content_hash`), a full rebuild clears the generation's stamps, or a
+config change creates a generation with a new fingerprint.
 
 ### Scope (`include_automated`)
 
