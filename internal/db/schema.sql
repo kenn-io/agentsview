@@ -1472,3 +1472,27 @@ CREATE TABLE IF NOT EXISTS conversation_session_changes (
     gap TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_conversation_session_changes_revision ON conversation_session_changes(revision);
+
+-- Durable local raw archive identity, inventory and accepted generations.
+CREATE TABLE IF NOT EXISTS raw_archive_roots (
+    id TEXT PRIMARY KEY, device_id TEXT NOT NULL, machine TEXT NOT NULL,
+    provider TEXT NOT NULL, original_path TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS raw_archive_files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    root_id TEXT NOT NULL REFERENCES raw_archive_roots(id), path TEXT NOT NULL,
+    sha256 TEXT NOT NULL, size INTEGER NOT NULL, mod_time_ns INTEGER NOT NULL,
+    covered INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(root_id,path,sha256)
+);
+CREATE TABLE IF NOT EXISTS raw_archive_sources (
+    manifest_id TEXT PRIMARY KEY, root_id TEXT NOT NULL REFERENCES raw_archive_roots(id),
+    source_key TEXT NOT NULL, original_path TEXT NOT NULL, canonical_json BLOB NOT NULL,
+    parent_receipt TEXT NOT NULL, receipt TEXT NOT NULL,
+    parse_error TEXT NOT NULL DEFAULT '', processing_version TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS raw_archive_heads (
+    root_id TEXT NOT NULL REFERENCES raw_archive_roots(id), source_key TEXT NOT NULL,
+    manifest_id TEXT NOT NULL REFERENCES raw_archive_sources(manifest_id),
+    PRIMARY KEY(root_id,source_key)
+);

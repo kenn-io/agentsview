@@ -6,6 +6,109 @@ description: All AgentsView commands, flags, and environment variables
 
 ## Commands
 
+### `agentsview archive`
+
+These commands are under development and are not in the latest release. They
+retain a closed capture from one machine, recover its original files, and
+reparse Claude and Codex sessions after the original directories are gone.
+Stop the daemon first. Archive writes refuse to run while another process owns
+the database.
+
+Set `AGENTSVIEW_DATA_DIR` to an isolated working archive. Seed its `sessions.db`
+from a consistent backup of your main archive to retain existing history and
+curation. Keep `telemetry-install-id`, `assets`, and any existing `artifacts`
+with it. Older or alternate databases can be retained as supplemental files;
+these commands do not merge them into the main database.
+
+Create an import specification:
+
+```json
+{
+  "device_id": "original-device",
+  "machine": "original-machine-label",
+  "roots": [
+    {
+      "id": "claude-home",
+      "provider": "claude",
+      "path": "./capture/claude",
+      "original_path": "/home/example/.claude",
+      "session_dirs": ["projects"]
+    },
+    {
+      "id": "codex-home",
+      "provider": "codex",
+      "path": "./capture/codex",
+      "original_path": "/home/example/.codex",
+      "session_dirs": ["sessions", "archived_sessions"]
+    },
+    {
+      "id": "other-files",
+      "provider": "files",
+      "path": "./capture/other-files",
+      "original_path": "/home/example/other-files"
+    }
+  ]
+}
+```
+
+`path` is relative to the specification file unless absolute. It can change
+when a drive moves. List only `session_dirs` present in the capture. Keep the
+device, root IDs, original paths, and machine label unchanged on retries. Inputs must be immutable captures with regular files;
+symlinks and special files are rejected. Take consistent SQLite snapshots before
+importing provider databases. Import does not stop provider writers or create a
+capture of their live directories.
+
+```bash
+agentsview archive import --spec ./import.json
+agentsview archive sources
+agentsview archive verify
+agentsview archive backup /media/backup/recovery-point
+agentsview archive restore /media/backup/recovery-point /new/archive
+AGENTSVIEW_DATA_DIR=/new/archive agentsview archive verify
+AGENTSVIEW_DATA_DIR=/new/archive agentsview archive reparse --all
+AGENTSVIEW_DATA_DIR=/new/archive agentsview archive extract /new/native-files
+```
+
+Each destination must not exist. Backup and restore reject destinations inside
+their source. `extract` writes native files under their root IDs, including
+supplemental files that have no parser. If an inventory contains different
+versions of one path, extraction fails without choosing a version or leaving a
+partial output.
+
+Import reports retained files and bytes separately from accepted provider
+sources. Files outside Claude and Codex capture plans remain supplemental. A
+conflicting source is retained as evidence and reported as a coverage gap; it
+never replaces the accepted source automatically. An import with gaps exits
+unsuccessfully after printing its report. No files are pruned automatically.
+
+`reparse --manifest ID` selects specific accepted sources; repeat the flag or
+supply comma-separated IDs. `--all` must be explicit. Reparsing clones SQLite
+once for the batch and uses the normal sync engine, including its large-Codex
+streaming path. It installs the replacement only after all selected sources
+succeed. Failed work leaves the previous browsable archive in place and records
+an error. Session ownership conflicts are reported without merging identities.
+Allow scratch space for the full database, its WAL, and materialized source
+files. `--scratch-bytes` limits each materialized source to 16 GiB by default;
+it does not cap total scratch usage.
+
+`verify` reads every retained object and accepted manifest. Backup verifies that
+closure, closes SQLite and the embedded raw vault, and holds the writer lock
+while copying them. It also copies assets, the ordinary artifact vault,
+configuration, and installation identity when present. It hashes the copy and
+writes `recovery.json`. Restore checks those hashes, SQLite integrity, and all
+accepted source objects before succeeding. An older database is rebuilt from its
+stored sessions with all live providers disabled; this makes it readable by the
+current version without reparsing original files. Keep the recovery point
+unchanged; use its restored copy as the working archive. Configuration and transcripts can
+contain credentials, so choose backup storage accordingly.
+
+Startup resync keeps archive-only sessions and their acceptance records without
+opening the raw vault. Reparsing them always requires an explicit command.
+Continuous capture, cross-device merging, team permissions, cloud storage, and
+online backup are outside this first implementation.
+
+______________________________________________________________________
+
 ### `agentsview capture`
 
 Capture and export the usage of one exact non-interactive automation run without

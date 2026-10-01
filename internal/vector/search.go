@@ -129,7 +129,10 @@ func (ix *Index) SearchPage(
 		return nil, false, fmt.Errorf("search: %w", err)
 	}
 	exhausted := len(hits) < limit
-	hits = kitvec.RollupByDocument(hits)
+	hits, err = kitvec.RollupByDocument(hits)
+	if err != nil {
+		return nil, false, fmt.Errorf("grouping search results: %w", err)
+	}
 	if len(hits) > limit {
 		hits = hits[:limit]
 	}

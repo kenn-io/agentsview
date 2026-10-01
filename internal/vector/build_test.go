@@ -642,7 +642,9 @@ func TestBuildEncoderErrorAbortsAndRetryResumesWithoutReembedding(t *testing.T) 
 		return out, nil
 	}
 
-	_, err := ix.Build(ctx, src, failOnBad, gen, BuildOptions{})
+	// Use explicit one-input requests so the first request commits before
+	// the second fails; shared batches cannot retain a partial response.
+	_, err := ix.Build(ctx, src, failOnBad, gen, BuildOptions{BatchSize: 1})
 	require.Error(t, err)
 
 	var stampCount int
