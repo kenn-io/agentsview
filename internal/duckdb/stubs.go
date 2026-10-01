@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/ledger"
 )
 
 func (s *Store) InsertInsight(ctx context.Context, _ db.Insight) (int64, error) {
@@ -43,4 +44,26 @@ func (s *Store) WriteSessionBatchAtomic(ctx context.Context,
 	_ []db.SessionBatchWrite, _ ...func() error,
 ) (db.SessionBatchResult, error) {
 	return db.SessionBatchResult{}, db.ErrReadOnly
+}
+
+func (s *Store) AppendLedgerSegment(_ context.Context, _ string, _ ledger.Segment, _ string) (ledger.PublishOutcome, error) {
+	return ledger.Published, db.ErrReadOnly
+}
+func (s *Store) LatestLedgerSeq(_ context.Context, _, _ string) (uint64, error) { return 0, nil }
+func (s *Store) ListLedgerSegments(_ context.Context, _, _ string, _ uint64, _ int) ([]ledger.Segment, error) {
+	return []ledger.Segment{}, nil
+}
+
+func (s *Store) LedgerSegmentSeqs(_ context.Context, _, _ string) ([]uint64, error) { return nil, nil }
+
+func (s *Store) LedgerStatus(_ context.Context, zone string) (ledger.ZoneStatus, error) {
+	return ledger.ZoneStatus{Zone: zone, Sources: map[string]uint64{}}, nil
+}
+
+func (s *Store) GetLedgerVerifyState(_ context.Context, _, _ string) (*ledger.VerifyCheckpoint, error) {
+	return nil, nil
+}
+
+func (s *Store) SaveLedgerVerifyState(_ context.Context, _, _ string, _ ledger.VerifyCheckpoint) error {
+	return db.ErrReadOnly
 }

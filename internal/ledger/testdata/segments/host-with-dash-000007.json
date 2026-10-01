@@ -1,0 +1,188 @@
+{
+  "source": "host-with-dash",
+  "source_seq": 7,
+  "checksum": 1192239657,
+  "created_at": "2026-01-02T05:04:05.500Z",
+  "events": [
+    {
+      "event_id": "0190f5a2-7c3e-7000-8000-000000000100",
+      "zone": "ops",
+      "source": "host-with-dash",
+      "source_seq": 1,
+      "timestamp": "2026-01-02T05:04:05Z",
+      "correlation_id": null,
+      "causation_id": null,
+      "actor_ref": "machine:host-b",
+      "object_ref": null,
+      "event_class": "ingest",
+      "payload_tier": "metadata_only",
+      "payload": {
+        "i": 0,
+        "subsystem": "sub-0",
+        "summary": "event 0"
+      }
+    },
+    {
+      "event_id": "0190f5a2-7c3e-7000-8000-000000000101",
+      "zone": "ops",
+      "source": "host-with-dash",
+      "source_seq": 2,
+      "timestamp": "2026-01-02T05:04:06.005Z",
+      "correlation_id": null,
+      "causation_id": null,
+      "actor_ref": "machine:host-b",
+      "object_ref": null,
+      "event_class": "route",
+      "payload_tier": "structured",
+      "payload": {
+        "i": 1,
+        "subsystem": "sub-1",
+        "summary": "event 1"
+      }
+    },
+    {
+      "event_id": "0190f5a2-7c3e-7000-8000-000000000102",
+      "zone": "ops",
+      "source": "host-with-dash",
+      "source_seq": 3,
+      "timestamp": "2026-01-02T05:04:07.000005Z",
+      "correlation_id": null,
+      "causation_id": null,
+      "actor_ref": "machine:host-b",
+      "object_ref": null,
+      "event_class": "decision",
+      "payload_tier": "confidential",
+      "payload": {
+        "i": 2,
+        "subsystem": "sub-2",
+        "summary": "event 2"
+      }
+    },
+    {
+      "event_id": "0190f5a2-7c3e-7000-8000-000000000103",
+      "zone": "ops",
+      "source": "host-with-dash",
+      "source_seq": 4,
+      "timestamp": "2026-01-02T05:04:08.000000005Z",
+      "correlation_id": null,
+      "causation_id": null,
+      "actor_ref": "machine:host-b",
+      "object_ref": null,
+      "event_class": "state_change",
+      "payload_tier": "metadata_only",
+      "payload": {
+        "i": 3,
+        "subsystem": "sub-0",
+        "summary": "event 3"
+      }
+    },
+    {
+      "event_id": "0190f5a2-7c3e-7000-8000-000000000104",
+      "zone": "ops",
+      "source": "host-with-dash",
+      "source_seq": 5,
+      "timestamp": "2026-01-02T05:04:09.999999999Z",
+      "correlation_id": null,
+      "causation_id": null,
+      "actor_ref": "machine:host-b",
+      "object_ref": null,
+      "event_class": "claim",
+      "payload_tier": "structured",
+      "payload": {
+        "i": 4,
+        "subsystem": "sub-1",
+        "summary": "event 4"
+      }
+    },
+    {
+      "event_id": "0190f5a2-7c3e-7000-8000-000000000105",
+      "zone": "ops",
+      "source": "host-with-dash",
+      "source_seq": 6,
+      "timestamp": "2026-01-02T05:04:10Z",
+      "correlation_id": null,
+      "causation_id": null,
+      "actor_ref": "machine:host-b",
+      "object_ref": null,
+      "event_class": "delivery",
+      "payload_tier": "confidential",
+      "payload": {
+        "i": 5,
+        "subsystem": "sub-2",
+        "summary": "event 5"
+      }
+    },
+    {
+      "event_id": "0190f5a2-7c3e-7000-8000-000000000106",
+      "zone": "ops",
+      "source": "host-with-dash",
+      "source_seq": 7,
+      "timestamp": "2026-01-02T05:04:11.005Z",
+      "correlation_id": null,
+      "causation_id": null,
+      "actor_ref": "machine:host-b",
+      "object_ref": null,
+      "event_class": "projection",
+      "payload_tier": "metadata_only",
+      "payload": {
+        "i": 6,
+        "subsystem": "sub-0",
+        "summary": "event 6"
+      }
+    },
+    {
+      "event_id": "0190f5a2-7c3e-7000-8000-000000000107",
+      "zone": "ops",
+      "source": "host-with-dash",
+      "source_seq": 8,
+      "timestamp": "2026-01-02T05:04:12.000005Z",
+      "correlation_id": null,
+      "causation_id": null,
+      "actor_ref": "machine:host-b",
+      "object_ref": null,
+      "event_class": "health",
+      "payload_tier": "structured",
+      "payload": {
+        "i": 7,
+        "subsystem": "sub-1",
+        "summary": "event 7"
+      }
+    },
+    {
+      "event_id": "0190f5a2-7c3e-7000-8000-000000000108",
+      "zone": "ops",
+      "source": "host-with-dash",
+      "source_seq": 9,
+      "timestamp": "2026-01-02T05:04:13.000000005Z",
+      "correlation_id": null,
+      "causation_id": null,
+      "actor_ref": "machine:host-b",
+      "object_ref": null,
+      "event_class": "approval",
+      "payload_tier": "confidential",
+      "payload": {
+        "i": 8,
+        "subsystem": "sub-2",
+        "summary": "event 8"
+      }
+    },
+    {
+      "event_id": "0190f5a2-7c3e-7000-8000-000000000109",
+      "zone": "ops",
+      "source": "host-with-dash",
+      "source_seq": 10,
+      "timestamp": "2026-01-02T05:04:14.999999999Z",
+      "correlation_id": null,
+      "causation_id": null,
+      "actor_ref": "machine:host-b",
+      "object_ref": null,
+      "event_class": "note_meta",
+      "payload_tier": "metadata_only",
+      "payload": {
+        "i": 9,
+        "subsystem": "sub-0",
+        "summary": "event 9"
+      }
+    }
+  ]
+}
