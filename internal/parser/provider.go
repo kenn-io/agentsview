@@ -925,6 +925,12 @@ type ChangedPathRequest struct {
 type StoredMemberFreshness struct {
 	Path             string
 	CoveredThroughNS int64
+	// FingerprintHash is the member's committed stored fingerprint hash,
+	// opaque to the caller; providers that compare a change token instead of
+	// a watermark read it. An empty value never vouches for a member.
+	FingerprintHash string
+	// Suppressed means the archive refuses writes for this member (trashed or permanently deleted), so a changed-path listing omits it whatever its token or watermark.
+	Suppressed bool
 }
 
 // StoredMemberFreshnessPager returns stored freshness rows strictly after
@@ -934,6 +940,27 @@ type StoredMemberFreshness struct {
 type StoredMemberFreshnessPager func(
 	ctx context.Context, afterPath string, limit int,
 ) ([]StoredMemberFreshness, bool, error)
+
+// StoredMemberFreshnessContainerResolver maps a changed path to the shared
+// container whose stored member freshness a changed-path listing merges with.
+type StoredMemberFreshnessContainerResolver interface {
+	StoredMemberFreshnessContainer(path string) (string, bool)
+}
+
+// ResolveStoredMemberFreshnessContainer returns the container for path when
+// provider declares Source.StoredMemberFreshnessListing.
+func ResolveStoredMemberFreshnessContainer(
+	provider Provider, path string,
+) (string, bool) {
+	if provider.Capabilities().Source.StoredMemberFreshnessListing != CapabilitySupported {
+		return "", false
+	}
+	resolver, ok := provider.(StoredMemberFreshnessContainerResolver)
+	if !ok {
+		return "", false
+	}
+	return resolver.StoredMemberFreshnessContainer(path)
+}
 
 // FindSourceRequest contains lookup inputs and persisted source hints for
 // provider-owned source resolution. RawSessionID and FullSessionID identify the

@@ -95,6 +95,15 @@ type SourceCapabilities struct {
 	// they opt in; the sync engine uses the flag instead of a hardcoded
 	// Claude/Codex whitelist.
 	S3Discovery CapabilitySupport
+	// StoredMemberFreshnessListing means the provider answers a changed-path
+	// event for a shared container with only the members whose change marker
+	// ChangedPathRequest.StoredMemberFreshnessPage does not cover, and resolves
+	// that container through ResolveStoredMemberFreshnessContainer. The listing
+	// must read one database snapshot: the engine skips its post-listing
+	// re-list for these providers, since a commit during the listing arrives as
+	// its own watcher event. The OpenCode family receives the pager through its
+	// own engine route; other providers receive it only by declaring this.
+	StoredMemberFreshnessListing CapabilitySupport
 }
 
 // ContentCapabilities declares optional normalized content fields a provider

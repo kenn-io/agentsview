@@ -47,6 +47,14 @@ type multiSessionMatch struct {
 	DiscoveryFingerprint   *SourceFingerprint
 }
 
+// multiSessionMemberToken is one member's virtual path, raw ID, and cheap
+// change token.
+type multiSessionMemberToken struct {
+	Path     string
+	MemberID string
+	Token    string
+}
+
 // classifySQLiteContainerPath maps a stored or changed path to its database
 // container and member, shared by every multi-session provider whose
 // sessions live in one shared SQLite database (Zed, Shelley, Omnigent).
@@ -185,6 +193,13 @@ type multiSessionConfig struct {
 	// changed container during a single tombstone pass. Optional; when nil the
 	// base falls back to calling memberPresent per member.
 	batchMemberPresence func(ctx context.Context, container multiSessionSource, members []multiSessionSource) map[string]bool
+	// memberTokens streams every listable member of one container in ascending
+	// virtual-path order with its change token. Nil keeps every changed-path
+	// event on the whole-container source.
+	memberTokens func(ctx context.Context, container multiSessionSource, yield func(multiSessionMemberToken) error) error
+	// storedMemberToken recovers the comparable token from a stored
+	// fingerprint hash; false when the hash cannot vouch.
+	storedMemberToken func(fileHash string) (string, bool)
 	// freshStoredMember reports whether a stored member source still resolves to
 	// the requested raw session ID under RequireFreshSource. Providers with
 	// positional member IDs (Aider's run index) set this so a stored path whose
@@ -326,6 +341,16 @@ func WithBatchMemberPresence(
 	return func(c *multiSessionConfig) { c.batchMemberPresence = fn }
 }
 
+func WithMemberChangeTokens(
+	list func(context.Context, multiSessionSource, func(multiSessionMemberToken) error) error,
+	stored func(string) (string, bool),
+) MultiSessionOption {
+	return func(c *multiSessionConfig) {
+		c.memberTokens = list
+		c.storedMemberToken = stored
+	}
+}
+
 func WithFreshStoredMember(
 	fn func(src multiSessionSource, rawID string) bool,
 ) MultiSessionOption {
@@ -360,6 +385,8 @@ func NewMultiSessionContainerSourceSet(
 		panic("multi-session container: missing WithContainerParse, WithContextContainerParseEach, or WithContainerParseOutcome")
 	case cfg.parseMember == nil && cfg.parseMemberContext == nil:
 		panic("multi-session container: missing WithMemberParse")
+	case (cfg.memberTokens == nil) != (cfg.storedMemberToken == nil):
+		panic("multi-session container: WithMemberChangeTokens needs both callbacks")
 	}
 	return multiSessionContainerSourceSet{
 		agent: agent,
@@ -397,6 +424,24 @@ func (s multiSessionContainerSourceSet) ReconciliationContainer(
 				match.Container != "" {
 				return match.Container, true
 			}
+		}
+	}
+	return "", false
+}
+
+// StoredMemberFreshnessContainer resolves the container a changed path names,
+// with the classification SourcesForChangedPath applies, for providers
+// configured with a member change-token listing.
+func (s multiSessionContainerSourceSet) StoredMemberFreshnessContainer(
+	path string,
+) (string, bool) {
+	if s.cfg.memberTokens == nil {
+		return "", false
+	}
+	for _, root := range s.roots {
+		if match, ok := s.cfg.classifyPath(root, path, true); ok &&
+			match.Container != "" && match.MemberID == "" {
+			return match.Container, true
 		}
 	}
 	return "", false
@@ -494,6 +539,13 @@ func (s multiSessionContainerSourceSet) SourcesForChangedPath(
 			continue
 		}
 		tombstones := s.changedPathTombstones(ctx, root, match, req.StoredSourcePaths)
+		members, listed, err := s.changedTokenMembers(ctx, root, match, req)
+		if err != nil {
+			return nil, err
+		}
+		if listed {
+			return append(members, tombstones...), nil
+		}
 		sources := make([]SourceRef, 0, 1+len(tombstones))
 		if req.EventKind != "remove" ||
 			len(tombstones) == 0 ||
@@ -640,6 +692,87 @@ func (s multiSessionContainerSourceSet) changedPathTombstones(ctx context.Contex
 		tombstones = append(tombstones, s.sourceRef(root, match))
 	}
 	return tombstones
+}
+
+// changedTokenMembers answers a write to a present container with only the
+// members whose listed change token differs from the one in their stored
+// hash. listed=false keeps the whole-container source: no listing seam or
+// stored authority, a member or removal event, a missing container, an
+// empty stored side (the complete parse reconciles membership), or a failed
+// listing or pager. Suppressed rows alone count as an empty stored side.
+func (s multiSessionContainerSourceSet) changedTokenMembers(
+	ctx context.Context, root string, match multiSessionMatch,
+	req ChangedPathRequest,
+) ([]SourceRef, bool, error) {
+	if s.cfg.memberTokens == nil || !req.AllowWatermarkOnlySources ||
+		req.StoredMemberFreshnessPage == nil || match.MemberID != "" ||
+		match.Container == "" || req.EventKind == "remove" ||
+		!IsRegularFile(match.Container) {
+		return nil, false, nil
+	}
+	cursor, found, err := firstUnsuppressedStoredPage(ctx, req.StoredMemberFreshnessPage)
+	if err != nil || !found {
+		return nil, false, ctx.Err()
+	}
+	var sources []SourceRef
+	err = s.cfg.memberTokens(ctx, match.toSource(root),
+		func(member multiSessionMemberToken) error {
+			row, ok, err := cursor.lookup(ctx, member.Path)
+			if err != nil {
+				return err
+			}
+			if ok && row.Suppressed {
+				return nil
+			}
+			if ok {
+				if stored, usable := s.cfg.storedMemberToken(row.FingerprintHash); usable && stored == member.Token {
+					return nil
+				}
+			}
+			sources = append(sources, s.sourceRef(root, multiSessionMatch{
+				Path:      member.Path,
+				Container: match.Container,
+				MemberID:  member.MemberID,
+			}))
+			return nil
+		})
+	if err != nil {
+		return nil, false, ctx.Err()
+	}
+	return sources, true, nil
+}
+
+// firstUnsuppressedStoredPage pages the stored side, one page at a time, until
+// a row that is not Suppressed turns up. It returns a cursor positioned at the
+// start of the stored side, reusing the first page when that page holds one.
+func firstUnsuppressedStoredPage(
+	ctx context.Context, pager StoredMemberFreshnessPager,
+) (storedMemberFreshnessCursor, bool, error) {
+	after := ""
+	for {
+		rows, done, err := pager(ctx, after, storedMemberFreshnessPageSize)
+		if err != nil {
+			return storedMemberFreshnessCursor{}, false, err
+		}
+		for _, row := range rows {
+			if row.Suppressed {
+				continue
+			}
+			if after != "" {
+				return storedMemberFreshnessCursor{pager: pager}, true, nil
+			}
+			return storedMemberFreshnessCursor{
+				pager: pager,
+				rows:  rows,
+				after: rows[len(rows)-1].Path,
+				done:  done,
+			}, true, nil
+		}
+		if done || len(rows) == 0 {
+			return storedMemberFreshnessCursor{}, false, nil
+		}
+		after = rows[len(rows)-1].Path
+	}
 }
 
 func (s multiSessionContainerSourceSet) batchMemberPresence(ctx context.Context,

@@ -357,7 +357,7 @@ func TestStoredMemberFreshnessPagerEmitsOnlyVouchableRows(t *testing.T) {
 	}))
 
 	e := &Engine{db: database, machine: "local"}
-	rows, done, err := e.storedMemberFreshnessPager(container)(
+	rows, done, err := e.storedMemberFreshnessPager(container, "opencode:")(
 		t.Context(), "", 10,
 	)
 	require.NoError(t, err)
@@ -395,7 +395,7 @@ func TestStoredMemberFreshnessPagerAdvancesPastAllStalePages(t *testing.T) {
 	seedCoveredVirtualMember(t, database, "opencode:c", container+"#c", 500)
 
 	e := &Engine{db: database, machine: "local"}
-	rows, done, err := e.storedMemberFreshnessPager(container)(
+	rows, done, err := e.storedMemberFreshnessPager(container, "opencode:")(
 		t.Context(), "", 2,
 	)
 	require.NoError(t, err)

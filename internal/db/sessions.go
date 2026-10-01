@@ -3469,6 +3469,11 @@ type VirtualContainerMemberFreshness struct {
 	MTimeNS     int64
 	DataVersion int
 	Hash        string
+	// Trashed reports that the newest-mtime row is in the user trash.
+	Trashed bool
+	// Excluded reports a permanently deleted member: no sessions row, only an
+	// excluded_sessions ID, so the other fields are zero.
+	Excluded bool
 }
 
 // VirtualContainerMemberFreshnessRow pairs one virtual member path with its
@@ -3483,7 +3488,10 @@ type VirtualContainerMemberFreshnessRow struct {
 // at containerPath ("<containerPath>#<sessionID>"), excluding source-missing
 // tombstones: at most limit member paths strictly after afterPath, in
 // ascending path order, and whether the container's stored membership is
-// exhausted. Changed-path classification merges a streamed watermark-only
+// exhausted. Permanently deleted members whose excluded_sessions ID is
+// idPrefix plus a raw ID merge into the same order at
+// "<containerPath>#<raw ID>", marked Excluded; an empty idPrefix skips them.
+// Changed-path classification merges a streamed watermark-only
 // listing against these pages, so a one-session write flows one candidate
 // into the sync pipeline while peak memory stays one page — never the
 // container's full membership.
@@ -3498,7 +3506,7 @@ type VirtualContainerMemberFreshnessRow struct {
 // and SQLite's bare-column-from-the-extreme-row guarantee only holds with
 // exactly one min/max aggregate in the query.
 func (db *DB) ListVirtualContainerMemberFreshnessPage(
-	ctx context.Context, containerPath, afterPath string, limit int,
+	ctx context.Context, containerPath, idPrefix, afterPath string, limit int,
 ) ([]VirtualContainerMemberFreshnessRow, bool, error) {
 	if containerPath == "" || limit <= 0 {
 		return nil, true, nil
@@ -3536,13 +3544,34 @@ func (db *DB) ListVirtualContainerMemberFreshnessPage(
 	if err := pathRows.Err(); err != nil {
 		return nil, false, err
 	}
-	if len(paths) == 0 {
+	excluded, err := db.listExcludedContainerMemberPaths(
+		ctx, containerPath, idPrefix, afterPath, limit,
+	)
+	if err != nil {
+		return nil, false, err
+	}
+	done := len(paths) < limit && len(excluded) < limit
+	merged, excludedSet := mergeContainerMemberPaths(paths, excluded)
+	if len(merged) > limit {
+		merged = merged[:limit]
+		done = false
+	}
+	if len(merged) == 0 {
 		return nil, true, nil
 	}
-	done := len(paths) < limit
+	paths = paths[:0]
+	for _, path := range merged {
+		if _, ok := excludedSet[path]; !ok {
+			paths = append(paths, path)
+		}
+	}
+	if len(paths) == 0 {
+		return excludedContainerMemberRows(merged), done, nil
+	}
 
 	rows, err := db.getReader().QueryContext(ctx,
-		"SELECT file_path, file_mtime, data_version, file_hash FROM sessions"+
+		"SELECT file_path, file_mtime, data_version, file_hash,"+
+			" deleted_at IS NOT NULL FROM sessions"+
 			" WHERE file_path >= ? AND file_path <= ?"+notMissing,
 		paths[0], paths[len(paths)-1],
 	)
@@ -3557,7 +3586,8 @@ func (db *DB) ListVirtualContainerMemberFreshnessPage(
 		var path string
 		var mtime, version sql.NullInt64
 		var hash sql.NullString
-		if err := rows.Scan(&path, &mtime, &version, &hash); err != nil {
+		var trashed bool
+		if err := rows.Scan(&path, &mtime, &version, &hash, &trashed); err != nil {
 			return nil, false, fmt.Errorf(
 				"scanning container member freshness %s: %w",
 				containerPath, err,
@@ -3567,6 +3597,7 @@ func (db *DB) ListVirtualContainerMemberFreshnessPage(
 			MTimeNS:     mtime.Int64,
 			DataVersion: int(version.Int64),
 			Hash:        hash.String,
+			Trashed:     trashed,
 		}
 		member, seen := members[path]
 		if !seen {
@@ -3576,6 +3607,7 @@ func (db *DB) ListVirtualContainerMemberFreshnessPage(
 		if row.MTimeNS > member.MTimeNS {
 			member.MTimeNS = row.MTimeNS
 			member.Hash = row.Hash
+			member.Trashed = row.Trashed
 		}
 		if row.DataVersion < member.DataVersion {
 			member.DataVersion = row.DataVersion
@@ -3585,14 +3617,105 @@ func (db *DB) ListVirtualContainerMemberFreshnessPage(
 	if err := rows.Err(); err != nil {
 		return nil, false, err
 	}
-	page := make([]VirtualContainerMemberFreshnessRow, 0, len(paths))
-	for _, path := range paths {
+	page := make([]VirtualContainerMemberFreshnessRow, 0, len(merged))
+	for _, path := range merged {
+		member, stored := members[path]
+		if _, ok := excludedSet[path]; ok && !stored {
+			member = VirtualContainerMemberFreshness{Excluded: true}
+		}
 		page = append(page, VirtualContainerMemberFreshnessRow{
 			Path:                            path,
-			VirtualContainerMemberFreshness: members[path],
+			VirtualContainerMemberFreshness: member,
 		})
 	}
 	return page, done, nil
+}
+
+// listExcludedContainerMemberPaths returns at most limit virtual paths
+// "<containerPath>#<raw ID>" strictly after afterPath, in ascending order,
+// for excluded_sessions IDs spelled idPrefix plus a raw ID. The ID range
+// rides the primary key, and raw-ID order equals virtual-path order.
+func (db *DB) listExcludedContainerMemberPaths(
+	ctx context.Context, containerPath, idPrefix, afterPath string, limit int,
+) ([]string, error) {
+	if idPrefix == "" {
+		return nil, nil
+	}
+	memberPrefix := containerPath + "#"
+	lower, lowerOp := idPrefix, ">="
+	if raw, ok := strings.CutPrefix(afterPath, memberPrefix); ok && raw != "" {
+		lower, lowerOp = idPrefix+raw, ">"
+	} else if afterPath >= containerPath+"$" {
+		return nil, nil
+	}
+	last := idPrefix[len(idPrefix)-1]
+	upper := idPrefix[:len(idPrefix)-1] + string(rune(last+1))
+	rows, err := db.getReader().QueryContext(ctx,
+		"SELECT id FROM excluded_sessions WHERE id "+lowerOp+" ? AND id < ?"+
+			" ORDER BY id LIMIT ?",
+		lower, upper, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"listing excluded container members %s: %w", containerPath, err,
+		)
+	}
+	defer rows.Close()
+	var paths []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf(
+				"scanning excluded container member %s: %w", containerPath, err,
+			)
+		}
+		if raw := strings.TrimPrefix(id, idPrefix); raw != "" {
+			paths = append(paths, memberPrefix+raw)
+		}
+	}
+	return paths, rows.Err()
+}
+
+// mergeContainerMemberPaths merges two ascending path lists without
+// duplicates and reports which paths came from the excluded list.
+func mergeContainerMemberPaths(
+	stored, excluded []string,
+) ([]string, map[string]struct{}) {
+	excludedSet := make(map[string]struct{}, len(excluded))
+	for _, path := range excluded {
+		excludedSet[path] = struct{}{}
+	}
+	merged := make([]string, 0, len(stored)+len(excluded))
+	i, j := 0, 0
+	for i < len(stored) && j < len(excluded) {
+		switch {
+		case stored[i] < excluded[j]:
+			merged = append(merged, stored[i])
+			i++
+		case excluded[j] < stored[i]:
+			merged = append(merged, excluded[j])
+			j++
+		default:
+			merged = append(merged, stored[i])
+			i++
+			j++
+		}
+	}
+	if i < len(stored) {
+		merged = append(merged, stored[i:]...)
+	}
+	if j < len(excluded) {
+		merged = append(merged, excluded[j:]...)
+	}
+	return merged, excludedSet
+}
+
+func excludedContainerMemberRows(paths []string) []VirtualContainerMemberFreshnessRow {
+	page := make([]VirtualContainerMemberFreshnessRow, 0, len(paths))
+	for _, path := range paths {
+		page = append(page, VirtualContainerMemberFreshnessRow{Path: path, Excluded: true})
+	}
+	return page
 }
 
 // GetProjectByPath returns the stored project for the newest

@@ -672,6 +672,9 @@ type Engine struct {
 	// parseAdmissionObserver is a cardinality-test seam; result admission
 	// reports results seen and still held for the current source.
 	parseAdmissionObserver func(yielded, retained int)
+	// changedPathListedHook is a test seam called after a changed-path
+	// listing and before its re-list check; nil in production.
+	changedPathListedHook func(path string)
 	// claudeProjectSessionFiles is an observability seam for cardinality tests
 	// around duplicate-session discovery.
 	claudeProjectSessionFiles func(string) []parser.DiscoveredFile
@@ -2050,9 +2053,16 @@ func (e *Engine) classifyProviderChangedPath(
 		// caller's stored authority only while the container provably has
 		// not changed across the listing window, and the pass-level capture
 		// guard does not exist yet at classification time.
+		watermarkSingleSnapshot := false
 		watermarkContainer := openCodeContainerPathForChangedPathEvent(
 			agentType, roots, path,
 		)
+		if watermarkContainer == "" {
+			watermarkContainer, _ = parser.ResolveStoredMemberFreshnessContainer(
+				provider, path,
+			)
+			watermarkSingleSnapshot = watermarkContainer != ""
+		}
 		var watermarkPreState parser.SQLiteContainerState
 		watermarkPreStateOK := false
 		if watermarkContainer != "" {
@@ -2071,7 +2081,7 @@ func (e *Engine) classifyProviderChangedPath(
 			}
 			if watermarkContainer != "" && watermarkPreStateOK &&
 				!e.forceParse && e.pathRewriter == nil {
-				request.StoredMemberFreshnessPage = e.storedMemberFreshnessPager(watermarkContainer)
+				request.StoredMemberFreshnessPage = e.storedMemberFreshnessPager(watermarkContainer, def.IDPrefix)
 			}
 			if provider.Capabilities().Source.StoredSourceHints == parser.CapabilitySupported {
 				if resolver, ok := provider.(parser.StoredSourceHintScopeProvider); ok {
@@ -2100,7 +2110,11 @@ func (e *Engine) classifyProviderChangedPath(
 				ctx,
 				request,
 			)
-			if err == nil && request.StoredMemberFreshnessPage != nil {
+			if e.changedPathListedHook != nil {
+				e.changedPathListedHook(path)
+			}
+			// A single-snapshot listing needs no re-list; a later commit arrives as its own watcher event.
+			if err == nil && request.StoredMemberFreshnessPage != nil && !watermarkSingleSnapshot {
 				if post, ok := statSQLiteContainerState(watermarkContainer); !ok ||
 					post != watermarkPreState {
 					// The container changed while the merged listing ran: a

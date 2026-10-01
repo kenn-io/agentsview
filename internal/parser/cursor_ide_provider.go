@@ -34,6 +34,7 @@ func newCursorIDEProviderFactory(def AgentDef) ProviderFactory {
 				WithContextMemberParse(cursorIDEParseMember),
 				WithMemberPresence(cursorIDEMemberPresent),
 				WithBatchMemberPresence(cursorIDEBatchMemberPresent),
+				WithMemberChangeTokens(cursorIDEMemberTokens, cursorIDEStoredComposerToken),
 			)
 		},
 	)
@@ -250,6 +251,25 @@ func cursorIDEBatchMemberPresent(ctx context.Context,
 	return present
 }
 
+// cursorIDEMemberTokens lists composers for the base's changed-path merge.
+func cursorIDEMemberTokens(
+	ctx context.Context, src multiSessionSource,
+	yield func(multiSessionMemberToken) error,
+) error {
+	conn, err := openCursorIDEDB(src.Container)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	return listCursorIDEComposerTokens(ctx, conn, func(id, token string) error {
+		return yield(multiSessionMemberToken{
+			Path:     VirtualSourcePath(src.Container, id),
+			MemberID: id,
+			Token:    token,
+		})
+	})
+}
+
 func cursorIDEParseMember(
 	ctx context.Context, src multiSessionSource, req ParseRequest,
 ) (*ParseResult, error) {
@@ -335,6 +355,8 @@ func cursorIDEProviderCapabilities() Capabilities {
 		CapabilitySupported,
 	)
 	source.PersistentArchive = CapabilitySupported
+	// Watcher events parse only composers whose document changed; PeriodicReconcile catches the rest.
+	source.StoredMemberFreshnessListing = CapabilitySupported
 	return Capabilities{
 		Source: source,
 		Content: ContentCapabilities{

@@ -386,6 +386,10 @@ var Registry = []AgentDef{
 		// encryption keys. Remote sync stays disabled until there is an
 		// allowlisted export schema, matching Omnigent's chat.db precedent.
 		RemoteSyncExcluded: true,
+		// Watcher events parse only composers whose composerData document
+		// changed, so bubble-only edits rely on the scheduled
+		// fingerprint-gated container reparse.
+		PeriodicReconcile: true,
 	},
 	{
 		Type:        AgentAmp,

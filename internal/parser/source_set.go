@@ -148,6 +148,16 @@ func (p *SourceSetProvider) StoredSourceHintScopes(
 	return resolver.StoredSourceHintScopes(req)
 }
 
+func (p *SourceSetProvider) StoredMemberFreshnessContainer(
+	path string,
+) (string, bool) {
+	resolver, ok := p.sources.(StoredMemberFreshnessContainerResolver)
+	if !ok {
+		return "", false
+	}
+	return resolver.StoredMemberFreshnessContainer(path)
+}
+
 func (p *SourceSetProvider) FindSource(
 	ctx context.Context,
 	req FindSourceRequest,

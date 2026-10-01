@@ -540,7 +540,13 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // Kimi state titles, Gemini summaries, and legacy Kiro titles. Titles no longer
 // replace the first message. Re-parse unchanged sources so existing sessions
 // pick up their titles.)
-const dataVersion = 120
+// (121: Cursor IDE stored hashes carry a composer-document digest ahead of the
+// full content digest, which the watcher compares to skip unchanged
+// composers. The bump reparses the whole archive once, which rewrites every
+// live Cursor IDE row to the new hash; until then the watcher parses the
+// whole container. Trashed rows keep their old hash and are vouched as
+// suppressed.)
+const dataVersion = 121
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

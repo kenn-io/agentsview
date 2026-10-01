@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -39,6 +40,21 @@ const (
 	cursorIDEBubbleTypeUser      = 1
 	cursorIDEBubbleTypeAssistant = 2
 )
+
+// cursorIDEHashVersion prefixes stored hashes that carry the composer
+// document digest the watcher compares, ahead of the full content digest.
+const cursorIDEHashVersion = "cide1"
+
+var (
+	cursorIDEComposerParses  atomic.Int64
+	cursorIDEComposerDigests atomic.Int64
+)
+
+// CursorIDEComposerParses returns how many composers have been parsed.
+func CursorIDEComposerParses() int64 { return cursorIDEComposerParses.Load() }
+
+// CursorIDEComposerDigests returns how many composer content digests have run.
+func CursorIDEComposerDigests() int64 { return cursorIDEComposerDigests.Load() }
 
 // cursorIDEDefaultDirs returns platform-specific default directories holding
 // state.vscdb.
@@ -142,8 +158,9 @@ type cursorIDEComposerDoc struct {
 }
 
 // cursorIDEComposerMeta is a per-composer descriptor for the engine's
-// freshness check: the composer's lastUpdatedAt plus a content digest over
-// every byte the parser reads for that composer.
+// freshness check: the composer's lastUpdatedAt plus digest, the stored hash
+// form (cursorIDEComposerHash) of the document digest and a content digest
+// over every byte the parser reads for that composer.
 type cursorIDEComposerMeta struct {
 	rawID         string
 	lastUpdatedAt int64
@@ -163,6 +180,7 @@ type cursorIDEComposerMeta struct {
 func cursorIDEComposerDigest(
 	ctx context.Context, q cursorIDEQuerier, composerID string, rawComposer []byte,
 ) (string, error) {
+	cursorIDEComposerDigests.Add(1)
 	h := fnv.New64a()
 	_, _ = h.Write(rawComposer)
 	rows, err := q.QueryContext(ctx,
@@ -192,6 +210,30 @@ func cursorIDEComposerDigest(
 			"digesting cursor IDE bubbles for %s: %w", composerID, err)
 	}
 	return strconv.FormatUint(h.Sum64(), 16), nil
+}
+
+// cursorIDEComposerDocDigest hashes one raw composerData value; the watcher
+// compares it because every bubble the parser reads is listed in it.
+func cursorIDEComposerDocDigest(raw []byte) string {
+	h := fnv.New64a()
+	_, _ = h.Write(raw)
+	return strconv.FormatUint(h.Sum64(), 16)
+}
+
+// cursorIDEComposerHash is the stored and fingerprinted hash of a composer:
+// its document digest, then the full content digest.
+func cursorIDEComposerHash(raw []byte, fullDigest string) string {
+	return cursorIDEHashVersion + ":" + cursorIDEComposerDocDigest(raw) + ":" + fullDigest
+}
+
+// cursorIDEStoredComposerToken recovers the document digest from a stored
+// hash; any other form, including pre-cide1 hashes, cannot vouch.
+func cursorIDEStoredComposerToken(hash string) (string, bool) {
+	parts := strings.Split(hash, ":")
+	if len(parts) != 3 || parts[0] != cursorIDEHashVersion || parts[1] == "" || parts[2] == "" {
+		return "", false
+	}
+	return parts[1], true
 }
 
 func loadCursorIDEComposerMeta(
@@ -239,7 +281,7 @@ func loadCursorIDEComposerMeta(
 	return cursorIDEComposerMeta{
 		rawID:         composerID,
 		lastUpdatedAt: doc.LastUpdatedAt,
-		digest:        digest,
+		digest:        cursorIDEComposerHash(raw, digest),
 	}, true, nil
 }
 
@@ -265,6 +307,48 @@ func listCursorIDEComposerIDs(ctx context.Context, conn *sql.DB) ([]string, erro
 		}
 	}
 	return ids, rows.Err()
+}
+
+// listCursorIDEComposerTokens streams every composer whose document lists
+// at least one conversation header, in ascending composer-ID order, with the
+// digest of that document. It reads only composerData rows; NULL, malformed,
+// and headerless values are left out, and the whole-container pass keeps
+// handling them.
+func listCursorIDEComposerTokens(
+	ctx context.Context, conn *sql.DB,
+	yield func(composerID, token string) error,
+) error {
+	rows, err := conn.QueryContext(ctx,
+		`SELECT key, value FROM cursorDiskKV
+		WHERE key >= ? AND key < ?
+		  AND CASE WHEN json_valid(CAST(value AS TEXT))
+		           THEN coalesce(json_array_length(CAST(value AS TEXT), '$.fullConversationHeadersOnly'), 0)
+		           ELSE 0 END > 0
+		ORDER BY key`,
+		cursorIDEComposerKeyPrefix, "composerData;",
+	)
+	if err != nil {
+		return fmt.Errorf("listing cursor IDE composer tokens: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var key string
+		var value []byte
+		if err := rows.Scan(&key, &value); err != nil {
+			return fmt.Errorf("listing cursor IDE composer tokens: %w", err)
+		}
+		id := strings.TrimPrefix(key, cursorIDEComposerKeyPrefix)
+		if !IsValidSessionID(id) {
+			continue
+		}
+		if err := yield(id, cursorIDEComposerDocDigest(value)); err != nil {
+			return err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("listing cursor IDE composer tokens: %w", err)
+	}
+	return nil
 }
 
 // cursorIDEToolFormerData is a bubble's embedded tool call: unlike Claude's
@@ -454,6 +538,7 @@ func parseCursorIDEComposer(
 		// session is preserved through the source-missing seam.
 		return nil, nil
 	}
+	cursorIDEComposerParses.Add(1)
 	var doc cursorIDEComposerDoc
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		// Malformed is not missing: a nil result would read as a clean
@@ -579,7 +664,7 @@ func parseCursorIDEComposer(
 			Path:  VirtualSourcePath(dbPath, composerID),
 			Size:  dbInfo.Size(),
 			Mtime: endedAt.UnixNano(),
-			Hash:  digest,
+			Hash:  cursorIDEComposerHash(raw, digest),
 		},
 	}
 

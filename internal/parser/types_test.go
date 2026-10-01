@@ -745,6 +745,10 @@ func TestPeriodicReconcileCapability(t *testing.T) {
 	// updated_at floor, so metadata-only edits and deletions rely on the
 	// scheduled fingerprint-gated container reparse.
 	assert.True(t, optedIn[AgentOmnigent])
+	// Cursor IDE's watcher parses only composers whose composerData
+	// document changed, so bubble-only edits rely on the scheduled
+	// fingerprint-gated container reparse.
+	assert.True(t, optedIn[AgentCursorIDE])
 	// Codebuff's recursive per-project watch covers existing projects;
 	// scheduled reconciliation picks up newly created project
 	// directories under the root (see codebuffWatchRoots).
