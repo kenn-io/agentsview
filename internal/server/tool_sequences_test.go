@@ -365,6 +365,25 @@ func TestHandleToolSequences_GeneratedClientValidation(t *testing.T) {
 	assert.Empty(t, call.ResultPreview)
 	assert.Empty(t, call.ToolUseID)
 	require.NoError(t, response.Validate())
+	t.Run("required nullable fields survive round trip", func(t *testing.T) {
+		var response apiclient.GetAPIV1SessionsIDToolSequencesResponse
+		require.NoError(t, json.Unmarshal([]byte(`{"sequences":[{"calls":[{"duration_ms":null,"result_bytes":null,"result_omitted_bytes":null}]}]}`), &response))
+		encoded, err := json.Marshal(response)
+		require.NoError(t, err)
+		var roundTrip struct {
+			Sequences []struct {
+				Calls []map[string]any `json:"calls"`
+			} `json:"sequences"`
+		}
+		require.NoError(t, json.Unmarshal(encoded, &roundTrip))
+		require.Len(t, roundTrip.Sequences, 1)
+		require.Len(t, roundTrip.Sequences[0].Calls, 1)
+		for _, key := range []string{"duration_ms", "result_bytes", "result_omitted_bytes"} {
+			value, present := roundTrip.Sequences[0].Calls[0][key]
+			assert.True(t, present, "required nullable key %s", key)
+			assert.Nil(t, value, "nullable key %s", key)
+		}
+	})
 	call.Outcome = "invalid"
 	require.Error(t, response.Validate())
 }

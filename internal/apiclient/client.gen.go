@@ -21388,16 +21388,16 @@ func (s SessionToolSequence) Validate() error {
 
 type SessionToolSequenceCall struct {
 	CallIndex            int64                          `json:"call_index"`
-	DurationMs           *int64                         `json:"duration_ms,omitempty"`
+	DurationMs           *int64                         `json:"duration_ms"`
 	InputBytes           int64                          `json:"input_bytes"`
 	InputOmittedBytes    int64                          `json:"input_omitted_bytes"`
 	InputPreview         string                         `json:"input_preview"`
 	Ordinal              int64                          `json:"ordinal"`
 	Outcome              SessionToolSequenceCallOutcome `json:"outcome" validate:"required"`
 	Repeat               SessionToolSequenceCallRepeat  `json:"repeat" validate:"required"`
-	ResultBytes          *int64                         `json:"result_bytes,omitempty"`
+	ResultBytes          *int64                         `json:"result_bytes"`
 	ResultContentUnknown bool                           `json:"result_content_unknown"`
-	ResultOmittedBytes   *int64                         `json:"result_omitted_bytes,omitempty"`
+	ResultOmittedBytes   *int64                         `json:"result_omitted_bytes"`
 	ResultPreview        string                         `json:"result_preview"`
 	ToolChanged          bool                           `json:"tool_changed"`
 	ToolName             string                         `json:"tool_name" validate:"required"`
