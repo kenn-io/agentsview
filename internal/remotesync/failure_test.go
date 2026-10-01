@@ -221,6 +221,20 @@ func TestIsHostUnavailable(t *testing.T) {
 		{name: "deadline exceeded", err: context.DeadlineExceeded, want: true},
 		{name: "request canceled", err: context.Canceled, want: false},
 		{
+			name: "host name unavailable",
+			err:  &net.DNSError{Err: "no such host", Name: "offline.invalid", IsNotFound: true},
+			want: true,
+		},
+		{
+			name: "wrapped DNS failure",
+			err: &url.Error{Op: "Get", URL: "http://offline.invalid", Err: &net.OpError{
+				Op: "dial", Net: "tcp", Err: &net.DNSError{
+					Err: "server misbehaving", Name: "offline.invalid", IsTemporary: true,
+				},
+			}},
+			want: true,
+		},
+		{
 			name: "protocol decode EOF",
 			err:  fmt.Errorf("decode remote manifest: %w", io.EOF),
 			want: false,
@@ -241,7 +255,9 @@ func TestIsHostUnavailable(t *testing.T) {
 			cause: syscall.ETIMEDOUT,
 		}, want: false},
 		{name: "bad token", err: &StatusError{Code: 401}, want: false},
-		{name: "bad host name", err: &net.DNSError{Err: "no such host"}, want: false},
+		{name: "DNS failure with retained cleanup", err: &cleanupRetryTestError{
+			cause: &net.DNSError{Err: "no such host"},
+		}, want: false},
 		{name: "import failure", err: errors.New("persist mirror"), want: false},
 	}
 

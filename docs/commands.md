@@ -403,11 +403,12 @@ verbatim curated content still use delta transfer. Windsurf's sanitized curated
 export remains a separate full-archive transfer on every sync. HTTP collectors
 and spokes must use the same remote-sync protocol version; incompatible peers
 fail before exchanging targets or archive data. A configured HTTP host that is
-offline, unreachable, or times out is skipped; reachable HTTP hosts still join
-the combined rebuild. Other HTTP preparation or contributor failures abort the
-combined rebuild without replacing the active archive. The command exits
-non-zero for any failure other than an unavailable configured HTTP host. See
-[Incremental Sync](/docs/remote-access/#incremental-sync).
+offline, cannot resolve through DNS, is unreachable, or times out is skipped;
+local sources and reachable HTTP hosts still join the combined rebuild. Archived
+sessions from skipped hosts are preserved. Other HTTP preparation or contributor
+failures abort the combined rebuild without replacing the active archive. The
+command exits non-zero for any failure other than an unavailable configured HTTP
+host. See [Incremental Sync](/docs/remote-access/#incremental-sync).
 
 HTTP remote sync requires a reachable remote daemon, preferably over a private
 network such as Tailscale, and remote archive endpoints always require bearer

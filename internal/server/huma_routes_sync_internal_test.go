@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -44,11 +45,14 @@ type syncRouteFixture struct {
 	handler   http.Handler
 }
 
-type offlineRemoteTransport struct{}
+type offlineRemoteTransport struct{ err error }
 
-func (offlineRemoteTransport) RoundTrip(
+func (tr offlineRemoteTransport) RoundTrip(
 	*http.Request,
 ) (*http.Response, error) {
+	if tr.err != nil {
+		return nil, tr.err
+	}
 	return nil, syscall.ETIMEDOUT
 }
 
@@ -1115,6 +1119,65 @@ func TestPrepareHTTPRebuildOmitsOfflineHost(t *testing.T) {
 	assert.Contains(t, progress, syncpkg.Progress{
 		Detail: "Skipped offline remote host offline",
 	})
+}
+
+func TestRunRemoteSyncRequestRebuildContinuesAfterDNSFailure(t *testing.T) {
+	for _, automatic := range []bool{false, true} {
+		name := "explicit"
+		if automatic {
+			name = "data-version-upgrade"
+		}
+		t.Run(name, func(t *testing.T) {
+			var opts []syncRouteFixtureOption
+			if automatic {
+				opts = append(opts, withStaleDB())
+			}
+			f := newSyncRouteFixture(t, opts...)
+			f.writeClaudeSession(t, "proj/local.jsonl", "fresh local session")
+			missingPath := filepath.Join(f.dir, "offline.jsonl")
+			require.NoError(t, f.db.UpsertSession(t.Context(), db.Session{
+				ID: "offline~session", Agent: "claude", Machine: "offline",
+				Project: "archive", FilePath: &missingPath, MessageCount: 1,
+			}))
+
+			prepare := prepareHTTPRebuild
+			stubPrepareHTTPRebuild(t, func(
+				ctx context.Context, syncs []remotesync.HTTPSync,
+			) (preparedHTTPRebuild, error) {
+				require.Len(t, syncs, 1)
+				for i := range syncs {
+					syncs[i].Client = &http.Client{Transport: offlineRemoteTransport{
+						err: &net.DNSError{Err: "no such host", Name: "offline.invalid", IsNotFound: true},
+					}}
+				}
+				return prepare(ctx, syncs)
+			})
+			var progress []syncpkg.Progress
+			response := f.srv.runRemoteSyncRequest(
+				t.Context(), f.db, f.srv.syncEngineForLocal(t.Context(), f.db),
+				remoteSyncRequest{
+					Full: !automatic, IncludeLocal: true,
+					Hosts: []config.RemoteHost{{
+						Host: "offline", URL: "http://offline.invalid", Token: "token",
+					}},
+				}, func(p syncpkg.Progress) { progress = append(progress, p) },
+			)
+
+			require.Empty(t, response.Error)
+			require.Empty(t, response.Failures)
+			require.NotNil(t, response.LocalStats)
+			assert.False(t, response.LocalStats.Aborted)
+			assert.False(t, f.db.NeedsResync())
+			local, err := f.db.GetSession(t.Context(), "local")
+			require.NoError(t, err)
+			require.NotNil(t, local, "local imports must proceed when the remote cannot resolve")
+			assert.Equal(t, "fresh local session", *local.FirstMessage)
+			preserved, err := f.db.GetSession(t.Context(), "offline~session")
+			require.NoError(t, err)
+			assert.NotNil(t, preserved, "offline remote history must survive the rebuild")
+			assert.Contains(t, progress, syncpkg.Progress{Detail: "Skipped offline remote host offline"})
+		})
+	}
 }
 
 func TestRunRemoteSyncRequestIncrementalKeepsActiveHTTPPath(t *testing.T) {

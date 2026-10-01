@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-09-30
+last_edited: 2026-10-01
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -155,6 +155,10 @@ The latest published release is
 
 **Bug fixes**
 
+- Sync continues importing local sessions and reachable remotes when another
+  remote's hostname cannot resolve, such as while disconnected from a private
+  network. This also applies during archive upgrades and full rebuilds, which
+  preserve the unavailable host's archived sessions.
 - Antigravity IDE and Antigravity CLI sessions stop re-syncing in a loop.
   Reading a session database rewrote its shared-memory (`-shm`) file, and
   AgentsView counted that as a change, so every pass re-read and re-uploaded

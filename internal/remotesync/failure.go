@@ -100,6 +100,11 @@ func IsHostUnavailable(err error) bool {
 	}](err); ok {
 		return false
 	}
+	// Private-network names may stop resolving while the network is offline.
+	// Treat this like an unreachable host so other sources can still sync.
+	if _, ok := errors.AsType[*net.DNSError](err); ok {
+		return true
+	}
 	if errors.Is(err, context.DeadlineExceeded) ||
 		errors.Is(err, syscall.ECONNREFUSED) ||
 		errors.Is(err, syscall.ECONNRESET) ||
