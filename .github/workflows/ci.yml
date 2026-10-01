@@ -572,10 +572,6 @@ jobs:
       # and 7+ minutes on its own); it is still covered without -race by the
       # main test job's ./... run. Limit package fan-out because the race
       # detector makes highly parallel runs slow enough to exhaust deadlines.
-      - name: Diagnose isolated parser fixture under race
-        env:
-          RAW_SANDBOX_REQUIRED: "1"
-        run: go test -tags "fts5" -race ./internal/rawderive -run '^TestSandboxProviderJSONAndSQLite$' -count=30 -v
       - name: Run Go tests (race detector)
         run: go list ./... | grep -v '/internal/duckdb$' | xargs go test -p 4 -tags "fts5" -race -count=1 -timeout=20m
         env:
