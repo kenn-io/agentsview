@@ -162,7 +162,76 @@ A Linux/XFS run on 2026-10-01 with Python 3.14.7 and SQLite 3.53.1 produced:
 Every layout passed the full signature roundtrip check. Prefix-coded pages
 reduced this baseline by about 75%. This establishes that repeated prefixes and
 indexes materially inflated the earlier estimate. It does not establish SQLite
-as the best persistence mechanism. Compare Mac results before selecting the
-production representation and budget in the
+as the best persistence mechanism. Use the platform evidence below before
+selecting the production representation and budget in the
 [design](../specs/2026-10-01-central-source-watcher-design.md) and
 [implementation plan](2026-10-01-central-source-watcher.md).
+
+
+## Returned Mac results
+
+The returned `mac-source-watch-handoff.md` report identifies script revision
+`5e4618b0eeeaf2dc099afb6611caf9e9d32c9eae`. It reports a successful smoke run
+and three full default runs, each exiting zero with empty stderr. Only the
+aggregate Markdown report was supplied; the raw JSON reports were not supplied
+for independent validation. Results below are reported measurements, with sums
+and ranges calculated from its tables.
+
+The host was an arm64 Mac with 18 logical CPUs, 128 GiB RAM, internal SSD, and
+APFS. Source and scratch storage shared a volume. Python was 3.14.7 and SQLite
+3.53.1. Normal desktop applications, coding agents, a VM, and development
+services remained running. A build began before the third run. Start/end
+one-minute load averages ranged from 5.61 to 6.27. This is a short concurrent
+workload observation on a high-capacity Mac, not evidence of sustained contention
+or qualification on a smaller machine.
+
+The report notes elevated filesystem event and indexing service CPU after
+synthetic file creation. Its attribution to the experiment is inferred, not
+measured. Interactive responsiveness was not assessed. Cache and source timings
+alone therefore do not account for the experiment's total host impact.
+
+| Reported measurement | Range across three full runs |
+| --- | --- |
+| Full-run elapsed time | 11-12 s; about 35 s total |
+| Default source candidate files / traversed directories | 19,922 / 1,010; stable across all passes |
+| Source enumeration errors, symlinks, truncation | None reported |
+| Sum of each root's subsequent-pass wall-time median | 94.7-107.9 ms |
+| Synthetic file creation, 50,000 files / 196 directories | 2.262-2.425 s |
+| Synthetic warm file-stat median | 101.9-112.0 ms |
+| Synthetic warm listings-only median | 21.1-22.2 ms |
+| Synthetic warm enumeration and stat median | 119.7-124.9 ms |
+
+The sum of root medians is not the median of a timed all-root pass. The candidate
+inventory is broad and is not parser coverage. Its relative filenames total
+1,679,272 bytes, while basenames total 1,359,882 bytes. Directory-prefix removal
+alone accounts for about 19% of those filename bytes. The larger storage gains
+in the synthetic layout comparison also remove duplicated root and parent
+strings and redundant indexes. Do not extrapolate a 75% saving to every real
+filename distribution.
+
+Reported database byte counts matched the Linux prototype at both scales in
+all three runs. Directory-ID rows used 5.62 MiB for 50,000 files and 28.04 MiB
+for 250,000. Prefix-coded pages used 3.95 MiB and 19.70 MiB. Every layout reportedly
+round-tripped every signature; deletion and refill left file sizes unchanged.
+Journal values were samples, not verified peak bounds.
+
+| Layout | Files | Listing fill | Delete and refill | Reopen and full read |
+| --- | --- | --- | --- | --- |
+| Directory IDs and basenames | 50,000 | 86-87 ms | 82-88 ms | 27 ms |
+| Prefix-coded pages | 50,000 | 136-166 ms | 123-125 ms | 20 ms |
+| Directory IDs and basenames | 250,000 | 460-492 ms | 471-499 ms | 134-140 ms |
+| Prefix-coded pages | 250,000 | 692-758 ms | 688-735 ms | 98-105 ms |
+
+The evidence confirms why the production design must avoid duplicated full
+paths. It does not select prefix-coded pages automatically: at 50,000 files
+they save about 1.66 MiB over compact rows, while compact rows fill faster and
+already use shared directory prefixes. Prefer compact rows as the first
+candidate to qualify; adopt page coding only if final-schema measurements
+justify its codec and page-replacement costs. Keep only the selected format.
+
+Cheap warm metadata passes do not establish a need for persistent caching.
+Compare actual uncached startup, durable reopen, selective changes, and eviction
+with equivalent provider work before deciding. These runs do not qualify native
+FSEvents behavior, production Go memory, sustained backlog, restart savings,
+interactive impact, cold storage, or the complete storage envelope. Windows
+results remain outstanding.

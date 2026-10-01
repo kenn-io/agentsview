@@ -222,7 +222,7 @@ File rows reference directory IDs; overlapping providers share this inventory.
 Directory-prefix records are covered by the cap and bounded eviction cleanup.
 Full paths exist only in the bounded API page returned to the caller.
 
-- [ ] Run the [portable comparison](2026-10-01-source-watcher-mac-measurements.md) on Linux and Mac. Compare directory-ID/basename rows with prefix-coded pages; reject the duplicated full-path baseline. Then qualify both compact candidates with production generation metadata, sparse and nested trees, less repetitive basenames, seek-by-basename reads, and changed-page transactions using the repository driver. Measure durable reopen versus uncached startup before connecting persistence. The API works without durable storage if savings do not justify it.
+- [ ] Run the [portable comparison](2026-10-01-source-watcher-mac-measurements.md) on Linux and Mac. The [returned Mac report](2026-10-01-source-watcher-mac-measurements.md#returned-mac-results) supplies three full APFS runs; raw JSON and Windows results remain outstanding. Start qualification with directory-ID/basename rows, which filled faster; compare prefix-coded pages where their additional size savings justify codec and replacement costs. Reject the duplicated full-path baseline. Then qualify both compact candidates with production generation metadata, sparse and nested trees, less repetitive basenames, seek-by-basename reads, and changed-page transactions using the repository driver. Measure durable reopen versus uncached startup before connecting persistence. The API works without durable storage if savings do not justify it.
 - [ ] Write `TestCachePrefixStorageAndPageSeeking`. Verify byte-exact names, signatures, rename/move, overlapping-provider reuse, eviction of unused prefixes, and paged seeks across prefix boundaries. Require decoded pages to stay within 256 records/2 MiB; do not materialize full directory listings for seeks. Select the representation from the measurements rather than retaining both in production.
 - [ ] Write `TestCacheAdmissionAndEvictionPreserveUnknownState`, `TestCacheReopenAndFingerprintChange`, and `TestCacheStorageEnvelope`. Fill through the actual cache API with long paths and changed listings; measure all cache-owned files during commits, evictions, rollback, and reopen.
 
@@ -499,7 +499,9 @@ reduce 50,000-file storage from 16.1 MiB to 5.6 MiB, and prefix-coded pages to
 4.0 MiB. The ceiling remains provisional; qualify the final schema and restart
 benefits before choosing persistent storage. Explicit admission control is still
 required. These experiments do not verify production restart savings, the total
-auxiliary-file bound, or macOS behavior. Those are executable qualification
+auxiliary-file bound, or native macOS watcher behavior. The returned APFS
+metadata results match compact disk sizes and show short warm passes under
+concurrent work, but do not select durable caching or qualify sustained load. Those are executable qualification
 steps, not prerequisites for finishing this plan.
 
 Recommended execution is native, in dependency order, with review at each

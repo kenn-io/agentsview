@@ -109,6 +109,18 @@ production representation or a reason to enlarge the budget. See the
 [portable measurement handoff](../plans/2026-10-01-source-watcher-mac-measurements.md)
 for the script, workload, and Mac report contract.
 
+The returned Mac report repeats the full experiment during normal concurrent
+work on APFS: 19,922 source candidates, synthetic 50,000-file warm stat passes
+of 102-112 ms, and matching compact-layout disk sizes. Compact rows filled
+faster than prefix-coded pages; prefix-coded pages were smaller and read faster.
+Use compact rows as the first format to qualify, retaining prefix coding as a
+measured alternative rather than implementing both. The report is a short run
+on a high-capacity machine and supplies aggregate tables rather than raw JSON.
+It establishes metadata feasibility on that host, not production watcher or
+restart qualification. See the
+[returned Mac results](../plans/2026-10-01-source-watcher-mac-measurements.md#returned-mac-results)
+for workload context, calculations, tradeoffs, and remaining limits.
+
 ## Ownership and declarations
 
 Each provider exposes a `CoveragePlan(context.Context)` returning source
@@ -372,7 +384,9 @@ root-reappearance scenarios against scratch data. Record Go heap/allocations,
 forced-GC heap, and `vmmap` physical footprint over a multi-hour retention run.
 Use offline format fixtures or separately authorized source clones for parsing.
 
-macOS measurements are outstanding. Network and FUSE timestamp reliability,
+macOS metadata and representation measurements have been returned; native
+watcher and sustained-load qualification remain outstanding. Network and FUSE
+timestamp reliability,
 large changed-container enumeration, actual activity concentration, and cold
 storage behavior remain explicit qualification work. They do not block this
 design artifact; they gate performance claims and any later adaptive watch pool.
