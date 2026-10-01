@@ -21,7 +21,7 @@ func (s *Server) registerMetadataRoutes() {
 	s.get(group, "/branches", "List branches", s.humaListBranches)
 	s.get(group, "/agents", "List agents", s.humaListAgents)
 	s.get(group, "/stats", "Get stats", s.humaGetStats)
-	s.get(group, "/session-stats", "Get session stats", s.humaGetSessionStats)
+	s.getLong(group, "/session-stats", "Get session stats", s.humaGetSessionStats)
 	s.get(group, "/version", "Get server version", s.humaGetVersion)
 	s.get(group, "/memory/status", "Get memory readiness", s.humaGetMemoryStatus)
 	s.get(group, "/update/check", "Check for updates", s.humaCheckUpdate)
