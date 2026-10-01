@@ -11,6 +11,12 @@ The latest release is
 
 **New features**
 
+- Assistants connected over MCP can see which tools a session ran, find which
+  sessions edited a file, list a session's sub-agents, read the Activity report,
+  see tool usage and where agents struggled, compare usage between two models or
+  projects, and search the AgentsView guides. The eight new tools are read-only
+  and stay out of the `memory` profile. The server now speaks MCP 2026-07-28
+  over stdio, and clients on older protocol versions keep working.
 - Browse and search the retained archive during full parser and archive-only
   preservation rebuilds with a stale warning; archive writes fail with a retryable
   503. Scoped upgrades and schema repairs finish before serving.

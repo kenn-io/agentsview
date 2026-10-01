@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
@@ -109,6 +110,30 @@ func (s *stubGetService) Messages(context.Context, string, service.MessageFilter
 
 func (s *stubGetService) ToolCalls(context.Context, string) (*service.ToolCallList, error) {
 	panic("ToolCalls not expected")
+}
+
+func (s *stubGetService) ChildSessions(context.Context, string) ([]db.Session, error) {
+	panic("ChildSessions not expected")
+}
+
+func (s *stubGetService) RecentEdits(context.Context, service.RecentEditsFilter) (*db.RecentEditsResult, error) {
+	panic("RecentEdits not expected")
+}
+
+func (s *stubGetService) ActivityReport(context.Context, service.ActivityReportRequest) (*activity.Report, error) {
+	panic("ActivityReport not expected")
+}
+
+func (s *stubGetService) ToolAnalytics(context.Context, service.AnalyticsRequest) (*db.ToolsAnalyticsResponse, error) {
+	panic("ToolAnalytics not expected")
+}
+
+func (s *stubGetService) SignalAnalytics(context.Context, service.AnalyticsRequest) (*db.SignalsAnalyticsResponse, error) {
+	panic("SignalAnalytics not expected")
+}
+
+func (s *stubGetService) SignalSessions(context.Context, service.SignalSessionsRequest) (*db.SignalSessionsResponse, error) {
+	panic("SignalSessions not expected")
 }
 
 func (s *stubGetService) Sync(context.Context, service.SyncInput) (*service.SessionDetail, error) {
