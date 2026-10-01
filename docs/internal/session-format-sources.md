@@ -2263,19 +2263,22 @@ schemas keep their existing ordering behavior.
   harness as a product, so it reuses Pi's session file, entry types, and tree
   structure without modification.
 
-- **Evidence:** `documentation`.
+- **Evidence:** `source`.
 
-- **Upstream:** The reference documentation shipped inside the StepCode
-  distribution was checked 2026-10-01. Its session-format page documents the
-  same JSONL layout as Pi: a `session` header followed by tree-linked entries
-  keyed by `id` and `parentId`, with the same `message`, `model_change`,
-  `thinking_level_change`, `compaction`, `branch_summary`, and `custom` entry
-  types, and files named `<timestamp>_<session-id>.jsonl` one encoded project
-  directory below the session root. Its integration page states that the
-  product entrypoint is an adapter over the Pi coding-agent runtime that keeps
-  Pi's `SessionManager` class, JSONL format, and tree operations unchanged
-  while binding that manager to the StepCode agent root. The StepCode source
-  repository is private, so no pinned revision is available.
+- **Upstream:** Clone `https://github.com/stepfun-ai/Step-Code.git` at
+  `519e4de4ed2162d3667be1821cb92ada6b884e5a`; see the pinned
+  [session format](https://github.com/stepfun-ai/Step-Code/blob/519e4de4ed2162d3667be1821cb92ada6b884e5a/packages/coding-agent/docs/session-format.md)
+  and
+  [Step integration](https://github.com/stepfun-ai/Step-Code/blob/519e4de4ed2162d3667be1821cb92ada6b884e5a/packages/coding-agent/docs/step-integration.md),
+  plus
+  [third-party notices](https://github.com/stepfun-ai/Step-Code/blob/519e4de4ed2162d3667be1821cb92ada6b884e5a/THIRD_PARTY_NOTICES.md).
+  The integration page states that the product entrypoint is an adapter over the
+  Pi coding-agent runtime that keeps Pi's `SessionManager` class, JSONL format,
+  and tree operations unchanged while binding that manager to the StepCode
+  agent root. The session-format page documents
+  `~/.stepcode/agent/sessions/<encoded-cwd>/` and the
+  `<timestamp>_<session-id>.jsonl` naming. StepCode is public and MIT-licensed;
+  its notices state that it is derived from Pi, which is also MIT.
 
 - **Usage and cost:** Pi-family usage persists input, output, cache-read, and
   cache-write tokens with a model. Agentsview derives monetary cost from the
