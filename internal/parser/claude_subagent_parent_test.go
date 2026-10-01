@@ -266,6 +266,45 @@ func TestClaudeSubagentUnderTwoParentsJoinsOneSession(t *testing.T) {
 	}
 }
 
+func TestClaudeSubagentContinuationAcrossWorkflowPaths(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, firstWorkflow string }{
+		{"flat to nested", ""},
+		{"different workflows", "workflows/first"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			project := filepath.Join(root, "project")
+			paths := []string{
+				writeSubagentTranscript(t, project, subagentParentOne,
+					"first", "first reply", "2026-08-05T03:40:00Z", "2026-08-05T03:41:00Z"),
+				writeSubagentTranscript(t, project, subagentParentTwo,
+					"second", "second reply", "2026-08-05T03:42:00Z", "2026-08-05T03:43:00Z"),
+			}
+			for i, workflow := range []string{tc.firstWorkflow, "workflows/second"} {
+				if workflow == "" {
+					continue
+				}
+				nested := filepath.Join(filepath.Dir(paths[i]), workflow, filepath.Base(paths[i]))
+				require.NoError(t, os.MkdirAll(filepath.Dir(nested), 0o700))
+				require.NoError(t, os.Rename(paths[i], nested))
+				paths[i] = nested
+			}
+			for _, path := range paths {
+				result := parseSubagentTranscript(t, root, path)
+				texts := make([]string, len(result.Messages))
+				ordinals := make([]int, len(result.Messages))
+				for i, message := range result.Messages {
+					texts[i], ordinals[i] = message.Content, message.Ordinal
+				}
+				assert.Equal(t, []string{"first", "first reply", "second", "second reply"}, texts)
+				assert.Equal(t, []int{0, 1, 2, 3}, ordinals)
+			}
+		})
+	}
+}
+
 func TestClaudeSubagentDiscoveryErrorFailsParse(t *testing.T) {
 	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
 		t.Skip("requires Unix permissions enforced for a non-root user")

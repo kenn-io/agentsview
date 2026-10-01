@@ -137,21 +137,24 @@ fixtures retain this field; missing identities remain source-local.
 - **Format:** Project-scoped JSONL transcripts, including subagent JSONL, with
   `user`, `assistant`, `system`, and progress records.
 
-- **Continuation parsing (2026-09-30):** Rechecked the native provider with the
+- **Continuation parsing (2026-10-01):** Rechecked the native provider with the
   synthetic two-parent fixture in
   `internal/parser/claude_subagent_parent_test.go`. An unreadable companion
   fails the parse instead of returning a partial session for replacement.
   Directory enumeration and candidate stat errors also fail full and
   incremental parsing; restoring access lets a retry include both transcripts.
   Joined transcripts use the native metadata and title precedence rules, and
-  companion forks remain separate sessions. The sync retention regression in
-  `internal/sync/parse_retention_test.go` checks that admission and pending
-  writes account for both files without changing the stored transcript size.
-  Sync regressions also verify that newly discovered earlier messages replace
-  the saved ordinal stream, and that recorded contributor paths preserve
-  archived messages across missing files, restarts, and rebuilds. Restoring
-  the files permits readable corrections to replace the saved transcript. This
-  verifies Agentsview behavior, not Claude's persistence format.
+  companion forks remain separate sessions. Companion discovery matches the
+  agent filename across different workflow folders beneath other parents in
+  the same project; synthetic fixtures verify both flat and nested layouts.
+  The sync retention regression in `internal/sync/parse_retention_test.go`
+  checks that admission and pending writes account for both files without
+  changing the stored transcript size. Sync regressions also verify that newly
+  discovered earlier messages replace the saved ordinal stream, and that
+  recorded contributor paths preserve archived messages across missing files,
+  restarts, and rebuilds. Restoring the files permits readable corrections to
+  replace the saved transcript. This verifies Agentsview behavior, not
+  Claude's persistence format.
 
 - **Title evidence (2026-09-13):** A local corpus measure sampled 768 files and
   found 12,261 `ai-title` records, with a mean of 15.96 records per file and a

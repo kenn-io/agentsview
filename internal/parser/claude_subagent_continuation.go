@@ -54,11 +54,11 @@ func claudeSubagentTranscriptRel(
 
 // claudeSubagentSiblingTranscripts returns the transcripts of the same sub-agent
 // dispatch under the other parent sessions of the same project. Membership is
-// the same set seen from either file — same project directory, same path below
-// each parent's subagents tree — so which file the sync happens to parse cannot
+// the same set seen from either file — same project directory, same filename
+// anywhere in each parent's subagents tree — so which file the sync parses cannot
 // change which entries the session ends up with.
 func claudeSubagentSiblingTranscripts(path string) ([]string, error) {
-	subagentsDir, rel, ok := claudeSubagentTranscriptRel(path)
+	subagentsDir, _, ok := claudeSubagentTranscriptRel(path)
 	if !ok {
 		return nil, nil
 	}
@@ -74,20 +74,22 @@ func claudeSubagentSiblingTranscripts(path string) ([]string, error) {
 		if !entry.IsDir() || entry.Name() == parentName {
 			continue
 		}
-		candidate := filepath.Join(
-			projectDir, entry.Name(), "subagents", rel,
-		)
-		info, err := os.Lstat(candidate)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
+		root := filepath.Join(projectDir, entry.Name(), "subagents")
+		err := filepath.WalkDir(root, func(candidate string, entry os.DirEntry, err error) error {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			if entry.Name() == filepath.Base(path) && entry.Type().IsRegular() {
+				siblings = append(siblings, candidate)
+			}
+			return nil
+		})
 		if err != nil {
 			return nil, err
 		}
-		if !info.Mode().IsRegular() {
-			continue
-		}
-		siblings = append(siblings, candidate)
 	}
 	slices.Sort(siblings)
 	return siblings, nil
