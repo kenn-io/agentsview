@@ -88,11 +88,26 @@ still had to be examined. Do not assert that all irrelevant entries cost zero.
 
 These are metadata probes on warm filesystem caches, not production scanner
 benchmarks or cold boot measurements. They do not demonstrate a large restart
-speedup. Linear extrapolation puts 100,000 cache rows around 32-53 MiB before
-additional schema costs. A 50,000-file stat pass every 30 seconds would consume
+speedup. The original full-path prototype duplicates prefixes and indexes;
+its 32-53 MiB extrapolation for 100,000 rows is superseded by the compact-layout
+comparison below. A 50,000-file stat pass every 30 seconds would consume
 about 0.24% of one core if its measured wall cost translated entirely into CPU;
 that is an estimate, not measured daemon CPU. Slow disks, APFS, network mounts,
 longer paths, and live container queries remain unmeasured.
+
+A second Linux/XFS representation experiment used 256 files per directory,
+identical signatures, and TRUNCATE journaling with incremental auto-vacuum.
+At 50,000 / 250,000 files, the full-path baseline used 16.10 / 80.84 MiB;
+directory IDs plus basenames used 5.62 / 28.04 MiB; directory IDs plus
+prefix-coded listing pages used 3.95 / 19.70 MiB. Each compact layout includes
+directory metadata. All layouts preserved every filename and signature through
+deletion, refill, and reopen. Prefix-coded pages cut the baseline by about 75%.
+These prototypes omit production generation and routing metadata. Their repeated
+rollout-style names favor prefix coding; sparse trees need separate measurement.
+The baseline numbers are evidence of redundant storage, not an acceptable
+production representation or a reason to enlarge the budget. See the
+[portable measurement handoff](../plans/2026-10-01-source-watcher-mac-measurements.md)
+for the script, workload, and Mac report contract.
 
 ## Ownership and declarations
 
@@ -177,7 +192,9 @@ use their existing spool and replacement-proof rules.
 
 ## Persistent cache and finite growth
 
-Use one disposable `watch-cache.sqlite` outside `sessions.db`. Its SQLite
+If persistence qualifies, use one disposable `watch-cache.sqlite` outside
+`sessions.db`. SQLite is a candidate for the disposable cache, not a requirement
+for scanner correctness or a settled optimal representation. Its SQLite
 application ID is `0x41565743`, cache kind is `source-watch-cache`, and cache
 format version starts at 1. It is local,
 never replicated, and contains no transcript content or history. It stores
@@ -185,8 +202,27 @@ current complete directory listings and acknowledged physical file signatures,
 plus unit plan fingerprints and activity timestamps. This is an optimization,
 not an archive or a durable work queue.
 
-The initial total storage envelope is 128 MiB. Its main database is capped at
-48 MiB using SQLite page limits; the remaining 80 MiB is reserved for rollback
+Store physical directory prefixes once, using parent-directory IDs and raw
+basenames. File records reference directory IDs instead of repeating roots,
+relative paths, and parent paths. Do not duplicate inventories per provider
+when units share a physical directory. Prefer the compact primary key over a
+redundant full-path index. Evaluate front coding of sorted basenames within
+bounded listing pages; decoding one page must remain within the existing
+256-record/2 MiB limits. Seek pages by directory, generation, and basename
+boundary without loading an entire listing. Reconstruct full paths only for
+the dispatched page. Preserve exact filename bytes and signature fields.
+Collect unused directory-prefix records during bounded eviction maintenance;
+the prefix dictionary must obey the same disk envelope as file listings.
+
+Compare compact row storage and prefix-coded pages before choosing the cache
+format. Qualify sparse directories, deeply nested and long paths, less
+repetitive basenames, selective reads, changed-page writes, and reopen costs.
+Choose persistence only if measured restart savings justify disk, memory, and
+maintenance costs. The scanner must work without it. Do not add a separate
+compressed-file implementation just to conduct this comparison.
+
+The provisional maximum total storage envelope is 128 MiB. Its main database
+is capped at 48 MiB using SQLite page limits; the remaining 80 MiB is reserved for rollback
 journal and metadata. Use TRUNCATE journaling, incremental auto-vacuum, and no
 WAL. SQL temporary storage stays in memory with bounded queries. Main-file page
 limits alone are not sufficient evidence for the total envelope: qualification
@@ -301,8 +337,13 @@ required to expose these counters in existing diagnostics.
 
 ## macOS qualification access and remaining limits
 
-Needed access is an SSH destination/account, or an existing remote-execution
-connection, to a Mac with a substantial local source collection on APFS. Read
+The [Mac measurement handoff](../plans/2026-10-01-source-watcher-mac-measurements.md)
+and standalone script can be run by an agent on the machine and returned as an
+aggregate report. This covers metadata and storage representation experiments
+without remote access or a watcher build.
+
+For later native watcher qualification, needed access is an SSH destination
+and account, or an existing remote-execution connection, to a Mac with a substantial local source collection on APFS. Read
 provider directory metadata and create a private scratch directory for synthetic
 files, a disposable cache, and an isolated binary. No sudo, transcript content,
 live archive writes, installed-binary replacement, or live daemon restart is

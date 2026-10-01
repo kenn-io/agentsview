@@ -25,7 +25,9 @@ SQLite driver, fsnotify 1.10.1, existing FSEvents bridge, testify, synctest.
 - SQLite is the persistent archive; do not change its schema for scanner state.
 - Source formats, mirror schemas, archival policy, and daily audit are unchanged.
 - No new dependency, brace-expansion language, native journal, or replay bridge.
-- Cache envelope: 128 MiB per consumer; main file: 48 MiB; remaining reserve: 80 MiB.
+- Provisional cache ceiling: 128 MiB per consumer; main file: 48 MiB; reserve: 80 MiB.
+- Intern physical directory prefixes; never persist duplicate root/relative/parent paths per file.
+- Qualify persistence benefits and compact representation before connecting a durable cache.
 - Cache uses TRUNCATE journaling, incremental auto-vacuum, and no WAL.
 - SQLite page cache: 8 MiB; metadata pages: 256 records and 2 MiB maximum.
 - Retained path batches: 8,192 paths and 2 MiB; first-event window: 500 ms.
@@ -215,7 +217,13 @@ are discarded on reopen. Append pages each obey the 256-record/2 MiB bound.
 Keep old acknowledged pages readable until the new listing is committed, or
 explicitly invalidate the directory when capacity cannot retain both.
 Root parent is NULL; never encode the root as its own child.
+Store each physical directory as a parent ID and basename, including metadata.
+File rows reference directory IDs; overlapping providers share this inventory.
+Directory-prefix records are covered by the cap and bounded eviction cleanup.
+Full paths exist only in the bounded API page returned to the caller.
 
+- [ ] Run the [portable comparison](2026-10-01-source-watcher-mac-measurements.md) on Linux and Mac. Compare directory-ID/basename rows with prefix-coded pages; reject the duplicated full-path baseline. Then qualify both compact candidates with production generation metadata, sparse and nested trees, less repetitive basenames, seek-by-basename reads, and changed-page transactions using the repository driver. Measure durable reopen versus uncached startup before connecting persistence. The API works without durable storage if savings do not justify it.
+- [ ] Write `TestCachePrefixStorageAndPageSeeking`. Verify byte-exact names, signatures, rename/move, overlapping-provider reuse, eviction of unused prefixes, and paged seeks across prefix boundaries. Require decoded pages to stay within 256 records/2 MiB; do not materialize full directory listings for seeks. Select the representation from the measurements rather than retaining both in production.
 - [ ] Write `TestCacheAdmissionAndEvictionPreserveUnknownState`, `TestCacheReopenAndFingerprintChange`, and `TestCacheStorageEnvelope`. Fill through the actual cache API with long paths and changed listings; measure all cache-owned files during commits, evictions, rollback, and reopen.
 
   ```go
@@ -485,8 +493,11 @@ loss recovery 10, raw capture 11, and performance/docs 12. The five Review Focus
 conditions have owning behavioral tests. Optional FSEvents replay and adaptive
 watch eviction are deliberately excluded, not unresolved implementation tasks.
 
-The Linux evidence supports the initial cache budget and its need for explicit
-admission control. It does not verify production restart savings, the total
+The Linux evidence shows why duplicate full paths are unsuitable: compact rows
+reduce 50,000-file storage from 16.1 MiB to 5.6 MiB, and prefix-coded pages to
+4.0 MiB. The ceiling remains provisional; qualify the final schema and restart
+benefits before choosing persistent storage. Explicit admission control is still
+required. These experiments do not verify production restart savings, the total
 auxiliary-file bound, or macOS behavior. Those are executable qualification
 steps, not prerequisites for finishing this plan.
 
