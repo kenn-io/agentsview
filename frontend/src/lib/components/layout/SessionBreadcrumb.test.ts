@@ -2152,12 +2152,18 @@ describe("SessionBreadcrumb", () => {
       ui.signalPanelOpen = true;
       await vi.waitFor(() => {
         expect(document.body.textContent).toContain("Not measured");
+        expect(document.querySelector(".tool-sequences-panel")?.getAttribute("aria-busy")).toBe(
+          "false",
+        );
       });
       expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(1);
 
       sessions.activeSessionUsageVersion += 1;
       await vi.waitFor(() => {
         expect(document.body.textContent).toContain("0ms");
+        expect(document.querySelector(".tool-sequences-panel")?.getAttribute("aria-busy")).toBe(
+          "false",
+        );
       });
       expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(2);
       component.$destroy();
@@ -2180,6 +2186,9 @@ describe("SessionBreadcrumb", () => {
       });
       await vi.waitFor(() => {
         expect(document.body.textContent).toContain("2.0s");
+        expect(document.querySelector(".tool-sequences-panel")?.getAttribute("aria-busy")).toBe(
+          "false",
+        );
       });
 
       const details = document.querySelector<HTMLDetailsElement>("details.sequence")!;
@@ -2193,11 +2202,17 @@ describe("SessionBreadcrumb", () => {
       await tick();
       expect(document.body.textContent).toContain("2.0s");
       expect(document.body.textContent).not.toContain("Loading tool sequences");
+      expect(document.querySelector(".tool-sequences-panel")?.getAttribute("aria-busy")).toBe(
+        "true",
+      );
       expect(document.querySelector<HTMLDetailsElement>("details.sequence")?.open).toBe(true);
 
       refresh.resolve(makeToolSequences(4000));
       await vi.waitFor(() => {
         expect(document.body.textContent).toContain("4.0s");
+        expect(document.querySelector(".tool-sequences-panel")?.getAttribute("aria-busy")).toBe(
+          "false",
+        );
       });
       expect(document.querySelector<HTMLDetailsElement>("details.sequence")?.open).toBe(true);
       component.$destroy();

@@ -15,7 +15,7 @@
     SquareTerminalIcon,
     TriangleAlertIcon,
   } from "../../icons.js";
-  import { onDestroy, onMount } from "svelte";
+  import { onDestroy, onMount, untrack } from "svelte";
   import type { Session } from "../../api/types.js";
   import type { SessionToolSequencesResponse } from "../../api/generated/index.js";
   import {
@@ -385,7 +385,7 @@
       currentSession.termination_status ?? "",
       sessions.activeSessionUsageVersion,
     ].join("\n");
-    if (toolSequencesData?.session_id !== id) {
+    if (untrack(() => toolSequencesData?.session_id) !== id) {
       toolSequencesData = null;
       toolSequencesLoadedIdentity = "";
     }
