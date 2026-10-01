@@ -81,6 +81,7 @@
   let feedbackTimer: ReturnType<typeof setTimeout> | undefined;
   let sessionDir = $state<string | null>(null);
   let toolSequencesData = $state<SessionToolSequencesResponse | null>(null);
+  let toolSequencesRevision = $state("");
   let toolSequencesLoading = $state(false);
   let toolSequencesFailed = $state(false);
   let toolSequencesLoadedIdentity = "";
@@ -373,20 +374,23 @@
     if (!visible || !id || !currentSession) {
       toolSequencesRead.cancel();
       toolSequencesData = null;
+      toolSequencesRevision = "";
       toolSequencesLoading = false;
       toolSequencesFailed = false;
       toolSequencesLoadedIdentity = "";
       return;
     }
 
+    const revision = currentSession.transcript_revision ?? "";
     const identity = [
       id,
-      currentSession.transcript_revision ?? "",
+      revision,
       currentSession.termination_status ?? "",
       sessions.activeSessionUsageVersion,
     ].join("\n");
-    if (untrack(() => toolSequencesData?.session_id) !== id) {
+    if (untrack(() => toolSequencesData?.session_id !== id || toolSequencesRevision !== revision)) {
       toolSequencesData = null;
+      toolSequencesRevision = "";
       toolSequencesLoadedIdentity = "";
     }
     if (identity === toolSequencesLoadedIdentity) return;
@@ -398,10 +402,12 @@
         if (!toolSequencesRead.isCurrent(signal)) return;
         toolSequencesLoadedIdentity = identity;
         toolSequencesData = response;
+        toolSequencesRevision = revision;
       })
       .catch((error) => {
         if (isAbortError(error) || !toolSequencesRead.isCurrent(signal)) return;
         toolSequencesData = null;
+        toolSequencesRevision = "";
         toolSequencesFailed = true;
       })
       .finally(() => {
@@ -1176,7 +1182,7 @@
 {#if ui.signalPanelOpen && session}
   <SignalPanel {session} />
   <ToolSequencesPanel
-    data={toolSequencesData?.session_id === session.id ? toolSequencesData : null}
+    data={toolSequencesData?.session_id === session.id && toolSequencesRevision === (session.transcript_revision ?? "") ? toolSequencesData : null}
     sessionId={session.id}
     loading={toolSequencesLoading}
     failed={toolSequencesFailed}

@@ -2207,6 +2207,13 @@ describe("SessionBreadcrumb", () => {
       );
       expect(document.querySelector<HTMLDetailsElement>("details.sequence")?.open).toBe(true);
 
+      const scrollToOrdinal = vi.spyOn(ui, "scrollToOrdinal");
+      document
+        .querySelector<HTMLButtonElement>('button[title="Open call 3 for Grep in the transcript"]')!
+        .click();
+      expect(scrollToOrdinal).toHaveBeenCalledWith(3, session.id);
+      scrollToOrdinal.mockRestore();
+
       refresh.resolve(makeToolSequences(4000));
       await vi.waitFor(() => {
         expect(document.body.textContent).toContain("4.0s");
@@ -2215,6 +2222,90 @@ describe("SessionBreadcrumb", () => {
         );
       });
       expect(document.querySelector<HTMLDetailsElement>("details.sequence")?.open).toBe(true);
+      component.$destroy();
+    });
+
+    it.each(["revision-2", undefined])(
+      "hides stale call links while refreshing transcript revision to %s",
+      async (revision) => {
+        const refresh = deferred<SessionToolSequencesResponse>();
+        const session = makeSession("claude", { transcript_revision: "revision-1" });
+        const replacement = makeToolSequences(4000);
+        replacement.sequences[0]!.calls[0]!.ordinal = 7;
+        replacement.sequences[0]!.calls[0]!.result_preview = "Replacement result";
+        sessionsService.getApiV1SessionsByIdToolSequences
+          .mockResolvedValueOnce(makeToolSequences(2000))
+          .mockReturnValueOnce(refresh.promise);
+        ui.signalPanelOpen = true;
+        const component = createClassComponent({
+          component: SessionBreadcrumb,
+          target: document.body,
+          props: { session, onBack: () => {} },
+        });
+        await vi.waitFor(() => expect(document.body.textContent).toContain("2.0s"));
+        document.querySelector<HTMLDetailsElement>("details.sequence")!.open = true;
+        await tick();
+        expect(
+          document.querySelector('button[title="Open call 3 for Grep in the transcript"]'),
+        ).not.toBeNull();
+
+        component.$set({ session: { ...session, transcript_revision: revision } });
+        await tick();
+        expect(
+          document.querySelector('button[title="Open call 3 for Grep in the transcript"]'),
+        ).toBeNull();
+        expect(document.body.textContent).toContain("Loading tool sequences");
+        expect(document.querySelector(".tool-sequences-panel")?.getAttribute("aria-busy")).toBe(
+          "true",
+        );
+
+        refresh.resolve(replacement);
+        await vi.waitFor(() => expect(document.body.textContent).toContain("Replacement result"));
+        document.querySelector<HTMLDetailsElement>("details.sequence")!.open = true;
+        const scrollToOrdinal = vi.spyOn(ui, "scrollToOrdinal");
+        document
+          .querySelector<HTMLButtonElement>(
+            'button[title="Open call 7 for Grep in the transcript"]',
+          )!
+          .click();
+        expect(scrollToOrdinal).toHaveBeenCalledWith(7, session.id);
+        scrollToOrdinal.mockRestore();
+        component.$destroy();
+      },
+    );
+
+    it("ignores a superseded tool-sequence response for the same session", async () => {
+      const revision2 = deferred<SessionToolSequencesResponse>();
+      const revision3 = makeToolSequences(6000);
+      revision3.sequences[0]!.calls[0]!.ordinal = 9;
+      const session = makeSession("claude", { transcript_revision: "revision-1" });
+      sessionsService.getApiV1SessionsByIdToolSequences
+        .mockResolvedValueOnce(makeToolSequences(2000))
+        .mockReturnValueOnce(revision2.promise)
+        .mockResolvedValueOnce(revision3);
+      ui.signalPanelOpen = true;
+      const component = createClassComponent({
+        component: SessionBreadcrumb,
+        target: document.body,
+        props: { session, onBack: () => {} },
+      });
+      await vi.waitFor(() => expect(document.body.textContent).toContain("2.0s"));
+      component.$set({ session: { ...session, transcript_revision: "revision-2" } });
+      await flushPromises();
+      expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(2);
+      component.$set({ session: { ...session, transcript_revision: "revision-3" } });
+      await vi.waitFor(() => expect(document.body.textContent).toContain("6.0s"));
+
+      revision2.resolve(makeToolSequences(10000));
+      await flushPromises();
+      expect(document.body.textContent).toContain("6.0s");
+      expect(document.body.textContent).not.toContain("10.0s");
+      expect(
+        document.querySelector('button[title="Open call 9 for Grep in the transcript"]'),
+      ).not.toBeNull();
+      expect(
+        document.querySelector('button[title="Open call 3 for Grep in the transcript"]'),
+      ).toBeNull();
       component.$destroy();
     });
 
