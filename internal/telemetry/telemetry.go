@@ -30,8 +30,8 @@ type Reporter struct {
 
 type Options struct {
 	InstallationID string
-	// InstalledAt is when InstallationID was created. Reports wait until the
-	// install is a day old; zero sends them immediately.
+	// InstalledAt is when InstallationID was created. Reports carry its age as
+	// install_age_hours; zero sends them without an age.
 	InstalledAt time.Time
 	Version     string
 	Commit      string

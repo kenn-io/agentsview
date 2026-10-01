@@ -35,7 +35,7 @@ func (c *Config) readInstallationID() error {
 	return nil
 }
 
-// readInstallationCreatedAt returns zero, meaning an established install, when
+// readInstallationCreatedAt returns zero, meaning an unknown install age, when
 // the record is missing, malformed, or belongs to a different ID.
 func readInstallationCreatedAt(dataDir, id string) time.Time {
 	data, err := readInstallationIDFile(filepath.Join(dataDir, installationCreatedFilename))

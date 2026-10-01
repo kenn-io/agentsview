@@ -86,7 +86,7 @@ func TestTelemetryOptionsPassInstallationAge(t *testing.T) {
 				assert.WithinDuration(t, time.Now(), opts.InstalledAt, time.Minute)
 			} else {
 				assert.Equal(t, tc.existingID, opts.InstallationID)
-				assert.True(t, opts.InstalledAt.IsZero(), "existing installs keep reporting without a hold")
+				assert.True(t, opts.InstalledAt.IsZero(), "existing installs report without an install age")
 			}
 
 			restarted, err := config.LoadMinimal()
