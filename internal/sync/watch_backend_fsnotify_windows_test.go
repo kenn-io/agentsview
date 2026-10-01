@@ -11,6 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const expectedWindowsBufferBytes = 16 << 10
+
 func fsnotifyBufferAllocations(t *testing.T) (bytes, objects int64, found bool) {
 	t.Helper()
 	// Two collections publish completed allocations to the memory profile.
@@ -31,7 +33,7 @@ func fsnotifyBufferAllocations(t *testing.T) (bytes, objects int64, found bool) 
 		for {
 			frame, more := frames.Next()
 			if frame.Function == "github.com/fsnotify/fsnotify.(*readDirChangesW).addWatch" &&
-				filepath.Base(frame.File) == "backend_windows.go" && frame.Line == 359 {
+				record.AllocObjects > 0 && record.AllocBytes/record.AllocObjects >= expectedWindowsBufferBytes {
 				bytes += record.AllocBytes
 				objects += record.AllocObjects
 				found = true
@@ -80,7 +82,7 @@ func TestFSNotifyBackendWindowsBufferAllocation(t *testing.T) {
 			runtime.KeepAlive(backend)
 			require.True(t, found, "missing pinned fsnotify buffer allocation record")
 			assert.Equal(t, int64(1), afterObjects-beforeObjects, "native buffer allocations")
-			assert.Equal(t, int64(16384), afterBytes-beforeBytes, "native buffer bytes")
+			assert.Equal(t, int64(expectedWindowsBufferBytes), afterBytes-beforeBytes, "native buffer bytes")
 			t.Logf("buffer allocation: %d objects, %d bytes", afterObjects-beforeObjects, afterBytes-beforeBytes)
 		})
 	}
