@@ -216,7 +216,9 @@ func TestEncoderInputRejectionIsPermanentAndNotRetried(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls.Add(1)
-		w.WriteHeader(http.StatusBadRequest)
+		writeJSON(t, w, http.StatusBadRequest, map[string]any{
+			"error": "the input length exceeds the context length",
+		})
 	}))
 	defer srv.Close()
 

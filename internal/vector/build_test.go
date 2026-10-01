@@ -755,7 +755,7 @@ func TestBuildSkipsPermanentlyRejectedDocumentAndContinues(t *testing.T) {
 	rejectPoison := func(_ context.Context, texts []string) ([][]float32, error) {
 		calls++
 		if slices.Contains(texts, "poison") {
-			return nil, &embedclient.APIError{StatusCode: http.StatusBadRequest}
+			return nil, &embedclient.APIError{StatusCode: http.StatusBadRequest, Reason: embedclient.ReasonInputTooLong}
 		}
 		out := make([][]float32, len(texts))
 		for i := range texts {

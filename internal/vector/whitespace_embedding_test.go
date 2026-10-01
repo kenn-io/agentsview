@@ -94,7 +94,7 @@ func TestBuildSkipsPermanentlyRejectedDocumentSharingABatch(t *testing.T) {
 
 	rejectPoison := func(_ context.Context, texts []string) ([][]float32, error) {
 		if slices.Contains(texts, "poison") {
-			return nil, &embedclient.APIError{StatusCode: 400}
+			return nil, &embedclient.APIError{StatusCode: 400, Reason: embedclient.ReasonInputTooLong}
 		}
 		out := make([][]float32, len(texts))
 		for i := range texts {

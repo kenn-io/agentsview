@@ -288,19 +288,19 @@ failures up to `max_retries` attempts. Document builds keep retrying a 429 until
 it clears or the build is canceled; 429s do not use up the `max_retries` budget
 for other failures in the same request.
 
-kit's errors carry the HTTP status but not the response body, so a 400 alone
-cannot tell a rejected document from a wrong model, route, or request field.
-When an encode call returns 400, the build sends the endpoint a short probe
-input. If the probe also fails, the endpoint rejects every request: the fill
-aborts, documents stay pending, and the active generation is unchanged. If the
-probe embeds, the 400 belongs to the document. That document is not retried in
-that fill or the next one: it's stamped for the generation with no vectors at
-its current `content_hash`, which marks it non-pending. It's logged (doc key
-plus the underlying error) and counted in the build summary's skipped count, but
-there is no separate poison list or periodic retry — the only way it embeds
-again is if the document's content itself changes later (a new `content_hash`,
-so a new pending row). Every other failure — 401, 403, 404, 5xx, network errors,
-timeouts, and 429 — aborts the fill and is retried on the next scheduled build.
+kit classifies every failed response from its status and the provider's error
+code or message. Only an input that is too long or refused by policy counts as a
+rejection of that document. A 400 kit cannot attribute to the input, such as a
+wrong model or an unsupported `dimensions` field, aborts the fill: documents
+stay pending and the active generation is unchanged. A rejected document is not
+retried in that fill or the next one: it's stamped for the generation with no
+vectors at its current `content_hash`, which marks it non-pending. It's logged
+(doc key plus the underlying error) and counted in the build summary's skipped
+count, but there is no separate poison list or periodic retry — the only way it
+embeds again is if the document's content itself changes later (a new
+`content_hash`, so a new pending row). Every other failure — 401, 403, 404, 5xx,
+network errors, timeouts, and 429 — aborts the fill and is retried on the next
+scheduled build.
 
 ### Scope (`include_automated`)
 
