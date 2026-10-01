@@ -262,15 +262,31 @@ func scanMessages(rows db.MessageRows) ([]db.Message, error) {
 	return msgs, rows.Err()
 }
 
+const attachToolCallBatchSize = 500
+
 func (s *Store) attachToolCalls(ctx context.Context, msgs []db.Message) error {
+	for start := 0; start < len(msgs); start += attachToolCallBatchSize {
+		if err := s.attachToolCallsBatch(ctx, msgs[start:min(start+attachToolCallBatchSize, len(msgs))]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) attachToolCallsBatch(ctx context.Context, msgs []db.Message) error {
 	if len(msgs) == 0 {
 		return nil
 	}
 	index := make(map[int]int, len(msgs))
 	sessionID := msgs[0].SessionID
+	args := []any{sessionID}
+	placeholders := make([]string, len(msgs))
 	for i, msg := range msgs {
 		index[msg.Ordinal] = i
+		args = append(args, msg.Ordinal)
+		placeholders[i] = "?"
 	}
+	membership := strings.Join(placeholders, ",")
 	rows, err := s.queryContext(ctx, `
 		SELECT m.ordinal, tc.call_index, tc.tool_name, tc.category,
 			COALESCE(tc.tool_use_id, ''), COALESCE(tc.input_json, ''),
@@ -281,9 +297,9 @@ func (s *Store) attachToolCalls(ctx context.Context, msgs []db.Message) error {
 		FROM tool_calls tc
 		JOIN messages m ON m.session_id = tc.session_id
 			AND m.id = tc.message_id
-		WHERE tc.session_id = ?
+		WHERE tc.session_id = ? AND m.ordinal IN (`+membership+`)
 		ORDER BY m.ordinal, tc.call_index`,
-		sessionID,
+		args...,
 	)
 	if err != nil {
 		return err
@@ -312,7 +328,7 @@ func (s *Store) attachToolCalls(ctx context.Context, msgs []db.Message) error {
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	if err := s.attachToolResultEvents(ctx, msgs, index, sessionID); err != nil {
+	if err := s.attachToolResultEvents(ctx, msgs, index, membership, args); err != nil {
 		return err
 	}
 	// Mirrors the SQLite load boundary: a summary the call's single result
@@ -322,7 +338,7 @@ func (s *Store) attachToolCalls(ctx context.Context, msgs []db.Message) error {
 }
 
 func (s *Store) attachToolResultEvents(
-	ctx context.Context, msgs []db.Message, index map[int]int, sessionID string,
+	ctx context.Context, msgs []db.Message, index map[int]int, membership string, args []any,
 ) error {
 	rows, err := s.queryContext(ctx, `
 		SELECT tool_call_message_ordinal, call_index,
@@ -330,9 +346,9 @@ func (s *Store) attachToolResultEvents(
 			COALESCE(subagent_session_id, ''), source, status,
 			content, content_length, timestamp, event_index
 		FROM tool_result_events
-		WHERE session_id = ?
+		WHERE session_id = ? AND tool_call_message_ordinal IN (`+membership+`)
 		ORDER BY tool_call_message_ordinal, call_index, event_index`,
-		sessionID,
+		args...,
 	)
 	if err != nil {
 		return err

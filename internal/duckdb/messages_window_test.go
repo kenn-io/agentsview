@@ -43,6 +43,10 @@ func seedDuckWindowMessages(t *testing.T, local *db.DB, sessionID string) {
 			Content:       content,
 			ContentLength: len(content),
 			IsSystem:      role == "system",
+			ToolCalls: []db.ToolCall{{
+				ToolName: "Read", InputJSON: "x", ResultContentLength: 1,
+				ResultEvents: []db.ToolResultEvent{{Source: "tool", Status: "completed", Content: "r", ContentLength: 1}},
+			}},
 		})
 	}
 	require.NoError(t, local.InsertMessages(t.Context(), msgs),
@@ -117,6 +121,8 @@ func TestDuckGetMessagesWindow_AnchorIncludedEvenWhenRoleFiltered(t *testing.T) 
 	require.Equal(t, []int{3, 4, 5}, duckOrdinalsOf(msgs),
 		"anchor must be included even though its own role is filtered out")
 	assert.Equal(t, "system", msgs[1].Role)
+	require.Len(t, msgs[1].ToolCalls, 1)
+	assert.Equal(t, "r", msgs[1].ToolCalls[0].ResultContent)
 }
 
 func TestDuckGetMessagesWindow_AroundOrdinalZeroHasNoBefore(t *testing.T) {

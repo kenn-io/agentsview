@@ -74,16 +74,19 @@ func (s *Store) getMessagesLinear(
 	args = append(args, sessionID, from)
 	args = append(args, roleArgs...)
 	args = append(args, limit)
-	msgs, err := db.QueryMessagesWithRevision(ctx, s.queryContext, scanMessages, w.ObservedRevision, `
-		SELECT `+revCol+`, `+messageCols+`
-		FROM messages
-		WHERE session_id = ? AND ordinal `+op+` ?`+roleClause+`
-		ORDER BY ordinal `+dir+`
-		LIMIT ?`, args...)
+	selection := `SELECT ` + messageCols + ` FROM messages
+		WHERE session_id = ? AND ordinal ` + op + ` ?` + roleClause + `
+		ORDER BY ordinal ` + dir + ` LIMIT ?`
+	selectionArgs := args
+	if w.ObservedRevision != nil {
+		selectionArgs = args[1:]
+	}
+	msgs, err := db.QueryMessagesWithRevision(ctx, s.queryContext, scanMessages, w.ObservedRevision,
+		`SELECT `+revCol+`, w.* FROM (`+selection+`) AS w ORDER BY w.ordinal `+dir, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying clickhouse messages: %w", err)
 	}
-	if err := s.attachToolCalls(ctx, msgs); err != nil {
+	if err := s.attachToolCalls(ctx, msgs, selection, selectionArgs); err != nil {
 		return nil, err
 	}
 	return msgs, nil
@@ -98,26 +101,24 @@ func (s *Store) getMessagesAroundAnchor(
 	args = append(args, max(w.Before, 0), sessionID, anchor, sessionID, anchor)
 	args = append(args, roleArgs...)
 	args = append(args, max(w.After, 0))
-	msgs, err := db.QueryMessagesWithRevision(ctx, s.queryContext, scanMessages, w.ObservedRevision, `
-		SELECT `+revisionCol+`, w.*
-		FROM (
+	selection := `
 			SELECT * FROM (
-				SELECT `+messageCols+` FROM messages
-				WHERE session_id = ? AND ordinal < ?`+roleClause+`
+				SELECT ` + messageCols + ` FROM messages
+				WHERE session_id = ? AND ordinal < ?` + roleClause + `
 				ORDER BY ordinal DESC LIMIT ?) AS before_rows
 			UNION ALL
-			SELECT `+messageCols+` FROM messages WHERE session_id = ? AND ordinal = ?
+			SELECT ` + messageCols + ` FROM messages WHERE session_id = ? AND ordinal = ?
 			UNION ALL
 			SELECT * FROM (
-				SELECT `+messageCols+` FROM messages
-				WHERE session_id = ? AND ordinal > ?`+roleClause+`
-				ORDER BY ordinal ASC LIMIT ?) AS after_rows
-		) AS w
-		ORDER BY w.ordinal`, args...)
+				SELECT ` + messageCols + ` FROM messages
+				WHERE session_id = ? AND ordinal > ?` + roleClause + `
+				ORDER BY ordinal ASC LIMIT ?) AS after_rows`
+	msgs, err := db.QueryMessagesWithRevision(ctx, s.queryContext, scanMessages, w.ObservedRevision,
+		`SELECT `+revisionCol+`, w.* FROM (`+selection+`) AS w ORDER BY w.ordinal`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying clickhouse around-window messages: %w", err)
 	}
-	if err := s.attachToolCalls(ctx, msgs); err != nil {
+	if err := s.attachToolCalls(ctx, msgs, selection, args[1:]); err != nil {
 		return nil, err
 	}
 	return msgs, nil
@@ -148,15 +149,12 @@ func roleFilterClause(roles []string) (string, []any) {
 }
 
 func (s *Store) GetAllMessages(ctx context.Context, sessionID string) ([]db.Message, error) {
-	msgs, err := s.queryMessageRows(ctx, `
-		SELECT `+messageCols+`
-		FROM messages
-		WHERE session_id = ?
-		ORDER BY ordinal ASC`, sessionID)
+	selection := `SELECT ` + messageCols + ` FROM messages WHERE session_id = ?`
+	msgs, err := s.queryMessageRows(ctx, selection+` ORDER BY ordinal ASC`, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("querying all clickhouse messages: %w", err)
 	}
-	if err := s.attachToolCalls(ctx, msgs); err != nil {
+	if err := s.attachToolCalls(ctx, msgs, selection, []any{sessionID}); err != nil {
 		return nil, err
 	}
 	return msgs, nil
@@ -216,10 +214,10 @@ func scanMessages(rows db.MessageRows) ([]db.Message, error) {
 	return msgs, rows.Err()
 }
 
-// attachToolCalls loads the session's tool calls and result events and
+// attachToolCalls loads the selected messages' tool calls and result events and
 // attaches them to msgs by ordinal. Tool calls join on message_ordinal, the
 // mirror's stable key, rather than the archive-local message id.
-func (s *Store) attachToolCalls(ctx context.Context, msgs []db.Message) error {
+func (s *Store) attachToolCalls(ctx context.Context, msgs []db.Message, selection string, selectionArgs []any) error {
 	if len(msgs) == 0 {
 		return nil
 	}
@@ -228,13 +226,14 @@ func (s *Store) attachToolCalls(ctx context.Context, msgs []db.Message) error {
 	for i, msg := range msgs {
 		index[msg.Ordinal] = i
 	}
+	args := append([]any{sessionID}, selectionArgs...)
 	rows, err := s.queryContext(ctx, `
 		SELECT message_ordinal, call_index, tool_name, category,
 			tool_use_id, input_json, skill_name, result_content_length,
 			result_content, subagent_session_id, file_path
 		FROM tool_calls
-		WHERE session_id = ?
-		ORDER BY message_ordinal, call_index`, sessionID)
+		WHERE session_id = ? AND message_ordinal IN (SELECT ordinal FROM (`+selection+`))
+		ORDER BY message_ordinal, call_index`, args...)
 	if err != nil {
 		return fmt.Errorf("querying clickhouse tool calls: %w", err)
 	}
@@ -259,7 +258,7 @@ func (s *Store) attachToolCalls(ctx context.Context, msgs []db.Message) error {
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	if err := s.attachToolResultEvents(ctx, msgs, index, sessionID); err != nil {
+	if err := s.attachToolResultEvents(ctx, msgs, index, selection, args); err != nil {
 		return err
 	}
 	// The push drops a result summary its single result event already
@@ -269,15 +268,15 @@ func (s *Store) attachToolCalls(ctx context.Context, msgs []db.Message) error {
 }
 
 func (s *Store) attachToolResultEvents(
-	ctx context.Context, msgs []db.Message, index map[int]int, sessionID string,
+	ctx context.Context, msgs []db.Message, index map[int]int, selection string, args []any,
 ) error {
 	rows, err := s.queryContext(ctx, `
 		SELECT tool_call_message_ordinal, call_index,
 			tool_use_id, agent_id, subagent_session_id, source, status,
 			content, content_length, timestamp, event_index
 		FROM tool_result_events
-		WHERE session_id = ?
-		ORDER BY tool_call_message_ordinal, call_index, event_index`, sessionID)
+		WHERE session_id = ? AND tool_call_message_ordinal IN (SELECT ordinal FROM (`+selection+`))
+		ORDER BY tool_call_message_ordinal, call_index, event_index`, args...)
 	if err != nil {
 		return fmt.Errorf("querying clickhouse tool result events: %w", err)
 	}
