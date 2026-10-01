@@ -353,7 +353,10 @@ load context rather than discarding slow runs.
 The [Mac measurement handoff](../plans/2026-10-01-source-watcher-mac-measurements.md)
 and standalone script can be run by an agent on the machine and returned as an
 aggregate report. This covers metadata and storage representation experiments
-without remote access or a watcher build.
+without remote access or a watcher build. The
+[Windows handoff](../plans/2026-10-01-source-watcher-windows-measurements.md)
+uses the same script and workload with PowerShell commands. Native Windows
+watch delivery and recovery remain separate implementation qualification.
 
 For later native watcher qualification, needed access is an SSH destination
 and account, or an existing remote-execution connection, to a Mac with a substantial local source collection on APFS. Read

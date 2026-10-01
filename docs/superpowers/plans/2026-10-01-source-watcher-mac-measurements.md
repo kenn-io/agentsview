@@ -1,5 +1,8 @@
 # Mac measurement handoff
 
+For Windows, use the [PowerShell handoff](2026-10-01-source-watcher-windows-measurements.md)
+with the same Python script and full workload.
+
 Give the prompt below and `scripts/measure-source-watch.py` to an agent on your
 Mac. The script needs Python 3.9 or newer and its standard library. It measures
 source metadata and compares three disposable cache layouts. It does not run a
@@ -132,7 +135,7 @@ large whole-cache delete transaction to expose a cost that insertion-only probes
 miss. Sampling does not establish a universal peak or enforce the proposed cap.
 
 The report records logical CPU count and start/end 1-, 5-, and 15-minute load
-averages. Load average includes runnable and some blocked work and is not CPU
+averages where available; Windows reports `null` for those fields. Load average includes runnable and some blocked work and is not CPU
 utilization or a complete account of memory and disk contention. Supply the
 workload context alongside it. Do not dismiss slow loaded results as noise or
 reduce file cardinality to make them pass. Carry them into implementation

@@ -23,6 +23,23 @@ DEFAULT_ROOTS = (
 PAGE = 256
 
 
+def load_average():
+    getloadavg = getattr(os, "getloadavg", None)
+    if getloadavg is None:
+        return None
+    try:
+        return list(getloadavg())
+    except OSError:
+        return None
+
+
+def is_directory_link(metadata):
+    # Conservatively skip all Windows reparse points, including junctions.
+    return (stat.S_ISLNK(metadata.st_mode) or
+            bool(getattr(metadata, "st_file_attributes", 0) &
+                 getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)))
+
+
 def inventory(root, max_entries):
     """Inspect metadata, skipping symlinks. Return aggregates, never names."""
     out = dict(entries=0, directories=0, candidates=0, errors=0, symlinks=0,
@@ -32,7 +49,7 @@ def inventory(root, max_entries):
     # Reject static symlinks in root components as well as descendants.
     for part in (root, *root.parents):
         try:
-            if stat.S_ISLNK(part.lstat().st_mode):
+            if is_directory_link(part.lstat()):
                 out["symlinks"] += 1
                 out["skipped_root"] = True
                 return out
@@ -53,7 +70,7 @@ def inventory(root, max_entries):
                     out["entries"] += 1
                     try:
                         metadata = entry.stat(follow_symlinks=False)
-                        if stat.S_ISLNK(metadata.st_mode):
+                        if is_directory_link(metadata):
                             out["symlinks"] += 1
                         elif stat.S_ISDIR(metadata.st_mode):
                             stack.append(Path(entry.path))
@@ -283,7 +300,7 @@ def main():
         parser.error("--passes must be at least 2")
     os.umask(0o077)
     report = dict(report_version=1, logical_cpus=os.cpu_count(),
-                  load_average_start=list(os.getloadavg()), system=platform.system(),
+                  load_average_start=load_average(), system=platform.system(),
                   os_release=platform.release(), architecture=platform.machine(),
                   python=platform.python_version(), sqlite=sqlite3.sqlite_version,
                   page_records=PAGE, live=[], cache_comparison=[])
@@ -301,7 +318,7 @@ def main():
         for rows in args.rows:
             for layout in ("full_paths", "interned_dirs", "prefix_pages"):
                 report["cache_comparison"].append(cache_experiment(base, layout, rows))
-    report["load_average_end"] = list(os.getloadavg())
+    report["load_average_end"] = load_average()
     print(json.dumps(report, indent=2))
 
 
