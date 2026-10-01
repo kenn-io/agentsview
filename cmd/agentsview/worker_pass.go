@@ -326,7 +326,6 @@ func restoreArchiveAccess(
 	policy.InitialInterval = reacquireBackoffInitial
 	policy.MaxInterval = reacquireBackoffMax
 	policy.Multiplier = 2
-	policy.RandomizationFactor = 0
 	_, err := backoff.Retry(ctx, func() (struct{}, error) {
 		return struct{}{}, restore()
 	}, backoff.WithBackOff(policy), backoff.WithMaxTries(0), backoff.WithMaxElapsedTime(0),
@@ -352,7 +351,6 @@ func reacquireWriteOwnerLock(
 	policy.InitialInterval = reacquireBackoffInitial
 	policy.MaxInterval = reacquireBackoffMax
 	policy.Multiplier = 2
-	policy.RandomizationFactor = 0
 	_, err := backoff.Retry(ctx, func() (struct{}, error) {
 		return struct{}{}, lock.Reacquire()
 	}, backoff.WithBackOff(policy), backoff.WithMaxTries(0), backoff.WithMaxElapsedTime(0),
