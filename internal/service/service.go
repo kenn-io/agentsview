@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 
+	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 )
 
@@ -74,6 +75,11 @@ type SessionService interface {
 	List(ctx context.Context, f ListFilter) (*SessionList, error)
 	Messages(ctx context.Context, id string, f MessageFilter) (*MessageList, error)
 	ToolCalls(ctx context.Context, id string) (*ToolCallList, error)
+	// ChildSessions lists the sub-agent and fork sessions whose parent is id.
+	ChildSessions(ctx context.Context, id string) ([]db.Session, error)
+	// RecentEdits pages edited files, newest edit first, with the sessions
+	// whose Edit/Write tool calls touched each file.
+	RecentEdits(ctx context.Context, f RecentEditsFilter) (*db.RecentEditsResult, error)
 	Sync(ctx context.Context, in SyncInput) (*SessionDetail, error)
 	Watch(ctx context.Context, id string) (<-chan Event, error)
 	Stats(ctx context.Context, f StatsFilter) (*SessionStats, error)
@@ -83,6 +89,12 @@ type SessionService interface {
 	UsagePairwiseComparison(
 		ctx context.Context, req UsagePairwiseComparisonRequest,
 	) (*UsagePairwiseComparisonResponse, error)
+	// ActivityReport returns the Activity report for one range with every
+	// session row in BySession.
+	ActivityReport(ctx context.Context, req ActivityReportRequest) (*activity.Report, error)
+	ToolAnalytics(ctx context.Context, req AnalyticsRequest) (*db.ToolsAnalyticsResponse, error)
+	SignalAnalytics(ctx context.Context, req AnalyticsRequest) (*db.SignalsAnalyticsResponse, error)
+	SignalSessions(ctx context.Context, req SignalSessionsRequest) (*db.SignalSessionsResponse, error)
 	ListRecallEntries(ctx context.Context, f RecallFilter) (*RecallList, error)
 	GetRecallEntry(ctx context.Context, id string) (*db.RecallEntry, error)
 	QueryRecallEntries(ctx context.Context, req RecallQuery) (*RecallQueryResult, error)
@@ -470,6 +482,18 @@ type ToolCall struct {
 	SubagentSessionID string `json:"subagent_session_id,omitempty"`
 	ResultLength      int    `json:"result_length"`
 }
+
+// RecentEditsFilter parameterises RecentEdits. Search matches a
+// case-insensitive file path substring; Limit counts files, not edits.
+type RecentEditsFilter struct {
+	Project string
+	Search  string
+	Limit   int
+	Offset  int
+}
+
+// recentEditsPerFile matches the inline edit cap of GET /api/v1/recent-edits.
+const recentEditsPerFile = 20
 
 // ToolCallList mirrors {tool_calls, count}.
 type ToolCallList struct {

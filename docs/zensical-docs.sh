@@ -115,6 +115,7 @@ tmp_config_base=""
     --exclude './screenshots/tests/*' \
     --exclude './screenshots/update-generated-assets-branch.sh' \
     --exclude './README.md' \
+    --exclude './*.go' \
     --exclude './pyproject.toml' \
     --exclude './uv.lock' \
     --exclude './vercel.json' \

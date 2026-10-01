@@ -478,6 +478,61 @@ func (b *httpBackend) ToolCalls(
 	return out, nil
 }
 
+func (b *httpBackend) ChildSessions(
+	ctx context.Context, id string,
+) ([]db.Session, error) {
+	api, err := b.apiClient(b.client)
+	if err != nil {
+		return nil, err
+	}
+	response, err := api.GetAPIV1SessionsIDChildrenWithResponse(ctx, &apiclient.GetAPIV1SessionsIDChildrenRequestOptions{PathParams: &apiclient.GetAPIV1SessionsIDChildrenPath{ID: url.PathEscape(id)}})
+	if response == nil {
+		return nil, err
+	}
+	if err := serviceResponseError(response.HTTPResponse, response.Body, err); err != nil {
+		return nil, err
+	}
+	children := []db.Session{}
+	if response.JSON200 != nil {
+		children = append(children, *response.JSON200...)
+	}
+	for i := range children {
+		children[i].WebURL = b.sessionWebURL(children[i].ID)
+	}
+	return children, nil
+}
+
+func (b *httpBackend) RecentEdits(
+	ctx context.Context, f service.RecentEditsFilter,
+) (*db.RecentEditsResult, error) {
+	// Clamp like the direct backend so out-of-range paging is not rejected.
+	p := db.NormalizeRecentEditsParams(db.RecentEditsParams{
+		Project: f.Project, Search: f.Search, Limit: f.Limit, Offset: f.Offset,
+	})
+	q := &apiclient.GetAPIV1RecentEditsQuery{Limit: new(int64(p.Limit))}
+	if p.Project != "" {
+		q.Project = new(p.Project)
+	}
+	if p.Search != "" {
+		q.Search = new(p.Search)
+	}
+	if p.Offset > 0 {
+		q.Offset = new(int64(p.Offset))
+	}
+	api, err := b.apiClient(b.client)
+	if err != nil {
+		return nil, err
+	}
+	response, err := api.GetAPIV1RecentEditsWithResponse(ctx, &apiclient.GetAPIV1RecentEditsRequestOptions{Query: q})
+	if response == nil {
+		return nil, err
+	}
+	if err := serviceResponseError(response.HTTPResponse, response.Body, err); err != nil {
+		return nil, err
+	}
+	return response.JSON200, nil
+}
+
 func (b *httpBackend) Sync(
 	ctx context.Context, in service.SyncInput,
 ) (*service.SessionDetail, error) {

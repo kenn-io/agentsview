@@ -515,6 +515,35 @@ func (b *directBackend) ToolCalls(
 	return &ToolCallList{ToolCalls: out, Count: len(out)}, nil
 }
 
+func (b *directBackend) ChildSessions(
+	ctx context.Context, id string,
+) ([]db.Session, error) {
+	children, err := b.db.GetChildSessions(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if children == nil {
+		children = []db.Session{}
+	}
+	return children, nil
+}
+
+func (b *directBackend) RecentEdits(
+	ctx context.Context, f RecentEditsFilter,
+) (*db.RecentEditsResult, error) {
+	res, err := b.db.RecentEdits(ctx, db.RecentEditsParams{
+		Project:         f.Project,
+		Search:          f.Search,
+		Limit:           f.Limit,
+		Offset:          f.Offset,
+		MaxEditsPerFile: recentEditsPerFile,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
 // Sync runs a one-off sync for the file path associated with the
 // given session (or an explicit path in SyncInput.Path) and
 // returns the resulting session detail. Returns db.ErrReadOnly

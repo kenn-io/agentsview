@@ -19,6 +19,11 @@ filter:
       - get-api-v1-sessions
       - get-api-v1-sessions-id-messages
       - get-api-v1-sessions-id-tool-calls
+      - get-api-v1-sessions-id-children
+      - get-api-v1-recent-edits
+      - get-api-v1-analytics-tools
+      - get-api-v1-analytics-signals
+      - get-api-v1-analytics-signal-sessions
       - post-api-v1-sessions-sync
       - get-api-v1-sessions-id-watch
       - get-api-v1-session-stats

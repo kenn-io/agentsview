@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-09-21
+last_edited: 2026-09-30
 title: MCP Server
 description: Connect assistant clients to your AgentsView session history with MCP
 ---
@@ -7,8 +7,10 @@ description: Connect assistant clients to your AgentsView session history with M
 The `agentsview mcp` command runs a read-only
 [Model Context Protocol](https://modelcontextprotocol.io) server. MCP-capable
 assistant clients can use it to search prior sessions, inspect a session before
-opening it, fetch message slices, search raw content, and summarize token usage
-without leaving the assistant.
+opening it, fetch message slices, search raw content, see which tools a session
+ran and which files it edited, report activity, tool use, and quality signals,
+summarize and compare token usage, and search the AgentsView guides without
+leaving the assistant.
 
 ## When To Use It
 
@@ -17,7 +19,10 @@ Use the MCP server when you want a coding assistant to answer questions such as:
 - "Have I solved this error before?"
 - "Find prior sessions in this repository about the deploy pipeline."
 - "Open the relevant messages around this search hit."
+- "Which sessions changed `internal/server/routes.go`, and what did they run?"
 - "Summarize recent token usage for this project."
+- "How much agent time and cost did this week take, and where did agents
+  struggle?"
 
 The tools are read-only. They expose session history and usage data, but they do
 not mutate the archive or resync files directly.
@@ -67,6 +72,14 @@ client will see these tools:
 | `search_content`       | Substring, regex, terms, semantic, or hybrid search over session text    |
 | `get_usage_summary`    | Aggregate token and cost usage                                           |
 | `query_recall`         | Search extracted Recall entries when the backend supports Recall queries |
+| `get_tool_calls`       | List the tool calls one session made, with inputs and result sizes       |
+| `get_recent_edits`     | Find which sessions edited a file, newest edit first                     |
+| `get_child_sessions`   | List the sub-agent and fork sessions started from one session            |
+| `compare_usage`        | Compare token usage and cost between two models or two projects          |
+| `get_activity_report`  | Report agent time, sessions, and cost for a day, week, month, or range   |
+| `get_tool_usage`       | Count tool calls by category, agent, and tool name                       |
+| `get_quality_signals`  | Show health grades, outcomes, failures, and example sessions             |
+| `search_docs`          | Search the AgentsView guides bundled with this version                   |
 
 ### Focused memory profile
 
@@ -195,6 +208,60 @@ stops working when the archive server restarts. If a continuation fails with
 `source_changed` or `invalid body_cursor`, start a fresh `get_messages` listing.
 Role and system filtering still happens after each scanned page, so an empty or
 short page can have a `next_from` and should be continued.
+
+### Session details, reports, and guides
+
+`get_tool_calls` lists one session's tool calls in order, up to 50 per page
+(maximum 200). Set `category` to `Edit`, `Write`, `Bash`, or another tool
+category to narrow the list. Each input has secret-shaped values masked and is
+cut to `max_input_chars` (default 500, maximum 10000). Pass a call's `ordinal`
+to `get_messages` to read the surrounding conversation.
+
+`get_recent_edits` matches `path` as a case-insensitive substring of edited file
+paths. Files come back newest edit first, 10 per page (maximum 50), each with up
+to 20 of its newest Edit and Write calls and the session that made each one.
+Omit `path` to list every recently edited file.
+
+`get_child_sessions` returns the sub-agent and fork sessions whose parent is
+`session_id`, with each child's `relationship`.
+
+`compare_usage` takes a `dimension` of `model` or `project` and a `left` and
+`right` value, each one name or several separated by commas. Both sides share
+the optional date range, agent, and machine filters. The result has each side's
+cost, tokens, and session count plus the differences. Like `get_usage_summary`,
+it counts one-shot sessions.
+
+`get_activity_report` returns the same totals as `agentsview activity report`:
+agent minutes, sessions, tokens, and cost, the most agents running at once, and
+breakdowns by project, model, and agent. `preset` is `day` (default), `week`,
+`month`, or `custom` with RFC3339 `from` and `to`. `date` picks the day, week,
+or month and defaults to today in `timezone` (default UTC). The session list
+comes 20 rows at a time (maximum 100), longest first or most expensive first
+with `sessions_sort: "cost"`; pass `sessions_next_cursor` back as
+`sessions_cursor` for the next page. The timeline buckets are left out.
+
+`get_tool_usage` and `get_quality_signals` use the analytics filters: `from` and
+`to` dates default to the 30 days ending today in UTC, and one-shot and
+automated sessions are excluded unless `include_one_shot` or
+`include_automated` is set. `get_tool_usage` counts tool calls by category,
+agent, and tool name with a weekly trend. `get_quality_signals` reports health
+grades, outcomes, tool failures and retries, edit churn, context pressure, and
+prompt quality, by agent and project. Set `signal`, such as
+`tool_failure_signals` or `edit_churn`, to also get up to `examples` sessions
+(default 5, maximum 20) that show it.
+
+`search_docs` searches the guides published at
+[agentsview.io/docs](https://agentsview.io/docs/) as shipped with this binary,
+so it works offline and matches the version you run. Every query word must
+appear in a section. Set `topic` to one guide name, such as `mcp` or `recall`,
+to search only that guide.
+
+### Protocol versions
+
+Over stdio, the server speaks MCP 2026-07-28 and still accepts clients that use
+an older protocol version. StreamableHTTP keeps per-client sessions, which MCP
+2026-07-28 does not support, so HTTP clients negotiate 2025-11-25 or older.
+Current clients fall back to it automatically.
 
 ## Daemon-Backed Reads
 
