@@ -363,7 +363,12 @@ func parsePiLikeSession(
 			Mtime: info.ModTime().UnixNano(),
 		},
 	}
-	if (agent == AgentPrimeAgent || agent == AgentPi || agent == AgentOMO) && parentSessionID != "" {
+	// A persisted parent means the transcript was branched from another
+	// session (/fork, /clone), not spawned as a subagent. StepCode writes the
+	// same header, so it is classified the same way; a subagent child that
+	// got its lineage from the run directory still overrides this below.
+	if (agent == AgentPrimeAgent || agent == AgentPi || agent == AgentOMO ||
+		agent == AgentStepCode) && parentSessionID != "" {
 		sess.RelationshipType = RelFork
 	}
 	if isOMPSubagent || isPiSubagent {

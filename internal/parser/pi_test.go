@@ -561,6 +561,38 @@ func TestPiProviderParsesOMPParentSession(t *testing.T) {
 	}
 }
 
+// TestPiProviderStepCodeParentedSessionIsFork verifies that a StepCode
+// transcript carrying a persisted parent is classified as a fork, not left
+// with a bare ParentSessionID. StepCode writes parentSession as a path the
+// same way Pi does, so an agent excluded from the fork check would silently
+// drop the classification for every /fork and /clone session.
+func TestPiProviderStepCodeParentedSessionIsFork(t *testing.T) {
+	root := t.TempDir()
+	parentPath := filepath.Join(root, "2026-09-01T12-00-00-000Z_parent.jsonl")
+	childPath := filepath.Join(root, "2026-09-01T12-30-00-000Z_child.jsonl")
+	parentPathJSON, err := json.Marshal(parentPath)
+	require.NoError(t, err)
+	parentContent := `{"type":"session","version":3,"id":"step-parent-header","timestamp":"2026-09-01T12:00:00.000Z","cwd":"/repos/x"}` + "\n"
+	childContent := `{"type":"session","version":3,"id":"step-child","timestamp":"2026-09-01T12:30:00.000Z","cwd":"/repos/x","parentSession":` + string(parentPathJSON) + `}` + "\n"
+	require.NoError(t, os.WriteFile(parentPath, []byte(parentContent), 0o644))
+	require.NoError(t, os.WriteFile(childPath, []byte(childContent), 0o644))
+
+	parent, _, err := parsePiLikeSession(
+		parentPath, "my_project", "local", AgentStepCode, "stepcode:")
+	require.NoError(t, err)
+	child, _, err := parsePiLikeSession(
+		childPath, "my_project", "local", AgentStepCode, "stepcode:")
+	require.NoError(t, err)
+
+	assert.Equal(t, "stepcode:step-parent-header", parent.ID)
+	assert.Empty(t, parent.RelationshipType,
+		"parent session has no relationship of its own")
+	assert.Equal(t, parent.ID, child.ParentSessionID,
+		"parentSession must resolve to the parent's stored header ID")
+	assert.Equal(t, RelFork, child.RelationshipType,
+		"StepCode parented session is classified as a fork")
+}
+
 // TestPiProviderNativeParentSessionUsesHeaderIdentity verifies that native
 // Pi parentSession paths resolve to the parent's persisted header ID when the
 // filename stem and header ID differ.

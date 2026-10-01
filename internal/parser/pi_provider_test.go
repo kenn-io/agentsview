@@ -260,6 +260,8 @@ func TestStepCodeProviderSourceMethods(t *testing.T) {
 	child := childOutcome.Results[0].Result.Session
 	assert.Equal(t, "stepcode:"+subagentID, child.ID)
 	assert.Equal(t, "stepcode:"+parentID, child.ParentSessionID)
+	assert.Equal(t, RelSubagent, child.RelationshipType,
+		"a run-directory child is a subagent, not a fork")
 }
 
 func TestPiProviderSourceMethods(t *testing.T) {
