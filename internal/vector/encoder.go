@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/cenkalti/backoff/v7"
 	"go.kenn.io/kit/embedclient"
 	"go.kenn.io/kit/embedconfig"
 	kitvec "go.kenn.io/kit/vector"
@@ -87,64 +88,45 @@ func NewEncoder(cfg EncoderConfig, role embedconfig.Role) (kitvec.EncodeFunc, er
 	}, nil
 }
 
-// retryEncode calls encode until it succeeds. A 429 clears with time and does
-// not mean the request is broken, so a durable build waits it out without
-// limit. Other retryable failures (408, 5xx, transport errors) share one
-// budget of maxAttempts across the whole call, so rate limits interleaved
-// with server failures cannot reset it. Any other error returns at once.
+// retryEncode calls encode until it succeeds, with the same jittered, capped
+// exponential backoff kit uses. A 429 clears with time and does not mean the
+// request is broken, so a durable build waits it out without limit. Other
+// retryable failures (408, 5xx, transport errors) share one budget of
+// maxAttempts across the whole call, so rate limits interleaved with server
+// failures cannot reset it. Any other error returns at once.
 func retryEncode(
 	ctx context.Context, maxAttempts int, encode func() ([][]float32, error),
 ) ([][]float32, error) {
+	policy := backoff.NewExponentialBackOff()
+	policy.InitialInterval = backoffBase
+	policy.MaxInterval = backoffMax
 	failures := 0
-	for attempt := 1; ; attempt++ {
+	vectors, err := backoff.Retry(ctx, func() ([][]float32, error) {
 		vectors, err := encode()
 		if err == nil {
 			return vectors, nil
 		}
-		var retryAfter time.Duration
 		apiErr, isAPIErr := errors.AsType[*embedclient.APIError](err)
 		_, isTransportErr := errors.AsType[*embedclient.TransportError](err)
 		switch {
 		case isAPIErr && apiErr.StatusCode == http.StatusTooManyRequests:
-			retryAfter = apiErr.RetryAfter
 		case (isAPIErr && apiErr.Retryable()) || isTransportErr:
-			failures++
-			if failures >= max(maxAttempts, 1) {
-				return nil, err
-			}
-			if isAPIErr {
-				retryAfter = apiErr.RetryAfter
+			if failures++; failures >= max(maxAttempts, 1) {
+				return nil, backoff.Permanent(err)
 			}
 		default:
-			return nil, err
+			return nil, backoff.Permanent(err)
 		}
-		if err := sleepBackoff(ctx, retryDelay(attempt, retryAfter)); err != nil {
-			return nil, err
+		if isAPIErr && apiErr.RetryAfter > 0 {
+			return nil, backoff.RetryAfter(min(apiErr.RetryAfter, retryAfterCap), err)
 		}
+		return nil, err
+	}, backoff.WithBackOff(policy), backoff.WithMaxElapsedTime(0))
+	if retryErr := backoff.AsRetryError(err); retryErr != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, errors.Join(retryErr.LastErr, ctxErr)
+		}
+		return nil, retryErr.LastErr
 	}
-}
-
-// retryDelay honors a provider's Retry-After, capped at retryAfterCap, and
-// otherwise uses capped exponential backoff from attempt.
-func retryDelay(attempt int, retryAfter time.Duration) time.Duration {
-	if retryAfter > 0 {
-		return min(retryAfter, retryAfterCap)
-	}
-	delay := backoffBase << min(attempt-1, 16)
-	if delay > backoffMax || delay <= 0 {
-		delay = backoffMax
-	}
-	return delay
-}
-
-// sleepBackoff waits delay, returning ctx.Err() promptly if ctx is canceled.
-func sleepBackoff(ctx context.Context, delay time.Duration) error {
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-timer.C:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	return vectors, err
 }
