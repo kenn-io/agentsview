@@ -282,7 +282,8 @@ def main():
     if args.passes < 2:
         parser.error("--passes must be at least 2")
     os.umask(0o077)
-    report = dict(report_version=1, system=platform.system(),
+    report = dict(report_version=1, logical_cpus=os.cpu_count(),
+                  load_average_start=list(os.getloadavg()), system=platform.system(),
                   os_release=platform.release(), architecture=platform.machine(),
                   python=platform.python_version(), sqlite=sqlite3.sqlite_version,
                   page_records=PAGE, live=[], cache_comparison=[])
@@ -300,6 +301,7 @@ def main():
         for rows in args.rows:
             for layout in ("full_paths", "interned_dirs", "prefix_pages"):
                 report["cache_comparison"].append(cache_experiment(base, layout, rows))
+    report["load_average_end"] = list(os.getloadavg())
     print(json.dumps(report, indent=2))
 
 

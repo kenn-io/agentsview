@@ -20,12 +20,17 @@ The script avoids static symlinks but is not a sandbox against concurrent path
 replacement. Run it against stable roots you recognize.
 
 Create a private report directory. Run the smoke measurement first, then the
-full measurement. Use an existing scratch parent on the same filesystem as
+full measurement while your normal heavy applications are running. Use the
+same 50,000-file and 50,000/250,000-record workloads as Linux, on the Mac you normally use for builds and agents. A reduced smoke run checks setup; it is not the design benchmark. Do not
+close applications, stop services, or wait for an artificially idle machine.
+Repeat the full run three times during representative work and retain all three
+reports. An optional idle baseline is useful for comparison, but does not
+replace the loaded measurements. Use an existing scratch parent on the same filesystem as
 the source collection when possible. The script creates and removes only its
 own temporary child directory. Do not clean up other processes or directories.
 Do not install Python if it is missing; report the missing prerequisite.
 
-Return mac-source-watch.json and mac-source-watch-context.md. Inspect both
+Return the three mac-source-watch-busy JSON reports and mac-source-watch-context.md. Inspect both
 before returning them. Include only aggregate measurements and generic machine
 characteristics. Omit usernames, hostnames, absolute paths, project names,
 filenames, transcript text, volume names, serial numbers, and identifiers.
@@ -43,7 +48,9 @@ umask 077
 mkdir -p measurement-report
 python3 measure-source-watch.py --skip-live --synthetic-files 100 \
   --rows 100 600 --passes 2 > measurement-report/smoke.json
-python3 measure-source-watch.py > measurement-report/mac-source-watch.json
+python3 measure-source-watch.py > measurement-report/mac-source-watch-busy-1.json
+python3 measure-source-watch.py > measurement-report/mac-source-watch-busy-2.json
+python3 measure-source-watch.py > measurement-report/mac-source-watch-busy-3.json
 ```
 
 The default inventory examines these conventional source directories relative
@@ -79,14 +86,18 @@ when that better represents your configured providers.
 
 ## Return these files
 
-Return `mac-source-watch.json` and a short `mac-source-watch-context.md` with:
+Return the three `mac-source-watch-busy-*.json` reports and a short
+`mac-source-watch-context.md` with:
 
 - Mac architecture, macOS version, memory capacity, and storage class such as
   internal SSD or external HDD. Avoid identifying hardware details.
 - Whether sources and scratch are on APFS, case-sensitive APFS, a network mount,
   or another filesystem; whether they share a volume. Inspect locally and
   return only those generic properties.
-- Whether the machine was idle, busy, or actively recording sessions.
+- The concurrent workload in generic terms, such as compiling, containers,
+  browser use, or active agent sessions. Record whether normal interaction was
+  noticeably affected by the measurement, and whether the workload changed
+  between runs. Do not attribute a slowdown to the watcher, which is not running.
 - Whether the conventional roots covered the collection, and any missing
   provider types. Describe custom roots generically.
 - Any errors, truncated inventories, or workload changes. Do not copy raw error
@@ -119,6 +130,14 @@ one-file directories, nested trees, and changed pages need further qualification
 with the eventual implementation. The journal sample includes a deliberately
 large whole-cache delete transaction to expose a cost that insertion-only probes
 miss. Sampling does not establish a universal peak or enforce the proposed cap.
+
+The report records logical CPU count and start/end 1-, 5-, and 15-minute load
+averages. Load average includes runnable and some blocked work and is not CPU
+utilization or a complete account of memory and disk contention. Supply the
+workload context alongside it. Do not dismiss slow loaded results as noise or
+reduce file cardinality to make them pass. Carry them into implementation
+qualification. A slow Python probe alone does not prove the future Go watcher
+fails; qualification must exercise the actual scanner under comparable load.
 
 The first live pass runs in a fresh process, but the kernel may already have
 cached metadata. Subsequent passes are warm medians. Synthetic files were just

@@ -335,6 +335,19 @@ unit scan/verification/audit counts, native allocation, dispatch retries, and
 maximum retained bytes through existing sync diagnostics. No frontend work is
 required to expose these counters in existing diagnostics.
 
+Qualification must include representative concurrent work on ordinary developer
+Macs, such as builds, containers, browser activity, and active agent sessions.
+Use the same 50,000-file workload under load; reducing cardinality or requiring
+an idle machine is not an acceptable way to meet the design's gates. Record
+scan completion and event-to-dispatch latency distributions, CPU time, peak and
+retained memory, retries, and backlog over repeated runs. Completion-based
+scheduling must not overlap scans or accumulate unbounded work when the machine
+is busy. If the implementation cannot meet the stated correctness, coverage,
+and memory requirements under this load, revise the design before cutover.
+Python metadata timings identify qualification risks; they are not production
+watcher latency evidence. Compare with an optional idle baseline and report
+load context rather than discarding slow runs.
+
 ## macOS qualification access and remaining limits
 
 The [Mac measurement handoff](../plans/2026-10-01-source-watcher-mac-measurements.md)
