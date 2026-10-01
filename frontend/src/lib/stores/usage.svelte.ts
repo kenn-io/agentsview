@@ -56,7 +56,7 @@ export interface UsageProjectFilterItem {
 }
 
 export type GroupBy = "project" | "model" | "agent";
-export type TimeSeriesView = "stacked-area" | "bars" | "lines";
+export type TimeSeriesView = "smooth" | "lines" | "bars";
 export type AttributionView = "treemap" | "list" | "bars";
 
 interface Toggles {
@@ -68,13 +68,17 @@ const TOGGLES_KEY = "usage-toggles";
 
 function defaultToggles(): Toggles {
   return {
-    timeSeries: { groupBy: "project", view: "stacked-area" },
+    timeSeries: { groupBy: "project", view: "smooth" },
     attribution: { groupBy: "project", view: "treemap" },
   };
 }
 
 function isGroupBy(value: unknown): value is GroupBy {
   return value === "project" || value === "model" || value === "agent";
+}
+
+function isTimeSeriesView(value: unknown): value is TimeSeriesView {
+  return value === "smooth" || value === "lines" || value === "bars";
 }
 
 function isUnknownProjectKeyError(error: unknown): boolean {
@@ -98,7 +102,9 @@ function loadToggles(): Toggles {
       return {
         timeSeries: {
           groupBy: sharedGroupBy,
-          view: parsed.timeSeries?.view ?? defaults.timeSeries.view,
+          view: isTimeSeriesView(parsed.timeSeries?.view)
+            ? parsed.timeSeries.view
+            : defaults.timeSeries.view,
         },
         attribution: {
           groupBy: sharedGroupBy,

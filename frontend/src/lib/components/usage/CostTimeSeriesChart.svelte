@@ -1,10 +1,17 @@
 <script lang="ts">
-  import { Area, Bar, Chart, Layer, Tooltip } from "layerchart";
-  import { Button } from "@kenn-io/kit-ui";
-  import { scaleBand, scalePoint } from "d3-scale";
-  import { curveStep } from "d3-shape";
-  import LargeChartFrame from "../shared/LargeChartFrame.svelte";
-  import { usage, type GroupBy } from "../../stores/usage.svelte.js";
+  import { Area, Chart, Layer, Line, Rect, Text } from "layerchart";
+  import {
+    Button,
+    SegmentedControl,
+    type SegmentedControlOption,
+  } from "@kenn-io/kit-ui";
+  import { scaleLinear } from "d3-scale";
+  import { curveLinear, curveMonotoneX } from "d3-shape";
+  import {
+    usage,
+    type GroupBy,
+    type TimeSeriesView,
+  } from "../../stores/usage.svelte.js";
   import { formatDateTime, m } from "../../i18n/index.js";
   import { formatMoney, moneyFromMicrodollars } from "../../money.js";
   import { sumSelectedTokens } from "../../stores/usageTokenTypes.js";
@@ -20,13 +27,18 @@
 
   let { colorMap }: Props = $props();
 
-  const CHART_H = 180;
-  const MIN_Y_LABEL_W = 40;
+  // Plot geometry matches the Activity timeline.
+  const TOP_PAD = 8;
+  const PLOT_H = 160;
+  const X_LABEL_H = 18;
+  const MIN_Y_LABEL_W = 32;
   const Y_LABEL_CHAR_W = 6;
-  const Y_LABEL_GAP = 4;
-  // Reserved headroom at the top of the plot area so the
-  // maximum bar, its grid line, and the top y-axis label's
-  // ascenders do not clip against the SVG viewBox edge.
+  const Y_LABEL_GAP = 6;
+  const RIGHT_PAD = 16;
+  const TICK_TARGET = 4;
+  const PLOT_BOTTOM = TOP_PAD + PLOT_H;
+  const SVG_H = PLOT_BOTTOM + X_LABEL_H;
+  const DAY_MS = 86_400_000;
   const MAX_SERIES = 10;
 
   interface Point {
@@ -236,14 +248,25 @@
     return { points, keys, maxY: maxY || 1, labels };
   });
 
-  // TICK_TARGET is the number of y-axis intervals we aim
-  // for. niceScale picks a step from the 1/2/5 × 10ⁿ set so
-  // the chosen max is always an integer multiple of the step
-  // and every tick lands on a round value. Actual interval
-  // count may come out as target ± 1 depending on where maxY
-  // falls.
-  const TICK_TARGET = 5;
+  const view = $derived(usage.toggles.timeSeries.view);
+  const viewOptions = $derived<SegmentedControlOption[]>([
+    { value: "smooth", label: m.usage_chart_style_smooth() },
+    { value: "lines", label: m.usage_chart_style_lines() },
+    { value: "bars", label: m.usage_chart_style_bars() },
+  ]);
+  const groupByOptions = $derived<SegmentedControlOption[]>([
+    { value: "project", label: m.analytics_col_project() },
+    { value: "model", label: m.usage_model() },
+    { value: "agent", label: m.analytics_col_agent() },
+  ]);
+  // A single day has no neighbor to draw an area toward.
+  const drawBars = $derived(
+    view === "bars" || seriesData.points.length === 1,
+  );
 
+  // niceScale picks a step from the 1/2/5 × 10ⁿ set so the
+  // chosen max is an integer multiple of the step and every
+  // tick lands on a round value.
   function niceScale(
     maxY: number,
   ): { step: number; max: number } {
@@ -276,16 +299,98 @@
   const yLabelWidth = $derived.by(() => {
     let maxLength = 0;
     for (const value of yTickValues) {
-      const label = isTokenMode
-        ? fmtTokenYLabel(value)
-        : fmtCostYLabel(value);
-      maxLength = Math.max(maxLength, [...label].length);
+      maxLength = Math.max(maxLength, [...fmtYLabel(value)].length);
     }
     return Math.max(
       MIN_Y_LABEL_W,
       maxLength * Y_LABEL_CHAR_W + Y_LABEL_GAP,
     );
   });
+
+  let containerEl: HTMLDivElement | undefined = $state();
+  let containerWidth = $state(600);
+
+  $effect(() => {
+    if (!containerEl) return;
+    const ro = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (entry) containerWidth = Math.floor(entry.contentRect.width);
+    });
+    ro.observe(containerEl);
+    return () => ro.disconnect();
+  });
+
+  const plotWidth = $derived(
+    Math.max(containerWidth - yLabelWidth - RIGHT_PAD, 100),
+  );
+  const rangeStartMs = $derived(seriesData.points[0]?.time ?? 0);
+  const rangeEndMs = $derived(
+    (seriesData.points.at(-1)?.time ?? 0) + DAY_MS,
+  );
+
+  // Each day owns the cell [day start, next day start) on the x axis.
+  function xForMs(ms: number): number {
+    return yLabelWidth +
+      ((ms - rangeStartMs) / (rangeEndMs - rangeStartMs)) * plotWidth;
+  }
+
+  function yForValue(value: number): number {
+    return PLOT_BOTTOM - (value / scale.max) * PLOT_H;
+  }
+
+  function seriesColor(key: string): string {
+    return key === "__other__"
+      ? "var(--text-muted)"
+      : colorMap.get(key) ?? "var(--text-muted)";
+  }
+
+  function seriesLabel(key: string): string {
+    return key === "__other__"
+      ? m.shared_other()
+      : seriesData.labels[key] ?? key;
+  }
+
+  const cells = $derived(seriesData.points.map((point, idx) => {
+    const cellX = xForMs(point.time);
+    const cellW = plotWidth / seriesData.points.length;
+    const gap = Math.min(cellW * 0.2, 2);
+    let stacked = 0;
+    const segments = seriesData.keys.flatMap((key) => {
+      const value = point.values[key] ?? 0;
+      if (value <= 0) return [];
+      const y = yForValue(stacked + value);
+      const height = yForValue(stacked) - y;
+      stacked += value;
+      return [{ key, y, height, color: seriesColor(key) }];
+    });
+    return {
+      idx,
+      cellX,
+      cellW,
+      x: cellX + gap / 2,
+      w: Math.max(cellW - gap, 1),
+      segments,
+      total: stacked,
+    };
+  }));
+
+  // Area vertices sit at day centers so they line up with the bars.
+  const areaLayers = $derived.by(() => {
+    const below = seriesData.points.map(() => 0);
+    return seriesData.keys.map((key) => ({
+      key,
+      color: seriesColor(key),
+      data: seriesData.points.map((point, i) => {
+        const y0 = below[i] ?? 0;
+        const y1 = y0 + (point.values[key] ?? 0);
+        below[i] = y1;
+        return { time: point.time + DAY_MS / 2, y0, y1 };
+      }),
+    }));
+  });
+
+  // Monotone curves never swing past a day's value or below zero.
+  const areaCurve = $derived(view === "lines" ? curveLinear : curveMonotoneX);
 
   function dateLabel(date: string): string {
     return formatDateTime(`${date}T00:00:00`, {
@@ -304,12 +409,25 @@
 
   const xTicks = $derived.by(() => {
     const pts = seriesData.points;
+    const last = pts.length - 1;
     const step = Math.max(Math.ceil(pts.length / 6), 1);
-    return pts
-      .filter((_, index) =>
-        index === 0 || index === pts.length - 1 || index % step === 0
-      )
-      .map((point) => point.time);
+    type XTick = { x: number; label: string; anchor: "start" | "middle" | "end" };
+    return cells.flatMap((cell): XTick[] => {
+      const index = cell.idx;
+      const keep = index === 0 ||
+        index === last ||
+        (index % step === 0 && last - index >= step / 2);
+      if (!keep) return [];
+      const label = dateLabel(pts[index]!.date);
+      // Narrow edge cells anchor their label inside the plot.
+      if (cell.cellW < 48 && last > 0 && index === 0) {
+        return [{ x: cell.cellX, label, anchor: "start" }];
+      }
+      if (cell.cellW < 48 && last > 0 && index === last) {
+        return [{ x: cell.cellX + cell.cellW, label, anchor: "end" }];
+      }
+      return [{ x: cell.cellX + cell.cellW / 2, label, anchor: "middle" }];
+    });
   });
 
   function fmtCostYLabel(v: number): string {
@@ -323,80 +441,196 @@
     return String(Math.round(v));
   }
 
-  const stackSeries = $derived(
-    seriesData.keys.map((key) => ({
-      key,
-      value: (point: Point) => point.values[key] ?? 0,
-      color: key === "__other__"
-        ? "var(--text-muted)"
-        : colorMap.get(key) ?? "var(--text-muted)",
-    })),
-  );
-
-  function seriesColor(key: string): string {
-    return key === "__other__"
-      ? "var(--text-muted)"
-      : colorMap.get(key) ?? "var(--text-muted)";
+  function fmtYLabel(v: number): string {
+    return isTokenMode ? fmtTokenYLabel(v) : fmtCostYLabel(v);
   }
 
   function tooltipRows(point: Point) {
     return seriesData.keys
       .map((key) => ({
         key,
-        label: key === "__other__"
-          ? m.shared_other()
-          : seriesData.labels[key] ?? key,
+        label: seriesLabel(key),
         value: point.values[key] ?? 0,
         color: seriesColor(key),
       }))
       .sort((a, b) => b.value - a.value);
   }
 
+  let tooltip = $state<{ x: number; y: number; idx: number } | null>(null);
+  let tooltipEl = $state<HTMLDivElement>();
+  let tooltipPos = $state<{ left: number; top: number } | null>(null);
+  const TIP_PAD = 8;
+
+  // Clamp the measured tooltip inside the viewport, as the Activity
+  // timeline does. It renders hidden for one frame while this measures it.
+  $effect(() => {
+    if (!tooltip || !tooltipEl) {
+      tooltipPos = null;
+      return;
+    }
+    const w = tooltipEl.offsetWidth;
+    const h = tooltipEl.offsetHeight;
+    const left = Math.min(
+      Math.max(tooltip.x - w / 2, TIP_PAD),
+      Math.max(window.innerWidth - w - TIP_PAD, TIP_PAD),
+    );
+    const top = Math.max(tooltip.y - h, TIP_PAD);
+    tooltipPos = { left, top };
+  });
+
+  function showDayTip(event: MouseEvent, idx: number) {
+    const rect = (event.currentTarget as Element).getBoundingClientRect();
+    tooltip = { x: rect.left + rect.width / 2, y: rect.top - 4, idx };
+  }
+
+  function hideTip() {
+    tooltip = null;
+  }
+
+  // Day hits are keyed by index; drop a hover captured against old data.
+  $effect.pre(() => {
+    void seriesData;
+    void view;
+    hideTip();
+  });
+
+  const tooltipPoint = $derived(
+    tooltip ? seriesData.points[tooltip.idx] ?? null : null,
+  );
+
+  const selectedRange = $derived.by(() => {
+    const selection = usage.selectedTimeRange;
+    if (!selection) return null;
+    const pts = seriesData.points;
+    const start = pts.findIndex((point) => point.date >= selection.from);
+    const end = pts.findLastIndex((point) => point.date <= selection.to);
+    if (start < 0 || end < start) return null;
+    return { start, end: end + 1 };
+  });
+
+  let dragStart = $state<number | null>(null);
+  let dragEnd = $state<number | null>(null);
+  let keyboardAnchorIndex = $state<number | null>(null);
+
+  const activeRange = $derived.by(() => {
+    if (dragStart !== null) {
+      const end = dragEnd ?? dragStart;
+      return {
+        start: Math.min(dragStart, end),
+        end: Math.max(dragStart, end) + 1,
+      };
+    }
+    return selectedRange;
+  });
+
+  const selectionBounds = $derived.by(() => {
+    if (!activeRange) return null;
+    const first = cells[activeRange.start];
+    const last = cells[activeRange.end - 1];
+    if (!first || !last) return null;
+    return {
+      x: first.cellX,
+      width: last.cellX + last.cellW - first.cellX,
+    };
+  });
+
+  function inRange(idx: number): boolean {
+    return activeRange !== null &&
+      idx >= activeRange.start &&
+      idx < activeRange.end;
+  }
+
+  // The summary range needs two distinct days, so one-day picks do nothing.
+  function selectRange(startIndex: number, endIndex: number) {
+    const from = seriesData.points[Math.min(startIndex, endIndex)]?.date;
+    const to = seriesData.points[Math.max(startIndex, endIndex)]?.date;
+    if (from && to && from !== to) usage.setTimeRange(from, to);
+  }
+
+  function beginRangeDrag(event: PointerEvent, idx: number) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    dragStart = idx;
+    dragEnd = idx;
+  }
+
+  function extendRangeDrag(idx: number) {
+    if (dragStart === null) return;
+    dragEnd = idx;
+  }
+
+  function moveRangeDrag(event: PointerEvent) {
+    if (dragStart === null || !containerEl || cells.length === 0) return;
+    const x = event.clientX - containerEl.getBoundingClientRect().left;
+    const first = cells[0]!;
+    const last = cells.at(-1)!;
+    if (x <= first.cellX) {
+      dragEnd = 0;
+      return;
+    }
+    if (x >= last.cellX + last.cellW) {
+      dragEnd = cells.length - 1;
+      return;
+    }
+    const idx = cells.findIndex((cell) => x < cell.cellX + cell.cellW);
+    if (idx >= 0) dragEnd = idx;
+  }
+
+  function finishRangeDrag() {
+    if (dragStart === null) return;
+    const start = dragStart;
+    const end = dragEnd ?? dragStart;
+    dragStart = null;
+    dragEnd = null;
+    selectRange(start, end);
+  }
+
+  function cancelRangeDrag() {
+    dragStart = null;
+    dragEnd = null;
+  }
+
+  function onDayKey(event: KeyboardEvent, idx: number) {
+    if (event.key === "Escape" && usage.selectedTimeRange) {
+      event.preventDefault();
+      usage.clearTimeRange();
+      keyboardAnchorIndex = null;
+      return;
+    }
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      keyboardAnchorIndex = idx;
+      return;
+    }
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const next = Math.max(
+      0,
+      Math.min(cells.length - 1, idx + (event.key === "ArrowRight" ? 1 : -1)),
+    );
+    if (event.shiftKey) {
+      const anchor = keyboardAnchorIndex ?? idx;
+      keyboardAnchorIndex = anchor;
+      selectRange(anchor, next);
+    } else {
+      keyboardAnchorIndex = next;
+    }
+    queueMicrotask(() => {
+      containerEl?.querySelector<SVGElement>(
+        `[data-cost-day-index="${next}"]`,
+      )?.focus();
+    });
+  }
+
   function handleGroupByChange(g: GroupBy) {
     usage.setTimeSeriesGroupBy(g);
   }
-
-  const selectedBrushDomain = $derived(
-    usage.selectedTimeRange
-      ? [
-          dateTime(usage.selectedTimeRange.from),
-          dateTime(usage.selectedTimeRange.to),
-        ]
-      : [null, null],
-  );
-
-  function handleBrushEnd(event: {
-    brush: {
-      active: boolean | undefined;
-      x: Array<number | Date | string | null>;
-    };
-  }) {
-    if (!event.brush.active) return;
-    const first = event.brush.x[0];
-    const last = event.brush.x[1];
-    if (typeof first !== "number" || typeof last !== "number") return;
-    const fromTime = Math.min(first, last);
-    const toTime = Math.max(first, last);
-    const from = seriesData.points.find((point) => point.time === fromTime)?.date;
-    const to = seriesData.points.find((point) => point.time === toTime)?.date;
-    if (from && to) usage.setTimeRange(from, to);
-  }
-
-  function handleKeyboardRangeSubmit(event: SubmitEvent) {
-    event.preventDefault();
-    const form = event.currentTarget as HTMLFormElement;
-    const data = new FormData(form);
-    const from = String(data.get("from") ?? "");
-    const to = String(data.get("to") ?? "");
-    if (
-      from < to &&
-      seriesData.points.some((point) => point.date === from) &&
-      seriesData.points.some((point) => point.date === to)
-    ) {
-      usage.setTimeRange(from, to);
-    }
-  }
 </script>
+
+<svelte:window
+  onpointerup={finishRangeDrag}
+  onpointercancel={cancelRangeDrag}
+/>
 
 <div class="chart-container">
   <div class="chart-header">
@@ -404,40 +638,6 @@
       {chartTitle}
     </h3>
     <div class="chart-actions">
-      <form
-        class="keyboard-range kit-sr-only"
-        aria-label={m.shared_range_select_date_range()}
-        onsubmit={handleKeyboardRangeSubmit}
-      >
-        <label>
-          <span>{m.shared_range_from()}</span>
-          <!-- kit-ui-check-ignore: focus-only keyboard fallback for the chart brush; DateRangePicker would duplicate the page range control and alter chart chrome. -->
-          <input type="date"
-            name="from"
-            min={seriesData.points[0]?.date}
-            max={seriesData.points.at(-1)?.date}
-            value={usage.selectedTimeRange?.from ?? seriesData.points[0]?.date ?? ""}
-            required
-          />
-        </label>
-        <label>
-          <span>{m.shared_range_to()}</span>
-          <!-- kit-ui-check-ignore: focus-only keyboard fallback for the chart brush; DateRangePicker would duplicate the page range control and alter chart chrome. -->
-          <input type="date"
-            name="to"
-            min={seriesData.points[0]?.date}
-            max={seriesData.points.at(-1)?.date}
-            value={usage.selectedTimeRange?.to ?? seriesData.points.at(-1)?.date ?? ""}
-            required
-          />
-        </label>
-        <Button
-          type="submit"
-          size="sm"
-          surface="soft"
-          label={m.shared_range_select_date_range()}
-        />
-      </form>
       {#if usage.selectedTimeRange}
         <Button
           size="sm"
@@ -446,121 +646,177 @@
           onclick={() => usage.clearTimeRange()}
         />
       {/if}
-      <div class="segment-toggle">
-        <button
-          class="toggle-btn"
-          class:active={groupBy === "project"}
-          onclick={() => handleGroupByChange("project")}
-        >
-          {m.analytics_col_project()}
-        </button>
-        <button
-          class="toggle-btn"
-          class:active={groupBy === "model"}
-          onclick={() => handleGroupByChange("model")}
-        >
-          {m.usage_model()}
-        </button>
-        <button
-          class="toggle-btn"
-          class:active={groupBy === "agent"}
-          onclick={() => handleGroupByChange("agent")}
-        >
-          {m.analytics_col_agent()}
-        </button>
-      </div>
+      <SegmentedControl
+        options={viewOptions}
+        value={view}
+        ariaLabel={m.usage_chart_style()}
+        onchange={(value) => usage.setTimeSeriesView(value as TimeSeriesView)}
+      />
+      <SegmentedControl
+        options={groupByOptions}
+        value={groupBy}
+        ariaLabel={m.trends_group_by()}
+        onchange={(value) => handleGroupByChange(value as GroupBy)}
+      />
     </div>
   </div>
 
   {#if seriesData.points.length === 0}
     <div class="empty">{m.shared_no_data_for_period()}</div>
   {:else}
-    <div class="chart-scroll">
-      <Chart
-        data={seriesData.points}
-        x="time"
-        y={(point) => Math.max(...seriesData.keys.map((key) => point.values[key] ?? 0))}
-        xScale={seriesData.points.length === 1
-          ? scaleBand().padding(0.5)
-          : scalePoint().padding(0.05)}
-        yDomain={[0, scale.max]}
-        series={stackSeries}
-        seriesLayout="stack"
-        padding={{ top: 10, right: 24, bottom: 20, left: yLabelWidth }}
-        height={CHART_H + 20}
-        brush={{
-          axis: "x",
-          zoomOnBrush: false,
-          x: selectedBrushDomain,
-          clickToReset: false,
-          onBrushEnd: handleBrushEnd,
-          classes: { range: "usage-brush-range" },
-        }}
-        tooltipContext={{ mode: "bisect-x" }}
-      >
-        <Layer class="chart-svg" title={chartTitle}>
-          <LargeChartFrame
-            xTicks={xTicks}
-            yTicks={yTickValues}
-            formatX={(value) => dateLabel(
-              new Date(Number(value)).toISOString().slice(0, 10),
-            )}
-            formatY={(value) => isTokenMode
-              ? fmtTokenYLabel(Number(value))
-              : fmtCostYLabel(Number(value))}
-          >
-            {#each stackSeries as item (item.key)}
-              {#if seriesData.points.length === 1}
-                <Bar
-                  data={seriesData.points[0]!}
-                  seriesKey={item.key}
-                  fill={item.color}
-                  radius={1}
-                />
-              {:else}
-                <Area
-                  seriesKey={item.key}
-                  fill={item.color}
-                  curve={curveStep}
-                />
-              {/if}
-            {/each}
-          </LargeChartFrame>
-        </Layer>
-        <Tooltip.Root variant="none" fadeDuration={0}>
-          {#snippet children({ data })}
-            <div class="usage-series-tooltip" role="status">
-              <div class="tooltip-date">{tooltipDateLabel(data.date)}</div>
-              {#each tooltipRows(data) as row (row.key)}
-                <div class="tooltip-row">
-                  <span class="tooltip-dot" style="background: {row.color}"></span>
-                  <span class="tooltip-name">{row.label}</span>
-                  <span class="tooltip-value">
-                    {isTokenMode
-                      ? fmtTokenYLabel(row.value)
-                      : formatMoney(moneyFromMicrodollars(row.value))}
-                  </span>
-                </div>
-              {/each}
-            </div>
-          {/snippet}
-        </Tooltip.Root>
-      </Chart>
-    </div>
-
     {#if seriesData.keys.length > 1}
-      <div class="legend" style:padding-left="{yLabelWidth}px">
-        {#each seriesData.keys as key}
+      <div class="legend">
+        {#each seriesData.keys as key (key)}
           <span class="legend-item">
             <span
               class="legend-dot"
-              style="background: {colorMap.get(key) ?? 'var(--text-muted)'}"
+              style="background: {seriesColor(key)}"
             ></span>
-            {key === "__other__" ? m.shared_other() : (seriesData.labels[key] ?? key)}
+            {seriesLabel(key)}
           </span>
         {/each}
       </div>
     {/if}
+
+    <div
+      class="chart-body"
+      role="group"
+      aria-label={chartTitle}
+      bind:this={containerEl}
+      onpointermove={moveRangeDrag}
+    >
+      <Chart
+        data={seriesData.points}
+        x="time"
+        y={(datum: { y1?: number }) => datum.y1 ?? 0}
+        xScale={scaleLinear()}
+        xDomain={[rangeStartMs, rangeEndMs]}
+        yDomain={[0, scale.max]}
+        xRange={[yLabelWidth, yLabelWidth + plotWidth]}
+        yRange={[PLOT_BOTTOM, TOP_PAD]}
+        padding={0}
+        height={SVG_H}
+      >
+        <Layer class="chart-svg" title={chartTitle}>
+          {#each yTickValues as value (value)}
+            <Line
+              x1={yLabelWidth}
+              y1={yForValue(value)}
+              x2={yLabelWidth + plotWidth}
+              y2={yForValue(value)}
+              class="grid-line"
+            />
+            <Text
+              value={fmtYLabel(value)}
+              x={yLabelWidth - 4}
+              y={yForValue(value) + 3}
+              class="y-label"
+              textAnchor="end"
+            />
+          {/each}
+
+          {#if drawBars}
+            {#each cells as cell (cell.idx)}
+              <g class="cost-bar" data-cost-bar={cell.idx}>
+                {#each cell.segments as seg (seg.key)}
+                  <Rect
+                    class={`cost-seg${inRange(cell.idx) ? " selected" : ""}`}
+                    x={cell.x}
+                    y={seg.y}
+                    width={cell.w}
+                    height={seg.height}
+                    fill={seg.color}
+                  />
+                {/each}
+              </g>
+            {/each}
+          {:else}
+            {#each areaLayers as layer (layer.key)}
+              <Area
+                data={layer.data}
+                x="time"
+                y0="y0"
+                y1="y1"
+                fill={layer.color}
+                curve={areaCurve}
+              />
+            {/each}
+          {/if}
+
+          {#each xTicks as tick (tick.x)}
+            <Text
+              value={tick.label}
+              x={tick.x}
+              y={SVG_H - 4}
+              class="x-label"
+              textAnchor={tick.anchor}
+            />
+          {/each}
+
+          {#if selectionBounds}
+            <Rect
+              class="range-selection"
+              x={selectionBounds.x}
+              y={TOP_PAD}
+              width={selectionBounds.width}
+              height={PLOT_H}
+            />
+          {/if}
+
+          {#each cells as cell (cell.idx)}
+            {@const point = seriesData.points[cell.idx]!}
+            <Rect
+              class="slot-hit"
+              data-cost-day-index={cell.idx}
+              x={cell.cellX}
+              y={TOP_PAD}
+              width={cell.cellW}
+              height={PLOT_H}
+              role="button"
+              tabindex={0}
+              aria-pressed={inRange(cell.idx)}
+              aria-label={m.usage_chart_day_label({
+                date: tooltipDateLabel(point.date),
+                value: fmtYLabel(cell.total),
+              })}
+              onmouseenter={(event: MouseEvent) => showDayTip(event, cell.idx)}
+              onmouseleave={hideTip}
+              onpointerdown={(event: PointerEvent) => beginRangeDrag(event, cell.idx)}
+              onpointerenter={() => extendRangeDrag(cell.idx)}
+              onkeydown={(event: KeyboardEvent) => onDayKey(event, cell.idx)}
+            />
+          {/each}
+        </Layer>
+      </Chart>
+
+      {#if tooltip && tooltipPoint}
+        <div
+          bind:this={tooltipEl}
+          class="tooltip"
+          role="status"
+          style={tooltipPos
+            ? `left: ${tooltipPos.left}px; top: ${tooltipPos.top}px;`
+            : "visibility: hidden;"}
+        >
+          <div class="tooltip-date">{tooltipDateLabel(tooltipPoint.date)}</div>
+          <dl class="tooltip-metrics">
+            {#each tooltipRows(tooltipPoint) as row (row.key)}
+              <div class="tooltip-row">
+                <dt>
+                  <span class="tooltip-swatch" style="background: {row.color}"></span>
+                  <span class="tooltip-name">{row.label}</span>
+                </dt>
+                <dd>
+                  {isTokenMode
+                    ? fmtTokenYLabel(row.value)
+                    : formatMoney(moneyFromMicrodollars(row.value))}
+                </dd>
+              </div>
+            {/each}
+          </dl>
+        </div>
+      {/if}
+    </div>
   {/if}
 </div>
 
@@ -572,10 +828,11 @@
   }
 
   .chart-header {
-    position: relative;
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
     margin-bottom: 8px;
   }
 
@@ -585,162 +842,30 @@
     color: var(--text-primary);
   }
 
-  .segment-toggle {
-    display: flex;
-    gap: 2px;
-    background: var(--bg-inset);
-    border-radius: var(--radius-sm);
-    padding: 1px;
-  }
-
   .chart-actions {
     display: flex;
     align-items: center;
-    gap: 8px;
+    flex-wrap: wrap;
+    gap: 12px;
   }
 
   .chart-actions :global(.kit-button.kit-button--sm) {
-    height: 20px;
-    min-height: 20px;
+    height: 22px;
+    min-height: 22px;
     padding: 0 8px;
     font-size: 10px;
   }
 
-  .keyboard-range:focus-within {
-    z-index: 3;
-    top: calc(100% + 4px);
-    right: 0;
-    width: auto;
-    height: auto;
-    margin: 0;
-    padding: 8px;
-    overflow: visible;
-    clip-path: none;
-    display: flex;
-    align-items: end;
-    gap: 8px;
-    white-space: normal;
-    background: var(--bg-surface);
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-sm);
-    box-shadow: var(--shadow-md);
-  }
-
-  .keyboard-range label {
-    display: grid;
-    gap: var(--space-2);
-    font-size: 10px;
-    color: var(--text-muted);
-  }
-
-  /* kit-ui-check-ignore: native date input for the focus-only brush fallback; Card is not a form-control replacement. */
-  .keyboard-range input {
-    min-height: 24px;
-    padding: 2px 6px;
-    font: inherit;
-    color: var(--text-primary);
-    background: var(--bg-inset);
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-sm);
-  }
-
-  .keyboard-range input:focus-visible {
-    outline: 2px solid var(--accent-blue);
-    outline-offset: 1px;
-  }
-
-  .toggle-btn {
-    padding: 2px 8px;
-    font-size: 10px;
-    border-radius: var(--radius-sm);
-    color: var(--text-muted);
-    cursor: pointer;
-    transition: background 0.1s, color 0.1s;
-  }
-
-  .toggle-btn.active {
-    background: var(--bg-surface);
-    color: var(--text-primary);
-    font-weight: 500;
-  }
-
-  .toggle-btn:hover:not(.active) {
-    color: var(--text-secondary);
-  }
-
-  .chart-scroll {
-    overflow-x: hidden;
-    padding-bottom: 4px;
-  }
-
-  .chart-container :global(.usage-brush-range) {
-    background: color-mix(
-      in srgb,
-      var(--accent-blue) 16%,
-      transparent
-    );
-    border-left: 1px solid var(--accent-blue);
-    border-right: 1px solid var(--accent-blue);
-  }
-
-  .chart-container :global(.chart-svg) {
-    display: block;
-  }
-
-  .usage-series-tooltip {
-    min-width: 180px;
-    max-width: 300px;
-    padding: 8px 10px;
-    color: var(--text-primary);
-    background: var(--bg-surface);
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-sm);
-    box-shadow: var(--shadow-md);
-    font-size: 11px;
-  }
-
-  .tooltip-date {
-    margin-bottom: 6px;
-    color: var(--text-secondary);
-    font-weight: 600;
-  }
-
-  .tooltip-row {
-    display: grid;
-    grid-template-columns: 7px minmax(0, 1fr) auto;
-    align-items: center;
-    gap: var(--space-4);
-    min-height: 20px;
-  }
-
-  .tooltip-dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-  }
-
-  .tooltip-name {
-    overflow: hidden;
-    color: var(--text-secondary);
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .tooltip-value {
-    color: var(--text-primary);
-    font-variant-numeric: tabular-nums;
-    text-align: right;
-  }
-
   .legend {
     display: flex;
-    gap: 12px;
+    align-items: center;
     flex-wrap: wrap;
-    margin-top: 8px;
+    gap: var(--space-5);
+    margin-bottom: 4px;
   }
 
   .legend-item {
-    display: flex;
+    display: inline-flex;
     align-items: center;
     gap: 4px;
     font-size: 10px;
@@ -750,8 +875,124 @@
   .legend-dot {
     width: 8px;
     height: 8px;
-    border-radius: 50%;
+    border-radius: 2px;
     flex-shrink: 0;
+  }
+
+  .chart-body {
+    width: 100%;
+  }
+
+  .chart-container :global(.chart-svg) {
+    display: block;
+  }
+
+  .chart-container :global(.grid-line) {
+    stroke: var(--border-muted);
+    stroke-width: 1;
+    stroke-dasharray: 2 2;
+  }
+
+  .chart-container :global(.y-label),
+  .chart-container :global(.x-label) {
+    font-size: 9px;
+    fill: var(--text-muted);
+    font-family: var(--font-mono);
+  }
+
+  .chart-container :global(.cost-seg) {
+    opacity: 0.75;
+    /* Surface-colored seam so stacked segments read as separate parts. */
+    stroke: var(--bg-surface);
+    stroke-width: 1;
+  }
+
+  .chart-container :global(.cost-seg.selected) {
+    opacity: 1;
+  }
+
+  .chart-container :global(.range-selection) {
+    fill: var(--accent-blue);
+    fill-opacity: 0.16;
+    stroke: var(--accent-blue);
+    stroke-opacity: 1;
+    stroke-width: 1.5;
+    pointer-events: none;
+  }
+
+  .chart-container :global(.slot-hit) {
+    fill: transparent;
+    cursor: pointer;
+  }
+
+  .chart-container :global(.slot-hit:hover) {
+    fill: var(--accent-blue);
+    opacity: 0.08;
+  }
+
+  .chart-container :global(.slot-hit:focus-visible) {
+    outline: 1px solid var(--accent-blue);
+    outline-offset: -1px;
+  }
+
+  .tooltip {
+    position: fixed;
+    min-width: 168px;
+    max-width: 320px;
+    padding: 8px 10px;
+    background: var(--text-primary);
+    color: var(--bg-primary);
+    font-size: 11px;
+    border-radius: var(--radius-sm);
+    white-space: nowrap;
+    pointer-events: none;
+    z-index: var(--z-tooltip);
+  }
+
+  .tooltip-date {
+    padding-bottom: 6px;
+    border-bottom: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+    font-weight: 600;
+  }
+
+  .tooltip-metrics {
+    display: grid;
+    gap: 4px;
+    margin: 6px 0 0;
+  }
+
+  .tooltip-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 16px;
+    align-items: baseline;
+  }
+
+  .tooltip-row dt {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .tooltip-swatch {
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+    flex-shrink: 0;
+  }
+
+  .tooltip-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    opacity: 0.7;
+  }
+
+  .tooltip-row dd {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-weight: 600;
+    text-align: right;
   }
 
   .empty {

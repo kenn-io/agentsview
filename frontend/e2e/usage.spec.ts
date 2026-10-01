@@ -34,7 +34,7 @@ test.describe("Usage page", () => {
 
     const chart = page.locator(".chart-container").first();
     const plot = chart.locator("svg").first();
-    const brush = chart.locator(".lc-brush-context");
+    const brush = chart.locator(".chart-body");
     const summaryRow = page.locator(".summary-cards");
     const summaryCards = summaryRow.locator(".card");
     await expect(plot).toBeVisible({ timeout: 10_000 });

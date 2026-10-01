@@ -505,6 +505,22 @@ describe("UsageStore group-by linking", () => {
       attribution: { groupBy: "agent" },
     });
   });
+
+  it("defaults the cost chart to smooth areas and remembers the chosen style", async () => {
+    localStorage.setItem(
+      TOGGLES_KEY,
+      JSON.stringify({ timeSeries: { groupBy: "project", view: "stacked-area" } }),
+    );
+
+    const { usage } = await loadStore();
+    expect(usage.toggles.timeSeries.view).toBe("smooth");
+
+    usage.setTimeSeriesView("bars");
+
+    expect(JSON.parse(localStorage.getItem(TOGGLES_KEY) || "{}")).toMatchObject({
+      timeSeries: { view: "bars" },
+    });
+  });
 });
 
 describe("UsageStore session filter params", () => {
