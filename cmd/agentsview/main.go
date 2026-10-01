@@ -281,11 +281,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 
 	idleTracker := newDaemonIdleTracker(cfg, stop)
 
-	telemetryReporter := telemetry.NewReporterOrDisabled(telemetry.Options{
-		InstallationID: cfg.InstallationID,
-		Version:        version,
-		Commit:         commit,
-	})
+	telemetryReporter := telemetry.NewReporterOrDisabled(telemetryOptions(cfg))
 	defer func() {
 		if err := telemetryReporter.Close(); err != nil {
 			log.Printf("close telemetry: %v", err)
@@ -1311,6 +1307,15 @@ func newDaemonIdleTracker(cfg config.Config, stop context.CancelFunc) *server.Id
 		log.Printf("idle timeout elapsed; shutting down daemon")
 		stop()
 	})
+}
+
+func telemetryOptions(cfg config.Config) telemetry.Options {
+	return telemetry.Options{
+		InstallationID: cfg.InstallationID,
+		InstalledAt:    cfg.InstallationCreatedAt,
+		Version:        version,
+		Commit:         commit,
+	}
 }
 
 func startTelemetryPings(ctx context.Context, reporter *telemetry.Reporter) {
