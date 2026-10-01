@@ -151,7 +151,7 @@ type bufferedFSNotifyWatchOps struct {
 }
 
 func (w bufferedFSNotifyWatchOps) Add(path string) error {
-	return w.Watcher.AddWith(path, fsnotify.WithBufferSize(16<<10))
+	return w.AddWith(path, fsnotify.WithBufferSize(16<<10))
 }
 
 type fsnotifyBackendLifecycle uint8
