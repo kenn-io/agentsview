@@ -87,11 +87,6 @@ func isolateParseDiffEnv(t *testing.T) {
 	testDataDir(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	// Neutralize every directory-affecting variable, not just the primary
-	// one. An agent whose EnvVar is empty resolves its roots through
-	// NativeEnvVar and DefaultRootEnvVar instead, so an ambient value for
-	// either would point discovery at the real home directory.
-	clearConfiguredAgentEnvVars(t)
 	for _, def := range parser.Registry {
 		if def.EnvVar != "" {
 			t.Setenv(def.EnvVar,

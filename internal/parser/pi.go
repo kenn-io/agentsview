@@ -122,9 +122,8 @@ func parsePiLikeSession(
 	// The pi-subagents extension writes a fresh child to
 	// <project>/<parent>/<runId>/run-N/session.jsonl with no parentSession in
 	// its header, so lineage comes from the parent transcript three levels up.
-	// StepCode ships the same extension, so it recovers lineage the same way.
 	var isPiSubagent bool
-	if (agent == AgentPi || agent == AgentOMO || agent == AgentStepCode) && parentSessionID == "" {
+	if (agent == AgentPi || agent == AgentOMO) && parentSessionID == "" {
 		if parentID := piSubagentParentSessionID(path); parentID != "" {
 			parentSessionID = idPrefix + parentID
 			isPiSubagent = true
@@ -364,20 +363,26 @@ func parsePiLikeSession(
 		},
 	}
 	// A persisted parent means the transcript was branched from another
-	// session (/fork, /clone), not spawned as a subagent. StepCode writes the
-	// same header, so it is classified the same way; a subagent child that
-	// got its lineage from the run directory still overrides this below.
+	// session (/fork, /clone), not spawned as a subagent. A subagent child
+	// that got its lineage from the run directory still overrides this below.
 	if (agent == AgentPrimeAgent || agent == AgentPi || agent == AgentOMO ||
 		agent == AgentStepCode) && parentSessionID != "" {
 		sess.RelationshipType = RelFork
 	}
-	if isOMPSubagent || isPiSubagent {
+	if isOMPSubagent || isPiSubagent || (agent == AgentStepCode && isStepCodeChildSessionID(sessionID)) {
 		sess.RelationshipType = RelSubagent
 	}
 
 	accumulateMessageTokenUsage(sess, messages)
 
 	return sess, messages, nil
+}
+
+// isStepCodeChildSessionID reports whether a StepCode header ID belongs to a
+// spawned subagent or workflow agent. StepCode writes those children beside
+// the parent with no parentSession, so the ID prefix is the only marker.
+func isStepCodeChildSessionID(id string) bool {
+	return strings.HasPrefix(id, "subagent-") || strings.HasPrefix(id, "workflow-")
 }
 
 func piPersistedPathSessionID(value string) string {

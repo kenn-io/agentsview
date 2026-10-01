@@ -170,10 +170,9 @@ func TestOMPProviderDiscoversTitleSlotSession(t *testing.T) {
 }
 
 // TestStepCodeProviderSourceMethods covers StepCode's real on-disk shape: a
-// project-encoded directory holding timestamp-prefixed transcripts, plus a
-// pi-subagents child nested below a directory named after its parent
-// transcript's stem. Both must be discovered, and both must land under the
-// stepcode: prefix instead of merging into Pi's sessions.
+// project-encoded directory holding timestamp-prefixed transcripts, including
+// a spawned subagent child written beside its parent. All must be discovered
+// and land under the stepcode: prefix instead of merging into Pi's sessions.
 func TestStepCodeProviderSourceMethods(t *testing.T) {
 	root := t.TempDir()
 	project := "--Users-alice-code-my-project--"
@@ -187,10 +186,10 @@ func TestStepCodeProviderSourceMethods(t *testing.T) {
 		"",
 	}, "\n"))
 
-	// A subagent child carries no parentSession header, so its lineage comes
-	// from the parent transcript sitting beside its run directory.
-	subagentID := "0199e4c2-7777-8888-9999-000011112222"
-	subagentPath := filepath.Join(root, project, parentStem, "run-a", "run-1", "session.jsonl")
+	// StepCode spawns subagents with --session-id subagent-<uuid>, so the child
+	// lands beside its parent with no parentSession header.
+	subagentID := "subagent-0199e4c2-7777-8888-9999-000011112222"
+	subagentPath := filepath.Join(root, project, "2026-09-01T12-00-10-000Z_"+subagentID+".jsonl")
 	writeSourceFile(t, subagentPath, strings.Join([]string{
 		`{"type":"session","version":3,"id":"` + subagentID + `","timestamp":"2026-09-01T12:00:10.000Z","cwd":"/Users/alice/code/my-project"}`,
 		`{"type":"message","id":"s1","parentId":null,"timestamp":"2026-09-01T12:00:11.000Z","message":{"role":"user","content":"Summarize the diff."}}`,
@@ -238,8 +237,12 @@ func TestStepCodeProviderSourceMethods(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, subagentPath, found.DisplayPath)
 
+	parentSource := discovered[0]
+	if parentSource.DisplayPath != sourcePath {
+		parentSource = discovered[1]
+	}
 	outcome, err := provider.Parse(t.Context(), ParseRequest{
-		Source:      discovered[0],
+		Source:      parentSource,
 		Fingerprint: SourceFingerprint{Key: sourcePath, Hash: "abc123"},
 	})
 	require.NoError(t, err)
@@ -250,8 +253,9 @@ func TestStepCodeProviderSourceMethods(t *testing.T) {
 	assert.Equal(t, AgentStepCode, sess.Agent)
 	assert.Equal(t, "abc123", sess.File.Hash)
 
-	// The nested child parses under its own ID and links back to the parent
-	// transcript, so subagent runs stay attached to the parent session.
+	// The parent transcript doesn't record the child's ID, so the child stays
+	// unlinked but is classified as a subagent to keep it out of session lists.
+	assert.Empty(t, sess.RelationshipType)
 	childOutcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: SourceRef{Provider: AgentStepCode, DisplayPath: subagentPath},
 	})
@@ -259,9 +263,8 @@ func TestStepCodeProviderSourceMethods(t *testing.T) {
 	require.Len(t, childOutcome.Results, 1)
 	child := childOutcome.Results[0].Result.Session
 	assert.Equal(t, "stepcode:"+subagentID, child.ID)
-	assert.Equal(t, "stepcode:"+parentID, child.ParentSessionID)
-	assert.Equal(t, RelSubagent, child.RelationshipType,
-		"a run-directory child is a subagent, not a fork")
+	assert.Empty(t, child.ParentSessionID)
+	assert.Equal(t, RelSubagent, child.RelationshipType)
 }
 
 func TestPiProviderSourceMethods(t *testing.T) {

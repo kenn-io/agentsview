@@ -173,10 +173,6 @@ func TestLocalSessionUsageRefreshesSubagentTranscripts(t *testing.T) {
 	dataDir := testDataDir(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	// Clear every directory-affecting variable before pinning EnvVar: an agent
-	// with no EnvVar resolves roots through NativeEnvVar or DefaultRootEnvVar,
-	// so an ambient value for either would escape this temp home.
-	clearConfiguredAgentEnvVars(t)
 	for _, def := range parser.Registry {
 		if def.EnvVar != "" {
 			t.Setenv(def.EnvVar,

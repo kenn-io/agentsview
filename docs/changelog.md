@@ -90,8 +90,11 @@ The latest published release is
   Pi but keeps its own directory, so its transcripts were previously invisible
   even though the format was already supported. Sessions from
   `~/.stepcode/agent/sessions` now appear alongside Pi's, under their own agent
-  name, and `STEP_CODING_AGENT_DIR` and `STEP_CODING_AGENT_SESSION_DIR` point
-  discovery elsewhere when you keep sessions somewhere else.
+  name. `STEPCODE_DIR`, `STEP_CODING_AGENT_DIR`, and
+  `STEP_CODING_AGENT_SESSION_DIR` point discovery elsewhere when you keep
+  sessions somewhere else. Subagent and workflow runs StepCode spawns are
+  tagged as subagents, so they stay out of the session list the way they stay
+  out of StepCode's own resume picker.
 
 **Improvements**
 

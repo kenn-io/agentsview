@@ -664,7 +664,7 @@ func TestStepCodeRegistryEntry(t *testing.T) {
 	def, ok := AgentByType(AgentStepCode)
 	require.True(t, ok, "AgentStepCode missing from Registry")
 	require.True(t, def.FileBased, "StepCode FileBased")
-	assert.Empty(t, def.EnvVar, "StepCode has no agentsview-specific dir var")
+	assert.Equal(t, "STEPCODE_DIR", def.EnvVar)
 	assert.Equal(t, "STEP_CODING_AGENT_SESSION_DIR", def.NativeEnvVar)
 	assert.Equal(t, "STEP_CODING_AGENT_DIR", def.DefaultRootEnvVar)
 	assert.Equal(t, ".stepcode/agent", def.DefaultRootDir)

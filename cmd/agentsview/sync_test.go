@@ -132,10 +132,6 @@ func isolateDirectCLISources(t *testing.T) {
 	t.Helper()
 	root := t.TempDir()
 	t.Setenv("HOME", root)
-	// Clear the agent-specific variables first: EnvVar is unset for agents
-	// that resolve roots through NativeEnvVar or DefaultRootEnvVar alone, and
-	// an ambient value for either would redirect discovery outside root.
-	clearConfiguredAgentEnvVars(t)
 	for _, def := range parser.Registry {
 		if def.EnvVar != "" {
 			t.Setenv(def.EnvVar, filepath.Join(root, string(def.Type)))

@@ -2290,11 +2290,17 @@ schemas keep their existing ordering behavior.
   (`.stepcode/agent/sessions`) and its own session-ID prefix, so StepCode
   transcripts never merge into Pi's. `STEP_CODING_AGENT_DIR` re-roots the
   default sessions path and `STEP_CODING_AGENT_SESSION_DIR` replaces it
-  outright, mirroring how Pi resolves the same pair of overrides. Because
-  default filenames are timestamp-prefixed rather than header-UUID-named,
-  identity lookup that arrives with only a bare header UUID falls back to a
-  header scan, and a pi-subagents child nested below its parent transcript's
-  stem is linked back to that parent.
+  outright, mirroring how Pi resolves the same pair of overrides;
+  `STEPCODE_DIR` or `stepcode_dirs` override both. Because default filenames
+  are timestamp-prefixed rather than header-UUID-named, identity lookup that
+  arrives with only a bare header UUID falls back to a header scan.
+  StepCode's own subagent and workflow runners spawn a child with
+  `--session-id subagent-<uuid>` or `workflow-<run>-<agent>`
+  ([helpers.ts](https://github.com/stepfun-ai/Step-Code/blob/519e4de4ed2162d3667be1821cb92ada6b884e5a/packages/coding-agent/src/features/subagent/helpers.ts)),
+  so the child lands beside its parent in the same project directory with no
+  `parentSession`. Agentsview classifies those IDs as subagents, the same
+  prefix StepCode's resume picker hides, and leaves them unlinked because the
+  parent transcript doesn't record the child ID.
 
 ## Qwen Code (`qwen`)
 

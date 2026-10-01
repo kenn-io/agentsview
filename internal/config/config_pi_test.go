@@ -75,12 +75,14 @@ func TestPiDirectoryOverrides(t *testing.T) {
 // TestStepCodeDirectoryOverrides covers StepCode's root resolution. StepCode
 // ships the Pi harness under its own agent directory, so it honours the same
 // pair of native overrides Pi does: STEP_CODING_AGENT_DIR re-roots the default
-// sessions path and STEP_CODING_AGENT_SESSION_DIR replaces it outright.
+// sessions path and STEP_CODING_AGENT_SESSION_DIR replaces it outright, while
+// STEPCODE_DIR beats both the way PI_DIR does.
 func TestStepCodeDirectoryOverrides(t *testing.T) {
 	for _, tt := range []struct {
 		name       string
 		agentDir   string
 		sessionDir string
+		stepDir    string
 		configDirs []string
 		want       string
 	}{
@@ -88,6 +90,7 @@ func TestStepCodeDirectoryOverrides(t *testing.T) {
 		{name: "agent home", agentDir: "profile", want: "profile/sessions"},
 		{name: "session directory", sessionDir: "transcripts", want: "transcripts"},
 		{name: "sessions override home", agentDir: "profile", sessionDir: "transcripts", want: "transcripts"},
+		{name: "STEPCODE_DIR overrides native variables", agentDir: "profile", sessionDir: "transcripts", stepDir: "explicit", want: "explicit"},
 		{name: "config overrides home", agentDir: "profile", configDirs: []string{"configured"}, want: "configured"},
 		{name: "config clears home", agentDir: "profile", configDirs: []string{}},
 		{name: "tilde home", agentDir: "~/profile", want: "profile/sessions"},
@@ -100,6 +103,7 @@ func TestStepCodeDirectoryOverrides(t *testing.T) {
 			t.Chdir(home)
 			t.Setenv("STEP_CODING_AGENT_DIR", tt.agentDir)
 			t.Setenv("STEP_CODING_AGENT_SESSION_DIR", tt.sessionDir)
+			t.Setenv("STEPCODE_DIR", tt.stepDir)
 			settings := map[string]any{}
 			if tt.configDirs != nil {
 				settings["stepcode_dirs"] = tt.configDirs

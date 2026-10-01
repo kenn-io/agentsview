@@ -592,6 +592,7 @@ var Registry = []AgentDef{
 		// otherwise never see StepCode sessions.
 		Type:              AgentStepCode,
 		DisplayName:       "StepCode",
+		EnvVar:            "STEPCODE_DIR",
 		NativeEnvVar:      "STEP_CODING_AGENT_SESSION_DIR",
 		DefaultRootEnvVar: "STEP_CODING_AGENT_DIR",
 		DefaultRootDir:    ".stepcode/agent",

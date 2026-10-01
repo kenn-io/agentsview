@@ -1865,8 +1865,9 @@ agentsview help
 | `PI_DIR`                              | `~/.pi/agent/sessions`                               | Pi sessions directory                                                                               |
 | `PI_CODING_AGENT_DIR`                 | unset                                                | Pi agent home that re-roots the default `sessions/` discovery path                                  |
 | `PI_CODING_AGENT_SESSION_DIR`         | unset                                                | Pi session directory override; `PI_DIR` takes precedence                                            |
+| `STEPCODE_DIR`                        | `~/.stepcode/agent/sessions`                         | StepCode sessions directory                                                                         |
 | `STEP_CODING_AGENT_DIR`               | unset                                                | StepCode agent home that re-roots the default `sessions/` discovery path                            |
-| `STEP_CODING_AGENT_SESSION_DIR`       | unset                                                | StepCode session directory override; takes precedence over the agent home                           |
+| `STEP_CODING_AGENT_SESSION_DIR`       | unset                                                | StepCode session directory override; `STEPCODE_DIR` takes precedence                                |
 | `PRIME_AGENT_SESSION_DIR`             | `~/.prime/agent/sessions`                            | Prime Agent sessions directory                                                                      |
 | `PIEBALD_DIR`                         | `~/.local/share/piebald`                             | Piebald directory (contains `app.db`)                                                               |
 | `POOLSIDE_DIR`                        | (platform-specific)                                  | Poolside Agent CLI trajectory directory                                                             |
