@@ -276,7 +276,7 @@ func (p *claudeProvider) Parse(
 	// transcript with the same name. Both are the same sub-agent session, so the
 	// later entries are appended here rather than colliding with the first
 	// file's session row and replacing it.
-	results, _, err = p.joinClaudeSubagentContinuations(
+	results, joined, err := p.joinClaudeSubagentContinuations(
 		ctx, path, project, machine, opts, results,
 	)
 	if err != nil {
@@ -294,6 +294,7 @@ func (p *claudeProvider) Parse(
 		Results:            out,
 		ExcludedSessionIDs: excludedIDs,
 		ResultSetComplete:  true,
+		ForceReplace:       joined,
 	}, nil
 }
 
