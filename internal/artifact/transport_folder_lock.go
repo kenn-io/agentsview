@@ -7,6 +7,8 @@ import (
 	"io/fs"
 	"os"
 	"time"
+
+	"github.com/cenkalti/backoff/v7"
 )
 
 const folderExchangeLockRetryDelay = 100 * time.Millisecond
@@ -22,26 +24,25 @@ func (t *folderTransport) acquireExchangeLockLocked(
 	if err != nil {
 		return nil, fmt.Errorf("acquiring artifact folder exchange lock: %w", err)
 	}
-	for {
+	lock, err := backoff.Retry(ctx, func() (*folderExchangeLock, error) {
 		locked, lockErr := tryLockFolderFile(file)
 		if lockErr != nil {
-			return nil, errors.Join(
-				fmt.Errorf("acquiring artifact folder exchange lock: %w", lockErr),
-				file.Close(),
-			)
+			return nil, backoff.Permanent(fmt.Errorf("acquiring artifact folder exchange lock: %w", lockErr))
 		}
 		if locked {
 			return &folderExchangeLock{file: file}, nil
 		}
-
-		timer := time.NewTimer(folderExchangeLockRetryDelay)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return nil, errors.Join(ctx.Err(), file.Close())
-		case <-timer.C:
-		}
+		return nil, errors.New("artifact folder exchange lock is held")
+	}, backoff.WithBackOff(backoff.NewConstantBackOff(folderExchangeLockRetryDelay)),
+		backoff.WithMaxTries(0), backoff.WithMaxElapsedTime(0))
+	if err == nil {
+		return lock, nil
 	}
+	retryErr := backoff.AsRetryError(err)
+	if errors.Is(retryErr.Cause, backoff.ErrPermanent) {
+		return nil, errors.Join(retryErr.LastErr, file.Close())
+	}
+	return nil, errors.Join(ctx.Err(), file.Close())
 }
 
 func openFolderExchangeLockFile(root *os.Root) (*os.File, error) {

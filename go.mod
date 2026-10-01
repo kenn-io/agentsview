@@ -6,6 +6,7 @@ require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/ClickHouse/clickhouse-go/v2 v2.48.0
 	github.com/ccoveille/go-safecast/v2 v2.0.1
+	github.com/cenkalti/backoff/v7 v7.0.1
 	github.com/danielgtaylor/huma/v2 v2.39.1
 	github.com/dlclark/regexp2/v2 v2.7.2
 	github.com/dmarkham/enumer v1.6.3

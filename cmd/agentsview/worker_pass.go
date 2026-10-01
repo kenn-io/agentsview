@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"time"
 
+	"github.com/cenkalti/backoff/v7"
 	"github.com/spf13/pflag"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -321,22 +322,21 @@ func workerWritePassLocked(
 func restoreArchiveAccess(
 	ctx context.Context, what string, restore func() error,
 ) error {
-	backoff := reacquireBackoffInitial
-	for {
-		err := restore()
-		if err == nil {
-			return nil
-		}
-		log.Printf("%s failed; retrying in %s: %v", what, backoff, err)
-		timer := time.NewTimer(backoff)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return fmt.Errorf("%s: %w", what, ctx.Err())
-		case <-timer.C:
-		}
-		backoff = min(backoff*2, reacquireBackoffMax)
+	policy := backoff.NewExponentialBackOff()
+	policy.InitialInterval = reacquireBackoffInitial
+	policy.MaxInterval = reacquireBackoffMax
+	policy.Multiplier = 2
+	policy.RandomizationFactor = 0
+	_, err := backoff.Retry(ctx, func() (struct{}, error) {
+		return struct{}{}, restore()
+	}, backoff.WithBackOff(policy), backoff.WithMaxTries(0), backoff.WithMaxElapsedTime(0),
+		backoff.WithNotify(func(err error, delay time.Duration) {
+			log.Printf("%s failed; retrying in %s: %v", what, delay, err)
+		}))
+	if err != nil {
+		return fmt.Errorf("%s: %w", what, ctx.Err())
 	}
+	return nil
 }
 
 // reacquireWriteOwnerLock retakes the write-owner lock after a worker pass,
@@ -348,27 +348,22 @@ func restoreArchiveAccess(
 func reacquireWriteOwnerLock(
 	ctx context.Context, lock *writeOwnerLock, mode string,
 ) error {
-	backoff := reacquireBackoffInitial
-	for {
-		if err := lock.Reacquire(); err == nil {
-			return nil
-		} else {
-			log.Printf(
-				"reacquire write lock after %s pass failed; retrying in %s: %v",
-				mode, backoff, err,
-			)
-		}
-		timer := time.NewTimer(backoff)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return fmt.Errorf(
-				"reacquire write lock after %s pass: %w", mode, ctx.Err(),
-			)
-		case <-timer.C:
-		}
-		backoff = min(backoff*2, reacquireBackoffMax)
+	policy := backoff.NewExponentialBackOff()
+	policy.InitialInterval = reacquireBackoffInitial
+	policy.MaxInterval = reacquireBackoffMax
+	policy.Multiplier = 2
+	policy.RandomizationFactor = 0
+	_, err := backoff.Retry(ctx, func() (struct{}, error) {
+		return struct{}{}, lock.Reacquire()
+	}, backoff.WithBackOff(policy), backoff.WithMaxTries(0), backoff.WithMaxElapsedTime(0),
+		backoff.WithNotify(func(err error, delay time.Duration) {
+			log.Printf("reacquire write lock after %s pass failed; retrying in %s: %v",
+				mode, delay, err)
+		}))
+	if err != nil {
+		return fmt.Errorf("reacquire write lock after %s pass: %w", mode, ctx.Err())
 	}
+	return nil
 }
 
 // launchSyncWorkerProcess self-execs `sync-worker --mode=<mode>`, decodes the
