@@ -192,7 +192,7 @@ func (ix *Index) Build(
 		return result, err
 	}
 
-	wrapped, finish := ix.wrapProgress(enc, total, o.Progress)
+	wrapped, finish := ix.wrapProgress(confirmInputRejections(enc), total, o.Progress)
 	fillStore := &repairQueueCompletingStore{
 		Store: ix.store,
 		db:    ix.db,
@@ -279,7 +279,7 @@ func (ix *Index) buildInvalidRepair(
 		return result, errors.Join(err, countErr)
 	}
 
-	wrapped, finish := ix.wrapProgress(enc, total, o.Progress)
+	wrapped, finish := ix.wrapProgress(confirmInputRejections(enc), total, o.Progress)
 	fill, fillErr := fillRepairQueue(ctx, store, target, wrapped, repairFillOptions{
 		Split:       ix.split,
 		Batch:       o.encodeBatchOptions(),
@@ -374,15 +374,50 @@ func skipPermanentEncodeError(doc string, err error) bool {
 
 // isPermanentEncodeError reports whether err rejects one specific input in a
 // way retrying can never fix: kit's pre-flight refusal of blank chunk text, or
-// an endpoint response kit classifies as an input rejection. Credential,
+// an endpoint response kit classifies as an input rejection. Build and repair
+// encoders pass through confirmInputRejections, which turns a 400 that the
+// endpoint also returns for a probe input into an ordinary error. Credential,
 // route, rate-limit, and server failures are not input-specific and abort the
 // fill so a later build retries the document.
 func isPermanentEncodeError(err error) bool {
+	if errors.Is(err, errEndpointRejectsRequests) {
+		return false
+	}
 	if errors.Is(err, kitvec.ErrEmptyEmbeddingInput) {
 		return true
 	}
 	apiErr, ok := errors.AsType[*embedclient.APIError](err)
 	return ok && apiErr.InputRejected()
+}
+
+// endpointProbeText is a short input any working embeddings endpoint embeds.
+const endpointProbeText = "agentsview embeddings probe"
+
+// errEndpointRejectsRequests marks an HTTP 400 that the endpoint also returned
+// for endpointProbeText, so the request or configuration is at fault rather
+// than the document.
+var errEndpointRejectsRequests = errors.New(
+	"embeddings endpoint also rejected a probe input, so the request or configuration is invalid")
+
+// confirmInputRejections reports an input rejection (HTTP 400) from enc as
+// one only after the endpoint embeds endpointProbeText. kit's APIError carries
+// no response body, so the status alone cannot tell a rejected document from
+// a wrong model, route, or request field, which return 400 for every input.
+// Skip-stamping those would mark the whole corpus covered with no vectors and
+// let an empty generation activate. When the probe fails too, the 400 comes
+// back as an ordinary error that aborts the fill and leaves documents pending.
+func confirmInputRejections(enc kitvec.EncodeFunc) kitvec.EncodeFunc {
+	return func(ctx context.Context, texts []string) ([][]float32, error) {
+		vectors, err := enc(ctx, texts)
+		apiErr, ok := errors.AsType[*embedclient.APIError](err)
+		if !ok || !apiErr.InputRejected() {
+			return vectors, err
+		}
+		if _, probeErr := enc(ctx, []string{endpointProbeText}); probeErr != nil {
+			return nil, fmt.Errorf("%w: %w; probe: %w", errEndpointRejectsRequests, err, probeErr)
+		}
+		return nil, err
+	}
 }
 
 // noWatermarkYet reports whether Refresh has never advanced the stored

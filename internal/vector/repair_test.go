@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -500,8 +501,11 @@ SELECT vec_rowid FROM message_vectors_chunks
 	}, gen, BuildOptions{RepairInvalid: true})
 	require.ErrorContains(t, err, "endpoint failed")
 
-	ordinary, err := ix.Build(ctx, src, func(context.Context, []string) ([][]float32, error) {
-		return nil, &embedclient.APIError{StatusCode: http.StatusBadRequest}
+	ordinary, err := ix.Build(ctx, src, func(_ context.Context, texts []string) ([][]float32, error) {
+		if slices.Contains(texts, "bad") {
+			return nil, &embedclient.APIError{StatusCode: http.StatusBadRequest}
+		}
+		return fakeBuildEncoder()(ctx, texts)
 	}, gen, BuildOptions{FullRebuild: true})
 	require.NoError(t, err)
 	assert.Equal(t, 1, ordinary.Fill.Skipped)

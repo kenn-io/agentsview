@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -644,8 +645,17 @@ func TestRunDirectBuildPrintsFailedAttemptResult(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
 
-	failingEncoder := func(context.Context, []string) ([][]float32, error) {
-		return nil, &embedclient.APIError{StatusCode: http.StatusBadRequest}
+	// The endpoint rejects every document but still embeds the build's probe
+	// input, so each 400 is a document rejection.
+	documents := map[string]bool{}
+	for _, unit := range src.units {
+		documents[unit.Content] = true
+	}
+	failingEncoder := func(ctx context.Context, texts []string) ([][]float32, error) {
+		if slices.ContainsFunc(texts, func(text string) bool { return documents[text] }) {
+			return nil, &embedclient.APIError{StatusCode: http.StatusBadRequest}
+		}
+		return fakePushEncoder()(ctx, texts)
 	}
 	m := vector.NewManager(ix, src, vector.EncoderSet{
 		Default: "default",

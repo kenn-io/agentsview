@@ -88,9 +88,11 @@ The latest published release is
   client. Existing indexes keep working without re-embedding. Behavior that
   changes:
   - Requests use plain JSON float vectors instead of base64.
-  - Any HTTP 400 now skips only the rejected document. Before, AgentsView
-    skipped a document only when the error text named its length or a content
-    policy.
+  - A document is skipped when the endpoint answers HTTP 400 for it but
+    still embeds a short probe input. Before, AgentsView skipped a document
+    only when the error text named its length or a content policy. A 400 for
+    every request, such as from a wrong model name, still stops the build and
+    leaves documents pending.
   - A response with an invalid vector fails without retrying unless
     `ollama_cpu_fallback` is on.
   - Normal requests to an Ollama endpoint are no longer paused while

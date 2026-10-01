@@ -148,6 +148,32 @@ func TestEncoderRetryRateLimitsOutlastsMaxRetries(t *testing.T) {
 	assert.Equal(t, int32(4), calls.Load())
 }
 
+func TestEncoderRetryRateLimitsKeepsServerFailureBudget(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1)%2 == 0 {
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	cfg := testEncoderConfig(srv.URL + "/v1")
+	cfg.MaxRetries = 2
+	cfg.RetryRateLimits = true
+	enc, err := NewEncoder(cfg, embedconfig.RoleDocument)
+	require.NoError(t, err)
+
+	_, err = enc(t.Context(), []string{"alpha"})
+	apiErr, ok := errors.AsType[*embedclient.APIError](err)
+	require.True(t, ok, "got %v", err)
+	assert.Equal(t, http.StatusServiceUnavailable, apiErr.StatusCode)
+	assert.Equal(t, int32(3), calls.Load(),
+		"rate limits between server failures must not reset the max_retries budget")
+}
+
 func TestEncoderRateLimitFailsAfterMaxRetriesWithoutRetryRateLimits(t *testing.T) {
 	srv, calls := rateLimitedServer(t, 100, "0")
 	cfg := testEncoderConfig(srv.URL + "/v1")

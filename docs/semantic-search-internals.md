@@ -284,19 +284,23 @@ server's config, default 4) documents are split and encoded in parallel; saves
 into `vectors.db` stay serialized on one goroutine, preserving the single-writer
 model. Requests go through kit's `embedclient`, which applies the role prefix
 and suffix, validates every vector, and retries 408, 429, 5xx, and network
-failures up to `max_retries` attempts. Document builds keep retrying a 429 after
-that budget until it clears or the build is canceled. A document whose encode
-call the endpoint rejects with HTTP 400 is not retried in that fill or the next
-one: it's stamped for the generation with no vectors at its current
-`content_hash`, which marks it non-pending. It's logged (doc key plus the
-underlying error) and counted in the build summary's skipped count, but there is
-no separate poison list or periodic retry — the only way it embeds again is if
-the document's content itself changes later (a new `content_hash`, so a new
-pending row). Every other failure — 401, 403, 404, 5xx, network errors,
+failures up to `max_retries` attempts. Document builds keep retrying a 429 until
+it clears or the build is canceled; 429s do not use up the `max_retries` budget
+for other failures in the same request.
+
+kit's errors carry the HTTP status but not the response body, so a 400 alone
+cannot tell a rejected document from a wrong model, route, or request field.
+When an encode call returns 400, the build sends the endpoint a short probe
+input. If the probe also fails, the endpoint rejects every request: the fill
+aborts, documents stay pending, and the active generation is unchanged. If the
+probe embeds, the 400 belongs to the document. That document is not retried in
+that fill or the next one: it's stamped for the generation with no vectors at
+its current `content_hash`, which marks it non-pending. It's logged (doc key
+plus the underlying error) and counted in the build summary's skipped count, but
+there is no separate poison list or periodic retry — the only way it embeds
+again is if the document's content itself changes later (a new `content_hash`,
+so a new pending row). Every other failure — 401, 403, 404, 5xx, network errors,
 timeouts, and 429 — aborts the fill and is retried on the next scheduled build.
-A model or route mistake that the endpoint reports as a 400 is classified as an
-input rejection, so check the first build against a new endpoint before leaving
-it unattended.
 
 ### Scope (`include_automated`)
 

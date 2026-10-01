@@ -50,6 +50,17 @@ const (
 // kit's embedclient, applying the role's configured prefix and suffix. Callers
 // batch through kitvec, so the client never splits a call further.
 func NewEncoder(cfg EncoderConfig, role embedconfig.Role) (kitvec.EncodeFunc, error) {
+	retry := embedclient.Retry{
+		MaxAttempts:    cfg.MaxRetries,
+		InitialBackoff: backoffBase,
+		MaxBackoff:     backoffMax,
+		MaxRetryAfter:  retryAfterCap,
+	}
+	if cfg.RetryRateLimits {
+		// kit's retry spends one attempt budget on every retryable status,
+		// so retryEncode owns retries to keep 429s off the budget.
+		retry.MaxAttempts = 1
+	}
 	client, err := embedclient.New(embedclient.Options{
 		Model:      cfg.Model,
 		Roles:      cfg.Roles,
@@ -59,38 +70,63 @@ func NewEncoder(cfg EncoderConfig, role embedconfig.Role) (kitvec.EncodeFunc, er
 		APIKey:     cfg.APIKey,
 		// Ollama recovery re-encodes only the invalid inputs.
 		OllamaMetalRecovery: cfg.OllamaMetalRecovery,
-		Retry: embedclient.Retry{
-			MaxAttempts:    cfg.MaxRetries,
-			InitialBackoff: backoffBase,
-			MaxBackoff:     backoffMax,
-			MaxRetryAfter:  retryAfterCap,
-		},
+		Retry:               retry,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("[vector.embeddings] configure client: %w", err)
 	}
+	if !cfg.RetryRateLimits {
+		return func(ctx context.Context, texts []string) ([][]float32, error) {
+			return client.EmbedTexts(ctx, role, texts)
+		}, nil
+	}
 	return func(ctx context.Context, texts []string) ([][]float32, error) {
-		for attempt := 1; ; attempt++ {
-			vectors, err := client.EmbedTexts(ctx, role, texts)
-			if err == nil || !cfg.RetryRateLimits {
-				return vectors, err
-			}
-			apiErr, ok := errors.AsType[*embedclient.APIError](err)
-			if !ok || apiErr.StatusCode != http.StatusTooManyRequests {
-				return nil, err
-			}
-			// A 429 clears with time and does not mean the request is
-			// broken, so a durable build waits it out instead of aborting.
-			if err := sleepBackoff(ctx, rateLimitDelay(attempt, apiErr.RetryAfter)); err != nil {
-				return nil, err
-			}
-		}
+		return retryEncode(ctx, cfg.MaxRetries, func() ([][]float32, error) {
+			return client.EmbedTexts(ctx, role, texts)
+		})
 	}, nil
 }
 
-// rateLimitDelay honors a provider's Retry-After, capped at retryAfterCap,
-// and otherwise uses capped exponential backoff from attempt.
-func rateLimitDelay(attempt int, retryAfter time.Duration) time.Duration {
+// retryEncode calls encode until it succeeds. A 429 clears with time and does
+// not mean the request is broken, so a durable build waits it out without
+// limit. Other retryable failures (408, 5xx, transport errors) share one
+// budget of maxAttempts across the whole call, so rate limits interleaved
+// with server failures cannot reset it. Any other error returns at once.
+func retryEncode(
+	ctx context.Context, maxAttempts int, encode func() ([][]float32, error),
+) ([][]float32, error) {
+	failures := 0
+	for attempt := 1; ; attempt++ {
+		vectors, err := encode()
+		if err == nil {
+			return vectors, nil
+		}
+		var retryAfter time.Duration
+		apiErr, isAPIErr := errors.AsType[*embedclient.APIError](err)
+		_, isTransportErr := errors.AsType[*embedclient.TransportError](err)
+		switch {
+		case isAPIErr && apiErr.StatusCode == http.StatusTooManyRequests:
+			retryAfter = apiErr.RetryAfter
+		case (isAPIErr && apiErr.Retryable()) || isTransportErr:
+			failures++
+			if failures >= max(maxAttempts, 1) {
+				return nil, err
+			}
+			if isAPIErr {
+				retryAfter = apiErr.RetryAfter
+			}
+		default:
+			return nil, err
+		}
+		if err := sleepBackoff(ctx, retryDelay(attempt, retryAfter)); err != nil {
+			return nil, err
+		}
+	}
+}
+
+// retryDelay honors a provider's Retry-After, capped at retryAfterCap, and
+// otherwise uses capped exponential backoff from attempt.
+func retryDelay(attempt int, retryAfter time.Duration) time.Duration {
 	if retryAfter > 0 {
 		return min(retryAfter, retryAfterCap)
 	}

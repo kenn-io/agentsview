@@ -1,11 +1,17 @@
 package vector
 
 import (
+	"context"
+	"database/sql"
+	"database/sql/driver"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	kitvec "go.kenn.io/kit/vector"
+	"go.kenn.io/kit/vector/sqlitevec"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -87,26 +93,81 @@ func TestPendingContentQueryPlanSkipsStampedDocumentContent(t *testing.T) {
 	}
 }
 
+// recordingConnector opens connections through the vector SQLite driver and
+// records every statement prepared on them, so a test can explain the exact
+// SQL a kit store runs.
+type recordingConnector struct {
+	drv driver.Driver
+	dsn string
+
+	mu         sync.Mutex
+	statements []string
+}
+
+func (c *recordingConnector) Connect(context.Context) (driver.Conn, error) {
+	conn, err := c.drv.Open(c.dsn)
+	if err != nil {
+		return nil, err
+	}
+	return &recordingConn{Conn: conn, connector: c}, nil
+}
+
+func (c *recordingConnector) Driver() driver.Driver { return c.drv }
+
+func (c *recordingConnector) recorded() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.statements)
+}
+
+// recordingConn exposes only driver.Conn, so database/sql prepares every
+// statement through Prepare.
+type recordingConn struct {
+	driver.Conn
+	connector *recordingConnector
+}
+
+func (c *recordingConn) Prepare(query string) (driver.Stmt, error) {
+	c.connector.mu.Lock()
+	c.connector.statements = append(c.connector.statements, query)
+	c.connector.mu.Unlock()
+	return c.Conn.Prepare(query)
+}
+
 // TestGenerationCoverageQueryPlanUsesCoverageIndex asserts kit's sqlitevec
 // Coverage, which `embeddings list` and auto-activation run, is answered from
-// the mirror's coverage index rather than every row's content. The query
-// below has the shape and freshness predicate of sqlitevec's coverage query
-// (stamp join, d.embed_gen IS NOT NULL, d.content_hash IS stamp.revision).
+// the mirror's coverage index rather than every row's content. It records the
+// statement Coverage executes and explains that exact SQL.
 func TestGenerationCoverageQueryPlanUsesCoverageIndex(t *testing.T) {
-	ix, gen := builtPendingIndex(t)
-	ordinal, err := ix.ordinalForFingerprint(t.Context(), gen.Fingerprint())
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "vectors.db")
+	ix, err := Open(ctx, path, false, 4000)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, ix.Close()) })
+	gen := fakeGeneration("fake-model")
+	_, err = ix.Build(ctx, twoDocSource(), fakeBuildEncoder(), gen, BuildOptions{})
 	require.NoError(t, err)
 
-	covered := `(d.embed_gen IS NOT NULL AND stamp.doc_key IS NOT NULL
-	             AND (d.content_hash IS stamp.revision))`
-	plan := explainVectorPlan(t, ix, `
-SELECT COALESCE(SUM(CASE WHEN `+covered+` AND EXISTS (
-         SELECT 1 FROM `+ix.spec.chunksTable()+` c
-          WHERE c.ordinal = stamp.ordinal AND c.doc_key = d.doc_key) THEN 1 ELSE 0 END), 0),
-       COALESCE(SUM(CASE WHEN NOT `+covered+` THEN 1 ELSE 0 END), 0)
-  FROM `+ix.spec.DocsTable+` d
-  LEFT JOIN `+ix.spec.stampsTable()+` stamp
-    ON stamp.ordinal = ? AND stamp.doc_key = d.doc_key`, ordinal)
+	connector := &recordingConnector{drv: ix.db.Driver(), dsn: vectorDSN(path, false)}
+	db := sql.OpenDB(connector)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	store, err := sqlitevec.New[string, string](ctx, db, ix.spec.schema())
+	require.NoError(t, err)
+	before := len(connector.recorded())
+	_, err = store.Coverage(ctx, gen.Fingerprint(), "")
+	require.NoError(t, err)
+
+	var coverage []string
+	for _, statement := range connector.recorded()[before:] {
+		if strings.Contains(statement, ix.spec.DocsTable+" d") {
+			coverage = append(coverage, statement)
+		}
+	}
+	require.Len(t, coverage, 1, "Coverage runs one statement over the mirror")
+	ordinal, err := ix.ordinalForFingerprint(ctx, gen.Fingerprint())
+	require.NoError(t, err)
+
+	plan := explainVectorPlan(t, ix, coverage[0], ordinal)
 	joined := strings.Join(plan, "\n")
 
 	assert.Contains(t, joined,
