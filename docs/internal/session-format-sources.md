@@ -147,7 +147,11 @@ fixtures retain this field; missing identities remain source-local.
   companion forks remain separate sessions. The sync retention regression in
   `internal/sync/parse_retention_test.go` checks that admission and pending
   writes account for both files without changing the stored transcript size.
-  This verifies Agentsview behavior, not Claude's persistence format.
+  Sync regressions also verify that newly discovered earlier messages replace
+  the saved ordinal stream, and that recorded contributor paths preserve
+  archived messages across missing files, restarts, and rebuilds. Restoring
+  the files permits readable corrections to replace the saved transcript. This
+  verifies Agentsview behavior, not Claude's persistence format.
 
 - **Title evidence (2026-09-13):** A local corpus measure sampled 768 files and
   found 12,261 `ai-title` records, with a mean of 15.96 records per file and a

@@ -769,6 +769,14 @@ CREATE TABLE IF NOT EXISTS local_session_source_baselines (
 CREATE INDEX IF NOT EXISTS idx_local_source_baselines_ownership
     ON local_session_source_baselines(machine, agent, file_path, session_id);
 
+-- Local provenance for archived Claude subagent messages. A missing
+-- contributor must not turn a full refresh into a partial replacement.
+CREATE TABLE IF NOT EXISTS claude_subagent_sources (
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    file_path  TEXT NOT NULL,
+    PRIMARY KEY (session_id, file_path)
+);
+
 -- Remote skip cache: tracks file mtimes per remote host
 -- for remote sync incremental optimization.
 CREATE TABLE IF NOT EXISTS remote_skipped_files (

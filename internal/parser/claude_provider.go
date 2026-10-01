@@ -285,6 +285,10 @@ func (p *claudeProvider) Parse(
 	InferRelationshipTypes(results)
 	out := make([]ParseResultOutcome, 0, len(results))
 	for _, result := range results {
+		if _, _, subagent := claudeSubagentTranscriptRel(result.Session.File.Path); subagent &&
+			result.Session.ClaudeSubagentSources == nil {
+			result.Session.ClaudeSubagentSources = []string{result.Session.File.Path}
+		}
 		out = append(out, ParseResultOutcome{
 			Result:      result,
 			DataVersion: DataVersionCurrent,

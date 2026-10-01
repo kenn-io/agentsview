@@ -33,6 +33,9 @@ type SessionBatchWrite struct {
 	RejectMessageCountDecrease bool
 	Checkpoint                 *ParserCheckpoint
 	CheckpointBlobs            *ParserCheckpointBlobs
+	// ClaudeSubagentSources changes local provenance with the message write.
+	// Nil leaves provenance unchanged; appends retain earlier contributors.
+	ClaudeSubagentSources []string
 	// ToolResultImages overrides the DB policy for this sync-engine write.
 	ToolResultImages *config.ToolResultImages
 }
@@ -595,6 +598,10 @@ func writeOneSessionBatchTx(
 		if err := insertToolResultEventsTx(queries, events); err != nil {
 			return 0, err
 		}
+	}
+	if err := writeClaudeSubagentSourcesTx(ctx, tx, write.Session.ID,
+		write.ClaudeSubagentSources, replaceMessages || !sessionExists); err != nil {
+		return 0, err
 	}
 	if transcriptChanged {
 		bump := bumpTranscriptRevisionTx

@@ -17398,6 +17398,7 @@ func (e *Engine) normalizePendingWriteMachines(
 }
 
 type writeBatchOutcome struct {
+	err             error
 	writtenSessions int
 	writtenMessages int
 	failedSessions  int
@@ -17784,10 +17785,34 @@ func (e *Engine) writeBatchWithOutcomeContext(
 		if ctx.Err() != nil {
 			return outcome
 		}
+		claudeSources, err := e.claudeSubagentWriteSources(ctx, pw)
+		if err != nil {
+			outcome.err = err
+			outcome.failedSessions++
+			return outcome
+		}
+		if claudeSources != nil {
+			// Keep contributing paths and content in the same transaction.
+			version := e.db.GetSessionDataVersion(ctx, applyIDPrefixToID(e.idPrefix, pw.sess.ID))
+			stale := version > 0 && version < db.CurrentDataVersion()
+			written := e.writeBatchBulkWithOutcomeContext(ctx, batch[i:i+1], forceReplace || stale)
+			outcome.writtenSessions += written.writtenSessions
+			outcome.writtenMessages += written.writtenMessages
+			outcome.failedSessions += written.failedSessions
+			outcome.cwdFiltered += written.cwdFiltered
+			outcome.written[i] = written.written[0]
+			outcome.resolved[i] = written.resolved[0]
+			if written.err != nil {
+				outcome.err = errors.Join(outcome.err, written.err)
+			}
+			continue
+		}
 		prepared, verdict, prepErr := e.prepareSessionNormalizedContext(
 			ctx, pw, resolveWorktreeProject, true,
 		)
 		if prepErr != nil {
+			outcome.err = prepErr
+			outcome.failedSessions++
 			return outcome
 		}
 		if verdict != sessionWriteOK {
@@ -18072,6 +18097,12 @@ func (e *Engine) prepareSessionNormalizedContext(
 	}
 
 	candidate.Session, candidate.Messages = s, msgs
+	if e.localClaudeSubagentSources(pw) != nil {
+		missing, err := e.missingClaudeSubagentSource(ctx, s.ID)
+		if err != nil || missing {
+			return ingest.PreparedSession{}, sessionWritePreserved, err
+		}
+	}
 	history, err := e.reconcileProviderHistoryContext(ctx, candidate)
 	if err != nil {
 		return ingest.PreparedSession{}, sessionWritePreserved, err
@@ -18400,6 +18431,8 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 			ctx, pw, resolveWorktreeProject, true,
 		)
 		if prepErr != nil {
+			outcome.err = prepErr
+			outcome.failedSessions++
 			return outcome
 		}
 		e.phaseStats.PrepNanos.Add(int64(time.Since(tPrep)))
@@ -18513,6 +18546,12 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 			}
 		}
 		identityObservation, hasIdentityObservation := e.projectIdentityObservationForWrite(pw, s)
+		claudeSources, err := e.claudeSubagentWriteSources(ctx, pw)
+		if err != nil {
+			outcome.err = err
+			outcome.failedSessions++
+			return outcome
+		}
 		writes = append(writes, db.SessionBatchWrite{
 			Session:          s,
 			Messages:         msgs,
@@ -18529,6 +18568,7 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 			ReplaceMessages:         replaceMessages,
 			Checkpoint:              checkpoint,
 			CheckpointBlobs:         checkpointBlobs,
+			ClaudeSubagentSources:   claudeSources,
 		})
 		pendingIndexes = append(pendingIndexes, pendingIndex)
 		pendingByID[s.ID] = pw
@@ -18555,6 +18595,7 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 	e.phaseStats.WriteBatchSize.Add(int64(len(writes)))
 	e.phaseStats.BatchedWrites.Add(int64(result.WrittenSessions))
 	if err != nil {
+		outcome.err = err
 		log.Printf("write session batch: %v", err)
 		for _, pw := range pendingByID {
 			e.markStaleFailedMemberWrite(ctx, pw)
@@ -18585,6 +18626,7 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 		}
 	}
 	for _, err := range result.Errors {
+		outcome.err = errors.Join(outcome.err, err)
 		log.Printf("write session batch: %v", err)
 	}
 	outcome.writtenSessions = result.WrittenSessions
@@ -19437,6 +19479,23 @@ func (e *Engine) writeSessionFullWithResolver(
 		return err
 	}
 	pw = preserved[0]
+	claudeSources, err := e.claudeSubagentWriteSources(ctx, pw)
+	if err != nil {
+		return err
+	}
+	if claudeSources != nil {
+		outcome := e.writeBatchBulkWithOutcomeContext(ctx, []pendingWrite{pw}, true)
+		if outcome.err != nil {
+			return outcome.err
+		}
+		if outcome.failedSessions > 0 {
+			return fmt.Errorf("write Claude subagent %s with source provenance", pw.sess.ID)
+		}
+		if !outcome.written[0] {
+			return errSessionPreserved
+		}
+		return nil
+	}
 	prepared, verdict, err := e.prepareSessionNormalizedContext(
 		ctx, pw, resolveWorktreeProject, true,
 	)

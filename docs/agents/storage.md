@@ -64,6 +64,15 @@ bounded body reads resolve project evidence in their own SQLite snapshot; body
 reads also pin the database generation and message revision. This local contract
 does not widen raw artifacts or mirror schemas.
 
+### Claude subagent sources
+
+Joined local subagent writes record contributing transcript paths with the
+messages in one SQLite transaction. Refreshes preserve the saved session when a
+recorded contributor is missing or no longer a regular file. Rebuilds copy this
+provenance with preserved sessions. Once all contributors are readable, a full
+parse can apply corrected or shortened transcripts. This metadata stays local to
+the archive; S3 materializations do not record temporary paths.
+
 ### Codex incremental import state
 
 Four SQLite-only tables support local Codex imports: `parser_checkpoints` holds

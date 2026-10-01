@@ -2021,6 +2021,16 @@ func copySessionDataForIDs(
 		return fmt.Errorf("copying sessions: %w", err)
 	}
 
+	if oldDBHasTable(ctx, tx, "claude_subagent_sources") {
+		if _, err := tx.ExecContext(ctx,
+			"INSERT OR IGNORE INTO claude_subagent_sources (session_id, file_path) "+
+				"SELECT session_id, file_path FROM old_db.claude_subagent_sources "+
+				"WHERE session_id IN (SELECT id FROM "+tempIDsTable+")",
+		); err != nil {
+			return fmt.Errorf("copying Claude subagent sources: %w", err)
+		}
+	}
+
 	// Copy messages. Omit id to let auto-increment assign
 	// new IDs (old IDs may collide with freshly synced
 	// messages). Probe is_system so older source DBs that

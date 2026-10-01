@@ -192,6 +192,7 @@ func (p *claudeProvider) joinClaudeSubagentContinuations(
 
 	joined := headResult
 	joined.Messages = nil
+	joined.Session.ClaudeSubagentSources = nil
 	joined.Session.MessageCount = 0
 	joined.Session.UserMessageCount = 0
 	joined.Session.MalformedLines = 0
@@ -231,6 +232,7 @@ func (p *claudeProvider) joinClaudeSubagentContinuations(
 			joined.Session.FirstMessage = member.result.Session.FirstMessage
 		}
 		meta := member.result.Session
+		joined.Session.ClaudeSubagentSources = append(joined.Session.ClaudeSubagentSources, member.path)
 		joined.Session.AgentLabel = firstNonEmptyJSONLString(joined.Session.AgentLabel, meta.AgentLabel)
 		joined.Session.Entrypoint = firstNonEmptyJSONLString(joined.Session.Entrypoint, meta.Entrypoint)
 		joined.Session.SessionKind = firstNonEmptyJSONLString(joined.Session.SessionKind, meta.SessionKind)
