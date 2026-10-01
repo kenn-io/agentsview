@@ -296,6 +296,40 @@ func TestHandleToolSequences_Timing(t *testing.T) {
 	assert.Nil(t, got.Sequences[0].Calls[1].DurationMs)
 	assert.Nil(t, got.Sequences[0].Calls[2].DurationMs)
 
+	t.Run("blank IDs use same-message occurrence timing", func(t *testing.T) {
+		te := setup(t)
+		const sessionID = "tool-sequences-blank-id-timing"
+		const start = "2026-04-26T10:00:00Z"
+		calls := make([]db.ToolCall, 3)
+		for i := range calls {
+			calls[i] = db.ToolCall{ToolName: "Grep", Category: "Grep", InputJSON: `{}`, ResultContent: "No matches found"}
+		}
+		for i, end := range []string{"2026-04-26T10:00:02Z", start} {
+			calls[i].ResultEvents = []db.ToolResultEvent{
+				{Source: "tool_execution", Status: "started", Timestamp: start, EventIndex: 0},
+				{Source: "tool_execution", Status: "completed", Timestamp: end, Content: "No matches found", EventIndex: 1},
+			}
+		}
+		dbtest.SeedSession(t, te.db, sessionID, "tool-sequences-test", func(s *db.Session) {
+			s.MessageCount = 1
+			s.TerminationStatus = new("clean")
+		})
+		require.NoError(t, te.db.ReplaceSessionMessages(t.Context(), sessionID, []db.Message{{
+			SessionID: sessionID, Ordinal: 7, Role: "assistant", Timestamp: start, HasToolUse: true, ToolCalls: calls,
+		}}))
+		response := fetchSessionToolSequences(t, te, sessionID)
+		require.Len(t, response.Sequences, 1)
+		require.Len(t, response.Sequences[0].Calls, 3)
+		for i, call := range response.Sequences[0].Calls {
+			assert.Equal(t, 7, call.Ordinal)
+			assert.Equal(t, i, call.CallIndex)
+			assert.Empty(t, call.ToolUseID)
+		}
+		assert.Equal(t, new(int64(2000)), response.Sequences[0].Calls[0].DurationMs)
+		assert.Equal(t, new(int64(0)), response.Sequences[0].Calls[1].DurationMs)
+		assert.Nil(t, response.Sequences[0].Calls[2].DurationMs)
+	})
+
 	t.Run("measured zero stays distinct from null", func(t *testing.T) {
 		te := setup(t)
 		const timestamp = "2026-04-26T10:00:00Z"
