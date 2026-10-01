@@ -1278,7 +1278,7 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newOpenCodeProviderFactory(def)
 	case AgentOpenCodeReview:
 		return newOpenCodeReviewProviderFactory(def)
-	case AgentOMP, AgentOMO:
+	case AgentOMP, AgentOMO, AgentStepCode:
 		return newPiProviderFactory(def)
 	case AgentOpenClaw:
 		return newOpenClawProviderFactory(def)

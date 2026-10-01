@@ -7872,7 +7872,7 @@ func (e *Engine) syncAllLocked(
 	// on large archives. Suppressing it behind verbose hid that cost on
 	// the daemon resync and interactive sync paths (both pass onProgress).
 	log.Printf(
-		"discovered %d files (%d claude, %d codex, %d copilot, %d gemini, %d cursor, %d amp, %d zencoder, %d iflow, %d vscode-copilot, %d visualstudio-copilot, %d pi, %d omp, %d kiro, %d zed, %d vibe) in %s",
+		"discovered %d files (%d claude, %d codex, %d copilot, %d gemini, %d cursor, %d amp, %d zencoder, %d iflow, %d vscode-copilot, %d visualstudio-copilot, %d pi, %d omp, %d stepcode, %d kiro, %d zed, %d vibe) in %s",
 		len(all),
 		counts[parser.AgentClaude],
 		counts[parser.AgentCodex],
@@ -7886,6 +7886,7 @@ func (e *Engine) syncAllLocked(
 		counts[parser.AgentVSCopilot],
 		counts[parser.AgentPi],
 		counts[parser.AgentOMP],
+		counts[parser.AgentStepCode],
 		counts[parser.AgentKiro],
 		counts[parser.AgentZed],
 		counts[parser.AgentVibe],

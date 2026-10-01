@@ -97,8 +97,10 @@ func parsePiLikeSession(
 	if branchedFrom := gjson.Get(headerLine, "branchedFrom").Str; branchedFrom != "" {
 		parentSessionID = idPrefix + piPersistedPathSessionID(branchedFrom)
 	} else if parentSession := gjson.Get(headerLine, "parentSession").Str; parentSession != "" &&
-		(agent == AgentPi || agent == AgentOMP || agent == AgentPrimeAgent || agent == AgentOMO) {
-		if agent == AgentPrimeAgent || agent == AgentPi || agent == AgentOMO {
+		(agent == AgentPi || agent == AgentOMP || agent == AgentPrimeAgent ||
+			agent == AgentOMO || agent == AgentStepCode) {
+		if agent == AgentPrimeAgent || agent == AgentPi || agent == AgentOMO ||
+			agent == AgentStepCode {
 			parentSession = primeParentSessionID(path, parentSession)
 		}
 		parentSessionID = idPrefix + parentSession
@@ -120,8 +122,9 @@ func parsePiLikeSession(
 	// The pi-subagents extension writes a fresh child to
 	// <project>/<parent>/<runId>/run-N/session.jsonl with no parentSession in
 	// its header, so lineage comes from the parent transcript three levels up.
+	// StepCode ships the same extension, so it recovers lineage the same way.
 	var isPiSubagent bool
-	if (agent == AgentPi || agent == AgentOMO) && parentSessionID == "" {
+	if (agent == AgentPi || agent == AgentOMO || agent == AgentStepCode) && parentSessionID == "" {
 		if parentID := piSubagentParentSessionID(path); parentID != "" {
 			parentSessionID = idPrefix + parentID
 			isPiSubagent = true

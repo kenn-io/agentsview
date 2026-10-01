@@ -2257,6 +2257,42 @@ schemas keep their existing ordering behavior.
   accepts a relative resource path after the name. Agentsview attributes only
   the URI in the Pi-family read path and decodes the name before storing it.
 
+## StepCode (`stepcode`)
+
+- **Format:** Pi-family JSONL. StepCode distributes the Pi coding-agent
+  harness as a product, so it reuses Pi's session file, entry types, and tree
+  structure without modification.
+
+- **Evidence:** `documentation`.
+
+- **Upstream:** The reference documentation shipped inside the StepCode
+  distribution was checked 2026-10-01. Its session-format page documents the
+  same JSONL layout as Pi: a `session` header followed by tree-linked entries
+  keyed by `id` and `parentId`, with the same `message`, `model_change`,
+  `thinking_level_change`, `compaction`, `branch_summary`, and `custom` entry
+  types, and files named `<timestamp>_<session-id>.jsonl` one encoded project
+  directory below the session root. Its integration page states that the
+  product entrypoint is an adapter over the Pi coding-agent runtime that keeps
+  Pi's `SessionManager` class, JSONL format, and tree operations unchanged
+  while binding that manager to the StepCode agent root. The StepCode source
+  repository is private, so no pinned revision is available.
+
+- **Usage and cost:** Pi-family usage persists input, output, cache-read, and
+  cache-write tokens with a model. Agentsview derives monetary cost from the
+  catalog.
+
+- **Agentsview:** StepCode reuses the Pi-family provider in
+  `internal/parser/pi.go` and `internal/parser/pi_provider.go`; no separate
+  parser is needed. Its registry entry supplies its own agent root
+  (`.stepcode/agent/sessions`) and its own session-ID prefix, so StepCode
+  transcripts never merge into Pi's. `STEP_CODING_AGENT_DIR` re-roots the
+  default sessions path and `STEP_CODING_AGENT_SESSION_DIR` replaces it
+  outright, mirroring how Pi resolves the same pair of overrides. Because
+  default filenames are timestamp-prefixed rather than header-UUID-named,
+  identity lookup that arrives with only a bare header UUID falls back to a
+  header scan, and a pi-subagents child nested below its parent transcript's
+  stem is linked back to that parent.
+
 ## Qwen Code (`qwen`)
 
 - **Format:** Gemini-derived project chat-record JSONL.

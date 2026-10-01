@@ -169,6 +169,99 @@ func TestOMPProviderDiscoversTitleSlotSession(t *testing.T) {
 	assert.Equal(t, "Fix the widget", sess.SessionName)
 }
 
+// TestStepCodeProviderSourceMethods covers StepCode's real on-disk shape: a
+// project-encoded directory holding timestamp-prefixed transcripts, plus a
+// pi-subagents child nested below a directory named after its parent
+// transcript's stem. Both must be discovered, and both must land under the
+// stepcode: prefix instead of merging into Pi's sessions.
+func TestStepCodeProviderSourceMethods(t *testing.T) {
+	root := t.TempDir()
+	project := "--Users-alice-code-my-project--"
+	parentID := "0199e4c2-1111-2222-3333-444455556666"
+	parentStem := "2026-09-01T12-00-00-000Z_" + parentID
+	sourcePath := filepath.Join(root, project, parentStem+".jsonl")
+	writeSourceFile(t, sourcePath, strings.Join([]string{
+		`{"type":"session","version":3,"id":"` + parentID + `","timestamp":"2026-09-01T12:00:00.000Z","cwd":"/Users/alice/code/my-project"}`,
+		`{"type":"message","id":"m1","parentId":null,"timestamp":"2026-09-01T12:00:01.000Z","message":{"role":"user","content":"Inspect the StepCode source."}}`,
+		`{"type":"message","id":"m2","parentId":"m1","timestamp":"2026-09-01T12:00:02.000Z","message":{"role":"assistant","content":"Looks ready.","model":"step-5-preview","usage":{"input_tokens":10,"output_tokens":5}}}`,
+		"",
+	}, "\n"))
+
+	// A subagent child carries no parentSession header, so its lineage comes
+	// from the parent transcript sitting beside its run directory.
+	subagentID := "0199e4c2-7777-8888-9999-000011112222"
+	subagentPath := filepath.Join(root, project, parentStem, "run-a", "run-1", "session.jsonl")
+	writeSourceFile(t, subagentPath, strings.Join([]string{
+		`{"type":"session","version":3,"id":"` + subagentID + `","timestamp":"2026-09-01T12:00:10.000Z","cwd":"/Users/alice/code/my-project"}`,
+		`{"type":"message","id":"s1","parentId":null,"timestamp":"2026-09-01T12:00:11.000Z","message":{"role":"user","content":"Summarize the diff."}}`,
+		"",
+	}, "\n"))
+
+	// Rejected: the first line's type is not "session".
+	writeSourceFile(t, filepath.Join(root, project, "notes.jsonl"), `{"type":"message"}`+"\n")
+
+	provider, ok := NewProvider(AgentStepCode, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	discovered, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, discovered, 2)
+	assert.ElementsMatch(t, []string{sourcePath, subagentPath},
+		[]string{discovered[0].DisplayPath, discovered[1].DisplayPath})
+	for _, source := range discovered {
+		assert.Equal(t, AgentStepCode, source.Provider)
+	}
+
+	plan, err := provider.WatchPlan(t.Context())
+	require.NoError(t, err)
+	require.Len(t, plan.Roots, 1)
+	assert.Equal(t, root, plan.Roots[0].Path)
+	assert.True(t, plan.Roots[0].Recursive)
+
+	// Timestamp-prefixed filenames defeat a filename lookup, so this resolves
+	// through the session-header scan.
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
+		FullSessionID: "host~stepcode:" + parentID,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, AgentStepCode, found.Provider)
+	assert.Equal(t, sourcePath, found.DisplayPath)
+
+	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
+		RawSessionID: "stepcode:" + subagentID,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, subagentPath, found.DisplayPath)
+
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
+		Source:      discovered[0],
+		Fingerprint: SourceFingerprint{Key: sourcePath, Hash: "abc123"},
+	})
+	require.NoError(t, err)
+	require.True(t, outcome.ResultSetComplete)
+	require.Len(t, outcome.Results, 1)
+	sess := outcome.Results[0].Result.Session
+	assert.Equal(t, "stepcode:"+parentID, sess.ID)
+	assert.Equal(t, AgentStepCode, sess.Agent)
+	assert.Equal(t, "abc123", sess.File.Hash)
+
+	// The nested child parses under its own ID and links back to the parent
+	// transcript, so subagent runs stay attached to the parent session.
+	childOutcome, err := provider.Parse(t.Context(), ParseRequest{
+		Source: SourceRef{Provider: AgentStepCode, DisplayPath: subagentPath},
+	})
+	require.NoError(t, err)
+	require.Len(t, childOutcome.Results, 1)
+	child := childOutcome.Results[0].Result.Session
+	assert.Equal(t, "stepcode:"+subagentID, child.ID)
+	assert.Equal(t, "stepcode:"+parentID, child.ParentSessionID)
+}
+
 func TestPiProviderSourceMethods(t *testing.T) {
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "encoded-cwd", "session-123.jsonl")

@@ -125,11 +125,13 @@ func (p *piProvider) FindSource(
 			return source, ok, err
 		}
 	}
-	// Native Pi default filenames are timestamp-prefixed, so a bare header
-	// UUID lookup finds nothing by filename. Fall back to scanning session
-	// headers only after the filename/directory lookup misses, so files with
-	// no header still resolve by their filename-derived identity.
-	if p.Def.Type == AgentPi || p.Def.Type == AgentOMO {
+	// Native Pi, OMO, and StepCode default filenames are timestamp-prefixed, so
+	// a bare header UUID lookup finds nothing by filename. Fall back to
+	// scanning session headers only after the filename/directory lookup
+	// misses, so files with no header still resolve by their
+	// filename-derived identity.
+	if p.Def.Type == AgentPi || p.Def.Type == AgentOMO ||
+		p.Def.Type == AgentStepCode {
 		return p.sourceForHeaderSessionID(ctx, req.RawSessionID)
 	}
 	return SourceRef{}, false, nil
@@ -299,8 +301,10 @@ func newPiSourceSet(agent AgentType, roots []string) JSONLSourceSet {
 	// Pi's native session-dir override writes transcripts directly into the
 	// chosen directory, and default homes group them by project. The
 	// pi-subagents extension nests subagent runs several levels below the
-	// project directory, so transcript depth is not capped.
-	if agent == AgentPi || agent == AgentOMO {
+	// project directory, so transcript depth is not capped. OMO and StepCode
+	// reuse Pi's harness, layout, and session-dir override, so they share the
+	// set.
+	if agent == AgentPi || agent == AgentOMO || agent == AgentStepCode {
 		return NewJSONLSourceSet(agent, roots,
 			WithRecursive(),
 			WithSymlinkFollowing(),
