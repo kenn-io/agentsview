@@ -84,6 +84,19 @@ The latest published release is
 
 **Improvements**
 
+- Semantic search embedding requests now go through the shared Kenn embedding
+  client. Existing indexes keep working without re-embedding. Behavior that
+  changes:
+  - Requests use plain JSON float vectors instead of base64.
+  - Any HTTP 400 now skips only the rejected document. Before, AgentsView
+    skipped a document only when the error text named its length or a content
+    policy.
+  - A response with an invalid vector fails without retrying unless
+    `ollama_cpu_fallback` is on.
+  - Normal requests to an Ollama endpoint are no longer paused while
+    `ollama_cpu_fallback` recovers another request.
+  - Endpoints can no longer include a query string. Plain `http://` to a public
+    IP address now needs `https://`.
 - Remote session sync now uses HTTP only. Configure each remote host's daemon
   URL and bearer token; omitting `transport` selects HTTP. SSH sync and the
   `sync --user` and `sync --port` flags have been removed. `sync --host` selects

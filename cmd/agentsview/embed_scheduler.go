@@ -10,6 +10,7 @@ import (
 	"os"
 	"time"
 
+	"go.kenn.io/kit/embedmodel"
 	kitvec "go.kenn.io/kit/vector"
 
 	"go.kenn.io/agentsview/internal/config"
@@ -362,9 +363,9 @@ func (t teeEmitter) Emit(scope string) {
 // translating its error taxonomy into db.ErrSemanticUnavailable-wrapped
 // errors and enforcing the config-drift staleness gate before every query.
 type searcherAdapter struct {
-	ix          *vector.Index
-	enc         kitvec.EncodeFunc
-	fingerprint string
+	ix    *vector.Index
+	enc   kitvec.EncodeFunc
+	space embedmodel.Descriptor
 }
 
 type recallSearcherAdapter struct {
@@ -374,35 +375,34 @@ type recallSearcherAdapter struct {
 	cfg      config.Config
 }
 
+// corpusIdentity returns the recall corpus snapshot the configured index must
+// serve and the descriptor that recognizes its generation.
 func (a recallSearcherAdapter) corpusIdentity(
 	ctx context.Context,
-) (db.RecallVectorSnapshot, error) {
+) (db.RecallVectorSnapshot, embedmodel.Descriptor, error) {
 	extractionFingerprint, err := recallCorpusFingerprint(ctx, a.database)
 	if err != nil {
-		return db.RecallVectorSnapshot{}, err
+		return db.RecallVectorSnapshot{}, embedmodel.Descriptor{}, err
 	}
 	revision, err := a.database.RecallCorpusRevision(ctx)
 	if err != nil {
-		return db.RecallVectorSnapshot{}, err
+		return db.RecallVectorSnapshot{}, embedmodel.Descriptor{}, err
 	}
+	gen := recallVectorGeneration(a.cfg.Vector.Embeddings, extractionFingerprint)
 	return db.RecallVectorSnapshot{
-		GenerationFingerprint: recallVectorGeneration(
-			a.cfg.Vector.Embeddings, extractionFingerprint,
-		).Fingerprint(),
-		CorpusRevision: revision,
-	}, nil
+		GenerationFingerprint: gen.Fingerprint(),
+		CorpusRevision:        revision,
+	}, vectorSpace(a.cfg.Vector.Embeddings, gen), nil
 }
 
 func (a recallSearcherAdapter) SearchRecall(
 	ctx context.Context, query string, limit int,
 ) ([]db.RecallVectorHit, bool, db.RecallVectorSnapshot, error) {
-	identity, err := a.corpusIdentity(ctx)
+	identity, space, err := a.corpusIdentity(ctx)
 	if err != nil {
 		return nil, false, db.RecallVectorSnapshot{}, fmt.Errorf("%w: %w", db.ErrSemanticUnavailable, err)
 	}
-	stale, err := a.ix.StaleActive(
-		ctx, identity.GenerationFingerprint, identity.CorpusRevision,
-	)
+	stale, err := a.ix.StaleActive(ctx, space, identity.CorpusRevision)
 	if err != nil {
 		return nil, false, db.RecallVectorSnapshot{}, translateRecallSearchError(err)
 	}
@@ -429,9 +429,11 @@ func (a recallSearcherAdapter) SearchRecall(
 func (a recallSearcherAdapter) ValidateRecallSnapshot(
 	ctx context.Context, identity db.RecallVectorSnapshot,
 ) error {
-	stale, err := a.ix.StaleActive(
-		ctx, identity.GenerationFingerprint, identity.CorpusRevision,
-	)
+	currentIdentity, space, err := a.corpusIdentity(ctx)
+	if err != nil {
+		return fmt.Errorf("%w: %w", db.ErrSemanticUnavailable, err)
+	}
+	stale, err := a.ix.StaleActive(ctx, space, identity.CorpusRevision)
 	if err != nil {
 		return translateRecallSearchError(err)
 	}
@@ -440,10 +442,6 @@ func (a recallSearcherAdapter) ValidateRecallSnapshot(
 			"%w: recall index changed during search; retry the query",
 			db.ErrSemanticUnavailable,
 		)
-	}
-	currentIdentity, err := a.corpusIdentity(ctx)
-	if err != nil {
-		return fmt.Errorf("%w: %w", db.ErrSemanticUnavailable, err)
 	}
 	if currentIdentity != identity {
 		return fmt.Errorf(
@@ -458,10 +456,10 @@ func (a recallSearcherAdapter) MaxRecallSearchCandidates() int {
 	return a.ix.MaxSearchCandidates()
 }
 
-// newSearcherAdapter builds a searcherAdapter for gen's configured
-// embedding identity.
-func newSearcherAdapter(ix *vector.Index, enc kitvec.EncodeFunc, gen kitvec.Generation) searcherAdapter {
-	return searcherAdapter{ix: ix, enc: enc, fingerprint: gen.Fingerprint()}
+// newSearcherAdapter builds a searcherAdapter for the configured embedding
+// space.
+func newSearcherAdapter(ix *vector.Index, enc kitvec.EncodeFunc, space embedmodel.Descriptor) searcherAdapter {
+	return searcherAdapter{ix: ix, enc: enc, space: space}
 }
 
 // SemanticReadiness inspects generation metadata without encoding a query.
@@ -482,7 +480,11 @@ func (a searcherAdapter) SemanticReadiness(
 			Embedded:   generation.Embedded,
 			Missing:    generation.Missing,
 		}
-		if generation.Fingerprint != a.fingerprint {
+		matches, err := a.space.Matches(generation.Fingerprint)
+		if err != nil {
+			return db.SemanticReadiness{}, err
+		}
+		if !matches {
 			out.State = "unavailable"
 			out.Reason = "configuration_mismatch"
 			return out, nil
@@ -505,7 +507,7 @@ func (a searcherAdapter) SemanticReadiness(
 func (a searcherAdapter) SemanticSearch(
 	ctx context.Context, query string, limit int,
 ) ([]db.VectorHit, error) {
-	stale, err := a.ix.StaleActive(ctx, a.fingerprint, "")
+	stale, err := a.ix.StaleActive(ctx, a.space, "")
 	if err != nil {
 		// StaleActive shares Search's error taxonomy (notably
 		// vector.ErrMirrorVersionMismatch from a version-mismatched
@@ -717,11 +719,13 @@ func setupVectorServing(
 	}
 
 	gen := vectorGeneration(cfg.Vector.Embeddings)
-	mgr := vector.NewManager(ix, database, encoders, gen)
+	mgr := embeddingManager(ix, database, encoders, cfg, vector.MessageIndexSpec().Name)
 	recallMgr := embeddingManager(
 		recallIX, database, encoders, cfg, vector.RecallIndexSpec().Name,
 	)
-	database.SetVectorSearcher(newSearcherAdapter(ix, queryEnc, gen))
+	database.SetVectorSearcher(newSearcherAdapter(
+		ix, queryEnc, vectorSpace(cfg.Vector.Embeddings, gen),
+	))
 	database.SetRecallVectorSearcher(recallSearcherAdapter{
 		ix: recallIX, enc: queryEnc, database: database, cfg: cfg,
 	})
@@ -850,7 +854,8 @@ func installDirectVectorSearcher(cfg config.Config, d *db.DB) func() error {
 		return nil
 	}
 	if ix != nil {
-		d.SetVectorSearcher(newSearcherAdapter(ix, enc, vectorGeneration(cfg.Vector.Embeddings)))
+		gen := vectorGeneration(cfg.Vector.Embeddings)
+		d.SetVectorSearcher(newSearcherAdapter(ix, enc, vectorSpace(cfg.Vector.Embeddings, gen)))
 	}
 	if recallIX != nil {
 		d.SetRecallVectorSearcher(recallSearcherAdapter{

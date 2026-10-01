@@ -150,7 +150,7 @@ func TestEnsureGenerationLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, ok)
 
-	require.NoError(t, ix.SetStateByID(ctx, infos[0].ID, sqlitevec.StateActive))
+	require.NoError(t, ix.forceActivateGeneration(ctx, infos[0].key))
 
 	active, ok, err := ix.ActiveFingerprint(ctx)
 	require.NoError(t, err)
@@ -506,7 +506,7 @@ func TestMirrorSchemaVersionV2StampReadOnlyReturnsSentinel(t *testing.T) {
 	_, err = ro.Search(ctx, fakeSearchEncoder(), "alpha", 10)
 	require.ErrorIs(t, err, ErrMirrorVersionMismatch)
 
-	_, err = ro.StaleActive(ctx, "any-fingerprint", "")
+	_, err = ro.StaleActive(ctx, legacySpace("any-fingerprint"), "")
 	assert.ErrorIs(t, err, ErrMirrorVersionMismatch,
 		"StaleActive must apply the same version gate Search does")
 }

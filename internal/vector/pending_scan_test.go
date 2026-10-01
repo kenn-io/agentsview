@@ -87,22 +87,31 @@ func TestPendingContentQueryPlanSkipsStampedDocumentContent(t *testing.T) {
 	}
 }
 
-// TestGenerationCoverageQueryPlanUsesRevisionIndex asserts the coverage
-// query's Embedded and Missing anti-joins are answered from the same
-// covering index, so `embeddings status` does not walk the whole mirror
-// either.
-func TestGenerationCoverageQueryPlanUsesRevisionIndex(t *testing.T) {
-	ix, _ := builtPendingIndex(t)
+// TestGenerationCoverageQueryPlanUsesCoverageIndex asserts kit's sqlitevec
+// Coverage, which `embeddings list` and auto-activation run, is answered from
+// the mirror's coverage index rather than every row's content. The query
+// below has the shape and freshness predicate of sqlitevec's coverage query
+// (stamp join, d.embed_gen IS NOT NULL, d.content_hash IS stamp.revision).
+func TestGenerationCoverageQueryPlanUsesCoverageIndex(t *testing.T) {
+	ix, gen := builtPendingIndex(t)
+	ordinal, err := ix.ordinalForFingerprint(t.Context(), gen.Fingerprint())
+	require.NoError(t, err)
 
-	plan := explainVectorPlan(t, ix, ix.generationCoverageQuery())
+	covered := `(d.embed_gen IS NOT NULL AND stamp.doc_key IS NOT NULL
+	             AND (d.content_hash IS stamp.revision))`
+	plan := explainVectorPlan(t, ix, `
+SELECT COALESCE(SUM(CASE WHEN `+covered+` AND EXISTS (
+         SELECT 1 FROM `+ix.spec.chunksTable()+` c
+          WHERE c.ordinal = stamp.ordinal AND c.doc_key = d.doc_key) THEN 1 ELSE 0 END), 0),
+       COALESCE(SUM(CASE WHEN NOT `+covered+` THEN 1 ELSE 0 END), 0)
+  FROM `+ix.spec.DocsTable+` d
+  LEFT JOIN `+ix.spec.stampsTable()+` stamp
+    ON stamp.ordinal = ? AND stamp.doc_key = d.doc_key`, ordinal)
 	joined := strings.Join(plan, "\n")
 
 	assert.Contains(t, joined,
-		"SEARCH d EXISTS USING COVERING INDEX idx_vector_messages_revision",
-		"the Embedded column must probe the covering index:\n%s", joined)
-	assert.Contains(t, joined,
-		"SCAN d USING COVERING INDEX idx_vector_messages_revision",
-		"the Missing column must scan the covering index, not the table:\n%s", joined)
+		"SCAN d USING COVERING INDEX idx_vector_messages_coverage",
+		"coverage must scan the covering index, not the table:\n%s", joined)
 	for _, line := range plan {
 		assert.NotEqual(t, "SCAN d", line,
 			"no coverage step may read every mirror row's content:\n%s", joined)

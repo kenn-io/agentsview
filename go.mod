@@ -16,7 +16,7 @@ require (
 	github.com/gofrs/flock v0.13.1
 	github.com/google/go-cmp v0.7.0
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
-	github.com/jackc/pgx/v5 v5.10.0
+	github.com/jackc/pgx/v5 v5.11.0
 	github.com/jellydator/ttlcache/v3 v3.4.1
 	github.com/klauspost/compress v1.20.0
 	github.com/mattn/go-runewidth v0.0.29
@@ -33,7 +33,7 @@ require (
 	github.com/thlib/go-timezone-local v0.0.8
 	github.com/tidwall/gjson v1.19.0
 	go.kenn.io/docbank v0.14.0
-	go.kenn.io/kit v0.25.1-0.20260922102214-70ff6b6032c5
+	go.kenn.io/kit v0.29.0
 	go.yaml.in/yaml/v3 v3.0.5
 	golang.org/x/exp v0.0.0-20260603202125-055de637280b
 	golang.org/x/mod v0.41.0
@@ -76,6 +76,7 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
+	github.com/cenkalti/backoff/v7 v7.0.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/containerd/errdefs v1.0.0 // indirect
@@ -153,6 +154,7 @@ require (
 	github.com/segmentio/encoding v0.5.4 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
+	github.com/spf13/pathologize v1.1.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.0 // indirect
 	github.com/tinylib/msgp v1.6.4 // indirect
