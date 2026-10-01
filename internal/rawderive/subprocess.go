@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json/v2"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -277,6 +278,9 @@ func runParserProcess(ctx context.Context, cancel context.CancelFunc, cmd *exec.
 		return nil, ctx.Err()
 	}
 	if waitErr != nil {
+		if os.Getenv("AGENTSVIEW_RAW_PARSER_TEST_DIAGNOSTIC") == "1" {
+			fmt.Fprintf(os.Stderr, "[DEBUG-rawparse] exit=%v stderr=%s\n", waitErr, diagnostic.data.Bytes())
+		}
 		return nil, errParserFailed
 	}
 	if !bytes.HasPrefix(out.data.Bytes(), []byte("READY\n")) {

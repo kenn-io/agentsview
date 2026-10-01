@@ -172,6 +172,7 @@ func TestSandboxActivationRefusesMissingIsolation(t *testing.T) {
 }
 
 func TestSandboxProviderJSONAndSQLite(t *testing.T) {
+	t.Setenv("AGENTSVIEW_RAW_PARSER_TEST_DIAGNOSTIC", "1")
 	p, err := NewSubprocessParser(20 * time.Second)
 	require.NoError(t, err)
 	if err = p.Preflight(t.Context()); err != nil {
