@@ -137,12 +137,16 @@ fixtures retain this field; missing identities remain source-local.
 - **Format:** Project-scoped JSONL transcripts, including subagent JSONL, with
   `user`, `assistant`, `system`, and progress records.
 
-- **Continuation discovery and read failures (2026-09-29):** Rechecked the
-  native provider with the synthetic two-parent fixture in
+- **Continuation parsing (2026-09-30):** Rechecked the native provider with the
+  synthetic two-parent fixture in
   `internal/parser/claude_subagent_parent_test.go`. An unreadable companion
   fails the parse instead of returning a partial session for replacement.
   Directory enumeration and candidate stat errors also fail full and
   incremental parsing; restoring access lets a retry include both transcripts.
+  Joined transcripts use the native metadata and title precedence rules, and
+  companion forks remain separate sessions. The sync retention regression in
+  `internal/sync/parse_retention_test.go` checks that admission and pending
+  writes account for both files without changing the stored transcript size.
   This verifies Agentsview behavior, not Claude's persistence format.
 
 - **Title evidence (2026-09-13):** A local corpus measure sampled 768 files and
@@ -3495,8 +3499,8 @@ schemas keep their existing ordering behavior.
   (`cli/src/utils/sdk-event-handlers.ts`). Nested blocks carry no timestamps.
 - **Evidence:** `source`.
 - **Upstream:** Clone `https://github.com/CodebuffAI/freebuff.git` at
-  `ab18ec9d88d449e8766f9c25db52cf5c5ae3c869`, checked 2026-09-26. The
-  snapshot SHA is rewritten over time, so re-verify before quoting. See
+  `ab18ec9d88d449e8766f9c25db52cf5c5ae3c869`, checked 2026-09-26. The snapshot
+  SHA is rewritten over time, so re-verify before quoting. See
   [chat.ts](https://github.com/CodebuffAI/freebuff/blob/ab18ec9d88d449e8766f9c25db52cf5c5ae3c869/cli/src/types/chat.ts)
   for `ChatMessage` and `ContentBlock`,
   [session-state.ts](https://github.com/CodebuffAI/freebuff/blob/ab18ec9d88d449e8766f9c25db52cf5c5ae3c869/common/src/types/session-state.ts)
@@ -3509,14 +3513,13 @@ schemas keep their existing ordering behavior.
   for `FREEBUFF_CONFIG_DIR`.
 - **Usage and cost:** `creditsUsed` resets at each user prompt, so
   `run-state.json` holds only the last prompt's spend. Each completed AI
-  message carries its prompt's `credits` and a `metadata.runState` snapshot.
-  1 credit = $0.01. BYOK runs record the model in
+  message carries its prompt's `credits` and a `metadata.runState` snapshot. 1
+  credit = $0.01. BYOK runs record the model in
   `metadata.runState.inference.model`; hosted runs record no model, and the
   agent template (`agentType`, e.g. `base2-deepseek`) names only a model
-  family. `contextTokenBaseline.model` is a context anchor, not a billing
-  model. `contextTokenCount` is context occupancy, not billed tokens. No
-  per-message input/output/cache tokens are persisted. Freebuff has no
-  credits.
+  family. `contextTokenBaseline.model` is a context anchor, not a billing model.
+  `contextTokenCount` is context occupancy, not billed tokens. No per-message
+  input/output/cache tokens are persisted. Freebuff has no credits.
 - **Agentsview:** `internal/parser/codebuff.go` and
   `internal/parser/codebuff_provider.go`. Each positive per-message `credits`
   becomes a reported-cost event; transcripts without them fall back to
@@ -3524,9 +3527,9 @@ schemas keep their existing ordering behavior.
   that shares the transcript's source identity. Attachments are stored as
   marker lines, never their paths or full pasted content; sponsored-proposal
   payloads are not stored. The sidecar supplies a missing first prompt and,
-  for an empty transcript, the message count. Termination status is `tool_call_pending` or `clean`.
-  Watch events on `log.jsonl`, `trace.jsonl`, and `.tmp` siblings are
-  ignored.
+  for an empty transcript, the message count. Termination status is
+  `tool_call_pending` or `clean`. Watch events on `log.jsonl`, `trace.jsonl`,
+  and `.tmp` siblings are ignored.
 
 ## Evener (`evener`)
 

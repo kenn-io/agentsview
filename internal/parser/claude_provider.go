@@ -208,6 +208,29 @@ func (p *claudeProvider) ComputeMultiFileStatHash(chatPath string) uint64 {
 	return fileStatTupleDigest(0xC1, chatPath)
 }
 
+func (p *claudeProvider) ParseSourceSize(ctx context.Context, source SourceRef) (int64, error) {
+	path, ok := p.sources.pathFromSource(source)
+	if !ok {
+		return 0, errors.New("claude source path unavailable")
+	}
+	paths, err := claudeSubagentSiblingTranscripts(path)
+	if err != nil {
+		return 0, err
+	}
+	var size int64
+	for _, input := range append(paths, path) {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		info, err := os.Stat(input)
+		if err != nil {
+			return 0, err
+		}
+		size += info.Size()
+	}
+	return size, nil
+}
+
 func (p *claudeProvider) Parse(
 	ctx context.Context,
 	req ParseRequest,

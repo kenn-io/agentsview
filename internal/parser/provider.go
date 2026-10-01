@@ -105,6 +105,13 @@ type StoredFingerprintProvider interface {
 	FingerprintWithStored(context.Context, SourceRef, StoredFingerprintLookup) (SourceFingerprint, error)
 }
 
+// ParseSourceSizer reports all bytes a full parse may read, including companion
+// sources. It affects memory admission only, never stored fingerprints or offsets.
+// Providers without this capability use the discovered source's size.
+type ParseSourceSizer interface {
+	ParseSourceSize(context.Context, SourceRef) (int64, error)
+}
+
 // SourceFingerprints, and normalized ParseResults without knowing whether the
 // backing data is a file, virtual DB row, sidecar set, remote canonical path, or
 // multi-session container.

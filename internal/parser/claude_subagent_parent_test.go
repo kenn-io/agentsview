@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
 // A Claude sub-agent transcript lives at
@@ -64,6 +65,107 @@ func mustParseStamp(t *testing.T, stamp string) time.Time {
 	parsed, err := time.Parse(time.RFC3339Nano, stamp)
 	require.NoError(t, err, "parse %s", stamp)
 	return parsed
+}
+
+func TestClaudeSubagentContinuationMetadata(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, earlier, later, title string
+	}{
+		{"rename beats later AI title", `{"type":"custom-title","customTitle":"Review"}`, `{"type":"ai-title","aiTitle":"Generated"}`, "Review"},
+		{"later rename clears title", `{"type":"custom-title","customTitle":"Review"}`, "{\"type\":\"system\",\"content\":\"<command-name>/rename</command-name><command-args></command-args>\"}\n{\"type\":\"ai-title\",\"aiTitle\":\"Generated\"}", ""},
+		{"later rename replaces AI title", `{"type":"ai-title","aiTitle":"Generated"}`, `{"type":"custom-title","customTitle":"Review"}`, "Review"},
+		{"latest AI title", `{"type":"ai-title","aiTitle":"Early"}`, `{"type":"ai-title","aiTitle":"Late"}`, "Late"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			project := filepath.Join(root, "project")
+			first := writeSubagentTranscript(t, project, subagentParentOne,
+				"first", "first reply", "2026-08-05T03:40:00Z", "2026-08-05T03:41:00Z")
+			second := writeSubagentTranscript(t, project, subagentParentTwo,
+				"second", "second reply", "2026-08-05T03:42:00Z", "2026-08-05T03:43:00Z")
+			for i, path := range []string{first, second} {
+				content, err := os.ReadFile(path)
+				require.NoError(t, err)
+				fields, title := `"agentSetting":"reviewer","cwd":"/project/early",`, tc.earlier
+				if i == 1 {
+					fields, title = `"agentSetting":"later","entrypoint":"cli","sessionKind":"bg","cwd":"/project/late","gitBranch":"feature",`, tc.later
+				}
+				updated := strings.Replace(string(content), `"type":"user",`, `"type":"user",`+fields, 1)
+				require.NoError(t, os.WriteFile(path, []byte(updated+title+"\n"), 0o600))
+			}
+			for i, path := range []string{first, second} {
+				result := parseSubagentTranscript(t, root, path)
+				assert.Equal(t, tc.title, result.Session.SessionName)
+				assert.Equal(t, "reviewer", result.Session.AgentLabel)
+				assert.Equal(t, "cli", result.Session.Entrypoint)
+				assert.Equal(t, "bg", result.Session.SessionKind)
+				assert.Equal(t, "/project/early", result.Session.Cwd)
+				assert.Equal(t, "feature", result.Session.GitBranch)
+				assert.Equal(t, path, result.Session.File.Path)
+				assert.Equal(t, []string{subagentParentOne, subagentParentTwo}[i], result.Session.ParentSessionID)
+			}
+		})
+	}
+}
+
+func TestClaudeSubagentContinuationPreservesForks(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, start, end string
+		duplicate        bool
+	}{
+		{"joined", "2026-08-05T03:40:00Z", "2026-08-05T03:41:00Z", false},
+		{"overlapping", "2026-08-05T03:40:00Z", "2026-08-05T03:43:00Z", false},
+		{"duplicate fork", "2026-08-05T03:40:00Z", "2026-08-05T03:41:00Z", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			project := filepath.Join(root, "project")
+			first := writeSubagentTranscript(t, project, subagentParentOne,
+				"earlier", "earlier reply", tc.start, tc.end)
+			second := writeSubagentTranscript(t, project, subagentParentTwo,
+				"later", "later reply", "2026-08-05T03:42:00Z", "2026-08-05T03:43:00Z")
+			content := testjsonl.NewSessionBuilder().
+				AddClaudeUserWithUUID("2026-08-05T03:42:00Z", "start", "a", "").
+				AddClaudeAssistantWithUUID("2026-08-05T03:42:01Z", "reply", "b", "a").
+				AddClaudeUserWithUUID("2026-08-05T03:42:02Z", "one", "c", "b").
+				AddClaudeAssistantWithUUID("2026-08-05T03:42:03Z", "one reply", "d", "c").
+				AddClaudeUserWithUUID("2026-08-05T03:42:04Z", "two", "e", "d").
+				AddClaudeAssistantWithUUID("2026-08-05T03:42:05Z", "two reply", "f", "e").
+				AddClaudeUserWithUUID("2026-08-05T03:42:06Z", "three", "g", "f").
+				AddClaudeAssistantWithUUID("2026-08-05T03:42:07Z", "three reply", "h", "g").
+				AddClaudeUserWithUUID("2026-08-05T03:42:08Z", "four", "k", "h").
+				AddClaudeAssistantWithUUID("2026-08-05T03:42:09Z", "four reply", "l", "k").
+				AddClaudeUserWithUUID("2026-08-05T03:43:00Z", "fork question", "i", "b").
+				AddClaudeAssistantWithUUID("2026-08-05T03:43:01Z", "fork answer", "j", "i").String()
+			require.NoError(t, os.WriteFile(second, []byte(content), 0o600))
+			if tc.duplicate {
+				third := writeSubagentTranscript(t, project, "third-parent", "unused", "unused", tc.start, tc.end)
+				require.NoError(t, os.WriteFile(third, []byte(content), 0o600))
+			}
+			provider, ok := NewProvider(AgentClaude, ProviderConfig{Roots: []string{root}, Machine: "local"})
+			require.True(t, ok)
+			for _, path := range []string{first, second} {
+				sources, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{Path: path})
+				require.NoError(t, err)
+				require.Len(t, sources, 1)
+				outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
+				require.NoError(t, err)
+				require.Len(t, outcome.Results, 2)
+				fork := outcome.Results[1].Result
+				assert.Equal(t, subagentAgentID+"-i", fork.Session.ID)
+				assert.Equal(t, subagentAgentID, fork.Session.ParentSessionID)
+				assert.Equal(t, RelFork, fork.Session.RelationshipType)
+				assert.Equal(t, second, fork.Session.File.Path)
+				require.Len(t, fork.Messages, 2)
+				assert.Equal(t, "fork question", fork.Messages[0].Content)
+				assert.Equal(t, "fork answer", fork.Messages[1].Content)
+			}
+		})
+	}
 }
 
 // parseSubagentTranscript parses one transcript through the provider, which is

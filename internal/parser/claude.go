@@ -505,6 +505,7 @@ func claudeParseFile(
 			lastAssistantStopReason(results[i].Messages),
 			lastLineFailed,
 		)
+		results[i].Session.claudeRenameSeen = renameSeen
 	}
 
 	// Drop content-free /usage probe sessions (e.g. CodexBar's

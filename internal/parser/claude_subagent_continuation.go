@@ -142,6 +142,11 @@ func (p *claudeProvider) joinClaudeSubagentContinuations(
 	}
 
 	members := []claudeSubagentChainMember{{path: path, result: headResult}}
+	out := slices.Clone(results)
+	seen := make(map[string]bool, len(results))
+	for _, result := range results {
+		seen[result.Session.ID] = true
+	}
 	for _, sibling := range siblings {
 		if err := ctx.Err(); err != nil {
 			return nil, false, err
@@ -158,8 +163,12 @@ func (p *claudeProvider) joinClaudeSubagentContinuations(
 		}
 		for _, siblingResult := range siblingResults {
 			if siblingResult.Session.ID != headResult.Session.ID {
-				// Entries of another session inside a companion transcript are
-				// not this session's to claim.
+				// A companion's DAG forks remain separate sessions. Discovery
+				// selects one file for this agent, so retain them here too.
+				if !seen[siblingResult.Session.ID] {
+					out = append(out, siblingResult)
+					seen[siblingResult.Session.ID] = true
+				}
 				continue
 			}
 			members = append(members, claudeSubagentChainMember{
@@ -168,7 +177,7 @@ func (p *claudeProvider) joinClaudeSubagentContinuations(
 		}
 	}
 	if len(members) == 1 {
-		return results, false, nil
+		return out, false, nil
 	}
 
 	slices.SortStableFunc(members, func(a, b claudeSubagentChainMember) int {
@@ -190,6 +199,13 @@ func (p *claudeProvider) joinClaudeSubagentContinuations(
 	joined.Session.PeakContextTokens = 0
 	joined.Session.HasTotalOutputTokens = false
 	joined.Session.HasPeakContextTokens = false
+	joined.Session.AgentLabel = ""
+	joined.Session.Entrypoint = ""
+	joined.Session.SessionKind = ""
+	joined.Session.Cwd = ""
+	joined.Session.GitBranch = ""
+	joined.Session.SessionName = ""
+	joined.Session.claudeRenameSeen = false
 	// A continued session's stored transcript ends in a companion, so no
 	// resume point inside the parsed file describes the end of its messages.
 	joined.Checkpoint = nil
@@ -206,13 +222,25 @@ func (p *claudeProvider) joinClaudeSubagentContinuations(
 			if member.path == path {
 				// The transcript being parsed must always be stored, so a
 				// refusal that would drop it refuses the whole join instead.
-				return results, false, nil
+				return out, false, nil
 			}
 			continue
 		}
 		if accepted == 0 {
 			joined.Session.StartedAt = member.result.Session.StartedAt
 			joined.Session.FirstMessage = member.result.Session.FirstMessage
+		}
+		meta := member.result.Session
+		joined.Session.AgentLabel = firstNonEmptyJSONLString(joined.Session.AgentLabel, meta.AgentLabel)
+		joined.Session.Entrypoint = firstNonEmptyJSONLString(joined.Session.Entrypoint, meta.Entrypoint)
+		joined.Session.SessionKind = firstNonEmptyJSONLString(joined.Session.SessionKind, meta.SessionKind)
+		joined.Session.Cwd = firstNonEmptyJSONLString(joined.Session.Cwd, meta.Cwd)
+		joined.Session.GitBranch = firstNonEmptyJSONLString(joined.Session.GitBranch, meta.GitBranch)
+		if meta.claudeRenameSeen {
+			joined.Session.SessionName = meta.SessionName
+			joined.Session.claudeRenameSeen = true
+		} else if !joined.Session.claudeRenameSeen && meta.SessionName != "" {
+			joined.Session.SessionName = meta.SessionName
 		}
 		base := 0
 		if len(joined.Messages) > 0 {
@@ -246,9 +274,8 @@ func (p *claudeProvider) joinClaudeSubagentContinuations(
 		accepted++
 	}
 	if accepted < 2 {
-		return results, false, nil
+		return out, false, nil
 	}
-	out := slices.Clone(results)
 	out[head] = joined
 	return out, true, nil
 }

@@ -1412,6 +1412,9 @@ type ParsedSession struct {
 	// linear-bound sessions. Only set by the Claude parser; nil for
 	// all other agents.
 	ClaudeLinearParse *bool
+	// claudeRenameSeen preserves explicit title precedence when combining
+	// transcripts, including a /rename command that cleared the title.
+	claudeRenameSeen bool
 
 	TotalOutputTokens    int
 	PeakContextTokens    int

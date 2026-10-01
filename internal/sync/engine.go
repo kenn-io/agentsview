@@ -12322,6 +12322,12 @@ func (e *Engine) processProviderFile(
 	// bounds the parsed payload and attach it to every result carrying that
 	// data. A result still classified as a skip below releases it immediately.
 	sourceBytes := e.parseRetentionSourceBytes(file)
+	if sizer, ok := provider.(parser.ParseSourceSizer); ok {
+		sourceBytes, err = sizer.ParseSourceSize(ctx, source)
+		if err != nil {
+			return processResult{err: err}, true
+		}
+	}
 	lease, err := e.retentionBudget().acquire(
 		ctx, sourceBytes,
 	)

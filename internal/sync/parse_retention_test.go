@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -21,6 +22,45 @@ import (
 
 type parseRetentionFinalizerMarker struct {
 	value bool
+}
+
+func TestClaudeContinuationRetentionIncludesCompanion(t *testing.T) {
+	root := t.TempDir()
+	paths := make([]string, 2)
+	var total int64
+	sizes := make([]int64, 2)
+	for i, parent := range []string{"first-parent", "second-parent"} {
+		path := filepath.Join(root, "project", parent, "subagents", "agent-reviewer.jsonl")
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+		content := testjsonl.NewSessionBuilder().
+			AddClaudeUser(fmt.Sprintf("2026-08-05T03:%02d:00Z", 40+i*2), "review").
+			AddClaudeAssistant(fmt.Sprintf("2026-08-05T03:%02d:00Z", 41+i*2), strings.Repeat("reply ", 1+i*10000)).String()
+		require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+		paths[i], sizes[i] = path, int64(len(content))
+		total += sizes[i]
+	}
+	engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{
+		Machine:   "local",
+		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}},
+	})
+	t.Cleanup(engine.Close)
+	for i, path := range paths {
+		result, used := engine.processProviderFile(t.Context(), parser.DiscoveredFile{
+			Path: path, Agent: parser.AgentClaude, SourceSize: sizes[i], ForceParse: true,
+		})
+		require.True(t, used)
+		require.NoError(t, result.err)
+		t.Cleanup(result.retentionLease.Release)
+		require.Len(t, result.results, 1)
+		assert.Len(t, result.results[0].Messages, 4)
+		assert.Equal(t, sizes[i], result.results[0].Session.File.Size,
+			"stored source size still describes the selected transcript")
+		assert.Equal(t, total, result.sourceBytes,
+			"pending writes must carry all parsed source bytes")
+		require.NotNil(t, result.retentionLease)
+		assert.Equal(t, int64(65536)+4*total, result.retentionLease.retainedBytes,
+			"admission must charge both transcripts before parsing")
+	}
 }
 
 // newWarmBenchEngine builds a small already-synced Claude archive and
