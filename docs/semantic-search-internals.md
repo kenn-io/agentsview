@@ -292,15 +292,19 @@ kit classifies every failed response from its status and the provider's error
 code or message. Only an input that is too long or refused by policy counts as a
 rejection of that document. A 400 kit cannot attribute to the input, such as a
 wrong model or an unsupported `dimensions` field, aborts the fill: documents
-stay pending and the active generation is unchanged. A rejected document is not
-retried in that fill or the next one: it's stamped for the generation with no
-vectors at its current `content_hash`, which marks it non-pending. It's logged
-(doc key plus the underlying error) and counted in the build summary's skipped
-count, but there is no separate poison list or periodic retry — the only way it
-embeds again is if the document's content itself changes later (a new
-`content_hash`, so a new pending row). Every other failure — 401, 403, 404, 5xx,
-network errors, timeouts, and 429 — aborts the fill and is retried on the next
-scheduled build.
+stay pending and the active generation is unchanged. Every other failure — 401,
+403, 404, 5xx, network errors, timeouts, and 429 — also aborts the fill and is
+retried on the next scheduled build.
+
+When a rejection comes back for a request that batched several documents, the
+fill re-sends each document on its own to find the one at fault. A confirmed
+rejection is stamped for the generation with no vectors at its current
+`content_hash`, which marks it non-pending, and later builds of that generation
+do not send it again. It's logged (doc key plus the underlying error) and
+counted in the build summary's skipped count; there is no separate poison list
+or periodic retry. The document is attempted again only when its content changes
+(a new `content_hash`), a full rebuild clears the generation's stamps, or a
+config change creates a generation with a new fingerprint.
 
 ### Scope (`include_automated`)
 
