@@ -50,8 +50,7 @@ type Unit struct {
 	Text         string
 	OrdinalStart int
 	OrdinalEnd   int
-	// ToolUse reports that some assistant message in an action unit ran a
-	// tool. Extraction restricts action units without one.
+	// ToolUse reports adapted tool evidence on blocks belonging to this action unit.
 	ToolUse bool
 }
 
@@ -91,7 +90,7 @@ func (TurnsV1) Name() string { return "turns-v1" }
 
 // Params implements Segmenter.
 func (s TurnsV1) Params() map[string]any {
-	return map[string]any{"max_window_chars": s.MaxWindowChars}
+	return map[string]any{"max_window_chars": s.MaxWindowChars, "tool_use_version": 1}
 }
 
 // PromptRoles implements Segmenter.
@@ -204,22 +203,22 @@ type ordinalBlock struct {
 func packRun(blocks []ordinalBlock, maxChars int, units []Unit) []Unit {
 	var current []ordinalBlock
 	currentChars := 0
-	runToolUse := false
 	flush := func() {
 		if len(current) == 0 {
 			return
 		}
 		texts := make([]string, 0, len(current))
+		toolUse := false
 		for _, block := range current {
 			texts = append(texts, block.text)
-			runToolUse = runToolUse || block.toolUse
+			toolUse = toolUse || block.toolUse
 		}
 		units = append(units, Unit{
 			Role:         RoleAction,
 			Text:         strings.Join(texts, "\n\n"),
 			OrdinalStart: current[0].ordinal,
 			OrdinalEnd:   current[len(current)-1].ordinal,
-			ToolUse:      runToolUse,
+			ToolUse:      toolUse,
 		})
 	}
 	for _, block := range blocks {

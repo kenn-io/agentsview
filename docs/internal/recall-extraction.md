@@ -283,13 +283,13 @@ ladder:
 There is no "retry with a compact prompt" path: a capped response silently loses
 entries, so truncation always splits or fails.
 
-An action unit whose messages ran no tool call is sent with `procedure` removed
-from the allowed entry types and a one-sentence preamble on the action prompt. A
-response that still uses `procedure` marks that session failed and retries it
-after the failure backoff while the pass continues with other sessions; a type
-outside all six stays a schema violation that aborts the pass. `recall extract
-doctor` probes only the unrestricted intent request, so it does not surface
-this.
+Each action window computes its stored tool evidence independently. A window
+without evidence omits `procedure` from its allowed entry types and receives a
+completion preamble on its action prompt. A returned forbidden type violates the
+requested schema and aborts the pass through the existing endpoint protocol
+error. Progress stays resumable after the endpoint or configuration is repaired.
+`recall extract doctor` probes the unrestricted intent request. A stored call
+flag proves invocation; wording in other entry types still depends on the model.
 
 ## Scheduling
 

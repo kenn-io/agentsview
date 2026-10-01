@@ -117,6 +117,14 @@ func TestLoadPromptOverridesReadsRoleFiles(t *testing.T) {
 	}
 }
 
+type legacyToolUseParams struct{ Segmenter }
+
+func (s legacyToolUseParams) Params() map[string]any {
+	params := s.Segmenter.Params()
+	delete(params, "tool_use_version")
+	return params
+}
+
 func TestFingerprintIsStableAndSensitive(t *testing.T) {
 	seg := TurnsV1{MaxWindowChars: 50000}
 	prompts := PromptsFor(mustProfile(t, "base"), nil)
@@ -135,6 +143,11 @@ func TestFingerprintIsStableAndSensitive(t *testing.T) {
 		require.FailNowf(t, "test failed", "fingerprint not stable: %s vs %s", a, b)
 	}
 	t.Logf("fixed-config fingerprint: %s", a)
+	t.Logf("repeated fixed-config fingerprint: %s", b)
+	legacy, err := Fingerprint(id, legacyToolUseParams{seg}, prompts, shape)
+	require.NoError(t, err)
+	t.Logf("legacy-params fingerprint: %s", legacy)
+	require.NotEqual(t, a, legacy, "Params must independently change generation identity")
 
 	changedModel, _ := Fingerprint(
 		ModelIdentity{Model: "model-y"}, seg, prompts, shape,

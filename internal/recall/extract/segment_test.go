@@ -90,13 +90,10 @@ func roleForKind(t *testing.T, kind string) string {
 
 func TestTurnsV1Identity(t *testing.T) {
 	segmenter := TurnsV1{MaxWindowChars: 50000}
-	if segmenter.Name() != "turns-v1" {
-		assert.Failf(t, "test failed", "Name() = %q, want turns-v1", segmenter.Name())
-	}
+	assert.Equal(t, "turns-v1", segmenter.Name())
 	params := segmenter.Params()
-	if params["max_window_chars"] != 50000 {
-		assert.Failf(t, "test failed", "Params()[max_window_chars] = %v, want 50000", params["max_window_chars"])
-	}
+	assert.Equal(t, map[string]any{"max_window_chars": 50000, "tool_use_version": 1}, params)
+	assert.Equal(t, params, segmenter.Params())
 }
 
 func TestTurnsV1PromptRoles(t *testing.T) {
@@ -297,33 +294,61 @@ func TestTurnsV1ToolUse(t *testing.T) {
 	}
 }
 
-// TestTurnsV1ToolUseCarriesAcrossWindows pins that evidence in an earlier
-// window of one assistant run reaches later windows, but never earlier ones.
-func TestTurnsV1ToolUseCarriesAcrossWindows(t *testing.T) {
+func TestTurnsV1ToolUseIsWindowLocal(t *testing.T) {
 	long := strings.Repeat("x", 40)
 	cases := []struct {
-		name  string
-		tools []bool
-		want  []bool
+		name     string
+		contents []string
+		tools    []bool
+		budget   int
+		want     []Unit
 	}{
-		{name: "call in the first window", tools: []bool{true, false}, want: []bool{true, true}},
-		{name: "call in the second window", tools: []bool{false, true}, want: []bool{false, true}},
+		{
+			name: "tool then oversized proposal", contents: []string{"tool", long}, tools: []bool{true, false}, budget: 40,
+			want: []Unit{
+				{Role: RoleAction, Text: "[0] ASSISTANT:\ntool", OrdinalStart: 0, OrdinalEnd: 0, ToolUse: true},
+				{Role: RoleAction, Text: "[1] ASSISTANT:\n" + long, OrdinalStart: 1, OrdinalEnd: 1},
+			},
+		},
+		{
+			name: "tool then ordinary packed proposal", contents: []string{long, "idea", "plan"}, tools: []bool{true, false, false}, budget: 60,
+			want: []Unit{
+				{Role: RoleAction, Text: "[0] ASSISTANT:\n" + long, OrdinalStart: 0, OrdinalEnd: 0, ToolUse: true},
+				{Role: RoleAction, Text: "[1] ASSISTANT:\nidea\n\n[2] ASSISTANT:\nplan", OrdinalStart: 1, OrdinalEnd: 2},
+			},
+		},
+		{
+			name: "proposal then tool", contents: []string{long, long}, tools: []bool{false, true}, budget: 60,
+			want: []Unit{
+				{Role: RoleAction, Text: "[0] ASSISTANT:\n" + long, OrdinalStart: 0, OrdinalEnd: 0},
+				{Role: RoleAction, Text: "[1] ASSISTANT:\n" + long, OrdinalStart: 1, OrdinalEnd: 1, ToolUse: true},
+			},
+		},
+		{
+			name: "tool then proposal then tool", contents: []string{long, long, long}, tools: []bool{true, false, true}, budget: 60,
+			want: []Unit{
+				{Role: RoleAction, Text: "[0] ASSISTANT:\n" + long, OrdinalStart: 0, OrdinalEnd: 0, ToolUse: true},
+				{Role: RoleAction, Text: "[1] ASSISTANT:\n" + long, OrdinalStart: 1, OrdinalEnd: 1},
+				{Role: RoleAction, Text: "[2] ASSISTANT:\n" + long, OrdinalStart: 2, OrdinalEnd: 2, ToolUse: true},
+			},
+		},
+		{
+			name: "two tool blocks in one window", contents: []string{"a", "b"}, tools: []bool{true, true}, budget: 60,
+			want: []Unit{
+				{Role: RoleAction, Text: "[0] ASSISTANT:\na\n\n[1] ASSISTANT:\nb", OrdinalStart: 0, OrdinalEnd: 1, ToolUse: true},
+			},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			messages := make([]Message, 0, len(tc.tools))
 			for i, tool := range tc.tools {
 				messages = append(messages, Message{
-					Ordinal: i, Role: "assistant", Content: long, ToolUse: tool,
+					Ordinal: i, Role: "assistant", Content: tc.contents[i], ToolUse: tool,
 				})
 			}
-			units := TurnsV1{MaxWindowChars: 60}.Units(messages)
-			require.Len(t, units, len(tc.want), "each block must land in its own window")
-			got := make([]bool, 0, len(units))
-			for _, unit := range units {
-				got = append(got, unit.ToolUse)
-			}
-			assert.Equal(t, tc.want, got)
+			units := TurnsV1{MaxWindowChars: tc.budget}.Units(messages)
+			assert.Equal(t, tc.want, units)
 		})
 	}
 }

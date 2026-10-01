@@ -71,14 +71,6 @@ var errClientOnlyResponseLimit = errors.New(
 	"distill response exceeds a client-only resource limit",
 )
 
-// errRestrictedEntryType marks a known entry type the request withheld for
-// this unit, such as 'procedure' for an action unit that ran no tool. The
-// restriction follows the unit's content, so the manager fails that session
-// behind its backoff and continues instead of aborting the pass.
-var errRestrictedEntryType = errors.New(
-	"distill response uses an entry type withheld for this unit",
-)
-
 // requestStatusError carries the HTTP status of a permanent server
 // rejection so callers can tell endpoint-scoped failures from
 // input-specific ones.
@@ -169,7 +161,8 @@ const maxRetryDelay = 30 * time.Second
 // v4: maxItems/maxLength bounds on entries, fields, and entities.
 // v5: body maxLength is enforced client-side only for grammar compatibility.
 // v6: action units without a tool call drop 'procedure' and get a prompt preamble.
-const extractionProtocolVersion = 6
+// v7: unit-local tool evidence and normal schema-failure routing.
+const extractionProtocolVersion = 7
 
 // Local resource bounds on a single distill response. The transport cap
 // only bounds bytes; within it a compromised or misconfigured endpoint
@@ -625,8 +618,7 @@ func (c *Client) distill(
 	}
 	entries, err := parseEntries(choice.Message.Content, types)
 	if err != nil {
-		if errors.Is(err, errClientOnlyResponseLimit) ||
-			errors.Is(err, errRestrictedEntryType) {
+		if errors.Is(err, errClientOnlyResponseLimit) {
 			return nil, parsed.Usage, err
 		}
 		// The server was asked for constrained decoding, so a violation
@@ -807,11 +799,6 @@ func parseEntries(content string, types []string) ([]Entry, error) {
 		var entry Entry
 		if entry.Type, err = strictString(fields["type"], "type"); err != nil {
 			return nil, fmt.Errorf("entry %d: %w", i, err)
-		}
-		if !slices.Contains(types, entry.Type) && slices.Contains(entryTypes, entry.Type) {
-			return nil, fmt.Errorf(
-				"entry %d: type %q: %w", i, entry.Type, errRestrictedEntryType,
-			)
 		}
 		if !slices.Contains(types, entry.Type) {
 			return nil, fmt.Errorf(

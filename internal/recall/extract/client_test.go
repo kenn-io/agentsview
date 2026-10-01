@@ -1321,10 +1321,7 @@ func TestClientRequestSchemaKeepsLargeBodyLimitLocal(t *testing.T) {
 	assert.Equal(t, "p", system["content"])
 }
 
-// TestClientRejectsProcedureWithoutToolUse pins that a restricted request
-// validates the response against its own narrower type list. A withheld
-// known type is a unit-scoped failure, while a type outside every list stays
-// an endpoint-scoped protocol violation.
+// Restricted requests validate the response against the enum sent to the server.
 func TestClientRejectsProcedureWithoutToolUse(t *testing.T) {
 	entry := func(kind string) string {
 		return `{"entries":[{"type":"` + kind + `","title":"Added deploy.yml",` +
@@ -1336,7 +1333,7 @@ func TestClientRejectsProcedureWithoutToolUse(t *testing.T) {
 		noToolUse bool
 		wantErr   error
 	}{
-		{name: "restricted", content: entry("procedure"), noToolUse: true, wantErr: errRestrictedEntryType},
+		{name: "restricted", content: entry("procedure"), noToolUse: true, wantErr: errProtocolViolation},
 		{name: "unrestricted", content: entry("procedure"), noToolUse: false},
 		{name: "unknown type", content: entry("changelog"), noToolUse: true, wantErr: errProtocolViolation},
 	}
@@ -1354,9 +1351,7 @@ func TestClientRejectsProcedureWithoutToolUse(t *testing.T) {
 			assert.Len(t, requests, 1)
 			if tc.wantErr != nil {
 				require.ErrorIs(t, err, tc.wantErr)
-				restricted := errors.Is(tc.wantErr, errRestrictedEntryType)
-				assert.Equal(t, !restricted, endpointScopedRejection(err))
-				assert.Equal(t, !restricted, errors.Is(err, errProtocolViolation))
+				assert.True(t, endpointScopedRejection(err))
 				_, transient := errors.AsType[*transientError](err)
 				assert.False(t, transient)
 				assert.Empty(t, entries)

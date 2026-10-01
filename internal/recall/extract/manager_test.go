@@ -3482,6 +3482,58 @@ func TestManagerUnexecutedActionUnitRequest(t *testing.T) {
 	assert.ElementsMatch(t, slices.Collect(maps.Keys(want)), slices.Collect(maps.Keys(got)))
 }
 
+func TestManagerToolEvidenceIsWindowLocal(t *testing.T) {
+	fixture, err := os.ReadFile(filepath.Join("testdata", "proposal_only.txt"))
+	require.NoError(t, err)
+	cases := []struct {
+		name      string
+		toolText  string
+		proposals []db.Message
+		marker    string
+	}{
+		{
+			name: "oversized proposal", toolText: "tool marker: listed workflows",
+			proposals: []db.Message{{Role: "assistant", Content: string(fixture)}},
+			marker:    "Here's what I'd suggest for CI.",
+		},
+		{
+			name: "ordinary packed proposal", toolText: "tool marker: " + strings.Repeat("x", 65),
+			proposals: []db.Message{
+				{Role: "assistant", Content: "proposal marker: add CI"},
+				{Role: "assistant", Content: "Use a deploy job."},
+			},
+			marker: "proposal marker",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := newTestArchive(t)
+			server, log := modelServer(t, func(string, int) (int, string) {
+				return http.StatusOK, completionBody(t, `{"entries":[]}`)
+			})
+			messages := []db.Message{{
+				Role: "assistant", Content: tc.toolText,
+				ToolCalls: []db.ToolCall{{ToolName: "Bash", Category: "Bash"}},
+			}}
+			messages = append(messages, tc.proposals...)
+			seedSession(t, d, "sess-1", messages, nil)
+			m := newManager(t, d, server.URL, func(cfg *ManagerConfig) {
+				cfg.Segmenter = TurnsV1{MaxWindowChars: 100}
+			})
+
+			_, err := m.RunPass(t.Context(), PassOptions{})
+			require.NoError(t, err)
+			require.Len(t, log.all(), 2)
+			tool, _ := log.byUserText(t, "tool marker")
+			assert.Equal(t, allEntryTypesLiteral, requestEntryTypes(t, tool))
+			assert.Equal(t, "action prompt", requestText(t, tool, "system"))
+			proposal, _ := log.byUserText(t, tc.marker)
+			assert.Equal(t, unexecutedEntryTypesLiteral, requestEntryTypes(t, proposal))
+			assert.Equal(t, unexecutedActionPreamble+"\n\naction prompt", requestText(t, proposal, "system"))
+		})
+	}
+}
+
 // TestManagerToolResultRowsKeepRequest pins that tool output stored without
 // a call, inside the run or as a visible user row just before it, keeps the
 // action unit on today's request.
@@ -3613,10 +3665,7 @@ func TestManagerUnexecutedPreambleWrapsOverride(t *testing.T) {
 		requestText(t, requests[0], "system"))
 }
 
-// TestManagerRestrictedProcedureFailsSessionOnly pins that a response using
-// 'procedure' for a restricted unit fails only that session: the violation
-// follows the unit's content, so aborting would stall every later pass on it.
-func TestManagerRestrictedProcedureFailsSessionOnly(t *testing.T) {
+func TestManagerRestrictedProcedureAbortsPass(t *testing.T) {
 	d := newTestArchive(t)
 	ctx := t.Context()
 	server, log := modelServer(t, func(text string, _ int) (int, string) {
@@ -3628,27 +3677,29 @@ func TestManagerRestrictedProcedureFailsSessionOnly(t *testing.T) {
 	})
 	seedSession(t, d, "sess-a", []db.Message{
 		{Role: "assistant", Content: "I suggest adding .github/workflows/deploy.yml."},
-	}, nil)
+	}, endedAgo(time.Hour))
 	seedSession(t, d, "sess-b", []db.Message{
 		{Role: "assistant", Content: "I suggest adding a cache."},
-	}, nil)
+	}, endedAgo(2*time.Hour))
 	m := newManager(t, d, server.URL, nil)
 
 	result, err := m.RunPass(ctx, PassOptions{})
-	require.NoError(t, err)
-	assert.Equal(t, 1, result.Failed)
-	assert.Len(t, log.all(), 2, "the pass must continue to the next session")
+	require.ErrorIs(t, err, errProtocolViolation)
+	assert.Equal(t, 0, result.Failed)
+	assert.Len(t, log.all(), 1, "a schema violation must stop the pass")
+	entry, readErr := d.GetRecallEntry(ctx, EntryID(m.Fingerprint(), "sess-a", 0, 0))
+	require.NoError(t, readErr)
+	assert.Nil(t, entry)
 
 	progress, found, err := d.ExtractProgress(ctx, "sess-a", m.Fingerprint())
 	require.NoError(t, err)
 	require.True(t, found)
-	assert.Equal(t, db.ExtractProgressFailed, progress.State)
+	assert.Equal(t, db.ExtractProgressPending, progress.State)
 	assert.Equal(t, 0, progress.UnitCursor)
-	assert.Contains(t, progress.LastError, errRestrictedEntryType.Error())
-	progress, found, err = d.ExtractProgress(ctx, "sess-b", m.Fingerprint())
+	assert.Empty(t, progress.LastError)
+	_, found, err = d.ExtractProgress(ctx, "sess-b", m.Fingerprint())
 	require.NoError(t, err)
-	require.True(t, found, "the second session must be visited")
-	assert.Equal(t, db.ExtractProgressDone, progress.State)
+	assert.False(t, found, "the second session must remain unvisited")
 }
 
 // TestManagerUnexecutedActionUnitAcceptsEmpty pins that an empty response
@@ -3751,7 +3802,7 @@ func TestUnexecutedActionUnitsLive(t *testing.T) {
 
 	result, err := m.RunPass(ctx, PassOptions{})
 	require.NoError(t, err)
-	require.Equal(t, 0, result.Failed, "a restricted unit answered with procedure fails its session")
+	require.Equal(t, 0, result.Failed, "a forbidden procedure must abort through the protocol error")
 	for i := range maxResponseEntries {
 		entry, err := d.GetRecallEntry(ctx, EntryID(m.Fingerprint(), "sess-live", 0, i))
 		require.NoError(t, err)
