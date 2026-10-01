@@ -69,81 +69,82 @@ type ToolSequences struct {
 // Grep A, Glob, Grep A therefore does not count as a repeat. Both nil and empty
 // input return empty Calls and Sequences slices.
 func ExtractToolSequences(calls []ToolCallRow, complete bool) ToolSequences {
-	result := ToolSequences{
-		Calls:     make([]ToolCallOutcome, 0, len(calls)),
-		Sequences: make([]ToolSequence, 0),
-	}
-	activeStart := -1
-	identical := false
-	nearIdentical := false
-	toolChanged := false
-
-	for i, call := range calls {
-		outcome := classifyToolOutcome(call)
-		observed := ToolCallOutcome{
-			ToolUseID:      call.ToolUseID,
-			MessageOrdinal: call.MessageOrdinal,
-			CallIndex:      call.CallIndex,
-			ToolName:       call.ToolName,
-			Outcome:        outcome,
-			Repeat:         ToolRepeatNone,
-		}
-
-		followup := activeStart >= 0 && call.MessageOrdinal > calls[i-1].MessageOrdinal
-		if followup {
-			observed.ToolChanged = call.ToolName != calls[i-1].ToolName
-			observed.Repeat = classifyToolRepeat(
-				calls[i-1], call,
-			)
-			identical = identical || observed.Repeat == ToolRepeatIdentical
-			nearIdentical = nearIdentical ||
-				observed.Repeat == ToolRepeatNearIdentical
-			toolChanged = toolChanged || observed.ToolChanged
-		}
-		result.Calls = append(result.Calls, observed)
-
-		if activeStart < 0 {
-			if startsToolSequence(outcome) {
-				activeStart = i
-				identical = false
-				nearIdentical = false
-				toolChanged = false
-			}
-			continue
-		}
-
-		if followup && outcome == ToolOutcomeContent {
-			result.Sequences = append(result.Sequences, ToolSequence{
-				Start:         activeStart,
-				End:           i + 1,
-				Identical:     identical,
-				NearIdentical: nearIdentical,
-				ToolChanged:   toolChanged,
-				Ending:        ToolSequenceEndingRecovered,
-			})
-			activeStart = -1
-			continue
+	result := ToolSequences{Calls: make([]ToolCallOutcome, 0, len(calls)), Sequences: []ToolSequence{}}
+	extractor := NewToolSequenceExtractor()
+	for _, call := range calls {
+		outcome, sequence := extractor.Add(call)
+		result.Calls = append(result.Calls, outcome)
+		if sequence != nil {
+			result.Sequences = append(result.Sequences, *sequence)
 		}
 	}
-
-	if activeStart >= 0 {
-		ending := ToolSequenceEndingOpen
-		if complete {
-			ending = ToolSequenceEndingUnknown
-			if startsToolSequence(result.Calls[len(result.Calls)-1].Outcome) {
-				ending = ToolSequenceEndingAbandoned
-			}
-		}
-		result.Sequences = append(result.Sequences, ToolSequence{
-			Start:         activeStart,
-			End:           len(calls),
-			Identical:     identical,
-			NearIdentical: nearIdentical,
-			ToolChanged:   toolChanged,
-			Ending:        ending,
-		})
+	if sequence := extractor.Finish(complete); sequence != nil {
+		result.Sequences = append(result.Sequences, *sequence)
 	}
 	return result
+}
+
+// ToolSequenceExtractor preserves adjacent-call analysis across message pages.
+type ToolSequenceExtractor struct {
+	previous    ToolCallRow
+	count       int
+	active      ToolSequence
+	lastOutcome ToolOutcome
+}
+
+func NewToolSequenceExtractor() *ToolSequenceExtractor {
+	return &ToolSequenceExtractor{active: ToolSequence{Start: -1}}
+}
+
+func (e *ToolSequenceExtractor) ActiveStart() (int, bool) {
+	return e.active.Start, e.active.Start >= 0
+}
+
+func (e *ToolSequenceExtractor) Add(call ToolCallRow) (ToolCallOutcome, *ToolSequence) {
+	outcome := classifyToolOutcome(call)
+	observed := ToolCallOutcome{ToolUseID: call.ToolUseID, MessageOrdinal: call.MessageOrdinal, CallIndex: call.CallIndex, ToolName: call.ToolName, Outcome: outcome, Repeat: ToolRepeatNone}
+	followup := e.active.Start >= 0 && call.MessageOrdinal > e.previous.MessageOrdinal
+	if followup {
+		observed.ToolChanged = call.ToolName != e.previous.ToolName
+		observed.Repeat = classifyToolRepeat(e.previous, call)
+		e.active.Identical = e.active.Identical || observed.Repeat == ToolRepeatIdentical
+		e.active.NearIdentical = e.active.NearIdentical || observed.Repeat == ToolRepeatNearIdentical
+		e.active.ToolChanged = e.active.ToolChanged || observed.ToolChanged
+	}
+	e.previous = ToolCallRow{InputJSON: call.InputJSON, ToolName: call.ToolName, MessageOrdinal: call.MessageOrdinal}
+	e.lastOutcome = outcome
+	index := e.count
+	e.count++
+	if e.active.Start < 0 {
+		if startsToolSequence(outcome) {
+			e.active = ToolSequence{Start: index}
+		}
+	} else if followup && outcome == ToolOutcomeContent {
+		return observed, e.finish(ToolSequenceEndingRecovered)
+	}
+	return observed, nil
+}
+
+func (e *ToolSequenceExtractor) Finish(complete bool) *ToolSequence {
+	e.previous = ToolCallRow{}
+	if e.active.Start < 0 {
+		return nil
+	}
+	ending := ToolSequenceEndingOpen
+	if complete {
+		ending = ToolSequenceEndingUnknown
+		if startsToolSequence(e.lastOutcome) {
+			ending = ToolSequenceEndingAbandoned
+		}
+	}
+	return e.finish(ending)
+}
+
+func (e *ToolSequenceExtractor) finish(ending ToolSequenceEnding) *ToolSequence {
+	sequence := e.active
+	sequence.End, sequence.Ending = e.count, ending
+	e.active = ToolSequence{Start: -1}
+	return &sequence
 }
 
 func startsToolSequence(outcome ToolOutcome) bool {

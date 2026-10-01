@@ -465,6 +465,7 @@ type sessionToolSequence struct {
 }
 
 type sessionToolSequenceCall struct {
+	timingEligible       bool
 	Ordinal              int    `json:"ordinal"`
 	CallIndex            int    `json:"call_index"`
 	ToolUseID            string `json:"tool_use_id"`
@@ -494,122 +495,151 @@ func (s *Server) humaToolSequences(
 		return nil, apiError(http.StatusNotFound, "session not found")
 	}
 
-	messages, err := s.db.GetAllMessages(ctx, in.ID)
+	response, err := collectSessionToolSequences(ctx, s.db, session)
 	if err != nil {
 		return nil, serverError(err)
 	}
-	rows := ingest.ExtractToolCallRows(messages)
-	timing, err := s.db.GetSessionTiming(ctx, in.ID)
-	if err != nil {
-		return nil, serverError(err)
-	}
-	if timing == nil {
+	if response == nil {
 		return nil, apiError(http.StatusNotFound, "session not found")
 	}
-
-	return &jsonOutput[sessionToolSequencesResponse]{
-		Body: buildSessionToolSequences(session, rows, timing),
-	}, nil
+	return &jsonOutput[sessionToolSequencesResponse]{Body: *response}, nil
 }
 
-type sessionToolTimingKey struct {
-	ordinal   int
-	toolUseID string
+type sessionToolSequenceCollector struct {
+	extractor *signals.ToolSequenceExtractor
+	response  sessionToolSequencesResponse
+	calls     []sessionToolSequenceCall
 }
 
-type sessionToolTimingMatch struct {
-	durationMs *int64
-	count      int
+func newSessionToolSequenceCollector(id string) *sessionToolSequenceCollector {
+	return &sessionToolSequenceCollector{extractor: signals.NewToolSequenceExtractor(), response: sessionToolSequencesResponse{SessionID: id, Sequences: []sessionToolSequence{}}}
 }
 
-func buildSessionToolSequences(
-	session *db.Session,
-	rows []signals.ToolCallRow,
-	timing *db.SessionTiming,
-) sessionToolSequencesResponse {
-	complete := session.TerminationStatus != nil &&
-		(*session.TerminationStatus == string(parser.TerminationClean) ||
-			*session.TerminationStatus == string(parser.TerminationAwaitingUser))
-	extracted := signals.ExtractToolSequences(rows, complete)
-	timingMatches := make(map[sessionToolTimingKey]sessionToolTimingMatch)
-	if timing != nil {
-		for _, turn := range timing.Turns {
-			for i := range turn.Calls {
-				call := &turn.Calls[i]
-				if call.ToolUseID == "" {
-					continue
-				}
-				key := sessionToolTimingKey{ordinal: turn.Ordinal, toolUseID: call.ToolUseID}
-				match := timingMatches[key]
-				match.count++
-				match.durationMs = call.DurationMs
-				timingMatches[key] = match
-			}
-		}
-	}
-
-	response := sessionToolSequencesResponse{
-		SessionID:      session.ID,
-		TotalToolCalls: len(extracted.Calls),
-		TotalSequences: len(extracted.Sequences),
-		Sequences:      make([]sessionToolSequence, 0, min(len(extracted.Sequences), maxSessionToolSequences)),
-	}
-	response.OmittedSequences = response.TotalSequences - min(response.TotalSequences, maxSessionToolSequences)
-	for _, sequence := range extracted.Sequences {
-		response.TotalSequenceCalls += sequence.End - sequence.Start
-	}
-	for _, sequence := range extracted.Sequences[:min(len(extracted.Sequences), maxSessionToolSequences)] {
-		count := sequence.End - sequence.Start
-		indexes := make([]int, 0, min(count, maxSessionToolSequenceCalls))
-		if count <= maxSessionToolSequenceCalls {
-			for i := sequence.Start; i < sequence.End; i++ {
-				indexes = append(indexes, i)
-			}
+func (c *sessionToolSequenceCollector) add(row signals.ToolCallRow) {
+	_, wasActive := c.extractor.ActiveStart()
+	outcome, sequence := c.extractor.Add(row)
+	_, active := c.extractor.ActiveStart()
+	c.response.TotalToolCalls++
+	if (wasActive || active) && len(c.response.Sequences) < maxSessionToolSequences {
+		call := projectSessionToolSequenceCall(row, outcome)
+		if len(c.calls) < maxSessionToolSequenceCalls {
+			c.calls = append(c.calls, call)
 		} else {
-			for i := sequence.Start; i < sequence.Start+maxSessionToolSequenceCalls-1; i++ {
-				indexes = append(indexes, i)
-			}
-			indexes = append(indexes, sequence.End-1)
+			c.calls[maxSessionToolSequenceCalls-1] = call
 		}
+	}
+	if sequence != nil {
+		c.appendSequence(sequence)
+	}
+}
 
-		projected := sessionToolSequence{
-			Ending:        string(sequence.Ending),
-			Identical:     sequence.Identical,
-			NearIdentical: sequence.NearIdentical,
-			ToolChanged:   sequence.ToolChanged,
-			TotalCalls:    count,
-			OmittedCalls:  count - len(indexes),
-			Calls:         make([]sessionToolSequenceCall, 0, len(indexes)),
-		}
-		for _, index := range indexes {
-			row, outcome := rows[index], extracted.Calls[index]
-			projectedCall := projectSessionToolSequenceCall(row, outcome)
-			if row.ToolUseID != "" {
-				match := timingMatches[sessionToolTimingKey{
-					ordinal: outcome.MessageOrdinal, toolUseID: row.ToolUseID,
-				}]
-				if match.count == 1 {
-					projectedCall.DurationMs = match.durationMs
-				}
+func (c *sessionToolSequenceCollector) messageTimingEligibility(message *db.Message) {
+	if !message.HasToolUse {
+		return
+	}
+	candidates := map[string]int{}
+	var selected []*sessionToolSequenceCall
+	collect := func(calls []sessionToolSequenceCall) {
+		for i := range calls {
+			call := &calls[i]
+			if call.Ordinal == message.Ordinal && call.ToolUseID != "" {
+				candidates[call.ToolUseID] = 0
+				selected = append(selected, call)
 			}
-			projected.Calls = append(projected.Calls, projectedCall)
 		}
-		response.Sequences = append(response.Sequences, projected)
 	}
-	returnedCalls := 0
+	collect(c.calls)
+	for i := range c.response.Sequences {
+		collect(c.response.Sequences[i].Calls)
+	}
+	if len(candidates) == 0 {
+		return
+	}
+	for _, call := range message.ToolCalls {
+		if _, selected := candidates[call.ToolUseID]; selected {
+			candidates[call.ToolUseID]++
+		}
+	}
+	for _, call := range selected {
+		call.timingEligible = candidates[call.ToolUseID] == 1
+	}
+}
+
+func (c *sessionToolSequenceCollector) appendSequence(sequence *signals.ToolSequence) {
+	count := sequence.End - sequence.Start
+	c.response.TotalSequences++
+	c.response.TotalSequenceCalls += count
+	if len(c.response.Sequences) < maxSessionToolSequences {
+		c.response.Sequences = append(c.response.Sequences, sessionToolSequence{Ending: string(sequence.Ending), Identical: sequence.Identical, NearIdentical: sequence.NearIdentical, ToolChanged: sequence.ToolChanged, TotalCalls: count, OmittedCalls: count - len(c.calls), Calls: c.calls})
+	}
+	c.calls = nil
+}
+
+func (c *sessionToolSequenceCollector) finish(session *db.Session) sessionToolSequencesResponse {
+	complete := session.TerminationStatus != nil && (*session.TerminationStatus == string(parser.TerminationClean) || *session.TerminationStatus == string(parser.TerminationAwaitingUser))
+	if sequence := c.extractor.Finish(complete); sequence != nil {
+		c.appendSequence(sequence)
+	}
+	c.response.OmittedSequences = c.response.TotalSequences - len(c.response.Sequences)
+	c.response.OmittedCalls = c.response.TotalSequenceCalls
+	for _, sequence := range c.response.Sequences {
+		c.response.OmittedCalls -= len(sequence.Calls)
+	}
+	return c.response
+}
+
+func collectSessionToolSequences(ctx context.Context, store db.Store, session *db.Session) (*sessionToolSequencesResponse, error) {
+	collector := newSessionToolSequenceCollector(session.ID)
+	for from := 0; ; {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		messages, err := store.GetMessages(ctx, session.ID, from, db.DefaultMessageLimit, true)
+		if err != nil {
+			return nil, err
+		}
+		if len(messages) == 0 {
+			break
+		}
+		from = messages[len(messages)-1].Ordinal + 1
+		for i := range messages {
+			for _, row := range ingest.ExtractToolCallRows(messages[i : i+1]) {
+				collector.add(row)
+			}
+			collector.messageTimingEligibility(&messages[i])
+			messages[i] = db.Message{}
+		}
+	}
+	response := collector.finish(session)
+	positions := make([]db.ToolCallPosition, 0)
 	for _, sequence := range response.Sequences {
-		returnedCalls += len(sequence.Calls)
+		for _, call := range sequence.Calls {
+			if call.timingEligible {
+				positions = append(positions, db.ToolCallPosition{MessageOrdinal: call.Ordinal, CallIndex: call.CallIndex})
+			}
+		}
 	}
-	response.OmittedCalls = response.TotalSequenceCalls - returnedCalls
-	return response
+	durations, err := store.GetToolCallDurations(ctx, session.ID, positions)
+	if err != nil || durations == nil {
+		return nil, err
+	}
+	for i := range response.Sequences {
+		for j := range response.Sequences[i].Calls {
+			call := &response.Sequences[i].Calls[j]
+			if call.timingEligible {
+				call.DurationMs = durations[db.ToolCallPosition{MessageOrdinal: call.Ordinal, CallIndex: call.CallIndex}]
+			}
+		}
+	}
+	return &response, nil
 }
 
 func projectSessionToolSequenceCall(
 	row signals.ToolCallRow,
 	outcome signals.ToolCallOutcome,
 ) sessionToolSequenceCall {
-	inputPreview := stringutil.SafeTruncate(row.InputJSON, maxToolSequenceInputPreview)
-	resultPreview := stringutil.SafeTruncate(row.ResultContent, maxToolSequenceResultPreview)
+	inputPreview := strings.Clone(stringutil.SafeTruncate(row.InputJSON, maxToolSequenceInputPreview))
+	resultPreview := strings.Clone(stringutil.SafeTruncate(row.ResultContent, maxToolSequenceResultPreview))
 	call := sessionToolSequenceCall{
 		Ordinal:              outcome.MessageOrdinal,
 		CallIndex:            outcome.CallIndex,

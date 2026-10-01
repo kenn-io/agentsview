@@ -2,6 +2,7 @@ package clickhouse
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -526,4 +527,44 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func (s *Store) GetToolCallDurations(ctx context.Context, id string, positions []db.ToolCallPosition) (map[db.ToolCallPosition]*int64, error) {
+	return (db.ToolCallTimingReadBase{SessionLookup: s.GetSessionFull, Queries: s}).GetToolCallDurations(ctx, id, positions)
+}
+
+func (s *Store) QueryToolCallDurationRows(ctx context.Context, id string, positions []db.ToolCallPosition) (*sql.Rows, error) {
+	selected := make([]string, len(positions))
+	args := []any{id}
+	for i, position := range positions {
+		selected[i] = "(?,?)"
+		args = append(args, position.MessageOrdinal, position.CallIndex)
+	}
+	args = append(append(append([]any{}, args...), args...), args...)
+	return s.queryContext(ctx, `
+		SELECT tc.message_ordinal, tc.call_index,
+          started.started_at, completed.completed_at,
+			s_sub.started_at, s_sub.ended_at, tc.subagent_session_id
+		FROM tool_calls tc
+		LEFT JOIN (
+			SELECT tool_call_message_ordinal, call_index,
+				argMin(timestamp, event_index) AS started_at
+			FROM tool_result_events
+			WHERE session_id = ? AND (tool_call_message_ordinal,call_index) IN (`+strings.Join(selected, ",")+`) AND source = 'tool_execution'
+				AND status = 'started' AND timestamp IS NOT NULL
+			GROUP BY tool_call_message_ordinal, call_index
+		) AS started ON started.tool_call_message_ordinal = tc.message_ordinal
+			AND started.call_index = tc.call_index
+		LEFT JOIN (
+			SELECT tool_call_message_ordinal, call_index,
+				argMax(timestamp, event_index) AS completed_at
+			FROM tool_result_events
+			WHERE session_id = ? AND (tool_call_message_ordinal,call_index) IN (`+strings.Join(selected, ",")+`) AND source = 'tool_execution'
+				AND status IN ('completed', 'errored') AND timestamp IS NOT NULL
+			GROUP BY tool_call_message_ordinal, call_index
+		) AS completed ON completed.tool_call_message_ordinal = tc.message_ordinal
+			AND completed.call_index = tc.call_index
+		LEFT JOIN sessions s_sub ON s_sub.id = tc.subagent_session_id
+		WHERE tc.session_id = ? AND (tc.message_ordinal,tc.call_index) IN (`+strings.Join(selected, ",")+`)
+		ORDER BY tc.message_id, tc.call_index`, args...)
 }

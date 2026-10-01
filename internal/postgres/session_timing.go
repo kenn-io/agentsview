@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -209,4 +210,54 @@ func (s *Store) queryCallRowsWithJoin(ctx context.Context, sessionID, subagentJo
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) GetToolCallDurations(ctx context.Context, id string, positions []db.ToolCallPosition) (map[db.ToolCallPosition]*int64, error) {
+	return (db.ToolCallTimingReadBase{SessionLookup: s.GetSession, Queries: s}).GetToolCallDurations(ctx, id, positions)
+}
+
+func (s *Store) QueryToolCallDurationRows(ctx context.Context, id string, positions []db.ToolCallPosition) (*sql.Rows, error) {
+	return s.queryToolCallDurationRowsWithJoin(ctx, id, positions, `LEFT JOIN sessions s_sub ON s_sub.id=tc.subagent_session_id`)
+}
+
+func (s *Store) queryToolCallDurationRowsWithJoin(ctx context.Context, id string, positions []db.ToolCallPosition, subagentJoin string) (*sql.Rows, error) {
+	selected := make([]string, len(positions))
+	args := []any{id}
+	for i, position := range positions {
+		selected[i] = fmt.Sprintf("($%d,$%d)", len(args)+1, len(args)+2)
+		args = append(args, position.MessageOrdinal, position.CallIndex)
+	}
+	return s.pg.QueryContext(ctx, `
+		SELECT tc.message_ordinal, tc.call_index,
+          (
+		    SELECT tre.timestamp
+		    FROM tool_result_events tre
+		    WHERE tre.session_id = tc.session_id
+		      AND tre.tool_call_message_ordinal = tc.message_ordinal
+		      AND tre.call_index = tc.call_index
+		      AND tre.source = 'tool_execution'
+		      AND tre.status = 'started'
+		      AND tre.timestamp IS NOT NULL
+		    ORDER BY tre.event_index ASC
+		    LIMIT 1
+		  ) AS execution_started_at,
+		  (
+		    SELECT tre.timestamp
+		    FROM tool_result_events tre
+		    WHERE tre.session_id = tc.session_id
+		      AND tre.tool_call_message_ordinal = tc.message_ordinal
+		      AND tre.call_index = tc.call_index
+		      AND tre.source = 'tool_execution'
+		      AND tre.status IN ('completed', 'errored')
+		      AND tre.timestamp IS NOT NULL
+		    ORDER BY tre.event_index DESC
+		    LIMIT 1
+		  ) AS execution_completed_at
+		  ,s_sub.started_at
+		  ,s_sub.ended_at, tc.subagent_session_id
+		FROM tool_calls tc
+		`+subagentJoin+`
+		WHERE tc.session_id = $1 AND (tc.message_ordinal,tc.call_index) IN (`+strings.Join(selected, ",")+`)
+		ORDER BY tc.message_ordinal, tc.id
+	`, args...)
 }

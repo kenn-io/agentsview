@@ -591,3 +591,49 @@ func timingMillis(start, end string) (int64, bool) {
 func hasSystemPrefix(msg db.Message) bool {
 	return db.IsSystemPrefixed(msg.Content, msg.Role)
 }
+
+func (s *Store) GetToolCallDurations(ctx context.Context, id string, positions []db.ToolCallPosition) (map[db.ToolCallPosition]*int64, error) {
+	return (db.ToolCallTimingReadBase{SessionLookup: s.GetSessionFull, Queries: s}).GetToolCallDurations(ctx, id, positions)
+}
+
+func (s *Store) QueryToolCallDurationRows(ctx context.Context, id string, positions []db.ToolCallPosition) (*sql.Rows, error) {
+	selected := make([]string, len(positions))
+	args := []any{id}
+	for i, position := range positions {
+		selected[i] = "(?,?)"
+		args = append(args, position.MessageOrdinal, position.CallIndex)
+	}
+	return s.queryContext(ctx, `
+		SELECT m.ordinal, tc.call_index,
+          (
+				SELECT tre.timestamp
+				FROM tool_result_events tre
+				WHERE tre.session_id = tc.session_id
+					AND tre.tool_call_message_ordinal = m.ordinal
+					AND tre.call_index = tc.call_index
+					AND tre.source = 'tool_execution'
+					AND tre.status = 'started'
+					AND tre.timestamp IS NOT NULL
+				ORDER BY tre.event_index ASC
+				LIMIT 1
+			) AS execution_started_at,
+			(
+				SELECT tre.timestamp
+				FROM tool_result_events tre
+				WHERE tre.session_id = tc.session_id
+					AND tre.tool_call_message_ordinal = m.ordinal
+					AND tre.call_index = tc.call_index
+					AND tre.source = 'tool_execution'
+					AND tre.status IN ('completed', 'errored')
+					AND tre.timestamp IS NOT NULL
+				ORDER BY tre.event_index DESC
+				LIMIT 1
+			) AS execution_completed_at
+			,s_sub.started_at
+			,s_sub.ended_at, tc.subagent_session_id
+		FROM tool_calls tc
+		JOIN messages m ON m.id = tc.message_id
+		LEFT JOIN sessions s_sub ON s_sub.id = tc.subagent_session_id
+		WHERE tc.session_id = ? AND (m.ordinal,tc.call_index) IN (`+strings.Join(selected, ",")+`)
+		ORDER BY tc.message_id, tc.call_index`, args...)
+}

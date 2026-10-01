@@ -48,6 +48,7 @@ type Store interface {
 
 	// Timing.
 	GetSessionTiming(ctx context.Context, sessionID string) (*SessionTiming, error)
+	GetToolCallDurations(ctx context.Context, sessionID string, positions []ToolCallPosition) (map[ToolCallPosition]*int64, error)
 
 	// Search.
 	HasFTS(ctx context.Context) bool

@@ -10,12 +10,14 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
@@ -293,6 +295,44 @@ func TestHandleToolSequences_Timing(t *testing.T) {
 	assert.Nil(t, got.Sequences[0].Calls[0].DurationMs)
 	assert.Nil(t, got.Sequences[0].Calls[1].DurationMs)
 	assert.Nil(t, got.Sequences[0].Calls[2].DurationMs)
+
+	t.Run("measured zero stays distinct from null", func(t *testing.T) {
+		te := setup(t)
+		const timestamp = "2026-04-26T10:00:00Z"
+		seedSequenceSession(t, te.db, "tool-sequences-zero", new("clean"), []db.ToolCall{
+			{ToolName: "Grep", Category: "Grep", ToolUseID: "zero", ResultContent: "No matches found", ResultEvents: []db.ToolResultEvent{
+				{ToolUseID: "zero", Source: "tool_execution", Status: "started", Timestamp: timestamp, EventIndex: 0},
+				{ToolUseID: "zero", Source: "tool_execution", Status: "completed", Timestamp: timestamp, Content: "No matches found", EventIndex: 1},
+			}},
+			{ToolName: "Grep", Category: "Grep", ToolUseID: "unmeasured", ResultContent: "No matches found"},
+		})
+		response := fetchSessionToolSequences(t, te, "tool-sequences-zero")
+		require.Len(t, response.Sequences, 1)
+		require.Len(t, response.Sequences[0].Calls, 2)
+		assert.Equal(t, new(int64(0)), response.Sequences[0].Calls[0].DurationMs)
+		assert.Nil(t, response.Sequences[0].Calls[1].DurationMs)
+	})
+}
+
+func TestHandleToolSequences_GeneratedClientValidation(t *testing.T) {
+	te := setup(t)
+	seedSequenceSession(t, te.db, "tool-sequences-empty-evidence", new("clean"), []db.ToolCall{{
+		ToolName: "Bash", Category: "Bash",
+		ResultEvents: []db.ToolResultEvent{{Source: "tool_execution", Status: "errored"}},
+	}})
+	w := te.get(t, "/api/v1/sessions/tool-sequences-empty-evidence/tool-sequences")
+	assertStatus(t, w, http.StatusOK)
+	var response apiclient.GetAPIV1SessionsIDToolSequencesResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	require.Len(t, response.Sequences, 1)
+	require.Len(t, response.Sequences[0].Calls, 1)
+	call := &response.Sequences[0].Calls[0]
+	assert.Empty(t, call.InputPreview)
+	assert.Empty(t, call.ResultPreview)
+	assert.Empty(t, call.ToolUseID)
+	require.NoError(t, response.Validate())
+	call.Outcome = "invalid"
+	require.Error(t, response.Validate())
 }
 
 func TestHandleToolSequences_ChildClosureAddsOnlyMeasuredDuration(t *testing.T) {
@@ -597,6 +637,15 @@ func TestHandleToolSequences_DuckDBParity(t *testing.T) {
 	child := source["tool-sequences-parity-parent"]
 	require.Len(t, child.Sequences, 1)
 	assert.Equal(t, int64(3000), *child.Sequences[0].Calls[0].DurationMs)
+	streamed := source["tool-sequences-parity-streamed"]
+	assert.Equal(t, 154, streamed.TotalToolCalls)
+	assert.Equal(t, 144, streamed.OmittedCalls)
+	require.Len(t, streamed.Sequences, 1)
+	require.Len(t, streamed.Sequences[0].Calls, 10)
+	assert.Nil(t, streamed.Sequences[0].Calls[0].DurationMs)
+	assert.Equal(t, new(int64(0)), streamed.Sequences[0].Calls[1].DurationMs)
+	assert.Equal(t, 260, streamed.Sequences[0].Calls[9].Ordinal)
+	assert.Equal(t, new(int64(2000)), streamed.Sequences[0].Calls[9].DurationMs)
 
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
 	_, err := duckdb.Push(t.Context(), path, te.db, "test-installation", storage.MirrorPushOptions{}, true, nil)
@@ -624,7 +673,7 @@ func TestHandleToolSequences_ReadErrors(t *testing.T) {
 			assertStatus(t, w, http.StatusInternalServerError)
 			assert.Equal(t, 1, store.called["session"])
 			if failure != "session" {
-				assert.Equal(t, 1, store.called["messages"])
+				assert.GreaterOrEqual(t, store.called["messages"], 1)
 			}
 			if failure == "timing" {
 				assert.Equal(t, 1, store.called["timing"])
@@ -720,6 +769,78 @@ type toolSequenceFailureStore struct {
 	cancel    context.CancelFunc
 }
 
+func TestCollectSessionToolSequences_Streaming(t *testing.T) {
+	te := setup(t)
+	const id = "tool-sequences-streaming"
+	calls := make([]db.ToolCall, 250)
+	for i := range calls {
+		calls[i] = db.ToolCall{ToolName: "Grep", Category: "Grep", ToolUseID: strconv.Itoa(i), InputJSON: `{}`, ResultContent: "No matches found"}
+	}
+	calls[len(calls)-1].ToolName = "Read"
+	calls[len(calls)-1].ResultContent = "recovered"
+	seedSequenceSession(t, te.db, id, new("clean"), calls)
+	messages, err := te.db.GetAllMessages(t.Context(), id)
+	require.NoError(t, err)
+	for i := range messages {
+		messages[i].Ordinal *= 2
+	}
+	require.NoError(t, te.db.ReplaceSessionMessages(t.Context(), id, messages))
+	store := &toolSequenceStreamingStore{Store: te.db}
+	cfg := config.Config{Host: "127.0.0.1", InstallationID: "server-installation"}
+	te.handler = wrapTestHandler(cfg, server.New(cfg, store, nil).Handler())
+	got := fetchSessionToolSequences(t, te, id)
+	assert.Equal(t, 250, got.TotalToolCalls)
+	assert.Equal(t, 250, got.TotalSequenceCalls)
+	assert.Equal(t, 240, got.OmittedCalls)
+	require.Len(t, got.Sequences, 1)
+	assert.Equal(t, "recovered", got.Sequences[0].Ending)
+	require.Len(t, got.Sequences[0].Calls, 10)
+	assert.Equal(t, 500, got.Sequences[0].Calls[9].Ordinal)
+	assert.Equal(t, []int{0, 199, 399, 501}, store.cursors)
+	require.Len(t, store.positions, 10)
+	assert.Equal(t, db.ToolCallPosition{MessageOrdinal: 500}, store.positions[9])
+
+	store.cursors = nil
+	store.failFrom = 199
+	w := te.get(t, "/api/v1/sessions/"+id+"/tool-sequences")
+	assertStatus(t, w, http.StatusInternalServerError)
+	assert.Equal(t, []int{0, 199}, store.cursors)
+}
+
+type toolSequenceStreamingStore struct {
+	db.Store
+	cursors   []int
+	positions []db.ToolCallPosition
+	failFrom  int
+}
+
+func (s *toolSequenceStreamingStore) GetAllMessages(context.Context, string) ([]db.Message, error) {
+	return nil, errors.New("full transcript read forbidden")
+}
+
+func (s *toolSequenceStreamingStore) GetSessionTiming(context.Context, string) (*db.SessionTiming, error) {
+	return nil, errors.New("full timing read forbidden")
+}
+
+func (s *toolSequenceStreamingStore) GetMessages(ctx context.Context, id string, from, limit int, asc bool) ([]db.Message, error) {
+	if limit != db.DefaultMessageLimit || !asc {
+		return nil, errors.New("expected fixed ascending page")
+	}
+	s.cursors = append(s.cursors, from)
+	if s.failFrom > 0 && from >= s.failFrom {
+		return nil, errors.New("later page failed")
+	}
+	return s.Store.GetMessages(ctx, id, from, limit, asc)
+}
+
+func (s *toolSequenceStreamingStore) GetToolCallDurations(ctx context.Context, id string, positions []db.ToolCallPosition) (map[db.ToolCallPosition]*int64, error) {
+	s.positions = slices.Clone(positions)
+	if len(positions) > 200 {
+		return nil, errors.New("too many selected timing rows")
+	}
+	return s.Store.GetToolCallDurations(ctx, id, positions)
+}
+
 func (s *toolSequenceFailureStore) GetSession(ctx context.Context, id string) (*db.Session, error) {
 	s.count("session")
 	if s.cancel != nil {
@@ -737,15 +858,15 @@ func (s *toolSequenceFailureStore) GetSession(ctx context.Context, id string) (*
 	return s.Store.GetSession(ctx, id)
 }
 
-func (s *toolSequenceFailureStore) GetAllMessages(ctx context.Context, id string) ([]db.Message, error) {
+func (s *toolSequenceFailureStore) GetMessages(ctx context.Context, id string, from, limit int, asc bool) ([]db.Message, error) {
 	s.count("messages")
 	if s.fail == "messages" {
 		return nil, errors.New("message read failed")
 	}
-	return s.Store.GetAllMessages(ctx, id)
+	return s.Store.GetMessages(ctx, id, from, limit, asc)
 }
 
-func (s *toolSequenceFailureStore) GetSessionTiming(ctx context.Context, id string) (*db.SessionTiming, error) {
+func (s *toolSequenceFailureStore) GetToolCallDurations(ctx context.Context, id string, positions []db.ToolCallPosition) (map[db.ToolCallPosition]*int64, error) {
 	s.count("timing")
 	if s.fail == "timing" {
 		return nil, errors.New("timing read failed")
@@ -753,7 +874,7 @@ func (s *toolSequenceFailureStore) GetSessionTiming(ctx context.Context, id stri
 	if s.noTiming {
 		return nil, nil
 	}
-	return s.Store.GetSessionTiming(ctx, id)
+	return s.Store.GetToolCallDurations(ctx, id, positions)
 }
 
 func (s *toolSequenceFailureStore) count(key string) {

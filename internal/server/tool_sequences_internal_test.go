@@ -30,7 +30,11 @@ func TestBuildSessionToolSequences_UTF8AndCallCap(t *testing.T) {
 		}
 	}
 	status := string(parser.TerminationClean)
-	got := buildSessionToolSequences(&db.Session{ID: "session", TerminationStatus: &status}, rows, nil)
+	collector := newSessionToolSequenceCollector("session")
+	for _, row := range rows {
+		collector.add(row)
+	}
+	got := collector.finish(&db.Session{ID: "session", TerminationStatus: &status})
 	require.Len(t, got.Sequences, 1)
 	sequence := got.Sequences[0]
 	assert.Equal(t, "recovered", sequence.Ending)
@@ -98,36 +102,60 @@ func TestBuildSessionToolSequences_ResultLengthSemantics(t *testing.T) {
 	}
 }
 
-func TestBuildSessionToolSequences_TimingUsesOrdinalAndUniqueIDs(t *testing.T) {
-	zero, first, second, recovered := int64(0), int64(17), int64(29), int64(41)
-	status := string(parser.TerminationClean)
-	rows := []signals.ToolCallRow{
-		{ToolName: "Grep", Category: "Grep", ToolUseID: "reused", MessageOrdinal: 1, InputJSON: `{}`, ResultContent: "No matches found"},
-		{ToolName: "Grep", Category: "Grep", ToolUseID: "reused", MessageOrdinal: 2, InputJSON: `{}`, ResultContent: "No matches found"},
-		{ToolName: "Read", Category: "Read", ToolUseID: "read", MessageOrdinal: 3, InputJSON: `{}`, ResultContent: "text"},
+func TestBuildSessionToolSequences_TimingEligibilityIncludesOmittedSiblings(t *testing.T) {
+	collector := newSessionToolSequenceCollector("session")
+	message := db.Message{Ordinal: 1, HasToolUse: true, ToolCalls: []db.ToolCall{{ToolUseID: "duplicate"}, {ToolUseID: "duplicate"}, {ToolUseID: "unique"}}}
+	for i := range 12 {
+		id := "duplicate"
+		if i == 11 {
+			id = "unique"
+		}
+		collector.add(signals.ToolCallRow{ToolName: "Grep", Category: "Grep", ToolUseID: id, MessageOrdinal: 1, CallIndex: i, ResultContent: "No matches found"})
 	}
-	timing := &db.SessionTiming{Turns: []db.TurnTiming{
-		{Ordinal: 1, Calls: []db.CallTiming{{ToolUseID: "reused", DurationMs: &zero}}},
-		{Ordinal: 2, Calls: []db.CallTiming{{ToolUseID: "reused", DurationMs: &first}}},
-		{Ordinal: 3, Calls: []db.CallTiming{{ToolUseID: "read", DurationMs: &recovered}}},
-	}}
-	got := buildSessionToolSequences(&db.Session{ID: "session", TerminationStatus: &status}, rows, timing)
-	require.Len(t, got.Sequences, 1)
-	assert.Equal(t, &zero, got.Sequences[0].Calls[0].DurationMs)
-	assert.Equal(t, &first, got.Sequences[0].Calls[1].DurationMs)
-	assert.Equal(t, &recovered, got.Sequences[0].Calls[2].DurationMs)
+	collector.messageTimingEligibility(&message)
+	response := collector.finish(&db.Session{})
+	require.Len(t, response.Sequences, 1)
+	calls := response.Sequences[0].Calls
+	require.Len(t, calls, 10)
+	assert.False(t, calls[0].timingEligible)
+	assert.True(t, calls[9].timingEligible)
+	assert.Equal(t, 11, calls[9].CallIndex)
+}
 
-	rows = append(rows[:1], rows[2:]...)
-	rows[1].MessageOrdinal = 2
-	timing = &db.SessionTiming{Turns: []db.TurnTiming{{
-		Ordinal: 1,
-		Calls: []db.CallTiming{
-			{ToolUseID: "reused", DurationMs: &first},
-			{ToolUseID: "reused", DurationMs: &second},
-		},
-	}, {Ordinal: 2, Calls: []db.CallTiming{{ToolUseID: "read", DurationMs: &recovered}}}}}
-	got = buildSessionToolSequences(&db.Session{ID: "session", TerminationStatus: &status}, rows, timing)
-	require.Len(t, got.Sequences, 1)
-	assert.Nil(t, got.Sequences[0].Calls[0].DurationMs)
-	assert.Equal(t, &recovered, got.Sequences[0].Calls[1].DurationMs)
+func TestBuildSessionToolSequences_BoundedRetainedOutput(t *testing.T) {
+	for _, count := range []int{25, 250} {
+		collector := newSessionToolSequenceCollector("session")
+		ordinal := 0
+		for range count {
+			for i := range 12 {
+				ordinal++
+				tool, content := "Grep", "No matches found"
+				if i == 10 {
+					tool = "Glob"
+					content = "No files found"
+				}
+				if i == 11 {
+					tool, content = "Read", "recovered"
+				}
+				collector.add(signals.ToolCallRow{ToolName: tool, Category: tool, ToolUseID: "call", InputJSON: strings.Repeat("x", 2048), MessageOrdinal: ordinal, ResultContent: content})
+				assert.LessOrEqual(t, len(collector.calls), 10)
+				assert.LessOrEqual(t, len(collector.response.Sequences), 20)
+			}
+		}
+		response := collector.finish(&db.Session{})
+		assert.Equal(t, count, response.TotalSequences)
+		assert.Equal(t, count*12, response.TotalSequenceCalls)
+		assert.Equal(t, count-20, response.OmittedSequences)
+		assert.Equal(t, count*12-200, response.OmittedCalls)
+		require.Len(t, response.Sequences, 20)
+		assert.True(t, response.Sequences[0].ToolChanged)
+		assert.Equal(t, 12, response.Sequences[0].Calls[9].Ordinal)
+		assert.Equal(t, 240, response.Sequences[19].Calls[9].Ordinal)
+		for _, sequence := range response.Sequences {
+			require.Len(t, sequence.Calls, 10)
+			for _, call := range sequence.Calls {
+				assert.Len(t, call.InputPreview, 512)
+			}
+		}
+	}
 }

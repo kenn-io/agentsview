@@ -1,6 +1,8 @@
 package dbtest
 
 import (
+	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -79,7 +81,38 @@ func SeedToolSequencesParity(t *testing.T, d *db.DB) []string {
 	}
 	seedToolSequenceParitySession(t, d, parentID, "tool_call_pending", parentMessages)
 
-	return []string{exampleID, evidenceID, incompleteID, parentID}
+	const streamedID = "tool-sequences-parity-streamed"
+	streamed := []db.Message{{SessionID: streamedID, Ordinal: 0, Role: "user", Content: "search", ContentLength: 6}}
+	for i := 1; i <= 130; i++ {
+		call := toolSequenceParityCall("Grep", "reused", "No matches found", 16, "completed")
+		call.InputJSON = `{"pattern":"config"}`
+		if i == 130 {
+			call = toolSequenceParityCall("Read", "recovery", "recovered", 9, "completed")
+		}
+		call.ResultEvents = []db.ToolResultEvent{
+			{ToolUseID: call.ToolUseID, Source: "tool_execution", Status: "started", Timestamp: "2026-04-26T10:00:00Z", EventIndex: 0},
+			{ToolUseID: call.ToolUseID, Source: "tool_execution", Status: "completed", Timestamp: "2026-04-26T10:00:02Z", Content: call.ResultContent, ContentLength: len(call.ResultContent), EventIndex: 1},
+		}
+		message := toolSequenceParityMessage(streamedID, i*2, call)
+		if i == 1 {
+			for j := 1; j < 25; j++ {
+				sibling := call
+				sibling.ToolUseID = fmt.Sprint("parallel-", j)
+				if j == 1 {
+					sibling.ResultEvents = slices.Clone(call.ResultEvents)
+					sibling.ResultEvents[1].Timestamp = sibling.ResultEvents[0].Timestamp
+				}
+				if j == 20 {
+					sibling.ToolUseID = "reused"
+				}
+				message.ToolCalls = append(message.ToolCalls, sibling)
+			}
+		}
+		streamed = append(streamed, message)
+	}
+	seedToolSequenceParitySession(t, d, streamedID, "clean", streamed)
+
+	return []string{exampleID, evidenceID, incompleteID, parentID, streamedID}
 }
 
 func seedToolSequenceParitySession(
