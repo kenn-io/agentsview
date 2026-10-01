@@ -21,10 +21,7 @@ import (
 
 func TestProbeDuckDBMirrorForServeAcceptsCompatibleMirror(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	conn, err := duckdbsync.Open(t.Context(), path)
-	require.NoError(t, err)
-	require.NoError(t, duckdbsync.EnsureSchema(t.Context(), conn))
-	require.NoError(t, conn.Close())
+	buildEmptyDuckDBMirrorFixture(t, path)
 
 	assert.NoError(t, probeDuckDBMirrorForServe(t.Context(), path))
 }
