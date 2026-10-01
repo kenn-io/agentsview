@@ -102,26 +102,6 @@ func TestBuildSessionToolSequences_ResultLengthSemantics(t *testing.T) {
 	}
 }
 
-func TestBuildSessionToolSequences_TimingEligibilityIncludesOmittedSiblings(t *testing.T) {
-	collector := newSessionToolSequenceCollector("session")
-	message := db.Message{Ordinal: 1, HasToolUse: true, ToolCalls: []db.ToolCall{{ToolUseID: "duplicate"}, {ToolUseID: "duplicate"}, {ToolUseID: "unique"}}}
-	for i := range 12 {
-		id := "duplicate"
-		if i == 11 {
-			id = "unique"
-		}
-		collector.add(signals.ToolCallRow{ToolName: "Grep", Category: "Grep", ToolUseID: id, MessageOrdinal: 1, CallIndex: i, ResultContent: "No matches found"})
-	}
-	collector.messageTimingEligibility(&message)
-	response := collector.finish(&db.Session{})
-	require.Len(t, response.Sequences, 1)
-	calls := response.Sequences[0].Calls
-	require.Len(t, calls, 10)
-	assert.False(t, calls[0].timingEligible)
-	assert.True(t, calls[9].timingEligible)
-	assert.Equal(t, 11, calls[9].CallIndex)
-}
-
 func TestBuildSessionToolSequences_BoundedRetainedOutput(t *testing.T) {
 	for _, count := range []int{25, 250} {
 		collector := newSessionToolSequenceCollector("session")

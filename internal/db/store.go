@@ -12,6 +12,11 @@ import (
 // implementations (e.g. the PostgreSQL reader).
 var ErrReadOnly = readOnlyError{}
 
+// ToolSequenceReadSource binds sequence reads to hosted identity or replica publication.
+type ToolSequenceReadSource interface {
+	ToolSequenceReadSource(ctx context.Context, sessionID string) (binding string, pending bool, err error)
+}
+
 type readOnlyError struct{}
 
 func (readOnlyError) Error() string { return "not available in remote mode" }

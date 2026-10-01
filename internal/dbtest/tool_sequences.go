@@ -82,6 +82,18 @@ func SeedToolSequencesParity(t *testing.T, d *db.DB) []string {
 	seedToolSequenceParitySession(t, d, parentID, "tool_call_pending", parentMessages)
 
 	const streamedID = "tool-sequences-parity-streamed"
+	const duplicateID = "tool-sequences-parity-duplicate"
+	duplicates := make([]db.ToolCall, 2)
+	for i, end := range []string{"2026-04-26T10:00:02Z", "2026-04-26T10:00:05Z"} {
+		duplicates[i] = toolSequenceParityCall("Grep", "same", "No matches found", 16, "completed")
+		duplicates[i].ResultEvents = []db.ToolResultEvent{
+			{ToolUseID: "same", Source: "tool_execution", Status: "started", Timestamp: "2026-04-26T10:00:00Z", EventIndex: 0},
+			{ToolUseID: "same", Source: "tool_execution", Status: "completed", Timestamp: end, Content: "No matches found", EventIndex: 1},
+		}
+	}
+	duplicateMessage := toolSequenceParityMessage(duplicateID, 7, duplicates[0])
+	duplicateMessage.ToolCalls = duplicates
+	seedToolSequenceParitySession(t, d, duplicateID, "clean", []db.Message{duplicateMessage})
 	streamed := []db.Message{{SessionID: streamedID, Ordinal: 0, Role: "user", Content: "search", ContentLength: 6}}
 	for i := 1; i <= 130; i++ {
 		call := toolSequenceParityCall("Grep", "reused", "No matches found", 16, "completed")
@@ -112,7 +124,7 @@ func SeedToolSequencesParity(t *testing.T, d *db.DB) []string {
 	}
 	seedToolSequenceParitySession(t, d, streamedID, "clean", streamed)
 
-	return []string{exampleID, evidenceID, incompleteID, parentID, streamedID}
+	return []string{exampleID, evidenceID, incompleteID, parentID, streamedID, duplicateID}
 }
 
 func seedToolSequenceParitySession(

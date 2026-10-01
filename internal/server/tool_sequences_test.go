@@ -261,40 +261,30 @@ func TestHandleToolSequences_Bounds(t *testing.T) {
 }
 
 func TestHandleToolSequences_Timing(t *testing.T) {
-	te := setup(t)
-	duplicate := []db.ToolCall{
-		{
-			ToolName: "Grep", Category: "Grep", ToolUseID: "same",
-			InputJSON: `{}`, ResultContent: "No matches found", ResultContentLength: 15,
-			ResultEvents: []db.ToolResultEvent{{
-				ToolUseID: "same", Source: "tool_execution", Status: "completed",
-				Content: "No matches found", ContentLength: 15, EventIndex: 0,
-			}},
-		},
-		{
-			ToolName: "Grep", Category: "Grep", ToolUseID: "same",
-			InputJSON: `{}`, ResultContent: "No matches found", ResultContentLength: 15,
-			ResultEvents: []db.ToolResultEvent{{
-				ToolUseID: "same", Source: "tool_execution", Status: "completed",
-				Content: "No matches found", ContentLength: 15, EventIndex: 1,
-			}},
-		},
-		{
-			ToolName: "Read", Category: "Read", InputJSON: `{}`,
-			ResultContent: "text", ResultContentLength: 4,
-			ResultEvents: []db.ToolResultEvent{{
-				Source: "tool_execution", Status: "completed",
-				Content: "text", ContentLength: 4, EventIndex: 0,
-			}},
-		},
-	}
-	seedSequenceSession(t, te.db, "tool-sequences-ambiguous-timing", dbtest.Ptr("clean"), duplicate)
-	got := fetchSessionToolSequences(t, te, "tool-sequences-ambiguous-timing")
-	require.Len(t, got.Sequences, 1)
-	require.Len(t, got.Sequences[0].Calls, 3)
-	assert.Nil(t, got.Sequences[0].Calls[0].DurationMs)
-	assert.Nil(t, got.Sequences[0].Calls[1].DurationMs)
-	assert.Nil(t, got.Sequences[0].Calls[2].DurationMs)
+	t.Run("repeated provider IDs keep each occurrence interval", func(t *testing.T) {
+		te := setup(t)
+		const id = "tool-sequences-repeated-id"
+		const start = "2026-04-26T10:00:00Z"
+		calls := make([]db.ToolCall, 12)
+		for i := range calls {
+			calls[i] = db.ToolCall{ToolName: "Grep", Category: "Grep", ToolUseID: "same", InputJSON: `{}`, ResultContent: "No matches found"}
+		}
+		for i, end := range []string{"2026-04-26T10:00:02Z", "2026-04-26T10:00:05Z"} {
+			calls[i].ResultEvents = []db.ToolResultEvent{
+				{ToolUseID: "same", Source: "tool_execution", Status: "started", Timestamp: start, EventIndex: 0},
+				{ToolUseID: "same", Source: "tool_execution", Status: "completed", Timestamp: end, Content: "No matches found", EventIndex: 1},
+			}
+		}
+		dbtest.SeedSession(t, te.db, id, "tool-sequences-test", dbtest.WithMessageCounts(1, 0))
+		require.NoError(t, te.db.ReplaceSessionMessages(t.Context(), id, []db.Message{{SessionID: id, Ordinal: 7, Role: "assistant", Timestamp: start, HasToolUse: true, ToolCalls: calls}}))
+		got := fetchSessionToolSequences(t, te, id)
+		require.Len(t, got.Sequences, 1)
+		require.Len(t, got.Sequences[0].Calls, 10)
+		assert.Equal(t, 2, got.Sequences[0].OmittedCalls)
+		assert.Equal(t, new(int64(2000)), got.Sequences[0].Calls[0].DurationMs)
+		assert.Equal(t, new(int64(5000)), got.Sequences[0].Calls[1].DurationMs)
+		assert.Equal(t, 11, got.Sequences[0].Calls[9].CallIndex)
+	})
 
 	t.Run("blank IDs use same-message occurrence timing", func(t *testing.T) {
 		te := setup(t)
@@ -690,12 +680,17 @@ func TestHandleToolSequences_DuckDBParity(t *testing.T) {
 	child := source["tool-sequences-parity-parent"]
 	require.Len(t, child.Sequences, 1)
 	assert.Equal(t, int64(3000), *child.Sequences[0].Calls[0].DurationMs)
+	duplicates := source["tool-sequences-parity-duplicate"]
+	require.Len(t, duplicates.Sequences, 1)
+	require.Len(t, duplicates.Sequences[0].Calls, 2)
+	assert.Equal(t, new(int64(2000)), duplicates.Sequences[0].Calls[0].DurationMs)
+	assert.Equal(t, new(int64(5000)), duplicates.Sequences[0].Calls[1].DurationMs)
 	streamed := source["tool-sequences-parity-streamed"]
 	assert.Equal(t, 154, streamed.TotalToolCalls)
 	assert.Equal(t, 144, streamed.OmittedCalls)
 	require.Len(t, streamed.Sequences, 1)
 	require.Len(t, streamed.Sequences[0].Calls, 10)
-	assert.Nil(t, streamed.Sequences[0].Calls[0].DurationMs)
+	assert.Equal(t, new(int64(2000)), streamed.Sequences[0].Calls[0].DurationMs)
 	assert.Equal(t, new(int64(0)), streamed.Sequences[0].Calls[1].DurationMs)
 	assert.Equal(t, 260, streamed.Sequences[0].Calls[9].Ordinal)
 	assert.Equal(t, new(int64(2000)), streamed.Sequences[0].Calls[9].DurationMs)
@@ -724,7 +719,7 @@ func TestHandleToolSequences_ReadErrors(t *testing.T) {
 			te.handler = wrapTestHandler(cfg, server.New(cfg, store, nil).Handler())
 			w := te.get(t, "/api/v1/sessions/tool-sequences-error/tool-sequences")
 			assertStatus(t, w, http.StatusInternalServerError)
-			assert.Equal(t, 1, store.called["session"])
+			assert.GreaterOrEqual(t, store.called["session"], 1)
 			if failure != "session" {
 				assert.GreaterOrEqual(t, store.called["messages"], 1)
 			}
@@ -745,14 +740,14 @@ func TestHandleToolSequences_ReadErrors(t *testing.T) {
 	assert.True(t, store.cancelled)
 }
 
-func TestHandleToolSequences_NilTimingIsNotFound(t *testing.T) {
+func TestHandleToolSequences_NilTimingIsSourceChanged(t *testing.T) {
 	te := setup(t)
 	dbtest.SeedToolSequencesExample(t, te.db, "tool-sequences-nil-timing")
 	store := &toolSequenceFailureStore{Store: te.db, noTiming: true}
 	cfg := config.Config{Host: "127.0.0.1", InstallationID: "server-installation"}
 	te.handler = wrapTestHandler(cfg, server.New(cfg, store, nil).Handler())
 	w := te.get(t, "/api/v1/sessions/tool-sequences-nil-timing/tool-sequences")
-	assertStatus(t, w, http.StatusNotFound)
+	assertStatus(t, w, http.StatusConflict)
 }
 
 func fetchSessionToolSequences(
@@ -875,15 +870,16 @@ func (s *toolSequenceStreamingStore) GetSessionTiming(context.Context, string) (
 	return nil, errors.New("full timing read forbidden")
 }
 
-func (s *toolSequenceStreamingStore) GetMessages(ctx context.Context, id string, from, limit int, asc bool) ([]db.Message, error) {
-	if limit != db.DefaultMessageLimit || !asc {
+func (s *toolSequenceStreamingStore) GetMessagesWindow(ctx context.Context, id string, w db.MessageWindow) ([]db.Message, error) {
+	if w.Limit != db.DefaultMessageLimit || !w.Asc || w.From == nil || w.ObservedRevision == nil {
 		return nil, errors.New("expected fixed ascending page")
 	}
+	from := *w.From
 	s.cursors = append(s.cursors, from)
 	if s.failFrom > 0 && from >= s.failFrom {
 		return nil, errors.New("later page failed")
 	}
-	return s.Store.GetMessages(ctx, id, from, limit, asc)
+	return s.Store.GetMessagesWindow(ctx, id, w)
 }
 
 func (s *toolSequenceStreamingStore) GetToolCallDurations(ctx context.Context, id string, positions []db.ToolCallPosition) (map[db.ToolCallPosition]*int64, error) {
@@ -911,12 +907,12 @@ func (s *toolSequenceFailureStore) GetSession(ctx context.Context, id string) (*
 	return s.Store.GetSession(ctx, id)
 }
 
-func (s *toolSequenceFailureStore) GetMessages(ctx context.Context, id string, from, limit int, asc bool) ([]db.Message, error) {
+func (s *toolSequenceFailureStore) GetMessagesWindow(ctx context.Context, id string, w db.MessageWindow) ([]db.Message, error) {
 	s.count("messages")
 	if s.fail == "messages" {
 		return nil, errors.New("message read failed")
 	}
-	return s.Store.GetMessages(ctx, id, from, limit, asc)
+	return s.Store.GetMessagesWindow(ctx, id, w)
 }
 
 func (s *toolSequenceFailureStore) GetToolCallDurations(ctx context.Context, id string, positions []db.ToolCallPosition) (map[db.ToolCallPosition]*int64, error) {
@@ -935,4 +931,170 @@ func (s *toolSequenceFailureStore) count(key string) {
 		s.called = make(map[string]int)
 	}
 	s.called[key]++
+}
+
+type toolSequenceChangingStore struct {
+	db.Store
+	beforePage  func(int)
+	afterPage   func(int, []db.Message, *string)
+	afterTiming func()
+	metadata    func(*db.Session, int)
+	reads       int
+}
+
+func (s *toolSequenceChangingStore) GetSession(ctx context.Context, id string) (*db.Session, error) {
+	value, err := s.Store.GetSession(ctx, id)
+	s.reads++
+	if s.metadata != nil && value != nil {
+		s.metadata(value, s.reads)
+	}
+	return value, err
+}
+
+func (s *toolSequenceChangingStore) GetMessagesWindow(ctx context.Context, id string, w db.MessageWindow) ([]db.Message, error) {
+	if s.beforePage != nil {
+		s.beforePage(*w.From)
+	}
+	value, err := s.Store.GetMessagesWindow(ctx, id, w)
+	if err == nil && s.afterPage != nil {
+		s.afterPage(*w.From, value, w.ObservedRevision)
+	}
+	return value, err
+}
+
+func (s *toolSequenceChangingStore) GetToolCallDurations(ctx context.Context, id string, positions []db.ToolCallPosition) (map[db.ToolCallPosition]*int64, error) {
+	value, err := s.Store.GetToolCallDurations(ctx, id, positions)
+	if err == nil && s.afterTiming != nil {
+		s.afterTiming()
+	}
+	return value, err
+}
+
+func TestHandleToolSequences_SourceChanged(t *testing.T) {
+	for _, boundary := range []string{"first page", "hydration", "EOF", "timing", "shorter", "zero"} {
+		t.Run(boundary, func(t *testing.T) {
+			te := setup(t)
+			const id = "tool-sequences-replaced"
+			calls := make([]db.ToolCall, 205)
+			for i := range calls {
+				calls[i] = db.ToolCall{ToolName: "Grep", Category: "Grep", ToolUseID: fmt.Sprint(i), ResultContent: "No matches found"}
+			}
+			seedSequenceSession(t, te.db, id, new("clean"), calls)
+			replace := func() {
+				messages, err := te.db.GetAllMessages(t.Context(), id)
+				require.NoError(t, err)
+				if boundary == "shorter" {
+					messages = messages[:1]
+				}
+				if boundary == "zero" {
+					messages = nil
+				}
+				if len(messages) > 1 {
+					messages[1].ToolCalls[0].ResultContent = "replacement"
+				}
+				require.NoError(t, te.db.ReplaceSessionMessages(t.Context(), id, messages))
+			}
+			store := &toolSequenceChangingStore{Store: te.db}
+			if boundary == "shorter" || boundary == "zero" {
+				store.beforePage = func(from int) {
+					if from > 0 {
+						replace()
+					}
+				}
+			} else if boundary == "timing" {
+				store.afterTiming = replace
+			} else {
+				store.afterPage = func(from int, messages []db.Message, revision *string) {
+					if (boundary == "EOF" && len(messages) == 0) || (boundary != "EOF" && from == 0) {
+						replace()
+						if boundary == "hydration" {
+							hydrated, err := te.db.GetMessages(t.Context(), id, from, db.DefaultMessageLimit, true)
+							require.NoError(t, err)
+							for i := range messages {
+								messages[i].ToolCalls = hydrated[i].ToolCalls
+							}
+						}
+					}
+				}
+			}
+			cfg := config.Config{Host: "127.0.0.1", InstallationID: "test"}
+			te.handler = wrapTestHandler(cfg, server.New(cfg, store, nil).Handler())
+			response := te.get(t, "/api/v1/sessions/"+id+"/tool-sequences")
+			assertStatus(t, response, http.StatusConflict)
+			assert.Contains(t, response.Body.String(), `"code":"source_changed"`)
+			assert.NotContains(t, response.Body.String(), `"sequences"`)
+			assert.NotContains(t, response.Body.String(), `"total_tool_calls"`)
+		})
+	}
+}
+
+func TestHandleToolSequences_ReadBinding(t *testing.T) {
+	for _, change := range []string{"termination", "disappearance", "nil revision", "empty revision", "missing page revision"} {
+		t.Run(change, func(t *testing.T) {
+			te := setup(t)
+			const id = "tool-sequences-binding"
+			dbtest.SeedToolSequencesExample(t, te.db, id)
+			store := &toolSequenceChangingStore{Store: te.db}
+			status := http.StatusConflict
+			switch change {
+			case "nil revision", "empty revision":
+				status = http.StatusNotImplemented
+				store.metadata = func(session *db.Session, _ int) {
+					session.TranscriptRevision = nil
+					if change == "empty revision" {
+						session.TranscriptRevision = new("")
+					}
+				}
+			case "missing page revision":
+				status = http.StatusNotImplemented
+				store.afterPage = func(_ int, _ []db.Message, revision *string) { *revision = "" }
+			case "termination":
+				store.afterPage = func(_ int, _ []db.Message, _ *string) {
+					require.NoError(t, te.db.Update(t.Context(), func(tx *sql.Tx) error {
+						_, err := tx.ExecContext(t.Context(), `UPDATE sessions SET termination_status='truncated' WHERE id=?`, id)
+						return err
+					}))
+				}
+			case "disappearance":
+				store.afterPage = func(_ int, _ []db.Message, _ *string) { require.NoError(t, te.db.SoftDeleteSession(t.Context(), id)) }
+			}
+			cfg := config.Config{Host: "127.0.0.1", InstallationID: "test"}
+			te.handler = wrapTestHandler(cfg, server.New(cfg, store, nil).Handler())
+			response := te.get(t, "/api/v1/sessions/"+id+"/tool-sequences")
+			assertStatus(t, response, status)
+			assert.NotContains(t, response.Body.String(), `"sequences"`)
+		})
+	}
+	for _, boundary := range []string{"initial", "after page"} {
+		t.Run("unavailable backend binding "+boundary, func(t *testing.T) {
+			te := setup(t)
+			const id = "tool-sequences-unavailable-binding"
+			dbtest.SeedToolSequencesExample(t, te.db, id)
+			store := &toolSequenceUnavailableStore{Store: te.db, initial: boundary == "initial"}
+			cfg := config.Config{Host: "127.0.0.1", InstallationID: "test"}
+			te.handler = wrapTestHandler(cfg, server.New(cfg, store, nil).Handler())
+			response := te.get(t, "/api/v1/sessions/"+id+"/tool-sequences")
+			assertStatus(t, response, http.StatusNotImplemented)
+			assert.NotContains(t, response.Body.String(), `"sequences"`)
+		})
+	}
+}
+
+type toolSequenceUnavailableStore struct {
+	db.Store
+	initial  bool
+	readPage bool
+}
+
+func (s *toolSequenceUnavailableStore) ToolSequenceReadSource(context.Context, string) (string, bool, error) {
+	if s.initial || s.readPage {
+		return "", false, nil
+	}
+	return "binding", false, nil
+}
+
+func (s *toolSequenceUnavailableStore) GetMessagesWindow(ctx context.Context, id string, w db.MessageWindow) ([]db.Message, error) {
+	messages, err := s.Store.GetMessagesWindow(ctx, id, w)
+	s.readPage = true
+	return messages, err
 }

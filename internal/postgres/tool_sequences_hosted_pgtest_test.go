@@ -3,6 +3,7 @@
 package postgres
 
 import (
+	"context"
 	"encoding/json/v2"
 	"fmt"
 	"net/http"
@@ -17,6 +18,63 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/server"
 )
+
+type toolSequenceAliasSwapStore struct {
+	*HostedStore
+	afterPage func()
+}
+
+func (s *toolSequenceAliasSwapStore) GetMessagesWindow(ctx context.Context, id string, w db.MessageWindow) ([]db.Message, error) {
+	messages, err := s.HostedStore.GetMessagesWindow(ctx, id, w)
+	if err == nil && s.afterPage != nil {
+		s.afterPage()
+		s.afterPage = nil
+	}
+	return messages, err
+}
+
+func TestToolSequencesHosted_SourceBinding(t *testing.T) {
+	f := newProjectionFixture(t)
+	m, accepted := f.accept(t, "device-a", "capture-a", "")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("first transcript")))
+	h, err := NewHostedStore(f.dsn, f.schema, f.tenant, false)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, h.Close()) })
+	before, err := h.resolve(t.Context(), "codex:portable")
+	require.NoError(t, err)
+	metadata, err := h.GetSession(t.Context(), "codex:portable")
+	require.NoError(t, err)
+	require.NotNil(t, metadata.TranscriptRevision)
+	store := &toolSequenceAliasSwapStore{HostedStore: h, afterPage: func() {
+		replacement, _ := f.accept(t, "device-a", "capture-b", accepted.Receipt)
+		require.NoError(t, f.sink.Project(t.Context(), f.lease(t, replacement), replacement, projectionOutcome("replacement transcript")))
+		after, err := h.resolve(t.Context(), "codex:portable")
+		require.NoError(t, err)
+		require.NotEqual(t, before.SessionID, after.SessionID)
+		_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET transcript_revision=$1, termination_status=$2 WHERE id=$3`, *metadata.TranscriptRevision, metadata.TerminationStatus, after.SessionID)
+		require.NoError(t, err)
+		current, err := h.GetSession(t.Context(), "codex:portable")
+		require.NoError(t, err)
+		assert.Equal(t, metadata.TranscriptRevision, current.TranscriptRevision)
+		assert.Equal(t, metadata.TerminationStatus, current.TerminationStatus)
+	}}
+	handler := server.New(config.Config{Host: "127.0.0.1", InstallationID: "hosted"}, store, nil).Handler()
+	request := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:0/api/v1/sessions/codex:portable/tool-sequences", nil)
+		req.RemoteAddr = "127.0.0.1:1234"
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, req)
+		return response
+	}
+	response := request()
+	assert.Equal(t, http.StatusConflict, response.Code, response.Body.String())
+	assert.Contains(t, response.Body.String(), `"code":"source_changed"`)
+	assert.NotContains(t, response.Body.String(), `"sequences"`)
+	assert.NotContains(t, response.Body.String(), "raw-row-")
+	response = request()
+	assert.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	assert.NotContains(t, response.Body.String(), "raw-row-")
+}
 
 func TestToolSequencesHosted_SelectedTimingAndMapping(t *testing.T) {
 	f := newProjectionFixture(t)

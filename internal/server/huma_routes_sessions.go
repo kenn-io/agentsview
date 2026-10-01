@@ -465,7 +465,6 @@ type sessionToolSequence struct {
 }
 
 type sessionToolSequenceCall struct {
-	timingEligible       bool
 	Ordinal              int    `json:"ordinal"`
 	CallIndex            int    `json:"call_index"`
 	ToolUseID            string `json:"tool_use_id"`
@@ -487,16 +486,14 @@ func (s *Server) humaToolSequences(
 	ctx context.Context,
 	in *idPathInput,
 ) (*jsonOutput[sessionToolSequencesResponse], error) {
-	session, err := s.db.GetSession(ctx, in.ID)
+	response, err := collectSessionToolSequences(ctx, s.db, in.ID)
 	if err != nil {
-		return nil, serverError(err)
-	}
-	if session == nil {
-		return nil, apiError(http.StatusNotFound, "session not found")
-	}
-
-	response, err := collectSessionToolSequences(ctx, s.db, session)
-	if err != nil {
+		if errors.Is(err, service.ErrSourceChanged) {
+			return nil, apiErrorWithCode(http.StatusConflict, "source_changed", err.Error())
+		}
+		if errors.Is(err, service.ErrRevisionBoundReadUnavailable) {
+			return nil, apiError(http.StatusNotImplemented, err.Error())
+		}
 		return nil, serverError(err)
 	}
 	if response == nil {
@@ -533,40 +530,6 @@ func (c *sessionToolSequenceCollector) add(row signals.ToolCallRow) {
 	}
 }
 
-func (c *sessionToolSequenceCollector) messageTimingEligibility(message *db.Message) {
-	if !message.HasToolUse {
-		return
-	}
-	candidates := map[string]int{}
-	var selected []*sessionToolSequenceCall
-	collect := func(calls []sessionToolSequenceCall) {
-		for i := range calls {
-			call := &calls[i]
-			if call.Ordinal == message.Ordinal {
-				if call.ToolUseID != "" {
-					candidates[call.ToolUseID] = 0
-				}
-				selected = append(selected, call)
-			}
-		}
-	}
-	collect(c.calls)
-	for i := range c.response.Sequences {
-		collect(c.response.Sequences[i].Calls)
-	}
-	if len(selected) == 0 {
-		return
-	}
-	for _, call := range message.ToolCalls {
-		if _, selected := candidates[call.ToolUseID]; selected {
-			candidates[call.ToolUseID]++
-		}
-	}
-	for _, call := range selected {
-		call.timingEligible = call.ToolUseID == "" || candidates[call.ToolUseID] == 1
-	}
-}
-
 func (c *sessionToolSequenceCollector) appendSequence(sequence *signals.ToolSequence) {
 	count := sequence.End - sequence.Start
 	c.response.TotalSequences++
@@ -590,14 +553,90 @@ func (c *sessionToolSequenceCollector) finish(session *db.Session) sessionToolSe
 	return c.response
 }
 
-func collectSessionToolSequences(ctx context.Context, store db.Store, session *db.Session) (*sessionToolSequencesResponse, error) {
+func collectSessionToolSequences(ctx context.Context, store db.Store, id string) (*sessionToolSequencesResponse, error) {
+	source, hasSource := store.(db.ToolSequenceReadSource)
+	var binding string
+	var pending bool
+	var err error
+	if hasSource {
+		binding, pending, err = source.ToolSequenceReadSource(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+	}
+	session, err := store.GetSession(ctx, id)
+	if err != nil || session == nil {
+		return nil, err
+	}
+	if pending {
+		return nil, service.ErrSourceChanged
+	}
+	if session.TranscriptRevision == nil || *session.TranscriptRevision == "" || (hasSource && binding == "") {
+		return nil, service.ErrRevisionBoundReadUnavailable
+	}
+	revision := *session.TranscriptRevision
+	check := func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		var unavailable bool
+		if hasSource {
+			current, pending, err := source.ToolSequenceReadSource(ctx, id)
+			if err != nil {
+				return err
+			}
+			if pending || (current != "" && current != binding) {
+				return service.ErrSourceChanged
+			}
+			unavailable = current == ""
+		}
+		current, err := store.GetSession(ctx, id)
+		if err != nil {
+			return err
+		}
+		if current == nil {
+			return service.ErrSourceChanged
+		}
+		if unavailable || current.TranscriptRevision == nil || *current.TranscriptRevision == "" {
+			return service.ErrRevisionBoundReadUnavailable
+		}
+		if *current.TranscriptRevision != revision || !reflect.DeepEqual(current.TerminationStatus, session.TerminationStatus) {
+			return service.ErrSourceChanged
+		}
+		if hasSource {
+			current, pending, err := source.ToolSequenceReadSource(ctx, id)
+			if err != nil {
+				return err
+			}
+			if pending || (current != "" && current != binding) {
+				return service.ErrSourceChanged
+			}
+			if current == "" {
+				return service.ErrRevisionBoundReadUnavailable
+			}
+		}
+		return nil
+	}
+	if err := check(); err != nil {
+		return nil, err
+	}
 	collector := newSessionToolSequenceCollector(session.ID)
 	for from := 0; ; {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		messages, err := store.GetMessages(ctx, session.ID, from, db.DefaultMessageLimit, true)
+		observed := ""
+		messages, err := store.GetMessagesWindow(ctx, id, db.MessageWindow{From: &from, Limit: db.DefaultMessageLimit, Asc: true, ObservedRevision: &observed})
 		if err != nil {
+			return nil, err
+		}
+		if len(messages) > 0 && observed == "" {
+			return nil, service.ErrRevisionBoundReadUnavailable
+		}
+		if len(messages) > 0 && observed != revision {
+			return nil, service.ErrSourceChanged
+		}
+		if err := check(); err != nil {
 			return nil, err
 		}
 		if len(messages) == 0 {
@@ -608,7 +647,6 @@ func collectSessionToolSequences(ctx context.Context, store db.Store, session *d
 			for _, row := range ingest.ExtractToolCallRows(messages[i : i+1]) {
 				collector.add(row)
 			}
-			collector.messageTimingEligibility(&messages[i])
 			messages[i] = db.Message{}
 		}
 	}
@@ -616,21 +654,23 @@ func collectSessionToolSequences(ctx context.Context, store db.Store, session *d
 	positions := make([]db.ToolCallPosition, 0)
 	for _, sequence := range response.Sequences {
 		for _, call := range sequence.Calls {
-			if call.timingEligible {
-				positions = append(positions, db.ToolCallPosition{MessageOrdinal: call.Ordinal, CallIndex: call.CallIndex})
-			}
+			positions = append(positions, db.ToolCallPosition{MessageOrdinal: call.Ordinal, CallIndex: call.CallIndex})
 		}
 	}
 	durations, err := store.GetToolCallDurations(ctx, session.ID, positions)
-	if err != nil || durations == nil {
+	if err != nil {
 		return nil, err
+	}
+	if err := check(); err != nil {
+		return nil, err
+	}
+	if durations == nil {
+		return nil, service.ErrSourceChanged
 	}
 	for i := range response.Sequences {
 		for j := range response.Sequences[i].Calls {
 			call := &response.Sequences[i].Calls[j]
-			if call.timingEligible {
-				call.DurationMs = durations[db.ToolCallPosition{MessageOrdinal: call.Ordinal, CallIndex: call.CallIndex}]
-			}
+			call.DurationMs = durations[db.ToolCallPosition{MessageOrdinal: call.Ordinal, CallIndex: call.CallIndex}]
 		}
 	}
 	return &response, nil
