@@ -1,11 +1,14 @@
 package sync_test
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
+	gosync "sync"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -1038,4 +1041,237 @@ func TestSyncCursorIDEDataVersionUpgradeRefreshesSessionStart(t *testing.T) {
 	require.NotNil(t, refreshed.StartedAt)
 	assert.Equal(t, wantStart, *refreshed.StartedAt)
 	assert.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(t.Context(), id))
+}
+
+func cursorIDERetentionComposer(id string, i int, turns int) cursorIDESyncComposer {
+	c := cursorIDESyncComposer{
+		id: id, name: "Chat " + id,
+		createdAt: 1782026756842 + int64(i), updatedAt: 1782026791522 + int64(i)*1000,
+	}
+	for turn := 1; turn <= turns; turn++ {
+		bubbleType := 1
+		if turn%2 == 0 {
+			bubbleType = 2
+		}
+		c.bubbles = append(c.bubbles, cursorIDESyncBubble{
+			id: fmt.Sprintf("b%d", turn), bubbleType: bubbleType,
+			text:      fmt.Sprintf("%s turn %d", id, turn),
+			createdAt: fmt.Sprintf("2026-06-21T07:27:%02d.606Z", 10+turn),
+		})
+	}
+	return c
+}
+
+// writeCursorIDEComposer replaces one composer document and its bubble rows
+// through a connection separate from the engine's reader.
+func writeCursorIDEComposer(t *testing.T, dbPath string, c cursorIDESyncComposer) {
+	t.Helper()
+	writer, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	defer writer.Close()
+	_, err = writer.ExecContext(t.Context(),
+		`INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`,
+		"composerData:"+c.id, cursorIDEComposerJSON(t, c),
+	)
+	require.NoError(t, err)
+	for _, b := range c.bubbles {
+		raw, err := json.Marshal(map[string]any{
+			"type": b.bubbleType, "text": b.text, "createdAt": b.createdAt,
+		})
+		require.NoError(t, err)
+		_, err = writer.ExecContext(t.Context(),
+			`INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`,
+			"bubbleId:"+c.id+":"+b.id, raw,
+		)
+		require.NoError(t, err)
+	}
+}
+
+func execCursorIDEStateDB(t *testing.T, dbPath, query string, args ...any) {
+	t.Helper()
+	writer, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	defer writer.Close()
+	_, err = writer.ExecContext(t.Context(), query, args...)
+	require.NoError(t, err)
+}
+
+func cursorIDESessionForTest(t *testing.T, database *db.DB, id string) *db.Session {
+	t.Helper()
+	sess, err := database.GetSessionFull(t.Context(), "cursor-ide:"+id)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	return sess
+}
+
+type cursorIDEAdmissionProbe struct {
+	mu          gosync.Mutex
+	calls       int
+	maxYielded  int
+	maxRetained int
+	onFirst     func()
+}
+
+func (p *cursorIDEAdmissionProbe) observe(yielded, retained int) {
+	p.mu.Lock()
+	p.calls++
+	first := p.calls == 1
+	p.maxYielded = max(p.maxYielded, yielded)
+	p.maxRetained = max(p.maxRetained, retained)
+	onFirst := p.onFirst
+	p.mu.Unlock()
+	if first && onFirst != nil {
+		onFirst()
+	}
+}
+
+func (p *cursorIDEAdmissionProbe) snapshot() (calls, maxYielded, maxRetained int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls, p.maxYielded, p.maxRetained
+}
+
+func TestReconcileCursorIDEContainerRetainsOnlyChangedMembers(t *testing.T) {
+	for _, n := range []int{8, 256} {
+		t.Run(fmt.Sprintf("composers=%d", n), func(t *testing.T) {
+			root := t.TempDir()
+			dbPath := filepath.Join(root, "state.vscdb")
+			composers := make([]cursorIDESyncComposer, 0, n)
+			for i := range n {
+				composers = append(composers, cursorIDERetentionComposer(fmt.Sprintf("composer-%04d", i), i, 2))
+			}
+			createCursorIDEStateDB(t, dbPath, composers)
+			engine, database := newCursorIDESyncEngine(t, root)
+			require.Equal(t, n, engine.SyncAll(t.Context(), nil).Synced)
+
+			edited := cursorIDERetentionComposer("composer-0000", 0, 3)
+			edited.updatedAt += 60_000
+			writeCursorIDEComposer(t, dbPath, edited)
+			execCursorIDEStateDB(t, dbPath,
+				`DELETE FROM cursorDiskKV WHERE key = ? OR key LIKE ?`,
+				"composerData:composer-0001", "bubbleId:composer-0001:%",
+			)
+
+			lastID := fmt.Sprintf("composer-%04d", n-1)
+			rewritten := cursorIDERetentionComposer(lastID, n-1, 3)
+			rewritten.updatedAt += 60_000
+			probe := &cursorIDEAdmissionProbe{onFirst: func() {
+				writeCursorIDEComposer(t, dbPath, rewritten)
+			}}
+			sync.SetParseAdmissionObserver(engine, probe.observe)
+
+			require.NoError(t, engine.ReconcileProviderRoots(t.Context(), parser.AgentCursorIDE, []string{root}))
+			sync.SetParseAdmissionObserver(engine, nil)
+
+			_, maxYielded, maxRetained := probe.snapshot()
+			assert.Equal(t, n-1, maxYielded, "every surviving composer must be seen")
+			assert.Equal(t, 2, maxRetained,
+				"the engine must hold only the edited and rewritten composers")
+			assert.Equal(t, 3, cursorIDESessionForTest(t, database, "composer-0000").MessageCount)
+			assert.Equal(t, 3, cursorIDESessionForTest(t, database, lastID).MessageCount,
+				"a composer rewritten mid-pass must be read after the rewrite")
+			deleted := cursorIDESessionForTest(t, database, "composer-0001")
+			assertSourceMissingState(t, deleted)
+			assert.Equal(t, 2, deleted.MessageCount)
+			untouched := cursorIDESessionForTest(t, database, "composer-0002")
+			assert.Equal(t, 2, untouched.MessageCount)
+			assert.Nil(t, untouched.SourceMissingAt)
+		})
+	}
+}
+
+func TestReconcileCursorIDEUnrelatedWriteKeepsEveryMember(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "state.vscdb")
+	composers := make([]cursorIDESyncComposer, 0, 8)
+	for i := range 8 {
+		composers = append(composers, cursorIDERetentionComposer(fmt.Sprintf("composer-%04d", i), i, 2))
+	}
+	createCursorIDEStateDB(t, dbPath, composers)
+	engine, database := newCursorIDESyncEngine(t, root)
+	require.Equal(t, 8, engine.SyncAll(t.Context(), nil).Synced)
+
+	execCursorIDEStateDB(t, dbPath,
+		`INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`,
+		"workbench.panel.state", `{"open":true}`,
+	)
+	probe := &cursorIDEAdmissionProbe{}
+	sync.SetParseAdmissionObserver(engine, probe.observe)
+	require.NoError(t, engine.ReconcileProviderRoots(t.Context(), parser.AgentCursorIDE, []string{root}))
+	sync.SetParseAdmissionObserver(engine, nil)
+
+	_, maxYielded, maxRetained := probe.snapshot()
+	assert.Equal(t, 8, maxYielded)
+	assert.Equal(t, 0, maxRetained)
+	for _, c := range composers {
+		sess := cursorIDESessionForTest(t, database, c.id)
+		assert.Nil(t, sess.SourceMissingAt, c.id)
+		assert.Equal(t, 2, sess.MessageCount, c.id)
+	}
+}
+
+func TestReconcileCursorIDEMalformedLaterComposerPublishesNothing(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "state.vscdb")
+	editedID, brokenID := "aaa-edited", "zzz-broken"
+	broken := cursorIDERetentionComposer(brokenID, 1, 2)
+	createCursorIDEStateDB(t, dbPath, []cursorIDESyncComposer{
+		cursorIDERetentionComposer(editedID, 0, 2), broken,
+	})
+	engine, database := newCursorIDESyncEngine(t, root)
+	require.Equal(t, 2, engine.SyncAll(t.Context(), nil).Synced)
+
+	edited := cursorIDERetentionComposer(editedID, 0, 3)
+	edited.updatedAt += 60_000
+	writeCursorIDEComposer(t, dbPath, edited)
+	execCursorIDEStateDB(t, dbPath,
+		`UPDATE cursorDiskKV SET value = ? WHERE key = ?`,
+		"{not json", "composerData:"+brokenID,
+	)
+
+	_ = engine.ReconcileProviderRoots(t.Context(), parser.AgentCursorIDE, []string{root})
+
+	for _, id := range []string{editedID, brokenID} {
+		sess := cursorIDESessionForTest(t, database, id)
+		assert.Equal(t, 2, sess.MessageCount, id)
+		assert.Nil(t, sess.SourceMissingAt, id)
+	}
+
+	writeCursorIDEComposer(t, dbPath, broken)
+	require.NoError(t, engine.ReconcileProviderRoots(t.Context(), parser.AgentCursorIDE, []string{root}))
+	assert.Equal(t, 3, cursorIDESessionForTest(t, database, editedID).MessageCount)
+}
+
+func TestReconcileCursorIDECancelledContainerParsePublishesNothing(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "state.vscdb")
+	composers := make([]cursorIDESyncComposer, 0, 8)
+	for i := range 8 {
+		composers = append(composers, cursorIDERetentionComposer(fmt.Sprintf("composer-%04d", i), i, 2))
+	}
+	createCursorIDEStateDB(t, dbPath, composers)
+	engine, database := newCursorIDESyncEngine(t, root)
+	require.Equal(t, 8, engine.SyncAll(t.Context(), nil).Synced)
+
+	edited := cursorIDERetentionComposer("composer-0000", 0, 3)
+	edited.updatedAt += 60_000
+	writeCursorIDEComposer(t, dbPath, edited)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	probe := &cursorIDEAdmissionProbe{onFirst: cancel}
+	sync.SetParseAdmissionObserver(engine, probe.observe)
+	_ = engine.ReconcileProviderRoots(ctx, parser.AgentCursorIDE, []string{root})
+	sync.SetParseAdmissionObserver(engine, nil)
+
+	calls, _, _ := probe.snapshot()
+	require.Positive(t, calls, "the pass must reach result admission before cancelling")
+	for _, c := range composers {
+		sess := cursorIDESessionForTest(t, database, c.id)
+		assert.Equal(t, 2, sess.MessageCount, c.id)
+		assert.Nil(t, sess.SourceMissingAt, c.id)
+	}
+
+	require.NoError(t, engine.ReconcileProviderRoots(t.Context(), parser.AgentCursorIDE, []string{root}))
+	assert.Equal(t, 3, cursorIDESessionForTest(t, database, "composer-0000").MessageCount)
 }

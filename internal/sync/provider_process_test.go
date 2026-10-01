@@ -1463,6 +1463,55 @@ func TestProcessFileProviderAuthoritativeNotFoundFails(t *testing.T) {
 	assert.Equal(t, []string{"find-source"}, provider.calls)
 }
 
+func TestProcessFileProviderAuthoritativeStreamedValidationFailureCachesFailure(t *testing.T) {
+	root := t.TempDir()
+	sourcePath, fingerprint := writeProcessProviderSource(t, root, "mixed.jsonl")
+	// A composite-fingerprint source needs a hash before its failure can cache.
+	fingerprint.Hash = "mixed-hash"
+	provider := newProcessFixtureProvider(
+		processFixtureSource(sourcePath),
+		fingerprint,
+		parser.ParseOutcome{
+			Results: []parser.ParseResultOutcome{
+				{
+					Result: processFixtureResult(
+						"cowork:valid",
+						parser.AgentCowork,
+						"fixture-project",
+						sourcePath,
+						fingerprint,
+					),
+					DataVersion: parser.DataVersionCurrent,
+				},
+				{
+					Result: processFixtureResult(
+						"wrong:prefix",
+						parser.AgentCowork,
+						"fixture-project",
+						sourcePath,
+						fingerprint,
+					),
+					DataVersion: parser.DataVersionCurrent,
+				},
+			},
+			ResultSetComplete: true,
+		},
+	)
+	engine := newProcessFixtureEngine(t, root, provider)
+
+	res := engine.processFile(t.Context(), parser.DiscoveredFile{
+		Path:  sourcePath,
+		Agent: parser.AgentCowork,
+	})
+
+	require.ErrorContains(t, res.err, `"wrong:prefix" must use prefix "cowork:"`)
+	assert.Empty(t, res.results, "a validation failure mid-parse must publish nothing")
+	assert.True(t, res.noCacheSkip)
+	// A validation failure is a stable source defect, so it caches even though its message is not a malformed-parse marker.
+	assert.True(t, res.cacheFailure, "a streamed validation failure must take the validation branch")
+	assert.Equal(t, providerAgentSkipCacheKey(sourcePath, parser.AgentCowork), res.failureCacheKey)
+}
+
 func TestSyncSingleSessionProviderAuthoritativeBypassesProviderSkipCache(t *testing.T) {
 	root := t.TempDir()
 	sourcePath, fingerprint := writeProcessProviderSource(t, root, "single.jsonl")

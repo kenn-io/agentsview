@@ -7,3 +7,8 @@ const CodexExecMigrationKey = codexExecMigrationKey
 
 // FileChangeTime lets external integration tests observe the native timestamp.
 var FileChangeTime = fileChangeTime
+
+// SetParseAdmissionObserver installs the result-admission cardinality probe.
+func SetParseAdmissionObserver(e *Engine, fn func(yielded, retained int)) {
+	e.parseAdmissionObserver = fn
+}

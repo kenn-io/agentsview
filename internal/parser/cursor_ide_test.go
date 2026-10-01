@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"encoding/json/jsontext"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -1127,4 +1128,85 @@ func TestParseCursorIDEComposer_TypelessBubbleFallsBackToHeaderType(t *testing.T
 	assert.Equal(t, RoleUser, result.Messages[0].Role)
 	assert.Equal(t, RoleAssistant, result.Messages[1].Role)
 	assert.Equal(t, "answer", result.Messages[1].Content)
+}
+
+func TestCursorIDEParseEachReadsComposersOneAtATime(t *testing.T) {
+	composer := func(id string) cursorIDETestComposer {
+		return cursorIDETestComposer{
+			id: id, name: id, createdAt: 1782026756842, updatedAt: 1782026791522,
+			bubbles: []cursorIDETestBubble{{
+				id: "b1", bubbleType: 1, text: id, createdAt: "2026-06-21T07:27:29.606Z",
+			}},
+		}
+	}
+	setup := func(t *testing.T) (Provider, ParseRequest, string) {
+		t.Helper()
+		dbPath := createCursorIDEDB(t, []cursorIDETestComposer{
+			composer("composer-a"), composer("composer-b"), composer("composer-c"),
+		})
+		provider, ok := NewProvider(AgentCursorIDE, ProviderConfig{
+			Roots: []string{filepath.Dir(dbPath)}, Machine: "test",
+		})
+		require.True(t, ok)
+		sources, err := provider.Discover(t.Context())
+		require.NoError(t, err)
+		require.Len(t, sources, 1)
+		fingerprint, err := provider.Fingerprint(t.Context(), sources[0])
+		require.NoError(t, err)
+		return provider, ParseRequest{Source: sources[0], Machine: "test", Fingerprint: fingerprint}, dbPath
+	}
+
+	t.Run("matches Parse", func(t *testing.T) {
+		provider, req, _ := setup(t)
+		collected, err := provider.Parse(t.Context(), req)
+		require.NoError(t, err)
+		var want []string
+		for _, r := range collected.Results {
+			want = append(want, r.Result.Session.ID)
+		}
+		var got []string
+		outcome, err := ParseEach(t.Context(), provider, req, func(r ParseResultOutcome) error {
+			got = append(got, r.Result.Session.ID)
+			return nil
+		})
+		require.NoError(t, err)
+		assert.Equal(t, want, got)
+		assert.Len(t, got, 3)
+		assert.Nil(t, outcome.Results)
+		assert.True(t, outcome.ResultSetComplete)
+		assert.True(t, outcome.ForceReplace)
+	})
+
+	t.Run("reads each composer after the previous yield", func(t *testing.T) {
+		provider, req, dbPath := setup(t)
+		var got []string
+		_, err := ParseEach(t.Context(), provider, req, func(r ParseResultOutcome) error {
+			if len(got) == 0 {
+				writer, err := sql.Open("sqlite3", dbPath)
+				require.NoError(t, err)
+				defer writer.Close()
+				_, err = writer.ExecContext(t.Context(),
+					`DELETE FROM cursorDiskKV WHERE key = ?`,
+					cursorIDEComposerKeyPrefix+"composer-c",
+				)
+				require.NoError(t, err)
+			}
+			got = append(got, r.Result.Session.ID)
+			return nil
+		})
+		require.NoError(t, err)
+		assert.Equal(t, []string{"cursor-ide:composer-a", "cursor-ide:composer-b"}, got)
+	})
+
+	t.Run("yield error stops the parse", func(t *testing.T) {
+		provider, req, _ := setup(t)
+		sentinel := errors.New("stop")
+		calls := 0
+		_, err := ParseEach(t.Context(), provider, req, func(ParseResultOutcome) error {
+			calls++
+			return sentinel
+		})
+		require.ErrorIs(t, err, sentinel)
+		assert.Equal(t, 1, calls)
+	})
 }

@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -63,6 +64,75 @@ func validateProviderOutcome(
 		}
 	}
 	return nil
+}
+
+// providerResultAdmission is where a parse result becomes the engine's to
+// hold: admit runs the per-result publication gates as each result arrives,
+// keeping only members it will write plus every member's identity.
+type providerResultAdmission struct {
+	engine          *Engine
+	ctx             context.Context
+	def             parser.AgentDef
+	file            parser.DiscoveredFile
+	source          parser.SourceRef
+	fingerprint     parser.SourceFingerprint
+	policy          parser.UnchangedResultPolicy
+	codexIdentities bool
+
+	kept []parser.ParseResult
+	// emitted holds only Session.ID and Session.File.Path of every admitted result.
+	emitted                []parser.ParseResult
+	retryIDs               []string
+	firstHash              string
+	truncationVerifyFailed bool
+	validationErr          error
+}
+
+func (a *providerResultAdmission) admit(r parser.ParseResultOutcome) error {
+	if err := validateProviderOutcome(
+		a.def, a.source, a.fingerprint,
+		parser.ParseOutcome{Results: []parser.ParseResultOutcome{r}},
+	); err != nil {
+		a.validationErr = err
+		return err
+	}
+	if a.codexIdentities {
+		prepareCodexResultIdentities(r.Result.Messages, nil)
+	}
+	one := []parser.ParseResultOutcome{r}
+	applyProviderFingerprintFileInfo(a.file.Agent, a.fingerprint, one)
+	r = one[0]
+	if a.firstHash == "" {
+		a.firstHash = r.Result.Session.File.Hash
+	}
+	a.emitted = append(a.emitted, parser.ParseResult{Session: parser.ParsedSession{
+		ID:   r.Result.Session.ID,
+		File: parser.FileInfo{Path: r.Result.Session.File.Path},
+	}})
+	if r.DataVersion == parser.DataVersionNeedsRetry {
+		a.retryIDs = append(a.retryIDs, r.Result.Session.ID)
+	}
+	kept := a.engine.dropUnchangedSharedSQLiteResults(
+		a.ctx, a.file, []parser.ParseResult{r.Result}, a.policy,
+	)
+	kept, verifyFailed := a.engine.dropShrinkingTruncatedCursorIDEResults(a.ctx, a.file, kept)
+	a.truncationVerifyFailed = a.truncationVerifyFailed || verifyFailed
+	a.kept = append(a.kept, kept...)
+	if a.engine.parseAdmissionObserver != nil {
+		a.engine.parseAdmissionObserver(len(a.emitted), len(a.kept))
+	}
+	return nil
+}
+
+// admitAll admits every result of an already collected outcome in order.
+func (a *providerResultAdmission) admitAll(outcome parser.ParseOutcome) (parser.ParseOutcome, error) {
+	for _, r := range outcome.Results {
+		if err := a.admit(r); err != nil {
+			return parser.ParseOutcome{}, err
+		}
+	}
+	outcome.Results = nil
+	return outcome, nil
 }
 
 func validateProviderParseResultSessionIDs(def parser.AgentDef, result parser.ParseResult) error {

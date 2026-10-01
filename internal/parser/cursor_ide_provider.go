@@ -30,7 +30,7 @@ func newCursorIDEProviderFactory(def AgentDef) ProviderFactory {
 				WithChangedPathClassifier(cursorIDEClassifyPath),
 				WithMemberLookup(cursorIDEFindMember),
 				WithContextFingerprint(cursorIDEFingerprintSource),
-				WithContextContainerParse(cursorIDEParseContainer),
+				WithContextContainerParseEach(cursorIDEParseContainerEach),
 				WithContextMemberParse(cursorIDEParseMember),
 				WithMemberPresence(cursorIDEMemberPresent),
 				WithBatchMemberPresence(cursorIDEBatchMemberPresent),
@@ -273,42 +273,46 @@ func cursorIDEParseMember(
 	)
 }
 
-func cursorIDEParseContainer(
+// cursorIDEParseContainerEach yields each composer as it is parsed, so the
+// provider holds one transcript at a time.
+func cursorIDEParseContainerEach(
 	ctx context.Context, src multiSessionSource, req ParseRequest,
-) ([]ParseResult, error) {
+	yield func(ParseResult) error,
+) error {
 	dbInfo, err := os.Stat(src.Container)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil
 		}
-		return nil, err
+		return err
 	}
 	conn, err := openCursorIDEDB(src.Container)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer conn.Close()
 	ids, err := listCursorIDEComposerIDs(ctx, conn)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	results := make([]ParseResult, 0, len(ids))
 	for _, id := range ids {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return err
 		}
 		result, err := parseCursorIDEComposer(
 			ctx, conn, src.Container, id, req.Machine, dbInfo,
 		)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if result == nil {
 			continue
 		}
-		results = append(results, *result)
+		if err := yield(*result); err != nil {
+			return err
+		}
 	}
-	return results, nil
+	return nil
 }
 
 // parseCursorIDEVirtualPath splits a Cursor IDE virtual source path into its

@@ -3,7 +3,6 @@ package main
 import (
 	"os"
 	"path/filepath"
-	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -83,12 +82,10 @@ func TestDaemonIngestionReloadAppliesProviderSettings(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, reloaded.DisabledAgents)
 
-	require.Eventually(t, func() bool {
-		return slices.Equal(
-			engine.ReconciliationRootsForAgent(string(parser.AgentGemini)),
-			[]string{primary, alternate},
-		)
-	}, 10*time.Second, 20*time.Millisecond,
+	// The engine switches before the replacement watcher is ready.
+	ingestion.applying.Wait()
+	require.Equal(t, []string{primary, alternate},
+		engine.ReconciliationRootsForAgent(string(parser.AgentGemini)),
 		"the engine switches to the saved provider set")
 	assert.False(t, sessionImported(t, database, "gemini:primary"),
 		"a reload does not sync by itself")

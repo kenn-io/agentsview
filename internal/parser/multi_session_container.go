@@ -171,6 +171,10 @@ type multiSessionConfig struct {
 	// per-request hints such as req.Source.ProjectHint.
 	parseContainer        func(src multiSessionSource, req ParseRequest) ([]ParseResult, error)
 	parseContainerContext func(context.Context, multiSessionSource, ParseRequest) ([]ParseResult, error)
+	// parseContainerEach parses one member at a time, handing each result to
+	// yield before reading the next; a yield error stops the parse and is
+	// returned unchanged.
+	parseContainerEach func(context.Context, multiSessionSource, ParseRequest, func(ParseResult) error) error
 	// parseMember parses a single member; a nil result is a clean no-session.
 	parseMember        func(src multiSessionSource, req ParseRequest) (*ParseResult, error)
 	parseMemberContext func(context.Context, multiSessionSource, ParseRequest) (*ParseResult, error)
@@ -288,6 +292,12 @@ func WithContextContainerParse(
 	return func(c *multiSessionConfig) { c.parseContainerContext = fn }
 }
 
+func WithContextContainerParseEach(
+	fn func(context.Context, multiSessionSource, ParseRequest, func(ParseResult) error) error,
+) MultiSessionOption {
+	return func(c *multiSessionConfig) { c.parseContainerEach = fn }
+}
+
 func WithContainerParseOutcome(
 	fn func(ctx context.Context, src multiSessionSource, req ParseRequest) (ParseOutcome, error),
 ) MultiSessionOption {
@@ -346,8 +356,8 @@ func NewMultiSessionContainerSourceSet(
 		panic("multi-session container: missing WithMemberLookup")
 	case cfg.fingerprint == nil && cfg.fingerprintContext == nil:
 		panic("multi-session container: missing WithFingerprint")
-	case cfg.parseContainer == nil && cfg.parseContainerContext == nil && cfg.parseContainerOutcome == nil:
-		panic("multi-session container: missing WithContainerParse or WithContainerParseOutcome")
+	case cfg.parseContainer == nil && cfg.parseContainerContext == nil && cfg.parseContainerEach == nil && cfg.parseContainerOutcome == nil:
+		panic("multi-session container: missing WithContainerParse, WithContextContainerParseEach, or WithContainerParseOutcome")
 	case cfg.parseMember == nil && cfg.parseMemberContext == nil:
 		panic("multi-session container: missing WithMemberParse")
 	}
@@ -746,8 +756,11 @@ func (s multiSessionContainerSourceSet) Fingerprint(
 	return fingerprint, nil
 }
 
-func (s multiSessionContainerSourceSet) parse(
+// parseInto parses src and hands every result to yield in order. The returned
+// outcome carries the source-level fields and no Results.
+func (s multiSessionContainerSourceSet) parseInto(
 	ctx context.Context, src multiSessionSource, req ParseRequest,
+	yield func(ParseResultOutcome) error,
 ) (ParseOutcome, error) {
 	fingerprintHash := req.Fingerprint.Hash
 	if src.MemberID != "" {
@@ -769,11 +782,13 @@ func (s multiSessionContainerSourceSet) parse(
 		if result.Session.File.Hash == "" && fingerprintHash != "" {
 			result.Session.File.Hash = fingerprintHash
 		}
+		if err := yield(ParseResultOutcome{
+			Result:      *result,
+			DataVersion: DataVersionCurrent,
+		}); err != nil {
+			return ParseOutcome{}, err
+		}
 		return ParseOutcome{
-			Results: []ParseResultOutcome{{
-				Result:      *result,
-				DataVersion: DataVersionCurrent,
-			}},
 			ResultSetComplete: true,
 			ForceReplace:      true,
 		}, nil
@@ -784,12 +799,40 @@ func (s multiSessionContainerSourceSet) parse(
 		if err != nil {
 			return ParseOutcome{}, err
 		}
-		if fingerprintHash != "" && s.cfg.stampContainerHash {
-			for i := range outcome.Results {
+		for i := range outcome.Results {
+			if fingerprintHash != "" && s.cfg.stampContainerHash {
 				outcome.Results[i].Result.Session.File.Hash = fingerprintHash
 			}
+			if err := yield(outcome.Results[i]); err != nil {
+				return ParseOutcome{}, err
+			}
 		}
+		outcome.Results = nil
 		return outcome, nil
+	}
+
+	if s.cfg.parseContainerEach != nil {
+		yielded := 0
+		err := s.cfg.parseContainerEach(ctx, src, req, func(r ParseResult) error {
+			if fingerprintHash != "" && s.cfg.stampContainerHash {
+				r.Session.File.Hash = fingerprintHash
+			}
+			yielded++
+			return yield(ParseResultOutcome{
+				Result:      r,
+				DataVersion: DataVersionCurrent,
+			})
+		})
+		if err != nil {
+			return ParseOutcome{}, err
+		}
+		if yielded == 0 {
+			return s.skipOutcome(src), nil
+		}
+		return ParseOutcome{
+			ResultSetComplete: true,
+			ForceReplace:      true,
+		}, nil
 	}
 
 	var results []ParseResult
@@ -805,21 +848,36 @@ func (s multiSessionContainerSourceSet) parse(
 	if len(results) == 0 {
 		return s.skipOutcome(src), nil
 	}
-	out := make([]ParseResultOutcome, 0, len(results))
 	for i := range results {
 		if fingerprintHash != "" && s.cfg.stampContainerHash {
 			results[i].Session.File.Hash = fingerprintHash
 		}
-		out = append(out, ParseResultOutcome{
+		if err := yield(ParseResultOutcome{
 			Result:      results[i],
 			DataVersion: DataVersionCurrent,
-		})
+		}); err != nil {
+			return ParseOutcome{}, err
+		}
 	}
 	return ParseOutcome{
-		Results:           out,
 		ResultSetComplete: true,
 		ForceReplace:      true,
 	}, nil
+}
+
+func (s multiSessionContainerSourceSet) parse(
+	ctx context.Context, src multiSessionSource, req ParseRequest,
+) (ParseOutcome, error) {
+	var results []ParseResultOutcome
+	outcome, err := s.parseInto(ctx, src, req, func(r ParseResultOutcome) error {
+		results = append(results, r)
+		return nil
+	})
+	if err != nil {
+		return ParseOutcome{}, err
+	}
+	outcome.Results = results
+	return outcome, nil
 }
 
 func unsupportedMultiSessionOutcome() ParseOutcome {
@@ -966,6 +1024,26 @@ func (s multiSessionContainerSourceSet) Parse(
 	return s.parse(ctx, src, req)
 }
 
+// multiSessionStreamingSourceSet is the source set NewMultiSessionProviderFactory
+// returns. parseEach lives only here so a source set that embeds the base and
+// overrides Parse never gains a streaming path that skips its override.
+type multiSessionStreamingSourceSet struct {
+	multiSessionContainerSourceSet
+}
+
+func (s multiSessionStreamingSourceSet) parseEach(
+	ctx context.Context, req ParseRequest, yield func(ParseResultOutcome) error,
+) (ParseOutcome, error) {
+	if err := ctx.Err(); err != nil {
+		return ParseOutcome{}, err
+	}
+	src, ok := s.sourceFromRef(req.Source)
+	if !ok {
+		return ParseOutcome{}, fmt.Errorf("%s source path unavailable", s.agent)
+	}
+	return s.parseInto(ctx, src, req, yield)
+}
+
 // NewMultiSessionProviderFactory builds a ProviderFactory for a multi-session
 // container provider. It is a thin adapter over the generic SourceSetFactory;
 // the build closure constructs the agent's configured source set.
@@ -976,6 +1054,6 @@ func NewMultiSessionProviderFactory(
 ) ProviderFactory {
 	return NewSourceSetFactory(
 		def, caps,
-		func(cfg ProviderConfig) SourceSet { return build(cfg) },
+		func(cfg ProviderConfig) SourceSet { return multiSessionStreamingSourceSet{build(cfg)} },
 	)
 }

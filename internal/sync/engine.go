@@ -669,6 +669,9 @@ type Engine struct {
 	// workerCountOverride is a test seam for exercising the production worker
 	// floor and cap independently of the host CPU count.
 	workerCountOverride int
+	// parseAdmissionObserver is a cardinality-test seam; result admission
+	// reports results seen and still held for the current source.
+	parseAdmissionObserver func(yielded, retained int)
 	// claudeProjectSessionFiles is an observability seam for cardinality tests
 	// around duplicate-session discovery.
 	claudeProjectSessionFiles func(string) []parser.DiscoveredFile
@@ -12346,6 +12349,12 @@ func (e *Engine) processProviderFile(
 		stagedSink.disableSignals = e.disableSignalRecompute
 		stagedGCRelease = beginStagedColdSync()
 	}
+	admission := &providerResultAdmission{
+		engine: e, ctx: ctx, def: provider.Definition(), file: file,
+		source: source, fingerprint: fingerprint,
+		policy:          providerSemantics.UnchangedResults,
+		codexIdentities: isCodexFormatAgent(file.Agent) && stagedSink == nil,
+	}
 	var outcome parser.ParseOutcome
 	if stagedSink != nil {
 		if e.forceParseRequested(file) {
@@ -12358,16 +12367,19 @@ func (e *Engine) processProviderFile(
 		outcome, err = stagedCodexParseOutcome(
 			ctx, stagedConfig, source, fingerprint, stagedSink,
 		)
+		if err == nil {
+			outcome, err = admission.admitAll(outcome)
+		}
 	} else {
-		outcome, err = provider.Parse(ctx, parser.ParseRequest{
+		outcome, err = parser.ParseEach(ctx, provider, parser.ParseRequest{
 			Source:             source,
 			Fingerprint:        fingerprint,
 			Machine:            machine,
 			ForceParse:         e.forceParseRequested(file),
 			StoredPathResolver: e.storedPathResolver,
-		})
+		}, admission.admit)
 	}
-	if err != nil {
+	if err != nil && admission.validationErr == nil {
 		if stagedSink != nil {
 			stagedSink.Close()
 		}
@@ -12406,12 +12418,11 @@ func (e *Engine) processProviderFile(
 	if file.Agent == parser.AgentPiebald && !e.forceParse {
 		e.clearPiebaldFailure(source)
 	}
-	if err := validateProviderOutcome(
-		provider.Definition(),
-		source,
-		fingerprint,
-		outcome,
-	); err != nil {
+	validationErr := admission.validationErr
+	if validationErr == nil {
+		validationErr = validateProviderOutcome(provider.Definition(), source, fingerprint, outcome)
+	}
+	if validationErr != nil {
 		if stagedSink != nil {
 			stagedSink.Close()
 		}
@@ -12419,7 +12430,7 @@ func (e *Engine) processProviderFile(
 			stagedGCRelease()
 		}
 		return markSourceFailure(file, processResult{
-			err:            err,
+			err:            validationErr,
 			mtime:          fingerprint.MTimeNS,
 			cacheSkip:      cacheSkip,
 			cacheKey:       cacheKey,
@@ -12427,26 +12438,17 @@ func (e *Engine) processProviderFile(
 			retentionLease: lease,
 		}, failureIdentity, failureIdentityOK), true
 	}
-	if isCodexFormatAgent(file.Agent) && stagedSink == nil {
-		for i := range outcome.Results {
-			prepareCodexResultIdentities(outcome.Results[i].Result.Messages, nil)
-		}
-	}
-	applyProviderFingerprintFileInfo(file.Agent, fingerprint, outcome.Results)
 	if codexFingerprintFromParse && fingerprint.Hash == "" {
 		// A completed parse captures the full source hash even when its pending
 		// calls cannot fit a persisted checkpoint.
-		for i := range outcome.Results {
-			if hash := outcome.Results[i].Result.Session.File.Hash; hash != "" {
-				fingerprint.Hash = hash
-				break
-			}
+		if admission.firstHash != "" {
+			fingerprint.Hash = admission.firstHash
 		}
 		if fingerprint.Hash != "" {
 			cacheKey = providerProcessCacheKey(file, source, fingerprint, providerSemantics)
 		}
 	}
-	cleanCache := providerOutcomeAllowsCleanSkipCache(outcome)
+	cleanCache := providerOutcomeAllowsCleanSkipCache(outcome) && len(admission.retryIDs) == 0
 	providerWideFailureCount := len(outcome.SourceErrors)
 	if !outcome.ResultSetComplete {
 		providerWideFailureCount++
@@ -12551,7 +12553,8 @@ func (e *Engine) processProviderFile(
 		}
 		return skipRes, true
 	}
-	parsedResults := parseOutcomeResults(outcome.Results)
+	// Only Session.ID and Session.File.Path are populated for ownership checks.
+	parsedResults := admission.emitted
 	parsedCount := len(parsedResults)
 	excludedSessionIDs := append([]string(nil), outcome.ExcludedSessionIDs...)
 	preservedSessionIDs := providerPreservedSessionIDs(provider, source)
@@ -12617,10 +12620,7 @@ func (e *Engine) processProviderFile(
 			}, true
 		}
 	}
-	filteredResults := e.dropUnchangedSharedSQLiteResults(ctx,
-		file, parsedResults, providerSemantics.UnchangedResults,
-	)
-	filteredResults, truncationVerifyFailed := e.dropShrinkingTruncatedCursorIDEResults(ctx, file, filteredResults)
+	filteredResults, truncationVerifyFailed := admission.kept, admission.truncationVerifyFailed
 	if stagedSink != nil && len(filteredResults) == 0 {
 		// Every result was dropped as unchanged; nothing will publish the
 		// staged rows, so release the scratch sink now.
@@ -12671,17 +12671,15 @@ func (e *Engine) processProviderFile(
 	// appending on top of stale state. Match the legacy process arm,
 	// which stamped inode/device from the source file stat.
 	e.stampProviderFileIdentity(provider, source, res.results)
-	for _, result := range outcome.Results {
-		if result.DataVersion == parser.DataVersionNeedsRetry {
-			if res.retrySessionIDs == nil {
-				res.retrySessionIDs = make(map[string]bool)
-			}
-			res.retrySessionIDs[result.Result.Session.ID] = true
-			if isCodexFormatAgent(file.Agent) {
-				res.deferredCount++
-			} else {
-				res.providerFailureCount++
-			}
+	for _, id := range admission.retryIDs {
+		if res.retrySessionIDs == nil {
+			res.retrySessionIDs = make(map[string]bool)
+		}
+		res.retrySessionIDs[id] = true
+		if isCodexFormatAgent(file.Agent) {
+			res.deferredCount++
+		} else {
+			res.providerFailureCount++
 		}
 	}
 	if e.forceParseRequested(file) {
