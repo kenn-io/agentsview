@@ -1,11 +1,17 @@
 package vector
 
 import (
+	"context"
+	"database/sql"
+	"database/sql/driver"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	kitvec "go.kenn.io/kit/vector"
+	"go.kenn.io/kit/vector/sqlitevec"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -87,22 +93,86 @@ func TestPendingContentQueryPlanSkipsStampedDocumentContent(t *testing.T) {
 	}
 }
 
-// TestGenerationCoverageQueryPlanUsesRevisionIndex asserts the coverage
-// query's Embedded and Missing anti-joins are answered from the same
-// covering index, so `embeddings status` does not walk the whole mirror
-// either.
-func TestGenerationCoverageQueryPlanUsesRevisionIndex(t *testing.T) {
-	ix, _ := builtPendingIndex(t)
+// recordingConnector opens connections through the vector SQLite driver and
+// records every statement prepared on them, so a test can explain the exact
+// SQL a kit store runs.
+type recordingConnector struct {
+	drv driver.Driver
+	dsn string
 
-	plan := explainVectorPlan(t, ix, ix.generationCoverageQuery())
+	mu         sync.Mutex
+	statements []string
+}
+
+func (c *recordingConnector) Connect(context.Context) (driver.Conn, error) {
+	conn, err := c.drv.Open(c.dsn)
+	if err != nil {
+		return nil, err
+	}
+	return &recordingConn{Conn: conn, connector: c}, nil
+}
+
+func (c *recordingConnector) Driver() driver.Driver { return c.drv }
+
+func (c *recordingConnector) recorded() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.statements)
+}
+
+// recordingConn exposes only driver.Conn, so database/sql prepares every
+// statement through Prepare.
+type recordingConn struct {
+	driver.Conn
+	connector *recordingConnector
+}
+
+func (c *recordingConn) Prepare(query string) (driver.Stmt, error) {
+	c.connector.mu.Lock()
+	c.connector.statements = append(c.connector.statements, query)
+	c.connector.mu.Unlock()
+	return c.Conn.Prepare(query)
+}
+
+// TestGenerationCoverageQueryPlanUsesCoverageIndex asserts kit's sqlitevec
+// Coverage, which `embeddings list` and auto-activation run, is answered from
+// the mirror's coverage index rather than every row's content. It records the
+// statement Coverage executes and explains that exact SQL.
+func TestGenerationCoverageQueryPlanUsesCoverageIndex(t *testing.T) {
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "vectors.db")
+	ix, err := Open(ctx, path, false, 4000)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, ix.Close()) })
+	gen := fakeGeneration("fake-model")
+	_, err = ix.Build(ctx, twoDocSource(), fakeBuildEncoder(), gen, BuildOptions{})
+	require.NoError(t, err)
+
+	connector := &recordingConnector{drv: ix.db.Driver(), dsn: vectorDSN(path, false)}
+	db := sql.OpenDB(connector)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	store, err := sqlitevec.New[string, string](ctx, db, ix.spec.schema())
+	require.NoError(t, err)
+	before := len(connector.recorded())
+	_, err = store.Coverage(ctx, gen.Fingerprint(), "")
+	require.NoError(t, err)
+
+	var coverage []string
+	for _, statement := range connector.recorded()[before:] {
+		if strings.Contains(statement, ix.spec.DocsTable+" d") {
+			coverage = append(coverage, statement)
+		}
+	}
+	require.Len(t, coverage, 1, "Coverage runs one statement over the mirror")
+	ordinal, err := ix.ordinalForFingerprint(ctx, gen.Fingerprint())
+	require.NoError(t, err)
+
+	plan := explainVectorPlan(t, ix, coverage[0], ordinal)
 	joined := strings.Join(plan, "\n")
 
 	assert.Contains(t, joined,
-		"SEARCH d EXISTS USING COVERING INDEX idx_vector_messages_revision",
-		"the Embedded column must probe the covering index:\n%s", joined)
-	assert.Contains(t, joined,
-		"SCAN d USING COVERING INDEX idx_vector_messages_revision",
-		"the Missing column must scan the covering index, not the table:\n%s", joined)
+		"SCAN d USING COVERING INDEX idx_vector_messages_coverage",
+		"coverage must scan the covering index, not the table:\n%s", joined)
 	for _, line := range plan {
 		assert.NotEqual(t, "SCAN d", line,
 			"no coverage step may read every mirror row's content:\n%s", joined)

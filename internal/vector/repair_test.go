@@ -18,6 +18,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/kit/embedclient"
 	kitvec "go.kenn.io/kit/vector"
 )
 
@@ -110,7 +111,7 @@ SELECT c.vec_rowid, v.embedding
 	assert.NotEqual(t, activeBadRowID, newActiveBadRowID)
 	newActiveBadVector, err := decodeFloat32Blob(newActiveBadBlob)
 	require.NoError(t, err)
-	assert.NoError(t, validateEmbedding(newActiveBadVector, 0))
+	assert.NoError(t, validateStoredEmbeddingBlob(newActiveBadBlob, len(newActiveBadVector)))
 	assert.Equal(t, activeGoodRowID, newActiveGoodRowID)
 	assert.Equal(t, activeGoodBlob, newActiveGoodBlob)
 	assert.Equal(t, oldBadRowID, newOldBadRowID)
@@ -500,7 +501,7 @@ SELECT vec_rowid FROM message_vectors_chunks
 	require.ErrorContains(t, err, "endpoint failed")
 
 	ordinary, err := ix.Build(ctx, src, func(context.Context, []string) ([][]float32, error) {
-		return nil, &HTTPStatusError{Status: http.StatusBadRequest, Body: "input exceeds token limit"}
+		return nil, &embedclient.APIError{StatusCode: http.StatusBadRequest, Reason: embedclient.ReasonInputTooLong}
 	}, gen, BuildOptions{FullRebuild: true})
 	require.NoError(t, err)
 	assert.Equal(t, 1, ordinary.Fill.Skipped)
@@ -519,10 +520,7 @@ SELECT COUNT(*) FROM message_vectors_repair_queue
 }
 
 func TestBuildRepairInvalidKeepsTargetAfterPermanentEncodeFailure(t *testing.T) {
-	assertFailedRepairRemainsQueued(t, &HTTPStatusError{
-		Status: http.StatusBadRequest,
-		Body:   "input exceeds token limit",
-	})
+	assertFailedRepairRemainsQueued(t, &embedclient.APIError{StatusCode: http.StatusBadRequest, Reason: embedclient.ReasonInputTooLong})
 }
 
 func TestBuildRepairInvalidKeepsTargetAfterContextDeadline(t *testing.T) {
@@ -632,10 +630,7 @@ func TestBuildRepairInvalidContinuesAfterPermanentTargetFailure(t *testing.T) {
 
 	result, err := ix.Build(ctx, src, func(_ context.Context, texts []string) ([][]float32, error) {
 		if texts[0] == "bad" {
-			return nil, &HTTPStatusError{
-				Status: http.StatusBadRequest,
-				Body:   "input exceeds token limit",
-			}
+			return nil, &embedclient.APIError{StatusCode: http.StatusBadRequest, Reason: embedclient.ReasonInputTooLong}
 		}
 		return fakeBuildEncoder()(ctx, texts)
 	}, gen, BuildOptions{RepairInvalid: true})

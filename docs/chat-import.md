@@ -137,11 +137,17 @@ You can safely re-import the same export file:
   export) is reported as an error and leaves the stored session unchanged.
   Equal-length or longer exports can refresh earlier messages, including
   attachment text; earlier turns do not have to match the archive.
-- **ChatGPT** — unchanged sessions are skipped. An export may append messages
-  when every archived message still matches the beginning of the export.
-  Shorter exports and exports that change archived history are reported as
-  errors and leave the archive unchanged. Existing message metadata and user
-  display names are preserved during an append.
+- **ChatGPT** — unchanged sessions are skipped. An export may add messages
+  when every archived message still matches the beginning of the export. The
+  match compares message text and each archived tool call's name and
+  category, and checks whether its result is empty. Extra tool calls in the
+  export are ignored. A tool result that was empty when archived and is filled
+  in the export is written into the archived message, which keeps its place
+  and any pin. For example, you export during a code run, keep chatting, and
+  export again: the re-import adds the run's output and the new turns. Other
+  result differences keep the archived result. Shorter exports and other
+  changes are reported as errors and leave the archive unchanged. Trashed
+  conversations are skipped. User display names are preserved.
 - **Gemini Apps** — existing sessions are matched by the canonical UTC
   timestamp and its zero-based occurrence among records sharing that
   timestamp. Inserting or reordering records with other timestamps doesn't

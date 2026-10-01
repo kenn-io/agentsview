@@ -32,6 +32,7 @@ import (
 	"go.kenn.io/agentsview/internal/jsonutil"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/pathutil"
+	"go.kenn.io/kit/embedconfig"
 )
 
 // TerminalConfig holds terminal launch preferences.
@@ -457,6 +458,48 @@ func (c VectorConfig) ResolvedDBPath(dataDir string) string {
 		return c.DBPath
 	}
 	return filepath.Join(dataDir, "vectors.db")
+}
+
+// EmbedModel maps the configured model identity onto kit's shared model
+// contract. Vectors are stored as the endpoint returns them (no client-side
+// normalization) so existing generations keep their exact values.
+func (c VectorEmbeddingsConfig) EmbedModel() embedconfig.Model {
+	return embedconfig.Model{
+		Name:              c.Model,
+		Dimensions:        c.Dimension,
+		Metric:            embedconfig.MetricCosine,
+		Normalization:     embedconfig.NormalizationNone,
+		RequestDimensions: c.RequestDimensions,
+	}
+}
+
+// EmbedRoles maps the configured prefixes and the shared input suffix onto
+// kit's role contract: documents get document_prefix, queries get
+// query_prefix, and both get input_suffix.
+func (c VectorEmbeddingsConfig) EmbedRoles() embedconfig.Roles {
+	return embedconfig.Roles{
+		DocumentPrefix: c.DocumentPrefix,
+		DocumentSuffix: c.InputSuffix,
+		QueryPrefix:    c.QueryPrefix,
+		QuerySuffix:    c.InputSuffix,
+		InputType:      embedconfig.InputTypeNone,
+	}
+}
+
+// EmbedDeployment maps the server endpoint onto kit's deployment contract.
+// agentsview has always accepted plaintext endpoints on the local network, so
+// private addresses and host names are trusted.
+func (c VectorEmbeddingsServerConfig) EmbedDeployment() embedconfig.Deployment {
+	return embedconfig.Deployment{BaseURL: c.Endpoint, TrustPrivateNetwork: true}
+}
+
+// EmbedTransport maps the server timeout onto kit's transport contract.
+func (c VectorEmbeddingsServerConfig) EmbedTransport() (embedconfig.Transport, error) {
+	timeout, err := time.ParseDuration(c.Timeout)
+	if err != nil {
+		return embedconfig.Transport{}, fmt.Errorf("invalid timeout %q: %w", c.Timeout, err)
+	}
+	return embedconfig.Transport{Timeout: timeout}, nil
 }
 
 // APIKey reads the API key from the environment variable named by

@@ -26,6 +26,16 @@ func testFSNotifyBackend(t *testing.T) *fsnotifyBackend {
 	return backend
 }
 
+func TestBufferedFSNotifyWatchOpsPreservesErrors(t *testing.T) {
+	watcher, err := fsnotify.NewWatcher()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = watcher.Close() })
+	ops := bufferedFSNotifyWatchOps{Watcher: watcher}
+	require.ErrorIs(t, ops.Add(filepath.Join(t.TempDir(), "absent")), os.ErrNotExist)
+	require.NoError(t, watcher.Close())
+	require.ErrorIs(t, ops.Add(t.TempDir()), fsnotify.ErrClosed)
+}
+
 func TestFSNotifyBackendOverflowRequestsLostEventRecovery(t *testing.T) {
 	backend := testFSNotifyBackend(t)
 	errorInput := make(chan error, 1)
@@ -195,7 +205,7 @@ func TestFSNotifyBackendExcludesExistingLockFileEvents(t *testing.T) {
 }
 
 type blockingRemoveWatchOps struct {
-	watcher       *fsnotify.Watcher
+	watchOps      fsnotifyWatchOps
 	removeStarted chan struct{}
 	allowRemove   chan struct{}
 	addCalled     chan struct{}
@@ -204,7 +214,7 @@ type blockingRemoveWatchOps struct {
 }
 
 type failPathWatchOps struct {
-	watcher  *fsnotify.Watcher
+	watchOps fsnotifyWatchOps
 	failPath string
 	err      error
 }
@@ -213,11 +223,11 @@ func (w *failPathWatchOps) Add(path string) error {
 	if filepath.Clean(path) == filepath.Clean(w.failPath) {
 		return w.err
 	}
-	return w.watcher.Add(path)
+	return w.watchOps.Add(path)
 }
 
 func (w *failPathWatchOps) Remove(path string) error {
-	return w.watcher.Remove(path)
+	return w.watchOps.Remove(path)
 }
 
 func TestFSNotifyBackendRuntimeBudgetDegradesExactScopesToPolling(t *testing.T) {
@@ -371,7 +381,7 @@ func TestFSNotifyBackendRuntimeAddFailureDegradesExactScopesToPolling(t *testing
 	created := filepath.Join(root, "unwatchable")
 	require.NoError(t, os.Mkdir(created, 0o755))
 	backend.watchOps = &failPathWatchOps{
-		watcher: backend.watcher, failPath: created, err: syscall.ENOSPC,
+		watchOps: backend.watchOps, failPath: created, err: syscall.ENOSPC,
 	}
 	itemType, excluded := backend.watchCreatedPath(created)
 	assert.Equal(t, backendItemDirectory, itemType)
@@ -470,13 +480,13 @@ func TestFSNotifyBackendRuntimeCreateRecursivelyWatchesMovedSubtree(t *testing.T
 
 func (w *blockingRemoveWatchOps) Add(path string) error {
 	w.addOnce.Do(func() { close(w.addCalled) })
-	return w.watcher.Add(path)
+	return w.watchOps.Add(path)
 }
 
 func (w *blockingRemoveWatchOps) Remove(path string) error {
 	w.removeOnce.Do(func() { close(w.removeStarted) })
 	<-w.allowRemove
-	return w.watcher.Remove(path)
+	return w.watchOps.Remove(path)
 }
 
 func TestFSNotifyBackendConcurrentAddWaitsForRemoveOwnershipDecision(t *testing.T) {
@@ -484,7 +494,7 @@ func TestFSNotifyBackendConcurrentAddWaitsForRemoveOwnershipDecision(t *testing.
 	root := t.TempDir()
 	require.NoError(t, backend.AddShallow(root))
 	barrier := &blockingRemoveWatchOps{
-		watcher:       backend.watcher,
+		watchOps:      backend.watchOps,
 		removeStarted: make(chan struct{}),
 		allowRemove:   make(chan struct{}),
 		addCalled:     make(chan struct{}),

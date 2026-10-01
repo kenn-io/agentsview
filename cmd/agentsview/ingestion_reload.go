@@ -167,14 +167,16 @@ func (d *daemonIngestion) applySaved() {
 	if reflect.DeepEqual(engineSourceConfig(prev), engineSourceConfig(next)) {
 		return
 	}
-	// The engine switches first so the new watcher's first batch is handled
-	// by the new provider set.
-	d.engine.ReconfigureSources(engineSourceConfig(next))
-
-	// Start the replacement before stopping the old watcher so no change
-	// falls between them; a change seen by both is synced twice, which is
-	// harmless.
+	// Register the replacement watcher before the engine switches, so once
+	// the engine reports a new root, every later change under it is seen.
+	// Registration can take tens of milliseconds, and a session written in
+	// that gap would otherwise wait for the next full sync. The watcher only
+	// collects until dispatch opens below, so its first batch is still
+	// handled by the new provider set. It also starts before the old watcher
+	// stops, so no change falls between them; a change seen by both is
+	// synced twice, which is harmless.
 	watchers := d.startWatchers(next)
+	d.engine.ReconfigureSources(engineSourceConfig(next))
 	d.mu.Lock()
 	old := d.watchers
 	d.watchers = watchers

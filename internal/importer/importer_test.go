@@ -1,11 +1,14 @@
 package importer
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -902,4 +905,552 @@ func TestImportClaudeAIReimportComparesStoredForm(t *testing.T) {
 	assert.Zero(t, stats.Errors)
 	assert.Zero(t, stats.Updated)
 	assert.Equal(t, 1, stats.Skipped)
+}
+
+// chatGPTToolNode renders one ChatGPT mapping node. Non-text content types
+// carry their text in the "text" field, as code and execution output do.
+func chatGPTToolNode(id, parent, child, role, contentType, text string, ts float64) string {
+	children := "[]"
+	if child != "" {
+		children = `["` + child + `"]`
+	}
+	content := `{"content_type":"text","parts":["` + text + `"]}`
+	if contentType != "text" {
+		content = `{"content_type":"` + contentType + `","text":"` + text + `"}`
+	}
+	return `"` + id + `":{"id":"` + id + `","parent":"` + parent +
+		`","children":` + children + `,"message":{"id":"m-` + id +
+		`","create_time":` + fmt.Sprint(ts) + `,"author":{"role":"` + role +
+		`"},"content":` + content +
+		`,"status":"finished_successfully","metadata":{}}}`
+}
+
+type chatGPTNodeSpec struct{ role, contentType, text string }
+
+// chatGPTChainConv renders one linear conversation "cg-tool" from nodes.
+func chatGPTChainConv(chain ...chatGPTNodeSpec) string {
+	nodes := make([]string, len(chain))
+	parent := "r"
+	for i, n := range chain {
+		id := fmt.Sprintf("n%d", i+1)
+		child := ""
+		if i+1 < len(chain) {
+			child = fmt.Sprintf("n%d", i+2)
+		}
+		nodes[i] = chatGPTToolNode(id, parent, child, n.role, n.contentType, n.text, float64(1706745600+10*i))
+		parent = id
+	}
+	return `[{"id":"cg-tool","conversation_id":"cg-tool","title":"Tool",` +
+		`"create_time":1706745600.0,"update_time":1706745710.0,` +
+		`"current_node":"` + parent + `","mapping":{` +
+		`"r":{"id":"r","parent":null,"children":["n1"],"message":null},` +
+		strings.Join(nodes, ",") + `}}]`
+}
+
+// chatGPTToolRunConv is a user turn and an assistant turn whose code run
+// has output only when output is non-empty. later adds a user turn and an
+// assistant reply after the run.
+func chatGPTToolRunConv(output string, later bool) string {
+	chain := []chatGPTNodeSpec{
+		{"user", "text", "Run print(42)"},
+		{"assistant", "text", "Running it."},
+		{"tool", "code", "print(42)"},
+	}
+	if output != "" {
+		chain = append(chain, chatGPTNodeSpec{"tool", "execution_output", output})
+	}
+	if later {
+		chain = append(chain,
+			chatGPTNodeSpec{"user", "text", "Now print 43"},
+			chatGPTNodeSpec{"assistant", "text", "Tuesday answer printed 43"},
+		)
+	}
+	return chatGPTChainConv(chain...)
+}
+
+// chatGPTTwoToolRunsConv is two code runs on separate assistant turns; each
+// has output only when its output is non-empty.
+func chatGPTTwoToolRunsConv(firstOutput, secondOutput string) string {
+	chain := []chatGPTNodeSpec{
+		{"user", "text", "Run print(41)"},
+		{"assistant", "text", "Running it."},
+		{"tool", "code", "print(41)"},
+	}
+	if firstOutput != "" {
+		chain = append(chain, chatGPTNodeSpec{"tool", "execution_output", firstOutput})
+	}
+	chain = append(chain,
+		chatGPTNodeSpec{"user", "text", "Run print(42)"},
+		chatGPTNodeSpec{"assistant", "text", "Running again."},
+		chatGPTNodeSpec{"tool", "code", "print(42)"},
+	)
+	if secondOutput != "" {
+		chain = append(chain, chatGPTNodeSpec{"tool", "execution_output", secondOutput})
+	}
+	return chatGPTChainConv(chain...)
+}
+
+// chatGPTImageOutput is execution output holding an inline image, escaped
+// for a JSON string. Blank lines delimit the JSON image section inside the
+// code fence the ChatGPT parser adds.
+func chatGPTImageOutput(t *testing.T) string {
+	t.Helper()
+	encoded, err := json.Marshal("\n\n" + `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]` + "\n\n")
+	require.NoError(t, err)
+	return strings.Trim(string(encoded), `"`)
+}
+
+func chatGPTTranscriptRevision(t *testing.T, d *db.DB) int {
+	t.Helper()
+	session, err := d.GetSession(t.Context(), "chatgpt:cg-tool")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	require.NotNil(t, session.TranscriptRevision)
+	rev, err := strconv.Atoi(*session.TranscriptRevision)
+	require.NoError(t, err)
+	return rev
+}
+
+func TestImportChatGPTFillsArchivedToolResult(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		archive config.ArchiveContent
+		images  config.ToolResultImages
+		image   bool
+		later   bool
+	}{
+		{name: "filled and continued", archive: config.ArchiveContentFull, later: true},
+		{name: "filled only", archive: config.ArchiveContentFull},
+		{name: "transcripts filled and continued", archive: config.ArchiveContentTranscripts, later: true},
+		{name: "offload image filled", archive: config.ArchiveContentFull, images: config.ToolResultImagesOffload, image: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			d.SetArchiveContent(tt.archive)
+			toolAssets := t.TempDir()
+			d.SetAssetsDir(toolAssets)
+			d.SetToolResultImages(tt.images)
+			ctx := t.Context()
+			dir := t.TempDir()
+			path := filepath.Join(dir, "conversations-000.json")
+			assetsDir := t.TempDir()
+			output := "42"
+			if tt.image {
+				output = chatGPTImageOutput(t)
+			}
+
+			// Monday: exported while the code run had no output yet.
+			require.NoError(t, os.WriteFile(path, []byte(chatGPTToolRunConv("", false)), 0o644))
+			stats, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
+			require.NoError(t, err)
+			require.Equal(t, 1, stats.Imported)
+			before, err := d.GetAllMessages(ctx, "chatgpt:cg-tool")
+			require.NoError(t, err)
+			require.Len(t, before, 2)
+			require.Len(t, before[1].ToolCalls, 1)
+			require.Empty(t, before[1].ToolCalls[0].ResultContent)
+			require.Zero(t, before[1].ToolCalls[0].ResultContentLength)
+			_, err = d.PinMessage(ctx, "chatgpt:cg-tool", before[1].ID, nil)
+			require.NoError(t, err)
+			revBefore := chatGPTTranscriptRevision(t, d)
+
+			// Tuesday: the output is filled in, maybe with new turns after it.
+			require.NoError(t, os.WriteFile(path, []byte(chatGPTToolRunConv(output, tt.later)), 0o644))
+			stats, err = ImportChatGPT(ctx, d, dir, assetsDir, nil)
+			require.NoError(t, err)
+			assert.Zero(t, stats.Errors)
+			assert.Equal(t, 1, stats.Updated)
+
+			after, err := d.GetAllMessages(ctx, "chatgpt:cg-tool")
+			require.NoError(t, err)
+			want := 2
+			if tt.later {
+				want = 4
+			}
+			require.Len(t, after, want)
+			assert.Equal(t, before[0].ID, after[0].ID)
+			assert.Equal(t, before[1].ID, after[1].ID)
+			require.Len(t, after[1].ToolCalls, 1)
+			result := after[1].ToolCalls[0]
+			switch {
+			case tt.image:
+				assert.Positive(t, result.ResultContentLength)
+				assert.NotContains(t, result.ResultContent, "data:image")
+				entries, err := os.ReadDir(toolAssets)
+				require.NoError(t, err)
+				assert.NotEmpty(t, entries, "the filled image must be offloaded")
+			case tt.archive == config.ArchiveContentTranscripts:
+				assert.Empty(t, result.ResultContent)
+				assert.Equal(t, 10, result.ResultContentLength)
+			default:
+				assert.Equal(t, "```\n42\n```", result.ResultContent)
+				assert.Equal(t, 10, result.ResultContentLength)
+			}
+			if tt.later {
+				assert.Equal(t, "Tuesday answer printed 43", after[3].Content)
+			}
+			assert.Greater(t, chatGPTTranscriptRevision(t, d), revBefore)
+
+			// The messages API reads through this window with its revision.
+			observed := ""
+			window, err := d.GetMessagesWindow(ctx, "chatgpt:cg-tool", db.MessageWindow{
+				From: new(0), Limit: 10, Asc: true, ObservedRevision: &observed,
+			})
+			require.NoError(t, err)
+			require.Len(t, window, want)
+			require.Len(t, window[1].ToolCalls, 1)
+			assert.Equal(t, result.ResultContent, window[1].ToolCalls[0].ResultContent)
+			assert.Equal(t, result.ResultContentLength, window[1].ToolCalls[0].ResultContentLength)
+			assert.Equal(t, strconv.Itoa(chatGPTTranscriptRevision(t, d)), observed)
+
+			pins, err := d.ListPinnedMessages(ctx, "chatgpt:cg-tool", "")
+			require.NoError(t, err)
+			require.Len(t, pins, 1)
+			assert.Equal(t, before[1].ID, pins[0].MessageID)
+
+			// The same export again is unchanged.
+			stats, err = ImportChatGPT(ctx, d, dir, assetsDir, nil)
+			require.NoError(t, err)
+			assert.Zero(t, stats.Errors)
+			assert.Equal(t, 1, stats.Skipped)
+		})
+	}
+}
+
+func TestImportChatGPTPolicyChangeBetweenImports(t *testing.T) {
+	for _, tt := range []struct {
+		name                  string
+		firstArchive, archive config.ArchiveContent
+		firstImages, images   config.ToolResultImages
+		image                 bool
+	}{
+		{name: "full to transcripts", firstArchive: config.ArchiveContentFull, archive: config.ArchiveContentTranscripts},
+		{name: "transcripts to full", firstArchive: config.ArchiveContentTranscripts, archive: config.ArchiveContentFull},
+		{name: "offload to keep", firstImages: config.ToolResultImagesOffload, images: config.ToolResultImagesKeep, image: true},
+		{name: "offload to drop", firstImages: config.ToolResultImagesOffload, images: config.ToolResultImagesDrop, image: true},
+		{name: "keep to offload", firstImages: config.ToolResultImagesKeep, images: config.ToolResultImagesOffload, image: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := t.Context()
+			dbPath := filepath.Join(t.TempDir(), "test.db")
+			dbtest.EnsureTestDBAt(t, dbPath)
+			toolAssets := t.TempDir()
+			dir := t.TempDir()
+			path := filepath.Join(dir, "conversations-000.json")
+			assetsDir := t.TempDir()
+			first := "41"
+			if tt.image {
+				first = chatGPTImageOutput(t)
+			}
+
+			// A separate handle per import lets the archive policy loosen,
+			// which a single handle refuses.
+			d, err := db.OpenWithArchiveContent(ctx, dbPath, tt.firstArchive)
+			require.NoError(t, err)
+			d.SetAssetsDir(toolAssets)
+			d.SetToolResultImages(tt.firstImages)
+			require.NoError(t, os.WriteFile(path, []byte(chatGPTTwoToolRunsConv(first, "")), 0o644))
+			stats, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
+			require.NoError(t, err)
+			require.Equal(t, 1, stats.Imported)
+			before, err := d.GetAllMessages(ctx, "chatgpt:cg-tool")
+			require.NoError(t, err)
+			require.Len(t, before, 4)
+			require.Positive(t, before[1].ToolCalls[0].ResultContentLength)
+			require.Zero(t, before[3].ToolCalls[0].ResultContentLength)
+			require.NoError(t, d.Close())
+
+			d, err = db.OpenWithArchiveContent(ctx, dbPath, tt.archive)
+			require.NoError(t, err)
+			t.Cleanup(func() { d.Close() })
+			d.SetAssetsDir(toolAssets)
+			d.SetToolResultImages(tt.images)
+
+			stats, err = ImportChatGPT(ctx, d, dir, assetsDir, nil)
+			require.NoError(t, err)
+			assert.Zero(t, stats.Errors)
+			assert.Equal(t, 1, stats.Skipped, "an unchanged export must be skipped after a policy change")
+
+			require.NoError(t, os.WriteFile(path, []byte(chatGPTTwoToolRunsConv(first, "42")), 0o644))
+			stats, err = ImportChatGPT(ctx, d, dir, assetsDir, nil)
+			require.NoError(t, err)
+			assert.Zero(t, stats.Errors)
+			assert.Equal(t, 1, stats.Updated)
+
+			after, err := d.GetAllMessages(ctx, "chatgpt:cg-tool")
+			require.NoError(t, err)
+			require.Len(t, after, 4)
+			for i := range before {
+				assert.Equal(t, before[i].ID, after[i].ID)
+			}
+			assert.Equal(t, before[1].ToolCalls, after[1].ToolCalls, "unfilled rows must keep their stored results")
+			assert.Equal(t, 10, after[3].ToolCalls[0].ResultContentLength)
+		})
+	}
+}
+
+func TestImportChatGPTFillKeepsCompletedSiblingCall(t *testing.T) {
+	conv := func(second string) string {
+		chain := []chatGPTNodeSpec{
+			{"user", "text", "Run two cells"},
+			{"assistant", "text", "Running both."},
+			{"tool", "code", "print(41)"},
+			{"tool", "execution_output", "41"},
+			{"tool", "code", "print(42)"},
+		}
+		if second != "" {
+			chain = append(chain, chatGPTNodeSpec{"tool", "execution_output", second})
+		}
+		return chatGPTChainConv(chain...)
+	}
+	d := testDB(t)
+	ctx := t.Context()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "conversations-000.json")
+	assetsDir := t.TempDir()
+	require.NoError(t, os.WriteFile(path, []byte(conv("")), 0o644))
+	_, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
+	require.NoError(t, err)
+	before, err := d.GetAllMessages(ctx, "chatgpt:cg-tool")
+	require.NoError(t, err)
+	require.Len(t, before, 2)
+	require.Len(t, before[1].ToolCalls, 2)
+	require.Equal(t, "```\n41\n```", before[1].ToolCalls[0].ResultContent)
+	d.SetArchiveContent(config.ArchiveContentTranscripts)
+
+	require.NoError(t, os.WriteFile(path, []byte(conv("42")), 0o644))
+	stats, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
+	require.NoError(t, err)
+	assert.Zero(t, stats.Errors)
+	assert.Equal(t, 1, stats.Updated)
+
+	after, err := d.GetAllMessages(ctx, "chatgpt:cg-tool")
+	require.NoError(t, err)
+	require.Len(t, after, 2)
+	require.Len(t, after[1].ToolCalls, 2)
+	assert.Equal(t, before[1].ToolCalls[0], after[1].ToolCalls[0], "the completed call must keep its stored result")
+	assert.Empty(t, after[1].ToolCalls[1].ResultContent)
+	assert.Equal(t, 10, after[1].ToolCalls[1].ResultContentLength)
+}
+
+func TestImportChatGPTKeepsCompletedToolResult(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "conversations-000.json")
+	assetsDir := t.TempDir()
+	require.NoError(t, os.WriteFile(path, []byte(chatGPTToolRunConv("42", false)), 0o644))
+	_, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
+	require.NoError(t, err)
+	before, err := d.GetAllMessages(ctx, "chatgpt:cg-tool")
+	require.NoError(t, err)
+	require.Len(t, before, 2)
+
+	// A result that changed from one value to another keeps the archived one.
+	require.NoError(t, os.WriteFile(path, []byte(chatGPTToolRunConv("4242", true)), 0o644))
+	stats, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
+	require.NoError(t, err)
+	assert.Zero(t, stats.Errors)
+	assert.Equal(t, 1, stats.Updated)
+
+	after, err := d.GetAllMessages(ctx, "chatgpt:cg-tool")
+	require.NoError(t, err)
+	require.Len(t, after, 4)
+	assert.Equal(t, before, after[:2])
+	assert.Equal(t, "```\n42\n```", after[1].ToolCalls[0].ResultContent)
+	assert.Equal(t, "Tuesday answer printed 43", after[3].Content)
+}
+
+func TestImportChatGPTComparesToolCallStructure(t *testing.T) {
+	user := chatGPTNodeSpec{"user", "text", "Run print(42)"}
+	asst := chatGPTNodeSpec{"assistant", "text", "Running it."}
+	code := chatGPTNodeSpec{"tool", "code", "print(42)"}
+	search := chatGPTNodeSpec{"tool", "tether_quote", "A quote"}
+	later := []chatGPTNodeSpec{{"user", "text", "Now print 43"}, {"assistant", "text", "Printed 43"}}
+	for _, tt := range []struct {
+		name     string
+		initial  string
+		data     string
+		category string
+		accepted bool
+	}{
+		{name: "renamed call", initial: chatGPTChainConv(user, asst, code), data: chatGPTChainConv(user, asst, search)},
+		{name: "changed category", initial: chatGPTChainConv(user, asst, code), data: chatGPTChainConv(user, asst, code), category: "Changed"},
+		{name: "fewer calls", initial: chatGPTChainConv(user, asst, code, code), data: chatGPTChainConv(user, asst, code)},
+		{name: "extra call on last archived message", initial: chatGPTChainConv(user, asst, code), data: chatGPTChainConv(append([]chatGPTNodeSpec{user, asst, code, search}, later...)...), accepted: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			dir := t.TempDir()
+			path := filepath.Join(dir, "conversations-000.json")
+			assetsDir := t.TempDir()
+			require.NoError(t, os.WriteFile(path, []byte(tt.initial), 0o644))
+			_, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
+			require.NoError(t, err)
+			if tt.category != "" {
+				// The parser derives the category from the name, so the
+				// archived row stands in for a category the export changed.
+				require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
+					_, err := tx.ExecContext(ctx,
+						"UPDATE tool_calls SET category = ? WHERE session_id = 'chatgpt:cg-tool'",
+						tt.category)
+					return err
+				}))
+			}
+			before, err := d.GetAllMessages(ctx, "chatgpt:cg-tool")
+			require.NoError(t, err)
+			require.Len(t, before, 2)
+			require.NotEmpty(t, before[1].ToolCalls)
+
+			require.NoError(t, os.WriteFile(path, []byte(tt.data), 0o644))
+			stats, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
+			require.NoError(t, err)
+			after, err := d.GetAllMessages(ctx, "chatgpt:cg-tool")
+			require.NoError(t, err)
+			if !tt.accepted {
+				assert.Equal(t, 1, stats.Errors)
+				assert.Zero(t, stats.Updated)
+				assert.Equal(t, before, after)
+				return
+			}
+			assert.Zero(t, stats.Errors)
+			assert.Equal(t, 1, stats.Updated)
+			require.Len(t, after, 4)
+			assert.Equal(t, before, after[:2], "archived calls must stay as stored")
+			assert.Equal(t, "Printed 43", after[3].Content)
+		})
+	}
+}
+
+func TestImportChatGPTSkipsTrashedSession(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		data string
+	}{
+		{name: "unchanged", data: chatGPTToolRunConv("", false)},
+		{name: "appended", data: chatGPTToolRunConv("", true)},
+		{name: "filled", data: chatGPTToolRunConv("42", true)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			dir := t.TempDir()
+			path := filepath.Join(dir, "conversations-000.json")
+			assetsDir := t.TempDir()
+			require.NoError(t, os.WriteFile(path, []byte(chatGPTToolRunConv("", false)), 0o644))
+			_, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
+			require.NoError(t, err)
+			require.NoError(t, d.SoftDeleteSession(ctx, "chatgpt:cg-tool"))
+
+			require.NoError(t, os.WriteFile(path, []byte(tt.data), 0o644))
+			stats, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
+			require.NoError(t, err)
+			assert.Zero(t, stats.Errors)
+			assert.Zero(t, stats.Updated)
+			assert.Equal(t, 1, stats.Skipped)
+			full, err := d.GetSessionFull(ctx, "chatgpt:cg-tool")
+			require.NoError(t, err)
+			require.NotNil(t, full)
+			assert.NotNil(t, full.DeletedAt, "the session must stay trashed")
+		})
+	}
+}
+
+// failFillStore fails the batch write just before it commits.
+type failFillStore struct{ *db.DB }
+
+func (s failFillStore) WriteSessionBatchAtomic(
+	ctx context.Context, writes []db.SessionBatchWrite,
+	_ ...func() error,
+) (db.SessionBatchResult, error) {
+	return s.DB.WriteSessionBatchAtomic(ctx, writes, func() error {
+		return errors.New("commit failed")
+	})
+}
+
+func TestImportChatGPTFailedFillKeepsSessionRow(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "conversations-000.json")
+	assetsDir := t.TempDir()
+
+	require.NoError(t, os.WriteFile(path, []byte(chatGPTToolRunConv("", false)), 0o644))
+	_, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
+	require.NoError(t, err)
+	beforeMsgs, err := d.GetAllMessages(ctx, "chatgpt:cg-tool")
+	require.NoError(t, err)
+	require.Len(t, beforeMsgs, 2)
+	_, err = d.PinMessage(ctx, "chatgpt:cg-tool", beforeMsgs[1].ID, nil)
+	require.NoError(t, err)
+	before, err := d.GetSession(ctx, "chatgpt:cg-tool")
+	require.NoError(t, err)
+	require.NotNil(t, before)
+
+	renamed := strings.Replace(chatGPTToolRunConv("42", true), `"title":"Tool"`, `"title":"Tool renamed"`, 1)
+	require.NoError(t, os.WriteFile(path, []byte(renamed), 0o644))
+	stats, _ := ImportChatGPT(ctx, failFillStore{d}, dir, assetsDir, nil)
+	assert.Equal(t, 1, stats.Errors)
+
+	after, err := d.GetSession(ctx, "chatgpt:cg-tool")
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+	name, found, err := d.GetSessionName(ctx, "chatgpt:cg-tool")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, "Tool", name, "a failed fill must keep the old title")
+	afterMsgs, err := d.GetAllMessages(ctx, "chatgpt:cg-tool")
+	require.NoError(t, err)
+	assert.Equal(t, beforeMsgs, afterMsgs)
+	pins, err := d.ListPinnedMessages(ctx, "chatgpt:cg-tool", "")
+	require.NoError(t, err)
+	require.Len(t, pins, 1)
+	assert.Equal(t, beforeMsgs[1].ID, pins[0].MessageID)
+
+	// A later import of the same export fills the result in.
+	stats, err = ImportChatGPT(ctx, d, dir, assetsDir, nil)
+	require.NoError(t, err)
+	assert.Zero(t, stats.Errors)
+	assert.Equal(t, 1, stats.Updated)
+}
+
+func TestImportChatGPTReimportRestoresExportImage(t *testing.T) {
+	var conversations []map[string]any
+	require.NoError(t, json.Unmarshal([]byte(testChatGPTConvWithAppend()), &conversations))
+	mapping := conversations[0]["mapping"].(map[string]any)
+	second := mapping["n2"].(map[string]any)["message"].(map[string]any)
+	second["content"] = map[string]any{
+		"content_type": "multimodal_text",
+		"parts": []any{"See this:", map[string]any{
+			"content_type":  "image_asset_pointer",
+			"asset_pointer": "file-service://file-img1",
+		}},
+	}
+	encoded, err := json.Marshal(conversations)
+	require.NoError(t, err)
+
+	d := testDB(t)
+	ctx := t.Context()
+	dir := t.TempDir()
+	png := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "file-img1-aaaa1111-bbbb-cccc-dddd-eeeeeeeeeeee.png"), png, 0o644,
+	))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "conversations-000.json"), encoded, 0o644))
+	assetsDir := filepath.Join(t.TempDir(), "assets")
+	_, err = ImportChatGPT(ctx, d, dir, assetsDir, nil)
+	require.NoError(t, err)
+	entries, err := os.ReadDir(assetsDir)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.NoError(t, os.Remove(filepath.Join(assetsDir, entries[0].Name())))
+
+	stats, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
+	require.NoError(t, err)
+	assert.Zero(t, stats.Errors)
+	assert.Equal(t, 1, stats.Skipped)
+	restored, err := os.ReadDir(assetsDir)
+	require.NoError(t, err)
+	assert.Len(t, restored, 1, "an unchanged re-import copies the export image again")
 }

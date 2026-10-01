@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"go.kenn.io/kit/embedmodel"
 	kitvec "go.kenn.io/kit/vector"
 	"go.kenn.io/kit/vector/sqlitevec"
 )
@@ -197,6 +198,9 @@ type BuildTarget struct {
 	Source         UnitSource
 	Generation     kitvec.Generation
 	CorpusRevision string
+	// Space recognizes existing generations of the configured embedding
+	// space; see BuildOptions.Space.
+	Space embedmodel.Descriptor
 }
 
 // NewManager creates a Manager that builds gen's embedding space over ix,
@@ -382,7 +386,17 @@ func (m *Manager) Activate(ctx context.Context, id int64, force bool) error {
 		return refusedf("generation %d still has %d documents needing embedding; use --force",
 			id, target.Missing)
 	}
-	return m.ix.activateGeneration(ctx, target.Fingerprint)
+	if force || target.State == string(sqlitevec.StateRetired) {
+		return m.ix.forceActivateGeneration(ctx, target.key)
+	}
+	activated, err := m.ix.maybeActivate(ctx, target.key, true)
+	if err != nil {
+		return err
+	}
+	if !activated {
+		return refusedf("generation %d gained documents needing embedding; use --force", id)
+	}
+	return nil
 }
 
 // Retire transitions the generation identified by id to retired. Without
@@ -403,7 +417,7 @@ func (m *Manager) Retire(ctx context.Context, id int64, force bool) error {
 	if !force && target.State == string(sqlitevec.StateActive) {
 		return refusedf("generation %d is active; use --force to retire it", id)
 	}
-	return m.ix.SetStateByID(ctx, id, sqlitevec.StateRetired)
+	return m.ix.RetireByID(ctx, id)
 }
 
 // begin transitions the manager into the running state, resetting the
@@ -462,6 +476,7 @@ func (m *Manager) runBuild(
 		MaxBatchTokens:     me.Settings.MaxBatchTokens,
 		Concurrency:        me.Settings.Concurrency,
 		CorpusRevision:     target.CorpusRevision,
+		Space:              target.Space,
 		Progress:           m.reportProgress,
 	})
 }

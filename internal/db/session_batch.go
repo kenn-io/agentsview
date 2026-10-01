@@ -29,6 +29,9 @@ type SessionBatchWrite struct {
 	SkipSignalUpdates bool
 	DataVersion       int
 	ReplaceMessages   bool
+	// FillEmptyToolResults lets an append write set results on stored calls that are still empty, at stored ordinals; other stored rows are untouched.
+	// Results come from ToolCall.ResultContent and ResultContentLength; result events are not written.
+	FillEmptyToolResults bool
 	// RejectMessageCountDecrease prevents full replacement with fewer messages.
 	RejectMessageCountDecrease bool
 	Checkpoint                 *ParserCheckpoint
@@ -556,6 +559,7 @@ func writeOneSessionBatchTx(
 
 	msgs := write.Messages
 	var pins []savedPin
+	filled := 0
 	if replaceMessages && sessionExists {
 		if err := reconcileConversationMessagesTx(queries, write.Session.ID, msgs, true, usageOnly); err != nil {
 			return 0, err
@@ -572,12 +576,20 @@ func writeOneSessionBatchTx(
 		if err != nil {
 			return 0, err
 		}
+		if write.FillEmptyToolResults {
+			filled, err = fillEmptyToolResultsTx(
+				queries, write.Session.ID, msgs, maxOrd,
+			)
+			if err != nil {
+				return 0, err
+			}
+		}
 		msgs = messagesAfterOrdinal(msgs, maxOrd)
 		if err := reconcileConversationMessagesTx(queries, write.Session.ID, msgs, false, usageOnly); err != nil {
 			return 0, err
 		}
 	}
-	transcriptChanged := len(msgs) > 0
+	transcriptChanged := len(msgs) > 0 || filled > 0
 	if replaceMessages && sessionExists {
 		transcriptChanged = replacementTranscriptChanged
 	}
@@ -605,7 +617,7 @@ func writeOneSessionBatchTx(
 			return 0, err
 		}
 	}
-	if replaceMessages && sessionExists {
+	if replaceMessages && sessionExists || filled > 0 {
 		if err := reconcileRecallEvidenceForSessionTx(
 			ctx,
 			tx,
@@ -731,6 +743,50 @@ func maxOrdinalTx(tx transactionQueries, sessionID string) (int, error) {
 		return -1, nil
 	}
 	return int(n.Int64), nil
+}
+
+// fillEmptyToolResultsTx writes candidate results into stored calls at
+// ordinals up to maxOrd whose stored result is still empty. It never
+// touches message rows or calls that already hold a result.
+func fillEmptyToolResultsTx(
+	tx transactionQueries, sessionID string, msgs []Message, maxOrd int,
+) (int, error) {
+	filled := 0
+	for _, m := range msgs {
+		if m.Ordinal > maxOrd {
+			continue
+		}
+		for j, tc := range m.ToolCalls {
+			if tc.ResultContent == "" && tc.ResultContentLength == 0 {
+				continue
+			}
+			res, err := tx.Exec(
+				`UPDATE tool_calls
+				 SET result_content = ?, result_content_length = ?
+				 WHERE session_id = ? AND call_index = ?
+				   AND message_id = (
+				     SELECT id FROM messages
+				     WHERE session_id = ? AND ordinal = ?)
+				   AND COALESCE(result_content, '') = ''
+				   AND COALESCE(result_content_length, 0) = 0`,
+				tc.ResultContent,
+				ResolveResultContentLength(tc.ResultContent, tc.ResultContentLength),
+				sessionID, j, sessionID, m.Ordinal,
+			)
+			if err != nil {
+				return 0, fmt.Errorf(
+					"filling tool result for %s ordinal %d: %w",
+					sessionID, m.Ordinal, err,
+				)
+			}
+			n, err := res.RowsAffected()
+			if err != nil {
+				return 0, err
+			}
+			filled += int(n)
+		}
+	}
+	return filled, nil
 }
 
 func messagesAfterOrdinal(msgs []Message, maxOrd int) []Message {

@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/cenkalti/backoff/v7"
 	"github.com/mattn/go-sqlite3"
 
 	"go.kenn.io/agentsview/internal/config"
@@ -4490,28 +4491,22 @@ func (db *DB) CheckpointWALTruncate(ctx context.Context) error {
 // pages after large rewrites such as a full resync. Persistent readers simply
 // leave the WAL for the next periodic attempt.
 func (db *DB) CheckpointWALTruncateWithRetry(ctx context.Context) error {
-	var lastErr error
-	for i := range walCheckpointAttempts {
+	_, err := backoff.Retry(ctx, func() (struct{}, error) {
 		err := db.CheckpointWALTruncate(ctx)
-		if err == nil {
-			return nil
+		if err != nil && !errors.Is(err, ErrWALCheckpointBusy) {
+			err = backoff.Permanent(err)
 		}
-		lastErr = err
-		if !errors.Is(err, ErrWALCheckpointBusy) {
-			return err
-		}
-		if i == walCheckpointAttempts-1 {
-			break
-		}
-		timer := time.NewTimer(walCheckpointRetryDelay)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C:
-		}
+		return struct{}{}, err
+	}, backoff.WithBackOff(backoff.NewConstantBackOff(walCheckpointRetryDelay)),
+		backoff.WithMaxTries(walCheckpointAttempts), backoff.WithMaxElapsedTime(0))
+	if err == nil {
+		return nil
 	}
-	return lastErr
+	retryErr := backoff.AsRetryError(err)
+	if errors.Is(retryErr.Cause, backoff.ErrPermanent) || errors.Is(retryErr.Cause, backoff.ErrExhausted) {
+		return retryErr.LastErr
+	}
+	return ctx.Err()
 }
 
 // MaybeCheckpointLargeWAL attempts a truncate checkpoint only when the WAL file

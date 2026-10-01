@@ -16,6 +16,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/cenkalti/backoff/v7"
 )
 
 const (
@@ -601,31 +603,28 @@ func (db *DB) vacuumIntoCandidate(ctx context.Context, candidatePath string) err
 // checkpointWALTruncateConn retries a truncate checkpoint on conn so
 // short-lived readers can release their pinned pages.
 func checkpointWALTruncateConn(ctx context.Context, conn *sql.DB) error {
-	var lastErr error
-	for i := range walCheckpointAttempts {
+	_, err := backoff.Retry(ctx, func() (struct{}, error) {
 		var busy, logPages, checkpointedPages int
 		err := conn.QueryRowContext(
 			ctx, "PRAGMA wal_checkpoint(TRUNCATE)",
 		).Scan(&busy, &logPages, &checkpointedPages)
 		if err != nil {
-			return err
+			return struct{}{}, backoff.Permanent(err)
 		}
-		if busy == 0 {
-			return nil
+		if busy != 0 {
+			return struct{}{}, ErrWALCheckpointBusy
 		}
-		lastErr = ErrWALCheckpointBusy
-		if i == walCheckpointAttempts-1 {
-			break
-		}
-		timer := time.NewTimer(walCheckpointRetryDelay)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C:
-		}
+		return struct{}{}, nil
+	}, backoff.WithBackOff(backoff.NewConstantBackOff(walCheckpointRetryDelay)),
+		backoff.WithMaxTries(walCheckpointAttempts), backoff.WithMaxElapsedTime(0))
+	if err == nil {
+		return nil
 	}
-	return lastErr
+	retryErr := backoff.AsRetryError(err)
+	if errors.Is(retryErr.Cause, backoff.ErrPermanent) || errors.Is(retryErr.Cause, backoff.ErrExhausted) {
+		return retryErr.LastErr
+	}
+	return ctx.Err()
 }
 
 // installCompactCandidate performs the short exclusive swap: close and drain

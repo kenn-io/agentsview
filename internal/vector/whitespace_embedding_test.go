@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/kit/embedclient"
 	kitvec "go.kenn.io/kit/vector"
 )
 
@@ -93,9 +94,7 @@ func TestBuildSkipsPermanentlyRejectedDocumentSharingABatch(t *testing.T) {
 
 	rejectPoison := func(_ context.Context, texts []string) ([][]float32, error) {
 		if slices.Contains(texts, "poison") {
-			return nil, &HTTPStatusError{
-				Status: 400, Body: "input exceeds maximum context length",
-			}
+			return nil, &embedclient.APIError{StatusCode: 400, Reason: embedclient.ReasonInputTooLong}
 		}
 		out := make([][]float32, len(texts))
 		for i := range texts {
@@ -127,7 +126,7 @@ func TestBuildTransientBatchErrorStillAborts(t *testing.T) {
 	var calls int
 	failing := func(_ context.Context, _ []string) ([][]float32, error) {
 		calls++
-		return nil, &HTTPStatusError{Status: 503, Body: "upstream unavailable"}
+		return nil, &embedclient.APIError{StatusCode: 503}
 	}
 
 	result, err := ix.Build(ctx, src, failing, fakeGeneration("fake-model"),

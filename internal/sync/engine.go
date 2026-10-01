@@ -11875,13 +11875,15 @@ func (e *Engine) processProviderFile(
 
 	// Persisted stat-digest skip. This runs before the single-session
 	// content guard below on purpose: a matching digest (size, mtime,
-	// ctime per component) plus a current stored row proves the source
-	// unchanged without opening it, so a fresh process (daemon restart or
-	// one-shot CLI sync) skips on stats alone instead of re-hashing the
-	// full transcript through providerIncrementalContentChanged. Any real
-	// change -- including a same-size same-mtime in-place rewrite --
-	// bumps a ctime and breaks the digest, falling through to the
-	// content-verified gates.
+	// ctime, and inode per component) plus a current stored row
+	// proves the source unchanged without opening it, so a fresh process
+	// (daemon restart or one-shot CLI sync) skips on stats alone instead of
+	// re-hashing the full transcript through
+	// providerIncrementalContentChanged. A same-size same-mtime in-place
+	// rewrite bumps a ctime, and an atomic replacement changes the inode
+	// even when a coarse clock gives it the original's timestamps;
+	// either breaks the digest and falls through to the content-verified
+	// gates.
 	if !forceSourceCwdParse && !codexForceFullParse &&
 		!codexProvenUnchanged && !codexAuditDeepVerify {
 		if freshMTime, fresh := e.providerSourceFreshBeforeFingerprint(
