@@ -12,9 +12,9 @@ import (
 // implementations (e.g. the PostgreSQL reader).
 var ErrReadOnly = readOnlyError{}
 
-// ToolSequenceReadSource binds sequence reads to hosted identity or replica publication.
+// ToolSequenceReadSource binds sequence reads to hosted identity or replica publication; validatePublication marks a request boundary.
 type ToolSequenceReadSource interface {
-	ToolSequenceReadSource(ctx context.Context, sessionID string) (binding string, pending bool, err error)
+	ToolSequenceReadSource(ctx context.Context, sessionID string, validatePublication bool) (binding string, pending bool, err error)
 }
 
 type readOnlyError struct{}

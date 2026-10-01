@@ -14,7 +14,7 @@ func (h *HostedStore) ToolSequenceSourceChanged(err error) bool {
 	return errors.Is(err, ErrHostedIdentityChanged)
 }
 
-func (h *HostedStore) ToolSequenceReadSource(ctx context.Context, id string) (string, bool, error) {
+func (h *HostedStore) ToolSequenceReadSource(ctx context.Context, id string, _ bool) (string, bool, error) {
 	binding, err := hostedRead(ctx, h, func(revision hostedRevision) (string, error) {
 		source, err := h.resolve(ctx, id)
 		if err != nil || source.State == RawIdentityGone {
@@ -22,7 +22,7 @@ func (h *HostedStore) ToolSequenceReadSource(ctx context.Context, id string) (st
 		}
 		return fmt.Sprintf("%d:%d:%d:%t:%s", revision.Identity, revision.Selection, revision.Corpus, source.Legacy, source.SessionID), nil
 	})
-	if err == ErrHostedIdentityChanged {
+	if errors.Is(err, ErrHostedIdentityChanged) {
 		return "", true, nil
 	}
 	return binding, false, err

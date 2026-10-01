@@ -42,6 +42,10 @@ func TestToolSequencesPublicationBinding(t *testing.T) {
 			}
 			response := request()
 			require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+			binding, pending, err := store.ToolSequenceReadSource(t.Context(), id, true)
+			require.NoError(t, err)
+			require.NotEmpty(t, binding)
+			require.False(t, pending)
 			metadata, err := store.GetSession(t.Context(), id)
 			require.NoError(t, err)
 			messages, err := local.GetAllMessages(t.Context(), id)
@@ -102,7 +106,11 @@ func TestToolSequencesPublicationBinding(t *testing.T) {
 				}
 				_, err := store.conn.ExecContext(t.Context(), `INSERT INTO sessions SELECT * REPLACE (push_version + 1 AS push_version, message_count + 1 AS message_count) FROM sessions WHERE id = ?`, id)
 				require.NoError(t, err)
-				_, pending, err := store.ToolSequenceReadSource(t.Context(), id)
+				current, pending, err := store.ToolSequenceReadSource(t.Context(), id, false)
+				require.NoError(t, err)
+				assert.NotEqual(t, binding, current)
+				assert.False(t, pending)
+				_, pending, err = store.ToolSequenceReadSource(t.Context(), id, true)
 				require.NoError(t, err)
 				assert.True(t, pending)
 				assert.Equal(t, http.StatusConflict, request().Code)

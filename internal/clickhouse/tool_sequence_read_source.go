@@ -27,10 +27,14 @@ func (s *Store) toolSequencePublication(ctx context.Context, id string) (toolSeq
 	return p, err == nil, err
 }
 
-func (s *Store) ToolSequenceReadSource(ctx context.Context, id string) (string, bool, error) {
+func (s *Store) ToolSequenceReadSource(ctx context.Context, id string, validatePublication bool) (string, bool, error) {
 	before, exists, err := s.toolSequencePublication(ctx, id)
 	if err != nil || !exists {
 		return "", false, err
+	}
+	binding := fmt.Sprintf("%d:%s:%t:%s:%d", before.version, before.revision, before.termination.Valid, before.termination.String, before.messages)
+	if !validatePublication {
+		return binding, false, nil
 	}
 	var messages, mismatches uint64
 	err = s.conn.QueryRowContext(ctx, `SELECT count(), countIf(push_version != ?) FROM messages WHERE session_id = ?`, before.version, id).Scan(&messages, &mismatches)
@@ -51,5 +55,5 @@ func (s *Store) ToolSequenceReadSource(ctx context.Context, id string) (string, 
 		return "", false, err
 	}
 	pending = pending || !exists || before != after
-	return fmt.Sprintf("%d:%s:%t:%s:%d", before.version, before.revision, before.termination.Valid, before.termination.String, before.messages), pending, nil
+	return binding, pending, nil
 }

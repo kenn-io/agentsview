@@ -977,7 +977,7 @@ func TestHandleToolSequences_SourceChanged(t *testing.T) {
 			const id = "tool-sequences-replaced"
 			calls := make([]db.ToolCall, 205)
 			for i := range calls {
-				calls[i] = db.ToolCall{ToolName: "Grep", Category: "Grep", ToolUseID: fmt.Sprint(i), ResultContent: "No matches found"}
+				calls[i] = db.ToolCall{ToolName: "Grep", Category: "Grep", ToolUseID: strconv.Itoa(i), ResultContent: "No matches found"}
 			}
 			seedSequenceSession(t, te.db, id, new("clean"), calls)
 			replace := func() {
@@ -995,17 +995,24 @@ func TestHandleToolSequences_SourceChanged(t *testing.T) {
 				require.NoError(t, te.db.ReplaceSessionMessages(t.Context(), id, messages))
 			}
 			store := &toolSequenceChangingStore{Store: te.db}
-			if boundary == "shorter" || boundary == "zero" {
+			switch boundary {
+			case "shorter", "zero":
 				store.beforePage = func(from int) {
 					if from > 0 {
 						replace()
 					}
 				}
-			} else if boundary == "timing" {
+			case "timing":
 				store.afterTiming = replace
-			} else {
+			case "EOF":
+				store.afterPage = func(_ int, messages []db.Message, _ *string) {
+					if len(messages) == 0 {
+						replace()
+					}
+				}
+			default:
 				store.afterPage = func(from int, messages []db.Message, revision *string) {
-					if (boundary == "EOF" && len(messages) == 0) || (boundary != "EOF" && from == 0) {
+					if from == 0 {
 						replace()
 						if boundary == "hydration" {
 							hydrated, err := te.db.GetMessages(t.Context(), id, from, db.DefaultMessageLimit, true)
@@ -1026,6 +1033,21 @@ func TestHandleToolSequences_SourceChanged(t *testing.T) {
 			assert.NotContains(t, response.Body.String(), `"total_tool_calls"`)
 		})
 	}
+}
+
+func TestHandleToolSequences_FinalPublicationBoundary(t *testing.T) {
+	te := setup(t)
+	const id = "tool-sequences-final-publication-boundary"
+	dbtest.SeedToolSequencesExample(t, te.db, id)
+	store := &toolSequenceBoundaryStore{Store: te.db}
+	cfg := config.Config{Host: "127.0.0.1", InstallationID: "test"}
+	te.handler = wrapTestHandler(cfg, server.New(cfg, store, nil).Handler())
+	response := te.get(t, "/api/v1/sessions/"+id+"/tool-sequences")
+	assertStatus(t, response, http.StatusConflict)
+	assert.Contains(t, response.Body.String(), `"code":"source_changed"`)
+	assert.NotContains(t, response.Body.String(), `"sequences"`)
+	assert.NotContains(t, response.Body.String(), `"total_tool_calls"`)
+	assert.Equal(t, 2, store.boundaries)
 }
 
 func TestHandleToolSequences_ReadBinding(t *testing.T) {
@@ -1086,11 +1108,24 @@ type toolSequenceUnavailableStore struct {
 	readPage bool
 }
 
-func (s *toolSequenceUnavailableStore) ToolSequenceReadSource(context.Context, string) (string, bool, error) {
+func (s *toolSequenceUnavailableStore) ToolSequenceReadSource(context.Context, string, bool) (string, bool, error) {
 	if s.initial || s.readPage {
 		return "", false, nil
 	}
 	return "binding", false, nil
+}
+
+type toolSequenceBoundaryStore struct {
+	db.Store
+	boundaries int
+}
+
+func (s *toolSequenceBoundaryStore) ToolSequenceReadSource(_ context.Context, _ string, validatePublication bool) (string, bool, error) {
+	if !validatePublication {
+		return "binding", false, nil
+	}
+	s.boundaries++
+	return "binding", s.boundaries > 1, nil
 }
 
 func (s *toolSequenceUnavailableStore) GetMessagesWindow(ctx context.Context, id string, w db.MessageWindow) ([]db.Message, error) {

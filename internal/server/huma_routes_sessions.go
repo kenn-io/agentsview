@@ -560,7 +560,7 @@ func collectSessionToolSequences(ctx context.Context, store db.Store, id string)
 	var pending bool
 	var err error
 	if hasSource {
-		binding, pending, err = source.ToolSequenceReadSource(ctx, id)
+		binding, pending, err = source.ToolSequenceReadSource(ctx, id, true)
 		if err != nil {
 			return nil, err
 		}
@@ -582,7 +582,7 @@ func collectSessionToolSequences(ctx context.Context, store db.Store, id string)
 		}
 		var unavailable bool
 		if hasSource {
-			current, pending, err := source.ToolSequenceReadSource(ctx, id)
+			current, pending, err := source.ToolSequenceReadSource(ctx, id, false)
 			if err != nil {
 				return err
 			}
@@ -605,7 +605,7 @@ func collectSessionToolSequences(ctx context.Context, store db.Store, id string)
 			return service.ErrSourceChanged
 		}
 		if hasSource {
-			current, pending, err := source.ToolSequenceReadSource(ctx, id)
+			current, pending, err := source.ToolSequenceReadSource(ctx, id, false)
 			if err != nil {
 				return err
 			}
@@ -664,6 +664,18 @@ func collectSessionToolSequences(ctx context.Context, store db.Store, id string)
 	}
 	if err := check(); err != nil {
 		return nil, err
+	}
+	if hasSource {
+		current, pending, err := source.ToolSequenceReadSource(ctx, id, true)
+		if err != nil {
+			return nil, err
+		}
+		if pending || (current != "" && current != binding) {
+			return nil, service.ErrSourceChanged
+		}
+		if current == "" {
+			return nil, service.ErrRevisionBoundReadUnavailable
+		}
 	}
 	if durations == nil {
 		return nil, service.ErrSourceChanged
