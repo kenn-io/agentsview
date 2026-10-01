@@ -106,3 +106,113 @@ host operation.
 
 Errors and truncation are part of the result. Return them with their scope
 rather than resizing the workload or treating them as successful qualification.
+
+
+## Returned Windows results
+
+The received portable report contains the smoke run, three full baseline runs,
+four supplemental experiment results, raw aggregate JSON, and experiment source.
+All eight JSON blocks parsed. The pinned baseline script at
+`5e4618b0eeeaf2dc099afb6611caf9e9d32c9eae` has SHA-256
+`015a8042a62a1764ba83f49b1ec1d575c0b31c13e460f661e1d7210486a888b2`,
+which matches the repository blob. Aggregate arithmetic and canary assertions
+were checked against the supplied JSON; experiments were not rerun here.
+
+The host was Windows 11, x64, 24 logical CPUs, about 128 GiB RAM, and a local
+SSD using NTFS. Source and scratch shared a volume. Normal browser, agent, and
+editor/runtime processes remained present. Snapshots did not establish
+sustained contention; responsiveness was not assessed. The baseline used Python
+3.14.7 and SQLite 3.53.1. Its smoke and three full runs reportedly exited zero
+with empty stderr, retaining the full cardinality. Full runs took 87.31-90.05 s.
+
+Live coverage was small: only Codex existed at the default roots, with 33
+candidates in 17 directories. Four missing roots reported errors. No truncation
+or skipped links were reported in retained first/last passes. These are not
+large live-provider coverage results; synthetic inventories carry the scale
+comparison.
+
+| Baseline measurement | Range across three runs |
+| --- | --- |
+| Create 50,000 files in 196 directories | 14.952-16.570 s |
+| Warm individual path-stat median | 3.624-3.670 s |
+| Warm listing-only median | 83.7-94.0 ms |
+| Warm enumeration plus stat median | 112.8-119.8 ms |
+
+Every baseline representation round-tripped all records, and database sizes
+matched Linux and Mac. Compact directory-ID rows used 5.62/28.04 MiB at
+50,000/250,000 files; prefix pages used 3.95/19.70 MiB. The large difference
+between individual checks and enumeration is an API-semantics distinction,
+not evidence that equivalent fresh observations are cheap on Windows.
+
+### Freshness and identity constraints
+
+The supplemental native probe compared full closed-file signatures with
+independent individual handle queries. Bulk enumeration included actual change
+time and 128-bit file IDs, with zero mismatches on 50,000 closed files. Python
+DirEntry metadata omitted IDs in this sample, and its ctime was creation time,
+not Windows change time. A production signature must retain volume identity,
+all 128 file-ID bits, and an explicit flag when identity/change time is unknown.
+Prototype disk sizes do not include this final signature representation.
+
+Three open-writer append canaries are decisive counterexamples to using listing
+metadata as a fresh known-file observation. Native bulk and Python enumeration
+both returned size four; individual handle and path queries returned size five.
+The parent directory signature did not change. Enumeration after an individual
+query returned five, so query order can hide the stale-listing behavior. All
+closed-writer listings matched the handle oracle. Fast listing metadata may
+support discovery; it must not suppress fresh checks for known candidates.
+
+Two of three rapid same-size overwrite canaries retained the compared write
+and change timestamps even after close. The experiment establishes unchanged
+signatures, not their cause. Explicit native dirty paths must still reach
+owning content verification, and lost-history recovery must retain scoped
+content verification. Stat-only absence of change is not content proof.
+Native notification delivery was not measured.
+
+### Scope, bounded workers, and cache writes
+
+| Supplemental operation | Median wall time | Qualification limit |
+| --- | --- | --- |
+| Full individual native signatures, 50,000 files | 5.650 s | Scratch-only Python/Win32 |
+| Same checks scoped to 768 files in three directories | 87.6 ms | Models scope, not actual coordinator routing |
+| Closed-file bulk metadata, 8 KiB / 64 KiB buffers | 125 / 128 ms | Stale open-writer entries remain possible |
+| One stat worker, 50,000 signatures | 6.009 s; 5.734 CPU s | Separate worker experiment |
+| Two stat workers | 4.448 s; 8.250 CPU s | 26.0% less wall time, 43.9% more CPU time |
+| Four stat workers | 4.320 s; 9.094 CPU s | Little further wall-time benefit |
+
+Workers submitted at most one 256-record page and preserved every signature.
+These Python/ctypes results justify qualifying a small pool only if serial Go
+checks fail latency requirements. They do not justify enabling one by default
+or trading more CPU for a nominal benchmark win. Physical routing, selective
+work, cancellation, and fair progress between units come first. A background
+coverage pass must not delay unrelated pending event work until all files have
+been checked; qualify service between bounded pages with the real coordinator.
+
+Selective 256-record cache reads had medians of 0.278-0.451 ms for compact rows
+and 0.323-0.435 ms for prefix pages. One-file update medians were 4.513-5.001 ms
+and 4.918-5.783 ms respectively. Row storage changed one record; page storage
+re-encoded 256. These small samples do not establish a strong throughput ranking.
+Both sampled 4,616 journal bytes, not a peak bound. Ordinary acknowledged file
+changes should update only existing signatures or affected pages; reserve full
+listing generations for membership or completeness changes.
+
+For equal-length high-entropy synthetic names at 250,000 files, compact rows
+used 29,396,992 bytes and prefix pages 28,663,808 bytes. The latter saved only
+2.49%, compared with about 30% for repetitive rollout-style names. This supports
+compact rows as the first format to qualify and reinforces the need to measure
+actual name distributions before adding a codec.
+
+### Remaining evidence limits
+
+The metadata/cache optimization suite emitted complete JSON and checks, but its
+launcher did not retain the final exit status after an earlier interrupted
+launch. Its status is unrecorded, not a verified successful exit. The separate
+open-writer, worker, and scoped-signature probes reportedly exited zero with
+empty stderr. Their source and raw JSON were inspected, not executed locally.
+
+All probes are synthetic, short, and on high-capacity hardware. Their oracles
+retain full inventories, so they do not qualify bounded production memory.
+Native event delivery, overflow recovery, sustained contention, Go latency and
+CPU, interactive impact, final schema/caps, and actual restart gains remain
+unmeasured. Unchanged post-delete size and journal samples do not establish
+the total storage envelope. The design gates remain implementation work.

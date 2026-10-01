@@ -199,14 +199,16 @@ live in the existing format-owned provider file.
 **Files:** Create `internal/watchscan/cache.go`, `cache_test.go`, and
 `types.go`. Reuse the existing SQLite driver; do not modify `internal/db/schema.sql`.
 
-**Interfaces:** Define `Signature{Size, MtimeNS, ChangeTimeNS, Inode int64;
+**Interfaces:** Define `FileIdentity{VolumeID uint64; FileID [16]byte; Known bool}`
+and `Signature{Size, MtimeNS, ChangeTimeNS int64; Identity FileIdentity;
 ChangeTimeKnown bool}`, `Entry{RelPath string; Directory bool; Signature Signature}`,
 `DirectoryState{Signature Signature; Trusted bool}`, and
 `CacheOptions{MaxBytes int64}`.
 Produce `OpenCache(ctx context.Context, path string, options CacheOptions) (*Cache, error)`,
 `(*Cache).Directory(ctx, unitID, fingerprint, relDir string)
 (DirectoryState, bool, error)`, `(*Cache).Children(ctx, unitID, relDir, after string,
-limit int) ([]Entry, string, error)`, `(*Cache).BeginDirectory(ctx context.Context, unitID, fingerprint, relDir string,
+limit int) ([]Entry, string, error)`, `(*Cache).UpdateSignatures(ctx context.Context, unitID, fingerprint, relDir string,
+entries []Entry) (bool, error)`, `(*Cache).BeginDirectory(ctx context.Context, unitID, fingerprint, relDir string,
 state DirectoryState) (*DirectoryWrite, error)`, `(*DirectoryWrite).Append(ctx
 context.Context, entries []Entry) error`, `(*DirectoryWrite).Commit(ctx
 context.Context) (bool, error)`, `(*DirectoryWrite).Abort(ctx context.Context) error`,
@@ -221,8 +223,17 @@ Store each physical directory as a parent ID and basename, including metadata.
 File rows reference directory IDs; overlapping providers share this inventory.
 Directory-prefix records are covered by the cap and bounded eviction cleanup.
 Full paths exist only in the bounded API page returned to the caller.
+UpdateSignatures applies at most 256 existing file members/2 MiB after downstream
+acknowledgement. It preserves listing membership and trust. Return false on
+unknown directory, fingerprint mismatch, missing member, or declined admission;
+do not insert new members or grant completeness. Row layouts update only changed
+rows; coded layouts rewrite only affected pages. Directory membership changes
+still use BeginDirectory/Commit. File IDs are opaque bytes, include all native
+Windows bits, and are paired with volume identity. Unknown identity is explicit;
+do not encode it as a matching zero identity.
 
-- [ ] Run the [portable comparison](2026-10-01-source-watcher-mac-measurements.md) on Linux and Mac. The [returned Mac report](2026-10-01-source-watcher-mac-measurements.md#returned-mac-results) supplies three full APFS runs; raw JSON and Windows results remain outstanding. Start qualification with directory-ID/basename rows, which filled faster; compare prefix-coded pages where their additional size savings justify codec and replacement costs. Reject the duplicated full-path baseline. Then qualify both compact candidates with production generation metadata, sparse and nested trees, less repetitive basenames, seek-by-basename reads, and changed-page transactions using the repository driver. Measure durable reopen versus uncached startup before connecting persistence. The API works without durable storage if savings do not justify it.
+- [ ] Run the [portable comparison](2026-10-01-source-watcher-mac-measurements.md) across platforms. The [returned Mac report](2026-10-01-source-watcher-mac-measurements.md#returned-mac-results) supplies three full APFS runs; the [returned Windows report](2026-10-01-source-watcher-windows-measurements.md#returned-windows-results) includes checked raw JSON and signature canaries, while Mac raw JSON remains outstanding. Start qualification with directory-ID/basename rows, which filled faster; compare prefix-coded pages where their additional size savings justify codec and replacement costs. Reject the duplicated full-path baseline. Then qualify both compact candidates with production generation metadata, sparse and nested trees, less repetitive basenames, seek-by-basename reads, and changed-page transactions using the repository driver. Measure durable reopen versus uncached startup before connecting persistence. The API works without durable storage if savings do not justify it.
+- [ ] Write `TestCacheSelectiveAcknowledgedSignatures` and `TestCacheFullFileIdentity`. Exercise one changed signature in small/large inventories, untouched-record fidelity, unchanged listing generation, failed acknowledgement/reopen, unknown-member refusal, and file IDs with nonzero high 64 bits. Check the selected format modifies only its owned row/page, not the complete inventory.
 - [ ] Write `TestCachePrefixStorageAndPageSeeking`. Verify byte-exact names, signatures, rename/move, overlapping-provider reuse, eviction of unused prefixes, and paged seeks across prefix boundaries. Require decoded pages to stay within 256 records/2 MiB; do not materialize full directory listings for seeks. Select the representation from the measurements rather than retaining both in production.
 - [ ] Write `TestCacheAdmissionAndEvictionPreserveUnknownState`, `TestCacheReopenAndFingerprintChange`, and `TestCacheStorageEnvelope`. Fill through the actual cache API with long paths and changed listings; measure all cache-owned files during commits, evictions, rollback, and reopen.
 
@@ -245,14 +256,21 @@ platform-specific `signature_linux.go`, `signature_darwin.go`,
 `signature_windows.go`, and `signature_other.go`.
 
 **Interfaces:** Consume watchplan.Unit and Task 4 cache types. Define
-`Change{Path string; Removed bool; Group string}`, `ChangePage{UnitID string;
-Changes []Change; CompletenessRoots []string}`, `ScanRequest{Roots []string;
+`Change{Path string; Removed bool; Group string; VerifyContent bool}`, `ChangePage{UnitID string;
+Changes []Change; CompletenessRoots []string}`, `ScanRequest{Roots []string; DirtyPaths []string;
 Sweep bool}`, and `ScanStats{Listings, Entries, Stats, CacheHits, AdmissionRefusals
 int64}`. Produce `NewScanner(cache *Cache) *Scanner` and
 `(*Scanner).Scan(ctx context.Context, unit watchplan.Unit, request ScanRequest,
 apply func(context.Context, ChangePage) error) (ScanStats, error)`.
 A nil cache uses paged uncached enumeration. It never creates an unbounded
-in-memory substitute. The scanner calls apply before committing observations.
+in-memory substitute. The scanner calls apply before committing observations. Call apply at every
+bounded metadata work page, including an empty-change page, so unchanged full
+scans also provide coordinator scheduling checkpoints. DirtyPaths is a bounded
+set of explicitly notified physical paths, not a list of all root members.
+Emit VerifyContent for owned native dirty paths even when a fresh signature is
+unchanged. Persist changed signatures selectively after success; retain failed
+verification intent for retry. Directory discovery cannot replace fresh
+known-file checks on Windows.
 
 - [ ] Write `TestScanCreateAppendRemove`, `TestScanFailureSurvivesReopen`, `TestScanUnreadableAndMissingRoot`, and `TestScanCacheMissRequestsCompleteness`. Use real scratch files and a specific apply seam that fails only the intended page. Assert literal delivered paths and successful archive visibility after retry through the real engine in the integration case.
 
@@ -267,8 +285,13 @@ in-memory substitute. The scanner calls apply before committing observations.
   directory, appends with unchanged parent mtime, and a listing over 2 MiB.
   Cached unchanged-listing assertions apply only after the two-second racy
   window; use a controllable clock/stat seam rather than sleeping.
+- [ ] Write Windows scratch tests `TestScanOpenWriterAppend` and `TestScanNativeDirtySameSignature`. Keep a writer open, list before fresh individual queries, and verify the actual appended content is eventually stored. Exercise a controlled unchanged-signature dirty overwrite through the real owning engine, and lost-history recovery separately. Native query checks retain full IDs and actual change time; unsupported queries remain incomplete rather than zero-valued trusted proof. Test full-ID cache roundtrips independently of which IDs the scratch filesystem happens to allocate.
 - [ ] Run `CGO_ENABLED=1 go test -tags fts5 ./internal/watchscan -run TestScan`; require observable delivery/acknowledgement failure.
-- [ ] Implement pre/post listing signatures, two-second distrust, paged reads, post-apply commits, conservative partial-subtree handling, and SQLite-group physical probes using existing header logic. Unsupported change time remains explicit. Eviction emits no removal. Cold/evicted scopes request coalesced completeness before absence claims.
+- [ ] Implement pre/post listing signatures, two-second distrust, paged reads, post-apply commits, conservative partial-subtree handling, and SQLite-group physical probes using existing header logic. On Windows query known-file signatures from a fresh handle with FileBasicInfo,
+FileStandardInfo, and FileIdInfo; avoid redundant per-field opens. Use attribute
+read access with sharing for normal writers and deletion/rename, and close every
+handle. Directory bulk queries serve discovery only unless freshness for the
+specific use has been established. Unsupported change time/identity remains explicit. Eviction emits no removal. Cold/evicted scopes request coalesced completeness before absence claims.
 - [ ] Repeat tests and run `CGO_ENABLED=1 go test -tags fts5 -race ./internal/watchscan`; require PASS with no leaked scan work after cancellation.
 - [ ] Format/vet and commit `feat(watch): scan and acknowledge source observations`.
 
@@ -299,7 +322,9 @@ construction, stored-hint queries, and source interpretation.
   aggregate-member deletion, and Claude/Codex cross-root moves. Assert stored
   output and visibility, not only the dispatcher call counts.
 - [ ] Run `CGO_ENABLED=1 go test -tags fts5 ./internal/sync -run 'TestCoverageDispatch|TestSyncWatchBatchThenRun.*Cardinality|TestSyncWatchBatchThenRunMissing'`; require routing or persisted-output failures.
-- [ ] Implement exact unit-owned dispatch. Keep canonical-source replacement, persistent archive, ExplicitDeletionOnly, and existing proof scopes. A completeness request does not itself supply proof. If existing scope resolution needs wider traversal, retain that cost explicitly rather than inventing a narrow proof.
+- [ ] Implement exact unit-owned dispatch. Keep canonical-source replacement, persistent archive, ExplicitDeletionOnly, and existing proof scopes. Honor VerifyContent through the owning engine's content verification and
+verified-source trust boundaries, even for an equal metadata signature. Do not
+invalidate unrelated providers. A completeness request does not itself supply proof. If existing scope resolution needs wider traversal, retain that cost explicitly rather than inventing a narrow proof.
 - [ ] Repeat the command and require PASS at both archive cardinalities.
 - [ ] Format/vet and commit `refactor(sync): dispatch changes by source coverage unit`.
 
@@ -320,6 +345,13 @@ dispatch func(context.Context, watchscan.ChangePage) error) *SourceCoordinator`,
 `(*SourceCoordinator).UpdatePlan(index *watchplan.Index) error`.
 Scheduling uses an injectable clock seam in tests. Audit/verification execution
 is bound to the owning consumer in assembly, not implemented by the scanner.
+Run at most one background scan producer. Its apply callback sends one bounded
+page and blocks for the coordinator's success acknowledgement before further
+scan work or cache acknowledgement. Between pages the coordinator can service
+pending scoped owners while that producer remains paused. No buffered whole-scan
+output or concurrent archive dispatch is allowed. Cancellation unblocks and
+joins the owned producer. Retain dirty work for the same owner until its content
+verification succeeds; an earlier scan-page acknowledgement cannot clear it.
 
 - [ ] Write `TestCoordinatorCompletionCadence`, `TestCoordinatorPendingWorkAndBackoff`, `TestCoordinatorOverflowKeepsOwners`, and `TestCoordinatorMemberAudit`. Use synctest or the existing deterministic clock style.
 
@@ -336,6 +368,7 @@ is bound to the owning consumer in assembly, not implemented by the scanner.
   during scans. Member tests use real Goose/container fixtures.
 - [ ] Run `CGO_ENABLED=1 go test -tags fts5 ./internal/sync -run TestCoordinator`; require timing/ownership behavior to fail.
 - [ ] Implement serial bounded dispatch, first-event deadlines, completion-based coverage scans, jittered sweeps, member-audit wakes, and per-unit retry ownership. Carry lifecycle acknowledgements through success. Preserve five-second spacing between logical passes, not scan pages, and existing bounded backoff; timers never erase work. Resolve group kinds through Task 2 rather than switches on agent names.
+- [ ] Write `TestCoordinatorCoveragePagesYieldToPendingOwners`. Hold a large fallback scan across many pages, notify an unrelated unit, and require that owner to progress before fallback completion without overlapping archive dispatch or losing acknowledgements. Native dirty paths survive retry and coalescing even when metadata matches. Cancellation drains owned work; no unbounded page or stat queue is introduced.
 - [ ] Repeat the command, then `CGO_ENABLED=1 go test -tags fts5 -race ./internal/sync -run 'TestCoordinator|TestCoverageDispatch'`; require PASS.
 - [ ] Format/vet and commit `feat(sync): centralize source coverage scheduling`.
 
@@ -481,7 +514,8 @@ Extend existing SyncStats diagnostics without new frontend flows.
   members on its declared audit cadence; pin that scope and parse count.
 - [ ] Run `CGO_ENABLED=1 go test -tags fts5 ./internal/sync -run TestCoverageCardinality`; require cost/output failures before qualifying the implementation.
 - [ ] Add perfsim fixtures for 50,000 physical files, append, overflow, cache pressure, churn, and restart. Keep scratch data isolated. Test peak disk during transactions and rollback with the repository driver; verify the 32 MiB added working-memory gate and overall daemon memory with Go metrics and OS physical-memory measurements.
-- [ ] Qualify the same 50,000-file scenarios under representative concurrent builds, containers, browser activity, and active agent work on ordinary developer Macs and Linux. Repeat loaded runs and record workload context, completion and dispatch latency distributions, CPU time, retained/peak memory, retries, and backlog. Check completion-based scans do not overlap or build an unbounded queue. Do not shrink inventories or require idle hardware to satisfy gates; revise the design if the actual implementation fails its requirements. An idle baseline is supplementary.
+- [ ] Qualify the same 50,000-file scenarios under representative concurrent builds, containers, browser activity, and active agent work on ordinary developer Macs, Windows, and Linux. Repeat loaded runs and record workload context, completion and dispatch latency distributions, CPU time, retained/peak memory, retries, and backlog. Check completion-based scans do not overlap or build an unbounded queue. Do not shrink inventories or require idle hardware to satisfy gates; revise the design if the actual implementation fails its requirements. An idle baseline is supplementary.
+- [ ] Use the [Windows supplemental evidence](2026-10-01-source-watcher-windows-measurements.md#returned-windows-results) to qualify full fresh signatures versus fixed owner-scoped batches in Go. Verify open-writer appends and same-stat notified/lost-history changes with listing-before-query order. Keep high-entropy filename fixtures for final schema size and selective writes. If serial stats fail latency gates, compare one/two bounded workers for CPU, allocations, cancellation, fairness, and memory before selecting a pool; do not assume Python speedups transfer or enable four workers by default.
 - [ ] Repeat correctness tests, run `make bench-gate`, `make check-timing-budgets`, and the repository lint checks. Run macOS FSEvents integration and a multi-hour isolated APFS retention observation when access is provided. Report absent host access as unverified, not as a passing platform gate.
 - [ ] Document defaults, cache eviction costs, scoped audits, and measured platform limits. Update the old configuration advice and background overflow contract. Record Linux/macOS results as observed versus estimated. No new changelog or screenshot work is needed for this backend change.
 - [ ] Format/vet, scrub outgoing documents and fixtures, review the whole diff, and commit `test(watch): qualify centralized source observation at scale`.
@@ -501,7 +535,11 @@ benefits before choosing persistent storage. Explicit admission control is still
 required. These experiments do not verify production restart savings, the total
 auxiliary-file bound, or native macOS watcher behavior. The returned APFS
 metadata results match compact disk sizes and show short warm passes under
-concurrent work, but do not select durable caching or qualify sustained load. Those are executable qualification
+concurrent work. Windows raw results confirm those sizes but expose much slower
+fresh individual checks and stale open-writer listing metadata. Known-file
+freshness, full identity, bounded page fairness, and selective writes are explicit
+qualification requirements. Neither platform selects durable caching or qualifies
+sustained production load. Those are executable qualification
 steps, not prerequisites for finishing this plan.
 
 Recommended execution is native, in dependency order, with review at each

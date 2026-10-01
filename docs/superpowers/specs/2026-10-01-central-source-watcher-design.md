@@ -121,6 +121,17 @@ restart qualification. See the
 [returned Mac results](../plans/2026-10-01-source-watcher-mac-measurements.md#returned-mac-results)
 for workload context, calculations, tradeoffs, and remaining limits.
 
+The returned Windows report includes raw aggregate JSON and native-query
+canaries. Individual 50,000-file path checks took 3.624-3.670 s; full native
+signatures took 5.650 s versus 87.6 ms for 768 files in three directories.
+Fast enumeration returned stale sizes in all three open-writer append canaries,
+so it cannot replace fresh known-file checks. High-entropy names reduced prefix
+coding's additional saving over compact rows to 2.49%. These results strengthen
+physical scoping and selective updates, and require complete Windows identity
+representation. See the
+[returned Windows results](../plans/2026-10-01-source-watcher-windows-measurements.md#returned-windows-results)
+for checked aggregates, source inspection, method limits, and follow-up gates.
+
 ## Ownership and declarations
 
 Each provider exposes a `CoveragePlan(context.Context)` returning source
@@ -173,7 +184,21 @@ and the existing archive audit retain their current discovery semantics.
 The scanner owns filesystem traversal, not parsing or archive locks. It starts
 from declared roots and descends only into potentially interesting directories.
 A trusted cached listing can avoid `ReadDir` when directory identity, mtime, and
-change time match. Known candidate files are still stat-checked for appends.
+change time match. Known candidate files still receive fresh individual checks for appends.
+Windows bulk/DirEntry metadata may be stale while writers are open, even when
+parent stamps match. Use enumeration for names and discovery, not as proof
+that known-file signatures are unchanged. Query size, write time, actual change
+time, volume, and full file ID from one fresh Windows handle. Keep unsupported
+fields explicit; creation time is not change time. File identity is an opaque
+128-bit value plus volume identity, with narrower platforms zero-extending their
+native identity without losing bits. Never narrow Windows IDs to signed int64.
+
+An explicit native dirty path reaches owning content verification even if its
+fresh signature matches the acknowledged one. Retain this intent through retry
+and only acknowledge after successful downstream work. Ordinary unchanged
+coverage scans may skip parsing; lost-history recovery still uses scoped content
+verification. Neither timestamps nor cached listing trust prove unchanged
+content after notifications or event-history loss.
 SQLite groups additionally use the existing shared database/WAL header probe.
 
 Capture directory state before and after listing. If either differs, or the
@@ -192,7 +217,10 @@ the earlier baseline usable on retry and restart. A crash after archive commit
 but before cache commit may replay already-applied work; existing idempotent
 source processing handles that replay. Stable, recorded parser failures use the
 existing failure-cache policy rather than causing an immediate retry loop.
-Cache writes never participate in the archive transaction.
+Cache writes never participate in the archive transaction. An acknowledged
+signature change to an existing member updates only its row or affected page.
+It does not require a new whole-directory listing generation. Membership,
+incomplete scope, or changed directory proof still uses complete-listing rules.
 
 Cache absence means unknown, not empty. On a cold or evicted scope, enumerate
 its interesting physical inputs and request one scoped completeness pass before
@@ -276,7 +304,14 @@ bounded by the configured plan; unknown-owner loss requests all local units.
 Coverage scans run 30 seconds after completion for units with unavailable native
 coverage. Safety listing sweeps run hourly, jittered between 45 and 75 minutes,
 for all units. Targeted scans enter the same queue. Neither timer replaces
-pending event work or bypasses backoff. Native callbacks perform no filesystem,
+pending event work or bypasses backoff. Service pending owners between bounded
+coverage pages; a large fallback inventory must not monopolize unrelated event
+dispatch. Qualify cancellation and fairness against full fresh Windows checks.
+Use at most one paused-at-page background scan producer with a one-page
+acknowledgement channel. Even unchanged pages yield a checkpoint. The coordinator
+services pending owners between pages, and cancellation joins its producer.
+Keep serial archive dispatch initially. Qualify at most a small bounded stat pool only
+if production measurements justify the CPU and latency tradeoff. Native callbacks perform no filesystem,
 cache, Add/Remove, or provider work.
 
 Providers with incomplete member change feeds retain 15-minute scoped member
@@ -384,7 +419,7 @@ root-reappearance scenarios against scratch data. Record Go heap/allocations,
 forced-GC heap, and `vmmap` physical footprint over a multi-hour retention run.
 Use offline format fixtures or separately authorized source clones for parsing.
 
-macOS metadata and representation measurements have been returned; native
+macOS and Windows metadata and representation measurements have been returned; native
 watcher and sustained-load qualification remain outstanding. Network and FUSE
 timestamp reliability,
 large changed-container enumeration, actual activity concentration, and cold

@@ -233,5 +233,5 @@ Cheap warm metadata passes do not establish a need for persistent caching.
 Compare actual uncached startup, durable reopen, selective changes, and eviction
 with equivalent provider work before deciding. These runs do not qualify native
 FSEvents behavior, production Go memory, sustained backlog, restart savings,
-interactive impact, cold storage, or the complete storage envelope. Windows
-results remain outstanding.
+interactive impact, cold storage, or the complete storage envelope. The [returned Windows results](2026-10-01-source-watcher-windows-measurements.md#returned-windows-results)
+add important freshness and scoped-check qualification constraints.
