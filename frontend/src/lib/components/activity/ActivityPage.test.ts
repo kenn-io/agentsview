@@ -221,6 +221,33 @@ describe("ActivityPage refresh control", () => {
     activity.progress = null;
     activity.lastUpdatedAt = null;
   });
+
+  it("shows the in-progress note in the toolbar only while the period is in progress", async () => {
+    stubActivityPageCollaborators();
+    activity.report = {
+      ...projectReport(),
+      timezone: "America/New_York",
+      partial: true,
+      as_of: "2026-07-01T12:03:00Z",
+    };
+
+    const component = mount(ActivityPage, { target: document.body });
+    try {
+      await flushEffects();
+      const toolbar = document.body.querySelector(".activity-toolbar");
+      expect(toolbar?.textContent).toContain("In progress, as of 08:03");
+
+      activity.report = projectReport();
+      await flushEffects();
+      expect(document.body.textContent).not.toContain("In progress");
+    } finally {
+      await unmount(component);
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+      document.body.innerHTML = "";
+      activity.report = null;
+    }
+  });
 });
 
 describe("ActivityPage breakdown links", () => {

@@ -57,7 +57,6 @@
   }
 
   const peakAt = $derived(fmtClock(report.interactive_peak.at));
-  const asOf = $derived(fmtClock(report.as_of));
 
   interface SummaryCard {
     label: string;
@@ -123,10 +122,6 @@
   {/each}
 </div>
 
-{#if report.partial && asOf}
-  <div class="partial-note">{m.activity_in_progress_as_of({ time: asOf })}</div>
-{/if}
-
 <style>
   .summary-cards {
     display: flex;
@@ -169,11 +164,5 @@
     font-size: 10px;
     color: var(--text-muted);
     margin-top: 2px;
-  }
-
-  .partial-note {
-    margin-top: 8px;
-    font-size: 11px;
-    color: var(--accent-amber);
   }
 </style>
