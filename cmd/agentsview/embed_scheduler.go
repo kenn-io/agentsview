@@ -10,6 +10,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/cenkalti/backoff/v7"
+
 	kitvec "go.kenn.io/kit/vector"
 
 	"go.kenn.io/agentsview/internal/config"
@@ -39,23 +41,30 @@ func acquireVectorsWriteLockWithRetry(
 	ctx context.Context, dataDir string,
 ) (*writeOwnerLock, bool, error) {
 	deadline := time.Now().Add(vectorsWriteLockRetryTimeout)
-	for {
+	lock, err := backoff.Retry(ctx, func() (*writeOwnerLock, error) {
 		lock, err := tryAcquireNamedLock(dataDir, vectorsWriteLockFile)
 		if err == nil {
-			return lock, true, nil
+			return lock, nil
 		}
 		if _, ok := errors.AsType[writeOwnerLockHeldError](err); !ok {
-			return nil, false, err
+			return nil, backoff.Permanent(err)
 		}
 		if !time.Now().Before(deadline) {
-			return nil, false, nil
+			return nil, backoff.Permanent(err)
 		}
-		select {
-		case <-ctx.Done():
-			return nil, false, nil
-		case <-time.After(vectorsWriteLockRetryInterval):
+		return nil, err
+	}, backoff.WithBackOff(backoff.NewConstantBackOff(vectorsWriteLockRetryInterval)),
+		backoff.WithMaxTries(0), backoff.WithMaxElapsedTime(0))
+	if err == nil {
+		return lock, true, nil
+	}
+	retryErr := backoff.AsRetryError(err)
+	if errors.Is(retryErr.Cause, backoff.ErrPermanent) {
+		if _, ok := errors.AsType[writeOwnerLockHeldError](retryErr.LastErr); !ok {
+			return nil, false, retryErr.LastErr
 		}
 	}
+	return nil, false, nil
 }
 
 // embedDebounceInterval is the fixed quiet period the after-sync scheduler
