@@ -38,7 +38,7 @@ func TestUsageCommandsDeferStartupSyncOnlyForDaily(t *testing.T) {
 				ts, _ = newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "codex:session-a"})
 			}
 			started := false
-			stubStartBackgroundServeForTransport(t, func(ctx context.Context, cfg *config.Config, _ time.Duration) (*DaemonRuntime, error) {
+			stubStartBackgroundServeForTransport(t, func(ctx context.Context, cfg *config.Config, _ time.Duration, _ bool) (*DaemonRuntime, error) {
 				started = true
 				if command == "statusline" {
 					deadline, ok := ctx.Deadline()
@@ -87,7 +87,7 @@ func TestUsageCommandsReconcileDaemonStartedByDaily(t *testing.T) {
 			ts.Config.Handler = srv.Handler()
 			ts.Start()
 			t.Cleanup(ts.Close)
-			stubStartBackgroundServeForTransport(t, func(_ context.Context, launch *config.Config, _ time.Duration) (*DaemonRuntime, error) {
+			stubStartBackgroundServeForTransport(t, func(_ context.Context, launch *config.Config, _ time.Duration, _ bool) (*DaemonRuntime, error) {
 				assert.True(t, launch.SkipInitialSync)
 				registerTestRuntime(t, cfg.DataDir, ts.URL, false)
 				return daemonRuntimeFromTestURL(t, ts.URL), nil

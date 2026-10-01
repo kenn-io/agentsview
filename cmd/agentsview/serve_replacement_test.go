@@ -382,7 +382,6 @@ func TestPrepareForegroundServeDaemonUsesExistingCompatibleDaemon(t *testing.T) 
 
 func TestServeDaemonReplacementDecisionReplacesDifferentVersions(t *testing.T) {
 	for _, tt := range []struct{ name, client, daemon string }{
-		{"release rollback", "1.0.0", "1.1.0"},
 		{"git describe", "v1.1.0-3-gabcdef", "v1.1.0-2-g123456"},
 		{"non semver daemon", "1.1.0", "local-build"},
 		{"development CLI", "dev", "1.0.0"},
@@ -402,6 +401,19 @@ func TestServeDaemonReplacementDecisionReplacesDifferentVersions(t *testing.T) {
 			assert.Contains(t, decision.Reason, "differs")
 		})
 	}
+}
+
+func TestServeDaemonReplacementDoesNotDowngradeRelease(t *testing.T) {
+	dir := runtimeTestDir(t)
+	host, port := testPingServer(t)
+	writeRuntimeRecordFixture(t, dir, daemonRuntimeRecord(
+		host, port, withRuntimeVersion("1.1.0"),
+	))
+	setTestVersion(t, "1.0.0")
+	decision := decideServeDaemonReplacement(config.Config{DataDir: dir}, serveReplacementOptions{})
+	assert.Equal(t, serveReplacementUseExisting, decision.Action)
+	decision = decideServeDaemonReplacement(config.Config{DataDir: dir}, serveReplacementOptions{Replace: true})
+	assert.Equal(t, serveReplacementExplicit, decision.Action)
 }
 
 func TestPrepareForegroundServeDaemonReplaceStopsWritableDevConflict(t *testing.T) {

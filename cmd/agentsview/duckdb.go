@@ -138,7 +138,11 @@ func runDuckDBPush(cfg DuckDBPushConfig) {
 	)
 	defer stop()
 
-	backend, cleanup, err := resolveArchiveWriteBackend(ctx, appCfg)
+	intent := transportIntentArchiveWrite
+	if cfg.Watch {
+		intent = transportIntentLongLived
+	}
+	backend, cleanup, err := resolveArchiveWriteBackend(ctx, appCfg, intent)
 	if err != nil {
 		fatal("opening writer: %v", err)
 	}

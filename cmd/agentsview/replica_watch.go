@@ -325,7 +325,7 @@ func runReplicaPushWatch(
 		name, target.Target.MachineName, debounce, interval,
 	)
 
-	writer, cleanup, err := resolveArchiveWriteBackend(ctx, appCfg)
+	writer, cleanup, err := resolveArchiveWriteBackend(ctx, appCfg, transportIntentLongLived)
 	if err != nil {
 		return fmt.Errorf("opening writer: %w", err)
 	}

@@ -272,8 +272,9 @@ func TestMCPDaemonServiceStartsDaemonForEachOperation(t *testing.T) {
 	t.Cleanup(ts.Close)
 	host, port := splitTestServerURL(t, ts.URL)
 	stubStartBackgroundServeForTransport(t, func(
-		context.Context, *config.Config, time.Duration,
+		_ context.Context, _ *config.Config, _ time.Duration, allowReplacement bool,
 	) (*DaemonRuntime, error) {
+		assert.False(t, allowReplacement, "MCP startup must not replace a daemon that appears during launch")
 		starts++
 		return &DaemonRuntime{Host: host, Port: port}, nil
 	})
@@ -287,6 +288,57 @@ func TestMCPDaemonServiceStartsDaemonForEachOperation(t *testing.T) {
 	}
 	assert.Equal(t, 2, starts)
 	assert.NoFileExists(t, cfg.DBPath)
+}
+
+func TestMCPDaemonServiceKeepsUpgradedDaemon(t *testing.T) {
+	for _, versions := range []struct{ name, client, daemon string }{
+		{"release", "1.0.0", "1.1.0"},
+		{"development", "v1.1.0-2-g123456", "v1.1.0-3-gabcdef"},
+	} {
+		t.Run(versions.name, func(t *testing.T) {
+			dir := daemonRuntimeDir(t)
+			setTestVersion(t, versions.client)
+			ts := daemonRouteTestServer(t, map[string]http.HandlerFunc{
+				"/api/v1/sessions": func(w http.ResponseWriter, r *http.Request) {
+					writeTestJSON(t, w, service.SessionList{Sessions: []db.Session{{ID: "from-daemon"}}, Total: 1})
+				},
+			})
+			host, port := splitTestServerURL(t, ts.URL)
+			writeDaemonRuntimeForTest(t, dir, host, port, versions.client, false)
+			forbidStartBackgroundServeForTransport(t, "MCP must not replace a running daemon")
+			svc := newMCPDaemonService(config.Config{DataDir: dir})
+			_, err := svc.List(t.Context(), service.ListFilter{})
+			require.NoError(t, err)
+			// The same MCP process survives a daemon upgrade.
+			writeDaemonRuntimeForTest(t, dir, host, port, versions.daemon, false)
+			for range 2 {
+				res, err := svc.List(t.Context(), service.ListFilter{})
+				require.NoError(t, err)
+				require.Len(t, res.Sessions, 1)
+				assert.Equal(t, "from-daemon", res.Sessions[0].ID)
+			}
+		})
+	}
+}
+
+func TestMCPDaemonServiceRejectsIncompatibleDaemonWithoutReplacement(t *testing.T) {
+	for _, ahead := range []bool{false, true} {
+		t.Run(fmt.Sprintf("daemon ahead %t", ahead), func(t *testing.T) {
+			dir := daemonRuntimeDir(t)
+			host, port := testPingServer(t)
+			setTestVersion(t, "v1.1.0-3-gabcdef")
+			if ahead {
+				writeNewerDataVersionDaemonRuntime(t, dir, host, port, "v1.1.0-4-g123456")
+			} else {
+				writeIncompatibleDaemonRuntime(t, dir, host, port, "v1.1.0-2-g123456", false)
+			}
+			forbidStartBackgroundServeForTransport(t, "MCP must leave the incompatible daemon running")
+			svc := newMCPDaemonService(config.Config{DataDir: dir})
+			_, err := svc.List(t.Context(), service.ListFilter{})
+			require.Error(t, err)
+			assert.ErrorContains(t, err, "Restart this command with the current agentsview binary")
+		})
+	}
 }
 
 func TestMCPDaemonServiceForwardsMemoryStatus(t *testing.T) {
@@ -308,7 +360,7 @@ func TestMCPDaemonServiceForwardsMemoryStatus(t *testing.T) {
 	t.Cleanup(server.Close)
 	host, port := splitTestServerURL(t, server.URL)
 	stubStartBackgroundServeForTransport(t, func(
-		context.Context, *config.Config, time.Duration,
+		context.Context, *config.Config, time.Duration, bool,
 	) (*DaemonRuntime, error) {
 		return &DaemonRuntime{Host: host, Port: port}, nil
 	})
@@ -333,7 +385,7 @@ func TestMCPDaemonServiceRawSuffixResolvesDaemonPerCall(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	host, port := splitTestServerURL(t, srv.URL)
-	stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration) (*DaemonRuntime, error) {
+	stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration, bool) (*DaemonRuntime, error) {
 		starts++
 		return &DaemonRuntime{Host: host, Port: port}, nil
 	})
@@ -414,7 +466,7 @@ func TestMCPDaemonService_UsagePairwiseComparisonForwardsToDaemon(t *testing.T) 
 
 	host, port := splitTestServerURL(t, ts.URL)
 	stubStartBackgroundServeForTransport(t, func(
-		context.Context, *config.Config, time.Duration,
+		context.Context, *config.Config, time.Duration, bool,
 	) (*DaemonRuntime, error) {
 		starts++
 		return &DaemonRuntime{Host: host, Port: port}, nil

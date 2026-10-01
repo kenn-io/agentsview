@@ -156,18 +156,12 @@ the foreground. It remains attached to the terminal until you press `Ctrl+C`,
 unless `--background` is specified. This is the same writable server managed by
 `agentsview daemon`; the web UI and sync do not have separate lifecycles.
 
-When a local writable daemon has a different version from the CLI, `serve` and
-commands that use the daemon restart it with the current CLI executable. This
-includes development builds and switches between release versions. A matching
-version is reused. Replacement preserves the daemon's launch options and checks
-archive compatibility before stopping it; an older CLI cannot replace a daemon
-whose archive data version it cannot open. Read-only replica servers are left
-running.
-
-If the matching server is already running, `serve` reports its URL and exits.
-Open that URL to use the web UI. Stopping the server with either `daemon stop`
-or `serve stop` also stops its sync and file watchers. `--no-sync` disables
-automatic sync in that process; it does not create a separate sync daemon.
+`serve` reuses or replaces an existing local writable daemon according to the
+[replacement rules below](#background-mode). Read-only replica servers are left
+running. When reusing a server, `serve` reports its URL and exits. Open that URL
+to use the web UI. Stopping the server with either `daemon stop` or `serve stop`
+also stops its sync and file watchers. `--no-sync` disables automatic sync in
+that process; it does not create a separate sync daemon.
 
 ```bash
 agentsview serve [flags]
@@ -264,14 +258,27 @@ writable daemon if it was stopped. It accepts no serve flags and uses the same
 effective configuration as `daemon restart`. It is not equivalent to the broader
 `serve stop` followed by a foreground `serve` start.
 
-When a writable daemon is already running, a newer release binary automatically
-replaces an older compatible daemon before starting. Development builds,
-downgrades, and forward API/data-version conflicts do not auto-replace; use
-`--replace` when you deliberately want this invocation to stop the running
-daemon first. If the SQLite archive itself has a newer data version than the
-current binary can open, `serve` refuses before stopping the old daemon.
-`serve status` reports incompatible live daemons with their daemon and binary
-versions plus `daemon restart` or `daemon stop` guidance.
+`serve` and ordinary CLI commands automatically replace an older release daemon
+with a newer release. An older release reuses a compatible newer daemon; it does
+not downgrade it. When either binary is a development build, a different version
+string triggers replacement. Repeated dirty builds from the same commit can have
+the same version string and require `agentsview daemon restart`. Two different
+development installations sharing a data directory can replace each other when
+invoked; use separate data directories to keep them independent.
+
+Long-running clients (`mcp` and push commands with `--watch`, including
+installed push services) start a missing daemon and reconnect after daemon
+restarts, but never replace a running daemon. They keep using it while its API
+and data versions are compatible. If incompatible, they report the conflict and
+ask you to restart the client with the current binary.
+
+Use `serve --replace` or `agentsview daemon restart` for intentional
+replacement, including release downgrades. Automatic replacement preserves the
+daemon's launch options. All replacement paths check archive compatibility
+before stopping the daemon: an older binary cannot replace a daemon whose SQLite
+data version it cannot open. `serve status` reports incompatible live daemons
+with their daemon and binary versions plus `daemon restart` or `daemon stop`
+guidance.
 
 Background servers also act as the shared local daemon for the desktop app and
 CLI. The daemon owns local SQLite writes for its data directory, so common write

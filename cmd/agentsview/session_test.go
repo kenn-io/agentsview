@@ -1455,7 +1455,7 @@ func TestSessionUsage_NoSyncAutostartDisablesSourceSync(t *testing.T) {
 	require.NoError(t, err)
 	var started bool
 	stubStartBackgroundServeForTransport(t, func(
-		_ context.Context, cfg *config.Config, _ time.Duration,
+		_ context.Context, cfg *config.Config, _ time.Duration, _ bool,
 	) (*DaemonRuntime, error) {
 		started = true
 		assert.True(t, cfg.NoSync)
@@ -2310,7 +2310,7 @@ func TestSessionSync_ColdArchiveWriteAutoStartsDaemon(t *testing.T) {
 	rt := daemonRuntimeFromTestURL(t, ts.URL)
 	oldStart := startBackgroundServeForTransport
 	startBackgroundServeForTransport = func(
-		_ context.Context, cfg *config.Config, timeout time.Duration,
+		_ context.Context, cfg *config.Config, timeout time.Duration, _ bool,
 	) (*DaemonRuntime, error) {
 		assert.Equal(t, dataDir, cfg.DataDir)
 		assert.Equal(t, backgroundAutoStartReadyTimeout, timeout)

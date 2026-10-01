@@ -21,6 +21,7 @@ import (
 	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/servicehttp"
+	"go.kenn.io/agentsview/internal/update"
 )
 
 type transportMode int
@@ -35,6 +36,8 @@ type transportIntent int
 const (
 	transportIntentRead transportIntent = iota
 	transportIntentArchiveWrite
+	// Long-lived clients reconnect but never replace an existing daemon.
+	transportIntentLongLived
 )
 
 var errLocalDaemonUnreachable = errors.New(
@@ -55,6 +58,7 @@ var (
 // ensureBackgroundServe directly.
 func autoStartBackgroundServe(
 	ctx context.Context, cfg *config.Config, waitTimeout time.Duration,
+	allowReplacement bool,
 ) (*DaemonRuntime, error) {
 	if testing.Testing() {
 		return nil, errors.New(
@@ -62,7 +66,7 @@ func autoStartBackgroundServe(
 				"stub startBackgroundServeForTransport or set AGENTSVIEW_NO_DAEMON=1",
 		)
 	}
-	return ensureBackgroundServe(ctx, cfg, waitTimeout)
+	return ensureBackgroundServe(ctx, cfg, waitTimeout, allowReplacement)
 }
 
 // transport captures how to reach the session-data layer from a
@@ -213,6 +217,10 @@ func ensureTransportContext(
 	intent transportIntent,
 	waitTimeout time.Duration,
 ) (transport, error) {
+	allowReplacement := intent != transportIntentLongLived
+	if intent == transportIntentLongLived {
+		intent = transportIntentArchiveWrite
+	}
 	if cfg == nil {
 		return transport{}, errors.New("nil config")
 	}
@@ -253,7 +261,7 @@ func ensureTransportContext(
 		}
 	}
 	if tr.Mode == transportHTTP {
-		if (intent == transportIntentRead ||
+		if allowReplacement && (intent == transportIntentRead ||
 			intent == transportIntentArchiveWrite) &&
 			shouldReplaceDaemonRuntime(tr.Runtime, version) {
 			if daemonAutostartDisabled() {
@@ -270,7 +278,7 @@ func ensureTransportContext(
 			}
 			cfg.NoSync = cfg.NoSync || tr.Runtime.NoSync
 			rt, err := startBackgroundServeForTransport(
-				ctx, cfg, waitTimeout,
+				ctx, cfg, waitTimeout, allowReplacement,
 			)
 			if err != nil {
 				return transport{}, err
@@ -279,7 +287,10 @@ func ensureTransportContext(
 		}
 		return tr, nil
 	}
-	if (intent == transportIntentRead || intent == transportIntentArchiveWrite) &&
+	if !allowReplacement && tr.DirectIncompatible {
+		return transport{}, longLivedDaemonCompatibilityError(errors.New(tr.DirectReason))
+	}
+	if allowReplacement && (intent == transportIntentRead || intent == transportIntentArchiveWrite) &&
 		!daemonAutostartDisabled() {
 		if rt, err := FindIncompatibleDaemonRuntime(
 			cfg.DataDir, cfg.AuthToken,
@@ -290,7 +301,7 @@ func ensureTransportContext(
 			}
 			cfg.NoSync = cfg.NoSync || rt.NoSync
 			rt, err := startBackgroundServeForTransport(
-				ctx, cfg, waitTimeout,
+				ctx, cfg, waitTimeout, allowReplacement,
 			)
 			if err != nil {
 				return transport{}, err
@@ -321,7 +332,7 @@ func ensureTransportContext(
 		if err := guardDaemonAutoStartConfig(*cfg); err != nil {
 			return transport{}, err
 		}
-		rt, err := startBackgroundServeForTransport(ctx, cfg, waitTimeout)
+		rt, err := startBackgroundServeForTransport(ctx, cfg, waitTimeout, allowReplacement)
 		if err != nil {
 			return transport{}, err
 		}
@@ -355,7 +366,7 @@ func ensureTransportContext(
 	if err := guardDaemonAutoStartConfig(*cfg); err != nil {
 		return transport{}, err
 	}
-	rt, err := startBackgroundServeForTransport(ctx, cfg, waitTimeout)
+	rt, err := startBackgroundServeForTransport(ctx, cfg, waitTimeout, allowReplacement)
 	if err != nil {
 		return transport{}, err
 	}
@@ -421,7 +432,22 @@ func waitForBackgroundLaunchBeforeArchiveWrite(
 }
 
 func shouldReplaceDaemonRuntime(rt *DaemonRuntime, currentVersion string) bool {
-	return rt != nil && !rt.ReadOnly && rt.Record.Version != currentVersion
+	if rt == nil || rt.ReadOnly || rt.Record.Version == currentVersion {
+		return false
+	}
+	// Development versions cannot reliably be ordered across branches.
+	if update.IsDevBuildVersion(currentVersion) || update.IsDevBuildVersion(rt.Record.Version) ||
+		strings.HasSuffix(currentVersion, "-dirty") || strings.HasSuffix(rt.Record.Version, "-dirty") {
+		return true
+	}
+	return update.IsNewer(currentVersion, rt.Record.Version)
+}
+
+func longLivedDaemonCompatibilityError(err error) error {
+	return fmt.Errorf("%w\n\nThis long-running client cannot use the running daemon and will not replace it. "+
+		"Restart this command with the current agentsview binary (`mcp`, `pg push --watch`, "+
+		"`duckdb push --watch`, or the installed push service). If the daemon still needs "+
+		"replacement, run `agentsview daemon restart` from that install", err)
 }
 
 func shouldReplaceIncompatibleDaemonRuntime(

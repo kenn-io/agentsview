@@ -1150,7 +1150,7 @@ func TestArchiveQueryBackendNoSyncStartsNoSyncDaemonForDailyUsage(t *testing.T) 
 	newAgentDataDir(t)
 	var started bool
 	stubStartBackgroundServeForTransport(t, func(
-		_ context.Context, cfg *config.Config, _ time.Duration,
+		_ context.Context, cfg *config.Config, _ time.Duration, _ bool,
 	) (*DaemonRuntime, error) {
 		started = true
 		assert.True(t, cfg.NoSync)

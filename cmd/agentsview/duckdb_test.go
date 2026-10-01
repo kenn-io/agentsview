@@ -166,7 +166,13 @@ func TestArchiveWriteBackendDuckDBPushPostsRemoteURLToDaemon(t *testing.T) {
 func TestArchiveWriteBackendDuckDBPushWatchReResolvesDaemon(t *testing.T) {
 	dataDir := t.TempDir()
 	mirrorPath := filepath.Join(t.TempDir(), "mirror.duckdb")
-	ctx, cancel := context.WithCancel(t.Context())
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	setTestVersion(t, "v1.1.0-2-g123456")
+	stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration, bool) (*DaemonRuntime, error) {
+		cancel()
+		return nil, context.Canceled
+	})
 	var startupPushes int
 	startup := pushRuntimeServer(t, "/api/v1/push/duckdb", func(
 		w http.ResponseWriter,
@@ -192,7 +198,9 @@ func TestArchiveWriteBackendDuckDBPushWatchReResolvesDaemon(t *testing.T) {
 		r *http.Request,
 	) {
 		resolvedPushes++
-		cancel()
+		if resolvedPushes == 2 {
+			cancel()
+		}
 		var req apiclient.DaemonPushRequest
 		if !assert.NoError(t, json.UnmarshalRead(r.Body, &req)) {
 			return
@@ -206,7 +214,8 @@ func TestArchiveWriteBackendDuckDBPushWatchReResolvesDaemon(t *testing.T) {
 			"watch-mode daemon pushes must be marked automatic")
 		writeTestJSON(t, w, storage.MirrorPushResult{SessionsPushed: 1})
 	})
-	registerTestRuntime(t, dataDir, resolved.URL, false)
+	host, port := splitTestServerURL(t, resolved.URL)
+	writeDaemonRuntimeForTest(t, dataDir, host, port, "v1.1.0-3-gabcdef", false)
 
 	backend := newDaemonArchiveWriteBackendForTest(
 		config.Config{DataDir: dataDir}, startup.URL,
@@ -224,7 +233,7 @@ func TestArchiveWriteBackendDuckDBPushWatchReResolvesDaemon(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Equal(t, 1, startupPushes)
-	assert.GreaterOrEqual(t, resolvedPushes, 1)
+	assert.GreaterOrEqual(t, resolvedPushes, 2)
 	assert.NoFileExists(t, filepath.Join(dataDir, "sessions.db"))
 }
 

@@ -105,7 +105,7 @@ func runReplicaPush(
 	)
 	defer stop()
 
-	writer, cleanup, err := resolveArchiveWriteBackend(ctx, appCfg)
+	writer, cleanup, err := resolveArchiveWriteBackend(ctx, appCfg, transportIntentArchiveWrite)
 	if err != nil {
 		return fmt.Errorf("opening writer: %w", err)
 	}

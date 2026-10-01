@@ -1364,8 +1364,7 @@ func TestResolveArchiveWriteBackendCopiesNoSyncRuntime(t *testing.T) {
 	t.Cleanup(func() { RemoveDaemonRuntime(dataDir) })
 
 	backend, cleanup, err := resolveArchiveWriteBackend(
-		t.Context(), config.Config{DataDir: dataDir},
-	)
+		t.Context(), config.Config{DataDir: dataDir}, transportIntentArchiveWrite)
 	require.NoError(t, err)
 	t.Cleanup(cleanup)
 

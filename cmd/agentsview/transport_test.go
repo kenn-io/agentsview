@@ -214,7 +214,7 @@ func setTestVersion(t *testing.T, value string) {
 // for the test and restores the original on cleanup.
 func stubStartBackgroundServeForTransport(
 	t *testing.T,
-	fn func(context.Context, *config.Config, time.Duration) (*DaemonRuntime, error),
+	fn func(context.Context, *config.Config, time.Duration, bool) (*DaemonRuntime, error),
 ) {
 	t.Helper()
 	old := startBackgroundServeForTransport
@@ -227,7 +227,7 @@ func stubStartBackgroundServeForTransport(
 func forbidStartBackgroundServeForTransport(t *testing.T, msg string) {
 	t.Helper()
 	stubStartBackgroundServeForTransport(t, func(
-		context.Context, *config.Config, time.Duration,
+		context.Context, *config.Config, time.Duration, bool,
 	) (*DaemonRuntime, error) {
 		t.Helper()
 		return nil, errors.New(msg)
@@ -412,7 +412,7 @@ func TestEnsureTransport_ReadIntentStartsDaemon(t *testing.T) {
 	cfg := config.Config{DataDir: dir}
 	var started bool
 	stubStartBackgroundServeForTransport(t, func(
-		_ context.Context, gotCfg *config.Config, wait time.Duration,
+		_ context.Context, gotCfg *config.Config, wait time.Duration, _ bool,
 	) (*DaemonRuntime, error) {
 		started = true
 		assert.Equal(t, dir, gotCfg.DataDir)
@@ -459,7 +459,7 @@ func TestEnsureTransport_ArchiveWriteStartsDaemon(t *testing.T) {
 	cfg := config.Config{DataDir: dir, AuthToken: "secret"}
 	var started bool
 	stubStartBackgroundServeForTransport(t, func(
-		_ context.Context, gotCfg *config.Config, wait time.Duration,
+		_ context.Context, gotCfg *config.Config, wait time.Duration, _ bool,
 	) (*DaemonRuntime, error) {
 		started = true
 		assert.Equal(t, dir, gotCfg.DataDir)
@@ -485,12 +485,16 @@ func TestEnsureTransport_ReplacesDifferentDaemonVersion(t *testing.T) {
 		replace              bool
 	}{
 		{"release upgrade", "1.1.0", "1.0.0", true},
-		{"release rollback", "1.0.0", "1.1.0", true},
+		{"release rollback", "1.0.0", "1.1.0", false},
+		{"same release", "v1.1.0", "1.1.0", false},
 		{"development upgrade", "v1.1.0-3-gabcdef", "v1.1.0-2-g123456", true},
 		{"different development commit", "v1.1.0-3-gabcdef", "v1.1.0-3-g123456", true},
 		{"unversioned development build", "dev", "1.0.0", true},
 		{"unknown daemon version", "dev", "", true},
 		{"same development build", "v1.1.0-3-gabcdef", "v1.1.0-3-gabcdef", false},
+		{"dirty release checkout", "v1.1.0-dirty", "v1.1.0", true},
+		{"replace dirty release checkout", "v1.1.0", "v1.1.0-dirty", true},
+		{"same dirty checkout", "v1.1.0-dirty", "v1.1.0-dirty", false},
 	} {
 		for _, intent := range []transportIntent{transportIntentRead, transportIntentArchiveWrite} {
 			t.Run(fmt.Sprintf("%s/intent-%d", tt.name, intent), func(t *testing.T) {
@@ -504,7 +508,7 @@ func TestEnsureTransport_ReplacesDifferentDaemonVersion(t *testing.T) {
 				setTestVersion(t, tt.client)
 				var started bool
 				stubStartBackgroundServeForTransport(t, func(
-					_ context.Context, gotCfg *config.Config, _ time.Duration,
+					_ context.Context, gotCfg *config.Config, _ time.Duration, _ bool,
 				) (*DaemonRuntime, error) {
 					started = true
 					assert.True(t, gotCfg.NoSync)
@@ -563,7 +567,7 @@ func TestEnsureTransport_ReadIntentPreservesExplicitNoSyncWhenRestartingOlderDae
 
 	var started bool
 	stubStartBackgroundServeForTransport(t, func(
-		_ context.Context, gotCfg *config.Config, _ time.Duration,
+		_ context.Context, gotCfg *config.Config, _ time.Duration, _ bool,
 	) (*DaemonRuntime, error) {
 		started = true
 		assert.True(t, gotCfg.NoSync)
@@ -645,7 +649,7 @@ func TestEnsureTransport_ArchiveWriteRestartsDifferentDaemonAPI(t *testing.T) {
 			setTestVersion(t, "v1.1.0-3-gabcdef")
 			var started bool
 			stubStartBackgroundServeForTransport(t, func(
-				_ context.Context, gotCfg *config.Config, _ time.Duration,
+				_ context.Context, gotCfg *config.Config, _ time.Duration, _ bool,
 			) (*DaemonRuntime, error) {
 				started = true
 				assert.True(t, gotCfg.NoSync)
@@ -672,7 +676,7 @@ func TestEnsureTransport_ReadIntentPreservesExplicitNoSyncWhenRestartingIncompat
 
 	var started bool
 	stubStartBackgroundServeForTransport(t, func(
-		_ context.Context, gotCfg *config.Config, _ time.Duration,
+		_ context.Context, gotCfg *config.Config, _ time.Duration, _ bool,
 	) (*DaemonRuntime, error) {
 		started = true
 		assert.True(t, gotCfg.NoSync)
@@ -700,7 +704,7 @@ func TestEnsureTransport_ReadIntentRestartsIncompatibleOlderDaemon(t *testing.T)
 
 	var started bool
 	stubStartBackgroundServeForTransport(t, func(
-		_ context.Context, gotCfg *config.Config, _ time.Duration,
+		_ context.Context, gotCfg *config.Config, _ time.Duration, _ bool,
 	) (*DaemonRuntime, error) {
 		started = true
 		assert.True(t, gotCfg.NoSync)
@@ -734,7 +738,7 @@ func TestEnsureTransport_ArchiveWriteRestartsIncompatibleDaemonAfterExternalStar
 
 	var started bool
 	stubStartBackgroundServeForTransport(t, func(
-		_ context.Context, gotCfg *config.Config, _ time.Duration,
+		_ context.Context, gotCfg *config.Config, _ time.Duration, _ bool,
 	) (*DaemonRuntime, error) {
 		started = true
 		assert.Equal(t, dir, gotCfg.DataDir)
@@ -892,7 +896,7 @@ func TestEnsureTransport_ArchiveWriteAllowsAuthenticatedNonLoopbackAutoStart(
 	}
 	var started bool
 	stubStartBackgroundServeForTransport(t, func(
-		context.Context, *config.Config, time.Duration,
+		context.Context, *config.Config, time.Duration, bool,
 	) (*DaemonRuntime, error) {
 		started = true
 		return &DaemonRuntime{Host: "0.0.0.0", Port: 12345}, nil
@@ -923,7 +927,7 @@ func TestEnsureTransport_ArchiveWriteUsesAutoStartWaitForStartingDaemon(
 	})
 
 	stubStartBackgroundServeForTransport(t, func(
-		context.Context, *config.Config, time.Duration,
+		context.Context, *config.Config, time.Duration, bool,
 	) (*DaemonRuntime, error) {
 		return &DaemonRuntime{Host: "127.0.0.1", Port: 12345}, nil
 	})
@@ -1227,7 +1231,7 @@ func TestEnsureTransport_ArchiveWritePropagatesGeneratedAuthToken(t *testing.T) 
 	dir := daemonRuntimeDir(t)
 	cfg := config.Config{DataDir: dir}
 	stubStartBackgroundServeForTransport(t, func(
-		_ context.Context, gotCfg *config.Config, _ time.Duration,
+		_ context.Context, gotCfg *config.Config, _ time.Duration, _ bool,
 	) (*DaemonRuntime, error) {
 		gotCfg.AuthToken = "generated"
 		return &DaemonRuntime{
@@ -1372,7 +1376,7 @@ func TestServicesUseRunningDaemonBrowserURL(t *testing.T) {
 	tr := transportFromRuntime(rt)
 	// A separate client's config may predate startup or change after it.
 	cfg := config.Config{DataDir: t.TempDir(), PublicURL: "https://stale.example"}
-	stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration) (*DaemonRuntime, error) { return rt, nil })
+	stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration, bool) (*DaemonRuntime, error) { return rt, nil })
 	for _, tc := range []struct {
 		name  string
 		build func(context.Context, config.Config, transport) (service.SessionService, func(), error)

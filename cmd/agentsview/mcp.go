@@ -265,7 +265,7 @@ func (s *mcpDaemonService) daemonService(
 
 	cfg := s.cfg
 	tr, err := ensureTransportContext(
-		ctx, &cfg, transportIntentArchiveWrite, 0,
+		ctx, &cfg, transportIntentLongLived, 0,
 	)
 	if err != nil {
 		return nil, err

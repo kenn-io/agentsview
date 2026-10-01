@@ -379,9 +379,10 @@ func watchRecoveryForBatch(
 func resolveArchiveWriteBackend(
 	ctx context.Context,
 	appCfg config.Config,
+	intent transportIntent,
 ) (archiveWriteBackend, func(), error) {
 	tr, err := ensureTransportContext(
-		ctx, &appCfg, transportIntentArchiveWrite, 0,
+		ctx, &appCfg, intent, 0,
 	)
 	if err != nil {
 		return nil, nil, err
@@ -573,7 +574,7 @@ func (b daemonArchiveWriteBackend) DuckDBPushWatch(
 			cleanup := func() {}
 			if reason != reasonStartup {
 				backend, cleanup, err = resolveArchiveWriteBackend(
-					pctx, b.appCfg,
+					pctx, b.appCfg, transportIntentLongLived,
 				)
 				if err != nil {
 					return err
@@ -715,7 +716,7 @@ func (b daemonArchiveWriteBackend) ReplicaPushWatch(
 			cleanup := func() {}
 			if reason != reasonStartup {
 				writer, cleanup, err = resolveArchiveWriteBackend(
-					pctx, b.appCfg,
+					pctx, b.appCfg, transportIntentLongLived,
 				)
 				if err != nil {
 					return err

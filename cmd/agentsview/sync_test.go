@@ -843,7 +843,7 @@ func TestDoSyncUnknownHostFailsBeforeDaemonStartup(t *testing.T) {
 		newSyncCLIEnv(t)
 		t.Setenv("AGENTSVIEW_NO_DAEMON", "")
 		stubStartBackgroundServeForTransport(t, func(
-			context.Context, *config.Config, time.Duration,
+			context.Context, *config.Config, time.Duration, bool,
 		) (*DaemonRuntime, error) {
 			return nil, errors.New("unexpected daemon startup")
 		})
@@ -1884,7 +1884,7 @@ func TestDoSyncPrintsStatusBeforeWaitingForDaemonStartup(t *testing.T) {
 		}
 	})
 	stubStartBackgroundServeForTransport(t, func(
-		context.Context, *config.Config, time.Duration,
+		context.Context, *config.Config, time.Duration, bool,
 	) (*DaemonRuntime, error) {
 		close(startupEntered)
 		<-releaseStartup
@@ -1929,7 +1929,7 @@ func TestDoSyncFullSkipsRedundantDaemonInitialSync(t *testing.T) {
 	endpoint := serverEndpoint(t, ts)
 	var skipInitialSync bool
 	stubStartBackgroundServeForTransport(t, func(
-		_ context.Context, cfg *config.Config, _ time.Duration,
+		_ context.Context, cfg *config.Config, _ time.Duration, _ bool,
 	) (*DaemonRuntime, error) {
 		skipInitialSync = cfg.SkipInitialSync
 		return &DaemonRuntime{Host: endpoint.Host, Port: endpoint.Port}, nil
@@ -1953,7 +1953,7 @@ func TestDoSyncSkipsRedundantDaemonInitialSync(t *testing.T) {
 	endpoint := serverEndpoint(t, ts)
 	var skipInitialSync bool
 	stubStartBackgroundServeForTransport(t, func(
-		_ context.Context, cfg *config.Config, _ time.Duration,
+		_ context.Context, cfg *config.Config, _ time.Duration, _ bool,
 	) (*DaemonRuntime, error) {
 		skipInitialSync = cfg.SkipInitialSync
 		return &DaemonRuntime{Host: endpoint.Host, Port: endpoint.Port}, nil
@@ -1982,7 +1982,7 @@ token = "remote-token"
 	endpoint := serverEndpoint(t, ts)
 	var skipInitialSync bool
 	stubStartBackgroundServeForTransport(t, func(
-		_ context.Context, cfg *config.Config, _ time.Duration,
+		_ context.Context, cfg *config.Config, _ time.Duration, _ bool,
 	) (*DaemonRuntime, error) {
 		skipInitialSync = cfg.SkipInitialSync
 		return &DaemonRuntime{Host: endpoint.Host, Port: endpoint.Port}, nil

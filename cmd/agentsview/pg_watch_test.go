@@ -138,7 +138,7 @@ func TestResolveArchiveWriteBackendSkipsReadOnlyDaemon(t *testing.T) {
 		config.Config{
 			DataDir: dataDir,
 			DBPath:  filepath.Join(dataDir, "sessions.db"),
-		},
+		}, transportIntentArchiveWrite,
 	)
 	require.NoError(t, err)
 	defer cleanup()
@@ -148,7 +148,13 @@ func TestResolveArchiveWriteBackendSkipsReadOnlyDaemon(t *testing.T) {
 
 func TestArchiveWriteBackendPGPushWatchReResolvesDaemon(t *testing.T) {
 	dataDir := t.TempDir()
-	ctx, cancel := context.WithCancel(t.Context())
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	setTestVersion(t, "v1.1.0-2-g123456")
+	stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration, bool) (*DaemonRuntime, error) {
+		cancel()
+		return nil, context.Canceled
+	})
 	var startupPushes int
 	startup := pushRuntimeServer(t, "/api/v1/push/pg", func(
 		w http.ResponseWriter,
@@ -163,10 +169,13 @@ func TestArchiveWriteBackendPGPushWatchReResolvesDaemon(t *testing.T) {
 		r *http.Request,
 	) {
 		resolvedPushes++
-		cancel()
+		if resolvedPushes == 2 {
+			cancel()
+		}
 		writeTestJSON(t, w, storage.PushResult{SessionsPushed: 1})
 	})
-	registerTestRuntime(t, dataDir, resolved.URL, false)
+	host, port := splitTestServerURL(t, resolved.URL)
+	writeDaemonRuntimeForTest(t, dataDir, host, port, "v1.1.0-3-gabcdef", false)
 
 	backend := newDaemonArchiveWriteBackendForTest(
 		config.Config{DataDir: dataDir}, startup.URL,
@@ -184,7 +193,7 @@ func TestArchiveWriteBackendPGPushWatchReResolvesDaemon(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Equal(t, 1, startupPushes)
-	assert.GreaterOrEqual(t, resolvedPushes, 1)
+	assert.GreaterOrEqual(t, resolvedPushes, 2)
 	assert.NoFileExists(t, filepath.Join(dataDir, "sessions.db"))
 }
 

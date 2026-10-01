@@ -54,7 +54,7 @@ func TestResolveArchiveQueryBackendNoSyncStartsNoSyncDaemon(t *testing.T) {
 	testDataDir(t)
 	var started bool
 	stubStartBackgroundServeForTransport(t, func(
-		_ context.Context, cfg *config.Config, _ time.Duration,
+		_ context.Context, cfg *config.Config, _ time.Duration, _ bool,
 	) (*DaemonRuntime, error) {
 		started = true
 		assert.True(t, cfg.NoSync)
@@ -103,7 +103,7 @@ func TestResolveArchiveQueryBackendUsesGeneratedAutostartToken(t *testing.T) {
 	t.Cleanup(ts.Close)
 
 	stubStartBackgroundServeForTransport(t, func(
-		_ context.Context, cfg *config.Config, _ time.Duration,
+		_ context.Context, cfg *config.Config, _ time.Duration, _ bool,
 	) (*DaemonRuntime, error) {
 		cfg.AuthToken = "generated-token"
 		return daemonRuntimeFromTestURL(t, ts.URL), nil

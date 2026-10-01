@@ -421,6 +421,7 @@ func ensureBackgroundServe(
 	ctx context.Context,
 	cfg *config.Config,
 	waitTimeout time.Duration,
+	allowReplacement bool,
 ) (*DaemonRuntime, error) {
 	if cfg == nil {
 		return nil, errors.New("nil config")
@@ -459,7 +460,7 @@ func ensureBackgroundServe(
 		}
 		if rt := FindDaemonRuntime(cfg.DataDir, cfg.AuthToken); rt != nil &&
 			!rt.ReadOnly {
-			if shouldReplaceDaemonRuntime(rt, version) {
+			if allowReplacement && shouldReplaceDaemonRuntime(rt, version) {
 				return nil, errors.New("agentsview serve --background is already in progress")
 			}
 			return rt, nil
@@ -467,6 +468,9 @@ func ensureBackgroundServe(
 		if _, err := findIncompatibleWritableDaemonRuntime(
 			cfg.DataDir, cfg.AuthToken,
 		); err != nil {
+			if !allowReplacement {
+				return nil, longLivedDaemonCompatibilityError(err)
+			}
 			return nil, fmt.Errorf(
 				"incompatible daemon is already running: %w; run "+
 					"`agentsview daemon stop` before starting this version",
@@ -490,7 +494,7 @@ func ensureBackgroundServe(
 probeDaemon:
 	if rt := FindDaemonRuntime(cfg.DataDir, cfg.AuthToken); rt != nil &&
 		!rt.ReadOnly {
-		if shouldReplaceDaemonRuntime(rt, version) {
+		if allowReplacement && shouldReplaceDaemonRuntime(rt, version) {
 			if waited, err := waitForExternalServeStartupBeforeReplacement(
 				ctx, cfg.DataDir, cfg.AuthToken, waitTimeout,
 			); waited {
@@ -522,6 +526,9 @@ probeDaemon:
 	if rt, err := findIncompatibleWritableDaemonRuntime(
 		cfg.DataDir, cfg.AuthToken,
 	); err != nil {
+		if !allowReplacement {
+			return nil, longLivedDaemonCompatibilityError(err)
+		}
 		if rt != nil && shouldReplaceIncompatibleDaemonRuntime(rt, version) {
 			if waited, err := waitForExternalServeStartupBeforeReplacement(
 				ctx, cfg.DataDir, cfg.AuthToken, waitTimeout,
@@ -566,6 +573,9 @@ probeDaemon:
 		if rt, err := findIncompatibleWritableDaemonRuntime(
 			cfg.DataDir, cfg.AuthToken,
 		); err != nil {
+			if !allowReplacement {
+				return nil, longLivedDaemonCompatibilityError(err)
+			}
 			if rt != nil && shouldReplaceIncompatibleDaemonRuntime(rt, version) {
 				if waited, err := waitForExternalServeStartupBeforeReplacement(
 					ctx, cfg.DataDir, cfg.AuthToken, waitTimeout,
