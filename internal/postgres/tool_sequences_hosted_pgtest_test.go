@@ -5,6 +5,7 @@ package postgres
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +19,72 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/server"
 )
+
+type toolSequenceExhaustedStore struct {
+	*HostedStore
+	fail       string
+	err        error
+	pageRead   bool
+	timingRead bool
+}
+
+func (s *toolSequenceExhaustedStore) GetSession(ctx context.Context, id string) (*db.Session, error) {
+	if s.fail == "initial session" || (s.fail == "session after hydration" && s.pageRead) || (s.fail == "final session" && s.timingRead) {
+		return nil, s.err
+	}
+	return s.HostedStore.GetSession(ctx, id)
+}
+
+func (s *toolSequenceExhaustedStore) GetMessagesWindow(ctx context.Context, id string, w db.MessageWindow) ([]db.Message, error) {
+	s.pageRead = true
+	if s.fail == "messages" {
+		return nil, s.err
+	}
+	return s.HostedStore.GetMessagesWindow(ctx, id, w)
+}
+
+func (s *toolSequenceExhaustedStore) GetToolCallDurations(ctx context.Context, id string, positions []db.ToolCallPosition) (map[db.ToolCallPosition]*int64, error) {
+	s.timingRead = true
+	if s.fail == "timing" {
+		return nil, s.err
+	}
+	return s.HostedStore.GetToolCallDurations(ctx, id, positions)
+}
+
+func TestToolSequencesHosted_ExhaustedReadBinding(t *testing.T) {
+	f := newProjectionFixture(t)
+	m, _ := f.accept(t, "device-a", "capture-a", "")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("transcript")))
+	h, err := NewHostedStore(f.dsn, f.schema, f.tenant, false)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, h.Close()) })
+	attempts := 0
+	_, exhausted := hostedRead(t.Context(), h, func(hostedRevision) (bool, error) {
+		attempts++
+		_, err := f.runtime.ExecContext(t.Context(), `UPDATE raw_corpus_state SET corpus_revision=corpus_revision+1 WHERE singleton=1`)
+		return true, err
+	})
+	require.Equal(t, 3, attempts)
+	require.ErrorIs(t, exhausted, ErrHostedIdentityChanged)
+	wrapped := fmt.Errorf("enclosed hosted read: %w", exhausted)
+	assert.True(t, h.ToolSequenceSourceChanged(wrapped))
+	assert.False(t, h.ToolSequenceSourceChanged(errors.New("ordinary read error")))
+	assert.False(t, h.ToolSequenceSourceChanged(nil))
+	for _, boundary := range []string{"initial session", "session after hydration", "final session", "messages", "timing"} {
+		t.Run(boundary, func(t *testing.T) {
+			store := &toolSequenceExhaustedStore{HostedStore: h, fail: boundary, err: wrapped}
+			handler := server.New(config.Config{Host: "127.0.0.1", InstallationID: "hosted"}, store, nil).Handler()
+			req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:0/api/v1/sessions/codex:portable/tool-sequences", nil)
+			req.RemoteAddr = "127.0.0.1:1234"
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, req)
+			assert.Equal(t, http.StatusConflict, response.Code, response.Body.String())
+			assert.Contains(t, response.Body.String(), `"code":"source_changed"`)
+			assert.NotContains(t, response.Body.String(), `"sequences"`)
+			assert.NotContains(t, response.Body.String(), `"total_tool_calls"`)
+		})
+	}
+}
 
 type toolSequenceAliasSwapStore struct {
 	*HostedStore

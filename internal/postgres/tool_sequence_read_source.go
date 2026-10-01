@@ -2,12 +2,17 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"go.kenn.io/agentsview/internal/db"
 )
 
 var _ db.ToolSequenceReadSource = (*HostedStore)(nil)
+
+func (h *HostedStore) ToolSequenceSourceChanged(err error) bool {
+	return errors.Is(err, ErrHostedIdentityChanged)
+}
 
 func (h *HostedStore) ToolSequenceReadSource(ctx context.Context, id string) (string, bool, error) {
 	binding, err := hostedRead(ctx, h, func(revision hostedRevision) (string, error) {

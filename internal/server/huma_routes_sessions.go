@@ -488,7 +488,8 @@ func (s *Server) humaToolSequences(
 ) (*jsonOutput[sessionToolSequencesResponse], error) {
 	response, err := collectSessionToolSequences(ctx, s.db, in.ID)
 	if err != nil {
-		if errors.Is(err, service.ErrSourceChanged) {
+		source, classifies := s.db.(interface{ ToolSequenceSourceChanged(error) bool })
+		if errors.Is(err, service.ErrSourceChanged) || (classifies && source.ToolSequenceSourceChanged(err)) {
 			return nil, apiErrorWithCode(http.StatusConflict, "source_changed", err.Error())
 		}
 		if errors.Is(err, service.ErrRevisionBoundReadUnavailable) {
