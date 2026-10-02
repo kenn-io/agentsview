@@ -1,4 +1,5 @@
 import { BREAKPOINTS } from "@kenn-io/kit-ui";
+import brand from "@kenn-io/kit-ui/brand.json";
 
 export const SIDEBAR_WIDTH_KEY = "agentsview-sidebar-width";
 export const SIDEBAR_WIDTH_DEFAULT = 260;
@@ -12,6 +13,9 @@ export const VITALS_WIDTH_STORAGE_MAX = 560;
 // Desktop starts one pixel past kit-ui's medium breakpoint so JS layout
 // logic agrees with the (max-width: 760px) CSS rules and ui.isMobileViewport.
 export const SIDEBAR_DESKTOP_BREAKPOINT = BREAKPOINTS.medium + 1;
+// Thickness of kit-ui's SplitResizeHandle, read from the same brand token that
+// sizes it. The handle is the whole divider: panes beside it draw no border.
+export const SPLIT_HANDLE_SIZE = Number.parseFloat(brand.layout.splitHandleSize);
 
 function clampStoredPaneWidth(
   value: unknown,

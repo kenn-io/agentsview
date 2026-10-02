@@ -10,6 +10,7 @@ import {
   SIDEBAR_WIDTH_DEFAULT,
   SIDEBAR_WIDTH_MIN,
   SIDEBAR_WIDTH_STORAGE_MAX,
+  SPLIT_HANDLE_SIZE,
   VITALS_WIDTH_DEFAULT,
   clampSidebarWidthForLayout,
   clampVitalsWidthForLayout,
@@ -31,9 +32,6 @@ const vitalsSnippet = createRawSnippet(() => ({
   render: () => '<div data-testid="vitals-slot">Vitals</div>',
 }));
 
-// Rendered width of kit-ui's .kit-split-resize-handle.
-const RESIZE_HANDLE_WIDTH = 4;
-const SIDEBAR_BORDER_WIDTH = 1;
 const KEYBOARD_RESIZE_STEP = 24;
 
 let component: ReturnType<typeof mount> | undefined;
@@ -87,10 +85,7 @@ function getVitalsPanel() {
 }
 
 function getClampedSidebarWidthForLayout(desiredWidth: number, layoutWidth: number) {
-  return clampSidebarWidthForLayout(
-    desiredWidth,
-    layoutWidth - RESIZE_HANDLE_WIDTH - SIDEBAR_BORDER_WIDTH,
-  );
+  return clampSidebarWidthForLayout(desiredWidth, layoutWidth - SPLIT_HANDLE_SIZE);
 }
 
 function mockLayoutWidth(width: number) {
@@ -423,7 +418,7 @@ describe("ThreeColumnLayout", () => {
     await tick();
 
     expect(getSidebar().style.width).toBe(`${expectedWidth}px`);
-    expect(layoutWidth - expectedWidth - RESIZE_HANDLE_WIDTH - SIDEBAR_BORDER_WIDTH).toBe(480);
+    expect(layoutWidth - expectedWidth - SPLIT_HANDLE_SIZE).toBe(480);
   });
 
   it("removes the handle and keeps the dragged width when the sidebar closes mid-drag", async () => {
@@ -566,13 +561,10 @@ describe("ThreeColumnLayout", () => {
 
   it("clamps the vitals panel to the layout and keeps a wider stored preference", async () => {
     const layoutWidth = 1100;
-    // Space left of the vitals panel: the sidebar, its handle, and both
-    // 1px pane borders plus the vitals handle.
+    // Space left of the vitals panel: the sidebar, its handle, and the
+    // vitals handle.
     const vitalsAvailable =
-      layoutWidth -
-      (SIDEBAR_WIDTH_DEFAULT + RESIZE_HANDLE_WIDTH + SIDEBAR_BORDER_WIDTH) -
-      RESIZE_HANDLE_WIDTH -
-      SIDEBAR_BORDER_WIDTH;
+      layoutWidth - (SIDEBAR_WIDTH_DEFAULT + SPLIT_HANDLE_SIZE) - SPLIT_HANDLE_SIZE;
     const expectedWidth = clampVitalsWidthForLayout(560, vitalsAvailable);
 
     setViewportWidth(1280);
@@ -613,12 +605,12 @@ describe("ThreeColumnLayout", () => {
 
     await dragHandle(SIDEBAR_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT + 400);
 
-    // 1280 minus both 4px handles and both 1px pane borders leaves 990 for
-    // the sidebar clamp once the vitals minimum footprint (280 + 5) is
-    // reserved; the 480 content minimum caps the sidebar at 510 and the
-    // vitals panel yields to 280, keeping the content column at exactly 480.
-    expect(ui.sidebarWidth).toBe(510);
-    expect(getSidebar().style.width).toBe("510px");
+    // 1280 minus both 4px handles leaves 992 for the sidebar clamp once the
+    // vitals minimum footprint (280 + 4) is reserved; the 480 content minimum
+    // caps the sidebar at 512 and the vitals panel yields to 280, keeping the
+    // content column at exactly 480.
+    expect(ui.sidebarWidth).toBe(512);
+    expect(getSidebar().style.width).toBe("512px");
     expect(getVitalsPanel().style.width).toBe("280px");
   });
 
@@ -632,12 +624,12 @@ describe("ThreeColumnLayout", () => {
     renderLayout(true);
     await tick();
 
-    expect(getSidebar().style.width).toBe("510px");
+    expect(getSidebar().style.width).toBe("512px");
     expect(getVitalsPanel().style.width).toBe("280px");
 
     // The separators advertise the layout-effective maxima, not the
     // storage caps the current window cannot grant.
-    expect(getHandle()!.getAttribute("aria-valuemax")).toBe("510");
+    expect(getHandle()!.getAttribute("aria-valuemax")).toBe("512");
     expect(getVitalsHandle()!.getAttribute("aria-valuemax")).toBe("280");
   });
 });
