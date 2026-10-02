@@ -46,6 +46,8 @@ type rawSyncBackfillProvider struct {
 	// provider's normalized capture roots resolved from them.
 	ConfigEntries   []string
 	ConfiguredRoots []string
+	factory         parser.ProviderFactory
+	config          parser.ProviderConfig
 }
 
 func newRawSyncBackfillCommand() *cobra.Command {
@@ -183,10 +185,11 @@ func selectRawSyncBackfillProviders(
 			return nil, err
 		}
 		roots := slices.Clone(entries)
-		provider := factory.NewProvider(parser.ProviderConfig{
+		providerConfig := parser.ProviderConfig{
 			Roots: roots, Machine: cfg.LocalMachineName,
 			SourceMachines: cfg.SourceMachines[typ],
-		})
+		}
+		provider := factory.NewProvider(providerConfig)
 		// Bind the provider's normalized roots, such as a Goose home resolved
 		// to its sessions directory, so capture plans fall inside the selection.
 		if normalized, ok := provider.(interface{ ConfiguredRoots() []string }); ok {
@@ -199,6 +202,7 @@ func selectRawSyncBackfillProviders(
 		}
 		selected = append(selected, rawSyncBackfillProvider{
 			Provider: provider, ConfigEntries: entries, ConfiguredRoots: roots,
+			factory: factory, config: providerConfig,
 		})
 	}
 	return selected, nil
@@ -299,18 +303,28 @@ func rawSyncBackfillSpec(
 			spec.Entries = append(spec.Entries, rawcheckpoint.BackfillEntry{Provider: typ, Path: entry})
 		}
 	}
-	// An existing run keeps its saved roots, so it resumes even when a source
-	// root is unmounted; BeginBackfill rejects it if the config entries changed.
+	// An existing run selects and discovers from its saved roots, so it resumes
+	// even when a source root is unmounted or a symlink is retargeted;
+	// BeginBackfill rejects it if the config entries changed.
 	if _, err := store.BackfillProgress(ctx, cfg.RunID); err == nil {
-		for _, typ := range spec.Providers {
+		for index, item := range selected {
+			typ := item.Provider.Definition().Type
 			stored, err := store.BackfillRoots(ctx, cfg.RunID, typ)
 			if err != nil {
 				return rawcheckpoint.BackfillRunSpec{}, rawcheckpoint.ErrBackfillConflict
 			}
+			paths := make([]string, 0, len(stored))
 			for _, root := range stored {
+				paths = append(paths, root.LocalPath)
 				spec.Roots = append(spec.Roots, rawcheckpoint.BackfillSelection{
 					Provider: typ, ConfiguredRootID: root.ID,
 				})
+			}
+			if item.factory != nil {
+				providerConfig := item.config.Clone()
+				providerConfig.Roots = paths
+				selected[index].Provider = item.factory.NewProvider(providerConfig)
+				selected[index].ConfiguredRoots = paths
 			}
 		}
 		return spec, nil

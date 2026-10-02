@@ -514,3 +514,39 @@ func TestRawSyncBackfillSealedRunUploadsAfterSourceRootUnmounted(t *testing.T) {
 	assert.Equal(t, progress.Captured, progress.Acknowledged)
 	assert.Positive(t, transport.commits)
 }
+
+func TestRawSyncBackfillResumeDiscoversSavedRootAfterSymlinkRetarget(t *testing.T) {
+	base := t.TempDir()
+	first := filepath.Join(base, "first")
+	second := filepath.Join(base, "second")
+	link := filepath.Join(base, "configured")
+	require.NoError(t, os.Mkdir(first, 0o700))
+	require.NoError(t, os.Mkdir(second, 0o700))
+	requireSymlinkOrSkip(t, first, link)
+	store, err := rawcheckpoint.Open(t.Context(), filepath.Join(t.TempDir(), "checkpoint.db"))
+	require.NoError(t, err)
+	defer store.Close()
+	require.NoError(t, store.SetDevice(t.Context(), "device-a"))
+	cfg := config.Config{AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {link}}}
+	backfill := rawSyncBackfillConfig{RunID: "run-retarget", DeviceID: "device-a", Server: "https://sync.example.test"}
+	selected, err := selectRawSyncBackfillProviders(cfg, []string{"claude"})
+	require.NoError(t, err)
+	spec, err := rawSyncBackfillSpec(t.Context(), store, backfill, selected)
+	require.NoError(t, err)
+	_, err = store.BeginBackfill(t.Context(), spec)
+	require.NoError(t, err)
+	saved, err := store.BackfillRoots(t.Context(), spec.RunID, parser.AgentClaude)
+	require.NoError(t, err)
+	require.Len(t, saved, 1)
+	require.NoError(t, os.Remove(link))
+	requireSymlinkOrSkip(t, second, link)
+
+	selected, err = selectRawSyncBackfillProviders(cfg, []string{"claude"})
+	require.NoError(t, err)
+	resumed, err := rawSyncBackfillSpec(t.Context(), store, backfill, selected)
+
+	require.NoError(t, err)
+	assert.Equal(t, spec, resumed)
+	roots := selected[0].Provider.(interface{ ConfiguredRoots() []string }).ConfiguredRoots()
+	assert.Equal(t, []string{saved[0].LocalPath}, roots)
+}
