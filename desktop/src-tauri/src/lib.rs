@@ -1573,6 +1573,12 @@ fn with_current_launch<T>(
     }
 }
 
+// Non-blocking variant for async callers: acts only if the launch is current right now.
+fn act_if_current<T>(state: &SidecarState, generation: u64, act: impl FnOnce() -> T) -> Option<T> {
+    let _gate = state.launch_gate.lock().ok()?;
+    launch_is_current(state, generation).then(act)
+}
+
 fn take_restart_after_stop_timeout_for_terminated_sidecar(
     state: &SidecarState,
     generation: u64,
@@ -2246,18 +2252,23 @@ fn poll_background_status_after_launcher_exit(
                 next_background_status_poll_attempts(&status, status_poll_backoff_attempts);
             match status {
                 BackendStatusProbe::Ready(port) => {
-                    save_sidecar_port(&handle, port);
-                    let _ = window.eval(
-                        "window.__setStage(2); \
-                         window.__setStatus('Connecting to interface...');",
-                    );
-                    redirect_when_ready(
-                        window.clone(),
-                        port,
-                        generation,
-                        "serve status",
-                        log_sender.clone(),
-                    );
+                    let acted = act_if_current(&handle.state::<SidecarState>(), generation, || {
+                        save_sidecar_port(&handle, port);
+                        let _ = window.eval(
+                            "window.__setStage(2); \
+                             window.__setStatus('Connecting to interface...');",
+                        );
+                        redirect_when_ready(
+                            window.clone(),
+                            port,
+                            generation,
+                            "serve status",
+                            log_sender.clone(),
+                        );
+                    });
+                    if acted.is_none() {
+                        continue;
+                    }
                     return;
                 }
                 BackendStatusProbe::Starting(status) => {
@@ -2561,49 +2572,48 @@ fn spawn_webview_health_fallback(window: WebviewWindow, port: u16, generation: u
             return;
         }
         let state = window.app_handle().state::<SidecarState>();
-        let triggered = with_current_launch(&state, generation, || {
-            FALLBACK_TRIGGERED.swap(true, Ordering::SeqCst)
+        with_current_launch(&state, generation, || {
+            if FALLBACK_TRIGGERED.swap(true, Ordering::SeqCst) {
+                return;
+            }
+
+            let url = format!("http://{HOST}:{port}");
+            eprintln!(
+                "[agentsview] WebView content process is not responding \
+                 (likely a GPU/EGL initialization failure); opening {url} \
+                 in the system browser instead"
+            );
+
+            let handle = window.app_handle().clone();
+            match handle.opener().open_url(url.as_str(), Option::<&str>::None) {
+                Ok(()) => {
+                    let _ = window.hide();
+                    handle
+                        .dialog()
+                        .message(format!(
+                            "AgentsView could not render its window, likely due to a \
+                             graphics driver (EGL) issue. It has been opened in your \
+                             web browser instead:\n\n{url}"
+                        ))
+                        .title("AgentsView")
+                        .show(|_| {});
+                }
+                Err(err) => {
+                    eprintln!("[agentsview] failed to open system browser fallback: {err}");
+                    // Keep the window up so the app stays visible and quittable.
+                    handle
+                        .dialog()
+                        .message(format!(
+                            "AgentsView could not render its window, likely due to a \
+                             graphics driver (EGL) issue, and no web browser could be \
+                             opened automatically. Open this URL in a browser to use \
+                             AgentsView:\n\n{url}"
+                        ))
+                        .title("AgentsView")
+                        .show(|_| {});
+                }
+            }
         });
-        if triggered != Some(false) {
-            return;
-        }
-
-        let url = format!("http://{HOST}:{port}");
-        eprintln!(
-            "[agentsview] WebView content process is not responding \
-             (likely a GPU/EGL initialization failure); opening {url} \
-             in the system browser instead"
-        );
-
-        let handle = window.app_handle().clone();
-        match handle.opener().open_url(url.as_str(), Option::<&str>::None) {
-            Ok(()) => {
-                let _ = window.hide();
-                handle
-                    .dialog()
-                    .message(format!(
-                        "AgentsView could not render its window, likely due to a \
-                         graphics driver (EGL) issue. It has been opened in your \
-                         web browser instead:\n\n{url}"
-                    ))
-                    .title("AgentsView")
-                    .show(|_| {});
-            }
-            Err(err) => {
-                eprintln!("[agentsview] failed to open system browser fallback: {err}");
-                // Keep the window up so the app stays visible and quittable.
-                handle
-                    .dialog()
-                    .message(format!(
-                        "AgentsView could not render its window, likely due to a \
-                         graphics driver (EGL) issue, and no web browser could be \
-                         opened automatically. Open this URL in a browser to use \
-                         AgentsView:\n\n{url}"
-                    ))
-                    .title("AgentsView")
-                    .show(|_| {});
-            }
-        }
     });
 }
 
