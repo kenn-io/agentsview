@@ -23,7 +23,8 @@ import (
 // binaries that still read them; the next push prices the mirror under the
 // new digest. Provider billing policies carry their own version in the
 // digest and need no bump here.
-const chUsagePriceFormatVersion = 2
+// Version 3 reprices the mirror after codex-auto-review joined the fixed pricing aliases.
+const chUsagePriceFormatVersion = 3
 
 // Persist error identity with its diagnostic text. The format version in the
 // digest keeps readers from decoding records written in the old string format.

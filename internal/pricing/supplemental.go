@@ -26,7 +26,9 @@ const supplementalVersion = "6"
 // KimiK26Canonical exists in the embedded LiteLLM snapshot;
 // KimiK3Canonical is seeded by the supplemental set below because the
 // LiteLLM catalog lists only the provider-qualified Kimi K3 name.
-// GPT56LunaCanonical is the catalog id for Codex Luna Reserve (gpt-reserve).
+// GPT56LunaCanonical is the catalog id for Codex Luna Reserve (gpt-reserve) and
+// Codex auto-review (codex-auto-review), which Codex runs on GPT-5.6 Luna under
+// API-key and Bedrock auth.
 // The Bedrock constants are the standard catalog rows for namespaced Codex
 // models that otherwise collide with provider-qualified variants.
 // GPT6AstraCanonical is the catalog id for Codex's namespaced Astra model.
@@ -39,6 +41,7 @@ const (
 	BedrockGPT56TerraCanonical = "bedrock_mantle/openai.gpt-5.6-terra"
 	GPT6AstraCanonical         = "bedrock_mantle/openai.gpt-6-astra"
 	GPTReserveModelName        = "gpt-reserve"
+	CodexAutoReviewModelName   = "codex-auto-review"
 	CodexGPT54ModelName        = "openai.gpt-5.4"
 	CodexGPT56LunaModelName    = "openai.gpt-5.6-luna"
 	CodexGPT56TerraModelName   = "openai.gpt-5.6-terra"
@@ -80,12 +83,14 @@ type FixedPricingAlias struct {
 // fixedPricingAliases are timestamp-independent reported names that need a
 // curated catalog target. Codex writes gpt-reserve for Luna Reserve turns and
 // namespaced model ids that can collide with provider-qualified rows; Kimi Work
-// writes k2d6-agent for the K2.6 era. A static supplemental rate row for these
-// names would hide later catalog updates for the canonical model, including
-// Pydantic time-window rates for GPT-5.6 Luna.
+// writes k2d6-agent for the K2.6 era. Codex also writes codex-auto-review for
+// auto-review threads and doesn't say which model serves them. A static
+// supplemental rate row for these names would hide later catalog updates for
+// the canonical model, including Pydantic time-window rates for GPT-5.6 Luna.
 var fixedPricingAliases = []FixedPricingAlias{
 	{Name: "k2d6-agent", Canonical: KimiK26Canonical},
 	{Name: GPTReserveModelName, Canonical: GPT56LunaCanonical},
+	{Name: CodexAutoReviewModelName, Canonical: GPT56LunaCanonical},
 	{Name: CodexGPT54ModelName, Canonical: BedrockGPT54Canonical, Exact: true},
 	{Name: CodexGPT56LunaModelName, Canonical: BedrockGPT56LunaCanonical, Exact: true},
 	{Name: CodexGPT56TerraModelName, Canonical: BedrockGPT56TerraCanonical, Exact: true},

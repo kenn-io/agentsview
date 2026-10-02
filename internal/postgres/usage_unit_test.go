@@ -870,6 +870,71 @@ func TestPGDailyUsageAmountsPrefersExactCustomGPTReserve(t *testing.T) {
 	assert.Equal(t, pricingpkg.GPTReserveModelName, resolutions[0].PricedModel)
 }
 
+func TestPGDailyUsageAmountsPricesCodexAutoReviewAsLuna(t *testing.T) {
+	lunaCost := money.MustParseDollars("0.20")
+	resolver := export.NewPricingResolver([]export.EffectivePricingRow{{
+		ModelPattern: pricingpkg.GPT56LunaCanonical,
+		Rates:        export.ModelRates{InputPerMTok: lunaCost},
+	}})
+
+	_, _, _, _, cost, _, err := pgDailyUsageAmounts(pgDailyUsageScanRow{
+		usageSource: "provider",
+		model:       pricingpkg.CodexAutoReviewModelName,
+		inputTokens: 1_000_000,
+	}, resolver)
+	require.NoError(t, err)
+	assert.Equal(t, lunaCost, cost)
+	block, err := resolver.BuildBlock()
+	require.NoError(t, err)
+	require.Contains(t, block.Models, pricingpkg.CodexAutoReviewModelName)
+	resolutions := block.Models[pricingpkg.CodexAutoReviewModelName].Resolutions
+	require.Len(t, resolutions, 1)
+	assert.Equal(t, pricingpkg.GPT56LunaCanonical, resolutions[0].PricedModel)
+	assert.NotContains(t, block.Models, pricingpkg.GPT56LunaCanonical)
+}
+
+// TestPGDailyUsageAmountsPrefersExactCustomPrefixedCodexAutoReview proves an
+// exact custom row beats the alias for both the provider-prefixed name and the
+// bare name users configure today.
+func TestPGDailyUsageAmountsPrefersExactCustomPrefixedCodexAutoReview(t *testing.T) {
+	for _, model := range []string{
+		"openai/" + pricingpkg.CodexAutoReviewModelName,
+		pricingpkg.CodexAutoReviewModelName,
+	} {
+		t.Run(model, func(t *testing.T) {
+			resolver := export.NewPricingResolver([]export.EffectivePricingRow{
+				{
+					ModelPattern: model,
+					Rates: export.ModelRates{
+						InputPerMTok: money.MustParseDollars("7"),
+						Source:       export.PricingRowSourceCustom,
+					},
+				},
+				{
+					ModelPattern: pricingpkg.GPT56LunaCanonical,
+					Rates: export.ModelRates{
+						InputPerMTok: money.MustParseDollars("0.20"),
+						Source:       export.PricingRowSourceFetched,
+					},
+				},
+			})
+
+			_, _, _, _, cost, _, err := pgDailyUsageAmounts(pgDailyUsageScanRow{
+				usageSource: "provider",
+				model:       model,
+				inputTokens: 1_000_000,
+			}, resolver)
+			require.NoError(t, err)
+			assert.Equal(t, money.MustParseDollars("7"), cost)
+			block, err := resolver.BuildBlock()
+			require.NoError(t, err)
+			resolutions := block.Models[model].Resolutions
+			require.Len(t, resolutions, 1)
+			assert.Equal(t, model, resolutions[0].PricedModel)
+		})
+	}
+}
+
 func TestPGDailyUsageAmountsForwardsProviderToBilling(t *testing.T) {
 	resolver := export.NewPricingResolver([]export.EffectivePricingRow{{
 		ModelPattern: "posit-model",

@@ -50,6 +50,10 @@ func TestSupplementalPricing_KimiK3StaticAliases(t *testing.T) {
 	assert.False(t, ok,
 		"gpt-reserve must not have a static row; it prices through %s",
 		GPT56LunaCanonical)
+	_, ok = byPattern[CodexAutoReviewModelName]
+	assert.False(t, ok,
+		"codex-auto-review must not have a static row; it prices through %s",
+		GPT56LunaCanonical)
 }
 
 // TestSupplementalPricing_StepFunStep5Preview pins the curated StepFun
@@ -140,6 +144,11 @@ func TestCanonicalModelForDate(t *testing.T) {
 		{"gpt-reserve maps to Luna after cutoff", GPTReserveModelName, post, GPT56LunaCanonical},
 		{"gpt-reserve ignores zero time", GPTReserveModelName, time.Time{}, GPT56LunaCanonical},
 		{"provider-prefixed gpt-reserve", "openai/" + GPTReserveModelName, post, GPT56LunaCanonical},
+		{"codex-auto-review maps to Luna", CodexAutoReviewModelName, post, GPT56LunaCanonical},
+		{"codex-auto-review ignores zero time", CodexAutoReviewModelName, time.Time{}, GPT56LunaCanonical},
+		{"provider-prefixed codex-auto-review", "openai/" + CodexAutoReviewModelName, post, GPT56LunaCanonical},
+		{"near-miss codex-auto-reviewer passes through", "codex-auto-reviewer", post, ""},
+		{"near-miss codex-auto-review-preview passes through", "codex-auto-review-preview", post, ""},
 		{"Codex GPT-5.4 maps to standard Bedrock model", CodexGPT54ModelName, post, BedrockGPT54Canonical},
 		{"Codex GPT-5.6 Luna maps to standard Bedrock model", CodexGPT56LunaModelName, post, BedrockGPT56LunaCanonical},
 		{"Codex GPT-5.6 Terra maps to standard Bedrock model", CodexGPT56TerraModelName, post, BedrockGPT56TerraCanonical},
@@ -176,6 +185,7 @@ func TestCanonicalModelForTimestamp(t *testing.T) {
 		{"garbage timestamp falls back to K3", "kimi-for-coding", "not-a-time", KimiK3Canonical},
 		{"explicit K2.6 alias ignores timestamp", "k2d6-agent", "not-a-time", KimiK26Canonical},
 		{"gpt-reserve ignores garbage timestamp", GPTReserveModelName, "not-a-time", GPT56LunaCanonical},
+		{"codex-auto-review ignores garbage timestamp", CodexAutoReviewModelName, "not-a-time", GPT56LunaCanonical},
 		{"Codex GPT-5.6 Luna ignores garbage timestamp", CodexGPT56LunaModelName, "not-a-time", BedrockGPT56LunaCanonical},
 		{"non-alias passes through", "k3", "2026-07-18T12:00:00Z", ""},
 	}

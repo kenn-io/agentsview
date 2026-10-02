@@ -45,7 +45,11 @@ const (
 	// Version 13 rebuilds facts and rollups with session-scoped Devin
 	// message source identities: bare node_id/step_id values collide
 	// across sessions, so previously deduplicated Devin usage was dropped.
-	usageCacheFormatVersion             = 13
+	// Version 14 rebuilds version 13 rollups because Codex auto-review turns
+	// stored as codex-auto-review now resolve to gpt-5.6-luna catalog rates.
+	// EffectivePricingDigest hashes only catalog rows, so the same facts and
+	// catalog would otherwise keep the unpriced costs.
+	usageCacheFormatVersion             = 14
 	usageCacheApplicationID             = 0x41565543
 	usageCacheKind                      = "agentsview-usage-facts"
 	usageCacheRetirementProtocolVersion = 1

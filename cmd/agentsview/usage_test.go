@@ -1329,6 +1329,47 @@ func TestUsageDailyJSONIncludesExportMetadata(t *testing.T) {
 		got.SessionCounts.ByProject)
 }
 
+func TestUsageDailyJSONPricesCodexAutoReviewAsLuna(t *testing.T) {
+	dataDir := testDataDir(t)
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+	require.NoError(t, pricingrefresh.SeedFallback(database))
+	started := "2026-10-01T12:00:00Z"
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
+		ID: "usage-auto-review", Project: "shared-project", Machine: "test",
+		Agent: "codex", StartedAt: &started, EndedAt: &started,
+		CreatedAt: started, MessageCount: 1, RelationshipType: "root",
+		DataVersion: 1,
+	}))
+	require.NoError(t, database.InsertMessages(t.Context(), []db.Message{{
+		SessionID: "usage-auto-review", Ordinal: 0, Role: "assistant",
+		Timestamp: started, Model: "codex-auto-review",
+		TokenUsage: jsontext.Value(`{"cache_read_input_tokens":900000,"input_tokens":100000,"output_tokens":10000}`),
+	}}))
+	require.NoError(t, database.Close())
+
+	out := captureStdout(t, func() {
+		runUsageDaily(UsageDailyConfig{
+			JSON: true, Breakdown: true, Since: "2026-10-01",
+			Until: "2026-10-01", Timezone: "UTC", Offline: true, NoSync: true,
+		})
+	})
+
+	var got db.DailyUsageResult
+	require.NoError(t, json.Unmarshal([]byte(out), &got))
+	require.Len(t, got.Daily, 1)
+	require.Len(t, got.Daily[0].ModelBreakdowns, 1)
+	breakdown := got.Daily[0].ModelBreakdowns[0]
+	assert.Equal(t, "codex-auto-review", breakdown.ModelName)
+	assert.Positive(t, breakdown.Cost.Microdollars)
+	require.NotNil(t, got.Pricing)
+	require.Contains(t, got.Pricing.Models, "codex-auto-review")
+	assert.NotContains(t, got.Pricing.Models, "gpt-5.6-luna")
+	resolutions := got.Pricing.Models["codex-auto-review"].Resolutions
+	require.Len(t, resolutions, 1)
+	assert.Equal(t, "gpt-5.6-luna", resolutions[0].PricedModel)
+	assert.NotNil(t, resolutions[0].MatchedPattern)
+}
+
 func seedUsageDailyExportMetadataFixture(
 	t *testing.T, database *db.DB, fallbackModel string,
 ) {

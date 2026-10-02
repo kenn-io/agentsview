@@ -30,6 +30,13 @@ func usagePriceTestRows(input string, updatedAt time.Time) []export.EffectivePri
 	}}
 }
 
+func TestUsageLookupModelResolvesCodexAutoReview(t *testing.T) {
+	assert.Equal(t, "gpt-5.6-luna",
+		chUsageLookupModel("codex-auto-review", "2026-10-01T12:00:00Z"))
+	assert.Equal(t, "gpt-5.6-luna",
+		chUsageLookupModel("openai/codex-auto-review", ""))
+}
+
 func TestUsagePricingDigestIgnoresRowTimestamps(t *testing.T) {
 	first := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	base, err := chUsagePricingDigest(usagePriceTestRows("1", first), nil)

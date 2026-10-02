@@ -831,10 +831,10 @@ When no catalog bands or applied bands exist, their canonical JSON value is
 that null-versus-nonempty-array representation within schema version 5.
 
 Ordinary models have one resolution whose `priced_model` is the reported model.
-Fixed aliases such as `k2d6-agent` and `gpt-reserve` keep that reported name
-and resolve `priced_model` to a catalog row (`moonshot/kimi-k2.6` and
-`gpt-5.6-luna`). Timestamp-aware aliases can have more than one resolution in a
-report. For
+Fixed aliases such as `k2d6-agent`, `gpt-reserve`, and `codex-auto-review` keep
+that reported name and resolve `priced_model` to a catalog row
+(`moonshot/kimi-k2.6`, and `gpt-5.6-luna` for both Codex names).
+Timestamp-aware aliases can have more than one resolution in a report. For
 example, one `kimi-for-coding` entry can contain both `moonshot/kimi-k2.6` and
 `kimi-k3` resolutions when its rows span the pricing cutoff. An exact
 custom-pricing row for the reported alias takes precedence before timestamp
@@ -863,6 +863,12 @@ row, its model entry and resolution have `cost_source: "reported"`, the
 resolution has `matched_pattern: null`, and all four rate fields are zero. The
 reported amount remains authoritative; the zero rates express unavailable rate
 provenance, not a zero-rate calculation.
+
+A computed resolution with `matched_pattern: null` means no effective pricing
+row matched the model. Its rates are zero, so its tokens add nothing to the
+computed cost; add a `[custom_model_pricing]` row to price it.
+`pricing.fallback.models` lists models priced from the embedded catalog, not
+unpriced ones.
 
 `pricing.source` is one of `embedded`, `fetched`, `custom`, `custom+embedded`,
 or `custom+fetched`. Combined values always serialize `custom` first, followed

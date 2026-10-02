@@ -297,6 +297,54 @@ func TestDailyUsagePersistedPricesMatchSQLite(t *testing.T) {
 	assert.Less(t, stats.rows, stats.events)
 }
 
+// TestDailyUsageCodexAutoReviewPricesAsLuna proves the ClickHouse CASE arm and
+// the persisted price records price codex-auto-review at Luna rates, matching
+// SQLite.
+func TestDailyUsageCodexAutoReviewPricesAsLuna(t *testing.T) {
+	local, target := seedUsagePriceFixture(t)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern:     pricingpkg.GPT56LunaCanonical,
+		InputPerMTok:     money.MustParseDollars("0.2"),
+		OutputPerMTok:    money.MustParseDollars("1.2"),
+		CacheReadPerMTok: money.MustParseDollars("0.02"),
+	}}))
+	ts := "2026-01-12T05:00:00.000Z"
+	tokenUsage := `{"cache_read_input_tokens":900000,"input_tokens":100000,"output_tokens":10000}`
+	var writes []db.SessionBatchWrite
+	for _, fixture := range []struct{ id, model string }{
+		{"ch-price-auto-review", pricingpkg.CodexAutoReviewModelName},
+		{"ch-price-luna", pricingpkg.GPT56LunaCanonical},
+	} {
+		session := fixtureSession(fixture.id, "gamma", fixture.id, ts, 1)
+		session.Agent = "codex"
+		writes = append(writes, db.SessionBatchWrite{
+			Session:         session,
+			Messages:        []db.Message{usagePriceMessage(fixture.id, 0, ts, fixture.model, tokenUsage)},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		})
+	}
+	_, err := local.WriteSessionBatchAtomic(t.Context(), writes)
+	require.NoError(t, err)
+
+	syncer := newTestSync(t, local, target, storage.PusherOptions{})
+	_, err = syncer.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	store, err := NewStore(t.Context(), target)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	assertDailyUsageParity(t, local, store)
+
+	filter := db.UsageFilter{Timezone: "UTC", Agent: "codex", Breakdowns: true}
+	got, err := store.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	review := modelCost(t, got, pricingpkg.CodexAutoReviewModelName)
+	assert.NotZero(t, review.Microdollars, "auto-review cost")
+	assert.Equal(t, modelCost(t, got, pricingpkg.GPT56LunaCanonical), review)
+	stats := dailyUsageGroupRowStats(t, store, db.UsageFilter{Timezone: "UTC", Agent: "codex"})
+	assert.Zero(t, stats.explicit)
+}
+
 func TestDailyUsagePersistedPricesKeepRequestRounding(t *testing.T) {
 	store, _, _ := newUsagePriceStore(t)
 	got, err := store.GetDailyUsage(t.Context(), db.UsageFilter{

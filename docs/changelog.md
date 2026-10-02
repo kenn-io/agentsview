@@ -182,6 +182,11 @@ The latest published release is
 
 **Bug fixes**
 
+- Price Codex auto-review turns, recorded as `codex-auto-review`, at GPT-5.6
+  Luna catalog rates instead of $0. Usage reports still list
+  `codex-auto-review` as the reported model, and a custom pricing row for it
+  still wins. Existing SQLite usage caches rebuild and the next ClickHouse push
+  reprices the mirror. (#2078)
 - Sync continues importing local sessions and reachable remotes when another
   remote's hostname cannot resolve, such as while disconnected from a private
   network. This also applies during archive upgrades and full rebuilds, which

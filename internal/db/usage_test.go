@@ -5890,6 +5890,72 @@ func TestGetDailyUsage_GPTReserveLunaPricing(t *testing.T) {
 	assert.NotContains(t, reserve.Pricing.Models, pricingpkg.GPT56LunaCanonical)
 }
 
+// TestGetDailyUsage_CodexAutoReviewLunaPricing proves Codex auto-review turns
+// that persist codex-auto-review keep that reported name in the pricing block
+// while costing the same as an explicit gpt-5.6-luna row. There is no
+// codex-auto-review catalog key, so a missed mapping yields zero against a
+// priced Luna sibling.
+func TestGetDailyUsage_CodexAutoReviewLunaPricing(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+
+	ts := "2026-10-01T12:00:00Z"
+	tokenUsage := jsontext.Value(`{"cache_read_input_tokens":900000,"input_tokens":100000,"output_tokens":10000}`)
+	for _, fixture := range []struct {
+		id    string
+		model string
+	}{
+		{id: "codex-auto-review", model: pricingpkg.CodexAutoReviewModelName},
+		{id: "codex-luna", model: pricingpkg.GPT56LunaCanonical},
+	} {
+		insertSession(t, d, fixture.id, "proj", func(s *Session) {
+			s.Agent = "codex"
+			s.StartedAt = new(ts)
+		})
+		insertMessages(t, d, Message{
+			SessionID:  fixture.id,
+			Ordinal:    0,
+			Role:       "assistant",
+			Timestamp:  ts,
+			Model:      fixture.model,
+			TokenUsage: tokenUsage,
+		})
+	}
+
+	luna, err := d.GetDailyUsage(ctx, UsageFilter{
+		From:     "2026-10-01",
+		To:       "2026-10-01",
+		Timezone: "UTC",
+		Model:    pricingpkg.GPT56LunaCanonical,
+	})
+	requireNoError(t, err, "GetDailyUsage luna")
+	assert.NotZero(t, luna.Totals.TotalCost.Microdollars,
+		"explicit Luna usage must be priced")
+
+	review, err := d.GetDailyUsage(ctx, UsageFilter{
+		From:     "2026-10-01",
+		To:       "2026-10-01",
+		Timezone: "UTC",
+		Model:    pricingpkg.CodexAutoReviewModelName,
+	})
+	requireNoError(t, err, "GetDailyUsage auto-review")
+	assert.NotZero(t, review.Totals.TotalCost.Microdollars,
+		"auto-review usage must be priced")
+	assert.Equal(t, luna.Totals.TotalCost, review.Totals.TotalCost, "TotalCost")
+	require.NotNil(t, review.Pricing, "pricing block")
+	require.Contains(t, review.Pricing.Models, pricingpkg.CodexAutoReviewModelName)
+	resolutions := review.Pricing.Models[pricingpkg.CodexAutoReviewModelName].Resolutions
+	require.Len(t, resolutions, 1)
+	assert.Equal(t, pricingpkg.GPT56LunaCanonical, resolutions[0].PricedModel)
+	assert.NotNil(t, resolutions[0].MatchedPattern, "MatchedPattern")
+	assert.NotContains(t, review.Pricing.Models, pricingpkg.GPT56LunaCanonical)
+
+	session, err := d.GetSessionUsage(ctx, "codex-auto-review", false)
+	requireNoError(t, err, "GetSessionUsage auto-review")
+	assert.True(t, session.HasCost, "HasCost")
+	assert.Empty(t, session.UnpricedModels, "UnpricedModels")
+}
+
 func TestGetDailyUsage_CodexNamespacedPricing(t *testing.T) {
 	d := testDB(t)
 	d.SetEmptyCatalogPricing(fallbackRateMap())
