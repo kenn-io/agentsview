@@ -2230,11 +2230,11 @@ schemas keep their existing ordering behavior.
 - **Format:** Pi-family, tree-structured JSONL, one file per session under an
   encoded working-directory folder below `~/.omo/agent/sessions/`.
 - **Evidence:** `source`.
-- **Upstream:** The `omo` command from oh-my-openagent runs senpi, a Pi fork,
-  under an OMO brand profile. Clone
-  `https://github.com/code-yeongyu/senpi.git` at
+- **Upstream:** Clone `https://github.com/code-yeongyu/senpi.git` at
   `b50f58c8a21b0e94b12c4269a9a8c608e03d308c` (tag `v2026.9.28-7`, the engine
-  omo-ai 5.1.0 pins); see the pinned [session format][omo-session-format],
+  omo-ai 5.1.0 pins). The `omo` command from oh-my-openagent runs senpi, a Pi
+  fork, under an OMO brand profile. See the pinned
+  [session format](https://github.com/code-yeongyu/senpi/blob/b50f58c8a21b0e94b12c4269a9a8c608e03d308c/packages/coding-agent/docs/session-format.md),
   [session manager][omo-session-manager], and
   [configuration paths][omo-configuration-paths]. The brand profile comes from
   `https://github.com/code-yeongyu/oh-my-openagent.git` at
@@ -3935,5 +3935,4 @@ schemas keep their existing ordering behavior.
 [evener-source-4]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/schema/snapshot.go
 [evener-source-5]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/fork.go
 [omo-configuration-paths]: https://github.com/code-yeongyu/senpi/blob/b50f58c8a21b0e94b12c4269a9a8c608e03d308c/packages/coding-agent/src/config.ts
-[omo-session-format]: https://github.com/code-yeongyu/senpi/blob/b50f58c8a21b0e94b12c4269a9a8c608e03d308c/packages/coding-agent/docs/session-format.md
 [omo-session-manager]: https://github.com/code-yeongyu/senpi/blob/b50f58c8a21b0e94b12c4269a9a8c608e03d308c/packages/coding-agent/src/core/session-manager.ts
