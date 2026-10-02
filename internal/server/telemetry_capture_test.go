@@ -71,20 +71,30 @@ func TestTelemetryCaptureRoute(t *testing.T) {
 		wantCode int
 		wantBody string
 	}{
-		{name: "no token", srv: authSrv, body: `{"event":"app_opened"}`, origin: origin,
-			wantCode: http.StatusUnauthorized},
-		{name: "foreign origin", srv: localSrv, body: `{"event":"app_opened"}`,
+		{
+			name: "no token", srv: authSrv, body: `{"event":"app_opened"}`, origin: origin,
+			wantCode: http.StatusUnauthorized,
+		},
+		{
+			name: "foreign origin", srv: localSrv, body: `{"event":"app_opened"}`,
 			origin:   "http://evil.example",
-			wantCode: http.StatusForbidden},
-		{name: "allowed event", srv: authSrv, body: `{"event":"app_opened"}`,
+			wantCode: http.StatusForbidden,
+		},
+		{
+			name: "allowed event", srv: authSrv, body: `{"event":"app_opened"}`,
 			origin: origin, token: "test-token",
-			wantCode: http.StatusAccepted, wantBody: `{"status":"disabled"}`},
-		{name: "unknown event", srv: authSrv, body: `{"event":"search_run"}`,
+			wantCode: http.StatusAccepted, wantBody: `{"status":"disabled"}`,
+		},
+		{
+			name: "unknown event", srv: authSrv, body: `{"event":"search_run"}`,
 			origin: origin, token: "test-token",
-			wantCode: http.StatusBadRequest},
-		{name: "oversized body", srv: authSrv, body: oversized,
+			wantCode: http.StatusBadRequest,
+		},
+		{
+			name: "oversized body", srv: authSrv, body: oversized,
 			origin: origin, token: "test-token",
-			wantCode: http.StatusBadRequest},
+			wantCode: http.StatusBadRequest,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
