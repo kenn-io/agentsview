@@ -71,9 +71,6 @@ func RunBackfill(ctx context.Context, store *rawcheckpoint.Store, capturer *rawc
 			_, found, err := uploader.UploadNextForBackfill(ctx, runID)
 			if err != nil {
 				failure = "upload"
-				if errors.Is(err, rawupload.ErrPermanentFailure) {
-					failure = "rejected"
-				}
 				return false, rawcheckpoint.ErrBackfillIncomplete
 			}
 			if !found {
@@ -125,7 +122,7 @@ func RunBackfill(ctx context.Context, store *rawcheckpoint.Store, capturer *rawc
 			// Pending includes invalidated bindings whose queue rows were
 			// removed. Neither missing nor deferred work permits a new scan.
 			if current.Pending > 0 {
-				failure = backfillWaitFailure(ctx, store, runID)
+				failure = "deferred"
 				return current, rawcheckpoint.ErrBackfillIncomplete
 			}
 			batch, err := auditor.AuditProvider(ctx, provider)
@@ -161,7 +158,7 @@ func RunBackfill(ctx context.Context, store *rawcheckpoint.Store, capturer *rawc
 		}
 		progress, err = store.CompleteBackfill(ctx, runID)
 		if err != nil {
-			failure = backfillWaitFailure(ctx, store, runID)
+			failure = "deferred"
 			return progress, rawcheckpoint.ErrBackfillIncomplete
 		}
 		return progress, nil
@@ -178,6 +175,13 @@ func finalizeBackfillAttempt(ctx context.Context, store *rawcheckpoint.Store, ru
 	if resultErr != nil && failure == "" {
 		failure = "capture"
 	}
+	// A permanently rejected capture outranks the attempt's own failure: only a
+	// new run captures that source again.
+	if resultErr != nil && !cancelled {
+		if rejected, err := store.BackfillRejected(cleanup, runID); err == nil && rejected {
+			failure = "rejected"
+		}
+	}
 	if err := store.RecordBackfillFailure(cleanup, runID, failure); err != nil {
 		resultErr = rawcheckpoint.ErrBackfillIncomplete
 	}
@@ -190,15 +194,6 @@ func finalizeBackfillAttempt(ctx context.Context, store *rawcheckpoint.Store, ru
 		resultErr = rawcheckpoint.ErrBackfillIncomplete
 	}
 	return progress, resultErr
-}
-
-// backfillWaitFailure separates work a later attempt can finish from captures
-// the server permanently rejected, which only a new run captures again.
-func backfillWaitFailure(ctx context.Context, store *rawcheckpoint.Store, runID string) string {
-	if rejected, err := store.BackfillRejected(ctx, runID); err == nil && rejected {
-		return "rejected"
-	}
-	return "deferred"
 }
 
 func backfillCaptureFailure(err error) string {

@@ -421,17 +421,24 @@ func TestBackfillDrainsUploadsBeforeCapturingPastDeferredWork(t *testing.T) {
 
 func TestBackfillReportsPermanentlyRejectedCapture(t *testing.T) {
 	root := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(root, "a.jsonl"), []byte("a"), 0o600))
+	for _, name := range []string{"a.jsonl", "b.jsonl"} {
+		require.NoError(t, os.WriteFile(filepath.Join(root, name), []byte(name), 0o600))
+	}
 	store, spec := backfillFixture(t, root)
 	opts := BackfillOptions{Spec: spec, Providers: []parser.Provider{newAuditProvider(root)}, BatchSize: 4}
-	rejecting := &recordingRawUploadTransport{commitErrs: []error{&rawclient.APIError{Status: 422, Code: rawclient.CodeChecksumMismatch}}}
-	p, err := RunBackfill(t.Context(), store, rawcapture.New(store), rawupload.New(store, rejecting, "device-a"), opts)
-	require.Error(t, err)
+	attempt := func(commitErr error) rawcheckpoint.BackfillProgress {
+		transport := &recordingRawUploadTransport{commitErrs: []error{commitErr}}
+		p, err := RunBackfill(t.Context(), store, rawcapture.New(store), rawupload.New(store, transport, "device-a"), opts)
+		require.Error(t, err)
+		return p
+	}
+
+	p := attempt(&rawclient.APIError{Status: 422, Code: rawclient.CodeChecksumMismatch})
 	require.Equal(t, int64(1), p.Failures["rejected"])
-
-	p, err = RunBackfill(t.Context(), store, rawcapture.New(store), rawupload.New(store, &recordingRawUploadTransport{}, "device-a"), opts)
-
-	require.Error(t, err)
+	p = attempt(errors.New("server unavailable"))
+	require.Equal(t, int64(1), p.Failures["rejected"], "a later transient failure must not hide the rejection")
+	require.Zero(t, p.Failures["upload"])
+	p = attempt(nil)
 	require.Equal(t, int64(1), p.Failures["rejected"])
 	require.Zero(t, p.Failures["deferred"])
 }
