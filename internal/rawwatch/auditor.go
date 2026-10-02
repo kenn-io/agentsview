@@ -167,9 +167,11 @@ func (a *Auditor) auditProviderBounded(
 			continue
 		}
 		result.Candidates++
-		// All emitted candidates consume work, including duplicates, unsupported
-		// plans and durable resume skips. Sources cannot bypass the batch bound.
-		remaining--
+		// Backfill charges every candidate so resume skips cannot bypass the
+		// batch bound; watch charges only capture attempts.
+		if a.runID != "" {
+			remaining--
+		}
 		identity, supported, err := a.rawCaptureSourceIdentity(ctx, provider, event.source)
 		if err != nil {
 			a.stopDiscoveryScan(providerType)
@@ -178,7 +180,7 @@ func (a *Auditor) auditProviderBounded(
 		if !supported {
 			result.Unsupported++
 			scan.failed = true
-			if remaining == 0 {
+			if a.runID != "" && remaining == 0 {
 				return result, nil
 			}
 			continue
@@ -189,7 +191,7 @@ func (a *Auditor) auditProviderBounded(
 		}
 		physicalKey := rawWatchSourceDedupKey(event.source)
 		if _, duplicate := seenPhysical[physicalKey]; duplicate {
-			if remaining == 0 {
+			if a.runID != "" && remaining == 0 {
 				return result, nil
 			}
 			continue
@@ -213,6 +215,7 @@ func (a *Auditor) auditProviderBounded(
 			}
 		} else {
 			capture, err = a.capturer.Capture(ctx, provider, event.source)
+			remaining--
 		}
 		result.Visited++
 		if errors.Is(err, rawcapture.ErrSourceChanged) {
