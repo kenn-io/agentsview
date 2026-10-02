@@ -339,15 +339,15 @@
 
 <style>
   .summary-cards {
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    grid-auto-rows: 1fr;
     gap: 8px;
-    flex-wrap: wrap;
   }
 
   .summary-cards :global(.card) {
-    flex: 1;
     min-width: 120px;
-    height: 90px;
+    min-height: 90px;
     padding: 12px;
     display: flex;
     flex-direction: column;

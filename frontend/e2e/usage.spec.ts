@@ -360,7 +360,19 @@ test.describe("Usage input cards", () => {
 
   const openUsage = async (page: Page, width: number) => {
     await page.setViewportSize({ width, height: 900 });
-    await page.route(/\/api\/v1\/usage\/summary(\?|$)/, (route) => route.fulfill({ json: summary }));
+    await page.route(/\/api\/v1\/usage\/summary(\?|$)/, (route) =>
+      route.fulfill({ json: summary }),
+    );
+    await page.route(/\/api\/v1\/usage\/comparison(\?|$)/, (route) =>
+      route.fulfill({
+        json: {
+          deltaPct: 1.25,
+          priorFrom: "2026-06-30",
+          priorTo: "2026-06-30",
+          priorTotalCost: { microdollars: 444_444 },
+        },
+      }),
+    );
     await page.goto("/usage");
     await expect(page.locator(".summary-cards .card-value").first()).toBeVisible({
       timeout: 10_000,
@@ -375,8 +387,10 @@ test.describe("Usage input cards", () => {
   const expectStableCards = async (page: Page) => {
     const cards = page.locator(".summary-cards .card");
     await expect(cards).toHaveCount(10);
+    await expect(cards.locator(".card-sub").first()).toContainText("+125%");
     const boxes = await cards.evaluateAll((els) =>
       els.map((el) => ({
+        label: el.querySelector(".card-label")?.textContent,
         height: el.getBoundingClientRect().height,
         overflowX: el.scrollWidth > el.clientWidth,
         overflowY: el.scrollHeight > el.clientHeight,
@@ -399,12 +413,14 @@ test.describe("Usage input cards", () => {
     });
   }
 
-  test("keeps az labels inside the cards at 768px", async ({ page }) => {
-    await page.addInitScript(() => localStorage.setItem("agentsview-locale", "az"));
-    await openUsage(page, 768);
+  for (const width of [1280, 768, 400]) {
+    test(`keeps az labels inside the cards at ${width}px`, async ({ page }) => {
+      await page.addInitScript(() => localStorage.setItem("agentsview-locale", "az"));
+      await openUsage(page, width);
 
-    await expect(card(page, "Cəmi giriş").locator(".card-value")).toHaveText("7.9B");
-    await expect(card(page, "Keşsiz giriş").locator(".card-value")).toHaveText("248.6M");
-    await expectStableCards(page);
-  });
+      await expect(card(page, "Cəmi giriş").locator(".card-value")).toHaveText("7.9B");
+      await expect(card(page, "Keşsiz giriş").locator(".card-value")).toHaveText("248.6M");
+      await expectStableCards(page);
+    });
+  }
 });
