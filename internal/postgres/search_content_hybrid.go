@@ -349,6 +349,8 @@ func (s *Store) enrichHybridMatchesPG(
 			SessionID:          d.sessionID,
 			Project:            info.project,
 			Agent:              info.agent,
+			Machine:            info.machine,
+			DisplayName:        info.displayName,
 			TranscriptRevision: info.transcriptRevision,
 			Location:           "message",
 			Role:               info.role,

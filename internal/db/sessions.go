@@ -166,7 +166,7 @@ func scanSessionRow(rs rowScanner) (Session, error) {
 }
 
 // scanSessionRowWithSource scans sessionBaseCols and an optional trailing
-// file_path into a Session.
+// source metadata into a Session.
 func scanSessionRowWithSource(rs rowScanner, includeSource bool) (Session, error) {
 	var s Session
 	targets := []any{
@@ -202,7 +202,7 @@ func scanSessionRowWithSource(rs rowScanner, includeSource bool) (Session, error
 		&s.TranscriptRevision, &s.CreatedAt, &s.ProjectAssigned,
 	}
 	if includeSource {
-		targets = append(targets, &s.FilePath)
+		targets = append(targets, &s.FilePath, &s.FileSize, &s.LocalModifiedAt)
 	}
 	err := rs.Scan(targets...)
 	return s, err
@@ -527,6 +527,11 @@ func (db *DB) DecodeCursor(s string) (SessionCursor, error) {
 
 // SessionFilter specifies how to query sessions.
 type SessionFilter struct {
+	// IDs selects rows directly. Nil preserves discovery defaults; an empty
+	// non-nil slice matches nothing. Raw IDs expand over literal tilde suffixes.
+	IDs []string
+	// IDsExact selects only physical IDs resolved by the hosted public-ID layer.
+	IDsExact  bool
 	SessionID string
 	Project   string
 	// ProjectLabels carries exact internal project labels resolved from an
@@ -755,7 +760,7 @@ func (db *DB) ListSessions(
 
 	columns := sessionBaseCols
 	if f.IncludeSource {
-		columns += ", file_path"
+		columns += ", file_path, file_size, local_modified_at"
 	}
 	query := "SELECT " + columns +
 		" FROM sessions WHERE " + cursorWhere + " " +

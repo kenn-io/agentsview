@@ -393,6 +393,7 @@ func (s *Store) Search(
 				m.session_id,
 				s.project,
 				s.agent,
+ s.machine,
 				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
 				COALESCE(s.ended_at, s.started_at) AS session_ended_at,
 				m.ordinal,
@@ -423,6 +424,7 @@ func (s *Store) Search(
 				s.id AS session_id,
 				s.project,
 				s.agent,
+ s.machine,
 				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
 				COALESCE(s.ended_at, s.started_at) AS session_ended_at,
 				-1 AS ordinal,
@@ -450,7 +452,7 @@ func (s *Store) Search(
 		-- rank is a constant 1.0 because PostgreSQL ILIKE has no
 	-- relevance scoring engine (unlike SQLite FTS5). Ordering
 	-- uses match_pos and session_ended_at instead.
-	SELECT session_id, project, agent, name,
+	SELECT session_id, project, agent, machine, name,
 			session_ended_at, ordinal,
 			snippet, 1.0 AS rank, match_pos
 		FROM (
@@ -481,7 +483,7 @@ func (s *Store) Search(
 		var endedAt *time.Time
 		var matchPos int
 		if err := rows.Scan(
-			&r.SessionID, &r.Project, &r.Agent, &r.Name,
+			&r.SessionID, &r.Project, &r.Agent, &r.Machine, &r.Name,
 			&endedAt, &r.Ordinal,
 			&r.Snippet, &r.Rank, &matchPos,
 		); err != nil {

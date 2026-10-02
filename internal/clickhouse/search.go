@@ -89,7 +89,7 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 	args = append(args, f.Limit+1, f.Cursor)
 	rows, err := s.queryContext(ctx, `
 		WITH msg_ranked AS (
-			SELECT m.session_id AS session_id, s.project AS project, s.agent AS agent,
+			SELECT m.session_id AS session_id, s.project AS project, s.agent AS agent, s.machine AS machine,
 				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
 				COALESCE(s.ended_at, s.started_at, s.created_at) AS session_ended_at,
 				m.ordinal AS ordinal, substringUTF8(m.content, 1, 200) AS snippet,
@@ -108,13 +108,13 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 				`+project+`
 		),
 		msg_matches AS (
-			SELECT session_id, project, agent, name, session_ended_at,
+			SELECT session_id, project, agent, machine, name, session_ended_at,
 				ordinal, snippet, rank, match_priority, match_pos
 			FROM msg_ranked
 			WHERE rn = 1
 		),
 		name_matches AS (
-			SELECT s.id AS session_id, s.project AS project, s.agent AS agent,
+			SELECT s.id AS session_id, s.project AS project, s.agent AS agent, s.machine AS machine,
 				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
 				COALESCE(s.ended_at, s.started_at, s.created_at) AS session_ended_at,
 				toInt64(-1) AS ordinal,
@@ -137,7 +137,7 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 				AND s.id NOT IN (SELECT session_id FROM msg_matches)
 				`+nameProject+`
 		)
-		SELECT session_id, project, agent, name,
+		SELECT session_id, project, agent, machine, name,
 			session_ended_at, ordinal, snippet, rank
 		FROM (
 			SELECT * FROM msg_matches
@@ -154,7 +154,7 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 	for rows.Next() {
 		var r db.SearchResult
 		var ended any
-		if err := rows.Scan(&r.SessionID, &r.Project, &r.Agent, &r.Name,
+		if err := rows.Scan(&r.SessionID, &r.Project, &r.Agent, &r.Machine, &r.Name,
 			&ended, &r.Ordinal, &r.Snippet, &r.Rank); err != nil {
 			return db.SearchPage{}, fmt.Errorf("scanning clickhouse search result: %w", err)
 		}

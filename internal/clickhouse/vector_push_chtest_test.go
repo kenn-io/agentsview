@@ -500,6 +500,9 @@ func TestVectorSearcherServesSemanticAndHybrid(t *testing.T) {
 	assert.Equal(t, [2]int{0, 0}, top.OrdinalRange)
 	assert.Equal(t, "message", top.Location)
 	assert.Equal(t, "alpha", top.Project)
+	assert.Equal(t, fixtureMachine, top.Machine)
+	require.NotNil(t, top.DisplayName)
+	assert.Equal(t, "Alpha Saved Title", *top.DisplayName)
 	require.NotNil(t, top.Score)
 	assert.Contains(t, top.Snippet, "alpha first")
 
@@ -532,6 +535,13 @@ func TestVectorSearcherServesSemanticAndHybrid(t *testing.T) {
 	require.NotEmpty(t, hybrid.Matches)
 	var sawBeta bool
 	for _, m := range hybrid.Matches {
+		assert.Equal(t, fixtureMachine, m.Machine)
+		if m.SessionID == fixtureAlphaID {
+			require.NotNil(t, m.DisplayName)
+			assert.Equal(t, "Alpha Saved Title", *m.DisplayName)
+		} else {
+			assert.Nil(t, m.DisplayName)
+		}
 		if m.SessionID == fixtureBetaID && m.Ordinal == 0 {
 			sawBeta = true
 			assert.Contains(t, m.Snippet, "beta first")

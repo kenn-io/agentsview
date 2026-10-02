@@ -4,6 +4,7 @@
 
 export interface DbSearchResult {
   agent: string;
+  machine: string;
   name: string;
   ordinal: number;
   project: string;

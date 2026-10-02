@@ -14,6 +14,8 @@ import (
 // for every candidate row before the LIMIT and carried through the sort.
 // Rows whose message row does not exist are marked missing.
 type contentAnchorMeta struct {
+	machine         string
+	displayName     *string
 	relationship    string
 	parentSessionID string
 	role            sql.NullString
@@ -46,6 +48,8 @@ func (db *DB) deriveLexicalUnits(
 	}
 	for i := range matches {
 		matches[i].OrdinalRange = ranges[i]
+		matches[i].Machine = metas[i].machine
+		matches[i].DisplayName = metas[i].displayName
 		matches[i].Relationship = metas[i].relationship
 		matches[i].ParentSessionID = metas[i].parentSessionID
 		matches[i].Sidechain = anchors[i].Sidechain
@@ -150,7 +154,7 @@ func (db *DB) lookupAnchorMetaChunk(
 	query := "WITH refs(session_id, ordinal) AS (VALUES " +
 		strings.Join(values, ", ") + ") " +
 		"SELECT r.session_id, r.ordinal, " +
-		"COALESCE(s.relationship_type,''), COALESCE(s.parent_session_id,''), " +
+		"COALESCE(s.relationship_type,''), COALESCE(s.parent_session_id,''), s.machine, COALESCE(s.display_name, s.session_name), " +
 		"m.role, m.is_sidechain, " +
 		"CASE WHEN m.is_system = 0 AND " +
 		SystemPrefixSQL("m.content", "m.role") + " THEN 1 ELSE 0 END " +
@@ -168,6 +172,7 @@ func (db *DB) lookupAnchorMetaChunk(
 		var meta contentAnchorMeta
 		if err := rows.Scan(&key.sessionID, &key.ordinal,
 			&meta.relationship, &meta.parentSessionID,
+			&meta.machine, &meta.displayName,
 			&meta.role, &meta.sidechain, &meta.embeddable); err != nil {
 			return fmt.Errorf("scanning match anchor: %w", err)
 		}

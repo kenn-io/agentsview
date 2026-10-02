@@ -141,6 +141,7 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, page.Results, 1)
 		assert.Equal(t, fixtureAlphaID, page.Results[0].SessionID)
+		assert.Equal(t, fixtureMachine, page.Results[0].Machine)
 
 		content, err := store.SearchContent(ctx, db.ContentSearchFilter{
 			Pattern:        "clickhouse result",
@@ -152,6 +153,9 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 		require.NotEmpty(t, content.Matches)
 		assert.Equal(t, "tool_result", content.Matches[0].Location)
 		assert.Equal(t, fixtureAlphaID, content.Matches[0].SessionID)
+		assert.Equal(t, fixtureMachine, content.Matches[0].Machine)
+		require.NotNil(t, content.Matches[0].DisplayName)
+		assert.Equal(t, "Alpha Saved Title", *content.Matches[0].DisplayName)
 
 		findings, err := store.ListSecretFindings(ctx, db.SecretFindingFilter{
 			Project: "alpha", Limit: 10,

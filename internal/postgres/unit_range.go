@@ -170,6 +170,8 @@ type pgAnchorKey struct {
 // anchor message row's classification columns — the PG twin of internal/db's
 // contentAnchorMeta.
 type pgAnchorMeta struct {
+	machine         string
+	displayName     *string
 	relationship    string
 	parentSessionID string
 	role            sql.NullString
@@ -212,6 +214,8 @@ func (s *Store) deriveLexicalUnitsPG(
 	}
 	for i := range matches {
 		matches[i].OrdinalRange = ranges[i]
+		matches[i].Machine = metas[i].machine
+		matches[i].DisplayName = metas[i].displayName
 		matches[i].Relationship = metas[i].relationship
 		matches[i].ParentSessionID = metas[i].parentSessionID
 		matches[i].Sidechain = anchors[i].Sidechain
@@ -278,7 +282,7 @@ func (s *Store) lookupAnchorMetaChunkPG(
 	query := "WITH refs(session_id, ordinal) AS (VALUES " +
 		strings.Join(values, ", ") + ") " +
 		"SELECT r.session_id, r.ordinal, " +
-		"COALESCE(s.relationship_type,''), COALESCE(s.parent_session_id,''), " +
+		"COALESCE(s.relationship_type,''), COALESCE(s.parent_session_id,''), s.machine, COALESCE(s.display_name, s.session_name), " +
 		"m.role, m.is_sidechain, " +
 		"CASE WHEN m.is_system = FALSE AND " +
 		db.PostgresSystemPrefixSQL("m.content", "m.role") +
@@ -297,6 +301,7 @@ func (s *Store) lookupAnchorMetaChunkPG(
 		var meta pgAnchorMeta
 		if err := rows.Scan(&key.sessionID, &key.ordinal,
 			&meta.relationship, &meta.parentSessionID,
+			&meta.machine, &meta.displayName,
 			&meta.role, &meta.sidechain, &meta.embeddable); err != nil {
 			return fmt.Errorf("scanning match anchor: %w", err)
 		}

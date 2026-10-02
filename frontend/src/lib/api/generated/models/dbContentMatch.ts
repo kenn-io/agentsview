@@ -7,8 +7,11 @@ export interface DbContentMatch {
   agent: string;
   context_after?: DbMessage[];
   context_before?: DbMessage[];
+  /** @nullable */
+  display_name: string | null;
   is_sidechain?: boolean;
   location: string;
+  machine: string;
   ordinal: number;
   /**
    * @minItems 2

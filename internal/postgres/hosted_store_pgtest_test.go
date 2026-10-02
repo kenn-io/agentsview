@@ -42,6 +42,16 @@ func TestHostedPublicReadBoundary(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, page.Sessions, 1)
 	assert.Equal(t, "codex:portable", page.Sessions[0].ID)
+	selected, err := store.ListSessions(t.Context(), db.SessionFilter{IDs: []string{"codex:portable", "missing"}})
+	require.NoError(t, err)
+	require.Len(t, selected.Sessions, 1)
+	assert.Equal(t, "codex:portable", selected.Sessions[0].ID)
+	unknown, err := store.ListSessions(t.Context(), db.SessionFilter{IDs: []string{"missing"}})
+	require.NoError(t, err)
+	assert.Empty(t, unknown.Sessions)
+	hiddenPage, err := store.ListSessions(t.Context(), db.SessionFilter{IDs: []string{raw.SessionID}})
+	require.NoError(t, err)
+	assert.Empty(t, hiddenPage.Sessions)
 	search, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
 		Pattern: "public transcript", SessionID: "codex:portable", IncludeOneShot: true,
 	})
@@ -74,6 +84,11 @@ func TestHostedPublicConflictCurationAndCursor(t *testing.T) {
 	var conflict *db.SessionIdentityError
 	require.ErrorAs(t, err, &conflict)
 	require.Len(t, conflict.Variants, 2)
+	_, err = h.ListSessions(t.Context(), db.SessionFilter{IDs: []string{"codex:portable"}})
+	require.ErrorAs(t, err, &conflict)
+	variantPage, err := h.ListSessions(t.Context(), db.SessionFilter{IDs: conflict.Variants, Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, variantPage.Sessions, 2)
 	page, err := h.ListSessions(t.Context(), db.SessionFilter{Limit: 1})
 	require.NoError(t, err)
 	require.Len(t, page.Sessions, 1)

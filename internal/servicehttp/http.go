@@ -4,6 +4,7 @@ package servicehttp
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -281,6 +282,11 @@ func (b *httpBackend) List(
 	if err != nil {
 		return nil, err
 	}
+	if f.IDs != nil && len(f.IDs) == 0 {
+		// Empty IDs selects no sessions at the service layer. Keep it local so
+		// the HTTP endpoint's non-empty CSV validation remains unchanged.
+		return &service.SessionList{Sessions: []db.Session{}}, nil
+	}
 	api, err := b.apiClient(b.client)
 	if err != nil {
 		return nil, err
@@ -305,6 +311,13 @@ func (b *httpBackend) List(
 // server-side parser in internal/server/sessions.go.
 func filterToQuery(f service.ListFilter) (*apiclient.GetAPIV1SessionsQuery, error) {
 	q := &apiclient.GetAPIV1SessionsQuery{}
+	if f.IDs != nil {
+		ids, err := encodeSessionIDs(f.IDs)
+		if err != nil {
+			return nil, err
+		}
+		q.Ids = new(ids)
+	}
 	if f.Project != "" {
 		q.Project = new(f.Project)
 	}
@@ -403,6 +416,27 @@ func filterToQuery(f service.ListFilter) (*apiclient.GetAPIV1SessionsQuery, erro
 		q.Descending = new(*f.Descending)
 	}
 	return q, nil
+}
+
+func encodeSessionIDs(ids []string) (string, error) {
+	for _, id := range ids {
+		if strings.Contains(id, "\r\n") {
+			return "", errors.New("HTTP session selection does not support IDs containing CRLF")
+		}
+	}
+	if !service.SessionIDsRequireCSVEncoding(ids) {
+		return strings.Join(ids, ","), nil
+	}
+	var encoded strings.Builder
+	w := csv.NewWriter(&encoded)
+	if err := w.Write(ids); err != nil {
+		return "", err
+	}
+	w.Flush()
+	if err := w.Error(); err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(encoded.String(), "\n"), nil
 }
 
 func (b *httpBackend) Messages(

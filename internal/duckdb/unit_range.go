@@ -170,6 +170,8 @@ type duckAnchorKey struct {
 // anchor message row's classification columns — the DuckDB twin of
 // internal/db's contentAnchorMeta.
 type duckAnchorMeta struct {
+	machine         string
+	displayName     *string
 	relationship    string
 	parentSessionID string
 	role            sql.NullString
@@ -212,6 +214,8 @@ func (s *Store) deriveLexicalUnitsDuck(
 	}
 	for i := range matches {
 		matches[i].OrdinalRange = ranges[i]
+		matches[i].Machine = metas[i].machine
+		matches[i].DisplayName = metas[i].displayName
 		matches[i].Relationship = metas[i].relationship
 		matches[i].ParentSessionID = metas[i].parentSessionID
 		matches[i].Sidechain = anchors[i].Sidechain
@@ -278,7 +282,7 @@ func (s *Store) lookupAnchorMetaChunkDuck(
 	query := "WITH refs(session_id, ordinal) AS (VALUES " +
 		strings.Join(values, ", ") + ") " +
 		"SELECT r.session_id, r.ordinal, " +
-		"COALESCE(s.relationship_type, ''), COALESCE(s.parent_session_id, ''), " +
+		"COALESCE(s.relationship_type, ''), COALESCE(s.parent_session_id, ''), s.machine, COALESCE(s.display_name, s.session_name), " +
 		"m.role, m.is_sidechain, " +
 		"CASE WHEN m.is_system = FALSE AND " +
 		db.DuckDBSystemPrefixSQL("m.content", "m.role") +
@@ -297,6 +301,7 @@ func (s *Store) lookupAnchorMetaChunkDuck(
 		var meta duckAnchorMeta
 		if err := rows.Scan(&key.sessionID, &key.ordinal,
 			&meta.relationship, &meta.parentSessionID,
+			&meta.machine, &meta.displayName,
 			&meta.role, &meta.sidechain, &meta.embeddable); err != nil {
 			return fmt.Errorf("scanning match anchor: %w", err)
 		}

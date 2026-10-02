@@ -253,8 +253,37 @@ result and emits `machine_labels: {}` with a warning on stderr. Human output
 does not read the catalog.
 
 Use `session list --json --include-source` to include each session's recorded
-`file_path`. Paths are omitted by default; this option does not add a column to
-human output. HTTP callers use `include_source=true`.
+`file_path`, `file_size`, and `local_modified_at` when the backend stores them.
+Source fields are omitted by default; this option does not add a column to human
+output. HTTP callers use `include_source=true`. PostgreSQL stores the source path
+but does not store file size or archive-row update time.
+
+To compare copies across hosts, fetch their metadata in one request:
+
+```http
+GET /api/v1/sessions?ids=codex:abc,codex:def&include_source=true
+```
+
+The HTTP-only `ids` parameter accepts 1 to 100 comma-separated IDs. Quote an ID
+that contains a comma or line break using RFC 4180 CSV quoting; double any quote
+characters inside it. For example, the decoded query value
+`ids="openclaw:main:part,part"` selects one ID. When none of the IDs contains a
+comma or line break, quote characters are treated literally. Whitespace around
+members is trimmed and duplicate IDs are returned once. Empty members or more
+than 100 members return HTTP 400. A raw ID matches itself and copies whose IDs
+end in `~<raw-id>`; an ID containing `~` matches exactly. Unknown IDs return no
+rows. IDs containing a CRLF sequence cannot be selected through this parameter.
+Direct selection includes child, automated, one-shot, and empty sessions. Deleted
+sessions remain excluded. Other explicit filters intersect the selected rows;
+normal sorting, limits, and cursor pagination still apply. Hosted PostgreSQL
+resolves public IDs first and rejects ambiguous copies through its existing
+identity-conflict response.
+
+Compare `cwd`, `is_truncated`, `message_count`, `file_size`,
+`local_modified_at`, and the session timestamps when choosing a copy. Source
+metadata and timestamps help compare copies; they do not guarantee a complete
+transcript. `local_modified_at` records changes to the archived session row,
+including later metadata edits. It is not the source file's modification time.
 
 Date filters match a session when its activity window overlaps the selected date
 or range. Sessions that start before midnight and remain active after it
@@ -280,7 +309,7 @@ therefore appear on both dates.
 | `--include-one-shot`  | `include_one_shot`  | bool                                                                                                                                                                              |
 | `--include-automated` | `include_automated` | bool                                                                                                                                                                              |
 | `--include-children`  | `include_children`  | bool                                                                                                                                                                              |
-| `--include-source`    | `include_source`    | bool; include source file paths, which are hidden by default                                                                                                                      |
+| `--include-source`    | `include_source`    | bool; include available source path, size, and archive-row update time, hidden by default                                                                                                                      |
 | `--outcome`           | `outcome`           | comma-separated                                                                                                                                                                   |
 | `--health-grade`      | `health_grade`      | comma-separated                                                                                                                                                                   |
 | `--min-tool-failures` | `min_tool_failures` | int; `0` is a meaningful filter                                                                                                                                                   |
@@ -599,6 +628,8 @@ agentsview session search <pattern> [flags]
     {
       "session_id": "abc-123",
       "project": "myapp",
+      "machine": "workstation",
+      "display_name": "Database investigation",
       "ordinal": 17,
       "ordinal_range": [12, 24],
       "location": "tool_result",
@@ -608,6 +639,11 @@ agentsview session search <pattern> [flags]
   ]
 }
 ```
+
+Each content match includes `machine` and `display_name` in every supported
+search mode and source. `display_name` uses the user title, falls back to the
+provider session name, and is `null` when neither exists. Session search at
+`GET /api/v1/search` also includes `machine` alongside its existing `name`.
 
 One-shot, automated, and subagent sessions are excluded by default; opt back in
 with `--include-one-shot`, `--include-automated`, or `--include-children`.

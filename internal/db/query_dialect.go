@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 type placeholderStyle int
@@ -609,6 +611,18 @@ func buildSessionFilterWithBuilder(
 		return qualifier + "." + col
 	}
 
+	if f.IDs != nil {
+		// Explicit hydration selects the requested rows rather than sidebar
+		// roots and their descendants. Keep caller-supplied row filters.
+		f.ExcludeOneShot = false
+		f.ExcludeAutomated = false
+		preds, oneShot := sessionFilterPredicates(f, b, q)
+		if oneShot != "" {
+			preds = append(preds, oneShot)
+		}
+		return strings.Join(append([]string{q("deleted_at") + " IS NULL"}, preds...), " AND ")
+	}
+
 	basePreds := []string{
 		q("message_count") + " > 0",
 		q("deleted_at") + " IS NULL",
@@ -695,6 +709,9 @@ func sessionFilterPredicates(
 	f SessionFilter, b *QueryBuilder, q func(string) string,
 ) ([]string, string) {
 	var preds []string
+	if f.IDs != nil {
+		preds = append(preds, sessionIDsPredicate(f, b, q("id")))
+	}
 	if f.SessionID != "" {
 		preds = append(preds, q("id")+" = "+b.Add(f.SessionID))
 	}
@@ -1031,4 +1048,29 @@ func (b *QueryBuilder) SessionDateRangePredicates(dateFrom, dateTo, timezone str
 			))))
 	}
 	return preds
+}
+
+// sessionIDsPredicate uses equality for exact IDs and literal, case-sensitive
+// tilde suffixes for raw IDs. SQL LIKE would treat ID characters as wildcards.
+func sessionIDsPredicate(f SessionFilter, b *QueryBuilder, col string) string {
+	parts := []string{inPredicate(col, f.IDs, b)}
+	if !f.IDsExact {
+		for _, id := range f.IDs {
+			if strings.Contains(id, "~") {
+				continue
+			}
+			suffix := "~" + id
+			ph := b.Add(suffix)
+			n := strconv.Itoa(utf8.RuneCountInString(suffix))
+			switch b.dialect.name {
+			case "sqlite":
+				parts = append(parts, "substr("+col+", -"+n+") = "+ph)
+			case "clickhouse":
+				parts = append(parts, "endsWith("+col+", "+ph+")")
+			default:
+				parts = append(parts, "right("+col+", "+n+") = "+ph)
+			}
+		}
+	}
+	return "(" + strings.Join(parts, " OR ") + ")"
 }

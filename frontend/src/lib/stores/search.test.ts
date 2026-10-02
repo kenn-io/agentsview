@@ -47,6 +47,7 @@ function fullTextResponse(query: string, count = 1): SearchResponse {
     results: Array.from({ length: count }, (_, index) => ({
       session_id: `full-${index}`,
       project: "alpha",
+      machine: "node-a",
       agent: "codex",
       name: `Result ${index}`,
       ordinal: index + 2,
@@ -61,6 +62,8 @@ function contentMatch(sessionId: string, ordinal: number, score: number): DbCont
   return {
     session_id: sessionId,
     project: "semantic-project",
+    machine: "node-a",
+    display_name: null,
     agent: "claude",
     location: "message",
     role: "user",

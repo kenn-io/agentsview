@@ -43,6 +43,16 @@ func (h *HostedStore) ListSessions(ctx context.Context, f db.SessionFilter) (db.
 	return hostedRead(ctx, h, func(rev hostedRevision) (db.SessionPage, error) {
 		q := f
 		var err error
+		if f.IDs != nil {
+			q.IDs, err = h.resolveBatch(ctx, f.IDs, false, false)
+			if err != nil {
+				return db.SessionPage{}, err
+			}
+			if q.IDs == nil {
+				q.IDs = []string{}
+			}
+			q.IDsExact = true
+		}
 		q.Cursor, err = h.openCursor(f.Cursor, rev)
 		if err != nil {
 			return db.SessionPage{}, err

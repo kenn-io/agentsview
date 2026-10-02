@@ -91,7 +91,8 @@ var termsSQLByDialect = map[string]termsSQLFragments{
 //
 // Columns: session_id, project, agent, transcript_revision, location, role,
 // start_ordinal, timestamp, body, end_ordinal, relationship_type,
-// parent_session_id, is_sidechain, subordinate. ScanTermsMatches reads them.
+// parent_session_id, is_sidechain, subordinate, machine, display_name.
+// ScanTermsMatches reads them.
 func BuildTermsSearchSQL(
 	f ContentSearchFilter, terms []string, dialect QueryDialect,
 ) (string, []any, error) {
@@ -135,7 +136,8 @@ func BuildTermsSearchSQL(
 		WITH scoped AS (
 			SELECT id FROM sessions WHERE %s
 		), eligible AS (
-			SELECT m.session_id, s.project, s.agent,
+			SELECT m.session_id, s.project, s.agent, s.machine,
+				COALESCE(s.display_name, s.session_name) AS display_name,
 				COALESCE(s.transcript_revision,'') AS transcript_revision,
 				COALESCE(s.relationship_type,'') AS relationship_type,
 				COALESCE(s.parent_session_id,'') AS parent_session_id,
@@ -156,7 +158,7 @@ func BuildTermsSearchSQL(
 			) AS exchange_no
 			FROM eligible
 		), exchanges AS (
-			SELECT session_id, project, agent, transcript_revision, relationship_type,
+			SELECT session_id, project, agent, machine, display_name, transcript_revision, relationship_type,
 				parent_session_id, is_sidechain, subordinate, exchange_no,
 				MIN(ordinal) AS start_ordinal, MAX(ordinal) AS end_ordinal,
 				CASE WHEN exchange_no > 0 THEN 'user' ELSE 'assistant' END AS role,
@@ -165,12 +167,12 @@ func BuildTermsSearchSQL(
 				MAX(sort_ts) AS sort_ts
 			FROM tagged
 			WHERE exchange_no > 0
-			GROUP BY session_id, project, agent, transcript_revision, relationship_type,
+			GROUP BY session_id, project, agent, machine, display_name, transcript_revision, relationship_type,
 				parent_session_id, is_sidechain, subordinate, exchange_no
 		)
 		SELECT session_id, project, agent, transcript_revision, 'message', role, start_ordinal,
 			ts, body, end_ordinal, relationship_type, parent_session_id,
-			is_sidechain, subordinate
+			is_sidechain, subordinate, machine, display_name
 		FROM exchanges
 		WHERE %s
 		ORDER BY subordinate ASC, %s, session_id ASC, start_ordinal ASC
@@ -203,7 +205,7 @@ func ScanTermsMatches(
 			&match.TranscriptRevision, &match.Location,
 			&match.Role, &match.Ordinal, timestampDest, &body, &endOrdinal,
 			&match.Relationship, &match.ParentSessionID, &match.Sidechain,
-			&match.Subordinate,
+			&match.Subordinate, &match.Machine, &match.DisplayName,
 		); err != nil {
 			return ContentSearchPage{}, fmt.Errorf("scan terms match: %w", err)
 		}

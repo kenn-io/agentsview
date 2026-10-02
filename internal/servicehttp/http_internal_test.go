@@ -3,6 +3,7 @@ package servicehttp
 import (
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -248,4 +249,64 @@ func TestQueryRecallSemanticModesUseLongRunningClient(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestListForwardsSessionIDs(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		ids     []string
+		present bool
+		want    string
+	}{
+		{"omitted", nil, false, ""},
+		{"batch", []string{"codex:shared", "node-a~codex:shared"}, true, "codex:shared,node-a~codex:shared"},
+		{"quoted comma and quote", []string{`openclaw:main:part,"quoted"`}, true, `"openclaw:main:part,""quoted"""`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, tt.present, r.URL.Query().Has("ids"))
+				assert.Equal(t, tt.want, r.URL.Query().Get("ids"))
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"sessions":[]}`))
+			}))
+			t.Cleanup(srv.Close)
+			_, err := NewHTTPBackend(srv.URL, "", false, "").List(t.Context(), service.ListFilter{IDs: tt.ids})
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestListRejectsCRLFSessionIDsBeforeRequest(t *testing.T) {
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"sessions":[]}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	_, err := NewHTTPBackend(srv.URL, "", false, "").List(
+		t.Context(), service.ListFilter{IDs: []string{"openclaw:main:part\r\npart"}},
+	)
+	require.ErrorContains(t, err, "CRLF")
+	assert.Zero(t, requests.Load())
+}
+
+func TestListEmptySessionSelectionReturnsEmptyWithoutRequest(t *testing.T) {
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"sessions":[]}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	page, err := NewHTTPBackend(srv.URL, "", false, "").List(
+		t.Context(), service.ListFilter{IDs: []string{}},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, page)
+	assert.Empty(t, page.Sessions)
+	assert.Zero(t, page.Total)
+	assert.Zero(t, requests.Load())
 }

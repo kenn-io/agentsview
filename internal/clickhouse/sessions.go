@@ -36,11 +36,8 @@ const sessionCols = `id, project, project_assigned, machine, agent,
 	secret_leak_count, secrets_rules_version,
 	deleted_at, deletion_cause, termination_status, transcript_revision`
 
-// sessionFullCols is the GetSessionFull list. It adds file_path the way
-// PostgreSQL serve does, and omits volatile fingerprint columns
-// (file_size, file_mtime, file_hash, local_modified_at).
-const sessionFullCols = sessionCols + `,
-	file_path`
+// sessionFullCols retains the detail route's path-only source projection.
+const sessionFullCols = sessionCols + `, file_path`
 
 // sessionActivityExpr orders sessions by their most recent activity.
 const sessionActivityExpr = "COALESCE(ended_at, started_at, created_at)"
@@ -52,8 +49,14 @@ func scanSession(rs interface{ Scan(...any) error }) (db.Session, error) {
 func scanSessionWithSource(
 	rs interface{ Scan(...any) error }, includeSource bool,
 ) (db.Session, error) {
+	return scanSessionProjection(rs, includeSource, includeSource)
+}
+
+func scanSessionProjection(
+	rs interface{ Scan(...any) error }, includeSource, includeComparison bool,
+) (db.Session, error) {
 	var s db.Session
-	var createdAt, startedAt, endedAt, deletedAt any
+	var createdAt, startedAt, endedAt, deletedAt, localModifiedAt any
 	targets := []any{
 		&s.ID, &s.Project, &s.ProjectAssigned, &s.Machine, &s.Agent,
 		&s.AgentLabel, &s.Entrypoint, &s.SessionKind,
@@ -87,10 +90,16 @@ func scanSessionWithSource(
 	if includeSource {
 		targets = append(targets, &s.FilePath)
 	}
+	if includeComparison {
+		targets = append(targets, &s.FileSize, &localModifiedAt)
+	}
 	if err := rs.Scan(targets...); err != nil {
 		return s, err
 	}
 	s.CreatedAt = formatDBTime(createdAt)
+	if v := formatDBTime(localModifiedAt); v != "" {
+		s.LocalModifiedAt = &v
+	}
 	if v := formatDBTime(startedAt); v != "" {
 		s.StartedAt = &v
 	}
@@ -155,7 +164,7 @@ func (s *Store) ListSessions(ctx context.Context, f db.SessionFilter) (db.Sessio
 	}
 	columns := sessionCols
 	if f.IncludeSource {
-		columns += ", file_path"
+		columns += ", file_path, file_size, local_modified_at"
 	}
 	query := "SELECT " + columns +
 		" FROM sessions WHERE " + cursorWhere + " " +
@@ -274,7 +283,7 @@ func (s *Store) GetSession(ctx context.Context, id string) (*db.Session, error) 
 
 func (s *Store) GetSessionFull(ctx context.Context, id string) (*db.Session, error) {
 	row := s.queryRowContext(ctx, "SELECT "+sessionFullCols+" FROM sessions WHERE id = ?", id)
-	sess, err := scanSessionWithSource(row, true)
+	sess, err := scanSessionProjection(row, true, false)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

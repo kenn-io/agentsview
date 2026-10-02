@@ -16098,7 +16098,7 @@ type GetAPIV1SessionsQuery struct {
 	// IncludeChildren Include child sessions
 	IncludeChildren *bool `json:"include_children,omitempty"`
 
-	// IncludeSource Include source file paths
+	// IncludeSource Include available source file path, size, and archive-row update time on /sessions; accepted but ignored by /sessions/sidebar-index
 	IncludeSource *bool `json:"include_source,omitempty"`
 
 	// Outcome Filter by detected outcome
@@ -16130,6 +16130,9 @@ type GetAPIV1SessionsQuery struct {
 
 	// Descending Default sort direction for keys in order_by that carry no explicit :asc/:desc suffix
 	Descending *bool `json:"descending,omitempty"`
+
+	// Ids Comma-separated list of 1 to 100 session IDs. Quote IDs containing commas or line breaks with RFC 4180 CSV quoting; IDs containing CRLF are rejected. Raw IDs include host copies; tilde-qualified IDs match exactly. Explicit filters intersect the selection; discovery exclusions do not apply.
+	Ids *string `json:"ids,omitempty"`
 }
 
 func (g GetAPIV1SessionsQuery) Validate() error {
@@ -19155,8 +19158,10 @@ type DBContentMatch struct {
 	Agent              string      `json:"agent" validate:"required"`
 	ContextAfter       []DBMessage `json:"context_after,omitempty"`
 	ContextBefore      []DBMessage `json:"context_before,omitempty"`
+	DisplayName        *string     `json:"display_name,omitempty" validate:"required"`
 	IsSidechain        *bool       `json:"is_sidechain,omitempty"`
 	Location           string      `json:"location" validate:"required"`
+	Machine            string      `json:"machine" validate:"required"`
 	Ordinal            int64       `json:"ordinal"`
 	OrdinalRange       []int64     `json:"ordinal_range" validate:"required"`
 	ParentSessionID    *string     `json:"parent_session_id,omitempty"`
@@ -19192,8 +19197,16 @@ func (d DBContentMatch) Validate() error {
 			}
 		}
 	}
+	if d.DisplayName != nil {
+		if err := typesValidator.Var(d.DisplayName, "required"); err != nil {
+			errors = errors.Append("DisplayName", err)
+		}
+	}
 	if err := typesValidator.Var(d.Location, "required"); err != nil {
 		errors = errors.Append("Location", err)
+	}
+	if err := typesValidator.Var(d.Machine, "required"); err != nil {
+		errors = errors.Append("Machine", err)
 	}
 	if err := typesValidator.Var(d.OrdinalRange, "required"); err != nil {
 		errors = errors.Append("OrdinalRange", err)

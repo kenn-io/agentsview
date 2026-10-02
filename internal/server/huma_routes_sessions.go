@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/csv"
 	"errors"
 	"fmt"
 	"log"
@@ -86,7 +87,7 @@ type sessionFilterInput struct {
 	IncludeOneShot   bool              `query:"include_one_shot" doc:"Include one-shot sessions"`
 	IncludeAutomated bool              `query:"include_automated" doc:"Include automated sessions"`
 	IncludeChildren  bool              `query:"include_children" doc:"Include child sessions"`
-	IncludeSource    bool              `query:"include_source" doc:"Include source file paths"`
+	IncludeSource    bool              `query:"include_source" doc:"Include available source file path, size, and archive-row update time on /sessions; accepted but ignored by /sessions/sidebar-index"`
 	Outcome          string            `query:"outcome" doc:"Filter by detected outcome"`
 	HealthGrade      string            `query:"health_grade" doc:"Filter by health grade"`
 	Cursor           string            `query:"cursor" doc:"Opaque pagination cursor"`
@@ -97,6 +98,55 @@ type sessionFilterInput struct {
 	Starred          bool              `query:"starred" doc:"Filter sessions by starred status"`
 	OrderBy          string            `query:"order_by" default:"recent" doc:"Sort order: a comma-separated list of keys, each optionally suffixed :asc or :desc (e.g. messages:desc,started:asc). A key with no suffix uses the descending param, then its natural direction. Valid keys: recent, started, messages, user-messages, output-tokens, peak-context, failures, retries, edit-churn, compactions, context-pressure, health, secrets, id."`
 	Descending       optionalBoolParam `query:"descending" doc:"Default sort direction for keys in order_by that carry no explicit :asc/:desc suffix"`
+}
+
+// SessionListFilters exposes the shared filters to Huma's embedded-field walk,
+// which skips unexported anonymous fields.
+type SessionListFilters = sessionFilterInput
+
+// Batch selection belongs only to the session list, not sidebar discovery.
+type listSessionsInput struct {
+	SessionListFilters
+	IDs    string `query:"ids" doc:"Comma-separated list of 1 to 100 session IDs. Quote IDs containing commas or line breaks with RFC 4180 CSV quoting; IDs containing CRLF are rejected. Raw IDs include host copies; tilde-qualified IDs match exactly. Explicit filters intersect the selection; discovery exclusions do not apply."`
+	IDsSet bool
+}
+
+func (in *listSessionsInput) Resolve(ctx huma.Context) []error {
+	// Huma treats an empty query value as omitted. Presence must be checked
+	// separately so ?ids= fails closed instead of listing the archive.
+	requestURL := ctx.URL()
+	in.IDsSet = requestURL.Query().Has("ids")
+	return nil
+}
+
+func parseSessionIDs(raw string) ([]string, error) {
+	if strings.Contains(raw, "\r\n") {
+		return nil, apiError(http.StatusBadRequest, "ids cannot contain CRLF")
+	}
+	members := strings.Split(raw, ",")
+	reader := csv.NewReader(strings.NewReader(raw))
+	reader.FieldsPerRecord = -1
+	reader.TrimLeadingSpace = true
+	if records, err := reader.ReadAll(); err == nil && len(records) == 1 &&
+		service.SessionIDsRequireCSVEncoding(records[0]) {
+		members = records[0]
+	}
+	if len(members) > 100 {
+		return nil, apiError(http.StatusBadRequest, "ids must contain 1 to 100 non-empty session IDs")
+	}
+	ids := make([]string, 0, len(members))
+	seen := make(map[string]bool, len(members))
+	for _, member := range members {
+		id := strings.TrimSpace(member)
+		if id == "" {
+			return nil, apiError(http.StatusBadRequest, "ids must contain 1 to 100 non-empty session IDs")
+		}
+		if !seen[id] {
+			ids = append(ids, id)
+			seen[id] = true
+		}
+	}
+	return ids, nil
 }
 
 type messageListInput struct {
@@ -218,11 +268,17 @@ func (in *sessionFilterInput) dbFilter(includeChildren bool) (db.SessionFilter, 
 
 func (s *Server) humaListSessions(
 	ctx context.Context,
-	in *sessionFilterInput,
+	in *listSessionsInput,
 ) (*jsonOutput[*service.SessionList], error) {
 	filter, err := in.listFilter()
 	if err != nil {
 		return nil, err
+	}
+	if in.IDsSet {
+		filter.IDs, err = parseSessionIDs(in.IDs)
+		if err != nil {
+			return nil, err
+		}
 	}
 	page, err := s.sessions.List(ctx, filter)
 	if err != nil {

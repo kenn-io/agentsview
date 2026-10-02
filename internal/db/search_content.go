@@ -66,16 +66,18 @@ type ContentSearchFilter struct {
 // window). The CLI sanitizes it for terminal display.
 type ContentMatch struct {
 	// WebURL is a client-derived browser link, never persisted.
-	WebURL    string `json:"web_url,omitempty"`
-	SessionID string `json:"session_id"`
-	Project   string `json:"project"`
-	Agent     string `json:"agent"`
-	Location  string `json:"location"` // message | tool_input | tool_result
-	Role      string `json:"role"`
-	ToolName  string `json:"tool_name,omitempty"`
-	Ordinal   int    `json:"ordinal"`
-	Timestamp string `json:"timestamp"`
-	Snippet   string `json:"snippet"`
+	WebURL      string  `json:"web_url,omitempty"`
+	SessionID   string  `json:"session_id"`
+	Project     string  `json:"project"`
+	Agent       string  `json:"agent"`
+	Machine     string  `json:"machine"`
+	DisplayName *string `json:"display_name"`
+	Location    string  `json:"location"` // message | tool_input | tool_result
+	Role        string  `json:"role"`
+	ToolName    string  `json:"tool_name,omitempty"`
+	Ordinal     int     `json:"ordinal"`
+	Timestamp   string  `json:"timestamp"`
+	Snippet     string  `json:"snippet"`
 	// Score is the searcher's relevance score for "semantic"/"hybrid" modes,
 	// nil for the other modes which have no comparable ranking signal.
 	Score *float64 `json:"score,omitempty"`
@@ -1007,6 +1009,8 @@ func (db *DB) searchContentSemantic(
 			SessionID:          h.SessionID,
 			Project:            info.project,
 			Agent:              info.agent,
+			Machine:            info.machine,
+			DisplayName:        info.displayName,
 			TranscriptRevision: info.transcriptRevision,
 			Location:           "message",
 			Role:               info.role,
@@ -1421,6 +1425,8 @@ func (db *DB) enrichHybridMatches(
 			SessionID:          d.sessionID,
 			Project:            info.project,
 			Agent:              info.agent,
+			Machine:            info.machine,
+			DisplayName:        info.displayName,
 			TranscriptRevision: info.transcriptRevision,
 			Location:           "message",
 			Role:               info.role,
@@ -1523,6 +1529,8 @@ type semanticHitKey struct {
 // store lineage per hit); isSidechain is the ANCHOR ordinal's message flag.
 type semanticHitInfo struct {
 	project, agent, role, timestamp, content string
+	machine                                  string
+	displayName                              *string
 	transcriptRevision                       string
 	relationshipType, parentSessionID        string
 	isSidechain                              bool
@@ -1556,7 +1564,7 @@ func (db *DB) enrichSemanticHits(
 			}
 			query := "WITH hits(session_id, ordinal) AS (VALUES " +
 				strings.Join(values, ", ") + ") " +
-				"SELECT m.session_id, s.project, s.agent, m.role, m.ordinal, " +
+				"SELECT m.session_id, s.project, s.agent, s.machine, COALESCE(s.display_name, s.session_name), m.role, m.ordinal, " +
 				"COALESCE(m.timestamp, ''), m.content, " +
 				"COALESCE(s.transcript_revision, ''), " +
 				"COALESCE(s.relationship_type, ''), " +
@@ -1573,7 +1581,7 @@ func (db *DB) enrichSemanticHits(
 			for rows.Next() {
 				var key semanticHitKey
 				var info semanticHitInfo
-				if err := rows.Scan(&key.sessionID, &info.project, &info.agent,
+				if err := rows.Scan(&key.sessionID, &info.project, &info.agent, &info.machine, &info.displayName,
 					&info.role, &key.ordinal, &info.timestamp, &info.content,
 					&info.transcriptRevision,
 					&info.relationshipType, &info.parentSessionID,

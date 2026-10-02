@@ -290,6 +290,8 @@ func (s *Store) enrichHybridMatches(
 			SessionID:       d.sessionID,
 			Project:         info.project,
 			Agent:           info.agent,
+			Machine:         info.machine,
+			DisplayName:     info.displayName,
 			Location:        "message",
 			Role:            info.role,
 			Ordinal:         d.ordinal,

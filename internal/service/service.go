@@ -8,6 +8,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"io"
+	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -380,6 +381,9 @@ type SessionList struct {
 // ListFilter mirrors the HTTP query parameters in handleListSessions.
 // Field names map to HTTP query param names via json tags.
 type ListFilter struct {
+	// IDs selects explicit sessions and their host copies; nil uses discovery defaults.
+	IDs []string `json:"ids,omitzero"`
+
 	Project          string `json:"project,omitempty"`
 	ExcludeProject   string `json:"exclude_project,omitempty"`
 	Machine          string `json:"machine,omitempty"`
@@ -409,6 +413,17 @@ type ListFilter struct {
 	// overrides the sort key's canonical direction when non-nil.
 	OrderBy    string `json:"order_by,omitempty"`
 	Descending *bool  `json:"descending,omitempty"`
+}
+
+// SessionIDsRequireCSVEncoding reports whether an ID contains a comma or line
+// break that must be preserved by the HTTP sessions-list query encoding.
+func SessionIDsRequireCSVEncoding(ids []string) bool {
+	for _, id := range ids {
+		if strings.ContainsAny(id, ",\r\n") {
+			return true
+		}
+	}
+	return false
 }
 
 // MessageFilter mirrors GET /api/v1/sessions/{id}/messages query params.

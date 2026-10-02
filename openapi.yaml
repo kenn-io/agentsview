@@ -1143,9 +1143,15 @@ components:
           items:
             $ref: "#/components/schemas/DbMessage"
           type: array
+        display_name:
+          type:
+            - string
+            - "null"
         is_sidechain:
           type: boolean
         location:
+          type: string
+        machine:
           type: string
         ordinal:
           format: int64
@@ -1186,6 +1192,8 @@ components:
         - session_id
         - project
         - agent
+        - machine
+        - display_name
         - location
         - role
         - ordinal
@@ -2337,6 +2345,8 @@ components:
       properties:
         agent:
           type: string
+        machine:
+          type: string
         name:
           type: string
         ordinal:
@@ -2359,6 +2369,7 @@ components:
         - session_id
         - project
         - agent
+        - machine
         - name
         - ordinal
         - session_ended_at
@@ -17283,12 +17294,12 @@ paths:
           schema:
             description: Include child sessions
             type: boolean
-        - description: Include source file paths
+        - description: Include available source file path, size, and archive-row update time on /sessions; accepted but ignored by /sessions/sidebar-index
           explode: false
           in: query
           name: include_source
           schema:
-            description: Include source file paths
+            description: Include available source file path, size, and archive-row update time on /sessions; accepted but ignored by /sessions/sidebar-index
             type: boolean
         - description: Filter by detected outcome
           explode: false
@@ -17365,6 +17376,13 @@ paths:
           schema:
             description: Default sort direction for keys in order_by that carry no explicit :asc/:desc suffix
             type: boolean
+        - description: Comma-separated list of 1 to 100 session IDs. Quote IDs containing commas or line breaks with RFC 4180 CSV quoting; IDs containing CRLF are rejected. Raw IDs include host copies; tilde-qualified IDs match exactly. Explicit filters intersect the selection; discovery exclusions do not apply.
+          explode: false
+          in: query
+          name: ids
+          schema:
+            description: Comma-separated list of 1 to 100 session IDs. Quote IDs containing commas or line breaks with RFC 4180 CSV quoting; IDs containing CRLF are rejected. Raw IDs include host copies; tilde-qualified IDs match exactly. Explicit filters intersect the selection; discovery exclusions do not apply.
+            type: string
       responses:
         "200":
           content:
@@ -17648,12 +17666,12 @@ paths:
           schema:
             description: Include child sessions
             type: boolean
-        - description: Include source file paths
+        - description: Include available source file path, size, and archive-row update time on /sessions; accepted but ignored by /sessions/sidebar-index
           explode: false
           in: query
           name: include_source
           schema:
-            description: Include source file paths
+            description: Include available source file path, size, and archive-row update time on /sessions; accepted but ignored by /sessions/sidebar-index
             type: boolean
         - description: Filter by detected outcome
           explode: false
