@@ -175,28 +175,41 @@ func selectRawSyncBackfillProviders(
 		if factory.Capabilities().RawCapture.Support != parser.CapabilitySupported {
 			return nil, errors.New("selected provider does not support raw capture")
 		}
-		roots := rawSyncFilesystemRoots(cfg.ResolveDirs(typ))
-		for index, root := range roots {
-			absolute, err := filepath.Abs(root)
-			if err != nil {
-				return nil, errors.New("could not resolve a selected provider root")
-			}
-			roots[index] = filepath.Clean(absolute)
-		}
-		slices.Sort(roots)
-		roots = slices.Compact(roots)
-		if len(roots) == 0 {
-			return nil, errors.New("selected provider has no configured filesystem roots")
+		roots, err := absoluteRawSyncBackfillRoots(rawSyncFilesystemRoots(cfg.ResolveDirs(typ)))
+		if err != nil {
+			return nil, err
 		}
 		provider := factory.NewProvider(parser.ProviderConfig{
 			Roots: roots, Machine: cfg.LocalMachineName,
 			SourceMachines: cfg.SourceMachines[typ],
 		})
+		// Bind the provider's normalized roots, such as a Goose home resolved
+		// to its sessions directory, so capture plans fall inside the selection.
+		if normalized, ok := provider.(interface{ ConfiguredRoots() []string }); ok {
+			if roots, err = absoluteRawSyncBackfillRoots(rawSyncFilesystemRoots(normalized.ConfiguredRoots())); err != nil {
+				return nil, err
+			}
+		}
+		if len(roots) == 0 {
+			return nil, errors.New("selected provider has no configured filesystem roots")
+		}
 		selected = append(selected, rawSyncBackfillProvider{
 			Provider: provider, ConfiguredRoots: roots,
 		})
 	}
 	return selected, nil
+}
+
+func absoluteRawSyncBackfillRoots(roots []string) ([]string, error) {
+	for index, root := range roots {
+		absolute, err := filepath.Abs(root)
+		if err != nil {
+			return nil, errors.New("could not resolve a selected provider root")
+		}
+		roots[index] = filepath.Clean(absolute)
+	}
+	slices.Sort(roots)
+	return slices.Compact(roots), nil
 }
 
 func runRawSyncBackfill(

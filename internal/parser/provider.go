@@ -326,6 +326,12 @@ func (b ProviderBase) Capabilities() Capabilities {
 	return b.Caps
 }
 
+// ConfiguredRoots returns the roots after the provider's own normalization,
+// which raw capture plans report as their configured root.
+func (b ProviderBase) ConfiguredRoots() []string {
+	return slices.Clone(b.Config.Roots)
+}
+
 func (b ProviderBase) Discover(context.Context) ([]SourceRef, error) {
 	return nil, nil
 }

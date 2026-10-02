@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -460,4 +461,63 @@ func decodeRawSyncBackfillProgress(t *testing.T, output string) rawcheckpoint.Ba
 	var progress rawcheckpoint.BackfillProgress
 	require.NoError(t, json.Unmarshal([]byte(output), &progress))
 	return progress
+}
+
+type acceptingRawSyncBackfillTransport struct{ commits int }
+
+func (*acceptingRawSyncBackfillTransport) MissingObjects(context.Context, parser.AgentType, []rawsync.ObjectRef) ([]rawsync.ObjectRef, error) {
+	return nil, nil
+}
+
+func (*acceptingRawSyncBackfillTransport) UploadObject(context.Context, parser.AgentType, rawsync.ObjectRef, io.ReaderAt) error {
+	return nil
+}
+
+func (t *acceptingRawSyncBackfillTransport) CommitManifest(context.Context, rawsync.Manifest) (rawsync.CommitResult, error) {
+	t.commits++
+	return rawsync.CommitResult{
+		ManifestID: fmt.Sprintf("%064x", t.commits), Receipt: fmt.Sprintf("%064x", t.commits+100),
+		Generation: 1, Created: true,
+	}, nil
+}
+
+func TestRawSyncBackfillCompletesGooseRootsTheProviderNormalizes(t *testing.T) {
+	for name, entry := range map[string]func(home string) string{
+		"goose home":  func(home string) string { return home },
+		"sessions.db": func(home string) string { return filepath.Join(home, "data", "sessions", parser.GooseDBName) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			sessions := filepath.Join(home, "data", "sessions")
+			require.NoError(t, os.MkdirAll(sessions, 0o700))
+			conn, err := sql.Open("sqlite3", filepath.Join(sessions, parser.GooseDBName))
+			require.NoError(t, err)
+			_, err = conn.Exec(`CREATE TABLE sessions (id TEXT PRIMARY KEY)`)
+			require.NoError(t, err)
+			require.NoError(t, conn.Close())
+			cfg := config.Config{AgentDirs: map[parser.AgentType][]string{parser.AgentGoose: {entry(home)}}}
+			selected, err := selectRawSyncBackfillProviders(cfg, []string{"goose"})
+			require.NoError(t, err)
+			store, err := rawcheckpoint.Open(t.Context(), filepath.Join(t.TempDir(), "checkpoint.db"))
+			require.NoError(t, err)
+			defer store.Close()
+			require.NoError(t, store.SetDevice(t.Context(), "device-a"))
+			backfill := rawSyncBackfillConfig{
+				RunID: "run-goose", DeviceID: "device-a", Server: "https://sync.example.test",
+				Providers: []string{"goose"}, Format: "json", BatchSize: 8,
+			}
+			spec, err := rawSyncBackfillSpec(t.Context(), store, backfill, selected)
+			require.NoError(t, err)
+			var output testBuffer
+
+			err = runRawSyncBackfillAttempt(t.Context(), &output, backfill, store, spec,
+				[]parser.Provider{selected[0].Provider}, &acceptingRawSyncBackfillTransport{})
+
+			require.NoError(t, err, output.String())
+			var progress rawcheckpoint.BackfillProgress
+			require.NoError(t, json.Unmarshal(output.data, &progress))
+			assert.True(t, progress.Complete)
+			assert.Equal(t, int64(1), progress.Captured)
+		})
+	}
 }
