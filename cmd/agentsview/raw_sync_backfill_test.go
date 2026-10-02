@@ -175,9 +175,11 @@ type forbiddenRawSyncBackfillTransport struct{}
 func (forbiddenRawSyncBackfillTransport) MissingObjects(context.Context, parser.AgentType, []rawsync.ObjectRef) ([]rawsync.ObjectRef, error) {
 	panic("transport must not be called after cancellation")
 }
+
 func (forbiddenRawSyncBackfillTransport) UploadObject(context.Context, parser.AgentType, rawsync.ObjectRef, io.ReaderAt) error {
 	panic("transport must not be called after cancellation")
 }
+
 func (forbiddenRawSyncBackfillTransport) CommitManifest(context.Context, rawsync.Manifest) (rawsync.CommitResult, error) {
 	panic("transport must not be called after cancellation")
 }
@@ -492,7 +494,7 @@ func TestRawSyncBackfillCompletesGooseRootsTheProviderNormalizes(t *testing.T) {
 			require.NoError(t, os.MkdirAll(sessions, 0o700))
 			conn, err := sql.Open("sqlite3", filepath.Join(sessions, parser.GooseDBName))
 			require.NoError(t, err)
-			_, err = conn.Exec(`CREATE TABLE sessions (id TEXT PRIMARY KEY)`)
+			_, err = conn.ExecContext(t.Context(), `CREATE TABLE sessions (id TEXT PRIMARY KEY)`)
 			require.NoError(t, err)
 			require.NoError(t, conn.Close())
 			cfg := config.Config{AgentDirs: map[parser.AgentType][]string{parser.AgentGoose: {entry(home)}}}

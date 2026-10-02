@@ -12,8 +12,10 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-var ErrBackfillConflict = errors.New("rawcheckpoint: backfill selection or state conflict")
-var ErrBackfillIncomplete = errors.New("rawcheckpoint: backfill incomplete")
+var (
+	ErrBackfillConflict   = errors.New("rawcheckpoint: backfill selection or state conflict")
+	ErrBackfillIncomplete = errors.New("rawcheckpoint: backfill incomplete")
+)
 
 type BackfillSelection struct {
 	Provider         parser.AgentType
@@ -277,6 +279,7 @@ func (s *Store) RecordBackfillFailure(ctx context.Context, runID, class string) 
 		return err
 	})
 }
+
 func validBackfillFailure(class string) bool {
 	switch class {
 	case "", "discovery_incomplete", "source_changed", "unsupported", "capacity", "capture", "upload", "deferred", "cancelled", "root_unavailable", "capture_lost":
@@ -310,6 +313,7 @@ func (s *Store) SealBackfill(ctx context.Context, runID string) (BackfillProgres
 	}
 	return s.BackfillProgress(ctx, runID)
 }
+
 func (s *Store) CompleteBackfill(ctx context.Context, runID string) (BackfillProgress, error) {
 	err := s.withImmediateWrite(ctx, "complete backfill", func(conn *sql.Conn) error {
 		state, err := requireBackfillConn(ctx, conn, runID)

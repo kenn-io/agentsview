@@ -34,12 +34,15 @@ type backfillMetadata struct {
 func (m *backfillMetadata) RecordVerifiedObject(context.Context, rawsync.AuthIdentity, rawsync.ObjectRef) error {
 	return nil
 }
+
 func (m *backfillMetadata) RecordVerifiedObjects(context.Context, rawsync.AuthIdentity, []rawsync.ObjectRef) error {
 	return nil
 }
+
 func (m *backfillMetadata) MissingObjects(context.Context, rawsync.AuthIdentity, []rawsync.ObjectRef) ([]rawsync.ObjectRef, error) {
 	return nil, errors.New("metadata must not decide custody")
 }
+
 func (m *backfillMetadata) CommitManifest(_ context.Context, manifest rawsync.CanonicalManifest, _ string) (rawsync.CommitResult, error) {
 	if commit, ok := m.commits[manifest.ManifestID]; ok {
 		return commit, nil
@@ -70,6 +73,7 @@ var backfillIdentity = rawsync.AuthIdentity{TenantID: "tenant-a", DeviceID: "dev
 func (t *backfillCustodyTransport) MissingObjects(ctx context.Context, p parser.AgentType, refs []rawsync.ObjectRef) ([]rawsync.ObjectRef, error) {
 	return t.service.MissingObjects(ctx, backfillIdentity, p, refs)
 }
+
 func (t *backfillCustodyTransport) UploadObject(ctx context.Context, p parser.AgentType, ref rawsync.ObjectRef, body io.ReaderAt) error {
 	_, err := t.service.FinalizeObject(ctx, backfillIdentity, p, ref, io.NewSectionReader(body, 0, ref.Length))
 	if err == nil {
@@ -77,6 +81,7 @@ func (t *backfillCustodyTransport) UploadObject(ctx context.Context, p parser.Ag
 	}
 	return err
 }
+
 func (t *backfillCustodyTransport) CommitManifest(ctx context.Context, m rawsync.Manifest) (rawsync.CommitResult, error) {
 	t.commitCalls++
 	commit, err := t.service.CommitManifest(ctx, backfillIdentity, m)
@@ -85,6 +90,7 @@ func (t *backfillCustodyTransport) CommitManifest(ctx context.Context, m rawsync
 	}
 	return commit, err
 }
+
 func newBackfillCustody(t *testing.T) *backfillCustodyTransport {
 	t.Helper()
 	repo, err := artifact.OpenRepository(t.Context(), t.TempDir())
@@ -97,6 +103,7 @@ func newBackfillCustody(t *testing.T) *backfillCustodyTransport {
 	require.NoError(t, err)
 	return &backfillCustodyTransport{service: service, objects: objects, metadata: metadata}
 }
+
 func TestBackfillCrashAfterServerReceiptPreservesManifestAndGeneration(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "a.jsonl")
@@ -193,10 +200,12 @@ type backfillShapeProvider struct {
 func (p *backfillShapeProvider) WatchPlan(context.Context) (parser.WatchPlan, error) {
 	return parser.WatchPlan{Roots: []parser.WatchRoot{{Path: p.root}}}, nil
 }
+
 func (p *backfillShapeProvider) Parse(context.Context, parser.ParseRequest) (parser.ParseOutcome, error) {
 	p.parses++
 	return parser.ParseOutcome{}, errors.New("normalized parsing forbidden")
 }
+
 func (p *backfillShapeProvider) DiscoverRawCaptureSourcesEach(ctx context.Context, yield func(parser.SourceRef) error) (bool, error) {
 	p.streams++
 	if err := parser.ReportRawCaptureDiscoveryProgress(ctx); err != nil {
@@ -205,6 +214,7 @@ func (p *backfillShapeProvider) DiscoverRawCaptureSourcesEach(ctx context.Contex
 	err := yield(parser.SourceRef{Provider: p.Def.Type, Key: filepath.Base(p.path), DisplayPath: p.path})
 	return err == nil, err
 }
+
 func (p *backfillShapeProvider) PlanRawCapture(context.Context, parser.SourceRef) (parser.RawCapturePlan, error) {
 	return parser.RawCapturePlan{ConfiguredRoot: p.root, CaptureRoot: p.root, SourceKey: filepath.Base(p.path), Entries: []parser.RawCaptureEntry{{Path: filepath.Base(p.path), LocalPath: p.path, Appendable: p.appendable}}}, nil
 }
@@ -231,7 +241,7 @@ func TestBackfillMultipleShapesCapturesSQLiteAndFilesWithoutParsing(t *testing.T
 			db, err := sql.Open("sqlite3", path)
 			require.NoError(t, err)
 			defer db.Close()
-			_, err = db.Exec(`PRAGMA journal_mode=WAL; CREATE TABLE source(value TEXT); INSERT INTO source VALUES('sqlite fixture')`)
+			_, err = db.ExecContext(t.Context(), `PRAGMA journal_mode=WAL; CREATE TABLE source(value TEXT); INSERT INTO source VALUES('sqlite fixture')`)
 			require.NoError(t, err)
 		} else {
 			require.NoError(t, os.WriteFile(path, []byte("synthetic raw fixture\n"), 0o600))
@@ -264,7 +274,7 @@ func TestBackfillMultipleShapesCapturesSQLiteAndFilesWithoutParsing(t *testing.T
 			db, err := sql.Open("sqlite3", snapshot)
 			require.NoError(t, err)
 			var value string
-			require.NoError(t, db.QueryRow(`SELECT value FROM source`).Scan(&value))
+			require.NoError(t, db.QueryRowContext(t.Context(), `SELECT value FROM source`).Scan(&value))
 			require.Equal(t, "sqlite fixture", value)
 			require.NoError(t, db.Close())
 		} else {

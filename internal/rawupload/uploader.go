@@ -86,6 +86,7 @@ func (u *Uploader) UploadNextForBackfill(ctx context.Context, runID string) (Res
 	}
 	return u.uploadNext(ctx, runID)
 }
+
 func (u *Uploader) uploadNext(ctx context.Context, runID string) (Result, bool, error) {
 	var manifest rawsync.Manifest
 	var found bool

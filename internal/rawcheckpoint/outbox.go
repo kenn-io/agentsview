@@ -523,6 +523,7 @@ func (s *Store) CompleteUnchangedCaptureForBackfill(ctx context.Context, reserva
 	}
 	return s.completeUnchangedCapture(ctx, reservationID, source, expectedCaptureID, expectedObservationRevision, runID)
 }
+
 func (s *Store) completeUnchangedCapture(ctx context.Context, reservationID string, source SourceIdentity, expectedCaptureID string, expectedObservationRevision int64, runID string) error {
 	if reservationID == "" || source.Provider == "" ||
 		source.ConfiguredRootID == "" || source.SourceKey == "" {
@@ -682,6 +683,7 @@ func (s *Store) CommitCaptureForBackfill(ctx context.Context, reservationID stri
 	}
 	return s.commitCapture(ctx, reservationID, generation, runID)
 }
+
 func (s *Store) commitCapture(ctx context.Context, reservationID string, generation CapturedGeneration, runID string) error {
 	s.objectMu.Lock()
 	defer s.objectMu.Unlock()

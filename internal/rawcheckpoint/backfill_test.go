@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -48,7 +49,7 @@ func TestBackfillSelectionAndSealRequireDurablePass(t *testing.T) {
 
 func TestBackfillPublicationReceiptAndLostGeneration(t *testing.T) {
 	for _, lost := range []bool{false, true} {
-		t.Run(fmt.Sprint(lost), func(t *testing.T) {
+		t.Run(strconv.FormatBool(lost), func(t *testing.T) {
 			store, root := openOutboxTestStore(t, 1<<20)
 			require.NoError(t, store.SetDevice(t.Context(), "device-a"))
 			_, err := store.BeginBackfill(t.Context(), BackfillRunSpec{RunID: "run-a", DeviceID: "device-a", Destination: "https://ingest.example", Providers: []parser.AgentType{parser.AgentClaude}, Roots: []BackfillSelection{{parser.AgentClaude, root.ID}}})
@@ -209,7 +210,7 @@ func TestBackfillVersionEightMigrationPreservesQueueAndReceipt(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 	for _, statement := range []string{`DROP TRIGGER backfill_generation_deleted`, `DROP TABLE backfill_members`, `DROP TABLE backfill_roots`, `DROP TABLE backfill_providers`, `DROP TABLE backfill_runs`, `PRAGMA user_version=8`} {
-		_, err = store.db.Exec(statement)
+		_, err = store.db.ExecContext(t.Context(), statement)
 		require.NoError(t, err)
 	}
 	require.NoError(t, store.Close())
@@ -226,13 +227,13 @@ func TestBackfillVersionEightMigrationPreservesQueueAndReceipt(t *testing.T) {
 	require.Equal(t, receipt.Receipt, head.Receipt)
 	require.Equal(t, receipt.Generation, head.Generation)
 	var version int
-	require.NoError(t, store.db.QueryRow(`PRAGMA user_version`).Scan(&version))
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&version))
 	require.Equal(t, 9, version)
 }
 
 func TestFreshSchemaMatchesVersionEightMigration(t *testing.T) {
 	schema := func(store *Store) map[string]string {
-		rows, err := store.db.Query(`SELECT type, name, sql FROM sqlite_master WHERE sql IS NOT NULL`)
+		rows, err := store.db.QueryContext(t.Context(), `SELECT type, name, sql FROM sqlite_master WHERE sql IS NOT NULL`)
 		require.NoError(t, err)
 		defer rows.Close()
 		objects := map[string]string{}
@@ -252,7 +253,7 @@ func TestFreshSchemaMatchesVersionEightMigration(t *testing.T) {
 	store, err := Open(t.Context(), path)
 	require.NoError(t, err)
 	for _, statement := range []string{`DROP TRIGGER backfill_generation_deleted`, `DROP TABLE backfill_members`, `DROP TABLE backfill_roots`, `DROP TABLE backfill_providers`, `DROP TABLE backfill_runs`, `PRAGMA user_version=8`} {
-		_, err = store.db.Exec(statement)
+		_, err = store.db.ExecContext(t.Context(), statement)
 		require.NoError(t, err)
 	}
 	require.NoError(t, store.Close())

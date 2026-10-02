@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"sync/atomic"
 	"testing"
 
@@ -28,9 +29,10 @@ func backfillFixture(t *testing.T, root string) (*rawcheckpoint.Store, rawcheckp
 	require.NoError(t, err)
 	return store, rawcheckpoint.BackfillRunSpec{RunID: "run-a", DeviceID: "device-a", Destination: "https://ingest.example", Providers: []parser.AgentType{parser.AgentClaude}, Roots: []rawcheckpoint.BackfillSelection{{Provider: parser.AgentClaude, ConfiguredRootID: configured.ID}}}
 }
+
 func TestBackfillFiniteCompletionAndRestart(t *testing.T) {
 	for _, batch := range []int{1, 512} {
-		t.Run(fmt.Sprint(batch), func(t *testing.T) {
+		t.Run(strconv.Itoa(batch), func(t *testing.T) {
 			root := t.TempDir()
 			require.NoError(t, os.WriteFile(filepath.Join(root, "a.jsonl"), []byte("first\n"), 0o600))
 			store, spec := backfillFixture(t, root)
@@ -151,38 +153,38 @@ func seedBackfillMembers(t *testing.T, store *rawcheckpoint.Store, checkpointPat
 	db, err := sql.Open("sqlite3", checkpointPath)
 	require.NoError(t, err)
 	defer db.Close()
-	tx, err := db.Begin()
+	tx, err := db.BeginTx(t.Context(), nil)
 	require.NoError(t, err)
 	defer tx.Rollback()
 	var original string
-	require.NoError(t, tx.QueryRow(`SELECT capture_id FROM backfill_members WHERE run_id=?`, spec.RunID).Scan(&original))
+	require.NoError(t, tx.QueryRowContext(t.Context(), `SELECT capture_id FROM backfill_members WHERE run_id=?`, spec.RunID).Scan(&original))
 	for i := 1; i < count; i++ {
 		name := fmt.Sprintf("%05d.jsonl", i)
 		id := fmt.Sprintf("%032x", i)
-		_, err = tx.Exec(`INSERT INTO raw_sources(provider,configured_root_id,source_key,updated_at,latest_capture_id,observation_revision)
+		_, err = tx.ExecContext(t.Context(), `INSERT INTO raw_sources(provider,configured_root_id,source_key,updated_at,latest_capture_id,observation_revision)
    SELECT provider,configured_root_id,?,updated_at,?,observation_revision FROM raw_sources WHERE latest_capture_id=?`, name, id, original)
 		require.NoError(t, err)
-		_, err = tx.Exec(`INSERT INTO outbox_generations(capture_id,provider,configured_root_id,source_key,captured_at,kind,state,metadata_bytes,created_at,updated_at)
+		_, err = tx.ExecContext(t.Context(), `INSERT INTO outbox_generations(capture_id,provider,configured_root_id,source_key,captured_at,kind,state,metadata_bytes,created_at,updated_at)
    SELECT ?,provider,configured_root_id,?,captured_at,kind,state,metadata_bytes,created_at,updated_at FROM outbox_generations WHERE capture_id=?`, id, name, original)
 		require.NoError(t, err)
-		_, err = tx.Exec(`INSERT INTO outbox_entries(capture_id,entry_ordinal,path,length,mod_time_ns,file_identity,prefix_sha256,appendable)
+		_, err = tx.ExecContext(t.Context(), `INSERT INTO outbox_entries(capture_id,entry_ordinal,path,length,mod_time_ns,file_identity,prefix_sha256,appendable)
    SELECT ?,entry_ordinal,?,length,mod_time_ns,file_identity,prefix_sha256,appendable FROM outbox_entries WHERE capture_id=?`, id, name, original)
 		require.NoError(t, err)
-		_, err = tx.Exec(`INSERT INTO outbox_entry_objects(capture_id,entry_ordinal,object_ordinal,sha256,length)
+		_, err = tx.ExecContext(t.Context(), `INSERT INTO outbox_entry_objects(capture_id,entry_ordinal,object_ordinal,sha256,length)
    SELECT ?,entry_ordinal,object_ordinal,sha256,length FROM outbox_entry_objects WHERE capture_id=?`, id, original)
 		require.NoError(t, err)
-		_, err = tx.Exec(`INSERT INTO backfill_members(run_id,provider,configured_root_id,source_key,ordinal,capture_id,status)
+		_, err = tx.ExecContext(t.Context(), `INSERT INTO backfill_members(run_id,provider,configured_root_id,source_key,ordinal,capture_id,status)
    SELECT run_id,provider,configured_root_id,?,?,?,'pending' FROM backfill_members WHERE capture_id=?`, name, i+1, id, original)
 		require.NoError(t, err)
 	}
-	_, err = tx.Exec(`UPDATE outbox_objects SET ref_count=?`, count)
+	_, err = tx.ExecContext(t.Context(), `UPDATE outbox_objects SET ref_count=?`, count)
 	require.NoError(t, err)
 	require.NoError(t, tx.Commit())
 }
 
 func TestBackfillAuditorBoundsTraversalAndResumeCandidates(t *testing.T) {
 	for _, count := range []int{100, 10000} {
-		t.Run(fmt.Sprint(count), func(t *testing.T) {
+		t.Run(strconv.Itoa(count), func(t *testing.T) {
 			root := t.TempDir()
 			for i := range count {
 				require.NoError(t, os.WriteFile(filepath.Join(root, fmt.Sprintf("%05d.jsonl", i)), []byte("x"), 0o600))
@@ -202,7 +204,7 @@ func TestBackfillAuditorBoundsTraversalAndResumeCandidates(t *testing.T) {
 			require.NoError(t, err)
 			seedBackfillMembers(t, store, checkpointPath, spec, count)
 			for _, batch := range []int{1, 512} {
-				t.Run(fmt.Sprint(batch), func(t *testing.T) {
+				t.Run(strconv.Itoa(batch), func(t *testing.T) {
 					runtime.GC()
 					var before, running runtime.MemStats
 					runtime.ReadMemStats(&before)
@@ -243,6 +245,7 @@ func (p *incompleteBackfillProvider) DiscoverRawCaptureSourcesEach(ctx context.C
 	p.streamCalls++
 	return false, parser.ReportRawCaptureDiscoveryProgress(ctx)
 }
+
 func TestBackfillTerminalEmptyIncompleteStreamStops(t *testing.T) {
 	root := t.TempDir()
 	store, spec := backfillFixture(t, root)
@@ -257,7 +260,7 @@ func TestBackfillTerminalEmptyIncompleteStreamStops(t *testing.T) {
 
 func TestBackfillFreshBatchesKeepTraversalAndSpoolBounded(t *testing.T) {
 	for _, count := range []int{100, 10000} {
-		t.Run(fmt.Sprint(count), func(t *testing.T) {
+		t.Run(strconv.Itoa(count), func(t *testing.T) {
 			root := t.TempDir()
 			for i := range count {
 				require.NoError(t, os.WriteFile(filepath.Join(root, fmt.Sprintf("%05d.jsonl", i)), []byte("x"), 0o600))
@@ -346,6 +349,7 @@ func (p *unsupportedCandidateProvider) Capabilities() parser.Capabilities {
 	}
 	return caps
 }
+
 func TestBackfillUnsupportedCandidateIsDurablyIncomplete(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(root, "a.jsonl"), []byte("x"), 0o600))

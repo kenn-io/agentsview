@@ -151,6 +151,7 @@ func (s *Store) FinalizeNextManifestForBackfill(ctx context.Context, deviceID, r
 	}
 	return s.finalizeNextManifest(ctx, deviceID, runID)
 }
+
 func (s *Store) finalizeNextManifest(ctx context.Context, deviceID, runID string) (rawsync.Manifest, bool, error) {
 	var manifest rawsync.Manifest
 	found := false

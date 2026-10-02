@@ -118,6 +118,7 @@ func (c *Capturer) CaptureForBackfill(ctx context.Context, provider parser.Provi
 	}
 	return c.capture(ctx, provider, source, runID)
 }
+
 func (c *Capturer) capture(ctx context.Context, provider parser.Provider, source parser.SourceRef, runID string) (result Result, resultErr error) {
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
