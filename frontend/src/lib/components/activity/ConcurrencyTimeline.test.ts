@@ -633,7 +633,7 @@ describe("ConcurrencyTimeline", () => {
       "Subagent peak 0",
       "Automated peak 1",
       "Agent-min 7.5K",
-      "Input Tokens 120K",
+      "Uncached Input 120K",
       "Output Tokens 9K",
       "Cost $0.90",
     ]);

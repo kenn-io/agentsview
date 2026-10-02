@@ -88,6 +88,10 @@ The latest published release is
 
 **Improvements**
 
+- The Usage page shows a **Total Input** card that adds uncached input, cache
+  writes, and cache reads, so heavy prompt caching no longer looks like missing
+  input. The input count that leaves out cached tokens is now labeled
+  **Uncached Input** on the Usage and Activity pages.
 - On Windows, each watched folder reserves 16 KiB for change notifications
   instead of 64 KiB. At the 8192-folder budget, that reduces buffer capacity
   from 512 MiB to 128 MiB.

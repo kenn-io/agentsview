@@ -163,7 +163,7 @@
           ratio: fmtRatio(perSessionRatio),
         },
         {
-          label: m.usage_input_tokens(),
+          label: m.usage_uncached_input(),
           left: fmtTokens(comparison.left.inputTokens),
           right: fmtTokens(comparison.right.inputTokens),
           delta: fmtSignedTokens(comparison.deltas.inputTokensDelta),
@@ -216,7 +216,7 @@
         ratio: fmtRatio(comparison.deltas.tokensPerSessionRatio),
       },
       {
-        label: m.usage_input_tokens(),
+        label: m.usage_uncached_input(),
         left: fmtTokens(comparison.left.inputTokens),
         right: fmtTokens(comparison.right.inputTokens),
         delta: fmtSignedTokens(comparison.deltas.inputTokensDelta),

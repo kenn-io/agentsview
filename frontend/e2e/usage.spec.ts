@@ -1,4 +1,5 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
+import type { UsageSummaryResponse } from "../src/lib/api/generated/index";
 import { clickNavTab, expectActiveNavTab } from "./helpers/nav";
 
 test.describe("Usage page", () => {
@@ -312,5 +313,98 @@ test.describe("Usage page", () => {
 
     await expect(page.locator(".usage-page")).toBeVisible();
     await expect(page.locator(".kit-date-range-picker__trigger")).toContainText("Last 90 days");
+  });
+});
+
+test.describe("Usage input cards", () => {
+  const totals = {
+    inputTokens: 248_600_000,
+    cacheCreationTokens: 1_400_000,
+    cacheReadTokens: 7_650_000_000,
+    outputTokens: 20_000_000,
+  };
+  const summary: UsageSummaryResponse = {
+    from: "2026-07-01",
+    to: "2026-07-01",
+    projects: {},
+    totals: {
+      ...totals,
+      totalCost: { microdollars: 1_000_000 },
+      cacheSavings: { microdollars: 0 },
+    },
+    daily: [
+      {
+        date: "2026-07-01",
+        ...totals,
+        totalCost: { microdollars: 1_000_000 },
+        modelsUsed: ["model"],
+        modelBreakdowns: [],
+        projectBreakdowns: [],
+        agentBreakdowns: [],
+        machineBreakdowns: [],
+      },
+    ],
+    projectTotals: [],
+    modelTotals: [],
+    agentTotals: [],
+    sessionCounts: { total: 1, byProject: {}, byAgent: {} },
+    cacheStats: {
+      cacheReadTokens: totals.cacheReadTokens,
+      cacheCreationTokens: totals.cacheCreationTokens,
+      uncachedInputTokens: totals.inputTokens,
+      outputTokens: totals.outputTokens,
+      hitRate: 0.97,
+      savingsVsUncached: { microdollars: 0 },
+    },
+  };
+
+  const openUsage = async (page: Page, width: number) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.route(/\/api\/v1\/usage\/summary(\?|$)/, (route) => route.fulfill({ json: summary }));
+    await page.goto("/usage");
+    await expect(page.locator(".summary-cards .card-value").first()).toBeVisible({
+      timeout: 10_000,
+    });
+  };
+
+  const card = (page: Page, label: string) =>
+    page.locator(".summary-cards .card").filter({
+      has: page.locator(".card-label", { hasText: new RegExp(`^${label}$`) }),
+    });
+
+  const expectStableCards = async (page: Page) => {
+    const cards = page.locator(".summary-cards .card");
+    await expect(cards).toHaveCount(10);
+    const boxes = await cards.evaluateAll((els) =>
+      els.map((el) => ({
+        height: el.getBoundingClientRect().height,
+        overflowX: el.scrollWidth > el.clientWidth,
+        overflowY: el.scrollHeight > el.clientHeight,
+      })),
+    );
+    expect(new Set(boxes.map((box) => box.height)).size).toBe(1);
+    expect(boxes.filter((box) => box.overflowX || box.overflowY)).toEqual([]);
+  };
+
+  for (const width of [1280, 768, 400]) {
+    test(`shows total and uncached input at ${width}px`, async ({ page }) => {
+      await openUsage(page, width);
+
+      await expect(card(page, "Total Input").locator(".card-value")).toHaveText("7.9B");
+      const uncached = card(page, "Uncached Input");
+      await expect(uncached.locator(".card-value")).toHaveText("248.6M");
+      await expect(uncached.locator(".card-sub")).toHaveText("+7.6B cached");
+      await expect(page.locator(".card-label", { hasText: /^Input Tokens$/ })).toHaveCount(0);
+      await expectStableCards(page);
+    });
+  }
+
+  test("keeps az labels inside the cards at 768px", async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem("agentsview-locale", "az"));
+    await openUsage(page, 768);
+
+    await expect(card(page, "Cəmi giriş").locator(".card-value")).toHaveText("7.9B");
+    await expect(card(page, "Keşsiz giriş").locator(".card-value")).toHaveText("248.6M");
+    await expectStableCards(page);
   });
 });

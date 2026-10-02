@@ -231,4 +231,23 @@ describe("UsagePairwiseComparisonPanel", () => {
 
     unmount(component);
   });
+
+  it.each(["cost", "token"] as const)(
+    "labels the input row as uncached input in %s mode",
+    async (mode) => {
+      usage.mode = mode;
+      const component = mount(UsagePairwiseComparisonPanel, {
+        target: document.body,
+      });
+      await tick();
+
+      const headers = Array.from(document.querySelectorAll("tbody th")).map((cell) =>
+        cell.textContent?.trim(),
+      );
+      expect(headers).toContain("Uncached Input");
+      expect(headers).not.toContain("Input Tokens");
+
+      unmount(component);
+    },
+  );
 });

@@ -173,8 +173,11 @@ and API model filters are unchanged.
 
 ### Summary Cards
 
-Eight baseline cards at the top summarize the selected window. The Total Cost
-card is featured with a larger value; the rest show total tokens, daily burn,
+Ten baseline cards at the top summarize the selected window. The Total Cost
+card is featured with a larger value. **Total Input** adds uncached input,
+cache writes, and cache reads, the full prompt volume the models read.
+**Uncached Input** counts input not reported as a cache read or cache write,
+with cache reads noted beneath it. The rest show output tokens, daily burn,
 peak day, cache hit rate, project and model counts, and active days. When
 Copilot-family sessions have priced usage, an additional **Copilot AI Credits**
 card shows the same spend converted at 100 credits per dollar.
@@ -210,10 +213,11 @@ comparison uses the page's active date range and shared filters, then asks the
 backend to compute both slices.
 
 The result table shows total cost, session count, cost per session, total
-tokens, tokens per session, input tokens, output tokens, the absolute delta from
-left to right, and the percent delta when a ratio can be computed. It is useful
-for questions such as "how much more expensive was project A than project B this
-week?" or "how do two models compare after normalizing by session count?"
+tokens, tokens per session, uncached input tokens, output tokens, the absolute
+delta from left to right, and the percent delta when a ratio can be computed. It
+is useful for questions such as "how much more expensive was project A than
+project B this week?" or "how do two models compare after normalizing by session
+count?"
 
 The same comparison is available over REST:
 

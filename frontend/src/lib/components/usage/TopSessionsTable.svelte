@@ -26,7 +26,7 @@
     }
     switch (usage.selectedTokenTypes[0]) {
       case "input":
-        return m.usage_summary_input_tokens();
+        return m.usage_uncached_input();
       case "cache_write":
         return m.usage_cache_writes();
       case "cache_read":

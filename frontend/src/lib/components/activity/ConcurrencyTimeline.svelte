@@ -842,7 +842,7 @@
             </div>
           {/if}
           <div>
-            <dt>{m.usage_input_tokens()}</dt>
+            <dt>{m.usage_uncached_input()}</dt>
             <dd>{fmtCompactValue(tooltip.bucket.input_tokens ?? 0)}</dd>
           </div>
           <div>
