@@ -41,6 +41,7 @@ func TestBackfillUnchangedBindsPendingAndAcknowledgedBase(t *testing.T) {
 		t.Run(map[bool]string{false: "pending", true: "acknowledged"}[ack], func(t *testing.T) {
 			store, _ := openCapturerTestStore(t, 1<<20)
 			require.NoError(t, store.SetDevice(t.Context(), "device-a"))
+			require.NoError(t, store.EnsureDestination(t.Context(), "https://ingest.example"))
 			provider, source, _ := captureFileProvider(t, "first\n")
 			c := New(store)
 			base, err := c.Capture(t.Context(), provider, source)

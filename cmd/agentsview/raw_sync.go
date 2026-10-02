@@ -146,6 +146,9 @@ func runRawSyncWatch(ctx context.Context, watchCfg rawSyncWatchConfig) error {
 	if err := store.EnsureDevice(ctx, watchCfg.DeviceID); err != nil {
 		return err
 	}
+	if err := store.EnsureDestination(ctx, watchCfg.Server); err != nil {
+		return err
+	}
 	client, err := rawclient.NewClient(rawclient.Config{
 		BaseURL: watchCfg.Server, DeviceID: watchCfg.DeviceID, Credential: credential,
 	})

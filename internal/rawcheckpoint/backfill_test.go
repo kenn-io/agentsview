@@ -37,7 +37,7 @@ func TestBackfillSelectionAndSealRequireDurablePass(t *testing.T) {
 	require.ErrorIs(t, err, ErrBackfillConflict)
 	spec.Destination = "https://different.example"
 	_, err = store.BeginBackfill(t.Context(), spec)
-	require.ErrorIs(t, err, ErrBackfillConflict)
+	require.ErrorIs(t, err, ErrDestinationMismatch)
 	require.NoError(t, store.FinishBackfillProvider(t.Context(), "run-a", parser.AgentClaude, BackfillPassResult{Complete: true}))
 	progress, err = store.SealBackfill(t.Context(), "run-a")
 	require.NoError(t, err)
@@ -52,7 +52,7 @@ func TestBackfillPublicationReceiptAndLostGeneration(t *testing.T) {
 		t.Run(strconv.FormatBool(lost), func(t *testing.T) {
 			store, root := openOutboxTestStore(t, 1<<20)
 			require.NoError(t, store.SetDevice(t.Context(), "device-a"))
-			_, err := store.BeginBackfill(t.Context(), BackfillRunSpec{RunID: "run-a", DeviceID: "device-a", Destination: "https://ingest.example", Providers: []parser.AgentType{parser.AgentClaude}, Roots: []BackfillSelection{{parser.AgentClaude, root.ID}}})
+			_, err := store.BeginBackfill(t.Context(), BackfillRunSpec{RunID: "run-a", DeviceID: "device-a", Destination: "https://ingest.example", Providers: []parser.AgentType{parser.AgentClaude}, Roots: []BackfillSelection{{Provider: parser.AgentClaude, ConfiguredRootID: root.ID}}})
 			require.NoError(t, err)
 			ref := rawsync.ObjectRef{SHA256: validCheckpointDigest(10), Length: 1}
 			installOutboxTestObject(t, store, ref, []byte{0})
@@ -111,7 +111,7 @@ func TestBackfillPublicationReceiptAndLostGeneration(t *testing.T) {
 func TestBackfillSelectorIncludesOnlyMembersAndPredecessors(t *testing.T) {
 	store, root := openOutboxTestStore(t, 1<<20)
 	require.NoError(t, store.SetDevice(t.Context(), "device-a"))
-	_, err := store.BeginBackfill(t.Context(), BackfillRunSpec{RunID: "run-a", DeviceID: "device-a", Destination: "https://ingest.example", Providers: []parser.AgentType{parser.AgentClaude}, Roots: []BackfillSelection{{parser.AgentClaude, root.ID}}})
+	_, err := store.BeginBackfill(t.Context(), BackfillRunSpec{RunID: "run-a", DeviceID: "device-a", Destination: "https://ingest.example", Providers: []parser.AgentType{parser.AgentClaude}, Roots: []BackfillSelection{{Provider: parser.AgentClaude, ConfiguredRootID: root.ID}}})
 	require.NoError(t, err)
 	var chain []CapturedGeneration
 	for i := 1; i <= 4; i++ {
@@ -209,7 +209,7 @@ func TestBackfillVersionEightMigrationPreservesQueueAndReceipt(t *testing.T) {
 	queued, found, err := store.QueueTombstone(t.Context(), gen.Source)
 	require.NoError(t, err)
 	require.True(t, found)
-	for _, statement := range []string{`DROP TRIGGER backfill_generation_deleted`, `DROP TABLE backfill_members`, `DROP TABLE backfill_roots`, `DROP TABLE backfill_providers`, `DROP TABLE backfill_runs`, `PRAGMA user_version=8`} {
+	for _, statement := range []string{`DROP TRIGGER backfill_generation_deleted`, `DROP TABLE backfill_members`, `DROP TABLE backfill_roots`, `DROP TABLE backfill_providers`, `DROP TABLE backfill_runs`, `ALTER TABLE outbox_config DROP COLUMN destination`, `PRAGMA user_version=8`} {
 		_, err = store.db.ExecContext(t.Context(), statement)
 		require.NoError(t, err)
 	}
@@ -226,9 +226,30 @@ func TestBackfillVersionEightMigrationPreservesQueueAndReceipt(t *testing.T) {
 	require.True(t, found)
 	require.Equal(t, receipt.Receipt, head.Receipt)
 	require.Equal(t, receipt.Generation, head.Generation)
+	require.ErrorIs(t, store.EnsureDestination(t.Context(), "https://ingest.example"), ErrDestinationUnknown,
+		"an older checkpoint's receipts cannot establish which server acknowledged them")
 	var version int
 	require.NoError(t, store.db.QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&version))
 	require.Equal(t, 9, version)
+}
+
+func TestBackfillDestinationSurvivesReopenAndFencesWatch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "checkpoint.db")
+	store, err := Open(t.Context(), path)
+	require.NoError(t, err)
+	require.NoError(t, store.EnsureDevice(t.Context(), "device-a"))
+	require.NoError(t, store.EnsureDestination(t.Context(), "https://INGEST.example/"))
+	require.NoError(t, store.Close())
+	store, err = Open(t.Context(), path)
+	require.NoError(t, err)
+	defer store.Close()
+	require.NoError(t, store.EnsureDestination(t.Context(), "https://ingest.example"))
+	require.ErrorIs(t, store.EnsureDestination(t.Context(), "https://other.example"), ErrDestinationMismatch)
+	_, err = store.BeginBackfill(t.Context(), BackfillRunSpec{
+		RunID: "after-watch", DeviceID: "device-a", Destination: "https://other.example",
+		Providers: []parser.AgentType{parser.AgentClaude},
+	})
+	require.ErrorIs(t, err, ErrDestinationMismatch)
 }
 
 func TestFreshSchemaMatchesVersionEightMigration(t *testing.T) {
@@ -240,7 +261,7 @@ func TestFreshSchemaMatchesVersionEightMigration(t *testing.T) {
 		for rows.Next() {
 			var kind, name, sql string
 			require.NoError(t, rows.Scan(&kind, &name, &sql))
-			objects[kind+" "+name] = strings.Join(strings.Fields(sql), " ")
+			objects[kind+" "+name] = strings.ReplaceAll(strings.Join(strings.Fields(sql), " "), " )", ")")
 		}
 		require.NoError(t, rows.Err())
 		return objects
@@ -252,7 +273,7 @@ func TestFreshSchemaMatchesVersionEightMigration(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "migrated.db")
 	store, err := Open(t.Context(), path)
 	require.NoError(t, err)
-	for _, statement := range []string{`DROP TRIGGER backfill_generation_deleted`, `DROP TABLE backfill_members`, `DROP TABLE backfill_roots`, `DROP TABLE backfill_providers`, `DROP TABLE backfill_runs`, `PRAGMA user_version=8`} {
+	for _, statement := range []string{`DROP TRIGGER backfill_generation_deleted`, `DROP TABLE backfill_members`, `DROP TABLE backfill_roots`, `DROP TABLE backfill_providers`, `DROP TABLE backfill_runs`, `ALTER TABLE outbox_config DROP COLUMN destination`, `PRAGMA user_version=8`} {
 		_, err = store.db.ExecContext(t.Context(), statement)
 		require.NoError(t, err)
 	}
@@ -271,13 +292,13 @@ func TestBackfillSelectionWithInvalidUTF8RootStillDetectsChanges(t *testing.T) {
 		_, err := store.db.ExecContext(t.Context(), `INSERT INTO configured_roots(id,provider,local_root,created_at,updated_at) VALUES(?,?,?,'','')`, id, string(parser.AgentClaude), "/sessions/\xff"+id)
 		require.NoError(t, err)
 	}
-	spec := BackfillRunSpec{RunID: "run-a", DeviceID: "device-a", Destination: "https://ingest.example", Providers: []parser.AgentType{parser.AgentClaude}, Roots: []BackfillSelection{{parser.AgentClaude, "0-bad"}, {parser.AgentClaude, root.ID}}}
+	spec := BackfillRunSpec{RunID: "run-a", DeviceID: "device-a", Destination: "https://ingest.example", Providers: []parser.AgentType{parser.AgentClaude}, Roots: []BackfillSelection{{Provider: parser.AgentClaude, ConfiguredRootID: "0-bad"}, {Provider: parser.AgentClaude, ConfiguredRootID: root.ID}}}
 	_, err := store.BeginBackfill(t.Context(), spec)
 	require.NoError(t, err)
 	_, err = store.BeginBackfill(t.Context(), spec)
 	require.NoError(t, err)
 
-	spec.Roots[1] = BackfillSelection{parser.AgentClaude, "root-other"}
+	spec.Roots[1] = BackfillSelection{Provider: parser.AgentClaude, ConfiguredRootID: "root-other"}
 	_, err = store.BeginBackfill(t.Context(), spec)
 	require.ErrorIs(t, err, ErrBackfillConflict)
 }
@@ -287,7 +308,7 @@ func TestBackfillRootsKeepSelectionOrder(t *testing.T) {
 	require.NoError(t, store.SetDevice(t.Context(), "device-a"))
 	second, err := store.ResolveConfiguredRoot(t.Context(), parser.AgentClaude, t.TempDir())
 	require.NoError(t, err)
-	ordered := []BackfillSelection{{parser.AgentClaude, second.ID}, {parser.AgentClaude, first.ID}}
+	ordered := []BackfillSelection{{Provider: parser.AgentClaude, ConfiguredRootID: second.ID}, {Provider: parser.AgentClaude, ConfiguredRootID: first.ID}}
 	spec := BackfillRunSpec{RunID: "run-a", DeviceID: "device-a", Destination: "https://ingest.example", Providers: []parser.AgentType{parser.AgentClaude}, Roots: ordered}
 	_, err = store.BeginBackfill(t.Context(), spec)
 	require.NoError(t, err)

@@ -6,7 +6,6 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
-	"net/url"
 	"slices"
 	"strings"
 
@@ -21,6 +20,13 @@ var (
 type BackfillSelection struct {
 	Provider         parser.AgentType
 	ConfiguredRootID string
+	ProjectPath      string
+}
+
+// BackfillRoot retains provider metadata needed to reproduce raw manifest paths.
+type BackfillRoot struct {
+	ConfiguredRoot
+	ProjectPath string
 }
 
 // BackfillEntry is one configured root entry as written in the user's
@@ -66,10 +72,11 @@ func (s *Store) BeginBackfill(ctx context.Context, spec BackfillRunSpec) (Backfi
 	if !backfillToken(spec.RunID) || spec.DeviceID == "" || len(spec.Providers) == 0 {
 		return BackfillProgress{}, ErrBackfillConflict
 	}
-	destination, err := url.Parse(spec.Destination)
-	if err != nil || destination.Host == "" || (destination.Scheme != "https" && destination.Scheme != "http") || destination.User != nil || destination.RawQuery != "" || destination.Fragment != "" {
+	destination, err := normalizeDestination(spec.Destination)
+	if err != nil {
 		return BackfillProgress{}, ErrBackfillConflict
 	}
+	spec.Destination = destination
 	spec.Providers = slices.Clone(spec.Providers)
 	slices.Sort(spec.Providers)
 	spec.Providers = slices.Compact(spec.Providers)
@@ -84,6 +91,9 @@ func (s *Store) BeginBackfill(ctx context.Context, spec BackfillRunSpec) (Backfi
 	}
 	err = s.withImmediateWrite(ctx, "begin backfill", func(conn *sql.Conn) error {
 		if err := requireConfiguredDeviceConn(ctx, conn, spec.DeviceID); err != nil {
+			return err
+		}
+		if err := ensureDestinationConn(ctx, conn, spec.Destination); err != nil {
 			return err
 		}
 		type rootSelection struct {
@@ -133,7 +143,7 @@ func (s *Store) BeginBackfill(ctx context.Context, spec BackfillRunSpec) (Backfi
 			}
 		}
 		for ordinal, root := range selected {
-			if _, err = conn.ExecContext(ctx, `INSERT INTO backfill_roots(run_id,provider,configured_root_id,local_root,ordinal) VALUES(?,?,?,?,?)`, spec.RunID, string(root.Provider), root.ConfiguredRootID, root.LocalRoot, ordinal); err != nil {
+			if _, err = conn.ExecContext(ctx, `INSERT INTO backfill_roots(run_id,provider,configured_root_id,local_root,project_path,ordinal) VALUES(?,?,?,?,?,?)`, spec.RunID, string(root.Provider), root.ConfiguredRootID, root.LocalRoot, root.ProjectPath, ordinal); err != nil {
 				return err
 			}
 		}
@@ -425,16 +435,16 @@ const backfillPendingClosure = `WITH RECURSIVE backfill_pending(capture_id) AS (
 ) `
 
 // BackfillRoots returns the private immutable root selection for one provider.
-func (s *Store) BackfillRoots(ctx context.Context, runID string, provider parser.AgentType) ([]ConfiguredRoot, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT configured_root_id,local_root FROM backfill_roots WHERE run_id=? AND provider=? ORDER BY ordinal`, runID, string(provider))
+func (s *Store) BackfillRoots(ctx context.Context, runID string, provider parser.AgentType) ([]BackfillRoot, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT configured_root_id,local_root,project_path FROM backfill_roots WHERE run_id=? AND provider=? ORDER BY ordinal`, runID, string(provider))
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	roots := []ConfiguredRoot{}
+	roots := []BackfillRoot{}
 	for rows.Next() {
-		root := ConfiguredRoot{Provider: provider}
-		if err := rows.Scan(&root.ID, &root.LocalPath); err != nil {
+		root := BackfillRoot{Provider: provider}
+		if err := rows.Scan(&root.ID, &root.LocalPath, &root.ProjectPath); err != nil {
 			return nil, err
 		}
 		roots = append(roots, root)

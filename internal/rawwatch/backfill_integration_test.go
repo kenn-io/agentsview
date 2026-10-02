@@ -419,3 +419,26 @@ func TestBackfillNoEligibleUploadStopsBeforeDiscovery(t *testing.T) {
 		})
 	}
 }
+
+func TestBackfillNewRunRejectsDifferentDestination(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "a.jsonl"), []byte("first\n"), 0o600))
+	store, spec := backfillFixture(t, root)
+	provider := newAuditProvider(root)
+	first := newBackfillCustody(t)
+	opts := BackfillOptions{Spec: spec, Providers: []parser.Provider{provider}, BatchSize: 1}
+	progress, err := RunBackfill(t.Context(), store, rawcapture.New(store), rawupload.New(store, first, "device-a"), opts)
+	require.NoError(t, err)
+	require.True(t, progress.Complete)
+	require.Len(t, first.metadata.manifests, 1)
+
+	opts.Spec.RunID = "run-other-server"
+	opts.Spec.Destination = "https://other.example"
+	second := newBackfillCustody(t)
+	progress, err = RunBackfill(t.Context(), store, rawcapture.New(store), rawupload.New(store, second, "device-a"), opts)
+	require.ErrorIs(t, err, rawcheckpoint.ErrDestinationMismatch, "receipts from the first server cannot prove custody at the second")
+	require.False(t, progress.Complete)
+	require.Zero(t, second.commitCalls)
+	_, err = store.BackfillProgress(t.Context(), opts.Spec.RunID)
+	require.ErrorIs(t, err, rawcheckpoint.ErrBackfillConflict, "a rejected destination must not save a run")
+}

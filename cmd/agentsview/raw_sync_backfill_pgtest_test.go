@@ -156,7 +156,7 @@ func TestRawSyncBackfillCommandCommitsOnceAndReusesHistoricalProof(t *testing.T)
 	)
 	require.Error(t, err)
 	assert.Empty(t, output)
-	assert.Contains(t, err.Error(), "conflicts with durable state")
+	assert.Contains(t, err.Error(), "server does not match")
 
 	output, err = executeCommand(
 		newRootCommand(), "raw-sync", "backfill", "--run-id", "migration-a",
@@ -311,7 +311,7 @@ func TestRawSyncBackfillCommandRefusesChecksumFailure(t *testing.T) {
 	assert.Equal(t, int64(1), progress.Captured)
 	assert.Zero(t, progress.Acknowledged)
 	assert.Equal(t, int64(1), progress.Pending)
-	assert.Equal(t, int64(1), progress.Failures["upload"])
+	assert.Equal(t, int64(1), progress.Failures["rejected"])
 	assert.False(t, progress.Complete)
 	assert.Equal(t, int64(1), rejected.Load(), "the authenticated upload reached checksum verification")
 	var manifests int

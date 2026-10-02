@@ -49,28 +49,28 @@ necessary.
 
 Agentsview's flat fallback prices come from LiteLLM's
 [`model_prices_and_context_window.json`](https://github.com/BerriAI/litellm/blob/7d50a31eb5b080c29438f97be7701e117938ce88/model_prices_and_context_window.json)
-at pinned commit `7d50a31eb5b080c29438f97be7701e117938ce88`. Models retired
-from that catalog retain their last embedded rates from
+at pinned commit `7d50a31eb5b080c29438f97be7701e117938ce88`. Models retired from
+that catalog retain their last embedded rates from
 [`418c7c6012d7c39a9d4a28c72cabe1995595ad2b`](https://github.com/BerriAI/litellm/blob/418c7c6012d7c39a9d4a28c72cabe1995595ad2b/model_prices_and_context_window.json).
-Current rows always win; the previous source fills only missing model keys.
-The generated bundle records both immutable refs as `source_ref` and
+Current rows always win; the previous source fills only missing model keys. The
+generated bundle records both immutable refs as `source_ref` and
 `retained_source_ref`. This keeps older archived usage priceable without
 replacing current rates with stale ones.
 
 The current catalog prices plain `gpt-6-astra` at $10 input, $50 output,
 $12.50 cache write, and $1 cache read per million tokens. Above 272k request
-input tokens those rates become $20, $75, $25, and $2. `gpt-6-sol` uses
-$2, $10, $2.50, and $0.20, with $4, $15, $5, and $0.40 above 272k.
-`gpt-6.1-sol` uses the same input, output, and write rates as Sol, but cache
-reads cost $0.10 below or at 272k and $0.20 above it. The current flat
-`gpt-5.6-sol` row uses $4 input and $20 output; timestamped usage still
-uses matching GenAI price history first.
+input tokens those rates become $20, $75, $25, and $2. `gpt-6-sol` uses $2, $10,
+$2.50, and $0.20, with $4, $15, $5, and $0.40 above 272k. `gpt-6.1-sol` uses the
+same input, output, and write rates as Sol, but cache reads cost
+$0.10 below or at 272k and $0.20 above it. The current flat `gpt-5.6-sol` row
+uses $4 input and $20 output; timestamped usage still uses matching GenAI price
+history first.
 
 LiteLLM's
 [`cost_per_token` implementation](https://github.com/BerriAI/litellm/blob/7d50a31eb5b080c29438f97be7701e117938ce88/litellm/litellm_core_utils/llm_cost_calc/utils.py)
 shows that these catalog fields are request-pricing thresholds rather than
-model-name conventions. Reverified 2026-10-02 against both pinned catalogs,
-the current cost implementation, and embedded fallback/CLI regression tests.
+model-name conventions. Reverified 2026-10-02 against both pinned catalogs, the
+current cost implementation, and embedded fallback/CLI regression tests.
 
 Agentsview recognizes the anchored standard field shape
 `input_cost_per_token_above_<N>[k]_tokens`, including the published 200K and
@@ -613,15 +613,15 @@ fixtures retain this field; missing identities remain source-local.
     above 272k input tokens these become $22, $82.50, $27.50, and $2.20.
     Reverified 2026-10-02 against
     [LiteLLM's Bedrock row](https://github.com/BerriAI/litellm/blob/7d50a31eb5b080c29438f97be7701e117938ce88/model_prices_and_context_window.json)
-    and namespaced-Astra fallback/CLI tests.
-    Codex auto-review threads persist `turn_context.payload.model` as
-    `codex-auto-review`, a name Codex's default provider writes when it is not
-    using API-key auth (ChatGPT sign-in is one case), leaving the reviewer
-    model to the server. Under API-key auth Codex runs the same role on
-    `gpt-5.6-luna`, and Bedrock providers use their GPT-5.6 Luna ids.
-    AgentsView keeps the reported name and prices it at the `gpt-5.6-luna`
-    catalog row, an estimate rather than an OpenAI invoice. An exact
-    `[custom_model_pricing."codex-auto-review"]` row still wins. Reverified 2026-10-02 against Codex's
+    and namespaced-Astra fallback/CLI tests. Codex auto-review threads persist
+    `turn_context.payload.model` as `codex-auto-review`, a name Codex's default
+    provider writes when it is not using API-key auth (ChatGPT sign-in is one
+    case), leaving the reviewer model to the server. Under API-key auth Codex
+    runs the same role on `gpt-5.6-luna`, and Bedrock providers use their
+    GPT-5.6 Luna ids. AgentsView keeps the reported name and prices it at the
+    `gpt-5.6-luna` catalog row, an estimate rather than an OpenAI invoice. An
+    exact `[custom_model_pricing."codex-auto-review"]` row still wins.
+    Reverified 2026-10-02 against Codex's
     [review model selection](https://github.com/openai/codex/blob/ca466061d64f0b44f416135c7fd06aa7af850bbc/codex-rs/model-provider/src/provider.rs#L122-L126)
     and
     [Bedrock override](https://github.com/openai/codex/blob/ca466061d64f0b44f416135c7fd06aa7af850bbc/codex-rs/model-provider/src/amazon_bedrock/mod.rs#L290-L295).
@@ -2231,13 +2231,12 @@ schemas keep their existing ordering behavior.
   encoded working-directory folder below `~/.omo/agent/sessions/`.
 - **Evidence:** `source`.
 - **Upstream:** The `omo` command from oh-my-openagent runs senpi, a Pi fork,
-  under an OMO brand profile. Clone `https://github.com/code-yeongyu/senpi.git`
-  at `b50f58c8a21b0e94b12c4269a9a8c608e03d308c` (tag `v2026.9.28-7`, the engine omo-ai 5.1.0 pins); see the pinned
-  [session format](https://github.com/code-yeongyu/senpi/blob/b50f58c8a21b0e94b12c4269a9a8c608e03d308c/packages/coding-agent/docs/session-format.md),
-  [session manager](https://github.com/code-yeongyu/senpi/blob/b50f58c8a21b0e94b12c4269a9a8c608e03d308c/packages/coding-agent/src/core/session-manager.ts),
-  and
-  [configuration paths](https://github.com/code-yeongyu/senpi/blob/b50f58c8a21b0e94b12c4269a9a8c608e03d308c/packages/coding-agent/src/config.ts).
-  The brand profile comes from
+  under an OMO brand profile. Clone
+  `https://github.com/code-yeongyu/senpi.git` at
+  `b50f58c8a21b0e94b12c4269a9a8c608e03d308c` (tag `v2026.9.28-7`, the engine
+  omo-ai 5.1.0 pins); see the pinned [session format][omo-session-format],
+  [session manager][omo-session-manager], and
+  [configuration paths][omo-configuration-paths]. The brand profile comes from
   `https://github.com/code-yeongyu/oh-my-openagent.git` at
   `d69d696acb3a2fddffc6a4a8bdfa7b94c6f4aef0`: its
   [launcher](https://github.com/code-yeongyu/oh-my-openagent/blob/d69d696acb3a2fddffc6a4a8bdfa7b94c6f4aef0/packages/omo-native/bin/lib/launcher.js)
@@ -2246,8 +2245,8 @@ schemas keep their existing ordering behavior.
   [package manifest](https://github.com/code-yeongyu/oh-my-openagent/blob/d69d696acb3a2fddffc6a4a8bdfa7b94c6f4aef0/packages/omo-native/package.json)
   pins the senpi version.
 - **Usage and cost:** Assistant messages persist input, output, cache-read, and
-  cache-write tokens with a model ID and a producer cost object, the same shape
-  as Pi. Agentsview catalog-prices the tokens.
+  cache-write tokens with a model ID and a producer cost object, the same
+  shape as Pi. Agentsview catalog-prices the tokens.
 - **Agentsview:** OMO is registered through the Pi-family provider in
   `internal/parser/pi.go` and `internal/parser/pi_provider.go` with its own
   `omo:` session identity, so its sessions never share the Pi or Oh My Pi
@@ -2288,8 +2287,8 @@ schemas keep their existing ordering behavior.
 
 ## StepCode (`stepcode`)
 
-- **Format:** Pi-family JSONL. StepCode distributes the Pi coding-agent
-  harness as a product, so it reuses Pi's session file, entry types, and tree
+- **Format:** Pi-family JSONL. StepCode distributes the Pi coding-agent harness
+  as a product, so it reuses Pi's session file, entry types, and tree
   structure without modification.
 
 - **Evidence:** `source`.
@@ -2301,10 +2300,10 @@ schemas keep their existing ordering behavior.
   [Step integration](https://github.com/stepfun-ai/Step-Code/blob/519e4de4ed2162d3667be1821cb92ada6b884e5a/packages/coding-agent/docs/step-integration.md),
   plus
   [third-party notices](https://github.com/stepfun-ai/Step-Code/blob/519e4de4ed2162d3667be1821cb92ada6b884e5a/THIRD_PARTY_NOTICES.md).
-  The integration page states that the product entrypoint is an adapter over the
-  Pi coding-agent runtime that keeps Pi's `SessionManager` class, JSONL format,
-  and tree operations unchanged while binding that manager to the StepCode
-  agent root. The session-format page documents
+  The integration page states that the product entrypoint is an adapter over
+  the Pi coding-agent runtime that keeps Pi's `SessionManager` class, JSONL
+  format, and tree operations unchanged while binding that manager to the
+  StepCode agent root. The session-format page documents
   `~/.stepcode/agent/sessions/<encoded-cwd>/` and the
   `<timestamp>_<session-id>.jsonl` naming. StepCode is public and MIT-licensed;
   its notices state that it is derived from Pi, which is also MIT.
@@ -2322,8 +2321,8 @@ schemas keep their existing ordering behavior.
   outright, mirroring how Pi resolves the same pair of overrides;
   `STEPCODE_DIR` or `stepcode_dirs` override both. Because default filenames
   are timestamp-prefixed rather than header-UUID-named, identity lookup that
-  arrives with only a bare header UUID falls back to a header scan.
-  StepCode's own subagent and workflow runners spawn a child with
+  arrives with only a bare header UUID falls back to a header scan. StepCode's
+  own subagent and workflow runners spawn a child with
   `--session-id subagent-<uuid>` or `workflow-<run>-<agent>`
   ([helpers.ts](https://github.com/stepfun-ai/Step-Code/blob/519e4de4ed2162d3667be1821cb92ada6b884e5a/packages/coding-agent/src/features/subagent/helpers.ts)),
   so the child lands beside its parent in the same project directory with no
@@ -3813,8 +3812,11 @@ schemas keep their existing ordering behavior.
   stays proportional to inserted rows, with a periodic reconciliation pass
   covering metadata-only edits. Raw-sync audits re-read the project registry,
   and raw snapshots carry the registry-derived project path in the database's
-  logical manifest path because the database does not store it. Source row
-  deletion is not authoritative. Crush's pinned
+  logical manifest path because the database does not store it. Finite
+  backfills save that project path with each resolved root and restore it on
+  resume, independently of later registry additions or removal. The pinned
+  registry's separate `path` and `data_dir` fields were reverified on
+  2026-10-02. Source row deletion is not authoritative. Crush's pinned
   [session deletion service](https://github.com/charmbracelet/crush/blob/ce980ada68444b7591d8dfa631af7e94b2aba0b3/internal/session/session.go#L138-L168)
   physically removes session messages, files, and the session row
   (reverified 2026-09-16). Raw derivation requests full content replacement
@@ -3932,3 +3934,6 @@ schemas keep their existing ordering behavior.
 [evener-source-3]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/llm/types.go
 [evener-source-4]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/schema/snapshot.go
 [evener-source-5]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/fork.go
+[omo-configuration-paths]: https://github.com/code-yeongyu/senpi/blob/b50f58c8a21b0e94b12c4269a9a8c608e03d308c/packages/coding-agent/src/config.ts
+[omo-session-format]: https://github.com/code-yeongyu/senpi/blob/b50f58c8a21b0e94b12c4269a9a8c608e03d308c/packages/coding-agent/docs/session-format.md
+[omo-session-manager]: https://github.com/code-yeongyu/senpi/blob/b50f58c8a21b0e94b12c4269a9a8c608e03d308c/packages/coding-agent/src/core/session-manager.ts

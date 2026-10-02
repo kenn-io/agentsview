@@ -323,8 +323,10 @@ func rawSyncBackfillSpec(
 		}
 		return spec, nil
 	}
-	for _, item := range selected {
+	for index := range selected {
+		item := &selected[index]
 		typ := item.Provider.Definition().Type
+		var roots []rawcheckpoint.BackfillRoot
 		for _, path := range item.ConfiguredRoots {
 			root, err := store.ResolveConfiguredRoot(ctx, typ, path)
 			if errors.Is(err, rawcheckpoint.ErrConfiguredRootUnavailable) {
@@ -336,77 +338,54 @@ func rawSyncBackfillSpec(
 			if err != nil {
 				return rawcheckpoint.BackfillRunSpec{}, rawcheckpoint.ErrBackfillIncomplete
 			}
-			spec.Roots = append(spec.Roots, rawcheckpoint.BackfillSelection{
-				Provider: typ, ConfiguredRootID: root.ID,
+			roots = append(roots, rawcheckpoint.BackfillRoot{
+				ConfiguredRoot: root, ProjectPath: parser.RawCaptureProjectPath(item.Provider, path),
 			})
 		}
+		spec.Roots = append(spec.Roots, bindRawSyncBackfillProviderRoots(item, roots)...)
 	}
 	return spec, nil
 }
 
-// resumeRawSyncBackfillProvider keeps the provider built from the config
-// entries when it still resolves to exactly the run's saved roots, so state the
-// provider derives from those entries, such as Crush's projects.json mapping,
-// stays the same for every attempt. Otherwise it rebuilds the provider from the
-// saved roots, so captured work still uploads after a root is unmounted or a
-// symlink is retargeted.
+// resumeRawSyncBackfillProvider uses the saved roots and project metadata even
+// when a registry or symlink has changed since the run started.
 func resumeRawSyncBackfillProvider(
 	ctx context.Context,
 	store *rawcheckpoint.Store,
 	runID string,
 	item *rawSyncBackfillProvider,
 ) ([]rawcheckpoint.BackfillSelection, error) {
-	typ := item.Provider.Definition().Type
-	stored, err := store.BackfillRoots(ctx, runID, typ)
+	stored, err := store.BackfillRoots(ctx, runID, item.Provider.Definition().Type)
 	if err != nil {
 		return nil, rawcheckpoint.ErrBackfillConflict
 	}
-	selection := make([]rawcheckpoint.BackfillSelection, 0, len(stored))
-	storedIDs := make([]string, 0, len(stored))
-	paths := make([]string, 0, len(stored))
-	for _, root := range stored {
-		selection = append(selection, rawcheckpoint.BackfillSelection{
-			Provider: typ, ConfiguredRootID: root.ID,
-		})
-		storedIDs = append(storedIDs, root.ID)
-		paths = append(paths, root.LocalPath)
-	}
-	currentIDs, err := rawSyncBackfillCurrentRootIDs(ctx, store, typ, item.ConfiguredRoots)
-	if err != nil {
-		return nil, err
-	}
-	if slices.Equal(currentIDs, storedIDs) || item.factory == nil {
-		return selection, nil
-	}
-	providerConfig := item.config.Clone()
-	providerConfig.Roots = paths
-	item.Provider = item.factory.NewProvider(providerConfig)
-	item.ConfiguredRoots = paths
-	return selection, nil
+	return bindRawSyncBackfillProviderRoots(item, stored), nil
 }
 
-// rawSyncBackfillCurrentRootIDs resolves the config's roots in order, dropping
-// aliases of an earlier root. It returns nil when a root is unavailable.
-func rawSyncBackfillCurrentRootIDs(
-	ctx context.Context,
-	store *rawcheckpoint.Store,
-	typ parser.AgentType,
-	paths []string,
-) ([]string, error) {
-	ids := make([]string, 0, len(paths))
-	for _, path := range paths {
-		root, err := store.ResolveConfiguredRoot(ctx, typ, path)
-		if errors.Is(err, rawcheckpoint.ErrConfiguredRootUnavailable) {
-			return nil, nil
+func bindRawSyncBackfillProviderRoots(item *rawSyncBackfillProvider, roots []rawcheckpoint.BackfillRoot) []rawcheckpoint.BackfillSelection {
+	selection := make([]rawcheckpoint.BackfillSelection, 0, len(roots))
+	providerConfig := item.config.Clone()
+	providerConfig.Roots = make([]string, 0, len(roots))
+	providerConfig.RawCaptureProjectDirs = make(map[string]string)
+	seen := make(map[string]bool, len(roots))
+	for _, root := range roots {
+		if seen[root.ID] {
+			continue
 		}
-		if err != nil {
-			return nil, rawcheckpoint.ErrBackfillIncomplete
-		}
-		if !slices.Contains(ids, root.ID) {
-			ids = append(ids, root.ID)
+		seen[root.ID] = true
+		selection = append(selection, rawcheckpoint.BackfillSelection{
+			Provider: root.Provider, ConfiguredRootID: root.ID, ProjectPath: root.ProjectPath,
+		})
+		providerConfig.Roots = append(providerConfig.Roots, root.LocalPath)
+		if root.ProjectPath != "" {
+			providerConfig.RawCaptureProjectDirs[root.LocalPath] = root.ProjectPath
 		}
 	}
-	return ids, nil
+	if item.factory != nil {
+		item.Provider = item.factory.NewProvider(providerConfig)
+		item.ConfiguredRoots = providerConfig.Roots
+	}
+	return selection
 }
 
 func recoverRawSyncBackfillProgress(
@@ -471,6 +450,9 @@ func writeRawSyncBackfillProgress(
 func rawSyncBackfillResultError(cause error, emitted bool) error {
 	if cause == nil {
 		cause = rawcheckpoint.ErrBackfillIncomplete
+	}
+	if errors.Is(cause, rawcheckpoint.ErrDestinationMismatch) || errors.Is(cause, rawcheckpoint.ErrDestinationUnknown) {
+		return cause
 	}
 	if errors.Is(cause, rawcheckpoint.ErrBackfillConflict) ||
 		errors.Is(cause, rawcheckpoint.ErrDeviceMismatch) ||

@@ -25,7 +25,8 @@ CREATE TABLE raw_sources (
 CREATE TABLE outbox_config (
 		id INTEGER PRIMARY KEY,
 		spool_path TEXT NOT NULL,
-		max_outbox_bytes INTEGER NOT NULL DEFAULT 1073741824
+		max_outbox_bytes INTEGER NOT NULL DEFAULT 1073741824,
+		destination TEXT NOT NULL DEFAULT ''
 	);
 
 CREATE TABLE configured_roots (
@@ -192,7 +193,7 @@ CREATE TABLE backfill_providers (
 
 CREATE TABLE backfill_roots (
  run_id TEXT NOT NULL, provider TEXT NOT NULL, configured_root_id TEXT NOT NULL,
- local_root TEXT NOT NULL, ordinal INTEGER NOT NULL, PRIMARY KEY(run_id, provider, configured_root_id),
+ local_root TEXT NOT NULL, project_path TEXT NOT NULL DEFAULT '', ordinal INTEGER NOT NULL, PRIMARY KEY(run_id, provider, configured_root_id),
  FOREIGN KEY(run_id,provider) REFERENCES backfill_providers(run_id,provider));
 
 CREATE TABLE backfill_members (

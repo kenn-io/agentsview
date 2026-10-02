@@ -58,6 +58,7 @@ func (f *crushProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	originalRoots := make([]string, len(cfg.Roots))
 	copy(originalRoots, cfg.Roots)
 	expandedRoots, registryMapping, projectMapping := normalizeCrushRoots(cfg.Roots)
+	maps.Copy(projectMapping, cfg.RawCaptureProjectDirs)
 	if cfg.StableSourceSnapshots {
 		// crush.db does not store the project path, so hosted snapshots recover
 		// it from the provider-owned logical manifest path.
@@ -117,6 +118,15 @@ type crushProvider struct {
 	// configured registry, crush.db, or data-directory root that produced
 	// it, so source-machine mapping stays bound to the user's spelling.
 	configuredRoot map[string]string
+}
+
+// RawCaptureProjectPath returns project metadata that lives outside a raw
+// database. Other providers preserve their project metadata in the source.
+func RawCaptureProjectPath(provider Provider, root string) string {
+	if p, ok := provider.(*crushProvider); ok {
+		return crushProjectDir(filepath.Join(root, CrushDBName), p.projectMapping)
+	}
+	return ""
 }
 
 func crushRawCaptureEntryPath(projectDir string) string {

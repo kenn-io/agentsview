@@ -287,16 +287,24 @@ agentsview raw-sync backfill \
 Batch size may be 1–512 and can change between attempts. The run ID is bound to
 the device, server, selected providers, and the root entries as written in the
 configuration. Reordered or duplicate provider flags describe the same
-selection. A changed destination, device, provider set, root entry, or root
-order needs a new run ID, because the order in the configuration decides which
-root owns a file that two overlapping roots both contain.
+selection. A changed device, provider set, root entry, or root order needs a new
+run ID, because the order in the configuration decides which root owns a file
+that two overlapping roots both contain.
+
+The checkpoint is bound to one server for both backfill and watch. A new run ID
+does not permit a different server to reuse its receipts. To use another server,
+choose a separate `AGENTSVIEW_DATA_DIR` and enroll a device there. An older
+checkpoint with uploads but no recorded server also requires a separate data
+directory and a newly enrolled device; the client cannot establish where those
+uploads went. The original checkpoint and local archive remain intact.
 
 A run starts only when every configured root of the selected providers exists.
 If one is missing, such as a stale entry or an unmounted drive, the command
 exits with status 1 before saving the run. Mount the root or remove it from the
 configuration, then run the command again. A started run keeps the roots it
 resolved on its first attempt, so captured work still uploads after a source
-root is unmounted.
+root is unmounted. It also saves Crush's registry-derived project paths, so
+later registry changes do not alter the attribution of resumed uploads.
 
 Each invocation is finite. It does not sleep until a failed or deferred upload
 becomes eligible. An incomplete attempt prints current aggregate progress and
