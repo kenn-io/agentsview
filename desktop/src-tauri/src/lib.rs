@@ -2145,6 +2145,10 @@ fn redirect_when_ready(
                     let Some(navigated) =
                         with_current_launch(&state, generation, || window.navigate(url))
                     else {
+                        // Hand the consumed route back so the replacement launch opens it.
+                        if let Some(route) = deferred_route {
+                            dispatch_deep_link_route(window.app_handle(), route);
+                        }
                         return;
                     };
                     if let Err(err) = navigated {
@@ -2168,7 +2172,7 @@ fn redirect_when_ready(
                     // the system browser. See
                     // https://github.com/kenn-io/agentsview/issues/635
                     #[cfg(target_os = "linux")]
-                    spawn_webview_health_fallback(window.clone(), port);
+                    spawn_webview_health_fallback(window.clone(), port, generation);
                 }
                 Err(err) => {
                     queue_startup_log_record(
@@ -2193,9 +2197,12 @@ fn redirect_when_ready(
                     format!("navigating to deep link route {route} queued during startup redirect")
                         .as_str(),
                 );
-                with_current_launch(&state, generation, || {
+                let routed = with_current_launch(&state, generation, || {
                     navigate_main_window_to_route(window.app_handle(), port, route.as_str())
                 });
+                if routed.is_none() {
+                    dispatch_deep_link_route(window.app_handle(), route);
+                }
             }
             return;
         }
@@ -2541,7 +2548,7 @@ fn combined_probe_output(stdout: &str, stderr: &str) -> String {
 /// user where the UI went. If no browser can be opened the window stays
 /// visible and the dialog shows the URL to open manually.
 #[cfg(target_os = "linux")]
-fn spawn_webview_health_fallback(window: WebviewWindow, port: u16) {
+fn spawn_webview_health_fallback(window: WebviewWindow, port: u16, generation: u64) {
     // One-shot guard so focus/navigation retries can't open many tabs.
     static FALLBACK_TRIGGERED: AtomicBool = AtomicBool::new(false);
 
@@ -2553,7 +2560,11 @@ fn spawn_webview_health_fallback(window: WebviewWindow, port: u16) {
         if window.eval("void 0").is_ok() {
             return;
         }
-        if FALLBACK_TRIGGERED.swap(true, Ordering::SeqCst) {
+        let state = window.app_handle().state::<SidecarState>();
+        let triggered = with_current_launch(&state, generation, || {
+            FALLBACK_TRIGGERED.swap(true, Ordering::SeqCst)
+        });
+        if triggered != Some(false) {
             return;
         }
 
