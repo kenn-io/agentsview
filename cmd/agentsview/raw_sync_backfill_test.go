@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -453,6 +454,65 @@ func (t *acceptingRawSyncBackfillTransport) CommitManifest(context.Context, raws
 		ManifestID: fmt.Sprintf("%064x", t.commits), Receipt: fmt.Sprintf("%064x", t.commits+100),
 		Generation: 1, Created: true,
 	}, nil
+}
+
+type recordingRawSyncBackfillTransport struct {
+	acceptingRawSyncBackfillTransport
+	paths []string
+}
+
+func (t *recordingRawSyncBackfillTransport) CommitManifest(ctx context.Context, manifest rawsync.Manifest) (rawsync.CommitResult, error) {
+	for _, entry := range manifest.Entries {
+		t.paths = append(t.paths, entry.Path)
+	}
+	return t.acceptingRawSyncBackfillTransport.CommitManifest(ctx, manifest)
+}
+
+func TestRawSyncBackfillResumeKeepsCrushRegistryProjectPath(t *testing.T) {
+	registry := t.TempDir()
+	project := filepath.Join(t.TempDir(), "project-a")
+	dataDir := filepath.Join(t.TempDir(), "elsewhere", "crush-data")
+	require.NoError(t, os.MkdirAll(project, 0o700))
+	require.NoError(t, os.MkdirAll(dataDir, 0o700))
+	conn, err := sql.Open("sqlite3", filepath.Join(dataDir, parser.CrushDBName))
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), `CREATE TABLE sessions (id TEXT PRIMARY KEY)`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	registryBody, err := json.Marshal(map[string]any{
+		"projects": []map[string]string{{"path": project, "data_dir": dataDir}},
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(registry, parser.CrushProjectsFileName), registryBody, 0o600))
+	cfg := config.Config{AgentDirs: map[parser.AgentType][]string{parser.AgentCrush: {registry}}}
+	store, err := rawcheckpoint.Open(t.Context(), filepath.Join(t.TempDir(), "checkpoint.db"))
+	require.NoError(t, err)
+	defer store.Close()
+	require.NoError(t, store.SetDevice(t.Context(), "device-a"))
+	backfill := rawSyncBackfillConfig{
+		RunID: "run-crush", DeviceID: "device-a", Server: "https://sync.example.test",
+		Providers: []string{"crush"}, Format: "json", BatchSize: 8,
+	}
+	selected, err := selectRawSyncBackfillProviders(cfg, backfill.Providers)
+	require.NoError(t, err)
+	spec, err := rawSyncBackfillSpec(t.Context(), store, backfill, selected)
+	require.NoError(t, err)
+	_, err = store.BeginBackfill(t.Context(), spec)
+	require.NoError(t, err, "an interrupted first attempt saves the run before capturing")
+
+	selected, err = selectRawSyncBackfillProviders(cfg, backfill.Providers)
+	require.NoError(t, err)
+	spec, err = rawSyncBackfillSpec(t.Context(), store, backfill, selected)
+	require.NoError(t, err)
+	transport := &recordingRawSyncBackfillTransport{}
+	var output testBuffer
+	err = runRawSyncBackfillAttempt(t.Context(), &output, backfill, store, spec,
+		[]parser.Provider{selected[0].Provider}, transport)
+
+	require.NoError(t, err, output.String())
+	encoded := base64.RawURLEncoding.EncodeToString([]byte(project))
+	assert.Equal(t, []string{"projects/" + encoded + "/" + parser.CrushDBName}, transport.paths,
+		"a resumed run must attribute the database to the project in projects.json")
 }
 
 func TestRawSyncBackfillCompletesGooseRootsTheProviderNormalizes(t *testing.T) {

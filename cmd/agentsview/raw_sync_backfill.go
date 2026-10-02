@@ -311,29 +311,15 @@ func rawSyncBackfillSpec(
 			spec.Entries = append(spec.Entries, rawcheckpoint.BackfillEntry{Provider: typ, Path: entry})
 		}
 	}
-	// An existing run selects and discovers from its saved roots, so it resumes
-	// even when a source root is unmounted or a symlink is retargeted;
-	// BeginBackfill rejects it if the config entries changed.
+	// An existing run selects its saved roots; BeginBackfill rejects it if the
+	// config entries changed.
 	if _, err := store.BackfillProgress(ctx, cfg.RunID); err == nil {
-		for index, item := range selected {
-			typ := item.Provider.Definition().Type
-			stored, err := store.BackfillRoots(ctx, cfg.RunID, typ)
+		for index := range selected {
+			roots, err := resumeRawSyncBackfillProvider(ctx, store, cfg.RunID, &selected[index])
 			if err != nil {
-				return rawcheckpoint.BackfillRunSpec{}, rawcheckpoint.ErrBackfillConflict
+				return rawcheckpoint.BackfillRunSpec{}, err
 			}
-			paths := make([]string, 0, len(stored))
-			for _, root := range stored {
-				paths = append(paths, root.LocalPath)
-				spec.Roots = append(spec.Roots, rawcheckpoint.BackfillSelection{
-					Provider: typ, ConfiguredRootID: root.ID,
-				})
-			}
-			if item.factory != nil {
-				providerConfig := item.config.Clone()
-				providerConfig.Roots = paths
-				selected[index].Provider = item.factory.NewProvider(providerConfig)
-				selected[index].ConfiguredRoots = paths
-			}
+			spec.Roots = append(spec.Roots, roots...)
 		}
 		return spec, nil
 	}
@@ -356,6 +342,71 @@ func rawSyncBackfillSpec(
 		}
 	}
 	return spec, nil
+}
+
+// resumeRawSyncBackfillProvider keeps the provider built from the config
+// entries when it still resolves to exactly the run's saved roots, so state the
+// provider derives from those entries, such as Crush's projects.json mapping,
+// stays the same for every attempt. Otherwise it rebuilds the provider from the
+// saved roots, so captured work still uploads after a root is unmounted or a
+// symlink is retargeted.
+func resumeRawSyncBackfillProvider(
+	ctx context.Context,
+	store *rawcheckpoint.Store,
+	runID string,
+	item *rawSyncBackfillProvider,
+) ([]rawcheckpoint.BackfillSelection, error) {
+	typ := item.Provider.Definition().Type
+	stored, err := store.BackfillRoots(ctx, runID, typ)
+	if err != nil {
+		return nil, rawcheckpoint.ErrBackfillConflict
+	}
+	selection := make([]rawcheckpoint.BackfillSelection, 0, len(stored))
+	storedIDs := make([]string, 0, len(stored))
+	paths := make([]string, 0, len(stored))
+	for _, root := range stored {
+		selection = append(selection, rawcheckpoint.BackfillSelection{
+			Provider: typ, ConfiguredRootID: root.ID,
+		})
+		storedIDs = append(storedIDs, root.ID)
+		paths = append(paths, root.LocalPath)
+	}
+	currentIDs, err := rawSyncBackfillCurrentRootIDs(ctx, store, typ, item.ConfiguredRoots)
+	if err != nil {
+		return nil, err
+	}
+	if slices.Equal(currentIDs, storedIDs) || item.factory == nil {
+		return selection, nil
+	}
+	providerConfig := item.config.Clone()
+	providerConfig.Roots = paths
+	item.Provider = item.factory.NewProvider(providerConfig)
+	item.ConfiguredRoots = paths
+	return selection, nil
+}
+
+// rawSyncBackfillCurrentRootIDs resolves the config's roots in order, dropping
+// aliases of an earlier root. It returns nil when a root is unavailable.
+func rawSyncBackfillCurrentRootIDs(
+	ctx context.Context,
+	store *rawcheckpoint.Store,
+	typ parser.AgentType,
+	paths []string,
+) ([]string, error) {
+	ids := make([]string, 0, len(paths))
+	for _, path := range paths {
+		root, err := store.ResolveConfiguredRoot(ctx, typ, path)
+		if errors.Is(err, rawcheckpoint.ErrConfiguredRootUnavailable) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, rawcheckpoint.ErrBackfillIncomplete
+		}
+		if !slices.Contains(ids, root.ID) {
+			ids = append(ids, root.ID)
+		}
+	}
+	return ids, nil
 }
 
 func recoverRawSyncBackfillProgress(
