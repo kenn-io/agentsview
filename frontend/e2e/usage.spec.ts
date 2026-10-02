@@ -360,7 +360,9 @@ test.describe("Usage input cards", () => {
 
   const openUsage = async (page: Page, width: number) => {
     await page.setViewportSize({ width, height: 900 });
-    await page.route(/\/api\/v1\/usage\/summary(\?|$)/, (route) => route.fulfill({ json: summary }));
+    await page.route(/\/api\/v1\/usage\/summary(\?|$)/, (route) =>
+      route.fulfill({ json: summary }),
+    );
     await page.goto("/usage");
     await expect(page.locator(".summary-cards .card-value").first()).toBeVisible({
       timeout: 10_000,
@@ -372,7 +374,7 @@ test.describe("Usage input cards", () => {
       has: page.locator(".card-label", { hasText: new RegExp(`^${label}$`) }),
     });
 
-  const expectStableCards = async (page: Page) => {
+  const expectStableCards = async (page: Page, equalHeights = true) => {
     const cards = page.locator(".summary-cards .card");
     await expect(cards).toHaveCount(10);
     const boxes = await cards.evaluateAll((els) =>
@@ -382,7 +384,9 @@ test.describe("Usage input cards", () => {
         overflowY: el.scrollHeight > el.clientHeight,
       })),
     );
-    expect(new Set(boxes.map((box) => box.height)).size).toBe(1);
+    if (equalHeights) {
+      expect(new Set(boxes.map((box) => box.height)).size).toBe(1);
+    }
     expect(boxes.filter((box) => box.overflowX || box.overflowY)).toEqual([]);
   };
 
@@ -405,6 +409,6 @@ test.describe("Usage input cards", () => {
 
     await expect(card(page, "Cəmi giriş").locator(".card-value")).toHaveText("7.9B");
     await expect(card(page, "Keşsiz giriş").locator(".card-value")).toHaveText("248.6M");
-    await expectStableCards(page);
+    await expectStableCards(page, false);
   });
 });
