@@ -11,6 +11,12 @@ The latest published release is
 
 **New features**
 
+- Assistants connected over MCP can see which tools a session ran, find which
+  sessions edited a file, list a session's sub-agents, read the Activity report,
+  see tool usage and where agents struggled, compare usage between two models or
+  projects, and search the AgentsView guides. The eight new tools are read-only
+  and stay out of the `memory` profile. The server now speaks MCP 2026-07-28
+  over stdio, and clients on older protocol versions keep working.
 - Sessions show the title their agent keeps for them, and a name you chose with
   `/rename` or the agent's equivalent wins over a generated title. Current
   Claude Code `/rename` names now appear, and Qwen Code, Gemini CLI, Kimi CLI,

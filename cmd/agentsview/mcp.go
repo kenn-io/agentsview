@@ -18,6 +18,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	mcpserver "go.kenn.io/agentsview/internal/mcp"
@@ -36,8 +37,10 @@ func newMCPCommand() *cobra.Command {
 		Long: `Start an MCP (Model Context Protocol) server over stdio (default) or
 StreamableHTTP, exposing read-only tools for searching and reading
 recorded agent sessions: search_sessions, list_sessions,
-get_session_overview, get_messages, get_memory_status, search_content, and
-get_usage_summary, plus query_recall for distilled session knowledge.
+get_session_overview, get_messages, get_memory_status, search_content,
+get_usage_summary, get_tool_calls, get_recent_edits, get_child_sessions,
+compare_usage, get_activity_report, get_tool_usage, get_quality_signals, and
+search_docs, plus query_recall for distilled session knowledge.
 Use --profile memory to advertise only get_memory_status, search_content, and
 get_messages for focused conversation-memory clients. The default full profile
 is unchanged.
@@ -337,6 +340,66 @@ func (s *mcpDaemonService) ToolCalls(
 		return nil, err
 	}
 	return svc.ToolCalls(ctx, id)
+}
+
+func (s *mcpDaemonService) ChildSessions(
+	ctx context.Context, id string,
+) ([]db.Session, error) {
+	svc, err := s.daemonService(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return svc.ChildSessions(ctx, id)
+}
+
+func (s *mcpDaemonService) RecentEdits(
+	ctx context.Context, f service.RecentEditsFilter,
+) (*db.RecentEditsResult, error) {
+	svc, err := s.daemonService(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return svc.RecentEdits(ctx, f)
+}
+
+func (s *mcpDaemonService) ActivityReport(
+	ctx context.Context, req service.ActivityReportRequest,
+) (*activity.Report, error) {
+	svc, err := s.daemonService(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return svc.ActivityReport(ctx, req)
+}
+
+func (s *mcpDaemonService) ToolAnalytics(
+	ctx context.Context, req service.AnalyticsRequest,
+) (*db.ToolsAnalyticsResponse, error) {
+	svc, err := s.daemonService(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return svc.ToolAnalytics(ctx, req)
+}
+
+func (s *mcpDaemonService) SignalAnalytics(
+	ctx context.Context, req service.AnalyticsRequest,
+) (*db.SignalsAnalyticsResponse, error) {
+	svc, err := s.daemonService(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return svc.SignalAnalytics(ctx, req)
+}
+
+func (s *mcpDaemonService) SignalSessions(
+	ctx context.Context, req service.SignalSessionsRequest,
+) (*db.SignalSessionsResponse, error) {
+	svc, err := s.daemonService(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return svc.SignalSessions(ctx, req)
 }
 
 func (s *mcpDaemonService) Sync(

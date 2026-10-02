@@ -1,5 +1,5 @@
 // ABOUTME: Builds and serves the agentsview MCP server (stdio or
-// ABOUTME: StreamableHTTP) over the supported read-only retrieval tools.
+// ABOUTME: StreamableHTTP) over the supported read-only history tools.
 package mcp
 
 import (
@@ -32,6 +32,14 @@ const (
 	ToolSearchContent      = "search_content"
 	ToolGetMemoryStatus    = "get_memory_status"
 	ToolGetUsageSummary    = "get_usage_summary"
+	ToolGetToolCalls       = "get_tool_calls"
+	ToolGetRecentEdits     = "get_recent_edits"
+	ToolGetChildSessions   = "get_child_sessions"
+	ToolCompareUsage       = "compare_usage"
+	ToolGetActivityReport  = "get_activity_report"
+	ToolGetToolUsage       = "get_tool_usage"
+	ToolGetQualitySignals  = "get_quality_signals"
+	ToolSearchDocs         = "search_docs"
 )
 
 // Profile selects the tools advertised by an MCP server while keeping their
@@ -185,6 +193,64 @@ func newServer(opts ServeOptions) *mcp.Server {
 				"filterable by project, agent, machine, and date range.",
 			Annotations: readOnly,
 		}, t.usageSummary)
+
+		mcp.AddTool(s, &mcp.Tool{
+			Name: ToolGetToolCalls,
+			Description: "List the tool calls one session made, in order: tool name, category, input, and " +
+				"result size. Filter by category (for example Edit, Write, or Bash) to see what the agent " +
+				"ran or changed. Inputs have secret-shaped values masked and are cut to max_input_chars.",
+			Annotations: readOnly,
+		}, t.toolCalls)
+
+		mcp.AddTool(s, &mcp.Tool{
+			Name: ToolGetRecentEdits,
+			Description: "Find which sessions edited a file. Returns files whose path contains path, newest " +
+				"edit first, each with its recent Edit and Write calls and the session that made each one.",
+			Annotations: readOnly,
+		}, t.recentEdits)
+
+		mcp.AddTool(s, &mcp.Tool{
+			Name:        ToolGetChildSessions,
+			Description: "List the sub-agent and fork sessions started from one session.",
+			Annotations: readOnly,
+		}, t.childSessions)
+
+		mcp.AddTool(s, &mcp.Tool{
+			Name: ToolCompareUsage,
+			Description: "Compare token usage and cost between two models or two projects over one date " +
+				"range. Returns each side's totals and the differences between them.",
+			Annotations: readOnly,
+		}, t.compareUsage)
+
+		mcp.AddTool(s, &mcp.Tool{
+			Name: ToolGetActivityReport,
+			Description: "Report agent time, sessions, and cost for a day, week, month, or custom range: " +
+				"totals, the busiest moment, breakdowns by project, model, and agent, and a page of the " +
+				"sessions in the range. Page through the sessions with sessions_cursor.",
+			Annotations: readOnly,
+		}, t.activityReport)
+
+		mcp.AddTool(s, &mcp.Tool{
+			Name: ToolGetToolUsage,
+			Description: "Show which tools agents call and how often, by category, agent, and tool name, " +
+				"with a weekly trend. Use get_quality_signals for tool failures and retries.",
+			Annotations: readOnly,
+		}, t.toolUsage)
+
+		mcp.AddTool(s, &mcp.Tool{
+			Name: ToolGetQualitySignals,
+			Description: "Show where agents struggled: health grades, outcomes, tool failures and retries, " +
+				"edit churn, context pressure, and prompt quality, by agent and project. Set signal to " +
+				"also get example sessions for one signal.",
+			Annotations: readOnly,
+		}, t.qualitySignals)
+
+		mcp.AddTool(s, &mcp.Tool{
+			Name: ToolSearchDocs,
+			Description: "Search the AgentsView guides for setup, configuration, MCP, sync, search, and " +
+				"usage reporting. Returns matching sections with links to the published pages.",
+			Annotations: readOnly,
+		}, searchDocs)
 	}
 
 	return s
