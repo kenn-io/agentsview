@@ -515,7 +515,7 @@ func TestRawSyncBackfillSealedRunUploadsAfterSourceRootUnmounted(t *testing.T) {
 	assert.Positive(t, transport.commits)
 }
 
-func TestRawSyncBackfillResumeDiscoversSavedRootAfterSymlinkRetarget(t *testing.T) {
+func TestRawSyncBackfillResumeDiscoversSavedRootsWhenResolutionChanges(t *testing.T) {
 	base := t.TempDir()
 	first := filepath.Join(base, "first")
 	second := filepath.Join(base, "second")
