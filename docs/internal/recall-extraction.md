@@ -283,13 +283,21 @@ ladder:
 There is no "retry with a compact prompt" path: a capped response silently loses
 entries, so truncation always splits or fails.
 
-Each action window computes its stored tool evidence independently. A window
-without evidence omits `procedure` from its allowed entry types and receives a
-completion preamble on its action prompt. A returned forbidden type violates the
-requested schema and aborts the pass through the existing endpoint protocol
-error. Progress stays resumable after the endpoint or configuration is repaired.
-`recall extract doctor` probes the unrestricted intent request. A stored call
-flag proves invocation; wording in other entry types still depends on the model.
+Each action window computes its stored tool evidence independently. A message
+with no visible text but a tool flag marks the assistant block before it and the
+block after it, so a packing boundary cannot leave either side of one call
+without evidence. A window without evidence omits `procedure` from its allowed
+entry types and receives a preamble on its action prompt saying nothing ran.
+
+A returned type that is valid but outside the window's narrowed enum fails only
+that session, behind the normal failure backoff, and the pass continues. A
+server that ignores the enum still answers unrestricted windows correctly, so
+this is not an endpoint failure. A type outside every enum still aborts the pass
+as a protocol violation. `recall extract doctor` probes only the unrestricted
+intent request.
+
+A stored call flag proves invocation, not success: a denied or failed call still
+counts as evidence. Wording in other entry types depends on the model.
 
 ## Scheduling
 

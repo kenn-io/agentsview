@@ -333,6 +333,14 @@ func TestTurnsV1ToolUseIsWindowLocal(t *testing.T) {
 			},
 		},
 		{
+			name: "hidden tool row between split blocks", contents: []string{long, "", long},
+			tools: []bool{false, true, false}, budget: 60,
+			want: []Unit{
+				{Role: RoleAction, Text: "[0] ASSISTANT:\n" + long, OrdinalStart: 0, OrdinalEnd: 0, ToolUse: true},
+				{Role: RoleAction, Text: "[2] ASSISTANT:\n" + long, OrdinalStart: 2, OrdinalEnd: 2, ToolUse: true},
+			},
+		},
+		{
 			name: "two tool blocks in one window", contents: []string{"a", "b"}, tools: []bool{true, true}, budget: 60,
 			want: []Unit{
 				{Role: RoleAction, Text: "[0] ASSISTANT:\na\n\n[1] ASSISTANT:\nb", OrdinalStart: 0, OrdinalEnd: 1, ToolUse: true},

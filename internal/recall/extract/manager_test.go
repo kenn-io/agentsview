@@ -3665,7 +3665,10 @@ func TestManagerUnexecutedPreambleWrapsOverride(t *testing.T) {
 		requestText(t, requests[0], "system"))
 }
 
-func TestManagerRestrictedProcedureAbortsPass(t *testing.T) {
+// TestManagerRestrictedProcedureFailsOnlyItsSession pins that a server which
+// ignores the narrowed enum fails the offending session behind its backoff
+// while the pass continues through the rest of the backlog.
+func TestManagerRestrictedProcedureFailsOnlyItsSession(t *testing.T) {
 	d := newTestArchive(t)
 	ctx := t.Context()
 	server, log := modelServer(t, func(text string, _ int) (int, string) {
@@ -3684,9 +3687,9 @@ func TestManagerRestrictedProcedureAbortsPass(t *testing.T) {
 	m := newManager(t, d, server.URL, nil)
 
 	result, err := m.RunPass(ctx, PassOptions{})
-	require.ErrorIs(t, err, errProtocolViolation)
-	assert.Equal(t, 0, result.Failed)
-	assert.Len(t, log.all(), 1, "a schema violation must stop the pass")
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Failed)
+	assert.Len(t, log.all(), 2, "the pass must continue past the rejected unit")
 	entry, readErr := d.GetRecallEntry(ctx, EntryID(m.Fingerprint(), "sess-a", 0, 0))
 	require.NoError(t, readErr)
 	assert.Nil(t, entry)
@@ -3694,12 +3697,13 @@ func TestManagerRestrictedProcedureAbortsPass(t *testing.T) {
 	progress, found, err := d.ExtractProgress(ctx, "sess-a", m.Fingerprint())
 	require.NoError(t, err)
 	require.True(t, found)
-	assert.Equal(t, db.ExtractProgressPending, progress.State)
+	assert.Equal(t, db.ExtractProgressFailed, progress.State)
 	assert.Equal(t, 0, progress.UnitCursor)
-	assert.Empty(t, progress.LastError)
-	_, found, err = d.ExtractProgress(ctx, "sess-b", m.Fingerprint())
+	assert.Contains(t, progress.LastError, "does not allow")
+	progress, found, err = d.ExtractProgress(ctx, "sess-b", m.Fingerprint())
 	require.NoError(t, err)
-	assert.False(t, found, "the second session must remain unvisited")
+	require.True(t, found)
+	assert.Equal(t, db.ExtractProgressDone, progress.State)
 }
 
 // TestManagerUnexecutedActionUnitAcceptsEmpty pins that an empty response
@@ -3802,7 +3806,7 @@ func TestUnexecutedActionUnitsLive(t *testing.T) {
 
 	result, err := m.RunPass(ctx, PassOptions{})
 	require.NoError(t, err)
-	require.Equal(t, 0, result.Failed, "a forbidden procedure must abort through the protocol error")
+	require.Equal(t, 0, result.Failed, "the model returned an entry type the request did not allow")
 	for i := range maxResponseEntries {
 		entry, err := d.GetRecallEntry(ctx, EntryID(m.Fingerprint(), "sess-live", 0, i))
 		require.NoError(t, err)

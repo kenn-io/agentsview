@@ -1321,21 +1321,30 @@ func TestClientRequestSchemaKeepsLargeBodyLimitLocal(t *testing.T) {
 	assert.Equal(t, "p", system["content"])
 }
 
-// Restricted requests validate the response against the enum sent to the server.
-func TestClientRejectsProcedureWithoutToolUse(t *testing.T) {
+// Restricted requests validate the response against the enum sent to the
+// server. A type outside the narrowed enum indicts this unit's output, while
+// a type outside every enum means the server ignores the schema.
+func TestClientRejectsDisallowedEntryType(t *testing.T) {
 	entry := func(kind string) string {
 		return `{"entries":[{"type":"` + kind + `","title":"Added deploy.yml",` +
 			`"body":"Added the workflow.","entities":[]}]}`
 	}
 	cases := []struct {
-		name      string
-		content   string
-		noToolUse bool
-		wantErr   error
+		name          string
+		content       string
+		types         []string
+		wantErr       error
+		endpointScope bool
 	}{
-		{name: "restricted", content: entry("procedure"), noToolUse: true, wantErr: errProtocolViolation},
-		{name: "unrestricted", content: entry("procedure"), noToolUse: false},
-		{name: "unknown type", content: entry("changelog"), noToolUse: true, wantErr: errProtocolViolation},
+		{
+			name: "restricted", content: entry("procedure"),
+			types: unexecutedEntryTypes, wantErr: errDisallowedEntryType,
+		},
+		{name: "unrestricted", content: entry("procedure"), types: entryTypes},
+		{
+			name: "unknown type", content: entry("changelog"),
+			types: unexecutedEntryTypes, wantErr: errProtocolViolation, endpointScope: true,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1346,12 +1355,12 @@ func TestClientRejectsProcedureWithoutToolUse(t *testing.T) {
 			defer server.Close()
 
 			entries, _, err := testClient(server.URL).distillWithRecovery(
-				t.Context(), "p", "text", tc.noToolUse, 3,
+				t.Context(), "p", "text", tc.types, 3,
 			)
 			assert.Len(t, requests, 1)
 			if tc.wantErr != nil {
 				require.ErrorIs(t, err, tc.wantErr)
-				assert.True(t, endpointScopedRejection(err))
+				assert.Equal(t, tc.endpointScope, endpointScopedRejection(err))
 				_, transient := errors.AsType[*transientError](err)
 				assert.False(t, transient)
 				assert.Empty(t, entries)

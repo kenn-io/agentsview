@@ -71,6 +71,14 @@ var errClientOnlyResponseLimit = errors.New(
 	"distill response exceeds a client-only resource limit",
 )
 
+// errDisallowedEntryType marks an entry whose type is valid in general but
+// was left out of this request's enum. Only some units narrow the enum, so a
+// server that ignores it still answers unrestricted units correctly: like
+// errClientOnlyResponseLimit, it indicts one model output, not the endpoint.
+var errDisallowedEntryType = errors.New(
+	"distill response uses an entry type this unit does not allow",
+)
+
 // requestStatusError carries the HTTP status of a permanent server
 // rejection so callers can tell endpoint-scoped failures from
 // input-specific ones.
@@ -160,9 +168,9 @@ const maxRetryDelay = 30 * time.Second
 // v3: truncation always splits; the entry-capped compact retry is gone.
 // v4: maxItems/maxLength bounds on entries, fields, and entities.
 // v5: body maxLength is enforced client-side only for grammar compatibility.
-// v6: action units without a tool call drop 'procedure' and get a prompt preamble.
-// v7: unit-local tool evidence and normal schema-failure routing.
-const extractionProtocolVersion = 7
+// v6: action units whose messages ran no tool drop 'procedure' and open
+// with unexecutedActionPreamble; units carry that tool evidence.
+const extractionProtocolVersion = 6
 
 // Local resource bounds on a single distill response. The transport cap
 // only bounds bytes; within it a compromised or misconfigured endpoint
@@ -202,20 +210,10 @@ var entryTypes = []string{
 	"fact", "decision", "procedure", "warning", "preference", "open_question",
 }
 
-// unexecutedEntryTypes drops 'procedure' for action units whose messages ran
-// no tool: nothing in them can be recorded as steps that were carried out.
-var unexecutedEntryTypes = slices.DeleteFunc(
-	slices.Clone(entryTypes), func(t string) bool { return t == "procedure" },
-)
-
 // entrySchema constrains decoding so the model can only produce parseable
-// entries; validation failures become server-side sampling constraints
-// instead of client-side parse errors.
-var entrySchema = newEntrySchema(entryTypes)
-
-var unexecutedEntrySchema = newEntrySchema(unexecutedEntryTypes)
-
-func newEntrySchema(types []string) map[string]any {
+// entries of the given types; validation failures become server-side
+// sampling constraints instead of client-side parse errors.
+func entrySchema(types []string) map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -333,13 +331,13 @@ func (c *Client) ValidateRequestShape() error {
 func (c *Client) DistillWithRecovery(
 	ctx context.Context, systemPrompt, text string, maxAttempts int,
 ) ([]Entry, Usage, error) {
-	return c.distillWithRecovery(ctx, systemPrompt, text, false, maxAttempts)
+	return c.distillWithRecovery(ctx, systemPrompt, text, entryTypes, maxAttempts)
 }
 
-// distillWithRecovery is DistillWithRecovery with the request restricted
-// for an action unit that ran no tool when noToolUse is set.
+// distillWithRecovery is DistillWithRecovery with the response restricted
+// to types, a subset of entryTypes.
 func (c *Client) distillWithRecovery(
-	ctx context.Context, systemPrompt, text string, noToolUse bool,
+	ctx context.Context, systemPrompt, text string, types []string,
 	maxAttempts int,
 ) ([]Entry, Usage, error) {
 	var total Usage
@@ -348,7 +346,7 @@ func (c *Client) distillWithRecovery(
 	}
 	var lastErr error
 	for attempt := range maxAttempts {
-		entries, usage, err := c.distill(ctx, systemPrompt, text, noToolUse)
+		entries, usage, err := c.distill(ctx, systemPrompt, text, types)
 		total.PromptTokens += usage.PromptTokens
 		total.CompletionTokens += usage.CompletionTokens
 		if err == nil {
@@ -392,13 +390,8 @@ func (c *Client) distillWithRecovery(
 }
 
 func (c *Client) distill(
-	ctx context.Context, systemPrompt, text string, noToolUse bool,
+	ctx context.Context, systemPrompt, text string, types []string,
 ) ([]Entry, Usage, error) {
-	schema, types := entrySchema, entryTypes
-	if noToolUse {
-		systemPrompt = unexecutedActionPreamble + "\n\n" + systemPrompt
-		schema, types = unexecutedEntrySchema, unexecutedEntryTypes
-	}
 	payload := map[string]any{
 		"model":       c.Model,
 		"max_tokens":  c.Request.MaxTokens,
@@ -412,7 +405,7 @@ func (c *Client) distill(
 			"json_schema": map[string]any{
 				"name":   "session_readout",
 				"strict": true,
-				"schema": schema,
+				"schema": entrySchema(types),
 			},
 		},
 	}
@@ -618,7 +611,8 @@ func (c *Client) distill(
 	}
 	entries, err := parseEntries(choice.Message.Content, types)
 	if err != nil {
-		if errors.Is(err, errClientOnlyResponseLimit) {
+		if errors.Is(err, errClientOnlyResponseLimit) ||
+			errors.Is(err, errDisallowedEntryType) {
 			return nil, parsed.Usage, err
 		}
 		// The server was asked for constrained decoding, so a violation
@@ -800,10 +794,17 @@ func parseEntries(content string, types []string) ([]Entry, error) {
 		if entry.Type, err = strictString(fields["type"], "type"); err != nil {
 			return nil, fmt.Errorf("entry %d: %w", i, err)
 		}
-		if !slices.Contains(types, entry.Type) {
+		if !slices.Contains(entryTypes, entry.Type) {
 			return nil, fmt.Errorf(
 				"entry %d: type %q is not one of %s",
 				i, boundedToken(entry.Type, 60),
+				strings.Join(entryTypes, ", "),
+			)
+		}
+		if !slices.Contains(types, entry.Type) {
+			return nil, fmt.Errorf(
+				"%w: entry %d has type %q; allowed: %s",
+				errDisallowedEntryType, i, entry.Type,
 				strings.Join(types, ", "),
 			)
 		}

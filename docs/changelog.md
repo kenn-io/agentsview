@@ -175,9 +175,12 @@ The latest published release is
   `history.jsonl` to say which sessions are active. AgentsView now also checks
   the files of Codex sessions active in the last 24 hours. A session you resume
   after more than 24 hours idle still waits until Codex closes its file.
-- Recall restricts procedure entries to action windows with stored tool evidence.
-  A window without tool evidence omits procedure and tells the model it executed
-  nothing; wording in other entry types still depends on the model.
+- Recall no longer records work an agent only proposed as work it completed.
+  When a stretch of a session ran no tools, extraction cannot produce a
+  procedure entry for it and tells the model nothing there was executed.
+  Other entry types still rely on the model's wording. A tool call counts as
+  evidence even if it was denied or failed. Upgrading re-extracts recall
+  entries for every session, which costs one round of model calls per session.
 
 ## 0.44.0
 

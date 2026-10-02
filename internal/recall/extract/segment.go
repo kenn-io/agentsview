@@ -156,12 +156,14 @@ func (s TurnsV1) Units(messages []Message) []Unit {
 		content, ok := visibleContent(message)
 		if !ok {
 			// A row with no visible text can still carry execution evidence.
+			// It marks the block that announced the call and the block that
+			// reports its result, so packing cannot split the two sides of
+			// one tool call into a window that claims nothing ran.
 			if message.ToolUse {
 				if len(run) > 0 {
 					run[len(run)-1].toolUse = true
-				} else {
-					pendingToolUse = true
 				}
+				pendingToolUse = true
 			}
 			continue
 		}
