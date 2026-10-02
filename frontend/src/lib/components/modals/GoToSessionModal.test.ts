@@ -276,7 +276,12 @@ describe("GoToSessionModal", () => {
     await open();
     const overlay = document.querySelector<HTMLElement>(".kit-modal-overlay")!;
 
-    overlay.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+    // A full press on the overlay: kit-ui closes on the click that follows a
+    // press which starts and ends there, not on pointerdown alone.
+    const press = { bubbles: true, pointerId: 1 };
+    overlay.dispatchEvent(new PointerEvent("pointerdown", press));
+    overlay.dispatchEvent(new PointerEvent("pointerup", press));
+    overlay.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(ui.activeModal).toBeNull();
   });
