@@ -192,7 +192,7 @@ CREATE TABLE backfill_providers (
 
 CREATE TABLE backfill_roots (
  run_id TEXT NOT NULL, provider TEXT NOT NULL, configured_root_id TEXT NOT NULL,
- local_root TEXT NOT NULL, PRIMARY KEY(run_id, provider, configured_root_id),
+ local_root TEXT NOT NULL, ordinal INTEGER NOT NULL, PRIMARY KEY(run_id, provider, configured_root_id),
  FOREIGN KEY(run_id,provider) REFERENCES backfill_providers(run_id,provider));
 
 CREATE TABLE backfill_members (

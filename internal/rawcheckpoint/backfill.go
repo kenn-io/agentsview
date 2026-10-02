@@ -73,22 +73,10 @@ func (s *Store) BeginBackfill(ctx context.Context, spec BackfillRunSpec) (Backfi
 	spec.Providers = slices.Clone(spec.Providers)
 	slices.Sort(spec.Providers)
 	spec.Providers = slices.Compact(spec.Providers)
-	spec.Roots = slices.Clone(spec.Roots)
-	slices.SortFunc(spec.Roots, func(a, b BackfillSelection) int {
-		if n := strings.Compare(string(a.Provider), string(b.Provider)); n != 0 {
-			return n
-		}
-		return strings.Compare(a.ConfiguredRootID, b.ConfiguredRootID)
-	})
-	spec.Roots = slices.Compact(spec.Roots)
-	spec.Entries = slices.Clone(spec.Entries)
-	slices.SortFunc(spec.Entries, func(a, b BackfillEntry) int {
-		if n := strings.Compare(string(a.Provider), string(b.Provider)); n != 0 {
-			return n
-		}
-		return strings.Compare(a.Path, b.Path)
-	})
-	spec.Entries = slices.Compact(spec.Entries)
+	// Root and entry order is part of the run: it decides which root owns a
+	// file under overlapping roots, so only providers are put in a fixed order.
+	spec.Roots = uniqueInProviderOrder(spec.Roots, func(root BackfillSelection) parser.AgentType { return root.Provider })
+	spec.Entries = uniqueInProviderOrder(spec.Entries, func(entry BackfillEntry) parser.AgentType { return entry.Provider })
 	for _, entry := range spec.Entries {
 		if !slices.Contains(spec.Providers, entry.Provider) {
 			return BackfillProgress{}, ErrBackfillConflict
@@ -144,8 +132,8 @@ func (s *Store) BeginBackfill(ctx context.Context, spec BackfillRunSpec) (Backfi
 				return err
 			}
 		}
-		for _, root := range selected {
-			if _, err = conn.ExecContext(ctx, `INSERT INTO backfill_roots(run_id,provider,configured_root_id,local_root) VALUES(?,?,?,?)`, spec.RunID, string(root.Provider), root.ConfiguredRootID, root.LocalRoot); err != nil {
+		for ordinal, root := range selected {
+			if _, err = conn.ExecContext(ctx, `INSERT INTO backfill_roots(run_id,provider,configured_root_id,local_root,ordinal) VALUES(?,?,?,?,?)`, spec.RunID, string(root.Provider), root.ConfiguredRootID, root.LocalRoot, ordinal); err != nil {
 				return err
 			}
 		}
@@ -155,6 +143,19 @@ func (s *Store) BeginBackfill(ctx context.Context, spec BackfillRunSpec) (Backfi
 		return BackfillProgress{}, err
 	}
 	return s.BackfillProgress(ctx, spec.RunID)
+}
+
+func uniqueInProviderOrder[T comparable](items []T, provider func(T) parser.AgentType) []T {
+	unique := make([]T, 0, len(items))
+	for _, item := range items {
+		if !slices.Contains(unique, item) {
+			unique = append(unique, item)
+		}
+	}
+	slices.SortStableFunc(unique, func(a, b T) int {
+		return strings.Compare(string(provider(a)), string(provider(b)))
+	})
+	return unique
 }
 
 func backfillToken(value string) bool {
@@ -424,7 +425,7 @@ const backfillPendingClosure = `WITH RECURSIVE backfill_pending(capture_id) AS (
 
 // BackfillRoots returns the private immutable root selection for one provider.
 func (s *Store) BackfillRoots(ctx context.Context, runID string, provider parser.AgentType) ([]ConfiguredRoot, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT configured_root_id,local_root FROM backfill_roots WHERE run_id=? AND provider=? ORDER BY configured_root_id`, runID, string(provider))
+	rows, err := s.db.QueryContext(ctx, `SELECT configured_root_id,local_root FROM backfill_roots WHERE run_id=? AND provider=? ORDER BY ordinal`, runID, string(provider))
 	if err != nil {
 		return nil, err
 	}

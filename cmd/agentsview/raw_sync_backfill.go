@@ -180,22 +180,20 @@ func selectRawSyncBackfillProviders(
 		if factory.Capabilities().RawCapture.Support != parser.CapabilitySupported {
 			return nil, errors.New("selected provider does not support raw capture")
 		}
-		entries, err := absoluteRawSyncBackfillRoots(rawSyncFilesystemRoots(cfg.ResolveDirs(typ)))
+		providerConfig, err := rawSyncProviderConfig(cfg, typ)
 		if err != nil {
-			return nil, err
+			return nil, errors.New("could not resolve a selected provider root")
 		}
-		roots := slices.Clone(entries)
-		providerConfig := parser.ProviderConfig{
-			Roots: roots, Machine: cfg.LocalMachineName,
-			SourceMachines: cfg.SourceMachines[typ],
-		}
+		entries := slices.Clone(providerConfig.Roots)
 		provider := factory.NewProvider(providerConfig)
 		// Bind the provider's normalized roots, such as a Goose home resolved
 		// to its sessions directory, so capture plans fall inside the selection.
+		roots := entries
 		if normalized, ok := provider.(interface{ ConfiguredRoots() []string }); ok {
-			if roots, err = absoluteRawSyncBackfillRoots(rawSyncFilesystemRoots(normalized.ConfiguredRoots())); err != nil {
-				return nil, err
-			}
+			roots = rawSyncFilesystemRoots(normalized.ConfiguredRoots())
+		}
+		if roots, err = uniqueRawSyncBackfillRoots(roots); err != nil {
+			return nil, err
 		}
 		if len(roots) == 0 {
 			return nil, errors.New("selected provider has no configured filesystem roots")
@@ -208,16 +206,21 @@ func selectRawSyncBackfillProviders(
 	return selected, nil
 }
 
-func absoluteRawSyncBackfillRoots(roots []string) ([]string, error) {
-	for index, root := range roots {
+// uniqueRawSyncBackfillRoots keeps the provider's root order, which decides
+// the owning root of a file under overlapping roots.
+func uniqueRawSyncBackfillRoots(roots []string) ([]string, error) {
+	unique := make([]string, 0, len(roots))
+	for _, root := range roots {
 		absolute, err := filepath.Abs(root)
 		if err != nil {
 			return nil, errors.New("could not resolve a selected provider root")
 		}
-		roots[index] = filepath.Clean(absolute)
+		absolute = filepath.Clean(absolute)
+		if !slices.Contains(unique, absolute) {
+			unique = append(unique, absolute)
+		}
 	}
-	slices.Sort(roots)
-	return slices.Compact(roots), nil
+	return unique, nil
 }
 
 func runRawSyncBackfill(

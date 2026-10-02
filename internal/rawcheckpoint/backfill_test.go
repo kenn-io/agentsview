@@ -281,3 +281,21 @@ func TestBackfillSelectionWithInvalidUTF8RootStillDetectsChanges(t *testing.T) {
 	_, err = store.BeginBackfill(t.Context(), spec)
 	require.ErrorIs(t, err, ErrBackfillConflict)
 }
+
+func TestBackfillRootsKeepSelectionOrder(t *testing.T) {
+	store, first := openOutboxTestStore(t, 1<<20)
+	require.NoError(t, store.SetDevice(t.Context(), "device-a"))
+	second, err := store.ResolveConfiguredRoot(t.Context(), parser.AgentClaude, t.TempDir())
+	require.NoError(t, err)
+	ordered := []BackfillSelection{{parser.AgentClaude, second.ID}, {parser.AgentClaude, first.ID}}
+	spec := BackfillRunSpec{RunID: "run-a", DeviceID: "device-a", Destination: "https://ingest.example", Providers: []parser.AgentType{parser.AgentClaude}, Roots: ordered}
+	_, err = store.BeginBackfill(t.Context(), spec)
+	require.NoError(t, err)
+
+	roots, err := store.BackfillRoots(t.Context(), spec.RunID, parser.AgentClaude)
+	require.NoError(t, err)
+	require.Equal(t, []string{second.ID, first.ID}, []string{roots[0].ID, roots[1].ID})
+	spec.Roots = []BackfillSelection{ordered[1], ordered[0]}
+	_, err = store.BeginBackfill(t.Context(), spec)
+	require.ErrorIs(t, err, ErrBackfillConflict, "reordered roots need a new run")
+}

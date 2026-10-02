@@ -16,9 +16,11 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/rawcapture"
 	"go.kenn.io/agentsview/internal/rawcheckpoint"
 	"go.kenn.io/agentsview/internal/rawsync"
 	"go.kenn.io/agentsview/internal/rawtest"
+	"go.kenn.io/agentsview/internal/rawwatch"
 )
 
 func TestRawSyncBackfillValidatesFlagsBeforeConfigSideEffects(t *testing.T) {
@@ -554,4 +556,45 @@ func TestRawSyncBackfillResumeDiscoversSavedRootsWhenResolutionChanges(t *testin
 	assert.Equal(t, spec, resumed)
 	roots := selected[0].Provider.(interface{ ConfiguredRoots() []string }).ConfiguredRoots()
 	assert.Equal(t, []string{saved[0].LocalPath}, roots)
+}
+
+func TestRawSyncBackfillOwnsOverlappingRootsLikeWatch(t *testing.T) {
+	// Claude accepts this subagent transcript under both roots, and watch gives
+	// it to whichever root its config lists first.
+	parent := t.TempDir()
+	nested := filepath.Join(parent, "nested")
+	transcript := filepath.Join(nested, "project", "subagents", "subagents", "agent-child.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(transcript), 0o700))
+	require.NoError(t, os.WriteFile(transcript, []byte(`{"type":"user","uuid":"u1","isSidechain":true,"timestamp":"2026-07-06T12:00:00Z","message":{"content":"Inspect."}}`+"\n"), 0o600))
+	cfg := config.Config{AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {nested, parent}}}
+	store, err := rawcheckpoint.Open(t.Context(), filepath.Join(t.TempDir(), "checkpoint.db"))
+	require.NoError(t, err)
+	defer store.Close()
+	require.NoError(t, store.SetDevice(t.Context(), "device-a"))
+	backfill := rawSyncBackfillConfig{
+		RunID: "run-overlap", DeviceID: "device-a", Server: "https://sync.example.test",
+		Providers: []string{"claude"}, Format: "json", BatchSize: 64,
+	}
+	selected, err := selectRawSyncBackfillProviders(cfg, backfill.Providers)
+	require.NoError(t, err)
+	spec, err := rawSyncBackfillSpec(t.Context(), store, backfill, selected)
+	require.NoError(t, err)
+	var output testBuffer
+	require.NoError(t, runRawSyncBackfillAttempt(t.Context(), &output, backfill, store, spec,
+		[]parser.Provider{selected[0].Provider}, &acceptingRawSyncBackfillTransport{}), output.String())
+
+	providers, _, err := rawSyncProvidersAndRoots(t.Context(), cfg)
+	require.NoError(t, err)
+	var watched parser.Provider
+	for _, provider := range providers {
+		if provider.Definition().Type == parser.AgentClaude {
+			watched = provider
+		}
+	}
+	require.NotNil(t, watched)
+	result, err := rawwatch.NewAuditor(store, rawcapture.New(store), 64).AuditProviderFull(t.Context(), watched)
+
+	require.NoError(t, err)
+	assert.Positive(t, result.Unchanged)
+	assert.Zero(t, result.Captured, "watch must not upload a transcript backfill already sent")
 }
