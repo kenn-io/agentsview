@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -227,4 +228,37 @@ func TestBackfillVersionEightMigrationPreservesQueueAndReceipt(t *testing.T) {
 	var version int
 	require.NoError(t, store.db.QueryRow(`PRAGMA user_version`).Scan(&version))
 	require.Equal(t, 9, version)
+}
+
+func TestFreshSchemaMatchesVersionEightMigration(t *testing.T) {
+	schema := func(store *Store) map[string]string {
+		rows, err := store.db.Query(`SELECT type, name, sql FROM sqlite_master WHERE sql IS NOT NULL`)
+		require.NoError(t, err)
+		defer rows.Close()
+		objects := map[string]string{}
+		for rows.Next() {
+			var kind, name, sql string
+			require.NoError(t, rows.Scan(&kind, &name, &sql))
+			objects[kind+" "+name] = strings.Join(strings.Fields(sql), " ")
+		}
+		require.NoError(t, rows.Err())
+		return objects
+	}
+	fresh, err := Open(t.Context(), filepath.Join(t.TempDir(), "fresh.db"))
+	require.NoError(t, err)
+	defer fresh.Close()
+
+	path := filepath.Join(t.TempDir(), "migrated.db")
+	store, err := Open(t.Context(), path)
+	require.NoError(t, err)
+	for _, statement := range []string{`DROP TRIGGER backfill_generation_deleted`, `DROP TABLE backfill_members`, `DROP TABLE backfill_roots`, `DROP TABLE backfill_providers`, `DROP TABLE backfill_runs`, `PRAGMA user_version=8`} {
+		_, err = store.db.Exec(statement)
+		require.NoError(t, err)
+	}
+	require.NoError(t, store.Close())
+	migrated, err := Open(t.Context(), path)
+	require.NoError(t, err)
+	defer migrated.Close()
+
+	require.Equal(t, schema(fresh), schema(migrated))
 }
