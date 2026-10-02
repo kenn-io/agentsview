@@ -93,7 +93,6 @@ struct SidecarState {
     terminated_generation: Mutex<u64>,
     termination: Condvar,
     next_generation: AtomicU64,
-    background_status_poll_generation: AtomicU64,
 }
 
 struct SidecarProcess {
@@ -1534,6 +1533,30 @@ fn has_active_update_stop_waiter(state: &SidecarState) -> bool {
     state.active_update_stop_waiters.load(Ordering::SeqCst) > 0
 }
 
+// A completed update stop retires the launch it stopped; a failed one leaves it in charge.
+fn finish_update_stop_wait(state: &SidecarState, stopped: bool) {
+    if stopped {
+        state.next_generation.fetch_add(1, Ordering::SeqCst);
+    }
+    end_update_stop_wait(state);
+}
+
+fn launch_superseded(state: &SidecarState, generation: u64) -> bool {
+    state.next_generation.load(Ordering::SeqCst) != generation
+}
+
+// While an update stop is in flight the launch's fate is unknown, so it must not act yet.
+fn launch_is_current(state: &SidecarState, generation: u64) -> bool {
+    !has_active_update_stop_waiter(state) && !launch_superseded(state, generation)
+}
+
+fn launch_survives_update_stop(state: &SidecarState, generation: u64) -> bool {
+    while has_active_update_stop_waiter(state) {
+        thread::sleep(READY_POLL_INTERVAL);
+    }
+    !launch_superseded(state, generation)
+}
+
 fn take_restart_after_stop_timeout_for_terminated_sidecar(
     state: &SidecarState,
     generation: u64,
@@ -1743,15 +1766,15 @@ fn forward_sidecar_logs(
                         break;
                     }
                     if handle_sidecar_terminated(&state, startup_handled.as_ref(), generation) {
-                        spawn_startup_error_render(
+                        spawn_launch_error_render(
                             window.clone(),
+                            generation,
                             "AgentsView backend failed",
                             "The local backend exited before startup completed.",
                             startup_failure_detail(
                                 "The sidecar process ended before it reported a ready backend.",
                                 recent_startup_output(&startup_output).as_str(),
-                            )
-                            .as_str(),
+                            ),
                         );
                     }
                     let restart_after_stop_timeout =
@@ -1771,15 +1794,15 @@ fn forward_sidecar_logs(
                     );
                     eprintln!("[agentsview:error] {err}");
                     if !startup_handled.swap(true, Ordering::SeqCst) {
-                        spawn_startup_error_render(
+                        spawn_launch_error_render(
                             window.clone(),
+                            generation,
                             "AgentsView backend failed",
                             "The desktop wrapper received an error from the backend process.",
                             startup_failure_detail(
                                 redacted.as_str(),
                                 recent_startup_output(&startup_output).as_str(),
-                            )
-                            .as_str(),
+                            ),
                         );
                     }
                 }
@@ -1828,6 +1851,21 @@ fn spawn_startup_error_render(window: WebviewWindow, title: &str, message: &str,
             thread::sleep(READY_POLL_INTERVAL);
         }
         eprintln!("[agentsview] timed out waiting to render startup error");
+    });
+}
+
+// Waits out an update stop on its own thread because the async log task must not block.
+fn spawn_launch_error_render(
+    window: WebviewWindow,
+    generation: u64,
+    title: &'static str,
+    message: &'static str,
+    detail: String,
+) {
+    thread::spawn(move || {
+        if launch_survives_update_stop(&window.app_handle().state::<SidecarState>(), generation) {
+            spawn_startup_error_render(window, title, message, detail.as_str());
+        }
     });
 }
 
@@ -2050,7 +2088,11 @@ fn redirect_when_ready(
     log_sender: SyncSender<SidecarLogRecord>,
 ) {
     thread::spawn(move || {
-        if wait_for_selected_backend(&log_sender, generation, source, port, READY_TIMEOUT) {
+        let ready = wait_for_selected_backend(&log_sender, generation, source, port, READY_TIMEOUT);
+        if !launch_survives_update_stop(&window.app_handle().state::<SidecarState>(), generation) {
+            return;
+        }
+        if ready {
             let deferred_route = take_pending_deep_link_route(window.app_handle());
             let target_url = match deferred_route.as_deref() {
                 Some(route) => {
@@ -2132,10 +2174,6 @@ fn poll_background_status_after_launcher_exit(
     log_sender: SyncSender<SidecarLogRecord>,
 ) {
     let handle = window.app_handle().clone();
-    handle
-        .state::<SidecarState>()
-        .background_status_poll_generation
-        .store(generation, Ordering::SeqCst);
     tauri::async_runtime::spawn(async move {
         let started = Instant::now();
         let mut failed_status_probes = 0;
@@ -2143,17 +2181,22 @@ fn poll_background_status_after_launcher_exit(
         let mut long_startup_notice_shown = false;
         let mut unhealthy_since: Option<Instant> = None;
         loop {
-            if !background_status_poll_is_current(&handle, generation) {
+            if launch_superseded(&handle.state::<SidecarState>(), generation) {
                 return;
             }
+            // Hold without probing while an update stop decides this launch's fate.
+            if !launch_is_current(&handle.state::<SidecarState>(), generation) {
+                tokio::time::sleep(READY_POLL_INTERVAL).await;
+                continue;
+            }
             let status = probe_backend_status(&handle, &log_sender, generation).await;
+            if !launch_is_current(&handle.state::<SidecarState>(), generation) {
+                continue;
+            }
             status_poll_backoff_attempts =
                 next_background_status_poll_attempts(&status, status_poll_backoff_attempts);
             match status {
                 BackendStatusProbe::Ready(port) => {
-                    if !background_status_poll_is_current(&handle, generation) {
-                        return;
-                    }
                     save_sidecar_port(&handle, port);
                     let _ = window.eval(
                         "window.__setStage(2); \
@@ -2284,14 +2327,6 @@ fn poll_background_status_after_launcher_exit(
             .await;
         }
     });
-}
-
-fn background_status_poll_is_current(handle: &AppHandle, generation: u64) -> bool {
-    handle
-        .state::<SidecarState>()
-        .background_status_poll_generation
-        .load(Ordering::SeqCst)
-        == generation
 }
 
 fn background_status_poll_interval(backoff_attempts: u32) -> Duration {
@@ -3471,7 +3506,7 @@ fn stop_backend_inner(app: &AppHandle, wait_timeout: Option<Duration>) -> bool {
         } else {
             stop_detached_backend_for_update_with_port(app, deadline, detached_port)
         };
-        end_update_stop_wait(&state);
+        finish_update_stop_wait(&state, stopped);
         if let Some(generation) = waited_generation {
             restart_backend_after_stop_timeout_if_terminated(app, &state, generation);
         }
@@ -5113,6 +5148,59 @@ agentsview running at http://127.0.0.1:18082
         assert!(!take_restart_after_stop_timeout_if_current(&state, 1));
         assert!(take_restart_after_stop_timeout_if_current(&state, 2));
         assert!(!take_restart_after_stop_timeout_if_current(&state, 2));
+    }
+
+    #[test]
+    fn update_stop_retires_running_launch() {
+        let state = SidecarState::default();
+        state.next_generation.store(1, Ordering::SeqCst);
+        assert!(launch_is_current(&state, 1));
+
+        begin_update_stop_wait(&state);
+        assert!(!launch_is_current(&state, 1));
+        assert!(!launch_superseded(&state, 1));
+
+        finish_update_stop_wait(&state, true);
+        assert!(launch_superseded(&state, 1));
+
+        let replacement = state.next_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        assert!(launch_is_current(&state, replacement));
+        assert!(launch_superseded(&state, 1));
+    }
+
+    #[test]
+    fn failed_update_stop_keeps_launch_current() {
+        let state = SidecarState::default();
+        state.next_generation.store(7, Ordering::SeqCst);
+        begin_update_stop_wait(&state);
+        finish_update_stop_wait(&state, false);
+        assert!(launch_is_current(&state, 7));
+        assert!(!launch_superseded(&state, 7));
+    }
+
+    #[test]
+    fn launch_survives_update_stop_waits_for_outcome() {
+        for (stopped, survives) in [(true, false), (false, true)] {
+            let state = Arc::new(SidecarState::default());
+            state.next_generation.store(1, Ordering::SeqCst);
+            begin_update_stop_wait(&state);
+            let (tx, rx) = std::sync::mpsc::channel();
+            let waiter = Arc::clone(&state);
+            thread::spawn(move || {
+                let _ = tx.send(launch_survives_update_stop(&waiter, 1));
+            });
+            assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
+            finish_update_stop_wait(&state, stopped);
+            assert_eq!(rx.recv_timeout(Duration::from_secs(5)), Ok(survives));
+        }
+    }
+
+    #[test]
+    fn launch_survives_update_stop_returns_at_once_without_stop() {
+        let state = SidecarState::default();
+        state.next_generation.store(3, Ordering::SeqCst);
+        assert!(launch_survives_update_stop(&state, 3));
+        assert!(!launch_survives_update_stop(&state, 2));
     }
 
     #[test]
