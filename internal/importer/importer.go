@@ -678,7 +678,7 @@ func storedFormMessages(store db.Store, msgs []db.Message) []db.Message {
 
 // sameTurn reports whether two stored rows hold the same turn of the conversation.
 func sameTurn(a, b db.Message) bool {
-	return a.Ordinal == b.Ordinal && a.Role == b.Role && a.Timestamp == b.Timestamp
+	return a.Ordinal == b.Ordinal && a.Role == b.Role && a.IsSystem == b.IsSystem && a.Timestamp == b.Timestamp
 }
 
 func sameMessages(existing, incoming []db.Message) bool {

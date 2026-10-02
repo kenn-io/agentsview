@@ -1668,6 +1668,7 @@ func TestImportChatGPTExtendsTruncatedText(t *testing.T) {
 		{name: "empty archived text", initial: chatGPTLongTextConv(""), data: chatGPTLongTextConv(full)},
 		{name: "extended text with changed timestamp", initial: chatGPTLongTextConv(cut), data: shiftedStamp},
 		{name: "archived trailing space", initial: chatGPTLongTextConv(cut + " "), data: chatGPTLongTextConv(cut + "Xmore text")},
+		{name: "extended text turned system", initial: chatGPTChainConv(chatGPTNodeSpec{"user", "text", "Hi"}, chatGPTNodeSpec{"assistant", "text", cut}), data: chatGPTChainConv(chatGPTNodeSpec{"user", "text", "Hi"}, chatGPTNodeSpec{"system", "text", full})},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d, dir, path, assetsDir := setup(t, config.ArchiveContentFull, tt.initial)
