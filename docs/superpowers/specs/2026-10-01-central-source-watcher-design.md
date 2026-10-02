@@ -230,6 +230,24 @@ and keep their retry ownership local. Never turn cache pressure into a repeated
 all-provider audit. Aggregate members and cross-root replacements continue to
 use their existing spool and replacement-proof rules.
 
+## Returned Go watcher qualification
+
+The [returned platform results](../../internal/watchprobe-platform-results.md)
+exercise the isolated Go tester from `fd06b89e`. Cached warm metadata scans were
+slower than uncached scans on every host, so persistence remains conditional on
+saved downstream work. No startup-saving claim follows from cache reopening.
+Windows fresh full scans took 2-3 seconds per pass under the tested loads.
+Page fairness and event wakeups must therefore remain explicit contracts.
+
+The Mac kqueue run dropped 66% of native notices and recovered 57 units only
+at the end. Passing final checks is not timely recovery. Native intake must
+wake coordinator work independently of coverage timers; scoped loss recovery
+must progress during operation. Record operation mix, pending-loss age, and
+physical descriptors/handles. Do not equate 64 logical directory allocations
+with 64 kernel resources. The event-burst cause is unconfirmed. FSEvents needs
+its own qualification; neither queue inflation nor attribute filtering is
+approved by this result.
+
 ## Persistent cache and finite growth
 
 If persistence qualifies, use one disposable `watch-cache.sqlite` outside
@@ -419,8 +437,9 @@ root-reappearance scenarios against scratch data. Record Go heap/allocations,
 forced-GC heap, and `vmmap` physical footprint over a multi-hour retention run.
 Use offline format fixtures or separately authorized source clones for parsing.
 
-macOS and Windows metadata and representation measurements have been returned; native
-watcher and sustained-load qualification remain outstanding. Network and FUSE
+macOS and Windows metadata, representation, and isolated Go fsnotify sustained
+measurements have been returned. Production coordinator and native FSEvents
+qualification remain outstanding. Network and FUSE
 timestamp reliability,
 large changed-container enumeration, actual activity concentration, and cold
 storage behavior remain explicit qualification work. They do not block this

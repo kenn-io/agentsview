@@ -15,23 +15,27 @@ import (
 )
 
 type histogram struct {
-	buckets                [64]uint64
-	count, total, min, max uint64
+	buckets                      [64]uint64
+	count, total, min, max, zero uint64
 }
 
 func (h *histogram) observe(d time.Duration) {
-	n := uint64(max(d.Nanoseconds(), 1))
-	h.buckets[bits.Len64(n)-1]++
+	n := uint64(max(d.Nanoseconds(), 0))
 	h.count++
 	h.total += n
-	if h.min == 0 || n < h.min {
+	if h.count == 1 || n < h.min {
 		h.min = n
 	}
 	h.max = max(h.max, n)
+	if n == 0 {
+		h.zero++
+		return
+	}
+	h.buckets[bits.Len64(n)-1]++
 }
 
 type latency struct {
-	Count                                                    uint64
+	Count, ZeroDurationCount                                 uint64
 	MeanNS, MinNS, MaxNS, P50UpperNS, P95UpperNS, P99UpperNS uint64
 }
 
@@ -41,7 +45,10 @@ func (h *histogram) summary() latency {
 	}
 	quantile := func(percent uint64) uint64 {
 		target := (h.count*percent + 99) / 100
-		var cumulative uint64
+		if target <= h.zero {
+			return 0
+		}
+		cumulative := h.zero
 		for i, n := range h.buckets {
 			cumulative += n
 			if cumulative >= target {
@@ -53,7 +60,7 @@ func (h *histogram) summary() latency {
 		}
 		return h.max
 	}
-	return latency{h.count, h.total / h.count, h.min, h.max, quantile(50), quantile(95), quantile(99)}
+	return latency{h.count, h.zero, h.total / h.count, h.min, h.max, quantile(50), quantile(95), quantile(99)}
 }
 
 type resourceSample struct {
@@ -61,6 +68,7 @@ type resourceSample struct {
 	HeapAlloc, HeapInuse, TotalAlloc, Mallocs, RSS, HostAvailable, HostSwapUsed uint64
 	Goroutines, GC                                                              uint64
 	ResourceErrors                                                              int
+	OpenDescriptorsOrHandles                                                    int32
 }
 type recorder struct {
 	mu      sync.Mutex
@@ -94,6 +102,11 @@ func (r *recorder) snapshot(ctx context.Context) resourceSample {
 	}
 	if v, e := r.process.MemoryInfoWithContext(ctx); e == nil {
 		s.RSS = v.RSS
+	} else {
+		s.ResourceErrors++
+	}
+	if v, e := r.process.NumFDsWithContext(ctx); e == nil {
+		s.OpenDescriptorsOrHandles = v
 	} else {
 		s.ResourceErrors++
 	}
@@ -136,6 +149,7 @@ func (r *recorder) sample(ctx context.Context) error {
 	r.peak.HeapInuse = max(r.peak.HeapInuse, s.HeapInuse)
 	r.peak.RSS = max(r.peak.RSS, s.RSS)
 	r.peak.Goroutines = max(r.peak.Goroutines, s.Goroutines)
+	r.peak.OpenDescriptorsOrHandles = max(r.peak.OpenDescriptorsOrHandles, s.OpenDescriptorsOrHandles)
 	r.mu.Unlock()
 	return r.emit("resource", s)
 }

@@ -84,8 +84,8 @@ metrics.
 Linux uses inotify through fsnotify. Windows uses native file handles for fresh
 metadata, including open-writer size and full identity. macOS uses fresh stat
 calls and fsnotify's kqueue backend. The tester does not exercise the production
-FSEvents bridge or Windows change journals. A build for another platform does
-not establish its runtime behavior.
+FSEvents bridge or Windows change journals. The returned fsnotify runs establish synthetic runtime observations, not
+production backend qualification.
 
 RSS includes reclaimable memory. On macOS collect `vmmap -summary PID` and
 `footprint PID` during sustained execution when available. Record unavailable
@@ -96,6 +96,19 @@ This tester measures synthetic observation costs. It does not model provider
 parsing, archive commits, source topology changes, recursive discovery,
 tombstones, eviction under prolonged churn, or production scheduling fairness.
 Those remain qualification work before a production cutover.
+
+## Returned platform results
+
+Mac and Windows have now run this tester. See [the returned results](watchprobe-platform-results.md)
+for scan costs, the Mac queue-loss finding, and remaining qualification gates.
+Report version 3 adds aggregate operation counts, once-per-tick native snapshots,
+current queue depth, receiver-relative elapsed time, pending-loss age, first-loss-to-recovery latency, verification counts split by
+signature change, and descriptor/handle samples. Operation counts include
+combined bits and dropped notices, so their sum can exceed received events.
+No event filenames are emitted. `ZeroDurationCount` identifies clock-unresolved
+samples; zero percentile values must not be interpreted as zero-cost operations.
+Descriptors on Linux/macOS and handles on Windows are process totals, not
+exact watcher allocations. Recovery remains at the end for this comparison.
 
 ## Initial Linux results
 

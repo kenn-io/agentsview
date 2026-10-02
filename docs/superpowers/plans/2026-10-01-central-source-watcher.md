@@ -546,3 +546,15 @@ Recommended execution is native, in dependency order, with review at each
 delivery stage. The shared declaration and acknowledgement contracts make
 parallel implementation risky before those interfaces have passed their tests.
 The user has requested planning and measurement, not product implementation.
+
+
+## Returned Go diagnostic evidence
+
+The [Go platform results](../../internal/watchprobe-platform-results.md) refine
+Tasks 7, 9, 10, and 12. Preserve independent native wakeups, checkpoints between
+pages, physical descriptor/handle measurement, and scoped recovery during
+operation. The Mac's final correctness checks passed despite substantial loss
+and shutdown-only recovery; include oldest pending-loss age in qualification.
+Windows competing-load full scans remain seconds of work. Persistence needs
+measured downstream savings, since metadata lookup alone added overhead on
+all hosts. The tester's kqueue observations do not qualify FSEvents.

@@ -141,7 +141,7 @@ func runProbe(ctx context.Context, o options) (report probeReport, err error) {
 	if err != nil {
 		return report, err
 	}
-	report = probeReport{Artifacts: o.Output, ScanIntervalSeconds: o.ScanInterval.Seconds(), Version: 2, RequestedDurationSeconds: o.Duration.Seconds(), OS: runtime.GOOS, Arch: runtime.GOARCH, Go: runtime.Version(), LogicalCPUs: runtime.NumCPU(), Options: o, Checks: make(map[string]bool), Latencies: make(map[string]latency), Limitations: []string{"Synthetic file sources only; no archive, provider parsing, or production coordinator.", "Native backend is fsnotify; Darwin uses kqueue, not production FSEvents.", "Injected loss/retry are separate from measured native delivery.", "Cache main file is page-capped; sampled auxiliary disk is not a hard peak guarantee.", "RSS is not retained Go heap or macOS physical footprint; inspect AfterGC and platform tools.", "Percentile values are upper bounds from fixed logarithmic buckets; phase times are exact durations."}}
+	report = probeReport{Artifacts: o.Output, ScanIntervalSeconds: o.ScanInterval.Seconds(), Version: 3, RequestedDurationSeconds: o.Duration.Seconds(), OS: runtime.GOOS, Arch: runtime.GOARCH, Go: runtime.Version(), LogicalCPUs: runtime.NumCPU(), Options: o, Checks: make(map[string]bool), Latencies: make(map[string]latency), Limitations: []string{"Synthetic file sources only; no archive, provider parsing, or production coordinator.", "Native backend is fsnotify; Darwin uses kqueue, not production FSEvents.", "Injected loss/retry are separate from measured native delivery.", "Cache main file is page-capped; sampled auxiliary disk is not a hard peak guarantee.", "RSS is not retained Go heap or macOS physical footprint; inspect AfterGC and platform tools.", "Percentile values are upper bounds from fixed logarithmic buckets; phase times are exact durations."}}
 	if info, ok := debug.ReadBuildInfo(); ok {
 		for _, s := range info.Settings {
 			switch s.Key {
@@ -319,6 +319,14 @@ func runProbe(ctx context.Context, o options) (report probeReport, err error) {
 	report.Native.BudgetExcluded = native.budgetExcluded
 	report.Native.AllocationFailures = native.allocationFailures
 	observed := int64(0)
+	var equalSignature, changedSignature int64
+	nativeState := func() nativeReport {
+		state := native.snapshot()
+		state.Observed = observed
+		state.VerifiedEqualSignature = equalSignature
+		state.VerifiedChangedSignature = changedSignature
+		return state
+	}
 	var checkpointErr error
 	drain := func() {
 		if checkpointErr != nil {
@@ -345,12 +353,19 @@ func runProbe(ctx context.Context, o options) (report probeReport, err error) {
 		}
 	collected:
 		for _, n := range pending {
-			_, e := p.check(ctx, n.Unit, filepath.Join(dirs[n.Unit], n.Name))
+			stats, e := p.check(ctx, n.Unit, filepath.Join(dirs[n.Unit], n.Name))
 			if e != nil {
 				checkpointErr = e
 				return
 			}
 			observed++
+			if stats.Verified != 0 {
+				if stats.Changed == 0 {
+					equalSignature++
+				} else {
+					changedSignature++
+				}
+			}
 			p.observe("native_receipt_to_verified", time.Since(n.Received))
 		}
 	}
@@ -537,6 +552,9 @@ delivered:
 		case <-ctx.Done():
 			return report, ctx.Err()
 		case <-ticker.C:
+			if err = rec.emit("native", nativeState()); err != nil {
+				return report, err
+			}
 			if err = os.WriteFile(target, []byte("sustained-activity"), 0o600); err != nil {
 				return report, err
 			}
@@ -569,17 +587,14 @@ delivered:
 		return report, checkpointErr
 	}
 	for i := range native.loss {
-		if native.loss[i].Swap(false) {
+		if stamp := native.loss[i].Swap(0); stamp != 0 {
 			if err = phase("native_loss_recovery", func() (scanStats, error) { return p.scan(ctx, i, dirs[i], true, nil) }); err != nil {
 				return report, err
 			}
+			p.observe("native_loss_mark_to_recovered", time.Since(native.started)-time.Duration(stamp-1))
 		}
 	}
-	report.Native.MaxQueue = max(report.Native.MaxQueue, int(native.peakQueue.Load()))
-	report.Native.Received = native.received.Load()
-	report.Native.Dropped = native.dropped.Load()
-	report.Native.Errors = native.errors.Load()
-	report.Native.Observed = observed
+	report.Native = nativeState()
 	for k, h := range p.latencies {
 		report.Latencies[k] = h.summary()
 	}

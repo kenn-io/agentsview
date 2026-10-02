@@ -31,3 +31,14 @@ scan times, process CPU, watch allocation failures, queue drops/recovery,
 post-GC heap, cache disk size, and native/unwatched latency. Include all failed
 checks and telemetry errors. A zero event-overlap count is an observation, not
 proof of fair scheduling. macOS kqueue results do not qualify FSEvents.
+
+## Follow-up after the returned v2 report
+
+Rebuild the current branch head and repeat the same 50,000-file five-minute
+sustained run with v3 telemetry. Keep ordinary indexing and other applications
+running. Return the `native` JSONL records, report operation counts, equal versus
+changed signature verifications, pending-loss age and loss-recovery latency,
+process descriptors, and physical footprint. Do not filter Chmod or enlarge the
+queue for this comparison. Identify the build revision and upload the new
+bundle through the provided receiving endpoint. The prior event-burst cause
+remains unconfirmed; this run supplies the missing operation and timing evidence.

@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"github.com/fsnotify/fsnotify"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -195,4 +197,30 @@ func TestLifecycleChecksReplacementRenameAndRemoval(t *testing.T) {
 	assert.True(t, checks["replacement_identity"])
 	assert.True(t, checks["rename_routes_new_name"])
 	assert.True(t, checks["remove_drops_cache_entry"])
+}
+
+func TestLatencyReportsUnresolvedClockSamples(t *testing.T) {
+	h := histogram{}
+	h.observe(0)
+	h.observe(10 * time.Nanosecond)
+	s := h.summary()
+	assert.Zero(t, s.MinNS)
+	assert.EqualValues(t, 5, s.MeanNS)
+	assert.Zero(t, s.P50UpperNS)
+}
+
+func TestNativePressurePreservesEarliestLossAndOperationCounts(t *testing.T) {
+	n := nativeSource{queue: make(chan notice, 1), loss: make([]atomic.Int64, 1), started: time.Now()}
+	n.offer(notice{Unit: 0, Operation: fsnotify.Write})
+	n.offer(notice{Unit: 0, Operation: fsnotify.Chmod})
+	first := n.loss[0].Load()
+	n.offer(notice{Unit: 0, Operation: fsnotify.Chmod | fsnotify.Write})
+	s := n.snapshot()
+	assert.Equal(t, first, n.loss[0].Load())
+	assert.EqualValues(t, 2, s.Dropped)
+	assert.EqualValues(t, 2, s.Operations.Write)
+	assert.EqualValues(t, 2, s.Operations.Chmod)
+	assert.Equal(t, 1, s.PendingLossUnits)
+	assert.GreaterOrEqual(t, s.OldestPendingLossSeconds, 0.0)
+	assert.Equal(t, 1, len(n.queue))
 }

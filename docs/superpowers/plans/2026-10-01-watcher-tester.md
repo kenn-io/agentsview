@@ -21,8 +21,9 @@ Go CPU/heap profiles, and optional runtime traces are local diagnostic hooks.
    Linux runs, and cross-platform builds. Test aggregate report contracts and
    cleanup/cancellation. Document identical full workloads and sustained runs.
 
-Linux is the first exercised backend. Darwin and Windows signature/resource
-hooks and binaries are build-checked; native execution remains qualification on
-those hosts. Darwin fsnotify uses kqueue, not the production FSEvents bridge.
+Linux is the first exercised backend. Darwin and Windows signature/resource hooks were build-checked and then
+exercised on remote hosts. The [returned results](../../internal/watchprobe-platform-results.md)
+record native loss and timing limits. Production backend qualification remains
+separate work. Darwin fsnotify uses kqueue, not the production FSEvents bridge.
 The tester is not a parser, archive, or final production coordinator. Its cold
 and warm timings compare equivalent metadata work, not application startup.
