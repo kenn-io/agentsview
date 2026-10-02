@@ -92,8 +92,8 @@ Hover a bucket in either message view to compare both counts.
 ![Weekly Activity concurrency chart](/docs/assets/generated/screenshots/activity-concurrency.png)
 
 Hover a bucket to see its time range, the stacked split at the combined peak,
-the combined peak, each class's own peak within the bucket, agent-minutes, input
-and output tokens, and cost. A class's own peak can exceed its segment when that
+the combined peak, each class's own peak within the bucket, agent-minutes,
+uncached input and output tokens, and cost. A class's own peak can exceed its segment when that
 class peaked at a different instant from the combined peak. The **All-session
 overlay** control draws a combined **Tokens** or **Cost** trend over the bars,
 with its own scale on the right. These usage totals include all three classes.
