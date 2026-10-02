@@ -1774,7 +1774,8 @@ fn forward_sidecar_logs(
                             startup_failure_detail(
                                 "The sidecar process ended before it reported a ready backend.",
                                 recent_startup_output(&startup_output).as_str(),
-                            ),
+                            )
+                            .as_str(),
                         );
                     }
                     let restart_after_stop_timeout =
@@ -1802,7 +1803,8 @@ fn forward_sidecar_logs(
                             startup_failure_detail(
                                 redacted.as_str(),
                                 recent_startup_output(&startup_output).as_str(),
-                            ),
+                            )
+                            .as_str(),
                         );
                     }
                 }
@@ -1832,6 +1834,27 @@ fn main_window_from_handle(handle: &AppHandle) -> Result<WebviewWindow, DynError
 }
 
 fn spawn_startup_error_render(window: WebviewWindow, title: &str, message: &str, detail: &str) {
+    render_startup_error(window, title, message, detail, None);
+}
+
+// Rechecks the launch before every attempt so an update stop that lands mid-retry drops the render.
+fn spawn_launch_error_render(
+    window: WebviewWindow,
+    generation: u64,
+    title: &str,
+    message: &str,
+    detail: &str,
+) {
+    render_startup_error(window, title, message, detail, Some(generation));
+}
+
+fn render_startup_error(
+    window: WebviewWindow,
+    title: &str,
+    message: &str,
+    detail: &str,
+    generation: Option<u64>,
+) {
     let title = title.to_string();
     let message = message.to_string();
     let detail = detail.to_string();
@@ -1843,29 +1866,18 @@ fn spawn_startup_error_render(window: WebviewWindow, title: &str, message: &str,
             detail.as_str(),
             footer.as_str(),
         );
+        let state = window.app_handle().state::<SidecarState>();
         let deadline = Instant::now() + READY_TIMEOUT;
         while Instant::now() < deadline {
+            if generation.is_some_and(|g| !launch_survives_update_stop(&state, g)) {
+                return;
+            }
             if window.eval(script.as_str()).is_ok() {
                 return;
             }
             thread::sleep(READY_POLL_INTERVAL);
         }
         eprintln!("[agentsview] timed out waiting to render startup error");
-    });
-}
-
-// Waits out an update stop on its own thread because the async log task must not block.
-fn spawn_launch_error_render(
-    window: WebviewWindow,
-    generation: u64,
-    title: &'static str,
-    message: &'static str,
-    detail: String,
-) {
-    thread::spawn(move || {
-        if launch_survives_update_stop(&window.app_handle().state::<SidecarState>(), generation) {
-            spawn_startup_error_render(window, title, message, detail.as_str());
-        }
     });
 }
 
@@ -2159,8 +2171,9 @@ fn redirect_when_ready(
             return;
         }
 
-        spawn_startup_error_render(
+        spawn_launch_error_render(
             window,
+            generation,
             "AgentsView interface did not respond",
             "The backend reported a port, but the desktop window could not connect to it.",
             format!("Backend URL: {}", desktop_redirect_url(port)).as_str(),
@@ -2223,8 +2236,9 @@ fn poll_background_status_after_launcher_exit(
                     failed_status_probes = 0;
                     let first_seen = unhealthy_since.get_or_insert_with(Instant::now);
                     if first_seen.elapsed() >= DAEMON_UNHEALTHY_GRACE {
-                        spawn_startup_error_render(
+                        spawn_launch_error_render(
                             window,
+                            generation,
                             "AgentsView backend is not responding",
                             "A backend process is running, but it is not answering health checks.",
                             startup_failure_detail(
@@ -2241,8 +2255,9 @@ fn poll_background_status_after_launcher_exit(
                     );
                 }
                 BackendStatusProbe::NotRunning(status) => {
-                    spawn_startup_error_render(
+                    spawn_launch_error_render(
                         window,
+                        generation,
                         "AgentsView backend stopped",
                         "The background launcher exited, and no AgentsView server is running.",
                         startup_failure_detail(
@@ -2254,8 +2269,9 @@ fn poll_background_status_after_launcher_exit(
                     return;
                 }
                 BackendStatusProbe::Incompatible(status) => {
-                    spawn_startup_error_render(
+                    spawn_launch_error_render(
                         window,
+                        generation,
                         "AgentsView backend is incompatible",
                         "AgentsView found a running backend that this desktop app cannot use.",
                         status.as_str(),
@@ -2263,8 +2279,9 @@ fn poll_background_status_after_launcher_exit(
                     return;
                 }
                 BackendStatusProbe::ReadOnly(status) => {
-                    spawn_startup_error_render(
+                    spawn_launch_error_render(
                         window,
+                        generation,
                         "AgentsView backend is read-only",
                         "AgentsView Desktop needs a writable local backend to sync and migrate the archive.",
                         startup_failure_detail(
@@ -2276,8 +2293,9 @@ fn poll_background_status_after_launcher_exit(
                     return;
                 }
                 BackendStatusProbe::Unusable(status) => {
-                    spawn_startup_error_render(
+                    spawn_launch_error_render(
                         window,
+                        generation,
                         "AgentsView backend status is unusable",
                         "The background launcher exited, but the backend did not report a usable writable server.",
                         startup_failure_detail(
@@ -2291,8 +2309,9 @@ fn poll_background_status_after_launcher_exit(
                 BackendStatusProbe::Unavailable => {
                     failed_status_probes += 1;
                     if status_probe_failures_should_stop(failed_status_probes) {
-                        spawn_startup_error_render(
+                        spawn_launch_error_render(
                             window,
+                            generation,
                             "AgentsView backend status is unavailable",
                             "The background launcher exited, but the desktop app could not confirm backend status.",
                             startup_failure_detail(
