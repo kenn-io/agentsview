@@ -1773,7 +1773,7 @@ Optional features that send data externally when you enable them:
     `model`, or to the selected agent CLI when neither is set.
 - [Publish to Gist](/docs/usage/#publish-to-gist) uploads a session to GitHub.
 
-The automatic outbound requests are update checks and an anonymous daemon ping:
+The automatic outbound requests are update checks and anonymous telemetry:
 
 - **CLI and web UI** — on startup, the server contacts the GitHub API to check
     for new releases. No identifying information is sent beyond what a standard
@@ -1785,7 +1785,10 @@ The automatic outbound requests are update checks and an anonymous daemon ping:
 ### Anonymous Daemon Telemetry
 
 As of 0.33.0, the server sends an anonymous `daemon_active` liveness ping on
-startup and every 24 hours while running. The ping contains only:
+startup and every 24 hours while running. The web UI also reports an anonymous
+`app_opened` event to the server when it loads and on the first focus of a later
+UTC day. The server sends it to PostHog with the same fields and opt-out as the
+ping. The browser never contacts PostHog. The ping contains only:
 
 - app version and git commit
 - operating system and CPU architecture

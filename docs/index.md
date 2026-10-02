@@ -66,8 +66,9 @@ Session data stays on your machine by default. The server binds to `127.0.0.1`
 unless you explicitly configure [remote access](/docs/remote-access/). Data
 leaves the machine only for features you choose, such as hosted raw sync, a
 PostgreSQL or ClickHouse target, remote DuckDB access, Generated Insights, or
-publishing a session to GitHub. An anonymous, content-free daemon liveness ping
-is the only telemetry, and `AGENTSVIEW_TELEMETRY_ENABLED=0` disables it.
+publishing a session to GitHub. Telemetry is an anonymous, content-free daemon
+liveness ping and an `app_opened` event the web UI reports through the server,
+and `AGENTSVIEW_TELEMETRY_ENABLED=0` disables both.
 
 ## Human and machine-readable pages
 

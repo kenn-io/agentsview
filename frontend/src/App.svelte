@@ -88,6 +88,7 @@
   import { m } from "./lib/i18n/index.js";
   import { setAuthToken, getAuthToken, setServerUrl } from "./lib/api/runtime.js";
   import { setupVisibilityHealthCheck } from "./lib/utils/health.js";
+  import { setupAppOpenedReporting } from "./lib/utils/app-opened.js";
   import { registerShortcuts } from "./lib/utils/keyboard.js";
   import { shouldAutoSwitchTranscriptModeToNormal } from "./lib/utils/transcript-mode.js";
   import {
@@ -746,6 +747,7 @@
     sync.loadVersion();
     sync.checkForUpdate();
     sync.startPolling();
+    const appOpenedCleanup = setupAppOpenedReporting();
 
     const healthCleanup = setupVisibilityHealthCheck({
       onBackendDegraded: () => sync.markBackendDegraded(),
@@ -757,6 +759,7 @@
       navigateUserPrompt,
     });
     return () => {
+      appOpenedCleanup();
       healthCleanup();
       cleanup();
       window.removeEventListener("show-about", showAbout);

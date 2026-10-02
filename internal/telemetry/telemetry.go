@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -15,6 +16,7 @@ const (
 	GenericEnabledEnv = kittelemetry.GenericTelemetryEnabledEnv
 	postHogAPIKey     = "phc_AzHd9YvuHR7M5poKzC6eW654d3SgKyBdoQPuwkWhimUf"
 	EventDaemonActive = "daemon_active"
+	EventAppOpened    = "app_opened"
 	application       = "agentsview"
 	envPrefix         = "AGENTSVIEW"
 )
@@ -36,7 +38,15 @@ func EnabledFromEnv() bool {
 }
 
 func NewReporter(opts Options) (*Reporter, error) {
-	if runningUnderGoTest() || !EnabledFromEnv() {
+	if !EnabledFromEnv() {
+		// kit keeps the allowlist on an opted-out reporter, so the UI route still rejects unknown events.
+		client, err := newKitReporter(opts.InstallationID, opts.Version, opts.Commit)
+		if err != nil {
+			return nil, err
+		}
+		return &Reporter{client: client}, nil
+	}
+	if runningUnderGoTest() {
 		return DisabledReporter(), nil
 	}
 	if strings.TrimSpace(opts.InstallationID) == "" {
@@ -84,6 +94,15 @@ func (r *Reporter) EventAllowed(event string) bool {
 	return r != nil && r.client != nil && r.client.EventAllowed(event)
 }
 
+// CaptureHandler lets the web UI report allowlisted events through this reporter.
+func (r *Reporter) CaptureHandler() http.Handler {
+	var client *kittelemetry.PostHogReporter
+	if r != nil {
+		client = r.client
+	}
+	return kittelemetry.NewPostHogCaptureHandler(client)
+}
+
 func (r *Reporter) SanitizeProperties(
 	event string,
 	properties map[string]any,
@@ -122,5 +141,6 @@ func newKitReporter(
 func allowedEventOptions() []kittelemetry.PostHogOption {
 	return []kittelemetry.PostHogOption{
 		kittelemetry.WithAllowedEvent(EventDaemonActive),
+		kittelemetry.WithAllowedEvent(EventAppOpened),
 	}
 }

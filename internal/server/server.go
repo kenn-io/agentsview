@@ -195,6 +195,9 @@ type Server struct {
 	// maintenance barrier instead of allowing a CLI to bypass the writer.
 	localCompactRunner LocalCompactRunner
 
+	// telemetryCapture receives UI telemetry events; nil leaves the route unregistered.
+	telemetryCapture http.Handler
+
 	artifactExchangeRunner ArtifactExchangeRunner
 	rawSyncTenant          string
 	rawSyncDeviceAuth      RawSyncDeviceAuth
@@ -717,6 +720,7 @@ func (s *Server) routes() {
 	s.api = humago.New(s.mux, s.humaConfig())
 	s.registerTypedAPIRoutes()
 	s.registerMemoryRefreshRoute()
+	s.registerTelemetryCaptureRoute()
 
 	if s.pprofEnabled {
 		s.handleHTTP(&huma.Operation{Method: http.MethodGet, Path: "/debug/pprof/", Hidden: true}, httppprof.Index)
