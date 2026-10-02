@@ -23,6 +23,9 @@ func (db *DB) ReplaceSessionKeepingTrashedCopy(
 	write = db.storageSessionBatchWrite(sanitizeSessionBatchWrite(write))
 	id := write.Session.ID
 
+	// Writers hold db.mu, so the row read here matches the messages the transaction reads.
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	src, err := db.getSessionFullUncoalesced(ctx, id)
 	if err != nil {
 		return "", err
@@ -33,9 +36,6 @@ func (db *DB) ReplaceSessionKeepingTrashedCopy(
 	if src.DeletedAt != nil {
 		return "", ErrSessionTrashed
 	}
-
-	db.mu.Lock()
-	defer db.mu.Unlock()
 	tx, err := db.getWriter().BeginTx(ctx, nil)
 	if err != nil {
 		return "", fmt.Errorf("beginning session replace: %w", err)
@@ -63,8 +63,22 @@ func (db *DB) ReplaceSessionKeepingTrashedCopy(
 		return "", ErrReplaceUnchanged
 	}
 
+	events, err := usageEventsWithQuerier(ctx, tx, id, 0)
+	if err != nil {
+		return "", err
+	}
+
 	copyID := replacedSessionCopyID(id, time.Now())
 	copyWrite := db.storageSessionBatchWrite(sessionCopyWrite(*src, copyID, stored))
+	copyWrite.UsageEvents = make([]UsageEvent, len(events))
+	for i, ev := range events {
+		ev.ID, ev.SessionID = 0, copyID
+		copyWrite.UsageEvents[i] = ev
+	}
+	// The batch writer replaces a session's usage events, so keep the stored ones unless the import supplies its own.
+	if len(write.UsageEvents) == 0 {
+		write.UsageEvents = events
+	}
 	if _, err := writeOneSessionBatchTx(
 		ctx, tx, ctxTx, copyWrite, &pending, db.usageOnlyStorage(),
 	); err != nil {
