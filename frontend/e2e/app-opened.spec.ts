@@ -4,7 +4,11 @@ import { SessionsPage } from "./pages/sessions-page";
 const TELEMETRY_PATH = "/api/v1/telemetry/events";
 
 function isTelemetryPost(request: Request): boolean {
-  return request.method() === "POST" && new URL(request.url()).pathname === TELEMETRY_PATH;
+  return (
+    request.method() === "POST" &&
+    new URL(request.url()).pathname === TELEMETRY_PATH &&
+    request.postDataJSON()?.event === "app_opened"
+  );
 }
 
 test("loading the UI reports app_opened once and a same-day focus sends nothing more", async ({

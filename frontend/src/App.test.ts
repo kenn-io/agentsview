@@ -1816,3 +1816,175 @@ describe("App analytics date navigation", () => {
     expect(usage.to).toBe("2026-07-10");
   });
 });
+
+describe("App telemetry", () => {
+  let posted: Array<{ event: string; properties?: Record<string, string> }> = [];
+
+  function hydratedSession(
+    id: string,
+    agent: string,
+    extra: Record<string, unknown> = {},
+  ): (typeof sessions.sessions)[number] {
+    return {
+      compaction_count: 0,
+      consecutive_failure_max: 0,
+      edit_churn_count: 0,
+      ended_with_role: "",
+      final_failure_streak: 0,
+      mid_task_compaction_count: 0,
+      outcome: "",
+      outcome_confidence: "",
+      secret_leak_count: 0,
+      tool_failure_signal_count: 0,
+      tool_retry_count: 0,
+      id,
+      project: "proj-a",
+      machine: "local",
+      agent,
+      first_message: "hello",
+      started_at: "2026-02-20T12:30:00Z",
+      ended_at: "2026-02-20T12:31:00Z",
+      message_count: 2,
+      user_message_count: 1,
+      total_output_tokens: 0,
+      peak_context_tokens: 0,
+      has_total_output_tokens: false,
+      has_peak_context_tokens: false,
+      is_automated: false,
+      is_teammate: false,
+      is_index_only: false,
+      created_at: "2026-02-20T12:30:00Z",
+      ...extra,
+    } as unknown as (typeof sessions.sessions)[number];
+  }
+
+  function setup() {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    // Selects without fetching, as the real store does before hydration lands.
+    vi.spyOn(sessions, "navigateToSession").mockImplementation(async (id: string) => {
+      sessions.activeSessionId = id;
+    });
+    posted = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const headers = { "Content-Type": "application/json" };
+        if (String(input).includes("/api/v1/telemetry/events")) {
+          posted.push(JSON.parse(String(init?.body)));
+          return new Response('{"status":"disabled"}', { status: 202, headers });
+        }
+        return new Response("{}", { status: 200, headers });
+      }),
+    );
+  }
+
+  function postedFor(event: string) {
+    return posted.filter((p) => p.event === event).map((p) => p.properties);
+  }
+
+  async function open(id: string | null) {
+    router.route = "sessions";
+    router.sessionId = id;
+    sessions.activeSessionId = id;
+    await flushEffects();
+  }
+
+  afterEach(() => {
+    sessions.sessions = [];
+  });
+
+  it("reports one session_viewed per visit once the session hydrates", async () => {
+    setup();
+    sessions.sessions = [hydratedSession("session-1", "codex")];
+    router.route = "sessions";
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    expect(postedFor("session_viewed")).toEqual([]);
+
+    await open("session-1");
+    expect(postedFor("session_viewed")).toEqual([{ agent: "codex" }]);
+
+    sessions.sessions = [hydratedSession("session-1", "codex", { message_count: 3 })];
+    await flushEffects();
+    expect(postedFor("session_viewed")).toHaveLength(1);
+
+    await open(null);
+    await open("session-1");
+    expect(postedFor("session_viewed")).toEqual([{ agent: "codex" }, { agent: "codex" }]);
+
+    router.route = "usage";
+    router.sessionId = null;
+    await flushEffects();
+    await open("session-1");
+    expect(postedFor("session_viewed")).toHaveLength(3);
+  });
+
+  it("counts a revisit after an unhydrated selection and waits for hydration", async () => {
+    setup();
+    sessions.sessions = [
+      hydratedSession("session-a", "claude"),
+      hydratedSession("session-b", "gemini", { is_index_only: true }),
+    ];
+    router.route = "sessions";
+    component = mount(App, { target: document.body });
+    await flushEffects();
+
+    await open("session-a");
+    await open("session-b");
+    await open("session-a");
+    expect(postedFor("session_viewed")).toEqual([{ agent: "claude" }, { agent: "claude" }]);
+
+    await open("session-b");
+    expect(postedFor("session_viewed")).toHaveLength(2);
+    sessions.sessions = [
+      hydratedSession("session-a", "claude"),
+      hydratedSession("session-b", "gemini"),
+    ];
+    await flushEffects();
+    expect(postedFor("session_viewed")).toEqual([
+      { agent: "claude" },
+      { agent: "claude" },
+      { agent: "gemini" },
+    ]);
+  });
+
+  it("reports analytics_viewed once per analytics page change", async () => {
+    setup();
+    router.route = "usage";
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    expect(postedFor("analytics_viewed")).toEqual([{ page: "usage" }]);
+
+    router.route = "activity";
+    await flushEffects();
+    await open(null);
+    expect(postedFor("analytics_viewed")).toEqual([
+      { page: "usage" },
+      { page: "activity" },
+      { page: "sessions" },
+    ]);
+
+    router.route = "usage";
+    await flushEffects();
+    router.route = "sessions";
+    router.sessionId = "session-x";
+    sessions.activeSessionId = "session-x";
+    await flushEffects();
+    expect(postedFor("analytics_viewed")).toHaveLength(4);
+
+    router.route = "token-usage";
+    router.sessionId = null;
+    sessions.activeSessionId = null;
+    await flushEffects();
+    router.route = "usage";
+    await flushEffects();
+    expect(postedFor("analytics_viewed")).toEqual([
+      { page: "usage" },
+      { page: "activity" },
+      { page: "sessions" },
+      { page: "usage" },
+      { page: "usage" },
+    ]);
+  });
+});

@@ -15,6 +15,7 @@ import {
   type ImporterImportStats as ImportStats,
 } from "./generated/index.js";
 import { ApiError, getAuthToken, getGeneratedBase, isRemoteConnection } from "./runtime.js";
+import { reportTelemetry } from "../utils/telemetry.js";
 
 export interface SyncHandle {
   abort: () => void;
@@ -274,6 +275,7 @@ async function downloadAuthenticatedExport(
   request: () => Promise<Response>,
   fallbackFilename: string,
 ): Promise<void> {
+  reportTelemetry("export_run", { format: "html" });
   const token = getAuthToken();
   if (!token) {
     // Local connection — simple navigation is fine.
@@ -317,6 +319,9 @@ export function generateInsight(
 ): GenerateInsightHandle {
   const controller = new AbortController();
 
+  reportTelemetry("insight_generated", {
+    kind: req.type === "llm_canned" ? (req.kind ?? req.type) : req.type,
+  });
   const done = InsightsService.postApiV1InsightsGenerate(req, { signal: controller.signal }).then(
     (response) =>
       consumeEvents<Insight>(

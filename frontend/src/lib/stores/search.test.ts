@@ -512,3 +512,57 @@ describe("SearchStore", () => {
     expect(store.isSearching).toBe(false);
   });
 });
+
+describe("SearchStore telemetry", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.resetAllMocks();
+    fetchMock = vi.fn(async () => new Response('{"status":"queued"}', { status: 202 }));
+    vi.stubGlobal("fetch", fetchMock);
+    searchService.getApiV1Search.mockResolvedValue(fullTextResponse("needle"));
+    searchService.getApiV1SearchContent.mockResolvedValue(contentResult([]));
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  function postedBodies() {
+    return fetchMock.mock.calls
+      .filter(([url]) => String(url).endsWith("/api/v1/telemetry/events"))
+      .map(([, init]) => JSON.parse(String(init.body)));
+  }
+
+  it.each([
+    ["fulltext", "text"],
+    ["semantic", "semantic"],
+    ["hybrid", "hybrid"],
+  ] as const)(
+    "posts search_run with query_type %s -> %s after debounce",
+    async (mode, queryType) => {
+      const store = createSearchStore(memoryStorage());
+      store.setMode(mode);
+      store.search("needle");
+      expect(postedBodies()).toEqual([]);
+
+      await runDebounce();
+
+      expect(postedBodies()).toEqual([
+        { event: "search_run", properties: { query_type: queryType } },
+      ]);
+    },
+  );
+
+  it("posts nothing for a search cancelled before dispatch", async () => {
+    const store = createSearchStore(memoryStorage());
+    store.search("needle");
+    store.clear();
+
+    await runDebounce();
+
+    expect(postedBodies()).toEqual([]);
+  });
+});

@@ -9,17 +9,24 @@ import (
 	"testing"
 	"time"
 
+	"go.kenn.io/agentsview/internal/insight"
+	"go.kenn.io/agentsview/internal/parser"
 	kittelemetry "go.kenn.io/kit/telemetry"
 )
 
 const (
-	EnabledEnv        = "AGENTSVIEW_TELEMETRY_ENABLED"
-	GenericEnabledEnv = kittelemetry.GenericTelemetryEnabledEnv
-	postHogAPIKey     = "phc_AzHd9YvuHR7M5poKzC6eW654d3SgKyBdoQPuwkWhimUf"
-	EventDaemonActive = "daemon_active"
-	EventAppOpened    = "app_opened"
-	application       = "agentsview"
-	envPrefix         = "AGENTSVIEW"
+	EnabledEnv            = "AGENTSVIEW_TELEMETRY_ENABLED"
+	GenericEnabledEnv     = kittelemetry.GenericTelemetryEnabledEnv
+	postHogAPIKey         = "phc_AzHd9YvuHR7M5poKzC6eW654d3SgKyBdoQPuwkWhimUf"
+	EventDaemonActive     = "daemon_active"
+	EventAppOpened        = "app_opened"
+	EventSearchRun        = "search_run"
+	EventSessionViewed    = "session_viewed"
+	EventExportRun        = "export_run"
+	EventInsightGenerated = "insight_generated"
+	EventAnalyticsViewed  = "analytics_viewed"
+	application           = "agentsview"
+	envPrefix             = "AGENTSVIEW"
 )
 
 var ErrUnsupportedEvent = kittelemetry.ErrUnsupportedTelemetryEvent
@@ -147,5 +154,40 @@ func allowedEventOptions() []kittelemetry.PostHogOption {
 	return []kittelemetry.PostHogOption{
 		kittelemetry.WithAllowedEvent(EventDaemonActive),
 		kittelemetry.WithAllowedEvent(EventAppOpened),
+		oneOf(EventSearchRun, "query_type", "text", "semantic", "hybrid"),
+		oneOf(EventSessionViewed, "agent", agentValues()...),
+		oneOf(EventExportRun, "format", "html", "csv"),
+		oneOf(EventInsightGenerated, "kind", insightKinds()...),
+		oneOf(EventAnalyticsViewed, "page", "sessions", "usage", "activity", "trends", "quality"),
 	}
+}
+
+func oneOf(event, property string, values ...string) kittelemetry.PostHogOption {
+	return kittelemetry.WithAllowedEvent(event,
+		kittelemetry.AllowTelemetryProperty(property, kittelemetry.AllowTelemetryStringValues(values...)))
+}
+
+// agentValues adds Freebuff, which shares Codebuff's registry entry but keeps its own agent type.
+func agentValues() []string {
+	values := make([]string, 0, len(parser.Registry)+1)
+	for _, def := range parser.Registry {
+		values = append(values, string(def.Type))
+	}
+	return append(values, string(parser.AgentFreebuff))
+}
+
+// insightKinds names a canned request by its template and other requests by their type.
+func insightKinds() []string {
+	var kinds []string
+	for t, ok := range insight.ValidTypes {
+		if ok && t != insight.CannedType {
+			kinds = append(kinds, t)
+		}
+	}
+	for k, ok := range insight.ValidCannedKinds {
+		if ok {
+			kinds = append(kinds, string(k))
+		}
+	}
+	return kinds
 }

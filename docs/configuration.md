@@ -1788,12 +1788,27 @@ As of 0.33.0, the server sends an anonymous `daemon_active` liveness ping on
 startup and every 24 hours while running. The web UI also reports an anonymous
 `app_opened` event to the server when it loads and on the first focus of a later
 UTC day. The server sends it to PostHog with the same fields and opt-out as the
-ping. The browser never contacts PostHog. The ping contains only:
+ping. The browser never contacts PostHog.
+
+The web UI reports five core actions the same way, when the user starts them.
+Each carries one property, and the server drops any value outside its fixed
+list:
+
+| Event | Property | Allowed values |
+|---|---|---|
+| `search_run` | `query_type` | `text`, `semantic`, `hybrid` |
+| `session_viewed` | `agent` | the session's agent type |
+| `export_run` | `format` | `html`, `csv` |
+| `insight_generated` | `kind` | `daily_activity`, `agent_analysis`, or a generated-insight template name |
+| `analytics_viewed` | `page` | `sessions`, `usage`, `activity`, `trends`, `quality` |
+
+Every event contains only:
 
 - app version and git commit
 - operating system and CPU architecture
 - the application-owned installation ID stored in
     `~/.agentsview/telemetry-install-id`
+- for the five UI actions, the one listed value above
 
 It contains no session data, prompts, project names, file paths, account
 information, or hostname, and the events are sent with person-profile processing

@@ -17,12 +17,6 @@ import (
 	"go.kenn.io/agentsview/internal/timeutil"
 )
 
-var validInsightTypes = map[string]bool{
-	"daily_activity":   true,
-	"agent_analysis":   true,
-	insight.CannedType: true,
-}
-
 type generateInsightRequest struct {
 	Type           string                     `json:"type"`
 	DateFrom       string                     `json:"date_from"`

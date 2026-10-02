@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from "vite-plus/test";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
 import { mount, unmount, tick } from "svelte";
 import { ApiError } from "../../api/runtime.js";
 import { registerShortcuts } from "../../utils/keyboard.js";
@@ -888,5 +888,80 @@ describe("CommandPalette", () => {
     expect(mark?.textContent).toBe("needle");
 
     unmount(component);
+  });
+});
+
+describe("CommandPalette search telemetry parity", () => {
+  // The daemon's query_type allowlist; internal/telemetry asserts the same literal list.
+  const DAEMON_QUERY_TYPES = ["text", "semantic", "hybrid"];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    document.body.replaceChildren();
+    Element.prototype.scrollIntoView = vi.fn();
+    mockSearchStore.results = [];
+    mockSearchStore.isSearching = false;
+    mockSearchStore.error = null;
+    mockUi.activeModal = "commandPalette";
+    mockSessions.activeSessionId = null;
+    mockSessions.sessions = [];
+    mockEmbeddingsService.getApiV1EmbeddingsStatus.mockImplementation(() => new Promise(() => {}));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("maps every rendered search mode into the daemon's query_type list", async () => {
+    vi.useFakeTimers();
+    const posted: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).endsWith("/api/v1/telemetry/events")) {
+          const body = JSON.parse(String(init?.body));
+          expect(body.event).toBe("search_run");
+          posted.push(body.properties.query_type);
+          return new Response('{"status":"queued"}', { status: 202 });
+        }
+        return new Promise<Response>(() => {});
+      }),
+    );
+    const { createSearchStore } = await vi.importActual<
+      typeof import("../../stores/search.svelte.js")
+    >("../../stores/search.svelte.js");
+
+    const probe = mount(CommandPalette, { target: document.body });
+    await tick();
+    const optionCount = document.querySelectorAll('.palette-controls [role="radio"]').length;
+    unmount(probe);
+    expect(optionCount).toBeGreaterThan(0);
+
+    for (let index = 0; index < optionCount; index += 1) {
+      const real = createSearchStore(null);
+      mockSearchStore.mode = "" as never;
+      mockSearchStore.setMode.mockImplementation((mode) => real.setMode(mode));
+      mockSearchStore.search.mockImplementation((query: string, project?: string) =>
+        real.search(query, project),
+      );
+      const component = mount(CommandPalette, { target: document.body });
+      await tick();
+
+      document
+        .querySelectorAll<HTMLButtonElement>('.palette-controls [role="radio"]')
+        [index]!.click();
+      await enterSearchQuery("test");
+      await vi.advanceTimersByTimeAsync(1000);
+
+      unmount(component);
+      document.body.replaceChildren();
+    }
+
+    expect(posted).toHaveLength(optionCount);
+    expect(new Set(posted).size).toBe(optionCount);
+    for (const queryType of posted) {
+      expect(DAEMON_QUERY_TYPES).toContain(queryType);
+    }
   });
 });

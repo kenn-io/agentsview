@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vite-plus/test";
-import { generateAnalyticsCSV, type AnalyticsData } from "./csv-export.js";
+import { describe, it, expect, vi, afterEach } from "vite-plus/test";
+import { exportAnalyticsCSV, generateAnalyticsCSV, type AnalyticsData } from "./csv-export.js";
 
 function emptyData(): AnalyticsData {
   return {
@@ -208,5 +208,47 @@ describe("generateAnalyticsCSV", () => {
     const csv = generateAnalyticsCSV(data);
     expect(csv).toContain("'=cmd()");
     expect(csv).not.toContain(",=cmd()");
+  });
+});
+
+describe("exportAnalyticsCSV", () => {
+  const originalCreateObjectURL = URL.createObjectURL;
+  const originalRevokeObjectURL = URL.revokeObjectURL;
+
+  afterEach(() => {
+    URL.createObjectURL = originalCreateObjectURL;
+    URL.revokeObjectURL = originalRevokeObjectURL;
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("posts export_run csv and still downloads the file", () => {
+    const fetchMock = vi.fn<typeof fetch>(
+      async () => new Response('{"status":"queued"}', { status: 202 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const createObjectURL = vi.fn(() => "blob:analytics");
+    URL.createObjectURL = createObjectURL;
+    URL.revokeObjectURL = vi.fn();
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    const data = emptyData();
+    data.summary = {
+      total_sessions: 1,
+      total_messages: 2,
+      total_output_tokens: 0,
+      token_reporting_sessions: 0,
+      active_projects: 1,
+      active_days: 1,
+      avg_messages: 2,
+    } as AnalyticsData["summary"];
+
+    exportAnalyticsCSV(data);
+
+    expect(createObjectURL).toHaveBeenCalledTimes(1);
+    expect(click).toHaveBeenCalledTimes(1);
+    const bodies = fetchMock.mock.calls
+      .filter(([url]) => String(url).endsWith("/api/v1/telemetry/events"))
+      .map(([, init]) => JSON.parse(String(init?.body)));
+    expect(bodies).toEqual([{ event: "export_run", properties: { format: "csv" } }]);
   });
 });

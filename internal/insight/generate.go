@@ -34,6 +34,13 @@ type Result struct {
 	Model   string
 }
 
+// ValidTypes lists the insight types the generate route accepts.
+var ValidTypes = map[string]bool{
+	"daily_activity": true,
+	"agent_analysis": true,
+	CannedType:       true,
+}
+
 // ValidAgentNames lists the supported insight agent names in display
 // order. ValidAgents is a lookup set derived from it. The names live in
 // internal/config so configuration validation accepts exactly this set.
