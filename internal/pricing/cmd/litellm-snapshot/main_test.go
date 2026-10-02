@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -16,6 +17,62 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/pricing/catalog"
 )
+
+func TestRetainMissingModels(t *testing.T) {
+	current := []catalog.ModelPricing{{ModelPattern: "current", InputPerMTok: mustRate("4")}}
+	retained := []catalog.ModelPricing{
+		{ModelPattern: "current", InputPerMTok: mustRate("5")},
+		{ModelPattern: "retired", InputPerMTok: mustRate("1.5")},
+		{ModelPattern: "retired", InputPerMTok: mustRate("9")},
+	}
+	wantCurrent, wantRetained := slices.Clone(current), slices.Clone(retained)
+	got := retainMissingModels(current, retained)
+	assert.Equal(t, []catalog.ModelPricing{
+		{ModelPattern: "current", InputPerMTok: mustRate("4")},
+		{ModelPattern: "retired", InputPerMTok: mustRate("1.5")},
+	}, got)
+	assert.Equal(t, wantCurrent, current)
+	assert.Equal(t, wantRetained, retained)
+	got[0].ModelPattern = "mutated"
+	assert.Equal(t, "current", current[0].ModelPattern)
+}
+
+func FuzzRetainMissingModels(f *testing.F) {
+	f.Add("current", "retired")
+	f.Add("same", "same")
+	f.Fuzz(func(t *testing.T, currentName, retiredName string) {
+		current := []catalog.ModelPricing{{ModelPattern: currentName, InputPerMTok: mustRate("4")}}
+		retained := []catalog.ModelPricing{
+			{ModelPattern: currentName, InputPerMTok: mustRate("5")},
+			{ModelPattern: retiredName, InputPerMTok: mustRate("1.5")},
+			{ModelPattern: retiredName, InputPerMTok: mustRate("9")},
+		}
+		got := retainMissingModels(current, retained)
+		require.NotEmpty(t, got)
+		assert.Equal(t, current[0], got[0], "current row must win")
+		if currentName == retiredName {
+			assert.Len(t, got, 1)
+		} else {
+			require.Len(t, got, 2)
+			assert.Equal(t, retiredName, got[1].ModelPattern)
+			assert.Equal(t, mustRate("1.5"), got[1].InputPerMTok)
+		}
+		assert.Equal(t, currentName, current[0].ModelPattern)
+		assert.Equal(t, mustRate("5"), retained[0].InputPerMTok)
+	})
+}
+
+func TestValidateSnapshotFileRejectsInvalidRetainedSourceRef(t *testing.T) {
+	path := writeSnapshotFile(t, []byte(`{
+		"version": "litellm-test",
+		"source_ref": "551e5d097c11f08fd2400a25a651b1844fcf89c2",
+		"retained_source_ref": "main",
+		"models": [{"ModelPattern": "test", "InputPerMTok": {"microdollars": 1000000}}]
+	}`))
+	err := validateSnapshotFile(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "immutable retained LiteLLM source ref")
+}
 
 func TestAppendModelOverlay_FillsGaps(t *testing.T) {
 	base := []catalog.ModelPricing{

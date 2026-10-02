@@ -18,8 +18,9 @@ import (
 // rates. Version 3 removed moonshot/kimi-k3 after LiteLLM added it.
 // Version 4 adds namespaced Codex mappings and a temporary Bedrock Astra
 // fallback until the pinned LiteLLM snapshot includes it. Version 5 adds
-// a StepFun step-5-preview row, which the pinned snapshot lacks.
-const supplementalVersion = "5"
+// a StepFun step-5-preview row, which the pinned snapshot lacks. Version 6
+// removes the temporary Bedrock Astra row now supplied by the snapshot.
+const supplementalVersion = "6"
 
 // Canonical pricing models runtime aliases resolve to.
 // KimiK26Canonical exists in the embedded LiteLLM snapshot;
@@ -194,20 +195,6 @@ func CanonicalModelForTimestamp(model, ts string) string {
 // these rows like any other fallback row, so a later LiteLLM refresh
 // still overwrites them if upstream lists the real models.
 var supplementalPricing = []ModelPricing{
-	{
-		ModelPattern:         GPT6AstraCanonical,
-		InputPerMTok:         money.MustParseDollars("11.00"),
-		OutputPerMTok:        money.MustParseDollars("55.00"),
-		CacheCreationPerMTok: money.MustParseDollars("13.75"),
-		CacheReadPerMTok:     money.MustParseDollars("1.10"),
-		Bands: []PricingBand{{
-			AboveInputTokens:     272_000,
-			InputPerMTok:         money.MustParseDollars("22.00"),
-			OutputPerMTok:        money.MustParseDollars("82.50"),
-			CacheCreationPerMTok: money.MustParseDollars("27.50"),
-			CacheReadPerMTok:     money.MustParseDollars("2.20"),
-		}},
-	},
 	{
 		ModelPattern:         "k3",
 		InputPerMTok:         money.MustParseDollars("3.00"),
