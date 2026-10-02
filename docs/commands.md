@@ -1318,9 +1318,10 @@ See [Chat Import](/docs/chat-import/) for full documentation.
 agentsview import --type <type> <path>
 ```
 
-| Flag     | Default | Description                                                      |
-| -------- | ------- | ---------------------------------------------------------------- |
-| `--type` |         | Import type: `claude-ai`, `chatgpt`, or `gemini-apps` (required) |
+| Flag        | Default | Description                                                                                |
+| ----------- | ------- | ------------------------------------------------------------------------------------------ |
+| `--type`    |         | Import type: `claude-ai`, `chatgpt`, or `gemini-apps` (required)                           |
+| `--replace` |         | Session ID to replace when the default import refuses it; repeatable (claude-ai, chatgpt)  |
 
 The path can be a `.zip` file, a `conversations.json` file (Claude.ai only), a
 Gemini Apps `MyActivity.html` file, or a directory containing the extracted
@@ -1333,6 +1334,7 @@ agentsview import --type claude-ai ~/Downloads/claude.zip
 agentsview import --type chatgpt ~/Downloads/chatgpt.zip
 agentsview import --type claude-ai ./conversations.json
 agentsview import --type gemini-apps ~/Downloads/takeout.zip
+agentsview import --type chatgpt --replace chatgpt:<conversation-id> ~/Downloads/chatgpt.zip
 ```
 
 ______________________________________________________________________

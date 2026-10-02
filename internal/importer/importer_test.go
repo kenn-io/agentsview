@@ -1725,3 +1725,448 @@ func TestImportChatGPTExtendsTruncatedText(t *testing.T) {
 		assert.Equal(t, before, after)
 	})
 }
+
+type chatGPTTurn struct{ role, text string }
+
+// chatGPTLinearConv renders one linear ChatGPT conversation in the testChatGPTConv shape.
+func chatGPTLinearConv(t *testing.T, id string, turns ...chatGPTTurn) string {
+	t.Helper()
+	mapping := map[string]any{
+		"r": map[string]any{"id": "r", "parent": nil, "children": []any{"n1"}, "message": nil},
+	}
+	parent := "r"
+	for i, turn := range turns {
+		node := fmt.Sprintf("n%d", i+1)
+		children := []any{}
+		if i+1 < len(turns) {
+			children = []any{fmt.Sprintf("n%d", i+2)}
+		}
+		mapping[node] = map[string]any{
+			"id": node, "parent": parent, "children": children,
+			"message": map[string]any{
+				"id": "m-" + node, "create_time": 1706745600.0 + float64(10*i),
+				"author":  map[string]any{"role": turn.role, "name": nil, "metadata": map[string]any{}},
+				"content": map[string]any{"content_type": "text", "parts": []any{turn.text}},
+				"status":  "finished_successfully", "metadata": map[string]any{},
+			},
+		}
+		parent = node
+	}
+	encoded, err := json.Marshal([]any{map[string]any{
+		"id": id, "conversation_id": id, "title": "Test",
+		"create_time": 1706745600.0, "update_time": 1706745600.0 + float64(10*len(turns)),
+		"current_node": parent, "mapping": mapping,
+	}})
+	require.NoError(t, err)
+	return string(encoded)
+}
+
+// chatGPTExport joins single-conversation exports into one conversations file.
+func chatGPTExport(t *testing.T, convs ...string) string {
+	t.Helper()
+	var all []json.RawMessage
+	for _, c := range convs {
+		var one []json.RawMessage
+		require.NoError(t, json.Unmarshal([]byte(c), &one))
+		all = append(all, one...)
+	}
+	encoded, err := json.Marshal(all)
+	require.NoError(t, err)
+	return string(encoded)
+}
+
+var replaceFullBody = strings.Repeat("abcdefghij", 80)
+
+// truncatedChatGPTConv is the reported archived shape: a body cut at 500 characters and an extra row the export lacks.
+func truncatedChatGPTConv(t *testing.T, id string) string {
+	t.Helper()
+	return chatGPTLinearConv(t, id,
+		chatGPTTurn{"user", "Hello"},
+		chatGPTTurn{"assistant", replaceFullBody[:500]},
+		chatGPTTurn{"assistant", "metadata row"},
+	)
+}
+
+func fullChatGPTConv(t *testing.T, id string) string {
+	t.Helper()
+	return chatGPTLinearConv(t, id,
+		chatGPTTurn{"user", "Hello"},
+		chatGPTTurn{"assistant", replaceFullBody},
+	)
+}
+
+type chatGPTReplaceFixture struct {
+	d         *db.DB
+	dir       string
+	path      string
+	assetsDir string
+}
+
+func newChatGPTReplaceFixture(t *testing.T, initial string) chatGPTReplaceFixture {
+	t.Helper()
+	f := chatGPTReplaceFixture{d: testDB(t), dir: t.TempDir(), assetsDir: t.TempDir()}
+	f.path = filepath.Join(f.dir, "conversations-000.json")
+	f.write(t, initial)
+	stats, err := ImportChatGPT(t.Context(), f.d, f.dir, f.assetsDir, nil)
+	require.NoError(t, err)
+	require.Zero(t, stats.Errors)
+	return f
+}
+
+func (f chatGPTReplaceFixture) write(t *testing.T, data string) {
+	t.Helper()
+	require.NoError(t, os.WriteFile(f.path, []byte(data), 0o644))
+}
+
+func (f chatGPTReplaceFixture) importWith(t *testing.T, store db.Store, replace ...string) ImportStats {
+	t.Helper()
+	stats, err := ImportChatGPTWithOptions(t.Context(), store, f.dir, f.assetsDir, nil, ImportOptions{Replace: replace})
+	require.NoError(t, err)
+	return stats
+}
+
+func replacedCopies(t *testing.T, d *db.DB, id string) []db.Session {
+	t.Helper()
+	trashed, err := d.ListTrashedSessions(t.Context())
+	require.NoError(t, err)
+	var copies []db.Session
+	for _, s := range trashed {
+		if strings.HasPrefix(s.ID, id+":replaced:") {
+			copies = append(copies, s)
+		}
+	}
+	return copies
+}
+
+func allReplacedCopies(t *testing.T, d *db.DB) []db.Session {
+	t.Helper()
+	trashed, err := d.ListTrashedSessions(t.Context())
+	require.NoError(t, err)
+	var copies []db.Session
+	for _, s := range trashed {
+		if strings.Contains(s.ID, ":replaced:") {
+			copies = append(copies, s)
+		}
+	}
+	return copies
+}
+
+func messageContents(msgs []db.Message) []string {
+	out := make([]string, len(msgs))
+	for i, m := range msgs {
+		out[i] = m.Content
+	}
+	return out
+}
+
+func TestImportChatGPTReplaceListedSession(t *testing.T) {
+	const id = "chatgpt:cg-1"
+	f := newChatGPTReplaceFixture(t, truncatedChatGPTConv(t, "cg-1"))
+	ctx := t.Context()
+	name := "My saved title"
+	require.NoError(t, f.d.RenameSession(ctx, id, &name))
+	archived, err := f.d.GetAllMessages(ctx, id)
+	require.NoError(t, err)
+	require.Len(t, archived, 3)
+	for _, m := range archived[:2] {
+		_, err := f.d.PinMessage(ctx, id, m.ID, nil)
+		require.NoError(t, err)
+	}
+
+	f.write(t, fullChatGPTConv(t, "cg-1"))
+	stats := f.importWith(t, f.d)
+	assert.Equal(t, 1, stats.Errors, "the default import refuses the export")
+	unchanged, err := f.d.GetAllMessages(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, archived, unchanged)
+
+	stats = f.importWith(t, f.d, id)
+	assert.Equal(t, 1, stats.Updated)
+	assert.Zero(t, stats.Errors)
+
+	live, err := f.d.GetAllMessages(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"Hello", replaceFullBody}, messageContents(live))
+	session, err := f.d.GetSession(ctx, id)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	require.NotNil(t, session.DisplayName)
+	assert.Equal(t, name, *session.DisplayName)
+	pins, err := f.d.ListPinnedMessages(ctx, id, "")
+	require.NoError(t, err)
+	require.Len(t, pins, 1, "only the pin on the unchanged message stays")
+	assert.Equal(t, live[0].ID, pins[0].MessageID)
+
+	copies := replacedCopies(t, f.d, id)
+	require.Len(t, copies, 1)
+	require.NotNil(t, copies[0].DisplayName)
+	assert.Equal(t, name, *copies[0].DisplayName)
+	old, err := f.d.GetAllMessages(ctx, copies[0].ID)
+	require.NoError(t, err)
+	assert.Equal(t, messageContents(archived), messageContents(old))
+	copyPins, err := f.d.ListPinnedMessages(ctx, copies[0].ID, "")
+	require.NoError(t, err)
+	assert.Len(t, copyPins, 2)
+}
+
+func TestImportChatGPTReplaceOnlyListedSessions(t *testing.T) {
+	f := newChatGPTReplaceFixture(t, chatGPTExport(t,
+		truncatedChatGPTConv(t, "cg-a"),
+		truncatedChatGPTConv(t, "cg-b"),
+		truncatedChatGPTConv(t, "cg-c"),
+	))
+	ctx := t.Context()
+	before, err := f.d.GetAllMessages(ctx, "chatgpt:cg-c")
+	require.NoError(t, err)
+
+	f.write(t, chatGPTExport(t,
+		fullChatGPTConv(t, "cg-a"),
+		fullChatGPTConv(t, "cg-b"),
+		fullChatGPTConv(t, "cg-c"),
+	))
+	stats := f.importWith(t, f.d, "chatgpt:cg-a", "chatgpt:cg-b")
+	assert.Equal(t, 2, stats.Updated)
+	assert.Equal(t, 1, stats.Errors)
+
+	for _, id := range []string{"chatgpt:cg-a", "chatgpt:cg-b"} {
+		live, err := f.d.GetAllMessages(ctx, id)
+		require.NoError(t, err)
+		assert.Len(t, live, 2, id)
+		assert.Len(t, replacedCopies(t, f.d, id), 1, id)
+	}
+	after, err := f.d.GetAllMessages(ctx, "chatgpt:cg-c")
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+	assert.Empty(t, replacedCopies(t, f.d, "chatgpt:cg-c"))
+}
+
+func TestImportChatGPTReplaceKeepsAppend(t *testing.T) {
+	f := newChatGPTReplaceFixture(t, testChatGPTConv)
+	ctx := t.Context()
+	before, err := f.d.GetAllMessages(ctx, "chatgpt:cg-1")
+	require.NoError(t, err)
+
+	f.write(t, testChatGPTConvWithAppend())
+	stats := f.importWith(t, f.d, "chatgpt:cg-1")
+	assert.Equal(t, 1, stats.Updated)
+	assert.Zero(t, stats.Errors)
+	after, err := f.d.GetAllMessages(ctx, "chatgpt:cg-1")
+	require.NoError(t, err)
+	require.Len(t, after, 2)
+	assert.Equal(t, before[0].ID, after[0].ID, "an append keeps archived message IDs")
+	assert.Empty(t, allReplacedCopies(t, f.d))
+}
+
+func TestImportChatGPTReplaceIsIdempotent(t *testing.T) {
+	f := newChatGPTReplaceFixture(t, truncatedChatGPTConv(t, "cg-1"))
+	f.write(t, fullChatGPTConv(t, "cg-1"))
+
+	stats := f.importWith(t, f.d, "chatgpt:cg-1")
+	assert.Equal(t, 1, stats.Updated)
+	for range 2 {
+		stats = f.importWith(t, f.d, "chatgpt:cg-1")
+		assert.Equal(t, 1, stats.Skipped)
+		assert.Zero(t, stats.Updated)
+		assert.Zero(t, stats.Errors)
+	}
+	assert.Len(t, replacedCopies(t, f.d, "chatgpt:cg-1"), 1)
+}
+
+func TestImportChatGPTReplaceSkipsTrashedSession(t *testing.T) {
+	t.Run("trashed", func(t *testing.T) {
+		ctx := t.Context()
+		f := newChatGPTReplaceFixture(t, truncatedChatGPTConv(t, "cg-1"))
+		require.NoError(t, f.d.SoftDeleteSession(ctx, "chatgpt:cg-1"))
+
+		f.write(t, fullChatGPTConv(t, "cg-1"))
+		stats := f.importWith(t, f.d, "chatgpt:cg-1")
+		assert.Equal(t, 1, stats.Skipped)
+		assert.Zero(t, stats.Errors)
+		assert.Empty(t, allReplacedCopies(t, f.d))
+		full, err := f.d.GetSessionFull(ctx, "chatgpt:cg-1")
+		require.NoError(t, err)
+		require.NotNil(t, full)
+		assert.NotNil(t, full.DeletedAt, "the session must stay trashed")
+	})
+	t.Run("permanently deleted", func(t *testing.T) {
+		ctx := t.Context()
+		f := newChatGPTReplaceFixture(t, truncatedChatGPTConv(t, "cg-1"))
+		require.NoError(t, f.d.DeleteSession(ctx, "chatgpt:cg-1"))
+
+		f.write(t, fullChatGPTConv(t, "cg-1"))
+		stats := f.importWith(t, f.d, "chatgpt:cg-1")
+		assert.Equal(t, 1, stats.Skipped)
+		assert.Zero(t, stats.Errors)
+		assert.Empty(t, allReplacedCopies(t, f.d))
+		full, err := f.d.GetSessionFull(ctx, "chatgpt:cg-1")
+		require.NoError(t, err)
+		assert.Nil(t, full, "a deleted session must not come back")
+	})
+}
+
+func TestImportChatGPTReplaceRefusesOtherAgent(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	require.NoError(t, d.UpsertSession(ctx, db.Session{
+		ID: "chatgpt:cg-1", Project: "chatgpt.com", Machine: "local",
+		Agent: "claude",
+	}))
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "conversations-000.json"),
+		[]byte(fullChatGPTConv(t, "cg-1")), 0o644))
+
+	stats, err := ImportChatGPTWithOptions(ctx, d, dir, t.TempDir(), nil,
+		ImportOptions{Replace: []string{"chatgpt:cg-1"}})
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Errors)
+	assert.Empty(t, allReplacedCopies(t, d))
+}
+
+func TestImportChatGPTReplaceNeedsCopyCapability(t *testing.T) {
+	f := newChatGPTReplaceFixture(t, truncatedChatGPTConv(t, "cg-1"))
+	ctx := t.Context()
+	before, err := f.d.GetAllMessages(ctx, "chatgpt:cg-1")
+	require.NoError(t, err)
+
+	f.write(t, fullChatGPTConv(t, "cg-1"))
+	stats := f.importWith(t, struct{ db.Store }{f.d}, "chatgpt:cg-1")
+	assert.Equal(t, 1, stats.Errors)
+	assert.Zero(t, stats.Updated)
+	after, err := f.d.GetAllMessages(ctx, "chatgpt:cg-1")
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+	trashed, err := f.d.ListTrashedSessions(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, trashed)
+}
+
+func TestImportReplaceIgnoresUnlistedSessions(t *testing.T) {
+	t.Run("chatgpt", func(t *testing.T) {
+		ctx := t.Context()
+		f := newChatGPTReplaceFixture(t, truncatedChatGPTConv(t, "cg-1"))
+		before, err := f.d.GetAllMessages(ctx, "chatgpt:cg-1")
+		require.NoError(t, err)
+
+		f.write(t, fullChatGPTConv(t, "cg-1"))
+		stats := f.importWith(t, f.d, "chatgpt:not-in-export")
+		assert.Equal(t, 1, stats.Errors)
+		assert.Zero(t, stats.Updated)
+		after, err := f.d.GetAllMessages(ctx, "chatgpt:cg-1")
+		require.NoError(t, err)
+		assert.Equal(t, before, after)
+		assert.Empty(t, allReplacedCopies(t, f.d))
+	})
+	t.Run("claude-ai", func(t *testing.T) {
+		ctx := t.Context()
+		d := testDB(t)
+		_, err := ImportClaudeAI(ctx, d, strings.NewReader(testConversationsJSON), nil)
+		require.NoError(t, err)
+		before, err := d.GetAllMessages(ctx, "claude-ai:import-test-001")
+		require.NoError(t, err)
+
+		stats, err := ImportClaudeAIWithOptions(ctx, d,
+			strings.NewReader(claudeAIConversationWithMessages(t, 1)), nil,
+			ImportOptions{Replace: []string{"chatgpt:cg-1"}})
+		require.NoError(t, err)
+		assert.Equal(t, 1, stats.Errors)
+		assert.Zero(t, stats.Updated)
+		after, err := d.GetAllMessages(ctx, "claude-ai:import-test-001")
+		require.NoError(t, err)
+		assert.Equal(t, before, after)
+		assert.Empty(t, allReplacedCopies(t, d))
+	})
+}
+
+// diskFullStore fails every batch write and fails the test if replace is attempted.
+type diskFullStore struct {
+	*db.DB
+	t *testing.T
+}
+
+func (s diskFullStore) WriteSessionBatchAtomic(
+	context.Context, []db.SessionBatchWrite, ...func() error,
+) (db.SessionBatchResult, error) {
+	return db.SessionBatchResult{}, errors.New("disk full")
+}
+
+func (s diskFullStore) ReplaceSessionKeepingTrashedCopy(
+	context.Context, db.SessionBatchWrite,
+) (string, error) {
+	assert.Fail(s.t, "a transient write error must not trigger replace")
+	return "", errors.New("unexpected replace")
+}
+
+func TestImportChatGPTReplaceIgnoresTransientError(t *testing.T) {
+	f := newChatGPTReplaceFixture(t, testChatGPTConv)
+	ctx := t.Context()
+	before, err := f.d.GetAllMessages(ctx, "chatgpt:cg-1")
+	require.NoError(t, err)
+
+	f.write(t, testChatGPTConvWithAppend())
+	stats := f.importWith(t, diskFullStore{DB: f.d, t: t}, "chatgpt:cg-1")
+	assert.Equal(t, 1, stats.Errors)
+	after, err := f.d.GetAllMessages(ctx, "chatgpt:cg-1")
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+	assert.Empty(t, allReplacedCopies(t, f.d))
+}
+
+func TestImportClaudeAIReplaceSkipsTrashedSession(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	const id = "claude-ai:import-test-001"
+	_, err := ImportClaudeAI(ctx, d, strings.NewReader(claudeAIConversationWithMessages(t, 3)), nil)
+	require.NoError(t, err)
+	require.NoError(t, d.SoftDeleteSession(ctx, id))
+
+	stats, err := ImportClaudeAIWithOptions(ctx, d,
+		strings.NewReader(claudeAIConversationWithMessages(t, 2)), nil,
+		ImportOptions{Replace: []string{id}})
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Errors)
+	trashed, err := d.ListTrashedSessions(ctx)
+	require.NoError(t, err)
+	require.Len(t, trashed, 1)
+	assert.Equal(t, id, trashed[0].ID)
+}
+
+func TestImportClaudeAIReplaceListedSession(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	const id = "claude-ai:import-test-001"
+	_, err := ImportClaudeAI(ctx, d, strings.NewReader(claudeAIConversationWithMessages(t, 3)), nil)
+	require.NoError(t, err)
+	name := "My Custom Name"
+	require.NoError(t, d.RenameSession(ctx, id, &name))
+	archived, err := d.GetAllMessages(ctx, id)
+	require.NoError(t, err)
+	require.Len(t, archived, 3)
+	_, err = d.PinMessage(ctx, id, archived[2].ID, nil)
+	require.NoError(t, err)
+
+	stats, err := ImportClaudeAIWithOptions(ctx, d,
+		strings.NewReader(claudeAIConversationWithMessages(t, 2)), nil,
+		ImportOptions{Replace: []string{id}})
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Updated)
+	assert.Zero(t, stats.Errors)
+
+	live, err := d.GetAllMessages(ctx, id)
+	require.NoError(t, err)
+	assert.Len(t, live, 2)
+	session, err := d.GetSession(ctx, id)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	require.NotNil(t, session.DisplayName)
+	assert.Equal(t, name, *session.DisplayName)
+
+	copies := replacedCopies(t, d, id)
+	require.Len(t, copies, 1)
+	old, err := d.GetAllMessages(ctx, copies[0].ID)
+	require.NoError(t, err)
+	assert.Equal(t, messageContents(archived), messageContents(old))
+	pins, err := d.ListPinnedMessages(ctx, copies[0].ID, "")
+	require.NoError(t, err)
+	require.Len(t, pins, 1)
+	assert.Equal(t, 2, pins[0].Ordinal)
+}
