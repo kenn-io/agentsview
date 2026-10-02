@@ -3,6 +3,7 @@ package rawwatch
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/rawcapture"
 	"go.kenn.io/agentsview/internal/rawcheckpoint"
+	"go.kenn.io/agentsview/internal/rawclient"
 	"go.kenn.io/agentsview/internal/rawupload"
 )
 
@@ -387,4 +389,48 @@ func TestBackfillRecoveryCannotTurnLostCaptureIntoCompletion(t *testing.T) {
 	require.Equal(t, "invalidated", member.Status)
 	_, err = store.CompleteBackfill(t.Context(), spec.RunID)
 	require.ErrorIs(t, err, rawcheckpoint.ErrBackfillIncomplete)
+}
+
+func TestBackfillDrainsUploadsBeforeCapturingPastDeferredWork(t *testing.T) {
+	claudeRoot, codexRoot := t.TempDir(), t.TempDir()
+	for _, name := range []string{"a.jsonl", "b.jsonl", "c.jsonl", "d.jsonl", "e.jsonl", "f.jsonl"} {
+		require.NoError(t, os.WriteFile(filepath.Join(claudeRoot, name), []byte(name), 0o600))
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(codexRoot, "x.jsonl"), []byte("x"), 0o600))
+	store, spec := backfillFixture(t, claudeRoot)
+	codexConfigured, err := store.ResolveConfiguredRoot(t.Context(), parser.AgentCodex, codexRoot)
+	require.NoError(t, err)
+	spec.Providers = append(spec.Providers, parser.AgentCodex)
+	spec.Roots = append(spec.Roots, rawcheckpoint.BackfillSelection{Provider: parser.AgentCodex, ConfiguredRootID: codexConfigured.ID})
+	codex := newAuditProvider(codexRoot)
+	codex.Def.Type = parser.AgentCodex
+	opts := BackfillOptions{Spec: spec, Providers: []parser.Provider{newAuditProvider(claudeRoot), codex}, BatchSize: 64}
+	failing := &recordingRawUploadTransport{commitErrs: []error{errors.New("server unavailable")}}
+	p, err := RunBackfill(t.Context(), store, rawcapture.New(store), rawupload.New(store, failing, "device-a"), opts)
+	require.Error(t, err)
+	require.Equal(t, int64(6), p.Captured)
+
+	opts.BatchSize = 1
+	p, err = RunBackfill(t.Context(), store, rawcapture.New(store), rawupload.New(store, &recordingRawUploadTransport{}, "device-a"), opts)
+
+	require.Error(t, err)
+	require.Equal(t, int64(6), p.Captured, "a deferred upload must stop discovery")
+	require.Equal(t, int64(5), p.Acknowledged)
+	require.Equal(t, int64(1), p.Failures["deferred"])
+}
+
+func TestBackfillReportsPermanentlyRejectedCapture(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "a.jsonl"), []byte("a"), 0o600))
+	store, spec := backfillFixture(t, root)
+	opts := BackfillOptions{Spec: spec, Providers: []parser.Provider{newAuditProvider(root)}, BatchSize: 4}
+	rejecting := &recordingRawUploadTransport{commitErrs: []error{&rawclient.APIError{Status: 422, Code: rawclient.CodeChecksumMismatch}}}
+	_, err := RunBackfill(t.Context(), store, rawcapture.New(store), rawupload.New(store, rejecting, "device-a"), opts)
+	require.Error(t, err)
+
+	p, err := RunBackfill(t.Context(), store, rawcapture.New(store), rawupload.New(store, &recordingRawUploadTransport{}, "device-a"), opts)
+
+	require.Error(t, err)
+	require.Equal(t, int64(1), p.Failures["rejected"])
+	require.Zero(t, p.Failures["deferred"])
 }

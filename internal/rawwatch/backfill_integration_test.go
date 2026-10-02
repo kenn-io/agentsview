@@ -408,7 +408,11 @@ func TestBackfillNoEligibleUploadStopsBeforeDiscovery(t *testing.T) {
 			require.Equal(t, planCalls, provider.planCalls, "uncaptured files must not be examined")
 			require.Equal(t, before.Captured, progress.Captured)
 			require.Equal(t, before.Pending, progress.Pending)
-			require.Equal(t, int64(1), progress.Failures["deferred"])
+			failure := "deferred"
+			if state == "blocked" {
+				failure = "rejected"
+			}
+			require.Equal(t, int64(1), progress.Failures[failure])
 			durable, err := store.BackfillProgress(t.Context(), spec.RunID)
 			require.NoError(t, err)
 			require.Equal(t, progress, durable)

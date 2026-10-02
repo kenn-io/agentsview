@@ -112,17 +112,18 @@ func RunBackfill(ctx context.Context, store *rawcheckpoint.Store, capturer *rawc
 			if err != nil {
 				return progress, err
 			}
-			if exhausted {
-				current, err := store.BackfillProgress(ctx, runID)
-				if err != nil {
-					return progress, rawcheckpoint.ErrBackfillIncomplete
-				}
-				// Pending includes invalidated bindings whose queue rows were
-				// removed. Neither missing nor deferred work permits a new scan.
-				if current.Pending > 0 {
-					failure = "deferred"
-					return current, rawcheckpoint.ErrBackfillIncomplete
-				}
+			if !exhausted {
+				continue
+			}
+			current, err := store.BackfillProgress(ctx, runID)
+			if err != nil {
+				return progress, rawcheckpoint.ErrBackfillIncomplete
+			}
+			// Pending includes invalidated bindings whose queue rows were
+			// removed. Neither missing nor deferred work permits a new scan.
+			if current.Pending > 0 {
+				failure = backfillWaitFailure(ctx, store, runID)
+				return current, rawcheckpoint.ErrBackfillIncomplete
 			}
 			batch, err := auditor.AuditProvider(ctx, provider)
 			pass.Changed += int64(batch.Changed)
@@ -157,7 +158,7 @@ func RunBackfill(ctx context.Context, store *rawcheckpoint.Store, capturer *rawc
 		}
 		progress, err = store.CompleteBackfill(ctx, runID)
 		if err != nil {
-			failure = "deferred"
+			failure = backfillWaitFailure(ctx, store, runID)
 			return progress, rawcheckpoint.ErrBackfillIncomplete
 		}
 		return progress, nil
@@ -186,6 +187,15 @@ func finalizeBackfillAttempt(ctx context.Context, store *rawcheckpoint.Store, ru
 		resultErr = rawcheckpoint.ErrBackfillIncomplete
 	}
 	return progress, resultErr
+}
+
+// backfillWaitFailure separates work a later attempt can finish from captures
+// the server permanently rejected, which only a new run captures again.
+func backfillWaitFailure(ctx context.Context, store *rawcheckpoint.Store, runID string) string {
+	if rejected, err := store.BackfillRejected(ctx, runID); err == nil && rejected {
+		return "rejected"
+	}
+	return "deferred"
 }
 
 func backfillCaptureFailure(err error) string {

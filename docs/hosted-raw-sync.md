@@ -295,6 +295,9 @@ Each invocation is finite. It does not sleep until a failed or deferred upload
 becomes eligible. An incomplete attempt prints current aggregate progress and
 exits nonzero; repair the unavailable root, local spool capacity, device
 authorization, network, or server rejection, then run the same command again.
+A `rejected` failure means the server permanently refused a capture in the run.
+Repeating that run can't finish it; fix the source and start a new run ID,
+which captures it again.
 JSON output is one object with `captured`, `acknowledged`, `pending`, failure
 counters, and an explicit `complete` field. Human output states `complete` or
 `incomplete` directly. Output and errors do not include source paths, transcript

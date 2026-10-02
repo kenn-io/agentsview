@@ -115,7 +115,7 @@ func (p *auditProvider) Discover(context.Context) ([]parser.SourceRef, error) {
 	for _, entry := range entries {
 		if entry.Type().IsRegular() {
 			sources = append(sources, parser.SourceRef{
-				Provider: parser.AgentClaude,
+				Provider: p.Def.Type,
 				Key:      entry.Name(), DisplayPath: filepath.Join(p.root, entry.Name()),
 			})
 		}
@@ -160,7 +160,7 @@ func (p *auditProvider) DiscoverRawCaptureSourcesEach(
 		}
 		p.streamedSources++
 		if err := yield(parser.SourceRef{
-			Provider: parser.AgentClaude,
+			Provider: p.Def.Type,
 			Key:      entry.Name(), DisplayPath: filepath.Join(p.root, entry.Name()),
 		}); err != nil {
 			return false, err

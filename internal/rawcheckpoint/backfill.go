@@ -310,7 +310,7 @@ func (s *Store) RecordBackfillFailure(ctx context.Context, runID, class string) 
 
 func validBackfillFailure(class string) bool {
 	switch class {
-	case "", "discovery_incomplete", "source_changed", "unsupported", "capacity", "capture", "upload", "deferred", "cancelled", "root_unavailable", "capture_lost":
+	case "", "discovery_incomplete", "source_changed", "unsupported", "capacity", "capture", "upload", "deferred", "rejected", "cancelled", "root_unavailable", "capture_lost":
 		return true
 	}
 	return false
@@ -438,4 +438,13 @@ func (s *Store) BackfillRoots(ctx context.Context, runID string, provider parser
 		roots = append(roots, root)
 	}
 	return roots, rows.Err()
+}
+
+// BackfillRejected reports whether a pending capture of the run, or one it
+// waits on, was permanently rejected by the server.
+func (s *Store) BackfillRejected(ctx context.Context, runID string) (bool, error) {
+	var blocked int
+	err := s.db.QueryRowContext(ctx, backfillPendingClosure+`SELECT count(*) FROM outbox_generations
+ WHERE blocked = 1 AND capture_id IN (SELECT capture_id FROM backfill_pending)`, runID).Scan(&blocked)
+	return blocked > 0, err
 }
