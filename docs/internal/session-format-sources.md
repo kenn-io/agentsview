@@ -617,11 +617,11 @@ fixtures retain this field; missing identities remain source-local.
     Codex auto-review threads persist `turn_context.payload.model` as
     `codex-auto-review`, a name Codex's default provider writes when it is not
     using API-key auth (ChatGPT sign-in is one case), leaving the reviewer
-    model to the server. Under API-key auth Codex runs the same role on `gpt-5.6-luna`, and
-    Bedrock providers use their GPT-5.6 Luna ids. AgentsView keeps the reported
-    name and prices it at the `gpt-5.6-luna` catalog row, an estimate rather
-    than an OpenAI invoice. An exact `[custom_model_pricing."codex-auto-review"]`
-    row still wins. Reverified 2026-10-02 against Codex's
+    model to the server. Under API-key auth Codex runs the same role on
+    `gpt-5.6-luna`, and Bedrock providers use their GPT-5.6 Luna ids.
+    AgentsView keeps the reported name and prices it at the `gpt-5.6-luna`
+    catalog row, an estimate rather than an OpenAI invoice. An exact
+    `[custom_model_pricing."codex-auto-review"]` row still wins. Reverified 2026-10-02 against Codex's
     [review model selection](https://github.com/openai/codex/blob/ca466061d64f0b44f416135c7fd06aa7af850bbc/codex-rs/model-provider/src/provider.rs#L122-L126)
     and
     [Bedrock override](https://github.com/openai/codex/blob/ca466061d64f0b44f416135c7fd06aa7af850bbc/codex-rs/model-provider/src/amazon_bedrock/mod.rs#L290-L295).
