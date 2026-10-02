@@ -4726,6 +4726,22 @@ components:
       required:
         - configured
       type: object
+    ImporterImportRefusal:
+      additionalProperties: false
+      properties:
+        reason:
+          enum:
+            - diverged
+            - shorter_export
+            - trashed
+            - transient
+          type: string
+        session_id:
+          type: string
+      required:
+        - session_id
+        - reason
+      type: object
     ImporterImportStats:
       additionalProperties: false
       properties:
@@ -4735,6 +4751,10 @@ components:
         imported:
           format: int64
           type: integer
+        refusals:
+          items:
+            $ref: "#/components/schemas/ImporterImportRefusal"
+          type: array
         skipped:
           format: int64
           type: integer

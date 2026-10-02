@@ -1,6 +1,7 @@
 package server
 
 import (
+	"archive/zip"
 	"bytes"
 	"encoding/json/v2"
 	"mime/multipart"
@@ -62,10 +63,18 @@ func TestHandleImportClaudeAI(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
 
+	raw := rec.Body.Bytes()
 	var stats importer.ImportStats
-	require.NoError(t, json.UnmarshalRead(rec.Body, &stats))
+	require.NoError(t, json.Unmarshal(raw, &stats))
 	assert.Equal(t, 1, stats.Imported)
 	assert.Zero(t, stats.Updated)
+
+	var wire map[string]any
+	require.NoError(t, json.Unmarshal(raw, &wire))
+	for _, key := range []string{"imported", "updated", "skipped", "errors"} {
+		assert.Contains(t, wire, key)
+	}
+	assert.NotContains(t, wire, "refusals", "a clean import must not send refusals")
 }
 
 // TestHandleImportRejectsWriterClosedBeforeStream pins the maintenance-mode
@@ -209,4 +218,148 @@ func TestHandleImportClaudeAI_NoFile(t *testing.T) {
 	srv.mux.ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusBadRequest, rec.Code, "body: %s", rec.Body.String())
+}
+
+const chatGPTRefusalConv = `[{
+  "id":"cg-1","conversation_id":"cg-1","title":"Test",
+  "create_time":1706745600.0,"update_time":1706745660.0,
+  "current_node":"n1","mapping":{
+    "r":{"id":"r","parent":null,"children":["n1"],"message":null},
+    "n1":{"id":"n1","parent":"r","children":[],"message":{
+      "id":"m1","create_time":1706745600.0,
+      "author":{"role":"user","name":null,"metadata":{}},
+      "content":{"content_type":"text","parts":["Hello"]},
+      "status":"finished_successfully","metadata":{}}}
+  }
+}]`
+
+const chatGPTRefusalConvWithAppend = `[{
+  "id":"cg-1","conversation_id":"cg-1","title":"Test",
+  "create_time":1706745600.0,"update_time":1706745660.0,
+  "current_node":"n2","mapping":{
+    "r":{"id":"r","parent":null,"children":["n1"],"message":null},
+    "n1":{"id":"n1","parent":"r","children":["n2"],"message":{
+      "id":"m1","create_time":1706745600.0,
+      "author":{"role":"user","name":null,"metadata":{}},
+      "content":{"content_type":"text","parts":["Hello"]},
+      "status":"finished_successfully","metadata":{}}},
+    "n2":{"id":"n2","parent":"n1","children":[],"message":{
+      "id":"m2","create_time":1706745660.0,
+      "author":{"role":"assistant","name":null,"metadata":{}},
+      "content":{"content_type":"text","parts":["A newly appended answer with searchable phrase"]},
+      "status":"finished_successfully","metadata":{}}}
+  }
+}]`
+
+// postChatGPTExport posts conversations as a one-file export zip and decodes the JSON body.
+func postChatGPTExport(t *testing.T, srv *Server, conversations string) map[string]any {
+	t.Helper()
+	var archive bytes.Buffer
+	zw := zip.NewWriter(&archive)
+	entry, err := zw.Create("conversations-000.json")
+	require.NoError(t, err)
+	_, err = entry.Write([]byte(conversations))
+	require.NoError(t, err)
+	require.NoError(t, zw.Close())
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", "export.zip")
+	require.NoError(t, err)
+	_, err = part.Write(archive.Bytes())
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/import/chatgpt", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
+
+	var wire map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &wire))
+	return wire
+}
+
+func TestHandleImportChatGPTReportsRefusalReasons(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		data   string
+		reason string
+	}{
+		{name: "diverged", data: strings.Replace(chatGPTRefusalConvWithAppend, `"Hello"`, `"Changed archived message"`, 1), reason: "diverged"},
+		{name: "shorter_export", data: chatGPTRefusalConv, reason: "shorter_export"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := testServer(t, 5*time.Second)
+			first := postChatGPTExport(t, srv, chatGPTRefusalConvWithAppend)
+			require.Equal(t, float64(1), first["imported"], "first import: %v", first)
+
+			wire := postChatGPTExport(t, srv, tc.data)
+			assert.Equal(t, float64(1), wire["errors"])
+			assert.Equal(t, []any{
+				map[string]any{"session_id": "chatgpt:cg-1", "reason": tc.reason},
+			}, wire["refusals"])
+		})
+	}
+}
+
+func TestHandleImportClaudeAIStreamsRefusalsOnlyWhenDone(t *testing.T) {
+	srv := testServer(t, 5*time.Second)
+	message := func(id, text, sender, at string) string {
+		return `{"uuid":"` + id + `","text":"` + text + `","sender":"` + sender + `",` +
+			`"content":[{"type":"text","text":"` + text + `"}],"created_at":"` + at + `"}`
+	}
+	conversation := func(messages ...string) string {
+		return `[{"uuid":"refusal-sse-001","name":"Refusal SSE",` +
+			`"created_at":"2026-03-01T10:00:00.000000Z","updated_at":"2026-03-01T10:05:00.000000Z",` +
+			`"chat_messages":[` + strings.Join(messages, ",") + `]}]`
+	}
+	first := message("m1", "hello", "human", "2026-03-01T10:00:00.000000Z")
+	second := message("m2", "hi there", "assistant", "2026-03-01T10:01:00.000000Z")
+
+	post := func(conversations string, stream bool) *httptest.ResponseRecorder {
+		var body bytes.Buffer
+		writer := multipart.NewWriter(&body)
+		part, err := writer.CreateFormFile("file", "conversations.json")
+		require.NoError(t, err)
+		_, err = part.Write([]byte(conversations))
+		require.NoError(t, err)
+		require.NoError(t, writer.Close())
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/import/claude-ai", &body)
+		req.Header.Set("Content-Type", writer.FormDataContentType())
+		if stream {
+			req.Header.Set("Accept", "text/event-stream")
+		}
+		rec := httptest.NewRecorder()
+		srv.mux.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
+		return rec
+	}
+	post(conversation(first, second), false)
+
+	rec := post(conversation(first), true)
+	var done *importer.ImportStats
+	progress := 0
+	lines := strings.Split(rec.Body.String(), "\n")
+	for i, line := range lines {
+		if i+1 >= len(lines) {
+			break
+		}
+		data := strings.TrimPrefix(lines[i+1], "data: ")
+		switch line {
+		case "event: progress":
+			progress++
+			assert.NotContains(t, data, `"refusals"`)
+		case "event: done":
+			done = new(importer.ImportStats)
+			require.NoError(t, json.Unmarshal([]byte(data), done))
+		}
+	}
+	require.Positive(t, progress, "body: %s", rec.Body.String())
+	require.NotNil(t, done, "body: %s", rec.Body.String())
+	assert.Equal(t, 1, done.Errors)
+	assert.Equal(t, []importer.ImportRefusal{
+		{SessionID: "claude-ai:refusal-sse-001", Reason: importer.RefusalShorterExport},
+	}, done.Refusals)
 }

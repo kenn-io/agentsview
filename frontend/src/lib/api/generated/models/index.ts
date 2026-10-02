@@ -306,6 +306,8 @@ export * from "./getApiV1UsageTopSessionsParams.ts";
 export * from "./getApiV1UsageTopSessionsSort.ts";
 export * from "./githubConfigResponse.ts";
 export * from "./headApiV1RawSyncUploadsByUploadIdPathParameters.ts";
+export * from "./importerImportRefusal.ts";
+export * from "./importerImportRefusalReason.ts";
 export * from "./importerImportStats.ts";
 export * from "./insightsResponse.ts";
 export * from "./machinesResponse.ts";

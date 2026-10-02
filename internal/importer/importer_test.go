@@ -687,9 +687,10 @@ func TestImportChatGPTRejectsShorterOrDivergentHistory(t *testing.T) {
 		name    string
 		initial string
 		data    string
+		reason  RefusalReason
 	}{
-		{name: "shorter", initial: testChatGPTConvWithAppend(), data: testChatGPTConv},
-		{name: "divergent", initial: testChatGPTConvWithAppend(), data: strings.Replace(testChatGPTConvWithAppend(), `"Hello"`, `"Changed archived message"`, 1)},
+		{name: "shorter", initial: testChatGPTConvWithAppend(), data: testChatGPTConv, reason: RefusalShorterExport},
+		{name: "divergent", initial: testChatGPTConvWithAppend(), data: strings.Replace(testChatGPTConvWithAppend(), `"Hello"`, `"Changed archived message"`, 1), reason: RefusalDiverged},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
@@ -708,6 +709,7 @@ func TestImportChatGPTRejectsShorterOrDivergentHistory(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, 1, stats.Errors)
 			assert.Zero(t, stats.Updated)
+			assert.Equal(t, []ImportRefusal{{SessionID: "chatgpt:cg-1", Reason: tc.reason}}, stats.Refusals)
 			after, err := d.GetAllMessages(ctx, "chatgpt:cg-1")
 			require.NoError(t, err)
 			assert.Equal(t, before, after)
@@ -851,6 +853,7 @@ func TestImportClaudeAIRejectsShorterExport(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, stats.Errors)
 	assert.Zero(t, stats.Updated)
+	assert.Equal(t, []ImportRefusal{{SessionID: "claude-ai:import-test-001", Reason: RefusalShorterExport}}, stats.Refusals)
 
 	after, err := d.GetAllMessages(ctx, "claude-ai:import-test-001")
 	require.NoError(t, err)
@@ -1349,6 +1352,7 @@ func TestImportChatGPTSkipsTrashedSession(t *testing.T) {
 			assert.Zero(t, stats.Errors)
 			assert.Zero(t, stats.Updated)
 			assert.Equal(t, 1, stats.Skipped)
+			assert.Empty(t, stats.Refusals)
 			full, err := d.GetSessionFull(ctx, "chatgpt:cg-tool")
 			require.NoError(t, err)
 			require.NotNil(t, full)
@@ -1392,6 +1396,7 @@ func TestImportChatGPTFailedFillKeepsSessionRow(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(renamed), 0o644))
 	stats, _ := ImportChatGPT(ctx, failFillStore{d}, dir, assetsDir, nil)
 	assert.Equal(t, 1, stats.Errors)
+	assert.Equal(t, []ImportRefusal{{SessionID: "chatgpt:cg-tool", Reason: RefusalTransient}}, stats.Refusals)
 
 	after, err := d.GetSession(ctx, "chatgpt:cg-tool")
 	require.NoError(t, err)
@@ -1413,6 +1418,7 @@ func TestImportChatGPTFailedFillKeepsSessionRow(t *testing.T) {
 	require.NoError(t, err)
 	assert.Zero(t, stats.Errors)
 	assert.Equal(t, 1, stats.Updated)
+	assert.Empty(t, stats.Refusals)
 }
 
 func TestImportChatGPTReimportRestoresExportImage(t *testing.T) {
@@ -1453,4 +1459,80 @@ func TestImportChatGPTReimportRestoresExportImage(t *testing.T) {
 	restored, err := os.ReadDir(assetsDir)
 	require.NoError(t, err)
 	assert.Len(t, restored, 1, "an unchanged re-import copies the export image again")
+}
+
+func TestImportStatsRecord(t *testing.T) {
+	var stats ImportStats
+	stats.record("a", importNew, nil)
+	stats.record("b", importUpdated, nil)
+	stats.record("c", importSkipped, nil)
+	assert.Equal(t, ImportStats{Imported: 1, Updated: 1, Skipped: 1}, stats)
+
+	diskFull := errors.New("disk full")
+	for _, tc := range []struct {
+		name string
+		err  error
+		want RefusalReason
+	}{
+		{name: "tagged diverged", err: refuse(RefusalDiverged, errors.New("export history diverges from the archived messages")), want: RefusalDiverged},
+		{name: "tagged shorter", err: refuse(RefusalShorterExport, errors.New("export has 1 messages, archive has 2")), want: RefusalShorterExport},
+		{name: "trashed", err: fmt.Errorf("upserting session: %w", db.ErrSessionTrashed), want: RefusalTrashed},
+		{name: "storage shorten", err: fmt.Errorf("writing session: %w", &db.SessionWouldShortenError{SessionID: "s", ExistingMessages: 2, IncomingMessages: 1}), want: RefusalShorterExport},
+		{name: "untagged", err: diskFull, want: RefusalTransient},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var stats ImportStats
+			stats.record("s1", importNew, tc.err)
+			assert.Equal(t, ImportStats{Errors: 1, Refusals: []ImportRefusal{{SessionID: "s1", Reason: tc.want}}}, stats)
+		})
+	}
+
+	tagged := refuse(RefusalDiverged, diskFull)
+	assert.Equal(t, diskFull.Error(), tagged.Error())
+	assert.ErrorIs(t, tagged, diskFull)
+}
+
+func TestImportClaudeAIReportsTrashedSession(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	_, err := ImportClaudeAI(ctx, d, strings.NewReader(testConversationsJSON), nil)
+	require.NoError(t, err)
+	require.NoError(t, d.SoftDeleteSession(ctx, "claude-ai:import-test-001"))
+
+	stats, err := ImportClaudeAI(ctx, d, strings.NewReader(testConversationsJSON), nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Errors)
+	assert.Zero(t, stats.Skipped)
+	assert.Equal(t, []ImportRefusal{{SessionID: "claude-ai:import-test-001", Reason: RefusalTrashed}}, stats.Refusals)
+	full, err := d.GetSessionFull(ctx, "claude-ai:import-test-001")
+	require.NoError(t, err)
+	require.NotNil(t, full)
+	assert.NotNil(t, full.DeletedAt, "the session must stay trashed")
+}
+
+func TestImportProgressOmitsRefusals(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "conversations-000.json")
+	assetsDir := filepath.Join(t.TempDir(), "assets")
+	require.NoError(t, os.WriteFile(path, []byte(testChatGPTConvWithAppend()), 0o644))
+	_, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
+	require.NoError(t, err)
+
+	divergent := strings.Replace(testChatGPTConvWithAppend(), `"Hello"`, `"Changed archived message"`, 1)
+	require.NoError(t, os.WriteFile(path, []byte(divergent), 0o644))
+	var events []ImportStats
+	stats, err := ImportChatGPT(ctx, d, dir, assetsDir, &ImportCallbacks{
+		OnProgress: func(s ImportStats) { events = append(events, s) },
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, events)
+	sawError := false
+	for _, e := range events {
+		assert.Nil(t, e.Refusals)
+		sawError = sawError || e.Errors == 1
+	}
+	assert.True(t, sawError, "a progress event must carry the error count")
+	assert.Equal(t, []ImportRefusal{{SessionID: "chatgpt:cg-1", Reason: RefusalDiverged}}, stats.Refusals)
 }

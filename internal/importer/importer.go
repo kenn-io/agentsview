@@ -22,12 +22,30 @@ type ImportStats struct {
 	Updated  int `json:"updated"`
 	Skipped  int `json:"skipped"`
 	Errors   int `json:"errors"`
+	// Refusals names each conversation a per-conversation write refused (each also counted in Errors); Gemini Apps parse errors are counted without an entry, and progress callbacks get counts only.
+	Refusals []ImportRefusal `json:"refusals,omitempty"`
+}
+
+// RefusalReason tells a caller whether importing the same export again can succeed.
+type RefusalReason string
+
+const (
+	RefusalDiverged      RefusalReason = "diverged"       // export rewrites archived messages
+	RefusalShorterExport RefusalReason = "shorter_export" // export has fewer messages than the archive
+	RefusalTrashed       RefusalReason = "trashed"        // session is in the trash
+	RefusalTransient     RefusalReason = "transient"      // anything else; a later import may succeed
+)
+
+// ImportRefusal identifies one conversation the import did not write.
+type ImportRefusal struct {
+	SessionID string        `json:"session_id"`
+	Reason    RefusalReason `json:"reason" enum:"diverged,shorter_export,trashed,transient"`
 }
 
 // ImportCallbacks provides optional progress reporting.
 type ImportCallbacks struct {
 	// OnProgress fires after each conversation with current
-	// cumulative stats.
+	// cumulative counts; Refusals is always left empty.
 	OnProgress func(ImportStats)
 	// OnIndexing fires before the FTS index rebuild starts.
 	OnIndexing func()
@@ -35,6 +53,7 @@ type ImportCallbacks struct {
 
 func (c *ImportCallbacks) progress(s ImportStats) {
 	if c != nil && c.OnProgress != nil {
+		s.Refusals = nil // per-conversation events stay constant-size; the result carries the list
 		c.OnProgress(s)
 	}
 }
@@ -102,7 +121,8 @@ func (f *lazyFTS) restore(ctx context.Context) error {
 // sessions are updated (messages replaced) unless the export
 // has fewer messages than the archive, which is refused.
 // User-renamed display names are preserved. Excluded (deleted)
-// sessions are counted as skipped.
+// sessions are counted as skipped. Refused conversations are
+// counted as errors and listed in Refusals with a reason.
 func ImportClaudeAI(
 	ctx context.Context,
 	store db.Store,
@@ -141,25 +161,7 @@ func ImportClaudeAI(
 		status, err := upsertConversation(
 			ctx, store, result, fts,
 		)
-		if err != nil {
-			stats.Errors++
-			log.Printf(
-				"import: skipping %s: %v",
-				result.Session.ID, err,
-			)
-			cb.progress(stats)
-			return nil
-		}
-
-		switch status {
-		case importNew:
-			stats.Imported++
-		case importUpdated:
-			stats.Updated++
-		case importSkipped:
-			stats.Skipped++
-		}
-
+		stats.record(result.Session.ID, status, err)
 		cb.progress(stats)
 		return nil
 	})
@@ -175,6 +177,51 @@ const (
 	importUpdated
 	importSkipped
 )
+
+// refusalError tags an import error with the reason reported to callers.
+type refusalError struct {
+	reason RefusalReason
+	err    error
+}
+
+func (e *refusalError) Error() string { return e.err.Error() }
+func (e *refusalError) Unwrap() error { return e.err }
+
+func refuse(reason RefusalReason, err error) error {
+	return &refusalError{reason: reason, err: err}
+}
+
+// refusalReason classifies an import error; anything untagged stays retryable.
+func refusalReason(err error) RefusalReason {
+	if tagged, ok := errors.AsType[*refusalError](err); ok {
+		return tagged.reason
+	}
+	if errors.Is(err, db.ErrSessionTrashed) {
+		return RefusalTrashed
+	}
+	if _, ok := errors.AsType[*db.SessionWouldShortenError](err); ok {
+		return RefusalShorterExport
+	}
+	return RefusalTransient
+}
+
+// record counts one conversation's outcome and lists it when the write failed.
+func (s *ImportStats) record(sessionID string, status importStatus, err error) {
+	if err != nil {
+		s.Errors++
+		s.Refusals = append(s.Refusals, ImportRefusal{SessionID: sessionID, Reason: refusalReason(err)})
+		log.Printf("import: skipping %s: %v", sessionID, err)
+		return
+	}
+	switch status {
+	case importNew:
+		s.Imported++
+	case importUpdated:
+		s.Updated++
+	case importSkipped:
+		s.Skipped++
+	}
+}
 
 func upsertConversation(
 	ctx context.Context,
@@ -205,10 +252,10 @@ func upsertConversation(
 	// turns) would make the replacement below drop stored messages.
 	// Refuse it before touching the session row.
 	if existing != nil && len(msgs) < existing.MessageCount {
-		return importNew, fmt.Errorf(
+		return importNew, refuse(RefusalShorterExport, fmt.Errorf(
 			"export has %d messages, archive has %d",
 			len(msgs), existing.MessageCount,
-		)
+		))
 	}
 
 	sess := db.Session{
@@ -343,25 +390,7 @@ func ImportChatGPT(
 			status, err := upsertChatGPTConversation(
 				ctx, store, result, fts,
 			)
-			if err != nil {
-				stats.Errors++
-				log.Printf(
-					"import: skipping %s: %v",
-					result.Session.ID, err,
-				)
-				cb.progress(stats)
-				return nil
-			}
-
-			switch status {
-			case importNew:
-				stats.Imported++
-			case importUpdated:
-				stats.Updated++
-			case importSkipped:
-				stats.Skipped++
-			}
-
+			stats.record(result.Session.ID, status, err)
 			cb.progress(stats)
 			return nil
 		},
@@ -402,9 +431,9 @@ func upsertChatGPTConversation(
 	}
 
 	if existing.Agent != string(parser.AgentChatGPT) {
-		return importNew, fmt.Errorf(
+		return importNew, refuse(RefusalDiverged, fmt.Errorf(
 			"existing session belongs to agent %q", existing.Agent,
-		)
+		))
 	}
 	policy := storeArchiveContent(store)
 	if policy.UsageOnly() {
@@ -422,21 +451,21 @@ func upsertChatGPTConversation(
 	// can differ from an unchanged archived copy.
 	canonical := canonicalChatGPTMessages(store, chatGPTSession(s), msgs, policy)
 	if len(canonical) < len(archived) {
-		return importNew, fmt.Errorf(
+		return importNew, refuse(RefusalShorterExport, fmt.Errorf(
 			"export has %d messages, archive has %d",
 			len(canonical), len(archived),
-		)
+		))
 	}
 	if len(canonical) != len(msgs) {
-		return importNew, errors.New(
+		return importNew, refuse(RefusalDiverged, errors.New(
 			"export history diverges from the archived messages",
-		)
+		))
 	}
 	filled, ok := compareChatGPTPrefix(archived, canonical[:len(archived)])
 	if !ok {
-		return importNew, errors.New(
+		return importNew, refuse(RefusalDiverged, errors.New(
 			"export history diverges from the archived messages",
-		)
+		))
 	}
 
 	if len(msgs) == len(archived) && len(filled) == 0 {

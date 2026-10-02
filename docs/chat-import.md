@@ -153,3 +153,19 @@ You can safely re-import the same export file:
   timestamp. Inserting or reordering records with other timestamps doesn't
   change existing IDs. Content changes update the same one-message session;
   unchanged records are skipped.
+
+Claude.ai and ChatGPT import results list each conversation that could not be
+imported under `refusals`, with its AgentsView session ID
+(`chatgpt:<conversation id>` or `claude-ai:<conversation uuid>`, the export ID
+with the provider prefix) and a reason:
+
+- `diverged`: the export changes archived messages.
+- `shorter_export`: the export has fewer messages than the archive.
+- `trashed`: a Claude.ai or Gemini Apps session is in the trash. Restore it
+  first. A trashed ChatGPT conversation stays a skip.
+- `transient`: anything else. Importing again may work.
+
+The first three repeat on every import of the same export. Streamed progress
+events carry only the counts. The CLI summary shows the same reasons next to
+its error count. Gemini Apps records the parser rejects before they have a
+session ID are counted in `errors` without an entry.

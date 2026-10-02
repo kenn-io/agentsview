@@ -3,7 +3,6 @@ package importer
 import (
 	"context"
 	"errors"
-	"log"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
@@ -49,24 +48,7 @@ func ImportGeminiApps(
 			status, err := upsertConversation(
 				ctx, store, result, fts,
 			)
-			if err != nil {
-				stats.Errors++
-				log.Printf(
-					"import: skipping %s: %v",
-					result.Session.ID, err,
-				)
-				cb.progress(stats)
-				return nil
-			}
-
-			switch status {
-			case importNew:
-				stats.Imported++
-			case importUpdated:
-				stats.Updated++
-			case importSkipped:
-				stats.Skipped++
-			}
+			stats.record(result.Session.ID, status, err)
 			cb.progress(stats)
 			return nil
 		},

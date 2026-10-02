@@ -348,23 +348,7 @@ func TestImportGeminiAppsPersistenceGuards(t *testing.T) {
 	t.Run("excluded sessions stay excluded", func(t *testing.T) {
 		root := t.TempDir()
 		path := filepath.Join(root, "activity.html")
-		fixture := strings.ReplaceAll(
-			sanitizedGeminiAppsImportHTML,
-			`<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Canvas</p><p>Jan 3, 2025, 3:04:05 PM PST</p></div><div class="content-cell"><p>canvas</p></div></div>`,
-			"",
-		)
-		fixture = strings.ReplaceAll(fixture,
-			`<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Feedback</p><p>Jan 4, 2025, 3:04:05 PM PST</p></div><div class="content-cell"><p>feedback</p></div></div>`,
-			"",
-		)
-		fixture = strings.ReplaceAll(fixture,
-			`<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Prompted</p><p>Jan 5, 2025, 3:04:05 PM PST</p></div><div class="content-cell"><p>second prompt</p><p>second answer</p></div></div>`,
-			"",
-		)
-		fixture = strings.ReplaceAll(fixture,
-			`<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Unknown</p><p>Jan 6, 2025, 3:04:05 PM PST</p></div><div class="content-cell"><p>unknown</p></div></div>`,
-			"",
-		)
+		fixture := geminiAppsSinglePromptHTML()
 		require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
 		d := testDB(t)
 		_, err := ImportGeminiApps(t.Context(), d, root, nil)
@@ -383,9 +367,52 @@ func TestImportGeminiAppsPersistenceGuards(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, 1, stats.Skipped)
 		assert.Zero(t, stats.Errors)
+		assert.Empty(t, stats.Refusals)
 		assert.Zero(t, indexing)
 		page, err = d.ListSessions(t.Context(), db.SessionFilter{Agent: "gemini-apps"})
 		require.NoError(t, err)
 		assert.Empty(t, page.Sessions)
 	})
+}
+
+// geminiAppsSinglePromptHTML keeps only the first Prompted record of the sanitized fixture.
+func geminiAppsSinglePromptHTML() string {
+	fixture := strings.ReplaceAll(
+		sanitizedGeminiAppsImportHTML,
+		`<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Canvas</p><p>Jan 3, 2025, 3:04:05 PM PST</p></div><div class="content-cell"><p>canvas</p></div></div>`,
+		"",
+	)
+	fixture = strings.ReplaceAll(fixture,
+		`<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Feedback</p><p>Jan 4, 2025, 3:04:05 PM PST</p></div><div class="content-cell"><p>feedback</p></div></div>`,
+		"",
+	)
+	fixture = strings.ReplaceAll(fixture,
+		`<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Prompted</p><p>Jan 5, 2025, 3:04:05 PM PST</p></div><div class="content-cell"><p>second prompt</p><p>second answer</p></div></div>`,
+		"",
+	)
+	fixture = strings.ReplaceAll(fixture,
+		`<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Unknown</p><p>Jan 6, 2025, 3:04:05 PM PST</p></div><div class="content-cell"><p>unknown</p></div></div>`,
+		"",
+	)
+	return fixture
+}
+
+func TestImportGeminiAppsReportsTrashedSession(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, "activity.html"), []byte(geminiAppsSinglePromptHTML()), 0o644,
+	))
+	d := testDB(t)
+	_, err := ImportGeminiApps(t.Context(), d, root, nil)
+	require.NoError(t, err)
+	page, err := d.ListSessions(t.Context(), db.SessionFilter{Agent: "gemini-apps"})
+	require.NoError(t, err)
+	require.Len(t, page.Sessions, 1)
+	id := page.Sessions[0].ID
+	require.NoError(t, d.SoftDeleteSession(t.Context(), id))
+
+	stats, err := ImportGeminiApps(t.Context(), d, root, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Errors)
+	assert.Equal(t, []ImportRefusal{{SessionID: id, Reason: RefusalTrashed}}, stats.Refusals)
 }

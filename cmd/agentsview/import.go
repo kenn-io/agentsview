@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/config"
@@ -210,7 +212,7 @@ func formatImportSummary(stats importer.ImportStats) string {
 	}
 	fmt.Fprintln(&summary)
 	if stats.Errors > 0 {
-		fmt.Fprintf(&summary, "  %d errors\n", stats.Errors)
+		fmt.Fprintf(&summary, "  %d errors%s\n", stats.Errors, refusalBreakdown(stats.Refusals))
 	}
 	return summary.String()
 }
@@ -220,6 +222,22 @@ func formatImportFailureSummary(stats importer.ImportStats) string {
 		return ""
 	}
 	return formatImportSummary(stats)
+}
+
+// refusalBreakdown renders refused conversations grouped by reason, e.g. " (2 diverged, 1 transient)".
+func refusalBreakdown(refusals []importer.ImportRefusal) string {
+	if len(refusals) == 0 {
+		return ""
+	}
+	counts := make(map[importer.RefusalReason]int)
+	for _, r := range refusals {
+		counts[r.Reason]++
+	}
+	parts := make([]string, 0, len(counts))
+	for _, reason := range slices.Sorted(maps.Keys(counts)) {
+		parts = append(parts, fmt.Sprintf("%d %s", counts[reason], reason))
+	}
+	return " (" + strings.Join(parts, ", ") + ")"
 }
 
 // resolveImportSource handles zip extraction. If the path is
