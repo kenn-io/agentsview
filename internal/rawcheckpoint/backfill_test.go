@@ -263,3 +263,21 @@ func TestFreshSchemaMatchesVersionEightMigration(t *testing.T) {
 
 	require.Equal(t, schema(fresh), schema(migrated))
 }
+
+func TestBackfillSelectionWithInvalidUTF8RootStillDetectsChanges(t *testing.T) {
+	store, root := openOutboxTestStore(t, 1<<20)
+	require.NoError(t, store.SetDevice(t.Context(), "device-a"))
+	for _, id := range []string{"0-bad", "root-other"} {
+		_, err := store.db.ExecContext(t.Context(), `INSERT INTO configured_roots(id,provider,local_root,created_at,updated_at) VALUES(?,?,?,'','')`, id, string(parser.AgentClaude), "/sessions/\xff"+id)
+		require.NoError(t, err)
+	}
+	spec := BackfillRunSpec{RunID: "run-a", DeviceID: "device-a", Destination: "https://ingest.example", Providers: []parser.AgentType{parser.AgentClaude}, Roots: []BackfillSelection{{parser.AgentClaude, "0-bad"}, {parser.AgentClaude, root.ID}}}
+	_, err := store.BeginBackfill(t.Context(), spec)
+	require.NoError(t, err)
+	_, err = store.BeginBackfill(t.Context(), spec)
+	require.NoError(t, err)
+
+	spec.Roots[1] = BackfillSelection{parser.AgentClaude, "root-other"}
+	_, err = store.BeginBackfill(t.Context(), spec)
+	require.ErrorIs(t, err, ErrBackfillConflict)
+}

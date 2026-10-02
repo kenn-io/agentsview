@@ -3,6 +3,7 @@ package rawcheckpoint
 import (
 	"context"
 	"database/sql"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"net/url"
@@ -90,12 +91,16 @@ func (s *Store) BeginBackfill(ctx context.Context, spec BackfillRunSpec) (Backfi
 			}
 			selected = append(selected, rootSelection{root, path})
 		}
-		selection, _ := json.Marshal(struct {
+		// Root IDs keep the snapshot unique when invalid UTF-8 in a path is replaced.
+		selection, err := json.Marshal(struct {
 			Providers []parser.AgentType
 			Roots     []rootSelection
-		}{spec.Providers, selected})
+		}{spec.Providers, selected}, jsontext.AllowInvalidUTF8(true))
+		if err != nil {
+			return ErrBackfillConflict
+		}
 		var device, dest, stored string
-		err := conn.QueryRowContext(ctx, `SELECT device_id,destination,selection FROM backfill_runs WHERE run_id=?`, spec.RunID).Scan(&device, &dest, &stored)
+		err = conn.QueryRowContext(ctx, `SELECT device_id,destination,selection FROM backfill_runs WHERE run_id=?`, spec.RunID).Scan(&device, &dest, &stored)
 		if err == nil {
 			if device != spec.DeviceID || dest != spec.Destination || stored != string(selection) {
 				return ErrBackfillConflict
