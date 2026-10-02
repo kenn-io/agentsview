@@ -166,3 +166,24 @@ func TestReplaceSessionKeepingTrashedCopyRejectsTrashed(t *testing.T) {
 	require.ErrorIs(t, err, ErrSessionTrashed)
 	assert.Empty(t, trashedReplaceCopies(t, d))
 }
+
+func TestReplaceSessionKeepingTrashedCopyKeepsUsageEvents(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	seedReplaceSession(t, d)
+	require.NoError(t, d.ReplaceSessionUsageEvents(ctx, "replace", []UsageEvent{{
+		Source: "session", Model: "gpt-test", InputTokens: 10, OutputTokens: 5,
+		OccurredAt: "2026-10-01T00:00:00Z", DedupKey: "usage-1",
+	}}))
+
+	copyID, err := d.ReplaceSessionKeepingTrashedCopy(ctx, replaceWrite("new first", "new second"))
+	require.NoError(t, err)
+
+	for _, id := range []string{"replace", copyID} {
+		events, err := d.GetUsageEvents(ctx, id)
+		require.NoError(t, err)
+		require.Len(t, events, 1, id)
+		assert.Equal(t, "usage-1", events[0].DedupKey, id)
+		assert.Equal(t, 10, events[0].InputTokens, id)
+	}
+}
