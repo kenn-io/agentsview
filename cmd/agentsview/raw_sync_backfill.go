@@ -333,6 +333,7 @@ func sameRawSyncConfiguredRoots(
 		want = append(want, filepath.Clean(root.LocalPath))
 	}
 	slices.Sort(current)
+	current = slices.Compact(current)
 	slices.Sort(want)
 	return slices.Equal(current, want)
 }

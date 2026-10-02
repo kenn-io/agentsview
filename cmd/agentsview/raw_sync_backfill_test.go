@@ -523,3 +523,19 @@ func TestRawSyncBackfillCompletesGooseRootsTheProviderNormalizes(t *testing.T) {
 		})
 	}
 }
+
+func TestSameRawSyncConfiguredRootsCollapsesSymlinkAliases(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "sessions")
+	alias := filepath.Join(base, "alias")
+	require.NoError(t, os.Mkdir(root, 0o700))
+	if err := os.Symlink(root, alias); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	canonical, err := filepath.EvalSymlinks(root)
+	require.NoError(t, err)
+
+	assert.True(t, sameRawSyncConfiguredRoots(
+		[]string{root, alias}, []rawcheckpoint.ConfiguredRoot{{LocalPath: canonical}},
+	))
+}
