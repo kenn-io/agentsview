@@ -115,6 +115,9 @@ func TestBackfillTerminalIncompleteDoesNotRestart(t *testing.T) {
 }
 
 func TestBackfillUnreadableEmptyRootCannotComplete(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod 0 does not make a directory unreadable on Windows")
+	}
 	root := t.TempDir()
 	store, spec := backfillFixture(t, root)
 	require.NoError(t, os.Chmod(root, 0))
