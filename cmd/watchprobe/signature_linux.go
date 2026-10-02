@@ -13,5 +13,5 @@ func freshSignature(path string) (signature, error) {
 	}
 	id := [16]byte{}
 	binary.LittleEndian.PutUint64(id[:8], s.Ino)
-	return signature{Size: s.Size, MtimeNS: s.Mtim.Nano(), ChangeNS: s.Ctim.Nano(), Volume: uint64(s.Dev), Identity: id, IdentityKnown: true, ChangeKnown: true}, nil
+	return signature{Size: s.Size, MtimeNS: s.Mtim.Nano(), ChangeNS: s.Ctim.Nano(), Volume: s.Dev, Identity: id, IdentityKnown: true, ChangeKnown: true}, nil
 }

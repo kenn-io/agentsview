@@ -91,6 +91,7 @@ func newRecorder(ctx context.Context, path string) (*recorder, error) {
 	}
 	return &recorder{file: f, process: p, start: time.Now()}, nil
 }
+
 func (r *recorder) snapshot(ctx context.Context) resourceSample {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
@@ -129,6 +130,7 @@ func (r *recorder) snapshot(ctx context.Context) resourceSample {
 	}
 	return s
 }
+
 func (r *recorder) emit(kind string, value any) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -141,6 +143,7 @@ func (r *recorder) emit(kind string, value any) error {
 	_, err := r.file.WriteString("\n")
 	return err
 }
+
 func (r *recorder) sample(ctx context.Context) error {
 	s := r.snapshot(ctx)
 	r.mu.Lock()

@@ -108,6 +108,7 @@ func (c *cache) load(ctx context.Context, unit int, names []string) (map[string]
 	}
 	return result, rows.Err()
 }
+
 func (c *cache) write(ctx context.Context, unit int, records []record) (bool, error) {
 	if len(records) > pageRecords {
 		return false, errors.New("cache update exceeds page bound")
@@ -119,7 +120,7 @@ func (c *cache) write(ctx context.Context, unit int, records []record) (bool, er
 	if err != nil {
 		return false, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	stmt, err := tx.PrepareContext(ctx, "INSERT OR REPLACE INTO files VALUES(?,?,?,?,?,?,?,?)")
 	if err != nil {
 		return false, err
@@ -151,10 +152,12 @@ func (c *cache) write(ctx context.Context, unit int, records []record) (bool, er
 	}
 	return true, nil
 }
+
 func cacheFull(err error) bool {
 	e, ok := errors.AsType[*sqlite.Error](err)
 	return ok && e.Code()&255 == 13
 }
+
 func (c *cache) remove(ctx context.Context, unit int, name string) error {
 	_, err := c.db.ExecContext(ctx, "DELETE FROM files WHERE unit=? AND name=?", unit, name)
 	return err

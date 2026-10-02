@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/trace"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -43,10 +44,11 @@ type probe struct {
 
 func sourceName(i int, pattern string) string {
 	if pattern == "entropy" {
-		return fmt.Sprintf("%x.jsonl", sha256.Sum256([]byte(fmt.Sprint(i))))
+		return fmt.Sprintf("%x.jsonl", sha256.Sum256([]byte(strconv.Itoa(i))))
 	}
 	return fmt.Sprintf("rollout-2026-10-01-%045d.jsonl", i)
 }
+
 func (p *probe) scan(ctx context.Context, unit int, dir string, force bool, checkpoint func()) (scanStats, error) {
 	region := trace.StartRegion(ctx, "scan-directory")
 	defer region.End()
@@ -149,6 +151,7 @@ func (p *probe) scan(ctx context.Context, unit int, dir string, force bool, chec
 	}
 	return stats, nil
 }
+
 func (p *probe) verify(ctx context.Context, path string) (int64, error) {
 	start := time.Now()
 	defer func() { p.observe("content_verify", time.Since(start)) }()

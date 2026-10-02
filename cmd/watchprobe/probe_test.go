@@ -2,19 +2,20 @@ package main
 
 import (
 	"context"
-	"github.com/fsnotify/fsnotify"
 	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestSelectiveCacheAcknowledgementAndRestart(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "cache.sqlite")
 	c, err := openCache(ctx, path, 4<<20)
 	require.NoError(t, err)
@@ -40,7 +41,7 @@ func TestSelectiveCacheAcknowledgementAndRestart(t *testing.T) {
 }
 
 func TestScannerNoopRetryAndForcedVerification(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	path := filepath.Join(root, "a.jsonl")
 	require.NoError(t, os.WriteFile(path, []byte("0000"), 0o600))
@@ -76,15 +77,15 @@ func TestScannerPagesAndCancellation(t *testing.T) {
 	}
 	p := probe{}
 	pages := 0
-	s, err := p.scan(context.Background(), 0, root, false, func() { pages++ })
+	s, err := p.scan(t.Context(), 0, root, false, func() { pages++ })
 	require.NoError(t, err)
 	assert.EqualValues(t, 513, s.Stats)
 	assert.Equal(t, 3, pages)
 	assert.LessOrEqual(t, s.MaxPageRecords, 256)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	_, err = p.scan(ctx, 0, root, false, nil)
-	assert.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestOpenWriterSignatureSeesAppend(t *testing.T) {
@@ -95,7 +96,7 @@ func TestOpenWriterSignatureSeesAppend(t *testing.T) {
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
 	require.NoError(t, err)
 	defer f.Close()
-	_, err = f.Write([]byte("1"))
+	_, err = f.WriteString("1")
 	require.NoError(t, err)
 	after, err := freshSignature(path)
 	require.NoError(t, err)
@@ -105,7 +106,7 @@ func TestOpenWriterSignatureSeesAppend(t *testing.T) {
 }
 
 func TestCachePressureIsUnknownNotRemoval(t *testing.T) {
-	c, err := openCache(context.Background(), filepath.Join(t.TempDir(), "cache.sqlite"), 128<<10)
+	c, err := openCache(t.Context(), filepath.Join(t.TempDir(), "cache.sqlite"), 128<<10)
 	require.NoError(t, err)
 	defer c.close()
 	refused := false
@@ -114,11 +115,11 @@ func TestCachePressureIsUnknownNotRemoval(t *testing.T) {
 		for i := range rows {
 			rows[i] = record{Name: sourceName(i, "entropy"), Signature: signature{Size: 4}}
 		}
-		ok, err := c.write(context.Background(), unit, rows)
+		ok, err := c.write(t.Context(), unit, rows)
 		require.NoError(t, err)
 		if !ok {
 			refused = true
-			got, err := c.load(context.Background(), unit, []string{sourceName(0, "entropy")})
+			got, err := c.load(t.Context(), unit, []string{sourceName(0, "entropy")})
 			require.NoError(t, err)
 			assert.Empty(t, got)
 			break
@@ -128,7 +129,7 @@ func TestCachePressureIsUnknownNotRemoval(t *testing.T) {
 }
 
 func TestTesterReportAndScopedNativeObservation(t *testing.T) {
-	report, err := runProbe(context.Background(), options{Files: 513, Passes: 2, MaxWatches: 1, Queue: 32, CacheBytes: 4 << 20, Output: filepath.Join(t.TempDir(), "artifacts"), Pattern: "repetitive"})
+	report, err := runProbe(t.Context(), options{Files: 513, Passes: 2, MaxWatches: 1, Queue: 32, CacheBytes: 4 << 20, Output: filepath.Join(t.TempDir(), "artifacts"), Pattern: "repetitive"})
 	require.NoError(t, err)
 	assert.Equal(t, 513, report.Options.Files)
 	assert.Equal(t, 3, report.Directories)
@@ -137,7 +138,7 @@ func TestTesterReportAndScopedNativeObservation(t *testing.T) {
 	assert.True(t, report.Checks["retry_preserves_baseline"])
 	assert.True(t, report.Checks["restart_preserves_baseline"])
 	assert.True(t, report.Checks["explicit_dirty_same_stat_verified"])
-	assert.Greater(t, report.Native.Observed, int64(0))
+	assert.Positive(t, report.Native.Observed)
 	assert.LessOrEqual(t, report.MaxPageRecords, 256)
 	for _, p := range report.Phases {
 		if p.Name == "warm_scan" {
@@ -148,7 +149,7 @@ func TestTesterReportAndScopedNativeObservation(t *testing.T) {
 }
 
 func TestCoverageOnlyAndCacheDisabled(t *testing.T) {
-	r, err := runProbe(context.Background(), options{Files: 2, Passes: 1, Queue: 1, Output: filepath.Join(t.TempDir(), "probe"), Pattern: "entropy"})
+	r, err := runProbe(t.Context(), options{Files: 2, Passes: 1, Queue: 1, Output: filepath.Join(t.TempDir(), "probe"), Pattern: "entropy"})
 	require.NoError(t, err)
 	assert.Zero(t, r.Native.Allocated)
 	assert.Equal(t, 1, r.Native.Unavailable)
@@ -161,7 +162,7 @@ func TestCoverageOnlyAndCacheDisabled(t *testing.T) {
 }
 
 func TestSustainedTelemetryAndCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	out := filepath.Join(t.TempDir(), "artifacts")
 	done := make(chan error, 1)
 	go func() {
@@ -172,16 +173,16 @@ func TestSustainedTelemetryAndCancellation(t *testing.T) {
 	cancel()
 	select {
 	case err := <-done:
-		assert.ErrorIs(t, err, context.Canceled)
+		require.ErrorIs(t, err, context.Canceled)
 	case <-time.After(5 * time.Second):
-		t.Fatal("owned probe work did not cancel")
+		require.FailNow(t, "owned probe work did not cancel")
 	}
 	_, err := os.Stat(filepath.Join(out, "sources"))
 	assert.ErrorIs(t, err, os.ErrNotExist)
 }
 
 func TestLifecycleChecksReplacementRenameAndRemoval(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	target := filepath.Join(root, "a.jsonl")
 	require.NoError(t, os.WriteFile(target, []byte("original"), 0o600))
@@ -222,5 +223,5 @@ func TestNativePressurePreservesEarliestLossAndOperationCounts(t *testing.T) {
 	assert.EqualValues(t, 2, s.Operations.Chmod)
 	assert.Equal(t, 1, s.PendingLossUnits)
 	assert.GreaterOrEqual(t, s.OldestPendingLossSeconds, 0.0)
-	assert.Equal(t, 1, len(n.queue))
+	assert.Len(t, n.queue, 1)
 }

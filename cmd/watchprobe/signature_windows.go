@@ -31,7 +31,7 @@ func freshSignature(path string) (signature, error) {
 	if err != nil {
 		return signature{}, err
 	}
-	defer windows.CloseHandle(handle)
+	defer func() { _ = windows.CloseHandle(handle) }()
 	var basic fileBasicInfo
 	var standard fileStandardInfo
 	var id fileIDInfo

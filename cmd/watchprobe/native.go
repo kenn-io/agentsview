@@ -114,9 +114,11 @@ func (n *nativeSource) offer(item notice) {
 		n.markLoss(item.Unit)
 	}
 }
+
 func (n *nativeSource) markLoss(unit int) {
 	n.loss[unit].CompareAndSwap(0, time.Since(n.started).Nanoseconds()+1)
 }
+
 func (n *nativeSource) snapshot() nativeReport {
 	r := nativeReport{ElapsedS: time.Since(n.started).Seconds(), QueueDepth: len(n.queue), Allocated: n.allocated, Unavailable: n.unavailable, BudgetExcluded: n.budgetExcluded, AllocationFailures: n.allocationFailures, Received: n.received.Load(), Dropped: n.dropped.Load(), Errors: n.errors.Load(), MaxQueue: int(n.peakQueue.Load())}
 	r.Operations = nativeOperations{n.operations[0].Load(), n.operations[1].Load(), n.operations[2].Load(), n.operations[3].Load(), n.operations[4].Load()}

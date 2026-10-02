@@ -66,6 +66,7 @@ func addStats(a *scanStats, b scanStats) {
 	a.MaxPageRecords = max(a.MaxPageRecords, b.MaxPageRecords)
 	a.MaxPagePayloadEstimateBytes = max(a.MaxPagePayloadEstimateBytes, b.MaxPagePayloadEstimateBytes)
 }
+
 func (p *probe) check(ctx context.Context, unit int, path string) (scanStats, error) {
 	var stats scanStats
 	defer func() { addStats(&p.total, stats) }()
@@ -123,6 +124,7 @@ func (p *probe) check(ctx context.Context, unit int, path string) (scanStats, er
 	}
 	return stats, nil
 }
+
 func runProbe(ctx context.Context, o options) (report probeReport, err error) {
 	if o.ScanInterval < 0 {
 		return report, errors.New("scan interval must not be negative")
@@ -409,7 +411,7 @@ func runProbe(ctx context.Context, o options) (report probeReport, err error) {
 	if e != nil {
 		return report, e
 	}
-	_, e = writer.Write([]byte("1"))
+	_, e = writer.WriteString("1")
 	if e != nil {
 		writer.Close()
 		return report, e
@@ -476,6 +478,9 @@ delivered:
 	p.failNextAck = true
 	_, e = p.check(ctx, 0, target)
 	if !errors.Is(e, errInjectedAck) {
+		if e != nil {
+			return report, e
+		}
 		return report, errors.New("retry scenario did not fail at acknowledgement")
 	}
 	err = phase("retry", func() (scanStats, error) {
