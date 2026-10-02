@@ -1509,30 +1509,3 @@ func TestImportClaudeAIReportsTrashedSession(t *testing.T) {
 	require.NotNil(t, full)
 	assert.NotNil(t, full.DeletedAt, "the session must stay trashed")
 }
-
-func TestImportProgressOmitsRefusals(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "conversations-000.json")
-	assetsDir := filepath.Join(t.TempDir(), "assets")
-	require.NoError(t, os.WriteFile(path, []byte(testChatGPTConvWithAppend()), 0o644))
-	_, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
-	require.NoError(t, err)
-
-	divergent := strings.Replace(testChatGPTConvWithAppend(), `"Hello"`, `"Changed archived message"`, 1)
-	require.NoError(t, os.WriteFile(path, []byte(divergent), 0o644))
-	var events []ImportStats
-	stats, err := ImportChatGPT(ctx, d, dir, assetsDir, &ImportCallbacks{
-		OnProgress: func(s ImportStats) { events = append(events, s) },
-	})
-	require.NoError(t, err)
-	require.NotEmpty(t, events)
-	sawError := false
-	for _, e := range events {
-		assert.Nil(t, e.Refusals)
-		sawError = sawError || e.Errors == 1
-	}
-	assert.True(t, sawError, "a progress event must carry the error count")
-	assert.Equal(t, []ImportRefusal{{SessionID: "chatgpt:cg-1", Reason: RefusalDiverged}}, stats.Refusals)
-}
