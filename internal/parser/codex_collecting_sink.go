@@ -275,15 +275,16 @@ func hasEquivalentCallResultEvent(
 
 // applyCodexTokenUsage normalizes Codex token usage fields into the
 // Anthropic-style shape expected by the usage and cost queries. Codex
-// reports input_tokens as the full input count (cached portion included),
+// reports input_tokens as the full input count, with both cached reads and
+// cache writes included (codex-rs/protocol/src/protocol.rs TokenUsage),
 // while the downstream cost formula treats input_tokens as the uncached
-// remainder and bills cache_read_input_tokens separately. Subtracting
-// cached here prevents double-counting the cached portion at the full
-// input rate.
+// remainder and bills cache reads and writes separately. Subtracting both
+// here prevents billing them at the full input rate.
 //
-//	input_tokens - cached_input_tokens -> input_tokens  (uncached)
-//	output_tokens                      -> output_tokens
-//	cached_input_tokens                -> cache_read_input_tokens
+//	input_tokens - cached_input_tokens - cache_write_input_tokens -> input_tokens
+//	output_tokens            -> output_tokens
+//	cached_input_tokens      -> cache_read_input_tokens
+//	cache_write_input_tokens -> cache_creation_input_tokens (omitted when 0)
 func applyCodexTokenUsage(msg *ParsedMessage, raw string) {
 	usage := gjson.Parse(raw)
 	totalInput := int(usage.Get("input_tokens").Int())
@@ -291,11 +292,17 @@ func applyCodexTokenUsage(msg *ParsedMessage, raw string) {
 	output := int(usage.Get("output_tokens").Int())
 
 	uncached := max(totalInput-cached, 0)
+	cacheWrite := min(max(int(usage.Get("cache_write_input_tokens").Int()), 0), uncached)
+	uncached -= cacheWrite
 
 	normalized := map[string]int{
 		"input_tokens":            uncached,
 		"output_tokens":           output,
 		"cache_read_input_tokens": cached,
+	}
+	// Writes sit inside Codex's input count; zero keeps older rows byte-identical.
+	if cacheWrite > 0 {
+		normalized["cache_creation_input_tokens"] = cacheWrite
 	}
 	j, err := json.Marshal(normalized, json.Deterministic(true))
 	if err != nil {
@@ -304,6 +311,6 @@ func applyCodexTokenUsage(msg *ParsedMessage, raw string) {
 	msg.TokenUsage = j
 	msg.OutputTokens = output
 	msg.HasOutputTokens = output > 0
-	msg.ContextTokens = uncached + cached
+	msg.ContextTokens = uncached + cacheWrite + cached
 	msg.HasContextTokens = totalInput > 0 || cached > 0
 }

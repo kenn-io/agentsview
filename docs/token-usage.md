@@ -548,6 +548,11 @@ so the input side of the equation is accurate:
 If you upgraded from an earlier version, the first `usage` invocation triggers a
 full resync so these corrections apply to historical sessions.
 
+Codex also records prompt-cache writes inside its input count. AgentsView moves
+them into the cache-creation bucket so GPT-5.6 and later writes price at the
+cache-write rate. Hosted raw archives pick up the change through the existing
+[`pg raw-reparse hosted`](hosted-raw-sync.md#reparse-and-rollback) workflow.
+
 ### Amp Token Metrics
 
 Amp thread documents carry a `usage` object on each assistant message with the
@@ -558,9 +563,9 @@ model's own tokens rather than collapsing to one.
 Amp routes every prompt token into one of three input buckets. Anthropic-backed
 threads already use Anthropic's cache semantics and are read as-is.
 OpenAI-backed threads report `inputTokens` as zero and classify the whole
-uncached prompt as cache creation; because OpenAI does not bill cache writes,
-those tokens are recorded as uncached input and no cache-creation bucket is
-emitted — the same normalization the Codex parser applies for the same reason.
+uncached prompt as cache creation. That bucket is the whole uncached prompt
+rather than an OpenAI-reported cache write, so those tokens are recorded as
+uncached input and no cache-creation bucket is emitted.
 
 Two limits are worth knowing. Older threads can omit the model entirely. Usage
 reporting counts only rows that carry a model, so those inferences are absent

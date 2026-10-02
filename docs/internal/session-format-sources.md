@@ -581,9 +581,16 @@ fixtures retain this field; missing identities remain source-local.
 
 - **Usage and cost:** `token_count` records include total and last usage with
   input, cached input, cache-write input, output, reasoning output, and total
-  tokens. Agentsview currently consumes input, cached input, and output only:
-  it subtracts cached input from upstream's inclusive input total, maps cached
-  input to cache-read, and ignores cache-write and reasoning-output fields.
+  tokens. Agentsview subtracts cached input and cache-write input from
+  upstream's inclusive input total, maps cached input to cache-read and
+  cache-write input to cache-creation, and ignores reasoning-output. The
+  [`TokenUsage` struct](https://github.com/openai/codex/blob/ca466061d64f0b44f416135c7fd06aa7af850bbc/codex-rs/protocol/src/protocol.rs#L2241-L2260)
+  defaults `cache_write_input_tokens` to 0, and the
+  [Responses parser test](https://github.com/openai/codex/blob/ca466061d64f0b44f416135c7fd06aa7af850bbc/codex-rs/codex-api/src/sse/responses.rs#L802-L828)
+  shows writes counted inside `input_tokens`. OpenAI's
+  [prompt-caching guide](https://developers.openai.com/api/docs/guides/prompt-caching)
+  bills GPT-5.6 and later cache writes at 1.25x the uncached input rate.
+  Reverified 2026-10-02.
   Catalog pricing therefore covers only the normalized fields the parser
   emits. Codex Luna Reserve turns persist `turn_context.payload.model` as
   `gpt-reserve`. That reported name is stored unchanged; pricing resolves it
@@ -813,7 +820,7 @@ fixtures retain this field; missing identities remain source-local.
   de-identified rollout is retained as a fixture.
 - **Usage and cost:** `token_count` records carry the Codex fields, so
   normalization and catalog pricing follow the Codex entry above exactly,
-  including the same cache-write and reasoning-output omissions.
+  including the same reasoning-output omission.
 - **Agentsview:** `internal/parser/traex.go` relabels the shared Codex parser
   (`internal/parser/codex.go`, `internal/parser/codex_provider.go`) onto the
   `traex:` ID namespace, and `internal/sync` gates the format-shaped branches

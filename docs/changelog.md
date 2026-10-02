@@ -195,6 +195,10 @@ The latest published release is
   `codex-auto-review` as the reported model, and a custom pricing row for it
   still wins. Existing SQLite usage caches rebuild and the next ClickHouse push
   reprices the mirror. (#2078)
+- Codex sessions on GPT-5.6 and later price prompt-cache writes at the
+  cache-write rate instead of the input rate. A custom pricing row for such a
+  model needs `cache_creation_microdollars_per_mtok`, since omitted rates count
+  as zero. The first sync after upgrading re-reads each session once.
 - Sync continues importing local sessions and reachable remotes when another
   remote's hostname cannot resolve, such as while disconnected from a private
   network. This also applies during archive upgrades and full rebuilds, which

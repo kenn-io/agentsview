@@ -1018,7 +1018,12 @@ func applyUsageResult(
 		}
 		usage := &TokenUsage{OutputTokens: &totals.OutputTokens}
 		if complete {
-			usage.InputTokens = &totals.InputTokens
+			input := totals.InputTokens
+			if Provider(provider) == ProviderCodex {
+				// Schema v1 reports Codex cache writes as unavailable, so they stay inside input.
+				input += totals.CacheCreationTokens
+			}
+			usage.InputTokens = &input
 			usage.CacheReadInputTokens = &totals.CacheReadTokens
 			if Provider(provider) == ProviderClaude {
 				usage.CacheCreationInputTokens = &totals.CacheCreationTokens

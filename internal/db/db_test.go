@@ -1111,6 +1111,11 @@ func TestCurrentDataVersionCursorSubagentCategory(t *testing.T) {
 		"version 107 is the data-version boundary for the Cursor Subagent tool category")
 }
 
+func TestCurrentDataVersionCodexCacheWriteTokens(t *testing.T) {
+	assert.GreaterOrEqual(t, CurrentDataVersion(), 123,
+		"version 123 is the data-version boundary for Codex cache-write token normalization")
+}
+
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s-events", "proj")

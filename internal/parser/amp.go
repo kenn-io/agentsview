@@ -205,9 +205,9 @@ func ampFoldsCacheCreationIntoInput(model string) bool {
 //
 // Anthropic-family threads already carry Anthropic semantics and pass
 // through unchanged. OpenAI-family threads fold cache creation into
-// uncached input and emit no cache-creation bucket, mirroring
-// applyCodexTokenUsage: the cost formula treats input_tokens as the
-// uncached remainder, and OpenAI does not bill cache writes.
+// uncached input and emit no cache-creation bucket: Amp's OpenAI
+// cache-creation count is the whole uncached prompt, not a reported
+// cache write.
 //
 //	inputTokens (+ cacheCreationInputTokens for gpt-*) → input_tokens
 //	outputTokens                                       → output_tokens
