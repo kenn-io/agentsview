@@ -71,6 +71,9 @@ func RunBackfill(ctx context.Context, store *rawcheckpoint.Store, capturer *rawc
 			_, found, err := uploader.UploadNextForBackfill(ctx, runID)
 			if err != nil {
 				failure = "upload"
+				if errors.Is(err, rawupload.ErrPermanentFailure) {
+					failure = "rejected"
+				}
 				return false, rawcheckpoint.ErrBackfillIncomplete
 			}
 			if !found {

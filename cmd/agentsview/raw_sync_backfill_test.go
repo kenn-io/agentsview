@@ -136,6 +136,11 @@ func TestWriteRawSyncBackfillProgressFormatsFinalResult(t *testing.T) {
 	humanOut.Reset()
 	require.NoError(t, writeRawSyncBackfillProgress(&humanOut, "human", progress))
 	assert.Equal(t, "Backfill run-a incomplete: 2 captured, 2 acknowledged, 0 pending.\n", humanOut.String())
+
+	progress.Failures = map[string]int64{"rejected": 1}
+	humanOut.Reset()
+	require.NoError(t, writeRawSyncBackfillProgress(&humanOut, "human", progress))
+	assert.Contains(t, humanOut.String(), "start a new run ID")
 }
 
 func TestRecoverRawSyncBackfillCancellationEmitsDurableRun(t *testing.T) {

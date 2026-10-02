@@ -391,6 +391,9 @@ func writeRawSyncBackfillProgress(
 		out, "Backfill %s %s: %d captured, %d acknowledged, %d pending.\n",
 		progress.RunID, state, progress.Captured, progress.Acknowledged, progress.Pending,
 	)
+	if err == nil && progress.Failures["rejected"] > 0 {
+		_, err = fmt.Fprintln(out, "The server rejected a capture; fix the source and start a new run ID.")
+	}
 	return err
 }
 

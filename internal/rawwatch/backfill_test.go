@@ -425,10 +425,11 @@ func TestBackfillReportsPermanentlyRejectedCapture(t *testing.T) {
 	store, spec := backfillFixture(t, root)
 	opts := BackfillOptions{Spec: spec, Providers: []parser.Provider{newAuditProvider(root)}, BatchSize: 4}
 	rejecting := &recordingRawUploadTransport{commitErrs: []error{&rawclient.APIError{Status: 422, Code: rawclient.CodeChecksumMismatch}}}
-	_, err := RunBackfill(t.Context(), store, rawcapture.New(store), rawupload.New(store, rejecting, "device-a"), opts)
+	p, err := RunBackfill(t.Context(), store, rawcapture.New(store), rawupload.New(store, rejecting, "device-a"), opts)
 	require.Error(t, err)
+	require.Equal(t, int64(1), p.Failures["rejected"])
 
-	p, err := RunBackfill(t.Context(), store, rawcapture.New(store), rawupload.New(store, &recordingRawUploadTransport{}, "device-a"), opts)
+	p, err = RunBackfill(t.Context(), store, rawcapture.New(store), rawupload.New(store, &recordingRawUploadTransport{}, "device-a"), opts)
 
 	require.Error(t, err)
 	require.Equal(t, int64(1), p.Failures["rejected"])
