@@ -4,12 +4,19 @@ import (
 	"encoding/binary"
 	"os"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// walWithFramesFixture is placeholder WAL content larger than the 32-byte
+// WAL header. Composite-mtime fingerprints ignore WAL siblings at or under
+// header size (readers create those empty), so tests that expect a WAL write
+// to count need content past the header.
+var walWithFramesFixture = strings.Repeat("w", 4096)
 
 // TestSQLiteContainerStateIgnoresSubSecondMtimeChanges pins the state's
 // timestamp contract: mtime participates at whole-second granularity only,

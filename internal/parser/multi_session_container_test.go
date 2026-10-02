@@ -264,3 +264,47 @@ func TestParseEachKeepsOmnigentParseOverride(t *testing.T) {
 	}
 	assert.Equal(t, want, gotIDs)
 }
+
+// TestSQLiteContainerPathForEventIgnoresFramelessWAL pins the shared rule
+// every SQLite container provider routes events through: while the database
+// exists, a "-wal" event for a missing or header-only WAL (what a read
+// connection creates on open and deletes on close) resolves to nothing, and
+// a WAL holding frames, the database itself, or a deleted database's WAL
+// still resolves to the container.
+func TestSQLiteContainerPathForEventIgnoresFramelessWAL(t *testing.T) {
+	tests := []struct {
+		name   string
+		noDB   bool
+		wal    []byte
+		event  string
+		wantOK bool
+	}{
+		{name: "missing WAL", event: "-wal"},
+		{name: "empty WAL", wal: []byte{}, event: "-wal"},
+		{name: "header-only WAL", wal: make([]byte, 32), event: "-wal"},
+		{name: "WAL with frames", wal: []byte(walWithFramesFixture), event: "-wal", wantOK: true},
+		{name: "database file", event: "", wantOK: true},
+		{name: "journal", event: "-journal", wantOK: true},
+		{name: "deleted database WAL", noDB: true, event: "-wal", wantOK: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			dbPath := filepath.Join(root, "threads", "threads.db")
+			require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
+			if !tt.noDB {
+				require.NoError(t, os.WriteFile(dbPath, []byte("db"), 0o644))
+			}
+			if tt.wal != nil {
+				require.NoError(t, os.WriteFile(dbPath+"-wal", tt.wal, 0o644))
+			}
+			got, ok := sqliteContainerPathForEvent(
+				root, dbPath+tt.event, "threads/threads.db", true,
+			)
+			assert.Equal(t, tt.wantOK, ok)
+			if tt.wantOK {
+				assert.Equal(t, dbPath, got)
+			}
+		})
+	}
+}

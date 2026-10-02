@@ -681,7 +681,7 @@ func TestAntigravityCLIDBFileInfoIncludesWALButNotSHM(t *testing.T) {
 	mustMkdir(t, filepath.Join(root, "conversations"))
 	dbPath := filepath.Join(root, "conversations", id+".db")
 	mustWrite(t, dbPath, []byte("db"))
-	mustWrite(t, dbPath+"-wal", []byte("wal"))
+	mustWrite(t, dbPath+"-wal", []byte(walWithFramesFixture))
 	mustWrite(t, dbPath+"-shm", []byte("shm"))
 
 	early := time.Unix(1779000000, 0)
@@ -693,8 +693,35 @@ func TestAntigravityCLIDBFileInfoIncludesWALButNotSHM(t *testing.T) {
 
 	info, err := AntigravityCLIFileInfo(dbPath)
 	require.NoError(t, err)
-	assert.Equal(t, int64(len("dbwal")), info.Size())
+	assert.Equal(t, int64(len("db")+len(walWithFramesFixture)), info.Size())
 	assert.Equal(t, late.UnixNano(), info.ModTime().UnixNano())
+}
+
+// TestAntigravityCLIDBFileInfoIgnoresFramelessWAL pins that the empty WAL a
+// read connection leaves behind moves neither the effective size nor mtime.
+func TestAntigravityCLIDBFileInfoIgnoresFramelessWAL(t *testing.T) {
+	root := t.TempDir()
+	id := "55555555-6666-7777-8888-999999999999"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	mustWrite(t, dbPath, []byte("db"))
+	early := time.Unix(1779000000, 0)
+	require.NoError(t, os.Chtimes(dbPath, early, early))
+	before, err := AntigravityCLIFileInfo(dbPath)
+	require.NoError(t, err)
+
+	mustWrite(t, dbPath+"-wal", make([]byte, 32))
+	late := time.Unix(1779000300, 0)
+	require.NoError(t, os.Chtimes(dbPath+"-wal", late, late))
+	after, err := AntigravityCLIFileInfo(dbPath)
+	require.NoError(t, err)
+	assert.Equal(t, before.Size(), after.Size())
+	assert.Equal(t, before.ModTime(), after.ModTime())
+	hashBefore, err := antigravityCompositeHash(dbPath)
+	require.NoError(t, err)
+	hashAfter, err := antigravityCompositeHash(dbPath, dbPath+"-wal")
+	require.NoError(t, err)
+	assert.Equal(t, hashBefore, hashAfter)
 }
 
 func TestAntigravityCLIFileInfoIncludesHistoryForLegacySync(t *testing.T) {
@@ -2817,7 +2844,7 @@ func TestAntigravitySessionFileMetadataIncludesWAL(t *testing.T) {
 	require.NoError(t, err)
 
 	walPath := dbPath + "-wal"
-	mustWrite(t, walPath, []byte("wal bytes"))
+	mustWrite(t, walPath, []byte(walWithFramesFixture))
 	walTime := mainInfo.ModTime().Add(5 * time.Second)
 	require.NoError(t, os.Chtimes(walPath, walTime, walTime))
 

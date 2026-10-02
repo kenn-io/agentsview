@@ -1535,13 +1535,12 @@ func hermesArchiveFingerprint(source SourceRef, stateDB string) (SourceFingerpri
 		if walInfo.IsDir() {
 			return SourceFingerprint{}, fmt.Errorf("stat %s: source is a directory", walPath)
 		}
-		// A zero-length WAL carries no committed frames and is created as a
-		// side effect of merely opening the database read-only (the parse
-		// itself creates one). Folding its mtime into the fingerprint would
-		// make the identity computed before a parse never match the one
-		// computed after it, so every subsequent sync re-parses an unchanged
-		// archive. Skip the empty WAL; any real commit gives it frames.
-		if walInfo.Size() > 0 {
+		// A WAL with no frames is created as a side effect of merely opening
+		// the database read-only (the parse itself creates one). Folding its
+		// mtime into the fingerprint would make the identity computed before a
+		// parse never match the one computed after it, so every subsequent
+		// sync re-parses an unchanged archive. Any real commit adds frames.
+		if sqliteWALInfoHasFrames(walInfo) {
 			fingerprint.Size += walInfo.Size()
 			if mtime := walInfo.ModTime().UnixNano(); mtime > fingerprint.MTimeNS {
 				fingerprint.MTimeNS = mtime
@@ -1809,11 +1808,11 @@ func hermesArchiveEffectiveFileInfo(stateDB string) (int64, int64) {
 	}
 	size := info.Size()
 	mtime := info.ModTime().UnixNano()
-	// A zero-length WAL is a read-side artifact of opening the database and
+	// A WAL with no frames is a read-side artifact of opening the database and
 	// carries no committed frames; hermesArchiveFingerprint ignores it for the
 	// same reason, and the two aggregations must agree.
 	if walInfo, err := os.Stat(stateDB + "-wal"); err == nil &&
-		!walInfo.IsDir() && walInfo.Size() > 0 {
+		sqliteWALInfoHasFrames(walInfo) {
 		size += walInfo.Size()
 		if walMtime := walInfo.ModTime().UnixNano(); walMtime > mtime {
 			mtime = walMtime

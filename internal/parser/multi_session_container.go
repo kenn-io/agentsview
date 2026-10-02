@@ -113,7 +113,12 @@ func sqliteContainerUnderRoot(
 
 // sqliteContainerPathForEvent resolves a changed-path event naming the
 // database file itself or a WAL/SHM/journal sibling to the container's
-// canonical path.
+// canonical path. While the database exists, a "-wal" event whose WAL is
+// gone or holds no frames is ignored: every read connection, this process's
+// own included, creates an empty WAL on open and deletes it on close, so
+// resolving those events made each scan schedule the next one. A commit
+// writes frames past the header and a checkpoint writes the database file
+// itself, so no content change is lost. A deleted database still resolves.
 func sqliteContainerPathForEvent(
 	root, path, dbRelPath string, rejectShmSiblingEvents bool,
 ) (string, bool) {
@@ -131,7 +136,12 @@ func sqliteContainerPathForEvent(
 	if filepath.ToSlash(rel) == dbRelPath ||
 		(filepath.ToSlash(filepath.Dir(rel)) == dbDir &&
 			strings.HasPrefix(filepath.Base(rel), dbBase+"-")) {
-		return filepath.Join(root, filepath.FromSlash(dbRelPath)), true
+		dbPath := filepath.Join(root, filepath.FromSlash(dbRelPath))
+		if strings.HasSuffix(path, "-wal") && !sqliteWALHasFrames(path) &&
+			IsRegularFile(dbPath) {
+			return "", false
+		}
+		return dbPath, true
 	}
 	return "", false
 }

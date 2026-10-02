@@ -4,6 +4,7 @@ package parser
 
 import (
 	"database/sql"
+	"encoding/binary"
 	"encoding/json"
 	"encoding/json/jsontext"
 	"errors"
@@ -1209,4 +1210,76 @@ func TestCursorIDEParseEachReadsComposersOneAtATime(t *testing.T) {
 		require.ErrorIs(t, err, sentinel)
 		assert.Equal(t, 1, calls)
 	})
+}
+
+// TestCursorIDEContainerFingerprintIgnoresEmptyWAL pins that a reader-created
+// empty state.vscdb-wal does not change the container fingerprint. SQLite
+// creates that empty WAL whenever any connection (including this process's
+// own read-only scans) opens the WAL-mode database and deletes it on close,
+// so counting its mtime or header made every scan look like a change and
+// reparse the whole container in a loop while Cursor was not even running.
+func TestCursorIDEContainerFingerprintIgnoresEmptyWAL(t *testing.T) {
+	dbPath := createCursorIDEDB(t, []cursorIDETestComposer{{
+		id:        "142856b4-34d8-4950-ba25-b45fe1c47941",
+		name:      "Thread",
+		createdAt: 1782026756842,
+		updatedAt: 1782026791522,
+	}})
+	walPath := dbPath + "-wal"
+	_ = os.Remove(walPath)
+	src := multiSessionSource{Container: dbPath, Path: dbPath}
+
+	before, err := cursorIDEFingerprintSource(t.Context(), src)
+	require.NoError(t, err)
+	require.NotEmpty(t, before.Hash)
+
+	require.NoError(t, os.WriteFile(walPath, nil, 0o644))
+	future := time.Now().Add(time.Hour)
+	require.NoError(t, os.Chtimes(walPath, future, future))
+	withEmptyWAL, err := cursorIDEFingerprintSource(t.Context(), src)
+	require.NoError(t, err)
+	assert.Equal(t, before, withEmptyWAL,
+		"an empty WAL holds no frames and must not change the fingerprint")
+
+	// A WAL that can carry frames still counts.
+	frames := make([]byte, 4096)
+	binary.BigEndian.PutUint32(frames[0:4], sqliteWALMagicBE)
+	require.NoError(t, os.WriteFile(walPath, frames, 0o644))
+	require.NoError(t, os.Chtimes(walPath, future, future))
+	withFrames, err := cursorIDEFingerprintSource(t.Context(), src)
+	require.NoError(t, err)
+	assert.NotEqual(t, before.Hash, withFrames.Hash)
+	assert.Equal(t, future.UnixNano(), withFrames.MTimeNS)
+}
+
+// TestCursorIDEClassifyPathIgnoresEmptyWALEvents pins that the create and
+// delete events of a reader's empty WAL do not resolve to the container, so
+// a scan's own read connection cannot schedule the next scan. A WAL holding
+// frames, and the database file itself, still resolve.
+func TestCursorIDEClassifyPathIgnoresEmptyWALEvents(t *testing.T) {
+	dbPath := createCursorIDEDB(t, []cursorIDETestComposer{{
+		id:        "142856b4-34d8-4950-ba25-b45fe1c47941",
+		name:      "Thread",
+		createdAt: 1782026756842,
+		updatedAt: 1782026791522,
+	}})
+	root := filepath.Dir(dbPath)
+	walPath := dbPath + "-wal"
+
+	_ = os.Remove(walPath)
+	_, ok := cursorIDEClassifyPath(root, walPath, true)
+	assert.False(t, ok, "a deleted reader WAL must not resolve to the container")
+
+	require.NoError(t, os.WriteFile(walPath, nil, 0o644))
+	_, ok = cursorIDEClassifyPath(root, walPath, true)
+	assert.False(t, ok, "an empty reader WAL must not resolve to the container")
+
+	require.NoError(t, os.WriteFile(walPath, []byte(walWithFramesFixture), 0o644))
+	match, ok := cursorIDEClassifyPath(root, walPath, true)
+	require.True(t, ok, "a WAL with frames must resolve to the container")
+	assert.Equal(t, dbPath, match.Container)
+
+	match, ok = cursorIDEClassifyPath(root, dbPath, true)
+	require.True(t, ok)
+	assert.Equal(t, dbPath, match.Container)
 }

@@ -186,6 +186,14 @@ The latest published release is
   missing when an earlier export was archived. The archived message keeps its
   place and any pin. Re-importing a conversation you trashed now skips it
   instead of reporting an error.
+- Cursor IDE chats stop re-syncing in a loop while Cursor is closed. Opening
+  Cursor's `state.vscdb` to read it makes SQLite create an empty `-wal` file
+  and delete it again on close, and AgentsView counted that file's appearance
+  and timestamp as a change, so each pass re-read every Cursor chat and
+  scheduled the next pass. On a large Cursor history this kept one or more CPU
+  cores busy indefinitely. An empty write-ahead log no longer counts as a
+  change for Cursor IDE or for other agents whose sessions live in SQLite
+  databases; real writes still sync as before.
 - Antigravity IDE and Antigravity CLI sessions stop re-syncing in a loop.
   Reading a session database rewrote its shared-memory (`-shm`) file, and
   AgentsView counted that as a change, so every pass re-read and re-uploaded

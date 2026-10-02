@@ -90,7 +90,7 @@ func TestAntigravityProviderFingerprintAndParse(t *testing.T) {
 	assert.NotEmpty(t, before.Hash)
 
 	walPath := dbPath + "-wal"
-	writeSourceFile(t, walPath, "wal")
+	writeSourceFile(t, walPath, walWithFramesFixture)
 	walTime := time.Unix(0, before.MTimeNS+int64(time.Second))
 	require.NoError(t, os.Chtimes(walPath, walTime, walTime))
 	after, err := provider.Fingerprint(t.Context(), source)
@@ -1191,7 +1191,7 @@ func TestAntigravityProvidersFingerprintIgnoresShm(t *testing.T) {
 			assert.Equal(t, beforeInfo, afterInfo)
 
 			walTime := base.Add(2 * time.Hour)
-			writeSourceFile(t, walPath, "wal with a committed frame")
+			writeSourceFile(t, walPath, walWithFramesFixture)
 			require.NoError(t, os.Chtimes(walPath, walTime, walTime))
 			afterWAL, err := provider.Fingerprint(t.Context(), source)
 			require.NoError(t, err)

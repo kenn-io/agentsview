@@ -1275,3 +1275,71 @@ func TestReconcileCursorIDECancelledContainerParsePublishesNothing(t *testing.T)
 	require.NoError(t, engine.ReconcileProviderRoots(t.Context(), parser.AgentCursorIDE, []string{root}))
 	assert.Equal(t, 3, cursorIDESessionForTest(t, database, "composer-0000").MessageCount)
 }
+
+// TestSyncPathsCursorIDEFramelessWALEventDoesNotReparse pins that the WAL a
+// read connection creates on open and deletes on close cannot trigger a
+// parse: a "-wal" event for a missing or header-only WAL is ignored, while a
+// WAL holding committed frames still routes to the container.
+func TestSyncPathsCursorIDEFramelessWALEventDoesNotReparse(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "state.vscdb")
+	walPath := dbPath + "-wal"
+	composer := cursorIDESyncComposer{
+		id: "wal-composer", name: "Original",
+		createdAt: 1782026756842, updatedAt: 1782026791522,
+		bubbles: []cursorIDESyncBubble{{
+			id: "b1", bubbleType: 1, text: "hello",
+			createdAt: "2026-06-21T07:27:29.606Z",
+		}},
+	}
+	createCursorIDEStateDB(t, dbPath, []cursorIDESyncComposer{composer})
+	engine, database := newCursorIDESyncEngine(t, root)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+
+	displayName := func() string {
+		t.Helper()
+		sess, err := database.GetSession(t.Context(), "cursor-ide:wal-composer")
+		require.NoError(t, err)
+		require.NotNil(t, sess)
+		require.NotNil(t, sess.DisplayName)
+		return *sess.DisplayName
+	}
+	rename := func(writer *sql.DB, name string, updatedAt int64) {
+		t.Helper()
+		composer.name, composer.updatedAt = name, updatedAt
+		_, err := writer.ExecContext(t.Context(),
+			`UPDATE cursorDiskKV SET value = ? WHERE key = ?`,
+			cursorIDEComposerJSON(t, composer), "composerData:wal-composer",
+		)
+		require.NoError(t, err)
+	}
+
+	// Change the database behind the engine's back so a parse would show.
+	writer, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = writer.ExecContext(t.Context(), `PRAGMA journal_mode=WAL`)
+	require.NoError(t, err)
+	rename(writer, "Unsynced", 1782026801522)
+	require.NoError(t, writer.Close())
+	require.NoFileExists(t, walPath, "setup: closing the last connection removes the WAL")
+
+	engine.SyncPaths([]string{walPath})
+	assert.Equal(t, "Original", displayName(), "a deleted WAL must not trigger a parse")
+
+	require.NoError(t, os.WriteFile(walPath, make([]byte, 32), 0o644))
+	engine.SyncPaths([]string{walPath})
+	assert.Equal(t, "Original", displayName(), "a header-only WAL must not trigger a parse")
+	require.NoError(t, os.Remove(walPath))
+
+	// An open writer leaves committed frames in the WAL.
+	writer, err = sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = writer.Close() })
+	rename(writer, "Committed", 1782026811522)
+	info, err := os.Stat(walPath)
+	require.NoError(t, err)
+	require.Greater(t, info.Size(), int64(32), "setup: the WAL must hold frames")
+
+	engine.SyncPaths([]string{walPath})
+	assert.Equal(t, "Committed", displayName(), "a WAL with frames must still sync")
+}

@@ -649,13 +649,13 @@ func TestHermesArchiveFingerprintIgnoresEmptyWAL(t *testing.T) {
 	assert.Equal(t, before.Hash, after.Hash,
 		"a zero-length WAL must not change the archive hash")
 
-	require.NoError(t, os.WriteFile(walPath, []byte("wal frames"), 0o644))
+	require.NoError(t, os.WriteFile(walPath, []byte(walWithFramesFixture), 0o644))
 	committedTime := walTime.Add(2 * time.Second)
 	require.NoError(t, os.Chtimes(walPath, committedTime, committedTime))
 
 	committed, err := provider.Fingerprint(t.Context(), discovered[0])
 	require.NoError(t, err)
-	assert.Equal(t, before.Size+int64(len("wal frames")), committed.Size,
+	assert.Equal(t, before.Size+int64(len(walWithFramesFixture)), committed.Size,
 		"a WAL with frames must add its size to the archive fingerprint")
 	assert.Equal(t, committedTime.UnixNano(), committed.MTimeNS,
 		"a WAL with frames must advance the archive freshness")

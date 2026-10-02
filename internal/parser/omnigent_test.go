@@ -723,6 +723,7 @@ func TestOmnigentChangedPathParsingIsBounded(t *testing.T) {
 					'changed')`, changedID+"_i1", changedID)
 			require.NoError(t, err)
 			require.NoError(t, writer.Close())
+			writeSourceFile(t, path+"-wal", walWithFramesFixture)
 
 			changed, err := provider.SourcesForChangedPath(
 				t.Context(), ChangedPathRequest{
@@ -1700,6 +1701,7 @@ func TestOmnigentShmEventDoesNotResolveToContainer(t *testing.T) {
 	assert.False(t, ok,
 		"-shm events come from the provider's own read connections and "+
 			"must not schedule a scan")
+	writeSourceFile(t, path+"-wal", walWithFramesFixture)
 	match, ok := omnigentClassifyPath(root, path+"-wal", true)
 	require.True(t, ok, "-wal events carry real commits")
 	assert.Equal(t, path, match.Container)

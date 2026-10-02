@@ -303,6 +303,7 @@ func TestMultiSessionChangedPathMemberTokens(t *testing.T) {
 	t.Run("stored freshness container", func(t *testing.T) {
 		f := newMemberTokenFixture(t)
 		set := f.sourceSet(nil, nil, true, nil)
+		writeSourceFile(t, f.dbPath+"-wal", walWithFramesFixture)
 		for _, path := range []string{f.dbPath, f.dbPath + "-wal"} {
 			container, ok := set.StoredMemberFreshnessContainer(path)
 			assert.True(t, ok, path)

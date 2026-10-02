@@ -880,7 +880,7 @@ func antigravityCLICombinedFileInfo(
 	mtime := base.ModTime().UnixNano()
 	for _, p := range companions {
 		info, err := os.Stat(p)
-		if err != nil {
+		if err != nil || !antigravityCompanionCounts(p, info) {
 			continue
 		}
 		size += info.Size()
@@ -893,6 +893,12 @@ func antigravityCLICombinedFileInfo(
 		size:  size,
 		mtime: mtime,
 	}
+}
+
+// antigravityCompanionCounts drops a frame-less WAL companion: reading the
+// database creates and deletes one, which must not look like a change.
+func antigravityCompanionCounts(path string, info os.FileInfo) bool {
+	return !strings.HasSuffix(path, "-wal") || sqliteWALInfoHasFrames(info)
 }
 
 func antigravityCompositeHash(path string, companions ...string) (string, error) {
@@ -925,7 +931,8 @@ func antigravityCompositeHashWithExtra(
 		}
 		prev = companion
 		info, err := os.Stat(companion)
-		if err != nil || info.IsDir() {
+		if err != nil || info.IsDir() ||
+			!antigravityCompanionCounts(companion, info) {
 			continue
 		}
 		if err := addAntigravityFingerprintPart(

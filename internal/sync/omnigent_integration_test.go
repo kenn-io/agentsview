@@ -366,7 +366,7 @@ func TestSyncOmnigentChangedPathWorkIsBounded(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, writer.Close())
 
-			engine.SyncPaths([]string{dbPath + "-wal"})
+			engine.SyncPaths([]string{dbPath})
 			assert.Equal(t, 1, engine.LastSyncStats().Synced,
 				"one changed conversation should produce one archive write")
 			changed, err := archive.GetSessionFull(

@@ -167,6 +167,13 @@ func TestClassifyStoredHintProviderChangedPathAllocationsStayBoundedByContainer(
 		"unrelated stored containers must not scale changed-path allocations")
 }
 
+// writeWALWithFrames leaves a WAL sibling past the 32-byte header, as an open
+// writer would; a frame-less WAL event never routes to its container.
+func writeWALWithFrames(t *testing.T, dbPath string) {
+	t.Helper()
+	require.NoError(t, os.WriteFile(dbPath+"-wal", make([]byte, 4096), 0o644))
+}
+
 func TestClassifyProviderChangedPathPreservesHintDependentTombstones(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -204,6 +211,7 @@ func TestClassifyProviderChangedPathPreservesHintDependentTombstones(t *testing.
 					folder_paths TEXT, folder_paths_order TEXT, created_at TEXT)`)
 				require.NoError(t, err)
 				require.NoError(t, store.Close())
+				writeWALWithFrames(t, path)
 				return root, path + "-wal", parser.ZedSQLiteVirtualPath(path, "deleted")
 			},
 		},
@@ -250,6 +258,7 @@ func TestClassifyProviderChangedPathPreservesHintDependentTombstones(t *testing.
 				_, err = store.ExecContext(t.Context(), `DELETE FROM conversations_v2 WHERE conversation_id = 'deleted'`)
 				require.NoError(t, err)
 				require.NoError(t, store.Close())
+				writeWALWithFrames(t, path)
 				return root, path + "-wal", parser.KiroSQLiteVirtualPath(path, "deleted")
 			},
 		},

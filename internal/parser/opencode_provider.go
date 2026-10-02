@@ -8,7 +8,6 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -1996,20 +1995,6 @@ func (spec openCodeProviderSpec) dbPathForEvent(root, path string) (string, bool
 		name = spec.format.dbName
 	}
 	return filepath.Join(root, name), true
-}
-
-func sqliteWALHasFrames(path string) bool {
-	info, err := os.Stat(path)
-	if err != nil {
-		// Only a missing WAL is a definitive no-op. Other stat failures fail
-		// open so a real update is synced instead of silently dropped; at
-		// worst that costs one redundant sync.
-		return !errors.Is(err, fs.ErrNotExist)
-	}
-	if info == nil {
-		return false
-	}
-	return info.Mode().IsRegular() && info.Size() > sqliteWALHeaderSize
 }
 
 func (s openCodeFormatSourceSet) sourceForRawID(ctx context.Context, root, sessionID string) (SourceRef, bool) {

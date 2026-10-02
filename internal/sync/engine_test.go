@@ -7483,7 +7483,7 @@ func TestProcessAntigravityWALOnlyUpdateNotSkipped(t *testing.T) {
 
 	// WAL-only update: the main .db is untouched.
 	walPath := dbPath + "-wal"
-	require.NoError(t, os.WriteFile(walPath, []byte("wal bytes"), 0o644))
+	require.NoError(t, os.WriteFile(walPath, []byte(strings.Repeat("w", 4096)), 0o644))
 	info, err := os.Stat(dbPath)
 	require.NoError(t, err)
 	walTime := info.ModTime().Add(5 * time.Second)

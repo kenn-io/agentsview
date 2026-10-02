@@ -366,6 +366,9 @@ func TestOpenClawSQLiteChangedPathExpandsAndRemapsRoots(t *testing.T) {
 	}
 	for _, suffix := range []string{"", "-wal", "-journal"} {
 		t.Run("event "+suffix, func(t *testing.T) {
+			if suffix == "-wal" {
+				writeSourceFile(t, secondDB+suffix, walWithFramesFixture)
+			}
 			changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 				Path:      secondDB + suffix,
 				EventKind: "write",
@@ -1285,6 +1288,9 @@ func TestOpenClawSQLiteStoreChangedPathRouting(t *testing.T) {
 
 	for _, suffix := range []string{"", "-wal", "-journal"} {
 		t.Run("routes "+suffix, func(t *testing.T) {
+			if suffix == "-wal" {
+				writeSourceFile(t, dbPath+suffix, walWithFramesFixture)
+			}
 			changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 				Path:      dbPath + suffix,
 				EventKind: "write",
