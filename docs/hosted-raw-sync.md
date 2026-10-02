@@ -285,9 +285,11 @@ agentsview raw-sync backfill \
 ```
 
 Batch size may be 1–512 and can change between attempts. The run ID is bound to
-the device, server, selected providers, and configured roots. Reordered or
-duplicate provider flags describe the same selection. A changed destination,
-device, provider set, or root set needs a new run ID.
+the device, server, selected providers, and the root entries as written in the
+configuration. Reordered or duplicate provider flags describe the same
+selection. A changed destination, device, provider set, or root entry needs a
+new run ID. A started run keeps the roots it resolved on its first attempt, so
+captured work still uploads after a source root is unmounted.
 
 Each invocation is finite. It does not sleep until a failed or deferred upload
 becomes eligible. An incomplete attempt prints current aggregate progress and

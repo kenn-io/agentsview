@@ -225,6 +225,7 @@ func TestRawSyncBackfillSpecReusesCompletedSelectionAfterRootRemoval(t *testing.
 		RunID: "run-complete", DeviceID: "device-a", Destination: "https://sync.example.test",
 		Providers: []parser.AgentType{parser.AgentClaude},
 		Roots:     []rawcheckpoint.BackfillSelection{{Provider: parser.AgentClaude, ConfiguredRootID: configured.ID}},
+		Entries:   []rawcheckpoint.BackfillEntry{{Provider: parser.AgentClaude, Path: root}},
 	}
 	_, err = store.BeginBackfill(t.Context(), original)
 	require.NoError(t, err)
@@ -239,85 +240,17 @@ func TestRawSyncBackfillSpecReusesCompletedSelectionAfterRootRemoval(t *testing.
 
 	got, err := rawSyncBackfillSpec(t.Context(), store, rawSyncBackfillConfig{
 		RunID: original.RunID, DeviceID: original.DeviceID, Server: original.Destination,
-	}, []rawSyncBackfillProvider{{Provider: provider, ConfiguredRoots: []string{root}}})
+	}, []rawSyncBackfillProvider{{Provider: provider, ConfigEntries: []string{root}, ConfiguredRoots: []string{root}}})
 
 	require.NoError(t, err)
 	assert.Equal(t, original, got)
-}
 
-func TestRawSyncBackfillSpecReusesCompletedDanglingSymlinkSelection(t *testing.T) {
-	base := t.TempDir()
-	target := filepath.Join(base, "sessions")
-	link := filepath.Join(base, "configured")
-	require.NoError(t, os.Mkdir(target, 0o700))
-	requireSymlinkOrSkip(t, target, link)
-	store, original, provider := completedRawSyncBackfillSelection(t, link)
-	require.NoError(t, os.Remove(target))
-
-	got, err := rawSyncBackfillSpec(t.Context(), store, rawSyncBackfillConfig{
+	changed, err := rawSyncBackfillSpec(t.Context(), store, rawSyncBackfillConfig{
 		RunID: original.RunID, DeviceID: original.DeviceID, Server: original.Destination,
-	}, []rawSyncBackfillProvider{{Provider: provider, ConfiguredRoots: []string{link}}})
-
+	}, []rawSyncBackfillProvider{{Provider: provider, ConfigEntries: []string{root + "-moved"}, ConfiguredRoots: []string{root + "-moved"}}})
 	require.NoError(t, err)
-	assert.Equal(t, original, got)
-}
-
-func TestRawSyncBackfillSpecRejectsRetargetedDanglingSymlink(t *testing.T) {
-	base := t.TempDir()
-	target := filepath.Join(base, "sessions")
-	otherTarget := filepath.Join(base, "other-sessions")
-	link := filepath.Join(base, "configured")
-	require.NoError(t, os.Mkdir(target, 0o700))
-	requireSymlinkOrSkip(t, target, link)
-	store, original, provider := completedRawSyncBackfillSelection(t, link)
-	require.NoError(t, os.Remove(link))
-	require.NoError(t, os.Mkdir(otherTarget, 0o700))
-	requireSymlinkOrSkip(t, otherTarget, link)
-	require.NoError(t, os.Remove(otherTarget))
-
-	_, err := rawSyncBackfillSpec(t.Context(), store, rawSyncBackfillConfig{
-		RunID: original.RunID, DeviceID: original.DeviceID, Server: original.Destination,
-	}, []rawSyncBackfillProvider{{Provider: provider, ConfiguredRoots: []string{link}}})
-
+	_, err = store.BeginBackfill(t.Context(), changed)
 	require.ErrorIs(t, err, rawcheckpoint.ErrBackfillConflict)
-}
-
-func completedRawSyncBackfillSelection(
-	t *testing.T,
-	configuredPath string,
-) (*rawcheckpoint.Store, rawcheckpoint.BackfillRunSpec, parser.Provider) {
-	t.Helper()
-	store, err := rawcheckpoint.Open(t.Context(), filepath.Join(t.TempDir(), "checkpoint.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	require.NoError(t, store.SetDevice(t.Context(), "device-a"))
-	configured, err := store.ResolveConfiguredRoot(
-		t.Context(), parser.AgentClaude, configuredPath,
-	)
-	require.NoError(t, err)
-	spec := rawcheckpoint.BackfillRunSpec{
-		RunID: "run-complete-symlink", DeviceID: "device-a",
-		Destination: "https://sync.example.test",
-		Providers:   []parser.AgentType{parser.AgentClaude},
-		Roots: []rawcheckpoint.BackfillSelection{{
-			Provider: parser.AgentClaude, ConfiguredRootID: configured.ID,
-		}},
-	}
-	_, err = store.BeginBackfill(t.Context(), spec)
-	require.NoError(t, err)
-	require.NoError(t, store.FinishBackfillProvider(
-		t.Context(), spec.RunID, parser.AgentClaude,
-		rawcheckpoint.BackfillPassResult{Complete: true},
-	))
-	_, err = store.SealBackfill(t.Context(), spec.RunID)
-	require.NoError(t, err)
-	_, err = store.CompleteBackfill(t.Context(), spec.RunID)
-	require.NoError(t, err)
-	provider, ok := parser.NewProvider(parser.AgentClaude, parser.ProviderConfig{
-		Roots: []string{configuredPath},
-	})
-	require.True(t, ok)
-	return store, spec, provider
 }
 
 type testBuffer struct{ data []byte }
@@ -524,18 +457,60 @@ func TestRawSyncBackfillCompletesGooseRootsTheProviderNormalizes(t *testing.T) {
 	}
 }
 
-func TestSameRawSyncConfiguredRootsCollapsesSymlinkAliases(t *testing.T) {
-	base := t.TempDir()
-	root := filepath.Join(base, "sessions")
-	alias := filepath.Join(base, "alias")
-	require.NoError(t, os.Mkdir(root, 0o700))
-	if err := os.Symlink(root, alias); err != nil {
-		t.Skipf("symlink not supported: %v", err)
-	}
-	canonical, err := filepath.EvalSymlinks(root)
-	require.NoError(t, err)
+type flakyRawSyncBackfillTransport struct {
+	acceptingRawSyncBackfillTransport
+	fail bool
+}
 
-	assert.True(t, sameRawSyncConfiguredRoots(
-		[]string{root, alias}, []rawcheckpoint.ConfiguredRoot{{LocalPath: canonical}},
-	))
+func (t *flakyRawSyncBackfillTransport) CommitManifest(ctx context.Context, manifest rawsync.Manifest) (rawsync.CommitResult, error) {
+	if t.fail {
+		return rawsync.CommitResult{}, errors.New("server unavailable")
+	}
+	return t.acceptingRawSyncBackfillTransport.CommitManifest(ctx, manifest)
+}
+
+func TestRawSyncBackfillSealedRunUploadsAfterSourceRootUnmounted(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "sessions")
+	rawtest.Claude(t, root)
+	now := time.Now()
+	base := t.TempDir()
+	store, err := rawcheckpoint.OpenWithOptions(t.Context(), filepath.Join(base, "checkpoint.db"), rawcheckpoint.Options{
+		SpoolDir: filepath.Join(base, "spool"), MaxOutboxBytes: 1 << 20, Now: func() time.Time { return now },
+	})
+	require.NoError(t, err)
+	defer store.Close()
+	require.NoError(t, store.SetDevice(t.Context(), "device-a"))
+	cfg := config.Config{AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}}
+	backfill := rawSyncBackfillConfig{
+		RunID: "run-sealed", DeviceID: "device-a", Server: "https://sync.example.test",
+		Providers: []string{"claude"}, Format: "json", BatchSize: 8,
+	}
+	attempt := func(transport *flakyRawSyncBackfillTransport) (rawcheckpoint.BackfillProgress, error) {
+		selected, err := selectRawSyncBackfillProviders(cfg, backfill.Providers)
+		require.NoError(t, err)
+		spec, err := rawSyncBackfillSpec(t.Context(), store, backfill, selected)
+		require.NoError(t, err)
+		var output testBuffer
+		runErr := runRawSyncBackfillAttempt(t.Context(), &output, backfill, store, spec,
+			[]parser.Provider{selected[0].Provider}, transport)
+		var progress rawcheckpoint.BackfillProgress
+		require.NoError(t, json.Unmarshal(output.data, &progress))
+		return progress, runErr
+	}
+
+	progress, err := attempt(&flakyRawSyncBackfillTransport{fail: true})
+	require.Error(t, err)
+	require.Equal(t, "sealed", progress.Discovery)
+	require.Positive(t, progress.Pending)
+
+	require.NoError(t, os.RemoveAll(root))
+	now = now.Add(2 * time.Hour)
+	transport := &flakyRawSyncBackfillTransport{}
+	progress, err = attempt(transport)
+
+	require.NoError(t, err)
+	assert.True(t, progress.Complete)
+	assert.Positive(t, progress.Acknowledged)
+	assert.Equal(t, progress.Captured, progress.Acknowledged)
+	assert.Positive(t, transport.commits)
 }

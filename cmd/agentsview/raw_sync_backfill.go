@@ -41,7 +41,10 @@ type rawSyncBackfillConfig struct {
 }
 
 type rawSyncBackfillProvider struct {
-	Provider        parser.Provider
+	Provider parser.Provider
+	// ConfigEntries are the configured paths; ConfiguredRoots are the
+	// provider's normalized capture roots resolved from them.
+	ConfigEntries   []string
 	ConfiguredRoots []string
 }
 
@@ -175,10 +178,11 @@ func selectRawSyncBackfillProviders(
 		if factory.Capabilities().RawCapture.Support != parser.CapabilitySupported {
 			return nil, errors.New("selected provider does not support raw capture")
 		}
-		roots, err := absoluteRawSyncBackfillRoots(rawSyncFilesystemRoots(cfg.ResolveDirs(typ)))
+		entries, err := absoluteRawSyncBackfillRoots(rawSyncFilesystemRoots(cfg.ResolveDirs(typ)))
 		if err != nil {
 			return nil, err
 		}
+		roots := slices.Clone(entries)
 		provider := factory.NewProvider(parser.ProviderConfig{
 			Roots: roots, Machine: cfg.LocalMachineName,
 			SourceMachines: cfg.SourceMachines[typ],
@@ -194,7 +198,7 @@ func selectRawSyncBackfillProviders(
 			return nil, errors.New("selected provider has no configured filesystem roots")
 		}
 		selected = append(selected, rawSyncBackfillProvider{
-			Provider: provider, ConfiguredRoots: roots,
+			Provider: provider, ConfigEntries: entries, ConfiguredRoots: roots,
 		})
 	}
 	return selected, nil
@@ -288,14 +292,21 @@ func rawSyncBackfillSpec(
 	spec := rawcheckpoint.BackfillRunSpec{
 		RunID: cfg.RunID, DeviceID: cfg.DeviceID, Destination: cfg.Server,
 	}
-	if progress, err := store.BackfillProgress(ctx, cfg.RunID); err == nil && progress.Complete {
-		for _, item := range selected {
-			typ := item.Provider.Definition().Type
+	for _, item := range selected {
+		typ := item.Provider.Definition().Type
+		spec.Providers = append(spec.Providers, typ)
+		for _, entry := range item.ConfigEntries {
+			spec.Entries = append(spec.Entries, rawcheckpoint.BackfillEntry{Provider: typ, Path: entry})
+		}
+	}
+	// An existing run keeps its saved roots, so it resumes even when a source
+	// root is unmounted; BeginBackfill rejects it if the config entries changed.
+	if _, err := store.BackfillProgress(ctx, cfg.RunID); err == nil {
+		for _, typ := range spec.Providers {
 			stored, err := store.BackfillRoots(ctx, cfg.RunID, typ)
-			if err != nil || !sameRawSyncConfiguredRoots(item.ConfiguredRoots, stored) {
+			if err != nil {
 				return rawcheckpoint.BackfillRunSpec{}, rawcheckpoint.ErrBackfillConflict
 			}
-			spec.Providers = append(spec.Providers, typ)
 			for _, root := range stored {
 				spec.Roots = append(spec.Roots, rawcheckpoint.BackfillSelection{
 					Provider: typ, ConfiguredRootID: root.ID,
@@ -306,7 +317,6 @@ func rawSyncBackfillSpec(
 	}
 	for _, item := range selected {
 		typ := item.Provider.Definition().Type
-		spec.Providers = append(spec.Providers, typ)
 		for _, path := range item.ConfiguredRoots {
 			root, err := store.ResolveConfiguredRoot(ctx, typ, path)
 			if err != nil {
@@ -318,71 +328,6 @@ func rawSyncBackfillSpec(
 		}
 	}
 	return spec, nil
-}
-
-func sameRawSyncConfiguredRoots(
-	configured []string,
-	stored []rawcheckpoint.ConfiguredRoot,
-) bool {
-	current := make([]string, 0, len(configured))
-	for _, root := range configured {
-		current = append(current, historicalRawSyncRootIdentity(root))
-	}
-	want := make([]string, 0, len(stored))
-	for _, root := range stored {
-		want = append(want, filepath.Clean(root.LocalPath))
-	}
-	slices.Sort(current)
-	current = slices.Compact(current)
-	slices.Sort(want)
-	return slices.Equal(current, want)
-}
-
-// historicalRawSyncRootIdentity resolves symlink prefixes without requiring
-// the final target to exist. Completed runs use this only to compare current
-// configuration with their durable canonical root identity.
-func historicalRawSyncRootIdentity(root string) string {
-	absolute, err := filepath.Abs(root)
-	if err != nil {
-		return filepath.Clean(root)
-	}
-	absolute = filepath.Clean(absolute)
-	if canonical, err := filepath.EvalSymlinks(absolute); err == nil {
-		return filepath.Clean(canonical)
-	}
-
-	candidate := absolute
-	for range 255 {
-		prefix, suffix := candidate, ""
-		for {
-			info, statErr := os.Lstat(prefix)
-			if statErr == nil {
-				if info.Mode()&os.ModeSymlink != 0 {
-					target, readErr := os.Readlink(prefix)
-					if readErr != nil {
-						return absolute
-					}
-					if !filepath.IsAbs(target) {
-						target = filepath.Join(filepath.Dir(prefix), target)
-					}
-					candidate = filepath.Clean(filepath.Join(target, suffix))
-					break
-				}
-				canonical, evalErr := filepath.EvalSymlinks(prefix)
-				if evalErr != nil {
-					return absolute
-				}
-				return filepath.Clean(filepath.Join(canonical, suffix))
-			}
-			parent := filepath.Dir(prefix)
-			if parent == prefix {
-				return absolute
-			}
-			suffix = filepath.Join(filepath.Base(prefix), suffix)
-			prefix = parent
-		}
-	}
-	return absolute
 }
 
 func recoverRawSyncBackfillProgress(

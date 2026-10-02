@@ -22,10 +22,19 @@ type BackfillSelection struct {
 	Provider         parser.AgentType
 	ConfiguredRootID string
 }
+
+// BackfillEntry is one configured root entry as written in the user's
+// configuration, before the provider resolves it to capture roots.
+type BackfillEntry struct {
+	Provider parser.AgentType
+	Path     string
+}
+
 type BackfillRunSpec struct {
 	RunID, DeviceID, Destination string
 	Providers                    []parser.AgentType
 	Roots                        []BackfillSelection
+	Entries                      []BackfillEntry
 }
 type BackfillProgress struct {
 	RunID        string           `json:"run_id"`
@@ -72,6 +81,19 @@ func (s *Store) BeginBackfill(ctx context.Context, spec BackfillRunSpec) (Backfi
 		return strings.Compare(a.ConfiguredRootID, b.ConfiguredRootID)
 	})
 	spec.Roots = slices.Compact(spec.Roots)
+	spec.Entries = slices.Clone(spec.Entries)
+	slices.SortFunc(spec.Entries, func(a, b BackfillEntry) int {
+		if n := strings.Compare(string(a.Provider), string(b.Provider)); n != 0 {
+			return n
+		}
+		return strings.Compare(a.Path, b.Path)
+	})
+	spec.Entries = slices.Compact(spec.Entries)
+	for _, entry := range spec.Entries {
+		if !slices.Contains(spec.Providers, entry.Provider) {
+			return BackfillProgress{}, ErrBackfillConflict
+		}
+	}
 	err = s.withImmediateWrite(ctx, "begin backfill", func(conn *sql.Conn) error {
 		if err := requireConfiguredDeviceConn(ctx, conn, spec.DeviceID); err != nil {
 			return err
@@ -95,7 +117,8 @@ func (s *Store) BeginBackfill(ctx context.Context, spec BackfillRunSpec) (Backfi
 		selection, err := json.Marshal(struct {
 			Providers []parser.AgentType
 			Roots     []rootSelection
-		}{spec.Providers, selected}, jsontext.AllowInvalidUTF8(true))
+			Entries   []BackfillEntry
+		}{spec.Providers, selected, spec.Entries}, jsontext.AllowInvalidUTF8(true))
 		if err != nil {
 			return ErrBackfillConflict
 		}
