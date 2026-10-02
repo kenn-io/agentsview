@@ -492,6 +492,7 @@ func newTokenUseCommand() *cobra.Command {
 
 func newImportCommand() *cobra.Command {
 	var importType string
+	var replace []string
 	cmd := &cobra.Command{
 		Use:          "import --type <type> <path>",
 		Short:        "Import conversations",
@@ -499,10 +500,11 @@ func newImportCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
-			runImport(ImportConfig{Type: importType, Path: args[0]})
+			runImport(ImportConfig{Type: importType, Path: args[0], Replace: replace})
 		},
 	}
 	cmd.Flags().StringVar(&importType, "type", "", "Import type: claude-ai, chatgpt, gemini-apps")
+	cmd.Flags().StringArrayVar(&replace, "replace", nil, "Session ID whose archived messages this import may replace when the default import refuses them; repeatable (claude-ai, chatgpt)")
 	_ = cmd.MarkFlagRequired("type")
 	return cmd
 }

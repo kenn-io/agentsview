@@ -358,6 +358,7 @@ export async function importClaudeAI(file: File, cb?: ImportCallbacks): Promise<
   return readImportResponse(
     await ImportService.postApiV1ImportClaudeAi(
       { file },
+      undefined,
       {
         headers: { Accept: "text/event-stream" },
       },
@@ -370,6 +371,7 @@ export async function importChatGPT(file: File, cb?: ImportCallbacks): Promise<I
   return readImportResponse(
     await ImportService.postApiV1ImportChatgpt(
       { file },
+      undefined,
       {
         headers: { Accept: "text/event-stream" },
       },

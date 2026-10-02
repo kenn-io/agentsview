@@ -52,6 +52,21 @@ func (db *DB) projectSessionBatchMessages(write SessionBatchWrite) []Message {
 	return projected
 }
 
+// storageSessionBatchWrite applies the archive's image, content, and usage-only policies to a sanitized write before the transaction writes it.
+func (db *DB) storageSessionBatchWrite(write SessionBatchWrite) SessionBatchWrite {
+	write.Messages = db.projectSessionBatchMessages(write)
+	if db.ArchiveContent().OmitsToolContent() {
+		write.Checkpoint, write.CheckpointBlobs = nil, nil
+	}
+	write.Session, write.Messages = db.sessionAndMessagesForStorage(write.Session, write.Messages)
+	if db.usageOnlyStorage() {
+		write.Signals = usageOnlySignalUpdate()
+		write.Findings = nil
+		write.SkipSignalUpdates = false
+	}
+	return write
+}
+
 // SessionWouldShortenError reports a rejected message-count decrease.
 type SessionWouldShortenError struct {
 	SessionID        string
@@ -152,18 +167,7 @@ func (db *DB) WriteSessionBatchContext(
 		if err != nil {
 			return result, err
 		}
-		write.Messages = db.projectSessionBatchMessages(write)
-		if db.ArchiveContent().OmitsToolContent() {
-			write.Checkpoint, write.CheckpointBlobs = nil, nil
-		}
-		write.Session, write.Messages = db.sessionAndMessagesForStorage(
-			write.Session, write.Messages,
-		)
-		if db.usageOnlyStorage() {
-			write.Signals = usageOnlySignalUpdate()
-			write.Findings = nil
-			write.SkipSignalUpdates = false
-		}
+		write = db.storageSessionBatchWrite(write)
 		savepoint := fmt.Sprintf("session_batch_%d", i)
 		if _, err := ctxTx.Exec("SAVEPOINT " + savepoint); err != nil {
 			return result, fmt.Errorf(
@@ -252,19 +256,7 @@ func (db *DB) WriteSessionBatchAtomic(ctx context.Context,
 	var writtenUsageIDs []string
 
 	for i, write := range writes {
-		write = sanitizeSessionBatchWrite(write)
-		write.Messages = db.projectSessionBatchMessages(write)
-		if db.ArchiveContent().OmitsToolContent() {
-			write.Checkpoint, write.CheckpointBlobs = nil, nil
-		}
-		write.Session, write.Messages = db.sessionAndMessagesForStorage(
-			write.Session, write.Messages,
-		)
-		if db.usageOnlyStorage() {
-			write.Signals = usageOnlySignalUpdate()
-			write.Findings = nil
-			write.SkipSignalUpdates = false
-		}
+		write = db.storageSessionBatchWrite(sanitizeSessionBatchWrite(write))
 		messagesWritten, err := writeOneSessionBatchTx(
 			context.Background(), tx, tx,
 			write,

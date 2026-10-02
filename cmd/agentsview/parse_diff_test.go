@@ -17,6 +17,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/importer"
 	"go.kenn.io/agentsview/internal/parser"
@@ -77,6 +78,78 @@ func TestGeminiAppsImportDispatchesDirectAndZipSources(t *testing.T) {
 	assert.Equal(t, 1, stats.Skipped)
 	assert.Equal(t, "\rDone: 1 processed (1 skipped)\n", formatImportFailureSummary(stats))
 	assert.Empty(t, formatImportFailureSummary(importer.ImportStats{}))
+}
+
+// chatGPTReplaceExportDir writes a one-conversation ChatGPT export whose turns alternate user and assistant.
+func chatGPTReplaceExportDir(t *testing.T, texts ...string) string {
+	t.Helper()
+	nodes := make([]string, len(texts))
+	parent := "r"
+	for i, text := range texts {
+		role := "user"
+		if i%2 == 1 {
+			role = "assistant"
+		}
+		node := fmt.Sprintf("n%d", i+1)
+		children := "[]"
+		if i+1 < len(texts) {
+			children = fmt.Sprintf(`["n%d"]`, i+2)
+		}
+		nodes[i] = fmt.Sprintf(`%q:{"id":%q,"parent":%q,"children":%s,"message":{"id":"m-%s","create_time":%d,"author":{"role":%q,"name":null,"metadata":{}},"content":{"content_type":"text","parts":[%q]},"status":"finished_successfully","metadata":{}}}`,
+			node, node, parent, children, node, 1706745600+10*i, role, text)
+		parent = node
+	}
+	conv := `[{"id":"cg-1","conversation_id":"cg-1","title":"Replace",` +
+		`"create_time":1706745600.0,"update_time":1706745700.0,"current_node":"` + parent + `",` +
+		`"mapping":{"r":{"id":"r","parent":null,"children":["n1"],"message":null},` + strings.Join(nodes, ",") + `}}]`
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "conversations-000.json"), []byte(conv), 0o644))
+	return dir
+}
+
+func TestImportSessionsReplace(t *testing.T) {
+	testDataDir(t)
+	exportA := chatGPTReplaceExportDir(t, "Hello", strings.Repeat("x", 500), "metadata row")
+	exportB := chatGPTReplaceExportDir(t, "Hello", strings.Repeat("x", 800))
+
+	require.NoError(t, importSessions(ImportConfig{Type: "chatgpt", Path: exportA}))
+	require.NoError(t, importSessions(ImportConfig{
+		Type: "chatgpt", Path: exportB, Replace: []string{"chatgpt:cg-1"},
+	}))
+
+	cfg, err := config.LoadMinimal()
+	require.NoError(t, err)
+	database, err := openDB(t.Context(), cfg)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	msgs, err := database.GetAllMessages(t.Context(), "chatgpt:cg-1")
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, strings.Repeat("x", 800), msgs[1].Content)
+	trashed, err := database.ListTrashedSessions(t.Context())
+	require.NoError(t, err)
+	require.Len(t, trashed, 1)
+	assert.True(t, strings.HasPrefix(trashed[0].ID, "chatgpt:cg-1:replaced:"), trashed[0].ID)
+}
+
+func TestImportSessionsRejectsReplaceForGeminiApps(t *testing.T) {
+	dataDir := testDataDir(t)
+	err := importSessions(ImportConfig{
+		Type: "gemini-apps", Path: filepath.Join(t.TempDir(), "missing.html"),
+		Replace: []string{"x"},
+	})
+	require.ErrorContains(t, err, "--replace is not supported for gemini-apps imports")
+	entries, err := os.ReadDir(dataDir)
+	require.NoError(t, err)
+	assert.Empty(t, entries, "the rejection must not create a database")
+}
+
+func TestImportCommandReplaceFlag(t *testing.T) {
+	cmd := newImportCommand()
+	require.NoError(t, cmd.ParseFlags([]string{"--type", "chatgpt", "--replace", "a", "--replace", "b,c"}))
+	got, err := cmd.Flags().GetStringArray("replace")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"a", "b,c"}, got)
 }
 
 // isolateParseDiffEnv points the data dir, HOME, and every per-agent

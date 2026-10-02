@@ -19,6 +19,10 @@ The latest published release is
   finite command saves resumable progress, reports incomplete work without
   waiting through retry delays, and reuses completed migration proof without
   uploading duplicate generations.
+- Chat imports can replace sessions whose archived history is wrong. List them
+  with `agentsview import --replace <session-id>` or `replace=<session-id>` on
+  the import API. The old version moves to the trash with its messages, name,
+  and pins.
 - Sessions show the title their agent keeps for them, and a name you chose with
   `/rename` or the agent's equivalent wins over a generated title. Current
   Claude Code `/rename` names now appear, and Qwen Code, Gemini CLI, Kimi CLI,
