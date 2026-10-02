@@ -330,7 +330,7 @@
           <div class="palette-empty">{m.command_palette_searching()}</div>
         {:else if searchStore.error?.kind === "semantic-unavailable"}
           <SemanticSetupHelp
-            onResolved={() => searchStore.retry()}
+            onResolved={() => searchStore.retry(false)}
             searchDetail={searchStore.error.detail}
           />
         {:else if searchStore.error}
