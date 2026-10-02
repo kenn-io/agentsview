@@ -595,6 +595,7 @@
     const route = router.route;
     const activeId = sessions.activeSessionId;
     const session = sessions.activeSession;
+    const routedId = router.sessionId;
     untrack(() => {
       if (activeId !== selectedSessionId) {
         selectedSessionId = activeId;
@@ -604,7 +605,8 @@
         viewedSessionId = null;
         return;
       }
-      if (session && session.id === activeId && activeId !== viewedSessionId) {
+      // Wait for the URL to name the session, so a stale selection left from another page is not counted.
+      if (session && session.id === activeId && routedId === activeId && activeId !== viewedSessionId) {
         viewedSessionId = activeId;
         reportTelemetry("session_viewed", { agent: session.agent });
       }
