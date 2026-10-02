@@ -29,9 +29,9 @@ type SessionBatchWrite struct {
 	SkipSignalUpdates bool
 	DataVersion       int
 	ReplaceMessages   bool
-	// FillEmptyToolResults lets an append write set results on stored calls that are still empty, at stored ordinals; other stored rows are untouched.
+	// CompleteStoredRows lets an append write complete stored rows at stored ordinals: it sets results on stored calls that are still empty and replaces stored text with longer text that starts with it (IsTextExtension). Rows keep their IDs; other stored rows are untouched.
 	// Results come from ToolCall.ResultContent and ResultContentLength; result events are not written.
-	FillEmptyToolResults bool
+	CompleteStoredRows bool
 	// RejectMessageCountDecrease prevents full replacement with fewer messages.
 	RejectMessageCountDecrease bool
 	Checkpoint                 *ParserCheckpoint
@@ -562,7 +562,7 @@ func writeOneSessionBatchTx(
 
 	msgs := write.Messages
 	var pins []savedPin
-	filled := 0
+	filled, extended := 0, 0
 	if replaceMessages && sessionExists {
 		if err := reconcileConversationMessagesTx(queries, write.Session.ID, msgs, true, usageOnly); err != nil {
 			return 0, err
@@ -579,8 +579,14 @@ func writeOneSessionBatchTx(
 		if err != nil {
 			return 0, err
 		}
-		if write.FillEmptyToolResults {
+		if write.CompleteStoredRows {
 			filled, err = fillEmptyToolResultsTx(
+				queries, write.Session.ID, msgs, maxOrd,
+			)
+			if err != nil {
+				return 0, err
+			}
+			extended, err = extendTruncatedTextTx(
 				queries, write.Session.ID, msgs, maxOrd,
 			)
 			if err != nil {
@@ -592,7 +598,7 @@ func writeOneSessionBatchTx(
 			return 0, err
 		}
 	}
-	transcriptChanged := len(msgs) > 0 || filled > 0
+	transcriptChanged := len(msgs) > 0 || filled > 0 || extended > 0
 	if replaceMessages && sessionExists {
 		transcriptChanged = replacementTranscriptChanged
 	}
@@ -611,6 +617,19 @@ func writeOneSessionBatchTx(
 			return 0, err
 		}
 	}
+	if extended > 0 {
+		active, err := conversationExportActiveTx(queries)
+		if err != nil {
+			return 0, err
+		}
+		if active {
+			if err := refreshConversationMessagesFromArchiveTx(
+				ctx, tx, "session_id = ?", write.Session.ID,
+			); err != nil {
+				return 0, err
+			}
+		}
+	}
 	if err := writeClaudeSubagentSourcesTx(ctx, tx, write.Session.ID,
 		write.ClaudeSubagentSources, replaceMessages || !sessionExists); err != nil {
 		return 0, err
@@ -624,7 +643,7 @@ func writeOneSessionBatchTx(
 			return 0, err
 		}
 	}
-	if replaceMessages && sessionExists || filled > 0 {
+	if replaceMessages && sessionExists || filled > 0 || extended > 0 {
 		if err := reconcileRecallEvidenceForSessionTx(
 			ctx,
 			tx,
@@ -794,6 +813,51 @@ func fillEmptyToolResultsTx(
 		}
 	}
 	return filled, nil
+}
+
+// extendTruncatedTextTx writes candidate text into stored messages at
+// ordinals up to maxOrd whose stored text the candidate extends. It updates
+// only content and content_length by row id.
+func extendTruncatedTextTx(
+	tx transactionQueries, sessionID string, msgs []Message, maxOrd int,
+) (int, error) {
+	extended := 0
+	for _, m := range msgs {
+		if m.Ordinal > maxOrd {
+			continue
+		}
+		var id int64
+		var stored string
+		err := tx.QueryRow(
+			`SELECT id, content FROM messages
+			 WHERE session_id = ? AND ordinal = ?`,
+			sessionID, m.Ordinal,
+		).Scan(&id, &stored)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return 0, fmt.Errorf(
+				"extending text for %s ordinal %d: %w",
+				sessionID, m.Ordinal, err,
+			)
+		}
+		if !IsTextExtension(stored, m.Content) {
+			continue
+		}
+		if _, err := tx.Exec(
+			`UPDATE messages SET content = ?, content_length = ?
+			 WHERE id = ?`,
+			m.Content, m.ContentLength, id,
+		); err != nil {
+			return 0, fmt.Errorf(
+				"extending text for %s ordinal %d: %w",
+				sessionID, m.Ordinal, err,
+			)
+		}
+		extended++
+	}
+	return extended, nil
 }
 
 func messagesAfterOrdinal(msgs []Message, maxOrd int) []Message {
