@@ -177,7 +177,7 @@ func finalizeBackfillAttempt(ctx context.Context, store *rawcheckpoint.Store, ru
 	}
 	// A permanently rejected capture outranks the attempt's own failure: only a
 	// new run captures that source again.
-	if resultErr != nil && !cancelled {
+	if resultErr != nil || cancelled {
 		if rejected, err := store.BackfillRejected(cleanup, runID); err == nil && rejected {
 			failure = "rejected"
 		}
