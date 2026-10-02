@@ -44,7 +44,7 @@ func EnabledFromEnv() bool {
 func NewReporter(opts Options) (*Reporter, error) {
 	if !EnabledFromEnv() {
 		// kit keeps the allowlist on an opted-out reporter, so the UI route still rejects unknown events.
-		client, err := newKitReporter(opts.InstallationID, opts.Version, opts.Commit)
+		client, err := newKitReporter(opts.InstallationID, opts.InstalledAt, opts.Version, opts.Commit)
 		if err != nil {
 			return nil, err
 		}
