@@ -93,6 +93,8 @@ struct SidecarState {
     terminated_generation: Mutex<u64>,
     termination: Condvar,
     next_generation: AtomicU64,
+    // Held across an update stop's start and retirement and across each window action a launch takes.
+    launch_gate: Mutex<()>,
 }
 
 struct SidecarProcess {
@@ -1517,6 +1519,7 @@ fn take_restart_after_stop_timeout_if_current(state: &SidecarState, generation: 
 }
 
 fn begin_update_stop_wait(state: &SidecarState) {
+    let _gate = state.launch_gate.lock();
     state
         .active_update_stop_waiters
         .fetch_add(1, Ordering::SeqCst);
@@ -1535,6 +1538,7 @@ fn has_active_update_stop_waiter(state: &SidecarState) -> bool {
 
 // A completed update stop retires the launch it stopped; a failed one leaves it in charge.
 fn finish_update_stop_wait(state: &SidecarState, stopped: bool) {
+    let _gate = state.launch_gate.lock();
     if stopped {
         state.next_generation.fetch_add(1, Ordering::SeqCst);
     }
@@ -1550,11 +1554,23 @@ fn launch_is_current(state: &SidecarState, generation: u64) -> bool {
     !has_active_update_stop_waiter(state) && !launch_superseded(state, generation)
 }
 
-fn launch_survives_update_stop(state: &SidecarState, generation: u64) -> bool {
-    while has_active_update_stop_waiter(state) {
+// Waits out an update stop, then acts only if the launch survived, holding the gate so no stop starts mid-action.
+fn with_current_launch<T>(
+    state: &SidecarState,
+    generation: u64,
+    act: impl FnOnce() -> T,
+) -> Option<T> {
+    loop {
+        let gate = state.launch_gate.lock().ok()?;
+        if launch_superseded(state, generation) {
+            return None;
+        }
+        if !has_active_update_stop_waiter(state) {
+            return Some(act());
+        }
+        drop(gate);
         thread::sleep(READY_POLL_INTERVAL);
     }
-    !launch_superseded(state, generation)
 }
 
 fn take_restart_after_stop_timeout_for_terminated_sidecar(
@@ -1867,17 +1883,23 @@ fn render_startup_error(
             footer.as_str(),
         );
         let state = window.app_handle().state::<SidecarState>();
+        let eval = || window.eval(script.as_str()).is_ok();
+        // The script no-ops until the loading page is ready, so keep resubmitting until the deadline.
         let deadline = Instant::now() + READY_TIMEOUT;
+        let mut submitted = false;
         while Instant::now() < deadline {
-            if generation.is_some_and(|g| !launch_survives_update_stop(&state, g)) {
-                return;
-            }
-            if window.eval(script.as_str()).is_ok() {
-                return;
-            }
+            submitted |= match generation {
+                Some(g) => match with_current_launch(&state, g, eval) {
+                    Some(ok) => ok,
+                    None => return,
+                },
+                None => eval(),
+            };
             thread::sleep(READY_POLL_INTERVAL);
         }
-        eprintln!("[agentsview] timed out waiting to render startup error");
+        if !submitted {
+            eprintln!("[agentsview] timed out waiting to render startup error");
+        }
     });
 }
 
@@ -1886,13 +1908,11 @@ fn startup_error_script(title: &str, message: &str, detail: &str, footer: &str) 
     let message = js_string_literal(message);
     let detail = js_string_literal(detail);
     let footer = js_string_literal(footer);
-    let retry_ms = READY_POLL_INTERVAL.as_millis();
     format!(
         "(function renderStartupError() {{\
             var h = document.querySelector('h1');\
             var status = document.getElementById('status');\
             if (!h || !status) {{\
-                window.setTimeout(renderStartupError, {retry_ms});\
                 return;\
             }}\
             var shell = document.querySelector('.shell');\
@@ -2101,7 +2121,9 @@ fn redirect_when_ready(
 ) {
     thread::spawn(move || {
         let ready = wait_for_selected_backend(&log_sender, generation, source, port, READY_TIMEOUT);
-        if !launch_survives_update_stop(&window.app_handle().state::<SidecarState>(), generation) {
+        let handle = window.app_handle().clone();
+        let state = handle.state::<SidecarState>();
+        if with_current_launch(&state, generation, || ()).is_none() {
             return;
         }
         if ready {
@@ -2120,7 +2142,12 @@ fn redirect_when_ready(
             // failures in the desktop log as well.
             match Url::parse(target_url.as_str()) {
                 Ok(url) => {
-                    if let Err(err) = window.navigate(url) {
+                    let Some(navigated) =
+                        with_current_launch(&state, generation, || window.navigate(url))
+                    else {
+                        return;
+                    };
+                    if let Err(err) = navigated {
                         queue_startup_log_record(
                             &log_sender,
                             generation,
@@ -2166,7 +2193,9 @@ fn redirect_when_ready(
                     format!("navigating to deep link route {route} queued during startup redirect")
                         .as_str(),
                 );
-                navigate_main_window_to_route(window.app_handle(), port, route.as_str());
+                with_current_launch(&state, generation, || {
+                    navigate_main_window_to_route(window.app_handle(), port, route.as_str())
+                });
             }
             return;
         }
@@ -5206,7 +5235,7 @@ agentsview running at http://127.0.0.1:18082
             let (tx, rx) = std::sync::mpsc::channel();
             let waiter = Arc::clone(&state);
             thread::spawn(move || {
-                let _ = tx.send(launch_survives_update_stop(&waiter, 1));
+                let _ = tx.send(with_current_launch(&waiter, 1, || ()).is_some());
             });
             assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
             finish_update_stop_wait(&state, stopped);
@@ -5218,8 +5247,24 @@ agentsview running at http://127.0.0.1:18082
     fn launch_survives_update_stop_returns_at_once_without_stop() {
         let state = SidecarState::default();
         state.next_generation.store(3, Ordering::SeqCst);
-        assert!(launch_survives_update_stop(&state, 3));
-        assert!(!launch_survives_update_stop(&state, 2));
+        assert_eq!(with_current_launch(&state, 3, || 7), Some(7));
+        assert_eq!(with_current_launch(&state, 2, || 7), None);
+    }
+
+    #[test]
+    fn update_stop_waits_for_launch_action() {
+        let state = Arc::new(SidecarState::default());
+        state.next_generation.store(1, Ordering::SeqCst);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let stopper = Arc::clone(&state);
+        with_current_launch(&state, 1, || {
+            thread::spawn(move || {
+                begin_update_stop_wait(&stopper);
+                let _ = tx.send(());
+            });
+            assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
+        });
+        assert!(rx.recv_timeout(Duration::from_secs(5)).is_ok());
     }
 
     #[test]
