@@ -384,7 +384,7 @@ test.describe("Usage input cards", () => {
       has: page.locator(".card-label", { hasText: new RegExp(`^${label}$`) }),
     });
 
-  const expectStableCards = async (page: Page) => {
+  const expectStableCards = async (page: Page, equalHeights = true) => {
     const cards = page.locator(".summary-cards .card");
     await expect(cards).toHaveCount(10);
     await expect(cards.locator(".card-sub").first()).toContainText("+125%");
@@ -396,7 +396,9 @@ test.describe("Usage input cards", () => {
         overflowY: el.scrollHeight > el.clientHeight,
       })),
     );
-    expect(new Set(boxes.map((box) => box.height)).size).toBe(1);
+    if (equalHeights) {
+      expect(new Set(boxes.map((box) => box.height)).size).toBe(1);
+    }
     expect(boxes.filter((box) => box.overflowX || box.overflowY)).toEqual([]);
   };
 
@@ -420,7 +422,7 @@ test.describe("Usage input cards", () => {
 
       await expect(card(page, "Cəmi giriş").locator(".card-value")).toHaveText("7.9B");
       await expect(card(page, "Keşsiz giriş").locator(".card-value")).toHaveText("248.6M");
-      await expectStableCards(page);
+      await expectStableCards(page, false);
     });
   }
 });

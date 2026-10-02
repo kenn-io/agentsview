@@ -339,13 +339,13 @@
 
 <style>
   .summary-cards {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-    grid-auto-rows: 1fr;
+    display: flex;
     gap: 8px;
+    flex-wrap: wrap;
   }
 
   .summary-cards :global(.card) {
+    flex: 1;
     min-width: 120px;
     min-height: 90px;
     padding: 12px;
