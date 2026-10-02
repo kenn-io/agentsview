@@ -293,10 +293,10 @@ func TestHandleImportChatGPTReportsRefusalReasons(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := testServer(t, 5*time.Second)
 			first := postChatGPTExport(t, srv, chatGPTRefusalConvWithAppend)
-			require.Equal(t, float64(1), first["imported"], "first import: %v", first)
+			require.InDelta(t, float64(1), first["imported"], 0, "first import: %v", first)
 
 			wire := postChatGPTExport(t, srv, tc.data)
-			assert.Equal(t, float64(1), wire["errors"])
+			assert.InDelta(t, float64(1), wire["errors"], 0)
 			assert.Equal(t, []any{
 				map[string]any{"session_id": "chatgpt:cg-1", "reason": tc.reason},
 			}, wire["refusals"])
