@@ -175,11 +175,11 @@ func finalizeBackfillAttempt(ctx context.Context, store *rawcheckpoint.Store, ru
 	if resultErr != nil && failure == "" {
 		failure = "capture"
 	}
-	// A permanently rejected capture outranks the attempt's own failure: only a
-	// new run captures that source again.
+	// A rejected or lost capture outranks the attempt's own failure: only a new
+	// run captures that source again.
 	if resultErr != nil || cancelled {
-		if rejected, err := store.BackfillRejected(cleanup, runID); err == nil && rejected {
-			failure = "rejected"
+		if terminal := terminalBackfillFailure(cleanup, store, runID); terminal != "" {
+			failure = terminal
 		}
 	}
 	if err := store.RecordBackfillFailure(cleanup, runID, failure); err != nil {
@@ -194,6 +194,18 @@ func finalizeBackfillAttempt(ctx context.Context, store *rawcheckpoint.Store, ru
 		resultErr = rawcheckpoint.ErrBackfillIncomplete
 	}
 	return progress, resultErr
+}
+
+// terminalBackfillFailure names a failure that repeating the run cannot clear.
+// A lookup error leaves the attempt's own failure in place.
+func terminalBackfillFailure(ctx context.Context, store *rawcheckpoint.Store, runID string) string {
+	if rejected, err := store.BackfillRejected(ctx, runID); err == nil && rejected {
+		return "rejected"
+	}
+	if current, err := store.BackfillProgress(ctx, runID); err == nil && current.Failures["capture_lost"] > 0 {
+		return "capture_lost"
+	}
+	return ""
 }
 
 func backfillCaptureFailure(err error) string {

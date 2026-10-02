@@ -408,18 +408,14 @@ func TestBackfillNoEligibleUploadStopsBeforeDiscovery(t *testing.T) {
 			require.Equal(t, planCalls, provider.planCalls, "uncaptured files must not be examined")
 			require.Equal(t, before.Captured, progress.Captured)
 			require.Equal(t, before.Pending, progress.Pending)
-			failure := "deferred"
-			if state == "blocked" {
-				failure = "rejected"
-			}
-			require.Equal(t, int64(1), progress.Failures[failure])
+			failure := map[string]string{
+				"deferred": "deferred", "blocked": "rejected", "invalidated": "capture_lost",
+			}[state]
+			require.Equal(t, map[string]int64{failure: 1}, progress.Failures)
 			durable, err := store.BackfillProgress(t.Context(), spec.RunID)
 			require.NoError(t, err)
 			require.Equal(t, progress, durable)
 			require.Zero(t, transport.commitCalls)
-			if state == "invalidated" {
-				require.Equal(t, int64(1), durable.Failures["capture_lost"])
-			}
 		})
 	}
 }

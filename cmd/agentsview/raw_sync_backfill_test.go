@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -139,10 +140,12 @@ func TestWriteRawSyncBackfillProgressFormatsFinalResult(t *testing.T) {
 	require.NoError(t, writeRawSyncBackfillProgress(&humanOut, "human", progress))
 	assert.Equal(t, "Backfill run-a incomplete: 2 captured, 2 acknowledged, 0 pending.\n", humanOut.String())
 
-	progress.Failures = map[string]int64{"rejected": 1}
-	humanOut.Reset()
-	require.NoError(t, writeRawSyncBackfillProgress(&humanOut, "human", progress))
-	assert.Contains(t, humanOut.String(), "start a new run ID")
+	for _, failure := range []string{"rejected", "capture_lost"} {
+		progress.Failures = map[string]int64{failure: 1}
+		humanOut.Reset()
+		require.NoError(t, writeRawSyncBackfillProgress(&humanOut, "human", progress))
+		assert.Contains(t, humanOut.String(), "start a new run ID", "failure: %s", failure)
+	}
 }
 
 func TestRecoverRawSyncBackfillCancellationEmitsDurableRun(t *testing.T) {
@@ -370,20 +373,49 @@ func TestRawSyncBackfillCommandReportsUnreadableSelectedRoot(t *testing.T) {
 	assert.NotContains(t, err.Error(), root)
 }
 
-func TestRawSyncBackfillCommandRefusesMissingSelectedRoot(t *testing.T) {
+func TestRawSyncBackfillCommandRefusesToStartWithUnavailableRoot(t *testing.T) {
 	dataDir := t.TempDir()
-	root := filepath.Join(t.TempDir(), "missing-claude")
-	configureRawSyncBackfillCommand(t, dataDir, root)
+	present := filepath.Join(t.TempDir(), "claude")
+	rawtest.Claude(t, present)
+	missing := filepath.Join(t.TempDir(), "unmounted", "claude")
+	configureRawSyncBackfillCommandRoots(t, dataDir, present, missing)
+	args := []string{
+		"raw-sync", "backfill", "--run-id", "missing-root", "--provider", "claude",
+		"--json", "--allow-insecure-http",
+	}
 
-	output, err := executeCommand(
-		newRootCommand(), "raw-sync", "backfill", "--run-id", "missing-a",
-		"--provider", "claude", "--format", "json", "--allow-insecure-http",
-	)
+	output, err := executeCommand(newRootCommand(), args...)
 
 	require.Error(t, err)
 	assert.Empty(t, output)
+	assert.Equal(t, 1, exitCodeFromError(err), "rerunning cannot start this run")
+	assert.Contains(t, err.Error(), "configured claude root is unavailable")
+	assert.NotContains(t, err.Error(), missing)
+
+	configureRawSyncBackfillCommandRoots(t, dataDir, present)
+	output, err = executeCommand(newRootCommand(), args...)
+
+	require.Error(t, err)
 	assert.Equal(t, rawSyncBackfillExitCode, exitCodeFromError(err))
-	assert.NotContains(t, err.Error(), root)
+	progress := decodeRawSyncBackfillProgress(t, output)
+	assert.Equal(t, int64(1), progress.Captured,
+		"the refused attempt must not save a run bound to the unavailable root")
+}
+
+func configureRawSyncBackfillCommandRoots(t *testing.T, dataDir string, roots ...string) {
+	t.Helper()
+	quoted := make([]string, 0, len(roots))
+	for _, root := range roots {
+		quoted = append(quoted, fmt.Sprintf("%q", root))
+	}
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dataDir, "config.toml"),
+		[]byte("[agents.claude]\ndirs = ["+strings.Join(quoted, ", ")+"]\n"), 0o600,
+	))
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	t.Setenv("AGENTSVIEW_RAW_SYNC_URL", "http://127.0.0.1:1")
+	t.Setenv("AGENTSVIEW_RAW_SYNC_DEVICE_ID", "device-a")
+	t.Setenv("AGENTSVIEW_RAW_SYNC_CREDENTIAL", "credential-value")
 }
 
 func configureRawSyncBackfillCommand(t *testing.T, dataDir, root string) {

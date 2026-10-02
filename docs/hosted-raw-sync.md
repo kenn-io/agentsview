@@ -289,16 +289,28 @@ the device, server, selected providers, and the root entries as written in the
 configuration. Reordered or duplicate provider flags describe the same
 selection. A changed destination, device, provider set, root entry, or root
 order needs a new run ID, because the order in the configuration decides which
-root owns a file that two overlapping roots both contain. A started run keeps the roots it resolved on its first attempt, so
-captured work still uploads after a source root is unmounted.
+root owns a file that two overlapping roots both contain.
+
+A run starts only when every configured root of the selected providers exists.
+If one is missing, such as a stale entry or an unmounted drive, the command
+exits with status 1 before saving the run. Mount the root or remove it from the
+configuration, then run the command again. A started run keeps the roots it
+resolved on its first attempt, so captured work still uploads after a source
+root is unmounted.
 
 Each invocation is finite. It does not sleep until a failed or deferred upload
 becomes eligible. An incomplete attempt prints current aggregate progress and
-exits nonzero; repair the unavailable root, local spool capacity, device
+exits with status 2; repair the unavailable root, local spool capacity, device
 authorization, network, or server rejection, then run the same command again.
-A `rejected` failure means the server permanently refused a capture in the run.
-Repeating that run can't finish it; fix the source and start a new run ID,
-which captures it again.
+
+Two failures end a run for good. Repeating the run can't finish it, so start a
+new run ID, which captures the affected source again:
+
+- `rejected`: the server permanently refused a capture in the run. Fix the
+  source first.
+- `capture_lost`: a capture was removed from the local spool before it uploaded,
+  for example by checkpoint recovery after a missing object.
+
 JSON output is one object with `captured`, `acknowledged`, `pending`, failure
 counters, and an explicit `complete` field. Human output states `complete` or
 `incomplete` directly. Output and errors do not include source paths, transcript

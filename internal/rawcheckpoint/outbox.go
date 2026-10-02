@@ -29,6 +29,9 @@ var (
 	ErrCaptureConflict     = errors.New("rawcheckpoint: capture predecessor conflict")
 	ErrReservationMissing  = errors.New("rawcheckpoint: capture reservation not found")
 	ErrReservationTooSmall = errors.New("rawcheckpoint: capture reservation is too small")
+	// ErrConfiguredRootUnavailable means a configured root is missing, unreadable,
+	// or not a directory, so retrying without changing the filesystem cannot help.
+	ErrConfiguredRootUnavailable = errors.New("rawcheckpoint: configured root unavailable")
 )
 
 // CoverageStatus is the capture completeness state for one configured root.
@@ -1727,16 +1730,16 @@ func canonicalConfiguredRoot(root string) (string, error) {
 	}
 	canonical, err := filepath.EvalSymlinks(absolute)
 	if err != nil {
-		return "", fmt.Errorf("rawcheckpoint: resolve configured root: %s",
-			checkpointFilesystemError(err))
+		return "", fmt.Errorf("%w: resolve: %s",
+			ErrConfiguredRootUnavailable, checkpointFilesystemError(err))
 	}
 	info, err := os.Stat(canonical)
 	if err != nil {
-		return "", fmt.Errorf("rawcheckpoint: stat configured root: %s",
-			checkpointFilesystemError(err))
+		return "", fmt.Errorf("%w: stat: %s",
+			ErrConfiguredRootUnavailable, checkpointFilesystemError(err))
 	}
 	if !info.IsDir() {
-		return "", errors.New("rawcheckpoint: configured root is not a directory")
+		return "", fmt.Errorf("%w: not a directory", ErrConfiguredRootUnavailable)
 	}
 	return filepath.Clean(canonical), nil
 }

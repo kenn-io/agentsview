@@ -246,6 +246,11 @@ func runRawSyncBackfill(
 		return errors.New("raw-sync backfill: device does not match the checkpoint")
 	}
 	spec, err := rawSyncBackfillSpec(ctx, store, cfg, selected)
+	// Rerunning cannot start a run while a root is unavailable, so this exits
+	// with an ordinary error instead of the retryable incomplete code.
+	if errors.Is(err, rawcheckpoint.ErrConfiguredRootUnavailable) {
+		return fmt.Errorf("raw-sync backfill: %w", err)
+	}
 	if err != nil {
 		return rawSyncBackfillResultError(err, false)
 	}
@@ -336,6 +341,12 @@ func rawSyncBackfillSpec(
 		typ := item.Provider.Definition().Type
 		for _, path := range item.ConfiguredRoots {
 			root, err := store.ResolveConfiguredRoot(ctx, typ, path)
+			if errors.Is(err, rawcheckpoint.ErrConfiguredRootUnavailable) {
+				return rawcheckpoint.BackfillRunSpec{}, fmt.Errorf(
+					"a configured %s root is unavailable; mount it or remove it "+
+						"from the configuration: %w", typ, err,
+				)
+			}
 			if err != nil {
 				return rawcheckpoint.BackfillRunSpec{}, rawcheckpoint.ErrBackfillIncomplete
 			}
@@ -394,8 +405,14 @@ func writeRawSyncBackfillProgress(
 		out, "Backfill %s %s: %d captured, %d acknowledged, %d pending.\n",
 		progress.RunID, state, progress.Captured, progress.Acknowledged, progress.Pending,
 	)
-	if err == nil && progress.Failures["rejected"] > 0 {
+	if err != nil {
+		return err
+	}
+	switch {
+	case progress.Failures["rejected"] > 0:
 		_, err = fmt.Fprintln(out, "The server rejected a capture; fix the source and start a new run ID.")
+	case progress.Failures["capture_lost"] > 0:
+		_, err = fmt.Fprintln(out, "A capture was lost before upload; start a new run ID.")
 	}
 	return err
 }

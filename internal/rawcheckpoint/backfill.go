@@ -192,11 +192,12 @@ func (s *Store) BackfillProgress(ctx context.Context, runID string) (BackfillPro
 		}
 		p.Pending = p.Captured - p.Acknowledged
 		p.Failures = map[string]int64{}
-		if invalid > 0 {
-			p.Failures["capture_lost"] = invalid
-		}
 		if class != "" {
 			p.Failures[class]++
+		}
+		// A capture_lost run class restates its invalidated members; count them once.
+		if invalid > 0 {
+			p.Failures["capture_lost"] = invalid
 		}
 		rows, err := conn.QueryContext(ctx, `SELECT changed,unsupported,degraded,error_class FROM backfill_providers WHERE run_id=?`, runID)
 		if err != nil {
