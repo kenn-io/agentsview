@@ -73,6 +73,15 @@ provenance with preserved sessions. Once all contributors are readable, a full
 parse can apply corrected or shortened transcripts. This metadata stays local to
 the archive; S3 materializations do not record temporary paths.
 
+### Codex deletion scope
+
+Before data version 123, deleting a Codex-format thread excluded all its rollout
+files under one ID. The upgrade marks those exclusions with
+`include_codex_pages`, so pages remain excluded even if their files were absent
+during the upgrade and return later. Copies preserve that scope across later
+rebuilds. New deletions keep the default per-file scope. Session and recall
+imports use the same exclusion check.
+
 ### Codex incremental import state
 
 Four SQLite-only tables support local Codex imports: `parser_checkpoints` holds

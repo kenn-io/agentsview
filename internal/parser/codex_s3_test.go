@@ -91,7 +91,7 @@ func TestCodexS3SessionIndexURIPrefersRawCodexLayout(t *testing.T) {
 	)
 }
 
-func TestFindCodexS3ParentSessionURI(t *testing.T) {
+func TestFindCodexS3ParentSessionURIs(t *testing.T) {
 	const parentID = "11111111-1111-4111-8111-111111111111"
 	const root = "s3://bucket/laptop/raw/codex"
 	parentDated := root + "/2026/08/12/rollout-2026-08-12T00-00-00-" +
@@ -100,6 +100,11 @@ func TestFindCodexS3ParentSessionURI(t *testing.T) {
 		"rollout-2026-08-12T00-00-00-" + parentID + ".jsonl"
 	parentArchived := root + "/archived_sessions/" +
 		"rollout-2026-08-12T00-00-00-" + parentID + ".jsonl"
+	const pageRollout = "44444444-4444-4444-8444-444444444444"
+	pageLive := root + "/sessions/2026/08/14/rollout-2026-08-14T00-00-00-" +
+		parentID + "_" + pageRollout + ".jsonl"
+	pageArchived := root + "/archived_sessions/rollout-2026-08-14T00-00-00-" +
+		parentID + "_" + pageRollout + ".jsonl"
 	customRoot := "s3://bucket/root/codex"
 	customParent := customRoot + "/team/b/" +
 		"rollout-2026-08-12T00-00-00-" + parentID + ".jsonl"
@@ -109,7 +114,7 @@ func TestFindCodexS3ParentSessionURI(t *testing.T) {
 		childURI string
 		parentID string
 		objects  []S3Object
-		want     string
+		want     []string
 		wantRoot string
 		wantList bool
 	}{
@@ -119,7 +124,7 @@ func TestFindCodexS3ParentSessionURI(t *testing.T) {
 				"22222222-2222-4222-8222-222222222222.jsonl",
 			parentID: parentID,
 			objects:  []S3Object{{URI: parentDated}},
-			want:     parentDated,
+			want:     []string{parentDated},
 			wantList: true,
 		},
 		{
@@ -128,7 +133,7 @@ func TestFindCodexS3ParentSessionURI(t *testing.T) {
 				"rollout-2026-08-13T00-00-00-22222222-2222-4222-8222-222222222222.jsonl",
 			parentID: parentID,
 			objects:  []S3Object{{URI: parentSessions}},
-			want:     parentSessions,
+			want:     []string{parentSessions},
 			wantList: true,
 		},
 		{
@@ -137,7 +142,7 @@ func TestFindCodexS3ParentSessionURI(t *testing.T) {
 				"rollout-2026-08-13T00-00-00-22222222-2222-4222-8222-222222222222.jsonl",
 			parentID: parentID,
 			objects:  []S3Object{{URI: parentArchived}},
-			want:     parentArchived,
+			want:     []string{parentArchived},
 			wantList: true,
 		},
 		{
@@ -149,7 +154,7 @@ func TestFindCodexS3ParentSessionURI(t *testing.T) {
 				{URI: parentArchived},
 				{URI: parentSessions},
 			},
-			want:     parentSessions,
+			want:     []string{parentSessions},
 			wantList: true,
 		},
 		{
@@ -158,8 +163,23 @@ func TestFindCodexS3ParentSessionURI(t *testing.T) {
 				"rollout-2026-08-13T00-00-00-22222222-2222-4222-8222-222222222222.jsonl",
 			parentID: parentID,
 			objects:  []S3Object{{URI: customParent}},
-			want:     customParent,
+			want:     []string{customParent},
 			wantRoot: customRoot,
+			wantList: true,
+		},
+		{
+			name: "revert pages of the parent, live copies first",
+			childURI: root + "/sessions/2026/08/13/" +
+				"rollout-2026-08-13T00-00-00-22222222-2222-4222-8222-222222222222.jsonl",
+			parentID: parentID,
+			objects: []S3Object{
+				{URI: parentSessions},
+				{URI: pageArchived},
+				{URI: pageLive},
+				{URI: root + "/sessions/2026/08/12/rollout-2026-08-12T00-00-00-" +
+					"33333333-3333-4333-8333-333333333333_" + pageRollout + ".jsonl"},
+			},
+			want:     []string{parentSessions, pageLive},
 			wantList: true,
 		},
 		{
@@ -216,11 +236,10 @@ func TestFindCodexS3ParentSessionURI(t *testing.T) {
 			if configuredRoot == "" {
 				configuredRoot = root
 			}
-			got, ok := FindCodexS3ParentSessionURI(
+			got := FindCodexS3ParentSessionURIs(
 				configuredRoot, tt.childURI, tt.parentID,
 			)
 
-			assert.Equal(t, tt.want != "", ok)
 			assert.Equal(t, tt.want, got)
 			assert.Equal(t, tt.wantList, listed)
 		})

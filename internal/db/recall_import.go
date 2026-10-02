@@ -750,9 +750,7 @@ func validateRecallImportPlaceholderSessionStateWithQueryer(
 	sessionID string,
 ) error {
 	var excluded bool
-	if err := queryer.QueryRowContext(ctx, `
-		SELECT EXISTS (SELECT 1 FROM excluded_sessions WHERE id = ?)
-	`, sessionID).Scan(&excluded); err != nil {
+	if err := queryer.QueryRowContext(ctx, sessionExcludedQuery, sessionID).Scan(&excluded); err != nil {
 		return fmt.Errorf("checking excluded session %s: %w", sessionID, err)
 	}
 	if excluded {

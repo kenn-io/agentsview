@@ -551,7 +551,13 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // that second transcript's entries appended to the same sub-agent session.
 // Re-parse unchanged Claude sources so a sub-agent session reaches its later
 // run's last entry.)
-const dataVersion = 122
+// (123: a Codex rollout written by thread/revert,
+// rollout-<ts>-<thread>_<rollout>.jsonl, is stored as its own session
+// codex:<thread>_<rollout> linked as a continuation instead of overwriting
+// codex:<thread>. Re-parse unchanged Codex sources so every file gets its own
+// session; the resync's orphan copy drops a stale codex:<thread> row whose
+// file now belongs to a page session.)
+const dataVersion = 123
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
@@ -2162,6 +2168,10 @@ func legacySchemaColumnMigrations() []schemaColumnMigration {
 
 func schemaColumnMigrations() []schemaColumnMigration {
 	return []schemaColumnMigration{
+		{
+			"excluded_sessions", "include_codex_pages",
+			"ALTER TABLE excluded_sessions ADD COLUMN include_codex_pages INTEGER NOT NULL DEFAULT 0",
+		},
 		{
 			"session_project_assignments", "original_project",
 			"ALTER TABLE session_project_assignments ADD COLUMN original_project TEXT NOT NULL DEFAULT '';" +

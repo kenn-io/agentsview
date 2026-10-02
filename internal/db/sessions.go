@@ -1284,12 +1284,22 @@ func (db *DB) GetSessionName(
 	return stored.String, true, nil
 }
 
+// A pre-revert-page deletion covered the whole Codex thread. Keep that scope
+// even for page files absent during the upgrade. New deletions remain exact IDs.
+const sessionExcludedQuery = `SELECT EXISTS (
+	SELECT 1 FROM excluded_sessions
+	WHERE id = ?1 OR (
+		include_codex_pages = 1 AND substr(?1, -37, 1) = '_'
+		AND id = substr(?1, 1, length(?1) - 37)
+	)
+)`
+
 // IsSessionExcluded returns true if the session ID was
 // permanently deleted by the user.
 func (db *DB) IsSessionExcluded(ctx context.Context, id string) bool {
 	var n int
 	_ = db.getReader().QueryRow(ctx,
-		"SELECT 1 FROM excluded_sessions WHERE id = ?", id,
+		sessionExcludedQuery, id,
 	).Scan(&n)
 	return n == 1
 }
@@ -1613,7 +1623,7 @@ func upsertSessionExec(
 	// concurrent DeleteSession/EmptyTrash/RestoreSession.
 	var excluded int
 	err := queryRow(ctx,
-		"SELECT 1 FROM excluded_sessions WHERE id = ?", s.ID,
+		sessionExcludedQuery, s.ID,
 	).Scan(&excluded)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return sessionUpsertResult{},
@@ -1707,7 +1717,7 @@ func (db *DB) insertSessionIfAbsent(ctx context.Context, s Session) error {
 
 	var excluded int
 	_ = db.getWriter().QueryRowContext(
-		ctx, "SELECT 1 FROM excluded_sessions WHERE id = ?", s.ID,
+		ctx, sessionExcludedQuery, s.ID,
 	).Scan(&excluded)
 	if excluded == 1 {
 		return ErrSessionExcluded
@@ -2636,6 +2646,43 @@ func (db *DB) FindSessionIDsByRawSuffix(
 		return nil, fmt.Errorf(
 			"finding sessions by raw suffix %q: %w",
 			raw, err,
+		)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf(
+				"scanning session id: %w", err,
+			)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// CodexRevertPageSessionIDs returns the ids of stored, non-deleted sessions
+// whose id starts with threadSessionID + "_" (Codex revert pages of that
+// thread, codex:<thread>_<rollout>). It compares an id range, not LIKE,
+// because '_' is a wildcard in LIKE and valid in session ids.
+func (db *DB) CodexRevertPageSessionIDs(
+	ctx context.Context, threadSessionID string,
+) ([]string, error) {
+	if threadSessionID == "" {
+		return nil, nil
+	}
+	// '`' is the byte after '_', so the range holds exactly the ids with the "_" prefix.
+	rows, err := db.getReader().QueryContext(ctx,
+		`SELECT id FROM sessions
+		 WHERE id > ?1 AND id < ?2 AND deleted_at IS NULL
+		 ORDER BY id`,
+		threadSessionID+"_", threadSessionID+"`",
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"finding codex revert pages of %q: %w",
+			threadSessionID, err,
 		)
 	}
 	defer rows.Close()

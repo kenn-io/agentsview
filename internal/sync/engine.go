@@ -16684,37 +16684,76 @@ func (e *Engine) classifyCodexIndexPath(ctx context.Context,
 
 	var out []parser.DiscoveredFile
 	for uuid, title := range titles {
-		if !e.codexStoredNameDiffers(uuid, title) {
-			continue
-		}
-		var candidates []parser.DiscoveredFile
-		for _, root := range sessionRoots {
-			if src := e.codexSourceFileForUUID(root, uuid); src != "" {
-				candidates = append(candidates, parser.DiscoveredFile{
-					Path:    src,
-					Agent:   parser.AgentCodex,
-					Machine: e.machineForPath(parser.AgentCodex, src),
-				})
+		for _, rawID := range e.codexIndexRenamedRawIDs(ctx, uuid, title) {
+			if chosen, ok := e.codexIndexSourceForRawID(
+				ctx, sessionRoots, rawID,
+			); ok {
+				out = append(out, chosen)
 			}
 		}
-		if len(candidates) == 0 {
-			continue
-		}
-		// A UUID can exist in both sessions/ and archived_sessions/.
-		// Prefer the path the DB already tracks so a title rename does
-		// not reparse a stale duplicate over the stored copy.
-		chosen := e.pickPreferredCodexIndexDiscoveredFile(ctx, candidates)
-		// Pin the provider source to the chosen path and route it through the
-		// provider so processProviderFile parses exactly this copy instead of
-		// re-canonicalizing the UUID to the preferred dated layout, which would
-		// undo the DB-aware selection above.
-		chosen.ProviderProcess = true
-		chosen.ProviderSource = e.codexPinnedProviderSource(
-			parser.AgentCodex, chosen.Path,
-		)
-		out = append(out, chosen)
 	}
 	return out
+}
+
+// codexIndexRenamedRawIDs lists the raw session ids of one index entry whose
+// stored title differs from it: the thread itself and each stored revert page
+// of the thread (codex:<thread>_<rollout>), which carry the thread's title.
+func (e *Engine) codexIndexRenamedRawIDs(ctx context.Context,
+	uuid, title string,
+) []string {
+	var rawIDs []string
+	if e.codexStoredNameDiffers(uuid, title) {
+		rawIDs = append(rawIDs, uuid)
+	}
+	threadSessionID := e.idPrefix + "codex:" + uuid
+	pageIDs, err := e.db.CodexRevertPageSessionIDs(ctx, threadSessionID)
+	if err != nil {
+		log.Printf("codex index rename: listing revert pages of %s: %v", threadSessionID, err)
+		return rawIDs
+	}
+	for _, id := range pageIDs {
+		raw := strings.TrimPrefix(id, e.idPrefix+"codex:")
+		if parser.CodexThreadIDFromSessionKey(raw) != uuid {
+			continue
+		}
+		if e.codexStoredNameDiffersBySessionID(id, title, false) {
+			rawIDs = append(rawIDs, raw)
+		}
+	}
+	return rawIDs
+}
+
+// codexIndexSourceForRawID resolves a Codex session key to its source file
+// under the index's roots and pins the provider source to the chosen copy.
+func (e *Engine) codexIndexSourceForRawID(ctx context.Context,
+	sessionRoots []string, rawID string,
+) (parser.DiscoveredFile, bool) {
+	var candidates []parser.DiscoveredFile
+	for _, root := range sessionRoots {
+		if src := e.codexSourceFileForUUID(root, rawID); src != "" {
+			candidates = append(candidates, parser.DiscoveredFile{
+				Path:    src,
+				Agent:   parser.AgentCodex,
+				Machine: e.machineForPath(parser.AgentCodex, src),
+			})
+		}
+	}
+	if len(candidates) == 0 {
+		return parser.DiscoveredFile{}, false
+	}
+	// A UUID can exist in both sessions/ and archived_sessions/.
+	// Prefer the path the DB already tracks so a title rename does
+	// not reparse a stale duplicate over the stored copy.
+	chosen := e.pickPreferredCodexIndexDiscoveredFile(ctx, candidates)
+	// Pin the provider source to the chosen path and route it through the
+	// provider so processProviderFile parses exactly this copy instead of
+	// re-canonicalizing the UUID to the preferred dated layout, which would
+	// undo the DB-aware selection above.
+	chosen.ProviderProcess = true
+	chosen.ProviderSource = e.codexPinnedProviderSource(
+		parser.AgentCodex, chosen.Path,
+	)
+	return chosen, true
 }
 
 func (e *Engine) pickPreferredCodexIndexDiscoveredFile(ctx context.Context,

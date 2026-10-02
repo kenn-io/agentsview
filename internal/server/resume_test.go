@@ -72,6 +72,31 @@ func TestResumeCommandAugureCode(t *testing.T) {
 	assert.Equal(t, "augure resume run-1 -m ossington-5", cmd)
 }
 
+func TestResumeCommandCodexRevertPage(t *testing.T) {
+	const (
+		thread = "11111111-1111-4111-8111-111111111111"
+		page   = thread + "_22222222-2222-4222-8222-222222222222"
+	)
+	tests := []struct {
+		name  string
+		agent string
+		rawID string
+		want  string
+	}{
+		{"codex page resumes its thread", "codex", page, "codex resume " + thread},
+		{"traex page resumes its thread", "traex", page, "traex resume " + thread},
+		{"augure page resumes its thread", "augure-code", page, "augure resume " + thread},
+		{"plain codex thread", "codex", thread, "codex resume " + thread},
+		{"augure underscore id", "augure-code", "run_1", "augure resume run_1"},
+		{"other agent keeps page-shaped id", "claude", page, "claude --resume " + page},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, resumeCommand(tt.agent, resumeAgents[tt.agent], tt.rawID, ""))
+		})
+	}
+}
+
 func TestCommandWithCleanup(t *testing.T) {
 	assert.Equal(t,
 		"claude < prompt.txt; rm -f -- 'prompt.txt'",

@@ -233,6 +233,20 @@ func TestResumeSession(t *testing.T) {
 		}
 	})
 
+	t.Run("codex revert page resumes its thread", func(t *testing.T) {
+		const (
+			thread = "11111111-1111-4111-8111-111111111111"
+			pageID = "codex:" + thread + "_22222222-2222-4222-8222-222222222222"
+		)
+		te.seedSession(t, pageID, "remote-project", 1, func(s *db.Session) {
+			s.Agent = "codex"
+		})
+		assertStatus(t, te.post(t, "/api/v1/config/terminal", `{"mode":"clipboard"}`), http.StatusOK)
+		w := te.post(t, "/api/v1/sessions/"+pageID+"/resume", `{}`)
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.JSONEq(t, `{"launched":false,"command":"codex resume `+thread+`"}`, w.Body.String())
+	})
+
 	// Seed a claude session with an absolute project path.
 	projectDir := t.TempDir()
 	te.seedSession(t, "sess-1", projectDir, 5, func(s *db.Session) {

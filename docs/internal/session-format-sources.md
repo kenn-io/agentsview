@@ -495,6 +495,85 @@ fixtures retain this field; missing identities remain source-local.
 
 ## Codex (`codex`)
 
+- **Revert rollouts (checked 2026-09-29 at rust-v0.154.0):** Only
+  `thread/revert` writes a rollout named
+  `rollout-<ts>-<thread>_<rollout>.jsonl`
+  ([revert_thread.rs](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/thread-store/src/local/revert_thread.rs#L160-L177)
+  and
+  [rollout_file_name.rs](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/rollout/src/rollout_file_name.rs#L62-L73)).
+  History length never creates one. Its `session_meta` keeps the thread id
+  in `id`, sets `history_mode: "paginated"`, and carries a `history_base`
+  whose `thread_id` names a rollout id
+  ([protocol.rs](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/protocol/src/protocol.rs#L3018-L3032)).
+  The base is absent when the revert goes back to before the first turn
+  ([paginated_fork.rs](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/thread-store/src/local/paginated_fork.rs#L136-L177)).
+  Older files stay intact, undone turns included
+  ([revert_thread.rs](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/thread-store/src/local/revert_thread.rs#L15-L18)).
+  Codex copies nothing forward and rebuilds the live thread by walking bases
+  back from the newest file
+  ([rollout_lineage.rs](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/thread-store/src/local/rollout_lineage.rs#L65-L188)),
+  so several pages can share one base. Each page lands in the dated folder
+  for the day of the undo, and archiving moves every file of the thread into
+  `archived_sessions/`
+  ([archive_thread.rs](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/thread-store/src/local/archive_thread.rs#L42-L113)).
+  Resume and thread lookup take the thread id and open its newest file
+  ([list.rs](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/rollout/src/list.rs#L1602-L1616)).
+  A reported archive written by Codex `0.153.4` and `0.155.0-alpha.16.3`
+  held five such files for one thread across five dated folders. AgentsView
+  stores each file as `codex:<thread>_<rollout>`, a continuation of the
+  session for its base rollout, or of the thread's session when the base is
+  absent. A forked thread's page carries the fork cutoff as
+  `forked_from_ordinal_exclusive`, the smaller of the source cutoff and the
+  base's end
+  ([revert_thread.rs](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/thread-store/src/local/revert_thread.rs#L103-L109)),
+  so a base ending at that cutoff lies in inherited history and the page
+  continues the thread it was forked from. A page without the cutoff keeps
+  every message but its parent link may not resolve. Resume commands and index
+  titles use the thread id. A subagent forked from a thread copies the
+  thread's full live history, pages included
+  ([thread_manager.rs](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/core/src/thread_manager.rs#L1040-L1073)),
+  so the replay filter reads turn ids from the thread's rollout and every
+  page. Raw capture carries those same parent files across configured roots,
+  including nested custom roots, so hosted parsing also drops copied messages
+  and usage. Reverified these producer paths on 2026-09-30 at the same commit.
+  Parent lookup shares a file inventory across providers from the same
+  factory. Directory identity and modification time refresh changed folders
+  when pages appear or move, while file identity still validates cached turn
+  IDs. This avoids listing every unchanged rollout for each fork. Verified
+  page creation, archival moves, and removal of the original on 2026-10-02. If
+  only pages remain and the parent's original rollout is missing, the fork
+  keeps its retry marker until the original becomes available. If the original
+  exists but an archived parent page is missing, copied turns from that page
+  can still be imported and counted again; turn IDs are read from files, not
+  retained in the archive. When upgrading an archive older than data version
+  123, newly split pages inherit the thread's permanent deletion or trash
+  state. Permanent deletions retain their whole-thread scope, including pages
+  whose files return after the upgrade. New deletions affect only the selected
+  file. Pins follow the page named by the old row's file, and saved names and
+  stars follow it when the original thread row is gone. Saved parser-source
+  project identities follow their page without overwriting the original
+  thread's identity. Archived pages whose files are absent keep their
+  messages, tool results, usage, and export identities under the page ID, even
+  if the original file is reparsed. Their base cannot be recovered from disk,
+  so they link to the thread. Later rebuilds keep metadata scoped to each
+  file. Activity hints still find the newest surviving page without an
+  original thread row. Reverified these archive and activity paths on
+  2026-10-01. Other Codex versions may differ. Tests:
+  `TestCodexRevertPageSessionsThroughAPI`, `TestCodexRevertPagesFormATree`,
+  `TestCodexRevertPagesRetainDailyUsage`,
+  `TestCodexRevertPageUpgradeReplacesStaleThreadRow`,
+  `TestCopySessionMetadataFrom_CodexPagePins`,
+  `TestCopySessionMetadataFromCodexPageProjectSnapshot`,
+  `TestCopyExcludedSessionsFromRetainsCodexThreadScope`,
+  `TestCopyOrphanedCodexPagePreservesArchivedContent`,
+  `TestLiveActivityLookupFollowsNewestCodexRevertPage`,
+  `TestCodexForkOfRevertedThreadDropsReplayedPageTurns`,
+  `TestCodexForkWithOnlyParentPageNeedsRetry`,
+  `TestCodexForkInventoryFindsNewAndMovedPages`,
+  `TestCodexForkInventoryDoesNotAllocatePerUnchangedFile`,
+  `TestCodexRevertPageRebuildPreservesDeletionState`,
+  `TestProviderParserHostedParseMatchesLocalCodexForkLineage`.
+
 - **Tool-result image check (2026-09-08):** Reverified the pinned
   [output payload types and array tests](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/protocol/src/models.rs).
   `function_call_output.output` accepts a string or a content-item array.
@@ -2238,11 +2317,15 @@ schemas keep their existing ordering behavior.
 
 - **Format:** Pi-family, tree-structured JSONL, one file per session under an
   encoded working-directory folder below `~/.omo/agent/sessions/`.
+
 - **Evidence:** `source`.
-- **Upstream:** The `omo` command from oh-my-openagent runs senpi, a Pi fork,
-  under an OMO brand profile. Clone `https://github.com/code-yeongyu/senpi.git`
-  at `b50f58c8a21b0e94b12c4269a9a8c608e03d308c` (tag `v2026.9.28-7`, the engine omo-ai 5.1.0 pins); see the pinned
-  [session format](https://github.com/code-yeongyu/senpi/blob/b50f58c8a21b0e94b12c4269a9a8c608e03d308c/packages/coding-agent/docs/session-format.md),
+
+- **Upstream:** Clone `https://github.com/code-yeongyu/senpi.git` at
+  `b50f58c8a21b0e94b12c4269a9a8c608e03d308c` (tag `v2026.9.28-7`, the engine
+  omo-ai 5.1.0 pins). The `omo` command from oh-my-openagent runs senpi, a Pi
+  fork, under an OMO brand profile. See the pinned
+  [session format](https://github.com/code-yeongyu/senpi/blob/b50f58c8a21b0e94b12c4269a9a8c608e03d308c/packages/coding-agent/docs/session-format.md).
+  Also see the
   [session manager](https://github.com/code-yeongyu/senpi/blob/b50f58c8a21b0e94b12c4269a9a8c608e03d308c/packages/coding-agent/src/core/session-manager.ts),
   and
   [configuration paths](https://github.com/code-yeongyu/senpi/blob/b50f58c8a21b0e94b12c4269a9a8c608e03d308c/packages/coding-agent/src/config.ts).
@@ -2254,9 +2337,11 @@ schemas keep their existing ordering behavior.
   prefix `OMO`, and its
   [package manifest](https://github.com/code-yeongyu/oh-my-openagent/blob/d69d696acb3a2fddffc6a4a8bdfa7b94c6f4aef0/packages/omo-native/package.json)
   pins the senpi version.
+
 - **Usage and cost:** Assistant messages persist input, output, cache-read, and
-  cache-write tokens with a model ID and a producer cost object, the same shape
-  as Pi. Agentsview catalog-prices the tokens.
+  cache-write tokens with a model ID and a producer cost object, the same
+  shape as Pi. Agentsview catalog-prices the tokens.
+
 - **Agentsview:** OMO is registered through the Pi-family provider in
   `internal/parser/pi.go` and `internal/parser/pi_provider.go` with its own
   `omo:` session identity, so its sessions never share the Pi or Oh My Pi

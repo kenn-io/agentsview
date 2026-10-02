@@ -18,11 +18,8 @@ func TestCodexParentTurnCache(t *testing.T) {
 	turns := map[string]struct{}{"opaque-turn": {}}
 
 	cache := newCodexParentTurnCache(1)
-	cache.PutParent("root\x00parent", key, turns)
+	cache.Put(key, turns)
 	got, ok := cache.Get(key)
-	require.True(t, ok)
-	assert.Equal(t, turns, got)
-	got, ok = cache.GetParent("root\x00parent")
 	require.True(t, ok)
 	assert.Equal(t, turns, got)
 
@@ -30,7 +27,5 @@ func TestCodexParentTurnCache(t *testing.T) {
 	other.path = filepath.Join(filepath.Dir(path), "other.jsonl")
 	cache.Put(other, map[string]struct{}{"other": {}})
 	_, kept := cache.Get(key)
-	assert.False(t, kept)
-	_, kept = cache.GetParent("root\x00parent")
 	assert.False(t, kept)
 }

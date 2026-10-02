@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -69,6 +70,9 @@ type codexSessionBuilder struct {
 	sessionID                   string
 	parentSessionID             string
 	relationshipType            RelationshipType
+	historyBase                 string
+	forkedFromID                string
+	forkBaseInherited           bool
 	sessionKind                 string
 	project                     string
 	callNames                   map[string]string
@@ -407,6 +411,9 @@ func (b *codexSessionBuilder) handleSessionMeta(
 	payload gjson.Result, envelopeTS time.Time,
 ) (skip bool) {
 	b.sessionID = payload.Get("id").Str
+	b.historyBase = strings.TrimSpace(payload.Get("history_base.thread_id").Str)
+	b.forkedFromID = strings.TrimSpace(payload.Get("forked_from_id").Str)
+	b.forkBaseInherited = codexForkBaseInherited(payload, b.historyBase, b.forkedFromID)
 	b.agentPath = strings.TrimSpace(payload.Get("agent_path").Str)
 	if b.agentPath == "" {
 		b.agentPath = strings.TrimSpace(
@@ -1625,54 +1632,72 @@ func (p *codexProvider) parseSessionWithCursor(
 	)
 }
 
+// parentTurnResolver returns the turn ids of a replay parent thread. A fork
+// copies the thread's live history, which spans its own rollout and every
+// revert page (<thread>_<rollout>), so the ids come from all of those files.
+// Directory identities validate the file inventory so an undo added between
+// parses is visible without listing every unchanged day's files again.
 func (p *codexProvider) parentTurnResolver(
 	ctx context.Context, childPath string,
 ) codexParentTurnResolver {
 	return func(parentID string) (map[string]struct{}, bool) {
-		if ctx.Err() != nil {
-			return nil, false
-		}
-		parentKey := strings.Join(p.sources.roots, "\x00") + "\x00" + parentID
-		if turnIDs, ok := p.parentTurnCache.GetParent(parentKey); ok {
-			return turnIDs, true
-		}
-		parentPath := ""
+		var paths []string
+		hasOriginal := false
 		for _, root := range p.sources.roots {
 			if ctx.Err() != nil {
 				return nil, false
 			}
-			candidate := p.sources.findSourceFile(root, parentID)
-			if candidate == "" || filepath.Clean(candidate) == filepath.Clean(childPath) {
-				continue
+			for _, path := range p.sources.findThreadSourceFiles(root, parentID) {
+				if filepath.Clean(path) != filepath.Clean(childPath) {
+					paths = append(paths, path)
+					if CodexSessionUUIDFromFilename(filepath.Base(path)) == parentID {
+						hasOriginal = true
+					}
+				}
 			}
-			parentPath = candidate
-			break
 		}
-		if parentPath == "" {
+		// A page alone cannot identify turns copied from the original rollout.
+		// Keep the fork eligible for retry until that file becomes available.
+		if !hasOriginal {
 			return nil, false
 		}
-		info, err := os.Stat(parentPath)
-		if err != nil || info.IsDir() {
-			return nil, false
-		}
-		cacheKey := codexParentTurnCacheKeyFor(parentPath, info)
-		if turnIDs, ok := p.parentTurnCache.Get(cacheKey); ok {
-			return turnIDs, true
-		}
-
 		turnIDs := make(map[string]struct{})
-		_, err = readCodexJSONLFromContext(ctx, parentPath, 0, func(line string) {
-			if gjson.Get(line, "type").Str != codexTypeTurnContext {
-				return
+		for _, path := range paths {
+			fileTurnIDs, ok := p.rolloutTurnIDs(ctx, path)
+			if !ok {
+				return nil, false
 			}
-			turnIDs[gjson.Get(line, "payload.turn_id").Str] = struct{}{}
-		})
-		if err != nil && !errors.Is(err, errCodexIncrementalNeedsFullParse) {
-			return nil, false
+			maps.Copy(turnIDs, fileTurnIDs)
 		}
-		p.parentTurnCache.PutParent(parentKey, cacheKey, turnIDs)
 		return turnIDs, true
 	}
+}
+
+// rolloutTurnIDs returns the turn ids one rollout file records, cached by the
+// file's identity.
+func (p *codexProvider) rolloutTurnIDs(
+	ctx context.Context, path string,
+) (map[string]struct{}, bool) {
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return nil, false
+	}
+	cacheKey := codexParentTurnCacheKeyFor(path, info)
+	if turnIDs, ok := p.parentTurnCache.Get(cacheKey); ok {
+		return turnIDs, true
+	}
+	turnIDs := make(map[string]struct{})
+	_, err = readCodexJSONLFromContext(ctx, path, 0, func(line string) {
+		if gjson.Get(line, "type").Str != codexTypeTurnContext {
+			return
+		}
+		turnIDs[gjson.Get(line, "payload.turn_id").Str] = struct{}{}
+	})
+	if err != nil && !errors.Is(err, errCodexIncrementalNeedsFullParse) {
+		return nil, false
+	}
+	p.parentTurnCache.Put(cacheKey, turnIDs)
+	return turnIDs, true
 }
 
 // CodexReplayParentID returns the explicit parent only when the rollout has a
@@ -1771,6 +1796,47 @@ func (p *codexProvider) parseSessionSnapshotWithCursor(
 	)
 }
 
+// codexForkBaseInherited reports whether a forked thread's history_base names
+// a rollout the thread inherited from the one it was forked from. Codex records
+// the page's fork cutoff as min(source cutoff, base end), so an inherited base
+// ends exactly at forked_from_ordinal_exclusive while the thread's own rollouts
+// end past it.
+func codexForkBaseInherited(payload gjson.Result, base, forkedFromID string) bool {
+	if forkedFromID == "" || base == "" {
+		return false
+	}
+	if base == forkedFromID {
+		return true
+	}
+	cutoff := payload.Get("forked_from_ordinal_exclusive")
+	end := payload.Get("history_base.end_ordinal_exclusive")
+	return cutoff.Exists() && end.Exists() && cutoff.Int() == end.Int()
+}
+
+// codexRevertPage returns the session id and parent of a rollout Codex
+// thread/revert wrote as rollout-<ts>-<thread>_<rollout>.jsonl. The page
+// continues the session of the rollout its history_base names; without a base
+// (a revert to the thread's start) it continues the thread's own session. A
+// forked thread's base can lie in history it inherited, which may belong to a
+// thread further up the fork chain; the page then continues the thread it was
+// forked from.
+func codexRevertPage(
+	path, threadID, baseRollout, forkedFromID string, inherited bool,
+) (id, parentID string, ok bool) {
+	key := CodexSessionUUIDFromFilename(filepath.Base(path))
+	if threadID == "" || key == threadID || CodexThreadIDFromSessionKey(key) != threadID {
+		return "", "", false
+	}
+	parent := threadID
+	if baseRollout != "" && baseRollout != threadID {
+		parent = threadID + "_" + baseRollout
+		if inherited {
+			parent = forkedFromID
+		}
+	}
+	return key, "codex:" + parent, true
+}
+
 // parseCodexSessionSnapshotStreaming decodes one snapshot, emitting every
 // normalized operation into the caller's sink instead of accumulating a
 // full message slice inside the parser. The returned message slice comes
@@ -1859,6 +1925,13 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 	}
 
 	sessionID := b.sessionID
+	parentSessionID, relationshipType := b.parentSessionID, b.relationshipType
+	if pageID, pageParent, ok := codexRevertPage(
+		path, b.sessionID, b.historyBase, b.forkedFromID, b.forkBaseInherited,
+	); ok {
+		sessionID = pageID
+		parentSessionID, relationshipType = pageParent, RelContinuation
+	}
 	if sessionID == "" {
 		sessionID = strings.TrimSuffix(
 			filepath.Base(path), ".jsonl",
@@ -1897,8 +1970,8 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 		Project:            b.project,
 		Machine:            machine,
 		Agent:              AgentCodex,
-		ParentSessionID:    b.parentSessionID,
-		RelationshipType:   b.relationshipType,
+		ParentSessionID:    parentSessionID,
+		RelationshipType:   relationshipType,
 		SessionKind:        b.sessionKind,
 		Cwd:                b.cwd,
 		FirstMessage:       b.firstMessage,

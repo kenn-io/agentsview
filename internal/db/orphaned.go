@@ -6,8 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 	"time"
+
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 type sqlContextExecer interface {
@@ -81,6 +84,12 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 		)
 	}()
 
+	staleIDs, err := staleCodexFileRowIDs(ctx, conn)
+	if err != nil {
+		return nil, err
+	}
+	extraExcludedIDs = append(slices.Clip(extraExcludedIDs), staleIDs...)
+
 	if _, err := conn.ExecContext(ctx, `
 		CREATE TEMP TABLE _extra_excluded_orphan_ids (
 			id TEXT PRIMARY KEY
@@ -143,31 +152,12 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 	// Snapshot orphaned session IDs before any inserts
 	// change main.sessions. Exclude permanently deleted sessions
 	// so they are not resurrected as orphans.
-	//
-	// Also exclude stale Codex rows whose file was reparsed into
-	// the new DB under a different session id: before dataVersion
-	// 40 a forked rollout's replayed parent session_meta overwrote
-	// the fork's id (#643), so the fork file's row was stored under
-	// the parent's identity with double-counted totals. That row is
-	// a stale duplicate of a live file, not an archive of a lost
-	// one. Scoped to Codex because it is strictly one session per
-	// file; SQLite-backed agents share a file_path across many
-	// sessions, where an id missing from the fresh parse can be a
-	// genuinely evicted chat that must survive as an orphan.
 	if _, err := conn.ExecContext(ctx, `
 		CREATE TEMP TABLE _orphaned_ids AS
-		SELECT id FROM old_db.sessions
+		SELECT id, id AS source_id FROM old_db.sessions
 		WHERE id NOT IN (SELECT id FROM main.sessions)
 		  AND id NOT IN (SELECT id FROM main.excluded_sessions)
-		  AND id NOT IN (SELECT id FROM _extra_excluded_orphan_ids)
-		  AND id NOT IN (
-			SELECT old_s.id
-			FROM old_db.sessions old_s
-			JOIN main.sessions new_s
-				ON new_s.file_path = old_s.file_path
-			WHERE old_s.agent = 'codex'
-			  AND new_s.agent = 'codex'
-		  )`,
+		  AND id NOT IN (SELECT id FROM _extra_excluded_orphan_ids)`,
 	); err != nil {
 		return nil, fmt.Errorf(
 			"identifying orphaned sessions: %w", err,
@@ -180,6 +170,46 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 			"DROP TABLE IF EXISTS _orphaned_ids",
 		)
 	}()
+
+	var sourceVersion int
+	if err := conn.QueryRowContext(ctx, "PRAGMA old_db.user_version").Scan(&sourceVersion); err != nil {
+		return nil, fmt.Errorf("reading orphan source version: %w", err)
+	}
+	if sourceVersion < codexRevertPageDataVersion {
+		candidates, err := codexRowsReparsedElsewhere(ctx, conn)
+		if err != nil {
+			return nil, err
+		}
+		for sourceID, pageID := range candidates {
+			prefixEnd := strings.LastIndex(sourceID, ":") + 1
+			if parser.CodexThreadIDFromSessionKey(pageID[prefixEnd:]) != sourceID[prefixEnd:] {
+				continue
+			}
+			// Stop treating this page as the head even when the page is
+			// excluded or already has its own archived row.
+			if _, err := conn.ExecContext(ctx, `DELETE FROM _orphaned_ids WHERE id = ? AND id = source_id`, sourceID); err != nil {
+				return nil, fmt.Errorf("removing old Codex page identity: %w", err)
+			}
+			// A reparsed head can occupy the old page's ID. Retain the old
+			// page under its file identity, including when both files are gone.
+			// Trash already copied before parsing must not be copied twice.
+			if _, err := conn.ExecContext(ctx, `
+				INSERT INTO _orphaned_ids (id, source_id)
+				SELECT ?, ?
+				WHERE NOT EXISTS (SELECT 1 FROM main.sessions WHERE id = ?)
+				  AND NOT EXISTS (SELECT 1 FROM _orphaned_ids WHERE id = ?)
+				  AND NOT EXISTS (SELECT 1 FROM main.sessions WHERE id = ? AND deleted_at IS NOT NULL)
+				  AND NOT EXISTS (SELECT 1 FROM main.excluded_sessions WHERE id IN (?, ?))
+				  AND NOT EXISTS (SELECT 1 FROM _extra_excluded_orphan_ids WHERE id IN (?, ?))`,
+				pageID, sourceID, pageID, pageID, sourceID, pageID, sourceID, pageID, sourceID); err != nil {
+				return nil, fmt.Errorf("preserving archived Codex page: %w", err)
+			}
+		}
+	}
+
+	if _, err := conn.ExecContext(ctx, `CREATE UNIQUE INDEX _orphaned_source_ids ON _orphaned_ids(source_id)`); err != nil {
+		return nil, fmt.Errorf("indexing orphan source IDs: %w", err)
+	}
 
 	ids, err := copiedSessionIDs(ctx, conn, "_orphaned_ids")
 	if err != nil {
@@ -208,7 +238,6 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 		if err := copySessionDataForIDs(ctx, tx, "_orphaned_ids"); err != nil {
 			return nil, fmt.Errorf("copying orphaned data: %w", err)
 		}
-		sourceVersion := copiedSourceDataVersion(ctx, tx)
 		if err := removeGeneratedIdentitySnapshotsWithoutSource(
 			ctx, tx, "_orphaned_ids", sourceVersion,
 		); err != nil {
@@ -296,7 +325,7 @@ func (d *DB) CopyTrashedDataFrom(sourcePath string) ([]string, error) {
 	}
 	if _, err := tx.ExecContext(ctx, `
 		CREATE TEMP TABLE _trashed_ids AS
-		SELECT id FROM old_db.sessions
+		SELECT id, id AS source_id FROM old_db.sessions
 		WHERE `+trashFilter+`
 		  AND id NOT IN (SELECT id FROM main.excluded_sessions)`); err != nil {
 		return nil, fmt.Errorf(
@@ -309,6 +338,10 @@ func (d *DB) CopyTrashedDataFrom(sourcePath string) ([]string, error) {
 			"DROP TABLE IF EXISTS _trashed_ids",
 		)
 	}()
+
+	if _, err := tx.ExecContext(ctx, `CREATE UNIQUE INDEX _trashed_source_ids ON _trashed_ids(source_id)`); err != nil {
+		return nil, fmt.Errorf("indexing trashed source IDs: %w", err)
+	}
 
 	ids, err := copiedSessionIDs(ctx, tx, "_trashed_ids")
 	if err != nil {
@@ -1087,6 +1120,9 @@ func copyArtifactCheckpointLandings(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
+// Before this version, every Codex rollout of a thread shared one session ID.
+const codexRevertPageDataVersion = 123
+
 // CopyExcludedSessionsFrom copies the excluded_sessions table
 // from the source DB so permanently deleted sessions survive
 // full DB rebuilds. The source must not have active connections.
@@ -1127,12 +1163,49 @@ func (d *DB) CopyExcludedSessionsFrom(
 		return fmt.Errorf("probing excluded_sessions table: %w", err)
 	}
 
+	var sourceVersion int
+	if err := conn.QueryRowContext(ctx, "PRAGMA old_db.user_version").Scan(&sourceVersion); err != nil {
+		return fmt.Errorf("reading exclusion source version: %w", err)
+	}
+	var hasPageScope int
+	if err := conn.QueryRowContext(ctx, `SELECT count(*)
+		FROM pragma_table_info('excluded_sessions', 'old_db')
+		WHERE name = 'include_codex_pages'`).Scan(&hasPageScope); err != nil {
+		return fmt.Errorf("reading exclusion source columns: %w", err)
+	}
+	scope := "0"
+	if hasPageScope != 0 {
+		scope = "include_codex_pages"
+	}
+	if sourceVersion < codexRevertPageDataVersion {
+		// Deleted rows no longer retain file names, so unknown page IDs cannot
+		// be enumerated. Preserve the old whole-thread deletion instead.
+		scope = `CASE WHEN id GLOB 'codex:*' OR id GLOB '*~codex:*'
+			OR id GLOB 'traex:*' OR id GLOB '*~traex:*'
+			OR id GLOB 'augure-code:*' OR id GLOB '*~augure-code:*'
+			THEN 1 ELSE ` + scope + ` END`
+	}
 	_, err = conn.ExecContext(ctx, `
-		INSERT OR IGNORE INTO excluded_sessions (id, created_at)
-		SELECT id, created_at
-		FROM old_db.excluded_sessions`)
+		INSERT INTO excluded_sessions (id, created_at, include_codex_pages)
+		SELECT id, created_at, `+scope+` FROM old_db.excluded_sessions WHERE true
+		ON CONFLICT(id) DO UPDATE SET include_codex_pages =
+			MAX(excluded_sessions.include_codex_pages, excluded.include_codex_pages)`)
 	if err != nil {
 		return fmt.Errorf("copying excluded sessions: %w", err)
+	}
+	// Materialize exclusions for pages already parsed by the replacement so
+	// its post-sync purge and excluded-session inventory include those IDs.
+	_, err = conn.ExecContext(ctx, `
+		INSERT OR IGNORE INTO excluded_sessions (id, created_at)
+		SELECT page.id, thread.created_at
+		FROM main.sessions page
+		JOIN excluded_sessions thread
+		  ON thread.id = substr(page.id, 1, length(page.id) - 37)
+		WHERE thread.include_codex_pages = 1
+		  AND page.agent IN ('codex', 'traex', 'augure-code')
+		  AND substr(page.id, -37, 1) = '_'`)
+	if err != nil {
+		return fmt.Errorf("copying excluded Codex pages: %w", err)
 	}
 	return nil
 }
@@ -1167,6 +1240,42 @@ func (d *DB) CopySessionMetadataFrom(
 			ctx, "DETACH DATABASE old_db",
 		)
 	}()
+
+	// Old thread rows could contain a revert page's messages. Resolve that
+	// file before copying pins, even when the thread's original also survives.
+	if _, err := conn.ExecContext(ctx, `CREATE TEMP TABLE _codex_page_metadata (
+		source_id TEXT PRIMARY KEY, target_id TEXT NOT NULL
+	)`); err != nil {
+		return fmt.Errorf("creating Codex metadata map: %w", err)
+	}
+	defer func() { _, _ = conn.ExecContext(ctx, "DROP TABLE _codex_page_metadata") }()
+	var sourceVersion int
+	if err := conn.QueryRowContext(ctx, "PRAGMA old_db.user_version").Scan(&sourceVersion); err != nil {
+		return fmt.Errorf("reading metadata source version: %w", err)
+	}
+	var hasSessionFiles bool
+	if err := conn.QueryRowContext(ctx, `SELECT EXISTS (
+		SELECT 1 FROM pragma_table_info('sessions', 'old_db') WHERE name = 'file_path'
+	)`).Scan(&hasSessionFiles); err != nil {
+		return fmt.Errorf("probing metadata source sessions: %w", err)
+	}
+	if sourceVersion < codexRevertPageDataVersion && hasSessionFiles {
+		candidates, err := codexRowsReparsedElsewhere(ctx, conn)
+		if err != nil {
+			return err
+		}
+		for oldID, pageID := range candidates {
+			prefixEnd := strings.LastIndex(oldID, ":") + 1
+			if parser.CodexThreadIDFromSessionKey(pageID[prefixEnd:]) != oldID[prefixEnd:] {
+				continue
+			}
+			if _, err := conn.ExecContext(ctx, `
+				INSERT INTO _codex_page_metadata (source_id, target_id)
+				SELECT ?, id FROM main.sessions WHERE id = ?`, oldID, pageID); err != nil {
+				return fmt.Errorf("mapping Codex page metadata: %w", err)
+			}
+		}
+	}
 
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
@@ -1211,6 +1320,25 @@ func (d *DB) CopySessionMetadataFrom(
 			return fmt.Errorf("copying deleted_at: %w", err)
 		}
 	}
+	if hasDeletedAt && sourceVersion < codexRevertPageDataVersion {
+		// Deleting a thread before pages had separate IDs also hid its pages.
+		// Later rebuilds must keep deletion scoped to the selected file.
+		trashFilter := "old_s.deleted_at IS NOT NULL"
+		if hasDeletionCause {
+			trashFilter += " AND (old_s.deletion_cause IS NULL OR old_s.deletion_cause <> '" +
+				legacyDeletionCauseSourceMissing + "')"
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE main.sessions AS page
+			SET deleted_at = old_s.deleted_at
+			FROM old_db.sessions old_s
+			WHERE old_s.id = substr(page.id, 1, length(page.id) - 37)
+			  AND page.agent IN ('codex', 'traex', 'augure-code')
+			  AND substr(page.id, -37, 1) = '_'
+			  AND `+trashFilter); err != nil {
+			return fmt.Errorf("copying Codex revert page trash: %w", err)
+		}
+	}
 
 	// Copy user-set display_name (renames via RenameSession) from the old DB.
 	// In the two-field design display_name is always user-owned, so any
@@ -1234,6 +1362,16 @@ func (d *DB) CopySessionMetadataFrom(
 			  AND old_s.display_name IS NOT NULL`); err != nil {
 			return fmt.Errorf("copying user display_name: %w", err)
 		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE main.sessions
+			SET display_name = old_s.display_name
+			FROM old_db.sessions old_s
+			JOIN _codex_page_metadata mapped ON mapped.source_id = old_s.id
+			WHERE main.sessions.id = mapped.target_id
+			  AND old_s.display_name IS NOT NULL
+			  AND NOT EXISTS (SELECT 1 FROM main.sessions WHERE id = old_s.id)`); err != nil {
+			return fmt.Errorf("copying Codex page display_name: %w", err)
+		}
 	}
 
 	// Copy starred sessions (table may not exist in older DBs).
@@ -1247,6 +1385,14 @@ func (d *DB) CopySessionMetadataFrom(
 				SELECT id FROM main.sessions
 			)`); err != nil {
 			return fmt.Errorf("copying starred sessions: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT OR IGNORE INTO main.starred_sessions (session_id, created_at)
+			SELECT mapped.target_id, old_star.created_at
+			FROM old_db.starred_sessions old_star
+			JOIN _codex_page_metadata mapped ON mapped.source_id = old_star.session_id
+			WHERE NOT EXISTS (SELECT 1 FROM main.sessions WHERE id = old_star.session_id)`); err != nil {
+			return fmt.Errorf("copying Codex page stars: %w", err)
 		}
 	}
 
@@ -1278,21 +1424,20 @@ func (d *DB) CopySessionMetadataFrom(
 				INSERT OR IGNORE INTO main.pinned_messages
 					(session_id, message_id, ordinal, note, created_at)
 				SELECT
-					op.session_id, new_m.id, new_m.ordinal,
+					new_m.session_id, new_m.id, new_m.ordinal,
 					op.note, op.created_at
 				FROM old_db.pinned_messages op
 				JOIN old_db.messages old_m
 					ON old_m.id = op.message_id
+				LEFT JOIN _codex_page_metadata mapped
+					ON mapped.source_id = old_m.session_id
 				JOIN main.messages new_m
-					ON new_m.session_id = old_m.session_id
+					ON new_m.session_id = COALESCE(mapped.target_id, old_m.session_id)
 					AND new_m.source_uuid = old_m.source_uuid
-				WHERE op.session_id IN (
-					SELECT id FROM main.sessions
-				)
-				AND old_m.source_uuid != ''
+				WHERE old_m.source_uuid != ''
 				AND (
 					SELECT COUNT(*) FROM main.messages x
-					WHERE x.session_id = old_m.session_id
+					WHERE x.session_id = new_m.session_id
 					AND x.source_uuid = old_m.source_uuid
 				) = 1
 				AND (
@@ -1320,20 +1465,19 @@ func (d *DB) CopySessionMetadataFrom(
 				INSERT OR IGNORE INTO main.pinned_messages
 					(session_id, message_id, ordinal, note, created_at)
 				SELECT
-					op.session_id, new_m.id, new_m.ordinal,
+					new_m.session_id, new_m.id, new_m.ordinal,
 					op.note, op.created_at
 				FROM old_db.pinned_messages op
 				JOIN old_db.messages old_m
 					ON old_m.id = op.message_id
+				LEFT JOIN _codex_page_metadata mapped
+					ON mapped.source_id = old_m.session_id
 				JOIN main.messages new_m
-					ON new_m.session_id = old_m.session_id
+					ON new_m.session_id = COALESCE(mapped.target_id, old_m.session_id)
 					AND new_m.source_uuid = old_m.source_uuid
 					AND new_m.role = old_m.role
 					AND new_m.content = old_m.content
-				WHERE op.session_id IN (
-					SELECT id FROM main.sessions
-				)
-				AND old_m.source_uuid != ''
+				WHERE old_m.source_uuid != ''
 				AND (
 					SELECT COUNT(*) FROM old_db.messages y
 					WHERE y.session_id = old_m.session_id
@@ -1342,7 +1486,7 @@ func (d *DB) CopySessionMetadataFrom(
 					AND y.content = old_m.content
 				) = (
 					SELECT COUNT(*) FROM main.messages x
-					WHERE x.session_id = old_m.session_id
+					WHERE x.session_id = new_m.session_id
 					AND x.source_uuid = old_m.source_uuid
 					AND x.role = old_m.role
 					AND x.content = old_m.content
@@ -1356,7 +1500,7 @@ func (d *DB) CopySessionMetadataFrom(
 					AND y2.ordinal <= old_m.ordinal
 				) = (
 					SELECT COUNT(*) FROM main.messages x2
-					WHERE x2.session_id = old_m.session_id
+					WHERE x2.session_id = new_m.session_id
 					AND x2.source_uuid = old_m.source_uuid
 					AND x2.role = old_m.role
 					AND x2.content = old_m.content
@@ -1398,19 +1542,19 @@ func (d *DB) CopySessionMetadataFrom(
 			INSERT OR IGNORE INTO main.pinned_messages
 				(session_id, message_id, ordinal, note, created_at)
 			SELECT
-				op.session_id, new_m.id, new_m.ordinal,
+				new_m.session_id, new_m.id, new_m.ordinal,
 				op.note, op.created_at
 			FROM old_db.pinned_messages op
 			JOIN old_db.messages old_m
 				ON old_m.id = op.message_id
+			LEFT JOIN _codex_page_metadata mapped
+				ON mapped.source_id = old_m.session_id
 			JOIN main.messages new_m
-				ON new_m.session_id = old_m.session_id
+				ON new_m.session_id = COALESCE(mapped.target_id, old_m.session_id)
 				AND new_m.role = old_m.role
 				AND new_m.content = old_m.content
 				AND new_m.is_system = 0
-			WHERE op.session_id IN (
-				SELECT id FROM main.sessions
-			)`+legacyOnly+oldMVisible+`
+			WHERE 1=1`+legacyOnly+oldMVisible+`
 			AND (
 				SELECT COUNT(*) FROM old_db.messages y
 				WHERE y.session_id = old_m.session_id
@@ -1418,7 +1562,7 @@ func (d *DB) CopySessionMetadataFrom(
 				AND y.content = old_m.content`+oldYVisible+`
 			) = (
 				SELECT COUNT(*) FROM main.messages x
-				WHERE x.session_id = old_m.session_id
+				WHERE x.session_id = new_m.session_id
 				AND x.role = old_m.role
 				AND x.content = old_m.content
 				AND x.is_system = 0
@@ -1431,7 +1575,7 @@ func (d *DB) CopySessionMetadataFrom(
 				AND y2.ordinal <= old_m.ordinal`+oldY2Visible+`
 			) = (
 				SELECT COUNT(*) FROM main.messages x2
-				WHERE x2.session_id = old_m.session_id
+				WHERE x2.session_id = new_m.session_id
 				AND x2.role = old_m.role
 				AND x2.content = old_m.content
 				AND x2.is_system = 0
@@ -1553,9 +1697,10 @@ func (d *DB) CopySessionMetadataFrom(
 		}
 	}
 
-	sourceVersion := copiedSourceDataVersion(ctx, tx)
 	if sourceVersion >= projectIdentitySourceSnapshotDataVersion &&
 		oldDBHasTable(ctx, tx, "session_project_identity_snapshots") {
+		// An old thread row may contain a page's parser-source evidence.
+		// Move that evidence with the page instead of replacing the head's.
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO main.session_project_identity_snapshots (
 				session_id, project, machine, root_path, git_remote,
@@ -1564,13 +1709,15 @@ func (d *DB) CopySessionMetadataFrom(
 				git_branch, remote_resolution, remote_candidate_count,
 				observed_at, normalized_remote, key_source, key
 			)
-			SELECT session_id, project, machine, root_path, git_remote,
+			SELECT COALESCE(mapped.target_id, snapshot.session_id),
+				project, machine, root_path, git_remote,
 				git_remote_name, repository_path, worktree_name,
 				worktree_root_path, worktree_relationship, checkout_state,
 				git_branch, remote_resolution, remote_candidate_count,
 				observed_at, normalized_remote, key_source, key
-			FROM old_db.session_project_identity_snapshots
-			WHERE session_id IN (SELECT id FROM main.sessions)
+			FROM old_db.session_project_identity_snapshots snapshot
+			LEFT JOIN _codex_page_metadata mapped ON mapped.source_id = snapshot.session_id
+			WHERE COALESCE(mapped.target_id, snapshot.session_id) IN (SELECT id FROM main.sessions)
 			ON CONFLICT(session_id) DO UPDATE SET
 				project = excluded.project,
 				machine = excluded.machine,
@@ -2015,8 +2162,8 @@ func copySessionDataForIDs(
 
 	if _, err := tx.ExecContext(ctx,
 		"INSERT OR IGNORE INTO sessions ("+orphanCols+") "+
-			"SELECT "+orphanCols+" FROM old_db.sessions "+
-			"WHERE id IN (SELECT id FROM "+tempIDsTable+")",
+			"SELECT copied.id, "+strings.TrimPrefix(orphanCols, "id, ")+" FROM old_db.sessions old_s "+
+			"JOIN "+tempIDsTable+" copied ON copied.source_id = old_s.id",
 	); err != nil {
 		return fmt.Errorf("copying sessions: %w", err)
 	}
@@ -2029,6 +2176,20 @@ func copySessionDataForIDs(
 		); err != nil {
 			return fmt.Errorf("copying Claude subagent sources: %w", err)
 		}
+	}
+
+	// A retained page has no file to supply its base link. Its filename still
+	// identifies the thread. User renames stay on a surviving original head.
+	if _, err := tx.ExecContext(ctx, `UPDATE main.sessions
+		SET parent_session_id = copied.source_id,
+			parser_parent_session_id = copied.source_id,
+			relationship_type = 'continuation',
+			display_name = CASE WHEN EXISTS (
+				SELECT 1 FROM main.sessions head WHERE head.id = copied.source_id
+			) THEN NULL ELSE display_name END
+		FROM `+tempIDsTable+` copied
+		WHERE sessions.id = copied.id AND copied.id != copied.source_id`); err != nil {
+		return fmt.Errorf("linking archived Codex pages: %w", err)
 	}
 
 	// Copy messages. Omit id to let auto-increment assign
@@ -2056,20 +2217,24 @@ func copySessionDataForIDs(
 			msgCols.WriteString(", " + c)
 		}
 	}
+	// Restrict the source scan as well as mapping IDs. The join alone scans
+	// the whole archive even when only one session is missing.
 	if _, err := tx.ExecContext(ctx,
 		"INSERT INTO messages ("+msgCols.String()+") "+
-			"SELECT "+msgCols.String()+" FROM old_db.messages "+
-			"WHERE session_id IN (SELECT id FROM "+tempIDsTable+")",
+			"SELECT copied.id, "+strings.TrimPrefix(msgCols.String(), "session_id, ")+" FROM old_db.messages old_m "+
+			"JOIN "+tempIDsTable+" copied ON copied.source_id = old_m.session_id "+
+			"WHERE old_m.session_id IN (SELECT source_id FROM "+tempIDsTable+")",
 	); err != nil {
 		return fmt.Errorf("copying messages: %w", err)
 	}
-	if err := copyConversationRowsTx(ctx, tx, "session_id IN (SELECT id FROM "+tempIDsTable+")"); err != nil {
+	sessionID := "(SELECT id FROM " + tempIDsTable + " WHERE source_id = session_id)"
+	if err := copyConversationRowsTx(ctx, tx, "session_id IN (SELECT source_id FROM "+tempIDsTable+")", sessionID); err != nil {
 		return fmt.Errorf("copying conversation messages: %w", err)
 	}
 
 	if oldDBHasTable(ctx, tx, "usage_events") {
 		usageEventCols := "session_id, message_ordinal, source, model"
-		usageEventSelect := usageEventCols
+		usageEventSelect := sessionID + ", message_ordinal, source, model"
 		if oldDBHasColumn(ctx, tx, "usage_events", "provider_id") {
 			usageEventCols += ", provider_id"
 			usageEventSelect += ", provider_id"
@@ -2089,7 +2254,7 @@ func copySessionDataForIDs(
 			SELECT `+usageEventSelect+`
 			FROM old_db.usage_events
 			WHERE session_id IN (
-				SELECT id FROM `+tempIDsTable+`
+				SELECT source_id FROM `+tempIDsTable+`
 			)`,
 		); err != nil {
 			return fmt.Errorf("copying usage_events: %w", err)
@@ -2104,7 +2269,7 @@ func copySessionDataForIDs(
 		"result_content_length",
 	}
 	toolCallSelect := []string{
-		"new_m.id", "otc.session_id", "otc.tool_name",
+		"new_m.id", "new_m.session_id", "otc.tool_name",
 		"otc.category", "otc.tool_use_id", "otc.input_json",
 		"otc.skill_name", "otc.result_content_length",
 	}
@@ -2136,11 +2301,12 @@ func copySessionDataForIDs(
 		FROM old_db.tool_calls otc
 		JOIN old_db.messages old_m
 			ON old_m.id = otc.message_id
+		JOIN `+tempIDsTable+` copied ON copied.source_id = old_m.session_id
 		JOIN main.messages new_m
-			ON new_m.session_id = old_m.session_id
+			ON new_m.session_id = copied.id
 			AND new_m.ordinal = old_m.ordinal
 		WHERE otc.session_id IN (
-			SELECT id FROM `+tempIDsTable+`
+			SELECT source_id FROM `+tempIDsTable+`
 		)
 		ORDER BY otc.id`,
 	); err != nil {
@@ -2156,14 +2322,14 @@ func copySessionDataForIDs(
 				 content, content_length, timestamp,
 				 event_index)
 			SELECT
-				session_id, tool_call_message_ordinal,
+				`+sessionID+`, tool_call_message_ordinal,
 				call_index, tool_use_id, agent_id,
 				subagent_session_id, source, status,
 				content, content_length, timestamp,
 				event_index
 			FROM old_db.tool_result_events
 			WHERE session_id IN (
-				SELECT id FROM `+tempIDsTable+`
+				SELECT source_id FROM `+tempIDsTable+`
 			)`,
 		); err != nil {
 			return fmt.Errorf(
@@ -2180,13 +2346,13 @@ func copySessionDataForIDs(
 				 match_start, match_end, match_index,
 				 redacted_match, rules_version, created_at)
 			SELECT
-				session_id, rule_name, confidence, location_kind,
+				`+sessionID+`, rule_name, confidence, location_kind,
 				message_ordinal, call_index, event_index,
 				match_start, match_end, match_index,
 				redacted_match, rules_version, created_at
 			FROM old_db.secret_findings
 			WHERE session_id IN (
-				SELECT id FROM `+tempIDsTable+`
+				SELECT source_id FROM `+tempIDsTable+`
 			)`,
 		); err != nil {
 			return fmt.Errorf("copying secret_findings: %w", err)
@@ -2227,6 +2393,30 @@ func removeGeneratedIdentitySnapshotsWithoutSource(
 		  AND `+missingSourceSnapshot); err != nil {
 		return fmt.Errorf("removing generated identity snapshots: %w", err)
 	}
+	// Mapped orphans have no same-ID snapshot in the source. Preserve their
+	// archived evidence after removing the insert trigger's placeholder.
+	if sourceVersion >= projectIdentitySourceSnapshotDataVersion &&
+		oldDBHasTable(ctx, tx, "session_project_identity_snapshots") {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO main.session_project_identity_snapshots (
+				session_id, project, machine, root_path, git_remote,
+				git_remote_name, repository_path, worktree_name,
+				worktree_root_path, worktree_relationship, checkout_state,
+				git_branch, remote_resolution, remote_candidate_count,
+				observed_at, normalized_remote, key_source, key
+			)
+			SELECT copied.id, project, machine, root_path, git_remote,
+				git_remote_name, repository_path, worktree_name,
+				worktree_root_path, worktree_relationship, checkout_state,
+				git_branch, remote_resolution, remote_candidate_count,
+				observed_at, normalized_remote, key_source, key
+			FROM old_db.session_project_identity_snapshots old_snapshot
+			JOIN `+tempIDsTable+` copied ON copied.source_id = old_snapshot.session_id
+			WHERE copied.id != copied.source_id`); err != nil {
+			return fmt.Errorf("preserving mapped orphan project snapshots: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -2564,16 +2754,17 @@ func copyPinnedMessagesForIDs(
 		INSERT OR IGNORE INTO main.pinned_messages
 			(session_id, message_id, ordinal, note, created_at)
 		SELECT
-			op.session_id, new_m.id, new_m.ordinal,
+			new_m.session_id, new_m.id, new_m.ordinal,
 			op.note, op.created_at
 		FROM old_db.pinned_messages op
 		JOIN old_db.messages old_m
 			ON old_m.id = op.message_id
+		JOIN `+tempIDsTable+` copied ON copied.source_id = old_m.session_id
 		JOIN main.messages new_m
-			ON new_m.session_id = old_m.session_id
+			ON new_m.session_id = copied.id
 			AND new_m.ordinal = old_m.ordinal
 		WHERE op.session_id IN (
-			SELECT id FROM `+tempIDsTable+`
+			SELECT source_id FROM `+tempIDsTable+`
 		)`,
 	); err != nil {
 		return fmt.Errorf("copying pinned messages: %w", err)
@@ -2590,4 +2781,68 @@ func oldDBHasColumn(ctx context.Context, tx *sql.Tx, table, column string) bool 
 		table, column,
 	).Scan(&exists)
 	return err == nil && exists
+}
+
+// staleCodexFileRowIDs returns old Codex-format rows (codex, traex,
+// augure-code) whose rollout file the fresh sync reparsed under another id.
+// Before dataVersion 40 a forked rollout was stored under its parent's id
+// (#643), and before 123 a revert page, rollout-<ts>-<thread>_<rollout>.jsonl,
+// overwrote its thread's row. Such a row duplicates a live session rather than
+// archiving a lost one. The file name names the session, so a file archiving
+// moved to another folder still matches. SQLite-backed agents are left out:
+// many of their sessions share a file, so a missing id can be an evicted chat.
+// CopySessionMetadataFrom still reads the old source to move user metadata
+// from excluded pre-123 thread rows to their reparsed page.
+func staleCodexFileRowIDs(ctx context.Context, conn *sql.Conn) ([]string, error) {
+	candidates, err := codexRowsReparsedElsewhere(ctx, conn)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for staleID, liveID := range candidates {
+		var found int
+		err := conn.QueryRowContext(ctx,
+			`SELECT 1 FROM main.sessions WHERE id = ?
+			 AND NOT EXISTS (SELECT 1 FROM main.sessions WHERE id = ?)`, liveID, staleID,
+		).Scan(&found)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("checking live codex session %s: %w", liveID, err)
+		}
+		ids = append(ids, staleID)
+	}
+	return ids, nil
+}
+
+// codexRowsReparsedElsewhere maps each old Codex-format row to the id its
+// rollout file's name gives, when that id differs.
+func codexRowsReparsedElsewhere(ctx context.Context, conn *sql.Conn) (map[string]string, error) {
+	rows, err := conn.QueryContext(ctx, `
+		SELECT id, file_path FROM old_db.sessions
+		WHERE agent IN (?, ?, ?)
+		  AND file_path IS NOT NULL`,
+		string(parser.AgentCodex), string(parser.AgentTraeX), string(parser.AgentAugureCode),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("finding stale codex rows: %w", err)
+	}
+	defer rows.Close()
+	liveIDs := make(map[string]string)
+	for rows.Next() {
+		var id, path string
+		if err := rows.Scan(&id, &path); err != nil {
+			return nil, fmt.Errorf("scanning stale codex row: %w", err)
+		}
+		key := parser.CodexSessionUUIDFromFilename(path[strings.LastIndexAny(path, `/\`)+1:])
+		prefixEnd := strings.LastIndex(id, ":") + 1
+		if key != "" && prefixEnd > 0 && id[prefixEnd:] != key {
+			liveIDs[id] = id[:prefixEnd] + key
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reading stale codex rows: %w", err)
+	}
+	return liveIDs, nil
 }
