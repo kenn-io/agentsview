@@ -3,7 +3,7 @@ package rawcheckpoint
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"net/url"
 	"slices"
