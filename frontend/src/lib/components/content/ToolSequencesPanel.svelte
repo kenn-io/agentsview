@@ -290,50 +290,52 @@
                       >{m.tool_sequences_message({ ordinal: call.ordinal })}<span aria-hidden="true"> ↗</span></a>
                     </div>
                     {#if callOpen}
-                      <dl class="detail" id="{uid}-call-{index}-{callIndex}">
-                        <div class="ev">
-                          <dt>{m.tool_sequences_input()}</dt>
-                          <dd>
-                            {#if call.input_preview}
-                              <!-- svelte-ignore a11y_no_noninteractive_tabindex (scrollable preview needs keyboard access) -->
-                              <pre tabindex="0" role="region" aria-label={m.tool_sequences_input()}>{call.input_preview}</pre>
-                            {:else}
-                              <p class="none">{m.tool_sequences_no_input()}</p>
-                            {/if}
-                            {#if call.input_preview && call.input_omitted_bytes > 0}
-                              <p class="note">
-                                {previewNote(call.input_bytes, call.input_omitted_bytes)}
-                                <span class="cut">{m.tool_sequences_full_input_in_message({ ordinal: call.ordinal })}</span>
-                              </p>
-                            {/if}
-                          </dd>
-                        </div>
-                        <div class="ev">
-                          <dt>{m.tool_sequences_result()}</dt>
-                          <dd>
-                            {#if call.result_content_unknown && call.outcome === "unknown"}
-                              <p class="none">{m.tool_sequences_result_unknown()}</p>
-                            {/if}
-                            {#if call.result_preview}
-                              <!-- svelte-ignore a11y_no_noninteractive_tabindex (scrollable preview needs keyboard access) -->
-                              <pre tabindex="0" role="region" aria-label={m.tool_sequences_result()}>{call.result_preview}</pre>
-                            {:else if call.result_bytes !== null && call.result_bytes > 0}
-                              <p class="none">{m.tool_sequences_result_unavailable(countArgs(call.result_bytes))}</p>
-                            {:else if call.result_bytes === 0}
-                              <p class="none">{m.tool_sequences_result_empty()}</p>
-                            {:else if !(call.result_content_unknown && call.outcome === "unknown")}
-                              <p class="none">{m.tool_sequences_result_size_unknown()}</p>
-                            {/if}
-                            {#if call.result_preview && call.result_bytes !== null && call.result_omitted_bytes !== null && call.result_omitted_bytes > 0}
-                              <p class="note">
-                                {previewNote(call.result_bytes, call.result_omitted_bytes)}
-                                <span class="cut">{m.tool_sequences_full_result_in_message({ ordinal: call.ordinal })}</span>
-                              </p>
-                            {/if}
-                          </dd>
-                        </div>
+                      <div class="detail" id="{uid}-call-{index}-{callIndex}">
+                        <dl class="evidence">
+                          <div class="ev">
+                            <dt>{m.tool_sequences_input()}</dt>
+                            <dd>
+                              {#if call.input_preview}
+                                <!-- svelte-ignore a11y_no_noninteractive_tabindex (scrollable preview needs keyboard access) -->
+                                <pre tabindex="0" role="region" aria-label={m.tool_sequences_input()}>{call.input_preview}</pre>
+                              {:else}
+                                <p class="none">{m.tool_sequences_no_input()}</p>
+                              {/if}
+                              {#if call.input_preview && call.input_omitted_bytes > 0}
+                                <p class="note">
+                                  {previewNote(call.input_bytes, call.input_omitted_bytes)}
+                                  <span class="cut">{m.tool_sequences_full_input_in_message({ ordinal: call.ordinal })}</span>
+                                </p>
+                              {/if}
+                            </dd>
+                          </div>
+                          <div class="ev">
+                            <dt>{m.tool_sequences_result()}</dt>
+                            <dd>
+                              {#if call.result_content_unknown && call.outcome === "unknown"}
+                                <p class="none">{m.tool_sequences_result_unknown()}</p>
+                              {/if}
+                              {#if call.result_preview}
+                                <!-- svelte-ignore a11y_no_noninteractive_tabindex (scrollable preview needs keyboard access) -->
+                                <pre tabindex="0" role="region" aria-label={m.tool_sequences_result()}>{call.result_preview}</pre>
+                              {:else if call.result_bytes !== null && call.result_bytes > 0}
+                                <p class="none">{m.tool_sequences_result_unavailable(countArgs(call.result_bytes))}</p>
+                              {:else if call.result_bytes === 0}
+                                <p class="none">{m.tool_sequences_result_empty()}</p>
+                              {:else if !(call.result_content_unknown && call.outcome === "unknown")}
+                                <p class="none">{m.tool_sequences_result_size_unknown()}</p>
+                              {/if}
+                              {#if call.result_preview && call.result_bytes !== null && call.result_omitted_bytes !== null && call.result_omitted_bytes > 0}
+                                <p class="note">
+                                  {previewNote(call.result_bytes, call.result_omitted_bytes)}
+                                  <span class="cut">{m.tool_sequences_full_result_in_message({ ordinal: call.ordinal })}</span>
+                                </p>
+                              {/if}
+                            </dd>
+                          </div>
+                        </dl>
                         <p class="idline">{call.tool_use_id || m.tool_sequences_missing_identity()}</p>
-                      </dl>
+                      </div>
                     {/if}
                   </div>
                 {/each}
@@ -671,10 +673,14 @@
     text-decoration: underline;
   }
 
-  .detail {
+  .detail,
+  .evidence {
     display: grid;
     gap: var(--space-3);
     margin: 0;
+  }
+
+  .detail {
     padding: var(--space-1) var(--space-4) var(--space-4) 28px;
   }
 
