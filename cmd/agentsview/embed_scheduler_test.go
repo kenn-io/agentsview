@@ -1164,6 +1164,53 @@ func TestRecallSchedulerSessionDeletionRemovesImportedEntryWithoutExtraction(t *
 	}
 }
 
+func TestMessageSchedulerQueuesBuildOnSessionDeletion(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		path         string
+		wantStatus   int
+		runAfterSync bool
+		wantQueued   int
+	}{
+		{name: "permanent delete", path: "/api/v1/sessions/s1/permanent", wantStatus: http.StatusNoContent, runAfterSync: true, wantQueued: 1},
+		{name: "empty trash", path: "/api/v1/trash", wantStatus: http.StatusOK, runAfterSync: true, wantQueued: 1},
+		{name: "run after sync disabled", path: "/api/v1/sessions/s1/permanent", wantStatus: http.StatusNoContent, runAfterSync: false, wantQueued: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dataDir := t.TempDir()
+			database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+			dbtest.SeedSession(t, database, "s1", "agentsview")
+			require.NoError(t, database.SoftDeleteSession(t.Context(), "s1"))
+
+			ln, port := listenLoopback(t)
+			cfg := vectorTestConfig(dataDir)
+			cfg.Host, cfg.Port = "127.0.0.1", port
+			runAfterSync := tc.runAfterSync
+			cfg.Vector.Embed.RunAfterSync = &runAfterSync
+
+			vs, err := setupVectorServing(t.Context(), cfg, database, nil)
+			require.NoError(t, err)
+			require.NotNil(t, vs.Scheduler)
+			t.Cleanup(func() { require.NoError(t, vs.Close()) })
+			require.Empty(t, vs.Scheduler.dirty, "setup must not queue a message build")
+
+			srv := server.New(cfg, database, nil, vs.ServerOpts...)
+			ts := startTestServer(t, ln, srv.Handler())
+			req, err := http.NewRequestWithContext(
+				t.Context(), http.MethodDelete, ts.URL+tc.path, nil,
+			)
+			require.NoError(t, err)
+			req.Header.Set("Origin", ts.URL)
+			resp, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			require.Equal(t, tc.wantStatus, resp.StatusCode)
+
+			assert.Len(t, vs.Scheduler.dirty, tc.wantQueued)
+		})
+	}
+}
+
 func TestRecallSchedulerStartupBuildsOfflineImportedCorpus(t *testing.T) {
 	dataDir := t.TempDir()
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))

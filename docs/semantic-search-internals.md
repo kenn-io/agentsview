@@ -276,6 +276,12 @@ instead of being deleted outright, so a same-scan reinsert under the same
 `doc_key` survives via upsert and keeps its `embed_gen` rather than
 re-embedding.
 
+An incremental refresh also reads the archive's session deletion journal from
+the revision stored in `vectors.db`. It removes the documents of permanently
+deleted sessions and rescans reinserted sessions whole, whatever their end time.
+When the stored revision is missing, belongs to another archive, or is ahead of
+the journal, the refresh runs a full reconciliation instead.
+
 ### Fill and skip-and-stamp
 
 Fill embeds every pending document (content changed, or never embedded, for the

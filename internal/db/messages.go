@@ -877,13 +877,36 @@ func (db *DB) ScanEmbeddableUnits(
 	ctx context.Context, since string, includeAutomated bool,
 	fn func(EmbeddableUnit) error,
 ) (maxEnded string, err error) {
-	args := []any{}
+	return db.scanEmbeddableUnits(ctx, since, "", includeAutomated, fn)
+}
+
+// ScanEmbeddableUnitsForSession streams all embeddable units for one session,
+// without applying an ended_at watermark.
+func (db *DB) ScanEmbeddableUnitsForSession(
+	ctx context.Context, sessionID string, includeAutomated bool,
+	fn func(EmbeddableUnit) error,
+) error {
+	if sessionID == "" {
+		return errors.New("session ID is required")
+	}
+	_, err := db.scanEmbeddableUnits(ctx, "", sessionID, includeAutomated, fn)
+	return err
+}
+
+func (db *DB) scanEmbeddableUnits(
+	ctx context.Context, since, sessionID string, includeAutomated bool,
+	fn func(EmbeddableUnit) error,
+) (maxEnded string, err error) {
+	args := make([]any, 0, 2)
+	if sessionID != "" {
+		args = append(args, sessionID)
+	}
 	if since != "" {
 		args = append(args, since)
 	}
 
 	rows, err := db.getReader().QueryContext(
-		ctx, embeddableUnitsQuery(since, includeAutomated), args...)
+		ctx, embeddableUnitsQuery(since, sessionID, includeAutomated), args...)
 	if err != nil {
 		return "", fmt.Errorf("scanning embeddable units: %w", err)
 	}
@@ -1076,10 +1099,11 @@ func runUnit(members []unitRow) EmbeddableUnit {
 	}
 }
 
-// embeddableUnitsQuery builds ScanEmbeddableUnits' statement. It takes one
-// bound argument (since) when since is set and none otherwise, and always
-// emits rows in (session_id, ordinal) order, which unitReducer depends on.
-func embeddableUnitsQuery(since string, includeAutomated bool) string {
+// embeddableUnitsQuery builds the embeddable-unit scan statement. A scoped
+// scan takes sessionID first; an incremental scan takes since after it. The
+// query always emits rows in (session_id, ordinal) order, which unitReducer
+// depends on.
+func embeddableUnitsQuery(since, sessionID string, includeAutomated bool) string {
 	preds := []string{
 		"m.role IN ('user', 'assistant')",
 		"m.is_system = 0",
@@ -1088,6 +1112,9 @@ func embeddableUnitsQuery(since string, includeAutomated bool) string {
 	}
 	if !includeAutomated {
 		preds = append(preds, automatedScopePredicate("human", "s.is_automated"))
+	}
+	if sessionID != "" {
+		preds = append(preds, "m.session_id = ?")
 	}
 	return `
 		SELECT m.session_id, m.role, m.source_uuid, m.ordinal, m.content,
