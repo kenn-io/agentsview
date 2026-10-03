@@ -64,6 +64,30 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
+function mountPanel(
+  data: SessionToolSequencesResponse | null,
+  extra: { loading?: boolean; failed?: boolean; onretry?: () => void } = {},
+) {
+  return mount(ToolSequencesPanel, {
+    target: document.body,
+    props: { data, sessionId: "session-a", loading: false, failed: false, ...extra },
+  });
+}
+
+async function openSequence(index = 0) {
+  const row = document.querySelectorAll<HTMLButtonElement>(".sequence-row")[index]!;
+  row.click();
+  await tick();
+  return row;
+}
+
+async function openCall(index: number) {
+  const row = document.querySelectorAll<HTMLButtonElement>(".call-row")[index]!;
+  row.click();
+  await tick();
+  return row;
+}
+
 describe("ToolSequencesPanel", () => {
   it("distinguishes measured zero from missing timing and shows bounded evidence", async () => {
     const data = makeData({
@@ -84,10 +108,11 @@ describe("ToolSequencesPanel", () => {
               result_bytes: 10,
               result_omitted_bytes: 3,
               result_content_unknown: true,
+              input_bytes: 12,
               input_omitted_bytes: 2,
             }),
             makeCall({
-              ordinal: 5,
+              ordinal: 9,
               tool_name: "Read",
               duration_ms: 0,
               repeat: "identical",
@@ -98,166 +123,198 @@ describe("ToolSequencesPanel", () => {
       ],
     });
     const jump = vi.spyOn(ui, "scrollToOrdinal").mockImplementation(() => {});
-    const component = mount(ToolSequencesPanel, {
-      target: document.body,
-      props: { data, sessionId: "session-a", loading: false, failed: false },
-    });
+    const component = mountPanel(data);
 
-    const details = document.querySelector<HTMLDetailsElement>("details.sequence");
-    expect(details).not.toBeNull();
-    details!.open = true;
-    await tick();
-    const text = document.body.textContent ?? "";
+    const row = document.querySelector<HTMLButtonElement>(".sequence-row")!;
+    expect(row.getAttribute("aria-expanded")).toBe("false");
+    expect(document.querySelector(".call")).toBeNull();
+    const header = document.querySelector(".panel-head")!.textContent ?? "";
+    expect(header).toContain("12 calls in sequences");
+    expect(header).toContain("12 tool calls in session");
+    expect(row.textContent).toContain("Same input repeated");
+    expect(row.textContent).toContain("Tool switched");
+    expect(row.textContent).toContain("Messages 4–9");
+    expect(row.textContent).toContain("+2 more");
+
+    await openSequence();
+    expect(row.getAttribute("aria-expanded")).toBe("true");
+    expect(row.getAttribute("aria-controls")).toBe(document.querySelector(".calls")!.id);
+    let text = document.body.textContent ?? "";
     expect(text).toContain("A later call returned content.");
+    expect(text).toContain("12 calls in a row.");
     expect(text).toContain("Not measured");
     expect(text).toContain("0ms");
-    expect(text).toContain("Unknown outcome");
-    expect(text).toContain("This result contains non-text evidence");
-    expect(text).toContain("2 calls omitted; some tool names may be hidden");
-    expect(text).toContain("4 calls omitted from this view");
-    expect(text).toContain("2 bytes omitted from the input preview");
-    expect(text).toContain("3 bytes omitted from the result preview");
-    expect(document.querySelectorAll(".call-fact")).toHaveLength(2);
+    expect(text).toContain("2 more calls between message 4 and message 9 aren't shown.");
+    expect(text).toContain("4 calls in sequences aren't shown in this view.");
+    expect(document.querySelectorAll(".tag")).toHaveLength(1);
+    expect(document.querySelector(".tag")!.textContent).toBe("same input");
 
-    const callButton = document.querySelector<HTMLButtonElement>(
-      '.sequence-call button[title="Open call 5 for Read in the transcript"]',
+    await openCall(0);
+    text = document.body.textContent ?? "";
+    expect(text).toContain("Unknown");
+    expect(text).toContain("This result isn't text, so its outcome is unknown.");
+    expect(text).toContain("Preview shows 10 of 12 bytes.");
+    expect(text).toContain("Full input is in message 4.");
+    expect(text).toContain("Preview shows 7 of 10 bytes.");
+    expect(text).toContain("Full result is in message 4.");
+    expect(text).toContain("tool-id");
+
+    const link = document.querySelector<HTMLAnchorElement>(
+      'a.jump[aria-label="Message 9: open the Read call in the transcript"]',
     );
-    expect(callButton).not.toBeNull();
-    callButton!.click();
-    expect(jump).toHaveBeenCalledWith(5, "session-a");
+    expect(link).not.toBeNull();
+    expect(link!.textContent).toContain("Message 9");
+    expect(link!.getAttribute("href")).toContain("msg=9");
+    expect(link!.closest("button")).toBeNull();
+    link!.click();
+    expect(jump).toHaveBeenCalledWith(9, "session-a");
+    expect(document.querySelectorAll(".call-row")[1]!.getAttribute("aria-expanded")).toBe("false");
     jump.mockRestore();
     unmount(component);
   });
 
-  it("keeps no calls distinct from calls without an error or empty result", async () => {
-    const noCalls = mount(ToolSequencesPanel, {
-      target: document.body,
-      props: {
-        data: makeData({
-          total_tool_calls: 0,
-          total_sequences: 0,
-          total_sequence_calls: 0,
-          sequences: [],
-        }),
-        sessionId: "session-a",
-        loading: false,
-        failed: false,
-      },
-    });
+  it("collapses back-to-back calls with the same tool and outcome", async () => {
+    const component = mountPanel(
+      makeData({
+        sequences: [
+          makeSequence({
+            total_calls: 4,
+            calls: [
+              makeCall({ ordinal: 2 }),
+              makeCall({ ordinal: 3, repeat: "near_identical" }),
+              makeCall({ ordinal: 4, outcome: "errored" }),
+              makeCall({ ordinal: 5, tool_name: "Read", outcome: "content", tool_changed: true }),
+            ],
+          }),
+        ],
+      }),
+    );
     await tick();
-    expect(document.body.textContent).toContain("No tool calls recorded.");
+
+    const steps = [...document.querySelectorAll(".step")].map((step) =>
+      step.textContent?.replace(/\s+/g, " ").trim(),
+    );
+    expect(steps).toEqual(["Grep, Empty×2", "Grep, Error", "Read, Content"]);
+    await openSequence();
+    expect(document.querySelectorAll(".call")).toHaveLength(4);
+    const tag = document.querySelectorAll<HTMLElement>(".tag")[0]!;
+    expect(tag.textContent).toBe("same input, reformatted");
+    expect(tag.title).toBe("Same input with different JSON formatting");
+    unmount(component);
+  });
+
+  it("keeps no calls distinct from calls without an error or empty result", async () => {
+    const noCalls = mountPanel(
+      makeData({ total_tool_calls: 0, total_sequences: 0, total_sequence_calls: 0, sequences: [] }),
+    );
+    await tick();
+    expect(document.body.textContent).toContain("No tool calls recorded in this session.");
+    expect(document.querySelector(".count")).toBeNull();
     unmount(noCalls);
 
     document.body.innerHTML = "";
-    const callsWithoutSequence = mount(ToolSequencesPanel, {
-      target: document.body,
-      props: {
-        data: makeData({
-          total_tool_calls: 2,
-          total_sequences: 0,
-          total_sequence_calls: 0,
-          sequences: [],
-        }),
-        sessionId: "session-a",
-        loading: false,
-        failed: false,
-      },
-    });
+    const callsWithoutSequence = mountPanel(
+      makeData({ total_tool_calls: 2, total_sequences: 0, total_sequence_calls: 0, sequences: [] }),
+    );
     await tick();
-    expect(document.body.textContent).toContain("No error or empty-result sequences recorded.");
+    expect(document.body.textContent).toContain("No tool call returned an error or empty result.");
+    expect(document.querySelector(".count")!.textContent).toContain("0");
+    expect(document.querySelector(".legend")).toBeNull();
     unmount(callsWithoutSequence);
   });
 
   it("keeps unknown explanations aligned with the displayed calls", async () => {
-    const component = mount(ToolSequencesPanel, {
-      target: document.body,
-      props: {
-        data: makeData({
-          sequences: [
-            makeSequence({
-              ending: "unknown",
-              calls: [
-                makeCall({
-                  outcome: "errored",
-                  result_content_unknown: true,
-                  result_preview: "[image]",
-                }),
-                makeCall({
-                  ordinal: 5,
-                  tool_name: "Read",
-                  outcome: "content",
-                  result_content_unknown: false,
-                  result_preview: "Found the config",
-                }),
-              ],
-            }),
-          ],
-        }),
-        sessionId: "session-a",
-        loading: false,
-        failed: false,
-      },
-    });
-    document.querySelector<HTMLDetailsElement>("details.sequence")!.open = true;
-    await tick();
-
-    const calls = document.querySelectorAll(".sequence-call");
-    expect(calls[0]!.textContent).toContain("Error");
-    expect(calls[0]!.querySelector(".unknown-note")).toBeNull();
-    expect(calls[1]!.textContent).toContain("Content");
-    expect(document.body.textContent).toContain(
-      "The trace does not show how this sequence ended.",
+    const component = mountPanel(
+      makeData({
+        sequences: [
+          makeSequence({
+            ending: "unknown",
+            calls: [
+              makeCall({
+                outcome: "errored",
+                result_content_unknown: true,
+                result_preview: "[image]",
+              }),
+              makeCall({
+                ordinal: 5,
+                tool_name: "Read",
+                outcome: "content",
+                result_content_unknown: false,
+                result_preview: "Found the config",
+              }),
+            ],
+          }),
+        ],
+      }),
     );
+    await openSequence();
+    await openCall(0);
+    await openCall(1);
 
+    const calls = document.querySelectorAll(".call");
+    expect(calls[0]!.textContent).toContain("Error");
+    expect(calls[0]!.textContent).not.toContain("isn't text");
+    expect(calls[1]!.textContent).toContain("Content");
+    expect(document.body.textContent).toContain("The trace doesn't show how this sequence ended.");
     unmount(component);
   });
 
   it("describes open sequences without denying later results", async () => {
-    const component = mount(ToolSequencesPanel, {
-      target: document.body,
-      props: {
-        data: makeData({
-          sequences: [
-            makeSequence({
-              ending: "open",
-              calls: [
-                makeCall({ outcome: "empty", result_preview: "" }),
-                makeCall({ ordinal: 5, outcome: "content", result_preview: "later result" }),
-              ],
-            }),
-          ],
-        }),
-        sessionId: "session-a",
-        loading: false,
-        failed: false,
-      },
-    });
-    document.querySelector<HTMLDetailsElement>("details.sequence")!.open = true;
-    await tick();
+    const component = mountPanel(
+      makeData({
+        sequences: [
+          makeSequence({
+            ending: "open",
+            calls: [
+              makeCall({ outcome: "empty", result_preview: "", result_bytes: 0 }),
+              makeCall({ ordinal: 5, outcome: "content", result_preview: "later result" }),
+            ],
+          }),
+        ],
+      }),
+    );
+    await openSequence();
+    await openCall(0);
+    await openCall(1);
 
+    expect(document.body.textContent).toContain("The tool returned nothing.");
     expect(document.body.textContent).toContain("later result");
     expect(document.body.textContent).toContain("The trace ends before the sequence is resolved.");
     unmount(component);
   });
 
+  it("says how many sequences are shown when the response is capped", async () => {
+    const component = mountPanel(
+      makeData({
+        total_sequences: 26,
+        omitted_sequences: 25,
+        total_sequence_calls: 30,
+        omitted_calls: 29,
+      }),
+    );
+    await tick();
+    expect(document.body.textContent).toContain(
+      "Showing 1 of 26 sequences. The rest come later in the session.",
+    );
+    unmount(component);
+  });
+
   it("renders loading and request errors separately", async () => {
-    const component = mount(ToolSequencesPanel, {
-      target: document.body,
-      props: { data: null, sessionId: "session-a", loading: true, failed: false },
-    });
+    const component = mountPanel(null, { loading: true });
     await tick();
     expect(document.body.textContent).toContain("Loading tool sequences");
+    expect(document.querySelector("section")!.getAttribute("aria-busy")).toBe("true");
+    expect(document.querySelectorAll(".skel")).toHaveLength(3);
     unmount(component);
 
     document.body.innerHTML = "";
-    const failed = mount(ToolSequencesPanel, {
-      target: document.body,
-      props: { data: null, sessionId: "session-a", loading: false, failed: true },
-    });
+    const onretry = vi.fn();
+    const failed = mountPanel(null, { failed: true, onretry });
     await tick();
-    expect(document.querySelector('[role="alert"]')?.textContent).toContain(
-      "Couldn't load tool sequences",
-    );
+    const alert = document.querySelector('[role="alert"]')!;
+    expect(alert.textContent).toContain("Couldn't load tool sequences");
+    alert.querySelector("button")!.click();
+    expect(onretry).toHaveBeenCalledOnce();
     unmount(failed);
   });
 });

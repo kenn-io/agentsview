@@ -1,7 +1,7 @@
-// ABOUTME: Table-driven unit tests for summarizeToolCall.
+// ABOUTME: Table-driven unit tests for summarizeToolCall and summarizeToolInputPreview.
 import { describe, it, expect } from "vite-plus/test";
 import type { DbToolCall as ToolCall } from "../api/generated/index.js";
-import { summarizeToolCall, summarizeToolCallPath } from "./tool-summary.js";
+import { summarizeToolCall, summarizeToolCallPath, summarizeToolInputPreview } from "./tool-summary.js";
 
 function call(partial: Partial<ToolCall>): ToolCall {
   return {
@@ -547,5 +547,23 @@ describe("summarizeToolCall", () => {
         ).toBe(path);
       }
     });
+  });
+});
+
+describe("summarizeToolInputPreview", () => {
+  it("prefers the command over other arguments", () => {
+    expect(summarizeToolInputPreview(JSON.stringify({ description: "list", command: "ls -la\npwd" }))).toBe("ls -la");
+  });
+
+  it("reads the search pattern from JSON cut mid-string", () => {
+    expect(summarizeToolInputPreview('{"pattern": "load\\"Config", "path": "/very/long')).toBe('load"Config');
+  });
+
+  it("keeps the raw text of a value cut mid-escape", () => {
+    expect(summarizeToolInputPreview(String.raw`{"query": "a\u00`)).toBe(String.raw`a\u00`);
+  });
+
+  it("falls back to the collapsed preview", () => {
+    expect(summarizeToolInputPreview('{"other":\n  1')).toBe('{"other": 1');
   });
 });

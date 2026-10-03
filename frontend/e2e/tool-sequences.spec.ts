@@ -40,24 +40,38 @@ test("renders, expands, and navigates observed sequences at desktop, tablet, and
       ],
     });
 
-    const sequence = panel.locator("details.sequence").first();
-    const summary = sequence.locator("summary");
+    const header = panel.locator(".panel-head");
+    await expect(header).toContainText("3 calls in sequences");
+    await expect(header).toContainText("3 tool calls in session");
+    const summary = panel.locator(".sequence-row").first();
+    await expect(summary).toContainText("Messages 1–3");
+    await expect(summary).toContainText("Recovered");
+    await expect(summary.locator(".step").first()).toContainText("×2");
     await summary.focus();
     await expect(summary).toBeFocused();
     await summary.press("Enter");
-    await expect(sequence).toHaveJSProperty("open", true);
+    await expect(summary).toHaveAttribute("aria-expanded", "true");
     await expect(panel).toContainText("A later call returned content.");
-    await expect(panel).toContainText("Same input as the previous call");
-    await expect(panel).toContainText("A later call switched tools.");
-    await expect(panel).toContainText("Not measured");
-    await expect(panel.locator(".duration").first()).toHaveText("2.0s");
+    await expect(panel).toContainText("same input");
+    await expect(panel).toContainText("Tool switched");
+    await expect(panel.locator(".call")).toHaveCount(3);
+
+    const callRow = panel.locator(".call-row").first();
+    await callRow.press("Enter");
+    await expect(callRow).toHaveAttribute("aria-expanded", "true");
     await expect(panel.locator("pre").first()).toContainText("pattern");
+    if (width > 820) {
+      await expect(panel.locator(".dur").first()).toHaveText("2.0s");
+      await expect(panel.locator(".dur").nth(1)).toHaveAttribute("title", "Not measured");
+    }
 
     const scroller = page.locator(".message-list-scroll");
     await scroller.evaluate((element) => {
       element.scrollTop = element.scrollHeight;
     });
-    await panel.getByRole("button", { name: "Open call 1 for Grep in the transcript" }).click();
+    await panel
+      .getByRole("link", { name: "Message 1: open the Grep call in the transcript" })
+      .click();
     const target = scroller.locator(".virtual-row.selected");
     await expect(target).toHaveAttribute("data-index", String(data.sequences[0].calls[0].ordinal));
     await expect(target).toBeInViewport({ timeout: 10_000 });
@@ -94,14 +108,12 @@ test("shows the empty state for a session with no messages", async ({ page }) =>
   await page.goto("/sessions/test-session-empty-0", { waitUntil: "domcontentloaded" });
   const panel = page.locator(".tool-sequences-panel");
   await expect(panel).toBeVisible({ timeout: 10_000 });
-  const response = await page.request.get(
-    "/api/v1/sessions/test-session-empty-0/tool-sequences",
-  );
+  const response = await page.request.get("/api/v1/sessions/test-session-empty-0/tool-sequences");
   expect(response.ok()).toBe(true);
   expect(await response.json()).toMatchObject({
     session_id: "test-session-empty-0",
     total_tool_calls: 0,
     total_sequences: 0,
   });
-  await expect(panel).toContainText("No tool calls recorded.");
+  await expect(panel).toContainText("No tool calls recorded in this session.");
 });

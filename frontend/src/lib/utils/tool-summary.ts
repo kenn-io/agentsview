@@ -194,3 +194,41 @@ export function summarizeToolCall(toolCall: ToolCall): string | null {
 
   return null;
 }
+
+const PREVIEW_KEYS = ["command", "cmd", "pattern", "query", "file_path", "filePath", "path", "file", "url", "description", "prompt"];
+const PATH_KEYS = new Set(["file_path", "filePath", "path", "file"]);
+
+function previewValue(key: string, value: string): string {
+  return PATH_KEYS.has(key) ? pathDisplayValue(value) : firstLine(value);
+}
+
+/**
+ * One-line label for a tool call's input preview, which may be JSON cut
+ * mid-value. Prefers the command, path, or pattern argument.
+ */
+export function summarizeToolInputPreview(preview: string): string {
+  let params: Params | null = null;
+  try {
+    const parsed: unknown = JSON.parse(preview);
+    params = parsed && typeof parsed === "object" ? (parsed as Params) : null;
+  } catch {
+    params = null;
+  }
+  for (const key of PREVIEW_KEYS) {
+    if (params) {
+      const value = asString(params[key]);
+      if (value) return previewValue(key, value);
+      continue;
+    }
+    const match = new RegExp(String.raw`"${key}"\s*:\s*"((?:[^"\\]|\\.)*)`).exec(preview);
+    if (!match?.[1]) continue;
+    let value = match[1];
+    try {
+      value = JSON.parse(`"${value}"`) as string;
+    } catch {
+      // A value cut mid-escape keeps its raw text.
+    }
+    return previewValue(key, value);
+  }
+  return preview.replace(/\s+/g, " ").trim().slice(0, MAX);
+}

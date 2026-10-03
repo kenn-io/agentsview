@@ -1,32 +1,59 @@
 <script lang="ts">
-  import { Button } from "@kenn-io/kit-ui";
+  import { Button, Chip, type ChipTone } from "@kenn-io/kit-ui";
+  import { SvelteSet } from "svelte/reactivity";
   import type {
     SessionToolSequence,
     SessionToolSequenceCall,
     SessionToolSequencesResponse,
   } from "../../api/generated/index.js";
-  import { m } from "../../i18n/index.js";
+  import { getLocale, m } from "../../i18n/index.js";
+  import { ChevronRightIcon, InfoIcon, WorkflowIcon } from "../../icons.js";
+  import { router } from "../../stores/router.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { formatDuration } from "../../utils/duration.js";
+  import { summarizeToolInputPreview } from "../../utils/tool-summary.js";
 
   interface Props {
     data: SessionToolSequencesResponse | null;
     sessionId: string;
     loading: boolean;
     failed: boolean;
+    onretry?: (() => void) | undefined;
   }
 
-  let { data, sessionId, loading, failed }: Props = $props();
+  let { data, sessionId, loading, failed, onretry = undefined }: Props = $props();
+
+  type Outcome = SessionToolSequenceCall["outcome"];
+  type Ending = SessionToolSequence["ending"];
+
+  const uid = $props.id();
+  const OUTCOMES: Outcome[] = ["errored", "empty", "content", "unknown"];
+  const OUTCOME_TONES: Record<Outcome, string | undefined> = {
+    errored: "danger",
+    empty: "warning",
+    content: "success",
+    unknown: undefined,
+  };
+  const ENDING_TONES: Record<Ending, ChipTone> = {
+    recovered: "success",
+    abandoned: "danger",
+    open: "warning",
+    unknown: "neutral",
+  };
+
+  const openSequences = new SvelteSet<string>();
+  const openCalls = new SvelteSet<string>();
 
   function countArgs(count: number) {
-    return { count, countLabel: count.toLocaleString() };
+    return { count, countLabel: count.toLocaleString(getLocale()) };
   }
 
-  function toolsIn(sequence: SessionToolSequence): string {
-    return [...new Set(sequence.calls.map((call) => call.tool_name))].join(", ");
+  function toggle(set: SvelteSet<string>, key: string) {
+    if (set.has(key)) set.delete(key);
+    else set.add(key);
   }
 
-  function endingLabel(ending: SessionToolSequence["ending"]): string {
+  function endingLabel(ending: Ending): string {
     switch (ending) {
       case "recovered": return m.tool_sequences_ending_recovered();
       case "abandoned": return m.tool_sequences_ending_abandoned();
@@ -35,7 +62,7 @@
     }
   }
 
-  function endingExplanation(ending: SessionToolSequence["ending"]): string {
+  function endingExplanation(ending: Ending): string {
     switch (ending) {
       case "recovered": return m.tool_sequences_recovered_explanation();
       case "abandoned": return m.tool_sequences_abandoned_explanation();
@@ -44,7 +71,7 @@
     }
   }
 
-  function outcomeLabel(outcome: SessionToolSequenceCall["outcome"]): string {
+  function outcomeLabel(outcome: Outcome): string {
     switch (outcome) {
       case "errored": return m.tool_sequences_outcome_errored();
       case "empty": return m.tool_sequences_outcome_empty();
@@ -53,378 +80,789 @@
     }
   }
 
-  function repeatLabel(repeat: SessionToolSequenceCall["repeat"]): string | null {
-    switch (repeat) {
-      case "identical": return m.tool_sequences_repeat_identical();
-      case "near_identical": return m.tool_sequences_repeat_near_identical();
-      case "none": return null;
+  function callTag(call: SessionToolSequenceCall): { label: string; title?: string } | null {
+    if (call.repeat === "identical") return { label: m.tool_sequences_repeat_identical() };
+    if (call.repeat === "near_identical") {
+      return {
+        label: m.tool_sequences_repeat_near_identical(),
+        title: m.tool_sequences_repeat_near_identical_title(),
+      };
     }
+    if (call.tool_changed) return { label: m.tool_sequences_tool_changed() };
+    return null;
   }
 
-  function jumpToCall(call: SessionToolSequenceCall) {
+  function sequenceFlags(sequence: SessionToolSequence): string[] {
+    const flags: string[] = [];
+    if (sequence.identical) flags.push(m.tool_sequences_flag_identical());
+    if (sequence.near_identical) flags.push(m.tool_sequences_flag_near_identical());
+    if (sequence.tool_changed) flags.push(m.tool_sequences_flag_tool_switch());
+    return flags;
+  }
+
+  type Step = { tool: string; outcome: Outcome; count: number } | { more: number };
+
+  // The server keeps the first calls and the last one, so omitted calls sit before the last shown call.
+  function hiddenBefore(sequence: SessionToolSequence): number {
+    return sequence.omitted_calls > 0 && sequence.calls.length > 1 ? sequence.calls.length - 1 : -1;
+  }
+
+  // Back-to-back calls with the same tool and outcome collapse into one step with a count.
+  function steps(sequence: SessionToolSequence): Step[] {
+    const out: Step[] = [];
+    const gap = hiddenBefore(sequence);
+    sequence.calls.forEach((call, index) => {
+      if (index === gap) out.push({ more: sequence.omitted_calls });
+      const last = out.at(-1);
+      if (last && "tool" in last && last.tool === call.tool_name && last.outcome === call.outcome) last.count++;
+      else out.push({ tool: call.tool_name, outcome: call.outcome, count: 1 });
+    });
+    if (sequence.omitted_calls > 0 && gap < 0) out.push({ more: sequence.omitted_calls });
+    return out;
+  }
+
+  function messageRange(sequence: SessionToolSequence): string {
+    const first = sequence.calls[0]?.ordinal;
+    const last = sequence.calls.at(-1)?.ordinal;
+    if (first === undefined || last === undefined) return "";
+    if (first === last) return m.tool_sequences_message({ ordinal: first });
+    return m.tool_sequences_messages_range({ first, last });
+  }
+
+  function resultSummary(call: SessionToolSequenceCall): string | null {
+    return call.result_bytes === null ? null : m.tool_sequences_byte_count(countArgs(call.result_bytes));
+  }
+
+  function previewNote(total: number, omitted: number) {
+    return m.tool_sequences_preview_shows({ ...countArgs(total), shownLabel: (total - omitted).toLocaleString(getLocale()) });
+  }
+
+  function jumpHref(call: SessionToolSequenceCall): string {
+    return router.buildSessionHref(sessionId, { msg: String(call.ordinal) });
+  }
+
+  function jumpToCall(event: MouseEvent, call: SessionToolSequenceCall) {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
     ui.scrollToOrdinal(call.ordinal, sessionId);
   }
 </script>
 
+{#snippet dot(outcome: Outcome)}
+  <i class="dot" class:hollow={outcome === "unknown"} data-kit-tone={OUTCOME_TONES[outcome]} aria-hidden="true"></i>
+{/snippet}
+
 <section
   class="tool-sequences-panel"
-  aria-labelledby="tool-sequences-title"
+  aria-labelledby="{uid}-title"
   aria-busy={loading}
 >
-  <header class="panel-header">
-    <h2 id="tool-sequences-title">{m.tool_sequences_title()}</h2>
-    {#if data && !failed}
-      <div class="panel-counts">
-        <span>{m.tool_sequences_sequence_count(countArgs(data.total_sequences))}</span>
-        <span>{m.tool_sequences_call_count(countArgs(data.total_tool_calls))}</span>
+  <header class="panel-head">
+    <div class="panel-title-block">
+      <div class="panel-heading">
+        <WorkflowIcon size={14} aria-hidden="true" />
+        <h2 id="{uid}-title">{m.tool_sequences_title()}</h2>
+        {#if data && !failed && data.total_tool_calls > 0}
+          <span class="count" title={m.tool_sequences_sequence_count(countArgs(data.total_sequences))}>
+            <span aria-hidden="true">{data.total_sequences.toLocaleString(getLocale())}</span>
+            <span class="kit-sr-only">{m.tool_sequences_sequence_count(countArgs(data.total_sequences))}</span>
+          </span>
+        {/if}
       </div>
+      {#if loading && !data}
+        <p class="panel-sub">{m.tool_sequences_loading()}</p>
+      {:else if data && !failed && data.total_tool_calls > 0}
+        <p class="panel-sub">
+          {m.tool_sequences_sequence_calls(countArgs(data.total_sequence_calls))} ·
+          {m.tool_sequences_session_calls(countArgs(data.total_tool_calls))}
+        </p>
+      {/if}
+    </div>
+    {#if data && !failed && data.sequences.length > 0}
+      <ul class="legend" aria-label={m.tool_sequences_legend()}>
+        {#each OUTCOMES as outcome (outcome)}
+          <li>{@render dot(outcome)}{outcomeLabel(outcome)}</li>
+        {/each}
+      </ul>
     {/if}
   </header>
-  <p class="panel-description">{m.tool_sequences_description()}</p>
 
   {#if loading && !data}
-    <p class="panel-state">{m.tool_sequences_loading()}</p>
+    <div class="box skeleton" aria-hidden="true">
+      <div class="skel"></div>
+      <div class="skel"></div>
+      <div class="skel"></div>
+    </div>
   {:else if failed && !data}
-    <p class="panel-state panel-error" role="alert">{m.tool_sequences_error()}</p>
+    <div class="state state-error" data-kit-tone="danger" role="alert">
+      <span>{m.tool_sequences_error()}</span>
+      {#if onretry}
+        <Button size="sm" tone="neutral" surface="outline" label={m.tool_sequences_retry()} onclick={onretry} />
+      {/if}
+    </div>
   {:else if data}
-    {#if data.omitted_sequences > 0}
-      <p class="omission-note">
-        {m.tool_sequences_sequences_omitted(countArgs(data.omitted_sequences))}
-      </p>
-    {/if}
-    {#if data.omitted_calls > 0}
-      <p class="omission-note">
-        {m.tool_sequences_total_calls_omitted(countArgs(data.omitted_calls))}
-      </p>
-    {/if}
-
     {#if data.total_tool_calls === 0}
-      <p class="panel-state">{m.tool_sequences_none_recorded()}</p>
+      <p class="state">{m.tool_sequences_none_recorded()}</p>
     {:else if data.total_sequences === 0}
-      <p class="panel-state">{m.tool_sequences_no_sequences()}</p>
+      <p class="state">{m.tool_sequences_no_sequences()}</p>
     {:else}
-      <div class="sequence-list">
+      <div class="box">
         {#each data.sequences as sequence, index (`${sessionId}-${index}`)}
-          <details class="sequence">
-            <summary class="sequence-summary">
-              <span class="sequence-tools">{toolsIn(sequence)}</span>
-              <span class="sequence-count">
-                {m.tool_sequences_call_count(countArgs(sequence.total_calls))}
-              </span>
-              <span class="sequence-ending">{endingLabel(sequence.ending)}</span>
-              {#if sequence.omitted_calls > 0}
-                <span class="sequence-omission">
-                  {m.tool_sequences_calls_omitted(countArgs(sequence.omitted_calls))}
-                </span>
-              {/if}
-            </summary>
-            <div class="sequence-content">
-              <p class="sequence-explanation">{endingExplanation(sequence.ending)}</p>
-              {#if sequence.identical}
-                <p class="sequence-fact">{m.tool_sequences_has_identical_repeat()}</p>
-              {/if}
-              {#if sequence.near_identical}
-                <p class="sequence-fact">{m.tool_sequences_has_near_identical_repeat()}</p>
-              {/if}
-              {#if sequence.tool_changed}
-                <p class="sequence-fact">{m.tool_sequences_has_tool_switch()}</p>
-              {/if}
-
-              {#each sequence.calls as call (`${call.ordinal}-${call.call_index}-${call.tool_use_id}`)}
-                <article class="sequence-call">
-                  <div class="call-heading">
-                    <Button
-                      size="sm"
-                      tone="neutral"
-                      surface="outline"
-                      label={m.tool_sequences_open_call({ ordinal: call.ordinal, tool: call.tool_name })}
-                      title={m.tool_sequences_open_call({ ordinal: call.ordinal, tool: call.tool_name })}
-                      onclick={() => jumpToCall(call)}
-                    />
-                    <strong class="tool-name">{call.tool_name}</strong>
-                    <span class="outcome">{outcomeLabel(call.outcome)}</span>
-                    {#if repeatLabel(call.repeat)}
-                      <span class="call-fact">{repeatLabel(call.repeat)}</span>
-                    {/if}
-                    {#if call.tool_changed}
-                      <span class="call-fact">{m.tool_sequences_tool_changed()}</span>
-                    {/if}
-                    <span class="duration">
-                      {call.duration_ms === null
-                        ? m.tool_sequences_not_measured()
-                        : formatDuration(call.duration_ms)}
+          {@const key = `${sessionId}-${index}`}
+          {@const open = openSequences.has(key)}
+          {@const flags = sequenceFlags(sequence)}
+          {@const gap = hiddenBefore(sequence)}
+          <div class="sequence" class:open>
+            <button
+              type="button"
+              class="sequence-row"
+              aria-expanded={open}
+              aria-controls="{uid}-seq-{index}"
+              onclick={() => toggle(openSequences, key)}
+            >
+              <ChevronRightIcon class="chev" size={12} aria-hidden="true" />
+              <span class="flow">
+                {#each steps(sequence) as step, stepIndex (stepIndex)}
+                  {#if stepIndex > 0}<span class="arrow" aria-hidden="true">→</span>{/if}
+                  {#if "more" in step}
+                    <span class="step more">{m.tool_sequences_more_calls(countArgs(step.more))}</span>
+                  {:else}
+                    <span class="step">
+                      {@render dot(step.outcome)}{step.tool}<span class="kit-sr-only">, {outcomeLabel(step.outcome)}</span>{#if step.count > 1}<span class="times">×{step.count}</span>{/if}
                     </span>
-                  </div>
-                  <p class="call-identity">
-                    {m.tool_sequences_call_identity({ ordinal: call.ordinal, id: call.tool_use_id || m.tool_sequences_missing_identity() })}
-                  </p>
-                  <dl class="call-evidence">
-                    <div class="evidence-row">
-                      <dt>{m.tool_sequences_input()}</dt>
-                      <dd>
-                        {#if call.input_preview}
-                          <pre>{call.input_preview}</pre>
-                        {:else}
-                          <span class="empty-preview">{m.tool_sequences_no_input()}</span>
-                        {/if}
-                        <span class="byte-count">
-                          {m.tool_sequences_byte_count(countArgs(call.input_bytes))}
+                  {/if}
+                {/each}
+              </span>
+              {#if flags.length > 0}
+                <span class="facts">{flags.join(" · ")}</span>
+              {/if}
+              <span class="where">{messageRange(sequence)}</span>
+              <Chip size="xs" tone={ENDING_TONES[sequence.ending]} title={endingExplanation(sequence.ending)} class="ending">
+                {endingLabel(sequence.ending)}
+              </Chip>
+            </button>
+            {#if open}
+              <div class="calls" id="{uid}-seq-{index}">
+                {#each sequence.calls as call, callIndex (`${call.ordinal}-${call.call_index}-${call.tool_use_id}`)}
+                  {@const callKey = `${key}-${call.ordinal}-${call.call_index}`}
+                  {@const callOpen = openCalls.has(callKey)}
+                  {@const tag = callTag(call)}
+                  {@const size = resultSummary(call)}
+                  {#if callIndex === gap}
+                    <p class="omit">
+                      <InfoIcon size={12} aria-hidden="true" />
+                      {m.tool_sequences_calls_hidden_between({
+                        ...countArgs(sequence.omitted_calls),
+                        from: sequence.calls[callIndex - 1]!.ordinal,
+                        to: call.ordinal,
+                      })}
+                    </p>
+                  {/if}
+                  <div class="call" class:open={callOpen} data-kit-tone={OUTCOME_TONES[call.outcome]}>
+                    <div class="call-line">
+                      <button
+                        type="button"
+                        class="call-row"
+                        aria-expanded={callOpen}
+                        aria-controls="{uid}-call-{index}-{callIndex}"
+                        onclick={() => toggle(openCalls, callKey)}
+                      >
+                        <ChevronRightIcon class="chev" size={12} aria-hidden="true" />
+                        <span class="tool">{@render dot(call.outcome)}{call.tool_name}</span>
+                        <span class="input" title={call.input_preview}>
+                          {call.input_preview ? summarizeToolInputPreview(call.input_preview) : m.tool_sequences_no_input()}
+                          {#if tag}<span class="tag" title={tag.title}>{tag.label}</span>{/if}
                         </span>
-                        {#if call.input_omitted_bytes > 0}
-                          <span class="omission-note">
-                            {m.tool_sequences_input_omitted(countArgs(call.input_omitted_bytes))}
+                        <span class="res"><b>{outcomeLabel(call.outcome)}</b>{#if size}{` · ${size}`}{/if}</span>
+                        {#if call.duration_ms === null}
+                          <span class="dur" title={m.tool_sequences_not_measured()}>
+                            <span aria-hidden="true">—</span><span class="kit-sr-only">{m.tool_sequences_not_measured()}</span>
                           </span>
-                        {/if}
-                      </dd>
-                    </div>
-                    <div class="evidence-row">
-                      <dt>{m.tool_sequences_result()}</dt>
-                      <dd>
-                        {#if call.result_content_unknown && call.outcome === "unknown"}
-                          <span class="unknown-note">{m.tool_sequences_result_unknown()}</span>
-                        {/if}
-                        {#if call.result_preview}
-                          <pre>{call.result_preview}</pre>
-                        {:else if call.result_bytes !== null && call.result_bytes > 0}
-                          <span class="empty-preview">
-                            {m.tool_sequences_result_unavailable(countArgs(call.result_bytes))}
-                          </span>
-                        {:else if call.result_bytes === 0}
-                          <span class="empty-preview">{m.tool_sequences_result_empty()}</span>
                         {:else}
-                          <span class="empty-preview">{m.tool_sequences_result_size_unknown()}</span>
+                          <span class="dur">{formatDuration(call.duration_ms)}</span>
                         {/if}
-                        {#if call.result_bytes !== null}
-                          <span class="byte-count">
-                            {m.tool_sequences_byte_count(countArgs(call.result_bytes))}
-                          </span>
-                        {/if}
-                        {#if call.result_omitted_bytes !== null && call.result_omitted_bytes > 0}
-                          <span class="omission-note">
-                            {m.tool_sequences_result_omitted(countArgs(call.result_omitted_bytes))}
-                          </span>
-                        {/if}
-                      </dd>
+                      </button>
+                      <a
+                        class="jump"
+                        href={jumpHref(call)}
+                        aria-label={m.tool_sequences_jump_label({ ordinal: call.ordinal, tool: call.tool_name })}
+                        onclick={(event) => jumpToCall(event, call)}
+                      >{m.tool_sequences_message({ ordinal: call.ordinal })}<span aria-hidden="true"> ↗</span></a>
                     </div>
-                  </dl>
-                </article>
-              {/each}
-            </div>
-          </details>
+                    {#if callOpen}
+                      <dl class="detail" id="{uid}-call-{index}-{callIndex}">
+                        <div class="ev">
+                          <dt>{m.tool_sequences_input()}</dt>
+                          <dd>
+                            {#if call.input_preview}
+                              <pre>{call.input_preview}</pre>
+                            {:else}
+                              <p class="none">{m.tool_sequences_no_input()}</p>
+                            {/if}
+                            {#if call.input_omitted_bytes > 0}
+                              <p class="note">
+                                {previewNote(call.input_bytes, call.input_omitted_bytes)}
+                                <span class="cut">{m.tool_sequences_full_input_in_message({ ordinal: call.ordinal })}</span>
+                              </p>
+                            {/if}
+                          </dd>
+                        </div>
+                        <div class="ev">
+                          <dt>{m.tool_sequences_result()}</dt>
+                          <dd>
+                            {#if call.result_content_unknown && call.outcome === "unknown"}
+                              <p class="none">{m.tool_sequences_result_unknown()}</p>
+                            {/if}
+                            {#if call.result_preview}
+                              <pre>{call.result_preview}</pre>
+                            {:else if call.result_bytes !== null && call.result_bytes > 0}
+                              <p class="none">{m.tool_sequences_result_unavailable(countArgs(call.result_bytes))}</p>
+                            {:else if call.result_bytes === 0}
+                              <p class="none">{m.tool_sequences_result_empty()}</p>
+                            {:else if !(call.result_content_unknown && call.outcome === "unknown")}
+                              <p class="none">{m.tool_sequences_result_size_unknown()}</p>
+                            {/if}
+                            {#if call.result_bytes !== null && call.result_omitted_bytes !== null && call.result_omitted_bytes > 0}
+                              <p class="note">
+                                {previewNote(call.result_bytes, call.result_omitted_bytes)}
+                                <span class="cut">{m.tool_sequences_full_result_in_message({ ordinal: call.ordinal })}</span>
+                              </p>
+                            {/if}
+                          </dd>
+                        </div>
+                        <p class="idline">{call.tool_use_id || m.tool_sequences_missing_identity()}</p>
+                      </dl>
+                    {/if}
+                  </div>
+                {/each}
+                {#if sequence.omitted_calls > 0 && gap < 0}
+                  <p class="omit">
+                    <InfoIcon size={12} aria-hidden="true" />
+                    {m.tool_sequences_calls_not_shown(countArgs(sequence.omitted_calls))}
+                  </p>
+                {/if}
+                <p class="explain">
+                  <b>{endingLabel(sequence.ending)}.</b>
+                  {endingExplanation(sequence.ending)}
+                  {#if sequence.total_calls > 1}{m.tool_sequences_calls_in_row(countArgs(sequence.total_calls))}{/if}
+                </p>
+              </div>
+            {/if}
+          </div>
         {/each}
       </div>
+      {#if data.omitted_sequences > 0 || data.omitted_calls > 0}
+        <p class="omit">
+          <InfoIcon size={12} aria-hidden="true" />
+          <span>
+            {#if data.omitted_sequences > 0}
+              {m.tool_sequences_showing_sequences({
+                ...countArgs(data.total_sequences),
+                shownLabel: data.sequences.length.toLocaleString(getLocale()),
+              })}
+            {/if}
+            {#if data.omitted_calls > 0}
+              {m.tool_sequences_calls_not_shown(countArgs(data.omitted_calls))}
+            {/if}
+          </span>
+        </p>
+      {/if}
     {/if}
   {/if}
 </section>
 
 <style>
   .tool-sequences-panel {
+    container-type: inline-size;
     max-height: clamp(10rem, 34vh, 24rem);
     min-width: 0;
     overflow: auto;
-    padding: 10px 12px;
+    padding: 10px var(--space-5) var(--space-5);
     background: var(--bg-inset);
-    border-bottom: 1px solid var(--border-muted);
+    border-bottom: 1px solid var(--border-default);
     color: var(--text-primary);
-    font-size: 12px;
+    font-size: var(--font-size-sm);
   }
 
-  .panel-header,
-  .panel-counts,
-  .call-heading {
+  .panel-head {
     display: flex;
     align-items: center;
+    justify-content: space-between;
     flex-wrap: wrap;
-    gap: 6px 8px;
-    min-width: 0;
+    gap: var(--space-2) var(--space-6);
+    margin-bottom: var(--space-4);
   }
 
-  .panel-header {
-    justify-content: space-between;
+  .panel-heading {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    color: var(--text-muted);
   }
 
   h2 {
     margin: 0;
-    font-size: 13px;
-  }
-
-  .panel-counts,
-  .panel-description,
-  .panel-state,
-  .sequence-explanation,
-  .sequence-fact,
-  .call-identity {
-    color: var(--text-muted);
-  }
-
-  .panel-description,
-  .panel-state,
-  .sequence-explanation,
-  .sequence-fact,
-  .call-identity {
-    margin: 6px 0 0;
-  }
-
-  .panel-error,
-  .unknown-note {
-    color: var(--accent-amber);
-  }
-
-  .sequence-list {
-    display: grid;
-    gap: 6px;
-    min-width: 0;
-  }
-
-  .sequence {
-    min-width: 0;
-    border: 1px solid var(--border-muted);
-    border-radius: 4px;
-    background: var(--bg-surface);
-  }
-
-  .sequence-summary {
-    display: flex;
-    align-items: baseline;
-    flex-wrap: wrap;
-    gap: 4px 8px;
-    min-width: 0;
-    padding: 7px 9px;
-    cursor: pointer;
-  }
-
-  .sequence-tools,
-  .tool-name {
-    min-width: 0;
-    overflow-wrap: anywhere;
-  }
-
-  .sequence-tools {
-    flex: 1 1 10rem;
+    color: var(--text-primary);
+    font-size: var(--font-size-md);
     font-weight: 600;
   }
 
-  .sequence-count,
-  .sequence-ending,
-  .outcome,
-  .duration,
-  .byte-count {
+  .count {
+    padding: 0 5px;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    background: var(--bg-surface);
     color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-2xs);
+  }
+
+  .panel-sub {
+    margin: 2px 0 0;
+    color: var(--text-muted);
+    font-size: var(--font-size-xs);
     font-variant-numeric: tabular-nums;
   }
 
-  .sequence-ending,
-  .outcome {
-    color: var(--accent-blue);
+  .legend {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: var(--space-4);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    color: var(--text-muted);
+    font-size: var(--font-size-xs);
   }
 
-  .sequence-omission,
-  .omission-note {
-    color: var(--accent-amber);
+  .legend li {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
   }
 
-  .sequence-content {
-    display: grid;
-    gap: 8px;
+  .dot {
+    display: inline-block;
+    flex-shrink: 0;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--kit-tone, var(--text-muted));
+  }
+
+  .dot.hollow {
+    width: 7px;
+    height: 7px;
+    border: 1.5px solid var(--text-muted);
+    background: transparent;
+  }
+
+  .box {
     min-width: 0;
-    padding: 0 9px 9px;
+    overflow: hidden;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    background: var(--bg-surface);
   }
 
-  .sequence-call {
-    min-width: 0;
-    padding-top: 8px;
+  .sequence + .sequence {
     border-top: 1px solid var(--border-muted);
   }
 
-  .call-heading {
-    gap: 6px;
+  button {
+    font: inherit;
+    color: inherit;
+    text-align: left;
+    background: none;
+    border: 0;
+    cursor: pointer;
   }
 
-  .tool-name {
-    font-size: 12px;
+  .sequence-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    width: 100%;
+    min-width: 0;
+    padding: 7px 10px;
+    font-size: var(--font-size-sm);
   }
 
-  .outcome,
-  .call-fact,
-  .duration,
-  .byte-count {
-    overflow-wrap: anywhere;
+  .sequence-row:hover {
+    background: var(--bg-surface-hover);
   }
 
-  .call-fact {
+  .sequence-row:focus-visible,
+  .call-row:focus-visible,
+  .jump:focus-visible {
+    outline: var(--focus-ring);
+    outline-offset: -2px;
+    border-radius: var(--radius-sm);
+  }
+
+  :global(.tool-sequences-panel .chev) {
+    flex-shrink: 0;
     color: var(--text-muted);
+    transition: transform 0.18s ease;
   }
 
-  .duration {
-    margin-left: auto;
+  .open > .sequence-row :global(.chev),
+  .call.open .call-row :global(.chev) {
+    transform: rotate(90deg);
   }
 
-  .call-identity {
+  .flow {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    flex: 1;
+    gap: var(--space-2);
+    min-width: 0;
+    font-family: var(--font-mono);
+    font-size: var(--font-size-xs);
+  }
+
+  .step {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+    padding: 1px var(--space-3);
+    border: 1px solid var(--border-muted);
+    border-radius: var(--radius-sm);
+    background: var(--bg-primary);
+    color: var(--text-secondary);
     overflow-wrap: anywhere;
   }
 
-  .call-evidence {
-    display: grid;
-    gap: 8px;
-    margin: 8px 0 0;
-    min-width: 0;
+  .step .times {
+    color: var(--text-muted);
+    font-family: var(--font-sans);
   }
 
-  .evidence-row {
-    display: grid;
-    grid-template-columns: minmax(4rem, 6rem) minmax(0, 1fr);
-    gap: 8px;
-    min-width: 0;
+  .step.more {
+    border-style: dashed;
+    color: var(--text-muted);
+    font-family: var(--font-sans);
   }
 
-  dt {
+  .arrow {
+    color: var(--text-muted);
+    font-size: var(--font-size-2xs);
+  }
+
+  .facts,
+  .where {
+    color: var(--text-muted);
+    font-size: var(--font-size-xs);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .calls {
+    display: grid;
+    gap: var(--space-1);
+    padding: 0 10px var(--space-4) 30px;
+  }
+
+  .call {
+    border: 1px solid var(--border-muted);
+    border-radius: var(--radius-sm);
+    background: var(--bg-primary);
+    transition: border-color 0.15s, background 0.15s;
+  }
+
+  .call:hover {
+    border-color: var(--border-default);
+    background: var(--bg-surface-hover);
+  }
+
+  .call.open {
+    border-color: var(--border-default);
+    background: var(--bg-surface);
+  }
+
+  .call-line {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--space-4);
+    padding-right: var(--space-4);
+  }
+
+  .call-row {
+    display: grid;
+    grid-template-columns: 12px 6.5rem minmax(0, 1fr) auto 3.5em;
+    align-items: center;
+    gap: var(--space-4);
+    min-width: 0;
+    padding: var(--space-2) 0 var(--space-2) var(--space-4);
+    font-size: var(--font-size-xs);
+  }
+
+  .tool {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    min-width: 0;
+    color: var(--accent-amber);
+    font-family: var(--font-mono);
+    font-weight: 500;
+    overflow-wrap: anywhere;
+  }
+
+  .input {
+    overflow: hidden;
     color: var(--text-secondary);
+    font-family: var(--font-mono);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tag {
+    display: inline-block;
+    margin-left: var(--space-3);
+    padding: 0 5px;
+    border-radius: 3px;
+    background: var(--bg-inset);
+    color: var(--text-muted);
+    font-family: var(--font-sans);
+    font-size: var(--font-size-2xs);
+  }
+
+  .res {
+    color: var(--text-muted);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .res b {
+    color: var(--kit-tone-ink, var(--text-secondary));
     font-weight: 600;
   }
 
-  dd {
+  .dur {
+    min-width: 3.5em;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-2xs);
+    text-align: right;
+  }
+
+  .jump {
+    color: var(--accent-blue);
+    font-size: var(--font-size-xs);
+    text-decoration: none;
+    white-space: nowrap;
+  }
+
+  .jump:hover {
+    text-decoration: underline;
+  }
+
+  .detail {
     display: grid;
-    gap: 4px;
+    gap: var(--space-3);
+    margin: 0;
+    padding: var(--space-1) var(--space-4) var(--space-4) 28px;
+  }
+
+  .ev {
+    display: grid;
+    grid-template-columns: 3.5rem minmax(0, 1fr);
+    gap: var(--space-4);
+    font-size: var(--font-size-xs);
+  }
+
+  dt {
+    padding-top: var(--space-2);
+    color: var(--text-muted);
+  }
+
+  dd {
     min-width: 0;
     margin: 0;
   }
 
   pre {
-    max-width: 100%;
-    min-width: 0;
+    max-height: 9.5em;
     margin: 0;
-    padding: 5px 7px;
-    border-radius: 3px;
-    background: var(--bg-inset);
+    padding: 5px var(--space-4);
+    overflow: auto;
+    border: 1px solid var(--border-muted);
+    border-radius: var(--radius-sm);
+    background: var(--tool-bg);
     color: var(--text-primary);
-    font: 11px/1.4 var(--font-mono);
+    font: 11px/1.45 var(--font-mono);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
-    word-break: break-word;
   }
 
-  .empty-preview,
-  .byte-count {
+  .note {
+    margin: 3px 0 0;
     color: var(--text-muted);
   }
 
-  @media (max-width: 640px) {
-    .panel-header {
-      align-items: flex-start;
-      flex-direction: column;
+  .cut {
+    color: var(--accent-amber);
+  }
+
+  .none {
+    margin: 0;
+    padding-top: var(--space-2);
+    color: var(--text-muted);
+    font-style: italic;
+  }
+
+  .idline {
+    margin: 0;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-2xs);
+    overflow-wrap: anywhere;
+  }
+
+  .explain {
+    margin: 0;
+    padding: var(--space-2) var(--space-1) 0;
+    color: var(--text-muted);
+    font-size: var(--font-size-xs);
+  }
+
+  .explain b {
+    color: var(--text-secondary);
+    font-weight: 600;
+  }
+
+  .omit {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    margin: var(--space-4) 0 0;
+    color: var(--text-muted);
+    font-size: var(--font-size-xs);
+  }
+
+  .calls .omit {
+    margin: var(--space-1) 0;
+  }
+
+  .state {
+    margin: 0;
+    padding: 14px var(--space-5);
+    border: 1px dashed var(--border-default);
+    border-radius: var(--radius-md);
+    background: var(--bg-surface);
+    color: var(--text-muted);
+    font-size: var(--font-size-sm);
+    text-align: center;
+  }
+
+  .state-error {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: var(--space-4);
+    border-style: solid;
+    border-color: var(--kit-tone-border);
+    background: var(--kit-tone-band-bg);
+    color: var(--kit-tone-ink);
+  }
+
+  .skel {
+    height: 30px;
+    background: linear-gradient(90deg, var(--bg-surface) 0%, var(--bg-surface-hover) 50%, var(--bg-surface) 100%);
+    background-size: 200% 100%;
+    animation: skeleton-sweep 1.2s linear infinite;
+  }
+
+  .skel + .skel {
+    border-top: 2px solid var(--bg-inset);
+  }
+
+  @keyframes skeleton-sweep {
+    to {
+      background-position: -200% 0;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .skel {
+      animation: none;
     }
 
-    .panel-counts {
-      gap: 4px 8px;
+    :global(.tool-sequences-panel .chev) {
+      transition: none;
+    }
+  }
+
+  @container (max-width: 820px) {
+    .call-row {
+      grid-template-columns: 12px 5.5rem minmax(0, 1fr) auto;
     }
 
-    .evidence-row {
-      grid-template-columns: minmax(0, 1fr);
-      gap: 4px;
+    .dur {
+      display: none;
+    }
+  }
+
+  @container (max-width: 520px) {
+    .legend {
+      display: none;
     }
 
-    .duration {
+    .sequence-row {
+      flex-wrap: wrap;
+      row-gap: var(--space-2);
+    }
+
+    .flow {
+      flex-basis: calc(100% - 22px);
+    }
+
+    .facts,
+    .where {
+      margin-left: 22px;
+    }
+
+    .facts + .where {
       margin-left: 0;
+    }
+
+    .sequence-row :global(.ending) {
+      margin-left: auto;
+    }
+
+    .calls {
+      padding-left: 10px;
+    }
+
+    .call-line {
+      align-items: start;
+    }
+
+    .call-row {
+      grid-template-columns: 12px auto minmax(0, 1fr);
+      row-gap: var(--space-1);
+    }
+
+    .res {
+      grid-column: 2 / 4;
+      white-space: normal;
+    }
+
+    .jump {
+      padding-top: var(--space-2);
+    }
+
+    .detail {
+      padding-left: var(--space-4);
+    }
+
+    .ev {
+      grid-template-columns: minmax(0, 1fr);
+      gap: var(--space-1);
     }
   }
 </style>

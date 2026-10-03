@@ -84,6 +84,7 @@
   let toolSequencesRevision = $state("");
   let toolSequencesLoading = $state(false);
   let toolSequencesFailed = $state(false);
+  let toolSequencesRetry = $state(0);
   let toolSequencesLoadedIdentity = "";
   const openersRead = new LatestRead();
   const directoryRead = new LatestRead();
@@ -371,6 +372,8 @@
     const currentSession = session;
     const id = currentSession?.id;
     const visible = ui.signalPanelOpen;
+    // Read so a retry reruns this effect; a failed read never records its identity.
+    void toolSequencesRetry;
     if (!visible || !id || !currentSession) {
       toolSequencesRead.cancel();
       toolSequencesData = null;
@@ -1186,6 +1189,7 @@
     sessionId={session.id}
     loading={toolSequencesLoading}
     failed={toolSequencesFailed}
+    onretry={() => toolSequencesRetry++}
   />
 {/if}
 
