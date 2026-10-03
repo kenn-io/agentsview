@@ -300,7 +300,7 @@
                             {:else}
                               <p class="none">{m.tool_sequences_no_input()}</p>
                             {/if}
-                            {#if call.input_omitted_bytes > 0}
+                            {#if call.input_preview && call.input_omitted_bytes > 0}
                               <p class="note">
                                 {previewNote(call.input_bytes, call.input_omitted_bytes)}
                                 <span class="cut">{m.tool_sequences_full_input_in_message({ ordinal: call.ordinal })}</span>
@@ -324,7 +324,7 @@
                             {:else if !(call.result_content_unknown && call.outcome === "unknown")}
                               <p class="none">{m.tool_sequences_result_size_unknown()}</p>
                             {/if}
-                            {#if call.result_bytes !== null && call.result_omitted_bytes !== null && call.result_omitted_bytes > 0}
+                            {#if call.result_preview && call.result_bytes !== null && call.result_omitted_bytes !== null && call.result_omitted_bytes > 0}
                               <p class="note">
                                 {previewNote(call.result_bytes, call.result_omitted_bytes)}
                                 <span class="cut">{m.tool_sequences_full_result_in_message({ ordinal: call.ordinal })}</span>
@@ -616,7 +616,7 @@
     align-items: center;
     gap: var(--space-3);
     min-width: 0;
-    color: var(--accent-amber);
+    color: color-mix(in srgb, var(--accent-amber) 72%, var(--text-primary));
     font-family: var(--font-mono);
     font-weight: 500;
     overflow-wrap: anywhere;
@@ -715,7 +715,7 @@
   }
 
   .cut {
-    color: var(--accent-amber);
+    color: color-mix(in srgb, var(--accent-amber) 72%, var(--text-primary));
   }
 
   .none {

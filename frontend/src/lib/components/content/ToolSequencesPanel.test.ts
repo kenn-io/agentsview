@@ -319,6 +319,28 @@ describe("ToolSequencesPanel", () => {
     unmount(component);
   });
 
+  it("does not point at a full result when no result text was retained", async () => {
+    const component = mountPanel(
+      makeData({
+        sequences: [
+          makeSequence({
+            calls: [
+              makeCall({ result_preview: "", result_bytes: 4096, result_omitted_bytes: 4096 }),
+            ],
+          }),
+        ],
+      }),
+    );
+    await openSequence();
+    await openCall(0);
+
+    const text = document.body.textContent ?? "";
+    expect(text).toContain("The retained 4,096 bytes of result text are unavailable here.");
+    expect(text).not.toContain("Full result is in message");
+    expect(text).not.toContain("Preview shows");
+    unmount(component);
+  });
+
   it("says how many sequences are shown when the response is capped", async () => {
     const component = mountPanel(
       makeData({
