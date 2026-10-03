@@ -2324,7 +2324,8 @@ describe("SessionBreadcrumb", () => {
       ui.signalPanelOpen = true;
       sessionsService.getApiV1SessionsByIdToolSequences
         .mockResolvedValueOnce(makeToolSequences(2000))
-        .mockResolvedValueOnce(makeToolSequences(4000));
+        .mockResolvedValueOnce(makeToolSequences(4000))
+        .mockResolvedValueOnce(makeToolSequences(6000));
       const component = createClassComponent({
         component: SessionBreadcrumb,
         target: document.body,
@@ -2350,6 +2351,17 @@ describe("SessionBreadcrumb", () => {
         expect(await expandedSequenceText()).toContain("4.0s");
       });
       expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(2);
+
+      component.$set({
+        session: makeSession("claude", {
+          transcript_revision: "revision-2",
+          termination_status: "awaiting_user",
+        }),
+      });
+      await vi.waitFor(async () => {
+        expect(await expandedSequenceText()).toContain("6.0s");
+      });
+      expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(3);
       component.$destroy();
     });
 
