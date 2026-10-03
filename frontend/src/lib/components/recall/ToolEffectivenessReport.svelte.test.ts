@@ -27,6 +27,7 @@ vi.mock("../../api/generated/index", async (importOriginal) => {
 function makeFacts(totalToolCalls: number): SessionToolSequencesResponse {
   return {
     session_id: "s1",
+    transcript_revision: "revision-1",
     total_tool_calls: totalToolCalls,
     total_sequences: 1,
     omitted_sequences: 0,
@@ -56,6 +57,7 @@ function makeFacts(totalToolCalls: number): SessionToolSequencesResponse {
             result_bytes: 16,
             result_omitted_bytes: 0,
             result_content_unknown: false,
+            awaiting_subagent: false,
           },
         ],
       },

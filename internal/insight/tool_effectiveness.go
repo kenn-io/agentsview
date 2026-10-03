@@ -42,7 +42,7 @@ const toolEffectivenessInstruction = "You are assessing how the tool calls in on
 	`{"conclusions":[{"assessment":"helped|did_not_help|unknown","text":"...","ordinals":[N],"calls":[{"ordinal":N,"call_index":I}]}]}. ` +
 	"Each conclusion cites the message ordinals that support it in \"ordinals\", and names the exact call in \"calls\" when a message holds several. " +
 	"Cite only message ordinals and calls that appear in this prompt. " +
-	"An empty result can be useful evidence. " +
+	"An empty result can be useful evidence; a call with status completed and an empty result finished without output, as a silent command does. " +
 	"A successful tool call does not prove the task succeeded. " +
 	"Answer unknown when the evidence is insufficient, including anything listed under Omissions. " +
 	"Do not assign session cost, tokens, or time to a single tool.\n"
@@ -150,60 +150,30 @@ type toolEvidenceField struct {
 	text               string
 }
 
-// ErrSessionChangedDuringRead means a sync kept rewriting the session while
-// its evidence was read, so the messages and calls could mix versions.
-var ErrSessionChangedDuringRead = errors.New("session changed while its evidence was read; try again")
-
 // ErrNoCitableMessages means the session has no user or assistant message
 // for a conclusion to cite.
 var ErrNoCitableMessages = errors.New("this session has no messages to analyze")
 
-const stableReadAttempts = 3
-
-// loadStableSessionPromptInput retries the read until the transcript
-// revision, termination status and source binding are the same before
-// and after it.
-func loadStableSessionPromptInput(
+// loadCheckedSessionPromptInput reads the session through the same revision
+// check as the tool sequences panel, so the report never mixes two versions.
+func loadCheckedSessionPromptInput(
 	ctx context.Context,
 	database db.Store,
 	sessionID string,
 ) (sessionPromptInput, error) {
-	// Hosted stores resolve the session's source on every read, so the
-	// source binding must also hold still across the read.
-	source, hasSource := database.(db.ToolSequenceReadSource)
-	binding := func() (string, bool, error) {
-		if !hasSource {
-			return "", false, nil
-		}
-		return source.ToolSequenceReadSource(ctx, sessionID, false)
+	var in sessionPromptInput
+	sess, err := db.ReadSessionChecked(ctx, database, sessionID, func(sess *db.Session) error {
+		var err error
+		in, err = loadSessionEvidence(ctx, database, sess)
+		return err
+	})
+	if err != nil {
+		return sessionPromptInput{}, err
 	}
-	for range stableReadAttempts {
-		before, pending, err := binding()
-		if err != nil {
-			return sessionPromptInput{}, fmt.Errorf("resolving session source: %w", err)
-		}
-		if pending {
-			continue
-		}
-		in, err := loadSessionPromptInput(ctx, database, sessionID)
-		if err != nil {
-			return in, err
-		}
-		after, err := database.GetSession(ctx, sessionID)
-		if err != nil {
-			return in, fmt.Errorf("getting session: %w", err)
-		}
-		current, pending, err := binding()
-		if err != nil {
-			return in, fmt.Errorf("resolving session source: %w", err)
-		}
-		if after != nil && !pending && current == before &&
-			revisionOf(after) == revisionOf(in.sess) &&
-			terminationOf(after) == terminationOf(in.sess) {
-			return in, nil
-		}
+	if sess == nil {
+		return sessionPromptInput{}, fmt.Errorf("session not found: %s", sessionID)
 	}
-	return sessionPromptInput{}, ErrSessionChangedDuringRead
+	return in, nil
 }
 
 func revisionOf(sess *db.Session) string {
@@ -226,25 +196,27 @@ var ErrPromptTooLarge = errors.New("this prompt is too large for the selected ag
 
 // BuildToolEffectivenessPrompt writes the session prompt plus the tool
 // evidence and omissions sections, and returns what it sent. When
-// req.MaxPromptBytes is set, the evidence budget shrinks to fit it.
+// req.MaxPromptBytes is set, the evidence budget shrinks to fit it with room
+// left for one correction.
 func BuildToolEffectivenessPrompt(
 	ctx context.Context,
 	database db.Store,
 	req GenerateRequest,
 ) (string, ToolEffectivenessEvidence, error) {
-	in, err := loadStableSessionPromptInput(ctx, database, req.SessionID)
+	in, err := loadCheckedSessionPromptInput(ctx, database, req.SessionID)
 	if err != nil {
 		return "", ToolEffectivenessEvidence{SessionID: req.SessionID}, err
 	}
 	budget := toolEvidenceBudgetBytes
 	step, prevSize := 0, -1
+	limit := req.MaxPromptBytes - toolEffectivenessCorrectionReserve
 	for {
 		prompt, ev, err := buildToolEffectivenessPrompt(req, in, budget)
 		if err != nil || req.MaxPromptBytes <= 0 {
 			return prompt, ev, err
 		}
 		size := promptArgSize(prompt)
-		over := size - req.MaxPromptBytes
+		over := size - limit
 		if over <= 0 {
 			return prompt, ev, nil
 		}
@@ -304,14 +276,15 @@ func buildToolEffectivenessPrompt(
 	ev.allResultsUnknown = len(rows) > 0
 	for i, row := range rows {
 		outcome := observed.Calls[i].Outcome
-		if outcome != signals.ToolOutcomeUnknown {
-			ev.allResultsUnknown = false
-		}
 		// A withheld result keeps its length and error status but loses its text.
 		// A finished call with no output and no length returned nothing.
 		unretained[i] = row.ResultContentUnknown ||
 			(row.ResultContent == "" && (row.ResultContentLength > 0 ||
 				(outcome == signals.ToolOutcomeUnknown && !signals.IsCompletedToolStatus(row.EventStatus))))
+		// A finished call whose result is retained, even a silent command's empty one, is known evidence though its outcome class is unknown.
+		if outcome != signals.ToolOutcomeUnknown || (signals.IsCompletedToolStatus(row.EventStatus) && !unretained[i]) {
+			ev.allResultsUnknown = false
+		}
 		detail := ToolEffectivenessCitedCall{
 			Ordinal: row.MessageOrdinal, CallIndex: row.CallIndex, ToolName: row.ToolName,
 			InputPreview: strings.Clone(stringutil.SafeTruncate(row.InputJSON, toolCitationPreviewBytes)),
@@ -359,6 +332,9 @@ func buildToolEffectivenessPrompt(
 		ev.sentCalls[key] = true
 		fmt.Fprintf(&b, "### Call msg %d #%d %s\n", row.MessageOrdinal, row.CallIndex, row.ToolName)
 		fmt.Fprintf(&b, "- Outcome: %s\n", observed.Calls[i].Outcome)
+		if row.EventStatus != "" {
+			fmt.Fprintf(&b, "- Status: %s\n", row.EventStatus)
+		}
 		if sequenceOf[i] > 0 {
 			fmt.Fprintf(&b, "- Sequence: %d\n", sequenceOf[i])
 		} else {
@@ -510,6 +486,18 @@ func describeOmission(o ToolEvidenceOmission) string {
 	return o.Reason
 }
 
+// toolEffectivenessCorrectionReserve keeps room under an argument limit for
+// the correction a rejected reply gets, escaping included.
+const toolEffectivenessCorrectionReserve = 2 << 10
+
+// ToolEffectivenessCorrectionPrompt asks the model once more after its reply
+// failed validation, naming what was wrong.
+func ToolEffectivenessCorrectionPrompt(prompt string, rejected error) string {
+	return prompt + "\n## Correction\n\nYour previous reply was rejected: " +
+		stringutil.SafeTruncate(rejected.Error(), 512) +
+		"\nReply again with the complete JSON object, corrected.\n"
+}
+
 // ParseToolEffectivenessReport decodes the model reply strictly, after
 // removing one surrounding code fence. A reply that wraps the object in prose,
 // before or after it, falls back to the text between its first and last brace.
@@ -535,6 +523,18 @@ func ParseToolEffectivenessReport(content string) (ToolEffectivenessReport, erro
 	}
 	if err != nil {
 		return ToolEffectivenessReport{}, fmt.Errorf("parsing tool effectiveness JSON: %w", err)
+	}
+	// A citation repeated within one conclusion adds nothing, so it's dropped rather than failing a paid run.
+	for i := range out.Conclusions {
+		c := &out.Conclusions[i]
+		slices.Sort(c.Ordinals)
+		c.Ordinals = slices.Compact(c.Ordinals)
+		seen := make(map[ToolEffectivenessCallRef]bool, len(c.Calls))
+		c.Calls = slices.DeleteFunc(c.Calls, func(call ToolEffectivenessCallRef) bool {
+			repeated := seen[call]
+			seen[call] = true
+			return repeated
+		})
 	}
 	return out, nil
 }
@@ -566,23 +566,13 @@ func ValidateToolEffectivenessReport(r ToolEffectivenessReport, ev ToolEffective
 		if len(c.Ordinals) == 0 {
 			return fmt.Errorf("conclusion %d: at least one ordinal is required", i)
 		}
-		seen := make(map[int]bool, len(c.Ordinals))
 		for _, n := range c.Ordinals {
-			if seen[n] {
-				return fmt.Errorf("conclusion %d: duplicate ordinal %d", i, n)
-			}
-			seen[n] = true
 			if !ev.sentOrdinals[n] {
 				return fmt.Errorf("conclusion %d: ordinal %d was not in the prompt", i, n)
 			}
 		}
-		seenCalls := make(map[[2]int]bool, len(c.Calls))
 		for _, call := range c.Calls {
 			key := [2]int{call.Ordinal, call.CallIndex}
-			if seenCalls[key] {
-				return fmt.Errorf("conclusion %d: duplicate call msg %d #%d", i, call.Ordinal, call.CallIndex)
-			}
-			seenCalls[key] = true
 			if !ev.sentCalls[key] {
 				return fmt.Errorf("conclusion %d: call msg %d #%d was not in the prompt", i, call.Ordinal, call.CallIndex)
 			}

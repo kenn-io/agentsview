@@ -3,6 +3,7 @@ package insight
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -77,9 +78,9 @@ func TestBuildToolEffectivenessPrompt_IssueExample(t *testing.T) {
 	assert.Contains(t, prompt, "An empty result can be useful evidence")
 	assert.Contains(t, prompt, "does not prove the task succeeded")
 	assert.Contains(t, prompt, "## Tool evidence")
-	assert.Contains(t, prompt, "### Call msg 1 #0 Grep\n- Outcome: empty\n- Sequence: 1\n\nInput:\n```\n{\"pattern\":\"retryLimit\"}\n```\n\nResult:\n```\nNo matches found\n```\n")
-	assert.Contains(t, prompt, "### Call msg 2 #0 Grep\n- Outcome: empty\n- Sequence: 1\n")
-	assert.Contains(t, prompt, "### Call msg 3 #0 Glob\n- Outcome: content\n- Sequence: 1\n")
+	assert.Contains(t, prompt, "### Call msg 1 #0 Grep\n- Outcome: empty\n- Status: completed\n- Sequence: 1\n\nInput:\n```\n{\"pattern\":\"retryLimit\"}\n```\n\nResult:\n```\nNo matches found\n```\n")
+	assert.Contains(t, prompt, "### Call msg 2 #0 Grep\n- Outcome: empty\n- Status: completed\n- Sequence: 1\n")
+	assert.Contains(t, prompt, "### Call msg 3 #0 Glob\n- Outcome: content\n- Status: completed\n- Sequence: 1\n")
 	assert.Contains(t, prompt, "internal/retry/policy.go")
 	assert.Contains(t, prompt, "- Sequence 1: messages 1, 2, 3; tools Grep, Glob; ending recovered; identical repeat yes; near-identical repeat no; tool switch yes\n")
 	assert.Contains(t, prompt, "## Omissions\n\nNone.\n")
@@ -129,10 +130,10 @@ func TestBuildToolEffectivenessPrompt_RereadsWhileTheSessionChanges(t *testing.T
 	assert.Equal(t, "awaiting_user", ev.TerminationStatus)
 
 	_, _, err = BuildToolEffectivenessPrompt(t.Context(), &churningStore{Store: d, changes: 100}, req)
-	require.ErrorIs(t, err, ErrSessionChangedDuringRead)
+	require.ErrorIs(t, err, db.ErrSessionChanged)
 
 	_, _, err = BuildToolEffectivenessPrompt(t.Context(), &churningStore{Store: d, changes: 100, termination: true}, req)
-	require.ErrorIs(t, err, ErrSessionChangedDuringRead)
+	require.ErrorIs(t, err, db.ErrSessionChanged)
 }
 
 // rebindingStore reports a different hosted source binding on each check
@@ -143,13 +144,34 @@ type rebindingStore struct {
 	checks  int
 }
 
-func (s *rebindingStore) ToolSequenceReadSource(context.Context, string, bool) (string, bool, error) {
+func (s *rebindingStore) SessionSourceBinding(context.Context, string) (string, error) {
 	s.checks++
 	if s.changes > 0 {
 		s.changes--
-		return fmt.Sprintf("binding-%d", s.checks), false, nil
+		return fmt.Sprintf("binding-%d", s.checks), nil
 	}
-	return "binding", false, nil
+	return "binding", nil
+}
+
+func (s *rebindingStore) SessionSourceChanged(error) bool { return false }
+
+// revisionlessStore stands in for a backend that records no transcript revision.
+type revisionlessStore struct{ db.Store }
+
+func (s *revisionlessStore) GetSession(ctx context.Context, id string) (*db.Session, error) {
+	sess, err := s.Store.GetSession(ctx, id)
+	if sess != nil {
+		sess.TranscriptRevision = nil
+	}
+	return sess, err
+}
+
+func TestBuildToolEffectivenessPrompt_RefusesSessionsWithoutRevision(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	seedIssueExample(t, d)
+	req := GenerateRequest{Type: ToolEffectivenessType, SessionID: "issue"}
+	_, _, err := BuildToolEffectivenessPrompt(t.Context(), &revisionlessStore{Store: d}, req)
+	require.ErrorIs(t, err, db.ErrSessionRevisionUnavailable)
 }
 
 func TestBuildToolEffectivenessPrompt_RereadsWhileTheSourceMoves(t *testing.T) {
@@ -163,7 +185,7 @@ func TestBuildToolEffectivenessPrompt_RereadsWhileTheSourceMoves(t *testing.T) {
 	assert.Equal(t, 4, settles.checks)
 
 	_, _, err = BuildToolEffectivenessPrompt(t.Context(), &rebindingStore{Store: d, changes: 100}, req)
-	require.ErrorIs(t, err, ErrSessionChangedDuringRead)
+	require.ErrorIs(t, err, db.ErrSessionChanged)
 }
 
 func TestBuildToolEffectivenessPrompt_FitsAgentArgumentLimit(t *testing.T) {
@@ -386,10 +408,8 @@ func TestValidateToolEffectivenessReport(t *testing.T) {
 		"system ordinal":   func(c *ToolEffectivenessConclusion) { c.Ordinals = []int{1} },
 		"negative ordinal": func(c *ToolEffectivenessConclusion) { c.Ordinals = []int{-1} },
 		"empty ordinals":   func(c *ToolEffectivenessConclusion) { c.Ordinals = nil },
-		"duplicate":        func(c *ToolEffectivenessConclusion) { c.Ordinals = []int{3, 3} },
 		"unsent call":      func(c *ToolEffectivenessConclusion) { c.Calls = []ToolEffectivenessCallRef{{Ordinal: 3, CallIndex: 1}} },
 		"bad assessment":   func(c *ToolEffectivenessConclusion) { c.Assessment = "great" },
-		"duplicate call":   func(c *ToolEffectivenessConclusion) { c.Calls = []ToolEffectivenessCallRef{{Ordinal: 3}, {Ordinal: 3}} },
 		"empty text":       func(c *ToolEffectivenessConclusion) { c.Text = "  " },
 	} {
 		c := valid
@@ -417,7 +437,17 @@ func TestValidateToolEffectivenessReport_UnknownOnly(t *testing.T) {
 	)
 	_, noCalls := buildToolEffectiveness(t, d, "no-calls")
 	require.Error(t, ValidateToolEffectivenessReport(ToolEffectivenessReport{Conclusions: []ToolEffectivenessConclusion{{Assessment: AssessmentDidNotHelp, Text: "x", Ordinals: []int{1}}}}, noCalls))
-	assert.NoError(t, ValidateToolEffectivenessReport(ToolEffectivenessReport{Conclusions: []ToolEffectivenessConclusion{{Assessment: AssessmentUnknown, Text: "x", Ordinals: []int{1}}}}, noCalls))
+	require.NoError(t, ValidateToolEffectivenessReport(ToolEffectivenessReport{Conclusions: []ToolEffectivenessConclusion{{Assessment: AssessmentUnknown, Text: "x", Ordinals: []int{1}}}}, noCalls))
+
+	seedToolEffectivenessSession(t, d, "withheld-finished", "clean",
+		db.Message{SessionID: "withheld-finished", Ordinal: 0, Role: "user", Content: "go"},
+		toolEffectivenessMessage("withheld-finished", 1, db.ToolCall{
+			ToolName: "Bash", Category: "Bash", ToolUseID: "w", ResultContentLength: 17,
+			ResultEvents: []db.ToolResultEvent{{ToolUseID: "w", Source: "tool_execution", Status: "completed", ContentLength: 17}},
+		}),
+	)
+	_, withheld := buildToolEffectiveness(t, d, "withheld-finished")
+	require.Error(t, ValidateToolEffectivenessReport(helped, withheld), "a finished call whose output was withheld is still unknown")
 
 	emptyHelped := ToolEffectivenessReport{Conclusions: []ToolEffectivenessConclusion{{Assessment: AssessmentHelped, Text: "ruled out", Ordinals: []int{2}}}}
 	assert.NoError(t, ValidateToolEffectivenessReport(emptyHelped, issueEvidence(t)))
@@ -512,4 +542,18 @@ func TestToolEffectivenessStructured_CitedCalls(t *testing.T) {
 
 	md := RenderToolEffectivenessMarkdown(r, ev)
 	assert.Contains(t, md, "## Observed tool sequences\n\n- Sequence 1: messages 1, 2")
+}
+
+func TestParseToolEffectivenessReport_DropsRepeatedCitations(t *testing.T) {
+	r, err := ParseToolEffectivenessReport(`{"conclusions":[{"assessment":"helped","text":"x","ordinals":[3,2,3],"calls":[{"ordinal":3,"call_index":1},{"ordinal":3,"call_index":0},{"ordinal":3,"call_index":1}]}]}`)
+	require.NoError(t, err)
+	require.Len(t, r.Conclusions, 1)
+	assert.Equal(t, []int{2, 3}, r.Conclusions[0].Ordinals)
+	assert.Equal(t, []ToolEffectivenessCallRef{{Ordinal: 3, CallIndex: 1}, {Ordinal: 3, CallIndex: 0}}, r.Conclusions[0].Calls)
+}
+
+func TestToolEffectivenessCorrectionPrompt(t *testing.T) {
+	got := ToolEffectivenessCorrectionPrompt("prompt", errors.New("conclusion 0: msg 2 holds 2 calls, so the conclusion must name one"))
+	assert.True(t, strings.HasPrefix(got, "prompt\n## Correction\n"))
+	assert.Contains(t, got, "msg 2 holds 2 calls")
 }
