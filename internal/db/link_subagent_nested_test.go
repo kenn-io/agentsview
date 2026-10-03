@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/friction"
 	"go.kenn.io/agentsview/internal/timeutil"
 )
 
@@ -77,8 +78,13 @@ func TestLinkSubagentSessionsReParentsNestedGrandchild(t *testing.T) {
 			}},
 		},
 	)
+	require.NoError(t, d.replaceSessionFriction(t.Context(), grandchildID,
+		nil, nil, friction.RulesVersion,
+		FrictionHash(nil, nil, friction.RulesVersion)))
 
-	require.NoError(t, d.LinkSubagentSessions(), "LinkSubagentSessions")
+	changed, err := d.LinkSubagentSessionsContextWithChanges(t.Context())
+	require.NoError(t, err, "LinkSubagentSessions")
+	assert.Equal(t, []string{grandchildID}, changed)
 
 	// Orchestrator stays under main.
 	orch, err := d.GetSession(t.Context(), orchestratorID)
@@ -95,6 +101,8 @@ func TestLinkSubagentSessionsReParentsNestedGrandchild(t *testing.T) {
 	requireNoError(t, err, "GetSession grandchild")
 	assert.Equal(t, "subagent", gc.RelationshipType,
 		"grandchild relationship_type")
+	assert.Empty(t, gc.FrictionRulesVersion,
+		"re-parenting must mark the stored friction snapshot stale")
 	if assert.NotNil(t, gc.ParentSessionID, "grandchild parent") {
 		assert.Equal(t, orchestratorID, *gc.ParentSessionID,
 			"grandchild.parent_session_id must be the orchestrator, "+
@@ -192,6 +200,34 @@ func TestQueuedSubagentRepairProgressAndRollback(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Empty(t, counts, "a committed repair must drain both queues")
+}
+
+func TestRepairQueuedSubagentParentsReturnsChangedIDs(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "spawner", "p", func(s *Session) {
+		s.MessageCount = 1
+	})
+	insertSession(t, d, "kid", "p", func(s *Session) {
+		s.MessageCount = 1
+		s.ParentSessionID = Ptr("wrong-parent")
+		s.RelationshipType = "continuation"
+	})
+	insertMessages(t, d, spawnEdgeTo("spawner", "kid", "spawn"))
+	insertSession(t, d, "dangling", "p", func(s *Session) {
+		s.ParentSessionID = Ptr("deleted-parent")
+		s.RelationshipType = "subagent"
+	})
+	require.NoError(t, d.QueueSubagentParentRepairs(t.Context(), []string{"kid"}))
+	require.NoError(t, d.QueueSubagentParentCleanupRepairs(t.Context(), []string{"dangling"}))
+
+	changed, err := d.RepairQueuedSubagentParentsContextWithChanges(t.Context(), nil)
+
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"kid", "dangling"}, changed)
+	assert.Equal(t, "spawner", parentOfSession(t, d, "kid"))
+	dangling, err := d.GetSession(t.Context(), "dangling")
+	require.NoError(t, err)
+	assert.Nil(t, dangling.ParentSessionID)
 }
 
 // TestLinkSubagentSessionsUpgradesTypeWhenParentAlreadyMatches guards the
@@ -478,8 +514,14 @@ func TestLinkSubagentSessionsRepairsLegacySelfParentOnce(t *testing.T) {
 	forceSelfParent(t, d, "path-derived")
 	forceBackfilledSelfParent(t, d, "backfilled")
 
-	updated, err := d.LinkSubagentSessionsContext(t.Context())
+	changed, err := d.LinkSubagentSessionsContextWithChanges(t.Context())
 	require.NoError(t, err)
+	assert.ElementsMatch(t,
+		[]string{"with-edge", "edgeless", "backfilled", "path-derived"},
+		changed,
+		"the one-time self-parent repair must report every changed session",
+	)
+	updated := len(changed)
 	assert.Equal(t, 4, updated, "legacy parent repairs must count as session changes")
 
 	for _, tc := range []struct {
@@ -546,6 +588,42 @@ func TestLinkSubagentSessionsRollsBackLegacyRepairOnFailure(t *testing.T) {
 	require.NotNil(t, legacy)
 	assert.Nil(t, legacy.ParentSessionID)
 	assert.Equal(t, "parent", parentOfSession(t, d, "child"))
+}
+
+func TestLinkSubagentSessionsCountsLegacyRepairAndRelink(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "parent", "project")
+	insertSession(t, d, "child", "project")
+	forceSelfParent(t, d, "child")
+	insertMessages(t, d, spawnEdgeTo("parent", "child", "spawn"))
+
+	updated, err := d.LinkSubagentSessionsContext(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 2, updated, "both committed repairs contribute to sync notifications")
+	assert.Equal(t, "parent", parentOfSession(t, d, "child"))
+
+	updated, err = d.LinkSubagentSessionsContext(t.Context())
+	require.NoError(t, err)
+	assert.Zero(t, updated, "an unchanged pass must not notify again")
+}
+
+func TestCopyOrphanedDataFromExcludingReturnsSelfParentRepairs(t *testing.T) {
+	source := testDB(t)
+	insertSession(t, source, "legacy-child", "p")
+	forceSelfParent(t, source, "legacy-child")
+
+	destination := testDB(t)
+	copied, changed, err := destination.CopyOrphanedDataFromExcludingWithChanges(
+		source.Path(), nil,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"legacy-child"}, copied)
+	assert.Equal(t, []string{"legacy-child"}, changed)
+
+	child, err := destination.GetSessionFull(t.Context(), "legacy-child")
+	require.NoError(t, err)
+	assert.Nil(t, child.ParentSessionID)
+	assert.Empty(t, child.FrictionRulesVersion)
 }
 
 // TestLinkSubagentSessionsConvergesAcrossIngestionOrder covers the

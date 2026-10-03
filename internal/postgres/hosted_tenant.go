@@ -62,6 +62,9 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
 		if err = installRawProjectionUpgrade(ctx, tx, schema, tenant); err != nil {
 			return err
 		}
+		if err = installHostedFrictionUpgrade(ctx, tx, schema, tenant); err != nil {
+			return err
+		}
 		if _, err = tx.ExecContext(ctx, hostedLegacyRevisionDDL); err != nil {
 			return err
 		}
@@ -76,7 +79,7 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
 	if _, err = tx.ExecContext(ctx, `CREATE SCHEMA IF NOT EXISTS `+quoted); err != nil {
 		return err
 	}
-	for _, ddl := range []string{coreDDL, rawIngestDDL, rawIngestAppendOnlyDDL, postgresUsageJSONHelperDDL, rawProjectionDDL, rawLinksDDL} {
+	for _, ddl := range []string{coreDDL, frictionDDL, rawIngestDDL, rawIngestAppendOnlyDDL, postgresUsageJSONHelperDDL, rawProjectionDDL, rawLinksDDL} {
 		if _, err = tx.ExecContext(ctx, ddl); err != nil {
 			return fmt.Errorf("creating hosted application schema: %w", err)
 		}

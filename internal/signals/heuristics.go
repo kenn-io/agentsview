@@ -334,15 +334,12 @@ func promptTokens(normalized string) []string {
 
 func capsWordRatio(content string, minWords int) float64 {
 	withoutCode := stripCodeFences(content)
-	words := strings.FieldsFunc(withoutCode, func(r rune) bool {
+	words := strings.FieldsFuncSeq(withoutCode, func(r rune) bool {
 		return !unicode.IsLetter(r)
 	})
-	if len(words) < minWords {
-		return 0
-	}
 	total := 0
 	caps := 0
-	for _, word := range words {
+	for word := range words {
 		if len([]rune(word)) < 2 {
 			continue
 		}
@@ -639,7 +636,7 @@ func RunawayToolLoopSpan(
 	for i, c := range calls {
 		facts[i] = toolLoopFact{
 			failure:        IsFailure(c),
-			exactSignature: toolSignature(c),
+			exactSignature: [3]string{c.ToolName, c.Category, c.InputJSON},
 			commandClass:   commandClass(c),
 		}
 	}
@@ -661,7 +658,7 @@ func hasRunawayToolLoop(calls []ToolCallRow) bool {
 
 type toolLoopFact struct {
 	failure        bool
-	exactSignature string
+	exactSignature [3]string // Borrow fields instead of copying entire tool arguments.
 	commandClass   string
 }
 

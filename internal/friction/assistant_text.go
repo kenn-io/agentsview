@@ -23,7 +23,7 @@ func AssistantText(
 		}
 	}
 	for _, call := range calls {
-		if rendering := renderingInText(text, call, redacted); rendering != "" {
+		if rendering := renderingInText(agent, text, call, redacted); rendering != "" {
 			text = removePart(text, strings.Index(text, rendering), len(rendering))
 		}
 	}
@@ -64,9 +64,22 @@ func openHandsSummaryStart(text, toolName string) int {
 
 // renderingInText chooses the longest present rendering in the preferred
 // form, falling back to the other form only when none is present.
-func renderingInText(text string, call RawToolCall, redacted bool) string {
+func renderingInText(agent, text string, call RawToolCall, redacted bool) string {
+	// Full-content Claude archives normally contain this exact rendering.
+	// Avoid scanning the arguments again to build an unused redacted form.
+	if !redacted {
+		switch parser.AgentType(agent) {
+		case parser.AgentClaude, parser.AgentOpenClaude, parser.AgentCowork:
+			full := parser.ToolUseRendering(call.ToolName, call.InputJSON)
+			if full != "" && strings.Contains(text, full) {
+				return full
+			}
+		default:
+			// Other providers use the candidate search below.
+		}
+	}
 	pairs := parser.ToolUseRenderingCandidates(
-		call.Category, call.ToolName, call.InputJSON,
+		parser.AgentType(agent), call.Category, call.ToolName, call.InputJSON,
 	)
 	pick := func(
 		form func(parser.ToolUseRenderingPair) string,

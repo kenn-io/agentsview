@@ -139,6 +139,20 @@ The latest published release is
   New sessions in a newly enabled provider or home are picked up as they are
   written, and sessions already on disk arrive with the next sync. Separate
   `push --watch` processes still need a restart.
+- After upgrading, background reconciliation gradually computes Friction Log
+  findings for archived sessions and sends the new results to PostgreSQL mirrors.
+  This one-time work handles at most 20 sessions per tick and resumes after
+  daemon restarts. Completed archives avoid a full session scan on each tick.
+  Usage-only archives mark empty findings current without reading transcripts.
+  Background recomputes
+  leave sessions above 2,000 message, tool-call, and result-event rows or 4 MiB of
+  stored text pending; larger sessions need incremental detection. Findings are
+  stored for upcoming digest, API, and UI work. Fresh imports keep the same
+  findings while avoiding repeated text scans and per-finding database writes.
+  Metadata-only PostgreSQL updates keep unchanged findings in place. Background
+  backfill waits for foreground archive rebuilds. Transcript-only archives
+  detect tool failures from retained status fields, with the same policy for
+  large imports and later updates.
 - Syncing uses less CPU to check transcript text for invalid characters. Clean
   text is now checked in one pass and stored unchanged. In a full sync of a
   950 MB local test corpus, total CPU time fell about 4%. Wall-clock time did

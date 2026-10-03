@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/friction"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
@@ -198,6 +199,48 @@ func TestResyncBuildThenSwapMatchesResyncAll(t *testing.T) {
 
 	warm := e.SyncAll(t.Context(), nil)
 	assert.Zero(t, warm.Synced, "persisted skip state must survive the swap")
+}
+
+func TestResyncQueuedHierarchyRepairRefreshesFrictionOnReplacement(t *testing.T) {
+	e, database, _ := newResyncSplitEngine(t)
+	ctx := t.Context()
+	missingParent := "deleted-parent"
+	require.NoError(t, database.UpsertSession(ctx, db.Session{
+		ID: "resync-child", Project: "project", Machine: "local",
+		Agent: "claude", ParentSessionID: &missingParent,
+		RelationshipType: "subagent",
+	}))
+	require.NoError(t, database.ReplaceSessionMessages(ctx, "resync-child", []db.Message{{
+		SessionID: "resync-child", Ordinal: 0, Role: "user", Content: "run the task",
+	}}))
+	var reviewCalls atomic.Int32
+	e.frictionReviewHook = func(in friction.SessionInput) []friction.Signal {
+		if in.SubjectID == "resync-child" {
+			reviewCalls.Add(1)
+		}
+		return nil
+	}
+	require.NoError(t, e.recomputeFrictionFromDB(ctx, "resync-child"))
+	require.NoError(t, database.QueueSubagentParentCleanupRepairs(
+		ctx, []string{"resync-child"},
+	))
+	reviewCalls.Store(0)
+
+	tempPath, stats, err := e.ResyncBuild(ctx, nil)
+	require.NoError(t, err)
+	require.False(t, stats.Aborted)
+	require.FileExists(t, tempPath)
+
+	replacement, err := db.Open(ctx, tempPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, replacement.Close()) })
+	child, err := replacement.GetSessionFull(ctx, "resync-child")
+	require.NoError(t, err)
+	assert.Nil(t, child.ParentSessionID)
+	assert.Equal(t, friction.RulesVersion, child.FrictionRulesVersion)
+	assert.EqualValues(t, 1, reviewCalls.Load(),
+		"queued hierarchy changes in the replacement must recompute friction before swap",
+	)
 }
 
 // TestSwapWindowRejectsDirectWrites proves the write barrier: with the writer

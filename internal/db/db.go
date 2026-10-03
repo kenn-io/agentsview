@@ -2538,6 +2538,18 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"ALTER TABLE sessions ADD COLUMN secrets_rules_version TEXT NOT NULL DEFAULT ''",
 		},
 		{
+			"sessions", "friction_count",
+			"ALTER TABLE sessions ADD COLUMN friction_count INTEGER NOT NULL DEFAULT 0",
+		},
+		{
+			"sessions", "friction_rules_version",
+			"ALTER TABLE sessions ADD COLUMN friction_rules_version TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			"sessions", "friction_hash",
+			"ALTER TABLE sessions ADD COLUMN friction_hash TEXT NOT NULL DEFAULT ''",
+		},
+		{
 			"recall_extract_progress", "content_stamped_at",
 			"ALTER TABLE recall_extract_progress ADD COLUMN content_stamped_at TEXT NOT NULL DEFAULT ''",
 		},
@@ -3621,6 +3633,8 @@ func (db *DB) createPartialIndexesLocked(ctx context.Context, w *writerHandle) e
 		   AND claude_request_id != ''`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_has_secret
 		 ON sessions(secret_leak_count) WHERE secret_leak_count > 0`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_friction_rules_version
+		 ON sessions(friction_rules_version)`,
 	}
 	for _, ddl := range indexes {
 		if _, err := w.Exec(ctx, ddl); err != nil {

@@ -33,15 +33,21 @@ type SessionSignalUpdate struct {
 	HasContextData         bool
 	SecretLeakCount        int
 	SecretsRulesVersion    string
-	QualitySignals         QualitySignals
+	// Friction, when non-nil, replaces the session's friction findings,
+	// dims and summary columns in the same transaction as the signals.
+	// Nil leaves stored friction untouched for incremental maintenance.
+	Friction       *SessionFrictionUpdate
+	QualitySignals QualitySignals
 }
 
 // usageOnlySignalUpdate is the canonical derived-signal state for an archive
 // that deliberately omits the transcript content those signals require. The
-// current version marks the empty result as intentional so startup backfill
-// does not revisit the row on every process launch.
+// current quality and friction versions mark the empty results as intentional
+// so startup backfills do not revisit the row on every process launch.
 func usageOnlySignalUpdate() SessionSignalUpdate {
+	frictionUpdate := settledUsageOnlyFriction()
 	return SessionSignalUpdate{
+		Friction: &frictionUpdate,
 		QualitySignals: QualitySignals{
 			Version: CurrentQualitySignalVersion,
 		},
@@ -202,6 +208,11 @@ func updateSessionSignalsTx(
 			state.State, state.SignalVersion, sessionID,
 		); err != nil {
 			return fmt.Errorf("writing full signal state for %s: %w", sessionID, err)
+		}
+	}
+	if u.Friction != nil {
+		if err := replaceSessionFrictionTx(tx, sessionID, *u.Friction); err != nil {
+			return err
 		}
 	}
 	return nil

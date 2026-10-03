@@ -1,6 +1,7 @@
 package friction
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -161,10 +162,51 @@ func TestAssistantText(t *testing.T) {
 		},
 		{"only rendering leaves empty text", readR, "", []RawToolCall{read}, false, ""},
 	}
-	for _, tt := range tests {
+	for _, agent := range []string{"", "claude", "openclaude", "cowork"} {
+		for _, tt := range tests {
+			t.Run(agent+"/"+tt.name, func(t *testing.T) {
+				assert.Equal(t, tt.want,
+					AssistantText(agent, tt.content, tt.thinking, tt.calls, tt.redacted))
+			})
+		}
+	}
+}
+
+func TestAssistantTextCodex(t *testing.T) {
+	call := RawToolCall{ToolName: "exec_command", Category: "Bash", InputJSON: `{"cmd":"echo for now"}`}
+	for _, tt := range []struct {
+		name, content, want string
+		redacted            bool
+	}{
+		{"full", "Before.\n[Bash]\n$ echo for now\nAfter.", "Before.\nAfter.", false},
+		{"redacted", "Before.\n[Bash]\nAfter.", "Before.\nAfter.", true},
+		{"full under transcript policy", "Before.\n[Bash]\n$ echo for now\nAfter.", "Before.\nAfter.", true},
+		{"redacted preferred", "[Bash]\n[Bash]\n$ echo for now", "[Bash]\n$ echo for now", true},
+	} {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want,
-				AssistantText("", tt.content, tt.thinking, tt.calls, tt.redacted))
+			assert.Equal(t, tt.want, AssistantText("codex", tt.content, "", []RawToolCall{call}, tt.redacted))
+		})
+	}
+}
+
+// Large Write arguments are not part of the short label stored in assistant
+// text. Reconstructing every provider's rendering used to copy them repeatedly.
+func BenchmarkAssistantTextToolArguments(b *testing.B) {
+	for _, size := range []struct {
+		name  string
+		bytes int
+	}{{"1KiB", 1 << 10}, {"64KiB", 64 << 10}} {
+		b.Run(size.name, func(b *testing.B) {
+			calls := []RawToolCall{{
+				ToolName: "Write", Category: "Write",
+				InputJSON: `{"file_path":"fixture.go","content":"` + strings.Repeat("x", size.bytes) + `"}`,
+			}}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				text := AssistantText("claude", "Before.\n[Write: fixture.go]\nAfter.", "", calls, false)
+				require.Equal(b, "Before.\nAfter.", text)
+			}
 		})
 	}
 }

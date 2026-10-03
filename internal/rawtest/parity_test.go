@@ -119,7 +119,7 @@ func TestCaptureOracleRelationshipsAndToolEvents(t *testing.T) {
 			}
 		}
 		require.Len(t, events, 1)
-		assert.Equal(t, "Process exited with code 1\nError: synthetic failure", events[0].Content)
+		assert.Equal(t, "bash: python3: command not found", events[0].Content)
 	})
 }
 

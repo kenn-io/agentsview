@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/friction"
 	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/signals"
@@ -131,6 +132,40 @@ func TestFinalizePreservesAuthoritativeSummaryTotals(t *testing.T) {
 	assert.Equal(t, 17, prepared.UsageEvents[0].OutputTokens)
 	assert.Equal(t, summaryTotal, prepared.Session.TotalOutputTokens)
 	assert.Equal(t, summaryPeak, prepared.Session.PeakContextTokens)
+}
+
+func TestRefreshFrictionUsesPreparedToolResults(t *testing.T) {
+	parsed := parser.ParseResult{
+		Session: parser.ParsedSession{ID: "session-1", Agent: parser.AgentCodex},
+		Messages: []parser.ParsedMessage{
+			{
+				Ordinal: 0, Role: parser.RoleAssistant,
+				ToolCalls: []parser.ParsedToolCall{{
+					ToolUseID: "call-1", ToolName: "exec_command", Category: "Bash",
+				}},
+			},
+			{
+				Ordinal: 1, Role: parser.RoleUser,
+				ToolResults: []parser.ParsedToolResult{{
+					ToolUseID:  "call-1",
+					ContentRaw: `"bash: python3: command not found"`,
+				}},
+			},
+		},
+	}
+	candidate, err := ingest.PrepareCandidate(
+		t.Context(), parsed, ingest.ContentOptions{},
+	)
+	require.NoError(t, err)
+
+	prepared, err := ingest.Finalize(
+		t.Context(), candidate, ingest.ContentOptions{},
+	)
+	require.NoError(t, err)
+	require.NoError(t, ingest.RefreshFriction(&prepared, ingest.ContentOptions{}))
+	assert.Equal(t, 1, prepared.Session.FrictionCount)
+	assert.Equal(t, friction.RulesVersion, prepared.Session.FrictionRulesVersion)
+	assert.NotEmpty(t, prepared.Session.FrictionHash)
 }
 
 func TestFinalizeKeepsUsageWithoutMessagesAndStampsFinalID(t *testing.T) {

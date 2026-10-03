@@ -255,17 +255,28 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 			changed = true
 		}
 	}
-	if changed || derivedChanged {
+	staleFrictionGroups := make(map[string]bool)
+	for _, group := range ordered {
+		stale, staleErr := rawGroupHasStaleFriction(ctx, tx, group)
+		if staleErr != nil {
+			return staleErr
+		}
+		if stale {
+			staleFrictionGroups[group] = true
+		}
+	}
+	if changed || derivedChanged || len(staleFrictionGroups) > 0 {
 		var revision int64
 		err = tx.QueryRowContext(ctx, `INSERT INTO raw_corpus_state(singleton,corpus_revision,identity_revision) VALUES(1,1,CASE WHEN $1 THEN 1 ELSE 0 END) ON CONFLICT(singleton) DO UPDATE SET corpus_revision=raw_corpus_state.corpus_revision+1,identity_revision=raw_corpus_state.identity_revision+EXCLUDED.identity_revision RETURNING corpus_revision`, changed).Scan(&revision)
 		if err != nil {
 			return err
 		}
-		if changed {
-			for _, group := range ordered {
-				if err = s.materializeGroup(ctx, tx, group, revision); err != nil {
-					return err
-				}
+		for _, group := range ordered {
+			if !changed && !staleFrictionGroups[group] {
+				continue
+			}
+			if err = s.materializeGroup(ctx, tx, group, revision); err != nil {
+				return err
 			}
 		}
 	}

@@ -264,7 +264,7 @@ func toolUseRenderingToReplace(content string, call ToolCall) (string, string) {
 	// that was inlined; a shorter match would leave the body behind.
 	var full, redacted string
 	for _, pair := range parser.ToolUseRenderingCandidates(
-		call.Category, call.ToolName, call.InputJSON,
+		"", call.Category, call.ToolName, call.InputJSON,
 	) {
 		if len(pair.Full) > len(full) && strings.Contains(content, pair.Full) {
 			full, redacted = pair.Full, pair.Redacted
@@ -608,11 +608,10 @@ func dropCopiedToolContentTx(
 			return fmt.Errorf("dropping copied %s: %w", statement.label, err)
 		}
 	}
-	// The source archive computed signals and secret findings from payloads
-	// this archive does not keep. Clearing the counters and their version
-	// markers hides the stale values now and lets the startup backfill
-	// recompute both from the projected rows, matching what the write path
-	// stores for freshly parsed sessions.
+	// The source archive computed signals, secret findings, and friction from
+	// payloads this archive does not keep. Clearing the counters and version
+	// markers hides stale values and lets startup backfill recompute all three
+	// from the projected rows, matching freshly parsed sessions.
 	rows, err := tx.QueryContext(ctx, "SELECT id FROM "+tempIDsTable)
 	if err != nil {
 		return fmt.Errorf("listing copied sessions: %w", err)
@@ -629,6 +628,9 @@ func dropCopiedToolContentTx(
 		}
 		if err := replaceSecretFindingsTx(tx, id, nil, 0, ""); err != nil {
 			return fmt.Errorf("clearing copied findings for %s: %w", id, err)
+		}
+		if err := clearSessionFrictionTx(tx, id); err != nil {
+			return fmt.Errorf("clearing copied friction for %s: %w", id, err)
 		}
 	}
 	return nil
@@ -811,7 +813,7 @@ func redactCopiedUnrecoverableToolRenderings(content string, calls []ToolCall) s
 			})
 		}
 		labels[call.Category], labels[call.ToolName] = true, true
-		for _, pair := range parser.ToolUseRenderingCandidates(call.Category, call.ToolName, "{}") {
+		for _, pair := range parser.ToolUseRenderingCandidates("", call.Category, call.ToolName, "{}") {
 			if inside, ok := strings.CutPrefix(pair.Full, "["); ok {
 				label, _, _ := strings.Cut(inside, "]")
 				label, _, _ = strings.Cut(label, ":")

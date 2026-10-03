@@ -148,5 +148,15 @@ func (e *Engine) computeFullSignalsAndSecretsForStorage(
 			msgs, e.toolResultImages,
 		)
 	}
-	return computeFullSignalsAndSecrets(s, msgs, failures)
+	update, findings, err := computeFullSignalsAndSecrets(s, msgs, failures)
+	if err != nil {
+		return update, findings, err
+	}
+	// Full-content staged writes use placeholder results in memory and
+	// recompute friction after commit. Other writes compute only from the
+	// projected rows, so later archive reads reproduce the same findings.
+	if failures == nil {
+		e.attachFriction(&update, s, msgs)
+	}
+	return update, findings, nil
 }

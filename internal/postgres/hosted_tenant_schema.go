@@ -74,7 +74,7 @@ var hostedTables = append([]HostedTable{
 		{Columns: []string{"device_id"}, Table: "raw_devices", References: []string{"device_id"}, Delete: "RESTRICT"},
 	}},
 	{Name: "raw_ingest_jobs", Key: []string{"id"}, ForeignKeys: []HostedForeignKey{{Columns: []string{"manifest_id"}, Table: "raw_manifests", References: []string{"manifest_id"}, Delete: "RESTRICT"}}},
-}, rawProjectionTables...)
+}, append(append([]HostedTable(nil), hostedFrictionTables...), rawProjectionTables...)...)
 
 func sessionHostedFK() []HostedForeignKey {
 	return []HostedForeignKey{{Columns: []string{"session_id"}, Table: "sessions", References: []string{"id"}, Delete: "CASCADE"}}

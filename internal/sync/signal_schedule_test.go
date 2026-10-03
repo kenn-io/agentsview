@@ -132,6 +132,19 @@ func TestSignalSchedulerFirstMarkRunsInline(t *testing.T) {
 		"inline run should not arm a flush timer")
 }
 
+func TestSignalSchedulerDeferredMarkPreservesIncrementalFastPath(t *testing.T) {
+	h := newSchedulerHarness(10*time.Second, 2*time.Second)
+
+	h.sched.markDirtyDeferred("s1")
+	assert.Empty(t, h.runsSnapshot(), "the append must not load session history")
+	require.Equal(t, 1, h.armedCount())
+
+	h.advance(2 * time.Second)
+	h.fireTimer(t)
+	assert.Equal(t, []string{"s1"}, h.deferredSnapshot(),
+		"the quiet flush must publish the new findings")
+}
+
 func TestSignalSchedulerDefersWithinIntervalThenQuietFlush(t *testing.T) {
 	h := newSchedulerHarness(10*time.Second, 2*time.Second)
 
