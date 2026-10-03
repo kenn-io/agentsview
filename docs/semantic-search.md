@@ -830,7 +830,8 @@ A serving host without `[vector]` can adopt a published recipe instead. Under
 `AGENTSVIEW_EMBEDDINGS_ENDPOINT` (and `AGENTSVIEW_EMBEDDINGS_API_KEY_FILE` if
 the endpoint needs a key) to an embeddings server that serves the published
 model. `pg serve` and `--pg` reads then use the single published recipe whose
-parameters rebuild its fingerprint. A local `[vector]` section always wins. If
+parameters rebuild its fingerprint. A `[vector]` section in `config.toml` can't
+be combined with the `AGENTSVIEW_EMBEDDINGS_*` variables; startup stops. If
 PostgreSQL holds several published recipes, adoption refuses to guess and
 semantic search reports the count; remove obsolete generations with
 `agentsview pg vectors drop <id>` and restart. Generations pushed before recipe

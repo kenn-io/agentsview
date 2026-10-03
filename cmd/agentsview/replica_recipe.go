@@ -12,8 +12,8 @@ import (
 
 // adoptReplicaVectorConfig returns cfg with the single embedding recipe
 // published to a PostgreSQL replica, served through the deployment
-// embeddings server. A local [vector] section always wins, and cfg is
-// returned unchanged without a deployment server or on other backends.
+// embeddings server. cfg is returned unchanged when [vector] is enabled,
+// without a deployment server, or on other backends.
 // Nothing is written to config.toml; callers keep the adopted value for
 // their lifetime.
 func adoptReplicaVectorConfig(
