@@ -1431,7 +1431,7 @@ func TestLocalPGPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 			DBPath:         dbPath,
 			InstallationID: "local",
 			AgentDirs: map[parser.AgentType][]string{
-				parser.AgentCodex: {codexRoot},
+				parser.AgentTraeX: {codexRoot},
 			},
 		},
 		database: database,
@@ -1518,7 +1518,7 @@ func TestLocalPGPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 		case ticks <- time.Now():
 		default:
 		}
-		session, err := database.GetSession(t.Context(), "codex:"+uuid)
+		session, err := database.GetSession(t.Context(), "traex:"+uuid)
 		return err == nil && session != nil
 	}, 10*time.Second, 20*time.Millisecond,
 		"the returned root must be reconciled by the poller without watcher events or floor pushes")
@@ -1546,7 +1546,7 @@ func TestLocalDuckDBPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 			DBPath:         dbPath,
 			InstallationID: "local",
 			AgentDirs: map[parser.AgentType][]string{
-				parser.AgentCodex: {codexRoot},
+				parser.AgentTraeX: {codexRoot},
 			},
 		},
 		database: database,
@@ -1634,7 +1634,7 @@ func TestLocalDuckDBPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 		case ticks <- time.Now():
 		default:
 		}
-		session, err := database.GetSession(t.Context(), "codex:"+uuid)
+		session, err := database.GetSession(t.Context(), "traex:"+uuid)
 		return err == nil && session != nil
 	}, 10*time.Second, 20*time.Millisecond,
 		"the returned root must be reconciled by the poller without watcher events or floor pushes")
