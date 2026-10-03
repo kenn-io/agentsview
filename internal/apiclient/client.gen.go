@@ -21400,7 +21400,7 @@ type SessionToolSequenceCall struct {
 	ResultOmittedBytes   *int64                         `json:"result_omitted_bytes"`
 	ResultPreview        string                         `json:"result_preview"`
 	ToolChanged          bool                           `json:"tool_changed"`
-	ToolName             string                         `json:"tool_name" validate:"required"`
+	ToolName             string                         `json:"tool_name"`
 	ToolUseID            string                         `json:"tool_use_id"`
 }
 
@@ -21415,9 +21415,6 @@ func (s SessionToolSequenceCall) Validate() error {
 		if err := v.Validate(); err != nil {
 			errors = errors.Append("Repeat", err)
 		}
-	}
-	if err := typesValidator.Var(s.ToolName, "required"); err != nil {
-		errors = errors.Append("ToolName", err)
 	}
 	if len(errors) == 0 {
 		return nil

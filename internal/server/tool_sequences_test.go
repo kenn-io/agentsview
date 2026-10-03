@@ -341,7 +341,6 @@ func TestHandleToolSequences_Timing(t *testing.T) {
 func TestHandleToolSequences_GeneratedClientValidation(t *testing.T) {
 	te := setup(t)
 	seedSequenceSession(t, te.db, "tool-sequences-empty-evidence", new("clean"), []db.ToolCall{{
-		ToolName: "Bash", Category: "Bash",
 		ResultEvents: []db.ToolResultEvent{{Source: "tool_execution", Status: "errored"}},
 	}})
 	w := te.get(t, "/api/v1/sessions/tool-sequences-empty-evidence/tool-sequences")
@@ -354,6 +353,7 @@ func TestHandleToolSequences_GeneratedClientValidation(t *testing.T) {
 	assert.Empty(t, call.InputPreview)
 	assert.Empty(t, call.ResultPreview)
 	assert.Empty(t, call.ToolUseID)
+	assert.Empty(t, call.ToolName)
 	require.NoError(t, response.Validate())
 	t.Run("required nullable fields survive round trip", func(t *testing.T) {
 		var response apiclient.GetAPIV1SessionsIDToolSequencesResponse

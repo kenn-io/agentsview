@@ -126,11 +126,11 @@ writeFileSync(
           '$1"',
         )
         .replace(
-          /(\t(?:InputPreview|ResultPreview|ToolUseID)\s+string\s+`json:"[^"]+") validate:"required"/g,
+          /(\t(?:InputPreview|ResultPreview|ToolName|ToolUseID)\s+string\s+`json:"[^"]+") validate:"required"/g,
           "$1",
         )
         .replace(
-          /\tif err := typesValidator\.Var\(s\.(?:InputPreview|ResultPreview|ToolUseID), "required"\); err != nil \{\n\t\terrors = errors.Append\("[^"]+", err\)\n\t\}\n/g,
+          /\tif err := typesValidator\.Var\(s\.(?:InputPreview|ResultPreview|ToolName|ToolUseID), "required"\); err != nil \{\n\t\terrors = errors.Append\("[^"]+", err\)\n\t\}\n/g,
           "",
         ),
     ),
