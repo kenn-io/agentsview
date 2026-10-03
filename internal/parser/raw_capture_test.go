@@ -451,11 +451,13 @@ func TestCodexProviderPlansForkWithReplayParent(t *testing.T) {
 	const parentID = "11111111-1111-4111-8111-111111111111"
 	parentPath := canonicalRawCaptureTestPath(t,
 		writeCodexProviderSession(t, root, parentID, "parent task"))
+	pagePath := canonicalRawCaptureTestPath(t,
+		writeCodexProviderSession(t, root, parentID+"_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "page task"))
 	childPath := canonicalRawCaptureTestPath(t,
 		writeCodexProviderSessionContent(t, root, childID,
 			`{"type":"session_meta","payload":{"id":"`+childID+`","forked_from_id":"`+parentID+`"}}`+"\n",
 		))
-	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root, filepath.Dir(pagePath)}})
 	require.True(t, ok)
 	child := requireCodexProviderSource(t, provider, childID)
 
@@ -463,15 +465,18 @@ func TestCodexProviderPlansForkWithReplayParent(t *testing.T) {
 
 	require.NoError(t, err)
 	require.True(t, supported)
-	require.Len(t, plan.Entries, 2)
+	require.Len(t, plan.Entries, 3)
 	entries := make(map[string]RawCaptureEntry, len(plan.Entries))
 	for _, entry := range plan.Entries {
 		entries[entry.LocalPath] = entry
 	}
 	require.Contains(t, entries, parentPath)
+	require.Contains(t, entries, pagePath)
 	require.Contains(t, entries, childPath)
 	assert.False(t, entries[parentPath].Appendable,
 		"the parent is an immutable parse input for this child generation")
+	assert.False(t, entries[pagePath].Appendable,
+		"parent pages are also immutable parse inputs")
 	assert.True(t, entries[childPath].Appendable,
 		"only the primary child transcript may extend the generation")
 }

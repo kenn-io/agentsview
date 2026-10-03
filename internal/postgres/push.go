@@ -1845,7 +1845,11 @@ func readPGExcludedSessionIDs(
 
 func pgExcludedSessionIDsQuery(ids []string) (string, []any) {
 	return `SELECT id FROM excluded_sessions
-			 WHERE id = ANY($1)`, []any{ids}
+			 WHERE id = ANY($1)
+			 UNION
+			 SELECT candidate.id FROM unnest($1::text[]) AS candidate(id)
+			 JOIN excluded_sessions e ON e.id = left(candidate.id, -37)
+			 WHERE e.include_codex_pages AND left(right(candidate.id, 37), 1) = '_'`, []any{ids}
 }
 
 func purgePGExcludedPushSessions(
@@ -2050,6 +2054,7 @@ func sessionPushFingerprint(
 		stringValue(sess.EndedAt),
 		stringValue(sess.DeletedAt),
 		stringValue(sess.DeletionCause),
+		strconv.FormatBool(sess.TrashIncludesCodexPages),
 		strconv.Itoa(sess.MessageCount),
 		strconv.Itoa(sess.UserMessageCount),
 		strconv.FormatBool(sess.IsAutomated),
@@ -2297,7 +2302,8 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 			transcript_fidelity, transcript_revision,
 			agent_label, entrypoint, session_kind,
 			source_archive_id, source_database_generation, file_path,
-			project_assigned, prompt_evidence_discarded, updated_at
+			project_assigned, prompt_evidence_discarded, trash_includes_codex_pages,
+			source_trash_includes_codex_pages, updated_at
 			)
 			SELECT
 				$1, $2, $3, $4, $5, $6, $7, $8,
@@ -2315,9 +2321,11 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 				$50, $51,
 				$52, $53, $54, $55, $56, $57, $58, $59, $60, $61,
 				$62, $63, $64, $65, $66, $67, $68,
-				$70, NOW()
+				$70, $71, $71, NOW()
 			WHERE NOT EXISTS (
-				SELECT 1 FROM excluded_sessions WHERE id = $1
+				SELECT 1 FROM excluded_sessions
+				WHERE id = $1 OR (include_codex_pages
+					AND left(right($1, 37), 1) = '_' AND id = left($1, -37))
 			)
 			ON CONFLICT (id) DO UPDATE SET
 			machine = EXCLUDED.machine,
@@ -2360,6 +2368,14 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 				ELSE EXCLUDED.deletion_cause
 			END,
 			source_deleted_at = EXCLUDED.deleted_at,
+			trash_includes_codex_pages = CASE
+				WHEN sessions.deleted_at IS DISTINCT FROM sessions.source_deleted_at
+					OR sessions.trash_includes_codex_pages IS DISTINCT FROM
+						sessions.source_trash_includes_codex_pages
+				THEN sessions.trash_includes_codex_pages
+				ELSE EXCLUDED.trash_includes_codex_pages
+			END,
+			source_trash_includes_codex_pages = EXCLUDED.trash_includes_codex_pages,
 			message_count = EXCLUDED.message_count,
 			user_message_count = EXCLUDED.user_message_count,
 			total_output_tokens = EXCLUDED.total_output_tokens,
@@ -2420,7 +2436,9 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 			OR sessions.owner_marker = EXCLUDED.owner_marker)
 			AND NOT EXISTS (
 				SELECT 1 FROM excluded_sessions
-				WHERE id = EXCLUDED.id
+				WHERE id = EXCLUDED.id OR (include_codex_pages
+					AND left(right(EXCLUDED.id, 37), 1) = '_'
+					AND id = left(EXCLUDED.id, -37))
 			)
 			AND (
 			sessions.machine IS DISTINCT FROM EXCLUDED.machine
@@ -2446,6 +2464,7 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 			OR sessions.started_at IS DISTINCT FROM EXCLUDED.started_at
 			OR sessions.ended_at IS DISTINCT FROM EXCLUDED.ended_at
 			OR sessions.source_deleted_at IS DISTINCT FROM EXCLUDED.deleted_at
+			OR sessions.source_trash_includes_codex_pages IS DISTINCT FROM EXCLUDED.trash_includes_codex_pages
 			OR sessions.deletion_cause IS DISTINCT FROM EXCLUDED.deletion_cause
 			OR sessions.message_count IS DISTINCT FROM EXCLUDED.message_count
 			OR sessions.user_message_count IS DISTINCT FROM EXCLUDED.user_message_count
@@ -2545,6 +2564,7 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 		sess.ProjectAssigned,
 		string(legacyMarkerMachinesJSON),
 		options.UsageOnly,
+		sess.TrashIncludesCodexPages,
 	)
 	if err != nil {
 		return err

@@ -5867,8 +5867,9 @@ func TestCopyOrphanedDataFrom_DuplicateSourceUUIDKeepsOnePin(t *testing.T) {
 // an orphan — but genuine Codex orphans (file gone) and SQLite-backed
 // agents that share a file_path across sessions must still be copied.
 func TestCopyOrphanedDataFrom_SkipsStaleCodexForkRows(t *testing.T) {
+	const forkID = "codex:22222222-2222-4222-8222-222222222222"
 	dir := t.TempDir()
-	forkFile := filepath.Join(dir, "fork.jsonl")
+	forkFile := filepath.Join(dir, "rollout-2026-06-12T10-00-00-"+forkID[len("codex:"):]+".jsonl")
 	goneFile := filepath.Join(dir, "gone.jsonl")
 	sharedDB := filepath.Join(dir, "chats.db")
 
@@ -5897,7 +5898,7 @@ func TestCopyOrphanedDataFrom_SkipsStaleCodexForkRows(t *testing.T) {
 	dstDB := testDBAtPath(t, dstPath, "dst")
 	defer dstDB.Close()
 	// The fork file reparsed under the fork's own id.
-	insertSession(t, dstDB, "codex:fork-1", "proj", func(s *Session) {
+	insertSession(t, dstDB, forkID, "proj", func(s *Session) {
 		s.Agent = "codex"
 		s.FilePath = &forkFile
 	})
@@ -7045,6 +7046,84 @@ func TestCopySessionMetadataFrom(t *testing.T) {
 		"SELECT count(*) FROM starred_sessions WHERE session_id = ?", "s1",
 	).Scan(&starCount), "count stars after")
 	assert.Equal(t, 1, starCount, "stars after")
+}
+
+// A stale thread row can hold page messages even when the original head
+// survives. Pins follow the page's identity and occurrence rank, not the head.
+func TestCopySessionMetadataFrom_CodexPagePins(t *testing.T) {
+	const thread = "codex:11111111-1111-4111-8111-111111111111"
+	const page = thread + "_22222222-2222-4222-8222-222222222222"
+	for _, tt := range []struct {
+		name        string
+		version     int
+		duplicate   bool
+		shrink      bool
+		wantID      string
+		wantOrdinal int
+	}{
+		{"unique_uuid", 122, false, false, page, 11},
+		{"duplicate_uuid", 122, true, false, page, 11},
+		{"ambiguous_duplicate", 122, true, true, "", 0},
+		{"already_upgraded", 123, false, false, thread, 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := t.Context()
+			dir := t.TempDir()
+			srcPath := filepath.Join(dir, "src.db")
+			src := testDBAtPath(t, srcPath, "src")
+			insertSession(t, src, thread, "proj", func(s *Session) {
+				s.Agent = "codex"
+				s.FilePath = new("rollout-2026-01-01T00-00-00-" + page[len("codex:"):] + ".jsonl")
+			})
+			firstUUID := "first"
+			if tt.duplicate {
+				firstUUID = "reply"
+			}
+			messages := []Message{
+				{SessionID: thread, Ordinal: 0, Role: "assistant", Content: "Reply", SourceUUID: firstUUID},
+				{SessionID: thread, Ordinal: 1, Role: "assistant", Content: "Reply", SourceUUID: "reply"},
+			}
+			insertMessages(t, src, messages...)
+			oldMessages, err := src.GetAllMessages(ctx, thread)
+			require.NoError(t, err)
+			require.Len(t, oldMessages, 2)
+			note := "Saved reply"
+			pinID, err := src.PinMessage(ctx, thread, oldMessages[1].ID, &note)
+			require.NoError(t, err)
+			require.NotZero(t, pinID)
+			_, err = src.getWriter().Exec(ctx, fmt.Sprintf("PRAGMA user_version = %d", tt.version))
+			require.NoError(t, err)
+			require.NoError(t, src.Close())
+
+			dst := testDBAtPath(t, filepath.Join(dir, "dst.db"), "dst")
+			defer dst.Close()
+			insertSession(t, dst, thread, "proj")
+			insertSession(t, dst, page, "proj")
+			insertMessages(t, dst, messages...)
+			for i := range messages {
+				messages[i].SessionID = page
+				messages[i].Ordinal += 10
+			}
+			if tt.shrink {
+				messages = messages[:1]
+			}
+			insertMessages(t, dst, messages...)
+			// Repeated copies must not duplicate pins or retain a temporary map.
+			for range 2 {
+				require.NoError(t, dst.CopySessionMetadataFrom(srcPath))
+			}
+			pins, err := dst.ListPinnedMessages(ctx, "", "")
+			require.NoError(t, err)
+			if tt.wantID == "" {
+				assert.Empty(t, pins)
+				return
+			}
+			require.Len(t, pins, 1)
+			assert.Equal(t, tt.wantID, pins[0].SessionID)
+			assert.Equal(t, tt.wantOrdinal, pins[0].Ordinal)
+			assert.Equal(t, &note, pins[0].Note)
+		})
+	}
 }
 
 func TestCopySessionMetadataFrom_IdenticalDuplicatePins(t *testing.T) {

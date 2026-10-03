@@ -137,7 +137,7 @@ const sessionFullCols = `id, project, machine, agent,
 	transcript_fidelity,
 	parser_malformed_lines, is_truncated,
 	last_write_incremental,
-	deleted_at, deletion_cause, source_missing_at,
+	deleted_at, deletion_cause, source_missing_at, trash_includes_codex_pages,
 	termination_status, file_path, file_size, file_mtime,
 	next_ordinal, last_entry_uuid,
 	file_inode, file_device,
@@ -371,15 +371,16 @@ type Session struct {
 	ParserMalformedLines        int             `json:"parser_malformed_lines,omitzero"`
 	IsTruncated                 bool            `json:"is_truncated,omitzero"`
 
-	DeletedAt         *string `json:"deleted_at,omitempty"`
-	DeletionCause     *string `json:"-"`
-	SourceMissingAt   *string `json:"-"`
-	TerminationStatus *string `json:"termination_status,omitempty"`
-	FilePath          *string `json:"file_path,omitempty"`
-	FileSize          *int64  `json:"file_size,omitempty"`
-	FileMtime         *int64  `json:"file_mtime,omitempty"`
-	NextOrdinal       int     `json:"-"`
-	LastEntryUUID     *string `json:"-"`
+	DeletedAt               *string `json:"deleted_at,omitempty"`
+	TrashIncludesCodexPages bool    `json:"-"`
+	DeletionCause           *string `json:"-"`
+	SourceMissingAt         *string `json:"-"`
+	TerminationStatus       *string `json:"termination_status,omitempty"`
+	FilePath                *string `json:"file_path,omitempty"`
+	FileSize                *int64  `json:"file_size,omitempty"`
+	FileMtime               *int64  `json:"file_mtime,omitempty"`
+	NextOrdinal             int     `json:"-"`
+	LastEntryUUID           *string `json:"-"`
 	// ClaudeLinearParse is SQLite-only sync bookkeeping: whether the
 	// Claude full parser fell back to linear processing for this file
 	// (nil = unknown/legacy or non-Claude). Linearity is monotonic
@@ -1250,7 +1251,7 @@ func scanSessionFullRow(row interface{ Scan(...any) error }, id string) (*Sessio
 		&s.TranscriptFidelity,
 		&s.ParserMalformedLines, &s.IsTruncated,
 		&s.LastWriteIncremental,
-		&s.DeletedAt, &s.DeletionCause, &s.SourceMissingAt,
+		&s.DeletedAt, &s.DeletionCause, &s.SourceMissingAt, &s.TrashIncludesCodexPages,
 		&s.TerminationStatus, &s.FilePath, &s.FileSize,
 		&s.FileMtime, &s.NextOrdinal, &s.LastEntryUUID,
 		&s.FileInode, &s.FileDevice,
@@ -1287,22 +1288,41 @@ func (db *DB) GetSessionName(
 	return stored.String, true, nil
 }
 
+// A pre-revert-page deletion covered the whole Codex thread. Keep that scope
+// even for page files absent during the upgrade. New deletions remain exact IDs.
+const sessionExcludedQuery = `SELECT EXISTS (
+	SELECT 1 FROM excluded_sessions
+	WHERE id = ?1 OR (
+		include_codex_pages = 1 AND substr(?1, -37, 1) = '_'
+		AND id = substr(?1, 1, length(?1) - 37)
+	)
+)`
+
 // IsSessionExcluded returns true if the session ID was
 // permanently deleted by the user.
 func (db *DB) IsSessionExcluded(ctx context.Context, id string) bool {
 	var n int
 	_ = db.getReader().QueryRow(ctx,
-		"SELECT 1 FROM excluded_sessions WHERE id = ?", id,
+		sessionExcludedQuery, id,
 	).Scan(&n)
 	return n == 1
 }
 
-// IsSessionTrashed returns true if the session ID exists in the trash.
+const sessionTrashedQuery = `SELECT EXISTS (
+	SELECT 1 FROM sessions
+	WHERE deleted_at IS NOT NULL AND (
+		id = ?1 OR (
+			trash_includes_codex_pages = 1 AND substr(?1, -37, 1) = '_'
+			AND id = substr(?1, 1, length(?1) - 37)
+		)
+	)
+)`
+
+// IsSessionTrashed includes pages covered by a legacy whole-thread trash action.
 func (db *DB) IsSessionTrashed(ctx context.Context, id string) bool {
 	var n int
 	_ = db.getReader().QueryRow(ctx,
-		"SELECT 1 FROM sessions WHERE id = ?"+
-			" AND deleted_at IS NOT NULL", id,
+		sessionTrashedQuery, id,
 	).Scan(&n)
 	return n == 1
 }
@@ -1335,26 +1355,34 @@ func (db *DB) PurgeExcludedSessions(ctx context.Context) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	ids, err := sessionIDsTx(ctx,
-		tx, "id IN (SELECT id FROM excluded_sessions)",
-	)
-	if err != nil {
+	if _, err := purgeExcludedSessionsTx(ctx, tx); err != nil {
 		return err
+	}
+	return tx.Commit()
+}
+
+func purgeExcludedSessionsTx(ctx context.Context, tx *sql.Tx) (int64, error) {
+	const excluded = `EXISTS (
+		SELECT 1 FROM excluded_sessions excluded
+		WHERE excluded.id = sessions.id OR (
+			excluded.include_codex_pages = 1 AND substr(sessions.id, -37, 1) = '_'
+			AND excluded.id = substr(sessions.id, 1, length(sessions.id) - 37)
+		)
+	)`
+	ids, err := sessionIDsTx(ctx, tx, excluded)
+	if err != nil {
+		return 0, err
 	}
 	for _, id := range ids {
 		if err := deleteSessionMessagesTx(tx, id); err != nil {
-			return fmt.Errorf(
-				"pre-deleting excluded session %s messages: %w",
-				id, err,
-			)
+			return 0, fmt.Errorf("pre-deleting excluded session %s messages: %w", id, err)
 		}
 	}
-	if _, err := tx.ExecContext(ctx,
-		"DELETE FROM sessions WHERE id IN (SELECT id FROM excluded_sessions)",
-	); err != nil {
-		return fmt.Errorf("purging excluded sessions: %w", err)
+	res, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE "+excluded)
+	if err != nil {
+		return 0, fmt.Errorf("purging excluded sessions: %w", err)
 	}
-	return tx.Commit()
+	return res.RowsAffected()
 }
 
 // DeleteParserExcludedSessions removes rows that the current parser
@@ -1616,7 +1644,7 @@ func upsertSessionExec(
 	// concurrent DeleteSession/EmptyTrash/RestoreSession.
 	var excluded int
 	err := queryRow(ctx,
-		"SELECT 1 FROM excluded_sessions WHERE id = ?", s.ID,
+		sessionExcludedQuery, s.ID,
 	).Scan(&excluded)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return sessionUpsertResult{},
@@ -1657,6 +1685,17 @@ func upsertSessionExec(
 	}
 	if deletedAt.Valid {
 		return sessionUpsertResult{}, ErrSessionTrashed
+	}
+	// Only page-shaped IDs can inherit a thread's trash. Ordinary writes
+	// retain the exact-row check above without another database query.
+	if len(s.ID) > 37 && s.ID[len(s.ID)-37] == '_' {
+		var trashed bool
+		if err := queryRow(ctx, sessionTrashedQuery, s.ID).Scan(&trashed); err != nil {
+			return sessionUpsertResult{}, fmt.Errorf("checking trash for %s: %w", s.ID, err)
+		}
+		if trashed {
+			return sessionUpsertResult{}, ErrSessionTrashed
+		}
 	}
 	result.sourceMissing = sourceMissingAt.Valid
 
@@ -1710,7 +1749,7 @@ func (db *DB) insertSessionIfAbsent(ctx context.Context, s Session) error {
 
 	var excluded int
 	_ = db.getWriter().QueryRowContext(
-		ctx, "SELECT 1 FROM excluded_sessions WHERE id = ?", s.ID,
+		ctx, sessionExcludedQuery, s.ID,
 	).Scan(&excluded)
 	if excluded == 1 {
 		return ErrSessionExcluded
@@ -1720,7 +1759,7 @@ func (db *DB) insertSessionIfAbsent(ctx context.Context, s Session) error {
 	// UpsertSession does, under the same lock to avoid a restore/delete race.
 	var trashed int
 	_ = db.getWriter().QueryRowContext(
-		ctx, "SELECT 1 FROM sessions WHERE id = ? AND deleted_at IS NOT NULL", s.ID,
+		ctx, sessionTrashedQuery, s.ID,
 	).Scan(&trashed)
 	if trashed == 1 {
 		return ErrSessionTrashed
@@ -2639,6 +2678,43 @@ func (db *DB) FindSessionIDsByRawSuffix(
 		return nil, fmt.Errorf(
 			"finding sessions by raw suffix %q: %w",
 			raw, err,
+		)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf(
+				"scanning session id: %w", err,
+			)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// CodexRevertPageSessionIDs returns the ids of stored, non-deleted sessions
+// whose id starts with threadSessionID + "_" (Codex revert pages of that
+// thread, codex:<thread>_<rollout>). It compares an id range, not LIKE,
+// because '_' is a wildcard in LIKE and valid in session ids.
+func (db *DB) CodexRevertPageSessionIDs(
+	ctx context.Context, threadSessionID string,
+) ([]string, error) {
+	if threadSessionID == "" {
+		return nil, nil
+	}
+	// '`' is the byte after '_', so the range holds exactly the ids with the "_" prefix.
+	rows, err := db.getReader().QueryContext(ctx,
+		`SELECT id FROM sessions
+		 WHERE id > ?1 AND id < ?2 AND deleted_at IS NULL
+		 ORDER BY id`,
+		threadSessionID+"_", threadSessionID+"`",
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"finding codex revert pages of %q: %w",
+			threadSessionID, err,
 		)
 	}
 	defer rows.Close()
@@ -5410,37 +5486,66 @@ func (db *DB) DeleteSession(ctx context.Context, id string) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	aliasIDs, err := sessionAliasIDsTx(ctx, tx, "id = ?", id)
-	if err != nil {
+	if _, err := deleteSessionsTx(ctx, tx, "id = ?", id); err != nil {
 		return err
 	}
-	if err := deleteSessionMessagesTx(tx, id); err != nil {
-		return fmt.Errorf(
-			"pre-deleting session %s messages: %w",
-			id, err,
-		)
-	}
-
-	res, err := tx.ExecContext(ctx,
-		"DELETE FROM sessions WHERE id = ?", id,
-	)
-	if err != nil {
-		return fmt.Errorf("deleting session %s: %w", id, err)
-	}
-	n, _ := res.RowsAffected()
-	if n > 0 {
-		if err := excludeSessionIDTx(ctx, tx, id); err != nil {
-			return fmt.Errorf("excluding session %s: %w", id, err)
-		}
-		for _, aliasID := range aliasIDs {
-			if err := excludeSessionIDTx(ctx, tx, aliasID); err != nil {
-				return fmt.Errorf(
-					"excluding session alias %s: %w", aliasID, err,
-				)
-			}
-		}
-	}
 	return tx.Commit()
+}
+
+// deleteSessionsTx preserves the scope of legacy trash before removing its
+// anchor. Its pages are deleted in this transaction, so none remain restorable
+// under a permanent thread exclusion.
+func deleteSessionsTx(ctx context.Context, tx *sql.Tx, where string, args ...any) (int64, error) {
+	aliasIDs, err := sessionAliasIDsTx(ctx, tx, where, args...)
+	if err != nil {
+		return 0, err
+	}
+	ids, err := sessionIDsTx(ctx, tx, where, args...)
+	if err != nil {
+		return 0, err
+	}
+	var threadScope bool
+	if err := tx.QueryRowContext(ctx,
+		"SELECT EXISTS (SELECT 1 FROM sessions WHERE ("+where+")"+
+			" AND deleted_at IS NOT NULL AND trash_includes_codex_pages = 1)", args...,
+	).Scan(&threadScope); err != nil {
+		return 0, fmt.Errorf("reading deleted session scope: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO excluded_sessions (id, include_codex_pages)
+		 SELECT id, CASE WHEN deleted_at IS NOT NULL THEN trash_includes_codex_pages ELSE 0 END
+		 FROM sessions WHERE `+where+`
+		 ON CONFLICT(id) DO UPDATE SET include_codex_pages =
+		 MAX(excluded_sessions.include_codex_pages, excluded.include_codex_pages)`, args...,
+	); err != nil {
+		return 0, fmt.Errorf("excluding sessions: %w", err)
+	}
+	for _, aliasID := range aliasIDs {
+		if err := excludeSessionIDTx(ctx, tx, aliasID); err != nil {
+			return 0, fmt.Errorf("excluding session alias %s: %w", aliasID, err)
+		}
+	}
+	for _, id := range ids {
+		if err := deleteSessionMessagesTx(tx, id); err != nil {
+			return 0, fmt.Errorf("pre-deleting session %s messages: %w", id, err)
+		}
+	}
+	res, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE "+where, args...)
+	if err != nil {
+		return 0, fmt.Errorf("deleting sessions: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if threadScope {
+		pages, err := purgeExcludedSessionsTx(ctx, tx)
+		if err != nil {
+			return 0, err
+		}
+		n += pages
+	}
+	return n, nil
 }
 
 func excludeSessionIDTx(ctx context.Context, tx *sql.Tx, id string) error {
@@ -5550,38 +5655,9 @@ func (db *DB) DeleteSessionIfTrashed(ctx context.Context, id string) (int64, err
 	if locked == 0 {
 		return 0, nil
 	}
-	aliasIDs, err := sessionAliasIDsTx(ctx,
-		tx, "id = ? AND deleted_at IS NOT NULL", id,
-	)
+	n, err := deleteSessionsTx(ctx, tx, "id = ? AND deleted_at IS NOT NULL", id)
 	if err != nil {
 		return 0, err
-	}
-	if err := deleteSessionMessagesTx(tx, id); err != nil {
-		return 0, fmt.Errorf(
-			"pre-deleting trashed session %s messages: %w",
-			id, err,
-		)
-	}
-
-	res, err = tx.ExecContext(ctx,
-		"DELETE FROM sessions WHERE id = ? AND deleted_at IS NOT NULL",
-		id,
-	)
-	if err != nil {
-		return 0, fmt.Errorf("deleting trashed session %s: %w", id, err)
-	}
-	n, _ := res.RowsAffected()
-
-	// Record in exclusion list so sync doesn't re-import.
-	if err := excludeSessionIDTx(ctx, tx, id); err != nil {
-		return 0, fmt.Errorf("excluding session %s: %w", id, err)
-	}
-	for _, aliasID := range aliasIDs {
-		if err := excludeSessionIDTx(ctx, tx, aliasID); err != nil {
-			return 0, fmt.Errorf(
-				"excluding session alias %s: %w", aliasID, err,
-			)
-		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -6013,6 +6089,17 @@ func (db *DB) RestoreSession(ctx context.Context, id string) (int64, error) {
 		return 0, err
 	}
 	if n > 0 {
+		// Restoring a selected file ends the earlier whole-thread trash action.
+		// Other materialized pages keep their own deleted_at values.
+		if _, err := tx.ExecContext(ctx, `UPDATE sessions
+			SET trash_includes_codex_pages = 0,
+			    local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+			WHERE trash_includes_codex_pages = 1 AND (
+				id = ?1 OR (substr(?1, -37, 1) = '_'
+					AND id = substr(?1, 1, length(?1) - 37))
+			)`, id); err != nil {
+			return 0, err
+		}
 		if _, err := tx.ExecContext(ctx,
 			"DELETE FROM local_session_source_baselines WHERE session_id = ?", id,
 		); err != nil {
@@ -6108,49 +6195,11 @@ func (db *DB) EmptyTrash(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("locking trashed sessions: %w", err)
 	}
 
-	aliasIDs, err := sessionAliasIDsTx(ctx,
-		tx, "deleted_at IS NOT NULL",
-	)
-	if err != nil {
-		return 0, err
-	}
-	ids, err := sessionIDsTx(ctx,
-		tx, "deleted_at IS NOT NULL",
-	)
+	n, err := deleteSessionsTx(ctx, tx, "deleted_at IS NOT NULL")
 	if err != nil {
 		return 0, err
 	}
 
-	// Record all trashed session IDs before deleting.
-	if _, err := tx.ExecContext(ctx,
-		`INSERT OR IGNORE INTO excluded_sessions (id)
-		 SELECT id FROM sessions
-		 WHERE deleted_at IS NOT NULL`,
-	); err != nil {
-		return 0, fmt.Errorf("excluding trashed sessions: %w", err)
-	}
-	for _, aliasID := range aliasIDs {
-		if err := excludeSessionIDTx(ctx, tx, aliasID); err != nil {
-			return 0, fmt.Errorf(
-				"excluding trashed session alias %s: %w", aliasID, err,
-			)
-		}
-	}
-	for _, id := range ids {
-		if err := deleteSessionMessagesTx(tx, id); err != nil {
-			return 0, fmt.Errorf(
-				"pre-deleting trashed session %s messages: %w",
-				id, err,
-			)
-		}
-	}
-	res, err := tx.ExecContext(ctx,
-		"DELETE FROM sessions WHERE deleted_at IS NOT NULL",
-	)
-	if err != nil {
-		return 0, fmt.Errorf("emptying trash: %w", err)
-	}
-	n, _ := res.RowsAffected()
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("commit empty-trash: %w", err)
 	}
@@ -6191,45 +6240,10 @@ func (db *DB) DeleteSessions(ctx context.Context, ids []string) (int, error) {
 		}
 		placeholders := strings.Repeat(",?", len(batch))[1:]
 
-		aliasIDs, err := sessionAliasIDsTx(ctx,
-			tx, "id IN ("+placeholders+")", args...,
-		)
+		n, err := deleteSessionsTx(ctx, tx, "id IN ("+placeholders+")", args...)
 		if err != nil {
 			return 0, err
 		}
-
-		// Exclude only IDs that exist before we delete them.
-		if _, err := tx.ExecContext(ctx,
-			"INSERT OR IGNORE INTO excluded_sessions (id) "+
-				"SELECT id FROM sessions WHERE id IN ("+placeholders+")",
-			args...,
-		); err != nil {
-			return 0, fmt.Errorf("excluding batch: %w", err)
-		}
-		for _, aliasID := range aliasIDs {
-			if err := excludeSessionIDTx(ctx, tx, aliasID); err != nil {
-				return 0, fmt.Errorf(
-					"excluding batch session alias %s: %w", aliasID, err,
-				)
-			}
-		}
-		for _, id := range batch {
-			if err := deleteSessionMessagesTx(tx, id); err != nil {
-				return 0, fmt.Errorf(
-					"pre-deleting batch session %s messages: %w",
-					id, err,
-				)
-			}
-		}
-
-		res, err := tx.ExecContext(ctx,
-			"DELETE FROM sessions WHERE id IN ("+placeholders+")",
-			args...,
-		)
-		if err != nil {
-			return 0, fmt.Errorf("deleting batch: %w", err)
-		}
-		n, _ := res.RowsAffected()
 		total += int(n)
 	}
 
@@ -6358,7 +6372,7 @@ func (db *DB) ListSessionsModifiedBetween(
 			&s.TranscriptFidelity,
 			&s.ParserMalformedLines, &s.IsTruncated,
 			&s.LastWriteIncremental,
-			&s.DeletedAt, &s.DeletionCause, &s.SourceMissingAt,
+			&s.DeletedAt, &s.DeletionCause, &s.SourceMissingAt, &s.TrashIncludesCodexPages,
 			&s.TerminationStatus, &s.FilePath, &s.FileSize,
 			&s.FileMtime, &s.NextOrdinal, &s.LastEntryUUID,
 			&s.FileInode, &s.FileDevice,
@@ -6467,7 +6481,7 @@ func (db *DB) ListSessionsForMirrorWindow(
 			&s.TranscriptFidelity,
 			&s.ParserMalformedLines, &s.IsTruncated,
 			&s.LastWriteIncremental,
-			&s.DeletedAt, &s.DeletionCause, &s.SourceMissingAt,
+			&s.DeletedAt, &s.DeletionCause, &s.SourceMissingAt, &s.TrashIncludesCodexPages,
 			&s.TerminationStatus, &s.FilePath, &s.FileSize,
 			&s.FileMtime, &s.NextOrdinal, &s.LastEntryUUID,
 			&s.FileInode, &s.FileDevice,

@@ -114,7 +114,7 @@ func (m CodexMetadata) ReadThreadName(
 	if err != nil {
 		return "", false, err
 	}
-	title, ok := titles[sessionID]
+	title, ok := titles[CodexThreadIDFromSessionKey(sessionID)]
 	return strings.TrimSpace(title), ok, nil
 }
 

@@ -62,6 +62,7 @@ type codexProviderFactory struct {
 	spec            codexProviderSpec
 	cursorCache     *codexCursorCache
 	parentTurnCache *codexParentTurnCache
+	threadFiles     codexThreadFileCache
 }
 
 func newCodexProviderFactory(def AgentDef) ProviderFactory {
@@ -114,6 +115,7 @@ func (f *codexProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	cfg = cfg.Clone()
 	sources := newCodexSourceSet(f.spec.agent, cfg.Roots)
 	sources.metadata = CodexMetadata{roots: cfg.MetadataDirs}
+	sources.threadFiles = &f.threadFiles
 	return &codexProvider{
 		Def:             cloneAgentDef(f.def),
 		Caps:            f.Capabilities(),
@@ -391,37 +393,36 @@ func (p *codexProvider) PlanRawCapture(
 	}}
 	var sidecarRoots []string
 	if parentID, needed := codexReplayParentIDContext(ctx, src.Path); needed {
-		parentPath := ""
+		seen := map[string]bool{filepath.Clean(src.Path): true}
 		for _, root := range p.sources.roots {
 			if err := ctx.Err(); err != nil {
 				return RawCapturePlan{}, err
 			}
-			candidate := p.sources.findSourceFile(root, parentID)
-			if candidate == "" || samePath(candidate, src.Path) {
-				continue
-			}
-			parentPath = candidate
-			break
-		}
-		// Missing parents preserve the child's history, matching local parsing.
-		if parentPath != "" {
-			// One named parent may come from any configured root. Give an
-			// external parent its own flat root so it cannot collide with the
-			// child's layout, and hosted lookup can find it by session UUID.
-			parentRel := filepath.Join("replay-parent", filepath.Base(parentPath))
-			if rawCapturePathWithin(captureRoot, parentPath) {
-				parentRel, err = filepath.Rel(captureRoot, parentPath)
-				if err != nil {
-					return RawCapturePlan{}, invalidRawCapturePlan(
-						"resolve Codex replay parent: %s", rawCaptureFilesystemError(err),
-					)
+			// Match parentTurnResolver: a fork can replay turns from the
+			// original rollout and any page in any configured root.
+			for _, parentPath := range p.sources.findThreadSourceFiles(root, parentID) {
+				parentPath = filepath.Clean(parentPath)
+				if seen[parentPath] {
+					continue
 				}
-			} else {
-				sidecarRoots = append(sidecarRoots, filepath.Dir(parentPath))
+				seen[parentPath] = true
+				// Separate flat roots preserve even same-named external
+				// rollouts and let hosted discovery find every captured file.
+				parentRel := filepath.Join(fmt.Sprintf("replay-parent-%d", len(entries)), filepath.Base(parentPath))
+				if rawCapturePathWithin(captureRoot, parentPath) {
+					parentRel, err = filepath.Rel(captureRoot, parentPath)
+					if err != nil {
+						return RawCapturePlan{}, invalidRawCapturePlan(
+							"resolve Codex replay parent: %s", rawCaptureFilesystemError(err),
+						)
+					}
+				} else {
+					sidecarRoots = append(sidecarRoots, filepath.Dir(parentPath))
+				}
+				entries = append(entries, RawCaptureEntry{
+					Path: filepath.ToSlash(parentRel), LocalPath: parentPath,
+				})
 			}
-			entries = append(entries, RawCaptureEntry{
-				Path: filepath.ToSlash(parentRel), LocalPath: parentPath,
-			})
 		}
 	}
 	for i, candidate := range p.sources.metadata.IndexPaths(src.Path) {
@@ -774,9 +775,10 @@ type codexSourceSet struct {
 	// agent labels the sources this set emits. Codex-format forks share
 	// the layout but must not share a discovery namespace: keying sources
 	// by agent keeps a TraeX UUID from colliding with a Codex one.
-	agent    AgentType
-	roots    []string
-	metadata CodexMetadata
+	agent       AgentType
+	roots       []string
+	metadata    CodexMetadata
+	threadFiles *codexThreadFileCache
 }
 
 func newCodexSourceSet(agent AgentType, roots []string) codexSourceSet {
@@ -1002,6 +1004,15 @@ func (s codexSourceSet) findSourceFile(sessionsDir, sessionID string) string {
 		return live
 	}
 	return archived
+}
+
+// findThreadSourceFiles returns every rollout of a thread under sessionsDir,
+// live or archived: its own file and each revert page (<thread>_<rollout>).
+func (s codexSourceSet) findThreadSourceFiles(sessionsDir, threadID string) []string {
+	if !IsValidSessionID(threadID) {
+		return nil
+	}
+	return s.threadFiles.find(sessionsDir, threadID)
 }
 
 func (s codexSourceSet) WatchPlan(context.Context) (WatchPlan, error) {

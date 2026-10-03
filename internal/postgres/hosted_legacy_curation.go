@@ -120,7 +120,7 @@ func legacyCurationTx(ctx context.Context, tx *sql.Tx, id, field string, value a
 		if value.(bool) {
 			result, err = tx.ExecContext(ctx, `UPDATE sessions SET deleted_at=NOW(),deletion_cause=NULL,updated_at=NOW() WHERE id=$1 AND deleted_at IS NULL`, id)
 		} else {
-			result, err = tx.ExecContext(ctx, `UPDATE sessions SET deleted_at=NULL,deletion_cause=NULL,data_version=$2,updated_at=NOW() WHERE id=$1 AND deleted_at IS NOT NULL`, id, max(db.CurrentDataVersion()-1, 0))
+			return restorePGSessionTx(ctx, tx, id)
 		}
 	default:
 		return 0, fmt.Errorf("unsupported legacy curation field %q", field)
@@ -132,11 +132,11 @@ func legacyCurationTx(ctx context.Context, tx *sql.Tx, id, field string, value a
 }
 
 func deleteLegacyTrashedTx(ctx context.Context, tx *sql.Tx, id string) (int64, error) {
-	ids, excluded, err := readPGTrashedSessionExclusions(ctx, tx, `s.id=$1 AND s.provenance_kind='legacy' AND s.deleted_at IS NOT NULL`, id)
+	ids, excluded, scoped, err := readPGTrashedSessionExclusions(ctx, tx, `s.id=$1 AND s.provenance_kind='legacy' AND s.deleted_at IS NOT NULL`, id)
 	if err != nil || len(ids) == 0 {
 		return 0, err
 	}
-	if err = insertPGExcludedSessionIDs(ctx, tx, excluded); err != nil {
+	if err = insertPGTrashedSessionExclusions(ctx, tx, excluded, scoped); err != nil {
 		return 0, err
 	}
 	n, err := deletePGTrashedSessionRows(ctx, tx, ids)

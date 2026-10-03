@@ -205,3 +205,58 @@ func TestHTTPMirrorCodexIndexRemoval(t *testing.T) {
 		}
 	}
 }
+
+func TestHTTPMirrorCodexIndexRemovalRenamesRevertPages(t *testing.T) {
+	const (
+		thread = "019f0000-0000-7000-8000-000000000009"
+		page   = "019f0000-0000-7000-8000-00000000000a"
+	)
+	remote := newMirrorTestRemote(t)
+	base := t.TempDir()
+	primary := filepath.Join(base, "primary")
+	alternate := filepath.Join(base, "alternate")
+	root := filepath.Join(primary, "sessions")
+	require.NoError(t, os.MkdirAll(root, 0o755))
+	require.NoError(t, os.MkdirAll(alternate, 0o755))
+	transcript := func(extra string) []byte {
+		return []byte(`{"timestamp":"2026-09-03T10:00:00Z","type":"session_meta","payload":{"id":"` + thread + `","cwd":"/work"` + extra + `}}` + "\n" +
+			`{"timestamp":"2026-09-03T10:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Prompt"}]}}` + "\n")
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(root, "rollout-2026-09-03T10-00-00-"+thread+".jsonl"), transcript(""), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "rollout-2026-09-03T11-00-00-"+thread+"_"+page+".jsonl"),
+		transcript(`,"history_mode":"paginated","history_base":{"thread_id":"`+thread+`"}`), 0o600))
+	primaryIndex := filepath.Join(primary, parser.CodexSessionIndexFilename)
+	alternateIndex := filepath.Join(alternate, parser.CodexSessionIndexFilename)
+	require.NoError(t, os.WriteFile(primaryIndex, []byte(`{"id":"`+thread+`","thread_name":"Primary title"}`+"\n"), 0o600))
+	require.NoError(t, os.WriteFile(alternateIndex, []byte(`{"id":"`+thread+`","thread_name":"Alternate title"}`+"\n"), 0o600))
+	stamp := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, os.Chtimes(primaryIndex, stamp, stamp))
+	require.NoError(t, os.Chtimes(alternateIndex, stamp.Add(time.Hour), stamp.Add(time.Hour)))
+	var err error
+	remote.targets, err = ResolveTargets(config.Config{
+		AgentDirs:        map[parser.AgentType][]string{parser.AgentCodex: {root}},
+		ProviderMetadata: map[parser.AgentType]map[string][]string{parser.AgentCodex: {root: {primary, alternate}}},
+	})
+	require.NoError(t, err)
+	database, hs := newMirrorSync(t, remote, t.TempDir())
+	_, err = hs.Run(t.Context())
+	require.NoError(t, err)
+	ids := []string{"devbox~codex:" + thread, "devbox~codex:" + thread + "_" + page}
+	assertNames := func(want string) {
+		t.Helper()
+		for _, id := range ids {
+			session, err := database.GetSessionFull(t.Context(), id)
+			require.NoError(t, err)
+			require.NotNil(t, session, "session %s", id)
+			require.NotNil(t, session.SessionName, "name of %s", id)
+			assert.Equal(t, want, *session.SessionName, "name of %s", id)
+		}
+	}
+	assertNames("Alternate title")
+
+	require.NoError(t, os.Remove(alternateIndex))
+	stats, err := hs.Run(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 2, stats.SessionsSynced, "removing an index entry reparses the thread and its revert page")
+	assertNames("Primary title")
+}
