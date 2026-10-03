@@ -47,9 +47,11 @@ agentsview daemon status
 agentsview daemon restart
 ```
 
-A non-loopback `host` in `config.toml` requires `require_auth = true`; the
-server refuses to start rather than persistently exposing an unauthenticated
-API. The `--host` flag remains available for one-off unauthenticated binds.
+A non-loopback host from `config.toml` or from `AGENTSVIEW_HOST` (under a
+[container deployment](/docs/configuration/#container-deployment)) requires
+`require_auth`; the server refuses to start rather than persistently exposing
+an unauthenticated API. The `--host` flag remains available for one-off
+unauthenticated binds.
 
 When the server runs inside WSL, AgentsView advertises the WSL `eth0` address
 instead of `127.0.0.1` so the printed URL is usable from the Windows host and

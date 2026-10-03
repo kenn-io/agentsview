@@ -217,7 +217,7 @@ zoom_level = 120
 | `archive_content`                   | How much of each session the archive stores: `"full"` (default), `"transcripts"`, or `"usage"`; changes require a daemon restart — see [Archive content](#archive-content)                                                                                                                                                                                                                                                                                                       |
 | `host`                              | Interface the server binds to (default `127.0.0.1`); non-loopback values require `require_auth = true`                                                                                                                                                                                                                                                                                                                                                                           |
 | `require_auth`                      | Require bearer-token authentication for API access                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `auth_token`                        | Auto-generated 256-bit bearer token for remote access; can be overridden with `AGENTSVIEW_AUTH_TOKEN`                                                                                                                                                                                                                                                                                                                                                                            |
+| `auth_token`                        | Auto-generated 256-bit bearer token for remote access; overridden by `AGENTSVIEW_AUTH_TOKEN`, or by `AGENTSVIEW_AUTH_TOKEN_FILE` under a [container deployment](#container-deployment)                                                                                                                                                                                                                                                                                           |
 | `public_url`                        | Browser URL, trusted origin, and managed Caddy site address                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `public_origins`                    | Additional trusted origins for request Host/Origin checks                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `daemon_idle_timeout`               | Idle timeout for detached writable daemons; set to `"0s"` to keep them alive                                                                                                                                                                                                                                                                                                                                                                                                     |
@@ -262,13 +262,70 @@ endpoint settings such as `max_batch_tokens` under
 When `require_auth` is enabled, the browser login prompt accepts the configured
 `auth_token`. The value can come from `~/.agentsview/config.toml` or from the
 `AGENTSVIEW_AUTH_TOKEN` environment variable; the environment variable wins when
-both are set.
+both are set. Under a [container deployment](#container-deployment),
+`AGENTSVIEW_AUTH_TOKEN_FILE` can supply it from a mounted secret file instead.
+When authentication needs a token and none is configured, AgentsView generates
+one and saves it as `auth_token` in `config.toml`.
 
 !!! note
 
     Older configs may still contain `remote_access = true`. AgentsView still reads
     that legacy key for backward compatibility, but new setups should use
     `require_auth = true`.
+
+### Container deployment
+
+The published image sets `AGENTSVIEW_MODE`, which turns on a small set of
+deployment environment variables. They apply only when `AGENTSVIEW_MODE` is set
+to a non-blank value, so a desktop or native install ignores them, including
+invalid values and missing files. You can also set `AGENTSVIEW_MODE` yourself to
+use them with the native binary.
+
+| Variable                             | Behavior                                                                                                                                                                                    |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AGENTSVIEW_MODE`                    | `serve` or `pg-serve`. When the command line is empty or starts with a flag other than `--help` or `--version`, the image runs `agentsview serve` or `agentsview pg serve` with those flags |
+| `PG_SERVE`                           | `1`, `true`, `yes`, or `on` selects `pg serve` when `AGENTSVIEW_MODE=serve`; kept for older deployments                                                                                     |
+| `AGENTSVIEW_HOST`                    | Listener address. A non-loopback value needs `AGENTSVIEW_REQUIRE_AUTH=true` or `require_auth = true`                                                                                        |
+| `AGENTSVIEW_REQUIRE_AUTH`            | Require bearer authentication for API access                                                                                                                                                |
+| `AGENTSVIEW_NO_BROWSER`              | Do not open a browser on start                                                                                                                                                              |
+| `AGENTSVIEW_AUTH_TOKEN_FILE`         | File holding the bearer token; overrides `auth_token` in `config.toml`. `~/` expands to the home directory. Cannot be combined with `AGENTSVIEW_AUTH_TOKEN`                                 |
+| `AGENTSVIEW_PG_ALLOW_INSECURE`       | Sets `allow_insecure` for the default PostgreSQL target, for a database on a private network without TLS                                                                                    |
+| `AGENTSVIEW_EMBEDDINGS_ENDPOINT`     | OpenAI-compatible embeddings endpoint used to adopt a recipe published to PostgreSQL — see [semantic search on PostgreSQL](/docs/semantic-search/)                                          |
+| `AGENTSVIEW_EMBEDDINGS_API_KEY_FILE` | File holding that endpoint's API key; requires `AGENTSVIEW_EMBEDDINGS_ENDPOINT`                                                                                                             |
+
+The image sets `AGENTSVIEW_MODE=serve`, `AGENTSVIEW_HOST=0.0.0.0`,
+`AGENTSVIEW_REQUIRE_AUTH=true`, and `AGENTSVIEW_NO_BROWSER=true`. An explicit
+subcommand such as `pg push --watch` or `mcp` runs as given.
+
+Precedence, highest first: command flags, deployment variables, `config.toml`,
+built-in defaults. A host set through `AGENTSVIEW_HOST` counts as persistent
+configuration, so a non-loopback value without authentication stops `serve`;
+only the `--host` flag allows a one-off unauthenticated bind. `pg serve` and
+`duckdb serve` ignore network settings in `config.toml` but apply these
+variables.
+
+These rules fail closed:
+
+- Boolean variables accept `true`, `false`, `1`, `0`, and the other values Go's
+  `strconv.ParseBool` accepts. Any other value, an unknown `AGENTSVIEW_MODE`, or
+  a blank `AGENTSVIEW_HOST` stops startup with an error naming the variable.
+- A missing, unreadable, or empty `AGENTSVIEW_AUTH_TOKEN_FILE` or
+  `AGENTSVIEW_EMBEDDINGS_API_KEY_FILE` stops startup. AgentsView never falls
+  back to another secret source.
+- Any `AGENTSVIEW_EMBEDDINGS_*` variable together with a `[vector]` section
+  stops startup, so one place owns the embedding recipe.
+
+The image's API requires a bearer token, so an unauthenticated
+`GET /api/ping` returns 401. Use a TCP check on the listener port as the
+container health check, or treat 401 as alive.
+
+To keep the PostgreSQL password out of the URL, mount a
+[passfile](https://www.postgresql.org/docs/current/libpq-pgpass.html) and set
+`PGPASSFILE` to its path, or add `?passfile=/run/secrets/pgpass` to
+`AGENTSVIEW_PG_URL`. A file containing the single line `*:*:*:*:<password>`
+matches every connection. The PostgreSQL driver ignores a missing passfile, so a
+missing mount shows up as a PostgreSQL authentication error rather than an error
+naming the file.
 
 ## Remote Hosts
 

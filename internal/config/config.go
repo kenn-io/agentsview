@@ -95,6 +95,9 @@ type pgEnvOverrides struct {
 	URL         string
 	Schema      string
 	MachineName string
+	// AllowInsecure comes from AGENTSVIEW_PG_ALLOW_INSECURE under a
+	// deployment mode; nil leaves the target's setting in place.
+	AllowInsecure *bool
 }
 
 // ResolvedPGTarget is one PostgreSQL target after target selection,
@@ -305,6 +308,10 @@ type VectorEmbeddingsServerConfig struct {
 	// vector.EncoderConfig.RetryRateLimits). Other 4xx responses fail fast;
 	// 0 means one attempt. Default 3.
 	MaxRetries int `toml:"max_retries" json:"max_retries"`
+
+	// apiKey is read from AGENTSVIEW_EMBEDDINGS_API_KEY_FILE for the
+	// deployment server; it takes precedence over APIKeyEnv.
+	apiKey string
 }
 
 // ResolvedDefaultServer returns the server name used when no explicit
@@ -522,9 +529,12 @@ func (c VectorEmbeddingsServerConfig) EmbedTransport() (embedconfig.Transport, e
 	return embedconfig.Transport{Timeout: timeout}, nil
 }
 
-// APIKey reads the API key from the environment variable named by
-// APIKeyEnv. Returns "" when APIKeyEnv is unset.
+// APIKey returns the key read from a deployment secret file, else the
+// environment variable named by APIKeyEnv. Returns "" when neither is set.
 func (c VectorEmbeddingsServerConfig) APIKey() string {
+	if c.apiKey != "" {
+		return c.apiKey
+	}
 	if c.APIKeyEnv == "" {
 		return ""
 	}
@@ -989,6 +999,16 @@ type Config struct {
 	// PortExplicit is true when the user passed --port on the CLI.
 	PortExplicit bool `json:"-" toml:"-"`
 
+	// DeploymentEmbeddings is the embedding transport from deployment env,
+	// set only without a [vector] section.
+	DeploymentEmbeddings *VectorEmbeddingsServerConfig `json:"-" toml:"-"`
+	// NoDaemonAutostart suppresses daemon autostart for this invocation
+	// only; pg push --embed sets it to keep the archive writer local.
+	NoDaemonAutostart bool `json:"-" toml:"-"`
+
+	// vectorSectionDefined records a [vector] section in config.toml.
+	vectorSectionDefined bool
+
 	pgEnvOverrides         pgEnvOverrides
 	clickHouseEnvOverrides clickHouseEnvOverrides
 }
@@ -1378,8 +1398,8 @@ func loadPGServeBase() (Config, error) {
 	// pg serve intentionally ignores persisted normal serve/public/proxy
 	// settings so an existing SQLite-backed serve deployment cannot silently
 	// reconfigure the PG-backed server. Until a dedicated pg-serve config
-	// namespace exists, only explicit pg-serve flags should shape its
-	// network/proxy behavior.
+	// namespace exists, only deployment variables and explicit pg-serve
+	// flags shape its network/proxy behavior.
 	cfg.Host = "127.0.0.1"
 	cfg.Port = 8080
 	cfg.PublicURL = ""
@@ -1387,7 +1407,7 @@ func loadPGServeBase() (Config, error) {
 	cfg.Proxy = ProxyConfig{}
 	cfg.NoBrowser = false
 	cfg.HostExplicit = false
-	return cfg, nil
+	return cfg, cfg.applyDeploymentEnv()
 }
 
 // LoadMinimal builds a Config from defaults, env, and config file,
@@ -1418,7 +1438,7 @@ func loadConfigLayers() (Config, error) {
 	if err := cfg.loadFile(); err != nil {
 		return cfg, fmt.Errorf("loading config file: %w", err)
 	}
-	return cfg, nil
+	return cfg, cfg.applyDeploymentEnv()
 }
 
 func finishLoadedConfig(cfg *Config) error {
@@ -1451,6 +1471,9 @@ func LoadReadOnly() (Config, error) {
 
 	if err := cfg.loadFileReadOnly(); err != nil {
 		return cfg, fmt.Errorf("loading config file: %w", err)
+	}
+	if err := cfg.applyDeploymentEnv(); err != nil {
+		return cfg, err
 	}
 	if err := cfg.readInstallationID(); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return cfg, fmt.Errorf("reading installation identity: %w", err)
@@ -1676,6 +1699,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		if err := rejectUnknownVectorKeys(meta); err != nil {
 			return err
 		}
+		c.vectorSectionDefined = true
 	}
 	if file.ZoomLevel != nil {
 		if err := file.ZoomLevel.Validate(); err != nil {
@@ -3153,6 +3177,9 @@ func (c *Config) resolvePGConfig(
 		}
 		if c.pgEnvOverrides.MachineName != "" {
 			pg.MachineName = c.pgEnvOverrides.MachineName
+		}
+		if c.pgEnvOverrides.AllowInsecure != nil {
+			pg.AllowInsecure = *c.pgEnvOverrides.AllowInsecure
 		}
 	}
 	if pg.URL != "" {

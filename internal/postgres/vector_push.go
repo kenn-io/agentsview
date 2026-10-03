@@ -176,6 +176,9 @@ func (s *Sync) pushVectors(
 		res.Skipped, res.SkippedReason = true, unavailable
 		return res, nil
 	}
+	if s.vectorRecipeColumn, err = ensureVectorRecipeColumn(ctx, s.pg); err != nil {
+		return res, err
+	}
 	witnessKey, err := s.vectorGenerationWitnessKey(ctx)
 	if err != nil {
 		return res, err
@@ -781,6 +784,15 @@ func (s *Sync) resolveVectorGeneration(
 	)
 	if err != nil {
 		return vectorGeneration{}, err
+	}
+	if s.vectorRecipeColumn && gen.Params != nil {
+		if err := publishVectorRecipe(ctx, s.pg, gen.Fingerprint, gen.Params); err != nil {
+			if !isInsufficientPrivilege(err) {
+				return vectorGeneration{}, err
+			}
+			log.Printf("vector push: cannot publish the embedding recipe "+
+				"(insufficient privilege); pushing vectors without it: %v", err)
+		}
 	}
 	if err := ensureVectorChunkTable(ctx, s.pg, genID, gen.Dimension); err != nil {
 		return vectorGeneration{}, err
