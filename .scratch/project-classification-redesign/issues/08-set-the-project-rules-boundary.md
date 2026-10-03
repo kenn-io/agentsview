@@ -1,3 +1,8 @@
+---
+title: "Set the boundary of Project mapping rules"
+description: "Open decision on the boundary and navigation of the secondary Project mapping rules view."
+last_edited: 2026-09-15
+---
 # Set the boundary of Project mapping rules
 
 Type: grilling

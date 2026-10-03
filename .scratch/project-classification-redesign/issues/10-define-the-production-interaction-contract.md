@@ -1,3 +1,8 @@
+---
+title: "Define the production interaction contract"
+description: "Open decision on keyboard, focus, responsive, error, and localization behavior for the project workspace."
+last_edited: 2026-09-15
+---
 # Define the production interaction contract
 
 Type: grilling

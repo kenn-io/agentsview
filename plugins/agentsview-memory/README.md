@@ -1,4 +1,6 @@
 ---
+title: "AgentsView Memory"
+description: "Install and configure the native conversation-memory package for Claude Code and Codex."
 last_edited: 2026-09-21
 ---
 

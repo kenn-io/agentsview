@@ -1,6 +1,7 @@
 ---
 title: Semantic Search
 description: Vector (semantic) search over session messages, plus hybrid search and cursor-based context retrieval
+last_edited: 2026-10-01
 ---
 
 AgentsView can index user and assistant message content into a local vector

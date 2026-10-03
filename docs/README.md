@@ -1,3 +1,8 @@
+---
+title: "AgentsView docs maintainer guide"
+description: "Maintain, build, validate, and publish the AgentsView website and documentation."
+last_edited: 2026-09-15
+---
 # AgentsView docs maintainer guide
 
 Edit this directory to update <https://agentsview.io>. The homepage and guide

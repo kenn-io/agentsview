@@ -1,3 +1,8 @@
+---
+title: "Prototype folder triage as a complementary workflow"
+description: "Prototype review and rejection of folder-first triage as a complementary workflow."
+last_edited: 2026-09-15
+---
 # Prototype folder triage as a complementary workflow
 
 Type: prototype

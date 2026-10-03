@@ -1,3 +1,8 @@
+---
+title: "GPT-5.6 Sol pricing change research on 2026-08-26"
+description: "Dated pricing research and source evidence for the GPT-5.6 Sol API price change."
+last_edited: 2026-08-27
+---
 # GPT-5.6 Sol pricing change research on 2026-08-26
 
 ## Conclusion

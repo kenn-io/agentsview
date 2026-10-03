@@ -1,3 +1,8 @@
+---
+title: "DuckDB Backend"
+description: "DuckDB mirror setup, local and Quack read paths, schema lifecycle, and development commands."
+last_edited: 2026-07-31
+---
 # DuckDB Backend
 
 This package implements the optional DuckDB mirror backend. SQLite remains the

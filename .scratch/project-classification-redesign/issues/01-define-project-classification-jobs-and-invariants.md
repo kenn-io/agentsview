@@ -1,3 +1,8 @@
+---
+title: "Define project-classification jobs and invariants"
+description: "Resolved user jobs, domain invariants, and evaluation criteria for project classification."
+last_edited: 2026-09-15
+---
 # Define project-classification jobs and invariants
 
 Type: grilling

@@ -1,3 +1,8 @@
+---
+title: "Choose the supporting backend contract"
+description: "Open decision on backend capabilities, API boundaries, and parity for approved classification workflows."
+last_edited: 2026-09-15
+---
 # Choose the supporting backend contract
 
 Type: grilling

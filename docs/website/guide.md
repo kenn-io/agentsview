@@ -1,3 +1,8 @@
+---
+title: "The session intelligence loop"
+description: "A nine-step guide from capturing AI coding sessions to searching and reusing the archive."
+last_edited: 2026-09-21
+---
 # The session intelligence loop
 
 Your agents already write the raw data. AgentsView turns it into a searchable

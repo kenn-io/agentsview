@@ -1,6 +1,7 @@
 ---
 title: Session Intelligence
 description: Health scores, outcomes, and session-quality analytics in AgentsView
+last_edited: 2026-09-21
 ---
 
 Use session health scores to find stalled sessions, repeated tool failures, and

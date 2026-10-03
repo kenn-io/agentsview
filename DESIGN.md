@@ -1,3 +1,8 @@
+---
+title: "Design System"
+description: "Shared component, styling, and localization rules for the AgentsView interface."
+last_edited: 2026-09-23
+---
 # Design System
 
 agentsview is a dense local-first product UI. The interface should use a small,

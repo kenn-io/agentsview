@@ -1,3 +1,8 @@
+---
+title: "Pricing source survey on 2026-08-25"
+description: "Dated comparison of machine-readable AI pricing sources and their coverage for AgentsView."
+last_edited: 2026-08-27
+---
 # Pricing source survey on 2026-08-25
 
 This note compares machine-readable AI pricing sources for Agentsview. It uses

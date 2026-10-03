@@ -1,6 +1,7 @@
 ---
 title: Semantic Search Internals
 description: Architecture and invariants behind the vector index — storage, generations, build pipeline, concurrency, and search path
+last_edited: 2026-10-01
 ---
 
 This page documents the internal design of

@@ -1,3 +1,8 @@
+---
+title: "Audit current project-classification capabilities"
+description: "Verified current classification capabilities, storage boundaries, and constraints for the redesign."
+last_edited: 2026-09-15
+---
 # Audit current project-classification capabilities
 
 Type: task

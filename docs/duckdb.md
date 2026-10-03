@@ -1,6 +1,7 @@
 ---
 title: DuckDB Mirror
 description: Mirror the local SQLite archive into DuckDB and serve it locally or over the Quack remote protocol
+last_edited: 2026-09-11
 ---
 
 As of 0.33.0, AgentsView can mirror its local SQLite archive into a DuckDB

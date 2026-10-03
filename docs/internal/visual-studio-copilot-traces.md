@@ -1,3 +1,8 @@
+---
+title: "Visual Studio Copilot Trace Format"
+description: "Visual Studio Copilot trace structure and its differences from VS Code Copilot session data."
+last_edited: 2026-06-17
+---
 # Visual Studio Copilot Trace Format
 
 Visual Studio Copilot trace data is not the same format as VS Code Copilot chat

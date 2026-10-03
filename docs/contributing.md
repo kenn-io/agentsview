@@ -1,6 +1,7 @@
 ---
 title: Contributing
 description: Engineering standards and review workflow for AgentsView contributions
+last_edited: 2026-08-23
 ---
 
 # Contributing to AgentsView (for Humans)

@@ -1,3 +1,8 @@
+---
+title: "AgentsView Desktop (Tauri)"
+description: "Requirements and commands for the AgentsView Tauri desktop wrapper, sidecar, and system tray."
+last_edited: 2026-09-19
+---
 # AgentsView Desktop (Tauri)
 
 This directory contains an experimental Tauri desktop wrapper for AgentsView.

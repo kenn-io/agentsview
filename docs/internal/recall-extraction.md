@@ -1,3 +1,8 @@
+---
+title: "Recall Extraction"
+description: "Design contracts for automatic recall extraction, generations, segmentation, and privacy."
+last_edited: 2026-10-02
+---
 # Recall Extraction
 
 This document records the design contracts of automatic recall extraction: the

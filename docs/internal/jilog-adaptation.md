@@ -1,3 +1,8 @@
+---
+title: "jilog adaptation provenance"
+description: "Source provenance, retained behavior, and planned replacements for the jilog Friction Log adaptation."
+last_edited: 2026-09-28
+---
 # jilog adaptation provenance
 
 AgentsView's Friction Log adapts the session review from

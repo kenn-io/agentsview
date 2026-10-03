@@ -1,3 +1,8 @@
+---
+title: "Refresh release screenshots"
+description: "Prepare, capture, inspect, and publish the full release screenshot set on its asset branch."
+last_edited: 2026-09-21
+---
 # Refresh release screenshots
 
 Regenerate the full screenshot set for every release. Capture new visible

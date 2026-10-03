@@ -1,6 +1,7 @@
 ---
 title: Conversation Export
 description: Incremental exports of stored user and assistant messages
+last_edited: 2026-09-29
 ---
 
 Use conversation exports to maintain a lightweight copy of stored user and

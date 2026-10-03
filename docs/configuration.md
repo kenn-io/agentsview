@@ -1,6 +1,7 @@
 ---
 title: Configuration
 description: Config file, default paths, and runtime settings
+last_edited: 2026-10-02
 ---
 
 ## Data Directory

@@ -1,3 +1,8 @@
+---
+title: "Codex incremental checkpoints and streamed full imports"
+description: "Checkpoint and streaming-import design for bounded Codex transcript reads and memory use."
+last_edited: 2026-09-08
+---
 # Codex incremental checkpoints and streamed full imports
 
 ## Problem

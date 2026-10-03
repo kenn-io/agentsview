@@ -1,3 +1,8 @@
+---
+title: "ClickHouse push and serve"
+description: "Design decisions and boundaries for pushing the SQLite archive to ClickHouse and serving it."
+last_edited: 2026-09-22
+---
 # ClickHouse push and serve
 
 SQLite is the archive. `agentsview clickhouse push` copies sessions from that

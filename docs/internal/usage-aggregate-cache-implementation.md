@@ -1,3 +1,8 @@
+---
+title: "Usage Aggregate Cache Implementation Plan"
+description: "Implementation plan and execution record for exact daily usage rollups and cache invalidation."
+last_edited: 2026-08-20
+---
 # Usage Aggregate Cache Implementation Plan
 
 ## Outcome

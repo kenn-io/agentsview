@@ -1,3 +1,8 @@
+---
+title: "Approve the implementation handoff"
+description: "Open approval gate for a reconciled, implementation-ready project-classification specification."
+last_edited: 2026-09-15
+---
 # Approve the implementation handoff
 
 Type: grilling

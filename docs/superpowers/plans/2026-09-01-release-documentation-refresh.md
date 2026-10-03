@@ -1,3 +1,8 @@
+---
+title: "Release Documentation Refresh Implementation Plan"
+description: "Implementation plan for release documentation, website copy, and refreshed screenshots for 0.42.0."
+last_edited: 2026-09-01
+---
 # Release Documentation Refresh Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use

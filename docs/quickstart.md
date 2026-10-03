@@ -1,6 +1,7 @@
 ---
 title: Quick Start
 description: Get AgentsView running in under a minute
+last_edited: 2026-09-28
 ---
 
 ## Install

@@ -1,3 +1,8 @@
+---
+title: "Testing Rules"
+description: "Coverage, assertion, timing-budget, and integration-test rules for AgentsView."
+last_edited: 2026-09-11
+---
 # Testing Rules
 
 Read this file before adding or changing tests.

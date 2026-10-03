@@ -1,3 +1,8 @@
+---
+title: "Tau fixture"
+description: "Source provenance and sanitization details for the Tau parser fixture."
+last_edited: 2026-09-08
+---
 # Tau fixture
 
 `issue-session.jsonl` is a sanitized derivative of the Tau session attached to

@@ -1,6 +1,7 @@
 ---
 title: Session API
 description: Programmatic access to session data via the agentsview session CLI and REST endpoints
+last_edited: 2026-10-02
 ---
 
 The `agentsview session` command group is a stable, programmatic surface for

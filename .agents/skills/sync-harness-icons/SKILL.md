@@ -1,6 +1,8 @@
 ---
-name: sync-harness-icons
+title: "Sync Harness Icons"
 description: Use when a person asks to audit or update the harness marks after new agent parsers were added, when the landing-page agent grid or the kit-ui HarnessIcon set is missing a newly supported agent, or when someone invokes /sync-harness-icons. Human-invoked only.
+last_edited: 2026-09-17
+name: sync-harness-icons
 disable-model-invocation: true
 ---
 

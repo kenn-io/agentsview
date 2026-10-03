@@ -1,3 +1,8 @@
+---
+title: "Performance Gates"
+description: "Performance regression history, deterministic work-count checks, and optional local benchmarks."
+last_edited: 2026-09-13
+---
 # Performance Gates
 
 agentsview has repeatedly shipped performance regressions where sync work

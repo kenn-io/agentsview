@@ -1,6 +1,7 @@
 ---
 title: Activity
 description: Activity, concurrency, and session-time reporting in AgentsView
+last_edited: 2026-10-02
 ---
 
 Use **Activity** to see when agents ran, how much work overlapped, and what it

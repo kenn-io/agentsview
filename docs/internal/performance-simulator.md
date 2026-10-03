@@ -1,3 +1,8 @@
+---
+title: "Performance simulator"
+description: "Run synthetic parser, archive, sync, and query workloads with the performance simulator."
+last_edited: 2026-09-23
+---
 # Performance simulator
 
 `cmd/perfsim` creates synthetic Claude/Codex JSONL sources or an OpenCode SQLite

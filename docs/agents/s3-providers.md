@@ -1,3 +1,8 @@
+---
+title: "S3 Provider Rules"
+description: "Implementation rules for S3 provider discovery, session identity, and sync dispatch."
+last_edited: 2026-09-10
+---
 # S3 Provider Rules
 
 Read this file before enabling S3 ingest for an agent, changing `S3Provider` /

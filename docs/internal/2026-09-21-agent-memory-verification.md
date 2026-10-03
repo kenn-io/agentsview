@@ -1,4 +1,6 @@
 ---
+title: "Agent-memory verification record"
+description: "Recorded results of the live conversation-memory release gate on 2026-09-21."
 last_edited: 2026-09-21
 ---
 

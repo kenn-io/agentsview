@@ -1,3 +1,8 @@
+---
+title: "Background Work and Memory"
+description: "Rules for bounded watchers, polling, memory investigations, and usage-cache background work."
+last_edited: 2026-09-17
+---
 # Background Work and Memory
 
 Read this file before changing watchers, polling, sync scheduling, or other

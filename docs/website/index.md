@@ -1,3 +1,8 @@
+---
+title: "See what your AI coding agents did, and what it cost"
+description: "AgentsView overview, installation, session browsing, activity analysis, and cost tracking."
+last_edited: 2026-09-28
+---
 # See what your AI coding agents did, and what it cost
 
 AgentsView brings your AI coding sessions into one searchable archive. Browse

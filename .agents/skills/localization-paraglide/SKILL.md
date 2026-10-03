@@ -1,6 +1,8 @@
 ---
-name: localization-paraglide
+title: "Localization Paraglide"
 description: Use when adding, reviewing, or fixing localized UI copy in agentsview's Svelte frontend with Paraglide JS. Trigger for frontend/messages/*.json edits, generated m.* message usage, locale-aware number/date/relative-time formatting, pluralization, language switching, or hard-coded user-facing English in frontend/src.
+last_edited: 2026-09-21
+name: localization-paraglide
 ---
 
 # Localization Paraglide

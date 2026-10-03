@@ -1,3 +1,8 @@
+---
+title: "In-session find"
+description: "In-session find behavior, navigation, recovery, matching costs, and regression coverage."
+last_edited: 2026-09-13
+---
 # In-session find
 
 Find searches the selected session's message text, thinking, skills, code, tool

@@ -1,3 +1,8 @@
+---
+title: "Define save and impact-review behavior"
+description: "Resolved save behavior, impact review, conflict handling, and failure feedback for project corrections."
+last_edited: 2026-09-15
+---
 # Define save and impact-review behavior
 
 Type: grilling

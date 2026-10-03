@@ -78,6 +78,11 @@ Before reviewing CI runner security, read the
 
 ## Documentation
 
+Every new Markdown file, except root `README.md` and `AGENTS.md`, must have YAML
+frontmatter with `title`, `description`, and `last_edited`, in that order.
+Update `last_edited` to the body-edit date whenever you change the body of any
+nonexempt Markdown file; preserve it for metadata-only edits.
+
 - Write for the person trying to use or maintain AgentsView. Lead with the
   outcome, name who does what, use short sentences, and explain unfamiliar
   terms.

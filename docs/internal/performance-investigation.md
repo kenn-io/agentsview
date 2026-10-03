@@ -1,3 +1,8 @@
+---
+title: "Steady-state performance measurements"
+description: "Steady-state performance measurements and remaining costs from isolated workloads."
+last_edited: 2026-09-06
+---
 # Steady-state performance measurements
 
 Measurements collected on macOS arm64 with Go 1.27.0 and SQLite FTS5. These are

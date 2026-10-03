@@ -1,7 +1,9 @@
 ---
-# generated-by: agentsview 0.1.0 hash:1dd83a08549bf88a62e8451042481f98ddbef4cb5a21ed2f018ac52843614320 — do not edit; re-run `agentsview skills install`
-name: agentsview-finding-history
+# generated-by: agentsview 0.1.0 hash:4897640a00dfd8e7a575f99f2befa5c1abfd81f40f71cc1f0bcca03c8c30df70 — do not edit; re-run `agentsview skills install`
+title: "Finding Conversation History"
 description: Use proactively when prior decisions, rationale, solutions, pitfalls, project context, or repeated workflows may help, when stuck, or before guessing about something learned previously — searches AgentsView conversation history for evidence.
+last_edited: 2026-09-26
+name: agentsview-finding-history
 ---
 
 # Finding Conversation History

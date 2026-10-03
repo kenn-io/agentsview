@@ -1,6 +1,7 @@
 ---
 title: Token Usage & Costs
 description: Fast token usage and cost reports from your local AgentsView database
+last_edited: 2026-10-02
 ---
 
 AgentsView records token usage while ingesting messages and usage events from

@@ -1,6 +1,7 @@
 ---
 title: Quality
 description: Deterministic quality signals and recommendations computed from session data
+last_edited: 2026-09-01
 ---
 
 Quality summarizes observable patterns in your session archive. Unlike

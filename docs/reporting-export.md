@@ -1,6 +1,7 @@
 ---
 title: Reporting Export
 description: Canonical hourly activity and usage exports for reporting integrations
+last_edited: 2026-09-20
 ---
 
 Use `agentsview export hour`, `day`, and `digest` to build reports from the

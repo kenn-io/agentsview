@@ -1,6 +1,7 @@
 ---
 title: One-shot CI capture
 description: Capture exact usage from one supported non-interactive agent execution
+last_edited: 2026-09-09
 ---
 
 # One-shot CI capture

@@ -1,3 +1,8 @@
+---
+title: "PostgreSQL usage benchmark decision"
+description: "Benchmark evidence and parity requirements before changing PostgreSQL usage query behavior."
+last_edited: 2026-08-25
+---
 # PostgreSQL usage benchmark decision
 
 PostgreSQL usage currently uses the live query methods in

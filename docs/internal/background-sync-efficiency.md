@@ -1,3 +1,8 @@
+---
+title: "Background Sync Efficiency"
+description: "Runtime contracts that keep watchers and incremental imports proportional to changed session data."
+last_edited: 2026-09-08
+---
 # Background Sync Efficiency
 
 This document records the runtime and cost-model contracts that keep active

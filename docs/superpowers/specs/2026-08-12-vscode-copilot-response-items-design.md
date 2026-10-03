@@ -1,3 +1,8 @@
+---
+title: "VS Code Copilot Response Item Parsing"
+description: "Design for parsing VS Code Copilot response items, tool calls, and inline file references."
+last_edited: 2026-08-12
+---
 # VS Code Copilot Response Item Parsing
 
 ## Problem

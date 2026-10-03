@@ -1,3 +1,8 @@
+---
+title: "Windows Tray Lifecycle Implementation Plan"
+description: "Implementation plan for Windows close-to-tray behavior in the Tauri desktop wrapper."
+last_edited: 2026-08-17
+---
 # Windows Tray Lifecycle Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans

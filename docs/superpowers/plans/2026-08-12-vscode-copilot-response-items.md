@@ -1,3 +1,8 @@
+---
+title: "VS Code Copilot Response Item Parsing Implementation Plan"
+description: "Implementation plan for VS Code Copilot response items, tool calls, and file references."
+last_edited: 2026-08-12
+---
 # VS Code Copilot Response Item Parsing Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans

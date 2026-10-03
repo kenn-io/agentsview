@@ -1,4 +1,6 @@
 ---
+title: "Session Format Source Inventory"
+description: "Pinned evidence and provenance for supported session formats and usage-accounting sources."
 last_edited: 2026-10-02
 ---
 

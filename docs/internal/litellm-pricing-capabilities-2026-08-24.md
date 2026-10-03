@@ -1,3 +1,8 @@
+---
+title: "LiteLLM pricing capabilities on 2026-08-24"
+description: "Dated review of LiteLLM pricing data, context bands, model coverage, and AgentsView import limits."
+last_edited: 2026-08-27
+---
 # LiteLLM pricing capabilities on 2026-08-24
 
 This note checks LiteLLM's machine-readable pricing catalog and pricing code at

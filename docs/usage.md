@@ -1,6 +1,7 @@
 ---
 title: Usage Guide
 description: Complete guide to the AgentsView web interface
+last_edited: 2026-09-30
 ---
 
 AgentsView serves a full-featured web application for browsing, searching, and

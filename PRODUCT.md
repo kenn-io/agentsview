@@ -1,3 +1,8 @@
+---
+title: "AgentsView Product Guide"
+description: "Product purpose, audience, voice, and design principles for AgentsView."
+last_edited: 2026-06-18
+---
 # Product
 
 ## Register

@@ -1,7 +1,9 @@
 ---
-# generated-by: agentsview 0.1.0 hash:cfc47ab188fce1b0a39f208b8ca190de4bc4a6012ba8a5932be73762de459030 — do not edit; re-run `agentsview skills install`
-name: agentsview-search-conversations
+# generated-by: agentsview 0.1.0 hash:227aef84e5012dbc67b283f73ba1a09fecd5b328eb625a9fac1bf17b77f13e56 — do not edit; re-run `agentsview skills install`
+title: "Search AgentsView conversations"
 description: Search AgentsView conversation history and synthesize evidence for the parent agent.
+last_edited: 2026-09-26
+name: agentsview-search-conversations
 model: haiku
 tools: mcp__agentsview__search_content, mcp__agentsview__get_messages
 ---

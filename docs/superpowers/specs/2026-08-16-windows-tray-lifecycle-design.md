@@ -1,3 +1,8 @@
+---
+title: "Windows Tray Lifecycle"
+description: "Design for Windows desktop close-to-tray behavior and shared tray controls."
+last_edited: 2026-08-17
+---
 # Windows Tray Lifecycle
 
 ## Goal

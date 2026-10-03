@@ -1,3 +1,8 @@
+---
+title: "AgentsView Terminology"
+description: "AgentsView terminology for projects, classifications, folder suggestions, and mapping rules."
+last_edited: 2026-09-15
+---
 # Agents View
 
 Agents View organizes local AI-agent sessions so developers can inspect their

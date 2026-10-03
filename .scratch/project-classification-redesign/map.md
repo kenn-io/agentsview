@@ -1,3 +1,8 @@
+---
+title: "Redesign project classification"
+description: "Decision map and approved direction for the project-classification redesign."
+last_edited: 2026-09-15
+---
 # Redesign project classification
 
 ## Destination

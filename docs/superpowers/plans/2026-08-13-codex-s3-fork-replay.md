@@ -1,3 +1,8 @@
+---
+title: "Codex S3 Fork Replay Repair Implementation Plan"
+description: "Implementation plan for parent lookup, hydration, and replay exclusion in Codex S3 forks."
+last_edited: 2026-08-13
+---
 # Codex S3 Fork Replay Repair Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans

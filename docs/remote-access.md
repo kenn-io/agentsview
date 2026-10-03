@@ -1,6 +1,7 @@
 ---
 title: Remote Access
 description: Access AgentsView from other devices on your network
+last_edited: 2026-09-30
 ---
 
 AgentsView binds to `127.0.0.1` by default, so only your local machine can reach

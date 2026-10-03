@@ -1,3 +1,8 @@
+---
+title: "QwenPaw Test Fixtures"
+description: "Synthetic QwenPaw session layouts, parser coverage, and fixture regeneration instructions."
+last_edited: 2026-06-16
+---
 # QwenPaw Test Fixtures
 
 Synthetic, sanitized QwenPaw session files for agentsview regression

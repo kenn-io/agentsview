@@ -1,3 +1,8 @@
+---
+title: "Codex S3 Fork Replay Repair"
+description: "Design for excluding parent replay from Codex S3 forks while retaining repair eligibility."
+last_edited: 2026-08-13
+---
 # Codex S3 Fork Replay Repair
 
 ## Goal

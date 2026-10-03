@@ -1,3 +1,8 @@
+---
+title: "Choose project classification language"
+description: "Resolved language for project corrections, folder suggestions, and mapping rules."
+last_edited: 2026-09-15
+---
 # Choose project classification language
 
 Type: grilling

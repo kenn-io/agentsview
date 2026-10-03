@@ -1,7 +1,7 @@
 ---
-last_edited: 2026-09-21
 title: MCP Server
 description: Connect assistant clients to your AgentsView session history with MCP
+last_edited: 2026-09-21
 ---
 
 The `agentsview mcp` command runs a read-only

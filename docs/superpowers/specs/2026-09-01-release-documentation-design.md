@@ -1,3 +1,8 @@
+---
+title: "Release Documentation Refresh Design"
+description: "Design for outcome-focused release documentation and the 0.42.0 website refresh."
+last_edited: 2026-09-01
+---
 # Release Documentation Refresh Design
 
 ## Goal

@@ -1,6 +1,7 @@
 ---
 title: Filesystem Session Sync
 description: View sessions from multiple machines by transporting native agent session directories to one AgentsView instance
+last_edited: 2026-10-01
 ---
 
 AgentsView can label filesystem session roots with the machine that produced

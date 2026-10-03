@@ -1,6 +1,8 @@
 ---
-name: testing-without-tautologies
+title: "Testing Without Tautologies"
 description: Use when creating, editing, fixing, or reviewing tests; when adding mocks, fakes, assertions, unit tests, PG integration tests, frontend component tests, or Playwright e2e tests; or when changing tests after failures.
+last_edited: 2026-07-03
+name: testing-without-tautologies
 ---
 
 # Testing Without Tautologies

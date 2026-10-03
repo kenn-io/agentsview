@@ -1,6 +1,7 @@
 ---
 title: Artifact Folder Sync
 description: Exchange normalized sessions between AgentsView archives through a trusted folder
+last_edited: 2026-08-03
 ---
 
 Artifact folder sync exchanges normalized AgentsView sessions between machines

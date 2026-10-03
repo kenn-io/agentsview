@@ -1,3 +1,8 @@
+---
+title: "Huma API Routes"
+description: "Route ownership, compatibility rules, and generated API contract conventions for Huma."
+last_edited: 2026-09-17
+---
 # Huma API Routes
 
 The server API is registered with Huma route groups. Keep each route group

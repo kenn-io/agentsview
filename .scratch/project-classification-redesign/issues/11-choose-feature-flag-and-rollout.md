@@ -1,3 +1,8 @@
+---
+title: "Choose the feature flag and rollout contract"
+description: "Open decision on feature flags, feedback, and rollout of the redesigned Data experience."
+last_edited: 2026-09-15
+---
 # Choose the feature flag and rollout contract
 
 Type: grilling

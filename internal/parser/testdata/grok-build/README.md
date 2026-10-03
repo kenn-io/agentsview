@@ -1,3 +1,8 @@
+---
+title: "Grok Build parser goldens"
+description: "Provenance and regeneration instructions for sanitized Grok Build parser goldens."
+last_edited: 2026-09-18
+---
 # Grok Build parser goldens
 
 These sanitized sessions pin the persisted formats emitted by

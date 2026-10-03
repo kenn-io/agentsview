@@ -1,3 +1,8 @@
+---
+title: "Frontend Agent Instructions"
+description: "Frontend toolchain, shared control, and localization instructions for AgentsView contributors."
+last_edited: 2026-07-31
+---
 <!--VITE PLUS START-->
 
 # Using Vite+, the Unified Toolchain for the Web

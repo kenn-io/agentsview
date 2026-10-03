@@ -1,3 +1,8 @@
+---
+title: "Define read-only and multi-machine behavior"
+description: "Resolved source identity, read-only presentation, and machine scope for project classification."
+last_edited: 2026-09-15
+---
 # Define read-only and multi-machine behavior
 
 Type: grilling

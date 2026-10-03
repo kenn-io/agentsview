@@ -1,6 +1,7 @@
 ---
 title: Chat Import
 description: Import Claude.ai, ChatGPT, and Gemini Apps conversations into AgentsView
+last_edited: 2026-10-02
 ---
 
 AgentsView can import your conversation history from Claude.ai,

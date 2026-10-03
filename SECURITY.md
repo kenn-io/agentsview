@@ -1,3 +1,8 @@
+---
+title: "Security and Privacy Posture"
+description: "Current security and privacy behavior, deployment assumptions, threat model, and vulnerability reporting."
+last_edited: 2026-09-30
+---
 # Security and Privacy Posture
 
 ## Status

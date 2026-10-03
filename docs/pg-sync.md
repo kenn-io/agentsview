@@ -1,7 +1,7 @@
 ---
-last_edited: 2026-09-11
 title: PostgreSQL Sync
 description: Share sessions across machines with PostgreSQL push sync, an auto-push service, and a read-only server
+last_edited: 2026-09-11
 ---
 
 AgentsView stores sessions locally in SQLite by default. PostgreSQL sync lets

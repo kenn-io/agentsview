@@ -1,6 +1,7 @@
 ---
 title: ClickHouse Sync
 description: Push the SQLite archive into ClickHouse and serve a read-only web UI from it
+last_edited: 2026-09-24
 ---
 
 AgentsView stores sessions locally in SQLite. `agentsview clickhouse push`

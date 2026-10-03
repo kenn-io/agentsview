@@ -1,3 +1,8 @@
+---
+title: "Storage Rules"
+description: "Archive safety, backend contracts, replica parity, and derived-storage rules for AgentsView."
+last_edited: 2026-10-01
+---
 # Storage Rules
 
 Read this file before changing SQLite, PostgreSQL, CockroachDB, DuckDB,

@@ -1,3 +1,8 @@
+---
+title: "Usage Aggregate Cache"
+description: "Purpose, data layers, validity rules, and lifecycle of the disposable SQLite usage cache."
+last_edited: 2026-09-02
+---
 # Usage Aggregate Cache
 
 ## Purpose

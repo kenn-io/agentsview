@@ -1,6 +1,7 @@
 ---
 title: Recall (Experimental)
 description: Find reusable lessons from past sessions, with links to the supporting messages
+last_edited: 2026-09-29
 ---
 
 Recall helps you reuse facts, procedures, preferences, and warnings from past

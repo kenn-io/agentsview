@@ -1,7 +1,7 @@
 ---
-last_edited: 2026-09-11
 title: Hosted Raw Sync
 description: Upload original session files to an operator-managed server and resume interrupted transfers
+last_edited: 2026-09-11
 ---
 
 Hosted raw sync uploads original agent session files from your machines to a

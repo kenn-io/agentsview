@@ -1,6 +1,7 @@
 ---
 title: Session Export
 description: Content-free session summary exports for scripting and analytics
+last_edited: 2026-09-15
 ---
 
 Export session metadata and token and cost totals without transcript text. Use

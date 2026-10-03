@@ -1,6 +1,7 @@
 ---
 title: Recent Edits
 description: Browse the files your agents edited most recently across every session in AgentsView
+last_edited: 2026-09-01
 ---
 
 The **Recent Edits** page is a top-level feed of the files your agents changed

@@ -1,6 +1,7 @@
 ---
 title: Data
 description: Correct project assignments with worktree rules and an opt-in project workspace
+last_edited: 2026-09-21
 ---
 
 Use **Data** to group sessions under the right project name. Open the Data tab

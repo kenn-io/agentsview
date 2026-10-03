@@ -1,3 +1,8 @@
+---
+title: "Episodic Memory adaptation provenance"
+description: "Provenance and retained behavior of the conversation-recall adaptation from Episodic Memory."
+last_edited: 2026-09-22
+---
 # Episodic Memory adaptation provenance
 
 AgentsView's conversation-recall instructions adapt these files from

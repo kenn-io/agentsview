@@ -1,3 +1,8 @@
+---
+title: "Paraglide Formatting Reference"
+description: "Reference for Paraglide messages, plural variants, and locale-aware date and number formatting."
+last_edited: 2026-09-21
+---
 # Paraglide Formatting Reference
 
 Official docs:

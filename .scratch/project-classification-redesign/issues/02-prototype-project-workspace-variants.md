@@ -1,3 +1,8 @@
+---
+title: "Prototype project workspace variants"
+description: "Prototype comparisons and live-review decisions for the project workspace."
+last_edited: 2026-09-15
+---
 # Prototype project workspace variants
 
 Type: prototype

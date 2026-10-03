@@ -1,6 +1,7 @@
 ---
 title: Stats
 description: Experimental workspace analytics via agentsview stats
+last_edited: 2026-09-29
 ---
 
 `agentsview stats` is a top-level CLI command added in 0.23.0 for window-scoped

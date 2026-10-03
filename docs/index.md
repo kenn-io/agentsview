@@ -1,6 +1,7 @@
 ---
 title: AgentsView Documentation
 description: Find the guide for browsing, searching, reporting on, and maintaining your agent session archive
+last_edited: 2026-10-02
 ---
 
 # AgentsView Documentation

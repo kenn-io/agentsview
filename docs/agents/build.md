@@ -1,3 +1,8 @@
+---
+title: "Build and Dependency Rules"
+description: "Build requirements, dependency conventions, and CI runner policy for AgentsView."
+last_edited: 2026-09-17
+---
 # Build and Dependency Rules
 
 Read this file before changing build commands, toolchain setup, CI build tags,

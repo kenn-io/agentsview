@@ -1,3 +1,8 @@
+---
+title: "Scoped Push and Session Provider Controls Implementation Plan"
+description: "Implementation plan for changed-batch PostgreSQL pushes and configurable session-provider controls."
+last_edited: 2026-08-14
+---
 # Scoped Push and Session Provider Controls Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans

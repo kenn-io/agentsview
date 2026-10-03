@@ -1,3 +1,8 @@
+---
+title: "Define undo and change-history semantics"
+description: "Resolved immediate undo and durable rule-set version semantics for project corrections."
+last_edited: 2026-09-15
+---
 # Define undo and change-history semantics
 
 Type: grilling
