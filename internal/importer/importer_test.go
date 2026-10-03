@@ -2170,3 +2170,25 @@ func TestImportClaudeAIReplaceListedSession(t *testing.T) {
 	require.Len(t, pins, 1)
 	assert.Equal(t, 2, pins[0].Ordinal)
 }
+
+func TestImportChatGPTReplaceMixedRefusals(t *testing.T) {
+	f := newChatGPTReplaceFixture(t, chatGPTExport(t,
+		truncatedChatGPTConv(t, "cg-a"),
+		chatGPTLinearConv(t, "cg-b", chatGPTTurn{"user", "Hello"}, chatGPTTurn{"assistant", "Answer"}),
+		chatGPTLinearConv(t, "cg-c", chatGPTTurn{"user", "Hello"}, chatGPTTurn{"assistant", "Answer"}, chatGPTTurn{"user", "More"}),
+	))
+
+	f.write(t, chatGPTExport(t,
+		fullChatGPTConv(t, "cg-a"),
+		chatGPTLinearConv(t, "cg-b", chatGPTTurn{"user", "Changed"}, chatGPTTurn{"assistant", "Answer"}),
+		chatGPTLinearConv(t, "cg-c", chatGPTTurn{"user", "Hello"}, chatGPTTurn{"assistant", "Answer"}),
+	))
+	stats := f.importWith(t, f.d, "chatgpt:cg-a")
+	assert.Equal(t, 1, stats.Updated, "the listed replacement counts as updated")
+	assert.Equal(t, 2, stats.Errors)
+	assert.Equal(t, []ImportRefusal{
+		{SessionID: "chatgpt:cg-b", Reason: RefusalDiverged},
+		{SessionID: "chatgpt:cg-c", Reason: RefusalShorterExport},
+	}, stats.Refusals)
+	assert.Len(t, allReplacedCopies(t, f.d), 1)
+}
