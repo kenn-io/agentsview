@@ -330,10 +330,14 @@ export function generateInsight(
           if (event === "status") onStatus?.(JSON.parse(data).phase);
           if (event === "log") onLog?.(JSON.parse(data));
           if (event === "done") {
-            reportTelemetry("insight_generated", {
-              kind: req.type === "llm_canned" ? (req.kind ?? req.type) : req.type,
-            });
-            return JSON.parse(data);
+            const insight: Insight = JSON.parse(data);
+            // A cache hit returns a stored insight without running the generator.
+            if (insight.cache_status !== "hit") {
+              reportTelemetry("insight_generated", {
+                kind: req.type === "llm_canned" ? (req.kind ?? req.type) : req.type,
+              });
+            }
+            return insight;
           }
           if (event === "error") throw new Error(JSON.parse(data).message);
         },

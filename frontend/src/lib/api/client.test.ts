@@ -681,5 +681,11 @@ describe("core action telemetry", () => {
     expect(telemetry.reportTelemetry).toHaveBeenCalledExactlyOnceWith("insight_generated", {
       kind: "prompt_maturity_review",
     });
+
+    mockFetchWithStream([
+      `event: done\ndata: ${JSON.stringify({ id: 1, cache_status: "hit" })}\n\n`,
+    ]);
+    await generateInsight(req).done;
+    expect(telemetry.reportTelemetry).toHaveBeenCalledTimes(1);
   });
 });
