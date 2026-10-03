@@ -304,7 +304,8 @@ The recipe is resolved on the first cycle that succeeds and kept until the
 process restarts. `--embed` never starts a daemon and refuses to run while a
 daemon owns the archive; stop the daemon, or push without `--embed` and let the
 daemon build. In watch mode a failed build is logged, that cycle still pushes
-sessions with the vector phase skipped, and the next cycle retries. A one-shot
+sessions and any vectors already built for the active model, and the next cycle
+retries. A one-shot
 `pg push --embed` returns the build error instead. `--embed` cannot be combined
 with `--no-vectors`, `--all`, `push_vectors = false`, or a usage-only archive.
 
