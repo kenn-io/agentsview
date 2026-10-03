@@ -10,8 +10,8 @@ sessions. A background server imports recorded sessions into a SQLite database
 on your machine. The web interface, desktop app, command line, and APIs read
 that archive.
 
-New here? The [product overview](/) explains what AgentsView is for, and the
-[five-minute guide](/guide/) walks the whole loop with screenshots. The pages
+New here? The [product overview](/){target=_self} explains what AgentsView is for, and the
+[five-minute guide](/guide/){target=_self} walks the whole loop with screenshots. The pages
 here explain how to use and maintain each feature.
 
 These guides follow `main` and may include changes newer than the latest
