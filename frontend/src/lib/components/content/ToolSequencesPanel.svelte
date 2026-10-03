@@ -268,7 +268,7 @@
                         onclick={() => toggle(openCalls, callKey)}
                       >
                         <ChevronRightIcon class="chev" size={12} aria-hidden="true" />
-                        <span class="tool">{@render dot(call.outcome)}{call.tool_name}</span>
+                        <span class="tool">{@render dot(call.outcome)}{call.tool_name}<span class="kit-sr-only">, {m.tool_sequences_message({ ordinal: call.ordinal })}</span></span>
                         <span class="input" title={call.input_preview}>
                           {call.input_preview ? summarizeToolInputPreview(call.input_preview) : m.tool_sequences_no_input()}
                           {#if tag}<span class="tag" title={tag.title}>{tag.label}</span>{/if}

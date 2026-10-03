@@ -242,6 +242,7 @@ describe("ToolSequencesPanel", () => {
         sequences: [
           makeSequence({
             ending: "unknown",
+            total_calls: 3,
             calls: [
               makeCall({
                 outcome: "errored",
@@ -249,14 +250,16 @@ describe("ToolSequencesPanel", () => {
                 result_preview: "[image]",
               }),
               makeCall({
-                ordinal: 5,
+                ordinal: 4,
+                call_index: 1,
                 tool_name: "Read",
                 outcome: "content",
                 result_content_unknown: false,
                 result_preview: "Found the config",
               }),
               makeCall({
-                ordinal: 6,
+                ordinal: 4,
+                call_index: 2,
                 tool_name: "Read",
                 outcome: "unknown",
                 result_content_unknown: true,
@@ -292,9 +295,15 @@ describe("ToolSequencesPanel", () => {
         sequences: [
           makeSequence({
             ending: "open",
+            total_calls: 2,
             calls: [
               makeCall({ outcome: "empty", result_preview: "", result_bytes: 0 }),
-              makeCall({ ordinal: 5, outcome: "content", result_preview: "later result" }),
+              makeCall({
+                ordinal: 4,
+                call_index: 1,
+                outcome: "content",
+                result_preview: "later result",
+              }),
             ],
           }),
         ],

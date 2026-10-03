@@ -163,6 +163,16 @@ function makeUsage(overrides: Partial<SessionUsage> = {}): SessionUsage {
   };
 }
 
+// Call rows render only inside an expanded sequence, so expand it before reading their text.
+async function expandedSequenceText(): Promise<string> {
+  const row = document.querySelector<HTMLButtonElement>(".tool-sequences-panel .sequence-row");
+  if (row?.getAttribute("aria-expanded") === "false") {
+    row.click();
+    await tick();
+  }
+  return document.body.textContent ?? "";
+}
+
 function makeToolSequences(
   duration: number | null,
   sessionId = "run:123456789abcdef",
@@ -2150,8 +2160,8 @@ describe("SessionBreadcrumb", () => {
       expect(sessionsService.getApiV1SessionsByIdToolSequences).not.toHaveBeenCalled();
 
       ui.signalPanelOpen = true;
-      await vi.waitFor(() => {
-        expect(document.body.textContent).toContain("Not measured");
+      await vi.waitFor(async () => {
+        expect(await expandedSequenceText()).toContain("Not measured");
         expect(document.querySelector(".tool-sequences-panel")?.getAttribute("aria-busy")).toBe(
           "false",
         );
@@ -2159,8 +2169,8 @@ describe("SessionBreadcrumb", () => {
       expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(1);
 
       sessions.activeSessionUsageVersion += 1;
-      await vi.waitFor(() => {
-        expect(document.body.textContent).toContain("0ms");
+      await vi.waitFor(async () => {
+        expect(await expandedSequenceText()).toContain("0ms");
         expect(document.querySelector(".tool-sequences-panel")?.getAttribute("aria-busy")).toBe(
           "false",
         );
@@ -2184,16 +2194,13 @@ describe("SessionBreadcrumb", () => {
         target: document.body,
         props: { session, onBack: () => {} },
       });
-      await vi.waitFor(() => {
-        expect(document.body.textContent).toContain("2.0s");
+      await vi.waitFor(async () => {
+        expect(await expandedSequenceText()).toContain("2.0s");
         expect(document.querySelector(".tool-sequences-panel")?.getAttribute("aria-busy")).toBe(
           "false",
         );
       });
 
-      const details = document.querySelector<HTMLDetailsElement>("details.sequence")!;
-      details.open = true;
-      await tick();
       component.$set({ session: { ...session } });
       await flushPromises();
       expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(1);
@@ -2205,23 +2212,25 @@ describe("SessionBreadcrumb", () => {
       expect(document.querySelector(".tool-sequences-panel")?.getAttribute("aria-busy")).toBe(
         "true",
       );
-      expect(document.querySelector<HTMLDetailsElement>("details.sequence")?.open).toBe(true);
+      expect(document.querySelector(".sequence-row")?.getAttribute("aria-expanded")).toBe("true");
 
       const scrollToOrdinal = vi.spyOn(ui, "scrollToOrdinal");
       document
-        .querySelector<HTMLButtonElement>('button[title="Open call 3 for Grep in the transcript"]')!
+        .querySelector<HTMLAnchorElement>(
+          'a[aria-label="Message 3: open the Grep call in the transcript"]',
+        )!
         .click();
       expect(scrollToOrdinal).toHaveBeenCalledWith(3, session.id);
       scrollToOrdinal.mockRestore();
 
       refresh.resolve(makeToolSequences(4000));
-      await vi.waitFor(() => {
-        expect(document.body.textContent).toContain("4.0s");
+      await vi.waitFor(async () => {
+        expect(await expandedSequenceText()).toContain("4.0s");
         expect(document.querySelector(".tool-sequences-panel")?.getAttribute("aria-busy")).toBe(
           "false",
         );
       });
-      expect(document.querySelector<HTMLDetailsElement>("details.sequence")?.open).toBe(true);
+      expect(document.querySelector(".sequence-row")?.getAttribute("aria-expanded")).toBe("true");
       component.$destroy();
     });
 
@@ -2242,17 +2251,17 @@ describe("SessionBreadcrumb", () => {
           target: document.body,
           props: { session, onBack: () => {} },
         });
-        await vi.waitFor(() => expect(document.body.textContent).toContain("2.0s"));
-        document.querySelector<HTMLDetailsElement>("details.sequence")!.open = true;
+        await vi.waitFor(async () => expect(await expandedSequenceText()).toContain("2.0s"));
+        await expandedSequenceText();
         await tick();
         expect(
-          document.querySelector('button[title="Open call 3 for Grep in the transcript"]'),
+          document.querySelector('a[aria-label="Message 3: open the Grep call in the transcript"]'),
         ).not.toBeNull();
 
         component.$set({ session: { ...session, transcript_revision: revision } });
         await tick();
         expect(
-          document.querySelector('button[title="Open call 3 for Grep in the transcript"]'),
+          document.querySelector('a[aria-label="Message 3: open the Grep call in the transcript"]'),
         ).toBeNull();
         expect(document.body.textContent).toContain("Loading tool sequences");
         expect(document.querySelector(".tool-sequences-panel")?.getAttribute("aria-busy")).toBe(
@@ -2260,12 +2269,14 @@ describe("SessionBreadcrumb", () => {
         );
 
         refresh.resolve(replacement);
-        await vi.waitFor(() => expect(document.body.textContent).toContain("Replacement result"));
-        document.querySelector<HTMLDetailsElement>("details.sequence")!.open = true;
+        await vi.waitFor(async () => expect(await expandedSequenceText()).toContain("4.0s"));
+        document.querySelector<HTMLButtonElement>(".call-row")!.click();
+        await tick();
+        expect(document.body.textContent).toContain("Replacement result");
         const scrollToOrdinal = vi.spyOn(ui, "scrollToOrdinal");
         document
-          .querySelector<HTMLButtonElement>(
-            'button[title="Open call 7 for Grep in the transcript"]',
+          .querySelector<HTMLAnchorElement>(
+            'a[aria-label="Message 7: open the Grep call in the transcript"]',
           )!
           .click();
         expect(scrollToOrdinal).toHaveBeenCalledWith(7, session.id);
@@ -2289,22 +2300,22 @@ describe("SessionBreadcrumb", () => {
         target: document.body,
         props: { session, onBack: () => {} },
       });
-      await vi.waitFor(() => expect(document.body.textContent).toContain("2.0s"));
+      await vi.waitFor(async () => expect(await expandedSequenceText()).toContain("2.0s"));
       component.$set({ session: { ...session, transcript_revision: "revision-2" } });
       await flushPromises();
       expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(2);
       component.$set({ session: { ...session, transcript_revision: "revision-3" } });
-      await vi.waitFor(() => expect(document.body.textContent).toContain("6.0s"));
+      await vi.waitFor(async () => expect(await expandedSequenceText()).toContain("6.0s"));
 
       revision2.resolve(makeToolSequences(10000));
       await flushPromises();
       expect(document.body.textContent).toContain("6.0s");
       expect(document.body.textContent).not.toContain("10.0s");
       expect(
-        document.querySelector('button[title="Open call 9 for Grep in the transcript"]'),
+        document.querySelector('a[aria-label="Message 9: open the Grep call in the transcript"]'),
       ).not.toBeNull();
       expect(
-        document.querySelector('button[title="Open call 3 for Grep in the transcript"]'),
+        document.querySelector('a[aria-label="Message 3: open the Grep call in the transcript"]'),
       ).toBeNull();
       component.$destroy();
     });
@@ -2325,8 +2336,8 @@ describe("SessionBreadcrumb", () => {
           onBack: () => {},
         },
       });
-      await vi.waitFor(() => {
-        expect(document.body.textContent).toContain("2.0s");
+      await vi.waitFor(async () => {
+        expect(await expandedSequenceText()).toContain("2.0s");
       });
 
       component.$set({
@@ -2335,8 +2346,8 @@ describe("SessionBreadcrumb", () => {
           termination_status: "clean",
         }),
       });
-      await vi.waitFor(() => {
-        expect(document.body.textContent).toContain("4.0s");
+      await vi.waitFor(async () => {
+        expect(await expandedSequenceText()).toContain("4.0s");
       });
       expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(2);
       component.$destroy();
@@ -2359,13 +2370,36 @@ describe("SessionBreadcrumb", () => {
       ui.signalPanelOpen = false;
       await flushPromises();
       ui.signalPanelOpen = true;
-      await vi.waitFor(() => {
-        expect(document.body.textContent).toContain("2.0s");
+      await vi.waitFor(async () => {
+        expect(await expandedSequenceText()).toContain("2.0s");
       });
       first.resolve(makeToolSequences(10000));
       await flushPromises();
       expect(document.body.textContent).toContain("2.0s");
       expect(document.body.textContent).not.toContain("10.0s");
+      expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(2);
+      component.$destroy();
+    });
+
+    it("retries a failed tool-sequence read", async () => {
+      sessionsService.getApiV1SessionsByIdToolSequences
+        .mockRejectedValueOnce(new Error("offline"))
+        .mockResolvedValueOnce(makeToolSequences(2000));
+      ui.signalPanelOpen = true;
+      const component = createClassComponent({
+        component: SessionBreadcrumb,
+        target: document.body,
+        props: { session: makeSession("claude"), onBack: () => {} },
+      });
+      await vi.waitFor(() => {
+        expect(document.querySelector('.tool-sequences-panel [role="alert"]')).not.toBeNull();
+      });
+
+      document
+        .querySelector<HTMLButtonElement>('.tool-sequences-panel [role="alert"] button')!
+        .click();
+      await vi.waitFor(async () => expect(await expandedSequenceText()).toContain("2.0s"));
+      expect(document.querySelector('.tool-sequences-panel [role="alert"]')).toBeNull();
       expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(2);
       component.$destroy();
     });
@@ -2385,8 +2419,8 @@ describe("SessionBreadcrumb", () => {
       component.$set({
         session: makeSession("claude", { id: "run:bbb" }),
       });
-      await vi.waitFor(() => {
-        expect(document.body.textContent).toContain("2.0s");
+      await vi.waitFor(async () => {
+        expect(await expandedSequenceText()).toContain("2.0s");
       });
 
       first.resolve(makeToolSequences(10000, "run:aaa"));
