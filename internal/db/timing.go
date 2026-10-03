@@ -52,6 +52,8 @@ type CallTiming struct {
 	DurationMs        *int64  `json:"duration_ms"`
 	IsParallel        bool    `json:"is_parallel"`
 	InputPreview      string  `json:"input_preview"`
+	// AwaitingChild marks a delegated call whose child session hasn't closed. It survives a hosted store hiding a child it can't resolve yet.
+	AwaitingChild bool `json:"-"`
 }
 
 // TurnRow is the per-message timing row returned by the per-turn SQL
@@ -297,6 +299,7 @@ func AssembleTiming(
 			SkillName:         r.SkillName,
 			SubagentSessionID: r.SubagentSessionID,
 			InputPreview:      makeInputPreview(r.Category, r.ToolName, r.InputJSON),
+			AwaitingChild:     childPending(r),
 		}
 		if interval := intervals[i]; interval != nil {
 			v := interval.end - interval.start
@@ -341,6 +344,14 @@ func AssembleTiming(
 		})
 	}
 	return out
+}
+
+func childPending(call CallRow) bool {
+	if call.SubagentSessionID == nil || *call.SubagentSessionID == "" {
+		return false
+	}
+	_, closed := parseClosedInterval(call.SubagentStart, call.SubagentEnd)
+	return !closed
 }
 
 func completedCallBoundary(calls []CallRow, messageID int64) (int64, bool) {

@@ -86,6 +86,8 @@
   let toolSequencesLoading = $state(false);
   let toolSequencesFailed = $state(false);
   let toolSequencesUnavailable = $state(false);
+  // A delegated call gets its duration when its child session closes, which can be any session, so a read that found one also refetches on session changes. Keyed by read so a switch needs no reset.
+  let toolSequencesAwaitingBase = $state("");
   let toolSequencesRetry = $state(0);
   let toolSequencesLoadedIdentity = "";
   const openersRead = new LatestRead();
@@ -194,15 +196,6 @@
           child.ended_at ?? "",
         ].join("\t")
       )
-      .sort()
-      .join("\n");
-  }
-
-  // A delegated call's duration ends when its child session does, so a child closing changes the sequences without touching the parent.
-  function childTimingKey(parentId: string): string {
-    return Array.from(sessions.childSessions.values())
-      .filter((child) => child.parent_session_id === parentId)
-      .map((child) => [child.id, child.started_at ?? "", child.ended_at ?? ""].join("\t"))
       .sort()
       .join("\n");
   }
@@ -397,17 +390,16 @@
     }
 
     const revision = currentSession.transcript_revision ?? "";
-    const identity = [
-      id,
-      revision,
-      currentSession.termination_status ?? "",
-      childTimingKey(id),
-    ].join("\n");
+    const base = [id, revision, currentSession.termination_status ?? ""].join("\n");
     if (untrack(() => toolSequencesData?.session_id !== id || toolSequencesRevision !== revision)) {
       toolSequencesData = null;
       toolSequencesRevision = "";
       toolSequencesLoadedIdentity = "";
     }
+    const usageVersion = untrack(() => sessions.activeSessionUsageVersion);
+    const identity = toolSequencesAwaitingBase === base
+      ? `${base}\n${sessions.activeSessionUsageVersion}`
+      : base;
     if (identity === toolSequencesLoadedIdentity) return;
     toolSequencesLoading = true;
     toolSequencesFailed = false;
@@ -415,24 +407,28 @@
     const signal = toolSequencesRead.begin();
     SessionsService.getApiV1SessionsByIdToolSequences({ id }, { signal })
       .then((response) => {
-        if (!toolSequencesRead.isCurrent(signal)) return;
-        toolSequencesLoadedIdentity = identity;
+        // Settle the read before writing state the effect tracks, since that rerun cancels the read.
+        if (!toolSequencesRead.finish(signal)) return;
+        toolSequencesLoading = false;
+        const awaiting = response.sequences.some((sequence) =>
+          sequence.calls.some((call) => call.awaiting_subagent),
+        );
+        toolSequencesLoadedIdentity = awaiting ? `${base}\n${usageVersion}` : base;
+        toolSequencesAwaitingBase = awaiting ? base : "";
         toolSequencesData = response;
         toolSequencesRevision = revision;
       })
       .catch((error) => {
-        if (isAbortError(error) || !toolSequencesRead.isCurrent(signal)) return;
+        if (isAbortError(error) || !toolSequencesRead.finish(signal)) return;
+        toolSequencesLoading = false;
         toolSequencesData = null;
         toolSequencesRevision = "";
         if (error instanceof ApiError && error.status === 501) {
-          toolSequencesLoadedIdentity = identity;
+          toolSequencesLoadedIdentity = base;
           toolSequencesUnavailable = true;
         } else {
           toolSequencesFailed = true;
         }
-      })
-      .finally(() => {
-        if (toolSequencesRead.finish(signal)) toolSequencesLoading = false;
       });
 
     return () => toolSequencesRead.cancel();

@@ -6863,6 +6863,8 @@ components:
     SessionToolSequenceCall:
       additionalProperties: false
       properties:
+        awaiting_subagent:
+          type: boolean
         call_index:
           format: int64
           type: integer
@@ -6931,6 +6933,7 @@ components:
         - result_bytes
         - result_omitted_bytes
         - result_content_unknown
+        - awaiting_subagent
       type: object
     SessionToolSequencesResponse:
       additionalProperties: false

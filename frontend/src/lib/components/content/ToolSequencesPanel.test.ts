@@ -27,6 +27,7 @@ function makeCall(overrides: Partial<SessionToolSequenceCall> = {}): SessionTool
     result_bytes: 15,
     result_omitted_bytes: 0,
     result_content_unknown: false,
+    awaiting_subagent: false,
     ...overrides,
   };
 }

@@ -480,6 +480,8 @@ type sessionToolSequenceCall struct {
 	ResultBytes          *int   `json:"result_bytes"`
 	ResultOmittedBytes   *int   `json:"result_omitted_bytes"`
 	ResultContentUnknown bool   `json:"result_content_unknown"`
+	// AwaitingSubagent marks a delegated call whose child session hasn't closed yet, so the panel refetches when other sessions change.
+	AwaitingSubagent bool `json:"awaiting_subagent"`
 }
 
 func (s *Server) humaToolSequences(
@@ -527,11 +529,11 @@ func buildSessionToolSequences(
 ) sessionToolSequencesResponse {
 	extracted := signals.ExtractToolSequences(rows, session.TerminationStatus != nil && (*session.TerminationStatus == string(parser.TerminationClean) || *session.TerminationStatus == string(parser.TerminationAwaitingUser)))
 	// Timing lists each turn's calls in call order, so a call's position in its message finds its duration even when tool IDs repeat or are blank.
-	durations := make(map[db.ToolCallPosition]*int64)
+	timings := make(map[db.ToolCallPosition]db.CallTiming)
 	if timing != nil {
 		for _, turn := range timing.Turns {
 			for i, call := range turn.Calls {
-				durations[db.ToolCallPosition{MessageOrdinal: turn.Ordinal, CallIndex: i}] = call.DurationMs
+				timings[db.ToolCallPosition{MessageOrdinal: turn.Ordinal, CallIndex: i}] = call
 			}
 		}
 	}
@@ -566,7 +568,9 @@ func buildSessionToolSequences(
 		}
 		for _, index := range indexes {
 			call := projectSessionToolSequenceCall(rows[index], extracted.Calls[index])
-			call.DurationMs = durations[db.ToolCallPosition{MessageOrdinal: call.Ordinal, CallIndex: call.CallIndex}]
+			timing := timings[db.ToolCallPosition{MessageOrdinal: call.Ordinal, CallIndex: call.CallIndex}]
+			call.DurationMs = timing.DurationMs
+			call.AwaitingSubagent = timing.AwaitingChild
 			projected.Calls = append(projected.Calls, call)
 		}
 		response.Sequences = append(response.Sequences, projected)

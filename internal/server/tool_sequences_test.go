@@ -62,6 +62,7 @@ type sessionToolSequenceCall struct {
 	ResultBytes          *int   `json:"result_bytes"`
 	ResultOmittedBytes   *int   `json:"result_omitted_bytes"`
 	ResultContentUnknown bool   `json:"result_content_unknown"`
+	AwaitingSubagent     bool   `json:"awaiting_subagent"`
 }
 
 func TestHandleToolSequences_Example(t *testing.T) {
@@ -392,9 +393,13 @@ func TestHandleToolSequences_ChildClosureAddsOnlyMeasuredDuration(t *testing.T) 
 		s.MessageCount = 2
 		s.StartedAt = &childStart
 	})
+	// The spawn itself is timed, as Grok's spawn_subagent is, so the call has a duration before its child closes.
 	call := db.ToolCall{
 		ToolName: "Task", Category: "Tool", ToolUseID: "delegated", SubagentSessionID: childID,
-		ResultEvents: []db.ToolResultEvent{{ToolUseID: "delegated", Source: "tool_execution", Status: "errored", EventIndex: 0}},
+		ResultEvents: []db.ToolResultEvent{
+			{ToolUseID: "delegated", Source: "tool_execution", Status: "started", Timestamp: childStart, EventIndex: 0},
+			{ToolUseID: "delegated", Source: "tool_execution", Status: "errored", Timestamp: "2026-04-26T10:00:01Z", EventIndex: 1},
+		},
 	}
 	msgs := []db.Message{
 		{SessionID: parentID, Ordinal: 0, Role: "user", Content: "Delegate", ContentLength: 8, Timestamp: childStart},
@@ -410,7 +415,8 @@ func TestHandleToolSequences_ChildClosureAddsOnlyMeasuredDuration(t *testing.T) 
 	first := fetchSessionToolSequences(t, te, parentID)
 	require.Len(t, first.Sequences, 1)
 	assert.Equal(t, "open", first.Sequences[0].Ending)
-	assert.Nil(t, first.Sequences[0].Calls[0].DurationMs)
+	assert.Equal(t, new(int64(1000)), first.Sequences[0].Calls[0].DurationMs)
+	assert.True(t, first.Sequences[0].Calls[0].AwaitingSubagent)
 
 	child, err := te.db.GetSession(t.Context(), childID)
 	require.NoError(t, err)
@@ -422,6 +428,7 @@ func TestHandleToolSequences_ChildClosureAddsOnlyMeasuredDuration(t *testing.T) 
 	second := fetchSessionToolSequences(t, te, parentID)
 	require.Len(t, second.Sequences, 1)
 	assert.Equal(t, new(int64(4000)), second.Sequences[0].Calls[0].DurationMs)
+	assert.False(t, second.Sequences[0].Calls[0].AwaitingSubagent)
 	parentAfter, err := te.db.GetSession(t.Context(), parentID)
 	require.NoError(t, err)
 	assert.Equal(t, parentRevision, parentAfter.TranscriptRevision)

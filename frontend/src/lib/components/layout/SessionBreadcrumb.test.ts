@@ -210,6 +210,7 @@ function makeToolSequences(
             result_bytes: 15,
             result_omitted_bytes: 0,
             result_content_unknown: false,
+            awaiting_subagent: false,
           },
         ],
       },
@@ -2176,17 +2177,12 @@ describe("SessionBreadcrumb", () => {
       component.$destroy();
     });
 
-    it("refreshes tool sequences when a child session closes", async () => {
+    it("refetches on session changes only while a delegated call waits for its child", async () => {
       const session = makeSession("claude", { transcript_revision: "revision-1" });
-      const child = makeSession("claude", {
-        id: "child-1",
-        parent_session_id: session.id,
-        started_at: "2024-01-01T00:00:00Z",
-        ended_at: undefined,
-      });
-      sessions.childSessions = new Map([[child.id, child]]);
+      const waiting = makeToolSequences(null);
+      waiting.sequences[0]!.calls[0]!.awaiting_subagent = true;
       sessionsService.getApiV1SessionsByIdToolSequences
-        .mockResolvedValueOnce(makeToolSequences(null))
+        .mockResolvedValueOnce(waiting)
         .mockResolvedValueOnce(makeToolSequences(2000));
       ui.signalPanelOpen = true;
       const component = createClassComponent({
@@ -2196,10 +2192,40 @@ describe("SessionBreadcrumb", () => {
       });
       await vi.waitFor(async () => expect(await expandedSequenceText()).toContain("Not measured"));
       expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(1);
+      expect(document.querySelector(".tool-sequences-panel")?.getAttribute("aria-busy")).toBe("false");
 
-      sessions.childSessions = new Map([[child.id, { ...child, ended_at: "2024-01-01T00:00:02Z" }]]);
+      // A child owned by another session closes; the parent's own fields don't move.
+      sessions.activeSessionUsageVersion += 1;
       await vi.waitFor(async () => expect(await expandedSequenceText()).toContain("2.0s"));
       expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(2);
+      expect(document.querySelector(".tool-sequences-panel")?.getAttribute("aria-busy")).toBe("false");
+
+      sessions.activeSessionUsageVersion += 1;
+      await flushPromises();
+      expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(2);
+      component.$destroy();
+    });
+
+    it("reads a new transcript revision once after a read that waited on a child", async () => {
+      const session = makeSession("claude", { transcript_revision: "revision-1" });
+      const waiting = makeToolSequences(null);
+      waiting.sequences[0]!.calls[0]!.awaiting_subagent = true;
+      sessionsService.getApiV1SessionsByIdToolSequences
+        .mockResolvedValueOnce(waiting)
+        .mockResolvedValueOnce(makeToolSequences(2000));
+      ui.signalPanelOpen = true;
+      const component = createClassComponent({
+        component: SessionBreadcrumb,
+        target: document.body,
+        props: { session, onBack: () => {} },
+      });
+      await vi.waitFor(async () => expect(await expandedSequenceText()).toContain("Not measured"));
+
+      component.$set({ session: { ...session, transcript_revision: "revision-2" } });
+      await vi.waitFor(async () => expect(await expandedSequenceText()).toContain("2.0s"));
+      await flushPromises();
+      expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(2);
+      expect(document.querySelector(".tool-sequences-panel")?.getAttribute("aria-busy")).toBe("false");
       component.$destroy();
     });
 

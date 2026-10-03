@@ -5,6 +5,7 @@ import type { SessionToolSequenceCallOutcome } from "./sessionToolSequenceCallOu
 import type { SessionToolSequenceCallRepeat } from "./sessionToolSequenceCallRepeat.ts";
 
 export interface SessionToolSequenceCall {
+  awaiting_subagent: boolean;
   call_index: number;
   /** @nullable */
   duration_ms: number | null;
