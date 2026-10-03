@@ -1,7 +1,10 @@
 package sync
 
 import (
+	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -263,23 +266,23 @@ func TestProcessS3CodexForkRetriesUntilParentAvailable(t *testing.T) {
 	mtime := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC).UnixNano()
 
 	oldFetch := fetchS3Object
-	oldFindParent := findCodexS3ParentSessionURI
+	oldFindParent := findCodexS3ParentSessionURIs
 	t.Cleanup(func() {
 		fetchS3Object = oldFetch
-		findCodexS3ParentSessionURI = oldFindParent
+		findCodexS3ParentSessionURIs = oldFindParent
 	})
 	parentAvailable := false
 	var fetched []string
-	findCodexS3ParentSessionURI = func(
+	findCodexS3ParentSessionURIs = func(
 		gotRoot, gotChild, gotParent string,
-	) (string, bool) {
+	) []string {
 		require.Empty(t, gotRoot)
 		require.Equal(t, childPath, gotChild)
 		require.Equal(t, parentID, gotParent)
 		if !parentAvailable {
-			return "", false
+			return nil
 		}
-		return parentPath, true
+		return []string{parentPath}
 	}
 	fetchS3Object = func(got string) (io.ReadCloser, error) {
 		fetched = append(fetched, got)
@@ -339,6 +342,92 @@ func TestProcessS3CodexForkRetriesUntilParentAvailable(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, storedMessages, 2)
 	assert.Equal(t, []string{childPath, parentPath, indexPath}, fetched)
+}
+
+// A fork copies the parent thread's live history, which spans its revert
+// pages, so every page must be downloaded for the replay filter to see it.
+func TestProcessS3CodexForkOfRevertedThreadSkipsReplayedPageTurns(t *testing.T) {
+	const root = "s3://bucket/laptop/raw/codex"
+	const parentID = "11111111-1111-4111-8111-111111111111"
+	const pageRollout = "33333333-3333-4333-8333-333333333333"
+	const childID = "22222222-2222-4222-8222-222222222222"
+	const ts = "2024-01-01T10:00:00Z"
+	headPath := root + "/2026/08/12/rollout-2026-08-12T00-00-00-" + parentID + ".jsonl"
+	pagePath := root + "/2026/08/13/rollout-2026-08-13T00-00-00-" +
+		parentID + "_" + pageRollout + ".jsonl"
+	childPath := root + "/2026/08/14/rollout-2026-08-14T00-00-00-" + childID + ".jsonl"
+	objects := map[string]string{
+		headPath: testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON(parentID, "/workspace/project", "codex_cli_rs", ts),
+			testjsonl.CodexTurnContextWithIDJSON("gpt-5.4", "head-turn", ts),
+		),
+		pagePath: testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaWithFieldsJSON(parentID, "/workspace/project", "codex_cli_rs", ts,
+				map[string]any{"history_mode": "paginated", "history_base": map[string]any{"thread_id": parentID}}),
+			testjsonl.CodexTurnContextWithIDJSON("gpt-5.4", "page-turn", ts),
+		),
+		childPath: testjsonl.JoinJSONL(
+			testjsonl.CodexForkedSessionMetaJSON(childID, parentID, "/workspace/project", "codex_cli_rs", ts),
+			testjsonl.CodexSessionMetaJSON(parentID, "/workspace/project", "codex_cli_rs", ts),
+			testjsonl.CodexTurnContextWithIDJSON("gpt-5.4", "head-turn", ts),
+			testjsonl.CodexMsgJSON("user", "replayed head task", ts),
+			testjsonl.CodexTurnContextWithIDJSON("gpt-5.4", "page-turn", ts),
+			testjsonl.CodexMsgJSON("user", "replayed page task", ts),
+			testjsonl.CodexMsgJSON("assistant", "replayed page answer", ts),
+			testjsonl.CodexTokenCountJSON(ts, 50_000, 9_000, 0),
+			testjsonl.CodexTurnContextWithIDJSON("gpt-5.5", "child-turn", "2024-01-01T10:00:01Z"),
+			testjsonl.CodexMsgJSON("user", "child task", "2024-01-01T10:00:01Z"),
+			testjsonl.CodexMsgJSON("assistant", "child answer", "2024-01-01T10:00:05Z"),
+			testjsonl.CodexTokenCountJSON("2024-01-01T10:00:05Z", 10_000, 500, 6_000),
+		),
+	}
+	oldFetch := fetchS3Object
+	oldFindParent := findCodexS3ParentSessionURIs
+	t.Cleanup(func() {
+		fetchS3Object = oldFetch
+		findCodexS3ParentSessionURIs = oldFindParent
+	})
+	findCodexS3ParentSessionURIs = func(_, _, gotParent string) []string {
+		require.Equal(t, parentID, gotParent)
+		return []string{headPath, pagePath}
+	}
+	for _, tt := range []struct {
+		name         string
+		pageFetchErr bool
+		wantMessages []string
+		wantDeferred int
+	}{
+		{"all pages downloaded", false, []string{"child task", "child answer"}, 0},
+		{"page download fails", true, nil, 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			fetchS3Object = func(got string) (io.ReadCloser, error) {
+				content, ok := objects[got]
+				if !ok || tt.pageFetchErr && got == pagePath {
+					return nil, missingS3ObjectError()
+				}
+				return io.NopCloser(strings.NewReader(content)), nil
+			}
+			e := &Engine{db: openTestDB(t), machine: "central"}
+			res := e.processFile(t.Context(), parser.DiscoveredFile{
+				Agent: parser.AgentCodex, Path: childPath, Machine: "laptop",
+				SourceSize: int64(len(objects[childPath])), SourceMtime: 1,
+			})
+			require.NoError(t, res.err)
+			require.Len(t, res.results, 1)
+			assert.Equal(t, tt.wantDeferred, res.deferredCount,
+				"an incomplete parent leaves the fork marked for retry")
+			if tt.wantMessages == nil {
+				return
+			}
+			var got []string
+			for _, m := range res.results[0].Messages {
+				got = append(got, m.Content)
+			}
+			assert.Equal(t, tt.wantMessages, got)
+			assert.Equal(t, 500, res.results[0].Session.TotalOutputTokens)
+		})
+	}
 }
 
 func TestProcessS3CodexUsesSessionIndex(t *testing.T) {
@@ -1049,4 +1138,130 @@ func TestSyncClaudeS3SubagentTranscriptsContextUsesPrefixedChildProject(
 	require.NoError(t, err)
 	require.NotNil(t, localChild)
 	assert.Equal(t, "localproject", localChild.Project)
+}
+
+func TestProcessS3CodexRevertPageIsItsOwnSession(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	objects := map[string]string{}
+	var uris []string
+	for page := range 2 {
+		local := writeCodexUsagePage(t, root, page, true, true)
+		content, err := os.ReadFile(local)
+		require.NoError(t, err)
+		uri := fmt.Sprintf("s3://bucket/laptop/raw/codex/2026/09/%02d/%s", 24+page, filepath.Base(local))
+		objects[uri] = string(content)
+		uris = append(uris, uri)
+	}
+	oldFetch := fetchS3Object
+	t.Cleanup(func() { fetchS3Object = oldFetch })
+	fetchS3Object = func(uri string) (io.ReadCloser, error) {
+		content, ok := objects[uri]
+		if !ok {
+			return nil, missingS3ObjectError()
+		}
+		return io.NopCloser(strings.NewReader(content)), nil
+	}
+	e := &Engine{db: database, machine: "central"}
+	var ids []string
+	for _, uri := range uris {
+		res := e.processFile(t.Context(), parser.DiscoveredFile{
+			Agent: parser.AgentCodex, Path: uri, Machine: "laptop",
+			SourceSize: int64(len(objects[uri])), SourceMtime: time.Now().UnixNano(),
+		})
+		require.NoError(t, res.err)
+		require.Len(t, res.results, 1)
+		written, _, failed, _ := e.writeBatch([]pendingWrite{{
+			sess: res.results[0].Session, msgs: res.results[0].Messages,
+		}}, syncWriteDefault, false)
+		require.Equal(t, 1, written)
+		require.Zero(t, failed)
+		ids = append(ids, res.results[0].Session.ID)
+	}
+
+	threadID := "laptop~codex:" + paginationThread
+	pageID := threadID + "_" + paginationRollouts[1]
+	assert.Equal(t, []string{threadID, pageID}, ids)
+	page, err := database.GetSession(t.Context(), pageID)
+	require.NoError(t, err)
+	require.NotNil(t, page)
+	require.NotNil(t, page.ParentSessionID)
+	assert.Equal(t, threadID, *page.ParentSessionID)
+	assert.Equal(t, "continuation", page.RelationshipType)
+	got, _ := dailyOutputTokens(t, database)
+	assert.Equal(t, map[string]int{"2026-09-24": 10, "2026-09-25": 20}, got)
+}
+
+func TestProcessS3CodexRevertPageUsesThreadIndexTitle(t *testing.T) {
+	database := openTestDB(t)
+	pageKey := paginationThread + "_" + paginationRollouts[1]
+	path := "s3://bucket/laptop/raw/codex/2026/09/25/" +
+		"rollout-2026-09-25T12-00-00-" + pageKey + ".jsonl"
+	indexPath := "s3://bucket/laptop/raw/session_index.jsonl"
+	content := testjsonl.JoinJSONL(
+		codexRevertMeta("2026-09-25T04:00:00Z", paginationThread, 5),
+		codexUserEntryJSON("2026-09-25T04:00:01Z", "page prompt"),
+	)
+	index := `{"id":"` + paginationThread + `","thread_name":"New title","updated_at":"2026-09-25T00:00:00Z"}` + "\n"
+	mtime := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC).UnixNano()
+
+	storedID := "laptop~codex:" + pageKey
+	oldTitle := "Old title"
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
+		ID:          storedID,
+		Project:     "project",
+		Machine:     "laptop",
+		Agent:       "codex",
+		FilePath:    strPtr(path),
+		FileSize:    int64Ptr(int64(len(content))),
+		FileMtime:   int64Ptr(mtime),
+		FileHash:    strPtr("s3:fingerprint:page"),
+		SessionName: &oldTitle,
+	}))
+	require.NoError(t, database.SetSessionDataVersion(t.Context(), storedID, db.CurrentDataVersion()))
+
+	oldFetch := fetchS3Object
+	oldStat := statS3Object
+	t.Cleanup(func() {
+		fetchS3Object = oldFetch
+		statS3Object = oldStat
+	})
+	statS3Object = func(got string) (parser.S3Object, error) {
+		require.Equal(t, indexPath, got)
+		return parser.S3Object{
+			URI:          indexPath,
+			Size:         int64(len(index)),
+			LastModified: time.Date(2026, 9, 25, 12, 30, 0, 0, time.UTC),
+			Fingerprint:  "s3:fingerprint:index",
+		}, nil
+	}
+	var fetchedPage bool
+	fetchS3Object = func(got string) (io.ReadCloser, error) {
+		switch got {
+		case path:
+			fetchedPage = true
+			return io.NopCloser(strings.NewReader(content)), nil
+		case indexPath:
+			return io.NopCloser(strings.NewReader(index)), nil
+		default:
+			return nil, missingS3ObjectError()
+		}
+	}
+
+	e := &Engine{db: database, machine: "central"}
+	res := e.processFile(t.Context(), parser.DiscoveredFile{
+		Agent:             parser.AgentCodex,
+		Path:              path,
+		Machine:           "laptop",
+		SourceSize:        int64(len(content)),
+		SourceMtime:       mtime,
+		SourceFingerprint: "s3:fingerprint:page",
+	})
+
+	require.NoError(t, res.err)
+	require.False(t, res.skip, "the thread's renamed title bypasses the stored skip")
+	require.True(t, fetchedPage)
+	require.Len(t, res.results, 1)
+	assert.Equal(t, storedID, res.results[0].Session.ID)
+	assert.Equal(t, "New title", res.results[0].Session.SessionName)
 }

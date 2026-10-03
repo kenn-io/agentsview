@@ -1,11 +1,20 @@
+// Codex stores a thread/revert page as <thread>_<rollout>; its CLI and app open the thread.
+const CODEX_REVERT_PAGE_ID =
+  /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Map a stored Codex session key to the thread id the Codex CLI and app accept. */
+export function codexThreadId(id: string): string {
+  return CODEX_REVERT_PAGE_ID.exec(id)?.[1] ?? id;
+}
+
 /** Agent types that support CLI session resumption. */
 const RESUME_AGENTS: Record<string, (sessionId: string) => string> = Object.create(null);
 RESUME_AGENTS["claude"] = (id) => `claude --resume ${shellQuote(id)}`;
-RESUME_AGENTS["codex"] = (id) => `codex resume ${shellQuote(id)}`;
+RESUME_AGENTS["codex"] = (id) => `codex resume ${shellQuote(codexThreadId(id))}`;
 // TraeX ships the traex, traecli, and trae-cli aliases; use the shortest.
-RESUME_AGENTS["traex"] = (id) => `traex resume ${shellQuote(id)}`;
+RESUME_AGENTS["traex"] = (id) => `traex resume ${shellQuote(codexThreadId(id))}`;
 // The Augure Code agent's command is the vendor's own `augure` CLI.
-RESUME_AGENTS["augure-code"] = (id) => `augure resume ${shellQuote(id)}`;
+RESUME_AGENTS["augure-code"] = (id) => `augure resume ${shellQuote(codexThreadId(id))}`;
 RESUME_AGENTS["copilot"] = (id) => `copilot --resume=${shellQuote(id)}`;
 RESUME_AGENTS["cursor"] = (id) => `cursor agent --resume ${shellQuote(id)}`;
 RESUME_AGENTS["gemini"] = (id) => `gemini --resume ${shellQuote(id)}`;

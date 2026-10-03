@@ -152,6 +152,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     ended_at           TIMESTAMPTZ,
     deleted_at         TIMESTAMPTZ,
     source_deleted_at  TIMESTAMPTZ,
+    trash_includes_codex_pages BOOLEAN NOT NULL DEFAULT FALSE,
+    source_trash_includes_codex_pages BOOLEAN NOT NULL DEFAULT FALSE,
     deletion_cause     TEXT,
     message_count      INT NOT NULL DEFAULT 0,
     user_message_count INT NOT NULL DEFAULT 0,
@@ -305,6 +307,7 @@ CREATE TABLE IF NOT EXISTS starred_sessions (
 
 CREATE TABLE IF NOT EXISTS excluded_sessions (
     id         TEXT PRIMARY KEY,
+    include_codex_pages BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -2067,7 +2070,7 @@ func CheckSchemaCompat(
 	}
 
 	_, err = db.ExecContext(ctx,
-		`SELECT source_display_name, source_deleted_at, deletion_cause
+		`SELECT source_display_name, source_deleted_at, deletion_cause, source_trash_includes_codex_pages
 		 FROM sessions LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(
@@ -2076,7 +2079,7 @@ func CheckSchemaCompat(
 	}
 
 	_, err = db.ExecContext(ctx,
-		`SELECT id FROM excluded_sessions LIMIT 0`)
+		`SELECT id, include_codex_pages FROM excluded_sessions LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(
 			"excluded_sessions table missing required columns: %w", err,

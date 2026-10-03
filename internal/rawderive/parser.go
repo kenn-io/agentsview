@@ -205,16 +205,19 @@ func materializedProviderRoots(
 		local := filepath.Join(root, filepath.FromSlash(entry.Path))
 		candidate := root
 		_, id, valid := parser.CodexSessionPathInfo(candidate, local)
-		if !valid {
-			top, _, nested := strings.Cut(entry.Path, "/")
+		// Configured replay-parent roots may be nested anywhere inside
+		// the captured home. Find the first recognized flat or dated layout.
+		for remaining := entry.Path; !valid; {
+			top, rest, nested := strings.Cut(remaining, "/")
 			if !nested {
-				continue
+				break
 			}
-			candidate = filepath.Join(root, top)
+			candidate = filepath.Join(candidate, top)
+			remaining = rest
 			_, id, valid = parser.CodexSessionPathInfo(candidate, local)
-			if !valid {
-				continue
-			}
+		}
+		if !valid {
+			continue
 		}
 		if _, exists := seen[candidate]; !exists {
 			seen[candidate] = struct{}{}

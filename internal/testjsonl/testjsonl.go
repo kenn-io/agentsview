@@ -6,6 +6,7 @@ package testjsonl
 import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"maps"
 	"strings"
 )
 
@@ -147,6 +148,25 @@ func CodexSessionMetaJSON(
 		},
 	}
 	return mustMarshal(m)
+}
+
+// CodexSessionMetaWithFieldsJSON returns a Codex session_meta message whose
+// payload carries the given extra fields alongside the standard ones. Used for
+// meta shapes that only some rollouts carry, such as paginated history.
+func CodexSessionMetaWithFieldsJSON(
+	id, cwd, originator, timestamp string, extra map[string]any,
+) string {
+	payload := map[string]any{
+		"id":         id,
+		"cwd":        cwd,
+		"originator": originator,
+	}
+	maps.Copy(payload, extra)
+	return mustMarshal(map[string]any{
+		"type":      "session_meta",
+		"timestamp": timestamp,
+		"payload":   payload,
+	})
 }
 
 // CodexSubagentSessionMetaJSON returns the session_meta shape written by

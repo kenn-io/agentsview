@@ -2,8 +2,9 @@ package parser
 
 import (
 	"fmt"
+	"maps"
 	"path"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -62,47 +63,53 @@ func codexS3Scanner() S3SessionScanner {
 	}
 }
 
-// FindCodexS3ParentSessionURI locates one explicitly named parent rollout
-// under the same configured Codex S3 root as childURI. It lists metadata only;
-// callers decide whether and where to materialize the matching object.
-func FindCodexS3ParentSessionURI(
+// FindCodexS3ParentSessionURIs locates every rollout of an explicitly named
+// parent thread under the same configured Codex S3 root as childURI: the
+// thread's own rollout and each revert page (<thread>_<rollout>). A fork
+// replays history from all of them. Each session key yields one URI, the live
+// copy before an archived one. It lists metadata only; callers decide whether
+// and where to materialize the objects.
+func FindCodexS3ParentSessionURIs(
 	configuredRoot, childURI, parentID string,
-) (string, bool) {
+) []string {
 	if parentID == "" || strings.TrimSpace(parentID) != parentID ||
 		strings.ContainsAny(parentID, `/\\`) ||
 		CodexSessionUUIDFromFilename("rollout-x-"+parentID+".jsonl") != parentID {
-		return "", false
+		return nil
 	}
 	root, ok := codexS3RootURI(configuredRoot, childURI)
 	if !ok {
-		return "", false
+		return nil
 	}
 	objects, err := listS3Objects(root)
 	if err != nil {
-		return "", false
+		return nil
 	}
-	var matches []string
+	byKey := make(map[string]string)
 	for _, obj := range objects {
 		if _, withinRoot := s3RelativePath(root, obj.URI); !withinRoot {
 			continue
 		}
-		name := path.Base(obj.URI)
-		if CodexSessionUUIDFromFilename(name) == parentID {
-			matches = append(matches, obj.URI)
+		key := CodexSessionUUIDFromFilename(path.Base(obj.URI))
+		if CodexThreadIDFromSessionKey(key) != parentID {
+			continue
+		}
+		if current, seen := byKey[key]; !seen || codexS3URIPreferred(obj.URI, current) {
+			byKey[key] = obj.URI
 		}
 	}
-	if len(matches) == 0 {
-		return "", false
+	return slices.Sorted(maps.Values(byKey))
+}
+
+// codexS3URIPreferred reports whether a should replace b as the copy of one
+// session: live layout before archived, then the lexically smaller URI.
+func codexS3URIPreferred(a, b string) bool {
+	aArchived := strings.Contains(a, "/archived_sessions/")
+	bArchived := strings.Contains(b, "/archived_sessions/")
+	if aArchived != bArchived {
+		return !aArchived
 	}
-	sort.Slice(matches, func(i, j int) bool {
-		iArchived := strings.Contains(matches[i], "/archived_sessions/")
-		jArchived := strings.Contains(matches[j], "/archived_sessions/")
-		if iArchived != jArchived {
-			return !iArchived
-		}
-		return matches[i] < matches[j]
-	})
-	return matches[0], true
+	return a < b
 }
 
 func codexS3RootURI(configuredRoot, sessionURI string) (string, bool) {

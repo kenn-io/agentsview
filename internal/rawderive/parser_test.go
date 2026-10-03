@@ -662,6 +662,7 @@ func TestProviderParserHostedParseMatchesLocalCodexForkLineage(t *testing.T) {
 		withIndex    bool
 		parentLayout string
 		shadowParent bool
+		pageRootPath string
 	}{
 		{name: "sessions without session index", layout: "sessions"},
 		{name: "sessions with session index", layout: "sessions", withIndex: true},
@@ -670,11 +671,13 @@ func TestProviderParserHostedParseMatchesLocalCodexForkLineage(t *testing.T) {
 		{name: "parent in another home", layout: "sessions", parentLayout: "sessions", withIndex: true},
 		{name: "parent in another archive", layout: "archived_sessions", parentLayout: "archived_sessions"},
 		{name: "parent with custom roots", layout: "custom", parentLayout: "custom"},
-		{name: "first root wins over another parent copy", layout: "sessions", parentLayout: "sessions", shadowParent: true},
+		{name: "parent copies across roots", layout: "sessions", parentLayout: "sessions", shadowParent: true},
+		{name: "page in nested root", layout: "sessions", pageRootPath: "other/custom", withIndex: true},
+		{name: "page in nested sessions root", layout: "sessions", pageRootPath: "sessions/other/custom"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			testProviderParserHostedCodexForkLineage(t, tc.layout, tc.withIndex, tc.parentLayout, tc.shadowParent)
+			testProviderParserHostedCodexForkLineage(t, tc.layout, tc.withIndex, tc.parentLayout, tc.shadowParent, tc.pageRootPath)
 		})
 	}
 }
@@ -797,6 +800,7 @@ func testProviderParserHostedCodexForkLineage(
 	withIndex bool,
 	parentLayout string,
 	shadowParent bool,
+	pageRootPath string,
 ) {
 	t.Helper()
 
@@ -813,6 +817,7 @@ func testProviderParserHostedCodexForkLineage(
 	const parentID = "11111111-1111-4111-8111-111111111111"
 	const childID = "22222222-2222-4222-8222-222222222222"
 	const parentTurnID = "parent-turn"
+	const pageID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 	const childTurnID = "child-turn"
 	parentPath := filepath.Join(parentRoot,
 		"rollout-2026-09-08T10-00-00-"+parentID+".jsonl")
@@ -830,6 +835,29 @@ func testProviderParserHostedCodexForkLineage(
 		testjsonl.CodexSessionMetaJSON(parentID, "/work/project", "codex_cli_rs", "2026-09-08T10:00:00Z"),
 		testjsonl.CodexTurnContextWithIDJSON("gpt-5.4", parentTurnID, "2026-09-08T10:00:01Z"),
 	)), 0o600))
+	pageRoot := parentRoot
+	if shadowParent {
+		pageRoot = clientRoot
+	}
+	if pageRootPath != "" {
+		pageRoot = filepath.Join(clientBase, filepath.FromSlash(pageRootPath))
+		roots = append(roots, pageRoot)
+	}
+	pagePath := filepath.Join(pageRoot,
+		"rollout-2026-09-09T09-00-00-"+parentID+"_"+pageID+".jsonl")
+	if parentLayout == "sessions" {
+		pagePath = filepath.Join(pageRoot, "2026", "09", "09", filepath.Base(pagePath))
+	}
+	require.NoError(t, os.MkdirAll(filepath.Dir(pagePath), 0o755))
+	require.NoError(t, os.WriteFile(pagePath, []byte(testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaWithFieldsJSON(parentID, "/work/project", "codex_cli_rs", "2026-09-09T09:00:00Z", map[string]any{
+			"history_mode": "paginated",
+			"history_base": map[string]any{"thread_id": parentID, "end_ordinal_exclusive": 3},
+		}),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5.4", "page-turn", "2026-09-09T09:00:01Z"),
+	)), 0o600))
+	// An overlapping flat root must not capture the same page twice.
+	roots = append(roots, filepath.Dir(pagePath))
 	require.NoError(t, os.WriteFile(childPath, []byte(testjsonl.JoinJSONL(
 		testjsonl.CodexForkedSessionMetaJSON(
 			childID, parentID, "/work/project", "codex_cli_rs", "2026-09-09T10:00:00Z",
@@ -837,13 +865,18 @@ func testProviderParserHostedCodexForkLineage(
 		testjsonl.CodexTurnContextWithIDJSON("gpt-5.4", parentTurnID, "2026-09-09T10:00:01Z"),
 		testjsonl.CodexMsgJSON("user", "replayed parent task", "2026-09-09T10:00:02Z"),
 		testjsonl.CodexMsgJSON("assistant", "replayed parent answer", "2026-09-09T10:00:03Z"),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5.4", "page-turn", "2026-09-09T10:00:04Z"),
+		testjsonl.CodexMsgJSON("user", "replayed page task", "2026-09-09T10:00:05Z"),
+		testjsonl.CodexMsgJSON("assistant", "replayed page answer", "2026-09-09T10:00:06Z"),
+		testjsonl.CodexTokenCountJSON("2026-09-09T10:00:07Z", 50000, 9000, 0),
 		testjsonl.CodexTurnContextWithIDJSON("gpt-5.4", childTurnID, "2026-09-09T10:01:00Z"),
 		testjsonl.CodexMsgJSON("user", "child task", "2026-09-09T10:01:01Z"),
 		testjsonl.CodexMsgJSON("assistant", "child answer", "2026-09-09T10:01:02Z"),
+		testjsonl.CodexTokenCountJSON("2026-09-09T10:01:03Z", 10000, 500, 0),
 	)), 0o600))
 	if shadowParent {
 		// The same parent filename in a later configured root carries different
-		// turns. Capture must select the same first-root copy as local parsing.
+		// turns. Capture must retain both copies, just like local parsing.
 		shadowPath := filepath.Join(filepath.Dir(childPath), filepath.Base(parentPath))
 		require.NoError(t, os.WriteFile(shadowPath, []byte(testjsonl.JoinJSONL(
 			testjsonl.CodexSessionMetaJSON(parentID, "/work/project", "codex_cli_rs", "2026-09-08T10:00:00Z"),
@@ -871,6 +904,7 @@ func testProviderParserHostedCodexForkLineage(
 	require.NoError(t, err)
 	require.Len(t, localOutcome.Results, 1)
 	require.Len(t, localOutcome.Results[0].Result.Messages, 2)
+	assert.Equal(t, 500, localOutcome.Results[0].Result.Session.TotalOutputTokens)
 	assert.Equal(t, parser.DataVersionCurrent, localOutcome.Results[0].DataVersion)
 
 	manifest, objects := manifestFromCapturePlan(
@@ -907,6 +941,7 @@ func testProviderParserHostedCodexForkLineage(
 	require.Len(t, hostedResult.Result.Messages, 2)
 	assert.Equal(t, "child task", hostedResult.Result.Messages[0].Content)
 	assert.Equal(t, "child answer", hostedResult.Result.Messages[1].Content)
+	assert.Equal(t, 500, hostedResult.Result.Session.TotalOutputTokens)
 }
 
 func TestProviderParserRejectsMiskeyedCodexManifest(t *testing.T) {

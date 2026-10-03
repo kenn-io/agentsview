@@ -61,6 +61,10 @@ var resumeAgents = map[string]string{
 const syntheticModel = "<synthetic>"
 
 func resumeCommand(agent, tmpl, rawID, model string) string {
+	if agent == "codex" || agent == "traex" || agent == "augure-code" {
+		// Codex stores a revert page as <thread>_<rollout>; the CLI resumes the thread.
+		rawID = parser.CodexThreadIDFromSessionKey(rawID)
+	}
 	cmd := fmt.Sprintf(tmpl, shellQuote(rawID))
 	if !resumeAgentNeedsModel(agent) {
 		return cmd

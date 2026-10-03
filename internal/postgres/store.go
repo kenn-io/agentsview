@@ -486,23 +486,46 @@ func (s *Store) SoftDeleteSessions(ctx context.Context, ids []string) (int, erro
 // RestoreSession restores a trashed session and invalidates source freshness
 // so changes made while it was trashed are parsed.
 func (s *Store) RestoreSession(ctx context.Context, id string) (int64, error) {
-	res, err := s.pg.ExecContext(ctx,
-		`UPDATE sessions
-		 SET deleted_at = NULL,
-		     deletion_cause = NULL,
-		     data_version = $2,
-		     updated_at = NOW()
-		 WHERE id = $1 AND deleted_at IS NOT NULL`,
-		id, max(db.CurrentDataVersion()-1, 0),
-	)
+	tx, err := s.pg.BeginTx(ctx, nil)
 	if err != nil {
-		return 0, mapPGWriteError(
-			"restoring session "+id, err,
-		)
+		return 0, mapPGWriteError("begin restore transaction", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	n, err := restorePGSessionTx(ctx, tx, id)
+	if err != nil {
+		return 0, mapPGWriteError("restoring session "+id, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, mapPGWriteError("committing restore transaction", err)
+	}
+	return n, nil
+}
+
+// Restoring one member ends the old whole-thread trash action. Leave other
+// materialized members in trash, and retain the source scope baseline so a
+// subsequent push cannot undo this PostgreSQL curation decision.
+func restorePGSessionTx(ctx context.Context, tx *sql.Tx, id string) (int64, error) {
+	res, err := tx.ExecContext(ctx, `UPDATE sessions
+		SET deleted_at = NULL, deletion_cause = NULL,
+			data_version = $2, updated_at = NOW()
+		WHERE id = $1 AND deleted_at IS NOT NULL`,
+		id, max(db.CurrentDataVersion()-1, 0))
+	if err != nil {
+		return 0, err
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return 0, fmt.Errorf("counting restored session %s: %w", id, err)
+		return 0, err
+	}
+	if n > 0 {
+		_, err = tx.ExecContext(ctx, `UPDATE sessions
+			SET trash_includes_codex_pages = FALSE, updated_at = NOW()
+			WHERE provenance_kind = 'legacy' AND trash_includes_codex_pages
+				AND (id = $1 OR (left(right($1, 37), 1) = '_'
+					AND id = left($1, -37)))`, id)
+		if err != nil {
+			return 0, err
+		}
 	}
 	return n, nil
 }
@@ -520,7 +543,7 @@ func (s *Store) DeleteSessionIfTrashed(ctx context.Context,
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	sessionIDs, excludedIDs, err := readPGTrashedSessionExclusions(
+	sessionIDs, excludedIDs, scopedIDs, err := readPGTrashedSessionExclusions(
 		ctx, tx,
 		"s.id = $1 AND s.deleted_at IS NOT NULL",
 		id,
@@ -535,7 +558,7 @@ func (s *Store) DeleteSessionIfTrashed(ctx context.Context,
 		return 0, nil
 	}
 
-	if err := insertPGExcludedSessionIDs(ctx, tx, excludedIDs); err != nil {
+	if err := insertPGTrashedSessionExclusions(ctx, tx, excludedIDs, scopedIDs); err != nil {
 		return 0, mapPGWriteError(
 			"recording excluded trashed session "+id,
 			err,
@@ -594,7 +617,7 @@ func (s *Store) emptyTrash(ctx context.Context, legacyOnly bool) (int, error) {
 	if legacyOnly {
 		where += " AND s.provenance_kind='legacy'"
 	}
-	sessionIDs, excludedIDs, err := readPGTrashedSessionExclusions(
+	sessionIDs, excludedIDs, scopedIDs, err := readPGTrashedSessionExclusions(
 		ctx, tx, where,
 	)
 	if err != nil {
@@ -607,7 +630,7 @@ func (s *Store) emptyTrash(ctx context.Context, legacyOnly bool) (int, error) {
 		return 0, nil
 	}
 
-	if err := insertPGExcludedSessionIDs(ctx, tx, excludedIDs); err != nil {
+	if err := insertPGTrashedSessionExclusions(ctx, tx, excludedIDs, scopedIDs); err != nil {
 		return 0, mapPGWriteError("recording excluded trashed sessions", err)
 	}
 
@@ -631,9 +654,9 @@ func (s *Store) emptyTrash(ctx context.Context, legacyOnly bool) (int, error) {
 
 func readPGTrashedSessionExclusions(
 	ctx context.Context, tx *sql.Tx, where string, args ...any,
-) ([]string, []string, error) {
+) ([]string, []string, []string, error) {
 	rows, err := tx.QueryContext(ctx,
-		`SELECT s.id, sa.alias_id, rsa.session_id, rsaa.alias_id
+		`SELECT s.id, sa.alias_id, rsa.session_id, rsaa.alias_id, s.trash_includes_codex_pages
 		 FROM sessions s
 		 LEFT JOIN session_aliases sa ON sa.session_id = s.id
 		 LEFT JOIN session_aliases rsa ON rsa.alias_id = s.id
@@ -643,11 +666,12 @@ func readPGTrashedSessionExclusions(
 		args...,
 	)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	defer rows.Close()
 
 	sessionIDs := []string{}
+	scopedIDs := []string{}
 	excludedIDs := []string{}
 	sessionSeen := map[string]struct{}{}
 	excludedSeen := map[string]struct{}{}
@@ -663,17 +687,21 @@ func readPGTrashedSessionExclusions(
 	}
 	for rows.Next() {
 		var id string
+		var scope bool
 		var aliasID sql.NullString
 		var reverseSessionID sql.NullString
 		var reverseAliasID sql.NullString
 		if err := rows.Scan(
-			&id, &aliasID, &reverseSessionID, &reverseAliasID,
+			&id, &aliasID, &reverseSessionID, &reverseAliasID, &scope,
 		); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		if _, ok := sessionSeen[id]; !ok {
 			sessionSeen[id] = struct{}{}
 			sessionIDs = append(sessionIDs, id)
+			if scope {
+				scopedIDs = append(scopedIDs, id)
+			}
 		}
 		addExcludedID(id)
 		if aliasID.Valid {
@@ -687,9 +715,33 @@ func readPGTrashedSessionExclusions(
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return sessionIDs, excludedIDs, nil
+	rows.Close()
+	if len(scopedIDs) > 0 {
+		children, err := tx.QueryContext(ctx, `SELECT id FROM sessions
+			WHERE provenance_kind = 'legacy' AND left(right(id, 37), 1) = '_'
+				AND left(id, -37) = ANY($1)
+			ORDER BY id FOR UPDATE`, scopedIDs)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		defer children.Close()
+		for children.Next() {
+			var id string
+			if err := children.Scan(&id); err != nil {
+				return nil, nil, nil, err
+			}
+			if _, ok := sessionSeen[id]; !ok {
+				sessionIDs = append(sessionIDs, id)
+			}
+			addExcludedID(id)
+		}
+		if err := children.Err(); err != nil {
+			return nil, nil, nil, err
+		}
+	}
+	return sessionIDs, excludedIDs, scopedIDs, nil
 }
 
 func deletePGTrashedSessionRows(
@@ -700,7 +752,7 @@ func deletePGTrashedSessionRows(
 	}
 	res, err := tx.ExecContext(ctx,
 		`DELETE FROM sessions
-		 WHERE id = ANY($1) AND deleted_at IS NOT NULL`,
+		 WHERE id = ANY($1)`,
 		ids,
 	)
 	if err != nil {

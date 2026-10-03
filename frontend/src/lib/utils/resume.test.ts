@@ -81,6 +81,19 @@ describe("buildResumeCommand", () => {
     );
   });
 
+  it("resumes the thread of a Codex revert page", () => {
+    const thread = "11111111-1111-4111-8111-111111111111";
+    const page = `${thread}_22222222-2222-4222-8222-222222222222`;
+    expect(buildResumeCommand("codex", `codex:${page}`)).toBe(`codex resume ${thread}`);
+    expect(buildResumeCommand("traex", `traex:${page}`)).toBe(`traex resume ${thread}`);
+    expect(buildResumeCommand("augure-code", `augure-code:${page}`)).toBe(
+      `augure resume ${thread}`,
+    );
+    expect(buildResumeCommand("codex", `codex:${thread}`)).toBe(`codex resume ${thread}`);
+    expect(buildResumeCommand("augure-code", "augure-code:run_1")).toBe("augure resume run_1");
+    expect(buildResumeCommand("claude", page)).toBe(`claude --resume ${page}`);
+  });
+
   it("pins Claude and Codex models with shell quoting", () => {
     expect(buildResumeCommand("claude", "run-1", { model: "claude sonnet" })).toBe(
       "claude --resume run-1 --model 'claude sonnet'",

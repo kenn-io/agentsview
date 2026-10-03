@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -143,7 +144,7 @@ func DBLiveActivityLookup(database *db.DB) LiveActivityLookup {
 		ctx context.Context,
 		fullSessionID string,
 	) (LiveActivitySource, bool, error) {
-		session, err := database.GetSessionFull(ctx, fullSessionID)
+		session, err := liveActivitySession(ctx, database, fullSessionID)
 		if err != nil {
 			return LiveActivitySource{}, false, err
 		}
@@ -855,4 +856,54 @@ func sortedLiveActivityKeys[V any](values map[string]V) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// liveActivitySession returns the stored session a hint names. Codex hints
+// name a thread, but after an undo Codex writes to the thread's newest revert
+// page (<thread>_<rollout>). Of the thread's rows whose file still exists, the
+// one written most recently on disk is returned. Stored mtimes cannot decide
+// this: Codex rows fold in session_index.jsonl's mtime, which a rename sets on
+// every file of the thread at once.
+func liveActivitySession(
+	ctx context.Context, database *db.DB, id string,
+) (*db.Session, error) {
+	session, err := database.GetSessionFull(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	agent, _ := parser.AgentByPrefix(id)
+	if session != nil {
+		agent.Type = parser.AgentType(session.Agent)
+	}
+	if !ingest.IsCodexFormatAgent(agent.Type) {
+		return session, nil
+	}
+	pageIDs, err := database.CodexRevertPageSessionIDs(ctx, id)
+	if err != nil || len(pageIDs) == 0 {
+		return session, err
+	}
+	newestMtime := sessionFileModTime(session)
+	for _, pageID := range pageIDs {
+		page, err := database.GetSessionFull(ctx, pageID)
+		if err != nil {
+			return nil, err
+		}
+		if mtime := sessionFileModTime(page); mtime > newestMtime {
+			session, newestMtime = page, mtime
+		}
+	}
+	return session, nil
+}
+
+// sessionFileModTime returns the on-disk mtime of a session's file, or -1
+// when the session has no file or the file cannot be read.
+func sessionFileModTime(session *db.Session) int64 {
+	if session == nil || session.FilePath == nil {
+		return -1
+	}
+	info, err := os.Stat(*session.FilePath)
+	if err != nil {
+		return -1
+	}
+	return info.ModTime().UnixNano()
 }
