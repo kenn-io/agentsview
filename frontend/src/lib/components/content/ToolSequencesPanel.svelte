@@ -9,10 +9,10 @@
   } from "../../api/generated/index.js";
   import { getLocale, m } from "../../i18n/index.js";
   import { ChevronRightIcon, InfoIcon, WorkflowIcon } from "../../icons.js";
-  import { router } from "../../stores/router.svelte.js";
-  import { ui } from "../../stores/ui.svelte.js";
-  import { formatDuration } from "../../utils/duration.js";
+  import { TOOL_OUTCOMES, outcomeLabel, type ToolOutcome } from "../../utils/tool-outcomes.js";
   import { summarizeToolInputPreview } from "../../utils/tool-summary.js";
+  import ToolCallRow from "./ToolCallRow.svelte";
+  import ToolOutcomeDot from "./ToolOutcomeDot.svelte";
 
   interface Props {
     data: SessionToolSequencesResponse | null;
@@ -21,6 +21,8 @@
     failed: boolean;
     unavailable?: boolean;
     onretry?: (() => void) | undefined;
+    /** Drops the panel's own background and scroll so a page section can host it. */
+    embedded?: boolean;
     /** The session's live timing, the same snapshot the timing view shows. */
     timing?: DbSessionTiming | null;
     /** True only when data comes from the transcript revision the message list holds. */
@@ -34,21 +36,14 @@
     failed,
     unavailable = false,
     onretry = undefined,
+    embedded = false,
     timing = null,
     linked = false,
   }: Props = $props();
 
-  type Outcome = SessionToolSequenceCall["outcome"];
   type Ending = SessionToolSequence["ending"];
 
   const uid = $props.id();
-  const OUTCOMES: Outcome[] = ["errored", "empty", "content", "unknown"];
-  const OUTCOME_TONES: Record<Outcome, string | undefined> = {
-    errored: "danger",
-    empty: "warning",
-    content: "success",
-    unknown: undefined,
-  };
   const ENDING_TONES: Record<Ending, ChipTone> = {
     recovered: "success",
     abandoned: "danger",
@@ -102,15 +97,6 @@
     }
   }
 
-  function outcomeLabel(outcome: Outcome): string {
-    switch (outcome) {
-      case "errored": return m.tool_sequences_outcome_errored();
-      case "empty": return m.tool_sequences_outcome_empty();
-      case "content": return m.tool_sequences_outcome_content();
-      case "unknown": return m.tool_sequences_outcome_unknown();
-    }
-  }
-
   function callTag(call: SessionToolSequenceCall): { label: string; title?: string } | null {
     if (call.repeat === "identical") return { label: m.tool_sequences_repeat_identical() };
     if (call.repeat === "near_identical") {
@@ -131,7 +117,7 @@
     return flags;
   }
 
-  type Step = { tool: string; outcome: Outcome; count: number } | { more: number };
+  type Step = { tool: string; outcome: ToolOutcome; count: number } | { more: number };
 
   // The server keeps the first calls and the last one, so omitted calls sit before the last shown call.
   function hiddenBefore(sequence: SessionToolSequence): number {
@@ -160,33 +146,14 @@
     return m.tool_sequences_messages_range({ first, last });
   }
 
-  function resultSummary(call: SessionToolSequenceCall): string | null {
-    return call.result_bytes === null ? null : m.tool_sequences_byte_count(countArgs(call.result_bytes));
-  }
-
   function previewNote(total: number, omitted: number) {
     return m.tool_sequences_preview_shows({ ...countArgs(total), shownLabel: (total - omitted).toLocaleString(getLocale()) });
   }
-
-  function jumpHref(call: SessionToolSequenceCall): string {
-    // The revision rides along so a link opened in another tab is checked against the transcript it loads.
-    const rev = data?.transcript_revision;
-    return router.buildSessionHref(sessionId, { msg: String(call.ordinal), ...(rev ? { rev } : {}) });
-  }
-
-  function jumpToCall(event: MouseEvent, call: SessionToolSequenceCall) {
-    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-    event.preventDefault();
-    ui.scrollToOrdinal(call.ordinal, sessionId, data?.transcript_revision);
-  }
 </script>
-
-{#snippet dot(outcome: Outcome)}
-  <i class="dot" class:hollow={outcome === "unknown"} data-kit-tone={OUTCOME_TONES[outcome]} aria-hidden="true"></i>
-{/snippet}
 
 <section
   class="tool-sequences-panel"
+  class:embedded
   aria-labelledby="{uid}-title"
   aria-busy={loading}
 >
@@ -213,8 +180,8 @@
     </div>
     {#if data && !failed && data.sequences.length > 0}
       <ul class="legend" aria-label={m.tool_sequences_legend()}>
-        {#each OUTCOMES as outcome (outcome)}
-          <li>{@render dot(outcome)}{outcomeLabel(outcome)}</li>
+        {#each TOOL_OUTCOMES as outcome (outcome)}
+          <li><ToolOutcomeDot {outcome} />{outcomeLabel(outcome)}</li>
         {/each}
       </ul>
     {/if}
@@ -263,7 +230,7 @@
                     <span class="step more">{m.tool_sequences_more_calls(countArgs(step.more))}</span>
                   {:else}
                     <span class="step">
-                      {@render dot(step.outcome)}{step.tool}<span class="kit-sr-only">, {outcomeLabel(step.outcome)}</span>{#if step.count > 1}<span class="times">×{step.count}</span>{/if}
+                      <ToolOutcomeDot outcome={step.outcome} />{step.tool}<span class="kit-sr-only">, {outcomeLabel(step.outcome)}</span>{#if step.count > 1}<span class="times">×{step.count}</span>{/if}
                     </span>
                   {/if}
                 {/each}
@@ -281,9 +248,6 @@
                 {#each sequence.calls as call, callIndex (`${call.ordinal}-${call.call_index}-${call.tool_use_id}`)}
                   {@const callKey = `${key}-${call.ordinal}-${call.call_index}`}
                   {@const callOpen = openCalls.has(callKey)}
-                  {@const tag = callTag(call)}
-                  {@const size = resultSummary(call)}
-                  {@const duration = durationOf(call)}
                   {#if callIndex === gap}
                     <p class="omit">
                       <InfoIcon size={12} aria-hidden="true" />
@@ -294,96 +258,69 @@
                       })}
                     </p>
                   {/if}
-                  <div class="call" class:open={callOpen} data-kit-tone={OUTCOME_TONES[call.outcome]}>
-                    <div class="call-line">
-                      <button
-                        type="button"
-                        class="call-row"
-                        aria-expanded={callOpen}
-                        aria-controls={callOpen ? `${uid}-call-${index}-${callIndex}` : undefined}
-                        onclick={() => toggle(openCalls, callKey)}
-                      >
-                        <ChevronRightIcon class="chev" size={12} aria-hidden="true" />
-                        <span class="tool">{@render dot(call.outcome)}<span class="name" title={call.tool_name}>{call.tool_name}</span><span class="kit-sr-only">, {m.tool_sequences_message({ ordinal: call.ordinal })}</span></span>
-                        <span class="input" title={call.input_preview}>
-                          {call.input_preview ? summarizeToolInputPreview(call.input_preview) : m.tool_sequences_no_input()}
-                          {#if tag}<span class="tag" title={tag.title}>{tag.label}</span>{/if}
-                        </span>
-                        <span class="res"><b>{outcomeLabel(call.outcome)}</b>{#if size}{` · ${size}`}{/if}</span>
-                        {#if duration === null}
-                          <span class="dur" title={m.tool_sequences_not_measured()}>
-                            <span aria-hidden="true">—</span><span class="kit-sr-only">{m.tool_sequences_not_measured()}</span>
-                          </span>
-                        {:else}
-                          <span class="dur">{formatDuration(duration)}</span>
-                        {/if}
-                      </button>
-                      {#if linked}
-                        <a
-                          class="jump"
-                          href={jumpHref(call)}
-                          aria-label={m.tool_sequences_jump_label({ ordinal: call.ordinal, tool: call.tool_name })}
-                          onclick={(event) => jumpToCall(event, call)}
-                        >{m.tool_sequences_message({ ordinal: call.ordinal })}<span aria-hidden="true"> ↗</span></a>
-                      {:else}
-                        <!-- The transcript on screen is a different revision, so the ordinal could name another message. -->
-                        <span class="jump unlinked">{m.tool_sequences_message({ ordinal: call.ordinal })}</span>
-                      {/if}
-                    </div>
-                    {#if callOpen}
-                      <div class="detail" id="{uid}-call-{index}-{callIndex}">
+                  <ToolCallRow
+                    {sessionId}
+                    ordinal={call.ordinal}
+                    tool={call.tool_name}
+                    input={call.input_preview ? summarizeToolInputPreview(call.input_preview) : m.tool_sequences_no_input()}
+                    inputTitle={call.input_preview}
+                    outcome={call.outcome}
+                    tag={callTag(call)}
+                    resultBytes={call.result_bytes}
+                    durationMs={durationOf(call)}
+                    {linked}
+                    revision={data.transcript_revision}
+                    expanded={callOpen}
+                    detailId="{uid}-call-{index}-{callIndex}"
+                    ontoggle={() => toggle(openCalls, callKey)}
+                  >
+                    <div class="detail" id="{uid}-call-{index}-{callIndex}">
                         <dl class="evidence">
-                          <!-- The call row drops its duration column on narrow panels, so the details carry it there. -->
-                          <div class="ev ev-duration">
-                            <dt>{m.tool_sequences_duration()}</dt>
-                            <dd>{duration === null ? m.tool_sequences_not_measured() : formatDuration(duration)}</dd>
-                          </div>
-                          <div class="ev">
-                            <dt>{m.tool_sequences_input()}</dt>
-                            <dd>
-                              {#if call.input_preview}
-                                <!-- svelte-ignore a11y_no_noninteractive_tabindex (scrollable preview needs keyboard access) -->
-                                <pre tabindex="0" role="region" aria-label={m.tool_sequences_input()}>{call.input_preview}</pre>
-                              {:else}
-                                <p class="none">{m.tool_sequences_no_input()}</p>
-                              {/if}
-                              {#if call.input_preview && call.input_omitted_bytes > 0}
-                                <p class="note">
-                                  {previewNote(call.input_bytes, call.input_omitted_bytes)}
-                                  <span class="cut">{m.tool_sequences_full_input_in_message({ ordinal: call.ordinal })}</span>
-                                </p>
-                              {/if}
-                            </dd>
-                          </div>
-                          <div class="ev">
-                            <dt>{m.tool_sequences_result()}</dt>
-                            <dd>
-                              {#if call.result_content_unknown && call.outcome === "unknown"}
-                                <p class="none">{m.tool_sequences_result_unknown()}</p>
-                              {/if}
-                              {#if call.result_preview}
-                                <!-- svelte-ignore a11y_no_noninteractive_tabindex (scrollable preview needs keyboard access) -->
-                                <pre tabindex="0" role="region" aria-label={m.tool_sequences_result()}>{call.result_preview}</pre>
-                              {:else if call.result_bytes !== null && call.result_bytes > 0}
-                                <p class="none">{m.tool_sequences_result_unavailable(countArgs(call.result_bytes))}</p>
-                              {:else if call.result_bytes === 0}
-                                <p class="none">{m.tool_sequences_result_empty()}</p>
-                              {:else if !(call.result_content_unknown && call.outcome === "unknown")}
-                                <p class="none">{m.tool_sequences_result_size_unknown()}</p>
-                              {/if}
-                              {#if call.result_preview && call.result_bytes !== null && call.result_omitted_bytes !== null && call.result_omitted_bytes > 0}
-                                <p class="note">
-                                  {previewNote(call.result_bytes, call.result_omitted_bytes)}
-                                  <span class="cut">{m.tool_sequences_full_result_in_message({ ordinal: call.ordinal })}</span>
-                                </p>
-                              {/if}
-                            </dd>
-                          </div>
+                        <div class="ev">
+                          <dt>{m.tool_sequences_input()}</dt>
+                          <dd>
+                            {#if call.input_preview}
+                              <!-- svelte-ignore a11y_no_noninteractive_tabindex (scrollable preview needs keyboard access) -->
+                              <pre tabindex="0" role="region" aria-label={m.tool_sequences_input()}>{call.input_preview}</pre>
+                            {:else}
+                              <p class="none">{m.tool_sequences_no_input()}</p>
+                            {/if}
+                            {#if call.input_preview && call.input_omitted_bytes > 0}
+                              <p class="note">
+                                {previewNote(call.input_bytes, call.input_omitted_bytes)}
+                                <span class="cut">{m.tool_sequences_full_input_in_message({ ordinal: call.ordinal })}</span>
+                              </p>
+                            {/if}
+                          </dd>
+                        </div>
+                        <div class="ev">
+                          <dt>{m.tool_sequences_result()}</dt>
+                          <dd>
+                            {#if call.result_content_unknown && call.outcome === "unknown"}
+                              <p class="none">{m.tool_sequences_result_unknown()}</p>
+                            {/if}
+                            {#if call.result_preview}
+                              <!-- svelte-ignore a11y_no_noninteractive_tabindex (scrollable preview needs keyboard access) -->
+                              <pre tabindex="0" role="region" aria-label={m.tool_sequences_result()}>{call.result_preview}</pre>
+                            {:else if call.result_bytes !== null && call.result_bytes > 0}
+                              <p class="none">{m.tool_sequences_result_unavailable(countArgs(call.result_bytes))}</p>
+                            {:else if call.result_bytes === 0}
+                              <p class="none">{m.tool_sequences_result_empty()}</p>
+                            {:else if !(call.result_content_unknown && call.outcome === "unknown")}
+                              <p class="none">{m.tool_sequences_result_size_unknown()}</p>
+                            {/if}
+                            {#if call.result_preview && call.result_bytes !== null && call.result_omitted_bytes !== null && call.result_omitted_bytes > 0}
+                              <p class="note">
+                                {previewNote(call.result_bytes, call.result_omitted_bytes)}
+                                <span class="cut">{m.tool_sequences_full_result_in_message({ ordinal: call.ordinal })}</span>
+                              </p>
+                            {/if}
+                          </dd>
+                        </div>
                         </dl>
                         <p class="idline">{call.tool_use_id || m.tool_sequences_missing_identity()}</p>
-                      </div>
-                    {/if}
-                  </div>
+                    </div>
+                  </ToolCallRow>
                 {/each}
                 {#if sequence.omitted_calls > 0 && gap < 0}
                   <p class="omit">
@@ -432,6 +369,14 @@
     border-bottom: 1px solid var(--border-default);
     color: var(--text-primary);
     font-size: var(--font-size-sm);
+  }
+
+  .tool-sequences-panel.embedded {
+    max-height: none;
+    overflow: visible;
+    padding: 0;
+    background: none;
+    border-bottom: 0;
   }
 
   .panel-head {
@@ -491,22 +436,6 @@
     gap: var(--space-2);
   }
 
-  .dot {
-    display: inline-block;
-    flex-shrink: 0;
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--kit-tone, var(--text-muted));
-  }
-
-  .dot.hollow {
-    width: 7px;
-    height: 7px;
-    border: 1.5px solid var(--text-muted);
-    background: transparent;
-  }
-
   .box {
     min-width: 0;
     overflow: hidden;
@@ -543,22 +472,19 @@
   }
 
   .sequence-row:focus-visible,
-  .call-row:focus-visible,
-  .jump:focus-visible,
   pre:focus-visible {
     outline: var(--focus-ring);
     outline-offset: -2px;
     border-radius: var(--radius-sm);
   }
 
-  :global(.tool-sequences-panel .chev) {
+  .sequence-row :global(.chev) {
     flex-shrink: 0;
     color: var(--text-muted);
     transition: transform 0.18s ease;
   }
 
-  .open > .sequence-row :global(.chev),
-  .call.open .call-row :global(.chev) {
+  .open > .sequence-row :global(.chev) {
     transform: rotate(90deg);
   }
 
@@ -624,111 +550,6 @@
     padding: 0 10px var(--space-4) 30px;
   }
 
-  .call {
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-sm);
-    background: var(--bg-primary);
-    transition: border-color 0.15s, background 0.15s;
-  }
-
-  .call:hover {
-    border-color: var(--border-default);
-    background: var(--bg-surface-hover);
-  }
-
-  .call.open {
-    border-color: var(--border-default);
-    background: var(--bg-surface);
-  }
-
-  .call-line {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: center;
-    gap: var(--space-4);
-    padding-right: var(--space-4);
-  }
-
-  .call-row {
-    display: grid;
-    grid-template-columns: 12px 6.5rem minmax(0, 1fr) auto 3.5em;
-    align-items: center;
-    gap: var(--space-4);
-    min-width: 0;
-    /* Right padding keeps the inset focus ring off the last column. */
-    padding: var(--space-2) var(--space-3) var(--space-2) var(--space-4);
-    font-size: var(--font-size-xs);
-  }
-
-  .tool {
-    display: flex;
-    align-items: center;
-    gap: var(--space-3);
-    min-width: 0;
-    color: color-mix(in srgb, var(--accent-amber) 72%, var(--text-primary));
-    font-family: var(--font-mono);
-    font-weight: 500;
-  }
-
-  .name {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .input {
-    overflow: hidden;
-    color: var(--text-secondary);
-    font-family: var(--font-mono);
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .tag {
-    display: inline-block;
-    margin-left: var(--space-3);
-    padding: 0 5px;
-    border-radius: 3px;
-    background: var(--bg-inset);
-    color: var(--text-muted);
-    font-family: var(--font-sans);
-    font-size: var(--font-size-2xs);
-  }
-
-  .res {
-    color: var(--text-muted);
-    white-space: nowrap;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .res b {
-    color: var(--kit-tone-ink, var(--text-secondary));
-    font-weight: 600;
-  }
-
-  .dur {
-    min-width: 3.5em;
-    color: var(--text-muted);
-    font-family: var(--font-mono);
-    font-size: var(--font-size-2xs);
-    text-align: right;
-  }
-
-  .jump {
-    color: var(--accent-blue);
-    font-size: var(--font-size-xs);
-    text-decoration: none;
-    white-space: nowrap;
-  }
-
-  a.jump:hover {
-    text-decoration: underline;
-  }
-
-  .jump.unlinked {
-    color: var(--text-muted);
-  }
-
   .detail,
   .evidence {
     display: grid;
@@ -745,14 +566,6 @@
     grid-template-columns: 3.5rem minmax(0, 1fr);
     gap: var(--space-4);
     font-size: var(--font-size-xs);
-  }
-
-  .ev-duration {
-    display: none;
-  }
-
-  .ev-duration dd {
-    padding-top: var(--space-2);
   }
 
   dt {
@@ -873,22 +686,8 @@
       animation: none;
     }
 
-    :global(.tool-sequences-panel .chev) {
+    .sequence-row :global(.chev) {
       transition: none;
-    }
-  }
-
-  @container (max-width: 820px) {
-    .call-row {
-      grid-template-columns: 12px 5.5rem minmax(0, 1fr) auto;
-    }
-
-    .dur {
-      display: none;
-    }
-
-    .ev-duration {
-      display: grid;
     }
   }
 
@@ -921,25 +720,6 @@
 
     .calls {
       padding-left: 10px;
-    }
-
-    .call-line {
-      align-items: start;
-    }
-
-    /* fit-content keeps a long MCP tool name from squeezing out the input. */
-    .call-row {
-      grid-template-columns: 12px fit-content(40%) minmax(0, 1fr);
-      row-gap: var(--space-1);
-    }
-
-    .res {
-      grid-column: 2 / 4;
-      white-space: normal;
-    }
-
-    .jump {
-      padding-top: var(--space-2);
     }
 
     .detail {

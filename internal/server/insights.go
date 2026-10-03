@@ -18,9 +18,10 @@ import (
 )
 
 var validInsightTypes = map[string]bool{
-	"daily_activity":   true,
-	"agent_analysis":   true,
-	insight.CannedType: true,
+	"daily_activity":              true,
+	"agent_analysis":              true,
+	insight.CannedType:            true,
+	insight.ToolEffectivenessType: true,
 }
 
 type generateInsightRequest struct {

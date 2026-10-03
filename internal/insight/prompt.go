@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/money"
@@ -22,11 +23,27 @@ type GenerateRequest struct {
 	SessionID      string
 	AutomatedScope string
 	Summary        *RangeSummary // non-nil only for multi-day ranges
+	// MaxPromptBytes caps the prompt for agents that take it as one
+	// command-line argument; zero means no cap.
+	MaxPromptBytes int
 }
 
 // BuildPrompt queries sessions for the given date and assembles
-// a prompt for the AI agent.
+// a prompt for the AI agent. It returns ErrPromptTooLarge when the prompt
+// exceeds req.MaxPromptBytes, since it has no evidence to trim.
 func BuildPrompt(
+	ctx context.Context,
+	database db.Store,
+	req GenerateRequest,
+) (string, error) {
+	prompt, err := buildPrompt(ctx, database, req)
+	if err == nil && req.MaxPromptBytes > 0 && promptArgSize(prompt) > req.MaxPromptBytes {
+		return "", ErrPromptTooLarge
+	}
+	return prompt, err
+}
+
+func buildPrompt(
 	ctx context.Context,
 	database db.Store,
 	req GenerateRequest,
@@ -145,50 +162,79 @@ func buildSessionPrompt(
 	database db.Store,
 	req GenerateRequest,
 ) (string, error) {
-	sess, err := database.GetSession(ctx, req.SessionID)
+	in, err := loadSessionPromptInput(ctx, database, req.SessionID)
 	if err != nil {
-		return "", fmt.Errorf("getting session: %w", err)
+		return "", err
 	}
-	if sess == nil {
-		return "", fmt.Errorf("session not found: %s", req.SessionID)
-	}
-	msgs, err := database.GetAllMessages(ctx, req.SessionID)
-	if err != nil {
-		return "", fmt.Errorf("getting messages: %w", err)
-	}
-	timing, err := database.GetSessionTiming(ctx, req.SessionID)
-	if err != nil {
-		return "", fmt.Errorf("getting timing: %w", err)
-	}
-	usage, err := database.GetSessionUsage(ctx, req.SessionID, false)
-	if err != nil {
-		return "", fmt.Errorf("getting usage: %w", err)
-	}
-
 	var b strings.Builder
 	writeSystemInstruction(&b, req.Type)
-	fmt.Fprintf(&b, "\n## Session: %s\n\n", req.SessionID)
-	fmt.Fprintf(&b, "- Project: %s\n", sess.Project)
-	fmt.Fprintf(&b, "- Agent: %s\n", sess.Agent)
+	writeSessionBody(&b, req.SessionID, in)
+	writeUserQuery(&b, req.Prompt)
+	return b.String(), nil
+}
+
+type sessionPromptInput struct {
+	sess   *db.Session
+	msgs   []db.Message
+	timing *db.SessionTiming
+	usage  *db.SessionUsage
+}
+
+func loadSessionPromptInput(
+	ctx context.Context,
+	database db.Store,
+	sessionID string,
+) (sessionPromptInput, error) {
+	sess, err := database.GetSession(ctx, sessionID)
+	if err != nil {
+		return sessionPromptInput{}, fmt.Errorf("getting session: %w", err)
+	}
+	if sess == nil {
+		return sessionPromptInput{}, fmt.Errorf("session not found: %s", sessionID)
+	}
+	msgs, err := database.GetAllMessages(ctx, sessionID)
+	if err != nil {
+		return sessionPromptInput{}, fmt.Errorf("getting messages: %w", err)
+	}
+	timing, err := database.GetSessionTiming(ctx, sessionID)
+	if err != nil {
+		return sessionPromptInput{}, fmt.Errorf("getting timing: %w", err)
+	}
+	usage, err := database.GetSessionUsage(ctx, sessionID, false)
+	if err != nil {
+		return sessionPromptInput{}, fmt.Errorf("getting usage: %w", err)
+	}
+	return sessionPromptInput{sess: sess, msgs: msgs, timing: timing, usage: usage}, nil
+}
+
+const sessionPreviewRunes = 800
+
+// writeSessionBody returns how many messages were cut to a preview.
+func writeSessionBody(b *strings.Builder, sessionID string, in sessionPromptInput) int {
+	sess, msgs, timing, usage := in.sess, in.msgs, in.timing, in.usage
+	fmt.Fprintf(b, "\n## Session: %s\n\n", sessionID)
+	fmt.Fprintf(b, "- Project: %s\n", sess.Project)
+	fmt.Fprintf(b, "- Agent: %s\n", sess.Agent)
 	if sess.StartedAt != nil {
-		fmt.Fprintf(&b, "- Started: %s\n", *sess.StartedAt)
+		fmt.Fprintf(b, "- Started: %s\n", *sess.StartedAt)
 	}
 	if sess.EndedAt != nil {
-		fmt.Fprintf(&b, "- Ended: %s\n", *sess.EndedAt)
+		fmt.Fprintf(b, "- Ended: %s\n", *sess.EndedAt)
 	}
-	fmt.Fprintf(&b, "- Messages: %d\n", sess.MessageCount)
+	fmt.Fprintf(b, "- Messages: %d\n", sess.MessageCount)
 	if usage != nil && usage.HasTokenData {
-		fmt.Fprintf(&b, "- Output tokens: %d\n", usage.TotalOutputTokens)
-		fmt.Fprintf(&b, "- Peak context tokens: %d\n", usage.PeakContextTokens)
+		fmt.Fprintf(b, "- Output tokens: %d\n", usage.TotalOutputTokens)
+		fmt.Fprintf(b, "- Peak context tokens: %d\n", usage.PeakContextTokens)
 	}
 	if usage != nil && usage.HasCost {
-		fmt.Fprintf(&b, "- Cost: %s\n", money.FormatUSD(usage.Cost, money.DisplayCents))
+		fmt.Fprintf(b, "- Cost: %s\n", money.FormatUSD(usage.Cost, money.DisplayCents))
 	}
 	if timing != nil {
-		fmt.Fprintf(&b, "- Duration: %.1fs\n", float64(timing.TotalDurationMs)/1000)
-		fmt.Fprintf(&b, "- Tool calls: %d\n", timing.ToolCallCount)
+		fmt.Fprintf(b, "- Duration: %.1fs\n", float64(timing.TotalDurationMs)/1000)
+		fmt.Fprintf(b, "- Tool calls: %d\n", timing.ToolCallCount)
 	}
 
+	previews := 0
 	b.WriteString("\n## Messages\n\n")
 	if len(msgs) == 0 {
 		b.WriteString("No messages found for this session.\n")
@@ -197,30 +243,38 @@ func buildSessionPrompt(
 			if m.IsSystem {
 				continue
 			}
-			fmt.Fprintf(&b, "### Message %d: %s\n", m.Ordinal, m.Role)
+			fmt.Fprintf(b, "### Message %d: %s\n", m.Ordinal, m.Role)
 			if m.Timestamp != "" {
-				fmt.Fprintf(&b, "- Timestamp: %s\n", m.Timestamp)
+				fmt.Fprintf(b, "- Timestamp: %s\n", m.Timestamp)
 			}
 			if m.Model != "" {
-				fmt.Fprintf(&b, "- Model: %s\n", m.Model)
+				fmt.Fprintf(b, "- Model: %s\n", m.Model)
 			}
 			if hasContext, hasOutput := m.TokenPresence(); hasContext || hasOutput {
-				fmt.Fprintf(&b, "- Context tokens: %d\n", m.ContextTokens)
-				fmt.Fprintf(&b, "- Output tokens: %d\n", m.OutputTokens)
+				fmt.Fprintf(b, "- Context tokens: %d\n", m.ContextTokens)
+				fmt.Fprintf(b, "- Output tokens: %d\n", m.OutputTokens)
 			}
-			fmt.Fprintf(&b, "\n%s\n\n", stringutil.TruncateRunes(m.Content, 800, "..."))
+			if utf8.RuneCountInString(m.Content) > sessionPreviewRunes {
+				previews++
+			}
+			fmt.Fprintf(b, "\n%s\n\n", stringutil.TruncateRunes(m.Content, sessionPreviewRunes, "..."))
 		}
 	}
-	if req.Prompt != "" {
+	return previews
+}
+
+func writeUserQuery(b *strings.Builder, prompt string) {
+	if prompt != "" {
 		b.WriteString("## User Query\n\n")
-		b.WriteString(req.Prompt)
+		b.WriteString(prompt)
 		b.WriteString("\n")
 	}
-	return b.String(), nil
 }
 
 func writeSystemInstruction(b *strings.Builder, typ string) {
 	switch typ {
+	case ToolEffectivenessType:
+		b.WriteString(toolEffectivenessInstruction)
 	case "agent_analysis":
 		b.WriteString(
 			"You are analyzing AI agent sessions. " +

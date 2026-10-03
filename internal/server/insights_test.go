@@ -204,6 +204,11 @@ func TestInsightExportHTML(t *testing.T) {
 	assertBodyContains(t, w, "Daily Activity Insight")
 	assertBodyContains(t, w, "# Insight")
 	assertBodyContains(t, w, "my-app")
+
+	toolID := te.seedInsight(t, insight.ToolEffectivenessType, "2025-01-15", new("my-app"))
+	w = te.get(t, fmt.Sprintf("/api/v1/insights/%d/export", toolID))
+	assertStatus(t, w, http.StatusOK)
+	assertBodyContains(t, w, "Tool Effectiveness Insight")
 }
 
 func TestInsightMarkdownExport(t *testing.T) {
@@ -433,7 +438,7 @@ func TestGenerateInsight_SessionValidation(t *testing.T) {
 	} {
 		w := te.post(t, "/api/v1/insights/generate", body)
 		assertStatus(t, w, http.StatusBadRequest)
-		assertBodyContains(t, w, "session_id is only supported for agent_analysis")
+		assertBodyContains(t, w, "session_id is only supported for agent_analysis and tool_effectiveness")
 	}
 }
 
@@ -2101,4 +2106,116 @@ func TestGenerateInsight_ArchiveContentCapability(t *testing.T) {
 			assert.Equal(t, available, called, "unavailable generation must not invoke the agent")
 		})
 	}
+}
+
+func toolEffectivenessStream(content string, prompts *[]string) server.Option {
+	return server.WithGenerateStreamFunc(func(
+		_ context.Context, _, prompt string, _ insight.LogFunc,
+	) (insight.Result, error) {
+		if prompts != nil {
+			*prompts = append(*prompts, prompt)
+		}
+		return insight.Result{Agent: "claude", Content: content}, nil
+	})
+}
+
+func TestGenerateInsight_ToolEffectivenessSavesReport(t *testing.T) {
+	var prompts []string
+	te := setupWithServerOpts(t, []server.Option{toolEffectivenessStream(
+		"```json\n"+`{"conclusions":[{"assessment":"did_not_help","text":"The second Grep repeated an empty search.","ordinals":[1,2],"calls":[{"ordinal":2,"call_index":0}]},{"assessment":"helped","text":"Read found the config.","ordinals":[3]}]}`+"\n```",
+		&prompts,
+	)})
+	dbtest.SeedToolSequencesExample(t, te.db, "te-session")
+
+	w := te.post(t, "/api/v1/insights/generate",
+		`{"type":"tool_effectiveness","session_id":"te-session","date_from":"","date_to":""}`)
+	assertStatus(t, w, http.StatusOK)
+	events := parseSSE(w.Body.String())
+	require.NotEmpty(t, events)
+	require.Equal(t, "done", events[len(events)-1].Event, w.Body.String())
+	require.Len(t, prompts, 1)
+	assert.Contains(t, prompts[0], "## Tool evidence")
+	assert.Contains(t, prompts[0], "### Call msg 2 #0 Grep")
+
+	var done db.Insight
+	require.NoError(t, json.Unmarshal([]byte(events[len(events)-1].Data), &done))
+	got := te.get(t, "/api/v1/insights/"+strconv.FormatInt(done.ID, 10))
+	assertStatus(t, got, http.StatusOK)
+	saved := decode[db.Insight](t, got)
+	assert.Equal(t, insight.ToolEffectivenessType, saved.Type)
+	assert.Equal(t, insight.ToolEffectivenessSchemaVersion, saved.SchemaVersion)
+	assert.Contains(t, saved.Content, "## Model assessment")
+	assert.Contains(t, saved.Content, "(msg 1, msg 2, msg 2 #0)")
+	assert.Contains(t, saved.Content, "## Omissions\n\nNone.")
+
+	var structured insight.ToolEffectivenessStructured
+	require.NoError(t, json.Unmarshal([]byte(saved.StructuredJSON), &structured))
+	assert.Equal(t, "te-session", structured.SessionID)
+	assert.Equal(t, 3, structured.CallCount)
+	sess, err := te.db.GetSession(t.Context(), "te-session")
+	require.NoError(t, err)
+	require.NotNil(t, sess.TranscriptRevision)
+	assert.Equal(t, *sess.TranscriptRevision, structured.TranscriptRevision)
+	if sess.TerminationStatus != nil {
+		assert.Equal(t, *sess.TerminationStatus, structured.TerminationStatus)
+	} else {
+		assert.Empty(t, structured.TerminationStatus)
+	}
+	require.Len(t, structured.Conclusions, 2)
+	assert.Equal(t, []int{1, 2}, structured.Conclusions[0].Ordinals)
+	assert.Equal(t, []insight.ToolEffectivenessCallRef{{Ordinal: 2, CallIndex: 0}}, structured.Conclusions[0].Calls)
+	assert.Empty(t, structured.Conclusions[1].Calls)
+	assert.Empty(t, structured.Omissions)
+	assert.Contains(t, saved.StructuredJSON, `"calls":[]`)
+	assert.Contains(t, saved.StructuredJSON, `"omissions":[]`)
+}
+
+func TestGenerateInsight_ToolEffectivenessInvalidNotSaved(t *testing.T) {
+	te := setupWithServerOpts(t, []server.Option{toolEffectivenessStream(
+		`{"conclusions":[{"assessment":"helped","text":"x","ordinals":[999]}]}`, nil,
+	)})
+	dbtest.SeedToolSequencesExample(t, te.db, "te-session")
+
+	w := te.post(t, "/api/v1/insights/generate",
+		`{"type":"tool_effectiveness","session_id":"te-session","date_from":"","date_to":""}`)
+	assertStatus(t, w, http.StatusOK)
+	assertBodyContains(t, w, "event: error")
+	assertBodyContains(t, w, "tool effectiveness report failed validation: conclusion 0: ordinal 999 was not in the prompt")
+
+	list := decode[listInsightsResponse](t, te.get(t, "/api/v1/insights"))
+	assert.Empty(t, list.Insights)
+}
+
+func TestGenerateInsight_ToolEffectivenessRequiresSession(t *testing.T) {
+	te := setup(t)
+	w := te.post(t, "/api/v1/insights/generate",
+		`{"type":"tool_effectiveness","date_from":"2025-01-15","date_to":"2025-01-15"}`)
+	assertStatus(t, w, http.StatusBadRequest)
+	assertBodyContains(t, w, "session_id is required for tool_effectiveness")
+}
+
+func TestListInsights_ToolEffectivenessType(t *testing.T) {
+	te := setup(t)
+	w := te.get(t, "/api/v1/insights?type=tool_effectiveness")
+	assertStatus(t, w, http.StatusOK)
+}
+
+func TestToolEffectivenessEndpointErrorDoesNotFallBack(t *testing.T) {
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "busy", http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(endpoint.Close)
+	te := setup(t, func(c *config.Config) {
+		c.Insights.Endpoint = endpoint.URL + "/v1"
+		c.Insights.Model = "local"
+	})
+	dbtest.SeedToolSequencesExample(t, te.db, "te-session")
+
+	w := te.post(t, "/api/v1/insights/generate",
+		`{"type":"tool_effectiveness","session_id":"te-session","agent":"claude","date_from":"","date_to":""}`)
+	assertStatus(t, w, http.StatusOK)
+	assertBodyContains(t, w, "event: error")
+	assertBodyContains(t, w, "503")
+	list := decode[listInsightsResponse](t, te.get(t, "/api/v1/insights"))
+	assert.Empty(t, list.Insights)
 }

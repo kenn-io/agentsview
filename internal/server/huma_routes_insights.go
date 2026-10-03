@@ -33,7 +33,7 @@ func (s *Server) registerInsightsRoutes() {
 type insightType string
 
 type insightsInput struct {
-	Type     insightType `query:"type" enum:"daily_activity,agent_analysis,llm_canned" doc:"Insight type"`
+	Type     insightType `query:"type" enum:"daily_activity,agent_analysis,llm_canned,tool_effectiveness" doc:"Insight type"`
 	Project  string      `query:"project" doc:"Filter by project"`
 	DateFrom string      `query:"date_from" format:"date" doc:"Filter date_from >= (YYYY-MM-DD)"`
 	DateTo   string      `query:"date_to" format:"date" doc:"Filter date_to <= (YYYY-MM-DD)"`
@@ -204,11 +204,15 @@ func (s *Server) humaGenerateInsight(
 	req := in.Body
 	if !validInsightTypes[req.Type] {
 		return nil, apiError(http.StatusBadRequest,
-			"invalid type: must be daily_activity, agent_analysis, or llm_canned")
+			"invalid type: must be daily_activity, agent_analysis, llm_canned, or tool_effectiveness")
 	}
-	if req.SessionID != "" && req.Type != "agent_analysis" {
+	if req.SessionID != "" && req.Type != "agent_analysis" && req.Type != insight.ToolEffectivenessType {
 		return nil, apiError(http.StatusBadRequest,
-			"session_id is only supported for agent_analysis")
+			"session_id is only supported for agent_analysis and tool_effectiveness")
+	}
+	if req.Type == insight.ToolEffectivenessType && req.SessionID == "" {
+		return nil, apiError(http.StatusBadRequest,
+			"session_id is required for tool_effectiveness")
 	}
 	if req.Type == insight.CannedType {
 		return s.humaGenerateCannedInsight(ctx, req)
@@ -280,6 +284,7 @@ func (s *Server) humaGenerateInsight(
 			Prompt:         req.Prompt,
 			SessionID:      req.SessionID,
 			AutomatedScope: req.AutomatedScope,
+			MaxPromptBytes: insight.PromptArgLimit(req.Agent, s.currentInsightGenerateOptions(hctx.Context())),
 		}
 		// Attach the activity summary for any valid range, single day
 		// included: daily_activity insights are commonly one day and the
@@ -293,7 +298,21 @@ func (s *Server) humaGenerateInsight(
 				genReq.Summary = summary
 			}
 		}
-		prompt, err := insight.BuildPrompt(hctx.Context(), s.db, genReq)
+		var (
+			prompt   string
+			evidence insight.ToolEffectivenessEvidence
+			err      error
+		)
+		if req.Type == insight.ToolEffectivenessType {
+			prompt, evidence, err = insight.BuildToolEffectivenessPrompt(hctx.Context(), s.db, genReq)
+		} else {
+			prompt, err = insight.BuildPrompt(hctx.Context(), s.db, genReq)
+		}
+		if errors.Is(err, insight.ErrSessionChangedDuringRead) || errors.Is(err, insight.ErrNoCitableMessages) ||
+			errors.Is(err, insight.ErrPromptTooLarge) {
+			sendJSON("error", map[string]string{"message": err.Error()})
+			return
+		}
 		if err != nil {
 			log.Printf("insight prompt error: %v", err)
 			sendJSON("error", map[string]string{"message": "failed to build prompt"})
@@ -420,6 +439,28 @@ func (s *Server) humaGenerateInsight(
 			})
 			return
 		}
+		content := result.Content
+		var schemaVersion, structuredJSON string
+		if req.Type == insight.ToolEffectivenessType {
+			report, err := insight.ParseToolEffectivenessReport(result.Content)
+			if err == nil {
+				err = insight.ValidateToolEffectivenessReport(report, evidence)
+			}
+			var raw []byte
+			if err == nil {
+				raw, err = insight.ToolEffectivenessStructuredJSON(report, evidence)
+			}
+			if err != nil {
+				log.Printf("tool effectiveness validation error: %v", err)
+				sendJSON("error", map[string]string{
+					"message": "tool effectiveness report failed validation: " + err.Error(),
+				})
+				return
+			}
+			content = insight.RenderToolEffectivenessMarkdown(report, evidence)
+			schemaVersion = insight.ToolEffectivenessSchemaVersion
+			structuredJSON = string(raw)
+		}
 		var project *string
 		if req.Project != "" {
 			project = &req.Project
@@ -436,14 +477,16 @@ func (s *Server) humaGenerateInsight(
 		err = s.serializeArchiveWrite(genCtx, func() error {
 			var insertErr error
 			id, insertErr = s.db.InsertInsight(genCtx, db.Insight{
-				Type:     req.Type,
-				DateFrom: req.DateFrom,
-				DateTo:   req.DateTo,
-				Project:  project,
-				Agent:    result.Agent,
-				Model:    model,
-				Prompt:   promptPtr,
-				Content:  result.Content,
+				Type:           req.Type,
+				DateFrom:       req.DateFrom,
+				DateTo:         req.DateTo,
+				Project:        project,
+				Agent:          result.Agent,
+				Model:          model,
+				Prompt:         promptPtr,
+				Content:        content,
+				SchemaVersion:  schemaVersion,
+				StructuredJSON: structuredJSON,
 			})
 			return insertErr
 		})
