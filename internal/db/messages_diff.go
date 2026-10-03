@@ -275,6 +275,14 @@ func messageSourceUUIDCounts(msgs []Message) map[string]int {
 	return counts
 }
 
+// IsTextExtension reports whether incoming completes stored: stored is a
+// non-empty strict prefix of incoming. An empty stored text never qualifies,
+// so a placeholder or policy-blanked row cannot claim arbitrary text.
+func IsTextExtension(stored, incoming string) bool {
+	return stored != "" && len(incoming) > len(stored) &&
+		strings.HasPrefix(incoming, stored)
+}
+
 func messagePinIdentityStable(
 	old, incoming Message,
 	oldUUIDCounts, incomingUUIDCounts map[string]int,
@@ -294,11 +302,8 @@ func messagePinIdentityStable(
 	// A content extension is the same message completed by a later
 	// parse (e.g. a streamed partial response): the row keeps its
 	// ordinal, role, and source uuid (the caller refuses uuid
-	// changes), so the in-place update may retain the pin. The old
-	// content must be a non-empty prefix so an empty placeholder
-	// cannot claim an arbitrary replacement as its completion.
-	return old.Content != "" &&
-		strings.HasPrefix(incoming.Content, old.Content)
+	// changes), so the in-place update may retain the pin.
+	return IsTextExtension(old.Content, incoming.Content)
 }
 
 // messageDiffNeedsPinRemapTx reports whether an in-place update would

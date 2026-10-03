@@ -211,6 +211,10 @@ The latest published release is
   cores busy indefinitely. An empty write-ahead log no longer counts as a
   change for Cursor IDE or for other agents whose sessions live in SQLite
   databases; real writes still sync as before.
+- Re-importing a ChatGPT export now restores message text that an earlier import
+  stored cut short, when the archived text is the start of the export's text.
+  The message keeps its place and any pin, and search finds the restored text.
+  Any other difference from the archive is still refused.
 - Antigravity IDE and Antigravity CLI sessions stop re-syncing in a loop.
   Reading a session database rewrote its shared-memory (`-shm`) file, and
   AgentsView counted that as a change, so every pass re-read and re-uploaded
