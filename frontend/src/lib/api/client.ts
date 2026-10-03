@@ -259,6 +259,7 @@ export async function downloadExport(sessionId: string): Promise<void> {
     SessionsService.getGetApiV1SessionsByIdExportUrl({ id: sessionId }),
     () => SessionsService.getApiV1SessionsByIdExport({ id: sessionId }),
     `session-${sessionId}.html`,
+    "html",
   );
 }
 
@@ -267,6 +268,7 @@ export async function downloadInsightExport(insightId: number): Promise<void> {
     InsightsService.getGetApiV1InsightsByIdExportUrl({ id: insightId }),
     () => InsightsService.getApiV1InsightsByIdExport({ id: insightId }),
     `insight-${insightId}.html`,
+    "insight_html",
   );
 }
 
@@ -274,8 +276,9 @@ async function downloadAuthenticatedExport(
   url: string,
   request: () => Promise<Response>,
   fallbackFilename: string,
+  format: "html" | "insight_html",
 ): Promise<void> {
-  reportTelemetry("export_run", { format: "html" });
+  reportTelemetry("export_run", { format });
   const token = getAuthToken();
   if (!token) {
     // Local connection — simple navigation is fine.
@@ -319,9 +322,6 @@ export function generateInsight(
 ): GenerateInsightHandle {
   const controller = new AbortController();
 
-  reportTelemetry("insight_generated", {
-    kind: req.type === "llm_canned" ? (req.kind ?? req.type) : req.type,
-  });
   const done = InsightsService.postApiV1InsightsGenerate(req, { signal: controller.signal }).then(
     (response) =>
       consumeEvents<Insight>(
@@ -329,7 +329,12 @@ export function generateInsight(
         ({ event, data }) => {
           if (event === "status") onStatus?.(JSON.parse(data).phase);
           if (event === "log") onLog?.(JSON.parse(data));
-          if (event === "done") return JSON.parse(data);
+          if (event === "done") {
+            reportTelemetry("insight_generated", {
+              kind: req.type === "llm_canned" ? (req.kind ?? req.type) : req.type,
+            });
+            return JSON.parse(data);
+          }
           if (event === "error") throw new Error(JSON.parse(data).message);
         },
         "Generate stream ended without done event",

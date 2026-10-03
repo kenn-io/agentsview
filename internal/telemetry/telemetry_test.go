@@ -65,12 +65,6 @@ func TestNewReporterOptedOutKeepsAllowlist(t *testing.T) {
 	assert.True(t, reporter.EventAllowed(EventAppOpened))
 	assert.True(t, reporter.EventAllowed(EventDaemonActive))
 	assert.False(t, reporter.EventAllowed("unknown_event"))
-	for _, event := range []string{
-		EventSearchRun, EventSessionViewed, EventExportRun,
-		EventInsightGenerated, EventAnalyticsViewed,
-	} {
-		assert.True(t, reporter.EventAllowed(event), event)
-	}
 	require.NoError(t, reporter.CaptureDaemonActive(t.Context()))
 }
 

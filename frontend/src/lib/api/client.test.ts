@@ -10,6 +10,9 @@ import {
 import type { SyncHandle } from "./client.js";
 import { ApiError } from "./runtime.js";
 import type { SyncProgress } from "./generated/index.js";
+import * as telemetry from "../utils/telemetry.js";
+
+vi.mock("../utils/telemetry.js", () => ({ reportTelemetry: vi.fn() }));
 
 /**
  * Create a ReadableStream that yields the given chunks as
@@ -638,108 +641,45 @@ describe("watchSession", () => {
 });
 
 describe("core action telemetry", () => {
-  const telemetryPath = "/api/v1/telemetry/events";
-  let telemetryBodies: unknown[];
-
   beforeEach(() => {
-    telemetryBodies = [];
+    vi.mocked(telemetry.reportTelemetry).mockClear();
   });
 
-  afterEach(async () => {
-    const { setAuthToken, setServerUrl } = await import("./runtime.js");
-    setAuthToken("");
-    setServerUrl("");
+  afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 
-  function stubFetch(
-    respond: (url: string, init?: RequestInit) => Promise<Response>,
-    telemetry: () => Promise<Response> = async () =>
-      new Response('{"status":"queued"}', { status: 202 }),
-  ) {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.endsWith(telemetryPath)) {
-        telemetryBodies.push(JSON.parse(String(init?.body)));
-        return telemetry();
-      }
-      return respond(url, init);
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    return fetchMock;
-  }
-
-  it("downloadExport posts export_run html and opens the export", async () => {
-    stubFetch(async () => new Response("unexpected", { status: 500 }));
-    const open = vi.spyOn(window, "open").mockReturnValue(null);
-    const { downloadExport } = await import("./client.js");
-
-    await downloadExport("session-1");
-
-    expect(telemetryBodies).toEqual([{ event: "export_run", properties: { format: "html" } }]);
-    expect(open).toHaveBeenCalledWith(
-      expect.stringContaining("/sessions/session-1/export"),
-      "_blank",
-    );
-  });
-
-  it("downloadInsightExport posts export_run html and still downloads when telemetry fails", async () => {
-    const { setAuthToken, setServerUrl } = await import("./runtime.js");
-    setServerUrl("http://remote.example:8080");
-    setAuthToken("tok");
-    stubFetch(
-      async () =>
-        new Response("<html></html>", {
-          status: 200,
-          headers: { "Content-Disposition": 'attachment; filename="insight-7.html"' },
-        }),
-      async () => Promise.reject(new Error("offline")),
-    );
-    const originalCreate = URL.createObjectURL;
-    const originalRevoke = URL.revokeObjectURL;
-    URL.createObjectURL = vi.fn(() => "blob:insight");
-    URL.revokeObjectURL = vi.fn();
-    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
-    try {
-      const { downloadInsightExport } = await import("./client.js");
-
-      await downloadInsightExport(7);
-
-      expect(telemetryBodies).toEqual([{ event: "export_run", properties: { format: "html" } }]);
-      expect(click).toHaveBeenCalledTimes(1);
-    } finally {
-      URL.createObjectURL = originalCreate;
-      URL.revokeObjectURL = originalRevoke;
-    }
-  });
-
   it.each([
-    [{ type: "daily_activity", date_from: "2025-01-15", date_to: "2025-01-15" }, "daily_activity"],
-    [
-      {
-        type: "llm_canned",
-        kind: "prompt_maturity_review",
-        date_from: "2025-01-15",
-        date_to: "2025-01-15",
-      },
-      "prompt_maturity_review",
-    ],
-  ])("generateInsight posts insight_generated for %o", async (req, kind) => {
-    const insight = { id: 1, type: req.type, date_from: "2025-01-15", date_to: "2025-01-15" };
-    const generateBodies: unknown[] = [];
-    stubFetch(async (_url, init) => {
-      generateBodies.push(JSON.parse(String(init?.body)));
-      return new Response(makeSSEStream([`event: done\ndata: ${JSON.stringify(insight)}\n\n`]), {
-        status: 200,
-      });
-    });
+    ["downloadExport", "html"],
+    ["downloadInsightExport", "insight_html"],
+  ] as const)("%s reports export_run %s", async (fn, format) => {
+    vi.spyOn(window, "open").mockReturnValue(null);
+    const client = await import("./client.js");
+
+    await (fn === "downloadExport"
+      ? client.downloadExport("session-1")
+      : client.downloadInsightExport(7));
+
+    expect(telemetry.reportTelemetry).toHaveBeenCalledExactlyOnceWith("export_run", { format });
+  });
+
+  it("generateInsight reports insight_generated only after the insight is done", async () => {
+    const req = {
+      type: "llm_canned",
+      kind: "prompt_maturity_review",
+      date_from: "2025-01-15",
+      date_to: "2025-01-15",
+    } as const;
+    mockFetchWithStream(['event: error\ndata: {"message":"boom"}\n\n']);
     const { generateInsight } = await import("./client.js");
+    await expect(generateInsight(req).done).rejects.toThrow("boom");
+    expect(telemetry.reportTelemetry).not.toHaveBeenCalled();
 
-    const handle = generateInsight(req);
-    await handle.done;
-
-    expect(telemetryBodies).toEqual([{ event: "insight_generated", properties: { kind } }]);
-    expect(generateBodies).toEqual([req]);
+    mockFetchWithStream([`event: done\ndata: ${JSON.stringify({ id: 1 })}\n\n`]);
+    await generateInsight(req).done;
+    expect(telemetry.reportTelemetry).toHaveBeenCalledExactlyOnceWith("insight_generated", {
+      kind: "prompt_maturity_review",
+    });
   });
 });

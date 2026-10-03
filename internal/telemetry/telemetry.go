@@ -156,9 +156,9 @@ func allowedEventOptions() []kittelemetry.PostHogOption {
 		kittelemetry.WithAllowedEvent(EventAppOpened),
 		oneOf(EventSearchRun, "query_type", "text", "semantic", "hybrid"),
 		oneOf(EventSessionViewed, "agent", agentValues()...),
-		oneOf(EventExportRun, "format", "html", "csv"),
+		oneOf(EventExportRun, "format", "html", "insight_html", "csv", "markdown_link", "gist", "insight_gist"),
 		oneOf(EventInsightGenerated, "kind", insightKinds()...),
-		oneOf(EventAnalyticsViewed, "page", "sessions", "usage", "activity", "trends", "quality"),
+		oneOf(EventAnalyticsViewed, "page", "usage", "activity", "trends", "quality"),
 	}
 }
 

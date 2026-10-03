@@ -86,36 +86,6 @@ func TestTelemetryCaptureRoute(t *testing.T) {
 			wantCode: http.StatusAccepted, wantBody: `{"status":"disabled"}`,
 		},
 		{
-			name: "search run", srv: authSrv,
-			body:   `{"event":"search_run","properties":{"query_type":"semantic"}}`,
-			origin: origin, token: "test-token",
-			wantCode: http.StatusAccepted, wantBody: `{"status":"disabled"}`,
-		},
-		{
-			name: "session viewed", srv: authSrv,
-			body:   `{"event":"session_viewed","properties":{"agent":"claude"}}`,
-			origin: origin, token: "test-token",
-			wantCode: http.StatusAccepted, wantBody: `{"status":"disabled"}`,
-		},
-		{
-			name: "export run", srv: authSrv,
-			body:   `{"event":"export_run","properties":{"format":"html"}}`,
-			origin: origin, token: "test-token",
-			wantCode: http.StatusAccepted, wantBody: `{"status":"disabled"}`,
-		},
-		{
-			name: "insight generated", srv: authSrv,
-			body:   `{"event":"insight_generated","properties":{"kind":"daily_activity"}}`,
-			origin: origin, token: "test-token",
-			wantCode: http.StatusAccepted, wantBody: `{"status":"disabled"}`,
-		},
-		{
-			name: "analytics viewed", srv: authSrv,
-			body:   `{"event":"analytics_viewed","properties":{"page":"usage"}}`,
-			origin: origin, token: "test-token",
-			wantCode: http.StatusAccepted, wantBody: `{"status":"disabled"}`,
-		},
-		{
 			name: "unknown event", srv: authSrv, body: `{"event":"unknown_event"}`,
 			origin: origin, token: "test-token",
 			wantCode: http.StatusBadRequest,

@@ -12,6 +12,9 @@ import AppHeader from "../components/layout/AppHeader.svelte";
 import SidebarToggleButton from "../components/layout/SidebarToggleButton.svelte";
 import { registerShortcuts } from "./keyboard.js";
 import { registerSessionList } from "./arrow-target.js";
+import { reportTelemetry } from "./telemetry.js";
+
+vi.mock("./telemetry.js", () => ({ reportTelemetry: vi.fn() }));
 
 vi.mock("../utils/clipboard.js", () => ({
   copyToClipboard: vi.fn().mockResolvedValue(true),
@@ -1112,45 +1115,18 @@ describe("go to session shortcut", () => {
 });
 
 describe("export shortcut telemetry", () => {
-  let cleanup: () => void;
-  let fetchMock: ReturnType<typeof vi.fn>;
-  let openSpy: ReturnType<typeof vi.spyOn>;
-
-  beforeEach(() => {
-    ui.activeModal = null;
-    sessions.activeSessionId = null;
-    fetchMock = vi.fn(async () => new Response('{"status":"queued"}', { status: 202 }));
-    vi.stubGlobal("fetch", fetchMock);
-    openSpy = vi.spyOn(window, "open").mockReturnValue(null);
-    cleanup = registerShortcuts({ navigateMessage: vi.fn(), navigateUserPrompt: vi.fn() });
-  });
-
-  afterEach(() => {
-    cleanup();
-    sessions.activeSessionId = null;
-    vi.unstubAllGlobals();
-    vi.restoreAllMocks();
-  });
-
-  function telemetryBodies() {
-    return fetchMock.mock.calls
-      .filter(([url]) => String(url).endsWith("/api/v1/telemetry/events"))
-      .map(([, init]) => JSON.parse(String(init.body)));
-  }
-
-  it("posts export_run html when e opens the active session's export", () => {
+  it("reports export_run html when e opens the active session's export", () => {
+    vi.mocked(reportTelemetry).mockClear();
+    vi.spyOn(window, "open").mockReturnValue(null);
+    const cleanup = registerShortcuts({ navigateMessage: vi.fn(), navigateUserPrompt: vi.fn() });
     sessions.activeSessionId = "session-1";
-
-    fireKey("e");
-
-    expect(openSpy).toHaveBeenCalledTimes(1);
-    expect(telemetryBodies()).toEqual([{ event: "export_run", properties: { format: "html" } }]);
-  });
-
-  it("posts nothing when e has no active session", () => {
-    fireKey("e");
-
-    expect(openSpy).not.toHaveBeenCalled();
-    expect(telemetryBodies()).toEqual([]);
+    try {
+      fireKey("e");
+      expect(reportTelemetry).toHaveBeenCalledExactlyOnceWith("export_run", { format: "html" });
+    } finally {
+      cleanup();
+      sessions.activeSessionId = null;
+      vi.restoreAllMocks();
+    }
   });
 });

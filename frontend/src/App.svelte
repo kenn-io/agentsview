@@ -613,15 +613,12 @@
     });
   });
 
-  // Telemetry: one analytics_viewed per analytics page visit. The
-  // overview lives on the sessions route while nothing is selected.
+  // Telemetry: one analytics_viewed per analytics page visit; token-usage is the usage page.
   let lastAnalyticsPage: string | null = null;
   $effect(() => {
     const route = router.route;
     let page: string | null = null;
-    if (route === "sessions") {
-      if (sessions.activeSessionId === null && router.sessionId === null) page = "sessions";
-    } else if (route === "usage" || route === "token-usage") {
+    if (route === "usage" || route === "token-usage") {
       page = "usage";
     } else if (route === "activity" || route === "trends" || route === "quality") {
       page = route;

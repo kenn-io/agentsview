@@ -45,6 +45,7 @@
     getMarkdownExportUrl,
   } from "../../api/client.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
+  import { reportTelemetry } from "../../utils/telemetry.js";
   import ProjectTypeahead from "./ProjectTypeahead.svelte";
   import ImportModal from "../import/ImportModal.svelte";
 
@@ -149,6 +150,7 @@
     ).toString();
     const ok = await copyToClipboard(url);
     if (!ok) return;
+    reportTelemetry("export_run", { format: "markdown_link" });
     copiedMarkdownLink = true;
     clearTimeout(copiedMarkdownLinkTimer);
     copiedMarkdownLinkTimer = setTimeout(() => {

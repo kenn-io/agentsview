@@ -1790,17 +1790,17 @@ startup and every 24 hours while running. The web UI also reports an anonymous
 UTC day. The server sends it to PostHog with the same fields and opt-out as the
 ping. The browser never contacts PostHog.
 
-The web UI reports five core actions the same way, when the user starts them.
-Each carries one property, and the server drops any value outside its fixed
-list:
+The web UI reports five core actions the same way. Each carries one property,
+and the server drops any value outside its fixed list. A search counts once per
+command palette open, and an insight counts once it finishes generating:
 
 | Event | Property | Allowed values |
 |---|---|---|
 | `search_run` | `query_type` | `text`, `semantic`, `hybrid` |
 | `session_viewed` | `agent` | the session's agent type |
-| `export_run` | `format` | `html`, `csv` |
+| `export_run` | `format` | `html`, `insight_html`, `csv`, `markdown_link`, `gist`, `insight_gist` |
 | `insight_generated` | `kind` | `daily_activity`, `agent_analysis`, or a generated-insight template name |
-| `analytics_viewed` | `page` | `sessions`, `usage`, `activity`, `trends`, `quality` |
+| `analytics_viewed` | `page` | `usage`, `activity`, `trends`, `quality` |
 
 Every event contains only:
 

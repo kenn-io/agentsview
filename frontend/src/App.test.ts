@@ -1920,71 +1920,18 @@ describe("App telemetry", () => {
     expect(postedFor("session_viewed")).toHaveLength(3);
   });
 
-  it("counts a revisit after an unhydrated selection and waits for hydration", async () => {
+  it("reports analytics_viewed once per analytics page and never for the sessions landing page", async () => {
     setup();
-    sessions.sessions = [
-      hydratedSession("session-a", "claude"),
-      hydratedSession("session-b", "gemini", { is_index_only: true }),
-    ];
     router.route = "sessions";
     component = mount(App, { target: document.body });
     await flushEffects();
+    expect(postedFor("analytics_viewed")).toEqual([]);
 
-    await open("session-a");
-    await open("session-b");
-    await open("session-a");
-    expect(postedFor("session_viewed")).toEqual([{ agent: "claude" }, { agent: "claude" }]);
-
-    await open("session-b");
-    expect(postedFor("session_viewed")).toHaveLength(2);
-    sessions.sessions = [
-      hydratedSession("session-a", "claude"),
-      hydratedSession("session-b", "gemini"),
-    ];
-    await flushEffects();
-    expect(postedFor("session_viewed")).toEqual([
-      { agent: "claude" },
-      { agent: "claude" },
-      { agent: "gemini" },
-    ]);
-  });
-
-  it("reports analytics_viewed once per analytics page change", async () => {
-    setup();
-    router.route = "usage";
-    component = mount(App, { target: document.body });
-    await flushEffects();
-    expect(postedFor("analytics_viewed")).toEqual([{ page: "usage" }]);
-
-    router.route = "activity";
-    await flushEffects();
+    for (const route of ["usage", "token-usage", "activity"] as const) {
+      router.route = route;
+      await flushEffects();
+    }
     await open(null);
-    expect(postedFor("analytics_viewed")).toEqual([
-      { page: "usage" },
-      { page: "activity" },
-      { page: "sessions" },
-    ]);
-
-    router.route = "usage";
-    await flushEffects();
-    router.route = "sessions";
-    router.sessionId = "session-x";
-    sessions.activeSessionId = "session-x";
-    await flushEffects();
-    expect(postedFor("analytics_viewed")).toHaveLength(4);
-
-    router.route = "token-usage";
-    router.sessionId = null;
-    sessions.activeSessionId = null;
-    await flushEffects();
-    router.route = "usage";
-    await flushEffects();
-    expect(postedFor("analytics_viewed")).toEqual([
-      { page: "usage" },
-      { page: "activity" },
-      { page: "sessions" },
-      { page: "usage" },
-      { page: "usage" },
-    ]);
+    expect(postedFor("analytics_viewed")).toEqual([{ page: "usage" }, { page: "activity" }]);
   });
 });

@@ -48,6 +48,7 @@
     searchStore.clear();
     searchStore.resetSort();
     searchStore.resetRange();
+    searchStore.searchReported = false;
   });
 
   // Most Chinese, Japanese, and Korean words are one or two characters long,
@@ -330,7 +331,7 @@
           <div class="palette-empty">{m.command_palette_searching()}</div>
         {:else if searchStore.error?.kind === "semantic-unavailable"}
           <SemanticSetupHelp
-            onResolved={() => searchStore.retry(false)}
+            onResolved={() => searchStore.retry()}
             searchDetail={searchStore.error.detail}
           />
         {:else if searchStore.error}

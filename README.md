@@ -779,7 +779,7 @@ agentsview sends limited anonymous telemetry to PostHog: a `daemon_active` ping
 when the server starts and every 24 hours while it runs, and an `app_opened`
 event when the web UI loads and on the first focus of a later UTC day. The web
 UI also reports searches (search mode), session views (the session's agent
-type), exports (HTML or CSV), insight requests (insight kind) and analytics page
+type), exports (format), generated insights (insight kind) and analytics page
 views (page name), each with one value from a fixed list in the server that
 drops anything else. All events use a stable random install ID as the event
 `DistinctId`. The events include

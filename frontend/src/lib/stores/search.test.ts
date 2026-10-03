@@ -4,6 +4,9 @@ import { ApiError } from "../api/runtime.js";
 import type { SearchResponse } from "../api/generated/index.js";
 import type { DbContentMatch, ServiceContentSearchResult } from "../api/generated/index.js";
 import { SEARCH_MODE_STORAGE_KEY, createSearchStore, type SearchMode } from "./search.svelte.js";
+import { reportTelemetry } from "../utils/telemetry.js";
+
+vi.mock("../utils/telemetry.js", () => ({ reportTelemetry: vi.fn() }));
 
 vi.mock("../api/generated/index.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/generated/index.js")>();
@@ -514,55 +517,31 @@ describe("SearchStore", () => {
 });
 
 describe("SearchStore telemetry", () => {
-  let fetchMock: ReturnType<typeof vi.fn>;
-
   beforeEach(() => {
     vi.useFakeTimers();
-    vi.resetAllMocks();
-    fetchMock = vi.fn(async () => new Response('{"status":"queued"}', { status: 202 }));
-    vi.stubGlobal("fetch", fetchMock);
+    vi.mocked(reportTelemetry).mockClear();
     searchService.getApiV1Search.mockResolvedValue(fullTextResponse("needle"));
     searchService.getApiV1SearchContent.mockResolvedValue(contentResult([]));
   });
 
   afterEach(() => {
-    vi.unstubAllGlobals();
     vi.useRealTimers();
   });
 
-  function postedBodies() {
-    return fetchMock.mock.calls
-      .filter(([url]) => String(url).endsWith("/api/v1/telemetry/events"))
-      .map(([, init]) => JSON.parse(String(init.body)));
-  }
-
-  it.each([
-    ["fulltext", "text"],
-    ["semantic", "semantic"],
-    ["hybrid", "hybrid"],
-  ] as const)(
-    "posts search_run with query_type %s -> %s after debounce",
-    async (mode, queryType) => {
-      const store = createSearchStore(memoryStorage());
-      store.setMode(mode);
-      store.search("needle");
-      expect(postedBodies()).toEqual([]);
-
-      await runDebounce();
-
-      expect(postedBodies()).toEqual([
-        { event: "search_run", properties: { query_type: queryType } },
-      ]);
-    },
-  );
-
-  it("posts nothing for a search cancelled before dispatch", async () => {
+  it("reports one search_run per palette open across typing pauses, sort and mode changes", async () => {
     const store = createSearchStore(memoryStorage());
-    store.search("needle");
-    store.clear();
-
+    store.search("foo");
     await runDebounce();
+    store.search("foo bar");
+    await runDebounce();
+    store.setSort("recency");
+    store.setMode("semantic");
+    expect(reportTelemetry).toHaveBeenCalledExactlyOnceWith("search_run", { query_type: "text" });
 
-    expect(postedBodies()).toEqual([]);
+    store.searchReported = false;
+    store.search("needle");
+    await runDebounce();
+    expect(reportTelemetry).toHaveBeenLastCalledWith("search_run", { query_type: "semantic" });
+    expect(reportTelemetry).toHaveBeenCalledTimes(2);
   });
 });

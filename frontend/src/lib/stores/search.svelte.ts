@@ -134,6 +134,8 @@ export class SearchStore {
   results: PaletteSearchResult[] = $state([]);
   isSearching: boolean = $state(false);
   error: SearchFailure | null = $state(null);
+  // search_run counts once per palette open; the palette clears this when it closes.
+  searchReported = false;
 
   private storage: SearchModeStorage | null;
   private abortController: AbortController | null = null;
@@ -189,12 +191,11 @@ export class SearchStore {
     }
   }
 
-  // An automatic retry, such as after semantic setup finishes, repeats the user's search without reporting it again.
-  retry(report = true) {
+  retry() {
     if (!this.query.trim() || !this.error) return;
     this.debouncedSearch.cancel();
     this.cancelInFlight();
-    void this.executeSearch(this.query, this.project, report);
+    void this.executeSearch(this.query, this.project);
   }
 
   setRange(range: RangeSelection) {
@@ -229,7 +230,7 @@ export class SearchStore {
     this.abortController = null;
   }
 
-  private async executeSearch(query: string, project: string, report = true) {
+  private async executeSearch(query: string, project: string) {
     this.cancelInFlight();
     const requestVersion = this.requestVersion;
     const controller = new AbortController();
@@ -238,7 +239,10 @@ export class SearchStore {
     this.isSearching = true;
     this.error = null;
     const mode = this.mode;
-    if (report) reportTelemetry("search_run", { query_type: mode === "fulltext" ? "text" : mode });
+    if (!this.searchReported) {
+      this.searchReported = true;
+      reportTelemetry("search_run", { query_type: mode === "fulltext" ? "text" : mode });
+    }
     // All time must omit both bounds, rather than use the picker's fallback
     // start date when the earliest archived session is unknown.
     const range =
