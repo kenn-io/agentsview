@@ -147,14 +147,27 @@ func (p *codexProvider) DiscoverRawCaptureSourcesEach(
 ) (bool, error) {
 	ctx = withRawCaptureStreamingTraversal(ctx)
 	var incomplete error
-	for _, root := range p.sources.roots {
+	for index, root := range p.sources.roots {
 		if err := ReportRawCaptureDiscoveryProgress(ctx); err != nil {
 			return false, err
 		}
 		if isS3URI(root) {
 			continue
 		}
-		err := p.sources.discoverEachRoot(ctx, root, yield)
+		err := p.sources.discoverEachRoot(ctx, root, func(source SourceRef) error {
+			// The first root accepting this layout owns the physical file for
+			// the whole pass, including across audit batches. Checking roots
+			// avoids retaining a set that grows with the transcript archive.
+			for _, previous := range p.sources.roots[:index] {
+				if isS3URI(previous) {
+					continue
+				}
+				if _, _, supported := CodexSessionPathInfo(previous, source.DisplayPath); supported {
+					return nil
+				}
+			}
+			return yield(source)
+		})
 		if err == nil {
 			continue
 		}

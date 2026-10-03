@@ -104,6 +104,67 @@ func newBackfillCustody(t *testing.T) *backfillCustodyTransport {
 	return &backfillCustodyTransport{service: service, objects: objects, metadata: metadata}
 }
 
+func TestBackfillCodexOverlappingRootsKeepFirstEligibleOwner(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		roots []string
+		owner int
+	}{
+		{"parent first", []string{"sessions", "sessions/2026/06/11"}, 0},
+		{"child first", []string{"sessions/2026/06/11", "sessions"}, 0},
+		{"unsupported parent layout", []string{".", "sessions"}, 1},
+	} {
+		for _, batchSize := range []int{1, 128} {
+			t.Run(fmt.Sprintf("%s/batch-%d", tc.name, batchSize), func(t *testing.T) {
+				base := t.TempDir()
+				const sessionID = "019eb791-cf7d-75c1-8439-9ed74c1229e5"
+				path := filepath.Join(base, "sessions", "2026", "06", "11",
+					"rollout-2026-06-11T12-44-06-"+sessionID+".jsonl")
+				require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+				require.NoError(t, os.WriteFile(path,
+					[]byte(`{"type":"session_meta","payload":{"id":"`+sessionID+`"}}`+"\n"), 0o600))
+				// Traversal work also ends a batch. Keep the duplicate in a
+				// later batch at both the minimum and default batch sizes.
+				for index := range batchSize {
+					require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(path),
+						fmt.Sprintf("unrelated-%03d.txt", index)), nil, 0o600))
+				}
+				store, err := rawcheckpoint.Open(t.Context(), filepath.Join(t.TempDir(), "checkpoint.db"))
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, store.Close()) })
+				require.NoError(t, store.SetDevice(t.Context(), "device-a"))
+				spec := rawcheckpoint.BackfillRunSpec{
+					RunID: "run-a", DeviceID: "device-a", Destination: "https://ingest.example",
+					Providers: []parser.AgentType{parser.AgentCodex},
+				}
+				var roots []string
+				for _, root := range tc.roots {
+					configured, err := store.ResolveConfiguredRoot(t.Context(), parser.AgentCodex, filepath.Join(base, root))
+					require.NoError(t, err)
+					roots = append(roots, configured.LocalPath)
+					spec.Roots = append(spec.Roots, rawcheckpoint.BackfillSelection{
+						Provider: parser.AgentCodex, ConfiguredRootID: configured.ID,
+					})
+				}
+				provider, ok := parser.NewProvider(parser.AgentCodex, parser.ProviderConfig{Roots: roots})
+				require.True(t, ok)
+				transport := newBackfillCustody(t)
+				progress, err := RunBackfill(t.Context(), store, rawcapture.New(store),
+					rawupload.New(store, transport, "device-a"),
+					BackfillOptions{Spec: spec, Providers: []parser.Provider{provider}, BatchSize: batchSize})
+				require.NoError(t, err)
+				require.True(t, progress.Complete)
+				require.Equal(t, int64(1), progress.Captured)
+				require.Len(t, transport.metadata.manifests, 1)
+				for _, manifest := range transport.metadata.manifests {
+					require.Equal(t, spec.Roots[tc.owner].ConfiguredRootID, manifest.Manifest.ConfiguredRootID)
+					require.Equal(t, "codex:019eb791-cf7d-75c1-8439-9ed74c1229e5", manifest.Manifest.SourceKey)
+				}
+			})
+		}
+	}
+}
+
 func TestBackfillCrashAfterServerReceiptPreservesManifestAndGeneration(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "a.jsonl")
