@@ -107,7 +107,10 @@ func (s *Store) BeginBackfill(ctx context.Context, spec BackfillRunSpec) (Backfi
 			}
 			var path string
 			if err := conn.QueryRowContext(ctx, `SELECT local_root FROM configured_roots WHERE id=? AND provider=?`, root.ConfiguredRootID, string(root.Provider)).Scan(&path); err != nil {
-				return ErrBackfillConflict
+				if errors.Is(err, sql.ErrNoRows) {
+					return ErrBackfillConflict
+				}
+				return err
 			}
 			selected = append(selected, rootSelection{root, path})
 		}
@@ -183,7 +186,10 @@ func backfillToken(value string) bool {
 func requireBackfillConn(ctx context.Context, conn *sql.Conn, runID string) (string, error) {
 	var device, state string
 	if err := conn.QueryRowContext(ctx, `SELECT device_id,discovery FROM backfill_runs WHERE run_id=?`, runID).Scan(&device, &state); err != nil {
-		return "", ErrBackfillConflict
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", ErrBackfillConflict
+		}
+		return "", err
 	}
 	return state, requireConfiguredDeviceConn(ctx, conn, device)
 }
@@ -415,7 +421,10 @@ func bindBackfillCaptureConn(ctx context.Context, conn *sql.Conn, runID string, 
 	var generation int64
 	if pending == 0 {
 		if err := conn.QueryRowContext(ctx, `SELECT head_manifest_id,head_receipt,head_generation FROM raw_sources WHERE provider=? AND configured_root_id=? AND source_key=? AND head_capture_id=?`, string(source.Provider), source.ConfiguredRootID, source.SourceKey, captureID).Scan(&manifest, &receipt, &generation); err != nil {
-			return ErrBackfillConflict
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrBackfillConflict
+			}
+			return err
 		}
 		if manifest == "" || receipt == "" || generation <= 0 {
 			return ErrBackfillConflict
