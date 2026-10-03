@@ -121,6 +121,7 @@ agentsview pg push [target] [flags]
 | `--all`              | `false` | Push every configured PG target sequentially                              |
 | `--full`             | `false` | Force full local resync and re-push, bypassing change detection           |
 | `--no-vectors`       | `false` | Skip the semantic-search vector phase for this run                        |
+| `--embed`            | `false` | Build pending embeddings in this process before each push                 |
 | `--projects`         |         | Comma-separated projects to push (inclusive)                              |
 | `--exclude-projects` |         | Comma-separated projects to exclude                                       |
 | `--all-projects`     | `false` | Ignore configured project filters for this run                            |
@@ -284,6 +285,32 @@ push, serve, and maintenance workflow.
 
 `pg vectors list` and `pg vectors drop <id>` inspect and remove pushed
 generations.
+
+#### Build and push embeddings in a container
+
+`pg push --embed` (and `pg push --watch --embed`) syncs the local archive,
+builds pending embeddings, and pushes sessions and vectors in one process. A
+container that runs it needs no shell wrapper:
+
+- With `[vector]` in its `config.toml`, it builds with that recipe.
+- Without `[vector]`, it adopts the recipe a configured workstation published to
+  PostgreSQL. Set `AGENTSVIEW_EMBEDDINGS_ENDPOINT` (and
+  `AGENTSVIEW_EMBEDDINGS_API_KEY_FILE` if the endpoint needs a key) under
+  [`AGENTSVIEW_MODE`](/docs/configuration/#container-deployment). Adoption needs
+  exactly one published recipe; see
+  [semantic search: PostgreSQL](/docs/semantic-search/#postgresql).
+
+The recipe is resolved on the first cycle that succeeds and kept until the
+process restarts. `--embed` never starts a daemon and refuses to run while a
+daemon owns the archive; stop the daemon, or push without `--embed` and let the
+daemon build. In watch mode a failed build is logged, that cycle still pushes
+sessions and any vectors already built for the active model, and the next cycle
+retries. A one-shot
+`pg push --embed` returns the build error instead. `--embed` cannot be combined
+with `--no-vectors`, `--all`, `push_vectors = false`, or a usage-only archive.
+
+To keep the database password out of the URL, mount a passfile and set
+`PGPASSFILE`; see [container deployment](/docs/configuration/#container-deployment).
 
 ### `agentsview pg status`
 
@@ -590,11 +617,12 @@ PostgreSQL settings can also be configured via environment variables. In legacy
 single-target mode they override the `[pg]` values. In named-target mode they
 apply only to the effective default target:
 
-| Variable                | Description                        |
-| ----------------------- | ---------------------------------- |
-| `AGENTSVIEW_PG_URL`     | PostgreSQL connection URL          |
-| `AGENTSVIEW_PG_MACHINE` | Machine name for push sync         |
-| `AGENTSVIEW_PG_SCHEMA`  | Schema name (default `agentsview`) |
+| Variable                       | Description                                                                                                   |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| `AGENTSVIEW_PG_URL`            | PostgreSQL connection URL                                                                                     |
+| `AGENTSVIEW_PG_MACHINE`        | Machine name for push sync                                                                                    |
+| `AGENTSVIEW_PG_SCHEMA`         | Schema name (default `agentsview`)                                                                            |
+| `AGENTSVIEW_PG_ALLOW_INSECURE` | Sets `allow_insecure`; read only under [`AGENTSVIEW_MODE`](/docs/configuration/#container-deployment)        |
 
 ______________________________________________________________________
 
