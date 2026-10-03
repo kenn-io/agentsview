@@ -13,6 +13,9 @@ type VectorGenerationInfo struct {
 	Fingerprint string
 	Model       string
 	Dimension   int
+	// Params is the generation's immutable input recipe; nil when the
+	// generation is unpublished or predates recipe publication.
+	Params map[string]string
 }
 
 // VectorPushChunk is one embedded slice of a document. ChunkIndex is stable

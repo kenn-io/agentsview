@@ -179,6 +179,9 @@ type Sync struct {
 	// vectorSource, when set, supplies the local vectors.db active generation
 	// pushed as a phase at the end of Push. Nil disables the phase.
 	vectorSource storage.VectorPushSource
+	// vectorRecipeColumn records whether vector_generations.params exists
+	// for this push; a writer that cannot add it skips recipe publication.
+	vectorRecipeColumn bool
 	// afterVectorApply is a full/scoped post-apply test hook.
 	afterVectorApply func()
 	// beforeVectorWitnessRecord is a generation-wide pre-witness test hook.

@@ -128,8 +128,18 @@ for the listener, browser URL, and managed Caddy port rules.
 
 ## Docker
 
-The container image defaults to local `agentsview serve`. Set `PG_SERVE=1` to
-switch the startup command to `agentsview pg serve` instead.
+The image runs the `agentsview` binary directly. With no command it starts
+`agentsview serve`; set `AGENTSVIEW_MODE=pg-serve` (or pass `pg serve`) to read
+PostgreSQL instead. The older `PG_SERVE=1` selector still works.
+
+The image listens on `0.0.0.0` inside the container, does not open a browser,
+and requires bearer-token authentication. Those defaults come from environment
+variables, so flags you pass, such as `--port 9000`, keep them. On first start
+the image generates a token and stores it in `/data/config.toml`; read it with
+`docker exec <container> grep auth_token /data/config.toml`, or supply your own
+through a mounted secret file named by `AGENTSVIEW_AUTH_TOKEN_FILE`. See the
+[container deployment guide](https://agentsview.io/docs/configuration/#container-deployment)
+for every variable.
 
 `docker-compose.prod.yaml` is included as a production example:
 
@@ -143,8 +153,9 @@ The container runs as root, so prefer a named volume for `/data` over a host
 bind mount; if you do bind-mount, pre-create the directory with the desired
 ownership to avoid root-owned files in your home directory.
 
-The examples publish the UI on loopback only (`127.0.0.1`). If you need to
-expose it beyond localhost, enable `--require-auth` and publish the port
+The examples publish the UI on loopback only (`127.0.0.1`). Every request needs
+the bearer token, including the DuckDB and Quack examples below, which bind
+the container's wildcard host. Publish the port beyond localhost only
 intentionally.
 
 Important: a containerized agentsview instance can only discover agent sessions
@@ -156,7 +167,7 @@ Example PostgreSQL-backed startup:
 
 ```bash
 docker run --rm -p 127.0.0.1:8080:8080 \
-  -e PG_SERVE=1 \
+  -e AGENTSVIEW_MODE=pg-serve \
   -e AGENTSVIEW_PG_URL='postgres://user:password@postgres.example.com:5432/agentsview?sslmode=require' \
   ghcr.io/kenn-io/agentsview:latest
 ```
