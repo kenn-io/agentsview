@@ -217,7 +217,7 @@
               type="button"
               class="sequence-row"
               aria-expanded={open}
-              aria-controls="{uid}-seq-{index}"
+              aria-controls={open ? `${uid}-seq-${index}` : undefined}
               onclick={() => toggle(openSequences, key)}
             >
               <ChevronRightIcon class="chev" size={12} aria-hidden="true" />
@@ -264,7 +264,7 @@
                         type="button"
                         class="call-row"
                         aria-expanded={callOpen}
-                        aria-controls="{uid}-call-{index}-{callIndex}"
+                        aria-controls={callOpen ? `${uid}-call-${index}-${callIndex}` : undefined}
                         onclick={() => toggle(openCalls, callKey)}
                       >
                         <ChevronRightIcon class="chev" size={12} aria-hidden="true" />
@@ -295,7 +295,8 @@
                           <dt>{m.tool_sequences_input()}</dt>
                           <dd>
                             {#if call.input_preview}
-                              <pre>{call.input_preview}</pre>
+                              <!-- svelte-ignore a11y_no_noninteractive_tabindex (scrollable preview needs keyboard access) -->
+                              <pre tabindex="0" role="region" aria-label={m.tool_sequences_input()}>{call.input_preview}</pre>
                             {:else}
                               <p class="none">{m.tool_sequences_no_input()}</p>
                             {/if}
@@ -314,7 +315,8 @@
                               <p class="none">{m.tool_sequences_result_unknown()}</p>
                             {/if}
                             {#if call.result_preview}
-                              <pre>{call.result_preview}</pre>
+                              <!-- svelte-ignore a11y_no_noninteractive_tabindex (scrollable preview needs keyboard access) -->
+                              <pre tabindex="0" role="region" aria-label={m.tool_sequences_result()}>{call.result_preview}</pre>
                             {:else if call.result_bytes !== null && call.result_bytes > 0}
                               <p class="none">{m.tool_sequences_result_unavailable(countArgs(call.result_bytes))}</p>
                             {:else if call.result_bytes === 0}
@@ -494,7 +496,8 @@
 
   .sequence-row:focus-visible,
   .call-row:focus-visible,
-  .jump:focus-visible {
+  .jump:focus-visible,
+  pre:focus-visible {
     outline: var(--focus-ring);
     outline-offset: -2px;
     border-radius: var(--radius-sm);
@@ -555,8 +558,16 @@
   .where {
     color: var(--text-muted);
     font-size: var(--font-size-xs);
-    white-space: nowrap;
     font-variant-numeric: tabular-nums;
+  }
+
+  .facts {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .where {
+    white-space: nowrap;
   }
 
   .calls {

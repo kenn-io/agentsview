@@ -90,35 +90,39 @@ async function openCall(index: number) {
 
 describe("ToolSequencesPanel", () => {
   it("distinguishes measured zero from missing timing and shows bounded evidence", async () => {
+    // The server keeps the first nine calls and the last one of a capped sequence.
+    const retained = [
+      makeCall({
+        ordinal: 4,
+        outcome: "errored",
+        result_preview: "exit status 1",
+        result_bytes: 10,
+        result_omitted_bytes: 3,
+        input_bytes: 12,
+        input_omitted_bytes: 2,
+      }),
+      ...Array.from({ length: 8 }, (_, index) =>
+        makeCall({ ordinal: 5 + index, repeat: index === 0 ? "identical" : "none" }),
+      ),
+      makeCall({
+        ordinal: 20,
+        tool_name: "Read",
+        outcome: "content",
+        duration_ms: 0,
+        tool_changed: true,
+      }),
+    ];
     const data = makeData({
       total_tool_calls: 12,
       total_sequence_calls: 12,
-      omitted_calls: 4,
+      omitted_calls: 2,
       sequences: [
         makeSequence({
           identical: true,
           tool_changed: true,
           total_calls: 12,
           omitted_calls: 2,
-          calls: [
-            makeCall({
-              ordinal: 4,
-              outcome: "unknown",
-              result_preview: "[image]",
-              result_bytes: 10,
-              result_omitted_bytes: 3,
-              result_content_unknown: true,
-              input_bytes: 12,
-              input_omitted_bytes: 2,
-            }),
-            makeCall({
-              ordinal: 9,
-              tool_name: "Read",
-              duration_ms: 0,
-              repeat: "identical",
-              tool_changed: true,
-            }),
-          ],
+          calls: retained,
         }),
       ],
     });
@@ -133,8 +137,12 @@ describe("ToolSequencesPanel", () => {
     expect(header).toContain("12 tool calls in session");
     expect(row.textContent).toContain("Same input repeated");
     expect(row.textContent).toContain("Tool switched");
-    expect(row.textContent).toContain("Messages 4–9");
-    expect(row.textContent).toContain("+2 more");
+    expect(row.textContent).toContain("Messages 4–20");
+    const steps = [...row.querySelectorAll(".step")].map((step) =>
+      step.textContent?.replace(/\s+/g, " ").trim(),
+    );
+    expect(steps).toEqual(["Grep, Error", "Grep, Empty×8", "+2 more", "Read, Content"]);
+    expect(row.hasAttribute("aria-controls")).toBe(false);
 
     await openSequence();
     expect(row.getAttribute("aria-expanded")).toBe("true");
@@ -144,15 +152,20 @@ describe("ToolSequencesPanel", () => {
     expect(text).toContain("12 calls in a row.");
     expect(text).toContain("Not measured");
     expect(text).toContain("0ms");
-    expect(text).toContain("2 more calls between message 4 and message 9 aren't shown.");
-    expect(text).toContain("4 calls in sequences aren't shown in this view.");
-    expect(document.querySelectorAll(".tag")).toHaveLength(1);
-    expect(document.querySelector(".tag")!.textContent).toBe("same input");
+    const gap = document.querySelector(".calls > .omit")!;
+    expect(gap.textContent).toContain(
+      "2 more calls between message 12 and message 20 aren't shown.",
+    );
+    expect(gap.previousElementSibling!.querySelector(".jump")!.textContent).toContain("Message 12");
+    expect(gap.nextElementSibling!.querySelector(".jump")!.textContent).toContain("Message 20");
+    expect(text).toContain("2 calls in sequences aren't shown in this view.");
+    expect([...document.querySelectorAll(".tag")].map((tag) => tag.textContent)).toEqual([
+      "same input",
+      "tool switched",
+    ]);
 
     await openCall(0);
     text = document.body.textContent ?? "";
-    expect(text).toContain("Unknown");
-    expect(text).toContain("This result isn't text, so its outcome is unknown.");
     expect(text).toContain("Preview shows 10 of 12 bytes.");
     expect(text).toContain("Full input is in message 4.");
     expect(text).toContain("Preview shows 7 of 10 bytes.");
@@ -160,15 +173,15 @@ describe("ToolSequencesPanel", () => {
     expect(text).toContain("tool-id");
 
     const link = document.querySelector<HTMLAnchorElement>(
-      'a.jump[aria-label="Message 9: open the Read call in the transcript"]',
+      'a.jump[aria-label="Message 20: open the Read call in the transcript"]',
     );
     expect(link).not.toBeNull();
-    expect(link!.textContent).toContain("Message 9");
-    expect(link!.getAttribute("href")).toContain("msg=9");
+    expect(link!.textContent).toContain("Message 20");
+    expect(link!.getAttribute("href")).toContain("msg=20");
     expect(link!.closest("button")).toBeNull();
     link!.click();
-    expect(jump).toHaveBeenCalledWith(9, "session-a");
-    expect(document.querySelectorAll(".call-row")[1]!.getAttribute("aria-expanded")).toBe("false");
+    expect(jump).toHaveBeenCalledWith(20, "session-a");
+    expect(document.querySelectorAll(".call-row")[9]!.getAttribute("aria-expanded")).toBe("false");
     jump.mockRestore();
     unmount(component);
   });
@@ -242,6 +255,13 @@ describe("ToolSequencesPanel", () => {
                 result_content_unknown: false,
                 result_preview: "Found the config",
               }),
+              makeCall({
+                ordinal: 6,
+                tool_name: "Read",
+                outcome: "unknown",
+                result_content_unknown: true,
+                result_preview: "[image]",
+              }),
             ],
           }),
         ],
@@ -250,11 +270,18 @@ describe("ToolSequencesPanel", () => {
     await openSequence();
     await openCall(0);
     await openCall(1);
+    await openCall(2);
 
     const calls = document.querySelectorAll(".call");
     expect(calls[0]!.textContent).toContain("Error");
     expect(calls[0]!.textContent).not.toContain("isn't text");
     expect(calls[1]!.textContent).toContain("Content");
+    expect(calls[2]!.textContent).toContain("Unknown");
+    expect(calls[2]!.textContent).toContain("This result isn't text, so its outcome is unknown.");
+    expect(calls[2]!.querySelector(".dot.hollow")).not.toBeNull();
+    const preview = calls[2]!.querySelectorAll("pre")[1]!;
+    expect(preview.tabIndex).toBe(0);
+    expect(preview.getAttribute("aria-label")).toBe("Result");
     expect(document.body.textContent).toContain("The trace doesn't show how this sequence ended.");
     unmount(component);
   });

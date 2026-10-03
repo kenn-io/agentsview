@@ -59,7 +59,10 @@ test("renders, expands, and navigates observed sequences at desktop, tablet, and
     const callRow = panel.locator(".call-row").first();
     await callRow.press("Enter");
     await expect(callRow).toHaveAttribute("aria-expanded", "true");
-    await expect(panel.locator("pre").first()).toContainText("pattern");
+    const preview = panel.locator("pre").first();
+    await expect(preview).toContainText("pattern");
+    await preview.focus();
+    await expect(preview).toBeFocused();
     if (width > 820) {
       await expect(panel.locator(".dur").first()).toHaveText("2.0s");
       await expect(panel.locator(".dur").nth(1)).toHaveAttribute("title", "Not measured");
@@ -86,6 +89,9 @@ test("renders, expands, and navigates observed sequences at desktop, tablet, and
         height: bounds.height,
         clientWidth: element.clientWidth,
         scrollWidth: element.scrollWidth,
+        clipped: [
+          ...element.querySelectorAll<HTMLElement>(".box, .sequence-row, .call-line"),
+        ].filter((child) => child.scrollWidth > child.clientWidth).length,
         transcriptHeight: transcript.getBoundingClientRect().height,
         viewportWidth: window.innerWidth,
       };
@@ -93,6 +99,7 @@ test("renders, expands, and navigates observed sequences at desktop, tablet, and
     expect(geometry.left).toBeGreaterThanOrEqual(0);
     expect(geometry.right).toBeLessThanOrEqual(geometry.viewportWidth);
     expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth);
+    expect(geometry.clipped).toBe(0);
     expect(geometry.height).toBeLessThanOrEqual(384);
     expect(geometry.transcriptHeight).toBeGreaterThan(100);
     await page.screenshot({ path: testInfo.outputPath(`tool-sequences-${width}.png`) });
