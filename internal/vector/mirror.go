@@ -210,12 +210,18 @@ func (ix *Index) Refresh(
 	)
 	if hasJournal {
 		var err error
-		revision, err = journal.SessionDeletionPublicationRevision(ctx)
-		if err != nil {
-			return RefreshStats{}, err
-		}
 		databaseID, err = journal.GetDatabaseID(ctx)
 		if err != nil && !errors.Is(err, db.ErrDatabaseIDMissing) {
+			return RefreshStats{}, err
+		}
+		// Without an archive id a stored revision cannot be tied to this
+		// archive, so the refresh keeps watermark-only behavior.
+		hasJournal = databaseID != ""
+	}
+	if hasJournal {
+		var err error
+		revision, err = journal.SessionDeletionPublicationRevision(ctx)
+		if err != nil {
 			return RefreshStats{}, err
 		}
 		storedCursor, cursorOK, err := ix.metaGet(ctx, sessionDeletionCursorKey)
@@ -357,6 +363,12 @@ func (ix *Index) Refresh(
 
 	if nextWatermark != "" {
 		if err := ix.setRefreshWatermark(ctx, nextWatermark); err != nil {
+			return RefreshStats{}, err
+		}
+	} else if full {
+		// An empty full scan must not leave a previous archive's watermark
+		// hiding older sessions from later incremental scans.
+		if err := ix.metaDelete(ctx, refreshWatermarkKey); err != nil {
 			return RefreshStats{}, err
 		}
 	}
