@@ -107,3 +107,38 @@ The private raw sustained `report.json` files have these SHA-256 digests:
 | macOS | `ef579aa02a862429bc2ba288f2b31c700e78794420b8fb10a05d91799495dbd0` |
 | Windows ordinary | `c46e28b3f0a18212c54e26c4509e7b1692ca868a2922528d7c5192b3c32ab50d` |
 | Windows competing load | `25bf7c5c5a5abbf49c42c3518733e2a8f923647e7970809d4606ad8e191f391c` |
+
+## First production scanner measurement
+
+The draft now uses shared metadata scans for Claude transcripts, Codex rollouts,
+and Codex title indexes. Native events still use the existing production
+fsnotify/FSEvents backends. The scanner has no persistent database. It retains
+filenames under shared directory prefixes, with limits of 65,536 signatures and
+8 MiB of name strings. Saturation keeps memory bounded but causes authoritative
+reconciliation of affected scopes on subsequent passes, so it can cost more
+archive work.
+
+A Linux synthetic measurement of 50,000 files in 196 directories recorded an
+unchanged pass around 86 ms, about 7.3 MiB of retained Go heap, and 0.92 MiB of
+retained name strings. Each pass allocated about 27.4 MiB temporarily. These
+numbers cover metadata observation, not parser/archive work or desktop impact.
+Repeat the measurement with:
+
+```bash
+CGO_ENABLED=1 go test -tags fts5 ./internal/sync -run '^$' \
+  -bench '^BenchmarkSourceScan50K$' -benchtime=3x -benchmem
+```
+
+Coverage runs 30 seconds after the previous pass completes. Scans read at most
+256 entries at a time outside the native event loop. Changes enter the existing
+serialized dispatcher; bounded scan pages bypass the native-event dispatch
+floor. Successful archive acknowledgement advances signatures.
+Failed callbacks let scans continue to other roots while watcher retries remain
+pending. Missing roots defer reconciliation. Providers still supply complete
+discovery before disappearance can affect archive state.
+
+Logs report scan duration, files examined, changed paths, retained signatures,
+name bytes, saturation, and cumulative failures. `Watcher.SourceScanStats`
+exposes the last completed pass. These diagnostics contain counts only.
+Production Mac and Windows runs, sustained bursts, and multi-hour retention
+remain qualification work. No end-to-end performance advantage is claimed yet.

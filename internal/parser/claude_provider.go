@@ -628,6 +628,12 @@ func (s claudeSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 				s.spec.debounceScope + ":" + root,
 		})
 	}
+	if s.spec.agent == AgentClaude {
+		for i := range roots {
+			roots[i].SourceFileGlobs = []string{"*.jsonl"}
+			roots[i].FollowChildDirectorySymlinks = true
+		}
+	}
 	return WatchPlan{Roots: roots}, nil
 }
 
