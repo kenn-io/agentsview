@@ -721,6 +721,9 @@ func (s *Server) handleQueryRecallEntries(
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if restrictedIngress(r.Context()) {
+		req.SkipRecording = true
+	}
 	resp, err := service.QueryRecallStore(r.Context(), s.db, req)
 	if err != nil {
 		if handleContextError(w, err) {

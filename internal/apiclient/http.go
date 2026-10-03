@@ -7,10 +7,15 @@ import (
 	"strings"
 
 	"github.com/doordash-oss/oapi-codegen-dd/v3/pkg/runtime"
+	"go.kenn.io/agentsview/internal/requestsign"
 )
 
 // NewHTTPClient connects the generated API to the selected daemon transport.
 func NewHTTPClient(baseURL, token string, client *http.Client) (*Client, error) {
+	client, err := requestsign.ClientFromEnvironment(baseURL, client)
+	if err != nil {
+		return nil, err
+	}
 	origin, err := url.Parse(baseURL)
 	if err != nil {
 		return nil, err
