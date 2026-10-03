@@ -11,8 +11,10 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
+	"unicode/utf16"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/stringutil"
@@ -36,9 +38,10 @@ type Result struct {
 
 // ValidTypes lists the insight types the generate route accepts.
 var ValidTypes = map[string]bool{
-	"daily_activity": true,
-	"agent_analysis": true,
-	CannedType:       true,
+	"daily_activity":      true,
+	"agent_analysis":      true,
+	CannedType:            true,
+	ToolEffectivenessType: true,
 }
 
 // ValidAgentNames lists the supported insight agent names in display
@@ -485,6 +488,63 @@ func parseCodexStream(
 	}
 
 	return strings.Join(messages, "\n"), nil
+}
+
+// PromptArgLimit returns the largest prompt, as measured by promptArgSize,
+// that agent can receive, or zero when the prompt goes through stdin or an
+// HTTP body. Copilot's CLI takes the prompt as one argument, which Linux caps
+// at 128 KiB and Windows caps, for the whole command line, at 32,767
+// characters.
+func PromptArgLimit(agent string, opts GenerateOptions) int {
+	if agent != "copilot" || opts.Endpoint != nil {
+		return 0
+	}
+	if runtime.GOOS == "windows" {
+		return 30 << 10
+	}
+	return 120 << 10
+}
+
+// promptArgSize measures a prompt the way the OS limits it as an argument.
+var promptArgSize = func(prompt string) int {
+	if runtime.GOOS == "windows" {
+		return windowsArgLength(prompt)
+	}
+	return len(prompt)
+}
+
+// windowsArgLength returns the UTF-16 length of s once quoted for a Windows
+// command line, following syscall.EscapeArg.
+func windowsArgLength(s string) int {
+	if s == "" {
+		return 2
+	}
+	n := 0
+	for _, r := range s {
+		n += utf16.RuneLen(r)
+	}
+	hasSpace := strings.ContainsAny(s, " \t")
+	if hasSpace {
+		n += 2
+	}
+	if !strings.ContainsAny(s, `"\`) {
+		return n
+	}
+	slashes := 0
+	for i := range len(s) {
+		switch s[i] {
+		case '\\':
+			slashes++
+			continue
+		case '"':
+			n += slashes + 1
+		}
+		slashes = 0
+	}
+	if hasSpace {
+		n += slashes
+	}
+	return n
 }
 
 // generateCopilot invokes `copilot -p <prompt> --silent`.

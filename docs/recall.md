@@ -48,6 +48,13 @@ The top-level **Recall** page has two tabs:
 Open Recall from the header or navigate directly to `/recall`. Generated-report
 links use `/recall?tab=generated&insight=<id>`.
 
+From a session's actions menu, **Analyze tool effectiveness** generates a report
+on that one session: which tool calls helped and which wasted turns. Each
+conclusion names the calls it cites, and clicking one shows those calls with a
+link to their message. The session's observed tool sequences and a note on
+anything cut from the model's input follow the conclusions. The server rejects
+a report that cites a message the model was never shown.
+
 ![Recall corpus browser](/docs/assets/generated/screenshots/recall-corpus.png)
 
 ![Generated insights](/docs/assets/generated/screenshots/recall-generated-insights.png)
