@@ -180,12 +180,13 @@ func ampUsageHasTokenCounters(usage gjson.Result) bool {
 		usage.Get("cacheReadInputTokens").Exists()
 }
 
-// ampFoldsCacheCreationIntoInput reports whether an Amp usage model
-// bills cache writes. Amp routes every prompt token into one of its
-// three input buckets, but only Anthropic-family models are billed a
-// cache-write premium. OpenAI-family threads report inputTokens as 0
-// and classify the whole uncached prompt as cacheCreationInputTokens,
-// so that portion is uncached input rather than a cache write.
+// ampFoldsCacheCreationIntoInput reports whether Amp's
+// cacheCreationInputTokens for a model holds uncached input rather
+// than cache writes. Amp routes every prompt token into one of its
+// three input buckets. Anthropic-family threads use Anthropic's
+// cache-write semantics, while OpenAI-family threads report
+// inputTokens as 0 and put the whole uncached prompt in
+// cacheCreationInputTokens, so that portion is uncached input.
 //
 // Only gpt-prefixed names are folded. An unrecognized or absent model
 // keeps Amp's own bucket labels: without a known provider there is no
