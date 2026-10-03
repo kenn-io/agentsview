@@ -12713,6 +12713,15 @@ paths:
           schema:
             description: Use text/event-stream to stream progress
             type: string
+        - description: Session IDs whose archived messages this import may replace when the default import refuses the export; the previous version moves to the trash. Repeatable
+          explode: true
+          in: query
+          name: replace
+          schema:
+            description: Session IDs whose archived messages this import may replace when the default import refuses the export; the previous version moves to the trash. Repeatable
+            items:
+              type: string
+            type: array
       requestBody:
         content:
           multipart/form-data:
@@ -12818,6 +12827,15 @@ paths:
           schema:
             description: Use text/event-stream to stream progress
             type: string
+        - description: Session IDs whose archived messages this import may replace when the default import refuses the export; the previous version moves to the trash. Repeatable
+          explode: true
+          in: query
+          name: replace
+          schema:
+            description: Session IDs whose archived messages this import may replace when the default import refuses the export; the previous version moves to the trash. Repeatable
+            items:
+              type: string
+            type: array
       requestBody:
         content:
           multipart/form-data:

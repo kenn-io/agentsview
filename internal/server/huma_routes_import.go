@@ -33,7 +33,8 @@ func (s *Server) registerImportRoutes() {
 }
 
 type importArchiveInput struct {
-	Accept  string `header:"Accept" doc:"Use text/event-stream to stream progress"`
+	Accept  string   `header:"Accept" doc:"Use text/event-stream to stream progress"`
+	Replace []string `query:"replace,explode" doc:"Session IDs whose archived messages this import may replace when the default import refuses the export; the previous version moves to the trash. Repeatable"`
 	RawBody huma.MultipartFormFiles[importArchiveForm]
 }
 
@@ -57,8 +58,9 @@ func (s *Server) humaImportClaudeAI(
 		return nil, apiError(http.StatusBadRequest,
 			"missing 'file' field in form data")
 	}
+	opts := importer.ImportOptions{Replace: in.Replace}
 	if !strings.Contains(in.Accept, "text/event-stream") {
-		stats, err := s.importClaudeAIFromFile(ctx, file)
+		stats, err := s.importClaudeAIFromFile(ctx, file, opts)
 		if err != nil {
 			return nil, err
 		}
@@ -78,7 +80,7 @@ func (s *Server) humaImportClaudeAI(
 			OnIndexing: func() {
 				stream.SendJSON("indexing", struct{}{})
 			},
-		})
+		}, opts)
 		if err != nil {
 			stream.SendJSON("error", map[string]string{"error": err.Error()})
 			return
@@ -90,14 +92,16 @@ func (s *Server) humaImportClaudeAI(
 func (s *Server) importClaudeAIFromFile(
 	ctx context.Context,
 	file huma.FormFile,
+	opts importer.ImportOptions,
 ) (importer.ImportStats, error) {
-	return s.importClaudeAIFromFileWithCallbacks(ctx, file, nil)
+	return s.importClaudeAIFromFileWithCallbacks(ctx, file, nil, opts)
 }
 
 func (s *Server) importClaudeAIFromFileWithCallbacks(
 	ctx context.Context,
 	file huma.FormFile,
 	cb *importer.ImportCallbacks,
+	opts importer.ImportOptions,
 ) (importer.ImportStats, error) {
 	reader, cleanup, err := claudeImportReader(file)
 	if err != nil {
@@ -107,7 +111,7 @@ func (s *Server) importClaudeAIFromFileWithCallbacks(
 	var stats importer.ImportStats
 	err = s.serializeArchiveWrite(ctx, func() error {
 		var importErr error
-		stats, importErr = importer.ImportClaudeAI(ctx, s.db, reader, cb)
+		stats, importErr = importer.ImportClaudeAIWithOptions(ctx, s.db, reader, cb, opts)
 		return importErr
 	})
 	if err != nil {
@@ -186,7 +190,7 @@ func (s *Server) humaImportChatGPT(
 			"ChatGPT import requires a .zip file")
 	}
 	if !strings.Contains(in.Accept, "text/event-stream") {
-		stats, err := s.importChatGPTFromFile(ctx, file, nil)
+		stats, err := s.importChatGPTFromFile(ctx, file, nil, importer.ImportOptions{Replace: in.Replace})
 		if err != nil {
 			return nil, err
 		}
@@ -206,7 +210,7 @@ func (s *Server) humaImportChatGPT(
 			OnIndexing: func() {
 				stream.SendJSON("indexing", struct{}{})
 			},
-		})
+		}, importer.ImportOptions{Replace: in.Replace})
 		if err != nil {
 			stream.SendJSON("error", map[string]string{"error": err.Error()})
 			return
@@ -219,6 +223,7 @@ func (s *Server) importChatGPTFromFile(
 	ctx context.Context,
 	file huma.FormFile,
 	cb *importer.ImportCallbacks,
+	opts importer.ImportOptions,
 ) (importer.ImportStats, error) {
 	tmpFile, err := os.CreateTemp("", "chatgpt-import-*.zip")
 	if err != nil {
@@ -242,8 +247,8 @@ func (s *Server) importChatGPTFromFile(
 	var stats importer.ImportStats
 	err = s.serializeArchiveWrite(ctx, func() error {
 		var importErr error
-		stats, importErr = importer.ImportChatGPT(ctx, s.db, dir,
-			filepath.Join(s.cfg.DataDir, "assets"), cb)
+		stats, importErr = importer.ImportChatGPTWithOptions(ctx, s.db, dir,
+			filepath.Join(s.cfg.DataDir, "assets"), cb, opts)
 		return importErr
 	})
 	if err != nil {
