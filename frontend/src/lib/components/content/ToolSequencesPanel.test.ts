@@ -204,7 +204,7 @@ describe("ToolSequencesPanel", () => {
     expect(text).toContain("tool-id");
     // Narrow panels hide the duration column, so each expanded call repeats its timing.
     const durations = () =>
-      [...document.querySelectorAll(".ev-duration")].map((row) =>
+      [...document.querySelectorAll(".dur-detail")].map((row) =>
         row.textContent?.replace(/\s+/g, " ").trim(),
       );
     expect(durations()).toEqual(["Duration Not measured"]);

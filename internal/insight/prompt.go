@@ -192,6 +192,16 @@ func loadSessionPromptInput(
 	if sess == nil {
 		return sessionPromptInput{}, fmt.Errorf("session not found: %s", sessionID)
 	}
+	return loadSessionEvidence(ctx, database, sess)
+}
+
+// loadSessionEvidence reads the transcript, timing and usage of a session already looked up.
+func loadSessionEvidence(
+	ctx context.Context,
+	database db.Store,
+	sess *db.Session,
+) (sessionPromptInput, error) {
+	sessionID := sess.ID
 	msgs, err := database.GetAllMessages(ctx, sessionID)
 	if err != nil {
 		return sessionPromptInput{}, fmt.Errorf("getting messages: %w", err)

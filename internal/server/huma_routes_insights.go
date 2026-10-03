@@ -308,7 +308,8 @@ func (s *Server) humaGenerateInsight(
 		} else {
 			prompt, err = insight.BuildPrompt(hctx.Context(), s.db, genReq)
 		}
-		if errors.Is(err, insight.ErrSessionChangedDuringRead) || errors.Is(err, insight.ErrNoCitableMessages) ||
+		if errors.Is(err, db.ErrSessionChanged) || errors.Is(err, db.ErrSessionRevisionUnavailable) ||
+			errors.Is(err, insight.ErrNoCitableMessages) ||
 			errors.Is(err, insight.ErrPromptTooLarge) {
 			sendJSON("error", map[string]string{"message": err.Error()})
 			return
@@ -403,6 +404,17 @@ func (s *Server) humaGenerateInsight(
 		}
 
 		result, err := s.generateStreamFunc(genCtx, req.Agent, prompt, enqueueLog)
+		if err == nil && req.Type == insight.ToolEffectivenessType {
+			// One bad citation shouldn't throw away a paid run, so a rejected reply gets one corrected retry.
+			report, rejected := insight.ParseToolEffectivenessReport(result.Content)
+			if rejected == nil {
+				rejected = insight.ValidateToolEffectivenessReport(report, evidence)
+			}
+			if rejected != nil {
+				enqueueLog(insight.LogEvent{Stream: "stderr", Line: "report failed validation, asking once more: " + rejected.Error()})
+				result, err = s.generateStreamFunc(genCtx, req.Agent, insight.ToolEffectivenessCorrectionPrompt(prompt, rejected), enqueueLog)
+			}
+		}
 		dropped, drained, senderStopped, timedOut := finishLogStream()
 		if !senderStopped {
 			stream.ForceWriteDeadlineNow()
