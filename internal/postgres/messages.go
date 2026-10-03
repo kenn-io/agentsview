@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"slices"
 	"strings"
@@ -63,7 +64,7 @@ const pgMessageCols = `session_id, ordinal, role, content, thinking_text,
 	claude_message_id, claude_request_id,
 	source_type, source_subtype, prompt_source, source_uuid,
 	source_parent_uuid, is_sidechain,
-	is_compact_boundary`
+	is_compact_boundary, tool_result_text, content_layout`
 
 // GetMessagesWindow mirrors internal/db's GetMessagesWindow: linear mode
 // (optionally role-filtered) delegates to GetMessages when Roles is empty;
@@ -274,7 +275,9 @@ func (s *Store) SearchSession(
 	}
 	like := "%" + escapeLike(query) + "%"
 	rows, err := s.pg.QueryContext(ctx, `
-		SELECT DISTINCT m.ordinal
+		SELECT DISTINCT m.ordinal, m.content, COALESCE(m.thinking_text, ''), COALESCE(m.tool_result_text, ''),
+ COALESCE(tc.tool_name, ''), COALESCE(tc.input_json, ''), COALESCE(tc.rendering, ''),
+ COALESCE(tc.result_content, ''), COALESCE(tre.content, '')
 		FROM messages m
 		LEFT JOIN tool_calls tc
 			ON tc.session_id = m.session_id
@@ -286,9 +289,7 @@ func (s *Store) SearchSession(
 		WHERE m.session_id = $1
 			AND m.is_system = FALSE
 			AND `+db.PostgresSystemPrefixSQL("m.content", "m.role")+`
-			AND (m.content ILIKE $2
-				OR tc.result_content ILIKE $2
-				OR tre.content ILIKE $2)
+			AND (m.content ILIKE $2 OR m.thinking_text ILIKE $2 OR m.tool_result_text ILIKE $2 OR tc.rendering ILIKE $2 OR tc.tool_name ILIKE $2 OR tc.input_json ILIKE $2 OR tc.result_content ILIKE $2 OR tre.content ILIKE $2)
 		ORDER BY m.ordinal ASC`,
 		sessionID, like,
 	)
@@ -299,17 +300,7 @@ func (s *Store) SearchSession(
 	}
 	defer rows.Close()
 
-	var ordinals []int
-	for rows.Next() {
-		var ord int
-		if err := rows.Scan(&ord); err != nil {
-			return nil, fmt.Errorf(
-				"scanning ordinal: %w", err,
-			)
-		}
-		ordinals = append(ordinals, ord)
-	}
-	return ordinals, rows.Err()
+	return db.ReadVisibleSearchOrdinals(rows, query)
 }
 
 // HasFTS returns true because ILIKE search is available.
@@ -383,7 +374,7 @@ func (s *Store) Search(
 	termClauses := make([]string, len(terms))
 	for i, t := range terms {
 		termClauses[i] = fmt.Sprintf(
-			"m.content ILIKE '%%' || $%d || '%%' ESCAPE E'\\\\'", argIdx)
+			"COALESCE(NULLIF(m.palette_text, ''), m.content) ILIKE '%%' || $%d || '%%' ESCAPE E'\\\\'", argIdx)
 		args = append(args, escapeLike(t))
 		argIdx++
 	}
@@ -419,15 +410,15 @@ func (s *Store) Search(
 				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
 				COALESCE(s.ended_at, s.started_at) AS session_ended_at,
 				m.ordinal,
-				POSITION(LOWER($2) IN LOWER(m.content)) AS match_pos,
+				POSITION(LOWER($2) IN LOWER(COALESCE(NULLIF(m.palette_text, ''), m.content))) AS match_pos,
 				CASE
-					WHEN POSITION(LOWER($2) IN LOWER(m.content)) > 100
-						THEN '...' || SUBSTRING(m.content
+					WHEN POSITION(LOWER($2) IN LOWER(COALESCE(NULLIF(m.palette_text, ''), m.content))) > 100
+						THEN '...' || SUBSTRING(COALESCE(NULLIF(m.palette_text, ''), m.content)
 							FROM GREATEST(1, POSITION(
-								LOWER($2) IN LOWER(m.content)
+								LOWER($2) IN LOWER(COALESCE(NULLIF(m.palette_text, ''), m.content))
 							) - 50) FOR 200) || '...'
-					ELSE SUBSTRING(m.content FROM 1 FOR 200)
-						|| CASE WHEN LENGTH(m.content) > 200
+					ELSE SUBSTRING(COALESCE(NULLIF(m.palette_text, ''), m.content) FROM 1 FOR 200)
+						|| CASE WHEN LENGTH(COALESCE(NULLIF(m.palette_text, ''), m.content)) > 200
 							THEN '...' ELSE '' END
 				END AS snippet
 			FROM messages m
@@ -438,7 +429,7 @@ func (s *Store) Search(
 				AND `+db.PostgresSystemPrefixSQL("m.content", "m.role")+`
 				%s
 			ORDER BY m.session_id,
-				POSITION(LOWER($2) IN LOWER(m.content)) ASC,
+				POSITION(LOWER($2) IN LOWER(COALESCE(NULLIF(m.palette_text, ''), m.content))) ASC,
 				m.ordinal ASC
 		),
 		name_matches AS (
@@ -595,7 +586,7 @@ func (s *Store) attachToolCallsBatch(
 			COALESCE(result_content, ''),
 			COALESCE(subagent_session_id, ''),
 			COALESCE(file_path, ''),
-			COALESCE(call_index, 0)
+			COALESCE(call_index, 0), COALESCE(rendering, '')
 		FROM tool_calls
 		WHERE session_id = $1
 			AND message_ordinal IN (%s)
@@ -619,7 +610,7 @@ func (s *Store) attachToolCallsBatch(
 			&tc.ToolUseID, &tc.InputJSON, &tc.SkillName,
 			&tc.ResultContentLength, &tc.ResultContent,
 			&tc.SubagentSessionID,
-			&tc.FilePath, &tc.CallIndex,
+			&tc.FilePath, &tc.CallIndex, &tc.Rendering,
 		); err != nil {
 			return fmt.Errorf(
 				"scanning tool_call: %w", err,
@@ -746,6 +737,7 @@ func scanPGMessages(rows interface {
 		var m db.Message
 		var ts *time.Time
 		var tokenUsage string
+		var contentLayout sql.NullString
 		if err := rows.Scan(
 			&m.SessionID, &m.Ordinal, &m.Role,
 			&m.Content, &m.ThinkingText, &ts, &m.HasThinking,
@@ -757,7 +749,7 @@ func scanPGMessages(rows interface {
 			&m.ClaudeMessageID, &m.ClaudeRequestID,
 			&m.SourceType, &m.SourceSubtype, &m.PromptSource, &m.SourceUUID,
 			&m.SourceParentUUID, &m.IsSidechain,
-			&m.IsCompactBoundary,
+			&m.IsCompactBoundary, &m.ToolResultText, &contentLayout,
 		); err != nil {
 			return nil, fmt.Errorf(
 				"scanning message: %w", err,
@@ -773,6 +765,7 @@ func scanPGMessages(rows interface {
 		// Validation happens only here, on read (see
 		// db.DecodeStoredTokenUsage).
 		m.TokenUsage = db.DecodeStoredTokenUsage(tokenUsage)
+		m.SetContentLayout(db.DecodeStoredContentLayout(contentLayout.String))
 		msgs = append(msgs, m)
 	}
 	return msgs, rows.Err()

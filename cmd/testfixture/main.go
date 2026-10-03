@@ -11,10 +11,12 @@ import (
 	"os/signal"
 	"time"
 
+	"github.com/tidwall/gjson"
 	"go.kenn.io/agentsview/internal/db"
 	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
@@ -360,22 +362,19 @@ func generateMixedContentMessages(
 	sessionID string, start time.Time, model string,
 ) []db.Message {
 	type spec struct {
-		role        string
-		content     string
-		hasThinking bool
-		hasToolUse  bool
+		role       string
+		content    string
+		nativeBody string
 	}
 
 	specs := []spec{
 		{
 			role:    "user",
-			content: "Help me read a file",
+			content: "Help me read a file\n\n[Thinking]\nThis is a literal marker.",
 		},
 		{
-			role: "assistant",
-			content: "[Thinking]\nLet me analyze..." +
-				"\n\nHere is my analysis.",
-			hasThinking: true,
+			role:       "assistant",
+			nativeBody: `[{"type":"thinking","thinking":"Let me analyze..."},{"type":"text","text":"Here is my analysis."}]`,
 		},
 		{
 			role:    "user",
@@ -383,20 +382,15 @@ func generateMixedContentMessages(
 		},
 		{
 			role:       "assistant",
-			content:    "[Read /src/main.ts]\nconst app = express();",
-			hasToolUse: true,
+			nativeBody: `[{"type":"tool_use","id":"tu_mixed_read","name":"Read","input":{"file_path":"/workspace/packages/agentsview/frontend/src/lib/components/content/ToolBlock.svelte"}}]`,
 		},
 		{
 			role:       "assistant",
-			content:    "[Bash]\nls -la /src",
-			hasToolUse: true,
+			nativeBody: `[{"type":"tool_use","id":"tu_mixed_bash","name":"Bash","input":{"command":"ls -la /src"}}]`,
 		},
 		{
-			role: "assistant",
-			content: "[Thinking]\nGemini-style reasoning\n" +
-				"[/Thinking]\n\n" +
-				"This is the visible response after thinking.",
-			hasThinking: true,
+			role:       "assistant",
+			nativeBody: `[{"type":"thinking","thinking":"Gemini-style reasoning"},{"type":"text","text":"This is the visible response after thinking."}]`,
 		},
 		{
 			role:    "user",
@@ -413,9 +407,24 @@ func generateMixedContentMessages(
 			Role:          s.role,
 			Content:       s.content,
 			Timestamp:     ts.Format(time.RFC3339Nano),
-			HasThinking:   s.hasThinking,
-			HasToolUse:    s.hasToolUse,
 			ContentLength: len(s.content),
+		}
+		if s.nativeBody != "" {
+			body := parser.ExtractMessageContent(context.Background(), gjson.Parse(s.nativeBody))
+			msg.Content = body.Content
+			msg.ThinkingText = body.ThinkingText
+			msg.ToolResultText = body.ToolResultText
+			msg.SetContentLayout(body.ContentLayout)
+			msg.ContentLength = body.ContentLength
+			msg.HasThinking = body.HasThinking
+			msg.HasToolUse = body.HasToolUse
+			for _, call := range body.ToolCalls {
+				msg.ToolCalls = append(msg.ToolCalls, db.ToolCall{
+					ToolName: call.ToolName, Category: call.Category,
+					ToolUseID: call.ToolUseID, InputJSON: call.InputJSON,
+					Rendering: call.Rendering,
+				})
+			}
 		}
 		if s.role == "assistant" && model != "" {
 			msg.Model = model
@@ -436,16 +445,8 @@ func generateMixedContentMessages(
 		}
 		if i == 3 {
 			const resultContent = "# Fixture output\n\n**safe** <script>alert(\"xss\")</script>"
-			msg.ToolCalls = []db.ToolCall{
-				{
-					ToolName:            "Read",
-					Category:            "Read",
-					ToolUseID:           "tu_mixed_read",
-					InputJSON:           `{"file_path":"/workspace/packages/agentsview/frontend/src/lib/components/content/ToolBlock.svelte"}`,
-					ResultContentLength: len(resultContent),
-					ResultContent:       resultContent,
-				},
-			}
+			msg.ToolCalls[0].ResultContentLength = len(resultContent)
+			msg.ToolCalls[0].ResultContent = resultContent
 		}
 		msgs = append(msgs, msg)
 	}

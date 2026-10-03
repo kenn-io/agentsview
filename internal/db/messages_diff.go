@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"reflect"
 	"strings"
 )
 
@@ -20,7 +21,7 @@ const diffDeleteChunkSize = 500
 func messageInsertArgs(m Message) []any {
 	return []any{
 		m.SessionID, m.Ordinal, m.Role, m.Content,
-		m.ThinkingText,
+		m.ThinkingText, m.ToolResultText, storedContentLayout(m.ContentLayout),
 		m.Timestamp, m.HasThinking, m.HasToolUse,
 		m.ContentLength, m.IsSystem,
 		m.Model, m.ReasoningEffort, string(m.TokenUsage),
@@ -50,7 +51,8 @@ var messageUpdateSetClause = func() string {
 func messageRowEqual(a, b Message) bool {
 	if a.SessionID != b.SessionID || a.Ordinal != b.Ordinal ||
 		a.Role != b.Role || a.Content != b.Content ||
-		a.ThinkingText != b.ThinkingText || a.Timestamp != b.Timestamp ||
+		a.ThinkingText != b.ThinkingText || a.ToolResultText != b.ToolResultText ||
+		!reflect.DeepEqual(a.ContentLayout, b.ContentLayout) || a.Timestamp != b.Timestamp ||
 		a.HasThinking != b.HasThinking || a.HasToolUse != b.HasToolUse ||
 		a.ContentLength != b.ContentLength || a.IsSystem != b.IsSystem ||
 		a.Model != b.Model || a.ReasoningEffort != b.ReasoningEffort ||
@@ -111,6 +113,7 @@ func toolCallRowEqual(a, b ToolCall) bool {
 		a.Category == b.Category &&
 		a.ToolUseID == b.ToolUseID &&
 		a.InputJSON == b.InputJSON &&
+		a.Rendering == b.Rendering &&
 		a.SkillName == b.SkillName &&
 		a.ResultContentLength == b.ResultContentLength &&
 		a.ResultContent == b.ResultContent &&

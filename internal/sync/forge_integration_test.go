@@ -189,9 +189,14 @@ func TestSyncEngineForgeBulkSync(t *testing.T) {
 	assertMessageContent(
 		t, env.db, "forge:forge-sync-1",
 		"Please add Forge support.",
-		"[Thinking]\nInspecting the code first.\n[/Thinking]",
+		"",
 		"Added Forge support.",
 	)
+	stored := fetchMessages(t, env.db, "forge:forge-sync-1")
+	require.Len(t, stored, 3)
+	assert.True(t, stored[1].HasThinking)
+	assert.Equal(t, "Inspecting the code first.", stored[1].ThinkingText)
+	require.NotNil(t, stored[1].ContentLayout)
 
 	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 0, Synced: 0, Skipped: 0})
 }

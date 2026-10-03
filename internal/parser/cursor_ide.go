@@ -340,6 +340,8 @@ func loadCursorIDEBubble(
 // bookkeeping bubbles such as in-flight generation placeholders).
 func cursorIDEMessageFromBubble(ordinal int, bubble cursorIDEBubble) (ParsedMessage, bool) {
 	content := strings.TrimSpace(bubble.Text)
+	var body MessageContentBuilder
+	body.AddText(content)
 	msg := ParsedMessage{
 		Ordinal:       ordinal,
 		ContentLength: len(content),
@@ -352,37 +354,36 @@ func cursorIDEMessageFromBubble(ordinal int, bubble cursorIDEBubble) (ParsedMess
 			return ParsedMessage{}, false
 		}
 		msg.Role = RoleUser
-		msg.Content = content
-		return msg, true
+		msg.Content = body.Message().Content
+		return msg.withBody(body.Message()), true
 
 	case cursorIDEBubbleTypeAssistant:
 		msg.Role = RoleAssistant
-		msg.Content = content
+		msg.Content = body.Message().Content
 		if bubble.ToolFormerData == nil {
 			if content == "" {
 				return ParsedMessage{}, false
 			}
-			return msg, true
+			return msg.withBody(body.Message()), true
 		}
 		tfd := bubble.ToolFormerData
-		msg.HasToolUse = true
-		msg.ToolCalls = []ParsedToolCall{{
+		body.AddToolCall(ParsedToolCall{
 			ToolUseID: tfd.ToolCallID,
 			ToolName:  tfd.Name,
 			Category:  NormalizeToolCategory(tfd.Name),
 			InputJSON: tfd.RawArgs,
-		}}
+		})
 		if text := cursorIDEToolResultText(tfd.Result); text != "" {
 			quoted, err := json.Marshal(text)
 			if err == nil {
-				msg.ToolResults = []ParsedToolResult{{
+				body.addToolResult(ParsedToolResult{
 					ToolUseID:     tfd.ToolCallID,
 					ContentLength: len(text),
 					ContentRaw:    string(quoted),
-				}}
+				}, text)
 			}
 		}
-		return msg, true
+		return msg.withBody(body.Message()), true
 
 	default:
 		return ParsedMessage{}, false

@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 func TestRecallEvidenceWindowBuildsCanonicalHostAuthorization(t *testing.T) {
@@ -530,6 +531,9 @@ func TestRecallEvidenceReconciliationLogsStableReason(t *testing.T) {
 
 				require.Len(t, messages[1].ToolCalls, 2)
 				messages[1].ToolCalls = messages[1].ToolCalls[:1]
+				messages[1].ContentLayout = &parser.ContentLayout{Version: 1, Blocks: []parser.ContentBlock{
+					{Kind: "text", End: 25}, {Kind: "tool_call", CallIndex: 0},
+				}}
 				return messages
 			},
 		},
@@ -708,6 +712,9 @@ func TestRecallEvidenceDiffRevokesMissingToolCall(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, messages[1].ToolCalls, 2)
 	messages[1].ToolCalls = messages[1].ToolCalls[:1]
+	messages[1].ContentLayout = &parser.ContentLayout{Version: 1, Blocks: []parser.ContentBlock{
+		{Kind: "text", End: 25}, {Kind: "tool_call", CallIndex: 0},
+	}}
 
 	err = d.ReplaceSessionMessages(t.Context(), "missing-tool", messages)
 
@@ -749,6 +756,9 @@ func TestRecallEvidenceDiffRevokesEitherMissingToolFromMultiToolSelection(
 			require.NoError(t, err)
 			require.Len(t, messages[1].ToolCalls, 2)
 			messages[1].ToolCalls = tc.remaining(messages[1].ToolCalls)
+			messages[1].ContentLayout = &parser.ContentLayout{Version: 1, Blocks: []parser.ContentBlock{
+				{Kind: "text", End: 25}, {Kind: "tool_call", CallIndex: 0},
+			}}
 
 			err = d.ReplaceSessionMessages(t.Context(), "multi-tool", messages)
 

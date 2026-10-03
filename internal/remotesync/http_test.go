@@ -1375,11 +1375,12 @@ func TestHTTPExplicitFullReparsesEarlierRowsOfAppendedClaudeSession(t *testing.T
 	_, err := hs.Run(t.Context())
 	require.NoError(t, err)
 
-	raw, err := sql.Open("sqlite3", database.Path())
+	raw, err := sql.Open("agentsview_archive_sqlite3", database.Path())
 	require.NoError(t, err)
 	_, err = raw.ExecContext(t.Context(), `
 		UPDATE messages
-		SET content = 'corrupted', content_length = length('corrupted')
+		SET content = 'corrupted', content_length = length('corrupted'),
+		    content_layout = '{"version":1,"blocks":[{"kind":"text","end":9}]}'
 		WHERE session_id = 'devbox~session' AND ordinal = 0`)
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
@@ -2119,11 +2120,12 @@ func TestHTTPLegacyExplicitFullReplacesAppendedSession(t *testing.T) {
 	_, err := hs.Run(t.Context())
 	require.NoError(t, err)
 
-	raw, err := sql.Open("sqlite3", database.Path())
+	raw, err := sql.Open("agentsview_archive_sqlite3", database.Path())
 	require.NoError(t, err)
 	_, err = raw.ExecContext(t.Context(), `
 		UPDATE messages
-		SET content = 'corrupted', content_length = length('corrupted')
+		SET content = 'corrupted', content_length = length('corrupted'),
+		    content_layout = '{"version":1,"blocks":[{"kind":"text","end":9}]}'
 		WHERE session_id = 'devbox~session' AND ordinal = 0`)
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())

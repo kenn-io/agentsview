@@ -374,8 +374,7 @@ func TestParseCodebuffSession_ThinkingBlocks(t *testing.T) {
 	}
 	require.NotNil(t, thinkingMsg, "expected a thinking message")
 	assert.Equal(t, RoleAssistant, thinkingMsg.Role)
-	assert.Contains(t, thinkingMsg.Content, "[Thinking]")
-	assert.Contains(t, thinkingMsg.Content, "Let me think about this approach.")
+	assert.Empty(t, thinkingMsg.Content)
 	assert.Contains(t, thinkingMsg.ThinkingText, "Let me think about this approach.")
 }
 

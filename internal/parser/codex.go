@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/base64"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -209,12 +210,13 @@ type codexToolCallRef struct {
 }
 
 type codexPendingEvent struct {
-	agentID   string
-	source    string
-	status    string
-	text      string
-	timestamp time.Time
-	ordinal   int
+	sourceUUID string
+	agentID    string
+	source     string
+	status     string
+	text       string
+	timestamp  time.Time
+	ordinal    int
 }
 
 func newCodexSessionBuilder(
@@ -455,6 +457,9 @@ func (b *codexSessionBuilder) handleResponseItem(ctx context.Context,
 	case "agent_message":
 		b.handleAgentMessage(payload, ts)
 		return
+	case "reasoning":
+		b.handleReasoning(payload, ts)
+		return
 	}
 
 	role := payload.Get("role").Str
@@ -463,7 +468,7 @@ func (b *codexSessionBuilder) handleResponseItem(ctx context.Context,
 	}
 
 	content := extractCodexContent(payload)
-	if role == "user" && b.handleSubagentNotification(ctx, content, ts) {
+	if role == "user" && b.handleSubagentNotification(ctx, content, ts, payload.Get("id").Str) {
 		return
 	}
 
@@ -496,13 +501,11 @@ func (b *codexSessionBuilder) handleResponseItem(ctx context.Context,
 		b.committedUsageBlockedByUser = true
 	}
 
-	msg := ParsedMessage{
-		Role:          RoleType(role),
-		Content:       content,
-		Timestamp:     ts,
-		ContentLength: len(content),
-		Model:         b.model,
-	}
+	var body MessageContentBuilder
+	body.AddText(content)
+	msg := body.Message()
+	msg.Role, msg.Timestamp, msg.Model = RoleType(role), ts, b.model
+	msg.SourceUUID = strings.Clone(payload.Get("id").Str)
 	if role == string(RoleAssistant) {
 		msg.ReasoningEffort = b.reasoningEffort
 	}
@@ -527,13 +530,37 @@ func (b *codexSessionBuilder) handleAgentMessage(
 	}
 	b.committedUsageTarget = nil
 	b.committedUsageBlockedByUser = true
-	b.sink.AppendMessage(ParsedMessage{
-		Role:          RoleUser,
-		Content:       content,
-		Timestamp:     ts,
-		ContentLength: len(content),
-		Model:         b.model,
+	var body MessageContentBuilder
+	body.AddText(content)
+	msg := body.Message()
+	msg.Role, msg.Timestamp, msg.Model = RoleUser, ts, b.model
+	msg.SourceUUID = strings.Clone(payload.Get("id").Str)
+	b.sink.AppendMessage(msg)
+}
+
+func (b *codexSessionBuilder) handleReasoning(payload gjson.Result, ts time.Time) {
+	var body MessageContentBuilder
+	payload.Get("summary").ForEach(func(_, part gjson.Result) bool {
+		if part.Get("type").Str == "summary_text" {
+			body.AddThinking(strings.Clone(part.Get("text").Str))
+		}
+		return true
 	})
+	payload.Get("content").ForEach(func(_, part gjson.Result) bool {
+		switch part.Get("type").Str {
+		case "reasoning_text", "text":
+			body.AddThinking(strings.Clone(part.Get("text").Str))
+		}
+		return true
+	})
+	if !body.message.HasThinking {
+		body.AddThinking("")
+	}
+	msg := body.Message()
+	msg.Role, msg.Timestamp, msg.Model = RoleAssistant, ts, b.model
+	msg.ReasoningEffort = b.reasoningEffort
+	msg.SourceUUID = strings.Clone(payload.Get("id").Str)
+	b.sink.AppendMessage(msg)
 }
 
 func (b *codexSessionBuilder) handleEventMsg(payload gjson.Result) {
@@ -645,23 +672,16 @@ func (b *codexSessionBuilder) handleFunctionCall(
 		waitAgentIDs = codexWaitAgentIDs(args)
 	}
 
-	messageOrdinal := b.sink.AppendMessage(ParsedMessage{
-		Role:            RoleAssistant,
-		Content:         content,
-		Timestamp:       ts,
-		HasToolUse:      true,
-		ContentLength:   len(content),
-		Model:           b.model,
-		ReasoningEffort: b.reasoningEffort,
-		ToolCalls: []ParsedToolCall{{
-			ToolUseID: callID,
-			ToolName:  name,
-			Category:  NormalizeToolCategory(name),
-			InputJSON: inputJSON,
-			Rendering: content,
-			SkillName: skillName,
-		}},
+	var body MessageContentBuilder
+	body.AddToolCall(ParsedToolCall{
+		ToolUseID: callID, ToolName: name, Category: NormalizeToolCategory(name),
+		InputJSON: inputJSON, Rendering: content, SkillName: skillName,
 	})
+	msg := body.Message()
+	msg.Role, msg.Timestamp, msg.Model = RoleAssistant, ts, b.model
+	msg.ReasoningEffort = b.reasoningEffort
+	msg.SourceUUID = strings.Clone(payload.Get("id").Str)
+	messageOrdinal := b.sink.AppendMessage(msg)
 	if callID != "" {
 		position := &ParsedToolCallPosition{
 			MessageOrdinal: messageOrdinal,
@@ -684,16 +704,19 @@ func (b *codexSessionBuilder) handleFunctionCallOutput(ctx context.Context,
 	payload gjson.Result, ts time.Time,
 ) {
 	callID := payload.Get("call_id").Str
-	if callID == "" {
-		return
-	}
 	defer b.forgetToolCall(callID)
 
 	output, raw := parseCodexFunctionOutput(payload)
-	if !output.Exists() {
-		if strings.TrimSpace(raw) == "" {
-			return
+	if b.toolCallNameForOutput(callID) == "" {
+		if nativeOutput := payload.Get("output"); nativeOutput.Exists() {
+			msg := codexStandaloneOutput(nativeOutput.Raw, callID, payload.Get("id").Str, ts)
+			msg.Model = b.model
+			b.sink.AppendMessage(msg)
 		}
+		return
+	}
+	if !output.Exists() && strings.TrimSpace(raw) == "" {
+		return
 	}
 
 	switch b.toolCallNameForOutput(callID) {
@@ -751,6 +774,20 @@ func (b *codexSessionBuilder) handleFunctionCallOutput(ctx context.Context,
 	}
 }
 
+func codexStandaloneOutput(raw, callID, sourceUUID string, ts time.Time) ParsedMessage {
+	var body MessageContentBuilder
+	body.AddToolResult(ParsedToolResult{
+		ToolUseID: callID, ContentRaw: strings.Clone(raw),
+		ContentLength: toolResultContentLength(gjson.Parse(raw)),
+	})
+	msg := body.Message()
+	msg.Role, msg.Timestamp = RoleUser, ts
+	msg.SourceSubtype = SourceSubtypeToolResult
+	msg.SourceUUID = strings.Clone(sourceUUID)
+	msg.ContentLength = sanitizedToolResultWorkLength(gjson.Parse(raw))
+	return msg
+}
+
 func (b *codexSessionBuilder) appendToolResultEvent(ctx context.Context,
 	callID string, ev ParsedToolResultEvent,
 ) {
@@ -773,7 +810,7 @@ func (b *codexSessionBuilder) toolCallNameForOutput(callID string) string {
 // its ordinal position until the wait call shows up or EOF flushes it as
 // an orphan message.
 func (b *codexSessionBuilder) handleSubagentNotification(ctx context.Context,
-	content string, ts time.Time,
+	content string, ts time.Time, sourceUUID string,
 ) bool {
 	agentID, statusName, text := parseCodexSubagentNotification(content)
 	if agentID == "" || text == "" {
@@ -793,12 +830,13 @@ func (b *codexSessionBuilder) handleSubagentNotification(ctx context.Context,
 
 	b.pendingAgentEvents[agentID] = append(
 		b.pendingAgentEvents[agentID], codexPendingEvent{
-			agentID:   agentID,
-			source:    "subagent_notification",
-			status:    statusName,
-			text:      text,
-			timestamp: ts,
-			ordinal:   b.sink.ReserveOrdinal(),
+			sourceUUID: strings.Clone(sourceUUID),
+			agentID:    agentID,
+			source:     "subagent_notification",
+			status:     statusName,
+			text:       text,
+			timestamp:  ts,
+			ordinal:    b.sink.ReserveOrdinal(),
 		},
 	)
 	return true
@@ -878,15 +916,10 @@ func (b *codexSessionBuilder) flushPendingAgentResultsContext(
 					return err
 				}
 				key := agentID + "\x00" + ev.status + "\x00" + ev.text
-				b.sink.InsertOrphanMessage(key, ParsedMessage{
-					Ordinal:       ev.ordinal,
-					Role:          RoleUser,
-					Content:       ev.text,
-					SourceSubtype: SourceSubtypeToolResult,
-					Timestamp:     ev.timestamp,
-					Model:         b.model,
-					ContentLength: len(ev.text),
-				})
+				quoted, _ := json.Marshal(ev.text)
+				msg := codexStandaloneOutput(string(quoted), "", ev.sourceUUID, ev.timestamp)
+				msg.Ordinal, msg.Model = ev.ordinal, b.model
+				b.sink.InsertOrphanMessage(key, msg)
 
 			}
 			delete(b.pendingAgentEvents, agentID)

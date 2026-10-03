@@ -42,6 +42,8 @@ it("positions visible matches without hidden thinking, including live filter cha
   const content = `[Thinking]\n${"x".repeat(10000)}\n[/Thinking]\n\nneedle`;
   messages.messages = [
     {
+      content_layout: null,
+      tool_result_text: "",
       has_context_tokens: false,
       has_output_tokens: false,
       id: 180000,

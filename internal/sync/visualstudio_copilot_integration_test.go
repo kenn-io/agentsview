@@ -1234,9 +1234,10 @@ func TestSyncEngineVisualStudioCopilotMergeDerivesFirstMessageFromMergedRows(t *
 	))
 	msgs := fetchMessages(t, database, sessionID)
 	require.Len(t, msgs, 2)
+	assert.Empty(t, msgs[0].Content)
+	require.Len(t, msgs[0].ToolCalls, 1)
 	assert.Equal(t, "[Bash: run_command_in_terminal]\n$ "+
-		"dotnet build --configuration Release",
-		msgs[0].Content)
+		"dotnet build --configuration Release", msgs[0].ToolCalls[0].Rendering)
 	assert.Equal(t, strings.TrimSpace(laterPrompt), msgs[1].Content)
 	assertSessionState(t, database, sessionID, func(sess *db.Session) {
 		require.NotNil(t, sess.FirstMessage)
@@ -1318,8 +1319,10 @@ func TestSyncEngineVisualStudioCopilotMergesNewMessageWhenTraceShrinks(t *testin
 	))
 	msgs := fetchMessages(t, database, sessionID)
 	require.Len(t, msgs, 4)
+	assert.Empty(t, msgs[0].Content)
+	require.Len(t, msgs[0].ToolCalls, 1)
 	assert.Equal(t, "[Bash: run_command_in_terminal]\n$ dotnet build",
-		msgs[0].Content)
+		msgs[0].ToolCalls[0].Rendering)
 	assert.Equal(t, strings.TrimSpace(oldPrompt), msgs[1].Content)
 	assert.Equal(t, "Another archived prompt.", msgs[2].Content)
 	assert.Equal(t, "New follow-up.", msgs[3].Content)
@@ -1395,8 +1398,10 @@ func TestSyncEngineVisualStudioCopilotMergesNewMessageWhenCompositeGrows(t *test
 	))
 	msgs := fetchMessages(t, database, sessionID)
 	require.Len(t, msgs, 3)
+	assert.Empty(t, msgs[0].Content)
+	require.Len(t, msgs[0].ToolCalls, 1)
 	assert.Equal(t, "[Bash: run_command_in_terminal]\n$ dotnet build",
-		msgs[0].Content)
+		msgs[0].ToolCalls[0].Rendering)
 	assert.Equal(t, "Archived prompt.", msgs[1].Content)
 	assert.Equal(t, strings.TrimSpace(newPrompt), msgs[2].Content)
 }
@@ -1461,8 +1466,10 @@ func TestSyncEngineVisualStudioCopilotDoesNotAppendRotatedDuplicateToolCall(t *t
 	))
 	msgs := fetchMessages(t, database, sessionID)
 	require.Len(t, msgs, 2)
+	assert.Empty(t, msgs[0].Content)
+	require.Len(t, msgs[0].ToolCalls, 1)
 	assert.Equal(t, "[Bash: run_command_in_terminal]\n$ dotnet build",
-		msgs[0].Content)
+		msgs[0].ToolCalls[0].Rendering)
 	require.Len(t, msgs[0].ToolCalls, 1)
 	assert.Equal(t, "call_build", msgs[0].ToolCalls[0].ToolUseID)
 	require.Len(t, msgs[0].ToolCalls[0].ResultEvents, 1)

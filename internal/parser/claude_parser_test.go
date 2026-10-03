@@ -2589,9 +2589,10 @@ func TestParseClaudeSession_SameMessageIDStreamingSnapshots(t *testing.T) {
 
 	require.Len(t, msgs, 2)
 	msg := msgs[1]
-	assert.Equal(t, "Working\n[Task: same (Explore)]", msg.Content)
+	assert.Equal(t, "Working", msg.Content)
 	assert.Equal(t, 3, msg.OutputTokens)
-	assert.Len(t, msg.ToolCalls, 1)
+	require.Len(t, msg.ToolCalls, 1)
+	assert.Equal(t, "[Task: same (Explore)]", msg.ToolCalls[0].Rendering)
 	assert.Equal(t, "toolu_same", msg.ToolCalls[0].ToolUseID)
 }
 
@@ -2892,8 +2893,7 @@ func TestExtractTextContent_ReturnsThinkingText(t *testing.T) {
 		text, thinking, hasThinking, _, _, _ := ExtractTextContent(t.Context(), content)
 		assert.True(t, hasThinking)
 		assert.Equal(t, "first thought\n\nsecond thought", thinking)
-		assert.Contains(t, text, "[Thinking]\nfirst thought\n[/Thinking]")
-		assert.Contains(t, text, "reply A")
+		assert.Equal(t, "reply A\nreply B", text)
 	})
 
 	t.Run("skips empty thinking blocks", func(t *testing.T) {

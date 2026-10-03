@@ -249,9 +249,10 @@ func requireVectorEnabled(cfg config.Config) error {
 // reusing embeddings built under the old scheme.
 func vectorGeneration(c config.VectorEmbeddingsConfig) kitvec.Generation {
 	params := map[string]string{
-		"max_input_chars":     strconv.Itoa(c.MaxInputChars),
-		"doc_unit_scheme":     "run_v1",
-		"chunk_overlap_chars": strconv.Itoa(vector.ChunkOverlap(c.MaxInputChars)),
+		"max_input_chars":             strconv.Itoa(c.MaxInputChars),
+		"doc_unit_scheme":             "run_v1",
+		vector.CorpusFingerprintParam: "dialogue-layout-v1",
+		"chunk_overlap_chars":         strconv.Itoa(vector.ChunkOverlap(c.MaxInputChars)),
 	}
 	// input_suffix joins the fingerprint only when set: an empty suffix must
 	// hash identically to configs written before the key existed, so adding

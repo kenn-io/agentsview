@@ -1074,6 +1074,13 @@ func decodeAntigravityParsedStep(
 		strs = urlOnly
 	}
 
+	if msg, native := antigravityNativeStepBody(step); native {
+		// Keep the former wire walker's work count, even when it could not
+		// recover short or protobuf-shaped text from a verified string field.
+		msg.ContentLength = sanitizedWorkLength(strings.Join(strs, "\n\n"))
+		return msg, true
+	}
+
 	// Emit the message if it has displayable content OR tool calls.
 	// Tool-only assistant steps (empty prose) are valid.
 	if len(strs) == 0 && len(calls) == 0 {

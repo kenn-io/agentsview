@@ -1314,8 +1314,8 @@ func TestParseHermesSession_JSONL_ToolCalls(t *testing.T) {
 	// Assistant message with reasoning and tool call.
 	assert.True(t, msgs[1].HasThinking)
 	assert.True(t, msgs[1].HasToolUse)
-	assert.Contains(t, msgs[1].Content, "[Thinking]")
-	assert.Contains(t, msgs[1].Content, "Let me read it.")
+	assert.Empty(t, msgs[1].Content)
+	assert.Equal(t, "Let me read it.", msgs[1].ThinkingText)
 	require.Len(t, msgs[1].ToolCalls, 1)
 	assert.Equal(t, "read_file", msgs[1].ToolCalls[0].ToolName)
 	assert.Equal(t, "Read", msgs[1].ToolCalls[0].Category)
@@ -1523,9 +1523,16 @@ func TestParseHermesSession_JSONL_ToolResultNoID(t *testing.T) {
 
 	sess, msgs := runHermesJSONLTest(t, "", content)
 	require.NotNil(t, sess)
-	// Tool result without ID is skipped.
-	assertMessageCount(t, sess.MessageCount, 1)
-	require.Len(t, msgs, 1)
+	// A result without a call ID retains its own output body.
+	assertMessageCount(t, sess.MessageCount, 2)
+	require.Len(t, msgs, 2)
+	assert.Empty(t, msgs[1].Content)
+	assert.Equal(t, "result", msgs[1].ToolResultText)
+	require.Len(t, msgs[1].ToolResults, 1)
+	assert.Empty(t, msgs[1].ToolResults[0].ToolUseID)
+	assert.Equal(t, &ContentLayout{Version: 1, Blocks: []ContentBlock{
+		{Kind: "tool_result", End: 6},
+	}}, msgs[1].ContentLayout)
 }
 
 func TestParseHermesSession_JSONL_InvalidJSON(t *testing.T) {
@@ -1656,7 +1663,8 @@ func TestParseHermesSession_JSON_ReasoningDetails(t *testing.T) {
 	_, msgs := runHermesJSONTest(t, "", content)
 	// reasoning_details is a fallback for reasoning.
 	assert.True(t, msgs[1].HasThinking)
-	assert.Contains(t, msgs[1].Content, "deep thought")
+	assert.Equal(t, "done", msgs[1].Content)
+	assert.Equal(t, "deep thought", msgs[1].ThinkingText)
 }
 
 func TestParseHermesSession_JSON_EmptyMessages(t *testing.T) {

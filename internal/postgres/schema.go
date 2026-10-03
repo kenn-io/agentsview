@@ -226,6 +226,9 @@ CREATE TABLE IF NOT EXISTS messages (
     source_parent_uuid TEXT NOT NULL DEFAULT '',
     is_sidechain       BOOLEAN NOT NULL DEFAULT FALSE,
     is_compact_boundary BOOLEAN NOT NULL DEFAULT FALSE,
+    tool_result_text TEXT NOT NULL DEFAULT '',
+    content_layout TEXT,
+    palette_text TEXT,
     PRIMARY KEY (session_id, ordinal),
     FOREIGN KEY (session_id)
         REFERENCES sessions(id) ON DELETE CASCADE
@@ -524,6 +527,7 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     subagent_session_id   TEXT,
     message_ordinal       INT NOT NULL,
     file_path             TEXT,
+    rendering             TEXT NOT NULL DEFAULT '',
     FOREIGN KEY (session_id)
         REFERENCES sessions(id) ON DELETE CASCADE
 );
@@ -1296,6 +1300,26 @@ func EnsureSchema(
 			"messages", "thinking_text",
 			`thinking_text TEXT NOT NULL DEFAULT ''`,
 			"adding messages.thinking_text",
+		},
+		{
+			"messages", "tool_result_text",
+			`tool_result_text TEXT NOT NULL DEFAULT ''`,
+			"adding messages.tool_result_text",
+		},
+		{
+			"messages", "palette_text",
+			`palette_text TEXT`,
+			"adding messages.palette_text",
+		},
+		{
+			"messages", "content_layout",
+			`content_layout TEXT`,
+			"adding messages.content_layout",
+		},
+		{
+			"tool_calls", "rendering",
+			`rendering TEXT NOT NULL DEFAULT ''`,
+			"adding tool_calls.rendering",
 		},
 		{
 			"sessions", "termination_status",
@@ -2510,7 +2534,7 @@ func CheckSchemaCompat(
 	}
 
 	_, err = db.ExecContext(ctx,
-		`SELECT call_index, file_path FROM tool_calls LIMIT 0`)
+		`SELECT call_index, file_path, rendering FROM tool_calls LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(
 			"tool_calls table missing required columns: %w",
@@ -2527,7 +2551,7 @@ func CheckSchemaCompat(
 			claude_message_id, claude_request_id,
 			source_type, source_subtype, prompt_source, source_uuid,
 			source_parent_uuid, is_sidechain,
-			is_compact_boundary
+			is_compact_boundary, tool_result_text, content_layout, palette_text
 		 FROM messages LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(

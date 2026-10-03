@@ -57,14 +57,10 @@ func (s *Store) SearchContent(
 		return s.searchContentTermsPG(ctx, f)
 	}
 
-	if len(f.Sources) == 0 {
-		f.Sources = []string{"messages", "tool_input", "tool_result"}
-	}
-	for _, src := range f.Sources {
-		if src != "messages" && src != "tool_input" && src != "tool_result" {
-			return db.ContentSearchPage{},
-				&db.SearchInputError{Msg: fmt.Sprintf("search: unknown source %q", src)}
-		}
+	var err error
+	f.Sources, err = db.NormalizeContentSearchSources(f)
+	if err != nil {
+		return db.ContentSearchPage{}, err
 	}
 	switch f.Mode {
 	case "", "substring":
@@ -150,6 +146,18 @@ func (s *Store) searchContentSubstringPG(
 	if pgHasSource(f, "messages") {
 		branches = append(branches, pgMessagesBranch(f, escapedPat, pb))
 	}
+	for _, field := range []struct {
+		source, column, location string
+		rank                     int
+	}{
+		{"thinking", "thinking_text", "thinking", 4}, {"tool_result", "tool_result_text", "tool_result", 5},
+	} {
+		if !pgHasSource(f, field.source) {
+			continue
+		}
+		branches = append(branches, pgCanonicalBodyBranch(f, field.column, field.location, field.rank, escapedPat, false, pb))
+	}
+
 	if pgHasSource(f, "tool_input") {
 		branches = append(branches, pgToolInputBranch(f, escapedPat, pb))
 	}
@@ -183,9 +191,9 @@ func pgMessagesBranch(
 		"m.content", f, escapedPat, pb,
 	)
 
-	sysPred := "TRUE"
+	sysPred := db.DialogueEligibilitySQL("m", db.PostgresQueryDialect())
 	if f.ExcludeSystem {
-		sysPred = "m.is_system = FALSE AND " +
+		sysPred += " AND m.is_system = FALSE AND " +
 			db.PostgresSystemPrefixSQL("m.content", "m.role")
 	}
 
@@ -445,6 +453,18 @@ func (s *Store) pgRegexCandidateRows(
 	if pgHasSource(f, "messages") {
 		branches = append(branches, pgMessagesCandidateBranch(f, lit, pb))
 	}
+	for _, field := range []struct {
+		source, column, location string
+		rank                     int
+	}{
+		{"thinking", "thinking_text", "thinking", 4}, {"tool_result", "tool_result_text", "tool_result", 5},
+	} {
+		if !pgHasSource(f, field.source) {
+			continue
+		}
+		branches = append(branches, pgCanonicalBodyBranch(f, field.column, field.location, field.rank, lit, true, pb))
+	}
+
 	if pgHasSource(f, "tool_input") {
 		branches = append(branches, pgToolInputCandidateBranch(f, lit, pb))
 	}
@@ -486,9 +506,9 @@ func pgMessagesCandidateBranch(
 ) string {
 	prefilter := pgPrefilterClause("m.content", lit, pb)
 
-	sysPred := "TRUE"
+	sysPred := db.DialogueEligibilitySQL("m", db.PostgresQueryDialect())
 	if f.ExcludeSystem {
-		sysPred = "m.is_system = FALSE AND " +
+		sysPred += " AND m.is_system = FALSE AND " +
 			db.PostgresSystemPrefixSQL("m.content", "m.role")
 	}
 
@@ -597,4 +617,31 @@ func literalPrefixPG(pattern string) string {
 	}
 	prefix, _ := re.LiteralPrefix()
 	return prefix
+}
+
+// pgCanonicalBodyBranch selects a complete reasoning or standalone output
+// owner so snippet redaction sees secrets outside the eventual window.
+func pgCanonicalBodyBranch(f db.ContentSearchFilter, column, location string, rank int, pattern string, regex bool, pb *paramBuilder) string {
+	col := "m." + column
+	var pred string
+	if regex {
+		pred = pgPrefilterClause(col, pattern, pb)
+	} else {
+		pred = pgContentSearchPredicate(col, f, pattern, pb)
+	}
+	pred += " AND " + col + " <> ''"
+	if f.ExcludeSystem {
+		pred += " AND m.is_system = FALSE AND " + db.PostgresSystemPrefixSQL("m.content", "m.role")
+	}
+	alias := "snippet"
+	if regex {
+		alias = "body"
+	}
+	return fmt.Sprintf(`
+		SELECT m.session_id, s.project, s.agent, '%s' AS location,
+			m.role, '' AS tool_name, m.ordinal, m.timestamp AS ts,
+			%s AS %s, %d AS src, 0::bigint AS row_id,
+			COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts
+		FROM messages m JOIN sessions s ON s.id = m.session_id
+		JOIN scoped sc ON sc.id = m.session_id WHERE %s`, location, col, alias, rank, pred)
 }

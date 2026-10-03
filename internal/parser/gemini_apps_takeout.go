@@ -218,7 +218,7 @@ func planGeminiAppsCell(cell *html.Node) (bool, ParseResult, error) {
 		return true, ParseResult{}, errors.New("prompted activity record has no prompt")
 	}
 	result := ParseResult{Session: ParsedSession{Project: "gemini.google.com", Machine: "local", Agent: AgentGeminiApps, FirstMessage: payload, SessionName: payload, StartedAt: ts, EndedAt: ts, MessageCount: 1, UserMessageCount: 1}}
-	result.Messages = []ParsedMessage{{Ordinal: 0, Role: RoleUser, Content: payload, Timestamp: ts, ContentLength: len(payload)}}
+	result.Messages = []ParsedMessage{ParsedMessage{Ordinal: 0, Role: RoleUser, Content: payload, Timestamp: ts, ContentLength: len(payload)}.withPlainBody()}
 	return true, result, nil
 }
 

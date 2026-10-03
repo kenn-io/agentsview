@@ -290,7 +290,7 @@ func TestOpenCodeReviewRequestSuffixAndStreamPairing(t *testing.T) {
 	assert.Equal(t, "call_a", aCall.ResultEvents[0].ToolUseID)
 	assert.Equal(t, "p result", pCall.ResultEvents[0].Content)
 	assert.Equal(t, "call_p", pCall.ResultEvents[0].ToolUseID)
-	assert.Contains(t, result.Messages[len(result.Messages)-2].Content, "orphan")
+	assert.Contains(t, result.Messages[len(result.Messages)-2].ToolResultText, "orphan")
 	assert.Equal(t, RoleSystem, result.Messages[len(result.Messages)-2].Role)
 	assert.Equal(t, "completed", pCall.ResultEvents[0].Status)
 	pendingCall := findOpenCodeReviewToolCall(t, result.Messages, "file_read", `"path":"pending"`)

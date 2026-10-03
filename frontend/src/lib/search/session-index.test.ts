@@ -7,6 +7,8 @@ import { buildSessionIndex } from "./session-index.js";
 let nextId = 100000;
 function message(ordinal: number, content: string, overrides: Partial<Message> = {}): Message {
   return {
+    content_layout: null,
+    tool_result_text: "",
     has_context_tokens: false,
     has_output_tokens: false,
     id: nextId++,
@@ -96,6 +98,7 @@ describe("buildSessionIndex", () => {
         has_tool_use: true,
         tool_calls: [
           {
+            rendering: "",
             tool_name: "Bash",
             category: "Bash",
             input_json: JSON.stringify({ command: "needle needle" }),
@@ -164,6 +167,7 @@ describe("buildSessionIndex", () => {
         has_tool_use: true,
         tool_calls: [
           {
+            rendering: "",
             tool_name: "Bash",
             category: "Bash",
             input_json: JSON.stringify({ command: "needle" }),
@@ -188,6 +192,7 @@ describe("buildSessionIndex", () => {
     const initial = message(1, "", {
       tool_calls: [
         {
+          rendering: "",
           category: "",
           tool_name: "Read",
           result_content: "needle",
@@ -198,6 +203,7 @@ describe("buildSessionIndex", () => {
       ...initial,
       tool_calls: [
         {
+          rendering: "",
           category: "",
           tool_name: "Read",
           result_content: "absent",
@@ -213,6 +219,7 @@ describe("buildSessionIndex", () => {
       message(ordinal, "", {
         tool_calls: [
           {
+            rendering: "",
             category: "",
             tool_name: "Read",
             result_content: "needle needle",

@@ -70,36 +70,22 @@ func parseDeepSeekTUISession(
 			}
 		}
 
-		content, thinking, hasThinking, hasToolUse, calls, results := extractDeepSeekTUIContent(msg.Get("content"))
-		if strings.TrimSpace(content) == "" && len(calls) == 0 &&
-			len(results) == 0 {
+		body := extractDeepSeekTUIBody(msg.Get("content"))
+		if !body.hasNativeBody() {
 			return true
 		}
-		if role == RoleUser && firstMessage == "" &&
-			strings.TrimSpace(content) != "" {
-			firstMessage = truncate(
-				strings.ReplaceAll(content, "\n", " "),
-				300,
-			)
+		if role == RoleUser && firstMessage == "" && strings.TrimSpace(body.Content) != "" {
+			firstMessage = truncate(strings.ReplaceAll(body.Content, "\n", " "), 300)
 		}
-
 		msgModel := msg.Get("model").Str
 		if msgModel == "" {
 			msgModel = model
 		}
-		messages = append(messages, ParsedMessage{
-			Ordinal:       ordinal,
-			Role:          role,
-			Content:       content,
-			ThinkingText:  thinking,
-			Timestamp:     ts,
-			HasThinking:   hasThinking,
-			HasToolUse:    hasToolUse,
-			ContentLength: len(content),
-			ToolCalls:     calls,
-			ToolResults:   results,
-			Model:         msgModel,
-		})
+		body.Ordinal, body.Role, body.Timestamp, body.Model = ordinal, role, ts, msgModel
+		if role == RoleUser && body.Content == "" && len(body.ToolResults) > 0 {
+			body.SourceSubtype = SourceSubtypeToolResult
+		}
+		messages = append(messages, body)
 		ordinal++
 		return true
 	})
@@ -168,60 +154,35 @@ func deepSeekTUIRole(role string) (RoleType, bool) {
 	}
 }
 
-func extractDeepSeekTUIContent(
-	content gjson.Result,
-) (string, string, bool, bool, []ParsedToolCall, []ParsedToolResult) {
+func extractDeepSeekTUIBody(content gjson.Result) ParsedMessage {
+	var composer MessageContentBuilder
 	if content.Type == gjson.String {
-		return content.Str, "", false, false, nil, nil
+		composer.AddText(content.Str)
+	} else if content.IsArray() {
+		content.ForEach(func(_, block gjson.Result) bool {
+			switch block.Get("type").Str {
+			case "text":
+				composer.AddText(block.Get("text").Str)
+			case "thinking":
+				thinking := block.Get("thinking").Str
+				if thinking == "" {
+					thinking = block.Get("text").Str
+				}
+				composer.AddThinking(thinking)
+			case "tool_use", "server_tool_use":
+				if call, ok := deepSeekTUIToolCall(block); ok {
+					call.Rendering = formatToolUse(block)
+					composer.AddToolCall(call)
+				}
+			case "tool_result", "tool_search_tool_result", "code_execution_tool_result":
+				if result, ok := deepSeekTUIToolResult(block); ok {
+					composer.AddToolResult(result)
+				}
+			}
+			return true
+		})
 	}
-	if !content.IsArray() {
-		return "", "", false, false, nil, nil
-	}
-
-	var (
-		parts         []string
-		thinkingParts []string
-		calls         []ParsedToolCall
-		results       []ParsedToolResult
-		hasThinking   bool
-		hasToolUse    bool
-	)
-	content.ForEach(func(_, block gjson.Result) bool {
-		switch block.Get("type").Str {
-		case "text":
-			if text := block.Get("text").Str; text != "" {
-				parts = append(parts, text)
-			}
-		case "thinking":
-			thinking := block.Get("thinking").Str
-			if thinking == "" {
-				thinking = block.Get("text").Str
-			}
-			if thinking != "" {
-				hasThinking = true
-				thinkingParts = append(thinkingParts, thinking)
-				parts = append(parts,
-					"[Thinking]\n"+thinking+"\n[/Thinking]")
-			}
-		case "tool_use", "server_tool_use":
-			if call, ok := deepSeekTUIToolCall(block); ok {
-				hasToolUse = true
-				call.Rendering = formatToolUse(block)
-				calls = append(calls, call)
-				parts = append(parts, call.Rendering)
-			}
-		case "tool_result", "tool_search_tool_result",
-			"code_execution_tool_result":
-			if result, ok := deepSeekTUIToolResult(block); ok {
-				results = append(results, result)
-			}
-		}
-		return true
-	})
-
-	return strings.Join(parts, "\n"),
-		strings.Join(thinkingParts, "\n\n"),
-		hasThinking, hasToolUse, calls, results
+	return composer.Message()
 }
 
 func deepSeekTUIToolCall(block gjson.Result) (ParsedToolCall, bool) {
@@ -252,10 +213,6 @@ func deepSeekTUIToolResult(block gjson.Result) (ParsedToolResult, bool) {
 	if toolUseID == "" {
 		toolUseID = block.Get("id").Str
 	}
-	if toolUseID == "" {
-		return ParsedToolResult{}, false
-	}
-
 	content := block.Get("content")
 	if !content.Exists() {
 		content = block.Get("result")

@@ -249,6 +249,7 @@ func loadOpenCodeV2Messages(ctx context.Context, db *sql.DB, sessionID, cwd stri
 			return nil, true, "", fmt.Errorf("decoding opencode v2 message %s: %w", id, err)
 		}
 		pm := ParsedMessage{Ordinal: len(parsed), Timestamp: millisToTime(created), SourceUUID: id}
+		var body MessageContentBuilder
 		switch kind {
 		case "user":
 			pm.Role, pm.Content = RoleUser, data.Text
@@ -271,28 +272,21 @@ func loadOpenCodeV2Messages(ctx context.Context, db *sql.DB, sessionID, cwd stri
 			}
 		case "assistant":
 			pm.Role = RoleAssistant
-			var texts []string
 			for _, item := range data.Content {
 				switch item.Type {
 				case "text":
-					if item.Text != "" {
-						texts = append(texts, item.Text)
-					}
+					body.AddText(item.Text)
 				case "reasoning":
-					if item.Text != "" {
-						pm.HasThinking = true
-						texts = append(texts, "[Thinking]\n"+item.Text+"\n[/Thinking]")
-					}
+					body.AddThinking(item.Text)
 				case "tool":
-					pm.HasToolUse = true
 					call, err := openCodeV2ToolCall(item, cwd)
 					if err != nil {
 						return nil, true, "", fmt.Errorf("decoding opencode v2 tool %s: %w", item.ID, err)
 					}
-					pm.ToolCalls = append(pm.ToolCalls, call)
+					body.AddToolCall(call)
 				}
 			}
-			pm.Content = strings.Join(texts, "\n")
+			pm.Content = body.Message().Content
 			applyOpenCodeTokenUsage(&pm, openCodeMessageData{ModelID: data.Model.ID}, raw, nil)
 		case "system", "synthetic", "skill", "compaction":
 			pm.Role, pm.IsSystem, pm.Content = RoleUser, true, data.Text
@@ -302,7 +296,6 @@ func loadOpenCodeV2Messages(ctx context.Context, db *sql.DB, sessionID, cwd stri
 			}
 		case "shell":
 			pm.Role, pm.HasToolUse = RoleUser, true
-			pm.Content = data.Command
 			input, err := json.Marshal(map[string]string{"command": data.Command})
 			if err != nil {
 				return nil, true, "", err
@@ -313,7 +306,7 @@ func loadOpenCodeV2Messages(ctx context.Context, db *sql.DB, sessionID, cwd stri
 				id, name = data.ShellID, "shell"
 				output = gjson.GetBytes(data.Output, "output").Str
 			}
-			call := ParsedToolCall{ToolUseID: id, ToolName: name, Category: NormalizeToolCategory(name), InputJSON: string(input)}
+			call := ParsedToolCall{ToolUseID: id, ToolName: name, Category: NormalizeToolCategory(name), InputJSON: string(input), Rendering: data.Command}
 			if data.Time.Completed != 0 {
 				status := "completed"
 				if data.Exit != 0 {
@@ -321,15 +314,18 @@ func loadOpenCodeV2Messages(ctx context.Context, db *sql.DB, sessionID, cwd stri
 				}
 				call.ResultEvents = []ParsedToolResultEvent{{ToolUseID: id, Status: status, Content: output, Timestamp: millisToTime(data.Time.Completed)}}
 			}
-			pm.ToolCalls = []ParsedToolCall{call}
+			body.AddToolCall(call)
 		default:
 			// Agent/model switches are session controls, not transcript messages.
 			continue
 		}
-		if strings.TrimSpace(pm.Content) == "" && !pm.HasToolUse && !pm.IsCompactBoundary && len(pm.TokenUsage) == 0 {
+		if kind != "assistant" && kind != "shell" {
+			body.AddText(pm.Content)
+		}
+		pm = pm.withBody(body.Message())
+		if !pm.hasNativeBody() && !pm.IsCompactBoundary && len(pm.TokenUsage) == 0 {
 			continue
 		}
-		pm.ContentLength = len(pm.Content)
 		parsed = append(parsed, pm)
 	}
 	return parsed, present, fmt.Sprintf("opencode-v2:%x", hash.Sum(nil)), rows.Err()

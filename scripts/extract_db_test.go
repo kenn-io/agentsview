@@ -37,7 +37,7 @@ func TestExtractDBBlocksTermsAcrossCoveredColumns(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, d.Close())
 
-	conn, err := sql.Open("sqlite3", srcPath)
+	conn, err := sql.Open("agentsview_archive_sqlite3", srcPath)
 	require.NoError(t, err)
 	defer conn.Close()
 
@@ -91,6 +91,16 @@ func TestExtractDBBlocksTermsAcrossCoveredColumns(t *testing.T) {
 	insertToolCall("s_tcpath", "/Users/dev/code/blocklist-demo-service/main.go", "", `{"a":1}`)
 
 	// Term hidden in a tool call's skill_name (newly covered column).
+	insertSession("s_output", "main", "ordinary prompt")
+	insertMessage(6, "s_output", "clean message body")
+	_, err = conn.ExecContext(t.Context(), `UPDATE messages SET tool_result_text = 'blocklist-demo-service' WHERE session_id = 's_output'`)
+	require.NoError(t, err)
+	insertSession("s_rendering", "main", "ordinary prompt")
+	insertMessage(7, "s_rendering", "clean message body")
+	insertToolCall("s_rendering", "clean.go", "", `{}`)
+	_, err = conn.ExecContext(t.Context(), `UPDATE tool_calls SET rendering = 'blocklist-demo-service' WHERE session_id = 's_rendering'`)
+	require.NoError(t, err)
+
 	insertSession("s_skill", "main", "skill run")
 	insertMessage(5, "s_skill", "clean message body")
 	insertToolCall("s_skill", "/tmp/clean.go", "blocklist-demo-service-deploy", `{"b":2}`)
@@ -151,7 +161,7 @@ func TestExtractDBUsesPrivateTermsFileByDefault(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, d.Close())
 
-	conn, err := sql.Open("sqlite3", srcPath)
+	conn, err := sql.Open("agentsview_archive_sqlite3", srcPath)
 	require.NoError(t, err)
 	defer conn.Close()
 
@@ -233,7 +243,7 @@ func TestExtractDBRedactsHomePathByDefault(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, d.Close())
 
-	conn, err := sql.Open("sqlite3", srcPath)
+	conn, err := sql.Open("agentsview_archive_sqlite3", srcPath)
 	require.NoError(t, err)
 	defer conn.Close()
 
@@ -267,6 +277,16 @@ func TestExtractDBRedactsHomePathByDefault(t *testing.T) {
 		"Open -home-local-user-name-code-project-a",
 		"Inspect ~/.claude/projects/-home-local-user-name-code-project-a/session.jsonl",
 	)
+	seed("s_native", "ordinary native prompt", "é "+homePath+" tail")
+	_, err = conn.ExecContext(t.Context(), `UPDATE messages
+		SET thinking_text = ?, tool_result_text = ?, content_layout = ? WHERE session_id = 's_native'`,
+		"think "+homePath, "output "+homePath,
+		`{"version":1,"blocks":[{"kind":"text","start":0,"end":12},{"kind":"thinking","start":0,"end":27},{"kind":"text","start":12,"end":29},{"kind":"tool_result","start":0,"end":28},{"kind":"tool_call","call_index":0}]}`)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), `INSERT INTO tool_calls
+		(message_id, session_id, tool_name, category, rendering)
+		SELECT id, session_id, 'Read', 'Read', ? FROM messages WHERE session_id = 's_native'`, "[Read: "+homePath+"/file]")
+	require.NoError(t, err)
 
 	_, err = conn.ExecContext(t.Context(), "PRAGMA wal_checkpoint(TRUNCATE)")
 	require.NoError(t, err)
@@ -288,7 +308,7 @@ func TestExtractDBRedactsHomePathByDefault(t *testing.T) {
 	out, err := cmd.CombinedOutput()
 	require.NoErrorf(t, err, "extract-db.sh failed: %s", out)
 
-	outConn, err := sql.Open("sqlite3", outPath)
+	outConn, err := sql.Open("agentsview_archive_sqlite3", outPath)
 	require.NoError(t, err)
 	defer outConn.Close()
 	rows, err := outConn.QueryContext(t.Context(), "SELECT id FROM sessions ORDER BY id")
@@ -302,7 +322,7 @@ func TestExtractDBRedactsHomePathByDefault(t *testing.T) {
 	}
 	require.NoError(t, rows.Err())
 
-	assert.Equal(t, []string{"s_encoded", "s_keep", "s_redact"}, ids)
+	assert.Equal(t, []string{"s_encoded", "s_keep", "s_native", "s_redact"}, ids)
 
 	var firstMessage, content string
 	require.NoError(t, outConn.QueryRowContext(t.Context(),
@@ -324,6 +344,41 @@ func TestExtractDBRedactsHomePathByDefault(t *testing.T) {
 	).Scan(&firstMessage, &content))
 	assert.Equal(t, "Open -home-user-code-project-a", firstMessage)
 	assert.Equal(t, "Inspect ~/.claude/projects/-home-user-code-project-a/session.jsonl", content)
+	var thinking, output, layout, rendering string
+	require.NoError(t, outConn.QueryRowContext(t.Context(), `SELECT content, thinking_text, tool_result_text, content_layout FROM messages WHERE session_id = 's_native'`).Scan(&content, &thinking, &output, &layout))
+	assert.Equal(t, "é ~ tail", content)
+	assert.Equal(t, "think ~", thinking)
+	assert.Equal(t, "output ~", output)
+	assert.JSONEq(t, `{"version":1,"blocks":[{"kind":"text","start":0,"end":4},{"kind":"thinking","start":0,"end":7},{"kind":"text","start":4,"end":9},{"kind":"tool_result","start":0,"end":8},{"kind":"tool_call","call_index":0}]}`, layout)
+	require.NoError(t, outConn.QueryRowContext(t.Context(), `SELECT rendering FROM tool_calls WHERE session_id = 's_native'`).Scan(&rendering))
+	assert.Equal(t, "[Read: ~/file]", rendering)
+	var sourceContent string
+	sourceConn, err := sql.Open("sqlite3", srcPath)
+	require.NoError(t, err)
+	defer sourceConn.Close()
+	require.NoError(t, sourceConn.QueryRowContext(t.Context(), `SELECT content FROM messages WHERE session_id = 's_native'`).Scan(&sourceContent))
+	assert.Equal(t, "é "+homePath+" tail", sourceContent)
+	var matches int
+	require.NoError(t, outConn.QueryRowContext(t.Context(), `SELECT count(*) FROM messages_fts WHERE messages_fts MATCH 'tail'`).Scan(&matches))
+	assert.Equal(t, 1, matches)
+	_, err = outConn.ExecContext(t.Context(), `UPDATE messages SET content='legacy-only-secret' WHERE session_id='s_keep'`)
+	require.NoError(t, err)
+	require.NoError(t, outConn.QueryRowContext(t.Context(), `SELECT count(*) FROM messages_fts WHERE messages_fts MATCH '"legacy-only-secret"'`).Scan(&matches))
+	assert.Zero(t, matches, "restored native FTS triggers exclude legacy bodies")
+	require.NoError(t, outConn.Close())
+	rebuilt, err := avdb.Open(t.Context(), outPath)
+	require.NoError(t, err)
+	require.NoError(t, rebuilt.Close())
+	paletteConn, err := sql.Open("sqlite3", outPath)
+	require.NoError(t, err)
+	defer paletteConn.Close()
+	var palette string
+	require.NoError(t, paletteConn.QueryRowContext(t.Context(), `SELECT p.content FROM palette_messages p JOIN messages m ON m.id=p.id WHERE m.session_id='s_native'`).Scan(&palette))
+	assert.Contains(t, palette, "é ~")
+	assert.Contains(t, palette, "think ~")
+	assert.Contains(t, palette, "output ~")
+	assert.Contains(t, palette, "[Read: ~/file]")
+	assert.NotContains(t, palette, homePath)
 }
 
 func TestExtractDBUsesPrivateTermsFileWithScreenshotFileOverride(t *testing.T) {
@@ -340,7 +395,7 @@ func TestExtractDBUsesPrivateTermsFileWithScreenshotFileOverride(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, d.Close())
 
-	conn, err := sql.Open("sqlite3", srcPath)
+	conn, err := sql.Open("agentsview_archive_sqlite3", srcPath)
 	require.NoError(t, err)
 	defer conn.Close()
 
@@ -421,7 +476,7 @@ func TestExtractDBKeepsOnlyRootTrees(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, d.Close())
 
-	conn, err := sql.Open("sqlite3", srcPath)
+	conn, err := sql.Open("agentsview_archive_sqlite3", srcPath)
 	require.NoError(t, err)
 	defer conn.Close()
 
@@ -611,7 +666,7 @@ func TestExtractDBSupportsArchivesBeforeMappingChangeJournals(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, d.Close())
 
-	conn, err := sql.Open("sqlite3", srcPath)
+	conn, err := sql.Open("agentsview_archive_sqlite3", srcPath)
 	require.NoError(t, err)
 	defer conn.Close()
 
@@ -687,7 +742,7 @@ func TestExtractDBTermsFileSkipsCommentsAndBlanks(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, d.Close())
 
-	conn, err := sql.Open("sqlite3", srcPath)
+	conn, err := sql.Open("agentsview_archive_sqlite3", srcPath)
 	require.NoError(t, err)
 	defer conn.Close()
 

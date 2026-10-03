@@ -1376,7 +1376,7 @@ func TestParseKiloLegacySessionCodebaseSearchResultStandalone(t *testing.T) {
 	// marked as tool output.
 	found := false
 	for _, m := range parsed {
-		if m.IsSystem && strings.Contains(m.Content, "codebaseSearch") {
+		if m.IsSystem && strings.Contains(m.ToolResultText, "codebaseSearch") {
 			found = true
 			assert.Equal(t, SourceSubtypeToolResult, m.SourceSubtype)
 			break
@@ -1615,12 +1615,13 @@ func TestParseKiloLegacySessionUnpairedCommandOutputIsMarkedToolOutput(
 
 	var fallback *ParsedMessage
 	for i := range parsed {
-		if parsed[i].Content == "secret=abc123" {
+		if parsed[i].ToolResultText == "secret=abc123" {
 			fallback = &parsed[i]
 			break
 		}
 	}
 	require.NotNil(t, fallback, "unpaired command output falls back to a row")
+	assert.Empty(t, fallback.Content)
 	assert.True(t, fallback.IsSystem)
 	assert.Equal(t, SourceSubtypeToolResult, fallback.SourceSubtype,
 		"the fallback row's text is tool output")

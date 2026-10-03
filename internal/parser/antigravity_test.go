@@ -379,8 +379,8 @@ func TestAntigravityCLIDiscoverAndParse(t *testing.T) {
 	assert.Equal(t, RoleUser, msgs[0].Role)
 	assert.Contains(t, msgs[0].Content, "hello world")
 	assert.Equal(t, RoleAssistant, msgs[1].Role)
-	assert.Contains(t, msgs[1].Content, "step one")
-	assert.Contains(t, msgs[1].Content, "Top task summary")
+	assert.Contains(t, msgs[1].ToolResultText, "step one")
+	assert.Contains(t, msgs[1].ToolResultText, "Top task summary")
 	assert.Equal(t, 2, sess.MessageCount)
 	assert.Equal(t, 1, sess.UserMessageCount)
 	assert.Equal(t, "hello world", sess.FirstMessage)
@@ -886,7 +886,7 @@ func TestAntigravityIDEDiscoverAndParse(t *testing.T) {
 			assert.Contains(t, m.Content, "user prompt text")
 		}
 		if m.Role == RoleAssistant &&
-			strings.Contains(m.Content, "Plan summary") {
+			strings.Contains(m.ToolResultText, "Plan summary") {
 			sawAssistant = true
 		}
 	}
@@ -1911,10 +1911,19 @@ func TestAntigravityCLITrajectoryWithoutSupportedMessagesFallsBack(t *testing.T)
 			sess, msgs, err := parseAntigravityCLITestSession(t, pbPath, "", "test-machine")
 			require.NoError(t, err)
 
-			require.Len(t, msgs, 1)
+			wantCount := 1
+			if tc.name == "tool result only" {
+				wantCount = 2
+			}
+			require.Len(t, msgs, wantCount)
 			assert.Equal(t, RoleUser, msgs[0].Role)
 			assert.Equal(t, "history fallback", msgs[0].Content)
-			assert.Equal(t, 1, sess.MessageCount)
+			assert.Equal(t, wantCount, sess.MessageCount)
+			assert.Equal(t, 1, sess.UserMessageCount)
+			if tc.name == "tool result only" {
+				assert.Empty(t, msgs[1].Content)
+				assert.Equal(t, `"file1.txt"`, msgs[1].ToolResultText)
+			}
 			assert.Equal(t, "history fallback", sess.FirstMessage)
 		})
 	}

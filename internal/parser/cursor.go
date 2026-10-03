@@ -135,24 +135,14 @@ func parseCursorMessages(lines []string) []ParsedMessage {
 	messages := make([]ParsedMessage, 0, len(blocks))
 
 	for i, block := range blocks {
-		content, timestamp, hasThinking, toolCalls := extractCursorContent(
-			block.role, block.lines,
-		)
-		content = strings.TrimSpace(content)
-		if content == "" && len(toolCalls) == 0 {
+		body, timestamp := extractCursorBody(block.role, block.lines)
+		if !body.hasNativeBody() {
 			continue
 		}
-
 		messages = append(messages, ParsedMessage{
-			Ordinal:       i,
-			Role:          block.role,
-			Content:       content,
-			Timestamp:     timestamp,
-			HasThinking:   hasThinking,
-			HasToolUse:    len(toolCalls) > 0,
-			ContentLength: len(content),
-			ToolCalls:     toolCalls,
-		})
+			Ordinal: i, Role: block.role, Content: body.Content,
+			Timestamp: timestamp,
+		}.withBody(body))
 	}
 
 	// Re-number ordinals to be contiguous after filtering
@@ -191,18 +181,18 @@ func splitCursorBlocks(lines []string) []cursorBlock {
 	return blocks
 }
 
-// extractCursorContent processes lines for a single message
-// block, returning the visible text content, whether thinking
-// was present, and any tool calls found.
-func extractCursorContent(
-	role RoleType, lines []string,
-) (string, time.Time, bool, []ParsedToolCall) {
+// extractCursorBody reads the producer-specific text grammar, including its
+// native structural markers. Normalized dialogue is never parsed this way.
+func extractCursorBody(role RoleType, lines []string) (ParsedMessage, time.Time) {
 	if role == RoleUser {
 		content, timestamp := extractCursorUserContent(lines)
-		return content, timestamp, false, nil
+		var builder MessageContentBuilder
+		builder.AddText(content)
+		body := builder.Message()
+		body.ContentLength = sanitizedWorkLength(content)
+		return body, timestamp
 	}
-	content, hasThinking, toolCalls := extractAssistantContent(lines)
-	return content, time.Time{}, hasThinking, toolCalls
+	return extractCursorAssistantBody(lines), time.Time{}
 }
 
 var cursorTimestampPattern = regexp.MustCompile(
@@ -322,93 +312,70 @@ func extractUserQuery(lines []string) string {
 	return strings.TrimSpace(text)
 }
 
-// extractAssistantContent parses assistant message lines for
-// visible text, thinking blocks, and tool calls.
-func extractAssistantContent(
-	lines []string,
-) (string, bool, []ParsedToolCall) {
-	var textParts []string
+// extractAssistantContent retains the field-only helper used by grammar tests.
+func extractAssistantContent(lines []string) (string, bool, []ParsedToolCall) {
+	body := extractCursorAssistantBody(lines)
+	return body.Content, body.HasThinking, body.ToolCalls
+}
+
+func extractCursorAssistantBody(lines []string) ParsedMessage {
+	var builder MessageContentBuilder
+	var textLines, run []string
 	var toolCalls []ParsedToolCall
-	hasThinking := false
+	flushText := func() {
+		builder.AddText(strings.Join(run, "\n"))
+		run = nil
+	}
 
-	i := 0
-	for i < len(lines) {
-		line := lines[i]
-		trimmed := strings.TrimSpace(line)
-
-		// Thinking block
-		if strings.HasPrefix(trimmed, "[Thinking]") {
-			hasThinking = true
-			i++
-			for i < len(lines) {
-				if isBlockBodyEnd(lines[i]) {
-					break
-				}
-				i++
-			}
-			continue
-		}
-
-		// Tool call
-		if toolName, ok := strings.CutPrefix(
-			trimmed, "[Tool call] ",
-		); ok {
+	for i := 0; i < len(lines); {
+		trimmed := strings.TrimSpace(lines[i])
+		if isAssistantMarker(trimmed) {
+			flushText()
+			markerStart := i
 			i++
 			bodyStart := i
-			for i < len(lines) {
-				if isBlockBodyEnd(lines[i]) {
-					break
-				}
+			for i < len(lines) && !isBlockBodyEnd(lines[i]) {
 				i++
 			}
-			inputJSON := cursorToolInputJSON(
-				toolName,
-				lines[bodyStart:i],
-			)
-			toolCalls = append(toolCalls, ParsedToolCall{
-				ToolName:  toolName,
-				Category:  NormalizeToolCategory(toolName),
-				InputJSON: inputJSON,
-				SkillName: inferToolSkillName(context.Background(),
-					toolName,
-					inputJSON,
-				),
-			})
-			continue
-		}
-
-		// Tool result — attach the body to the preceding call
-		if strings.HasPrefix(trimmed, "[Tool result]") {
-			i++
-			bodyStart := i
-			for i < len(lines) {
-				if isBlockBodyEnd(lines[i]) {
-					break
+			content := strings.TrimSpace(strings.Join(dedentCursorBlock(lines[bodyStart:i]), "\n"))
+			switch {
+			case strings.HasPrefix(trimmed, "[Thinking]"):
+				builder.AddThinking(content)
+			case strings.HasPrefix(trimmed, "[Tool call] "):
+				name := strings.TrimPrefix(trimmed, "[Tool call] ")
+				inputJSON := cursorToolInputJSON(name, lines[bodyStart:i])
+				call := ParsedToolCall{
+					ToolName: name, Category: NormalizeToolCategory(name), InputJSON: inputJSON,
+					SkillName: inferToolSkillName(context.Background(), name, inputJSON),
+					Rendering: strings.TrimSpace(strings.Join(lines[markerStart:i], "\n")),
 				}
-				i++
-			}
-			if len(toolCalls) > 0 {
-				content := strings.TrimSpace(strings.Join(
-					dedentCursorBlock(lines[bodyStart:i]), "\n",
-				))
+				toolCalls = append(toolCalls, call)
+				builder.AddToolCall(call)
+			case strings.HasPrefix(trimmed, "[Tool result]"):
 				if content == "" {
 					continue
 				}
-				toolCalls[len(toolCalls)-1].ResultEvents = append(
-					toolCalls[len(toolCalls)-1].ResultEvents,
-					ParsedToolResultEvent{Content: content},
-				)
+				if len(toolCalls) > 0 {
+					call := &toolCalls[len(toolCalls)-1]
+					call.ResultEvents = append(call.ResultEvents, ParsedToolResultEvent{Content: content})
+				} else {
+					raw, _ := json.Marshal(content)
+					builder.AddToolResult(ParsedToolResult{ContentRaw: string(raw), ContentLength: len(content)})
+				}
 			}
 			continue
 		}
-
-		// Regular text
-		textParts = append(textParts, line)
+		textLines = append(textLines, lines[i])
+		run = append(run, lines[i])
 		i++
 	}
-
-	content := strings.TrimSpace(strings.Join(textParts, "\n"))
-	return content, hasThinking, toolCalls
+	flushText()
+	body := builder.Message()
+	body.setDialogue(strings.TrimSpace(body.Content))
+	// The old reader measured dialogue only; retain that work convention.
+	body.ContentLength = sanitizedWorkLength(strings.TrimSpace(strings.Join(textLines, "\n")))
+	body.ToolCalls = toolCalls
+	return body
 }
 
 func cursorToolInputJSON(toolName string, lines []string) string {
@@ -581,28 +548,19 @@ func parseCursorJSONL(data string) []ParsedMessage {
 			continue
 		}
 
-		var msg ParsedMessage
+		body := ExtractMessageContent(context.Background(), content)
+		msg := body
 		msg.Ordinal = ordinal
-
 		if role == "user" {
 			msg.Role = RoleUser
-			msg.Content, msg.Timestamp = extractJSONLUserContent(content)
+			text, timestamp := extractJSONLUserContent(content)
+			msg.setDialogue(text)
+			msg.Timestamp = timestamp
 		} else {
 			msg.Role = RoleAssistant
-			text, _, hasThinking, hasToolUse,
-				toolCalls, toolResults := ExtractTextContent(context.Background(), content)
-			msg.Content = text
-			msg.HasThinking = hasThinking
-			msg.HasToolUse = hasToolUse
-			msg.ToolCalls = toolCalls
-			msg.ToolResults = toolResults
 		}
-
-		msg.Content = strings.TrimSpace(msg.Content)
-		msg.ContentLength = len(msg.Content)
-		if msg.Content == "" &&
-			len(msg.ToolCalls) == 0 &&
-			len(msg.ToolResults) == 0 {
+		msg.trimDialogue()
+		if !msg.hasNativeBody() {
 			continue
 		}
 

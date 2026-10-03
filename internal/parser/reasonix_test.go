@@ -58,8 +58,9 @@ func TestParseReasonixSession_Basic(t *testing.T) {
 	assert.Equal(t, RoleUser, msgs[0].Role, "msgs[0].Role")
 	assert.Equal(t, RoleAssistant, msgs[1].Role, "msgs[1].Role")
 
-	// Check that reasoning content is included in display content
-	assert.Contains(t, msgs[1].Content, "[Thinking]", "thinking block in content")
+	// Native reasoning stays separate from searchable dialogue.
+	assert.Equal(t, "Here's a function", msgs[1].Content)
+	assert.Equal(t, "I need to write a function", msgs[1].ThinkingText)
 	assert.True(t, msgs[1].HasThinking, "HasThinking flag")
 }
 

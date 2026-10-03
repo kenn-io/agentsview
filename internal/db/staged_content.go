@@ -163,7 +163,8 @@ func stagedSessionContentDigestTx(ctx context.Context,
 ) ([sha256.Size]byte, error) {
 	h := sha256.New()
 	rows, err := tx.QueryContext(ctx, `
-		SELECT ordinal, role, content, thinking_text, COALESCE(timestamp, ''),
+		SELECT ordinal, role, content, thinking_text, tool_result_text,
+		       COALESCE(content_layout, ''), COALESCE(timestamp, ''),
 		       has_thinking, has_tool_use, content_length, is_system, model,
 		       reasoning_effort, token_usage, context_tokens, output_tokens,
 		       has_context_tokens, has_output_tokens,
@@ -180,10 +181,11 @@ func stagedSessionContentDigestTx(ctx context.Context,
 		var contextTokens, outputTokens, hasContext, hasOutput int64
 		var isSidechain, isCompact int64
 		var role, content, thinking, timestamp, model, reasoningEffort, tokenUsage string
+		var toolResultText, contentLayout string
 		var claudeMessageID, claudeRequestID, sourceType, sourceSubtype string
 		var promptSource, sourceUUID, sourceParentUUID string
 		if err := rows.Scan(
-			&ordinal, &role, &content, &thinking, &timestamp,
+			&ordinal, &role, &content, &thinking, &toolResultText, &contentLayout, &timestamp,
 			&hasThinking, &hasToolUse, &contentLength, &isSystem, &model,
 			&reasoningEffort, &tokenUsage, &contextTokens, &outputTokens,
 			&hasContext, &hasOutput,
@@ -202,7 +204,8 @@ func stagedSessionContentDigestTx(ctx context.Context,
 			writeStagedDigestInt(h, value)
 		}
 		for _, value := range []string{
-			role, content, thinking, timestamp, model, reasoningEffort, tokenUsage,
+			role, content, thinking, toolResultText, contentLayout,
+			timestamp, model, reasoningEffort, tokenUsage,
 			claudeMessageID, claudeRequestID, sourceType, sourceSubtype,
 			promptSource, sourceUUID, sourceParentUUID,
 		} {
@@ -223,7 +226,8 @@ func stagedSessionContentDigestTx(ctx context.Context,
 		       COALESCE(tc.skill_name, ''),
 		       COALESCE(tc.result_content_length, 0),
 		       COALESCE(tc.result_content, ''),
-		       COALESCE(tc.subagent_session_id, ''), COALESCE(tc.file_path, '')
+		       COALESCE(tc.subagent_session_id, ''), COALESCE(tc.file_path, ''),
+		       tc.rendering
 		FROM tool_calls tc JOIN messages m ON m.id = tc.message_id
 		WHERE tc.session_id = ?
 		ORDER BY m.ordinal, COALESCE(tc.call_index, 0), tc.id`, sessionID)
@@ -234,11 +238,11 @@ func stagedSessionContentDigestTx(ctx context.Context,
 	for rows.Next() {
 		var ordinal, callIndex, resultLength int64
 		var toolName, category, toolUseID, inputJSON, skillName string
-		var resultContent, subagentSessionID, filePath string
+		var resultContent, subagentSessionID, filePath, rendering string
 		if err := rows.Scan(
 			&ordinal, &callIndex, &toolName, &category, &toolUseID,
 			&inputJSON, &skillName, &resultLength, &resultContent,
-			&subagentSessionID, &filePath,
+			&subagentSessionID, &filePath, &rendering,
 		); err != nil {
 			rows.Close()
 			return [sha256.Size]byte{}, err
@@ -249,7 +253,7 @@ func stagedSessionContentDigestTx(ctx context.Context,
 		writeStagedDigestInt(h, resultLength)
 		for _, value := range []string{
 			toolName, category, toolUseID, inputJSON, skillName,
-			resultContent, subagentSessionID, filePath,
+			resultContent, subagentSessionID, filePath, rendering,
 		} {
 			writeStagedDigestString(h, value)
 		}
@@ -374,6 +378,9 @@ func (db *DB) replaceSessionContentStaged(
 	signalsFn StagedSignalsFunc,
 	cp *ParserCheckpoint, blobs *ParserCheckpointBlobs,
 ) error {
+	if err := validateMessageLayouts(msgs); err != nil {
+		return err
+	}
 	if db.ArchiveContent().OmitsToolContent() {
 		// The in-memory rows contain all retained metadata. Staged output is
 		// excluded by this policy, so publish through the regular projection.
@@ -387,6 +394,12 @@ func (db *DB) replaceSessionContentStaged(
 			}
 		}
 		return db.ReplaceSessionContent(ctx, sessionID, msgs, update, findings)
+	}
+	// Prepare canonical ranges before publication and insertion, as regular
+	// message writers do. Explicit legacy provenance remains unknown.
+	msgs = append([]Message(nil), msgs...)
+	for i := range msgs {
+		sanitizeMessageBody(&msgs[i])
 	}
 
 	db.mu.Lock()
@@ -621,10 +634,17 @@ func replaceSessionMessagesTxStaged(
 				Category:          m.ToolCalls[callIdx].Category,
 				ToolUseID:         m.ToolCalls[callIdx].ToolUseID,
 				InputJSON:         m.ToolCalls[callIdx].InputJSON,
+				Rendering:         m.ToolCalls[callIdx].Rendering,
 				SkillName:         m.ToolCalls[callIdx].SkillName,
 				SubagentSessionID: m.ToolCalls[callIdx].SubagentSessionID,
 				FilePath:          m.ToolCalls[callIdx].FilePath,
 				CallIndex:         callIdx,
+			}
+			tc.ResultContentLength = ResolveResultContentLength(
+				m.ToolCalls[callIdx].ResultContent, m.ToolCalls[callIdx].ResultContentLength,
+			)
+			if !blocked[tc.Category] {
+				tc.ResultContent = m.ToolCalls[callIdx].ResultContent
 			}
 			if tc.ToolUseID != "" {
 				occurrence := callOccurrences[tc.ToolUseID]
@@ -644,12 +664,18 @@ func replaceSessionMessagesTxStaged(
 						sessionID, tc.ToolUseID, err,
 					)
 				}
-				tc.ResultContentLength = length
-				if !blocked[tc.Category] {
-					tc.ResultContent = summary
+				// Out-of-order native output can be paired into an inline
+				// summary without an event in scratch. Preserve that body;
+				// an actual staged event, including an empty one, owns its
+				// resolved summary and length.
+				if summary != "" || length != 0 || len(m.ToolCalls[callIdx].ResultEvents) != 0 {
+					tc.ResultContentLength = length
+					if !blocked[tc.Category] {
+						tc.ResultContent = summary
+					}
 				}
-				chunkBytes += int64(len(tc.ResultContent))
 			}
+			chunkBytes += int64(len(tc.ResultContent))
 			chunk = append(chunk, tc)
 			// Flush by byte budget as well as count: resolved summaries
 			// are the largest per-call strings, and a count-only bound

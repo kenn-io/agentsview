@@ -562,6 +562,26 @@ func insertMessages(t *testing.T, d *DB, msgs ...Message) {
 	require.NoError(t, d.InsertMessages(t.Context(), msgs), "insertMessages")
 }
 
+// removeNativeProjectionsForLegacyFixture removes derived objects that did not
+// exist in the legacy schema a migration test is about to construct.
+func removeNativeProjectionsForLegacyFixture(t *testing.T, conn *sql.DB) {
+	t.Helper()
+	_, err := conn.ExecContext(t.Context(), `
+		DROP TRIGGER IF EXISTS palette_owner_messages_insert;
+		DROP TRIGGER IF EXISTS palette_owner_messages_update;
+		DROP TRIGGER IF EXISTS palette_owner_messages_delete;
+		DROP TRIGGER IF EXISTS palette_owner_tool_calls_insert;
+		DROP TRIGGER IF EXISTS palette_owner_tool_calls_update;
+		DROP TRIGGER IF EXISTS palette_owner_tool_calls_delete;
+		DROP TRIGGER IF EXISTS palette_owner_tool_result_events_insert;
+		DROP TRIGGER IF EXISTS palette_owner_tool_result_events_update;
+		DROP TRIGGER IF EXISTS palette_owner_tool_result_events_delete;
+		UPDATE messages SET content_layout = NULL;
+		DROP VIEW IF EXISTS dialogue_messages;
+	`)
+	require.NoError(t, err, "prepare legacy projection schema")
+}
+
 // userMsg creates a user message with the given content.
 func userMsg(sid string, ordinal int, content string) Message {
 	return Message{
@@ -815,6 +835,7 @@ func TestMigration_ResultContentColumn(t *testing.T) {
 	// without the column to simulate a legacy schema.
 	conn, err := sql.Open("sqlite3", path)
 	requireNoError(t, err, "raw open")
+	removeNativeProjectionsForLegacyFixture(t, conn)
 	_, err = conn.ExecContext(t.Context(), `
 		CREATE TABLE tool_calls_old AS
 			SELECT id, message_id, session_id, tool_name,
@@ -6353,6 +6374,7 @@ func TestCopyOrphanedDataFrom_LegacyNoIsSystem(t *testing.T) {
 	// Drop is_system via raw SQL to simulate legacy schema.
 	raw, err := sql.Open("sqlite3", srcPath)
 	requireNoError(t, err, "raw open")
+	removeNativeProjectionsForLegacyFixture(t, raw)
 	// SQLite doesn't support DROP COLUMN before 3.35;
 	// recreate the table without is_system.
 	_, err = raw.ExecContext(t.Context(), `

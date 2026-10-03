@@ -1348,8 +1348,8 @@ func insertMessages(
 				provider_id,
 				has_context_tokens, has_output_tokens, claude_message_id,
 				claude_request_id, source_type, source_subtype, prompt_source, source_uuid,
-				source_parent_uuid, is_sidechain, is_compact_boundary
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				source_parent_uuid, is_sidechain, is_compact_boundary, tool_result_text, content_layout, palette_text
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			m.ID, m.SessionID, m.Ordinal, m.Role, m.Content,
 			m.ThinkingText, timeValue(m.Timestamp),
 			m.HasThinking, m.HasToolUse, m.ContentLength,
@@ -1359,6 +1359,7 @@ func insertMessages(
 			m.ClaudeMessageID, m.ClaudeRequestID,
 			m.SourceType, m.SourceSubtype, m.PromptSource, m.SourceUUID,
 			m.SourceParentUUID, m.IsSidechain, m.IsCompactBoundary,
+			m.ToolResultText, nilEmpty(db.ContentLayoutJSON(m.ContentLayout)), db.PaletteText(m),
 		); err != nil {
 			return fmt.Errorf("inserting duckdb message %s/%d: %w", m.SessionID, m.Ordinal, err)
 		}
@@ -1400,8 +1401,8 @@ func insertToolCalls(
 					message_id, session_id, tool_name, category,
 					call_index, tool_use_id, input_json, skill_name,
 					result_content_length, result_content,
-					subagent_session_id, file_path
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					subagent_session_id, file_path, rendering
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				m.ID, m.SessionID, tc.ToolName, tc.Category,
 				i, tc.ToolUseID, nilEmpty(tc.InputJSON),
 				nilEmpty(tc.SkillName), nilZero(tc.ResultContentLength),
@@ -1409,7 +1410,7 @@ func insertToolCalls(
 					tc.ResultContent, tc.ResultEvents,
 				)),
 				nilEmpty(tc.SubagentSessionID),
-				nilEmpty(tc.FilePath),
+				nilEmpty(tc.FilePath), tc.Rendering,
 			); err != nil {
 				return fmt.Errorf("inserting duckdb tool_call %s/%d/%d: %w",
 					m.SessionID, m.Ordinal, i, err)

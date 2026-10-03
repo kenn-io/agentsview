@@ -88,7 +88,7 @@ func parseQwenSession(
 		}
 
 		switch root.Get("type").Str {
-		case "user":
+		case "user", "tool_result":
 			if root.Get("message.role").Str != "user" {
 				continue
 			}
@@ -113,14 +113,15 @@ func parseQwenSession(
 					300,
 				)
 			}
+			var builder MessageContentBuilder
+			appendQwenParts(&builder, parts)
+			body := builder.Message()
+			body.ContentLength = sanitizedWorkLength(content)
 			messages = append(messages, ParsedMessage{
-				Ordinal:       ordinal,
-				Role:          RoleUser,
-				Content:       content,
-				Timestamp:     ts,
-				ContentLength: len(content),
-				ToolResults:   toolResults,
-			})
+				Ordinal: ordinal, Role: RoleUser, Content: body.Content,
+				Timestamp: ts, SourceUUID: root.Get("uuid").Str,
+				SourceParentUUID: root.Get("parentUuid").Str,
+			}.withBody(body))
 			ordinal++
 			userCount++
 
@@ -131,22 +132,22 @@ func parseQwenSession(
 
 			parts := root.Get("message.parts")
 			content := qwenJoinedParts(parts, false)
-			thinking := qwenJoinedParts(parts, true)
 			hasThinking := qwenHasThought(parts)
 			toolCalls := qwenExtractToolCalls(parts)
+			usage := root.Get("usageMetadata")
 			if strings.TrimSpace(content) == "" && !hasThinking &&
-				len(toolCalls) == 0 {
+				len(toolCalls) == 0 && !qwenHasUsage(usage) {
 				continue
 			}
 
 			pending.absorb(qwenAssistantEntry{
-				content:     content,
-				thinking:    thinking,
-				hasThinking: hasThinking,
-				toolCalls:   toolCalls,
-				timestamp:   ts,
-				model:       root.Get("model").Str,
-				usage:       root.Get("usageMetadata"),
+				content:          content,
+				sourceUUID:       root.Get("uuid").Str,
+				sourceParentUUID: root.Get("parentUuid").Str,
+				parts:            parts,
+				timestamp:        ts,
+				model:            root.Get("model").Str,
+				usage:            usage,
 			})
 
 			// Only flush on a "closing" entry: text with no tool call.
@@ -191,6 +192,32 @@ func parseQwenSession(
 	}
 	accumulateMessageTokenUsage(sess, messages)
 	return sess, messages, nil
+}
+
+func appendQwenParts(builder *MessageContentBuilder, parts gjson.Result) {
+	for _, part := range parts.Array() {
+		if part.Get("thought").Bool() {
+			builder.addThinking(part.Get("text").Str, "\n")
+		} else {
+			builder.AddText(part.Get("text").Str)
+		}
+		if call := part.Get("functionCall"); call.Get("name").Str != "" {
+			name := call.Get("name").Str
+			builder.AddToolCall(ParsedToolCall{
+				ToolUseID: call.Get("id").Str, ToolName: name,
+				Category: NormalizeToolCategory(name), InputJSON: call.Get("args").Raw,
+			})
+		}
+		if response := part.Get("functionResponse"); response.Exists() {
+			builder.AddToolResult(qwenToolResult(response))
+		}
+	}
+}
+
+func qwenHasUsage(usage gjson.Result) bool {
+	return usage.Get("promptTokenCount").Exists() ||
+		usage.Get("candidatesTokenCount").Exists() ||
+		usage.Get("cachedContentTokenCount").Exists()
 }
 
 func qwenJoinedParts(parts gjson.Result, thoughtsOnly bool) string {
@@ -275,30 +302,32 @@ func qwenExtractToolResults(parts gjson.Result) []ParsedToolResult {
 		if !fr.Exists() {
 			return true
 		}
-		content := fr.Get("response.output")
-		if !content.Exists() {
-			content = fr.Get("response")
-		}
-		results = append(results, ParsedToolResult{
-			ToolUseID:     fr.Get("id").Str,
-			ContentLength: toolResultContentLength(content),
-			ContentRaw:    content.Raw,
-		})
+		results = append(results, qwenToolResult(fr))
 		return true
 	})
 	return results
 }
 
+func qwenToolResult(response gjson.Result) ParsedToolResult {
+	content := response.Get("response.output")
+	if !content.Exists() {
+		content = response.Get("response")
+	}
+	return ParsedToolResult{
+		ToolUseID:     response.Get("id").Str,
+		ContentLength: toolResultContentLength(content), ContentRaw: content.Raw,
+	}
+}
+
 // qwenAssistantEntry holds the fields extracted from a single
 // `type=assistant` JSONL line, ready to be folded into a turn buffer.
 type qwenAssistantEntry struct {
-	content     string
-	thinking    string
-	hasThinking bool
-	toolCalls   []ParsedToolCall
-	timestamp   time.Time
-	model       string
-	usage       gjson.Result
+	sourceUUID, sourceParentUUID string
+	content                      string
+	parts                        gjson.Result
+	timestamp                    time.Time
+	model                        string
+	usage                        gjson.Result
 }
 
 // qwenAssistantBuffer accumulates one logical assistant turn across
@@ -309,14 +338,13 @@ type qwenAssistantEntry struct {
 // ParsedToolResult entries into the same buffer so the coalesced turn
 // retains its tool-use evidence.
 type qwenAssistantBuffer struct {
-	pending     bool
-	content     string
-	thinking    []string
-	hasThinking bool
-	toolCalls   []ParsedToolCall
-	toolResults []ParsedToolResult
-	timestamp   time.Time
-	model       string
+	sourceUUID, sourceParentUUID   string
+	identitySet, identityAmbiguous bool
+	pending                        bool
+	content                        string
+	body                           MessageContentBuilder
+	timestamp                      time.Time
+	model                          string
 
 	sumOutput    int
 	sumUncached  int
@@ -327,6 +355,12 @@ type qwenAssistantBuffer struct {
 }
 
 func (b *qwenAssistantBuffer) absorb(e qwenAssistantEntry) {
+	if !b.identitySet {
+		b.sourceUUID, b.sourceParentUUID = e.sourceUUID, e.sourceParentUUID
+		b.identitySet = true
+	} else if b.sourceUUID != e.sourceUUID || b.sourceParentUUID != e.sourceParentUUID {
+		b.identityAmbiguous = true
+	}
 	b.pending = true
 	if e.content != "" {
 		if b.content != "" {
@@ -335,15 +369,7 @@ func (b *qwenAssistantBuffer) absorb(e qwenAssistantEntry) {
 			b.content = e.content
 		}
 	}
-	if e.thinking != "" {
-		b.thinking = append(b.thinking, e.thinking)
-	}
-	if e.hasThinking {
-		b.hasThinking = true
-	}
-	if len(e.toolCalls) > 0 {
-		b.toolCalls = append(b.toolCalls, e.toolCalls...)
-	}
+	appendQwenParts(&b.body, e.parts)
 	if !e.timestamp.IsZero() {
 		b.timestamp = e.timestamp
 	}
@@ -393,7 +419,9 @@ func (b *qwenAssistantBuffer) absorbToolResults(trs []ParsedToolResult) {
 		return
 	}
 	b.pending = true
-	b.toolResults = append(b.toolResults, trs...)
+	for _, result := range trs {
+		b.body.AddToolResult(result)
+	}
 }
 
 func (b *qwenAssistantBuffer) flush(ordinal int) (ParsedMessage, bool) {
@@ -401,18 +429,15 @@ func (b *qwenAssistantBuffer) flush(ordinal int) (ParsedMessage, bool) {
 		return ParsedMessage{}, false
 	}
 
+	body := b.body.Message()
+	// Qwen historically measures only the coalesced dialogue bytes.
+	body.ContentLength = sanitizedWorkLength(b.content)
 	msg := ParsedMessage{
-		Ordinal:       ordinal,
-		Role:          RoleAssistant,
-		Content:       b.content,
-		ThinkingText:  strings.Join(b.thinking, "\n"),
-		Timestamp:     b.timestamp,
-		HasThinking:   b.hasThinking,
-		HasToolUse:    len(b.toolCalls) > 0,
-		ContentLength: len(b.content),
-		Model:         b.model,
-		ToolCalls:     b.toolCalls,
-		ToolResults:   b.toolResults,
+		Ordinal: ordinal, Role: RoleAssistant, Content: body.Content,
+		Timestamp: b.timestamp, Model: b.model,
+	}.withBody(body)
+	if !b.identityAmbiguous {
+		msg.SourceUUID, msg.SourceParentUUID = b.sourceUUID, b.sourceParentUUID
 	}
 
 	if b.hasOutput || b.hasContext {

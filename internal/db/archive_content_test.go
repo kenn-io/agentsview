@@ -311,9 +311,9 @@ func TestTranscriptsArchiveContentKeepsTextAndDropsToolPayloads(t *testing.T) {
 		StartedAt: &startedAt, MessageCount: 2, UserMessageCount: 1,
 	}))
 	require.NoError(t, database.ReplaceSessionMessages(t.Context(), "transcripts", []Message{
-		{SessionID: "transcripts", Ordinal: 0, Role: "user", Content: prompt},
+		{legacyBody: true, SessionID: "transcripts", Ordinal: 0, Role: "user", Content: prompt},
 		{
-			SessionID: "transcripts", Ordinal: 1, Role: "assistant",
+			legacyBody: true, SessionID: "transcripts", Ordinal: 1, Role: "assistant",
 			Model: "model-a", HasToolUse: true,
 			Content:      "running it now\n[Bash: build it]\n$ make build TOKEN=abc",
 			ThinkingText: "the build script is make",
@@ -340,23 +340,23 @@ func TestTranscriptsArchiveContentKeepsTextAndDropsToolPayloads(t *testing.T) {
 
 	require.NoError(t, database.InsertMessages(t.Context(), []Message{
 		{
-			SessionID: "transcripts", Ordinal: 2, Role: "tool",
+			legacyBody: true, SessionID: "transcripts", Ordinal: 2, Role: "tool",
 			Content: "standalone tool output", ContentLength: 22,
 		},
 		{
-			SessionID: "transcripts", Ordinal: 3, Role: "user", IsSystem: true,
+			legacyBody: true, SessionID: "transcripts", Ordinal: 3, Role: "user", IsSystem: true,
 			SourceSubtype: parser.SourceSubtypeToolResult,
 			Content:       "unpaired command output", ContentLength: 23,
 		},
 		{
-			SessionID: "transcripts", Ordinal: 4, Role: "user", IsSystem: true,
+			legacyBody: true, SessionID: "transcripts", Ordinal: 4, Role: "user", IsSystem: true,
 			Content: "unmarked command output", ContentLength: 23,
 			ToolResults: []ToolResult{{
 				ContentRaw: "unmarked command output", ContentLength: 23,
 			}},
 		},
 		{
-			SessionID: "transcripts", Ordinal: 5, Role: "user",
+			legacyBody: true, SessionID: "transcripts", Ordinal: 5, Role: "user",
 			Content: "please also run lint", ContentLength: 20,
 			ToolResults: []ToolResult{{
 				ToolUseID: "tool-use-1", ContentRaw: "lint output",
@@ -364,7 +364,7 @@ func TestTranscriptsArchiveContentKeepsTextAndDropsToolPayloads(t *testing.T) {
 			}},
 		},
 		{
-			SessionID: "transcripts", Ordinal: 6, Role: "assistant",
+			legacyBody: true, SessionID: "transcripts", Ordinal: 6, Role: "assistant",
 			Model: "model-a", HasToolUse: true,
 			Content: "checking\n[Bash: list secrets]\n$ ls ~/.ssh",
 			ToolCalls: []ToolCall{{
@@ -399,7 +399,7 @@ func TestTranscriptsArchiveContentKeepsTextAndDropsToolPayloads(t *testing.T) {
 		"a parser-provided rendering is replaced even when the input cannot rebuild it")
 
 	require.NoError(t, database.InsertMessages(t.Context(), []Message{{
-		SessionID: "transcripts", Ordinal: 8, Role: "assistant",
+		legacyBody: true, SessionID: "transcripts", Ordinal: 8, Role: "assistant",
 		Model: "model-a", HasToolUse: true,
 		Content: "[Bash]\n$ cat ~/.aws/credentials\nagain\n[Bash]\n$ cat ~/.aws/credentials",
 		ToolCalls: []ToolCall{{
@@ -416,7 +416,7 @@ func TestTranscriptsArchiveContentKeepsTextAndDropsToolPayloads(t *testing.T) {
 	// Sanitization strips control bytes from content before storage; the
 	// recorded rendering must still match afterwards.
 	require.NoError(t, database.InsertMessages(t.Context(), []Message{{
-		SessionID: "transcripts", Ordinal: 9, Role: "assistant",
+		legacyBody: true, SessionID: "transcripts", Ordinal: 9, Role: "assistant",
 		Model: "model-a", HasToolUse: true,
 		Content: "[Bash]\n$ cat \x00~/.netrc",
 		ToolCalls: []ToolCall{{
@@ -445,7 +445,7 @@ func TestTranscriptsArchiveContentKeepsTextAndDropsToolPayloads(t *testing.T) {
 	_, err = database.WriteSessionIncremental(t.Context(),
 		"transcripts",
 		[]Message{{
-			SessionID: "transcripts", Ordinal: 7, Role: "assistant",
+			legacyBody: true, SessionID: "transcripts", Ordinal: 7, Role: "assistant",
 			Model: "model-a", Content: "delegating", HasToolUse: true,
 			ToolCalls: []ToolCall{{
 				ToolName: "Agent", Category: "Task", ToolUseID: "tool-use-2",
@@ -503,7 +503,7 @@ func TestTranscriptArchiveRedactsOverlappingToolRenderings(t *testing.T) {
 					slices.Reverse(calls)
 				}
 				require.NoError(t, source.InsertMessages(t.Context(), []Message{{
-					SessionID: "overlapping", Role: "assistant", HasToolUse: true,
+					legacyBody: true, SessionID: "overlapping", Role: "assistant", HasToolUse: true,
 					Content:   "before\n[Bash]\n$ echo\nbetween\n[Bash]\n$ echo SECRET\nagain\n[Bash]\n$ echo SECRET\nafter",
 					ToolCalls: calls,
 				}}))
@@ -537,7 +537,7 @@ func TestTranscriptArchiveRedactsOverlappingToolRenderings(t *testing.T) {
 }
 
 // These are persisted row shapes from the provider parsers. Rendering is
-// deliberately absent: the archive does not store ParsedToolCall.Rendering.
+// deliberately absent to represent legacy rows before native rendering storage.
 func TestCopiedTranscriptsDropUnrecoverableToolText(t *testing.T) {
 	cases := []struct {
 		name, agent string
@@ -689,6 +689,7 @@ func TestCopiedTranscriptsDropUnrecoverableToolText(t *testing.T) {
 					ID: tc.name, Project: "project", Agent: tc.agent, Machine: "local",
 				}))
 				message := tc.message
+				message.SetContentLayout(nil)
 				message.SessionID = tc.name
 				message.ContentLength = len(message.Content)
 				require.NoError(t, source.InsertMessages(t.Context(), []Message{message}))
@@ -740,9 +741,9 @@ func TestCopyOrphanedDataProjectsArchiveContent(t *testing.T) {
 			MessageCount: 3, UserMessageCount: 1,
 		}))
 		require.NoError(t, source.InsertMessages(t.Context(), []Message{
-			{SessionID: "archived", Ordinal: 0, Role: "user", Content: prompt},
+			{legacyBody: true, SessionID: "archived", Ordinal: 0, Role: "user", Content: prompt},
 			{
-				SessionID: "archived", Ordinal: 1, Role: "assistant",
+				legacyBody: true, SessionID: "archived", Ordinal: 1, Role: "assistant",
 				Model: "model-a", HasToolUse: true,
 				Content:    "listing files\n[Bash]\n$ ls /private",
 				TokenUsage: []byte(`{"input_tokens":10,"output_tokens":2}`),
@@ -757,7 +758,7 @@ func TestCopyOrphanedDataProjectsArchiveContent(t *testing.T) {
 				}},
 			},
 			{
-				SessionID: "archived", Ordinal: 2, Role: "assistant",
+				legacyBody: true, SessionID: "archived", Ordinal: 2, Role: "assistant",
 				Model: "model-a", Content: "delegating", HasToolUse: true,
 				ToolCalls: []ToolCall{{
 					ToolName: "Agent", Category: "Task", ToolUseID: "tool-use-2",
@@ -766,11 +767,11 @@ func TestCopyOrphanedDataProjectsArchiveContent(t *testing.T) {
 				}},
 			},
 			{
-				SessionID: "archived", Ordinal: 3, Role: "tool",
+				legacyBody: true, SessionID: "archived", Ordinal: 3, Role: "tool",
 				Content: "standalone tool output", ContentLength: 22,
 			},
 			{
-				SessionID: "archived", Ordinal: 4, Role: "system", IsSystem: true,
+				legacyBody: true, SessionID: "archived", Ordinal: 4, Role: "system", IsSystem: true,
 				SourceSubtype: parser.SourceSubtypeToolResult,
 				Content:       "unpaired MCP response", ContentLength: 21,
 			},
@@ -813,6 +814,7 @@ func TestCopyOrphanedDataProjectsArchiveContent(t *testing.T) {
 			}))
 			for i := range legacy.messages {
 				legacy.messages[i].SessionID = legacy.id
+				legacy.messages[i].SetContentLayout(nil)
 			}
 			require.NoError(t, source.InsertMessages(t.Context(), legacy.messages))
 		}

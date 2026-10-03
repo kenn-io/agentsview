@@ -622,11 +622,13 @@ func parseCodebuffMessages(
 				return true
 			}
 			messages = append(messages, ParsedMessage{
-				Ordinal:       ordinal,
-				Role:          RoleUser,
-				Content:       content,
-				Timestamp:     ts,
-				ContentLength: len(content),
+				Ordinal:          ordinal,
+				SourceUUID:       msg.Get("id").Str,
+				SourceParentUUID: msg.Get("parentId").Str,
+				Role:             RoleUser,
+				Content:          content,
+				Timestamp:        ts,
+				ContentLength:    len(content),
 			})
 			ordinal++
 
@@ -634,6 +636,10 @@ func parseCodebuffMessages(
 			parsed := parseCodebuffAIMessage(msg, ts)
 			if len(parsed) == 0 {
 				return true
+			}
+			if len(parsed) == 1 {
+				parsed[0].SourceUUID = msg.Get("id").Str
+				parsed[0].SourceParentUUID = msg.Get("parentId").Str
 			}
 			for i := range parsed {
 				parsed[i].Ordinal = ordinal
@@ -650,12 +656,14 @@ func parseCodebuffMessages(
 				return true
 			}
 			messages = append(messages, ParsedMessage{
-				Ordinal:       ordinal,
-				Role:          RoleSystem,
-				Content:       content,
-				Timestamp:     ts,
-				ContentLength: len(content),
-				IsSystem:      true,
+				Ordinal:          ordinal,
+				SourceUUID:       msg.Get("id").Str,
+				SourceParentUUID: msg.Get("parentId").Str,
+				Role:             RoleSystem,
+				Content:          content,
+				Timestamp:        ts,
+				ContentLength:    len(content),
+				IsSystem:         true,
 			})
 			ordinal++
 		}
@@ -663,6 +671,7 @@ func parseCodebuffMessages(
 		return true
 	})
 
+	composeCodebuffBodies(messages)
 	return messages, startedAt, endedAt, nil
 }
 
@@ -719,7 +728,6 @@ func parseCodebuffAIMessage(
 					thinkingText := strings.Join(thinkingParts, "\n\n")
 					out = append(out, ParsedMessage{
 						Role:          RoleAssistant,
-						Content:       "[Thinking]\n" + thinkingText + "\n[/Thinking]",
 						ThinkingText:  thinkingText,
 						HasThinking:   true,
 						Timestamp:     ts,
@@ -735,7 +743,6 @@ func parseCodebuffAIMessage(
 			thinkingText := strings.Join(thinkingParts, "\n\n")
 			out = append(out, ParsedMessage{
 				Role:          RoleAssistant,
-				Content:       "[Thinking]\n" + thinkingText + "\n[/Thinking]",
 				ThinkingText:  thinkingText,
 				HasThinking:   true,
 				Timestamp:     ts,
@@ -800,7 +807,7 @@ func parseCodebuffAIMessage(
 			}
 			textType := block.Get("textType").Str
 			content := block.Get("content").Str
-			if strings.TrimSpace(content) == "" {
+			if strings.TrimSpace(content) == "" && textType != "reasoning" {
 				return true
 			}
 			isReason := textType == "reasoning"
@@ -961,7 +968,34 @@ func parseCodebuffAIMessage(
 	if len(out) == 0 {
 		return nil
 	}
+	composeCodebuffBodies(out)
 	return out
+}
+
+// composeCodebuffBodies consumes native grouped fields, including empty
+// reasoning. Group boundaries retain the existing tool/result row ownership.
+func composeCodebuffBodies(messages []ParsedMessage) {
+	for i := range messages {
+		msg := &messages[i]
+		if msg.ContentLayout != nil {
+			continue
+		}
+		var builder MessageContentBuilder
+		builder.AddText(msg.Content)
+		if msg.HasThinking {
+			builder.AddThinking(msg.ThinkingText)
+		}
+		for _, call := range msg.ToolCalls {
+			builder.AddToolCall(call)
+		}
+		for _, result := range msg.ToolResults {
+			builder.AddToolResult(result)
+		}
+		body := builder.Message()
+		body.ContentLength = msg.sanitizedHistoricalWorkLength()
+		msg.Content = body.Content
+		*msg = msg.withBody(body)
+	}
 }
 
 // parseCodebuffToolCall extracts a ParsedToolCall from a tool block.

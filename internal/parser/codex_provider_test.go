@@ -809,9 +809,10 @@ func TestCodexProviderIncrementalFirstGenuinePromptNeedsFullParse(t *testing.T) 
 				require.Len(t, full.Results, 1)
 				assert.Empty(t, full.Results[0].Result.Session.FirstMessage)
 				require.Len(t, full.Results[0].Result.Messages, 1)
+				assert.Empty(t, full.Results[0].Result.Messages[0].Content)
 				assert.Equal(t,
 					"Orphan task finished",
-					full.Results[0].Result.Messages[0].Content,
+					full.Results[0].Result.Messages[0].ToolResultText,
 				)
 				appendCodexProviderContent(t, path, tail)
 			}

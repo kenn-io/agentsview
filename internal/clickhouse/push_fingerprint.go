@@ -49,6 +49,7 @@ func (s *Sync) sessionFingerprints(
 			return nil, fmt.Errorf("tool call fingerprint %s: %w", sess.ID, err)
 		}
 		payload := struct {
+			PaletteRecipe  string
 			SessionFields  []any
 			Messages       []db.Message
 			Usage          string
@@ -56,6 +57,7 @@ func (s *Sync) sessionFingerprints(
 			SecretFindings []db.SecretFinding
 			Pins           []db.PinnedMessage
 		}{
+			PaletteRecipe:  db.PaletteCorpusRecipe,
 			SessionFields:  sessionFingerprintFields(sess, mirroredSessionMachine(sess, s.machine)),
 			Messages:       msgs,
 			Usage:          usage[sess.ID],

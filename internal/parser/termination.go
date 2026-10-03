@@ -65,7 +65,7 @@ func Classify(
 	// should not show a "waiting for you" indicator.
 	lastIsAssistant := false
 	for _, m := range slices.Backward(messages) {
-		if m.IsSystem {
+		if m.IsSystem || isUsageOnlyAssistant(m) {
 			continue
 		}
 		lastIsAssistant = m.Role == RoleAssistant
@@ -102,7 +102,7 @@ func hasOrphanedToolCall(messages []ParsedMessage) bool {
 	}
 	lastAssistantIdx := -1
 	for i, v := range slices.Backward(messages) {
-		if v.IsSystem {
+		if v.IsSystem || isUsageOnlyAssistant(v) {
 			continue
 		}
 		if v.Role == RoleAssistant {
@@ -150,4 +150,12 @@ func hasOrphanedToolCall(messages []ParsedMessage) bool {
 		}
 	}
 	return false
+}
+
+func isUsageOnlyAssistant(m ParsedMessage) bool {
+	return m.Role == RoleAssistant && m.ContentLayout != nil &&
+		m.ContentLayout.Version == 1 && len(m.ContentLayout.Blocks) == 0 &&
+		m.Content == "" && m.ThinkingText == "" && m.ToolResultText == "" &&
+		!m.HasThinking && !m.HasToolUse && len(m.ToolCalls) == 0 && len(m.ToolResults) == 0 &&
+		(m.HasContextTokens || m.HasOutputTokens || len(m.TokenUsage) > 0)
 }

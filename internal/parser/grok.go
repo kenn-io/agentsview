@@ -162,6 +162,7 @@ func ParseGrokSummary(
 				Content:   firstPrompt,
 				Timestamp: startedAt,
 			}}
+			composeGrokMessageBody(&messages[0])
 		}
 	}
 
@@ -434,15 +435,12 @@ func parseGrokChatHistory(path string) ([]ParsedMessage, int, error) {
 
 		case "reasoning":
 			text := grokReasoningText(root)
-			if text == "" {
-				continue
-			}
-			if hasPending {
+			if pendingThink != "" && text != "" {
 				pendingThink += "\n\n" + text
-			} else {
+			} else if text != "" {
 				pendingThink = text
-				hasPending = true
 			}
+			hasPending = true
 
 		case "backend_tool_call":
 			msg, ok := grokBackendToolMessage(root, ordinal)
@@ -469,12 +467,13 @@ func parseGrokChatHistory(path string) ([]ParsedMessage, int, error) {
 			content := strings.TrimSpace(root.Get("content").Str)
 			toolCalls := grokToolCalls(root.Get("tool_calls"))
 			thinking := pendingThink
+			hasThinking := hasPending || grokHasAssistantReasoning(root)
 			if inline := grokAssistantReasoning(root); inline != "" {
 				thinking = inline
 			}
 			pendingThink = ""
 			hasPending = false
-			if content == "" && len(toolCalls) == 0 && thinking == "" {
+			if content == "" && len(toolCalls) == 0 && !hasThinking {
 				continue
 			}
 			msg := ParsedMessage{
@@ -486,10 +485,9 @@ func parseGrokChatHistory(path string) ([]ParsedMessage, int, error) {
 				ToolCalls:     toolCalls,
 				HasToolUse:    len(toolCalls) > 0,
 			}
-			if thinking != "" {
+			if hasThinking {
 				msg.HasThinking = true
 				msg.ThinkingText = thinking
-				msg.Content = "[Thinking]\n" + thinking + "\n[/Thinking]\n" + content
 				msg.ContentLength = len(thinking) + len(content)
 			}
 			messages = append(messages, msg)
@@ -499,9 +497,6 @@ func parseGrokChatHistory(path string) ([]ParsedMessage, int, error) {
 			pendingThink = ""
 			hasPending = false
 			toolCallID := strings.TrimSpace(root.Get("tool_call_id").Str)
-			if toolCallID == "" {
-				continue
-			}
 			content := root.Get("content")
 			contentRaw := content.Raw
 			contentLen := toolResultContentLength(content)
@@ -532,7 +527,28 @@ func parseGrokChatHistory(path string) ([]ParsedMessage, int, error) {
 	if err := lr.Err(); err != nil {
 		return nil, malformed, fmt.Errorf("reading %s: %w", path, err)
 	}
+	for i := range messages {
+		composeGrokMessageBody(&messages[i])
+	}
 	return messages, malformed, nil
+}
+
+func composeGrokMessageBody(message *ParsedMessage) {
+	var builder MessageContentBuilder
+	if message.HasThinking {
+		builder.AddThinking(message.ThinkingText)
+	}
+	builder.AddText(message.Content)
+	for _, call := range message.ToolCalls {
+		builder.AddToolCall(call)
+	}
+	for _, result := range message.ToolResults {
+		builder.AddToolResult(result)
+	}
+	body := builder.Message()
+	body.ContentLength = message.sanitizedHistoricalWorkLength()
+	message.Content = body.Content
+	*message = message.withBody(body)
 }
 
 type grokTimestampAnchor struct {
@@ -762,7 +778,7 @@ func grokTimestampAnchorMatches(
 		return message.Content == grokNormalizeUserText(anchor.content)
 	case RoleAssistant:
 		content := message.Content
-		if message.HasThinking {
+		if message.HasThinking && message.ContentLayout == nil {
 			content = strings.TrimPrefix(
 				content,
 				"[Thinking]\n"+message.ThinkingText+"\n[/Thinking]\n",
@@ -834,14 +850,12 @@ func grokBackendToolMessage(
 		ToolName:  toolName,
 		Category:  NormalizeToolCategory(toolName),
 		InputJSON: inputJSON,
-		// The summary is the message text, so storage policies that drop
-		// tool inputs can replace it verbatim.
+		// The native backend summary is work displayed with this call.
 		Rendering: content,
 	}
 	return ParsedMessage{
 		Ordinal:       ordinal,
 		Role:          RoleAssistant,
-		Content:       content,
 		ContentLength: len(content),
 		HasToolUse:    true,
 		ToolCalls:     []ParsedToolCall{call},
@@ -1001,6 +1015,18 @@ func grokReasoningText(root gjson.Result) string {
 		return strings.Join(parts, "\n\n")
 	}
 	return strings.TrimSpace(root.Get("content").Str)
+}
+
+func grokHasAssistantReasoning(root gjson.Result) bool {
+	if root.Get("reasoning").Exists() || root.Get("reasoning_content").Exists() {
+		return true
+	}
+	for _, item := range root.Get("raw_output").Array() {
+		if item.Get("type").Str == "reasoning" {
+			return true
+		}
+	}
+	return false
 }
 
 func grokAssistantReasoning(root gjson.Result) string {

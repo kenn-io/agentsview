@@ -198,12 +198,12 @@ func TestParseCopilotSession_Reasoning(t *testing.T) {
 
 	ast := msgs[1]
 	assert.True(t, ast.HasThinking, "expected HasThinking on assistant message with reasoningText")
-	assert.Contains(t, ast.Content, "[Thinking]\nLet me think about this carefully...\n[/Thinking]")
-	assert.Contains(t, ast.Content, "Here is my analysis.")
-	// Thinking block must precede the visible content.
-	thinkIdx := strings.Index(ast.Content, "[Thinking]")
-	visibleIdx := strings.Index(ast.Content, "Here is my analysis.")
-	assert.Less(t, thinkIdx, visibleIdx, "thinking block should appear before visible content")
+	assert.Equal(t, "Let me think about this carefully...", ast.ThinkingText)
+	assert.Equal(t, "Here is my analysis.", ast.Content)
+	require.NotNil(t, ast.ContentLayout)
+	require.Len(t, ast.ContentLayout.Blocks, 2)
+	assert.Equal(t, "thinking", ast.ContentLayout.Blocks[0].Kind)
+	assert.Equal(t, "text", ast.ContentLayout.Blocks[1].Kind)
 }
 
 func TestParseCopilotSession_ReasoningOnly(t *testing.T) {
@@ -219,7 +219,8 @@ func TestParseCopilotSession_ReasoningOnly(t *testing.T) {
 
 	ast := msgs[1]
 	assert.True(t, ast.HasThinking, "expected HasThinking")
-	assert.Contains(t, ast.Content, "[Thinking]\nPondering the question...\n[/Thinking]")
+	assert.Empty(t, ast.Content)
+	assert.Equal(t, "Pondering the question...", ast.ThinkingText)
 }
 
 func TestParseCopilotSession_AssistantReasoningEvent(t *testing.T) {

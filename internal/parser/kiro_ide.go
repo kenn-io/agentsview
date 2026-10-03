@@ -170,19 +170,18 @@ func parseKiroIDENewFormat(
 					strings.ReplaceAll(content, "\n", " "), 300,
 				)
 			}
-			messages = append(messages, ParsedMessage{
+			messages = append(messages, (ParsedMessage{
 				Ordinal:       ordinal,
 				Role:          RoleUser,
 				Content:       content,
 				ContentLength: len(content),
-			})
+			}).withPlainBody())
 			ordinal++
 
 		case "assistant":
 			// Resolve model output from execution log.
-			resolved, toolCalls := kiroIDEResolveAssistant(
-				h, execIndex,
-			)
+			body := kiroIDEResolveAssistantBody(h, execIndex)
+			resolved, toolCalls := body.Content, body.ToolCalls
 			if resolved == "" {
 				resolved = content
 			}
@@ -202,26 +201,37 @@ func parseKiroIDENewFormat(
 			if resolved == "" && !hasToolUse {
 				continue
 			}
-			messages = append(messages, ParsedMessage{
+			if body.Content == "" && resolved != "" {
+				var fallback MessageContentBuilder
+				fallback.AddText(resolved)
+				for _, call := range toolCalls {
+					fallback.AddToolCall(call)
+				}
+				body = fallback.Message()
+			}
+			message := (ParsedMessage{
 				Ordinal:       ordinal,
 				Role:          RoleAssistant,
-				Content:       resolved,
+				Content:       body.Content,
 				ContentLength: len(resolved),
 				HasToolUse:    hasToolUse,
 				ToolCalls:     toolCalls,
-			})
+			}).withBody(body)
+			message.ContentLength = sanitizedWorkLength(resolved)
+			messages = append(messages, message)
 			ordinal++
 
 		case "tool":
-			// Tool results are consumed by the assistant
-			// message; skip to avoid blank transcript rows.
-			continue
+			raw, _ := json.Marshal(content)
+			body := kiroNativeResultBody([]ParsedToolResult{{ContentRaw: string(raw), ContentLength: len(content)}})
+			messages = append(messages, (ParsedMessage{Ordinal: ordinal, Role: RoleTool, SourceSubtype: SourceSubtypeToolResult}).withBody(body))
+			ordinal++
 		}
 	}
 
 	hasContent := false
 	for _, m := range messages {
-		if m.Content != "" {
+		if m.hasNativeBody() {
 			hasContent = true
 			break
 		}
@@ -360,12 +370,12 @@ func parseKiroIDEChatFormat(
 					strings.ReplaceAll(content, "\n", " "), 300,
 				)
 			}
-			messages = append(messages, ParsedMessage{
+			messages = append(messages, (ParsedMessage{
 				Ordinal:       ordinal,
 				Role:          RoleUser,
 				Content:       content,
 				ContentLength: len(content),
-			})
+			}).withPlainBody())
 			ordinal++
 
 		case "bot":
@@ -373,26 +383,27 @@ func parseKiroIDEChatFormat(
 				content == "I will follow these instructions." {
 				continue
 			}
-			messages = append(messages, ParsedMessage{
+			messages = append(messages, (ParsedMessage{
 				Ordinal:       ordinal,
 				Role:          RoleAssistant,
 				Content:       content,
 				ContentLength: len(content),
 				Model:         chat.Metadata.ModelID,
-			})
+			}).withPlainBody())
 			ordinal++
 
 		case "tool":
-			// Tool results are consumed by the assistant
-			// message; skip to avoid blank transcript rows.
-			continue
+			raw, _ := json.Marshal(content)
+			body := kiroNativeResultBody([]ParsedToolResult{{ContentRaw: string(raw), ContentLength: len(content)}})
+			messages = append(messages, (ParsedMessage{Ordinal: ordinal, Role: RoleTool, SourceSubtype: SourceSubtypeToolResult}).withBody(body))
+			ordinal++
 		}
 	}
 
 	// Require at least one message with content.
 	hasContent := false
 	for _, m := range messages {
-		if m.Content != "" {
+		if m.hasNativeBody() {
 			hasContent = true
 			break
 		}
@@ -527,41 +538,40 @@ func kiroIDEBuildExecIndex(dir string) map[string]string {
 // kiroIDEResolveAssistant extracts the model's text output
 // and tool calls from the execution log referenced by an
 // assistant history entry.
-func kiroIDEResolveAssistant(
+func kiroIDEResolveAssistantBody(
 	h kiroIDEHistoryEntry, execIndex map[string]string,
-) (string, []ParsedToolCall) {
+) ParsedMessage {
 	execID := h.ExecutionID
 	if execID == "" || execIndex == nil {
-		return "", nil
+		return (&MessageContentBuilder{}).Message()
 	}
 	path, ok := execIndex[execID]
 	if !ok {
-		return "", nil
+		return (&MessageContentBuilder{}).Message()
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", nil
+		return (&MessageContentBuilder{}).Message()
 	}
 
 	var exec struct {
 		Actions []kiroIDEExecAction `json:"actions"`
 	}
 	if err := json.Unmarshal(data, &exec); err != nil {
-		return "", nil
+		return (&MessageContentBuilder{}).Message()
 	}
 
-	var textParts []string
-	var toolCalls []ParsedToolCall
+	var body MessageContentBuilder
 	for _, a := range exec.Actions {
 		switch a.ActionType {
 		case "say":
 			if a.Output.Message != "" {
-				textParts = append(textParts, a.Output.Message)
+				body.addText(a.Output.Message, "\n\n")
 			}
 		case "replace":
 			if a.Input.File != "" {
 				diff := kiroIDEComputeDiff(a.Input)
-				toolCalls = append(toolCalls, ParsedToolCall{
+				body.AddToolCall(ParsedToolCall{
 					ToolUseID: a.ActionID,
 					ToolName:  "Edit",
 					Category:  "Edit",
@@ -576,7 +586,7 @@ func kiroIDEResolveAssistant(
 					m["content"] = a.Input.ModifiedContent
 				}
 				inputJSON, _ := json.Marshal(m, json.Deterministic(true))
-				toolCalls = append(toolCalls, ParsedToolCall{
+				body.AddToolCall(ParsedToolCall{
 					ToolUseID: a.ActionID,
 					ToolName:  "Write",
 					Category:  "Write",
@@ -587,7 +597,7 @@ func kiroIDEResolveAssistant(
 		case "readCode":
 			if a.Input.File != "" {
 				inputJSON, _ := json.Marshal(a.Input)
-				toolCalls = append(toolCalls, ParsedToolCall{
+				body.AddToolCall(ParsedToolCall{
 					ToolUseID: a.ActionID,
 					ToolName:  "readCode",
 					Category:  "Read",
@@ -596,7 +606,12 @@ func kiroIDEResolveAssistant(
 			}
 		}
 	}
-	return strings.Join(textParts, "\n\n"), toolCalls
+	return body.Message()
+}
+
+func kiroIDEResolveAssistant(h kiroIDEHistoryEntry, execIndex map[string]string) (string, []ParsedToolCall) {
+	body := kiroIDEResolveAssistantBody(h, execIndex)
+	return body.Content, body.ToolCalls
 }
 
 // kiroIDEComputeDiff produces a JSON object with "file" and

@@ -17,7 +17,7 @@ const simpleFTSDirEnv = "AGENTSVIEW_SIMPLE_DIR"
 
 const (
 	cjkFTSFingerprintStatsKey = "messages_cjk_fts_fingerprint_v1"
-	cjkFTSSchemaVersion       = "messages-cjk-fts-v3"
+	cjkFTSSchemaVersion       = "messages-cjk-fts-v4-palette"
 )
 
 var simpleFTSRuntimeConfig, simpleFTSRuntimeErr = discoverSimpleFTSRuntime()
@@ -258,6 +258,9 @@ func ensureCJKFTS(
 	defer func() { _ = tx.Rollback() }()
 
 	for _, trigger := range []string{
+		"palette_cjk_ai",
+		"palette_cjk_ad",
+		"palette_cjk_au",
 		"messages_cjk_ai",
 		"messages_cjk_ad",
 		"messages_cjk_au",
@@ -277,6 +280,11 @@ func ensureCJKFTS(
 			WHERE type = 'table' AND name = 'messages_cjk_fts'
 		)`).Scan(&tableExists); err != nil {
 		return fmt.Errorf("checking CJK FTS table: %w", err)
+	}
+
+	var paletteExists bool
+	if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = 'palette_cjk_fts')").Scan(&paletteExists); err != nil {
+		return err
 	}
 
 	var pendingTableExists bool
@@ -314,6 +322,9 @@ func ensureCJKFTS(
 	}
 
 	if !simpleFTSRuntimeConfig.available() {
+		if _, err := tx.ExecContext(ctx, "DROP TABLE IF EXISTS palette_cjk_fts"); err != nil {
+			return err
+		}
 		if tableExists {
 			if _, err := tx.ExecContext(ctx, "DROP TABLE messages_cjk_fts"); err != nil {
 				return fmt.Errorf("dropping unavailable CJK FTS: %w", err)
@@ -338,15 +349,24 @@ func ensureCJKFTS(
 	if fingerprintErr != nil && !errors.Is(fingerprintErr, sql.ErrNoRows) {
 		return fmt.Errorf("reading CJK FTS fingerprint: %w", fingerprintErr)
 	}
-	current := tableExists && fingerprintErr == nil && pendingSessions == 0 &&
+	current := tableExists && paletteExists && fingerprintErr == nil && pendingSessions == 0 &&
 		storedFingerprint == simpleFTSRuntimeConfig.fingerprint
 
 	if forceRebuild || !current {
 		log.Print("rebuilding CJK FTS index; startup waits for the full message scan to finish")
+		if _, err := tx.ExecContext(ctx, "DROP TABLE IF EXISTS palette_cjk_fts"); err != nil {
+			return err
+		}
 		if tableExists {
 			if _, err := tx.ExecContext(ctx, "DROP TABLE messages_cjk_fts"); err != nil {
 				return fmt.Errorf("dropping stale CJK FTS: %w", err)
 			}
+		}
+		if _, err := tx.ExecContext(ctx, schemaPaletteCJKFTS); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, "INSERT INTO palette_cjk_fts(palette_cjk_fts) VALUES('rebuild')"); err != nil {
+			return err
 		}
 		if _, err := tx.ExecContext(ctx, schemaCJKFTS); err != nil {
 			return fmt.Errorf("creating CJK FTS: %w", err)
@@ -371,7 +391,7 @@ func ensureCJKFTS(
 		}
 	}
 
-	if _, err := tx.ExecContext(ctx, schemaCJKFTSTriggers); err != nil {
+	if _, err := tx.ExecContext(ctx, schemaCJKFTSTriggers+schemaPaletteCJKTriggers); err != nil {
 		return fmt.Errorf("installing CJK FTS triggers: %w", err)
 	}
 	if err := tx.Commit(); err != nil {

@@ -11,16 +11,16 @@ import (
 	"slices"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 const (
 	selectMessageCols = `id, session_id, ordinal, role, content,
-		thinking_text,
+		thinking_text, tool_result_text, content_layout,
 		COALESCE(timestamp, '') AS timestamp,
 		has_thinking, has_tool_use, content_length,
 		is_system,
@@ -31,7 +31,7 @@ const (
 		source_parent_uuid, is_sidechain, is_compact_boundary`
 
 	insertMessageCols = `session_id, ordinal, role, content,
-		thinking_text,
+		thinking_text, tool_result_text, content_layout,
 		timestamp, has_thinking, has_tool_use, content_length,
 		is_system,
 		model, reasoning_effort, token_usage, context_tokens, output_tokens, provider_id,
@@ -52,11 +52,36 @@ const (
 	// Keep multi-row INSERT statements below SQLite's historic
 	// 999-variable limit so binaries built against older SQLite
 	// versions still work.
-	messageInsertRowsPerStmt         = 35  // 28 params per row
-	toolCallInsertRowsPerStmt        = 83  // 12 params per row (999/12 = 83)
+	messageInsertRowsPerStmt         = 33  // 30 params per row
+	toolCallInsertRowsPerStmt        = 76  // 13 params per row
 	toolResultEventInsertRowsPerStmt = 70  // 14 params per row
 	toolCallAgentStateRowsPerStmt    = 166 // 6 params per row
 )
+
+const existingToolResultOwnerSQL = `SELECT EXISTS(
+	SELECT 1 FROM tool_calls tc JOIN messages m ON m.id = tc.message_id
+	WHERE tc.session_id = ? AND tc.tool_use_id = ?
+)`
+
+// ExistingToolResultOwners resolves only the IDs in the appended batch using
+// the session/tool-use index. Unknown calls leave standalone results intact.
+func (db *DB) ExistingToolResultOwners(ctx context.Context, sessionID string, ids []string) (map[string]bool, error) {
+	owners := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		if _, checked := owners[id]; checked {
+			continue
+		}
+		var exists bool
+		if err := db.getReader().QueryRowContext(ctx, existingToolResultOwnerSQL, sessionID, id).Scan(&exists); err != nil {
+			return nil, fmt.Errorf("resolving tool result owner: %w", err)
+		}
+		owners[id] = exists
+	}
+	return owners, nil
+}
 
 // ToolCall represents a single tool invocation stored in
 // the tool_calls table.
@@ -74,10 +99,8 @@ type ToolCall struct {
 	ResultContent       string            `json:"result_content,omitempty"`
 	SubagentSessionID   string            `json:"subagent_session_id,omitempty"`
 	ResultEvents        []ToolResultEvent `json:"result_events,omitempty"`
-	// Rendering is the exact text the parser inlined into the message
-	// content for this call. It is consumed by the storage projection and
-	// never persisted.
-	Rendering string `json:"-"`
+	// Rendering is the native display text for this call.
+	Rendering string `json:"rendering"`
 }
 
 // ToolResult holds a tool_result content block for pairing.
@@ -499,31 +522,34 @@ type Message struct {
 	Content   string `json:"content"`
 	// ThinkingText holds the concatenated text of all thinking
 	// blocks for this message; "" if none.
-	ThinkingText      string         `json:"thinking_text"`
-	Timestamp         string         `json:"timestamp"`
-	HasThinking       bool           `json:"has_thinking"`
-	HasToolUse        bool           `json:"has_tool_use"`
-	ContentLength     int            `json:"content_length"`
-	Model             string         `json:"model"`
-	ReasoningEffort   string         `json:"reasoning_effort,omitempty"`
-	ProviderID        string         `json:"provider_id,omitempty"`
-	TokenUsage        jsontext.Value `json:"token_usage,omitempty"`
-	ContextTokens     int            `json:"context_tokens"`
-	OutputTokens      int            `json:"output_tokens"`
-	HasContextTokens  bool           `json:"has_context_tokens"`
-	HasOutputTokens   bool           `json:"has_output_tokens"`
-	ClaudeMessageID   string         `json:"claude_message_id,omitempty"`
-	ClaudeRequestID   string         `json:"claude_request_id,omitempty"`
-	ToolCalls         []ToolCall     `json:"tool_calls,omitempty"`
-	ToolResults       []ToolResult   `json:"-"`         // transient, for pairing
-	IsSystem          bool           `json:"is_system"` // persisted, filters search/analytics
-	SourceType        string         `json:"source_type,omitempty"`
-	SourceSubtype     string         `json:"source_subtype,omitempty"`
-	PromptSource      string         `json:"prompt_source,omitempty"`
-	SourceUUID        string         `json:"source_uuid,omitempty"`
-	SourceParentUUID  string         `json:"source_parent_uuid,omitempty"`
-	IsSidechain       bool           `json:"is_sidechain,omitempty"`
-	IsCompactBoundary bool           `json:"is_compact_boundary,omitempty"`
+	ThinkingText      string                `json:"thinking_text"`
+	ToolResultText    string                `json:"tool_result_text"`
+	ContentLayout     *parser.ContentLayout `json:"content_layout"`
+	legacyBody        bool                  `json:"-"`
+	Timestamp         string                `json:"timestamp"`
+	HasThinking       bool                  `json:"has_thinking"`
+	HasToolUse        bool                  `json:"has_tool_use"`
+	ContentLength     int                   `json:"content_length"`
+	Model             string                `json:"model"`
+	ReasoningEffort   string                `json:"reasoning_effort,omitempty"`
+	ProviderID        string                `json:"provider_id,omitempty"`
+	TokenUsage        jsontext.Value        `json:"token_usage,omitempty"`
+	ContextTokens     int                   `json:"context_tokens"`
+	OutputTokens      int                   `json:"output_tokens"`
+	HasContextTokens  bool                  `json:"has_context_tokens"`
+	HasOutputTokens   bool                  `json:"has_output_tokens"`
+	ClaudeMessageID   string                `json:"claude_message_id,omitempty"`
+	ClaudeRequestID   string                `json:"claude_request_id,omitempty"`
+	ToolCalls         []ToolCall            `json:"tool_calls,omitempty"`
+	ToolResults       []ToolResult          `json:"-"`         // transient, for pairing
+	IsSystem          bool                  `json:"is_system"` // persisted, filters search/analytics
+	SourceType        string                `json:"source_type,omitempty"`
+	SourceSubtype     string                `json:"source_subtype,omitempty"`
+	PromptSource      string                `json:"prompt_source,omitempty"`
+	SourceUUID        string                `json:"source_uuid,omitempty"`
+	SourceParentUUID  string                `json:"source_parent_uuid,omitempty"`
+	IsSidechain       bool                  `json:"is_sidechain,omitempty"`
+	IsCompactBoundary bool                  `json:"is_compact_boundary,omitempty"`
 }
 
 type ModelCount struct {
@@ -535,7 +561,7 @@ type ModelCount struct {
 // present in stored message metadata. It preserves explicit flags,
 // falls back to non-zero numeric values for legacy rows, and inspects
 // raw token_usage payload keys to preserve zero-valued coverage.
-func (m Message) TokenPresence() (bool, bool) {
+func (m *Message) TokenPresence() (bool, bool) {
 	return parser.InferTokenPresence(
 		m.TokenUsage, m.ContextTokens, m.OutputTokens,
 		m.HasContextTokens, m.HasOutputTokens,
@@ -1093,6 +1119,7 @@ func runUnit(members []unitRow) EmbeddableUnit {
 func embeddableUnitsQuery(since string, includeAutomated bool) string {
 	preds := []string{
 		"m.role IN ('user', 'assistant')",
+		DialogueEligibilitySQL("m", SQLiteQueryDialect()),
 		"m.is_system = 0",
 		"s.deleted_at IS NULL",
 		SystemPrefixSQL("m.content", "m.role"),
@@ -1204,7 +1231,7 @@ func insertMessagesTx(
 	for start := 0; start < len(msgs); start += messageInsertRowsPerStmt {
 		end := min(start+messageInsertRowsPerStmt, len(msgs))
 		batch := msgs[start:end]
-		args := make([]any, 0, len(batch)*28)
+		args := make([]any, 0, len(batch)*30)
 		for i, m := range batch {
 			id := nextID + int64(start+i)
 			ids[start+i] = id
@@ -1214,7 +1241,7 @@ func insertMessagesTx(
 		query := fmt.Sprintf(
 			"INSERT INTO messages (id, %s) VALUES %s",
 			insertMessageCols,
-			multiRowPlaceholders(len(batch), 28),
+			multiRowPlaceholders(len(batch), 30),
 		)
 		if _, err := tx.Exec(query, args...); err != nil {
 			first := batch[0].Ordinal
@@ -1260,7 +1287,7 @@ func multiRowPlaceholders(rows, cols int) string {
 func insertToolCallsChunkTx(
 	tx transactionQueries, calls []ToolCall,
 ) error {
-	args := make([]any, 0, len(calls)*12)
+	args := make([]any, 0, len(calls)*13)
 	for _, tc := range calls {
 		args = append(args,
 			tc.MessageID, tc.SessionID,
@@ -1273,6 +1300,7 @@ func insertToolCallsChunkTx(
 			nilIfEmpty(tc.SubagentSessionID),
 			nilIfEmpty(tc.FilePath),
 			tc.CallIndex,
+			tc.Rendering,
 		)
 	}
 	query := `
@@ -1280,8 +1308,8 @@ func insertToolCallsChunkTx(
 			(message_id, session_id, tool_name, category,
 			 tool_use_id, input_json, skill_name,
 			 result_content_length, result_content, subagent_session_id,
-			 file_path, call_index)
-		VALUES ` + multiRowPlaceholders(len(calls), 12)
+			 file_path, call_index, rendering)
+		VALUES ` + multiRowPlaceholders(len(calls), 13)
 	if _, err := tx.Exec(query, args...); err != nil {
 		return fmt.Errorf(
 			"inserting tool_calls batch (%d rows): %w",
@@ -1429,6 +1457,15 @@ func (db *DB) insertMessages(ctx context.Context,
 ) error {
 	if err := db.requireWritable(); err != nil {
 		return err
+	}
+	if err := validateMessageLayouts(msgs); err != nil {
+		return err
+	}
+	for i := range msgs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		sanitizeMessageBody(&msgs[i])
 	}
 	msgs, _ = db.ProjectToolResultImagesWithPolicy(msgs, policy)
 	rawMessages := msgs
@@ -1904,6 +1941,9 @@ func (db *DB) ReplaceSessionMessagesWithToolResultImages(ctx context.Context,
 func (db *DB) replaceSessionMessages(ctx context.Context,
 	sessionID string, msgs []Message, policy config.ToolResultImages,
 ) error {
+	if err := validateMessageLayouts(msgs); err != nil {
+		return err
+	}
 	msgs, _ = db.ProjectToolResultImagesWithPolicy(msgs, policy)
 	msgs = append([]Message(nil), msgs...)
 	_ = ValidateAndSanitize(nil, msgs, nil)
@@ -2183,7 +2223,7 @@ func deleteSessionMessageRowsTx(
 		// does not re-tokenize large message blobs through delete triggers.
 		if _, err := tx.Exec(
 			`INSERT INTO `+table.name+`(`+table.name+`, rowid, content)
-			 SELECT 'delete', id, content FROM messages WHERE session_id = ?`,
+			 SELECT 'delete', id, `+strings.ReplaceAll(dialogueOldIndexedTextSQL, "old.", "")+` FROM messages WHERE session_id = ?`,
 			sessionID,
 		); err != nil {
 			return fmt.Errorf("bulk-deleting %s entries: %w", table.name, err)
@@ -2298,6 +2338,9 @@ func (db *DB) replaceSessionContent(ctx context.Context,
 	cp *ParserCheckpoint, blobs *ParserCheckpointBlobs,
 	policy config.ToolResultImages,
 ) error {
+	if err := validateMessageLayouts(msgs); err != nil {
+		return err
+	}
 	msgs, _ = db.ProjectToolResultImagesWithPolicy(msgs, policy)
 	if len(msgs) > 0 {
 		msgs = append([]Message(nil), msgs...)
@@ -2827,7 +2870,7 @@ func attachToolCallsBatch(
 		SELECT message_id, session_id, tool_name, category,
 			tool_use_id, input_json, skill_name,
 			result_content_length, result_content, subagent_session_id,
-			file_path, call_index
+			file_path, call_index, rendering
 		FROM tool_calls
 		WHERE message_id IN (%s)
 		ORDER BY message_id, call_index`,
@@ -2852,6 +2895,7 @@ func attachToolCallsBatch(
 			&toolUseID, &inputJSON, &skillName,
 			&resultLen, &resultContent, &subagentSessionID,
 			&filePath, &callIndex,
+			&tc.Rendering,
 		); err != nil {
 			return fmt.Errorf("scanning tool_call: %w", err)
 		}
@@ -3000,9 +3044,10 @@ func scanMessages(rows *sql.Rows) ([]Message, error) {
 	for rows.Next() {
 		var m Message
 		var tokenUsage string
+		var contentLayout sql.NullString
 		err := rows.Scan(
 			&m.ID, &m.SessionID, &m.Ordinal, &m.Role,
-			&m.Content, &m.ThinkingText, &m.Timestamp,
+			&m.Content, &m.ThinkingText, &m.ToolResultText, &contentLayout, &m.Timestamp,
 			&m.HasThinking, &m.HasToolUse, &m.ContentLength,
 			&m.IsSystem,
 			&m.Model, &m.ReasoningEffort, &tokenUsage,
@@ -3017,6 +3062,7 @@ func scanMessages(rows *sql.Rows) ([]Message, error) {
 			return nil, fmt.Errorf("scanning message: %w", err)
 		}
 		m.TokenUsage = DecodeStoredTokenUsage(tokenUsage)
+		m.SetContentLayout(DecodeStoredContentLayout(contentLayout.String))
 		msgs = append(msgs, m)
 	}
 	return msgs, rows.Err()
@@ -3063,31 +3109,7 @@ func (db *DB) MessageContentFingerprint(ctx context.Context, sessionID string) (
 // raw NUL must be removed before strings.ToValidUTF8 (which treats it
 // as valid).
 func SanitizeUTF8(s string) string {
-	s = strings.ReplaceAll(s, "\x00", "")
-	s = strings.ToValidUTF8(s, "")
-	// Fast path: skip the rune scan and allocation when the string
-	// carries no control runes to strip.
-	if strings.IndexFunc(s, isStrippableControl) < 0 {
-		return s
-	}
-	return strings.Map(func(r rune) rune {
-		if isStrippableControl(r) {
-			return -1
-		}
-		return r
-	}, s)
-}
-
-// isStrippableControl reports whether r is a control rune that
-// SanitizeUTF8 removes. Newline, tab, and carriage return are
-// preserved because they are legitimate whitespace in message
-// content; every other control rune (C0 below U+0020, DEL, and the
-// C1 block U+0080..U+009F) is stripped.
-func isStrippableControl(r rune) bool {
-	if r == '\n' || r == '\t' || r == '\r' {
-		return false
-	}
-	return unicode.IsControl(r)
+	return stringutil.SanitizeUTF8(s)
 }
 
 // MessageTokenFingerprint returns an exact ordered fingerprint of
@@ -3216,9 +3238,10 @@ func (db *DB) MessageRoleTimeFingerprintWithTimestampNormalizer(ctx context.Cont
 }
 
 // MessageFlagsFingerprint returns an exact ordered fingerprint of the
-// per-message flag and thinking columns that the token, role/time, and
+// per-message flag and native body columns that the token, role/time, and
 // content fingerprints do not cover: is_system, has_thinking,
-// has_tool_use, and a SHA-256 over the sanitized thinking_text. The
+// has_tool_use, sanitized thinking_text and tool_result_text, and
+// the nullable content_layout. The
 // parse-diff comparator uses it as a tier-1 fast path so a parser change
 // confined to these columns still triggers the tier-2 row comparison.
 // PG push uses it with a PostgreSQL-side twin to avoid skipping
@@ -3226,7 +3249,7 @@ func (db *DB) MessageRoleTimeFingerprintWithTimestampNormalizer(ctx context.Cont
 func (db *DB) MessageFlagsFingerprint(ctx context.Context, sessionID string) (string, error) {
 	rows, err := db.getReader().Query(ctx,
 		`SELECT ordinal, is_system, has_thinking, has_tool_use,
-			thinking_text
+			thinking_text, tool_result_text, content_layout
 		 FROM messages
 		 WHERE session_id = ?
 		 ORDER BY ordinal ASC`,
@@ -3242,7 +3265,7 @@ func (db *DB) MessageFlagsFingerprint(ctx context.Context, sessionID string) (st
 		var r flagsFingerprintRow
 		if err := rows.Scan(
 			&r.ordinal, &r.isSystem, &r.hasThinking, &r.hasToolUse,
-			&r.thinkingText,
+			&r.thinkingText, &r.toolResultText, &r.contentLayout,
 		); err != nil {
 			return "", err
 		}
@@ -3253,7 +3276,7 @@ func (db *DB) MessageFlagsFingerprint(ctx context.Context, sessionID string) (st
 
 // ToolCallParseDiffFingerprint returns an exact ordered fingerprint of a
 // session's parser-owned tool_call columns: tool_name, category,
-// tool_use_id, a SHA-256 over input_json, skill_name,
+// tool_use_id, SHA-256 hashes over input_json and rendering, skill_name,
 // subagent_session_id, result_content_length, and file_path. The
 // database-assigned id/message_id/session_id columns are excluded, and
 // result_content (the possibly blocked body) is represented only by its
@@ -3272,7 +3295,7 @@ func (db *DB) ToolCallParseDiffFingerprint(ctx context.Context, sessionID string
 	rows, err := db.getReader().Query(ctx,
 		`SELECT m.ordinal, tc.tool_name, tc.category, tc.tool_use_id,
 			tc.input_json, tc.skill_name, tc.subagent_session_id,
-			tc.result_content_length, COALESCE(tc.file_path, '')
+			tc.result_content_length, COALESCE(tc.file_path, ''), tc.rendering
 		 FROM tool_calls tc
 		 JOIN messages m ON m.id = tc.message_id
 		 WHERE tc.session_id = ?
@@ -3288,12 +3311,12 @@ func (db *DB) ToolCallParseDiffFingerprint(ctx context.Context, sessionID string
 	for rows.Next() {
 		var ordinal int
 		var resultLen sql.NullInt64
-		var toolName, category, filePath string
+		var toolName, category, filePath, rendering string
 		var toolUseID, inputJSON, skillName, subagentSessionID sql.NullString
 		if err := rows.Scan(
 			&ordinal, &toolName, &category, &toolUseID,
 			&inputJSON, &skillName, &subagentSessionID, &resultLen,
-			&filePath,
+			&filePath, &rendering,
 		); err != nil {
 			return "", err
 		}
@@ -3304,8 +3327,9 @@ func (db *DB) ToolCallParseDiffFingerprint(ctx context.Context, sessionID string
 		sub := SanitizeUTF8(subagentSessionID.String)
 		fp := SanitizeUTF8(filePath)
 		sum := sha256.Sum256([]byte(SanitizeUTF8(inputJSON.String)))
+		renderingSum := sha256.Sum256([]byte(SanitizeUTF8(rendering)))
 		fmt.Fprintf(&b,
-			"%d|%d:%s|%d:%s|%d:%s|%x|%d:%s|%d:%s|%d|%d:%s;",
+			"%d|%d:%s|%d:%s|%d:%s|%x|%d:%s|%d:%s|%d|%d:%s|%x;",
 			ordinal,
 			len(toolName), toolName,
 			len(category), category,
@@ -3314,7 +3338,7 @@ func (db *DB) ToolCallParseDiffFingerprint(ctx context.Context, sessionID string
 			len(skill), skill,
 			len(sub), sub,
 			int(resultLen.Int64),
-			len(fp), fp,
+			len(fp), fp, renderingSum,
 		)
 	}
 	return b.String(), rows.Err()
@@ -3739,7 +3763,7 @@ func (db *DB) ToolCallFingerprint(ctx context.Context, sessionID string) (string
 			COALESCE(tc.subagent_session_id, ''),
 			COALESCE(tc.result_content_length, 0),
 			COALESCE(tc.result_content, ''),
-			COALESCE(tc.file_path, '')
+			COALESCE(tc.file_path, ''), COALESCE(tc.rendering, '')
 		 FROM tool_calls tc
 		 JOIN messages m ON m.id = tc.message_id
 		 WHERE tc.session_id = ?
@@ -3759,7 +3783,7 @@ func (db *DB) ToolCallFingerprint(ctx context.Context, sessionID string) (string
 			&r.messageOrdinal, &r.toolName, &r.category,
 			&r.toolUseID, &r.inputJSON, &r.skillName,
 			&r.subagentSessionID, &r.resultContentLength,
-			&r.resultContent, &r.filePath,
+			&r.resultContent, &r.filePath, &r.rendering,
 		); err != nil {
 			return "", err
 		}
@@ -3820,9 +3844,10 @@ func (db *DB) GetMessageByOrdinal(ctx context.Context,
 
 	var m Message
 	var tokenUsage string
+	var contentLayout sql.NullString
 	err := row.Scan(
 		&m.ID, &m.SessionID, &m.Ordinal, &m.Role,
-		&m.Content, &m.ThinkingText, &m.Timestamp,
+		&m.Content, &m.ThinkingText, &m.ToolResultText, &contentLayout, &m.Timestamp,
 		&m.HasThinking, &m.HasToolUse, &m.ContentLength,
 		&m.IsSystem,
 		&m.Model, &m.ReasoningEffort, &tokenUsage,
@@ -3840,6 +3865,7 @@ func (db *DB) GetMessageByOrdinal(ctx context.Context,
 		return nil, err
 	}
 	m.TokenUsage = DecodeStoredTokenUsage(tokenUsage)
+	m.SetContentLayout(DecodeStoredContentLayout(contentLayout.String))
 	return &m, nil
 }
 
@@ -3867,6 +3893,7 @@ func resolveToolCalls(
 				Category:  tc.Category,
 				ToolUseID: tc.ToolUseID,
 				InputJSON: tc.InputJSON,
+				Rendering: tc.Rendering,
 				SkillName: tc.SkillName,
 				ResultContentLength: ResolveResultContentLength(
 					tc.ResultContent, tc.ResultContentLength,

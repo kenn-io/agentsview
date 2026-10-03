@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -47,6 +48,7 @@ type hermesStateSession struct {
 }
 
 type hermesStateMessage struct {
+	id                  string
 	role                string
 	content             string
 	toolCallID          string
@@ -173,7 +175,7 @@ func (p *hermesProvider) parseSession(path, project, machine string) (*ParsedSes
 }
 
 // parseHermesJSONLSession parses a Hermes Agent JSONL session file.
-func parseHermesJSONLSession(path, project, machine string) (*ParsedSession, []ParsedMessage, error) {
+func parseHermesJSONLSession(path, project, machine string, sourceSessionID ...string) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, nil, fmt.Errorf("stat %s: %w", path, err)
@@ -200,6 +202,10 @@ func parseHermesJSONLSession(path, project, machine string) (*ParsedSession, []P
 
 	// Extract session ID from filename: 20260403_153620_5a3e2ff1.jsonl -> 20260403_153620_5a3e2ff1
 	sessionID := HermesSessionID(filepath.Base(path))
+	identitySessionID := sessionID
+	if len(sourceSessionID) > 0 {
+		identitySessionID = sourceSessionID[0]
+	}
 
 	for {
 		line, ok := lr.next()
@@ -226,6 +232,11 @@ func parseHermesJSONLSession(path, project, machine string) (*ParsedSession, []P
 		case "session_meta":
 			// Extract model and platform from session header.
 			sessionPlatform = gjson.Get(line, "platform").Str
+			if len(sourceSessionID) == 0 {
+				if origin := gjson.Get(line, "session_id").Str; origin != "" {
+					identitySessionID = origin
+				}
+			}
 			continue
 
 		case "user":
@@ -246,93 +257,32 @@ func parseHermesJSONLSession(path, project, machine string) (*ParsedSession, []P
 				)
 			}
 
-			messages = append(messages, ParsedMessage{
-				Ordinal:           ordinal,
-				Role:              RoleUser,
-				Content:           displayContent,
-				Timestamp:         ts,
-				ContentLength:     len(content),
-				IsSystem:          isCompact,
-				SourceType:        sourceTypeIf(isCompact, "system"),
-				SourceSubtype:     sourceTypeIf(isCompact, "compact_boundary"),
-				IsCompactBoundary: isCompact,
-			})
+			body := hermesUserBody(content)
+			body.Ordinal, body.Timestamp = ordinal, ts
+			body.SourceUUID = hermesSourceUUID(identitySessionID, gjson.Get(line, "id").String())
+			messages = append(messages, body)
 			ordinal++
 			if !isCompact {
 				realUserCount++
 			}
 
 		case "assistant":
-			content := gjson.Get(line, "content").Str
-			content = strings.TrimSpace(content)
-			reasoning := gjson.Get(line, "reasoning").Str
-			hasThinking := reasoning != ""
-
-			// Extract tool calls from the assistant message.
-			var toolCalls []ParsedToolCall
-			tcArray := gjson.Get(line, "tool_calls")
-			if tcArray.IsArray() {
-				tcArray.ForEach(func(_, tc gjson.Result) bool {
-					if toolCall, ok := parseHermesToolCall(tc); ok {
-						toolCalls = append(toolCalls, toolCall)
-					}
-					return true
-				})
-			}
-			hasToolUse := len(toolCalls) > 0
-
-			// Build display content: include reasoning if present.
-			displayContent := content
-			if hasThinking && content == "" {
-				// Assistant message with only reasoning and tool calls.
-				displayContent = ""
-			}
-			if hasThinking {
-				displayContent = "[Thinking]\n" + reasoning + "\n[/Thinking]\n" + displayContent
-			}
-
-			if displayContent == "" && len(toolCalls) == 0 {
+			record := gjson.Parse(line)
+			body := hermesAssistantBody(record)
+			body.ContentLength = sanitizedWorkLength(strings.TrimSpace(record.Get("content").Str)) + sanitizedWorkLength(record.Get("reasoning").Str)
+			if !body.hasNativeBody() {
 				continue
 			}
-
-			messages = append(messages, ParsedMessage{
-				Ordinal:       ordinal,
-				Role:          RoleAssistant,
-				Content:       displayContent,
-				Timestamp:     ts,
-				HasThinking:   hasThinking,
-				HasToolUse:    hasToolUse,
-				ContentLength: len(content) + len(reasoning),
-				ToolCalls:     toolCalls,
-			})
+			body.Ordinal, body.Timestamp = ordinal, ts
+			body.SourceUUID = hermesSourceUUID(identitySessionID, record.Get("id").String())
+			messages = append(messages, body)
 			ordinal++
 
 		case "tool":
-			// Tool results in Hermes are separate messages with
-			// tool_call_id linking back to the assistant's tool call.
-			toolCallID := gjson.Get(line, "tool_call_id").Str
-			if toolCallID == "" {
-				continue
-			}
-			content := gjson.Get(line, "content").Str
-			contentLen := len(content)
-
-			// Preserve tool output as JSON-quoted string so
-			// pairToolResults / DecodeContent can surface it in the UI.
-			quoted, _ := json.Marshal(content)
-
-			messages = append(messages, ParsedMessage{
-				Ordinal:       ordinal,
-				Role:          RoleUser,
-				Content:       "",
-				Timestamp:     ts,
-				ContentLength: contentLen,
-				ToolResults: []ParsedToolResult{{
-					ToolUseID:     toolCallID,
-					ContentRaw:    string(quoted),
-					ContentLength: contentLen,
-				}},
-			})
+			body := hermesToolResultBody(gjson.Get(line, "content").Str, gjson.Get(line, "tool_call_id").Str)
+			body.Ordinal, body.Timestamp = ordinal, ts
+			body.SourceUUID = hermesSourceUUID(identitySessionID, gjson.Get(line, "id").String())
+			messages = append(messages, body)
 			ordinal++
 		}
 	}
@@ -380,7 +330,7 @@ func parseHermesJSONLSession(path, project, machine string) (*ParsedSession, []P
 }
 
 // parseHermesJSONSession parses a Hermes CLI-format JSON session file.
-func parseHermesJSONSession(path, project, machine string) (*ParsedSession, []ParsedMessage, error) {
+func parseHermesJSONSession(path, project, machine string, sourceSessionID ...string) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, nil, fmt.Errorf("stat %s: %w", path, err)
@@ -397,6 +347,10 @@ func parseHermesJSONSession(path, project, machine string) (*ParsedSession, []Pa
 	}
 
 	sessionID := HermesSessionID(filepath.Base(path))
+	identitySessionID := sessionID
+	if len(sourceSessionID) > 0 {
+		identitySessionID = sourceSessionID[0]
+	}
 	sessionPlatform := root.Get("platform").Str
 	startedAt := parseHermesTimestamp(root.Get("session_start").Str)
 	endedAt := parseHermesTimestamp(root.Get("last_updated").Str)
@@ -442,90 +396,32 @@ func parseHermesJSONSession(path, project, machine string) (*ParsedSession, []Pa
 				)
 			}
 
-			messages = append(messages, ParsedMessage{
-				Ordinal:           ordinal,
-				Role:              RoleUser,
-				Content:           displayContent,
-				Timestamp:         msgTS,
-				ContentLength:     len(content),
-				IsSystem:          isCompact,
-				SourceType:        sourceTypeIf(isCompact, "system"),
-				SourceSubtype:     sourceTypeIf(isCompact, "compact_boundary"),
-				IsCompactBoundary: isCompact,
-			})
+			body := hermesUserBody(content)
+			body.Ordinal, body.Timestamp = ordinal, msgTS
+			body.SourceUUID = hermesSourceUUID(identitySessionID, msg.Get("id").String())
+			messages = append(messages, body)
 			ordinal++
 			if !isCompact {
 				realUserCount++
 			}
 
 		case "assistant":
-			content := strings.TrimSpace(msg.Get("content").Str)
-			reasoning := msg.Get("reasoning").Str
-			if reasoning == "" {
-				reasoning = msg.Get("reasoning_details").Str
-			}
-			hasThinking := reasoning != ""
-
-			var toolCalls []ParsedToolCall
-			tcArray := msg.Get("tool_calls")
-			if tcArray.IsArray() {
-				tcArray.ForEach(func(_, tc gjson.Result) bool {
-					if toolCall, ok := parseHermesToolCall(tc); ok {
-						toolCalls = append(toolCalls, toolCall)
-					}
-					return true
-				})
-			}
-			hasToolUse := len(toolCalls) > 0
-
-			displayContent := content
-			if hasThinking && content == "" {
-				displayContent = ""
-			}
-			if hasThinking {
-				displayContent = "[Thinking]\n" + reasoning + "\n[/Thinking]\n" + displayContent
-			}
-
-			if displayContent == "" && len(toolCalls) == 0 {
+			body := hermesAssistantBody(msg)
+			reasoning := firstNonEmptyHermes(msg.Get("reasoning").Str, msg.Get("reasoning_details").Str)
+			body.ContentLength = sanitizedWorkLength(strings.TrimSpace(msg.Get("content").Str)) + sanitizedWorkLength(reasoning)
+			if !body.hasNativeBody() {
 				return true
 			}
-
-			messages = append(messages, ParsedMessage{
-				Ordinal:       ordinal,
-				Role:          RoleAssistant,
-				Content:       displayContent,
-				Timestamp:     msgTS,
-				HasThinking:   hasThinking,
-				HasToolUse:    hasToolUse,
-				ContentLength: len(content) + len(reasoning),
-				ToolCalls:     toolCalls,
-			})
+			body.Ordinal, body.Timestamp = ordinal, msgTS
+			body.SourceUUID = hermesSourceUUID(identitySessionID, msg.Get("id").String())
+			messages = append(messages, body)
 			ordinal++
 
 		case "tool":
-			toolCallID := msg.Get("tool_call_id").Str
-			if toolCallID == "" {
-				return true
-			}
-			content := msg.Get("content").Str
-			contentLen := len(content)
-
-			// Preserve tool output as JSON-quoted string so
-			// pairToolResults / DecodeContent can surface it in the UI.
-			quoted, _ := json.Marshal(content)
-
-			messages = append(messages, ParsedMessage{
-				Ordinal:       ordinal,
-				Role:          RoleUser,
-				Content:       "",
-				Timestamp:     msgTS,
-				ContentLength: contentLen,
-				ToolResults: []ParsedToolResult{{
-					ToolUseID:     toolCallID,
-					ContentRaw:    string(quoted),
-					ContentLength: contentLen,
-				}},
-			})
+			body := hermesToolResultBody(msg.Get("content").Str, msg.Get("tool_call_id").Str)
+			body.Ordinal, body.Timestamp = ordinal, msgTS
+			body.SourceUUID = hermesSourceUUID(identitySessionID, msg.Get("id").String())
+			messages = append(messages, body)
 			ordinal++
 		}
 
@@ -691,7 +587,7 @@ func readHermesStateMessages(ctx context.Context,
 	conn *sql.DB,
 ) (map[string][]hermesStateMessage, error) {
 	rows, err := conn.QueryContext(ctx, `
-		SELECT session_id, role, COALESCE(content, ''),
+		SELECT id, session_id, role, COALESCE(content, ''),
 			COALESCE(tool_call_id, ''), COALESCE(tool_calls, ''),
 			timestamp, COALESCE(finish_reason, ''),
 			COALESCE(reasoning, ''), COALESCE(reasoning_content, ''),
@@ -711,7 +607,7 @@ func readHermesStateMessages(ctx context.Context,
 		var hm hermesStateMessage
 		var ts float64
 		if err := rows.Scan(
-			&sid, &hm.role, &hm.content, &hm.toolCallID,
+			&hm.id, &sid, &hm.role, &hm.content, &hm.toolCallID,
 			&hm.toolCalls, &ts, &hm.finishReason,
 			&hm.reasoning, &hm.reasoningContent,
 			&hm.reasoningDetails, &hm.codexReasoningItems,
@@ -770,7 +666,7 @@ func readHermesStateMessagesForSession(ctx context.Context,
 	conn *sql.DB, rawSessionID string,
 ) ([]hermesStateMessage, error) {
 	rows, err := conn.QueryContext(ctx, `
-		SELECT role, COALESCE(content, ''), COALESCE(tool_call_id, ''),
+		SELECT id, role, COALESCE(content, ''), COALESCE(tool_call_id, ''),
 			COALESCE(tool_calls, ''), timestamp,
 			COALESCE(finish_reason, ''), COALESCE(reasoning, ''),
 			COALESCE(reasoning_content, ''),
@@ -794,7 +690,7 @@ func readHermesStateMessagesForSession(ctx context.Context,
 		var hm hermesStateMessage
 		var ts float64
 		if err := rows.Scan(
-			&hm.role, &hm.content, &hm.toolCallID, &hm.toolCalls, &ts,
+			&hm.id, &hm.role, &hm.content, &hm.toolCallID, &hm.toolCalls, &ts,
 			&hm.finishReason, &hm.reasoning, &hm.reasoningContent,
 			&hm.reasoningDetails, &hm.codexReasoningItems,
 			&hm.codexMessageItems,
@@ -886,7 +782,7 @@ func encodeHermesStateSessionJSONL(
 ) error {
 	enc := jsontext.NewEncoder(w)
 
-	meta := map[string]any{"role": "session_meta"}
+	meta := map[string]any{"role": "session_meta", "session_id": ss.id}
 	if ss.model != "" {
 		meta["model"] = ss.model
 	}
@@ -898,6 +794,9 @@ func encodeHermesStateSessionJSONL(
 	}
 	for _, hm := range messages {
 		record := map[string]any{"role": hm.role}
+		if hm.id != "" {
+			record["id"] = hm.id
+		}
 		if hm.content != "" {
 			record["content"] = hm.content
 		}
@@ -920,7 +819,11 @@ func encodeHermesStateSessionJSONL(
 			record["reasoning_content"] = hm.reasoningContent
 		}
 		if hm.reasoningDetails != "" {
-			record["reasoning_details"] = hm.reasoningDetails
+			if jsontext.Value(hm.reasoningDetails).IsValid() {
+				record["reasoning_details"] = jsontext.Value(hm.reasoningDetails)
+			} else {
+				record["reasoning_details"] = hm.reasoningDetails
+			}
 		}
 		if hm.codexReasoningItems != "" &&
 			jsontext.Value([]byte(hm.codexReasoningItems)).IsValid() {
@@ -950,7 +853,7 @@ func buildHermesStateResult(
 	)
 	usageEvents := hermesUsageEvents(ss, "hermes:"+ss.id)
 	if sess == nil {
-		msgs = convertHermesStateMessages(stateMessages)
+		msgs = convertHermesStateMessages(stateMessages, ss.id)
 		if len(msgs) == 0 && len(usageEvents) == 0 {
 			return ParseResult{}, false
 		}
@@ -990,14 +893,14 @@ func chooseHermesStateSessionSource(
 	jsonPath := filepath.Join(sessionsDir, "session_"+ss.id+".json")
 	jsonlPath := filepath.Join(sessionsDir, ss.id+".jsonl")
 	if IsRegularFile(jsonPath) {
-		sess, msgs, err = parseHermesJSONSession(jsonPath, project, machine)
+		sess, msgs, err = parseHermesJSONSession(jsonPath, project, machine, ss.id)
 		if err == nil && sess != nil &&
 			hermesMessageQuality(msgs) >= hermesStateQuality(stateMessages) {
 			return jsonPath, sess, msgs, nil
 		}
 	}
 	if IsRegularFile(jsonlPath) {
-		sess, msgs, err = parseHermesJSONLSession(jsonlPath, project, machine)
+		sess, msgs, err = parseHermesJSONLSession(jsonlPath, project, machine, ss.id)
 		if err == nil && sess != nil &&
 			(hermesMessageQuality(msgs) >= hermesStateQuality(stateMessages) || len(stateMessages) == 0) {
 			return jsonlPath, sess, msgs, nil
@@ -1127,91 +1030,232 @@ func hermesUsageEvents(
 }
 
 func convertHermesStateMessages(
-	stateMessages []hermesStateMessage,
+	stateMessages []hermesStateMessage, sessionID string,
 ) []ParsedMessage {
 	msgs := make([]ParsedMessage, 0, len(stateMessages))
 	for _, hm := range stateMessages {
-		ordinal := len(msgs)
+		var body ParsedMessage
 		switch hm.role {
 		case "user":
-			content := strings.TrimSpace(hm.content)
-			if content == "" {
+			if strings.TrimSpace(hm.content) == "" {
 				continue
 			}
-			display := stripHermesSkillPrefix(content)
-			isCompact := isHermesCompactBoundary(display)
-			msgs = append(msgs, ParsedMessage{
-				Ordinal:           ordinal,
-				Role:              RoleUser,
-				Content:           display,
-				Timestamp:         hm.timestamp,
-				ContentLength:     len(content),
-				IsSystem:          isCompact,
-				SourceType:        sourceTypeIf(isCompact, "system"),
-				SourceSubtype:     sourceTypeIf(isCompact, "compact_boundary"),
-				IsCompactBoundary: isCompact,
-			})
+			body = hermesUserBody(hm.content)
 		case "assistant":
-			content := strings.TrimSpace(hm.content)
-			reasoning := firstNonEmptyHermes(
-				hm.reasoning, hm.reasoningContent,
-				hm.reasoningDetails, hm.codexReasoningItems,
-			)
-			display := content
-			hasThinking := reasoning != ""
-			if hasThinking {
-				display = "[Thinking]\n" + reasoning +
-					"\n[/Thinking]\n" + display
+			var b MessageContentBuilder
+			addHermesReasoning(&b, []gjson.Result{
+				{Type: gjson.String, Str: hm.reasoning},
+				{Type: gjson.String, Str: hm.reasoningContent},
+				hermesStoredReasoning(hm.reasoningDetails),
+				hermesStoredReasoning(hm.codexReasoningItems),
+			})
+			knownContent := addHermesContent(&b, hm.content)
+			addHermesToolCalls(&b, gjson.Parse(hm.toolCalls))
+			body = b.Message()
+			if !knownContent {
+				body = hermesLegacyBody(body)
 			}
-			var toolCalls []ParsedToolCall
-			if gjson.Valid(hm.toolCalls) {
-				gjson.Parse(hm.toolCalls).ForEach(
-					func(_, tc gjson.Result) bool {
-						if toolCall, ok := parseHermesToolCall(tc); ok {
-							toolCalls = append(toolCalls, toolCall)
-						}
-						return true
-					},
-				)
-			}
-			if display == "" && len(toolCalls) == 0 {
+			body.Role = RoleAssistant
+			body.ContentLength = sanitizedWorkLength(strings.TrimSpace(hm.content)) + sanitizedWorkLength(firstNonEmptyHermes(
+				hm.reasoning, hm.reasoningContent, hm.reasoningDetails, hm.codexReasoningItems,
+			))
+			if !body.hasNativeBody() {
 				continue
 			}
-			msgs = append(msgs, ParsedMessage{
-				Ordinal:       ordinal,
-				Role:          RoleAssistant,
-				Content:       display,
-				Timestamp:     hm.timestamp,
-				HasThinking:   hasThinking,
-				HasToolUse:    len(toolCalls) > 0,
-				ContentLength: len(content) + len(reasoning),
-				ToolCalls:     toolCalls,
-			})
 		case "tool":
-			if hm.toolCallID == "" {
-				continue
-			}
-			quoted, _ := json.Marshal(hm.content)
-			msgs = append(msgs, ParsedMessage{
-				Ordinal:       ordinal,
-				Role:          RoleUser,
-				Timestamp:     hm.timestamp,
-				ContentLength: len(hm.content),
-				ToolResults: []ParsedToolResult{{
-					ToolUseID:     hm.toolCallID,
-					ContentRaw:    string(quoted),
-					ContentLength: len(hm.content),
-				}},
-			})
+			body = hermesToolResultBody(hm.content, hm.toolCallID)
+		default:
+			continue
 		}
+		body.Ordinal, body.Timestamp = len(msgs), hm.timestamp
+		body.SourceUUID = hermesSourceUUID(sessionID, hm.id)
+		msgs = append(msgs, body)
 	}
 	return msgs
+}
+
+// Native state keys are local integer primary keys. Named transcript IDs
+// already carry their producer identity and remain unchanged.
+func hermesSourceUUID(sessionID, messageID string) string {
+	if _, err := strconv.ParseInt(messageID, 10, 64); err == nil {
+		return sessionID + ":" + messageID
+	}
+	return messageID
+}
+
+func hermesUserBody(content string) ParsedMessage {
+	content = strings.TrimSpace(content)
+	var b MessageContentBuilder
+	knownContent := addHermesContent(&b, content)
+	body := b.Message()
+	display := stripHermesSkillPrefix(body.Content)
+	body.setDialogue(display)
+	if !knownContent {
+		body.ContentLayout = nil
+	}
+	body.Role = RoleUser
+	body.ContentLength = sanitizedWorkLength(content)
+	body.IsCompactBoundary = isHermesCompactBoundary(display)
+	body.IsSystem = body.IsCompactBoundary
+	body.SourceType = sourceTypeIf(body.IsSystem, "system")
+	body.SourceSubtype = sourceTypeIf(body.IsSystem, "compact_boundary")
+	return body
+}
+
+func hermesAssistantBody(record gjson.Result) ParsedMessage {
+	var b MessageContentBuilder
+	addHermesReasoning(&b, []gjson.Result{
+		record.Get("reasoning"), record.Get("reasoning_content"),
+		record.Get("reasoning_details"), record.Get("codex_reasoning_items"),
+	})
+	knownContent := addHermesContent(&b, record.Get("content").Str)
+	addHermesToolCalls(&b, record.Get("tool_calls"))
+	body := b.Message()
+	if !knownContent {
+		body = hermesLegacyBody(body)
+	}
+	body.Role = RoleAssistant
+	return body
+}
+
+// Unknown tagged containers remain ineligible for dialogue search. Legacy
+// consumers read the complete Content body, so retain separate native reasoning
+// in that representation before clearing its provenance.
+func hermesLegacyBody(body ParsedMessage) ParsedMessage {
+	if body.HasThinking {
+		body.Content = "[Thinking]\n" + body.ThinkingText + "\n[/Thinking]\n\n" + body.Content
+	}
+	body.ContentLayout = nil
+	return body
+}
+
+const hermesContentJSONPrefix = "\x00json:"
+
+// The state writer explicitly tags multimodal containers. Do not infer JSON
+// from ordinary dialogue or certify future container kinds as plain text.
+func addHermesContent(b *MessageContentBuilder, content string) bool {
+	if !strings.HasPrefix(content, hermesContentJSONPrefix) {
+		b.AddText(strings.TrimSpace(content))
+		return true
+	}
+	raw := strings.TrimPrefix(content, hermesContentJSONPrefix)
+	parts := gjson.Parse(raw)
+	known := gjson.Valid(raw) && parts.IsArray()
+	if known {
+		parts.ForEach(func(_, part gjson.Result) bool {
+			switch part.Get("type").Str {
+			case "text":
+				known = part.Get("text").Type == gjson.String
+			case "image_url":
+				known = part.Get("image_url").Exists()
+			default:
+				known = false
+			}
+			return known
+		})
+	}
+	if !known {
+		b.AddText(content)
+		return false
+	}
+	parts.ForEach(func(_, part gjson.Result) bool {
+		if part.Get("type").Str == "text" {
+			b.AddText(part.Get("text").Str)
+		}
+		return true
+	})
+	return true
+}
+
+func addHermesToolCalls(b *MessageContentBuilder, calls gjson.Result) {
+	if !calls.IsArray() {
+		return
+	}
+	calls.ForEach(func(_, tc gjson.Result) bool {
+		if call, ok := parseHermesToolCall(tc); ok {
+			b.AddToolCall(call)
+		}
+		return true
+	})
+}
+
+func hermesToolResultBody(content, callID string) ParsedMessage {
+	quoted, _ := json.Marshal(content)
+	raw := string(quoted)
+	if structured, ok := strings.CutPrefix(content, hermesContentJSONPrefix); ok && gjson.Valid(structured) && gjson.Parse(structured).IsArray() {
+		raw = structured
+	}
+	var b MessageContentBuilder
+	b.AddToolResult(ParsedToolResult{
+		ToolUseID: callID, ContentRaw: raw, ContentLength: len(content),
+	})
+	body := b.Message()
+	body.Role = RoleUser
+	body.ContentLength = sanitizedWorkLength(content)
+	return body
+}
+
+// Structured state columns contain JSON; plain reasoning fields never undergo
+// text-marker or JSON inference. Older files can have a plaintext details field.
+func hermesStoredReasoning(raw string) gjson.Result {
+	if gjson.Valid(raw) {
+		return gjson.Parse(raw)
+	}
+	return gjson.Result{Type: gjson.String, Str: raw}
+}
+
+func addHermesReasoning(b *MessageContentBuilder, fields []gjson.Result) {
+	for _, field := range fields {
+		if field.Type == gjson.String {
+			if field.Str == "" {
+				continue
+			}
+			b.AddThinking(field.Str)
+			return
+		}
+		if !field.IsArray() && !field.IsObject() {
+			continue
+		}
+		blocks := field.Array()
+		if field.IsObject() {
+			blocks = []gjson.Result{field}
+		}
+		if len(blocks) == 0 {
+			continue
+		}
+		for _, block := range blocks {
+			switch block.Get("type").Str {
+			case "reasoning.text":
+				b.AddThinking(block.Get("text").Str)
+			case "reasoning.summary":
+				b.AddThinking(block.Get("summary").Str)
+			case "reasoning":
+				parts := append(block.Get("summary").Array(), block.Get("content").Array()...)
+				if len(parts) == 0 {
+					b.AddThinking("")
+				}
+				for _, part := range parts {
+					switch part.Get("type").Str {
+					case "summary_text", "reasoning_text", "text":
+						b.AddThinking(part.Get("text").Str)
+					}
+				}
+			default:
+				// Signatures and encrypted bodies carry presence, not text.
+				b.AddThinking("")
+			}
+		}
+		return
+	}
 }
 
 func hermesMessageQuality(msgs []ParsedMessage) int {
 	score := len(msgs) * 1000
 	for _, msg := range msgs {
 		score += len(msg.Content)
+		if msg.HasThinking {
+			score += len(msg.ThinkingText) + len("[Thinking]\n\n[/Thinking]\n")
+		}
 		if len(msg.ToolCalls) > 0 {
 			score += 100
 		}

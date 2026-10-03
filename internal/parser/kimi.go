@@ -170,9 +170,7 @@ func parseKimiSessionWithFallbackModel(
 
 		// Accumulate content parts and tool calls for the
 		// current assistant turn.
-		pendingText             []string
-		pendingThinkingText     []string
-		pendingToolCall         []ParsedToolCall
+		pendingBody             MessageContentBuilder
 		pendingModel            string
 		pendingTokenUsage       jsontext.Value
 		pendingContextTokens    int
@@ -182,8 +180,6 @@ func parseKimiSessionWithFallbackModel(
 		pendingStopReason       string
 		// Kimi Work can write tool.result before the step's trailing usage.
 		pendingUsageMessageIndex = -1
-		hasThinking              bool
-		hasToolUse               bool
 		cwd                      string
 
 		// Track token usage from StatusUpdate.
@@ -201,9 +197,7 @@ func parseKimiSessionWithFallbackModel(
 	)
 
 	resetAssistantTurn := func() {
-		pendingText = nil
-		pendingThinkingText = nil
-		pendingToolCall = nil
+		pendingBody = MessageContentBuilder{}
 		pendingModel = ""
 		pendingTokenUsage = nil
 		pendingContextTokens = 0
@@ -212,14 +206,11 @@ func parseKimiSessionWithFallbackModel(
 		pendingHasOutputTokens = false
 		pendingStopReason = ""
 		pendingTS = time.Time{}
-		hasThinking = false
-		hasToolUse = false
 	}
 
 	flushAssistantTurn := func() int {
-		content := strings.Join(pendingText, "\n")
-		if strings.TrimSpace(content) == "" &&
-			len(pendingToolCall) == 0 {
+		body := pendingBody.Message()
+		if !body.hasNativeBody() && len(pendingTokenUsage) == 0 {
 			resetAssistantTurn()
 			return -1
 		}
@@ -231,17 +222,16 @@ func parseKimiSessionWithFallbackModel(
 			turnModel = currentModel
 		}
 
+		if pendingTS.IsZero() {
+			pendingTS = currentTS
+		}
+
 		messageIndex := len(messages)
 		messages = append(messages, ParsedMessage{
 			Ordinal:          ordinal,
 			Role:             RoleAssistant,
-			Content:          content,
-			ThinkingText:     strings.Join(pendingThinkingText, "\n"),
+			Content:          body.Content,
 			Timestamp:        pendingTS,
-			HasThinking:      hasThinking,
-			HasToolUse:       hasToolUse,
-			ContentLength:    len(content),
-			ToolCalls:        pendingToolCall,
 			Model:            turnModel,
 			TokenUsage:       pendingTokenUsage,
 			ContextTokens:    pendingContextTokens,
@@ -249,15 +239,14 @@ func parseKimiSessionWithFallbackModel(
 			HasContextTokens: pendingHasContextTokens,
 			HasOutputTokens:  pendingHasOutputTokens,
 			StopReason:       pendingStopReason,
-		})
+		}.withBody(body))
 		ordinal++
 		resetAssistantTurn()
 		return messageIndex
 	}
 
 	hasPendingAssistantTurn := func() bool {
-		return strings.TrimSpace(strings.Join(pendingText, "\n")) != "" ||
-			len(pendingToolCall) > 0
+		return pendingBody.Message().hasNativeBody()
 	}
 
 	attachPendingTurn := func(message *ParsedMessage) {
@@ -356,31 +345,23 @@ func parseKimiSessionWithFallbackModel(
 							if pendingTS.IsZero() {
 								pendingTS = currentTS
 							}
-							pendingText = append(pendingText, text)
+							pendingBody.AddText(text)
 						}
 					case "think":
 						think := part.Get("think").Str
 						if think == "" {
 							think = part.Get("text").Str
 						}
-						if think != "" {
-							if pendingTS.IsZero() {
-								pendingTS = currentTS
-							}
-							hasThinking = true
-							pendingThinkingText = append(
-								pendingThinkingText, think,
-							)
-							pendingText = append(pendingText,
-								"[Thinking]\n"+think+"\n[/Thinking]")
+						if pendingTS.IsZero() {
+							pendingTS = currentTS
 						}
+						pendingBody.addThinking(think, "\n")
 					}
 
 				case "tool.call":
 					if pendingTS.IsZero() {
 						pendingTS = currentTS
 					}
-					hasToolUse = true
 					fnName := event.Get("name").Str
 					fnArgs := kimiRawJSON(event.Get("args"))
 					toolID := event.Get("toolCallId").Str
@@ -396,8 +377,7 @@ func parseKimiSessionWithFallbackModel(
 					}
 					argsResult := kimiJSONResult(event.Get("args"))
 					tc.Rendering = formatKimiToolUse(fnName, argsResult)
-					pendingToolCall = append(pendingToolCall, tc)
-					pendingText = append(pendingText, tc.Rendering)
+					pendingBody.AddToolCall(tc)
 
 				case "tool.result":
 					if index := flushAssistantTurn(); index >= 0 {
@@ -575,28 +555,19 @@ func parseKimiSessionWithFallbackModel(
 					if pendingTS.IsZero() {
 						pendingTS = currentTS
 					}
-					pendingText = append(pendingText, text)
+					pendingBody.AddText(text)
 				}
 			case "think":
-				think := payload.Get("think").Str
-				if think != "" {
-					if pendingTS.IsZero() {
-						pendingTS = currentTS
-					}
-					hasThinking = true
-					pendingThinkingText = append(
-						pendingThinkingText, think,
-					)
-					pendingText = append(pendingText,
-						"[Thinking]\n"+think+"\n[/Thinking]")
+				if pendingTS.IsZero() {
+					pendingTS = currentTS
 				}
+				pendingBody.addThinking(payload.Get("think").Str, "\n")
 			}
 
 		case "ToolCall":
 			if pendingTS.IsZero() {
 				pendingTS = currentTS
 			}
-			hasToolUse = true
 			fnName := payload.Get("function.name").Str
 			fnArgs := payload.Get("function.arguments").Str
 			toolID := payload.Get("id").Str
@@ -613,8 +584,7 @@ func parseKimiSessionWithFallbackModel(
 			// Format tool use display text and keep it on the call so
 			// storage policies that drop tool inputs can replace it.
 			tc.Rendering = formatKimiToolUse(fnName, gjson.Parse(fnArgs))
-			pendingToolCall = append(pendingToolCall, tc)
-			pendingText = append(pendingText, tc.Rendering)
+			pendingBody.AddToolCall(tc)
 
 		case "ToolResult":
 			flushAssistantTurn()
@@ -683,6 +653,22 @@ func parseKimiSessionWithFallbackModel(
 	displayProject := project
 	if displayProject == "" {
 		displayProject = "kimi"
+	}
+
+	for i := range messages {
+		msg := &messages[i]
+		if msg.ContentLayout != nil {
+			continue
+		}
+		var builder MessageContentBuilder
+		builder.AddText(msg.Content)
+		for _, result := range msg.ToolResults {
+			builder.AddToolResult(result)
+		}
+		body := builder.Message()
+		body.ContentLength = msg.sanitizedHistoricalWorkLength()
+		msg.Content = body.Content
+		*msg = msg.withBody(body)
 	}
 
 	userCount := 0

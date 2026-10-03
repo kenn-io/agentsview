@@ -15289,7 +15289,7 @@ type GetAPIV1SearchContentQuery struct {
 	// Scope Semantic/hybrid/terms result scope: top, all, or subordinate (default all)
 	Scope *GetAPIV1SearchContentQueryScope `json:"scope,omitempty"`
 
-	// In Comma-separated content sources
+	// In Comma-separated sources: messages, thinking, tool_input, tool_result; messages searches proven dialogue
 	In *string `json:"in,omitempty"`
 
 	// ExcludeSystem Exclude system messages
@@ -18708,41 +18708,48 @@ func (d DBMachineBreakdown) Validate() error {
 }
 
 type DBMessage struct {
-	ClaudeMessageID   *string      `json:"claude_message_id,omitempty"`
-	ClaudeRequestID   *string      `json:"claude_request_id,omitempty"`
-	Content           string       `json:"content" validate:"required"`
-	ContentLength     int64        `json:"content_length"`
-	ContextTokens     int64        `json:"context_tokens"`
-	HasContextTokens  bool         `json:"has_context_tokens"`
-	HasOutputTokens   bool         `json:"has_output_tokens"`
-	HasThinking       bool         `json:"has_thinking"`
-	HasToolUse        bool         `json:"has_tool_use"`
-	ID                int64        `json:"id"`
-	IsCompactBoundary *bool        `json:"is_compact_boundary,omitempty"`
-	IsSidechain       *bool        `json:"is_sidechain,omitempty"`
-	IsSystem          bool         `json:"is_system"`
-	Model             string       `json:"model" validate:"required"`
-	Ordinal           int64        `json:"ordinal"`
-	OutputTokens      int64        `json:"output_tokens"`
-	PromptSource      *string      `json:"prompt_source,omitempty"`
-	ProviderID        *string      `json:"provider_id,omitempty"`
-	ReasoningEffort   *string      `json:"reasoning_effort,omitempty"`
-	Role              string       `json:"role" validate:"required"`
-	SessionID         string       `json:"session_id" validate:"required"`
-	SourceParentUUID  *string      `json:"source_parent_uuid,omitempty"`
-	SourceSubtype     *string      `json:"source_subtype,omitempty"`
-	SourceType        *string      `json:"source_type,omitempty"`
-	SourceUUID        *string      `json:"source_uuid,omitempty"`
-	ThinkingText      string       `json:"thinking_text" validate:"required"`
-	Timestamp         string       `json:"timestamp" validate:"required"`
-	TokenUsage        *struct{}    `json:"token_usage,omitempty"`
-	ToolCalls         []DBToolCall `json:"tool_calls,omitempty"`
+	ClaudeMessageID   *string             `json:"claude_message_id,omitempty"`
+	ClaudeRequestID   *string             `json:"claude_request_id,omitempty"`
+	Content           string              `json:"content" validate:"required"`
+	ContentLayout     ParserContentLayout `json:"content_layout"`
+	ContentLength     int64               `json:"content_length"`
+	ContextTokens     int64               `json:"context_tokens"`
+	HasContextTokens  bool                `json:"has_context_tokens"`
+	HasOutputTokens   bool                `json:"has_output_tokens"`
+	HasThinking       bool                `json:"has_thinking"`
+	HasToolUse        bool                `json:"has_tool_use"`
+	ID                int64               `json:"id"`
+	IsCompactBoundary *bool               `json:"is_compact_boundary,omitempty"`
+	IsSidechain       *bool               `json:"is_sidechain,omitempty"`
+	IsSystem          bool                `json:"is_system"`
+	Model             string              `json:"model" validate:"required"`
+	Ordinal           int64               `json:"ordinal"`
+	OutputTokens      int64               `json:"output_tokens"`
+	PromptSource      *string             `json:"prompt_source,omitempty"`
+	ProviderID        *string             `json:"provider_id,omitempty"`
+	ReasoningEffort   *string             `json:"reasoning_effort,omitempty"`
+	Role              string              `json:"role" validate:"required"`
+	SessionID         string              `json:"session_id" validate:"required"`
+	SourceParentUUID  *string             `json:"source_parent_uuid,omitempty"`
+	SourceSubtype     *string             `json:"source_subtype,omitempty"`
+	SourceType        *string             `json:"source_type,omitempty"`
+	SourceUUID        *string             `json:"source_uuid,omitempty"`
+	ThinkingText      string              `json:"thinking_text" validate:"required"`
+	Timestamp         string              `json:"timestamp" validate:"required"`
+	TokenUsage        *struct{}           `json:"token_usage,omitempty"`
+	ToolCalls         []DBToolCall        `json:"tool_calls,omitempty"`
+	ToolResultText    string              `json:"tool_result_text" validate:"required"`
 }
 
 func (d DBMessage) Validate() error {
 	var errors runtime.ValidationErrors
 	if err := typesValidator.Var(d.Content, "required"); err != nil {
 		errors = errors.Append("Content", err)
+	}
+	if v, ok := any(d.ContentLayout).(runtime.Validator); ok {
+		if err := v.Validate(); err != nil {
+			errors = errors.Append("ContentLayout", err)
+		}
 	}
 	if err := typesValidator.Var(d.Model, "required"); err != nil {
 		errors = errors.Append("Model", err)
@@ -18765,6 +18772,9 @@ func (d DBMessage) Validate() error {
 				errors = errors.Append(fmt.Sprintf("ToolCalls[%d]", i), err)
 			}
 		}
+	}
+	if err := typesValidator.Var(d.ToolResultText, "required"); err != nil {
+		errors = errors.Append("ToolResultText", err)
 	}
 	if len(errors) == 0 {
 		return nil
@@ -19308,6 +19318,7 @@ func (d DBTemporalHourlyUTCEntry) Validate() error {
 type DBToolCall struct {
 	Category            string              `json:"category" validate:"required"`
 	InputJSON           *string             `json:"input_json,omitempty"`
+	Rendering           string              `json:"rendering" validate:"required"`
 	ResultContent       *string             `json:"result_content,omitempty"`
 	ResultContentLength *int64              `json:"result_content_length,omitempty"`
 	ResultEvents        []DBToolResultEvent `json:"result_events,omitempty"`
@@ -19321,6 +19332,9 @@ func (d DBToolCall) Validate() error {
 	var errors runtime.ValidationErrors
 	if err := typesValidator.Var(d.Category, "required"); err != nil {
 		errors = errors.Append("Category", err)
+	}
+	if err := typesValidator.Var(d.Rendering, "required"); err != nil {
+		errors = errors.Append("Rendering", err)
 	}
 	for i, item := range d.ResultEvents {
 		if v, ok := any(item).(runtime.Validator); ok {
@@ -19599,6 +19613,38 @@ func (m MachinesResponse) Validate() error {
 type ModelTotal = service.ModelTotal
 
 type MoneyMoney = money.Money
+
+type ParserContentBlock struct {
+	CallIndex int64   `json:"call_index"`
+	Category  *string `json:"category,omitempty"`
+	End       int64   `json:"end"`
+	Kind      string  `json:"kind" validate:"required"`
+	Start     int64   `json:"start"`
+}
+
+func (p ParserContentBlock) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(p))
+}
+
+type ParserContentLayout struct {
+	Blocks  []ParserContentBlock `json:"blocks" validate:"required"`
+	Version int64                `json:"version"`
+}
+
+func (p ParserContentLayout) Validate() error {
+	var errors runtime.ValidationErrors
+	for i, item := range p.Blocks {
+		if v, ok := any(item).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append(fmt.Sprintf("Blocks[%d]", i), err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
 
 type ProjectTotal = service.ProjectTotal
 

@@ -160,7 +160,8 @@ func TestParseCortexSession_ToolUse(t *testing.T) {
 	assert.True(t, msgs[1].HasToolUse)
 	require.Len(t, msgs[1].ToolCalls, 1)
 	assert.Equal(t, "read", msgs[1].ToolCalls[0].ToolName)
-	assert.Contains(t, msgs[1].Content, "/tmp/main.go")
+	assert.Empty(t, msgs[1].Content)
+	assert.Contains(t, msgs[1].ToolCalls[0].Rendering, "/tmp/main.go")
 
 	// Tool result message carries ContentLength > 0.
 	assert.Equal(t, SourceSubtypeToolResult, msgs[2].SourceSubtype)

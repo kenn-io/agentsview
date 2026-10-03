@@ -567,28 +567,23 @@ func buildCrushMessage(
 		message.ProviderID = ""
 	}
 
-	var texts []string
-	var thinking []string
+	var body MessageContentBuilder
 	contentJSON.ForEach(func(_, part gjson.Result) bool {
 		switch part.Get("type").Str {
 		case "text":
 			if text := strings.TrimSpace(part.Get("data.text").Str); text != "" {
-				texts = append(texts, text)
+				body.AddText(text)
 			}
 		case "reasoning":
-			message.HasThinking = true
-			if text := strings.TrimSpace(part.Get("data.thinking").Str); text != "" {
-				thinking = append(thinking, text)
-				texts = append(texts, "[Thinking]\n"+text+"\n[/Thinking]")
-			}
+			body.AddThinking(strings.TrimSpace(part.Get("data.thinking").Str))
 		case "tool_call":
 			if call, ok := crushParseToolCall(ctx, rowID, part); ok {
-				message.HasToolUse = true
-				message.ToolCalls = append(message.ToolCalls, call)
+				body.message.HasToolUse = true
+				body.AddToolCall(call)
 			}
 		case "tool_result":
 			if result, ok := crushParseToolResult(part); ok {
-				message.ToolResults = append(message.ToolResults, result)
+				body.AddToolResult(result)
 			}
 		case "finish":
 			if message.Role == RoleAssistant {
@@ -602,9 +597,8 @@ func buildCrushMessage(
 		}
 		return true
 	})
-	message.Content = strings.Join(texts, "\n")
-	message.ThinkingText = strings.Join(thinking, "\n\n")
-	message.ContentLength = len(message.Content)
+	message.Content = body.Message().Content
+	message = message.withBody(body.Message())
 	return message, true, nil
 }
 

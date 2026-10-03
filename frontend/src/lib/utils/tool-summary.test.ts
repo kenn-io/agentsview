@@ -5,6 +5,7 @@ import { summarizeToolCall, summarizeToolCallPath } from "./tool-summary.js";
 
 function call(partial: Partial<ToolCall>): ToolCall {
   return {
+    rendering: "",
     category: "",
     tool_name: "Tool",
     ...partial,

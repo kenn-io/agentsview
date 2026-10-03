@@ -104,7 +104,12 @@ func TestEvenerKindsAndContent(t *testing.T) {
 			require.Len(t, msgs, 1)
 			assert.Equal(t, tc.role, msgs[0].Role)
 			assert.Equal(t, tc.role == RoleSystem, msgs[0].IsSystem)
-			assert.Contains(t, msgs[0].Content, "visible")
+			if tc.role == RoleTool {
+				assert.Equal(t, "visible", msgs[0].ToolResultText)
+				assert.Empty(t, msgs[0].Content)
+			} else {
+				assert.Contains(t, msgs[0].Content, "visible")
+			}
 		})
 	}
 	t.Run("thinking and media", func(t *testing.T) {
@@ -125,11 +130,12 @@ func TestEvenerKindsAndContent(t *testing.T) {
 		require.Len(t, msgs, 1)
 		assert.True(t, msgs[0].HasThinking)
 		assert.Contains(t, msgs[0].ThinkingText, "reasoning")
-		assert.Contains(t, msgs[0].ThinkingText, "redacted")
-		for _, want := range []string{"answer", "image", "audio", "notes.pdf", "reference", "future detail"} {
+		assert.Equal(t, "reasoning", msgs[0].ThinkingText)
+		for _, want := range []string{"answer", "image", "audio", "notes.pdf", "future detail"} {
 			assert.Contains(t, msgs[0].Content, want)
 		}
-		assert.Contains(t, msgs[0].Content, "[Thinking]\nreasoning\n[/Thinking]")
+		require.Len(t, msgs[0].ToolCalls, 1)
+		assert.Equal(t, "[web search] reference", msgs[0].ToolCalls[0].Rendering)
 		assert.NotContains(t, msgs[0].Content, "c2VjcmV0")
 	})
 	t.Run("diagnostics", func(t *testing.T) {
@@ -458,20 +464,28 @@ func TestEvenerRelationshipRequiresMetadataEvidence(t *testing.T) {
 }
 
 func TestEvenerRedactedThinkingOmitsOpaquePayload(t *testing.T) {
-	turn := evenerTestTurn("ASSISTANT", "")
-	turn["message"] = map[string]any{"content": []any{map[string]any{"kind": "redacted_thinking", "thinking": map[string]any{"text": "opaque-encrypted-payload", "redacted": true}}, map[string]any{"kind": "text", "text": "Visible answer"}}}
-	path := writeEvenerFixture(t, t.TempDir(), "session", nil, turn)
-	_, msgs, err := parseEvenerSession(t.Context(), path, "test")
-	require.NoError(t, err)
-	require.Len(t, msgs, 1)
-	assert.True(t, msgs[0].HasThinking)
-	assert.Contains(t, msgs[0].ThinkingText, "redacted")
-	assert.NotContains(t, msgs[0].ThinkingText, "opaque-encrypted-payload")
-	assert.Contains(t, msgs[0].Content, "Visible answer")
-	assert.NotContains(t, msgs[0].Content, "opaque-encrypted-payload")
+	for _, kind := range []string{"redacted_thinking", "thinking"} {
+		t.Run(kind, func(t *testing.T) {
+			turn := evenerTestTurn("ASSISTANT", "")
+			turn["message"] = map[string]any{"content": []any{
+				map[string]any{"kind": kind, "thinking": map[string]any{"text": "opaque-encrypted-payload", "redacted": true}},
+				map[string]any{"kind": "text", "text": "Visible answer"},
+			}}
+			path := writeEvenerFixture(t, t.TempDir(), "session", nil, turn)
+			_, msgs, err := parseEvenerSession(t.Context(), path, "test")
+			require.NoError(t, err)
+			require.Len(t, msgs, 1)
+			assert.True(t, msgs[0].HasThinking)
+			assert.Empty(t, msgs[0].ThinkingText)
+			assert.Equal(t, "Visible answer", msgs[0].Content)
+			assert.Equal(t, &ContentLayout{Version: 1, Blocks: []ContentBlock{
+				{Kind: "thinking"}, {Kind: "text", End: 14},
+			}}, msgs[0].ContentLayout)
+		})
+	}
 }
 
-func TestEvenerContentUsesTranscriptRenderingMarkers(t *testing.T) {
+func TestEvenerNativeContentLayoutKeepsInterleaving(t *testing.T) {
 	turn := evenerTestTurn("ASSISTANT", "")
 	turn["message"] = map[string]any{"content": []any{
 		map[string]any{"kind": "text", "text": "Before reasoning"},
@@ -484,10 +498,13 @@ func TestEvenerContentUsesTranscriptRenderingMarkers(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, msgs, 1)
 	content := msgs[0].Content
-	assert.Contains(t, content, "[Thinking]\nConsider the input\n[/Thinking]")
-	assert.Contains(t, content, "[Tool: exec_command]\n\nAfter the tool")
+	assert.Equal(t, "Before reasoning\nAfter the tool", content)
+	assert.Equal(t, &ContentLayout{Version: 1, Blocks: []ContentBlock{
+		{Kind: "text", End: 16}, {Kind: "thinking", End: 18}, {Kind: "tool_call"}, {Kind: "text", Start: 17, End: 31},
+	}}, msgs[0].ContentLayout)
 	assert.Equal(t, "Consider the input", msgs[0].ThinkingText)
 	require.Len(t, msgs[0].ToolCalls, 1)
 	assert.JSONEq(t, `{"cmd":"pwd"}`, msgs[0].ToolCalls[0].InputJSON)
+	assert.Equal(t, "[Tool: exec_command]\n", msgs[0].ToolCalls[0].Rendering)
 	assert.NotContains(t, content, `{"cmd":"pwd"}`, "tool arguments belong to the structured tool block")
 }

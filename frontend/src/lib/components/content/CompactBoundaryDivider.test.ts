@@ -22,6 +22,8 @@ describe("CompactBoundaryDivider", () => {
       target: document.body,
       props: {
         message: {
+          content_layout: null,
+          tool_result_text: "",
           has_context_tokens: false,
           has_output_tokens: false,
           id: 1,
@@ -63,6 +65,8 @@ describe("CompactBoundaryDivider", () => {
       target: document.body,
       props: {
         message: {
+          content_layout: null,
+          tool_result_text: "",
           has_context_tokens: false,
           has_output_tokens: false,
           id: 1,
@@ -99,6 +103,8 @@ describe("CompactBoundaryDivider", () => {
       target: document.body,
       props: {
         message: {
+          content_layout: null,
+          tool_result_text: "",
           has_context_tokens: false,
           has_output_tokens: false,
           id: 1,

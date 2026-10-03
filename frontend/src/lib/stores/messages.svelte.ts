@@ -683,6 +683,8 @@ function transcriptMessageEqual(before: Message, after: Message): boolean {
     role: message.role,
     content: message.content,
     thinkingText: message.thinking_text,
+    toolResultText: message.tool_result_text,
+    contentLayout: message.content_layout,
     timestamp: message.timestamp,
     hasThinking: message.has_thinking,
     hasToolUse: message.has_tool_use,
@@ -697,6 +699,7 @@ function transcriptMessageEqual(before: Message, after: Message): boolean {
     isCompactBoundary: message.is_compact_boundary ?? false,
     toolCalls: (message.tool_calls ?? []).map((call) => ({
       toolName: call.tool_name,
+      rendering: call.rendering,
       category: call.category ?? "",
       toolUseId: call.tool_use_id ?? "",
       inputJson: call.input_json ?? "",

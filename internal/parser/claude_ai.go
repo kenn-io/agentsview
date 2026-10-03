@@ -99,57 +99,44 @@ func (p *claudeAIImportOnlyProvider) ParseClaudeAIExport(
 	return err
 }
 
-// assembleClaudeAIContent builds message content from content
-// blocks. Falls back to the top-level text field when no
-// content blocks have usable text.
-func assembleClaudeAIContent(
-	m claudeAIMessage,
-) (content string, hasThinking bool) {
-	attachmentParts := buildClaudeAttachmentText(m.Attachments)
-
-	if len(m.Content) == 0 {
-		if len(attachmentParts) == 0 {
-			return m.Text, false
+// assembleClaudeAIBody uses export block types; literal marker text stays prose.
+// Attachments and the legacy text fallback remain dialogue.
+func assembleClaudeAIBody(m claudeAIMessage) ParsedMessage {
+	var b MessageContentBuilder
+	workLength, workParts := 0, 0
+	addWork := func(length int) {
+		if workParts > 0 {
+			workLength += 2
 		}
-
-		contentParts := make([]string, 0, 1+len(attachmentParts))
-		if m.Text != "" {
-			contentParts = append(contentParts, m.Text)
-		}
-		contentParts = append(contentParts, attachmentParts...)
-		return strings.Join(contentParts, "\n\n"), false
+		workParts++
+		workLength += length
 	}
-
-	var contentParts []string
-	for _, b := range m.Content {
-		switch b.Type {
+	addText := func(text string) {
+		if text != "" {
+			b.addText(text, "\n\n")
+			addWork(sanitizedWorkLength(text))
+		}
+	}
+	for _, block := range m.Content {
+		switch block.Type {
 		case "text":
-			if b.Text != "" {
-				contentParts = append(contentParts, b.Text)
-			}
+			addText(block.Text)
 		case "thinking":
-			if b.Thinking != "" {
-				hasThinking = true
-				contentParts = append(contentParts,
-					"[Thinking]\n"+b.Thinking+"\n[/Thinking]")
+			b.AddThinking(block.Thinking)
+			if block.Thinking != "" {
+				addWork(sanitizedWorkLength(block.Thinking) + len("[Thinking]\n\n[/Thinking]"))
 			}
-			// tool_use, tool_result, voice_note, token_budget
-			// are metadata blocks — skip for display content.
 		}
 	}
-
-	if len(contentParts) == 0 {
-		if len(attachmentParts) == 0 {
-			return m.Text, hasThinking
-		}
-		if m.Text != "" {
-			contentParts = append(contentParts, m.Text)
-		}
+	if workParts == 0 {
+		addText(m.Text)
 	}
-
-	contentParts = append(contentParts, attachmentParts...)
-
-	return strings.Join(contentParts, "\n\n"), hasThinking
+	for _, attachment := range buildClaudeAttachmentText(m.Attachments) {
+		addText(attachment)
+	}
+	body := b.Message()
+	body.ContentLength = workLength
+	return body
 }
 
 func buildClaudeAttachmentText(
@@ -191,27 +178,24 @@ func convertClaudeAIConversation(
 	)
 
 	for i, m := range conv.Messages {
-		content, hasThinking := assembleClaudeAIContent(m)
+		body := assembleClaudeAIBody(m)
 
 		role := RoleAssistant
 		if m.Sender == "human" {
 			role = RoleUser
 			userCount++
 			if firstUserMessage == "" {
-				firstUserMessage = content
+				firstUserMessage = body.Content
 			}
 		}
 
 		ts, _ := time.Parse(time.RFC3339Nano, m.CreatedAt)
 
-		msgs = append(msgs, ParsedMessage{
-			Ordinal:       i,
-			Role:          role,
-			Content:       content,
-			Timestamp:     ts,
-			HasThinking:   hasThinking,
-			ContentLength: len(content),
-		})
+		body.Ordinal = i
+		body.Role = role
+		body.Timestamp = ts
+		body.SourceUUID = m.UUID
+		msgs = append(msgs, body)
 	}
 
 	return ParseResult{

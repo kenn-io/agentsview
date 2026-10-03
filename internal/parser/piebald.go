@@ -529,12 +529,8 @@ func buildPiebaldMessage(
 		return ParsedMessage{}, false, err
 	}
 
-	var (
-		contentParts []string
-		thinking     []string
-		toolCalls    []ParsedToolCall
-		toolResults  []ParsedToolResult
-	)
+	var body MessageContentBuilder
+	var contentParts, thinkingParts []string
 	for _, part := range parts {
 		switch part.partType {
 		case "text":
@@ -542,50 +538,46 @@ func buildPiebaldMessage(
 			if err != nil {
 				return ParsedMessage{}, false, err
 			}
-			if strings.TrimSpace(text) == "" {
-				continue
-			}
 			if isThinking {
-				thinking = append(thinking, text)
-			} else {
+				if strings.TrimSpace(text) != "" {
+					body.addThinking(text, "\n")
+					thinkingParts = append(thinkingParts, text)
+				} else {
+					body.AddThinking("")
+				}
+			} else if strings.TrimSpace(text) != "" {
 				contentParts = append(contentParts, text)
+				body.AddText(text)
 			}
 		case "tool_call":
 			call, result, err := loadPiebaldToolCall(ctx, db, part.id)
 			if err != nil {
 				return ParsedMessage{}, false, err
 			}
-			if call.ToolUseID != "" {
-				toolCalls = append(toolCalls, call)
+			if call.ToolName != "" {
+				body.AddToolCall(call)
 			}
-			if result.ToolUseID != "" {
-				toolResults = append(toolResults, result)
+			if result.ContentRaw != "" {
+				body.AddToolResult(result)
 			}
 		}
 	}
-
 	content := strings.TrimSpace(strings.Join(contentParts, "\n"))
-	thinkingText := strings.TrimSpace(strings.Join(thinking, "\n"))
-	role := piebaldRole(mr.role)
-	if content == "" && thinkingText == "" && len(toolCalls) == 0 && len(toolResults) == 0 {
-		return ParsedMessage{}, false, nil
-	}
-
-	msg := ParsedMessage{
-		Ordinal:       ordinal,
-		Role:          role,
-		Content:       content,
-		ThinkingText:  thinkingText,
-		Timestamp:     parsePiebaldTimestamp(mr.createdAt),
-		HasThinking:   thinkingText != "",
-		HasToolUse:    len(toolCalls) > 0,
-		ContentLength: len(content) + len(thinkingText),
-		ToolCalls:     toolCalls,
-		ToolResults:   toolResults,
-		Model:         mr.model,
-		StopReason:    mr.finishReason,
+	thinking := strings.TrimSpace(strings.Join(thinkingParts, "\n"))
+	msg := (ParsedMessage{
+		Ordinal: ordinal, Role: piebaldRole(mr.role), Content: content,
+		Timestamp: parsePiebaldTimestamp(mr.createdAt), Model: mr.model, StopReason: mr.finishReason,
+		SourceUUID: strconv.FormatInt(mr.parentChatID, 10) + ":" + strconv.FormatInt(mr.id, 10),
+	}).withBody(body.Message())
+	msg.trimThinking()
+	msg.ContentLength = sanitizedWorkLength(content) + sanitizedWorkLength(thinking)
+	if mr.parentMessageID.Valid {
+		msg.SourceParentUUID = strconv.FormatInt(mr.parentChatID, 10) + ":" + strconv.FormatInt(mr.parentMessageID.Int64, 10)
 	}
 	applyPiebaldTokenUsage(&msg, mr)
+	if !msg.hasNativeBody() && !msg.HasContextTokens && !msg.HasOutputTokens {
+		return ParsedMessage{}, false, nil
+	}
 	return msg, true, nil
 }
 

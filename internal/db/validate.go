@@ -164,41 +164,7 @@ func SanitizeMessage(m *Message) ValidationStats {
 		m.Role = ""
 		stats.RoleCoerced++
 	}
-
-	// Adjust ContentLength by the DELTA of bytes the sanitizer removed
-	// rather than overwriting it with len(Content). Some parsers set
-	// ContentLength to a semantic value that intentionally differs from
-	// len(Content) -- e.g. a thinking/reasoning-inclusive length, or a
-	// tool-only message with empty display Content but a nonzero work
-	// length. Overwriting would corrupt content_length (and the
-	// fingerprint/diff behavior that reads it) for normal messages where
-	// nothing was stripped. By subtracting only the removed bytes we
-	// preserve the parser's semantic length when no control runes are
-	// stripped, and keep content_length consistent with the stored bytes
-	// when they are. The latter also prevents a spurious archive-update
-	// rewrite every sync: visualStudioCopilotMessageHasArchiveUpdate
-	// treats equal ContentLength with differing Content as an update,
-	// which would false-fire forever when stored content was stripped but
-	// its length stayed raw; the reconcile path sanitizes re-parsed
-	// content before comparing, so the lengths stay aligned.
-	sanitizeLengthTrackedString(
-		&m.Content, &m.ContentLength, &stats,
-	)
-	origThinkingLen := len(m.ThinkingText)
-	sanitizeStringField(&m.ThinkingText, &stats)
-	if removed := origThinkingLen - len(m.ThinkingText); removed > 0 {
-		// Some parsers include ThinkingText in ContentLength. If the
-		// current length still has semantic bytes beyond the sanitized
-		// visible Content, subtract stripped thinking bytes from that
-		// excess without driving the length below stored Content.
-		excess := m.ContentLength - len(m.Content)
-		if excess > 0 {
-			if removed > excess {
-				removed = excess
-			}
-			m.ContentLength -= removed
-		}
-	}
+	stats.add(sanitizeMessageBody(m))
 	sanitizeStringField(&m.ClaudeMessageID, &stats)
 	sanitizeStringField(&m.ClaudeRequestID, &stats)
 	sanitizeStringField(&m.SourceType, &stats)
@@ -224,10 +190,70 @@ func SanitizeMessage(m *Message) ValidationStats {
 		stats.TokensClamped++
 	}
 
-	if BlankImplausibleTimestamp(&m.Timestamp) {
+	if BlankImplausibleTimestamp(&m.Timestamp) { //nolint:nilaway // The reported path is &msgs[i] inside range; nil slices have no elements.
 		stats.TimestampsBlanked++
 	}
 
+	return stats
+}
+
+// sanitizeMessageBody prepares native ranges without changing opaque metadata.
+// Direct archive writers historically preserve their identity and usage fields;
+// parser ingestion continues to use the complete SanitizeMessage contract.
+func sanitizeMessageBody(m *Message) ValidationStats {
+	var stats ValidationStats
+	m.prepareBodyLayout()
+	originalContent, originalThinking, originalOutput := m.Content, m.ThinkingText, m.ToolResultText
+	// Archive write boundaries reject invalid layouts; other callers retain
+	// the original body and provenance when it cannot be transformed safely.
+	_ = m.TransformBody(func(_, text string) string { return SanitizeUTF8(text) })
+	for _, pair := range [][2]string{{originalContent, m.Content}, {originalThinking, m.ThinkingText}, {originalOutput, m.ToolResultText}} {
+		if pair[0] != pair[1] {
+			stats.ControlCharsStripped++
+		}
+	}
+
+	// Adjust ContentLength by the DELTA of bytes the sanitizer removed
+	// rather than overwriting it with len(Content). Some parsers set
+	// ContentLength to a semantic value that intentionally differs from
+	// len(Content) -- e.g. a thinking/reasoning-inclusive length, or a
+	// tool-only message with empty display Content but a nonzero work
+	// length. Overwriting would corrupt content_length (and the
+	// fingerprint/diff behavior that reads it) for normal messages where
+	// nothing was stripped. By subtracting only the removed bytes we
+	// preserve the parser's semantic length when no control runes are
+	// stripped, and keep content_length consistent with the stored bytes
+	// when they are. The latter also prevents a spurious archive-update
+	// rewrite every sync: visualStudioCopilotMessageHasArchiveUpdate
+	// treats equal ContentLength with differing Content as an update,
+	// which would false-fire forever when stored content was stripped but
+	// its length stayed raw; the reconcile path sanitizes re-parsed
+	// content before comparing, so the lengths stay aligned.
+	if removed := len(originalContent) - len(m.Content); removed > 0 {
+		subtractRemovedBytes(&m.ContentLength, removed)
+	}
+	origThinkingLen := len(originalThinking)
+	if removed := origThinkingLen - len(m.ThinkingText); removed > 0 {
+		// Some parsers include ThinkingText in ContentLength. If the
+		// current length still has semantic bytes beyond the sanitized
+		// visible Content, subtract stripped thinking bytes from that
+		// excess without driving the length below stored Content.
+		excess := m.ContentLength - len(m.Content)
+		if excess > 0 {
+			if removed > excess {
+				removed = excess
+			}
+			m.ContentLength -= removed
+		}
+	}
+	if m.Content == "" && m.ThinkingText == "" {
+		if removed := len(originalOutput) - len(m.ToolResultText); removed > 0 {
+			subtractRemovedBytes(&m.ContentLength, removed)
+		}
+	}
+	for i := range m.ToolCalls {
+		m.ToolCalls[i].Rendering = SanitizeUTF8(m.ToolCalls[i].Rendering)
+	}
 	return stats
 }
 

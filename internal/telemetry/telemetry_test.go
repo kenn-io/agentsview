@@ -11,6 +11,7 @@ import (
 )
 
 func TestEnabledFromEnvHonorsAgentsViewAndGenericOptOut(t *testing.T) {
+	t.Setenv(GenericEnabledEnv, "1")
 	t.Setenv(EnabledEnv, "0")
 	assert.False(t, EnabledFromEnv())
 

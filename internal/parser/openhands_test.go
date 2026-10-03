@@ -176,7 +176,9 @@ func TestParseOpenHandsSession(t *testing.T) {
 	assert.Equal(t, "terminal", msgs[1].ToolCalls[0].ToolName)
 	assert.Equal(t, "Bash", msgs[1].ToolCalls[0].Category)
 	assert.Equal(t, "toolu_123", msgs[1].ToolCalls[0].ToolUseID)
-	assert.Contains(t, msgs[1].Content, "[Bash: Inspect latest server logs]")
+	assert.Equal(t, "I'll inspect the logs first.", msgs[1].Content)
+	assert.Equal(t, "Start with the failing process and collect output.", msgs[1].ThinkingText)
+	assert.Contains(t, msgs[1].ToolCalls[0].Rendering, "[Bash: Inspect latest server logs]")
 
 	assert.Equal(t, RoleUser, msgs[2].Role)
 	require.Len(t, msgs[2].ToolResults, 1)
@@ -207,7 +209,8 @@ func TestParseOpenHandsObservationWithoutToolCallIsMarkedToolOutput(t *testing.T
 
 	require.True(t, ok)
 	assert.Equal(t, RoleUser, msg.Role)
-	assert.Equal(t, "token=abc123", msg.Content)
+	assert.Empty(t, msg.Content)
+	assert.Equal(t, "token=abc123", msg.ToolResultText)
 	assert.Equal(t, SourceSubtypeToolResult, msg.SourceSubtype,
 		"an observation with no tool call to pair with is still tool output")
 }

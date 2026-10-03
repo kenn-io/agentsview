@@ -685,7 +685,7 @@ func TestParseCodexSession_FunctionCalls(t *testing.T) {
 		assert.Equal(t, RoleAssistant, msgs[1].Role)
 		assert.True(t, msgs[1].HasToolUse)
 		assertToolCalls(t, msgs[1].ToolCalls, []ParsedToolCall{{ToolName: "shell_command", Category: "Bash"}})
-		assert.Equal(t, "[Bash: Running tests]", msgs[1].Content)
+		assert.Equal(t, "[Bash: Running tests]", msgs[1].ToolCalls[0].Rendering)
 
 		assert.True(t, msgs[2].HasToolUse)
 		assertToolCalls(t, msgs[2].ToolCalls, []ParsedToolCall{{ToolName: "apply_patch", Category: "Edit"}})
@@ -698,7 +698,7 @@ func TestParseCodexSession_FunctionCalls(t *testing.T) {
 	t.Run("exec_command arguments include command detail", func(t *testing.T) {
 		content := loadFixture(t, "codex/fc_args_1.jsonl")
 		_, msgs := runCodexParserTest(t, "test.jsonl", content, false)
-		assert.Equal(t, "[Bash]\n$ rg --files", msgs[1].Content)
+		assert.Equal(t, "[Bash]\n$ rg --files", msgs[1].ToolCalls[0].Rendering)
 		assert.Equal(t, `{"cmd":"rg --files","workdir":"/tmp"}`, msgs[1].ToolCalls[0].InputJSON)
 	})
 
@@ -712,7 +712,7 @@ func TestParseCodexSession_FunctionCalls(t *testing.T) {
 			}, tsEarlyS5),
 		)
 		_, msgs := runCodexParserTest(t, "test.jsonl", content, false)
-		assert.Equal(t, "[Bash]\n$ cat > file.toml <<'EOF'", msgs[1].Content)
+		assert.Equal(t, "[Bash]\n$ cat > file.toml <<'EOF'", msgs[1].ToolCalls[0].Rendering)
 		assert.Contains(t, msgs[1].ToolCalls[0].InputJSON, "cmd")
 		assert.Contains(t, msgs[1].ToolCalls[0].InputJSON, "[package]")
 	})
@@ -721,7 +721,7 @@ func TestParseCodexSession_FunctionCalls(t *testing.T) {
 		content := loadFixture(t, "codex/fc_args_2.jsonl")
 		_, msgs := runCodexParserTest(t, "test.jsonl", content, false)
 		want := "[Edit: internal/parser/codex.go (+1 more)]\ninternal/parser/codex.go\ninternal/parser/parser_test.go"
-		assert.Equal(t, want, msgs[1].Content)
+		assert.Equal(t, want, msgs[1].ToolCalls[0].Rendering)
 		assert.NotEmpty(t, msgs[1].ToolCalls[0].InputJSON)
 		assert.Contains(t, msgs[1].ToolCalls[0].InputJSON, "Begin Patch")
 	})
@@ -789,7 +789,7 @@ func TestParseCodexSession_FunctionCalls(t *testing.T) {
 		content := loadFixture(t, "codex/fc_stdin.jsonl")
 		_, msgs := runCodexParserTest(t, "test.jsonl", content, false)
 		want := "[Bash: stdin -> sess-42]\nyes\\n"
-		assert.Equal(t, want, msgs[1].Content)
+		assert.Equal(t, want, msgs[1].ToolCalls[0].Rendering)
 		assertToolCalls(t, msgs[1].ToolCalls, []ParsedToolCall{{ToolName: "write_stdin", Category: "Bash"}})
 	})
 
@@ -805,7 +805,7 @@ func TestParseCodexSession_FunctionCalls(t *testing.T) {
 		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
 		assert.Equal(t, "codex:fc-agent", sess.ID)
 		assert.Len(t, msgs, 2)
-		assert.Contains(t, msgs[1].Content, "[Task: explore codebase (Explore)]")
+		assert.Contains(t, msgs[1].ToolCalls[0].Rendering, "[Task: explore codebase (Explore)]")
 		assertToolCalls(t, msgs[1].ToolCalls, []ParsedToolCall{{ToolName: "Agent", Category: "Task"}})
 	})
 
@@ -1369,7 +1369,8 @@ func TestParseCodexSession_FunctionCalls(t *testing.T) {
 
 		require.NotNil(t, sess)
 		assert.Len(t, msgs, 1)
-		assert.Equal(t, "Finished successfully", msgs[0].Content)
+		assert.Empty(t, msgs[0].Content)
+		assert.Equal(t, "Finished successfully", msgs[0].ToolResultText)
 	})
 
 	t.Run("function call no name skipped", func(t *testing.T) {
@@ -1409,7 +1410,7 @@ func TestParseCodexSession_FunctionCalls(t *testing.T) {
 		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
 		assert.Equal(t, "codex:fc-4", sess.ID)
 		assert.Len(t, msgs, 2)
-		assert.Equal(t, "[Bash]", msgs[1].Content)
+		assert.Equal(t, "[Bash]", msgs[1].ToolCalls[0].Rendering)
 	})
 
 	t.Run("empty arguments falls through to input", func(t *testing.T) {
@@ -1421,7 +1422,7 @@ func TestParseCodexSession_FunctionCalls(t *testing.T) {
 		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
 		assert.Equal(t, "codex:fc-empty-args", sess.ID)
 		assert.Len(t, msgs, 2)
-		assert.Equal(t, "[Bash]\n$ ls -la", msgs[1].Content)
+		assert.Equal(t, "[Bash]\n$ ls -la", msgs[1].ToolCalls[0].Rendering)
 	})
 
 	t.Run("empty array arguments falls through to input", func(t *testing.T) {
@@ -1433,7 +1434,7 @@ func TestParseCodexSession_FunctionCalls(t *testing.T) {
 		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
 		assert.Equal(t, "codex:fc-empty-arr", sess.ID)
 		assert.Len(t, msgs, 2)
-		assert.Equal(t, "[Bash]\n$ echo hello", msgs[1].Content)
+		assert.Equal(t, "[Bash]\n$ echo hello", msgs[1].ToolCalls[0].Rendering)
 	})
 }
 

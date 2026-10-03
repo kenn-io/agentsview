@@ -177,7 +177,7 @@ func BuildTermsSearchSQL(
 		where, frag.timestamp, frag.sessionSort,
 		dialect.trueLiteral, SubordinateSessionSQL("s"),
 		dialect.trueLiteral, dialect.falseLiteral,
-		dialect.falseLiteral, frag.systemPrefix("m.content", "m.role"),
+		dialect.falseLiteral, frag.systemPrefix("m.content", "m.role")+" AND "+DialogueEligibilitySQL("m", dialect),
 		prefilter.String(), frag.bodyAgg,
 		strings.Join(predicates, " AND "), frag.orderBySort,
 		b.Add(f.Limit+1), b.Add(f.Cursor))

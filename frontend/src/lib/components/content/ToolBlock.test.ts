@@ -51,6 +51,7 @@ function call(
   rest: Partial<ToolCall> = {},
 ): ToolCall {
   return {
+    rendering: "",
     category: "",
     tool_name,
     input_json: JSON.stringify(params),
@@ -151,6 +152,7 @@ describe("ToolBlock output and controls", () => {
     const result =
       '[{"type":"input_text","text":"Before"},{"byte_size":3,"media_type":"image/png","sha256":"","text":"[Image: image/png, 3 bytes]","type":"agentsview_image","version":1},{"type":"text","text":"After"}]';
     const toolCall: ToolCall = {
+      rendering: "",
       tool_name: "view_image",
       category: "Other",
       result_content: result,
@@ -196,6 +198,7 @@ describe("ToolBlock output and controls", () => {
     expect(new TextEncoder().encode(result).byteLength).toBe(1_441_138);
 
     const toolCall: ToolCall = {
+      rendering: "",
       tool_name: "view_image",
       category: "Other",
       result_content: result,
@@ -237,6 +240,7 @@ describe("ToolBlock output and controls", () => {
   it("renders an image-only retained result", async () => {
     const result = JSON.stringify([{ type: "input_image", image_url: SMALL_PNG_DATA_URI }]);
     const toolCall: ToolCall = {
+      rendering: "",
       tool_name: "view_image",
       category: "Other",
       result_content: result,
@@ -279,6 +283,7 @@ describe("ToolBlock output and controls", () => {
     document.head.appendChild(base);
 
     const toolCall: ToolCall = {
+      rendering: "",
       tool_name: "view_image",
       category: "Other",
       result_content: result,
@@ -497,6 +502,7 @@ describe("ToolBlock input source and copy", () => {
     await render({
       content: "legacy",
       toolCall: {
+        rendering: "",
         category: "",
         tool_name: "Read",
         input_json: "{",
@@ -508,6 +514,7 @@ describe("ToolBlock input source and copy", () => {
   it("handles a tool call without input_json", async () => {
     await render({
       toolCall: {
+        rendering: "",
         category: "",
         tool_name: "Read",
       },

@@ -12,6 +12,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/tidwall/gjson"
+
+	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 // vscodeCopilotSession is the top-level JSON structure of a
@@ -38,14 +42,15 @@ func (m jsonMillis) Time() time.Time {
 
 // vscodeCopilotRequest is one turn (user prompt + response).
 type vscodeCopilotRequest struct {
-	RequestID string               `json:"requestId"`
-	Message   vscodeCopilotMessage `json:"message"`
-	Response  []jsontext.Value     `json:"response"`
-	Agent     *vscodeCopilotAgent  `json:"agent,omitempty"`
-	ModelID   string               `json:"modelId"`
-	Timestamp jsonMillis           `json:"timestamp"`
-	Result    *vscodeCopilotResult `json:"result,omitempty"`
-	FollowUps []jsontext.Value     `json:"followups,omitempty"`
+	RequestID  string               `json:"requestId"`
+	ResponseID string               `json:"responseId"`
+	Message    vscodeCopilotMessage `json:"message"`
+	Response   []jsontext.Value     `json:"response"`
+	Agent      *vscodeCopilotAgent  `json:"agent,omitempty"`
+	ModelID    string               `json:"modelId"`
+	Timestamp  jsonMillis           `json:"timestamp"`
+	Result     *vscodeCopilotResult `json:"result,omitempty"`
+	FollowUps  []jsontext.Value     `json:"followups,omitempty"`
 }
 
 // vscodeCopilotMessage is the user prompt.
@@ -211,13 +216,14 @@ func parseVSCodeCopilotData(
 					strings.ReplaceAll(text, "\n", " "), 300,
 				)
 			}
+			var builder MessageContentBuilder
+			builder.AddText(text)
+			body := builder.Message()
+			body.ContentLength = sanitizedWorkLength(text)
 			messages = append(messages, ParsedMessage{
-				Ordinal:       ordinal,
-				Role:          RoleUser,
-				Content:       text,
-				Timestamp:     req.Timestamp.Time(),
-				ContentLength: len(text),
-			})
+				Ordinal: ordinal, Role: RoleUser, Content: body.Content,
+				Timestamp: req.Timestamp.Time(), SourceUUID: req.RequestID,
+			}.withBody(body))
 			ordinal++
 		}
 
@@ -233,23 +239,9 @@ func parseVSCodeCopilotData(
 			sawTokens = true
 		}
 
-		// Assistant response: parse response items
-		respText, toolCalls := parseVSCodeCopilotResponse(
-			req.Response,
-		)
-
-		hasToolUse := len(toolCalls) > 0
-		displayContent := respText
-		if hasToolUse {
-			toolText := formatVSCodeCopilotToolCalls(toolCalls)
-			if respText == "" {
-				displayContent = toolText
-			} else {
-				displayContent = toolText + "\n\n" + respText
-			}
-		}
-
-		if displayContent == "" && !hasToolUse {
+		// Preserve native response order while keeping work out of dialogue.
+		body := parseVSCodeCopilotResponseBody(req.Response)
+		if !body.hasNativeBody() {
 			continue
 		}
 
@@ -259,15 +251,10 @@ func parseVSCodeCopilotData(
 		md, _ := vscodeCopilotMetadataOf(req)
 
 		messages = append(messages, ParsedMessage{
-			Ordinal:       ordinal,
-			Role:          RoleAssistant,
-			Content:       displayContent,
-			Timestamp:     req.Timestamp.Time(),
-			HasToolUse:    hasToolUse,
-			ContentLength: len(displayContent),
-			ToolCalls:     toolCalls,
-			Model:         vscodeCopilotModel(req, md),
-		})
+			Ordinal: ordinal, Role: RoleAssistant, Content: body.Content,
+			Timestamp: req.Timestamp.Time(), SourceUUID: req.ResponseID,
+			Model: vscodeCopilotModel(req, md),
+		}.withBody(body))
 		ordinal++
 	}
 
@@ -389,15 +376,28 @@ func vscodeCopilotModel(
 	return normalizeCopilotModel(model)
 }
 
-// parseVSCodeCopilotResponse extracts text and tool calls
-// from the response items array.
-func parseVSCodeCopilotResponse(
-	raw []jsontext.Value,
-) (string, []ParsedToolCall) {
-	var textParts []string
-	var toolCalls []ParsedToolCall
+func parseVSCodeCopilotResponseBody(raw []jsontext.Value) ParsedMessage {
+	var builder MessageContentBuilder
+	var historicalText []string
 
 	for _, r := range raw {
+		if gjson.GetBytes(r, "kind").Str == "thinking" {
+			value := gjson.GetBytes(r, "value")
+			text := value.Str
+			if value.IsArray() {
+				var chunks strings.Builder
+				chunks.WriteString(text)
+				for _, chunk := range value.Array() {
+					chunks.WriteString(chunk.Str)
+				}
+				text = chunks.String()
+			} else if value.Type == gjson.String {
+				// The old reader counted string thinking as ordinary text.
+				historicalText = append(historicalText, text)
+			}
+			builder.AddThinking(text)
+			continue
+		}
 		var item vscodeCopilotResponseItem
 		if err := json.Unmarshal(r, &item); err != nil {
 			continue
@@ -418,7 +418,7 @@ func parseVSCodeCopilotResponse(
 					item.PastTenseMessage,
 					item.ToolSpecificData,
 				)
-				toolCalls = append(toolCalls, tc)
+				builder.AddToolCall(tc)
 			}
 		case "prepareToolInvocation":
 			// Skip, the actual invocation comes later.
@@ -426,25 +426,38 @@ func parseVSCodeCopilotResponse(
 			if ref := extractVSCodeInlineReference(
 				item.InlineReference,
 			); ref != "" {
-				textParts = append(textParts, ref)
+				historicalText = append(historicalText, ref)
+				builder.addText(ref, "")
 			}
 		case "undoStop", "codeblockUri", "textEditGroup":
 			// Skip non-text items.
 		case "":
 			// Items without a kind are markdown text
 			if item.Value != "" {
-				textParts = append(textParts, item.Value)
+				historicalText = append(historicalText, item.Value)
+				builder.addText(item.Value, "")
 			}
 		default:
 			// Unknown kind, try to extract value
 			if item.Value != "" {
-				textParts = append(textParts, item.Value)
+				historicalText = append(historicalText, item.Value)
+				builder.addText(item.Value, "")
 			}
 		}
 	}
 
-	text := strings.TrimSpace(strings.Join(textParts, ""))
-	return text, toolCalls
+	body := builder.Message()
+	body.setDialogue(strings.TrimSpace(body.Content))
+	text := strings.TrimSpace(strings.Join(historicalText, ""))
+	rendering := formatVSCodeCopilotToolCalls(body.ToolCalls)
+	for i := range body.ToolCalls {
+		body.ToolCalls[i].Rendering = stringutil.SanitizeUTF8(body.ToolCalls[i].Rendering)
+	}
+	body.ContentLength = sanitizedWorkLength(text) + sanitizedWorkLength(rendering)
+	if text != "" && rendering != "" {
+		body.ContentLength += 2
+	}
+	return body
 }
 
 func extractVSCodeInlineReference(raw jsontext.Value) string {

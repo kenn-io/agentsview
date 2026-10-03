@@ -430,6 +430,7 @@ func parseRooCodeMessages(
 		// so it renders as a collapsible thinking block.
 		content := strings.TrimSpace(msg.Text)
 		reasoning := strings.TrimSpace(msg.Reasoning)
+		hasThinking := msg.Say == "reasoning" || reasoning != ""
 		if msg.Say == "reasoning" && reasoning == "" && content != "" {
 			reasoning = content
 			content = ""
@@ -475,17 +476,17 @@ func parseRooCodeMessages(
 
 		// Skip messages with no content, no reasoning, and no tool
 		// calls/results.
-		if content == "" && reasoning == "" && len(toolCalls) == 0 &&
+		if content == "" && !hasThinking && len(toolCalls) == 0 &&
 			len(toolResults) == 0 {
 			continue
 		}
 
 		// If there's reasoning text, emit it as a thinking message first.
-		if reasoning != "" {
+		if hasThinking {
 			parsedMessages = append(parsedMessages, ParsedMessage{
 				Ordinal:       ordinal,
 				Role:          RoleAssistant,
-				Content:       "[Thinking]\n" + reasoning + "\n[/Thinking]",
+				Content:       "",
 				ThinkingText:  reasoning,
 				HasThinking:   true,
 				Model:         model,
@@ -773,6 +774,9 @@ func parseRooCodeMessages(
 	// would report a false tool_call_pending for every session whose
 	// last activity was a command).
 	finalizeRooCommandStream(parsedMessages, pendingCmdMsgIdx, pendingCmdErrored)
+	for i := range parsedMessages {
+		parsedMessages[i] = composeNativeUIMessage(parsedMessages[i])
+	}
 
 	return parsedMessages, peakCtx, maxTS, nil
 }
@@ -1039,6 +1043,9 @@ func rooLastMessageIsThinkingOnly(messages []ParsedMessage) bool {
 		}
 		if len(m.ToolCalls) > 0 {
 			return false
+		}
+		if m.ContentLayout != nil {
+			return strings.TrimSpace(m.Content) == ""
 		}
 		return IsThinkingOnlyContent(m.Content)
 	}

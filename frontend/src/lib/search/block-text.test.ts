@@ -8,6 +8,8 @@ import { domText, findOccurrences } from "./dom-text.js";
 let nextId = 50000;
 function message(content: string, overrides: Partial<Message> = {}): Message {
   return {
+    content_layout: null,
+    tool_result_text: "",
     has_context_tokens: false,
     has_output_tokens: false,
     id: nextId++,
@@ -30,6 +32,7 @@ function message(content: string, overrides: Partial<Message> = {}): Message {
 
 function call(tool_name: string, params: Record<string, unknown>): ToolCall {
   return {
+    rendering: "",
     category: "",
     tool_name,
     input_json: JSON.stringify(params),
@@ -61,6 +64,7 @@ describe("collectSearchBlocks", () => {
       message("", {
         tool_calls: [
           {
+            rendering: "",
             category: "",
             tool_name: "view_image",
             result_content: content,
@@ -217,6 +221,7 @@ describe("collectSearchBlocks", () => {
     const original = message("", {
       tool_calls: [
         {
+          rendering: "",
           category: "",
           tool_name: "Read",
           result_content: "first",
@@ -229,6 +234,7 @@ describe("collectSearchBlocks", () => {
       ...original,
       tool_calls: [
         {
+          rendering: "",
           category: "",
           tool_name: "Read",
           result_content: "other",
@@ -284,6 +290,7 @@ describe("resolveToolInputText", () => {
     expect(
       resolveToolInputText(
         {
+          rendering: "",
           category: "",
           tool_name: "Bash",
           input_json,

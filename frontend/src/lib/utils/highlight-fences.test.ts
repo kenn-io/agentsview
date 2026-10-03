@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { highlightCodeFences } from "./highlight-fences.js";
+import * as syntaxHighlight from "./syntax-highlight.js";
 import {
   currentRangeForBlock,
   searchBlock,
@@ -31,16 +32,28 @@ function color(root: HTMLElement) {
 afterEach(() => {
   for (const cleanup of cleanups.splice(0).reverse()) cleanup();
   document.body.replaceChildren();
+  vi.restoreAllMocks();
 });
 
 describe("highlightCodeFences", () => {
   it.each(["ts", "typescript", "javascript"])(
-    "colors %s with multiple token colors",
+    "applies asynchronous token colors for %s without changing source",
     async (language) => {
       const root = fixture(
         `<pre><code class="language-${language}">const value = 42;\n</code></pre>`,
       );
+      let resolveColoring!: (html: string) => void;
+      const coloring = vi.spyOn(syntaxHighlight, "highlightToHtml").mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveColoring = resolve;
+        }),
+      );
       color(root);
+      expect(coloring).toHaveBeenCalledWith("const value = 42;\n", language);
+      expect(root.querySelector("span[style]")).toBeNull();
+      resolveColoring(
+        '<span style="color:#CBA6F7">const</span><span style="color:#CDD6F4"> value = 42;</span>\n',
+      );
       await vi.waitFor(() => expect(root.querySelector("span[style]")).not.toBeNull(), {
         timeout: 10000,
       });

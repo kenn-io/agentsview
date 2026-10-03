@@ -314,6 +314,8 @@ export * from "./openersResponse.ts";
 export * from "./openRequest.ts";
 export * from "./openSessionResponse.ts";
 export * from "./ordinalsResponse.ts";
+export * from "./parserContentBlock.ts";
+export * from "./parserContentLayout.ts";
 export * from "./patchApiV1RawSyncUploadsByUploadIdPathParameters.ts";
 export * from "./patchApiV1SessionsByIdRenamePathParameters.ts";
 export * from "./pingInfo.ts";

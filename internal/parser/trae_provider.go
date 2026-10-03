@@ -585,7 +585,7 @@ func parseTraeSessionRecord(selected traeSession, project, machine, virtualPath 
 		if model == "" {
 			model = selected.Model
 		}
-		messages = append(messages, ParsedMessage{Ordinal: len(messages), Role: role, Content: content, Timestamp: stamp, ContentLength: len(content), Model: model})
+		messages = append(messages, ParsedMessage{Ordinal: len(messages), Role: role, Content: content, Timestamp: stamp, ContentLength: len(content), Model: model}.withPlainBody())
 	}
 	if len(messages) == 0 {
 		return nil, nil

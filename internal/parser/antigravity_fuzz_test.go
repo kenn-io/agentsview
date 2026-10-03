@@ -255,17 +255,45 @@ func FuzzDecodeAntigravityStep(f *testing.F) {
 		if !ok {
 			return
 		}
-		require.NotEmpty(t, msg.Content, "decoded message without content")
-		assert.True(t, utf8.ValidString(msg.Content),
-			"content is not valid UTF-8")
-		assert.NotContains(t, msg.Content, "\x00",
-			"content contains a NUL byte")
-		assert.Equal(t, len(msg.Content), msg.ContentLength)
-		wantRole := RoleAssistant
-		if stepType == 14 {
-			wantRole = RoleUser
+		for _, text := range []string{msg.Content, msg.ThinkingText, msg.ToolResultText} {
+			assert.True(t, utf8.ValidString(text), "body is not valid UTF-8")
+			assert.NotContains(t, text, "\x00", "body contains a NUL byte")
 		}
-		assert.Equal(t, wantRole, msg.Role)
+		if msg.ContentLayout == nil {
+			require.NotEmpty(t, msg.Content, "legacy decoded message without content")
+			assert.Equal(t, len(msg.Content), msg.ContentLength)
+			wantRole := RoleAssistant
+			if stepType == 14 {
+				wantRole = RoleUser
+			}
+			assert.Equal(t, wantRole, msg.Role)
+		} else {
+			assert.Equal(t, 1, msg.ContentLayout.Version)
+			assert.GreaterOrEqual(t, msg.ContentLength, 0)
+			assert.Contains(t, []RoleType{RoleUser, RoleAssistant, RoleSystem}, msg.Role)
+			for _, block := range msg.ContentLayout.Blocks {
+				text := ""
+				switch block.Kind {
+				case "text":
+					text = msg.Content
+				case "thinking":
+					text = msg.ThinkingText
+				case "tool_result":
+					text = msg.ToolResultText
+				case "tool_call":
+					require.GreaterOrEqual(t, block.CallIndex, 0)
+					require.Less(t, block.CallIndex, len(msg.ToolCalls))
+					continue
+				default:
+					require.FailNow(t, "unknown native block kind", "%q", block.Kind)
+				}
+				require.GreaterOrEqual(t, block.Start, 0)
+				require.GreaterOrEqual(t, block.End, block.Start)
+				require.LessOrEqual(t, block.End, len(text))
+				assert.True(t, utf8.ValidString(text[:block.Start]), "start splits a rune")
+				assert.True(t, utf8.ValidString(text[:block.End]), "end splits a rune")
+			}
+		}
 		if !msg.Timestamp.IsZero() {
 			assert.False(t, msg.Timestamp.Before(windowMin),
 				"timestamp %v before plausibility window", msg.Timestamp)

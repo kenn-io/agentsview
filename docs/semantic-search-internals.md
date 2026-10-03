@@ -10,6 +10,15 @@ not repeat configuration or CLI usage.
 
 ## Storage layout
 
+The archive keeps separate dialogue and palette search corpora. Message FTS
+indexes proven native dialogue. Palette FTS indexes a derived complete transcript
+from saved dialogue, reasoning, tool renderings, and retained result text. Owner
+writes refresh that projection in the same transaction, including policy and
+image changes. A recipe upgrade rebuilds it from stored records without changing
+message identities. The CJK indexes share the existing runtime fingerprint and
+freshness reconciliation. Replicas receive the same palette projection on push;
+their public message search remains restricted to dialogue.
+
 `vectors.db` is a separate SQLite database beside the main archive
 (`sessions.db`), not a set of tables inside it. Two things follow from that:
 
@@ -42,7 +51,8 @@ generation IDs are only unique within a store.
 
 The index does not embed every message individually. The embeddable universe —
 `role IN ('user','assistant')`, non-system, non-system-prefixed (per
-`SystemPrefixSQL`), from non-trashed sessions — is reduced by
+`SystemPrefixSQL`), nonempty dialogue with a supported native layout, from
+non-trashed sessions — is reduced by
 `db.ScanEmbeddableUnits` into **unit documents**:
 
 - **User documents**: one document per embeddable user message.
@@ -177,7 +187,8 @@ independent gates, and both are required: the version resets incompatible mirror
 The vector index moves through kit's generation lifecycle: **building → active →
 retired**. A generation's fingerprint is derived from `model` + `dimension` +
 the params map
-`{max_input_chars, doc_unit_scheme: "run_v1", chunk_overlap_chars}`
+`{max_input_chars, doc_unit_scheme: "run_v1", chunk_overlap_chars,
+corpus_fingerprint: "dialogue-layout-v1"}`
 (`vectorGeneration` in `cmd/agentsview/embeddings.go`), plus `query_prefix`,
 `document_prefix`, `input_suffix`, and `request_dimensions` when configured — an
 unset value is omitted from the map rather than included as `""`/`false`, so
@@ -185,6 +196,12 @@ configs written before those keys existed keep their fingerprints.
 `chunk_overlap_chars` is computed by `vector.ChunkOverlap` —
 `max_input_chars * 15 / 100` — the same function `Open` uses for kit's
 `SplitOptions`, so the split behavior and its fingerprint can never drift apart.
+The dialogue corpus fingerprint invalidates generations that mixed reasoning
+or tool work into message content. A build reconciles the complete corpus when
+it changes, removing legacy and non-dialogue documents. Startup rejects old
+generations locally and on PostgreSQL/ClickHouse replicas until the matching
+generation has been rebuilt and pushed.
+
 Changing any input — the model, the dimension, whether reduced output dimensions
 are requested, the chunking cap, either role prefix, the input suffix, the
 overlap formula, or the document-unit scheme — produces a different fingerprint

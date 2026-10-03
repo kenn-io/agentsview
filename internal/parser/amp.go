@@ -97,10 +97,10 @@ func parseAmpSession(
 			role = RoleAssistant
 		}
 
-		content, thinkingText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(context.Background(), msg.Get("content"))
-		trs = append(trs, extractAmpToolResults(msg.Get("content"))...)
+		body := ExtractMessageContent(context.Background(), msg.Get("content"))
+		content, thinkingText, hasThinking, hasToolUse, tcs, trs := body.Content, body.ThinkingText, body.HasThinking, body.HasToolUse, body.ToolCalls, body.ToolResults
 		usage := msg.Get("usage")
-		if strings.TrimSpace(content) == "" && len(trs) == 0 &&
+		if !body.hasNativeBody() &&
 			(role != RoleAssistant || !ampUsageHasTokenCounters(usage)) {
 			return true
 		}
@@ -122,7 +122,7 @@ func parseAmpSession(
 			ContentLength: len(content),
 			ToolCalls:     tcs,
 			ToolResults:   trs,
-		}
+		}.withBody(body)
 		applyAmpTokenUsage(&parsed, usage)
 
 		messages = append(messages, parsed)
@@ -357,58 +357,47 @@ func extractAmpToolResults(content gjson.Result) []ParsedToolResult {
 	if !content.IsArray() {
 		return nil
 	}
-
 	var results []ParsedToolResult
-	for _, block := range content.Array() {
-		if block.Get("type").Str != "tool_result" {
-			continue
+	content.ForEach(func(_, block gjson.Result) bool {
+		if result, ok := extractAmpToolResultBlock(block); ok {
+			results = append(results, result)
 		}
-
-		if block.Get("tool_use_id").Str != "" {
-			// Canonical schema is handled by shared extractor.
-			continue
-		}
-
-		toolUseID := block.Get("toolUseID").Str
-		if toolUseID == "" {
-			continue
-		}
-
-		var text string
-		hasResult := false
-		result := block.Get("run.result")
-		if result.Exists() && result.Type != gjson.Null {
-			text = serializeAmpResult(result)
-			hasResult = true
-		} else {
-			switch block.Get("run.status").Str {
-			case "error":
-				text = block.Get("run.error.message").Str
-				if text == "" {
-					text = "[unknown error]"
-				}
-			case "cancelled":
-				text = "[cancelled]"
-			}
-		}
-		// Skip blocks with no result and no error/cancelled status.
-		// Preserve blocks where run.result existed but serialized to empty
-		// (e.g. empty string, empty array) so the tool call is not left pending.
-		if text == "" && !hasResult {
-			continue
-		}
-
-		quoted, err := json.Marshal(text)
-		if err != nil {
-			continue
-		}
-
-		results = append(results, ParsedToolResult{
-			ToolUseID:     toolUseID,
-			ContentRaw:    string(quoted),
-			ContentLength: len(text),
-		})
-	}
-
+		return true
+	})
 	return results
+}
+
+func extractAmpToolResultBlock(block gjson.Result) (ParsedToolResult, bool) {
+	if block.Get("type").Str != "tool_result" || block.Get("tool_use_id").Str != "" {
+		return ParsedToolResult{}, false
+	}
+	id := block.Get("toolUseID").Str
+	if id == "" {
+		return ParsedToolResult{}, false
+	}
+	var text string
+	hasResult := false
+	result := block.Get("run.result")
+	if result.Exists() && result.Type != gjson.Null {
+		text = serializeAmpResult(result)
+		hasResult = true
+	} else {
+		switch block.Get("run.status").Str {
+		case "error":
+			text = block.Get("run.error.message").Str
+			if text == "" {
+				text = "[unknown error]"
+			}
+		case "cancelled":
+			text = "[cancelled]"
+		}
+	}
+	if text == "" && !hasResult {
+		return ParsedToolResult{}, false
+	}
+	quoted, err := json.Marshal(text)
+	if err != nil {
+		return ParsedToolResult{}, false
+	}
+	return ParsedToolResult{ToolUseID: id, ContentRaw: string(quoted), ContentLength: len(text)}, true
 }

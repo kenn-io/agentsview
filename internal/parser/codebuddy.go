@@ -137,6 +137,7 @@ func parseCodeBuddySession(indexPath, projectHint, machine string) (*ParsedSessi
 			messages = append(messages, ParsedMessage{
 				Ordinal:       ordinal,
 				Role:          RoleUser,
+				SourceUUID:    msgID,
 				Content:       content,
 				Timestamp:     ts,
 				ContentLength: len(content),
@@ -145,25 +146,15 @@ func parseCodeBuddySession(indexPath, projectHint, machine string) (*ParsedSessi
 			realUserCount++
 
 		case "assistant":
-			textContent, thinkingText, toolCalls := extractCodeBuddyAssistantContent(innerMsg)
+			body := extractCodeBuddyAssistantBody(innerMsg)
 
 			msg := ParsedMessage{
-				Ordinal:       ordinal,
-				Role:          RoleAssistant,
-				Content:       textContent,
-				Timestamp:     ts,
-				ContentLength: len(textContent),
-				Model:         msgModel,
-				ThinkingText:  thinkingText,
-				HasThinking:   thinkingText != "",
-			}
-			msg.ContentLength += len(thinkingText)
-			if len(toolCalls) > 0 {
-				msg.HasToolUse = true
-				msg.ToolCalls = toolCalls
-			}
+				Ordinal: ordinal, Role: RoleAssistant,
+				Content: body.Content, Timestamp: ts, Model: msgModel,
+				SourceUUID: msgID,
+			}.withBody(body)
 			applyCodeBuddyUsage(&msg, extraRoot)
-			if textContent == "" && thinkingText == "" && len(toolCalls) == 0 && len(msg.TokenUsage) == 0 {
+			if !msg.hasNativeBody() && len(msg.TokenUsage) == 0 {
 				continue
 			}
 			messages = append(messages, msg)
@@ -181,12 +172,29 @@ func parseCodeBuddySession(indexPath, projectHint, machine string) (*ParsedSessi
 			messages = append(messages, ParsedMessage{
 				Ordinal:       ordinal,
 				Role:          RoleUser,
+				SourceUUID:    msgID,
 				Timestamp:     ts,
 				ContentLength: contentLen,
 				ToolResults:   toolResults,
 			})
 			ordinal++
 		}
+	}
+
+	for i := range messages {
+		msg := &messages[i]
+		if msg.ContentLayout != nil {
+			continue
+		}
+		var builder MessageContentBuilder
+		builder.AddText(msg.Content)
+		for _, result := range msg.ToolResults {
+			builder.AddToolResult(result)
+		}
+		body := builder.Message()
+		body.ContentLength = msg.sanitizedHistoricalWorkLength()
+		msg.Content = body.Content
+		*msg = msg.withBody(body)
 	}
 
 	project := projectHint
@@ -275,8 +283,9 @@ func extractCodeBuddyUserContent(innerMsg gjson.Result, extraRoot gjson.Result) 
 	return strings.TrimSpace(fullRaw), cwd
 }
 
-func extractCodeBuddyAssistantContent(innerMsg gjson.Result) (textContent, thinkingText string, toolCalls []ParsedToolCall) {
+func extractCodeBuddyAssistantBody(innerMsg gjson.Result) ParsedMessage {
 	var texts, thoughts []string
+	var builder MessageContentBuilder
 	for _, blk := range innerMsg.Get("content").Array() {
 		bType := blk.Get("type").Str
 		switch bType {
@@ -288,21 +297,23 @@ func extractCodeBuddyAssistantContent(innerMsg gjson.Result) (textContent, think
 			if text != "" {
 				thoughts = append(thoughts, text)
 			}
+			builder.addThinking(text, "\n")
 		case "text":
 			if t := blk.Get("text").Str; t != "" {
 				texts = append(texts, t)
+				builder.AddText(t)
 			}
 		case "tool-call":
 			callID := blk.Get("toolCallId").Str
 			toolName := blk.Get("toolName").Str
-			if callID == "" || toolName == "" {
+			if toolName == "" {
 				continue
 			}
 			args := blk.Get("args").Raw
 			if args == "" {
 				args = "{}"
 			}
-			toolCalls = append(toolCalls, ParsedToolCall{
+			builder.AddToolCall(ParsedToolCall{
 				ToolUseID: callID,
 				ToolName:  toolName,
 				Category:  NormalizeToolCategory(toolName),
@@ -310,7 +321,20 @@ func extractCodeBuddyAssistantContent(innerMsg gjson.Result) (textContent, think
 			})
 		}
 	}
-	return strings.TrimSpace(strings.Join(texts, "\n")), strings.TrimSpace(strings.Join(thoughts, "\n")), toolCalls
+	body := builder.Message()
+	body.setDialogue(strings.TrimSpace(body.Content))
+	thinking := strings.TrimSpace(body.ThinkingText)
+	left := strings.Index(body.ThinkingText, thinking)
+	for i := range body.ContentLayout.Blocks {
+		block := &body.ContentLayout.Blocks[i]
+		if block.Kind == "thinking" {
+			block.Start = min(len(thinking), max(0, block.Start-left))
+			block.End = min(len(thinking), max(0, block.End-left))
+		}
+	}
+	body.ThinkingText = thinking
+	body.ContentLength = sanitizedWorkLength(strings.TrimSpace(strings.Join(texts, "\n"))) + sanitizedWorkLength(strings.TrimSpace(strings.Join(thoughts, "\n")))
+	return body
 }
 
 func extractCodeBuddyToolResults(innerMsg gjson.Result, extraRoot gjson.Result) []ParsedToolResult {
@@ -321,11 +345,12 @@ func extractCodeBuddyToolResults(innerMsg gjson.Result, extraRoot gjson.Result) 
 			continue
 		}
 		callID := blk.Get("toolCallId").Str
-		if callID == "" {
-			continue
-		}
 
 		resObj := blk.Get("result")
+		if callID == "" && !resObj.Exists() {
+			// An incomplete block must not suppress extra.toolStatus output.
+			continue
+		}
 		rawOutput := ""
 		if stdout := resObj.Get("result.stdout").Str; stdout != "" {
 			rawOutput = stdout

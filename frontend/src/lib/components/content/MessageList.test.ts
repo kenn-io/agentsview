@@ -41,6 +41,8 @@ import MessageList from "./MessageList.svelte";
 
 function makeMessage(ordinal: number): Message {
   return {
+    content_layout: null,
+    tool_result_text: "",
     id: ordinal + 1,
     session_id: "s1",
     ordinal,

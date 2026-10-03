@@ -34,7 +34,7 @@ const pgUnitExtentChunk = maxPGVars / 6
 // check: SystemPrefixSQL constrains user rows only.)
 func pgEmbeddableUserSQL(alias string) string {
 	return fmt.Sprintf("%[1]s.role = 'user' AND %[1]s.is_system = FALSE AND %[2]s",
-		alias, db.PostgresSystemPrefixSQL(alias+".content", alias+".role"))
+		alias, db.PostgresSystemPrefixSQL(alias+".content", alias+".role")+" AND "+db.DialogueEligibilitySQL(alias, db.PostgresQueryDialect()))
 }
 
 // NearestUserBoundaries returns, per probe, the nearest embeddable user
@@ -104,7 +104,7 @@ func (s *Store) RunExtents(
 // SystemPrefixSQL constrains user rows exclusively, so it is identically
 // TRUE for assistant rows and deliberately omitted there.
 func pgRunExtentSelectSQL() string {
-	stop := "((f.role = 'assistant' AND f.is_system = FALSE AND f.is_sidechain <> p.sc)" +
+	stop := "((f.role = 'assistant' AND f.is_system = FALSE AND f.is_sidechain <> p.sc AND " + db.DialogueEligibilitySQL("f", db.PostgresQueryDialect()) + ")" +
 		" OR (" + pgEmbeddableUserSQL("f") + "))"
 	return fmt.Sprintf(`
 	SELECT p.idx,
@@ -115,7 +115,7 @@ func pgRunExtentSelectSQL() string {
 	         AND f.ordinal > p.lo AND f.ordinal < p.o
 	         AND %[1]s
 	       ORDER BY f.ordinal DESC LIMIT 1), p.lo)
-	     AND m.role = 'assistant' AND m.is_system = FALSE
+	     AND m.role = 'assistant' AND m.is_system = FALSE AND %[2]s
 	     AND m.is_sidechain = p.sc
 	   ORDER BY m.ordinal ASC LIMIT 1),
 	  (SELECT m.ordinal FROM messages m
@@ -125,10 +125,10 @@ func pgRunExtentSelectSQL() string {
 	         AND f.ordinal > p.o AND f.ordinal < p.hi
 	         AND %[1]s
 	       ORDER BY f.ordinal ASC LIMIT 1), p.hi)
-	     AND m.role = 'assistant' AND m.is_system = FALSE
+	     AND m.role = 'assistant' AND m.is_system = FALSE AND %[2]s
 	     AND m.is_sidechain = p.sc
 	   ORDER BY m.ordinal DESC LIMIT 1)
-	FROM probes p`, stop)
+	FROM probes p`, stop, db.DialogueEligibilitySQL("m", db.PostgresQueryDialect()))
 }
 
 // lookupPGRunExtentChunk runs the one batched statement for a chunk of
@@ -281,7 +281,7 @@ func (s *Store) lookupAnchorMetaChunkPG(
 		"COALESCE(s.relationship_type,''), COALESCE(s.parent_session_id,''), " +
 		"m.role, m.is_sidechain, " +
 		"CASE WHEN m.is_system = FALSE AND " +
-		db.PostgresSystemPrefixSQL("m.content", "m.role") +
+		db.PostgresSystemPrefixSQL("m.content", "m.role") + " AND " + db.DialogueEligibilitySQL("m", db.PostgresQueryDialect()) +
 		" THEN TRUE ELSE FALSE END " +
 		"FROM refs r " +
 		"JOIN sessions s ON s.id = r.session_id " +

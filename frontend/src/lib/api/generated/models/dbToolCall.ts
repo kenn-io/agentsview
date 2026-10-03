@@ -6,6 +6,7 @@ import type { DbToolResultEvent } from "./dbToolResultEvent.ts";
 export interface DbToolCall {
   category: string;
   input_json?: string;
+  rendering: string;
   result_content?: string;
   result_content_length?: number;
   result_events?: DbToolResultEvent[];

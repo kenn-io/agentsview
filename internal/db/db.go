@@ -514,7 +514,14 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // messages and classifying user prompts. Re-parse unchanged sources to
 // remove retained context, restore omitted prompts, and correct first-message
 // previews and user-message counts.)
-const dataVersion = 113
+// (114: Native dialogue, reasoning, tool output and ordered layouts are
+// persisted separately. Re-parse unchanged sources to recover their native
+// boundaries and scoped message identities; source-missing archive rows keep
+// their legacy bodies through the normal non-destructive copy path.)
+// (115: Native composers and historical work overrides exclude sanitized
+// payload bytes. Re-parse unchanged sources to repair inflated counts from
+// earlier native-body builds; source-missing rows retain their saved counts.)
+const dataVersion = 115
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
@@ -576,10 +583,18 @@ var schemaSQL string
 // with a single bulk INSERT...SELECT) and then re-runs this DDL to
 // restore it before commit. Keeping the statement in one place keeps
 // the two installation sites byte-identical.
+const dialogueOldIndexedTextSQL = `CASE WHEN json_valid(old.content_layout)
+ THEN CASE WHEN json_extract(old.content_layout, '$.version') = 1 THEN old.content ELSE '' END
+ ELSE '' END`
+
+const dialogueNewIndexedTextSQL = `CASE WHEN json_valid(new.content_layout)
+ THEN CASE WHEN json_extract(new.content_layout, '$.version') = 1 THEN new.content ELSE '' END
+ ELSE '' END`
+
 const messagesADTriggerDDL = `
 CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
     INSERT INTO messages_fts(messages_fts, rowid, content)
-        VALUES('delete', old.id, old.content);
+        VALUES('delete', old.id, ` + dialogueOldIndexedTextSQL + `);
 END;
 `
 
@@ -594,33 +609,33 @@ CREATE TEMP TRIGGER IF NOT EXISTS messages_cjk_ad
 AFTER DELETE ON main.messages
 WHEN ` + cjkFTSRuntimeMatchesSQL + ` BEGIN
     INSERT INTO messages_cjk_fts(messages_cjk_fts, rowid, content)
-        VALUES('delete', old.id, old.content);
+        VALUES('delete', old.id, ` + dialogueOldIndexedTextSQL + `);
 END;
 `
 
 const schemaFTS = `
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
     content,
-    content='messages',
+    content='dialogue_messages',
     content_rowid='id',
     tokenize='porter unicode61'
 );
 
 CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
-    INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
+    INSERT INTO messages_fts(rowid, content) VALUES (new.id, ` + dialogueNewIndexedTextSQL + `);
 END;
 ` + messagesADTriggerDDL + `
 CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
     INSERT INTO messages_fts(messages_fts, rowid, content)
-        VALUES('delete', old.id, old.content);
-    INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
+        VALUES('delete', old.id, ` + dialogueOldIndexedTextSQL + `);
+    INSERT INTO messages_fts(rowid, content) VALUES (new.id, ` + dialogueNewIndexedTextSQL + `);
 END;
 `
 
 const schemaCJKFTS = `
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_cjk_fts USING fts5(
     content,
-    content='messages',
+    content='dialogue_messages',
     content_rowid='id',
     tokenize='simple 0'
 );
@@ -630,15 +645,15 @@ const schemaCJKFTSTriggers = `
 CREATE TEMP TRIGGER IF NOT EXISTS messages_cjk_ai
 AFTER INSERT ON main.messages
 WHEN ` + cjkFTSRuntimeMatchesSQL + ` BEGIN
-    INSERT INTO messages_cjk_fts(rowid, content) VALUES (new.id, new.content);
+    INSERT INTO messages_cjk_fts(rowid, content) VALUES (new.id, ` + dialogueNewIndexedTextSQL + `);
 END;
 ` + messagesCJKADTriggerDDL + `
 CREATE TEMP TRIGGER IF NOT EXISTS messages_cjk_au
 AFTER UPDATE ON main.messages
 WHEN ` + cjkFTSRuntimeMatchesSQL + ` BEGIN
     INSERT INTO messages_cjk_fts(messages_cjk_fts, rowid, content)
-        VALUES('delete', old.id, old.content);
-    INSERT INTO messages_cjk_fts(rowid, content) VALUES (new.id, new.content);
+        VALUES('delete', old.id, ` + dialogueOldIndexedTextSQL + `);
+    INSERT INTO messages_cjk_fts(rowid, content) VALUES (new.id, ` + dialogueNewIndexedTextSQL + `);
 END;
 
 -- The persistent BEFORE triggers mark a session pending without consulting
@@ -2162,6 +2177,30 @@ func legacySchemaColumnMigrations() []schemaColumnMigration {
 			"tool_calls", "subagent_session_id",
 			"ALTER TABLE tool_calls ADD COLUMN subagent_session_id TEXT",
 		},
+		{
+			"messages", "thinking_text",
+			"ALTER TABLE messages ADD COLUMN thinking_text TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			"messages", "tool_result_text",
+			"ALTER TABLE messages ADD COLUMN tool_result_text TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			"messages", "content_layout",
+			"ALTER TABLE messages ADD COLUMN content_layout TEXT",
+		},
+		{
+			"tool_calls", "rendering",
+			"ALTER TABLE tool_calls ADD COLUMN rendering TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			"tool_calls", "result_content",
+			"ALTER TABLE tool_calls ADD COLUMN result_content TEXT",
+		},
+		{
+			"tool_calls", "call_index",
+			"ALTER TABLE tool_calls ADD COLUMN call_index INTEGER",
+		},
 	}
 }
 
@@ -2523,10 +2562,6 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"ALTER TABLE sessions ADD COLUMN claude_linear_parse INTEGER",
 		},
 		{
-			"messages", "thinking_text",
-			"ALTER TABLE messages ADD COLUMN thinking_text TEXT NOT NULL DEFAULT ''",
-		},
-		{
 			"messages", "provider_id",
 			"ALTER TABLE messages ADD COLUMN provider_id TEXT NOT NULL DEFAULT ''",
 		},
@@ -2583,16 +2618,8 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"ALTER TABLE insights ADD COLUMN structured_json TEXT NOT NULL DEFAULT ''",
 		},
 		{
-			"tool_calls", "result_content",
-			"ALTER TABLE tool_calls ADD COLUMN result_content TEXT",
-		},
-		{
 			"tool_calls", "file_path",
 			"ALTER TABLE tool_calls ADD COLUMN file_path TEXT",
-		},
-		{
-			"tool_calls", "call_index",
-			"ALTER TABLE tool_calls ADD COLUMN call_index INTEGER",
 		},
 		{
 			"worktree_project_mappings", "layout",
@@ -4584,6 +4611,14 @@ func (db *DB) DropFTS(ctx context.Context) error {
 		"DROP TRIGGER IF EXISTS sessions_cjk_pending_au",
 		"DROP TRIGGER IF EXISTS sessions_cjk_pending_ad",
 		"DROP TABLE IF EXISTS messages_cjk_fts",
+		"DROP TRIGGER IF EXISTS palette_cjk_ai",
+		"DROP TRIGGER IF EXISTS palette_cjk_ad",
+		"DROP TRIGGER IF EXISTS palette_cjk_au",
+		"DROP TABLE IF EXISTS palette_cjk_fts",
+		"DROP TRIGGER IF EXISTS palette_ai",
+		"DROP TRIGGER IF EXISTS palette_ad",
+		"DROP TRIGGER IF EXISTS palette_au",
+		"DROP TABLE IF EXISTS palette_fts",
 		"DROP TRIGGER IF EXISTS messages_ai",
 		"DROP TRIGGER IF EXISTS messages_ad",
 		"DROP TRIGGER IF EXISTS messages_au",
@@ -4618,6 +4653,12 @@ func (db *DB) RebuildFTS(ctx context.Context) error {
 	)
 	if err != nil {
 		return fmt.Errorf("rebuild fts index: %w", err)
+	}
+	if _, err := w.Exec(ctx, schemaPaletteFTS); err != nil {
+		return fmt.Errorf("recreate palette fts: %w", err)
+	}
+	if _, err := w.Exec(ctx, "INSERT INTO palette_fts(palette_fts) VALUES('rebuild')"); err != nil {
+		return fmt.Errorf("rebuild palette fts: %w", err)
 	}
 	if err := ensureCJKFTS(ctx, w, true); err != nil {
 		return fmt.Errorf("rebuild CJK fts index: %w", err)
@@ -4797,6 +4838,13 @@ func (db *DB) init(ctx context.Context, progress OpenProgressFunc) error {
 		}
 	}
 
+	if _, err := w.ExecContext(ctx, `CREATE VIEW IF NOT EXISTS dialogue_messages AS
+ SELECT id, CASE WHEN json_valid(content_layout)
+ THEN CASE WHEN json_extract(content_layout, '$.version') = 1 THEN content ELSE '' END
+ ELSE '' END AS content FROM messages`); err != nil {
+		return fmt.Errorf("initializing dialogue projection: %w", err)
+	}
+
 	progress.report("Initializing full-text search")
 	var fts5Available, fts4Available bool
 	if err := w.QueryRowContext(ctx,
@@ -4815,6 +4863,31 @@ func (db *DB) init(ctx context.Context, progress OpenProgressFunc) error {
 		return fmt.Errorf("checking fts table: %w", err)
 	}
 	hadFTS := ftsCount > 0
+	if hadFTS && fts5Available {
+		var definition string
+		if err := w.QueryRowContext(ctx, "SELECT sql FROM sqlite_master WHERE name = 'messages_fts'").Scan(&definition); err != nil {
+			return err
+		}
+		if !strings.Contains(definition, "content='dialogue_messages'") {
+			tx, err := w.BeginTx(ctx, nil)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = tx.Rollback() }()
+			if _, err := tx.ExecContext(ctx, "DROP TRIGGER IF EXISTS messages_ai; DROP TRIGGER IF EXISTS messages_ad; DROP TRIGGER IF EXISTS messages_au; DROP TABLE messages_fts;"); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, schemaFTS); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, "INSERT INTO messages_fts(messages_fts) VALUES('rebuild')"); err != nil {
+				return err
+			}
+			if err := tx.Commit(); err != nil {
+				return err
+			}
+		}
+	}
 
 	// Attempt to initialize FTS. Failure is non-fatal
 	// (might be missing module).
@@ -4839,6 +4912,10 @@ func (db *DB) init(ctx context.Context, progress OpenProgressFunc) error {
 		); err != nil {
 			return fmt.Errorf("backfilling FTS: %w", err)
 		}
+	}
+
+	if err := ensurePaletteCorpus(ctx, w, fts5Available); err != nil {
+		return fmt.Errorf("initializing palette corpus: %w", err)
 	}
 
 	if err := ensureCJKFTS(ctx, w, false); err != nil {

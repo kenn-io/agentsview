@@ -29,7 +29,7 @@ const (
 type ContentSearchFilter struct {
 	Pattern       string
 	Mode          string   // "substring" (default) | "regex" | "fts" | "terms" | "semantic" | "hybrid"
-	Sources       []string // subset of {"messages","tool_input","tool_result"}
+	Sources       []string // subset of {"messages","thinking","tool_input","tool_result"}
 	ExcludeSystem bool
 
 	Project, ExcludeProject, Machine, Agent           string
@@ -70,7 +70,7 @@ type ContentMatch struct {
 	SessionID string `json:"session_id"`
 	Project   string `json:"project"`
 	Agent     string `json:"agent"`
-	Location  string `json:"location"` // message | tool_input | tool_result
+	Location  string `json:"location"` // message | thinking | tool_input | tool_result
 	Role      string `json:"role"`
 	ToolName  string `json:"tool_name,omitempty"`
 	Ordinal   int    `json:"ordinal"`
@@ -256,13 +256,10 @@ func (db *DB) SearchContent(
 		return db.searchContentTerms(ctx, f)
 	}
 
-	if len(f.Sources) == 0 {
-		f.Sources = []string{"messages", "tool_input", "tool_result"}
-	}
-	for _, s := range f.Sources {
-		if s != "messages" && s != "tool_input" && s != "tool_result" {
-			return ContentSearchPage{}, searchInputErrorf("search: unknown source %q", s)
-		}
+	var err error
+	f.Sources, err = NormalizeContentSearchSources(f)
+	if err != nil {
+		return ContentSearchPage{}, err
 	}
 	switch f.Mode {
 	case "", "substring":
@@ -300,9 +297,9 @@ func (db *DB) searchContentSubstring(
 	snippetExpr := func(col string) string { return col }
 
 	if hasSource(f, "messages") {
-		sysPred := "1=1"
+		sysPred := DialogueEligibilitySQL("m", SQLiteQueryDialect())
 		if f.ExcludeSystem {
-			sysPred = "m.is_system = 0 AND " +
+			sysPred += " AND m.is_system = 0 AND " +
 				SystemPrefixSQL("m.content", "m.role")
 		}
 		branches = append(branches, fmt.Sprintf(`
@@ -317,6 +314,29 @@ func (db *DB) searchContentSubstring(
 		args = append(args, like)
 		args = append(args, scopeArgs...)
 	}
+	for _, field := range []struct {
+		source, column, location string
+		rank                     int
+	}{
+		{"thinking", "thinking_text", "thinking", 4}, {"tool_result", "tool_result_text", "tool_result", 5},
+	} {
+		if !hasSource(f, field.source) {
+			continue
+		}
+		pred := "1=1"
+		if f.ExcludeSystem {
+			pred = "m.is_system = 0 AND " + SystemPrefixSQL("m.content", "m.role")
+		}
+		branches = append(branches, fmt.Sprintf(`
+			SELECT m.session_id, s.project, s.agent, '%s' AS location, m.role, '' AS tool_name,
+				m.ordinal, COALESCE(m.timestamp,'') AS ts, m.%s AS snippet,
+				COALESCE(s.ended_at, s.started_at, '') AS sort_ts, %d AS src, m.id AS row_id
+			FROM messages m JOIN sessions s ON s.id = m.session_id
+			WHERE m.%s LIKE ? ESCAPE '\' AND %s AND m.%s`, field.location, field.column, field.rank, field.column, pred, scope))
+		args = append(args, like)
+		args = append(args, scopeArgs...)
+	}
+
 	if hasSource(f, "tool_input") {
 		branches = append(branches, fmt.Sprintf(`
 			SELECT tc.session_id, s.project, s.agent, 'tool_input' AS location,
@@ -548,9 +568,9 @@ func (db *DB) regexCandidateRows(
 	}
 
 	if hasSource(f, "messages") {
-		sysPred := "1=1"
+		sysPred := DialogueEligibilitySQL("m", SQLiteQueryDialect())
 		if f.ExcludeSystem {
-			sysPred = "m.is_system = 0 AND " +
+			sysPred += " AND m.is_system = 0 AND " +
 				SystemPrefixSQL("m.content", "m.role")
 		}
 		w := prefilterClause("m.content")
@@ -566,6 +586,28 @@ func (db *DB) regexCandidateRows(
 			WHERE %s AND %s AND m.%s`, w, sysPred, scope))
 		args = append(args, scopeArgs...)
 	}
+	for _, field := range []struct {
+		source, column, location string
+		rank                     int
+	}{
+		{"thinking", "thinking_text", "thinking", 4}, {"tool_result", "tool_result_text", "tool_result", 5},
+	} {
+		if !hasSource(f, field.source) {
+			continue
+		}
+		pred := prefilterClause("m."+field.column) + " AND m." + field.column + " <> ''"
+		if f.ExcludeSystem {
+			pred += " AND m.is_system = 0 AND " + SystemPrefixSQL("m.content", "m.role")
+		}
+		branches = append(branches, fmt.Sprintf(`
+			SELECT m.session_id, s.project, s.agent, '%s' AS location, m.role, '' AS tool_name,
+				m.ordinal, COALESCE(m.timestamp,'') AS ts, m.%s AS body,
+				COALESCE(s.ended_at, s.started_at, '') AS sort_ts, %d AS src, m.id AS row_id
+			FROM messages m JOIN sessions s ON s.id = m.session_id
+			WHERE %s AND m.%s`, field.location, field.column, field.rank, pred, scope))
+		args = append(args, scopeArgs...)
+	}
+
 	if hasSource(f, "tool_input") {
 		w := prefilterClause("tc.input_json")
 		branches = append(branches, fmt.Sprintf(`
@@ -774,9 +816,9 @@ func (db *DB) searchContentFTS(
 		return ContentSearchPage{}, err
 	}
 	scope, scopeArgs := sessionScopeSubquery(f)
-	sysPred := "1=1"
+	sysPred := DialogueEligibilitySQL("m", SQLiteQueryDialect())
 	if f.ExcludeSystem {
-		sysPred = "m.is_system = 0 AND " + SystemPrefixSQL("m.content", "m.role")
+		sysPred += " AND m.is_system = 0 AND " + SystemPrefixSQL("m.content", "m.role")
 	}
 	// Select the full content (not FTS snippet()) so the snippet is built in Go
 	// and secret redaction sees whole secrets rather than a pre-truncated window.
@@ -1271,7 +1313,7 @@ func (db *DB) fetchHybridFTSBatch(
 		  AND m.is_system = 0 AND %s
 		  AND m.%s
 		ORDER BY f.rank, m.id LIMIT ? OFFSET ?`,
-		SystemPrefixSQL("m.content", "m.role"), scope)
+		SystemPrefixSQL("m.content", "m.role")+" AND "+DialogueEligibilitySQL("m", SQLiteQueryDialect()), scope)
 	query = strings.ReplaceAll(query, "messages_fts", ftsQuery.table)
 
 	args := []any{ftsQuery.match}
@@ -1536,7 +1578,7 @@ func (db *DB) enrichSemanticHits(
 				"COALESCE(s.parent_session_id, ''), m.is_sidechain " +
 				"FROM hits h " +
 				"JOIN messages m ON m.session_id = h.session_id AND m.ordinal = h.ordinal " +
-				"JOIN sessions s ON s.id = m.session_id"
+				"JOIN sessions s ON s.id = m.session_id WHERE " + DialogueEligibilitySQL("m", SQLiteQueryDialect())
 
 			rows, err := db.getReader().QueryContext(ctx, query, args...)
 			if err != nil {

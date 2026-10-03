@@ -12,15 +12,17 @@ import (
 
 // VibeMessage represents a single message in a Mistral Vibe session
 type VibeMessage struct {
-	Role             string         `json:"role"`
-	Content          string         `json:"content,omitempty"`
-	ReasoningContent string         `json:"reasoning_content,omitempty"`
-	ToolCalls        []VibeToolCall `json:"tool_calls,omitempty"`
-	Name             string         `json:"name,omitempty"`
-	ToolCallID       string         `json:"tool_call_id,omitempty"`
-	MessageID        string         `json:"message_id,omitempty"`
-	Injected         bool           `json:"injected,omitempty"`
-	Model            string         `json:"model,omitempty"`
+	Role               string         `json:"role"`
+	Content            string         `json:"content,omitempty"`
+	ReasoningContent   *string        `json:"reasoning_content,omitempty"`
+	ReasoningState     []string       `json:"reasoning_state,omitempty"`
+	ReasoningSignature string         `json:"reasoning_signature,omitempty"`
+	ToolCalls          []VibeToolCall `json:"tool_calls,omitempty"`
+	Name               string         `json:"name,omitempty"`
+	ToolCallID         string         `json:"tool_call_id,omitempty"`
+	MessageID          string         `json:"message_id,omitempty"`
+	Injected           bool           `json:"injected,omitempty"`
+	Model              string         `json:"model,omitempty"`
 }
 
 // VibeToolCall represents a tool invocation in Vibe
@@ -224,24 +226,15 @@ func parseVibeResultFile(path string, fileInfo FileInfo) (ParseResult, error) {
 		// result to the originating tool call by ID; the carrier message
 		// itself is filtered out of the visible transcript afterward.
 		if vibeMsg.Role == "tool" {
-			if vibeMsg.ToolCallID == "" {
-				continue
-			}
 			quoted, err := json.Marshal(vibeMsg.Content)
 			if err != nil {
 				continue
 			}
-			result.Messages = append(result.Messages, ParsedMessage{
-				Ordinal:       messageOrdinal,
-				Role:          RoleUser,
-				Content:       "",
-				ContentLength: len(vibeMsg.Content),
-				ToolResults: []ParsedToolResult{{
-					ToolUseID:     vibeMsg.ToolCallID,
-					ContentRaw:    string(quoted),
-					ContentLength: len(vibeMsg.Content),
-				}},
-			})
+			var body MessageContentBuilder
+			body.AddToolResult(ParsedToolResult{ToolUseID: vibeMsg.ToolCallID, ContentRaw: string(quoted), ContentLength: len(vibeMsg.Content)})
+			msg := (ParsedMessage{Ordinal: messageOrdinal, Role: RoleUser, SourceUUID: vibeMsg.MessageID}).withBody(body.Message())
+			msg.ContentLength = sanitizedWorkLength(vibeMsg.Content)
+			result.Messages = append(result.Messages, msg)
 			messageOrdinal++
 			continue
 		}
@@ -365,10 +358,10 @@ func convertVibeMessage(vibeMsg VibeMessage, ordinal int, defaultModel string) (
 	}
 
 	// Handle reasoning content as thinking
-	if vibeMsg.ReasoningContent != "" {
-		msg.ThinkingText = vibeMsg.ReasoningContent
-		msg.HasThinking = true
+	if vibeMsg.ReasoningContent != nil {
+		msg.ThinkingText = *vibeMsg.ReasoningContent
 	}
+	msg.HasThinking = vibeMsg.ReasoningContent != nil || len(vibeMsg.ReasoningState) > 0 || vibeMsg.ReasoningSignature != ""
 
 	// Handle system messages. Injected records carry system context (often
 	// under a user role), so mark them system too; they are then excluded from
@@ -395,6 +388,17 @@ func convertVibeMessage(vibeMsg VibeMessage, ordinal int, defaultModel string) (
 		msg.ToolCalls = toolCalls
 	}
 
+	var body MessageContentBuilder
+	if msg.HasThinking {
+		body.AddThinking(msg.ThinkingText)
+	}
+	body.AddText(msg.Content)
+	for _, call := range toolCalls {
+		body.AddToolCall(call)
+	}
+	msg.Content = body.Message().Content
+	msg = msg.withBody(body.Message())
+	msg.ContentLength = sanitizedWorkLength(vibeMsg.Content)
 	return msg, toolCalls
 }
 

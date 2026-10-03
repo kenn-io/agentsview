@@ -508,7 +508,7 @@ func loadPushMessageFlagFingerprints(
 ) error {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT session_id, ordinal, is_system, has_thinking, has_tool_use,
-			COALESCE(thinking_text, '')
+			COALESCE(thinking_text, ''), COALESCE(tool_result_text, ''), content_layout
 		 FROM messages
 		WHERE session_id = ANY($1)
 		ORDER BY session_id, ordinal ASC
@@ -523,22 +523,25 @@ func loadPushMessageFlagFingerprints(
 		var sessionID string
 		var ordinal int
 		var isSystem, hasThinking, hasToolUse bool
-		var thinkingText string
+		var thinkingText, toolResultText string
+		var contentLayout sql.NullString
 		if err := rows.Scan(
 			&sessionID, &ordinal, &isSystem, &hasThinking, &hasToolUse,
-			&thinkingText,
+			&thinkingText, &toolResultText, &contentLayout,
 		); err != nil {
 			return err
 		}
 		sum := sha256.Sum256([]byte(db.SanitizeUTF8(thinkingText)))
+		outputSum := sha256.Sum256([]byte(db.SanitizeUTF8(toolResultText)))
+		layoutSum := sha256.Sum256([]byte(db.ContentLayoutJSON(db.DecodeStoredContentLayout(contentLayout.String))))
 		b := builders[sessionID]
 		if b == nil {
 			b = &strings.Builder{}
 			builders[sessionID] = b
 		}
 		fmt.Fprintf(
-			b, "%d|%t|%t|%t|%x;", ordinal, isSystem, hasThinking,
-			hasToolUse, sum,
+			b, "%d|%t|%t|%t|%x|%x|%x;", ordinal, isSystem, hasThinking,
+			hasToolUse, sum, outputSum, layoutSum,
 		)
 	}
 	if err := rows.Err(); err != nil {
@@ -699,7 +702,7 @@ func loadPushToolCallFingerprints(
 			COALESCE(skill_name, ''), COALESCE(subagent_session_id, ''),
 			COALESCE(result_content_length, 0),
 			COALESCE(result_content, ''),
-			COALESCE(file_path, '')
+			COALESCE(file_path, ''), COALESCE(rendering, '')
 		 FROM tool_calls
 		WHERE session_id = ANY($1)
 		ORDER BY session_id, message_ordinal ASC, call_index ASC
@@ -714,12 +717,12 @@ func loadPushToolCallFingerprints(
 		var sessionID string
 		var messageOrdinal, callIndex, resultContentLength int
 		var toolName, category, toolUseID, inputJSON string
-		var skillName, subagentSessionID, resultContent, filePath string
+		var skillName, subagentSessionID, resultContent, filePath, rendering string
 		if err := rows.Scan(
 			&sessionID, &messageOrdinal, &callIndex, &toolName,
 			&category, &toolUseID, &inputJSON,
 			&skillName, &subagentSessionID, &resultContentLength,
-			&resultContent, &filePath,
+			&resultContent, &filePath, &rendering,
 		); err != nil {
 			return err
 		}
@@ -730,7 +733,7 @@ func loadPushToolCallFingerprints(
 		}
 		fmt.Fprintf(
 			b,
-			"%d|%d|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d|%d:%s|%d:%s;",
+			"%d|%d|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d|%d:%s|%d:%s|%d:%s;",
 			messageOrdinal, callIndex,
 			len(toolName), toolName,
 			len(category), category,
@@ -741,6 +744,7 @@ func loadPushToolCallFingerprints(
 			resultContentLength,
 			len(resultContent), resultContent,
 			len(filePath), filePath,
+			len(rendering), rendering,
 		)
 	}
 	if err := rows.Err(); err != nil {

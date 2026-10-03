@@ -137,7 +137,8 @@ func TestParseRooCodeSessionMCPResponseNoPending(t *testing.T) {
 	// Response should be a standalone system message.
 	assert.Equal(t, RoleSystem, msgs[1].Role)
 	assert.True(t, msgs[1].IsSystem)
-	assert.Equal(t, "Orphaned MCP response", msgs[1].Content)
+	assert.Empty(t, msgs[1].Content)
+	assert.Equal(t, "Orphaned MCP response", msgs[1].ToolResultText)
 }
 
 func TestParseRooCodeSessionEmptyMCPResponsePairsCompleted(t *testing.T) {

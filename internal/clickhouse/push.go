@@ -60,6 +60,7 @@ func (s *Sync) PushWithOptions(
 	cutoff := time.Now().UTC().Format(localSyncTimestampLayout)
 
 	meta, err := readMetadata(ctx, conn,
+		s.archiveKey("palette_corpus_recipe"),
 		s.archiveKey(lastPushCutoffKeyBase),
 		s.archiveKey(pushScopeKeyBase),
 		s.archiveKey(deletionRevisionKeyBase),
@@ -76,6 +77,9 @@ func (s *Sync) PushWithOptions(
 	storedMapping, _ := strconv.ParseInt(meta[s.archiveKey(mappingRevisionKeyBase)], 10, 64)
 
 	full, reason := s.decideFull(opts, storedCutoff, storedScope)
+	if !full && meta[s.archiveKey("palette_corpus_recipe")] != db.PaletteCorpusRecipe {
+		full, reason = true, "palette corpus recipe changed"
+	}
 	localDeletion, err := s.local.SessionDeletionPublicationRevision(ctx)
 	if err != nil {
 		return result, fmt.Errorf("reading local deletion revision: %w", err)
@@ -185,6 +189,7 @@ func (s *Sync) PushWithOptions(
 	if result.Errors == 0 {
 		if err := writeMetadata(ctx, conn, map[string]string{
 			s.archiveKey(lastPushCutoffKeyBase):   cutoff,
+			s.archiveKey("palette_corpus_recipe"): db.PaletteCorpusRecipe,
 			s.archiveKey(lastPushAtKeyBase):       time.Now().UTC().Format(time.RFC3339),
 			s.archiveKey(lastPushMachineKeyBase):  s.machine,
 			s.archiveKey(pushScopeKeyBase):        s.scopeString(),
@@ -784,6 +789,10 @@ func lastMessageAt(msgs []db.Message) *time.Time {
 }
 
 func messageRow(m db.Message, version uint64) []any {
+	var layout any
+	if m.ContentLayout != nil {
+		layout = db.ContentLayoutJSON(m.ContentLayout)
+	}
 	return []any{
 		m.ID, m.SessionID, int64(m.Ordinal), m.Role, m.Content, m.ThinkingText,
 		timeValue(m.Timestamp), m.HasThinking, m.HasToolUse, int64(m.ContentLength),
@@ -791,7 +800,7 @@ func messageRow(m db.Message, version uint64) []any {
 		int64(m.ContextTokens), int64(m.OutputTokens), m.ProviderID,
 		m.HasContextTokens, m.HasOutputTokens, m.ClaudeMessageID, m.ClaudeRequestID,
 		m.SourceType, m.SourceSubtype, m.PromptSource, m.SourceUUID, m.SourceParentUUID,
-		m.IsSidechain, m.IsCompactBoundary,
+		m.IsSidechain, m.IsCompactBoundary, m.ToolResultText, layout, db.PaletteText(m),
 		version,
 	}
 }
@@ -810,7 +819,7 @@ func toolCallRow(m db.Message, tc db.ToolCall, callIndex int, version uint64) []
 		m.ID, int64(m.Ordinal), m.SessionID, tc.ToolName, tc.Category, int64(callIndex),
 		tc.ToolUseID, tc.InputJSON, tc.SkillName, int64(length),
 		stored,
-		tc.SubagentSessionID, tc.FilePath,
+		tc.SubagentSessionID, tc.FilePath, tc.Rendering,
 		version,
 	}
 }

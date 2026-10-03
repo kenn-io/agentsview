@@ -516,9 +516,9 @@ func parseOpenClaudeSession(
 		}
 
 		content := gjson.Get(line, "message.content")
-		text, thinkingText, hasThinking, hasToolUse, toolCalls, toolResults := ExtractTextContent(context.Background(), content)
-		if strings.TrimSpace(text) == "" && len(toolResults) == 0 &&
-			len(toolCalls) == 0 && role != "system" {
+		body := ExtractMessageContent(context.Background(), content)
+		text, thinkingText, hasThinking, hasToolUse, toolCalls, toolResults := body.Content, body.ThinkingText, body.HasThinking, body.HasToolUse, body.ToolCalls, body.ToolResults
+		if !body.hasNativeBody() && role != "system" && (role != "assistant" || !claudeHasUsage(line)) {
 			continue
 		}
 
@@ -540,13 +540,12 @@ func parseOpenClaudeSession(
 				SourceUUID:       gjson.Get(line, "uuid").Str,
 				SourceParentUUID: gjson.Get(line, "parentUuid").Str,
 				IsSidechain:      gjson.Get(line, "isSidechain").Bool(),
-			})
+			}.withBody(body))
 			ordinal++
 			continue
 		}
 
-		if role == "user" && strings.TrimSpace(text) == "" &&
-			len(toolResults) == 0 {
+		if role == "user" && !body.hasNativeBody() {
 			continue
 		}
 
@@ -566,7 +565,7 @@ func parseOpenClaudeSession(
 			SourceParentUUID:   gjson.Get(line, "parentUuid").Str,
 			IsSidechain:        gjson.Get(line, "isSidechain").Bool(),
 			tokenPresenceKnown: role == "assistant",
-		}
+		}.withBody(body)
 		if role == "assistant" {
 			extractOpenClaudeTokenFields(&msg, line)
 			msg.StopReason = gjson.Get(line, "message.stop_reason").Str

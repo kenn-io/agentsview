@@ -260,7 +260,7 @@ func TestGooseProviderParsesTranscriptToolsRelationshipsAndUsage(t *testing.T) {
 	assert.Equal(t, "claude-sonnet-4-6", assistant.Model)
 	assert.True(t, assistant.HasThinking)
 	assert.Equal(t, "I should inspect auth.go first.", assistant.ThinkingText)
-	assert.Contains(t, assistant.Content, "[Thinking]")
+	assert.NotContains(t, assistant.Content, "[Thinking]")
 	assert.NotContains(t, assistant.Content, "opaque")
 	require.Len(t, assistant.ToolCalls, 1)
 	assert.Equal(t, "call-read", assistant.ToolCalls[0].ToolUseID)

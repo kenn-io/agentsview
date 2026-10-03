@@ -95,9 +95,11 @@ func (p *qClawProvider) parseSession(
 		switch role {
 		case "user":
 			content := msg.Get("content")
-			text, thinkingText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(context.Background(), content)
-			text = strings.TrimSpace(text)
-			if text == "" && len(tcs) == 0 && len(trs) == 0 {
+			body := ExtractMessageContent(context.Background(), content)
+			thinkingText, hasThinking, hasToolUse, tcs, trs := body.ThinkingText, body.HasThinking, body.HasToolUse, body.ToolCalls, body.ToolResults
+			body.trimDialogue()
+			text := body.Content
+			if !body.hasNativeBody() && (role != "assistant" || !clawHasUsage(msg)) {
 				continue
 			}
 
@@ -111,30 +113,36 @@ func (p *qClawProvider) parseSession(
 			}
 
 			messages = append(messages, ParsedMessage{
-				Ordinal:       ordinal,
-				Role:          RoleUser,
-				Content:       text,
-				Timestamp:     ts,
-				HasThinking:   hasThinking,
-				ThinkingText:  thinkingText,
-				HasToolUse:    hasToolUse,
-				ContentLength: len(text),
-				ToolCalls:     tcs,
-				ToolResults:   trs,
-			})
+				Ordinal:          ordinal,
+				SourceUUID:       gjson.Get(line, "id").Str,
+				SourceParentUUID: gjson.Get(line, "parentId").Str,
+				Role:             RoleUser,
+				Content:          text,
+				Timestamp:        ts,
+				HasThinking:      hasThinking,
+				ThinkingText:     thinkingText,
+				HasToolUse:       hasToolUse,
+				ContentLength:    len(text),
+				ToolCalls:        tcs,
+				ToolResults:      trs,
+			}.withBody(body))
 			ordinal++
 			realUserCount++
 
 		case "assistant":
 			content := msg.Get("content")
-			text, thinkingText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(context.Background(), content)
-			text = strings.TrimSpace(text)
-			if text == "" && len(tcs) == 0 && len(trs) == 0 {
+			body := ExtractMessageContent(context.Background(), content)
+			thinkingText, hasThinking, hasToolUse, tcs, trs := body.ThinkingText, body.HasThinking, body.HasToolUse, body.ToolCalls, body.ToolResults
+			body.trimDialogue()
+			text := body.Content
+			if !body.hasNativeBody() && (role != "assistant" || !clawHasUsage(msg)) {
 				continue
 			}
 
 			pm := ParsedMessage{
 				Ordinal:            ordinal,
+				SourceUUID:         gjson.Get(line, "id").Str,
+				SourceParentUUID:   gjson.Get(line, "parentId").Str,
 				Role:               RoleAssistant,
 				Content:            text,
 				Timestamp:          ts,
@@ -145,39 +153,29 @@ func (p *qClawProvider) parseSession(
 				ToolCalls:          tcs,
 				ToolResults:        trs,
 				tokenPresenceKnown: true,
-			}
+			}.withBody(body)
 			applyQClawAssistantUsage(&pm, msg)
 			messages = append(messages, pm)
 			ordinal++
 
 		case "toolResult":
-			// Tool results in QClaw are separate messages.
-			// Emit as a user message with empty Content so
-			// pairAndFilter removes it after pairToolResults
-			// copies ResultContentLength to the matching call.
-			toolCallID := msg.Get("toolCallId").Str
-			if toolCallID == "" {
-				continue
-			}
-
 			content := msg.Get("content")
-			resultText := extractQClawToolResultText(content)
-			contentLen := len(resultText)
-
-			messages = append(messages, ParsedMessage{
-				Ordinal:       ordinal,
-				Role:          RoleUser,
-				Content:       "",
-				Timestamp:     ts,
-				HasThinking:   false,
-				HasToolUse:    false,
+			contentLen := sanitizedWorkLength(extractQClawToolResultText(content))
+			var body MessageContentBuilder
+			body.AddToolResult(ParsedToolResult{
+				ToolUseID:     msg.Get("toolCallId").Str,
 				ContentLength: contentLen,
-				ToolResults: []ParsedToolResult{{
-					ToolUseID:     toolCallID,
-					ContentLength: contentLen,
-					ContentRaw:    content.Raw,
-				}},
+				ContentRaw:    content.Raw,
 			})
+			pm := body.Message()
+			pm.Ordinal = ordinal
+			pm.SourceUUID = gjson.Get(line, "id").Str
+			pm.SourceParentUUID = gjson.Get(line, "parentId").Str
+			pm.Role = RoleUser
+			pm.SourceSubtype = SourceSubtypeToolResult
+			pm.Timestamp = ts
+			pm.ContentLength = contentLen
+			messages = append(messages, pm)
 			ordinal++
 		}
 	}

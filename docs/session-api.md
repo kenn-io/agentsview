@@ -363,9 +363,17 @@ message is always included. Responses report the window's
 }
 ```
 
-`thinking_text` holds the concatenated text of any `thinking` blocks the agent
-emitted, separated from the flattened `content` which still contains inline
-`[Thinking]...[/Thinking]` markers for UI rendering.
+On `main`, `content` contains dialogue, `thinking_text` contains readable
+reasoning, and `tool_result_text` contains unmatched tool output. The nullable
+`content_layout` records their saved display order and references structured
+tool calls. Version 1 uses half-open UTF-8 byte ranges for text, thinking, and
+output, and zero-based `call_index` values for calls. Tool-call `rendering`
+preserves the provider's display text. `content_length` retains the existing
+work-length measure; use the byte length of `content` for dialogue size.
+
+Messages without native provenance have a null layout and keep their legacy
+body. In the latest release, `content` still includes inline
+`[Thinking]...[/Thinking]` markers alongside the separate `thinking_text`.
 
 Promoted `source_subtype` values on `is_system: true` messages: `continuation`,
 `resume`, `interrupted`, `task_notification`, `stop_hook`, `compact_boundary`.
@@ -506,6 +514,15 @@ Exit states:
 For a DB-derived export (HTML or markdown) use the HTTP endpoints
 `/api/v1/sessions/{id}/export` or `/api/v1/sessions/{id}/md`.
 
+On `main`, these full transcript exports follow saved native content order.
+They include dialogue, reasoning, tool calls, and retained results. Result
+events supply their payload once when present, without repeating the derived
+summary. Literal marker-looking dialogue stays text. Records without native
+provenance keep the legacy export format. Unsupported native layouts emit an
+export error marker. Exports use archived records and do not reparse sources.
+For dialogue-only publication and legacy coverage gaps, see
+[Conversation Export](/docs/conversation-export/#what-text-means).
+
 Markdown export accepts an optional `depth` query parameter:
 
 - omitted: root session only
@@ -620,7 +637,7 @@ with `--include-one-shot`, `--include-automated`, or `--include-children`.
 | `--hybrid`            | `mode=hybrid`       | Semantic + FTS reciprocal rank fusion; messages-only — see [Semantic Search](/docs/semantic-search/)                                                                              |
 | `--scope`             | `scope`             | `top`, `all` (default), or `subordinate` — semantic/hybrid only; supersedes `include_children` in those modes                                                                     |
 | `--context`           | `context`           | int — N messages of context before/after each match (max 10)                                                                                                                      |
-| `--in`                | `in`                | Comma-separated: `messages,tool_input,tool_result` (default all)                                                                                                                  |
+| `--in`                | `in`                | Comma-separated: `messages,thinking,tool_input,tool_result` (default all)                                                                                                                  |
 | `--exclude-system`    | `exclude_system`    | Drop system messages from the scan                                                                                                                                                |
 | `--reveal`            | `reveal`            | Show full secret values (localhost-only; warning to stderr)                                                                                                                       |
 | `--project`           | `project`           | string                                                                                                                                                                            |
@@ -641,12 +658,28 @@ with `--include-one-shot`, `--include-automated`, or `--include-children`.
 | `--cursor`            | `cursor`            | int — pagination cursor from a previous response                                                                                                                                  |
 
 `--regex`, `--fts`, `--semantic`, and `--hybrid` are mutually exclusive. `--fts`
-is the fastest mode on large archives but only searches message bodies;
-substring (the default) and regex modes also walk `tool_calls.input_json`,
-`tool_calls.result_content`, and the `tool_result_events` rows. `--semantic` and
+is the fastest mode on large archives and searches proven dialogue in
+`messages.content`. `--in messages` has that same meaning in every mode.
+Substring (the default) and regex modes also search readable reasoning
+(`--in thinking`, returned as `location=thinking`), `tool_calls.input_json`,
+`tool_calls.result_content`, `tool_result_events`, and unmatched output in
+`messages.tool_result_text`. Their default source set includes all four sources.
+FTS, terms, semantic, and hybrid remain restricted to messages.
+
+Older messages with unknown native boundaries are excluded from dialogue search
+until normal sync reparses their source. Sessions whose source is missing keep
+their saved complete transcript for viewing, palette search, and in-session
+find. They do not become eligible through display-marker guesses. `--semantic` and
 `--hybrid` require an embedding index and return a single ranked page
 (`--cursor` is rejected) — see [Semantic Search](/docs/semantic-search/) for
 setup, scoring, and limitations.
+
+Palette search (`GET /api/v1/search`) matches terms across the complete saved
+transcript, including reasoning, displayed tool inputs, retained outputs, and
+legacy bodies. It keeps one best match per session, session-name fallback,
+sorting, and pagination. In-session find returns ordered message ordinals for
+visible text from those same owners. Serialized tool input keys and image
+metadata that the viewer hides do not create find hits.
 
 Every match, in every mode, carries the conversation-unit citation described in
 [Hit shape](/docs/semantic-search/#hit-shape-ranges-and-anchors):
@@ -1087,7 +1120,7 @@ tiers exist:
 
 Findings are written to a `secret_findings` table keyed by session ID, with the
 rule name, confidence, location (message / tool_input / tool_result /
-tool_result_event), match coordinates, and a `redacted_match` value (the raw
+tool_result_event / thinking / tool_output / tool_rendering), match coordinates, and a `redacted_match` value (the raw
 secret is never stored). Each session also carries a `secret_leak_count` and a
 `secrets_rules_version` so a future ruleset bump can drive an incremental
 backfill.

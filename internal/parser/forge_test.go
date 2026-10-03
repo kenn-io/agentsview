@@ -523,7 +523,7 @@ func TestForgeDegenerate(t *testing.T) {
 		assertEq(t, "role", sessions[0].Messages[0].Role, RoleUser)
 	})
 
-	// Sub-case 2: tool message with empty call_id → skipped.
+	// Sub-case 2: output without a call ID retains a standalone owner.
 	t.Run("tool_message_empty_call_id", func(t *testing.T) {
 		dbPath, seeder, db := newForgeTestDB(t)
 		defer db.Close()
@@ -560,8 +560,9 @@ func TestForgeDegenerate(t *testing.T) {
 		sessions, err := parseForgeAll(dbPath, "m")
 		require.NoError(t, err, "ParseForgeDB")
 		require.Len(t, sessions, 1)
-		// Only the user message; tool result with empty call_id was skipped.
-		assertEq(t, "messages len", len(sessions[0].Messages), 1)
+		require.Len(t, sessions[0].Messages, 2)
+		assert.Empty(t, sessions[0].Messages[1].Content)
+		assert.Equal(t, "result", sessions[0].Messages[1].ToolResultText)
 	})
 
 	// Sub-case 3: user message with empty content but populated raw_content.Text.
@@ -1002,5 +1003,6 @@ func TestForgeReasoningNoText(t *testing.T) {
 	// User + assistant
 	require.GreaterOrEqual(t, len(msgs), 2, "want at least 2 messages")
 	asst := msgs[1]
-	assertEq(t, "HasThinking", asst.HasThinking, false)
+	assert.True(t, asst.HasThinking)
+	assert.Empty(t, asst.ThinkingText)
 }

@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
@@ -34,6 +35,7 @@ const (
 	markdownSegmentTool     markdownSegmentType = "tool"
 	markdownSegmentCode     markdownSegmentType = "code"
 	markdownSegmentSkill    markdownSegmentType = "skill"
+	markdownSegmentResult   markdownSegmentType = "tool_result"
 )
 
 type markdownSegment struct {
@@ -42,6 +44,7 @@ type markdownSegment struct {
 	Label    string
 	ToolName string
 	ToolCall *db.ToolCall
+	Native   bool
 }
 
 type markdownMatch struct {
@@ -317,6 +320,9 @@ func renderMarkdownMessage(
 			b.WriteString("\n")
 		case markdownSegmentTool:
 			renderMarkdownToolSegment(b, tree, seg, opts, renderedAnchors)
+		case markdownSegmentResult:
+			b.WriteString(renderXMLBodyTag("tool_result", nil, seg.Content))
+			b.WriteString("\n")
 		}
 	}
 	b.WriteString(closeTag("message"))
@@ -436,6 +442,9 @@ func markdownToolIdentity(seg markdownSegment) (string, string) {
 }
 
 func markdownToolBody(seg markdownSegment) string {
+	if seg.Native {
+		return seg.Content
+	}
 	if seg.ToolCall != nil {
 		if prompt := markdownToolPrompt(seg.ToolCall); prompt != "" {
 			return prompt
@@ -640,10 +649,94 @@ func markdownAgentDisplay(agent string) string {
 }
 
 func parseMarkdownSegments(msg db.Message) []markdownSegment {
+	if msg.ContentLayout != nil {
+		segments, err := nativeExportSegments(msg)
+		if err != nil {
+			return []markdownSegment{{Type: markdownSegmentText, Content: "[Export error: " + err.Error() + "]", Native: true}}
+		}
+		return segments
+	}
 	matches := extractMarkdownMatches(msg.Content, msg.HasToolUse)
 	segments := buildMarkdownSegments(msg.Content, matches)
 	segments = mergeThinkingSegments(segments)
 	return enrichMarkdownSegments(segments, msg.ToolCalls)
+}
+
+// Native exports consume saved owners; only adjacent text can form code fences.
+func nativeExportSegments(msg db.Message) ([]markdownSegment, error) {
+	if msg.ContentLayout.Version != 1 {
+		return nil, fmt.Errorf("unsupported content layout version %d", msg.ContentLayout.Version)
+	}
+	part := func(source string, block parser.ContentBlock) (string, error) {
+		if block.Start < 0 || block.End < block.Start || block.End > len(source) ||
+			(block.Start < len(source) && !utf8.RuneStart(source[block.Start])) ||
+			(block.End < len(source) && !utf8.RuneStart(source[block.End])) {
+			return "", fmt.Errorf("invalid UTF-8 %s content range", block.Kind)
+		}
+		return source[block.Start:block.End], nil
+	}
+	segments := []markdownSegment{}
+	attached := map[int]bool{}
+	blocks := msg.ContentLayout.Blocks
+	for index := 0; index < len(blocks); index++ {
+		block := blocks[index]
+		switch block.Kind {
+		case "text":
+			if _, err := part(msg.Content, block); err != nil {
+				return nil, err
+			}
+			for index+1 < len(blocks) && blocks[index+1].Kind == "text" {
+				index++
+				next := blocks[index]
+				if _, err := part(msg.Content, next); err != nil {
+					return nil, err
+				}
+				block.End = next.End
+			}
+			text, err := part(msg.Content, block)
+			if err != nil {
+				return nil, err
+			}
+			cursor := 0
+			for _, match := range mdCodeBlockRe.FindAllStringSubmatchIndex(text, -1) {
+				if match[0] > cursor {
+					segments = append(segments, markdownSegment{Type: markdownSegmentText, Content: text[cursor:match[0]], Native: true})
+				}
+				segments = append(segments, markdownSegment{Type: markdownSegmentCode, Label: text[match[2]:match[3]], Content: text[match[4]:match[5]], Native: true})
+				cursor = match[1]
+			}
+			if cursor < len(text) || len(text) == 0 {
+				segments = append(segments, markdownSegment{Type: markdownSegmentText, Content: text[cursor:], Native: true})
+			}
+		case "thinking", "tool_result":
+			source, kind := msg.ThinkingText, markdownSegmentThinking
+			if block.Kind == "tool_result" {
+				source, kind = msg.ToolResultText, markdownSegmentResult
+			}
+			text, err := part(source, block)
+			if err != nil {
+				return nil, err
+			}
+			segments = append(segments, markdownSegment{Type: kind, Content: text, Native: true})
+		case "tool_call":
+			if block.CallIndex < 0 || block.CallIndex >= len(msg.ToolCalls) || attached[block.CallIndex] {
+				return nil, fmt.Errorf("invalid content layout tool call index %d", block.CallIndex)
+			}
+			attached[block.CallIndex] = true
+			call := msg.ToolCalls[block.CallIndex]
+			if len(call.ResultEvents) > 0 {
+				call.ResultContent = "" // Events own their payload; the summary is derived.
+			}
+			content := call.Rendering
+			if content == "" {
+				content = parser.ToolUseRendering(call.ToolName, call.InputJSON)
+			}
+			segments = append(segments, markdownSegment{Type: markdownSegmentTool, Content: content, ToolCall: &call, Native: true})
+		default:
+			return nil, fmt.Errorf("unsupported content layout kind %q", block.Kind)
+		}
+	}
+	return segments, nil
 }
 
 func extractMarkdownMatches(text string, parseTools bool) []markdownMatch {

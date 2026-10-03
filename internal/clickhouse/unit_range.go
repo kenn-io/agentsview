@@ -19,7 +19,7 @@ const (
 
 func clickhouseEmbeddableUserSQL(alias string) string {
 	return fmt.Sprintf("%[1]s.role = 'user' AND %[1]s.is_system = false AND %[2]s",
-		alias, db.ClickHouseSystemPrefixSQL(alias+".content", alias+".role"))
+		alias, db.ClickHouseSystemPrefixSQL(alias+".content", alias+".role")+" AND "+db.DialogueEligibilitySQL(alias, db.ClickHouseQueryDialect()))
 }
 
 func (s *Store) NearestUserBoundaries(
@@ -101,8 +101,8 @@ func (s *Store) loadExtentMessages(
 	}
 	rows, err := s.queryContext(ctx, `
 		SELECT session_id, ordinal, role, is_system, is_sidechain, content
-		FROM messages
-		WHERE session_id IN (`+strings.Join(placeholders, ",")+`)
+		FROM messages m
+		WHERE `+db.DialogueEligibilitySQL("m", db.ClickHouseQueryDialect())+` AND session_id IN (`+strings.Join(placeholders, ",")+`)
 		ORDER BY session_id, ordinal`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying clickhouse run-extent messages: %w", err)
@@ -282,7 +282,7 @@ func (s *Store) lookupAnchorMetaChunk(
 			COALESCE(s.relationship_type, ''), COALESCE(s.parent_session_id, ''),
 			m.role, m.is_sidechain,
 			if(m.is_system = false AND ` +
-		db.ClickHouseSystemPrefixSQL("m.content", "m.role") +
+		db.ClickHouseSystemPrefixSQL("m.content", "m.role") + " AND " + db.DialogueEligibilitySQL("m", db.ClickHouseQueryDialect()) +
 		`, true, false)
 		FROM refs r
 		JOIN sessions s ON s.id = r.session_id

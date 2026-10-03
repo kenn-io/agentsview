@@ -115,11 +115,11 @@ func seedEmbeddableArchiveWithAutomated(t *testing.T, dataDir string) {
 }
 
 // TestVectorGenerationParams asserts vectorGeneration's Params map carries
-// exactly the three run_v1 fingerprint keys the plan requires, with
+// the run_v1 and dialogue corpus fingerprint keys the plan requires, with
 // chunk_overlap_chars derived from vector.ChunkOverlap so a future change to
 // that formula cannot silently drift from the fingerprint. Empty affixes must
 // be absent from the map (not present as ""), so configs written before these
-// keys existed keep their fingerprints; non-empty affixes cut a new generation.
+// keys existed keep their affix behavior; non-empty affixes cut a new generation.
 func TestVectorGenerationParams(t *testing.T) {
 	c := config.VectorEmbeddingsConfig{
 		Model:         "test-model",
@@ -132,19 +132,21 @@ func TestVectorGenerationParams(t *testing.T) {
 	assert.Equal(t, "test-model", gen.Model)
 	assert.Equal(t, 3, gen.Dimensions)
 	assert.Equal(t, map[string]string{
-		"max_input_chars":     "4000",
-		"doc_unit_scheme":     "run_v1",
-		"chunk_overlap_chars": strconv.Itoa(vector.ChunkOverlap(4000)),
+		"max_input_chars":             "4000",
+		"doc_unit_scheme":             "run_v1",
+		vector.CorpusFingerprintParam: "dialogue-layout-v1",
+		"chunk_overlap_chars":         strconv.Itoa(vector.ChunkOverlap(4000)),
 	}, gen.Params)
 	baselineFingerprint := gen.Fingerprint()
 
 	c.InputSuffix = "<|endoftext|>"
 	gen = vectorGeneration(c)
 	assert.Equal(t, map[string]string{
-		"max_input_chars":     "4000",
-		"doc_unit_scheme":     "run_v1",
-		"chunk_overlap_chars": strconv.Itoa(vector.ChunkOverlap(4000)),
-		"input_suffix":        "<|endoftext|>",
+		"max_input_chars":             "4000",
+		"doc_unit_scheme":             "run_v1",
+		vector.CorpusFingerprintParam: "dialogue-layout-v1",
+		"chunk_overlap_chars":         strconv.Itoa(vector.ChunkOverlap(4000)),
+		"input_suffix":                "<|endoftext|>",
 	}, gen.Params)
 	assert.NotEqual(t, baselineFingerprint, gen.Fingerprint(),
 		"adding an input suffix cuts a new generation")
@@ -153,11 +155,12 @@ func TestVectorGenerationParams(t *testing.T) {
 	c.QueryPrefix = "task: search result | query: "
 	gen = vectorGeneration(c)
 	assert.Equal(t, map[string]string{
-		"max_input_chars":     "4000",
-		"doc_unit_scheme":     "run_v1",
-		"chunk_overlap_chars": strconv.Itoa(vector.ChunkOverlap(4000)),
-		"input_suffix":        "<|endoftext|>",
-		"query_prefix":        "task: search result | query: ",
+		"max_input_chars":             "4000",
+		"doc_unit_scheme":             "run_v1",
+		vector.CorpusFingerprintParam: "dialogue-layout-v1",
+		"chunk_overlap_chars":         strconv.Itoa(vector.ChunkOverlap(4000)),
+		"input_suffix":                "<|endoftext|>",
+		"query_prefix":                "task: search result | query: ",
 	}, gen.Params)
 	assert.NotEqual(t, suffixFingerprint, gen.Fingerprint(),
 		"adding a query prefix cuts a new generation")
@@ -166,12 +169,13 @@ func TestVectorGenerationParams(t *testing.T) {
 	c.DocumentPrefix = "title: none | text: "
 	gen = vectorGeneration(c)
 	assert.Equal(t, map[string]string{
-		"max_input_chars":     "4000",
-		"doc_unit_scheme":     "run_v1",
-		"chunk_overlap_chars": strconv.Itoa(vector.ChunkOverlap(4000)),
-		"input_suffix":        "<|endoftext|>",
-		"query_prefix":        "task: search result | query: ",
-		"document_prefix":     "title: none | text: ",
+		"max_input_chars":             "4000",
+		"doc_unit_scheme":             "run_v1",
+		vector.CorpusFingerprintParam: "dialogue-layout-v1",
+		"chunk_overlap_chars":         strconv.Itoa(vector.ChunkOverlap(4000)),
+		"input_suffix":                "<|endoftext|>",
+		"query_prefix":                "task: search result | query: ",
+		"document_prefix":             "title: none | text: ",
 	}, gen.Params)
 	assert.NotEqual(t, queryFingerprint, gen.Fingerprint(),
 		"adding a document prefix cuts a new generation")
@@ -184,13 +188,14 @@ func TestVectorGenerationParams(t *testing.T) {
 	c.RequestDimensions = true
 	gen = vectorGeneration(c)
 	assert.Equal(t, map[string]string{
-		"max_input_chars":     "4000",
-		"doc_unit_scheme":     "run_v1",
-		"chunk_overlap_chars": strconv.Itoa(vector.ChunkOverlap(4000)),
-		"input_suffix":        "<|endoftext|>",
-		"query_prefix":        "task: search result | query: ",
-		"document_prefix":     "title: none | text: ",
-		"request_dimensions":  "true",
+		"max_input_chars":             "4000",
+		"doc_unit_scheme":             "run_v1",
+		vector.CorpusFingerprintParam: "dialogue-layout-v1",
+		"chunk_overlap_chars":         strconv.Itoa(vector.ChunkOverlap(4000)),
+		"input_suffix":                "<|endoftext|>",
+		"query_prefix":                "task: search result | query: ",
+		"document_prefix":             "title: none | text: ",
+		"request_dimensions":          "true",
 	}, gen.Params)
 	assert.NotEqual(t, nativeFingerprint, gen.Fingerprint(),
 		"enabling request_dimensions cuts a new generation")

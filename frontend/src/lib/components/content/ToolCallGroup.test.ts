@@ -8,6 +8,8 @@ import ToolCallGroup from "./ToolCallGroup.svelte";
 
 function makeToolMessage(ordinal: number): Message {
   return {
+    content_layout: null,
+    tool_result_text: "",
     id: ordinal + 1,
     session_id: "s1",
     ordinal,
@@ -26,6 +28,7 @@ function makeToolMessage(ordinal: number): Message {
     has_output_tokens: false,
     tool_calls: [
       {
+        rendering: "",
         category: "",
         tool_name: "bash",
       },
@@ -65,6 +68,7 @@ describe("ToolCallGroup", () => {
       const message = makeToolMessage(1);
       message.tool_calls = [
         {
+          rendering: "",
           tool_use_id: "call-1",
           tool_name: "Bash",
           category: "Bash",
@@ -140,6 +144,28 @@ describe("ToolCallGroup", () => {
     expect(divider?.textContent).toContain("New messages");
     expect(document.querySelector('[data-message-ordinal="2"]')).not.toBeNull();
 
+    unmount(component);
+  });
+
+  it("renders asset images in native tool results inside grouped tool rows", async () => {
+    const message = makeToolMessage(1);
+    const result = "![image](asset://chatgpt-image.png)";
+    message.tool_result_text = result;
+    message.content_layout = {
+      version: 1,
+      blocks: [{ kind: "tool_result", start: 0, end: result.length, call_index: 0 }],
+    };
+    const component = mount(ToolCallGroup, {
+      target: document.body,
+      props: { messages: [message], timestamp: message.timestamp },
+    });
+
+    await tick();
+
+    const output = document.querySelector(".tool-group .output-content");
+    expect(output?.querySelector("img")?.alt).toBe("image");
+    expect(output?.textContent).not.toContain("![image]");
+    expect(document.querySelector(".tool-group pre.output-content")).toBeNull();
     unmount(component);
   });
 });

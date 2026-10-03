@@ -128,9 +128,10 @@ func TestZencoderProviderParsesToolCallAndReasoning(t *testing.T) {
 
 	assert.True(t, msgs[1].HasThinking)
 	assert.True(t, msgs[1].HasToolUse)
-	assert.Contains(t, msgs[1].Content, "[Thinking]")
-	assert.Contains(t, msgs[1].Content, "Let me think about this.")
-	assert.Contains(t, msgs[1].Content, "[Read: main.go]")
+	assert.Equal(t, "I will read it now.", msgs[1].Content)
+	assert.Equal(t, "Let me think about this.", msgs[1].ThinkingText)
+	require.Len(t, msgs[1].ToolCalls, 1)
+	assert.Equal(t, "[Read: main.go]", msgs[1].ToolCalls[0].Rendering)
 
 	require.Len(t, msgs[1].ToolCalls, 1)
 	assert.Equal(t, "Read", msgs[1].ToolCalls[0].ToolName)
@@ -604,8 +605,8 @@ func TestZencoderProviderParsesToolResultSystemTags(t *testing.T) {
 	// System message from tool-result tags.
 	assert.True(t, msgs[3].IsSystem)
 	assert.Equal(t, RoleUser, msgs[3].Role)
-	assert.Contains(t, msgs[3].Content, "Remember your tasks")
-	assert.Contains(t, msgs[3].Content, "Extra context")
+	assert.Contains(t, msgs[3].ToolResultText, "Remember your tasks")
+	assert.Contains(t, msgs[3].ToolResultText, "Extra context")
 	assert.Equal(t, SourceSubtypeToolResult, msgs[3].SourceSubtype,
 		"text lifted out of a tool result is still tool output")
 }
@@ -721,7 +722,7 @@ func TestZencoderProviderParsesToolResultTaggedBlocksFilteredFromContentRaw(t *t
 					"last message should be a system message")
 				assert.Equal(t, RoleUser, sysMsg.Role)
 				for _, s := range tt.wantSystemParts {
-					assert.Contains(t, sysMsg.Content, s,
+					assert.Contains(t, sysMsg.ToolResultText, s,
 						"system message should contain %q", s)
 				}
 			}

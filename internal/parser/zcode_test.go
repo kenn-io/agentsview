@@ -487,7 +487,7 @@ func TestZCodeProviderSourceMethodsAndParse(t *testing.T) {
 	assert.True(t, result.Result.Messages[1].HasToolUse)
 	assert.Equal(t, "claude-sonnet-4-6", result.Result.Messages[1].Model)
 	assert.Equal(t,
-		"[Thinking]\nI should read the auth code first.\n[/Thinking]\nI'll inspect the auth code first.",
+		"I'll inspect the auth code first.",
 		result.Result.Messages[1].Content,
 	)
 	require.Len(t, result.Result.Messages[1].ToolCalls, 1)
@@ -647,7 +647,7 @@ func TestZCodeIngestsTranscriptMessages(t *testing.T) {
 	assert.True(t, result.Messages[1].HasThinking)
 	assert.Equal(t, "I should inspect the auth flow.", result.Messages[1].ThinkingText)
 	assert.Equal(t,
-		"[Thinking]\nI should inspect the auth flow.\n[/Thinking]\nI'll inspect the auth flow.",
+		"I'll inspect the auth flow.",
 		result.Messages[1].Content,
 	)
 	assert.Equal(t, "claude-sonnet-4-6", result.Messages[1].Model)
@@ -785,7 +785,7 @@ func TestZCodeOpenCodeStyleReasoningAndToolParts(t *testing.T) {
 	assert.True(t, assistant.HasToolUse)
 	assert.Equal(t, "I should inspect the auth flow.", assistant.ThinkingText)
 	assert.Equal(t,
-		"[Thinking]\nI should inspect the auth flow.\n[/Thinking]\nI'll inspect the auth flow.",
+		"I'll inspect the auth flow.",
 		assistant.Content,
 	)
 	require.Len(t, assistant.ToolCalls, 1)

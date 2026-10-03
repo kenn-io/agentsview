@@ -30,7 +30,7 @@ func (s *Store) GetMessages(
 			provider_id,
 			has_context_tokens, has_output_tokens, claude_message_id,
 			claude_request_id, source_type, source_subtype, prompt_source, source_uuid,
-			source_parent_uuid, is_sidechain, is_compact_boundary
+			source_parent_uuid, is_sidechain, is_compact_boundary, tool_result_text, content_layout
 		FROM messages
 		WHERE session_id = ? AND ordinal `+op+` ?
 		ORDER BY ordinal `+dir+`
@@ -94,7 +94,7 @@ func (s *Store) getMessagesLinearRoleFiltered(
 			provider_id,
 			has_context_tokens, has_output_tokens, claude_message_id,
 			claude_request_id, source_type, source_subtype, prompt_source, source_uuid,
-			source_parent_uuid, is_sidechain, is_compact_boundary
+			source_parent_uuid, is_sidechain, is_compact_boundary, tool_result_text, content_layout
 		FROM messages
 		WHERE session_id = ? AND ordinal ` + op + ` ?` + roleClause + `
 		ORDER BY ordinal ` + dir + `
@@ -132,7 +132,7 @@ func (s *Store) getMessagesAroundAnchor(
 			provider_id,
 			has_context_tokens, has_output_tokens, claude_message_id,
 			claude_request_id, source_type, source_subtype, prompt_source, source_uuid,
-			source_parent_uuid, is_sidechain, is_compact_boundary
+			source_parent_uuid, is_sidechain, is_compact_boundary, tool_result_text, content_layout
 		FROM messages
 		WHERE session_id = ? AND ordinal < ?` + roleClause + `
 		ORDER BY ordinal DESC LIMIT ?`
@@ -151,7 +151,7 @@ func (s *Store) getMessagesAroundAnchor(
 			provider_id,
 			has_context_tokens, has_output_tokens, claude_message_id,
 			claude_request_id, source_type, source_subtype, prompt_source, source_uuid,
-			source_parent_uuid, is_sidechain, is_compact_boundary
+			source_parent_uuid, is_sidechain, is_compact_boundary, tool_result_text, content_layout
 		FROM messages WHERE session_id = ? AND ordinal = ?`
 	anchorMsgs, err := s.queryMessageRows(ctx, anchorQuery, sessionID, anchor)
 	if err != nil {
@@ -165,7 +165,7 @@ func (s *Store) getMessagesAroundAnchor(
 			provider_id,
 			has_context_tokens, has_output_tokens, claude_message_id,
 			claude_request_id, source_type, source_subtype, prompt_source, source_uuid,
-			source_parent_uuid, is_sidechain, is_compact_boundary
+			source_parent_uuid, is_sidechain, is_compact_boundary, tool_result_text, content_layout
 		FROM messages
 		WHERE session_id = ? AND ordinal > ?` + roleClause + `
 		ORDER BY ordinal ASC LIMIT ?`
@@ -222,7 +222,7 @@ func (s *Store) GetAllMessages(ctx context.Context, sessionID string) ([]db.Mess
 			provider_id,
 			has_context_tokens, has_output_tokens, claude_message_id,
 			claude_request_id, source_type, source_subtype, prompt_source, source_uuid,
-			source_parent_uuid, is_sidechain, is_compact_boundary
+			source_parent_uuid, is_sidechain, is_compact_boundary, tool_result_text, content_layout
 		FROM messages
 		WHERE session_id = ?
 		ORDER BY ordinal ASC`,
@@ -279,6 +279,7 @@ func scanMessages(rows *sql.Rows) ([]db.Message, error) {
 		var m db.Message
 		var ts any
 		var tokenUsage string
+		var contentLayout sql.NullString
 		if err := rows.Scan(
 			&m.ID, &m.SessionID, &m.Ordinal, &m.Role, &m.Content,
 			&m.ThinkingText, &ts, &m.HasThinking, &m.HasToolUse,
@@ -289,6 +290,7 @@ func scanMessages(rows *sql.Rows) ([]db.Message, error) {
 			&m.ClaudeMessageID, &m.ClaudeRequestID,
 			&m.SourceType, &m.SourceSubtype, &m.PromptSource, &m.SourceUUID,
 			&m.SourceParentUUID, &m.IsSidechain, &m.IsCompactBoundary,
+			&m.ToolResultText, &contentLayout,
 		); err != nil {
 			return nil, fmt.Errorf("scanning duckdb message: %w", err)
 		}
@@ -299,6 +301,7 @@ func scanMessages(rows *sql.Rows) ([]db.Message, error) {
 		// marshal. Validation happens only here, on read (see
 		// db.DecodeStoredTokenUsage).
 		m.TokenUsage = db.DecodeStoredTokenUsage(tokenUsage)
+		m.SetContentLayout(db.DecodeStoredContentLayout(contentLayout.String))
 		msgs = append(msgs, m)
 	}
 	return msgs, rows.Err()
@@ -319,7 +322,7 @@ func (s *Store) attachToolCalls(ctx context.Context, msgs []db.Message) error {
 			COALESCE(tc.skill_name, ''), COALESCE(tc.result_content_length, 0),
 			COALESCE(tc.result_content, ''),
 			COALESCE(tc.subagent_session_id, ''),
-			COALESCE(tc.file_path, '')
+			COALESCE(tc.file_path, ''), COALESCE(tc.rendering, '')
 		FROM tool_calls tc
 		JOIN messages m ON m.session_id = tc.session_id
 			AND m.id = tc.message_id
@@ -337,7 +340,7 @@ func (s *Store) attachToolCalls(ctx context.Context, msgs []db.Message) error {
 		if err := rows.Scan(&ordinal, &callIndex, &tc.ToolName,
 			&tc.Category, &tc.ToolUseID, &tc.InputJSON,
 			&tc.SkillName, &tc.ResultContentLength,
-			&tc.ResultContent, &tc.SubagentSessionID, &tc.FilePath); err != nil {
+			&tc.ResultContent, &tc.SubagentSessionID, &tc.FilePath, &tc.Rendering); err != nil {
 			return err
 		}
 		tc.CallIndex = callIndex

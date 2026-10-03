@@ -17,6 +17,17 @@ func scanStoredSecretFindingsTx(
 		SELECT 'message', ordinal, NULL, NULL, content
 		FROM messages WHERE session_id = ?
 		UNION ALL
+		SELECT 'thinking', ordinal, NULL, NULL, thinking_text
+		FROM messages WHERE session_id = ?
+		UNION ALL
+		SELECT 'tool_output', ordinal, NULL, NULL, tool_result_text
+		FROM messages WHERE session_id = ?
+		UNION ALL
+		SELECT 'tool_rendering', m.ordinal, COALESCE(tc.call_index, 0), NULL,
+		       COALESCE(tc.rendering, '')
+		FROM tool_calls tc JOIN messages m ON m.id = tc.message_id
+		WHERE tc.session_id = ?
+		UNION ALL
 		SELECT 'tool_input', m.ordinal, COALESCE(tc.call_index, 0), NULL,
 		       COALESCE(tc.input_json, '')
 		FROM tool_calls tc JOIN messages m ON m.id = tc.message_id
@@ -34,7 +45,7 @@ func scanStoredSecretFindingsTx(
 		SELECT 'tool_result_event', tool_call_message_ordinal, call_index,
 		       event_index, content
 		FROM tool_result_events WHERE session_id = ?
-	`, sessionID, sessionID, sessionID, sessionID)
+	`, sessionID, sessionID, sessionID, sessionID, sessionID, sessionID, sessionID)
 	if err != nil {
 		return nil, 0, fmt.Errorf("querying stripped session for secret scan: %w", err)
 	}

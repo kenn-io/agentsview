@@ -1281,7 +1281,8 @@ func extractMessagesFrom(
 		}
 
 		content := gjson.Get(e.line, "message.content")
-		text, thinkingText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(context.Background(), content)
+		body := ExtractMessageContent(context.Background(), content)
+		text, thinkingText, hasThinking, hasToolUse, tcs, trs := body.Content, body.ThinkingText, body.HasThinking, body.HasToolUse, body.ToolCalls, body.ToolResults
 
 		// Convert command/skill invocation XML into readable
 		// text (e.g. "/roborev-fix 450"). If the content
@@ -1295,7 +1296,7 @@ func extractMessagesFrom(
 			}
 		}
 
-		if strings.TrimSpace(text) == "" && len(trs) == 0 {
+		if !body.hasNativeBody() && (e.entryType != "assistant" || !claudeHasUsage(e.line)) {
 			continue
 		}
 
@@ -1320,7 +1321,7 @@ func extractMessagesFrom(
 					SourceParentUUID: e.parentUuid,
 					IsSidechain:      gjson.Get(e.line, "isSidechain").Bool(),
 					PromptSource:     gjson.Get(e.line, "promptSource").Str,
-				})
+				}.withBody(body))
 				ordinal++
 				continue
 			}
@@ -1369,7 +1370,7 @@ func extractMessagesFrom(
 			IsSidechain:        gjson.Get(e.line, "isSidechain").Bool(),
 			PromptSource:       gjson.Get(e.line, "promptSource").Str,
 			tokenPresenceKnown: e.entryType == "assistant",
-		}
+		}.withBody(body)
 
 		if e.entryType == "assistant" {
 			extractClaudeTokenFields(&msg, e.line)
@@ -2588,7 +2589,8 @@ func extractMessagesContext(
 		}
 
 		content := gjson.Get(e.line, "message.content")
-		text, thinkingText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(ctx, content)
+		body := ExtractMessageContent(ctx, content)
+		text, thinkingText, hasThinking, hasToolUse, tcs, trs := body.Content, body.ThinkingText, body.HasThinking, body.HasToolUse, body.ToolCalls, body.ToolResults
 
 		// Convert command/skill invocation XML into readable
 		// text (e.g. "/roborev-fix 450"). If the content
@@ -2602,7 +2604,7 @@ func extractMessagesContext(
 			}
 		}
 
-		if strings.TrimSpace(text) == "" && len(trs) == 0 {
+		if !body.hasNativeBody() && (e.entryType != "assistant" || !claudeHasUsage(e.line)) {
 			continue
 		}
 
@@ -2627,7 +2629,7 @@ func extractMessagesContext(
 					SourceParentUUID: e.parentUuid,
 					IsSidechain:      gjson.Get(e.line, "isSidechain").Bool(),
 					PromptSource:     gjson.Get(e.line, "promptSource").Str,
-				})
+				}.withBody(body))
 				ordinal++
 				continue
 			}
@@ -2674,7 +2676,7 @@ func extractMessagesContext(
 			IsSidechain:        gjson.Get(e.line, "isSidechain").Bool(),
 			PromptSource:       gjson.Get(e.line, "promptSource").Str,
 			tokenPresenceKnown: e.entryType == "assistant",
-		}
+		}.withBody(body)
 
 		if e.entryType == "assistant" {
 			extractClaudeTokenFields(&msg, e.line)
@@ -2727,6 +2729,12 @@ func extractClaudeTokenFields(msg *ParsedMessage, line string) {
 		).Int())
 		msg.ContextTokens = input + cacheCreation + cacheRead
 	}
+}
+
+func claudeHasUsage(line string) bool {
+	usage := gjson.Get(line, "message.usage")
+	return usage.Get("input_tokens").Exists() || usage.Get("output_tokens").Exists() ||
+		usage.Get("cache_creation_input_tokens").Exists() || usage.Get("cache_read_input_tokens").Exists()
 }
 
 // annotateSubagentSessions sets SubagentSessionID on tool calls

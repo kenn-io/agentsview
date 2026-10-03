@@ -768,6 +768,10 @@ func parsePositAssistantConversation(
 	}
 
 	convDir := filepath.Dir(src.Path)
+	conversationID := conv.Root.ID
+	if conversationID == "" {
+		conversationID = filepath.Base(convDir)
+	}
 	lmMessages, malformed, err := readPositAssistantLMMessages(
 		filepath.Join(convDir, positAssistantLMMessagesFile),
 	)
@@ -793,6 +797,7 @@ func parsePositAssistantConversation(
 			if !ok {
 				continue
 			}
+			msg.SourceUUID = conversationID + ":" + strconv.Itoa(lmID)
 			if firstMessage == "" && msg.Role == RoleUser && msg.Content != "" {
 				firstMessage = truncate(
 					strings.ReplaceAll(msg.Content, "\n", " "), 300,
@@ -1066,7 +1071,25 @@ func positAssistantMessageFromLM(
 	default:
 		return ParsedMessage{}, false
 	}
-	msg.ContentLength = len(msg.Content)
+	work := sanitizedWorkLength(msg.Content)
+	if msg.ContentLayout == nil {
+		var body MessageContentBuilder
+		if role == "tool" {
+			for _, result := range msg.ToolResults {
+				output := gjson.Parse(result.ContentRaw)
+				text := DecodeContent(result.ContentRaw)
+				if value := output.Get("value"); value.Type == gjson.String {
+					text = value.Str
+				}
+				body.addToolResult(result, text)
+			}
+		} else {
+			body.AddText(msg.Content)
+		}
+		msg.Content = body.Message().Content
+		msg = msg.withBody(body.Message())
+	}
+	msg.ContentLength = work
 	return msg, true
 }
 
@@ -1091,34 +1114,26 @@ func positAssistantFillAssistant(
 	msg *ParsedMessage,
 	content, positai gjson.Result,
 ) {
-	var textParts, thinkingParts []string
+	var body MessageContentBuilder
 	if content.Type == gjson.String {
-		textParts = append(textParts, content.Str)
+		body.AddText(content.Str)
 	}
 	for _, part := range content.Array() {
 		switch part.Get("type").Str {
 		case "text":
-			if text := part.Get("text").Str; text != "" {
-				textParts = append(textParts, text)
-			}
+			body.AddText(part.Get("text").Str)
 		case "reasoning":
-			if text := part.Get("text").Str; text != "" {
-				thinkingParts = append(thinkingParts, text)
-			}
+			body.AddThinking(part.Get("text").Str)
 		case "tool-call":
-			if tc, ok := positAssistantToolCall(part); ok {
-				msg.ToolCalls = append(msg.ToolCalls, tc)
+			if call, ok := positAssistantToolCall(part); ok {
+				body.AddToolCall(call)
 			}
 		}
 	}
-	msg.Content = strings.TrimSpace(
-		positAssistantSummaryTagRe.ReplaceAllString(
-			strings.Join(textParts, "\n"), "",
-		),
-	)
-	msg.ThinkingText = strings.Join(thinkingParts, "\n\n")
-	msg.HasThinking = len(thinkingParts) > 0
-	msg.HasToolUse = len(msg.ToolCalls) > 0
+	msg.Content = body.Message().Content
+	*msg = msg.withBody(body.Message())
+	msg.removeDialogueRanges(positAssistantSummaryTagRe.FindAllStringIndex(msg.Content, -1))
+	msg.setDialogue(strings.TrimSpace(msg.Content))
 	msg.Model = positai.Get("modelId").Str
 	msg.ProviderID = positai.Get("providerId").Str
 	positAssistantFillTokenUsage(msg, positai.Get("usage"))

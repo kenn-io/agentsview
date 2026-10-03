@@ -353,6 +353,7 @@ func (db *DB) Search(
 	if err != nil {
 		return SearchPage{}, err
 	}
+	ftsQuery.table = strings.Replace(ftsQuery.table, "messages_", "palette_", 1)
 	f.Query = ftsQuery.match
 
 	// ORDER BY for the outer query. FTS5 ranks are negative (lower = better),
@@ -450,7 +451,7 @@ func (db *DB) Search(
 				snippet(messages_fts, 0, '<mark>', '</mark>',
 					'...', %d) AS snippet,
 				best.best_rank AS rank,
-				instr(LOWER(m.content), LOWER(best.best_query))
+				instr(LOWER(p.content), LOWER(best.best_query))
 					AS match_pos
 			FROM (
 				SELECT session_id, best_rowid, best_ordinal, best_rank, best_query
@@ -474,6 +475,7 @@ func (db *DB) Search(
 			) AS best
 			JOIN messages_fts ON messages_fts.rowid = best.best_rowid
 			JOIN messages m ON m.id = best.best_rowid
+			JOIN palette_messages p ON p.id = m.id
 			JOIN sessions s ON m.session_id = s.id
 			WHERE messages_fts MATCH ?
 
@@ -587,7 +589,9 @@ func (db *DB) SearchSession(
 	// on the call, and the frontend renders the event content either way.
 	like := "%" + escapeLike(query) + "%"
 	rows, err := db.getReader().QueryContext(ctx,
-		`SELECT DISTINCT m.ordinal
+		`SELECT DISTINCT m.ordinal, m.content, COALESCE(m.thinking_text, ''), COALESCE(m.tool_result_text, ''),
+ COALESCE(tc.tool_name, ''), COALESCE(tc.input_json, ''), COALESCE(tc.rendering, ''),
+ COALESCE(tc.result_content, ''), COALESCE(tre.content, '')
 		 FROM messages m
 		 LEFT JOIN tool_calls tc ON tc.message_id = m.id
 		 LEFT JOIN tool_result_events tre
@@ -597,26 +601,16 @@ func (db *DB) SearchSession(
 		 WHERE m.session_id = ?
 		   AND m.is_system = 0
 		   AND `+SystemPrefixSQL("m.content", "m.role")+`
-		   AND (m.content LIKE ? ESCAPE '\'
-		        OR tc.result_content LIKE ? ESCAPE '\'
-		        OR tre.content LIKE ? ESCAPE '\')
+		   AND (m.content LIKE ? ESCAPE '\' OR m.thinking_text LIKE ? ESCAPE '\' OR m.tool_result_text LIKE ? ESCAPE '\' OR tc.rendering LIKE ? ESCAPE '\' OR tc.tool_name LIKE ? ESCAPE '\' OR tc.input_json LIKE ? ESCAPE '\' OR tc.result_content LIKE ? ESCAPE '\' OR tre.content LIKE ? ESCAPE '\')
 		 ORDER BY m.ordinal ASC`,
-		sessionID, like, like, like,
+		sessionID, like, like, like, like, like, like, like, like,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("session search: %w", err)
 	}
 	defer rows.Close()
 
-	var ordinals []int
-	for rows.Next() {
-		var ord int
-		if err := rows.Scan(&ord); err != nil {
-			return nil, fmt.Errorf("scanning ordinal: %w", err)
-		}
-		ordinals = append(ordinals, ord)
-	}
-	return ordinals, rows.Err()
+	return ReadVisibleSearchOrdinals(rows, query)
 }
 
 // PrepareFTSQuery turns a user's raw search input into a well-formed SQLite

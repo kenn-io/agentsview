@@ -111,8 +111,7 @@
   }
   import type { DisplayItem } from "./lib/utils/display-items.js";
   import {
-    parseContent,
-    enrichSegments,
+    messageSegments,
   } from "./lib/utils/content-parser.js";
 
   let messageListRef:
@@ -248,15 +247,7 @@
           (m) => m.ordinal === ordinal,
         );
         if (msg && !thinkingVisible) {
-          const segs = enrichSegments(
-            parseContent(
-              msg.content,
-              msg.has_tool_use,
-              msg.id,
-              msg.content_length,
-            ),
-            msg.tool_calls,
-          );
+          const segs = messageSegments(msg);
           const hasThinkingSegment = segs.some(
             (s) => s.type === "thinking",
           );

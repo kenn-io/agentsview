@@ -167,7 +167,7 @@ func (s *Store) fetchHybridKeywordBatchPG(
 		ORDER BY COALESCE(s.ended_at, s.started_at, s.created_at) DESC NULLS LAST,
 		         m.session_id ASC, m.ordinal ASC
 		LIMIT %s OFFSET %s`,
-		contentPred, db.PostgresSystemPrefixSQL("m.content", "m.role"),
+		contentPred, db.PostgresSystemPrefixSQL("m.content", "m.role")+" AND "+db.DialogueEligibilitySQL("m", db.PostgresQueryDialect()),
 		scopeWhere, limitP, offsetP)
 
 	rows, err := s.pg.QueryContext(ctx, query, pb.args...)

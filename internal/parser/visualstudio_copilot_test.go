@@ -578,7 +578,7 @@ func TestParseVisualStudioCopilotTraceSession(t *testing.T) {
 	assert.Equal(t, "Run command: go test ./...", sess.FirstMessage)
 	require.Len(t, msgs, 1)
 	assert.True(t, msgs[0].HasToolUse)
-	assert.Contains(t, msgs[0].Content, "$ go test ./...")
+	assert.Empty(t, msgs[0].Content)
 	require.Len(t, msgs[0].ToolCalls, 1)
 	assert.Equal(t, "run_command_in_terminal",
 		msgs[0].ToolCalls[0].ToolName)
@@ -589,8 +589,8 @@ func TestParseVisualStudioCopilotTraceSession(t *testing.T) {
 		msgs[0].ToolCalls[0].InputJSON)
 	assert.Equal(t, "[Bash: run_command_in_terminal]\n$ go test ./...",
 		msgs[0].ToolCalls[0].Rendering,
-		"the returned call must carry the text that landed in the message")
-	assert.Contains(t, msgs[0].Content, msgs[0].ToolCalls[0].Rendering)
+		"the native call retains its display rendering")
+	assert.Equal(t, &ContentLayout{Version: 1, Blocks: []ContentBlock{{Kind: "tool_call"}}}, msgs[0].ContentLayout)
 	require.Len(t, msgs[0].ToolCalls[0].ResultEvents, 1)
 	assert.Equal(t, "completed",
 		msgs[0].ToolCalls[0].ResultEvents[0].Status)
@@ -623,10 +623,10 @@ func TestParseVisualStudioCopilotTraceSession_GetFileResult(t *testing.T) {
 	require.NotNil(t, sess)
 	assert.Equal(t, "Read file: Views\\MainWindow.xaml", sess.FirstMessage)
 	require.Len(t, msgs, 1)
-	assert.Contains(t, msgs[0].Content, "[Read: get_file]")
-	assert.Contains(t, msgs[0].Content, "Views\\MainWindow.xaml")
+	assert.Empty(t, msgs[0].Content)
 	require.Len(t, msgs[0].ToolCalls, 1)
 	call := msgs[0].ToolCalls[0]
+	assert.Equal(t, "[Read: get_file]\nViews\\MainWindow.xaml", call.Rendering)
 	assert.Equal(t, "get_file", call.ToolName)
 	assert.Equal(t, "Read", call.Category)
 	assert.Contains(t, call.InputJSON, `"file_path":"Views\\MainWindow.xaml"`)
@@ -1158,7 +1158,7 @@ func TestParseVisualStudioCopilotTraceSession_ChatOutputMessages(t *testing.T) {
 	assert.Equal(t, "Inspect the project and run tests.", msgs[0].Content)
 	assert.Equal(t, RoleAssistant, msgs[1].Role)
 	assert.True(t, msgs[1].HasToolUse)
-	assert.Contains(t, msgs[1].Content, "$ go test ./...")
+	assert.Equal(t, "I'll inspect the project and run the tests.", msgs[1].Content)
 	assert.Contains(t, msgs[1].Content,
 		"I'll inspect the project and run the tests.")
 	require.Len(t, msgs[1].ToolCalls, 1)

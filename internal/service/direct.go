@@ -957,13 +957,21 @@ func (b *directBackend) enrichContentContext(
 // parse-time field (json:"-") that GetMessagesWindow never populates, so it
 // never reaches a transport response.
 func redactMessageSecrets(m db.Message) db.Message {
-	m.Content = secrets.Redact(m.Content)
-	m.ThinkingText = secrets.Redact(m.ThinkingText)
+	if err := m.TransformBodySources(func(_, text string) (string, func(int) int) {
+		return secrets.RedactWithOffsets(text)
+	}); err != nil {
+		// Keep invalid native provenance so consumers report it explicitly,
+		// while masking each complete source without relying on its ranges.
+		m.Content = secrets.Redact(m.Content)
+		m.ThinkingText = secrets.Redact(m.ThinkingText)
+		m.ToolResultText = secrets.Redact(m.ToolResultText)
+	}
 	if len(m.ToolCalls) == 0 {
 		return m
 	}
 	toolCalls := make([]db.ToolCall, len(m.ToolCalls))
 	for i, tc := range m.ToolCalls {
+		tc.Rendering = secrets.Redact(tc.Rendering)
 		tc.InputJSON = secrets.Redact(tc.InputJSON)
 		tc.ResultContent = secrets.Redact(tc.ResultContent)
 		if len(tc.ResultEvents) > 0 {

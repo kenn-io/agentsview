@@ -196,21 +196,21 @@ func TestParseOpenClawSession_OrphanToolResult(t *testing.T) {
 		`{"type":"session","version":3,"id":"orphan-tr","timestamp":"2026-02-25T10:00:00Z","cwd":"/tmp"}`,
 		`{"type":"message","id":"m1","timestamp":"2026-02-25T10:00:01Z","message":{"role":"user","content":[{"type":"text","text":"hello"}],"timestamp":"2026-02-25T10:00:01Z"}}`,
 		`{"type":"message","id":"m2","timestamp":"2026-02-25T10:00:02Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu1","name":"read","input":{}}],"timestamp":"2026-02-25T10:00:02Z"}}`,
-		// toolResult with empty toolCallId — should be dropped
+		// A missing call ID leaves the native output on its own message.
 		`{"type":"message","id":"m3","timestamp":"2026-02-25T10:00:03Z","message":{"role":"toolResult","toolCallId":"","toolName":"read","content":[{"type":"text","text":"orphan result"}],"isError":false,"timestamp":"2026-02-25T10:00:03Z"}}`,
 		`{"type":"message","id":"m4","timestamp":"2026-02-25T10:00:04Z","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"timestamp":"2026-02-25T10:00:04Z"}}`,
 	)
 
 	sess, msgs, err := parseOpenClawSessionForTest(t, path, "", "test")
 	require.NoError(t, err)
-	// 3 messages: user, assistant (tool_use), assistant (text).
-	// The orphan toolResult is skipped entirely.
-	require.Len(t, msgs, 3, "expected 3 messages, got %d")
-	assert.Equal(t, 3, sess.MessageCount, "MessageCount = %d, want 3")
-	assert.Equal(t, 1, sess.UserMessageCount, "UserMessageCount = %d, want 1")
-	for _, m := range msgs {
-		assert.False(t, m.Role == RoleUser && m.Content == "", "blank user message leaked through")
-	}
+	require.Len(t, msgs, 4)
+	assert.Equal(t, 4, sess.MessageCount)
+	assert.Equal(t, 1, sess.UserMessageCount)
+	assert.Equal(t, RoleUser, msgs[2].Role)
+	assert.Empty(t, msgs[2].Content)
+	assert.Equal(t, "orphan result", msgs[2].ToolResultText)
+	assert.Equal(t, SourceSubtypeToolResult, msgs[2].SourceSubtype)
+	assert.Equal(t, "done", msgs[3].Content)
 }
 
 func TestParseOpenClawSession_EmptyFile(t *testing.T) {

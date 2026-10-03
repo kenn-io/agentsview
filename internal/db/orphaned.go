@@ -1901,12 +1901,23 @@ func reconcileTranscriptRevisionsTx(
 		oldReasoningEffort = "''"
 	}
 
+	oldOutput, oldLayout, oldRendering := "tool_result_text", "content_layout", "tc.rendering"
+	if !oldDBHasColumn(ctx, tx, "messages", "tool_result_text") {
+		oldOutput = "''"
+	}
+	if !oldDBHasColumn(ctx, tx, "messages", "content_layout") {
+		oldLayout = "NULL"
+	}
+	if !oldDBHasColumn(ctx, tx, "tool_calls", "rendering") {
+		oldRendering = "''"
+	}
+
 	_, err := tx.ExecContext(ctx, fmt.Sprintf(`
 		UPDATE main.sessions AS current
 		SET transcript_revision = (
 			SELECT CASE WHEN
 				NOT EXISTS (
-					SELECT ordinal, role, content, thinking_text, timestamp,
+					SELECT ordinal, role, content, thinking_text, tool_result_text, content_layout, timestamp,
 						 has_thinking, has_tool_use, is_system, model, reasoning_effort, token_usage,
 						claude_message_id, claude_request_id, source_uuid,
 						context_tokens, output_tokens, has_context_tokens,
@@ -1914,7 +1925,7 @@ func reconcileTranscriptRevisionsTx(
 						is_compact_boundary
 					FROM main.messages WHERE session_id = current.id
 					EXCEPT
-					SELECT ordinal, role, content, thinking_text, timestamp,
+					SELECT ordinal, role, content, thinking_text, %s, %s, timestamp,
 						 has_thinking, has_tool_use, is_system, model, %s, token_usage,
 						claude_message_id, claude_request_id, source_uuid,
 						context_tokens, output_tokens, has_context_tokens,
@@ -1923,7 +1934,7 @@ func reconcileTranscriptRevisionsTx(
 					FROM old_db.messages WHERE session_id = current.id
 				)
 				AND NOT EXISTS (
-					SELECT ordinal, role, content, thinking_text, timestamp,
+					SELECT ordinal, role, content, thinking_text, %s, %s, timestamp,
 						 has_thinking, has_tool_use, is_system, model, %s, token_usage,
 						claude_message_id, claude_request_id, source_uuid,
 						context_tokens, output_tokens, has_context_tokens,
@@ -1931,7 +1942,7 @@ func reconcileTranscriptRevisionsTx(
 						is_compact_boundary
 					FROM old_db.messages WHERE session_id = current.id
 					EXCEPT
-					SELECT ordinal, role, content, thinking_text, timestamp,
+					SELECT ordinal, role, content, thinking_text, tool_result_text, content_layout, timestamp,
 						 has_thinking, has_tool_use, is_system, model, reasoning_effort, token_usage,
 						claude_message_id, claude_request_id, source_uuid,
 						context_tokens, output_tokens, has_context_tokens,
@@ -1942,14 +1953,14 @@ func reconcileTranscriptRevisionsTx(
 				AND NOT EXISTS (
 					SELECT m.ordinal, tc.call_index, tc.tool_name, tc.category,
 						tc.tool_use_id, tc.input_json, tc.skill_name,
-						tc.result_content, tc.subagent_session_id, tc.file_path
+						tc.result_content, tc.subagent_session_id, tc.file_path, tc.rendering
 					FROM main.tool_calls tc
 					JOIN main.messages m ON m.id = tc.message_id
 					WHERE tc.session_id = current.id
 					EXCEPT
 					SELECT m.ordinal, tc.call_index, tc.tool_name, tc.category,
 						tc.tool_use_id, tc.input_json, tc.skill_name,
-						tc.result_content, tc.subagent_session_id, tc.file_path
+						tc.result_content, tc.subagent_session_id, tc.file_path, %s
 					FROM old_db.tool_calls tc
 					JOIN old_db.messages m ON m.id = tc.message_id
 					WHERE tc.session_id = current.id
@@ -1957,14 +1968,14 @@ func reconcileTranscriptRevisionsTx(
 				AND NOT EXISTS (
 					SELECT m.ordinal, tc.call_index, tc.tool_name, tc.category,
 						tc.tool_use_id, tc.input_json, tc.skill_name,
-						tc.result_content, tc.subagent_session_id, tc.file_path
+						tc.result_content, tc.subagent_session_id, tc.file_path, %s
 					FROM old_db.tool_calls tc
 					JOIN old_db.messages m ON m.id = tc.message_id
 					WHERE tc.session_id = current.id
 					EXCEPT
 					SELECT m.ordinal, tc.call_index, tc.tool_name, tc.category,
 						tc.tool_use_id, tc.input_json, tc.skill_name,
-						tc.result_content, tc.subagent_session_id, tc.file_path
+						tc.result_content, tc.subagent_session_id, tc.file_path, tc.rendering
 					FROM main.tool_calls tc
 					JOIN main.messages m ON m.id = tc.message_id
 					WHERE tc.session_id = current.id
@@ -1999,7 +2010,8 @@ func reconcileTranscriptRevisionsTx(
 		)
 		WHERE EXISTS (
 			SELECT 1 FROM old_db.sessions AS old WHERE old.id = current.id
-		)`, oldReasoningEffort, oldReasoningEffort))
+		)`, oldOutput, oldLayout, oldReasoningEffort,
+		oldOutput, oldLayout, oldReasoningEffort, oldRendering, oldRendering))
 	return err
 }
 
@@ -2040,7 +2052,7 @@ func copySessionDataForIDs(
 		"source_type", "source_subtype", "prompt_source",
 		"source_uuid", "source_parent_uuid",
 		"is_sidechain", "is_compact_boundary",
-		"thinking_text",
+		"thinking_text", "tool_result_text", "content_layout",
 	} {
 		if oldDBHasColumn(ctx, tx, "messages", c) {
 			msgCols.WriteString(", " + c)
@@ -2101,6 +2113,10 @@ func copySessionDataForIDs(
 	if oldDBHasColumn(ctx, tx, "tool_calls", "result_content") {
 		toolCallCols = append(toolCallCols, "result_content")
 		toolCallSelect = append(toolCallSelect, "otc.result_content")
+	}
+	if oldDBHasColumn(ctx, tx, "tool_calls", "rendering") {
+		toolCallCols = append(toolCallCols, "rendering")
+		toolCallSelect = append(toolCallSelect, "otc.rendering")
 	}
 	toolCallCols = append(toolCallCols, "subagent_session_id")
 	toolCallSelect = append(toolCallSelect, "otc.subagent_session_id")
@@ -2234,12 +2250,17 @@ func removeGeneratedIdentitySnapshotsWithoutSource(
 // dataVersion 59. Sources between the two versions only pay the
 // single-column input pass.
 //
+// sanitizedNativeBodySourceDataVersion covers native output, tool rendering,
+// and span-aware body sanitation. Older sanitized legacy bodies keep their
+// original watermark; newly stored native fields use this separate pass.
+//
 // Bump the relevant constant to the then-current dataVersion if
 // SanitizeUTF8 ever gains rules that must apply to already-stored
 // rows.
 const (
-	sanitizedSourceDataVersion      = 58
-	sanitizedInputSourceDataVersion = 59
+	sanitizedSourceDataVersion           = 58
+	sanitizedInputSourceDataVersion      = 59
+	sanitizedNativeBodySourceDataVersion = 114
 )
 
 // projectIdentitySourceSnapshotDataVersion is the first archive version whose
@@ -2276,11 +2297,17 @@ func sanitizeCopiedSessionContent(
 			return err
 		}
 	}
+	if sourceVersion < sanitizedNativeBodySourceDataVersion {
+		if err := sanitizeCopiedMessageContent(ctx, tx, tempIDsTable,
+			sourceVersion < sanitizedSourceDataVersion); err != nil {
+			return err
+		}
+		if err := sanitizeCopiedToolCallRendering(ctx, tx, tempIDsTable); err != nil {
+			return err
+		}
+	}
 	if sourceVersion >= sanitizedSourceDataVersion {
 		return nil
-	}
-	if err := sanitizeCopiedMessageContent(ctx, tx, tempIDsTable); err != nil {
-		return err
 	}
 	if err := sanitizeCopiedToolCallResults(ctx, tx, tempIDsTable); err != nil {
 		return err
@@ -2294,52 +2321,128 @@ type copiedTextUpdate struct {
 	length  int
 }
 
+// Keep copied payloads bounded while preserving native part boundaries. Sources
+// already covered by the older sanitizer need only the newly stored fields.
 func sanitizeCopiedMessageContent(
 	ctx context.Context,
 	tx *sql.Tx,
 	tempIDsTable string,
+	includeLegacy bool,
 ) error {
-	rows, err := tx.QueryContext(ctx,
-		`SELECT id, content, content_length
-		 FROM main.messages
-		 WHERE session_id IN (SELECT id FROM `+tempIDsTable+`)`,
-	)
-	if err != nil {
-		return fmt.Errorf("querying copied messages: %w", err)
+	predicate := ""
+	if !includeLegacy {
+		predicate = " AND (content_layout IS NOT NULL OR tool_result_text <> '')"
 	}
-	defer rows.Close()
+	var lastID int64
+	for {
+		rows, err := tx.QueryContext(ctx, `
+			SELECT m.id, m.role, m.content, m.thinking_text, m.tool_result_text,
+				m.content_layout, m.content_length, m.has_thinking, m.has_tool_use,
+				(SELECT COUNT(*) FROM main.tool_calls tc WHERE tc.message_id=m.id)
+			FROM main.messages m
+			WHERE m.session_id IN (SELECT id FROM `+tempIDsTable+`)
+				AND m.id > ?`+predicate+` ORDER BY m.id LIMIT 128`, lastID)
+		if err != nil {
+			return fmt.Errorf("querying copied messages: %w", err)
+		}
+		var updates []Message
+		count := 0
+		scanErr := func() error {
+			defer rows.Close()
+			for rows.Next() {
+				var m Message
+				var rawLayout sql.NullString
+				var callCount int
+				if err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.ThinkingText,
+					&m.ToolResultText, &rawLayout, &m.ContentLength,
+					&m.HasThinking, &m.HasToolUse, &callCount); err != nil {
+					return fmt.Errorf("scanning copied message: %w", err)
+				}
+				lastID = m.ID
+				count++
+				m.SetContentLayout(DecodeStoredContentLayout(rawLayout.String))
+				// Layout references use positional calls. Only their count is needed;
+				// result payloads stay outside this bounded body sanitation pass.
+				m.ToolCalls = make([]ToolCall, callCount)
+				if err := m.ValidateContentLayout(); err != nil {
+					return fmt.Errorf("copied message %d: %w", m.ID, err)
+				}
+				beforeContent, beforeThinking, beforeOutput := m.Content, m.ThinkingText, m.ToolResultText
+				beforeLength := m.ContentLength
+				sanitizeMessageBody(&m)
+				if beforeContent != m.Content || beforeThinking != m.ThinkingText ||
+					beforeOutput != m.ToolResultText || beforeLength != m.ContentLength ||
+					rawLayout.String != ContentLayoutJSON(m.ContentLayout) {
+					updates = append(updates, m)
+				}
+			}
+			return rows.Err()
+		}()
+		rowErr := scanErr
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("closing copied messages: %w", err)
+		}
+		if rowErr != nil {
+			return fmt.Errorf("iterating copied messages: %w", rowErr)
+		}
+		for _, m := range updates {
+			if _, err := tx.ExecContext(ctx, `UPDATE main.messages SET
+				content=?, thinking_text=?, tool_result_text=?, content_layout=?, content_length=?
+				WHERE id=?`, m.Content, m.ThinkingText, m.ToolResultText,
+				storedContentLayout(m.ContentLayout), m.ContentLength, m.ID); err != nil {
+				return fmt.Errorf("updating copied message %d: %w", m.ID, err)
+			}
+		}
+		if count < 128 {
+			return nil
+		}
+	}
+}
 
-	var updates []copiedTextUpdate
-	for rows.Next() {
-		var row copiedTextUpdate
-		var storedLength int
-		if err := rows.Scan(&row.id, &row.content, &storedLength); err != nil {
-			return fmt.Errorf("scanning copied message: %w", err)
+func sanitizeCopiedToolCallRendering(ctx context.Context, tx *sql.Tx, tempIDsTable string) error {
+	var lastID int64
+	for {
+		rows, err := tx.QueryContext(ctx, `SELECT id, rendering FROM main.tool_calls
+			WHERE session_id IN (SELECT id FROM `+tempIDsTable+`)
+			AND id > ? AND rendering <> '' ORDER BY id LIMIT 128`, lastID)
+		if err != nil {
+			return fmt.Errorf("querying copied tool renderings: %w", err)
 		}
-		sanitized := SanitizeUTF8(row.content)
-		if sanitized == row.content {
-			continue
+		var updates []copiedTextUpdate
+		count := 0
+		scanErr := func() error {
+			defer rows.Close()
+			for rows.Next() {
+				var row copiedTextUpdate
+				if err := rows.Scan(&row.id, &row.content); err != nil {
+					return fmt.Errorf("scanning copied tool rendering: %w", err)
+				}
+				lastID = row.id
+				count++
+				sanitized := SanitizeUTF8(row.content)
+				if sanitized != row.content {
+					row.content = sanitized
+					updates = append(updates, row)
+				}
+			}
+			return rows.Err()
+		}()
+		rowErr := scanErr
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("closing copied tool renderings: %w", err)
 		}
-		row.length = sanitizedCopiedTextLength(
-			row.content, sanitized, storedLength,
-		)
-		row.content = sanitized
-		updates = append(updates, row)
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterating copied messages: %w", err)
-	}
-	for _, row := range updates {
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE main.messages
-			 SET content = ?, content_length = ?
-			 WHERE id = ?`,
-			row.content, row.length, row.id,
-		); err != nil {
-			return fmt.Errorf("updating copied message %d: %w", row.id, err)
+		if rowErr != nil {
+			return fmt.Errorf("iterating copied tool renderings: %w", rowErr)
+		}
+		for _, row := range updates {
+			if _, err := tx.ExecContext(ctx, `UPDATE main.tool_calls SET rendering=? WHERE id=?`, row.content, row.id); err != nil {
+				return fmt.Errorf("updating copied tool rendering %d: %w", row.id, err)
+			}
+		}
+		if count < 128 {
+			return nil
 		}
 	}
-	return nil
 }
 
 type copiedNullableTextUpdate struct {

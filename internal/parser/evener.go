@@ -66,8 +66,9 @@ type evenerContent struct {
 	Kind     string `json:"kind"`
 	Text     string `json:"text"`
 	Thinking *struct {
-		Text    string   `json:"text"`
-		Summary []string `json:"summary"`
+		Text     string   `json:"text"`
+		Summary  []string `json:"summary"`
+		Redacted bool     `json:"redacted"`
 	} `json:"thinking"`
 	Image    jsontext.Value `json:"image"`
 	Audio    jsontext.Value `json:"audio"`
@@ -167,11 +168,13 @@ func parseEvenerSession(ctx context.Context, path, machine string) (*ParsedSessi
 		if content == "" || (initial.kind == "agent_tasks" && (content == "null" || content == "[]")) {
 			continue
 		}
+		var builder MessageContentBuilder
+		builder.AddText(content)
 		messages = append(messages, ParsedMessage{
 			Ordinal: len(messages), Role: RoleSystem, IsSystem: true,
 			Content: content, ContentLength: len(content), Timestamp: h.CreatedAt,
 			SourceType: "header", SourceSubtype: initial.kind,
-		})
+		}.withBody(builder.Message()))
 	}
 	type callLocation struct{ message, call int }
 	calls := map[string]callLocation{}
@@ -399,11 +402,21 @@ func evenerMessage(entry evenerEntry, ordinal int) ParsedMessage {
 		msg.IsCompactBoundary = true
 	}
 	msg.IsSystem = msg.Role == RoleSystem
-	var content, thinking []string
+	var content []string
+	var builder MessageContentBuilder
+	addText := func(text string) {
+		content = append(content, text)
+		if msg.Role == RoleTool {
+			raw, _ := json.Marshal(text)
+			builder.AddToolResult(ParsedToolResult{ContentRaw: string(raw), ContentLength: len(text)})
+		} else {
+			builder.AddText(text)
+		}
+	}
 	for _, part := range turn.Message.Content {
 		switch part.Kind {
 		case "text":
-			content = append(content, part.Text)
+			addText(part.Text)
 		case "thinking", "redacted_thinking":
 			msg.HasThinking = true
 			text := "[thinking unavailable]"
@@ -415,22 +428,32 @@ func evenerMessage(entry evenerEntry, ordinal int) ParsedMessage {
 					text = readable
 				}
 			}
-			thinking = append(thinking, text)
 			content = append(content, "[Thinking]\n"+text+"\n[/Thinking]")
+			visible := ""
+			if part.Kind != "redacted_thinking" && part.Thinking != nil && !part.Thinking.Redacted {
+				visible = strings.TrimSpace(strings.Join(append([]string{part.Thinking.Text}, part.Thinking.Summary...), "\n"))
+			}
+			builder.addThinking(visible, "\n")
 		case "image", "audio":
-			content = append(content, "["+part.Kind+"]")
+			addText("[" + part.Kind + "]")
 		case "document":
 			label := "document"
 			if part.Document != nil && part.Document.FileName != "" {
 				label += " " + part.Document.FileName
 			}
-			content = append(content, "["+label+"]")
+			addText("[" + label + "]")
 		case "web_search":
 			text := "[web search]"
 			if part.WebSearch != nil && part.WebSearch.Query != "" {
 				text += " " + part.WebSearch.Query
 			}
 			content = append(content, text)
+			query := ""
+			if part.WebSearch != nil {
+				query = part.WebSearch.Query
+			}
+			input, _ := json.Marshal(map[string]string{"query": query})
+			builder.AddToolCall(ParsedToolCall{ToolName: "web_search", Category: NormalizeToolCategory("web_search"), InputJSON: string(input), Rendering: text})
 		case "tool_call":
 			if part.ToolCall != nil {
 				call := part.ToolCall
@@ -438,39 +461,44 @@ func evenerMessage(entry evenerEntry, ordinal int) ParsedMessage {
 				if len(args) == 0 {
 					args = call.ParsedArguments
 				}
-				msg.ToolCalls = append(msg.ToolCalls, ParsedToolCall{ToolUseID: call.ID, ToolName: call.Name, Category: NormalizeToolCategory(call.Name), InputJSON: string(args)})
+				builder.AddToolCall(ParsedToolCall{ToolUseID: call.ID, ToolName: call.Name, Category: NormalizeToolCategory(call.Name), InputJSON: string(args), Rendering: "[Tool: " + call.Name + "]\n"})
 				content = append(content, "[Tool: "+call.Name+"]\n")
 			}
 		case "tool_result":
 			if part.ToolResult != nil {
 				text := evenerResultText(part)
 				raw, _ := json.Marshal(text)
-				msg.ToolResults = append(msg.ToolResults, ParsedToolResult{ToolUseID: part.ToolResult.ToolCallID, ContentLength: len(text), ContentRaw: string(raw)})
+				builder.AddToolResult(ParsedToolResult{ToolUseID: part.ToolResult.ToolCallID, ContentLength: len(text), ContentRaw: string(raw)})
 				// Result bodies must pass through the tool-category storage filter.
-				msg.ContentLength += len(text)
+				msg.ContentLength += sanitizedWorkLength(text)
 			}
 		default:
-			content = append(content, "["+part.Kind+"] "+part.Text)
+			addText("[" + part.Kind + "] " + part.Text)
 		}
 	}
 	for _, detail := range []jsontext.Value{turn.Error, turn.Hook, turn.AttentionResolution} {
 		if len(detail) > 0 && !bytes.Equal(detail, []byte("null")) {
-			content = append(content, string(detail))
+			addText(string(detail))
 		}
 	}
 	switch turn.Kind {
 	case "USER_INPUT", "STEERING", "ASSISTANT", "TOOL", "TOOL_RESULTS", "SYSTEM", "CHECKPOINT", "SUMMARY", "MODEL_SWITCH", "TURN_FAILURE", "HOOK_COMPLETED", "ENVIRONMENT", "ATTENTION_RESOLUTION":
 	default:
-		content = append(content, "["+turn.Kind+"] "+string(entry.raw))
+		addText("[" + turn.Kind + "] " + string(entry.raw))
 	}
-	msg.Content = strings.TrimSpace(strings.Join(content, "\n"))
-	if msg.Content == "" && !msg.HasThinking && len(msg.ToolCalls) == 0 && len(msg.ToolResults) == 0 {
-		msg.Content = "[" + turn.Kind + "]"
+	legacyContent := strings.TrimSpace(strings.Join(content, "\n"))
+	body := builder.Message()
+	if legacyContent == "" && !body.hasNativeBody() {
+		legacyContent = "[" + turn.Kind + "]"
+		if msg.Role != RoleAssistant {
+			builder.AddText(legacyContent)
+			body = builder.Message()
+		}
 	}
-	msg.ThinkingText = strings.TrimSpace(strings.Join(thinking, "\n"))
-	msg.HasToolUse = len(msg.ToolCalls) > 0
-	msg.ContentLength += len(msg.Content)
-	return msg
+	body.trimDialogue()
+	body.ContentLength = msg.ContentLength + sanitizedWorkLength(legacyContent)
+	msg.Content = body.Content
+	return msg.withBody(body)
 }
 
 func evenerResultText(part evenerContent) string {

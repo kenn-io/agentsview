@@ -18,7 +18,7 @@ export type GetApiV1SearchContentParams = {
    */
   scope?: GetApiV1SearchContentScope;
   /**
-   * Comma-separated content sources
+   * Comma-separated sources: messages, thinking, tool_input, tool_result; messages searches proven dialogue
    */
   in?: string;
   /**

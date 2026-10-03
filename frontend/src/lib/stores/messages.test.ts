@@ -108,6 +108,8 @@ function makeSession(id: string, messageCount: number): Session {
 
 function makeMessage(ordinal: number): Message {
   return {
+    content_layout: null,
+    tool_result_text: "",
     id: ordinal + 1,
     session_id: "s1",
     ordinal,
@@ -526,6 +528,51 @@ describe("MessagesStore", () => {
     expect(messages.activeSessionToken).toBe("new");
     expect(messages.activeSessionUnreadOrdinal).toBeNull();
   });
+
+  it.each(["thinking", "output", "layout", "rendering"])(
+    "publishes a native %s rewrite with unchanged dialogue and row IDs",
+    async (owner) => {
+      const native: Message = {
+        ...makeMessage(1),
+        content: "same",
+        thinking_text: "alpha",
+        tool_result_text: "alpha",
+        content_layout: {
+          version: 1,
+          blocks: [
+            { kind: "text", start: 0, end: 4, call_index: 0 },
+            { kind: "thinking", start: 0, end: 5, call_index: 0 },
+            { kind: "tool_call", start: 0, end: 0, call_index: 0 },
+            { kind: "tool_result", start: 0, end: 5, call_index: 0 },
+          ],
+        },
+        tool_calls: [{ tool_name: "Read", category: "Read", rendering: "alpha" }],
+      };
+      vi.mocked(api.getSession).mockResolvedValue({
+        ...makeSession("s1", 2),
+        transcript_revision: "old",
+      });
+      vi.mocked(api.getMessages).mockResolvedValueOnce(
+        makeMessagesResponse([makeMessage(0), native]),
+      );
+      await messages.loadSession("s1");
+      const revised = structuredClone(native);
+      if (owner === "thinking") revised.thinking_text = "omega";
+      if (owner === "output") revised.tool_result_text = "omega";
+      if (owner === "rendering") revised.tool_calls![0]!.rendering = "omega";
+      if (owner === "layout") revised.content_layout!.blocks.reverse();
+      vi.mocked(api.getSession).mockResolvedValueOnce({
+        ...makeSession("s1", 2),
+        transcript_revision: "new",
+      });
+      vi.mocked(api.getMessages).mockResolvedValueOnce(
+        makeMessagesResponse([makeMessage(0), revised]),
+      );
+      await messages.reload();
+      expect(messages.activeSessionToken).toBe("new");
+      expect(messages.activeSessionUnreadOrdinal).toBe(1);
+    },
+  );
 
   it("keeps a revised token pending until progressively loaded history is visible", async () => {
     const count = 4_000;

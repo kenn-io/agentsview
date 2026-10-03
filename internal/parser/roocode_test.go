@@ -231,7 +231,8 @@ func TestParseRooCodeSessionWithReasoning(t *testing.T) {
 	assert.Equal(t, 1, sess.UserMessageCount)
 	assert.Equal(t, RoleUser, msgs[0].Role)
 	assert.True(t, msgs[1].HasThinking, "message [1] should be thinking")
-	assert.Contains(t, msgs[1].Content, "I need to think about this...")
+	assert.Empty(t, msgs[1].Content)
+	assert.Equal(t, "I need to think about this...", msgs[1].ThinkingText)
 	assert.Equal(t, RoleAssistant, msgs[2].Role)
 }
 
@@ -834,8 +835,9 @@ func TestParseRooCodeSessionCommandOutput(t *testing.T) {
 	require.Len(t, msgs[1].ToolResults, 1)
 	assert.Equal(t, len("test output: all tests passed"),
 		msgs[1].ToolResults[0].ContentLength)
-	assert.Equal(t, "test output: all tests passed",
+	assert.Equal(t, `"test output: all tests passed"`,
 		msgs[1].ToolResults[0].ContentRaw)
+	assert.Equal(t, "test output: all tests passed", msgs[1].ToolResultText)
 }
 
 func TestParseRooCodeSessionEmptyCommandOutputCompletes(t *testing.T) {
@@ -1134,8 +1136,8 @@ func TestParseRooCodeSessionReasoningSay(t *testing.T) {
 	// say="reasoning" should produce a thinking block.
 	assert.True(t, msgs[1].HasThinking,
 		"say=reasoning message should be treated as thinking")
-	assert.Contains(t, msgs[1].Content,
-		"I need to understand the code structure first.")
+	assert.Empty(t, msgs[1].Content)
+	assert.Equal(t, "I need to understand the code structure first.", msgs[1].ThinkingText)
 
 	// Model should be set on the thinking message.
 	assert.Equal(t, "openai/gpt-5", msgs[1].Model)
@@ -2329,7 +2331,8 @@ func TestParseRooCodeSessionMultiPartCommandOutput(t *testing.T) {
 	assert.Empty(t, msgs[2].ToolCalls[0].ResultEvents)
 
 	// The post-stream chunk fell back to a standalone message.
-	assert.Equal(t, "stray late chunk", msgs[3].Content)
+	assert.Empty(t, msgs[3].Content)
+	assert.Equal(t, "stray late chunk", msgs[3].ToolResultText)
 	assert.True(t, msgs[3].IsSystem)
 }
 
@@ -3698,7 +3701,8 @@ func TestParseRooCodeSessionSubtaskResultNotPairedToFailedNewTask(t *testing.T) 
 	// The subtask_result falls back to a standalone system message.
 	last := msgs[len(msgs)-1]
 	assert.Equal(t, RoleSystem, last.Role)
-	assert.Equal(t, "Child finished the work", last.Content)
+	assert.Empty(t, last.Content)
+	assert.Equal(t, "Child finished the work", last.ToolResultText)
 }
 
 func TestParseRooCodeSessionChildIDsSkipFailedNewTask(t *testing.T) {

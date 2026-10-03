@@ -17,7 +17,7 @@ const messageCols = `id, session_id, ordinal, role, content, thinking_text,
 	provider_id,
 	has_context_tokens, has_output_tokens, claude_message_id,
 	claude_request_id, source_type, source_subtype, prompt_source, source_uuid,
-	source_parent_uuid, is_sidechain, is_compact_boundary`
+	source_parent_uuid, is_sidechain, is_compact_boundary, tool_result_text, content_layout`
 
 func (s *Store) GetMessages(
 	ctx context.Context, sessionID string, from, limit int, asc bool,
@@ -189,6 +189,7 @@ func scanMessages(rows *sql.Rows) ([]db.Message, error) {
 		var m db.Message
 		var ts any
 		var tokenUsage string
+		var contentLayout sql.NullString
 		if err := rows.Scan(
 			&m.ID, &m.SessionID, &m.Ordinal, &m.Role, &m.Content,
 			&m.ThinkingText, &ts, &m.HasThinking, &m.HasToolUse,
@@ -199,11 +200,13 @@ func scanMessages(rows *sql.Rows) ([]db.Message, error) {
 			&m.ClaudeMessageID, &m.ClaudeRequestID,
 			&m.SourceType, &m.SourceSubtype, &m.PromptSource, &m.SourceUUID,
 			&m.SourceParentUUID, &m.IsSidechain, &m.IsCompactBoundary,
+			&m.ToolResultText, &contentLayout,
 		); err != nil {
 			return nil, fmt.Errorf("scanning clickhouse message: %w", err)
 		}
 		m.Timestamp = formatDBTime(ts)
 		m.TokenUsage = db.DecodeStoredTokenUsage(tokenUsage)
+		m.SetContentLayout(db.DecodeStoredContentLayout(contentLayout.String))
 		msgs = append(msgs, m)
 	}
 	return msgs, rows.Err()
@@ -224,7 +227,7 @@ func (s *Store) attachToolCalls(ctx context.Context, msgs []db.Message) error {
 	rows, err := s.queryContext(ctx, `
 		SELECT message_ordinal, call_index, tool_name, category,
 			tool_use_id, input_json, skill_name, result_content_length,
-			result_content, subagent_session_id, file_path
+			result_content, subagent_session_id, file_path, rendering
 		FROM tool_calls
 		WHERE session_id = ?
 		ORDER BY message_ordinal, call_index`, sessionID)
@@ -238,7 +241,7 @@ func (s *Store) attachToolCalls(ctx context.Context, msgs []db.Message) error {
 		if err := rows.Scan(&ordinal, &callIndex, &tc.ToolName,
 			&tc.Category, &tc.ToolUseID, &tc.InputJSON,
 			&tc.SkillName, &tc.ResultContentLength,
-			&tc.ResultContent, &tc.SubagentSessionID, &tc.FilePath); err != nil {
+			&tc.ResultContent, &tc.SubagentSessionID, &tc.FilePath, &tc.Rendering); err != nil {
 			return fmt.Errorf("scanning clickhouse tool call: %w", err)
 		}
 		tc.CallIndex = callIndex

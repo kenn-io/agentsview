@@ -740,8 +740,9 @@ func TestCopySkipsSanitizeForSanitizedSource(t *testing.T) {
 				srcDB := testDBAtPath(t, srcPath, "src")
 				insertSession(t, srcDB, "sess", "proj")
 				insertMessages(t, srcDB, userMsg("sess", 0, "clean"))
+				// These older archive versions had no native layout provenance.
 				_, err := srcDB.getWriter().ExecContext(ctx,
-					`UPDATE messages SET content = ? WHERE session_id = ?`,
+					`UPDATE messages SET content = ?, content_layout = NULL WHERE session_id = ?`,
 					rawContent, "sess",
 				)
 				require.NoError(t, err, "plant raw content")

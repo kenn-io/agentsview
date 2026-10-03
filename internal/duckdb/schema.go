@@ -19,8 +19,10 @@ import (
 // reasoning effort to messages. v15 adds explicit session-project
 // assignment state. v16 rebuilds after SQLite data version 111 rewrote
 // stored Devin source identities; pre-111 mirrors would otherwise keep
-// serving bare ids that deduplicate across sessions.
-const SchemaVersion = 16
+// serving bare ids that deduplicate across sessions. v17 adds native body
+// layouts, standalone output, and tool renderings. v18 adds the complete
+// transcript palette corpus.
+const SchemaVersion = 18
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 
@@ -295,6 +297,9 @@ var mirrorTables = []tableSpec{
 			source_parent_uuid TEXT NOT NULL DEFAULT '',
 			is_sidechain BOOLEAN NOT NULL DEFAULT FALSE,
 			is_compact_boundary BOOLEAN NOT NULL DEFAULT FALSE,
+			tool_result_text TEXT NOT NULL DEFAULT '',
+			content_layout TEXT,
+			palette_text TEXT,
 			UNIQUE(session_id, ordinal)
 		)`,
 		columns: []columnSpec{
@@ -326,6 +331,9 @@ var mirrorTables = []tableSpec{
 			{"source_parent_uuid", "source_parent_uuid TEXT NOT NULL DEFAULT ''"},
 			{"is_sidechain", "is_sidechain BOOLEAN NOT NULL DEFAULT FALSE"},
 			{"is_compact_boundary", "is_compact_boundary BOOLEAN NOT NULL DEFAULT FALSE"},
+			{"tool_result_text", "tool_result_text TEXT NOT NULL DEFAULT ''"},
+			{"content_layout", "content_layout TEXT"},
+			{"palette_text", "palette_text TEXT"},
 		},
 		indexes: []string{
 			"CREATE INDEX IF NOT EXISTS idx_messages_session_ordinal ON messages(session_id, ordinal)",
@@ -623,7 +631,8 @@ var mirrorTables = []tableSpec{
 			result_content_length INTEGER,
 			result_content TEXT,
 			subagent_session_id TEXT,
-			file_path TEXT
+			file_path TEXT,
+			rendering TEXT NOT NULL DEFAULT ''
 		)`,
 		columns: []columnSpec{
 			{"id", "id BIGINT"},
@@ -639,6 +648,7 @@ var mirrorTables = []tableSpec{
 			{"result_content", "result_content TEXT"},
 			{"subagent_session_id", "subagent_session_id TEXT"},
 			{"file_path", "file_path TEXT"},
+			{"rendering", "rendering TEXT NOT NULL DEFAULT ''"},
 		},
 		indexes: []string{
 			"CREATE UNIQUE INDEX IF NOT EXISTS idx_tool_calls_dedup ON tool_calls(session_id, message_id, call_index)",

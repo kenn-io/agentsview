@@ -160,24 +160,24 @@ func TestExtractTextContent(t *testing.T) {
 		{
 			"thinking block",
 			`[{"type":"thinking","thinking":"Let me think..."}]`,
-			"[Thinking]\nLet me think...\n[/Thinking]", true, false, nil,
+			"", true, false, nil,
 		},
 		{
 			"tool_use block",
 			`[{"type":"tool_use","name":"Read","input":{"file_path":"test.go"}}]`,
-			"[Read: test.go]", false, true,
+			"", false, true,
 			[]ParsedToolCall{{ToolName: "Read", Category: "Read"}},
 		},
 		{
 			"mixed blocks",
 			`[{"type":"text","text":"Looking at"},{"type":"tool_use","name":"Bash","input":{"command":"ls","description":"list files"}}]`,
-			"Looking at\n[Bash: list files]\n$ ls", false, true,
+			"Looking at", false, true,
 			[]ParsedToolCall{{ToolName: "Bash", Category: "Bash"}},
 		},
 		{
 			"multiple tool_use blocks",
 			`[{"type":"tool_use","name":"Read","input":{"file_path":"a.go"}},{"type":"tool_use","name":"Grep","input":{"pattern":"TODO"}}]`,
-			"[Read: a.go]\n[Grep: TODO]", false, true,
+			"", false, true,
 			[]ParsedToolCall{
 				{ToolName: "Read", Category: "Read"},
 				{ToolName: "Grep", Category: "Grep"},
@@ -186,37 +186,37 @@ func TestExtractTextContent(t *testing.T) {
 		{
 			"tool_use with id and input",
 			`[{"type":"tool_use","id":"toolu_123","name":"Read","input":{"file_path":"main.go"}}]`,
-			"[Read: main.go]", false, true,
+			"", false, true,
 			[]ParsedToolCall{{ToolUseID: "toolu_123", ToolName: "Read", Category: "Read", InputJSON: `{"file_path":"main.go"}`}},
 		},
 		{
 			"Skill tool extracts skill_name",
 			`[{"type":"tool_use","id":"toolu_456","name":"Skill","input":{"skill":"superpowers:brainstorming"}}]`,
-			"[Skill: superpowers:brainstorming]", false, true,
+			"", false, true,
 			[]ParsedToolCall{{ToolUseID: "toolu_456", ToolName: "Skill", Category: "Tool", InputJSON: `{"skill":"superpowers:brainstorming"}`, SkillName: "superpowers:brainstorming"}},
 		},
 		{
 			"Amp skill tool extracts skill_name",
 			`[{"type":"tool_use","id":"toolu_789","name":"skill","input":{"name":"frontend-design"}}]`,
-			"[Skill: frontend-design]", false, true,
+			"", false, true,
 			[]ParsedToolCall{{ToolUseID: "toolu_789", ToolName: "skill", Category: "Tool", InputJSON: `{"name":"frontend-design"}`, SkillName: "frontend-design"}},
 		},
 		{
 			"Amp skill tool supports legacy input.skill",
 			`[{"type":"tool_use","id":"toolu_790","name":"skill","input":{"skill":"legacy-skill"}}]`,
-			"[Skill: legacy-skill]", false, true,
+			"", false, true,
 			[]ParsedToolCall{{ToolUseID: "toolu_790", ToolName: "skill", Category: "Tool", InputJSON: `{"skill":"legacy-skill"}`, SkillName: "legacy-skill"}},
 		},
 		{
 			"Amp skill tool falls back to input.name when input.skill is empty",
 			`[{"type":"tool_use","id":"toolu_791","name":"skill","input":{"skill":"","name":"frontend-design"}}]`,
-			"[Skill: frontend-design]", false, true,
+			"", false, true,
 			[]ParsedToolCall{{ToolUseID: "toolu_791", ToolName: "skill", Category: "Tool", InputJSON: `{"skill":"","name":"frontend-design"}`, SkillName: "frontend-design"}},
 		},
 		{
 			"tool_use with empty name",
 			`[{"type":"tool_use","name":"","input":{}}]`,
-			"[Tool: ]", false, true, nil,
+			"", false, true, nil,
 		},
 		{
 			"empty array",
@@ -224,9 +224,9 @@ func TestExtractTextContent(t *testing.T) {
 			"", false, false, nil,
 		},
 		{
-			"unknown and empty blocks ignored",
+			"unknown blocks ignored and empty thinking retained",
 			`[{"type":"unknown","value":"x"},{"type":"text","text":""},{"type":"thinking","thinking":""}]`,
-			"", false, false, nil,
+			"", true, false, nil,
 		},
 	}
 
@@ -249,7 +249,7 @@ func TestExtractTextContent_AmpSkillNameExtraction(t *testing.T) {
 
 	text, _, hasThinking, hasToolUse, toolCalls, toolResults := ExtractTextContent(t.Context(), result)
 
-	require.Equal(t, "[Skill: walkthrough]", text, "text")
+	require.Empty(t, text, "text")
 	require.False(t, hasThinking, "hasThinking")
 	require.True(t, hasToolUse, "hasToolUse")
 	require.Empty(t, toolResults, "toolResults")

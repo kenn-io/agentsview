@@ -170,6 +170,8 @@ async function openUsageBreakdown(): Promise<void> {
 
 function makeAssistantMessage(model: string, reasoning_effort?: string) {
   return {
+    content_layout: null,
+    tool_result_text: "",
     id: 1,
     session_id: "run:123456789abcdef",
     ordinal: 0,

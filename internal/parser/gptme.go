@@ -91,9 +91,6 @@ func (p *gptmeProvider) parseSession(
 
 		case "assistant":
 			content := strings.TrimSpace(gjson.Get(line, "content").Str)
-			if content == "" {
-				continue
-			}
 			pm := ParsedMessage{
 				Ordinal:            ordinal,
 				Role:               RoleAssistant,
@@ -104,19 +101,21 @@ func (p *gptmeProvider) parseSession(
 				tokenPresenceKnown: true,
 			}
 			applyGptmeTokenUsage(&pm, line)
+			if content == "" && len(pm.TokenUsage) == 0 {
+				continue
+			}
 			messages = append(messages, pm)
 			ordinal++
 
 		case "tool":
-			// gptme emits tool output as standalone transcript lines, but
-			// the format does not expose a stable tool-call ID we can use
-			// for ToolResults pairing. Keep the output visible by storing
-			// it as assistant transcript content instead of hiding it as
-			// a synthetic system/user message.
+			// Compatible tool-role records keep their existing assistant row
+			// classification. The native result subtype gives their body a
+			// standalone output owner, with an optional recorded call ID.
 			content := strings.TrimSpace(gjson.Get(line, "content").Str)
 			if content == "" {
 				continue
 			}
+			raw, _ := json.Marshal(content)
 			messages = append(messages, ParsedMessage{
 				Ordinal:       ordinal,
 				Role:          RoleAssistant,
@@ -124,6 +123,10 @@ func (p *gptmeProvider) parseSession(
 				Content:       content,
 				Timestamp:     ts,
 				ContentLength: len(content),
+				ToolResults: []ParsedToolResult{{
+					ToolUseID:  gjson.Get(line, "call_id").Str,
+					ContentRaw: string(raw), ContentLength: len(content),
+				}},
 			})
 			ordinal++
 		}
@@ -131,6 +134,22 @@ func (p *gptmeProvider) parseSession(
 
 	if err := lr.Err(); err != nil {
 		return nil, nil, fmt.Errorf("reading gptme %s: %w", path, err)
+	}
+
+	for i := range messages {
+		msg := &messages[i]
+		work := msg.sanitizedHistoricalWorkLength()
+		var body MessageContentBuilder
+		if msg.SourceSubtype == SourceSubtypeToolResult {
+			for _, result := range msg.ToolResults {
+				body.AddToolResult(result)
+			}
+		} else {
+			body.AddText(msg.Content)
+		}
+		msg.Content = body.Message().Content
+		*msg = msg.withBody(body.Message())
+		msg.ContentLength = work
 	}
 
 	if len(messages) == 0 {

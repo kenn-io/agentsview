@@ -1379,8 +1379,7 @@ func buildOpenCodeParsedSessionContext(
 			ordinal, m.id, role, m.timeCreated, msgParts, cwd,
 		)
 		applyOpenCodeTokenUsage(&pm, md, m.data, msgParts)
-		if strings.TrimSpace(pm.Content) == "" &&
-			!pm.HasToolUse {
+		if !pm.hasNativeBody() && len(pm.TokenUsage) == 0 {
 			continue
 		}
 
@@ -1409,7 +1408,7 @@ func finishOpenCodeSessionContext(
 	} else {
 		for _, m := range parsed {
 			if m.Role == RoleUser && !m.IsSystem {
-				firstMsg = truncate(strings.ReplaceAll(m.Content, "\n", " "), 300)
+				firstMsg = truncate(strings.ReplaceAll(openCodeUserActivityText(m), "\n", " "), 300)
 				break
 			}
 		}
@@ -1430,7 +1429,7 @@ func finishOpenCodeSessionContext(
 
 	userCount := 0
 	for _, m := range parsed {
-		if m.Role == RoleUser && !m.IsSystem && m.Content != "" {
+		if m.Role == RoleUser && !m.IsSystem && openCodeUserActivityText(m) != "" {
 			userCount++
 		}
 	}
@@ -1456,6 +1455,21 @@ func finishOpenCodeSessionContext(
 	accumulateMessageTokenUsage(sess, parsed)
 
 	return sess, parsed, nil
+}
+
+// Native shell projections are user activity even though their commands live
+// in tool fields. Keep their established prompt count and session preview.
+func openCodeUserActivityText(message ParsedMessage) string {
+	if message.Content != "" {
+		return message.Content
+	}
+	var renderings []string
+	for _, call := range message.ToolCalls {
+		if call.Rendering != "" {
+			renderings = append(renderings, call.Rendering)
+		}
+	}
+	return strings.Join(renderings, "\n")
 }
 
 // applyOpenCodeTokenUsage copies the assistant message's model
@@ -1584,59 +1598,29 @@ func normalizeOpenCodeRole(role string) RoleType {
 }
 
 func buildOpenCodeMessage(
-	ordinal int,
-	messageID string,
-	role RoleType,
-	timeCreatedMs int64,
-	parts []openCodePartRow,
-	cwd string,
+	ordinal int, messageID string, role RoleType, timeCreatedMs int64,
+	parts []openCodePartRow, cwd string,
 ) ParsedMessage {
-	var (
-		texts       []string
-		toolCalls   []ParsedToolCall
-		hasThinking bool
-		hasToolUse  bool
-	)
-
+	var b MessageContentBuilder
 	for _, p := range parts {
-		partType := extractOpenCodePartType(p.data)
-		switch partType {
+		switch extractOpenCodePartType(p.data) {
 		case "text":
-			text := extractOpenCodeText(p.data)
-			if text != "" {
-				texts = append(texts, text)
-			}
-		case "tool":
-			hasToolUse = true
-			tc := extractOpenCodeToolCall(p.data, cwd)
-			if tc.ToolName != "" {
-				toolCalls = append(toolCalls, tc)
-			}
+			b.AddText(extractOpenCodeText(p.data))
 		case "reasoning":
-			text := extractOpenCodeText(p.data)
-			if text != "" {
-				hasThinking = true
-				texts = append(texts,
-					"[Thinking]\n"+text+"\n[/Thinking]")
+			b.AddThinking(extractOpenCodeText(p.data))
+		case "tool":
+			b.message.HasToolUse = true
+			call := extractOpenCodeToolCall(p.data, cwd)
+			if call.ToolName != "" {
+				b.AddToolCall(call)
 			}
 		}
-		// skip step-start, step-finish, patch, etc.
 	}
-
-	content := strings.Join(texts, "\n")
+	body := b.Message()
 	return ParsedMessage{
-		Ordinal: ordinal,
-		Role:    role,
-		Content: content,
-		// The storage message ID is the stable identity archive guards use
-		// to match stored rows when ordinals shift or are sparse.
-		SourceUUID:    messageID,
-		Timestamp:     millisToTime(timeCreatedMs),
-		HasThinking:   hasThinking,
-		HasToolUse:    hasToolUse,
-		ContentLength: len(content),
-		ToolCalls:     toolCalls,
-	}
+		Ordinal: ordinal, Role: role, Content: body.Content,
+		SourceUUID: messageID, Timestamp: millisToTime(timeCreatedMs),
+	}.withBody(body)
 }
 
 // openCodePartTypeData extracts just the type from a part's

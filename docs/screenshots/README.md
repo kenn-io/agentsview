@@ -8,7 +8,7 @@ the release branch.
 
 ## What do I need?
 
-- Docker and SQLite's `sqlite3` command.
+- Docker, SQLite's `sqlite3` command, and Python 3.
 - AgentsView source at `~/code/agentsview` (override with `AGENTSVIEW_SRC`).
 - A sessions database at `~/.agentsview/sessions.db` (override with
   `SOURCE_DB`).
@@ -76,6 +76,9 @@ bash docs/screenshots/update-generated-assets-branch.sh --skip-generate
 1. Open the source database read-only and take a consistent SQLite snapshot.
    Filter and redact that disposable copy before passing it to Docker. Home
    paths are redacted in both normal paths and encoded Claude project folders.
+   Native dialogue, thinking, standalone output, and tool renderings are covered.
+   Redaction preserves native byte ranges. The copied palette cache is cleared
+   and rebuilt when the screenshot server opens the archive for writing.
 1. Build the current frontend and Go binary, then assemble a runner image with
    Chromium, Playwright, PostgreSQL, and the filtered database.
 1. Start isolated SQLite and PostgreSQL servers inside the container. The

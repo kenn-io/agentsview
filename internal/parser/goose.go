@@ -441,6 +441,7 @@ func loadGooseMessages(
 			return nil, err
 		}
 		if ok {
+			message.SourceUUID = sessionID + ":" + strconv.FormatInt(row.id, 10)
 			parsed = append(parsed, message)
 		}
 	}
@@ -474,43 +475,46 @@ func buildGooseMessage(
 	if role == RoleAssistant {
 		message.Model = sessionModel
 	}
-	var texts []string
-	var thinking []string
+	var body MessageContentBuilder
 	content.ForEach(func(_, block gjson.Result) bool {
 		switch block.Get("type").Str {
 		case "text":
 			if text := strings.TrimSpace(block.Get("text").Str); text != "" {
-				texts = append(texts, text)
+				body.AddText(text)
 			}
 		case "thinking":
-			message.HasThinking = true
-			if text := strings.TrimSpace(block.Get("thinking").Str); text != "" {
-				thinking = append(thinking, text)
-				texts = append(texts, "[Thinking]\n"+text+"\n[/Thinking]")
-			}
+			body.AddThinking(strings.TrimSpace(block.Get("thinking").Str))
 		case "redactedThinking":
-			message.HasThinking = true
+			body.AddThinking("")
 		case "toolRequest", "frontendToolRequest":
-			message.HasToolUse = true
+			body.message.HasToolUse = true
 			if call, ok := gooseParseToolCall(ctx, block); ok {
-				message.ToolCalls = append(message.ToolCalls, call)
+				body.AddToolCall(call)
 			}
 		case "toolResponse":
 			if result, ok := gooseParseToolResult(block); ok {
-				message.ToolResults = append(message.ToolResults, result)
+				body.AddToolResult(result)
 			}
 		case "image":
-			texts = append(texts, "[Image]")
-		case "toolConfirmationRequest", "actionRequired", "systemNotification":
+			body.AddText("[Image]")
+		case "systemNotification":
+			if block.Get("notificationType").Str == "thinkingMessage" {
+				// The old decoder did not include msg in its work count.
+				work, parts := body.workLength, body.workParts
+				body.AddThinking(strings.TrimSpace(block.Get("msg").Str))
+				body.workLength, body.workParts = work, parts
+			} else if text := gooseVisibleBlockText(block); text != "" {
+				body.AddText(text)
+			}
+		case "toolConfirmationRequest", "actionRequired":
 			if text := gooseVisibleBlockText(block); text != "" {
-				texts = append(texts, text)
+				body.AddText(text)
 			}
 		}
 		return true
 	})
-	message.Content = strings.Join(texts, "\n")
-	message.ThinkingText = strings.Join(thinking, "\n\n")
-	message.ContentLength = len(message.Content)
+	message.Content = body.Message().Content
+	message = message.withBody(body.Message())
 	return message, true, nil
 }
 

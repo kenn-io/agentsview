@@ -5,6 +5,8 @@ import type { SearchBlock } from "./block-text.js";
 import { matchSnippet, groupFindResults, resultRows } from "./results.js";
 function message(ordinal: number): Message {
   return {
+    content_layout: null,
+    tool_result_text: "",
     has_context_tokens: false,
     has_output_tokens: false,
     id: ordinal,

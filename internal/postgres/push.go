@@ -242,6 +242,15 @@ func (s *Sync) PushWithOptions(
 			"pgsync: transcript revision backfill marker missing; forcing full push",
 		)
 	}
+	paletteRecipe, err := state.GetSyncState(ctx, "palette_corpus_recipe")
+	if err != nil {
+		return result, fmt.Errorf("reading palette corpus recipe: %w", err)
+	}
+	paletteBackfillNeeded := paletteRecipe != db.PaletteCorpusRecipe
+	if paletteBackfillNeeded {
+		full = true
+		log.Printf("pgsync: palette corpus recipe changed; forcing full push")
+	}
 	var timestampNormalizationBackfillNeeded bool
 	full, timestampNormalizationBackfillNeeded, err = applyTimestampNormalizationBackfillRequirement(ctx, state, full)
 	if err != nil {
@@ -530,6 +539,11 @@ func (s *Sync) PushWithOptions(
 		); err != nil {
 			return result, err
 		}
+		if paletteBackfillNeeded && result.Errors == 0 {
+			if err := state.SetSyncState(ctx, "palette_corpus_recipe", db.PaletteCorpusRecipe); err != nil {
+				return result, err
+			}
+		}
 		if err := s.syncProjectIdentityObservations(
 			ctx, full, identityRefreshSessionIDs,
 		); err != nil {
@@ -664,6 +678,11 @@ func (s *Sync) PushWithOptions(
 		state, timestampNormalizationBackfillNeeded, result,
 	); err != nil {
 		return result, err
+	}
+	if paletteBackfillNeeded && result.Errors == 0 {
+		if err := state.SetSyncState(ctx, "palette_corpus_recipe", db.PaletteCorpusRecipe); err != nil {
+			return result, err
+		}
 	}
 	if result.Errors == 0 {
 		if err := s.syncProjectIdentityObservations(
@@ -2032,6 +2051,7 @@ func sessionPushFingerprint(
 	dependencyFingerprint string,
 ) string {
 	fields := []string{
+		"palette-" + db.PaletteCorpusRecipe,
 		sess.ID,
 		sess.Project,
 		strconv.FormatBool(sess.ProjectAssigned),
@@ -2598,6 +2618,12 @@ func (s *Sync) pushMessages(
 	sessionUsageFingerprints map[string]string,
 	comparisons *pushMessageComparison,
 ) (int, error) {
+	var missingPalette bool
+	if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM messages WHERE session_id = $1 AND palette_text IS NULL)", sessionID).Scan(&missingPalette); err != nil {
+		return 0, err
+	}
+	full = full || missingPalette
+
 	localCount, err := s.local.MessageCount(ctx, sessionID)
 	if err != nil {
 		return 0, fmt.Errorf(
@@ -3564,7 +3590,7 @@ func pgMessageFlagsFingerprint(
 ) (string, error) {
 	rows, err := tx.QueryContext(ctx,
 		`SELECT ordinal, is_system, has_thinking, has_tool_use,
-			COALESCE(thinking_text, '')
+			COALESCE(thinking_text, ''), COALESCE(tool_result_text, ''), content_layout
 		 FROM messages
 		 WHERE session_id = $1
 		 ORDER BY ordinal ASC`,
@@ -3579,16 +3605,19 @@ func pgMessageFlagsFingerprint(
 	for rows.Next() {
 		var ordinal int
 		var isSystem, hasThinking, hasToolUse bool
-		var thinkingText string
+		var thinkingText, toolResultText string
+		var contentLayout sql.NullString
 		if err := rows.Scan(
 			&ordinal, &isSystem, &hasThinking, &hasToolUse,
-			&thinkingText,
+			&thinkingText, &toolResultText, &contentLayout,
 		); err != nil {
 			return "", err
 		}
 		sum := sha256.Sum256([]byte(db.SanitizeUTF8(thinkingText)))
-		fmt.Fprintf(&b, "%d|%t|%t|%t|%x;",
-			ordinal, isSystem, hasThinking, hasToolUse, sum)
+		outputSum := sha256.Sum256([]byte(db.SanitizeUTF8(toolResultText)))
+		layoutSum := sha256.Sum256([]byte(db.ContentLayoutJSON(db.DecodeStoredContentLayout(contentLayout.String))))
+		fmt.Fprintf(&b, "%d|%t|%t|%t|%x|%x|%x;",
+			ordinal, isSystem, hasThinking, hasToolUse, sum, outputSum, layoutSum)
 	}
 	return b.String(), rows.Err()
 }
@@ -3602,7 +3631,7 @@ func pgToolCallFingerprint(
 			COALESCE(skill_name, ''), COALESCE(subagent_session_id, ''),
 			COALESCE(result_content_length, 0),
 			COALESCE(result_content, ''),
-			COALESCE(file_path, '')
+			COALESCE(file_path, ''), COALESCE(rendering, '')
 		 FROM tool_calls
 		 WHERE session_id = $1
 		 ORDER BY message_ordinal ASC, call_index ASC`,
@@ -3617,16 +3646,16 @@ func pgToolCallFingerprint(
 	for rows.Next() {
 		var messageOrdinal, callIndex, resultContentLength int
 		var toolName, category, toolUseID, inputJSON string
-		var skillName, subagentSessionID, resultContent, filePath string
+		var skillName, subagentSessionID, resultContent, filePath, rendering string
 		if err := rows.Scan(
 			&messageOrdinal, &callIndex, &toolName, &category,
 			&toolUseID, &inputJSON, &skillName, &subagentSessionID,
-			&resultContentLength, &resultContent, &filePath,
+			&resultContentLength, &resultContent, &filePath, &rendering,
 		); err != nil {
 			return "", err
 		}
 		fmt.Fprintf(&b,
-			"%d|%d|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d|%d:%s|%d:%s;",
+			"%d|%d|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d|%d:%s|%d:%s|%d:%s;",
 			messageOrdinal, callIndex,
 			len(toolName), toolName,
 			len(category), category,
@@ -3637,6 +3666,7 @@ func pgToolCallFingerprint(
 			resultContentLength,
 			len(resultContent), resultContent,
 			len(filePath), filePath,
+			len(rendering), rendering,
 		)
 	}
 	return b.String(), rows.Err()
@@ -3729,20 +3759,23 @@ func bulkInsertMessages(
 			claude_message_id, claude_request_id,
 			source_type, source_subtype, prompt_source, source_uuid,
 			source_parent_uuid, is_sidechain,
-			is_compact_boundary) VALUES `)
-		args := make([]any, 0, len(batch)*27)
+			is_compact_boundary, tool_result_text, content_layout, palette_text) VALUES `)
+		args := make([]any, 0, len(batch)*30)
 		for j, m := range batch {
+			if err := m.TransformBody(func(_ string, text string) string { return sanitizePG(text) }); err != nil {
+				return fmt.Errorf("message ordinal %d: %w", m.Ordinal, err)
+			}
 			if j > 0 {
 				b.WriteByte(',')
 			}
-			p := j*27 + 1
+			p := j*30 + 1
 			fmt.Fprintf(&b,
-				"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
+				"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
 				p, p+1, p+2, p+3, p+4,
 				p+5, p+6, p+7, p+8, p+9,
 				p+10, p+11, p+12, p+13, p+14, p+15,
 				p+16, p+17, p+18, p+19, p+20,
-				p+21, p+22, p+23, p+24, p+25, p+26,
+				p+21, p+22, p+23, p+24, p+25, p+26, p+27, p+28, p+29,
 			)
 			ts, err := optionalSQLiteTimestamp(m.Timestamp)
 			if err != nil {
@@ -3776,7 +3809,8 @@ func bulkInsertMessages(
 				sanitizePG(m.SourceUUID),
 				sanitizePG(m.SourceParentUUID),
 				m.IsSidechain,
-				m.IsCompactBoundary,
+				m.IsCompactBoundary, sanitizePG(m.ToolResultText),
+				nilIfEmpty(db.ContentLayoutJSON(m.ContentLayout)), sanitizePG(db.PaletteText(m)),
 			)
 		}
 		if _, err := tx.ExecContext(
@@ -3952,18 +3986,18 @@ func bulkInsertToolCalls(
 			call_index, tool_use_id, input_json,
 			skill_name, result_content_length,
 			result_content, subagent_session_id,
-			message_ordinal, file_path) VALUES `)
-		args := make([]any, 0, len(batch)*12)
+			message_ordinal, file_path, rendering) VALUES `)
+		args := make([]any, 0, len(batch)*13)
 		for j, r := range batch {
 			if j > 0 {
 				b.WriteByte(',')
 			}
-			p := j*12 + 1
+			p := j*13 + 1
 			fmt.Fprintf(&b,
 				"($%d,$%d,$%d,$%d,$%d,$%d,"+
-					"$%d,$%d,$%d,$%d,$%d,$%d)",
+					"$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
 				p, p+1, p+2, p+3, p+4, p+5,
-				p+6, p+7, p+8, p+9, p+10, p+11,
+				p+6, p+7, p+8, p+9, p+10, p+11, p+12,
 			)
 			args = append(args,
 				sessionID,
@@ -3979,7 +4013,7 @@ func bulkInsertToolCalls(
 				)),
 				nilIfEmpty(r.tc.SubagentSessionID),
 				r.ordinal,
-				nilIfEmpty(r.tc.FilePath),
+				nilIfEmpty(r.tc.FilePath), sanitizePG(r.tc.Rendering),
 			)
 		}
 		if _, err := tx.ExecContext(

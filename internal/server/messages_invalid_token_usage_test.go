@@ -40,7 +40,7 @@ func corruptStoredTokenUsage(
 ) {
 	t.Helper()
 
-	conn, err := sql.Open("sqlite3", dbPath)
+	conn, err := sql.Open("agentsview_archive_sqlite3", dbPath)
 	require.NoError(t, err)
 	defer conn.Close()
 

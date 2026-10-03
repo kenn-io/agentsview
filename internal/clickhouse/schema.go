@@ -15,7 +15,7 @@ import (
 // added later ship as ADD COLUMN IF NOT EXISTS entries in the table specs,
 // so an older mirror upgrades in place; the version tells operators and
 // status output which shape a mirror has.
-const SchemaVersion = 2
+const SchemaVersion = 4
 
 // Metadata keys shared by every archive that pushes into the mirror.
 const (
@@ -257,6 +257,9 @@ var mirrorTables = []tableSpec{
 			col("source_parent_uuid", tString),
 			col("is_sidechain", tBool),
 			col("is_compact_boundary", tBool),
+			col("tool_result_text", tString),
+			col("content_layout", tNullString),
+			col("palette_text", tString),
 		},
 		orderBy: []string{"session_id", "ordinal"},
 	},
@@ -406,6 +409,7 @@ var mirrorTables = []tableSpec{
 			col("result_content", tString),
 			col("subagent_session_id", tString),
 			col("file_path", tString),
+			col("rendering", tString),
 		},
 		orderBy: []string{"session_id", "message_ordinal", "call_index"},
 	},

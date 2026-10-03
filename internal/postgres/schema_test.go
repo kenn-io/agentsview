@@ -680,6 +680,20 @@ func TestCheckSchemaCompatRequiresMachineLabelMetadata(t *testing.T) {
 	assert.Contains(t, err.Error(), "sync_metadata table missing required columns")
 }
 
+func TestCheckSchemaCompatRequiresPaletteCorpus(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, nil)
+	state.execErrors = []schemaProbeQueryError{{
+		contains: "palette_text",
+		err:      &pgconn.PgError{Code: "42703", Message: `column "palette_text" does not exist`},
+	}}
+
+	err := CheckSchemaCompat(t.Context(), pg)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "messages table missing required columns")
+	assert.Contains(t, err.Error(), `column "palette_text" does not exist`)
+}
+
 func TestCheckSchemaCompatRequiresUsageJSONHelper(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, nil)
 	state.queryErrors = []schemaProbeQueryError{{
@@ -1150,7 +1164,7 @@ func TestEnsureSchemaGroupsMissingColumnMigrationsByTable(t *testing.T) {
 			"source_subtype", "source_uuid",
 		},
 		"tool_calls": {
-			"call_index", "file_path",
+			"call_index", "file_path", "rendering",
 		},
 		"model_pricing": {
 			"cache_creation_1h_microdollars_per_mtok",
@@ -1164,10 +1178,11 @@ func TestEnsureSchemaGroupsMissingColumnMigrationsByTable(t *testing.T) {
 
 	// Four tables have missing columns (sessions: termination_status;
 	// messages: source_parent_uuid, is_sidechain, is_compact_boundary,
-	// thinking_text; usage_events: provider_id;
+	// thinking_text, tool_result_text, content_layout, palette_text;
+	// usage_events: provider_id;
 	// source_project_identity_observations: repository/worktree/checkout/remote
 	// context). Per-table batching means one ALTER each. tool_calls
-	// lists all its migration columns (call_index, file_path) as present, so
-	// it contributes no ALTER.
+	// lists all its migration columns (call_index, file_path, rendering) as
+	// present, so it contributes no ALTER.
 	assert.Equal(t, 4, state.alterTableExecCount(), "ALTER TABLE execs")
 }

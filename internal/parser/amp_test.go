@@ -140,11 +140,11 @@ func TestAmpProviderParsesToolUseAndThinking(t *testing.T) {
 
 	assert.True(t, msgs[1].HasThinking)
 	assert.True(t, msgs[1].HasToolUse)
-	assert.Contains(t, msgs[1].Content, "[Thinking]")
-	assert.Contains(t, msgs[1].Content, "Let me plan this.")
-	assert.Contains(t, msgs[1].Content, "[Read: main.go]")
+	assert.Equal(t, "Let me plan this.", msgs[1].ThinkingText)
+	assert.Equal(t, "I will read it now.", msgs[1].Content)
 
 	require.Len(t, msgs[1].ToolCalls, 1)
+	assert.Equal(t, "[Read: main.go]", msgs[1].ToolCalls[0].Rendering)
 	assert.Equal(t, "Read", msgs[1].ToolCalls[0].ToolName)
 	assert.Equal(t, "Read", msgs[1].ToolCalls[0].Category)
 	assert.Equal(t, "tu1", msgs[1].ToolCalls[0].ToolUseID)

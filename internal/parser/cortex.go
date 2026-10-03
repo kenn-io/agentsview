@@ -164,11 +164,9 @@ func parseCortexMessages(
 		text := extractCortexText(msg)
 
 		// Collect tool calls (from assistant messages).
-		var toolCalls []ParsedToolCall
-		hasToolUse := false
+		toolCalls := make([]ParsedToolCall, 0, len(msg.Content))
 		for _, b := range msg.Content {
 			if b.Type == "tool_use" && b.ToolUse != nil {
-				hasToolUse = true
 				tu := b.ToolUse
 				cat := NormalizeToolCategory(tu.Name)
 				inputJSON := ""
@@ -185,7 +183,7 @@ func parseCortexMessages(
 		}
 
 		// Collect tool results (from user messages carrying tool_result blocks).
-		var toolResults []ParsedToolResult
+		toolResults := make([]ParsedToolResult, 0, len(msg.Content))
 		for _, b := range msg.Content {
 			if b.Type == "tool_result" && b.ToolResult != nil {
 				tr := b.ToolResult
@@ -239,17 +237,37 @@ func parseCortexMessages(
 			continue
 		}
 
+		var builder MessageContentBuilder
+		callIndex, resultIndex := 0, 0
+		for _, block := range msg.Content {
+			switch block.Type {
+			case "text":
+				if !isCortexInternalBlock(block) {
+					builder.AddText(strings.TrimSpace(block.Text))
+				}
+			case "tool_use":
+				if block.ToolUse != nil {
+					call := toolCalls[callIndex]
+					call.Rendering = formatCortexToolHeader(call)
+					builder.AddToolCall(call)
+					callIndex++
+				}
+			case "tool_result":
+				if block.ToolResult != nil {
+					builder.AddToolResult(toolResults[resultIndex])
+					resultIndex++
+				}
+			}
+		}
+		body := builder.Message()
+		body.ContentLength = sanitizedWorkLength(content)
 		msgs = append(msgs, ParsedMessage{
 			Ordinal:       ordinal,
 			Role:          role,
 			SourceSubtype: sourceSubtype,
-			Content:       content,
+			Content:       body.Content,
 			Timestamp:     ts,
-			HasToolUse:    hasToolUse,
-			ContentLength: len(content),
-			ToolCalls:     toolCalls,
-			ToolResults:   toolResults,
-		})
+		}.withBody(body))
 		ordinal++
 	}
 

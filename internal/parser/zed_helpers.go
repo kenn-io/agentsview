@@ -40,6 +40,37 @@ func extractZedDocMeta(doc map[string]any) zedDocMeta {
 	return meta
 }
 
+// Zed persists AgentMessageContent as an ordered vector of tagged enums.
+func zedNativeMessageBody(content any) ParsedMessage {
+	var body MessageContentBuilder
+	blocks, ok := content.([]any)
+	if !ok {
+		blocks = []any{content}
+	}
+	for _, block := range blocks {
+		obj, ok := block.(map[string]any)
+		if !ok {
+			continue
+		}
+		if thinking, ok := obj["Thinking"]; ok {
+			text := ""
+			if fields, ok := thinking.(map[string]any); ok {
+				text, _ = fields["text"].(string)
+			}
+			body.addThinking(text, "\n")
+		} else if _, ok := obj["RedactedThinking"]; ok {
+			body.AddThinking("")
+		} else if _, ok := obj["ToolUse"]; ok {
+			for _, call := range zedExtractToolCalls(obj) {
+				body.AddToolCall(call)
+			}
+		} else {
+			body.AddText(zedExtractText(obj))
+		}
+	}
+	return body.Message()
+}
+
 func zedExtractText(v any) string {
 	var parts []string
 	zedWalk(v, func(obj map[string]any) {
@@ -51,20 +82,6 @@ func zedExtractText(v any) string {
 			if value, ok := text["text"].(string); ok {
 				parts = append(parts, value)
 			}
-		}
-	})
-	return strings.Join(parts, "\n")
-}
-
-func zedExtractThinking(v any) string {
-	var parts []string
-	zedWalk(v, func(obj map[string]any) {
-		thinking, ok := obj["Thinking"].(map[string]any)
-		if !ok {
-			return
-		}
-		if text, ok := thinking["text"].(string); ok {
-			parts = append(parts, text)
 		}
 	})
 	return strings.Join(parts, "\n")

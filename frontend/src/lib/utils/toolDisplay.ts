@@ -41,6 +41,11 @@ export function displayFormattedToolResult(content: string): string {
   return projectToolResult(content, "formatted");
 }
 
+/** Returns true when a result contains a local asset image Markdown link. */
+export function hasAssetImageMarkdown(content: string): boolean {
+  return /!\[[^\]]*\]\(asset:\/\/[^\s)]+\)/.test(content);
+}
+
 type ToolResultDisplayMode = "stored" | "formatted";
 
 function projectToolResult(content: string, mode: ToolResultDisplayMode): string {

@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 // errCursorStoreFormat identifies readable stores whose structure cannot be
@@ -630,8 +632,20 @@ func applyCursorStoreTurns(
 			note(turn.UserTime)
 		}
 		if turn.ReasoningText != "" {
-			msgs[assistantIndex].ThinkingText = turn.ReasoningText
-			msgs[assistantIndex].HasThinking = true
+			message := &msgs[assistantIndex]
+			message.ThinkingText = stringutil.SanitizeUTF8(turn.ReasoningText)
+			message.HasThinking = true
+			blocks := []ContentBlock{{Kind: "thinking", End: len(message.ThinkingText)}}
+			if message.ContentLayout != nil {
+				for _, block := range message.ContentLayout.Blocks {
+					if block.Kind != "thinking" {
+						blocks = append(blocks, block)
+					}
+				}
+			} else if message.Content != "" {
+				blocks = append(blocks, ContentBlock{Kind: "text", End: len(message.Content)})
+			}
+			message.ContentLayout = &ContentLayout{Version: 1, Blocks: blocks}
 		}
 		switch {
 		case !turn.AssistantTime.IsZero():

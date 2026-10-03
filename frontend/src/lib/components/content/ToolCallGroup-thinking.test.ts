@@ -13,6 +13,8 @@ function message(ordinal: number, structured: boolean): Message {
   const content =
     "[Thinking]\nneedle needle\n[/Thinking]" + (structured ? "" : "\n[Bash]\necho done");
   return {
+    content_layout: null,
+    tool_result_text: "",
     has_context_tokens: false,
     has_output_tokens: false,
     id: id++,
@@ -30,7 +32,7 @@ function message(ordinal: number, structured: boolean): Message {
     context_tokens: 0,
     output_tokens: 0,
     tool_calls: structured
-      ? [{ tool_name: "Bash", category: "Bash", result_content: "ordinary output" }]
+      ? [{ rendering: "", tool_name: "Bash", category: "Bash", result_content: "ordinary output" }]
       : undefined,
   };
 }
@@ -82,6 +84,52 @@ async function render(structured: boolean, newestFirst: boolean) {
   await tick();
 }
 describe("thinking inside tool groups", () => {
+  it("reaches native call and standalone output highlights in saved order", async () => {
+    messages.messages = [
+      {
+        ...message(7, true),
+        content: "",
+        thinking_text: "before\n\nafter",
+        tool_result_text: "unmatchedneedle",
+        content_layout: {
+          version: 1,
+          blocks: [
+            { kind: "thinking", start: 0, end: 6, call_index: 0 },
+            { kind: "tool_call", start: 0, end: 0, call_index: 0 },
+            { kind: "tool_result", start: 0, end: 15, call_index: 0 },
+            { kind: "thinking", start: 8, end: 13, call_index: 0 },
+          ],
+        },
+        tool_calls: [
+          {
+            tool_name: "Bash",
+            category: "Bash",
+            rendering: "echo needle",
+            input_json: '{"command":"echo needle"}',
+          },
+        ],
+      },
+    ];
+    component = mount(ToolCallGroup, {
+      target: document.body,
+      props: { messages: messages.messages, timestamp: "2026-01-01T00:00:00Z", searchable: true },
+    });
+    await tick();
+    inSessionSearch.open();
+    inSessionSearch.query = "needle";
+    await vi.advanceTimersByTimeAsync(150);
+    await tick();
+    expect(inSessionSearch.total).toBe(2);
+    let current = document.querySelector<HTMLElement>('[data-search-current="true"]')!;
+    expect(current.dataset.searchBlock).toBe("7:tool-input:0");
+    expect(currentRangeForBlock(current)?.toString()).toBe("needle");
+    inSessionSearch.next();
+    await tick();
+    current = document.querySelector<HTMLElement>('[data-search-current="true"]')!;
+    expect(current.dataset.searchBlock).toBe("7:tool-output:seg2");
+    expect(currentRangeForBlock(current)?.toString()).toBe("needle");
+  });
+
   it.each([
     [true, false],
     [false, false],

@@ -392,34 +392,25 @@ func parsePiUserMessage(
 ) *ParsedMessage {
 	content := gjson.Get(line, "message.content")
 
-	var text string
+	var body MessageContentBuilder
 	if content.Type == gjson.String {
-		text = content.Str
+		body.AddText(content.Str)
 	} else if content.IsArray() {
-		var parts []string
 		content.ForEach(func(_, block gjson.Result) bool {
 			if block.Get("type").Str == "text" {
-				if t := block.Get("text").Str; t != "" {
-					parts = append(parts, t)
-				}
+				body.AddText(block.Get("text").Str)
 			}
 			return true
 		})
-		text = strings.Join(parts, "\n")
 	}
-
-	ts := piTimestamp(line)
-
-	return &ParsedMessage{
-		Ordinal:          ordinal,
-		Role:             RoleUser,
-		SourceType:       "user",
-		SourceUUID:       sourceUUID,
-		SourceParentUUID: sourceParentUUID,
-		Content:          text,
-		Timestamp:        ts,
-		ContentLength:    len(text),
-	}
+	pm := body.Message()
+	pm.Ordinal = ordinal
+	pm.Role = RoleUser
+	pm.SourceType = "user"
+	pm.SourceUUID = sourceUUID
+	pm.SourceParentUUID = sourceParentUUID
+	pm.Timestamp = piTimestamp(line)
+	return &pm
 }
 
 // parsePiAssistantMessage parses a message entry with role="assistant".
@@ -430,78 +421,44 @@ func parsePiAssistantMessage(
 	line string, ordinal int, fallbackModel, sourceUUID,
 	sourceParentUUID, sessionCwd string,
 ) *ParsedMessage {
-	var (
-		parts       []string
-		toolCalls   []ParsedToolCall
-		hasThinking bool
-		hasToolUse  bool
-	)
-
+	var body MessageContentBuilder
 	msgContent := gjson.Get(line, "message.content")
 	if msgContent.Type == gjson.String {
-		// Plain string content (back-compat format variation).
-		parts = append(parts, msgContent.Str)
+		body.AddText(msgContent.Str)
 	} else {
 		msgContent.ForEach(func(_, block gjson.Result) bool {
 			switch block.Get("type").Str {
 			case "text":
-				if t := block.Get("text").Str; t != "" {
-					parts = append(parts, t)
-				}
+				body.AddText(block.Get("text").Str)
 			case "thinking":
-				// Set hasThinking regardless of whether the thinking
-				// field is empty -- redacted thinking blocks have an
-				// empty field but the block type presence is sufficient
-				// to mark the message.
-				hasThinking = true
-				if thinking := block.Get("thinking").Str; thinking != "" {
-					parts = append(parts,
-						"[Thinking]\n"+thinking+"\n[/Thinking]")
-				}
+				// Redacted thinking still carries native type provenance.
+				body.AddThinking(block.Get("thinking").Str)
+			case "redactedThinking":
+				body.AddThinking("")
 			case "toolCall":
-				hasToolUse = true
-				id := block.Get("id").Str
 				name := block.Get("name").Str
-				argsRaw := block.Get("arguments").Raw
-				// Normalize Pi's agent__intent / _i field to
-				// "description" so the frontend can use a single
-				// params.description check across all agents.
-				argsRaw = normalizePiIntent(argsRaw)
-				rendering := formatPiToolUse(name, argsRaw)
-				toolCalls = append(toolCalls, ParsedToolCall{
-					ToolUseID: id,
+				argsRaw := normalizePiIntent(block.Get("arguments").Raw)
+				body.AddToolCall(ParsedToolCall{
+					ToolUseID: block.Get("id").Str,
 					ToolName:  name,
 					Category:  NormalizeToolCategory(name),
 					InputJSON: argsRaw,
-					SkillName: inferPiSkillName(
-						name, argsRaw, sessionCwd,
-					),
-					Rendering: rendering,
+					SkillName: inferPiSkillName(name, argsRaw, sessionCwd),
+					Rendering: formatPiToolUse(name, argsRaw),
 				})
-				parts = append(parts, rendering)
 			}
 			return true
 		})
 	}
-
-	content := strings.Join(parts, "\n")
-	ts := piTimestamp(line)
-
-	pm := &ParsedMessage{
-		Ordinal:          ordinal,
-		Role:             RoleAssistant,
-		SourceType:       "assistant",
-		SourceUUID:       sourceUUID,
-		SourceParentUUID: sourceParentUUID,
-		Content:          content,
-		Timestamp:        ts,
-		HasThinking:      hasThinking,
-		HasToolUse:       hasToolUse,
-		ContentLength:    len(content),
-		ToolCalls:        toolCalls,
-	}
-	applyPiTokenUsage(pm, line, fallbackModel)
-	return pm
+	pm := body.Message()
+	pm.Ordinal = ordinal
+	pm.Role = RoleAssistant
+	pm.SourceType = "assistant"
+	pm.SourceUUID = sourceUUID
+	pm.SourceParentUUID = sourceParentUUID
+	pm.Timestamp = piTimestamp(line)
+	applyPiTokenUsage(&pm, line, fallbackModel)
+	return &pm
 }
 
 // inferPiSkillName attributes a Pi tool call to a skill when the call
@@ -637,47 +594,40 @@ func applyPiUsage(pm *ParsedMessage, usage gjson.Result) {
 func parsePiToolResultMessage(
 	line string, ordinal int, sourceUUID, sourceParentUUID string,
 ) *ParsedMessage {
-	toolUseID := gjson.Get(line, "message.toolCallId").Str
 	content := gjson.Get(line, "message.content")
-	contentLen := toolResultContentLength(content)
-
-	ts := piTimestamp(line)
-
-	return &ParsedMessage{
-		Ordinal:          ordinal,
-		Role:             RoleUser,
-		SourceType:       "toolResult",
-		SourceUUID:       sourceUUID,
-		SourceParentUUID: sourceParentUUID,
-		Timestamp:        ts,
-		ToolResults: []ParsedToolResult{
-			{
-				ToolUseID:     toolUseID,
-				ContentLength: contentLen,
-				ContentRaw:    content.Raw,
-			},
-		},
-	}
+	var body MessageContentBuilder
+	body.AddToolResult(ParsedToolResult{
+		ToolUseID:     gjson.Get(line, "message.toolCallId").Str,
+		ToolName:      gjson.Get(line, "message.toolName").Str,
+		ContentLength: toolResultContentLength(content),
+		ContentRaw:    content.Raw,
+	})
+	pm := body.Message()
+	pm.Ordinal = ordinal
+	pm.Role = RoleUser
+	pm.SourceType = "toolResult"
+	pm.SourceUUID = sourceUUID
+	pm.SourceParentUUID = sourceParentUUID
+	pm.Timestamp = piTimestamp(line)
+	return &pm
 }
 
 func parsePiCompactionMessage(
 	line string, ordinal int, sourceUUID, sourceParentUUID string,
 ) *ParsedMessage {
-	summary := gjson.Get(line, "summary").Str
-	ts := parseTimestamp(gjson.Get(line, "timestamp").Str)
-	return &ParsedMessage{
-		Ordinal:           ordinal,
-		Role:              RoleAssistant,
-		Content:           summary,
-		Timestamp:         ts,
-		IsSystem:          true,
-		ContentLength:     len(summary),
-		SourceType:        "system",
-		SourceSubtype:     "compact_boundary",
-		SourceUUID:        sourceUUID,
-		SourceParentUUID:  sourceParentUUID,
-		IsCompactBoundary: true,
-	}
+	var body MessageContentBuilder
+	body.AddText(gjson.Get(line, "summary").Str)
+	pm := body.Message()
+	pm.Ordinal = ordinal
+	pm.Role = RoleAssistant
+	pm.Timestamp = parseTimestamp(gjson.Get(line, "timestamp").Str)
+	pm.IsSystem = true
+	pm.SourceType = "system"
+	pm.SourceSubtype = "compact_boundary"
+	pm.SourceUUID = sourceUUID
+	pm.SourceParentUUID = sourceParentUUID
+	pm.IsCompactBoundary = true
+	return &pm
 }
 
 // formatPiToolUse constructs a synthetic block with "input" mapped from

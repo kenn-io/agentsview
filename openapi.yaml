@@ -1536,6 +1536,10 @@ components:
           type: string
         content:
           type: string
+        content_layout:
+          anyOf:
+            - $ref: "#/components/schemas/ParserContentLayout"
+            - type: "null"
         content_length:
           format: int64
           type: integer
@@ -1594,6 +1598,8 @@ components:
           items:
             $ref: "#/components/schemas/DbToolCall"
           type: array
+        tool_result_text:
+          type: string
       required:
         - id
         - session_id
@@ -1601,6 +1607,8 @@ components:
         - role
         - content
         - thinking_text
+        - tool_result_text
+        - content_layout
         - timestamp
         - has_thinking
         - has_tool_use
@@ -3732,6 +3740,8 @@ components:
           type: string
         input_json:
           type: string
+        rendering:
+          type: string
         result_content:
           type: string
         result_content_length:
@@ -3752,6 +3762,7 @@ components:
       required:
         - tool_name
         - category
+        - rendering
       type: object
     DbToolCategoryCount:
       additionalProperties: false
@@ -4818,6 +4829,42 @@ components:
           type: array
       required:
         - ordinals
+      type: object
+    ParserContentBlock:
+      additionalProperties: false
+      properties:
+        call_index:
+          format: int64
+          type: integer
+        category:
+          type: string
+        end:
+          format: int64
+          type: integer
+        kind:
+          type: string
+        start:
+          format: int64
+          type: integer
+      required:
+        - kind
+        - start
+        - end
+        - call_index
+      type: object
+    ParserContentLayout:
+      additionalProperties: false
+      properties:
+        blocks:
+          items:
+            $ref: "#/components/schemas/ParserContentBlock"
+          type: array
+        version:
+          format: int64
+          type: integer
+      required:
+        - version
+        - blocks
       type: object
     PinMessageResponse:
       additionalProperties: false
@@ -15635,12 +15682,12 @@ paths:
           schema:
             description: Required for semantic/hybrid GET searches
             type: string
-        - description: Comma-separated content sources
+        - description: "Comma-separated sources: messages, thinking, tool_input, tool_result; messages searches proven dialogue"
           explode: false
           in: query
           name: in
           schema:
-            description: Comma-separated content sources
+            description: "Comma-separated sources: messages, thinking, tool_input, tool_result; messages searches proven dialogue"
             type: string
         - description: Exclude system messages
           explode: false

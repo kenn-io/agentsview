@@ -11,6 +11,8 @@ let component: ReturnType<typeof mount> | undefined;
 let nextId = 230000;
 function message(ordinal: number, content: string): Message {
   return {
+    content_layout: null,
+    tool_result_text: "",
     has_context_tokens: false,
     has_output_tokens: false,
     id: nextId++,

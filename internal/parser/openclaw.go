@@ -17,6 +17,15 @@ import (
 // parseSession parses an OpenClaw JSONL session file.
 // OpenClaw stores messages in a JSONL format with a session header
 // line, message entries, compaction summaries, and metadata events.
+func clawHasUsage(message gjson.Result) bool {
+	usage := message.Get("usage")
+	return usage.Get("input").Exists() || usage.Get("output").Exists() ||
+		usage.Get("inputTokens").Exists() || usage.Get("outputTokens").Exists() ||
+		usage.Get("cacheRead").Exists() || usage.Get("cacheWrite").Exists() ||
+		usage.Get("cacheCreation").Exists() || usage.Get("cache.read").Exists() ||
+		usage.Get("cache.write").Exists()
+}
+
 func (p *openClawProvider) parseSession(
 	path, project, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
@@ -101,9 +110,11 @@ func (p *openClawProvider) parseSession(
 		switch role {
 		case "user":
 			content := msg.Get("content")
-			text, thinkingText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(context.Background(), content)
-			text = strings.TrimSpace(text)
-			if text == "" && len(tcs) == 0 && len(trs) == 0 {
+			body := ExtractMessageContent(context.Background(), content)
+			thinkingText, hasThinking, hasToolUse, tcs, trs := body.ThinkingText, body.HasThinking, body.HasToolUse, body.ToolCalls, body.ToolResults
+			body.trimDialogue()
+			text := body.Content
+			if !body.hasNativeBody() && (role != "assistant" || !clawHasUsage(msg)) {
 				continue
 			}
 
@@ -117,30 +128,36 @@ func (p *openClawProvider) parseSession(
 			}
 
 			messages = append(messages, ParsedMessage{
-				Ordinal:       ordinal,
-				Role:          RoleUser,
-				Content:       text,
-				Timestamp:     ts,
-				HasThinking:   hasThinking,
-				ThinkingText:  thinkingText,
-				HasToolUse:    hasToolUse,
-				ContentLength: len(text),
-				ToolCalls:     tcs,
-				ToolResults:   trs,
-			})
+				Ordinal:          ordinal,
+				SourceUUID:       gjson.Get(line, "id").Str,
+				SourceParentUUID: gjson.Get(line, "parentId").Str,
+				Role:             RoleUser,
+				Content:          text,
+				Timestamp:        ts,
+				HasThinking:      hasThinking,
+				ThinkingText:     thinkingText,
+				HasToolUse:       hasToolUse,
+				ContentLength:    len(text),
+				ToolCalls:        tcs,
+				ToolResults:      trs,
+			}.withBody(body))
 			ordinal++
 			realUserCount++
 
 		case "assistant":
 			content := msg.Get("content")
-			text, thinkingText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(context.Background(), content)
-			text = strings.TrimSpace(text)
-			if text == "" && len(tcs) == 0 && len(trs) == 0 {
+			body := ExtractMessageContent(context.Background(), content)
+			thinkingText, hasThinking, hasToolUse, tcs, trs := body.ThinkingText, body.HasThinking, body.HasToolUse, body.ToolCalls, body.ToolResults
+			body.trimDialogue()
+			text := body.Content
+			if !body.hasNativeBody() && (role != "assistant" || !clawHasUsage(msg)) {
 				continue
 			}
 
 			pm := ParsedMessage{
 				Ordinal:            ordinal,
+				SourceUUID:         gjson.Get(line, "id").Str,
+				SourceParentUUID:   gjson.Get(line, "parentId").Str,
 				Role:               RoleAssistant,
 				Content:            text,
 				Timestamp:          ts,
@@ -151,39 +168,29 @@ func (p *openClawProvider) parseSession(
 				ToolCalls:          tcs,
 				ToolResults:        trs,
 				tokenPresenceKnown: true,
-			}
+			}.withBody(body)
 			applyOpenClawAssistantUsage(&pm, msg)
 			messages = append(messages, pm)
 			ordinal++
 
 		case "toolResult":
-			// Tool results in OpenClaw are separate messages.
-			// Emit as a user message with empty Content so
-			// pairAndFilter removes it after pairToolResults
-			// copies ResultContentLength to the matching call.
-			toolCallID := msg.Get("toolCallId").Str
-			if toolCallID == "" {
-				continue
-			}
-
 			content := msg.Get("content")
-			resultText := extractToolResultText(content)
-			contentLen := len(resultText)
-
-			messages = append(messages, ParsedMessage{
-				Ordinal:       ordinal,
-				Role:          RoleUser,
-				Content:       "",
-				Timestamp:     ts,
-				HasThinking:   false,
-				HasToolUse:    false,
+			contentLen := sanitizedWorkLength(extractToolResultText(content))
+			var body MessageContentBuilder
+			body.AddToolResult(ParsedToolResult{
+				ToolUseID:     msg.Get("toolCallId").Str,
 				ContentLength: contentLen,
-				ToolResults: []ParsedToolResult{{
-					ToolUseID:     toolCallID,
-					ContentLength: contentLen,
-					ContentRaw:    content.Raw,
-				}},
+				ContentRaw:    content.Raw,
 			})
+			pm := body.Message()
+			pm.Ordinal = ordinal
+			pm.SourceUUID = gjson.Get(line, "id").Str
+			pm.SourceParentUUID = gjson.Get(line, "parentId").Str
+			pm.Role = RoleUser
+			pm.SourceSubtype = SourceSubtypeToolResult
+			pm.Timestamp = ts
+			pm.ContentLength = contentLen
+			messages = append(messages, pm)
 			ordinal++
 		}
 	}

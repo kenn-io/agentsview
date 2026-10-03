@@ -4,6 +4,7 @@ import { mount, tick, unmount } from "svelte";
 import { setLocale } from "../../i18n/index.js";
 import { currentRangeForBlock } from "../../search/search-block.svelte.js";
 import CodeBlock from "./CodeBlock.svelte";
+import * as syntaxHighlight from "../../utils/syntax-highlight.js";
 const state = vi.hoisted(() => ({ query: "", current: -1, count: 0 }));
 const copyMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
 vi.mock("../../utils/clipboard.js", () => ({ copyToClipboard: copyMock }));
@@ -40,6 +41,7 @@ afterEach(async () => {
   component = undefined;
   document.body.replaceChildren();
   setLocale("en");
+  vi.restoreAllMocks();
 });
 describe("CodeBlock", () => {
   it("localizes copy labels and preserves raw code", async () => {
@@ -58,7 +60,18 @@ describe("CodeBlock", () => {
     state.query = "const target";
     state.current = 0;
     state.count = 1;
+    let resolveColoring!: (html: string) => void;
+    const coloring = vi.spyOn(syntaxHighlight, "highlightToHtml").mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveColoring = resolve;
+      }),
+    );
     const node = await render("const target = 42;\n", "ts");
+    expect(coloring).toHaveBeenCalledWith("const target = 42;\n", "ts");
+    expect(currentRangeForBlock(node)?.toString()).toBe("const target");
+    resolveColoring(
+      '<span style="color:#CBA6F7">const</span><span style="color:#CDD6F4"> target = 42;</span>\n',
+    );
     await vi.waitFor(
       () => {
         expect(node.querySelector("span[style]")).not.toBeNull();

@@ -232,21 +232,24 @@ func parsePoolsideSession(
 		case "session.input":
 			if event.SessionInput != nil && event.SessionInput.Prompt != "" {
 				ordinal++
-				messages = append(messages, ParsedMessage{
+				var body MessageContentBuilder
+				body.AddText(event.SessionInput.Prompt)
+				messages = append(messages, (ParsedMessage{
 					Ordinal:       ordinal,
 					Role:          RoleUser,
-					Content:       event.SessionInput.Prompt,
+					Content:       body.Message().Content,
 					Timestamp:     ts,
 					ContentLength: len(event.SessionInput.Prompt),
-				})
+				}).withBody(body.Message()))
 			}
 
 		case "assistant_message.start":
 			ordinal++
 			messages = append(messages, ParsedMessage{
-				Ordinal:   ordinal,
-				Role:      RoleAssistant,
-				Timestamp: ts,
+				Ordinal:       ordinal,
+				Role:          RoleAssistant,
+				Timestamp:     ts,
+				ContentLayout: &ContentLayout{Version: 1, Blocks: []ContentBlock{}},
 			})
 			// Capture the step_id cluster for this assistant
 			// turn so assistant_message.end can resolve the
@@ -266,8 +269,11 @@ func parsePoolsideSession(
 				if lastMsg.Role == RoleAssistant {
 					// Update content if present and not yet set.
 					if event.AssistantMessageEnd.AssistantMessage != "" && lastMsg.Content == "" {
-						lastMsg.Content = event.AssistantMessageEnd.AssistantMessage
-						lastMsg.ContentLength = len(event.AssistantMessageEnd.AssistantMessage)
+						body := continueMessageContent(*lastMsg)
+						body.AddText(event.AssistantMessageEnd.AssistantMessage)
+						lastMsg.Content = body.Message().Content
+						*lastMsg = lastMsg.withBody(body.Message())
+						lastMsg.ContentLength = sanitizedWorkLength(event.AssistantMessageEnd.AssistantMessage)
 					}
 					// Resolve the producing model. Real poolside
 					// fires tool_call.inference.start BEFORE
@@ -295,19 +301,16 @@ func parsePoolsideSession(
 			}
 
 		case "thought.end":
-			if event.ThoughtEnd != nil && event.ThoughtEnd.Thought != "" &&
-				len(messages) > 0 {
+			if event.ThoughtEnd != nil && len(messages) > 0 {
 				lastMsg := &messages[len(messages)-1]
 				if lastMsg.Role == RoleAssistant {
-					lastMsg.HasThinking = true
-					if lastMsg.ThinkingText == "" {
-						lastMsg.ThinkingText = event.ThoughtEnd.Thought
-					} else {
-						lastMsg.ThinkingText += "\n" + event.ThoughtEnd.Thought
-					}
+					work := lastMsg.ContentLength
+					body := continueMessageContent(*lastMsg)
+					body.addThinking(event.ThoughtEnd.Thought, "\n")
+					*lastMsg = lastMsg.withBody(body.Message())
+					lastMsg.ContentLength = work
 				}
 			}
-
 		case "tool_call.parsed":
 			if event.ToolCallParsed != nil {
 				tc := event.ToolCallParsed
@@ -385,14 +388,15 @@ func parsePoolsideSession(
 				if len(messages) > 0 {
 					lastMsg := &messages[len(messages)-1]
 					if lastMsg.Role == RoleAssistant {
-						lastMsg.HasToolUse = true
-						lastMsg.ToolCalls = append(lastMsg.ToolCalls, ParsedToolCall{
+						body := continueMessageContent(*lastMsg)
+						body.AddToolCall(ParsedToolCall{
 							ToolUseID: toolUseID,
 							ToolName:  name,
 							Category:  NormalizeToolCategory(name),
 							InputJSON: inputJSON,
 							SkillName: skillName,
 						})
+						*lastMsg = lastMsg.withBody(body.Message())
 					}
 				}
 			}
@@ -422,7 +426,8 @@ func parsePoolsideSession(
 				}
 
 				// Pair result with pending tool call using the payload call ID.
-				if info, ok := pendingToolCalls[tr.ID]; ok {
+				paired := false
+				if info, ok := pendingToolCalls[tr.ID]; ok && tr.ID != "" {
 					if info.ordinal > 0 && info.ordinal <= len(messages) {
 						msg := &messages[info.ordinal-1]
 						for i := range msg.ToolCalls {
@@ -432,11 +437,27 @@ func parsePoolsideSession(
 									Content:   tr.Observation,
 									Timestamp: ts,
 								})
+								paired = true
 								break
 							}
 						}
 					}
 					delete(pendingToolCalls, tr.ID)
+				}
+				if !paired {
+					raw, _ := json.Marshal(tr.Observation)
+					result := ParsedToolResult{ToolUseID: tr.ID, ToolName: tr.ToolName, ContentRaw: string(raw), ContentLength: len(tr.Observation)}
+					if len(messages) > 0 && messages[len(messages)-1].Role == RoleAssistant {
+						msg := &messages[len(messages)-1]
+						body := continueMessageContent(*msg)
+						body.AddToolResult(result)
+						*msg = msg.withBody(body.Message())
+					} else {
+						var body MessageContentBuilder
+						body.AddToolResult(result)
+						ordinal++
+						messages = append(messages, (ParsedMessage{Ordinal: ordinal, Role: RoleTool, SourceSubtype: SourceSubtypeToolResult, Timestamp: ts}).withBody(body.Message()))
+					}
 				}
 			}
 

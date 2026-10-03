@@ -180,6 +180,13 @@ func Redact(text string) string {
 	return redactSpans(text, scanRaw(text))
 }
 
+// RedactWithOffsets scans the complete source and maps its byte boundaries to
+// the masked text. A boundary inside a secret maps after its replacement,
+// assigning the mask to the first native part without duplicating it.
+func RedactWithOffsets(text string) (string, func(int) int) {
+	return redactSpansWithOffsets(text, scanRaw(text))
+}
+
 // redactSpans masks the secret spans raw within text and returns the result.
 // raw must be the matches for text (offsets relative to text), sorted by Start
 // ascending then End descending — the order scanRaw produces. Overlapping spans
@@ -189,8 +196,13 @@ func Redact(text string) string {
 // re-scanning the slice, which would drop grouped-rule secrets whose anchoring
 // context lies outside the slice.
 func redactSpans(text string, raw []Match) string {
+	redacted, _ := redactSpansWithOffsets(text, raw)
+	return redacted
+}
+
+func redactSpansWithOffsets(text string, raw []Match) (string, func(int) int) {
 	if len(raw) == 0 {
-		return text
+		return text, func(offset int) int { return offset }
 	}
 	type span struct {
 		start, end int
@@ -218,7 +230,19 @@ func redactSpans(text string, raw []Match) string {
 		prev = s.end
 	}
 	b.WriteString(text[prev:])
-	return b.String()
+	return b.String(), func(offset int) int {
+		delta := 0
+		for _, span := range spans {
+			if offset <= span.start {
+				break
+			}
+			if offset < span.end {
+				return span.start + delta + len(span.rep)
+			}
+			delta += len(span.rep) - (span.end - span.start)
+		}
+		return offset + delta
+	}
 }
 
 // RedactWindow returns full[lo:hi] with every secret-shaped span overlapping

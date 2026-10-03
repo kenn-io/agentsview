@@ -275,31 +275,38 @@ func parseOpenHandsMessageEvent(
 		return ParsedMessage{}, false, ""
 	}
 
-	content, _, _, _, toolCalls, toolResults := ExtractTextContent(context.Background(), llmMessage.Get("content"))
-	content, hasThinking := openHandsAppendThinking(
-		content, ev,
-	)
-	content = strings.TrimSpace(content)
-	if content == "" &&
-		len(toolCalls) == 0 &&
-		len(toolResults) == 0 {
+	base := ExtractMessageContent(context.Background(), llmMessage.Get("content"))
+	body := continueMessageContent(base)
+	blocks := llmMessage.Get("thinking_blocks")
+	if len(blocks.Array()) == 0 {
+		blocks = ev.Get("thinking_blocks")
+	}
+	thinking := llmMessage.Get("reasoning_content").Str
+	if thinking == "" {
+		thinking = ev.Get("reasoning_content").Str
+	}
+	if thinking == base.ThinkingText {
+		thinking = ""
+	}
+	appendOpenHandsThinking(body, blocks, thinking)
+	// The SDK persists plaintext Responses reasoning separately from opaque
+	// encrypted_content. Only summary/content are displayable body sources.
+	if item := llmMessage.Get("responses_reasoning_item"); item.IsObject() {
+		parts := append(openHandsStringArray(item.Get("summary")), openHandsStringArray(item.Get("content"))...)
+		body.AddThinking(strings.Join(parts, "\n\n"))
+	}
+	msg := body.Message()
+	msg.trimDialogue()
+	if !msg.hasNativeBody() {
 		return ParsedMessage{}, false, ""
 	}
-
-	msg := ParsedMessage{
-		Ordinal:       ordinal,
-		Role:          role,
-		Content:       content,
-		Timestamp:     ts,
-		HasThinking:   hasThinking,
-		HasToolUse:    len(toolCalls) > 0,
-		ContentLength: len(content),
-		ToolCalls:     toolCalls,
-		ToolResults:   toolResults,
-	}
+	msg.Ordinal = ordinal
+	msg.Role = role
+	msg.Timestamp = ts
 	if role == RoleAssistant {
 		msg.Model = model
 	}
+
 	return msg, true, ""
 }
 
@@ -325,36 +332,22 @@ func parseOpenHandsActionEvent(
 		inputJSON = action.Raw
 	}
 
-	content := openHandsText(ev.Get("thought"))
-	rendering := formatOpenHandsAction(
-		toolName, action, ev.Get("summary").Str,
-	)
-	content = joinOpenHandsParts(content, rendering)
-	content, hasThinking := openHandsAppendThinking(
-		content, ev,
-	)
-	content = strings.TrimSpace(content)
-	if content == "" {
-		return ParsedMessage{}, false, ""
-	}
-
-	msg := ParsedMessage{
-		Ordinal:       ordinal,
-		Role:          RoleAssistant,
-		Content:       content,
-		Timestamp:     ts,
-		HasThinking:   hasThinking,
-		HasToolUse:    true,
-		ContentLength: len(content),
-		Model:         model,
-		ToolCalls: []ParsedToolCall{{
-			ToolUseID: ev.Get("tool_call_id").Str,
-			ToolName:  toolName,
-			Category:  openHandsToolCategory(toolName, action),
-			InputJSON: inputJSON,
-			Rendering: strings.TrimSpace(rendering),
-		}},
-	}
+	var body MessageContentBuilder
+	body.AddText(openHandsText(ev.Get("thought")))
+	rendering := formatOpenHandsAction(toolName, action, ev.Get("summary").Str)
+	body.AddToolCall(ParsedToolCall{
+		ToolUseID: ev.Get("tool_call_id").Str,
+		ToolName:  toolName,
+		Category:  openHandsToolCategory(toolName, action),
+		InputJSON: inputJSON,
+		Rendering: strings.TrimSpace(rendering),
+	})
+	appendOpenHandsThinking(&body, ev.Get("thinking_blocks"), ev.Get("reasoning_content").Str)
+	msg := body.Message()
+	msg.Ordinal = ordinal
+	msg.Role = RoleAssistant
+	msg.Timestamp = ts
+	msg.Model = model
 	return msg, true, openHandsActionCwd(toolName, action)
 }
 
@@ -373,41 +366,33 @@ func parseOpenHandsObservationEvent(
 	).Str
 
 	toolUseID := ev.Get("tool_call_id").Str
-	if toolUseID == "" {
-		if display == "" {
-			return ParsedMessage{}, false, ""
-		}
-		return ParsedMessage{
-			Ordinal:       ordinal,
-			Role:          RoleUser,
-			Content:       display,
-			SourceSubtype: SourceSubtypeToolResult,
-			Timestamp:     ts,
-			ContentLength: len(display),
-		}, true, workingDir
+	if toolUseID == "" && display == "" {
+		return ParsedMessage{}, false, ""
 	}
-
 	if raw == "" {
 		b, _ := json.Marshal(display)
 		raw = string(b)
 	}
 	contentLength := len(display)
 	if contentLength == 0 {
-		contentLength = toolResultContentLength(
-			gjson.Parse(raw),
-		)
+		contentLength = toolResultContentLength(gjson.Parse(raw))
 	}
-
-	return ParsedMessage{
-		Ordinal:   ordinal,
-		Role:      RoleUser,
-		Timestamp: ts,
-		ToolResults: []ParsedToolResult{{
-			ToolUseID:     toolUseID,
-			ContentLength: contentLength,
-			ContentRaw:    raw,
-		}},
-	}, true, workingDir
+	var body MessageContentBuilder
+	body.AddToolResult(ParsedToolResult{
+		ToolUseID:     toolUseID,
+		ContentLength: contentLength,
+		ContentRaw:    raw,
+	})
+	msg := body.Message()
+	msg.Ordinal = ordinal
+	msg.Role = RoleUser
+	msg.SourceSubtype = SourceSubtypeToolResult
+	msg.Timestamp = ts
+	// Paired observations historically contribute work through the call.
+	if toolUseID == "" {
+		msg.ContentLength = sanitizedWorkLength(display)
+	}
+	return msg, true, workingDir
 }
 
 func openHandsBaseStateCwd(base gjson.Result) string {
@@ -434,36 +419,34 @@ func openHandsText(content gjson.Result) string {
 	return strings.TrimSpace(text)
 }
 
-func openHandsAppendThinking(
-	content string, ev gjson.Result,
-) (string, bool) {
-	thinking := openHandsThinkingText(ev)
-	if thinking == "" {
-		return content, false
-	}
-	block := "[Thinking]\n" + thinking + "\n[/Thinking]"
-	if strings.TrimSpace(content) == "" {
-		return block, true
-	}
-	return content + "\n" + block, true
-}
-
-func openHandsThinkingText(ev gjson.Result) string {
+func appendOpenHandsThinking(body *MessageContentBuilder, blocks gjson.Result, reasoning string) {
+	workLength, workParts := body.workLength, body.workParts
 	var parts []string
-	ev.Get("thinking_blocks").ForEach(func(_, block gjson.Result) bool {
-		if t := strings.TrimSpace(
-			block.Get("thinking").Str,
-		); t != "" {
-			parts = append(parts, t)
+	blocks.ForEach(func(_, block gjson.Result) bool {
+		switch block.Get("type").Str {
+		case "thinking":
+			text := strings.TrimSpace(block.Get("thinking").Str)
+			body.AddThinking(text)
+			if text != "" {
+				parts = append(parts, text)
+			}
+		case "redacted_thinking":
+			body.AddThinking("")
 		}
 		return true
 	})
-	if len(parts) > 0 {
-		return strings.Join(parts, "\n\n")
+	if len(parts) == 0 {
+		if text := strings.TrimSpace(reasoning); text != "" {
+			body.AddThinking(text)
+			parts = append(parts, text)
+		}
 	}
-	return strings.TrimSpace(
-		ev.Get("reasoning_content").Str,
-	)
+	if len(parts) > 0 {
+		// This provider historically rendered one reasoning envelope around
+		// the joined blocks. Retain that work count with individual spans.
+		body.workLength, body.workParts = workLength, workParts
+		body.addWork(sanitizedWorkLength(strings.Join(parts, "\n\n")) + len("[Thinking]\n\n[/Thinking]"))
+	}
 }
 
 func openHandsToolCategory(
@@ -588,17 +571,6 @@ func openHandsActionCwd(
 		return ""
 	}
 	return filepath.Dir(path)
-}
-
-func joinOpenHandsParts(parts ...string) string {
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			out = append(out, part)
-		}
-	}
-	return strings.Join(out, "\n")
 }
 
 func openHandsStringArray(value gjson.Result) []string {

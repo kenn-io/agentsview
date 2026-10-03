@@ -3,11 +3,18 @@ title: Semantic Search
 description: Vector (semantic) search over session messages, plus hybrid search and cursor-based context retrieval
 ---
 
-AgentsView can index user and assistant message content into a local vector
+AgentsView can index proven user and assistant dialogue into a local vector
 store and search it by meaning instead of exact terms, alongside the existing
 substring/regex/FTS5 content search. This is an opt-in feature backed by an
 OpenAI-compatible embeddings endpoint — a local [Ollama](https://ollama.com)
 model or a hosted API.
+
+Reasoning, commands, and tool output are excluded. Older messages with unknown
+native boundaries become eligible after normal sync reparses their source.
+Rebuild embeddings after the dialogue corpus upgrade; the previous generation
+cannot serve semantic searches. Replica servers also require a push of the new
+generation. Saved source-missing transcripts remain available for viewing and
+complete-transcript search.
 
 For the architecture behind this page — storage layout, generations,
 concurrency, and the search path — see

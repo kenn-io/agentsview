@@ -535,48 +535,41 @@ func buildZCodeMessage(
 	}
 
 	msg := ParsedMessage{
-		Ordinal:   ordinal,
-		Role:      role,
-		Timestamp: zcodeParseTime(row.timeCreated),
-		Model:     zcodeMessageModel(row.data),
-		IsSystem:  role == RoleSystem,
+		Ordinal:    ordinal,
+		SourceUUID: row.id,
+		Role:       role,
+		Timestamp:  zcodeParseTime(row.timeCreated),
+		Model:      zcodeMessageModel(row.data),
+		IsSystem:   role == RoleSystem,
 	}
 
-	var texts []string
-	var thinking []string
+	var body MessageContentBuilder
 	for _, part := range parts {
 		block := gjson.Parse(part.data)
 		switch block.Get("type").Str {
 		case "text":
 			if text := zcodeBlockText(block); text != "" {
-				texts = append(texts, text)
+				body.AddText(text)
 			}
 		case "thinking", "reasoning":
-			text := zcodeThinkingText(block)
-			if text == "" {
-				continue
-			}
-			msg.HasThinking = true
-			thinking = append(thinking, text)
-			texts = append(texts, "[Thinking]\n"+text+"\n[/Thinking]")
+			body.AddThinking(zcodeThinkingText(block))
 		case "tool_use", "tool":
-			msg.HasToolUse = true
+			body.message.HasToolUse = true
 			if tc, ok := zcodeParseToolCall(ctx, block); ok {
-				msg.ToolCalls = append(msg.ToolCalls, tc)
+				body.AddToolCall(tc)
 			}
 			if tr, ok := zcodeParseToolResult(block); ok {
-				msg.ToolResults = append(msg.ToolResults, tr)
+				body.AddToolResult(tr)
 			}
 		case "tool_result":
 			if tr, ok := zcodeParseToolResult(block); ok {
-				msg.ToolResults = append(msg.ToolResults, tr)
+				body.AddToolResult(tr)
 			}
 		}
 	}
 
-	msg.Content = strings.Join(texts, "\n")
-	msg.ThinkingText = strings.Join(thinking, "\n\n")
-	msg.ContentLength = len(msg.Content)
+	msg.Content = body.Message().Content
+	msg = msg.withBody(body.Message())
 	return msg, true
 }
 

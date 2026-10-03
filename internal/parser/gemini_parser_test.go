@@ -218,15 +218,14 @@ func TestParseGeminiSession_ToolCalls(t *testing.T) {
 		assert.Len(t, msgs, 2)
 		assert.True(t, msgs[1].HasToolUse)
 		assert.True(t, msgs[1].HasThinking)
-		assert.Contains(t, msgs[1].Content, "[Thinking]\nPlanning\n")
-		assert.Contains(t, msgs[1].Content, "[/Thinking]")
-		assert.Contains(t, msgs[1].Content, "[Read: main.go]")
-		// Chronological: thinking before content before tool calls
-		thinkIdx := strings.Index(msgs[1].Content, "[Thinking]")
-		contentIdx := strings.Index(msgs[1].Content, "Let me read it.")
-		toolIdx := strings.Index(msgs[1].Content, "[Read:")
-		assert.Less(t, thinkIdx, contentIdx)
-		assert.Less(t, contentIdx, toolIdx)
+		assert.Equal(t, "Let me read it.", msgs[1].Content)
+		assert.Equal(t, "Planning\nI need to read the file first.", msgs[1].ThinkingText)
+		require.Len(t, msgs[1].ToolCalls, 1)
+		assert.Equal(t, "[Read: main.go]", msgs[1].ToolCalls[0].Rendering)
+		require.NotNil(t, msgs[1].ContentLayout)
+		assert.Equal(t, []ContentBlock{
+			{Kind: "thinking", End: 39}, {Kind: "text", End: 15}, {Kind: "tool_call"},
+		}, msgs[1].ContentLayout.Blocks)
 		assertToolCalls(t, msgs[1].ToolCalls, []ParsedToolCall{{ToolName: "read_file", Category: "Read"}})
 	})
 
@@ -337,25 +336,13 @@ func TestParseGeminiSession_ThinkingWithText(t *testing.T) {
 	assert.True(t, msg.HasThinking)
 	assert.False(t, msg.HasToolUse)
 
-	// Thinking and content should be separated by blank lines
-	assert.Contains(t, msg.Content, "[Thinking]")
-	assert.Contains(t, msg.Content, "Here is how it works")
-
-	// Verify blank-line separation between thinking blocks
-	// and between thinking and content
-	thinkIdx := strings.LastIndex(
-		msg.Content, "[Thinking]",
-	)
-	contentIdx := strings.Index(
-		msg.Content,
-		"Here is how it works",
-	)
-	assert.Less(t, thinkIdx, contentIdx)
-
-	// The text between last thinking block and response
-	// should contain a blank line
-	between := msg.Content[thinkIdx:contentIdx]
-	assert.Contains(t, between, "\n\n")
+	assert.Equal(t, "Here is how it works: the system reads the config file on startup.", msg.Content)
+	assert.Equal(t, "Understanding request\nThe user wants an explanation of the system.\n\nPlanning response\nI should describe the config loading flow.", msg.ThinkingText)
+	require.NotNil(t, msg.ContentLayout)
+	require.Len(t, msg.ContentLayout.Blocks, 3)
+	assert.Equal(t, "thinking", msg.ContentLayout.Blocks[0].Kind)
+	assert.Equal(t, "thinking", msg.ContentLayout.Blocks[1].Kind)
+	assert.Equal(t, "text", msg.ContentLayout.Blocks[2].Kind)
 }
 
 func TestParseGeminiSession_TokenUsage(t *testing.T) {

@@ -87,9 +87,6 @@ func parseWorkBuddySession(path, project, machine string) (*ParsedSession, []Par
 				continue
 			}
 			content := workBuddyContentText(root.Get("content"))
-			if strings.TrimSpace(content) == "" {
-				continue
-			}
 			if firstMsg == "" && role == RoleUser {
 				firstMsg = truncate(strings.ReplaceAll(content, "\n", " "), 300)
 			}
@@ -103,7 +100,10 @@ func parseWorkBuddySession(path, project, machine string) (*ParsedSession, []Par
 			if role == RoleAssistant {
 				applyWorkBuddyUsage(&msg, root)
 			}
-			messages = append(messages, msg)
+			if strings.TrimSpace(content) == "" && !msg.HasContextTokens && !msg.HasOutputTokens {
+				continue
+			}
+			messages = append(messages, msg.withPlainBody())
 			ordinal++
 			if role == RoleUser {
 				realUserCount++
@@ -119,7 +119,7 @@ func parseWorkBuddySession(path, project, machine string) (*ParsedSession, []Par
 				Role:          RoleAssistant,
 				Timestamp:     ts,
 				HasToolUse:    true,
-				ContentLength: len(name),
+				ContentLength: sanitizedWorkLength(name),
 				ToolCalls: []ParsedToolCall{{
 					ToolUseID: callID,
 					ToolName:  name,
@@ -127,27 +127,30 @@ func parseWorkBuddySession(path, project, machine string) (*ParsedSession, []Par
 					InputJSON: workBuddyInputJSON(root.Get("arguments")),
 				}},
 			}
+			var body MessageContentBuilder
+			body.AddToolCall(msg.ToolCalls[0])
+			work := msg.ContentLength
+			msg = msg.withBody(body.Message())
+			msg.ContentLength = work
 			applyWorkBuddyUsage(&msg, root)
 			messages = append(messages, msg)
 			ordinal++
 		case "function_call_result":
 			callID := root.Get("callId").Str
-			if callID == "" {
-				continue
-			}
 			output := root.Get("output")
-			contentLen := len(output.String())
-			messages = append(messages, ParsedMessage{
-				Ordinal:       ordinal,
-				Role:          RoleUser,
-				Timestamp:     ts,
+			contentLen := sanitizedWorkLength(output.String())
+			var body MessageContentBuilder
+			body.AddToolResult(ParsedToolResult{
+				ToolUseID:     callID,
 				ContentLength: contentLen,
-				ToolResults: []ParsedToolResult{{
-					ToolUseID:     callID,
-					ContentLength: contentLen,
-					ContentRaw:    workBuddyResultRaw(output),
-				}},
+				ContentRaw:    workBuddyResultRaw(output),
 			})
+			msg := body.Message()
+			msg.Ordinal = ordinal
+			msg.Role = RoleUser
+			msg.Timestamp = ts
+			msg.ContentLength = contentLen
+			messages = append(messages, msg)
 			ordinal++
 		}
 	}

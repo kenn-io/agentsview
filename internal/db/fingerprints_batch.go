@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"fmt"
 	"strings"
 )
@@ -260,7 +261,7 @@ func (db *DB) MessageFlagsFingerprints(ctx context.Context,
 		ph, args := sessionIDArgs(chunk)
 		rows, err := db.getReader().Query(ctx, `
 			SELECT session_id, ordinal, is_system, has_thinking,
-				has_tool_use, thinking_text
+				has_tool_use, thinking_text, tool_result_text, content_layout
 			 FROM messages
 			 WHERE session_id IN (`+ph+`)
 			 ORDER BY session_id, ordinal ASC`,
@@ -276,7 +277,7 @@ func (db *DB) MessageFlagsFingerprints(ctx context.Context,
 			var r flagsFingerprintRow
 			if err := rows.Scan(
 				&sessionID, &r.ordinal, &r.isSystem, &r.hasThinking,
-				&r.hasToolUse, &r.thinkingText,
+				&r.hasToolUse, &r.thinkingText, &r.toolResultText, &r.contentLayout,
 			); err != nil {
 				return err
 			}
@@ -419,7 +420,7 @@ func (db *DB) ToolCallFingerprints(ctx context.Context,
 				COALESCE(tc.subagent_session_id, ''),
 				COALESCE(tc.result_content_length, 0),
 				COALESCE(tc.result_content, ''),
-				COALESCE(tc.file_path, '')
+				COALESCE(tc.file_path, ''), COALESCE(tc.rendering, '')
 			 FROM tool_calls tc
 			 JOIN messages m ON m.id = tc.message_id
 			 WHERE tc.session_id IN (`+ph+`)
@@ -439,7 +440,7 @@ func (db *DB) ToolCallFingerprints(ctx context.Context,
 				&sessionID, &r.messageOrdinal, &r.toolName, &r.category,
 				&r.toolUseID, &r.inputJSON, &r.skillName,
 				&r.subagentSessionID, &r.resultContentLength,
-				&r.resultContent, &r.filePath,
+				&r.resultContent, &r.filePath, &r.rendering,
 			); err != nil {
 				return err
 			}
@@ -673,17 +674,21 @@ func appendRoleTimeFingerprintRow(
 }
 
 type flagsFingerprintRow struct {
-	ordinal      int
-	isSystem     bool
-	hasThinking  bool
-	hasToolUse   bool
-	thinkingText string
+	ordinal        int
+	isSystem       bool
+	hasThinking    bool
+	hasToolUse     bool
+	thinkingText   string
+	toolResultText string
+	contentLayout  sql.NullString
 }
 
 func (r flagsFingerprintRow) appendTo(b *strings.Builder) {
 	sum := sha256.Sum256([]byte(SanitizeUTF8(r.thinkingText)))
-	fmt.Fprintf(b, "%d|%t|%t|%t|%x;",
-		r.ordinal, r.isSystem, r.hasThinking, r.hasToolUse, sum)
+	outputSum := sha256.Sum256([]byte(SanitizeUTF8(r.toolResultText)))
+	layoutSum := sha256.Sum256([]byte(ContentLayoutJSON(DecodeStoredContentLayout(r.contentLayout.String))))
+	fmt.Fprintf(b, "%d|%t|%t|%t|%x|%x|%x;",
+		r.ordinal, r.isSystem, r.hasThinking, r.hasToolUse, sum, outputSum, layoutSum)
 }
 
 type toolCallFingerprintRow struct {
@@ -698,6 +703,7 @@ type toolCallFingerprintRow struct {
 	resultContentLength int
 	resultContent       string
 	filePath            string
+	rendering           string
 }
 
 func (r toolCallFingerprintRow) appendTo(b *strings.Builder) {
@@ -709,8 +715,9 @@ func (r toolCallFingerprintRow) appendTo(b *strings.Builder) {
 	subagentSessionID := SanitizeUTF8(r.subagentSessionID)
 	resultContent := SanitizeUTF8(r.resultContent)
 	filePath := SanitizeUTF8(r.filePath)
+	rendering := SanitizeUTF8(r.rendering)
 	fmt.Fprintf(b,
-		"%d|%d|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d|%d:%s|%d:%s;",
+		"%d|%d|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d|%d:%s|%d:%s|%d:%s;",
 		r.messageOrdinal, r.callIndex,
 		len(toolName), toolName,
 		len(category), category,
@@ -721,6 +728,7 @@ func (r toolCallFingerprintRow) appendTo(b *strings.Builder) {
 		r.resultContentLength,
 		len(resultContent), resultContent,
 		len(filePath), filePath,
+		len(rendering), rendering,
 	)
 }
 

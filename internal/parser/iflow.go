@@ -362,7 +362,8 @@ func extractMessagesIflow(entries []dagEntryIflow) (
 		}
 
 		content := gjson.Get(e.line, "message.content")
-		text, _, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(context.Background(), content)
+		body := ExtractMessageContent(context.Background(), content)
+		text, thinkingText, hasThinking, hasToolUse, tcs, trs := body.Content, body.ThinkingText, body.HasThinking, body.HasToolUse, body.ToolCalls, body.ToolResults
 
 		// Convert command/skill invocation XML into readable
 		// text (e.g. "/roborev-fix 450"). If the content
@@ -376,7 +377,7 @@ func extractMessagesIflow(entries []dagEntryIflow) (
 			}
 		}
 
-		if strings.TrimSpace(text) == "" && len(trs) == 0 && len(tcs) == 0 {
+		if !body.hasNativeBody() {
 			continue
 		}
 
@@ -391,11 +392,12 @@ func extractMessagesIflow(entries []dagEntryIflow) (
 			Content:       text,
 			Timestamp:     e.timestamp,
 			HasThinking:   hasThinking,
+			ThinkingText:  thinkingText,
 			HasToolUse:    hasToolUse,
 			ContentLength: len(text),
 			ToolCalls:     tcs,
 			ToolResults:   trs,
-		})
+		}.withBody(body))
 		ordinal++
 	}
 

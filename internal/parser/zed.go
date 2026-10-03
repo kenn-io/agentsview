@@ -415,32 +415,28 @@ func parseZedMessagesFromDoc(doc map[string]any) []ParsedMessage {
 			if content == "" && !zedHasContent(rawContent) {
 				continue
 			}
-			messages = append(messages, ParsedMessage{
-				Role:          RoleUser,
-				Content:       content,
-				ContentLength: len(content),
-			})
+			var body MessageContentBuilder
+			body.AddText(content)
+			messages = append(messages, (ParsedMessage{
+				Role: RoleUser, Content: body.Message().Content,
+			}).withBody(body.Message()))
 			continue
 		}
 		if agent, ok := obj["Agent"]; ok {
 			content := strings.TrimSpace(zedExtractText(zedMessageContent(agent)))
-			thinking := strings.TrimSpace(zedExtractThinking(agent))
-			toolCalls := zedExtractToolCalls(agent)
-			toolResults := zedExtractToolResults(agent)
-			if content == "" && thinking == "" &&
-				len(toolCalls) == 0 && len(toolResults) == 0 {
+			body := zedNativeMessageBody(zedMessageContent(agent))
+			builder := continueMessageContent(body)
+			for _, result := range zedExtractToolResults(agent) {
+				builder.AddToolResult(result)
+			}
+			body = builder.Message()
+			body.trimThinking()
+			if !body.hasNativeBody() {
 				continue
 			}
-			messages = append(messages, ParsedMessage{
-				Role:          RoleAssistant,
-				Content:       content,
-				ThinkingText:  thinking,
-				HasThinking:   thinking != "",
-				HasToolUse:    len(toolCalls) > 0,
-				ContentLength: len(content),
-				ToolCalls:     toolCalls,
-				ToolResults:   toolResults,
-			})
+			msg := (ParsedMessage{Role: RoleAssistant, Content: content}).withBody(body)
+			msg.ContentLength = sanitizedWorkLength(content)
+			messages = append(messages, msg)
 		}
 	}
 	return messages

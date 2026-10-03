@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 // insertCSUnitMessage inserts a message with explicit is_system and
@@ -25,11 +26,11 @@ func insertCSUnitMessage(
 	_, err := store.DB().Exec(`
 		INSERT INTO messages
 			(session_id, ordinal, role, content, timestamp,
-			 content_length, is_system, is_sidechain)
-		VALUES ($1, $2, $3, $4, $5::timestamptz, $6, $7, $8)
+			 content_length, is_system, is_sidechain, content_layout)
+		VALUES ($1, $2, $3, $4, $5::timestamptz, $6, $7, $8, $9)
 		ON CONFLICT DO NOTHING`,
 		sessionID, ordinal, role, content, ts, len(content),
-		isSystem, isSidechain,
+		isSystem, isSidechain, db.ContentLayoutJSON(&parser.ContentLayout{Version: 1, Blocks: []parser.ContentBlock{{Kind: "text", End: len(content)}}}),
 	)
 	require.NoError(t, err, "insert message ord=%d", ordinal)
 }

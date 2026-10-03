@@ -44,6 +44,10 @@ func (s *Server) registerSessionRoutes() {
 	timing.Properties["slowest_call"] = &huma.Schema{
 		AnyOf: []*huma.Schema{registry.Schema(reflect.TypeFor[db.CallTiming](), true, ""), {Type: "null"}},
 	}
+	message := registry.Schema(reflect.TypeFor[db.Message](), false, "")
+	message.Properties["content_layout"] = &huma.Schema{
+		AnyOf: []*huma.Schema{registry.Schema(reflect.TypeFor[parser.ContentLayout](), true, ""), {Type: "null"}},
+	}
 
 	s.get(group, "/sessions/{id}/usage", "Get session usage", s.humaSessionUsage)
 	s.stream(group, http.MethodGet, "/sessions/{id}/watch", "Watch session events", s.humaWatchSession)

@@ -13,11 +13,12 @@ import (
 // reasonixMessage represents a single line in a Reasonix JSONL
 // transcript.
 type reasonixMessage struct {
-	Role             string             `json:"role"`
-	Content          string             `json:"content"`
-	ReasoningContent string             `json:"reasoning_content"`
-	ToolCalls        []reasonixToolCall `json:"tool_calls"`
-	ToolCallID       string             `json:"tool_call_id"`
+	Role               string             `json:"role"`
+	Content            string             `json:"content"`
+	ReasoningContent   string             `json:"reasoning_content"`
+	ReasoningSignature string             `json:"reasoning_signature"`
+	ToolCalls          []reasonixToolCall `json:"tool_calls"`
+	ToolCallID         string             `json:"tool_call_id"`
 }
 
 // reasonixToolCall represents a tool call in a Reasonix message.
@@ -85,30 +86,28 @@ func (b *reasonixSessionBuilder) processLine(line string) error {
 	// Normalize content
 	content := strings.TrimSpace(msg.Content)
 
-	// For assistant messages, prepend reasoning content if present
-	if role == RoleAssistant && msg.ReasoningContent != "" {
-		thinkBlock := "[Thinking]\n" + strings.TrimSpace(msg.ReasoningContent) + "\n[/Thinking]"
-		if content != "" {
-			content = thinkBlock + "\n\n" + content
-		} else {
-			content = thinkBlock
+	var bodyBuilder MessageContentBuilder
+	workLength := sanitizedWorkLength(content)
+	if role == RoleAssistant && (msg.ReasoningContent != "" || msg.ReasoningSignature != "") {
+		reasoning := strings.TrimSpace(msg.ReasoningContent)
+		bodyBuilder.AddThinking(reasoning)
+		if msg.ReasoningContent != "" {
+			workLength += sanitizedWorkLength(reasoning) + len("[Thinking]\n\n[/Thinking]")
+			if content != "" {
+				workLength += 2
+			}
 		}
 	}
-
-	// Extract tool calls
-	hasToolUse := len(msg.ToolCalls) > 0
-	var toolCalls []ParsedToolCall
+	bodyBuilder.AddText(content)
 	for _, tc := range msg.ToolCalls {
-		toolCalls = append(toolCalls, ParsedToolCall{
-			ToolUseID: tc.ID,
-			ToolName:  tc.Name,
-			Category:  NormalizeToolCategory(tc.Name),
-			InputJSON: tc.Arguments,
+		bodyBuilder.AddToolCall(ParsedToolCall{
+			ToolUseID: tc.ID, ToolName: tc.Name,
+			Category: NormalizeToolCategory(tc.Name), InputJSON: tc.Arguments,
 		})
 	}
-
-	// Skip messages with no content and no tool calls
-	if content == "" && !hasToolUse {
+	body := bodyBuilder.Message()
+	body.ContentLength = workLength
+	if !body.hasNativeBody() {
 		return nil
 	}
 
@@ -122,16 +121,8 @@ func (b *reasonixSessionBuilder) processLine(line string) error {
 	// Message ordering is tracked via ordinal; timestamps are
 	// set from metadata or file mtime after parsing completes.
 
-	b.messages = append(b.messages, ParsedMessage{
-		Ordinal:       b.ordinal,
-		Role:          role,
-		Content:       content,
-		ContentLength: len(content),
-		HasThinking:   msg.ReasoningContent != "",
-		HasToolUse:    hasToolUse,
-		ToolCalls:     toolCalls,
-		Model:         b.model,
-	})
+	body.Ordinal, body.Role, body.Model = b.ordinal, role, b.model
+	b.messages = append(b.messages, body)
 	b.ordinal++
 
 	return nil
@@ -140,27 +131,20 @@ func (b *reasonixSessionBuilder) processLine(line string) error {
 func (b *reasonixSessionBuilder) processToolResult(
 	msg reasonixMessage,
 ) error {
-	if msg.ToolCallID == "" {
-		return nil
-	}
-
 	content := msg.Content
 	quoted, err := json.Marshal(content)
 	if err != nil {
 		return nil //nolint:nilerr // Malformed provider records are skipped without discarding the transcript.
 	}
 
-	b.messages = append(b.messages, ParsedMessage{
-		Ordinal:       b.ordinal,
-		Role:          RoleUser,
-		Content:       "",
-		ContentLength: len(content),
-		ToolResults: []ParsedToolResult{{
-			ToolUseID:     msg.ToolCallID,
-			ContentRaw:    string(quoted),
-			ContentLength: len(content),
-		}},
+	var bodyBuilder MessageContentBuilder
+	bodyBuilder.AddToolResult(ParsedToolResult{
+		ToolUseID: msg.ToolCallID, ContentRaw: string(quoted), ContentLength: len(content),
 	})
+	body := bodyBuilder.Message()
+	body.Ordinal, body.Role = b.ordinal, RoleUser
+	body.ContentLength = sanitizedWorkLength(content)
+	b.messages = append(b.messages, body)
 	b.ordinal++
 
 	return nil

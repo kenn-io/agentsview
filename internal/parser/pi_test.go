@@ -244,13 +244,9 @@ func TestPiProviderParsesAssistantMessages(t *testing.T) {
 	assert.Equal(t, "Read", tc.Category, "PRSR-04: normalized category via NormalizeToolCategory")
 	assert.Equal(t, "toolu_01", tc.ToolUseID, "PRSR-04: tool use ID")
 	assert.Contains(t, tc.InputJSON, "auth.go", "PRSR-04: input JSON contains file path")
-	assert.Contains(t, assistantMsg.Content, "Looking at the auth module.", "assistant text content")
-
-	// Thinking and tool markers are now emitted inline in Content.
-	assert.Contains(t, assistantMsg.Content, "[Thinking]", "thinking marker in Content")
-	assert.Contains(t, assistantMsg.Content, "[/Thinking]", "thinking end marker in Content")
-	assert.Contains(t, assistantMsg.Content, "Let me analyze this carefully.", "thinking text in Content")
-	assert.Contains(t, assistantMsg.Content, "[Read: auth.go]", "tool use marker in Content")
+	assert.Equal(t, "Looking at the auth module.", assistantMsg.Content)
+	assert.Equal(t, "Let me analyze this carefully.", assistantMsg.ThinkingText)
+	assert.Equal(t, "[Read: auth.go]", tc.Rendering)
 }
 
 // TestPiProviderParsesToolResults verifies tool result entries are parsed
@@ -330,8 +326,8 @@ func TestPiProviderParsesThinkingBlocks(t *testing.T) {
 		}
 		require.NotNil(t, msg, "expected explicit-thinking assistant message")
 		assert.True(t, msg.HasThinking, "PRSR-06: HasThinking for explicit block")
-		assert.Contains(t, msg.Content, "[Thinking]\nLet me analyze this carefully.\n[/Thinking]",
-			"explicit thinking text emitted as inline marker")
+		assert.Equal(t, "Looking at the auth module.", msg.Content)
+		assert.Equal(t, "Let me analyze this carefully.", msg.ThinkingText)
 	})
 
 	t.Run("redacted thinking", func(t *testing.T) {
@@ -745,7 +741,7 @@ func TestPiProviderParsesIOError(t *testing.T) {
 }
 
 // TestParsePiAssistantMessage_BlockOrder verifies that interleaved thinking,
-// text, and tool blocks preserve their order in Content.
+// text, and tool blocks preserve their native order in the layout.
 func TestParsePiAssistantMessage_BlockOrder(t *testing.T) {
 	header := `{"type":"session","id":"order-sess","timestamp":"2025-01-01T10:00:00Z","cwd":"/tmp"}` + "\n"
 	// Assistant message with thinking -> text -> toolCall -> text order.
@@ -759,22 +755,15 @@ func TestParsePiAssistantMessage_BlockOrder(t *testing.T) {
 	_, msgs := runPiParserTest(t, header+assistant)
 	require.Len(t, msgs, 1)
 
-	content := msgs[0].Content
-	// Verify ordering: thinking marker comes before first text,
-	// tool marker comes between first and second text.
-	thinkIdx := strings.Index(content, "[Thinking]")
-	firstTextIdx := strings.Index(content, "first text")
-	toolIdx := strings.Index(content, "[Bash]")
-	secondTextIdx := strings.Index(content, "second text")
-
-	require.NotEqual(t, -1, thinkIdx, "thinking marker present")
-	require.NotEqual(t, -1, firstTextIdx, "first text present")
-	require.NotEqual(t, -1, toolIdx, "tool marker present")
-	require.NotEqual(t, -1, secondTextIdx, "second text present")
-
-	assert.Less(t, thinkIdx, firstTextIdx, "thinking before first text")
-	assert.Less(t, firstTextIdx, toolIdx, "first text before tool")
-	assert.Less(t, toolIdx, secondTextIdx, "tool before second text")
+	assert.Equal(t, "first text\nsecond text", msgs[0].Content)
+	assert.Equal(t, "step one", msgs[0].ThinkingText)
+	require.NotNil(t, msgs[0].ContentLayout)
+	assert.Equal(t, []ContentBlock{
+		{Kind: "thinking", End: 8},
+		{Kind: "text", End: 10},
+		{Kind: "tool_call", CallIndex: 0},
+		{Kind: "text", Start: 11, End: 22},
+	}, msgs[0].ContentLayout.Blocks)
 }
 
 func TestFormatPiToolUse(t *testing.T) {
@@ -864,8 +853,10 @@ func TestParsePiAssistantMessage_IntentInToolMarker(t *testing.T) {
 
 	_, msgs := runPiParserTest(t, header+assistant)
 	require.Len(t, msgs, 1)
-	assert.Contains(t, msgs[0].Content, "[Bash: List files]",
-		"agent__intent must be normalized to description for tool marker")
+	assert.Empty(t, msgs[0].Content)
+	require.Len(t, msgs[0].ToolCalls, 1)
+	assert.Equal(t, "[Bash: List files]\n$ ls", msgs[0].ToolCalls[0].Rendering)
+	assert.JSONEq(t, `{"command":"ls","description":"List files"}`, msgs[0].ToolCalls[0].InputJSON)
 }
 
 // TestPiProviderParsesErrorCases verifies error handling for missing, empty,

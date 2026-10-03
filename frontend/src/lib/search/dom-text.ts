@@ -46,7 +46,6 @@ function isCodePointBoundary(value: string, index: number): boolean {
   return !(previous >= 0xd800 && previous <= 0xdbff && current >= 0xdc00 && current <= 0xdfff);
 }
 
-const WORD_END = /[\p{L}\p{M}\p{N}\p{Pc}]$/u;
 const WORD_START = /^[\p{L}\p{M}\p{N}\p{Pc}]/u;
 
 function findFoldedOffsets(text: string, query: string, wholeWord: boolean): TextOccurrence[] {
@@ -56,11 +55,13 @@ function findFoldedOffsets(text: string, query: string, wholeWord: boolean): Tex
     const start = text.indexOf(query, cursor);
     if (start < 0) break;
     const end = start + query.length;
+    let previousStart = Math.max(0, start - 1);
+    if (!isCodePointBoundary(text, previousStart)) previousStart--;
     if (
       isCodePointBoundary(text, start) &&
       isCodePointBoundary(text, end) &&
       (!wholeWord ||
-        (!WORD_END.test(text.slice(Math.max(0, start - 2), start)) &&
+        (!WORD_START.test(text.slice(previousStart, start)) &&
           !WORD_START.test(text.slice(end, end + 2))))
     ) {
       occurrences.push({ start, end });

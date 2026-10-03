@@ -200,7 +200,7 @@ func (s *Store) enrichSemanticHitChunk(
 			m.is_sidechain
 		FROM refs r
 		JOIN messages m ON m.session_id = r.session_id AND m.ordinal = r.ordinal
-		JOIN sessions s ON s.id = m.session_id`, args...)
+		JOIN sessions s ON s.id = m.session_id WHERE `+db.DialogueEligibilitySQL("m", db.ClickHouseQueryDialect()), args...)
 	if err != nil {
 		return fmt.Errorf("clickhouse semantic search enrich: %w", err)
 	}

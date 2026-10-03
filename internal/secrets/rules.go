@@ -685,7 +685,9 @@ func looksLikePEMHeaderStart(body string) bool {
 // interrupted, and they can arrive later from machines still running old
 // binaries, so they must read as stale by value everywhere; a one-time
 // local migration could not invalidate either case.
-const rulesAlgorithmVersion = 7
+// v8: scans cover canonical thinking, standalone output and tool rendering.
+// Earlier stamps cannot attest that these newly stored owners were inspected.
+const rulesAlgorithmVersion = 8
 
 // Verify reports whether the named rule still produces a finding at exactly
 // [start:end) within source. Used by --reveal to confirm a stored finding's

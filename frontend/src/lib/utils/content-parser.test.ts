@@ -6,6 +6,8 @@ let nextId = 1;
 
 function makeMsg(overrides: Partial<Message> & { content: string }): Message {
   const defaults: Message = {
+    content_layout: null,
+    tool_result_text: "",
     has_context_tokens: false,
     has_output_tokens: false,
     id: nextId++,
@@ -494,6 +496,7 @@ describe("enrichSegments", () => {
   it("attaches toolCall to matching tool segment", () => {
     const segments = parseContent("[Bash]\n$ echo hi");
     const tc: ToolCall = {
+      rendering: "",
       tool_name: "Bash",
       category: "Bash",
       input_json: '{"command":"echo hi","description":""}',
@@ -512,6 +515,7 @@ describe("enrichSegments", () => {
     const fullCommand =
       "git commit -m \"$(cat <<'EOF')\n   Commit message here.\n\n   Co-Authored-By: Claude <noreply@anthropic.com>\n   EOF\n   )\"";
     const tc: ToolCall = {
+      rendering: "",
       tool_name: "Bash",
       category: "Bash",
       input_json: JSON.stringify({
@@ -538,6 +542,7 @@ describe("enrichSegments", () => {
     const segments = parseContent(`[exec_command]\n$ ${firstLine}`);
 
     const tc: ToolCall = {
+      rendering: "",
       tool_name: "exec_command",
       category: "Bash",
       input_json: JSON.stringify({ cmd: fullCmd }),
@@ -550,6 +555,7 @@ describe("enrichSegments", () => {
   it("does not replace single-line Bash content", () => {
     const segments = parseContent("[Bash]\n$ echo hi");
     const tc: ToolCall = {
+      rendering: "",
       tool_name: "Bash",
       category: "Bash",
       input_json: '{"command":"echo hi"}',
@@ -561,6 +567,7 @@ describe("enrichSegments", () => {
   it("attaches toolCall to Task segment", () => {
     const segments = parseContent("[Task: run tests (type)]\n");
     const tc: ToolCall = {
+      rendering: "",
       tool_name: "Task",
       category: "Task",
       input_json: JSON.stringify({
@@ -576,11 +583,13 @@ describe("enrichSegments", () => {
   it("matches multiple tool calls in order", () => {
     const segments = parseContent("[Read /foo.ts]\ncontents\n[Edit /foo.ts]\nchanges");
     const tc1: ToolCall = {
+      rendering: "",
       tool_name: "Read",
       category: "Read",
       input_json: '{"file_path":"/foo.ts"}',
     };
     const tc2: ToolCall = {
+      rendering: "",
       tool_name: "Edit",
       category: "Edit",
       input_json: '{"file_path":"/foo.ts"}',
@@ -593,6 +602,7 @@ describe("enrichSegments", () => {
   it("skips non-tool segments when matching", () => {
     const segments = parseContent("Some text\n[Bash]\n$ echo hi");
     const tc: ToolCall = {
+      rendering: "",
       tool_name: "Bash",
       category: "Bash",
       input_json: '{"command":"echo hi"}',
@@ -608,11 +618,13 @@ describe("enrichSegments", () => {
   it("appends remaining tool_calls when more exist than tool segments", () => {
     const segments = parseContent("[Bash]\n$ echo hi");
     const tc1: ToolCall = {
+      rendering: "",
       tool_name: "Bash",
       category: "Bash",
       input_json: '{"command":"echo hi"}',
     };
     const tc2: ToolCall = {
+      rendering: "",
       tool_name: "Read",
       category: "Read",
     };
@@ -626,8 +638,14 @@ describe("enrichSegments", () => {
   it("creates tool segments from structured tool_calls when no text markers exist (pi/omp style)", () => {
     // Pi/omp sessions: content is plain text, tool calls are structured JSON
     const segments = parseContent("I'll read the file.");
-    const tc1: ToolCall = { tool_name: "read", category: "Read", input_json: '{"path":"/foo.ts"}' };
+    const tc1: ToolCall = {
+      rendering: "",
+      tool_name: "read",
+      category: "Read",
+      input_json: '{"path":"/foo.ts"}',
+    };
     const tc2: ToolCall = {
+      rendering: "",
       tool_name: "write",
       category: "Write",
       input_json: '{"path":"/bar.ts","content":"x"}',
@@ -643,7 +661,12 @@ describe("enrichSegments", () => {
 
   it("creates tool segments from structured tool_calls when content is empty (pi/omp tool-only message)", () => {
     const segments = parseContent("");
-    const tc: ToolCall = { tool_name: "bash", category: "Bash", input_json: '{"command":"ls"}' };
+    const tc: ToolCall = {
+      rendering: "",
+      tool_name: "bash",
+      category: "Bash",
+      input_json: '{"command":"ls"}',
+    };
     const result = enrichSegments(segments, [tc]);
     expect(result).toHaveLength(1);
     expect(result[0]!.type).toBe("tool");
@@ -661,6 +684,7 @@ describe("enrichSegments - pi tool aliasing", () => {
 
   it("aliases str_replace to Edit label", () => {
     const tc: ToolCall = {
+      rendering: "",
       tool_name: "str_replace",
       category: "Edit",
       input_json: '{"path":"/src/app.ts","old_string":"x","new_string":"y"}',
@@ -673,6 +697,7 @@ describe("enrichSegments - pi tool aliasing", () => {
 
   it("aliases run_command to Bash label", () => {
     const tc: ToolCall = {
+      rendering: "",
       tool_name: "run_command",
       category: "Bash",
       input_json: '{"command":"npm test"}',
@@ -685,6 +710,7 @@ describe("enrichSegments - pi tool aliasing", () => {
 
   it("aliases create_file to Write label", () => {
     const tc: ToolCall = {
+      rendering: "",
       tool_name: "create_file",
       category: "Write",
       input_json: '{"path":"/src/new.ts","content":"export const x = 1;"}',
@@ -697,6 +723,7 @@ describe("enrichSegments - pi tool aliasing", () => {
 
   it("aliases read_file to Read label", () => {
     const tc: ToolCall = {
+      rendering: "",
       tool_name: "read_file",
       category: "Read",
       input_json: '{"path":"/src/app.ts"}',
@@ -710,6 +737,7 @@ describe("enrichSegments - pi tool aliasing", () => {
   it("expands multi-line run_command to $ command format", () => {
     const segments = parseContent("");
     const tc: ToolCall = {
+      rendering: "",
       tool_name: "run_command",
       category: "Bash",
       input_json: JSON.stringify({ command: "line1\nline2" }),
@@ -722,6 +750,7 @@ describe("enrichSegments - pi tool aliasing", () => {
   it("expands single-line run_command to $ command format", () => {
     const segments = parseContent("");
     const tc: ToolCall = {
+      rendering: "",
       tool_name: "run_command",
       category: "Bash",
       input_json: JSON.stringify({ command: "mkdir -p dist" }),
@@ -733,6 +762,7 @@ describe("enrichSegments - pi tool aliasing", () => {
 
   it("sets empty content for non-Bash pi tools so ToolBlock uses fallbackContent", () => {
     const tc: ToolCall = {
+      rendering: "",
       tool_name: "str_replace",
       category: "Edit",
       input_json: '{"path":"/src/app.ts","old_str":"x","new_str":"y"}',
@@ -751,6 +781,7 @@ describe("enrichSegments - pi lowercase native tool aliases", () => {
 
   it("aliases lowercase bash to Bash label", () => {
     const tc: ToolCall = {
+      rendering: "",
       tool_name: "bash",
       category: "Bash",
       input_json: '{"command":"ls -la","agent__intent":"List files"}',
@@ -763,6 +794,7 @@ describe("enrichSegments - pi lowercase native tool aliases", () => {
 
   it("aliases lowercase read to Read label", () => {
     const tc: ToolCall = {
+      rendering: "",
       tool_name: "read",
       category: "Read",
       input_json: '{"path":"/src/app.ts"}',
@@ -775,6 +807,7 @@ describe("enrichSegments - pi lowercase native tool aliases", () => {
 
   it("aliases lowercase write to Write label", () => {
     const tc: ToolCall = {
+      rendering: "",
       tool_name: "write",
       category: "Write",
       input_json: '{"path":"/src/new.ts","content":"x"}',
@@ -787,6 +820,7 @@ describe("enrichSegments - pi lowercase native tool aliases", () => {
 
   it("aliases lowercase edit to Edit label", () => {
     const tc: ToolCall = {
+      rendering: "",
       tool_name: "edit",
       category: "Edit",
       input_json: '{"path":"/src/app.ts","edits":[]}',
@@ -799,6 +833,7 @@ describe("enrichSegments - pi lowercase native tool aliases", () => {
 
   it("aliases lowercase grep to Grep label", () => {
     const tc: ToolCall = {
+      rendering: "",
       tool_name: "grep",
       category: "Grep",
       input_json: '{"pattern":"TODO","path":"/src"}',
@@ -811,6 +846,7 @@ describe("enrichSegments - pi lowercase native tool aliases", () => {
 
   it("aliases lowercase glob to Glob label", () => {
     const tc: ToolCall = {
+      rendering: "",
       tool_name: "glob",
       category: "Glob",
       input_json: '{"pattern":"**/*.ts"}',
@@ -823,6 +859,7 @@ describe("enrichSegments - pi lowercase native tool aliases", () => {
 
   it("aliases find to Read label and extracts pattern preview", () => {
     const tc: ToolCall = {
+      rendering: "",
       tool_name: "find",
       category: "Read",
       input_json: '{"pattern":"*.go"}',
@@ -837,6 +874,7 @@ describe("enrichSegments - pi lowercase native tool aliases", () => {
   it("expands lowercase bash command to $ format", () => {
     const segments = parseContent("");
     const tc: ToolCall = {
+      rendering: "",
       tool_name: "bash",
       category: "Bash",
       input_json: '{"command":"npm test","agent__intent":"Run tests"}',
@@ -848,6 +886,7 @@ describe("enrichSegments - pi lowercase native tool aliases", () => {
   it("expands multi-line lowercase bash to $ format", () => {
     const segments = parseContent("");
     const tc: ToolCall = {
+      rendering: "",
       tool_name: "bash",
       category: "Bash",
       input_json: JSON.stringify({ command: "git commit -m \"$(cat <<'EOF')\nMessage\nEOF\n)\"" }),
@@ -861,6 +900,7 @@ describe("enrichSegments - Read path preview", () => {
   it("sets content to file path for lowercase read tool", () => {
     const segments = parseContent("");
     const tc: ToolCall = {
+      rendering: "",
       tool_name: "read",
       category: "Read",
       input_json: '{"path":"/src/auth.go","agent__intent":"Reading auth module"}',
@@ -872,6 +912,7 @@ describe("enrichSegments - Read path preview", () => {
   it("sets content to file path for read_file tool", () => {
     const segments = parseContent("");
     const tc: ToolCall = {
+      rendering: "",
       tool_name: "read_file",
       category: "Read",
       input_json: '{"path":"/src/main.go"}',
@@ -883,6 +924,7 @@ describe("enrichSegments - Read path preview", () => {
   it("prefers path over file_path for read tool (pi field name)", () => {
     const segments = parseContent("");
     const tc: ToolCall = {
+      rendering: "",
       tool_name: "read",
       category: "Read",
       input_json: '{"path":"/src/app.ts","file_path":"/src/other.ts"}',
@@ -894,6 +936,7 @@ describe("enrichSegments - Read path preview", () => {
   it("leaves content empty for read tool with no path", () => {
     const segments = parseContent("");
     const tc: ToolCall = {
+      rendering: "",
       tool_name: "read",
       category: "Read",
       input_json: '{"agent__intent":"reading something"}',
@@ -945,6 +988,7 @@ describe("parseContent + enrichSegments segment typing pipeline", () => {
   it("enrichSegments preserves segment types through enrichment", () => {
     const segs = parseContent("Some text\n[Bash]\n$ echo hi", true);
     const tc: ToolCall = {
+      rendering: "",
       tool_name: "Bash",
       category: "Bash",
       input_json: '{"command":"echo hi"}',

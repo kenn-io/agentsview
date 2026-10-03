@@ -481,7 +481,7 @@ func TestImportAcceptedRecallEntriesJSONLNeverCommitsStaleEvidenceSnapshot(
 	messages[1].SourceUUID = "source-4"
 	insertMessages(t, d, messages...)
 
-	external, err := sql.Open("sqlite3", makeDSN(d.Path(), false))
+	external, err := sql.Open(sqliteArchiveDriverName, makeDSN(d.Path(), false))
 	require.NoError(t, err)
 	defer external.Close()
 	_, err = external.ExecContext(t.Context(), `PRAGMA busy_timeout = 5000`)
@@ -491,7 +491,8 @@ func TestImportAcceptedRecallEntriesJSONLNeverCommitsStaleEvidenceSnapshot(
 	defer rewrite.Rollback()
 	_, err = rewrite.ExecContext(t.Context(), `
 		UPDATE messages
-		SET content = 'The evidence changed before import commit.'
+		SET content = 'The evidence changed before import commit.',
+			content_layout = '{"version":1,"blocks":[{"kind":"text","end":42}]}'
 		WHERE session_id = 's1' AND ordinal = 4`)
 	require.NoError(t, err)
 

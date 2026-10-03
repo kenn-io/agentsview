@@ -19310,6 +19310,50 @@ func (e *Engine) writeIncremental(ctx context.Context,
 		},
 		e.blockedResultCategories,
 	)
+	if inc.agent == parser.AgentClaude {
+		var ids []string
+		for _, message := range dbMsgs {
+			if message.Role != "user" {
+				continue
+			}
+			for _, result := range message.ToolResults {
+				ids = append(ids, result.ToolUseID)
+			}
+		}
+		owners, err := e.db.ExistingToolResultOwners(ctx, inc.sessionID, ids)
+		if err != nil {
+			return err
+		}
+		filtered := dbMsgs[:0]
+		for _, message := range dbMsgs {
+			// Only user carriers generate Claude late-result link updates.
+			// Preserve accepted output in other roles until a full parse pairs it.
+			if message.Role != "user" {
+				filtered = append(filtered, message)
+				continue
+			}
+			matched := make([]bool, len(message.ToolResults))
+			for i, result := range message.ToolResults {
+				matched[i] = owners[result.ToolUseID]
+			}
+			if slices.Contains(matched, true) && message.RemoveToolResultBlocks(matched) {
+				remaining := message.ToolResults[:0]
+				for i, result := range message.ToolResults {
+					if !matched[i] {
+						remaining = append(remaining, result)
+					}
+				}
+				message.ToolResults = remaining
+				if len(remaining) == 0 && message.Role == "user" &&
+					strings.TrimSpace(message.Content) == "" && message.ThinkingText == "" &&
+					message.ToolResultText == "" && len(message.ToolCalls) == 0 {
+					continue
+				}
+			}
+			filtered = append(filtered, message)
+		}
+		dbMsgs = filtered
+	}
 	dbMsgs, _ = e.db.ProjectToolResultImagesWithPolicy(dbMsgs, e.toolResultImages)
 	// The incremental append path bypasses prepareSessionWrite, so run
 	// the central validation/sanitization pass on the new message rows
@@ -20274,6 +20318,7 @@ func toDBMessagesContext(
 			Role:              string(m.Role),
 			Content:           m.Content,
 			ThinkingText:      m.ThinkingText,
+			ToolResultText:    m.ToolResultText,
 			Timestamp:         timeutil.Format(m.Timestamp),
 			HasThinking:       m.HasThinking,
 			HasToolUse:        m.HasToolUse,
@@ -20299,6 +20344,7 @@ func toDBMessagesContext(
 			ToolCalls:         toolCalls,
 			ToolResults:       toolResults,
 		}
+		msgs[i].SetContentLayout(m.ContentLayout)
 	}
 	return pairAndFilterContext(ctx, msgs, blocked)
 }
@@ -21796,6 +21842,10 @@ func pairAndFilter(msgs []db.Message, blocked map[string]bool) []db.Message {
 func pairAndFilterContext(
 	ctx context.Context, msgs []db.Message, blocked map[string]bool,
 ) ([]db.Message, error) {
+	hadResults := make([]bool, len(msgs))
+	for i := range msgs {
+		hadResults[i] = len(msgs[i].ToolResults) > 0
+	}
 	if err := pairToolResultsContext(ctx, msgs, blocked); err != nil {
 		return nil, err
 	}
@@ -21805,13 +21855,15 @@ func pairAndFilterContext(
 		return nil, err
 	}
 	filtered := msgs[:0]
-	for _, m := range msgs {
+	for i, m := range msgs {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		if m.Role == "user" &&
-			len(m.ToolResults) > 0 &&
-			strings.TrimSpace(m.Content) == "" {
+			hadResults[i] &&
+			(m.ContentLayout == nil || len(m.ToolResults) == 0) &&
+			strings.TrimSpace(m.Content) == "" &&
+			m.ToolResultText == "" && m.ThinkingText == "" && len(m.ToolCalls) == 0 {
 			continue
 		}
 		filtered = append(filtered, m)
@@ -21844,18 +21896,18 @@ func pairToolResultsContext(
 			}
 		}
 	}
-	if len(idx) == 0 {
-		return ctx.Err()
-	}
-	for _, m := range msgs {
+	for i := range msgs {
+		m := &msgs[i]
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		for _, tr := range m.ToolResults {
+		matched := make([]bool, len(m.ToolResults))
+		for j, tr := range m.ToolResults {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
 			if tc, ok := idx[tr.ToolUseID]; ok {
+				matched[j] = true
 				// A withheld result keeps the parser's size; a stored one
 				// is measured, matching the archive's write rule so change
 				// detection never sees a parser-side rounding difference.
@@ -21867,6 +21919,18 @@ func pairToolResultsContext(
 					)
 				}
 			}
+		}
+		if slices.Contains(matched, true) && m.RemoveToolResultBlocks(matched) {
+			remaining := make([]db.ToolResult, 0, len(m.ToolResults))
+			for j, result := range m.ToolResults {
+				if !matched[j] {
+					remaining = append(remaining, result)
+				}
+			}
+			m.ToolResults = remaining
+		}
+		if err := m.ProjectStandaloneResultCategories(blocked); err != nil {
+			return err
 		}
 	}
 	return ctx.Err()

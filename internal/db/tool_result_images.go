@@ -504,6 +504,14 @@ func projectToolResultImagesWithPut(
 	copy(projected, messages)
 	var stats ToolImageStats
 	for i := range projected {
+		_ = projected[i].TransformBody(func(kind, text string) string {
+			if kind == "tool_result" {
+				var output string
+				output, stats = project(text, len(text), stats)
+				return output
+			}
+			return text
+		})
 		projected[i].ToolCalls = append([]ToolCall(nil), messages[i].ToolCalls...)
 		for j := range projected[i].ToolCalls {
 			call := &projected[i].ToolCalls[j]

@@ -90,15 +90,23 @@ fetching bodies they already hold when reconciling a rebuilt archive.
 
 ## What text means
 
-Text is the `content` stored on user and assistant message records. All agents
-use the same database fields and export path. Messages marked as system content
-or tool results are omitted. The export does not include separate thinking text,
-tool arguments, or tool-result fields.
+On `main`, text is the `content` stored on user and assistant records with a
+supported native `content_layout`. That provenance establishes which bytes are
+dialogue. All agents use the same database fields and export path. Messages
+marked as system content or tool results are omitted. The export does not
+include separate thinking text, tool arguments, or tool-result fields.
 
 The database is the source of truth. Text, code, logs, and any inline formatting
 already present in `content` are preserved. The export does not reinterpret
 provider formats or apply a second classification of message text. Storage
 policies still control which content is retained and available for export.
+
+Legacy records without native provenance publish `visible_text_unavailable`
+with `text: null`, even when their original bodies remain in the archive. Full
+transcript viewing, search, copy, and exports retain those bodies. Literal
+marker-looking native dialogue, such as `[Thinking]`, remains conversation text.
+A writable open refreshes older conversation indexes from stored records while
+preserving opaque IDs. Read-only exports fail until that refresh completes.
 
 With `archive_content=usage`, fetching message text fails with an error and
 leaves stdout empty, even before the daemon restarts. Text-free change listings

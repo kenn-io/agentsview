@@ -296,6 +296,13 @@ func decodeTauMessages(
 			}
 		}
 		if message != nil {
+			if message.ContentLayout == nil {
+				var composer MessageContentBuilder
+				composer.AddText(message.Content)
+				body := composer.Message()
+				body.ContentLength = message.sanitizedHistoricalWorkLength()
+				*message = message.withBody(body)
+			}
 			messages = append(messages, *message)
 			if entry.ID != "" {
 				visibleAncestorByID[entry.ID] = entry.ID
@@ -316,109 +323,73 @@ func decodeTauMessage(
 	if timestamp.IsZero() {
 		timestamp = tauOuterTimestamp(entry.Value.Get("timestamp"))
 	}
+	var body ParsedMessage
 	switch role {
 	case "user":
-		content, _, _, _, _ := tauExtractContent(message.Get("content"))
-		return &ParsedMessage{
-			Ordinal:          ordinal,
-			Role:             RoleUser,
-			Content:          content,
-			Timestamp:        timestamp,
-			ContentLength:    len(content),
-			SourceType:       "user",
-			SourceUUID:       entry.ID,
-			SourceParentUUID: parent,
-		}
+		body = tauExtractBody(message.Get("content"))
+		body.Role, body.SourceType = RoleUser, "user"
 	case "assistant":
-		content, thinking, hasThinking, hasToolUse, toolCalls := tauExtractContent(message.Get("content"))
-		if content == "" && message.Get("errorMessage").Str != "" {
-			content = message.Get("errorMessage").Str
+		body = tauExtractBody(message.Get("content"))
+		if body.ContentLength == 0 && message.Get("errorMessage").Str != "" {
+			composer := continueMessageContent(body)
+			composer.AddText(message.Get("errorMessage").Str)
+			body = composer.Message()
 		}
-		pm := &ParsedMessage{
-			Ordinal:          ordinal,
-			Role:             RoleAssistant,
-			Content:          content,
-			ThinkingText:     thinking,
-			Timestamp:        timestamp,
-			HasThinking:      hasThinking,
-			HasToolUse:       hasToolUse,
-			ContentLength:    len(content),
-			ToolCalls:        toolCalls,
-			Model:            message.Get("model").Str,
-			StopReason:       message.Get("stopReason").Str,
-			SourceType:       "assistant",
-			SourceUUID:       entry.ID,
-			SourceParentUUID: parent,
+		body.Role, body.SourceType = RoleAssistant, "assistant"
+		body.Model, body.StopReason = message.Get("model").Str, message.Get("stopReason").Str
+		if body.Model == "" {
+			body.Model = fallbackModel
 		}
-		if pm.Model == "" {
-			pm.Model = fallbackModel
-		}
-		applyTauUsage(pm, message.Get("usage"))
-		return pm
+		applyTauUsage(&body, message.Get("usage"))
 	case "toolResult":
 		content := message.Get("content")
-		return &ParsedMessage{
-			Ordinal:       ordinal,
-			Role:          RoleUser,
-			Timestamp:     timestamp,
-			ContentLength: toolResultContentLength(content),
-			ToolResults: []ParsedToolResult{{
-				ToolUseID:     message.Get("toolCallId").Str,
-				ContentLength: toolResultContentLength(content),
-				ContentRaw:    content.Raw,
-			}},
-			SourceType:       "toolResult",
-			SourceUUID:       entry.ID,
-			SourceParentUUID: parent,
-		}
+		length := toolResultContentLength(content)
+		var composer MessageContentBuilder
+		composer.AddToolResult(ParsedToolResult{
+			ToolUseID: message.Get("toolCallId").Str, ContentLength: length, ContentRaw: content.Raw,
+		})
+		body = composer.Message()
+		body.ContentLength = sanitizedToolResultWorkLength(content)
+		body.Role, body.SourceType, body.SourceSubtype = RoleUser, "toolResult", SourceSubtypeToolResult
 	default:
 		return nil
 	}
+	body.Ordinal, body.Timestamp = ordinal, timestamp
+	body.SourceUUID, body.SourceParentUUID = entry.ID, parent
+	return &body
 }
 
-func tauExtractContent(
-	content gjson.Result,
-) (string, string, bool, bool, []ParsedToolCall) {
+func tauExtractBody(content gjson.Result) ParsedMessage {
+	var composer MessageContentBuilder
 	if content.Type == gjson.String {
-		return content.Str, "", false, false, nil
-	}
-	if !content.IsArray() {
-		return "", "", false, false, nil
-	}
-	var parts, thinkingParts []string
-	var toolCalls []ParsedToolCall
-	hasThinking, hasToolUse := false, false
-	content.ForEach(func(_, block gjson.Result) bool {
-		switch block.Get("type").Str {
-		case "text":
-			if text := block.Get("text").Str; text != "" {
-				parts = append(parts, text)
-			}
-		case "thinking":
-			hasThinking = true
-			thinking := block.Get("thinking").Str
-			if thinking != "" {
-				thinkingParts = append(thinkingParts, thinking)
-				parts = append(parts, "[Thinking]\n"+thinking+"\n[/Thinking]")
-			}
-		case "toolCall":
-			hasToolUse = true
-			input := toolCallInput(block)
-			name := block.Get("name").Str
-			if name != "" {
-				toolCalls = append(toolCalls, ParsedToolCall{
-					ToolUseID: block.Get("id").Str,
-					ToolName:  name,
-					Category:  NormalizeToolCategory(name),
-					InputJSON: input.Raw,
+		composer.AddText(content.Str)
+	} else if content.IsArray() {
+		content.ForEach(func(_, block gjson.Result) bool {
+			switch block.Get("type").Str {
+			case "text":
+				composer.AddText(block.Get("text").Str)
+			case "thinking":
+				thinking := block.Get("thinking").Str
+				if block.Get("redacted").Bool() {
+					composer.AddThinking("")
+					if thinking != "" {
+						composer.addWork(sanitizedWorkLength(thinking) + len("[Thinking]\n\n[/Thinking]"))
+					}
+				} else {
+					composer.AddThinking(thinking)
+				}
+			case "toolCall":
+				input := toolCallInput(block)
+				name := block.Get("name").Str
+				composer.AddToolCall(ParsedToolCall{
+					ToolUseID: block.Get("id").Str, ToolName: name, Category: NormalizeToolCategory(name),
+					InputJSON: input.Raw, Rendering: formatToolUse(block),
 				})
 			}
-			parts = append(parts, formatToolUse(block))
-		}
-		return true
-	})
-	return strings.Join(parts, "\n"), strings.Join(thinkingParts, "\n\n"),
-		hasThinking, hasToolUse, toolCalls
+			return true
+		})
+	}
+	return composer.Message()
 }
 
 func tauOuterTimestamp(value gjson.Result) time.Time {

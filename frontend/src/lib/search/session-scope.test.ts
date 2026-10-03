@@ -16,6 +16,8 @@ const ALL: ReadonlySet<BlockType> = new Set([
 let nextId = 970000;
 function message(ordinal: number, content: string, overrides: Partial<Message> = {}): Message {
   return {
+    content_layout: null,
+    tool_result_text: "",
     has_context_tokens: false,
     has_output_tokens: false,
     id: nextId++,
@@ -70,6 +72,7 @@ describe("session search scope", () => {
       has_tool_use: true,
       tool_calls: [
         {
+          rendering: "",
           category: "",
           tool_name: "Bash",
         },

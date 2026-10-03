@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 // contentSearchSchema is an isolated schema for content-search tests so
@@ -78,10 +79,11 @@ func insertCSMessage(
 	_, err := store.DB().Exec(`
 		INSERT INTO messages
 			(session_id, ordinal, role, content, timestamp,
-			 content_length, is_system)
-		VALUES ($1, $2, $3, $4, $5::timestamptz, $6, $7)
+			 content_length, is_system, content_layout)
+		VALUES ($1, $2, $3, $4, $5::timestamptz, $6, $7, $8)
 		ON CONFLICT DO NOTHING`,
 		sessionID, ordinal, role, content, ts, len(content), isSystem,
+		db.ContentLayoutJSON(&parser.ContentLayout{Version: 1, Blocks: []parser.ContentBlock{{Kind: "text", End: len(content)}}}),
 	)
 	require.NoError(t, err, "insert message ord=%d", ordinal)
 }

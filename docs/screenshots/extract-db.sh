@@ -15,7 +15,9 @@ PRIVATE_TERMS_FILE="${KENN_PRIVATE_TERMS_FILE:-$HOME/.config/kenn/private-terms.
 HOME_PATH="${HOME:-}"
 BLOCKED_TERMS="${SCREENSHOT_BLOCKED_TERMS:-}"
 BLOCKED_PATTERNS_SQL="$(mktemp "${TMPDIR:-/tmp}/agentsview-screenshot-blocked-patterns.XXXXXX")"
-trap 'rm -f "$BLOCKED_PATTERNS_SQL"' EXIT
+SAVED_TRIGGERS_SQL="$(mktemp "${TMPDIR:-/tmp}/agentsview-screenshot-triggers.XXXXXX")"
+DROP_TRIGGERS_SQL="$(mktemp "${TMPDIR:-/tmp}/agentsview-screenshot-drop-triggers.XXXXXX")"
+trap 'rm -f "$BLOCKED_PATTERNS_SQL" "$SAVED_TRIGGERS_SQL" "$DROP_TRIGGERS_SQL"' EXIT
 
 append_blocked_terms() {
   local terms="$1"
@@ -52,6 +54,10 @@ echo "Keeping sessions from the newest $HISTORY_DAYS-day window."
 
 if ! command -v sqlite3 >/dev/null 2>&1; then
   echo "Error: sqlite3 is required to prepare the screenshot database"
+  exit 1
+fi
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "Error: python3 is required to redact native transcript byte ranges"
   exit 1
 fi
 
@@ -113,6 +119,26 @@ rm -f "$OUTPUT"
 # (rm -f above guarantees that).
 sqlite3 -readonly "$SOURCE" "VACUUM INTO '$OUTPUT'"
 
+# Suspend only derived search triggers in the disposable copy. Preserve their
+# actual definitions so legacy and current archives keep their own FTS recipe.
+# Native palette owners require SQL functions supplied by the archive driver,
+# which the standalone sqlite3 command does not register.
+trigger_filter="type = 'trigger' AND (name IN ('messages_ai', 'messages_ad', 'messages_au', 'palette_ai', 'palette_ad', 'palette_au') OR name LIKE 'palette_owner_%')"
+sqlite3 "$OUTPUT" "SELECT sql || ';' FROM sqlite_master WHERE $trigger_filter;" >"$SAVED_TRIGGERS_SQL"
+sqlite3 "$OUTPUT" "SELECT 'DROP TRIGGER ' || quote(name) || ';' FROM sqlite_master WHERE $trigger_filter;" >"$DROP_TRIGGERS_SQL"
+sqlite3 -bail "$OUTPUT" ".read \"$DROP_TRIGGERS_SQL\""
+
+# Older archives have no native owners. Add nullable compatibility columns only
+# to this copy; their absent provenance keeps older bodies outside dialogue FTS.
+for column in tool_result_text content_layout; do
+  if [[ $(sqlite3 "$OUTPUT" "SELECT count(*) FROM pragma_table_info('messages') WHERE name='$column';") == "0" ]]; then
+    sqlite3 -bail "$OUTPUT" "ALTER TABLE messages ADD COLUMN $column TEXT;"
+  fi
+done
+if [[ $(sqlite3 "$OUTPUT" "SELECT count(*) FROM pragma_table_info('tool_calls') WHERE name='rendering';") == "0" ]]; then
+  sqlite3 -bail "$OUTPUT" "ALTER TABLE tool_calls ADD COLUMN rendering TEXT;"
+fi
+
 # Delete sessions (and related data) for non-matching projects.
 # The heredoc delimiter is quoted so bash does NOT expand $ or
 # backticks inside — the embedded markdown contains both, and
@@ -170,7 +196,8 @@ WHERE s.project IN (SELECT name FROM screenshot_projects)
     JOIN screenshot_blocked_patterns p
       ON lower(
         COALESCE(m.content, '') || char(10) ||
-        COALESCE(m.thinking_text, '')
+        COALESCE(m.thinking_text, '') || char(10) ||
+        COALESCE(m.tool_result_text, '')
       ) LIKE p.pattern ESCAPE '\'
     WHERE m.session_id = s.id
   )
@@ -181,6 +208,7 @@ WHERE s.project IN (SELECT name FROM screenshot_projects)
       ON lower(
         COALESCE(tc.input_json, '') || char(10) ||
         COALESCE(tc.result_content, '') || char(10) ||
+        COALESCE(tc.rendering, '') || char(10) ||
         COALESCE(tc.file_path, '') || char(10) ||
         COALESCE(tc.skill_name, '')
       ) LIKE p.pattern ESCAPE '\'
@@ -316,40 +344,16 @@ SET first_message = replace(replace(first_message, r.from_text, r.to_text), r.en
     file_path = replace(replace(file_path, r.from_text, r.to_text), r.encoded_from_text, '-home-user')
 FROM screenshot_redactions r;
 
-UPDATE messages
-SET content = replace(replace(content, r.from_text, r.to_text), r.encoded_from_text, '-home-user'),
-    thinking_text = replace(replace(thinking_text, r.from_text, r.to_text), r.encoded_from_text, '-home-user')
-FROM screenshot_redactions r;
-
 UPDATE tool_calls
 SET file_path = replace(replace(file_path, r.from_text, r.to_text), r.encoded_from_text, '-home-user'),
     input_json = replace(replace(input_json, r.from_text, r.to_text), r.encoded_from_text, '-home-user'),
-    result_content = replace(replace(result_content, r.from_text, r.to_text), r.encoded_from_text, '-home-user')
+    result_content = replace(replace(result_content, r.from_text, r.to_text), r.encoded_from_text, '-home-user'),
+    rendering = replace(replace(rendering, r.from_text, r.to_text), r.encoded_from_text, '-home-user')
 FROM screenshot_redactions r;
 
 UPDATE tool_result_events
 SET content = replace(replace(content, r.from_text, r.to_text), r.encoded_from_text, '-home-user')
 FROM screenshot_redactions r;
-
--- Rebuild FTS index from the surviving messages.
-INSERT INTO messages_fts(messages_fts) VALUES('rebuild');
-
--- Restore FTS sync triggers so future inserts/updates
--- keep the index current.
-CREATE TRIGGER messages_ai AFTER INSERT ON messages BEGIN
-    INSERT INTO messages_fts(rowid, content)
-        VALUES (new.id, new.content);
-END;
-CREATE TRIGGER messages_ad AFTER DELETE ON messages BEGIN
-    INSERT INTO messages_fts(messages_fts, rowid, content)
-        VALUES('delete', old.id, old.content);
-END;
-CREATE TRIGGER messages_au AFTER UPDATE ON messages BEGIN
-    INSERT INTO messages_fts(messages_fts, rowid, content)
-        VALUES('delete', old.id, old.content);
-    INSERT INTO messages_fts(rowid, content)
-        VALUES (new.id, new.content);
-END;
 
 -- Update stats
 INSERT OR REPLACE INTO stats (key, value) VALUES
@@ -457,6 +461,10 @@ Refactored the review submission API to accept batch requests. Previously each f
 One short session updated the API documentation in `docs/api.md` to reflect the new batch endpoint and its request/response schema.',
 '2026-02-18T16:20:00.000Z');
 SQL
+
+python3 "$(dirname "$0")/redact-db.py" "$OUTPUT" "$HOME_PATH"
+sqlite3 -bail "$OUTPUT" "INSERT INTO messages_fts(messages_fts) VALUES('rebuild');"
+sqlite3 -bail "$OUTPUT" ".read \"$SAVED_TRIGGERS_SQL\""
 
 # The mapping delete above journals tombstones in current archives, so clear
 # that journal last. Older valid archives predate the table and its triggers.

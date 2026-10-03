@@ -9,71 +9,52 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// ExtractTextContent extracts readable text from message content.
-// content can be a string or a JSON array of blocks.
-// Returns: flattened text (with inline [Thinking] markers for UI
-// compatibility), concatenated thinking-block text (no markers),
-// hasThinking, hasToolUse, tool calls, and tool results.
-// Thinking blocks are joined with "\n\n" to give an unambiguous
-// block boundary in the concatenated thinking text.
-func ExtractTextContent(
-	ctx context.Context, content gjson.Result,
-) (string, string, bool, bool, []ParsedToolCall, []ParsedToolResult) {
+// ExtractMessageContent preserves native body types and their order.
+func ExtractMessageContent(ctx context.Context, content gjson.Result) ParsedMessage {
+	var body MessageContentBuilder
 	if content.Type == gjson.String {
-		return content.Str, "", false, false, nil, nil
+		body.AddText(content.Str)
+	} else if content.IsArray() {
+		content.ForEach(func(_, block gjson.Result) bool {
+			switch block.Get("type").Str {
+			case "text":
+				body.AddText(block.Get("text").Str)
+			case "thinking":
+				body.AddThinking(block.Get("thinking").Str)
+			case "redacted_thinking", "redactedThinking":
+				body.AddThinking("")
+			case "tool_use", "toolCall":
+				rendering := formatToolUse(block)
+				body.message.HasToolUse = true
+				if call, ok := parseToolCall(ctx, block); ok {
+					call.Rendering = rendering
+					body.AddToolCall(call)
+				} else {
+					body.addWork(sanitizedWorkLength(rendering))
+				}
+			case "tool_result":
+				if result, ok := parseToolResult(block); ok {
+					body.AddToolResult(result)
+				} else if result, ok := extractAmpToolResultBlock(block); ok {
+					body.AddToolResult(result)
+				} else if result := block.Get("content"); result.Exists() {
+					body.AddToolResult(ParsedToolResult{
+						ContentRaw:    result.Raw,
+						ContentLength: toolResultContentLength(result),
+					})
+				}
+			}
+			return true
+		})
 	}
+	return body.Message()
+}
 
-	if !content.IsArray() {
-		return "", "", false, false, nil, nil
-	}
-
-	var (
-		parts         []string
-		thinkingParts []string
-		toolCalls     []ParsedToolCall
-		toolResults   []ParsedToolResult
-		hasThinking   bool
-		hasToolUse    bool
-	)
-	content.ForEach(func(_, block gjson.Result) bool {
-		switch block.Get("type").Str {
-		case "text":
-			text := block.Get("text").Str
-			if text != "" {
-				parts = append(parts, text)
-			}
-		case "thinking":
-			thinking := block.Get("thinking").Str
-			if thinking != "" {
-				hasThinking = true
-				thinkingParts = append(thinkingParts, thinking)
-				parts = append(parts,
-					"[Thinking]\n"+thinking+"\n[/Thinking]")
-			}
-		case "tool_use", "toolCall":
-			// "tool_use" is the Anthropic block type; "toolCall" is
-			// the camelCase variant emitted by OpenClaw. OpenClaw
-			// usually carries the call arguments under "input", but
-			// some tools populate only "arguments", so fall back to
-			// it when "input" is missing or empty.
-			hasToolUse = true
-			rendering := formatToolUse(block)
-			if tc, ok := parseToolCall(ctx, block); ok {
-				tc.Rendering = rendering
-				toolCalls = append(toolCalls, tc)
-			}
-			parts = append(parts, rendering)
-		case "tool_result":
-			if tr, ok := parseToolResult(block); ok {
-				toolResults = append(toolResults, tr)
-			}
-		}
-		return true
-	})
-
-	return strings.Join(parts, "\n"),
-		strings.Join(thinkingParts, "\n\n"),
-		hasThinking, hasToolUse, toolCalls, toolResults
+// ExtractTextContent returns dialogue and native work metadata for callers
+// that intentionally do not retain a complete message body.
+func ExtractTextContent(ctx context.Context, content gjson.Result) (string, string, bool, bool, []ParsedToolCall, []ParsedToolResult) {
+	body := ExtractMessageContent(ctx, content)
+	return body.Content, body.ThinkingText, body.HasThinking, body.HasToolUse, body.ToolCalls, body.ToolResults
 }
 
 func parseToolCall(ctx context.Context, block gjson.Result) (ParsedToolCall, bool) {
@@ -149,6 +130,13 @@ func toolResultContentLength(content gjson.Result) int {
 		).Str)
 	}
 	return 0
+}
+
+// sanitizedToolResultWorkLength preserves the provider's result-count convention
+// (which omits array separators) while removing unsaved payload bytes.
+func sanitizedToolResultWorkLength(content gjson.Result) int {
+	raw := decodeContent(content)
+	return max(0, toolResultContentLength(content)-(len(raw)-sanitizedWorkLength(raw)))
 }
 
 // DecodeContent extracts the text from a raw JSON tool result content

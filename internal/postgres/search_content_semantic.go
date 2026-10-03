@@ -202,7 +202,7 @@ func (s *Store) enrichSemanticHitsPG(
 		ordinals[i] = int32(h.Ordinal)
 	}
 
-	const query = `
+	query := `
 SELECT m.session_id, s.project, s.agent, m.role, m.ordinal,
        m.timestamp, m.content,
        COALESCE(s.relationship_type, ''), COALESCE(s.parent_session_id, ''),
@@ -210,7 +210,7 @@ SELECT m.session_id, s.project, s.agent, m.role, m.ordinal,
   FROM (SELECT unnest($1::text[]) AS session_id,
                unnest($2::int[]) AS ordinal) h
   JOIN messages m ON m.session_id = h.session_id AND m.ordinal = h.ordinal
-  JOIN sessions s ON s.id = m.session_id`
+  JOIN sessions s ON s.id = m.session_id WHERE ` + db.DialogueEligibilitySQL("m", db.PostgresQueryDialect())
 
 	rows, err := s.pg.QueryContext(ctx, query, sessionIDs, ordinals)
 	if err != nil {

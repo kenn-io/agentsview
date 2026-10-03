@@ -492,8 +492,7 @@ func parseClineRawMessages(
 
 		var textParts []string
 		var thinkingParts []string
-		var toolCalls []ParsedToolCall
-		var toolResults []ParsedToolResult
+		var builder MessageContentBuilder
 
 		for _, block := range rawMsg.Content {
 			switch block.Type {
@@ -501,12 +500,16 @@ func parseClineRawMessages(
 				t := strings.TrimSpace(block.Text)
 				if t != "" {
 					textParts = append(textParts, t)
+					builder.addText(t, "\n\n")
 				}
 			case "thinking":
 				th := strings.TrimSpace(block.Thinking)
 				if th != "" {
 					thinkingParts = append(thinkingParts, th)
 				}
+				builder.AddThinking(th)
+			case "redacted_thinking":
+				builder.AddThinking("")
 			case "tool_use":
 				tc := ParsedToolCall{
 					ToolUseID: block.ID,
@@ -526,7 +529,7 @@ func parseClineRawMessages(
 				} else {
 					tc.SkillName = inferToolSkillName(context.Background(), block.Name, tc.InputJSON)
 				}
-				toolCalls = append(toolCalls, tc)
+				builder.AddToolCall(tc)
 			case "tool_result":
 				textContent, hasErr := parseClineToolResultContent(block.Content)
 				isErr := block.IsError || hasErr
@@ -536,7 +539,7 @@ func parseClineRawMessages(
 					ContentLength: len(textContent),
 					ContentRaw:    string(block.Content),
 				}
-				toolResults = append(toolResults, tr)
+				builder.addToolResult(tr, textContent)
 
 				// Pair with preceding tool call
 				if target, ok := pendingToolCalls[block.ToolUseID]; ok &&
@@ -567,8 +570,23 @@ func parseClineRawMessages(
 			textContent = cleanClinePrompt(textContent)
 		}
 
-		// Skip empty messages with no content, thinking, or tool calls/results
-		if textContent == "" && thinking == "" && len(toolCalls) == 0 && len(toolResults) == 0 {
+		body := builder.Message()
+		// Keep the established work accounting, including the combined length
+		// of the former synthetic thinking row when a native record has calls.
+		body.setDialogue(textContent)
+		body.ContentLength = sanitizedWorkLength(textContent)
+		if thinking != "" {
+			body.ContentLength += sanitizedWorkLength(thinking)
+			if len(body.ToolCalls) == 0 {
+				body.ContentLength += len("[Thinking]\n\n[/Thinking]")
+				if textContent != "" {
+					body.ContentLength += 2
+				}
+			}
+		}
+		// Empty native reasoning and assistant usage records remain evidence.
+		// Empty harness approvals still do not create user bubbles.
+		if !body.hasNativeBody() && (rawMsg.Role != "assistant" || rawMsg.Metrics == nil) {
 			continue
 		}
 
@@ -576,62 +594,22 @@ func parseClineRawMessages(
 		if rawMsg.Role == "assistant" {
 			role = RoleAssistant
 		}
-
 		msgProvider := ""
 		if role == RoleAssistant {
 			msgProvider = provider
 		}
 
-		// If an assistant message contains thinking along with tool calls,
-		// emit thinking as its own message first so tool grouping does not
-		// hide it in the UI (matching RooCode and Codebuff).
-		if role == RoleAssistant && thinking != "" && len(toolCalls) > 0 {
-			thinkingUUID := rawMsg.ID
-			if thinkingUUID != "" {
-				thinkingUUID += ":thinking"
-			}
-			parsedMessages = append(parsedMessages, ParsedMessage{
-				Ordinal:       ordinal,
-				Role:          RoleAssistant,
-				Content:       "[Thinking]\n" + thinking + "\n[/Thinking]",
-				ThinkingText:  thinking,
-				Timestamp:     ts,
-				HasThinking:   true,
-				ContentLength: len(thinking),
-				Model:         model,
-				ProviderID:    msgProvider,
-				SourceUUID:    thinkingUUID,
-			})
-			ordinal++
-			thinking = ""
-		}
-
-		content := textContent
-		if thinking != "" {
-			if content != "" {
-				content = "[Thinking]\n" + thinking + "\n[/Thinking]\n\n" + content
-			} else {
-				content = "[Thinking]\n" + thinking + "\n[/Thinking]"
-			}
-		}
-
 		msg := ParsedMessage{
-			Ordinal:       ordinal,
-			Role:          role,
-			Content:       content,
-			ThinkingText:  thinking,
-			Timestamp:     ts,
-			HasThinking:   thinking != "",
-			HasToolUse:    len(toolCalls) > 0,
-			ContentLength: len(content),
-			ToolCalls:     toolCalls,
-			ToolResults:   toolResults,
-			Model:         model,
-			ProviderID:    msgProvider,
-			SourceUUID:    rawMsg.ID,
-		}
+			Ordinal:    ordinal,
+			Role:       role,
+			Content:    body.Content,
+			Timestamp:  ts,
+			Model:      model,
+			ProviderID: msgProvider,
+			SourceUUID: rawMsg.ID,
+		}.withBody(body)
 
-		if role == RoleUser && len(toolResults) > 0 && content == "" {
+		if role == RoleUser && len(msg.ToolResults) > 0 && msg.Content == "" {
 			msg.IsSystem = true
 			msg.SourceSubtype = SourceSubtypeToolResult
 		}
@@ -671,7 +649,7 @@ func parseClineRawMessages(
 		parsedMessages = append(parsedMessages, msg)
 
 		// Register tool calls in pending map for later pairing
-		if len(toolCalls) > 0 {
+		if len(msg.ToolCalls) > 0 {
 			messageIndex := len(parsedMessages) - 1
 			for ci := range parsedMessages[messageIndex].ToolCalls {
 				tc := parsedMessages[messageIndex].ToolCalls[ci]
@@ -1149,6 +1127,9 @@ func clineLastMessageIsThinkingOnly(messages []ParsedMessage) bool {
 		}
 		if len(m.ToolCalls) > 0 {
 			return false
+		}
+		if m.ContentLayout != nil {
+			return strings.TrimSpace(m.Content) == ""
 		}
 		return strings.TrimSpace(m.Content) == "" || IsThinkingOnlyContent(m.Content)
 	}

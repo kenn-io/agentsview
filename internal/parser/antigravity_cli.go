@@ -211,6 +211,18 @@ func (p *antigravityCLIProvider) parseSessionWithStatus(
 			usageEvents = tRes.usageEvents
 			if hasDisplayableAntigravityCLITrajectoryMessage(tRes.messages) {
 				messages = tRes.messages
+				outputOnly := true
+				for _, message := range messages {
+					if len(message.ToolResults) == 0 {
+						outputOnly = false
+						break
+					}
+				}
+				if outputOnly {
+					messages = append(messages, collectAntigravityHistoryMessages(
+						filepath.Join(root, "history.jsonl"), id,
+					)...)
+				}
 				hasTrajectory = true
 				transcriptFidelity = TranscriptFidelityFull
 			}
@@ -285,7 +297,7 @@ func (p *antigravityCLIProvider) parseSessionWithStatus(
 	var userCount int
 	var startedAt, endedAt time.Time
 	for _, m := range messages {
-		if m.Role == RoleUser {
+		if m.Role == RoleUser && (m.Content != "" || len(m.ToolResults) == 0) {
 			userCount++
 			if firstMessage == "" && m.Content != "" {
 				firstMessage = truncate(
@@ -436,8 +448,8 @@ func mergeAntigravityDBHistoryMessages(
 				dbMessages, history,
 			)
 		}
-		dbMessages[i].Content = history[historyIdx].Content
-		dbMessages[i].ContentLength = len(history[historyIdx].Content)
+		dbMessages[i].setDialogue(history[historyIdx].Content)
+		dbMessages[i].ContentLength = sanitizedWorkLength(history[historyIdx].Content)
 		if !history[historyIdx].Timestamp.IsZero() {
 			dbMessages[i].Timestamp = history[historyIdx].Timestamp
 		}
@@ -494,9 +506,7 @@ func hasDisplayableAntigravityCLITrajectoryMessage(
 	msgs []ParsedMessage,
 ) bool {
 	for _, m := range msgs {
-		if strings.TrimSpace(m.Content) != "" ||
-			m.HasThinking ||
-			len(m.ToolCalls) > 0 {
+		if m.hasNativeBody() {
 			return true
 		}
 	}
@@ -683,12 +693,12 @@ func collectAntigravityHistoryMessages(
 			continue
 		}
 		tsMS := gjson.GetBytes(line, "timestamp").Int()
-		out = append(out, ParsedMessage{
-			Role:          RoleUser,
-			Content:       display,
-			ContentLength: len(display),
-			Timestamp:     time.UnixMilli(tsMS),
-		})
+		var body MessageContentBuilder
+		body.AddText(display)
+		out = append(out, (ParsedMessage{
+			Role: RoleUser, Content: body.Message().Content,
+			Timestamp: time.UnixMilli(tsMS),
+		}).withBody(body.Message()))
 	}
 	return out
 }
@@ -728,12 +738,14 @@ func collectAntigravityBrainMessages(dir string) []ParsedMessage {
 		} else {
 			content = header + "\n" + string(body)
 		}
-		out = append(out, ParsedMessage{
-			Role:          RoleAssistant,
-			Content:       content,
-			ContentLength: len(content),
-			Timestamp:     ts,
+		var composer MessageContentBuilder
+		raw, _ := json.Marshal(content)
+		composer.AddToolResult(ParsedToolResult{
+			ContentRaw: string(raw), ContentLength: len(content),
 		})
+		msg := (ParsedMessage{Role: RoleAssistant, Timestamp: ts}).withBody(composer.Message())
+		msg.ContentLength = sanitizedWorkLength(content)
+		out = append(out, msg)
 	}
 	return out
 }
@@ -1186,9 +1198,11 @@ type agyUserInput struct {
 }
 
 type agyPlannerResponse struct {
-	Thinking  string        `json:"thinking"`
-	Response  string        `json:"response"`
-	ToolCalls []agyToolCall `json:"toolCalls"`
+	Thinking          *string        `json:"thinking"`
+	ThinkingRedacted  bool           `json:"thinkingRedacted"`
+	ThinkingSignature jsontext.Value `json:"thinkingSignature"`
+	Response          string         `json:"response"`
+	ToolCalls         []agyToolCall  `json:"toolCalls"`
 }
 
 type agyToolCall struct {
@@ -1502,18 +1516,15 @@ func parseAntigravityCLITrajectory(
 		if len(pendingResults) == 0 {
 			return
 		}
-		// NOTE: We emit a synthetic User message with empty content containing these tool results.
-		// This relies on the sync engine's internal contract (specifically pairToolResults and
-		// pairAndFilter in engine.go) which matches tool results to tool calls by ToolUseID,
-		// and then filters out empty-content synthetic User messages from final display.
-		// Future maintainers: do not "clean up" this empty message behavior as it is critical
-		// for correct UI rendering.
-		msgs = append(msgs, ParsedMessage{
-			Role:        RoleUser,
-			Content:     "",
-			Timestamp:   pendingResultsTime,
-			ToolResults: pendingResults,
-		})
+		// Pairing may move known results to their calls. Unmatched results retain
+		// this native output body, including results without an execution ID.
+		var body MessageContentBuilder
+		for _, result := range pendingResults {
+			body.AddToolResult(result)
+		}
+		msgs = append(msgs, (ParsedMessage{
+			Role: RoleUser, Timestamp: pendingResultsTime,
+		}).withBody(body.Message()))
 		pendingResults = nil
 	}
 
@@ -1526,12 +1537,12 @@ func parseAntigravityCLITrajectory(
 			if step.UserInput == nil {
 				continue
 			}
-			msgs = append(msgs, ParsedMessage{
-				Role:          RoleUser,
-				Content:       step.UserInput.UserResponse,
-				ContentLength: len(step.UserInput.UserResponse),
-				Timestamp:     stepTime,
-			})
+			var body MessageContentBuilder
+			body.AddText(step.UserInput.UserResponse)
+			msgs = append(msgs, (ParsedMessage{
+				Role: RoleUser, Content: body.Message().Content,
+				Timestamp: stepTime,
+			}).withBody(body.Message()))
 
 		case "CORTEX_STEP_TYPE_PLANNER_RESPONSE":
 			flushPendingResults()
@@ -1553,29 +1564,32 @@ func parseAntigravityCLITrajectory(
 					ToolName:  tc.Name,
 					Category:  cat,
 					InputJSON: tc.ArgumentsJSON,
+					Rendering: header,
 				})
 			}
 
 			content := pr.Response
 			if content == "" && len(toolHeaders) > 0 {
 				content = strings.Join(toolHeaders, "\n")
-				for i := range toolCalls {
-					toolCalls[i].Rendering = toolHeaders[i]
-				}
 			}
 
-			msg := ParsedMessage{
-				Role:          RoleAssistant,
-				Content:       content,
-				ContentLength: len(content),
-				Timestamp:     stepTime,
-				ToolCalls:     toolCalls,
-				HasToolUse:    len(toolCalls) > 0,
+			var body MessageContentBuilder
+			if pr.ThinkingRedacted {
+				body.AddThinking("")
+			} else if pr.Thinking != nil {
+				body.AddThinking(*pr.Thinking)
+			} else if len(pr.ThinkingSignature) > 0 {
+				body.AddThinking("")
 			}
-			if pr.Thinking != "" {
-				msg.ThinkingText = pr.Thinking
-				msg.HasThinking = true
+			body.AddText(pr.Response)
+			for _, call := range toolCalls {
+				body.AddToolCall(call)
 			}
+			msg := (ParsedMessage{
+				Role: RoleAssistant, Content: body.Message().Content,
+				Timestamp: stepTime,
+			}).withBody(body.Message())
+			msg.ContentLength = sanitizedWorkLength(content)
 			msgs = append(msgs, msg)
 			plannerMsgIdx[stepIdx] = len(msgs) - 1
 
@@ -1587,7 +1601,7 @@ func parseAntigravityCLITrajectory(
 			"CORTEX_STEP_TYPE_ERROR_MESSAGE":
 
 			tuid := step.Metadata.ExecutionID
-			if tuid == "" {
+			if tuid == "" && step.Type == "CORTEX_STEP_TYPE_ERROR_MESSAGE" {
 				continue
 			}
 
@@ -1655,13 +1669,12 @@ func parseAntigravityCLITrajectory(
 			if step.SystemMessage == nil {
 				continue
 			}
-			msgs = append(msgs, ParsedMessage{
-				Role:          RoleUser,
-				IsSystem:      true,
-				Content:       step.SystemMessage.Message,
-				ContentLength: len(step.SystemMessage.Message),
-				Timestamp:     stepTime,
-			})
+			var body MessageContentBuilder
+			body.AddText(step.SystemMessage.Message)
+			msgs = append(msgs, (ParsedMessage{
+				Role: RoleUser, IsSystem: true,
+				Content: body.Message().Content, Timestamp: stepTime,
+			}).withBody(body.Message()))
 
 		case "CORTEX_STEP_TYPE_CHECKPOINT":
 			flushPendingResults()
@@ -1678,13 +1691,12 @@ func parseAntigravityCLITrajectory(
 			}
 			if len(parts) > 0 {
 				content := "[Checkpoint]\n" + strings.Join(parts, "\n")
-				msgs = append(msgs, ParsedMessage{
-					Role:          RoleUser,
-					IsSystem:      true,
-					Content:       content,
-					ContentLength: len(content),
-					Timestamp:     stepTime,
-				})
+				var body MessageContentBuilder
+				body.AddText(content)
+				msgs = append(msgs, (ParsedMessage{
+					Role: RoleUser, IsSystem: true,
+					Content: body.Message().Content, Timestamp: stepTime,
+				}).withBody(body.Message()))
 			}
 		}
 	}

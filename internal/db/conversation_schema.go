@@ -7,9 +7,10 @@ import (
 	"fmt"
 )
 
-// This additive migration owns only local conversation export state. Historical
-// rows become explicit prose gaps only when writable reparsing cannot supply
-// evidence. A pending rebuild must not publish temporary message identities.
+const conversationDialogueRecipe = "native-v1"
+
+// This additive migration owns only local conversation export state. Unknown
+// provenance publishes a prose gap while preserving the archived body and ID.
 const conversationSchemaSQL = `
 CREATE TRIGGER IF NOT EXISTS conversation_messages_insert AFTER INSERT ON conversation_messages
 BEGIN
@@ -92,11 +93,15 @@ func ensureConversationSchemaLocked(ctx context.Context, w *writerHandle, usageO
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM archive_metadata WHERE key='conversation_export_initialized')`).Scan(&initialized); err != nil {
 		return err
 	}
-	if !initialized {
+	var recipe string
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT value FROM archive_metadata WHERE key='conversation_dialogue_recipe'),'')`).Scan(&recipe); err != nil {
+		return err
+	}
+	if !initialized || recipe != conversationDialogueRecipe {
 		if err := refreshConversationMessagesFromArchiveTx(ctx, tx, "1=1"); err != nil {
 			return err
 		}
-		if usageOnly {
+		if usageOnly && !initialized {
 			rows, err := tx.QueryContext(ctx, `SELECT id FROM sessions`)
 			if err != nil {
 				return err
@@ -115,7 +120,10 @@ func ensureConversationSchemaLocked(ctx context.Context, w *writerHandle, usageO
 				return err
 			}
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO archive_metadata(key,value) VALUES ('conversation_export_initialized','1')`); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO archive_metadata(key,value) VALUES ('conversation_export_initialized','1') ON CONFLICT(key) DO NOTHING`); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO archive_metadata(key,value) VALUES ('conversation_dialogue_recipe',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, conversationDialogueRecipe); err != nil {
 			return err
 		}
 	}
@@ -127,7 +135,7 @@ const conversationCopyColumns = `session_id,message_id,ordinal,role,timestamp,so
 // Initialize exports or refresh copied rows after archive policy has changed
 // their stored content. These are the same archived messages, so keep their IDs.
 func refreshConversationMessagesFromArchiveTx(ctx context.Context, tx *sql.Tx, where string) error {
-	rows, err := tx.QueryContext(ctx, `SELECT m.session_id,m.ordinal,m.role,m.content,COALESCE(m.timestamp,''),m.source_uuid,
+	rows, err := tx.QueryContext(ctx, `SELECT m.session_id,m.ordinal,m.role,m.content,COALESCE(m.timestamp,''),m.source_uuid,m.content_layout,
 	 COALESCE(c.message_id,lower(hex(randomblob(16)))),COALESCE(c.gap,''),COUNT(*) OVER (PARTITION BY m.session_id,m.source_uuid)
 	 FROM (SELECT * FROM messages WHERE role IN ('user','assistant') AND is_system=0 AND source_subtype!='tool_result' AND `+where+`) m
 	 LEFT JOIN conversation_messages c ON c.session_id=m.session_id AND c.ordinal=m.ordinal AND c.removed=0
@@ -139,10 +147,12 @@ func refreshConversationMessagesFromArchiveTx(ctx context.Context, tx *sql.Tx, w
 	for rows.Next() {
 		var msg Message
 		var id, gap string
+		var layout sql.NullString
 		var sourceCount int
-		if err := rows.Scan(&msg.SessionID, &msg.Ordinal, &msg.Role, &msg.Content, &msg.Timestamp, &msg.SourceUUID, &id, &gap, &sourceCount); err != nil {
+		if err := rows.Scan(&msg.SessionID, &msg.Ordinal, &msg.Role, &msg.Content, &msg.Timestamp, &msg.SourceUUID, &layout, &id, &gap, &sourceCount); err != nil {
 			return err
 		}
+		msg.SetContentLayout(DecodeStoredContentLayout(layout.String))
 		row, _ := conversationRowFromMessage(msg)
 		row.MessageID = id
 		if gap == "identity_ambiguous" || msg.SourceUUID != "" && sourceCount > 1 {
@@ -245,20 +255,9 @@ func reconcileConversationResyncTx(ctx context.Context, tx *sql.Tx, usageOnly bo
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		current, err := conversationRowsTx(tx, id)
+		msgs, err := conversationStoredMessagesTx(tx, id)
 		if err != nil {
 			return err
-		}
-		msgs := make([]Message, 0, len(current))
-		for _, row := range current {
-			msg := Message{SessionID: id, Ordinal: row.Ordinal, Role: row.Role, SourceUUID: row.sourceID}
-			if row.body != nil {
-				msg.Content = *row.body
-			}
-			if row.Timestamp != nil {
-				msg.Timestamp = *row.Timestamp
-			}
-			msgs = append(msgs, msg)
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM main.conversation_messages WHERE session_id=?`, id); err != nil {
 			return err

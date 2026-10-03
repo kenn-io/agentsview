@@ -264,9 +264,8 @@ func TestParseVSCodeCopilotSession_TerminalToolData(t *testing.T) {
 	assert.Equal(t, "Bash", tc.Category, "category")
 	assert.NotEmpty(t, tc.InputJSON, "expected non-empty InputJSON")
 
-	// Content should include the command
-	assert.Contains(t, assistant.Content, "npm test",
-		"content should contain command, got: %s", assistant.Content)
+	assert.Empty(t, assistant.Content)
+	assert.Contains(t, tc.Rendering, "npm test")
 }
 
 func TestParseVSCodeCopilotSession_VSCode132ResponseItems(t *testing.T) {

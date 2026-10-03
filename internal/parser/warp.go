@@ -279,7 +279,8 @@ func buildWarpSession(
 			Timestamp:     ts,
 			ContentLength: len(queryText),
 			Model:         lastModel,
-		})
+			SourceUUID:    e.exchangeID,
+		}.withPlainBody())
 		ordinal++
 		userCount++
 
@@ -458,19 +459,16 @@ func synthesizeWarpToolMessages(
 		for range e.count {
 			category := NormalizeToolCategory(e.name)
 			content := fmt.Sprintf("[%s]", category)
+			var body MessageContentBuilder
+			body.AddToolCall(ParsedToolCall{ToolName: e.name, Category: category, Rendering: content})
 			msgs = append(msgs, ParsedMessage{
 				Ordinal:       *ordinal,
 				Role:          RoleAssistant,
-				Content:       content,
 				Timestamp:     ts,
 				HasToolUse:    true,
 				ContentLength: len(content),
 				Model:         model,
-				ToolCalls: []ParsedToolCall{{
-					ToolName: e.name,
-					Category: category,
-				}},
-			})
+			}.withBody(body.Message()))
 			*ordinal++
 		}
 	}

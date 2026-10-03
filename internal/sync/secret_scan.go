@@ -125,11 +125,17 @@ func scanSecretsFromMessages(
 	for _, msg := range msgs {
 		add(msg.SessionID, "message", msg.Ordinal, nil, nil,
 			msg.Content, scan(msg.Content))
+		add(msg.SessionID, "thinking", msg.Ordinal, nil, nil,
+			msg.ThinkingText, scan(msg.ThinkingText))
+		add(msg.SessionID, "tool_output", msg.Ordinal, nil, nil,
+			msg.ToolResultText, scan(msg.ToolResultText))
 		for ci := range msg.ToolCalls {
 			tc := msg.ToolCalls[ci]
 			callIdx := ci
 			add(msg.SessionID, "tool_input", msg.Ordinal, &callIdx, nil,
 				tc.InputJSON, scan(tc.InputJSON))
+			add(msg.SessionID, "tool_rendering", msg.Ordinal, &callIdx, nil,
+				tc.Rendering, scan(tc.Rendering))
 			if len(tc.ResultEvents) > 0 {
 				for ei := range tc.ResultEvents {
 					// Store the slice position, which is what the persistence

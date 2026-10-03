@@ -153,7 +153,7 @@ func (db *DB) lookupAnchorMetaChunk(
 		"COALESCE(s.relationship_type,''), COALESCE(s.parent_session_id,''), " +
 		"m.role, m.is_sidechain, " +
 		"CASE WHEN m.is_system = 0 AND " +
-		SystemPrefixSQL("m.content", "m.role") + " THEN 1 ELSE 0 END " +
+		SystemPrefixSQL("m.content", "m.role") + " AND " + DialogueEligibilitySQL("m", SQLiteQueryDialect()) + " THEN 1 ELSE 0 END " +
 		"FROM refs r " +
 		"JOIN sessions s ON s.id = r.session_id " +
 		"LEFT JOIN messages m ON m.session_id = r.session_id AND m.ordinal = r.ordinal"

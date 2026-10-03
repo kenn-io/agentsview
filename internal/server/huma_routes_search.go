@@ -41,7 +41,7 @@ type contentSearchInput struct {
 	Mode             contentSearchMode  `query:"mode" enum:"substring,regex,fts,terms,semantic,hybrid" doc:"Search mode"`
 	Scope            contentSearchScope `query:"scope" enum:"top,all,subordinate" doc:"Semantic/hybrid/terms result scope: top, all, or subordinate (default all)"`
 	SearchIntent     string             `header:"X-AgentsView-Search-Intent" doc:"Required for semantic/hybrid GET searches"`
-	In               string             `query:"in" doc:"Comma-separated content sources"`
+	In               string             `query:"in" doc:"Comma-separated sources: messages, thinking, tool_input, tool_result; messages searches proven dialogue"`
 	ExcludeSystem    bool               `query:"exclude_system" doc:"Exclude system messages"`
 	Reveal           bool               `query:"reveal" doc:"Return unredacted secret matches for localhost callers"`
 	Project          string             `query:"project" doc:"Filter by project"`

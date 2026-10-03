@@ -238,7 +238,7 @@ func TestParseChatGPTExport_ToolCalls(t *testing.T) {
 	assert.Contains(t, asst.ToolCalls[0].ResultEvents[0].Content, "42")
 }
 
-// Thoughts content type should produce [Thinking] blocks.
+// Thoughts content type stays outside dialogue.
 func TestParseChatGPTExport_Thinking(t *testing.T) {
 	dir := t.TempDir()
 	writeChatGPTFixture(t, dir, "conversations-001.json", `[
@@ -307,10 +307,8 @@ func TestParseChatGPTExport_Thinking(t *testing.T) {
 
 	asst := msgs[1]
 	assert.True(t, asst.HasThinking)
-	assert.Contains(t, asst.Content, "[Thinking]")
-	assert.Contains(t, asst.Content, "Let me think about recursion.")
-	assert.Contains(t, asst.Content, "It is a function calling itself.")
-	assert.Contains(t, asst.Content, "[/Thinking]")
+	assert.Empty(t, asst.Content)
+	assert.Equal(t, "Let me think about recursion.\nIt is a function calling itself.", asst.ThinkingText)
 	assert.Equal(t, "o1-preview", asst.Model)
 }
 
@@ -549,7 +547,7 @@ func TestAssembleContent(t *testing.T) {
 					{Content: "thinking hard"},
 				},
 			},
-			want: "[Thinking]\nthinking hard\n[/Thinking]",
+			want: "thinking hard",
 		},
 		{
 			name: "tether_quote",
@@ -740,6 +738,8 @@ func TestParseChatGPTExport_WebSearch(t *testing.T) {
 	require.Len(t, asst.ToolCalls, 1)
 	assert.Equal(t, "web_search", asst.ToolCalls[0].ToolName)
 	assert.Equal(t, "Tool", asst.ToolCalls[0].Category)
+	require.Len(t, asst.ToolCalls[0].ResultEvents, 1)
+	assert.Equal(t, "> Go is great\n> -- [Go Blog](https://go.dev/blog)", asst.ToolCalls[0].ResultEvents[0].Content)
 }
 
 // --- helpers ---

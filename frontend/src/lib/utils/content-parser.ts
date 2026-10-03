@@ -1,8 +1,9 @@
 import type { DbMessage as Message, DbToolCall as ToolCall } from "../api/generated/index.js";
 import { LRUCache } from "./cache.js";
 import { isSystemBoundaryMessage } from "./messages.js";
+import { resolveToolInputText } from "../search/tool-input.js";
 
-export type SegmentType = "text" | "thinking" | "tool" | "code" | "skill";
+export type SegmentType = "text" | "thinking" | "tool" | "tool_result" | "code" | "skill";
 
 export interface ContentSegment {
   type: SegmentType;
@@ -11,6 +12,10 @@ export interface ContentSegment {
   label?: string;
   /** Structured tool call data from the API, when available */
   toolCall?: ToolCall;
+  /** Stable structured-call index, independent of the surrounding text. */
+  callIndex?: number;
+  /** Original native text run, owned by its first display segment for copy. */
+  copyContent?: string;
 }
 
 /**
@@ -130,36 +135,194 @@ interface Match {
   segment: ContentSegment;
 }
 
-const toolOnlyCache = new LRUCache<string, boolean>(500);
 const segmentCache = new LRUCache<string, ContentSegment[]>(500);
+const messageCache = new LRUCache<string, { identity: symbol; segments: ContentSegment[] }>(500);
+const identityCache = new LRUCache<string, { fields: unknown[]; identity: symbol }>(500);
+
+/**
+ * Compare immutable strings directly and snapshot nested scalar fields so
+ * in-place edits invalidate caches without serializing entire transcripts.
+ */
+export function messageContentIdentity(message: Message): symbol {
+  const layout = message.content_layout;
+  const fields: unknown[] = [
+    message.content,
+    message.thinking_text,
+    message.tool_result_text,
+    message.has_tool_use,
+    message.has_thinking,
+    message.role,
+    message.is_system,
+    message.source_subtype,
+    message.is_compact_boundary,
+    message.ordinal,
+    layout == null,
+    layout?.version,
+    layout?.blocks?.length,
+    message.tool_calls?.length,
+  ];
+  for (const block of layout?.blocks ?? []) {
+    fields.push(block.kind, block.start, block.end, block.call_index, block.category);
+  }
+  for (const call of message.tool_calls ?? []) {
+    fields.push(
+      call.tool_name,
+      call.category,
+      call.rendering,
+      call.input_json,
+      call.result_content,
+      call.result_content_length,
+      call.skill_name,
+      call.subagent_session_id,
+      call.tool_use_id,
+      call.result_events?.length,
+    );
+    for (const event of call.result_events ?? []) {
+      fields.push(
+        event.agent_id,
+        event.content,
+        event.content_length,
+        event.event_index,
+        event.source,
+        event.status,
+        event.subagent_session_id,
+        event.timestamp,
+        event.tool_use_id,
+      );
+    }
+  }
+  const key = `${message.session_id}:${message.id}`;
+  const cached = identityCache.get(key);
+  if (
+    cached?.fields.length === fields.length &&
+    fields.every((field, index) => Object.is(field, cached.fields[index]))
+  )
+    return cached.identity;
+  const identity = Symbol("message content");
+  identityCache.set(key, { fields, identity });
+  return identity;
+}
+
+/** Map only valid UTF-8 boundaries to JavaScript's UTF-16 string positions. */
+function utf8Slice(source: string): (start: number, end: number) => string {
+  const boundaries = new Map<number, number>([[0, 0]]);
+  let bytes = 0;
+  let units = 0;
+  for (const character of source) {
+    const point = character.codePointAt(0)!;
+    bytes += point <= 0x7f ? 1 : point <= 0x7ff ? 2 : point <= 0xffff ? 3 : 4;
+    units += character.length;
+    boundaries.set(bytes, units);
+  }
+  return (start, end) => {
+    if (
+      !Number.isInteger(start) ||
+      !Number.isInteger(end) ||
+      start > end ||
+      !boundaries.has(start) ||
+      !boundaries.has(end)
+    ) {
+      throw new Error("Invalid UTF-8 content layout range");
+    }
+    return source.slice(boundaries.get(start)!, boundaries.get(end)!);
+  };
+}
+
+/** One transcript adapter: native owners use saved order; NULL stays legacy. */
+export function messageSegments(message: Message): ContentSegment[] {
+  const identity = messageContentIdentity(message);
+  const key = `${message.session_id}:${message.id}`;
+  const cached = messageCache.get(key);
+  if (cached?.identity === identity) return cached.segments;
+
+  let segments: ContentSegment[];
+  const layout = message.content_layout;
+  if (layout == null) {
+    segments = enrichSegments(
+      parseContent(message.content, message.has_tool_use),
+      message.tool_calls,
+    );
+  } else {
+    if (layout.version !== 1 || !Array.isArray(layout.blocks)) {
+      throw new Error("Unsupported content layout version");
+    }
+    const text = utf8Slice(message.content);
+    const thinking = utf8Slice(message.thinking_text);
+    const output = utf8Slice(message.tool_result_text);
+    const attached = new Set<number>();
+    segments = [];
+    for (let index = 0; index < layout.blocks.length; index++) {
+      const block = layout.blocks[index]!;
+      switch (block.kind) {
+        case "text": {
+          let end = block.end;
+          while (layout.blocks[index + 1]?.kind === "text") {
+            const next = layout.blocks[++index]!;
+            text(next.start, next.end); // Validate each original range too.
+            end = next.end;
+          }
+          const content = text(block.start, end);
+          const parsed = buildSegments(content, resolveOverlaps(codeBlockMatches(content)));
+          if (parsed.length === 0) parsed.push({ type: "text", content });
+          parsed.forEach((segment, part) => {
+            segments.push({ ...segment, copyContent: part === 0 ? content : "" });
+          });
+          break;
+        }
+        case "thinking":
+          segments.push({ type: "thinking", content: thinking(block.start, block.end) });
+          break;
+        case "tool_result":
+          segments.push({ type: "tool_result", content: output(block.start, block.end) });
+          break;
+        case "tool_call": {
+          const call = message.tool_calls?.[block.call_index];
+          if (!Number.isInteger(block.call_index) || !call || attached.has(block.call_index)) {
+            throw new Error("Invalid content layout tool call");
+          }
+          attached.add(block.call_index);
+          segments.push({
+            type: "tool",
+            content: call.rendering || resolveToolInputText(call, ""),
+            label: TOOL_ALIASES[call.tool_name] ?? (call.category || call.tool_name),
+            toolCall: call,
+            callIndex: block.call_index,
+          });
+          break;
+        }
+        default:
+          throw new Error("Unsupported content layout block kind");
+      }
+    }
+  }
+  messageCache.set(key, { identity, segments });
+  return segments;
+}
 
 /** Clear both content-parser caches. Call on session switch
  *  to prevent cross-session memory accumulation. */
 export function clearContentCaches(): void {
-  toolOnlyCache.clear();
   segmentCache.clear();
+  messageCache.clear();
+  identityCache.clear();
 }
 
 /** Returns true if the message contains only tool calls (no text) */
 export function isToolOnly(msg: Message): boolean {
-  const len = msg.content_length ?? msg.content.length;
-  const key = `${msg.id}:${len}:${msg.has_tool_use ? 1 : 0}`;
-  const cached = toolOnlyCache.get(key);
-  if (cached !== undefined) return cached;
-
   if (msg.role !== "assistant") return false;
-  if (!msg.has_tool_use) {
-    toolOnlyCache.set(key, false);
+  if (msg.content_layout == null && !msg.has_tool_use) return false;
+  const segments = messageSegments(msg);
+  // A standalone output is rendered as its own message, not a zero-call group.
+  if (msg.content_layout != null && !segments.some((segment) => segment.type === "tool")) {
     return false;
   }
-  const stripped = msg.content
-    .replace(THINKING_MARKED_RE, "")
-    .replace(THINKING_LEGACY_RE, "")
-    .replace(TOOL_RE, "")
-    .trim();
-  const result = stripped.length === 0;
-  toolOnlyCache.set(key, result);
-  return result;
+  return segments.every(
+    (segment) =>
+      segment.type === "tool" ||
+      segment.type === "thinking" ||
+      segment.type === "tool_result" ||
+      (segment.type === "text" && segment.content.trim() === ""),
+  );
 }
 
 /** Returns true if pos falls inside any inline code span. */
@@ -540,16 +703,14 @@ export function hasVisibleSegments(
   // every boundary card to the "user" role it carries for analytics.
   if (isSystemBoundaryMessage(msg)) return isVisible("system");
   const role: "user" | "assistant" = msg.role === "user" ? "user" : "assistant";
-  const segs = enrichSegments(
-    parseContent(msg.content, msg.has_tool_use, msg.id, msg.content_length),
-    msg.tool_calls,
-  );
+  const segs = messageSegments(msg);
   // Empty messages (e.g. initial assistant streaming state) should
   // remain visible when their role is not filtered out.
-  if (segs.length === 0) return isVisible(role);
+  if (segs.length === 0) return msg.content_layout == null && isVisible(role);
   return segs.some((s) => {
     if (s.type === "text") return isVisible(role);
     if (s.type === "skill") return isVisible(role);
+    if (s.type === "tool_result") return isVisible("tool");
     return isVisible(s.type);
   });
 }

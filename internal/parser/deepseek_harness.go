@@ -980,6 +980,7 @@ func deepSeekHarnessUserMessage(event deepSeekHarnessEvent) (ParsedMessage, erro
 	parsed.Role = RoleUser
 	parsed.IsSystem = source != "user"
 	parsed.SourceType = source
+	parsed.SourceUUID = deepSeekHarnessMessageID(event.Data)
 	return parsed, nil
 }
 
@@ -1003,6 +1004,7 @@ func deepSeekHarnessSystemMessage(event deepSeekHarnessEvent) (ParsedMessage, er
 	parsed.Role = RoleSystem
 	parsed.IsSystem = true
 	parsed.SourceType = source
+	parsed.SourceUUID = deepSeekHarnessMessageID(rawMessage)
 	return parsed, nil
 }
 
@@ -1022,7 +1024,15 @@ func deepSeekHarnessAssistantMessage(
 	}
 	parsed.Role = RoleAssistant
 	parsed.Model = model
+	parsed.SourceUUID = deepSeekHarnessMessageID(raw)
 	return parsed, model, nil
+}
+
+// deepSeekHarnessMessageID reads the stable ID from an already validated envelope.
+func deepSeekHarnessMessageID(raw jsontext.Value) string {
+	fields, _ := decodeDeepSeekHarnessObject(raw)
+	id, _ := deepSeekHarnessRequiredString(fields, "id")
+	return id
 }
 
 func deepSeekHarnessMessageEnvelope(
@@ -1073,7 +1083,7 @@ func parseDeepSeekHarnessContent(
 	}
 	parsed := ParsedMessage{Timestamp: time.UnixMilli(eventTime)}
 	visible := make([]string, 0)
-	thinking := make([]string, 0)
+	var body MessageContentBuilder
 	for _, rawBlock := range blocks {
 		fields, err := decodeDeepSeekHarnessObject(rawBlock)
 		if err != nil {
@@ -1090,17 +1100,19 @@ func parseDeepSeekHarnessContent(
 				return ParsedMessage{}, err
 			}
 			visible = append(visible, text)
+			body.AddText(text)
 		case "reasoning":
 			text, err := deepSeekHarnessRequiredString(fields, "text")
 			if err != nil {
 				return ParsedMessage{}, err
 			}
-			thinking = append(thinking, text)
+			body.addThinking(text, "\n")
 		case "image", "file":
 			if _, ok := fields["attachment"]; !ok {
 				return ParsedMessage{}, fmt.Errorf("%s block has no attachment", blockType)
 			}
 			visible = append(visible, "["+blockType+"]")
+			body.AddText("[" + blockType + "]")
 		case "tool-call":
 			id, idErr := deepSeekHarnessRequiredString(fields, "id")
 			name, nameErr := deepSeekHarnessRequiredString(fields, "name")
@@ -1108,7 +1120,7 @@ func parseDeepSeekHarnessContent(
 			if idErr != nil || nameErr != nil || argumentsErr != nil || id == "" || name == "" {
 				return ParsedMessage{}, errors.New("tool-call block is invalid")
 			}
-			parsed.ToolCalls = append(parsed.ToolCalls, ParsedToolCall{
+			body.AddToolCall(ParsedToolCall{
 				ToolUseID: id, ToolName: name,
 				Category: NormalizeToolCategory(name), InputJSON: arguments,
 			})
@@ -1129,20 +1141,18 @@ func parseDeepSeekHarnessContent(
 			if err != nil {
 				return ParsedMessage{}, err
 			}
-			parsed.ToolResults = append(parsed.ToolResults, ParsedToolResult{
+			body.addToolResult(ParsedToolResult{
 				ToolUseID: id, ContentLength: len(text), ContentRaw: string(normalizedContent),
-			})
+			}, text)
 		default:
 			return ParsedMessage{}, deepSeekHarnessUnsupportedError{message: fmt.Sprintf(
 				"unsupported content block type %q", blockType,
 			)}
 		}
 	}
-	parsed.Content = strings.Join(visible, "\n")
-	parsed.ThinkingText = strings.Join(thinking, "\n")
-	parsed.HasThinking = parsed.ThinkingText != ""
-	parsed.HasToolUse = len(parsed.ToolCalls) > 0
-	parsed.ContentLength = len(parsed.Content)
+	parsed.Content = body.Message().Content
+	parsed = parsed.withBody(body.Message())
+	parsed.ContentLength = sanitizedWorkLength(strings.Join(visible, "\n"))
 	return parsed, nil
 }
 
@@ -1283,12 +1293,12 @@ func deepSeekHarnessToolResultData(
 	parsed.Content = ""
 	parsed.ContentLength = 0
 	parsed.SourceType = "tool"
+	parsed.SourceUUID = deepSeekHarnessMessageID(rawMessage)
 	return key, parsed, isError, errorCode, nil
 }
 
 func deepSeekHarnessMessageVisible(message ParsedMessage) bool {
-	return message.Content != "" || message.ThinkingText != "" ||
-		len(message.ToolCalls) > 0 || len(message.ToolResults) > 0
+	return message.hasNativeBody()
 }
 
 func parseDeepSeekHarnessUsage(raw jsontext.Value) (deepSeekHarnessUsage, error) {

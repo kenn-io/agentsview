@@ -226,47 +226,33 @@ func parseQwenPawMessage(
 		Timestamp: parseQwenPawTimestamp(msg.Get("timestamp").Str),
 	}
 
+	var body MessageContentBuilder
 	var textParts []string
 	content := msg.Get("content")
 	if content.IsArray() {
 		content.ForEach(func(_, block gjson.Result) bool {
 			switch block.Get("type").Str {
 			case "text":
-				if t := block.Get("text").Str; t != "" {
-					textParts = append(textParts, t)
+				if text := block.Get("text").Str; text != "" {
+					textParts = append(textParts, text)
+					body.AddText(text)
 				}
 			case "thinking":
-				if th := block.Get("thinking").Str; th != "" {
-					pm.HasThinking = true
-					if pm.ThinkingText != "" {
-						pm.ThinkingText += "\n"
-					}
-					pm.ThinkingText += th
-				}
+				body.addThinking(block.Get("thinking").Str, "\n")
 			case "tool_use":
-				tc := ParsedToolCall{
-					ToolUseID: block.Get("id").Str,
-					ToolName:  block.Get("name").Str,
-					Category:  NormalizeToolCategory(block.Get("name").Str),
-				}
-				tc.InputJSON = qwenpawToolInputJSON(block)
-				pm.ToolCalls = append(pm.ToolCalls, tc)
-				pm.HasToolUse = true
+				name := block.Get("name").Str
+				body.AddToolCall(ParsedToolCall{ToolUseID: block.Get("id").Str, ToolName: name, Category: NormalizeToolCategory(name), InputJSON: qwenpawToolInputJSON(block)})
 			case "tool_result":
 				output := block.Get("output")
-				tr := ParsedToolResult{
-					ToolUseID:     block.Get("id").Str,
-					ContentLength: toolResultContentLength(output),
-					ContentRaw:    output.Raw,
-				}
-				pm.ToolResults = append(pm.ToolResults, tr)
+				body.AddToolResult(ParsedToolResult{ToolUseID: block.Get("id").Str, ContentLength: toolResultContentLength(output), ContentRaw: output.Raw})
 			}
 			return true
 		})
 	}
-
-	pm.Content = strings.Join(textParts, "\n")
-	pm.ContentLength = len(pm.Content)
+	pm.Content = body.Message().Content
+	pm = pm.withBody(body.Message())
+	pm.ContentLength = sanitizedWorkLength(strings.Join(textParts, "\n"))
+	pm.SourceUUID = msg.Get("id").Str
 	return pm, true
 }
 

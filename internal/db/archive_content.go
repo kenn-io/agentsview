@@ -161,22 +161,28 @@ func transcriptMessages(messages []Message) []Message {
 	}
 	stored := slices.Clone(messages)
 	for i := range stored {
+		stored[i].ClearBodyFields("tool_result")
 		if isToolOutputRow(stored[i]) {
-			stored[i].Content = ""
+			stored[i].ClearBodyFields("text")
 			stored[i].ContentLength = 0
 		}
 		stored[i].ToolResults = nil
 		if len(stored[i].ToolCalls) == 0 {
 			continue
 		}
-		if redacted, changed := redactToolUseRenderings(
-			stored[i].Content, stored[i].ToolCalls,
-		); changed {
-			stored[i].Content = redacted
-			stored[i].ContentLength = len(redacted)
+		if stored[i].ContentLayout == nil {
+			if redacted, changed := redactToolUseRenderings(
+				stored[i].Content, stored[i].ToolCalls,
+			); changed {
+				stored[i].Content = redacted
+				stored[i].ContentLength = len(redacted)
+			}
 		}
 		calls := slices.Clone(stored[i].ToolCalls)
 		for j := range calls {
+			calls[j].Rendering = parser.RedactToolUseRendering(
+				calls[j].Rendering, calls[j].Category, calls[j].ToolName, calls[j].InputJSON,
+			)
 			calls[j].InputJSON = ""
 			calls[j].ResultContent = ""
 			if len(calls[j].ResultEvents) == 0 {
@@ -296,8 +302,7 @@ func usageOnlyMessages(messages []Message) []Message {
 		if !usageOnlyMessageRequired(message) {
 			continue
 		}
-		message.Content = ""
-		message.ThinkingText = ""
+		message.ClearBodyFields("text", "thinking", "tool_result", "tool_call")
 		message.ToolCalls = usageOnlyToolCalls(message.ToolCalls)
 		message.ToolResults = nil
 		message.HasThinking = false
@@ -493,6 +498,9 @@ const toolOutputMarkerDataVersion = 105
 func dropCopiedToolContentTx(
 	ctx context.Context, tx *sql.Tx, tempIDsTable string,
 ) error {
+	if err := projectCopiedNativeTranscriptsTx(ctx, tx, tempIDsTable); err != nil {
+		return err
+	}
 	inCopied := ` IN (SELECT id FROM ` + tempIDsTable + `)`
 	// Rows of sessions parsed before the marker existed cannot be told apart
 	// by marker, so the copy fails closed per provider: every row shape the
@@ -515,6 +523,9 @@ func dropCopiedToolContentTx(
 			WHERE session_id` + inCopied},
 		{"tool result events", `
 			UPDATE tool_result_events SET content = ''
+			WHERE session_id` + inCopied},
+		{"standalone output", `
+			UPDATE messages SET tool_result_text = ''
 			WHERE session_id` + inCopied},
 		{"tool-role message text", `
 			UPDATE messages SET content = '', content_length = 0
@@ -621,7 +632,7 @@ func compactCopiedSessionsForUsageTx(
 		{"delegation tool calls", `
 			UPDATE tool_calls
 			SET tool_name = 'subagent', category = 'Task',
-			    input_json = NULL, skill_name = NULL,
+			    input_json = NULL, rendering = '', skill_name = NULL,
 			    result_content_length = NULL, result_content = NULL,
 			    file_path = NULL
 			WHERE session_id` + inCopied},
@@ -636,7 +647,9 @@ func compactCopiedSessionsForUsageTx(
 			               WHERE tc.message_id = messages.id))`},
 		{"message payloads", `
 			UPDATE messages
-			SET content = '', thinking_text = '', has_thinking = 0,
+			SET content = '', thinking_text = '', tool_result_text = '', has_thinking = 0,
+			    content_layout = CASE WHEN content_layout IS NULL THEN NULL
+			                          ELSE '{"version":1,"blocks":[]}' END,
 			    has_tool_use = EXISTS (SELECT 1 FROM tool_calls tc
 			                           WHERE tc.message_id = messages.id),
 			    content_length = 0, is_system = 0,
@@ -701,7 +714,8 @@ func redactCopiedToolUseRenderingsTx(
 		       COALESCE(tc.input_json, '')
 		  FROM messages m
 		  JOIN tool_calls tc ON tc.message_id = m.id
-		 WHERE m.session_id IN (SELECT id FROM `+tempIDsTable+`)
+		 WHERE m.content_layout IS NULL
+		   AND m.session_id IN (SELECT id FROM `+tempIDsTable+`)
 		 ORDER BY m.id, tc.call_index`)
 	if err != nil {
 		return fmt.Errorf("listing copied tool renderings: %w", err)
@@ -749,6 +763,84 @@ func redactCopiedToolUseRenderingsTx(
 			return fmt.Errorf(
 				"redacting copied tool rendering %d: %w", entry.id, err,
 			)
+		}
+	}
+	return nil
+}
+
+// Native copies use the same field and layout projection as fresh writes.
+// Legacy rows continue through the conservative rendering fallback above.
+func projectCopiedNativeTranscriptsTx(ctx context.Context, tx *sql.Tx, tempIDsTable string) error {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id, role, source_subtype, content_layout
+		FROM messages
+		WHERE content_layout IS NOT NULL
+		  AND session_id IN (SELECT id FROM `+tempIDsTable+`)
+		ORDER BY id`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var messages []Message
+	for rows.Next() {
+		var message Message
+		var layout string
+		if err := rows.Scan(&message.ID, &message.Role, &message.SourceSubtype, &layout); err != nil {
+			rows.Close()
+			return err
+		}
+		message.SetContentLayout(DecodeStoredContentLayout(layout))
+		messages = append(messages, message)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, message := range messages {
+		message.ClearBodyFields("tool_result")
+		if isToolOutputRow(message) {
+			message.ClearBodyFields("text")
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE messages SET tool_result_text = '', content_layout = ?
+			WHERE id = ?`,
+			storedContentLayout(message.ContentLayout), message.ID); err != nil {
+			return err
+		}
+	}
+	// Read invocation metadata only; output and event payloads are discarded
+	// in SQL and need not be materialized during archive copies.
+	rows, err = tx.QueryContext(ctx, `
+		SELECT tc.id, tc.tool_name, tc.category, COALESCE(tc.input_json, ''), COALESCE(tc.rendering, '')
+		FROM tool_calls tc JOIN messages m ON m.id = tc.message_id
+		WHERE m.session_id IN (SELECT id FROM `+tempIDsTable+`)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	type renderingUpdate struct {
+		id   int64
+		text string
+	}
+	var updates []renderingUpdate
+	for rows.Next() {
+		var id int64
+		var call ToolCall
+		if err := rows.Scan(&id, &call.ToolName, &call.Category, &call.InputJSON, &call.Rendering); err != nil {
+			rows.Close()
+			return err
+		}
+		updates = append(updates, renderingUpdate{id: id, text: parser.RedactToolUseRendering(call.Rendering, call.Category, call.ToolName, call.InputJSON)})
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, update := range updates {
+		if _, err := tx.ExecContext(ctx, "UPDATE tool_calls SET rendering = ? WHERE id = ?", update.text, update.id); err != nil {
+			return err
 		}
 	}
 	return nil

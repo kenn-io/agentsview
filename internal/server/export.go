@@ -651,7 +651,7 @@ func generateExportHTML(
 			roleClass = m.Role
 		}
 		extraClass := ""
-		if m.Role == "assistant" && isThinkingOnly(m.Content) {
+		if m.Role == "assistant" && isExportThinkingOnly(m) {
 			extraClass = " thinking-only"
 		}
 
@@ -661,7 +661,7 @@ func generateExportHTML(
 			ExtraClass:    extraClass,
 			Role:          m.Role,
 			Timestamp:     formatTimestamp(m.Timestamp),
-			ContentHTML:   template.HTML(formatContentForExport(m.Content)),
+			ContentHTML:   template.HTML(formatMessageForExport(m)),
 			FocusedHidden: !focusedVisible[m.Ordinal],
 		}
 	}
@@ -745,6 +745,58 @@ func isThinkingOnly(content string) bool {
 	return strings.TrimSpace(without) == ""
 }
 
+func formatMessageForExport(message db.Message) string {
+	if message.ContentLayout == nil {
+		return formatContentForExport(message.Content)
+	}
+	var output strings.Builder
+	result := func(content string) {
+		output.WriteString(`<pre class="tool-block">` + html.EscapeString(db.DisplayResultText(content)) + `</pre>`)
+	}
+	for _, segment := range parseMarkdownSegments(message) {
+		switch segment.Type {
+		case markdownSegmentText, markdownSegmentSkill:
+			output.WriteString(inlineCodeRe.ReplaceAllString(html.EscapeString(segment.Content), "<code>$1</code>"))
+		case markdownSegmentCode:
+			output.WriteString("<pre><code>" + html.EscapeString(segment.Content) + "</code></pre>")
+		case markdownSegmentThinking:
+			output.WriteString(`<div class="thinking-block"><div class="thinking-label">Thinking</div>` + html.EscapeString(segment.Content) + `</div>`)
+		case markdownSegmentResult:
+			result(segment.Content)
+		case markdownSegmentTool:
+			output.WriteString(`<div class="tool-block">` + html.EscapeString(segment.Content) + `</div>`)
+			call := segment.ToolCall
+			if call.ResultContent != "" {
+				result(call.ResultContent)
+			}
+			for _, event := range call.ResultEvents {
+				result(event.Content)
+			}
+		}
+	}
+	return output.String()
+}
+
+func isExportThinkingOnly(message db.Message) bool {
+	if message.ContentLayout == nil {
+		return isThinkingOnly(message.Content)
+	}
+	hasThinking := false
+	for _, segment := range parseMarkdownSegments(message) {
+		switch segment.Type {
+		case markdownSegmentThinking:
+			hasThinking = true
+		case markdownSegmentText:
+			if strings.TrimSpace(segment.Content) != "" {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return hasThinking
+}
+
 func focusedExportOrdinals(
 	msgs []db.Message, agent string,
 ) map[int]bool {
@@ -772,7 +824,7 @@ func focusedExportOrdinals(
 		}
 
 		if m.IsSystem || db.IsGoalContextPrefixed(m.Content, m.Role) ||
-			isThinkingOnly(m.Content) {
+			isExportThinkingOnly(m) {
 			continue
 		}
 
@@ -780,6 +832,9 @@ func focusedExportOrdinals(
 			if hasPendingAssistant && !keepAnswerBeforeTrailingTools {
 				toolAfterPendingAssistant = true
 			}
+			continue
+		}
+		if m.ContentLayout != nil && m.Content == "" {
 			continue
 		}
 
@@ -801,12 +856,16 @@ func focusedExportOrdinals(
 }
 
 func isExportToolOnly(m db.Message) bool {
-	if m.Role != "assistant" || !m.HasToolUse {
+	if m.Role != "assistant" || (m.ContentLayout == nil && !m.HasToolUse) {
 		return false
 	}
+	hasTool := false
 	for _, segment := range parseMarkdownSegments(m) {
 		switch segment.Type {
-		case markdownSegmentThinking, markdownSegmentTool:
+		case markdownSegmentTool:
+			hasTool = true
+			continue
+		case markdownSegmentThinking, markdownSegmentResult:
 			continue
 		case markdownSegmentText:
 			if strings.TrimSpace(segment.Content) == "" {
@@ -817,7 +876,7 @@ func isExportToolOnly(m db.Message) bool {
 			return false
 		}
 	}
-	return true
+	return m.ContentLayout == nil || hasTool
 }
 
 // parseTimestamp tries RFC3339Nano then RFC3339.

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/secrets"
 )
 
@@ -127,6 +128,57 @@ func (db *DB) rewriteStoredToolResultRows(
 		return false, err
 	}
 	var pendingRecallRevocations recallEvidenceRevocationEvents
+	type messageOutputUpdate struct {
+		id     int64
+		output string
+		layout *parser.ContentLayout
+	}
+	messageUpdates := make([]messageOutputUpdate, 0)
+	messageRows, err := tx.QueryContext(ctx, `
+		SELECT m.id, m.content, m.thinking_text, m.tool_result_text, COALESCE(m.content_layout, ''),
+		       (SELECT COUNT(*) FROM tool_calls tc WHERE tc.message_id = m.id)
+		FROM messages m WHERE m.session_id = ? AND m.tool_result_text <> ''`, sessionID)
+	if err != nil {
+		return false, err
+	}
+	defer messageRows.Close()
+	for messageRows.Next() {
+		var message Message
+		var layout string
+		var callCount int
+		if err := messageRows.Scan(&message.ID, &message.Content, &message.ThinkingText, &message.ToolResultText, &layout, &callCount); err != nil {
+			messageRows.Close()
+			return false, err
+		}
+		message.SetContentLayout(DecodeStoredContentLayout(layout))
+		message.ToolCalls = make([]ToolCall, callCount)
+		original := message.ToolResultText
+		var projectionErr error
+		transformErr := message.TransformBody(func(kind, text string) string {
+			if kind != "tool_result" || projectionErr != nil {
+				return text
+			}
+			projected, err := project(text)
+			projectionErr = err
+			return projected
+		})
+		if transformErr != nil {
+			messageRows.Close()
+			return false, transformErr
+		}
+		if projectionErr != nil {
+			messageRows.Close()
+			return false, projectionErr
+		}
+		if original != message.ToolResultText {
+			messageUpdates = append(messageUpdates, messageOutputUpdate{message.ID, message.ToolResultText, message.ContentLayout})
+		}
+	}
+	err = messageRows.Err()
+	messageRows.Close()
+	if err != nil {
+		return false, err
+	}
 
 	type storedToolResultKey struct {
 		messageOrdinal int
@@ -249,8 +301,14 @@ func (db *DB) rewriteStoredToolResultRows(
 		}
 	}
 
-	if len(calls) == 0 && len(events) == 0 {
+	if len(calls) == 0 && len(events) == 0 && len(messageUpdates) == 0 {
 		return false, nil
+	}
+	for _, update := range messageUpdates {
+		if _, err := tx.ExecContext(ctx, "UPDATE messages SET tool_result_text = ?, content_layout = ? WHERE id = ?",
+			update.output, storedContentLayout(update.layout), update.id); err != nil {
+			return false, err
+		}
 	}
 	for _, update := range calls {
 		if _, err := tx.ExecContext(ctx, `
@@ -389,7 +447,9 @@ func (db *DB) stripImageSessions(
 		OR EXISTS (SELECT 1 FROM tool_result_events ev
 		WHERE ev.session_id = s.id
 		  AND ev.content IS NOT NULL
-		  AND ev.content <> ''))`
+		  AND ev.content <> '')
+		OR EXISTS (SELECT 1 FROM messages m
+		WHERE m.session_id = s.id AND m.tool_result_text <> ''))`
 	args := []any{}
 	if filter.Project != "" {
 		where += ` AND s.project LIKE ? ESCAPE '\'`
@@ -447,6 +507,39 @@ func (db *DB) toolImageStats(
 	}
 	if err := rows.Err(); err != nil {
 		return ToolImageStats{}, fmt.Errorf("iterating tool result bytes: %w", err)
+	}
+	rows.Close()
+	rows, err = db.getReader().QueryContext(ctx, `
+		SELECT m.content, m.thinking_text, m.tool_result_text, COALESCE(m.content_layout, ''),
+		       (SELECT COUNT(*) FROM tool_calls tc WHERE tc.message_id = m.id)
+		FROM messages m WHERE m.session_id = ? AND m.tool_result_text <> ''`, sessionID)
+	if err != nil {
+		return ToolImageStats{}, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var message Message
+		var layout string
+		var callCount int
+		if err := rows.Scan(&message.Content, &message.ThinkingText, &message.ToolResultText, &layout, &callCount); err != nil {
+			return ToolImageStats{}, err
+		}
+		message.SetContentLayout(DecodeStoredContentLayout(layout))
+		message.ToolCalls = make([]ToolCall, callCount)
+		if err := message.TransformBody(func(kind, text string) string {
+			if kind == "tool_result" {
+				found := count(text)
+				stats.Payloads += found.Payloads
+				stats.StoredBytes += found.StoredBytes
+				stats.DecodedBytes += found.DecodedBytes
+			}
+			return text
+		}); err != nil {
+			return ToolImageStats{}, err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return ToolImageStats{}, err
 	}
 	return stats, nil
 }

@@ -64,8 +64,9 @@ func TestGrokProviderGoldenCurrentTranscriptSemantics(t *testing.T) {
 	assert.Equal(t, RoleUser, result.Messages[0].Role)
 	assert.Equal(t, "Review parser compatibility", result.Messages[0].Content)
 	assert.Equal(t, RoleAssistant, result.Messages[1].Role)
-	assert.Contains(t, result.Messages[1].Content, "Grok Build persistence")
 	require.Len(t, result.Messages[1].ToolCalls, 1)
+	assert.Empty(t, result.Messages[1].Content)
+	assert.Contains(t, result.Messages[1].ToolCalls[0].Rendering, "Grok Build persistence")
 	assert.Equal(t, "ws_1", result.Messages[1].ToolCalls[0].ToolUseID)
 	assert.Equal(t, "web_search", result.Messages[1].ToolCalls[0].ToolName)
 	assert.Equal(t, "Inspect both formats", result.Messages[2].ThinkingText)
@@ -225,7 +226,8 @@ func TestParseGrokChatHistoryReasoningShapes(t *testing.T) {
 			if tt.name == "legacy raw output reasoning" {
 				require.Len(t, messages[0].ToolCalls, 1)
 				assert.Equal(t, "ws_raw", messages[0].ToolCalls[0].ToolUseID)
-				assert.Contains(t, messages[0].Content, "raw query")
+				assert.Empty(t, messages[0].Content)
+				assert.Contains(t, messages[0].ToolCalls[0].Rendering, "raw query")
 			}
 		})
 	}

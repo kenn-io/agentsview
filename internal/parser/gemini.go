@@ -250,8 +250,9 @@ func parseGeminiMessage(
 	if msgType == "gemini" {
 		role = RoleAssistant
 	}
-	content, hasThinking, hasToolUse, tcs, trs := extractGeminiContent(msg)
-	if strings.TrimSpace(content) == "" {
+	body := extractGeminiMessageContent(msg)
+	content, hasThinking, hasToolUse, tcs, trs := body.Content, body.HasThinking, body.HasToolUse, body.ToolCalls, body.ToolResults
+	if !body.hasNativeBody() && !msg.Get("tokens").Exists() {
 		return ParsedMessage{}, false
 	}
 
@@ -266,6 +267,7 @@ func parseGeminiMessage(
 		Role:          role,
 		Content:       content,
 		Timestamp:     parseTimestamp(msg.Get("timestamp").Str),
+		SourceUUID:    msg.Get("id").Str,
 		HasThinking:   hasThinking,
 		HasToolUse:    hasToolUse,
 		ContentLength: len(content),
@@ -280,7 +282,7 @@ func parseGeminiMessage(
 		HasOutputTokens: tokResult.Get("output").Exists() ||
 			tokResult.Get("thoughts").Exists(),
 		tokenPresenceKnown: true,
-	}, true
+	}.withBody(body), true
 }
 
 func applyGeminiCumulativeDeltas(messages []ParsedMessage) {
@@ -362,105 +364,60 @@ func buildGeminiSession(
 	return sess
 }
 
-// extractGeminiContent builds readable text from a Gemini
-// message, including its content, thoughts, and tool calls.
-func extractGeminiContent(
-	msg gjson.Result,
-) (string, bool, bool, []ParsedToolCall, []ParsedToolResult) {
-	var (
-		parts       []string
-		parsed      []ParsedToolCall
-		results     []ParsedToolResult
-		hasThinking bool
-		hasToolUse  bool
-	)
-
-	// Extract thoughts (appear before content chronologically)
-	thoughts := msg.Get("thoughts")
-	if thoughts.IsArray() {
-		thoughts.ForEach(func(_, thought gjson.Result) bool {
-			desc := thought.Get("description").Str
-			if desc != "" {
-				hasThinking = true
-				subj := thought.Get("subject").Str
-				if subj != "" {
-					parts = append(parts,
-						fmt.Sprintf(
-							"[Thinking]\n%s\n%s\n[/Thinking]",
-							subj, desc,
-						),
-					)
-				} else {
-					parts = append(parts,
-						"[Thinking]\n"+desc+"\n[/Thinking]",
-					)
-				}
+// extractGeminiMessageContent retains the producer's thoughts/content/calls order.
+func extractGeminiMessageContent(msg gjson.Result) ParsedMessage {
+	var b MessageContentBuilder
+	msg.Get("thoughts").ForEach(func(_, thought gjson.Result) bool {
+		text := thought.Get("description").Str
+		if text != "" {
+			if subject := thought.Get("subject").Str; subject != "" {
+				text = subject + "\n" + text
 			}
-			return true
-		})
-	}
-
-	// Extract main content (string or Part[] array)
+		}
+		b.AddThinking(text)
+		return true
+	})
 	content := msg.Get("content")
 	if content.Type == gjson.String {
-		if t := content.Str; t != "" {
-			parts = append(parts, t)
-		}
+		b.addText(content.Str, "\n\n")
 	} else if content.IsArray() {
 		content.ForEach(func(_, part gjson.Result) bool {
-			if t := part.Get("text").Str; t != "" {
-				parts = append(parts, t)
-			}
+			b.addText(part.Get("text").Str, "\n\n")
 			return true
 		})
 	}
-
-	// Extract tool calls and inline results
-	toolCalls := msg.Get("toolCalls")
-	if toolCalls.IsArray() {
-		toolCalls.ForEach(func(_, tc gjson.Result) bool {
-			hasToolUse = true
-			name := tc.Get("name").Str
-			tcID := tc.Get("id").Str
-			rendering := formatGeminiToolCall(tc)
-			if name != "" {
-				parsed = append(parsed, ParsedToolCall{
-					ToolName:  name,
-					Category:  NormalizeToolCategory(name),
-					ToolUseID: tcID,
-					InputJSON: tc.Get("args").Raw,
-					Rendering: rendering,
-				})
-				// Extract inline tool results from
-				// result[].functionResponse.response.output
-				tc.Get("result").ForEach(
-					func(_, r gjson.Result) bool {
-						output := r.Get(
-							"functionResponse.response.output",
-						)
-						if !output.Exists() {
-							return true
-						}
-						rid := r.Get("functionResponse.id").Str
-						if rid == "" {
-							rid = tcID
-						}
-						results = append(results, ParsedToolResult{
-							ToolUseID:     rid,
-							ContentLength: toolResultContentLength(output),
-							ContentRaw:    output.Raw,
-						})
-						return true
-					},
-				)
+	msg.Get("toolCalls").ForEach(func(_, tc gjson.Result) bool {
+		name, id := tc.Get("name").Str, tc.Get("id").Str
+		rendering := formatGeminiToolCall(tc)
+		if name == "" {
+			b.message.HasToolUse = true
+			b.addWork(sanitizedWorkLength(rendering))
+			return true
+		}
+		b.AddToolCall(ParsedToolCall{
+			ToolName: name, Category: NormalizeToolCategory(name), ToolUseID: id,
+			InputJSON: tc.Get("args").Raw, Rendering: rendering,
+		})
+		tc.Get("result").ForEach(func(_, result gjson.Result) bool {
+			output := result.Get("functionResponse.response.output")
+			if !output.Exists() {
+				return true
 			}
-			parts = append(parts, rendering)
+			resultID := result.Get("functionResponse.id").Str
+			if resultID == "" {
+				resultID = id
+			}
+			b.AddToolResult(ParsedToolResult{
+				ToolUseID: resultID, ContentLength: toolResultContentLength(output), ContentRaw: output.Raw,
+			})
 			return true
 		})
-	}
-
-	return strings.Join(parts, "\n\n"),
-		hasThinking, hasToolUse, parsed, results
+		return true
+	})
+	body := b.Message()
+	// Gemini historically separates rendered blocks with two newlines.
+	body.ContentLength += max(0, b.workParts-1)
+	return body
 }
 
 func formatGeminiToolCall(tc gjson.Result) string {

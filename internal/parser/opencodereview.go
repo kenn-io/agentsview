@@ -353,6 +353,17 @@ func openCodeReviewResponse(state *openCodeReviewParserState, record openCodeRev
 			InputJSON: openCodeReviewArguments(call.Arguments),
 		})
 	}
+	var body MessageContentBuilder
+	if record.Reasoning != "" {
+		body.AddThinking(record.Reasoning)
+	}
+	body.AddText(record.Content)
+	for _, call := range message.ToolCalls {
+		body.AddToolCall(call)
+	}
+	message.Content = body.Message().Content
+	message = message.withBody(body.Message())
+	message.ContentLength = sanitizedWorkLength(record.Content)
 	openCodeReviewApplyUsage(&message, record.Usage)
 	messageIndex := openCodeReviewAppendMessage(state, message)
 	stream := openCodeReviewStream{FilePath: record.FilePath, TaskType: record.TaskType}
@@ -426,7 +437,7 @@ func openCodeReviewDiagnostic(state *openCodeReviewParserState, uuid, parent str
 	if content == "" {
 		return
 	}
-	openCodeReviewAppendMessage(state, ParsedMessage{
+	message := ParsedMessage{
 		Role:             RoleSystem,
 		IsSystem:         true,
 		Content:          content,
@@ -435,12 +446,24 @@ func openCodeReviewDiagnostic(state *openCodeReviewParserState, uuid, parent str
 		SourceSubtype:    subtype,
 		SourceUUID:       uuid,
 		SourceParentUUID: parent,
-	})
+	}
+	if subtype == "unmatched_tool_result" {
+		raw, _ := json.Marshal(content)
+		var body MessageContentBuilder
+		body.AddToolResult(ParsedToolResult{ContentRaw: string(raw), ContentLength: len(content)})
+		message.Content = ""
+		message = message.withBody(body.Message())
+		message.ContentLength = sanitizedWorkLength(content)
+	}
+	openCodeReviewAppendMessage(state, message)
 }
 
 func openCodeReviewAppendMessage(state *openCodeReviewParserState, message ParsedMessage) int {
 	message.Ordinal = len(state.messages)
-	message.ContentLength = len(message.Content)
+	if message.ContentLayout == nil {
+		message.ContentLength = len(message.Content)
+		message = message.withPlainBody()
+	}
 	state.messages = append(state.messages, message)
 	return len(state.messages) - 1
 }

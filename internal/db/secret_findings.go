@@ -12,7 +12,7 @@ type SecretFinding struct {
 	SessionID      string `json:"session_id"`
 	RuleName       string `json:"rule_name"`
 	Confidence     string `json:"confidence"`
-	LocationKind   string `json:"location_kind"` // message|tool_input|tool_result|tool_result_event
+	LocationKind   string `json:"location_kind"` // message|thinking|tool_output|tool_rendering|tool_input|tool_result|tool_result_event
 	MessageOrdinal int    `json:"message_ordinal"`
 	CallIndex      *int   `json:"call_index,omitempty"`
 	EventIndex     *int   `json:"event_index,omitempty"`
@@ -122,8 +122,13 @@ func FindingSourceFromMessages(msgs []Message, f SecretFinding) (string, bool) {
 	if msg == nil {
 		return "", false
 	}
-	if f.LocationKind == "message" {
+	switch f.LocationKind {
+	case "message":
 		return msg.Content, true
+	case "thinking":
+		return msg.ThinkingText, true
+	case "tool_output":
+		return msg.ToolResultText, true
 	}
 	text, ok := toolCallSource(msg.ToolCalls, f)
 	return text, ok
@@ -151,6 +156,8 @@ func toolCallSource(calls []ToolCall, f SecretFinding) (string, bool) {
 		return "", false
 	}
 	switch f.LocationKind {
+	case "tool_rendering":
+		return tc.Rendering, true
 	case "tool_input":
 		return tc.InputJSON, true
 	case "tool_result":

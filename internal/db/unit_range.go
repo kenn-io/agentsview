@@ -517,7 +517,7 @@ const unitSessionChunk = maxSQLVars / 2
 // prefix check: SystemPrefixSQL constrains user rows only.)
 func embeddableUserSQL(alias string) string {
 	return fmt.Sprintf("%[1]s.role = 'user' AND %[1]s.is_system = 0 AND %[2]s",
-		alias, SystemPrefixSQL(alias+".content", alias+".role"))
+		alias, SystemPrefixSQL(alias+".content", alias+".role")+" AND "+DialogueEligibilitySQL(alias, SQLiteQueryDialect()))
 }
 
 // NearestUserBoundaries returns, per probe, the nearest embeddable user
@@ -618,7 +618,7 @@ func runExtentSelectSQL() string {
 	         AND f.ordinal > p.lo AND f.ordinal < p.o
 	         AND %[1]s
 	       ORDER BY f.ordinal DESC LIMIT 1), p.lo)
-	     AND m.role = 'assistant' AND m.is_system = 0
+	     AND m.role = 'assistant' AND m.is_system = 0 AND %[2]s
 	     AND m.is_sidechain = p.sc
 	   ORDER BY m.ordinal ASC LIMIT 1),
 	  (SELECT m.ordinal FROM messages m
@@ -628,17 +628,17 @@ func runExtentSelectSQL() string {
 	         AND f.ordinal > p.o AND f.ordinal < p.hi
 	         AND %[1]s
 	       ORDER BY f.ordinal ASC LIMIT 1), p.hi)
-	     AND m.role = 'assistant' AND m.is_system = 0
+	     AND m.role = 'assistant' AND m.is_system = 0 AND %[2]s
 	     AND m.is_sidechain = p.sc
 	   ORDER BY m.ordinal DESC LIMIT 1)
-	FROM probes p`, runStopSQL())
+	FROM probes p`, runStopSQL(), DialogueEligibilitySQL("m", SQLiteQueryDialect()))
 }
 
 // runStopSQL is the stop-row predicate under alias f, correlated on p.sc: an
 // opposite-sidechain embeddable assistant row (flip) or an embeddable user
 // row (unit boundary).
 func runStopSQL() string {
-	return "((f.role = 'assistant' AND f.is_system = 0 AND f.is_sidechain <> p.sc)" +
+	return "((f.role = 'assistant' AND f.is_system = 0 AND f.is_sidechain <> p.sc AND " + DialogueEligibilitySQL("f", SQLiteQueryDialect()) + ")" +
 		" OR (" + embeddableUserSQL("f") + "))"
 }
 

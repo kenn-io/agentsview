@@ -184,7 +184,7 @@ func convertChatGPTConversation(
 		firstMsg  string
 	)
 	for _, m := range msgs {
-		if m.Role == RoleUser && !m.IsSystem {
+		if m.Role == RoleUser && !m.IsSystem && m.SourceSubtype != SourceSubtypeToolResult {
 			userCount++
 			if firstMsg == "" {
 				firstMsg = m.Content
@@ -276,108 +276,117 @@ func buildChatGPTMessages(
 			lastModel = msg.Metadata.ModelSlug
 		}
 
+		if role == "tool" && attachToolToAssistant(&msgs, lastAsstID, msg, content) {
+			continue
+		}
+		var b MessageContentBuilder
+		if msg.Content.ContentType == "thoughts" {
+			b.AddThinking(content)
+		} else if role == "tool" {
+			if msg.Content.ContentType == "code" {
+				b.AddToolCall(chatGPTCodeCall(msg, content))
+			} else {
+				b.AddToolResult(chatGPTToolResult(content))
+			}
+		} else {
+			b.AddText(content)
+		}
+		pm := b.Message()
+		pm.Ordinal = ordinal
+		pm.Timestamp = unixFloatToTime(msg.CreateTime)
+		pm.SourceUUID = msg.ID
+		pm.ContentLength = sanitizedWorkLength(content)
+		if msg.Content.ContentType == "thoughts" && content != "" {
+			pm.ContentLength += len("[Thinking]\n\n[/Thinking]")
+		}
 		switch role {
 		case "user":
-			pm := ParsedMessage{
-				Ordinal:       ordinal,
-				Role:          RoleUser,
-				Content:       content,
-				Timestamp:     unixFloatToTime(msg.CreateTime),
-				ContentLength: len(content),
-			}
-			msgs = append(msgs, pm)
+			pm.Role = RoleUser
 			lastAsstID = -1
-			ordinal++
-
 		case "assistant":
-			hasThinking := msg.Content.ContentType == "thoughts"
-			pm := ParsedMessage{
-				Ordinal:       ordinal,
-				Role:          RoleAssistant,
-				Content:       content,
-				Timestamp:     unixFloatToTime(msg.CreateTime),
-				HasThinking:   hasThinking,
-				ContentLength: len(content),
-				Model:         msg.Metadata.ModelSlug,
-			}
-			msgs = append(msgs, pm)
-			lastAsstID = len(msgs) - 1
-			ordinal++
-
+			pm.Role = RoleAssistant
+			pm.Model = msg.Metadata.ModelSlug
+			lastAsstID = len(msgs)
 		case "system":
-			pm := ParsedMessage{
-				Ordinal:       ordinal,
-				Role:          RoleAssistant,
-				Content:       content,
-				Timestamp:     unixFloatToTime(msg.CreateTime),
-				IsSystem:      true,
-				ContentLength: len(content),
-			}
-			msgs = append(msgs, pm)
+			pm.Role = RoleAssistant
+			pm.IsSystem = true
 			lastAsstID = -1
-			ordinal++
-
 		case "tool":
-			attachToolToAssistant(
-				&msgs, lastAsstID, msg, content,
-			)
+			if msg.Content.ContentType == "code" {
+				pm.Role = RoleAssistant
+				lastAsstID = len(msgs)
+			} else {
+				pm.Role = RoleUser
+				pm.SourceSubtype = SourceSubtypeToolResult
+			}
+		default:
+			continue
 		}
+		msgs = append(msgs, pm)
+		ordinal++
 	}
 
 	return msgs, lastModel
 }
 
-// attachToolToAssistant attaches a tool node's content to the
-// preceding assistant message as a ParsedToolCall.
-func attachToolToAssistant(
-	msgs *[]ParsedMessage,
-	asstIdx int,
-	msg *chatGPTMessage,
-	content string,
-) {
+// attachToolToAssistant preserves the existing call owner and result events.
+// Unpaired output stays in its native row instead of being discarded.
+func attachToolToAssistant(msgs *[]ParsedMessage, asstIdx int, msg *chatGPTMessage, content string) bool {
 	if asstIdx < 0 || asstIdx >= len(*msgs) {
-		return
+		return false
 	}
-
-	ct := msg.Content.ContentType
 	asst := &(*msgs)[asstIdx]
-	asst.HasToolUse = true
-
-	switch ct {
+	workLength := asst.ContentLength
+	b := continueMessageContent(*asst)
+	switch msg.Content.ContentType {
 	case "code":
-		asst.ToolCalls = append(asst.ToolCalls, ParsedToolCall{
-			ToolName: "code_interpreter",
-			Category: NormalizeToolCategory("code_interpreter"),
-		})
-
+		b.AddToolCall(chatGPTCodeCall(msg, content))
 	case "execution_output":
-		// Pair with the last code_interpreter tool call.
-		if n := len(asst.ToolCalls); n > 0 {
-			tc := &asst.ToolCalls[n-1]
-			tc.ResultEvents = append(
-				tc.ResultEvents,
-				ParsedToolResultEvent{Content: content},
-			)
+		n := len(asst.ToolCalls)
+		if n == 0 || asst.ToolCalls[n-1].ToolName != "code_interpreter" {
+			return false
 		}
-
+		asst.ToolCalls[n-1].ResultEvents = append(asst.ToolCalls[n-1].ResultEvents, ParsedToolResultEvent{Content: content})
+		asst.HasToolUse = true
+		return true
 	case "tether_quote", "tether_browsing_display":
-		asst.ToolCalls = append(asst.ToolCalls, ParsedToolCall{
-			ToolName: "web_search",
-			Category: NormalizeToolCategory("web_search"),
-		})
-
-	case "multimodal_text":
-		// DALL-E tool responses contain generated images as
-		// multimodal_text. Append the resolved image content
-		// to the assistant message.
+		call := ParsedToolCall{ToolName: "web_search", Category: NormalizeToolCategory("web_search")}
 		if content != "" {
-			if asst.Content != "" {
-				asst.Content += "\n\n"
-			}
-			asst.Content += content
-			asst.ContentLength = len(asst.Content)
+			call.ResultEvents = []ParsedToolResultEvent{{Content: content}}
 		}
+		b.AddToolCall(call)
+	case "multimodal_text":
+		b.AddToolResult(chatGPTToolResult(content))
+		if content != "" {
+			if workLength > 0 {
+				workLength += 2
+			}
+			workLength += sanitizedWorkLength(content)
+		}
+	default:
+		asst.HasToolUse = true
+		return content == ""
 	}
+	*asst = b.Message()
+	asst.HasToolUse = true
+	asst.ContentLength = workLength
+	return true
+}
+
+func chatGPTCodeCall(msg *chatGPTMessage, rendering string) ParsedToolCall {
+	input, _ := json.Marshal(struct {
+		Code     string `json:"code"`
+		Language string `json:"language,omitempty"`
+	}{Code: msg.Content.Text, Language: msg.Content.Language})
+	return ParsedToolCall{
+		ToolName: "code_interpreter", Category: NormalizeToolCategory("code_interpreter"),
+		InputJSON: string(input), Rendering: rendering,
+	}
+}
+
+func chatGPTToolResult(content string) ParsedToolResult {
+	raw, _ := json.Marshal(content)
+	return ParsedToolResult{ContentRaw: string(raw), ContentLength: len(content)}
 }
 
 // assembleContent converts a chatGPTContent into a plain-text
@@ -408,9 +417,7 @@ func assembleContent(
 		if len(parts) == 0 {
 			return ""
 		}
-		return "[Thinking]\n" +
-			strings.Join(parts, "\n") +
-			"\n[/Thinking]"
+		return strings.Join(parts, "\n")
 
 	case "tether_quote":
 		line := "> " + normalizeUnicode(c.Text)

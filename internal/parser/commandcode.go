@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -83,12 +82,14 @@ func (p *commandCodeProvider) parseSessionContext(
 
 		role := root.Get("role").Str
 		content := root.Get("content")
-		text, thinking, hasThinking, hasToolUse, toolCalls, toolResults := extractCommandCodeContent(content)
-		text = strings.TrimSpace(text)
-
+		body := extractCommandCodeBody(content)
+		body.setDialogue(strings.TrimSpace(body.Content))
+		// Command Code historically counts dialogue bytes only.
+		body.ContentLength = len(body.Content)
+		text := body.Content
 		switch role {
 		case "user":
-			if text == "" && len(toolResults) == 0 {
+			if !body.hasNativeBody() {
 				continue
 			}
 			if firstMessage == "" && text != "" {
@@ -98,52 +99,36 @@ func (p *commandCodeProvider) parseSessionContext(
 				)
 			}
 			messages = append(messages, ParsedMessage{
-				Ordinal:       ordinal,
-				Role:          RoleUser,
-				Content:       text,
-				ThinkingText:  thinking,
-				Timestamp:     ts,
-				HasThinking:   hasThinking,
-				HasToolUse:    hasToolUse,
-				ContentLength: len(text),
-				ToolCalls:     toolCalls,
-				ToolResults:   toolResults,
-			})
+				Ordinal: ordinal, Role: RoleUser, Content: body.Content,
+				Timestamp: ts, SourceUUID: root.Get("id").Str,
+				SourceParentUUID: root.Get("parentId").Str,
+			}.withBody(body))
 			ordinal++
 			if text != "" {
 				userCount++
 			}
 
 		case "assistant":
-			if text == "" && !hasThinking &&
-				len(toolCalls) == 0 && len(toolResults) == 0 {
+			if !body.hasNativeBody() {
 				continue
 			}
 			messages = append(messages, ParsedMessage{
-				Ordinal:       ordinal,
-				Role:          RoleAssistant,
-				Content:       text,
-				ThinkingText:  thinking,
-				Timestamp:     ts,
-				HasThinking:   hasThinking,
-				HasToolUse:    hasToolUse,
-				ContentLength: len(text),
-				ToolCalls:     toolCalls,
-				ToolResults:   toolResults,
-			})
+				Ordinal: ordinal, Role: RoleAssistant, Content: body.Content,
+				Timestamp: ts, SourceUUID: root.Get("id").Str,
+				SourceParentUUID: root.Get("parentId").Str,
+			}.withBody(body))
 			ordinal++
 
 		case "tool":
-			if len(toolResults) == 0 {
+			if len(body.ToolResults) == 0 {
 				continue
 			}
+			body.ContentLength = 0
 			messages = append(messages, ParsedMessage{
-				Ordinal:       ordinal,
-				Role:          RoleUser,
-				Timestamp:     ts,
-				ContentLength: 0,
-				ToolResults:   toolResults,
-			})
+				Ordinal: ordinal, Role: RoleUser, Content: body.Content,
+				Timestamp: ts, SourceUUID: root.Get("id").Str,
+				SourceParentUUID: root.Get("parentId").Str,
+			}.withBody(body))
 			ordinal++
 		}
 	}
@@ -229,40 +214,30 @@ func commandCodeCwd(root gjson.Result) string {
 	return ""
 }
 
-func extractCommandCodeContent(
+func extractCommandCodeBody(
 	content gjson.Result,
-) (string, string, bool, bool, []ParsedToolCall, []ParsedToolResult) {
+) ParsedMessage {
+	var builder MessageContentBuilder
 	if content.Type == gjson.String {
-		return content.Str, "", false, false, nil, nil
+		builder.AddText(content.Str)
+		return builder.Message()
 	}
 	if !content.IsArray() {
-		return "", "", false, false, nil, nil
+		return builder.Message()
 	}
-
-	var (
-		textParts     []string
-		thinkingParts []string
-		toolCalls     []ParsedToolCall
-		toolResults   []ParsedToolResult
-		hasThinking   bool
-		hasToolUse    bool
-	)
 
 	content.ForEach(func(_, block gjson.Result) bool {
 		switch block.Get("type").Str {
 		case "text":
 			if text := block.Get("text").Str; text != "" {
-				textParts = append(textParts, text)
+				builder.AddText(text)
 			}
 		case "reasoning", "thinking":
 			thinking := commandCodeFirstNonEmpty(
 				block.Get("text").Str,
 				block.Get("thinking").Str,
 			)
-			if thinking != "" {
-				hasThinking = true
-				thinkingParts = append(thinkingParts, thinking)
-			}
+			builder.AddThinking(thinking)
 		case "tool-call", "tool_use":
 			toolName := commandCodeFirstNonEmpty(
 				block.Get("toolName").Str,
@@ -271,13 +246,12 @@ func extractCommandCodeContent(
 			if toolName == "" {
 				return true
 			}
-			hasToolUse = true
 			input := block.Get("input")
 			inputJSON := input.Raw
 			if inputJSON == "" {
 				inputJSON = "{}"
 			}
-			toolCalls = append(toolCalls, ParsedToolCall{
+			builder.AddToolCall(ParsedToolCall{
 				ToolUseID: blockID(block, "toolCallId", "id"),
 				ToolName:  toolName,
 				Category:  NormalizeToolCategory(toolName),
@@ -286,10 +260,10 @@ func extractCommandCodeContent(
 		case "tool-result", "tool_result":
 			toolUseID := blockID(block, "toolCallId", "tool_use_id")
 			contentRaw, contentLen := commandCodeToolResultContent(block)
-			if toolUseID == "" || contentRaw == "" {
+			if contentRaw == "" {
 				return true
 			}
-			toolResults = append(toolResults, ParsedToolResult{
+			builder.AddToolResult(ParsedToolResult{
 				ToolUseID:     toolUseID,
 				ContentLength: contentLen,
 				ContentRaw:    contentRaw,
@@ -298,9 +272,7 @@ func extractCommandCodeContent(
 		return true
 	})
 
-	return strings.Join(textParts, "\n"),
-		strings.Join(thinkingParts, "\n\n"),
-		hasThinking, hasToolUse, toolCalls, toolResults
+	return builder.Message()
 }
 
 func commandCodeToolResultContent(block gjson.Result) (string, int) {
@@ -312,7 +284,8 @@ func commandCodeToolResultContent(block gjson.Result) (string, int) {
 		if output.IsObject() {
 			if value := output.Get("value"); value.Exists() &&
 				value.Type == gjson.String {
-				return strconv.Quote(value.Str), len(value.Str)
+				quoted, _ := json.Marshal(value.Str)
+				return string(quoted), len(value.Str)
 			}
 		}
 		return output.Raw, toolResultContentLength(output)
@@ -320,7 +293,8 @@ func commandCodeToolResultContent(block gjson.Result) (string, int) {
 
 	for _, key := range []string{"text", "error", "value"} {
 		if text := block.Get(key).Str; text != "" {
-			return strconv.Quote(text), len(text)
+			quoted, _ := json.Marshal(text)
+			return string(quoted), len(text)
 		}
 	}
 	return "", 0

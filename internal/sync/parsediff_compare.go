@@ -28,6 +28,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -598,8 +599,10 @@ func messageFlagsFingerprintTwin(msgs []db.Message) string {
 	var b strings.Builder
 	for _, m := range ordered {
 		sum := sha256.Sum256([]byte(db.SanitizeUTF8(m.ThinkingText)))
-		fmt.Fprintf(&b, "%d|%t|%t|%t|%x;",
-			m.Ordinal, m.IsSystem, m.HasThinking, m.HasToolUse, sum)
+		outputSum := sha256.Sum256([]byte(db.SanitizeUTF8(m.ToolResultText)))
+		layoutSum := sha256.Sum256([]byte(db.ContentLayoutJSON(m.ContentLayout)))
+		fmt.Fprintf(&b, "%d|%t|%t|%t|%x|%x|%x;",
+			m.Ordinal, m.IsSystem, m.HasThinking, m.HasToolUse, sum, outputSum, layoutSum)
 	}
 	return b.String()
 }
@@ -628,8 +631,9 @@ func toolCallParseDiffFingerprintTwin(msgs []db.Message) string {
 			sub := db.SanitizeUTF8(tc.SubagentSessionID)
 			fp := db.SanitizeUTF8(tc.FilePath)
 			sum := sha256.Sum256([]byte(db.SanitizeUTF8(tc.InputJSON)))
+			renderingSum := sha256.Sum256([]byte(db.SanitizeUTF8(tc.Rendering)))
 			fmt.Fprintf(&b,
-				"%d|%d:%s|%d:%s|%d:%s|%x|%d:%s|%d:%s|%d|%d:%s;",
+				"%d|%d:%s|%d:%s|%d:%s|%x|%d:%s|%d:%s|%d|%d:%s|%x;",
 				m.Ordinal,
 				len(toolName), toolName,
 				len(category), category,
@@ -638,7 +642,7 @@ func toolCallParseDiffFingerprintTwin(msgs []db.Message) string {
 				len(skill), skill,
 				len(sub), sub,
 				tc.ResultContentLength,
-				len(fp), fp,
+				len(fp), fp, renderingSum,
 			)
 		}
 	}
@@ -887,6 +891,10 @@ func messageMetadataDiff(stored, parsed db.Message) string {
 	case db.SanitizeUTF8(stored.ThinkingText) !=
 		db.SanitizeUTF8(parsed.ThinkingText):
 		return "thinking_text differs"
+	case db.SanitizeUTF8(stored.ToolResultText) != db.SanitizeUTF8(parsed.ToolResultText):
+		return "tool_result_text differs"
+	case !reflect.DeepEqual(stored.ContentLayout, parsed.ContentLayout):
+		return "content_layout differs"
 	case db.SanitizeUTF8(stored.SourceType) !=
 		db.SanitizeUTF8(parsed.SourceType):
 		return "source_type differs"
@@ -959,6 +967,9 @@ func toolCallDiff(stored, parsed db.ToolCall) string {
 	case db.SanitizeUTF8(stored.InputJSON) !=
 		db.SanitizeUTF8(parsed.InputJSON):
 		return "input_json differs"
+	case db.SanitizeUTF8(stored.Rendering) !=
+		db.SanitizeUTF8(parsed.Rendering):
+		return "rendering differs"
 	case db.SanitizeUTF8(stored.SkillName) !=
 		db.SanitizeUTF8(parsed.SkillName):
 		return fmt.Sprintf(

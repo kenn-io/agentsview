@@ -198,6 +198,7 @@ func TestConversationExportChunksPinBodyAndDatabase(t *testing.T) {
 	require.ErrorIs(t, err, ErrConversationReconciliationRequired)
 	opts.DatabaseID = initial.DatabaseID
 	msgs[0].Content = "new text"
+	msgs[0].ContentLayout.Blocks[0].End = 8
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "chat", msgs))
 	chunk, err := d.GetConversationMessage(ctx, opts)
 	require.ErrorIs(t, err, ErrConversationRevisionChanged)
@@ -219,6 +220,7 @@ func TestConversationExportPaginationDefersConcurrentChanges(t *testing.T) {
 	require.Len(t, page.Changes, 3)
 	assert.Equal(t, []int{0, 1, 2}, []int{page.Changes[0].Ordinal, page.Changes[1].Ordinal, page.Changes[2].Ordinal})
 	msgs[5].Content = "Revised"
+	msgs[5].ContentLayout.Blocks[0].End = 7
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "chat", msgs))
 	seen := []int{0, 1, 2}
 	var previous int64 = 3
@@ -332,8 +334,8 @@ func TestConversationExportUsesFinalCopiedContent(t *testing.T) {
 			source := testDB(t)
 			require.NoError(t, source.UpsertSession(t.Context(), Session{ID: "chat", Project: "sample", Machine: "local", Agent: "opencode"}))
 			require.NoError(t, source.InsertMessages(t.Context(), []Message{{
-				SessionID: "chat", Role: "assistant", HasToolUse: true, Content: "Checking.\n[Bash]\n$ echo payload",
-				ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"echo payload"}`}},
+				SessionID: "chat", Role: "assistant", HasToolUse: true, Content: "Checking.",
+				ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"echo payload"}`, Rendering: "[Bash]\n$ echo payload"}},
 			}}))
 			initial, err := source.ExportConversationChanges(t.Context(), ConversationExportOptions{})
 			require.NoError(t, err)
@@ -363,7 +365,7 @@ func TestConversationExportUsesFinalCopiedContent(t *testing.T) {
 				body, err := destination.GetConversationMessage(t.Context(), ConversationMessageOptions{DatabaseID: changes.DatabaseID, SessionID: "chat", MessageID: change.MessageID, Revision: change.Revision})
 				require.NoError(t, err)
 				require.NotNil(t, body.Text)
-				assert.Equal(t, "Checking.\n[Bash]", *body.Text)
+				assert.Equal(t, "Checking.", *body.Text)
 			}
 			assert.Equal(t, 1, messageCount)
 		})

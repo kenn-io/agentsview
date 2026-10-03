@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"encoding/json/v2"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -182,24 +183,14 @@ func (b *zencoderSessionBuilder) handleUserMessage(
 func (b *zencoderSessionBuilder) handleAssistantMessage(
 	line string, ts time.Time,
 ) {
-	content, hasThinking, hasToolUse, tcs := extractZencoderAssistantContent(
-		gjson.Get(line, "content"),
-	)
-
-	if strings.TrimSpace(content) == "" && !hasToolUse {
+	body := extractZencoderAssistantBody(gjson.Get(line, "content"))
+	if !body.hasNativeBody() {
 		return
 	}
-
 	b.messages = append(b.messages, ParsedMessage{
-		Ordinal:       b.ordinal,
-		Role:          RoleAssistant,
-		Content:       content,
-		HasThinking:   hasThinking,
-		HasToolUse:    hasToolUse,
-		ContentLength: len(content),
-		ToolCalls:     tcs,
-		Timestamp:     ts,
-	})
+		Ordinal: b.ordinal, Role: RoleAssistant,
+		Content: body.Content, Timestamp: ts,
+	}.withBody(body))
 	b.ordinal++
 }
 
@@ -214,9 +205,6 @@ func (b *zencoderSessionBuilder) handleToolMessage(
 				return true
 			}
 			toolCallID := block.Get("toolCallId").Str
-			if toolCallID == "" {
-				return true
-			}
 
 			// Track which content blocks are tagged (system)
 			// so we can strip them from ContentRaw.
@@ -230,7 +218,7 @@ func (b *zencoderSessionBuilder) handleToolMessage(
 				func(_, cb gjson.Result) bool {
 					if m := zencoderSessionIDRe.FindStringSubmatch(
 						cb.Get("text").Str,
-					); len(m) > 1 {
+					); len(m) > 1 && toolCallID != "" {
 						b.subagentMap[toolCallID] =
 							"zencoder:" + m[1]
 					}
@@ -346,35 +334,26 @@ func extractZencoderUserContent(
 		strings.Join(systemParts, "\n")
 }
 
-// extractZencoderAssistantContent extracts text, thinking, and
+// extractZencoderAssistantBody extracts text, thinking, and
 // tool calls from a Zencoder assistant message content array.
-func extractZencoderAssistantContent(
+func extractZencoderAssistantBody(
 	content gjson.Result,
-) (string, bool, bool, []ParsedToolCall) {
+) ParsedMessage {
 	if !content.IsArray() {
-		return "", false, false, nil
+		return (&MessageContentBuilder{}).Message()
 	}
 
-	var (
-		parts       []string
-		toolCalls   []ParsedToolCall
-		hasThinking bool
-		hasToolUse  bool
-	)
+	var builder MessageContentBuilder
 	content.ForEach(func(_, block gjson.Result) bool {
 		switch block.Get("type").Str {
 		case "text":
 			if text := block.Get("text").Str; text != "" {
-				parts = append(parts, text)
+				builder.AddText(text)
 			}
 		case "reasoning":
-			if text := block.Get("text").Str; text != "" {
-				hasThinking = true
-				parts = append(parts,
-					"[Thinking]\n"+text+"\n[/Thinking]")
-			}
+			builder.AddThinking(block.Get("text").Str)
 		case "tool-call":
-			hasToolUse = true
+			builder.message.HasToolUse = true
 			name := block.Get("toolName").Str
 			if name == "" {
 				return true
@@ -393,14 +372,12 @@ func extractZencoderAssistantContent(
 				orDefault(block.Get("input").Raw, "{}"),
 			)
 			tc.Rendering = formatToolUse(gjson.Parse(synth))
-			toolCalls = append(toolCalls, tc)
-			parts = append(parts, tc.Rendering)
+			builder.AddToolCall(tc)
 		}
 		return true
 	})
 
-	return strings.Join(parts, "\n"),
-		hasThinking, hasToolUse, toolCalls
+	return builder.Message()
 }
 
 // filterJSONArrayIndices returns a JSON array string with
@@ -491,12 +468,33 @@ func parseZencoderSession(
 			fmt.Errorf("reading zencoder %s: %w", path, err)
 	}
 
+	for i := range b.messages {
+		msg := &b.messages[i]
+		if msg.ContentLayout != nil {
+			continue
+		}
+		var builder MessageContentBuilder
+		if msg.SourceSubtype == SourceSubtypeToolResult {
+			quoted, _ := json.Marshal(msg.Content)
+			builder.AddToolResult(ParsedToolResult{ContentRaw: string(quoted), ContentLength: len(msg.Content)})
+		} else {
+			builder.AddText(msg.Content)
+			for _, result := range msg.ToolResults {
+				builder.AddToolResult(result)
+			}
+		}
+		body := builder.Message()
+		body.ContentLength = msg.sanitizedHistoricalWorkLength()
+		msg.Content = body.Content
+		*msg = msg.withBody(body)
+	}
+
 	// Filter: require at least one non-system user or assistant
 	// message. Files with only headers and system blocks (e.g.
 	// environment banners) are not real conversations.
 	hasContent := false
 	for _, m := range b.messages {
-		if m.Content != "" && !m.IsSystem {
+		if m.hasNativeBody() && !m.IsSystem {
 			hasContent = true
 			break
 		}

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"os"
@@ -277,8 +278,7 @@ func pushUniqueAider(v []string, s string) []string {
 //   - everything else               -> assistant channel (the default).
 //
 // A message is emitted whenever the channel switches. Tool output is
-// surfaced as assistant transcript content because agentsview has no
-// dedicated tool role. Edited files come from "Applied edit to" and
+// retained at its existing assistant owner with a standalone output body. Edited files come from "Applied edit to" and
 // "Creating empty file" tool lines (relative paths), de-duplicated;
 // "Did not apply edit ... (--dry-run)" and "Skipping edits to ..."
 // contribute nothing.
@@ -314,20 +314,30 @@ func parseAiderTurns(body string) ([]ParsedMessage, []string) {
 		if curChan == chanUser {
 			role = RoleUser
 		}
-		// Tool output stays visible as assistant text because aider has no
-		// tool-call IDs to pair on, but it is marked so storage policies
-		// that drop tool output can recognize it.
+		// Aider has no tool-call IDs to pair on. Keep the existing assistant
+		// owner and output subtype, with the output separate from dialogue.
 		var subtype string
 		if curChan == chanTool {
 			subtype = SourceSubtypeToolResult
 		}
-		messages = append(messages, ParsedMessage{
+		message := ParsedMessage{
 			Ordinal:       ordinal,
 			Role:          role,
 			Content:       text,
 			SourceSubtype: subtype,
 			ContentLength: len(text),
-		})
+		}
+		if curChan == chanTool {
+			raw, _ := json.Marshal(text)
+			var body MessageContentBuilder
+			body.AddToolResult(ParsedToolResult{ContentRaw: string(raw), ContentLength: len(text)})
+			message.Content = ""
+			message = message.withBody(body.Message())
+			message.ContentLength = sanitizedWorkLength(text)
+		} else {
+			message = message.withPlainBody()
+		}
+		messages = append(messages, message)
 		ordinal++
 	}
 

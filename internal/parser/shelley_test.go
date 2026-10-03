@@ -416,7 +416,7 @@ func TestParseShelleyRobustContent(t *testing.T) {
 		`{"Role":0,"Content":[{"Type":2,"Text":"go"}]}`,
 		"", "", "2026-06-15T10:00:00Z")
 	// Unknown content type (99) is ignored; redacted thinking (2) is
-	// surfaced as a placeholder; the text block survives.
+	// retains thinking presence without readable text; the text block survives.
 	seedShelleyMessage(t, db, "cROB1", 2, 1, "agent",
 		`{"Role":1,"Content":[{"Type":4},{"Type":99,"Text":"ignored"},`+
 			`{"Type":2,"Text":"real text"}]}`,
@@ -441,7 +441,8 @@ func TestParseShelleyRobustContent(t *testing.T) {
 	require.Len(t, result.Messages, 3, "messages len")
 	agentMsg := result.Messages[1]
 	assert.Equal(t, "real text", agentMsg.Content, "unknown type ignored, text kept")
-	assert.Contains(t, agentMsg.ThinkingText, "redacted", "redacted thinking placeholder")
+	assert.True(t, agentMsg.HasThinking, "opaque reasoning retains its native presence")
+	assert.Empty(t, agentMsg.ThinkingText, "opaque reasoning supplies no readable text")
 
 	errMsg := result.Messages[2]
 	assert.True(t, errMsg.IsSystem, "error message flagged system")

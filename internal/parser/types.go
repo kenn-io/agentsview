@@ -1469,6 +1469,7 @@ type ParsedMessageTokenUsageUpdate struct {
 // user message (the response to a prior tool_use).
 type ParsedToolResult struct {
 	ToolUseID     string
+	ToolName      string
 	ContentLength int
 	ContentRaw    string // raw JSON of the content field; decode with DecodeContent
 }
@@ -1489,18 +1490,22 @@ type ParsedToolResultEvent struct {
 }
 
 // ParsedMessage holds a single extracted message.
+//
+//nolint:recvcheck // Value builders return copies; pointer methods project an existing body.
 type ParsedMessage struct {
-	Ordinal       int
-	Role          RoleType
-	Content       string
-	ThinkingText  string // concatenated text of all thinking blocks; "" if none
-	Timestamp     time.Time
-	HasThinking   bool
-	HasToolUse    bool
-	IsSystem      bool
-	ContentLength int
-	ToolCalls     []ParsedToolCall
-	ToolResults   []ParsedToolResult
+	Ordinal        int
+	Role           RoleType
+	Content        string
+	ThinkingText   string         // concatenated text of all thinking blocks; "" if none
+	ToolResultText string         `json:"tool_result_text"`
+	ContentLayout  *ContentLayout `json:"content_layout"`
+	Timestamp      time.Time
+	HasThinking    bool
+	HasToolUse     bool
+	IsSystem       bool
+	ContentLength  int
+	ToolCalls      []ParsedToolCall
+	ToolResults    []ParsedToolResult
 
 	Model           string
 	ReasoningEffort string

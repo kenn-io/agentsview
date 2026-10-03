@@ -968,7 +968,7 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 	// without demanding they be contiguous, exactly like SQLite FTS5.
 	termClauses := make([]string, len(terms))
 	for i, t := range terms {
-		termClauses[i] = "m.content ILIKE ? ESCAPE '\\'"
+		termClauses[i] = "COALESCE(NULLIF(m.palette_text, ''), m.content) ILIKE ? ESCAPE '\\'"
 		args = append(args, "%"+db.EscapeLikePattern(t)+"%")
 	}
 	msgTermPredicate := strings.Join(termClauses, "\n\t\t\t\tAND ")
@@ -1002,12 +1002,12 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 			SELECT m.session_id, s.project, s.agent,
 				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
 				COALESCE(s.ended_at, s.started_at, s.created_at) AS session_ended_at,
-				m.ordinal, SUBSTRING(m.content, 1, 200) AS snippet,
+				m.ordinal, SUBSTRING(COALESCE(NULLIF(m.palette_text, ''), m.content), 1, 200) AS snippet,
 				1.0 AS rank, 1 AS match_priority,
-				INSTR(LOWER(m.content), LOWER(?)) AS match_pos,
+				INSTR(LOWER(COALESCE(NULLIF(m.palette_text, ''), m.content)), LOWER(?)) AS match_pos,
 				ROW_NUMBER() OVER (
 					PARTITION BY m.session_id
-					ORDER BY INSTR(LOWER(m.content), LOWER(?)) ASC,
+					ORDER BY INSTR(LOWER(COALESCE(NULLIF(m.palette_text, ''), m.content)), LOWER(?)) ASC,
 						m.ordinal ASC, COALESCE(m.id, 0) ASC
 				) AS rn
 			FROM messages m
@@ -1092,7 +1092,9 @@ func (s *Store) SearchSession(ctx context.Context, sessionID, query string) ([]i
 		return nil, nil
 	}
 	rows, err := s.queryContext(ctx, `
-		SELECT DISTINCT m.ordinal
+		SELECT DISTINCT m.ordinal, m.content, COALESCE(m.thinking_text, ''), COALESCE(m.tool_result_text, ''),
+ COALESCE(tc.tool_name, ''), COALESCE(tc.input_json, ''), COALESCE(tc.rendering, ''),
+ COALESCE(tc.result_content, ''), COALESCE(tre.content, '')
 		FROM messages m
 		LEFT JOIN tool_calls tc
 			ON tc.session_id = m.session_id
@@ -1104,27 +1106,15 @@ func (s *Store) SearchSession(ctx context.Context, sessionID, query string) ([]i
 		WHERE m.session_id = ?
 			AND m.is_system = FALSE
 			AND `+db.DuckDBSystemPrefixSQL("m.content", "m.role")+`
-			AND (m.content ILIKE ? ESCAPE '\'
-				OR tc.result_content ILIKE ? ESCAPE '\'
-				OR tre.content ILIKE ? ESCAPE '\')
+			AND (m.content ILIKE ? ESCAPE '\' OR m.thinking_text ILIKE ? ESCAPE '\' OR m.tool_result_text ILIKE ? ESCAPE '\' OR tc.rendering ILIKE ? ESCAPE '\' OR tc.tool_name ILIKE ? ESCAPE '\' OR tc.input_json ILIKE ? ESCAPE '\' OR tc.result_content ILIKE ? ESCAPE '\' OR tre.content ILIKE ? ESCAPE '\')
 		ORDER BY m.ordinal ASC`,
-		sessionID, "%"+db.EscapeLikePattern(query)+"%",
-		"%"+db.EscapeLikePattern(query)+"%",
-		"%"+db.EscapeLikePattern(query)+"%",
+		sessionID, "%"+db.EscapeLikePattern(query)+"%", "%"+db.EscapeLikePattern(query)+"%", "%"+db.EscapeLikePattern(query)+"%", "%"+db.EscapeLikePattern(query)+"%", "%"+db.EscapeLikePattern(query)+"%", "%"+db.EscapeLikePattern(query)+"%", "%"+db.EscapeLikePattern(query)+"%", "%"+db.EscapeLikePattern(query)+"%",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("duckdb session search: %w", err)
 	}
 	defer rows.Close()
-	var out []int
-	for rows.Next() {
-		var ordinal int
-		if err := rows.Scan(&ordinal); err != nil {
-			return nil, err
-		}
-		out = append(out, ordinal)
-	}
-	return out, rows.Err()
+	return db.ReadVisibleSearchOrdinals(rows, query)
 }
 
 func (s *Store) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db.ContentSearchPage, error) {
@@ -1156,14 +1146,10 @@ func (s *Store) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db
 		)
 	}
 
-	if len(f.Sources) == 0 {
-		f.Sources = []string{"messages", "tool_input", "tool_result"}
-	}
-	for _, source := range f.Sources {
-		if source != "messages" && source != "tool_input" && source != "tool_result" {
-			return db.ContentSearchPage{},
-				&db.SearchInputError{Msg: fmt.Sprintf("search: unknown source %q", source)}
-		}
+	var sourceErr error
+	f.Sources, sourceErr = db.NormalizeContentSearchSources(f)
+	if sourceErr != nil {
+		return db.ContentSearchPage{}, sourceErr
 	}
 	switch f.Mode {
 	case "", "substring", "regex":
@@ -1200,6 +1186,25 @@ func (s *Store) collectContentMatches(ctx context.Context, f db.ContentSearchFil
 	}
 	var all []duckContentCandidate
 	for _, source := range f.Sources {
+		if source == "thinking" || source == "tool_result" {
+			column, location, rank := "thinking_text", "thinking", 4
+			if source == "tool_result" {
+				column, location, rank = "tool_result_text", "tool_result", 5
+			}
+			rows, err := s.queryContext(ctx, canonicalBodySearchBranch(column, location, rank, "true", scopeWhere, f.ExcludeSystem), scopeArgs...)
+			if err != nil {
+				return nil, err
+			}
+			native, err := scanDuckContentCandidateRows(rows)
+			if err != nil {
+				return nil, err
+			}
+			all = append(all, native...)
+			if source == "thinking" {
+				continue
+			}
+		}
+
 		matches, err := s.collectContentSource(ctx, source, scopeWhere, scopeArgs, pattern, f)
 		if err != nil {
 			return nil, err
@@ -1250,9 +1255,9 @@ func (s *Store) collectContentSubstringMatches(
 	for _, source := range f.Sources {
 		switch source {
 		case "messages":
-			sysPred := "TRUE"
+			sysPred := db.DialogueEligibilitySQL("m", db.DuckDBQueryDialect())
 			if f.ExcludeSystem {
-				sysPred = "m.is_system = FALSE AND " + db.DuckDBSystemPrefixSQL("m.content", "m.role")
+				sysPred += " AND m.is_system = FALSE AND " + db.DuckDBSystemPrefixSQL("m.content", "m.role")
 			}
 			contentPred := addSearchArgs("m.content")
 			branches = append(branches, `
@@ -1267,6 +1272,10 @@ func (s *Store) collectContentSubstringMatches(
 				WHERE `+contentPred+`
 					AND `+sysPred+`
 					AND m.session_id IN (SELECT id FROM sessions WHERE `+scopeWhere+`)`)
+		case "thinking":
+			pred := addSearchArgs("m.thinking_text")
+			branches = append(branches, canonicalBodySearchBranch("thinking_text", "thinking", 4, pred, scopeWhere, f.ExcludeSystem))
+
 		case "tool_input":
 			inputPred := addSearchArgs("tc.input_json")
 			branches = append(branches, `
@@ -1283,6 +1292,9 @@ func (s *Store) collectContentSubstringMatches(
 				WHERE `+inputPred+`
 					AND tc.session_id IN (SELECT id FROM sessions WHERE `+scopeWhere+`)`)
 		case "tool_result":
+			outputPred := addSearchArgs("m.tool_result_text")
+			branches = append(branches, canonicalBodySearchBranch("tool_result_text", "tool_result", 5, outputPred, scopeWhere, f.ExcludeSystem))
+
 			contentPred := addSearchArgs("tc.result_content")
 			branches = append(branches, `
 					SELECT tc.session_id, s.project, s.agent, 'tool_result' AS location,
@@ -1473,6 +1485,7 @@ func (s *Store) collectContentSource(
 			0 AS call_index, 0 AS event_index
 			FROM messages m JOIN sessions s ON s.id = m.session_id
 			WHERE m.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)`
+		query += " AND " + db.DialogueEligibilitySQL("m", db.DuckDBQueryDialect())
 		if f.Mode != "regex" {
 			query += ` AND m.content ILIKE ? ESCAPE '\'`
 			args = append(args, pattern)
@@ -1613,4 +1626,23 @@ func scanDuckContentCandidateRows(rows *sql.Rows) ([]duckContentCandidate, error
 		out = append(out, candidate)
 	}
 	return out, rows.Err()
+}
+
+// canonicalBodySearchBranch keeps full canonical sources available for the
+// scanner's window redaction and merges them before pagination.
+func canonicalBodySearchBranch(column, location string, rank int, predicate, scopeWhere string, excludeSystem bool) string {
+	col := "m." + column
+	predicate += " AND " + col + " <> ''"
+	if excludeSystem {
+		predicate += " AND m.is_system = FALSE AND " + db.DuckDBSystemPrefixSQL("m.content", "m.role")
+	}
+	return fmt.Sprintf(`
+		SELECT m.session_id AS session_id, s.project AS project, s.agent AS agent,
+			'%s' AS location, m.role AS role, '' AS tool_name, m.ordinal AS ordinal,
+			m.timestamp AS ts, %s AS body,
+			COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
+			%d AS src, COALESCE(m.id, 0) AS row_id,
+			0 AS call_index, 0 AS event_index
+		FROM messages m JOIN sessions s ON s.id = m.session_id
+		WHERE %s AND m.session_id IN (SELECT id FROM sessions WHERE %s)`, location, col, rank, predicate, scopeWhere)
 }

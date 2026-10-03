@@ -165,9 +165,8 @@ func TestParseClaudeAIExport_ContentBlocks(t *testing.T) {
 	assert.False(t, msgs[0].HasThinking)
 
 	// Message with thinking block.
-	assert.Contains(t, msgs[1].Content, "[Thinking]")
-	assert.Contains(t, msgs[1].Content, "deep thought")
-	assert.Contains(t, msgs[1].Content, "The answer.")
+	assert.Equal(t, "deep thought", msgs[1].ThinkingText)
+	assert.Equal(t, "The answer.", msgs[1].Content)
 	assert.True(t, msgs[1].HasThinking)
 }
 

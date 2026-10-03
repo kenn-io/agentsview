@@ -13,9 +13,22 @@ parser change that needs a full resync must build a fresh database, sync source
 files, copy orphaned sessions from the old database, and swap the files
 atomically. Preserve sessions even when their source files no longer exist.
 
+Native body writes reject unsupported layout versions, invalid references,
+and ranges inside UTF-8 runes before rewriting or storing their payloads.
+Keep the original body and provenance intact on failure. Invalid input bytes
+at actual part boundaries still receive the normal sanitizer projection.
+Standalone output blocks can retain a non-payload category hint from the native
+result's tool name. Category blocking clears that output while preserving its
+record and empty range; matched results follow their call owner's category.
+
 ### Conversation export
 
-Conversation exports consume normalized SQLite message records for every agent.
+Conversation exports consume proven dialogue from normalized SQLite message
+records for every agent. A supported native `content_layout` proves that
+`content` contains dialogue. Unknown or unsupported provenance publishes a
+`visible_text_unavailable` gap while keeping the original archive body and
+opaque message ID. Thinking, tool renderings, and results remain available in
+full transcripts.
 The database is the system of record: use stored content, roles, system markers,
 and source identities. Do not add agent allowlists, export-only parser fields,
 or source reparse requirements. Export metadata and message writes commit in the
@@ -31,9 +44,10 @@ Changed no-ID replacements must report identity ambiguity. Rebuilds retain these
 IDs and tombstones but use the new database generation for revisions and
 cursors.
 
-Initialize a missing conversation index from existing database messages on
-writable open. Copied orphans and trash use the same stored records; absent
-source files do not make their archived text unavailable.
+Initialize a missing conversation index and refresh an older projection recipe
+from existing database messages on writable open. Read-only exports fail until
+that refresh finishes. Copied orphans and trash use the same stored provenance;
+absent source files do not make proven archived dialogue unavailable.
 
 Keep only current bodies and compact latest changes, not a body event log.
 Project-only changes publish session invalidations without changing message
@@ -80,10 +94,11 @@ placeholders. Combined summaries project labeled and anonymous sections using
 JSON boundaries, so blank lines inside arrays do not split them. Late result
 writes also project the rebuilt summary when older events predate drop mode.
 `db strip --images` applies the projection to existing rows one session at a
-time. The command updates `tool_calls.result_content` and
-`tool_result_events.content` directly in one transaction per session,
-recalculates their stored lengths, and keeps every event coordinate and metadata
-column unchanged. Each changed session also gets a full secret scan of its
+time. The command updates `tool_calls.result_content`,
+`tool_result_events.content`, and `messages.tool_result_text` directly in one
+transaction per session. It recalculates result lengths and native output byte
+ranges, and keeps every event coordinate and metadata column unchanged.
+Each changed session also gets a full secret scan of its
 projected transcript inside that transaction, preserving findings with their
 current offsets and rule version. A changed session gets the normal transcript
 revision, Recall, signal, artifact export, usage notification, and post-commit
@@ -92,8 +107,8 @@ resync applies this same projection only to the IDs returned by its trashed and
 orphaned session copies, before the replacement is published. Freshly parsed
 sessions already carry the projection. Large Codex imports project events before
 scratch insertion; staged summaries and signals use that projected content. The
-command counts raw `tool_calls.result_content` and `tool_result_events.content`
-bytes separately from decoded image bytes. `db compact` reports file-size
+command counts raw result-summary, result-event, and standalone-output bytes
+separately from decoded image bytes. `db compact` reports file-size
 reclamation separately.
 
 Transcript-only and usage-only writes omit parser checkpoints because resumable
@@ -411,6 +426,45 @@ artifact, recall, PostgreSQL, and DuckDB refreshes. Full resync reconciliation
 must compare the same fields so incremental and resync paths agree. A no-op
 message replacement preserves existing secret findings; changed transcript
 content clears them for a fresh scan.
+
+### Native message bodies
+
+New native messages store dialogue in `messages.content`, readable reasoning in
+`thinking_text`, standalone output in `tool_result_text`, and tool invocation
+text in `tool_calls.rendering`. Nullable `messages.content_layout` holds the
+versioned JSON layout. Its ordered blocks reference UTF-8 byte ranges in those
+fields or the owning message's zero-based tool-call index. Body transformations
+must update the fields and ranges together.
+
+A null layout means native boundaries are unknown. Preserve that provenance
+when copying archive rows or importing older serialized messages. Do not infer
+boundaries from display markers. New direct canonical writes receive a layout;
+parser conversion must explicitly carry the parser's nullable layout.
+
+Pairing moves matched standalone output to its tool call and removes the
+consumed output blocks. Unmatched results retain their message identity,
+including empty results. Transcript policy clears standalone output and its
+layout blocks. Usage policy clears every body field and keeps an empty native
+layout. Copied orphans and trash use the same boundaries; native dialogue that
+resembles a tool rendering remains dialogue.
+
+Secret scans inspect each complete canonical field before response masking.
+Findings use `thinking`, `tool_output`, and `tool_rendering` for the new owners,
+alongside the existing message, input, summary, and event locations. Reveal
+resolves those fields through the shared stored-message reader on every backend.
+Masking adjusts native byte ranges and assigns a replacement crossing part
+boundaries to its first part. Scan stamps from versions that omitted these
+owners must remain stale.
+
+`content_length` retains the provider's historical work count, which can differ
+from dialogue bytes. Sanitization subtracts removed bytes according to the
+existing work-count contract; it does not replace the count with dialogue size.
+Native composers and provider-specific count overrides remove stripped bytes
+before archive writes, preserving markers, separators, and zero-work result
+conventions. Repeated archive sanitization does not subtract those bytes again.
+The native-body parser version upgrade reparses source-backed sessions through
+normal non-destructive resync, including counts saved before this correction.
+Source-missing sessions retain their stored body, work count, and provenance.
 
 ### Tool result summaries
 

@@ -16,32 +16,38 @@ import (
 
 func TestImporterUsesRecordedProjectWithoutLocalGitDiscovery(t *testing.T) {
 	for _, tc := range []struct {
-		agent    parser.AgentType
-		filename string
-		id       string
-		body     string
+		agent       parser.AgentType
+		filename    string
+		id          string
+		body        string
+		wantContent string
+		wantOutput  string
 	}{
 		{
 			agent: parser.AgentEvener, filename: "demo.transcript.jsonl", id: "evener:demo",
+			wantContent: "Remote session content",
 			body: `{"kind":"header","format_version":2,"session_id":"demo","created_at":"2026-09-01T10:00:00Z","working_dir":%s}
 {"kind":"entry","seq":1,"turn":{"kind":"USER_INPUT","timestamp":"2026-09-01T10:01:00Z","message":{"content":[{"kind":"text","text":"Remote session content"}]}}}
 `,
 		},
 		{
 			agent: parser.AgentCodex, filename: "rollout-2026-09-01T10-00-00-11111111-2222-4333-8444-555555555555.jsonl", id: "codex:11111111-2222-4333-8444-555555555555",
+			wantContent: "Remote session content",
 			body: `{"type":"session_meta","payload":{"id":"11111111-2222-4333-8444-555555555555","cwd":%s,"timestamp":"2026-09-01T10:00:00Z"}}
 {"type":"response_item","timestamp":"2026-09-01T10:01:00Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Remote session content"}]}}
 `,
 		},
 		{
 			agent: parser.AgentCommandCode, filename: "project/demo.jsonl", id: "commandcode:demo",
+			wantContent: "Remote session content",
 			body: `{"id":"m1","timestamp":"2026-09-01T10:00:00Z","sessionId":"demo","role":"user","content":[{"type":"text","text":"Remote session content"}],"metadata":{"cwd":%s}}
 `,
 		},
 		{
-			agent:    parser.AgentOpenHands,
-			filename: "086c7ecf6cb746b69fbcb900358d1247/events/event-00000.json",
-			id:       "openhands:086c7ecf-6cb7-46b6-9fbc-b900358d1247",
+			agent:      parser.AgentOpenHands,
+			filename:   "086c7ecf6cb746b69fbcb900358d1247/events/event-00000.json",
+			id:         "openhands:086c7ecf-6cb7-46b6-9fbc-b900358d1247",
+			wantOutput: "Remote session content",
 			body: `{"id":"e0","timestamp":"2026-09-01T10:00:00Z","source":"environment",
 "observation":{"content":[{"type":"text","text":"Remote session content"}],
 "metadata":{"working_dir":%s},"kind":"TerminalObservation"},"kind":"ObservationEvent"}`,
@@ -96,7 +102,10 @@ func TestImporterUsesRecordedProjectWithoutLocalGitDiscovery(t *testing.T) {
 					messages, err := database.GetMessages(t.Context(), session.ID, 0, 100, true)
 					require.NoError(t, err)
 					require.Len(t, messages, 1)
-					assert.Equal(t, "Remote session content", messages[0].Content)
+					assert.Equal(t, tc.wantContent, messages[0].Content)
+					assert.Equal(t, tc.wantOutput, messages[0].ToolResultText)
+					require.NotNil(t, messages[0].ContentLayout)
+					assert.Equal(t, 1, messages[0].ContentLayout.Version)
 				})
 			}
 		})

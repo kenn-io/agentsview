@@ -27,6 +27,8 @@ vi.mock("./ui.svelte.js", () => ({
 let nextId = 150000;
 function message(ordinal: number, content: string, overrides: Partial<Message> = {}): Message {
   return {
+    content_layout: null,
+    tool_result_text: "",
     has_context_tokens: false,
     has_output_tokens: false,
     id: nextId++,
@@ -297,6 +299,7 @@ describe("local in-session search", () => {
     const original = message(1, "", {
       tool_calls: [
         {
+          rendering: "",
           category: "",
           tool_name: "Read",
           result_content: "needle",
@@ -311,6 +314,7 @@ describe("local in-session search", () => {
         ...original,
         tool_calls: [
           {
+            rendering: "",
             category: "",
             tool_name: "Read",
             result_content: "needle needle",

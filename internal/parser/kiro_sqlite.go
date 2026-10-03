@@ -362,7 +362,7 @@ func (s *KiroSQLiteStore) ParseSession(
 						300,
 					)
 				}
-				messages = append(messages, ParsedMessage{
+				messages = append(messages, (ParsedMessage{
 					Ordinal:       ordinal,
 					Role:          RoleUser,
 					Content:       prompt,
@@ -370,7 +370,7 @@ func (s *KiroSQLiteStore) ParseSession(
 					Timestamp: parseTimestamp(
 						user.Get("timestamp").Str,
 					),
-				})
+				}).withPlainBody())
 				ordinal++
 			}
 
@@ -388,7 +388,7 @@ func (s *KiroSQLiteStore) ParseSession(
 
 	hasContent := false
 	for _, msg := range messages {
-		if msg.Content != "" {
+		if msg.hasNativeBody() {
 			hasContent = true
 			break
 		}
@@ -487,44 +487,41 @@ func parseKiroSQLiteAssistant(
 	if streamEndMS > 0 {
 		timestamp = time.UnixMilli(streamEndMS).UTC()
 	}
-
 	if response := assistant.Get("Response"); response.Exists() {
 		content := strings.TrimSpace(response.Get("content").Str)
 		if content == "" {
 			return ParsedMessage{}, false
 		}
-		return ParsedMessage{
-			Ordinal:       ordinal,
-			Role:          RoleAssistant,
-			Content:       content,
-			ContentLength: len(content),
-			Timestamp:     timestamp,
-		}, true
+		return (ParsedMessage{
+			Ordinal: ordinal, Role: RoleAssistant,
+			Content: content, ContentLength: len(content), Timestamp: timestamp,
+		}).withPlainBody(), true
 	}
-
 	toolUse := assistant.Get("ToolUse")
 	if !toolUse.Exists() {
 		return ParsedMessage{}, false
 	}
 	text := strings.TrimSpace(toolUse.Get("content").Str)
 	toolCalls := kiroSQLiteToolCalls(toolUse.Get("tool_uses"))
-	hasToolUse := len(toolCalls) > 0
 	displayContent := text
-	if displayContent == "" && hasToolUse {
+	if displayContent == "" && len(toolCalls) > 0 {
 		displayContent = kiroFormatToolCalls(toolCalls)
 	}
-	if displayContent == "" && !hasToolUse {
+	if displayContent == "" && len(toolCalls) == 0 {
 		return ParsedMessage{}, false
 	}
-	return ParsedMessage{
-		Ordinal:       ordinal,
-		Role:          RoleAssistant,
-		Content:       displayContent,
-		ContentLength: len(displayContent),
-		Timestamp:     timestamp,
-		HasToolUse:    hasToolUse,
-		ToolCalls:     toolCalls,
-	}, true
+	var body MessageContentBuilder
+	body.AddText(text)
+	for _, call := range toolCalls {
+		call.Rendering = formatToolHeader(call.Category, call.ToolName)
+		body.AddToolCall(call)
+	}
+	msg := (ParsedMessage{
+		Ordinal: ordinal, Role: RoleAssistant,
+		Content: body.Message().Content, Timestamp: timestamp,
+	}).withBody(body.Message())
+	msg.ContentLength = sanitizedWorkLength(displayContent)
+	return msg, true
 }
 
 func kiroSQLiteToolCalls(

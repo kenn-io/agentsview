@@ -5,6 +5,8 @@ import type { DbMessage as Message } from "../api/generated/index.js";
 describe("formatMessageForCopy", () => {
   it("includes tool call params", () => {
     const msg: Message = {
+      content_layout: null,
+      tool_result_text: "",
       has_context_tokens: false,
       has_output_tokens: false,
       id: 1,
@@ -23,6 +25,7 @@ describe("formatMessageForCopy", () => {
       is_system: false,
       tool_calls: [
         {
+          rendering: "",
           tool_name: "Edit",
           category: "Edit",
           input_json: JSON.stringify({
@@ -43,6 +46,8 @@ describe("formatMessageForCopy", () => {
 
   it("includes Write content", () => {
     const msg: Message = {
+      content_layout: null,
+      tool_result_text: "",
       has_context_tokens: false,
       has_output_tokens: false,
       id: 2,
@@ -61,6 +66,7 @@ describe("formatMessageForCopy", () => {
       is_system: false,
       tool_calls: [
         {
+          rendering: "",
           tool_name: "Write",
           category: "Write",
           input_json: JSON.stringify({
@@ -78,6 +84,8 @@ describe("formatMessageForCopy", () => {
 
   it("includes kiro-ide Edit with diff key", () => {
     const msg = {
+      content_layout: null,
+      tool_result_text: "",
       has_context_tokens: false,
       has_output_tokens: false,
       id: 3,
@@ -96,6 +104,7 @@ describe("formatMessageForCopy", () => {
       is_system: false,
       tool_calls: [
         {
+          rendering: "",
           tool_name: "Edit",
           category: "Edit",
           input_json: JSON.stringify({
@@ -116,6 +125,8 @@ describe("formatMessageForCopy", () => {
     const path =
       "/workspace/packages/agentsview/frontend/src/lib/components/content/ToolBlock.svelte";
     const result = formatMessageForCopy({
+      content_layout: null,
+      tool_result_text: "",
       has_context_tokens: false,
       has_output_tokens: false,
       id: 4,
@@ -134,6 +145,7 @@ describe("formatMessageForCopy", () => {
       is_system: false,
       tool_calls: [
         {
+          rendering: "",
           tool_name: "Read",
           category: "Read",
           input_json: JSON.stringify({ file_path: path }),

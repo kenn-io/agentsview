@@ -898,7 +898,7 @@ func loadOmnigentMessages(
 	schema omnigentSchema, member omnigentMemberID,
 ) ([]ParsedMessage, string, error) {
 	query := `
-		SELECT position, type, COALESCE(data, ''), COALESCE(search_text, '')
+		SELECT ` + omnigentIDExpr(schema, "id") + `, position, type, COALESCE(data, ''), COALESCE(search_text, '')
 		  FROM conversation_items
 		 WHERE workspace_id = ? AND conversation_id = ?
 		 ORDER BY position ASC`
@@ -915,22 +915,27 @@ func loadOmnigentMessages(
 	h := sha256.New()
 	for rows.Next() {
 		var (
+			itemID     string
 			position   int
 			rawType    string
 			data       string
 			searchText string
 		)
-		if err := rows.Scan(&position, &rawType, &data, &searchText); err != nil {
+		if err := rows.Scan(&itemID, &position, &rawType, &data, &searchText); err != nil {
 			return nil, "", fmt.Errorf("scanning omnigent item: %w", err)
 		}
 		for _, value := range []string{
-			strconv.Itoa(position), rawType, data, searchText,
+			itemID, strconv.Itoa(position), rawType, data, searchText,
 		} {
 			omnigentWriteFingerprintField(h, value)
 		}
+		before := len(messages)
 		typeName := omnigentItemTypeName(schema, rawType)
 		decodeOmnigentItem(
 			position, typeName, data, searchText, &messages, callMsgIndex)
+		for i := before; i < len(messages); i++ {
+			messages[i].SourceUUID = itemID
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, "", err
@@ -964,24 +969,25 @@ func decodeOmnigentItem(
 			Role:          role,
 			Content:       content,
 			ContentLength: len(content),
-		})
+		}.withPlainBody())
 
 	case omnigentTypeFuncCall:
 		var fc omnigentFuncCallData
 		if json.Unmarshal([]byte(data), &fc) != nil {
 			return
 		}
-		*messages = append(*messages, ParsedMessage{
-			Ordinal:    position,
-			Role:       RoleAssistant,
-			HasToolUse: true,
-			ToolCalls: []ParsedToolCall{{
-				ToolUseID: fc.CallID,
-				ToolName:  fc.Name,
-				Category:  NormalizeToolCategory(fc.Name),
-				InputJSON: fc.Arguments,
-			}},
+		var body MessageContentBuilder
+		body.AddToolCall(ParsedToolCall{
+			ToolUseID: fc.CallID,
+			ToolName:  fc.Name,
+			Category:  NormalizeToolCategory(fc.Name),
+			InputJSON: fc.Arguments,
 		})
+		message := body.Message()
+		message.Ordinal = position
+		message.Role = RoleAssistant
+		message.ContentLength = 0
+		*messages = append(*messages, message)
 		if fc.CallID != "" {
 			callMsgIndex[fc.CallID] = len(*messages) - 1
 		}
@@ -1002,44 +1008,38 @@ func decodeOmnigentItem(
 		}
 		if idx, ok := callMsgIndex[fo.CallID]; ok {
 			msg := &(*messages)[idx]
-			msg.ToolResults = append(msg.ToolResults, result)
+			body := continueMessageContent(*msg)
+			body.AddToolResult(result)
+			*msg = msg.withBody(body.Message())
 			return
 		}
 		// Orphan output (no matching call in this conversation): keep it
 		// visible as its own tool-role message.
-		*messages = append(*messages, ParsedMessage{
-			Ordinal:       position,
-			Role:          RoleTool,
-			Content:       fo.Output,
-			ContentLength: len(fo.Output),
-			ToolResults:   []ParsedToolResult{result},
-		})
+		var body MessageContentBuilder
+		body.AddToolResult(result)
+		message := body.Message()
+		message.Ordinal = position
+		message.Role = RoleTool
+		message.ContentLength = sanitizedWorkLength(fo.Output)
+		*messages = append(*messages, message)
 
 	case omnigentTypeReasoning:
 		var rd omnigentReasoningData
 		if json.Unmarshal([]byte(data), &rd) != nil {
 			return
 		}
-		var b strings.Builder
-		for _, s := range rd.Summary {
-			if s.Text == "" {
-				continue
-			}
-			if b.Len() > 0 {
-				b.WriteString("\n")
-			}
-			b.WriteString(s.Text)
+		var body MessageContentBuilder
+		for _, summary := range rd.Summary {
+			body.addThinking(summary.Text, "\n")
 		}
-		thinking := b.String()
-		if thinking == "" {
-			return
+		if len(rd.Summary) == 0 {
+			body.AddThinking("")
 		}
-		*messages = append(*messages, ParsedMessage{
-			Ordinal:      position,
-			Role:         RoleAssistant,
-			ThinkingText: thinking,
-			HasThinking:  true,
-		})
+		message := body.Message()
+		message.Ordinal = position
+		message.Role = RoleAssistant
+		message.ContentLength = 0
+		*messages = append(*messages, message)
 
 	default:
 		// error, compaction, routing_decision, slash_command,
@@ -1055,7 +1055,7 @@ func decodeOmnigentItem(
 			IsSystem:      true,
 			Content:       content,
 			ContentLength: len(content),
-		})
+		}.withPlainBody())
 	}
 }
 

@@ -573,13 +573,13 @@ func TestTranscriptsArchiveContentSyncKeepsTranscriptWithoutToolPayloads(
 	require.NoError(t, err)
 	joined := joinedContent(messages)
 	assert.Contains(t, joined, "the build tool is missing")
-	assert.Contains(t, joined, "[Bash]",
-		"the transcript still shows that a tool ran")
 	assert.NotContains(t, joined, "make test",
 		"the command itself is a tool input and leaves the archive")
 	calls := toolCallsOf(messages)
 	require.Len(t, calls, 1)
 	assert.Equal(t, "Bash", calls[0].ToolName)
+	assert.Equal(t, "[Bash]", calls[0].Rendering,
+		"the stored tool label retains no command arguments")
 	assert.Empty(t, calls[0].InputJSON)
 	assert.Empty(t, calls[0].ResultContent)
 	assert.Equal(t, len("make: command not found"), calls[0].ResultContentLength)

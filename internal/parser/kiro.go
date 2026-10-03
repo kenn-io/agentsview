@@ -164,12 +164,12 @@ func (p *kiroProvider) parseLegacySessionContext(
 					strings.ReplaceAll(content, "\n", " "), 300,
 				)
 			}
-			messages = append(messages, ParsedMessage{
+			messages = append(messages, (ParsedMessage{
 				Ordinal:       ordinal,
 				Role:          RoleUser,
 				Content:       content,
 				ContentLength: len(content),
-			})
+			}).withPlainBody())
 			ordinal++
 
 		case kiroKindAssistant:
@@ -184,14 +184,17 @@ func (p *kiroProvider) parseLegacySessionContext(
 				continue
 			}
 
-			messages = append(messages, ParsedMessage{
+			body := kiroNativeAssistantBody(data)
+			msg := (ParsedMessage{
 				Ordinal:       ordinal,
 				Role:          RoleAssistant,
-				Content:       displayContent,
+				Content:       body.Content,
 				ContentLength: len(displayContent),
 				HasToolUse:    hasToolUse,
 				ToolCalls:     toolCalls,
-			})
+			}).withBody(body)
+			msg.ContentLength = sanitizedWorkLength(displayContent)
+			messages = append(messages, msg)
 			ordinal++
 
 		case kiroKindToolRes:
@@ -199,11 +202,11 @@ func (p *kiroProvider) parseLegacySessionContext(
 			if len(results) == 0 {
 				continue
 			}
-			messages = append(messages, ParsedMessage{
+			messages = append(messages, (ParsedMessage{
 				Ordinal:     ordinal,
 				Role:        RoleUser,
 				ToolResults: results,
-			})
+			}).withBody(kiroNativeResultBody(results)))
 			ordinal++
 		}
 	}
@@ -216,7 +219,7 @@ func (p *kiroProvider) parseLegacySessionContext(
 	// Require at least one message with content.
 	hasContent := false
 	for _, m := range messages {
-		if m.Content != "" {
+		if m.hasNativeBody() {
 			hasContent = true
 			break
 		}
@@ -340,7 +343,7 @@ func (p *kiroProvider) parseCurrentSessionContext(
 			if role == RoleUser && firstMessage == "" {
 				firstMessage = truncate(strings.ReplaceAll(content, "\n", " "), 300)
 			}
-			messages = append(messages, ParsedMessage{Ordinal: ordinal, Role: role, Content: content, Timestamp: timestamp, ContentLength: len(content), Model: payload.Get("reasoningModelId").Str})
+			messages = append(messages, (ParsedMessage{Ordinal: ordinal, Role: role, Content: content, Timestamp: timestamp, ContentLength: len(content), Model: payload.Get("reasoningModelId").Str}).withPlainBody())
 			accepted = true
 			ordinal++
 		case "tool_call":
@@ -349,17 +352,17 @@ func (p *kiroProvider) parseCurrentSessionContext(
 				continue
 			}
 			call := ParsedToolCall{ToolUseID: id, ToolName: name, Category: NormalizeToolCategory(name), InputJSON: payload.Get("args").Raw}
-			display := kiroFormatToolCalls([]ParsedToolCall{call})
-			messages = append(messages, ParsedMessage{Ordinal: ordinal, Role: RoleAssistant, Content: display, Timestamp: timestamp, ContentLength: len(display), HasToolUse: true, ToolCalls: []ParsedToolCall{call}})
+			call.Rendering = kiroFormatToolCalls([]ParsedToolCall{call})
+			var body MessageContentBuilder
+			body.AddToolCall(call)
+			messages = append(messages, (ParsedMessage{Ordinal: ordinal, Role: RoleAssistant, Timestamp: timestamp}).withBody(body.Message()))
 			accepted = true
 			ordinal++
 		case "tool_result":
 			id := payload.Get("toolCallId").Str
-			if id == "" {
-				continue
-			}
 			raw := payload.Get("content").Raw
-			messages = append(messages, ParsedMessage{Ordinal: ordinal, Role: RoleUser, Timestamp: timestamp, ToolResults: []ParsedToolResult{{ToolUseID: id, ContentRaw: raw, ContentLength: len(raw)}}})
+			results := []ParsedToolResult{{ToolUseID: id, ContentRaw: raw, ContentLength: len(raw)}}
+			messages = append(messages, (ParsedMessage{Ordinal: ordinal, Role: RoleUser, Timestamp: timestamp}).withBody(kiroNativeResultBody(results)))
 			accepted = true
 			ordinal++
 		}
@@ -504,9 +507,6 @@ func kiroExtractToolResults(
 		}
 		tr := block.Get("data")
 		toolUseID := tr.Get("toolUseId").Str
-		if toolUseID == "" {
-			return true
-		}
 		contentRaw := tr.Get("content").Raw
 		results = append(results, ParsedToolResult{
 			ToolUseID:     toolUseID,

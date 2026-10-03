@@ -60,6 +60,9 @@ func configureArchiveSQLiteConnection(conn *sqlite3.SQLiteConn) error {
 	if err := configureSQLiteConnection(conn); err != nil {
 		return err
 	}
+	if err := conn.RegisterFunc("agentsview_palette_text", sqlitePaletteText, true); err != nil {
+		return fmt.Errorf("registering palette projection: %w", err)
+	}
 	if err := conn.RegisterFunc(
 		"agentsview_cjk_fts_fingerprint",
 		func() string { return simpleFTSRuntimeConfig.fingerprint },

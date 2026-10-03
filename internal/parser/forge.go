@@ -245,29 +245,25 @@ func buildForgeSession(
 				if body == "" {
 					body = strings.TrimSpace(textMsg.Get("raw_content.Text").Str)
 				}
-				thinking := collectForgeReasoning(textMsg.Get("reasoning_details"))
-				hasThinking := thinking != ""
-				toolCalls := collectForgeToolCalls(textMsg.Get("tool_calls"))
-				display := body
-				if hasThinking {
-					display = "[Thinking]\n" + thinking + "\n[/Thinking]"
-					if body != "" {
-						display += "\n" + body
-					}
+				var builder MessageContentBuilder
+				textMsg.Get("reasoning_details").ForEach(func(_, detail gjson.Result) bool {
+					builder.AddThinking(strings.TrimSpace(detail.Get("text").Str))
+					return true
+				})
+				builder.AddText(body)
+				for _, call := range collectForgeToolCalls(textMsg.Get("tool_calls")) {
+					builder.AddToolCall(call)
 				}
-				if display == "" && len(toolCalls) == 0 {
+				composed := builder.Message()
+				composed.ContentLength = sanitizedWorkLength(body) + sanitizedWorkLength(collectForgeReasoning(textMsg.Get("reasoning_details")))
+				if !composed.hasNativeBody() && len(usageRaw) == 0 {
 					return true
 				}
 				messages = append(messages, ParsedMessage{
 					Ordinal:            ordinal,
 					Role:               RoleAssistant,
-					Content:            display,
-					ThinkingText:       thinking,
+					Content:            composed.Content,
 					Timestamp:          ts,
-					HasThinking:        hasThinking,
-					HasToolUse:         len(toolCalls) > 0,
-					ContentLength:      len(body) + len(thinking),
-					ToolCalls:          toolCalls,
 					Model:              model,
 					TokenUsage:         usageRaw,
 					ContextTokens:      ctxTokens,
@@ -275,7 +271,7 @@ func buildForgeSession(
 					HasContextTokens:   hasCtx,
 					HasOutputTokens:    hasOut,
 					tokenPresenceKnown: hasCtx || hasOut,
-				})
+				}.withBody(composed))
 				ordinal++
 			}
 			return true
@@ -284,9 +280,6 @@ func buildForgeSession(
 		toolMsg := item.Get("message.tool")
 		if toolMsg.Exists() {
 			callID := toolMsg.Get("call_id").Str
-			if callID == "" {
-				return true
-			}
 			content := forgeToolOutputText(toolMsg.Get("output"))
 			quoted, _ := json.Marshal(content)
 			messages = append(messages, ParsedMessage{
@@ -304,6 +297,22 @@ func buildForgeSession(
 		}
 		return true
 	})
+
+	for i := range messages {
+		msg := &messages[i]
+		if msg.ContentLayout != nil {
+			continue
+		}
+		var builder MessageContentBuilder
+		builder.AddText(msg.Content)
+		for _, result := range msg.ToolResults {
+			builder.AddToolResult(result)
+		}
+		body := builder.Message()
+		body.ContentLength = msg.sanitizedHistoricalWorkLength()
+		msg.Content = body.Content
+		*msg = msg.withBody(body)
+	}
 
 	if len(messages) == 0 {
 		return nil, nil, nil

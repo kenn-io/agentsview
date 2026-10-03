@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"os"
@@ -51,6 +52,7 @@ type copilotSessionBuilder struct {
 	shutdownCoveredMessages int
 	usageCoveredAt          time.Time
 	fallbackOutput          int
+	reasoningEvents         map[string]bool
 	hasFallbackOutput       bool
 }
 
@@ -71,6 +73,7 @@ func (b *copilotSessionBuilder) processLine(line string) {
 	}
 
 	data := gjson.Get(line, "data")
+	firstNewMessage := len(b.messages)
 
 	switch gjson.Get(line, "type").Str {
 	case copilotEventSessionStart:
@@ -84,13 +87,17 @@ func (b *copilotSessionBuilder) processLine(line string) {
 	case copilotEventToolComplete:
 		b.handleToolComplete(data, ts)
 	case copilotEventAssistantReason:
-		b.handleAssistantReasoning()
+		b.handleAssistantReasoning(data)
 	case copilotEventModelChange:
 		if v := data.Get("newModel"); v.Exists() {
 			b.currentModel = normalizeCopilotModel(v.Str)
 		}
 	case copilotEventSessionShutdown:
 		b.handleShutdown(data, ts)
+	}
+	for i := firstNewMessage; i < len(b.messages); i++ {
+		b.messages[i].SourceUUID = strings.Clone(gjson.Get(line, "id").Str)
+		b.messages[i].SourceParentUUID = strings.Clone(gjson.Get(line, "parentId").Str)
 	}
 }
 
@@ -129,13 +136,11 @@ func (b *copilotSessionBuilder) handleUserMessage(
 		)
 	}
 
-	b.messages = append(b.messages, ParsedMessage{
-		Ordinal:       b.ordinal,
-		Role:          RoleUser,
-		Content:       content,
-		Timestamp:     ts,
-		ContentLength: len(content),
-	})
+	var composer MessageContentBuilder
+	composer.AddText(strings.Clone(content))
+	body := composer.Message()
+	body.Ordinal, body.Role, body.Timestamp = b.ordinal, RoleUser, ts
+	b.messages = append(b.messages, body)
 	b.ordinal++
 }
 
@@ -152,9 +157,9 @@ func isCopilotSyntheticSkillMessage(
 func (b *copilotSessionBuilder) handleAssistantMessage(
 	data gjson.Result, ts time.Time,
 ) {
-	content := strings.TrimSpace(data.Get("content").Str)
-	reasoningText := strings.TrimSpace(data.Get("reasoningText").Str)
-	hasThinking := reasoningText != ""
+	content := strings.Clone(strings.TrimSpace(data.Get("content").Str))
+	reasoningText := strings.Clone(strings.TrimSpace(data.Get("reasoningText").Str))
+	hasThinking := reasoningText != "" || data.Get("reasoningOpaque").Str != "" || data.Get("encryptedContent").Str != ""
 
 	var toolCalls []ParsedToolCall
 	data.Get("toolRequests").ForEach(
@@ -169,37 +174,52 @@ func (b *copilotSessionBuilder) handleAssistantMessage(
 				inputJSON = args.Raw
 			}
 			toolCalls = append(toolCalls, ParsedToolCall{
-				ToolUseID: req.Get("toolCallId").Str,
+				ToolUseID: strings.Clone(req.Get("toolCallId").Str),
 				ToolName:  name,
 				Category:  NormalizeToolCategory(name),
-				InputJSON: inputJSON,
+				InputJSON: strings.Clone(inputJSON),
 			})
 			return true
 		},
 	)
 
-	hasToolUse := len(toolCalls) > 0
-
-	// Build display content for tool calls.
-	displayContent := content
-	if hasToolUse && content == "" {
-		displayContent = formatCopilotToolCalls(toolCalls)
-	}
-
-	// Prepend thinking block when reasoning text is present.
+	var composer MessageContentBuilder
+	workLength, workParts := 0, 0
 	if hasThinking {
-		thinkBlock := "[Thinking]\n" + reasoningText + "\n[/Thinking]"
-		if displayContent != "" {
-			displayContent = thinkBlock + "\n\n" + displayContent
-		} else {
-			displayContent = thinkBlock
+		composer.AddThinking(reasoningText)
+		if reasoningText != "" {
+			workLength = sanitizedWorkLength(reasoningText) + len("[Thinking]\n\n[/Thinking]")
+			workParts++
 		}
 	}
-
-	if displayContent == "" && !hasToolUse {
+	composer.AddText(content)
+	if content != "" {
+		if workParts > 0 {
+			workLength += 2
+		}
+		workLength += sanitizedWorkLength(content)
+		workParts++
+	}
+	for _, call := range toolCalls {
+		if content == "" {
+			call.Rendering = formatToolHeader(call.Category, call.ToolName)
+			if workParts > 0 {
+				if workParts == 1 && reasoningText != "" {
+					workLength += 2
+				} else {
+					workLength++
+				}
+			}
+			workLength += sanitizedWorkLength(call.Rendering)
+			workParts++
+		}
+		composer.AddToolCall(call)
+	}
+	body := composer.Message()
+	if !body.hasNativeBody() {
 		return
 	}
-
+	body.ContentLength = workLength
 	outputTokens := int(data.Get("outputTokens").Int())
 	hasOutputTokens := data.Get("outputTokens").Exists()
 	model := normalizeCopilotModel(data.Get("model").Str)
@@ -207,19 +227,9 @@ func (b *copilotSessionBuilder) handleAssistantMessage(
 		model = b.currentModel
 	}
 
-	b.messages = append(b.messages, ParsedMessage{
-		Ordinal:         b.ordinal,
-		Role:            RoleAssistant,
-		Content:         displayContent,
-		Timestamp:       ts,
-		HasThinking:     hasThinking,
-		HasToolUse:      hasToolUse,
-		ContentLength:   len(displayContent),
-		ToolCalls:       toolCalls,
-		Model:           model,
-		OutputTokens:    outputTokens,
-		HasOutputTokens: hasOutputTokens,
-	})
+	body.Ordinal, body.Role, body.Timestamp = b.ordinal, RoleAssistant, ts
+	body.Model, body.OutputTokens, body.HasOutputTokens = model, outputTokens, hasOutputTokens
+	b.messages = append(b.messages, body)
 	b.ordinal++
 }
 
@@ -235,10 +245,6 @@ func (b *copilotSessionBuilder) handleToolComplete(
 	data gjson.Result, ts time.Time,
 ) {
 	toolCallID := data.Get("toolCallId").Str
-	if toolCallID == "" {
-		return
-	}
-
 	r := data.Get("result")
 	content := r.Str
 	if r.Type != gjson.String && r.Raw != "" {
@@ -249,19 +255,16 @@ func (b *copilotSessionBuilder) handleToolComplete(
 		status = "errored"
 	}
 	b.appendToolExecutionEvent(toolCallID, status, content, ts)
-	contentLen := len(content)
-
-	// Emit a tool-result-only user message for pairing.
-	b.messages = append(b.messages, ParsedMessage{
-		Ordinal:       b.ordinal,
-		Role:          RoleUser,
-		Timestamp:     ts,
-		ContentLength: contentLen,
-		ToolResults: []ParsedToolResult{{
-			ToolUseID:     toolCallID,
-			ContentLength: contentLen,
-		}},
+	raw, _ := json.Marshal(content)
+	var composer MessageContentBuilder
+	composer.AddToolResult(ParsedToolResult{
+		ToolUseID: strings.Clone(toolCallID), ContentLength: len(content), ContentRaw: string(raw),
 	})
+	body := composer.Message()
+	body.Ordinal, body.Role, body.Timestamp = b.ordinal, RoleUser, ts
+	body.SourceSubtype = SourceSubtypeToolResult
+	body.ContentLength = sanitizedWorkLength(content)
+	b.messages = append(b.messages, body)
 	b.ordinal++
 }
 
@@ -289,14 +292,32 @@ func (b *copilotSessionBuilder) appendToolExecutionEvent(
 	}
 }
 
-func (b *copilotSessionBuilder) handleAssistantReasoning() {
-	// Mark the most recent assistant message as having
-	// thinking, if one exists.
-	for i, v := range slices.Backward(b.messages) {
-		if v.Role == RoleAssistant {
-			b.messages[i].HasThinking = true
+func (b *copilotSessionBuilder) handleAssistantReasoning(data gjson.Result) {
+	id := data.Get("reasoningId").Str
+	if id != "" && b.reasoningEvents[id] {
+		return
+	}
+	for i, message := range slices.Backward(b.messages) {
+		if message.Role != RoleAssistant {
+			continue
+		}
+		if id != "" {
+			if b.reasoningEvents == nil {
+				b.reasoningEvents = make(map[string]bool)
+			}
+			b.reasoningEvents[strings.Clone(id)] = true
+		}
+		text := strings.Clone(data.Get("content").Str)
+		// The native emitter sends this after the message carrying reasoningText.
+		if message.HasThinking && (text == "" || strings.TrimSpace(text) == message.ThinkingText) {
 			return
 		}
+		composer := continueMessageContent(message)
+		composer.AddThinking(text)
+		body := composer.Message()
+		body.ContentLength = message.ContentLength // this notification previously added no work bytes
+		b.messages[i] = body
+		return
 	}
 }
 
@@ -553,17 +574,6 @@ func copilotStoreHasUsageSchema(ctx context.Context, queryRow func(context.Conte
 	return columns == 9, err
 }
 
-func formatCopilotToolCalls(
-	calls []ParsedToolCall,
-) string {
-	var parts []string
-	for _, tc := range calls {
-		parts = append(parts,
-			formatToolHeader(tc.Category, tc.ToolName))
-	}
-	return strings.Join(parts, "\n")
-}
-
 // normalizeCopilotModel converts the model identifier used in
 // Copilot session events to the form used in the pricing catalog.
 // Claude model IDs use dots in version numbers in Copilot events
@@ -656,10 +666,10 @@ func (p *copilotProvider) parseSessionWithStore(ctx context.Context,
 			fmt.Errorf("reading copilot %s: %w", path, err)
 	}
 
-	// Filter: require at least one user or assistant message.
+	// Require a native body, including sessions containing only work blocks.
 	hasContent := false
 	for _, m := range b.messages {
-		if m.Content != "" {
+		if m.hasNativeBody() {
 			hasContent = true
 			break
 		}

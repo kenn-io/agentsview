@@ -40,6 +40,8 @@ let component: ReturnType<typeof mount> | undefined;
 let nextId = 180000;
 function message(ordinal: number, content: string, overrides: Partial<Message> = {}): Message {
   return {
+    content_layout: null,
+    tool_result_text: "",
     has_context_tokens: false,
     has_output_tokens: false,
     id: nextId++,
@@ -77,6 +79,7 @@ beforeEach(() => {
       has_tool_use: true,
       tool_calls: [
         {
+          rendering: "",
           category: "",
           tool_name: "Read",
           result_content: "needle",

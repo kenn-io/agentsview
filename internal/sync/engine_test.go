@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
@@ -4538,7 +4539,7 @@ func TestFilterEmptyMessages(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := pairAndFilter(tt.msgs, nil)
-			diff := cmp.Diff(tt.want, got)
+			diff := cmp.Diff(tt.want, got, cmpopts.IgnoreUnexported(db.Message{}))
 			assert.Empty(t, diff, "pairAndFilter() mismatch (-want +got):\n%s", diff)
 		})
 	}
@@ -4686,7 +4687,7 @@ func TestPairToolResults(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			pairToolResults(tt.msgs, nil)
-			diff := cmp.Diff(tt.want, tt.msgs)
+			diff := cmp.Diff(tt.want, tt.msgs, cmpopts.IgnoreUnexported(db.Message{}))
 			assert.Empty(t, diff, "pairToolResults() mismatch (-want +got):\n%s", diff)
 		})
 	}
@@ -4813,7 +4814,7 @@ func TestPairToolResultsContent(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			pairToolResults(tt.msgs, tt.blocked)
-			diff := cmp.Diff(tt.want, tt.msgs)
+			diff := cmp.Diff(tt.want, tt.msgs, cmpopts.IgnoreUnexported(db.Message{}))
 			assert.Empty(t, diff, "pairToolResults() mismatch (-want +got):\n%s", diff)
 		})
 	}
@@ -5024,7 +5025,7 @@ func TestPairToolResultEventSummaries(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			pairToolResultEventSummaries(tt.msgs, tt.blocked)
-			diff := cmp.Diff(tt.want, tt.msgs)
+			diff := cmp.Diff(tt.want, tt.msgs, cmpopts.IgnoreUnexported(db.Message{}))
 			require.Empty(t, diff, "pairToolResultEventSummaries() mismatch (-want +got):\n%s", diff)
 		})
 	}
@@ -7624,14 +7625,13 @@ func TestProcessAntigravityBrainOnlyUpdateNotSkipped(t *testing.T) {
 	require.False(t, res.skip,
 		"brain-only update must trigger a reparse")
 	require.Len(t, res.results, 1)
-	var found bool
-	for _, m := range res.results[0].Messages {
-		if strings.Contains(m.Content, "brain artifact body") {
-			found = true
-		}
-	}
-	assert.True(t, found,
-		"reparse must pick up the brain artifact message")
+	require.Len(t, res.results[0].Messages, 1)
+	artifact := res.results[0].Messages[0]
+	assert.Empty(t, artifact.Content)
+	assert.Equal(t, "[task.md]\nbrain artifact body", artifact.ToolResultText)
+	assert.Equal(t, &parser.ContentLayout{Version: 1, Blocks: []parser.ContentBlock{
+		{Kind: "tool_result", End: 29},
+	}}, artifact.ContentLayout)
 }
 
 func TestShouldSkipFileWithIDPrefix(t *testing.T) {

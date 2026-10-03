@@ -902,18 +902,18 @@ func visualStudioCopilotTraceMessages(
 		if prompt := visualStudioCopilotChatPrompt(span); prompt != "" {
 			promptKey := visualStudioCopilotPromptKey(span, prompt)
 			if _, seen := seenUserPrompts[promptKey]; !seen {
-				messages = append(messages, ParsedMessage{
+				messages = append(messages, (ParsedMessage{
 					Ordinal:       len(messages),
 					Role:          RoleUser,
 					Content:       prompt,
 					Timestamp:     span.start,
 					ContentLength: len(prompt),
-				})
+				}).withPlainBody())
 				seenUserPrompts[promptKey] = struct{}{}
 			}
-			if content, toolCalls := visualStudioCopilotChatOutput(span, executedToolIDs); content != "" || len(toolCalls) > 0 {
+			if content, body := visualStudioCopilotChatOutput(span, executedToolIDs); content != "" || len(body.ToolCalls) > 0 {
 				messages = visualStudioCopilotAppendChatOutput(
-					messages, seenChatOutputs, span, content, toolCalls,
+					messages, seenChatOutputs, span, content, body,
 					preferredChatSpans, executedToolIDs,
 				)
 			} else {
@@ -925,9 +925,9 @@ func visualStudioCopilotTraceMessages(
 			continue
 		}
 
-		if content, toolCalls := visualStudioCopilotChatOutput(span, executedToolIDs); content != "" || len(toolCalls) > 0 {
+		if content, body := visualStudioCopilotChatOutput(span, executedToolIDs); content != "" || len(body.ToolCalls) > 0 {
 			messages = visualStudioCopilotAppendChatOutput(
-				messages, seenChatOutputs, span, content, toolCalls,
+				messages, seenChatOutputs, span, content, body,
 				preferredChatSpans, executedToolIDs,
 			)
 			continue
@@ -957,6 +957,18 @@ func visualStudioCopilotTraceMessages(
 			ContentLength: len(content),
 			ToolCalls:     toolCalls,
 		}
+		if len(toolCalls) > 0 {
+			var body MessageContentBuilder
+			for _, call := range toolCalls {
+				body.AddToolCall(call)
+			}
+			message.Content = ""
+			message = message.withBody(body.Message())
+			message.ContentLength = sanitizedWorkLength(content)
+		} else {
+			message.IsSystem = true
+			message = message.withPlainBody()
+		}
 		visualStudioCopilotApplyUsage(&message, contentSpan)
 		if message.HasToolUse {
 			message.Ordinal = len(messages)
@@ -982,7 +994,7 @@ func visualStudioCopilotTraceMessages(
 // supplies content without reordering the transcript.
 func visualStudioCopilotAppendChatOutput(
 	messages []ParsedMessage, seen map[string]struct{},
-	span vsCopilotSpan, content string, toolCalls []ParsedToolCall,
+	span vsCopilotSpan, content string, body ParsedMessage,
 	preferred map[string]vsCopilotSpan, executedToolIDs map[string]struct{},
 ) []ParsedMessage {
 	key := visualStudioCopilotChatOutputIdentity(span, content)
@@ -993,17 +1005,19 @@ func visualStudioCopilotAppendChatOutput(
 	emitSpan := span
 	if best, ok := preferred[key]; ok {
 		emitSpan = best
-		content, toolCalls = visualStudioCopilotChatOutput(best, executedToolIDs)
+		content, body = visualStudioCopilotChatOutput(best, executedToolIDs)
 	}
 	message := ParsedMessage{
 		Ordinal:       len(messages),
 		Role:          RoleAssistant,
 		Content:       content,
 		Timestamp:     span.end,
-		HasToolUse:    len(toolCalls) > 0,
-		ContentLength: len(content),
-		ToolCalls:     toolCalls,
+		HasToolUse:    body.HasToolUse,
+		ContentLength: body.ContentLength,
+		ToolCalls:     body.ToolCalls,
 	}
+	message.Content = body.Content
+	message = message.withBody(body)
 	visualStudioCopilotApplyUsage(&message, emitSpan)
 	return append(messages, message)
 }
@@ -1030,8 +1044,8 @@ func visualStudioCopilotPreferredChatSpans(
 ) map[string]vsCopilotSpan {
 	best := map[string]vsCopilotSpan{}
 	for _, span := range spans {
-		content, toolCalls := visualStudioCopilotChatOutput(span, executedToolIDs)
-		if content == "" && len(toolCalls) == 0 {
+		content, body := visualStudioCopilotChatOutput(span, executedToolIDs)
+		if content == "" && len(body.ToolCalls) == 0 {
 			continue
 		}
 		key := visualStudioCopilotChatOutputIdentity(span, content)
@@ -1057,8 +1071,8 @@ func visualStudioCopilotPreferChatSpan(
 	currentContent, currentTools := visualStudioCopilotChatOutput(
 		current, executedToolIDs,
 	)
-	if len(candidateTools) != len(currentTools) {
-		return len(candidateTools) > len(currentTools)
+	if len(candidateTools.ToolCalls) != len(currentTools.ToolCalls) {
+		return len(candidateTools.ToolCalls) > len(currentTools.ToolCalls)
 	}
 	if len(candidateContent) != len(currentContent) {
 		return len(candidateContent) > len(currentContent)
@@ -1100,6 +1114,10 @@ func visualStudioCopilotAppendChatTurnUsage(
 		Timestamp:     span.end,
 		ContentLength: len(content),
 	}
+	message.Content = ""
+	var body MessageContentBuilder
+	message = message.withBody(body.Message())
+	message.ContentLength = sanitizedWorkLength(content)
 	visualStudioCopilotApplyUsage(&message, usageSpan)
 	return append(messages, message)
 }
@@ -1118,8 +1136,8 @@ func visualStudioCopilotPreferredChatUsageSpans(
 		if !visualStudioCopilotIsChatSpan(span) {
 			continue
 		}
-		content, toolCalls := visualStudioCopilotChatOutput(span, executedToolIDs)
-		if content != "" || len(toolCalls) > 0 {
+		content, body := visualStudioCopilotChatOutput(span, executedToolIDs)
+		if content != "" || len(body.ToolCalls) > 0 {
 			continue
 		}
 		if !visualStudioCopilotSpanHasUsage(span) {
@@ -1746,23 +1764,20 @@ func oneLineSummary(text string) string {
 	return strings.Join(strings.Fields(text), " ")
 }
 
-func visualStudioCopilotChatOutput(
-	span vsCopilotSpan, executedToolIDs map[string]struct{},
-) (string, []ParsedToolCall) {
+// visualStudioCopilotChatOutput extracts native order and the historical
+// tools-first display from the same decoded parts. Executed calls remain owned
+// by execute_tool spans. The historical display supplies fallback identity and
+// richest-span ranking as well as the provider-specific work count.
+func visualStudioCopilotChatOutput(span vsCopilotSpan, executedToolIDs map[string]struct{}) (string, ParsedMessage) {
 	if !visualStudioCopilotIsChatSpan(span) {
-		return "", nil
+		return "", ParsedMessage{}
 	}
-	raw := span.attrMap["gen_ai.output.messages"]
-	if raw == "" {
-		return "", nil
-	}
+	var body MessageContentBuilder
+	var historicalTexts, historicalTools []string
 	var messages []vsCopilotChatMessage
-	if err := json.Unmarshal([]byte(raw), &messages); err != nil {
-		return "", nil
+	if err := json.Unmarshal([]byte(span.attrMap["gen_ai.output.messages"]), &messages); err != nil {
+		return "", body.Message()
 	}
-
-	var textParts []string
-	var toolCalls []ParsedToolCall
 	for _, message := range messages {
 		if message.Role != "assistant" {
 			continue
@@ -1770,9 +1785,11 @@ func visualStudioCopilotChatOutput(
 		for _, part := range message.Parts {
 			switch part.Type {
 			case "text":
-				if text := strings.TrimSpace(part.Content); text != "" {
-					textParts = append(textParts, text)
+				text := strings.TrimSpace(part.Content)
+				if text != "" {
+					historicalTexts = append(historicalTexts, text)
 				}
+				body.addText(text, "\n\n")
 			case "tool_call":
 				if part.Name == "" {
 					continue
@@ -1780,29 +1797,24 @@ func visualStudioCopilotChatOutput(
 				if _, ok := executedToolIDs[part.ID]; ok {
 					continue
 				}
-				call := ParsedToolCall{
-					ToolUseID: part.ID,
-					ToolName:  part.Name,
-					Category:  visualStudioCopilotToolCategory(part.Name),
-				}
-				call.InputJSON = visualStudioCopilotChatToolInput(
-					part.Name, part.Arguments,
-				)
-				toolCalls = append(toolCalls, call)
+				calls := []ParsedToolCall{{ToolUseID: part.ID, ToolName: part.Name, Category: visualStudioCopilotToolCategory(part.Name), InputJSON: visualStudioCopilotChatToolInput(part.Name, part.Arguments)}}
+				historicalTools = append(historicalTools, formatVSCodeCopilotToolCalls(calls))
+				body.AddToolCall(calls[0])
 			}
 		}
 	}
-
-	content := strings.TrimSpace(strings.Join(textParts, "\n\n"))
-	if len(toolCalls) > 0 {
-		toolText := formatVSCodeCopilotToolCalls(toolCalls)
+	message := body.Message()
+	content := strings.Join(historicalTexts, "\n\n")
+	if len(historicalTools) > 0 {
+		tools := strings.Join(historicalTools, "\n\n")
 		if content == "" {
-			content = toolText
+			content = tools
 		} else {
-			content = toolText + "\n\n" + content
+			content = tools + "\n\n" + content
 		}
 	}
-	return content, toolCalls
+	message.ContentLength = sanitizedWorkLength(content)
+	return content, message
 }
 
 func visualStudioCopilotChatToolInput(

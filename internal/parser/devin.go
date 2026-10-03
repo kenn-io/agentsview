@@ -579,26 +579,29 @@ func parseDevinDBMessageNode(
 		return ParsedMessage{}, false, nil
 	}
 
-	content, thinking, hasThinking, hasToolUse, toolCalls, toolResults := ExtractTextContent(context.Background(), root.Get("content"))
-	topThinking := strings.TrimSpace(root.Get("thinking").Str)
-	if topThinking != "" && topThinking != thinking {
-		thinking = joinNonEmpty(thinking, topThinking)
-		content = joinNonEmpty(content, "[Thinking]\n"+topThinking+"\n[/Thinking]")
-		hasThinking = true
-	}
-
-	topLevelToolCalls, topLevelToolText := parseDevinDBToolCalls(root.Get("tool_calls"))
-	if len(topLevelToolCalls) > 0 {
-		toolCalls = append(toolCalls, topLevelToolCalls...)
-		hasToolUse = true
-		content = joinNonEmpty(content, topLevelToolText)
-	}
-
+	base := ExtractMessageContent(context.Background(), root.Get("content"))
+	body := continueMessageContent(base)
 	if role == RoleTool {
-		if toolResult, ok := parseDevinDBToolResult(root.Get("tool_call_id"), root.Get("content")); ok {
-			toolResults = append(toolResults, toolResult)
+		body = &MessageContentBuilder{}
+		if result, ok := parseDevinDBToolResult(root.Get("tool_call_id"), root.Get("content")); ok {
+			body.AddToolResult(result)
+		} else {
+			body.AddToolResult(ParsedToolResult{ContentRaw: root.Get("content").Raw})
 		}
 	}
+	topThinking := strings.TrimSpace(root.Get("thinking").Str)
+	if topThinking != "" && topThinking != base.ThinkingText {
+		body.AddThinking(topThinking)
+	}
+	topLevelToolCalls, _ := parseDevinDBToolCalls(root.Get("tool_calls"))
+	for _, call := range topLevelToolCalls {
+		body.AddToolCall(call)
+	}
+	native := body.Message()
+	if role == RoleTool {
+		native.ContentLength = base.sanitizedHistoricalWorkLength()
+	}
+	content, thinking, hasThinking, hasToolUse, toolCalls, toolResults := native.Content, native.ThinkingText, native.HasThinking, native.HasToolUse, native.ToolCalls, native.ToolResults
 
 	tokenUsage, contextTokens, outputTokens, hasContextTokens, hasOutputTokens := devinTokenUsageFromNodeMetrics(root.Get("metadata.metrics"))
 
@@ -614,8 +617,7 @@ func parseDevinDBMessageNode(
 	// would silently discard their prompt/completion usage and undercount
 	// the session. Content-empty turns without any token metrics remain
 	// skipped so genuinely empty nodes do not create blank messages.
-	if strings.TrimSpace(content) == "" && len(toolCalls) == 0 && len(toolResults) == 0 &&
-		!hasContextTokens && !hasOutputTokens {
+	if !native.hasNativeBody() && !hasContextTokens && !hasOutputTokens {
 		return ParsedMessage{}, false, nil
 	}
 
@@ -638,7 +640,7 @@ func parseDevinDBMessageNode(
 		HasContextTokens: hasContextTokens,
 		HasOutputTokens:  hasOutputTokens,
 		SourceUUID:       devinNodeSourceUUID(rawSessionID, row.NodeID),
-	}
+	}.withBody(native)
 	if row.ParentNodeID.Valid {
 		msg.SourceParentUUID = devinNodeSourceUUID(rawSessionID, row.ParentNodeID.Int64)
 	}
@@ -971,23 +973,26 @@ func parseDevinStep(rawSessionID string, step gjson.Result, ordinal int, model s
 		return ParsedMessage{}, false
 	}
 
-	content, thinking, hasThinking, hasToolUse, toolCalls, toolResults := ExtractTextContent(context.Background(), step.Get("message"))
-	topLevelToolText, topLevelToolCalls := formatTopLevelToolUses(step.Get("tool_use"))
-	if topLevelToolText != "" {
-		content = joinNonEmpty(content, topLevelToolText)
-		hasToolUse = true
+	base := ExtractMessageContent(context.Background(), step.Get("message"))
+	body := continueMessageContent(base)
+	_, topLevelToolCalls := formatTopLevelToolUses(step.Get("tool_use"))
+	for _, call := range topLevelToolCalls {
+		body.AddToolCall(call)
 	}
-	toolCalls = append(toolCalls, topLevelToolCalls...)
-	toolResults = append(toolResults, extractTopLevelToolResults(step.Get("tool_result"))...)
-
-	if strings.TrimSpace(content) == "" && len(toolCalls) == 0 && len(toolResults) == 0 {
+	for _, result := range extractTopLevelToolResults(step.Get("tool_result")) {
+		body.AddToolResult(result)
+	}
+	native := body.Message()
+	content, thinking, hasThinking, hasToolUse, toolCalls, toolResults := native.Content, native.ThinkingText, native.HasThinking, native.HasToolUse, native.ToolCalls, native.ToolResults
+	tokenUsage, contextTokens, outputTokens, hasContextTokens, hasOutputTokens := devinTokenUsageFromMetrics(step.Get("metrics"))
+	if !native.hasNativeBody() && !hasContextTokens && !hasOutputTokens {
 		return ParsedMessage{}, false
 	}
-	if role != RoleUser && strings.TrimSpace(content) == "" && len(toolCalls) == 0 && len(toolResults) > 0 {
+	if role != RoleUser && content == "" && !hasThinking && len(toolCalls) == 0 && len(toolResults) > 0 {
 		role = RoleTool
 		isSystem = false
 	}
-	tokenUsage, contextTokens, outputTokens, hasContextTokens, hasOutputTokens := devinTokenUsageFromMetrics(step.Get("metrics"))
+
 	messageModel := firstNonEmpty(
 		step.Get("extra.generation_model").Str,
 		step.Get("model_name").Str,
@@ -1013,7 +1018,7 @@ func parseDevinStep(rawSessionID string, step gjson.Result, ordinal int, model s
 		HasContextTokens: hasContextTokens,
 		HasOutputTokens:  hasOutputTokens,
 		SourceUUID:       devinStepSourceUUID(rawSessionID, step.Get("step_id")),
-	}, true
+	}.withBody(native), true
 }
 
 func devinTokenUsageFromMetrics(metrics gjson.Result) (
@@ -1147,14 +1152,4 @@ func devinStepTimestamp(step gjson.Result) time.Time {
 		step.Get("updated_at").Str,
 		step.Get("updatedAt").Str,
 	))
-}
-
-func joinNonEmpty(parts ...string) string {
-	filtered := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if strings.TrimSpace(part) != "" {
-			filtered = append(filtered, part)
-		}
-	}
-	return strings.Join(filtered, "\n")
 }

@@ -1733,14 +1733,21 @@ func TestSyncEngineKiroSQLiteUpdatePaths(t *testing.T) {
 		"Build the Kiro parser",
 		"I can do that.",
 		"Read the source first",
-		"[Other: execute_bash]",
+		"",
 	)
 	assertMessageContent(t, env.db, "kiro:virtual-path-session",
 		"Build the Kiro parser",
 		"I can do that.",
 		"Read the source first",
-		"[Other: execute_bash]",
+		"",
 	)
+
+	for _, id := range []string{"kiro:physical-path-session", "kiro:virtual-path-session"} {
+		messages := fetchMessages(t, env.db, id)
+		require.Len(t, messages, 4)
+		require.Len(t, messages[3].ToolCalls, 1)
+		assert.Equal(t, "[Other: execute_bash]", messages[3].ToolCalls[0].Rendering)
+	}
 
 	// A second full sync with the Kiro DB unchanged must not rewrite the row
 	// (Synced stays 0). After the initial fan-out, unchanged Kiro SQLite
@@ -14319,6 +14326,73 @@ func TestIncrementalSync_ClaudeCrossSyncToolResultFallback(t *testing.T) {
 	require.Len(t, msgs, 2)
 	require.Len(t, msgs[1].ToolCalls, 1)
 	assert.Equal(t, "done", msgs[1].ToolCalls[0].ResultContent, "result_content")
+}
+
+func TestIncrementalSync_ClaudeLateResultsPreserveUnmatchedAndDialogue(t *testing.T) {
+	for _, tc := range []struct {
+		name, result, wantOutput string
+	}{
+		{"unmatched output", "orphan output", "orphan output"},
+		{"empty unmatched output", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := setupTestEnv(t)
+			initial := testjsonl.JoinJSONL(
+				`{"type":"user","uuid":"u1","message":{"content":"go"},"cwd":"/tmp"}`,
+				`{"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"id":"msg_tool","content":[{"type":"tool_use","id":"known","name":"Read","input":{"file_path":"README.md"}}],"stop_reason":"tool_use"}}`,
+			)
+			path := env.writeClaudeSession(t, "proj-late-mixed", "late-mixed.jsonl", initial)
+			env.engine.SyncAll(t.Context(), nil)
+			require.Len(t, fetchMessages(t, env.db, "late-mixed"), 2)
+			appended := `{"type":"user","uuid":"r1","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"known","content":"attached"},{"type":"text","text":"keep dialogue"},{"type":"tool_result","tool_use_id":"unknown","content":"` + tc.result + `"}]}}` + "\n"
+			f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+			require.NoError(t, err)
+			_, err = f.WriteString(appended)
+			require.NoError(t, err)
+			require.NoError(t, f.Close())
+			env.engine.SyncPaths([]string{path})
+			msgs := fetchMessages(t, env.db, "late-mixed")
+			require.Len(t, msgs, 3)
+			require.Len(t, msgs[1].ToolCalls, 1)
+			assert.Equal(t, "attached", msgs[1].ToolCalls[0].ResultContent)
+			assert.Equal(t, "keep dialogue", msgs[2].Content)
+			assert.Equal(t, tc.wantOutput, msgs[2].ToolResultText)
+			require.NotNil(t, msgs[2].ContentLayout)
+			assert.Equal(t, &parser.ContentLayout{Version: 1, Blocks: []parser.ContentBlock{
+				{Kind: "text", Start: 0, End: 13},
+				{Kind: "tool_result", Start: 0, End: len(tc.wantOutput)},
+			}}, msgs[2].ContentLayout)
+		})
+	}
+}
+
+func TestIncrementalSync_ClaudeAssistantResultPreservesAcceptedOutput(t *testing.T) {
+	env := setupTestEnv(t)
+	initial := testjsonl.JoinJSONL(
+		`{"type":"user","uuid":"u1","message":{"content":"go"},"cwd":"/tmp"}`,
+		`{"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"id":"msg_tool","content":[{"type":"tool_use","id":"known","name":"Read","input":{"file_path":"README.md"}}],"stop_reason":"tool_use"}}`,
+	)
+	path := env.writeClaudeSession(t, "proj-assistant-result", "assistant-result.jsonl", initial)
+	env.engine.SyncAll(t.Context(), nil)
+	require.Len(t, fetchMessages(t, env.db, "assistant-result"), 2)
+	// Claude emits results as user records. A hand-edited assistant result is
+	// nevertheless accepted by the parser and must not lose its saved output.
+	appended := `{"type":"assistant","uuid":"a2","parentUuid":"a1","message":{"id":"msg_late","content":[{"type":"tool_result","tool_use_id":"known","content":"keep malformed output"}],"stop_reason":"end_turn"}}` + "\n"
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = f.WriteString(appended)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+	env.engine.SyncPaths([]string{path})
+	msgs := fetchMessages(t, env.db, "assistant-result")
+	require.Len(t, msgs, 3)
+	require.Len(t, msgs[1].ToolCalls, 1)
+	assert.Empty(t, msgs[1].ToolCalls[0].ResultContent)
+	assert.Equal(t, "assistant", msgs[2].Role)
+	assert.Equal(t, "keep malformed output", msgs[2].ToolResultText)
+	assert.Equal(t, &parser.ContentLayout{Version: 1, Blocks: []parser.ContentBlock{
+		{Kind: "tool_result", Start: 0, End: 21},
+	}}, msgs[2].ContentLayout)
 }
 
 func TestIncrementalSync_CodexAppend(t *testing.T) {

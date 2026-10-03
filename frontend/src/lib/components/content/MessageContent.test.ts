@@ -77,6 +77,8 @@ let nextId = 220000;
 function message(overrides: Partial<Message> = {}): Message {
   const content = overrides.content ?? "Token summary";
   return {
+    content_layout: null,
+    tool_result_text: "",
     has_context_tokens: false,
     has_output_tokens: false,
     id: nextId++,
@@ -164,6 +166,107 @@ afterEach(async () => {
 });
 
 describe("MessageContent", () => {
+  it("renders native text, reasoning, calls and unmatched output in saved order", async () => {
+    await render(
+      message({
+        content: "界𐐀 [Thinking]\n\ntail",
+        thinking_text: "reasonone\n\nreasontwo",
+        tool_result_text: "unmatched",
+        has_thinking: true,
+        has_tool_use: true,
+        content_layout: {
+          version: 1,
+          blocks: [
+            { kind: "text", start: 0, end: 18, call_index: 0 },
+            { kind: "thinking", start: 0, end: 9, call_index: 0 },
+            { kind: "tool_call", start: 0, end: 0, call_index: 0 },
+            { kind: "tool_result", start: 0, end: 9, call_index: 0 },
+            { kind: "thinking", start: 11, end: 20, call_index: 0 },
+            { kind: "text", start: 20, end: 24, call_index: 0 },
+          ],
+        },
+        tool_calls: [
+          {
+            tool_name: "Bash",
+            category: "Bash",
+            input_json: '{"command":"echo nativecommand"}',
+            rendering: "[Bash]\n$ echo nativecommand",
+          },
+        ],
+      }),
+    );
+    for (const header of document.querySelectorAll<HTMLButtonElement>(".thinking-header"))
+      header.click();
+    await tick();
+    const owners = Array.from(document.querySelector(".message-body")!.children);
+    expect(owners).toHaveLength(6);
+    ["界𐐀 [Thinking]", "reasonone", "nativecommand", "unmatched", "reasontwo", "tail"].forEach(
+      (needle, index) => {
+        expect(owners[index]!.textContent).toContain(needle);
+      },
+    );
+  });
+
+  it("renders retained standalone output using the tool visibility filter", async () => {
+    await render(
+      message({
+        role: "tool",
+        content: "",
+        thinking_text: "",
+        tool_result_text: "retained result",
+        content_layout: {
+          version: 1,
+          blocks: [{ kind: "tool_result", start: 0, end: 15, call_index: 0 }],
+        },
+      }),
+    );
+    expect(text(".message-body")).toBe("retained result");
+    expect(document.querySelector(".message-body > pre.output-content")).not.toBeNull();
+  });
+
+  it("renders asset images in native tool results as Markdown", async () => {
+    const result = "![image](asset://chatgpt-image.png)";
+    await render(
+      message({
+        content: "",
+        tool_result_text: result,
+        has_tool_use: true,
+        content_layout: {
+          version: 1,
+          blocks: [{ kind: "tool_result", start: 0, end: result.length, call_index: 0 }],
+        },
+      }),
+    );
+
+    const output = document.querySelector(".message-body .output-content");
+    expect(output?.querySelector("img")?.alt).toBe("image");
+    expect(output?.textContent).not.toContain("![image]");
+    expect(document.querySelector(".message-body > pre.output-content")).toBeNull();
+  });
+
+  it("keeps native tool-result source visible while searching", async () => {
+    state.searching = true;
+    const result = "Before\n\n![SearchTarget](asset://image-SearchTarget.png)\n\nAfter";
+    await render(
+      message({
+        content: "",
+        tool_result_text: result,
+        has_tool_use: true,
+        content_layout: {
+          version: 1,
+          blocks: [{ kind: "tool_result", start: 0, end: result.length, call_index: 0 }],
+        },
+      }),
+      { searchOrdinal: 0 },
+    );
+
+    const output = document.querySelector(".message-body .output-content");
+    expect(output?.tagName).toBe("PRE");
+    expect(output?.textContent).toBe(result);
+    expect(output?.querySelector("img")).toBeNull();
+    expect(document.querySelector(".search-output-hint")).not.toBeNull();
+  });
+
   it("omits duration for legacy calls without stored timing", async () => {
     await render(message({ content: "[Bash]\npwd", has_tool_use: true }));
     expect(document.querySelector(".tool-duration")).toBeNull();
@@ -220,6 +323,7 @@ describe("MessageContent", () => {
           has_tool_use: true,
           tool_calls: [
             {
+              rendering: "",
               tool_use_id: "call-1",
               tool_name: "Bash",
               category: "Bash",

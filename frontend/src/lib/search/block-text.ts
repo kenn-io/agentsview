@@ -1,7 +1,7 @@
 /** Collect the searchable text blocks rendered by one transcript message. */
 import type { DbMessage as Message, DbToolCall as ToolCall } from "../api/generated/index.js";
 import { LRUCache } from "../utils/cache.js";
-import { enrichSegments, parseContent } from "../utils/content-parser.js";
+import { messageContentIdentity, messageSegments } from "../utils/content-parser.js";
 import { renderMarkdown, type MarkdownRenderOptions } from "../utils/markdown.js";
 import { isSystemMessage } from "../utils/messages.js";
 import { displayToolResult } from "../utils/toolDisplay.js";
@@ -28,8 +28,8 @@ export interface SearchBlock {
 }
 
 const messageBlocks = [
-  new WeakMap<Message, SearchBlock[]>(),
-  new WeakMap<Message, SearchBlock[]>(),
+  new WeakMap<Message, { identity: symbol; blocks: SearchBlock[] }>(),
+  new WeakMap<Message, { identity: symbol; blocks: SearchBlock[] }>(),
 ];
 const markdownText = [new LRUCache<string, string>(500), new LRUCache<string, string>(500)];
 
@@ -50,7 +50,7 @@ function renderedText(content: string, options: MarkdownRenderOptions): string {
 
 /**
  * Mirror MessageContent's segment-first, tool-call-second rendering order.
- * Message object identity is the version: SSE replacements invalidate this cache.
+ * Saved transcript fields are the version, including edits on the same object.
  * Inline subagent transcripts belong to another session and are not traversed.
  */
 export function collectSearchBlocks(
@@ -58,10 +58,10 @@ export function collectSearchBlocks(
   options: MarkdownRenderOptions = {},
 ): SearchBlock[] {
   const cache = messageBlocks[options.renderUnknownXmlBlocksAsPreformatted ? 1 : 0]!;
+  const identity = messageContentIdentity(message);
   const cached = cache.get(message);
-  if (cached) return cached;
+  if (cached?.identity === identity) return cached.blocks;
   const blocks: SearchBlock[] = [];
-  cache.set(message, blocks);
   if (
     isSystemMessage(message) ||
     message.is_compact_boundary ||
@@ -69,10 +69,7 @@ export function collectSearchBlocks(
   )
     return blocks;
 
-  const segments = enrichSegments(
-    parseContent(message.content, message.has_tool_use, message.id, message.content_length),
-    message.tool_calls,
-  );
+  const segments = messageSegments(message);
   const add = (kind: SearchBlockKind, index: number | string, text: string, label?: string) => {
     if (!text) return;
     blocks.push({
@@ -83,15 +80,6 @@ export function collectSearchBlocks(
       label,
     });
   };
-  segments.forEach((segment, index) => {
-    if (segment.type === "tool") return;
-    const text =
-      segment.type === "text" || segment.type === "skill"
-        ? renderedText(segment.content, options)
-        : segment.content;
-    add(segment.type, index, text, segment.label);
-  });
-
   const addTool = (
     call: ToolCall | undefined,
     content: string,
@@ -105,6 +93,25 @@ export function collectSearchBlocks(
       add("tool-history", `${index}.${eventIndex}`, displayToolResult(event.content), name);
     });
   };
+  segments.forEach((segment, index) => {
+    if (segment.type === "tool") {
+      if (message.content_layout != null) {
+        addTool(segment.toolCall, segment.content, segment.callIndex!, segment.label);
+      }
+    } else if (segment.type === "tool_result") {
+      add("tool-output", `seg${index}`, displayToolResult(segment.content));
+    } else {
+      const text =
+        segment.type === "text" || segment.type === "skill"
+          ? renderedText(segment.content, options)
+          : segment.content;
+      add(segment.type, index, text, segment.label);
+    }
+  });
+  if (message.content_layout != null) {
+    cache.set(message, { identity, blocks });
+    return blocks;
+  }
   if (message.tool_calls?.length) {
     message.tool_calls.forEach((call, index) => addTool(call, "", index));
   } else {
@@ -114,5 +121,6 @@ export function collectSearchBlocks(
         addTool(segment.toolCall, segment.content, `seg${index}`, segment.label);
       });
   }
+  cache.set(message, { identity, blocks });
   return blocks;
 }

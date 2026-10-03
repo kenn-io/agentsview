@@ -654,6 +654,7 @@ func parseKiloLegacyMessages(
 
 		content := strings.TrimSpace(msg.Text)
 		reasoning := strings.TrimSpace(msg.Reasoning)
+		hasThinking := msg.Say == "reasoning" || reasoning != ""
 		if msg.Say == "reasoning" && reasoning == "" && content != "" {
 			// Cline/RooCode puts reasoning into the text field
 			// when the structured `reasoning` field is empty.
@@ -880,7 +881,7 @@ func parseKiloLegacyMessages(
 			}
 		}
 
-		if content == "" && reasoning == "" &&
+		if content == "" && !hasThinking &&
 			len(toolCalls) == 0 &&
 			len(toolResults) == 0 &&
 			len(msg.Images) == 0 {
@@ -906,11 +907,11 @@ func parseKiloLegacyMessages(
 			}
 		}
 
-		if reasoning != "" {
+		if hasThinking {
 			messages = append(messages, ParsedMessage{
 				Ordinal:       ordinal,
 				Role:          RoleAssistant,
-				Content:       "[Thinking]\n" + reasoning + "\n[/Thinking]",
+				Content:       "",
 				ThinkingText:  reasoning,
 				HasThinking:   true,
 				Timestamp:     ts,
@@ -1033,6 +1034,9 @@ func parseKiloLegacyMessages(
 		}
 	}
 
+	for i := range messages {
+		messages[i] = composeNativeUIMessage(messages[i])
+	}
 	return messages, totalOutput, totalInput, peakContext,
 		totalCost, hasCost, totalRequests, requestsWithCost,
 		provider, minTS, maxTS,
@@ -1312,6 +1316,9 @@ func kiloLastMessageIsThinkingOnly(messages []ParsedMessage) bool {
 		}
 		if len(m.ToolCalls) > 0 {
 			return false
+		}
+		if m.ContentLayout != nil {
+			return strings.TrimSpace(m.Content) == ""
 		}
 		return IsThinkingOnlyContent(m.Content)
 	}

@@ -39,6 +39,30 @@ async function expectSessionLoaded(page: Page, sessionId: string, expectedRows?:
 test.describe("Mixed content rendering", () => {
   test.describe.configure({ timeout: COLD_WEBKIT_TEST_TIMEOUT_MS });
 
+  test("native layouts keep literal markers as text and reasoning in its own block", async ({
+    page,
+  }) => {
+    const sid = await selectSession(page);
+    await expectSessionLoaded(page, sid, MIXED_CONTENT_DISPLAY_ROWS);
+    const response = await page.request.get(`/api/v1/sessions/${sid}/messages?limit=20`);
+    expect(response.ok()).toBe(true);
+    const { messages } = await response.json();
+    const reasoning = messages.find((message: { ordinal: number }) => message.ordinal === 1);
+    expect(reasoning.content).toBe("Here is my analysis.");
+    expect(reasoning.thinking_text).toBe("Let me analyze...");
+    expect(reasoning.content_layout.blocks.map((block: { kind: string }) => block.kind)).toEqual([
+      "thinking",
+      "text",
+    ]);
+    const literal = page.locator(LOC.row).filter({ hasText: "This is a literal marker." });
+    await expect(literal.locator(".text-content")).toContainText("[Thinking]");
+    await expect(literal.locator(".text-content")).toContainText("This is a literal marker.");
+    const row = page.locator(LOC.row).filter({ hasText: "Here is my analysis." });
+    await row.locator(".thinking-header").click();
+    await expect(row.locator(".thinking-content")).toHaveText("Let me analyze...");
+    await expect(row.locator(".text-content")).toHaveText("Here is my analysis.");
+  });
+
   test("tool group renders for consecutive tool-only messages", async ({ page }) => {
     const sid = await selectSession(page);
     await expectSessionLoaded(page, sid, MIXED_CONTENT_DISPLAY_ROWS);

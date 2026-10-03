@@ -145,7 +145,7 @@ func TestDeepSeekTUIProviderParsesToolUseAndThinking(t *testing.T) {
 
 	assert.True(t, msgs[1].HasThinking)
 	assert.Equal(t, "Need to inspect the target.", msgs[1].ThinkingText)
-	assert.Contains(t, msgs[1].Content, "[Thinking]")
+	assert.Empty(t, msgs[1].Content)
 	assert.True(t, msgs[1].HasToolUse)
 	require.Len(t, msgs[1].ToolCalls, 1)
 	assert.Equal(t, "toolu_1", msgs[1].ToolCalls[0].ToolUseID)

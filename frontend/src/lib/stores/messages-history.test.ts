@@ -27,6 +27,8 @@ const stores: MessagesStore[] = [];
 let id = 970000;
 function message(ordinal: number): Message {
   return {
+    content_layout: null,
+    tool_result_text: "",
     has_context_tokens: false,
     has_output_tokens: false,
     id: id++,

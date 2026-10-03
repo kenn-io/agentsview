@@ -99,6 +99,17 @@ discovered exact URLs, releases, and queries in the provider entry. If a
 repository or document disappears, retain its original URL and commit hash and
 add an archived or maintained mirror without replacing the original identity.
 
+## Native body sanitation evidence
+
+The shared composer and provider-specific historical count overrides were
+rechecked against their colocated reader tests on 2026-10-03. Work counts retain
+each reader's existing markers, separators, dialogue-only rules, and zero-work
+result conventions. Removed control and invalid UTF-8 bytes are excluded before
+archive writes. This is Agentsview reader evidence; it introduces no producer
+format or token/cost accounting claim. The controlled regression cases are in
+`internal/parser/message_content_test.go` and
+`internal/parser/native_trace_body_test.go`.
+
 ## Claude Code (`claude`)
 
 - **Performance fixture check (2026-09-04):** Rechecked the pinned Codeburn
@@ -337,6 +348,18 @@ add an archived or maintained mirror without replacing the original identity.
   recognizes the anchored layout and attributes it to `REPO`. Evidence remains
   `no-public-source`.
 
+- **Message bodies (2026-10-03):** Reverified 2026-10-03 against the observed
+  JSONL fixtures in `claude_parser_test.go` and native-body fixtures in
+  `shared_message_content_test.go`. The shared extractor separates native text,
+  thinking, redacted thinking, calls, and results. Full and incremental parses
+  retain redacted-only and usage-only assistant records. The incremental sync
+  fixtures in `engine_integration_test.go` also show late `tool_result` blocks
+  attaching to an archived call by `tool_use_id`. Consume only matched blocks;
+  preserve accompanying dialogue and unmatched output, including empty results.
+  A synthetic assistant/result boundary fixture verifies that accepted output
+  outside the normal user-result linkage remains stored until full pairing.
+  This is observed-format evidence, not an authoritative producer schema.
+
 ## OpenClaude (`openclaude`)
 
 - **Format:** OpenClaude JSONL with Claude-compatible message content and usage
@@ -369,6 +392,12 @@ add an archived or maintained mirror without replacing the original identity.
   streaming discovery follows them only to match the legacy `Discover` walk
   (`isDirOrSymlink`), not because the producer emits them.
 
+- **Message bodies (2026-10-02):** Reverified 2026-10-02 against the pinned
+  assistant/user message types above, which use Anthropic content-block types,
+  and native JSONL fixtures. Native dialogue, thinking, and tool blocks have
+  separate canonical fields and ordered layout; empty assistant usage records
+  remain available.
+
 ## Cowork (`cowork`)
 
 - **Format:** A workspace metadata JSON file plus nested Claude-compatible
@@ -385,7 +414,29 @@ add an archived or maintained mirror without replacing the original identity.
 - **Agentsview:** `internal/parser/cowork.go`,
   `internal/parser/cowork_paths.go`, and `internal/parser/cowork_provider.go`.
 
+- **Message bodies (2026-10-02):** Reverified the Claude-compatible delegation
+  in `cowork.go` and its controlled JSONL fixtures. Its Claude-compatible
+  transcript path inherits separate dialogue, thinking, calls, and results with
+  ordered layout from the shared Claude decoder. Identity retagging and product
+  metadata remain in the owning wrapper. This is compatible-format
+  implementation evidence, not a newly published producer schema.
+
 ## Codex (`codex`)
+
+- **Native bodies (2026-10-02):** Reverified the pinned
+  [response-item models](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/protocol/src/models.rs).
+  Message, agent-message, reasoning, function-call, custom-call, and output
+  records have native type boundaries and optional response-item IDs.
+  Agentsview composes their bodies before emitting them to collecting or
+  staged sinks. Plaintext reasoning summaries and content remain separate
+  from dialogue; encrypted-only reasoning retains presence without copying
+  ciphertext. Calls retain their existing rendering and work length on the
+  structured call. Unmatched outputs and orphaned subagent notifications
+  retain a standalone output body. Known late outputs keep their checkpoint
+  coordinates; unknown output call IDs still request a full parse. Native
+  response-item IDs survive extraction, including reserved notification
+  positions. Small extracted reasoning fields and IDs own their bytes so
+  they do not retain a discarded encrypted payload's buffer.
 
 - **Tool-result image check (2026-09-08):** Reverified the pinned
   [output payload types and array tests](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/protocol/src/models.rs).
@@ -631,6 +682,9 @@ add an archived or maintained mirror without replacing the original identity.
   against the parser and archive classification paths: orphan notifications
   retain their result text in full archives but do not count as user prompts
   or supply the first-user text used for automation classification.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## TraeX (`traex`)
 
@@ -665,6 +719,9 @@ add an archived or maintained mirror without replacing the original identity.
   `internal/parser/traex.go`: the shared Codex parser produces the same
   unmarked legacy notification rows. Transcript-only archive copies apply the
   same pre-version-100 user-row removal as Codex.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## Augure Code (`augure-code`)
 
@@ -702,6 +759,9 @@ add an archived or maintained mirror without replacing the original identity.
 - **Archive projection (2026-09-13):** Augure Code sessions share the Codex
   unmarked-notification shape, so the archive curation user-row removal that
   covers Codex and TraeX also covers `augure-code`.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## Augure Desktop v3 (`augure-desktop`)
 
@@ -741,6 +801,9 @@ add an archived or maintained mirror without replacing the original identity.
   from Hermes without a runtime gate; explicitly configured roots are
   accepted as given (TraeX precedent). Remote sync is excluded for the same
   raw-state.db/WAL reasons the registry entry documents.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## GitHub Copilot CLI (`copilot`)
 
@@ -782,6 +845,18 @@ add an archived or maintained mirror without replacing the original identity.
   Reverified 2026-09-04 against current local transcripts: an
   `assistant.message` can carry `data.model` and `data.outputTokens` when no
   usable `session.shutdown` metrics are present.
+
+- **Native message bodies (reverified 2026-10-02):** The published 1.0.60
+  package below defines event `id` and `parentId`, readable `reasoningText`,
+  and opaque `reasoningOpaque` and `encryptedContent` fields. Agentsview keeps
+  dialogue, readable thinking, calls, and completed output in separate bodies
+  with explicit layouts and native event identities. Opaque-only reasoning
+  retains presence without storing encrypted bytes. The package emits an
+  ephemeral `assistant.reasoning` event after the assistant message, with
+  complete text in `data.content`; that text is not duplicated when the
+  message already owns it. Completed output without a call ID is retained as
+  standalone output. Execution events keep their existing call attachment,
+  and historical work lengths and shutdown usage remain unchanged.
 
 - **Store evidence:** Reverified 2026-09-10 against the published Copilot CLI
   1.0.83
@@ -841,8 +916,17 @@ add an archived or maintained mirror without replacing the original identity.
   rebuilds store hashes; runtime refresh follows appends and latest-row
   removal. Historical edits below an unchanged maximum ID wait for a new
   engine or CLI sync.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## Gemini CLI (`gemini`)
+
+**Body separation check (2026-10-02):** Rechecked the pinned chat recording
+service. Recorded `thoughts` precede `content`; `toolCalls` retain arguments
+and function-response outputs. Native thoughts, dialogue, calls, and outputs
+now have separate canonical fields and an ordered layout. Tool-only, empty
+thought, and token-only assistant records remain representable.
 
 - **Format:** Project chat recordings written as JSONL, with older JSON
   recordings also accepted.
@@ -859,8 +943,17 @@ add an archived or maintained mirror without replacing the original identity.
 - **Agentsview:** `internal/parser/gemini.go` and
   `internal/parser/gemini_provider.go`; both JSON and JSONL generations remain
   supported.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## Gemini Apps (`gemini-apps`)
+
+**Body separation check (2026-10-02):** Controlled Takeout fixtures retain
+the existing one-record user projection of visible activity text with an
+explicit layout. No assistant role, native reasoning, or tool boundary is
+inferred from the HTML. Google does not publish the persisted activity schema;
+the evidence remains observed compatibility rather than producer source.
 
 - **Format:** Google Takeout `My Activity` HTML containing Gemini Apps activity
   cells. Each compatible `Prompted` record is imported as one one-turn session
@@ -958,11 +1051,25 @@ add an archived or maintained mirror without replacing the original identity.
   the pinned session guide (`17-sessions.md`) and the `SubagentMeta` writer in
   `xai-grok-shell` at the commit above.
 
+- **Body normalization:** Native reasoning fields and backend tool summaries
+  remain separate from dialogue, with layouts for plain and summary-only
+  records. Empty reasoning presence and identifierless tool output are
+  retained. Timestamp matching compares normalized dialogue directly, so
+  literal marker text remains intact. Existing pending-reasoning boundaries,
+  tool-result event ownership, work counts, and usage processing remain.
+  This body change does not replace the separately owned format-alignment
+  work or claim new producer-format evidence.
+
 - **Agentsview:** `internal/parser/grok.go`, `internal/parser/grok_provider.go`,
   colocated tests, and the sanitized upstream-generated fixtures in
   `internal/parser/testdata/grok-build`.
 
 ## MiMo Code (`mimocode`)
+
+**Body separation check (2026-10-02):** Rechecked the pinned
+[message-v2 schema](https://github.com/XiaomiMiMo/MiMo-Code/blob/f24ce4eb7341bfba6bb608436c1d27a843508adf/packages/opencode/src/session/message-v2.ts).
+Its `text`, `reasoning`, and `tool` part discriminants match the shared
+OpenCode composer. MiMo identity and relabeling remain provider-owned.
 
 - **Format:** OpenCode-compatible SQLite or legacy `storage/session`,
   `storage/message`, and `storage/part` JSON stores.
@@ -983,6 +1090,13 @@ add an archived or maintained mirror without replacing the original identity.
   whenever their shared parser changes.
 
 ## Open Code Review (`opencodereview`)
+
+**Native bodies reverified (2026-10-02):** The pinned session writer stores
+response dialogue, optional readable reasoning, calls, and usage separately.
+Reasoning is omitted when empty. Results contain a tool name rather than a call
+ID, so the reader retains its existing stream/name FIFO ownership. Unmatched
+results remain system-classified output records with canonical output text;
+request history and other system diagnostics have explicit layouts.
 
 - **Format:** One JSONL session file per review under an encoded project
   directory below `.opencodereview/sessions`. Records include review metadata,
@@ -1030,8 +1144,18 @@ add an archived or maintained mirror without replacing the original identity.
   does not consume a producer-reported monetary total.
 - **Agentsview:** `internal/parser/opencodereview.go` and
   `internal/parser/opencodereview_provider.go`.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## OpenCode (`opencode`)
+
+**Body separation check (2026-10-02):** Rechecked the pinned v2 message
+schema and beta v1 migration, alongside the captured v2 fixtures. Native
+`reasoning`, `text`, and `tool` parts keep their order while reasoning stays
+out of dialogue. Shell commands belong to the structured call; system, skill,
+compaction, and usage-only projections retain explicit layouts. V1 JSON and
+SQLite stores use the same native part composer.
 
 **Projection detail check (2026-09-12):** Rechecked the pinned
 [beta read tool](https://github.com/anomalyco/opencode/blob/d461154a8d2b24c4ad24a89b589069cf08ab168c/packages/core/src/tool/plugin/read.ts#L169),
@@ -1400,12 +1524,14 @@ schemas keep their existing ordering behavior.
   `task_metadata.json` (files-in-context only), the Claude-shaped
   `api_conversation_history.json`, and the Cline-shaped `ui_messages.json`.
 - **Evidence:** `source`.
-- **Upstream:** Clone `https://github.com/Kilo-Org/kilocode.git` at
-  `938919ab72e3977d1512e0363417270e3337c7b1`. The pinned
-  [task persistence](https://github.com/Kilo-Org/kilocode/blob/938919ab72e3977d1512e0363417270e3337c7b1/src/core/task-persistence/TaskHistoryStore.ts)
+- **Upstream:** Clone `https://github.com/Kilo-Org/kilocode-legacy.git` at
+  `84559098097d05216119fc26a09dd46535939044`. Reverified 2026-10-02: the
+  [UI message reader and writer](https://github.com/Kilo-Org/kilocode-legacy/blob/84559098097d05216119fc26a09dd46535939044/src/core/task-persistence/taskMessages.ts)
   and
-  [UI message reader](https://github.com/Kilo-Org/kilocode/blob/938919ab72e3977d1512e0363417270e3337c7b1/src/core/task-persistence/taskMessages.ts)
-  own the Cline-shaped transcript. The extension was superseded by the
+  [message schema](https://github.com/Kilo-Org/kilocode-legacy/blob/84559098097d05216119fc26a09dd46535939044/packages/types/src/message.ts)
+  own the Cline-shaped transcript. The previous links into the rebuilt
+  `kilocode` repository did not contain these legacy files. The extension was
+  superseded by the
   OpenCode-based rebuild (public beta 2026-03-10, GA 2026-04-02); new sessions
   stopped appearing around 2026-03-21.
 - **Usage and cost:** `ui_messages.json` carries per-request `api_req_started`
@@ -1421,6 +1547,14 @@ schemas keep their existing ordering behavior.
   `TestKiloLegacySessionNameUTF8`: Agentsview derives the display title from
   the first user message and clips it on a UTF-8 boundary within the existing
   80-byte budget, including `...`. This does not change the recorded format.
+- **Native message bodies (reverified 2026-10-02):** The pinned schema defines
+  `say` values for reasoning and tool responses, plus a separate optional
+  `reasoning` field. Fresh messages have explicit layouts. Thinking and
+  standalone output stay outside dialogue; paired execution events keep
+  their current owner and status. Empty native reasoning retains presence.
+  Native thinking-only termination reads the separate body fields. Legacy
+  rows can still use their existing marker representation. Historical work
+  lengths, partial-record skips, and usage are preserved.
 
 ## Roo Code (`roocode`)
 
@@ -1442,6 +1576,14 @@ schemas keep their existing ordering behavior.
 - **Agentsview:** `internal/parser/roocode.go` and
   `internal/parser/roocode_provider.go`; observed older Roo/Cline message
   variants remain covered by the parser's colocated fixtures.
+- **Native message bodies (reverified 2026-10-02):** The pinned writer persists
+  records described by its
+  [message schema](https://github.com/RooCodeInc/Roo-Code/blob/b867ec9145750d0ae1ff7f02d35406e9bf2a0b16/packages/types/src/message.ts).
+  The native `say` values and optional `reasoning` field distinguish thinking
+  and tool responses from prose. Agentsview gives fresh text, thinking, call,
+  output, and compaction rows explicit layouts, preserving current execution
+  event attachment and historical work lengths. Empty reasoning retains
+  presence; native thinking-only termination does not interpret prose markers.
 
 ## Cline CLI (`cline`)
 
@@ -1457,6 +1599,14 @@ schemas keep their existing ordering behavior.
   [conversation store](https://github.com/cline/cline/blob/595f1dbf2ea819e987afeadb4ed4dd9a0ae9a55e/sdk/packages/core/src/session/stores/conversation-store.ts)
   persist metadata to `<sessionId>/<sessionId>.json` and structured messages
   to `<sessionId>/<sessionId>.messages.json`.
+- **Reverified:** 2026-10-02. The pinned
+  [message schema](https://github.com/cline/cline/blob/595f1dbf2ea819e987afeadb4ed4dd9a0ae9a55e/sdk/packages/shared/src/llms/messages.ts)
+  defines ordered text, thinking, redacted thinking, call, and result blocks.
+  Redacted thinking carries encrypted `data`; it establishes reasoning presence
+  without visible text. Agentsview composes each native record in array order,
+  retains its source ID and usage, and keeps the combined work length of the
+  former synthetic thinking and call rows. Visible output uses the existing
+  Cline result decoder, while raw result metadata remains available for pairing.
 - **Usage and cost:** `<id>.json` persists cumulative `inputTokens`,
   `outputTokens`, `cacheReadTokens`, and `cacheWriteTokens` along with
   `totalCost` in the `metadata.usage` / `metadata.aggregateUsage` object.
@@ -1479,6 +1629,9 @@ schemas keep their existing ordering behavior.
   session store. A `team_run_task` call is linked to its teammate session only
   when that subagent has a single transcript. Deleted teammate transcripts are
   tombstoned through complete-source ownership reconciliation.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## OpenHands (`openhands`)
 
@@ -1516,6 +1669,29 @@ schemas keep their existing ordering behavior.
   Transcript-only archive copies discard the tail from a summary-bearing
   header, retaining the preceding prose and tool label. Appended thinking is
   also discarded because the summary boundaries cannot be recovered.
+
+- **Message bodies (2026-10-03):** Reverified 2026-10-03 against the pinned [LLM
+  message
+  model](https://github.com/OpenHands/software-agent-sdk/blob/4fe565663af2b4f1130a6e0dac7566b002bfe9b4/openhands-sdk/openhands/sdk/llm/message.py)
+  and [message
+  event](https://github.com/OpenHands/software-agent-sdk/blob/4fe565663af2b4f1130a6e0dac7566b002bfe9b4/openhands-sdk/openhands/sdk/event/llm_convertible/message.py).
+  Thinking belongs to `llm_message.thinking_blocks` or `reasoning_content`;
+  older top-level event fields remain compatible. Action calls and observation
+  results have separate canonical owners, including observations without a call
+  ID.
+  The pinned [observation
+  event](https://github.com/OpenHands/software-agent-sdk/blob/4fe565663af2b4f1130a6e0dac7566b002bfe9b4/openhands-sdk/openhands/sdk/event/llm_convertible/observation.py)
+  identifies its content as tool output. Terminal `observation.content` remains
+  output when its call ID is unavailable; `metadata.working_dir` still provides
+  project evidence.
+
+- **Responses reasoning:** The same pinned LLM model separates plaintext
+  `responses_reasoning_item.summary` and `.content` from `.encrypted_content`.
+  Agentsview retains only the plaintext in `ThinkingText`; an encrypted-only
+  item retains reasoning presence without publishing its opaque payload.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## Cursor (`cursor`)
 
@@ -1591,6 +1767,17 @@ schemas keep their existing ordering behavior.
   [agent-sessions](https://github.com/jazzyalex/agent-sessions/blob/7a3f1f402ed9a2cf6c47aa04c1ed87a0c35fa391/AgentSessions/Services/CursorSessionParser.swift)
   and
   [cc_transcript_viewer](https://github.com/tim-hua-01/cc_transcript_viewer/blob/4157ac3575c4c0e9d742048f494be7ee10c589fc/cursor_parser.py).
+- **Body normalization (rechecked 2026-10-02):** The existing legacy text
+  grammar now retains thinking and unmatched result bodies in separate
+  fields, with native marker order, empty-thinking presence, and explicit
+  layouts. Paired results remain on their existing preceding call; no-ID
+  calls do not acquire invented source identities. The historical work
+  length still counts dialogue only. Store reasoning replaces earlier
+  thinking spans and uses the deterministic reasoning-before-body display
+  convention without changing transcript message order or counts. The
+  first-party JSONL discussion above was rechecked and still does not verify
+  the legacy indentation grammar. These synthetic regressions prove decoder
+  behavior, not a producer version or a newly published schema.
 - **Usage and cost:** The consumed text/JSONL transcripts have no reliable
   per-message token, cache, reasoning, credit, or monetary-cost fields. The
   captured store adds no priced usage fields consumed by agentsview.
@@ -1635,6 +1822,15 @@ schemas keep their existing ordering behavior.
   archive reconciliation fixture. The official support post linked above still
   documents the `agent-transcripts` location; the history documentation link
   now redirects to the Agent overview.
+
+- **Message bodies (2026-10-02):** Reverified 2026-10-02 against native JSONL
+  fixtures: assistant content arrays can contain distinct text, thinking, and
+  tool-use blocks. The JSONL decoder now retains structured reasoning and
+  ordered layout. This evidence applies to the observed CLI transcript shape,
+  not the IDE database schema.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## Cursor IDE (`cursor-ide`)
 
@@ -1711,6 +1907,12 @@ schemas keep their existing ordering behavior.
   Cursor IDE is retired through stored-source-hint tombstones on `state.vscdb`
   change events and through complete-container ownership reconciliation.
 
+- **Message bodies (2026-10-02):** Rechecked the observed bubble schema and
+  the redacted object-result fixture. Fresh bubbles have explicit layouts:
+  bubble text is dialogue, followed by the inline call and its result when
+  present. Identifierless results remain standalone output. Bubble IDs remain
+  source identities. This does not establish an upstream persistence contract.
+
 ## Amp (`amp`)
 
 - **Format:** One JSON thread document per session.
@@ -1754,6 +1956,12 @@ schemas keep their existing ordering behavior.
 - **Agentsview:** `internal/parser/amp.go` and
   `internal/parser/amp_provider.go`.
 
+- **Message bodies (2026-10-02):** Reverified 2026-10-02 against the existing
+  exported-thread fixtures and native-body tests. Text, thinking, tool uses, and
+  `toolUseID` results are decoded separately, including completed, failed, and
+  cancelled result variants. This remains observed-format evidence; no new
+  producer schema is asserted.
+
 ## VS Code Copilot (`vscode-copilot`)
 
 - **Format:** VS Code `chatSessions/<uuid>.json` snapshots and JSONL operation
@@ -1764,6 +1972,16 @@ schemas keep their existing ordering behavior.
   [chatModel.ts](https://github.com/microsoft/vscode/blob/693614c9f239b49f6d13d55da7f1a851d5b82c36/src/vs/workbench/contrib/chat/common/model/chatModel.ts)
   and
   [chatSessionStore.ts](https://github.com/microsoft/vscode/blob/693614c9f239b49f6d13d55da7f1a851d5b82c36/src/vs/workbench/contrib/chat/common/model/chatSessionStore.ts).
+- **Native bodies reverified:** 2026-10-02 against the pinned `chatModel.ts`
+  and
+  [chatService.ts](https://github.com/microsoft/vscode/blob/693614c9f239b49f6d13d55da7f1a851d5b82c36/src/vs/workbench/contrib/chat/common/chatService/chatService.ts).
+  `IChatThinkingPart` uses `kind=thinking` with an optional string or string
+  array value. Array chunks concatenate; empty parts establish reasoning
+  presence. Ordered response parts now compose separate dialogue, reasoning,
+  and calls. Markdown fragments retain their no-separator join. Native
+  `requestId` and `responseId` are retained from the serialized model.
+  Historical work length and per-turn usage stay unchanged; outputs or extra
+  response kinds outside the existing reader remain outside this claim.
 - **Usage and cost:** Request metadata can persist prompt and output tokens plus
   the resolved model, but has no cache split or provider-reported USD cost in
   the consumed shape. Copilot credits are not treated as currency.
@@ -1779,6 +1997,9 @@ schemas keep their existing ordering behavior.
   `result.metadata.toolCallRounds`. Each assistant message records the model
   that served its turn (`result.metadata.resolvedModel`, falling back to the
   request's prefixed `modelId`).
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## Windsurf (`windsurf`)
 
@@ -1804,6 +2025,12 @@ schemas keep their existing ordering behavior.
   evidence.
 
 ## Trae (`trae`)
+
+**Body separation check (2026-10-02):** The consumed ordinary content and
+assistant text/proposal fallback fields receive explicit dialogue layouts.
+Controlled state-database fixtures verify those fields; neither the pinned
+product-notice repository nor product documentation provides a session
+serializer. No new tool, reasoning, or usage capability is inferred.
 
 - **Format:** VS Code-compatible workspace and global `state.vscdb` files with a
   JSON session list stored under the `memento/icube-ai-agent-storage`
@@ -1835,7 +2062,7 @@ schemas keep their existing ordering behavior.
   [Copilot usage metrics documentation](https://docs.github.com/en/copilot/reference/copilot-usage-metrics)
   and the OpenTelemetry
   [generative-AI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/)
-  were checked 2026-07-19. They are supplemental usage-semantics references;
+  were checked 2026-10-02. They are supplemental usage-semantics references;
   Visual Studio's emitting implementation, persisted exporter format, and
   on-disk configuration are not public.
 - **Usage and cost:** Spans persist `gen_ai.usage.input_tokens` and
@@ -1844,7 +2071,16 @@ schemas keep their existing ordering behavior.
   USD; Agentsview does not synthesize a currency value from them.
 - **Agentsview:** `internal/parser/visualstudio_copilot.go`,
   `internal/parser/visualstudio_copilot_provider.go`, and
-  `docs/internal/visual-studio-copilot-traces.md`.
+  `docs/internal/visual-studio-copilot-traces.md`. Observed output `parts`
+  arrays retain native text/call order. Executed calls remain owned by their
+  tool spans, with result events unchanged. Generated fallback summaries are
+  system diagnostics; usage-only chat rows contain no dialogue. Historical
+  display-based work conventions and richest-span selection remain unchanged.
+  Reverified 2026-10-03 with controlled duplicate-span fixtures: one native
+  extraction supplies dialogue, ordered calls, historical ranking, and work
+  counts. Removed control bytes are excluded before archive writes.
+  These boundaries are reader and controlled-fixture evidence, not a newly
+  public Visual Studio exporter schema.
 
 ## Pi (`pi`)
 
@@ -1900,6 +2136,16 @@ schemas keep their existing ordering behavior.
   filename and directory lookups miss. Data version 109 reparses stored native
   Pi sessions to repair lineage edges and fork classification.
 
+- **Message bodies:** Reverified 2026-10-02 against the pinned session format.
+  Native assistant text, thinking, and tool-call blocks are distinct types;
+  tool-result messages carry their own text/image body. Agentsview stores
+  dialogue in `Content`, reasoning in `ThinkingText`, and standalone output
+  in `ToolResultText`, with ordered UTF-8 byte spans in `ContentLayout`.
+  Literal marker-looking text stays dialogue. Structured tool metadata,
+  source identities, usage, and rendered work lengths remain available.
+  Rechecked the same native tool-result models on 2026-10-03: `toolName`
+  supplies a non-payload output category for unmatched-result blocking.
+
 ## Prime Agent (`prime-agent`)
 
 - **Format:** Pi-family, tree-structured JSONL with current saved sessions
@@ -1945,6 +2191,16 @@ schemas keep their existing ordering behavior.
   Support targets v0.7.0's current flat layout; that producer migrates older
   per-project sessions before normal session listing.
 
+- **Message bodies:** Reverified 2026-10-02 against the pinned session format.
+  Native assistant text, thinking, and tool-call blocks are distinct types;
+  tool-result messages carry their own text/image body. Agentsview stores
+  dialogue in `Content`, reasoning in `ThinkingText`, and standalone output
+  in `ToolResultText`, with ordered UTF-8 byte spans in `ContentLayout`.
+  Literal marker-looking text stays dialogue. Structured tool metadata,
+  source identities, usage, and rendered work lengths remain available.
+  Rechecked the same native tool-result models on 2026-10-03: `toolName`
+  supplies a non-payload output category for unmatched-result blocking.
+
 ## Oh My Pi (`omp`)
 
 - **Format:** Pi-family JSONL with Oh My Pi session entry and persistence
@@ -1975,6 +2231,16 @@ schemas keep their existing ordering behavior.
   accepts a relative resource path after the name. Agentsview attributes only
   the URI in the Pi-family read path and decodes the name before storing it.
 
+- **Message bodies:** Reverified 2026-10-02 against the pinned session entries and [AI message types](https://github.com/can1357/oh-my-pi/blob/39c95e5e29b1c8b082059f57421ce445c3dffdd4/packages/ai/src/types.ts).
+  Native assistant text, thinking, and tool-call blocks are distinct types;
+  tool-result messages carry their own text/image body. Agentsview stores
+  dialogue in `Content`, reasoning in `ThinkingText`, and standalone output
+  in `ToolResultText`, with ordered UTF-8 byte spans in `ContentLayout`.
+  Literal marker-looking text stays dialogue. Structured tool metadata,
+  source identities, usage, and rendered work lengths remain available.
+  Rechecked the same native tool-result models on 2026-10-03: `toolName`
+  supplies a non-payload output category for unmatched-result blocking.
+
 ## Qwen Code (`qwen`)
 
 - **Format:** Gemini-derived project chat-record JSONL.
@@ -1990,10 +2256,28 @@ schemas keep their existing ordering behavior.
   catalog-derived.
 - **Agentsview:** `internal/parser/qwen.go` and
   `internal/parser/qwen_provider.go`.
+- **Native bodies reverified:** 2026-10-02 against the pinned recording
+  service. The `ChatRecord` model stores Gemini-style `message.parts` and
+  native `uuid`/`parentUuid`; `recordToolResult` writes `type=tool_result`.
+  Both that kind and the older user-role result form keep output in the
+  existing coalesced assistant owner. The composer retains part order across
+  merged model calls and results, including empty thought presence. Plain
+  user and usage-only assistant records have explicit layouts. Per-call
+  token aggregation and the historical dialogue-only work length remain
+  unchanged. No synthetic message IDs are added.
+- **Native identity check (2026-10-02):** Reverified the pinned recording
+  service's `uuid`/`parentUuid`. A single or consistently identified coalesced
+  assistant owner retains its keys. Distinct or missing record identities
+  leave the owner unset rather than selecting an arbitrary UUID. Existing
+  turn grouping and usage aggregation remain unchanged.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## Command Code (`commandcode`)
 
-- **Format:** Session JSONL accompanied by a `.meta.json` sidecar.
+- **Format:** The consumed generation is role/content JSONL accompanied by
+  a `.meta.json` sidecar.
 - **Evidence:** `no-public-source`.
 - **Upstream:** Command Code's first-party product site, documentation surfaces,
   and public GitHub repositories were checked 2026-07-19. Clone the official
@@ -2001,8 +2285,22 @@ schemas keep their existing ordering behavior.
   `a774fe8cbe71697d115d4660de299c9c1b286cea`; it contains product and issue
   material only, not the CLI implementation. No authoritative persistence
   source or disk schema was public.
-- **Usage and cost:** The consumed records provide transcript and metadata but
-  no token, cache, reasoning, credit, or USD accounting to Agentsview.
+- **Reverified:** 2026-10-02. The pinned public repository still contains
+  product and issue material. The current first-party
+  [session documentation](https://commandcode.ai/docs/sessions) describes a
+  newer header/entry session tree with usage and cost. It does not establish
+  field compatibility with the observed role/content generation this parser
+  consumes; support for that newer generation is not claimed here.
+- **Usage and cost:** The consumed role/content records provide transcript and
+  metadata but no token, cache, reasoning, credit, or USD accounting to
+  Agentsview. Current product documentation describes richer accounting in
+  its newer session generation.
+- **Native body boundary:** Observed typed arrays retain text/thinking/call
+  order, empty reasoning presence, no-ID output, and native record IDs and
+  parents. JSON encoding keeps control-character results valid before body
+  sanitization. Work counts retain the existing dialogue-only convention.
+  Fixtures establish decoder behavior, not producer-version or ID-stability
+  evidence.
 - **Agentsview:** `internal/parser/commandcode.go` and
   `internal/parser/commandcode_provider.go`.
 
@@ -2024,7 +2322,12 @@ schemas keep their existing ordering behavior.
   emits no usage event from this metadata; that is a parser limitation.
 - **Agentsview:** `internal/parser/deepseek_tui.go` and
   `internal/parser/deepseek_tui_provider.go`; both `.codewhale` and legacy
-  `.deepseek` roots are intentional.
+  `.deepseek` roots are intentional. Reverified 2026-10-02 against the pinned
+  message enum: text, thinking, tool use, and tool result have native type
+  tags. Their ordered layout keeps reasoning and tool payloads outside
+  dialogue. Empty thinking retains presence, and a result with an empty call
+  ID remains standalone. Known object-shaped result text uses the existing
+  result decoder. Historical work lengths and session metadata are retained.
 
 ## DeepSeek Harness (`deepseek-harness`)
 
@@ -2115,7 +2418,11 @@ schemas keep their existing ordering behavior.
   escaping is decoded only when lookup starts from a full session ID.
   Per-response usage events are the sole analytics rows, while messages retain
   explicit context/output token fields without duplicating the raw Harness
-  usage blob into `token_usage`. Plain and zstd artifacts in one session
+  usage blob into `token_usage`. Reverified 2026-10-02 against the pinned
+  message/content types: native arrays retain text, reasoning, call and output
+  order, including empty reasoning. Validated message IDs remain source
+  identities. Final and reconstructed chunk messages share this composer;
+  existing dialogue-only work counts and usage-event accounting are retained. Plain and zstd artifacts in one session
   directory are treated as one logical source and rejected while both exist; a
   change maps directly to the surviving sibling once that conflict is removed.
   The version-0 inventory accepts all released event names, including
@@ -2134,6 +2441,9 @@ schemas keep their existing ordering behavior.
   not imported as transcript rows. Generation-3 seeded sessions use the last
   `session/end-seed {inherited:true}` marker as the inherited cut, and
   replacement coordinates use `startSeq`/`endSeq`.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## OpenClaw (`openclaw`)
 
@@ -2149,6 +2459,22 @@ schemas keep their existing ordering behavior.
   ignores the reported cost and catalog-prices normalized token fields to keep
   pricing attribution consistent.
 - **Agentsview:** `internal/parser/openclaw.go`.
+
+- **Message bodies (2026-10-02):** Reverified 2026-10-02 against the pinned
+  [transcript repair
+  implementation](https://github.com/openclaw/openclaw/blob/40d31f34813c2a01284b097c0d0d785fbb173400/src/agents/session-transcript-repair.ts).
+  It distinguishes native `toolCall` blocks from `toolResult` messages, whose
+  text body and call identity are separate fields. The parser retains canonical
+  dialogue, thinking, calls, and standalone output with ordered layout,
+  including results without a call ID.
+- **Native identity check (2026-10-02):** The compatible tree envelope's
+  `id`/`parentId` fields were rechecked against the pinned Pi session format
+  and reader fixtures. Each emitted message retains its outer keys, including
+  standalone results without a call ID. Metadata entries do not supply a
+  message identity. This does not assert an embedded Pi version.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## QClaw (`qclaw`)
 
@@ -2167,6 +2493,19 @@ schemas keep their existing ordering behavior.
   ignores the reported monetary field and catalog-prices tokens.
 - **Agentsview:** `internal/parser/qclaw.go` delegates message decoding to
   `internal/parser/openclaw.go`.
+
+- **Message bodies (2026-10-02):** Reverified 2026-10-02 against
+  OpenClaw-compatible native fixtures. Text, thinking, and calls are separate
+  native blocks; standalone tool-result messages retain output even without a
+  call ID. Compatibility does not establish the exact embedded producer
+  revision.
+- **Native identity check (2026-10-02):** Compatible reader fixtures retain
+  each outer `id`/`parentId`, including standalone results. This checks the
+  consumed envelope, not a published QClaw serializer or exact embedded
+  OpenClaw/Pi revision.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## Kimi CLI (`kimi`)
 
@@ -2193,6 +2532,15 @@ schemas keep their existing ordering behavior.
   and is therefore a lower bound. Agentsview catalog-prices usage with a
   model.
 
+- **Reverified:** 2026-10-02. The pinned
+  [content model](https://github.com/MoonshotAI/kimi-cli/blob/4a550effdfcb29a25a5d325bf935296cc50cd417/packages/kosong/src/kosong/message.py)
+  defines `ThinkPart` with visible `think` text and optional encrypted data or
+  signature. The
+  [wire types](https://github.com/MoonshotAI/kimi-cli/blob/4a550effdfcb29a25a5d325bf935296cc50cd417/src/kimi_cli/wire/types.py)
+  establish content, call, result, and turn boundaries. Agentsview composes both
+  accepted wire formats in event order, retains empty reasoning presence, and
+  keeps the existing work length and trailing usage attachment convention.
+
 - **Agentsview:** `internal/parser/kimi.go` and
   `internal/parser/kimi_provider.go`.
 
@@ -2201,6 +2549,9 @@ schemas keep their existing ordering behavior.
   transcript-only rows now use that formatter with path-only inputs to remove
   arguments while retaining tool labels and file paths. The shared decoder
   gives Kimi Work the same rendering and copy behavior.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## Kimi Work (`kimi-work`)
 
@@ -2234,10 +2585,18 @@ schemas keep their existing ordering behavior.
   Agentsview keeps the assistant tool-call message as the pending usage target
   across the user-role tool result, attaches the trailing `step.end` usage,
   and treats `usage.record` only as a fallback so the step is counted once.
+- **Shared decoder reverified:** 2026-10-02. The first-party overview still
+  identifies Kimi Code as the desktop kernel without publishing the persistence
+  schema. The wrapper delegates both accepted wire formats to the Kimi CLI
+  composer, so it receives the same separated body fields and ordered layout.
+  Observed desktop event fixtures continue to establish its usage ordering.
 - **Agentsview:** `internal/parser/kimi_work_provider.go` constrains discovery
   to user conversations, delegates wire decoding to `internal/parser/kimi.go`,
   and rewrites the provider identity and aggregate usage-event keys to
   `kimi-work`.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## Claude.ai Export (`claude-ai`)
 
@@ -2245,12 +2604,21 @@ schemas keep their existing ordering behavior.
 - **Evidence:** `documentation`.
 - **Upstream:** Anthropic's first-party
   [data export instructions](https://support.anthropic.com/en/articles/9450526-how-can-i-export-my-claude-ai-data)
-  were checked 2026-07-19. They establish the export artifact but do not
+  were checked 2026-10-02. They establish the export artifact but do not
   publish its complete JSON schema.
 - **Usage and cost:** The export contains conversation content and timestamps,
   not authoritative token, cache, reasoning, credit, or USD accounting.
 - **Agentsview:** `internal/parser/claude_ai.go`; this is an import format, not
-  a live application session store.
+  a live application session store. The observed export's `content` block
+  types distinguish text and thinking. The importer preserves their order,
+  puts thinking outside dialogue, and retains each message's `uuid`. The
+  legacy `text` fallback and extracted attachments remain dialogue. Empty
+  native thinking blocks retain their presence. Tool metadata blocks whose
+  payload schema is not established remain outside the displayed body; the
+  importer does not assume the API message schema applies to exports.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## ChatGPT Export (`chatgpt`)
 
@@ -2259,13 +2627,30 @@ schemas keep their existing ordering behavior.
 - **Evidence:** `documentation`.
 - **Upstream:** OpenAI's first-party
   [ChatGPT data export instructions](https://help.openai.com/en/articles/7260999-how-do-i-export-my-chatgpt-history-and-data)
-  were checked 2026-07-19. The help page does not publish a versioned JSON
+  were checked 2026-10-02. The help page does not publish a versioned JSON
   schema.
 - **Usage and cost:** Export messages may include `model_slug`, but the artifact
   does not provide authoritative token, cache, reasoning, credit, or cost
   data.
 - **Agentsview:** `internal/parser/chatgpt.go`; graph ancestry is flattened for
-  display and the importer does not claim billing completeness.
+  display and the importer does not claim billing completeness. The observed
+  export's `content_type` separates thoughts, tool code, execution output, and
+  generated multimodal output from dialogue. Native message `id` values are
+  retained. Code and output keep their existing assistant call owner; an
+  output without a matching call remains standalone. Generated output at its
+  existing assistant owner has a separate output body, including resolved
+  image references. Empty thoughts retain their native presence. These shapes
+  are covered by importer fixtures, not a published producer schema.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
+
+- **Multimodal tool-result images (2026-10-03):** Image pointers in
+  `multimodal_text` tool messages resolve to local asset references and remain
+  native tool-result content. The transcript renders these image links through
+  its asset-aware Markdown path; ordinary tool results remain preformatted.
+  This behavior is based on observed exports and parser fixtures, not a
+  published producer schema.
 
 ## Kiro CLI (`kiro`)
 
@@ -2288,7 +2673,7 @@ schemas keep their existing ordering behavior.
 
 - **Upstream:** Kiro's first-party [license page](https://kiro.dev/license/) and
   [conversation-persistence documentation](https://kiro.dev/docs/cli/chat/#conversation-persistence)
-  were checked 2026-07-19: current Kiro CLI is proprietary. The
+  were checked 2026-10-02: current Kiro CLI is proprietary. The
   documentation confirms automatic per-directory database persistence,
   resume-by-ID, and manual JSON save/load, but does not publish either
   database generation's schema. The open-source predecessor can be cloned from
@@ -2319,7 +2704,15 @@ schemas keep their existing ordering behavior.
   recorded environment metadata as the fallback when the key is empty. Bulk
   and single-session parsing honor the caller's filesystem-discovery policy;
   `TestKiroProviderSQLiteProjectDiscoveryPolicy` verifies project names and
-  filesystem probes with discovery enabled and disabled.
+  filesystem probes with discovery enabled and disabled. Observed legacy
+  `content` arrays now retain text/call order. SQLite `Response` and `ToolUse`
+  fields and current JSONL envelopes keep dialogue separate from call
+  renderings and standalone output, including results without IDs. Existing
+  display-based work counts remain unchanged. These are reader and fixture
+  observations, not a newly verified proprietary writer schema.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## Kiro IDE (`kiro-ide`)
 
@@ -2328,13 +2721,20 @@ schemas keep their existing ordering behavior.
 - **Upstream:** Kiro's first-party [license page](https://kiro.dev/license/),
   [documentation](https://kiro.dev/docs/), and the public
   [kirodotdev/Kiro repository](https://github.com/kirodotdev/Kiro/tree/e8daa058590dd58efb14f6d41ddb3ba1a26cfba3)
-  were checked 2026-07-19. The IDE is proprietary, and the public repository
+  were checked 2026-10-02. The IDE is proprietary, and the public repository
   contains community and issue infrastructure rather than the IDE persistence
   serializer or a versioned disk schema.
 - **Usage and cost:** Model metadata may be present, but the consumed format
   exposes no authoritative token, cache, reasoning, credit, or monetary cost.
 - **Agentsview:** `internal/parser/kiro_ide.go` and
-  `internal/parser/kiro_ide_provider.go`.
+  `internal/parser/kiro_ide_provider.go`. Execution-log actions retain their
+  native text/call order. Both history formats preserve explicit tool-role
+  bodies as standalone output; they do not supply a verified result ID.
+  Existing dialogue-based work counts remain unchanged. Public documentation
+  still does not establish the observed execution-log or history schemas.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## Cortex (`cortex`)
 
@@ -2353,10 +2753,21 @@ schemas keep their existing ordering behavior.
   companion and treats user rows containing only tool results and internal
   text as tool responses, not new prompts. This is consumer-side evidence;
   Snowflake does not publish the producer or a versioned schema.
+- **Native bodies rechecked:** 2026-10-02. The first-party replay guide
+  still documents local JSON persistence and links the independent reader;
+  it does not publish a producer schema. The existing observed nested
+  `text`, `tool_use`, and `tool_result` blocks now compose in array order.
+  Tool headers and result-count labels are excluded from dialogue; output
+  and call rendering have canonical owners. Internal-context filtering,
+  result classification, and historical work counts remain. Synthetic
+  fixtures verify reader behavior, not a producer version or ID stability.
 - **Usage and cost:** The consumed files expose transcript content but no token,
   cache, reasoning, credit, or USD accounting.
 - **Agentsview:** `internal/parser/cortex.go` and
   `internal/parser/cortex_provider.go`.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## Hermes Agent (`hermes`)
 
@@ -2382,6 +2793,30 @@ schemas keep their existing ordering behavior.
 - **Agentsview:** `internal/parser/hermes.go` and
   `internal/parser/hermes_provider.go`; database and file generations are both
   recognized.
+- **Native bodies (2026-10-02):** Reverified the pinned state writer's
+  `reasoning`, `reasoning_content`, `reasoning_details`, and
+  `codex_reasoning_items` columns and its separate tool-result rows. JSONL,
+  JSON, and database parsing keep dialogue, reasoning, and standalone output
+  separate, with native call references in the body layout. Structured
+  reasoning exposes documented plaintext and summaries; encrypted data and
+  signatures retain presence without becoming text. OpenRouter's first-party
+  [reasoning-details documentation](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens#reasoning-detail-types)
+  distinguishes text, summaries, and encrypted payloads. State readers retain
+  the native session ID together with its integer message primary key as
+  source identity. Generated state JSONL records that session ID in its header
+  so a renamed export retains the same identities. Work-length and
+  transcript-selection accounting retain the existing provider conventions.
+- **Structured state content (2026-10-02):** Reverified the pinned writer's
+  `\x00json:` sentinel for list/dictionary content. Supported text/image-URL
+  arrays expose their text parts as dialogue; result rows decode text into
+  canonical output. Unknown or malformed dialogue containers retain their
+  full legacy body with no normalized layout. Rechecked the same pinned writer
+  on 2026-10-03: separate readable reasoning is included in that legacy body
+  for display, copy, and full export. No JSON guessing applies to
+  ordinary strings. Historical stored work counts remain unchanged.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## Forge (`forge`)
 
@@ -2397,10 +2832,20 @@ schemas keep their existing ordering behavior.
   cached tokens. Although Forge domain data can discuss cost, Agentsview does
   not consume a direct persisted currency total from this store and instead
   catalog-prices normalized tokens.
+- **Native bodies reverified:** 2026-10-02. The pinned
+  [context model](https://github.com/tailcallhq/forgecode/blob/c5698103bce973d1c569ae905bca6f34ba85c1d0/crates/forge_domain/src/context.rs)
+  has separate text, reasoning details, calls, and tool-result records. Its
+  [reasoning model](https://github.com/tailcallhq/forgecode/blob/c5698103bce973d1c569ae905bca6f34ba85c1d0/crates/forge_domain/src/reasoning.rs)
+  distinguishes visible `text` from `signature` and `data`. Agentsview keeps
+  opaque reasoning presence, visible dialogue, and standalone output separate,
+  including output without a call ID. Existing usage and work lengths remain.
 - **Agentsview:** `internal/parser/forge.go`. Reverified 2026-09-10 with
   isolated SQLite fixtures: hosted WAL snapshots use immutable reads in
   read-only materializations; live reads retain uncheckpointed WAL rows.
   Producer schema and usage semantics are unchanged.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## Devin CLI (`devin`)
 
@@ -2462,6 +2907,15 @@ schemas keep their existing ordering behavior.
   `internal/parser/devin_provider.go`; metric aliases are implementation
   evidence because the upstream schema is unavailable.
 
+- **Message bodies (2026-10-02):** Reverified 2026-10-02 against transcript and
+  SQLite message-node fixtures. Native content arrays and separately stored
+  thinking, calls, and results are decoded into canonical body fields and
+  ordered layout. Message identity and token metrics remain independent of body
+  visibility. This is observed Devin-format evidence.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
+
 ## Piebald (`piebald`)
 
 - **Format:** An `app.db` SQLite database containing chats, projects, and
@@ -2488,9 +2942,28 @@ schemas keep their existing ordering behavior.
   store and does not prove the historical schema. Reverified 2026-09-20: the
   pinned analyzer joins `chats` to `projects` without selecting
   `chats.current_directory`. Sync remembers schema failures until database or
-  WAL state changes.
+  WAL state changes. Reverified 2026-10-02 against the pinned first-party
+  analyzer and isolated part-table fixtures: ordered text/thinking/call parts
+  now compose explicit bodies, including empty thoughts and standalone output.
+  Native message and parent IDs use the same chat-ID namespace, preventing
+  local integer keys from colliding across conversations. Usage-only rows are
+  retained. Existing work counts use dialogue plus readable reasoning; body
+  part details remain observed schema evidence beyond the analyzer's queries.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## Warp (`warp`)
+
+**Native bodies reverified (2026-10-02):** The pinned persistence writer
+serializes conversation metadata; isolated SQLite fixtures cover the consumed
+query and aggregate-tool shapes. The pinned
+[query migration](https://github.com/warpdotdev/warp/blob/69ce3728acae0b01c2f457b65a90c144664686aa/crates/persistence/migrations/2024-08-20-201322_split_ai_exchanges_table/up.sql)
+and
+[exchange-ID index](https://github.com/warpdotdev/warp/blob/69ce3728acae0b01c2f457b65a90c144664686aa/crates/persistence/migrations/2024-08-22-182702_ai_exchange_id_unique_index/up.sql)
+verify query exchange identities. Aggregate category labels are call renderings,
+separate from query dialogue. They do not establish individual call chronology
+or per-call identities. Historical aggregate work counts remain unchanged.
 
 - **Format:** A `warp.sqlite` database whose conversation records include
   transcript metadata and aggregate usage counters.
@@ -2526,13 +2999,21 @@ schemas keep their existing ordering behavior.
   [chatModel.ts](https://github.com/posit-dev/positron/blob/61345078cc1833b740fda2b1fe1aabc8472d2249/src/vs/workbench/contrib/chat/common/model/chatModel.ts)
   and
   [chatSessionStore.ts](https://github.com/posit-dev/positron/blob/61345078cc1833b740fda2b1fe1aabc8472d2249/src/vs/workbench/contrib/chat/common/model/chatSessionStore.ts).
-- **Usage and cost:** The underlying VS Code shape can carry prompt/output
-  metadata and model identity, but the Positron provider currently exposes no
-  usage events. Cache, reasoning, and monetary cost are therefore absent from
-  Agentsview analytics for this provider.
+- **Native bodies reverified:** 2026-10-02 against the pinned model and
+  [chatService.ts](https://github.com/posit-dev/positron/blob/61345078cc1833b740fda2b1fe1aabc8472d2249/src/vs/workbench/contrib/chat/common/chatService/chatService.ts).
+  Thinking string/array parts and serialized request/response identities use
+  the same shared composer as VS Code Copilot. Positron agent identity and
+  source file metadata remain provider-owned.
+- **Usage and cost:** The shared reader consumes prompt/output metadata and
+  model identity when present, producing per-turn usage events and session
+  output/context totals. This corrects the earlier no-usage claim; the
+  parser already supported those fields. The consumed shape has no cache
+  split or provider-reported monetary cost; prices are catalog-derived.
 - **Agentsview:** `internal/parser/positron_provider.go` and the shared decoding
-  in `internal/parser/vscode_copilot.go`; the lack of usage export is a parser
-  limitation, not proof that upstream never records metadata.
+  in `internal/parser/vscode_copilot.go`.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## Posit Assistant (`posit-assistant`)
 
@@ -2597,9 +3078,26 @@ schemas keep their existing ordering behavior.
   are retained even when they have no renderable transcript messages, and
   newer sidecar timestamps extend the session end time. Data version 95 reparses
   existing archives so message and usage-event rows persist the row-level
-  provider identity that drives the billing adjustment.
+  provider identity that drives the billing adjustment. Rechecked the public
+  documentation 2026-10-02; the observed private conversation schema still has
+  no public serializer. ModelMessage arrays preserve text/reasoning/call order,
+  empty thoughts, and tool-role output with optional IDs. Transcript record IDs
+  are scoped by the native conversation ID because LM integer keys repeat
+  between conversations. Existing summary-tag removal and
+  dialogue-only work lengths are retained, with layout ranges remapped after
+  text removal. Existing token normalization and sidecar accounting remain.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## Z Code (`zcode`)
+
+**Body separation check (2026-10-02):** Rechecked the first-party usage
+page; it describes local session records but still publishes no database
+schema. Isolated parser fixtures cover both native thinking/tool-use blocks
+and the observed OpenCode-style reasoning/tool parts. Canonical fields now
+separate those bodies while retaining their recorded order. This is
+implementation evidence, not a newly verified producer schema.
 
 - **Format:** A `db.sqlite` database, including a `model_usage` table.
 - **Evidence:** `no-public-source`.
@@ -2631,8 +3129,27 @@ schemas keep their existing ordering behavior.
   worker to its projection boundary in
   `TestRawCapturedSourcesReachHostedWorker`. No producer schema change is
   inferred.
+- **Native identity check (2026-10-02):** Rechecked the observed message/part
+  table relation and isolated SQLite fixtures. Each composed owner retains its
+  `message.id`, including reasoning-only records. This is reader/schema
+  evidence; it does not establish a publicly versioned serializer.
+
 
 ## Goose (`goose`)
+
+**Native notification bodies reverified (2026-10-02):** The pinned Rust
+message model declares `systemNotification` with `notificationType` and `msg`.
+Its `thinkingMessage` subtype is reasoning, including empty presence, and
+uses the native composer. The old reader omitted `msg` from its work count;
+that accounting remains unchanged. Other notification compatibility fields
+and message visibility gates retain their existing behavior.
+
+**Body separation check (2026-10-02):** Rechecked the pinned message model.
+The tagged native array distinguishes `text`, `thinking`, `redactedThinking`,
+`toolRequest`, and `toolResponse`. The parser retains that order in layout
+metadata, puts reasoning outside dialogue, and gives unattached responses
+a separate output owner. Redacted reasoning retains presence without copying
+the opaque data. Usage-ledger attribution remains unchanged.
 
 - **Format:** A shared SQLite `sessions.db`. Schema version 15 stores session
   metadata in `sessions`, ordered role messages with tagged JSON content in
@@ -2678,6 +3195,13 @@ schemas keep their existing ordering behavior.
   2026-09-10 with `TestHostedSkillInferenceKeepsNamesLexical` that hosted tool
   parsing derives skill names from recorded paths without reading worker-local
   frontmatter; local parsing retains frontmatter lookup.
+- **Native identity check (2026-10-02):** Rechecked the consumed SQLite
+  message key and isolated database fixtures. Each message retains the native
+  session ID together with the decimal `messages.id` key. This prevents local
+  primary keys from colliding across sessions; it does not substitute for the
+  separate message model's optional UUID or promise identity preservation
+  across independently rewritten databases.
+
 
 ## Zed (`zed`)
 
@@ -2699,6 +3223,16 @@ schemas keep their existing ordering behavior.
   event and catalog-prices it.
 - **Agentsview:** `internal/parser/zed.go`, `internal/parser/zed_helpers.go`,
   and `internal/parser/zed_provider.go`.
+
+- **Native bodies (2026-10-02):** Reverified the pinned `thread.rs` enum and
+  serialization. Ordered text, thinking, redacted thinking and tool-use
+  variants retain their source order in explicit layouts. Redacted-only and
+  empty thinking remain present without their opaque payloads. The existing
+  sorted-key tool-result projection follows the native content vector;
+  historical dialogue work lengths and aggregate usage remain unchanged.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## Antigravity IDE (`antigravity`)
 
@@ -2723,6 +3257,31 @@ schemas keep their existing ordering behavior.
   `internal/parser/antigravity_proto.go`, and
   `internal/parser/antigravity_provider.go`; field decoding is deliberately
   marked as reverse engineering.
+
+- **Native body fields (2026-10-02):** The official CLI 1.1.24 archive linked
+  below was downloaded and its documented checksum verified without executing
+  the binary. Its compiled `third_party/gemini_coder/proto/trajectory.proto`
+  describes `Step.user_input` (19), `planner_response` (20), `view_file` (14),
+  `run_command` (28), and `system_message` (114). The cortex descriptors
+  identify user response (2), planner response (1), thinking (3), message ID
+  (6), and tool calls (7); the common descriptor identifies call ID, name and
+  arguments (1/2/3). The shared reader uses these paths for ordered native
+  bodies. Tool output and generated brain artifacts have standalone output
+  bodies. History prompts have explicit dialogue layouts. Unknown payload
+  generations and decrypted wire previews keep their existing best-effort
+  legacy text without certifying extracted mixed strings as dialogue. The
+  persistence writer remains closed, and this does not prove all IDE versions
+  share the CLI descriptor.
+- **Native confidence check (2026-10-02):** Rechecked the compiled body
+  descriptors and both database readers. A known outer tag alone does not
+  certify an unknown inner schema. Unknown inner bodies retain the previous
+  best-effort visible text and legacy provenance. Explicit empty thinking
+  and output fields still retain native presence. Planner `raw_thinking` (16)
+  is a readable string fallback when thinking (3) is absent; the descriptor's
+  signature fields remain opaque, and redaction always suppresses their text.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## Antigravity CLI (`antigravity-cli`)
 
@@ -2770,6 +3329,27 @@ schemas keep their existing ordering behavior.
   the CWD. The project label is derived from the path text without probing the
   recorded folder when filesystem discovery is disabled.
 
+- **Trajectory message bodies (2026-10-02):** Rechecked the official 1.1.24
+  release and the typed sidecar reader. Native user/response fields are dialogue;
+  planner thinking precedes response text and calls in the layout. Explicit
+  empty thinking retains its presence. Call headers remain renderings with the
+  historical work length. Typed tool output survives without an execution ID;
+  output carriers do not count as user turns. Identifierless error messages
+  retain the existing omission because their tool ownership is unproven. This
+  finding covers typed trajectory sidecars, not the best-effort protobuf wire
+  walker, decrypted previews, or generated brain documents.
+
+- **Protobuf and fallback bodies (2026-10-02):** The shared native protobuf
+  field paths and conservative unknown-body boundary are described in the
+  Antigravity IDE entry above. Redacted or signature-only planner reasoning
+  retains presence without an opaque payload. Brain Markdown is generated
+  artifact output; its labels, summary and text remain together in the output
+  body with the previous work count. Unknown wire previews retain their full
+  legacy display, rather than becoming proven dialogue through a marker guess.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
+
 ## iFlow CLI (`iflow`)
 
 - **Format:** Claude-like JSONL with UUID/parent UUID links and streaming
@@ -2792,6 +3372,11 @@ schemas keep their existing ordering behavior.
 - **Agentsview:** `internal/parser/iflow.go` and
   `internal/parser/iflow_provider.go`; field interpretation is based on
   observed files rather than upstream authority.
+
+- **Message bodies (2026-10-02):** Reverified 2026-10-02 against native
+  Claude-like JSONL fixtures. The shared extractor retains reasoning and ordered
+  native blocks separately from dialogue. This remains observed-format evidence;
+  usage accounting remains unavailable.
 
 ## ICodeMate (`icodemate`)
 
@@ -2840,7 +3425,22 @@ schemas keep their existing ordering behavior.
   unchanged S3 transcripts use that persisted all-branch state to skip object
   downloads.
 
+- **Message bodies (2026-10-02):** Reverified the Claude-compatible delegation
+  in `icodemate_cli.go` and its controlled JSONL fixtures. Its Claude-compatible
+  transcript path inherits separate dialogue, thinking, calls, and results with
+  ordered layout from the shared Claude decoder. Identity retagging and product
+  metadata remain in the owning wrapper. This is compatible-format
+  implementation evidence, not a newly published producer schema.
+
 ## WorkBuddy (`workbuddy`)
+
+**Body separation check (2026-10-02):** Rechecked first-party product/API
+documentation; it still does not publish the desktop JSONL serializer. Native
+message, function-call, and function-call-result envelopes are reader/fixture
+evidence. Explicit result records retain output without a call ID, and
+usage-only assistants retain empty layouts. The existing required call name
+and ID validation and usage accounting remain unchanged. These fixtures do
+not verify additional reasoning event types or a producer version.
 
 - **Format:** Session JSONL with provider-specific raw usage embedded under
   message provider data. Issue
@@ -2868,6 +3468,9 @@ schemas keep their existing ordering behavior.
 - **Agentsview:** `internal/parser/workbuddy.go` and
   `internal/parser/workbuddy_provider.go`; counter semantics are
   implementation evidence.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## CodeBuddy (`codebuddy`)
 
@@ -2906,9 +3509,20 @@ schemas keep their existing ordering behavior.
   artifact observation above has no pinned producer version; whether thinking
   snapshots are cumulative and which releases include cached input in the input
   counter remain unverified. Do not treat this as audited billing parity.
+- **Native bodies reverified:** 2026-10-02. Current first-party CodeBuddy
+  [directory documentation](https://www.codebuddy.ai/docs/cli/codebuddy-dir)
+  describes the separate CLI JSONL store; it does not establish the IDE
+  manifest/message schema consumed here. Observed IDE blocks now compose
+  ordered body layouts, retaining empty reasoning, no-ID output, manifest
+  message IDs, usage, and existing work counts. An incomplete block without
+  output does not suppress the native `extra.toolStatus` fallback. These
+  synthetic fixtures do not establish producer versions or new counter rules.
 - **Agentsview:** `internal/parser/codebuddy.go` and
   `internal/parser/codebuddy_provider.go`; counter semantics are
   implementation evidence.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## Zencoder (`zencoder`)
 
@@ -2924,11 +3538,22 @@ schemas keep their existing ordering behavior.
   reasoning, credit, or monetary-cost fields to Agentsview.
 - **Agentsview:** `internal/parser/zencoder.go` and
   `internal/parser/zencoder_provider.go`.
+- **Native bodies reverified:** 2026-10-02. The first-party overview and
+  Analytics API remain organization-facing documentation, without a local JSONL
+  schema. Existing observed-format fixtures establish text, `reasoning`,
+  `tool-call`, and `tool-result` discriminants. Agentsview composes them in
+  native order, retains empty reasoning and no-ID output, and keeps tagged
+  system output in the output field. The native-work session gate accepts
+  reasoning or tools even when dialogue is empty. No producer version or new
+  usage fields are inferred from these fixtures.
 - **Archive projection (2026-09-04):** Rechecked the pre-version-100
   `internal/parser/zencoder.go`: system blocks inside tool results became
   unmarked, system-flagged user rows. Transcript-only archive copies discard
   these legacy system-flagged rows, including indistinguishable notices;
   version-100 rows use the tool-result marker.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## gptme (`gptme`)
 
@@ -2945,6 +3570,18 @@ schemas keep their existing ordering behavior.
   normalized usage and consumes no authoritative persisted USD total.
 - **Agentsview:** `internal/parser/gptme.go` and
   `internal/parser/gptme_provider.go`.
+
+- **Native bodies (2026-10-02):** Reverified the pinned message serializer's
+  role/content, optional `call_id`, and metadata usage fields. Fresh dialogue
+  and usage-only assistant records have explicit layouts. The reader's
+  compatible `role=tool` records remain at their existing assistant owner
+  with standalone output and the optional call identity. This compatibility
+  case is covered by fixtures; the pinned Python role annotation names only
+  system/user/assistant, so it does not establish `role=tool` writer behavior.
+  Previously skipped system/context records remain outside this reader claim.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## Qoder (`qoder`)
 
@@ -2973,6 +3610,13 @@ schemas keep their existing ordering behavior.
 - **Agentsview:** `internal/parser/qoder.go` and
   `internal/parser/qoder_provider.go`.
 
+- **Message bodies (2026-10-02):** Reverified the Claude-compatible delegation
+  in `qoder.go` and its controlled JSONL fixtures. Its Claude-compatible
+  transcript path inherits separate dialogue, thinking, calls, and results with
+  ordered layout from the shared Claude decoder. Identity retagging and product
+  metadata remain in the owning wrapper. This is compatible-format
+  implementation evidence, not a newly published producer schema.
+
 ## QwenPaw (`qwenpaw`)
 
 - **Format:** Workspace `sessions/<name>.json` documents whose
@@ -2991,7 +3635,14 @@ schemas keep their existing ordering behavior.
   `internal/parser/qwenpaw_provider.go`. Reverified 2026-09-16 against the
   parser: first-message previews keep at most 300 runes without a suffix. The
   shared truncation helper preserves that display rule; the recorded format
-  and usage handling are unchanged.
+  and usage handling are unchanged. Reverified 2026-10-02 against the pinned
+  context serializer and native memory-pair fixtures: message IDs and ordered
+  text/thinking/call/result blocks are retained, including empty thoughts and
+  output without IDs. Work counts remain based on dialogue only. The history
+  serializer is supporting content evidence, not a separate session writer.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## Shelley (`shelley`)
 
@@ -3000,7 +3651,7 @@ schemas keep their existing ordering behavior.
 - **Evidence:** `documentation`.
 - **Upstream:** The first-party
   [Shelley launch and storage documentation](https://blog.exe.dev/shelley) was
-  checked 2026-07-19 and identifies the SQLite store at
+  checked 2026-10-02 and identifies the SQLite store at
   `~/.config/shelley/shelley.db`. No public migration, table schema, or
   producer source was found, so column-level details remain observed evidence.
 - **Usage and cost:** `usage_data` can persist input, cache-creation,
@@ -3009,7 +3660,16 @@ schemas keep their existing ordering behavior.
   attribution and using catalog pricing instead.
 - **Agentsview:** `internal/parser/shelley.go` and
   `internal/parser/shelley_provider.go`; schema and cost-field behavior are
-  observed implementation evidence.
+  observed implementation evidence. Native numeric body types preserve block
+  order and distinguish opaque/empty thinking from readable reasoning. Search
+  result leaves are standalone output. Message IDs participate in both parsing
+  and discovery fingerprints. Source identities include the conversation ID:
+  the observed SQLite primary key alone has no verified global namespace. Usage-only sessions survive with empty layouts;
+  historical work counts remain based on the former display text. These body
+  boundaries were reverified with isolated SQLite fixtures, not a public writer.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## Mistral Vibe (`vibe`)
 
@@ -3029,9 +3689,26 @@ schemas keep their existing ordering behavior.
   fields even when another optional metadata field is malformed, so a partial
   parse cannot replace repository classification with generic fallbacks.
 - **Agentsview:** `internal/parser/vibe.go` and
-  `internal/parser/vibe_provider.go`.
+  `internal/parser/vibe_provider.go`. Reverified 2026-10-02 against the pinned
+  logger and [message model](https://github.com/mistralai/mistral-vibe/blob/0685654a40a4035966891289065379a751a7e617/vibe/core/types.py):
+  nullable reasoning content preserves explicit empty thoughts, while opaque
+  state/signature values supply presence only. Separate fields use reasoning,
+  dialogue, then calls as a deterministic display convention. Tool-role output
+  survives without IDs; message identities, injected context and aggregate
+  accounting remain unchanged. Historical work counts remain dialogue-based.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## Aider (`aider`)
+
+**Native bodies reverified (2026-10-02):** The pinned
+[IO writer](https://github.com/Aider-AI/aider/blob/5dc9490bb35f9729ef2c95d00a19ccd30c26339c/aider/io.py)
+provides the persistence evidence: user input uses `####`, assistant output
+is plain text, and tool output uses blockquotes. The existing turn grammar
+keeps those channels; tool output has a standalone canonical body at its
+existing assistant owner. Edited-file extraction and historical work counts
+remain unchanged. `history.py` summarizes history rather than writing it.
 
 - **Format:** Repository-local `.aider.chat.history.md`; multiple runs can be
   reconstructed from one Markdown history.
@@ -3048,6 +3725,9 @@ schemas keep their existing ordering behavior.
 - **Agentsview:** `internal/parser/aider.go` and
   `internal/parser/aider_provider.go`; roles and run boundaries are
   reconstructed from Markdown.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## Poolside Agent CLI (`poolside`)
 
@@ -3075,7 +3755,28 @@ schemas keep their existing ordering behavior.
   `internal/parser/poolside_provider.go`; single-file provider with NDJSON
   line-by-line parsing.
 
+- **Native bodies (2026-10-02):** Rechecked the characterized NDJSON event
+  shapes and existing real-trajectory fixtures. Text, thought and call events
+  add layout blocks at their current message owner in encounter order. Empty
+  thought events retain presence. Matched output keeps its original call
+  event; unmatched or identifierless output has a standalone body, including
+  output before an assistant turn. Historical dialogue-only work, call IDs,
+  skill inference, model attribution and inference usage remain unchanged.
+  Rechecked those observed result fixtures on 2026-10-03: an unmatched result's
+  native `tool_name` supplies a non-payload category hint in its output block,
+  so configured category blocking clears the output without losing its row.
+  Public documentation still does not publish the event serializer.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
+
 ## Reasonix (`reasonix`)
+
+**Opaque reasoning reverified (2026-10-02):** The pinned provider message
+model persists `reasoning_signature` separately from readable
+`reasoning_content`. Signature-only records retain thinking presence and an
+empty span, without copying the signature into readable text. Existing
+readable reasoning work counts and session boundaries remain unchanged.
 
 - **Format:** Session JSONL plus `.jsonl.meta` sidecars across live, archive,
   project, and subagent roots.
@@ -3091,8 +3792,25 @@ schemas keep their existing ordering behavior.
 - **Agentsview:** `internal/parser/reasonix.go` and
   `internal/parser/reasonix_provider.go`; discovery spans multiple roots and
   uses metadata sidecars for identity.
+- **Native bodies (2026-10-02):** Reverified the pinned session writer and
+  [provider message type](https://github.com/esengine/DeepSeek-Reasonix/blob/2301e24827bf62c7584f34c4f541c432dd4f6e0b/internal/provider/provider.go).
+  The native `reasoning_content` field and role-based tool results stay
+  separate from dialogue. Missing result call IDs retain a standalone output
+  body. Tool inputs and historical rendered work length are preserved;
+  literal thinking markers in ordinary text remain dialogue.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## Omnigent (`omnigent`)
+
+**Native bodies reverified (2026-10-02):** The pinned conversation entity
+allows readable summary blocks and encrypted or absent reasoning content. The
+pinned database model stores item IDs in both supported schema generations.
+The reader composes native messages, calls, outputs, and reasoning separately;
+empty or encrypted-only reasoning retains presence without copying ciphertext.
+Matched output stays on its original call owner; unmatched output has its own
+canonical body. Item IDs participate in the source fingerprint.
 
 - **Format:** A shared SQLite `chat.db` containing conversations and ordered
   conversation items, with session metadata and usage stored alongside each
@@ -3141,6 +3859,9 @@ schemas keep their existing ordering behavior.
 - **Agentsview:** `internal/parser/omnigent.go` and
   `internal/parser/omnigent_provider.go`; fixtures under
   `internal/parser/testdata/omnigent/` provide observed event-shape evidence.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## Codebuff (`codebuff`)
 
@@ -3173,9 +3894,23 @@ schemas keep their existing ordering behavior.
   available; only context window size and billing credits are persisted.
   Freebuff (free tier) has no credits -- it is ad-supported with daily session
   limits.
+- **Native bodies reverified:** 2026-10-02. The pinned chat model explicitly
+  tags text blocks as `reasoning` and stores tool input and output separately.
+  Agentsview composes each existing text/work/result group with a typed layout,
+  preserving group order, tool ownership, work lengths, system blocks, skill
+  metadata, and reported usage. Empty native reasoning retains presence.
+  Freebuff uses this same decoder and body contract.
 - **Agentsview:** `internal/parser/codebuff.go` and
   `internal/parser/codebuff_provider.go`; single-file provider with JSON array
   parsing.
+
+- **Native identity check (2026-10-02):** Reverified the pinned `ChatMessage`
+  `id` and optional `parentId`. One emitted owner retains those keys. When the
+  existing native block grouping yields multiple rows, the wrapper ID has no
+  unique row mapping and stays unset; the reader does not invent part IDs.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## Evener (`evener`)
 
@@ -3204,6 +3939,14 @@ schemas keep their existing ordering behavior.
 - **Model switches:** structured values identify configured provider/model
   transitions, not automatic fallbacks or response aliases. Per-response
   identities take precedence; do not parse display prose for billing facts.
+- **Native bodies reverified:** 2026-10-02. The pinned message and turn
+  schemas distinguish typed thinking, redacted thinking, calls, results, and
+  built-in web search. Agentsview retains native array order and turn IDs in
+  the canonical layout, with call-owned renderings and separate output.
+  Redaction retains reasoning presence without exposing payloads or synthetic
+  labels as thinking text. Native web-search queries use a work rendering and
+  structured query input. Header context, diagnostics, usage, result-event
+  ownership, and historical work lengths remain available.
 - **Agentsview:** `internal/parser/evener.go` and `evener_provider.go`. Fixtures
   are synthetic and cover semantic content, usage, metadata and fork behavior.
   Capture discovery uses bounded directory batches and the raw-audit progress
@@ -3232,6 +3975,9 @@ schemas keep their existing ordering behavior.
   `TestCapturerEvenerLineageParentGrowthReusesFork` verifies incremental
   parent capture with unchanged fork-object reuse; metadata remains
   replaceable.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## Tau (`tau`)
 
@@ -3277,6 +4023,14 @@ schemas keep their existing ordering behavior.
   exposes input, output, cache-read, and cache-write usage. AgentsView keeps
   its normalized JSON keys sorted so unchanged usage compares byte-for-byte
   equal after reparsing.
+- **Native message bodies (reverified 2026-10-02):** The pinned message model
+  defines ordered text, thinking, and `toolCall` blocks, role-based
+  `toolResult` messages, and a `redacted` flag on thinking. Agentsview keeps
+  dialogue separate from these work bodies, retains redacted presence without
+  its text, and preserves source IDs, parent IDs, and historical work lengths.
+  Unmatched results remain standalone. Plain user messages, errors, branch
+  summaries, and compaction boundaries receive explicit layouts. Image
+  handling and the supported role set are unchanged by this normalization.
 - **Agentsview:** `internal/parser/tau.go` and `internal/parser/tau_provider.go`
   read each transcript once, exclude the exact `index.jsonl` basename, use the
   filename for ordinary session identity, and encode the project directory
@@ -3291,8 +4045,18 @@ schemas keep their existing ordering behavior.
   default sessions from distinct configured roots separate; it does not
   distinguish machines with identical root paths. No legacy Tau v1 conversion,
   native transfer, or index metadata synchronization is included.
+- **Reader sanitation check (2026-10-03):** Historical work counts exclude
+  removed payload bytes under the [shared native-body contract](#native-body-sanitation-evidence).
+  Provider format and token/cost semantics are unchanged.
 
 ## Charm Crush (`crush`)
+
+**Body separation check (2026-10-02):** Rechecked the pinned
+[message serializer](https://github.com/charmbracelet/crush/blob/ce980ada68444b7591d8dfa631af7e94b2aba0b3/internal/message/message.go).
+Its `parts` wrapper distinguishes `reasoning`, `text`, `tool_call`,
+`tool_result`, and `finish`. Those native boundaries now drive canonical
+fields and ordered layouts; summary and finish metadata retain their existing
+meaning. Session-level usage attribution is unchanged.
 
 - **Format:** One SQLite `crush.db` per project under the project's `.crush`
   data directory (configurable with `options.data_directory` or `--data-dir`).

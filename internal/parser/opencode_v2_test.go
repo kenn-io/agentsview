@@ -57,7 +57,8 @@ func TestOpenCodeV2BetaWorkflow(t *testing.T) {
 	require.Len(t, call.ResultEvents, 1)
 	assert.Equal(t, "Read file /workspace/project-a/input.txt, lines 1-3\n1: alpha\n2: beta\n3: gamma", call.ResultEvents[0].Content)
 	assert.Contains(t, msgs[2].Content, "**Number of lines:** 3")
-	assert.Contains(t, msgs[4].Content, "[/Thinking]\nbeta")
+	assert.Equal(t, "beta", msgs[4].Content)
+	assert.NotEmpty(t, msgs[4].ThinkingText)
 	assert.Equal(t, "big-pickle", msgs[4].Model)
 	assert.Equal(t, 26, msgs[4].OutputTokens)
 	assert.Equal(t, 7154, msgs[4].ContextTokens)
@@ -88,7 +89,8 @@ func TestOpenCodeV2BetaWorkflow(t *testing.T) {
 	_, msgs, err = parseOpenCodeDBSession(path, id, "host-a")
 	require.NoError(t, err)
 	require.Len(t, msgs, 5)
-	assert.Contains(t, msgs[4].Content, "[/Thinking]\nupdated beta")
+	assert.Equal(t, "updated beta", msgs[4].Content)
+	assert.NotEmpty(t, msgs[4].ThinkingText)
 
 	// An empty v2 session must not try to load nonexistent v1 message tables.
 	_, err = writer.ExecContext(t.Context(), "DELETE FROM session_message WHERE session_id = ?", id)
@@ -205,7 +207,8 @@ func TestOpenCodeV2Projection(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	require.Len(t, msgs, 2)
-	assert.Equal(t, "[Thinking]\nInspect the plan\n[/Thinking]\nUse the index", msgs[1].Content)
+	assert.Equal(t, "Use the index", msgs[1].Content)
+	assert.Equal(t, "Inspect the plan", msgs[1].ThinkingText)
 	assert.True(t, msgs[1].HasThinking)
 	assert.Equal(t, "gpt-5.4", msgs[1].Model)
 	assert.JSONEq(t, `{"input_tokens":100,"output_tokens":20,"cache_read_input_tokens":30,"cache_creation_input_tokens":0}`, string(msgs[1].TokenUsage))
@@ -300,8 +303,8 @@ func TestOpenCodeV2MessageKinds(t *testing.T) {
 		{kind: "user", data: `{"text":"","files":[{"name":"input.txt","mime":"text/plain","data":"YWxwaGEK","source":{"type":"inline"}}]}`, content: "[Attachment: input.txt]\nalpha\n"},
 		{kind: "user", data: `{"text":"Inspect this","files":[{"name":"plot.png","mime":"image/png","data":"","source":{"type":"inline"}}]}`, content: "Inspect this\n[Attachment: plot.png]"},
 		{kind: "user", data: `{"text":"","files":[{"name":"input.txt","mime":"text/plain","uri":"file:///workspace/project-a/input.txt"}]}`, content: "[Attachment: input.txt]"},
-		{kind: "shell", data: `{"command":"echo hello","callID":"call_shell","output":"hello\n","time":{"created":1700000000000,"completed":1700000001000}}`, content: "echo hello", tool: true},
-		{kind: "shell", data: `{"command":"echo hello","shellID":"shell_a","status":"exited","exit":0,"output":{"output":"hello\n","cursor":6,"size":6,"truncated":false},"time":{"created":1700000000000,"completed":1700000001000}}`, content: "echo hello", tool: true},
+		{kind: "shell", data: `{"command":"echo hello","callID":"call_shell","output":"hello\n","time":{"created":1700000000000,"completed":1700000001000}}`, tool: true},
+		{kind: "shell", data: `{"command":"echo hello","shellID":"shell_a","status":"exited","exit":0,"output":{"output":"hello\n","cursor":6,"size":6,"truncated":false},"time":{"created":1700000000000,"completed":1700000001000}}`, tool: true},
 		{kind: "assistant", data: `{"model":{"id":"gpt-5.4"},"content":[],"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}}}`, usage: true},
 		{kind: "user", data: `{"text":`, invalid: true},
 	} {
@@ -332,6 +335,8 @@ func TestOpenCodeV2MessageKinds(t *testing.T) {
 			if tc.tool {
 				require.Len(t, msgs[0].ToolCalls, 1)
 				assert.JSONEq(t, `{"command":"echo hello"}`, msgs[0].ToolCalls[0].InputJSON)
+				assert.Equal(t, "echo hello", msgs[0].ToolCalls[0].Rendering)
+				assert.Equal(t, 1, sess.UserMessageCount)
 				require.Len(t, msgs[0].ToolCalls[0].ResultEvents, 1)
 				assert.Equal(t, "hello\n", msgs[0].ToolCalls[0].ResultEvents[0].Content)
 			}

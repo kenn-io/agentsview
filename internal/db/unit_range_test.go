@@ -559,9 +559,8 @@ func TestDeriveUnitRangesNonMemberSpan(t *testing.T) {
 // TestNearestUserBoundariesSentinels asserts the seam returns Prev=-1 and
 // Next=UnitOrdinalMax when no embeddable user row exists on that side, and
 // real exclusive boundaries otherwise (ignoring system-prefixed user rows
-// and the anchor's own ordinal). The empty-content user row at 5 pins the
-// SQLite first-code-point guard's COALESCE path: unicode(”) is NULL, and an
-// empty user row is still an embeddable boundary.
+// and the anchor's own ordinal). The empty-content user row at 7 stays
+// outside the dialogue/embedding corpus and must not become a boundary.
 func TestNearestUserBoundariesSentinels(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s-b", "proj", func(s *Session) { s.EndedAt = Ptr(tsHour1) })
@@ -571,8 +570,9 @@ func TestNearestUserBoundariesSentinels(t *testing.T) {
 		unitMsg("s-b", 2, "assistant", "a2"),
 		unitMsg("s-b", 3, "user", "<command-message> prefixed, not a boundary"),
 		unitMsg("s-b", 4, "assistant", "a4"),
-		unitMsg("s-b", 5, "user", ""),
+		unitMsg("s-b", 5, "user", "u5"),
 		unitMsg("s-b", 6, "assistant", "a6"),
+		unitMsg("s-b", 7, "user", ""),
 	)
 
 	got, err := d.NearestUserBoundaries(t.Context(), []UnitProbe{
@@ -587,13 +587,13 @@ func TestNearestUserBoundariesSentinels(t *testing.T) {
 	assert.Equal(t, UnitBounds{Prev: -1, Next: 1}, got[0],
 		"no user row before session start")
 	assert.Equal(t, UnitBounds{Prev: 1, Next: 5}, got[1],
-		"prefixed user row at 3 must not be a boundary; empty user row at 5 is")
+		"prefixed user row at 3 must not be a boundary; dialogue row at 5 is")
 	assert.Equal(t, UnitBounds{Prev: 1, Next: 5}, got[2],
-		"empty-content user row is an embeddable boundary")
+		"dialogue user row is an embeddable boundary")
 	assert.Equal(t, UnitBounds{Prev: -1, Next: 5}, got[3],
 		"boundaries are exclusive of the probe ordinal itself")
 	assert.Equal(t, UnitBounds{Prev: 5, Next: UnitOrdinalMax}, got[4],
-		"no user row after the last assistant")
+		"empty user row after the last assistant is not a dialogue boundary")
 }
 
 // TestUnitBoundsQuerierChunkingAlignment seeds more sessions than either

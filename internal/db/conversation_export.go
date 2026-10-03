@@ -209,6 +209,14 @@ func conversationArchiveIdentity(ctx context.Context, tx *sql.Tx) (string, strin
 		ErrConversationInitializationRequired, "conversation export initialization"); err != nil {
 		return "", "", err
 	}
+	recipe, err := sessionExportMetadataValue(ctx, tx, "conversation_dialogue_recipe",
+		ErrConversationInitializationRequired, "conversation dialogue projection")
+	if err != nil {
+		return "", "", err
+	}
+	if recipe != conversationDialogueRecipe {
+		return "", "", ErrConversationInitializationRequired
+	}
 	archiveID, err := sessionExportMetadataValue(ctx, tx, archiveMetadataArchiveIDKey, ErrArchiveIDMissing, "archive id")
 	if err != nil {
 		return "", "", err
@@ -346,12 +354,34 @@ func conversationRowsTx(tx transactionQueries, sessionID string) ([]conversation
 	return result, rows.Err()
 }
 
+func conversationStoredMessagesTx(tx transactionQueries, sessionID string) ([]Message, error) {
+	rows, err := tx.Query(`SELECT ordinal,role,content,thinking_text,tool_result_text,
+	 COALESCE(timestamp,''),source_uuid,source_subtype,content_layout
+	 FROM messages WHERE session_id=? AND role IN ('user','assistant') AND is_system=0 AND source_subtype!='tool_result'
+	 ORDER BY ordinal`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var messages []Message
+	for rows.Next() {
+		message := Message{SessionID: sessionID}
+		var layout sql.NullString
+		if err := rows.Scan(&message.Ordinal, &message.Role, &message.Content, &message.ThinkingText, &message.ToolResultText, &message.Timestamp, &message.SourceUUID, &message.SourceSubtype, &layout); err != nil {
+			return nil, err
+		}
+		message.SetContentLayout(DecodeStoredContentLayout(layout.String))
+		messages = append(messages, message)
+	}
+	return messages, rows.Err()
+}
+
 func conversationRowFromMessage(m Message) (conversationRow, bool) {
 	if m.IsSystem || m.Role != "user" && m.Role != "assistant" || m.SourceSubtype == "tool_result" {
 		return conversationRow{}, false
 	}
 	row := conversationRow{Type: "message", SessionID: m.SessionID, Ordinal: m.Ordinal, Role: m.Role, Timestamp: optionalStringPtr(m.Timestamp), sourceID: m.SourceUUID}
-	if m.Content == "" {
+	if m.ContentLayout == nil || m.ContentLayout.Version != 1 || m.Content == "" {
 		row.Gap = "visible_text_unavailable"
 	} else {
 		row.body = new(SanitizeUTF8(m.Content))
@@ -401,6 +431,35 @@ func reconcileConversationMessagesTx(tx transactionQueries, sessionID string, ms
 			equal = false
 		}
 	}
+	// Two unavailable bodies are equal as publications, but cannot prove that
+	// a no-ID legacy replacement is the same message. Compare saved evidence.
+	if equal {
+		var legacy []Message
+		for _, message := range msgs {
+			if message.ContentLayout == nil && message.SourceUUID == "" {
+				if _, eligible := conversationRowFromMessage(message); eligible {
+					legacy = append(legacy, message)
+				}
+			}
+		}
+		if len(legacy) > 0 {
+			stored, err := conversationStoredMessagesTx(tx, sessionID)
+			if err != nil {
+				return err
+			}
+			byOrdinal := map[int]Message{}
+			for _, message := range stored {
+				byOrdinal[message.Ordinal] = message
+			}
+			for _, message := range legacy {
+				previous, exists := byOrdinal[message.Ordinal]
+				if !exists || previous.Content != message.Content || previous.ThinkingText != message.ThinkingText || previous.ToolResultText != message.ToolResultText {
+					equal = false
+					break
+				}
+			}
+		}
+	}
 	retained := map[string]bool{}
 	for i := range incoming {
 		row := &incoming[i]
@@ -433,7 +492,7 @@ func reconcileConversationMessagesTx(tx transactionQueries, sessionID string, ms
 				row.Gap = "identity_ambiguous"
 			}
 		}
-		if row.MessageID == "" && row.body != nil && replace && len(old) > 0 && row.sourceID == "" {
+		if row.MessageID == "" && replace && len(old) > 0 && row.sourceID == "" {
 			row.Gap = "identity_ambiguous"
 		}
 		if row.MessageID == "" {

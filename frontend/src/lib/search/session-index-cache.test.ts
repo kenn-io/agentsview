@@ -8,6 +8,8 @@ let id = 940000;
 function message(text: string): Message {
   const content = `\`\`\`text\n${text}\n\`\`\``;
   return {
+    content_layout: null,
+    tool_result_text: "",
     has_context_tokens: false,
     has_output_tokens: false,
     id: id++,

@@ -188,6 +188,7 @@ func shelleyDigestMessage(h hash.Hash64, r shelleyMessageRow) {
 	shelleyDigestFields(
 		h,
 		"message",
+		r.messageID,
 		strconv.FormatInt(r.sequenceID, 10),
 		r.msgType,
 		r.llmData,
@@ -263,7 +264,7 @@ func forEachShelleyConversationMetaQuery(
 		        COALESCE(c.created_at, ''), COALESCE(c.updated_at, ''),
 		        COALESCE(c.cwd, ''), COALESCE(c.parent_conversation_id, ''),
 		        COALESCE(c.model, ''),
-		        COALESCE(m.sequence_id, 0), COALESCE(m.type, ''),
+		        COALESCE(m.message_id, ''), COALESCE(m.sequence_id, 0), COALESCE(m.type, ''),
 		        COALESCE(m.llm_data, ''), COALESCE(m.user_data, ''),
 		        COALESCE(m.usage_data, ''), COALESCE(m.created_at, '')
 		   FROM conversations c
@@ -303,7 +304,7 @@ func forEachShelleyConversationMetaQuery(
 			&userInitiated, &rowConv.createdAt,
 			&rowConv.updatedAt, &rowConv.cwd,
 			&rowConv.parentConversationID, &rowConv.model,
-			&msg.sequenceID, &msg.msgType, &msg.llmData,
+			&msg.messageID, &msg.sequenceID, &msg.msgType, &msg.llmData,
 			&msg.userData, &msg.usageData, &msg.createdAt,
 		); err != nil {
 			return fmt.Errorf("scanning shelley conversation meta: %w", err)
@@ -352,7 +353,7 @@ func ShelleySourceMtime(ctx context.Context, path string) (int64, error) {
 	}
 
 	rows, err := conn.QueryContext(ctx,
-		`SELECT COALESCE(sequence_id, 0), COALESCE(type, ''),
+		`SELECT COALESCE(message_id, ''), COALESCE(sequence_id, 0), COALESCE(type, ''),
 		        COALESCE(llm_data, ''), COALESCE(user_data, ''),
 		        COALESCE(usage_data, ''), COALESCE(created_at, '')
 		   FROM messages WHERE conversation_id = ?
@@ -370,7 +371,7 @@ func ShelleySourceMtime(ctx context.Context, path string) (int64, error) {
 	for rows.Next() {
 		var r shelleyMessageRow
 		if err := rows.Scan(
-			&r.sequenceID, &r.msgType, &r.llmData,
+			&r.messageID, &r.sequenceID, &r.msgType, &r.llmData,
 			&r.userData, &r.usageData, &r.createdAt,
 		); err != nil {
 			return 0, fmt.Errorf("scanning shelley message: %w", err)
@@ -460,6 +461,7 @@ func loadShelleyConversation(ctx context.Context,
 }
 
 type shelleyMessageRow struct {
+	messageID  string
 	sequenceID int64
 	msgType    string
 	llmData    string
@@ -477,7 +479,7 @@ func loadShelleyMessages(ctx context.Context,
 	// and must not be hidden. sequence_id is unique per conversation
 	// across generations, so it is a safe Ordinal.
 	rows, err := conn.QueryContext(ctx,
-		`SELECT COALESCE(sequence_id, 0), COALESCE(type, ''),
+		`SELECT COALESCE(message_id, ''), COALESCE(sequence_id, 0), COALESCE(type, ''),
 		        COALESCE(llm_data, ''), COALESCE(user_data, ''),
 		        COALESCE(usage_data, ''), COALESCE(created_at, '')
 		   FROM messages
@@ -498,7 +500,7 @@ func loadShelleyMessages(ctx context.Context,
 	for rows.Next() {
 		var r shelleyMessageRow
 		if err := rows.Scan(
-			&r.sequenceID, &r.msgType, &r.llmData,
+			&r.messageID, &r.sequenceID, &r.msgType, &r.llmData,
 			&r.userData, &r.usageData, &r.createdAt,
 		); err != nil {
 			return nil, "", fmt.Errorf("scanning shelley message: %w", err)
@@ -509,6 +511,9 @@ func loadShelleyMessages(ctx context.Context,
 		// matches the meta skip query; a mismatch would re-parse forever.
 		shelleyDigestMessage(h, r)
 		if msg, ok := decodeShelleyMessage(r, conv.model); ok {
+			if msg.SourceUUID != "" {
+				msg.SourceUUID = conv.conversationID + ":" + msg.SourceUUID
+			}
 			messages = append(messages, msg)
 		}
 	}
@@ -534,76 +539,57 @@ func decodeShelleyMessage(
 		isSystem = true
 	}
 
-	var (
-		textParts     []string
-		thinkingParts []string
-		toolCalls     []ParsedToolCall
-		toolResults   []ParsedToolResult
-	)
-
+	var body MessageContentBuilder
+	var textParts []string
 	if r.llmData != "" {
-		var msg shelleyLLMMessage
-		if err := json.Unmarshal([]byte(r.llmData), &msg); err == nil {
-			for _, c := range msg.Content {
+		var native shelleyLLMMessage
+		if err := json.Unmarshal([]byte(r.llmData), &native); err == nil {
+			for _, c := range native.Content {
 				switch c.Type {
 				case shelleyContentText:
 					if c.Text != "" {
 						textParts = append(textParts, c.Text)
+						body.addText(c.Text, "")
 					}
 				case shelleyContentThinking:
-					if c.Thinking != "" {
-						thinkingParts = append(thinkingParts, c.Thinking)
-					}
+					body.addThinking(c.Thinking, "\n")
 				case shelleyContentRedactedThinking:
-					thinkingParts = append(thinkingParts, "[redacted thinking]")
+					body.AddThinking("")
 				case shelleyContentToolUse, shelleyContentServerToolUse:
 					if c.ToolName != "" {
-						toolCalls = append(toolCalls, ParsedToolCall{
-							ToolUseID: c.ID,
-							ToolName:  c.ToolName,
-							Category:  NormalizeToolCategory(c.ToolName),
-							InputJSON: shelleyToolInput(c.ToolInput),
-						})
+						body.AddToolCall(ParsedToolCall{ToolUseID: c.ID, ToolName: c.ToolName, Category: NormalizeToolCategory(c.ToolName), InputJSON: shelleyToolInput(c.ToolInput)})
 					}
 				case shelleyContentToolResult, shelleyContentWebSearchToolResult:
 					text := shelleyToolResultText(c.ToolResult)
 					quoted, _ := json.Marshal(text)
-					toolResults = append(toolResults, ParsedToolResult{
-						ToolUseID:     c.ToolUseID,
-						ContentRaw:    string(quoted),
-						ContentLength: len(text),
-					})
+					body.AddToolResult(ParsedToolResult{ToolUseID: c.ToolUseID, ContentRaw: string(quoted), ContentLength: len(text)})
 				case shelleyContentWebSearchResult:
 					if label := strings.TrimSpace(c.Title + " " + c.URL); label != "" {
+						// The native search-result leaf is work output even without a call ID.
 						textParts = append(textParts, label)
+						quoted, _ := json.Marshal(label)
+						body.AddToolResult(ParsedToolResult{ContentRaw: string(quoted), ContentLength: len(label)})
 					}
 				}
 			}
 		}
 	}
-
 	content := strings.TrimSpace(strings.Join(textParts, ""))
-	thinking := strings.TrimSpace(strings.Join(thinkingParts, "\n"))
-
-	// User-typed text may live only in user_data for some message types.
-	if content == "" && len(toolCalls) == 0 && len(toolResults) == 0 {
-		content = shelleyUserDataText(r.userData)
+	native := body.Message()
+	if native.Content == "" && len(native.ToolCalls) == 0 && len(native.ToolResults) == 0 {
+		if fallback := shelleyUserDataText(r.userData); fallback != "" {
+			body.addText(fallback, "")
+			content = fallback
+		}
 	}
-
-	msg := ParsedMessage{
-		Ordinal:       int(r.sequenceID),
-		Role:          role,
-		Content:       content,
-		ThinkingText:  thinking,
-		HasThinking:   thinking != "",
-		HasToolUse:    len(toolCalls) > 0,
-		IsSystem:      isSystem,
-		ContentLength: len(content),
-		ToolCalls:     toolCalls,
-		ToolResults:   toolResults,
-		Timestamp:     parseTimestamp(r.createdAt),
-	}
-
+	native = body.Message()
+	native.setDialogue(strings.TrimSpace(native.Content))
+	native.trimThinking()
+	msg := (ParsedMessage{
+		Ordinal: int(r.sequenceID), Role: role, Content: native.Content, IsSystem: isSystem,
+		Timestamp: parseTimestamp(r.createdAt), SourceUUID: r.messageID,
+	}).withBody(native)
+	msg.ContentLength = sanitizedWorkLength(content)
 	// Apply usage for any row that carries it, not just agent rows:
 	// Shelley records token usage on errored assistant turns too (stored
 	// as type="error"), and applyShelleyUsage no-ops on the all-zero
@@ -611,8 +597,7 @@ func decodeShelleyMessage(
 	if r.usageData != "" {
 		applyShelleyUsage(&msg, r.usageData, convModel)
 	}
-	if content == "" && thinking == "" &&
-		len(toolCalls) == 0 && len(toolResults) == 0 {
+	if !msg.hasNativeBody() {
 		if !msg.HasContextTokens && !msg.HasOutputTokens {
 			return ParsedMessage{}, false
 		}
@@ -765,8 +750,7 @@ func buildShelleyParseResult(
 	}
 	hasContent := false
 	for _, m := range messages {
-		if m.Content != "" || m.HasThinking ||
-			m.HasToolUse || len(m.ToolResults) > 0 {
+		if m.hasNativeBody() || m.HasContextTokens || m.HasOutputTokens {
 			hasContent = true
 			break
 		}

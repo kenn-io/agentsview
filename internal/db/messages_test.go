@@ -423,6 +423,7 @@ func TestMigration_ThinkingTextColumn(t *testing.T) {
 	// (SQLite 3.35+) to simulate a legacy schema.
 	conn, err := sql.Open("sqlite3", path)
 	require.NoError(t, err, "raw open")
+	removeNativeProjectionsForLegacyFixture(t, conn)
 	_, err = conn.ExecContext(t.Context(),
 		`ALTER TABLE messages DROP COLUMN thinking_text`,
 	)
