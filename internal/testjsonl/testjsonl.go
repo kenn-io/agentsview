@@ -451,6 +451,31 @@ func CodexTokenCountJSON(
 	return mustMarshal(m)
 }
 
+// CodexTokenCountWithCacheWriteJSON returns a Codex token_count event whose
+// last_token_usage includes cache_write_input_tokens inside input_tokens.
+func CodexTokenCountWithCacheWriteJSON(
+	timestamp string,
+	inputTokens, outputTokens, cachedInputTokens, cacheWriteInputTokens int,
+) string {
+	m := map[string]any{
+		"type":      "event_msg",
+		"timestamp": timestamp,
+		"payload": map[string]any{
+			"type": "token_count",
+			"info": map[string]any{
+				"last_token_usage": map[string]any{
+					"input_tokens":             inputTokens,
+					"output_tokens":            outputTokens,
+					"cached_input_tokens":      cachedInputTokens,
+					"cache_write_input_tokens": cacheWriteInputTokens,
+					"total_tokens":             inputTokens + outputTokens,
+				},
+			},
+		},
+	}
+	return mustMarshal(m)
+}
+
 // ClaudeEntryJSON returns a Claude JSONL entry with uuid and
 // parentUuid fields.
 func ClaudeEntryJSON(
