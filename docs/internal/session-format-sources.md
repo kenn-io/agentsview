@@ -3814,7 +3814,9 @@ schemas keep their existing ordering behavior.
   and raw snapshots carry the registry-derived project path in the database's
   logical manifest path because the database does not store it. Finite
   backfills save that project path with each resolved root and restore it on
-  resume, independently of later registry additions or removal. The pinned
+  resume, independently of later registry additions, removal, or read/decode
+  errors. New backfills reject an existing registry that cannot be read or
+  decoded instead of completing with its project databases omitted. The pinned
   registry's separate `path` and `data_dir` fields were reverified on
   2026-10-02. Source row deletion is not authoritative. Crush's pinned
   [session deletion service](https://github.com/charmbracelet/crush/blob/ce980ada68444b7591d8dfa631af7e94b2aba0b3/internal/session/session.go#L138-L168)

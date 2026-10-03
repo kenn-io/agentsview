@@ -234,22 +234,27 @@ func TestBackfillVersionEightMigrationPreservesQueueAndReceipt(t *testing.T) {
 }
 
 func TestBackfillDestinationSurvivesReopenAndFencesWatch(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "checkpoint.db")
-	store, err := Open(t.Context(), path)
-	require.NoError(t, err)
-	require.NoError(t, store.EnsureDevice(t.Context(), "device-a"))
-	require.NoError(t, store.EnsureDestination(t.Context(), "https://INGEST.example/"))
-	require.NoError(t, store.Close())
-	store, err = Open(t.Context(), path)
-	require.NoError(t, err)
-	defer store.Close()
-	require.NoError(t, store.EnsureDestination(t.Context(), "https://ingest.example"))
-	require.ErrorIs(t, store.EnsureDestination(t.Context(), "https://other.example"), ErrDestinationMismatch)
-	_, err = store.BeginBackfill(t.Context(), BackfillRunSpec{
-		RunID: "after-watch", DeviceID: "device-a", Destination: "https://other.example",
-		Providers: []parser.AgentType{parser.AgentClaude},
-	})
-	require.ErrorIs(t, err, ErrDestinationMismatch)
+	for _, basePath := range []string{"", "/av", "/tenant%2Fname"} {
+		t.Run(basePath, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "checkpoint.db")
+			store, err := Open(t.Context(), path)
+			require.NoError(t, err)
+			require.NoError(t, store.EnsureDevice(t.Context(), "device-a"))
+			require.NoError(t, store.EnsureDestination(t.Context(), "https://INGEST.example"+basePath+"/"))
+			require.NoError(t, store.Close())
+			store, err = Open(t.Context(), path)
+			require.NoError(t, err)
+			defer store.Close()
+			require.NoError(t, store.EnsureDestination(t.Context(), "https://ingest.example"+basePath))
+			require.ErrorIs(t, store.EnsureDestination(t.Context(), "https://ingest.example/other"), ErrDestinationMismatch)
+			require.ErrorIs(t, store.EnsureDestination(t.Context(), "https://other.example"), ErrDestinationMismatch)
+			_, err = store.BeginBackfill(t.Context(), BackfillRunSpec{
+				RunID: "after-watch", DeviceID: "device-a", Destination: "https://other.example",
+				Providers: []parser.AgentType{parser.AgentClaude},
+			})
+			require.ErrorIs(t, err, ErrDestinationMismatch)
+		})
+	}
 }
 
 func TestFreshSchemaMatchesVersionEightMigration(t *testing.T) {

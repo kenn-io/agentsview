@@ -51,15 +51,55 @@ func TestRawSyncBackfillValidatesFlagsBeforeConfigSideEffects(t *testing.T) {
 }
 
 func TestNormalizeRawSyncBackfillConfigCanonicalizesSelection(t *testing.T) {
-	cfg, err := normalizeRawSyncBackfillConfig(rawSyncBackfillConfig{
-		Server: "https://sync.example.test/", DeviceID: "device-a",
-		RunID: "run_1", Providers: []string{"codex", " claude ", "CODEX"},
-		BatchSize: 128, Format: "json",
-	}, "credential-value")
+	for _, basePath := range []string{"", "/av", "/tenant%2Fname"} {
+		t.Run(basePath, func(t *testing.T) {
+			cfg, err := normalizeRawSyncBackfillConfig(rawSyncBackfillConfig{
+				Server: "https://sync.example.test" + basePath + "/", DeviceID: "device-a",
+				RunID: "run_1", Providers: []string{"codex", " claude ", "CODEX"},
+				BatchSize: 128, Format: "json",
+			}, "credential-value")
 
-	require.NoError(t, err)
-	assert.Equal(t, "https://sync.example.test", cfg.Server)
-	assert.Equal(t, []string{"claude", "codex"}, cfg.Providers)
+			require.NoError(t, err)
+			assert.Equal(t, "https://sync.example.test"+basePath, cfg.Server)
+			assert.Equal(t, []string{"claude", "codex"}, cfg.Providers)
+		})
+	}
+}
+
+func TestRawSyncBackfillRejectsUnreadableCrushRegistry(t *testing.T) {
+	for _, registryState := range []string{"malformed", "unreadable"} {
+		t.Run(registryState, func(t *testing.T) {
+			dataDir, registry, projectData := t.TempDir(), t.TempDir(), t.TempDir()
+			conn, err := sql.Open("sqlite3", filepath.Join(projectData, parser.CrushDBName))
+			require.NoError(t, err)
+			_, err = conn.ExecContext(t.Context(), `CREATE TABLE sessions (id TEXT PRIMARY KEY)`)
+			require.NoError(t, err)
+			require.NoError(t, conn.Close())
+			registryPath := filepath.Join(registry, parser.CrushProjectsFileName)
+			if registryState == "malformed" {
+				body, err := json.Marshal(map[string]any{"projects": []map[string]string{{"path": t.TempDir(), "data_dir": projectData}}})
+				require.NoError(t, err)
+				require.NoError(t, os.WriteFile(registryPath, body[:len(body)-1], 0o600))
+			} else {
+				require.NoError(t, os.Mkdir(registryPath, 0o700))
+			}
+			require.NoError(t, os.WriteFile(filepath.Join(dataDir, "config.toml"), []byte(fmt.Sprintf("[agents.crush]\ndirs = [%q]\n", registry)), 0o600))
+			t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+			t.Setenv("AGENTSVIEW_RAW_SYNC_URL", "https://sync.example.test")
+			t.Setenv("AGENTSVIEW_RAW_SYNC_DEVICE_ID", "device-a")
+			t.Setenv("AGENTSVIEW_RAW_SYNC_CREDENTIAL", "credential-value")
+			output, err := executeCommand(newRootCommand(), "raw-sync", "backfill", "--run-id", "bad-registry", "--provider", "crush", "--format", "json")
+			require.Error(t, err)
+			assert.Empty(t, output)
+			assert.Contains(t, err.Error(), "project registry")
+			assert.NotContains(t, err.Error(), registry)
+			store, err := rawcheckpoint.Open(t.Context(), rawSyncCheckpointPath(dataDir))
+			require.NoError(t, err)
+			defer store.Close()
+			_, err = store.BackfillProgress(t.Context(), "bad-registry")
+			require.ErrorIs(t, err, rawcheckpoint.ErrBackfillConflict, "an invalid registry must not save a run")
+		})
+	}
 }
 
 func TestSelectRawSyncBackfillProvidersBindsConfiguredRoots(t *testing.T) {
@@ -469,7 +509,7 @@ func (t *recordingRawSyncBackfillTransport) CommitManifest(ctx context.Context, 
 }
 
 func TestRawSyncBackfillResumeKeepsCrushRegistryProjectPath(t *testing.T) {
-	for _, registryChange := range []string{"unchanged", "added project", "removed registry", "overlapping registry root"} {
+	for _, registryChange := range []string{"unchanged", "added project", "removed registry", "malformed registry", "overlapping registry root"} {
 		t.Run(registryChange, func(t *testing.T) {
 			registry := t.TempDir()
 			project := filepath.Join(t.TempDir(), "project-a")
@@ -527,6 +567,8 @@ func TestRawSyncBackfillResumeKeepsCrushRegistryProjectPath(t *testing.T) {
 				require.NoError(t, os.WriteFile(filepath.Join(registry, parser.CrushProjectsFileName), registryBody, 0o600))
 			case "removed registry":
 				require.NoError(t, os.Remove(filepath.Join(registry, parser.CrushProjectsFileName)))
+			case "malformed registry":
+				require.NoError(t, os.WriteFile(filepath.Join(registry, parser.CrushProjectsFileName), []byte("{"), 0o600))
 			}
 
 			selected, err = selectRawSyncBackfillProviders(cfg, backfill.Providers)

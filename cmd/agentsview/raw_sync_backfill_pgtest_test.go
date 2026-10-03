@@ -45,7 +45,7 @@ func TestRawSyncBackfillCommandCommitsOnceAndReusesHistoricalProof(t *testing.T)
 	}, nil, nil, option)
 	var interruptManifestResponse atomic.Bool
 	rawHandler := rawServer.Handler()
-	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	httpServer := httptest.NewServer(http.StripPrefix("/av", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/raw-sync/manifests" &&
 			interruptManifestResponse.CompareAndSwap(true, false) {
 			recorded := httptest.NewRecorder()
@@ -64,7 +64,7 @@ func TestRawSyncBackfillCommandCommitsOnceAndReusesHistoricalProof(t *testing.T)
 			return
 		}
 		rawHandler.ServeHTTP(w, r)
-	}))
+	})))
 	t.Cleanup(httpServer.Close)
 
 	dataDir := t.TempDir()
@@ -81,7 +81,7 @@ func TestRawSyncBackfillCommandCommitsOnceAndReusesHistoricalProof(t *testing.T)
 	sourceBefore, err := os.ReadFile(claudePath)
 	require.NoError(t, err)
 	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
-	t.Setenv("AGENTSVIEW_RAW_SYNC_URL", httpServer.URL)
+	t.Setenv("AGENTSVIEW_RAW_SYNC_URL", httpServer.URL+"/av/")
 	t.Setenv("AGENTSVIEW_RAW_SYNC_DEVICE_ID", enrolled.Identity.DeviceID)
 	t.Setenv("AGENTSVIEW_RAW_SYNC_CREDENTIAL", enrolled.Credential)
 

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -102,12 +101,7 @@ func normalizeRawSyncBackfillConfig(
 	if err := validateRawSyncWatchConfig(connection, credential); err != nil {
 		return cfg, err
 	}
-	parsed, err := url.Parse(strings.TrimSpace(cfg.Server))
-	if err != nil || (parsed.Path != "" && parsed.Path != "/") {
-		return cfg, errors.New("raw-sync server URL must be an origin")
-	}
-	parsed.Path, parsed.RawPath = "", ""
-	cfg.Server = strings.TrimRight(parsed.String(), "/")
+	cfg.Server = strings.TrimRight(strings.TrimSpace(cfg.Server), "/")
 	if !validRawSyncBackfillRunID(cfg.RunID) {
 		return cfg, errors.New("--run-id must be 1-128 letters, digits, '_' or '-'")
 	}
@@ -328,6 +322,13 @@ func rawSyncBackfillSpec(
 		typ := item.Provider.Definition().Type
 		var roots []rawcheckpoint.BackfillRoot
 		for _, path := range item.ConfiguredRoots {
+			projectPath, err := parser.RawCaptureProjectPath(item.Provider, path)
+			if err != nil {
+				return rawcheckpoint.BackfillRunSpec{}, fmt.Errorf(
+					"a configured %s project registry could not be read or decoded; repair projects.json and retry: %w",
+					typ, rawcheckpoint.ErrConfiguredRootUnavailable,
+				)
+			}
 			root, err := store.ResolveConfiguredRoot(ctx, typ, path)
 			if errors.Is(err, rawcheckpoint.ErrConfiguredRootUnavailable) {
 				return rawcheckpoint.BackfillRunSpec{}, fmt.Errorf(
@@ -339,7 +340,7 @@ func rawSyncBackfillSpec(
 				return rawcheckpoint.BackfillRunSpec{}, rawcheckpoint.ErrBackfillIncomplete
 			}
 			roots = append(roots, rawcheckpoint.BackfillRoot{
-				ConfiguredRoot: root, ProjectPath: parser.RawCaptureProjectPath(item.Provider, path),
+				ConfiguredRoot: root, ProjectPath: projectPath,
 			})
 		}
 		spec.Roots = append(spec.Roots, bindRawSyncBackfillProviderRoots(item, roots)...)

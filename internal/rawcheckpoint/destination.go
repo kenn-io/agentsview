@@ -14,7 +14,7 @@ var (
 )
 
 // EnsureDestination binds both watch and backfill uploads to one server. A
-// checkpoint with earlier uploads but no origin cannot prove their destination.
+// checkpoint with earlier uploads but no server URL cannot prove their destination.
 func (s *Store) EnsureDestination(ctx context.Context, destination string) error {
 	destination, err := normalizeDestination(destination)
 	if err != nil {
@@ -26,13 +26,12 @@ func (s *Store) EnsureDestination(ctx context.Context, destination string) error
 }
 
 func normalizeDestination(destination string) (string, error) {
-	u, err := url.Parse(strings.TrimSpace(destination))
+	u, err := url.Parse(strings.TrimRight(strings.TrimSpace(destination), "/"))
 	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") ||
-		u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
-		return "", errors.New("rawcheckpoint: server URL must be an origin")
+		u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return "", errors.New("rawcheckpoint: server URL is invalid")
 	}
 	u.Host = strings.ToLower(u.Host)
-	u.Path, u.RawPath = "", ""
 	return u.String(), nil
 }
 

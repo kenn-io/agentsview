@@ -242,7 +242,8 @@ func TestCrushProviderDiscoveryAndRoots(t *testing.T) {
 		filepath.Join(registryDir, CrushProjectsFileName),
 		[]byte(registry), 0o600,
 	))
-	roots, registryMapping, projectMapping := normalizeCrushRoots([]string{registryDir})
+	roots, registryMapping, projectMapping, err := normalizeCrushRoots([]string{registryDir})
+	require.NoError(t, err)
 	require.Equal(t, []string{fixture.dataDir}, roots)
 	require.Len(t, registryMapping, 1)
 	assert.Equal(t, []string{fixture.dataDir}, registryMapping[filepath.Clean(registryDir)])
@@ -275,14 +276,14 @@ func TestCrushProviderDiscoveryAndRoots(t *testing.T) {
 	assert.Empty(t, meta.SessionID)
 
 	// A root pointing directly at a .crush data dir is kept as-is.
-	dataDirs, _, _ := normalizeCrushRoots([]string{fixture.dataDir})
+	dataDirs, _, _, _ := normalizeCrushRoots([]string{fixture.dataDir})
 	assert.Equal(t, []string{fixture.dataDir}, dataDirs)
 	// A root pointing at the db file resolves to its directory.
-	dataDirs, _, _ = normalizeCrushRoots([]string{fixture.dbPath})
+	dataDirs, _, _, _ = normalizeCrushRoots([]string{fixture.dbPath})
 	assert.Equal(t, []string{fixture.dataDir}, dataDirs)
 	// An unreadable registry leaves the root untouched rather than
 	// failing discovery.
-	dataDirs, _, _ = normalizeCrushRoots([]string{registryDir + "-missing"})
+	dataDirs, _, _, _ = normalizeCrushRoots([]string{registryDir + "-missing"})
 	assert.Equal(t, []string{registryDir + "-missing"}, dataDirs)
 }
 
