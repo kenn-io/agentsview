@@ -117,6 +117,46 @@ func TestScanEmbeddableUnitsSinceScope(t *testing.T) {
 	}
 }
 
+// TestScanEmbeddableUnitsForSessionScope pins the single-session scan the
+// vector mirror uses to rescan journaled sessions: it ignores ended_at but
+// keeps the automated and trash scope of the full scan.
+func TestScanEmbeddableUnitsForSessionScope(t *testing.T) {
+	d := testDB(t)
+	seedEmbeddableScopeCorpus(t, d)
+
+	tests := []struct {
+		name             string
+		sessionID        string
+		includeAutomated bool
+		want             []string
+	}{
+		{name: "OldEndedAtStillScanned", sessionID: "b-old", want: []string{"b-old-u0", "b-old-u1"}},
+		{name: "AutomatedExcludedByDefault", sessionID: "e-auto"},
+		{
+			name: "AutomatedIncludedWhenRequested", sessionID: "e-auto",
+			includeAutomated: true, want: []string{"e-auto-u0", "e-auto-u1"},
+		},
+		{name: "TrashedExcluded", sessionID: "f-trashed", includeAutomated: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got []string
+			err := d.ScanEmbeddableUnitsForSession(t.Context(), tt.sessionID, tt.includeAutomated,
+				func(u EmbeddableUnit) error {
+					assert.Equal(t, tt.sessionID, u.SessionID)
+					got = append(got, u.Content)
+					return nil
+				})
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+
+	err := d.ScanEmbeddableUnitsForSession(t.Context(), "", true,
+		func(EmbeddableUnit) error { return nil })
+	require.EqualError(t, err, "session ID is required")
+}
+
 // TestScanEmbeddableUnitsSinceOrdering asserts the (session_id, ordinal)
 // stream contract unitReducer depends on still holds for a since-filtered
 // scan, where the query now drives from sessions instead of messages.
@@ -210,7 +250,7 @@ func TestEmbeddableUnitsQueryPlanDrivesFromSessionsWhenSinceIsSet(t *testing.T) 
 				args = append(args, tt.since)
 			}
 			plan := explainQueryPlan(t, d,
-				embeddableUnitsQuery(tt.since, tt.includeAutomated), args...)
+				embeddableUnitsQuery(tt.since, "", tt.includeAutomated), args...)
 			joined := strings.Join(plan, "\n")
 
 			scansMessages := false
