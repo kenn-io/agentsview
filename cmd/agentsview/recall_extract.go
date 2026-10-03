@@ -33,8 +33,10 @@ type extractDistillation struct {
 	Quiet     time.Duration
 	Backoff   time.Duration
 	Backstop  time.Duration
-	Server    string
-	Profile   string
+	// Concurrency is the resolved server's parallel session count.
+	Concurrency int
+	Server      string
+	Profile     string
 }
 
 // resolveExtractDistillation validates cfg and resolves it into a runnable
@@ -110,11 +112,12 @@ func resolveExtractDistillation(
 			Model:      cfg.Model,
 			Deployment: cfg.Deployment,
 		},
-		Quiet:    quiet,
-		Backoff:  backoff,
-		Backstop: backstop,
-		Server:   serverName,
-		Profile:  profile.Name,
+		Quiet:       quiet,
+		Backoff:     backoff,
+		Backstop:    backstop,
+		Concurrency: server.Concurrency,
+		Server:      serverName,
+		Profile:     profile.Name,
 	}, nil
 }
 
@@ -134,6 +137,7 @@ func buildExtractManager(
 		Identity:       dist.Identity,
 		QuietPeriod:    dist.Quiet,
 		FailureBackoff: dist.Backoff,
+		Concurrency:    dist.Concurrency,
 
 		AllowCandidateFindings: cfg.AllowCandidateFindings(),
 	})
@@ -529,6 +533,7 @@ func newRecallExtractDoctorCommand() *cobra.Command {
 			}
 			fmt.Fprintf(out, "Server: %s (%s)\n",
 				dist.Server, config.RedactedEndpoint(dist.Client.BaseURL))
+			fmt.Fprintf(out, "Concurrency: %d\n", dist.Concurrency)
 			fmt.Fprintf(out, "Profile: %s\n", dist.Profile)
 			fmt.Fprintf(out, "Segmenter: %s (max_window_chars=%d)\n",
 				dist.Segmenter.Name(), dist.Segmenter.MaxWindowChars)

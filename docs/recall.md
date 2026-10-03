@@ -237,9 +237,18 @@ Optional keys: `deployment` (labels which serving instance produced the corpus),
 — how long a session must have been ended before extraction),
 `backstop_interval` (default `"1h"`), `failure_backoff` (default `"1h"`),
 `max_window_chars` (default 50000), `max_tokens`, `candidate_findings`
-(`"block"` default, or `"allow"` — see below), per-server `api_key_env`, a
+(`"block"` default, or `"allow"` — see below), per-server `api_key_env`,
+per-server `concurrency` (default 1 — see below), a
 `[recall.extract.prompts]` table (`profile`, `dir`), and a
 `[recall.extract.request]` table (`temperature`, `extra_body`).
+
+`concurrency` sets how many sessions a pass distills at once against that
+server; each session's units are still sent one at a time, in order. Raise it
+for hosted endpoints or servers that batch concurrent requests, where a
+one-session pass leaves the endpoint mostly idle between round trips. Keep the
+default of 1 for a single local model: parallel requests divide the same
+compute instead of adding throughput. Each in-flight session holds its
+transcript in memory, and a hosted endpoint's rate limits still apply.
 
 Non-loopback endpoints must use HTTPS: extraction sends transcript content to
 the endpoint, and plaintext HTTP off the machine could be intercepted. A server

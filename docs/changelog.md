@@ -134,6 +134,12 @@ The latest published release is
   stage starts, instead of leaving the previous subagent-repair label visible.
 - Full resync now shows how many queued sessions it has checked while repairing
   subagent relationships, then reports when it is saving those repairs.
+- Recall extraction can work through a large backlog faster against a hosted
+  or batching model endpoint. Set `concurrency` on a
+  `[recall.extract.servers.<name>]` entry to distill that many sessions at
+  once; each session's units still run in order. The default stays 1, which
+  suits a single local model, where parallel requests only share the same
+  compute.
 - Turning a session provider on or off, or adding or removing an alternate
   home, on the Settings page now takes effect without restarting the daemon.
   New sessions in a newly enabled provider or home are picked up as they are
