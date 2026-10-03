@@ -10,6 +10,7 @@ import {
   SessionsService,
   type SessionToolSequencesResponse,
 } from "../../api/generated/index";
+import { ApiError } from "../../api/runtime.js";
 import { messages } from "../../stores/messages.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
 import { setLocale } from "../../i18n/index.js";
@@ -2143,7 +2144,7 @@ describe("SessionBreadcrumb", () => {
       unmount(component);
     });
 
-    it("loads tool sequences only while visible and refreshes for child usage changes", async () => {
+    it("loads tool sequences only while visible and skips usage-only refreshes", async () => {
       const session = makeSession("claude", {
         transcript_revision: "revision-1",
         termination_status: "clean",
@@ -2169,13 +2170,9 @@ describe("SessionBreadcrumb", () => {
       expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(1);
 
       sessions.activeSessionUsageVersion += 1;
-      await vi.waitFor(async () => {
-        expect(await expandedSequenceText()).toContain("0ms");
-        expect(document.querySelector(".tool-sequences-panel")?.getAttribute("aria-busy")).toBe(
-          "false",
-        );
-      });
-      expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(2);
+      await flushPromises();
+      expect(await expandedSequenceText()).toContain("Not measured");
+      expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(1);
       component.$destroy();
     });
 
@@ -2205,7 +2202,7 @@ describe("SessionBreadcrumb", () => {
       await flushPromises();
       expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(1);
 
-      sessions.activeSessionUsageVersion += 1;
+      component.$set({ session: { ...session, termination_status: "awaiting_user" } });
       await tick();
       expect(document.body.textContent).toContain("2.0s");
       expect(document.body.textContent).not.toContain("Loading tool sequences");
@@ -2413,6 +2410,26 @@ describe("SessionBreadcrumb", () => {
       await vi.waitFor(async () => expect(await expandedSequenceText()).toContain("2.0s"));
       expect(document.querySelector('.tool-sequences-panel [role="alert"]')).toBeNull();
       expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(2);
+      component.$destroy();
+    });
+
+    it("says tool sequences are unavailable when the archive records no transcript revision", async () => {
+      sessionsService.getApiV1SessionsByIdToolSequences.mockRejectedValueOnce(
+        new ApiError(501, "this backend records no transcript revision", "revision_unavailable"),
+      );
+      ui.signalPanelOpen = true;
+      const component = createClassComponent({
+        component: SessionBreadcrumb,
+        target: document.body,
+        props: { session: makeSession("claude"), onBack: () => {} },
+      });
+      await vi.waitFor(() => {
+        expect(document.querySelector(".tool-sequences-panel")?.textContent).toContain(
+          "doesn't record transcript versions",
+        );
+      });
+      expect(document.querySelector('.tool-sequences-panel [role="alert"]')).toBeNull();
+      expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(1);
       component.$destroy();
     });
 

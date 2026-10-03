@@ -66,7 +66,7 @@ afterEach(() => {
 
 function mountPanel(
   data: SessionToolSequencesResponse | null,
-  extra: { loading?: boolean; failed?: boolean; onretry?: () => void } = {},
+  extra: { loading?: boolean; failed?: boolean; unavailable?: boolean; onretry?: () => void } = {},
 ) {
   return mount(ToolSequencesPanel, {
     target: document.body,
@@ -171,6 +171,15 @@ describe("ToolSequencesPanel", () => {
     expect(text).toContain("Preview shows 7 of 10 bytes.");
     expect(text).toContain("Full result is in message 4.");
     expect(text).toContain("tool-id");
+    // Narrow panels hide the duration column, so each expanded call repeats its timing.
+    const durations = () =>
+      [...document.querySelectorAll(".ev-duration")].map((row) =>
+        row.textContent?.replace(/\s+/g, " ").trim(),
+      );
+    expect(durations()).toEqual(["Duration Not measured"]);
+    await openCall(9);
+    expect(durations()).toEqual(["Duration Not measured", "Duration 0ms"]);
+    await openCall(9);
 
     const link = document.querySelector<HTMLAnchorElement>(
       'a.jump[aria-label="Message 20: open the Read call in the transcript"]',
@@ -386,5 +395,14 @@ describe("ToolSequencesPanel", () => {
     alert.querySelector("button")!.click();
     expect(onretry).toHaveBeenCalledOnce();
     unmount(failed);
+
+    document.body.innerHTML = "";
+    const unavailable = mountPanel(null, { unavailable: true });
+    await tick();
+    expect(document.body.textContent).toContain(
+      "This archive doesn't record transcript versions, so tool sequences aren't available.",
+    );
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+    unmount(unavailable);
   });
 });

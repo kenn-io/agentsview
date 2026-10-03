@@ -18,10 +18,11 @@
     sessionId: string;
     loading: boolean;
     failed: boolean;
+    unavailable?: boolean;
     onretry?: (() => void) | undefined;
   }
 
-  let { data, sessionId, loading, failed, onretry = undefined }: Props = $props();
+  let { data, sessionId, loading, failed, unavailable = false, onretry = undefined }: Props = $props();
 
   type Outcome = SessionToolSequenceCall["outcome"];
   type Ending = SessionToolSequence["ending"];
@@ -193,6 +194,8 @@
       <div class="skel"></div>
       <div class="skel"></div>
     </div>
+  {:else if unavailable && !data}
+    <p class="state">{m.tool_sequences_unavailable()}</p>
   {:else if failed && !data}
     <div class="state state-error" data-kit-tone="danger" role="alert">
       <span>{m.tool_sequences_error()}</span>
@@ -292,6 +295,11 @@
                     {#if callOpen}
                       <div class="detail" id="{uid}-call-{index}-{callIndex}">
                         <dl class="evidence">
+                          <!-- The call row drops its duration column on narrow panels, so the details carry it there. -->
+                          <div class="ev ev-duration">
+                            <dt>{m.tool_sequences_duration()}</dt>
+                            <dd>{call.duration_ms === null ? m.tool_sequences_not_measured() : formatDuration(call.duration_ms)}</dd>
+                          </div>
                           <div class="ev">
                             <dt>{m.tool_sequences_input()}</dt>
                             <dd>
@@ -697,6 +705,14 @@
     font-size: var(--font-size-xs);
   }
 
+  .ev-duration {
+    display: none;
+  }
+
+  .ev-duration dd {
+    padding-top: var(--space-2);
+  }
+
   dt {
     padding-top: var(--space-2);
     color: var(--text-muted);
@@ -827,6 +843,10 @@
 
     .dur {
       display: none;
+    }
+
+    .ev-duration {
+      display: grid;
     }
   }
 

@@ -26,6 +26,7 @@
     type ResumeResponse,
   } from "../../api/generated/index";
   import {
+    ApiError,
     isAbortError,
   } from "../../api/runtime.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
@@ -84,6 +85,7 @@
   let toolSequencesRevision = $state("");
   let toolSequencesLoading = $state(false);
   let toolSequencesFailed = $state(false);
+  let toolSequencesUnavailable = $state(false);
   let toolSequencesRetry = $state(0);
   let toolSequencesLoadedIdentity = "";
   const openersRead = new LatestRead();
@@ -380,6 +382,7 @@
       toolSequencesRevision = "";
       toolSequencesLoading = false;
       toolSequencesFailed = false;
+      toolSequencesUnavailable = false;
       toolSequencesLoadedIdentity = "";
       return;
     }
@@ -389,7 +392,6 @@
       id,
       revision,
       currentSession.termination_status ?? "",
-      sessions.activeSessionUsageVersion,
     ].join("\n");
     if (untrack(() => toolSequencesData?.session_id !== id || toolSequencesRevision !== revision)) {
       toolSequencesData = null;
@@ -399,6 +401,7 @@
     if (identity === toolSequencesLoadedIdentity) return;
     toolSequencesLoading = true;
     toolSequencesFailed = false;
+    toolSequencesUnavailable = false;
     const signal = toolSequencesRead.begin();
     SessionsService.getApiV1SessionsByIdToolSequences({ id }, { signal })
       .then((response) => {
@@ -411,7 +414,12 @@
         if (isAbortError(error) || !toolSequencesRead.isCurrent(signal)) return;
         toolSequencesData = null;
         toolSequencesRevision = "";
-        toolSequencesFailed = true;
+        if (error instanceof ApiError && error.status === 501) {
+          toolSequencesLoadedIdentity = identity;
+          toolSequencesUnavailable = true;
+        } else {
+          toolSequencesFailed = true;
+        }
       })
       .finally(() => {
         if (toolSequencesRead.finish(signal)) toolSequencesLoading = false;
@@ -1189,6 +1197,7 @@
     sessionId={session.id}
     loading={toolSequencesLoading}
     failed={toolSequencesFailed}
+    unavailable={toolSequencesUnavailable}
     onretry={() => toolSequencesRetry++}
   />
 {/if}

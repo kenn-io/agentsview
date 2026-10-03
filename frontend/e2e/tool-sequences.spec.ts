@@ -63,9 +63,24 @@ test("renders, expands, and navigates observed sequences at desktop, tablet, and
     await expect(preview).toContainText("pattern");
     await preview.focus();
     await expect(preview).toBeFocused();
-    if (width > 820) {
+    // The duration column only fits a panel wider than 820px; below that the expanded call carries the timing.
+    const durationColumn = await panel.locator(".dur").first().isVisible();
+    if (width < 820) expect(durationColumn).toBe(false);
+    if (durationColumn) {
       await expect(panel.locator(".dur").first()).toHaveText("2.0s");
       await expect(panel.locator(".dur").nth(1)).toHaveAttribute("title", "Not measured");
+      await expect(panel.locator(".ev-duration").first()).toBeHidden();
+    } else {
+      const duration = panel.locator(".call").first().locator(".ev-duration");
+      await expect(duration).toBeVisible();
+      await expect(duration).toContainText("Duration");
+      await expect(duration).toContainText("2.0s");
+      await panel.locator(".call-row").nth(1).press("Enter");
+      const unmeasured = panel.locator(".call").nth(1).locator(".ev-duration");
+      await expect(unmeasured).toBeVisible();
+      await expect(unmeasured).toContainText("Not measured");
+      await panel.locator(".call-row").nth(1).press("Enter");
+      await expect(unmeasured).toHaveCount(0);
     }
 
     const scroller = page.locator(".message-list-scroll");
