@@ -2176,6 +2176,33 @@ describe("SessionBreadcrumb", () => {
       component.$destroy();
     });
 
+    it("refreshes tool sequences when a child session closes", async () => {
+      const session = makeSession("claude", { transcript_revision: "revision-1" });
+      const child = makeSession("claude", {
+        id: "child-1",
+        parent_session_id: session.id,
+        started_at: "2024-01-01T00:00:00Z",
+        ended_at: undefined,
+      });
+      sessions.childSessions = new Map([[child.id, child]]);
+      sessionsService.getApiV1SessionsByIdToolSequences
+        .mockResolvedValueOnce(makeToolSequences(null))
+        .mockResolvedValueOnce(makeToolSequences(2000));
+      ui.signalPanelOpen = true;
+      const component = createClassComponent({
+        component: SessionBreadcrumb,
+        target: document.body,
+        props: { session, onBack: () => {} },
+      });
+      await vi.waitFor(async () => expect(await expandedSequenceText()).toContain("Not measured"));
+      expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(1);
+
+      sessions.childSessions = new Map([[child.id, { ...child, ended_at: "2024-01-01T00:00:02Z" }]]);
+      await vi.waitFor(async () => expect(await expandedSequenceText()).toContain("2.0s"));
+      expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(2);
+      component.$destroy();
+    });
+
     it("keeps an expanded sequence visible while refreshing its timing", async () => {
       const refresh = deferred<SessionToolSequencesResponse>();
       const session = makeSession("claude", {

@@ -198,6 +198,15 @@
       .join("\n");
   }
 
+  // A delegated call's duration ends when its child session does, so a child closing changes the sequences without touching the parent.
+  function childTimingKey(parentId: string): string {
+    return Array.from(sessions.childSessions.values())
+      .filter((child) => child.parent_session_id === parentId)
+      .map((child) => [child.id, child.started_at ?? "", child.ended_at ?? ""].join("\t"))
+      .sort()
+      .join("\n");
+  }
+
   function usageFetchKey(s: Session): string {
     return [
       s.id,
@@ -392,6 +401,7 @@
       id,
       revision,
       currentSession.termination_status ?? "",
+      childTimingKey(id),
     ].join("\n");
     if (untrack(() => toolSequencesData?.session_id !== id || toolSequencesRevision !== revision)) {
       toolSequencesData = null;
