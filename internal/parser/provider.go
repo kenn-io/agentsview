@@ -1201,6 +1201,13 @@ func ProviderFactories() []ProviderFactory {
 	return factories
 }
 
+// SharesSessionIDs reports whether agent's provider declares SharedSessionIDs,
+// so its sessions may be stored under an AltSessionID.
+func SharesSessionIDs(agent AgentType) bool {
+	def, ok := AgentByType(agent)
+	return ok && providerFactoryForDef(def).Capabilities().Source.SharedSessionIDs == CapabilitySupported
+}
+
 func providerFactoryForDef(def AgentDef) ProviderFactory {
 	def = cloneAgentDef(def)
 	switch def.Type {

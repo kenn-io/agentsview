@@ -52,6 +52,18 @@ func TestProviderCapabilitiesS3DiscoveryMatchConsumers(t *testing.T) {
 	}
 }
 
+// Only the providers with reported same-id files opt into keeping both.
+func TestProviderCapabilitiesSharedSessionIDsOptIn(t *testing.T) {
+	for _, factory := range ProviderFactories() {
+		agent := factory.Definition().Type
+		want := CapabilityUnsupported
+		if agent == AgentGemini || agent == AgentCursor {
+			want = CapabilitySupported
+		}
+		assert.Equalf(t, want, factory.Capabilities().Source.SharedSessionIDs, "%s", agent)
+	}
+}
+
 func TestProviderCapabilitiesActivityHintsMatchConsumers(t *testing.T) {
 	assert.Equal(t, CapabilityUnsupported, (SourceCapabilities{}).ActivityHints,
 		"new providers must opt in explicitly")

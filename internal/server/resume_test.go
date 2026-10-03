@@ -72,6 +72,12 @@ func TestResumeCommandAugureCode(t *testing.T) {
 	assert.Equal(t, "augure resume run-1 -m ossington-5", cmd)
 }
 
+func TestResumeCommandAltSession(t *testing.T) {
+	assert.Equal(t, "gemini --resume abc", resumeCommand("gemini", resumeAgents["gemini"], "abc_alt-0a1b2c3d4e5f6a7b", ""))
+	assert.Equal(t, "gemini --resume abc_alt-notahash", resumeCommand("gemini", resumeAgents["gemini"], "abc_alt-notahash", ""))
+	assert.Equal(t, "amp --resume abc_alt-0a1b2c3d4e5f6a7b", resumeCommand("amp", resumeAgents["amp"], "abc_alt-0a1b2c3d4e5f6a7b", ""))
+}
+
 func TestCommandWithCleanup(t *testing.T) {
 	assert.Equal(t,
 		"claude < prompt.txt; rm -f -- 'prompt.txt'",

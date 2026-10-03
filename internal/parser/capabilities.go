@@ -95,6 +95,11 @@ type SourceCapabilities struct {
 	// they opt in; the sync engine uses the flag instead of a hardcoded
 	// Claude/Codex whitelist.
 	S3Discovery CapabilitySupport
+	// SharedSessionIDs means two of the provider's files can carry the same
+	// session id as separate sessions (Gemini CLI chat segments, Cursor
+	// transcripts copied between projects). The sync engine then keeps the
+	// stored file on the id and stores the other under parser.AltSessionID.
+	SharedSessionIDs CapabilitySupport
 	// StoredMemberFreshnessListing means the provider answers a changed-path
 	// event for a shared container with only the members whose change marker
 	// ChangedPathRequest.StoredMemberFreshnessPage does not cover, and resolves

@@ -121,6 +121,7 @@ func (hs HTTPSync) importRoot(
 		Host:                    hs.Host,
 		Full:                    hs.Full,
 		RequireComplete:         true,
+		completeSourceMirror:    true,
 		DB:                      hs.DB,
 		BlockedResultCategories: hs.BlockedResultCategories,
 		Progress:                hs.Progress,

@@ -2,6 +2,8 @@ package parser
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"strings"
@@ -1331,6 +1333,31 @@ const (
 	RelSubagent     RelationshipType = "subagent"
 	RelFork         RelationshipType = "fork"
 )
+
+// altSessionMarker joins a session id to the source-path hash of a second
+// file that resolved to the same id. "~" is reserved for host prefixes.
+const altSessionMarker = "_alt-"
+
+// AltSessionID returns the id under which the source file at path is stored
+// when another file already owns id.
+func AltSessionID(id, path string) string {
+	sum := sha256.Sum256([]byte(path))
+	return id + altSessionMarker + hex.EncodeToString(sum[:8])
+}
+
+// BaseSessionID strips an AltSessionID suffix, returning the id the agent
+// itself recorded. Only agents whose provider declares SharedSessionIDs have
+// derived ids; their native ids never end in the suffix.
+func BaseSessionID(id string) string {
+	i := strings.LastIndex(id, altSessionMarker)
+	if i < 0 || len(id)-i != len(altSessionMarker)+16 {
+		return id
+	}
+	if _, err := hex.DecodeString(id[i+len(altSessionMarker):]); err != nil {
+		return id
+	}
+	return id[:i]
+}
 
 // RoleType identifies the role of a message sender.
 type RoleType string

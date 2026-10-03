@@ -488,6 +488,10 @@ type EngineConfig struct {
 	// physical path under the current mirror. Remote changed-path planning uses
 	// it to make persisted source hints usable by mirror-local providers.
 	StoredPathResolver func(storedPath string) (physicalPath string, ok bool)
+	// CompleteSourceMirror means resolved source paths cover the remote's
+	// complete export. A missing resolved file can prove a source is gone.
+	// Leave false for partial extracts; a full parse alone proves no coverage.
+	CompleteSourceMirror bool
 	// InitialSkipCache seeds an ephemeral engine with caller-owned translated
 	// skip state. Rebuild contributors use it because their engine is created
 	// inside the atomic replacement workflow.
@@ -550,11 +554,14 @@ type Engine struct {
 	// During a resync/rebuild it points at the original DB while
 	// e.db points at the fresh one; nil means e.db is the archive.
 	archiveStore db.Store
-	// archiveStaleClaudeForks snapshots the original archive's stale Claude
-	// fork rows for one rebuild; nil outside a rebuild, where e.db is queried
-	// per source path instead.
-	archiveStaleClaudeForks *archiveStaleClaudeForkIndex
-	deferredSourceCwd       *sourceCwdReconciliationBatch
+	// archiveRebuildIndex snapshots source ownership in the original archive
+	// for one rebuild; nil outside a rebuild, where e.db is queried instead.
+	archiveRebuildIndex *archiveRebuildIndex
+	// sourceClaims maps a full session id to the file that took it before
+	// its row is written, so a second file in the same pass derives its own.
+	sourceClaimsMu    gosync.Mutex
+	sourceClaims      map[string]string
+	deferredSourceCwd *sourceCwdReconciliationBatch
 	// sourceSet holds the provider set and session roots this engine
 	// discovers from. ReconfigureSources replaces it as one snapshot.
 	sourceSet atomic.Pointer[engineSources]
@@ -629,6 +636,7 @@ type Engine struct {
 	idPrefix                string
 	pathRewriter            func(string) string
 	storedPathResolver      func(string) (string, bool)
+	completeSourceMirror    bool
 	emitter                 Emitter
 	providerMigrationModes  map[parser.AgentType]parser.ProviderMigrationMode
 
@@ -981,6 +989,7 @@ func NewEngine(ctx context.Context,
 		idPrefix:                cfg.IDPrefix,
 		pathRewriter:            cfg.PathRewriter,
 		storedPathResolver:      cfg.StoredPathResolver,
+		completeSourceMirror:    cfg.CompleteSourceMirror,
 		emitter:                 cfg.Emitter,
 		providerMigrationModes:  providerModes,
 		digestVerifiedAt:        make(map[string]time.Time),
@@ -1780,6 +1789,7 @@ func (e *Engine) applyChangedPathSyncLocked(
 		return SyncStats{}, 0, prepared.classificationErr
 	}
 	e.resetS3CodexIndexCache()
+	e.resetSourceClaims()
 	e.anomalies.reset()
 	// Begin a container pass so an already-trusted, unchanged container
 	// still gates its fan-out, but never promote from a changed-path subset.
@@ -3284,19 +3294,19 @@ func (e *Engine) resyncBuildLocked(
 	// minutes. Without this marker the progress printer credits that
 	// silent time to the preceding (instant) "Disabling ..." phase.
 	// The archive is write-barriered for the whole rebuild, so one snapshot of
-	// its stale Claude fork rows serves every parsed file. Querying the archive
+	// its source ownership serves every parsed file. Querying the archive
 	// per file would open cold reader connections while workers are busy,
 	// which SQLite's busy handler turns into sleeps on every open.
-	archiveStaleForks, err := loadArchiveStaleClaudeForkIndex(ctx, origDB)
+	archiveIndex, err := loadArchiveRebuildIndex(ctx, origDB, e.collisionPolicyAgents())
 	if err != nil {
-		log.Printf("resync: snapshot stale claude forks: %v", err)
+		log.Printf("resync: snapshot archive source ownership: %v", err)
 		newDB.Close()
 		removeTempDB(tempPath)
 		restoreSkipCache()
 		stats = SyncStats{
 			Aborted: true,
 			Warnings: []string{
-				"resync failed: snapshot stale claude forks: " + err.Error(),
+				"resync failed: snapshot archive source ownership: " + err.Error(),
 			},
 		}
 		e.mu.Lock()
@@ -3305,7 +3315,7 @@ func (e *Engine) resyncBuildLocked(
 		return stats, err
 	}
 	e.archiveStore = origDB
-	e.archiveStaleClaudeForks = archiveStaleForks
+	e.archiveRebuildIndex = archiveIndex
 	deferredSourceCwd := newSourceCwdReconciliationBatch()
 	e.deferredSourceCwd = deferredSourceCwd
 	defer func() { e.deferredSourceCwd = nil }()
@@ -3320,7 +3330,7 @@ func (e *Engine) resyncBuildLocked(
 	)
 	e.db = origDB // restore immediately
 	e.archiveStore = nil
-	e.archiveStaleClaudeForks = nil
+	e.archiveRebuildIndex = nil
 	pendingTombstoned += stats.Tombstoned
 	stats.Tombstoned = 0
 	pendingLinksUpdated += stats.LinksUpdated
@@ -3355,7 +3365,7 @@ func (e *Engine) resyncBuildLocked(
 		}
 		contributorEngine := NewEngine(ctx, newDB, contributor.Config)
 		contributorEngine.archiveStore = origDB
-		contributorEngine.archiveStaleClaudeForks = archiveStaleForks
+		contributorEngine.archiveRebuildIndex = archiveIndex
 		contributorEngine.deferredSourceCwd = deferredSourceCwd
 		contributorEngine.forceFullParse = contributor.ForceParse ||
 			contributor.ForceFullParseAfterCache
@@ -7852,6 +7862,7 @@ func (e *Engine) syncAllLocked(
 	}
 	e.phaseStats.Reset()
 	e.resetS3CodexIndexCache()
+	e.resetSourceClaims()
 	e.anomalies.reset()
 	// Fold the per-run anomaly accumulator into the returned stats on
 	// every exit path so the CLI sync summary can surface them.
@@ -13383,7 +13394,7 @@ func (e *Engine) claudeSourceMissingSessionOwnershipsForCompleteResult(
 	for _, id := range e.applyIDPrefixToSessionIDs(excludedSessionIDs) {
 		present[id] = struct{}{}
 	}
-	if index := e.archiveStaleClaudeForks; index != nil {
+	if index := e.archiveRebuildIndex; index != nil {
 		return index.missingMembers(paths, present), nil
 	}
 	var members []sourceMissingMember
@@ -13424,24 +13435,37 @@ func (e *Engine) claudeSourceMissingSessionOwnershipsForCompleteResult(
 	return members, nil
 }
 
-// archiveStaleClaudeForkIndex is a rebuild-scoped snapshot of the original
-// archive's stale Claude fork rows keyed by stored source path. The archive
-// takes no writes while a rebuild reads it, so the snapshot stays exact.
-type archiveStaleClaudeForkIndex struct {
+// archiveRebuildIndex snapshots stale Claude forks and shared-session source
+// ownership from the original archive. The archive takes no writes during a
+// rebuild, so the snapshot stays exact.
+type archiveRebuildIndex struct {
 	byPath map[string][]db.SessionSourceOwnership
+	// pathRecords holds the archive's session path records for the agents
+	// sourceCollisionID covers, keyed by base id, so a rebuild sees the same
+	// ownership an ordinary sync reads from the live archive.
+	pathRecords map[string][]db.SessionPathRecord
 }
 
-func loadArchiveStaleClaudeForkIndex(ctx context.Context,
-	archive *db.DB,
-) (*archiveStaleClaudeForkIndex, error) {
+func loadArchiveRebuildIndex(ctx context.Context,
+	archive *db.DB, collisionAgents []string,
+) (*archiveRebuildIndex, error) {
 	ownerships, err := archive.ListStaleForkSessionOwnerships(ctx,
 		string(parser.AgentClaude),
 	)
 	if err != nil {
 		return nil, err
 	}
-	index := &archiveStaleClaudeForkIndex{
-		byPath: make(map[string][]db.SessionSourceOwnership),
+	records, err := archive.ListSessionPathRecordsForAgents(ctx, collisionAgents)
+	if err != nil {
+		return nil, err
+	}
+	index := &archiveRebuildIndex{
+		byPath:      make(map[string][]db.SessionSourceOwnership),
+		pathRecords: make(map[string][]db.SessionPathRecord),
+	}
+	for _, record := range records {
+		base := parser.BaseSessionID(record.ID)
+		index.pathRecords[base] = append(index.pathRecords[base], record)
 	}
 	for _, ownership := range ownerships {
 		index.byPath[ownership.FilePath] = append(
@@ -13453,7 +13477,7 @@ func loadArchiveStaleClaudeForkIndex(ctx context.Context,
 
 // missingMembers returns the snapshotted stale forks under paths that a
 // complete parse did not re-emit, in a stable path-then-ID order.
-func (index *archiveStaleClaudeForkIndex) missingMembers(
+func (index *archiveRebuildIndex) missingMembers(
 	paths map[string]struct{},
 	present map[string]struct{},
 ) []sourceMissingMember {
@@ -13727,8 +13751,24 @@ func (e *Engine) applyProviderFilePathPolicies(
 		if e.pathRewriter != nil {
 			lookupPath = e.pathRewriter(path)
 		}
-		currentID := result.Session.ID
-		currentPrefixedID := e.idPrefix + result.Session.ID
+		originalID := result.Session.ID
+		admitted := e.cwdFilter.allows(sourceCwdForFilter(result.Session.Cwd, sourceCwdDecision{
+			resolution: res.sourceCwdResolution,
+			storedCwd:  res.sourceCwdStored,
+			storedOK:   res.sourceCwdStoredOK,
+		}))
+		currentID, err := e.sourceCollisionID(ctx, provider, lookupPath, &result.Session, admitted)
+		if err != nil {
+			// Ownership is unknown, so skip the source this pass and retry it.
+			res.err = err
+			res.noCacheSkip = true
+			res.results = kept[:0]
+			return
+		}
+		if currentID != originalID && res.retrySessionIDs[originalID] {
+			res.retrySessionIDs[currentID] = true
+		}
+		currentPrefixedID := e.idPrefix + currentID
 
 		agentsToQuery := []string{string(agent)}
 		var existingIDs []string
@@ -18509,9 +18549,8 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 	}
 	writes := make([]db.SessionBatchWrite, 0, len(batch))
 	pendingIndexes := make([]int, 0, len(batch))
-	sources := make(map[string]batchSourceFile, len(batch))
+	sources := make([]batchSourceFile, 0, len(batch))
 	pendingByID := make(map[string]pendingWrite, len(batch))
-	pendingIndexByID := make(map[string]int, len(batch))
 	resolveWorktreeProject := e.loadWorktreeProjectResolverContext(ctx)
 
 	for pendingIndex, pw := range batch {
@@ -18664,14 +18703,11 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 		})
 		pendingIndexes = append(pendingIndexes, pendingIndex)
 		pendingByID[s.ID] = pw
-		pendingIndexByID[s.ID] = pendingIndex
-		if pw.sess.File.Path != "" {
-			sources[s.ID] = batchSourceFile{
-				path:        pw.sess.File.Path,
-				mtime:       pw.sess.File.Mtime,
-				fingerprint: pw.sess.File.Hash,
-			}
-		}
+		sources = append(sources, batchSourceFile{
+			path:        pw.sess.File.Path,
+			mtime:       pw.sess.File.Mtime,
+			fingerprint: pw.sess.File.Hash,
+		})
 	}
 	if len(writes) == 0 {
 		return outcome
@@ -18707,11 +18743,15 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 			e.markStaleFailedMemberWrite(ctx, pw)
 		}
 	}
-	for _, id := range result.ExcludedIDs {
-		if pendingIndex, ok := pendingIndexByID[id]; ok {
-			outcome.resolved[pendingIndex] = true
+	// Resolve skips by write index: two sources in one batch can share a
+	// session id, and each skipped source must be skip-cached.
+	for _, excludedIndex := range result.ExcludedIndexes {
+		if excludedIndex < 0 || excludedIndex >= len(pendingIndexes) {
+			continue
 		}
-		if source, ok := sources[id]; ok && source.path != "" {
+		pendingIndex := pendingIndexes[excludedIndex]
+		outcome.resolved[pendingIndex] = true
+		if source := sources[excludedIndex]; source.path != "" {
 			e.cacheSkip(
 				source.path, source.mtime, source.fingerprint,
 			)
@@ -20549,6 +20589,7 @@ func (e *Engine) SyncSingleSessionContext(
 	}()
 	defer e.syncMu.Unlock()
 	e.resetS3CodexIndexCache()
+	e.resetSourceClaims()
 
 	host, _ := parser.StripHostPrefix(sessionID)
 	if host != "" && !isS3SourcePath(e.db.GetSessionFilePath(ctx, sessionID)) {

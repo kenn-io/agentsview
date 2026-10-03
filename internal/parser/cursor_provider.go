@@ -1219,6 +1219,7 @@ func cursorProviderCapabilities() Capabilities {
 			ExcludedSessions:     CapabilityNotApplicable,
 			ForceReplaceOnParse:  CapabilityNotApplicable,
 			S3Discovery:          CapabilitySupported,
+			SharedSessionIDs:     CapabilitySupported,
 		},
 		Content: ContentCapabilities{
 			FirstMessage:     CapabilitySupported,

@@ -1127,9 +1127,19 @@ func (d *DB) CopyExcludedSessionsFrom(
 		return fmt.Errorf("probing excluded_sessions table: %w", err)
 	}
 
+	filePath := "NULL"
+	var hasFilePath bool
+	if err := conn.QueryRowContext(ctx,
+		"SELECT EXISTS(SELECT 1 FROM pragma_table_info('excluded_sessions', 'old_db') WHERE name = 'file_path')",
+	).Scan(&hasFilePath); err != nil {
+		return fmt.Errorf("probing excluded_sessions columns: %w", err)
+	}
+	if hasFilePath {
+		filePath = "file_path"
+	}
 	_, err = conn.ExecContext(ctx, `
-		INSERT OR IGNORE INTO excluded_sessions (id, created_at)
-		SELECT id, created_at
+		INSERT OR IGNORE INTO excluded_sessions (id, created_at, file_path)
+		SELECT id, created_at, `+filePath+`
 		FROM old_db.excluded_sessions`)
 	if err != nil {
 		return fmt.Errorf("copying excluded sessions: %w", err)

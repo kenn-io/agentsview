@@ -31,6 +31,7 @@ func (im Importer) ImportExtracted(
 		return stats, err
 	}
 	config.ArchiveContent = im.DB.ArchiveContent()
+	config.CompleteSourceMirror = im.completeSourceMirror
 
 	engine := syncpkg.NewEngine(ctx, im.DB, config)
 	defer engine.Close()
@@ -91,10 +92,11 @@ type importLayout struct {
 }
 
 type remotePathMap struct {
-	host       string
-	root       string
-	remoteDirs []string
-	localDirs  []string
+	host           string
+	root           string
+	remoteDirs     []string
+	localDirs      []string
+	forbiddenRoots []string
 }
 
 func newImportLayout(targets TargetSet, root string) (importLayout, error) {
@@ -102,6 +104,7 @@ func newImportLayout(targets TargetSet, root string) (importLayout, error) {
 		engineDirs: make(map[parser.AgentType][]string),
 	}
 	layout.paths.root = root
+	layout.paths.forbiddenRoots = targets.ForbiddenRoots
 	for agentType, agentDirList := range targets.Dirs {
 		for _, remoteDir := range agentDirList {
 			local, err := safeRemappedRemotePath(root, remoteDir)
@@ -185,6 +188,11 @@ func (p remotePathMap) storedPathResolver() func(string) (string, bool) {
 			strings.ReplaceAll(remotePath, `\`, "/"),
 		) {
 			return "", false
+		}
+		for _, forbiddenRoot := range p.forbiddenRoots {
+			if _, forbidden := remoteArchiveRel(forbiddenRoot, remotePath); forbidden {
+				return "", false
+			}
 		}
 		for i, remoteDir := range p.remoteDirs {
 			rel, withinRoot := remoteArchiveRel(remoteDir, remotePath)

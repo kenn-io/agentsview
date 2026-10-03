@@ -495,6 +495,7 @@ func (p *PreparedHTTP) RebuildContributor(ctx context.Context) (syncpkg.RebuildC
 		return syncpkg.RebuildContributor{}, err
 	}
 	config.ArchiveContent = p.sync.DB.ArchiveContent()
+	config.CompleteSourceMirror = true
 	persistSkipCache := func(engine *syncpkg.Engine, database *db.DB) error {
 		var err error
 		if p.mirrorImport != nil {
@@ -1011,6 +1012,7 @@ func (hs HTTPSync) prepareMirror(
 	}
 	pending, err := (Importer{
 		Host: hs.Host, Full: hs.Full, DB: hs.DB,
+		completeSourceMirror:    true,
 		BlockedResultCategories: hs.BlockedResultCategories,
 		Progress:                hs.Progress, Targets: prepared.targets, Root: mirrorRoot,
 		replaceRemoteSkippedFiles: prepared.replaceRemoteSkippedFiles,

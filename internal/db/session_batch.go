@@ -73,9 +73,13 @@ type SessionBatchResult struct {
 	WrittenIndexes   []int
 	ExcludedSessions int
 	ExcludedIDs      []string
-	FailedSessions   int
-	FailedIDs        []string
-	Errors           []error
+	// ExcludedIndexes holds the write indexes behind ExcludedIDs. Callers
+	// that may batch several writes for one session id use it to tell which
+	// source was skipped.
+	ExcludedIndexes []int
+	FailedSessions  int
+	FailedIDs       []string
+	Errors          []error
 }
 
 type contextTransaction struct {
@@ -204,6 +208,7 @@ func (db *DB) WriteSessionBatchContext(
 				result.ExcludedIDs,
 				write.Session.ID,
 			)
+			result.ExcludedIndexes = append(result.ExcludedIndexes, i)
 		default:
 			if rerr := rollbackSavepoint(ctxTx, savepoint); rerr != nil {
 				return result, rerr
@@ -283,6 +288,7 @@ func (db *DB) WriteSessionBatchAtomic(ctx context.Context,
 					result.ExcludedIDs,
 					write.Session.ID,
 				)
+				result.ExcludedIndexes = append(result.ExcludedIndexes, i)
 			default:
 				result.FailedSessions++
 				result.Errors = append(result.Errors, err)

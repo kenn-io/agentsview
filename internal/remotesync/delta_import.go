@@ -123,6 +123,7 @@ func (im Importer) PreparePending(
 		return nil, err
 	}
 	config.ArchiveContent = im.DB.ArchiveContent()
+	config.CompleteSourceMirror = im.completeSourceMirror
 
 	physicalPaths := make([]string, 0, len(request.Journal.Entries))
 	for _, entry := range request.Journal.Entries {

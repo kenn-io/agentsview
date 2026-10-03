@@ -93,6 +93,9 @@ export function buildResumeCommand(
   if (!builder) return null;
 
   const rawId = stripIdPrefix(stripHostPrefix(sessionId), agent);
+  // The server owns collision IDs and provider capabilities. Callers ask it
+  // first; don't guess a fallback for any ID that might need its resolution.
+  if (rawId.includes("_alt-")) return null;
   let cmd = builder(rawId);
 
   if (flags?.model) {

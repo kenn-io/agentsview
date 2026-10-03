@@ -340,15 +340,18 @@ func (r *ArchiveRequest) UnmarshalJSON(data []byte) error {
 }
 
 type Importer struct {
-	Host                      string
-	Full                      bool
-	ForceFullParseAfterCache  bool
-	RequireComplete           bool
-	DB                        *db.DB
-	BlockedResultCategories   []string
-	Progress                  syncpkg.ProgressFunc
-	Targets                   TargetSet
-	Root                      string
+	Host                     string
+	Full                     bool
+	ForceFullParseAfterCache bool
+	RequireComplete          bool
+	DB                       *db.DB
+	BlockedResultCategories  []string
+	Progress                 syncpkg.ProgressFunc
+	Targets                  TargetSet
+	Root                     string
+	// Only HTTP preparation establishes complete export coverage. Full and
+	// RequireComplete control parsing, not which source files were transferred.
+	completeSourceMirror      bool
 	replaceRemoteSkippedFiles func(context.Context, string, map[string]int64) error
 	applyRemoteSkippedChanges func(context.Context, string, []string, map[string]int64) error
 	saveSkipCache             func(*db.DB, *syncpkg.Engine, remotePathMap) error
