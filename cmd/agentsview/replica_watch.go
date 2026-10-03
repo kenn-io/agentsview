@@ -96,7 +96,8 @@ func (p *replicaPusher) pushAfterSync(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if p.beforePush != nil {
+	// The shutdown flush skips the build so its short budget goes to sessions.
+	if p.beforePush != nil && reason != reasonShutdown {
 		if err := p.beforePush(ctx); err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
