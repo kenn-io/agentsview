@@ -12,11 +12,6 @@ import (
 // implementations (e.g. the PostgreSQL reader).
 var ErrReadOnly = readOnlyError{}
 
-// ToolSequenceReadSource binds sequence reads to hosted identity or replica publication; validatePublication marks a request boundary.
-type ToolSequenceReadSource interface {
-	ToolSequenceReadSource(ctx context.Context, sessionID string, validatePublication bool) (binding string, pending bool, err error)
-}
-
 type readOnlyError struct{}
 
 func (readOnlyError) Error() string { return "not available in remote mode" }
@@ -53,7 +48,6 @@ type Store interface {
 
 	// Timing.
 	GetSessionTiming(ctx context.Context, sessionID string) (*SessionTiming, error)
-	GetToolCallDurations(ctx context.Context, sessionID string, positions []ToolCallPosition) (map[ToolCallPosition]*int64, error)
 
 	// Search.
 	HasFTS(ctx context.Context) bool

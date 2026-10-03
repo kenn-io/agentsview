@@ -1,65 +1,11 @@
 package signals
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func TestToolSequenceExtractor(t *testing.T) {
-	for _, ending := range []struct {
-		name     string
-		complete bool
-		last     ToolCallRow
-		want     ToolSequenceEnding
-	}{
-		{"recovered", false, ToolCallRow{ToolName: "Read", ResultContent: "content"}, ToolSequenceEndingRecovered},
-		{"open", false, ToolCallRow{ToolName: "Grep", Category: "Grep", ResultContent: "No matches found"}, ToolSequenceEndingOpen},
-		{"abandoned", true, ToolCallRow{ToolName: "Grep", Category: "Grep", ResultContent: "No matches found"}, ToolSequenceEndingAbandoned},
-		{"unknown", true, ToolCallRow{ToolName: "Read"}, ToolSequenceEndingUnknown},
-	} {
-		t.Run(ending.name, func(t *testing.T) {
-			rows := []ToolCallRow{
-				{ToolName: "Grep", Category: "Grep", MessageOrdinal: 1, InputJSON: `{"a":1,"b":2}`, ResultContent: "No matches found"},
-				{ToolName: "Grep", Category: "Grep", MessageOrdinal: 2, InputJSON: `{"a":1,"b":2}`, ResultContent: "No matches found"},
-				{ToolName: "Grep", Category: "Grep", MessageOrdinal: 3, InputJSON: `{"b":2,"a":1}`, ResultContent: "No matches found"},
-				{ToolName: "Read", MessageOrdinal: 3, ResultContent: "parallel content"},
-			}
-			ending.last.MessageOrdinal = 4
-			rows = append(rows, ending.last)
-			extractor := NewToolSequenceExtractor()
-			got := ToolSequences{Calls: []ToolCallOutcome{}, Sequences: []ToolSequence{}}
-			for _, row := range rows {
-				observation, sequence := extractor.Add(row)
-				got.Calls = append(got.Calls, observation)
-				if sequence != nil {
-					got.Sequences = append(got.Sequences, *sequence)
-				}
-				assert.Empty(t, extractor.previous.ResultContent)
-			}
-			if sequence := extractor.Finish(ending.complete); sequence != nil {
-				got.Sequences = append(got.Sequences, *sequence)
-			}
-			assert.Nil(t, extractor.Finish(ending.complete))
-			assert.Equal(t, ExtractToolSequences(rows, ending.complete), got)
-			require.Len(t, got.Sequences, 1)
-			assert.Equal(t, ending.want, got.Sequences[0].Ending)
-			assert.True(t, got.Sequences[0].Identical)
-			assert.True(t, got.Sequences[0].NearIdentical)
-			assert.Equal(t, ToolRepeatNone, got.Calls[3].Repeat)
-			assert.Empty(t, extractor.previous.InputJSON)
-		})
-	}
-	extractor := NewToolSequenceExtractor()
-	extractor.Add(ToolCallRow{ToolName: "Grep", Category: "Grep", MessageOrdinal: 1, InputJSON: strings.Repeat("x", 1024), ResultContent: "No matches found"})
-	_, first := extractor.Add(ToolCallRow{ToolName: "Read", MessageOrdinal: 2, ResultContent: "text"})
-	extractor.Add(ToolCallRow{ToolName: "Grep", Category: "Grep", MessageOrdinal: 3, ResultContent: "No matches found"})
-	second := extractor.Finish(true)
-	assert.Equal(t, 0, first.Start)
-	assert.Equal(t, 2, second.Start)
-}
 
 func TestClassifyToolOutcome(t *testing.T) {
 	tests := []struct {

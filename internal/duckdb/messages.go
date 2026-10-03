@@ -262,31 +262,15 @@ func scanMessages(rows db.MessageRows) ([]db.Message, error) {
 	return msgs, rows.Err()
 }
 
-const attachToolCallBatchSize = 500
-
 func (s *Store) attachToolCalls(ctx context.Context, msgs []db.Message) error {
-	for start := 0; start < len(msgs); start += attachToolCallBatchSize {
-		if err := s.attachToolCallsBatch(ctx, msgs[start:min(start+attachToolCallBatchSize, len(msgs))]); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *Store) attachToolCallsBatch(ctx context.Context, msgs []db.Message) error {
 	if len(msgs) == 0 {
 		return nil
 	}
 	index := make(map[int]int, len(msgs))
 	sessionID := msgs[0].SessionID
-	args := []any{sessionID}
-	placeholders := make([]string, len(msgs))
 	for i, msg := range msgs {
 		index[msg.Ordinal] = i
-		args = append(args, msg.Ordinal)
-		placeholders[i] = "?"
 	}
-	membership := strings.Join(placeholders, ",")
 	rows, err := s.queryContext(ctx, `
 		SELECT m.ordinal, tc.call_index, tc.tool_name, tc.category,
 			COALESCE(tc.tool_use_id, ''), COALESCE(tc.input_json, ''),
@@ -297,9 +281,9 @@ func (s *Store) attachToolCallsBatch(ctx context.Context, msgs []db.Message) err
 		FROM tool_calls tc
 		JOIN messages m ON m.session_id = tc.session_id
 			AND m.id = tc.message_id
-		WHERE tc.session_id = ? AND m.ordinal IN (`+membership+`)
+		WHERE tc.session_id = ?
 		ORDER BY m.ordinal, tc.call_index`,
-		args...,
+		sessionID,
 	)
 	if err != nil {
 		return err
@@ -328,7 +312,7 @@ func (s *Store) attachToolCallsBatch(ctx context.Context, msgs []db.Message) err
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	if err := s.attachToolResultEvents(ctx, msgs, index, membership, args); err != nil {
+	if err := s.attachToolResultEvents(ctx, msgs, index, sessionID); err != nil {
 		return err
 	}
 	// Mirrors the SQLite load boundary: a summary the call's single result
@@ -338,7 +322,7 @@ func (s *Store) attachToolCallsBatch(ctx context.Context, msgs []db.Message) err
 }
 
 func (s *Store) attachToolResultEvents(
-	ctx context.Context, msgs []db.Message, index map[int]int, membership string, args []any,
+	ctx context.Context, msgs []db.Message, index map[int]int, sessionID string,
 ) error {
 	rows, err := s.queryContext(ctx, `
 		SELECT tool_call_message_ordinal, call_index,
@@ -346,9 +330,9 @@ func (s *Store) attachToolResultEvents(
 			COALESCE(subagent_session_id, ''), source, status,
 			content, content_length, timestamp, event_index
 		FROM tool_result_events
-		WHERE session_id = ? AND tool_call_message_ordinal IN (`+membership+`)
+		WHERE session_id = ?
 		ORDER BY tool_call_message_ordinal, call_index, event_index`,
-		args...,
+		sessionID,
 	)
 	if err != nil {
 		return err
@@ -606,50 +590,4 @@ func timingMillis(start, end string) (int64, bool) {
 
 func hasSystemPrefix(msg db.Message) bool {
 	return db.IsSystemPrefixed(msg.Content, msg.Role)
-}
-
-func (s *Store) GetToolCallDurations(ctx context.Context, id string, positions []db.ToolCallPosition) (map[db.ToolCallPosition]*int64, error) {
-	return (db.ToolCallTimingReadBase{SessionLookup: s.GetSessionFull, Queries: s}).GetToolCallDurations(ctx, id, positions)
-}
-
-func (s *Store) QueryToolCallDurationRows(ctx context.Context, id string, positions []db.ToolCallPosition) (*sql.Rows, error) {
-	selected := make([]string, len(positions))
-	args := []any{id}
-	for i, position := range positions {
-		selected[i] = "(?,?)"
-		args = append(args, position.MessageOrdinal, position.CallIndex)
-	}
-	return s.queryContext(ctx, `
-		SELECT m.ordinal, tc.call_index,
-          (
-				SELECT tre.timestamp
-				FROM tool_result_events tre
-				WHERE tre.session_id = tc.session_id
-					AND tre.tool_call_message_ordinal = m.ordinal
-					AND tre.call_index = tc.call_index
-					AND tre.source = 'tool_execution'
-					AND tre.status = 'started'
-					AND tre.timestamp IS NOT NULL
-				ORDER BY tre.event_index ASC
-				LIMIT 1
-			) AS execution_started_at,
-			(
-				SELECT tre.timestamp
-				FROM tool_result_events tre
-				WHERE tre.session_id = tc.session_id
-					AND tre.tool_call_message_ordinal = m.ordinal
-					AND tre.call_index = tc.call_index
-					AND tre.source = 'tool_execution'
-					AND tre.status IN ('completed', 'errored')
-					AND tre.timestamp IS NOT NULL
-				ORDER BY tre.event_index DESC
-				LIMIT 1
-			) AS execution_completed_at
-			,s_sub.started_at
-			,s_sub.ended_at, tc.subagent_session_id
-		FROM tool_calls tc
-		JOIN messages m ON m.id = tc.message_id
-		LEFT JOIN sessions s_sub ON s_sub.id = tc.subagent_session_id
-		WHERE tc.session_id = ? AND (m.ordinal,tc.call_index) IN (`+strings.Join(selected, ",")+`)
-		ORDER BY tc.message_id, tc.call_index`, args...)
 }

@@ -91,28 +91,25 @@ func (r *hostedRefs) add(p *string) {
 	}
 }
 
-func (r *hostedRefs) linkTargets(ctx context.Context, h *HostedStore) (map[string][]string, error) {
+func (r *hostedRefs) mapIDs(ctx context.Context, h *HostedStore) error {
 	edges := map[string][]string{}
-	owners, aliases := []string{}, []string{}
-	pairs := map[string]bool{}
-	for _, link := range r.links {
-		key := link.owner + "\x00" + link.alias
-		if !pairs[key] {
-			pairs[key] = true
-			owners, aliases = append(owners, link.owner), append(aliases, link.alias)
-		}
+	owners := make([]string, 0, len(r.links))
+	for _, l := range r.links {
+		owners = append(owners, l.owner)
 	}
+	slices.Sort(owners)
+	owners = slices.Compact(owners)
 	if len(owners) > 0 {
-		rows, err := h.physical.pg.QueryContext(ctx, `SELECT DISTINCT owner.session_id,e.target_alias,target.session_id `+hostedLinkFromSQL+` AND (owner.session_id,e.target_alias) IN (SELECT * FROM unnest($1::text[],$2::text[]))`, owners, aliases)
+		rows, err := h.physical.pg.QueryContext(ctx, `SELECT DISTINCT owner.session_id,e.target_alias,target.session_id `+hostedLinkFromSQL+` AND owner.session_id=ANY($1)`, owners)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		defer rows.Close()
 		for rows.Next() {
 			var owner, alias, target string
 			if err = rows.Scan(&owner, &alias, &target); err != nil {
 				rows.Close()
-				return nil, err
+				return err
 			}
 			key := owner + "\x00" + alias
 			edges[key] = append(edges[key], target)
@@ -120,16 +117,8 @@ func (r *hostedRefs) linkTargets(ctx context.Context, h *HostedStore) (map[strin
 		err = rows.Err()
 		rows.Close()
 		if err != nil {
-			return nil, err
+			return err
 		}
-	}
-	return edges, nil
-}
-
-func (r *hostedRefs) mapIDs(ctx context.Context, h *HostedStore) error {
-	edges, err := r.linkTargets(ctx, h)
-	if err != nil {
-		return err
 	}
 	ids := make([]string, 0, len(r.fields))
 	for _, p := range r.fields {

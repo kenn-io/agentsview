@@ -4,10 +4,6 @@ package clickhouse
 
 import (
 	"context"
-	"fmt"
-
-	chdriver "github.com/ClickHouse/clickhouse-go/v2"
-	"go.kenn.io/agentsview/internal/clickhouse/chtest"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -351,104 +347,4 @@ func TestStoreMessageWindowReportsRevisionWithRows(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, msgs)
 	assert.Empty(t, revision, "no rows means no revision to describe them")
-}
-
-func TestMessageHydration(t *testing.T) {
-	dsn, database := chtest.FreshDatabase(t)
-	conn := chtest.Open(t, dsn, database)
-	ctx := t.Context()
-	require.NoError(t, EnsureSchemaOn(ctx, conn))
-	for _, query := range []string{
-		`INSERT INTO sessions (id,push_version,transcript_revision) VALUES ('hydration',1,'rev')`,
-		`INSERT INTO messages (id,session_id,ordinal,role,content,timestamp,push_version) SELECT number+1,'hydration',number,arrayElement(['user','assistant','user','assistant','system','user','assistant','user','assistant','system','user','assistant'],number+1),'msg','2026-01-01 00:00:00',1 FROM numbers(12)`,
-		`INSERT INTO tool_calls (message_id,session_id,message_ordinal,call_index,tool_name,category,input_json,result_content_length,push_version) SELECT number+1,'hydration',number,0,'Read','Read','x',1,1 FROM numbers(12)`,
-		`INSERT INTO tool_result_events (session_id,tool_call_message_ordinal,call_index,source,status,content,content_length,event_index,timestamp,push_version) SELECT 'hydration',number,0,'tool','completed','r',1,0,'2026-01-02 00:00:00',1 FROM numbers(12)`,
-		`INSERT INTO tool_result_events (session_id,tool_call_message_ordinal,call_index,source,status,content,content_length,event_index,timestamp,push_version) VALUES ('hydration',2,0,'tool','completed','later',5,1,'2026-01-03 00:00:00',1)`,
-	} {
-		_, err := conn.ExecContext(ctx, query)
-		require.NoError(t, err)
-	}
-	store := NewStoreFromDB(conn)
-	from, anchor, empty := 7, 4, 9000
-	for _, tc := range []struct {
-		name   string
-		window db.MessageWindow
-		want   []int
-		events uint64
-	}{
-		{"sparse", db.MessageWindow{Limit: 2, Asc: true, Roles: []string{"user"}}, []int{0, 2}, 3},
-		{"descending", db.MessageWindow{From: &from, Limit: 2, Roles: []string{"user"}}, []int{7, 5}, 2},
-		{"around", db.MessageWindow{Around: &anchor, Before: 1, After: 1, Roles: []string{"user"}}, []int{2, 4, 5}, 4},
-		{"empty", db.MessageWindow{From: &empty, Asc: true, Limit: 2}, []int{}, 0},
-		{"full", db.MessageWindow{}, []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}, 13},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var before []uint64
-			for round := range 2 {
-				queryID := fmt.Sprintf("hydration-%s-%s-%d", database, tc.name, round)
-				queryCtx := chdriver.Context(ctx, chdriver.WithQueryID(queryID), chdriver.WithSettings(chdriver.Settings{"log_queries": 1}))
-				var msgs []db.Message
-				var err error
-				if tc.name == "full" {
-					msgs, err = store.GetAllMessages(queryCtx, "hydration")
-				} else {
-					revision := ""
-					window := tc.window
-					window.ObservedRevision = &revision
-					msgs, err = store.GetMessagesWindow(queryCtx, "hydration", window)
-					if len(tc.want) > 0 {
-						assert.Equal(t, "rev", revision)
-					}
-				}
-				require.NoError(t, err)
-				ordinals := make([]int, len(msgs))
-				for i, msg := range msgs {
-					ordinals[i] = msg.Ordinal
-					require.Len(t, msg.ToolCalls, 1)
-					if msg.Ordinal == 2 {
-						require.Len(t, msg.ToolCalls[0].ResultEvents, 2)
-						assert.Equal(t, []string{"r", "later"}, []string{msg.ToolCalls[0].ResultEvents[0].Content, msg.ToolCalls[0].ResultEvents[1].Content})
-						assert.Equal(t, []int{1, 5}, []int{msg.ToolCalls[0].ResultEvents[0].ContentLength, msg.ToolCalls[0].ResultEvents[1].ContentLength})
-						assert.Equal(t, []int{0, 1}, []int{msg.ToolCalls[0].ResultEvents[0].EventIndex, msg.ToolCalls[0].ResultEvents[1].EventIndex})
-						assert.Contains(t, msg.ToolCalls[0].ResultEvents[1].Timestamp, "2026-01-03")
-					} else if msg.Ordinal != 11 {
-						assert.Equal(t, "r", msg.ToolCalls[0].ResultContent)
-					}
-				}
-				assert.Equal(t, tc.want, ordinals)
-				_, err = conn.ExecContext(ctx, `SYSTEM FLUSH LOGS`)
-				require.NoError(t, err)
-				var calls, events, callBytes, eventBytes, callQueries, eventQueries uint64
-				require.NoError(t, conn.QueryRowContext(ctx, `
-					SELECT sumIf(result_rows,position(query,'FROM tool_calls')>0),sumIf(result_rows,position(query,'FROM tool_result_events')>0),
-						sumIf(result_bytes,position(query,'FROM tool_calls')>0),sumIf(result_bytes,position(query,'FROM tool_result_events')>0),
-						countIf(position(query,'FROM tool_calls')>0),countIf(position(query,'FROM tool_result_events')>0)
-					FROM system.query_log WHERE current_database=currentDatabase() AND type='QueryFinish' AND is_initial_query=1 AND query_id=?`, queryID).Scan(&calls, &events, &callBytes, &eventBytes, &callQueries, &eventQueries))
-				assert.Equal(t, uint64(len(tc.want)), calls)
-				assert.Equal(t, tc.events, events)
-				if len(tc.want) == 0 {
-					assert.Zero(t, callQueries)
-					assert.Zero(t, eventQueries)
-				} else {
-					assert.Equal(t, uint64(1), callQueries)
-					assert.Equal(t, uint64(1), eventQueries)
-				}
-				bytes := []uint64{callBytes, eventBytes}
-				if round == 0 {
-					before = bytes
-					for _, table := range []string{"tool_calls", "tool_result_events"} {
-						column, ordinal := "input_json", "message_ordinal"
-						if table == "tool_result_events" {
-							column, ordinal = "content", "tool_call_message_ordinal"
-						}
-						_, err = conn.ExecContext(ctx, `INSERT INTO `+table+` SELECT * REPLACE (repeat('z',1000000) AS `+column+`,push_version+1 AS push_version) FROM `+table+` WHERE session_id='hydration' AND `+ordinal+`=11`)
-						require.NoError(t, err)
-					}
-				} else if tc.name != "full" {
-					assert.Equal(t, before, bytes)
-				}
-				t.Logf("round=%d call rows=%d event rows=%d result bytes=%v", round, calls, events, bytes)
-			}
-		})
-	}
 }

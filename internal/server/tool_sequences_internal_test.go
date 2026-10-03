@@ -30,11 +30,7 @@ func TestBuildSessionToolSequences_UTF8AndCallCap(t *testing.T) {
 		}
 	}
 	status := string(parser.TerminationClean)
-	collector := newSessionToolSequenceCollector("session")
-	for _, row := range rows {
-		collector.add(row)
-	}
-	got := collector.finish(&db.Session{ID: "session", TerminationStatus: &status})
+	got := buildSessionToolSequences(&db.Session{ID: "session", TerminationStatus: &status}, rows, nil)
 	require.Len(t, got.Sequences, 1)
 	sequence := got.Sequences[0]
 	assert.Equal(t, "recovered", sequence.Ending)
@@ -104,7 +100,7 @@ func TestBuildSessionToolSequences_ResultLengthSemantics(t *testing.T) {
 
 func TestBuildSessionToolSequences_BoundedRetainedOutput(t *testing.T) {
 	for _, count := range []int{25, 250} {
-		collector := newSessionToolSequenceCollector("session")
+		var rows []signals.ToolCallRow
 		ordinal := 0
 		for range count {
 			for i := range 12 {
@@ -117,12 +113,10 @@ func TestBuildSessionToolSequences_BoundedRetainedOutput(t *testing.T) {
 				if i == 11 {
 					tool, content = "Read", "recovered"
 				}
-				collector.add(signals.ToolCallRow{ToolName: tool, Category: tool, ToolUseID: "call", InputJSON: strings.Repeat("x", 2048), MessageOrdinal: ordinal, ResultContent: content})
-				assert.LessOrEqual(t, len(collector.calls), 10)
-				assert.LessOrEqual(t, len(collector.response.Sequences), 20)
+				rows = append(rows, signals.ToolCallRow{ToolName: tool, Category: tool, ToolUseID: "call", InputJSON: strings.Repeat("x", 2048), MessageOrdinal: ordinal, ResultContent: content})
 			}
 		}
-		response := collector.finish(&db.Session{})
+		response := buildSessionToolSequences(&db.Session{}, rows, nil)
 		assert.Equal(t, count, response.TotalSequences)
 		assert.Equal(t, count*12, response.TotalSequenceCalls)
 		assert.Equal(t, count-20, response.OmittedSequences)

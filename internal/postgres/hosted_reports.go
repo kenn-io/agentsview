@@ -2,7 +2,6 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
 	"slices"
 	"time"
 
@@ -314,27 +313,3 @@ var (
 	_ db.ActivityReportProbeStore    = (*HostedStore)(nil)
 	_ db.ActivityReportTokenStore    = (*HostedStore)(nil)
 )
-
-type hostedToolCallDurationQueries struct {
-	store *Store
-	join  string
-}
-
-func (q hostedToolCallDurationQueries) QueryToolCallDurationRows(ctx context.Context, id string, positions []db.ToolCallPosition) (*sql.Rows, error) {
-	return q.store.queryToolCallDurationRowsWithJoin(ctx, id, positions, q.join)
-}
-
-func (h *HostedStore) GetToolCallDurations(ctx context.Context, id string, positions []db.ToolCallPosition) (map[db.ToolCallPosition]*int64, error) {
-	return hostedRead(ctx, h, func(_ hostedRevision) (map[db.ToolCallPosition]*int64, error) {
-		target, err := h.resolve(ctx, id)
-		if err != nil || target.SessionID == "" {
-			return nil, err
-		}
-		join := `LEFT JOIN LATERAL (SELECT min(target_session.started_at) AS started_at,max(target_session.ended_at) AS ended_at ` + hostedLinkFromSQL + ` AND owner.session_id=tc.session_id AND e.kind='call' AND e.ordinal=tc.message_ordinal AND e.call_index=tc.call_index HAVING count(DISTINCT target.session_id)=1) s_sub ON true`
-		if target.Legacy {
-			join = `LEFT JOIN sessions s_sub ON s_sub.id=tc.subagent_session_id`
-		}
-		base := db.ToolCallTimingReadBase{SessionLookup: h.physical.GetSession, Queries: hostedToolCallDurationQueries{store: h.physical, join: join}}
-		return base.GetToolCallDurations(ctx, target.SessionID, positions)
-	})
-}

@@ -488,12 +488,11 @@ func (s *Server) humaToolSequences(
 ) (*jsonOutput[sessionToolSequencesResponse], error) {
 	response, err := collectSessionToolSequences(ctx, s.db, in.ID)
 	if err != nil {
-		source, classifies := s.db.(interface{ ToolSequenceSourceChanged(error) bool })
-		if errors.Is(err, service.ErrSourceChanged) || (classifies && source.ToolSequenceSourceChanged(err)) {
+		if errors.Is(err, db.ErrSessionChanged) {
 			return nil, apiErrorWithCode(http.StatusConflict, "source_changed", err.Error())
 		}
-		if errors.Is(err, service.ErrRevisionBoundReadUnavailable) {
-			return nil, apiError(http.StatusNotImplemented, err.Error())
+		if errors.Is(err, db.ErrSessionRevisionUnavailable) {
+			return nil, apiErrorWithCode(http.StatusNotImplemented, "revision_unavailable", err.Error())
 		}
 		return nil, serverError(err)
 	}
@@ -503,190 +502,80 @@ func (s *Server) humaToolSequences(
 	return &jsonOutput[sessionToolSequencesResponse]{Body: *response}, nil
 }
 
-type sessionToolSequenceCollector struct {
-	extractor *signals.ToolSequenceExtractor
-	response  sessionToolSequencesResponse
-	calls     []sessionToolSequenceCall
-}
-
-func newSessionToolSequenceCollector(id string) *sessionToolSequenceCollector {
-	return &sessionToolSequenceCollector{extractor: signals.NewToolSequenceExtractor(), response: sessionToolSequencesResponse{SessionID: id, Sequences: []sessionToolSequence{}}}
-}
-
-func (c *sessionToolSequenceCollector) add(row signals.ToolCallRow) {
-	_, wasActive := c.extractor.ActiveStart()
-	outcome, sequence := c.extractor.Add(row)
-	_, active := c.extractor.ActiveStart()
-	c.response.TotalToolCalls++
-	if (wasActive || active) && len(c.response.Sequences) < maxSessionToolSequences {
-		call := projectSessionToolSequenceCall(row, outcome)
-		if len(c.calls) < maxSessionToolSequenceCalls {
-			c.calls = append(c.calls, call)
-		} else {
-			c.calls[maxSessionToolSequenceCalls-1] = call
-		}
-	}
-	if sequence != nil {
-		c.appendSequence(sequence)
-	}
-}
-
-func (c *sessionToolSequenceCollector) appendSequence(sequence *signals.ToolSequence) {
-	count := sequence.End - sequence.Start
-	c.response.TotalSequences++
-	c.response.TotalSequenceCalls += count
-	if len(c.response.Sequences) < maxSessionToolSequences {
-		c.response.Sequences = append(c.response.Sequences, sessionToolSequence{Ending: string(sequence.Ending), Identical: sequence.Identical, NearIdentical: sequence.NearIdentical, ToolChanged: sequence.ToolChanged, TotalCalls: count, OmittedCalls: count - len(c.calls), Calls: c.calls})
-	}
-	c.calls = nil
-}
-
-func (c *sessionToolSequenceCollector) finish(session *db.Session) sessionToolSequencesResponse {
-	complete := session.TerminationStatus != nil && (*session.TerminationStatus == string(parser.TerminationClean) || *session.TerminationStatus == string(parser.TerminationAwaitingUser))
-	if sequence := c.extractor.Finish(complete); sequence != nil {
-		c.appendSequence(sequence)
-	}
-	c.response.OmittedSequences = c.response.TotalSequences - len(c.response.Sequences)
-	c.response.OmittedCalls = c.response.TotalSequenceCalls
-	for _, sequence := range c.response.Sequences {
-		c.response.OmittedCalls -= len(sequence.Calls)
-	}
-	return c.response
-}
-
 func collectSessionToolSequences(ctx context.Context, store db.Store, id string) (*sessionToolSequencesResponse, error) {
-	source, hasSource := store.(db.ToolSequenceReadSource)
-	var binding string
-	var pending bool
-	var err error
-	if hasSource {
-		binding, pending, err = source.ToolSequenceReadSource(ctx, id, true)
-		if err != nil {
-			return nil, err
+	var messages []db.Message
+	var timing *db.SessionTiming
+	session, err := db.ReadSessionChecked(ctx, store, id, func(*db.Session) error {
+		var err error
+		if messages, err = store.GetAllMessages(ctx, id); err != nil {
+			return err
 		}
-	}
-	session, err := store.GetSession(ctx, id)
+		timing, err = store.GetSessionTiming(ctx, id)
+		return err
+	})
 	if err != nil || session == nil {
 		return nil, err
 	}
-	if pending {
-		return nil, service.ErrSourceChanged
-	}
-	if session.TranscriptRevision == nil || *session.TranscriptRevision == "" || (hasSource && binding == "") {
-		return nil, service.ErrRevisionBoundReadUnavailable
-	}
-	revision := *session.TranscriptRevision
-	check := func() error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		var unavailable bool
-		if hasSource {
-			current, pending, err := source.ToolSequenceReadSource(ctx, id, false)
-			if err != nil {
-				return err
-			}
-			if pending || (current != "" && current != binding) {
-				return service.ErrSourceChanged
-			}
-			unavailable = current == ""
-		}
-		current, err := store.GetSession(ctx, id)
-		if err != nil {
-			return err
-		}
-		if current == nil {
-			return service.ErrSourceChanged
-		}
-		if unavailable || current.TranscriptRevision == nil || *current.TranscriptRevision == "" {
-			return service.ErrRevisionBoundReadUnavailable
-		}
-		if *current.TranscriptRevision != revision || !reflect.DeepEqual(current.TerminationStatus, session.TerminationStatus) {
-			return service.ErrSourceChanged
-		}
-		if hasSource {
-			current, pending, err := source.ToolSequenceReadSource(ctx, id, false)
-			if err != nil {
-				return err
-			}
-			if pending || (current != "" && current != binding) {
-				return service.ErrSourceChanged
-			}
-			if current == "" {
-				return service.ErrRevisionBoundReadUnavailable
-			}
-		}
-		return nil
-	}
-	if err := check(); err != nil {
-		return nil, err
-	}
-	collector := newSessionToolSequenceCollector(session.ID)
-	for from := 0; ; {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		observed := ""
-		messages, err := store.GetMessagesWindow(ctx, id, db.MessageWindow{From: &from, Limit: db.DefaultMessageLimit, Asc: true, ObservedRevision: &observed})
-		if err != nil {
-			return nil, err
-		}
-		if len(messages) > 0 && observed == "" {
-			return nil, service.ErrRevisionBoundReadUnavailable
-		}
-		if len(messages) > 0 && observed != revision {
-			return nil, service.ErrSourceChanged
-		}
-		if err := check(); err != nil {
-			return nil, err
-		}
-		if len(messages) == 0 {
-			break
-		}
-		from = messages[len(messages)-1].Ordinal + 1
-		for i := range messages {
-			for _, row := range ingest.ExtractToolCallRows(messages[i : i+1]) {
-				collector.add(row)
-			}
-			messages[i] = db.Message{}
-		}
-	}
-	response := collector.finish(session)
-	positions := make([]db.ToolCallPosition, 0)
-	for _, sequence := range response.Sequences {
-		for _, call := range sequence.Calls {
-			positions = append(positions, db.ToolCallPosition{MessageOrdinal: call.Ordinal, CallIndex: call.CallIndex})
-		}
-	}
-	durations, err := store.GetToolCallDurations(ctx, session.ID, positions)
-	if err != nil {
-		return nil, err
-	}
-	if err := check(); err != nil {
-		return nil, err
-	}
-	if hasSource {
-		current, pending, err := source.ToolSequenceReadSource(ctx, id, true)
-		if err != nil {
-			return nil, err
-		}
-		if pending || (current != "" && current != binding) {
-			return nil, service.ErrSourceChanged
-		}
-		if current == "" {
-			return nil, service.ErrRevisionBoundReadUnavailable
-		}
-	}
-	if durations == nil {
-		return nil, service.ErrSourceChanged
-	}
-	for i := range response.Sequences {
-		for j := range response.Sequences[i].Calls {
-			call := &response.Sequences[i].Calls[j]
-			call.DurationMs = durations[db.ToolCallPosition{MessageOrdinal: call.Ordinal, CallIndex: call.CallIndex}]
-		}
-	}
+	response := buildSessionToolSequences(session, ingest.ExtractToolCallRows(messages), timing)
 	return &response, nil
+}
+
+func buildSessionToolSequences(
+	session *db.Session,
+	rows []signals.ToolCallRow,
+	timing *db.SessionTiming,
+) sessionToolSequencesResponse {
+	extracted := signals.ExtractToolSequences(rows, session.TerminationStatus != nil && (*session.TerminationStatus == string(parser.TerminationClean) || *session.TerminationStatus == string(parser.TerminationAwaitingUser)))
+	// Timing lists each turn's calls in call order, so a call's position in its message finds its duration even when tool IDs repeat or are blank.
+	durations := make(map[db.ToolCallPosition]*int64)
+	if timing != nil {
+		for _, turn := range timing.Turns {
+			for i, call := range turn.Calls {
+				durations[db.ToolCallPosition{MessageOrdinal: turn.Ordinal, CallIndex: i}] = call.DurationMs
+			}
+		}
+	}
+	response := sessionToolSequencesResponse{
+		SessionID:      session.ID,
+		TotalToolCalls: len(extracted.Calls),
+		TotalSequences: len(extracted.Sequences),
+		Sequences:      make([]sessionToolSequence, 0, min(len(extracted.Sequences), maxSessionToolSequences)),
+	}
+	response.OmittedSequences = response.TotalSequences - min(response.TotalSequences, maxSessionToolSequences)
+	for _, sequence := range extracted.Sequences {
+		response.TotalSequenceCalls += sequence.End - sequence.Start
+	}
+	for _, sequence := range extracted.Sequences[:min(len(extracted.Sequences), maxSessionToolSequences)] {
+		count := sequence.End - sequence.Start
+		// A long sequence keeps its first calls and its last, so the panel still shows how it ended.
+		indexes := make([]int, 0, min(count, maxSessionToolSequenceCalls))
+		for i := sequence.Start; i < sequence.End && len(indexes) < maxSessionToolSequenceCalls-1; i++ {
+			indexes = append(indexes, i)
+		}
+		if count > len(indexes) {
+			indexes = append(indexes, sequence.End-1)
+		}
+		projected := sessionToolSequence{
+			Ending:        string(sequence.Ending),
+			Identical:     sequence.Identical,
+			NearIdentical: sequence.NearIdentical,
+			ToolChanged:   sequence.ToolChanged,
+			TotalCalls:    count,
+			OmittedCalls:  count - len(indexes),
+			Calls:         make([]sessionToolSequenceCall, 0, len(indexes)),
+		}
+		for _, index := range indexes {
+			call := projectSessionToolSequenceCall(rows[index], extracted.Calls[index])
+			call.DurationMs = durations[db.ToolCallPosition{MessageOrdinal: call.Ordinal, CallIndex: call.CallIndex}]
+			projected.Calls = append(projected.Calls, call)
+		}
+		response.Sequences = append(response.Sequences, projected)
+	}
+	response.OmittedCalls = response.TotalSequenceCalls
+	for _, sequence := range response.Sequences {
+		response.OmittedCalls -= len(sequence.Calls)
+	}
+	return response
 }
 
 func projectSessionToolSequenceCall(

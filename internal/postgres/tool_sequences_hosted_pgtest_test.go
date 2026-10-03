@@ -35,20 +35,20 @@ func (s *toolSequenceExhaustedStore) GetSession(ctx context.Context, id string) 
 	return s.HostedStore.GetSession(ctx, id)
 }
 
-func (s *toolSequenceExhaustedStore) GetMessagesWindow(ctx context.Context, id string, w db.MessageWindow) ([]db.Message, error) {
+func (s *toolSequenceExhaustedStore) GetAllMessages(ctx context.Context, id string) ([]db.Message, error) {
 	s.pageRead = true
 	if s.fail == "messages" {
 		return nil, s.err
 	}
-	return s.HostedStore.GetMessagesWindow(ctx, id, w)
+	return s.HostedStore.GetAllMessages(ctx, id)
 }
 
-func (s *toolSequenceExhaustedStore) GetToolCallDurations(ctx context.Context, id string, positions []db.ToolCallPosition) (map[db.ToolCallPosition]*int64, error) {
+func (s *toolSequenceExhaustedStore) GetSessionTiming(ctx context.Context, id string) (*db.SessionTiming, error) {
 	s.timingRead = true
 	if s.fail == "timing" {
 		return nil, s.err
 	}
-	return s.HostedStore.GetToolCallDurations(ctx, id, positions)
+	return s.HostedStore.GetSessionTiming(ctx, id)
 }
 
 func TestToolSequencesHosted_ExhaustedReadBinding(t *testing.T) {
@@ -67,9 +67,9 @@ func TestToolSequencesHosted_ExhaustedReadBinding(t *testing.T) {
 	require.Equal(t, 3, attempts)
 	require.ErrorIs(t, exhausted, ErrHostedIdentityChanged)
 	wrapped := fmt.Errorf("enclosed hosted read: %w", exhausted)
-	assert.True(t, h.ToolSequenceSourceChanged(wrapped))
-	assert.False(t, h.ToolSequenceSourceChanged(errors.New("ordinary read error")))
-	assert.False(t, h.ToolSequenceSourceChanged(nil))
+	assert.True(t, h.SessionSourceChanged(wrapped))
+	assert.False(t, h.SessionSourceChanged(errors.New("ordinary read error")))
+	assert.False(t, h.SessionSourceChanged(nil))
 	for _, boundary := range []string{"initial session", "session after hydration", "final session", "messages", "timing"} {
 		t.Run(boundary, func(t *testing.T) {
 			store := &toolSequenceExhaustedStore{HostedStore: h, fail: boundary, err: wrapped}
@@ -89,10 +89,12 @@ func TestToolSequencesHosted_ExhaustedReadBinding(t *testing.T) {
 type toolSequenceAliasSwapStore struct {
 	*HostedStore
 	afterPage func()
+	reads     int
 }
 
-func (s *toolSequenceAliasSwapStore) GetMessagesWindow(ctx context.Context, id string, w db.MessageWindow) ([]db.Message, error) {
-	messages, err := s.HostedStore.GetMessagesWindow(ctx, id, w)
+func (s *toolSequenceAliasSwapStore) GetAllMessages(ctx context.Context, id string) ([]db.Message, error) {
+	s.reads++
+	messages, err := s.HostedStore.GetAllMessages(ctx, id)
 	if err == nil && s.afterPage != nil {
 		s.afterPage()
 		s.afterPage = nil
@@ -133,17 +135,14 @@ func TestToolSequencesHosted_SourceBinding(t *testing.T) {
 		handler.ServeHTTP(response, req)
 		return response
 	}
+	// The alias moves during the first read, so the route rereads the replacement once instead of answering with a conflict.
 	response := request()
-	assert.Equal(t, http.StatusConflict, response.Code, response.Body.String())
-	assert.Contains(t, response.Body.String(), `"code":"source_changed"`)
-	assert.NotContains(t, response.Body.String(), `"sequences"`)
-	assert.NotContains(t, response.Body.String(), "raw-row-")
-	response = request()
 	assert.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	assert.Equal(t, 2, store.reads)
 	assert.NotContains(t, response.Body.String(), "raw-row-")
 }
 
-func TestToolSequencesHosted_SelectedTimingAndMapping(t *testing.T) {
+func TestToolSequencesHosted_TimingAndMapping(t *testing.T) {
 	f := newProjectionFixture(t)
 	manifest, _ := f.accept(t, "device-a", "capture-a", "")
 	outcome := projectionOutcome("delegate tasks")
@@ -170,38 +169,15 @@ func TestToolSequencesHosted_SelectedTimingAndMapping(t *testing.T) {
 	h, err := NewHostedStore(f.dsn, f.schema, f.tenant, false)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, h.Close()) })
-	root, err := h.resolve(t.Context(), "codex:portable")
-	require.NoError(t, err)
 	child, err := h.resolve(t.Context(), "codex:child-0")
 	require.NoError(t, err)
 	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET deleted_at=clock_timestamp() WHERE id=$1`, child.SessionID)
 	require.NoError(t, err)
 
-	positions := []db.ToolCallPosition{{MessageOrdinal: 1}, {MessageOrdinal: 1, CallIndex: 39}, {MessageOrdinal: 2}}
-	durations, err := h.GetToolCallDurations(t.Context(), "codex:portable", positions)
-	require.NoError(t, err)
-	require.Len(t, durations, 3)
-	assert.Equal(t, new(int64(7000)), durations[positions[0]])
-	assert.Equal(t, new(int64(46000)), durations[positions[1]])
-	assert.Nil(t, durations[positions[2]])
 	full, err := h.GetSessionTiming(t.Context(), "codex:portable")
 	require.NoError(t, err)
-	assert.Equal(t, full.Turns[0].Calls[0].DurationMs, durations[positions[0]])
-	assert.Equal(t, full.Turns[0].Calls[39].DurationMs, durations[positions[1]])
-
-	refs := hostedRefs{links: []hostedLink{{owner: root.SessionID, alias: "codex:child-0"}, {owner: root.SessionID, alias: "codex:child-0"}}}
-	edges, err := refs.linkTargets(t.Context(), h)
-	require.NoError(t, err)
-	require.Len(t, edges, 1)
-	assert.Equal(t, []string{child.SessionID}, edges[root.SessionID+"\x00codex:child-0"])
-	var allLinks int
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT count(DISTINCT e.target_alias) `+hostedLinkFromSQL+` AND owner.session_id=$1`, root.SessionID).Scan(&allLinks))
-	assert.Equal(t, 40, allLinks)
-	messages, err := h.GetMessages(t.Context(), "codex:portable", 1, 1, true)
-	require.NoError(t, err)
-	require.Len(t, messages, 1)
-	assert.Equal(t, "codex:child-0", messages[0].ToolCalls[0].SubagentSessionID)
-	assert.Equal(t, "codex:child-39", messages[0].ToolCalls[39].SubagentSessionID)
+	require.Len(t, full.Turns[0].Calls, 40)
+	assert.Equal(t, new(int64(7000)), full.Turns[0].Calls[0].DurationMs)
 
 	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:0/api/v1/sessions/codex:portable/tool-sequences", nil)
 	request.RemoteAddr = "127.0.0.1:1234"
