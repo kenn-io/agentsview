@@ -352,15 +352,8 @@ func (ix *Index) Refresh(
 		stats.Deleted += deleted
 	}
 
-	if hasJournal {
-		if err := ix.metaSet(ctx, sessionDeletionCursorKey, strconv.FormatInt(revision, 10)); err != nil {
-			return RefreshStats{}, err
-		}
-		if err := ix.metaSet(ctx, sessionDeletionDatabaseIDKey, databaseID); err != nil {
-			return RefreshStats{}, err
-		}
-	}
-
+	// The watermark is settled before the journal cursor, so a failed write
+	// leaves the cursor stale and the next refresh runs full again.
 	if nextWatermark != "" {
 		if err := ix.setRefreshWatermark(ctx, nextWatermark); err != nil {
 			return RefreshStats{}, err
@@ -369,6 +362,15 @@ func (ix *Index) Refresh(
 		// An empty full scan must not leave a previous archive's watermark
 		// hiding older sessions from later incremental scans.
 		if err := ix.metaDelete(ctx, refreshWatermarkKey); err != nil {
+			return RefreshStats{}, err
+		}
+	}
+
+	if hasJournal {
+		if err := ix.metaSet(ctx, sessionDeletionCursorKey, strconv.FormatInt(revision, 10)); err != nil {
+			return RefreshStats{}, err
+		}
+		if err := ix.metaSet(ctx, sessionDeletionDatabaseIDKey, databaseID); err != nil {
 			return RefreshStats{}, err
 		}
 	}
