@@ -341,6 +341,18 @@ describe("ToolSequencesPanel", () => {
     unmount(component);
   });
 
+  it("keeps the full name of a long tool on its truncated call row", async () => {
+    const tool = "mcp__agentsview__search_sessions_by_content";
+    const component = mountPanel(makeData({ sequences: [makeSequence({ calls: [makeCall({ tool_name: tool })] })] }));
+    await openSequence();
+
+    const name = document.querySelector<HTMLElement>(".call-row .name")!;
+    expect(name.textContent).toBe(tool);
+    expect(name.title).toBe(tool);
+    expect(document.querySelector(".call-row")!.textContent).toContain(tool);
+    unmount(component);
+  });
+
   it("says how many sequences are shown when the response is capped", async () => {
     const component = mountPanel(
       makeData({

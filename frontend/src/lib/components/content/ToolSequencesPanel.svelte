@@ -268,7 +268,7 @@
                         onclick={() => toggle(openCalls, callKey)}
                       >
                         <ChevronRightIcon class="chev" size={12} aria-hidden="true" />
-                        <span class="tool">{@render dot(call.outcome)}{call.tool_name}<span class="kit-sr-only">, {m.tool_sequences_message({ ordinal: call.ordinal })}</span></span>
+                        <span class="tool">{@render dot(call.outcome)}<span class="name" title={call.tool_name}>{call.tool_name}</span><span class="kit-sr-only">, {m.tool_sequences_message({ ordinal: call.ordinal })}</span></span>
                         <span class="input" title={call.input_preview}>
                           {call.input_preview ? summarizeToolInputPreview(call.input_preview) : m.tool_sequences_no_input()}
                           {#if tag}<span class="tag" title={tag.title}>{tag.label}</span>{/if}
@@ -609,7 +609,8 @@
     align-items: center;
     gap: var(--space-4);
     min-width: 0;
-    padding: var(--space-2) 0 var(--space-2) var(--space-4);
+    /* Right padding keeps the inset focus ring off the last column. */
+    padding: var(--space-2) var(--space-3) var(--space-2) var(--space-4);
     font-size: var(--font-size-xs);
   }
 
@@ -621,7 +622,12 @@
     color: color-mix(in srgb, var(--accent-amber) 72%, var(--text-primary));
     font-family: var(--font-mono);
     font-weight: 500;
-    overflow-wrap: anywhere;
+  }
+
+  .name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .input {
@@ -859,8 +865,9 @@
       align-items: start;
     }
 
+    /* fit-content keeps a long MCP tool name from squeezing out the input. */
     .call-row {
-      grid-template-columns: 12px auto minmax(0, 1fr);
+      grid-template-columns: 12px fit-content(40%) minmax(0, 1fr);
       row-gap: var(--space-1);
     }
 
