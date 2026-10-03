@@ -2224,13 +2224,13 @@ describe("SessionBreadcrumb", () => {
       scrollToOrdinal.mockRestore();
 
       refresh.resolve(makeToolSequences(4000));
-      await vi.waitFor(async () => {
-        expect(await expandedSequenceText()).toContain("4.0s");
+      await vi.waitFor(() => {
         expect(document.querySelector(".tool-sequences-panel")?.getAttribute("aria-busy")).toBe(
           "false",
         );
       });
       expect(document.querySelector(".sequence-row")?.getAttribute("aria-expanded")).toBe("true");
+      expect(document.body.textContent).toContain("4.0s");
       component.$destroy();
     });
 
