@@ -185,6 +185,15 @@ The latest published release is
 
 **Bug fixes**
 
+- On macOS, a reboot no longer makes the next sync re-read every session from
+  scratch. macOS can give a volume a different device number each time it is
+  mounted, which happens after a system update, and AgentsView took the changed
+  number to mean every session file had been replaced. Until that re-read
+  finished, `agentsview serve` did not start and `pg push --watch` could not
+  run. File identity now follows the volume's own UUID instead. The first sync
+  after upgrading re-reads each session once, raw capture re-captures each
+  source once, and the first push to a DuckDB or ClickHouse mirror re-sends
+  each session once.
 - Price Codex auto-review turns, recorded as `codex-auto-review`, at GPT-5.6
   Luna catalog rates instead of $0. Usage reports still list
   `codex-auto-review` as the reported model, and a custom pricing row for it
