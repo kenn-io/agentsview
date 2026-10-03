@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"syscall"
+
+	"go.kenn.io/agentsview/internal/volumeid"
 )
 
 func stableFileIdentity(_ *os.File, info os.FileInfo) string {
@@ -13,5 +15,5 @@ func stableFileIdentity(_ *os.File, info os.FileInfo) string {
 	if !ok {
 		return ""
 	}
-	return fmt.Sprintf("%d:%d", uint64(stat.Dev), stat.Ino)
+	return fmt.Sprintf("%d:%d", volumeid.Stable(stat.Dev), stat.Ino)
 }

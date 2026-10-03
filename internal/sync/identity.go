@@ -5,6 +5,8 @@ package sync
 import (
 	"os"
 	"syscall"
+
+	"go.kenn.io/agentsview/internal/volumeid"
 )
 
 // getFileIdentity extracts inode and device numbers from a
@@ -12,7 +14,7 @@ import (
 // stat data is unavailable in the expected form.
 func getFileIdentity(_ string, info os.FileInfo) (inode, device int64) {
 	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
-		return int64(stat.Ino), int64(stat.Dev)
+		return int64(stat.Ino), int64(volumeid.Stable(stat.Dev))
 	}
 	return 0, 0
 }
