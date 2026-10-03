@@ -55,6 +55,8 @@ func replaceable(err error) bool {
 	switch refusalReason(err) {
 	case RefusalDiverged, RefusalShorterExport:
 		return true
+	case RefusalTrashed, RefusalTransient:
+		return false
 	}
 	return false
 }
