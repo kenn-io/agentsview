@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/friction"
 	"go.kenn.io/agentsview/internal/ingest"
 )
 
@@ -16,6 +17,22 @@ const (
 	rawSourceProofDetachSQL = `UPDATE session_sources SET physical_session_id=NULL WHERE physical_session_id=$1`
 	rawGroupContentsSQL     = `SELECT id,raw_content_revision FROM sessions WHERE raw_group_id=$1 AND raw_group_id<>'' UNION SELECT session_id,content_revision FROM raw_session_branches WHERE group_id=$1 AND active ORDER BY 1`
 )
+
+func rawGroupHasStaleFriction(
+	ctx context.Context, tx *sql.Tx, group string,
+) (bool, error) {
+	var stale bool
+	err := tx.QueryRowContext(ctx, `SELECT EXISTS (
+		SELECT 1 FROM (
+			SELECT id FROM sessions WHERE raw_group_id=$1 AND raw_group_id<>''
+			UNION
+			SELECT session_id FROM raw_session_branches WHERE group_id=$1 AND active
+		) AS raw_sessions
+		JOIN sessions s ON s.id=raw_sessions.id
+		WHERE s.friction_rules_version IS DISTINCT FROM $2
+	)`, group, friction.RulesVersion).Scan(&stale)
+	return stale, err
+}
 
 func (s *RawProjectionStore) materializeGroup(ctx context.Context, tx *sql.Tx, group string, corpus int64) error {
 	if err := reconcileRawPrefixes(ctx, tx, group); err != nil {
@@ -82,6 +99,10 @@ func (s *RawProjectionStore) materializeGroup(ctx context.Context, tx *sql.Tx, g
 				if err = s.writePayload(ctx, tx, c.id, group, c.revision, payload); err != nil {
 					return err
 				}
+			} else if err = s.refreshStaleRawFriction(
+				ctx, tx, c.id, c.revision,
+			); err != nil {
+				return err
 			}
 			if _, err = tx.ExecContext(ctx, rawSourceProofAttachSQL, c.id); err != nil {
 				return err
@@ -100,6 +121,52 @@ func (s *RawProjectionStore) materializeGroup(ctx context.Context, tx *sql.Tx, g
 	return nil
 }
 
+func (s *RawProjectionStore) refreshStaleRawFriction(
+	ctx context.Context, tx *sql.Tx, id, revision string,
+) error {
+	var storedVersion string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT friction_rules_version FROM sessions WHERE id=$1 FOR UPDATE`, id,
+	).Scan(&storedVersion); err != nil {
+		return err
+	}
+	if storedVersion == friction.RulesVersion {
+		return nil
+	}
+	p, err := loadRawPayload(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	p.Session.ID = id
+	p.Session.FilePath = nil
+	p.Session.Machine = "hosted"
+	p.Session.TranscriptRevision = &revision
+	p.Session.DataVersion = db.CurrentDataVersion()
+	if err := ingest.RefreshFriction(&p, s.options.Content); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE sessions SET friction_count=$2,
+		friction_rules_version=$3,friction_hash=$4,updated_at=NOW() WHERE id=$1`,
+		id, p.Session.FrictionCount, p.Session.FrictionRulesVersion,
+		p.Session.FrictionHash); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM friction_findings WHERE session_id=$1`, id,
+	); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM friction_session_dims WHERE session_id=$1`, id,
+	); err != nil {
+		return err
+	}
+	if err := insertPGFrictionFindings(ctx, tx, id, p.Friction.Findings); err != nil {
+		return err
+	}
+	return insertPGFrictionDims(ctx, tx, id, p.Friction.Dims)
+}
+
 func (s *RawProjectionStore) writePayload(ctx context.Context, tx *sql.Tx, id, group, revision string, p ingest.PreparedSession) error {
 	p.Session.ID = id
 	p.Session.FilePath = nil
@@ -107,6 +174,9 @@ func (s *RawProjectionStore) writePayload(ctx context.Context, tx *sql.Tx, id, g
 	p.Session.CreatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	p.Session.TranscriptRevision = &revision
 	p.Session.DataVersion = db.CurrentDataVersion()
+	if err := ingest.RefreshFriction(&p, s.options.Content); err != nil {
+		return err
+	}
 	// Full shared preparation computes signals independently of Session. Copy
 	// matching scalar fields, then the quality scalar fields expected by the
 	// existing SQL kernel. This does not encode public JSON or omit hidden fields.
@@ -135,7 +205,13 @@ func (s *RawProjectionStore) writePayload(ctx context.Context, tx *sql.Tx, id, g
 	if err := bulkInsertUsageEvents(ctx, tx, p.UsageEvents); err != nil {
 		return err
 	}
-	return bulkInsertSecretFindings(ctx, tx, id, p.Findings)
+	if err := bulkInsertSecretFindings(ctx, tx, id, p.Findings); err != nil {
+		return err
+	}
+	if err := insertPGFrictionFindings(ctx, tx, id, p.Friction.Findings); err != nil {
+		return err
+	}
+	return insertPGFrictionDims(ctx, tx, id, p.Friction.Dims)
 }
 
 func copyRawSignalFields(session *db.Session, signals db.SessionSignalUpdate) {

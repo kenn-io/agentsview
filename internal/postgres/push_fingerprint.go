@@ -27,6 +27,12 @@ type pushToolCallAggregate struct {
 	Sum   int64
 }
 
+type pushFrictionComparison struct {
+	Count        int
+	RulesVersion string
+	Hash         string
+}
+
 type pushMessageComparison struct {
 	MessageAggregates       map[string]pushMessageAggregate
 	MessageContentHash      map[string]string
@@ -38,6 +44,7 @@ type pushMessageComparison struct {
 	ToolCallFingerprint     map[string]string
 	ToolResultFingerprint   map[string]string
 	UsageEventFingerprint   map[string]string
+	Friction                map[string]pushFrictionComparison
 }
 
 type pushLocalMessageFingerprint struct {
@@ -312,12 +319,16 @@ func readPushSessionMessageComparisons(
 		ToolCallFingerprint:     make(map[string]string, len(sessionIDs)),
 		ToolResultFingerprint:   make(map[string]string, len(sessionIDs)),
 		UsageEventFingerprint:   make(map[string]string, len(sessionIDs)),
+		Friction:                make(map[string]pushFrictionComparison, len(sessionIDs)),
 	}
 
 	for i := 0; i < len(sessionIDs); i += pushComparisonBatchSize {
 		end := min(i+pushComparisonBatchSize, len(sessionIDs))
 		chunk := sessionIDs[i:end]
 
+		if err := loadPushFrictionComparisons(ctx, tx, chunk, comparisons.Friction); err != nil {
+			return nil, err
+		}
 		if err := loadPushMessageAggregates(ctx, tx, chunk, comparisons.MessageAggregates); err != nil {
 			return nil, err
 		}
@@ -369,6 +380,48 @@ func readPushSessionMessageComparisons(
 	}
 
 	return comparisons, nil
+}
+
+func loadPushFrictionComparisons(
+	ctx context.Context, tx *sql.Tx, sessionIDs []string,
+	out map[string]pushFrictionComparison,
+) error {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id, friction_count, friction_rules_version, friction_hash
+		FROM sessions WHERE id = ANY($1)`, sessionIDs)
+	if err != nil {
+		return fmt.Errorf("reading pg friction metadata: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var friction pushFrictionComparison
+		if err := rows.Scan(&id, &friction.Count, &friction.RulesVersion, &friction.Hash); err != nil {
+			return err
+		}
+		out[id] = friction
+	}
+	return rows.Err()
+}
+
+// sessionFrictionUnchanged must run before pushSession replaces the metadata.
+func sessionFrictionUnchanged(
+	ctx context.Context, tx *sql.Tx, sess db.Session,
+	comparisons *pushMessageComparison,
+) (bool, error) {
+	var existing map[string]pushFrictionComparison
+	if comparisons != nil {
+		existing = comparisons.Friction
+	} else {
+		existing = make(map[string]pushFrictionComparison, 1)
+		if err := loadPushFrictionComparisons(ctx, tx, []string{sess.ID}, existing); err != nil {
+			return false, err
+		}
+	}
+	previous, ok := existing[sess.ID]
+	return ok && previous == (pushFrictionComparison{
+		Count: sess.FrictionCount, RulesVersion: sess.FrictionRulesVersion, Hash: sess.FrictionHash,
+	}), nil
 }
 
 func loadPushMessageAggregates(

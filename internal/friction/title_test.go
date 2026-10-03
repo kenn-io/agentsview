@@ -1,8 +1,6 @@
 package friction
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"strings"
 	"testing"
 
@@ -44,8 +42,9 @@ func TestInterruptionTitleIsStableAsCountGrows(t *testing.T) {
 
 func TestSignalFingerprint(t *testing.T) {
 	sig := Signal{Kind: KindDeferral, SubjectID: "s1", Label: "next session"}
-	sum := sha256.Sum256([]byte("[friction/deferral] s1: next session"))
-	assert.Equal(t, "fl1:"+hex.EncodeToString(sum[:]), sig.Fingerprint())
+	const want = "fl1:fa1d2b757d99024ff73f27e5761d5c5308dee2d5d6acaf46f34f73cf82e53035"
+	assert.Equal(t, want, sig.Fingerprint())
+	assert.Equal(t, want, FingerprintTitle("[friction/deferral] s1: next session"))
 	assert.Len(t, sig.Fingerprint(), 4+64)
 
 	// Dimensions and position do not change title identity.

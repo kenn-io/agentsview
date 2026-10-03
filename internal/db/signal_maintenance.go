@@ -65,11 +65,15 @@ type SessionSignalState struct {
 type SessionSignalInputSnapshot struct {
 	TranscriptRevision   string
 	MessageCount         int
+	Agent                string
 	IsAutomated          bool
 	EndedAt              string
 	HasEndedAt           bool
 	PeakContextTokens    int
 	HasPeakContextTokens bool
+	ParentSessionID      string
+	HasParentSessionID   bool
+	RelationshipType     string
 }
 
 // SignalInputSnapshot returns the signal-driving session-row inputs from s.
@@ -82,6 +86,7 @@ func SignalInputSnapshot(s Session) (SessionSignalInputSnapshot, error) {
 	snapshot := SessionSignalInputSnapshot{
 		TranscriptRevision:   *s.TranscriptRevision,
 		MessageCount:         s.MessageCount,
+		Agent:                s.Agent,
 		IsAutomated:          s.IsAutomated,
 		PeakContextTokens:    s.PeakContextTokens,
 		HasPeakContextTokens: s.HasPeakContextTokens,
@@ -90,6 +95,11 @@ func SignalInputSnapshot(s Session) (SessionSignalInputSnapshot, error) {
 		snapshot.EndedAt = *s.EndedAt
 		snapshot.HasEndedAt = true
 	}
+	if s.ParentSessionID != nil {
+		snapshot.ParentSessionID = *s.ParentSessionID
+		snapshot.HasParentSessionID = true
+	}
+	snapshot.RelationshipType = s.RelationshipType
 	return snapshot, nil
 }
 
@@ -602,18 +612,22 @@ func sessionSignalInputSnapshotMatchesTx(ctx context.Context,
 	var (
 		currentRevision string
 		messageCount    int
+		agent           string
 		isAutomated     int
 		endedAt         sql.NullString
 		peakTokens      int
 		hasPeak         int
+		parentSessionID sql.NullString
+		relationship    string
 	)
 	err := tx.QueryRowContext(ctx, `
-		SELECT transcript_revision, message_count, is_automated, ended_at,
-		       peak_context_tokens, has_peak_context_tokens
+		SELECT transcript_revision, message_count, agent, is_automated, ended_at,
+		       peak_context_tokens, has_peak_context_tokens,
+		       parent_session_id, relationship_type
 		FROM sessions WHERE id = ?`, sessionID,
 	).Scan(
-		&currentRevision, &messageCount, &isAutomated, &endedAt,
-		&peakTokens, &hasPeak,
+		&currentRevision, &messageCount, &agent, &isAutomated, &endedAt,
+		&peakTokens, &hasPeak, &parentSessionID, &relationship,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
@@ -626,11 +640,15 @@ func sessionSignalInputSnapshotMatchesTx(ctx context.Context,
 	current := SessionSignalInputSnapshot{
 		TranscriptRevision:   currentRevision,
 		MessageCount:         messageCount,
+		Agent:                agent,
 		IsAutomated:          isAutomated != 0,
 		EndedAt:              endedAt.String,
 		HasEndedAt:           endedAt.Valid,
 		PeakContextTokens:    peakTokens,
 		HasPeakContextTokens: hasPeak != 0,
+		ParentSessionID:      parentSessionID.String,
+		HasParentSessionID:   parentSessionID.Valid,
+		RelationshipType:     relationship,
 	}
 	return current == expected, nil
 }

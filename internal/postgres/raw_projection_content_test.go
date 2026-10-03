@@ -101,6 +101,74 @@ func TestRawContentRevisionIgnoresOnlyRecencyDerivedState(t *testing.T) {
 	assert.NotEqual(t, stableSignal, semantic, "actual transcript semantics remain content")
 }
 
+func TestRawContentRevisionIgnoresDerivedFriction(t *testing.T) {
+	p := ingest.PreparedSession{
+		Session: db.Session{
+			FrictionCount: 1, FrictionRulesVersion: "friction-v1",
+			FrictionHash: "friction-hash",
+		},
+		Friction: db.SessionFrictionUpdate{
+			RulesVersion: "friction-v1",
+			Hash:         "friction-hash",
+			Findings: []db.FrictionFinding{{
+				SessionID: "captured-session", Kind: "error", Detector: "tool-error",
+				Text: "command failed", Fingerprint: "finding-fingerprint",
+			}},
+		},
+	}
+	first, err := rawContentRevision(p)
+	require.NoError(t, err)
+
+	changedRows := p
+	changedRows.Friction.Findings = append([]db.FrictionFinding(nil), p.Friction.Findings...)
+	changedRows.Friction.Findings[0].Text = "different projected row text"
+	rowsRevision, err := rawContentRevision(changedRows)
+	require.NoError(t, err)
+	assert.Equal(t, first, rowsRevision, "derived findings do not change source content")
+
+	changed := p
+	changed.Session.FrictionCount++
+	changed.Session.FrictionRulesVersion = "updated-rules"
+	changed.Session.FrictionHash = "updated-hash"
+	second, err := rawContentRevision(changed)
+	require.NoError(t, err)
+	assert.Equal(t, first, second, "derived summaries do not change source content")
+
+	changed = p
+	changed.Friction.Findings = append([]db.FrictionFinding(nil), p.Friction.Findings...)
+	changed.Friction.Findings[0].SessionID = "other-captured-session"
+	third, err := rawContentRevision(changed)
+	require.NoError(t, err)
+	assert.Equal(t, first, third, "source session IDs are transport metadata")
+}
+
+func TestRawContentRevisionIgnoresFrictionSubjectIDs(t *testing.T) {
+	messages := []db.Message{
+		{Ordinal: 0, Role: "assistant", Content: "Here is the first answer."},
+		{Ordinal: 1, Role: "user", Content: "no, you misunderstood the goal here"},
+		{Ordinal: 2, Role: "assistant", Content: "Here is the revised answer."},
+	}
+	prepared := func(id string) ingest.PreparedSession {
+		return ingest.PreparedSession{
+			Session:  db.Session{ID: id, Agent: "codex", Machine: "hosted"},
+			Messages: append([]db.Message(nil), messages...),
+		}
+	}
+	first := prepared("captured-private-session-a")
+	second := prepared("captured-private-session-b")
+
+	require.NoError(t, ingest.RefreshFriction(&first, ingest.ContentOptions{}))
+	require.NoError(t, ingest.RefreshFriction(&second, ingest.ContentOptions{}))
+	require.Len(t, first.Friction.Findings, 1)
+	require.Len(t, second.Friction.Findings, 1)
+	assert.NotEqual(t, first.Friction.Findings[0].Fingerprint, second.Friction.Findings[0].Fingerprint)
+	firstRevision, err := rawContentRevision(first)
+	require.NoError(t, err)
+	secondRevision, err := rawContentRevision(second)
+	require.NoError(t, err)
+	assert.Equal(t, firstRevision, secondRevision, "capture IDs do not change source content through derived findings")
+}
+
 func TestRawContentRevisionJSONRepresentation(t *testing.T) {
 	p := ingest.PreparedSession{Messages: []db.Message{{
 		Role:       "assistant",

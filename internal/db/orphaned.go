@@ -54,6 +54,30 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 	sourcePath string,
 	extraExcludedIDs []string,
 ) ([]string, error) {
+	ids, _, err := d.CopyOrphanedDataFromExcludingWithChanges(
+		sourcePath, extraExcludedIDs,
+	)
+	return ids, err
+}
+
+// CopyOrphanedDataFromExcludingWithChanges also returns copied sessions whose
+// hierarchy was repaired while restoring the orphan rows.
+func (d *DB) CopyOrphanedDataFromExcludingWithChanges(
+	sourcePath string,
+	extraExcludedIDs []string,
+) ([]string, []string, error) {
+	var hierarchyChanged []string
+	ids, err := d.copyOrphanedDataFromExcluding(
+		sourcePath, extraExcludedIDs, &hierarchyChanged,
+	)
+	return ids, hierarchyChanged, err
+}
+
+func (d *DB) copyOrphanedDataFromExcluding(
+	sourcePath string,
+	extraExcludedIDs []string,
+	hierarchyChanged *[]string,
+) ([]string, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -197,6 +221,7 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 		return nil, fmt.Errorf("begin orphan tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	var copiedSelfParents []string
 
 	if err := reconcileTranscriptRevisionsTx(ctx, tx); err != nil {
 		return nil, fmt.Errorf("reconciling transcript revisions: %w", err)
@@ -224,7 +249,10 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 		); err != nil {
 			return nil, fmt.Errorf("projecting orphaned data: %w", err)
 		}
-		if err := clearCopiedSelfParents(ctx, tx, "_orphaned_ids"); err != nil {
+		copiedSelfParents, err = clearCopiedSelfParents(
+			ctx, tx, "_orphaned_ids",
+		)
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -236,6 +264,9 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 		return nil, fmt.Errorf(
 			"committing orphaned data: %w", err,
 		)
+	}
+	if hierarchyChanged != nil {
+		*hierarchyChanged = copiedSelfParents
 	}
 
 	if count > 0 {
@@ -545,16 +576,23 @@ func clearCopiedSelfParents(
 	ctx context.Context,
 	tx *sql.Tx,
 	tempIDsTable string,
-) error {
-	if _, err := tx.ExecContext(ctx, `
+) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, `
 		UPDATE main.sessions
 		SET parent_session_id = NULLIF(parser_parent_session_id, id),
+		friction_rules_version = '',
 		local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		WHERE id IN (SELECT id FROM `+tempIDsTable+`)
-		  AND parent_session_id IS id`); err != nil {
-		return fmt.Errorf("clearing copied self-parented sessions: %w", err)
+		  AND parent_session_id IS id
+		RETURNING id`)
+	if err != nil {
+		return nil, fmt.Errorf("clearing copied self-parented sessions: %w", err)
 	}
-	return nil
+	changed, err := readSessionIDs(rows)
+	if err != nil {
+		return nil, fmt.Errorf("reading copied self-parented sessions: %w", err)
+	}
+	return changed, nil
 }
 
 func copyArtifactImportState(ctx context.Context, tx *sql.Tx) error {
@@ -1851,6 +1889,7 @@ func orphanSessionCols(ctx context.Context, tx *sql.Tx) string {
 		"is_truncated", "last_write_incremental",
 		"transcript_revision",
 		"secret_leak_count", "secrets_rules_version",
+		"friction_count", "friction_rules_version", "friction_hash",
 	} {
 		if oldDBHasColumn(ctx, tx, "sessions", c) {
 			cols = append(cols, c)
@@ -2190,6 +2229,40 @@ func copySessionDataForIDs(
 			)`,
 		); err != nil {
 			return fmt.Errorf("copying secret_findings: %w", err)
+		}
+	}
+	if oldDBHasTable(ctx, tx, "friction_findings") {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO friction_findings
+				(session_id, kind, detector, message_ordinal, call_index,
+				 tool_name, label, text, evidence, title, fingerprint,
+				 occurred_at, seq, rules_version, created_at)
+			SELECT
+				session_id, kind, detector, message_ordinal, call_index,
+				tool_name, label, text, evidence, title, fingerprint,
+				occurred_at, seq, rules_version, created_at
+			FROM old_db.friction_findings
+			WHERE session_id IN (
+				SELECT id FROM `+tempIDsTable+`
+			)`,
+		); err != nil {
+			return fmt.Errorf("copying friction_findings: %w", err)
+		}
+	}
+	if oldDBHasTable(ctx, tx, "friction_session_dims") {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO friction_session_dims
+				(session_id, seat, persona, channel, dims_source,
+				 review_excluded)
+			SELECT
+				session_id, seat, persona, channel, dims_source,
+				review_excluded
+			FROM old_db.friction_session_dims
+			WHERE session_id IN (
+				SELECT id FROM `+tempIDsTable+`
+			)`,
+		); err != nil {
+			return fmt.Errorf("copying friction_session_dims: %w", err)
 		}
 	}
 

@@ -72,7 +72,7 @@ func (ids changedSessionLinks) link(ctx context.Context, e *Engine, stats *SyncS
 		sessionIDs = append(sessionIDs, id)
 	}
 	slices.Sort(sessionIDs)
-	linked, err := e.db.LinkSubagentSessionsForSessions(ctx, sessionIDs)
+	linked, err := e.linkSubagentSessionsForSessions(ctx, sessionIDs)
 	if err != nil {
 		e.subagentLinkPending = true
 		linkErr := fmt.Errorf("link affected subagent sessions: %w", err)

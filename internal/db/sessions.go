@@ -61,6 +61,7 @@ const sessionBaseCols = `id, project, machine, agent,
 	health_score, health_grade,
 	has_tool_calls, has_context_data,
 	secret_leak_count, secrets_rules_version,
+	friction_count, friction_rules_version, friction_hash,
 	quality_signal_version,
 	short_prompt_count, unstructured_start,
 	missing_success_criteria_count,
@@ -96,6 +97,7 @@ const sessionPruneCols = `id, project, machine, agent,
 	health_score, health_grade,
 	has_tool_calls, has_context_data,
 	secret_leak_count, secrets_rules_version,
+	friction_count, friction_rules_version, friction_hash,
 	quality_signal_version,
 	short_prompt_count, unstructured_start,
 	missing_success_criteria_count,
@@ -127,6 +129,7 @@ const sessionFullCols = `id, project, machine, agent,
 	health_score, health_grade,
 	has_tool_calls, has_context_data,
 	secret_leak_count, secrets_rules_version,
+	friction_count, friction_rules_version, friction_hash,
 	quality_signal_version,
 	short_prompt_count, unstructured_start,
 	missing_success_criteria_count,
@@ -188,6 +191,7 @@ func scanSessionRowWithSource(rs rowScanner, includeSource bool) (Session, error
 		&s.HealthScore, &s.HealthGrade,
 		&s.HasToolCalls, &s.HasContextData,
 		&s.SecretLeakCount, &s.SecretsRulesVersion,
+		&s.FrictionCount, &s.FrictionRulesVersion, &s.FrictionHash,
 		&s.QualitySignalVersion,
 		&s.ShortPromptCount, &s.UnstructuredStart,
 		&s.MissingSuccessCriteriaCount,
@@ -348,28 +352,32 @@ type Session struct {
 	HealthGrade            *string  `json:"health_grade,omitempty"`
 	// QualitySignals mirrors the scalar persistence fields below for API
 	// schema and JSON transport.
-	QualitySignals              *QualitySignals `json:"quality_signals,omitempty"`
-	HasToolCalls                bool            `json:"-"`
-	HasContextData              bool            `json:"-"`
-	SecretLeakCount             int             `json:"secret_leak_count"`
-	SecretsRulesVersion         string          `json:"-"`
-	QualitySignalVersion        int             `json:"-"`
-	ShortPromptCount            int             `json:"-"`
-	UnstructuredStart           bool            `json:"-"`
-	MissingSuccessCriteriaCount int             `json:"-"`
-	MissingVerificationCount    int             `json:"-"`
-	DuplicatePromptCount        int             `json:"-"`
-	NoCodeContextCount          int             `json:"-"`
-	RunawayToolLoopCount        int             `json:"-"`
-	DataVersion                 int             `json:"-"`
-	Cwd                         string          `json:"cwd,omitempty"`
-	GitBranch                   string          `json:"git_branch,omitempty"`
-	ProjectAssigned             bool            `json:"project_assigned,omitempty"`
-	SourceSessionID             string          `json:"source_session_id,omitempty"`
-	SourceVersion               string          `json:"source_version,omitempty"`
-	TranscriptFidelity          string          `json:"transcript_fidelity,omitempty"`
-	ParserMalformedLines        int             `json:"parser_malformed_lines,omitzero"`
-	IsTruncated                 bool            `json:"is_truncated,omitzero"`
+	QualitySignals      *QualitySignals `json:"quality_signals,omitempty"`
+	HasToolCalls        bool            `json:"-"`
+	HasContextData      bool            `json:"-"`
+	SecretLeakCount     int             `json:"secret_leak_count"`
+	SecretsRulesVersion string          `json:"-"`
+	// Friction summary columns stay out of the session API payload.
+	FrictionCount               int    `json:"-"`
+	FrictionRulesVersion        string `json:"-"`
+	FrictionHash                string `json:"-"`
+	QualitySignalVersion        int    `json:"-"`
+	ShortPromptCount            int    `json:"-"`
+	UnstructuredStart           bool   `json:"-"`
+	MissingSuccessCriteriaCount int    `json:"-"`
+	MissingVerificationCount    int    `json:"-"`
+	DuplicatePromptCount        int    `json:"-"`
+	NoCodeContextCount          int    `json:"-"`
+	RunawayToolLoopCount        int    `json:"-"`
+	DataVersion                 int    `json:"-"`
+	Cwd                         string `json:"cwd,omitempty"`
+	GitBranch                   string `json:"git_branch,omitempty"`
+	ProjectAssigned             bool   `json:"project_assigned,omitempty"`
+	SourceSessionID             string `json:"source_session_id,omitempty"`
+	SourceVersion               string `json:"source_version,omitempty"`
+	TranscriptFidelity          string `json:"transcript_fidelity,omitempty"`
+	ParserMalformedLines        int    `json:"parser_malformed_lines,omitzero"`
+	IsTruncated                 bool   `json:"is_truncated,omitzero"`
 
 	DeletedAt         *string `json:"deleted_at,omitempty"`
 	DeletionCause     *string `json:"-"`
@@ -1239,6 +1247,7 @@ func scanSessionFullRow(row interface{ Scan(...any) error }, id string) (*Sessio
 		&s.HealthScore, &s.HealthGrade,
 		&s.HasToolCalls, &s.HasContextData,
 		&s.SecretLeakCount, &s.SecretsRulesVersion,
+		&s.FrictionCount, &s.FrictionRulesVersion, &s.FrictionHash,
 		&s.QualitySignalVersion,
 		&s.ShortPromptCount, &s.UnstructuredStart,
 		&s.MissingSuccessCriteriaCount,
@@ -1454,6 +1463,11 @@ const upsertSessionBaseSQL = insertSessionSQL + `
 			parent_session_id = excluded.parent_session_id,
 			parser_parent_session_id = excluded.parser_parent_session_id,
 			relationship_type = excluded.relationship_type,
+			friction_rules_version = CASE
+				WHEN sessions.parent_session_id IS NOT excluded.parent_session_id
+				  OR sessions.relationship_type IS NOT excluded.relationship_type
+				  OR sessions.agent IS NOT excluded.agent
+				THEN '' ELSE sessions.friction_rules_version END,
 			total_output_tokens = excluded.total_output_tokens,
 			peak_context_tokens = excluded.peak_context_tokens,
 			has_total_output_tokens = excluded.has_total_output_tokens,
@@ -1849,6 +1863,7 @@ const linkSubagentSessionsQuery = `
 	SET parent_session_id = (` + subagentSpawnerExpr + `
 	),
 	relationship_type = 'subagent',
+	friction_rules_version = '',
 	local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 	-- The tool_calls edge (from toolUseResult.agentId) records the actual
 	-- spawn, authoritative over the path-derived parent set at parse time.
@@ -1898,20 +1913,28 @@ func (db *DB) LinkSubagentSessions() error {
 }
 
 // LinkSubagentSessionsContext is LinkSubagentSessions with caller-controlled
-// cancellation for bounded sync paths. The count is the number of session
-// rows whose parent link changed. Legacy repairs and ordinary linking commit
-// together so an error leaves no unreported parent changes.
+// cancellation for bounded sync paths. The count includes only committed changes.
 func (db *DB) LinkSubagentSessionsContext(ctx context.Context) (int, error) {
+	changed, err := db.LinkSubagentSessionsContextWithChanges(ctx)
+	return len(changed), err
+}
+
+// LinkSubagentSessionsContextWithChanges returns the child IDs whose
+// hierarchy changed so callers can recompute hierarchy-dependent signals.
+// An ID appears once per committed row update, including legacy repairs.
+func (db *DB) LinkSubagentSessionsContextWithChanges(
+	ctx context.Context,
+) ([]string, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	tx, err := db.getWriter().BeginTx(ctx, nil)
 	if err != nil {
-		return 0, fmt.Errorf("beginning subagent linking: %w", err)
+		return nil, fmt.Errorf("beginning subagent linking: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	repaired, err := repairLegacySelfParentedSessions(ctx, tx)
+	legacyChanged, err := repairLegacySelfParentedSessionsWithChanges(ctx, tx)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 
 	// local_modified_at is bumped so the sync_marker trigger fires and
@@ -1921,18 +1944,20 @@ func (db *DB) LinkSubagentSessionsContext(ctx context.Context) (int, error) {
 	// session after a mirror's cutoff would otherwise never re-push it
 	// (see updateSessionSignalsTx and ReplaceSessionUsageEvents for the
 	// same pattern).
-	res, err := tx.ExecContext(ctx, linkSubagentSessionsQuery)
+	rows, err := tx.QueryContext(
+		ctx, linkSubagentSessionsQuery+" RETURNING id",
+	)
 	if err != nil {
-		return 0, fmt.Errorf("linking subagent sessions: %w", err)
+		return nil, fmt.Errorf("linking subagent sessions: %w", err)
 	}
-	updated, err := res.RowsAffected()
+	changed, err := readSessionIDs(rows)
 	if err != nil {
-		return 0, fmt.Errorf("counting linked subagent sessions: %w", err)
+		return nil, fmt.Errorf("reading linked subagent sessions: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("committing subagent linking: %w", err)
+		return nil, fmt.Errorf("committing subagent linking: %w", err)
 	}
-	return repaired + int(updated), nil
+	return append(legacyChanged, changed...), nil
 }
 
 // selfParentRepairStateKey marks the archive as having cleared the
@@ -1953,6 +1978,7 @@ const selfParentRepairStateKey = "subagent_self_parent_repair_v1"
 const clearSelfParentedSessionsSQL = `
 	UPDATE sessions
 	SET parent_session_id = NULLIF(parser_parent_session_id, id),
+	friction_rules_version = '',
 	local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 	WHERE parent_session_id IS id`
 
@@ -1964,32 +1990,52 @@ const clearSelfParentedSessionsSQL = `
 // it is gated by a pg_sync_state marker rather than repeated on every sync.
 // The caller commits the marker, repair, and ordinary linking together so a
 // failed run retries every change.
-func repairLegacySelfParentedSessions(ctx context.Context, tx *sql.Tx) (int, error) {
+func repairLegacySelfParentedSessionsWithChanges(
+	ctx context.Context, tx *sql.Tx,
+) ([]string, error) {
 	var repaired int
 	if err := tx.QueryRowContext(
 		ctx,
 		"SELECT EXISTS(SELECT 1 FROM pg_sync_state WHERE key = ?)",
 		selfParentRepairStateKey,
 	).Scan(&repaired); err != nil {
-		return 0, fmt.Errorf("checking self-parent repair state: %w", err)
+		return nil, fmt.Errorf("checking self-parent repair state: %w", err)
 	}
 	if repaired != 0 {
-		return 0, nil
+		return nil, nil
 	}
-	res, err := tx.ExecContext(ctx, clearSelfParentedSessionsSQL)
+	rows, err := tx.QueryContext(ctx,
+		clearSelfParentedSessionsSQL+" RETURNING id",
+	)
 	if err != nil {
-		return 0, fmt.Errorf("clearing legacy self-parented sessions: %w", err)
+		return nil, fmt.Errorf("clearing legacy self-parented sessions: %w", err)
 	}
-	updated, err := res.RowsAffected()
+	changed, err := readSessionIDs(rows)
 	if err != nil {
-		return 0, fmt.Errorf("counting legacy self-parent repairs: %w", err)
+		return nil, fmt.Errorf("reading legacy self-parented sessions: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO pg_sync_state (key, value) VALUES (?, '1')
 		ON CONFLICT(key) DO NOTHING`, selfParentRepairStateKey); err != nil {
-		return 0, fmt.Errorf("recording self-parent repair state: %w", err)
+		return nil, fmt.Errorf("recording self-parent repair state: %w", err)
 	}
-	return int(updated), nil
+	return changed, nil
+}
+
+func readSessionIDs(rows *sql.Rows) ([]string, error) {
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scanning changed session ID: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reading changed session IDs: %w", err)
+	}
+	return ids, nil
 }
 
 // linkSubagentSessionsForSessionsQuery is linkSubagentSessionsQuery
@@ -2016,6 +2062,7 @@ func linkSubagentSessionsForSessionsQuery(ph string) string {
 	SET parent_session_id = (` + subagentSpawnerExpr + `
 	),
 	relationship_type = 'subagent',
+	friction_rules_version = '',
 	local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 	WHERE s.id IN (
 		SELECT tc.subagent_session_id FROM tool_calls tc
@@ -2049,6 +2096,7 @@ func clearDanglingSubagentParentQuery(ph string) string {
 	return `
 	UPDATE sessions AS s
 	SET parent_session_id = NULL,
+	friction_rules_version = '',
 	local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 	WHERE s.id IN ` + ph + `
 	AND s.relationship_type = 'subagent'
@@ -2076,25 +2124,35 @@ func clearDanglingSubagentParentQuery(ph string) string {
 // global LinkSubagentSessions pass they already coalesce to.
 // The returned count includes only committed changes; all chunks commit together.
 func (db *DB) LinkSubagentSessionsForSessions(ctx context.Context, ids []string) (int, error) {
+	changed, err := db.LinkSubagentSessionsForSessionsWithChanges(ctx, ids)
+	return len(changed), err
+}
+
+// LinkSubagentSessionsForSessionsWithChanges returns the child IDs whose
+// hierarchy changed for this bounded linking pass.
+func (db *DB) LinkSubagentSessionsForSessionsWithChanges(
+	ctx context.Context, ids []string,
+) ([]string, error) {
 	if len(ids) == 0 {
-		return 0, nil
+		return nil, nil
 	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	tx, err := db.getWriter().BeginTx(ctx, nil)
 	if err != nil {
-		return 0, fmt.Errorf("beginning scoped subagent linking: %w", err)
+		return nil, fmt.Errorf("beginning scoped subagent linking: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	updated := 0
+	var changed []string
 
 	// Each id binds twice (once per UNION branch), so halve the chunk to
 	// stay within SQLite's bind-variable limit.
 	err = queryChunkedSize(ids, maxSQLVars/2, func(chunk []string) error {
 		ph, args := inPlaceholders(chunk)
 		allArgs := append(append([]any{}, args...), args...)
-		res, err := tx.ExecContext(ctx,
-			linkSubagentSessionsForSessionsQuery(ph), allArgs...,
+		rows, err := tx.QueryContext(
+			ctx, linkSubagentSessionsForSessionsQuery(ph)+" RETURNING id",
+			allArgs...,
 		)
 		if err != nil {
 			return fmt.Errorf(
@@ -2102,20 +2160,26 @@ func (db *DB) LinkSubagentSessionsForSessions(ctx context.Context, ids []string)
 				len(chunk), err,
 			)
 		}
-		count, err := res.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("counting scoped subagent links: %w", err)
+		defer rows.Close()
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return fmt.Errorf("scanning linked subagent session: %w", err)
+			}
+			changed = append(changed, id)
 		}
-		updated += int(count)
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("reading linked subagent sessions: %w", err)
+		}
 		return nil
 	})
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("committing scoped subagent linking: %w", err)
+		return nil, fmt.Errorf("committing scoped subagent linking: %w", err)
 	}
-	return updated, nil
+	return changed, nil
 }
 
 // QueueSubagentParentRepairs durably records sessions whose hierarchy must be
@@ -2201,10 +2265,19 @@ func (db *DB) RepairQueuedSubagentParents() error {
 // checked queue entries, including missing sessions and unchanged parents. The
 // final callback precedes commit; an error still rolls back the entire repair.
 // The callback runs under the writer lock and must not call back into DB.
-// The returned count includes session rows changed by committed linking and cleanup.
 func (db *DB) RepairQueuedSubagentParentsContext(
 	ctx context.Context, onProgress func(done, total int),
 ) (int, error) {
+	changed, err := db.RepairQueuedSubagentParentsContextWithChanges(ctx, onProgress)
+	return len(changed), err
+}
+
+// RepairQueuedSubagentParentsContextWithChanges returns the session IDs whose
+// hierarchy changed while repairing the durable queue. Progress has the same
+// transaction and callback constraints as RepairQueuedSubagentParentsContext.
+func (db *DB) RepairQueuedSubagentParentsContextWithChanges(
+	ctx context.Context, onProgress func(done, total int),
+) ([]string, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -2216,20 +2289,19 @@ func (db *DB) RepairQueuedSubagentParentsContext(
 		subagentParentRepairQueueStateKey,
 	).Scan(&pending)
 	if err != nil {
-		return 0, fmt.Errorf("checking subagent parent repair queue: %w", err)
+		return nil, fmt.Errorf("checking subagent parent repair queue: %w", err)
 	}
 	if pending == 0 {
-		return 0, nil
+		return nil, nil
 	}
 	tx, err := db.getWriter().BeginTx(ctx, nil)
 	if err != nil {
-		return 0, fmt.Errorf("beginning queued subagent parent repair: %w", err)
+		return nil, fmt.Errorf("beginning queued subagent parent repair: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 	if err := migrateLegacySubagentParentRepairQueueTx(ctx, tx); err != nil {
-		return 0, err
+		return nil, err
 	}
-	updated := 0
 	var done, total int
 	if onProgress != nil {
 		if err := tx.QueryRowContext(ctx, `
@@ -2238,12 +2310,13 @@ func (db *DB) RepairQueuedSubagentParentsContext(
 				UNION
 				SELECT session_id FROM subagent_parent_cleanup_queue
 			)`).Scan(&total); err != nil {
-			return 0, fmt.Errorf("counting queued subagent parent repairs: %w", err)
+			return nil, fmt.Errorf("counting queued subagent parent repairs: %w", err)
 		}
 		if total > 0 {
 			onProgress(0, total)
 		}
 	}
+	var changed []string
 	for {
 		ids, err := func() ([]string, error) {
 			rows, err := tx.QueryContext(ctx, `
@@ -2272,7 +2345,7 @@ func (db *DB) RepairQueuedSubagentParentsContext(
 			return ids, nil
 		}()
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 		if len(ids) == 0 {
 			break
@@ -2281,42 +2354,42 @@ func (db *DB) RepairQueuedSubagentParentsContext(
 		chunk := ids
 		ph, args := inPlaceholders(chunk)
 		allArgs := append(append([]any{}, args...), args...)
-		res, err := tx.ExecContext(ctx,
-			linkSubagentSessionsForSessionsQuery(ph), allArgs...,
+		rows, err := tx.QueryContext(ctx,
+			linkSubagentSessionsForSessionsQuery(ph)+" RETURNING id", allArgs...,
 		)
 		if err != nil {
-			return 0, fmt.Errorf(
+			return nil, fmt.Errorf(
 				"linking queued subagent parents for %d sessions: %w",
 				len(chunk), err,
 			)
 		}
-		linked, err := res.RowsAffected()
+		linked, err := readSessionIDs(rows)
 		if err != nil {
-			return 0, fmt.Errorf("counting queued subagent links: %w", err)
+			return nil, fmt.Errorf("reading linked queued subagent parents: %w", err)
 		}
-		updated += int(linked)
+		changed = append(changed, linked...)
 		cleanupSeeds := `(SELECT session_id
 			FROM subagent_parent_cleanup_queue WHERE session_id IN ` + ph + `)`
-		res, err = tx.ExecContext(ctx,
-			clearDanglingSubagentParentQuery(cleanupSeeds), args...,
+		rows, err = tx.QueryContext(ctx,
+			clearDanglingSubagentParentQuery(cleanupSeeds)+" RETURNING id", args...,
 		)
 		if err != nil {
-			return 0, fmt.Errorf(
+			return nil, fmt.Errorf(
 				"clearing queued dangling subagent parents for %d "+
 					"sessions: %w",
 				len(chunk), err,
 			)
 		}
-		cleared, err := res.RowsAffected()
+		cleared, err := readSessionIDs(rows)
 		if err != nil {
-			return 0, fmt.Errorf("counting queued dangling-parent repairs: %w", err)
+			return nil, fmt.Errorf("reading cleared queued subagent parents: %w", err)
 		}
-		updated += int(cleared)
+		changed = append(changed, cleared...)
 		if _, err := tx.ExecContext(ctx,
 			"DELETE FROM subagent_parent_cleanup_queue WHERE session_id IN "+ph,
 			args...,
 		); err != nil {
-			return 0, fmt.Errorf(
+			return nil, fmt.Errorf(
 				"clearing %d queued subagent parent cleanups: %w",
 				len(chunk), err,
 			)
@@ -2325,7 +2398,7 @@ func (db *DB) RepairQueuedSubagentParentsContext(
 			"DELETE FROM subagent_parent_repair_queue WHERE session_id IN "+ph,
 			args...,
 		); err != nil {
-			return 0, fmt.Errorf(
+			return nil, fmt.Errorf(
 				"clearing %d queued subagent parent repairs: %w",
 				len(chunk), err,
 			)
@@ -2336,9 +2409,9 @@ func (db *DB) RepairQueuedSubagentParentsContext(
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("committing queued subagent parent repair: %w", err)
+		return nil, fmt.Errorf("committing queued subagent parent repair: %w", err)
 	}
-	return updated, nil
+	return changed, nil
 }
 
 func migrateLegacySubagentParentRepairQueueTx(
@@ -5901,6 +5974,7 @@ func (db *DB) FindPruneCandidates(ctx context.Context,
 			&s.HealthScore, &s.HealthGrade,
 			&s.HasToolCalls, &s.HasContextData,
 			&s.SecretLeakCount, &s.SecretsRulesVersion,
+			&s.FrictionCount, &s.FrictionRulesVersion, &s.FrictionHash,
 			&s.QualitySignalVersion,
 			&s.ShortPromptCount, &s.UnstructuredStart,
 			&s.MissingSuccessCriteriaCount,
@@ -6347,6 +6421,7 @@ func (db *DB) ListSessionsModifiedBetween(
 			&s.HealthScore, &s.HealthGrade,
 			&s.HasToolCalls, &s.HasContextData,
 			&s.SecretLeakCount, &s.SecretsRulesVersion,
+			&s.FrictionCount, &s.FrictionRulesVersion, &s.FrictionHash,
 			&s.QualitySignalVersion,
 			&s.ShortPromptCount, &s.UnstructuredStart,
 			&s.MissingSuccessCriteriaCount,
@@ -6456,6 +6531,7 @@ func (db *DB) ListSessionsForMirrorWindow(
 			&s.HealthScore, &s.HealthGrade,
 			&s.HasToolCalls, &s.HasContextData,
 			&s.SecretLeakCount, &s.SecretsRulesVersion,
+			&s.FrictionCount, &s.FrictionRulesVersion, &s.FrictionHash,
 			&s.QualitySignalVersion,
 			&s.ShortPromptCount, &s.UnstructuredStart,
 			&s.MissingSuccessCriteriaCount,

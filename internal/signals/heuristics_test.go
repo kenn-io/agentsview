@@ -527,3 +527,29 @@ func TestStripCodeFencesMatchesRegexp(t *testing.T) {
 		assert.Equal(t, codeFenceRe.ReplaceAllString(input, " "), stripCodeFences(input), "%q", input)
 	}
 }
+
+func TestIsFrustrationMarker(t *testing.T) {
+	for _, tt := range []struct {
+		content string
+		want    bool
+	}{
+		{"Please run the focused test again.", false},
+		{"Please inspect the error handling.", false},
+		{"That workaround works now.", false},
+		{"why won't this pass", true},
+		{"come on, please fix this", true},
+		{"wtf happened here", true},
+		{"this is broken again", true},
+		{"the same error remains", true},
+		{"that fucKing failure again", true},
+		{"still doesn't work", true},
+		{"please fix this!!!", true},
+		{"PLEASE FIX THIS", true},
+		{"A B C please", false},
+		{"PLEASE fix this ```text\nLOUD WORDS HERE\n```", false},
+	} {
+		t.Run(tt.content, func(t *testing.T) {
+			assert.Equal(t, tt.want, IsFrustrationMarker(tt.content))
+		})
+	}
+}

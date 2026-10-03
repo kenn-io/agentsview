@@ -130,6 +130,8 @@ GRANT INSERT, UPDATE, DELETE ON hosted_sessions.raw_upload_sessions,
   hosted_sessions.raw_pins TO hosted_runtime;
 GRANT INSERT, DELETE ON hosted_sessions.starred_sessions,
   hosted_sessions.raw_session_links TO hosted_runtime;
+GRANT INSERT, DELETE ON hosted_sessions.friction_findings,
+  hosted_sessions.friction_session_dims TO hosted_runtime;
 
 GRANT USAGE ON SEQUENCE hosted_sessions.raw_ingest_jobs_id_seq,
   hosted_sessions.tool_calls_id_seq, hosted_sessions.tool_result_events_id_seq,

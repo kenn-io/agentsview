@@ -136,3 +136,94 @@ func TestReplaceSessionSignalsIfInputsMatchRejectsMetadataOnlyRace(t *testing.T)
 	require.Equal(t, fresh.TranscriptRevision, stored.TranscriptRevision)
 	require.Equal(t, []byte("fresh-state"), stored.State)
 }
+
+func TestReplaceSessionSignalsIfInputsMatchFrictionInputs(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		query       string
+		wantApplied bool
+	}{
+		{
+			name:  "parent session id",
+			query: `UPDATE sessions SET parent_session_id = 'parent' WHERE id = ?`,
+		},
+		{
+			name:  "relationship type",
+			query: `UPDATE sessions SET relationship_type = 'fork' WHERE id = ?`,
+		},
+		{
+			name:  "agent",
+			query: `UPDATE sessions SET agent = 'codex' WHERE id = ?`,
+		},
+		{
+			name:        "machine",
+			query:       `UPDATE sessions SET machine = 'remote' WHERE id = ?`,
+			wantApplied: true,
+		},
+		{
+			name:        "project",
+			query:       `UPDATE sessions SET project = 'other-project' WHERE id = ?`,
+			wantApplied: true,
+		},
+		{
+			name:        "cwd",
+			query:       `UPDATE sessions SET cwd = '/workspace/other' WHERE id = ?`,
+			wantApplied: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			id := "signal-friction-race"
+			insertSession(t, d, id, "proj")
+
+			sess, err := d.GetSessionFull(t.Context(), id)
+			require.NoError(t, err)
+			expected, err := SignalInputSnapshot(*sess)
+			require.NoError(t, err)
+
+			baseline := []FrictionFinding{{
+				SessionID: id, Kind: "error", Detector: "error",
+				Text: "current findings", Title: "current findings",
+				Fingerprint: "current-findings",
+			}}
+			require.NoError(t, d.replaceSessionFriction(t.Context(), id,
+				baseline, nil, "friction-v1",
+				FrictionHash(baseline, nil, "friction-v1"),
+			))
+
+			_, err = d.getWriter().Exec(t.Context(), tc.query, id)
+			require.NoError(t, err)
+			computed := []FrictionFinding{{
+				SessionID: id, Kind: "correction", Detector: "correction.coding",
+				Text: "computed finding", Title: "computed finding",
+				Fingerprint: "computed-finding",
+			}}
+			update := SessionSignalUpdate{
+				Outcome: "computed-result",
+				Friction: &SessionFrictionUpdate{
+					Findings: computed, RulesVersion: "friction-v1",
+					Hash: FrictionHash(computed, nil, "friction-v1"),
+				},
+			}
+			applied, err := d.ReplaceSessionSignalsIfInputsMatch(
+				t.Context(), id, expected, nil, update,
+				SessionSignalState{},
+			)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantApplied, applied)
+
+			after, err := d.GetSessionFull(t.Context(), id)
+			require.NoError(t, err)
+			findings, err := d.SessionFrictionFindings(t.Context(), id)
+			require.NoError(t, err)
+			require.Len(t, findings, 1)
+			if tc.wantApplied {
+				require.Equal(t, "computed-result", after.Outcome)
+				require.Equal(t, "computed-finding", findings[0].Fingerprint)
+				return
+			}
+			require.NotEqual(t, "computed-result", after.Outcome)
+			require.Equal(t, "current-findings", findings[0].Fingerprint)
+		})
+	}
+}

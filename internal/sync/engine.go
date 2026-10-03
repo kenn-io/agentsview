@@ -28,6 +28,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/friction"
 	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/pathutil"
@@ -721,7 +722,11 @@ type Engine struct {
 	// recompute triggered by incremental writes, so streaming
 	// sessions don't rescan their whole history on every appended
 	// line. Close flushes and stops it.
-	signalSched *signalScheduler
+	signalSched        *signalScheduler
+	frictionSched      *signalScheduler
+	frictionBackfillMu gosync.Mutex
+	// frictionReviewHook replaces friction.Review in tests.
+	frictionReviewHook func(friction.SessionInput) []friction.Signal
 
 	// containerMu guards the OpenCode-family shared-SQLite freshness
 	// gate (see opencode_container_gate.go). trustedSQLiteContainers
@@ -1044,6 +1049,26 @@ func NewEngine(ctx context.Context,
 	if e.disableSignalRecompute {
 		e.signalSched.stop()
 	}
+	recomputeFriction := func(sessionID string) {
+		if err := e.recomputeFrictionFromDB(context.Background(), sessionID); err != nil {
+			log.Printf("friction: recompute %s: %v", sessionID, err)
+		}
+	}
+	if e.disableSignalRecompute {
+		recomputeFriction = func(string) {}
+	}
+	e.frictionSched = newSignalScheduler(
+		signalRecomputeInterval, signalRecomputeQuiet,
+		recomputeFriction,
+		func(flush func()) {
+			e.syncMu.Lock()
+			defer e.syncMu.Unlock()
+			flush()
+		},
+	)
+	if e.disableSignalRecompute {
+		e.frictionSched.stop()
+	}
 	return e
 }
 
@@ -1161,6 +1186,7 @@ func pathWithinRoot(path, root string) bool {
 // safe to call repeatedly.
 func (e *Engine) Close() {
 	e.signalSched.stop()
+	e.frictionSched.stop()
 }
 
 // FlushSignals immediately recomputes signals for sessions with a
@@ -1171,6 +1197,7 @@ func (e *Engine) Close() {
 // by the engine instead.
 func (e *Engine) FlushSignals() {
 	e.signalSched.flushAll()
+	e.frictionSched.flushAll()
 }
 
 func providerFactoryMap(
@@ -3318,6 +3345,10 @@ func (e *Engine) resyncBuildLocked(
 	stats = e.syncAllLocked(
 		ctx, reportResyncProgress, time.Time{}, nil, syncWriteBulk, true, false,
 	)
+	// The scheduler recomputes through e.db, which temporarily points at the
+	// replacement archive during this pass. Drain deferred work before restoring
+	// the live archive pointer so no hierarchy refresh targets the wrong DB.
+	e.frictionSched.flushAllInline()
 	e.db = origDB // restore immediately
 	e.archiveStore = nil
 	e.archiveStaleClaudeForks = nil
@@ -3600,7 +3631,7 @@ func (e *Engine) resyncBuildLocked(
 		"Copying archived sessions",
 		"",
 	)
-	orphaned, err := newDB.CopyOrphanedDataFromExcluding(
+	orphaned, copiedHierarchyChanges, err := newDB.CopyOrphanedDataFromExcludingWithChanges(
 		origPath, stats.parserExcludedIDs,
 	)
 	if err != nil {
@@ -3618,6 +3649,7 @@ func (e *Engine) resyncBuildLocked(
 		e.mu.Unlock()
 		return stats, err
 	}
+	hierarchyChangedIDs := append([]string(nil), copiedHierarchyChanges...)
 	stats.OrphanedCopied = len(orphaned)
 	copiedSessionIDs = append(copiedSessionIDs, orphaned...)
 	deferredCwdUpdated, err := e.applyDeferredSourceCwd(ctx,
@@ -3643,15 +3675,16 @@ func (e *Engine) resyncBuildLocked(
 
 	// Re-link subagent sessions after orphan copy so copied
 	// tool_calls.subagent_session_id references are resolved.
-	var repaired int
+	var changed []string
 	if len(orphaned) > 0 {
 		reportResyncPhase(
 			PhaseCopyingOrphans,
 			"Relinking archived subagent sessions",
 			"",
 		)
-		repaired, err = newDB.LinkSubagentSessionsContext(ctx)
-		pendingLinksUpdated += repaired
+		changed, err = newDB.LinkSubagentSessionsContextWithChanges(ctx)
+		pendingLinksUpdated += len(changed)
+		hierarchyChangedIDs = append(hierarchyChangedIDs, changed...)
 	}
 
 	// CopySyncStateFrom runs after the fresh archive's normal linking pass so
@@ -3660,10 +3693,11 @@ func (e *Engine) resyncBuildLocked(
 	// copied spawn edge is present. A failed repair leaves hierarchy state
 	// uncertain and must abort before the replacement can be installed.
 	if err == nil {
-		repaired, err = newDB.RepairQueuedSubagentParentsContext(ctx, func(done, total int) {
+		changed, err = newDB.RepairQueuedSubagentParentsContextWithChanges(ctx, func(done, total int) {
 			e.reportSubagentRepairProgress(reportResyncProgress, done, total)
 		})
-		pendingLinksUpdated += repaired
+		pendingLinksUpdated += len(changed)
+		hierarchyChangedIDs = append(hierarchyChangedIDs, changed...)
 	}
 	if err != nil {
 		log.Printf("resync: repair copied subagent parents: %v", err)
@@ -3838,6 +3872,16 @@ func (e *Engine) resyncBuildLocked(
 			e.lastSyncStats = stats
 			e.mu.Unlock()
 			return stats, err
+		}
+	}
+	seenHierarchyChanges := make(map[string]struct{}, len(hierarchyChangedIDs))
+	for _, id := range hierarchyChangedIDs {
+		if _, seen := seenHierarchyChanges[id]; seen {
+			continue
+		}
+		seenHierarchyChanges[id] = struct{}{}
+		if _, err := e.recomputeFrictionFromDatabase(ctx, newDB, id); err != nil {
+			log.Printf("resync: refresh hierarchy-dependent friction %s: %v", id, err)
 		}
 	}
 
@@ -4402,6 +4446,7 @@ func (e *Engine) syncThenRunLocked(
 	// deferred signal recomputes first (inline: syncMu is held) or
 	// pushed sessions could carry stale signal/secret fields.
 	e.signalSched.flushAllInline()
+	e.frictionSched.flushAllInline()
 	e.clearCurrentProgress()
 	if err := work(full || didResync); err != nil {
 		return stats, err
@@ -4532,6 +4577,7 @@ func (e *Engine) SyncThenRunWithRebuild(
 		return stats, nil
 	}
 	e.signalSched.flushAllInline()
+	e.frictionSched.flushAllInline()
 	e.clearCurrentProgress()
 	if err := work(full || didResync, didResync); err != nil {
 		return stats, err
@@ -4793,6 +4839,7 @@ func (e *Engine) RunExclusiveFlushed(work func() error) error {
 	e.syncMu.Lock()
 	defer e.syncMu.Unlock()
 	e.signalSched.flushAllInline()
+	e.frictionSched.flushAllInline()
 	return work()
 }
 
@@ -5080,7 +5127,7 @@ func (e *Engine) ReconcileProviderRootsGrouped(
 			}
 		}
 		if repairEligible {
-			repaired, err := e.db.RepairQueuedSubagentParentsContext(ctx, nil)
+			repaired, err := e.repairQueuedSubagentParents(ctx, nil)
 			if err != nil {
 				errs = append(errs, fmt.Errorf(
 					"repair queued subagent parents after grouped reconciliation: %w", err,
@@ -5582,7 +5629,7 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 	// An empty spool never enters collectAndBatch, so its pending durable
 	// repairs must run here too. This touches queued IDs, not the full archive.
 	if eligibility.repair && !passEpilogueDeferred(ctx) {
-		repaired, err := e.db.RepairQueuedSubagentParentsContext(ctx, nil)
+		repaired, err := e.repairQueuedSubagentParents(ctx, nil)
 		if err != nil {
 			stats.RecordFailed()
 			stats.Aborted = true
@@ -10927,7 +10974,7 @@ flush:
 			e.reportSubagentRepairProgress(onProgress, done, total)
 		}
 	}
-	repaired, err := e.db.RepairQueuedSubagentParentsContext(postWriteCtx, repairProgress)
+	repaired, err := e.repairQueuedSubagentParents(postWriteCtx, repairProgress)
 	if err != nil {
 		log.Printf("repair queued subagent parents: %v", err)
 		stats.RecordFailed()
@@ -11125,12 +11172,45 @@ func (e *Engine) linkSubagentSessions(ctx context.Context) (int, error) {
 	if runtimeMetrics := reconciliationRuntimeMetricsFor(ctx); runtimeMetrics != nil {
 		runtimeMetrics.globalLinkPass()
 	}
-	updated, err := e.db.LinkSubagentSessionsContext(ctx)
+	changed, err := e.db.LinkSubagentSessionsContextWithChanges(ctx)
 	e.subagentLinkPending = err != nil
 	if err != nil {
 		return 0, err
 	}
-	return updated, nil
+	e.markFrictionDirty(changed)
+	return len(changed), nil
+}
+
+func (e *Engine) linkSubagentSessionsForSessions(ctx context.Context, ids []string) (int, error) {
+	changed, err := e.db.LinkSubagentSessionsForSessionsWithChanges(ctx, ids)
+	if err != nil {
+		return 0, err
+	}
+	e.markFrictionDirty(changed)
+	return len(changed), nil
+}
+
+func (e *Engine) repairQueuedSubagentParents(ctx context.Context, onProgress func(int, int)) (int, error) {
+	changed, err := e.db.RepairQueuedSubagentParentsContextWithChanges(ctx, onProgress)
+	if err != nil {
+		return 0, err
+	}
+	e.markFrictionDirty(changed)
+	return len(changed), nil
+}
+
+func (e *Engine) markFrictionDirty(sessionIDs []string) {
+	if e.frictionSched == nil || len(sessionIDs) == 0 {
+		return
+	}
+	seen := make(map[string]struct{}, len(sessionIDs))
+	for _, id := range sessionIDs {
+		if _, duplicate := seen[id]; duplicate {
+			continue
+		}
+		seen[id] = struct{}{}
+		e.frictionSched.markDirty(id)
+	}
 }
 
 // drainResults consumes remaining items from the results
@@ -17266,7 +17346,14 @@ func (e *Engine) recomputeSignalsFromDBWithHook(
 			)
 		}
 		projectedSession, msgs := e.db.ProjectSessionForStorage(*sess, msgs)
+		withinFrictionBudget, err := e.db.FrictionInputWithinBudget(ctx, sessionID, expectedInputs.TranscriptRevision)
+		if err != nil {
+			return 0, fmt.Errorf("checking friction budget for %s: %w", sessionID, err)
+		}
 		update, findings := e.computeSignalsAndSecretsForStorage(projectedSession, msgs)
+		if withinFrictionBudget {
+			e.attachFriction(&update, projectedSession, msgs)
+		}
 		heapBytes := recomputeHeapBytes(msgs, findings)
 		var state db.SessionSignalState
 		if isCodexFormatAgent(parser.AgentType(sess.Agent)) {
@@ -18220,6 +18307,7 @@ func (e *Engine) prepareSessionNormalizedContext(
 		prepared.Signals, prepared.Findings = e.computeSignalsAndSecretsForStorage(
 			prepared.Session, prepared.Messages,
 		)
+		e.attachFriction(&prepared.Signals, prepared.Session, prepared.Messages)
 	}
 	s = prepared.Session
 	e.anomalies.recordSanitize(prepared.Validation)
@@ -18455,6 +18543,7 @@ func (e *Engine) writeStagedFullParse(
 	}
 	positions := stagedToolCallPositions(msgs)
 	var closure db.StagedSignalsFunc
+	var frictionSeeded bool
 	if !e.disableSignalRecompute {
 		closure = func(verdicts map[string]bool) (
 			db.SessionSignalUpdate, []db.SecretFinding, error,
@@ -18463,6 +18552,7 @@ func (e *Engine) writeStagedFullParse(
 			if err != nil {
 				return db.SessionSignalUpdate{}, nil, err
 			}
+			frictionSeeded = update.Friction != nil
 			if e.db.ArchiveContent().OmitsToolContent() {
 				return update, findings, nil
 			}
@@ -18488,6 +18578,10 @@ func (e *Engine) writeStagedFullParse(
 		return err
 	}
 	e.anomalies.recordSanitize(pw.staged.ValidationStats())
+	if !e.disableSignalRecompute && !frictionSeeded {
+		// Staged tool results become readable only after the commit above.
+		e.frictionSched.markDirty(s.ID)
+	}
 
 	return nil
 }
@@ -19484,6 +19578,10 @@ func (e *Engine) writeIncremental(ctx context.Context,
 	// write or flush retries.
 	if !signalsMaintained {
 		e.signalSched.markDirty(inc.sessionID)
+	} else {
+		// Friction windows span the session, so the maintained delta is
+		// insufficient to refresh its findings.
+		e.frictionSched.markDirtyDeferred(inc.sessionID)
 	}
 	if inc.providerStatHash != nil {
 		e.recordProviderStatHash(
@@ -20790,7 +20888,7 @@ func (e *Engine) processAndWriteSessionFile(
 				"reconcile fresh source baselines: %w", err,
 			)
 		}
-		repaired, err := e.db.RepairQueuedSubagentParentsContext(context.Background(), nil)
+		repaired, err := e.repairQueuedSubagentParents(context.Background(), nil)
 		if err != nil {
 			return false, sessionsChanged, fmt.Errorf(
 				"repair queued subagent parents: %w", err,
@@ -20801,7 +20899,7 @@ func (e *Engine) processAndWriteSessionFile(
 		// before its child could be durably queued. The requested session is
 		// still a bounded repair seed on the freshness path because its
 		// surviving edges identify those children directly.
-		linked, err := e.db.LinkSubagentSessionsForSessions(ctx,
+		linked, err := e.linkSubagentSessionsForSessions(ctx,
 			[]string{requestedSessionID},
 		)
 		if err != nil {
@@ -20841,7 +20939,7 @@ func (e *Engine) processAndWriteSessionFile(
 	// A prior sync may have removed an edge and then failed before repairing
 	// its child. Retry that durable work after this sync's read-only capture
 	// but before making any new mutations.
-	repaired, err := e.db.RepairQueuedSubagentParentsContext(context.Background(), nil)
+	repaired, err := e.repairQueuedSubagentParents(context.Background(), nil)
 	if err != nil {
 		return false, sessionsChanged, fmt.Errorf(
 			"repair queued subagent parents: %w", err,
@@ -20878,7 +20976,7 @@ func (e *Engine) processAndWriteSessionFile(
 		if !repairQueued {
 			return
 		}
-		repaired, repairErr := e.db.RepairQueuedSubagentParentsContext(context.Background(), nil)
+		repaired, repairErr := e.repairQueuedSubagentParents(context.Background(), nil)
 		if repairErr != nil {
 			err = errors.Join(err, fmt.Errorf(
 				"repair queued subagent parents: %w", repairErr,
@@ -20970,7 +21068,7 @@ func (e *Engine) processAndWriteSessionFile(
 		); err != nil {
 			return false, sessionsChanged, err
 		}
-		linked, err := e.db.LinkSubagentSessionsForSessions(ctx,
+		linked, err := e.linkSubagentSessionsForSessions(ctx,
 			[]string{res.incremental.sessionID},
 		)
 		if err != nil {
@@ -21071,7 +21169,7 @@ func (e *Engine) processAndWriteSessionFile(
 	if !sourceComplete {
 		markSourceIncomplete()
 	}
-	linked, err := e.db.LinkSubagentSessionsForSessions(ctx, resultIDs)
+	linked, err := e.linkSubagentSessionsForSessions(ctx, resultIDs)
 	if err != nil {
 		markSourceIncomplete()
 		return false, sessionsChanged, fmt.Errorf(
