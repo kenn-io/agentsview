@@ -18,6 +18,7 @@ import (
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/requestsign"
 )
 
 type insightListResponse struct {
@@ -278,7 +279,11 @@ func doInsightRequest(
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	resp, err := (&http.Client{Timeout: 0}).Do(req)
+	client, err := requestsign.ClientFromEnvironment(baseURL, &http.Client{Timeout: 0})
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}

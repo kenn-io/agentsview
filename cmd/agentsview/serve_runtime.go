@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -98,6 +99,11 @@ func startServerWithOptionalCaddy(
 	srv *server.Server,
 	opts serveRuntimeOptions,
 ) (*serveRuntime, error) {
+	if policyFile := os.Getenv("AGENTSVIEW_MACHINE_SIGNING_POLICY"); policyFile != "" {
+		if _, err := srv.StartRestrictedListener(ctx, policyFile); err != nil {
+			return nil, err
+		}
+	}
 	serveErrCh := make(chan error, 1)
 	go func() {
 		serveErrCh <- srv.ListenAndServe()

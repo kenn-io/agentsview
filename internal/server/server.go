@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -97,6 +98,7 @@ type Server struct {
 	mux                   *http.ServeMux
 	api                   huma.API
 	httpSrv               *http.Server
+	restrictedListener    *RestrictedListener
 	startupProbeKey       []byte
 	version               VersionInfo
 	dataDir               string
@@ -1367,10 +1369,21 @@ func (s *Server) Serve(ln net.Listener) error {
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.mu.RLock()
 	srv := s.httpSrv
+	ingress := s.restrictedListener
 	s.mu.RUnlock()
 	var err error
+	shutdownErrors := make(chan error, 2)
+	shutdownCount := 0
+	if ingress != nil {
+		shutdownCount++
+		go func() { shutdownErrors <- ingress.shutdown(ctx) }()
+	}
 	if srv != nil {
-		err = srv.Shutdown(ctx)
+		shutdownCount++
+		go func() { shutdownErrors <- srv.Shutdown(ctx) }()
+	}
+	for range shutdownCount {
+		err = errors.Join(err, <-shutdownErrors)
 	}
 	s.mu.Lock()
 	engine := s.onDemandEngine
