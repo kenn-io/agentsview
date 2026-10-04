@@ -490,6 +490,15 @@ func TestUsageRollupPriceChangeRebuildsOnlySessionsUsingIt(t *testing.T) {
 			}},
 			rebuildsA: true, wantCostA: 4_000_000, wantDailyRows: 1,
 		},
+		{
+			name: "new tier row beats stripped base row", modelA: "model-a-high",
+			patternA: "model-a",
+			change: []ModelPricing{{
+				ModelPattern: "model-a-high",
+				InputPerMTok: money.Money{Microdollars: 4_000_000},
+			}},
+			rebuildsA: true, wantCostA: 4_000_000, wantDailyRows: 1,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -569,9 +578,22 @@ func TestUsageRollupUnchangedPricingBuildsNoRows(t *testing.T) {
 		export.NewPricingResolver(firstSnapshot.PricingRows))
 	require.NoError(t, err)
 
-	// Re-storing the same rates only re-stamps updated_at.
-	require.NoError(t, database.UpsertModelPricing(price))
+	// A refresh that only re-stamps updated_at leaves every rate unchanged.
+	_, err = database.getWriter().ExecContext(t.Context(), `UPDATE model_pricing
+		SET updated_at = '2030-01-01T00:00:00.000Z' WHERE model_pattern = 'model-a'`)
+	require.NoError(t, err)
 	secondSnapshot, secondFills, _ := prepareUsageRollupTest(t, database)
+	updatedAt := func(snapshot usageQuerySnapshot) *time.Time {
+		for _, row := range snapshot.PricingRows {
+			if row.ModelPattern == "model-a" {
+				return row.Rates.UpdatedAt
+			}
+		}
+		return nil
+	}
+	require.NotNil(t, updatedAt(secondSnapshot))
+	require.NotEqual(t, updatedAt(firstSnapshot), updatedAt(secondSnapshot),
+		"the stored timestamp must actually change")
 	second, metrics, err := cache.rollup.Ensure(t.Context(), secondSnapshot,
 		secondFills, export.NewPricingResolver(secondSnapshot.PricingRows))
 	require.NoError(t, err)
