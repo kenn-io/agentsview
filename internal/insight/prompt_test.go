@@ -2,6 +2,7 @@ package insight
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
@@ -586,4 +587,63 @@ func TestCannedEvidenceRefsIncludesUsageModelBreakdown(t *testing.T) {
 			require.Failf(t, "refs missing", "%s: %v", want, ids)
 		}
 	}
+}
+
+func seedSessionAnalysisGoldenSession(t *testing.T, d *db.DB) {
+	t.Helper()
+	dbtest.SeedSession(t, d, "golden", "golden-app", func(s *db.Session) {
+		s.Agent = "claude"
+		s.MessageCount = 4
+		s.StartedAt = new("2025-01-15T10:00:00Z")
+		s.EndedAt = new("2025-01-15T10:10:00Z")
+	})
+	result := strings.Repeat("line of build output\n", 2000)
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "golden", []db.Message{
+		{SessionID: "golden", Ordinal: 0, Role: "user", Content: "system reminder", IsSystem: true},
+		{SessionID: "golden", Ordinal: 1, Role: "user", Content: strings.Repeat("测试", 450), Timestamp: "2025-01-15T10:00:01Z"},
+		{
+			SessionID: "golden", Ordinal: 2, Role: "assistant", Content: "Running the build",
+			Timestamp: "2025-01-15T10:00:02Z", HasToolUse: true,
+			ToolCalls: []db.ToolCall{{
+				ToolName: "Bash", Category: "Bash", ToolUseID: "bash-1",
+				InputJSON: `{"command":"make build"}`, ResultContent: result,
+				ResultContentLength: len(result),
+			}},
+		},
+		{SessionID: "golden", Ordinal: 3, Role: "assistant", Content: "Build finished", Timestamp: "2025-01-15T10:00:03Z"},
+	}))
+}
+
+func TestBuildPrompt_SessionAnalysisUnchanged(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	seedSessionAnalysisGoldenSession(t, d)
+	prompt, err := BuildPrompt(t.Context(), d, GenerateRequest{
+		Type: "agent_analysis", SessionID: "golden", Prompt: "Focus on build time",
+	})
+	require.NoError(t, err)
+	golden := "testdata/session_analysis_prompt.golden"
+	if os.Getenv("UPDATE_GOLDEN") == "1" {
+		require.NoError(t, os.MkdirAll("testdata", 0o755))
+		require.NoError(t, os.WriteFile(golden, []byte(prompt), 0o644))
+	}
+	want, err := os.ReadFile(golden)
+	require.NoError(t, err)
+	assert.Equal(t, strings.ReplaceAll(string(want), "\r\n", "\n"), prompt)
+	assert.NotContains(t, prompt, "## Tool evidence")
+}
+
+func TestBuildPrompt_RefusesPromptOverAgentLimit(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	seedSessionAnalysisGoldenSession(t, d)
+	req := GenerateRequest{Type: "agent_analysis", SessionID: "golden"}
+	prompt, err := BuildPrompt(t.Context(), d, req)
+	require.NoError(t, err)
+
+	req.MaxPromptBytes = promptArgSize(prompt)
+	_, err = BuildPrompt(t.Context(), d, req)
+	require.NoError(t, err)
+
+	req.MaxPromptBytes--
+	_, err = BuildPrompt(t.Context(), d, req)
+	require.ErrorIs(t, err, ErrPromptTooLarge)
 }

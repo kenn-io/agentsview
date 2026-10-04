@@ -47,6 +47,7 @@
   import { sessions } from "../../stores/sessions.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import { insights } from "../../stores/insights.svelte.js";
+  import { sync } from "../../stores/sync.svelte.js";
   import {
     supportsResume,
     buildResumeCommand,
@@ -485,6 +486,18 @@
   function handleAgentAnalysis() {
     if (!session) return;
     insights.generateForSession(session);
+    router.navigate("recall", { tab: "generated" });
+  }
+
+  const insightGenerationAvailable = $derived(
+    sync.serverVersion?.insight_generation_available ??
+      (sync.serverVersion?.read_only !== true),
+  );
+
+  function handleToolEffectiveness() {
+    if (!session || !insightGenerationAvailable) return;
+    closeMenu();
+    insights.generateForSession(session, "tool_effectiveness");
     router.navigate("recall", { tab: "generated" });
   }
 
@@ -1167,6 +1180,14 @@
         </button>
         {#if menuOpen}
           <div class="actions-menu" bind:this={menuEl}>
+            {#if insightGenerationAvailable}
+              <button
+                class="actions-menu-item"
+                onclick={handleToolEffectiveness}
+              >
+                {m.session_breadcrumb_tool_effectiveness()}
+              </button>
+            {/if}
             <button
               class="actions-menu-item"
               onclick={startRename}

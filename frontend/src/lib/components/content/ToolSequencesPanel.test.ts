@@ -8,6 +8,7 @@ import type {
   SessionToolSequencesResponse,
 } from "../../api/generated/index.js";
 import { setLocale } from "../../i18n/index.js";
+import { router } from "../../stores/router.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
 import ToolSequencesPanel from "./ToolSequencesPanel.svelte";
 
@@ -203,7 +204,7 @@ describe("ToolSequencesPanel", () => {
     expect(text).toContain("tool-id");
     // Narrow panels hide the duration column, so each expanded call repeats its timing.
     const durations = () =>
-      [...document.querySelectorAll(".ev-duration")].map((row) =>
+      [...document.querySelectorAll(".dur-detail")].map((row) =>
         row.textContent?.replace(/\s+/g, " ").trim(),
       );
     expect(durations()).toEqual(["Duration Not measured"]);
@@ -435,6 +436,44 @@ describe("ToolSequencesPanel", () => {
     );
     expect(document.querySelector('[role="alert"]')).toBeNull();
     unmount(unavailable);
+  });
+
+  it("opens the session from a page that isn't showing it", async () => {
+    const scroll = vi.spyOn(ui, "scrollToOrdinal").mockImplementation(() => {});
+    const navigate = vi.spyOn(router, "navigateToSession").mockImplementation(() => {});
+    router.sessionId = null;
+    const component = mount(ToolSequencesPanel, {
+      target: document.body,
+      props: { data: makeData(), sessionId: "session-a", loading: false, failed: false, embedded: true, linked: true },
+    });
+    await tick();
+
+    expect(document.querySelector(".tool-sequences-panel")!.classList.contains("embedded")).toBe(true);
+    await openSequence();
+    const link = document.querySelector<HTMLAnchorElement>(".jump")!;
+    expect(link.getAttribute("href")).toContain("msg=4");
+    link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+    expect(scroll).toHaveBeenCalledWith(4, "session-a", "revision-1");
+    expect(navigate).toHaveBeenCalledWith("session-a", { msg: "4", rev: "revision-1" });
+
+    navigate.mockClear();
+    router.sessionId = "session-a";
+    link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+    expect(navigate).not.toHaveBeenCalled();
+
+    router.sessionId = null;
+    scroll.mockRestore();
+    navigate.mockRestore();
+    unmount(component);
+  });
+
+  it("formats byte counts in the app language", async () => {
+    setLocale("fr");
+    const component = mountPanel(makeData({ sequences: [makeSequence({ calls: [makeCall({ outcome: "content", result_bytes: 400000 })] })] }));
+    await openSequence();
+
+    expect(document.querySelector(".call-row .res")?.textContent).toContain((400000).toLocaleString("fr"));
+    unmount(component);
   });
 
   it("drops a timed duration whose call ID disagrees with the sequence", async () => {

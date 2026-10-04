@@ -71,14 +71,14 @@ test("renders, expands, and navigates observed sequences at desktop, tablet, and
     if (durationColumn) {
       await expect(panel.locator(".dur").first()).toHaveText("2.0s");
       await expect(panel.locator(".dur").nth(1)).toHaveAttribute("title", "Not measured");
-      await expect(panel.locator(".ev-duration").first()).toBeHidden();
+      await expect(panel.locator(".dur-detail").first()).toBeHidden();
     } else {
-      const duration = panel.locator(".call").first().locator(".ev-duration");
+      const duration = panel.locator(".call").first().locator(".dur-detail");
       await expect(duration).toBeVisible();
       await expect(duration).toContainText("Duration");
       await expect(duration).toContainText("2.0s");
       await panel.locator(".call-row").nth(1).press("Enter");
-      const unmeasured = panel.locator(".call").nth(1).locator(".ev-duration");
+      const unmeasured = panel.locator(".call").nth(1).locator(".dur-detail");
       await expect(unmeasured).toBeVisible();
       await expect(unmeasured).toContainText("Not measured");
       await panel.locator(".call-row").nth(1).press("Enter");

@@ -17,6 +17,7 @@ import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
 import { setLocale } from "../../i18n/index.js";
 import { router } from "../../stores/router.svelte.js";
+import { sync } from "../../stores/sync.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
 import { testMoney } from "../../test/money.js";
 import type { Money } from "../../money.js";
@@ -1161,6 +1162,51 @@ describe("SessionBreadcrumb", () => {
     });
 
     navigateSpy.mockRestore();
+    unmount(component);
+  });
+
+  it("starts a tool-effectiveness report from the session actions menu", async () => {
+    const navigateSpy = vi.spyOn(router, "navigate");
+    const session = makeSession("claude");
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: { session, onBack: () => {} },
+    });
+
+    await tick();
+    document.querySelector<HTMLButtonElement>(".actions-btn")!.click();
+    await tick();
+    const item = [...document.querySelectorAll<HTMLButtonElement>(".actions-menu-item")].find(
+      (button) => button.textContent?.trim() === "Analyze tool effectiveness",
+    );
+    expect(item).toBeTruthy();
+    item!.click();
+    await tick();
+
+    expect(generateForSession).toHaveBeenCalledWith(session, "tool_effectiveness");
+    expect(navigateSpy).toHaveBeenCalledWith("recall", { tab: "generated" });
+    expect(document.querySelector(".actions-menu")).toBeNull();
+
+    navigateSpy.mockRestore();
+    unmount(component);
+  });
+
+  it("leaves tool-effectiveness out of the menu when the server can't generate insights", async () => {
+    const previous = sync.serverVersion;
+    sync.serverVersion = { ...(previous ?? {}), insight_generation_available: false } as typeof sync.serverVersion;
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: { session: makeSession("claude"), onBack: () => {} },
+    });
+
+    await tick();
+    document.querySelector<HTMLButtonElement>(".actions-btn")!.click();
+    await tick();
+    const labels = [...document.querySelectorAll(".actions-menu-item")].map((b) => b.textContent?.trim());
+    expect(labels).not.toContain("Analyze tool effectiveness");
+    expect(labels.length).toBeGreaterThan(0);
+
+    sync.serverVersion = previous;
     unmount(component);
   });
 
