@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -79,6 +80,10 @@ func sandboxKernelHelper(args []string) int {
 		return 78
 	}
 	os.Stdout.WriteString("READY\n")
+	// Complete the parent's request handshake before the helper can exit.
+	if _, err := io.Copy(io.Discard, os.Stdin); err != nil {
+		return 79
+	}
 	switch mode {
 	case "cpu":
 		//nolint:staticcheck // SA5002: deliberate CPU burn verifies the child's hard CPU limit.
