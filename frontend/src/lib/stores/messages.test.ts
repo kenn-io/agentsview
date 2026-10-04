@@ -1027,12 +1027,17 @@ describe("MessagesStore", () => {
       vi.mocked(api.getMessages)
         .mockResolvedValueOnce(first)
         .mockReturnValueOnce(gate.promise as ReturnType<typeof api.getMessages>)
-        .mockResolvedValueOnce(rewritten)
+        .mockImplementationOnce(async () => {
+          // The old row is parsed again while the restarted page is in flight.
+          parseContent(shown.content, shown.has_tool_use, shown.id, shown.content_length);
+          return rewritten;
+        })
         .mockResolvedValueOnce(page(range(1000, 1500), "r2"));
 
+      let shown = first.messages[0]!;
       const load = messages.loadSession("s1");
       await vi.waitFor(() => expect(messages.messages).toHaveLength(1000));
-      const shown = messages.messages[0]!;
+      shown = messages.messages[0]!;
       expect(
         parseContent(shown.content, shown.has_tool_use, shown.id, shown.content_length),
       ).toEqual([{ type: "text", content: "alpha1" }]);

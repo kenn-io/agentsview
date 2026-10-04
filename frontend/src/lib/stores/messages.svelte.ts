@@ -318,8 +318,6 @@ export class MessagesStore {
       } catch (err) {
         // A sync landed between pages; start over so every row shares one revision.
         if (!isRevisionChange(err) || attempt >= MAX_LOAD_ATTEMPTS) throw err;
-        // Rows the first attempt showed may come back rewritten under the same IDs and lengths.
-        clearContentCaches();
       }
     }
   }
@@ -350,6 +348,8 @@ export class MessagesStore {
         break;
       }
 
+      // Rows already parsed may come back rewritten under the same IDs and lengths.
+      if (loaded.length === 0) clearContentCaches();
       loaded = [...loaded, ...res.messages];
       // Every row on screen now comes from this one revision, so it can be published page by page.
       this.messages = loaded;
