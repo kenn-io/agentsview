@@ -253,9 +253,9 @@ export class MessagesStore {
   /** Take a refreshed window that starts at the loaded window's oldest row. */
   private acceptWindow(page: MessagePage, append: boolean) {
     clearContentCaches();
-    this.windowPass++;
     if (page.revision !== this.loadedRevision) {
       // Rows from two transcript revisions never share the list, so a new revision replaces the window.
+      this.windowPass++;
       this.messages = page.messages;
       this.hasOlder = page.messages[0]!.ordinal > 0;
       this.messageCount = Math.max(this.messageCount, page.messages.at(-1)!.ordinal + 1);
@@ -342,6 +342,14 @@ export class MessagesStore {
       );
       if (this.sessionId !== id) return;
       revision ??= res.revision;
+      if (loaded.length === 0) {
+        pass = ++this.windowPass;
+        // Rows already parsed may come back rewritten under the same IDs and lengths.
+        clearContentCaches();
+      } else if (pass !== this.windowPass) {
+        // A newer revision replaced the window while this page was in flight.
+        return;
+      }
       if (res.messages.length === 0) {
         if (loaded.length === 0) {
           // The session has no rows now, so nothing from an earlier revision may stay on screen.
@@ -352,14 +360,6 @@ export class MessagesStore {
         break;
       }
 
-      if (loaded.length === 0) {
-        pass = ++this.windowPass;
-        // Rows already parsed may come back rewritten under the same IDs and lengths.
-        clearContentCaches();
-      } else if (pass !== this.windowPass) {
-        // A reload replaced the window while this page was in flight.
-        return;
-      }
       loaded = [...loaded, ...res.messages];
       // Every row on screen now comes from this one revision, so it can be published page by page.
       this.messages = loaded;
