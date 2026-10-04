@@ -73,8 +73,9 @@ export class MessagesStore {
   private pendingReload: boolean = false;
   // Back-to-back reloads a moving transcript refused; bounded so a busy session can't reload forever.
   private revisionConflicts: number = 0;
-  // Bumped whenever a load replaces or merges the window, so a slower pass can tell it was overtaken.
-  private windowPass: number = 0;
+  // Each window load takes a ticket when it starts; a replacement lands only if no later-started load already replaced the window.
+  private loadTicket: number = 0;
+  private windowTicket: number = 0;
   private loadOlderPromise: Promise<void> | null = null;
   private pendingSessionToken: string | null = null;
   private hasPendingSessionToken: boolean = false;
@@ -251,11 +252,12 @@ export class MessagesStore {
   }
 
   /** Take a refreshed window that starts at the loaded window's oldest row. */
-  private acceptWindow(page: MessagePage, append: boolean) {
+  private acceptWindow(page: MessagePage, append: boolean, ticket: number) {
+    if (page.revision !== this.loadedRevision && ticket < this.windowTicket) return;
     clearContentCaches();
     if (page.revision !== this.loadedRevision) {
       // Rows from two transcript revisions never share the list, so a new revision replaces the window.
-      this.windowPass++;
+      this.windowTicket = ticket;
       this.messages = page.messages;
       this.hasOlder = page.messages[0]!.ordinal > 0;
       this.messageCount = Math.max(this.messageCount, page.messages.at(-1)!.ordinal + 1);
@@ -331,7 +333,7 @@ export class MessagesStore {
     let loaded: Message[] = [];
     let complete = false;
     let revision: string | null = null;
-    let pass = 0;
+    const ticket = ++this.loadTicket;
 
     for (;;) {
       const res = await this.fetchMessagePage(
@@ -343,10 +345,12 @@ export class MessagesStore {
       if (this.sessionId !== id) return;
       revision ??= res.revision;
       if (loaded.length === 0) {
-        pass = ++this.windowPass;
+        // A load that started later already replaced the window.
+        if (ticket < this.windowTicket) return;
+        this.windowTicket = ticket;
         // Rows already parsed may come back rewritten under the same IDs and lengths.
         clearContentCaches();
-      } else if (pass !== this.windowPass) {
+      } else if (this.windowTicket !== ticket) {
         // A newer revision replaced the window while this page was in flight.
         return;
       }
@@ -388,17 +392,19 @@ export class MessagesStore {
   }
 
   private async loadProgressively(id: string, signal: AbortSignal) {
+    const ticket = ++this.loadTicket;
     const firstRes = await this.fetchMessagePage(
       id,
       { limit: MESSAGE_PAGE_SIZE, direction: "desc" },
       signal,
       null,
     );
-    if (this.sessionId !== id) return;
+    // A load that started later already replaced the window.
+    if (this.sessionId !== id || ticket < this.windowTicket) return;
+    this.windowTicket = ticket;
 
     // Rows parsed while this page was in flight may come back rewritten under the same IDs and lengths.
     clearContentCaches();
-    this.windowPass++;
     this.messages = [...firstRes.messages].reverse();
     this.loadedRevision = firstRes.revision;
     this.historyComplete = false;
@@ -411,6 +417,7 @@ export class MessagesStore {
 
   /** Refresh from `from` onward; false when the transcript returned no rows there. */
   private async loadFrom(id: string, from: number, signal: AbortSignal): Promise<boolean> {
+    const ticket = ++this.loadTicket;
     const page = await this.fetchPages(id, {
       from,
       limit: MESSAGE_PAGE_SIZE,
@@ -418,7 +425,7 @@ export class MessagesStore {
       signal,
     });
     if (this.sessionId !== id || page.messages.length === 0) return false;
-    this.acceptWindow(page, true);
+    this.acceptWindow(page, true, ticket);
     return true;
   }
 
@@ -791,6 +798,7 @@ export class MessagesStore {
     const newest = this.messages[this.messages.length - 1];
     if (!oldest || !newest) return false;
 
+    const ticket = ++this.loadTicket;
     const refreshed = await this.fetchPages(id, {
       from: oldest.ordinal,
       limit: MESSAGE_PAGE_SIZE,
@@ -801,7 +809,7 @@ export class MessagesStore {
       return false;
     }
 
-    this.acceptWindow(refreshed, false);
+    this.acceptWindow(refreshed, false, ticket);
     return true;
   }
 
