@@ -398,15 +398,17 @@ export class MessagesStore {
     this.historyComplete = !this.hasOlder;
   }
 
-  private async loadFrom(id: string, from: number, signal: AbortSignal) {
+  /** Refresh from `from` onward; false when the transcript returned no rows there. */
+  private async loadFrom(id: string, from: number, signal: AbortSignal): Promise<boolean> {
     const page = await this.fetchPages(id, {
       from,
       limit: MESSAGE_PAGE_SIZE,
       direction: "asc",
       signal,
     });
-    if (this.sessionId !== id) return;
-    if (page.messages.length > 0) this.acceptWindow(page, true);
+    if (this.sessionId !== id || page.messages.length === 0) return false;
+    this.acceptWindow(page, true);
+    return true;
   }
 
   async loadOlder() {
@@ -709,11 +711,12 @@ export class MessagesStore {
         }
       } else if (newCount > oldCount && this.messages.length > 0) {
         const oldestOrdinal = this.messages[0]!.ordinal;
-        await this.loadFrom(id, oldestOrdinal, signal);
+        const refreshed = await this.loadFrom(id, oldestOrdinal, signal);
         if (this.sessionId !== id) return;
 
         const newest = this.messages[this.messages.length - 1];
-        if (!newest || newest.ordinal !== newCount - 1) {
+        // An empty refresh means the transcript shrank underneath the window.
+        if (!refreshed || !newest || newest.ordinal !== newCount - 1) {
           await this.fullReload(id, signal, newCount);
         } else {
           this.messageCount = newCount;
