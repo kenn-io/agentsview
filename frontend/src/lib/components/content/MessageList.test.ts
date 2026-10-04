@@ -182,6 +182,28 @@ describe("MessageList follow cancellation", () => {
     });
   });
 
+  it("drops a jump made for a transcript revision the list has moved past", async () => {
+    messages.loadedRevision = "r1";
+    vi.spyOn(messages, "ensureOrdinalLoaded").mockImplementation(async () => {
+      // Loading the older page hit a resync, so the list now holds another revision.
+      messages.messages = [makeMessage(0), makeMessage(10)];
+      messages.loadedRevision = "r2";
+    });
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+
+    ui.setFollowLatest(false);
+    ui.selectedOrdinal = 0;
+    (
+      component as ReturnType<typeof mount> & {
+        scrollToOrdinal: (ordinal: number, revision?: string) => void;
+      }
+    ).scrollToOrdinal(0, "r1");
+    await vi.waitFor(() => expect(ui.selectedOrdinal).toBeNull());
+    expect(virtualizerMock.scrollToIndex).not.toHaveBeenCalled();
+  });
+
   it("renders an unknown revision divider at the earliest message", async () => {
     messages.messages = [makeMessage(0), makeMessage(1), makeMessage(2), makeMessage(3)];
     messages.messageCount = 4;

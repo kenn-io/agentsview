@@ -1119,6 +1119,21 @@ describe("MessagesStore", () => {
       expect(messages.messages).toHaveLength(1500);
     });
 
+    it("clears rows when an unchanged count hides a transcript emptied under the window", async () => {
+      vi.mocked(api.getSession).mockResolvedValue(makeSession("s1", 3));
+      vi.mocked(api.getMessages).mockResolvedValueOnce(page([0, 1, 2], "r1"));
+      await messages.loadSession("s1");
+
+      // The session read still reports three rows, but the transcript empties before the page read.
+      vi.mocked(api.getMessages)
+        .mockResolvedValueOnce(page([], "r2"))
+        .mockResolvedValueOnce(page([], "r2"));
+      await messages.reload();
+
+      expect(messages.messages).toEqual([]);
+      expect(messages.loadedRevision).toBe("r2");
+    });
+
     it("clears rows when a full reload finds the session emptied", async () => {
       vi.mocked(api.getSession).mockResolvedValue(makeSession("s1", 3));
       vi.mocked(api.getMessages).mockResolvedValueOnce(page([0, 1, 2], "r1"));

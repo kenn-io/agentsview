@@ -175,7 +175,7 @@
   function jumpToCall(event: MouseEvent, call: SessionToolSequenceCall) {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
-    ui.scrollToOrdinal(call.ordinal, sessionId);
+    ui.scrollToOrdinal(call.ordinal, sessionId, data?.transcript_revision);
   }
 </script>
 

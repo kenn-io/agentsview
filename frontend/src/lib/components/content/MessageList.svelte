@@ -515,7 +515,7 @@
     return new Promise((r) => requestAnimationFrame(() => r()));
   }
 
-  async function scrollToOrdinalInternal(ordinal: number) {
+  async function scrollToOrdinalInternal(ordinal: number, revision?: string) {
     const reqId = ++lastScrollRequest;
     activeFollowScrollRequest = null;
 
@@ -532,6 +532,11 @@
 
     await messages.ensureOrdinalLoaded(ordinal);
     if (reqId !== lastScrollRequest) return;
+    // Loading older pages can move to a new transcript revision, where the ordinal may name another message.
+    if (revision !== undefined && messages.loadedRevision !== revision) {
+      if (ui.selectedOrdinal === ordinal) ui.selectedOrdinal = null;
+      return;
+    }
 
     // Let Svelte re-derive displayItemsAsc and the
     // virtualizer update its count after loading.
@@ -551,8 +556,8 @@
     scrollToDisplayIndex(loadedIdx, 0, 0, reqId);
   }
 
-  export function scrollToOrdinal(ordinal: number) {
-    void scrollToOrdinalInternal(ordinal);
+  export function scrollToOrdinal(ordinal: number, revision?: string) {
+    void scrollToOrdinalInternal(ordinal, revision);
   }
 
   function scrollToLatestInternal() {

@@ -219,7 +219,7 @@ describe("ToolSequencesPanel", () => {
     expect(link!.getAttribute("href")).toContain("msg=20");
     expect(link!.closest("button")).toBeNull();
     link!.click();
-    expect(jump).toHaveBeenCalledWith(20, "session-a");
+    expect(jump).toHaveBeenCalledWith(20, "session-a", "revision-1");
     expect(document.querySelectorAll(".call-row")[9]!.getAttribute("aria-expanded")).toBe("false");
     jump.mockRestore();
     unmount(component);

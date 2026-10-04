@@ -691,9 +691,15 @@ export class MessagesStore {
       const oldCount = this.messageCount;
       if (newCount === oldCount) {
         const refreshed = await this.refreshLoadedWindow(id, signal);
-        const newest = this.messages[this.messages.length - 1];
-        this.historyComplete =
-          refreshed && this.messages[0]?.ordinal === 0 && newest?.ordinal === oldCount - 1;
+        if (this.sessionId !== id) return;
+        if (!refreshed && this.messages.length > 0) {
+          // The loaded window came back empty, so the transcript shrank underneath it.
+          await this.fullReload(id, signal, newCount);
+        } else {
+          const newest = this.messages[this.messages.length - 1];
+          this.historyComplete =
+            refreshed && this.messages[0]?.ordinal === 0 && newest?.ordinal === oldCount - 1;
+        }
       } else if (newCount > oldCount && this.messages.length > 0) {
         const oldestOrdinal = this.messages[0]!.ordinal;
         await this.loadFrom(id, oldestOrdinal, signal);

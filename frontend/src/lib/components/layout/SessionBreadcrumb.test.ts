@@ -2336,7 +2336,7 @@ describe("SessionBreadcrumb", () => {
       expect(document.querySelector(".sequence-row")?.getAttribute("aria-expanded")).toBe("true");
       const scrollToOrdinal = vi.spyOn(ui, "scrollToOrdinal");
       jumpLink(3)!.click();
-      expect(scrollToOrdinal).toHaveBeenCalledWith(3, session.id);
+      expect(scrollToOrdinal).toHaveBeenCalledWith(3, session.id, "revision-1");
       scrollToOrdinal.mockRestore();
 
       refresh.resolve(makeToolSequences(4, session.id, "revision-1"));
