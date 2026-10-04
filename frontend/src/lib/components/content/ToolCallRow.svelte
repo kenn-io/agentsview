@@ -80,7 +80,9 @@
     event.preventDefault();
     ui.scrollToOrdinal(ordinal, sessionId, revision);
     // Same-session jumps leave ?msg alone like the app's other in-session jumps, since replaceParams reloads the sidebar.
-    if (router.sessionId !== sessionId) router.navigateToSession(sessionId, { msg: String(ordinal) });
+    if (router.sessionId !== sessionId) {
+      router.navigateToSession(sessionId, { msg: String(ordinal), ...(revision ? { rev: revision } : {}) });
+    }
   }
 </script>
 

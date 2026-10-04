@@ -415,6 +415,7 @@
                     {#if citation.kind === "message"}
                       <ToolCallRow
                         {sessionId}
+                        revision={report.transcript_revision || undefined}
                         ordinal={citation.ordinal}
                         message
                         tool={m.tool_effectiveness_message_label()}
@@ -424,6 +425,7 @@
                     {:else if citation.detail}
                       <ToolCallRow
                         {sessionId}
+                        revision={report.transcript_revision || undefined}
                         ordinal={citation.ordinal}
                         tool={citation.detail.tool_name}
                         input={inputLabel(citation.detail.input_preview)}
@@ -437,6 +439,7 @@
                     {:else}
                       <ToolCallRow
                         {sessionId}
+                        revision={report.transcript_revision || undefined}
                         ordinal={citation.ordinal}
                         tool=""
                         input={callFallback(citation)}

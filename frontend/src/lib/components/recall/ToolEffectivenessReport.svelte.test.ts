@@ -292,11 +292,13 @@ describe("ToolEffectivenessReport", () => {
     const link = jumps.find((a) => a.textContent?.trim() === "Message 3 ↗")!;
     expect(link.getAttribute("aria-label")).toBe("Message 3: open the Read call in the transcript");
     expect(link.getAttribute("href")).toContain("msg=3");
+    // The report's saved revision rides along, so a rewritten transcript drops the jump.
+    expect(link.getAttribute("href")).toContain("rev=rev-1");
     const event = new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 });
     link.dispatchEvent(event);
     expect(event.defaultPrevented).toBe(true);
-    expect(scroll).toHaveBeenCalledWith(3, "s1", undefined);
-    expect(navigate).toHaveBeenCalledWith("s1", { msg: "3" });
+    expect(scroll).toHaveBeenCalledWith(3, "s1", "rev-1");
+    expect(navigate).toHaveBeenCalledWith("s1", { msg: "3", rev: "rev-1" });
 
     scroll.mockRestore();
     navigate.mockRestore();
