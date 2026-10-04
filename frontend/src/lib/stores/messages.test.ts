@@ -1017,6 +1017,35 @@ describe("MessagesStore", () => {
       });
     });
 
+    it("drops parsed content from an attempt a sync interrupted", async () => {
+      const first = page(range(0, 1000), "r1");
+      first.messages[0] = { ...first.messages[0]!, content: "alpha1", content_length: 6 };
+      const rewritten = page(range(0, 1000), "r2");
+      rewritten.messages[0] = { ...rewritten.messages[0]!, content: "bravo2", content_length: 6 };
+      const gate = createDeferred<MessagesResponse>();
+      vi.mocked(api.getSession).mockResolvedValue(makeSession("s1", 1500));
+      vi.mocked(api.getMessages)
+        .mockResolvedValueOnce(first)
+        .mockReturnValueOnce(gate.promise as ReturnType<typeof api.getMessages>)
+        .mockResolvedValueOnce(rewritten)
+        .mockResolvedValueOnce(page(range(1000, 1500), "r2"));
+
+      const load = messages.loadSession("s1");
+      await vi.waitFor(() => expect(messages.messages).toHaveLength(1000));
+      const shown = messages.messages[0]!;
+      expect(
+        parseContent(shown.content, shown.has_tool_use, shown.id, shown.content_length),
+      ).toEqual([{ type: "text", content: "alpha1" }]);
+      gate.reject(new ApiError(409, "transcript revision does not match"));
+      await load;
+
+      const row = messages.messages[0]!;
+      expect(messages.loadedRevision).toBe("r2");
+      expect(parseContent(row.content, row.has_tool_use, row.id, row.content_length)).toEqual([
+        { type: "text", content: "bravo2" },
+      ]);
+    });
+
     it("replaces the window rather than merging rows from a new revision", async () => {
       vi.mocked(api.getSession).mockResolvedValue(makeSession("s1", 3));
       vi.mocked(api.getMessages).mockResolvedValueOnce(page([0, 1, 2], "r1", "old"));

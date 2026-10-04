@@ -318,6 +318,8 @@ export class MessagesStore {
       } catch (err) {
         // A sync landed between pages; start over so every row shares one revision.
         if (!isRevisionChange(err) || attempt >= MAX_LOAD_ATTEMPTS) throw err;
+        // Rows the first attempt showed may come back rewritten under the same IDs and lengths.
+        clearContentCaches();
       }
     }
   }
