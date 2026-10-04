@@ -59,8 +59,9 @@ and recall extraction still own their timing; migrating them is separate work.
   transaction, so they are always paired correctly, and a session written
   during the pass is refilled by its own mutation notification. Do not
   reintroduce a restart loop over a moving source fingerprint.
-- A successful scheduled pricing refresh calls `RewarmUsageCache` after every
-  pricing write commits. It starts the same coverage pass, which rebuilds only
+- A scheduled pricing refresh calls `RewarmUsageCache` once it returns, when
+  the stored catalog digest changed, including a partial refresh that also
+  reports an error. It starts the same coverage pass, which rebuilds only
   rollups whose pricing lookups now resolve differently. A pass resolves prices
   from the catalog it captured at start, so a re-warm that arrives during a
   pass queues exactly one more pass after it.

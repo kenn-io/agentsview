@@ -135,6 +135,15 @@ func (db *DB) restartUsageCacheBackfillIfEnabled() error {
 	return db.StartUsageCacheBackfill(context.Background())
 }
 
+// UsagePricingDigest identifies the stored pricing catalog, so callers can tell whether a refresh committed any write.
+func (db *DB) UsagePricingDigest(ctx context.Context) (string, error) {
+	rows, err := db.loadPricingMapFrom(ctx, db.getReader())
+	if err != nil {
+		return "", err
+	}
+	return usagePricingIdentity(rows)
+}
+
 // RewarmUsageCache rebuilds price-stale rollups; a call during a pass queues one rerun because passes pin their catalog.
 func (db *DB) RewarmUsageCache() error {
 	db.usageBackfillMu.Lock()

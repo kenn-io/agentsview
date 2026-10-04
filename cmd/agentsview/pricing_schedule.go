@@ -32,29 +32,33 @@ func pricingRefreshJob(database *db.DB, runner remoteSyncExclusiveRunner) poller
 }
 
 type usageCacheRewarmer interface {
+	UsagePricingDigest(context.Context) (string, error)
 	RewarmUsageCache() error
 }
 
-// runPricingRefresh re-warms usage rollups only after a successful refresh commits every pricing write.
+// runPricingRefresh re-warms usage rollups once the refresh has committed any pricing write, even a partial one.
 func runPricingRefresh(
 	ctx context.Context, runner remoteSyncExclusiveRunner,
 	refresh func(context.Context) error, rewarmer usageCacheRewarmer,
 ) error {
+	before, beforeErr := rewarmer.UsagePricingDigest(ctx)
 	// RunExclusive cannot cancel its sync/resync lock wait, so shutdown
 	// waits for the lock before this job can observe cancellation.
-	if err := runPricingExclusive(runner, func() error {
+	refreshErr := runPricingExclusive(runner, func() error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		return refresh(ctx)
-	}); err != nil {
-		return err
+	})
+	after, afterErr := rewarmer.UsagePricingDigest(ctx)
+	// An unreadable digest can't prove nothing committed, so re-warm anyway.
+	if ctx.Err() == nil && (beforeErr != nil || afterErr != nil || before != after) {
+		// A failed re-warm must not back off the pricing job; the next Usage request rebuilds instead.
+		if err := rewarmer.RewarmUsageCache(); err != nil {
+			log.Printf("usage cache re-warm after pricing refresh: %v", err)
+		}
 	}
-	// A failed re-warm must not back off the pricing job; the next Usage request rebuilds instead.
-	if err := rewarmer.RewarmUsageCache(); err != nil {
-		log.Printf("usage cache re-warm after pricing refresh: %v", err)
-	}
-	return nil
+	return refreshErr
 }
 
 func runPricingExclusive(

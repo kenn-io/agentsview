@@ -619,3 +619,18 @@ func TestRewarmUsageCacheRerunsAfterActivePassWithNewPrices(t *testing.T) {
 	assert.Equal(t, []int64{3_000_000}, costs,
 		"the queued pass must rebuild with the price committed during the first")
 }
+
+func TestUsagePricingDigestChangesWithCommittedPricing(t *testing.T) {
+	database := testDB(t)
+	before, err := database.UsagePricingDigest(t.Context())
+	require.NoError(t, err)
+	unchanged, err := database.UsagePricingDigest(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, before, unchanged)
+	require.NoError(t, database.UpsertModelPricing([]ModelPricing{{
+		ModelPattern: "digest-model", InputPerMTok: money.Money{Microdollars: 1},
+	}}))
+	after, err := database.UsagePricingDigest(t.Context())
+	require.NoError(t, err)
+	assert.NotEqual(t, before, after)
+}
