@@ -354,7 +354,6 @@ export class MessagesStore {
     ticket: number,
     messageCountHint?: number,
   ): Promise<boolean> {
-    this.historyComplete = false;
     let from = 0;
     let loaded: Message[] = [];
     let complete = false;
@@ -373,6 +372,7 @@ export class MessagesStore {
         // A load that started later already replaced the window.
         if (ticket < this.windowTicket) return false;
         this.windowTicket = ticket;
+        this.historyComplete = false;
         // Rows already parsed may come back rewritten under the same IDs and lengths.
         clearContentCaches();
       } else if (this.windowTicket !== ticket) {
@@ -827,7 +827,8 @@ export class MessagesStore {
     if (this.sessionId !== id || this.hasOlder || !this.hasPendingSessionToken) {
       return;
     }
-    this.activeSessionToken = this.pendingSessionToken;
+    // Rows may have been replaced since the token was deferred, so publish the revision now on screen.
+    this.activeSessionToken = this.acceptedToken(this.pendingSessionToken);
     this.activeSessionUnreadOrdinal = this.pendingSessionUnreadOrdinal;
     this.pendingSessionToken = null;
     this.hasPendingSessionToken = false;
