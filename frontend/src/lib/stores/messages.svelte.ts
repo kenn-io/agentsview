@@ -120,6 +120,8 @@ export class MessagesStore {
     const ac = new AbortController();
     this.abortController = ac;
 
+    // Taken before the metadata read, so a reload that starts while it is in flight outranks this load.
+    const ticket = ++this.loadTicket;
     try {
       let countHint: number | null = null;
       let pendingToken: string | null = null;
@@ -140,14 +142,15 @@ export class MessagesStore {
 
       const landed =
         countHint !== null && countHint > FULL_SESSION_MESSAGE_THRESHOLD
-          ? await this.loadProgressively(id, ac.signal)
-          : await this.loadAllMessages(id, ac.signal, countHint ?? undefined);
+          ? await this.loadProgressively(id, ac.signal, ticket)
+          : await this.loadAllMessages(id, ac.signal, countHint ?? undefined, ticket);
       // A load a reload overtook leaves the newer read-progress token in place.
       if (landed && this.sessionId === id) {
+        const token = this.acceptedToken(pendingToken);
         this.publishOrDeferSessionToken(
-          pendingToken,
+          token,
           null,
-          readMarker !== null && readMarker.token !== pendingToken,
+          readMarker !== null && readMarker.token !== token,
         );
       }
     } catch (err) {
@@ -329,9 +332,10 @@ export class MessagesStore {
     id: string,
     signal: AbortSignal,
     messageCountHint?: number,
+    firstTicket?: number,
   ): Promise<boolean> {
     for (let attempt = 1; ; attempt++) {
-      const ticket = ++this.loadTicket;
+      const ticket = attempt === 1 && firstTicket !== undefined ? firstTicket : ++this.loadTicket;
       try {
         return await this.loadAllMessagesOnce(id, signal, ticket, messageCountHint);
       } catch (err) {
@@ -414,8 +418,11 @@ export class MessagesStore {
   }
 
   /** Load the newest page; false when the session changed or a later load overtook this one. */
-  private async loadProgressively(id: string, signal: AbortSignal): Promise<boolean> {
-    const ticket = ++this.loadTicket;
+  private async loadProgressively(
+    id: string,
+    signal: AbortSignal,
+    ticket = ++this.loadTicket,
+  ): Promise<boolean> {
     const firstRes = await this.fetchMessagePage(
       id,
       { limit: MESSAGE_PAGE_SIZE, direction: "desc" },
@@ -775,11 +782,10 @@ export class MessagesStore {
 
       // A reload a newer load overtook leaves that load's read-progress token in place.
       if (landed && this.sessionId === id) {
+        const token = this.acceptedToken(pendingToken);
         const unreadOrdinal =
-          pendingToken !== previousToken
-            ? earliestChangedOrdinal(previousMessages, this.messages)
-            : null;
-        this.publishOrDeferSessionToken(pendingToken, unreadOrdinal);
+          token !== previousToken ? earliestChangedOrdinal(previousMessages, this.messages) : null;
+        this.publishOrDeferSessionToken(token, unreadOrdinal);
         this.revisionConflicts = 0;
       }
     } catch (err) {
@@ -792,6 +798,11 @@ export class MessagesStore {
       if (this.sessionId === id) this.historyComplete = false;
       console.warn("Reload failed:", err);
     }
+  }
+
+  /** The read-progress token for the rows on screen: their revision, or the metadata's when the backend reports none. */
+  private acceptedToken(metadataToken: string | null): string | null {
+    return this.loadedRevision?.trim() || metadataToken;
   }
 
   private publishOrDeferSessionToken(

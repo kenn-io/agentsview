@@ -999,7 +999,10 @@ describe("MessagesStore", () => {
     });
 
     it("starts over when a sync lands between pages, so every row shares one revision", async () => {
-      vi.mocked(api.getSession).mockResolvedValue(makeSession("s1", 1500));
+      vi.mocked(api.getSession).mockResolvedValue({
+        ...makeSession("s1", 1500),
+        transcript_revision: "r1",
+      });
       vi.mocked(api.getMessages)
         .mockResolvedValueOnce(page(range(0, 1000), "r1", "old"))
         .mockRejectedValueOnce(new ApiError(409, "transcript revision does not match"))
@@ -1011,6 +1014,8 @@ describe("MessagesStore", () => {
       expect(messages.loadedRevision).toBe("r2");
       expect(messages.messages).toHaveLength(1500);
       expect(messages.messages.every((message) => message.content.startsWith("new"))).toBe(true);
+      // Read progress names the revision on screen, not the one the metadata read saw.
+      expect(messages.activeSessionToken).toBe("r2");
       expect(vi.mocked(api.getMessages).mock.calls[3]![1]).toMatchObject({
         from: 1000,
         expected_revision: "r2",
@@ -1069,6 +1074,28 @@ describe("MessagesStore", () => {
       second.resolve(page(range(1000, 1500), "r1", "old"));
       await load;
       expect(messages.loadedRevision).toBe("r2");
+      expect(messages.messages.every((message) => message.content.startsWith("new"))).toBe(true);
+    });
+
+    it("lets a reload outrank an initial load whose metadata read is still in flight", async () => {
+      const metadata = createDeferred<Session>();
+      vi.mocked(api.getSession).mockReturnValueOnce(metadata.promise);
+      const load = messages.loadSession("s1");
+
+      vi.mocked(api.getSession).mockResolvedValue({
+        ...makeSession("s1", 3),
+        transcript_revision: "r2",
+      });
+      vi.mocked(api.getMessages).mockResolvedValueOnce(page([0, 1, 2], "r2", "new"));
+      await messages.reload();
+      expect(messages.loadedRevision).toBe("r2");
+
+      // The stale metadata says the session is large, which would load only the newest page.
+      vi.mocked(api.getMessages).mockResolvedValueOnce(page([2, 1, 0], "r1", "old"));
+      metadata.resolve({ ...makeSession("s1", 5_000), transcript_revision: "r1" });
+      await load;
+      expect(messages.loadedRevision).toBe("r2");
+      expect(messages.activeSessionToken).toBe("r2");
       expect(messages.messages.every((message) => message.content.startsWith("new"))).toBe(true);
     });
 
