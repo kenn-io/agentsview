@@ -13,13 +13,18 @@ import (
 )
 
 const (
-	EnabledEnv        = "AGENTSVIEW_TELEMETRY_ENABLED"
-	GenericEnabledEnv = kittelemetry.GenericTelemetryEnabledEnv
-	postHogAPIKey     = "phc_AzHd9YvuHR7M5poKzC6eW654d3SgKyBdoQPuwkWhimUf"
-	EventDaemonActive = "daemon_active"
-	EventAppOpened    = "app_opened"
-	application       = "agentsview"
-	envPrefix         = "AGENTSVIEW"
+	EnabledEnv            = "AGENTSVIEW_TELEMETRY_ENABLED"
+	GenericEnabledEnv     = kittelemetry.GenericTelemetryEnabledEnv
+	postHogAPIKey         = "phc_AzHd9YvuHR7M5poKzC6eW654d3SgKyBdoQPuwkWhimUf"
+	EventDaemonActive     = "daemon_active"
+	EventAppOpened        = "app_opened"
+	EventSearchRun        = "search_run"
+	EventSessionViewed    = "session_viewed"
+	EventExportRun        = "export_run"
+	EventInsightGenerated = "insight_generated"
+	EventAnalyticsViewed  = "analytics_viewed"
+	application           = "agentsview"
+	envPrefix             = "AGENTSVIEW"
 )
 
 var ErrUnsupportedEvent = kittelemetry.ErrUnsupportedTelemetryEvent
@@ -32,9 +37,11 @@ type Options struct {
 	InstallationID string
 	// InstalledAt is when InstallationID was created. Reports carry its age as
 	// install_age_hours; zero sends them without an age.
-	InstalledAt time.Time
-	Version     string
-	Commit      string
+	InstalledAt  time.Time
+	Version      string
+	Commit       string
+	AgentTypes   []string
+	InsightKinds []string
 }
 
 func EnabledFromEnv() bool {
@@ -44,7 +51,7 @@ func EnabledFromEnv() bool {
 func NewReporter(opts Options) (*Reporter, error) {
 	if !EnabledFromEnv() {
 		// kit keeps the allowlist on an opted-out reporter, so the UI route still rejects unknown events.
-		client, err := newKitReporter(opts.InstallationID, opts.InstalledAt, opts.Version, opts.Commit)
+		client, err := newKitReporter(opts)
 		if err != nil {
 			return nil, err
 		}
@@ -57,7 +64,7 @@ func NewReporter(opts Options) (*Reporter, error) {
 		return nil, errors.New("installation ID is required")
 	}
 
-	client, err := newKitReporter(opts.InstallationID, opts.InstalledAt, opts.Version, opts.Commit)
+	client, err := newKitReporter(opts)
 	if err != nil {
 		return nil, err
 	}
@@ -128,24 +135,32 @@ func (r *Reporter) Close() error {
 	return r.client.Close()
 }
 
-func newKitReporter(
-	distinctID string, installedAt time.Time, version, commit string,
-) (*kittelemetry.PostHogReporter, error) {
+func newKitReporter(opts Options) (*kittelemetry.PostHogReporter, error) {
 	return kittelemetry.NewPostHogReporter(kittelemetry.PostHogOptions{
 		APIKey:      postHogAPIKey,
 		Application: application,
 		EnvPrefix:   envPrefix,
-		DistinctID:  distinctID,
-		InstalledAt: installedAt,
-		Version:     version,
-		Commit:      commit,
+		DistinctID:  opts.InstallationID,
+		InstalledAt: opts.InstalledAt,
+		Version:     opts.Version,
+		Commit:      opts.Commit,
 		Source:      "daemon",
-	}, allowedEventOptions()...)
+	}, allowedEventOptions(opts)...)
 }
 
-func allowedEventOptions() []kittelemetry.PostHogOption {
+func allowedEventOptions(opts Options) []kittelemetry.PostHogOption {
 	return []kittelemetry.PostHogOption{
 		kittelemetry.WithAllowedEvent(EventDaemonActive),
 		kittelemetry.WithAllowedEvent(EventAppOpened),
+		oneOf(EventSearchRun, "query_type", "text", "semantic", "hybrid"),
+		oneOf(EventSessionViewed, "agent", opts.AgentTypes...),
+		oneOf(EventExportRun, "format", "html", "insight_html", "csv", "markdown_link", "gist", "insight_gist"),
+		oneOf(EventInsightGenerated, "kind", opts.InsightKinds...),
+		oneOf(EventAnalyticsViewed, "page", "usage", "activity", "trends", "quality"),
 	}
+}
+
+func oneOf(event, property string, values ...string) kittelemetry.PostHogOption {
+	return kittelemetry.WithAllowedEvent(event,
+		kittelemetry.AllowTelemetryProperty(property, kittelemetry.AllowTelemetryStringValues(values...)))
 }

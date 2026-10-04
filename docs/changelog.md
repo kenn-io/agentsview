@@ -19,6 +19,9 @@ The latest published release is
   finite command saves resumable progress, reports incomplete work without
   waiting through retry delays, and reuses completed migration proof without
   uploading duplicate generations.
+- The web UI reports anonymous search, session-view, export, insight and
+  analytics-page events through the server, each with one value from a fixed
+  list. `AGENTSVIEW_TELEMETRY_ENABLED=0` turns them off.
 - Sessions show the title their agent keeps for them, and a name you chose with
   `/rename` or the agent's equivalent wins over a generated title. Current
   Claude Code `/rename` names now appear, and Qwen Code, Gemini CLI, Kimi CLI,

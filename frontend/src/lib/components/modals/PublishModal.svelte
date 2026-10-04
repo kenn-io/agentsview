@@ -15,6 +15,7 @@
   import type { PublishResponse } from "../../api/generated/index.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
   import { LatestRead } from "../../utils/latest-read.js";
+  import { reportTelemetry } from "../../utils/telemetry.js";
 
   type View = "setup" | "progress" | "success" | "error";
 
@@ -82,6 +83,7 @@
       view = "error";
       return;
     }
+    reportTelemetry("export_run", { format: target.kind === "insight" ? "insight_gist" : "gist" });
 
     if (target.kind === "insight") {
       view = "progress";

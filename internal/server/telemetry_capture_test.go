@@ -86,7 +86,7 @@ func TestTelemetryCaptureRoute(t *testing.T) {
 			wantCode: http.StatusAccepted, wantBody: `{"status":"disabled"}`,
 		},
 		{
-			name: "unknown event", srv: authSrv, body: `{"event":"search_run"}`,
+			name: "unknown event", srv: authSrv, body: `{"event":"unknown_event"}`,
 			origin: origin, token: "test-token",
 			wantCode: http.StatusBadRequest,
 		},

@@ -4,6 +4,9 @@ import { ApiError } from "../api/runtime.js";
 import type { SearchResponse } from "../api/generated/index.js";
 import type { DbContentMatch, ServiceContentSearchResult } from "../api/generated/index.js";
 import { SEARCH_MODE_STORAGE_KEY, createSearchStore, type SearchMode } from "./search.svelte.js";
+import { reportTelemetry } from "../utils/telemetry.js";
+
+vi.mock("../utils/telemetry.js", () => ({ reportTelemetry: vi.fn() }));
 
 vi.mock("../api/generated/index.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/generated/index.js")>();
@@ -510,5 +513,65 @@ describe("SearchStore", () => {
     expect(store.results).toEqual([]);
     expect(store.query).toBe("");
     expect(store.isSearching).toBe(false);
+  });
+});
+
+describe("SearchStore telemetry", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.mocked(reportTelemetry).mockClear();
+    searchService.getApiV1Search.mockResolvedValue(fullTextResponse("needle"));
+    searchService.getApiV1SearchContent.mockResolvedValue(contentResult([]));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("reports each search mode once per palette open", async () => {
+    const store = createSearchStore(memoryStorage());
+    store.search("foo");
+    await runDebounce();
+    store.search("foo bar");
+    await runDebounce();
+    store.setSort("recency");
+    store.setMode("semantic");
+    store.setMode("hybrid");
+    store.setMode("fulltext");
+    store.setMode("semantic");
+    store.clear();
+    store.search("another query");
+    await runDebounce();
+    expect(vi.mocked(reportTelemetry).mock.calls).toEqual([
+      ["search_run", { query_type: "text" }],
+      ["search_run", { query_type: "semantic" }],
+      ["search_run", { query_type: "hybrid" }],
+    ]);
+
+    store.reportedModes.clear();
+    store.search("needle");
+    await runDebounce();
+    expect(reportTelemetry).toHaveBeenLastCalledWith("search_run", { query_type: "semantic" });
+    expect(reportTelemetry).toHaveBeenCalledTimes(4);
+  });
+
+  it("does not report another search when semantic setup retries the same mode", async () => {
+    const store = createSearchStore(memoryStorage());
+    store.search("needle");
+    await runDebounce();
+    searchService.getApiV1SearchContent.mockRejectedValueOnce(
+      generatedApiError(501, "Semantic search is unavailable"),
+    );
+    store.setMode("semantic");
+    await flushMicrotasks();
+    expect(store.error?.kind).toBe("semantic-unavailable");
+
+    store.retry();
+    await flushMicrotasks();
+    expect(store.error).toBeNull();
+    expect(vi.mocked(reportTelemetry).mock.calls).toEqual([
+      ["search_run", { query_type: "text" }],
+      ["search_run", { query_type: "semantic" }],
+    ]);
   });
 });

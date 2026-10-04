@@ -202,7 +202,7 @@ func (s *Server) humaGenerateInsight(
 		return nil, err
 	}
 	req := in.Body
-	if !validInsightTypes[req.Type] {
+	if !insight.ValidTypes[req.Type] {
 		return nil, apiError(http.StatusBadRequest,
 			"invalid type: must be daily_activity, agent_analysis, or llm_canned")
 	}

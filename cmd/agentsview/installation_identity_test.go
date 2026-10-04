@@ -12,6 +12,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/telemetry"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
@@ -56,6 +57,29 @@ func TestSessionSyncUsesInstallationIdentityAndPreservesHistoricalNames(t *testi
 		require.NotNil(t, historical)
 		assert.Equal(t, "old-host", historical.Machine)
 		require.NoError(t, database.Close())
+	}
+}
+
+func TestTelemetryOptionsAllowCoreActionValues(t *testing.T) {
+	t.Setenv(telemetry.EnabledEnv, "0")
+	reporter, err := telemetry.NewReporter(telemetryOptions(config.Config{}))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reporter.Close()) })
+
+	for _, tc := range []struct {
+		event, property, value string
+	}{
+		{telemetry.EventSessionViewed, "agent", "codex"},
+		{telemetry.EventSessionViewed, "agent", "freebuff"},
+		{telemetry.EventInsightGenerated, "kind", "daily_activity"},
+		{telemetry.EventInsightGenerated, "kind", "agent_analysis"},
+		{telemetry.EventInsightGenerated, "kind", "prompt_maturity_review"},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			props, err := reporter.SanitizeProperties(tc.event, map[string]any{tc.property: tc.value})
+			require.NoError(t, err)
+			assert.Equal(t, tc.value, props[tc.property])
+		})
 	}
 }
 

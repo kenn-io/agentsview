@@ -54,6 +54,7 @@ const {
     range: { mode: "relative" as const, days: 0 },
     setRange: vi.fn(),
     resetRange: vi.fn(),
+    reportedModes: new Set(),
   },
   mockRouter: {
     navigateToSession: vi.fn(),

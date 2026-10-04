@@ -67,8 +67,8 @@ unless you explicitly configure [remote access](/docs/remote-access/). Data
 leaves the machine only for features you choose, such as hosted raw sync, a
 PostgreSQL or ClickHouse target, remote DuckDB access, Generated Insights, or
 publishing a session to GitHub. Telemetry is an anonymous, content-free daemon
-liveness ping and an `app_opened` event the web UI reports through the server,
-and `AGENTSVIEW_TELEMETRY_ENABLED=0` disables both.
+liveness ping plus app-open and core-action events the web UI reports through
+the server, and `AGENTSVIEW_TELEMETRY_ENABLED=0` disables all of them.
 
 ## Human and machine-readable pages
 
