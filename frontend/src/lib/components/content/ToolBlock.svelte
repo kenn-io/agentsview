@@ -115,10 +115,11 @@
 
   let inputKey = $derived(toolSearchKey(searchScope, "tool-input"));
   let outputKey = $derived(toolSearchKey(searchScope, "tool-output"));
-  let resultEvents = $derived((toolCall?.result_events ?? []).map((event) => ({
-    ...event, content: displayToolResult(event.content),
-  })));
-  let historyKeys = $derived(resultEvents.map((_, index) => toolSearchKey(searchScope, "tool-history", index)));
+  // Empty timing marks only carry timestamps; keep each event's raw index so search keys still match.
+  let resultEvents = $derived((toolCall?.result_events ?? [])
+    .map((event, rawIndex) => ({ ...event, content: displayToolResult(event.content), rawIndex }))
+    .filter((event) => !(event.source === "tool_execution" && event.content === "" && event.status !== "errored")));
+  let historyKeys = $derived(resultEvents.map((event) => toolSearchKey(searchScope, "tool-history", event.rawIndex)));
   let currentInput = $derived(inSessionSearch.isCurrentBlock(inputKey));
   let currentOutput = $derived(inSessionSearch.isCurrentBlock(outputKey));
   let currentHistory = $derived(historyKeys.some((key) => inSessionSearch.isCurrentBlock(key)));
