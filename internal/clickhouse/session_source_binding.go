@@ -21,8 +21,8 @@ func (s *Store) SessionSourceChanged(err error) bool {
 }
 
 // SessionSourceBinding names the push that published the visible session row
-// and refuses while any evidence row comes from another push, or while the
-// row counts messages that are no longer readable.
+// and refuses while any evidence row comes from another push, or while fewer
+// messages are readable than the row counts.
 func (s *Store) SessionSourceBinding(ctx context.Context, id string) (string, error) {
 	var published uint64
 	var messageCount int
@@ -56,8 +56,8 @@ func (s *Store) SessionSourceBinding(ctx context.Context, id string) (string, er
 		if count > 0 && (low != published || high != published) {
 			return "", fmt.Errorf("%w: %s", errEvidenceUnpublished, table)
 		}
-		// Messages deleted ahead of their session row, or replaced by an empty push that never published.
-		if table == "messages" && count == 0 && messageCount > 0 {
+		// Fewer messages than the row counts means a deletion or an unpublished replacement is partway through.
+		if table == "messages" && messageCount > 0 && count < uint64(messageCount) {
 			return "", fmt.Errorf("%w: messages missing", errEvidenceUnpublished)
 		}
 	}

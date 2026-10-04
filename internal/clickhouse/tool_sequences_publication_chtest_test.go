@@ -46,6 +46,14 @@ func TestToolSequencesRefuseUnpublishedEvidence(t *testing.T) {
 			},
 		},
 		{
+			name: "a message deleted ahead of its session row",
+			change: func(t *testing.T, _ *db.DB, target Target, _ *Sync) {
+				conn := chtest.Open(t, target.URL, target.Database)
+				_, err := conn.ExecContext(t.Context(), "DELETE FROM messages WHERE session_id = ? AND ordinal = 0", fixtureAlphaID)
+				require.NoError(t, err)
+			},
+		},
+		{
 			name: "a leftover result event from an older push",
 			change: func(t *testing.T, _ *db.DB, target Target, _ *Sync) {
 				conn := chtest.Open(t, target.URL, target.Database)
