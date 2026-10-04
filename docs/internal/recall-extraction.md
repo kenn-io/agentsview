@@ -364,8 +364,17 @@ The daemon scheduler mirrors the embedding scheduler's shape:
 - passes drop instead of queueing when one is already running, and a dropped
   backstop carries into the next debounced pass.
 
-Concurrency is one pass at a time, one session at a time, one unit per model
-call. Each response is bounded locally as well as by the transport size cap: the
+Concurrency is one pass at a time and one unit per model call. Within a pass,
+up to the server's `concurrency` sessions (default 1) distill in parallel, each
+owned by a single worker for the whole pass: its units still distill and commit
+in cursor order, so the progress row's optimistic guards never see two writers
+from one pass. Model calls run outside any transaction and each unit commit
+still goes through the archive's single writer, so parallel sessions add no
+write-lock hold time. An error that would abort a sequential pass (an
+endpoint-scoped rejection, an exhausted retry ladder, a storage error) stops
+handing out sessions and cancels the ones still in flight; cancellation leaves
+their rows resumable exactly as daemon shutdown does, so an outage cannot burn
+every in-flight session's retry ladder or failure backoff. Each response is bounded locally as well as by the transport size cap: the
 client refuses responses exceeding fixed limits on entries per call and on
 title, body, and entity lengths. The requested JSON schema declares the entry,
 title, entity-count, and entity-length bounds. The 5000-character body bound is

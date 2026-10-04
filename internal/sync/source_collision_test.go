@@ -415,7 +415,8 @@ func TestSyncAcceptsSameSourceShrinking(t *testing.T) {
 
 // A derived session follows its file when the provider moves it: a second
 // project's Cursor .txt transcript replaced by a .jsonl beside it keeps one
-// row under the same id, and a deleted one stays deleted.
+// row under the same id, replaces corrected content, and stays deleted if the
+// original was deleted.
 func TestDerivedSessionFollowsProviderMove(t *testing.T) {
 	const baseID = "cursor:shared"
 	for _, deleted := range []bool{false, true} {
@@ -434,9 +435,7 @@ func TestDerivedSessionFollowsProviderMove(t *testing.T) {
 			}
 
 			jsonl := env.writeCursorSession(t, cursorDir, "Users-alice-code-two", "shared.jsonl",
-				`{"role":"user","message":{"content":"Hello"}}`+"\n"+
-					`{"role":"assistant","message":{"content":"Hi"}}`+"\n"+
-					`{"role":"user","message":{"content":"More"}}`+"\n")
+				`{"role":"user","message":{"content":"Corrected question"}}`+"\n")
 			env.engine.SyncAll(t.Context(), nil)
 
 			moved, err := env.db.GetSessionFull(t.Context(), parser.AltSessionID(baseID, jsonl))
@@ -450,7 +449,11 @@ func TestDerivedSessionFollowsProviderMove(t *testing.T) {
 			}
 			require.NotNil(t, alt)
 			assert.Equal(t, jsonl, *alt.FilePath)
-			assert.Equal(t, 3, alt.MessageCount)
+			assert.Equal(t, 1, alt.MessageCount)
+			messages, err := env.db.GetAllMessages(t.Context(), altID)
+			require.NoError(t, err)
+			require.Len(t, messages, 1, "the moved source replaces the old transcript")
+			assert.Equal(t, "Corrected question", messages[0].Content)
 		})
 	}
 }

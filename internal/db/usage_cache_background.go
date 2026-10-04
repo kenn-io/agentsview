@@ -282,6 +282,13 @@ func usageBackfillLocations(
 	ctx context.Context, cache *usageCache, local *time.Location,
 ) ([]*time.Location, error) {
 	localIdentity := usageTimezoneIdentityFor(local, nil)
+	// Unnamed sets left behind by an earlier local zone resolution are never
+	// read again; the foreign keys cascade to their days and installs.
+	if _, err := cache.db.ExecContext(ctx, `DELETE FROM usage_rollup_timezones
+		WHERE timezone_name IN ('', 'Local') AND timezone_key != ?`,
+		localIdentity.Key); err != nil {
+		return nil, fmt.Errorf("pruning stale local usage timezones: %w", err)
+	}
 	rows, err := cache.db.QueryContext(ctx, `SELECT timezone_name
 		FROM usage_rollup_timezones
 		WHERE timezone_key != ? AND timezone_name NOT IN ('', 'Local')

@@ -777,8 +777,12 @@ Troubleshooting:
 
 agentsview sends limited anonymous telemetry to PostHog: a `daemon_active` ping
 when the server starts and every 24 hours while it runs, and an `app_opened`
-event when the web UI loads and on the first focus of a later UTC day. Both use
-a stable random install ID as the event `DistinctId`. The events include
+event when the web UI loads and on the first focus of a later UTC day. The web
+UI also reports searches (search mode), session views (the session's agent
+type), exports (format), generated insights (insight kind) and analytics page
+views (page name), each with one value from a fixed list in the server that
+drops anything else. All events use a stable random install ID as the event
+`DistinctId`. The events include
 `application=agentsview`, app version, commit, OS, and CPU architecture, with
 `$process_person_profile=false` and `$geoip_disable=true`. It does not include
 session, project, prompt, file path, account, or machine identity. Disable

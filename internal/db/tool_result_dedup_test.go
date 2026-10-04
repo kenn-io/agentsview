@@ -40,6 +40,18 @@ func TestToolCallResultSummaryStorage(t *testing.T) {
 			wantLoaded:    "total 4\ndrwxr-xr-x",
 		},
 		{
+			name: "timed event summary is not stored",
+			call: ToolCall{
+				ToolName: "Bash", Category: "Bash", ToolUseID: "call_timed",
+				ResultContent: "output", ResultContentLength: len("output"),
+				ResultEvents: []ToolResultEvent{
+					{ToolUseID: "call_timed", Source: "tool_execution", Status: "started"},
+					{ToolUseID: "call_timed", Source: "tool_execution", Status: "completed", Content: "output", ContentLength: len("output")},
+				},
+			},
+			wantStored: "", wantStoredLen: len("output"), wantLoaded: "output",
+		},
+		{
 			name: "multi event summary is stored",
 			call: ToolCall{
 				ToolName:            "Task",
@@ -174,6 +186,13 @@ func TestToolCallResultSummaryStorage(t *testing.T) {
 				"loaded ToolCall.ResultContent")
 			assert.Len(t, msgs[0].ToolCalls[0].ResultEvents,
 				len(call.ResultEvents), "result events survive")
+			tx, err := d.getWriter().Begin(t.Context())
+			require.NoError(t, err)
+			defer func() { require.NoError(t, tx.Rollback()) }()
+			facts, err := (signalTxQuery{tx: tx, sessionID: "s-dedup"}).TrailingToolCalls(t.Context(), 1)
+			require.NoError(t, err)
+			require.Len(t, facts, 1)
+			assert.Equal(t, tt.wantLoaded, facts[0].ResultContent, "signal SQL result content")
 		})
 	}
 }
@@ -196,13 +215,16 @@ func TestSearchSessionFindsDedupedResultContent(t *testing.T) {
 			ToolUseID:           "call_find",
 			ResultContent:       "needle in the output",
 			ResultContentLength: len("needle in the output"),
-			ResultEvents: []ToolResultEvent{{
-				ToolUseID:     "call_find",
-				Source:        "function_call_output",
-				Status:        "completed",
-				Content:       "needle in the output",
-				ContentLength: len("needle in the output"),
-			}},
+			ResultEvents: []ToolResultEvent{
+				{ToolUseID: "call_find", Source: "tool_execution", Status: "started"},
+				{
+					ToolUseID:     "call_find",
+					Source:        "tool_execution",
+					Status:        "completed",
+					Content:       "needle in the output",
+					ContentLength: len("needle in the output"),
+				},
+			},
 		}},
 	}}))
 
@@ -231,6 +253,14 @@ func TestRestoreToolCallResultContent(t *testing.T) {
 			call: ToolCall{
 				ResultContentLength: 5,
 				ResultEvents:        []ToolResultEvent{{Content: "event"}},
+			},
+			want: "event",
+		},
+		{
+			name: "timed event refills a cleared summary",
+			call: ToolCall{
+				ResultContentLength: 5,
+				ResultEvents:        []ToolResultEvent{{Status: "started"}, {Status: "completed", Content: "event"}},
 			},
 			want: "event",
 		},
@@ -326,15 +356,10 @@ func TestSubagentLinkKeepsDedupedSummary(t *testing.T) {
 			ToolUseID:           "call_link",
 			ResultContent:       "agent finished",
 			ResultContentLength: len("agent finished"),
-			// The event carries no ToolUseID of its own; the insert path
-			// copies the call's id onto it, so the link path could find it
-			// either way. The test pins the stored shape, not the key.
-			ResultEvents: []ToolResultEvent{{
-				Source:        "subagent_notification",
-				Status:        "completed",
-				Content:       "agent finished",
-				ContentLength: len("agent finished"),
-			}},
+			ResultEvents: []ToolResultEvent{
+				{Source: "tool_execution", Status: "started"},
+				{Source: "subagent_notification", Status: "completed", Content: "agent finished", ContentLength: len("agent finished")},
+			},
 		}},
 	}}))
 

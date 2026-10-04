@@ -51,54 +51,31 @@ type crushProjectsFile struct {
 	} `json:"projects"`
 }
 
-// crushProjectsDataDirs reads a Crush projects.json registry and returns
-// the per-project data directories it lists.
-func crushProjectsDataDirs(registryPath string) []string {
+// readCrushProjects reads roots and project attribution from one registry snapshot.
+func readCrushProjects(registryPath string) ([]string, map[string]string, error) {
 	data, err := os.ReadFile(registryPath)
 	if err != nil {
-		return nil
+		return nil, nil, err
 	}
 	var pf crushProjectsFile
 	if err := json.Unmarshal(data, &pf); err != nil {
-		return nil
+		return nil, nil, err
 	}
 	dirs := make([]string, 0, len(pf.Projects))
-	for _, project := range pf.Projects {
-		dir := strings.TrimSpace(project.DataDir)
-		if dir == "" {
-			continue
-		}
-		dirs = append(dirs, filepath.Clean(dir))
-	}
-	return dirs
-}
-
-// crushProjectDirsMapping reads a Crush projects.json registry and returns
-// a mapping from each data directory to its project path. The project path
-// is used for project attribution when the data directory does not follow
-// the default <project>/.crush layout.
-func crushProjectDirsMapping(registryPath string) map[string]string {
-	data, err := os.ReadFile(registryPath)
-	if err != nil {
-		return nil
-	}
-	var pf crushProjectsFile
-	if err := json.Unmarshal(data, &pf); err != nil {
-		return nil
-	}
 	mapping := make(map[string]string, len(pf.Projects))
 	for _, project := range pf.Projects {
 		dir := strings.TrimSpace(project.DataDir)
 		if dir == "" {
 			continue
 		}
+		dirs = append(dirs, filepath.Clean(dir))
 		path := strings.TrimSpace(project.Path)
 		if path == "" {
 			continue
 		}
 		mapping[filepath.Clean(dir)] = filepath.Clean(path)
 	}
-	return mapping
+	return dirs, mapping, nil
 }
 
 func crushProjectDir(dbPath string, projectMapping map[string]string) string {

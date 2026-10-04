@@ -93,7 +93,8 @@ struct SidecarState {
     terminated_generation: Mutex<u64>,
     termination: Condvar,
     next_generation: AtomicU64,
-    background_status_poll_generation: AtomicU64,
+    // Held across an update stop's start and retirement and across each window action a launch takes.
+    launch_gate: Mutex<()>,
 }
 
 struct SidecarProcess {
@@ -1518,6 +1519,7 @@ fn take_restart_after_stop_timeout_if_current(state: &SidecarState, generation: 
 }
 
 fn begin_update_stop_wait(state: &SidecarState) {
+    let _gate = state.launch_gate.lock();
     state
         .active_update_stop_waiters
         .fetch_add(1, Ordering::SeqCst);
@@ -1532,6 +1534,49 @@ fn end_update_stop_wait(state: &SidecarState) {
 
 fn has_active_update_stop_waiter(state: &SidecarState) -> bool {
     state.active_update_stop_waiters.load(Ordering::SeqCst) > 0
+}
+
+// A completed update stop retires the launch it stopped; a failed one leaves it in charge.
+fn finish_update_stop_wait(state: &SidecarState, stopped: bool) {
+    let _gate = state.launch_gate.lock();
+    if stopped {
+        state.next_generation.fetch_add(1, Ordering::SeqCst);
+    }
+    end_update_stop_wait(state);
+}
+
+fn launch_superseded(state: &SidecarState, generation: u64) -> bool {
+    state.next_generation.load(Ordering::SeqCst) != generation
+}
+
+// While an update stop is in flight the launch's fate is unknown, so it must not act yet.
+fn launch_is_current(state: &SidecarState, generation: u64) -> bool {
+    !has_active_update_stop_waiter(state) && !launch_superseded(state, generation)
+}
+
+// Waits out an update stop, then acts only if the launch survived, holding the gate so no stop starts mid-action.
+fn with_current_launch<T>(
+    state: &SidecarState,
+    generation: u64,
+    act: impl FnOnce() -> T,
+) -> Option<T> {
+    loop {
+        let gate = state.launch_gate.lock().ok()?;
+        if launch_superseded(state, generation) {
+            return None;
+        }
+        if !has_active_update_stop_waiter(state) {
+            return Some(act());
+        }
+        drop(gate);
+        thread::sleep(READY_POLL_INTERVAL);
+    }
+}
+
+// Non-blocking variant for async callers: acts only if the launch is current right now.
+fn act_if_current<T>(state: &SidecarState, generation: u64, act: impl FnOnce() -> T) -> Option<T> {
+    let _gate = state.launch_gate.lock().ok()?;
+    launch_is_current(state, generation).then(act)
 }
 
 fn take_restart_after_stop_timeout_for_terminated_sidecar(
@@ -1743,8 +1788,9 @@ fn forward_sidecar_logs(
                         break;
                     }
                     if handle_sidecar_terminated(&state, startup_handled.as_ref(), generation) {
-                        spawn_startup_error_render(
+                        spawn_launch_error_render(
                             window.clone(),
+                            generation,
                             "AgentsView backend failed",
                             "The local backend exited before startup completed.",
                             startup_failure_detail(
@@ -1771,8 +1817,9 @@ fn forward_sidecar_logs(
                     );
                     eprintln!("[agentsview:error] {err}");
                     if !startup_handled.swap(true, Ordering::SeqCst) {
-                        spawn_startup_error_render(
+                        spawn_launch_error_render(
                             window.clone(),
+                            generation,
                             "AgentsView backend failed",
                             "The desktop wrapper received an error from the backend process.",
                             startup_failure_detail(
@@ -1809,6 +1856,27 @@ fn main_window_from_handle(handle: &AppHandle) -> Result<WebviewWindow, DynError
 }
 
 fn spawn_startup_error_render(window: WebviewWindow, title: &str, message: &str, detail: &str) {
+    render_startup_error(window, title, message, detail, None);
+}
+
+// Rechecks the launch before every attempt so an update stop that lands mid-retry drops the render.
+fn spawn_launch_error_render(
+    window: WebviewWindow,
+    generation: u64,
+    title: &str,
+    message: &str,
+    detail: &str,
+) {
+    render_startup_error(window, title, message, detail, Some(generation));
+}
+
+fn render_startup_error(
+    window: WebviewWindow,
+    title: &str,
+    message: &str,
+    detail: &str,
+    generation: Option<u64>,
+) {
     let title = title.to_string();
     let message = message.to_string();
     let detail = detail.to_string();
@@ -1820,14 +1888,24 @@ fn spawn_startup_error_render(window: WebviewWindow, title: &str, message: &str,
             detail.as_str(),
             footer.as_str(),
         );
+        let state = window.app_handle().state::<SidecarState>();
+        let eval = || window.eval(script.as_str()).is_ok();
+        // The script no-ops until the loading page is ready, so keep resubmitting until the deadline.
         let deadline = Instant::now() + READY_TIMEOUT;
+        let mut submitted = false;
         while Instant::now() < deadline {
-            if window.eval(script.as_str()).is_ok() {
-                return;
-            }
+            submitted |= match generation {
+                Some(g) => match with_current_launch(&state, g, eval) {
+                    Some(ok) => ok,
+                    None => return,
+                },
+                None => eval(),
+            };
             thread::sleep(READY_POLL_INTERVAL);
         }
-        eprintln!("[agentsview] timed out waiting to render startup error");
+        if !submitted {
+            eprintln!("[agentsview] timed out waiting to render startup error");
+        }
     });
 }
 
@@ -1836,13 +1914,11 @@ fn startup_error_script(title: &str, message: &str, detail: &str, footer: &str) 
     let message = js_string_literal(message);
     let detail = js_string_literal(detail);
     let footer = js_string_literal(footer);
-    let retry_ms = READY_POLL_INTERVAL.as_millis();
     format!(
         "(function renderStartupError() {{\
             var h = document.querySelector('h1');\
             var status = document.getElementById('status');\
             if (!h || !status) {{\
-                window.setTimeout(renderStartupError, {retry_ms});\
                 return;\
             }}\
             var shell = document.querySelector('.shell');\
@@ -2050,7 +2126,13 @@ fn redirect_when_ready(
     log_sender: SyncSender<SidecarLogRecord>,
 ) {
     thread::spawn(move || {
-        if wait_for_selected_backend(&log_sender, generation, source, port, READY_TIMEOUT) {
+        let ready = wait_for_selected_backend(&log_sender, generation, source, port, READY_TIMEOUT);
+        let handle = window.app_handle().clone();
+        let state = handle.state::<SidecarState>();
+        if with_current_launch(&state, generation, || ()).is_none() {
+            return;
+        }
+        if ready {
             let deferred_route = take_pending_deep_link_route(window.app_handle());
             let target_url = match deferred_route.as_deref() {
                 Some(route) => {
@@ -2066,7 +2148,16 @@ fn redirect_when_ready(
             // failures in the desktop log as well.
             match Url::parse(target_url.as_str()) {
                 Ok(url) => {
-                    if let Err(err) = window.navigate(url) {
+                    let Some(navigated) =
+                        with_current_launch(&state, generation, || window.navigate(url))
+                    else {
+                        // Hand the consumed route back so the replacement launch opens it.
+                        if let Some(route) = deferred_route {
+                            dispatch_deep_link_route(window.app_handle(), route);
+                        }
+                        return;
+                    };
+                    if let Err(err) = navigated {
                         queue_startup_log_record(
                             &log_sender,
                             generation,
@@ -2087,7 +2178,7 @@ fn redirect_when_ready(
                     // the system browser. See
                     // https://github.com/kenn-io/agentsview/issues/635
                     #[cfg(target_os = "linux")]
-                    spawn_webview_health_fallback(window.clone(), port);
+                    spawn_webview_health_fallback(window.clone(), port, generation);
                 }
                 Err(err) => {
                     queue_startup_log_record(
@@ -2112,13 +2203,19 @@ fn redirect_when_ready(
                     format!("navigating to deep link route {route} queued during startup redirect")
                         .as_str(),
                 );
-                navigate_main_window_to_route(window.app_handle(), port, route.as_str());
+                let routed = with_current_launch(&state, generation, || {
+                    navigate_main_window_to_route(window.app_handle(), port, route.as_str())
+                });
+                if routed.is_none() {
+                    dispatch_deep_link_route(window.app_handle(), route);
+                }
             }
             return;
         }
 
-        spawn_startup_error_render(
+        spawn_launch_error_render(
             window,
+            generation,
             "AgentsView interface did not respond",
             "The backend reported a port, but the desktop window could not connect to it.",
             format!("Backend URL: {}", desktop_redirect_url(port)).as_str(),
@@ -2132,10 +2229,6 @@ fn poll_background_status_after_launcher_exit(
     log_sender: SyncSender<SidecarLogRecord>,
 ) {
     let handle = window.app_handle().clone();
-    handle
-        .state::<SidecarState>()
-        .background_status_poll_generation
-        .store(generation, Ordering::SeqCst);
     tauri::async_runtime::spawn(async move {
         let started = Instant::now();
         let mut failed_status_probes = 0;
@@ -2143,29 +2236,39 @@ fn poll_background_status_after_launcher_exit(
         let mut long_startup_notice_shown = false;
         let mut unhealthy_since: Option<Instant> = None;
         loop {
-            if !background_status_poll_is_current(&handle, generation) {
+            if launch_superseded(&handle.state::<SidecarState>(), generation) {
                 return;
             }
+            // Hold without probing while an update stop decides this launch's fate.
+            if !launch_is_current(&handle.state::<SidecarState>(), generation) {
+                tokio::time::sleep(READY_POLL_INTERVAL).await;
+                continue;
+            }
             let status = probe_backend_status(&handle, &log_sender, generation).await;
+            if !launch_is_current(&handle.state::<SidecarState>(), generation) {
+                continue;
+            }
             status_poll_backoff_attempts =
                 next_background_status_poll_attempts(&status, status_poll_backoff_attempts);
             match status {
                 BackendStatusProbe::Ready(port) => {
-                    if !background_status_poll_is_current(&handle, generation) {
-                        return;
+                    let acted = act_if_current(&handle.state::<SidecarState>(), generation, || {
+                        save_sidecar_port(&handle, port);
+                        let _ = window.eval(
+                            "window.__setStage(2); \
+                             window.__setStatus('Connecting to interface...');",
+                        );
+                        redirect_when_ready(
+                            window.clone(),
+                            port,
+                            generation,
+                            "serve status",
+                            log_sender.clone(),
+                        );
+                    });
+                    if acted.is_none() {
+                        continue;
                     }
-                    save_sidecar_port(&handle, port);
-                    let _ = window.eval(
-                        "window.__setStage(2); \
-                         window.__setStatus('Connecting to interface...');",
-                    );
-                    redirect_when_ready(
-                        window.clone(),
-                        port,
-                        generation,
-                        "serve status",
-                        log_sender.clone(),
-                    );
                     return;
                 }
                 BackendStatusProbe::Starting(status) => {
@@ -2180,8 +2283,9 @@ fn poll_background_status_after_launcher_exit(
                     failed_status_probes = 0;
                     let first_seen = unhealthy_since.get_or_insert_with(Instant::now);
                     if first_seen.elapsed() >= DAEMON_UNHEALTHY_GRACE {
-                        spawn_startup_error_render(
+                        spawn_launch_error_render(
                             window,
+                            generation,
                             "AgentsView backend is not responding",
                             "A backend process is running, but it is not answering health checks.",
                             startup_failure_detail(
@@ -2198,8 +2302,9 @@ fn poll_background_status_after_launcher_exit(
                     );
                 }
                 BackendStatusProbe::NotRunning(status) => {
-                    spawn_startup_error_render(
+                    spawn_launch_error_render(
                         window,
+                        generation,
                         "AgentsView backend stopped",
                         "The background launcher exited, and no AgentsView server is running.",
                         startup_failure_detail(
@@ -2211,8 +2316,9 @@ fn poll_background_status_after_launcher_exit(
                     return;
                 }
                 BackendStatusProbe::Incompatible(status) => {
-                    spawn_startup_error_render(
+                    spawn_launch_error_render(
                         window,
+                        generation,
                         "AgentsView backend is incompatible",
                         "AgentsView found a running backend that this desktop app cannot use.",
                         status.as_str(),
@@ -2220,8 +2326,9 @@ fn poll_background_status_after_launcher_exit(
                     return;
                 }
                 BackendStatusProbe::ReadOnly(status) => {
-                    spawn_startup_error_render(
+                    spawn_launch_error_render(
                         window,
+                        generation,
                         "AgentsView backend is read-only",
                         "AgentsView Desktop needs a writable local backend to sync and migrate the archive.",
                         startup_failure_detail(
@@ -2233,8 +2340,9 @@ fn poll_background_status_after_launcher_exit(
                     return;
                 }
                 BackendStatusProbe::Unusable(status) => {
-                    spawn_startup_error_render(
+                    spawn_launch_error_render(
                         window,
+                        generation,
                         "AgentsView backend status is unusable",
                         "The background launcher exited, but the backend did not report a usable writable server.",
                         startup_failure_detail(
@@ -2248,8 +2356,9 @@ fn poll_background_status_after_launcher_exit(
                 BackendStatusProbe::Unavailable => {
                     failed_status_probes += 1;
                     if status_probe_failures_should_stop(failed_status_probes) {
-                        spawn_startup_error_render(
+                        spawn_launch_error_render(
                             window,
+                            generation,
                             "AgentsView backend status is unavailable",
                             "The background launcher exited, but the desktop app could not confirm backend status.",
                             startup_failure_detail(
@@ -2284,14 +2393,6 @@ fn poll_background_status_after_launcher_exit(
             .await;
         }
     });
-}
-
-fn background_status_poll_is_current(handle: &AppHandle, generation: u64) -> bool {
-    handle
-        .state::<SidecarState>()
-        .background_status_poll_generation
-        .load(Ordering::SeqCst)
-        == generation
 }
 
 fn background_status_poll_interval(backoff_attempts: u32) -> Duration {
@@ -2458,7 +2559,7 @@ fn combined_probe_output(stdout: &str, stderr: &str) -> String {
 /// user where the UI went. If no browser can be opened the window stays
 /// visible and the dialog shows the URL to open manually.
 #[cfg(target_os = "linux")]
-fn spawn_webview_health_fallback(window: WebviewWindow, port: u16) {
+fn spawn_webview_health_fallback(window: WebviewWindow, port: u16, generation: u64) {
     // One-shot guard so focus/navigation retries can't open many tabs.
     static FALLBACK_TRIGGERED: AtomicBool = AtomicBool::new(false);
 
@@ -2470,46 +2571,49 @@ fn spawn_webview_health_fallback(window: WebviewWindow, port: u16) {
         if window.eval("void 0").is_ok() {
             return;
         }
-        if FALLBACK_TRIGGERED.swap(true, Ordering::SeqCst) {
-            return;
-        }
-
-        let url = format!("http://{HOST}:{port}");
-        eprintln!(
-            "[agentsview] WebView content process is not responding \
-             (likely a GPU/EGL initialization failure); opening {url} \
-             in the system browser instead"
-        );
-
-        let handle = window.app_handle().clone();
-        match handle.opener().open_url(url.as_str(), Option::<&str>::None) {
-            Ok(()) => {
-                let _ = window.hide();
-                handle
-                    .dialog()
-                    .message(format!(
-                        "AgentsView could not render its window, likely due to a \
-                         graphics driver (EGL) issue. It has been opened in your \
-                         web browser instead:\n\n{url}"
-                    ))
-                    .title("AgentsView")
-                    .show(|_| {});
+        let state = window.app_handle().state::<SidecarState>();
+        with_current_launch(&state, generation, || {
+            if FALLBACK_TRIGGERED.swap(true, Ordering::SeqCst) {
+                return;
             }
-            Err(err) => {
-                eprintln!("[agentsview] failed to open system browser fallback: {err}");
-                // Keep the window up so the app stays visible and quittable.
-                handle
-                    .dialog()
-                    .message(format!(
-                        "AgentsView could not render its window, likely due to a \
-                         graphics driver (EGL) issue, and no web browser could be \
-                         opened automatically. Open this URL in a browser to use \
-                         AgentsView:\n\n{url}"
-                    ))
-                    .title("AgentsView")
-                    .show(|_| {});
+
+            let url = format!("http://{HOST}:{port}");
+            eprintln!(
+                "[agentsview] WebView content process is not responding \
+                 (likely a GPU/EGL initialization failure); opening {url} \
+                 in the system browser instead"
+            );
+
+            let handle = window.app_handle().clone();
+            match handle.opener().open_url(url.as_str(), Option::<&str>::None) {
+                Ok(()) => {
+                    let _ = window.hide();
+                    handle
+                        .dialog()
+                        .message(format!(
+                            "AgentsView could not render its window, likely due to a \
+                             graphics driver (EGL) issue. It has been opened in your \
+                             web browser instead:\n\n{url}"
+                        ))
+                        .title("AgentsView")
+                        .show(|_| {});
+                }
+                Err(err) => {
+                    eprintln!("[agentsview] failed to open system browser fallback: {err}");
+                    // Keep the window up so the app stays visible and quittable.
+                    handle
+                        .dialog()
+                        .message(format!(
+                            "AgentsView could not render its window, likely due to a \
+                             graphics driver (EGL) issue, and no web browser could be \
+                             opened automatically. Open this URL in a browser to use \
+                             AgentsView:\n\n{url}"
+                        ))
+                        .title("AgentsView")
+                        .show(|_| {});
+                }
             }
-        }
+        });
     });
 }
 
@@ -3471,7 +3575,7 @@ fn stop_backend_inner(app: &AppHandle, wait_timeout: Option<Duration>) -> bool {
         } else {
             stop_detached_backend_for_update_with_port(app, deadline, detached_port)
         };
-        end_update_stop_wait(&state);
+        finish_update_stop_wait(&state, stopped);
         if let Some(generation) = waited_generation {
             restart_backend_after_stop_timeout_if_terminated(app, &state, generation);
         }
@@ -5113,6 +5217,75 @@ agentsview running at http://127.0.0.1:18082
         assert!(!take_restart_after_stop_timeout_if_current(&state, 1));
         assert!(take_restart_after_stop_timeout_if_current(&state, 2));
         assert!(!take_restart_after_stop_timeout_if_current(&state, 2));
+    }
+
+    #[test]
+    fn update_stop_retires_running_launch() {
+        let state = SidecarState::default();
+        state.next_generation.store(1, Ordering::SeqCst);
+        assert!(launch_is_current(&state, 1));
+
+        begin_update_stop_wait(&state);
+        assert!(!launch_is_current(&state, 1));
+        assert!(!launch_superseded(&state, 1));
+
+        finish_update_stop_wait(&state, true);
+        assert!(launch_superseded(&state, 1));
+
+        let replacement = state.next_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        assert!(launch_is_current(&state, replacement));
+        assert!(launch_superseded(&state, 1));
+    }
+
+    #[test]
+    fn failed_update_stop_keeps_launch_current() {
+        let state = SidecarState::default();
+        state.next_generation.store(7, Ordering::SeqCst);
+        begin_update_stop_wait(&state);
+        finish_update_stop_wait(&state, false);
+        assert!(launch_is_current(&state, 7));
+        assert!(!launch_superseded(&state, 7));
+    }
+
+    #[test]
+    fn launch_survives_update_stop_waits_for_outcome() {
+        for (stopped, survives) in [(true, false), (false, true)] {
+            let state = Arc::new(SidecarState::default());
+            state.next_generation.store(1, Ordering::SeqCst);
+            begin_update_stop_wait(&state);
+            let (tx, rx) = std::sync::mpsc::channel();
+            let waiter = Arc::clone(&state);
+            thread::spawn(move || {
+                let _ = tx.send(with_current_launch(&waiter, 1, || ()).is_some());
+            });
+            assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
+            finish_update_stop_wait(&state, stopped);
+            assert_eq!(rx.recv_timeout(Duration::from_secs(5)), Ok(survives));
+        }
+    }
+
+    #[test]
+    fn launch_survives_update_stop_returns_at_once_without_stop() {
+        let state = SidecarState::default();
+        state.next_generation.store(3, Ordering::SeqCst);
+        assert_eq!(with_current_launch(&state, 3, || 7), Some(7));
+        assert_eq!(with_current_launch(&state, 2, || 7), None);
+    }
+
+    #[test]
+    fn update_stop_waits_for_launch_action() {
+        let state = Arc::new(SidecarState::default());
+        state.next_generation.store(1, Ordering::SeqCst);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let stopper = Arc::clone(&state);
+        with_current_launch(&state, 1, || {
+            thread::spawn(move || {
+                begin_update_stop_wait(&stopper);
+                let _ = tx.send(());
+            });
+            assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
+        });
+        assert!(rx.recv_timeout(Duration::from_secs(5)).is_ok());
     }
 
     #[test]

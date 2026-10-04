@@ -894,6 +894,9 @@ type Config struct {
 	WriteTimeout         time.Duration               `json:"-" toml:"-"`
 	// InstallationID identifies this data directory independently of its label.
 	InstallationID string `json:"-" toml:"-"`
+	// InstallationCreatedAt is when InstallationID was created, or zero for
+	// IDs created before the time was recorded.
+	InstallationCreatedAt time.Time `json:"-" toml:"-"`
 	// LocalMachineName is the display label, defaulting to the system hostname.
 	LocalMachineName string `json:"-" toml:"local_machine_name"`
 

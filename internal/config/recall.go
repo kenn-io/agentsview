@@ -83,6 +83,12 @@ type RecallExtractServerConfig struct {
 	// Extraction sends transcript content to the endpoint; without this
 	// explicit opt-in, non-loopback endpoints must use HTTPS.
 	AllowHTTP bool `toml:"allow_http" json:"allow_http,omitempty"`
+	// Concurrency is the number of sessions an extraction pass distills in
+	// parallel against this server. Units within one session stay
+	// sequential. Default 1: a single local model divides the same compute
+	// between parallel requests, while hosted endpoints and servers that
+	// batch concurrent requests finish a backlog faster with more.
+	Concurrency int `toml:"concurrency" json:"concurrency"`
 }
 
 // APIKey reads the API key from the environment variable named by
@@ -265,6 +271,11 @@ func (s RecallExtractServerConfig) validate(name string) error {
 				"without an HTTP deadline one hung request stalls "+
 				"extraction indefinitely", name, s.Timeout)
 	}
+	if s.Concurrency <= 0 {
+		return fmt.Errorf(
+			"[recall.extract.servers.%s] concurrency must be greater than 0, "+
+				"got %d", name, s.Concurrency)
+	}
 	return nil
 }
 
@@ -377,15 +388,20 @@ func ValidateExtractTransport(u *url.URL, allowHTTP bool) error {
 			"accept that risk explicitly", redactedEndpointURL(u))
 }
 
-// normalizedRecallExtractServers fills each named server's unset timeout
-// with the 120s default.
+// normalizedRecallExtractServers fills each named server's unset transport
+// fields with their defaults (timeout "120s", concurrency 1). meta.IsDefined
+// distinguishes an unset concurrency from an explicit zero, which stays zero
+// so validation rejects it instead of silently substituting the default.
 func normalizedRecallExtractServers(
-	servers map[string]RecallExtractServerConfig,
+	servers map[string]RecallExtractServerConfig, meta toml.MetaData,
 ) map[string]RecallExtractServerConfig {
 	out := make(map[string]RecallExtractServerConfig, len(servers))
 	for name, s := range servers {
 		if s.Timeout == "" {
 			s.Timeout = "120s"
+		}
+		if !meta.IsDefined("recall", "extract", "servers", name, "concurrency") {
+			s.Concurrency = 1
 		}
 		out[name] = s
 	}
@@ -420,7 +436,7 @@ func (c *Config) mergeRecallExtractTOML(file RecallConfig, meta toml.MetaData) {
 		extract.Server = file.Extract.Server
 	}
 	if len(file.Extract.Servers) > 0 {
-		extract.Servers = normalizedRecallExtractServers(file.Extract.Servers)
+		extract.Servers = normalizedRecallExtractServers(file.Extract.Servers, meta)
 	}
 	if meta.IsDefined("recall", "extract", "max_window_chars") {
 		extract.MaxWindowChars = file.Extract.MaxWindowChars

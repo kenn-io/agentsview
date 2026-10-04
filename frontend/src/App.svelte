@@ -89,6 +89,7 @@
   import { setAuthToken, getAuthToken, setServerUrl } from "./lib/api/runtime.js";
   import { setupVisibilityHealthCheck } from "./lib/utils/health.js";
   import { setupAppOpenedReporting } from "./lib/utils/app-opened.js";
+  import { reportTelemetry } from "./lib/utils/telemetry.js";
   import { registerShortcuts } from "./lib/utils/keyboard.js";
   import { shouldAutoSwitchTranscriptModeToNormal } from "./lib/utils/transcript-mode.js";
   import {
@@ -582,6 +583,51 @@
       } else if (sid === sessions.activeSessionId && !hydrated) {
         void sessions.navigateToSession(sid);
       }
+    });
+  });
+
+  // Telemetry: one session_viewed per transcript visit, sent once the
+  // session's metadata hydrates. The store keeps the active id while
+  // another page shows, so leaving the transcript resets the visit.
+  let viewedSessionId: string | null = null;
+  let selectedSessionId: string | null = null;
+  $effect(() => {
+    const route = router.route;
+    const activeId = sessions.activeSessionId;
+    const session = sessions.activeSession;
+    const routedId = router.sessionId;
+    untrack(() => {
+      if (activeId !== selectedSessionId) {
+        selectedSessionId = activeId;
+        viewedSessionId = null;
+      }
+      if (route !== "sessions" || activeId === null) {
+        viewedSessionId = null;
+        return;
+      }
+      // Wait for the URL to name the session, so a stale selection left from another page is not counted.
+      if (session && session.id === activeId && routedId === activeId && activeId !== viewedSessionId) {
+        viewedSessionId = activeId;
+        reportTelemetry("session_viewed", { agent: session.agent });
+      }
+    });
+  });
+
+  // Telemetry: one analytics_viewed per analytics page visit; token-usage is the usage page.
+  let lastAnalyticsPage: string | null = null;
+  $effect(() => {
+    const route = router.route;
+    let page: string | null = null;
+    if (route === "usage" || route === "token-usage") {
+      page = "usage";
+    } else if (route === "activity" || route === "trends" || route === "quality") {
+      page = route;
+    }
+    untrack(() => {
+      if (page !== null && page !== lastAnalyticsPage) {
+        reportTelemetry("analytics_viewed", { page });
+      }
+      lastAnalyticsPage = page;
     });
   });
 

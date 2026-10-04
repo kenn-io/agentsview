@@ -3,6 +3,7 @@ package clickhouse
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -149,6 +150,21 @@ func (s *Store) BuildProjectIdentityMap(
 	if labels != nil && len(labels) == 0 {
 		return map[string]export.ProjectMapEntry{}, nil
 	}
+	// The map depends only on the identity observations and the archives,
+	// so it is kept per their parts and the labels.
+	fingerprint, err := s.tablePartsFingerprint(ctx, []string{"source_project_identity_observations", "source_archives"})
+	if err != nil {
+		return nil, err
+	}
+	// The map depends on the set of labels, not their order or repeats.
+	set := labels
+	if set != nil {
+		set = slices.Compact(slices.Sorted(slices.Values(labels)))
+	}
+	key := fmt.Sprintf("%v|%#v", labels == nil, set)
+	if kept, ok := s.projectIdentityMaps.get(key, fingerprint); ok {
+		return maps.Clone(kept[0]), nil
+	}
 	observations, err := s.ListProjectIdentityObservations(ctx, labels)
 	if err != nil {
 		return nil, err
@@ -157,7 +173,9 @@ func (s *Store) BuildProjectIdentityMap(
 	if err != nil {
 		return nil, err
 	}
-	return export.BuildProjectsMapWithScope(labels, observations, scope), nil
+	projects := export.BuildProjectsMapWithScope(labels, observations, scope)
+	s.projectIdentityMaps.put(key, fingerprint, []map[string]export.ProjectMapEntry{maps.Clone(projects)})
+	return projects, nil
 }
 
 func (s *Store) sourceArchiveIdentityScope(

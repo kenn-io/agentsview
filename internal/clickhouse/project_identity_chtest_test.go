@@ -47,3 +47,16 @@ func TestProjectInventoryRulesAndCandidates(t *testing.T) {
 	assert.False(t, candidates[0].Available)
 	assert.Equal(t, 2, candidates[0].ContributingSessions, "alpha root plus subagent child")
 }
+
+// The project map depends on the set of labels, so callers that list the
+// same labels in another order share one kept map.
+func TestProjectIdentityMapKeptPerLabelSet(t *testing.T) {
+	store, _, _ := newPushedStore(t)
+	ctx := t.Context()
+	first, err := store.BuildProjectIdentityMap(ctx, []string{"alpha", "beta"})
+	require.NoError(t, err)
+	second, err := store.BuildProjectIdentityMap(ctx, []string{"beta", "alpha", "beta"})
+	require.NoError(t, err)
+	require.Equal(t, first, second)
+	require.Len(t, store.projectIdentityMaps.order, 1)
+}

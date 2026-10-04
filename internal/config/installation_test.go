@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -51,9 +52,11 @@ func TestInstallationIdentityLifecycle(t *testing.T) {
 	first, err := LoadMinimal()
 	require.NoError(t, err)
 	require.Regexp(t, `^[0-9a-f]{32}$`, first.InstallationID)
+	assert.WithinDuration(t, time.Now(), first.InstallationCreatedAt, time.Minute, "a new identity records its creation time")
 	second, err := LoadMinimal()
 	require.NoError(t, err)
 	assert.Equal(t, first.InstallationID, second.InstallationID, "restart retains installation identity")
+	assert.True(t, first.InstallationCreatedAt.Equal(second.InstallationCreatedAt), "restart retains the creation time")
 
 	copyDir := t.TempDir()
 	require.NoError(t, os.CopyFS(copyDir, os.DirFS(dir)))
@@ -61,6 +64,7 @@ func TestInstallationIdentityLifecycle(t *testing.T) {
 	copied, err := LoadMinimal()
 	require.NoError(t, err)
 	assert.Equal(t, first.InstallationID, copied.InstallationID, "copying the data directory copies identity")
+	assert.True(t, first.InstallationCreatedAt.Equal(copied.InstallationCreatedAt), "copying the data directory keeps the creation time")
 
 	require.NoError(t, os.Remove(filepath.Join(dir, "telemetry-install-id")))
 	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
@@ -164,4 +168,32 @@ func TestInstallationIdentityConcurrentCreation(t *testing.T) {
 	cfg := Config{DataDir: dir}
 	require.NoError(t, cfg.ensureInstallationID())
 	assert.Equal(t, ids[0], cfg.InstallationID)
+}
+
+func TestInstallationCreatedAtTreatsUnmatchedRecordsAsEstablished(t *testing.T) {
+	const id = "0123456789abcdef0123456789abcdef"
+	recent := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, tc := range []struct {
+		name   string
+		record string
+	}{
+		{"missing", ""},
+		{"other ID", "fedcba9876543210fedcba9876543210 " + recent},
+		{"malformed time", id + " yesterday"},
+		{"ID only", id},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := setupTestEnv(t)
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "telemetry-install-id"), []byte(id+"\n"), 0o600))
+			if tc.record != "" {
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "telemetry-install-created"), []byte(tc.record+"\n"), 0o600))
+			}
+			for _, load := range []func() (Config, error){LoadMinimal, LoadReadOnly} {
+				cfg, err := load()
+				require.NoError(t, err)
+				assert.Equal(t, id, cfg.InstallationID)
+				assert.True(t, cfg.InstallationCreatedAt.IsZero(), "an existing ID is never stamped with a new creation time")
+			}
+		})
+	}
 }

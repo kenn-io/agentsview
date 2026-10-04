@@ -649,16 +649,22 @@ func TestActivityReportMessageCountsAcrossBackends(t *testing.T) {
 	require.NoError(t, err)
 	for name, store := range stores {
 		t.Run(name, func(t *testing.T) {
-			artifacts, err := store.BuildActivityReportArtifacts(ctx,
-				db.AnalyticsFilter{Project: "message-counts"}, q, nil)
-			require.NoError(t, err)
-			var user, assistant []int
-			for _, bucket := range artifacts.Report.Buckets {
-				user = append(user, bucket.UserMessages)
-				assistant = append(assistant, bucket.AssistantMessages)
+			// The second build counts messages from inputs a store kept from
+			// the first.
+			var artifacts activity.CandidateArtifacts
+			for range 2 {
+				var err error
+				artifacts, err = store.BuildActivityReportArtifacts(ctx,
+					db.AnalyticsFilter{Project: "message-counts"}, q, nil)
+				require.NoError(t, err)
+				var user, assistant []int
+				for _, bucket := range artifacts.Report.Buckets {
+					user = append(user, bucket.UserMessages)
+					assistant = append(assistant, bucket.AssistantMessages)
+				}
+				assert.Equal(t, []int{1, 2, 0}, user)
+				assert.Equal(t, []int{3, 0, 1}, assistant)
 			}
-			assert.Equal(t, []int{1, 2, 0}, user)
-			assert.Equal(t, []int{3, 0, 1}, assistant)
 			page, err := activity.PageSessions(artifacts.Sessions, artifacts.Membership,
 				activity.SessionPageOptions{BucketRange: &activity.BucketRange{Start: 1, End: 2}})
 			require.NoError(t, err)

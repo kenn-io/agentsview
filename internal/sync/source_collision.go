@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"os"
+	"slices"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
@@ -14,20 +15,22 @@ import (
 // parser.AltSessionID as continuations, unless the provider recognizes a move.
 // A session the write step will filter out (admitted false) keeps any id its
 // file already holds but never claims or mints one.
+// The second result requests message replacement when an existing id moves
+// to another path; an append would keep stale messages at existing ordinals.
 func (e *Engine) sourceCollisionID(
 	ctx context.Context,
 	provider parser.Provider,
 	lookupPath string,
 	s *parser.ParsedSession,
 	admitted bool,
-) (string, error) {
+) (string, bool, error) {
 	if !collisionPolicyApplies(provider) {
-		return s.ID, nil
+		return s.ID, false, nil
 	}
 	fullID := applyIDPrefixToID(e.idPrefix, s.ID)
 	records, err := e.sessionPathRecords(ctx, fullID)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	var stored, deleted string
 	var hasStored, deletedAnyFile bool
@@ -44,13 +47,15 @@ func (e *Engine) sourceCollisionID(
 	}
 	// A permanently deleted id stays with the file it was deleted for; a
 	// deletion recorded without its file covers every file with the id.
-	if deletedAnyFile || e.storedSourceLivesAt(ctx, provider, stored, lookupPath) ||
-		e.storedSourceLivesAt(ctx, provider, deleted, lookupPath) {
-		return s.ID, nil
+	if deletedAnyFile || e.storedSourceLivesAt(ctx, provider, deleted, lookupPath) {
+		return s.ID, false, nil
 	}
-	altID := e.existingAltID(ctx, provider, records, fullID, s.ID, lookupPath)
+	if e.storedSourceLivesAt(ctx, provider, stored, lookupPath) {
+		return s.ID, stored != lookupPath, nil
+	}
+	altID, moved := e.existingAltID(ctx, provider, records, fullID, s.ID, lookupPath)
 	if altID == "" && !admitted {
-		return s.ID, nil
+		return s.ID, false, nil
 	}
 	if altID == "" {
 		available := !hasStored
@@ -59,14 +64,14 @@ func (e *Engine) sourceCollisionID(
 			available = e.storedSourceGone(ctx, provider, stored)
 		}
 		if available && deleted == "" && e.claimSessionID(ctx, provider, fullID, lookupPath) {
-			return s.ID, nil
+			return s.ID, hasStored, nil
 		}
 		altID = parser.AltSessionID(s.ID, lookupPath)
 	}
 	s.ParentSessionID = s.ID
 	s.RelationshipType = parser.RelContinuation
 	s.ID = altID
-	return altID, nil
+	return altID, moved, nil
 }
 
 // storedSourceGone requires absence on disk and at the provider. Remote paths
@@ -99,12 +104,33 @@ func collisionPolicyApplies(provider parser.Provider) bool {
 	return provider.Capabilities().Source.SharedSessionIDs == parser.CapabilitySupported
 }
 
-// collisionPolicyAgents lists the configured agents sourceCollisionID covers.
-func (e *Engine) collisionPolicyAgents() []string {
+// collisionPolicyAgents lists shared-id providers with roots participating in
+// this rebuild, including contributors whose roots are absent locally.
+func (e *Engine) collisionPolicyAgents(contributors []RebuildContributor) []string {
 	var agents []string
-	for agent, factory := range e.sources().providerFactories {
-		if factory != nil && factory.Capabilities().Source.SharedSessionIDs == parser.CapabilitySupported {
+	add := func(agent parser.AgentType, factory parser.ProviderFactory) {
+		if factory != nil && factory.Capabilities().Source.SharedSessionIDs == parser.CapabilitySupported &&
+			!slices.Contains(agents, string(agent)) {
 			agents = append(agents, string(agent))
+		}
+	}
+	sources := e.sources()
+	for agent, roots := range sources.agentDirs {
+		if len(roots) > 0 {
+			add(agent, sources.providerFactories[agent])
+		}
+	}
+	for _, contributor := range contributors {
+		cfg := contributor.Config
+		factories := cfg.ProviderFactories
+		if factories == nil {
+			factories = parser.ProviderFactories()
+		}
+		for _, factory := range factories {
+			agent := factory.Definition().Type
+			if len(cfg.AgentDirs[agent]) > 0 && !slices.Contains(cfg.DisabledAgents, agent) {
+				add(agent, factory)
+			}
 		}
 	}
 	return agents
@@ -134,18 +160,19 @@ func (e *Engine) sessionPathRecords(ctx context.Context, fullID string) ([]db.Se
 
 // existingAltID returns the derived id already held by this file, stored or
 // deleted, including one the provider has since moved to lookupPath, so its
-// curation and any deletion carry over. It returns "" when there is none.
+// curation and any deletion carry over. The second result reports a changed
+// source path. It returns "" when no derived id belongs to this file.
 func (e *Engine) existingAltID(
 	ctx context.Context, provider parser.Provider, records []db.SessionPathRecord,
 	fullID, rawID, lookupPath string,
-) string {
+) (string, bool) {
 	minted := applyIDPrefixToID(e.idPrefix, parser.AltSessionID(rawID, lookupPath))
 	for _, r := range records {
 		if r.ID != fullID && (r.ID == minted || e.storedSourceLivesAt(ctx, provider, r.FilePath, lookupPath)) {
-			return rawID + r.ID[len(fullID):]
+			return rawID + r.ID[len(fullID):], r.FilePath != "" && r.FilePath != lookupPath
 		}
 	}
-	return ""
+	return "", false
 }
 
 // claimSessionID records path as the owner of an id no stored session holds,
@@ -178,10 +205,23 @@ func (e *Engine) resetSourceClaims() {
 func (e *Engine) storedSourceLivesAt(
 	ctx context.Context, provider parser.Provider, stored, path string,
 ) bool {
-	if stored == "" || stored == path || e.pathRewriter != nil {
+	if stored == "" || stored == path {
 		return stored != "" && stored == path
 	}
+	if e.pathRewriter != nil {
+		if !e.completeSourceMirror || e.storedPathResolver == nil {
+			return false
+		}
+		resolved, ok := e.storedPathResolver(stored)
+		if !ok {
+			return false
+		}
+		stored = resolved
+	}
 	at, live := e.providerSourcePath(ctx, provider, stored)
+	if live && e.pathRewriter != nil {
+		at = e.pathRewriter(at)
+	}
 	return live && at == path
 }
 

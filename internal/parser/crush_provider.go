@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"hash"
 	"maps"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -57,7 +58,8 @@ func (f *crushProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	cfg = cfg.Clone()
 	originalRoots := make([]string, len(cfg.Roots))
 	copy(originalRoots, cfg.Roots)
-	expandedRoots, registryMapping, projectMapping := normalizeCrushRoots(cfg.Roots)
+	expandedRoots, registryMapping, projectMapping, rootErr := normalizeCrushRoots(cfg.Roots)
+	maps.Copy(projectMapping, cfg.RawCaptureProjectDirs)
 	if cfg.StableSourceSnapshots {
 		// crush.db does not store the project path, so hosted snapshots recover
 		// it from the provider-owned logical manifest path.
@@ -83,6 +85,7 @@ func (f *crushProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 		originalRoots:    originalRoots,
 		registryMapping:  registryMapping,
 		projectMapping:   projectMapping,
+		rootErr:          rootErr,
 		configuredRoot:   crushConfiguredRootByExpanded(originalRoots, registryMapping),
 	}
 	// Replace the parse closure to capture the project mapping so
@@ -112,11 +115,24 @@ type crushProvider struct {
 	originalRoots   []string
 	registryMapping map[string][]string
 	projectMapping  map[string]string
+	rootErr         error
 	childCache      crushChildRelationshipsCache
 	// configuredRoot maps each expanded data directory back onto the
 	// configured registry, crush.db, or data-directory root that produced
 	// it, so source-machine mapping stays bound to the user's spelling.
 	configuredRoot map[string]string
+}
+
+// RawCaptureProjectPath returns project metadata that lives outside a raw
+// database. Other providers preserve their project metadata in the source.
+func RawCaptureProjectPath(provider Provider, root string) (string, error) {
+	if p, ok := provider.(*crushProvider); ok {
+		if p.rootErr != nil {
+			return "", p.rootErr
+		}
+		return crushProjectDir(filepath.Join(root, CrushDBName), p.projectMapping), nil
+	}
+	return "", nil
 }
 
 func crushRawCaptureEntryPath(projectDir string) string {
@@ -138,8 +154,8 @@ func crushRawProjectDir(dataDir string) (string, bool) {
 func (p *crushProvider) currentRawCaptureProvider() (*dbBackedProvider, map[string]string) {
 	// Periodic raw-sync audits reuse one provider. Re-read projects.json so a
 	// project registered after startup enters the next bounded audit.
-	currentRoots, _, currentProjects := normalizeCrushRoots(p.originalRoots)
-	roots, _, _ := normalizeCrushRoots(
+	currentRoots, _, currentProjects, _ := normalizeCrushRoots(p.originalRoots)
+	roots, _, _, _ := normalizeCrushRoots(
 		append(append([]string(nil), p.Config.Roots...), currentRoots...),
 	)
 	projects := maps.Clone(p.projectMapping)
@@ -451,14 +467,16 @@ func crushProviderSpec(stableSnapshot bool) dbBackedProviderSpec {
 //   - a directory directly holding crush.db (a <project>/.crush data dir)
 //   - the path to a crush.db file itself
 //   - a Crush data directory holding projects.json, whose listed data
-//     dirs are each expanded (deduplicated); an unreadable or empty
-//     registry leaves the root in place rather than failing discovery
-func normalizeCrushRoots(roots []string) ([]string, map[string][]string, map[string]string) {
+//     dirs are each expanded (deduplicated). An unreadable or empty registry
+//     leaves the root in place; read/decode errors also prevent a new backfill
+//     from treating unresolved registry roots as a complete selection.
+func normalizeCrushRoots(roots []string) ([]string, map[string][]string, map[string]string, error) {
 	cleaned := cleanJSONLRoots(roots)
 	out := make([]string, 0, len(cleaned))
 	seen := make(map[string]struct{}, len(cleaned))
 	registryMapping := make(map[string][]string)
 	projectMapping := make(map[string]string)
+	var rootErr error
 	add := func(root string) {
 		if _, ok := seen[root]; ok {
 			return
@@ -479,19 +497,21 @@ func normalizeCrushRoots(roots []string) ([]string, map[string][]string, map[str
 			add(root)
 			continue
 		}
-		expanded := crushProjectsDataDirs(filepath.Join(root, CrushProjectsFileName))
+		expanded, mapping, err := readCrushProjects(filepath.Join(root, CrushProjectsFileName))
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			rootErr = errors.Join(rootErr, err)
+		}
 		if len(expanded) == 0 {
 			add(root)
 			continue
 		}
 		registryMapping[root] = expanded
-		mapping := crushProjectDirsMapping(filepath.Join(root, CrushProjectsFileName))
 		maps.Copy(projectMapping, mapping)
 		for _, dir := range expanded {
 			add(dir)
 		}
 	}
-	return out, registryMapping, projectMapping
+	return out, registryMapping, projectMapping, rootErr
 }
 
 func crushDBPath(dir string) string {

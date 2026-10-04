@@ -115,7 +115,7 @@ func (p *auditProvider) Discover(context.Context) ([]parser.SourceRef, error) {
 	for _, entry := range entries {
 		if entry.Type().IsRegular() {
 			sources = append(sources, parser.SourceRef{
-				Provider: parser.AgentClaude,
+				Provider: p.Def.Type,
 				Key:      entry.Name(), DisplayPath: filepath.Join(p.root, entry.Name()),
 			})
 		}
@@ -160,7 +160,7 @@ func (p *auditProvider) DiscoverRawCaptureSourcesEach(
 		}
 		p.streamedSources++
 		if err := yield(parser.SourceRef{
-			Provider: parser.AgentClaude,
+			Provider: p.Def.Type,
 			Key:      entry.Name(), DisplayPath: filepath.Join(p.root, entry.Name()),
 		}); err != nil {
 			return false, err
@@ -1259,4 +1259,49 @@ func TestAuditorFullCapturesPhysicalCodexDuplicatesWithinRoot(t *testing.T) {
 	require.True(t, found)
 	require.Len(t, latest.Entries, 1)
 	assert.NotEmpty(t, latest.Entries[0].Path)
+}
+
+type unpacedDuplicateAuditProvider struct {
+	*duplicateAuditProvider
+}
+
+func (p *unpacedDuplicateAuditProvider) DiscoverRawCaptureSourcesEach(
+	_ context.Context,
+	yield func(parser.SourceRef) error,
+) (bool, error) {
+	for _, source := range p.sources {
+		if err := yield(source); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+func TestAuditorWatchBudgetSkipsPhysicalDuplicates(t *testing.T) {
+	root := t.TempDir()
+	firstPath := filepath.Join(root, "first.jsonl")
+	secondPath := filepath.Join(root, "second.jsonl")
+	require.NoError(t, os.WriteFile(firstPath, []byte("first"), 0o600))
+	require.NoError(t, os.WriteFile(secondPath, []byte("second"), 0o600))
+	first := parser.SourceRef{Provider: parser.AgentClaude, Key: "first", DisplayPath: firstPath}
+	second := parser.SourceRef{Provider: parser.AgentClaude, Key: "second", DisplayPath: secondPath}
+	provider := &unpacedDuplicateAuditProvider{&duplicateAuditProvider{
+		auditProvider: newAuditProvider(root),
+		sources:       []parser.SourceRef{first, first, second},
+	}}
+	base := t.TempDir()
+	store, err := rawcheckpoint.OpenWithOptions(
+		t.Context(), filepath.Join(base, "checkpoint.db"),
+		rawcheckpoint.Options{
+			SpoolDir: filepath.Join(base, "spool"), MaxOutboxBytes: 1 << 20,
+		},
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+
+	result, err := NewAuditor(store, rawcapture.New(store), 2).
+		AuditProvider(t.Context(), provider)
+	require.NoError(t, err)
+	require.Equal(t, 3, result.Candidates)
+	require.Equal(t, 2, result.Captured)
 }

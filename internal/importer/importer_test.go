@@ -1509,3 +1509,219 @@ func TestImportClaudeAIReportsTrashedSession(t *testing.T) {
 	require.NotNil(t, full)
 	assert.NotNil(t, full.DeletedAt, "the session must stay trashed")
 }
+
+// chatGPTLongTextConv is a user turn holding text and an assistant reply.
+func chatGPTLongTextConv(text string) string {
+	return chatGPTChainConv(
+		chatGPTNodeSpec{"user", "text", text},
+		chatGPTNodeSpec{"assistant", "text", "Noted."},
+	)
+}
+
+func TestImportChatGPTExtendsTruncatedText(t *testing.T) {
+	full := strings.Repeat("lorem ipsum ", 50) + "zephyrquill closing words"
+	cut := full[:500]
+	require.Greater(t, strings.Index(full, "zephyrquill"), 500)
+	firstStamp := `"m-n1","create_time":` + fmt.Sprint(float64(1706745600))
+	shiftedStamp := strings.Replace(chatGPTLongTextConv(full), firstStamp, `"m-n1","create_time":1706745605`, 1)
+	require.NotEqual(t, chatGPTLongTextConv(full), shiftedStamp)
+
+	setup := func(t *testing.T, archive config.ArchiveContent, initial string) (*db.DB, string, string, string) {
+		t.Helper()
+		d := testDB(t)
+		d.SetArchiveContent(archive)
+		dir := t.TempDir()
+		path := filepath.Join(dir, "conversations-000.json")
+		assetsDir := t.TempDir()
+		require.NoError(t, os.WriteFile(path, []byte(initial), 0o644))
+		stats, err := ImportChatGPT(t.Context(), d, dir, assetsDir, nil)
+		require.NoError(t, err)
+		require.Equal(t, 1, stats.Imported)
+		return d, dir, path, assetsDir
+	}
+
+	t.Run("repair only", func(t *testing.T) {
+		d, dir, path, assetsDir := setup(t, config.ArchiveContentFull, chatGPTLongTextConv(cut))
+		ctx := t.Context()
+		before, err := d.GetAllMessages(ctx, "chatgpt:cg-tool")
+		require.NoError(t, err)
+		require.Len(t, before, 2)
+		require.Equal(t, cut, before[0].Content)
+		_, err = d.PinMessage(ctx, "chatgpt:cg-tool", before[0].ID, nil)
+		require.NoError(t, err)
+		score := 42
+		require.NoError(t, d.UpdateSessionSignals(ctx, "chatgpt:cg-tool", db.SessionSignalUpdate{
+			HealthScore:    &score,
+			QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion},
+		}))
+		revBefore := chatGPTTranscriptRevision(t, d)
+
+		require.NoError(t, os.WriteFile(path, []byte(chatGPTLongTextConv(full)), 0o644))
+		stats, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
+		require.NoError(t, err)
+		assert.Zero(t, stats.Errors)
+		assert.Equal(t, 1, stats.Updated)
+
+		after, err := d.GetAllMessages(ctx, "chatgpt:cg-tool")
+		require.NoError(t, err)
+		require.Len(t, after, 2)
+		assert.Equal(t, before[0].ID, after[0].ID)
+		assert.Equal(t, before[1].ID, after[1].ID)
+		assert.Equal(t, full, after[0].Content)
+		assert.Equal(t, len(full), after[0].ContentLength)
+		assert.Equal(t, before[1], after[1])
+
+		pins, err := d.ListPinnedMessages(ctx, "chatgpt:cg-tool", "")
+		require.NoError(t, err)
+		require.Len(t, pins, 1)
+		assert.Equal(t, before[0].ID, pins[0].MessageID)
+
+		session, err := d.GetSession(ctx, "chatgpt:cg-tool")
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		assert.Zero(t, session.QualitySignalVersion)
+		assert.Nil(t, session.HealthScore)
+
+		results, err := d.SearchContent(ctx, db.ContentSearchFilter{
+			Pattern: "zephyrquill", Sources: []string{"messages"},
+			IncludeOneShot: true, IncludeAutomated: true, Limit: 10,
+		})
+		require.NoError(t, err)
+		require.NotEmpty(t, results.Matches)
+		assert.Equal(t, "chatgpt:cg-tool", results.Matches[0].SessionID)
+
+		revAfter := chatGPTTranscriptRevision(t, d)
+		assert.Greater(t, revAfter, revBefore)
+		observed := ""
+		window, err := d.GetMessagesWindow(ctx, "chatgpt:cg-tool", db.MessageWindow{
+			From: new(0), Limit: 10, Asc: true, ObservedRevision: &observed,
+		})
+		require.NoError(t, err)
+		require.Len(t, window, 2)
+		assert.Equal(t, full, window[0].Content)
+		assert.Equal(t, strconv.Itoa(revAfter), observed)
+
+		stats, err = ImportChatGPT(ctx, d, dir, assetsDir, nil)
+		require.NoError(t, err)
+		assert.Zero(t, stats.Errors)
+		assert.Equal(t, 1, stats.Skipped)
+	})
+
+	t.Run("repair fill and append", func(t *testing.T) {
+		conv := func(text, first, second string, later bool) string {
+			chain := []chatGPTNodeSpec{
+				{"user", "text", "Run two cells"},
+				{"assistant", "text", text},
+				{"tool", "code", "print(41)"},
+				{"tool", "execution_output", first},
+				{"tool", "code", "print(42)"},
+			}
+			if second != "" {
+				chain = append(chain, chatGPTNodeSpec{"tool", "execution_output", second})
+			}
+			if later {
+				chain = append(chain,
+					chatGPTNodeSpec{"user", "text", "Now print 43"},
+					chatGPTNodeSpec{"assistant", "text", "Tuesday answer printed 43"},
+				)
+			}
+			return chatGPTChainConv(chain...)
+		}
+		d, dir, path, assetsDir := setup(t, config.ArchiveContentFull, conv(cut, "41", "", false))
+		ctx := t.Context()
+		before, err := d.GetAllMessages(ctx, "chatgpt:cg-tool")
+		require.NoError(t, err)
+		require.Len(t, before, 2)
+		require.Equal(t, cut, before[1].Content)
+		require.Len(t, before[1].ToolCalls, 2)
+		require.Equal(t, "```\n41\n```", before[1].ToolCalls[0].ResultContent)
+		require.Empty(t, before[1].ToolCalls[1].ResultContent)
+
+		require.NoError(t, os.WriteFile(path, []byte(conv(full, "4141", "42", true)), 0o644))
+		stats, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
+		require.NoError(t, err)
+		assert.Zero(t, stats.Errors)
+		assert.Equal(t, 1, stats.Updated)
+
+		after, err := d.GetAllMessages(ctx, "chatgpt:cg-tool")
+		require.NoError(t, err)
+		require.Len(t, after, 4)
+		assert.Equal(t, before[0].ID, after[0].ID)
+		assert.Equal(t, before[1].ID, after[1].ID)
+		assert.Equal(t, before[0], after[0])
+		assert.Equal(t, full, after[1].Content)
+		assert.Equal(t, len(full), after[1].ContentLength)
+		require.Len(t, after[1].ToolCalls, 2)
+		assert.Equal(t, before[1].ToolCalls[0], after[1].ToolCalls[0], "the completed call must keep its stored result")
+		assert.Equal(t, "```\n42\n```", after[1].ToolCalls[1].ResultContent)
+		assert.Equal(t, "Tuesday answer printed 43", after[3].Content)
+	})
+
+	for _, tt := range []struct {
+		name    string
+		archive config.ArchiveContent
+		initial string
+		data    string
+	}{
+		{name: "export text shorter", initial: chatGPTLongTextConv(full), data: chatGPTLongTextConv(cut)},
+		{name: "text changed inside prefix", initial: chatGPTLongTextConv(cut), data: chatGPTLongTextConv(strings.Replace(full, "lorem", "LOREM", 1))},
+		{name: "empty archived text", initial: chatGPTLongTextConv(""), data: chatGPTLongTextConv(full)},
+		{name: "extended text with changed timestamp", initial: chatGPTLongTextConv(cut), data: shiftedStamp},
+		{name: "archived trailing space", initial: chatGPTLongTextConv(cut + " "), data: chatGPTLongTextConv(cut + "Xmore text")},
+		{name: "extended text turned system", initial: chatGPTChainConv(chatGPTNodeSpec{"user", "text", "Hi"}, chatGPTNodeSpec{"assistant", "text", cut}), data: chatGPTChainConv(chatGPTNodeSpec{"user", "text", "Hi"}, chatGPTNodeSpec{"system", "text", full})},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d, dir, path, assetsDir := setup(t, config.ArchiveContentFull, tt.initial)
+			ctx := t.Context()
+			before, err := d.GetAllMessages(ctx, "chatgpt:cg-tool")
+			require.NoError(t, err)
+			require.Len(t, before, 2)
+
+			require.NoError(t, os.WriteFile(path, []byte(tt.data), 0o644))
+			stats, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
+			require.NoError(t, err)
+			assert.Equal(t, 1, stats.Errors)
+			assert.Zero(t, stats.Updated)
+			after, err := d.GetAllMessages(ctx, "chatgpt:cg-tool")
+			require.NoError(t, err)
+			assert.Equal(t, before, after)
+		})
+	}
+
+	t.Run("transcripts archive", func(t *testing.T) {
+		d, dir, path, assetsDir := setup(t, config.ArchiveContentTranscripts, chatGPTLongTextConv(cut))
+		ctx := t.Context()
+		before, err := d.GetAllMessages(ctx, "chatgpt:cg-tool")
+		require.NoError(t, err)
+		require.Len(t, before, 2)
+
+		require.NoError(t, os.WriteFile(path, []byte(chatGPTLongTextConv(full)), 0o644))
+		stats, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
+		require.NoError(t, err)
+		assert.Zero(t, stats.Errors)
+		assert.Equal(t, 1, stats.Updated)
+		after, err := d.GetAllMessages(ctx, "chatgpt:cg-tool")
+		require.NoError(t, err)
+		require.Len(t, after, 2)
+		assert.Equal(t, before[0].ID, after[0].ID)
+		assert.Equal(t, full, after[0].Content)
+	})
+
+	t.Run("usage archive", func(t *testing.T) {
+		d, dir, path, assetsDir := setup(t, config.ArchiveContentFull, chatGPTLongTextConv(cut))
+		ctx := t.Context()
+		d.SetArchiveContent(config.ArchiveContentUsage)
+		before, err := d.GetAllMessages(ctx, "chatgpt:cg-tool")
+		require.NoError(t, err)
+
+		require.NoError(t, os.WriteFile(path, []byte(chatGPTLongTextConv(full)), 0o644))
+		stats, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
+		require.NoError(t, err)
+		assert.Zero(t, stats.Errors)
+		assert.Zero(t, stats.Updated)
+		assert.Equal(t, 1, stats.Skipped)
+		after, err := d.GetAllMessages(ctx, "chatgpt:cg-tool")
+		require.NoError(t, err)
+		assert.Equal(t, before, after)
+	})
+}

@@ -16,6 +16,7 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
+	"go.kenn.io/agentsview/internal/timeutil"
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
@@ -345,18 +346,35 @@ func buildUsageTerminationPredSQLite(status string) (string, []any) {
 // location loads the timezone or returns the system local timezone.
 var usageLocationCache sync.Map
 
-func (f UsageFilter) location() *time.Location {
-	if f.Timezone == "" {
-		return time.Local //nolint:forbidigo // Usage reports group UTC timestamps into local calendar dates when no timezone is selected.
+// Location is the zone usage reports bucket calendar days in. Every backend
+// uses it so default requests agree on day boundaries.
+func (f UsageFilter) Location() *time.Location {
+	location := LoadLocationOr(f.Timezone, time.Local) //nolint:forbidigo // Usage reports group UTC timestamps into local calendar dates when no timezone is selected.
+	// Naming the local zone lets default and explicitly named requests share
+	// one rollup set and bucket days by the same rules.
+	if location == time.Local { //nolint:forbidigo // Only the process-local zone is renamed.
+		return usageLocalLocation()
 	}
-	if cached, ok := usageLocationCache.Load(f.Timezone); ok {
+	return location
+}
+
+// usageLocalLocation resolves the process-local zone once. Tests replace it.
+var usageLocalLocation = sync.OnceValue(timeutil.LocalLocation)
+
+// LoadLocationOr resolves a timezone name once per process and returns
+// fallback for an empty or unknown name.
+func LoadLocationOr(name string, fallback *time.Location) *time.Location {
+	if name == "" {
+		return fallback
+	}
+	if cached, ok := usageLocationCache.Load(name); ok {
 		return cached.(*time.Location)
 	}
-	loc, err := time.LoadLocation(f.Timezone)
+	loc, err := time.LoadLocation(name)
 	if err != nil {
-		return time.Local //nolint:forbidigo // Usage reports group UTC timestamps into local calendar dates when no timezone is selected.
+		return fallback
 	}
-	actual, _ := usageLocationCache.LoadOrStore(f.Timezone, loc)
+	actual, _ := usageLocationCache.LoadOrStore(name, loc)
 	return actual.(*time.Location)
 }
 
@@ -1155,7 +1173,7 @@ func dailyUsageRowsSQLForBounds(
 }
 
 func exactUsageUTCWindow(f UsageFilter) usageBounds {
-	loc := f.location()
+	loc := f.Location()
 	var out usageBounds
 	if f.From != "" {
 		if from, err := time.ParseInLocation("2006-01-02", f.From, loc); err == nil {
@@ -2164,7 +2182,7 @@ func paddedUTCBound(ts string, hours int) string {
 func (db *DB) getDailyUsageLegacy(
 	ctx context.Context, f UsageFilter,
 ) (DailyUsageResult, error) {
-	loc := f.location()
+	loc := f.Location()
 
 	pricing, err := db.loadPricingMap(ctx)
 	if err != nil {
@@ -2847,7 +2865,7 @@ func (db *DB) getTopSessionsByCostLegacy(
 	}
 	defer rows.Close()
 
-	loc := f.location()
+	loc := f.Location()
 
 	type sessAccum struct {
 		inputTokens       int
@@ -3476,7 +3494,7 @@ func (db *DB) getUsageSessionCountsLegacy(
 	}
 	defer rows.Close()
 
-	loc := f.location()
+	loc := f.Location()
 
 	// Track which sessions pass the localDate filter via a
 	// set of seen session IDs. Each session is counted once
@@ -3582,7 +3600,7 @@ func (db *DB) getUsageMatchingSessionCountLegacy(
 	}
 	defer rows.Close()
 
-	loc := f.location()
+	loc := f.Location()
 	seen := make(map[string]struct{})
 	for rows.Next() {
 		r, err := scanDailyUsageRow(rows)

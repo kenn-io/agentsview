@@ -551,7 +551,16 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // that second transcript's entries appended to the same sub-agent session.
 // Re-parse unchanged Claude sources so a sub-agent session reaches its later
 // run's last entry.)
-const dataVersion = 122
+// (123: Codex cache-write input tokens are split out of uncached input into
+// cache_creation_input_tokens so GPT-5.6 and later writes price at the
+// cache-write rate. Re-parse unchanged Codex-format sources because the
+// stored token_usage changes while source bytes do not.)
+// (124: OpenCode dispatch timestamps are retained as tool-execution events so
+// unchanged sessions gain dispatch-to-completion timing.)
+// (125: Gemini and Cursor files that share a session ID remain separate
+// conversations. Re-parse unchanged sources, including cached remote mirrors,
+// to recover conversations previously collapsed into one archived session.)
+const dataVersion = 125
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

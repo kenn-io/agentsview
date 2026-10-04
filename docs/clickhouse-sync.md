@@ -387,6 +387,16 @@ deployment configuration and run `SYSTEM RELOAD USERS`. SQL `GRANT` cannot
 modify XML-managed users, and schema upgrades cannot grant a permission the
 application account lacks.
 
+`clickhouse serve` keeps the Activity report of each past day a client opens on
+disk, so reopening it is quick, including after a restart. Days no one opens are
+never written. A report no one has opened for 30 days is removed. The files live
+under the service cache directory: `$CACHE_DIRECTORY` when the service manager
+sets it, otherwise the user cache directory under
+`agentsview/clickhouse-activity-reports`. They are derived data; deleting them
+only makes the next open of those days slower. A new binary rebuilds them on its
+own. If the directory cannot be created, serve logs a warning and keeps reports
+in memory only.
+
 When `require_auth` is enabled, a bearer token is generated if needed and
 printed on startup. Pass it via `Authorization: Bearer <token>` on API requests.
 

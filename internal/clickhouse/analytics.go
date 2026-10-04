@@ -8,7 +8,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	chdriver "github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/ClickHouse/clickhouse-go/v2/ext"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/signals"
@@ -49,6 +53,7 @@ type chAnalyticsSession struct {
 	noCodeContextCount          int
 	runawayToolLoopCount        int
 	frustrationMarkerCount      int
+	pushVersion                 uint64
 }
 
 func (s *Store) analyticsSessions(
@@ -79,6 +84,38 @@ func (s *Store) analyticsSessionsFiltered(
 		where += " AND " + extraPred
 		args = append(args, extraArgs...)
 	}
+	// Every analytics panel on a page lists the same sessions; keep the
+	// rows per parts and predicate so one page reads them once.
+	fingerprint, err := s.tablePartsFingerprint(ctx, []string{"sessions", "messages"})
+	if err != nil {
+		return nil, err
+	}
+	memoKey := analyticsSessionMemoKey(where, args)
+	if cached, ok := s.analyticsSessionRows.get(memoKey, fingerprint); ok {
+		return slices.Clone(cached), nil
+	}
+	// The panels of one page ask at once; one read answers them all. The
+	// read outlives a caller that gives up, so the others still get it.
+	shared := s.analyticsListings.DoChan(memoKey+"\x00"+fingerprint, func() (any, error) {
+		out, err := s.readAnalyticsSessions(context.WithoutCancel(ctx), where, args)
+		if err != nil {
+			return nil, err
+		}
+		s.analyticsSessionRows.put(memoKey, fingerprint, out)
+		return out, nil
+	})
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case result := <-shared:
+		if result.Err != nil {
+			return nil, result.Err
+		}
+		return slices.Clone(result.Val.([]chAnalyticsSession)), nil
+	}
+}
+
+func (s *Store) readAnalyticsSessions(ctx context.Context, where string, args []any) ([]chAnalyticsSession, error) {
 	rows, err := s.queryContext(ctx, `
 		SELECT id, project, machine, agent, first_message,
 			COALESCE(display_name, session_name) AS display_name,
@@ -92,7 +129,7 @@ func (s *Store) analyticsSessionsFiltered(
 			quality_signal_version, short_prompt_count,
 			unstructured_start, missing_success_criteria_count,
 			missing_verification_count, duplicate_prompt_count,
-			no_code_context_count, runaway_tool_loop_count
+			no_code_context_count, runaway_tool_loop_count, push_version
 		FROM sessions s
 		WHERE `+where, args...)
 	if err != nil {
@@ -118,7 +155,7 @@ func (s *Store) analyticsSessionsFiltered(
 			&r.shortPromptCount, &r.unstructuredStart,
 			&r.missingSuccessCriteriaCount, &r.missingVerificationCount,
 			&r.duplicatePromptCount, &r.noCodeContextCount,
-			&r.runawayToolLoopCount,
+			&r.runawayToolLoopCount, &r.pushVersion,
 		); err != nil {
 			return nil, fmt.Errorf("scanning clickhouse analytics session: %w", err)
 		}
@@ -127,7 +164,17 @@ func (s *Store) analyticsSessionsFiltered(
 		r.createdAt = formatDBTime(createdAt)
 		out = append(out, r)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// analyticsSessionMemoKey names a session listing by predicate and
+// arguments. Arguments are rendered in Go syntax so their boundaries and
+// types survive: ["a b", "c"] and ["a", "b c"] are different keys.
+func analyticsSessionMemoKey(where string, args []any) string {
+	return fmt.Sprintf("%s|%#v", where, args)
 }
 
 // analyticsSessionsModelTimeFiltered loads the date- and model-scoped sessions
@@ -403,14 +450,7 @@ func analyticsLocalDate(ts, tz string) string {
 }
 
 func analyticsLocation(tz string) *time.Location {
-	if tz == "" {
-		return time.UTC
-	}
-	loc, err := time.LoadLocation(tz)
-	if err != nil {
-		return time.UTC
-	}
-	return loc
+	return db.LoadLocationOr(tz, time.UTC)
 }
 
 func parseAnalyticsTime(ts string) (time.Time, bool) {
@@ -1756,6 +1796,30 @@ func chQueryChunked(ids []string, fn func(chunk []string) error) error {
 	return nil
 }
 
+// chAnalyticsToolCallMessagesSQL selects the message columns tool call
+// analytics join, limited to the selected sessions so the join hashes those
+// sessions' messages rather than every message. The join keys on session
+// id, so rows outside the selection could never match.
+const chAnalyticsToolCallMessagesSQL = `SELECT session_id, ordinal, timestamp, model
+					FROM messages WHERE session_id IN `
+
+// analyticsSessionIDsContext attaches every selected session id as an
+// external table, so a read over the selection is one statement and one
+// scan of each table instead of one per chunk of placeholders. The returned
+// subquery selects the ids.
+func analyticsSessionIDsContext(ctx context.Context, ids []string) (context.Context, string, error) {
+	table, err := ext.NewTable("analytics_session_ids", ext.Column("id", "String"))
+	if err != nil {
+		return nil, "", fmt.Errorf("creating analytics session table: %w", err)
+	}
+	for _, id := range ids {
+		if err := table.Append(id); err != nil {
+			return nil, "", fmt.Errorf("adding analytics session: %w", err)
+		}
+	}
+	return chdriver.Context(ctx, chdriver.WithExternalTable(table)), "(SELECT id FROM analytics_session_ids)", nil
+}
+
 func (s *Store) GetAnalyticsTools(
 	ctx context.Context, f db.AnalyticsFilter,
 ) (db.ToolsAnalyticsResponse, error) {
@@ -1776,63 +1840,62 @@ func (s *Store) GetAnalyticsTools(
 		return db.BuildToolsAnalytics(nil), nil
 	}
 	var toolRows []db.ToolAnalyticsRow
-	err = chQueryChunked(ids, func(chunk []string) error {
-		ph, args := chInPlaceholders(chunk)
-		modelPred, modelArgs := chAnalyticsCSVPredicate("m.model", f.Model)
-		args = append(args, modelArgs...)
-		from, to := chAnalyticsWindowBounds(f)
-		windowPred, windowArgs := chAnalyticsMessageWindowPred("m.timestamp", from, to)
-		args = append(args, windowArgs...)
-		query := `SELECT tc.session_id, tc.category,
-				trim(COALESCE(tc.tool_name, '')), toInt64(COUNT(*)),
-				MAX(m.timestamp)
-				FROM tool_calls tc
-				LEFT JOIN messages m
-					ON m.session_id = tc.session_id
-					AND m.ordinal = tc.message_ordinal
-				WHERE tc.session_id IN ` + ph
-		if modelPred != "" {
-			query += `
-				AND ` + modelPred
-		}
-		query += chAnalyticsAndClause(windowPred)
-		query += `
-				GROUP BY tc.session_id, tc.category,
-					trim(COALESCE(tc.tool_name, '')), toStartOfMinute(m.timestamp)`
-		rows, qErr := s.queryContext(ctx, query, args...)
-		if qErr != nil {
-			return qErr
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var sid, cat, toolName string
-			var ts any
-			var count int
-			if err := rows.Scan(&sid, &cat, &toolName, &count, &ts); err != nil {
-				return err
-			}
-			r, ok := meta[sid]
-			if !ok {
-				continue
-			}
-			_, date, keep := f.ResolveSkillRowTime(
-				formatDBTime(ts), analyticsDateTime(r),
-			)
-			if !keep {
-				continue
-			}
-			toolRows = append(toolRows, db.ToolAnalyticsRow{
-				SessionID: sid,
-				Category:  cat,
-				ToolName:  toolName,
-				Agent:     r.agent,
-				Count:     count,
-				Date:      date,
-			})
-		}
-		return rows.Err()
-	})
+	ctx, ph, err := analyticsSessionIDsContext(ctx, ids)
 	if err != nil {
+		return db.ToolsAnalyticsResponse{}, err
+	}
+	modelPred, modelArgs := chAnalyticsCSVPredicate("m.model", f.Model)
+	from, to := chAnalyticsWindowBounds(f)
+	windowPred, windowArgs := chAnalyticsMessageWindowPred("m.timestamp", from, to)
+	args := slices.Concat(modelArgs, windowArgs)
+	query := `SELECT tc.session_id, tc.category,
+			trim(COALESCE(tc.tool_name, '')), toInt64(COUNT(*)),
+			MAX(m.timestamp)
+			FROM tool_calls tc
+			LEFT JOIN (` + chAnalyticsToolCallMessagesSQL + ph + `) m
+				ON m.session_id = tc.session_id
+				AND m.ordinal = tc.message_ordinal
+			WHERE tc.session_id IN ` + ph
+	if modelPred != "" {
+		query += `
+			AND ` + modelPred
+	}
+	query += chAnalyticsAndClause(windowPred)
+	query += `
+			GROUP BY tc.session_id, tc.category,
+				trim(COALESCE(tc.tool_name, '')), toStartOfMinute(m.timestamp)`
+	rows, qErr := s.queryContext(ctx, query, args...)
+	if qErr != nil {
+		return db.ToolsAnalyticsResponse{}, qErr
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var sid, cat, toolName string
+		var ts any
+		var count int
+		if err := rows.Scan(&sid, &cat, &toolName, &count, &ts); err != nil {
+			return db.ToolsAnalyticsResponse{}, err
+		}
+		r, ok := meta[sid]
+		if !ok {
+			continue
+		}
+		_, date, keep := f.ResolveSkillRowTime(
+			formatDBTime(ts), analyticsDateTime(r),
+		)
+		if !keep {
+			continue
+		}
+		toolRows = append(toolRows, db.ToolAnalyticsRow{
+			SessionID: sid,
+			Category:  cat,
+			ToolName:  toolName,
+			Agent:     r.agent,
+			Count:     count,
+			Date:      date,
+		})
+	}
+	if err := rows.Err(); err != nil {
 		return db.ToolsAnalyticsResponse{}, err
 	}
 	return db.BuildToolsAnalytics(toolRows), nil
@@ -1861,59 +1924,58 @@ func (s *Store) GetAnalyticsSkills(
 	}
 
 	var skillRows []db.SkillAnalyticsRow
-	err = chQueryChunked(ids, func(chunk []string) error {
-		ph, args := chInPlaceholders(chunk)
-		modelPred, modelArgs := chAnalyticsCSVPredicate("m.model", f.Model)
-		args = append(args, modelArgs...)
-		from, to := chAnalyticsWindowBounds(f)
-		windowPred, windowArgs := chAnalyticsMessageWindowPred("m.timestamp", from, to)
-		args = append(args, windowArgs...)
-		rows, qErr := s.queryContext(ctx,
-			`SELECT tc.session_id, trim(COALESCE(tc.skill_name, '')),
-				toInt64(COUNT(*)), MAX(m.timestamp)
-				FROM tool_calls tc
-				LEFT JOIN messages m
-					ON m.session_id = tc.session_id
-					AND m.ordinal = tc.message_ordinal
-				WHERE tc.session_id IN `+ph+`
-					AND trim(COALESCE(tc.skill_name, '')) != ''
-					`+chAnalyticsAndClause(modelPred)+chAnalyticsAndClause(windowPred)+`
-				GROUP BY tc.session_id, trim(COALESCE(tc.skill_name, '')),
-					toStartOfMinute(m.timestamp)`, args...)
-		if qErr != nil {
-			return qErr
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var sid, skill string
-			var count int
-			var msgTS any
-			if err := rows.Scan(&sid, &skill, &count, &msgTS); err != nil {
-				return err
-			}
-			r, ok := meta[sid]
-			if !ok {
-				continue
-			}
-			usedTS, date, keep := f.ResolveSkillRowTime(
-				formatDBTime(msgTS), analyticsDateTime(r),
-			)
-			if !keep {
-				continue
-			}
-			skillRows = append(skillRows, db.SkillAnalyticsRow{
-				SessionID:  sid,
-				SkillName:  skill,
-				Agent:      r.agent,
-				Project:    r.project,
-				Date:       date,
-				LastUsedAt: usedTS,
-				Count:      count,
-			})
-		}
-		return rows.Err()
-	})
+	ctx, ph, err := analyticsSessionIDsContext(ctx, ids)
 	if err != nil {
+		return db.SkillsAnalyticsResponse{}, err
+	}
+	modelPred, modelArgs := chAnalyticsCSVPredicate("m.model", f.Model)
+	from, to := chAnalyticsWindowBounds(f)
+	windowPred, windowArgs := chAnalyticsMessageWindowPred("m.timestamp", from, to)
+	args := slices.Concat(modelArgs, windowArgs)
+	rows, qErr := s.queryContext(ctx,
+		`SELECT tc.session_id, trim(COALESCE(tc.skill_name, '')),
+			toInt64(COUNT(*)), MAX(m.timestamp)
+			FROM tool_calls tc
+			LEFT JOIN (`+chAnalyticsToolCallMessagesSQL+ph+`) m
+				ON m.session_id = tc.session_id
+				AND m.ordinal = tc.message_ordinal
+			WHERE tc.session_id IN `+ph+`
+				AND trim(COALESCE(tc.skill_name, '')) != ''
+				`+chAnalyticsAndClause(modelPred)+chAnalyticsAndClause(windowPred)+`
+			GROUP BY tc.session_id, trim(COALESCE(tc.skill_name, '')),
+				toStartOfMinute(m.timestamp)`, args...)
+	if qErr != nil {
+		return db.SkillsAnalyticsResponse{}, qErr
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var sid, skill string
+		var count int
+		var msgTS any
+		if err := rows.Scan(&sid, &skill, &count, &msgTS); err != nil {
+			return db.SkillsAnalyticsResponse{}, err
+		}
+		r, ok := meta[sid]
+		if !ok {
+			continue
+		}
+		usedTS, date, keep := f.ResolveSkillRowTime(
+			formatDBTime(msgTS), analyticsDateTime(r),
+		)
+		if !keep {
+			continue
+		}
+		skillRows = append(skillRows, db.SkillAnalyticsRow{
+			SessionID:  sid,
+			SkillName:  skill,
+			Agent:      r.agent,
+			Project:    r.project,
+			Date:       date,
+			LastUsedAt: usedTS,
+			Count:      count,
+		})
+	}
+	if err := rows.Err(); err != nil {
 		return db.SkillsAnalyticsResponse{}, err
 	}
 	return db.BuildSkillsAnalytics(
@@ -2484,7 +2546,7 @@ func (s *Store) GetAnalyticsSignals(
 		return db.SignalsAnalyticsResponse{}, err
 	}
 	rows := chSignalRowsFromSessions(sessions, f)
-	if err := s.chPopulateFrustrationMarkers(ctx, rows); err != nil {
+	if err := s.chPopulateFrustrationMarkers(ctx, rows, chSessionPushVersions(sessions)); err != nil {
 		return db.SignalsAnalyticsResponse{}, err
 	}
 	return db.AggregateSignals(rows), nil
@@ -2507,7 +2569,7 @@ func (s *Store) GetAnalyticsSignalSessions(
 		return db.SignalSessionsResponse{}, err
 	}
 	rows := chSignalRowsFromSessions(sessions, f)
-	if err := s.chPopulateFrustrationMarkers(ctx, rows); err != nil {
+	if err := s.chPopulateFrustrationMarkers(ctx, rows, chSessionPushVersions(sessions)); err != nil {
 		return db.SignalSessionsResponse{}, err
 	}
 	candidates := db.SignalCandidates(rows, signal, limit)
@@ -2558,20 +2620,74 @@ func chSignalRowsFromSessions(
 	return rows
 }
 
+func chSessionPushVersions(sessions []chAnalyticsSession) map[string]uint64 {
+	versions := make(map[string]uint64, len(sessions))
+	for _, session := range sessions {
+		versions[session.id] = session.pushVersion
+	}
+	return versions
+}
+
+// frustrationMarkerMemo remembers each session's marker count under the
+// session push version it was read at. A push republishes every message of a
+// changed session under a newer version, so a stale count is never reused,
+// while unchanged sessions skip reading and scanning their prompts again.
+type frustrationMarkerMemo struct {
+	mu     sync.Mutex
+	counts map[string]frustrationMarkerEntry
+}
+
+type frustrationMarkerEntry struct {
+	pushVersion uint64
+	count       int
+}
+
+func (m *frustrationMarkerMemo) lookup(id string, pushVersion uint64) (int, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	entry, ok := m.counts[id]
+	if !ok || entry.pushVersion != pushVersion {
+		return 0, false
+	}
+	return entry.count, true
+}
+
+func (m *frustrationMarkerMemo) store(id string, pushVersion uint64, count int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.counts == nil {
+		m.counts = make(map[string]frustrationMarkerEntry)
+	}
+	m.counts[id] = frustrationMarkerEntry{pushVersion: pushVersion, count: count}
+}
+
+// chPopulateFrustrationMarkers counts frustration markers for rows whose
+// session version is not memoized. versions maps session IDs to the push
+// version their row was read at; a session absent from it is always scanned.
 func (s *Store) chPopulateFrustrationMarkers(
 	ctx context.Context,
 	rows []db.SignalRow,
+	versions map[string]uint64,
 ) error {
 	if len(rows) == 0 {
 		return nil
 	}
 	idx := make(map[string]int, len(rows))
-	ids := make([]string, len(rows))
+	ids := make([]string, 0, len(rows))
 	for i := range rows {
+		if version, ok := versions[rows[i].ID]; ok {
+			if count, hit := s.frustrationMarkers.lookup(rows[i].ID, version); hit {
+				rows[i].FrustrationMarkerCount = count
+				continue
+			}
+		}
 		idx[rows[i].ID] = i
-		ids[i] = rows[i].ID
+		ids = append(ids, rows[i].ID)
 	}
-	return chQueryChunked(ids, func(chunk []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	err := chQueryChunked(ids, func(chunk []string) error {
 		ph, args := chInPlaceholders(chunk)
 		q := `SELECT session_id, content, is_system
 			FROM messages
@@ -2602,6 +2718,17 @@ func (s *Store) chPopulateFrustrationMarkers(
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	// Only a complete scan is memoized; a failed or canceled read leaves
+	// every session in the batch to be scanned again next time.
+	for id, i := range idx {
+		if version, ok := versions[id]; ok {
+			s.frustrationMarkers.store(id, version, rows[i].FrustrationMarkerCount)
+		}
+	}
+	return nil
 }
 
 func (s *Store) chSignalMessages(

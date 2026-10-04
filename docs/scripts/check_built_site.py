@@ -47,7 +47,8 @@ DOCS_PAGES = [
     "clickhouse-sync",
 ]
 
-ROUTES = ["/", "/guide/", "/docs/"] + [f"/docs/{page}/" for page in DOCS_PAGES]
+MARKETING_ROUTES = ["/", "/guide/"]
+ROUTES = [*MARKETING_ROUTES, "/docs/"] + [f"/docs/{page}/" for page in DOCS_PAGES]
 
 REQUIRED_FRAGMENTS = [
     "/docs/configuration/#session-discovery",
@@ -378,6 +379,34 @@ def check_discord_header_link(current: pathlib.Path, parser: LinkParser) -> None
         fail(f"missing Discord header link in {current}")
 
 
+def check_marketing_links_bypass_instant_nav(
+    current: pathlib.Path, parser: LinkParser
+) -> None:
+    """Docs links to marketing pages must load a full page.
+
+    The docs sitemap lists the marketing pages, so Zensical's instant navigation
+    treats them as docs pages and swaps them into the docs document, which
+    leaves the homepage unstyled. A `target` attribute makes it skip the link.
+    """
+    if not current.is_relative_to((SITE / "docs").resolve()):
+        return
+    marketing_pages = {route_to_file(route).resolve() for route in MARKETING_ROUTES}
+    for attrs in parser.link_attrs:
+        href = attrs["href"]
+        if href.startswith("#"):
+            continue
+        target = target_file(current, href)
+        if (
+            target is not None
+            and target.resolve() in marketing_pages
+            and not attrs.get("target")
+        ):
+            fail(
+                f"docs link {href} in {current} needs a target attribute "
+                "to bypass instant navigation"
+            )
+
+
 def check_local_asset(current: pathlib.Path, asset: str) -> pathlib.Path | None:
     parsed = urllib.parse.urlparse(asset)
     if parsed.scheme or parsed.netloc or asset.startswith("data:"):
@@ -459,6 +488,7 @@ def main() -> None:
         check_global_metadata(current, parser)
         check_discord_header_link(current, parser)
         check_no_svg_use_href(current, parser)
+        check_marketing_links_bypass_instant_nav(current, parser)
 
     for route in ROUTES:
         parser = parsed_by_file.get(route_to_file(route).resolve())

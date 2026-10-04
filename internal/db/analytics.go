@@ -170,16 +170,11 @@ func (f AnalyticsFilter) OneShotExclusionSQL(base string) string {
 	return base
 }
 
-// location loads the timezone or returns UTC on error.
+// location resolves the filter's timezone once per name, or returns UTC on
+// error. Row-level helpers such as ResolveSkillRowTime call it for every row,
+// and loading a location reads the zone database each time.
 func (f AnalyticsFilter) location() *time.Location {
-	if f.Timezone == "" {
-		return time.UTC
-	}
-	loc, err := time.LoadLocation(f.Timezone)
-	if err != nil {
-		return time.UTC
-	}
-	return loc
+	return LoadLocationOr(f.Timezone, time.UTC)
 }
 
 // utcRange returns UTC time bounds padded by ±14h to cover

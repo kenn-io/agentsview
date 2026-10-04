@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
+	"sync"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -85,6 +87,31 @@ const chUsagePriceKeySQL = `hex(sipHash128(
 				cache_create_norm, cache_create_1h_norm, cache_read_norm,
 				cost_microdollars IS NOT NULL AND cost_source != 'copilot-reported'
 			))`
+
+// chUsageStoredPriceColumns maps each price record column to the name the
+// per-request join exposes it under and the name prepared_usage stores it
+// under. zero is the value a row without a record carries, matching a LEFT
+// JOIN without join_use_nulls.
+var chUsageStoredPriceColumns = []struct{ source, joined, stored, zero string }{
+	{"priced", "p_priced", "stored_priced", "toInt64(0)"},
+	{"token_cost_microdollars", "p_token_cost", "stored_token_cost", "toInt64(0)"},
+	{"cache_savings_microdollars", "p_savings", "stored_savings", "toInt64(0)"},
+	{"billed_context_id", "p_billed_context_id", "stored_billed_context_id", "''"},
+	{"unbilled_context_id", "p_unbilled_context_id", "stored_unbilled_context_id", "''"},
+	{"request_scoped", "p_request_scoped", "stored_request_scoped", "false"},
+	{"band_above_input_tokens", "p_band", "stored_band", "toInt64(0)"},
+	{"price_error", "p_price_error", "stored_price_error", "''"},
+}
+
+// chUsagePriceRowsSQL selects the price records under their joined names.
+func chUsagePriceRowsSQL() string {
+	columns := make([]string, 0, len(chUsageStoredPriceColumns)+1)
+	columns = append(columns, "price_key AS p_price_key")
+	for _, column := range chUsageStoredPriceColumns {
+		columns = append(columns, column.source+" AS "+column.joined)
+	}
+	return "SELECT " + strings.Join(columns, ", ") + " FROM usage_event_prices"
+}
 
 const (
 	chUsagePriceKindReported  = "reported"
@@ -464,4 +491,52 @@ func loadUsagePriceContexts(
 		return nil, fmt.Errorf("iterating clickhouse usage price contexts: %w", err)
 	}
 	return out, nil
+}
+
+// pricingSnapshot is the mirror's pricing catalog as read under one set of
+// active pricing parts. Every report and usage read needs the same rows,
+// the same digest, and the same parsed GenAI document; reading and
+// canonicalizing them per request cost more than the usage rows themselves.
+type pricingSnapshot struct {
+	rows    []export.EffectivePricingRow
+	digest  string
+	catalog chPricingCatalog
+	// catalogDigest is EffectivePricingDigest(catalog.rows).
+	catalogDigest string
+}
+
+type pricingCache struct {
+	mu          sync.Mutex
+	fingerprint string
+	snapshot    *pricingSnapshot
+}
+
+// pricingSnapshot returns the catalog for the current pricing parts. Any
+// insert or merge on a pricing table changes the fingerprint, so a stale
+// snapshot is never served; a merge only costs one reload.
+func (s *Store) pricingSnapshot(ctx context.Context) (*pricingSnapshot, error) {
+	fingerprint, err := s.tablePartsFingerprint(ctx, []string{"model_pricing", "model_pricing_bands", "genai_pricing"})
+	if err != nil {
+		return nil, err
+	}
+	s.pricing.mu.Lock()
+	defer s.pricing.mu.Unlock()
+	if s.pricing.snapshot != nil && s.pricing.fingerprint == fingerprint {
+		return s.pricing.snapshot, nil
+	}
+	catalog, err := chLoadPricingCatalog(ctx, s.conn, s.customPricing)
+	if err != nil {
+		return nil, err
+	}
+	// The catalog's rows with custom rates applied are the effective rows,
+	// so one load serves both.
+	digest, err := export.EffectivePricingDigest(catalog.rows)
+	if err != nil {
+		return nil, err
+	}
+	snapshot := &pricingSnapshot{
+		rows: catalog.rows, digest: digest, catalog: catalog, catalogDigest: digest,
+	}
+	s.pricing.fingerprint, s.pricing.snapshot = fingerprint, snapshot
+	return snapshot, nil
 }

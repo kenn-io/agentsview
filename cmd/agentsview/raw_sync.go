@@ -65,6 +65,7 @@ func newRawSyncCommand() *cobra.Command {
 		},
 	}
 	cmd.AddCommand(newRawSyncWatchCommand())
+	cmd.AddCommand(newRawSyncBackfillCommand())
 	cmd.AddCommand(newRawSyncStatusCommand())
 	cmd.AddCommand(newRawSyncCleanUploadsCommand())
 	cmd.AddCommand(newRawSyncServerStatusCommand())
@@ -143,6 +144,9 @@ func runRawSyncWatch(ctx context.Context, watchCfg rawSyncWatchConfig) error {
 	}
 	defer store.Close()
 	if err := store.EnsureDevice(ctx, watchCfg.DeviceID); err != nil {
+		return err
+	}
+	if err := store.EnsureDestination(ctx, watchCfg.Server); err != nil {
 		return err
 	}
 	client, err := rawclient.NewClient(rawclient.Config{
@@ -374,23 +378,15 @@ func rawSyncProvidersAndRoots(
 			continue
 		}
 		def := factory.Definition()
-		configuredRoots := rawSyncFilesystemRoots(cfg.ResolveDirs(def.Type))
-		for index, root := range configuredRoots {
-			absoluteRoot, err := filepath.Abs(root)
-			if err != nil {
-				return nil, nil, fmt.Errorf(
-					"raw-sync resolve configured root for %s: %w", def.Type, err,
-				)
-			}
-			configuredRoots[index] = absoluteRoot
+		providerConfig, err := rawSyncProviderConfig(cfg, def.Type)
+		if err != nil {
+			return nil, nil, err
 		}
+		configuredRoots := providerConfig.Roots
 		if len(configuredRoots) == 0 {
 			continue
 		}
-		provider := factory.NewProvider(parser.ProviderConfig{
-			Roots: configuredRoots, Machine: cfg.InstallationID,
-			SourceMachines: cfg.SourceMachines[def.Type],
-		})
+		provider := factory.NewProvider(providerConfig)
 		watchRoots, err := parser.ResolveWatchRoots(ctx, provider)
 		if err != nil {
 			return nil, nil, fmt.Errorf("raw-sync watch roots for %s: %w", def.Type, err)
@@ -437,6 +433,26 @@ func rawSyncProvidersAndRoots(
 		}
 	}
 	return providers, roots, nil
+}
+
+// rawSyncProviderConfig builds the provider configuration raw sync captures
+// with. Watch and backfill share it so both see roots in the same order, which
+// decides the owning root of a file under overlapping roots.
+func rawSyncProviderConfig(cfg config.Config, agent parser.AgentType) (parser.ProviderConfig, error) {
+	roots := rawSyncFilesystemRoots(cfg.ResolveDirs(agent))
+	for index, root := range roots {
+		absoluteRoot, err := filepath.Abs(root)
+		if err != nil {
+			return parser.ProviderConfig{}, fmt.Errorf(
+				"raw-sync resolve configured root for %s: %w", agent, err,
+			)
+		}
+		roots[index] = absoluteRoot
+	}
+	return parser.ProviderConfig{
+		Roots: roots, Machine: cfg.InstallationID,
+		SourceMachines: cfg.SourceMachines[agent],
+	}, nil
 }
 
 func rawSyncFilesystemRoots(roots []string) []string {

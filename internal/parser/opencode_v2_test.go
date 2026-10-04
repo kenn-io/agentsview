@@ -54,8 +54,8 @@ func TestOpenCodeV2BetaWorkflow(t *testing.T) {
 	call := msgs[1].ToolCalls[0]
 	assert.Equal(t, "read", call.ToolName)
 	assert.JSONEq(t, `{"path":"/workspace/project-a/input.txt"}`, call.InputJSON)
-	require.Len(t, call.ResultEvents, 1)
-	assert.Equal(t, "Read file /workspace/project-a/input.txt, lines 1-3\n1: alpha\n2: beta\n3: gamma", call.ResultEvents[0].Content)
+	require.Len(t, call.ResultEvents, 2)
+	assert.Equal(t, "Read file /workspace/project-a/input.txt, lines 1-3\n1: alpha\n2: beta\n3: gamma", call.ResultEvents[1].Content)
 	assert.Contains(t, msgs[2].Content, "**Number of lines:** 3")
 	assert.Contains(t, msgs[4].Content, "[/Thinking]\nbeta")
 	assert.Equal(t, "big-pickle", msgs[4].Model)
@@ -68,9 +68,9 @@ func TestOpenCodeV2BetaWorkflow(t *testing.T) {
 	require.Len(t, failed[1].ToolCalls, 1)
 	shell := failed[1].ToolCalls[0]
 	assert.Equal(t, "shell", shell.ToolName)
-	require.Len(t, shell.ResultEvents, 1)
-	assert.Equal(t, "errored", shell.ResultEvents[0].Status)
-	assert.Contains(t, shell.ResultEvents[0].Content, "Command exited with code 7.")
+	require.Len(t, shell.ResultEvents, 2)
+	assert.Equal(t, "errored", shell.ResultEvents[1].Status)
+	assert.Contains(t, shell.ResultEvents[1].Content, "Command exited with code 7.")
 
 	// Streaming finalization updates only the projection, not session metadata.
 	before, digest, composite, err := openCodeSessionCompositeMtime(t.Context(), writer, path, id)
@@ -133,8 +133,8 @@ func TestOpenCodeV2CapturedWorkflow(t *testing.T) {
 	call := msgs[1].ToolCalls[0]
 	assert.Equal(t, "read", call.ToolName)
 	assert.JSONEq(t, `{"path":"input.txt"}`, call.InputJSON)
-	require.Len(t, call.ResultEvents, 1)
-	assert.Equal(t, "alpha\nbeta\ngamma\n", call.ResultEvents[0].Content)
+	require.Len(t, call.ResultEvents, 2)
+	assert.Equal(t, "alpha\nbeta\ngamma\n", call.ResultEvents[1].Content)
 	assert.True(t, msgs[2].IsSystem)
 	assert.Equal(t, "The three words in order are: **alpha**, **beta**, **gamma**.\n\nThe file has **3 lines**.", msgs[3].Content)
 	assert.Equal(t, "big-pickle", msgs[3].Model)
@@ -283,6 +283,59 @@ func TestOpenCodeV2ToolStates(t *testing.T) {
 				assert.Equal(t, tc.status, call.ResultEvents[0].Status)
 				assert.Equal(t, tc.text, call.ResultEvents[0].Content)
 			}
+		})
+	}
+}
+
+func TestOpenCodeV2DispatchTiming(t *testing.T) {
+	for _, tc := range []struct {
+		name, status   string
+		ran, completed int64
+		wantEvents     int
+		wantTerminal   string
+	}{
+		{name: "completed", status: "completed", ran: 1700000005000, completed: 1700000027000, wantEvents: 2, wantTerminal: "completed"},
+		{name: "errored", status: "error", ran: 1700000030000, completed: 1700000030000, wantEvents: 2, wantTerminal: "errored"},
+		{name: "missing-ran", status: "completed", completed: 1700000040000, wantEvents: 1, wantTerminal: "completed"},
+		{name: "reversed", status: "completed", ran: 1700000060000, completed: 1700000050000, wantEvents: 1, wantTerminal: "completed"},
+		{name: "zero-ran", status: "completed", completed: 1700000070000, wantEvents: 1, wantTerminal: "completed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path, seed, writer := newTestDB(t)
+			seed.AddProject("project-a", "/workspace/project-a")
+			seed.AddSession("ses_timing", "project-a", "", "", 1700000000000, 1700000080000)
+			_, err := writer.ExecContext(t.Context(), openCodeV2TestSchema)
+			require.NoError(t, err)
+			data := fmt.Sprintf(
+				`{"content":[{"type":"tool","id":"call_timing","name":"read","state":{"status":%q,"input":{"path":"file.txt"},"content":[{"type":"text","text":"done"}]},"time":{"created":1700000000000,"ran":%d,"completed":%d}}]}`,
+				tc.status, tc.ran, tc.completed,
+			)
+			if tc.name == "missing-ran" {
+				data = fmt.Sprintf(
+					`{"content":[{"type":"tool","id":"call_timing","name":"read","state":{"status":%q,"input":{"path":"file.txt"},"content":[{"type":"text","text":"done"}]},"time":{"created":1700000000000,"completed":%d}}]}`,
+					tc.status, tc.completed,
+				)
+			}
+			_, err = writer.ExecContext(t.Context(), `INSERT INTO session_message VALUES ('msg_timing', 'ses_timing', 'assistant', 1, 1700000000000, 1700000080000, ?)`, data)
+			require.NoError(t, err)
+			_, messages, err := parseOpenCodeDBSession(path, "ses_timing", "host-a")
+			require.NoError(t, err)
+			require.Len(t, messages, 1)
+			require.Len(t, messages[0].ToolCalls, 1)
+			events := messages[0].ToolCalls[0].ResultEvents
+			require.Len(t, events, tc.wantEvents)
+			terminal := events[len(events)-1]
+			assert.Equal(t, tc.wantTerminal, terminal.Status)
+			if tc.wantEvents == 2 {
+				assert.Equal(t, "tool_execution", events[0].Source)
+				assert.Equal(t, "started", events[0].Status)
+				assert.Equal(t, time.UnixMilli(tc.ran), events[0].Timestamp)
+				assert.Equal(t, "tool_execution", terminal.Source)
+			}
+			if tc.wantEvents == 1 {
+				assert.Empty(t, terminal.Source)
+			}
+			assert.Equal(t, "done", terminal.Content)
 		})
 	}
 }
@@ -522,17 +575,17 @@ func TestOpenCodeV2ToolFiles(t *testing.T) {
 			require.Len(t, messages, 1)
 			require.Len(t, messages[0].ToolCalls, 2)
 			for i, call := range messages[0].ToolCalls {
-				require.Len(t, call.ResultEvents, 1)
+				require.Len(t, call.ResultEvents, 2)
 				var blocks []map[string]string
-				require.NoError(t, json.Unmarshal([]byte(call.ResultEvents[0].Content), &blocks))
+				require.NoError(t, json.Unmarshal([]byte(call.ResultEvents[1].Content), &blocks))
 				want := source.Content[i].State.Content
 				if status == "error" {
 					require.Len(t, blocks, len(want)+1)
 					assert.Equal(t, map[string]string{"type": "text", "text": "Read failed"}, blocks[len(want)])
-					assert.Equal(t, "errored", call.ResultEvents[0].Status)
+					assert.Equal(t, "errored", call.ResultEvents[1].Status)
 				} else {
 					require.Len(t, blocks, len(want))
-					assert.Equal(t, "completed", call.ResultEvents[0].Status)
+					assert.Equal(t, "completed", call.ResultEvents[1].Status)
 				}
 				if i == 0 {
 					assert.Equal(t, want[0], blocks[0])

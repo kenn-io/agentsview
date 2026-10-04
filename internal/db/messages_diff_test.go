@@ -391,3 +391,20 @@ func TestMessagePinIdentityStableRequiresSameUniqueUUID(t *testing.T) {
 		map[string]int{"uuid-new": 1},
 	), "different unique UUIDs are different pin identities")
 }
+
+func TestIsTextExtension(t *testing.T) {
+	for _, tt := range []struct {
+		stored, incoming string
+		want             bool
+	}{
+		{"", "x", false},
+		{"ab", "ab", false},
+		{"ab", "abc", true},
+		{"abc", "ab", false},
+		{"ab", "aXb", false},
+		{"héllo", "héllo wörld", true},
+	} {
+		assert.Equal(t, tt.want, IsTextExtension(tt.stored, tt.incoming),
+			"IsTextExtension(%q, %q)", tt.stored, tt.incoming)
+	}
+}

@@ -3297,7 +3297,7 @@ func (e *Engine) resyncBuildLocked(
 	// its source ownership serves every parsed file. Querying the archive
 	// per file would open cold reader connections while workers are busy,
 	// which SQLite's busy handler turns into sleeps on every open.
-	archiveIndex, err := loadArchiveRebuildIndex(ctx, origDB, e.collisionPolicyAgents())
+	archiveIndex, err := loadArchiveRebuildIndex(ctx, origDB, e.collisionPolicyAgents(opts.Contributors))
 	if err != nil {
 		log.Printf("resync: snapshot archive source ownership: %v", err)
 		newDB.Close()
@@ -13757,7 +13757,7 @@ func (e *Engine) applyProviderFilePathPolicies(
 			storedCwd:  res.sourceCwdStored,
 			storedOK:   res.sourceCwdStoredOK,
 		}))
-		currentID, err := e.sourceCollisionID(ctx, provider, lookupPath, &result.Session, admitted)
+		currentID, moved, err := e.sourceCollisionID(ctx, provider, lookupPath, &result.Session, admitted)
 		if err != nil {
 			// Ownership is unknown, so skip the source this pass and retry it.
 			res.err = err
@@ -13765,6 +13765,7 @@ func (e *Engine) applyProviderFilePathPolicies(
 			res.results = kept[:0]
 			return
 		}
+		res.forceReplace = res.forceReplace || moved
 		if currentID != originalID && res.retrySessionIDs[originalID] {
 			res.retrySessionIDs[currentID] = true
 		}

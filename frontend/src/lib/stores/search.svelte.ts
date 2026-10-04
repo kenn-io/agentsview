@@ -3,6 +3,7 @@ import { SearchService } from "../api/generated/index.js";
 import { ApiError, isAbortError } from "../api/runtime.js";
 import type { DbSearchResult as SearchResult } from "../api/generated/index.js";
 import { resolveRange, type RangeSelection } from "../components/shared/rangeSelection.js";
+import { reportTelemetry } from "../utils/telemetry.js";
 
 export type SearchMode = "fulltext" | "semantic" | "hybrid";
 export type SearchSort = "relevance" | "recency";
@@ -133,6 +134,8 @@ export class SearchStore {
   results: PaletteSearchResult[] = $state([]);
   isSearching: boolean = $state(false);
   error: SearchFailure | null = $state(null);
+  // search_run counts each mode once per palette open; the palette clears this when it closes.
+  reportedModes = new Set<SearchMode>();
 
   private storage: SearchModeStorage | null;
   private abortController: AbortController | null = null;
@@ -236,6 +239,10 @@ export class SearchStore {
     this.isSearching = true;
     this.error = null;
     const mode = this.mode;
+    if (!this.reportedModes.has(mode)) {
+      this.reportedModes.add(mode);
+      reportTelemetry("search_run", { query_type: mode === "fulltext" ? "text" : mode });
+    }
     // All time must omit both bounds, rather than use the picker's fallback
     // start date when the earliest archived session is unknown.
     const range =

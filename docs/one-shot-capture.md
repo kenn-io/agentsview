@@ -197,7 +197,9 @@ agentsview capture run \
 The JSONL stream is copied byte-for-byte to standard output. AgentsView does not
 parse formatted stderr and does not add `--json` itself. Schema version 1
 reports Codex cache-write and reasoning-output categories as unavailable, not
-zero, because the canonical parser does not yet retain them. Every Codex v1
+zero. Older Codex releases do not record cache writes, so a zero cannot be
+proven; `input_tokens` still includes Codex cache writes. The canonical parser
+does not retain reasoning-output tokens. Every Codex v1
 result therefore has `assurance.state: partial`; this is expected, not a
 reporting failure.
 

@@ -751,6 +751,10 @@ func setupVectorServing(
 		),
 		server.WithEmbeddingsIncludeAutomatedDefault(cfg.Vector.IncludeAutomated),
 	}
+	if cfg.Vector.Embed.RunAfterSyncEnabled() {
+		// A permanent delete must reach the message mirror's journal refresh without waiting for a sync.
+		serverOpts = append(serverOpts, server.WithSessionMutationNotifier(scheduler.Notify))
+	}
 	var recallMutationNotify func()
 	if cfg.Vector.Embed.Recall {
 		// An import or extraction mutation can happen while the daemon is down,

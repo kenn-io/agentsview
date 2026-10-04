@@ -206,15 +206,75 @@ capable push completes it.
 whether the mirror changed. That source probe used to scan `sessions`,
 `messages`, `usage_events`, both pricing tables, and `sync_metadata` for their
 counts and maxima on every request. The store now hashes the active
-`system.parts` rows of those six tables, which is metadata and reads no data,
-and reuses the last probe result while the hash is unchanged. A merge changes
-the parts without changing the data, so the hash is never the report token: on a
-hash miss the store recomputes the original probe and caches it under the new
-hash, and only a real data change moves the token or resets pagination. The
-mutex protects only the cached pair, never a query, and an error is not cached.
-This is whole-mirror invalidation; any insert, delete, or merge on one of those
-tables triggers one full probe. Reading `system.parts` needs its own grant,
-described in [ClickHouse sync](../clickhouse-sync.md#3-serve-the-dashboard).
+`system.parts` rows of those six tables, plus `usage_session_snapshots` and
+`prepared_usage`, which is metadata and reads no data, and reuses the last probe
+result while the hash is unchanged. A merge changes the parts without changing
+the data, so the hash is never the report token: on a hash miss the store
+recomputes the original probe and caches it under the new hash, and only a real
+data change moves the token or resets pagination. The mutex protects only the
+cached pair, never a query, and an error is not cached. This is whole-mirror
+invalidation; any insert, delete, or merge on one of those tables triggers one
+full probe. Reading `system.parts` needs its own grant, described in
+[ClickHouse sync](../clickhouse-sync.md#3-serve-the-dashboard).
+
+## Prepared usage
+
+Usage, analytics, and Activity reports read date-ordered usage rows. Computing
+those rows from `messages` and `usage_events` on every request dominated report
+time on small hosts, so the mirror prepares them ahead of time.
+
+**Complete snapshots.** Each push reads a session and its usage from the archive
+in one transaction and writes them to `usage_session_snapshots` as one versioned
+snapshot. A retry of a failed batch reuses the payload it already loaded, so one
+push version never mixes two archive states.
+
+**Refreshed table.** The refreshable materialized view `prepare_usage` turns the
+snapshots into `prepared_usage` every 15 minutes, and every push starts a
+refresh. Rows are sorted by their stored UTC time, so a day read touches only
+that day's granules. Each row stores its price model, price key, and a copy of
+its price record, stamped with the pricing digest it was priced under. The table
+comment names the query that built it; a table built by another query is dropped
+and rebuilt on the next schema step, and a rebuild that stopped halfway finishes
+on the next start. The schema step adds a missing projection only with the
+refresh stopped, and always starts it again.
+
+**Currency is proven per read.** A read uses prepared rows only when every
+session has a current snapshot. Sessions pushed since the last refresh form a
+delta: their rows are prepared and priced in Go once per snapshot, sent to the
+read as an external table, and replace that session's stored rows. A refresh
+empties the delta. Before the first refresh, or while a session lacks a current
+snapshot, reads use raw rows. When the stored price copies no longer match the
+price records, for example after the records were cleared, reads keep the
+prepared rows and price them through the per-request join.
+
+## Kept reads
+
+Serve keeps the results of recent reads in memory so a repeat request between
+pushes reads no rows from ClickHouse; it still runs the small metadata queries
+that check whether its inputs changed. Each kept read has one slot per selection
+(filter, range, and similar inputs), and its key names the rows it read: the
+prepared usage stamp and the parts of the small tables it joins, the candidate
+sessions and their push versions, or the parts of the tables it scanned. A push
+that changes those replaces the slot; a push that does not leaves it in place.
+Usage reads filtered by `active`, `stale`, or `unclean` termination compare
+session times with the current time, so their rows are never kept. Kept reads
+include usage rows, analytics session listings, Activity pairing inputs per
+session version, candidate listings, project label maps, and the whole report of
+an ended range.
+
+Nothing rebuilds kept reads in the background. The first request after a push
+that changes a read's rows pays for that read.
+
+**Reports on disk.** When a client opens an ended day, its report is written to
+the report cache described in
+[ClickHouse sync](../clickhouse-sync.md#agentsview-clickhouse-serve), one file
+per selection and one directory per mirror. Nothing prepares days ahead of time,
+so a day no one opens costs no disk. A file names the binary that wrote it and
+the report's key, so a new build or a change to that day's rows rebuilds it.
+Every open, whether served from memory or from the file, refreshes the file's
+modification time. At startup and about once a day serve removes reports no one
+has opened for 30 days, and temporary files that interrupted writes left more
+than an hour ago; there is no other size or count limit.
 
 ## Tradeoffs
 

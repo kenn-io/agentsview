@@ -177,8 +177,8 @@ const refreshConversationMessagesSQL = `SELECT m.session_id,m.ordinal,m.role,m.c
 
 // Initialize exports or refresh copied rows after archive policy has changed
 // their stored content. These are the same archived messages, so keep their IDs.
-func refreshConversationMessagesFromArchiveTx(ctx context.Context, tx *sql.Tx, where string) error {
-	rows, err := tx.QueryContext(ctx, fmt.Sprintf(refreshConversationMessagesSQL, where))
+func refreshConversationMessagesFromArchiveTx(ctx context.Context, tx *sql.Tx, where string, args ...any) error {
+	rows, err := tx.QueryContext(ctx, fmt.Sprintf(refreshConversationMessagesSQL, where), args...)
 	if err != nil {
 		return err
 	}

@@ -73,6 +73,21 @@ type UnitSource interface {
 		fn func(db.EmbeddableUnit) error) (string, error)
 }
 
+// sessionJournalSource is implemented by *db.DB. Incremental refreshes use the
+// archive's session deletion journal to drop permanently deleted sessions and
+// rescan reinserted ones; other sources keep watermark-only refreshes.
+type sessionJournalSource interface {
+	GetDatabaseID(context.Context) (string, error)
+	SessionDeletionPublicationRevision(context.Context) (int64, error)
+	LoadSessionDeletionChanges(context.Context, int64, int64) ([]string, error)
+	ScanEmbeddableUnitsForSession(context.Context, string, bool, func(db.EmbeddableUnit) error) error
+}
+
+const (
+	sessionDeletionCursorKey     = "session_deletion_revision"
+	sessionDeletionDatabaseIDKey = "session_deletion_database_id"
+)
+
 // RefreshStats summarizes one Refresh call: Upserted counts mirror rows
 // inserted or changed (new identity or content_hash changed; this includes
 // a doc_key reinserted after a same-scan slot eviction, see Refresh),
@@ -166,15 +181,72 @@ func contentHash(content string) string {
 // scan completes: a UUID-keyed doc_key evicted from a (session_id, ordinal)
 // slot it no longer occupies is deleted via store.DeleteVectors only if it
 // was not reinserted elsewhere in the same scan, so a row that merely
-// shifted (or was displaced in a shift cascade) keeps its embeddings. The
+// shifted (or was displaced in a shift cascade) keeps its embeddings.
 // Incremental sources may also emit tombstones, which delete matching mirror
-// rows and vectors immediately. The watermark advances to the opaque value
-// returned by the source after a successful scan.
+// rows and vectors immediately.
+//
+// When src also exposes the archive's session deletion journal
+// (sessionJournalSource), an incremental refresh reconciles every session
+// journaled since the stored revision: it rescans each one whole, whatever
+// its ended_at, and deletes that session's mirror rows the scan did not
+// observe, so permanently deleted sessions drop out and reinserted ones are
+// republished. It runs as a full refresh instead when the stored revision is
+// missing, belongs to another archive, or is ahead of the journal. After a
+// successful refresh it stores the journal revision and archive id captured
+// before the scan. The watermark advances to the opaque value returned by
+// the source after a successful scan.
 func (ix *Index) Refresh(
 	ctx context.Context, src UnitSource, full, includeAutomated bool,
 ) (RefreshStats, error) {
 	if err := ix.requireWritable(); err != nil {
 		return RefreshStats{}, err
+	}
+
+	journal, hasJournal := src.(sessionJournalSource)
+	var (
+		revision   int64
+		databaseID string
+		changed    []string
+	)
+	if hasJournal {
+		var err error
+		databaseID, err = journal.GetDatabaseID(ctx)
+		if err != nil && !errors.Is(err, db.ErrDatabaseIDMissing) {
+			return RefreshStats{}, err
+		}
+		// Without an archive id a stored revision cannot be tied to this
+		// archive, so the refresh keeps watermark-only behavior.
+		hasJournal = databaseID != ""
+	}
+	if hasJournal {
+		var err error
+		revision, err = journal.SessionDeletionPublicationRevision(ctx)
+		if err != nil {
+			return RefreshStats{}, err
+		}
+		storedCursor, cursorOK, err := ix.metaGet(ctx, sessionDeletionCursorKey)
+		if err != nil {
+			return RefreshStats{}, err
+		}
+		storedID, idOK, err := ix.metaGet(ctx, sessionDeletionDatabaseIDKey)
+		if err != nil {
+			return RefreshStats{}, err
+		}
+		stored, parseErr := strconv.ParseInt(storedCursor, 10, 64)
+		if parseErr != nil || stored < 0 {
+			cursorOK = false
+		}
+		// Upgrade, resync, journal reset, or a restored backup: the stored
+		// window no longer describes this archive's journal.
+		if !cursorOK || !idOK || storedID != databaseID || stored > revision {
+			full = true
+		}
+		if !full {
+			changed, err = journal.LoadSessionDeletionChanges(ctx, stored, revision)
+			if err != nil {
+				return RefreshStats{}, err
+			}
+		}
 	}
 
 	since := ""
@@ -188,13 +260,14 @@ func (ix *Index) Refresh(
 
 	var stats RefreshStats
 	seen := make(map[string]struct{})
+	visited := make(map[string]struct{})
 	occurrences := make(map[string]int)
 	evicted := make(map[string]struct{})
 	sentinel, err := ix.parkingFloor(ctx)
 	if err != nil {
 		return RefreshStats{}, err
 	}
-	nextWatermark, err := src.ScanEmbeddableUnits(ctx, since, includeAutomated, func(u db.EmbeddableUnit) error {
+	visitUnit := func(u db.EmbeddableUnit) error {
 		occurrence := 1
 		if u.SourceUUID != "" {
 			occKey := u.SessionID + "\x00" + u.SourceUUID
@@ -225,10 +298,24 @@ func (ix *Index) Refresh(
 			stats.Upserted++
 		}
 		seen[key] = struct{}{}
+		visited[u.SessionID] = struct{}{}
 		return nil
-	})
+	}
+	nextWatermark, err := src.ScanEmbeddableUnits(ctx, since, includeAutomated, visitUnit)
 	if err != nil {
 		return RefreshStats{}, fmt.Errorf("scanning embeddable units: %w", err)
+	}
+
+	// Rescan journaled sessions the watermark scan skipped. A session it
+	// already visited is never rescanned: the occurrence counters would mint
+	// "#2" keys for its units.
+	for _, id := range changed {
+		if _, ok := visited[id]; ok {
+			continue
+		}
+		if err := journal.ScanEmbeddableUnitsForSession(ctx, id, includeAutomated, visitUnit); err != nil {
+			return RefreshStats{}, fmt.Errorf("rescanning journaled session %s: %w", id, err)
+		}
 	}
 
 	// finalizeEvictions must run before full-mode reconcileDeletions: an
@@ -247,16 +334,43 @@ func (ix *Index) Refresh(
 	}
 	stats.Deleted += finalized
 
-	if full {
-		deleted, err := ix.reconcileDeletions(ctx, seen)
+	// Journaled sessions were scanned whole above, so their mirror rows the
+	// scan did not see belong to a deleted session or a vanished identity.
+	for _, id := range changed {
+		deleted, err := ix.reconcileDeletions(ctx, seen, id)
 		if err != nil {
 			return RefreshStats{}, err
 		}
 		stats.Deleted += deleted
 	}
 
+	if full {
+		deleted, err := ix.reconcileDeletions(ctx, seen, "")
+		if err != nil {
+			return RefreshStats{}, err
+		}
+		stats.Deleted += deleted
+	}
+
+	// The watermark is settled before the journal cursor, so a failed write
+	// leaves the cursor stale and the next refresh runs full again.
 	if nextWatermark != "" {
 		if err := ix.setRefreshWatermark(ctx, nextWatermark); err != nil {
+			return RefreshStats{}, err
+		}
+	} else if full {
+		// An empty full scan must not leave a previous archive's watermark
+		// hiding older sessions from later incremental scans.
+		if err := ix.metaDelete(ctx, refreshWatermarkKey); err != nil {
+			return RefreshStats{}, err
+		}
+	}
+
+	if hasJournal {
+		if err := ix.metaSet(ctx, sessionDeletionCursorKey, strconv.FormatInt(revision, 10)); err != nil {
+			return RefreshStats{}, err
+		}
+		if err := ix.metaSet(ctx, sessionDeletionDatabaseIDKey, databaseID); err != nil {
 			return RefreshStats{}, err
 		}
 	}
@@ -523,11 +637,16 @@ func (ix *Index) currentOrdinals(ctx context.Context, keys []string) (map[string
 }
 
 // reconcileDeletions deletes every mirror row (and its vectors) whose
-// doc_key was not seen in a full scan.
+// doc_key was not seen in a full scan. A non-empty sessionID limits it to
+// that session, which the caller must have scanned whole.
 func (ix *Index) reconcileDeletions(
-	ctx context.Context, seen map[string]struct{},
+	ctx context.Context, seen map[string]struct{}, sessionID string,
 ) (int, error) {
-	rows, err := ix.db.QueryContext(ctx, `SELECT doc_key FROM `+ix.spec.DocsTable)
+	query, args := `SELECT doc_key FROM `+ix.spec.DocsTable, []any(nil)
+	if sessionID != "" {
+		query, args = query+` WHERE session_id = ?`, []any{sessionID}
+	}
+	rows, err := ix.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return 0, fmt.Errorf("listing mirror doc_keys: %w", err)
 	}
@@ -616,7 +735,7 @@ func (ix *Index) Clear(ctx context.Context) error {
 	if err := ix.requireWritable(); err != nil {
 		return err
 	}
-	if _, err := ix.reconcileDeletions(ctx, nil); err != nil {
+	if _, err := ix.reconcileDeletions(ctx, nil, ""); err != nil {
 		return err
 	}
 	return ix.metaDelete(ctx, refreshWatermarkKey)

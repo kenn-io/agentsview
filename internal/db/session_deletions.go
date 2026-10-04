@@ -89,6 +89,51 @@ func (db *DB) LoadSessionDeletionDelta(
 	return tombstones, nil
 }
 
+// LoadSessionDeletionChanges returns the IDs of every session journaled in
+// (afterRevision, throughRevision], whether it was deleted or reinserted.
+func (db *DB) LoadSessionDeletionChanges(
+	ctx context.Context, afterRevision, throughRevision int64,
+) ([]string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if afterRevision < 0 || throughRevision < afterRevision {
+		return nil, fmt.Errorf(
+			"invalid session deletion publication window (%d, %d]",
+			afterRevision, throughRevision,
+		)
+	}
+	if afterRevision == throughRevision {
+		return nil, nil
+	}
+
+	where, args := sessionDeletionPublicationChangeWhere(
+		"c", afterRevision, throughRevision, nil, nil,
+	)
+	rows, err := db.getReader().QueryContext(ctx, `
+		SELECT c.session_id
+		FROM session_deletion_changes c
+		`+where+`
+		ORDER BY c.revision`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("listing session deletion changes: %w", err)
+	}
+	defer rows.Close()
+
+	var sessionIDs []string
+	for rows.Next() {
+		var sessionID string
+		if err := rows.Scan(&sessionID); err != nil {
+			return nil, fmt.Errorf("scanning session deletion change: %w", err)
+		}
+		sessionIDs = append(sessionIDs, sessionID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating session deletion changes: %w", err)
+	}
+	return sessionIDs, nil
+}
+
 func sessionDeletionPublicationChangeWhere(
 	alias string,
 	afterRevision, throughRevision int64,

@@ -14,6 +14,14 @@ The latest published release is
 - The web UI reports an anonymous `app_opened` event through the server when it
   loads and on the first focus of each later UTC day.
   `AGENTSVIEW_TELEMETRY_ENABLED=0` turns it off with the daemon ping.
+- Upload existing Claude Code, Codex, and other supported local session roots
+  with `agentsview raw-sync backfill` before starting continuous raw sync. The
+  finite command saves resumable progress, reports incomplete work without
+  waiting through retry delays, and reuses completed migration proof without
+  uploading duplicate generations.
+- The web UI reports anonymous search, session-view, export, insight and
+  analytics-page events through the server, each with one value from a fixed
+  list. `AGENTSVIEW_TELEMETRY_ENABLED=0` turns them off.
 - Sessions show the title their agent keeps for them, and a name you chose with
   `/rename` or the agent's equivalent wins over a generated title. Current
   Claude Code `/rename` names now appear, and Qwen Code, Gemini CLI, Kimi CLI,
@@ -134,6 +142,12 @@ The latest published release is
   stage starts, instead of leaving the previous subagent-repair label visible.
 - Full resync now shows how many queued sessions it has checked while repairing
   subagent relationships, then reports when it is saving those repairs.
+- Recall extraction can work through a large backlog faster against a hosted
+  or batching model endpoint. Set `concurrency` on a
+  `[recall.extract.servers.<name>]` entry to distill that many sessions at
+  once; each session's units still run in order. The default stays 1, which
+  suits a single local model, where parallel requests only share the same
+  compute.
 - Turning a session provider on or off, or adding or removing an alternate
   home, on the Settings page now takes effect without restarting the daemon.
   New sessions in a newly enabled provider or home are picked up as they are
@@ -190,6 +204,10 @@ The latest published release is
   `codex-auto-review` as the reported model, and a custom pricing row for it
   still wins. Existing SQLite usage caches rebuild and the next ClickHouse push
   reprices the mirror. (#2078)
+- Codex sessions on GPT-5.6 and later price prompt-cache writes at the
+  cache-write rate instead of the input rate. A custom pricing row for such a
+  model needs `cache_creation_microdollars_per_mtok`, since omitted rates count
+  as zero. The first sync after upgrading re-reads each session once.
 - Sync continues importing local sessions and reachable remotes when another
   remote's hostname cannot resolve, such as while disconnected from a private
   network. This also applies during archive upgrades and full rebuilds, which
@@ -206,6 +224,10 @@ The latest published release is
   cores busy indefinitely. An empty write-ahead log no longer counts as a
   change for Cursor IDE or for other agents whose sessions live in SQLite
   databases; real writes still sync as before.
+- Re-importing a ChatGPT export now restores message text that an earlier import
+  stored cut short, when the archived text is the start of the export's text.
+  The message keeps its place and any pin, and search finds the restored text.
+  Any other difference from the archive is still refused.
 - Antigravity IDE and Antigravity CLI sessions stop re-syncing in a loop.
   Reading a session database rewrote its shared-memory (`-shm`) file, and
   AgentsView counted that as a change, so every pass re-read and re-uploaded
@@ -232,12 +254,17 @@ The latest published release is
   new transcript has at least as many messages. This covers folder moves and
   renames of the original session. Remote imports also preserve the ID when
   a complete mirror covers the old path; partial imports and paths outside
-  the exported roots stay separate. Already linked files need a move the provider
-  recognizes to keep their IDs. A shorter file stays separate so it cannot
-  shorten the archive. Full resyncs preserve this
-  ownership and existing names, stars, and pins. On a first sync, parallel parse
-  order decides which file gets the original ID; it need not be the earliest
-  segment. Trashing the base also hides its linked sessions from the sidebar;
+  the exported roots stay separate. Provider-recognized moves, including Cursor
+  switching a transcript from `.txt` to `.jsonl`, retain IDs and saved names
+  locally and in complete remote mirrors, even for shorter replacements.
+  Already linked files need a provider-recognized move to keep their IDs.
+  Other shorter files stay separate so they cannot shorten the archive. The
+  first sync after upgrading re-reads the archive once, including unchanged
+  remote mirrors. Full resyncs preserve ownership and existing names, stars,
+  and pins, and skip ownership snapshots for providers without source roots.
+  On a first sync, parallel parse order decides which file gets the original
+  ID; it need not be the earliest segment. Trashing the base also hides its
+  linked sessions from the sidebar;
   permanently deleting it promotes them. Cursor copies retain shared turns,
   which search and usage count twice. A copied subagent links to the session
   with the same ID, replacing its original parent link. Other agents sync as

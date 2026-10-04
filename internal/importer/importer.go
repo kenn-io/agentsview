@@ -402,7 +402,8 @@ func ImportChatGPT(
 
 // upsertChatGPTConversation imports a new ChatGPT conversation or
 // appends new messages to an archived one. An existing session is only
-// extended when its archived messages are an exact prefix of the export;
+// extended when its archived messages are a prefix of the export, where an
+// archived text the export extends (a truncated copy) counts as a match;
 // shorter exports and exports that rewrite archived history are refused
 // so a re-import can never lose or silently change stored messages.
 func upsertChatGPTConversation(
@@ -484,11 +485,12 @@ func upsertChatGPTConversation(
 		return importSkipped, nil
 	}
 
-	// Fill results that were empty when archived and insert the rows past
-	// the verified prefix. A full replacement would delete and reinsert
-	// archived rows, changing message IDs and risking pins that cannot be
-	// re-matched without source UUIDs. A fill-only import is an update too.
-	// Full-text search indexes message rows only, so fills alone skip it.
+	// Fill results that were empty when archived, extend archived text the
+	// export completes, and insert the rows past the verified prefix. A full
+	// replacement would delete and reinsert archived rows, changing message
+	// IDs and risking pins that cannot be re-matched without source UUIDs. A
+	// fill- or repair-only import is an update too. In-place text updates
+	// reindex through the update trigger, so only inserts suspend the index.
 	if len(msgs) > len(archived) {
 		fts.suspend(ctx)
 	}
@@ -591,21 +593,23 @@ func writeChatGPTSession(
 	})
 }
 
-// appendChatGPTMessages fills archived-empty tool results at stored
-// ordinals and inserts later rows, leaving other stored rows untouched.
-// Signals are written as zero values so the backfill recomputes them.
+// appendChatGPTMessages fills archived-empty tool results and extends
+// truncated archived text at stored ordinals, and inserts later rows, leaving
+// other stored rows untouched. Signals are written as zero values so the
+// backfill recomputes them.
 func appendChatGPTMessages(
 	ctx context.Context, store db.Store, sess db.Session, msgs []db.Message,
 ) error {
 	return writeChatGPTBatch(ctx, store, db.SessionBatchWrite{
-		Session:              sess,
-		Messages:             msgs,
-		FillEmptyToolResults: true,
+		Session:            sess,
+		Messages:           msgs,
+		CompleteStoredRows: true,
 	})
 }
 
-// chatGPTFillRows copies the export rows whose archived calls get a result,
-// keeping only the results being filled so nothing else reaches the write.
+// chatGPTFillRows copies the export rows that complete archived rows (a
+// filled result or extended text), keeping only the results being filled so
+// nothing else reaches the write.
 func chatGPTFillRows(
 	archived, incoming []db.Message, filled []int,
 ) []db.Message {
@@ -672,15 +676,18 @@ func storedFormMessages(store db.Store, msgs []db.Message) []db.Message {
 	return out
 }
 
+// sameTurn reports whether two stored rows hold the same turn of the conversation.
+func sameTurn(a, b db.Message) bool {
+	return a.Ordinal == b.Ordinal && a.Role == b.Role && a.IsSystem == b.IsSystem && a.Timestamp == b.Timestamp
+}
+
 func sameMessages(existing, incoming []db.Message) bool {
 	if len(existing) != len(incoming) {
 		return false
 	}
 	for i := range existing {
-		if existing[i].Ordinal != incoming[i].Ordinal ||
-			existing[i].Role != incoming[i].Role ||
+		if !sameTurn(existing[i], incoming[i]) ||
 			existing[i].Content != incoming[i].Content ||
-			existing[i].Timestamp != incoming[i].Timestamp ||
 			existing[i].ContentLength != incoming[i].ContentLength {
 			return false
 		}
@@ -689,16 +696,26 @@ func sameMessages(existing, incoming []db.Message) bool {
 }
 
 // compareChatGPTPrefix reports whether the export still starts with the
-// archived messages and which rows hold archived-empty results the export
-// fills. Only fields no archive policy rewrites are compared: each archived
-// call's name and category, and whether its result is empty.
+// archived messages and which archived rows the export completes: a result
+// that was empty when archived and is filled now, or archived text the export
+// extends (db.IsTextExtension). Only fields no archive policy rewrites are
+// compared: the turn (sameTurn), text and length (equal or extended), and
+// each archived call's name and category and whether its result is empty.
 func compareChatGPTPrefix(
 	existing, incoming []db.Message,
-) (filled []int, ok bool) {
-	if !sameMessages(existing, incoming) {
+) (completed []int, ok bool) {
+	if len(existing) != len(incoming) {
 		return nil, false
 	}
 	for i := range existing {
+		a, b := existing[i], incoming[i]
+		if !sameTurn(a, b) {
+			return nil, false
+		}
+		extended := db.IsTextExtension(a.Content, b.Content)
+		if !extended && (a.Content != b.Content || a.ContentLength != b.ContentLength) {
+			return nil, false
+		}
 		if len(incoming[i].ToolCalls) < len(existing[i].ToolCalls) {
 			return nil, false
 		}
@@ -712,11 +729,11 @@ func compareChatGPTPrefix(
 				fill = true
 			}
 		}
-		if fill {
-			filled = append(filled, i)
+		if fill || extended {
+			completed = append(completed, i)
 		}
 	}
-	return filled, true
+	return completed, true
 }
 
 func emptyToolResult(tc db.ToolCall) bool {
