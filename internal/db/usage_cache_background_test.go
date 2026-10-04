@@ -6,12 +6,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/money"
 )
 
 func TestUsageCacheBackfillNewestFirstAndResumesInstalledCoverage(t *testing.T) {
@@ -550,4 +553,84 @@ func TestReopenRestartsUsageBackfillOnlyWhenPreviouslyStarted(t *testing.T) {
 	require.NotNil(t, done,
 		"reopen must restart backfill once it was explicitly started")
 	require.NoError(t, database.WaitUsageCacheBackfill(t.Context()))
+}
+
+func TestRewarmUsageCacheRerunsAfterActivePassWithNewPrices(t *testing.T) {
+	database := testDB(t)
+	started := "2026-08-10T08:00:00Z"
+	insertSession(t, database, "rewarm", "project", func(session *Session) {
+		session.StartedAt = &started
+	})
+	require.NoError(t, database.InsertMessages(t.Context(), []Message{{
+		SessionID: "rewarm", Ordinal: 0, Role: "assistant",
+		Timestamp: "2026-08-10T09:00:00Z", Model: "rewarm-model",
+		TokenUsage: json.RawMessage(`{"input_tokens":1000000}`),
+	}}))
+	setPrice := func(microdollars int64) {
+		require.NoError(t, database.UpsertModelPricing([]ModelPricing{{
+			ModelPattern: "rewarm-model",
+			InputPerMTok: money.Money{Microdollars: microdollars},
+		}}))
+	}
+	setPrice(1_000_000)
+
+	require.NoError(t, database.RewarmUsageCache())
+	database.usageBackfillMu.Lock()
+	done := database.usageBackfillDone
+	database.usageBackfillMu.Unlock()
+	require.Nil(t, done, "re-warm must not start backfill nothing enabled")
+
+	require.NoError(t, database.StartUsageCacheBackfill(t.Context()))
+	require.NoError(t, database.WaitUsageCacheBackfill(t.Context()))
+	snapshot, err := database.captureUsageQuery(
+		t.Context(), UsageFilter{}, usageQueryKindToken)
+	require.NoError(t, err)
+	cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
+	require.NoError(t, err)
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	cache.rollup.observer.beforeEnsure = func() {
+		once.Do(func() {
+			close(entered)
+			<-release
+		})
+	}
+	require.NoError(t, database.RewarmUsageCache())
+	<-entered
+	setPrice(3_000_000)
+	require.NoError(t, database.RewarmUsageCache())
+	close(release)
+	require.NoError(t, database.WaitUsageCacheBackfill(t.Context()))
+	cache.rollup.observer = usageRollupObserver{}
+
+	rows, err := cache.db.QueryContext(t.Context(),
+		`SELECT DISTINCT estimated_cost_microdollars FROM usage_daily_rollups`)
+	require.NoError(t, err)
+	defer rows.Close()
+	var costs []int64
+	for rows.Next() {
+		var cost int64
+		require.NoError(t, rows.Scan(&cost))
+		costs = append(costs, cost)
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, []int64{3_000_000}, costs,
+		"the queued pass must rebuild with the price committed during the first")
+}
+
+func TestUsagePricingDigestChangesWithCommittedPricing(t *testing.T) {
+	database := testDB(t)
+	before, err := database.UsagePricingDigest(t.Context())
+	require.NoError(t, err)
+	unchanged, err := database.UsagePricingDigest(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, before, unchanged)
+	require.NoError(t, database.UpsertModelPricing([]ModelPricing{{
+		ModelPattern: "digest-model", InputPerMTok: money.Money{Microdollars: 1},
+	}}))
+	after, err := database.UsagePricingDigest(t.Context())
+	require.NoError(t, err)
+	assert.NotEqual(t, before, after)
 }

@@ -106,6 +106,12 @@ The latest published release is
 
 **Improvements**
 
+- The Usage page stays fast after a pricing update. A changed price now
+  rebuilds only the sessions that used that model, instead of every session in
+  the archive, and a refresh that changes no rates rebuilds nothing. The daemon
+  rebuilds affected sessions in the background after its daily price refresh,
+  so the next Usage load doesn't wait for them. The first
+  Usage load after upgrading rebuilds the usage cache once.
 - The Usage page shows a **Total Input** card that adds uncached input, cache
   writes, and cache reads, so heavy prompt caching no longer looks like missing
   input. The input count that leaves out cached tokens is now labeled

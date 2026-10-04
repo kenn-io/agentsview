@@ -3,9 +3,14 @@ package export
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"hash"
 	"math/big"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -362,6 +367,94 @@ func (r *PricingResolver) ResolveAt(
 	return pricedModel, lookup
 }
 
+// DependencyFingerprint hashes what ResolveAt/ResolveBilledAt can return at any timestamp, minus UpdatedAt.
+func (r *PricingResolver) DependencyFingerprint(
+	providerID, reportedModel, canonicalModel string,
+) (string, error) {
+	digest := sha256.New()
+	writeField := func(value string) {
+		_, _ = fmt.Fprintf(digest, "%d:%s", len(value), value)
+	}
+	writeLookup := func(pricedModel string, lookup PricingLookup) {
+		writeField(pricedModel)
+		writeField(lookup.Pattern)
+		writeField(strconv.FormatBool(lookup.OK))
+		writeField(lookup.Adjustment)
+		writePricingRatesFingerprint(digest, lookup.Rates)
+	}
+	pricedModel, lookup := r.ResolveAt(reportedModel, canonicalModel, time.Time{})
+	writeLookup(pricedModel, lookup)
+	billedModel, billed, err := r.ResolveBilledAt(
+		providerID, reportedModel, canonicalModel, time.Time{})
+	if err != nil {
+		return "", err
+	}
+	writeLookup(billedModel, billed)
+	if r == nil {
+		return hex.EncodeToString(digest.Sum(nil)), nil
+	}
+	// writeLadder skips GenAI when a custom rate shadows it, as resolveAt does.
+	genAISourceWritten := false
+	writeLadder := func(reported, canonical string) (PricingLookup, bool, bool) {
+		priced, flat, custom := r.resolveFlat(reported, canonical)
+		writeLookup(priced, flat)
+		if custom || r.genAI == nil {
+			return flat, custom, false
+		}
+		if !genAISourceWritten {
+			writeField(string(r.genAISource))
+			genAISourceWritten = true
+		}
+		matched := false
+		candidates := genAICandidatesFor(reported, canonical,
+			genAIFallbackModel(priced, flat))
+		for _, candidate := range candidates.items[:candidates.count] {
+			fingerprint := r.genAI.ModelFingerprint(candidate.provider, candidate.model)
+			matched = matched || fingerprint != "none"
+			writeField(candidate.provider)
+			writeField(candidate.model)
+			writeField(candidate.priced)
+			writeField(fingerprint)
+		}
+		return flat, custom, matched
+	}
+	mainFlat, mainCustom, mainGenAI := writeLadder(reportedModel, canonicalModel)
+	// ResolveAt tries Ollama bases only when the main ladder can come back unusable.
+	if mainCustom || (mainFlat.OK && !isPlaceholderOllamaCloudRate(mainFlat) && !mainGenAI) {
+		return hex.EncodeToString(digest.Sum(nil)), nil
+	}
+	var bases []string
+	for _, model := range []string{reportedModel, canonicalModel, pricedModel} {
+		base := pricingpkg.OllamaCloudBaseModel(model)
+		if base != model && !slices.Contains(bases, base) {
+			bases = append(bases, base)
+		}
+	}
+	for _, base := range bases {
+		writeLadder(base, base)
+	}
+	return hex.EncodeToString(digest.Sum(nil)), nil
+}
+
+func writePricingRatesFingerprint(digest hash.Hash, rates ModelRates) {
+	bands := slices.Clone(rates.Bands)
+	slices.SortStableFunc(bands, func(left, right PricingBand) int {
+		return cmp.Compare(left.AboveInputTokens, right.AboveInputTokens)
+	})
+	_, _ = fmt.Fprintf(digest, "%d:%s|%d,%d,%d,%d,%d|%d",
+		len(rates.Source), rates.Source,
+		rates.InputPerMTok.Microdollars, rates.OutputPerMTok.Microdollars,
+		rates.CacheWritePerMTok.Microdollars,
+		rates.CacheWrite1hPerMTok.Microdollars,
+		rates.CacheReadPerMTok.Microdollars, len(bands))
+	for _, band := range bands {
+		_, _ = fmt.Fprintf(digest, "|%d,%d,%d,%d,%d,%d",
+			band.AboveInputTokens, band.InputPerMTok.Microdollars,
+			band.OutputPerMTok.Microdollars, band.CacheWritePerMTok.Microdollars,
+			band.CacheWrite1hPerMTok.Microdollars, band.CacheReadPerMTok.Microdollars)
+	}
+}
+
 // isPlaceholderOllamaCloudRate reports whether a lookup found only a zero-rate
 // Ollama Cloud row. LiteLLM publishes rows such as
 // "ollama/gpt-oss:120b-cloud" with all-zero rates because Ollama Cloud
@@ -387,35 +480,38 @@ func isPlaceholderOllamaCloudRate(lookup PricingLookup) bool {
 func (r *PricingResolver) resolveAt(
 	reportedModel, canonicalModel string, timestamp time.Time,
 ) (string, PricingLookup) {
+	pricedModel, flatLookup, custom := r.resolveFlat(reportedModel, canonicalModel)
+	if custom || timestamp.IsZero() {
+		return pricedModel, flatLookup
+	}
+	if pricedModel, rates, ok := r.resolveGenAI(
+		reportedModel, canonicalModel,
+		genAIFallbackModel(pricedModel, flatLookup), timestamp,
+	); ok {
+		return pricedModel, rates
+	}
+	return pricedModel, flatLookup
+}
+
+// resolveFlat reports custom=true when a custom rate ends resolution before GenAI.
+func (r *PricingResolver) resolveFlat(
+	reportedModel, canonicalModel string,
+) (string, PricingLookup, bool) {
 	if rates, ok := r.byModel[reportedModel]; ok &&
 		rates.Source == PricingRowSourceCustom {
 		return reportedModel, PricingLookup{
 			Rates:   rates,
 			Pattern: reportedModel,
 			OK:      true,
-		}
+		}, true
 	}
 	pricedModel := canonicalModel
 	if pricedModel == "" {
 		pricedModel = reportedModel
 	}
 	flatLookup := r.Lookup(pricedModel)
-	if flatLookup.OK && flatLookup.Rates.Source == PricingRowSourceCustom {
-		return pricedModel, flatLookup
-	}
-	if !timestamp.IsZero() {
-		var genAIFallbackModel string
-		if flatLookup.OK &&
-			pricingpkg.EffortTierBaseModel(pricedModel) != pricedModel {
-			genAIFallbackModel = flatLookup.Pattern
-		}
-		if pricedModel, rates, ok := r.resolveGenAI(
-			reportedModel, canonicalModel, genAIFallbackModel, timestamp,
-		); ok {
-			return pricedModel, rates
-		}
-	}
-	return pricedModel, flatLookup
+	return pricedModel, flatLookup,
+		flatLookup.OK && flatLookup.Rates.Source == PricingRowSourceCustom
 }
 
 func (r *PricingResolver) resolveGenAI(
@@ -424,18 +520,61 @@ func (r *PricingResolver) resolveGenAI(
 	if r.genAI == nil {
 		return "", PricingLookup{}, false
 	}
+	candidates := genAICandidatesFor(reportedModel, canonicalModel, fallbackModel)
+	for _, candidate := range candidates.items[:candidates.count] {
+		resolved, ok := r.genAI.Resolve(
+			candidate.provider, candidate.model, timestamp,
+		)
+		if !ok {
+			continue
+		}
+		return candidate.priced, PricingLookup{
+			Rates: ModelRates{
+				InputPerMTok:        resolved.InputPerMTok,
+				OutputPerMTok:       resolved.OutputPerMTok,
+				CacheWritePerMTok:   resolved.CacheCreationPerMTok,
+				CacheWrite1hPerMTok: resolved.CacheCreation1hPerMTok,
+				CacheReadPerMTok:    resolved.CacheReadPerMTok,
+				UpdatedAt:           r.genAIUpdatedAt,
+				Source:              r.genAISource,
+				Bands:               genAIPricingBands(resolved.Bands),
+			},
+			Pattern: resolved.ModelPattern,
+			OK:      true,
+		}, true
+	}
+	return "", PricingLookup{}, false
+}
+
+// genAIFallbackModel is the flat row resolveGenAI also tries for an effort-tier model.
+func genAIFallbackModel(pricedModel string, flatLookup PricingLookup) string {
+	if flatLookup.OK &&
+		pricingpkg.EffortTierBaseModel(pricedModel) != pricedModel {
+		return flatLookup.Pattern
+	}
+	return ""
+}
+
+type genAICandidate struct {
+	provider string
+	model    string
+	priced   string
+}
+
+// genAICandidates is a fixed array (four aliases, two candidates each) to stay off the heap.
+type genAICandidates struct {
+	items [8]genAICandidate
+	count int
+}
+
+// genAICandidatesFor is shared with DependencyFingerprint so the two cannot drift.
+func genAICandidatesFor(
+	reportedModel, canonicalModel, fallbackModel string,
+) genAICandidates {
 	type modelAlias struct {
 		lookup string
 		priced string
 	}
-	type modelCandidate struct {
-		provider string
-		model    string
-		priced   string
-	}
-	// At most four aliases (canonical, reported, effort-tier base, flat
-	// fallback) and two candidates per alias; fixed backing arrays keep
-	// both lists off the heap.
 	var aliasStorage [4]modelAlias
 	models := append(aliasStorage[:0],
 		modelAlias{lookup: reportedModel, priced: reportedModel})
@@ -464,44 +603,21 @@ func (r *PricingResolver) resolveGenAI(
 			priced: pricedModel,
 		})
 	}
-	for _, model := range models {
-		provider, unqualified := genAIProviderAndModel(model.lookup)
-		var candidateStorage [2]modelCandidate
-		candidates := append(candidateStorage[:0],
-			modelCandidate{provider, unqualified, model.priced})
-		if provider != "" || unqualified != model.lookup {
-			candidates = append(candidates, modelCandidate{
-				model:  model.lookup,
-				priced: model.priced,
-			})
-		}
-		for _, candidate := range candidates {
-			if candidate.model == "" {
-				continue
-			}
-			resolved, ok := r.genAI.Resolve(
-				candidate.provider, candidate.model, timestamp,
-			)
-			if !ok {
-				continue
-			}
-			return candidate.priced, PricingLookup{
-				Rates: ModelRates{
-					InputPerMTok:        resolved.InputPerMTok,
-					OutputPerMTok:       resolved.OutputPerMTok,
-					CacheWritePerMTok:   resolved.CacheCreationPerMTok,
-					CacheWrite1hPerMTok: resolved.CacheCreation1hPerMTok,
-					CacheReadPerMTok:    resolved.CacheReadPerMTok,
-					UpdatedAt:           r.genAIUpdatedAt,
-					Source:              r.genAISource,
-					Bands:               genAIPricingBands(resolved.Bands),
-				},
-				Pattern: resolved.ModelPattern,
-				OK:      true,
-			}, true
+	var out genAICandidates
+	add := func(candidate genAICandidate) {
+		if candidate.model != "" {
+			out.items[out.count] = candidate
+			out.count++
 		}
 	}
-	return "", PricingLookup{}, false
+	for _, model := range models {
+		provider, unqualified := genAIProviderAndModel(model.lookup)
+		add(genAICandidate{provider, unqualified, model.priced})
+		if provider != "" || unqualified != model.lookup {
+			add(genAICandidate{model: model.lookup, priced: model.priced})
+		}
+	}
+	return out
 }
 
 func genAIProviderAndModel(model string) (string, string) {

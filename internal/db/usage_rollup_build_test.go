@@ -370,7 +370,7 @@ func TestBuildUsageDailyContributionsRecordsDiscardedSnapshots(t *testing.T) {
 		[]usageRollupFact{loser, winner}, newUsageDedupIdentitySet(),
 	)
 	require.Empty(t, exceptions)
-	daily, err := buildUsageDailyContributions(survivors, resolver)
+	daily, _, err := buildUsageDailyContributions(survivors, resolver)
 	require.NoError(t, err)
 	require.Len(t, daily, 1)
 	assert.Equal(t, int64(20), daily[0].OutputTokens)
@@ -389,12 +389,15 @@ func TestBuildUsageDailyContributionsPricesBeforeSumming(t *testing.T) {
 		},
 	}})
 
-	daily, err := buildUsageDailyContributions(
+	daily, inputs, err := buildUsageDailyContributions(
 		[]usageRollupSurvivor{{Fact: first}, {Fact: second}}, resolver,
 	)
 	require.NoError(t, err)
 	require.Len(t, daily, 1)
 	assert.Equal(t, int64(2), daily[0].CostMicrodollars)
+	assert.Equal(t, []usagePricingInput{{
+		ReportedModel: "model-a", CanonicalModel: "model-a",
+	}}, inputs, "both facts share one pricing lookup")
 }
 
 func rollupSnapshotFact(

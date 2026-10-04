@@ -178,3 +178,55 @@ func awaitPricingResult(t *testing.T, result <-chan error) {
 		require.FailNow(t, "pricing operation did not finish")
 	}
 }
+
+type fakeUsageCacheRewarmer struct {
+	digest    string
+	digestErr error
+	calls     int
+	err       error
+}
+
+func (f *fakeUsageCacheRewarmer) UsagePricingDigest(context.Context) (string, error) {
+	return f.digest, f.digestErr
+}
+
+func (f *fakeUsageCacheRewarmer) RewarmUsageCache() error {
+	f.calls++
+	return f.err
+}
+
+func TestRunPricingRefreshRewarmsAfterCommittedWrites(t *testing.T) {
+	refreshErr := errors.New("openrouter failed")
+	tests := []struct {
+		name      string
+		writes    bool
+		refresh   error
+		digestErr error
+		rewarm    error
+		wantErr   error
+		wantCalls int
+	}{
+		{name: "committed writes", writes: true, wantCalls: 1},
+		{name: "no writes", wantCalls: 0},
+		{name: "partial refresh", writes: true, refresh: refreshErr, wantErr: refreshErr, wantCalls: 1},
+		{name: "failed refresh without writes", refresh: refreshErr, wantErr: refreshErr},
+		{name: "unreadable digest", digestErr: errors.New("locked"), wantCalls: 1},
+		{name: "rewarm failure keeps job healthy", writes: true, rewarm: errors.New("busy"), wantCalls: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rewarmer := &fakeUsageCacheRewarmer{
+				digest: "before", digestErr: tt.digestErr, err: tt.rewarm,
+			}
+			err := runPricingRefresh(t.Context(), nil, func(context.Context) error {
+				assert.Zero(t, rewarmer.calls, "re-warm must wait for the refresh")
+				if tt.writes {
+					rewarmer.digest = "after"
+				}
+				return tt.refresh
+			}, rewarmer)
+			require.ErrorIs(t, err, tt.wantErr)
+			assert.Equal(t, tt.wantCalls, rewarmer.calls)
+		})
+	}
+}
