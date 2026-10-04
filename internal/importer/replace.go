@@ -52,64 +52,39 @@ type sessionReplacer interface {
 
 // replaceable reports whether an explicit replace may override err: only history refusals, never trashed or transient ones.
 func replaceable(err error) bool {
-	switch refusalReason(err) {
-	case RefusalDiverged, RefusalShorterExport:
-		return true
-	case RefusalTrashed, RefusalTransient:
-		return false
-	}
-	return false
+	reason := refusalReason(err)
+	return reason == RefusalDiverged || reason == RefusalShorterExport
 }
 
-func importClaudeAIConversation(
+// conversationImport is one agent's default upsert and the message rows it writes.
+type conversationImport struct {
+	agent    parser.AgentType
+	upsert   func(context.Context, db.Store, parser.ParseResult, *lazyFTS) (importStatus, error)
+	messages func(string, []parser.ParsedMessage) []db.Message
+}
+
+var (
+	claudeAIImport = conversationImport{parser.AgentClaudeAI, upsertConversation, claudeAIMessages}
+	chatGPTImport  = conversationImport{parser.AgentChatGPT, upsertChatGPTConversation, chatGPTMessages}
+)
+
+// importConversation runs the default upsert and, when it refuses a session opts lists, replaces the session's messages with the export's and keeps the previous version as a trashed copy.
+func (ci conversationImport) importConversation(
 	ctx context.Context,
 	store db.Store,
 	result parser.ParseResult,
 	fts *lazyFTS,
 	opts ImportOptions,
 ) (importStatus, error) {
-	status, err := upsertConversation(ctx, store, result, fts)
-	if err == nil || !replaceable(err) || !opts.replaces(result.Session.ID) {
-		return status, err
+	status, refused := ci.upsert(ctx, store, result, fts)
+	if refused == nil || !replaceable(refused) || !opts.replaces(result.Session.ID) {
+		return status, refused
 	}
-	// chatGPTSession builds the same row upsertConversation writes.
-	return replaceConversation(ctx, store, parser.AgentClaudeAI, db.SessionBatchWrite{
-		Session:  chatGPTSession(result.Session),
-		Messages: claudeAIMessages(result.Session.ID, result.Messages),
-	}, fts, err)
-}
-
-func importChatGPTConversation(
-	ctx context.Context,
-	store db.Store,
-	result parser.ParseResult,
-	fts *lazyFTS,
-	opts ImportOptions,
-) (importStatus, error) {
-	status, err := upsertChatGPTConversation(ctx, store, result, fts)
-	if err == nil || !replaceable(err) || !opts.replaces(result.Session.ID) {
-		return status, err
-	}
-	return replaceConversation(ctx, store, parser.AgentChatGPT, db.SessionBatchWrite{
-		Session:  chatGPTSession(result.Session),
-		Messages: chatGPTMessages(result.Session.ID, result.Messages),
-	}, fts, err)
-}
-
-// replaceConversation replaces a refused session's messages with the export's and keeps the previous version as a trashed copy.
-func replaceConversation(
-	ctx context.Context,
-	store db.Store,
-	agent parser.AgentType,
-	write db.SessionBatchWrite,
-	fts *lazyFTS,
-	refused error,
-) (importStatus, error) {
-	existing, err := store.GetSession(ctx, write.Session.ID)
+	existing, err := store.GetSession(ctx, result.Session.ID)
 	if err != nil {
 		return importNew, err
 	}
-	if existing == nil || existing.Agent != string(agent) {
+	if existing == nil || existing.Agent != string(ci.agent) {
 		return importNew, refused
 	}
 	r, ok := store.(sessionReplacer)
@@ -117,10 +92,14 @@ func replaceConversation(
 		return importNew, fmt.Errorf("replace needs a local archive: %w", refused)
 	}
 	fts.suspend(ctx)
-	_, err = r.ReplaceSessionKeepingTrashedCopy(ctx, write)
+	// chatGPTSession builds the same row both upserts write.
+	_, err = r.ReplaceSessionKeepingTrashedCopy(ctx, db.SessionBatchWrite{
+		Session:  chatGPTSession(result.Session),
+		Messages: ci.messages(result.Session.ID, result.Messages),
+	})
 	switch {
 	// A trashed ChatGPT conversation is a skip and a trashed Claude.ai one a refusal, as on the default path.
-	case errors.Is(err, db.ErrSessionTrashed) && agent == parser.AgentClaudeAI:
+	case errors.Is(err, db.ErrSessionTrashed) && ci.agent == parser.AgentClaudeAI:
 		return importNew, err
 	case errors.Is(err, db.ErrReplaceUnchanged),
 		errors.Is(err, db.ErrSessionTrashed),

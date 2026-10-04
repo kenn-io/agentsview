@@ -160,7 +160,7 @@ func ImportClaudeAIWithOptions(
 		result.Session.Machine = resolvedImportMachine(
 			result.Session.Machine, machine,
 		)
-		status, err := importClaudeAIConversation(
+		status, err := claudeAIImport.importConversation(
 			ctx, store, result, fts, opts,
 		)
 		stats.record(result.Session.ID, status, err)
@@ -381,7 +381,7 @@ func ImportChatGPTWithOptions(
 			result.Session.Machine = resolvedImportMachine(
 				result.Session.Machine, machine,
 			)
-			status, err := importChatGPTConversation(
+			status, err := chatGPTImport.importConversation(
 				ctx, store, result, fts, opts,
 			)
 			stats.record(result.Session.ID, status, err)

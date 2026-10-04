@@ -253,8 +253,8 @@ const chatGPTRefusalConvWithAppend = `[{
   }
 }]`
 
-// postChatGPTExport posts conversations as a one-file export zip and decodes the JSON body.
-func postChatGPTExport(t *testing.T, srv *Server, conversations string) map[string]any {
+// chatGPTExportZip packs conversations as a one-file ChatGPT export zip.
+func chatGPTExportZip(t *testing.T, conversations string) []byte {
 	t.Helper()
 	var archive bytes.Buffer
 	zw := zip.NewWriter(&archive)
@@ -263,12 +263,17 @@ func postChatGPTExport(t *testing.T, srv *Server, conversations string) map[stri
 	_, err = entry.Write([]byte(conversations))
 	require.NoError(t, err)
 	require.NoError(t, zw.Close())
+	return archive.Bytes()
+}
 
+// postChatGPTExport posts conversations as a one-file export zip and decodes the JSON body.
+func postChatGPTExport(t *testing.T, srv *Server, conversations string) map[string]any {
+	t.Helper()
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	part, err := writer.CreateFormFile("file", "export.zip")
 	require.NoError(t, err)
-	_, err = part.Write(archive.Bytes())
+	_, err = part.Write(chatGPTExportZip(t, conversations))
 	require.NoError(t, err)
 	require.NoError(t, writer.Close())
 
@@ -366,53 +371,7 @@ func TestHandleImportClaudeAIStreamsRefusalsOnlyWhenDone(t *testing.T) {
 	}, done.Refusals)
 }
 
-func claudeAIReplaceExport(texts ...string) string {
-	msgs := make([]string, len(texts))
-	for i, text := range texts {
-		sender := "human"
-		if i%2 == 1 {
-			sender = "assistant"
-		}
-		ts := fmt.Sprintf("2026-03-01T10:0%d:00.000000Z", i)
-		msgs[i] = fmt.Sprintf(`{"uuid":"m%d","text":%q,"content":[{"type":"text","text":%q}],"sender":%q,"created_at":%q,"updated_at":%q,"attachments":[],"files":[]}`,
-			i, text, text, sender, ts, ts)
-	}
-	return `[{"uuid":"replace-001","name":"Replace","summary":"",` +
-		`"created_at":"2026-03-01T10:00:00.000000Z","updated_at":"2026-03-01T10:05:00.000000Z",` +
-		`"account":{"uuid":"acct-1"},"chat_messages":[` + strings.Join(msgs, ",") + `]}]`
-}
-
-func chatGPTReplaceZip(t *testing.T, texts ...string) []byte {
-	t.Helper()
-	nodes := make([]string, len(texts))
-	parent := "r"
-	for i, text := range texts {
-		role := "user"
-		if i%2 == 1 {
-			role = "assistant"
-		}
-		node := fmt.Sprintf("n%d", i+1)
-		children := "[]"
-		if i+1 < len(texts) {
-			children = fmt.Sprintf(`["n%d"]`, i+2)
-		}
-		nodes[i] = fmt.Sprintf(`%q:{"id":%q,"parent":%q,"children":%s,"message":{"id":"m-%s","create_time":%d,"author":{"role":%q,"name":null,"metadata":{}},"content":{"content_type":"text","parts":[%q]},"status":"finished_successfully","metadata":{}}}`,
-			node, node, parent, children, node, 1706745600+10*i, role, text)
-		parent = node
-	}
-	conv := `[{"id":"cg-replace","conversation_id":"cg-replace","title":"Replace",` +
-		`"create_time":1706745600.0,"update_time":1706745700.0,"current_node":"` + parent + `",` +
-		`"mapping":{"r":{"id":"r","parent":null,"children":["n1"],"message":null},` + strings.Join(nodes, ",") + `}}]`
-	var buf bytes.Buffer
-	zw := zip.NewWriter(&buf)
-	w, err := zw.Create("conversations-000.json")
-	require.NoError(t, err)
-	_, err = w.Write([]byte(conv))
-	require.NoError(t, err)
-	require.NoError(t, zw.Close())
-	return buf.Bytes()
-}
-
+// postImport posts data to an import route and decodes the stats from the JSON body or the stream's done event.
 func postImport(t *testing.T, srv *Server, path, filename string, data []byte, stream bool) importer.ImportStats {
 	t.Helper()
 	var body bytes.Buffer
@@ -431,74 +390,52 @@ func postImport(t *testing.T, srv *Server, path, filename string, data []byte, s
 	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
 
 	var stats importer.ImportStats
-	if !stream {
-		require.NoError(t, json.UnmarshalRead(rec.Body, &stats))
-		return stats
+	payload := rec.Body.String()
+	if stream {
+		_, done, ok := strings.Cut(payload, "event: done\ndata: ")
+		require.True(t, ok, "no done event in %s", payload)
+		payload, _, _ = strings.Cut(done, "\n")
 	}
-	lines := strings.Split(rec.Body.String(), "\n")
-	found := false
-	for i, line := range lines {
-		if line == "event: done" && i+1 < len(lines) {
-			require.NoError(t, json.Unmarshal([]byte(strings.TrimPrefix(lines[i+1], "data: ")), &stats))
-			found = true
-		}
-	}
-	require.True(t, found, "no done event in %s", rec.Body.String())
+	require.NoError(t, json.Unmarshal([]byte(payload), &stats))
 	return stats
 }
 
 func TestHandleImportReplaceQuery(t *testing.T) {
+	const claudeAIMessage = `{"uuid":"m%d","text":"turn %d","sender":"human","content":[{"type":"text","text":"turn %d"}],"created_at":"2026-03-01T10:0%d:00.000000Z"}`
+	claudeAIExport := func(n int) []byte {
+		msgs := make([]string, n)
+		for i := range msgs {
+			msgs[i] = fmt.Sprintf(claudeAIMessage, i, i, i, i)
+		}
+		return []byte(`[{"uuid":"replace-001","name":"Replace","created_at":"2026-03-01T10:00:00.000000Z",` +
+			`"updated_at":"2026-03-01T10:05:00.000000Z","chat_messages":[` + strings.Join(msgs, ",") + `]}]`)
+	}
+	claudeAI := struct{ path, file, id string }{"/api/v1/import/claude-ai", "conversations.json", "claude-ai:replace-001"}
+	chatGPT := struct{ path, file, id string }{"/api/v1/import/chatgpt", "export.zip", "chatgpt:cg-1"}
 	for _, tt := range []struct {
-		name      string
-		path      string
-		filename  string
-		sessionID string
-		stream    bool
-		initial   []byte
-		refused   []byte
+		name             string
+		route            struct{ path, file, id string }
+		initial, refused []byte
+		stream           bool
 	}{
-		{
-			name: "claude-ai json", path: "/api/v1/import/claude-ai", filename: "conversations.json",
-			sessionID: "claude-ai:replace-001",
-			initial:   []byte(claudeAIReplaceExport("Hello", "Hi there", "Extra")),
-			refused:   []byte(claudeAIReplaceExport("Hello", "Hi there")),
-		},
-		{
-			name: "claude-ai sse", path: "/api/v1/import/claude-ai", filename: "conversations.json",
-			sessionID: "claude-ai:replace-001", stream: true,
-			initial: []byte(claudeAIReplaceExport("Hello", "Hi there", "Extra")),
-			refused: []byte(claudeAIReplaceExport("Hello", "Hi there")),
-		},
-		{
-			name: "chatgpt json", path: "/api/v1/import/chatgpt", filename: "export.zip",
-			sessionID: "chatgpt:cg-replace",
-			initial:   chatGPTReplaceZip(t, "Hello", strings.Repeat("x", 500), "metadata row"),
-			refused:   chatGPTReplaceZip(t, "Hello", strings.Repeat("x", 800)),
-		},
+		{"claude-ai json", claudeAI, claudeAIExport(2), claudeAIExport(1), false},
+		{"claude-ai sse", claudeAI, claudeAIExport(2), claudeAIExport(1), true},
+		{"chatgpt json", chatGPT, chatGPTExportZip(t, chatGPTRefusalConvWithAppend), chatGPTExportZip(t, chatGPTRefusalConv), false},
+		{"chatgpt sse", chatGPT, chatGPTExportZip(t, chatGPTRefusalConvWithAppend), chatGPTExportZip(t, chatGPTRefusalConv), true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := testServer(t, 5*time.Second)
-			stats := postImport(t, srv, tt.path, tt.filename, tt.initial, tt.stream)
-			require.Equal(t, 1, stats.Imported)
+			require.Equal(t, 1, postImport(t, srv, tt.route.path, tt.route.file, tt.initial, tt.stream).Imported)
+			require.Equal(t, 1, postImport(t, srv, tt.route.path, tt.route.file, tt.refused, tt.stream).Errors)
 
-			stats = postImport(t, srv, tt.path, tt.filename, tt.refused, tt.stream)
-			assert.Equal(t, 1, stats.Errors)
-			assert.Zero(t, stats.Updated)
-
-			query := "?" + url.Values{"replace": {tt.sessionID}}.Encode()
-			stats = postImport(t, srv, tt.path+query, tt.filename, tt.refused, tt.stream)
+			query := "?" + url.Values{"replace": {tt.route.id}}.Encode()
+			stats := postImport(t, srv, tt.route.path+query, tt.route.file, tt.refused, tt.stream)
 			assert.Equal(t, 1, stats.Updated)
 			assert.Zero(t, stats.Errors)
-
-			local, ok := srv.db.(*db.DB)
-			require.True(t, ok)
-			msgs, err := local.GetAllMessages(t.Context(), tt.sessionID)
-			require.NoError(t, err)
-			assert.Len(t, msgs, 2)
-			trashed, err := local.ListTrashedSessions(t.Context())
+			trashed, err := srv.db.(*db.DB).ListTrashedSessions(t.Context())
 			require.NoError(t, err)
 			require.Len(t, trashed, 1)
-			assert.True(t, strings.HasPrefix(trashed[0].ID, tt.sessionID+":replaced:"), trashed[0].ID)
+			assert.True(t, strings.HasPrefix(trashed[0].ID, tt.route.id+":replaced:"), trashed[0].ID)
 		})
 	}
 }

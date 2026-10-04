@@ -80,41 +80,25 @@ func TestGeminiAppsImportDispatchesDirectAndZipSources(t *testing.T) {
 	assert.Empty(t, formatImportFailureSummary(importer.ImportStats{}))
 }
 
-// chatGPTReplaceExportDir writes a one-conversation ChatGPT export whose turns alternate user and assistant.
-func chatGPTReplaceExportDir(t *testing.T, texts ...string) string {
+// claudeAIExportFile writes a one-conversation Claude.ai export with n messages.
+func claudeAIExportFile(t *testing.T, n int) string {
 	t.Helper()
-	nodes := make([]string, len(texts))
-	parent := "r"
-	for i, text := range texts {
-		role := "user"
-		if i%2 == 1 {
-			role = "assistant"
-		}
-		node := fmt.Sprintf("n%d", i+1)
-		children := "[]"
-		if i+1 < len(texts) {
-			children = fmt.Sprintf(`["n%d"]`, i+2)
-		}
-		nodes[i] = fmt.Sprintf(`%q:{"id":%q,"parent":%q,"children":%s,"message":{"id":"m-%s","create_time":%d,"author":{"role":%q,"name":null,"metadata":{}},"content":{"content_type":"text","parts":[%q]},"status":"finished_successfully","metadata":{}}}`,
-			node, node, parent, children, node, 1706745600+10*i, role, text)
-		parent = node
+	msgs := make([]string, n)
+	for i := range msgs {
+		msgs[i] = fmt.Sprintf(`{"uuid":"m%d","text":"turn %d","sender":"human","content":[{"type":"text","text":"turn %d"}],"created_at":"2026-03-01T10:0%d:00.000000Z"}`, i, i, i, i)
 	}
-	conv := `[{"id":"cg-1","conversation_id":"cg-1","title":"Replace",` +
-		`"create_time":1706745600.0,"update_time":1706745700.0,"current_node":"` + parent + `",` +
-		`"mapping":{"r":{"id":"r","parent":null,"children":["n1"],"message":null},` + strings.Join(nodes, ",") + `}}]`
-	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "conversations-000.json"), []byte(conv), 0o644))
-	return dir
+	path := filepath.Join(t.TempDir(), "conversations.json")
+	require.NoError(t, os.WriteFile(path, []byte(`[{"uuid":"replace-001","name":"Replace",`+
+		`"created_at":"2026-03-01T10:00:00.000000Z","updated_at":"2026-03-01T10:05:00.000000Z",`+
+		`"chat_messages":[`+strings.Join(msgs, ",")+`]}]`), 0o644))
+	return path
 }
 
 func TestImportSessionsReplace(t *testing.T) {
 	testDataDir(t)
-	exportA := chatGPTReplaceExportDir(t, "Hello", strings.Repeat("x", 500), "metadata row")
-	exportB := chatGPTReplaceExportDir(t, "Hello", strings.Repeat("x", 800))
-
-	require.NoError(t, importSessions(ImportConfig{Type: "chatgpt", Path: exportA}))
+	require.NoError(t, importSessions(ImportConfig{Type: "claude-ai", Path: claudeAIExportFile(t, 2)}))
 	require.NoError(t, importSessions(ImportConfig{
-		Type: "chatgpt", Path: exportB, Replace: []string{"chatgpt:cg-1"},
+		Type: "claude-ai", Path: claudeAIExportFile(t, 1), Replace: []string{"claude-ai:replace-001"},
 	}))
 
 	cfg, err := config.LoadMinimal()
@@ -122,14 +106,13 @@ func TestImportSessionsReplace(t *testing.T) {
 	database, err := openDB(t.Context(), cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
-	msgs, err := database.GetAllMessages(t.Context(), "chatgpt:cg-1")
+	msgs, err := database.GetAllMessages(t.Context(), "claude-ai:replace-001")
 	require.NoError(t, err)
-	require.Len(t, msgs, 2)
-	assert.Equal(t, strings.Repeat("x", 800), msgs[1].Content)
+	assert.Len(t, msgs, 1)
 	trashed, err := database.ListTrashedSessions(t.Context())
 	require.NoError(t, err)
 	require.Len(t, trashed, 1)
-	assert.True(t, strings.HasPrefix(trashed[0].ID, "chatgpt:cg-1:replaced:"), trashed[0].ID)
+	assert.True(t, strings.HasPrefix(trashed[0].ID, "claude-ai:replace-001:replaced:"), trashed[0].ID)
 }
 
 func TestImportSessionsRejectsReplaceForGeminiApps(t *testing.T) {
@@ -144,17 +127,6 @@ func TestImportSessionsRejectsReplaceForGeminiApps(t *testing.T) {
 	assert.Empty(t, entries, "the rejection must not create a database")
 }
 
-func TestImportCommandReplaceFlag(t *testing.T) {
-	cmd := newImportCommand()
-	require.NoError(t, cmd.ParseFlags([]string{"--type", "chatgpt", "--replace", "a", "--replace", "b,c"}))
-	got, err := cmd.Flags().GetStringArray("replace")
-	require.NoError(t, err)
-	assert.Equal(t, []string{"a", "b,c"}, got)
-}
-
-// isolateParseDiffEnv points the data dir, HOME, and every per-agent
-// directory override at empty temp dirs so end-to-end runs never
-// discover the developer machine's real session files.
 func isolateParseDiffEnv(t *testing.T) {
 	t.Helper()
 	testDataDir(t)

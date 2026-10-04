@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -123,18 +124,11 @@ func sessionCopyWrite(src Session, copyID string, msgs []Message) SessionBatchWr
 	sess.FileInode, sess.FileDevice, sess.FileHash = nil, nil, nil
 	rows := make([]Message, len(msgs))
 	for i, m := range msgs {
-		m.ID = 0
-		m.SessionID = copyID
-		calls := make([]ToolCall, len(m.ToolCalls))
-		for j, tc := range m.ToolCalls {
-			tc.SessionID = copyID
-			tc.MessageID = 0
-			calls[j] = tc
+		m.ID, m.SessionID = 0, copyID
+		m.ToolCalls = slices.Clone(m.ToolCalls)
+		for j := range m.ToolCalls {
+			m.ToolCalls[j].SessionID, m.ToolCalls[j].MessageID = copyID, 0
 		}
-		if m.ToolCalls == nil {
-			calls = nil
-		}
-		m.ToolCalls = calls
 		rows[i] = m
 	}
 	return SessionBatchWrite{
