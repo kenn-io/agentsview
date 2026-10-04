@@ -89,10 +89,6 @@ func TestToolSequencesHTTPParity(t *testing.T) {
 				assert.Equal(t, float64(99+i), row["ordinal"])
 				if i == 1 || i == 2 {
 					assert.Equal(t, "identical", row["repeat"])
-					assert.Nil(t, row["duration_ms"])
-				}
-				if i == 0 || i == 3 {
-					assert.Equal(t, float64(2000), row["duration_ms"])
 				}
 			}
 			assert.Equal(t, true, calls[3].(map[string]any)["tool_changed"])

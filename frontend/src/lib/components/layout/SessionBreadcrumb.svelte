@@ -58,6 +58,7 @@
 
   import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
   import { messages as messagesStore } from "../../stores/messages.svelte.js";
+  import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
   import { formatModelEffort } from "../../utils/model.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { m } from "../../i18n/index.js";
@@ -82,14 +83,12 @@
   let feedbackTimer: ReturnType<typeof setTimeout> | undefined;
   let sessionDir = $state<string | null>(null);
   let toolSequencesData = $state<SessionToolSequencesResponse | null>(null);
-  let toolSequencesRevision = $state("");
   let toolSequencesLoading = $state(false);
   let toolSequencesFailed = $state(false);
   let toolSequencesUnavailable = $state(false);
-  // A delegated call gets its duration when its child session closes, which can be any session, so a read that found one also refetches on session changes. Keyed by read so a switch needs no reset.
-  let toolSequencesAwaitingBase = $state("");
   let toolSequencesRetry = $state(0);
-  let toolSequencesLoadedIdentity = "";
+  // The session, loaded message revision and end state the current or last read was for.
+  let toolSequencesIdentity = "";
   const openersRead = new LatestRead();
   const directoryRead = new LatestRead();
   const costRead = new LatestRead();
@@ -373,67 +372,56 @@
   });
 
   $effect(() => {
-    const currentSession = session;
-    const id = currentSession?.id;
+    const id = session?.id;
+    const termination = session?.termination_status ?? "";
     const visible = ui.signalPanelOpen;
-    // Read so a retry reruns this effect; a failed read never records its identity.
+    // Read so a retry reruns this effect; a failed read clears its identity.
     void toolSequencesRetry;
-    if (!visible || !id || !currentSession) {
+    if (!visible || !id) {
       toolSequencesRead.cancel();
       toolSequencesData = null;
-      toolSequencesRevision = "";
       toolSequencesLoading = false;
       toolSequencesFailed = false;
       toolSequencesUnavailable = false;
-      toolSequencesLoadedIdentity = "";
+      toolSequencesIdentity = "";
       return;
     }
 
-    const revision = currentSession.transcript_revision ?? "";
-    const base = [id, revision, currentSession.termination_status ?? ""].join("\n");
-    if (untrack(() => toolSequencesData?.session_id !== id || toolSequencesRevision !== revision)) {
-      toolSequencesData = null;
-      toolSequencesRevision = "";
-      toolSequencesLoadedIdentity = "";
+    if (untrack(() => toolSequencesData?.session_id !== id)) toolSequencesData = null;
+    const loadedRevision = messagesStore.sessionId === id ? messagesStore.loadedRevision : null;
+    if (loadedRevision === null && messagesStore.loading) {
+      // The message list is replacing its rows; read once they land so the sequences match them.
+      toolSequencesRead.cancel();
+      toolSequencesIdentity = "";
+      toolSequencesLoading = true;
+      toolSequencesFailed = false;
+      toolSequencesUnavailable = false;
+      return;
     }
-    const usageVersion = untrack(() => sessions.activeSessionUsageVersion);
-    const identity = toolSequencesAwaitingBase === base
-      ? `${base}\n${sessions.activeSessionUsageVersion}`
-      : base;
-    if (identity === toolSequencesLoadedIdentity) return;
+    const identity = [id, loadedRevision ?? "", termination].join("\n");
+    if (identity === toolSequencesIdentity) return;
+    toolSequencesIdentity = identity;
     toolSequencesLoading = true;
     toolSequencesFailed = false;
     toolSequencesUnavailable = false;
     const signal = toolSequencesRead.begin();
     SessionsService.getApiV1SessionsByIdToolSequences({ id }, { signal })
       .then((response) => {
-        // Settle the read before writing state the effect tracks, since that rerun cancels the read.
         if (!toolSequencesRead.finish(signal)) return;
-        // A sync can land between reading the session and reading its sequences; the panel waits for the session to catch up rather than link into the wrong transcript.
-        toolSequencesLoading = response.transcript_revision !== revision;
-        if (toolSequencesLoading && sessions.activeSessionId === id) void sessions.refreshActiveSession();
-        const awaiting = response.sequences.some((sequence) =>
-          sequence.calls.some((call) => call.awaiting_subagent),
-        );
-        toolSequencesLoadedIdentity = awaiting ? `${base}\n${usageVersion}` : base;
-        toolSequencesAwaitingBase = awaiting ? base : "";
+        toolSequencesLoading = false;
         toolSequencesData = response;
-        toolSequencesRevision = response.transcript_revision;
       })
       .catch((error) => {
         if (isAbortError(error) || !toolSequencesRead.finish(signal)) return;
         toolSequencesLoading = false;
         toolSequencesData = null;
-        toolSequencesRevision = "";
         if (error instanceof ApiError && error.status === 501) {
-          toolSequencesLoadedIdentity = base;
           toolSequencesUnavailable = true;
         } else {
+          toolSequencesIdentity = "";
           toolSequencesFailed = true;
         }
       });
-
-    return () => toolSequencesRead.cancel();
   });
 
   function sessionDisplayId(id: string): string {
@@ -1201,7 +1189,11 @@
 {#if ui.signalPanelOpen && session}
   <SignalPanel {session} />
   <ToolSequencesPanel
-    data={toolSequencesData?.session_id === session.id && toolSequencesRevision === (session.transcript_revision ?? "") ? toolSequencesData : null}
+    data={toolSequencesData?.session_id === session.id ? toolSequencesData : null}
+    linked={toolSequencesData?.session_id === session.id &&
+      messagesStore.sessionId === session.id &&
+      toolSequencesData.transcript_revision === messagesStore.loadedRevision}
+    timing={sessionTiming.timing?.session_id === session.id ? sessionTiming.timing : null}
     sessionId={session.id}
     loading={toolSequencesLoading}
     failed={toolSequencesFailed}

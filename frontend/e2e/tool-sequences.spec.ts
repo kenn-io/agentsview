@@ -34,11 +34,13 @@ test("renders, expands, and navigates observed sequences at desktop, tablet, and
       identical: true,
       tool_changed: true,
       calls: [
-        { ordinal: 1, tool_use_id: "grep-1", duration_ms: 2000 },
-        { ordinal: 2, tool_use_id: "grep-2", duration_ms: null },
-        { ordinal: 3, tool_use_id: "read-1", duration_ms: 2000 },
+        { ordinal: 1, tool_use_id: "grep-1" },
+        { ordinal: 2, tool_use_id: "grep-2" },
+        { ordinal: 3, tool_use_id: "read-1" },
       ],
     });
+    // Durations come from the session timing the transcript already shows.
+    expect(data.sequences[0].calls[0]).not.toHaveProperty("duration_ms");
 
     const header = panel.locator(".panel-head");
     await expect(header).toContainText("3 calls in sequences");

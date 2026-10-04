@@ -2,7 +2,6 @@ package dbtest
 
 import (
 	"fmt"
-	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -28,15 +27,13 @@ func SeedToolSequencesExample(
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), sessionID, ToolSequencesExampleMessages(sessionID)))
 }
 
-// SeedToolSequencesParity adds retained-evidence and child-timing cases to the
-// basic recovery example used by the backend parity tests.
+// SeedToolSequencesParity adds retained-evidence, incomplete and long streamed
+// cases to the basic recovery example used by the backend parity tests.
 func SeedToolSequencesParity(t *testing.T, d *db.DB) []string {
 	t.Helper()
 	const exampleID = "tool-sequences-parity"
 	const evidenceID = "tool-sequences-parity-evidence"
 	const incompleteID = "tool-sequences-parity-incomplete"
-	const childID = "tool-sequences-parity-child"
-	const parentID = "tool-sequences-parity-parent"
 	SeedToolSequencesExample(t, d, exampleID)
 
 	evidenceMessages := []db.Message{
@@ -59,41 +56,7 @@ func SeedToolSequencesParity(t *testing.T, d *db.DB) []string {
 	}
 	seedToolSequenceParitySession(t, d, incompleteID, "tool_call_pending", incompleteMessages)
 
-	childStart := "2026-04-26T10:00:02Z"
-	childEnd := "2026-04-26T10:00:05Z"
-	SeedSession(t, d, childID, "tool-sequences-parity", func(s *db.Session) {
-		s.MessageCount = 0
-		s.StartedAt = &childStart
-		s.EndedAt = &childEnd
-		s.ParentSessionID = Ptr(parentID)
-		s.ParentSessionIDs = []string{parentID}
-		s.RelationshipType = "subagent"
-	})
-	parentMessages := []db.Message{
-		{SessionID: parentID, Ordinal: 0, Role: "user", Content: "Delegate the task", ContentLength: len("Delegate the task"), Timestamp: "2026-04-26T10:00:00Z"},
-		toolSequenceParityMessage(parentID, 1, db.ToolCall{
-			ToolName: "Task", Category: "Tool", ToolUseID: "delegated",
-			SubagentSessionID: childID,
-			ResultEvents: []db.ToolResultEvent{{
-				ToolUseID: "delegated", Source: "tool_execution", Status: "errored", EventIndex: 0,
-			}},
-		}),
-	}
-	seedToolSequenceParitySession(t, d, parentID, "tool_call_pending", parentMessages)
-
 	const streamedID = "tool-sequences-parity-streamed"
-	const duplicateID = "tool-sequences-parity-duplicate"
-	duplicates := make([]db.ToolCall, 2)
-	for i, end := range []string{"2026-04-26T10:00:02Z", "2026-04-26T10:00:05Z"} {
-		duplicates[i] = toolSequenceParityCall("Grep", "same", "No matches found", 16, "completed")
-		duplicates[i].ResultEvents = []db.ToolResultEvent{
-			{ToolUseID: "same", Source: "tool_execution", Status: "started", Timestamp: "2026-04-26T10:00:00Z", EventIndex: 0},
-			{ToolUseID: "same", Source: "tool_execution", Status: "completed", Timestamp: end, Content: "No matches found", EventIndex: 1},
-		}
-	}
-	duplicateMessage := toolSequenceParityMessage(duplicateID, 7, duplicates[0])
-	duplicateMessage.ToolCalls = duplicates
-	seedToolSequenceParitySession(t, d, duplicateID, "clean", []db.Message{duplicateMessage})
 	streamed := []db.Message{{SessionID: streamedID, Ordinal: 0, Role: "user", Content: "search", ContentLength: 6}}
 	for i := 1; i <= 130; i++ {
 		call := toolSequenceParityCall("Grep", "reused", "No matches found", 16, "completed")
@@ -110,10 +73,6 @@ func SeedToolSequencesParity(t *testing.T, d *db.DB) []string {
 			for j := 1; j < 25; j++ {
 				sibling := call
 				sibling.ToolUseID = fmt.Sprint("parallel-", j)
-				if j == 1 {
-					sibling.ResultEvents = slices.Clone(call.ResultEvents)
-					sibling.ResultEvents[1].Timestamp = sibling.ResultEvents[0].Timestamp
-				}
 				if j == 20 {
 					sibling.ToolUseID = "reused"
 				}
@@ -124,7 +83,7 @@ func SeedToolSequencesParity(t *testing.T, d *db.DB) []string {
 	}
 	seedToolSequenceParitySession(t, d, streamedID, "clean", streamed)
 
-	return []string{exampleID, evidenceID, incompleteID, parentID, streamedID, duplicateID}
+	return []string{exampleID, evidenceID, incompleteID, streamedID}
 }
 
 func seedToolSequenceParitySession(

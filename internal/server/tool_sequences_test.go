@@ -55,7 +55,6 @@ type sessionToolSequenceCall struct {
 	Outcome              string `json:"outcome"`
 	Repeat               string `json:"repeat"`
 	ToolChanged          bool   `json:"tool_changed"`
-	DurationMs           *int64 `json:"duration_ms"`
 	InputPreview         string `json:"input_preview"`
 	InputBytes           int    `json:"input_bytes"`
 	InputOmittedBytes    int    `json:"input_omitted_bytes"`
@@ -63,7 +62,6 @@ type sessionToolSequenceCall struct {
 	ResultBytes          *int   `json:"result_bytes"`
 	ResultOmittedBytes   *int   `json:"result_omitted_bytes"`
 	ResultContentUnknown bool   `json:"result_content_unknown"`
-	AwaitingSubagent     bool   `json:"awaiting_subagent"`
 }
 
 func TestHandleToolSequences_Example(t *testing.T) {
@@ -101,16 +99,12 @@ func TestHandleToolSequences_Example(t *testing.T) {
 	assert.Equal(t, "identical", sequence.Calls[1].Repeat)
 	assert.True(t, sequence.Calls[2].ToolChanged)
 	assert.Equal(t, "No matches found", sequence.Calls[0].ResultPreview)
-	assert.Equal(t, new(int64(2000)), sequence.Calls[0].DurationMs)
-	assert.Nil(t, sequence.Calls[1].DurationMs)
-	assert.Equal(t, new(int64(2000)), sequence.Calls[2].DurationMs)
 
 	var raw any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &raw))
 	assert.False(t, containsCostKey(raw))
 	call := raw.(map[string]any)["sequences"].([]any)[0].(map[string]any)["calls"].([]any)[1].(map[string]any)
-	assert.Contains(t, call, "duration_ms")
-	assert.Nil(t, call["duration_ms"])
+	assert.NotContains(t, call, "duration_ms")
 	assert.Contains(t, call, "result_bytes")
 	assert.InDelta(t, float64(16), call["result_bytes"], 0)
 	assert.Contains(t, call, "result_omitted_bytes")
@@ -265,84 +259,6 @@ func TestHandleToolSequences_Bounds(t *testing.T) {
 	assert.Len(t, got.Sequences, 20)
 }
 
-func TestHandleToolSequences_Timing(t *testing.T) {
-	t.Run("repeated provider IDs keep each occurrence interval", func(t *testing.T) {
-		te := setup(t)
-		const id = "tool-sequences-repeated-id"
-		const start = "2026-04-26T10:00:00Z"
-		calls := make([]db.ToolCall, 12)
-		for i := range calls {
-			calls[i] = db.ToolCall{ToolName: "Grep", Category: "Grep", ToolUseID: "same", InputJSON: `{}`, ResultContent: "No matches found"}
-		}
-		for i, end := range []string{"2026-04-26T10:00:02Z", "2026-04-26T10:00:05Z"} {
-			calls[i].ResultEvents = []db.ToolResultEvent{
-				{ToolUseID: "same", Source: "tool_execution", Status: "started", Timestamp: start, EventIndex: 0},
-				{ToolUseID: "same", Source: "tool_execution", Status: "completed", Timestamp: end, Content: "No matches found", EventIndex: 1},
-			}
-		}
-		dbtest.SeedSession(t, te.db, id, "tool-sequences-test", dbtest.WithMessageCounts(1, 0))
-		require.NoError(t, te.db.ReplaceSessionMessages(t.Context(), id, []db.Message{{SessionID: id, Ordinal: 7, Role: "assistant", Timestamp: start, HasToolUse: true, ToolCalls: calls}}))
-		got := fetchSessionToolSequences(t, te, id)
-		require.Len(t, got.Sequences, 1)
-		require.Len(t, got.Sequences[0].Calls, 10)
-		assert.Equal(t, 2, got.Sequences[0].OmittedCalls)
-		assert.Equal(t, new(int64(2000)), got.Sequences[0].Calls[0].DurationMs)
-		assert.Equal(t, new(int64(5000)), got.Sequences[0].Calls[1].DurationMs)
-		assert.Equal(t, 11, got.Sequences[0].Calls[9].CallIndex)
-	})
-
-	t.Run("blank IDs use same-message occurrence timing", func(t *testing.T) {
-		te := setup(t)
-		const sessionID = "tool-sequences-blank-id-timing"
-		const start = "2026-04-26T10:00:00Z"
-		calls := make([]db.ToolCall, 3)
-		for i := range calls {
-			calls[i] = db.ToolCall{ToolName: "Grep", Category: "Grep", InputJSON: `{}`, ResultContent: "No matches found"}
-		}
-		for i, end := range []string{"2026-04-26T10:00:02Z", start} {
-			calls[i].ResultEvents = []db.ToolResultEvent{
-				{Source: "tool_execution", Status: "started", Timestamp: start, EventIndex: 0},
-				{Source: "tool_execution", Status: "completed", Timestamp: end, Content: "No matches found", EventIndex: 1},
-			}
-		}
-		dbtest.SeedSession(t, te.db, sessionID, "tool-sequences-test", func(s *db.Session) {
-			s.MessageCount = 1
-			s.TerminationStatus = new("clean")
-		})
-		require.NoError(t, te.db.ReplaceSessionMessages(t.Context(), sessionID, []db.Message{{
-			SessionID: sessionID, Ordinal: 7, Role: "assistant", Timestamp: start, HasToolUse: true, ToolCalls: calls,
-		}}))
-		response := fetchSessionToolSequences(t, te, sessionID)
-		require.Len(t, response.Sequences, 1)
-		require.Len(t, response.Sequences[0].Calls, 3)
-		for i, call := range response.Sequences[0].Calls {
-			assert.Equal(t, 7, call.Ordinal)
-			assert.Equal(t, i, call.CallIndex)
-			assert.Empty(t, call.ToolUseID)
-		}
-		assert.Equal(t, new(int64(2000)), response.Sequences[0].Calls[0].DurationMs)
-		assert.Equal(t, new(int64(0)), response.Sequences[0].Calls[1].DurationMs)
-		assert.Nil(t, response.Sequences[0].Calls[2].DurationMs)
-	})
-
-	t.Run("measured zero stays distinct from null", func(t *testing.T) {
-		te := setup(t)
-		const timestamp = "2026-04-26T10:00:00Z"
-		seedSequenceSession(t, te.db, "tool-sequences-zero", new("clean"), []db.ToolCall{
-			{ToolName: "Grep", Category: "Grep", ToolUseID: "zero", ResultContent: "No matches found", ResultEvents: []db.ToolResultEvent{
-				{ToolUseID: "zero", Source: "tool_execution", Status: "started", Timestamp: timestamp, EventIndex: 0},
-				{ToolUseID: "zero", Source: "tool_execution", Status: "completed", Timestamp: timestamp, Content: "No matches found", EventIndex: 1},
-			}},
-			{ToolName: "Grep", Category: "Grep", ToolUseID: "unmeasured", ResultContent: "No matches found"},
-		})
-		response := fetchSessionToolSequences(t, te, "tool-sequences-zero")
-		require.Len(t, response.Sequences, 1)
-		require.Len(t, response.Sequences[0].Calls, 2)
-		assert.Equal(t, new(int64(0)), response.Sequences[0].Calls[0].DurationMs)
-		assert.Nil(t, response.Sequences[0].Calls[1].DurationMs)
-	})
-}
-
 func TestHandleToolSequences_GeneratedClientValidation(t *testing.T) {
 	te := setup(t)
 	seedSequenceSession(t, te.db, "tool-sequences-empty-evidence", new("clean"), []db.ToolCall{{
@@ -362,7 +278,7 @@ func TestHandleToolSequences_GeneratedClientValidation(t *testing.T) {
 	require.NoError(t, response.Validate())
 	t.Run("required nullable fields survive round trip", func(t *testing.T) {
 		var response apiclient.GetAPIV1SessionsIDToolSequencesResponse
-		require.NoError(t, json.Unmarshal([]byte(`{"sequences":[{"calls":[{"duration_ms":null,"result_bytes":null,"result_omitted_bytes":null}]}]}`), &response))
+		require.NoError(t, json.Unmarshal([]byte(`{"sequences":[{"calls":[{"result_bytes":null,"result_omitted_bytes":null}]}]}`), &response))
 		encoded, err := json.Marshal(response)
 		require.NoError(t, err)
 		var roundTrip struct {
@@ -373,7 +289,7 @@ func TestHandleToolSequences_GeneratedClientValidation(t *testing.T) {
 		require.NoError(t, json.Unmarshal(encoded, &roundTrip))
 		require.Len(t, roundTrip.Sequences, 1)
 		require.Len(t, roundTrip.Sequences[0].Calls, 1)
-		for _, key := range []string{"duration_ms", "result_bytes", "result_omitted_bytes"} {
+		for _, key := range []string{"result_bytes", "result_omitted_bytes"} {
 			value, present := roundTrip.Sequences[0].Calls[0][key]
 			assert.True(t, present, "required nullable key %s", key)
 			assert.Nil(t, value, "nullable key %s", key)
@@ -381,62 +297,6 @@ func TestHandleToolSequences_GeneratedClientValidation(t *testing.T) {
 	})
 	call.Outcome = "invalid"
 	require.Error(t, response.Validate())
-}
-
-func TestHandleToolSequences_ChildClosureAddsOnlyMeasuredDuration(t *testing.T) {
-	te := setup(t)
-	const parentID, childID = "tool-sequences-parent-timing", "tool-sequences-child-timing"
-	childStart := "2026-04-26T10:00:00Z"
-	dbtest.SeedSession(t, te.db, childID, "tool-sequences-test", func(s *db.Session) {
-		s.StartedAt = &childStart
-		s.MessageCount = 1
-		s.ParentSessionID = dbtest.Ptr(parentID)
-		s.ParentSessionIDs = []string{parentID}
-		s.RelationshipType = "subagent"
-	})
-	dbtest.SeedSession(t, te.db, parentID, "tool-sequences-test", func(s *db.Session) {
-		s.MessageCount = 2
-		s.StartedAt = &childStart
-	})
-	// The spawn itself is timed, as Grok's spawn_subagent is, so the call has a duration before its child closes.
-	call := db.ToolCall{
-		ToolName: "Task", Category: "Tool", ToolUseID: "delegated", SubagentSessionID: childID,
-		ResultEvents: []db.ToolResultEvent{
-			{ToolUseID: "delegated", Source: "tool_execution", Status: "started", Timestamp: childStart, EventIndex: 0},
-			{ToolUseID: "delegated", Source: "tool_execution", Status: "errored", Timestamp: "2026-04-26T10:00:01Z", EventIndex: 1},
-		},
-	}
-	msgs := []db.Message{
-		{SessionID: parentID, Ordinal: 0, Role: "user", Content: "Delegate", ContentLength: 8, Timestamp: childStart},
-		{SessionID: parentID, Ordinal: 1, Role: "assistant", Content: "tool call", ContentLength: 9, Timestamp: "2026-04-26T10:00:01Z", HasToolUse: true, ToolCalls: []db.ToolCall{call}},
-	}
-	require.NoError(t, te.db.ReplaceSessionMessages(t.Context(), parentID, msgs))
-	parentBefore, err := te.db.GetSession(t.Context(), parentID)
-	require.NoError(t, err)
-	require.NotNil(t, parentBefore)
-	parentRevision := parentBefore.TranscriptRevision
-	require.NotNil(t, parentRevision)
-
-	first := fetchSessionToolSequences(t, te, parentID)
-	require.Len(t, first.Sequences, 1)
-	assert.Equal(t, "open", first.Sequences[0].Ending)
-	assert.Equal(t, new(int64(1000)), first.Sequences[0].Calls[0].DurationMs)
-	assert.True(t, first.Sequences[0].Calls[0].AwaitingSubagent)
-
-	child, err := te.db.GetSession(t.Context(), childID)
-	require.NoError(t, err)
-	require.NotNil(t, child)
-	childEnded := "2026-04-26T10:00:04Z"
-	child.EndedAt = &childEnded
-	require.NoError(t, te.db.UpsertSession(t.Context(), *child))
-
-	second := fetchSessionToolSequences(t, te, parentID)
-	require.Len(t, second.Sequences, 1)
-	assert.Equal(t, new(int64(4000)), second.Sequences[0].Calls[0].DurationMs)
-	assert.False(t, second.Sequences[0].Calls[0].AwaitingSubagent)
-	parentAfter, err := te.db.GetSession(t.Context(), parentID)
-	require.NoError(t, err)
-	assert.Equal(t, parentRevision, parentAfter.TranscriptRevision)
 }
 
 func TestHandleToolSequences_ScopeAndPresence(t *testing.T) {
@@ -688,23 +548,12 @@ func TestHandleToolSequences_DuckDBParity(t *testing.T) {
 	require.Len(t, incomplete.Sequences, 1)
 	assert.Equal(t, "open", incomplete.Sequences[0].Ending)
 	assert.Empty(t, incomplete.Sequences[0].Calls[0].ToolUseID)
-	child := source["tool-sequences-parity-parent"]
-	require.Len(t, child.Sequences, 1)
-	assert.Equal(t, int64(3000), *child.Sequences[0].Calls[0].DurationMs)
-	duplicates := source["tool-sequences-parity-duplicate"]
-	require.Len(t, duplicates.Sequences, 1)
-	require.Len(t, duplicates.Sequences[0].Calls, 2)
-	assert.Equal(t, new(int64(2000)), duplicates.Sequences[0].Calls[0].DurationMs)
-	assert.Equal(t, new(int64(5000)), duplicates.Sequences[0].Calls[1].DurationMs)
 	streamed := source["tool-sequences-parity-streamed"]
 	assert.Equal(t, 154, streamed.TotalToolCalls)
 	assert.Equal(t, 144, streamed.OmittedCalls)
 	require.Len(t, streamed.Sequences, 1)
 	require.Len(t, streamed.Sequences[0].Calls, 10)
-	assert.Equal(t, new(int64(2000)), streamed.Sequences[0].Calls[0].DurationMs)
-	assert.Equal(t, new(int64(0)), streamed.Sequences[0].Calls[1].DurationMs)
 	assert.Equal(t, 260, streamed.Sequences[0].Calls[9].Ordinal)
-	assert.Equal(t, new(int64(2000)), streamed.Sequences[0].Calls[9].DurationMs)
 
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
 	_, err := duckdb.Push(t.Context(), path, te.db, "test-installation", storage.MirrorPushOptions{}, true, nil)
@@ -721,7 +570,7 @@ func TestHandleToolSequences_DuckDBParity(t *testing.T) {
 }
 
 func TestHandleToolSequences_ReadErrors(t *testing.T) {
-	for _, failure := range []string{"session", "messages", "timing"} {
+	for _, failure := range []string{"session", "messages"} {
 		t.Run(failure, func(t *testing.T) {
 			te := setup(t)
 			dbtest.SeedToolSequencesExample(t, te.db, "tool-sequences-error")
@@ -733,9 +582,6 @@ func TestHandleToolSequences_ReadErrors(t *testing.T) {
 			assert.GreaterOrEqual(t, store.called["session"], 1)
 			if failure != "session" {
 				assert.Equal(t, 1, store.called["messages"])
-			}
-			if failure == "timing" {
-				assert.Equal(t, 1, store.called["timing"])
 			}
 		})
 	}
@@ -836,14 +682,6 @@ func (s *toolSequenceFailureStore) GetAllMessages(ctx context.Context, id string
 		return nil, errors.New("message read failed")
 	}
 	return s.Store.GetAllMessages(ctx, id)
-}
-
-func (s *toolSequenceFailureStore) GetSessionTiming(ctx context.Context, id string) (*db.SessionTiming, error) {
-	s.count("timing")
-	if s.fail == "timing" {
-		return nil, errors.New("timing read failed")
-	}
-	return s.Store.GetSessionTiming(ctx, id)
 }
 
 func (s *toolSequenceFailureStore) count(key string) {

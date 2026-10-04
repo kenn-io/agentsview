@@ -22,14 +22,13 @@ import (
 
 type toolSequenceExhaustedStore struct {
 	*HostedStore
-	fail       string
-	err        error
-	pageRead   bool
-	timingRead bool
+	fail     string
+	err      error
+	pageRead bool
 }
 
 func (s *toolSequenceExhaustedStore) GetSession(ctx context.Context, id string) (*db.Session, error) {
-	if s.fail == "initial session" || (s.fail == "session after hydration" && s.pageRead) || (s.fail == "final session" && s.timingRead) {
+	if s.fail == "initial session" || (s.fail == "session after hydration" && s.pageRead) {
 		return nil, s.err
 	}
 	return s.HostedStore.GetSession(ctx, id)
@@ -41,14 +40,6 @@ func (s *toolSequenceExhaustedStore) GetAllMessages(ctx context.Context, id stri
 		return nil, s.err
 	}
 	return s.HostedStore.GetAllMessages(ctx, id)
-}
-
-func (s *toolSequenceExhaustedStore) GetSessionTiming(ctx context.Context, id string) (*db.SessionTiming, error) {
-	s.timingRead = true
-	if s.fail == "timing" {
-		return nil, s.err
-	}
-	return s.HostedStore.GetSessionTiming(ctx, id)
 }
 
 func TestToolSequencesHosted_ExhaustedReadBinding(t *testing.T) {
@@ -70,7 +61,7 @@ func TestToolSequencesHosted_ExhaustedReadBinding(t *testing.T) {
 	assert.True(t, h.SessionSourceChanged(wrapped))
 	assert.False(t, h.SessionSourceChanged(errors.New("ordinary read error")))
 	assert.False(t, h.SessionSourceChanged(nil))
-	for _, boundary := range []string{"initial session", "session after hydration", "final session", "messages", "timing"} {
+	for _, boundary := range []string{"initial session", "session after hydration", "messages"} {
 		t.Run(boundary, func(t *testing.T) {
 			store := &toolSequenceExhaustedStore{HostedStore: h, fail: boundary, err: wrapped}
 			handler := server.New(config.Config{Host: "127.0.0.1", InstallationID: "hosted"}, store, nil).Handler()
@@ -142,7 +133,7 @@ func TestToolSequencesHosted_SourceBinding(t *testing.T) {
 	assert.NotContains(t, response.Body.String(), "raw-row-")
 }
 
-func TestToolSequencesHosted_TimingAndMapping(t *testing.T) {
+func TestToolSequencesHosted_Mapping(t *testing.T) {
 	f := newProjectionFixture(t)
 	manifest, _ := f.accept(t, "device-a", "capture-a", "")
 	outcome := projectionOutcome("delegate tasks")
@@ -169,16 +160,6 @@ func TestToolSequencesHosted_TimingAndMapping(t *testing.T) {
 	h, err := NewHostedStore(f.dsn, f.schema, f.tenant, false)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, h.Close()) })
-	child, err := h.resolve(t.Context(), "codex:child-0")
-	require.NoError(t, err)
-	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET deleted_at=clock_timestamp() WHERE id=$1`, child.SessionID)
-	require.NoError(t, err)
-
-	full, err := h.GetSessionTiming(t.Context(), "codex:portable")
-	require.NoError(t, err)
-	require.Len(t, full.Turns[0].Calls, 40)
-	assert.Equal(t, new(int64(7000)), full.Turns[0].Calls[0].DurationMs)
-
 	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:0/api/v1/sessions/codex:portable/tool-sequences", nil)
 	request.RemoteAddr = "127.0.0.1:1234"
 	response := httptest.NewRecorder()
@@ -190,7 +171,7 @@ func TestToolSequencesHosted_TimingAndMapping(t *testing.T) {
 		OmittedCalls   int    `json:"omitted_calls"`
 		Sequences      []struct {
 			Calls []struct {
-				DurationMs *int64 `json:"duration_ms"`
+				ToolUseID string `json:"tool_use_id"`
 			} `json:"calls"`
 		} `json:"sequences"`
 	}
@@ -200,6 +181,6 @@ func TestToolSequencesHosted_TimingAndMapping(t *testing.T) {
 	assert.Equal(t, 31, document.OmittedCalls)
 	require.Len(t, document.Sequences, 1)
 	require.Len(t, document.Sequences[0].Calls, 10)
-	assert.Equal(t, new(int64(7000)), document.Sequences[0].Calls[0].DurationMs)
-	assert.Nil(t, document.Sequences[0].Calls[9].DurationMs)
+	assert.Equal(t, "call-0", document.Sequences[0].Calls[0].ToolUseID)
+	assert.Equal(t, "recovered", document.Sequences[0].Calls[9].ToolUseID)
 }

@@ -6863,16 +6863,9 @@ components:
     SessionToolSequenceCall:
       additionalProperties: false
       properties:
-        awaiting_subagent:
-          type: boolean
         call_index:
           format: int64
           type: integer
-        duration_ms:
-          format: int64
-          type:
-            - integer
-            - "null"
         input_bytes:
           format: int64
           type: integer
@@ -6925,7 +6918,6 @@ components:
         - outcome
         - repeat
         - tool_changed
-        - duration_ms
         - input_preview
         - input_bytes
         - input_omitted_bytes
@@ -6933,7 +6925,6 @@ components:
         - result_bytes
         - result_omitted_bytes
         - result_content_unknown
-        - awaiting_subagent
       type: object
     SessionToolSequencesResponse:
       additionalProperties: false

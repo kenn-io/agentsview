@@ -2,6 +2,7 @@
   import { Button, Chip, type ChipTone } from "@kenn-io/kit-ui";
   import { SvelteSet } from "svelte/reactivity";
   import type {
+    DbSessionTiming,
     SessionToolSequence,
     SessionToolSequenceCall,
     SessionToolSequencesResponse,
@@ -20,9 +21,22 @@
     failed: boolean;
     unavailable?: boolean;
     onretry?: (() => void) | undefined;
+    /** The session's live timing, the same snapshot the timing view shows. */
+    timing?: DbSessionTiming | null;
+    /** True only when data comes from the transcript revision the message list holds. */
+    linked?: boolean;
   }
 
-  let { data, sessionId, loading, failed, unavailable = false, onretry = undefined }: Props = $props();
+  let {
+    data,
+    sessionId,
+    loading,
+    failed,
+    unavailable = false,
+    onretry = undefined,
+    timing = null,
+    linked = false,
+  }: Props = $props();
 
   type Outcome = SessionToolSequenceCall["outcome"];
   type Ending = SessionToolSequence["ending"];
@@ -41,6 +55,24 @@
     open: "warning",
     unknown: "neutral",
   };
+
+  // Timing lists each turn's calls in call order, so a call's position in its message finds its duration even when tool IDs repeat or are blank.
+  const timingByPosition = $derived(
+    new Map(
+      (timing?.turns ?? []).flatMap((turn) =>
+        turn.calls.map((call, index) => [`${turn.ordinal}:${index}`, call] as const),
+      ),
+    ),
+  );
+
+  function durationOf(call: SessionToolSequenceCall): number | null {
+    const timed = timingByPosition.get(`${call.ordinal}:${call.call_index}`);
+    // Timing can lag or lead the sequences by a sync, so a call whose ID disagrees stays unmeasured.
+    if (!timed || (timed.tool_use_id && call.tool_use_id && timed.tool_use_id !== call.tool_use_id)) {
+      return null;
+    }
+    return timed.duration_ms;
+  }
 
   const openSequences = new SvelteSet<string>();
   const openCalls = new SvelteSet<string>();
@@ -251,6 +283,7 @@
                   {@const callOpen = openCalls.has(callKey)}
                   {@const tag = callTag(call)}
                   {@const size = resultSummary(call)}
+                  {@const duration = durationOf(call)}
                   {#if callIndex === gap}
                     <p class="omit">
                       <InfoIcon size={12} aria-hidden="true" />
@@ -277,20 +310,25 @@
                           {#if tag}<span class="tag" title={tag.title}>{tag.label}</span>{/if}
                         </span>
                         <span class="res"><b>{outcomeLabel(call.outcome)}</b>{#if size}{` · ${size}`}{/if}</span>
-                        {#if call.duration_ms === null}
+                        {#if duration === null}
                           <span class="dur" title={m.tool_sequences_not_measured()}>
                             <span aria-hidden="true">—</span><span class="kit-sr-only">{m.tool_sequences_not_measured()}</span>
                           </span>
                         {:else}
-                          <span class="dur">{formatDuration(call.duration_ms)}</span>
+                          <span class="dur">{formatDuration(duration)}</span>
                         {/if}
                       </button>
-                      <a
-                        class="jump"
-                        href={jumpHref(call)}
-                        aria-label={m.tool_sequences_jump_label({ ordinal: call.ordinal, tool: call.tool_name })}
-                        onclick={(event) => jumpToCall(event, call)}
-                      >{m.tool_sequences_message({ ordinal: call.ordinal })}<span aria-hidden="true"> ↗</span></a>
+                      {#if linked}
+                        <a
+                          class="jump"
+                          href={jumpHref(call)}
+                          aria-label={m.tool_sequences_jump_label({ ordinal: call.ordinal, tool: call.tool_name })}
+                          onclick={(event) => jumpToCall(event, call)}
+                        >{m.tool_sequences_message({ ordinal: call.ordinal })}<span aria-hidden="true"> ↗</span></a>
+                      {:else}
+                        <!-- The transcript on screen is a different revision, so the ordinal could name another message. -->
+                        <span class="jump unlinked">{m.tool_sequences_message({ ordinal: call.ordinal })}</span>
+                      {/if}
                     </div>
                     {#if callOpen}
                       <div class="detail" id="{uid}-call-{index}-{callIndex}">
@@ -298,7 +336,7 @@
                           <!-- The call row drops its duration column on narrow panels, so the details carry it there. -->
                           <div class="ev ev-duration">
                             <dt>{m.tool_sequences_duration()}</dt>
-                            <dd>{call.duration_ms === null ? m.tool_sequences_not_measured() : formatDuration(call.duration_ms)}</dd>
+                            <dd>{duration === null ? m.tool_sequences_not_measured() : formatDuration(duration)}</dd>
                           </div>
                           <div class="ev">
                             <dt>{m.tool_sequences_input()}</dt>
@@ -683,8 +721,12 @@
     white-space: nowrap;
   }
 
-  .jump:hover {
+  a.jump:hover {
     text-decoration: underline;
+  }
+
+  .jump.unlinked {
+    color: var(--text-muted);
   }
 
   .detail,

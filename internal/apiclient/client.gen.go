@@ -21387,9 +21387,7 @@ func (s SessionToolSequence) Validate() error {
 }
 
 type SessionToolSequenceCall struct {
-	AwaitingSubagent     bool                           `json:"awaiting_subagent"`
 	CallIndex            int64                          `json:"call_index"`
-	DurationMs           *int64                         `json:"duration_ms"`
 	InputBytes           int64                          `json:"input_bytes"`
 	InputOmittedBytes    int64                          `json:"input_omitted_bytes"`
 	InputPreview         string                         `json:"input_preview"`

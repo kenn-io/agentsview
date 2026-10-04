@@ -30,7 +30,7 @@ func TestBuildSessionToolSequences_UTF8AndCallCap(t *testing.T) {
 		}
 	}
 	status := string(parser.TerminationClean)
-	got := buildSessionToolSequences(&db.Session{ID: "session", TerminationStatus: &status}, rows, nil)
+	got := buildSessionToolSequences(&db.Session{ID: "session", TerminationStatus: &status}, rows)
 	require.Len(t, got.Sequences, 1)
 	sequence := got.Sequences[0]
 	assert.Equal(t, "recovered", sequence.Ending)
@@ -116,7 +116,7 @@ func TestBuildSessionToolSequences_BoundedRetainedOutput(t *testing.T) {
 				rows = append(rows, signals.ToolCallRow{ToolName: tool, Category: tool, ToolUseID: "call", InputJSON: strings.Repeat("x", 2048), MessageOrdinal: ordinal, ResultContent: content})
 			}
 		}
-		response := buildSessionToolSequences(&db.Session{}, rows, nil)
+		response := buildSessionToolSequences(&db.Session{}, rows)
 		assert.Equal(t, count, response.TotalSequences)
 		assert.Equal(t, count*12, response.TotalSequenceCalls)
 		assert.Equal(t, count-20, response.OmittedSequences)

@@ -15,6 +15,7 @@ vi.mock("../api/generated/index", () => ({
   },
 }));
 vi.mock("../api/runtime.js", () => ({
+  ApiError: class ApiError extends Error {},
   isAbortError: (error: unknown) => error instanceof DOMException && error.name === "AbortError",
 }));
 vi.mock("./sessions.svelte.js", () => ({ sessions: { markActiveSessionMissing: vi.fn() } }));

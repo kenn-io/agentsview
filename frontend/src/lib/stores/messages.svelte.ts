@@ -1,6 +1,6 @@
 import { SessionsService } from "../api/generated/index";
 import type { DbMessage as Message } from "../api/generated/index.js";
-import { isAbortError } from "../api/runtime.js";
+import { ApiError, isAbortError } from "../api/runtime.js";
 import { clearContentCaches } from "../utils/content-parser.js";
 import { computeMainModelInfo, type ModelEffort } from "../utils/model.js";
 import { buildReadProgressToken, readProgress } from "./read-progress.svelte.js";
@@ -16,6 +16,25 @@ interface FetchPageOptions {
   signal: AbortSignal;
 }
 
+const MAX_LOAD_ATTEMPTS = 3;
+
+interface PageQuery {
+  from?: number;
+  limit: number;
+  direction: "asc" | "desc";
+}
+
+/** Rows from one transcript revision, as the messages API reported it. */
+interface MessagePage {
+  messages: Message[];
+  revision: string;
+}
+
+// A bound read answers 409 once the transcript has moved past the revision it named.
+function isRevisionChange(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 409;
+}
+
 export class MessagesStore {
   messages: Message[] = $state([]);
   loading: boolean = $state(false);
@@ -26,6 +45,11 @@ export class MessagesStore {
   hasOlder: boolean = $state(false);
   loadingOlder: boolean = $state(false);
   historyComplete: boolean = $state(false);
+  /**
+   * The transcript revision every row in messages came from, taken from the
+   * message responses that delivered them. Null until the first page lands.
+   */
+  loadedRevision: string | null = $state(null);
   private reloading: boolean = $state(false);
   private _stableMainModelInfo: ModelEffort = $state({
     model: "",
@@ -170,6 +194,7 @@ export class MessagesStore {
     this.hasOlder = false;
     this.loadingOlder = false;
     this.historyComplete = false;
+    this.loadedRevision = null;
     this.reloading = false;
     this.reloadPromise = null;
     this.reloadSessionId = null;
@@ -202,20 +227,66 @@ export class MessagesStore {
     this.loadOlderPromise = null;
   }
 
-  private async fetchPages(id: string, opts: FetchPageOptions): Promise<Message[]> {
+  /** Fetch one page, bound to revision when one is given so a moved transcript answers 409. */
+  private async fetchMessagePage(
+    id: string,
+    query: PageQuery,
+    signal: AbortSignal,
+    revision: string | null,
+  ): Promise<MessagePage> {
+    const res = await SessionsService.getApiV1SessionsByIdMessages(
+      { id },
+      revision ? { ...query, expected_revision: revision } : query,
+      { signal },
+    );
+    return { messages: res.messages, revision: res.transcript_revision ?? "" };
+  }
+
+  /** Take a refreshed window that starts at the loaded window's oldest row. */
+  private acceptWindow(page: MessagePage, append: boolean) {
+    clearContentCaches();
+    if (page.revision !== this.loadedRevision) {
+      // Rows from two transcript revisions never share the list, so a new revision replaces the window.
+      this.messages = page.messages;
+      this.hasOlder = page.messages[0]!.ordinal > 0;
+      this.messageCount = Math.max(this.messageCount, page.messages.at(-1)!.ordinal + 1);
+    } else {
+      const oldest = this.messages[0]?.ordinal ?? 0;
+      const newest = this.messages.at(-1)?.ordinal ?? -1;
+      const kept = append
+        ? page.messages
+        : page.messages.filter((m) => m.ordinal >= oldest && m.ordinal <= newest);
+      const updates = new Map(kept.map((m) => [m.ordinal, m]));
+      const existingOrdinals = new Set(this.messages.map((m) => m.ordinal));
+      const appended = append ? page.messages.filter((m) => !existingOrdinals.has(m.ordinal)) : [];
+      this.messages = [...this.messages.map((m) => updates.get(m.ordinal) ?? m), ...appended];
+    }
+    this.loadedRevision = page.revision;
+    this.updateStableMainModelInfo();
+  }
+
+  /**
+   * Whether a page fetched while the window held revision `held` can join it:
+   * the window must not have moved on, and the page must share its revision.
+   */
+  private pageJoinsWindow(held: string | null, page: MessagePage): boolean {
+    return this.loadedRevision === held && (held === null || page.revision === held);
+  }
+
+  /** Fetch consecutive pages that all belong to the first page's revision. */
+  private async fetchPages(id: string, opts: FetchPageOptions): Promise<MessagePage> {
     const loaded: Message[] = [];
     let from = opts.from;
+    let revision: string | null = null;
 
     for (;;) {
-      const res = await SessionsService.getApiV1SessionsByIdMessages(
-        { id },
-        {
-          from,
-          limit: opts.limit,
-          direction: opts.direction,
-        },
-        { signal: opts.signal },
+      const res = await this.fetchMessagePage(
+        id,
+        { from, limit: opts.limit, direction: opts.direction },
+        opts.signal,
+        revision,
       );
+      revision ??= res.revision;
       if (res.messages.length === 0) break;
 
       loaded.push(...res.messages);
@@ -231,33 +302,45 @@ export class MessagesStore {
       from = nextFrom;
     }
 
-    return loaded;
+    return { messages: loaded, revision: revision ?? "" };
   }
 
   private async loadAllMessages(id: string, signal: AbortSignal, messageCountHint?: number) {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await this.loadAllMessagesOnce(id, signal, messageCountHint);
+      } catch (err) {
+        // A sync landed between pages; start over so every row shares one revision.
+        if (!isRevisionChange(err) || attempt >= MAX_LOAD_ATTEMPTS) throw err;
+      }
+    }
+  }
+
+  private async loadAllMessagesOnce(id: string, signal: AbortSignal, messageCountHint?: number) {
     this.historyComplete = false;
     let from = 0;
     let loaded: Message[] = [];
     let complete = false;
+    let revision: string | null = null;
 
     for (;;) {
-      const res = await SessionsService.getApiV1SessionsByIdMessages(
-        { id },
-        {
-          from,
-          limit: MESSAGE_PAGE_SIZE,
-          direction: "asc",
-        },
-        { signal },
+      const res = await this.fetchMessagePage(
+        id,
+        { from, limit: MESSAGE_PAGE_SIZE, direction: "asc" },
+        signal,
+        revision,
       );
       if (this.sessionId !== id) return;
+      revision ??= res.revision;
       if (res.messages.length === 0) {
         complete = true;
         break;
       }
 
       loaded = [...loaded, ...res.messages];
+      // Every row on screen now comes from this one revision, so it can be published page by page.
       this.messages = loaded;
+      this.loadedRevision = revision;
 
       const newest = loaded[loaded.length - 1];
       this.messageCount = messageCountHint ?? (newest ? newest.ordinal + 1 : loaded.length);
@@ -282,17 +365,16 @@ export class MessagesStore {
   }
 
   private async loadProgressively(id: string, signal: AbortSignal) {
-    const firstRes = await SessionsService.getApiV1SessionsByIdMessages(
-      { id },
-      {
-        limit: MESSAGE_PAGE_SIZE,
-        direction: "desc",
-      },
-      { signal },
+    const firstRes = await this.fetchMessagePage(
+      id,
+      { limit: MESSAGE_PAGE_SIZE, direction: "desc" },
+      signal,
+      null,
     );
     if (this.sessionId !== id) return;
 
     this.messages = [...firstRes.messages].reverse();
+    this.loadedRevision = firstRes.revision;
     this.historyComplete = false;
     const newest = this.messages[this.messages.length - 1];
     this.messageCount = newest ? newest.ordinal + 1 : 0;
@@ -302,21 +384,14 @@ export class MessagesStore {
   }
 
   private async loadFrom(id: string, from: number, signal: AbortSignal) {
-    const pages = await this.fetchPages(id, {
+    const page = await this.fetchPages(id, {
       from,
       limit: MESSAGE_PAGE_SIZE,
       direction: "asc",
       signal,
     });
     if (this.sessionId !== id) return;
-    if (pages.length > 0) {
-      const updates = new Map(pages.map((m) => [m.ordinal, m]));
-      const existingOrdinals = new Set(this.messages.map((m) => m.ordinal));
-      const appended = pages.filter((m) => !existingOrdinals.has(m.ordinal));
-      clearContentCaches();
-      this.messages = [...this.messages.map((m) => updates.get(m.ordinal) ?? m), ...appended];
-      this.updateStableMainModelInfo();
-    }
+    if (page.messages.length > 0) this.acceptWindow(page, true);
   }
 
   async loadOlder() {
@@ -349,17 +424,18 @@ export class MessagesStore {
     if (!signal || signal.aborted) return;
 
     this.loadingOlder = true;
+    const revision = this.loadedRevision;
     try {
-      const res = await SessionsService.getApiV1SessionsByIdMessages(
-        { id },
-        {
-          from: oldest - 1,
-          limit: MESSAGE_PAGE_SIZE,
-          direction: "desc",
-        },
-        { signal },
+      const res = await this.fetchMessagePage(
+        id,
+        { from: oldest - 1, limit: MESSAGE_PAGE_SIZE, direction: "desc" },
+        signal,
+        revision,
       );
       if (this.sessionId !== id) return;
+      // A reload replaced the window while this page was in flight.
+      if (!this.pageJoinsWindow(revision, res)) return;
+      this.loadedRevision = res.revision;
       if (res.messages.length === 0) {
         this.hasOlder = false;
         this.historyComplete = true;
@@ -373,6 +449,10 @@ export class MessagesStore {
       this.publishPendingSessionToken(id);
     } catch (err) {
       if (isAbortError(err)) return;
+      if (this.sessionId === id && isRevisionChange(err)) {
+        void this.reload();
+        return;
+      }
       if (this.sessionId === id) this.historyComplete = false;
       console.warn("Failed to load older messages:", err);
     } finally {
@@ -436,13 +516,19 @@ export class MessagesStore {
     this.loadingOlder = true;
     try {
       let from = (this.messages.at(-1)?.ordinal ?? -1) + 1;
+      let revision = this.loadedRevision;
       for (;;) {
-        const res = await SessionsService.getApiV1SessionsByIdMessages(
-          { id },
+        const res = await this.fetchMessagePage(
+          id,
           { from, limit: MESSAGE_PAGE_SIZE, direction: "asc" },
-          { signal },
+          signal,
+          revision,
         );
         if (!current()) return;
+        // A reload replaced the window while this page was in flight.
+        if (!this.pageJoinsWindow(revision, res)) return;
+        revision = res.revision;
+        this.loadedRevision = revision;
         if (res.messages.length === 0) {
           this.historyComplete = !this.hasOlder;
           break;
@@ -469,6 +555,10 @@ export class MessagesStore {
       this.publishPendingSessionToken(id);
     } catch (error) {
       if (isAbortError(error) || !current()) return;
+      if (isRevisionChange(error)) {
+        void this.reload();
+        return;
+      }
       this.historyComplete = false;
       console.warn("Failed to complete session history:", error);
     } finally {
@@ -485,18 +575,21 @@ export class MessagesStore {
       let from = this.messages[0]!.ordinal - 1;
       let lastOldest = this.messages[0]!.ordinal;
       const chunks: Message[][] = [];
+      const held = this.loadedRevision;
+      let revision = held;
 
       while (from >= 0) {
-        const res = await SessionsService.getApiV1SessionsByIdMessages(
-          { id },
-          {
-            from,
-            limit: MESSAGE_PAGE_SIZE,
-            direction: "desc",
-          },
-          { signal },
+        const res = await this.fetchMessagePage(
+          id,
+          { from, limit: MESSAGE_PAGE_SIZE, direction: "desc" },
+          signal,
+          revision,
         );
         if (this.sessionId !== id) return;
+        // A reload replaced the window while this page was in flight.
+        if (this.loadedRevision !== held || (revision !== null && res.revision !== revision))
+          return;
+        revision = res.revision;
         if (res.messages.length === 0) {
           this.hasOlder = false;
           this.historyComplete = true;
@@ -519,6 +612,7 @@ export class MessagesStore {
       if (chunks.length > 0) {
         const merged = chunks.reverse().flat();
         this.messages = [...merged, ...this.messages];
+        this.loadedRevision = revision;
       }
 
       const oldestNow = this.messages[0]?.ordinal;
@@ -527,6 +621,10 @@ export class MessagesStore {
       this.publishPendingSessionToken(id);
     } catch (err) {
       if (isAbortError(err)) return;
+      if (this.sessionId === id && isRevisionChange(err)) {
+        void this.reload();
+        return;
+      }
       if (this.sessionId === id) this.historyComplete = false;
       console.warn("Failed to load older messages for ordinal:", err);
     } finally {
@@ -580,6 +678,11 @@ export class MessagesStore {
       }
     } catch (err) {
       if (isAbortError(err)) return;
+      // A sync landed between pages; loadedRevision still names only rows that arrived, and one more pass catches up.
+      if (this.sessionId === id && isRevisionChange(err)) {
+        this.pendingReload = true;
+        return;
+      }
       if (this.sessionId === id) this.historyComplete = false;
       console.warn("Reload failed:", err);
     }
@@ -625,18 +728,11 @@ export class MessagesStore {
       direction: "asc",
       signal,
     });
-    if (this.sessionId !== id || refreshed.length === 0) {
+    if (this.sessionId !== id || refreshed.messages.length === 0) {
       return false;
     }
 
-    const updates = new Map(
-      refreshed
-        .filter((m) => m.ordinal >= oldest.ordinal && m.ordinal <= newest.ordinal)
-        .map((m) => [m.ordinal, m]),
-    );
-    clearContentCaches();
-    this.messages = this.messages.map((m) => updates.get(m.ordinal) ?? m);
-    this.updateStableMainModelInfo();
+    this.acceptWindow(refreshed, false);
     return true;
   }
 

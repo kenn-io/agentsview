@@ -1,17 +1,19 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
-import { mount, unmount, tick } from "svelte";
-import { createClassComponent } from "svelte/legacy";
+import { mount as mountComponent, unmount as unmountComponent, tick } from "svelte";
+import { createClassComponent as createLegacyComponent } from "svelte/legacy";
 // @ts-ignore
 import SessionBreadcrumb from "./SessionBreadcrumb.svelte";
 import type { Session } from "../../api/types.js";
 import {
   OpenersService,
   SessionsService,
+  type DbSessionTiming,
   type SessionToolSequencesResponse,
 } from "../../api/generated/index";
 import { ApiError } from "../../api/runtime.js";
 import { messages } from "../../stores/messages.svelte.js";
+import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
 import { setLocale } from "../../i18n/index.js";
 import { router } from "../../stores/router.svelte.js";
@@ -20,8 +22,14 @@ import { testMoney } from "../../test/money.js";
 import type { Money } from "../../money.js";
 import { copyToClipboard } from "../../utils/clipboard.js";
 
-const { generateForSession } = vi.hoisted(() => ({
+const { generateForSession, getTiming } = vi.hoisted(() => ({
   generateForSession: vi.fn(),
+  getTiming: vi.fn(),
+}));
+
+vi.mock("../../api/generated/sessions/sessions.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../api/generated/sessions/sessions.js")>()),
+  getApiV1SessionsByIdTiming: getTiming,
 }));
 
 vi.mock("../../stores/insights.svelte.js", () => ({
@@ -65,6 +73,8 @@ const openersService = OpenersService as unknown as {
 };
 
 const sessionsService = SessionsService as unknown as {
+  getApiV1SessionsById: ReturnType<typeof vi.fn>;
+  getApiV1SessionsByIdMessages: ReturnType<typeof vi.fn>;
   getApiV1SessionsByIdDirectory: ReturnType<typeof vi.fn>;
   getApiV1SessionsByIdUsage: ReturnType<typeof vi.fn>;
   getApiV1SessionsByIdToolSequences: ReturnType<typeof vi.fn>;
@@ -175,9 +185,9 @@ async function expandedSequenceText(): Promise<string> {
 }
 
 function makeToolSequences(
-  duration: number | null,
+  ordinal = 3,
   sessionId = "run:123456789abcdef",
-  transcriptRevision = "",
+  transcriptRevision = "revision-1",
 ): SessionToolSequencesResponse {
   return {
     session_id: sessionId,
@@ -197,14 +207,13 @@ function makeToolSequences(
         omitted_calls: 0,
         calls: [
           {
-            ordinal: 3,
+            ordinal,
             call_index: 0,
             tool_use_id: "tool-id",
             tool_name: "Grep",
             outcome: "empty",
             repeat: "none",
             tool_changed: false,
-            duration_ms: duration,
             input_preview: "{}",
             input_bytes: 2,
             input_omitted_bytes: 0,
@@ -212,12 +221,59 @@ function makeToolSequences(
             result_bytes: 15,
             result_omitted_bytes: 0,
             result_content_unknown: false,
-            awaiting_subagent: false,
           },
         ],
       },
     ],
   };
+}
+
+// The timing view's snapshot, measuring the one Grep call at message 3.
+function makeTiming(sessionId: string, durationMs: number | null): DbSessionTiming {
+  return {
+    session_id: sessionId,
+    running: true,
+    turns: [
+      {
+        message_id: 3,
+        ordinal: 3,
+        started_at: "2026-02-20T12:30:30Z",
+        duration_ms: durationMs,
+        primary_category: "Grep",
+        calls: [
+          {
+            tool_use_id: "tool-id",
+            tool_name: "Grep",
+            category: "Grep",
+            duration_ms: durationMs,
+            input_preview: "",
+            is_parallel: false,
+          },
+        ],
+      },
+    ],
+  } as unknown as DbSessionTiming;
+}
+
+async function loadTiming(sessionId: string, durationMs: number | null) {
+  getTiming.mockResolvedValueOnce(makeTiming(sessionId, durationMs));
+  await sessionTiming.load(sessionId);
+}
+
+// Stand in for the message list having loaded rows from one transcript revision.
+function showMessages(sessionId: string, revision: string) {
+  messages.sessionId = sessionId;
+  messages.loadedRevision = revision;
+}
+
+function jumpLink(ordinal: number): HTMLAnchorElement | null {
+  return document.querySelector<HTMLAnchorElement>(
+    `.tool-sequences-panel a[aria-label="Message ${ordinal}: open the Grep call in the transcript"]`,
+  );
+}
+
+function panelBusy(): string | null | undefined {
+  return document.querySelector(".tool-sequences-panel")?.getAttribute("aria-busy");
 }
 
 async function openUsageBreakdown(): Promise<void> {
@@ -256,10 +312,12 @@ function makeAssistantMessage(model: string, reasoning_effort?: string) {
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((res) => {
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
     resolve = res;
+    reject = rej;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 async function flushPromises() {
@@ -275,7 +333,10 @@ beforeEach(() => {
   sessionsService.getApiV1SessionsByIdUsage.mockReset().mockResolvedValue(makeUsage());
   sessionsService.getApiV1SessionsByIdToolSequences
     .mockReset()
-    .mockResolvedValue(makeToolSequences(null));
+    .mockResolvedValue(makeToolSequences());
+  messages.clear();
+  sessionTiming.reset();
+  getTiming.mockReset();
   sessionsService.postApiV1SessionsByIdResume.mockReset();
   sessions.activeSessionId = null;
   sessions.activeSessionUsageVersion = 0;
@@ -285,7 +346,34 @@ beforeEach(() => {
   ui.signalPanelOpen = false;
 });
 
+// A component a test leaves mounted keeps reacting to the shared stores, so each test tears down what it left.
+const live = new Map<object, () => void>();
+
+const mount: typeof mountComponent = (component, options) => {
+  const instance = mountComponent(component, options);
+  live.set(instance, () => void unmountComponent(instance));
+  return instance;
+};
+
+const unmount: typeof unmountComponent = (instance, options) => {
+  live.delete(instance);
+  return unmountComponent(instance, options);
+};
+
+const createClassComponent = ((options: Parameters<typeof createLegacyComponent>[0]) => {
+  const instance = createLegacyComponent(options);
+  const destroy = instance.$destroy.bind(instance);
+  instance.$destroy = () => {
+    live.delete(instance);
+    destroy();
+  };
+  live.set(instance, destroy);
+  return instance;
+}) as typeof createLegacyComponent;
+
 afterEach(() => {
+  for (const teardown of [...live.values()]) teardown();
+  live.clear();
   setLocale("en");
   document.body.innerHTML = "";
   ui.sidebarOpen = true;
@@ -2148,13 +2236,8 @@ describe("SessionBreadcrumb", () => {
     });
 
     it("loads tool sequences only while visible and skips usage-only refreshes", async () => {
-      const session = makeSession("claude", {
-        transcript_revision: "revision-1",
-        termination_status: "clean",
-      });
-      sessionsService.getApiV1SessionsByIdToolSequences
-        .mockResolvedValueOnce(makeToolSequences(null, undefined, "revision-1"))
-        .mockResolvedValueOnce(makeToolSequences(0, undefined, "revision-1"));
+      const session = makeSession("claude", { termination_status: "clean" });
+      showMessages(session.id, "revision-1");
       const component = createClassComponent({
         component: SessionBreadcrumb,
         target: document.body,
@@ -2165,80 +2248,74 @@ describe("SessionBreadcrumb", () => {
 
       ui.signalPanelOpen = true;
       await vi.waitFor(async () => {
-        expect(await expandedSequenceText()).toContain("Not measured");
-        expect(document.querySelector(".tool-sequences-panel")?.getAttribute("aria-busy")).toBe(
-          "false",
-        );
+        expect(await expandedSequenceText()).toContain("Message 3");
+        expect(panelBusy()).toBe("false");
       });
       expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(1);
 
+      // Other sessions changing, or this session's metadata moving ahead, says nothing new about the loaded transcript.
       sessions.activeSessionUsageVersion += 1;
-      await flushPromises();
-      expect(await expandedSequenceText()).toContain("Not measured");
-      expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(1);
-      component.$destroy();
-    });
-
-    it("refetches on session changes only while a delegated call waits for its child", async () => {
-      const session = makeSession("claude", { transcript_revision: "revision-1" });
-      const waiting = makeToolSequences(null, undefined, "revision-1");
-      waiting.sequences[0]!.calls[0]!.awaiting_subagent = true;
-      sessionsService.getApiV1SessionsByIdToolSequences
-        .mockResolvedValueOnce(waiting)
-        .mockResolvedValueOnce(makeToolSequences(2000, undefined, "revision-1"));
-      ui.signalPanelOpen = true;
-      const component = createClassComponent({
-        component: SessionBreadcrumb,
-        target: document.body,
-        props: { session, onBack: () => {} },
-      });
-      await vi.waitFor(async () => expect(await expandedSequenceText()).toContain("Not measured"));
-      expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(1);
-      expect(document.querySelector(".tool-sequences-panel")?.getAttribute("aria-busy")).toBe("false");
-
-      // A child owned by another session closes; the parent's own fields don't move.
-      sessions.activeSessionUsageVersion += 1;
-      await vi.waitFor(async () => expect(await expandedSequenceText()).toContain("2.0s"));
-      expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(2);
-      expect(document.querySelector(".tool-sequences-panel")?.getAttribute("aria-busy")).toBe("false");
-
-      sessions.activeSessionUsageVersion += 1;
-      await flushPromises();
-      expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(2);
-      component.$destroy();
-    });
-
-    it("reads a new transcript revision once after a read that waited on a child", async () => {
-      const session = makeSession("claude", { transcript_revision: "revision-1" });
-      const waiting = makeToolSequences(null, undefined, "revision-1");
-      waiting.sequences[0]!.calls[0]!.awaiting_subagent = true;
-      sessionsService.getApiV1SessionsByIdToolSequences
-        .mockResolvedValueOnce(waiting)
-        .mockResolvedValueOnce(makeToolSequences(2000, undefined, "revision-2"));
-      ui.signalPanelOpen = true;
-      const component = createClassComponent({
-        component: SessionBreadcrumb,
-        target: document.body,
-        props: { session, onBack: () => {} },
-      });
-      await vi.waitFor(async () => expect(await expandedSequenceText()).toContain("Not measured"));
-
       component.$set({ session: { ...session, transcript_revision: "revision-2" } });
-      await vi.waitFor(async () => expect(await expandedSequenceText()).toContain("2.0s"));
       await flushPromises();
-      expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(2);
-      expect(document.querySelector(".tool-sequences-panel")?.getAttribute("aria-busy")).toBe("false");
+      expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(1);
       component.$destroy();
     });
 
-    it("keeps an expanded sequence visible while refreshing its timing", async () => {
-      const refresh = deferred<SessionToolSequencesResponse>();
-      const session = makeSession("claude", {
-        transcript_revision: "revision-1",
-        termination_status: "clean",
+    it("takes durations from live timing and follows a running child with no parent change", async () => {
+      const session = makeSession("claude", { termination_status: "tool_call_pending" });
+      showMessages(session.id, "revision-1");
+      await loadTiming(session.id, 1000);
+      ui.signalPanelOpen = true;
+      const component = createClassComponent({
+        component: SessionBreadcrumb,
+        target: document.body,
+        props: { session, onBack: () => {} },
       });
+      await vi.waitFor(async () => expect(await expandedSequenceText()).toContain("1.0s"));
+
+      // The delegated call's child keeps running: its end time advances while the parent transcript stays put.
+      sessionTiming.applyEvent(makeTiming(session.id, 4000));
+      await tick();
+      expect(document.body.textContent).toContain("4.0s");
+      expect(document.body.textContent).not.toContain("1.0s");
+      expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(1);
+      component.$destroy();
+    });
+
+    it("refetches when the loaded message revision or the end state changes", async () => {
+      const session = makeSession("claude", { termination_status: "tool_call_pending" });
+      showMessages(session.id, "revision-1");
       sessionsService.getApiV1SessionsByIdToolSequences
-        .mockResolvedValueOnce(makeToolSequences(2000, undefined, "revision-1"))
+        .mockResolvedValueOnce(makeToolSequences(3, session.id, "revision-1"))
+        .mockResolvedValueOnce(makeToolSequences(5, session.id, "revision-2"))
+        .mockResolvedValueOnce(makeToolSequences(6, session.id, "revision-2"));
+      ui.signalPanelOpen = true;
+      const component = createClassComponent({
+        component: SessionBreadcrumb,
+        target: document.body,
+        props: { session, onBack: () => {} },
+      });
+      await vi.waitFor(async () => {
+        await expandedSequenceText();
+        expect(jumpLink(3)).not.toBeNull();
+      });
+
+      messages.loadedRevision = "revision-2";
+      await vi.waitFor(() => expect(jumpLink(5)).not.toBeNull());
+      expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(2);
+
+      component.$set({ session: { ...session, termination_status: "clean" } });
+      await vi.waitFor(() => expect(jumpLink(6)).not.toBeNull());
+      expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(3);
+      component.$destroy();
+    });
+
+    it("keeps an expanded sequence and its links while a refresh is in flight", async () => {
+      const refresh = deferred<SessionToolSequencesResponse>();
+      const session = makeSession("claude", { termination_status: "tool_call_pending" });
+      showMessages(session.id, "revision-1");
+      sessionsService.getApiV1SessionsByIdToolSequences
+        .mockResolvedValueOnce(makeToolSequences(3, session.id, "revision-1"))
         .mockReturnValueOnce(refresh.promise);
       ui.signalPanelOpen = true;
       const component = createClassComponent({
@@ -2247,105 +2324,108 @@ describe("SessionBreadcrumb", () => {
         props: { session, onBack: () => {} },
       });
       await vi.waitFor(async () => {
-        expect(await expandedSequenceText()).toContain("2.0s");
-        expect(document.querySelector(".tool-sequences-panel")?.getAttribute("aria-busy")).toBe(
-          "false",
-        );
+        await expandedSequenceText();
+        expect(jumpLink(3)).not.toBeNull();
+        expect(panelBusy()).toBe("false");
       });
 
-      component.$set({ session: { ...session } });
-      await flushPromises();
-      expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(1);
-
-      component.$set({ session: { ...session, termination_status: "awaiting_user" } });
+      component.$set({ session: { ...session, termination_status: "clean" } });
       await tick();
-      expect(document.body.textContent).toContain("2.0s");
+      expect(panelBusy()).toBe("true");
       expect(document.body.textContent).not.toContain("Loading tool sequences");
-      expect(document.querySelector(".tool-sequences-panel")?.getAttribute("aria-busy")).toBe(
-        "true",
-      );
       expect(document.querySelector(".sequence-row")?.getAttribute("aria-expanded")).toBe("true");
-
       const scrollToOrdinal = vi.spyOn(ui, "scrollToOrdinal");
-      document
-        .querySelector<HTMLAnchorElement>(
-          'a[aria-label="Message 3: open the Grep call in the transcript"]',
-        )!
-        .click();
+      jumpLink(3)!.click();
       expect(scrollToOrdinal).toHaveBeenCalledWith(3, session.id);
       scrollToOrdinal.mockRestore();
 
-      refresh.resolve(makeToolSequences(4000, undefined, "revision-1"));
-      await vi.waitFor(() => {
-        expect(document.querySelector(".tool-sequences-panel")?.getAttribute("aria-busy")).toBe(
-          "false",
-        );
-      });
+      refresh.resolve(makeToolSequences(4, session.id, "revision-1"));
+      await vi.waitFor(() => expect(panelBusy()).toBe("false"));
       expect(document.querySelector(".sequence-row")?.getAttribute("aria-expanded")).toBe("true");
-      expect(document.body.textContent).toContain("4.0s");
+      expect(jumpLink(4)).not.toBeNull();
       component.$destroy();
     });
 
-    it.each(["revision-2", undefined])(
-      "hides stale call links while refreshing transcript revision to %s",
-      async (revision) => {
-        const refresh = deferred<SessionToolSequencesResponse>();
-        const session = makeSession("claude", { transcript_revision: "revision-1" });
-        const replacement = makeToolSequences(4000, undefined, revision ?? "");
-        replacement.sequences[0]!.calls[0]!.ordinal = 7;
-        replacement.sequences[0]!.calls[0]!.result_preview = "Replacement result";
-        sessionsService.getApiV1SessionsByIdToolSequences
-          .mockResolvedValueOnce(makeToolSequences(2000, undefined, "revision-1"))
-          .mockReturnValueOnce(refresh.promise);
-        ui.signalPanelOpen = true;
-        const component = createClassComponent({
-          component: SessionBreadcrumb,
-          target: document.body,
-          props: { session, onBack: () => {} },
-        });
-        await vi.waitFor(async () => expect(await expandedSequenceText()).toContain("2.0s"));
-        await expandedSequenceText();
-        await tick();
-        expect(
-          document.querySelector('a[aria-label="Message 3: open the Grep call in the transcript"]'),
-        ).not.toBeNull();
-
-        component.$set({ session: { ...session, transcript_revision: revision } });
-        await tick();
-        expect(
-          document.querySelector('a[aria-label="Message 3: open the Grep call in the transcript"]'),
-        ).toBeNull();
-        expect(document.body.textContent).toContain("Loading tool sequences");
-        expect(document.querySelector(".tool-sequences-panel")?.getAttribute("aria-busy")).toBe(
-          "true",
-        );
-
-        refresh.resolve(replacement);
-        await vi.waitFor(async () => expect(await expandedSequenceText()).toContain("4.0s"));
-        document.querySelector<HTMLButtonElement>(".call-row")!.click();
-        await tick();
-        expect(document.body.textContent).toContain("Replacement result");
-        const scrollToOrdinal = vi.spyOn(ui, "scrollToOrdinal");
-        document
-          .querySelector<HTMLAnchorElement>(
-            'a[aria-label="Message 7: open the Grep call in the transcript"]',
-          )!
-          .click();
-        expect(scrollToOrdinal).toHaveBeenCalledWith(7, session.id);
-        scrollToOrdinal.mockRestore();
-        component.$destroy();
-      },
-    );
-
-    it("holds sequences read from a newer transcript until the session catches up", async () => {
-      const session = makeSession("claude", { transcript_revision: "revision-1" });
-      const newer = makeToolSequences(2000, undefined, "revision-2");
-      newer.sequences[0]!.calls[0]!.ordinal = 7;
-      sessions.activeSessionId = session.id;
-      const refreshActiveSession = vi.spyOn(sessions, "refreshActiveSession").mockResolvedValue();
+    it("withholds links from sequences newer than the loaded messages until they catch up", async () => {
+      const session = makeSession("claude");
+      showMessages(session.id, "revision-1");
       sessionsService.getApiV1SessionsByIdToolSequences
-        .mockResolvedValueOnce(newer)
-        .mockResolvedValueOnce(newer);
+        .mockResolvedValueOnce(makeToolSequences(7, session.id, "revision-2"))
+        .mockResolvedValueOnce(makeToolSequences(7, session.id, "revision-2"));
+      ui.signalPanelOpen = true;
+      const component = createClassComponent({
+        component: SessionBreadcrumb,
+        target: document.body,
+        props: { session, onBack: () => {} },
+      });
+      await vi.waitFor(async () => expect(await expandedSequenceText()).toContain("Message 7"));
+      expect(document.querySelector(".tool-sequences-panel a.jump")).toBeNull();
+
+      messages.loadedRevision = "revision-2";
+      await vi.waitFor(() => expect(jumpLink(7)).not.toBeNull());
+      component.$destroy();
+    });
+
+    it.each([
+      ["delayed", false],
+      ["failed", true],
+    ])("never links into old messages while a message refresh after resync is %s", async (_, fails) => {
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      const session = makeSession("claude", { message_count: 4, termination_status: "tool_call_pending" });
+      const rows = (revision: string) => ({
+        messages: [0, 1, 2, 3].map((ordinal) => ({ ...makeAssistantMessage("claude sonnet"), ordinal })),
+        count: 4,
+        transcript_revision: revision,
+      });
+      sessionsService.getApiV1SessionsById.mockResolvedValue({ ...session, transcript_revision: "revision-1" });
+      sessionsService.getApiV1SessionsByIdMessages.mockResolvedValueOnce(rows("revision-1"));
+      await messages.loadSession(session.id);
+      expect(messages.loadedRevision).toBe("revision-1");
+      const replaced = makeToolSequences(2, session.id, "revision-2");
+      sessionsService.getApiV1SessionsByIdToolSequences
+        .mockResolvedValueOnce(makeToolSequences(3, session.id, "revision-1"))
+        .mockResolvedValue(replaced);
+      ui.signalPanelOpen = true;
+      const component = createClassComponent({
+        component: SessionBreadcrumb,
+        target: document.body,
+        props: { session, onBack: () => {} },
+      });
+      await vi.waitFor(async () => {
+        await expandedSequenceText();
+        expect(jumpLink(3)).not.toBeNull();
+      });
+
+      // A resync replaces the transcript. Session metadata and the sequences reach the new revision first.
+      const refresh = deferred<ReturnType<typeof rows>>();
+      sessionsService.getApiV1SessionsById.mockResolvedValue({ ...session, transcript_revision: "revision-2" });
+      sessionsService.getApiV1SessionsByIdMessages.mockReturnValueOnce(refresh.promise);
+      const reload = messages.reload();
+      component.$set({ session: { ...session, transcript_revision: "revision-2", termination_status: "clean" } });
+      await vi.waitFor(async () => expect(await expandedSequenceText()).toContain("Message 2"));
+      expect(document.querySelector(".tool-sequences-panel a.jump")).toBeNull();
+      expect(messages.loadedRevision).toBe("revision-1");
+
+      if (fails) refresh.reject(new Error("offline"));
+      else refresh.resolve(rows("revision-2"));
+      await reload;
+      await flushPromises();
+      if (fails) {
+        expect(messages.loadedRevision).toBe("revision-1");
+        expect(document.querySelector(".tool-sequences-panel a.jump")).toBeNull();
+        expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(2);
+      } else {
+        await vi.waitFor(() => expect(jumpLink(2)).not.toBeNull());
+        expect(messages.loadedRevision).toBe("revision-2");
+        expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(3);
+      }
+      component.$destroy();
+    });
+
+    it("waits for the message list to land rows before reading sequences", async () => {
+      const session = makeSession("claude");
+      messages.sessionId = session.id;
+      messages.loading = true;
       ui.signalPanelOpen = true;
       const component = createClassComponent({
         component: SessionBreadcrumb,
@@ -2353,111 +2433,62 @@ describe("SessionBreadcrumb", () => {
         props: { session, onBack: () => {} },
       });
       await flushPromises();
-      expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(1);
-      expect(document.querySelector(".tool-sequences-panel")?.getAttribute("aria-busy")).toBe("true");
-      expect(document.querySelector(".tool-sequences-panel .sequence-row")).toBeNull();
-      expect(refreshActiveSession).toHaveBeenCalledOnce();
-      refreshActiveSession.mockRestore();
+      expect(sessionsService.getApiV1SessionsByIdToolSequences).not.toHaveBeenCalled();
+      expect(document.body.textContent).toContain("Loading tool sequences");
 
-      component.$set({ session: { ...session, transcript_revision: "revision-2" } });
-      await vi.waitFor(async () => expect(await expandedSequenceText()).toContain("2.0s"));
-      expect(
-        document.querySelector('a[aria-label="Message 7: open the Grep call in the transcript"]'),
-      ).not.toBeNull();
-      expect(document.querySelector(".tool-sequences-panel")?.getAttribute("aria-busy")).toBe("false");
+      messages.loadedRevision = "revision-1";
+      messages.loading = false;
+      await vi.waitFor(async () => {
+        await expandedSequenceText();
+        expect(jumpLink(3)).not.toBeNull();
+      });
+      expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(1);
       component.$destroy();
     });
 
     it("ignores a superseded tool-sequence response for the same session", async () => {
       const revision2 = deferred<SessionToolSequencesResponse>();
-      const revision3 = makeToolSequences(6000, undefined, "revision-3");
-      revision3.sequences[0]!.calls[0]!.ordinal = 9;
-      const session = makeSession("claude", { transcript_revision: "revision-1" });
+      const session = makeSession("claude");
+      showMessages(session.id, "revision-1");
       sessionsService.getApiV1SessionsByIdToolSequences
-        .mockResolvedValueOnce(makeToolSequences(2000, undefined, "revision-1"))
+        .mockResolvedValueOnce(makeToolSequences(3, session.id, "revision-1"))
         .mockReturnValueOnce(revision2.promise)
-        .mockResolvedValueOnce(revision3);
+        .mockResolvedValueOnce(makeToolSequences(9, session.id, "revision-3"));
       ui.signalPanelOpen = true;
       const component = createClassComponent({
         component: SessionBreadcrumb,
         target: document.body,
         props: { session, onBack: () => {} },
       });
-      await vi.waitFor(async () => expect(await expandedSequenceText()).toContain("2.0s"));
-      component.$set({ session: { ...session, transcript_revision: "revision-2" } });
+      await vi.waitFor(async () => {
+        await expandedSequenceText();
+        expect(jumpLink(3)).not.toBeNull();
+      });
+      messages.loadedRevision = "revision-2";
       await flushPromises();
       expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(2);
-      component.$set({ session: { ...session, transcript_revision: "revision-3" } });
-      await vi.waitFor(async () => expect(await expandedSequenceText()).toContain("6.0s"));
+      messages.loadedRevision = "revision-3";
+      await vi.waitFor(() => expect(jumpLink(9)).not.toBeNull());
 
-      revision2.resolve(makeToolSequences(10000, undefined, "revision-2"));
+      revision2.resolve(makeToolSequences(5, session.id, "revision-2"));
       await flushPromises();
-      expect(document.body.textContent).toContain("6.0s");
-      expect(document.body.textContent).not.toContain("10.0s");
-      expect(
-        document.querySelector('a[aria-label="Message 9: open the Grep call in the transcript"]'),
-      ).not.toBeNull();
-      expect(
-        document.querySelector('a[aria-label="Message 3: open the Grep call in the transcript"]'),
-      ).toBeNull();
-      component.$destroy();
-    });
-
-    it("refreshes tool sequences when the transcript revision or termination status changes", async () => {
-      ui.signalPanelOpen = true;
-      sessionsService.getApiV1SessionsByIdToolSequences
-        .mockResolvedValueOnce(makeToolSequences(2000, undefined, "revision-1"))
-        .mockResolvedValueOnce(makeToolSequences(4000, undefined, "revision-2"))
-        .mockResolvedValueOnce(makeToolSequences(6000, undefined, "revision-2"));
-      const component = createClassComponent({
-        component: SessionBreadcrumb,
-        target: document.body,
-        props: {
-          session: makeSession("claude", {
-            transcript_revision: "revision-1",
-            termination_status: "tool_call_pending",
-          }),
-          onBack: () => {},
-        },
-      });
-      await vi.waitFor(async () => {
-        expect(await expandedSequenceText()).toContain("2.0s");
-      });
-
-      component.$set({
-        session: makeSession("claude", {
-          transcript_revision: "revision-2",
-          termination_status: "clean",
-        }),
-      });
-      await vi.waitFor(async () => {
-        expect(await expandedSequenceText()).toContain("4.0s");
-      });
-      expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(2);
-
-      component.$set({
-        session: makeSession("claude", {
-          transcript_revision: "revision-2",
-          termination_status: "awaiting_user",
-        }),
-      });
-      await vi.waitFor(async () => {
-        expect(await expandedSequenceText()).toContain("6.0s");
-      });
-      expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(3);
+      expect(jumpLink(9)).not.toBeNull();
+      expect(document.body.textContent).not.toContain("Message 5");
       component.$destroy();
     });
 
     it("does not let a closed-panel response replace the next read", async () => {
       const first = deferred<SessionToolSequencesResponse>();
+      const session = makeSession("claude");
+      showMessages(session.id, "revision-1");
       sessionsService.getApiV1SessionsByIdToolSequences
         .mockReturnValueOnce(first.promise)
-        .mockResolvedValueOnce(makeToolSequences(2000));
+        .mockResolvedValueOnce(makeToolSequences(3, session.id, "revision-1"));
       ui.signalPanelOpen = true;
       const component = createClassComponent({
         component: SessionBreadcrumb,
         target: document.body,
-        props: { session: makeSession("claude"), onBack: () => {} },
+        props: { session, onBack: () => {} },
       });
       await flushPromises();
       expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(1);
@@ -2466,25 +2497,28 @@ describe("SessionBreadcrumb", () => {
       await flushPromises();
       ui.signalPanelOpen = true;
       await vi.waitFor(async () => {
-        expect(await expandedSequenceText()).toContain("2.0s");
+        await expandedSequenceText();
+        expect(jumpLink(3)).not.toBeNull();
       });
-      first.resolve(makeToolSequences(10000));
+      first.resolve(makeToolSequences(8, session.id, "revision-1"));
       await flushPromises();
-      expect(document.body.textContent).toContain("2.0s");
-      expect(document.body.textContent).not.toContain("10.0s");
+      expect(jumpLink(3)).not.toBeNull();
+      expect(document.body.textContent).not.toContain("Message 8");
       expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(2);
       component.$destroy();
     });
 
     it("retries a failed tool-sequence read", async () => {
+      const session = makeSession("claude");
+      showMessages(session.id, "revision-1");
       sessionsService.getApiV1SessionsByIdToolSequences
         .mockRejectedValueOnce(new Error("offline"))
-        .mockResolvedValueOnce(makeToolSequences(2000));
+        .mockResolvedValueOnce(makeToolSequences(3, session.id, "revision-1"));
       ui.signalPanelOpen = true;
       const component = createClassComponent({
         component: SessionBreadcrumb,
         target: document.body,
-        props: { session: makeSession("claude"), onBack: () => {} },
+        props: { session, onBack: () => {} },
       });
       await vi.waitFor(() => {
         expect(document.querySelector('.tool-sequences-panel [role="alert"]')).not.toBeNull();
@@ -2493,7 +2527,10 @@ describe("SessionBreadcrumb", () => {
       document
         .querySelector<HTMLButtonElement>('.tool-sequences-panel [role="alert"] button')!
         .click();
-      await vi.waitFor(async () => expect(await expandedSequenceText()).toContain("2.0s"));
+      await vi.waitFor(async () => {
+        await expandedSequenceText();
+        expect(jumpLink(3)).not.toBeNull();
+      });
       expect(document.querySelector('.tool-sequences-panel [role="alert"]')).toBeNull();
       expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(2);
       component.$destroy();
@@ -2521,9 +2558,10 @@ describe("SessionBreadcrumb", () => {
 
     it("ignores a late tool-sequence response after switching sessions", async () => {
       const first = deferred<SessionToolSequencesResponse>();
+      showMessages("run:bbb", "revision-1");
       sessionsService.getApiV1SessionsByIdToolSequences
         .mockReturnValueOnce(first.promise)
-        .mockResolvedValueOnce(makeToolSequences(2000, "run:bbb"));
+        .mockResolvedValueOnce(makeToolSequences(3, "run:bbb", "revision-1"));
       ui.signalPanelOpen = true;
       const component = createClassComponent({
         component: SessionBreadcrumb,
@@ -2531,17 +2569,16 @@ describe("SessionBreadcrumb", () => {
         props: { session: makeSession("claude", { id: "run:aaa" }), onBack: () => {} },
       });
       await flushPromises();
-      component.$set({
-        session: makeSession("claude", { id: "run:bbb" }),
-      });
+      component.$set({ session: makeSession("claude", { id: "run:bbb" }) });
       await vi.waitFor(async () => {
-        expect(await expandedSequenceText()).toContain("2.0s");
+        await expandedSequenceText();
+        expect(jumpLink(3)).not.toBeNull();
       });
 
-      first.resolve(makeToolSequences(10000, "run:aaa"));
+      first.resolve(makeToolSequences(8, "run:aaa", "revision-1"));
       await flushPromises();
-      expect(document.body.textContent).toContain("2.0s");
-      expect(document.body.textContent).not.toContain("10.0s");
+      expect(jumpLink(3)).not.toBeNull();
+      expect(document.body.textContent).not.toContain("Message 8");
       component.$destroy();
     });
   });

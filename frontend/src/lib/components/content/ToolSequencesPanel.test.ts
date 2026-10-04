@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import type {
+  DbSessionTiming,
   SessionToolSequence,
   SessionToolSequenceCall,
   SessionToolSequencesResponse,
@@ -19,7 +20,6 @@ function makeCall(overrides: Partial<SessionToolSequenceCall> = {}): SessionTool
     outcome: "empty",
     repeat: "none",
     tool_changed: false,
-    duration_ms: null,
     input_preview: "{}",
     input_bytes: 2,
     input_omitted_bytes: 0,
@@ -27,7 +27,6 @@ function makeCall(overrides: Partial<SessionToolSequenceCall> = {}): SessionTool
     result_bytes: 15,
     result_omitted_bytes: 0,
     result_content_unknown: false,
-    awaiting_subagent: false,
     ...overrides,
   };
 }
@@ -66,13 +65,41 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
+function makeTiming(turns: { ordinal: number; calls: { tool_use_id: string; duration_ms: number | null }[] }[]): DbSessionTiming {
+  return {
+    session_id: "session-a",
+    running: false,
+    turns: turns.map((turn, index) => ({
+      message_id: index + 1,
+      ordinal: turn.ordinal,
+      started_at: "2026-04-26T10:00:00Z",
+      duration_ms: null,
+      primary_category: "Grep",
+      calls: turn.calls.map((call) => ({
+        ...call,
+        category: "Grep",
+        input_preview: "",
+        is_parallel: false,
+        tool_name: "Grep",
+      })),
+    })),
+  } as unknown as DbSessionTiming;
+}
+
 function mountPanel(
   data: SessionToolSequencesResponse | null,
-  extra: { loading?: boolean; failed?: boolean; unavailable?: boolean; onretry?: () => void } = {},
+  extra: {
+    loading?: boolean;
+    failed?: boolean;
+    unavailable?: boolean;
+    onretry?: () => void;
+    timing?: DbSessionTiming | null;
+    linked?: boolean;
+  } = {},
 ) {
   return mount(ToolSequencesPanel, {
     target: document.body,
-    props: { data, sessionId: "session-a", loading: false, failed: false, ...extra },
+    props: { data, sessionId: "session-a", loading: false, failed: false, linked: true, ...extra },
   });
 }
 
@@ -110,7 +137,6 @@ describe("ToolSequencesPanel", () => {
         ordinal: 20,
         tool_name: "Read",
         outcome: "content",
-        duration_ms: 0,
         tool_changed: true,
       }),
     ];
@@ -129,7 +155,9 @@ describe("ToolSequencesPanel", () => {
       ],
     });
     const jump = vi.spyOn(ui, "scrollToOrdinal").mockImplementation(() => {});
-    const component = mountPanel(data);
+    // Message 20 is the only call the timing view measured, and it took no time at all.
+    const timing = makeTiming([{ ordinal: 20, calls: [{ tool_use_id: "tool-id", duration_ms: 0 }] }]);
+    const component = mountPanel(data, { timing });
 
     const row = document.querySelector<HTMLButtonElement>(".sequence-row")!;
     expect(row.getAttribute("aria-expanded")).toBe("false");
@@ -406,5 +434,28 @@ describe("ToolSequencesPanel", () => {
     );
     expect(document.querySelector('[role="alert"]')).toBeNull();
     unmount(unavailable);
+  });
+
+  it("drops a timed duration whose call ID disagrees with the sequence", async () => {
+    const data = makeData({
+      sequences: [makeSequence({ calls: [makeCall({ ordinal: 4, tool_use_id: "a" }), makeCall({ ordinal: 5, tool_use_id: "b" })] })],
+    });
+    const timing = makeTiming([
+      { ordinal: 4, calls: [{ tool_use_id: "a", duration_ms: 1000 }] },
+      { ordinal: 5, calls: [{ tool_use_id: "other", duration_ms: 9000 }] },
+    ]);
+    const component = mountPanel(data, { timing });
+    await openSequence();
+    const durations = [...document.querySelectorAll(".dur")].map((cell) => cell.textContent?.trim());
+    expect(durations).toEqual(["1.0s", "—Not measured"]);
+    unmount(component);
+  });
+
+  it("withholds transcript links while the sequences belong to another revision", async () => {
+    const component = mountPanel(makeData(), { linked: false });
+    await openSequence();
+    expect(document.querySelector("a.jump")).toBeNull();
+    expect(document.querySelector(".jump")!.textContent).toContain("Message 4");
+    unmount(component);
   });
 });
