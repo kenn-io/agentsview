@@ -4597,7 +4597,7 @@ func usageRollupExceptionMetrics(
 	tb testing.TB, cache *usageCache, filter UsageFilter,
 ) (int64, int64) {
 	tb.Helper()
-	identity := usageTimezoneIdentityFor(filter.location(), nil)
+	identity := usageTimezoneIdentityFor(filter.Location(), nil)
 	var rows, groups int64
 	require.NoError(tb, cache.db.QueryRowContext(tb.Context(), `SELECT COUNT(*),
 		COUNT(DISTINCT e.group_kind || char(0) || e.group_key)

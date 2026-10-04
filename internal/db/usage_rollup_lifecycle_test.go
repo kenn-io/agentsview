@@ -134,6 +134,124 @@ func TestUsageTimezoneIdentitySurvivesLocalInitialization(t *testing.T) {
 	assert.Equal(t, before, after)
 }
 
+// setUsageLocalLocation pins the resolved local zone and clears identities
+// cached under the previous resolution.
+func setUsageLocalLocation(t *testing.T, location *time.Location) {
+	t.Helper()
+	previous := usageLocalLocation
+	usageLocalLocation = func() *time.Location { return location }
+	usageTimezoneIdentityCache.Clear()
+	t.Cleanup(func() {
+		usageLocalLocation = previous
+		usageTimezoneIdentityCache.Clear()
+	})
+}
+
+func TestUsageLocalRequestsShareNamedZoneIdentity(t *testing.T) {
+	newYork, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	setUsageLocalLocation(t, newYork)
+	want := usageTimezoneIdentityFor(newYork, nil)
+	require.Equal(t, "America/New_York", want.Name)
+
+	for _, filter := range []UsageFilter{
+		{}, {Timezone: "Local"}, {Timezone: "America/New_York"},
+	} {
+		got := usageTimezoneIdentityFor(filter.Location(), nil)
+		assert.Equal(t, want.Key, got.Key, "timezone %q", filter.Timezone)
+	}
+	assert.Equal(t, "UTC", usageTimezoneIdentityFor(
+		UsageFilter{Timezone: "UTC"}.Location(), nil).Name)
+}
+
+func TestUsageBackfillLocationsPrunesStaleLocalTimezones(t *testing.T) {
+	newYork, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	anonymous := time.FixedZone("Local", -5*60*60)
+	tests := []struct {
+		name      string
+		local     *time.Location
+		wantKept  []string
+		wantGone  []string
+		wantZones []string
+	}{
+		{
+			name:      "resolved local zone prunes unnamed sets",
+			local:     newYork,
+			wantKept:  []string{"named"},
+			wantGone:  []string{"local-old", "local-current"},
+			wantZones: []string{"America/New_York"},
+		},
+		{
+			name:      "unresolved local zone keeps its own set",
+			local:     anonymous,
+			wantKept:  []string{"named", "local-current"},
+			wantGone:  []string{"local-old"},
+			wantZones: []string{"Local", "America/New_York"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			usageTimezoneIdentityCache.Clear()
+			t.Cleanup(usageTimezoneIdentityCache.Clear)
+			database := testDB(t)
+			seedUsageSnapshotSession(t, database, "session", "project-a",
+				"2026-08-10T09:00:00Z", 0, 10, "model-a")
+			snapshot, fills, cache := prepareUsageRollupTest(t, database)
+			// The real install path seeds each set, so the fixture tracks the schema.
+			install := func(location *time.Location) string {
+				zoned := snapshot
+				zoned.location = location
+				_, _, err := cache.rollup.Ensure(t.Context(), zoned, fills,
+					export.NewPricingResolver(zoned.PricingRows))
+				require.NoError(t, err)
+				return usageTimezoneIdentityFor(location, nil).Key
+			}
+			named := install(newYork)
+			current := install(anonymous)
+			require.Equal(t, "local:", current[:len("local:")])
+			_, err := cache.db.ExecContext(t.Context(), `UPDATE usage_rollup_timezones
+				SET timezone_key = 'local:old' WHERE timezone_key = ?`, current)
+			require.NoError(t, err)
+			install(anonymous)
+			keys := map[string]string{
+				"named": named, "local-current": current, "local-old": "local:old",
+			}
+			require.Equal(t, 3, usageCacheCount(t, cache, "usage_rollup_installs"))
+			require.Equal(t, 3, usageCacheCount(t, cache, "usage_rollup_days"))
+
+			locations, err := usageBackfillLocations(t.Context(), cache, tt.local)
+			require.NoError(t, err)
+
+			names := make([]string, 0, len(locations))
+			for _, location := range locations {
+				names = append(names, location.String())
+			}
+			assert.Equal(t, tt.wantZones, names)
+			installsFor := func(key string) int {
+				var count int
+				require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT COUNT(*)
+					FROM usage_rollup_installs i JOIN usage_rollup_timezones tz
+					  ON tz.id = i.timezone_id
+					WHERE tz.timezone_key = ?`, key).Scan(&count))
+				return count
+			}
+			for _, label := range tt.wantKept {
+				assert.Equal(t, 1, installsFor(keys[label]), label)
+			}
+			for _, label := range tt.wantGone {
+				assert.Zero(t, installsFor(keys[label]), label)
+			}
+			kept := len(tt.wantKept)
+			assert.Equal(t, kept, usageCacheCount(t, cache, "usage_rollup_timezones"))
+			assert.Equal(t, kept, usageCacheCount(t, cache, "usage_rollup_installs"),
+				"pruned timezones must cascade to their installs")
+			assert.Equal(t, kept, usageCacheCount(t, cache, "usage_rollup_days"),
+				"pruned timezones must cascade to their days")
+		})
+	}
+}
+
 func TestUsageRollupCallKeyIncludesCursorHighWater(t *testing.T) {
 	snapshot := usageQuerySnapshot{CursorHighWater: 1, location: time.UTC}
 	first := usageRollupCallKey(snapshot, nil, "pricing")
