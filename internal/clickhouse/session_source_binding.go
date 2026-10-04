@@ -21,14 +21,15 @@ func (s *Store) SessionSourceChanged(err error) bool {
 }
 
 // SessionSourceBinding names the push that published the visible session row
-// and refuses while any evidence row comes from another push, or while fewer
-// messages are readable than the row counts.
+// and refuses while any evidence row comes from another push, or while that
+// push published stored messages that are no longer readable.
 func (s *Store) SessionSourceBinding(ctx context.Context, id string) (string, error) {
 	var published uint64
-	var messageCount int
+	var storedMessages bool
+	// last_message_at comes from the rows the push stored, so it stays null when none were stored even if message_count is positive.
 	err := s.queryRowContext(ctx,
-		"SELECT push_version, message_count FROM sessions PREWHERE id = ? WHERE deleted_at IS NULL", id,
-	).Scan(&published, &messageCount)
+		"SELECT push_version, last_message_at IS NOT NULL FROM sessions PREWHERE id = ? WHERE deleted_at IS NULL", id,
+	).Scan(&published, &storedMessages)
 	if errors.Is(err, sql.ErrNoRows) {
 		// No visible row to read; the route answers not found.
 		return "", nil
@@ -56,8 +57,8 @@ func (s *Store) SessionSourceBinding(ctx context.Context, id string) (string, er
 		if count > 0 && (low != published || high != published) {
 			return "", fmt.Errorf("%w: %s", errEvidenceUnpublished, table)
 		}
-		// Fewer messages than the row counts means a deletion or an unpublished replacement is partway through.
-		if table == "messages" && messageCount > 0 && count < uint64(messageCount) {
+		// No messages behind a row that published some means a deletion or an unpublished replacement is partway through.
+		if table == "messages" && storedMessages && count == 0 {
 			return "", fmt.Errorf("%w: messages missing", errEvidenceUnpublished)
 		}
 	}

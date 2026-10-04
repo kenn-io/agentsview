@@ -46,10 +46,10 @@ func TestToolSequencesRefuseUnpublishedEvidence(t *testing.T) {
 			},
 		},
 		{
-			name: "a message deleted ahead of its session row",
+			name: "messages deleted ahead of their session row",
 			change: func(t *testing.T, _ *db.DB, target Target, _ *Sync) {
 				conn := chtest.Open(t, target.URL, target.Database)
-				_, err := conn.ExecContext(t.Context(), "DELETE FROM messages WHERE session_id = ? AND ordinal = 0", fixtureAlphaID)
+				_, err := conn.ExecContext(t.Context(), "DELETE FROM messages WHERE session_id = ?", fixtureAlphaID)
 				require.NoError(t, err)
 			},
 		},
@@ -111,6 +111,31 @@ func TestToolSequencesServeAfterPublicationRecovers(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	handler := server.New(config.Config{Host: "127.0.0.1", InstallationID: "mirror"}, store, nil).Handler()
 	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:0/api/v1/sessions/"+fixtureAlphaID+"/tool-sequences", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	assert.Equal(t, http.StatusOK, res.Code, res.Body.String())
+}
+
+func TestToolSequencesServeSessionsWithoutStoredMessages(t *testing.T) {
+	ctx := context.Background()
+	local, target := seedFixture(t)
+	const id = "ch-metadata-only"
+	// Metadata-only and usage-only sessions keep a positive message_count with no stored message rows.
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+		Session:     fixtureSession(id, "alpha", "metadata only", "2026-01-11T00:00:00.000Z", 3),
+		DataVersion: 1,
+	}})
+	require.NoError(t, err)
+	s := newTestSync(t, local, target, storage.PusherOptions{})
+	_, err = s.Push(ctx, false, nil)
+	require.NoError(t, err)
+
+	store, err := NewStore(ctx, target)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	handler := server.New(config.Config{Host: "127.0.0.1", InstallationID: "mirror"}, store, nil).Handler()
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:0/api/v1/sessions/"+id+"/tool-sequences", nil)
 	req.RemoteAddr = "127.0.0.1:1234"
 	res := httptest.NewRecorder()
 	handler.ServeHTTP(res, req)
