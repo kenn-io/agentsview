@@ -1051,6 +1051,27 @@ describe("MessagesStore", () => {
       ]);
     });
 
+    it("ignores a continuation page that a reload overtook", async () => {
+      vi.mocked(api.getSession).mockResolvedValue(makeSession("s1", 1500));
+      const second = createDeferred<MessagesResponse>();
+      vi.mocked(api.getMessages)
+        .mockResolvedValueOnce(page(range(0, 1000), "r1", "old"))
+        .mockReturnValueOnce(second.promise as ReturnType<typeof api.getMessages>);
+      const load = messages.loadSession("s1");
+      await vi.waitFor(() => expect(messages.messages).toHaveLength(1000));
+
+      vi.mocked(api.getMessages)
+        .mockResolvedValueOnce(page(range(0, 1000), "r2", "new"))
+        .mockResolvedValueOnce(page(range(1000, 1500), "r2", "new"));
+      await messages.reload();
+      expect(messages.loadedRevision).toBe("r2");
+
+      second.resolve(page(range(1000, 1500), "r1", "old"));
+      await load;
+      expect(messages.loadedRevision).toBe("r2");
+      expect(messages.messages.every((message) => message.content.startsWith("new"))).toBe(true);
+    });
+
     it("replaces the window rather than merging rows from a new revision", async () => {
       vi.mocked(api.getSession).mockResolvedValue(makeSession("s1", 3));
       vi.mocked(api.getMessages).mockResolvedValueOnce(page([0, 1, 2], "r1", "old"));

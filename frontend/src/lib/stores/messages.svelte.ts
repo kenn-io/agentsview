@@ -73,6 +73,8 @@ export class MessagesStore {
   private pendingReload: boolean = false;
   // Back-to-back reloads a moving transcript refused; bounded so a busy session can't reload forever.
   private revisionConflicts: number = 0;
+  // Bumped whenever a load replaces or merges the window, so a slower pass can tell it was overtaken.
+  private windowPass: number = 0;
   private loadOlderPromise: Promise<void> | null = null;
   private pendingSessionToken: string | null = null;
   private hasPendingSessionToken: boolean = false;
@@ -251,6 +253,7 @@ export class MessagesStore {
   /** Take a refreshed window that starts at the loaded window's oldest row. */
   private acceptWindow(page: MessagePage, append: boolean) {
     clearContentCaches();
+    this.windowPass++;
     if (page.revision !== this.loadedRevision) {
       // Rows from two transcript revisions never share the list, so a new revision replaces the window.
       this.messages = page.messages;
@@ -328,6 +331,7 @@ export class MessagesStore {
     let loaded: Message[] = [];
     let complete = false;
     let revision: string | null = null;
+    let pass = 0;
 
     for (;;) {
       const res = await this.fetchMessagePage(
@@ -348,8 +352,14 @@ export class MessagesStore {
         break;
       }
 
-      // Rows already parsed may come back rewritten under the same IDs and lengths.
-      if (loaded.length === 0) clearContentCaches();
+      if (loaded.length === 0) {
+        pass = ++this.windowPass;
+        // Rows already parsed may come back rewritten under the same IDs and lengths.
+        clearContentCaches();
+      } else if (pass !== this.windowPass) {
+        // A reload replaced the window while this page was in flight.
+        return;
+      }
       loaded = [...loaded, ...res.messages];
       // Every row on screen now comes from this one revision, so it can be published page by page.
       this.messages = loaded;
@@ -388,6 +398,7 @@ export class MessagesStore {
 
     // Rows parsed while this page was in flight may come back rewritten under the same IDs and lengths.
     clearContentCaches();
+    this.windowPass++;
     this.messages = [...firstRes.messages].reverse();
     this.loadedRevision = firstRes.revision;
     this.historyComplete = false;
