@@ -1063,7 +1063,8 @@ describe("MessagesStore", () => {
 
       vi.mocked(api.getMessages)
         .mockRejectedValueOnce(new ApiError(409, "transcript revision does not match"))
-        .mockResolvedValueOnce(page(range(4000, 5000), "r2", "new"));
+        .mockResolvedValueOnce(page(range(4000, 5000), "r2", "new"))
+        .mockResolvedValueOnce(page([], "r2"));
       await messages.loadOlder();
       await vi.waitFor(() => expect(messages.loadedRevision).toBe("r2"));
 
@@ -1073,6 +1074,62 @@ describe("MessagesStore", () => {
       });
       expect(messages.messages[0]!.ordinal).toBe(4000);
       expect(messages.messages.every((message) => message.content.startsWith("new"))).toBe(true);
+    });
+
+    it("still reaches a jump target after the transcript moves under it", async () => {
+      vi.mocked(api.getSession).mockResolvedValue(makeSession("s1", 5_000));
+      vi.mocked(api.getMessages).mockResolvedValueOnce(page(range(4000, 5000).reverse(), "r1"));
+      await messages.loadSession("s1");
+
+      vi.mocked(api.getMessages)
+        .mockRejectedValueOnce(new ApiError(409, "transcript revision does not match"))
+        .mockResolvedValueOnce(page(range(4000, 5000), "r2"))
+        .mockResolvedValueOnce(page([], "r2"))
+        .mockResolvedValueOnce(page(range(3000, 4000).reverse(), "r2"));
+      await messages.ensureOrdinalLoaded(3500);
+
+      expect(messages.loadedRevision).toBe("r2");
+      expect(messages.messages[0]!.ordinal).toBe(3000);
+      expect(vi.mocked(api.getMessages).mock.calls.at(-1)![1]).toMatchObject({
+        from: 3999,
+        expected_revision: "r2",
+      });
+    });
+
+    it("stops reloading after a few passes that a busy transcript keeps refusing", async () => {
+      vi.mocked(api.getSession).mockResolvedValue(makeSession("s1", 1500));
+      vi.mocked(api.getMessages)
+        .mockResolvedValueOnce(page(range(0, 1000), "r1"))
+        .mockResolvedValueOnce(page(range(1000, 1500), "r1"));
+      await messages.loadSession("s1");
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      // Every refresh sees its first page, then a sync lands before the second.
+      let call = 0;
+      vi.mocked(api.getMessages).mockImplementation(async () => {
+        call++;
+        if (call % 2 === 1) return page(range(0, 1000), `r${call + 1}`);
+        throw new ApiError(409, "transcript revision does not match");
+      });
+      const sessionReads = vi.mocked(api.getSession).mock.calls.length;
+      await messages.reload();
+
+      expect(vi.mocked(api.getSession).mock.calls.length - sessionReads).toBe(3);
+      expect(messages.loadedRevision).toBe("r1");
+      expect(messages.messages).toHaveLength(1500);
+    });
+
+    it("clears rows when a full reload finds the session emptied", async () => {
+      vi.mocked(api.getSession).mockResolvedValue(makeSession("s1", 3));
+      vi.mocked(api.getMessages).mockResolvedValueOnce(page([0, 1, 2], "r1"));
+      await messages.loadSession("s1");
+
+      vi.mocked(api.getSession).mockResolvedValue(makeSession("s1", 0));
+      vi.mocked(api.getMessages).mockResolvedValueOnce(page([], "r2"));
+      await messages.reload();
+
+      expect(messages.messages).toEqual([]);
+      expect(messages.loadedRevision).toBe("r2");
     });
   });
 

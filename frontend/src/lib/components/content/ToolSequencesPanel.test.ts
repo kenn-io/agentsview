@@ -438,16 +438,27 @@ describe("ToolSequencesPanel", () => {
 
   it("drops a timed duration whose call ID disagrees with the sequence", async () => {
     const data = makeData({
-      sequences: [makeSequence({ calls: [makeCall({ ordinal: 4, tool_use_id: "a" }), makeCall({ ordinal: 5, tool_use_id: "b" })] })],
+      sequences: [
+        makeSequence({
+          calls: [
+            makeCall({ ordinal: 4, tool_use_id: "a" }),
+            makeCall({ ordinal: 5, tool_use_id: "b" }),
+            makeCall({ ordinal: 6, tool_use_id: "" }),
+            makeCall({ ordinal: 7, tool_use_id: "" }),
+          ],
+        }),
+      ],
     });
     const timing = makeTiming([
       { ordinal: 4, calls: [{ tool_use_id: "a", duration_ms: 1000 }] },
       { ordinal: 5, calls: [{ tool_use_id: "other", duration_ms: 9000 }] },
+      { ordinal: 6, calls: [{ tool_use_id: "named", duration_ms: 9000 }] },
+      { ordinal: 7, calls: [{ tool_use_id: "", duration_ms: 3000 }] },
     ]);
     const component = mountPanel(data, { timing });
     await openSequence();
     const durations = [...document.querySelectorAll(".dur")].map((cell) => cell.textContent?.trim());
-    expect(durations).toEqual(["1.0s", "—Not measured"]);
+    expect(durations).toEqual(["1.0s", "—Not measured", "—Not measured", "3.0s"]);
     unmount(component);
   });
 

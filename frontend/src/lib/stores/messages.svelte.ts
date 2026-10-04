@@ -24,6 +24,9 @@ interface PageQuery {
   direction: "asc" | "desc";
 }
 
+/** How a read bound to the loaded revision ended: finished, outpaced by a reload, or refused by a moved transcript. */
+type RevisionedRead = "done" | "moved" | "reload";
+
 /** Rows from one transcript revision, as the messages API reported it. */
 interface MessagePage {
   messages: Message[];
@@ -68,6 +71,8 @@ export class MessagesStore {
   private reloadPromise: Promise<void> | null = null;
   private reloadSessionId: string | null = null;
   private pendingReload: boolean = false;
+  // Back-to-back reloads a moving transcript refused; bounded so a busy session can't reload forever.
+  private revisionConflicts: number = 0;
   private loadOlderPromise: Promise<void> | null = null;
   private pendingSessionToken: string | null = null;
   private hasPendingSessionToken: boolean = false;
@@ -199,6 +204,7 @@ export class MessagesStore {
     this.reloadPromise = null;
     this.reloadSessionId = null;
     this.pendingReload = false;
+    this.revisionConflicts = 0;
     this.loadOlderPromise = null;
     this.pendingSessionToken = null;
     this.hasPendingSessionToken = false;
@@ -333,6 +339,11 @@ export class MessagesStore {
       if (this.sessionId !== id) return;
       revision ??= res.revision;
       if (res.messages.length === 0) {
+        if (loaded.length === 0) {
+          // The session has no rows now, so nothing from an earlier revision may stay on screen.
+          this.messages = [];
+          this.loadedRevision = revision;
+        }
         complete = true;
         break;
       }
@@ -511,6 +522,19 @@ export class MessagesStore {
 
   /** Resume the missing tail without removing already loaded rows or their cursor. */
   private async loadRemainingMessages(id: string, signal: AbortSignal): Promise<void> {
+    for (let attempt = 1; ; attempt++) {
+      const outcome = await this.loadRemainingMessagesOnce(id, signal);
+      if (outcome === "done" || attempt >= MAX_LOAD_ATTEMPTS) return;
+      // The transcript moved underneath this read; catch the window up and try again.
+      if (outcome === "reload") await this.reload();
+      if (this.sessionId !== id || signal.aborted || this.historyComplete) return;
+    }
+  }
+
+  private async loadRemainingMessagesOnce(
+    id: string,
+    signal: AbortSignal,
+  ): Promise<RevisionedRead> {
     const current = () =>
       this.sessionId === id && this.abortController?.signal === signal && !signal.aborted;
     this.loadingOlder = true;
@@ -524,9 +548,9 @@ export class MessagesStore {
           signal,
           revision,
         );
-        if (!current()) return;
+        if (!current()) return "done";
         // A reload replaced the window while this page was in flight.
-        if (!this.pageJoinsWindow(revision, res)) return;
+        if (!this.pageJoinsWindow(revision, res)) return "moved";
         revision = res.revision;
         this.loadedRevision = revision;
         if (res.messages.length === 0) {
@@ -553,22 +577,39 @@ export class MessagesStore {
         from = nextFrom;
       }
       this.publishPendingSessionToken(id);
+      return "done";
     } catch (error) {
-      if (isAbortError(error) || !current()) return;
-      if (isRevisionChange(error)) {
-        void this.reload();
-        return;
-      }
+      if (isAbortError(error) || !current()) return "done";
+      if (isRevisionChange(error)) return "reload";
       this.historyComplete = false;
       console.warn("Failed to complete session history:", error);
+      return "done";
     } finally {
       if (current()) this.loadingOlder = false;
     }
   }
 
-  private async doEnsureOrdinal(id: string, targetOrdinal: number) {
+  private async doEnsureOrdinal(id: string, targetOrdinal: number): Promise<void> {
+    for (let attempt = 1; ; attempt++) {
+      const outcome = await this.ensureOrdinalOnce(id, targetOrdinal);
+      if (outcome === "done" || attempt >= MAX_LOAD_ATTEMPTS) return;
+      // The transcript moved underneath this read; catch the window up and try again.
+      if (outcome === "reload") await this.reload();
+      const oldest = this.messages[0]?.ordinal;
+      if (
+        this.sessionId !== id ||
+        oldest === undefined ||
+        oldest <= targetOrdinal ||
+        !this.hasOlder
+      ) {
+        return;
+      }
+    }
+  }
+
+  private async ensureOrdinalOnce(id: string, targetOrdinal: number): Promise<RevisionedRead> {
     const signal = this.abortController?.signal;
-    if (!signal || signal.aborted) return;
+    if (!signal || signal.aborted) return "done";
 
     this.loadingOlder = true;
     try {
@@ -585,10 +626,11 @@ export class MessagesStore {
           signal,
           revision,
         );
-        if (this.sessionId !== id) return;
+        if (this.sessionId !== id) return "done";
         // A reload replaced the window while this page was in flight.
-        if (this.loadedRevision !== held || (revision !== null && res.revision !== revision))
-          return;
+        if (this.loadedRevision !== held || (revision !== null && res.revision !== revision)) {
+          return "moved";
+        }
         revision = res.revision;
         if (res.messages.length === 0) {
           this.hasOlder = false;
@@ -607,7 +649,7 @@ export class MessagesStore {
         from = chunkOldest - 1;
       }
 
-      if (this.sessionId !== id) return;
+      if (this.sessionId !== id) return "done";
 
       if (chunks.length > 0) {
         const merged = chunks.reverse().flat();
@@ -619,14 +661,13 @@ export class MessagesStore {
       this.hasOlder = oldestNow !== undefined && oldestNow > 0;
       this.historyComplete = !this.hasOlder;
       this.publishPendingSessionToken(id);
+      return "done";
     } catch (err) {
-      if (isAbortError(err)) return;
-      if (this.sessionId === id && isRevisionChange(err)) {
-        void this.reload();
-        return;
-      }
+      if (isAbortError(err)) return "done";
+      if (this.sessionId === id && isRevisionChange(err)) return "reload";
       if (this.sessionId === id) this.historyComplete = false;
       console.warn("Failed to load older messages for ordinal:", err);
+      return "done";
     } finally {
       if (this.sessionId === id) {
         this.loadingOlder = false;
@@ -675,12 +716,13 @@ export class MessagesStore {
             ? earliestChangedOrdinal(previousMessages, this.messages)
             : null;
         this.publishOrDeferSessionToken(pendingToken, unreadOrdinal);
+        this.revisionConflicts = 0;
       }
     } catch (err) {
       if (isAbortError(err)) return;
-      // A sync landed between pages; loadedRevision still names only rows that arrived, and one more pass catches up.
+      // A sync landed between pages; loadedRevision still names only rows that arrived, and another pass catches up.
       if (this.sessionId === id && isRevisionChange(err)) {
-        this.pendingReload = true;
+        if (++this.revisionConflicts < MAX_LOAD_ATTEMPTS) this.pendingReload = true;
         return;
       }
       if (this.sessionId === id) this.historyComplete = false;

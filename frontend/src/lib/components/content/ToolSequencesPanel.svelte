@@ -68,9 +68,7 @@
   function durationOf(call: SessionToolSequenceCall): number | null {
     const timed = timingByPosition.get(`${call.ordinal}:${call.call_index}`);
     // Timing can lag or lead the sequences by a sync, so a call whose ID disagrees stays unmeasured.
-    if (!timed || (timed.tool_use_id && call.tool_use_id && timed.tool_use_id !== call.tool_use_id)) {
-      return null;
-    }
+    if (!timed || (timed.tool_use_id ?? "") !== (call.tool_use_id ?? "")) return null;
     return timed.duration_ms;
   }
 
