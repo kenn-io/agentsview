@@ -1099,6 +1099,26 @@ describe("MessagesStore", () => {
       expect(messages.messages.every((message) => message.content.startsWith("new"))).toBe(true);
     });
 
+    it("serializes overlapping jumps into older history without duplicating rows", async () => {
+      vi.mocked(api.getSession).mockResolvedValue(makeSession("s1", 5_000));
+      vi.mocked(api.getMessages).mockResolvedValueOnce(page(range(4000, 5000).reverse(), "r1"));
+      await messages.loadSession("s1");
+
+      vi.mocked(api.getMessages).mockImplementation(async (_id, params) => {
+        const from = params.from as number;
+        return page(range(Math.max(0, from - 999), from + 1).reverse(), "r1");
+      });
+      await Promise.all([
+        messages.ensureOrdinalLoaded(3500),
+        messages.ensureOrdinalLoaded(2500),
+        messages.ensureOrdinalLoaded(1500),
+      ]);
+
+      const ordinals = messages.messages.map((message) => message.ordinal);
+      expect(new Set(ordinals).size).toBe(ordinals.length);
+      expect(ordinals[0]).toBeLessThanOrEqual(1500);
+    });
+
     it("ignores a delayed first page that a reload overtook", async () => {
       vi.mocked(api.getSession)
         .mockResolvedValueOnce({ ...makeSession("s1", 3), transcript_revision: "r1" })

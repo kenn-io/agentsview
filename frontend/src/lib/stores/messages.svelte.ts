@@ -536,11 +536,12 @@ export class MessagesStore {
     if (oldestLoaded <= targetOrdinal) return;
     if (!this.hasOlder) return;
 
-    if (this.loadOlderPromise) {
+    // Several jumps can wait on one load; each rechecks after its turn so they never page the same range twice.
+    while (this.loadOlderPromise) {
       await this.loadOlderPromise;
       if (!this.sessionId || this.sessionId !== id) return;
       if (this.messages.length === 0) return;
-      if (this.messages[0]!.ordinal <= targetOrdinal) return;
+      if (this.messages[0]!.ordinal <= targetOrdinal || !this.hasOlder) return;
     }
 
     const p = this.doEnsureOrdinal(id, targetOrdinal).finally(() => {
@@ -710,7 +711,11 @@ export class MessagesStore {
       if (this.sessionId !== id) return "done";
 
       if (chunks.length > 0) {
-        const merged = chunks.reverse().flat();
+        const oldest = this.messages[0]?.ordinal ?? Infinity;
+        const merged = chunks
+          .reverse()
+          .flat()
+          .filter((message) => message.ordinal < oldest);
         this.messages = [...merged, ...this.messages];
         this.loadedRevision = revision;
       }
