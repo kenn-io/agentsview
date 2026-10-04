@@ -262,3 +262,41 @@ func TestGenAIPricesCaseInsensitiveRulesKeepDeclarationOrder(t *testing.T) {
 		})
 	}
 }
+
+func TestGenAIModelFingerprintTracksOnlyThisModelsPrices(t *testing.T) {
+	document := func(laterAlpha, laterBeta string) *GenAIPrices {
+		prices, err := ParseGenAIPrices([]byte(`[{
+			"id": "provider",
+			"name": "Provider",
+			"api_pattern": "https://example.invalid",
+			"model_match": {"starts_with": "model-"},
+			"models": [
+				{"id": "model-alpha", "match": {"equals": "model-alpha"},
+				 "prices": [
+					{"prices": {"input_mtok": 1}},
+					{"constraint": {"start_date": "2026-09-01"},
+					 "prices": {"input_mtok": ` + laterAlpha + `}}
+				 ]},
+				{"id": "model-beta", "match": {"equals": "model-beta"},
+				 "prices": [
+					{"prices": {"input_mtok": 1}},
+					{"constraint": {"start_date": "2026-09-01"},
+					 "prices": {"input_mtok": ` + laterBeta + `}}
+				 ]}
+			]
+		}]`))
+		require.NoError(t, err)
+		return prices
+	}
+	base := document("2", "2")
+
+	assert.Equal(t, base.ModelFingerprint("", "model-alpha"),
+		document("2", "3").ModelFingerprint("", "model-alpha"),
+		"another model's later price must not change this model's fingerprint")
+	assert.NotEqual(t, base.ModelFingerprint("", "model-alpha"),
+		document("3", "2").ModelFingerprint("", "model-alpha"),
+		"a later-period price change must change the fingerprint")
+	assert.Equal(t, "none", base.ModelFingerprint("", "unknown-model"))
+	assert.NotEqual(t, base.ModelFingerprint("", "model-alpha"),
+		base.ModelFingerprint("", "model-beta"))
+}

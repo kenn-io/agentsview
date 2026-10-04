@@ -49,7 +49,12 @@ const (
 	// stored as codex-auto-review now resolve to gpt-5.6-luna catalog rates.
 	// EffectivePricingDigest hashes only catalog rows, so the same facts and
 	// catalog would otherwise keep the unpriced costs.
-	usageCacheFormatVersion             = 14
+	// Version 15 records each rollup install's pricing lookups and re-resolves
+	// only those, so a price change rebuilds just the sessions that used the
+	// changed rows. Because the identity re-runs the resolver, it also catches
+	// resolver changes like those behind versions 6, 9, 12 and 14 whenever
+	// they change a used lookup's result.
+	usageCacheFormatVersion             = 15
 	usageCacheApplicationID             = 0x41565543
 	usageCacheKind                      = "agentsview-usage-facts"
 	usageCacheRetirementProtocolVersion = 1
@@ -157,6 +162,7 @@ CREATE TABLE usage_rollup_installs (
     fact_install_revision INTEGER NOT NULL,
     baked_agent TEXT NOT NULL,
     baked_started_at TEXT NOT NULL,
+    pricing_inputs TEXT NOT NULL,
 	pricing_hash TEXT NOT NULL,
     install_revision INTEGER NOT NULL,
     cached_at TEXT NOT NULL,
@@ -795,7 +801,7 @@ func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
 		`SELECT id, timezone_id, session_id, source_sync_marker,
 		        source_transcript_rev, usage_event_fingerprint,
 		        fact_install_revision, baked_agent, baked_started_at,
-		        pricing_hash, install_revision, cached_at
+		        pricing_inputs, pricing_hash, install_revision, cached_at
 		 FROM usage_rollup_installs LIMIT 0`,
 		`SELECT rollup_install_id, local_date, reported_model, priced_model,
 		        matched_pattern, rate_ok, rate_hash, band_threshold,

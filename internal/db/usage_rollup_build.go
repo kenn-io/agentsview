@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"maps"
 	"math"
 	"slices"
 	"strconv"
@@ -29,11 +30,12 @@ type usagePriceResult struct {
 	BandThreshold                      *int
 	ComputedRequest, ComputedAggregate int
 	Reported, BaseRequest              int
-	// model and lookup are the exact pricing inputs behind Cost: the plain
-	// resolution for reported rows and the billed resolution otherwise.
-	// Provenance recording reuses lookup instead of resolving the row again.
-	model  string
-	lookup export.PricingLookup
+	// model, canonical and lookup are the exact pricing inputs behind Cost:
+	// the plain resolution for reported rows and the billed resolution
+	// otherwise. Provenance recording reuses lookup instead of resolving the
+	// row again.
+	model, canonical string
+	lookup           export.PricingLookup
 }
 
 // rateHash fingerprints the rates behind Cost. Rollup grouping and
@@ -88,12 +90,14 @@ type usageExceptionRow struct {
 }
 
 type usageRollupBuild struct {
-	SessionID, Agent, StartedAt, PricingHash string
-	Source                                   usageSourceVersion
-	FactRevision                             int64
-	Daily                                    []usageDailyContribution
-	Activity                                 []usageActivityContribution
-	Exceptions                               []usageExceptionRow
+	SessionID, Agent, StartedAt string
+	// PricingInputs encodes the lookups Daily used; PricingHash is their identity.
+	PricingInputs, PricingHash string
+	Source                     usageSourceVersion
+	FactRevision               int64
+	Daily                      []usageDailyContribution
+	Activity                   []usageActivityContribution
+	Exceptions                 []usageExceptionRow
 }
 
 func priceUsageFact(
@@ -126,7 +130,7 @@ func priceUsageFact(
 	result := usagePriceResult{
 		PricedModel: pricedModel, MatchedPattern: lookup.Pattern,
 		RateOK: lookup.OK,
-		model:  model, lookup: lookup,
+		model:  model, canonical: canonicalModel, lookup: lookup,
 	}
 	selectedRates := lookup.Rates
 	if input.Fact.RequestScoped {
@@ -230,13 +234,14 @@ func usageRatesAndBandForFact(
 
 func buildUsageDailyContributions(
 	survivors []usageRollupSurvivor, resolver *export.PricingResolver,
-) ([]usageDailyContribution, error) {
+) ([]usageDailyContribution, []usagePricingInput, error) {
 	type key struct {
 		session, date, model, providerID, priced, pattern, rateHash string
 		rateOK                                                      bool
 		band                                                        int
 	}
 	rows := make(map[key]*usageDailyContribution)
+	inputs := make(map[usagePricingInput]bool)
 	for _, survivor := range survivors {
 		fact := survivor.Fact
 		timestamp := fact.Fact.RawTimestamp
@@ -245,8 +250,12 @@ func buildUsageDailyContributions(
 			ProviderID: fact.Fact.ProviderID,
 		}, resolver)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
+		inputs[usagePricingInput{
+			ProviderID: fact.Fact.ProviderID, ReportedModel: priced.model,
+			CanonicalModel: priced.canonical,
+		}] = true
 		rateHash := priced.rateHash()
 		band := -1
 		if priced.BandThreshold != nil {
@@ -275,12 +284,12 @@ func buildUsageDailyContributions(
 			row.PricingTimestamp = timestamp
 		}
 		if err := addUsageFactToDailyContribution(row, fact, priced); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		discarded, err := addUsageInt64(row.DiscardedSnapshotOutputTokens,
 			survivor.DiscardedSnapshotOutputTokens)
 		if err != nil {
-			return nil, fmt.Errorf("summing discarded snapshot output: %w", err)
+			return nil, nil, fmt.Errorf("summing discarded snapshot output: %w", err)
 		}
 		row.DiscardedSnapshotOutputTokens = discarded
 	}
@@ -289,7 +298,7 @@ func buildUsageDailyContributions(
 		result = append(result, *row)
 	}
 	slices.SortFunc(result, compareUsageDailyContribution)
-	return result, nil
+	return result, slices.Collect(maps.Keys(inputs)), nil
 }
 
 func addUsageFactToDailyContribution(
@@ -424,11 +433,16 @@ func loadUsageRollupFacts(
 
 func loadCursorUsageRollupBuild(
 	ctx context.Context, conn *sql.Conn, highWater int64,
-	location *time.Location, pricingHash string,
+	location *time.Location, pricing *usagePricingIdentities,
 ) (usageRollupBuild, error) {
+	// Cursor rows price at read time, so only the policy identity applies.
+	inputs, pricingHash, err := pricing.forInputs(nil)
+	if err != nil {
+		return usageRollupBuild{}, err
+	}
 	build := usageRollupBuild{
 		SessionID: usageRollupCursorSessionID, Agent: "cursor",
-		PricingHash: pricingHash,
+		PricingInputs: inputs, PricingHash: pricingHash,
 		Source: usageSourceVersion{
 			SessionID:  usageRollupCursorSessionID,
 			SyncMarker: strconv.FormatInt(highWater, 10),
@@ -493,7 +507,7 @@ func loadCursorUsageRollupBuild(
 func buildUsageRollupSessions(
 	facts []usageRollupFact, sessions map[string]usageQuerySession,
 	versions map[string]usageSourceVersion, fills map[string]usageFillResult,
-	location *time.Location, resolver *export.PricingResolver, pricingHash string,
+	location *time.Location, pricing *usagePricingIdentities,
 	cross usageDedupIdentitySet,
 ) ([]usageRollupBuild, error) {
 	if location == nil {
@@ -516,14 +530,18 @@ func buildUsageRollupSessions(
 		}
 		sessionFacts := facts[start:factIndex]
 		survivors, exceptions := classifyUsageRollupFacts(sessionFacts, cross)
-		daily, err := buildUsageDailyContributions(survivors, resolver)
+		daily, inputs, err := buildUsageDailyContributions(survivors, pricing.resolver)
+		if err != nil {
+			return nil, err
+		}
+		pricingInputs, pricingHash, err := pricing.forInputs(inputs)
 		if err != nil {
 			return nil, err
 		}
 		builds = append(builds, usageRollupBuild{
 			SessionID: id, Agent: sessions[id].Agent, StartedAt: sessions[id].StartedAt,
-			PricingHash: pricingHash,
-			Source:      versions[id], FactRevision: fills[id].InstallRevision,
+			PricingInputs: pricingInputs, PricingHash: pricingHash,
+			Source: versions[id], FactRevision: fills[id].InstallRevision,
 			Daily: daily, Activity: usageRollupActivityContributions(id, sessionFacts),
 			Exceptions: usageRollupExceptionRows(exceptions),
 		})
