@@ -386,6 +386,8 @@ export class MessagesStore {
     );
     if (this.sessionId !== id) return;
 
+    // Rows parsed while this page was in flight may come back rewritten under the same IDs and lengths.
+    clearContentCaches();
     this.messages = [...firstRes.messages].reverse();
     this.loadedRevision = firstRes.revision;
     this.historyComplete = false;
