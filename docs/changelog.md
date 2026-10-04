@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-01
+last_edited: 2026-10-04
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -199,6 +199,15 @@ The latest published release is
 
 **Bug fixes**
 
+- On macOS, `agentsview serve` no longer hangs at `Running initial sync...`
+  when a session's working directory is on an external or network drive under
+  `/Volumes`. Reading Git metadata there made macOS ask for access to the
+  volume, and a `launchd` service on a Mac with nobody at the screen waited on
+  that prompt forever. AgentsView now leaves those directories untouched, so
+  sessions recorded there keep path-only project identity with no Git remote,
+  worktree, or branch. Set `scan_protected_paths = true` to read Git detail
+  from them again; see
+  [macOS Protected Folders](/docs/configuration/#macos-protected-folders).
 - On macOS, a reboot no longer makes the next sync re-read every session from
   scratch. macOS can give a volume a different device number each time it is
   mounted, which happens after a system update, and AgentsView took the changed

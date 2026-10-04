@@ -745,6 +745,80 @@ func TestClassifyLocalPathProbeSkipsAutomountNamespace(t *testing.T) {
 		"darwin", home, filepath.Join(home, "tohome", "user", "repo"), false), "a symlink into the automount namespace must stop the walk")
 }
 
+func TestIsMountedVolumePath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the predicate compares POSIX paths built with filepath")
+	}
+	tests := []struct {
+		name string
+		goos string
+		path string
+		want bool
+	}{
+		{"volume child", "darwin", "/Volumes/External/project", true},
+		{"volume root", "darwin", "/Volumes/External", true},
+		{"case folded", "darwin", "/volumes/External/project", true},
+		{"data volume spelling", "darwin", "/System/Volumes/Data/Volumes/External/project", true},
+		{"dot dot stays on volume", "darwin", "/Volumes/External/a/../project", true},
+		{"volumes directory itself", "darwin", "/Volumes", false},
+		{"volumes directory trailing slash", "darwin", "/Volumes/", false},
+		{"dot dot leaves volumes", "darwin", "/Volumes/../Users/tester/src", false},
+		{"system data volume", "darwin", "/System/Volumes/Data/Users/tester/src", false},
+		{"similar prefix", "darwin", "/VolumesBackup/project", false},
+		{"relative path", "darwin", "Volumes/External/project", false},
+		{"linux never matches", "linux", "/Volumes/External/project", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, IsMountedVolumePath(tt.goos, tt.path))
+		})
+	}
+}
+
+// TestClassifyLocalPathProbeMountedVolume pins that a working directory on a
+// volume under /Volumes classifies as protected without being touched,
+// whether the input names it directly or reaches it through a symlink.
+// Reading there from a launchd-started process blocks on a consent prompt
+// nobody answers, which is the startup hang issue #2087 reported.
+func TestClassifyLocalPathProbeMountedVolume(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the predicate compares POSIX paths built with filepath")
+	}
+	home := t.TempDir()
+	require.NoError(t, os.Symlink(
+		"/Volumes/External/code", filepath.Join(home, "ext"),
+	))
+	orig := osLstat
+	t.Cleanup(func() { osLstat = orig })
+	var onVolume []string
+	osLstat = func(path string) (os.FileInfo, error) {
+		if strings.HasPrefix(path, "/Volumes/") {
+			onVolume = append(onVolume, path)
+		}
+		return orig(path)
+	}
+
+	tests := []struct {
+		name string
+		home string
+		path string
+	}{
+		{"direct volume path", home, "/Volumes/External/project"},
+		{"unresolvable home", "", "/Volumes/External/project"},
+		{"symlink onto volume", home, filepath.Join(home, "ext", "project")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, LocalPathProbeProtectedUserData,
+				ClassifyLocalPathProbe("darwin", tt.home, tt.path, false))
+		})
+	}
+	assert.Empty(t, onVolume, "classification must not Lstat on a mounted volume")
+
+	assert.Equal(t, LocalPathProbeSafe,
+		ClassifyLocalPathProbe("linux", home, "/Volumes/External/project", false))
+}
+
 // TestClassifyLocalPathProbeDotDotTraversalOrder pins that ".." resolves in
 // traversal order, after the components before it: collapsing it lexically
 // would drop an unresolved symlink component and classify a path as safe

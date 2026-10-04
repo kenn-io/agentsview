@@ -471,8 +471,9 @@ type EngineConfig struct {
 	IncludeCwdPrefixes []string
 	// ScanProtectedPaths lets local Git discovery read working directories
 	// inside macOS TCC-protected locations (Documents, Downloads, Desktop,
-	// iCloud Drive, and cloud-provider folders). It defaults to false so a
-	// first sync cannot raise consent prompts the user cannot explain;
+	// iCloud Drive, cloud-provider folders, and volumes under /Volumes). It
+	// defaults to false so a first sync cannot raise consent prompts the
+	// user cannot explain;
 	// sessions there keep path-only project identity. Populated from the
 	// scan_protected_paths config option. The safe default belongs to the
 	// zero value so an engine built without the option never prompts.

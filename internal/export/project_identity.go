@@ -951,6 +951,29 @@ func IsProtectedUserDataPath(goos, home, p string) bool {
 	return false
 }
 
+// mountedVolumesRoot is where macOS mounts removable and network volumes.
+// Reading a file on one makes macOS ask for Removable Volumes or Network
+// Volumes access. A process started by launchd on a machine with nobody at
+// the console blocks in that read indefinitely, because the prompt is never
+// answered.
+const mountedVolumesRoot = "/Volumes"
+
+// IsMountedVolumePath reports whether p lies on a volume mounted under
+// /Volumes on macOS. /Volumes itself is a plain directory on the startup
+// volume and stays unguarded; only /Volumes/<name> and below count. The
+// startup volume's own entry there (a symlink to /) is matched too: telling
+// it apart would need an Lstat, and a session recorded under that spelling
+// only loses Git detail. Comparison is lexical and folds case like
+// IsProtectedUserDataPath.
+func IsMountedVolumePath(goos, p string) bool {
+	if goos != "darwin" || !filepath.IsAbs(p) {
+		return false
+	}
+	cleaned := strings.ToLower(trimDataVolumePrefix(filepath.Clean(p)))
+	prefix := strings.ToLower(mountedVolumesRoot) + string(filepath.Separator)
+	return len(cleaned) > len(prefix) && strings.HasPrefix(cleaned, prefix)
+}
+
 // maxProtectedPathLinkHops bounds symlink resolution in
 // ResolvesIntoProtectedUserDataPath. Hitting the bound treats the path as
 // protected, so a link loop fails toward skipping the probe rather than
@@ -959,7 +982,8 @@ const maxProtectedPathLinkHops = 40
 
 // LocalPathProbeClass classifies whether passive discovery may touch a local
 // path on disk. Safe paths may be probed. Protected paths raise a macOS TCC
-// consent prompt and may only be probed under an explicit user opt-in.
+// consent prompt and may only be probed under an explicit user opt-in; they
+// cover the guarded folders under home and volumes mounted under /Volumes.
 // Automount-namespace paths wake automountd on any stat and must never be
 // probed, opt-in or not — the two unsafe classes exist so callers cannot
 // treat one override as permission for the other.
@@ -1084,7 +1108,12 @@ func resolvePathAvoidingAutomount(
 	return current, true
 }
 
-func protectedUnderAnyHome(goos string, homes []string, p string) bool {
+// consentGatedPath reports whether reading p raises a macOS consent prompt:
+// a protected folder under any of homes, or a volume mounted under /Volumes.
+func consentGatedPath(goos string, homes []string, p string) bool {
+	if IsMountedVolumePath(goos, p) {
+		return true
+	}
 	for _, home := range homes {
 		if IsProtectedUserDataPath(goos, home, p) {
 			return true
@@ -1111,7 +1140,7 @@ func classifyLocalPathProbe(
 	if IsAutomountNamespacePath(goos, cleaned) {
 		return LocalPathProbeAutomountNamespace
 	}
-	if !scanProtected && protectedUnderAnyHome(goos, homes, cleaned) {
+	if !scanProtected && consentGatedPath(goos, homes, cleaned) {
 		return LocalPathProbeProtectedUserData
 	}
 	// Walk raw components in traversal order. current never contains a
@@ -1135,7 +1164,7 @@ func classifyLocalPathProbe(
 		if IsAutomountNamespacePath(goos, next) {
 			return LocalPathProbeAutomountNamespace
 		}
-		if protectedUnderAnyHome(goos, homes, next) {
+		if consentGatedPath(goos, homes, next) {
 			if !scanProtected {
 				return LocalPathProbeProtectedUserData
 			}
