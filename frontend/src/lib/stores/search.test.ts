@@ -528,7 +528,7 @@ describe("SearchStore telemetry", () => {
     vi.useRealTimers();
   });
 
-  it("reports one search_run per palette open across typing pauses, sort and mode changes", async () => {
+  it("reports each search mode once per palette open", async () => {
     const store = createSearchStore(memoryStorage());
     store.search("foo");
     await runDebounce();
@@ -536,12 +536,42 @@ describe("SearchStore telemetry", () => {
     await runDebounce();
     store.setSort("recency");
     store.setMode("semantic");
-    expect(reportTelemetry).toHaveBeenCalledExactlyOnceWith("search_run", { query_type: "text" });
+    store.setMode("hybrid");
+    store.setMode("fulltext");
+    store.setMode("semantic");
+    store.clear();
+    store.search("another query");
+    await runDebounce();
+    expect(vi.mocked(reportTelemetry).mock.calls).toEqual([
+      ["search_run", { query_type: "text" }],
+      ["search_run", { query_type: "semantic" }],
+      ["search_run", { query_type: "hybrid" }],
+    ]);
 
-    store.searchReported = false;
+    store.reportedModes.clear();
     store.search("needle");
     await runDebounce();
     expect(reportTelemetry).toHaveBeenLastCalledWith("search_run", { query_type: "semantic" });
-    expect(reportTelemetry).toHaveBeenCalledTimes(2);
+    expect(reportTelemetry).toHaveBeenCalledTimes(4);
+  });
+
+  it("does not report another search when semantic setup retries the same mode", async () => {
+    const store = createSearchStore(memoryStorage());
+    store.search("needle");
+    await runDebounce();
+    searchService.getApiV1SearchContent.mockRejectedValueOnce(
+      generatedApiError(501, "Semantic search is unavailable"),
+    );
+    store.setMode("semantic");
+    await flushMicrotasks();
+    expect(store.error?.kind).toBe("semantic-unavailable");
+
+    store.retry();
+    await flushMicrotasks();
+    expect(store.error).toBeNull();
+    expect(vi.mocked(reportTelemetry).mock.calls).toEqual([
+      ["search_run", { query_type: "text" }],
+      ["search_run", { query_type: "semantic" }],
+    ]);
   });
 });

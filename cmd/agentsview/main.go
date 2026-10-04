@@ -23,6 +23,7 @@ import (
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/insight"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/poller"
 	"go.kenn.io/agentsview/internal/rawderive"
@@ -1328,12 +1329,29 @@ func newDaemonIdleTracker(cfg config.Config, stop context.CancelFunc) *server.Id
 }
 
 func telemetryOptions(cfg config.Config) telemetry.Options {
-	return telemetry.Options{
+	opts := telemetry.Options{
 		InstallationID: cfg.InstallationID,
 		InstalledAt:    cfg.InstallationCreatedAt,
 		Version:        version,
 		Commit:         commit,
 	}
+	for _, def := range parser.Registry {
+		opts.AgentTypes = append(opts.AgentTypes, string(def.Type))
+	}
+	// Freebuff shares Codebuff's registry entry but keeps its own agent type.
+	opts.AgentTypes = append(opts.AgentTypes, string(parser.AgentFreebuff))
+	// Canned insights report their template; other insights report their type.
+	for kind, valid := range insight.ValidTypes {
+		if valid && kind != insight.CannedType {
+			opts.InsightKinds = append(opts.InsightKinds, kind)
+		}
+	}
+	for kind, valid := range insight.ValidCannedKinds {
+		if valid {
+			opts.InsightKinds = append(opts.InsightKinds, string(kind))
+		}
+	}
+	return opts
 }
 
 func startTelemetryPings(ctx context.Context, reporter *telemetry.Reporter) {

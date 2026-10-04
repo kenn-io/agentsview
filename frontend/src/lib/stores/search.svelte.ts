@@ -134,8 +134,8 @@ export class SearchStore {
   results: PaletteSearchResult[] = $state([]);
   isSearching: boolean = $state(false);
   error: SearchFailure | null = $state(null);
-  // search_run counts once per palette open; the palette clears this when it closes.
-  searchReported = false;
+  // search_run counts each mode once per palette open; the palette clears this when it closes.
+  reportedModes = new Set<SearchMode>();
 
   private storage: SearchModeStorage | null;
   private abortController: AbortController | null = null;
@@ -239,8 +239,8 @@ export class SearchStore {
     this.isSearching = true;
     this.error = null;
     const mode = this.mode;
-    if (!this.searchReported) {
-      this.searchReported = true;
+    if (!this.reportedModes.has(mode)) {
+      this.reportedModes.add(mode);
       reportTelemetry("search_run", { query_type: mode === "fulltext" ? "text" : mode });
     }
     // All time must omit both bounds, rather than use the picker's fallback

@@ -45,7 +45,9 @@ func TestCoreActionAllowlist(t *testing.T) {
 	client, err := kittelemetry.NewPostHogReporter(kittelemetry.PostHogOptions{
 		APIKey: "phc_test", Application: application, EnvPrefix: envPrefix,
 		DistinctID: "install-id", Source: "daemon", Endpoint: collector.URL,
-	}, allowedEventOptions()...)
+	}, allowedEventOptions(Options{
+		AgentTypes: []string{"freebuff"}, InsightKinds: []string{"daily_activity"},
+	})...)
 	require.NoError(t, err)
 	reporter := &Reporter{client: client}
 	srv := server.New(config.Config{Host: "127.0.0.1", Port: 8080},

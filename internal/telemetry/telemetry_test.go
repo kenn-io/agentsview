@@ -4,7 +4,6 @@ import (
 	"context"
 	"runtime"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -72,9 +71,9 @@ func TestAllowedEventOptionsConfigureDaemonActiveShape(t *testing.T) {
 	t.Setenv(EnabledEnv, "1")
 	t.Setenv(GenericEnabledEnv, "1")
 
-	client, err := newKitReporter(
-		"anonymous-install-id", time.Time{}, "v1.2.3", "abc123",
-	)
+	client, err := newKitReporter(Options{
+		InstallationID: "anonymous-install-id", Version: "v1.2.3", Commit: "abc123",
+	})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, client.Close()) })
 
@@ -116,9 +115,9 @@ func TestReporterCaptureDaemonActiveNoopsDuringTests(t *testing.T) {
 	t.Setenv(EnabledEnv, "1")
 	t.Setenv(GenericEnabledEnv, "1")
 
-	client, err := newKitReporter(
-		"anonymous-install-id", time.Time{}, "v1.2.3", "abc123",
-	)
+	client, err := newKitReporter(Options{
+		InstallationID: "anonymous-install-id", Version: "v1.2.3", Commit: "abc123",
+	})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, client.Close()) })
 

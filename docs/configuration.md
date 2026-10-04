@@ -1792,22 +1792,27 @@ ping. The browser never contacts PostHog.
 
 The web UI reports five core actions the same way. Each carries one property,
 and the server drops any value outside its fixed list. A search counts once per
-command palette open, and an insight counts once it finishes generating:
+mode used during each command palette open. Typing pauses, sorting, and retries
+in the same mode do not add events. An insight counts once it finishes
+generating; opening a cached insight does not count.
 
-| Event | Property | Allowed values |
-|---|---|---|
-| `search_run` | `query_type` | `text`, `semantic`, `hybrid` |
-| `session_viewed` | `agent` | the session's agent type |
-| `export_run` | `format` | `html`, `insight_html`, `csv`, `markdown_link`, `gist`, `insight_gist` |
-| `insight_generated` | `kind` | `daily_activity`, `agent_analysis`, or a generated-insight template name |
-| `analytics_viewed` | `page` | `usage`, `activity`, `trends`, `quality` |
+Downloads and Gist publishes count export attempts, including attempts that
+fail. Markdown links count after the link is copied successfully.
+
+| Event               | Property     | Allowed values                                                           |
+| ------------------- | ------------ | ------------------------------------------------------------------------ |
+| `search_run`        | `query_type` | `text`, `semantic`, `hybrid`                                             |
+| `session_viewed`    | `agent`      | the session's agent type                                                 |
+| `export_run`        | `format`     | `html`, `insight_html`, `csv`, `markdown_link`, `gist`, `insight_gist`   |
+| `insight_generated` | `kind`       | `daily_activity`, `agent_analysis`, or a generated-insight template name |
+| `analytics_viewed`  | `page`       | `usage`, `activity`, `trends`, `quality`                                 |
 
 Every event contains only:
 
 - app version and git commit
 - operating system and CPU architecture
 - the application-owned installation ID stored in
-    `~/.agentsview/telemetry-install-id`
+  `~/.agentsview/telemetry-install-id`
 - for the five UI actions, the one listed value above
 
 It contains no session data, prompts, project names, file paths, account

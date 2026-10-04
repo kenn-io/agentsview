@@ -48,7 +48,7 @@
     searchStore.clear();
     searchStore.resetSort();
     searchStore.resetRange();
-    searchStore.searchReported = false;
+    searchStore.reportedModes.clear();
   });
 
   // Most Chinese, Japanese, and Korean words are one or two characters long,

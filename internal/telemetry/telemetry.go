@@ -9,8 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"go.kenn.io/agentsview/internal/insight"
-	"go.kenn.io/agentsview/internal/parser"
 	kittelemetry "go.kenn.io/kit/telemetry"
 )
 
@@ -39,9 +37,11 @@ type Options struct {
 	InstallationID string
 	// InstalledAt is when InstallationID was created. Reports carry its age as
 	// install_age_hours; zero sends them without an age.
-	InstalledAt time.Time
-	Version     string
-	Commit      string
+	InstalledAt  time.Time
+	Version      string
+	Commit       string
+	AgentTypes   []string
+	InsightKinds []string
 }
 
 func EnabledFromEnv() bool {
@@ -51,7 +51,7 @@ func EnabledFromEnv() bool {
 func NewReporter(opts Options) (*Reporter, error) {
 	if !EnabledFromEnv() {
 		// kit keeps the allowlist on an opted-out reporter, so the UI route still rejects unknown events.
-		client, err := newKitReporter(opts.InstallationID, opts.InstalledAt, opts.Version, opts.Commit)
+		client, err := newKitReporter(opts)
 		if err != nil {
 			return nil, err
 		}
@@ -64,7 +64,7 @@ func NewReporter(opts Options) (*Reporter, error) {
 		return nil, errors.New("installation ID is required")
 	}
 
-	client, err := newKitReporter(opts.InstallationID, opts.InstalledAt, opts.Version, opts.Commit)
+	client, err := newKitReporter(opts)
 	if err != nil {
 		return nil, err
 	}
@@ -135,29 +135,27 @@ func (r *Reporter) Close() error {
 	return r.client.Close()
 }
 
-func newKitReporter(
-	distinctID string, installedAt time.Time, version, commit string,
-) (*kittelemetry.PostHogReporter, error) {
+func newKitReporter(opts Options) (*kittelemetry.PostHogReporter, error) {
 	return kittelemetry.NewPostHogReporter(kittelemetry.PostHogOptions{
 		APIKey:      postHogAPIKey,
 		Application: application,
 		EnvPrefix:   envPrefix,
-		DistinctID:  distinctID,
-		InstalledAt: installedAt,
-		Version:     version,
-		Commit:      commit,
+		DistinctID:  opts.InstallationID,
+		InstalledAt: opts.InstalledAt,
+		Version:     opts.Version,
+		Commit:      opts.Commit,
 		Source:      "daemon",
-	}, allowedEventOptions()...)
+	}, allowedEventOptions(opts)...)
 }
 
-func allowedEventOptions() []kittelemetry.PostHogOption {
+func allowedEventOptions(opts Options) []kittelemetry.PostHogOption {
 	return []kittelemetry.PostHogOption{
 		kittelemetry.WithAllowedEvent(EventDaemonActive),
 		kittelemetry.WithAllowedEvent(EventAppOpened),
 		oneOf(EventSearchRun, "query_type", "text", "semantic", "hybrid"),
-		oneOf(EventSessionViewed, "agent", agentValues()...),
+		oneOf(EventSessionViewed, "agent", opts.AgentTypes...),
 		oneOf(EventExportRun, "format", "html", "insight_html", "csv", "markdown_link", "gist", "insight_gist"),
-		oneOf(EventInsightGenerated, "kind", insightKinds()...),
+		oneOf(EventInsightGenerated, "kind", opts.InsightKinds...),
 		oneOf(EventAnalyticsViewed, "page", "usage", "activity", "trends", "quality"),
 	}
 }
@@ -165,29 +163,4 @@ func allowedEventOptions() []kittelemetry.PostHogOption {
 func oneOf(event, property string, values ...string) kittelemetry.PostHogOption {
 	return kittelemetry.WithAllowedEvent(event,
 		kittelemetry.AllowTelemetryProperty(property, kittelemetry.AllowTelemetryStringValues(values...)))
-}
-
-// agentValues adds Freebuff, which shares Codebuff's registry entry but keeps its own agent type.
-func agentValues() []string {
-	values := make([]string, 0, len(parser.Registry)+1)
-	for _, def := range parser.Registry {
-		values = append(values, string(def.Type))
-	}
-	return append(values, string(parser.AgentFreebuff))
-}
-
-// insightKinds names a canned request by its template and other requests by their type.
-func insightKinds() []string {
-	var kinds []string
-	for t, ok := range insight.ValidTypes {
-		if ok && t != insight.CannedType {
-			kinds = append(kinds, t)
-		}
-	}
-	for k, ok := range insight.ValidCannedKinds {
-		if ok {
-			kinds = append(kinds, string(k))
-		}
-	}
-	return kinds
 }
