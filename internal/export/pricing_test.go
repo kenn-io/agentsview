@@ -1453,6 +1453,37 @@ func TestPricingResolverDependencyFingerprint(t *testing.T) {
 		})
 	}
 
+	t.Run("custom rate shadows genai", func(t *testing.T) {
+		alpha := input{reported: "genai-alpha", canonical: "genai-alpha"}
+		withCustom := func(genAI *pricingpkg.GenAIPrices) []EffectivePricingRow {
+			rows := baseRows()
+			rows[3].GenAI = genAI
+			return append(rows, EffectivePricingRow{ModelPattern: "genai-alpha", Rates: ModelRates{
+				InputPerMTok: money.MustParseDollars("7"), Source: PricingRowSourceCustom,
+			}})
+		}
+		shadowed := fingerprint(withCustom(genAIDocument("2", "2")), alpha)
+		assert.Equal(t, shadowed, fingerprint(withCustom(genAIDocument("3", "2")), alpha),
+			"GenAI prices behind a custom rate are unreachable")
+		assert.NotEqual(t, shadowed, fingerprint(baseRows(), alpha),
+			"removing the custom rate exposes GenAI")
+	})
+
+	t.Run("unused ollama base", func(t *testing.T) {
+		tagged := input{reported: "kimi-y:cloud", canonical: "kimi-y:cloud"}
+		rows := func(baseRate string) []EffectivePricingRow {
+			return append(baseRows(),
+				EffectivePricingRow{ModelPattern: "kimi-y:cloud", Rates: ModelRates{
+					InputPerMTok: money.MustParseDollars("6"), Source: PricingRowSourceFetched,
+				}},
+				EffectivePricingRow{ModelPattern: "kimi-y", Rates: ModelRates{
+					InputPerMTok: money.MustParseDollars(baseRate), Source: PricingRowSourceFetched,
+				}})
+		}
+		assert.Equal(t, fingerprint(rows("3"), tagged), fingerprint(rows("4"), tagged),
+			"a priced tagged row never falls back to its base")
+	})
+
 	t.Run("billing policy provider", func(t *testing.T) {
 		billed := modelA
 		billed.provider = pricingpkg.PositAssistantProviderID

@@ -393,35 +393,45 @@ func (r *PricingResolver) DependencyFingerprint(
 	if r == nil {
 		return hex.EncodeToString(digest.Sum(nil)), nil
 	}
-	type ladder struct{ reported, canonical string }
-	ladders := []ladder{{reportedModel, canonicalModel}}
-	for _, model := range []string{reportedModel, canonicalModel, pricedModel} {
-		base := pricingpkg.OllamaCloudBaseModel(model)
-		if base != model && !slices.Contains(ladders, ladder{base, base}) {
-			ladders = append(ladders, ladder{base, base})
+	// writeLadder skips GenAI when a custom rate shadows it, as resolveAt does.
+	genAISourceWritten := false
+	writeLadder := func(reported, canonical string) (PricingLookup, bool, bool) {
+		priced, flat, custom := r.resolveFlat(reported, canonical)
+		writeLookup(priced, flat)
+		if custom || r.genAI == nil {
+			return flat, custom, false
 		}
-	}
-	if r.genAI != nil {
-		writeField(string(r.genAISource))
-	}
-	for _, step := range ladders {
-		ladderModel, ladderLookup := r.resolveAt(step.reported, step.canonical, time.Time{})
-		writeLookup(ladderModel, ladderLookup)
-		if r.genAI == nil {
-			continue
+		if !genAISourceWritten {
+			writeField(string(r.genAISource))
+			genAISourceWritten = true
 		}
-		priced := step.canonical
-		if priced == "" {
-			priced = step.reported
-		}
-		candidates := genAICandidatesFor(step.reported, step.canonical,
-			genAIFallbackModel(priced, r.Lookup(priced)))
+		matched := false
+		candidates := genAICandidatesFor(reported, canonical,
+			genAIFallbackModel(priced, flat))
 		for _, candidate := range candidates.items[:candidates.count] {
+			fingerprint := r.genAI.ModelFingerprint(candidate.provider, candidate.model)
+			matched = matched || fingerprint != "none"
 			writeField(candidate.provider)
 			writeField(candidate.model)
 			writeField(candidate.priced)
-			writeField(r.genAI.ModelFingerprint(candidate.provider, candidate.model))
+			writeField(fingerprint)
 		}
+		return flat, custom, matched
+	}
+	mainFlat, mainCustom, mainGenAI := writeLadder(reportedModel, canonicalModel)
+	// ResolveAt tries Ollama bases only when the main ladder can come back unusable.
+	if mainCustom || (mainFlat.OK && !isPlaceholderOllamaCloudRate(mainFlat) && !mainGenAI) {
+		return hex.EncodeToString(digest.Sum(nil)), nil
+	}
+	var bases []string
+	for _, model := range []string{reportedModel, canonicalModel, pricedModel} {
+		base := pricingpkg.OllamaCloudBaseModel(model)
+		if base != model && !slices.Contains(bases, base) {
+			bases = append(bases, base)
+		}
+	}
+	for _, base := range bases {
+		writeLadder(base, base)
 	}
 	return hex.EncodeToString(digest.Sum(nil)), nil
 }
@@ -470,31 +480,38 @@ func isPlaceholderOllamaCloudRate(lookup PricingLookup) bool {
 func (r *PricingResolver) resolveAt(
 	reportedModel, canonicalModel string, timestamp time.Time,
 ) (string, PricingLookup) {
+	pricedModel, flatLookup, custom := r.resolveFlat(reportedModel, canonicalModel)
+	if custom || timestamp.IsZero() {
+		return pricedModel, flatLookup
+	}
+	if pricedModel, rates, ok := r.resolveGenAI(
+		reportedModel, canonicalModel,
+		genAIFallbackModel(pricedModel, flatLookup), timestamp,
+	); ok {
+		return pricedModel, rates
+	}
+	return pricedModel, flatLookup
+}
+
+// resolveFlat reports custom=true when a custom rate ends resolution before GenAI.
+func (r *PricingResolver) resolveFlat(
+	reportedModel, canonicalModel string,
+) (string, PricingLookup, bool) {
 	if rates, ok := r.byModel[reportedModel]; ok &&
 		rates.Source == PricingRowSourceCustom {
 		return reportedModel, PricingLookup{
 			Rates:   rates,
 			Pattern: reportedModel,
 			OK:      true,
-		}
+		}, true
 	}
 	pricedModel := canonicalModel
 	if pricedModel == "" {
 		pricedModel = reportedModel
 	}
 	flatLookup := r.Lookup(pricedModel)
-	if flatLookup.OK && flatLookup.Rates.Source == PricingRowSourceCustom {
-		return pricedModel, flatLookup
-	}
-	if !timestamp.IsZero() {
-		if pricedModel, rates, ok := r.resolveGenAI(
-			reportedModel, canonicalModel,
-			genAIFallbackModel(pricedModel, flatLookup), timestamp,
-		); ok {
-			return pricedModel, rates
-		}
-	}
-	return pricedModel, flatLookup
+	return pricedModel, flatLookup,
+		flatLookup.OK && flatLookup.Rates.Source == PricingRowSourceCustom
 }
 
 func (r *PricingResolver) resolveGenAI(

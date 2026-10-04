@@ -15,8 +15,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
+	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
 
 func TestUsageTimezoneIdentityUsesNamedZone(t *testing.T) {
@@ -842,4 +844,58 @@ func effectivePricingRateForTest(
 	}
 	require.FailNow(t, "pricing row not found", pattern)
 	return export.ModelRates{}
+}
+
+func TestUsageRollupCustomRateShadowsGenAIPriceChanges(t *testing.T) {
+	database := testDB(t)
+	started := "2026-08-10T08:00:00Z"
+	insertSession(t, database, "shadowed", "project-a", func(session *Session) {
+		session.StartedAt = &started
+	})
+	require.NoError(t, database.InsertMessages(t.Context(), []Message{{
+		SessionID: "shadowed", Ordinal: 0, Role: "assistant",
+		Timestamp: "2026-08-10T09:00:00Z", Model: "genai-alpha",
+		TokenUsage: json.RawMessage(`{"input_tokens":1000000}`),
+	}}))
+	setGenAIPrice := func(price string) {
+		data := []byte(`[{"id": "genai", "name": "GenAI",
+			"api_pattern": "https://example.invalid",
+			"model_match": {"starts_with": "genai-"},
+			"models": [{"id": "genai-alpha", "match": {"equals": "genai-alpha"},
+				"prices": {"input_mtok": ` + price + `}}]}]`)
+		parsed, err := pricingpkg.ParseGenAIPrices(data)
+		require.NoError(t, err)
+		require.NoError(t, database.UpsertGenAIPricing(t.Context(), GenAIPricingDocument{
+			Version: parsed.Version(), Source: GenAIPricingSourceFetched, Data: data,
+		}))
+	}
+	ensure := func() map[string]usageRollupInstall {
+		snapshot, fills, cache := prepareUsageRollupTest(t, database)
+		installs, _, err := cache.rollup.Ensure(t.Context(), snapshot, fills,
+			export.NewPricingResolver(snapshot.PricingRows))
+		require.NoError(t, err)
+		return installs
+	}
+	setGenAIPrice("2")
+	database.SetCustomPricing(map[string]config.CustomModelRate{
+		"genai-alpha": {InputMicrodollarsPerMTok: 5_000_000},
+	})
+	first := ensure()
+
+	setGenAIPrice("3")
+	shadowed := ensure()
+	assert.Equal(t, first["shadowed"].InstallRevision,
+		shadowed["shadowed"].InstallRevision,
+		"a GenAI price behind a custom rate must not rebuild the session")
+
+	database.SetCustomPricing(nil)
+	exposed := ensure()
+	assert.Greater(t, exposed["shadowed"].InstallRevision,
+		shadowed["shadowed"].InstallRevision,
+		"removing the custom rate must rebuild with GenAI's price")
+	daily, err := database.GetDailyUsage(t.Context(), UsageFilter{
+		From: "2026-08-10", To: "2026-08-10", Timezone: "UTC",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(3_000_000), daily.Totals.TotalCost.Microdollars)
 }
