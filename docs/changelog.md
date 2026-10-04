@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-01
+last_edited: 2026-10-04
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -11,6 +11,41 @@ The latest published release is
 
 **New features**
 
+- When the hub files a recurring Friction Log pattern whose Kata issue was
+  closed as `done`, it reopens the issue with a comment and the
+  `friction:recurred` label. Other close reasons are left alone. Digest lines
+  for patterns that were already open show the cost of the sessions they
+  recurred in.
+- The Friction Log page now shows each headline pattern's Kata status and linked
+  issue. On a writable hub with Kata ready, you can file a pattern, link an
+  existing issue, or remove the local link. Removing the link leaves the Kata
+  issue open.
+- The AgentsView hub can file Friction Log patterns to Kata, with manual
+  `friction file`, `link` and `unlink` commands. Set `auto_file = true` under
+  `[friction.kata]` to file during digest builds. Pending patterns wait in an
+  outbox while Kata is unreachable; pushing laptops never file.
+- The **Friction Log page** opens the latest daily digest with P0 alerts and
+  new or recurring patterns first. It then shows corrections, errors,
+  workarounds, deferrals, patterns, frustration and interruptions, with links
+  to the exact session message when available. The session signal panel lists
+  findings for the open session, and Quality links to the page.
+- Friction Log digests, findings and recurring patterns can now be read and
+  built from the API, CLI and MCP. `agentsview friction run` builds missing
+  complete days, while `friction digest`, `friction findings` and
+  `friction patterns` read the results. MCP clients can read digests and
+  patterns with two new tools. The findings are heuristics, so check the
+  linked session before acting on one.
+- AgentsView now builds a Friction Log digest for every completed local day,
+  including days the daemon was not running (up to `backfill_days`, default
+  7). It is on by default; set `[friction] enabled = false` to turn it off.
+  Each session is reviewed once, the digest is kept across full resyncs, and
+  `pg serve` builds its own digests for the hub. Findings, including
+  frustration markers and interrupted turns, are deterministic heuristics; no
+  model is involved.
+- AgentsView can check an optional Kata issue tracker connection, through a
+  local daemon or an HTTPS hub. Configure `[kata]`, then run
+  `agentsview kata status` or request `GET /api/v1/kata/status`. See
+  [Kata](/docs/kata/).
 - The web UI reports an anonymous `app_opened` event through the server when it
   loads and on the first focus of each later UTC day.
   `AGENTSVIEW_TELEMETRY_ENABLED=0` turns it off with the daemon ping.
@@ -106,6 +141,15 @@ The latest published release is
 
 **Improvements**
 
+- Friction Log findings can be filed to Kata immediately, before the daily
+  digest exists. Issue previews and creates include bounded, redacted nearby
+  transcript excerpts and an exact-message link. Hosted digest links open the
+  requested date. See [Kata setup](/docs/kata/).
+- Session sync now saves Friction Log findings such as corrections, tool errors,
+  workarounds, deferrals, repeated patterns, frustration, and interruptions.
+  Existing sessions are filled in during background reconciliation, and
+  PostgreSQL mirrors receive the same findings. These deterministic detections
+  are stored for upcoming digest, API, and UI work.
 - The Usage page shows a **Total Input** card that adds uncached input, cache
   writes, and cache reads, so heavy prompt caching no longer looks like missing
   input. The input count that leaves out cached tokens is now labeled

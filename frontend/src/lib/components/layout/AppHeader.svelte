@@ -89,10 +89,13 @@
     "recall",
     "pinned",
     "quality",
+    "friction",
     "trash",
     "recent-edits",
     "data",
   ] as const;
+
+  const frictionNavVisible = $derived(sync.serverVersion?.friction_available === true);
 
   const tabs: TopBarTab[] = $derived([
     { id: "sessions", label: m.nav_sessions() },
@@ -102,6 +105,7 @@
     { id: "recall", label: m.nav_recall() },
     { id: "pinned", label: m.nav_pinned() },
     { id: "quality", label: m.nav_quality() },
+    ...(frictionNavVisible ? [{ id: "friction", label: m.nav_friction() }] : []),
     { id: "trash", label: m.nav_trash() },
     { id: "recent-edits", label: m.nav_recent_edits() },
     { id: "data", label: m.nav_data() },

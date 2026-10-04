@@ -292,3 +292,134 @@ describe("i18n locale selection", () => {
     expect(localStorage.getItem(LOCALE_STORAGE_KEY)).toBe("zh-CN");
   });
 });
+
+const FRICTION_KEYS = [
+  "nav_friction",
+  "friction_page_help_intro",
+  "friction_page_help_docs",
+  "friction_page_refresh",
+  "friction_date_label",
+  "friction_date_previous",
+  "friction_date_next",
+  "friction_date_no_match",
+  "friction_build_now",
+  "friction_build_title",
+  "friction_build_done",
+  "friction_build_nothing",
+  "friction_build_failed",
+  "friction_empty_title",
+  "friction_empty_hint",
+  "friction_load_error",
+  "friction_retry",
+  "friction_digest_heading",
+  "friction_digest_missing",
+  "friction_digest_meta",
+  "friction_scanned",
+  "friction_headline_title",
+  "friction_p0_title",
+  "friction_p0_none",
+  "friction_p0_item",
+  "friction_patterns_new",
+  "friction_patterns_recurring",
+  "friction_patterns_none",
+  "friction_pattern_occurrences",
+  "friction_pattern_sessions",
+  "friction_pattern_first_seen",
+  "friction_section_corrections",
+  "friction_section_errors",
+  "friction_section_workarounds",
+  "friction_section_deferrals",
+  "friction_section_patterns",
+  "friction_none_corrections",
+  "friction_none_errors",
+  "friction_none_workarounds",
+  "friction_none_deferrals",
+  "friction_none_patterns",
+  "friction_section_frustration",
+  "friction_section_interruptions",
+  "friction_none_frustration",
+  "friction_none_interruptions",
+  "friction_interruption_count",
+  "friction_kind_correction",
+  "friction_kind_error",
+  "friction_kind_workaround",
+  "friction_kind_deferral",
+  "friction_kind_pattern",
+  "friction_kind_frustration",
+  "friction_kind_interruption",
+  "friction_disabled_title",
+  "friction_disabled_hint",
+  "friction_section_personas",
+  "friction_section_spend",
+  "friction_spend_total",
+  "friction_spend_no_cost",
+  "friction_spend_coverage",
+  "friction_spend_tokens",
+  "friction_spend_by_role",
+  "friction_spend_by_model",
+  "friction_archive_title",
+  "friction_archive_yesterday",
+  "friction_archive_no_rows",
+  "friction_archive_week",
+  "friction_markdown_title",
+  "friction_markdown_show",
+  "friction_markdown_copy",
+  "friction_markdown_copied",
+  "friction_markdown_download",
+  "friction_markdown_loading",
+  "friction_markdown_error",
+  "friction_open_session",
+  "friction_open_session_start",
+  "friction_quality_card_title",
+  "friction_quality_card_body",
+  "friction_quality_card_open",
+  "friction_session_title",
+  "friction_session_loading",
+  "friction_session_error",
+  "friction_session_empty",
+  "friction_session_jump",
+  "friction_session_jump_title",
+] as const;
+
+describe("friction log messages", () => {
+  beforeEach(() => {
+    setLocale("en");
+  });
+
+  it.each([
+    ["en", en],
+    ["zh-CN", zhCN],
+    ["zh-TW", zhTW],
+    ["ko", ko],
+    ["fr", fr],
+    ["ja", ja],
+    ["az", az],
+    ["es", es],
+  ] as const)("defines every friction key in %s", (_locale, catalogue) => {
+    const keys = new Set(Object.keys(catalogue));
+    const missing = FRICTION_KEYS.filter((key) => !keys.has(key));
+    expect(missing).toEqual([]);
+  });
+
+  it.each([
+    [1, "1 session scanned"],
+    [4, "4 sessions scanned"],
+  ])("selects the English plural for %i scanned sessions", (count, expected) => {
+    expect(m.friction_scanned({ count })).toBe(expected);
+  });
+
+  it("keeps technical identifiers untranslated in the P0 line", () => {
+    setLocale("fr");
+    expect(m.friction_p0_item({ tool: "bash", count: 3 })).toContain("bash");
+    setLocale("en");
+    expect(m.friction_p0_item({ tool: "bash", count: 3 })).toBe(
+      "bash failed in 3 distinct sessions",
+    );
+  });
+
+  it("formats the digest heading with an em dash", () => {
+    expect(m.friction_digest_heading({ date: "2026-09-21" })).toBe(
+      "Friction Log — 2026-09-21",
+    );
+  });
+});
