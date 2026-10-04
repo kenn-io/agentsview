@@ -3,9 +3,11 @@ package db
 import (
 	"context"
 	"io"
+	"time"
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/friction"
 )
 
 // ErrReadOnly is returned by write methods on read-only store
@@ -157,6 +159,30 @@ type Store interface {
 		writes []SessionBatchWrite,
 		beforeCommit ...func() error,
 	) (SessionBatchResult, error)
+
+	// Friction review state. Each store builds its own digests; read-only
+	// mirrors return ErrReadOnly.
+	FrictionSubjectsForDate(ctx context.Context, date string, loc *time.Location, includeDigested bool) ([]FrictionSubject, error)
+	FrictionFindingsForSubjects(ctx context.Context, subjectIDs []string) ([]FrictionFinding, error)
+	FrictionUsageForSessions(ctx context.Context, sessionIDs []string) (map[string]friction.SessionUsage, error)
+	FrictionArchiveSpend(ctx context.Context, from, to string, loc *time.Location) (*friction.ArchiveSpend, error)
+	SaveFrictionDigest(ctx context.Context, d FrictionDigest, subjects []FrictionDigestSubject, patterns []FrictionPatternUpdate) error
+	GetFrictionDigest(ctx context.Context, date string) (*FrictionDigest, error)
+	LatestFrictionDigestDate(ctx context.Context) (string, error)
+	EarliestSessionDate(ctx context.Context, loc *time.Location) (string, error)
+	UpdateFrictionDigestRender(ctx context.Context, date string, markdown, summaryJSON []byte, revision int) error
+
+	// Friction Log reads.
+	ListFrictionFindings(ctx context.Context, f FrictionFindingFilter) ([]FrictionFinding, string, error)
+	ListFrictionDigests(ctx context.Context, from, to string) ([]FrictionDigest, error)
+	ListFrictionPatterns(ctx context.Context, f FrictionPatternFilter) ([]FrictionPattern, string, error)
+
+	// Friction Log Kata linkage and retry state. Only the filing hub writes it.
+	GetFrictionIssueLinks(ctx context.Context, fingerprints []string) (map[string]FrictionIssueLink, error)
+	UpsertFrictionIssueLink(ctx context.Context, link FrictionIssueLink) error
+	DeleteFrictionIssueLink(ctx context.Context, fingerprint string) error
+	DueFrictionFilings(ctx context.Context, now time.Time, limit int) ([]FrictionIssueLink, error)
+	DigestDatesForFingerprints(ctx context.Context, fingerprints []string) ([]string, error)
 
 	// ReadOnly returns true for remote/PG-backed stores.
 	ReadOnly() bool

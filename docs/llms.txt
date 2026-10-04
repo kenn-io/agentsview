@@ -31,6 +31,7 @@ The Markdown pages are canonical for machine readers; the HTML routes drop the
 
 - [Session Intelligence](https://agentsview.io/docs/session-intelligence.md): Health scores, outcomes, and session-quality analytics.
 - [Quality](https://agentsview.io/docs/quality.md): Deterministic quality signals and recommendations computed from session data.
+- [Friction Log](https://agentsview.io/docs/friction-log.md): Daily heuristic review of corrections, tool errors, workarounds, deferrals, frustration, interruptions and recurring patterns.
 - [Semantic Search](https://agentsview.io/docs/semantic-search.md): Vector search over session messages, plus hybrid search and cursor-based context retrieval.
 - [Semantic Search Internals](https://agentsview.io/docs/semantic-search-internals.md): Architecture and invariants behind the vector index.
 - [Recall](https://agentsview.io/docs/recall.md): Experimental, provenance-linked durable knowledge over the local session archive.
@@ -40,6 +41,7 @@ The Markdown pages are canonical for machine readers; the HTML routes drop the
 ## Automate and Integrate
 
 - [MCP Server](https://agentsview.io/docs/mcp.md): Connect assistant clients to your session history with MCP.
+- [Kata](https://agentsview.io/docs/kata.md): Check the optional connection to a Kata issue tracker.
 - [Session API](https://agentsview.io/docs/session-api.md): Programmatic access to session data via the CLI and REST endpoints.
 - [Session Export](https://agentsview.io/docs/session-export.md): Content-free session summary exports for scripting and analytics.
 - [Conversation Export](https://agentsview.io/docs/conversation-export.md): Visible user and assistant prose with incremental changes and revision-pinned reads.

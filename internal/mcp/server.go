@@ -24,14 +24,16 @@ import (
 // Tool names. The same constant is used to register a tool and to refer
 // to it in tests.
 const (
-	ToolSearchSessions     = "search_sessions"
-	ToolQueryRecall        = "query_recall"
-	ToolListSessions       = "list_sessions"
-	ToolGetSessionOverview = "get_session_overview"
-	ToolGetMessages        = "get_messages"
-	ToolSearchContent      = "search_content"
-	ToolGetMemoryStatus    = "get_memory_status"
-	ToolGetUsageSummary    = "get_usage_summary"
+	ToolSearchSessions       = "search_sessions"
+	ToolQueryRecall          = "query_recall"
+	ToolListSessions         = "list_sessions"
+	ToolGetSessionOverview   = "get_session_overview"
+	ToolGetMessages          = "get_messages"
+	ToolSearchContent        = "search_content"
+	ToolGetMemoryStatus      = "get_memory_status"
+	ToolGetUsageSummary      = "get_usage_summary"
+	ToolGetFrictionDigest    = "get_friction_digest"
+	ToolListFrictionPatterns = "list_friction_patterns"
 )
 
 // Profile selects the tools advertised by an MCP server while keeping their
@@ -185,6 +187,25 @@ func newServer(opts ServeOptions) *mcp.Server {
 				"filterable by project, agent, machine, and date range.",
 			Annotations: readOnly,
 		}, t.usageSummary)
+	}
+
+	if service.SupportsFriction(opts.Service) {
+		mcp.AddTool(s, &mcp.Tool{
+			Name: ToolGetFrictionDigest,
+			Description: "Read one dated Friction Log digest: heuristic findings (user corrections, " +
+				"tool errors, workarounds, deferrals, health patterns, frustration, interruptions) and P0 " +
+				"alerts for one local day. " +
+				"format markdown returns the rendered digest; summary returns the counts-only object. " +
+				"Findings are deterministic heuristics, not ground truth.",
+			Annotations: readOnly,
+		}, t.frictionDigest)
+		mcp.AddTool(s, &mcp.Tool{
+			Name: ToolListFrictionPatterns,
+			Description: "List recurring friction patterns ranked by occurrences across digests, with " +
+				"first/last seen dates, distinct session counts, and a web_url for the latest occurrence. " +
+				"Filter by kind, since (YYYY-MM-DD) or linked.",
+			Annotations: readOnly,
+		}, t.listFrictionPatterns)
 	}
 
 	return s

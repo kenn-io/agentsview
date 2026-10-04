@@ -1339,6 +1339,183 @@ test.describe('Recall and Quality', () => {
     await snap(page, 'quality');
   });
 
+  test('friction log', async ({ page }) => {
+    // Synthetic digest: keeps the capture deterministic and free of private data.
+    const date = '2026-09-21';
+    const sig = (o: Record<string, unknown>) => ({
+      kind: 'correction',
+      detector: 'correction.coding',
+      subject_id: 'example-session-1',
+      subject_kind: 'session',
+      title: '',
+      fingerprint: `fl1:${'a'.repeat(64)}`,
+      text: '',
+      tool_name: '',
+      label: '',
+      evidence: '',
+      message_ordinal: null,
+      call_index: null,
+      occurred_at: null,
+      seat: '',
+      agent: '',
+      machine: '',
+      persona: '',
+      channel: '',
+      session_url: '',
+      ...o,
+    });
+    const signals = [
+      sig({
+        text: 'no, run the unit tests before the integration suite',
+        message_ordinal: 12,
+        agent: 'claude',
+      }),
+      sig({
+        kind: 'error',
+        detector: 'error',
+        tool_name: 'bash',
+        text: 'go: cannot find main module',
+        message_ordinal: 30,
+        fingerprint: `fl1:${'b'.repeat(64)}`,
+        agent: 'codex',
+      }),
+      sig({
+        kind: 'workaround',
+        detector: 'workaround',
+        label: 'for now',
+        text: 'Skip the flaky test for now and revisit it later.',
+        message_ordinal: 44,
+        fingerprint: `fl1:${'c'.repeat(64)}`,
+      }),
+      sig({
+        kind: 'pattern',
+        detector: 'pattern.retry_loop',
+        label: 'retry_loop',
+        evidence: '`bash` x4 identical arguments 14:02-14:05',
+        fingerprint: `fl1:${'d'.repeat(64)}`,
+      }),
+      sig({
+        kind: 'frustration',
+        detector: 'frustration',
+        text: 'why is this still failing',
+        message_ordinal: 51,
+        fingerprint: `fl1:${'e'.repeat(64)}`,
+      }),
+      sig({
+        kind: 'interruption',
+        detector: 'interruption',
+        message_ordinal: 58,
+        fingerprint: `fl1:${'f'.repeat(64)}`,
+      }),
+    ];
+    await page.route('**/api/v1/friction/**', async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.endsWith('/friction/digests')) {
+        await route.fulfill({
+          json: {
+            digests: [
+              {
+                date,
+                timezone: 'UTC',
+                rules_version: 'friction-v1',
+                built_at: `${date}T23:59:00Z`,
+                revision: 1,
+                sessions_scanned: 14,
+              },
+            ],
+          },
+        });
+      } else if (path.endsWith(`/friction/digests/${date}`)) {
+        await route.fulfill({
+          json: {
+            date,
+            timezone: 'UTC',
+            rules_version: 'friction-v1',
+            built_at: `${date}T23:59:00Z`,
+            revision: 1,
+            sessions_scanned: 14,
+            markdown_sha256: '0'.repeat(64),
+            web_url: '',
+            summary: {
+              schema_version: 3,
+              sessions_scanned: 14,
+              tracker_failures: 0,
+              corrections: 1,
+              errors: 1,
+              workarounds: 1,
+              deferrals: 0,
+              patterns: 1,
+              frustrations: 1,
+              interruptions: 1,
+              p0_alerts: {
+                bash: ['example-session-1', 'example-session-2', 'example-session-3'],
+              },
+              spend: {
+                total_usd: '12.480000',
+                sessions_with_stats: 14,
+                sessions_with_cost: 12,
+                input_tokens: 5120000,
+                output_tokens: 84000,
+                role_costs_usd: { '(root)': '9.100000', subagent: '3.380000' },
+                model_costs_usd: { 'claude-sonnet-4-5': '12.480000' },
+              },
+              digest_path: `friction:${date}`,
+              created_issues: [],
+            },
+            signals,
+            p0_alerts: [
+              {
+                tool: 'bash',
+                subject_ids: [
+                  'example-session-1',
+                  'example-session-2',
+                  'example-session-3',
+                ],
+              },
+            ],
+          },
+        });
+      } else if (path.endsWith('/friction/patterns')) {
+        await route.fulfill({
+          json: {
+            patterns: [
+              {
+                fingerprint: `fl1:${'b'.repeat(64)}`,
+                kind: 'error',
+                title: '[friction/error] bash: go: cannot find main module',
+                first_seen_date: '2026-09-02',
+                last_seen_date: date,
+                occurrence_count: 6,
+                session_count: 5,
+                last_subject_id: 'example-session-1',
+                last_ordinal: 30,
+              },
+              {
+                fingerprint: `fl1:${'d'.repeat(64)}`,
+                kind: 'pattern',
+                title:
+                  '[friction/pattern] example-session-1: retry loop: `bash` called 4 times with identical arguments',
+                first_seen_date: date,
+                last_seen_date: date,
+                occurrence_count: 1,
+                session_count: 1,
+                last_subject_id: 'example-session-1',
+                last_ordinal: null,
+              },
+            ],
+            next_cursor: '',
+          },
+        });
+      } else {
+        await route.fulfill({ json: { findings: [], next_cursor: '' } });
+      }
+    });
+    await page.goto('/friction');
+    await page.waitForSelector('.friction-page h1', { timeout: 10_000 });
+    await page.waitForTimeout(1000);
+    await snap(page, 'friction-log');
+  });
+
   test('generated insights', async ({ page }) => {
     await navigateToGeneratedInsights(page);
 

@@ -95,6 +95,25 @@ func (s *signalScheduler) markDirty(sessionID string) {
 	s.mu.Unlock()
 }
 
+// markDirtyDeferred queues a recompute without loading session history on
+// the caller's write path. The first mark starts the maximum wait interval;
+// subsequent marks move only the quiet-period deadline.
+func (s *signalScheduler) markDirtyDeferred(sessionID string) {
+	s.mu.Lock()
+	if s.stopped {
+		s.mu.Unlock()
+		s.run(sessionID)
+		return
+	}
+	now := s.now()
+	if _, pending := s.dirty[sessionID]; !pending {
+		s.last[sessionID] = now
+	}
+	s.dirty[sessionID] = now
+	s.armLocked()
+	s.mu.Unlock()
+}
+
 // deferRetry schedules a failed recompute without the leading-edge execution
 // of markDirty. Shutdown gets only its existing final flush attempt.
 func (s *signalScheduler) deferRetry(sessionID string) {

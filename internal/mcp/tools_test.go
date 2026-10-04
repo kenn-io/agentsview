@@ -1392,6 +1392,7 @@ func TestServer_EndToEnd(t *testing.T) {
 	assert.ElementsMatch(t, []string{
 		ToolSearchSessions, ToolQueryRecall, ToolListSessions, ToolGetSessionOverview,
 		ToolGetMessages, ToolGetMemoryStatus, ToolSearchContent, ToolGetUsageSummary,
+		ToolGetFrictionDigest, ToolListFrictionPatterns,
 	}, names)
 
 	res, err := ct.CallTool(ctx, callParams("search_sessions", map[string]any{

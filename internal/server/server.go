@@ -24,7 +24,10 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/friction/filing"
+	"go.kenn.io/agentsview/internal/friction/review"
 	"go.kenn.io/agentsview/internal/insight"
+	"go.kenn.io/agentsview/internal/kata"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/pricingrefresh"
 	"go.kenn.io/agentsview/internal/rawsync"
@@ -44,6 +47,8 @@ type VersionInfo struct {
 	BuildDate                  string `json:"build_date"`
 	ReadOnly                   bool   `json:"read_only,omitempty"`
 	InsightGenerationAvailable bool   `json:"insight_generation_available"`
+	FrictionAvailable          bool   `json:"friction_available"`
+	KataAvailable              bool   `json:"kata_available"`
 	SessionStatsAvailable      bool   `json:"session_stats_available"`
 	APIVersion                 int    `json:"api_version"`
 	DataVersion                int    `json:"data_version"`
@@ -53,7 +58,10 @@ type VersionInfo struct {
 // Bump it when a client-visible contract cannot be decoded safely by an older
 // CLI or daemon.
 const (
-	APIVersion = 10
+	APIVersion = 11
+	// FrictionAPIVersion is the first daemon API that serves
+	// /api/v1/friction digests, findings, patterns and runs.
+	FrictionAPIVersion = 11
 	// ScopedWatchPushAPIVersion is the first daemon API that accepts bounded
 	// watcher batches and their authoritative recovery scope on push requests.
 	ScopedWatchPushAPIVersion = 7
@@ -199,6 +207,9 @@ type Server struct {
 	telemetryCapture http.Handler
 
 	artifactExchangeRunner ArtifactExchangeRunner
+	frictionRunner         *review.Runner
+	frictionFiler          *filing.Filer
+	frictionExclusive      func(func() error) error
 	rawSyncTenant          string
 	rawSyncDeviceAuth      RawSyncDeviceAuth
 	rawSyncCustody         RawSyncCustody
@@ -206,6 +217,9 @@ type Server struct {
 	rawSyncSchemaOnly      bool
 	rawSyncUploads         RawSyncUploads
 	rawSyncJobHealth       RawSyncJobHealth
+
+	// kata is the optional Kata spoke connection; never nil after New.
+	kata *kata.Conn
 
 	ensurePricing func(context.Context, *db.DB) error
 }
@@ -276,6 +290,22 @@ func New(
 	for _, opt := range opts {
 		opt(s)
 	}
+	if s.kata == nil {
+		// Only a local SQLite archive with no PG push target is its own hub.
+		// pg serve passes its own hub Conn; read-only replicas are not hubs.
+		_, local := database.(*db.DB)
+		hub := local && filing.EligibleHost(false, cfg.HasPGPushTarget())
+		s.kata = kata.NewConn(kata.ConfigFrom(cfg.Kata, hub))
+	}
+	eligibility := "disabled"
+	if kataCfg := s.kata.Config(); kataCfg.Enabled {
+		if kataCfg.Hub {
+			eligibility = "hub"
+		} else {
+			eligibility = "not_hub"
+		}
+	}
+	log.Printf("kata: hub eligibility %s", eligibility)
 	if s.version.APIVersion == 0 {
 		s.version.APIVersion = APIVersion
 	}
@@ -540,6 +570,15 @@ func WithGenerateStreamFunc(f insight.GenerateStreamFunc) Option {
 		if f != nil {
 			s.generateStreamFunc = f
 		}
+	}
+}
+
+// WithFriction attaches the Friction Log review runner. A nil runner leaves
+// the feature unavailable. The run route uses the same serialization as the job.
+func WithFriction(runner *review.Runner, exclusive func(func() error) error) Option {
+	return func(s *Server) {
+		s.frictionRunner = runner
+		s.frictionExclusive = exclusive
 	}
 }
 

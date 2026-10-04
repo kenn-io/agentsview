@@ -372,6 +372,21 @@ func schemaColumnMigrations() []columnMigration {
 			"adding sessions.secrets_rules_version",
 		},
 		{
+			"sessions", "friction_count",
+			`friction_count INTEGER NOT NULL DEFAULT 0`,
+			"adding sessions.friction_count",
+		},
+		{
+			"sessions", "friction_rules_version",
+			`friction_rules_version TEXT NOT NULL DEFAULT ''`,
+			"adding sessions.friction_rules_version",
+		},
+		{
+			"sessions", "friction_hash",
+			`friction_hash TEXT NOT NULL DEFAULT ''`,
+			"adding sessions.friction_hash",
+		},
+		{
 			"sessions", "session_name",
 			`session_name TEXT`,
 			"adding sessions.session_name",
