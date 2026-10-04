@@ -254,7 +254,10 @@ Environment variables override the config file:
   development builds are inert and can be deleted. On POSIX platforms,
   where rename is atomic even against an open destination handle, a
   running serve process picks up a rebuilt file automatically (see the
-  reopen behavior above) without needing a restart. On Windows, the serve
-  process's open handle on the destination file can block the rename
-  outright; `duckdb push` retries briefly and then fails with an error
-  asking you to stop the serving process and re-run the push.
+  reopen behavior above) without needing a restart. On Windows the rename
+  uses POSIX semantics, which DuckDB's file handles allow, so a push also
+  replaces a mirror that serve has open, and `duckdb serve` picks it up
+  the same way. A program that holds the mirror open without allowing
+  deletion can still block the rename there; `duckdb push` retries
+  briefly and then fails with an error asking you to close that program
+  and re-run the push.

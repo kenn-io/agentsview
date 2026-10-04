@@ -563,7 +563,6 @@ func TestPushFailsClosedWhenWriterHoldsMirror(t *testing.T) {
 // write-opens the destination (temp file plus atomic rename) — and records
 // the reader-hold reason.
 func TestPushExplicitRebuildsWhileMirrorHeldByReaders(t *testing.T) {
-	skipReopenTestOnWindows(t)
 	ctx := t.Context()
 	local, path := newPushFixture(t, 1)
 	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)

@@ -222,6 +222,10 @@ The latest published release is
   and inode. The first sync after upgrading re-reads each session once, raw
   capture re-captures each source once, and the first push to a DuckDB or
   ClickHouse mirror re-sends each session once.
+- On Windows, `duckdb push` can now rebuild the mirror while `duckdb serve` has
+  it open, and serve switches to the rebuilt file without a restart, as on
+  macOS and Linux. Before, the push failed with "Access is denied" and asked
+  you to stop the server first.
 - Price Codex auto-review turns, recorded as `codex-auto-review`, at GPT-5.6
   Luna catalog rates instead of $0. Usage reports still list
   `codex-auto-review` as the reported model, and a custom pricing row for it

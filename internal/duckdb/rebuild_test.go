@@ -138,9 +138,9 @@ func TestRebuildMirrorLeavesNoTempFilesOnSwapFailure(t *testing.T) {
 	seedRebuildFixture(t, local)
 	dir := t.TempDir()
 	// A directory in place of the destination file makes the final
-	// os.Rename fail deterministically (EISDIR/ENOTDIR) on every platform,
-	// simulating a swap failure (e.g. Windows sharing violation) without
-	// needing to inject a fake rename.
+	// rename fail deterministically on every platform, simulating a swap
+	// failure (e.g. Windows sharing violation) without needing to inject a
+	// fake rename.
 	path := filepath.Join(dir, "mirror-as-dir.duckdb")
 	require.NoError(t, os.Mkdir(path, 0o755))
 
@@ -168,7 +168,7 @@ func TestSwapMirrorFileRetriesThenFailsWithActionableError(t *testing.T) {
 	err := swapMirrorFile(tmpPath, dstPath)
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "agentsview duckdb serve")
+	assert.Contains(t, err.Error(), "close it and re-run the push")
 	assert.FileExists(t, tmpPath, "source file must survive a failed swap")
 	content, readErr := os.ReadFile(tmpPath)
 	require.NoError(t, readErr)

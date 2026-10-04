@@ -11,6 +11,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/storage"
+	"go.kenn.io/kit/atomicfile"
 )
 
 // mirrorWorkDirSuffix is appended to the mirror path to form the mirror's
@@ -507,23 +508,22 @@ func validateBuiltMirror(ctx context.Context, tmpPath string, wantSessions int) 
 
 // swapMirrorFile atomically replaces dstPath with tmpPath. tmpPath lives in
 // the mirror's work directory, a subdirectory of dstPath's own parent, so
-// the rename never crosses a volume boundary: it stays a same-filesystem
-// rename and remains atomic on POSIX and Windows exactly as a
-// sibling-to-sibling rename would. POSIX rename over an existing file
-// succeeds on the first attempt; the retry loop exists for platforms
-// (Windows) where another process briefly holding the destination open
-// causes a sharing violation. dstPath is left untouched on every failed
-// attempt because rename is atomic: there is no partial state where the
-// mirror is half-replaced.
+// the rename never crosses a volume boundary. On Windows atomicfile.Replace
+// renames with POSIX semantics, so the swap succeeds while 'agentsview duckdb
+// serve' has the mirror open: DuckDB opens files with FILE_SHARE_DELETE, and
+// the server keeps reading the old file until WatchMirrorReplacement reopens
+// it, as on Unix. A handle opened without delete sharing still blocks the
+// rename; the retry loop covers one that is held briefly. dstPath is left
+// untouched on every failed attempt because rename is atomic: there is no
+// partial state where the mirror is half-replaced.
 func swapMirrorFile(tmpPath, dstPath string) error {
 	var err error
 	for attempt := range 5 {
-		if err = os.Rename(tmpPath, dstPath); err == nil {
+		if err = atomicfile.Replace(tmpPath, dstPath); err == nil {
 			return nil
 		}
 		time.Sleep(time.Duration(attempt+1) * 200 * time.Millisecond)
 	}
-	return fmt.Errorf("replacing duckdb mirror %s: %w; if 'agentsview duckdb serve' "+
-		"or 'agentsview duckdb quack serve' is running against this file, stop it "+
-		"and re-run the push", dstPath, err)
+	return fmt.Errorf("replacing duckdb mirror %s: %w; if another program has "+
+		"this file open, close it and re-run the push", dstPath, err)
 }

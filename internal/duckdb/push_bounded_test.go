@@ -61,12 +61,11 @@ func TestPushWorkBoundedByChangedBatchNotArchiveSize(t *testing.T) {
 // contract under test is the live-reader path production `serve` uses: the
 // rebuild must never error, concurrent reads against the store must never
 // see an error during the swap, and the store must eventually pick up and
-// serve the rebuilt content. (Windows behavior when the destination handle
-// blocks the rename is covered separately by TestSwapMirrorFileRetriesThenFailsWithActionableError
-// in rebuild_test.go; POSIX rename is atomic, which is what this test relies
-// on to avoid ever observing a torn file.)
+// serve the rebuilt content. (A swap that keeps failing is covered separately
+// by TestSwapMirrorFileRetriesThenFailsWithActionableError in rebuild_test.go;
+// the rename is atomic, which is what this test relies on to avoid ever
+// observing a torn file.)
 func TestRebuildUnderReaderNeverErrorsAndEventuallyServesRebuiltData(t *testing.T) {
-	skipReopenTestOnWindows(t)
 	ctx := t.Context()
 	local, path := newPushFixture(t, 3)
 	_, err := rebuildMirror(ctx, path, local, "m", storage.MirrorPushOptions{}, nil)
