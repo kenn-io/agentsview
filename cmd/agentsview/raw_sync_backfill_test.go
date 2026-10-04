@@ -726,7 +726,9 @@ func TestRawSyncBackfillResumeDiscoversSavedRootsWhenResolutionChanges(t *testin
 func TestRawSyncBackfillOwnsOverlappingRootsLikeWatch(t *testing.T) {
 	// Claude accepts this subagent transcript under both roots, and watch gives
 	// it to whichever root its config lists first.
-	parent := t.TempDir()
+	// Match config.LoadReadOnly's canonical roots, including /tmp on macOS.
+	parent, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
 	nested := filepath.Join(parent, "nested")
 	transcript := filepath.Join(nested, "project", "subagents", "subagents", "agent-child.jsonl")
 	require.NoError(t, os.MkdirAll(filepath.Dir(transcript), 0o700))
