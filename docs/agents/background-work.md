@@ -59,6 +59,11 @@ and recall extraction still own their timing; migrating them is separate work.
   transaction, so they are always paired correctly, and a session written
   during the pass is refilled by its own mutation notification. Do not
   reintroduce a restart loop over a moving source fingerprint.
+- A successful scheduled pricing refresh calls `RewarmUsageCache` after every
+  pricing write commits. It starts the same coverage pass, which rebuilds only
+  rollups whose pricing lookups now resolve differently. A pass resolves prices
+  from the catalog it captured at start, so a re-warm that arrives during a
+  pass queues exactly one more pass after it.
 - Sweep the archive deletion journal before and after the pass and between
   install batches. Queries also inner-join current archive sessions before
   ranking, so tombstone processing is hygiene rather than a correctness

@@ -178,3 +178,39 @@ func awaitPricingResult(t *testing.T, result <-chan error) {
 		require.FailNow(t, "pricing operation did not finish")
 	}
 }
+
+type fakeUsageCacheRewarmer struct {
+	calls int
+	err   error
+}
+
+func (f *fakeUsageCacheRewarmer) RewarmUsageCache() error {
+	f.calls++
+	return f.err
+}
+
+func TestRunPricingRefreshRewarmsOnlyAfterSuccess(t *testing.T) {
+	refreshErr := errors.New("refresh failed")
+	tests := []struct {
+		name      string
+		refresh   error
+		rewarm    error
+		wantErr   error
+		wantCalls int
+	}{
+		{name: "success", wantCalls: 1},
+		{name: "refresh failure", refresh: refreshErr, wantErr: refreshErr},
+		{name: "rewarm failure keeps job healthy", rewarm: errors.New("busy"), wantCalls: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rewarmer := &fakeUsageCacheRewarmer{err: tt.rewarm}
+			err := runPricingRefresh(t.Context(), nil, func(context.Context) error {
+				assert.Zero(t, rewarmer.calls, "re-warm must wait for the refresh")
+				return tt.refresh
+			}, rewarmer)
+			require.ErrorIs(t, err, tt.wantErr)
+			assert.Equal(t, tt.wantCalls, rewarmer.calls)
+		})
+	}
+}

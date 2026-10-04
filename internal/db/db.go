@@ -769,6 +769,7 @@ type DB struct {
 	usageBackfillDone    chan struct{}
 	usageBackfillErr     error
 	usageBackfillStarted func()
+	usageBackfillRerun   bool // queues one more pass after the active one
 	// usageBackfillEnabled records that this process explicitly started
 	// background backfill (the daemon lifecycle). Reopen restarts a pass
 	// only then, so CLI resyncs never trigger an unrequested archive scan.
