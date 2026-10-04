@@ -1132,6 +1132,12 @@ describe("MessagesStore", () => {
 
       expect(messages.messages).toEqual([]);
       expect(messages.loadedRevision).toBe("r2");
+
+      // The rows come back while the count still matches the stale one.
+      vi.mocked(api.getMessages).mockResolvedValueOnce(page([0, 1, 2], "r3"));
+      await messages.reload();
+      expect(messages.messages).toHaveLength(3);
+      expect(messages.loadedRevision).toBe("r3");
     });
 
     it("clears rows when a full reload finds the session emptied", async () => {

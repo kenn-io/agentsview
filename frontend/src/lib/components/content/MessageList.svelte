@@ -501,12 +501,13 @@
     scrollRetries = 0,
     reqId = lastScrollRequest,
     align: ScrollAlign = "start",
+    stillValid: () => boolean = () => true,
   ): Promise<boolean> {
     return settleVirtualScroll({
       index, align, waitFrames, scrollRetries,
       getVirtualizer: () => virtualizer.instance,
       getCount: () => displayItemsAsc.length,
-      isCurrent: () => !destroyed && reqId === lastScrollRequest,
+      isCurrent: () => !destroyed && reqId === lastScrollRequest && stillValid(),
       nextFrame: raf,
     });
   }
@@ -518,6 +519,12 @@
   async function scrollToOrdinalInternal(ordinal: number, revision?: string) {
     const reqId = ++lastScrollRequest;
     activeFollowScrollRequest = null;
+    // A jump made for one transcript revision stops once the list holds another, where the ordinal may name a different message.
+    const sameRevision = () => revision === undefined || messages.loadedRevision === revision;
+    const abandon = () => {
+      if (ui.selectedOrdinal === ordinal) ui.selectedOrdinal = null;
+    };
+    if (!sameRevision()) return abandon();
 
     const idxAsc = displayItemsAsc.findIndex((item) =>
       item.ordinals.includes(ordinal),
@@ -526,17 +533,13 @@
       const idx = ui.sortNewestFirst
         ? displayItemsAsc.length - 1 - idxAsc
         : idxAsc;
-      scrollToDisplayIndex(idx, 0, 0, reqId);
+      scrollToDisplayIndex(idx, 0, 0, reqId, "start", sameRevision);
       return;
     }
 
     await messages.ensureOrdinalLoaded(ordinal);
     if (reqId !== lastScrollRequest) return;
-    // Loading older pages can move to a new transcript revision, where the ordinal may name another message.
-    if (revision !== undefined && messages.loadedRevision !== revision) {
-      if (ui.selectedOrdinal === ordinal) ui.selectedOrdinal = null;
-      return;
-    }
+    if (!sameRevision()) return abandon();
 
     // Let Svelte re-derive displayItemsAsc and the
     // virtualizer update its count after loading.
@@ -545,6 +548,7 @@
     await raf();
     await raf();
     if (reqId !== lastScrollRequest) return;
+    if (!sameRevision()) return abandon();
 
     const loadedIdxAsc = displayItemsAsc.findIndex(
       (item) => item.ordinals.includes(ordinal),
@@ -553,7 +557,7 @@
     const loadedIdx = ui.sortNewestFirst
       ? displayItemsAsc.length - 1 - loadedIdxAsc
       : loadedIdxAsc;
-    scrollToDisplayIndex(loadedIdx, 0, 0, reqId);
+    scrollToDisplayIndex(loadedIdx, 0, 0, reqId, "start", sameRevision);
   }
 
   export function scrollToOrdinal(ordinal: number, revision?: string) {

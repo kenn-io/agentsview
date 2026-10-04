@@ -692,8 +692,8 @@ export class MessagesStore {
       if (newCount === oldCount) {
         const refreshed = await this.refreshLoadedWindow(id, signal);
         if (this.sessionId !== id) return;
-        if (!refreshed && this.messages.length > 0) {
-          // The loaded window came back empty, so the transcript shrank underneath it.
+        if (!refreshed) {
+          // No window to refresh, or it came back empty because the transcript shrank underneath it.
           await this.fullReload(id, signal, newCount);
         } else {
           const newest = this.messages[this.messages.length - 1];

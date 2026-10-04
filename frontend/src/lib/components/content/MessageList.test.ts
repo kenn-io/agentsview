@@ -185,9 +185,11 @@ describe("MessageList follow cancellation", () => {
   it("drops a jump made for a transcript revision the list has moved past", async () => {
     messages.loadedRevision = "r1";
     vi.spyOn(messages, "ensureOrdinalLoaded").mockImplementation(async () => {
-      // Loading the older page hit a resync, so the list now holds another revision.
       messages.messages = [makeMessage(0), makeMessage(10)];
-      messages.loadedRevision = "r2";
+      // A resync replaces the transcript while the list re-renders the loaded page.
+      requestAnimationFrame(() => {
+        messages.loadedRevision = "r2";
+      });
     });
 
     component = mount(MessageList, { target: document.body });
