@@ -293,9 +293,32 @@ func TestHostedRuntimeCapturedConflictAndRemoval(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, session)
 	require.NoError(t, store.RenameSession(t.Context(), rawtest.ClaudeID, new("Shared curation")))
-	rawtest.AppendClaude(t, pathB)
+	transcript, err := os.ReadFile(pathB)
+	require.NoError(t, err)
+	require.Equal(t, 1, bytes.Count(transcript, []byte("The build failed.")))
+	transcript = bytes.Replace(transcript, []byte("The build failed."), []byte("Recorded the failure."), 1)
+	require.NoError(t, os.WriteFile(pathB, transcript, 0o600))
 	divergent := b.capture(t)
 	waitCaptureJob(t, admin, divergent.ManifestID, "complete", 1)
+	var activeBranches, activeContents int
+	require.NoError(t, admin.QueryRow(`
+SELECT count(DISTINCT b.branch_id),count(DISTINCT b.session_id)
+FROM raw_session_public_aliases a
+JOIN raw_session_branches b ON b.group_id=a.group_id
+WHERE a.alias_id=$1 AND b.active`, rawtest.ClaudeID).Scan(&activeBranches, &activeContents))
+	assert.Equal(t, 2, activeBranches, "both devices should retain an active source branch")
+	assert.Equal(t, 2, activeContents, "the appended transcript should create a second content cohort")
+	var projectedLastMessage, projectionDiagnostics string
+	require.NoError(t, admin.QueryRow(`
+SELECT m.content,p.diagnostics
+FROM raw_source_projections p
+JOIN raw_session_branches b ON b.source_id=p.source_id AND b.active
+JOIN messages m ON m.session_id=b.session_id
+WHERE p.last_attempt_manifest_id=$1
+ORDER BY m.ordinal DESC LIMIT 1`, divergent.ManifestID).Scan(&projectedLastMessage, &projectionDiagnostics))
+	assert.Equal(t, "results=1 errors=0 complete=true", projectionDiagnostics)
+	assert.Equal(t, "Recorded the failure.", projectedLastMessage,
+		"the latest captured branch should project the appended assistant message")
 	_, err = store.GetSession(t.Context(), rawtest.ClaudeID)
 	var conflict *db.SessionIdentityError
 	require.ErrorAs(t, err, &conflict)

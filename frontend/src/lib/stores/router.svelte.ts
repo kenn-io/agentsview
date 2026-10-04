@@ -8,6 +8,7 @@ export type Route =
   | "trends"
   | "recall"
   | "quality"
+  | "friction"
   | "pinned"
   | "trash"
   | "recent-edits"
@@ -22,6 +23,7 @@ const VALID_ROUTES: ReadonlySet<string> = new Set<Route>([
   "trends",
   "recall",
   "quality",
+  "friction",
   "pinned",
   "trash",
   "recent-edits",
@@ -76,6 +78,9 @@ export function parsePath(): {
   }
 
   const params = Object.fromEntries(new URLSearchParams(window.location.search));
+  if (route === "friction" && segments[1]) {
+    params.date = decodePathSegment(segments[1]);
+  }
 
   return { route, sessionId, params, isRootPath };
 }

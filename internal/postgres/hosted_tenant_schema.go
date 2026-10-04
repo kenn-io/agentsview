@@ -27,54 +27,58 @@ type HostedForeignKey struct {
 	Update     string
 }
 
-var hostedTables = append([]HostedTable{
-	{Name: "vector_generations", Key: []string{"id"}},
-	{Name: "vector_generation_machines", Key: []string{"generation_id", "machine"}},
-	{Name: "vector_documents", Key: []string{"doc_key"}},
-	{Name: "vector_push_state", Key: []string{"generation_id", "session_id"}},
-	{Name: "hosted_tenant_binding", Key: []string{"singleton"}},
-	{Name: "sync_metadata", Key: []string{"key"}},
-	{Name: "sessions", Key: []string{"id"}},
-	{Name: "messages", Key: []string{"session_id", "ordinal"}, ForeignKeys: sessionHostedFK()},
-	{Name: "usage_events", Key: []string{"id"}, ForeignKeys: sessionHostedFK()},
-	{Name: "cursor_usage_events", Key: []string{"id"}},
-	{Name: "starred_sessions", Key: []string{"session_id"}, ForeignKeys: sessionHostedFK()},
-	{Name: "excluded_sessions", Key: []string{"id"}},
-	{Name: "session_aliases", Key: []string{"session_id", "alias_id"}, ForeignKeys: sessionHostedFK()},
-	{Name: "pinned_messages", Key: []string{"id"}, ForeignKeys: sessionHostedFK()},
-	{Name: "tool_calls", Key: []string{"id"}, ForeignKeys: sessionHostedFK()},
-	{Name: "tool_result_events", Key: []string{"id"}, ForeignKeys: sessionHostedFK()},
-	{Name: "secret_findings", Key: []string{"id"}, ForeignKeys: sessionHostedFK()},
-	{Name: "insights", Key: []string{"id"}},
-	{Name: "model_pricing", Key: []string{"model_pattern"}},
-	{Name: "model_pricing_bands", Key: []string{"model_pattern", "above_input_tokens"}, ForeignKeys: []HostedForeignKey{{Columns: []string{"model_pattern"}, Table: "model_pricing", References: []string{"model_pattern"}, Delete: "CASCADE"}}},
-	{Name: "genai_pricing", Key: []string{"singleton"}},
-	{Name: "source_archives", Key: []string{"source_archive_id"}},
-	{Name: "source_project_identity_observations", Key: []string{"source_archive_id", "project", "machine", "root_path", "git_remote"}},
-	{Name: "source_project_identity_observation_scopes", Key: []string{"source_archive_id", "project", "machine", "root_path", "git_remote", "publication_scope"}, ForeignKeys: []HostedForeignKey{{Columns: []string{"source_archive_id", "project", "machine", "root_path", "git_remote"}, Table: "source_project_identity_observations", References: []string{"source_archive_id", "project", "machine", "root_path", "git_remote"}, Delete: "CASCADE"}}},
-	{Name: "source_session_project_identity_snapshots", Key: []string{"source_archive_id", "source_database_generation", "source_session_id"}},
-	{Name: "source_session_project_identity_snapshot_scopes", Key: []string{"source_archive_id", "source_database_generation", "source_session_id", "publication_scope"}, ForeignKeys: []HostedForeignKey{{Columns: []string{"source_archive_id", "source_database_generation", "source_session_id"}, Table: "source_session_project_identity_snapshots", References: []string{"source_archive_id", "source_database_generation", "source_session_id"}, Delete: "CASCADE"}}},
-	{Name: "source_worktree_project_mappings", Key: []string{"source_archive_id", "machine", "path_prefix"}},
-	{Name: "source_worktree_project_mapping_scopes", Key: []string{"source_archive_id", "machine", "path_prefix", "publication_scope"}, ForeignKeys: []HostedForeignKey{{Columns: []string{"source_archive_id", "machine", "path_prefix"}, Table: "source_worktree_project_mappings", References: []string{"source_archive_id", "machine", "path_prefix"}, Delete: "CASCADE"}}},
-	{Name: "raw_devices", Key: []string{"device_id"}},
-	{Name: "raw_device_tokens", Key: []string{"token_sha256"}, ForeignKeys: deviceHostedFK()},
-	{Name: "raw_upload_sessions", Key: []string{"upload_id"}, ForeignKeys: deviceHostedFK()},
-	{Name: "raw_objects", Key: []string{"sha256"}},
-	{Name: "raw_manifests", Key: []string{"manifest_id"}, ForeignKeys: []HostedForeignKey{
-		{Columns: []string{"device_id"}, Table: "raw_devices", References: []string{"device_id"}, Delete: "RESTRICT"},
-		{Columns: []string{"device_id", "provider", "configured_root_id", "source_key_sha256"}, Table: "raw_source_heads", References: []string{"device_id", "provider", "configured_root_id", "source_key_sha256"}, Delete: "RESTRICT"},
-	}},
-	{Name: "raw_manifest_entries", Key: []string{"manifest_id", "entry_index"}, ForeignKeys: []HostedForeignKey{{Columns: []string{"manifest_id"}, Table: "raw_manifests", References: []string{"manifest_id"}, Delete: "RESTRICT"}}},
-	{Name: "raw_manifest_objects", Key: []string{"manifest_id", "entry_index", "object_index"}, ForeignKeys: []HostedForeignKey{
-		{Columns: []string{"manifest_id", "entry_index"}, Table: "raw_manifest_entries", References: []string{"manifest_id", "entry_index"}, Delete: "RESTRICT"},
-		{Columns: []string{"sha256", "size_bytes"}, Table: "raw_objects", References: []string{"sha256", "size_bytes"}, Delete: "RESTRICT"},
-	}},
-	{Name: "raw_source_heads", Key: []string{"device_id", "provider", "configured_root_id", "source_key_sha256"}, ForeignKeys: []HostedForeignKey{
-		{Columns: []string{"manifest_id"}, Table: "raw_manifests", References: []string{"manifest_id"}, Delete: "RESTRICT"},
-		{Columns: []string{"device_id"}, Table: "raw_devices", References: []string{"device_id"}, Delete: "RESTRICT"},
-	}},
-	{Name: "raw_ingest_jobs", Key: []string{"id"}, ForeignKeys: []HostedForeignKey{{Columns: []string{"manifest_id"}, Table: "raw_manifests", References: []string{"manifest_id"}, Delete: "RESTRICT"}}},
-}, rawProjectionTables...)
+var hostedTables = func() []HostedTable {
+	tables := []HostedTable{
+		{Name: "vector_generations", Key: []string{"id"}},
+		{Name: "vector_generation_machines", Key: []string{"generation_id", "machine"}},
+		{Name: "vector_documents", Key: []string{"doc_key"}},
+		{Name: "vector_push_state", Key: []string{"generation_id", "session_id"}},
+		{Name: "hosted_tenant_binding", Key: []string{"singleton"}},
+		{Name: "sync_metadata", Key: []string{"key"}},
+		{Name: "sessions", Key: []string{"id"}},
+		{Name: "messages", Key: []string{"session_id", "ordinal"}, ForeignKeys: sessionHostedFK()},
+		{Name: "usage_events", Key: []string{"id"}, ForeignKeys: sessionHostedFK()},
+		{Name: "cursor_usage_events", Key: []string{"id"}},
+		{Name: "starred_sessions", Key: []string{"session_id"}, ForeignKeys: sessionHostedFK()},
+		{Name: "excluded_sessions", Key: []string{"id"}},
+		{Name: "session_aliases", Key: []string{"session_id", "alias_id"}, ForeignKeys: sessionHostedFK()},
+		{Name: "pinned_messages", Key: []string{"id"}, ForeignKeys: sessionHostedFK()},
+		{Name: "tool_calls", Key: []string{"id"}, ForeignKeys: sessionHostedFK()},
+		{Name: "tool_result_events", Key: []string{"id"}, ForeignKeys: sessionHostedFK()},
+		{Name: "secret_findings", Key: []string{"id"}, ForeignKeys: sessionHostedFK()},
+		{Name: "insights", Key: []string{"id"}},
+		{Name: "model_pricing", Key: []string{"model_pattern"}},
+		{Name: "model_pricing_bands", Key: []string{"model_pattern", "above_input_tokens"}, ForeignKeys: []HostedForeignKey{{Columns: []string{"model_pattern"}, Table: "model_pricing", References: []string{"model_pattern"}, Delete: "CASCADE"}}},
+		{Name: "genai_pricing", Key: []string{"singleton"}},
+		{Name: "source_archives", Key: []string{"source_archive_id"}},
+		{Name: "source_project_identity_observations", Key: []string{"source_archive_id", "project", "machine", "root_path", "git_remote"}},
+		{Name: "source_project_identity_observation_scopes", Key: []string{"source_archive_id", "project", "machine", "root_path", "git_remote", "publication_scope"}, ForeignKeys: []HostedForeignKey{{Columns: []string{"source_archive_id", "project", "machine", "root_path", "git_remote"}, Table: "source_project_identity_observations", References: []string{"source_archive_id", "project", "machine", "root_path", "git_remote"}, Delete: "CASCADE"}}},
+		{Name: "source_session_project_identity_snapshots", Key: []string{"source_archive_id", "source_database_generation", "source_session_id"}},
+		{Name: "source_session_project_identity_snapshot_scopes", Key: []string{"source_archive_id", "source_database_generation", "source_session_id", "publication_scope"}, ForeignKeys: []HostedForeignKey{{Columns: []string{"source_archive_id", "source_database_generation", "source_session_id"}, Table: "source_session_project_identity_snapshots", References: []string{"source_archive_id", "source_database_generation", "source_session_id"}, Delete: "CASCADE"}}},
+		{Name: "source_worktree_project_mappings", Key: []string{"source_archive_id", "machine", "path_prefix"}},
+		{Name: "source_worktree_project_mapping_scopes", Key: []string{"source_archive_id", "machine", "path_prefix", "publication_scope"}, ForeignKeys: []HostedForeignKey{{Columns: []string{"source_archive_id", "machine", "path_prefix"}, Table: "source_worktree_project_mappings", References: []string{"source_archive_id", "machine", "path_prefix"}, Delete: "CASCADE"}}},
+		{Name: "raw_devices", Key: []string{"device_id"}},
+		{Name: "raw_device_tokens", Key: []string{"token_sha256"}, ForeignKeys: deviceHostedFK()},
+		{Name: "raw_upload_sessions", Key: []string{"upload_id"}, ForeignKeys: deviceHostedFK()},
+		{Name: "raw_objects", Key: []string{"sha256"}},
+		{Name: "raw_manifests", Key: []string{"manifest_id"}, ForeignKeys: []HostedForeignKey{
+			{Columns: []string{"device_id"}, Table: "raw_devices", References: []string{"device_id"}, Delete: "RESTRICT"},
+			{Columns: []string{"device_id", "provider", "configured_root_id", "source_key_sha256"}, Table: "raw_source_heads", References: []string{"device_id", "provider", "configured_root_id", "source_key_sha256"}, Delete: "RESTRICT"},
+		}},
+		{Name: "raw_manifest_entries", Key: []string{"manifest_id", "entry_index"}, ForeignKeys: []HostedForeignKey{{Columns: []string{"manifest_id"}, Table: "raw_manifests", References: []string{"manifest_id"}, Delete: "RESTRICT"}}},
+		{Name: "raw_manifest_objects", Key: []string{"manifest_id", "entry_index", "object_index"}, ForeignKeys: []HostedForeignKey{
+			{Columns: []string{"manifest_id", "entry_index"}, Table: "raw_manifest_entries", References: []string{"manifest_id", "entry_index"}, Delete: "RESTRICT"},
+			{Columns: []string{"sha256", "size_bytes"}, Table: "raw_objects", References: []string{"sha256", "size_bytes"}, Delete: "RESTRICT"},
+		}},
+		{Name: "raw_source_heads", Key: []string{"device_id", "provider", "configured_root_id", "source_key_sha256"}, ForeignKeys: []HostedForeignKey{
+			{Columns: []string{"manifest_id"}, Table: "raw_manifests", References: []string{"manifest_id"}, Delete: "RESTRICT"},
+			{Columns: []string{"device_id"}, Table: "raw_devices", References: []string{"device_id"}, Delete: "RESTRICT"},
+		}},
+		{Name: "raw_ingest_jobs", Key: []string{"id"}, ForeignKeys: []HostedForeignKey{{Columns: []string{"manifest_id"}, Table: "raw_manifests", References: []string{"manifest_id"}, Delete: "RESTRICT"}}},
+	}
+	tables = append(tables, frictionHostedTables...)
+	return append(tables, rawProjectionTables...)
+}()
 
 func sessionHostedFK() []HostedForeignKey {
 	return []HostedForeignKey{{Columns: []string{"session_id"}, Table: "sessions", References: []string{"id"}, Delete: "CASCADE"}}

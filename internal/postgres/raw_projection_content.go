@@ -87,6 +87,9 @@ func rawContentRevision(p ingest.PreparedSession) (string, error) {
 	s.PreserveStoredAutomation = false
 	s.DataVersion = 0
 	s.SecretsRulesVersion = ""
+	s.FrictionCount = 0
+	s.FrictionRulesVersion = ""
+	s.FrictionHash = ""
 	s.QualitySignalVersion = 0
 	// Recency-derived state is published separately from immutable content.
 	s.SignalsPendingSince, s.HealthScore, s.HealthGrade = nil, nil, nil
@@ -186,7 +189,8 @@ func rawCanonicalValue(v reflect.Value, field string) (any, error) {
 			f := v.Type().Field(i)
 			// This transient projection marker adds no content to the existing
 			// normalized-content-v1 representation.
-			if !f.IsExported() || f.Name == "UsageAutomationProjected" {
+			if !f.IsExported() || f.Name == "UsageAutomationProjected" || f.Name == "Friction" ||
+				f.Name == "FrictionCount" || f.Name == "FrictionRulesVersion" || f.Name == "FrictionHash" {
 				continue
 			}
 			value, err := rawCanonicalValue(v.Field(i), f.Name)

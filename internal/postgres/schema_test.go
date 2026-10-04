@@ -21,6 +21,8 @@ type schemaProbeConn struct {
 	state *schemaProbeState
 }
 
+type schemaProbeTx struct{}
+
 type schemaProbeRows struct {
 	columns []string
 	values  [][]driver.Value
@@ -104,8 +106,11 @@ func (c *schemaProbeConn) Prepare(string) (driver.Stmt, error) {
 func (c *schemaProbeConn) Close() error { return nil }
 
 func (c *schemaProbeConn) Begin() (driver.Tx, error) {
-	return nil, driver.ErrSkip
+	return schemaProbeTx{}, nil
 }
+
+func (schemaProbeTx) Commit() error   { return nil }
+func (schemaProbeTx) Rollback() error { return nil }
 
 func (c *schemaProbeConn) ExecContext(
 	_ context.Context, query string, args []driver.NamedValue,
@@ -596,6 +601,12 @@ func TestSyncEnsureSchemaSkipsLegacyDDLWhenSchemaCompatible(t *testing.T) {
 		"source_worktree_project_mappings":                true,
 		"source_worktree_project_mapping_scopes":          true,
 		"cursor_usage_events":                             true,
+		"friction_findings":                               true,
+		"friction_session_dims":                           true,
+		"friction_digests":                                true,
+		"friction_digest_sessions":                        true,
+		"friction_digest_fingerprints":                    true,
+		"friction_patterns":                               true,
 	}
 	state.existingIndexes = map[string]bool{
 		"idx_cursor_usage_events_dedup":   true,
@@ -636,6 +647,12 @@ func TestEnsureSchemaScrubsProjectIdentityGitRemoteCredentials(t *testing.T) {
 		"source_worktree_project_mappings":                true,
 		"source_worktree_project_mapping_scopes":          true,
 		"cursor_usage_events":                             true,
+		"friction_findings":                               true,
+		"friction_session_dims":                           true,
+		"friction_digests":                                true,
+		"friction_digest_sessions":                        true,
+		"friction_digest_fingerprints":                    true,
+		"friction_patterns":                               true,
 	}
 	state.existingIndexes = map[string]bool{
 		"idx_cursor_usage_events_dedup":   true,

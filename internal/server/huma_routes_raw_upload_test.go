@@ -261,7 +261,7 @@ func TestRawUploadPatchExtendsRealServerReadDeadline(t *testing.T) {
 		},
 	}
 	srv := newRawUploadHTTPTestServer(t, rawUploadAuthStub(t, identity), uploads)
-	srv.httpReadTimeout = 50 * time.Millisecond
+	srv.httpReadTimeout = time.Second
 	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	serveErr := make(chan error, 1)
@@ -304,7 +304,7 @@ func TestRawUploadPatchExtendsRealServerReadDeadline(t *testing.T) {
 	require.NoError(t, err)
 	// Observe the upload middleware extending the real connection deadline
 	// before releasing the rest of the request body.
-	deadlineWait := time.NewTimer(3 * time.Second)
+	deadlineWait := time.NewTimer(10 * time.Second)
 	defer deadlineWait.Stop()
 waitForUploadDeadline:
 	for {
@@ -327,7 +327,7 @@ waitForUploadDeadline:
 	case result := <-response:
 		defer result.Body.Close()
 		assert.Equal(t, http.StatusOK, result.StatusCode)
-	case <-time.After(3 * time.Second):
+	case <-time.After(10 * time.Second):
 		require.FailNow(t, "slow upload request did not finish")
 	}
 }

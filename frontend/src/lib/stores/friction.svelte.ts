@@ -1,0 +1,299 @@
+import { m } from "../i18n/index.js";
+import { FrictionService } from "../api/generated/index";
+import type {
+  FrictionDigestItem,
+  FrictionDigestResponse,
+  FrictionPatternItem,
+  FrictionSignal,
+} from "../api/generated/index.js";
+import { isAbortError, isNotFoundError } from "../api/runtime.js";
+import { LatestRead } from "../utils/latest-read.js";
+import { perf } from "./perf.svelte.js";
+
+// Each patterns request stays bounded while paging to the selected digest's
+// fingerprints in the globally ranked patterns list.
+export const PATTERN_PAGE_LIMIT = 1000;
+
+type ReadStatus = "ok" | "error" | "aborted";
+
+function errorMessage(e: unknown): string {
+  return e instanceof Error && e.message ? e.message : m.friction_load_error();
+}
+
+function newestFirst(a: FrictionDigestItem, b: FrictionDigestItem): number {
+  if (a.date < b.date) return 1;
+  if (a.date > b.date) return -1;
+  return 0;
+}
+
+class FrictionStore {
+  dates: FrictionDigestItem[] = $state([]);
+  selectedDate: string | null = $state(null);
+  digest: FrictionDigestResponse | null = $state(null);
+  patterns: FrictionPatternItem[] = $state([]);
+  markdown: string | null = $state(null);
+  loading = $state({ dates: false, digest: false, markdown: false });
+  errors = $state<{
+    dates: string | null;
+    digest: string | null;
+    markdown: string | null;
+    build: string | null;
+  }>({ dates: null, digest: null, markdown: null, build: null });
+  building: boolean = $state(false);
+  mutationFingerprint: string | null = $state(null);
+  mutationError: { fingerprint: string; message: string } | null = $state(null);
+  lastBuildWritten: number | null = $state(null);
+  lastUpdatedAt: number | null = $state(null);
+  lastQueryDurationMs: number | null = $state(null);
+  #datesRead = new LatestRead();
+  #digestRead = new LatestRead();
+  #markdownRead = new LatestRead();
+  #selectionRevision = 0;
+
+  get latestDate(): string | null {
+    return this.dates[0]?.date ?? null;
+  }
+
+  #selectedIndex(): number {
+    return this.dates.findIndex((d) => d.date === this.selectedDate);
+  }
+
+  get olderDate(): string | null {
+    const i = this.#selectedIndex();
+    return i >= 0 ? (this.dates[i + 1]?.date ?? null) : null;
+  }
+
+  get newerDate(): string | null {
+    const i = this.#selectedIndex();
+    return i > 0 ? this.dates[i - 1]!.date : null;
+  }
+
+  async load(requestedDate: string | null = null): Promise<void> {
+    const signal = this.#datesRead.begin();
+    const selectionRevision = this.#selectionRevision;
+    const started = performance.now();
+    let status: ReadStatus = "ok";
+    this.loading.dates = true;
+    this.errors.dates = null;
+    if (requestedDate !== this.selectedDate) {
+      this.#digestRead.cancel();
+      this.#markdownRead.cancel();
+      this.loading.digest = false;
+      this.loading.markdown = false;
+      this.digest = null;
+      this.patterns = [];
+      this.markdown = null;
+      this.errors.digest = null;
+      this.errors.markdown = null;
+      this.mutationError = null;
+    }
+    try {
+      const res = await FrictionService.getApiV1FrictionDigests(undefined, { signal });
+      if (!this.#datesRead.isCurrent(signal)) {
+        status = "aborted";
+        return;
+      }
+      this.dates = [...(res.digests ?? [])].sort(newestFirst);
+      if (this.#selectionRevision === selectionRevision) {
+        const target =
+          requestedDate && this.dates.some((d) => d.date === requestedDate)
+            ? requestedDate
+            : this.latestDate;
+        if (target === null) {
+          this.#digestRead.cancel();
+          this.selectedDate = null;
+          this.digest = null;
+          this.patterns = [];
+          this.markdown = null;
+          this.lastUpdatedAt = Date.now();
+        } else {
+          await this.selectDate(target);
+        }
+      }
+      this.lastQueryDurationMs = performance.now() - started;
+    } catch (e) {
+      if (isAbortError(e) || !this.#datesRead.isCurrent(signal)) {
+        status = "aborted";
+        return;
+      }
+      status = "error";
+      this.errors.dates = errorMessage(e);
+    } finally {
+      perf.recordPanel({
+        route: "friction",
+        name: "digests",
+        durationMs: performance.now() - started,
+        status,
+      });
+      if (this.#datesRead.finish(signal)) this.loading.dates = false;
+    }
+  }
+
+  async selectDate(date: string): Promise<void> {
+    this.#selectionRevision++;
+    const signal = this.#digestRead.begin();
+    this.#markdownRead.cancel();
+    if (this.digest?.date !== date) {
+      this.digest = null;
+      this.patterns = [];
+    }
+    this.selectedDate = date;
+    this.mutationError = null;
+    this.markdown = null;
+    this.errors.markdown = null;
+    this.loading.markdown = false;
+    this.loading.digest = true;
+    this.errors.digest = null;
+    try {
+      const digest = await FrictionService.getApiV1FrictionDigestsByDate({ date }, { signal });
+      const patterns = await this.#fetchPatterns(date, digest.signals ?? [], signal);
+      if (!this.#digestRead.isCurrent(signal)) return;
+      this.digest = digest;
+      this.patterns = patterns;
+      this.lastUpdatedAt = Date.now();
+    } catch (e) {
+      if (isAbortError(e) || !this.#digestRead.isCurrent(signal)) return;
+      this.digest = null;
+      this.patterns = [];
+      this.errors.digest = isNotFoundError(e)
+        ? m.friction_digest_missing({ date })
+        : errorMessage(e);
+    } finally {
+      if (this.#digestRead.finish(signal)) this.loading.digest = false;
+    }
+  }
+
+  async #fetchPatterns(
+    since: string,
+    signals: readonly FrictionSignal[],
+    signal: AbortSignal,
+  ): Promise<FrictionPatternItem[]> {
+    const out: FrictionPatternItem[] = [];
+    const remaining = new Set(signals.map((signal) => signal.fingerprint));
+    if (remaining.size === 0) return out;
+
+    let cursor = "";
+    for (;;) {
+      const params = cursor
+        ? { since, limit: PATTERN_PAGE_LIMIT, cursor }
+        : { since, limit: PATTERN_PAGE_LIMIT };
+      const res = await FrictionService.getApiV1FrictionPatterns(params, { signal });
+      for (const pattern of res.patterns ?? []) {
+        if (remaining.delete(pattern.fingerprint)) out.push(pattern);
+      }
+      if (remaining.size === 0 || !res.next_cursor) break;
+      cursor = res.next_cursor;
+    }
+    return out;
+  }
+
+  async loadMarkdown(): Promise<void> {
+    const date = this.selectedDate;
+    if (!date) return;
+    const signal = this.#markdownRead.begin();
+    this.loading.markdown = true;
+    this.errors.markdown = null;
+    try {
+      const res = await FrictionService.getApiV1FrictionDigestsByDateMd({ date }, { signal });
+      const text = await res.text();
+      if (!this.#markdownRead.isCurrent(signal) || this.selectedDate !== date) return;
+      this.markdown = text;
+    } catch (e) {
+      if (isAbortError(e) || !this.#markdownRead.isCurrent(signal)) return;
+      this.errors.markdown = m.friction_markdown_error();
+    } finally {
+      if (this.#markdownRead.finish(signal)) this.loading.markdown = false;
+    }
+  }
+
+  async buildNow(): Promise<void> {
+    if (this.building) return;
+    this.building = true;
+    this.errors.build = null;
+    this.lastBuildWritten = null;
+    try {
+      const res = await FrictionService.postApiV1FrictionRun({});
+      const written = (res.reports ?? []).filter((r) => r.written).length;
+      this.lastBuildWritten = written;
+      await this.load(this.selectedDate);
+    } catch (e) {
+      this.errors.build = errorMessage(e);
+    } finally {
+      this.building = false;
+    }
+  }
+
+  async #mutatePattern(
+    fingerprint: string,
+    action: (date: string | null) => Promise<unknown>,
+  ): Promise<void> {
+    if (this.mutationFingerprint !== null) return;
+    this.mutationFingerprint = fingerprint;
+    this.mutationError = null;
+    const date = this.selectedDate;
+    try {
+      await action(date);
+      if (date !== null && this.selectedDate === date) await this.selectDate(date);
+    } catch (e) {
+      this.mutationError = { fingerprint, message: errorMessage(e) };
+    } finally {
+      this.mutationFingerprint = null;
+    }
+  }
+
+  async filePattern(fingerprint: string): Promise<void> {
+    await this.#mutatePattern(fingerprint, (date) =>
+      FrictionService.postApiV1FrictionPatternsByFingerprintFile(
+        { fingerprint },
+        { date: date ?? undefined },
+      ),
+    );
+  }
+
+  async linkPattern(fingerprint: string, issueRef: string): Promise<void> {
+    const issue_ref = issueRef.trim();
+    if (!issue_ref) {
+      this.mutationError = { fingerprint, message: m.friction_kata_issue_required() };
+      return;
+    }
+    await this.#mutatePattern(fingerprint, () =>
+      FrictionService.putApiV1FrictionPatternsByFingerprintLink({ fingerprint }, { issue_ref }),
+    );
+  }
+
+  async unlinkPattern(fingerprint: string): Promise<void> {
+    await this.#mutatePattern(fingerprint, () =>
+      FrictionService.deleteApiV1FrictionPatternsByFingerprintLink({ fingerprint }),
+    );
+  }
+
+  cancelInFlightReads(): void {
+    this.#datesRead.cancel();
+    this.#digestRead.cancel();
+    this.#markdownRead.cancel();
+    this.loading.dates = false;
+    this.loading.digest = false;
+    this.loading.markdown = false;
+  }
+
+  reset(): void {
+    this.cancelInFlightReads();
+    this.dates = [];
+    this.selectedDate = null;
+    this.digest = null;
+    this.patterns = [];
+    this.markdown = null;
+    this.errors.dates = null;
+    this.errors.digest = null;
+    this.errors.markdown = null;
+    this.errors.build = null;
+    this.building = false;
+    this.mutationFingerprint = null;
+    this.mutationError = null;
+    this.lastBuildWritten = null;
+    this.lastUpdatedAt = null;
+    this.lastQueryDurationMs = null;
+  }
+}
+
+export const friction = new FrictionStore();

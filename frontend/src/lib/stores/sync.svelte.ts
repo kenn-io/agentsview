@@ -70,8 +70,12 @@ class SyncStore {
   private statusProgressActive = false;
 
   /** Register a callback invoked after any sync completes. */
-  onSyncComplete(listener: SyncCompleteListener) {
+  onSyncComplete(listener: SyncCompleteListener): () => void {
     this.syncCompleteListeners.push(listener);
+    return () => {
+      const index = this.syncCompleteListeners.indexOf(listener);
+      if (index !== -1) this.syncCompleteListeners.splice(index, 1);
+    };
   }
 
   private notifySyncComplete() {

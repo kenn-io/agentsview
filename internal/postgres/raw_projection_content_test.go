@@ -91,6 +91,17 @@ func TestRawContentRevisionIgnoresOnlyRecencyDerivedState(t *testing.T) {
 	settled, err := rawContentRevision(p)
 	require.NoError(t, err)
 	assert.Equal(t, first, settled, "recency expiry is not new content")
+	p.Session.FrictionCount = 3
+	p.Session.FrictionRulesVersion = "next-friction-rules"
+	p.Session.FrictionHash = "derived-hash"
+	p.Signals.Friction = &db.SessionFrictionUpdate{
+		Findings:     []db.FrictionFinding{{Kind: "correction", Text: "derived result"}},
+		RulesVersion: "next-friction-rules",
+		Hash:         "derived-hash",
+	}
+	frictionState, err := rawContentRevision(p)
+	require.NoError(t, err)
+	assert.Equal(t, first, frictionState, "derived friction state is not new transcript content")
 	p.Signals.ToolRetryCount++
 	stableSignal, err := rawContentRevision(p)
 	require.NoError(t, err)

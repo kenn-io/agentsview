@@ -84,6 +84,11 @@ func normalizeSession(s db.Session) db.Session {
 	s.CreatedAt = ""
 	s.LocalModifiedAt = nil
 	s.TranscriptRevision = nil
+	// Friction summaries are archive-derived and intentionally excluded from
+	// the hosted raw projection; compare their source content above that layer.
+	s.FrictionCount = 0
+	s.FrictionRulesVersion = ""
+	s.FrictionHash = ""
 	return s
 }
 

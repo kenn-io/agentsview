@@ -535,3 +535,22 @@ func TestReadOnlySchemaAfterInitialCancellation(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, required["sessions"], "id")
 }
+
+func TestOpenReadOnlyAllowsMissingFrictionTables(t *testing.T) {
+	path := createClosedTestDB(t, tempDBPath(t, "sessions.db"), func(d *DB) {
+		insertSession(t, d, "s1", "proj")
+	})
+	execRawSQLite(t, path, "DROP TABLE friction_findings")
+	execRawSQLite(t, path, "DROP TABLE friction_session_dims")
+
+	readonly, err := OpenReadOnly(t.Context(), path)
+	require.NoError(t, err, "friction tables are optional for read-only opens")
+	t.Cleanup(func() { require.NoError(t, readonly.Close()) })
+
+	findings, err := readonly.SessionFrictionFindings(t.Context(), "s1")
+	require.NoError(t, err)
+	assert.Empty(t, findings)
+	dims, err := readonly.SessionFrictionDims(t.Context(), "s1")
+	require.NoError(t, err)
+	assert.Nil(t, dims)
+}

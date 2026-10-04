@@ -23,7 +23,10 @@ import (
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/friction/filing"
+	"go.kenn.io/agentsview/internal/friction/review"
 	"go.kenn.io/agentsview/internal/insight"
+	"go.kenn.io/agentsview/internal/kata"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/poller"
 	"go.kenn.io/agentsview/internal/rawderive"
@@ -490,6 +493,27 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		fatal("%v", prepErr)
 	}
 	cfg = preparedCfg
+	var frictionEngine remoteSyncExclusiveRunner
+	if engine != nil {
+		frictionEngine = engine
+	}
+	frictionExcl := frictionExclusive(idleTracker, frictionEngine)
+	kataConn := kata.NewConn(kata.ConfigFrom(cfg.Kata, filing.EligibleHost(false, cfg.HasPGPushTarget())))
+	var frictionFiler *filing.Filer
+	var frictionStartupBackfill func(context.Context) error
+	if engine != nil {
+		frictionStartupBackfill = func(ctx context.Context) error {
+			return backfillFrictionAfterStartup(ctx, engine)
+		}
+	}
+	frictionRunner, waitFriction := startFrictionReviewWithBackfill(ctx, cfg, database, frictionExcl, frictionStartupBackfill, func(r *review.Runner) {
+		frictionFiler = newFrictionFiler(frictionFilerDeps{Cfg: &cfg, Store: database, Conn: kataConn, Runner: r})
+		attachFiler(r, frictionFiler)
+	})
+	defer func() {
+		stop()
+		waitFriction()
+	}()
 	rtOpts.BasePath = opts.BasePath
 
 	srvOpts := []server.Option{
@@ -548,6 +572,10 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	srvOpts = append(srvOpts, server.WithArtifactExchangeRunner(
 		newDaemonArtifactExchangeRunner(cfg, database, engine, emitter),
 	))
+	if frictionRunner != nil {
+		srvOpts = append(srvOpts, server.WithFriction(frictionRunner, frictionExcl))
+	}
+	srvOpts = append(srvOpts, server.WithKataConn(kataConn), server.WithFrictionFiler(frictionFiler))
 	srv := server.New(cfg, database, engine, srvOpts...)
 
 	startupProgress.SetPhase("starting HTTP server")
@@ -2936,6 +2964,7 @@ func startPeriodicSync(
 			runScheduledSyncPass(ctx, engine, scheduledReconcileTargets(current))
 			runRemoteSourceSyncPass(ctx, engine, remoteSourceSyncRoots(current))
 			recomputePendingSessions(engine, database)
+			recomputeStaleFriction(ctx, engine)
 		})
 	}
 }
@@ -3290,5 +3319,13 @@ func recomputePendingSessions(
 		// deferred-recompute loop is best-effort, the next
 		// pass will retry any that failed.
 		_ = engine.RecomputeSignals(context.Background(), id)
+	}
+}
+
+// recomputeStaleFriction retries the guarded friction backfill on the
+// scheduled reconcile tick. A current archive is a cheap no-op.
+func recomputeStaleFriction(ctx context.Context, engine *sync.Engine) {
+	if _, err := engine.BackfillFriction(ctx); err != nil && ctx.Err() == nil {
+		log.Printf("friction backfill: %v", err)
 	}
 }

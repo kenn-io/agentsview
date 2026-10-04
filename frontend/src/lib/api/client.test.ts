@@ -653,13 +653,18 @@ describe("core action telemetry", () => {
   it.each([
     ["downloadExport", "html"],
     ["downloadInsightExport", "insight_html"],
+    ["downloadFrictionDigestMarkdown", "friction_markdown"],
   ] as const)("%s reports export_run %s", async (fn, format) => {
     vi.spyOn(window, "open").mockReturnValue(null);
     const client = await import("./client.js");
 
-    await (fn === "downloadExport"
-      ? client.downloadExport("session-1")
-      : client.downloadInsightExport(7));
+    if (fn === "downloadExport") {
+      await client.downloadExport("session-1");
+    } else if (fn === "downloadInsightExport") {
+      await client.downloadInsightExport(7);
+    } else {
+      await client.downloadFrictionDigestMarkdown("2026-09-21");
+    }
 
     expect(telemetry.reportTelemetry).toHaveBeenCalledExactlyOnceWith("export_run", { format });
   });

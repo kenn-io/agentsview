@@ -1579,6 +1579,20 @@ server.
 
 ______________________________________________________________________
 
+### `agentsview kata status`
+
+Shows whether the configured Kata instance is reachable, compatible (API
+schema 0.21.0 or newer), authenticated, and has the configured project. With a
+running daemon it reports the daemon's view. When no daemon owns the data
+directory, it probes from the local config without starting one. An
+unreachable owner returns an error. `--format json` prints the status
+object; `--json` is an alias. `--format human` selects the default text output.
+`--server URL` asks an explicit AgentsView daemon; use
+`AGENTSVIEW_SERVER_TOKEN` or `--server-token-file PATH` for its credential. See
+[Kata](/docs/kata/).
+
+______________________________________________________________________
+
 ### `agentsview insight`
 
 Generate and inspect stored Activity Insights through the daemon API.
@@ -1610,6 +1624,47 @@ explicit server, provide its bearer token with `AGENTSVIEW_SERVER_TOKEN` or
 sent to an explicitly supplied server.
 
 ______________________________________________________________________
+
+### `agentsview friction`
+
+Build and read the [Friction Log](friction-log.md), a daily heuristic review of
+corrections, tool errors, workarounds, deferrals, frustration, interruptions and
+recurring patterns. It is on by default; `[friction] enabled = false` turns it
+off.
+
+```bash
+agentsview friction run [--date YYYY-MM-DD] [--rebuild] [--dry-run] [--format human|json | --json]
+agentsview friction digest [--date D | --from D --to D] [--format md|json | --json]
+agentsview friction findings [--date D] [--kind K] [--session ID] [--format table|json | --json]
+agentsview friction patterns [--kind K] [--since D] [--linked | --unlinked] [--format table|json | --json]
+agentsview friction file (<fingerprint> | --date D) [--force-new] [--dry-run]
+agentsview friction link <fingerprint> <kata-ref>
+agentsview friction unlink <fingerprint>
+```
+
+`friction run` without flags builds every complete local day that has no digest
+yet. With `--rebuild` or `--dry-run`, omitting `--date` instead targets only the
+latest complete day. It prints jilog-compatible summary lines, or the summary
+JSON object per day with `--json`, and exits non-zero only when the review fails.
+`--json` is an alias for `--format json` on every friction command.
+`friction digest` prints the latest digest unless `--date` or a range is given;
+`--format json` prints the counts-only summary object, byte-identical whether it
+comes from the daemon or the local archive. `--linked` and `--unlinked` filter
+patterns by issue linkage. `--kind` accepts `correction`, `error`, `workaround`,
+`deferral`, `pattern`, `frustration` and `interruption`.
+
+`friction file` files one pattern or every unique pattern in a stored digest.
+`--dry-run` previews the create request; `--force-new` skips the metadata
+lookup. `friction link` records a local link to an existing Kata issue, and
+`friction unlink` removes that local link without changing the Kata issue.
+These three commands work only through the running hub daemon or an explicit
+`--server URL`; they never write directly to a local archive.
+
+The read and run commands use the running daemon (starting one when needed) or, with
+`AGENTSVIEW_NO_DAEMON=1`, read and write the local archive directly. An explicit
+`--server <url>` targets a running server; provide its token with
+`AGENTSVIEW_SERVER_TOKEN` or `--server-token-file <path>`. `friction run`
+refuses to run where `[friction] enabled = false`.
 
 ### `agentsview doctor memory`
 

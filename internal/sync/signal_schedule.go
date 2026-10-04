@@ -35,8 +35,12 @@ type signalScheduler struct {
 	// pass, so sessions are never claimed out of the dirty map by a
 	// goroutine that then blocks — a concurrent locked flush would
 	// see an empty map and push stale rows.
-	run       func(sessionID string)
+	// run reports whether the recompute published successfully.
+	run       func(sessionID string) bool
 	exclusive func(flush func())
+	// afterFlush runs outside exclusive after a deferred flush publishes
+	// at least one successful recompute.
+	afterFlush func()
 
 	// now and afterFunc are injectable for deterministic tests.
 	// afterFunc returns a cancel function reporting whether the
@@ -59,7 +63,7 @@ type signalScheduler struct {
 
 func newSignalScheduler(
 	interval, quiet time.Duration,
-	run func(sessionID string),
+	run func(sessionID string) bool,
 	exclusive func(flush func()),
 ) *signalScheduler {
 	return &signalScheduler{
@@ -95,6 +99,25 @@ func (s *signalScheduler) markDirty(sessionID string) {
 	s.mu.Unlock()
 }
 
+// markDirtyDeferred queues a recompute without loading session history on
+// the caller's write path. The first mark starts the maximum wait interval;
+// subsequent marks move only the quiet-period deadline.
+func (s *signalScheduler) markDirtyDeferred(sessionID string) {
+	s.mu.Lock()
+	if s.stopped {
+		s.mu.Unlock()
+		s.run(sessionID)
+		return
+	}
+	now := s.now()
+	if _, pending := s.dirty[sessionID]; !pending {
+		s.last[sessionID] = now
+	}
+	s.dirty[sessionID] = now
+	s.armLocked()
+	s.mu.Unlock()
+}
+
 // deferRetry schedules a failed recompute without the leading-edge execution
 // of markDirty. Shutdown gets only its existing final flush attempt.
 func (s *signalScheduler) deferRetry(sessionID string) {
@@ -112,13 +135,21 @@ func (s *signalScheduler) deferRetry(sessionID string) {
 // engine's sync lock: the pass runs inside exclusive, which takes
 // it before claiming anything.
 func (s *signalScheduler) tick() {
-	s.exclusive(func() { s.flushDue(false) })
+	published := false
+	s.exclusive(func() { published = s.flushDue(false) })
+	if published && s.afterFlush != nil {
+		s.afterFlush()
+	}
 }
 
 // flushAll immediately recomputes every deferred session. Callers
 // must not hold the engine's sync lock (see tick).
 func (s *signalScheduler) flushAll() {
-	s.exclusive(func() { s.flushDue(true) })
+	published := false
+	s.exclusive(func() { published = s.flushDue(true) })
+	if published && s.afterFlush != nil {
+		s.afterFlush()
+	}
 }
 
 // flushAllInline immediately recomputes every deferred session
@@ -129,10 +160,14 @@ func (s *signalScheduler) flushAllInline() {
 	s.flushDue(true)
 }
 
-func (s *signalScheduler) flushDue(all bool) {
+func (s *signalScheduler) flushDue(all bool) bool {
+	var published bool
 	for _, id := range s.takeDue(all) {
-		s.run(id)
+		if s.run(id) {
+			published = true
+		}
 	}
+	return published
 }
 
 // stop cancels the pending flush timer, waits for any timer
