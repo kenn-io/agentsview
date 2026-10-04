@@ -3,6 +3,8 @@ package export
 import (
 	"encoding/json/v2"
 	"math"
+	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -1309,35 +1311,44 @@ func TestPricingResolverPricesKimiK27CodeOllamaCloudFromEmbeddedCatalog(t *testi
 	assert.Equal(t, money.MustParseDollars("0.19"), lookup.Rates.CacheReadPerMTok)
 }
 
+// TestPricingResolverDependencyFingerprint checks the fingerprint against the
+// resolver itself: it must change exactly when some reachable lookup result
+// changes, so a resolver rule the fingerprint misses fails here.
 func TestPricingResolverDependencyFingerprint(t *testing.T) {
 	observed := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
 	later := observed.Add(24 * time.Hour)
-	genAIDocument := func(alphaLater, betaLater string) *pricingpkg.GenAIPrices {
+	genAIDocument := func(alphaLater, betaLater, gammaLater string) *pricingpkg.GenAIPrices {
+		model := func(id, laterPrice string) string {
+			return `{"id": "` + id + `", "match": {"equals": "` + id + `"},
+				"prices": [
+					{"prices": {"input_mtok": 1}},
+					{"constraint": {"start_date": "2026-09-01"},
+					 "prices": {"input_mtok": ` + laterPrice + `}}
+				]}`
+		}
 		prices, err := pricingpkg.ParseGenAIPrices([]byte(`[{
-			"id": "genai",
-			"name": "GenAI",
-			"api_pattern": "https://example.invalid",
+			"id": "genai", "name": "GenAI", "api_pattern": "https://example.invalid",
 			"model_match": {"starts_with": "genai-"},
-			"models": [
-				{"id": "genai-alpha", "match": {"equals": "genai-alpha"},
-				 "prices": [
-					{"prices": {"input_mtok": 1}},
-					{"constraint": {"start_date": "2026-09-01"},
-					 "prices": {"input_mtok": ` + alphaLater + `}}
-				 ]},
-				{"id": "genai-beta", "match": {"equals": "genai-beta"},
-				 "prices": [
-					{"prices": {"input_mtok": 1}},
-					{"constraint": {"start_date": "2026-09-01"},
-					 "prices": {"input_mtok": ` + betaLater + `}}
-				 ]}
-			]
+			"models": [` + model("genai-alpha", alphaLater) + `,` +
+			model("genai-beta", betaLater) + `,` + model("genai-gamma", gammaLater) + `]
 		}]`))
 		require.NoError(t, err)
 		return prices
 	}
+	fetched := func(pattern, rate string) EffectivePricingRow {
+		return EffectivePricingRow{ModelPattern: pattern, Rates: ModelRates{
+			InputPerMTok: money.MustParseDollars(rate), Source: PricingRowSourceFetched,
+		}}
+	}
+	custom := func(pattern, rate string) EffectivePricingRow {
+		return EffectivePricingRow{ModelPattern: pattern, Rates: ModelRates{
+			InputPerMTok: money.MustParseDollars(rate), Source: PricingRowSourceCustom,
+		}}
+	}
+	const genAIIndex = 0
 	baseRows := func() []EffectivePricingRow {
 		return []EffectivePricingRow{
+			{GenAI: genAIDocument("2", "2", "2"), GenAISource: PricingRowSourceEmbedded},
 			{ModelPattern: "test/model-a", Rates: ModelRates{
 				InputPerMTok: money.MustParseDollars("1"), UpdatedAt: &observed,
 				Source: PricingRowSourceFetched,
@@ -1347,146 +1358,133 @@ func TestPricingResolverDependencyFingerprint(t *testing.T) {
 					UpdatedAt:        &observed,
 				}},
 			}},
-			{ModelPattern: "other-model", Rates: ModelRates{
-				InputPerMTok: money.MustParseDollars("5"), UpdatedAt: &observed,
-				Source: PricingRowSourceFetched,
-			}},
-			{ModelPattern: "kimi-x", Rates: ModelRates{
-				InputPerMTok: money.MustParseDollars("3"),
-				Source:       PricingRowSourceFetched,
-			}},
-			{GenAI: genAIDocument("2", "2"), GenAISource: PricingRowSourceEmbedded},
+			fetched("other-model", "5"),
+			fetched("kimi-x", "3"),
+			fetched("kimi-y:cloud", "6"),
+			fetched("kimi-y", "3"),
+			custom("genai-gamma", "7"),
 		}
 	}
 	type input struct{ provider, reported, canonical string }
-	modelA := input{reported: "model-a", canonical: "model-a"}
+	inputs := map[string]input{
+		"model-a":           {reported: "model-a", canonical: "model-a"},
+		"alias-a":           {reported: "alias-a", canonical: "model-a"},
+		"billed":            {provider: pricingpkg.PositAssistantProviderID, reported: "model-a", canonical: "model-a"},
+		"tier":              {reported: "model-a-high", canonical: "model-a-high"},
+		"unpriced":          {reported: "unpriced", canonical: "unpriced"},
+		"kimi-x:cloud":      {reported: "kimi-x:cloud", canonical: "kimi-x:cloud"},
+		"kimi-y:cloud":      {reported: "kimi-y:cloud", canonical: "kimi-y:cloud"},
+		"genai-alpha":       {reported: "genai-alpha", canonical: "genai-alpha"},
+		"genai-alpha:cloud": {reported: "genai-alpha:cloud", canonical: "genai-alpha:cloud"},
+		"genai-gamma":       {reported: "genai-gamma", canonical: "genai-gamma"},
+	}
+	usesModelA := []string{"model-a", "alias-a", "billed", "tier"}
+
 	fingerprint := func(rows []EffectivePricingRow, in input) string {
 		value, err := NewPricingResolver(rows).DependencyFingerprint(
 			in.provider, in.reported, in.canonical)
 		require.NoError(t, err)
 		return value
 	}
+	// resolutions is everything a priced fact can observe, minus UpdatedAt,
+	// at a timestamp in each GenAI price period and with no timestamp.
+	resolutions := func(rows []EffectivePricingRow, in input) []any {
+		resolver := NewPricingResolver(rows)
+		withoutUpdatedAt := func(lookup PricingLookup) PricingLookup {
+			lookup.Rates.UpdatedAt = nil
+			lookup.Rates.Bands = slices.Clone(lookup.Rates.Bands)
+			for i := range lookup.Rates.Bands {
+				lookup.Rates.Bands[i].UpdatedAt = nil
+			}
+			return lookup
+		}
+		var out []any
+		for _, at := range []time.Time{
+			{}, observed, time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC),
+		} {
+			priced, lookup := resolver.ResolveAt(in.reported, in.canonical, at)
+			billedModel, billed, err := resolver.ResolveBilledAt(
+				in.provider, in.reported, in.canonical, at)
+			require.NoError(t, err)
+			out = append(out, priced, withoutUpdatedAt(lookup),
+				billedModel, withoutUpdatedAt(billed))
+		}
+		return out
+	}
 
 	tests := []struct {
-		name    string
-		input   input
-		mutate  func([]EffectivePricingRow) []EffectivePricingRow
-		changed bool
+		name   string
+		mutate func([]EffectivePricingRow) []EffectivePricingRow
+		want   []string // inputs whose fingerprint must change
 	}{
-		{"unrelated row rate", modelA, func(rows []EffectivePricingRow) []EffectivePricingRow {
-			rows[1].Rates.InputPerMTok = money.MustParseDollars("9")
+		{"unrelated row rate", func(rows []EffectivePricingRow) []EffectivePricingRow {
+			rows[2] = fetched("other-model", "9")
 			return rows
-		}, false},
-		{"updated_at only", modelA, func(rows []EffectivePricingRow) []EffectivePricingRow {
-			rows[0].Rates.UpdatedAt = &later
-			rows[0].Rates.Bands[0].UpdatedAt = &later
+		}, nil},
+		{"updated_at only", func(rows []EffectivePricingRow) []EffectivePricingRow {
+			rows[1].Rates.UpdatedAt = &later
+			rows[1].Rates.Bands[0].UpdatedAt = &later
 			return rows
-		}, false},
-		{"used rate", modelA, func(rows []EffectivePricingRow) []EffectivePricingRow {
-			rows[0].Rates.InputPerMTok = money.MustParseDollars("1.5")
+		}, nil},
+		{"used rate", func(rows []EffectivePricingRow) []EffectivePricingRow {
+			rows[1].Rates.InputPerMTok = money.MustParseDollars("1.5")
 			return rows
-		}, true},
-		{"used band", modelA, func(rows []EffectivePricingRow) []EffectivePricingRow {
-			rows[0].Rates.Bands[0].InputPerMTok = money.MustParseDollars("2.5")
+		}, usesModelA},
+		{"used band", func(rows []EffectivePricingRow) []EffectivePricingRow {
+			rows[1].Rates.Bands[0].InputPerMTok = money.MustParseDollars("2.5")
 			return rows
-		}, true},
-		{"new exact row beats pattern", modelA, func(rows []EffectivePricingRow) []EffectivePricingRow {
-			return append(rows, EffectivePricingRow{ModelPattern: "model-a", Rates: ModelRates{
-				InputPerMTok: money.MustParseDollars("1"), Source: PricingRowSourceFetched,
-			}})
-		}, true},
-		{"used row removed", modelA, func(rows []EffectivePricingRow) []EffectivePricingRow {
-			return rows[1:]
-		}, true},
-		{
-			"unpriced model gains a row",
-			input{reported: "unpriced", canonical: "unpriced"},
-			func(rows []EffectivePricingRow) []EffectivePricingRow {
-				return append(rows, EffectivePricingRow{ModelPattern: "unpriced", Rates: ModelRates{
-					InputPerMTok: money.MustParseDollars("1"), Source: PricingRowSourceFetched,
-				}})
-			}, true,
-		},
-		{
-			"custom override for reported alias",
-			input{reported: "alias-a", canonical: "model-a"},
-			func(rows []EffectivePricingRow) []EffectivePricingRow {
-				return append(rows, EffectivePricingRow{ModelPattern: "alias-a", Rates: ModelRates{
-					InputPerMTok: money.MustParseDollars("1"), Source: PricingRowSourceCustom,
-				}})
-			}, true,
-		},
-		{
-			"ollama base row",
-			input{reported: "kimi-x:cloud", canonical: "kimi-x:cloud"},
-			func(rows []EffectivePricingRow) []EffectivePricingRow {
-				rows[2].Rates.InputPerMTok = money.MustParseDollars("4")
-				return rows
-			}, true,
-		},
-		{
-			"genai later period of used model",
-			input{reported: "genai-alpha", canonical: "genai-alpha"},
-			func(rows []EffectivePricingRow) []EffectivePricingRow {
-				rows[3].GenAI = genAIDocument("3", "2")
-				return rows
-			}, true,
-		},
-		{
-			"genai later period of another model",
-			input{reported: "genai-alpha", canonical: "genai-alpha"},
-			func(rows []EffectivePricingRow) []EffectivePricingRow {
-				rows[3].GenAI = genAIDocument("2", "3")
-				return rows
-			}, false,
-		},
+		}, usesModelA},
+		{"used row removed", func(rows []EffectivePricingRow) []EffectivePricingRow {
+			return slices.Delete(rows, 1, 2)
+		}, usesModelA},
+		{"new exact row beats provider-qualified row", func(rows []EffectivePricingRow) []EffectivePricingRow {
+			return append(rows, fetched("model-a", "4"))
+		}, usesModelA},
+		{"new tier row beats stripped base row", func(rows []EffectivePricingRow) []EffectivePricingRow {
+			return append(rows, fetched("model-a-high", "4"))
+		}, []string{"tier"}},
+		{"unpriced model gains a row", func(rows []EffectivePricingRow) []EffectivePricingRow {
+			return append(rows, fetched("unpriced", "1"))
+		}, []string{"unpriced"}},
+		{"custom override for reported alias", func(rows []EffectivePricingRow) []EffectivePricingRow {
+			return append(rows, custom("alias-a", "1"))
+		}, []string{"alias-a"}},
+		{"ollama base row", func(rows []EffectivePricingRow) []EffectivePricingRow {
+			rows[3] = fetched("kimi-x", "4")
+			return rows
+		}, []string{"kimi-x:cloud"}},
+		{"base of a priced tagged row", func(rows []EffectivePricingRow) []EffectivePricingRow {
+			rows[5] = fetched("kimi-y", "4")
+			return rows
+		}, nil},
+		{"genai later period of a used model", func(rows []EffectivePricingRow) []EffectivePricingRow {
+			rows[genAIIndex].GenAI = genAIDocument("3", "2", "2")
+			return rows
+		}, []string{"genai-alpha", "genai-alpha:cloud"}},
+		{"genai later period of another model", func(rows []EffectivePricingRow) []EffectivePricingRow {
+			rows[genAIIndex].GenAI = genAIDocument("2", "3", "2")
+			return rows
+		}, nil},
+		{"genai price behind a custom rate", func(rows []EffectivePricingRow) []EffectivePricingRow {
+			rows[genAIIndex].GenAI = genAIDocument("2", "2", "3")
+			return rows
+		}, nil},
+		{"custom rate removed exposes genai", func(rows []EffectivePricingRow) []EffectivePricingRow {
+			return rows[:len(rows)-1]
+		}, []string{"genai-gamma"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			before := fingerprint(baseRows(), tt.input)
-			after := fingerprint(tt.mutate(baseRows()), tt.input)
-			if tt.changed {
-				assert.NotEqual(t, before, after)
-			} else {
-				assert.Equal(t, before, after)
+			for name, in := range inputs {
+				before, after := baseRows(), tt.mutate(baseRows())
+				fingerprintChanged := fingerprint(before, in) != fingerprint(after, in)
+				assert.Equal(t, slices.Contains(tt.want, name), fingerprintChanged,
+					"fingerprint change for %s", name)
+				assert.Equal(t,
+					!reflect.DeepEqual(resolutions(before, in), resolutions(after, in)),
+					fingerprintChanged,
+					"fingerprint must change exactly when %s resolves differently", name)
 			}
 		})
 	}
-
-	t.Run("custom rate shadows genai", func(t *testing.T) {
-		alpha := input{reported: "genai-alpha", canonical: "genai-alpha"}
-		withCustom := func(genAI *pricingpkg.GenAIPrices) []EffectivePricingRow {
-			rows := baseRows()
-			rows[3].GenAI = genAI
-			return append(rows, EffectivePricingRow{ModelPattern: "genai-alpha", Rates: ModelRates{
-				InputPerMTok: money.MustParseDollars("7"), Source: PricingRowSourceCustom,
-			}})
-		}
-		shadowed := fingerprint(withCustom(genAIDocument("2", "2")), alpha)
-		assert.Equal(t, shadowed, fingerprint(withCustom(genAIDocument("3", "2")), alpha),
-			"GenAI prices behind a custom rate are unreachable")
-		assert.NotEqual(t, shadowed, fingerprint(baseRows(), alpha),
-			"removing the custom rate exposes GenAI")
-	})
-
-	t.Run("unused ollama base", func(t *testing.T) {
-		tagged := input{reported: "kimi-y:cloud", canonical: "kimi-y:cloud"}
-		rows := func(baseRate string) []EffectivePricingRow {
-			return append(baseRows(),
-				EffectivePricingRow{ModelPattern: "kimi-y:cloud", Rates: ModelRates{
-					InputPerMTok: money.MustParseDollars("6"), Source: PricingRowSourceFetched,
-				}},
-				EffectivePricingRow{ModelPattern: "kimi-y", Rates: ModelRates{
-					InputPerMTok: money.MustParseDollars(baseRate), Source: PricingRowSourceFetched,
-				}})
-		}
-		assert.Equal(t, fingerprint(rows("3"), tagged), fingerprint(rows("4"), tagged),
-			"a priced tagged row never falls back to its base")
-	})
-
-	t.Run("billing policy provider", func(t *testing.T) {
-		billed := modelA
-		billed.provider = pricingpkg.PositAssistantProviderID
-		assert.NotEqual(t, fingerprint(baseRows(), modelA), fingerprint(baseRows(), billed))
-	})
 }
