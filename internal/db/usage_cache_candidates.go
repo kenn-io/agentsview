@@ -100,7 +100,7 @@ func (db *DB) captureUsageQuery(
 	defer func() { _ = tx.Rollback() }()
 
 	var snapshot usageQuerySnapshot
-	snapshot.location = filter.location()
+	snapshot.location = filter.Location()
 	if err := tx.QueryRowContext(ctx,
 		`SELECT value FROM archive_metadata WHERE key = ?`,
 		archiveMetadataDatabaseIDKey,
@@ -175,7 +175,7 @@ func (db *DB) captureUsageQuery(
 // may appear in stored timestamp text. The result is deliberately a superset;
 // exact membership is applied against cached parsed timestamps later.
 func usageCandidateBoundsForFilter(filter UsageFilter) usageBounds {
-	location := filter.location()
+	location := filter.Location()
 	var bounds usageBounds
 	if filter.From != "" {
 		if day, err := time.ParseInLocation("2006-01-02", filter.From, location); err == nil {
@@ -353,7 +353,7 @@ func usageQueryIntervals(filter UsageFilter) []usageQueryInterval {
 	if filter.From == "" && filter.To == "" {
 		return nil
 	}
-	location := filter.location()
+	location := filter.Location()
 	parseDate := func(value string) (time.Time, bool) {
 		parsed, err := time.ParseInLocation("2006-01-02", value, location)
 		return parsed, err == nil

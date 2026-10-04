@@ -12,6 +12,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"testing"
@@ -2468,10 +2470,19 @@ func TestTrendsTermsApplySessionFiltersAndSystemPrefixExclusion(t *testing.T) {
 }
 
 func TestDailyUsageDefaultsToLocalTimezone(t *testing.T) {
-	oldLocal := time.Local                             //nolint:forbidigo // Exercise report formatting and date buckets in the local calendar timezone.
-	time.Local = time.FixedZone("DuckLocal", -5*60*60) //nolint:forbidigo // Exercise report formatting and date buckets in the local calendar timezone.
-	t.Cleanup(func() { time.Local = oldLocal })        //nolint:forbidigo // Exercise report formatting and date buckets in the local calendar timezone.
-
+	// A fresh process pins a DST zone before the default zone is cached.
+	if os.Getenv("AGENTSVIEW_TEST_DUCK_USAGE_TZ") != "1" {
+		exe, err := os.Executable()
+		require.NoError(t, err)
+		cmd := exec.CommandContext(t.Context(), exe,
+			"-test.run=^TestDailyUsageDefaultsToLocalTimezone$")
+		cmd.Env = append(os.Environ(),
+			"AGENTSVIEW_TEST_DUCK_USAGE_TZ=1", "TZ=America/New_York")
+		output, err := cmd.CombinedOutput()
+		require.NoError(t, err, "%s", output)
+		require.Contains(t, string(output), "PASS")
+		return
+	}
 	ctx := t.Context()
 	local := newLocalDB(t)
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
@@ -2480,10 +2491,14 @@ func TestDailyUsageDefaultsToLocalTimezone(t *testing.T) {
 		OutputPerMTok: money.MustParseDollars("15"),
 	}}))
 	sessionID := "duck-usage-local-day"
+	// Near-midnight UTC events in winter and summer land on different local
+	// days depending on the zone and its DST rules.
+	timestamps := []string{"2026-01-02T02:00:00.000Z", "2026-07-02T04:30:00.000Z"}
 	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
-		Session: syncSession(sessionID, "alpha", "local usage", "2026-01-02T02:00:00.000Z", 1),
+		Session: syncSession(sessionID, "alpha", "local usage", timestamps[0], 2),
 		Messages: []db.Message{
-			syncMessage(sessionID, 0, "assistant", "local usage", "2026-01-02T02:00:00.000Z"),
+			syncMessage(sessionID, 0, "assistant", "winter usage", timestamps[0]),
+			syncMessage(sessionID, 1, "assistant", "summer usage", timestamps[1]),
 		},
 		DataVersion:     1,
 		ReplaceMessages: true,
@@ -2494,16 +2509,32 @@ func TestDailyUsageDefaultsToLocalTimezone(t *testing.T) {
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
+	filter := db.UsageFilter{From: "2026-01-01", To: "2026-07-31"}
+	location := filter.Location()
+	require.Equal(t, "America/New_York", location.String())
+	var wantDates []string
+	for _, timestamp := range timestamps {
+		at, err := time.Parse(time.RFC3339, timestamp)
+		require.NoError(t, err)
+		wantDates = append(wantDates, at.In(location).Format(time.DateOnly))
+	}
 
-	got, err := store.GetDailyUsage(ctx, db.UsageFilter{
-		From: "2026-01-01",
-		To:   "2026-01-01",
-	})
+	got, err := store.GetDailyUsage(ctx, filter)
 	require.NoError(t, err)
-	require.Len(t, got.Daily, 1)
-	assert.Equal(t, "2026-01-01", got.Daily[0].Date)
-	assert.Equal(t, 1, got.Totals.InputTokens)
-	assert.Equal(t, 2, got.Totals.OutputTokens)
+	sqlite, err := local.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+
+	dates := func(result db.DailyUsageResult) []string {
+		out := make([]string, 0, len(result.Daily))
+		for _, day := range result.Daily {
+			out = append(out, day.Date)
+		}
+		return out
+	}
+	assert.Equal(t, wantDates, dates(got), "zone %s", location)
+	assert.Equal(t, dates(sqlite), dates(got), "DuckDB and SQLite must agree")
+	assert.Equal(t, 2, got.Totals.InputTokens)
+	assert.Equal(t, 4, got.Totals.OutputTokens)
 }
 
 func TestDailyUsageActiveSinceUsesSessionActivity(t *testing.T) {
