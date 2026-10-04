@@ -132,12 +132,12 @@ export class MessagesStore {
         console.warn("Failed to fetch session metadata:", err);
       }
 
-      if (countHint !== null && countHint > FULL_SESSION_MESSAGE_THRESHOLD) {
-        await this.loadProgressively(id, ac.signal);
-      } else {
-        await this.loadAllMessages(id, ac.signal, countHint ?? undefined);
-      }
-      if (this.sessionId === id) {
+      const landed =
+        countHint !== null && countHint > FULL_SESSION_MESSAGE_THRESHOLD
+          ? await this.loadProgressively(id, ac.signal)
+          : await this.loadAllMessages(id, ac.signal, countHint ?? undefined);
+      // A load a reload overtook leaves the newer read-progress token in place.
+      if (landed && this.sessionId === id) {
         this.publishOrDeferSessionToken(
           pendingToken,
           null,
@@ -316,7 +316,12 @@ export class MessagesStore {
     return { messages: loaded, revision: revision ?? "" };
   }
 
-  private async loadAllMessages(id: string, signal: AbortSignal, messageCountHint?: number) {
+  /** Load from the first message; false when the session changed or a later load overtook this one. */
+  private async loadAllMessages(
+    id: string,
+    signal: AbortSignal,
+    messageCountHint?: number,
+  ): Promise<boolean> {
     for (let attempt = 1; ; attempt++) {
       try {
         return await this.loadAllMessagesOnce(id, signal, messageCountHint);
@@ -327,7 +332,11 @@ export class MessagesStore {
     }
   }
 
-  private async loadAllMessagesOnce(id: string, signal: AbortSignal, messageCountHint?: number) {
+  private async loadAllMessagesOnce(
+    id: string,
+    signal: AbortSignal,
+    messageCountHint?: number,
+  ): Promise<boolean> {
     this.historyComplete = false;
     let from = 0;
     let loaded: Message[] = [];
@@ -342,17 +351,17 @@ export class MessagesStore {
         signal,
         revision,
       );
-      if (this.sessionId !== id) return;
+      if (this.sessionId !== id) return false;
       revision ??= res.revision;
       if (loaded.length === 0) {
         // A load that started later already replaced the window.
-        if (ticket < this.windowTicket) return;
+        if (ticket < this.windowTicket) return false;
         this.windowTicket = ticket;
         // Rows already parsed may come back rewritten under the same IDs and lengths.
         clearContentCaches();
       } else if (this.windowTicket !== ticket) {
         // A newer revision replaced the window while this page was in flight.
-        return;
+        return false;
       }
       if (res.messages.length === 0) {
         if (loaded.length === 0) {
@@ -385,13 +394,15 @@ export class MessagesStore {
     }
 
     const newest = this.messages[this.messages.length - 1];
-    if (this.sessionId !== id) return;
+    if (this.sessionId !== id) return false;
     this.messageCount = messageCountHint ?? (newest ? newest.ordinal + 1 : this.messages.length);
     this.hasOlder = false;
     this.historyComplete = complete;
+    return true;
   }
 
-  private async loadProgressively(id: string, signal: AbortSignal) {
+  /** Load the newest page; false when the session changed or a later load overtook this one. */
+  private async loadProgressively(id: string, signal: AbortSignal): Promise<boolean> {
     const ticket = ++this.loadTicket;
     const firstRes = await this.fetchMessagePage(
       id,
@@ -400,7 +411,7 @@ export class MessagesStore {
       null,
     );
     // A load that started later already replaced the window.
-    if (this.sessionId !== id || ticket < this.windowTicket) return;
+    if (this.sessionId !== id || ticket < this.windowTicket) return false;
     this.windowTicket = ticket;
 
     // Rows parsed while this page was in flight may come back rewritten under the same IDs and lengths.
@@ -413,6 +424,7 @@ export class MessagesStore {
     const oldest = this.messages[0]?.ordinal;
     this.hasOlder = oldest !== undefined ? oldest > 0 : false;
     this.historyComplete = !this.hasOlder;
+    return true;
   }
 
   /** Refresh from `from` onward; false when the transcript returned no rows there. */

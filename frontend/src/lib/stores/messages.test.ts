@@ -1073,7 +1073,9 @@ describe("MessagesStore", () => {
     });
 
     it("ignores a delayed first page that a reload overtook", async () => {
-      vi.mocked(api.getSession).mockResolvedValue(makeSession("s1", 3));
+      vi.mocked(api.getSession)
+        .mockResolvedValueOnce({ ...makeSession("s1", 3), transcript_revision: "r1" })
+        .mockResolvedValue({ ...makeSession("s1", 3), transcript_revision: "r2" });
       const first = createDeferred<MessagesResponse>();
       vi.mocked(api.getMessages).mockReturnValueOnce(
         first.promise as ReturnType<typeof api.getMessages>,
@@ -1085,11 +1087,15 @@ describe("MessagesStore", () => {
       vi.mocked(api.getMessages).mockResolvedValueOnce(page([0, 1, 2], "r2", "new"));
       await messages.reload();
       expect(messages.loadedRevision).toBe("r2");
+      const tokenAfterReload = messages.activeSessionToken;
+      expect(tokenAfterReload).toBe("r2");
 
       first.resolve(page([0, 1, 2], "r1", "old"));
       await load;
       expect(messages.loadedRevision).toBe("r2");
       expect(messages.messages.every((message) => message.content.startsWith("new"))).toBe(true);
+      // The overtaken load keeps its stale read-progress token to itself.
+      expect(messages.activeSessionToken).toBe(tokenAfterReload);
     });
 
     it("replaces the window rather than merging rows from a new revision", async () => {
