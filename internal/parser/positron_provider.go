@@ -596,6 +596,9 @@ func positronWorkspaceProject(root, hash string) string {
 
 func positronProviderCapabilities() Capabilities {
 	return Capabilities{
+		Sync: ProviderSyncSemantics{
+			FingerprintHashRequiredForFreshness: true,
+		},
 		Source: SourceCapabilities{
 			DiscoverSources:      CapabilitySupported,
 			StreamingDiscovery:   CapabilitySupported,

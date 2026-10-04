@@ -58,6 +58,9 @@ func TestProviderSyncSemanticsDeclarations(t *testing.T) {
 		AgentGemini: {
 			FingerprintHashRequiredForFreshness: true,
 		},
+		AgentPositron: {
+			FingerprintHashRequiredForFreshness: true,
+		},
 		AgentJunie: {
 			FingerprintHashInCacheKey:           true,
 			FingerprintHashRequiredForFreshness: true,

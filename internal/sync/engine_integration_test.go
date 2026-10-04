@@ -13125,6 +13125,9 @@ func TestSyncAllSincePositronWorkspaceMetadataRefreshesProject(t *testing.T) {
 		t, jsonlPath,
 		[]byte(`{"kind":0,"v":`+session+`}`),
 	)
+	initialTime := time.Now().Add(-time.Minute).Truncate(time.Second)
+	require.NoError(t, os.Chtimes(jsonlPath, initialTime, initialTime))
+	require.NoError(t, os.Chtimes(workspacePath, initialTime, initialTime))
 
 	engine.SyncAll(t.Context(), nil)
 	assertSessionState(
@@ -13140,6 +13143,8 @@ func TestSyncAllSincePositronWorkspaceMetadataRefreshesProject(t *testing.T) {
 	cutoff := time.Now().Add(-1 * time.Hour)
 
 	writeWorkspace("two")
+	// Equal composite size and mtime must still expose changed workspace content.
+	require.NoError(t, os.Chtimes(workspacePath, initialTime, initialTime))
 	stats := engine.SyncAllSince(t.Context(), cutoff, nil)
 	assert.Equal(t, 1, stats.Synced, "synced = %d, want 1", stats.Synced)
 
@@ -15045,12 +15050,22 @@ func TestSyncPathsCodexSameStatInPlaceRewriteRejectedByCheckpoint(t *testing.T) 
 	beforeHash := *before.FileHash
 	beforeInfo, err := os.Stat(path)
 	require.NoError(t, err)
+	beforeChangeTime, ok := sync.FileChangeTime(path, beforeInfo)
+	require.True(t, ok)
 	env.engine.InjectSkipCache(map[string]int64{
 		path: beforeInfo.ModTime().UnixNano(),
 	})
 
 	require.NoError(t, os.WriteFile(path, []byte(rewritten), 0o644))
-	require.NoError(t, os.Chtimes(path, beforeInfo.ModTime(), beforeInfo.ModTime()))
+	// Establish a distinct change time even when Windows writes share a clock tick.
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		require.NoError(c, os.Chtimes(path, beforeInfo.ModTime(), beforeInfo.ModTime()))
+		info, err := os.Stat(path)
+		require.NoError(c, err)
+		changeTime, ok := sync.FileChangeTime(path, info)
+		require.True(c, ok)
+		assert.NotEqual(c, beforeChangeTime, changeTime)
+	}, 2*time.Second, time.Millisecond)
 	afterInfo, err := os.Stat(path)
 	require.NoError(t, err)
 	require.Equal(t, beforeInfo.Size(), afterInfo.Size(), "rewrite must keep file size")
