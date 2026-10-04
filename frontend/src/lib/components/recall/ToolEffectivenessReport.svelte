@@ -201,6 +201,10 @@
         currentLabel: formatCount(facts.total_tool_calls),
       });
     }
+    // The sequences name their own revision, so a mismatch shows even when the session read fails.
+    if (report.transcript_revision && facts?.transcript_revision && facts.transcript_revision !== report.transcript_revision) {
+      return m.tool_effectiveness_session_revised();
+    }
     const current = session?.transcript_revision;
     if (report.transcript_revision && session && (current ?? "") !== report.transcript_revision) {
       return m.tool_effectiveness_session_revised();
