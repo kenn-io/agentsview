@@ -27,7 +27,7 @@ vi.mock("../../api/generated/index", async (importOriginal) => {
 function makeFacts(totalToolCalls: number): SessionToolSequencesResponse {
   return {
     session_id: "s1",
-    transcript_revision: "revision-1",
+    transcript_revision: "rev-1",
     total_tool_calls: totalToolCalls,
     total_sequences: 1,
     omitted_sequences: 0,
@@ -443,6 +443,21 @@ describe("ToolEffectivenessReport", () => {
     await settle();
 
     expect(getSession).toHaveBeenCalledWith({ id: "s1" }, expect.anything());
+    expect(
+      document.querySelector("[data-testid=tool-effectiveness-session-changed]")?.textContent,
+    ).toContain("The session changed after this report was generated");
+    unmount(component);
+  });
+
+  it("notes a revised transcript from the sequences when the session read fails", async () => {
+    getToolSequences.mockResolvedValue({ ...makeFacts(3), transcript_revision: "rev-2" });
+    getSession.mockRejectedValue(new Error("offline"));
+    const component = mount(ToolEffectivenessReport, {
+      target: document.body,
+      props: { insight: makeInsight() },
+    });
+    await settle();
+
     expect(
       document.querySelector("[data-testid=tool-effectiveness-session-changed]")?.textContent,
     ).toContain("The session changed after this report was generated");
