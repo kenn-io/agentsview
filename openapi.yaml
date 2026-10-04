@@ -6959,8 +6959,11 @@ components:
         total_tool_calls:
           format: int64
           type: integer
+        transcript_revision:
+          type: string
       required:
         - session_id
+        - transcript_revision
         - total_tool_calls
         - total_sequences
         - omitted_sequences

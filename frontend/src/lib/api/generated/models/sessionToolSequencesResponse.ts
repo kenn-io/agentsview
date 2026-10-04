@@ -11,4 +11,5 @@ export interface SessionToolSequencesResponse {
   total_sequence_calls: number;
   total_sequences: number;
   total_tool_calls: number;
+  transcript_revision: string;
 }

@@ -21431,6 +21431,7 @@ type SessionToolSequencesResponse struct {
 	TotalSequenceCalls int64                 `json:"total_sequence_calls"`
 	TotalSequences     int64                 `json:"total_sequences"`
 	TotalToolCalls     int64                 `json:"total_tool_calls"`
+	TranscriptRevision string                `json:"transcript_revision" validate:"required"`
 }
 
 func (s SessionToolSequencesResponse) Validate() error {
@@ -21444,6 +21445,9 @@ func (s SessionToolSequencesResponse) Validate() error {
 	}
 	if err := typesValidator.Var(s.SessionID, "required"); err != nil {
 		errors = errors.Append("SessionID", err)
+	}
+	if err := typesValidator.Var(s.TranscriptRevision, "required"); err != nil {
+		errors = errors.Append("TranscriptRevision", err)
 	}
 	if len(errors) == 0 {
 		return nil

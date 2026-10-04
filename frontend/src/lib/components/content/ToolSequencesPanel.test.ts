@@ -50,6 +50,7 @@ function makeData(
 ): SessionToolSequencesResponse {
   return {
     session_id: "session-a",
+    transcript_revision: "revision-1",
     total_tool_calls: 1,
     total_sequences: 1,
     omitted_sequences: 0,

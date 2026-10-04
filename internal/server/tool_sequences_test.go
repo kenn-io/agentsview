@@ -28,6 +28,7 @@ import (
 
 type sessionToolSequencesResponse struct {
 	SessionID          string                `json:"session_id"`
+	TranscriptRevision string                `json:"transcript_revision"`
 	TotalToolCalls     int                   `json:"total_tool_calls"`
 	TotalSequences     int                   `json:"total_sequences"`
 	OmittedSequences   int                   `json:"omitted_sequences"`
@@ -74,6 +75,10 @@ func TestHandleToolSequences_Example(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	got := decode[sessionToolSequencesResponse](t, w)
 	assert.Equal(t, sessionID, got.SessionID)
+	stored, err := te.db.GetSession(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, stored.TranscriptRevision)
+	assert.Equal(t, *stored.TranscriptRevision, got.TranscriptRevision)
 	assert.Equal(t, 3, got.TotalToolCalls)
 	assert.Equal(t, 1, got.TotalSequences)
 	assert.Zero(t, got.OmittedSequences)

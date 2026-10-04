@@ -177,9 +177,11 @@ async function expandedSequenceText(): Promise<string> {
 function makeToolSequences(
   duration: number | null,
   sessionId = "run:123456789abcdef",
+  transcriptRevision = "",
 ): SessionToolSequencesResponse {
   return {
     session_id: sessionId,
+    transcript_revision: transcriptRevision,
     total_tool_calls: 1,
     total_sequences: 1,
     omitted_sequences: 0,
@@ -2151,8 +2153,8 @@ describe("SessionBreadcrumb", () => {
         termination_status: "clean",
       });
       sessionsService.getApiV1SessionsByIdToolSequences
-        .mockResolvedValueOnce(makeToolSequences(null))
-        .mockResolvedValueOnce(makeToolSequences(0));
+        .mockResolvedValueOnce(makeToolSequences(null, undefined, "revision-1"))
+        .mockResolvedValueOnce(makeToolSequences(0, undefined, "revision-1"));
       const component = createClassComponent({
         component: SessionBreadcrumb,
         target: document.body,
@@ -2179,11 +2181,11 @@ describe("SessionBreadcrumb", () => {
 
     it("refetches on session changes only while a delegated call waits for its child", async () => {
       const session = makeSession("claude", { transcript_revision: "revision-1" });
-      const waiting = makeToolSequences(null);
+      const waiting = makeToolSequences(null, undefined, "revision-1");
       waiting.sequences[0]!.calls[0]!.awaiting_subagent = true;
       sessionsService.getApiV1SessionsByIdToolSequences
         .mockResolvedValueOnce(waiting)
-        .mockResolvedValueOnce(makeToolSequences(2000));
+        .mockResolvedValueOnce(makeToolSequences(2000, undefined, "revision-1"));
       ui.signalPanelOpen = true;
       const component = createClassComponent({
         component: SessionBreadcrumb,
@@ -2208,11 +2210,11 @@ describe("SessionBreadcrumb", () => {
 
     it("reads a new transcript revision once after a read that waited on a child", async () => {
       const session = makeSession("claude", { transcript_revision: "revision-1" });
-      const waiting = makeToolSequences(null);
+      const waiting = makeToolSequences(null, undefined, "revision-1");
       waiting.sequences[0]!.calls[0]!.awaiting_subagent = true;
       sessionsService.getApiV1SessionsByIdToolSequences
         .mockResolvedValueOnce(waiting)
-        .mockResolvedValueOnce(makeToolSequences(2000));
+        .mockResolvedValueOnce(makeToolSequences(2000, undefined, "revision-2"));
       ui.signalPanelOpen = true;
       const component = createClassComponent({
         component: SessionBreadcrumb,
@@ -2236,7 +2238,7 @@ describe("SessionBreadcrumb", () => {
         termination_status: "clean",
       });
       sessionsService.getApiV1SessionsByIdToolSequences
-        .mockResolvedValueOnce(makeToolSequences(2000))
+        .mockResolvedValueOnce(makeToolSequences(2000, undefined, "revision-1"))
         .mockReturnValueOnce(refresh.promise);
       ui.signalPanelOpen = true;
       const component = createClassComponent({
@@ -2273,7 +2275,7 @@ describe("SessionBreadcrumb", () => {
       expect(scrollToOrdinal).toHaveBeenCalledWith(3, session.id);
       scrollToOrdinal.mockRestore();
 
-      refresh.resolve(makeToolSequences(4000));
+      refresh.resolve(makeToolSequences(4000, undefined, "revision-1"));
       await vi.waitFor(() => {
         expect(document.querySelector(".tool-sequences-panel")?.getAttribute("aria-busy")).toBe(
           "false",
@@ -2289,11 +2291,11 @@ describe("SessionBreadcrumb", () => {
       async (revision) => {
         const refresh = deferred<SessionToolSequencesResponse>();
         const session = makeSession("claude", { transcript_revision: "revision-1" });
-        const replacement = makeToolSequences(4000);
+        const replacement = makeToolSequences(4000, undefined, revision ?? "");
         replacement.sequences[0]!.calls[0]!.ordinal = 7;
         replacement.sequences[0]!.calls[0]!.result_preview = "Replacement result";
         sessionsService.getApiV1SessionsByIdToolSequences
-          .mockResolvedValueOnce(makeToolSequences(2000))
+          .mockResolvedValueOnce(makeToolSequences(2000, undefined, "revision-1"))
           .mockReturnValueOnce(refresh.promise);
         ui.signalPanelOpen = true;
         const component = createClassComponent({
@@ -2335,13 +2337,44 @@ describe("SessionBreadcrumb", () => {
       },
     );
 
+    it("holds sequences read from a newer transcript until the session catches up", async () => {
+      const session = makeSession("claude", { transcript_revision: "revision-1" });
+      const newer = makeToolSequences(2000, undefined, "revision-2");
+      newer.sequences[0]!.calls[0]!.ordinal = 7;
+      sessions.activeSessionId = session.id;
+      const refreshActiveSession = vi.spyOn(sessions, "refreshActiveSession").mockResolvedValue();
+      sessionsService.getApiV1SessionsByIdToolSequences
+        .mockResolvedValueOnce(newer)
+        .mockResolvedValueOnce(newer);
+      ui.signalPanelOpen = true;
+      const component = createClassComponent({
+        component: SessionBreadcrumb,
+        target: document.body,
+        props: { session, onBack: () => {} },
+      });
+      await flushPromises();
+      expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(1);
+      expect(document.querySelector(".tool-sequences-panel")?.getAttribute("aria-busy")).toBe("true");
+      expect(document.querySelector(".tool-sequences-panel .sequence-row")).toBeNull();
+      expect(refreshActiveSession).toHaveBeenCalledOnce();
+      refreshActiveSession.mockRestore();
+
+      component.$set({ session: { ...session, transcript_revision: "revision-2" } });
+      await vi.waitFor(async () => expect(await expandedSequenceText()).toContain("2.0s"));
+      expect(
+        document.querySelector('a[aria-label="Message 7: open the Grep call in the transcript"]'),
+      ).not.toBeNull();
+      expect(document.querySelector(".tool-sequences-panel")?.getAttribute("aria-busy")).toBe("false");
+      component.$destroy();
+    });
+
     it("ignores a superseded tool-sequence response for the same session", async () => {
       const revision2 = deferred<SessionToolSequencesResponse>();
-      const revision3 = makeToolSequences(6000);
+      const revision3 = makeToolSequences(6000, undefined, "revision-3");
       revision3.sequences[0]!.calls[0]!.ordinal = 9;
       const session = makeSession("claude", { transcript_revision: "revision-1" });
       sessionsService.getApiV1SessionsByIdToolSequences
-        .mockResolvedValueOnce(makeToolSequences(2000))
+        .mockResolvedValueOnce(makeToolSequences(2000, undefined, "revision-1"))
         .mockReturnValueOnce(revision2.promise)
         .mockResolvedValueOnce(revision3);
       ui.signalPanelOpen = true;
@@ -2357,7 +2390,7 @@ describe("SessionBreadcrumb", () => {
       component.$set({ session: { ...session, transcript_revision: "revision-3" } });
       await vi.waitFor(async () => expect(await expandedSequenceText()).toContain("6.0s"));
 
-      revision2.resolve(makeToolSequences(10000));
+      revision2.resolve(makeToolSequences(10000, undefined, "revision-2"));
       await flushPromises();
       expect(document.body.textContent).toContain("6.0s");
       expect(document.body.textContent).not.toContain("10.0s");
@@ -2373,9 +2406,9 @@ describe("SessionBreadcrumb", () => {
     it("refreshes tool sequences when the transcript revision or termination status changes", async () => {
       ui.signalPanelOpen = true;
       sessionsService.getApiV1SessionsByIdToolSequences
-        .mockResolvedValueOnce(makeToolSequences(2000))
-        .mockResolvedValueOnce(makeToolSequences(4000))
-        .mockResolvedValueOnce(makeToolSequences(6000));
+        .mockResolvedValueOnce(makeToolSequences(2000, undefined, "revision-1"))
+        .mockResolvedValueOnce(makeToolSequences(4000, undefined, "revision-2"))
+        .mockResolvedValueOnce(makeToolSequences(6000, undefined, "revision-2"));
       const component = createClassComponent({
         component: SessionBreadcrumb,
         target: document.body,

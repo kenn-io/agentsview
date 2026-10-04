@@ -409,14 +409,16 @@
       .then((response) => {
         // Settle the read before writing state the effect tracks, since that rerun cancels the read.
         if (!toolSequencesRead.finish(signal)) return;
-        toolSequencesLoading = false;
+        // A sync can land between reading the session and reading its sequences; the panel waits for the session to catch up rather than link into the wrong transcript.
+        toolSequencesLoading = response.transcript_revision !== revision;
+        if (toolSequencesLoading && sessions.activeSessionId === id) void sessions.refreshActiveSession();
         const awaiting = response.sequences.some((sequence) =>
           sequence.calls.some((call) => call.awaiting_subagent),
         );
         toolSequencesLoadedIdentity = awaiting ? `${base}\n${usageVersion}` : base;
         toolSequencesAwaitingBase = awaiting ? base : "";
         toolSequencesData = response;
-        toolSequencesRevision = revision;
+        toolSequencesRevision = response.transcript_revision;
       })
       .catch((error) => {
         if (isAbortError(error) || !toolSequencesRead.finish(signal)) return;

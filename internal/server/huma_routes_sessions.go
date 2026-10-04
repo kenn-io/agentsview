@@ -446,6 +446,7 @@ const (
 
 type sessionToolSequencesResponse struct {
 	SessionID          string                `json:"session_id"`
+	TranscriptRevision string                `json:"transcript_revision"`
 	TotalToolCalls     int                   `json:"total_tool_calls"`
 	TotalSequences     int                   `json:"total_sequences"`
 	OmittedSequences   int                   `json:"omitted_sequences"`
@@ -519,6 +520,8 @@ func collectSessionToolSequences(ctx context.Context, store db.Store, id string)
 		return nil, err
 	}
 	response := buildSessionToolSequences(session, ingest.ExtractToolCallRows(messages), timing)
+	// The checked read guarantees a revision; returning it lets the client tell these sequences from the transcript it shows.
+	response.TranscriptRevision = *session.TranscriptRevision
 	return &response, nil
 }
 
