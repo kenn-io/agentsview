@@ -528,6 +528,9 @@ export class MessagesStore {
       // The transcript moved underneath this read; catch the window up and try again.
       if (outcome === "reload") await this.reload();
       if (this.sessionId !== id || signal.aborted || this.historyComplete) return;
+      // The reload may have dropped back to the newest page, so the prefix needs loading again first.
+      if (this.hasOlder) await this.doEnsureOrdinal(id, 0);
+      if (this.sessionId !== id || signal.aborted || this.historyComplete) return;
     }
   }
 

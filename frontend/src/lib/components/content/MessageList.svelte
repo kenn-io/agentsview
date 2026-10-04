@@ -533,7 +533,9 @@
       const idx = ui.sortNewestFirst
         ? displayItemsAsc.length - 1 - idxAsc
         : idxAsc;
-      scrollToDisplayIndex(idx, 0, 0, reqId, "start", sameRevision);
+      void scrollToDisplayIndex(idx, 0, 0, reqId, "start", sameRevision).then(() => {
+        if (reqId === lastScrollRequest && !sameRevision()) abandon();
+      });
       return;
     }
 
@@ -557,7 +559,9 @@
     const loadedIdx = ui.sortNewestFirst
       ? displayItemsAsc.length - 1 - loadedIdxAsc
       : loadedIdxAsc;
-    scrollToDisplayIndex(loadedIdx, 0, 0, reqId, "start", sameRevision);
+    void scrollToDisplayIndex(loadedIdx, 0, 0, reqId, "start", sameRevision).then(() => {
+      if (reqId === lastScrollRequest && !sameRevision()) abandon();
+    });
   }
 
   export function scrollToOrdinal(ordinal: number, revision?: string) {

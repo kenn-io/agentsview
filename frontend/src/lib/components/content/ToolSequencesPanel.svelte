@@ -169,7 +169,9 @@
   }
 
   function jumpHref(call: SessionToolSequenceCall): string {
-    return router.buildSessionHref(sessionId, { msg: String(call.ordinal) });
+    // The revision rides along so a link opened in another tab is checked against the transcript it loads.
+    const rev = data?.transcript_revision;
+    return router.buildSessionHref(sessionId, { msg: String(call.ordinal), ...(rev ? { rev } : {}) });
   }
 
   function jumpToCall(event: MouseEvent, call: SessionToolSequenceCall) {

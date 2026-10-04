@@ -217,6 +217,7 @@ describe("ToolSequencesPanel", () => {
     expect(link).not.toBeNull();
     expect(link!.textContent).toContain("Message 20");
     expect(link!.getAttribute("href")).toContain("msg=20");
+    expect(link!.getAttribute("href")).toContain("rev=revision-1");
     expect(link!.closest("button")).toBeNull();
     link!.click();
     expect(jump).toHaveBeenCalledWith(20, "session-a", "revision-1");
