@@ -57,7 +57,6 @@ function makeFacts(totalToolCalls: number): SessionToolSequencesResponse {
             result_bytes: 16,
             result_omitted_bytes: 0,
             result_content_unknown: false,
-            awaiting_subagent: false,
           },
         ],
       },
@@ -296,11 +295,32 @@ describe("ToolEffectivenessReport", () => {
     const event = new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 });
     link.dispatchEvent(event);
     expect(event.defaultPrevented).toBe(true);
-    expect(scroll).toHaveBeenCalledWith(3, "s1");
+    expect(scroll).toHaveBeenCalledWith(3, "s1", undefined);
     expect(navigate).toHaveBeenCalledWith("s1", { msg: "3" });
 
     scroll.mockRestore();
     navigate.mockRestore();
+    unmount(component);
+  });
+
+  it("shows each observed call's duration from the session's timing", async () => {
+    getTiming.mockResolvedValue({
+      session_id: "s1",
+      turns: [{ ordinal: 1, calls: [{ tool_use_id: "g1", duration_ms: 1500 }] }],
+    });
+    const component = mount(ToolEffectivenessReport, {
+      target: document.body,
+      props: { insight: makeInsight() },
+    });
+    await settle();
+    await settle();
+
+    expect(getTiming).toHaveBeenCalledWith({ id: "s1" }, expect.anything());
+    document.querySelector<HTMLButtonElement>(".tool-sequences-panel .sequence-row")!.click();
+    flushSync();
+    const row = document.querySelector(".tool-sequences-panel .call")!;
+    expect(row.querySelector(".dur")?.textContent).toBe("1.5s");
+    expect(row.querySelector("a.jump")).not.toBeNull();
     unmount(component);
   });
 
