@@ -118,7 +118,7 @@
 
   let messageListRef:
     | {
-        scrollToOrdinal: (o: number) => void;
+        scrollToOrdinal: (o: number, revision?: string) => void;
         getDisplayItems: () => DisplayItem[];
         getNormalDisplayItems: () => DisplayItem[];
       }
@@ -268,12 +268,19 @@
         }
       }
 
-      messageListRef.scrollToOrdinal(ordinal);
+      const revision = ui.pendingScrollRevision;
+      ui.pendingScrollOrdinal = null;
+      ui.pendingScrollSession = null;
+      ui.pendingScrollRevision = null;
+      // A jump made for another transcript revision could name a different message here.
+      if (revision !== null && messages.loadedRevision !== revision) {
+        ui.selectedOrdinal = null;
+        return;
+      }
+      messageListRef.scrollToOrdinal(ordinal, revision ?? undefined);
       // Ensure highlight is set (the session-change effect
       // may have cleared it before this effect ran).
       ui.selectedOrdinal = ordinal;
-      ui.pendingScrollOrdinal = null;
-      ui.pendingScrollSession = null;
     });
   });
 
@@ -611,6 +618,7 @@
   $effect(() => {
     const sid = router.sessionId;
     const msgParam = router.params["msg"] ?? null;
+    const revParam = router.params["rev"] || undefined;
     untrack(() => {
       if (!sid || !msgParam) return;
       if (msgParam === "last") {
@@ -619,7 +627,7 @@
       } else {
         const ordinal = parseInt(msgParam, 10);
         if (Number.isFinite(ordinal)) {
-          ui.scrollToOrdinal(ordinal, sid);
+          ui.scrollToOrdinal(ordinal, sid, revParam);
         }
       }
     });

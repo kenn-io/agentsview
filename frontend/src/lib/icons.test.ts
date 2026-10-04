@@ -37,6 +37,7 @@ const approvedIconNames = [
   "FunnelIcon",
   "GlobeIcon",
   "Grid2x2Icon",
+  "InfoIcon",
   "LayoutGridIcon",
   "LayoutListIcon",
   "LightbulbIcon",
@@ -68,6 +69,7 @@ const approvedIconNames = [
   "UserRoundIcon",
   "UsersRoundIcon",
   "WholeWordIcon",
+  "WorkflowIcon",
   "XIcon",
 ] as const;
 

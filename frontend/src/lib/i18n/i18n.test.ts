@@ -255,6 +255,10 @@ describe("i18n locale selection", () => {
     expect(m.tool_call_group_call_count({ count: 3 })).toBe("3 appels d'outil");
     expect(m.subagent_inline_message_count({ count: 1 })).toBe("1 message");
     expect(m.subagent_inline_message_count({ count: 5 })).toBe("5 messages");
+    // CLDR puts exact millions in `many` for French and Spanish.
+    expect(m.tool_sequences_byte_count({ count: 1_000_000, countLabel: "1 000 000" })).toBe(
+      "1 000 000 octets",
+    );
 
     // Spanish has one/other like English, and CLDR puts 0 in `other`, so zero
     // takes the plural form unlike French.
@@ -264,6 +268,9 @@ describe("i18n locale selection", () => {
     expect(m.tool_call_group_call_count({ count: 3 })).toBe("3 llamadas a herramienta");
     expect(m.subagent_inline_message_count({ count: 1 })).toBe("1 mensaje");
     expect(m.subagent_inline_message_count({ count: 5 })).toBe("5 mensajes");
+    expect(m.tool_sequences_byte_count({ count: 1_000_000, countLabel: "1.000.000" })).toBe(
+      "1.000.000 bytes",
+    );
   });
 
   it("formats dates with the active Paraglide locale", () => {

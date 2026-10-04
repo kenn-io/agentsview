@@ -6825,6 +6825,143 @@ components:
         - homes_supported
         - homes
       type: object
+    SessionToolSequence:
+      additionalProperties: false
+      properties:
+        calls:
+          items:
+            $ref: "#/components/schemas/SessionToolSequenceCall"
+          type: array
+        ending:
+          enum:
+            - recovered
+            - abandoned
+            - open
+            - unknown
+          type: string
+        identical:
+          type: boolean
+        near_identical:
+          type: boolean
+        omitted_calls:
+          format: int64
+          type: integer
+        tool_changed:
+          type: boolean
+        total_calls:
+          format: int64
+          type: integer
+      required:
+        - ending
+        - identical
+        - near_identical
+        - tool_changed
+        - total_calls
+        - omitted_calls
+        - calls
+      type: object
+    SessionToolSequenceCall:
+      additionalProperties: false
+      properties:
+        call_index:
+          format: int64
+          type: integer
+        input_bytes:
+          format: int64
+          type: integer
+        input_omitted_bytes:
+          format: int64
+          type: integer
+        input_preview:
+          type: string
+        ordinal:
+          format: int64
+          type: integer
+        outcome:
+          enum:
+            - errored
+            - empty
+            - content
+            - unknown
+          type: string
+        repeat:
+          enum:
+            - none
+            - identical
+            - near_identical
+          type: string
+        result_bytes:
+          format: int64
+          type:
+            - integer
+            - "null"
+        result_content_unknown:
+          type: boolean
+        result_omitted_bytes:
+          format: int64
+          type:
+            - integer
+            - "null"
+        result_preview:
+          type: string
+        tool_changed:
+          type: boolean
+        tool_name:
+          type: string
+        tool_use_id:
+          type: string
+      required:
+        - ordinal
+        - call_index
+        - tool_use_id
+        - tool_name
+        - outcome
+        - repeat
+        - tool_changed
+        - input_preview
+        - input_bytes
+        - input_omitted_bytes
+        - result_preview
+        - result_bytes
+        - result_omitted_bytes
+        - result_content_unknown
+      type: object
+    SessionToolSequencesResponse:
+      additionalProperties: false
+      properties:
+        omitted_calls:
+          format: int64
+          type: integer
+        omitted_sequences:
+          format: int64
+          type: integer
+        sequences:
+          items:
+            $ref: "#/components/schemas/SessionToolSequence"
+          type: array
+        session_id:
+          type: string
+        total_sequence_calls:
+          format: int64
+          type: integer
+        total_sequences:
+          format: int64
+          type: integer
+        total_tool_calls:
+          format: int64
+          type: integer
+        transcript_revision:
+          type: string
+      required:
+        - session_id
+        - transcript_revision
+        - total_tool_calls
+        - total_sequences
+        - omitted_sequences
+        - total_sequence_calls
+        - omitted_calls
+        - sequences
+      type: object
     SessionUsageBreakdownResponse:
       additionalProperties: false
       properties:
@@ -20196,6 +20333,93 @@ paths:
                 $ref: "#/components/schemas/ApiErrorResponse"
           description: Gateway Timeout
       summary: List session tool calls
+      tags:
+        - Sessions
+  /api/v1/sessions/{id}/tool-sequences:
+    get:
+      operationId: get-api-v1-sessions-id-tool-sequences
+      parameters:
+        - description: Session ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Session ID
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionToolSequencesResponse"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Get session tool sequences
       tags:
         - Sessions
   /api/v1/sessions/{id}/usage:

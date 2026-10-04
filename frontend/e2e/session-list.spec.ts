@@ -2,7 +2,11 @@ import { createRequire } from "node:module";
 import { test, expect } from "@playwright/test";
 import { SessionsPage } from "./pages/sessions-page";
 import { clickNavTab } from "./helpers/nav";
-import { createMockSessions, handleSessionsRoute, sessionsRoutePattern } from "./helpers/mock-sessions";
+import {
+  createMockSessions,
+  handleSessionsRoute,
+  sessionsRoutePattern,
+} from "./helpers/mock-sessions";
 
 type RenderLintModule = {
   renderLintSnippet: (scopeSelector: string, options?: Record<string, unknown>) => string;
@@ -10,16 +14,13 @@ type RenderLintModule = {
 
 const require = createRequire(import.meta.url);
 const renderLintPath = process.env.PR_RENDER_LINT_PATH;
-const renderLint = renderLintPath
-  ? (require(renderLintPath) as RenderLintModule)
-  : undefined;
+const renderLint = renderLintPath ? (require(renderLintPath) as RenderLintModule) : undefined;
 
-// Test-fixture assumptions: project-alpha has 2 sessions,
-// project-beta has 3, project-duration has 1 (the duration UX
-// showcase), project-edits has 1 (the recent-edits fixture), and the
-// project-reclassification fixture has 2, totalling 12 sessions.
-const TOTAL_SESSIONS = 12;
-const ALPHA_SESSIONS = 2;
+// Test-fixture assumptions: project-alpha has 3 sessions (including the
+// tool-sequences fixture), project-beta has 3, project-duration has 1,
+// project-edits has 1, and project-reclassification has 2, totalling 13.
+const TOTAL_SESSIONS = 13;
+const ALPHA_SESSIONS = 3;
 const BETA_SESSIONS = 3;
 const SLOW_SESSION_RESPONSE_MS = 5_500;
 
@@ -47,7 +48,10 @@ test("session previews hide a leading system-reminder envelope", async ({ page }
     first_message:
       '<system-reminder data-role="user-context">ctx</system-reminder>\nrefactor the auth guard',
   };
-  await page.route(sessionsRoutePattern, handleSessionsRoute([{ sessions: [session], project: null }]));
+  await page.route(
+    sessionsRoutePattern,
+    handleSessionsRoute([{ sessions: [session], project: null }]),
+  );
   await page.route("**/api/v1/projects*", (route) =>
     route.fulfill({ json: { projects: [{ name: "project-preview", session_count: 1 }] } }),
   );

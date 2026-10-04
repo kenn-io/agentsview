@@ -15,8 +15,9 @@
     SquareTerminalIcon,
     TriangleAlertIcon,
   } from "../../icons.js";
-  import { onDestroy, onMount } from "svelte";
+  import { onDestroy, onMount, untrack } from "svelte";
   import type { Session } from "../../api/types.js";
+  import type { SessionToolSequencesResponse } from "../../api/generated/index.js";
   import {
     OpenersService,
     SessionsService,
@@ -25,6 +26,7 @@
     type ResumeResponse,
   } from "../../api/generated/index";
   import {
+    ApiError,
     isAbortError,
   } from "../../api/runtime.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
@@ -39,6 +41,7 @@
   import { normalizeMessagePreview } from "../../utils/messages.js";
   import { getGradeStyle, getGradeLabel } from "../../utils/grade.js";
   import SignalPanel from "../content/SignalPanel.svelte";
+  import ToolSequencesPanel from "../content/ToolSequencesPanel.svelte";
   import SessionFilterControl from "../filters/SessionFilterControl.svelte";
   import SidebarToggleButton from "./SidebarToggleButton.svelte";
   import { sessions } from "../../stores/sessions.svelte.js";
@@ -55,6 +58,7 @@
 
   import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
   import { messages as messagesStore } from "../../stores/messages.svelte.js";
+  import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
   import { formatModelEffort } from "../../utils/model.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { m } from "../../i18n/index.js";
@@ -78,10 +82,18 @@
   let openFeedbackKind = $state<"success" | "error">("success");
   let feedbackTimer: ReturnType<typeof setTimeout> | undefined;
   let sessionDir = $state<string | null>(null);
+  let toolSequencesData = $state<SessionToolSequencesResponse | null>(null);
+  let toolSequencesLoading = $state(false);
+  let toolSequencesFailed = $state(false);
+  let toolSequencesUnavailable = $state(false);
+  let toolSequencesRetry = $state(0);
+  // The session, loaded message revision and end state the current or last read was for.
+  let toolSequencesIdentity = "";
   const openersRead = new LatestRead();
   const directoryRead = new LatestRead();
   const costRead = new LatestRead();
   const breakdownRead = new LatestRead();
+  const toolSequencesRead = new LatestRead();
 
   interface SessionDirectoryResponse {
     path: string;
@@ -296,6 +308,7 @@
     directoryRead.cancel();
     costRead.cancel();
     breakdownRead.cancel();
+    toolSequencesRead.cancel();
   });
 
   let sessionCostLabel = $derived(
@@ -356,6 +369,59 @@
     if (ui.signalPanelOpen && session?.id) {
       sessions.fetchSignalDetail(session.id);
     }
+  });
+
+  $effect(() => {
+    const id = session?.id;
+    const termination = session?.termination_status ?? "";
+    const visible = ui.signalPanelOpen;
+    // Read so a retry reruns this effect; a failed read clears its identity.
+    void toolSequencesRetry;
+    if (!visible || !id) {
+      toolSequencesRead.cancel();
+      toolSequencesData = null;
+      toolSequencesLoading = false;
+      toolSequencesFailed = false;
+      toolSequencesUnavailable = false;
+      toolSequencesIdentity = "";
+      return;
+    }
+
+    if (untrack(() => toolSequencesData?.session_id !== id)) toolSequencesData = null;
+    const loadedRevision = messagesStore.sessionId === id ? messagesStore.loadedRevision : null;
+    if (loadedRevision === null && messagesStore.loading) {
+      // The message list is replacing its rows; read once they land so the sequences match them.
+      toolSequencesRead.cancel();
+      toolSequencesIdentity = "";
+      toolSequencesLoading = true;
+      toolSequencesFailed = false;
+      toolSequencesUnavailable = false;
+      return;
+    }
+    const identity = [id, loadedRevision ?? "", termination].join("\n");
+    if (identity === toolSequencesIdentity) return;
+    toolSequencesIdentity = identity;
+    toolSequencesLoading = true;
+    toolSequencesFailed = false;
+    toolSequencesUnavailable = false;
+    const signal = toolSequencesRead.begin();
+    SessionsService.getApiV1SessionsByIdToolSequences({ id }, { signal })
+      .then((response) => {
+        if (!toolSequencesRead.finish(signal)) return;
+        toolSequencesLoading = false;
+        toolSequencesData = response;
+      })
+      .catch((error) => {
+        if (isAbortError(error) || !toolSequencesRead.finish(signal)) return;
+        toolSequencesLoading = false;
+        toolSequencesData = null;
+        if (error instanceof ApiError && error.status === 501) {
+          toolSequencesUnavailable = true;
+        } else {
+          toolSequencesIdentity = "";
+          toolSequencesFailed = true;
+        }
+      });
   });
 
   function sessionDisplayId(id: string): string {
@@ -820,7 +886,8 @@
         style:color={gradeStyle.text}
         style:border-color={gradeStyle.border}
         onclick={() => ui.toggleSignalPanel()}
-        title={m.session_breadcrumb_session_health()}
+        title={m.session_breadcrumb_session_health_and_tool_sequences()}
+        aria-expanded={ui.signalPanelOpen}
       >
         {getGradeLabel(session.health_grade)}
       </button>
@@ -1121,6 +1188,18 @@
 
 {#if ui.signalPanelOpen && session}
   <SignalPanel {session} />
+  <ToolSequencesPanel
+    data={toolSequencesData?.session_id === session.id ? toolSequencesData : null}
+    linked={toolSequencesData?.session_id === session.id &&
+      messagesStore.sessionId === session.id &&
+      toolSequencesData.transcript_revision === messagesStore.loadedRevision}
+    timing={sessionTiming.timing?.session_id === session.id ? sessionTiming.timing : null}
+    sessionId={session.id}
+    loading={toolSequencesLoading}
+    failed={toolSequencesFailed}
+    unavailable={toolSequencesUnavailable}
+    onretry={() => toolSequencesRetry++}
+  />
 {/if}
 
 <style>

@@ -50,3 +50,27 @@ func TestCreateProjectReclassificationFixture(t *testing.T) {
 		assert.NotEmpty(t, snapshot.Key)
 	}
 }
+
+func TestCreateToolSequencesFixture(t *testing.T) {
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "sessions.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+
+	start := time.Date(2026, 7, 1, 10, 0, 0, 0, time.UTC)
+	require.NoError(t, createToolSequencesFixture(t.Context(), database, start))
+	session, err := database.GetSession(t.Context(), "test-session-tool-sequences")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, 54, session.MessageCount)
+	assert.Equal(t, 26, session.UserMessageCount)
+	assert.Equal(t, "clean", *session.TerminationStatus)
+
+	messages, err := database.GetAllMessages(t.Context(), session.ID)
+	require.NoError(t, err)
+	require.Len(t, messages, 54)
+	require.Len(t, messages[1].ToolCalls, 1)
+	assert.Equal(t, "grep-1", messages[1].ToolCalls[0].ToolUseID)
+	require.Len(t, messages[3].ToolCalls, 1)
+	assert.Equal(t, "read-1", messages[3].ToolCalls[0].ToolUseID)
+	assert.Equal(t, 53, messages[53].Ordinal)
+}

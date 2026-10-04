@@ -267,6 +267,8 @@ class UIStore {
   selectedOrdinal: number | null = $state(null);
   pendingScrollOrdinal: number | null = $state(null);
   pendingScrollSession: string | null = $state(null);
+  /** The transcript revision a pending jump was made for; null when any revision will do. */
+  pendingScrollRevision: string | null = $state(null);
 
   private localZoomLevel = readStoredZoom();
   zoomLevel: ZoomLevel = $state(this.localZoomLevel ?? ZOOM_DEFAULT);
@@ -543,13 +545,15 @@ class UIStore {
     this.selectedOrdinal = null;
     this.pendingScrollOrdinal = null;
     this.pendingScrollSession = null;
+    this.pendingScrollRevision = null;
   }
 
-  scrollToOrdinal(ordinal: number, sessionId?: string) {
+  scrollToOrdinal(ordinal: number, sessionId?: string, revision?: string) {
     this.followLatest = false;
     this.selectedOrdinal = ordinal;
     this.pendingScrollOrdinal = ordinal;
     this.pendingScrollSession = sessionId ?? null;
+    this.pendingScrollRevision = revision ?? null;
   }
 
   setFollowLatest(enabled: boolean) {
@@ -559,6 +563,7 @@ class UIStore {
       this.selectedOrdinal = null;
       this.pendingScrollOrdinal = null;
       this.pendingScrollSession = null;
+      this.pendingScrollRevision = null;
     }
   }
 
