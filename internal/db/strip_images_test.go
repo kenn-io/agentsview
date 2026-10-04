@@ -155,7 +155,7 @@ func TestStripToolImagesRejectsInvalidBefore(t *testing.T) {
 func TestStripToolImagesUpdatesDeduplicatedCallLength(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "deduped", "project")
-	insertMessages(t, d, testImageMessage("deduped"))
+	insertMessages(t, d, testTimedImageMessage("deduped"))
 
 	var storedCall string
 	var beforeLength int
@@ -180,7 +180,7 @@ func TestStripToolImagesUpdatesDeduplicatedCallLength(t *testing.T) {
 		  ON ev.session_id = tc.session_id
 		 AND ev.tool_call_message_ordinal = 0
 		 AND ev.call_index = tc.call_index
-		WHERE tc.session_id = ?`, "deduped").Scan(
+		WHERE tc.session_id = ? AND COALESCE(ev.content, '') <> ''`, "deduped").Scan(
 		&callContent, &callLength, &eventContent, &eventLength,
 	))
 	assert.Empty(t, callContent)
@@ -371,7 +371,11 @@ func TestStripToolImagesCopiedSessionsOnly(t *testing.T) {
 	source := testDB(t)
 	for _, id := range []string{"orphan", "trashed", "fresh", "excluded"} {
 		insertSession(t, source, id, "project")
-		insertMessages(t, source, testImageMessage(id))
+		message := testImageMessage(id)
+		if id == "orphan" || id == "trashed" {
+			message = testTimedImageMessage(id)
+		}
+		insertMessages(t, source, message)
 	}
 	require.NoError(t, source.SoftDeleteSession(ctx, "trashed"))
 	sourcePath := source.Path()
@@ -398,6 +402,16 @@ func TestStripToolImagesCopiedSessionsOnly(t *testing.T) {
 			assert.Contains(t, messages[0].ToolCalls[0].ResultContent, "input_image")
 		} else {
 			assert.Contains(t, messages[0].ToolCalls[0].ResultContent, "agentsview_image")
+			var callLength, eventLength int
+			require.NoError(t, destination.getReader().QueryRow(ctx, `
+				SELECT tc.result_content_length, ev.content_length
+				FROM tool_calls tc JOIN tool_result_events ev
+				  ON ev.session_id = tc.session_id
+				 AND ev.tool_call_message_ordinal = 0
+				 AND ev.call_index = tc.call_index
+				WHERE tc.session_id = ? AND COALESCE(ev.content, '') <> ''`, id,
+			).Scan(&callLength, &eventLength))
+			assert.Equal(t, eventLength, callLength)
 		}
 	}
 	excluded, err := destination.GetSessionFull(ctx, "excluded")

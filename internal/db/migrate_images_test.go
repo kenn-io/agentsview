@@ -972,7 +972,7 @@ func TestMigrateDeduplicatedSummaryKeepsCollapse(t *testing.T) {
 	put := realPut(assetsDir)
 	seedArtifactOrigin(t, d)
 	insertSession(t, d, "dedup-collapse", "project")
-	insertMessages(t, d, testImageMessage("dedup-collapse"))
+	insertMessages(t, d, testTimedImageMessage("dedup-collapse"))
 	clearArtifactExportQueue(t, d)
 
 	// Verify the dedup invariant: result_content is empty, result_content_length
@@ -1001,7 +1001,7 @@ func TestMigrateDeduplicatedSummaryKeepsCollapse(t *testing.T) {
 	var eventLength int
 	require.NoError(t, d.getReader().QueryRow(t.Context(), `
 		SELECT content, content_length
-		FROM tool_result_events WHERE session_id = ?`, "dedup-collapse",
+		FROM tool_result_events WHERE session_id = ? AND COALESCE(content, '') <> ''`, "dedup-collapse",
 	).Scan(&eventContent, &eventLength))
 
 	// Call stays collapsed (result_content still empty) but length follows the

@@ -196,6 +196,7 @@ type openCodeV2Message struct {
 
 type openCodeV2Time struct {
 	Created   int64 `json:"created"`
+	Ran       int64 `json:"ran"`
 	Completed int64 `json:"completed"`
 }
 
@@ -413,6 +414,15 @@ func openCodeV2ToolCall(item openCodeV2Content, cwd string) (ParsedToolCall, err
 			ToolUseID: item.ID, Status: status, Content: content,
 			Timestamp: millisToTime(item.Time.Completed),
 		}}
+		if item.Time.Ran > 0 && item.Time.Completed >= item.Time.Ran {
+			call.ResultEvents = append([]ParsedToolResultEvent{{
+				ToolUseID: item.ID,
+				Source:    "tool_execution",
+				Status:    "started",
+				Timestamp: millisToTime(item.Time.Ran),
+			}}, call.ResultEvents...)
+			call.ResultEvents[1].Source = "tool_execution"
+		}
 	}
 	return call, nil
 }

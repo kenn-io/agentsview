@@ -388,6 +388,27 @@ describe("ToolBlock output and controls", () => {
     await click(".history-header");
     expect(document.querySelector(".result-history")).toBeNull();
   });
+  it("hides empty timing-only events from result history", async () => {
+    const timing = (event_index: number, status: string, content = "") =>
+      ({ event_index, status, source: "tool_execution", content, content_length: content.length });
+    await render({ toolCall: call("bash", {}, { result_events: [timing(0, "started"), timing(1, "completed")] }) });
+    await click(".tool-header");
+    expect(document.querySelector(".history-header")).toBeNull();
+  });
+  it("keeps the raw event index on history rows after hiding timing marks", async () => {
+    const timing = (event_index: number, status: string, content = "") =>
+      ({ event_index, status, source: "tool_execution", content, content_length: content.length });
+    await render({
+      toolCall: call("bash", {}, { result_events: [timing(0, "started"), timing(1, "completed", "done")] }),
+      searchScope: { ordinal: 3, callIdx: 0 },
+    });
+    await click(".tool-header");
+    expect(text(".history-header .tool-preview")).toBe("completed: done");
+    await click(".history-header");
+    const rows = Array.from(document.querySelectorAll<HTMLElement>(".history-content"));
+    expect(rows.map((node) => node.textContent)).toEqual(["done"]);
+    expect(rows[0]!.dataset.searchBlock).toBe("3:tool-history:0.1");
+  });
   it("localizes input, output, history and line controls without translating content", async () => {
     setLocale("zh-CN");
     await render({
