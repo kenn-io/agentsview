@@ -27,6 +27,9 @@ interface PageQuery {
 /** How a read bound to the loaded revision ended: finished, outpaced by a reload, or refused by a moved transcript. */
 type RevisionedRead = "done" | "moved" | "reload";
 
+/** How a refresh of the loaded window ended. */
+type WindowRefresh = "landed" | "empty" | "superseded";
+
 /** Rows from one transcript revision, as the messages API reported it. */
 interface MessagePage {
   messages: Message[];
@@ -255,8 +258,9 @@ export class MessagesStore {
   }
 
   /** Take a refreshed window that starts at the loaded window's oldest row. */
-  private acceptWindow(page: MessagePage, append: boolean, ticket: number) {
-    if (page.revision !== this.loadedRevision && ticket < this.windowTicket) return;
+  /** False when a load that started later already replaced the window. */
+  private acceptWindow(page: MessagePage, append: boolean, ticket: number): boolean {
+    if (page.revision !== this.loadedRevision && ticket < this.windowTicket) return false;
     clearContentCaches();
     if (page.revision !== this.loadedRevision) {
       // Rows from two transcript revisions never share the list, so a new revision replaces the window.
@@ -277,6 +281,7 @@ export class MessagesStore {
     }
     this.loadedRevision = page.revision;
     this.updateStableMainModelInfo();
+    return true;
   }
 
   /**
@@ -326,11 +331,15 @@ export class MessagesStore {
     messageCountHint?: number,
   ): Promise<boolean> {
     for (let attempt = 1; ; attempt++) {
+      const ticket = ++this.loadTicket;
       try {
-        return await this.loadAllMessagesOnce(id, signal, messageCountHint);
+        return await this.loadAllMessagesOnce(id, signal, ticket, messageCountHint);
       } catch (err) {
+        if (!isRevisionChange(err)) throw err;
+        // A later load already replaced the window, so this one retires instead of restarting.
+        if (ticket < this.windowTicket) return false;
         // A sync landed between pages; start over so every row shares one revision.
-        if (!isRevisionChange(err) || attempt >= MAX_LOAD_ATTEMPTS) throw err;
+        if (attempt >= MAX_LOAD_ATTEMPTS) throw err;
       }
     }
   }
@@ -338,6 +347,7 @@ export class MessagesStore {
   private async loadAllMessagesOnce(
     id: string,
     signal: AbortSignal,
+    ticket: number,
     messageCountHint?: number,
   ): Promise<boolean> {
     this.historyComplete = false;
@@ -345,7 +355,6 @@ export class MessagesStore {
     let loaded: Message[] = [];
     let complete = false;
     let revision: string | null = null;
-    const ticket = ++this.loadTicket;
 
     for (;;) {
       const res = await this.fetchMessagePage(
@@ -430,8 +439,8 @@ export class MessagesStore {
     return true;
   }
 
-  /** Refresh from `from` onward; false when the transcript returned no rows there. */
-  private async loadFrom(id: string, from: number, signal: AbortSignal): Promise<boolean> {
+  /** Refresh from `from` onward and say whether rows landed, none came back, or a later load overtook this one. */
+  private async loadFrom(id: string, from: number, signal: AbortSignal): Promise<WindowRefresh> {
     const ticket = ++this.loadTicket;
     const page = await this.fetchPages(id, {
       from,
@@ -439,9 +448,9 @@ export class MessagesStore {
       direction: "asc",
       signal,
     });
-    if (this.sessionId !== id || page.messages.length === 0) return false;
-    this.acceptWindow(page, true, ticket);
-    return true;
+    if (this.sessionId !== id) return "superseded";
+    if (page.messages.length === 0) return "empty";
+    return this.acceptWindow(page, true, ticket) ? "landed" : "superseded";
   }
 
   async loadOlder() {
@@ -735,13 +744,15 @@ export class MessagesStore {
       if (newCount === oldCount) {
         const refreshed = await this.refreshLoadedWindow(id, signal);
         if (this.sessionId !== id) return;
-        if (!refreshed) {
+        if (refreshed === "superseded") {
+          landed = false;
+        } else if (refreshed === "empty") {
           // No window to refresh, or it came back empty because the transcript shrank underneath it.
           landed = await this.fullReload(id, signal, newCount);
         } else {
           const newest = this.messages[this.messages.length - 1];
           this.historyComplete =
-            refreshed && this.messages[0]?.ordinal === 0 && newest?.ordinal === oldCount - 1;
+            this.messages[0]?.ordinal === 0 && newest?.ordinal === oldCount - 1;
         }
       } else if (newCount > oldCount && this.messages.length > 0) {
         const oldestOrdinal = this.messages[0]!.ordinal;
@@ -749,8 +760,10 @@ export class MessagesStore {
         if (this.sessionId !== id) return;
 
         const newest = this.messages[this.messages.length - 1];
-        // An empty refresh means the transcript shrank underneath the window.
-        if (!refreshed || !newest || newest.ordinal !== newCount - 1) {
+        if (refreshed === "superseded") {
+          landed = false;
+        } else if (refreshed === "empty" || !newest || newest.ordinal !== newCount - 1) {
+          // An empty refresh means the transcript shrank underneath the window.
           landed = await this.fullReload(id, signal, newCount);
         } else {
           this.messageCount = newCount;
@@ -810,10 +823,10 @@ export class MessagesStore {
     this.pendingSessionUnreadOrdinal = null;
   }
 
-  private async refreshLoadedWindow(id: string, signal: AbortSignal): Promise<boolean> {
+  private async refreshLoadedWindow(id: string, signal: AbortSignal): Promise<WindowRefresh> {
     const oldest = this.messages[0];
     const newest = this.messages[this.messages.length - 1];
-    if (!oldest || !newest) return false;
+    if (!oldest || !newest) return "empty";
 
     const ticket = ++this.loadTicket;
     const refreshed = await this.fetchPages(id, {
@@ -822,12 +835,9 @@ export class MessagesStore {
       direction: "asc",
       signal,
     });
-    if (this.sessionId !== id || refreshed.messages.length === 0) {
-      return false;
-    }
-
-    this.acceptWindow(refreshed, false, ticket);
-    return true;
+    if (this.sessionId !== id) return "superseded";
+    if (refreshed.messages.length === 0) return "empty";
+    return this.acceptWindow(refreshed, false, ticket) ? "landed" : "superseded";
   }
 
   /** Reload from scratch; false when the session changed or a later load overtook this one. */
