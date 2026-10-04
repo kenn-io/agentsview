@@ -76,6 +76,8 @@ export class MessagesStore {
   // Each window load takes a ticket when it starts; a replacement lands only if no later-started load already replaced the window.
   private loadTicket: number = 0;
   private windowTicket: number = 0;
+  // The latest-started full load owns `loading`, so an overtaken one can't clear it under its replacement.
+  private loadingOwner: number = 0;
   private loadOlderPromise: Promise<void> | null = null;
   private pendingSessionToken: string | null = null;
   private hasPendingSessionToken: boolean = false;
@@ -109,6 +111,7 @@ export class MessagesStore {
     this.sessionId = id;
     this.cancelledSessionId = null;
     this.loading = true;
+    const owner = ++this.loadingOwner;
 
     const generation = ++this.loadGeneration;
     const ac = new AbortController();
@@ -152,7 +155,7 @@ export class MessagesStore {
       }
       console.warn("Failed to load session messages:", err);
     } finally {
-      if (this.sessionId === id) {
+      if (this.sessionId === id && this.loadingOwner === owner) {
         this.loading = false;
         this.updateStableMainModelInfo();
       }
@@ -728,12 +731,13 @@ export class MessagesStore {
       const pendingToken = buildReadProgressToken(sess);
       const newCount = sess.message_count ?? 0;
       const oldCount = this.messageCount;
+      let landed = true;
       if (newCount === oldCount) {
         const refreshed = await this.refreshLoadedWindow(id, signal);
         if (this.sessionId !== id) return;
         if (!refreshed) {
           // No window to refresh, or it came back empty because the transcript shrank underneath it.
-          await this.fullReload(id, signal, newCount);
+          landed = await this.fullReload(id, signal, newCount);
         } else {
           const newest = this.messages[this.messages.length - 1];
           this.historyComplete =
@@ -747,16 +751,17 @@ export class MessagesStore {
         const newest = this.messages[this.messages.length - 1];
         // An empty refresh means the transcript shrank underneath the window.
         if (!refreshed || !newest || newest.ordinal !== newCount - 1) {
-          await this.fullReload(id, signal, newCount);
+          landed = await this.fullReload(id, signal, newCount);
         } else {
           this.messageCount = newCount;
           this.historyComplete = this.messages[0]?.ordinal === 0 && newest.ordinal === newCount - 1;
         }
       } else {
-        await this.fullReload(id, signal, newCount);
+        landed = await this.fullReload(id, signal, newCount);
       }
 
-      if (this.sessionId === id) {
+      // A reload a newer load overtook leaves that load's read-progress token in place.
+      if (landed && this.sessionId === id) {
         const unreadOrdinal =
           pendingToken !== previousToken
             ? earliestChangedOrdinal(previousMessages, this.messages)
@@ -825,17 +830,21 @@ export class MessagesStore {
     return true;
   }
 
-  private async fullReload(id: string, signal: AbortSignal, messageCountHint?: number) {
+  /** Reload from scratch; false when the session changed or a later load overtook this one. */
+  private async fullReload(
+    id: string,
+    signal: AbortSignal,
+    messageCountHint?: number,
+  ): Promise<boolean> {
     clearContentCaches();
     this.loading = true;
+    const owner = ++this.loadingOwner;
     try {
-      if (messageCountHint !== undefined && messageCountHint > FULL_SESSION_MESSAGE_THRESHOLD) {
-        await this.loadProgressively(id, signal);
-      } else {
-        await this.loadAllMessages(id, signal, messageCountHint);
-      }
+      return messageCountHint !== undefined && messageCountHint > FULL_SESSION_MESSAGE_THRESHOLD
+        ? await this.loadProgressively(id, signal)
+        : await this.loadAllMessages(id, signal, messageCountHint);
     } finally {
-      if (this.sessionId === id) {
+      if (this.sessionId === id && this.loadingOwner === owner) {
         this.loading = false;
         this.updateStableMainModelInfo();
       }
