@@ -494,15 +494,20 @@ func parseCodexStream(
 // that agent can receive, or zero when the prompt goes through stdin or an
 // HTTP body. Copilot's CLI takes the prompt as one argument, which Linux caps
 // at 128 KiB and Windows caps, for the whole command line, at 32,767
-// characters.
+// characters. macOS has no per-argument cap, only 1 MiB for all arguments and
+// the environment together, so its limit leaves 128 KiB for the rest.
 func PromptArgLimit(agent string, opts GenerateOptions) int {
 	if agent != "copilot" || opts.Endpoint != nil {
 		return 0
 	}
-	if runtime.GOOS == "windows" {
+	switch runtime.GOOS {
+	case "windows":
 		return 30 << 10
+	case "darwin":
+		return 896 << 10
+	default:
+		return 120 << 10
 	}
-	return 120 << 10
 }
 
 // promptArgSize measures a prompt the way the OS limits it as an argument.
