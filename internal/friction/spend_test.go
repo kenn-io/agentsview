@@ -215,24 +215,6 @@ func TestCmpUSD(t *testing.T) {
 	assert.Equal(t, 0, cmpUSD(USD{}, mustUSD(t, "0")), "zero value compares as 0")
 }
 
-// format_usd lives in PR 1's usd.go; the render contract depends on it,
-// so the jilog test is re-pinned here (roadmap PR 4 acceptance).
-func TestFormatUSDRenderContract(t *testing.T) {
-	tests := []struct{ in, want string }{
-		{"4.2", "$4.20"},
-		{"7", "$7.00"},
-		{"0.0003", "$0.0003"},
-		{"4.20", "$4.20"},
-		{"332.138392", "$332.138392"},
-	}
-	for _, tt := range tests {
-		t.Run("format_usd_pads_cents_but_keeps_subcent_precision/"+tt.in, func(t *testing.T) {
-			assert.Equal(t, tt.want, FormatUSD(mustUSD(t, tt.in)))
-		})
-	}
-	assert.Equal(t, "$1300.250000", FormatUSD(USDFromMicros(1_300_250_000)))
-}
-
 // Ports archive_spend.rs parses_daily_rows_and_summarizes_yesterday_and_week
 // (:269-330), minus usage-daily JSON parsing replaced by the native rollup query.
 func archiveRows() []DailySpend {

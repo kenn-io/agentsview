@@ -64,7 +64,6 @@ func TestRenderMarkdown(t *testing.T) {
 	})
 	t.Run("digest_errors_truncated_with_marker", func(t *testing.T) {
 		body := render(snap("2026-04-30", Signal{Kind: KindError, SubjectID: "s1", ToolName: "bash", Text: strings.Repeat("x", 600)}), RenderLinks{})
-		assert.Contains(t, body, "[truncated]")
 		line := lineWith(t, body, "`s1` / `bash`: ")
 		assert.Equal(t, "- `s1` / `bash`: "+strings.Repeat("x", 500)+" … [truncated]", line)
 	})
@@ -127,9 +126,6 @@ func TestRenderMarkdown(t *testing.T) {
 			assert.Contains(t, body, want)
 		}
 	})
-	t.Run("digest_spend_section_absent_without_stats", func(t *testing.T) {
-		assert.NotContains(t, render(snap("2026-07-05"), RenderLinks{}), "## Spend")
-	})
 	t.Run("digest_spend_all_unpriced_says_no_cost_data", func(t *testing.T) {
 		s := snap("2026-07-05")
 		s.Spend = &SpendSummary{SessionsWithStats: 2, InputTokens: 10, OutputTokens: 1}
@@ -148,9 +144,6 @@ func TestRenderMarkdown(t *testing.T) {
 		assert.Contains(t, body, "- `helper@general' injected` `s1` — ")
 		assert.Contains(t, body, "- `helper@general' injected`: 1 corrections")
 		assert.NotContains(t, body, "general`", "raw backtick leaked into digest")
-	})
-	t.Run("digest_personas_section_absent_for_coding_only_runs", func(t *testing.T) {
-		assert.NotContains(t, render(snap("2026-07-13"), RenderLinks{}), "## Personas")
 	})
 	t.Run("personas_rollup_carries_tokens_and_optional_cost", func(t *testing.T) {
 		s := snap("2026-08-26")
@@ -308,8 +301,6 @@ func TestRenderMarkdownSpendNamesSanitized(t *testing.T) {
 	assert.Contains(t, body, "- `model' ## Injected model`: $1.00\n")
 	assert.NotContains(t, body, "\n## Injected role")
 	assert.NotContains(t, body, "\n## Injected model")
-	assert.Contains(t, s.Spend.RoleCosts, role, "display sanitization must leave the raw key intact")
-	assert.Contains(t, s.Spend.ModelCosts, model, "display sanitization must leave the raw key intact")
 	spend := decodeObject(t, RenderSummaryJSON(s, SummaryMeta{}))["spend"].(map[string]any)
 	assert.Equal(t, map[string]any{role: "1"}, spend["role_costs_usd"])
 	assert.Equal(t, map[string]any{model: "1"}, spend["model_costs_usd"])

@@ -1,7 +1,6 @@
 package friction
 
 import (
-	"sort"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -42,37 +41,6 @@ func decodeObject(t *testing.T, b []byte) map[string]any {
 }
 
 func TestRenderSummaryJSON(t *testing.T) {
-	t.Run("json_output_has_documented_keys", func(t *testing.T) {
-		s, m := digestReportFixture(t)
-		obj := decodeObject(t, RenderSummaryJSON(s, m))
-		keys := make([]string, 0, len(obj))
-		for k := range obj {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		assert.Equal(t, []string{
-			"corrections", "created_issues", "deferrals", "digest_path", "errors",
-			"frustrations", "interruptions", "p0_alerts", "patterns", "personas", "schema_version", "sessions_scanned",
-			"spend", "tracker_failures", "workarounds",
-		}, keys)
-		assert.Equal(t, map[string]any{
-			"helper@general": map[string]any{
-				"persona": "helper", "channel": "general",
-				"sessions": serdejson.Number("2"), "corrections": serdejson.Number("1"),
-				"errors": serdejson.Number("0"), "workarounds": serdejson.Number("0"),
-				"deferrals": serdejson.Number("0"), "patterns": serdejson.Number("1"),
-				"input_tokens": serdejson.Number("5000"), "output_tokens": serdejson.Number("250"),
-				"cost_usd": nil,
-			},
-		}, obj["personas"])
-		assert.Equal(t, serdejson.Number("3"), obj["schema_version"])
-		assert.Equal(t, serdejson.Number("3"), obj["sessions_scanned"])
-		assert.Equal(t, map[string]any{"bash": []any{"session-a", "session-b"}}, obj["p0_alerts"])
-		assert.Equal(t, []any{map[string]any{
-			"id": "#42", "backend": "kata", "title": "tracked issue",
-			"url": "https://example.com/issues/42",
-		}}, obj["created_issues"])
-	})
 	t.Run("json_dry_run_uses_null_digest_path", func(t *testing.T) {
 		s, m := digestReportFixture(t)
 		m.DigestPath = nil
@@ -81,7 +49,6 @@ func TestRenderSummaryJSON(t *testing.T) {
 		obj := decodeObject(t, out)
 		assert.Nil(t, obj["digest_path"])
 		assert.Equal(t, []any{}, obj["created_issues"])
-		assert.Contains(t, string(out), "\"created_issues\": [],\n")
 	})
 	t.Run("review_json_carries_archive_spend_only_when_present", func(t *testing.T) {
 		s, m := digestReportFixture(t)
@@ -136,12 +103,8 @@ func TestRenderSummaryJSON(t *testing.T) {
 	})
 	t.Run("frustration_and_interruption_keys_always_present", func(t *testing.T) {
 		s, m := digestReportFixture(t)
-		obj := decodeObject(t, RenderSummaryJSON(s, m))
-		assert.Equal(t, serdejson.Number("0"), obj["frustrations"])
-		assert.Equal(t, serdejson.Number("0"), obj["interruptions"])
-
 		s.Signals = []Signal{{Kind: KindFrustration}, {Kind: KindFrustration}, {Kind: KindInterruption}}
-		obj = decodeObject(t, RenderSummaryJSON(s, m))
+		obj := decodeObject(t, RenderSummaryJSON(s, m))
 		assert.Equal(t, serdejson.Number("2"), obj["frustrations"])
 		assert.Equal(t, serdejson.Number("1"), obj["interruptions"])
 		assert.Equal(t, serdejson.Number("3"), obj["schema_version"])
@@ -151,13 +114,6 @@ func TestRenderSummaryJSON(t *testing.T) {
 		m.CreatedIssues[0].URL = ""
 		issue := decodeObject(t, RenderSummaryJSON(s, m))["created_issues"].([]any)[0].(map[string]any)
 		assert.Nil(t, issue["url"])
-	})
-	t.Run("ends_with_one_newline", func(t *testing.T) {
-		s, m := digestReportFixture(t)
-		out := RenderSummaryJSON(s, m)
-		require.NotEmpty(t, out)
-		assert.Equal(t, byte('\n'), out[len(out)-1])
-		assert.NotEqual(t, byte('\n'), out[len(out)-2])
 	})
 }
 

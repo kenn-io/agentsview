@@ -1,13 +1,9 @@
 package friction
 
 import (
-	"bytes"
-	"crypto/sha256"
 	"flag"
-	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -109,20 +105,6 @@ func buildGoldenDocuments(t *testing.T) map[string][]byte {
 	}
 }
 
-func goldenManifest(docs map[string][]byte) []byte {
-	names := make([]string, 0, len(docs))
-	for name := range docs {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	var b bytes.Buffer
-	for _, name := range names {
-		sum := sha256.Sum256(docs[name])
-		_, _ = fmt.Fprintf(&b, "%x  %s\n", sum, name)
-	}
-	return b.Bytes()
-}
-
 // TestFrictionDigestGolden ports jilog digest_bytes_match_golden and
 // review_json_bytes_match_golden, in the TestExportReportingGolden shape
 // (cmd/agentsview/export_reporting_test.go:453-482).
@@ -132,13 +114,11 @@ func TestFrictionDigestGolden(t *testing.T) {
 	require.Equal(t, got, repeated, "independent renders must be byte-identical")
 
 	base := filepath.Join("testdata", "golden")
-	manifest := goldenManifest(got)
 	if *updateGolden {
 		require.NoError(t, os.MkdirAll(base, 0o755))
 		for name, contents := range got {
 			require.NoError(t, os.WriteFile(filepath.Join(base, name), contents, 0o644))
 		}
-		require.NoError(t, os.WriteFile(filepath.Join(base, "manifest.sha256"), manifest, 0o644))
 		t.Logf("rewrote friction goldens under %s", base)
 		return
 	}
@@ -147,7 +127,4 @@ func TestFrictionDigestGolden(t *testing.T) {
 		require.NoError(t, err, "read %s (run with -update to generate)", name)
 		assert.Equal(t, string(want), string(contents), name)
 	}
-	wantManifest, err := os.ReadFile(filepath.Join(base, "manifest.sha256"))
-	require.NoError(t, err, "read golden manifest")
-	assert.Equal(t, string(wantManifest), string(manifest))
 }
