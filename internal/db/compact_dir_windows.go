@@ -9,10 +9,10 @@ import (
 	"go.kenn.io/kit/atomicfile"
 )
 
-// replaceInstalledFile uses a temporary failed-target name because a handle
-// opened without share-delete, as SQLite opens files, still blocks
-// atomicfile.Replace over the target. If installing
-// the candidate fails, put the old target back before returning the error.
+// replaceInstalledFile moves the old target to a failed-target name first,
+// which startup recovery and reinstateSidelinedOriginal know how to restore.
+// If installing the candidate fails, put the old target back before returning
+// the error.
 func replaceInstalledFile(source, target string) error {
 	failed := target + ".failed"
 	// The sideline path is scratch space that is cleared below. A caller
