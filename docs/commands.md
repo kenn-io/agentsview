@@ -1334,7 +1334,7 @@ agentsview import --type claude-ai ~/Downloads/claude.zip
 agentsview import --type chatgpt ~/Downloads/chatgpt.zip
 agentsview import --type claude-ai ./conversations.json
 agentsview import --type gemini-apps ~/Downloads/takeout.zip
-agentsview import --type chatgpt --replace chatgpt:<conversation-id> ~/Downloads/chatgpt.zip
+agentsview import --type chatgpt --replace 'chatgpt:<conversation-id>' ~/Downloads/chatgpt.zip
 ```
 
 ______________________________________________________________________
