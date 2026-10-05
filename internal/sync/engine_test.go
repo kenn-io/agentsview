@@ -4317,13 +4317,16 @@ func TestStartupSyncFallbackRechecksAfterInFlightForegroundSync(t *testing.T) {
 		err error
 	}
 	fallbackDone := make(chan fallbackResult, 1)
+	fallbackFinished := make(chan struct{})
 	go func() {
 		_, ran, err := engine.RunStartupSyncFallback(t.Context(), nil)
 		fallbackDone <- fallbackResult{ran: ran, err: err}
+		close(fallbackFinished)
 	}()
+	// Never can leave a poll running after it returns; keep the result for the assertion below.
 	assert.Never(t, func() bool {
 		select {
-		case <-fallbackDone:
+		case <-fallbackFinished:
 			return true
 		default:
 			return false
