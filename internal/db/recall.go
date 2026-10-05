@@ -1110,11 +1110,20 @@ func (db *DB) queryRecallEntriesVector(
 		if err != nil {
 			return RecallPage{}, err
 		}
-		page, err := db.recallPageFromVectorHits(ctx, q, hits, limit)
+		// The index may lag the corpus, so snapshot validation accepts a
+		// corpus that moved. Fence the page read through that validation, so
+		// an entry deleted, rejected or demoted before validation returns
+		// never stays in the page.
+		var page RecallPage
+		err = db.fenceRecallRead(ctx, func() error {
+			var readErr error
+			page, readErr = db.recallPageFromVectorHits(ctx, q, hits, limit)
+			if readErr != nil {
+				return readErr
+			}
+			return searcher.ValidateRecallSnapshot(ctx, snapshot)
+		})
 		if err != nil {
-			return RecallPage{}, err
-		}
-		if err := searcher.ValidateRecallSnapshot(ctx, snapshot); err != nil {
 			return RecallPage{}, err
 		}
 		if len(page.RecallEntries) >= limit || exhausted {
@@ -1153,7 +1162,7 @@ func (db *DB) recallPageFromVectorHits(
 		seen[hit.EntryID] = struct{}{}
 		ids = append(ids, hit.EntryID)
 	}
-	entries, err := db.listVisibleRecallEntriesByIDs(ctx, q, ids)
+	entries, err := db.listRecallEntriesByIDs(ctx, q, ids)
 	if err != nil {
 		return RecallPage{}, err
 	}
@@ -1255,7 +1264,12 @@ func (db *DB) keepVisibleRecallResults(
 		seen[result.ID] = struct{}{}
 		ids = append(ids, result.ID)
 	}
-	entries, err := db.listVisibleRecallEntriesByIDs(ctx, q, ids)
+	var entries []RecallEntry
+	err := db.fenceRecallRead(ctx, func() error {
+		var readErr error
+		entries, readErr = db.listRecallEntriesByIDs(ctx, q, ids)
+		return readErr
+	})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1278,36 +1292,33 @@ func (db *DB) keepVisibleRecallResults(
 	return keep(lexical), keep(vector), nil
 }
 
-// recallVisibilityReadAttempts bounds how often a fenced read of Recall
-// entries starts over because the corpus moved underneath it.
-const recallVisibilityReadAttempts = 3
+// recallFencedReadAttempts bounds how often a fenced Recall read starts over
+// because the corpus moved underneath it.
+const recallFencedReadAttempts = 3
 
-// listVisibleRecallEntriesByIDs is listRecallEntriesByIDs fenced by the
-// Recall query revision, which every entry or evidence mutation bumps. The
-// entries it returns all matched q at one revision, so a page never keeps an
-// entry that was deleted, rejected or demoted while the read was in flight.
-// Archives that predate the query revision cannot change and are read once.
-func (db *DB) listVisibleRecallEntriesByIDs(
-	ctx context.Context, q RecallQuery, ids []string,
-) ([]RecallEntry, error) {
-	for range recallVisibilityReadAttempts {
+// fenceRecallRead runs read between two reads of the Recall query revision,
+// which every entry or evidence write bumps, and starts it over when a write
+// landed in between. What read returns therefore matched the corpus at one
+// revision, taken after its last step. Archives that predate the query
+// revision cannot change, so their read runs once.
+func (db *DB) fenceRecallRead(ctx context.Context, read func() error) error {
+	for range recallFencedReadAttempts {
 		before, err := db.RecallQueryRevision(ctx)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		entries, err := db.listRecallEntriesByIDs(ctx, q, ids)
-		if err != nil {
-			return nil, err
+		if err := read(); err != nil {
+			return err
 		}
 		after, err := db.RecallQueryRevision(ctx)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if before == after {
-			return entries, nil
+			return nil
 		}
 	}
-	return nil, NewSemanticUnavailableError(
+	return NewSemanticUnavailableError(
 		"recall corpus changed during search; retry the query",
 	)
 }

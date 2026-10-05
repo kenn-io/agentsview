@@ -1481,8 +1481,30 @@ func TestRecallSearchServesIndexWithinRevisionLag(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestRecallHybridDropsEntriesHiddenDuringQueryEncoding(t *testing.T) {
-	tests := []struct {
+// validateHook runs hook at the snapshot validation the db layer asks for
+// after reading a vector page: once when ran is set, otherwise every time.
+type validateHook struct {
+	recallSearcherAdapter
+	hook func(context.Context) error
+	ran  *bool
+}
+
+func (v validateHook) ValidateRecallSnapshot(
+	ctx context.Context, snapshot db.RecallVectorSnapshot,
+) error {
+	if v.ran == nil || !*v.ran {
+		if v.ran != nil {
+			*v.ran = true
+		}
+		if err := v.hook(ctx); err != nil {
+			return err
+		}
+	}
+	return v.recallSearcherAdapter.ValidateRecallSnapshot(ctx, snapshot)
+}
+
+func TestRecallDropsEntriesHiddenDuringSearch(t *testing.T) {
+	mutations := []struct {
 		name        string
 		reviewState string
 		stmt        string
@@ -1496,33 +1518,65 @@ func TestRecallHybridDropsEntriesHiddenDuringQueryEncoding(t *testing.T) {
 				corerecall.ReviewStateUnreviewedAuto + `' WHERE id = 'entry-2'`,
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			l := newLaggedRecallSearch(t, 2, tt.reviewState)
-			// The lexical leg has already read entry-2 when the query is
-			// encoded, and the index still holds its vector.
-			searcher := l.searcher
-			searcher.enc = func(ctx context.Context, texts []string) ([][]float32, error) {
-				if err := l.mutate(ctx, tt.stmt); err != nil {
-					return nil, err
-				}
-				return l.queryEncoder(ctx, texts)
-			}
-			l.database.SetRecallVectorSearcher(searcher)
+	// While the query is encoded, hybrid's lexical leg has already read
+	// entry-2. At the final snapshot validation, the vector page has.
+	stages := []string{"query encoding", "final validation"}
+	modes := []string{db.RecallQueryModeVector, db.RecallQueryModeHybrid}
+	for _, stage := range stages {
+		for _, mode := range modes {
+			for _, m := range mutations {
+				t.Run(stage+"/"+mode+"/"+m.name, func(t *testing.T) {
+					l := newLaggedRecallSearch(t, 2, m.reviewState)
+					mutate := func(ctx context.Context) error { return l.mutate(ctx, m.stmt) }
+					searcher := l.searcher
+					var installed db.RecallVectorSearcher = searcher
+					if stage == "query encoding" {
+						searcher.enc = func(ctx context.Context, texts []string) ([][]float32, error) {
+							if err := mutate(ctx); err != nil {
+								return nil, err
+							}
+							return l.queryEncoder(ctx, texts)
+						}
+						installed = searcher
+					} else {
+						installed = validateHook{recallSearcherAdapter: searcher, hook: mutate, ran: new(bool)}
+					}
+					l.database.SetRecallVectorSearcher(installed)
 
-			page, err := l.database.QueryRecallEntries(t.Context(), db.RecallQuery{
-				Text: "connection reuse", Mode: db.RecallQueryModeHybrid,
-				ReviewState: tt.reviewState, Limit: 5,
-			})
-			require.NoError(t, err)
-			ids := make([]string, 0, len(page.RecallEntries))
-			for _, result := range page.RecallEntries {
-				ids = append(ids, result.ID)
+					page, err := l.database.QueryRecallEntries(t.Context(), db.RecallQuery{
+						Text: "connection reuse", Mode: mode,
+						ReviewState: m.reviewState, Limit: 5,
+					})
+					require.NoError(t, err)
+					ids := make([]string, 0, len(page.RecallEntries))
+					for _, result := range page.RecallEntries {
+						ids = append(ids, result.ID)
+					}
+					assert.NotContains(t, ids, "entry-2")
+					assert.Contains(t, ids, "entry-1")
+				})
 			}
-			assert.NotContains(t, ids, "entry-2")
-			assert.Contains(t, ids, "entry-1")
-		})
+		}
 	}
+}
+
+func TestRecallVectorFailsWhenCorpusNeverSettles(t *testing.T) {
+	l := newLaggedRecallSearch(t, 2, "")
+	// A review-state flip moves the query revision but not the corpus
+	// revision, so only the read fence notices it.
+	l.database.SetRecallVectorSearcher(validateHook{
+		recallSearcherAdapter: l.searcher,
+		hook: func(ctx context.Context) error {
+			return l.mutate(ctx, `UPDATE recall_entries SET review_state = CASE review_state
+				WHEN '`+corerecall.ReviewStateHumanReviewed+`' THEN '`+corerecall.ReviewStateUnreviewedAuto+`'
+				ELSE '`+corerecall.ReviewStateHumanReviewed+`' END WHERE id = 'entry-1'`)
+		},
+	})
+	_, err := l.database.QueryRecallEntries(t.Context(), db.RecallQuery{
+		Text: "connection reuse", Mode: db.RecallQueryModeVector, Limit: 5,
+	})
+	require.ErrorIs(t, err, db.ErrSemanticUnavailable)
+	assert.Contains(t, err.Error(), "retry the query")
 }
 
 func TestRecallRevisionFresh(t *testing.T) {
