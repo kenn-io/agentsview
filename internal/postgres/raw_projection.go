@@ -243,7 +243,9 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		changed = changed || !exists || !previous.Active || previous.CapturedSession != sessionID
 	}
 	// A complete archive snapshot can omit sessions that must remain retained.
-	replaceMembership := complete && (parsed.Tombstone || parsed.Outcome.ForceReplace)
+	// A tombstone reports that the source left its device, not that the user
+	// or the provider removed its sessions, so it withdraws no membership.
+	replaceMembership := complete && parsed.Outcome.ForceReplace
 	for _, b := range prior {
 		_, present := candidates[b.Group]
 		excluded := slices.Contains(parsed.Outcome.ExcludedSessionIDs, b.Member)

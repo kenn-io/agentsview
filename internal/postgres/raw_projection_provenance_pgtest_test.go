@@ -11,7 +11,6 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/rawderive"
-	"go.kenn.io/agentsview/internal/rawsync"
 )
 
 func TestRawProjectionPreservesAbsentProviderTitleFromSameSource(t *testing.T) {
@@ -222,46 +221,6 @@ func TestRawProjectionKeepsLegacyProofSeparate(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT provenance_kind FROM sessions WHERE id=$1`, r.SessionID).Scan(&kind))
 	assert.Equal(t, "raw", kind)
-}
-
-func TestRawProjectionTombstoneHidesEveryPhysicalInventoryAndReactivationRestoresCuration(t *testing.T) {
-	f := newProjectionFixture(t)
-	m, accepted := f.accept(t, "device-a", "visible", "")
-	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("needle")))
-	require.NoError(t, f.sink.SetCuration(t.Context(), "codex:portable", "starred", true))
-	require.NoError(t, f.sink.SetPin(t.Context(), "codex:portable", 0, true, "retained"))
-	store := &Store{pg: f.runtime}
-	before, err := f.sink.Resolve(t.Context(), "codex:portable")
-	require.NoError(t, err)
-	tomb := rawsync.Manifest{SchemaVersion: rawsync.ManifestSchemaVersion, Provider: m.Manifest.Provider, ConfiguredRootID: m.Manifest.ConfiguredRootID, SourceKey: m.Manifest.SourceKey, ExpectedParentReceipt: accepted.Receipt, CaptureID: "tombstone", CapturedAt: rawIngestCapturedAt(), Kind: rawsync.ManifestTombstone}
-	canonical, err := rawsync.ValidateAndCanonicalize(m.Identity, tomb, rawsync.DefaultManifestLimits())
-	require.NoError(t, err)
-	removed, err := f.custody.CommitManifest(t.Context(), m.Identity, tomb)
-	require.NoError(t, err)
-	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, canonical), canonical, rawderive.ParsedManifest{Tombstone: true}))
-	page, err := store.ListSessions(t.Context(), db.SessionFilter{})
-	require.NoError(t, err)
-	assert.Empty(t, page.Sessions)
-	trash, err := store.ListTrashedSessions(t.Context())
-	require.NoError(t, err)
-	assert.Empty(t, trash)
-	stars, err := store.ListStarredSessionIDs(t.Context())
-	require.NoError(t, err)
-	assert.Empty(t, stars)
-	matches, err := store.Search(t.Context(), db.SearchFilter{Query: "needle"})
-	require.NoError(t, err)
-	assert.Empty(t, matches.Results)
-	next, _ := f.accept(t, "device-a", "reactivated", removed.Receipt)
-	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, next), next, projectionOutcome("needle")))
-	after, err := f.sink.Resolve(t.Context(), "codex:portable")
-	require.NoError(t, err)
-	assert.Equal(t, before.SessionID, after.SessionID)
-	stars, err = store.ListStarredSessionIDs(t.Context())
-	require.NoError(t, err)
-	assert.Equal(t, []string{after.SessionID}, stars)
-	pins, err := store.ListPinnedMessages(t.Context(), after.SessionID, "")
-	require.NoError(t, err)
-	require.Len(t, pins, 1)
 }
 
 func TestRawProjectionProviderFallbackAliasSurvivesConflict(t *testing.T) {

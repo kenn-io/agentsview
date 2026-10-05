@@ -241,7 +241,7 @@ func TestHostedRuntimeSettlingRechecksConcurrentVisibility(t *testing.T) {
 	}
 }
 
-func TestHostedRuntimeSubprocessTombstoneRemovesPublicSource(t *testing.T) {
+func TestHostedRuntimeSubprocessTombstoneRetainsPublicSession(t *testing.T) {
 	f := newProjectionFixture(t)
 	jobs, err := NewHostedRawIngestStore(f.runtime, f.tenant, "parser-1")
 	require.NoError(t, err)
@@ -275,15 +275,15 @@ func TestHostedRuntimeSubprocessTombstoneRemovesPublicSource(t *testing.T) {
 	assert.Zero(t, result.Retried)
 	var active, proof int
 	require.NoError(t, f.runtime.QueryRow(`SELECT count(*) FROM raw_session_branches WHERE active`).Scan(&active))
-	assert.Zero(t, active)
+	assert.Equal(t, 1, active)
 	require.NoError(t, f.runtime.QueryRow(`SELECT count(*) FROM session_sources`).Scan(&proof))
-	assert.Zero(t, proof)
+	assert.Equal(t, 1, proof)
 	after, err := public.ListSessions(t.Context(), db.SessionFilter{Limit: 10})
 	require.NoError(t, err)
-	assert.Empty(t, after.Sessions)
-	gone, err := public.GetSession(t.Context(), "codex:portable")
+	assert.Equal(t, before.Sessions, after.Sessions)
+	retained, err := public.GetSession(t.Context(), "codex:portable")
 	require.NoError(t, err)
-	assert.Nil(t, gone)
+	assert.NotNil(t, retained)
 	var state string
 	require.NoError(t, f.runtime.QueryRow(`SELECT state FROM raw_ingest_jobs WHERE manifest_id=$1`, canonical.ManifestID).Scan(&state))
 	assert.Equal(t, "complete", state)

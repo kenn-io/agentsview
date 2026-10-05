@@ -209,10 +209,24 @@ provider identity, sources remain separate even when their content matches.
 
 A shorter transcript shares the longer copy's displayed session when every
 retained message and usage event matches its prefix and the source metadata
-agrees. Each source keeps its captured revision. Removing the longer source
-restores the shorter copy. Changed messages, conflicting metadata, or several
-divergent continuations remain separate variants; the bare session ID is then
-ambiguous. Source removal retracts only that source's proof.
+agrees. Each source keeps its captured revision. When a later snapshot of the
+longer source no longer contains the session, the shorter copy is displayed
+again. Changed messages, conflicting metadata, or several divergent
+continuations remain separate variants; the bare session ID is then ambiguous.
+Such a removal retracts only that source's proof.
+
+A source file that disappears from its device does not remove its sessions.
+`raw-sync watch` reports the disappearance as a tombstone, and the server
+records it as the source's current generation. The sessions that source last
+supplied stay listed and searchable with their names, stars, pins, and source
+proof. If the file returns, its new snapshot updates the same sessions. Only
+three things remove a hosted session: the user deletes it, the parser excludes
+it, or a later snapshot of a source that reports its full contents omits it.
+
+A departed source has nothing left to parse, so `pg raw-reparse` leaves its
+retained sessions as the earlier parser produced them. Sessions hidden by a
+tombstone that was processed before this rule took effect stay hidden until
+their source returns; their raw files and manifests remain in custody.
 
 Names, stars and pins survive compatible publication; ambiguous identity never
 silently picks a transcript. Owner imports that change legacy identity must
@@ -370,6 +384,11 @@ Captures and upload state are kept under `raw-sync/` in the configured
 AgentsView data directory. `agentsview raw-sync status` prints path-free JSON
 describing the local checkpoint, pending work, retry time, failures, and
 coverage.
+
+When a complete audit finds that a previously captured file is gone, the
+watcher uploads a tombstone for it. The server keeps the sessions already
+derived from that file; see
+[Isolation and processing limits](#isolation-and-processing-limits).
 
 The normal writable `agentsview serve` daemon has its own parser watcher. Run
 both only when local parsed sessions and hosted raw custody are both required;

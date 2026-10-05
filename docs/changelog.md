@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-04
+last_edited: 2026-10-05
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -203,6 +203,13 @@ The latest published release is
 
 **Bug fixes**
 
+- Hosted raw sync keeps a session listed and searchable after its source file
+  disappears from the device that uploaded it, matching the local archive.
+  Before, `raw-sync watch` reporting a missing file hid the session, emptied it
+  from the trash, and could swap in a shorter copy from another device. Deleting
+  a session yourself still removes it. Sessions already hidden this way stay
+  hidden until their file returns; see
+  [Hosted Raw Sync](/docs/hosted-raw-sync/#isolation-and-processing-limits).
 - On macOS, `agentsview serve` no longer hangs at `Running initial sync...`
   when a session's working directory is on an external or network drive under
   `/Volumes`. Reading Git metadata there made macOS ask for access to the

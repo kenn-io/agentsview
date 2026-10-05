@@ -77,6 +77,19 @@ func (f projectionFixture) acceptScoped(t *testing.T, device, capture, parent st
 	return canonical, result
 }
 
+// tombstone accepts and projects the manifest a device sends once a source it
+// previously captured is no longer present there.
+func (f projectionFixture) tombstone(t *testing.T, previous rawsync.CanonicalManifest, capture, parent string) (rawsync.CanonicalManifest, rawsync.CommitResult) {
+	t.Helper()
+	manifest := rawsync.Manifest{SchemaVersion: rawsync.ManifestSchemaVersion, Provider: previous.Manifest.Provider, ConfiguredRootID: previous.Manifest.ConfiguredRootID, SourceKey: previous.Manifest.SourceKey, ExpectedParentReceipt: parent, CaptureID: capture, CapturedAt: rawIngestCapturedAt(), Kind: rawsync.ManifestTombstone}
+	canonical, err := rawsync.ValidateAndCanonicalize(previous.Identity, manifest, rawsync.DefaultManifestLimits())
+	require.NoError(t, err)
+	result, err := f.custody.CommitManifest(t.Context(), previous.Identity, manifest)
+	require.NoError(t, err)
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, canonical), canonical, rawderive.ParsedManifest{Tombstone: true}))
+	return canonical, result
+}
+
 // projectionOutcome models a complete, authoritative source snapshot.
 func projectionOutcome(content string) rawderive.ParsedManifest {
 	return rawderive.ParsedManifest{Outcome: parser.ParseOutcome{ResultSetComplete: true, ForceReplace: true, Results: []parser.ParseResultOutcome{{Result: parser.ParseResult{
