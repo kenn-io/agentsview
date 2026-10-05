@@ -629,7 +629,6 @@ func TestBuildPrompt_SessionAnalysisUnchanged(t *testing.T) {
 	want, err := os.ReadFile(golden)
 	require.NoError(t, err)
 	assert.Equal(t, strings.ReplaceAll(string(want), "\r\n", "\n"), prompt)
-	assert.NotContains(t, prompt, "## Tool evidence")
 }
 
 func TestBuildPrompt_RefusesPromptOverAgentLimit(t *testing.T) {

@@ -133,15 +133,18 @@ func TestListInsights(t *testing.T) {
 		te := setup(t)
 		te.seedInsight(t, "daily_activity", "2025-01-15", new("my-app"))
 		te.seedInsight(t, "agent_analysis", "2025-01-15", nil)
+		te.seedInsight(t, insight.ToolEffectivenessType, "2025-01-15", nil)
 
 		t.Run("TypeFilter", func(t *testing.T) {
 			assertList(t, te, "/api/v1/insights?type=daily_activity",
+				http.StatusOK, 1, "")
+			assertList(t, te, "/api/v1/insights?type=tool_effectiveness",
 				http.StatusOK, 1, "")
 		})
 
 		te.seedInsight(t, "daily_activity", "2025-01-15", new("other-app"))
 		t.Run("WithData", func(t *testing.T) {
-			assertList(t, te, "/api/v1/insights", http.StatusOK, 3, "")
+			assertList(t, te, "/api/v1/insights", http.StatusOK, 4, "")
 		})
 
 		t.Run("InvalidType", func(t *testing.T) {
@@ -2265,12 +2268,6 @@ func TestGenerateInsight_ToolEffectivenessRequiresSession(t *testing.T) {
 		`{"type":"tool_effectiveness","date_from":"2025-01-15","date_to":"2025-01-15"}`)
 	assertStatus(t, w, http.StatusBadRequest)
 	assertBodyContains(t, w, "session_id is required for tool_effectiveness")
-}
-
-func TestListInsights_ToolEffectivenessType(t *testing.T) {
-	te := setup(t)
-	w := te.get(t, "/api/v1/insights?type=tool_effectiveness")
-	assertStatus(t, w, http.StatusOK)
 }
 
 func TestToolEffectivenessEndpointErrorDoesNotFallBack(t *testing.T) {

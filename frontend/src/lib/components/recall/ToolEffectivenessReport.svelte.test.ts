@@ -281,6 +281,9 @@ describe("ToolEffectivenessReport", () => {
   it("navigates to the cited message from the evidence row", async () => {
     const scroll = vi.spyOn(ui, "scrollToOrdinal").mockImplementation(() => {});
     const navigate = vi.spyOn(router, "navigateToSession").mockImplementation(() => {});
+    // The live transcript has moved on, so only the report's own revision can reach the jumps.
+    getToolSequences.mockResolvedValue({ ...makeFacts(3), transcript_revision: "rev-2" });
+    getSession.mockResolvedValue(makeSession({ transcript_revision: "rev-2" }));
     const component = mount(ToolEffectivenessReport, {
       target: document.body,
       props: { insight: makeInsight() },

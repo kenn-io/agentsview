@@ -62,24 +62,28 @@ test("saved tool-effectiveness report keeps conclusions, sequences, and omission
 }, testInfo) => {
   for (const width of [1280, 768, 400]) {
     const detail = await openReport(page, width);
-    await expect(detail.getByRole("heading", { name: "Model assessment" })).toBeVisible();
-    await expect(detail.getByRole("heading", { name: "Observed tool sequences" })).toBeVisible();
-    await expect(detail).toContainText("The second Grep repeated an empty search.");
-    await expect(detail).toContainText("1 message shown as an 800-character preview");
-    await expect(detail).toContainText("3 of 3 calls cited");
-    await expect(detail.locator("[data-testid=tool-effectiveness-session-changed]")).toHaveCount(0);
-    await expect(detail.locator(".citations .citation")).toHaveText([
-      /Grep\s*config\s*· Message 1/,
-      /Grep\s*config\s*· Message 2/,
-      /mcp__onemcp__context7_1mcp_resolve_library_id\s*app\/config\.json\s*· Message 3/,
-    ]);
+    // Text doesn't change with width, so check it once; layout is checked at every width.
+    if (width === 1280) {
+      await expect(detail.getByRole("heading", { name: "Model assessment" })).toBeVisible();
+      await expect(detail.getByRole("heading", { name: "Observed tool sequences" })).toBeVisible();
+      await expect(detail).toContainText("The second Grep repeated an empty search.");
+      await expect(detail).toContainText("1 message shown as an 800-character preview");
+      await expect(detail).toContainText("3 of 3 calls cited");
+      await expect(detail.locator("[data-testid=tool-effectiveness-session-changed]")).toHaveCount(0);
+      await expect(detail.locator(".citations .citation")).toHaveText([
+        /Grep\s*config\s*· Message 1/,
+        /Grep\s*config\s*· Message 2/,
+        /mcp__onemcp__context7_1mcp_resolve_library_id\s*app\/config\.json\s*· Message 3/,
+      ]);
+    }
 
     const evidence = detail.locator(".conclusion").nth(1);
     const citationInput = await evidence.locator(".citation .citation-input").boundingBox();
     expect(citationInput!.width).toBeGreaterThan(20);
     await evidence.locator(".citation").click();
     const row = evidence.locator(".call");
-    await expect(row).toContainText("model saw 12 bytes");
+    if (width === 1280) await expect(row).toContainText("model saw 12 bytes");
+    else await expect(row).toBeVisible();
     const [input, result, jump] = await Promise.all(
       [".input", ".res", ".jump"].map((s) => row.locator(s).boundingBox()),
     );

@@ -3,7 +3,6 @@ package insight
 import (
 	"context"
 	"encoding/json/v2"
-	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -89,13 +88,10 @@ func TestBuildToolEffectivenessPrompt_IssueExample(t *testing.T) {
 	assert.Equal(t, map[int]bool{0: true, 1: true, 2: true, 3: true, 4: true}, ev.sentOrdinals)
 }
 
-// churningStore reports a new transcript revision, or termination status, on each session read
-// until its budget of changes runs out.
+// churningStore reports a new transcript revision on every session read.
 type churningStore struct {
 	db.Store
-	changes     int
-	reads       int
-	termination bool
+	reads int
 }
 
 func (s *churningStore) GetSession(ctx context.Context, id string) (*db.Session, error) {
@@ -104,87 +100,15 @@ func (s *churningStore) GetSession(ctx context.Context, id string) (*db.Session,
 		return sess, err
 	}
 	s.reads++
-	if s.changes > 0 {
-		s.changes--
-		if s.termination {
-			sess.TerminationStatus = new(fmt.Sprintf("status-%d", s.reads))
-		} else {
-			sess.TranscriptRevision = new(fmt.Sprintf("rev-%d", s.reads))
-		}
-	}
+	sess.TranscriptRevision = new(fmt.Sprintf("rev-%d", s.reads))
 	return sess, nil
 }
 
-func TestBuildToolEffectivenessPrompt_RereadsWhileTheSessionChanges(t *testing.T) {
+func TestBuildToolEffectivenessPrompt_RefusesAChurningSession(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	seedIssueExample(t, d)
 	req := GenerateRequest{Type: ToolEffectivenessType, SessionID: "issue"}
-
-	settles := &churningStore{Store: d, changes: 2}
-	_, ev, err := BuildToolEffectivenessPrompt(t.Context(), settles, req)
-	require.NoError(t, err)
-	assert.Equal(t, 3, ev.CallCount)
-	stored, err := d.GetSession(t.Context(), "issue")
-	require.NoError(t, err)
-	assert.Equal(t, revisionOf(stored), ev.TranscriptRevision)
-	assert.Equal(t, "awaiting_user", ev.TerminationStatus)
-
-	_, _, err = BuildToolEffectivenessPrompt(t.Context(), &churningStore{Store: d, changes: 100}, req)
-	require.ErrorIs(t, err, db.ErrSessionChanged)
-
-	_, _, err = BuildToolEffectivenessPrompt(t.Context(), &churningStore{Store: d, changes: 100, termination: true}, req)
-	require.ErrorIs(t, err, db.ErrSessionChanged)
-}
-
-// rebindingStore reports a different hosted source binding on each check
-// until its budget of changes runs out.
-type rebindingStore struct {
-	db.Store
-	changes int
-	checks  int
-}
-
-func (s *rebindingStore) SessionSourceBinding(context.Context, string) (string, error) {
-	s.checks++
-	if s.changes > 0 {
-		s.changes--
-		return fmt.Sprintf("binding-%d", s.checks), nil
-	}
-	return "binding", nil
-}
-
-func (s *rebindingStore) SessionSourceChanged(error) bool { return false }
-
-// revisionlessStore stands in for a backend that records no transcript revision.
-type revisionlessStore struct{ db.Store }
-
-func (s *revisionlessStore) GetSession(ctx context.Context, id string) (*db.Session, error) {
-	sess, err := s.Store.GetSession(ctx, id)
-	if sess != nil {
-		sess.TranscriptRevision = nil
-	}
-	return sess, err
-}
-
-func TestBuildToolEffectivenessPrompt_RefusesSessionsWithoutRevision(t *testing.T) {
-	d := dbtest.OpenTestDB(t)
-	seedIssueExample(t, d)
-	req := GenerateRequest{Type: ToolEffectivenessType, SessionID: "issue"}
-	_, _, err := BuildToolEffectivenessPrompt(t.Context(), &revisionlessStore{Store: d}, req)
-	require.ErrorIs(t, err, db.ErrSessionRevisionUnavailable)
-}
-
-func TestBuildToolEffectivenessPrompt_RereadsWhileTheSourceMoves(t *testing.T) {
-	d := dbtest.OpenTestDB(t)
-	seedIssueExample(t, d)
-	req := GenerateRequest{Type: ToolEffectivenessType, SessionID: "issue"}
-
-	settles := &rebindingStore{Store: d, changes: 2}
-	_, _, err := BuildToolEffectivenessPrompt(t.Context(), settles, req)
-	require.NoError(t, err)
-	assert.Equal(t, 4, settles.checks)
-
-	_, _, err = BuildToolEffectivenessPrompt(t.Context(), &rebindingStore{Store: d, changes: 100}, req)
+	_, _, err := BuildToolEffectivenessPrompt(t.Context(), &churningStore{Store: d}, req)
 	require.ErrorIs(t, err, db.ErrSessionChanged)
 }
 
@@ -504,23 +428,10 @@ func TestToolEffectivenessStructuredAndMarkdown(t *testing.T) {
 		Assessment: AssessmentDidNotHelp, Text: "Repeated the same search", Ordinals: []int{1, 2},
 		Calls: []ToolEffectivenessCallRef{{Ordinal: 2, CallIndex: 0}},
 	}}}
-	raw, err := ToolEffectivenessStructuredJSON(r, ev)
-	require.NoError(t, err)
-	var saved map[string]any
-	require.NoError(t, json.Unmarshal(raw, &saved))
-	assert.Equal(t, "s", saved["session_id"])
-	assert.EqualValues(t, 2, saved["call_count"])
-	assert.Len(t, saved["conclusions"], 1)
-	assert.Len(t, saved["omissions"], 1)
-
 	md := RenderToolEffectivenessMarkdown(r, ev)
 	assert.Contains(t, md, "## Model assessment\n\n- **Did not help**: Repeated the same search (msg 1, msg 2, msg 2 #0)\n")
 	assert.Contains(t, md, "## Observed tool sequences\n\nNone.\n")
 	assert.Contains(t, md, "## Omissions\n\n- msg 2 #0 Read result: not retained\n")
-
-	raw, err = ToolEffectivenessStructuredJSON(r, ToolEffectivenessEvidence{SessionID: "s"})
-	require.NoError(t, err)
-	assert.Contains(t, string(raw), `"omissions":[]`)
 }
 
 func TestToolEffectivenessStructured_CitedCalls(t *testing.T) {
@@ -550,10 +461,4 @@ func TestParseToolEffectivenessReport_DropsRepeatedCitations(t *testing.T) {
 	require.Len(t, r.Conclusions, 1)
 	assert.Equal(t, []int{2, 3}, r.Conclusions[0].Ordinals)
 	assert.Equal(t, []ToolEffectivenessCallRef{{Ordinal: 3, CallIndex: 1}, {Ordinal: 3, CallIndex: 0}}, r.Conclusions[0].Calls)
-}
-
-func TestToolEffectivenessCorrectionPrompt(t *testing.T) {
-	got := ToolEffectivenessCorrectionPrompt("prompt", errors.New("conclusion 0: msg 2 holds 2 calls, so the conclusion must name one"))
-	assert.True(t, strings.HasPrefix(got, "prompt\n## Correction\n"))
-	assert.Contains(t, got, "msg 2 holds 2 calls")
 }

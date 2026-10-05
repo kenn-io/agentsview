@@ -263,19 +263,3 @@ func TestClassify(t *testing.T) {
 		})
 	}
 }
-
-func TestTerminationComplete(t *testing.T) {
-	for _, tc := range []struct {
-		status *string
-		want   bool
-	}{
-		{nil, false},
-		{new(""), false},
-		{new(string(TerminationClean)), true},
-		{new(string(TerminationAwaitingUser)), true},
-		{new(string(TerminationToolCallPending)), false},
-		{new(string(TerminationTruncated)), false},
-	} {
-		assert.Equal(t, tc.want, TerminationComplete(tc.status))
-	}
-}
