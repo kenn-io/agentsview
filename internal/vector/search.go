@@ -494,6 +494,21 @@ SELECT doc_key, ordinal, ordinal_end, subordinate
 func (ix *Index) StaleActive(
 	ctx context.Context, space embedmodel.Descriptor, wantRevision string,
 ) (bool, error) {
+	return ix.StaleActiveWithin(ctx, space, wantRevision, func(completed, want string) bool {
+		return completed == want
+	})
+}
+
+// StaleActiveWithin is StaleActive with a caller-supplied revision test:
+// fresh(completed, want) reports whether an active generation completed at
+// corpus revision completed may still answer for a corpus at want. The
+// space check and the missing-stamp rule are unchanged, so only a revision
+// lag can be tolerated; a different model, config, or generation is always
+// stale. Revisions stay opaque here; the caller owns their format.
+func (ix *Index) StaleActiveWithin(
+	ctx context.Context, space embedmodel.Descriptor, wantRevision string,
+	fresh func(completed, want string) bool,
+) (bool, error) {
 	if ix.versionMismatch {
 		return false, ErrMirrorVersionMismatch
 	}
@@ -518,5 +533,5 @@ func (ix *Index) StaleActive(
 	if err != nil {
 		return false, fmt.Errorf("reading completed corpus revision: %w", err)
 	}
-	return !ok || completed != wantRevision, nil
+	return !ok || !fresh(completed, wantRevision), nil
 }

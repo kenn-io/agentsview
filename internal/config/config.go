@@ -206,9 +206,18 @@ type VectorConfig struct {
 	// archive's index with content that search already hides by default.
 	// `embeddings build --include-automated` can override this for a
 	// one-off build; see that flag's help for the scheduled-build caveat.
-	IncludeAutomated bool                   `toml:"include_automated" json:"include_automated"`
-	Embeddings       VectorEmbeddingsConfig `toml:"embeddings" json:"embeddings"`
-	Embed            VectorEmbedConfig      `toml:"embed" json:"embed"`
+	IncludeAutomated bool `toml:"include_automated" json:"include_automated"`
+	// RecallMaxRevisionLag is how many Recall corpus revisions the Recall
+	// vector index may trail the corpus and still answer vector and hybrid
+	// queries. Every insert, delete, or text edit of an accepted Recall entry
+	// is one revision, so while extraction runs the index trails by a few
+	// until the next build. Entries newer than the index are missing only
+	// from the vector ranking; hybrid still finds them by keyword. 0 requires
+	// an exact match, which was the only behavior before this setting.
+	// Default 256.
+	RecallMaxRevisionLag int                    `toml:"recall_max_revision_lag" json:"recall_max_revision_lag"`
+	Embeddings           VectorEmbeddingsConfig `toml:"embeddings" json:"embeddings"`
+	Embed                VectorEmbedConfig      `toml:"embed" json:"embed"`
 }
 
 // VectorEmbeddingsConfig describes the embedding space — the model identity
@@ -417,11 +426,21 @@ type VectorEmbedConfig struct {
 	BackstopInterval string `toml:"backstop_interval" json:"backstop_interval"`
 }
 
+// DefaultRecallMaxRevisionLag is the default [vector]
+// recall_max_revision_lag: room for well over an hour of extraction between
+// Recall index builds, which the daemon runs about 30 s after a mutation.
+const DefaultRecallMaxRevisionLag = 256
+
 // Validate checks the vector config for internal consistency. It is a
 // no-op when the section is disabled.
 func (c VectorConfig) Validate() error {
 	if !c.Enabled {
 		return nil
+	}
+	if c.RecallMaxRevisionLag < 0 {
+		return fmt.Errorf(
+			"[vector] recall_max_revision_lag must be 0 or greater, got %d",
+			c.RecallMaxRevisionLag)
 	}
 	if c.Embeddings.Model == "" {
 		return errors.New("[vector.embeddings] model is required when [vector] is enabled")
@@ -1235,6 +1254,7 @@ func Default() (Config, error) {
 		DaemonIdleTimeout:              20 * time.Minute,
 		Agent:                          map[string]AgentConfig{},
 		Vector: VectorConfig{
+			RecallMaxRevisionLag: DefaultRecallMaxRevisionLag,
 			Embeddings: VectorEmbeddingsConfig{
 				MaxInputChars: 8192,
 			},
@@ -1866,6 +1886,9 @@ func (c *Config) applyConfigTOML(data string) error {
 	// section fields' treatment even though both currently agree.
 	if meta.IsDefined("vector", "include_automated") {
 		c.Vector.IncludeAutomated = file.Vector.IncludeAutomated
+	}
+	if meta.IsDefined("vector", "recall_max_revision_lag") {
+		c.Vector.RecallMaxRevisionLag = file.Vector.RecallMaxRevisionLag
 	}
 	if file.Vector.Embeddings.Model != "" {
 		c.Vector.Embeddings.Model = file.Vector.Embeddings.Model

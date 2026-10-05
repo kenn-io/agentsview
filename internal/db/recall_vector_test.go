@@ -467,3 +467,28 @@ func TestScanRecallEmbeddingUnitsTracksDeleteAndReinsert(t *testing.T) {
 	assert.Equal(t, "Restored entry\n\nThis identity serves again.", units[0].Content)
 	assert.False(t, units[0].Deleted)
 }
+
+func TestRecallCorpusRevisionLag(t *testing.T) {
+	tests := []struct {
+		name      string
+		completed string
+		current   string
+		wantLag   int64
+		wantOK    bool
+	}{
+		{name: "equal", completed: "counter-v1:7", current: "counter-v1:7", wantLag: 0, wantOK: true},
+		{name: "index behind", completed: "counter-v1:7", current: "counter-v1:10", wantLag: 3, wantOK: true},
+		{name: "index ahead", completed: "counter-v1:12", current: "counter-v1:10", wantLag: -2, wantOK: true},
+		{name: "legacy watermark", completed: "2026-01-01T00:00:00Z", current: "counter-v1:10"},
+		{name: "malformed counter", completed: "counter-v1:x", current: "counter-v1:10"},
+		{name: "negative counter", completed: "counter-v1:-1", current: "counter-v1:10"},
+		{name: "empty", completed: "", current: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lag, ok := RecallCorpusRevisionLag(tt.completed, tt.current)
+			assert.Equal(t, tt.wantOK, ok)
+			assert.Equal(t, tt.wantLag, lag)
+		})
+	}
+}

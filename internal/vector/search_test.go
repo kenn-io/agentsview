@@ -237,6 +237,34 @@ func TestStaleActiveRejectsNewerCorpusRevision(t *testing.T) {
 	assert.True(t, stale)
 }
 
+func TestStaleActiveWithinUsesCallerRevisionTest(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := t.Context()
+	gen := fakeGeneration("fake-model")
+
+	_, err := ix.Build(
+		ctx, threeDocSearchSource(), fakeSearchEncoder(), gen,
+		BuildOptions{CorpusRevision: "revision-1"},
+	)
+	require.NoError(t, err)
+
+	tolerant := func(completed, want string) bool {
+		return completed == "revision-1" && want == "revision-2"
+	}
+	stale, err := ix.StaleActiveWithin(ctx, legacySpace(gen.Fingerprint()), "revision-2", tolerant)
+	require.NoError(t, err)
+	assert.False(t, stale, "the caller's test accepts the lag")
+
+	stale, err = ix.StaleActiveWithin(ctx, legacySpace(gen.Fingerprint()), "revision-3", tolerant)
+	require.NoError(t, err)
+	assert.True(t, stale, "the caller's test rejects this lag")
+
+	stale, err = ix.StaleActiveWithin(ctx, legacySpace("some-other-fingerprint"), "revision-2",
+		func(string, string) bool { return true })
+	require.NoError(t, err)
+	assert.True(t, stale, "a different space is stale whatever the revision test says")
+}
+
 func TestStaleActiveFalseWhenNoActiveGeneration(t *testing.T) {
 	ix := openTestIndex(t)
 	ctx := t.Context()

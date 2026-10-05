@@ -30,6 +30,7 @@ Semantic search is disabled by default. Add a `[vector]` section to
 enabled = true                    # default false; everything below is opt-in
 # db_path defaults to <data_dir>/vectors.db
 include_automated = false         # default; automated sessions (e.g. roborev) are not embedded -- set true to include
+recall_max_revision_lag = 256     # default; Recall corpus revisions the Recall index may trail and still serve (0 = exact)
 
 [vector.embeddings]
 model = "nomic-embed-text"
@@ -74,9 +75,10 @@ archive sync notifications; it does not suppress Recall startup or Recall
 corpus-mutation refreshes after that consent is enabled. A manual
 `agentsview embeddings build --store recall` remains available without this
 setting because invoking that command is an explicit one-time request. Recall
-vector and hybrid queries also fail closed as unavailable whenever the served
-Recall corpus is newer than the last completed build; lexical queries remain
-available while an automatic or manual refresh catches up.
+vector and hybrid queries fail closed as unavailable once the served Recall
+corpus is more than `recall_max_revision_lag` revisions newer than the last
+completed build; lexical queries remain available while an automatic or manual
+refresh catches up. See [Recall](/docs/recall/#vector-and-hybrid-retrieval).
 
 ### Named embeddings servers
 

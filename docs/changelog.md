@@ -216,6 +216,12 @@ The latest published release is
   a session yourself still removes it. Sessions already hidden this way stay
   hidden until their file returns; see
   [Hosted Raw Sync](/docs/hosted-raw-sync/#isolation-and-processing-limits).
+- `recall query` and `recall brief` in `--mode vector` or `--mode hybrid` no
+  longer turn unavailable every time recall extraction writes a new entry. The
+  Recall index may now trail the corpus by up to `recall_max_revision_lag`
+  revisions (a `[vector]` setting, default 256) and still answer; entries newer
+  than the index are found by the lexical half of hybrid search until the next
+  build. Set it to `0` for the previous exact-match behavior.
 - On macOS, `agentsview serve` no longer hangs at `Running initial sync...`
   when a session's working directory is on an external or network drive under
   `/Volumes`. Reading Git metadata there made macOS ask for access to the

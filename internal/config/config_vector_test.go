@@ -67,6 +67,15 @@ func TestVectorConfigValidate(t *testing.T) {
 			wantErr: "model is required",
 		},
 		{
+			name:    "enabled negative recall_max_revision_lag",
+			mutate:  func(c *VectorConfig) { c.RecallMaxRevisionLag = -1 },
+			wantErr: "recall_max_revision_lag",
+		},
+		{
+			name:   "enabled zero recall_max_revision_lag is valid",
+			mutate: func(c *VectorConfig) { c.RecallMaxRevisionLag = 0 },
+		},
+		{
 			name:    "enabled missing dimension",
 			mutate:  func(c *VectorConfig) { c.Embeddings.Dimension = 0 },
 			wantErr: "dimension",
@@ -281,6 +290,8 @@ func TestVectorConfigDefaults(t *testing.T) {
 		"run_after_sync defaults to true when unset")
 	assert.False(t, cfg.Vector.Embed.Recall,
 		"automatic Recall embedding requires explicit opt-in")
+	assert.Equal(t, DefaultRecallMaxRevisionLag, cfg.Vector.RecallMaxRevisionLag,
+		"the Recall index may trail the corpus by the default lag")
 
 	disabled := false
 	cfg.Vector.Embed.RunAfterSync = &disabled
@@ -448,6 +459,23 @@ func TestVectorConfigTOMLLoad(t *testing.T) {
 		assert.Equal(t, "300s", remote.Timeout, "per-server timeout override")
 		assert.Equal(t, 6, remote.Concurrency, "per-server concurrency override")
 		assert.Equal(t, 32, remote.BatchSize, "unset per-server batch_size keeps default")
+	})
+
+	t.Run("recall_max_revision_lag is loaded, including an explicit 0", func(t *testing.T) {
+		for _, want := range []int{0, 32} {
+			cfg := loadMinimalWithConfig(t, map[string]any{
+				"vector": map[string]any{
+					"enabled":                 true,
+					"recall_max_revision_lag": want,
+					"embeddings": map[string]any{
+						"model":     "nomic-embed-text",
+						"dimension": 768,
+						"servers":   minimalServers(),
+					},
+				},
+			})
+			assert.Equal(t, want, cfg.Vector.RecallMaxRevisionLag)
+		}
 	})
 
 	t.Run("include_automated true is loaded", func(t *testing.T) {
