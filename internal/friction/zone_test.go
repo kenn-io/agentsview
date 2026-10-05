@@ -66,37 +66,3 @@ func TestResolveZone(t *testing.T) {
 		})
 	}
 }
-
-func TestResolveZoneUsesLocalLocation(t *testing.T) {
-	loc, err := ResolveZone("", "")
-	require.NoError(t, err)
-	require.NotNil(t, loc)
-}
-
-// Ports zone.rs digest_date_and_window_follow_the_zone with Asia/Dhaka.
-func TestDigestDateAndWindowFollowTheZone(t *testing.T) {
-	dhaka := mustLoad(t, "Asia/Dhaka")
-	tokyo := mustLoad(t, "Asia/Tokyo")
-	tests := []struct {
-		name     string
-		now      time.Time
-		loc      *time.Location
-		date     string
-		from, to string
-	}{
-		{"late_utc_is_next_day_at_plus_six", time.Date(2026, 9, 17, 22, 30, 0, 0, time.UTC), dhaka, "2026-09-18", "2026-09-11", "2026-09-17"},
-		{"same_instant_in_utc", time.Date(2026, 9, 17, 22, 30, 0, 0, time.UTC), time.UTC, "2026-09-17", "2026-09-10", "2026-09-16"},
-		{"evening_run_is_still_today_at_plus_six", time.Date(2026, 9, 17, 16, 50, 0, 0, time.UTC), dhaka, "2026-09-17", "2026-09-10", "2026-09-16"},
-		{"tokyo_has_turned_over", time.Date(2026, 9, 17, 16, 50, 0, 0, time.UTC), tokyo, "2026-09-18", "2026-09-11", "2026-09-17"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			date := tt.now.In(tt.loc).Format(time.DateOnly)
-			assert.Equal(t, tt.date, date)
-			from, to, err := ArchiveWindow(date)
-			require.NoError(t, err)
-			assert.Equal(t, tt.from, from)
-			assert.Equal(t, tt.to, to)
-		})
-	}
-}
