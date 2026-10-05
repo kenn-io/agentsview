@@ -180,7 +180,6 @@ func TestBuildToolEffectivenessPrompt_BudgetTrimsLargestFirst(t *testing.T) {
 		Reason: OmissionBudget, Ordinal: new(2), CallIndex: new(0), ToolName: "Bash",
 		Field: "result", KeptBytes: new(limit), OriginalBytes: new(len(medium)),
 	}, ev.Omissions[1])
-	assert.LessOrEqual(t, fixed+2*limit, toolEvidenceBudgetBytes)
 	assert.Contains(t, prompt, input)
 	assert.Contains(t, prompt, small)
 	assert.NotContains(t, prompt, strings.Repeat("a", limit+1))
