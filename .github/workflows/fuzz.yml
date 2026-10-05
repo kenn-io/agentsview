@@ -43,6 +43,9 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Restore pricing snapshot
+        run: go run ./internal/pricing/cmd/litellm-snapshot -restore
+
       # The dispatch input goes through an env var, never directly
       # into the run script, so it cannot inject shell commands.
       - name: Fuzz ${{ matrix.target }}
