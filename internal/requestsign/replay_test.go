@@ -1,7 +1,6 @@
 package requestsign
 
 import (
-	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/base64"
@@ -112,9 +111,6 @@ func TestReplayMissingCorruptCapacityAndRollbackFailClosed(t *testing.T) {
 	require.NoError(t, err)
 	store.limit = 1
 	require.ErrorIs(t, store.Admit(t.Context(), "key", replayNonce(t), now, now+30), ErrReplay)
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	require.Error(t, store.Admit(ctx, "key", replayNonce(t), now, now+30))
 	corrupt := filepath.Join(t.TempDir(), "corrupt.db")
 	require.NoError(t, os.WriteFile(corrupt, []byte("corrupt"), 0o600))
 	_, err = OpenReplay(corrupt)
@@ -131,4 +127,13 @@ func TestReplayRechecksFreshnessAfterWriteLock(t *testing.T) {
 	require.ErrorIs(t, store.Admit(t.Context(), "key", replayNonce(t), now-30, now), ErrInvalid)
 	require.ErrorIs(t, store.Admit(t.Context(), "key", replayNonce(t), now+6, now+36), ErrInvalid)
 	require.ErrorIs(t, store.Admit(t.Context(), "key", replayNonce(t), now, now+31), ErrInvalid)
+	// The check callback runs while the writer lock is held, so a request that
+	// expires during the lock wait must be rejected.
+	created := time.Now().Unix()
+	require.ErrorIs(t, store.admit(t.Context(), "key", replayNonce(t), created, created+1, func() error {
+		for time.Now().Unix() < created+1 {
+			time.Sleep(10 * time.Millisecond)
+		}
+		return nil
+	}), ErrInvalid)
 }

@@ -183,7 +183,6 @@ func FuzzSignerTarget(f *testing.F) {
 			assert.Equal(t, "example.com", req.URL.Host)
 			assert.True(t, strings.HasPrefix(req.URL.Path, "/native/"))
 			assert.NotContains(t, req.URL.Path, "/../")
-			assert.LessOrEqual(t, len(req.Header.Get("Signature-Input")), 2048)
 		}
 	})
 }

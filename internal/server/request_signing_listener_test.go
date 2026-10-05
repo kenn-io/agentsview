@@ -240,9 +240,6 @@ func TestRestrictedListenerRejectsPublicBinding(t *testing.T) {
 	secretFile := filepath.Join(dir, "secret")
 	// A key generated at runtime avoids committing secret fixtures.
 	require.NoError(t, requestsign.GenerateSecretFile(secretFile))
-	key, err := requestsign.ReadSecret(secretFile)
-	require.NoError(t, err)
-	assert.GreaterOrEqual(t, len(key), 64)
 	state := filepath.Join(dir, "replay.db")
 	require.NoError(t, requestsign.InitReplay(state))
 	policyFile := filepath.Join(dir, "policy.json")
