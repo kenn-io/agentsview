@@ -10,6 +10,7 @@ id = "check-timing-budgets"
 name = "Check timing budgets"
 language = "system"
 entry = "go run ./scripts/check-timing-budgets ."
+stages = ["pre-push"]
 pass_filenames = false
 always_run = true
 
@@ -25,7 +26,8 @@ always_run = true
 id = "golangci-lint"
 name = "golangci-lint"
 language = "system"
-entry = "make lint-golangci"
+entry = "make lint-golangci-ci"
+stages = ["pre-push"]
 pass_filenames = false
 always_run = true
 
@@ -34,6 +36,7 @@ id = "huma-check"
 name = "Check Huma API contract"
 language = "system"
 entry = "go run go.kenn.io/kit/cmd/huma-check@e9840a327158da2559458186b253b0c15a5e2c2b -fix=false ./..."
+stages = ["pre-push"]
 pass_filenames = false
 always_run = true
 
