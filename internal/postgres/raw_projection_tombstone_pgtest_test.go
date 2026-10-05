@@ -227,36 +227,6 @@ func TestRawProjectionTombstoneReparseRetainsSession(t *testing.T) {
 	assert.Equal(t, m.ManifestID, proof)
 }
 
-func TestRawProjectionTombstoneLeavesMembershipCompletenessToSnapshots(t *testing.T) {
-	tests := []struct {
-		name     string
-		complete bool
-	}{
-		{"after a complete snapshot", true},
-		{"after an incomplete snapshot", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			f := newProjectionFixture(t)
-			m, accepted := f.accept(t, "device-a", "snapshot", "")
-			outcome := projectionOutcome("retained")
-			var want error
-			if !tt.complete {
-				outcome.Outcome.ResultSetComplete = false
-				outcome.Outcome.SourceErrors = []parser.SourceError{{SessionID: "codex:second", Err: errors.New("synthetic parse failure"), Retryable: true}}
-				want = rawderive.ErrProjectionRetrying
-			}
-			require.ErrorIs(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome), want)
-
-			f.tombstone(t, m, "tombstone", accepted.Receipt)
-
-			var complete bool
-			require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT membership_complete FROM raw_source_projections WHERE source_id=$1`, rawSourceID(m)).Scan(&complete))
-			assert.Equal(t, tt.complete, complete)
-		})
-	}
-}
-
 func TestRawProjectionRejectsTombstoneCarryingParseOutcome(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -265,6 +235,8 @@ func TestRawProjectionRejectsTombstoneCarryingParseOutcome(t *testing.T) {
 		{"members", projectionOutcome("unexpected").Outcome},
 		{"authoritative replacement", parser.ParseOutcome{ResultSetComplete: true, ForceReplace: true}},
 		{"exclusions", parser.ParseOutcome{ExcludedSessionIDs: []string{"codex:portable"}}},
+		{"source errors", parser.ParseOutcome{SourceErrors: []parser.SourceError{{SessionID: "codex:portable", Err: errors.New("synthetic parse failure")}}}},
+		{"complete result set", parser.ParseOutcome{ResultSetComplete: true}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

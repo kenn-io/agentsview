@@ -284,9 +284,7 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 	if parsed.Tombstone {
 		diagnostics = "tombstone"
 	}
-	// A tombstone reports nothing about membership, so the last snapshot's
-	// completeness stands.
-	_, err = tx.ExecContext(ctx, `UPDATE raw_source_projections SET last_attempt_manifest_id=$2,successful_manifest_id=CASE WHEN $5 THEN $2 ELSE successful_manifest_id END,membership_complete=CASE WHEN $6 THEN membership_complete ELSE $3 END,diagnostics=$4 WHERE source_id=$1`, source, m.ManifestID, complete, diagnostics, complete || len(candidates) > 0, parsed.Tombstone)
+	_, err = tx.ExecContext(ctx, `UPDATE raw_source_projections SET last_attempt_manifest_id=$2,successful_manifest_id=CASE WHEN $5 THEN $2 ELSE successful_manifest_id END,membership_complete=$3,diagnostics=$4 WHERE source_id=$1`, source, m.ManifestID, complete, diagnostics, complete || len(candidates) > 0)
 	if err != nil {
 		return err
 	}
