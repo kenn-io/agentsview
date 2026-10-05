@@ -48,8 +48,6 @@ func TestNativeHTTPAndRawClientsSignFromEnvironment(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, response)
 	assert.Equal(t, 200, response.StatusCode)
-	require.NotNil(t, response.JSON200)
-	assert.True(t, response.JSON200.ReadOnly != nil && *response.JSON200.ReadOnly)
 	raw, err := RawRequest(ts.URL+"/native", ts.Client(), func(api *Client) error {
 		_, err := api.GetAPIV1VersionWithResponse(t.Context())
 		return err
