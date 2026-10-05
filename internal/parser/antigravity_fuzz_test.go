@@ -15,8 +15,9 @@ package parser
 //     amplify memory two orders of magnitude) is asserted here
 //     but pinned deterministically by TestAgProtoFieldBudget:
 //     mutated inputs stay far too small to probe it.
-//   - decodeAntigravityStep: content is non-empty valid UTF-8 with
-//     no NUL bytes, roles are in the enum, timestamps are zero or
+//   - decodeAntigravityStep: content or tool calls are present, content
+//     is valid UTF-8 without NUL bytes, roles follow the payload with
+//     the supplied step type as fallback, timestamps are zero or
 //     inside the 2000..2100 plausibility window.
 //   - extractModelName: empty or printable with at least one letter
 //     (the 2026-06-11 incident: a nested protobuf fragment whose
@@ -248,6 +249,15 @@ func FuzzDecodeAntigravityStep(f *testing.F) {
 		f.Add(i, 14, seed)
 		f.Add(i, 2, seed)
 	}
+	for _, kind := range []uint64{14, 15} {
+		f.Add(0, 14, encodePB([]pbField{
+			{num: 1, wire: pbWireVarint, varint: kind},
+			{num: 17, wire: pbWireBytes, bytes: []byte("A message with enough text to retain.")},
+		}))
+	}
+	f.Add(0, 15, encodePB([]pbField{
+		{num: 17, wire: pbWireBytes, bytes: []byte("view_file")},
+	}))
 	windowMin := time.Unix(946_684_801, 0)
 	windowMax := time.Unix(4_102_444_800, 0)
 	f.Fuzz(func(t *testing.T, idx, stepType int, payload []byte) {
@@ -255,14 +265,21 @@ func FuzzDecodeAntigravityStep(f *testing.F) {
 		if !ok {
 			return
 		}
-		require.NotEmpty(t, msg.Content, "decoded message without content")
+		require.True(t, msg.Content != "" || len(msg.ToolCalls) > 0,
+			"decoded message without content or tool calls")
 		assert.True(t, utf8.ValidString(msg.Content),
 			"content is not valid UTF-8")
 		assert.NotContains(t, msg.Content, "\x00",
 			"content contains a NUL byte")
 		assert.Equal(t, len(msg.Content), msg.ContentLength)
 		wantRole := RoleAssistant
-		if stepType == 14 {
+		fields, err := agProtoParse(payload)
+		require.NoError(t, err)
+		isUser := stepType == 14
+		if kind, found := agProtoFind(fields, 1); found && kind.Wire == pbWireVarint {
+			isUser = kind.Varint == 14
+		}
+		if isUser {
 			wantRole = RoleUser
 		}
 		assert.Equal(t, wantRole, msg.Role)
