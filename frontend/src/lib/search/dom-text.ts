@@ -46,7 +46,7 @@ function isCodePointBoundary(value: string, index: number): boolean {
   return !(previous >= 0xd800 && previous <= 0xdbff && current >= 0xdc00 && current <= 0xdfff);
 }
 
-const WORD_END = /[\p{L}\p{M}\p{N}\p{Pc}]$/u;
+const WORD_END = /[\p{L}\p{M}\p{N}\p{Pc}]+$/u;
 const WORD_START = /^[\p{L}\p{M}\p{N}\p{Pc}]/u;
 
 function findFoldedOffsets(text: string, query: string, wholeWord: boolean): TextOccurrence[] {
