@@ -23,7 +23,7 @@ func TestSignalSchedulerRetriesExhaustedSnapshotConflicts(t *testing.T) {
 	h := newSchedulerHarness(10*time.Second, 2*time.Second)
 	defer h.sched.stop()
 	runs, conflicts := 0, 0
-	h.sched.run = func(id string) {
+	h.sched.run = func(id string) bool {
 		runs++
 		_, err := engine.recomputeSignalsFromDBWithHook(t.Context(), id, func(int) {
 			if runs != 1 {
@@ -39,7 +39,9 @@ func TestSignalSchedulerRetriesExhaustedSnapshotConflicts(t *testing.T) {
 		})
 		if err != nil {
 			h.sched.deferRetry(id)
+			return false
 		}
+		return true
 	}
 	h.sched.markDirty(sessionID)
 	require.Equal(t, 3, conflicts)
@@ -59,9 +61,10 @@ func TestSignalSchedulerRetriesExhaustedSnapshotConflicts(t *testing.T) {
 func TestSignalSchedulerDoesNotRetryFailedShutdownFlush(t *testing.T) {
 	h := newSchedulerHarness(10*time.Second, 2*time.Second)
 	runs := 0
-	h.sched.run = func(id string) {
+	h.sched.run = func(id string) bool {
 		runs++
 		h.sched.deferRetry(id)
+		return false
 	}
 	h.sched.markDirty("session")
 	require.Equal(t, 1, runs)

@@ -174,13 +174,28 @@ func (s *Server) humaListAgents(
 }
 
 func (s *Server) humaGetVersion(
-	_ context.Context,
+	ctx context.Context,
 	_ *emptyInput,
 ) (*jsonOutput[VersionInfo], error) {
 	version := s.version
 	version.InsightGenerationAvailable = supportsInsightGeneration(s.db)
+	version.FrictionAvailable = supportsFrictionLog(s.db)
+	version.FrictionBuildAvailable = s.frictionRunner != nil
+	version.KataAvailable = s.kataConn().VersionReady(ctx)
+	version.KataFilingAvailable = s.frictionFiler != nil && version.KataAvailable
 	_, version.SessionStatsAvailable = s.db.(*db.DB)
 	return &jsonOutput[VersionInfo]{Body: version}, nil
+}
+
+func supportsFrictionLog(store db.Store) bool {
+	if _, local := store.(*db.DB); local {
+		return true
+	}
+	if capable, ok := store.(interface{ FrictionReadAvailable() bool }); ok {
+		return capable.FrictionReadAvailable()
+	}
+	capable, ok := store.(interface{ FrictionAvailable() bool })
+	return ok && capable.FrictionAvailable()
 }
 
 func (s *Server) humaGetMemoryStatus(

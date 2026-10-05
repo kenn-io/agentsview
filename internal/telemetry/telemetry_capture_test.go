@@ -67,6 +67,7 @@ func TestCoreActionAllowlist(t *testing.T) {
 		{EventInsightGenerated, "kind", "llm_canned", false},
 		{EventAnalyticsViewed, "page", "trends", true},
 		{EventAnalyticsViewed, "page", "sessions", false},
+		{EventExportRun, "format", "friction_markdown", true},
 	}
 	for _, c := range cases {
 		body, err := json.Marshal(map[string]any{"event": c.event, "properties": map[string]any{c.key: c.value, "query": "secret prompt"}})

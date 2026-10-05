@@ -2,15 +2,19 @@ package sync_test
 
 import (
 	"bytes"
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
+	syncpkg "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
@@ -41,6 +45,117 @@ func checkpointCodexInitial() string {
 			"exec_command", "call_cp", nil, "2024-01-01T10:00:02Z",
 		),
 	)
+}
+
+func checkpointCodexLargeInitial() string {
+	events := []string{
+		testjsonl.CodexSessionMetaJSON(
+			checkpointTestUUID, "/tmp/proj", "codex_cli_rs",
+			"2024-01-01T10:00:00Z",
+		),
+	}
+	start := time.Date(2024, 1, 1, 10, 0, 1, 0, time.UTC)
+	for i := range 400 {
+		timestamp := start.Add(time.Duration(i*2) * time.Second).Format(time.RFC3339)
+		events = append(events,
+			testjsonl.CodexMsgJSON("user", fmt.Sprintf("request %d", i), timestamp),
+			testjsonl.CodexMsgJSON("assistant", fmt.Sprintf("answer %d", i), timestamp),
+		)
+	}
+	return testjsonl.JoinJSONL(events...)
+}
+
+func TestCodexCheckpointWatcherAppendsDeferFrictionUntilQuiet(t *testing.T) {
+	var frictionPasses atomic.Int64
+	emitter := &fakeEmitter{}
+	env := setupTestEnv(t,
+		WithEmitter(emitter),
+		WithFrictionDims(func(context.Context, db.Session) (db.FrictionSessionDims, bool) {
+			frictionPasses.Add(1)
+			return db.FrictionSessionDims{}, true
+		}),
+	)
+	ctx := t.Context()
+	path := writeCheckpointCodexSession(t, env, checkpointCodexLargeInitial())
+	env.engine.SyncAll(ctx, nil)
+	initialPasses := frictionPasses.Load()
+	require.Positive(t, initialPasses,
+		"the dimensions callback must observe the initial full-session Friction pass")
+	sessionID := "codex:" + checkpointTestUUID
+	session, err := env.db.GetSessionFull(ctx, sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.GreaterOrEqual(t, session.MessageCount, 800,
+		"the append workload must begin with a large stored session")
+
+	for i := range 3 {
+		appended := testjsonl.JoinJSONL(testjsonl.CodexMsgJSON(
+			"assistant", fmt.Sprintf("streamed answer %d", i),
+			time.Date(2024, 1, 2, 0, i, 0, 0, time.UTC).Format(time.RFC3339),
+		))
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+		require.NoError(t, err)
+		_, writeErr := f.WriteString(appended)
+		closeErr := f.Close()
+		require.NoError(t, writeErr)
+		require.NoError(t, closeErr)
+		require.NoError(t, syncpkg.ApplyWatchBatch(ctx, env.engine,
+			syncpkg.WatchBatch{Paths: []string{path}}, nil))
+
+		session, err = env.db.GetSessionFull(ctx, sessionID)
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		assert.True(t, session.LastWriteIncremental,
+			"each watcher append must resume the saved Codex checkpoint")
+		assert.Equal(t, initialPasses, frictionPasses.Load(),
+			"ordinary watcher batches must leave full Friction recomputation deferred")
+	}
+
+	refreshesBeforeFlush := 0
+	for _, scope := range emitter.got() {
+		if scope == "sessions" {
+			refreshesBeforeFlush++
+		}
+	}
+	require.Eventually(t, func() bool {
+		return frictionPasses.Load() > initialPasses
+	}, 5*time.Second, 10*time.Millisecond,
+		"the quiet-period flush must eventually publish Friction for the appended transcript")
+	assert.Equal(t, initialPasses+1, frictionPasses.Load(),
+		"a burst of small appends should coalesce into one full Friction pass")
+	require.Eventually(t, func() bool {
+		count := 0
+		for _, scope := range emitter.got() {
+			if scope == "sessions" {
+				count++
+			}
+		}
+		return count > refreshesBeforeFlush
+	}, 5*time.Second, 10*time.Millisecond,
+		"readers must receive a session refresh after deferred Friction publication")
+
+	beforePush := frictionPasses.Load()
+	appended := testjsonl.JoinJSONL(testjsonl.CodexMsgJSON(
+		"assistant", "output before push", "2024-01-03T00:00:00Z",
+	))
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, writeErr := f.WriteString(appended)
+	closeErr := f.Close()
+	require.NoError(t, writeErr)
+	require.NoError(t, closeErr)
+	workCalled := false
+	_, err = env.engine.SyncWatchBatchThenRun(ctx,
+		syncpkg.WatchBatch{Paths: []string{path}}, nil,
+		func() error {
+			workCalled = true
+			assert.Equal(t, beforePush+1, frictionPasses.Load(),
+				"push work must observe a fresh Friction snapshot")
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	assert.True(t, workCalled)
 }
 
 func TestCodexCheckpointFullParsePersistsCheckpoint(t *testing.T) {

@@ -62,7 +62,16 @@ describe("parsePath", () => {
   });
 
   it("parses page routes", () => {
-    for (const route of ["usage", "trends", "recall", "quality", "pinned", "trash", "settings"]) {
+    for (const route of [
+      "usage",
+      "trends",
+      "recall",
+      "quality",
+      "friction",
+      "pinned",
+      "trash",
+      "settings",
+    ]) {
       setURL(`/${route}`);
       const result = parsePath();
       expect(result.route).toBe(route);
@@ -76,6 +85,27 @@ describe("parsePath", () => {
     expect(parsed.route).toBe("activity");
     expect(parsed.params.preset).toBe("week");
     expect(parsed.params.date).toBe("2026-06-16");
+  });
+
+  it("opens the date in a Kata digest link under a hosted base path", () => {
+    const base = document.createElement("base");
+    base.href = "/archive/";
+    document.head.append(base);
+    try {
+      setURL("/archive/friction/2026-09-20?desktop=1&date=2026-09-21");
+      const store = new RouterStore();
+      try {
+        expect(store.route).toBe("friction");
+        expect(store.params).toEqual({ desktop: "1", date: "2026-09-20" });
+        setURL("/archive/friction/2026-09-19");
+        window.dispatchEvent(new PopStateEvent("popstate"));
+        expect(store.params.date).toBe("2026-09-19");
+      } finally {
+        store.destroy();
+      }
+    } finally {
+      base.remove();
+    }
   });
 
   it("replaceParams writes query without a new history entry, keeping the path", () => {

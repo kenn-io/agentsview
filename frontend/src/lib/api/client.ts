@@ -11,6 +11,7 @@ import {
   SessionsService,
   InsightsService,
   ImportService,
+  FrictionService,
   type DbSessionTiming as SessionTiming,
   type ImporterImportStats as ImportStats,
 } from "./generated/index.js";
@@ -272,11 +273,21 @@ export async function downloadInsightExport(insightId: number): Promise<void> {
   );
 }
 
+/** Download a stored Friction Log digest as Markdown with remote auth headers. */
+export async function downloadFrictionDigestMarkdown(date: string): Promise<void> {
+  await downloadAuthenticatedExport(
+    FrictionService.getGetApiV1FrictionDigestsByDateMdUrl({ date }),
+    () => FrictionService.getApiV1FrictionDigestsByDateMd({ date }),
+    `friction-log-${date}.md`,
+    "friction_markdown",
+  );
+}
+
 async function downloadAuthenticatedExport(
   url: string,
   request: () => Promise<Response>,
   fallbackFilename: string,
-  format: "html" | "insight_html",
+  format: "html" | "insight_html" | "friction_markdown",
 ): Promise<void> {
   reportTelemetry("export_run", { format });
   const token = getAuthToken();

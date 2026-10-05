@@ -83,6 +83,7 @@ type httpBackend struct {
 	longRunningClient *http.Client
 	readOnly          bool
 	recallQueries     bool
+	friction          bool
 	token             string
 }
 
@@ -91,8 +92,9 @@ const recallNonRecordingAPIVersion = 4
 // HTTPServerCapabilities is the subset of version metadata needed to expose
 // client features safely for an explicitly selected daemon.
 type HTTPServerCapabilities struct {
-	ReadOnly   bool `json:"read_only"`
-	APIVersion int  `json:"api_version"`
+	ReadOnly          bool `json:"read_only"`
+	APIVersion        int  `json:"api_version"`
+	FrictionAvailable bool `json:"friction_available"`
 }
 
 // NewHTTPBackend constructs a SessionService that proxies to a
@@ -104,6 +106,7 @@ type HTTPServerCapabilities struct {
 // an empty value uses baseURL.
 func NewHTTPBackend(baseURL, token string, readOnly bool, browserURL string) service.SessionService {
 	b := newHTTPBackend(baseURL, token, readOnly, !readOnly)
+	b.friction = true
 	if browserURL != "" {
 		b.browserURL = browserURL
 	}
@@ -115,13 +118,15 @@ func NewHTTPBackend(baseURL, token string, readOnly bool, browserURL string) ser
 func NewHTTPBackendForServer(
 	baseURL, token string, capabilities HTTPServerCapabilities,
 ) service.SessionService {
-	return newHTTPBackend(
+	b := newHTTPBackend(
 		baseURL,
 		token,
 		capabilities.ReadOnly,
 		!capabilities.ReadOnly &&
 			capabilities.APIVersion >= recallNonRecordingAPIVersion,
 	)
+	b.friction = capabilities.APIVersion >= frictionAPIVersion && capabilities.FrictionAvailable
+	return b
 }
 
 func newHTTPBackend(
@@ -157,7 +162,11 @@ func ProbeHTTPServerCapabilities(
 		return HTTPServerCapabilities{},
 			fmt.Errorf("probing server capabilities: %w", err)
 	}
-	return HTTPServerCapabilities{ReadOnly: response.JSON200.ReadOnly != nil && *response.JSON200.ReadOnly, APIVersion: int(response.JSON200.APIVersion)}, nil
+	return HTTPServerCapabilities{
+		ReadOnly:          response.JSON200.ReadOnly != nil && *response.JSON200.ReadOnly,
+		APIVersion:        int(response.JSON200.APIVersion),
+		FrictionAvailable: response.JSON200.FrictionAvailable,
+	}, nil
 }
 
 func (b *httpBackend) SupportsRecallQueries() bool { return b.recallQueries }

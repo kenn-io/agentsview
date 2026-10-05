@@ -107,6 +107,10 @@ describe("AnalyticsPage outcome window", () => {
             api_version: 10,
             data_version: 1,
             insight_generation_available: false,
+            friction_available: false,
+            friction_build_available: false,
+            kata_available: false,
+            kata_filing_available: false,
             session_stats_available: backendAvailable,
           };
     router.route = "sessions";
@@ -142,6 +146,10 @@ describe("AnalyticsPage outcome window", () => {
         api_version: 10,
         data_version: 1,
         insight_generation_available: false,
+        friction_available: false,
+        friction_build_available: false,
+        kata_available: false,
+        kata_filing_available: false,
         session_stats_available: true,
         read_only: true,
       };

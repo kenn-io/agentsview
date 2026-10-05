@@ -355,6 +355,15 @@ func TestHostedTenantRejectsPrivilegedFunctions(t *testing.T) {
 	assert.Error(t, CheckHostedTenant(t.Context(), f.runtime, f.schema, f.tenant))
 }
 
+func TestHostedTenantIgnoresPrivilegedFunctionsInInaccessibleSchemas(t *testing.T) {
+	f := newHostedFixture(t, "tenant-a")
+	sibling := newHostedFixture(t, "tenant-b")
+	_, err := sibling.admin.ExecContext(t.Context(), `CREATE FUNCTION privileged_read() RETURNS integer LANGUAGE sql SECURITY DEFINER AS 'SELECT 1'`)
+	require.NoError(t, err)
+
+	require.NoError(t, CheckHostedTenant(t.Context(), f.runtime, f.schema, f.tenant))
+}
+
 func TestHostedTenantProvisioningUsesOneConnection(t *testing.T) {
 	pg := newHostedLegacyFixture(t)
 	var schema string

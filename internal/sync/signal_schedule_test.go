@@ -30,13 +30,14 @@ type schedulerHarness struct {
 
 func newSchedulerHarness(interval, quiet time.Duration) *schedulerHarness {
 	h := &schedulerHarness{clock: time.Unix(1_700_000_000, 0)}
-	record := func(id string) {
+	record := func(id string) bool {
 		h.mu.Lock()
 		h.runs = append(h.runs, id)
 		if h.inExclusive {
 			h.deferred = append(h.deferred, id)
 		}
 		h.mu.Unlock()
+		return true
 	}
 	h.sched = newSignalScheduler(interval, quiet, record,
 		func(flush func()) {
@@ -130,6 +131,19 @@ func TestSignalSchedulerFirstMarkRunsInline(t *testing.T) {
 		"first mark after quiet should recompute immediately")
 	assert.Zero(t, h.armedCount(),
 		"inline run should not arm a flush timer")
+}
+
+func TestSignalSchedulerDeferredMarkPreservesIncrementalFastPath(t *testing.T) {
+	h := newSchedulerHarness(10*time.Second, 2*time.Second)
+
+	h.sched.markDirtyDeferred("s1")
+	assert.Empty(t, h.runsSnapshot(), "the append must not load session history")
+	require.Equal(t, 1, h.armedCount())
+
+	h.advance(2 * time.Second)
+	h.fireTimer(t)
+	assert.Equal(t, []string{"s1"}, h.deferredSnapshot(),
+		"the quiet flush must publish the new findings")
 }
 
 func TestSignalSchedulerDefersWithinIntervalThenQuietFlush(t *testing.T) {
@@ -278,7 +292,7 @@ func TestSignalSchedulerStopWaitsForInflightTimerRun(t *testing.T) {
 		var mu sync.Mutex
 		clock := time.Unix(1_700_000_000, 0)
 		sched := newSignalScheduler(10*time.Second, 2*time.Second,
-			func(string) {},
+			func(string) bool { return true },
 			func(flush func()) {
 				startedOnce.Do(func() { close(started) })
 				<-release
@@ -624,10 +638,11 @@ func TestSignalSchedulerRealTimerFlushes(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var mu sync.Mutex
 		var runs int
-		run := func(string) {
+		run := func(string) bool {
 			mu.Lock()
 			runs++
 			mu.Unlock()
+			return true
 		}
 		sched := newSignalScheduler(
 			50*time.Millisecond, 10*time.Millisecond, run,

@@ -1,0 +1,406 @@
+package postgres
+
+import (
+	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"log"
+	"sort"
+	"time"
+
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/friction"
+)
+
+// FrictionAvailable reports whether startup proved this role can write the
+// friction review tables. pg serve runs the friction-review job only then.
+func (s *Store) FrictionAvailable() bool { return s.frictionAvailable.Load() }
+
+// FrictionReadAvailable reports whether this role can read the Friction Log
+// tables. Read-only roles can serve existing digests without building new ones.
+func (s *Store) FrictionReadAvailable() bool { return s.frictionReadAvailable.Load() }
+
+// DetectFrictionAvailability probes read access directly and probes write
+// access inside a rolled-back transaction. Read-only roles can serve existing
+// digests without running the builder.
+func (s *Store) DetectFrictionAvailability(ctx context.Context) {
+	s.frictionReadAvailable.Store(false)
+	s.frictionAvailable.Store(false)
+	for _, table := range []struct{ name, column string }{
+		{"friction_findings", "session_id"},
+		{"friction_session_dims", "session_id"},
+		{"friction_digests", "date"},
+		{"friction_digest_sessions", "subject_id"},
+		{"friction_digest_fingerprints", "fingerprint"},
+		{"friction_patterns", "fingerprint"},
+		{"friction_issue_links", "fingerprint"},
+	} {
+		if !pgHasTable(ctx, s.pg, table.name) {
+			return
+		}
+		if err := func() error {
+			rows, err := s.pg.QueryContext(ctx, "SELECT "+table.column+" FROM "+table.name+" LIMIT 0")
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			for rows.Next() {
+			}
+			return rows.Err()
+		}(); err != nil {
+			log.Printf("friction: read capability probe: %v", err)
+			return
+		}
+	}
+	s.frictionReadAvailable.Store(true)
+
+	tx, err := s.pg.BeginTx(ctx, nil)
+	if err != nil {
+		log.Printf("friction: capability probe: %v", err)
+		return
+	}
+	defer func() { _ = tx.Rollback() }()
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO friction_digests (date, timezone, rules_version, built_at,
+			sessions_scanned, snapshot_json, summary_json, markdown,
+			markdown_sha256, run_id)
+		VALUES ('0000-00-00', 'UTC', '', NOW(), 0, '', '', '', '', '')
+		ON CONFLICT (date) DO NOTHING`)
+	if err == nil {
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO friction_digest_sessions (subject_id, date, subject_kind)
+			VALUES ('friction-capability-probe', '0000-00-00', 'diagnostic')
+			ON CONFLICT (subject_id) DO NOTHING`)
+	}
+	if err == nil {
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO friction_patterns (fingerprint, kind, title,
+				first_seen_date, last_seen_date, occurrence_count, session_count,
+				last_subject_id)
+			VALUES ('friction-capability-probe', 'pattern', '',
+				'0000-00-00', '0000-00-00', 0, 0, 'friction-capability-probe')
+			ON CONFLICT (fingerprint) DO NOTHING`)
+	}
+	if err == nil {
+		for _, query := range []string{
+			"UPDATE friction_digests SET revision = revision WHERE date = '0000-00-00'",
+			"UPDATE friction_patterns SET title = title WHERE fingerprint = 'friction-capability-probe'",
+		} {
+			if _, err = tx.ExecContext(ctx, query); err != nil {
+				break
+			}
+		}
+	}
+	if err != nil {
+		if !IsReadOnlyError(err) {
+			log.Printf("friction: capability probe: %v", err)
+		}
+		return
+	}
+	s.frictionAvailable.Store(true)
+}
+
+func (s *Store) FrictionSubjectsForDate(
+	ctx context.Context, date string, loc *time.Location, includeDigested bool,
+) ([]db.FrictionSubject, error) {
+	from, to, err := db.FrictionDayBounds(date, loc)
+	if err != nil {
+		return nil, err
+	}
+	labels, err := s.GetMachineLabels(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.pg.QueryContext(ctx, `
+		SELECT s.id, s.machine, COALESCE(s.file_path, ''), s.agent,
+			(s.parent_session_id IS NOT NULL AND s.relationship_type = 'subagent'),
+			COALESCE(s.ended_at, s.started_at), s.friction_rules_version,
+			COALESCE(d.seat, ''), COALESCE(d.persona, ''), COALESCE(d.channel, ''),
+			COALESCE(d.dims_source, ''), COALESCE(d.review_excluded, FALSE),
+			COALESCE(ds.date, '')
+		FROM sessions s
+		LEFT JOIN friction_session_dims d ON d.session_id = s.id
+		LEFT JOIN friction_digest_sessions ds ON ds.subject_id = s.id
+		WHERE s.deleted_at IS NULL
+		  AND COALESCE(d.review_excluded, FALSE) = FALSE
+		  AND ((ds.subject_id IS NULL
+		        AND COALESCE(s.ended_at, s.started_at) >= $1
+		        AND COALESCE(s.ended_at, s.started_at) < $2)
+		    OR ($3 AND ds.date = $4))`,
+		from.UTC(), to.UTC(), includeDigested, date)
+	if err != nil {
+		return nil, fmt.Errorf("listing friction subjects: %w", err)
+	}
+	defer rows.Close()
+	out := []db.FrictionSubject{}
+	for rows.Next() {
+		var (
+			sub        db.FrictionSubject
+			machine    string
+			last       sql.NullTime
+			digestDate string
+		)
+		if err := rows.Scan(&sub.SubjectID, &machine, &sub.FilePath, &sub.Agent,
+			&sub.IsSubAgent, &last, &sub.RulesVersion, &sub.Dims.Seat,
+			&sub.Dims.Persona, &sub.Dims.Channel, &sub.Dims.DimsSource,
+			&sub.Dims.ReviewExcluded, &digestDate); err != nil {
+			return nil, fmt.Errorf("scanning friction subject: %w", err)
+		}
+		if last.Valid {
+			sub.LastActivity = last.Time.UTC()
+		}
+		sub.SubjectKind = friction.SubjectSession
+		sub.AlreadyDigested = digestDate != ""
+		sub.Dims.SessionID = sub.SubjectID
+		sub.Machine = machine
+		if label := labels[machine]; label != "" {
+			sub.Machine = label
+		}
+		out = append(out, sub)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) FrictionFindingsForSubjects(
+	ctx context.Context, subjectIDs []string,
+) ([]db.FrictionFinding, error) {
+	out := []db.FrictionFinding{}
+	for start := 0; start < len(subjectIDs); start += 500 {
+		chunk := subjectIDs[start:min(start+500, len(subjectIDs))]
+		findings, err := s.frictionFindingsChunk(ctx, chunk)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, findings...)
+	}
+	// PG has no rowid tiebreak; seq is unique within a session's findings.
+	// Sort in Go with byte order so collation never differs from SQLite.
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].SessionID != out[j].SessionID {
+			return out[i].SessionID < out[j].SessionID
+		}
+		return out[i].Seq < out[j].Seq
+	})
+	return out, nil
+}
+
+func (s *Store) frictionFindingsChunk(
+	ctx context.Context, subjectIDs []string,
+) ([]db.FrictionFinding, error) {
+	pb := &paramBuilder{}
+	in := pgInPlaceholders(subjectIDs, pb)
+	rows, err := s.pg.QueryContext(ctx, `
+		SELECT session_id, kind, detector, message_ordinal, call_index,
+			tool_name, label, text, evidence, title, fingerprint,
+			occurred_at, seq, rules_version
+		FROM friction_findings
+		WHERE session_id IN `+in, pb.args...)
+	if err != nil {
+		return nil, fmt.Errorf("loading friction findings: %w", err)
+	}
+	defer rows.Close()
+	out := []db.FrictionFinding{}
+	for rows.Next() {
+		var (
+			f         db.FrictionFinding
+			ord, call sql.NullInt64
+			occurred  sql.NullTime
+		)
+		if err := rows.Scan(&f.SessionID, &f.Kind, &f.Detector, &ord, &call,
+			&f.ToolName, &f.Label, &f.Text, &f.Evidence, &f.Title, &f.Fingerprint,
+			&occurred, &f.Seq, &f.RulesVersion); err != nil {
+			return nil, fmt.Errorf("scanning friction finding: %w", err)
+		}
+		if ord.Valid {
+			f.MessageOrdinal = new(int(ord.Int64))
+		}
+		if call.Valid {
+			f.CallIndex = new(int(call.Int64))
+		}
+		if occurred.Valid {
+			f.OccurredAt = new(occurred.Time.UTC())
+		}
+		out = append(out, f)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *Store) SaveFrictionDigest(
+	ctx context.Context, d db.FrictionDigest,
+	subjects []db.FrictionDigestSubject, patterns []db.FrictionPatternUpdate,
+) error {
+	fingerprints, err := friction.SnapshotFingerprintList(d.SnapshotJSON)
+	if err != nil {
+		return fmt.Errorf("indexing friction digest %s fingerprints: %w", d.Date, err)
+	}
+	if len(fingerprints) == 0 {
+		fingerprints = []string{""}
+	}
+	tx, err := s.pg.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning friction digest tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	var res sql.Result
+	if d.Revision <= 1 {
+		res, err = tx.ExecContext(ctx, `
+			INSERT INTO friction_digests (date, timezone, rules_version, built_at,
+				revision, sessions_scanned, snapshot_json, summary_json, markdown,
+				markdown_sha256, run_id)
+			VALUES ($1, $2, $3, $4, 1, $5, $6, $7, $8, $9, $10)
+			ON CONFLICT (date) DO NOTHING`,
+			d.Date, d.Timezone, d.RulesVersion, d.BuiltAt.UTC(), d.SessionsScanned,
+			string(d.SnapshotJSON), string(d.SummaryJSON), string(d.Markdown),
+			d.MarkdownSHA256, d.RunID)
+	} else {
+		res, err = tx.ExecContext(ctx, `
+			UPDATE friction_digests SET timezone = $1, rules_version = $2,
+				built_at = $3, revision = $4, sessions_scanned = $5,
+				snapshot_json = $6, summary_json = $7, markdown = $8,
+				markdown_sha256 = $9, run_id = $10
+			WHERE date = $11 AND revision = $12`,
+			d.Timezone, d.RulesVersion, d.BuiltAt.UTC(), d.Revision, d.SessionsScanned,
+			string(d.SnapshotJSON), string(d.SummaryJSON), string(d.Markdown),
+			d.MarkdownSHA256, d.RunID, d.Date, d.Revision-1)
+	}
+	if err != nil {
+		return fmt.Errorf("writing friction digest %s: %w", d.Date, err)
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return fmt.Errorf("writing friction digest %s: %w", d.Date, err)
+	} else if n == 0 {
+		return db.ErrFrictionDigestConflict
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM friction_digest_fingerprints WHERE date = $1`, d.Date,
+	); err != nil {
+		return fmt.Errorf("replacing friction digest %s fingerprint index: %w", d.Date, err)
+	}
+	for _, fingerprint := range fingerprints {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO friction_digest_fingerprints (date, fingerprint)
+			VALUES ($1, $2) ON CONFLICT (date, fingerprint) DO NOTHING`,
+			d.Date, fingerprint); err != nil {
+			return fmt.Errorf("indexing friction digest %s fingerprint: %w", d.Date, err)
+		}
+	}
+	for _, sub := range subjects {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO friction_digest_sessions (subject_id, date, subject_kind)
+			VALUES ($1, $2, $3) ON CONFLICT (subject_id) DO NOTHING`,
+			sub.SubjectID, sub.Date, sub.SubjectKind); err != nil {
+			return fmt.Errorf("recording friction subject %s: %w", sub.SubjectID, err)
+		}
+	}
+	for _, p := range patterns {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO friction_patterns (fingerprint, kind, title,
+				first_seen_date, last_seen_date, occurrence_count, session_count,
+				last_subject_id, last_ordinal)
+			VALUES ($1, $2, $3, $4, $4, $5, 1, $6, $7)
+			ON CONFLICT (fingerprint) DO UPDATE SET
+				kind = EXCLUDED.kind,
+				title = EXCLUDED.title,
+				occurrence_count = friction_patterns.occurrence_count + EXCLUDED.occurrence_count,
+				session_count = friction_patterns.session_count + 1,
+				first_seen_date = LEAST(friction_patterns.first_seen_date, EXCLUDED.first_seen_date),
+				last_subject_id = CASE WHEN EXCLUDED.last_seen_date >= friction_patterns.last_seen_date
+					THEN EXCLUDED.last_subject_id ELSE friction_patterns.last_subject_id END,
+				last_ordinal = CASE WHEN EXCLUDED.last_seen_date >= friction_patterns.last_seen_date
+					THEN EXCLUDED.last_ordinal ELSE friction_patterns.last_ordinal END,
+				last_seen_date = GREATEST(friction_patterns.last_seen_date, EXCLUDED.last_seen_date)`,
+			p.Fingerprint, p.Kind, p.Title, p.Date, p.Occurrences, p.SubjectID, p.Ordinal); err != nil {
+			return fmt.Errorf("updating friction pattern %s: %w", p.Fingerprint, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing friction digest %s: %w", d.Date, err)
+	}
+	return nil
+}
+
+func (s *Store) GetFrictionDigest(ctx context.Context, date string) (*db.FrictionDigest, error) {
+	var (
+		d                     db.FrictionDigest
+		snapshot, summary, md string
+	)
+	err := s.pg.QueryRowContext(ctx, `
+		SELECT date, timezone, rules_version, built_at, revision,
+			sessions_scanned, snapshot_json, summary_json, markdown,
+			markdown_sha256, run_id
+		FROM friction_digests WHERE date = $1`, date,
+	).Scan(&d.Date, &d.Timezone, &d.RulesVersion, &d.BuiltAt, &d.Revision,
+		&d.SessionsScanned, &snapshot, &summary, &md, &d.MarkdownSHA256, &d.RunID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading friction digest %s: %w", date, err)
+	}
+	d.BuiltAt = d.BuiltAt.UTC()
+	d.SnapshotJSON, d.SummaryJSON, d.Markdown = []byte(snapshot), []byte(summary), []byte(md)
+	return &d, nil
+}
+
+func (s *Store) LatestFrictionDigestDate(ctx context.Context) (string, error) {
+	var date string
+	if err := s.pg.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(date), '') FROM friction_digests`,
+	).Scan(&date); err != nil {
+		return "", fmt.Errorf("reading latest friction digest date: %w", err)
+	}
+	return date, nil
+}
+
+func (s *Store) EarliestSessionDate(ctx context.Context, loc *time.Location) (string, error) {
+	var earliest sql.NullTime
+	if err := s.pg.QueryRowContext(ctx, `
+		SELECT MIN(COALESCE(ended_at, started_at)) FROM sessions
+		WHERE deleted_at IS NULL`,
+	).Scan(&earliest); err != nil {
+		return "", fmt.Errorf("reading earliest session date: %w", err)
+	}
+	if !earliest.Valid {
+		return "", nil
+	}
+	return earliest.Time.In(loc).Format("2006-01-02"), nil
+}
+
+func (s *Store) UpdateFrictionDigestRender(
+	ctx context.Context, date string, markdown, summaryJSON []byte, revision int,
+) error {
+	sum := sha256.Sum256(markdown)
+	res, err := s.pg.ExecContext(ctx, `
+		UPDATE friction_digests
+		SET markdown = $1, summary_json = $2, markdown_sha256 = $3, revision = $4
+		WHERE date = $5 AND revision = $6`,
+		string(markdown), string(summaryJSON), hex.EncodeToString(sum[:]),
+		revision, date, revision-1)
+	if err != nil {
+		return fmt.Errorf("re-rendering friction digest %s: %w", date, err)
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return fmt.Errorf("re-rendering friction digest %s: %w", date, err)
+	} else if n == 0 {
+		return db.ErrFrictionDigestConflict
+	}
+	return nil
+}
+
+func (s *Store) FrictionUsageForSessions(
+	ctx context.Context, sessionIDs []string,
+) (map[string]friction.SessionUsage, error) {
+	return db.FrictionUsageForSessionsFrom(ctx, s, sessionIDs)
+}
+
+func (s *Store) FrictionArchiveSpend(
+	ctx context.Context, from, to string, loc *time.Location,
+) (*friction.ArchiveSpend, error) {
+	return db.FrictionArchiveSpendFrom(ctx, s, from, to, loc)
+}

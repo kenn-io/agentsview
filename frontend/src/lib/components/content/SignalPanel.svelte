@@ -1,6 +1,8 @@
 <script lang="ts">
   import { m } from "../../i18n/index.js";
   import type { Session } from "../../api/types/core.js";
+  import { sync } from "../../stores/sync.svelte.js";
+  import SessionFrictionFindings from "../friction/SessionFrictionFindings.svelte";
   import {
     getGradeStyle,
     getGradeLabel,
@@ -142,6 +144,9 @@
         {/each}
       </div>
     {/if}
+  {/if}
+  {#if sync.serverVersion?.friction_available === true}
+    <SessionFrictionFindings sessionId={session.id} />
   {/if}
 </div>
 

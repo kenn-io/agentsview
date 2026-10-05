@@ -1830,6 +1830,10 @@ var readOnlyRequiredTables = []string{
 	"model_pricing_bands",
 	"genai_pricing",
 	"secret_findings",
+	"friction_digests",
+	"friction_digest_sessions",
+	"friction_digest_fingerprints",
+	"friction_patterns",
 	"recall_entries",
 	"recall_evidence",
 	"recall_query_events",
@@ -2548,6 +2552,18 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"ALTER TABLE sessions ADD COLUMN secrets_rules_version TEXT NOT NULL DEFAULT ''",
 		},
 		{
+			"sessions", "friction_count",
+			"ALTER TABLE sessions ADD COLUMN friction_count INTEGER NOT NULL DEFAULT 0",
+		},
+		{
+			"sessions", "friction_rules_version",
+			"ALTER TABLE sessions ADD COLUMN friction_rules_version TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			"sessions", "friction_hash",
+			"ALTER TABLE sessions ADD COLUMN friction_hash TEXT NOT NULL DEFAULT ''",
+		},
+		{
 			"recall_extract_progress", "content_stamped_at",
 			"ALTER TABLE recall_extract_progress ADD COLUMN content_stamped_at TEXT NOT NULL DEFAULT ''",
 		},
@@ -2646,6 +2662,10 @@ func schemaColumnMigrations() []schemaColumnMigration {
 		{
 			"sessions", "sync_marker",
 			"ALTER TABLE sessions ADD COLUMN sync_marker TEXT",
+		},
+		{
+			"friction_issue_links", "create_idempotency_key",
+			"ALTER TABLE friction_issue_links ADD COLUMN create_idempotency_key TEXT NOT NULL DEFAULT ''",
 		},
 	}
 }
@@ -4807,6 +4827,9 @@ func (db *DB) init(ctx context.Context, progress OpenProgressFunc) error {
 	w := db.getWriter()
 	progress.report("Updating database schema and indexes")
 	if err := execSchemaScriptLocked(ctx, w); err != nil {
+		return err
+	}
+	if err := db.backfillFrictionDigestFingerprintIndex(ctx, w); err != nil {
 		return err
 	}
 

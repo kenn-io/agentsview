@@ -62,6 +62,9 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
 		if err = installRawProjectionUpgrade(ctx, tx, schema, tenant); err != nil {
 			return err
 		}
+		if err = installHostedFrictionUpgrade(ctx, tx, schema, tenant); err != nil {
+			return err
+		}
 		if _, err = tx.ExecContext(ctx, hostedLegacyRevisionDDL); err != nil {
 			return err
 		}
@@ -259,7 +262,7 @@ func CheckHostedTenant(ctx context.Context, database *sql.DB, schema, tenant str
 	if err = conn.QueryRowContext(ctx, `SELECT r.rolsuper OR r.rolbypassrls OR r.rolcreaterole OR r.rolcreatedb OR r.rolreplication OR current_user<>session_user
   OR EXISTS(SELECT 1 FROM pg_auth_members WHERE member=r.oid)
   OR has_database_privilege(current_database(),'CREATE')
-  OR EXISTS(SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE p.prosecdef AND n.nspname !~ '^pg_' AND n.nspname<>'information_schema' AND has_function_privilege(p.oid,'EXECUTE'))
+  OR EXISTS(SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE p.prosecdef AND n.nspname !~ '^pg_' AND n.nspname<>'information_schema' AND has_schema_privilege(n.oid,'USAGE') AND has_function_privilege(p.oid,'EXECUTE'))
   OR EXISTS(SELECT 1 FROM pg_namespace n WHERE n.nspname !~ '^pg_' AND n.nspname<>'information_schema' AND (n.nspowner=r.oid OR has_schema_privilege(n.oid,'CREATE') OR (n.nspname<>$1 AND n.nspname<>'public' AND has_schema_privilege(n.oid,'USAGE'))))
   OR EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relkind IN ('r','p') AND (has_table_privilege(c.oid,'TRUNCATE,TRIGGER,REFERENCES') OR has_any_column_privilege(c.oid,'REFERENCES')))
   OR EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname !~ '^pg_' AND n.nspname<>'information_schema' AND c.relkind IN ('r','p','v','m','f','S') AND (c.relowner=r.oid OR (n.nspname<>$1 AND CASE WHEN c.relkind='S' THEN has_sequence_privilege(c.oid,'USAGE,SELECT,UPDATE') ELSE (has_table_privilege(c.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') OR has_any_column_privilege(c.oid,'SELECT,INSERT,UPDATE,REFERENCES')) END)))

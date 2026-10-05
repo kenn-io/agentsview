@@ -463,6 +463,9 @@ func (e *Engine) SyncWatchBatchThenRun(
 		return stats, nil
 	}
 	e.signalSched.flushAllInline()
+	if work != nil {
+		e.frictionSched.flushAllInline()
+	}
 	e.clearCurrentProgress()
 	if work != nil {
 		if err := work(); err != nil {

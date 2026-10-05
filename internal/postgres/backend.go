@@ -144,6 +144,7 @@ func prepareServeStore(ctx context.Context, store *Store, schema string) error {
 			"probing insight generation capability: %w", err,
 		)
 	}
+	store.DetectFrictionAvailability(ctx)
 	return nil
 }
 

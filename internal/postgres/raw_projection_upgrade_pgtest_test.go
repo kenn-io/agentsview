@@ -35,3 +35,23 @@ func TestHostedReprovisionRestoresMigratedColumnsAndIndexes(t *testing.T) {
 	require.NoError(t, constructorErr)
 	require.NoError(t, CheckHostedTenant(t.Context(), f.runtime, f.schema, f.tenant))
 }
+
+func TestHostedReprovisionRestoresFrictionRelations(t *testing.T) {
+	f := newHostedFixture(t, "tenant-friction-upgrade")
+	_, err := f.admin.ExecContext(t.Context(), `DROP TABLE friction_findings, friction_session_dims, friction_digests, friction_digest_sessions, friction_digest_fingerprints, friction_patterns, friction_issue_links CASCADE`)
+	require.NoError(t, err)
+	require.Error(t, CheckHostedTenant(t.Context(), f.runtime, f.schema, f.tenant))
+
+	require.NoError(t, EnsureHostedTenant(t.Context(), f.admin, f.schema, f.tenant))
+	_, err = f.admin.ExecContext(t.Context(), `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA "`+f.schema+`" TO "`+f.role+`";
+ GRANT USAGE ON ALL SEQUENCES IN SCHEMA "`+f.schema+`" TO "`+f.role+`"`)
+	require.NoError(t, err)
+	require.NoError(t, CheckHostedTenant(t.Context(), f.runtime, f.schema, f.tenant))
+	_, err = f.admin.ExecContext(t.Context(), `ALTER TABLE friction_issue_links DROP COLUMN create_idempotency_key`)
+	require.NoError(t, err)
+	require.NoError(t, EnsureHostedTenant(t.Context(), f.admin, f.schema, f.tenant))
+	require.NoError(t, CheckHostedTenant(t.Context(), f.runtime, f.schema, f.tenant))
+	var keyColumn bool
+	require.NoError(t, f.admin.QueryRowContext(t.Context(), `SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=$1 AND table_name='friction_issue_links' AND column_name='create_idempotency_key')`, f.schema).Scan(&keyColumn))
+	assert.True(t, keyColumn)
+}

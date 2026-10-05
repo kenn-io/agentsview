@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-09-21
+last_edited: 2026-10-04
 title: MCP Server
 description: Connect assistant clients to your AgentsView session history with MCP
 ---
@@ -57,16 +57,23 @@ For local desktop-style MCP clients, use stdio:
 Restart or reload your MCP client after adding the server. Once connected, the
 client will see these tools:
 
-| Tool                   | Purpose                                                                  |
-| ---------------------- | ------------------------------------------------------------------------ |
-| `search_sessions`      | Full-text search across recorded sessions                                |
-| `list_sessions`        | List recent or filtered sessions                                         |
-| `get_session_overview` | Fetch metadata and a compact message preview                             |
-| `get_messages`         | Read paginated message bodies from one session                           |
-| `get_memory_status`    | Report archive, lexical, semantic, and source readiness                  |
-| `search_content`       | Substring, regex, terms, semantic, or hybrid search over session text    |
-| `get_usage_summary`    | Aggregate token and cost usage                                           |
-| `query_recall`         | Search extracted Recall entries when the backend supports Recall queries |
+| Tool                     | Purpose                                                                  |
+| ------------------------ | ------------------------------------------------------------------------ |
+| `search_sessions`        | Full-text search across recorded sessions                                |
+| `list_sessions`          | List recent or filtered sessions                                         |
+| `get_session_overview`   | Fetch metadata and a compact message preview                             |
+| `get_messages`           | Read paginated message bodies from one session                           |
+| `get_memory_status`      | Report archive, lexical, semantic, and source readiness                  |
+| `search_content`         | Substring, regex, terms, semantic, or hybrid search over session text    |
+| `get_usage_summary`      | Aggregate token and cost usage                                           |
+| `query_recall`           | Search extracted Recall entries when the backend supports Recall queries |
+| `get_friction_digest`    | Read a dated Friction Log digest as Markdown or the summary object       |
+| `list_friction_patterns` | List recurring friction patterns ranked by occurrences                   |
+
+`get_friction_digest` defaults to the latest digest; pass `date` (YYYY-MM-DD)
+and `format` (`markdown` or `summary`). `list_friction_patterns` accepts `kind`,
+`since`, `limit` (default 20, max 100) and `linked`. Both are read-only and
+report [Friction Log](friction-log.md) heuristics, not ground truth.
 
 ### Focused memory profile
 
