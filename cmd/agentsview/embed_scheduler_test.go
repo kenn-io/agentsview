@@ -27,6 +27,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	corerecall "go.kenn.io/agentsview/internal/recall"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/vector"
 )
@@ -1376,7 +1377,17 @@ func TestRecallSearchRejectsCorpusMutationUntilRefresh(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestRecallSearchServesIndexWithinRevisionLag(t *testing.T) {
+// laggedRecallSearch is a Recall index built over two accepted entries and
+// served with a revision lag bound.
+type laggedRecallSearch struct {
+	database     *db.DB
+	mgr          *vector.Manager
+	searcher     recallSearcherAdapter
+	queryEncoder kitvec.EncodeFunc
+}
+
+func newLaggedRecallSearch(t *testing.T, maxLag int, reviewState string) laggedRecallSearch {
+	t.Helper()
 	dataDir := t.TempDir()
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
 	dbtest.SeedSession(t, database, "s1", "agentsview")
@@ -1385,6 +1396,7 @@ func TestRecallSearchServesIndexWithinRevisionLag(t *testing.T) {
 		{ID: "entry-2", Title: "Connection reuse", Body: "Keep idle connections open."},
 	} {
 		entry.Type, entry.Scope, entry.Status = "fact", "project", "accepted"
+		entry.ReviewState = reviewState
 		entry.SourceSessionID, entry.ExtractorMethod = "s1", "import-v1"
 		_, err := database.InsertRecallEntry(t.Context(), entry)
 		require.NoError(t, err)
@@ -1393,7 +1405,7 @@ func TestRecallSearchServesIndexWithinRevisionLag(t *testing.T) {
 	stub := newEmbeddingsStubServer(t, 3)
 	t.Cleanup(stub.Close)
 	cfg := vectorTestConfig(dataDir)
-	cfg.Vector.RecallMaxRevisionLag = 2
+	cfg.Vector.RecallMaxRevisionLag = maxLag
 	embeddingsServer := cfg.Vector.Embeddings.Servers["local"]
 	embeddingsServer.Endpoint = stub.URL + "/v1"
 	cfg.Vector.Embeddings.Servers["local"] = embeddingsServer
@@ -1417,12 +1429,21 @@ func TestRecallSearchServesIndexWithinRevisionLag(t *testing.T) {
 		ix: ix, enc: queryEncoder, database: database, cfg: cfg,
 	}
 	database.SetRecallVectorSearcher(searcher)
-	mutate := func(ctx context.Context, stmt string) error {
-		return database.Update(ctx, func(tx *sql.Tx) error {
-			_, execErr := tx.ExecContext(ctx, stmt)
-			return execErr
-		})
+	return laggedRecallSearch{
+		database: database, mgr: mgr, searcher: searcher, queryEncoder: queryEncoder,
 	}
+}
+
+func (l laggedRecallSearch) mutate(ctx context.Context, stmt string) error {
+	return l.database.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, stmt)
+		return err
+	})
+}
+
+func TestRecallSearchServesIndexWithinRevisionLag(t *testing.T) {
+	l := newLaggedRecallSearch(t, 2, "")
+	database, mgr, searcher, queryEncoder, mutate := l.database, l.mgr, l.searcher, l.queryEncoder, l.mutate
 
 	// A corpus revision landing during the search stays within the bound.
 	searcher.enc = func(ctx context.Context, texts []string) ([][]float32, error) {
@@ -1431,7 +1452,7 @@ func TestRecallSearchServesIndexWithinRevisionLag(t *testing.T) {
 		}
 		return queryEncoder(ctx, texts)
 	}
-	_, _, _, err = searcher.SearchRecall(t.Context(), "connection reuse", 5)
+	_, _, _, err := searcher.SearchRecall(t.Context(), "connection reuse", 5)
 	require.NoError(t, err, "one revision during the search is within a lag of 2")
 	searcher.enc = queryEncoder
 	database.SetRecallVectorSearcher(searcher)
@@ -1453,11 +1474,55 @@ func TestRecallSearchServesIndexWithinRevisionLag(t *testing.T) {
 	require.ErrorIs(t, err, db.ErrSemanticUnavailable)
 	assert.Contains(t, err.Error(), "embeddings build --store recall")
 
-	started, err = mgr.TryBuild(t.Context(), vector.BuildRequest{})
+	started, err := mgr.TryBuild(t.Context(), vector.BuildRequest{})
 	require.NoError(t, err)
 	require.True(t, started)
 	_, _, _, err = searcher.SearchRecall(t.Context(), "connection reuse", 5)
 	require.NoError(t, err)
+}
+
+func TestRecallHybridDropsEntriesHiddenDuringQueryEncoding(t *testing.T) {
+	tests := []struct {
+		name        string
+		reviewState string
+		stmt        string
+	}{
+		{name: "deleted", stmt: `DELETE FROM recall_entries WHERE id = 'entry-2'`},
+		{name: "rejected", stmt: `UPDATE recall_entries SET status = 'rejected' WHERE id = 'entry-2'`},
+		{
+			name:        "demoted under a review-state filter",
+			reviewState: corerecall.ReviewStateHumanReviewed,
+			stmt: `UPDATE recall_entries SET review_state = '` +
+				corerecall.ReviewStateUnreviewedAuto + `' WHERE id = 'entry-2'`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l := newLaggedRecallSearch(t, 2, tt.reviewState)
+			// The lexical leg has already read entry-2 when the query is
+			// encoded, and the index still holds its vector.
+			searcher := l.searcher
+			searcher.enc = func(ctx context.Context, texts []string) ([][]float32, error) {
+				if err := l.mutate(ctx, tt.stmt); err != nil {
+					return nil, err
+				}
+				return l.queryEncoder(ctx, texts)
+			}
+			l.database.SetRecallVectorSearcher(searcher)
+
+			page, err := l.database.QueryRecallEntries(t.Context(), db.RecallQuery{
+				Text: "connection reuse", Mode: db.RecallQueryModeHybrid,
+				ReviewState: tt.reviewState, Limit: 5,
+			})
+			require.NoError(t, err)
+			ids := make([]string, 0, len(page.RecallEntries))
+			for _, result := range page.RecallEntries {
+				ids = append(ids, result.ID)
+			}
+			assert.NotContains(t, ids, "entry-2")
+			assert.Contains(t, ids, "entry-1")
+		})
+	}
 }
 
 func TestRecallRevisionFresh(t *testing.T) {

@@ -1153,7 +1153,7 @@ func (db *DB) recallPageFromVectorHits(
 		seen[hit.EntryID] = struct{}{}
 		ids = append(ids, hit.EntryID)
 	}
-	entries, err := db.listRecallEntriesByIDs(ctx, q, ids)
+	entries, err := db.listVisibleRecallEntriesByIDs(ctx, q, ids)
 	if err != nil {
 		return RecallPage{}, err
 	}
@@ -1202,6 +1202,16 @@ func (db *DB) queryRecallEntriesHybrid(
 	if err != nil {
 		return RecallPage{}, err
 	}
+	// The lexical leg read its entries before the query was encoded, and the
+	// Recall index may lag the corpus, so an entry deleted, rejected or
+	// demoted in between would otherwise survive fusion on its lexical rank.
+	// Reload both legs' candidates at one revision before fusing them.
+	lexical.RecallEntries, vector.RecallEntries, err = db.keepVisibleRecallResults(
+		ctx, candidateQuery, lexical.RecallEntries, vector.RecallEntries,
+	)
+	if err != nil {
+		return RecallPage{}, err
+	}
 	legs := [][]RankedUnit{
 		recallResultRankedUnits(lexical.RecallEntries),
 		recallResultRankedUnits(vector.RecallEntries),
@@ -1229,6 +1239,77 @@ func (db *DB) queryRecallEntriesHybrid(
 		page.RecallEntries = append(page.RecallEntries, result)
 	}
 	return page, nil
+}
+
+// keepVisibleRecallResults drops every lexical and vector result whose entry
+// no longer matches q, and refreshes the rest, from one fenced read.
+func (db *DB) keepVisibleRecallResults(
+	ctx context.Context, q RecallQuery, lexical, vector []RecallResult,
+) ([]RecallResult, []RecallResult, error) {
+	ids := make([]string, 0, len(lexical)+len(vector))
+	seen := make(map[string]struct{}, len(lexical)+len(vector))
+	for _, result := range slices.Concat(lexical, vector) {
+		if _, ok := seen[result.ID]; ok {
+			continue
+		}
+		seen[result.ID] = struct{}{}
+		ids = append(ids, result.ID)
+	}
+	entries, err := db.listVisibleRecallEntriesByIDs(ctx, q, ids)
+	if err != nil {
+		return nil, nil, err
+	}
+	current := make(map[string]RecallEntry, len(entries))
+	for _, entry := range entries {
+		current[entry.ID] = entry
+	}
+	keep := func(results []RecallResult) []RecallResult {
+		kept := make([]RecallResult, 0, len(results))
+		for _, result := range results {
+			entry, ok := current[result.ID]
+			if !ok {
+				continue
+			}
+			result.RecallEntry = entry
+			kept = append(kept, result)
+		}
+		return kept
+	}
+	return keep(lexical), keep(vector), nil
+}
+
+// recallVisibilityReadAttempts bounds how often a fenced read of Recall
+// entries starts over because the corpus moved underneath it.
+const recallVisibilityReadAttempts = 3
+
+// listVisibleRecallEntriesByIDs is listRecallEntriesByIDs fenced by the
+// Recall query revision, which every entry or evidence mutation bumps. The
+// entries it returns all matched q at one revision, so a page never keeps an
+// entry that was deleted, rejected or demoted while the read was in flight.
+// Archives that predate the query revision cannot change and are read once.
+func (db *DB) listVisibleRecallEntriesByIDs(
+	ctx context.Context, q RecallQuery, ids []string,
+) ([]RecallEntry, error) {
+	for range recallVisibilityReadAttempts {
+		before, err := db.RecallQueryRevision(ctx)
+		if err != nil {
+			return nil, err
+		}
+		entries, err := db.listRecallEntriesByIDs(ctx, q, ids)
+		if err != nil {
+			return nil, err
+		}
+		after, err := db.RecallQueryRevision(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if before == after {
+			return entries, nil
+		}
+	}
+	return nil, NewSemanticUnavailableError(
+		"recall corpus changed during search; retry the query",
+	)
 }
 
 func recallResultRankedUnits(results []RecallResult) []RankedUnit {

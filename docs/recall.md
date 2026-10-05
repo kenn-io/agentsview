@@ -199,8 +199,10 @@ recall_max_revision_lag = 256   # 0 requires the index to match the corpus exact
 ```
 
 Entries newer than the index are missing only from the vector ranking. Hybrid
-search still finds them through its lexical ranking, and an entry rejected or
-deleted since the last build never comes back from its old vector. Past the
+search still finds them through its lexical ranking. An entry that is deleted,
+rejected, or no longer matches the query's filters drops out of the results,
+even when that happens while the query is running: hybrid search re-reads every
+candidate under the query's filters before it merges the two rankings. Past the
 bound, vector and hybrid queries fail closed until the Recall store is rebuilt;
 lexical mode keeps working while an automatic refresh catches up. See
 [Semantic Search](/docs/semantic-search/#enabling-vector) for the shared
