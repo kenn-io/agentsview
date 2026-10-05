@@ -11,8 +11,8 @@ added later. The scheduler owns jitter, cooldown recorded before attempts,
 capped failure backoff, `RetryAfterError`, and cancellation. Status is in memory
 only; `TriggerNow` bypasses cooldown.
 
-Pricing refresh uses the scheduler. Periodic session sync, vector embedding,
-and recall extraction still own their timing; migrating them is separate work.
+Pricing refresh uses the scheduler. Periodic session sync, vector embedding, and
+recall extraction still own their timing; migrating them is separate work.
 
 ## Memory and Work Bounds
 
@@ -21,19 +21,25 @@ and recall extraction still own their timing; migrating them is separate work.
 
 - Bound watcher, polling, and sync work by the changed batch, not the full
   archive. Do not scan or load every stored session for each filesystem event.
+
 - A rejected parser checkpoint forbids resuming from its cursor. It must not
   force a transcript rewrite when the full source hash and stored metadata
   still match. Filesystem device numbers can change across boots.
+
 - Declare costly scheduling inputs as provider capabilities. Compute them only
   for providers that use them, and default new capabilities to unsupported.
+
 - Add cardinality-scaling regressions for background paths. Compare small and
   large archives and prove that unchanged work per event stays bounded. Cover
   deletion, tombstones, and persistent archives in the same tests.
+
 - Diagnose long-running memory with allocation and CPU profiles, live heap,
   forced-GC heap, and operating-system physical or dirty memory. Raw RSS does
   not prove live memory because it includes clean reclaimable mappings.
+
 - Profile branch binaries only against isolated, production-scale database and
   source clones. Never use live archives or agent transcripts.
+
 - Observe retention long enough to reproduce the reported growth window. On
   macOS, record `vmmap` physical footprint and dirty memory. Use portable Go
   allocation and heap metrics on Linux and Windows.
@@ -59,12 +65,12 @@ and recall extraction still own their timing; migrating them is separate work.
   transaction, so they are always paired correctly, and a session written
   during the pass is refilled by its own mutation notification. Do not
   reintroduce a restart loop over a moving source fingerprint.
-- A scheduled pricing refresh calls `RewarmUsageCache` once it returns, when
-  the stored catalog digest changed, including a partial refresh that also
-  reports an error. It starts the same coverage pass, which rebuilds only
-  rollups whose pricing lookups now resolve differently. A pass resolves prices
-  from the catalog it captured at start, so a re-warm that arrives during a
-  pass queues exactly one more pass after it.
+- A scheduled pricing refresh calls `RewarmUsageCache` once it returns, when the
+  stored catalog digest changed, including a partial refresh that also reports
+  an error. It starts the same coverage pass, which rebuilds only rollups
+  whose pricing lookups now resolve differently. A pass resolves prices from
+  the catalog it captured at start, so a re-warm that arrives during a pass
+  queues one additional pass if the active pass succeeds.
 - Sweep the archive deletion journal before and after the pass and between
   install batches. Queries also inner-join current archive sessions before
   ranking, so tombstone processing is hygiene rather than a correctness

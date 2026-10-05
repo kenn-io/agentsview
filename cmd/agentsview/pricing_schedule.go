@@ -53,6 +53,12 @@ func runPricingRefresh(
 	after, afterErr := rewarmer.UsagePricingDigest(ctx)
 	// An unreadable digest can't prove nothing committed, so re-warm anyway.
 	if ctx.Err() == nil && (beforeErr != nil || afterErr != nil || before != after) {
+		if beforeErr != nil {
+			log.Printf("reading usage pricing digest before pricing refresh: %v", beforeErr)
+		}
+		if afterErr != nil {
+			log.Printf("reading usage pricing digest after pricing refresh: %v", afterErr)
+		}
 		// A failed re-warm must not back off the pricing job; the next Usage request rebuilds instead.
 		if err := rewarmer.RewarmUsageCache(); err != nil {
 			log.Printf("usage cache re-warm after pricing refresh: %v", err)
