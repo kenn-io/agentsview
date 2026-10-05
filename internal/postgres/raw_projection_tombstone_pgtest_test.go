@@ -3,7 +3,9 @@
 package postgres
 
 import (
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -194,4 +196,126 @@ func TestRawProjectionTombstoneDoesNotRestoreRemovedSessions(t *testing.T) {
 			assert.Len(t, trash, tt.wantTrash)
 		})
 	}
+}
+
+// A parser upgrade reschedules each source's current head. For a departed
+// source that head is the tombstone, which must still withdraw nothing.
+func TestRawProjectionTombstoneReparseRetainsSession(t *testing.T) {
+	f := newProjectionFixture(t)
+	h := f.hosted(t)
+	m, accepted := f.accept(t, "device-a", "visible", "")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("needle")))
+	tomb, _ := f.tombstone(t, m, "tombstone", accepted.Receipt)
+
+	scheduled, err := f.sink.ScheduleCurrentHeads(t.Context(), "rollout", "parser-2", 10)
+	require.NoError(t, err)
+	require.Equal(t, 1, scheduled.Selected)
+	leases, err := f.jobs.ClaimRawParseJobs(t.Context(), "rollout-worker", 1, time.Minute)
+	require.NoError(t, err)
+	require.Len(t, leases, 1)
+	require.Equal(t, tomb.ManifestID, leases[0].ManifestID)
+	require.Equal(t, "parser-2", leases[0].ProcessingVersion)
+	require.NoError(t, f.sink.Project(t.Context(), leases[0], tomb, rawderive.ParsedManifest{Tombstone: true}))
+
+	page, err := h.ListSessions(t.Context(), db.SessionFilter{Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, page.Sessions, 1)
+	assert.Equal(t, "codex:portable", page.Sessions[0].ID)
+	var version, proof string
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT processing_version,manifest_id FROM session_sources WHERE source_id=$1`, rawSourceID(m)).Scan(&version, &proof))
+	assert.Equal(t, "parser-1", version, "retained sessions keep the parser output that last saw the file")
+	assert.Equal(t, m.ManifestID, proof)
+}
+
+func TestRawProjectionTombstoneLeavesMembershipCompletenessToSnapshots(t *testing.T) {
+	tests := []struct {
+		name     string
+		complete bool
+	}{
+		{"after a complete snapshot", true},
+		{"after an incomplete snapshot", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newProjectionFixture(t)
+			m, accepted := f.accept(t, "device-a", "snapshot", "")
+			outcome := projectionOutcome("retained")
+			var want error
+			if !tt.complete {
+				outcome.Outcome.ResultSetComplete = false
+				outcome.Outcome.SourceErrors = []parser.SourceError{{SessionID: "codex:second", Err: errors.New("synthetic parse failure"), Retryable: true}}
+				want = rawderive.ErrProjectionRetrying
+			}
+			require.ErrorIs(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome), want)
+
+			f.tombstone(t, m, "tombstone", accepted.Receipt)
+
+			var complete bool
+			require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT membership_complete FROM raw_source_projections WHERE source_id=$1`, rawSourceID(m)).Scan(&complete))
+			assert.Equal(t, tt.complete, complete)
+		})
+	}
+}
+
+func TestRawProjectionRejectsTombstoneCarryingParseOutcome(t *testing.T) {
+	tests := []struct {
+		name    string
+		outcome parser.ParseOutcome
+	}{
+		{"members", projectionOutcome("unexpected").Outcome},
+		{"authoritative replacement", parser.ParseOutcome{ResultSetComplete: true, ForceReplace: true}},
+		{"exclusions", parser.ParseOutcome{ExcludedSessionIDs: []string{"codex:portable"}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newProjectionFixture(t)
+			h := f.hosted(t)
+			m, accepted := f.accept(t, "device-a", "visible", "")
+			require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("retained")))
+			manifest := rawsync.Manifest{SchemaVersion: rawsync.ManifestSchemaVersion, Provider: m.Manifest.Provider, ConfiguredRootID: m.Manifest.ConfiguredRootID, SourceKey: m.Manifest.SourceKey, ExpectedParentReceipt: accepted.Receipt, CaptureID: "tombstone", CapturedAt: rawIngestCapturedAt(), Kind: rawsync.ManifestTombstone}
+			tomb, err := rawsync.ValidateAndCanonicalize(m.Identity, manifest, rawsync.DefaultManifestLimits())
+			require.NoError(t, err)
+			_, err = f.custody.CommitManifest(t.Context(), m.Identity, manifest)
+			require.NoError(t, err)
+
+			err = f.sink.Project(t.Context(), f.lease(t, tomb), tomb, rawderive.ParsedManifest{Tombstone: true, Outcome: tt.outcome})
+
+			require.Error(t, err)
+			page, err := h.ListSessions(t.Context(), db.SessionFilter{Limit: 10})
+			require.NoError(t, err)
+			assert.Len(t, page.Sessions, 1)
+		})
+	}
+}
+
+// A departed device sends no further snapshot, so a copy that conflicts with
+// another device's stays a variant until the user deletes it.
+func TestRawProjectionTombstoneKeepsDivergentVariantUntilUserDeletesIt(t *testing.T) {
+	f := newProjectionFixture(t)
+	h := f.hosted(t)
+	a, _ := f.accept(t, "device-a", "kept", "")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, a), a, projectionOutcome("kept on device a")))
+	b, accepted := f.accept(t, "device-b", "divergent", "")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, b), b, projectionOutcome("diverged on device b")))
+	departed := f.alias(t, b)
+
+	f.tombstone(t, b, "departed", accepted.Receipt)
+
+	resolved, err := f.sink.Resolve(t.Context(), "codex:portable")
+	require.NoError(t, err)
+	require.Equal(t, RawIdentityAmbiguous, resolved.State)
+	require.Len(t, resolved.Variants, 2)
+
+	require.NoError(t, h.SoftDeleteSession(t.Context(), departed))
+	deleted, err := h.DeleteSessionIfTrashed(t.Context(), departed)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), deleted)
+
+	resolved, err = f.sink.Resolve(t.Context(), "codex:portable")
+	require.NoError(t, err)
+	assert.Equal(t, RawIdentityUnique, resolved.State)
+	messages, err := h.GetMessages(t.Context(), "codex:portable", 0, 10, true)
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	assert.Equal(t, "kept on device a", messages[0].Content)
 }

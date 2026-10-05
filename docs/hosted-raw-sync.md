@@ -223,6 +223,10 @@ proof. If the file returns, its new snapshot updates the same sessions. Only
 three things remove a hosted session: the user deletes it, the parser excludes
 it, or a later snapshot of a source that reports its full contents omits it.
 
+A departed source sends no further snapshot. If its copy of a session conflicts
+with another device's, the two stay separate variants and the bare session ID
+stays ambiguous. Deleting the departed variant resolves it.
+
 A departed source has nothing left to parse, so `pg raw-reparse` leaves its
 retained sessions as the earlier parser produced them. Sessions hidden by a
 tombstone that was processed before this rule took effect stay hidden until
@@ -263,6 +267,10 @@ selects at most 1–256 heads and atomically saves its keyset checkpoint. The ru
 ID is bound to the executable's processing version. Equal manifest/version
 selection is idempotent: a new run ID does not resurrect completed or exhausted
 jobs for that same selection. Startup and idle polls perform no reparse scan.
+
+A source whose file has left its device has a tombstone as its current head.
+Reparsing it changes nothing, so its retained sessions keep the output of the
+parser that last read the file.
 
 To stop derivation, set `raw_derivation = false` and restart. Keep `raw_tenant`,
 authentication, the cursor secret and the tenant-bound runtime connection.
