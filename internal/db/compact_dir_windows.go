@@ -9,8 +9,9 @@ import (
 	"go.kenn.io/kit/atomicfile"
 )
 
-// replaceInstalledFile uses a temporary failed-target name because Windows
-// does not allow Rename to overwrite an existing openable file. If installing
+// replaceInstalledFile uses a temporary failed-target name because a handle
+// opened without share-delete, as SQLite opens files, still blocks
+// atomicfile.Replace over the target. If installing
 // the candidate fails, put the old target back before returning the error.
 func replaceInstalledFile(source, target string) error {
 	failed := target + ".failed"
