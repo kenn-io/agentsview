@@ -2098,6 +2098,7 @@
   "system_boundary_interrupted": "请求中断",
   "system_boundary_task_notification": "任务通知",
   "system_boundary_stop_hook": "停止钩子反馈",
+  "system_boundary_peer_message": "来自其他会话的消息",
   "system_boundary_title": "系统边界：{subtype}",
   "system_boundary_show_content": "显示内容",
   "trash_loading": "正在加载回收站...",

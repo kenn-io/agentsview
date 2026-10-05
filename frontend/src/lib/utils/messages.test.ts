@@ -122,12 +122,16 @@ describe("isSystemMessage", () => {
     expect(isSystemMessage(msg({ content }))).toBe(false);
   });
 
-  it.each(["continuation", "resume", "interrupted", "task_notification", "stop_hook"])(
-    "keeps promoted subtype %s visible even with is_system=true",
-    (subtype) => {
-      expect(isSystemMessage(msg({ is_system: true, source_subtype: subtype }))).toBe(false);
-    },
-  );
+  it.each([
+    "continuation",
+    "resume",
+    "interrupted",
+    "task_notification",
+    "stop_hook",
+    "peer_message",
+  ])("keeps promoted subtype %s visible even with is_system=true", (subtype) => {
+    expect(isSystemMessage(msg({ is_system: true, source_subtype: subtype }))).toBe(false);
+  });
 
   it("hides unknown source_subtype when is_system is true", () => {
     expect(isSystemMessage(msg({ is_system: true, source_subtype: "future_subtype" }))).toBe(true);

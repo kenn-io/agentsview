@@ -2170,6 +2170,7 @@
   "system_boundary_interrupted": "リクエストが中断されました",
   "system_boundary_task_notification": "タスク通知",
   "system_boundary_stop_hook": "フックフィードバックを停止する",
+  "system_boundary_peer_message": "別のセッションからのメッセージ",
   "system_boundary_title": "システム境界: {subtype}",
   "system_boundary_show_content": "コンテンツを表示",
   "trash_loading": "ゴミ箱を読み込み中...",

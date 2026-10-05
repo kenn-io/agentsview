@@ -2184,6 +2184,7 @@
   "system_boundary_interrupted": "Sorğu dayandırıldı",
   "system_boundary_task_notification": "Tapşırıq bildirişi",
   "system_boundary_stop_hook": "Dayandırma hadisəsi emalçısının rəyi",
+  "system_boundary_peer_message": "Başqa sessiyadan mesaj",
   "system_boundary_title": "Sistem sərhədi: {subtype}",
   "system_boundary_show_content": "Məzmunu göstər",
   "trash_loading": "Zibil qutusu yüklənir...",

@@ -2184,6 +2184,7 @@
   "system_boundary_interrupted": "Solicitud interrumpida",
   "system_boundary_task_notification": "Notificación de tarea",
   "system_boundary_stop_hook": "Respuesta del hook de detención",
+  "system_boundary_peer_message": "Mensaje de otra sesión",
   "system_boundary_title": "Límite del sistema: {subtype}",
   "system_boundary_show_content": "Mostrar contenido",
   "trash_loading": "Cargando papelera...",

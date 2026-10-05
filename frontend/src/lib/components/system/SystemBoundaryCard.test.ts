@@ -22,6 +22,19 @@ describe("SystemBoundaryCard", () => {
     unmount(c);
   });
 
+  it("labels a message from another session", () => {
+    const c = mount(SystemBoundaryCard, {
+      target: document.body,
+      props: {
+        subtype: "peer_message",
+        content: '<cross-session-message from-name="peer">\nhello\n</cross-session-message>',
+        timestamp: "2026-04-18T12:00:00Z",
+      },
+    });
+    expect(document.body.textContent).toMatch(/Message from another session/);
+    unmount(c);
+  });
+
   it("falls back to the raw subtype when unknown", () => {
     const c = mount(SystemBoundaryCard, {
       target: document.body,

@@ -232,6 +232,11 @@ The latest published release is
   it open, and serve switches to the rebuilt file without a restart, as on
   macOS and Linux. Before, the push failed with "Access is denied" and asked
   you to stop the server first.
+- Messages one Claude Code session sends to another no longer count as user
+  prompts. They no longer raise user-message counts or become a session's first
+  message, and the transcript shows each one as a "Message from another
+  session" card with the sender's name and full text. The first sync after
+  upgrading re-reads each session once.
 - Price Codex auto-review turns, recorded as `codex-auto-review`, at GPT-5.6
   Luna catalog rates instead of $0. Usage reports still list
   `codex-auto-review` as the reported model, and a custom pricing row for it

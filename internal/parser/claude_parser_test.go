@@ -726,6 +726,65 @@ func TestParseClaudeSession_QueuedSystemMessagesDoNotCount(t *testing.T) {
 	assert.Equal(t, "task_notification", systems[1].SourceSubtype)
 }
 
+// A message another Claude Code session sends arrives as a queued_command
+// attachment marked isMeta, with origin.kind "peer" and a
+// <cross-session-message> prompt. It stays in the transcript with its
+// sender attributes but is not a user prompt, so it cannot become the
+// first message or raise the user-message count. Full and incremental
+// parses must agree.
+func TestParseClaudeSession_QueuedPeerMessagesDoNotCount(t *testing.T) {
+	content := loadFixture(t, "claude/queued_peer_messages.jsonl")
+
+	assertMessages := func(t *testing.T, msgs []ParsedMessage) {
+		t.Helper()
+		require.Len(t, msgs, 5)
+
+		peer := msgs[0]
+		assert.True(t, peer.IsSystem)
+		assert.Equal(t, RoleUser, peer.Role)
+		assert.Equal(t, "system", peer.SourceType)
+		assert.Equal(t, "peer_message", peer.SourceSubtype)
+		assert.Contains(t, peer.Content, `from-name="synthetic-peer"`)
+		assert.Contains(t, peer.Content,
+			"Synthetic peer request: please review the fixture.")
+
+		assert.Equal(t, RoleAssistant, msgs[1].Role)
+
+		typed := msgs[2]
+		assert.False(t, typed.IsSystem)
+		assert.Equal(t, "user", typed.SourceType)
+		assert.Equal(t, "queued_command", typed.SourceSubtype)
+		assert.Equal(t,
+			"Synthetic user follow-up typed during the review.", typed.Content)
+
+		assert.True(t, msgs[3].IsSystem)
+		assert.Equal(t, "task_notification", msgs[3].SourceSubtype)
+
+		assert.Equal(t, RoleAssistant, msgs[4].Role)
+		for _, m := range msgs {
+			assert.NotContains(t, m.Content, "Cross-session delivery notice",
+				"isMeta harness notices stay out of the transcript")
+		}
+	}
+
+	t.Run("full parse", func(t *testing.T) {
+		sess, msgs := runClaudeParserTest(t, "test.jsonl", content)
+		assertMessages(t, msgs)
+		assert.Equal(t, 5, sess.MessageCount)
+		assert.Equal(t, 1, sess.UserMessageCount)
+		assert.Equal(t,
+			"Synthetic user follow-up typed during the review.",
+			sess.FirstMessage)
+	})
+
+	t.Run("incremental parse", func(t *testing.T) {
+		path := createTestFile(t, "test.jsonl", content)
+		msgs, _, _, err := callParseClaudeSessionFrom(path, 0, 0, "")
+		require.NoError(t, err)
+		assertMessages(t, msgs)
+	})
+}
+
 func TestParseClaudeSession_LeadingSystemReminderKeepsRealPrompt(t *testing.T) {
 	content := testjsonl.JoinJSONL(
 		testjsonl.ClaudeUserJSON(

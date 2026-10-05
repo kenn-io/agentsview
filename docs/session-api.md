@@ -397,7 +397,10 @@ emitted, separated from the flattened `content` which still contains inline
 `[Thinking]...[/Thinking]` markers for UI rendering.
 
 Promoted `source_subtype` values on `is_system: true` messages: `continuation`,
-`resume`, `interrupted`, `task_notification`, `stop_hook`, `compact_boundary`.
+`resume`, `interrupted`, `task_notification`, `stop_hook`, `peer_message`,
+`compact_boundary`. `peer_message` is a message another Claude Code session
+sent; its `content` keeps the `<cross-session-message>` wrapper with the
+sender's name.
 
 ______________________________________________________________________
 

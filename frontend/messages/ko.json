@@ -2100,6 +2100,7 @@
   "system_boundary_interrupted": "요청 중단됨",
   "system_boundary_task_notification": "작업 알림",
   "system_boundary_stop_hook": "중지 훅 피드백",
+  "system_boundary_peer_message": "다른 세션의 메시지",
   "system_boundary_title": "시스템 경계: {subtype}",
   "system_boundary_show_content": "내용 표시",
   "trash_loading": "휴지통을 불러오는 중...",

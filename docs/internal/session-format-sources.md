@@ -201,6 +201,22 @@ fixtures retain this field; missing identities remain source-local.
   title. Data version 118 reparses existing sessions once, so renames made
   before the upgrade appear.
 
+- **Peer message evidence (2026-10-04):** Claude Code 2.1.280 persists a message
+  from another local session in the receiving transcript as
+  `{"type":"attachment","attachment":{"type":"queued_command","commandMode":"prompt","isMeta":true,"prompt":"<cross-session-message from=... from-name=... from-mode=...>\nBODY\n</cross-session-message>","origin":{"kind":"peer","name":...,"body":...}}}`,
+  with `queue-operation` `enqueue` and `remove` records around it. The
+  harness may also write a `type:"user"` record with `isMeta:true` and
+  `promptSource:"system"` carrying a delivery notice. Native parsing
+  classifies a prompt that starts with `<cross-session-message` as a system
+  row with `source_subtype` `peer_message`, keeping the wrapper so the sender
+  stays visible; `isMeta` user records stay dropped. Task notifications in the
+  same release are `type:"user"` records with
+  `origin:{"kind":"task-notification"}` and a `<task-notification>` body,
+  which the existing `task_notification` rule already covers. Checked against
+  a local transcript corpus; the synthetic fixture
+  `internal/parser/testdata/claude/queued_peer_messages.jsonl` mirrors these
+  shapes. Data version 126 reparses existing sessions once.
+
 - **Evidence:** `no-public-source`.
 
 - **Upstream:** The public
@@ -590,13 +606,13 @@ fixtures retain this field; missing identities remain source-local.
   shows writes counted inside `input_tokens`. OpenAI's
   [prompt-caching guide](https://developers.openai.com/api/docs/guides/prompt-caching)
   bills GPT-5.6 and later cache writes at 1.25x the uncached input rate.
-  Reverified 2026-10-02.
-  Catalog pricing therefore covers only the normalized fields the parser
-  emits. Codex Luna Reserve turns persist `turn_context.payload.model` as
-  `gpt-reserve`. That reported name is stored unchanged; pricing resolves it
-  to the `gpt-5.6-luna` catalog row (Luna list rates, not an OpenAI invoice).
-  An exact `[custom_model_pricing."gpt-reserve"]` row still wins. Reverified
-  2026-09-06 against OpenAI's Luna Reserve help article
+  Reverified 2026-10-02. Catalog pricing therefore covers only the normalized
+  fields the parser emits. Codex Luna Reserve turns persist
+  `turn_context.payload.model` as `gpt-reserve`. That reported name is stored
+  unchanged; pricing resolves it to the `gpt-5.6-luna` catalog row (Luna list
+  rates, not an OpenAI invoice). An exact `[custom_model_pricing."gpt-reserve"]`
+  row still wins. Reverified 2026-09-06 against OpenAI's Luna Reserve help
+  article
     <https://help.openai.com/en/articles/20001499-luna-reserve-in-codex-and-chatgpt-work>
     and Codex `turn_context` model seeding in `internal/parser/codex.go`. With
     the `amazon-bedrock` provider, Codex reports `openai.gpt-5.4`,
@@ -1383,14 +1399,13 @@ latter is verified against the upstream
 [bash tool](https://github.com/anomalyco/opencode/blob/dff8fbc149fb7492e4f07b713ac31ea70d9a541c/packages/core/src/tool/bash.ts).
 
 OpenCode timing uses the native dispatch fields. Legacy tool parts store
-`state.time.start` and `state.time.end`; v2 tool items store
-`time.ran` and `time.completed`. AgentsView measures dispatch through
-completion, so time spent waiting for approval is included. `time.created` is
-not a fallback. A missing, zero, or reversed dispatch boundary leaves the
-duration unknown. An interrupted legacy record with
-`state.metadata.interrupted=true` and equal positive bounds is synthetic and
-also remains unknown; equal positive bounds without that flag are valid zero
-duration. Standalone shell rows have no `ran` field and retain
+`state.time.start` and `state.time.end`; v2 tool items store `time.ran` and
+`time.completed`. AgentsView measures dispatch through completion, so time spent
+waiting for approval is included. `time.created` is not a fallback. A missing,
+zero, or reversed dispatch boundary leaves the duration unknown. An interrupted
+legacy record with `state.metadata.interrupted=true` and equal positive bounds
+is synthetic and also remains unknown; equal positive bounds without that flag
+are valid zero duration. Standalone shell rows have no `ran` field and retain
 unknown timing. The legacy start is written before the producer's permission
 request in the
 [v1 processor](https://github.com/anomalyco/opencode/blob/67caf894e0843ee370e72839e8265e483233479b/packages/opencode/src/session/processor.ts#L331-L378).

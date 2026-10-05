@@ -55,7 +55,9 @@ type dagEntry struct {
 // claudeQueuedCommand is a user message Claude Code persisted as
 // type=attachment with attachment.type=queued_command — i.e. a
 // prompt the user typed while a tool call was still running.
-// These records have no uuid/parentUuid, so we collect them out
+// Claude Code also uses this shape for task notifications and for
+// messages another session sent, which queuedCommandMessage
+// classifies as system rows. These records have no uuid/parentUuid, so we collect them out
 // of band and splice them into the message stream by timestamp
 // after DAG processing completes.
 type claudeQueuedCommand struct {
@@ -3160,6 +3162,11 @@ func classifyClaudeSystemMessage(content string) string {
 		return "interrupted"
 	case strings.HasPrefix(trimmed, "<task-notification>"):
 		return "task_notification"
+	case strings.HasPrefix(trimmed, "<cross-session-message"):
+		// Another Claude Code session sent this message. Claude Code
+		// persists it as a queued_command whose prompt keeps the
+		// sender attributes in this wrapper.
+		return "peer_message"
 	case strings.HasPrefix(trimmed, "Stop hook feedback:"):
 		return "stop_hook"
 	case strings.HasPrefix(trimmed, "<system-reminder>"):

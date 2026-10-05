@@ -2181,6 +2181,7 @@
   "system_boundary_interrupted": "Requête interrompue",
   "system_boundary_task_notification": "Notification de tâche",
   "system_boundary_stop_hook": "Retour du hook d'arrêt",
+  "system_boundary_peer_message": "Message d'une autre session",
   "system_boundary_title": "Limite système : {subtype}",
   "system_boundary_show_content": "Afficher le contenu",
   "trash_loading": "Chargement de la corbeille...",

@@ -2098,6 +2098,7 @@
   "system_boundary_interrupted": "請求中斷",
   "system_boundary_task_notification": "任務通知",
   "system_boundary_stop_hook": "停止 Hook 回饋",
+  "system_boundary_peer_message": "來自其他工作階段的訊息",
   "system_boundary_title": "系統邊界：{subtype}",
   "system_boundary_show_content": "顯示內容",
   "trash_loading": "正在載入垃圾桶...",

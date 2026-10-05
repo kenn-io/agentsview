@@ -15,6 +15,7 @@
     interrupted: m.system_boundary_interrupted(),
     task_notification: m.system_boundary_task_notification(),
     stop_hook: m.system_boundary_stop_hook(),
+    peer_message: m.system_boundary_peer_message(),
   });
 
   let label = $derived(LABELS[subtype] ?? subtype);

@@ -2182,6 +2182,7 @@
   "system_boundary_interrupted": "Request interrupted",
   "system_boundary_task_notification": "Task notification",
   "system_boundary_stop_hook": "Stop hook feedback",
+  "system_boundary_peer_message": "Message from another session",
   "system_boundary_title": "System boundary: {subtype}",
   "system_boundary_show_content": "Show content",
   "trash_loading": "Loading trash...",

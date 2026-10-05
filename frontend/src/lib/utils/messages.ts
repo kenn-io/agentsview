@@ -31,6 +31,7 @@ const VISIBLE_SYSTEM_SUBTYPES = new Set([
   "interrupted",
   "task_notification",
   "stop_hook",
+  "peer_message",
 ]);
 
 /**
@@ -51,7 +52,8 @@ export function isSystemBoundaryMessage(m: Message): m is Message & { source_sub
  * then falls back to prefix detection for parsers that don't set it.
  *
  * Compact boundary messages and promoted system-subtype messages
- * (continuation, resume, interrupted, task_notification, stop_hook)
+ * (continuation, resume, interrupted, task_notification, stop_hook,
+ * peer_message)
  * are system-flagged but rendered as dividers/cards, so they are
  * kept visible here.
  */
