@@ -2104,10 +2104,11 @@ func TestPushSyncsCursorUsageEventsIntoPGDailyUsage(t *testing.T) {
 	defer store.Close()
 
 	result, err := store.GetDailyUsage(ctx, db.UsageFilter{
-		From:       "2026-05-14",
-		To:         "2026-05-14",
-		Timezone:   "UTC",
-		Breakdowns: true,
+		From:             "2026-05-14",
+		To:               "2026-05-14",
+		Timezone:         "UTC",
+		Breakdowns:       true,
+		BranchBreakdowns: true,
 	})
 	require.NoError(t, err, "GetDailyUsage")
 	require.Len(t, result.Daily, 1, "daily entries")

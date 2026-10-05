@@ -3746,10 +3746,11 @@ func TestPushSyncsCursorUsageEventsIntoDuckDBDailyUsage(t *testing.T) {
 
 	store := NewStoreFromDB(syncer.DB())
 	result, err := store.GetDailyUsage(ctx, db.UsageFilter{
-		From:       "2026-05-14",
-		To:         "2026-05-14",
-		Timezone:   "UTC",
-		Breakdowns: true,
+		From:             "2026-05-14",
+		To:               "2026-05-14",
+		Timezone:         "UTC",
+		Breakdowns:       true,
+		BranchBreakdowns: true,
 	})
 	require.NoError(t, err)
 	require.Len(t, result.Daily, 1)

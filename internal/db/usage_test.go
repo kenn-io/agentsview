@@ -1012,9 +1012,10 @@ func TestGetDailyUsageIncludesCursorUsageEvents(t *testing.T) {
 	}}), "InsertCursorUsageEvents")
 
 	result, err := d.GetDailyUsage(ctx, UsageFilter{
-		From:       "2026-05-14",
-		To:         "2026-05-14",
-		Breakdowns: true,
+		From:             "2026-05-14",
+		To:               "2026-05-14",
+		Breakdowns:       true,
+		BranchBreakdowns: true,
 	})
 	require.NoError(t, err, "GetDailyUsage cursor")
 	require.Len(t, result.Daily, 1, "daily len =")

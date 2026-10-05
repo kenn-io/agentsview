@@ -8,6 +8,7 @@ import { sessions, filtersToParams, parseFiltersFromParams } from "../../stores/
 import { starred } from "../../stores/starred.svelte.js";
 import { MetadataService } from "../../api/generated/index.js";
 import { branchFilterToken } from "../../branchFilters.js";
+import { MetadataService } from "../../api/generated/index.js";
 
 let component: ReturnType<typeof mount> | undefined;
 
@@ -239,20 +240,24 @@ describe("SessionFilterControl selected-to-top sort", () => {
     expect(names[1]).toBe("alpha-host");
   });
 
-  it("passes the current project scope to the shared branch picker", async () => {
+  it("searches root-session branches within the current project", async () => {
+    const searchBranches = vi.spyOn(MetadataService, "getApiV1BranchNames")
+      .mockResolvedValue({ branches: [], has_more: false });
     sessions.filters.project = "proj-a";
     await openDropdown();
 
-    const branchTrigger = Array.from(
-      document.querySelectorAll<HTMLButtonElement>(".branch-picker-trigger"),
-    )[0]!;
-    expect(branchTrigger).toBeTruthy();
-    expect(branchTrigger.textContent).toContain("All Branches");
-  });
+    document
+      .querySelector<HTMLButtonElement>(".branch-picker-trigger")!
+      .click();
 
-  it("searches root-session branches for the sidebar", async () => {
-    await openDropdown();
-    expect(document.querySelector(".branch-picker-trigger")).toBeTruthy();
+    await vi.waitFor(() =>
+      expect(searchBranches).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projects: ["proj-a"],
+          scope: "roots",
+        }),
+      )
+    );
   });
 
   it("decodes a selected legacy project-pair branch for display", async () => {

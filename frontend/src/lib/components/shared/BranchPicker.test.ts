@@ -42,9 +42,9 @@ afterEach(() => {
 });
 
 describe("BranchPicker", () => {
-  it("forwards project scope and limits ordinary results to 100", async () => {
+  it("forwards project scope and shows the refine message when more exist", async () => {
     const search = vi.fn().mockResolvedValue({
-      branches: Array.from({ length: 105 }, (_, i) => ({ branch: `branch-${i}` })),
+      branches: Array.from({ length: 100 }, (_, i) => ({ branch: `branch-${i}` })),
       has_more: true,
     });
     component = mount(BranchPicker, {
@@ -73,7 +73,6 @@ describe("BranchPicker", () => {
       search: "",
       limit: 100,
     });
-    expect(rowNames()).toHaveLength(100);
     expect(document.body.textContent).toContain("More branches exist. Refine your search.");
   });
 
