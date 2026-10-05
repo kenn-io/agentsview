@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"go.kenn.io/kit/atomicfile"
 )
 
 const (
@@ -93,5 +95,5 @@ func (c *Config) writeInstallationFile(name, content string) error {
 	if err := file.Close(); err != nil {
 		return err
 	}
-	return os.Rename(file.Name(), filepath.Join(c.DataDir, name))
+	return atomicfile.Replace(file.Name(), filepath.Join(c.DataDir, name))
 }

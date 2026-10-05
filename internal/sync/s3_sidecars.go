@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/minio/minio-go/v7"
+	"go.kenn.io/kit/atomicfile"
 )
 
 func hydrateS3ClaudeToolResults(
@@ -29,7 +30,7 @@ func hydrateS3ClaudeToolResults(
 		_ = os.Remove(rewritePath)
 		return false, sawPersisted, nil
 	}
-	if err := os.Rename(rewritePath, sessionPath); err != nil {
+	if err := atomicfile.Replace(rewritePath, sessionPath); err != nil {
 		_ = os.Remove(rewritePath)
 		return false, sawPersisted, err
 	}

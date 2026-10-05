@@ -17,6 +17,7 @@ import (
 	"github.com/gofrs/flock"
 
 	"go.kenn.io/agentsview/internal/jsonutil"
+	"go.kenn.io/kit/atomicfile"
 )
 
 const (
@@ -637,7 +638,7 @@ func atomicWriteContext(ctx context.Context, path string, data []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
+	if err := atomicfile.Replace(tmpPath, path); err != nil {
 		return fmt.Errorf("installing output: %w", err)
 	}
 	return nil

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v7"
+	"go.kenn.io/kit/atomicfile"
 )
 
 const (
@@ -1180,7 +1181,7 @@ func writeCompactManifest(path string, manifest compactManifest) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := atomicfile.Replace(tmp, path); err != nil {
 		return err
 	}
 	return syncDirectory(filepath.Dir(path))
@@ -1357,7 +1358,7 @@ func reinstateSidelinedOriginal(databasePath, expectedHash string) (bool, error)
 	if err := removeIfExists(databasePath); err != nil {
 		return false, err
 	}
-	if err := os.Rename(databasePath+".failed", databasePath); err != nil {
+	if err := atomicfile.Replace(databasePath+".failed", databasePath); err != nil {
 		return false, fmt.Errorf("reinstate sidelined archive: %w", err)
 	}
 	return true, syncDirectory(filepath.Dir(databasePath))

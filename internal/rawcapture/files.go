@@ -15,6 +15,7 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/rawcheckpoint"
 	"go.kenn.io/agentsview/internal/rawsync"
+	"go.kenn.io/kit/atomicfile"
 )
 
 type fileOperations struct {
@@ -153,7 +154,7 @@ func (s *capturePlanScope) MatchesRoots(plan parser.RawCapturePlan) bool {
 
 func defaultFileOperations() fileOperations {
 	return fileOperations{
-		openRoot: (*os.Root).Open, stat: os.Stat, rename: os.Rename, remove: os.Remove,
+		openRoot: (*os.Root).Open, stat: os.Stat, rename: atomicfile.Replace, remove: os.Remove,
 		removeAll: os.RemoveAll, syncDir: syncDirectory,
 	}
 }

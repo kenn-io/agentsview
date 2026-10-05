@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"go.kenn.io/kit/atomicfile"
 )
 
 // allowedImageExts is the set of passive image formats safe to serve inline.
@@ -127,7 +129,7 @@ func writeObject(assetsDir, destPath string, fill func(*os.File) error) error {
 	if err := os.Chmod(tmpPath, 0o644); err != nil {
 		return fmt.Errorf("setting asset mode: %w", err)
 	}
-	if err := os.Rename(tmpPath, destPath); err != nil {
+	if err := atomicfile.Replace(tmpPath, destPath); err != nil {
 		return fmt.Errorf("publishing asset: %w", err)
 	}
 	return nil

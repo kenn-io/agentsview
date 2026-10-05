@@ -5,6 +5,8 @@ package db
 import (
 	"fmt"
 	"os"
+
+	"go.kenn.io/kit/atomicfile"
 )
 
 // replaceInstalledFile uses a temporary failed-target name because Windows
@@ -23,16 +25,16 @@ func replaceInstalledFile(source, target string) error {
 	}
 	oldMoved := false
 	if _, err := os.Stat(target); err == nil {
-		if err := os.Rename(target, failed); err != nil {
+		if err := atomicfile.Replace(target, failed); err != nil {
 			return err
 		}
 		oldMoved = true
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	if err := os.Rename(source, target); err != nil {
+	if err := atomicfile.Replace(source, target); err != nil {
 		if oldMoved {
-			_ = os.Rename(failed, target)
+			_ = atomicfile.Replace(failed, target)
 		}
 		return err
 	}

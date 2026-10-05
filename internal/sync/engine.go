@@ -34,6 +34,7 @@ import (
 	"go.kenn.io/agentsview/internal/secrets"
 	"go.kenn.io/agentsview/internal/sync/failurecache"
 	"go.kenn.io/agentsview/internal/timeutil"
+	"go.kenn.io/kit/atomicfile"
 )
 
 const (
@@ -4018,7 +4019,7 @@ func (e *Engine) swapResyncDatabaseLocked(
 	// complete original.
 	removeWAL(origPath)
 
-	if err := os.Rename(tempPath, origPath); err != nil {
+	if err := atomicfile.Replace(tempPath, origPath); err != nil {
 		log.Printf("resync: rename temp db: %v", err)
 		stats.Aborted = true
 		stats.Warnings = append(stats.Warnings,

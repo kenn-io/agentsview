@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/activity"
+	"go.kenn.io/kit/atomicfile"
 )
 
 // activityReportDisk keeps the reports of ended days that clients open on
@@ -212,7 +213,7 @@ func writeFileAtomic(path string, data []byte) error {
 	if err := errors.Join(writeErr, closeErr); err != nil {
 		return errors.Join(err, os.Remove(tmp.Name()))
 	}
-	if err := os.Rename(tmp.Name(), path); err != nil {
+	if err := atomicfile.Replace(tmp.Name(), path); err != nil {
 		return errors.Join(err, os.Remove(tmp.Name()))
 	}
 	return nil

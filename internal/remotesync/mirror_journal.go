@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/kit/atomicfile"
 )
 
 const (
@@ -416,7 +417,7 @@ type mirrorJournalStore struct {
 func newMirrorJournalStore() mirrorJournalStore {
 	return mirrorJournalStore{
 		createTemp: os.CreateTemp,
-		rename:     os.Rename,
+		rename:     atomicfile.Replace,
 		remove:     os.Remove,
 		open:       os.Open,
 	}

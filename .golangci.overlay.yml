@@ -3,8 +3,18 @@ run:
   build-tags:
     - fts5
 linters:
+  settings:
+    forbidigo:
+      analyze-types: true
+      forbid:
+        - pattern: '^os\.Rename$'
+          msg: Use atomicfile.Replace from go.kenn.io/kit, or atomicfile.RenameNoReplace when the target must not exist, so a Windows reader can't block the rename.
   exclusions:
     rules:
+      - linters:
+          - forbidigo
+        path: _test\.go
+        text: os\.Rename
       - linters:
           - modernize
         text: "omitzero:"

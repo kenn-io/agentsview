@@ -16,6 +16,7 @@ import (
 	"go.kenn.io/agentsview/internal/artifact"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/kit/atomicfile"
 )
 
 var errSourceChanged = errors.New("capture source changed while it was copied")
@@ -300,7 +301,7 @@ func copyStableSource(
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	if err := os.Rename(temporaryPath, destination); err != nil {
+	if err := atomicfile.Replace(temporaryPath, destination); err != nil {
 		return "", fmt.Errorf("installing transcript source copy: %w", err)
 	}
 	if err := os.Chmod(destination, 0o600); err != nil {

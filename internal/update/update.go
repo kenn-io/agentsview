@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"go.kenn.io/kit/atomicfile"
 	"golang.org/x/mod/semver"
 )
 
@@ -265,10 +266,10 @@ func installFromArchiveTo(
 // at srcPath. The new binary is staged in a sibling tmp file
 // with the executable mode bit set, then renamed into place.
 //
-// On Unix os.Rename atomically replaces dstPath in a single
-// syscall, so concurrent readers always see one of the two
+// On Unix atomicfile.Replace atomically replaces dstPath in a
+// single syscall, so concurrent readers always see one of the two
 // binaries — never a missing or partial file. On Windows the
-// existing binary must be moved aside first because os.Rename
+// existing binary must be moved aside first because Replace
 // cannot replace a running executable; this leaves dstPath
 // briefly missing between the two renames.
 func installBinaryTo(srcPath, dstPath string) error {
@@ -305,9 +306,9 @@ func installBinaryTo(srcPath, dstPath string) error {
 		movedAside = aside
 	}
 
-	if err := os.Rename(tmpPath, dstPath); err != nil {
+	if err := atomicfile.Replace(tmpPath, dstPath); err != nil {
 		if movedAside {
-			if rbErr := os.Rename(backupPath, dstPath); rbErr != nil {
+			if rbErr := atomicfile.Replace(backupPath, dstPath); rbErr != nil {
 				return fmt.Errorf(
 					"install: %w (rollback also failed: %w)",
 					err, rbErr,
@@ -323,7 +324,7 @@ func installBinaryTo(srcPath, dstPath string) error {
 }
 
 // movePreviousAside renames an existing dstPath to backupPath.
-// Used on Windows where os.Rename cannot replace a running
+// Used on Windows where atomicfile.Replace cannot replace a running
 // executable. Returns true if dstPath was moved.
 func movePreviousAside(dstPath, backupPath string) (bool, error) {
 	if _, err := os.Stat(dstPath); err != nil {
@@ -332,7 +333,7 @@ func movePreviousAside(dstPath, backupPath string) (bool, error) {
 		}
 		return false, fmt.Errorf("checking installed executable: %w", err)
 	}
-	if err := os.Rename(dstPath, backupPath); err != nil {
+	if err := atomicfile.Replace(dstPath, backupPath); err != nil {
 		return false, fmt.Errorf("backup: %w", err)
 	}
 	return true, nil

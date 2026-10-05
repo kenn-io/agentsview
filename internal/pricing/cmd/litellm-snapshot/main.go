@@ -24,6 +24,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/pricing/catalog"
+	"go.kenn.io/kit/atomicfile"
 )
 
 var defaultOutputPath = filepath.FromSlash(
@@ -312,11 +313,11 @@ func restoreSnapshotFile(ctx context.Context,
 		return fmt.Errorf("validating restored snapshot: %w", err)
 	}
 
-	if err := os.Rename(tmp, outPath); err != nil {
+	if err := atomicfile.Replace(tmp, outPath); err != nil {
 		if removeErr := os.Remove(outPath); removeErr != nil && !os.IsNotExist(removeErr) {
 			return fmt.Errorf("replacing existing snapshot: %w", removeErr)
 		}
-		if renameErr := os.Rename(tmp, outPath); renameErr != nil {
+		if renameErr := atomicfile.Replace(tmp, outPath); renameErr != nil {
 			return fmt.Errorf("moving snapshot into place: %w", renameErr)
 		}
 	}

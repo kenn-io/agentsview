@@ -2,10 +2,10 @@
 
 package db
 
-import "os"
+import "go.kenn.io/kit/atomicfile"
 
 // replaceInstalledFile atomically installs source over target on Unix. Both
 // paths are required to be on the same filesystem by the caller.
 func replaceInstalledFile(source, target string) error {
-	return os.Rename(source, target)
+	return atomicfile.Replace(source, target)
 }

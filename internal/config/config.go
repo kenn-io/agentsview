@@ -32,6 +32,7 @@ import (
 	"go.kenn.io/agentsview/internal/jsonutil"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/pathutil"
+	"go.kenn.io/kit/atomicfile"
 	"go.kenn.io/kit/embedconfig"
 )
 
@@ -1480,7 +1481,7 @@ func (c *Config) migrateJSONToTOML() error {
 		if err := os.WriteFile(tomlPath, buf.Bytes(), 0o600); err != nil {
 			return fmt.Errorf("writing config.toml: %w", err)
 		}
-		if err := os.Rename(jsonPath, jsonPath+".bak"); err != nil {
+		if err := atomicfile.Replace(jsonPath, jsonPath+".bak"); err != nil {
 			return fmt.Errorf("renaming config.json to .bak: %w", err)
 		}
 		return nil

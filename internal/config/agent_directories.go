@@ -12,6 +12,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/kit/atomicfile"
 )
 
 // AgentDirectoryConfig is the shared [agents.<id>] configuration. A nil
@@ -222,7 +223,7 @@ func (c *Config) migrateAgentTables() error {
 		if err := temp.Close(); err != nil {
 			return fmt.Errorf("closing temporary agent configuration: %w", err)
 		}
-		if err := os.Rename(tempPath, path); err != nil {
+		if err := atomicfile.Replace(tempPath, path); err != nil {
 			return fmt.Errorf("replacing agent configuration: %w", err)
 		}
 		tempPath = ""
