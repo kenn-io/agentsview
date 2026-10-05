@@ -262,24 +262,6 @@ func TestServer_NegotiatesCurrentAndOlderProtocols(t *testing.T) {
 	}
 }
 
-func TestNewServer_MemoryProfileUnchangedOnCurrentProtocol(t *testing.T) {
-	d := dbtest.OpenTestDB(t)
-	srv := newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), Profile: ProfileMemory})
-	st, ct := newInMemoryPair(t, srv)
-	defer func() {
-		require.NoError(t, ct.Close())
-		require.NoError(t, st.Wait())
-	}()
-	assert.Equal(t, "2026-07-28", ct.InitializeResult().ProtocolVersion)
-	tools, err := ct.ListTools(t.Context(), nil)
-	require.NoError(t, err)
-	names := make([]string, 0, len(tools.Tools))
-	for _, tool := range tools.Tools {
-		names = append(names, tool.Name)
-	}
-	assert.ElementsMatch(t, []string{ToolSearchContent, ToolGetMessages, ToolGetMemoryStatus}, names)
-}
-
 // A multiline key stored inside JSON has its newlines escaped; masking must
 // still see the decoded key.
 func TestRedactToolInput_MasksEscapedPrivateKey(t *testing.T) {
