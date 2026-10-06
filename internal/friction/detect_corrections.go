@@ -40,15 +40,16 @@ func firstMatch(res []*regexp.Regexp, text string) (int, bool) {
 	return 0, false
 }
 
-// DetectCorrections ports detect_corrections (jilog detectors.rs:108-168):
+// DetectCorrections adapts detect_corrections (jilog detectors.rs:108-168):
 // an assistant→user→assistant window whose user text is at most 200 bytes
-// raw and at least 15 bytes trimmed.
+// raw and at least 15 bytes trimmed. Unlike jilog, it also requires the
+// chat corrective-language gate, so plain instructions aren't corrections.
 func DetectCorrections(msgs []Message, subjectID string) []Signal {
 	return detectCorrections(msgs, subjectID, false)
 }
 
 // DetectCorrectionsChat ports detect_corrections_chat (detectors.rs:116-118):
-// the coding rule plus a corrective-language gate on the trimmed text.
+// the same window and corrective-language gate, labeled as a chat correction.
 func DetectCorrectionsChat(msgs []Message, subjectID string) []Signal {
 	return detectCorrections(msgs, subjectID, true)
 }
@@ -70,11 +71,11 @@ func detectCorrections(msgs []Message, subjectID string, chat bool) []Signal {
 		if len(trimmed) < MinCorrectionLength {
 			continue
 		}
+		if _, ok := firstMatch(chatCorrectionPatterns, trimmed); !ok {
+			continue
+		}
 		detector := DetectorCorrectionCoding
 		if chat {
-			if _, ok := firstMatch(chatCorrectionPatterns, trimmed); !ok {
-				continue
-			}
 			detector = DetectorCorrectionChat
 		}
 		out = append(out, Signal{

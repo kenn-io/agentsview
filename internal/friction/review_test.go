@@ -16,7 +16,7 @@ func reviewFixture(dims Dims) SessionInput {
 	msgs := []RawMessage{
 		{Ordinal: 0, Role: "user", Content: "please run the tests", Timestamp: rmin(0)},
 		{Ordinal: 1, Role: "assistant", Content: "Skipping for now, I'll come back to this.", Timestamp: rmin(1)},
-		{Ordinal: 2, Role: "user", Content: "thanks, that looks really great", Timestamp: rmin(2)},
+		{Ordinal: 2, Role: "user", Content: "no, keep the old function name", Timestamp: rmin(2)},
 		{Ordinal: 3, Role: "assistant", Content: "Ran them.", Timestamp: rmin(3)},
 		{Ordinal: 4, Role: "user", Content: "this is broken again, same error", Timestamp: rmin(4)},
 		{Ordinal: 5, Role: "assistant", Content: "Looking.", Timestamp: rmin(5)},
@@ -47,7 +47,7 @@ func TestReview(t *testing.T) {
 				"channel is stamped only with a persona")
 		}
 		assert.Equal(t, []string{
-			DetectorCorrectionCoding, DetectorCorrectionCoding,
+			DetectorCorrectionCoding,
 			DetectorError, DetectorWorkaround, DetectorDeferral,
 			DetectorFrustration, DetectorInterruption,
 		}, detectors)
@@ -61,8 +61,7 @@ func TestReview(t *testing.T) {
 			assert.NotEqual(t, DetectorCorrectionCoding, s.Detector)
 			assert.Equal(t, dims, s.Dims)
 		}
-		assert.Equal(t, DetectorError, got[0].Detector,
-			"plain short chat is not a chat correction")
+		assert.Equal(t, DetectorCorrectionChat, got[0].Detector)
 	})
 
 	t.Run("excluded session yields nil", func(t *testing.T) {

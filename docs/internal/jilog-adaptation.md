@@ -15,8 +15,8 @@ approved mapping, not current behavior.
 
 - The correction, error, workaround, deferral, and pattern signal model
   (`crates/jilog-review/src/signal.rs:6-219`) maps to `friction.Signal`.
-- Coding and chat correction detection keeps the ten chat marker patterns
-  (`crates/jilog-review/src/detectors.rs:89-176`).
+- Coding and chat correction detection keeps the window, length limits and
+  ten chat marker patterns (`crates/jilog-review/src/detectors.rs:89-176`).
 - Error detection keeps one signal per failed tool result and the content-free
   `bash` rule (`detectors.rs:205-488`): a failure whose text is blank or only
   the timeout sentence is expected noise. The caller marks failed calls and
@@ -88,6 +88,9 @@ approved mapping, not current behavior.
 
 - Titles use `[friction/<kind>]`, labels use `friction`, and the planned digest
   heading is `# Friction Log — <date>`.
+- Coding corrections require the chat marker patterns too. jilog counts every
+  15-200 byte user turn between two assistant turns, so instructions such as
+  "now run the tests" became corrections.
 - The adapter removes system, compact-boundary, and tool-result rows from every
   correction stream, extending jilog's NanoClaw rule to all sessions.
 - The adapter drops thinking blocks and tool renderings from stored assistant

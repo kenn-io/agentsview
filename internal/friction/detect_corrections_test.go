@@ -9,7 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Ports jilog detectors.rs tests :670-820 (coding corrections).
+// Ports jilog detectors.rs tests :670-820 (coding corrections), with
+// corrective wording added where jilog's text had none.
 func TestDetectCorrections(t *testing.T) {
 	tests := []struct {
 		name string
@@ -23,33 +24,33 @@ func TestDetectCorrections(t *testing.T) {
 		},
 		{
 			"corrections_too_short_skipped",
-			[]Message{assistant("first"), user("just a short"), assistant("second")},
+			[]Message{assistant("first"), user("wrong one here"), assistant("second")},
 			[]string{},
 		},
 		{
 			"corrections_too_long_skipped",
-			[]Message{assistant("a"), user(strings.Repeat("x", 201)), assistant("b")},
+			[]Message{assistant("a"), user("wrong " + strings.Repeat("x", 195)), assistant("b")},
 			[]string{},
 		},
 		{
 			"corrections_exact_minimum_length",
-			[]Message{assistant("a"), user("123456789012345"), assistant("b")},
-			[]string{"123456789012345"},
+			[]Message{assistant("a"), user("wrong one here."), assistant("b")},
+			[]string{"wrong one here."},
 		},
 		{
 			"corrections_exact_maximum_length",
-			[]Message{assistant("a"), user(strings.Repeat("x", 200)), assistant("b")},
-			[]string{strings.Repeat("x", 200)},
+			[]Message{assistant("a"), user("wrong " + strings.Repeat("x", 194)), assistant("b")},
+			[]string{"wrong " + strings.Repeat("x", 194)},
 		},
 		{
 			"corrections_wrong_role_pattern_skipped",
-			[]Message{user("first message in transcript"), user("another short user message"), assistant("reply")},
+			[]Message{user("no, first message in transcript"), user("no, another short user message"), assistant("reply")},
 			[]string{},
 		},
 		{
 			"corrections_multiple_in_one_transcript",
-			[]Message{assistant("a1"), user("first correction please"), assistant("a2"), user("second correction please"), assistant("a3")},
-			[]string{"first correction please", "second correction please"},
+			[]Message{assistant("a1"), user("no, first correction please"), assistant("a2"), user("no, second correction please"), assistant("a3")},
+			[]string{"no, first correction please", "no, second correction please"},
 		},
 		{"corrections_empty_transcript/none", nil, []string{}},
 		{"corrections_empty_transcript/one", []Message{assistant("a")}, []string{}},
@@ -86,19 +87,22 @@ func TestDetectCorrections(t *testing.T) {
 				toolResultUser("(Bash completed with no output)"),
 				assistant("a6"),
 			},
-			[]string{"read the deck and make sure the edits land", "yes - clean it up please"},
+			// jilog flags both user turns; neither uses corrective wording.
+			[]string{},
 		},
 		// agentsview additions.
+		{"plain_instruction_skipped", []Message{assistant("a"), user("now run the tests"), assistant("b")}, []string{}},
+		{"plain_approval_skipped", []Message{assistant("a"), user("looks good, ship it"), assistant("b")}, []string{}},
 		{
 			"length_is_bytes_not_runes",
-			// 67 three-byte runes = 201 bytes: over the raw limit although 67 runes.
-			[]Message{assistant("a"), user(strings.Repeat("日", 67)), assistant("b")},
+			// 6 bytes + 65 three-byte runes = 201 bytes: over the raw limit although 71 runes.
+			[]Message{assistant("a"), user("wrong " + strings.Repeat("日", 65)), assistant("b")},
 			[]string{},
 		},
 		{
 			"trim_is_measured_but_context_is_untrimmed",
-			[]Message{assistant("a"), user("   exactly fifteen b   "), assistant("b")},
-			[]string{"   exactly fifteen b   "},
+			[]Message{assistant("a"), user("   wrong one here.   "), assistant("b")},
+			[]string{"   wrong one here.   "},
 		},
 		{
 			"system_role_breaks_the_window",
@@ -180,10 +184,10 @@ func TestDetectCorrectionsChat(t *testing.T) {
 			}
 		})
 	}
-	// chat_corrections_require_corrective_language, second half: the same
-	// window IS a coding correction.
+	// chat_corrections_require_corrective_language, second half: jilog
+	// counts the same window as a coding correction; agentsview doesn't.
 	plain := []Message{assistant("Here is the summary you asked for."), user("thanks, that looks really great"), assistant("Happy to help.")}
-	assert.Len(t, DetectCorrections(plain, "s1"), 1)
+	assert.Empty(t, DetectCorrections(plain, "s1"))
 }
 
 func TestDetectCorrectionsChatMarkers(t *testing.T) {
