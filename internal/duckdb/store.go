@@ -350,7 +350,7 @@ func scanSessionWithSource(
 		&s.ParserMalformedLines, &s.IsTruncated,
 		&s.SecretLeakCount, &s.SecretsRulesVersion,
 		&deletedAt, &s.DeletionCause, &s.TerminationStatus, &s.TranscriptRevision,
-		duckPRLinksColumn{&s.PRLinks},
+		db.PRLinksScanner(&s.PRLinks),
 		duckLabelsColumn{&s.Labels},
 	}
 	if includeSource {
@@ -374,25 +374,6 @@ func scanSessionWithSource(
 		s.DeletedAt = &v
 	}
 	return s, nil
-}
-
-// duckPRLinksColumn scans the mirrored pr_links JSON text into a slice.
-// The push writes db.EncodePRLinks output, so the stored text round-trips
-// through db.DecodePRLinks.
-type duckPRLinksColumn struct{ dst *[]db.PRLink }
-
-func (c duckPRLinksColumn) Scan(src any) error {
-	switch v := src.(type) {
-	case nil:
-		*c.dst = nil
-	case string:
-		*c.dst = db.DecodePRLinks(v)
-	case []byte:
-		*c.dst = db.DecodePRLinks(string(v))
-	default:
-		return fmt.Errorf("scanning duckdb pr_links: unsupported type %T", src)
-	}
-	return nil
 }
 
 // duckLabelsColumn scans the mirrored labels VARCHAR[] column, which the

@@ -53,7 +53,10 @@ type VersionInfo struct {
 // Bump it when a client-visible contract cannot be decoded safely by an older
 // CLI or daemon.
 const (
-	APIVersion = 10
+	APIVersion = SessionAnnotationsAPIVersion
+	// SessionAnnotationsAPIVersion is the first daemon API that applies label
+	// and pull request filters; older daemons ignore them.
+	SessionAnnotationsAPIVersion = 11
 	// ScopedWatchPushAPIVersion is the first daemon API that accepts bounded
 	// watcher batches and their authoritative recovery scope on push requests.
 	ScopedWatchPushAPIVersion = 7

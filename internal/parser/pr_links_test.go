@@ -55,6 +55,15 @@ func TestNewPRLink(t *testing.T) {
 			wantOK: true,
 		},
 		{
+			name: "bitbucket pull request",
+			url:  "https://bitbucket.org/team/repo/pull-requests/5",
+			want: PRLink{
+				URL: "https://bitbucket.org/team/repo/pull-requests/5", Host: "bitbucket.org",
+				Repository: "team/repo", Number: 5,
+			},
+			wantOK: true,
+		},
+		{
 			name:       "explicit fields win over an unrecognized path",
 			url:        "https://forge.example.com/r/9",
 			repository: "team/repo",

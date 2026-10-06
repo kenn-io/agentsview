@@ -57,7 +57,7 @@ func (s *Server) humaGetSessionLabels(
 	if err != nil {
 		return nil, sessionAnnotationError("get session labels", err)
 	}
-	return &jsonOutput[db.SessionLabels]{Body: labelsResponse(labels)}, nil
+	return &jsonOutput[db.SessionLabels]{Body: labels}, nil
 }
 
 func (s *Server) humaSetSessionLabels(
@@ -73,7 +73,7 @@ func (s *Server) humaSetSessionLabels(
 	if err != nil {
 		return nil, sessionAnnotationError("set session labels", err)
 	}
-	return &jsonOutput[db.SessionLabels]{Body: labelsResponse(labels)}, nil
+	return &jsonOutput[db.SessionLabels]{Body: labels}, nil
 }
 
 func (s *Server) humaUpdateSessionLabels(
@@ -89,7 +89,7 @@ func (s *Server) humaUpdateSessionLabels(
 	if err != nil {
 		return nil, sessionAnnotationError("update session labels", err)
 	}
-	return &jsonOutput[db.SessionLabels]{Body: labelsResponse(labels)}, nil
+	return &jsonOutput[db.SessionLabels]{Body: labels}, nil
 }
 
 func (s *Server) humaGetSessionParent(
@@ -136,13 +136,6 @@ func (s *Server) humaClearSessionParent(
 		return nil, sessionAnnotationError("clear session parent", err)
 	}
 	return &jsonOutput[db.SessionExternalParent]{Body: link}, nil
-}
-
-func labelsResponse(labels db.SessionLabels) db.SessionLabels {
-	if labels.Labels == nil {
-		labels.Labels = []string{}
-	}
-	return labels
 }
 
 func sessionAnnotationError(op string, err error) error {

@@ -80,6 +80,10 @@ func DecodePRLinks(text string) []PRLink {
 // prLinksColumn scans the stored pr_links text into a slice.
 type prLinksColumn struct{ dst *[]PRLink }
 
+// PRLinksScanner scans pr_links text written by EncodePRLinks into dst, for
+// mirrors that store the same encoding.
+func PRLinksScanner(dst *[]PRLink) sql.Scanner { return prLinksColumn{dst} }
+
 func (c prLinksColumn) Scan(src any) error {
 	switch v := src.(type) {
 	case nil:

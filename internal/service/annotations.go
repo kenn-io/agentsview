@@ -127,8 +127,5 @@ func labelsResult(labels db.SessionLabels, err error) (*db.SessionLabels, error)
 	if err != nil {
 		return nil, err
 	}
-	if labels.Labels == nil {
-		labels.Labels = []string{}
-	}
 	return &labels, nil
 }

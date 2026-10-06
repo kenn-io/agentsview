@@ -138,10 +138,10 @@ func ReadSessionLabels(
 	if err != nil {
 		return SessionLabels{}, err
 	}
-	result := SessionLabels{SessionID: sessionID, Labels: []string{}}
+	result := SessionLabels{SessionID: sessionID}
 	if sess != nil {
 		result.SessionFound = true
-		result.Labels = append(result.Labels, sess.Labels...)
+		result.Labels = sess.Labels
 	}
 	return result, nil
 }
@@ -214,9 +214,6 @@ func (db *DB) writeSessionLabels(
 		)
 	}
 	result := SessionLabels{SessionID: sessionID, Labels: labels}
-	if labels == nil {
-		result.Labels = []string{}
-	}
 	var found int
 	if err := tx.QueryRowContext(ctx,
 		"SELECT EXISTS(SELECT 1 FROM sessions WHERE id = ?)", sessionID,
