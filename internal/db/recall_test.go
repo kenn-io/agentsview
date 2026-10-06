@@ -1848,6 +1848,41 @@ func TestQueryRecallEntriesVectorRejectsCorpusMutationAfterSearch(t *testing.T) 
 	assert.ErrorIs(t, err, ErrSemanticUnavailable)
 }
 
+func TestQueryRecallEntriesHybridReadsKeywordsAfterEncoding(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "s1", "agentsview")
+	for _, id := range []string{"kept", "hidden"} {
+		_, err := d.InsertRecallEntry(ctx, RecallEntry{
+			ID: id, Type: "fact", Scope: "project", Status: "accepted",
+			Title: "Database pool", Body: "Reuse idle connections.",
+			SourceSessionID: "s1",
+		})
+		require.NoError(t, err)
+	}
+	// No database: validation accepts the write, as a lag-tolerant index does.
+	d.SetRecallVectorSearcher(&fakeRecallVectorSearcher{
+		hits: []RecallVectorHit{{EntryID: "kept", Score: 0.8}},
+		onSearch: func() {
+			_, err := d.getWriter().ExecContext(ctx,
+				"UPDATE recall_entries SET status = 'rejected' WHERE id = 'hidden'",
+			)
+			require.NoError(t, err)
+		},
+	})
+
+	page, err := d.QueryRecallEntries(ctx, RecallQuery{
+		Text: "database pool", Mode: RecallQueryModeHybrid, Limit: 5,
+	})
+
+	require.NoError(t, err)
+	ids := make([]string, 0, len(page.RecallEntries))
+	for _, result := range page.RecallEntries {
+		ids = append(ids, result.ID)
+	}
+	assert.Equal(t, []string{"kept"}, ids)
+}
+
 func TestQueryRecallEntriesVectorExpandsPastFilteredCandidates(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
