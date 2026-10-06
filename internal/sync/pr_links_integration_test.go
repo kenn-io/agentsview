@@ -88,7 +88,7 @@ func TestParseDiffAnnotations(t *testing.T) {
 	// A launcher-supplied parent on a full-replace agent's session is not
 	// parser drift.
 	_, err := env.db.SetSessionExternalParent(
-		t.Context(), "gemini:pd-worker", "pd-prs", "")
+		t.Context(), "gemini:pd-worker", "pd-prs")
 	require.NoError(t, err)
 	report := runParseDiff(t, env, sync.ParseDiffOptions{})
 	assert.Equal(t, sync.ParseDiffTotals{Examined: 2, Identical: 2}, report.Totals)

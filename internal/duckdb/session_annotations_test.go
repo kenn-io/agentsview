@@ -279,7 +279,7 @@ func TestDuckDBChildLabelSelectsChildAndKeepsTree(t *testing.T) {
 	ctx := t.Context()
 	local, path := newAnnotatedPushFixture(t)
 	// sess-3 becomes a launched worker of sess-1 and carries its own label.
-	_, err := local.SetSessionExternalParent(ctx, "sess-3", "sess-1", "")
+	_, err := local.SetSessionExternalParent(ctx, "sess-3", "sess-1")
 	require.NoError(t, err)
 	_, err = local.SetSessionLabels(ctx, "sess-3", []string{"reviewer"})
 	require.NoError(t, err)

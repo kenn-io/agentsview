@@ -6,23 +6,17 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 )
 
 // ErrSessionExternalParentInvalid identifies invalid external parent input.
 var ErrSessionExternalParentInvalid = errors.New("invalid session parent link")
 
-// DefaultExternalRelationshipType is the relationship recorded when a
-// launcher supplies a parent without naming one. A worker started by an
-// orchestrator is delegated work, which the session tree, sidebar, and
-// usage rollups already model as a subagent.
-const DefaultExternalRelationshipType = "subagent"
-
-// ExternalRelationshipTypes lists the relationship types a launcher may
-// record. A launched worker is delegated work, which the session tree and
-// every mirror already treat as a subagent.
-var ExternalRelationshipTypes = []string{"subagent"}
+// ExternalRelationshipType is the relationship every launcher link records.
+// A worker started by an orchestrator is delegated work, which the session
+// tree, sidebar, and usage rollups already model as a subagent. The SQL below
+// spells it as a literal.
+const ExternalRelationshipType = "subagent"
 
 // SessionExternalParent is a parent link supplied by whatever launched a
 // session. It is stored apart from parsed transcript data and applies only
@@ -56,17 +50,13 @@ func (db *DB) GetSessionExternalParent(
 // SetSessionExternalParent records a launcher-supplied parent and applies
 // it when the session has no transcript parent or spawn edge.
 func (db *DB) SetSessionExternalParent(
-	ctx context.Context, sessionID, parentID, relationshipType string,
+	ctx context.Context, sessionID, parentID string,
 ) (SessionExternalParent, error) {
 	if err := db.requireWritable(); err != nil {
 		return SessionExternalParent{}, err
 	}
 	sessionID = strings.TrimSpace(sessionID)
 	parentID = strings.TrimSpace(parentID)
-	relationshipType = strings.TrimSpace(relationshipType)
-	if relationshipType == "" {
-		relationshipType = DefaultExternalRelationshipType
-	}
 	switch {
 	case sessionID == "":
 		return SessionExternalParent{}, fmt.Errorf(
@@ -77,11 +67,6 @@ func (db *DB) SetSessionExternalParent(
 	case parentID == sessionID:
 		return SessionExternalParent{}, fmt.Errorf(
 			"%w: a session cannot be its own parent", ErrSessionExternalParentInvalid)
-	case !slices.Contains(ExternalRelationshipTypes, relationshipType):
-		return SessionExternalParent{}, fmt.Errorf(
-			"%w: relationship_type must be one of %s",
-			ErrSessionExternalParentInvalid,
-			strings.Join(ExternalRelationshipTypes, ", "))
 	}
 
 	db.mu.Lock()
@@ -96,14 +81,12 @@ func (db *DB) SetSessionExternalParent(
 		return SessionExternalParent{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO session_external_parents (
-			session_id, parent_session_id, relationship_type
-		) VALUES (?, ?, ?)
+		INSERT INTO session_external_parents (session_id, parent_session_id)
+		VALUES (?, ?)
 		ON CONFLICT(session_id) DO UPDATE SET
 			parent_session_id = excluded.parent_session_id,
-			relationship_type = excluded.relationship_type,
 			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`,
-		sessionID, parentID, relationshipType,
+		sessionID, parentID,
 	); err != nil {
 		return SessionExternalParent{}, fmt.Errorf("saving session parent: %w", err)
 	}
@@ -196,7 +179,7 @@ func loadSessionExternalParent(
 		spawned       bool
 	)
 	err := q.QueryRowContext(ctx, `
-		SELECT ep.session_id, ep.parent_session_id, ep.relationship_type,
+		SELECT ep.session_id, ep.parent_session_id,
 			ep.created_at, ep.updated_at,
 			s.id IS NOT NULL, s.parent_session_id, s.relationship_type,
 			s.parser_parent_session_id,
@@ -205,7 +188,7 @@ func loadSessionExternalParent(
 		LEFT JOIN sessions s ON s.id = ep.session_id
 		WHERE ep.session_id = ?`, sessionID,
 	).Scan(
-		&link.SessionID, &link.ParentSessionID, &link.RelationshipType,
+		&link.SessionID, &link.ParentSessionID,
 		&link.CreatedAt, &link.UpdatedAt,
 		&link.SessionFound, &currentParent, &currentType, &parserParent,
 		&spawned,
@@ -216,6 +199,7 @@ func loadSessionExternalParent(
 		}
 		return SessionExternalParent{}, fmt.Errorf("loading session parent: %w", err)
 	}
+	link.RelationshipType = ExternalRelationshipType
 	link.Applied = link.SessionFound &&
 		parserParent.String == "" && !spawned &&
 		currentParent.String == link.ParentSessionID &&
@@ -253,8 +237,8 @@ func externalParentChainSQL(start, target string) string {
 }
 
 // applySessionExternalParentsSQL recomputes the launcher links that
-// linksSQL selects (with columns session_id, parent_session_id, and
-// relationship_type) from current evidence. A link is the effective parent
+// linksSQL selects (with columns session_id and parent_session_id) from
+// current evidence. A link is the effective parent
 // when the session has no transcript parent, no spawn edge, and the link's
 // chain does not lead back to the session; otherwise a session it once
 // applied to returns to no parent. The session triggers run it, so it has
@@ -267,10 +251,10 @@ func applySessionExternalParentsSQL(linksSQL string) string {
 	return `
 	UPDATE sessions
 	SET parent_session_id = IIF(l.cyclic, NULL, l.parent_session_id),
-		relationship_type = IIF(l.cyclic, '', l.relationship_type),
+		relationship_type = IIF(l.cyclic, '', 'subagent'),
 		local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 	FROM (
-		SELECT ep.session_id, ep.parent_session_id, ep.relationship_type,
+		SELECT ep.session_id, ep.parent_session_id,
 			` + externalParentChainSQL("ep.parent_session_id", "ep.session_id") + ` AS cyclic
 		FROM (` + linksSQL + `) AS ep
 		LIMIT -1
@@ -280,7 +264,7 @@ func applySessionExternalParentsSQL(linksSQL string) string {
 	AND NOT ` + spawnEdgeExistsSQL("sessions") + `
 	AND (
 		COALESCE(sessions.parent_session_id, '') <> IIF(l.cyclic, '', l.parent_session_id)
-		OR COALESCE(sessions.relationship_type, '') <> IIF(l.cyclic, '', l.relationship_type)
+		OR COALESCE(sessions.relationship_type, '') <> IIF(l.cyclic, '', 'subagent')
 	)`
 }
 
@@ -314,13 +298,13 @@ func scopedSessionExternalParentsSQL(start string) string {
 			LEFT JOIN session_external_parents pe ON pe.session_id = up.id
 			WHERE ` + externalParentStepSQL + ` IS NOT NULL
 		)
-		SELECT ep.session_id, ep.parent_session_id, ep.relationship_type
+		SELECT ep.session_id, ep.parent_session_id
 		FROM down
 		CROSS JOIN session_external_parents ep ON ep.session_id = down.id
 		CROSS JOIN sessions cur ON cur.id = ep.session_id
 		WHERE ep.session_id IN (SELECT id FROM up)
 		OR cur.parent_session_id IS NOT ep.parent_session_id
-		OR cur.relationship_type IS NOT ep.relationship_type`)
+		OR cur.relationship_type IS NOT 'subagent'`)
 }
 
 // applyScopedSessionExternalParentsSQL binds the JSON id list twice.
@@ -329,11 +313,12 @@ var applyScopedSessionExternalParentsSQL = scopedSessionExternalParentsSQL(
 
 // sessionExternalParentTriggerDropsSQL and
 // sessionExternalParentTriggerCreatesSQL apply launcher links on every
-// session write. The triggers run the scoped recompute from the written row
-// inside the writer's statement, so no writer can skip it and a rolled-back
-// write takes its recompute with it. Like the artifact queue triggers they
-// reference migrated columns, so they are dropped before column migrations
-// and created after.
+// session write that inserts a row or changes its parent columns, so an
+// upsert that rewrites the same parents skips the walk. The triggers run the
+// scoped recompute from the written row inside the writer's statement, so
+// no writer can skip it and a rolled-back write takes its recompute with it.
+// Like the artifact queue triggers they reference migrated columns, so they
+// are dropped before column migrations and created after.
 const sessionExternalParentTriggerDropsSQL = `
 DROP TRIGGER IF EXISTS trg_sessions_external_parent_insert;
 DROP TRIGGER IF EXISTS trg_sessions_external_parent_update;
@@ -348,7 +333,9 @@ END;
 
 CREATE TRIGGER IF NOT EXISTS trg_sessions_external_parent_update
 AFTER UPDATE OF parent_session_id, parser_parent_session_id ON sessions
-WHEN EXISTS (SELECT 1 FROM session_external_parents)
+WHEN (OLD.parent_session_id IS NOT NEW.parent_session_id
+	OR OLD.parser_parent_session_id IS NOT NEW.parser_parent_session_id)
+AND EXISTS (SELECT 1 FROM session_external_parents)
 BEGIN` + scopedSessionExternalParentsSQL("SELECT NEW.id") + `;
 END;
 `

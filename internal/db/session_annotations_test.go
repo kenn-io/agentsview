@@ -168,11 +168,11 @@ func TestSessionExternalParentApplication(t *testing.T) {
 	insertSession(t, d, "manager", "proj")
 
 	// A launcher can link a worker before sync imports it.
-	link, err := d.SetSessionExternalParent(ctx, "worker", "manager", "")
+	link, err := d.SetSessionExternalParent(ctx, "worker", "manager")
 	require.NoError(t, err)
 	assert.False(t, link.SessionFound)
 	assert.False(t, link.Applied)
-	assert.Equal(t, DefaultExternalRelationshipType, link.RelationshipType)
+	assert.Equal(t, ExternalRelationshipType, link.RelationshipType)
 
 	// The write applies the link itself, as an HTTP upload with no linking
 	// pass would.
@@ -224,7 +224,7 @@ func TestSessionExternalParentYieldsToParserParent(t *testing.T) {
 		s.RelationshipType = "continuation"
 	})
 
-	link, err := d.SetSessionExternalParent(ctx, "child", "manager", "subagent")
+	link, err := d.SetSessionExternalParent(ctx, "child", "manager")
 	require.NoError(t, err)
 	assert.True(t, link.SessionFound)
 	assert.False(t, link.Applied)
@@ -239,7 +239,7 @@ func TestSessionExternalParentYieldsToParserParent(t *testing.T) {
 func TestSessionExternalParentSkipsLinkThatClosesCycle(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
-	_, err := d.SetSessionExternalParent(ctx, "a", "b", "")
+	_, err := d.SetSessionExternalParent(ctx, "a", "b")
 	require.NoError(t, err)
 	insertSession(t, d, "a", "proj")
 	nativeParent := "a"
@@ -276,7 +276,7 @@ func TestSessionExternalParentReturnsWhenNativeCycleGoesAway(t *testing.T) {
 	ctx := t.Context()
 	insertSession(t, d, "manager", "proj")
 	insertSession(t, d, "worker", "proj")
-	_, err := d.SetSessionExternalParent(ctx, "worker", "manager", "")
+	_, err := d.SetSessionExternalParent(ctx, "worker", "manager")
 	require.NoError(t, err)
 
 	// An imported transcript puts the manager under the worker.
@@ -311,7 +311,7 @@ func TestSessionExternalParentYieldsOnRawUpsert(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "a", "proj")
-	_, err := d.SetSessionExternalParent(ctx, "a", "b", "")
+	_, err := d.SetSessionExternalParent(ctx, "a", "b")
 	require.NoError(t, err)
 
 	// A plain-writer upsert of b under a, with no Go-side recompute, leaves
@@ -333,7 +333,7 @@ func TestSessionExternalParentAppliesOnInsertIfAbsent(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "manager", "proj")
-	_, err := d.SetSessionExternalParent(ctx, "worker", "manager", "")
+	_, err := d.SetSessionExternalParent(ctx, "worker", "manager")
 	require.NoError(t, err)
 
 	require.NoError(t, d.insertSessionIfAbsent(ctx, Session{
@@ -350,25 +350,22 @@ func TestSessionExternalParentRejectsInvalidLinks(t *testing.T) {
 	ctx := t.Context()
 	insertSession(t, d, "a", "proj")
 	insertSession(t, d, "b", "proj")
-	_, err := d.SetSessionExternalParent(ctx, "b", "a", "")
+	_, err := d.SetSessionExternalParent(ctx, "b", "a")
 	require.NoError(t, err)
-	_, err = d.SetSessionExternalParent(ctx, "pending-c", "b", "")
+	_, err = d.SetSessionExternalParent(ctx, "pending-c", "b")
 	require.NoError(t, err)
 
 	tests := []struct {
-		name, session, parent, relationship string
+		name, session, parent string
 	}{
 		{name: "self", session: "a", parent: "a"},
 		{name: "cycle through effective parent", session: "a", parent: "b"},
 		{name: "cycle through pending link", session: "a", parent: "pending-c"},
-		{name: "unknown relationship", session: "a", parent: "x", relationship: "delegated"},
 		{name: "missing parent", session: "a"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := d.SetSessionExternalParent(
-				ctx, tt.session, tt.parent, tt.relationship,
-			)
+			_, err := d.SetSessionExternalParent(ctx, tt.session, tt.parent)
 			assert.ErrorIs(t, err, ErrSessionExternalParentInvalid)
 		})
 	}
@@ -387,7 +384,7 @@ func TestCopySessionMetadataFromPreservesLabelsAndExternalParents(t *testing.T) 
 	require.NoError(t, err)
 	_, err = source.SetSessionLabels(ctx, "not-synced-yet", []string{"queued"})
 	require.NoError(t, err)
-	_, err = source.SetSessionExternalParent(ctx, "worker", "manager", "")
+	_, err = source.SetSessionExternalParent(ctx, "worker", "manager")
 	require.NoError(t, err)
 
 	destinationPath := filepath.Join(dir, "destination.db")
@@ -428,7 +425,7 @@ func TestAnnotationFiltersFindLaunchedWorkers(t *testing.T) {
 			Repository: "acme/widgets", Number: 42,
 		}}
 	})
-	_, err := d.SetSessionExternalParent(ctx, "worker", "manager", "")
+	_, err := d.SetSessionExternalParent(ctx, "worker", "manager")
 	require.NoError(t, err)
 	_, err = d.SetSessionLabels(ctx, "worker", []string{"ticket=ABC-123"})
 	require.NoError(t, err)
@@ -492,7 +489,7 @@ func TestSessionExternalParentYieldsToSpawnEdge(t *testing.T) {
 
 	// A launcher naming the spawner itself must not take ownership of the
 	// spawn-derived parent.
-	link, err := d.SetSessionExternalParent(ctx, "child", "spawner", "")
+	link, err := d.SetSessionExternalParent(ctx, "child", "spawner")
 	require.NoError(t, err)
 	assert.False(t, link.Applied)
 	_, err = d.ClearSessionExternalParent(ctx, "child")
@@ -504,7 +501,7 @@ func TestSessionExternalParentYieldsToSpawnEdge(t *testing.T) {
 		"clearing a launcher link must keep the spawn-derived parent")
 
 	insertSession(t, d, "manager", "proj")
-	link, err = d.SetSessionExternalParent(ctx, "child", "manager", "")
+	link, err = d.SetSessionExternalParent(ctx, "child", "manager")
 	require.NoError(t, err)
 	assert.False(t, link.Applied)
 	// A parser rewrite clears the column; the spawn edge, not the launcher
