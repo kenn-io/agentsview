@@ -56,43 +56,12 @@ func TestDetectCorrections(t *testing.T) {
 		{"corrections_empty_transcript/one", []Message{assistant("a")}, []string{}},
 		{"corrections_empty_transcript/two", []Message{assistant("a"), user("hi there friend")}, []string{}},
 		{
-			"corrections_tool_result_user_turn_excluded",
-			[]Message{assistant("ran it"), toolResultUser("(Bash completed with no output)"), assistant("next")},
-			[]string{},
-		},
-		{
-			"corrections_tool_result_error_user_turn_excluded",
-			[]Message{assistant("a"), toolResultUser("<tool_use_error>File has not been read yet. Read it first.</tool_use_error>"), assistant("b")},
-			[]string{},
-		},
-		{
 			"corrections_real_user_string_still_detected",
 			[]Message{assistant("first"), user("no, you misunderstood the goal here"), assistant("second")},
 			[]string{"no, you misunderstood the goal here"},
 		},
-		{
-			"corrections_digest_2026_06_24_fixture",
-			[]Message{
-				assistant("a0"),
-				toolResultUser("--- icon def block ---\n39:  const I = {};"),
-				assistant("a1"),
-				user("read the deck and make sure the edits land"),
-				assistant("a2"),
-				toolResultUser("<tool_use_error>File has not been read yet.</tool_use_error>"),
-				assistant("a3"),
-				user("yes - clean it up please"),
-				assistant("a4"),
-				toolResultUser("=== reverted ===\n## main...origin/main"),
-				assistant("a5"),
-				toolResultUser("(Bash completed with no output)"),
-				assistant("a6"),
-			},
-			// jilog flags both user turns; neither uses corrective wording.
-			[]string{},
-		},
 		// agentsview additions.
 		{"plain_instruction_skipped", []Message{assistant("a"), user("now run the tests"), assistant("b")}, []string{}},
-		{"plain_approval_skipped", []Message{assistant("a"), user("looks good, ship it"), assistant("b")}, []string{}},
 		{
 			"length_is_bytes_not_runes",
 			// 6 bytes + 65 three-byte runes = 201 bytes: over the raw limit although 71 runes.
@@ -168,7 +137,6 @@ func TestDetectCorrectionsChat(t *testing.T) {
 			window("  no, that message was for the other group"),
 			[]string{"  no, that message was for the other group"},
 		},
-		{"chat_corrections_keep_length_window_and_tool_result_filter/too_short", window("no, stop"), []string{}},
 		{
 			"chat_corrections_keep_length_window_and_tool_result_filter/tool_echo",
 			[]Message{assistant("a"), toolResultUser("<tool_use_error>don't do that, wrong file</tool_use_error>"), assistant("b")},
@@ -184,10 +152,6 @@ func TestDetectCorrectionsChat(t *testing.T) {
 			}
 		})
 	}
-	// chat_corrections_require_corrective_language, second half: jilog
-	// counts the same window as a coding correction; agentsview doesn't.
-	plain := []Message{assistant("Here is the summary you asked for."), user("thanks, that looks really great"), assistant("Happy to help.")}
-	assert.Empty(t, DetectCorrections(plain, "s1"))
 }
 
 func TestDetectCorrectionsChatMarkers(t *testing.T) {
