@@ -128,6 +128,12 @@ func TestPushServesSessionLabelsAndPRLinks(t *testing.T) {
 		{"number from another link", db.SessionFilter{PR: db.PRFilter{Repository: "acme/tools", Number: 42}},
 			nil},
 		{"unlinked repository", db.SessionFilter{PR: db.PRFilter{Repository: "acme/other"}}, nil},
+		{"url on another host", db.SessionFilter{PR: db.PRFilter{
+			Host: "forge.example.com", Repository: "acme/widgets", Number: 42,
+		}}, nil},
+		{"url on the stored host", db.SessionFilter{PR: db.PRFilter{
+			Host: "github.com", Repository: "acme/widgets", Number: 42,
+		}}, []string{fixtureAlphaID}},
 		{"label and pr together", db.SessionFilter{
 			Labels: []string{"ticket-1"}, PR: db.PRFilter{Repository: "acme/widgets", Number: 42},
 		}, []string{fixtureAlphaID}},

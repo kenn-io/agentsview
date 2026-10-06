@@ -95,25 +95,16 @@ func (c prLinksColumn) Scan(src any) error {
 }
 
 // PRFilter selects sessions linked to a repository, optionally narrowed
-// to one pull request number. Repository matching ignores case.
+// to one pull request number. Repository matching ignores case. Host is
+// set only for URL filters; shorthand filters match any forge.
 type PRFilter struct {
+	Host       string
 	Repository string
 	Number     int
 }
 
 // IsZero reports whether the filter selects nothing.
 func (f PRFilter) IsZero() bool { return f.Repository == "" }
-
-// String renders the canonical filter text accepted by ParsePRFilter.
-func (f PRFilter) String() string {
-	if f.Repository == "" {
-		return ""
-	}
-	if f.Number > 0 {
-		return f.Repository + "#" + strconv.Itoa(f.Number)
-	}
-	return f.Repository
-}
 
 // ParsePRFilter accepts "owner/repo", "owner/repo#123", or a pull or
 // merge request URL. An empty value returns the zero filter.
@@ -130,6 +121,7 @@ func ParsePRFilter(value string) (PRFilter, error) {
 			)
 		}
 		return PRFilter{
+			Host:       link.Host,
 			Repository: strings.ToLower(link.Repository), Number: link.Number,
 		}, nil
 	}
@@ -183,11 +175,12 @@ func (c labelsColumn) Scan(src any) error {
 	return nil
 }
 
-// GetSessionPRLinkURLs returns the set of pull request URLs stored for a
-// session. A missing session yields an empty set.
-func (db *DB) GetSessionPRLinkURLs(
+// GetSessionPRLinkFirstSeen maps each pull request URL stored for a
+// session to its stored first-seen time (zero when the source gave none).
+// A missing session yields an empty map.
+func (db *DB) GetSessionPRLinkFirstSeen(
 	ctx context.Context, sessionID string,
-) (map[string]struct{}, error) {
+) (map[string]time.Time, error) {
 	var text string
 	err := db.getReader().QueryRowContext(ctx,
 		"SELECT pr_links FROM sessions WHERE id = ?", sessionID,
@@ -195,9 +188,13 @@ func (db *DB) GetSessionPRLinkURLs(
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("reading pr links for %s: %w", sessionID, err)
 	}
-	urls := make(map[string]struct{})
+	seen := make(map[string]time.Time)
 	for _, link := range DecodePRLinks(text) {
-		urls[link.URL] = struct{}{}
+		var at time.Time
+		if link.FirstSeenAt != "" {
+			at, _ = time.Parse(time.RFC3339Nano, link.FirstSeenAt)
+		}
+		seen[link.URL] = at
 	}
-	return urls, nil
+	return seen, nil
 }

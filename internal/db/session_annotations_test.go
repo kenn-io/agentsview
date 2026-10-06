@@ -59,6 +59,8 @@ func TestSessionPRLinksRoundTripAndFilter(t *testing.T) {
 		{filter: "owner/repo#12", want: []string{"with-prs"}},
 		{filter: "https://github.com/OWNER/repo/pull/12", want: []string{"with-prs"}},
 		{filter: "owner/repo#13", want: []string{}},
+		// A URL also pins the forge host; shorthand matches any host.
+		{filter: "https://forge.example.com/owner/repo/pull/12", want: []string{}},
 		{filter: "owner/missing", want: []string{}},
 	}
 	for _, tt := range tests {
@@ -355,4 +357,45 @@ func TestAnnotationFiltersFindLaunchedWorkers(t *testing.T) {
 
 	// Without an annotation filter the defaults still hide the worker.
 	assert.ElementsMatch(t, []string{"manager", "idle"}, listSessionIDs(t, d, defaults))
+}
+
+func TestSessionExternalParentYieldsToSpawnEdge(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "spawner", "proj")
+	insertSession(t, d, "child", "proj")
+	insertMessages(t, d, Message{
+		SessionID: "spawner", Ordinal: 0, Role: "assistant",
+		Content: "spawn child", HasToolUse: true,
+		ToolCalls: []ToolCall{{
+			ToolName: "Agent", Category: "Task", SubagentSessionID: "child",
+		}},
+	})
+	require.NoError(t, d.LinkSubagentSessions())
+
+	// A launcher naming the spawner itself must not take ownership of the
+	// spawn-derived parent.
+	link, err := d.SetSessionExternalParent(ctx, "child", "spawner", "")
+	require.NoError(t, err)
+	assert.False(t, link.Applied)
+	_, err = d.ClearSessionExternalParent(ctx, "child")
+	require.NoError(t, err)
+	child, err := d.GetSession(ctx, "child")
+	require.NoError(t, err)
+	require.NotNil(t, child.ParentSessionID)
+	assert.Equal(t, "spawner", *child.ParentSessionID,
+		"clearing a launcher link must keep the spawn-derived parent")
+
+	insertSession(t, d, "manager", "proj")
+	link, err = d.SetSessionExternalParent(ctx, "child", "manager", "")
+	require.NoError(t, err)
+	assert.False(t, link.Applied)
+	// A parser rewrite clears the column; the spawn edge, not the launcher
+	// link, decides the parent afterwards.
+	insertSession(t, d, "child", "proj")
+	require.NoError(t, d.LinkSubagentSessions())
+	child, err = d.GetSession(ctx, "child")
+	require.NoError(t, err)
+	require.NotNil(t, child.ParentSessionID)
+	assert.Equal(t, "spawner", *child.ParentSessionID)
 }

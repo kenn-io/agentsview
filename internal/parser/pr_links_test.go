@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -116,21 +117,59 @@ func TestClaudePRLinksDeduplicatedWithEarliestTimestamp(t *testing.T) {
 	assert.Len(t, results[0].Messages, 2)
 }
 
-func TestClaudeIncrementalEscalatesOnlyForNewPRLinks(t *testing.T) {
-	stored := map[string]struct{}{
+func TestClaudeIncrementalEscalatesOnlyForPRLinkChanges(t *testing.T) {
+	storedAt := time.Date(2026, 10, 5, 3, 21, 0, 0, time.UTC)
+	stored := map[string]time.Time{
+		"https://github.com/owner/repo/pull/123": storedAt,
+	}
+	untimed := map[string]time.Time{
 		"https://github.com/owner/repo/pull/123": {},
 	}
-	repeated := `{"type":"pr-link","prNumber":123,"prUrl":"https://github.com/owner/repo/pull/123","prRepository":"owner/repo","timestamp":"2026-10-05T03:40:00Z"}`
-	fresh := `{"type":"pr-link","prNumber":124,"prUrl":"https://github.com/owner/repo/pull/124","prRepository":"owner/repo","timestamp":"2026-10-05T03:41:00Z"}`
+	full := make(map[string]time.Time, maxPRLinksPerSession)
+	for i := range maxPRLinksPerSession {
+		full[fmt.Sprintf("https://github.com/owner/repo/pull/%d", 1000+i)] = storedAt
+	}
+	record := func(n int, ts string) string {
+		line := fmt.Sprintf(`{"type":"pr-link","prNumber":%d,"prUrl":"https://github.com/owner/repo/pull/%d","prRepository":"owner/repo"`, n, n)
+		if ts != "" {
+			line += `,"timestamp":"` + ts + `"`
+		}
+		return line + "}"
+	}
 	tests := []struct {
 		name       string
-		storedURLs map[string]struct{}
+		stored     map[string]time.Time
 		appended   string
 		wantStatus IncrementalStatus
 	}{
-		{name: "repeated link stays incremental", storedURLs: stored, appended: repeated, wantStatus: IncrementalApplied},
-		{name: "new link needs full parse", storedURLs: stored, appended: fresh, wantStatus: IncrementalNeedsFullParse},
-		{name: "unknown stored links stay incremental", appended: fresh, wantStatus: IncrementalApplied},
+		{
+			name: "repeated link stays incremental", stored: stored,
+			appended: record(123, "2026-10-05T03:40:00Z"), wantStatus: IncrementalApplied,
+		},
+		{
+			name: "new link needs full parse", stored: stored,
+			appended: record(124, "2026-10-05T03:41:00Z"), wantStatus: IncrementalNeedsFullParse,
+		},
+		{
+			name: "first timestamp for a stored link needs full parse", stored: untimed,
+			appended: record(123, "2026-10-05T03:40:00Z"), wantStatus: IncrementalNeedsFullParse,
+		},
+		{
+			name: "earlier timestamp for a stored link needs full parse", stored: stored,
+			appended: record(123, "2026-10-05T03:00:00Z"), wantStatus: IncrementalNeedsFullParse,
+		},
+		{
+			name: "untimed repeat stays incremental", stored: stored,
+			appended: record(123, ""), wantStatus: IncrementalApplied,
+		},
+		{
+			name: "link past the cap stays incremental", stored: full,
+			appended: record(124, "2026-10-05T03:41:00Z"), wantStatus: IncrementalApplied,
+		},
+		{
+			name:     "unknown stored links stay incremental",
+			appended: record(124, "2026-10-05T03:41:00Z"), wantStatus: IncrementalApplied,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -156,7 +195,7 @@ func TestClaudeIncrementalEscalatesOnlyForNewPRLinks(t *testing.T) {
 			outcome, status, err := provider.ParseIncremental(t.Context(), IncrementalRequest{
 				Source: source, Fingerprint: SourceFingerprint{Key: path, Size: current.Size()},
 				SessionID: "incremental", Offset: info.Size(), StartOrdinal: 2,
-				StoredPRLinkURLs: tt.storedURLs,
+				StoredPRLinks: tt.stored,
 			})
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantStatus, status)

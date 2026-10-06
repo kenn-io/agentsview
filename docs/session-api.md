@@ -621,7 +621,8 @@ does not say whether the session opened it.
 Filter by pull request with `session list --pr` or the `pr` query parameter.
 The value is `owner/repo` for any pull request in that repository,
 `owner/repo#123` for one pull request, or a pull request URL. Repository
-matching ignores case.
+matching ignores case. A URL also matches its host, so it cannot select a
+same-named repository on another forge; the shorthand forms match any host.
 
 #### Filtering by label or pull request
 
