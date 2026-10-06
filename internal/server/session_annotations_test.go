@@ -129,10 +129,6 @@ func TestSessionParentAPI(t *testing.T) {
 		`{"parent_session_id":"worker"}`)
 	assertStatus(t, w, http.StatusBadRequest)
 
-	w = te.put(t, "/api/v1/sessions/worker/parent",
-		`{"parent_session_id":"manager","relationship_type":"delegated"}`)
-	assertStatus(t, w, http.StatusBadRequest)
-
 	w = te.del(t, "/api/v1/sessions/worker/parent")
 	assertStatus(t, w, http.StatusOK)
 	w = te.get(t, "/api/v1/sessions/worker/parent")

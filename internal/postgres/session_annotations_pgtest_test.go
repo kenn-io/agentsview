@@ -3,8 +3,6 @@
 package postgres
 
 import (
-	"context"
-	"database/sql"
 	"slices"
 	"strconv"
 	"testing"
@@ -33,7 +31,7 @@ func seedAnnotatedSession(
 ) {
 	t.Helper()
 	sess.Project = "proj"
-	sess.Machine = "test-machine"
+	sess.Machine = "workstation"
 	sess.Agent = "claude"
 	sess.MessageCount = 1
 	sess.UserMessageCount = 1
@@ -52,27 +50,6 @@ func seedAnnotatedSession(
 	}
 }
 
-func newAnnotationsPushEnv(
-	t *testing.T, schema string,
-) (*sql.DB, *db.DB, *Sync, string) {
-	t.Helper()
-	pgURL := testPGURL(t)
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
-
-	pg, err := Open(pgURL, schema, true)
-	require.NoError(t, err, "Open")
-	t.Cleanup(func() { pg.Close() })
-	require.NoError(t, EnsureSchema(t.Context(), pg, schema), "EnsureSchema")
-
-	local := testDB(t)
-	syncer := &Sync{
-		pg: pg, local: local, machine: "test-machine", schema: schema,
-		schemaDone: true,
-	}
-	return pg, local, syncer, pgURL
-}
-
 func sortedSessionIDs(sessions []db.Session) []string {
 	ids := sessionIDs(sessions)
 	slices.Sort(ids)
@@ -89,10 +66,10 @@ func sidebarIDs(rows []db.SidebarSessionIndexRow) []string {
 }
 
 func TestPGSessionPRLinksAndLabelsReadAndFilter(t *testing.T) {
-	_, local, syncer, pgURL := newAnnotationsPushEnv(
+	syncer, local, _, ctx := newSessionProvenancePushSync(
 		t, "agentsview_session_annotations_test",
 	)
-	ctx := t.Context()
+	pgURL := testPGURL(t)
 
 	seedAnnotatedSession(t, local, db.Session{
 		ID: "sid-a",
@@ -293,10 +270,9 @@ func TestPGSessionPRLinksAndLabelsReadAndFilter(t *testing.T) {
 }
 
 func TestPGPushRepushesAnnotationOnlyChanges(t *testing.T) {
-	pg, local, syncer, _ := newAnnotationsPushEnv(
+	syncer, local, pg, ctx := newSessionProvenancePushSync(
 		t, "agentsview_session_annotations_repush_test",
 	)
-	ctx := t.Context()
 
 	sess := db.Session{
 		ID: "sid-repush",
@@ -356,10 +332,10 @@ func TestPGPushRepushesAnnotationOnlyChanges(t *testing.T) {
 }
 
 func TestPGPushAddsAnnotationColumnsToOlderSchema(t *testing.T) {
-	pg, local, syncer, pgURL := newAnnotationsPushEnv(
+	syncer, local, pg, ctx := newSessionProvenancePushSync(
 		t, "agentsview_session_annotations_upgrade_test",
 	)
-	ctx := context.Background()
+	pgURL := testPGURL(t)
 
 	_, err := pg.ExecContext(ctx,
 		`ALTER TABLE sessions DROP COLUMN pr_links, DROP COLUMN labels`)
@@ -407,8 +383,8 @@ func TestPGAnnotationTreeSkipsHiddenAncestors(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, local, syncer, pgURL := newAnnotationsPushEnv(t, tt.schema)
-			ctx := t.Context()
+			syncer, local, _, ctx := newSessionProvenancePushSync(t, tt.schema)
+			pgURL := testPGURL(t)
 			seedAnnotatedSession(t, local, db.Session{ID: "root"})
 			seedAnnotatedSession(t, local, db.Session{
 				ID: "mid", ParentSessionID: strPtr("root"), RelationshipType: "subagent",

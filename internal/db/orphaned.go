@@ -1178,16 +1178,13 @@ func (d *DB) CopySessionMetadataFrom(
 	if oldDBHasTable(ctx, tx, "session_external_parents") {
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO main.session_external_parents (
-				session_id, parent_session_id, relationship_type,
-				created_at, updated_at
+				session_id, parent_session_id, created_at, updated_at
 			)
-			SELECT session_id, parent_session_id, relationship_type,
-				created_at, updated_at
+			SELECT session_id, parent_session_id, created_at, updated_at
 			FROM old_db.session_external_parents
 			WHERE true
 			ON CONFLICT(session_id) DO UPDATE SET
 				parent_session_id = excluded.parent_session_id,
-				relationship_type = excluded.relationship_type,
 				created_at = excluded.created_at,
 				updated_at = excluded.updated_at`); err != nil {
 			return fmt.Errorf("copying session parents: %w", err)

@@ -81,10 +81,7 @@ func newSessionLabelCommand() *cobra.Command {
 }
 
 func newSessionParentCommand() *cobra.Command {
-	var (
-		relationship string
-		clearAll     bool
-	)
+	var clearAll bool
 	cmd := &cobra.Command{
 		Use:   "parent <session-id> [parent-session-id]",
 		Short: "Show, set, or remove a launcher-supplied parent session",
@@ -92,7 +89,8 @@ func newSessionParentCommand() *cobra.Command {
 			"that starts worker sessions as separate processes. The link appears\n" +
 			"in the session tree only while the transcript itself names no\n" +
 			"parent: parser-derived subagent, fork, and continuation links win.\n" +
-			"The link may be recorded before the session has synced.",
+			"The link makes the session a subagent of its launcher. It may be\n" +
+			"recorded before the session has synced.",
 		Example: "  agentsview session parent <worker-id> <manager-id>\n" +
 			"  agentsview session parent <worker-id> --clear",
 		Args:         cobra.RangeArgs(1, 2),
@@ -106,9 +104,6 @@ func newSessionParentCommand() *cobra.Command {
 			if clearAll && parentID != "" {
 				return errors.New("--clear cannot be combined with a parent session id")
 			}
-			if cmd.Flags().Changed("relationship") && parentID == "" {
-				return errors.New("--relationship requires a parent session id")
-			}
 			annotator, cleanup, err := resolveSessionAnnotator(cmd, clearAll || parentID != "")
 			if err != nil {
 				return err
@@ -120,9 +115,7 @@ func newSessionParentCommand() *cobra.Command {
 			case clearAll:
 				link, err = annotator.ClearSessionParent(cmd.Context(), id)
 			case parentID != "":
-				link, err = annotator.SetSessionParent(
-					cmd.Context(), id, parentID, relationship,
-				)
+				link, err = annotator.SetSessionParent(cmd.Context(), id, parentID)
 			default:
 				link, err = annotator.SessionParent(cmd.Context(), id)
 			}
@@ -136,10 +129,6 @@ func newSessionParentCommand() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&relationship, "relationship", "",
-		"Relationship to the parent: "+
-			strings.Join(db.ExternalRelationshipTypes, ", ")+
-			" (default "+db.DefaultExternalRelationshipType+")")
 	cmd.Flags().BoolVar(&clearAll, "clear", false,
 		"Remove the launcher-supplied parent link")
 	return cmd

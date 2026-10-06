@@ -697,16 +697,17 @@ agentsview session parent <worker-id>                    # show the link
 agentsview session parent <worker-id> --clear
 ```
 
-| Method   | Path                           | Body                                                             |
-| -------- | ------------------------------ | ---------------------------------------------------------------- |
-| `GET`    | `/api/v1/sessions/{id}/parent` | —                                                                |
-| `PUT`    | `/api/v1/sessions/{id}/parent` | `{"parent_session_id": "<id>", "relationship_type": "subagent"}` |
-| `DELETE` | `/api/v1/sessions/{id}/parent` | —                                                                |
+| Method   | Path                           | Body                            |
+| -------- | ------------------------------ | ------------------------------- |
+| `GET`    | `/api/v1/sessions/{id}/parent` | —                               |
+| `PUT`    | `/api/v1/sessions/{id}/parent` | `{"parent_session_id": "<id>"}` |
+| `DELETE` | `/api/v1/sessions/{id}/parent` | —                               |
 
-`relationship_type` is `subagent`, which is also the default. A launched worker
-is delegated work, so the link makes it a subagent of the launching session: it nests under that session in the sidebar, and
-`session usage` includes its cost in the launcher's total. The response reports
-`session_found` and `applied`.
+A launched worker is delegated work, so the link always makes it a subagent of
+the launching session, and the response reports `relationship_type` as
+`subagent`. The worker nests under that session in the sidebar, and
+`session usage` includes its cost in the launcher's total. The response also
+reports `session_found` and `applied`.
 
 - The link applies only while the transcript names no parent of its own.
   Subagent, fork, and continuation links that AgentsView derives from the

@@ -755,7 +755,6 @@ CREATE INDEX IF NOT EXISTS idx_session_labels_label
 CREATE TABLE IF NOT EXISTS session_external_parents (
     session_id        TEXT PRIMARY KEY,
     parent_session_id TEXT NOT NULL,
-    relationship_type TEXT NOT NULL DEFAULT 'subagent',
     created_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     updated_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );

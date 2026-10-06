@@ -17135,23 +17135,6 @@ func (s SessionToolSequenceCallRepeat) Validate() error {
 	}
 }
 
-// SetSessionParentInputBodyRelationshipType Relationship to the parent; defaults to subagent
-type SetSessionParentInputBodyRelationshipType string
-
-const (
-	Subagent SetSessionParentInputBodyRelationshipType = "subagent"
-)
-
-// Validate checks if the SetSessionParentInputBodyRelationshipType value is valid
-func (s SetSessionParentInputBodyRelationshipType) Validate() error {
-	switch s {
-	case Subagent:
-		return nil
-	default:
-		return runtime.NewValidationErrorsFromString("Enum", fmt.Sprintf("must be a valid SetSessionParentInputBodyRelationshipType value, got: %v", s))
-	}
-}
-
 // GetAPIV1ActivityReportQueryPreset Range preset
 type GetAPIV1ActivityReportQueryPreset string
 
@@ -23532,27 +23515,10 @@ func (s SetSessionLabelsInputBody) Validate() error {
 type SetSessionParentInputBody struct {
 	// ParentSessionID ID of the session that launched this one
 	ParentSessionID string `json:"parent_session_id" validate:"required"`
-
-	// RelationshipType Relationship to the parent; defaults to subagent
-	RelationshipType *SetSessionParentInputBodyRelationshipType `json:"relationship_type,omitempty"`
 }
 
 func (s SetSessionParentInputBody) Validate() error {
-	var errors runtime.ValidationErrors
-	if err := typesValidator.Var(s.ParentSessionID, "required"); err != nil {
-		errors = errors.Append("ParentSessionID", err)
-	}
-	if s.RelationshipType != nil {
-		if v, ok := any(s.RelationshipType).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append("RelationshipType", err)
-			}
-		}
-	}
-	if len(errors) == 0 {
-		return nil
-	}
-	return errors
+	return runtime.ConvertValidatorError(typesValidator.Struct(s))
 }
 
 type SyncAnomalyStats struct {

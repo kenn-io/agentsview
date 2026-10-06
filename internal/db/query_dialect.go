@@ -216,7 +216,7 @@ func PostgresQueryDialect() QueryDialect {
 		canonicalChildRelationships: []string{"subagent", "fork", "continuation"},
 		nullsLast:                   true,
 		labelPredicate: func(q func(string) string, ph string) string {
-			// Containment can use the partial GIN index on labels.
+			// Containment can use the GIN index on labels.
 			return q("labels") + " @> ARRAY[" + ph + "::text]"
 		},
 		prLinkPredicate: func(col, repoPh, numPh, hostPh string) string {

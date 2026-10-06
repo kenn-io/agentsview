@@ -4911,12 +4911,10 @@ func (e *Engine) UpdateSessionLabels(
 // serialized with parser writes so a concurrent parse cannot interleave
 // with the parent application.
 func (e *Engine) SetSessionExternalParent(
-	ctx context.Context, sessionID, parentID, relationshipType string,
+	ctx context.Context, sessionID, parentID string,
 ) (db.SessionExternalParent, error) {
 	return runSessionAnnotationWrite(e, func() (db.SessionExternalParent, error) {
-		return e.db.SetSessionExternalParent(
-			ctx, sessionID, parentID, relationshipType,
-		)
+		return e.db.SetSessionExternalParent(ctx, sessionID, parentID)
 	}, sessionExternalParentChanged)
 }
 

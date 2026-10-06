@@ -45,8 +45,7 @@ type updateSessionLabelsInput struct {
 type setSessionParentInput struct {
 	ID   string `path:"id" required:"true" doc:"Session ID"`
 	Body struct {
-		ParentSessionID  string `json:"parent_session_id" required:"true" doc:"ID of the session that launched this one"`
-		RelationshipType string `json:"relationship_type,omitempty" enum:"subagent" doc:"Relationship to the parent; defaults to subagent"`
+		ParentSessionID string `json:"parent_session_id" required:"true" doc:"ID of the session that launched this one"`
 	}
 }
 
@@ -114,7 +113,7 @@ func (s *Server) humaSetSessionParent(
 		return nil, err
 	}
 	link, err := s.syncEngineForLocal(ctx, localDB).SetSessionExternalParent(
-		ctx, in.ID, in.Body.ParentSessionID, in.Body.RelationshipType,
+		ctx, in.ID, in.Body.ParentSessionID,
 	)
 	if err != nil {
 		return nil, sessionAnnotationError("set session parent", err)

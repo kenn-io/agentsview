@@ -20,9 +20,7 @@ type SessionAnnotator interface {
 	) (*db.SessionLabels, error)
 	// SessionParent returns nil when no launcher-supplied link is recorded.
 	SessionParent(ctx context.Context, id string) (*db.SessionExternalParent, error)
-	SetSessionParent(
-		ctx context.Context, id, parentID, relationshipType string,
-	) (*db.SessionExternalParent, error)
+	SetSessionParent(ctx context.Context, id, parentID string) (*db.SessionExternalParent, error)
 	// ClearSessionParent returns ErrNoSessionParent when no link is recorded.
 	ClearSessionParent(ctx context.Context, id string) (*db.SessionExternalParent, error)
 }
@@ -79,7 +77,7 @@ func (b *directBackend) SessionParent(
 }
 
 func (b *directBackend) SetSessionParent(
-	ctx context.Context, id, parentID, relationshipType string,
+	ctx context.Context, id, parentID string,
 ) (*db.SessionExternalParent, error) {
 	var (
 		link db.SessionExternalParent
@@ -87,9 +85,9 @@ func (b *directBackend) SetSessionParent(
 	)
 	switch {
 	case b.engine != nil:
-		link, err = b.engine.SetSessionExternalParent(ctx, id, parentID, relationshipType)
+		link, err = b.engine.SetSessionExternalParent(ctx, id, parentID)
 	case b.local != nil:
-		link, err = b.local.SetSessionExternalParent(ctx, id, parentID, relationshipType)
+		link, err = b.local.SetSessionExternalParent(ctx, id, parentID)
 	default:
 		return nil, db.ErrReadOnly
 	}

@@ -7204,11 +7204,6 @@ components:
         parent_session_id:
           description: ID of the session that launched this one
           type: string
-        relationship_type:
-          description: Relationship to the parent; defaults to subagent
-          enum:
-            - subagent
-          type: string
       required:
         - parent_session_id
       type: object

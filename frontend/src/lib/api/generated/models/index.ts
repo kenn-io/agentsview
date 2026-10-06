@@ -481,7 +481,6 @@ export * from "./setGithubConfigInputBody.ts";
 export * from "./setGithubConfigResponse.ts";
 export * from "./setSessionLabelsInputBody.ts";
 export * from "./setSessionParentInputBody.ts";
-export * from "./setSessionParentInputBodyRelationshipType.ts";
 export * from "./settingsResponse.ts";
 export * from "./settingsResponseAgentDirs.ts";
 export * from "./settingsResponseToolResultImages.ts";

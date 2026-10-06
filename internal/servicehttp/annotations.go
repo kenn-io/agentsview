@@ -98,7 +98,7 @@ func (b *httpBackend) SessionParent(
 }
 
 func (b *httpBackend) SetSessionParent(
-	ctx context.Context, id, parentID, relationshipType string,
+	ctx context.Context, id, parentID string,
 ) (*db.SessionExternalParent, error) {
 	if err := b.requireWritable("parent"); err != nil {
 		return nil, err
@@ -108,10 +108,6 @@ func (b *httpBackend) SetSessionParent(
 		return nil, err
 	}
 	body := &apiclient.PutAPIV1SessionsIDParentBody{ParentSessionID: parentID}
-	if relationshipType != "" {
-		rel := apiclient.SetSessionParentInputBodyRelationshipType(relationshipType)
-		body.RelationshipType = &rel
-	}
 	response, err := api.PutAPIV1SessionsIDParentWithResponse(ctx,
 		&apiclient.PutAPIV1SessionsIDParentRequestOptions{
 			PathParams: &apiclient.PutAPIV1SessionsIDParentPath{ID: url.PathEscape(id)},
