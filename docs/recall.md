@@ -189,9 +189,9 @@ one-time consent for that invocation.
 
 Vector and hybrid queries keep working while the Recall index trails the corpus
 by a few entries, which is normal while extraction is writing them. Each
-insert, delete, or text edit of an accepted entry is one corpus revision, and
-the index may trail by up to `[vector] recall_max_revision_lag` revisions
-(default 256):
+insert, delete, accept, reject, or text edit of an accepted entry is one corpus
+revision, and the index may trail by up to `[vector] recall_max_revision_lag`
+revisions (default 256):
 
 ```toml
 [vector]
@@ -199,11 +199,11 @@ recall_max_revision_lag = 256   # 0 requires the index to match the corpus exact
 ```
 
 Entries newer than the index are missing only from the vector ranking. Hybrid
-search still finds them through its lexical ranking. An entry that is deleted,
-rejected, or no longer matches the query's filters drops out of the results,
-because both rankings read entries as they are when the query runs. Past the
-bound, vector and hybrid queries fail closed until the Recall store is rebuilt;
-lexical mode keeps working while an automatic refresh catches up. See
+search still finds them through its lexical ranking. An entry deleted or
+rejected since the last build drops out of the results, because both rankings
+read entries after the query is encoded. Past the bound, vector and hybrid
+queries fail closed until the Recall store is rebuilt, by hand or by the
+automatic refresh when it is enabled; lexical mode keeps working meanwhile. See
 [Semantic Search](/docs/semantic-search/#enabling-vector) for the shared
 embedding configuration and endpoint privacy considerations.
 
