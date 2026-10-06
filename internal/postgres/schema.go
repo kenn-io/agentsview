@@ -143,6 +143,10 @@ CREATE TABLE IF NOT EXISTS sessions (
     agent_label        TEXT NOT NULL DEFAULT '',
     entrypoint         TEXT NOT NULL DEFAULT '',
     session_kind       TEXT NOT NULL DEFAULT '',
+    -- JSON array of parser-derived pull request links; '' when none.
+    pr_links           TEXT NOT NULL DEFAULT '',
+    -- Sorted user labels pushed from the SQLite archive.
+    labels             TEXT[] NOT NULL DEFAULT '{}',
     first_message      TEXT,
     display_name       TEXT,
     source_display_name TEXT,
@@ -1160,6 +1164,10 @@ func createPartialIndexesPG(ctx context.Context, db pgSessionExecer) error {
 		 WHERE timestamp IS NOT NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_has_secret
 		 ON sessions(secret_leak_count) WHERE secret_leak_count > 0`,
+		// idx_sessions_labels backs the label filter's array containment,
+		// the PostgreSQL counterpart of SQLite's idx_session_labels_label.
+		`CREATE INDEX IF NOT EXISTS idx_sessions_labels
+		 ON sessions USING GIN (labels)`,
 		// idx_tool_calls_file_path backs the cross-session Recent Edits feed.
 		// Created here, after the file_path column migration, mirroring the
 		// SQLite partial index so legacy schemas migrate cleanly.

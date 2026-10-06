@@ -73,6 +73,34 @@ func TestSessionFingerprintCoversEveryMirroredColumn(t *testing.T) {
 		"sessionFingerprintFields and sessionFingerprintColumns must stay parallel")
 }
 
+// Labels and PR links live only on the session row, so a change to either
+// alone must change the fingerprint or the push would skip the session.
+func TestSnapshotFingerprintTracksLabelsAndPRLinks(t *testing.T) {
+	s := &Sync{machine: "m"}
+	fingerprint := func(sess db.Session) string {
+		t.Helper()
+		fp, err := s.snapshotFingerprint(&db.SessionMirrorSnapshot{Session: sess})
+		require.NoError(t, err)
+		return fp
+	}
+	base := db.Session{ID: "s", CreatedAt: "2026-01-01T00:00:00Z"}
+	labeled := base
+	labeled.Labels = []string{"ticket-1"}
+	linked := base
+	linked.PRLinks = []db.PRLink{{
+		URL: "https://github.com/acme/widgets/pull/1", Host: "github.com",
+		Repository: "acme/widgets", Number: 1,
+	}}
+	cleared := base
+	cleared.Labels = []string{}
+
+	baseFP := fingerprint(base)
+	assert.NotEqual(t, baseFP, fingerprint(labeled), "label-only change")
+	assert.NotEqual(t, baseFP, fingerprint(linked), "pr-link-only change")
+	assert.Equal(t, baseFP, fingerprint(cleared),
+		"no labels and an emptied label set write the same row")
+}
+
 func tableColumn(spec tableSpec, name string) (columnSpec, bool) {
 	for _, c := range spec.columns {
 		if c.name == name {

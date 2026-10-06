@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
+  import { TextInput } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { router } from "../../stores/router.svelte.js";
@@ -11,12 +12,16 @@
     agentLabel,
   } from "../../utils/agents.js";
   import type { GroupMode } from "../sidebar/session-list-utils.js";
+  import { isValidPRFilter } from "../../utils/prLinks.js";
   import { CheckIcon, FunnelIcon } from "../../icons.js";
 
   interface Props {
     groupMode?: GroupMode;
     showDisplay?: boolean;
     showStarred?: boolean;
+    /** Show label and pull request filters. Pages whose data ignores
+     *  them (usage, analytics) turn this off. */
+    showLabelFilters?: boolean;
     align?: "left" | "right";
     onToggleGroupByAgent?: () => void;
     onToggleGroupByProject?: () => void;
@@ -30,6 +35,7 @@
     groupMode = "none",
     showDisplay = true,
     showStarred = true,
+    showLabelFilters = true,
     align = "right",
     onToggleGroupByAgent,
     onToggleGroupByProject,
@@ -46,6 +52,10 @@
     $state(undefined);
   let agentSearch = $state("");
   let machineSearch = $state("");
+  let labelDraft = $state("");
+  let prDraft = $state("");
+  let prInvalid = $state(false);
+  const prErrorId = $props.id();
 
   const sortedAgents = $derived.by(() => {
     const agents = [...sessions.agents].sort(
@@ -75,11 +85,35 @@
       sessions.loadMachines();
       agentSearch = "";
       machineSearch = "";
+      labelDraft = "";
+      prDraft = "";
+      prInvalid = false;
     }
   });
 
+  function onLabelKeydown(event: KeyboardEvent) {
+    if (event.key !== "Enter" || event.isComposing) return;
+    event.preventDefault();
+    if (!labelDraft.trim()) return;
+    sessions.addLabelFilter(labelDraft);
+    labelDraft = "";
+  }
+
+  function onPRKeydown(event: KeyboardEvent) {
+    if (event.key !== "Enter" || event.isComposing) return;
+    event.preventDefault();
+    if (!prDraft.trim()) return;
+    if (!isValidPRFilter(prDraft)) {
+      prInvalid = true;
+      return;
+    }
+    sessions.setPRFilter(prDraft);
+    prDraft = "";
+    prInvalid = false;
+  }
+
   let hasFilters = $derived(
-    sessions.hasActiveFilters ||
+    (showLabelFilters ? sessions.hasActiveFilters : sessions.hasSharedFilters) ||
       (showStarred && starred.filterOnly) ||
       extraActive,
   );
@@ -382,6 +416,58 @@
         </div>
       </div>
     {/if}
+    {#if showLabelFilters}
+      <div class="filter-section">
+        <div class="filter-section-label">{m.sidebar_filters_labels()}</div>
+        {#each sessions.filters.labels as label (label)}
+          <button
+            class="filter-toggle active"
+            title={m.shared_active_filters_remove_label({ label })}
+            onclick={() => sessions.removeLabelFilter(label)}
+          >
+            <span class="toggle-check on"></span>
+            <span class="filter-value">{label}</span>
+          </button>
+        {/each}
+        <TextInput
+          size="sm"
+          block
+          bind:value={labelDraft}
+          placeholder={m.sidebar_filters_label_placeholder()}
+          ariaLabel={m.sidebar_filters_label_input()}
+          onkeydown={onLabelKeydown}
+        />
+      </div>
+      <div class="filter-section">
+        <div class="filter-section-label">{m.sidebar_filters_pull_request()}</div>
+        {#if sessions.filters.pr}
+          <button
+            class="filter-toggle active"
+            title={m.shared_active_filters_clear_pull_request()}
+            onclick={() => sessions.setPRFilter("")}
+          >
+            <span class="toggle-check on"></span>
+            <span class="filter-value">{sessions.filters.pr}</span>
+          </button>
+        {/if}
+        <TextInput
+          size="sm"
+          block
+          bind:value={prDraft}
+          invalid={prInvalid}
+          placeholder={m.sidebar_filters_pull_request_placeholder()}
+          ariaLabel={m.sidebar_filters_pull_request_input()}
+          ariaDescribedby={prInvalid ? prErrorId : undefined}
+          oninput={() => (prInvalid = false)}
+          onkeydown={onPRKeydown}
+        />
+        {#if prInvalid}
+          <div class="filter-input-error" id={prErrorId}>
+            {m.sidebar_filters_pull_request_invalid()}
+          </div>
+        {/if}
+      </div>
+    {/if}
     <div class="filter-section">
       <div class="filter-section-label">{m.sidebar_filters_min_prompts()}</div>
       <div class="pill-buttons">
@@ -518,6 +604,24 @@
     background: var(--bg-surface-hover);
     color: var(--accent-green);
     font-weight: 500;
+  }
+
+  .filter-value {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .filter-section :global(.kit-text-input) {
+    margin-top: 2px;
+  }
+
+  .filter-input-error {
+    margin-top: 4px;
+    font-size: 10px;
+    color: var(--accent-red);
   }
 
   .toggle-check {

@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-02
+last_edited: 2026-10-06
 ---
 
 # Session Format Source Inventory
@@ -178,6 +178,18 @@ fixtures retain this field; missing identities remain source-local.
 
 - **Format:** Project-scoped JSONL transcripts, including subagent JSONL, with
   `user`, `assistant`, `system`, and progress records.
+
+- **Pull request links (2026-10-06):** Checked against local Claude Code 2.1.x
+  transcripts. The CLI appends top-level records shaped
+  `{"type":"pr-link","prNumber":123,"prUrl":"https://github.com/owner/repo/pull/123","prRepository":"owner/repo","sessionId":"...","timestamp":"..."}`.
+  The records carry no `uuid`, so background-fork replay trimming never
+  drops them. One transcript can repeat the same link hundreds of times, so
+  Agentsview keeps one link per normalized URL with the earliest timestamp and
+  escalates an incremental sync to a full parse only for a URL the session
+  does not store yet. The record does not say whether the session opened the
+  pull request. Undocumented upstream; evidence is `no-public-source`. See
+  `claudePRLink` in `internal/parser/claude.go` and
+  `internal/parser/pr_links.go`.
 
 - **Continuation parsing (2026-10-01):** Rechecked the native provider with the
   synthetic two-parent fixture in
@@ -556,6 +568,15 @@ fixtures retain this field; missing identities remain source-local.
   `cmd/perfsim` generates dated rollouts with session metadata, turn context,
   response items and token-count events through the shared fixture builder.
   Its integration test checks parsed messages and aggregate output tokens.
+
+- **Pull request metadata (2026-10-06):** Rollout files carry no pull request
+  fields; `session_meta.payload.git` holds only `commit_hash`, `branch`, and
+  `repository_url` (`GitInfo` in `codex-rs/protocol/src/protocol.rs`, checked
+  at upstream `2dbcab90e2`). Newer Codex apps can attach a pull request to a
+  thread through the app-server `thread/attachment/add` call, which writes
+  `thread_attachments` rows with `attachment_type = "pull_request"` to the
+  Codex state SQLite database. Agentsview does not read that database for pull
+  requests yet.
 
 - **Format:** Rollout JSONL files, with a separate JSONL session index for
   thread names. Current releases keep thread metadata in SQLite and still
@@ -2445,6 +2466,13 @@ schemas keep their existing ordering behavior.
   message falls back to that title only when the session has no user message.
   Managed sessions keep their title in a resource-store `session_metadata`
   record, which Agentsview does not read.
+- **Pull request metadata (2026-10-06):** Recent releases write a sidecar
+  `<chatsDir>/<sessionId>.pr.json` holding
+  `{"prs":[{"number","url","createdAt","state?","source?","issues?"}]}`, where
+  `source` is `create`, `worktree`, or `review` (see
+  `packages/core/src/services/session-pr-service.ts` on upstream `main`,
+  checked 2026-10-06). Agentsview does not read the sidecar yet; the session
+  `pr_links` model can hold it.
 - **Agentsview:** `internal/parser/qwen.go` and
   `internal/parser/qwen_provider.go`.
 

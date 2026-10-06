@@ -308,7 +308,8 @@ const duckSessionCols = `id, project, project_assigned, machine, agent,
 	cwd, git_branch, source_session_id, source_version, transcript_fidelity,
 	parser_malformed_lines, is_truncated,
 	secret_leak_count, secrets_rules_version,
-	deleted_at, deletion_cause, termination_status, transcript_revision`
+	deleted_at, deletion_cause, termination_status, transcript_revision,
+	pr_links, labels`
 
 func scanSession(rs interface{ Scan(...any) error }) (db.Session, error) {
 	return scanSessionWithSource(rs, false)
@@ -349,6 +350,7 @@ func scanSessionWithSource(
 		&s.ParserMalformedLines, &s.IsTruncated,
 		&s.SecretLeakCount, &s.SecretsRulesVersion,
 		&deletedAt, &s.DeletionCause, &s.TerminationStatus, &s.TranscriptRevision,
+		duckPRLinksColumn{&s.PRLinks}, duckLabelsColumn{&s.Labels},
 	}
 	if includeSource {
 		targets = append(targets, &s.FilePath, &s.FileSize, &localModifiedAt)
@@ -371,6 +373,51 @@ func scanSessionWithSource(
 		s.DeletedAt = &v
 	}
 	return s, nil
+}
+
+// duckPRLinksColumn scans the mirrored pr_links JSON text into a slice.
+// The push writes db.EncodePRLinks output, so the stored text round-trips
+// through db.DecodePRLinks.
+type duckPRLinksColumn struct{ dst *[]db.PRLink }
+
+func (c duckPRLinksColumn) Scan(src any) error {
+	switch v := src.(type) {
+	case nil:
+		*c.dst = nil
+	case string:
+		*c.dst = db.DecodePRLinks(v)
+	case []byte:
+		*c.dst = db.DecodePRLinks(string(v))
+	default:
+		return fmt.Errorf("scanning duckdb pr_links: unsupported type %T", src)
+	}
+	return nil
+}
+
+// duckLabelsColumn scans the mirrored labels VARCHAR[] column, which the
+// DuckDB driver returns as []any, into a slice. NULL and an empty list
+// both decode to nil, matching the SQLite archive's session reads.
+type duckLabelsColumn struct{ dst *[]string }
+
+func (c duckLabelsColumn) Scan(src any) error {
+	*c.dst = nil
+	if src == nil {
+		return nil
+	}
+	items, ok := src.([]any)
+	if !ok {
+		return fmt.Errorf("scanning duckdb labels: unsupported type %T", src)
+	}
+	for _, item := range items {
+		label, ok := item.(string)
+		if !ok {
+			return fmt.Errorf(
+				"scanning duckdb labels: unsupported element type %T", item,
+			)
+		}
+		*c.dst = append(*c.dst, label)
+	}
+	return nil
 }
 
 func scanSessionRows(rows *sql.Rows) ([]db.Session, error) {
@@ -594,6 +641,7 @@ func (s *Store) ListSessions(ctx context.Context, f db.SessionFilter) (db.Sessio
 func (s *Store) GetSidebarSessionIndex(ctx context.Context, f db.SessionFilter) (db.SidebarSessionIndex, error) {
 	f.IncludeChildren = true
 	f.IncludeOrphans = true
+	f = f.WithAnnotationSelection()
 	f.Cursor = ""
 	f.Limit = 0
 

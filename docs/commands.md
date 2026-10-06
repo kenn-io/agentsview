@@ -1475,7 +1475,13 @@ agentsview session watch <id>            # NDJSON event stream
 agentsview session search <pattern>      # content search across sessions
 agentsview session usage <id>            # token usage and cost estimate
 agentsview session usage <id> --own-only # exclude subagent transcripts
+agentsview session label <id> k=v ...    # add, remove, or show labels
+agentsview session parent <id> <parent>  # record the launching session
 ```
+
+`session list --label k=v` and `--pr owner/repo#123` filter by
+[labels](/docs/session-api/#agentsview-session-label) and
+[pull request links](/docs/session-api/#pull-request-links).
 
 `session usage` attributes each subagent transcript's spend to the session that
 spawned it, so a parent that delegated most of its work still reports the full

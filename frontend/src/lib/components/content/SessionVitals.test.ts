@@ -340,6 +340,60 @@ describe("SessionVitals", () => {
     expect(document.querySelector('[title="agentsview"]')).not.toBeNull();
   });
 
+  it("links pull requests in a new tab and skips non-http links", async () => {
+    const session: Session = {
+      ...traceSession,
+      pr_links: [
+        {
+          url: "https://github.com/acme/widgets/pull/42",
+          host: "github.com",
+          repository: "acme/widgets",
+          number: 42,
+        },
+        { url: "javascript:alert(1)", host: "", repository: "evil/repo", number: 1 },
+      ],
+    };
+    component = mount(SessionVitals, {
+      target: document.body,
+      props: { sessionId: session.id, session },
+    });
+    await tick();
+
+    const link = screen.getByRole("link", { name: "acme/widgets#42" });
+    expect(link.getAttribute("href")).toBe("https://github.com/acme/widgets/pull/42");
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+    expect(screen.getAllByRole("link")).toHaveLength(1);
+    expect(document.body.textContent).not.toContain("evil/repo");
+    expect(document.body.textContent).not.toContain(m.session_vitals_labels());
+  });
+
+  it("shows labels and applies a label filter when one is clicked", async () => {
+    const onFilterLabel = vi.fn();
+    const session: Session = { ...traceSession, labels: ["role=reviewer", "ticket=ABC-123"] };
+    component = mount(SessionVitals, {
+      target: document.body,
+      props: { sessionId: session.id, session, onFilterLabel },
+    });
+    await tick();
+
+    expect(document.body.textContent).not.toContain(m.session_vitals_pull_requests());
+    await fireEvent.click(screen.getByRole("button", { name: "ticket=ABC-123" }));
+    expect(onFilterLabel).toHaveBeenCalledWith("ticket=ABC-123");
+  });
+
+  it("renders labels as static chips without a filter handler", async () => {
+    const session: Session = { ...traceSession, labels: ["ticket=ABC-123"] };
+    component = mount(SessionVitals, {
+      target: document.body,
+      props: { sessionId: session.id, session },
+    });
+    await tick();
+
+    expect(document.body.textContent).toContain("ticket=ABC-123");
+    expect(screen.queryByRole("button", { name: "ticket=ABC-123" })).toBeNull();
+  });
+
   it("reveals the full worktree path in a tooltip", async () => {
     component = mount(SessionVitals, {
       target: document.body,

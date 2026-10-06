@@ -1,6 +1,68 @@
 import { rollingRange } from "../utils/dates.js";
 
 export const SESSION_ANALYTICS_WINDOW_PARAM = "window_days";
+export const SESSION_LABEL_PARAM = "label";
+export const SESSION_PR_PARAM = "pr";
+
+// Route params are a flat string record, but `label` repeats in the URL
+// (?label=a&label=b) to match the API. Inside the record its values are
+// joined with a newline: the server rejects labels containing control
+// characters, so the separator never collides with a real label.
+const REPEATED_QUERY_PARAMS: ReadonlySet<string> = new Set([SESSION_LABEL_PARAM]);
+const REPEATED_VALUE_SEPARATOR = "\n";
+
+/** Trims label filter values, drops empty ones, and removes duplicates
+ *  while keeping the first-seen order. */
+export function normalizeLabelFilters(labels: unknown): string[] {
+  if (!Array.isArray(labels)) return [];
+  const out: string[] = [];
+  for (const value of labels) {
+    if (typeof value !== "string") continue;
+    const label = value.trim();
+    if (label && !out.includes(label)) out.push(label);
+  }
+  return out;
+}
+
+/** Encodes label filters as one route param value. */
+export function joinLabelFilterParam(labels: readonly string[]): string {
+  return normalizeLabelFilters(labels).join(REPEATED_VALUE_SEPARATOR);
+}
+
+/** Decodes a route param value written by joinLabelFilterParam. */
+export function splitLabelFilterParam(raw: string | undefined): string[] {
+  if (!raw) return [];
+  return normalizeLabelFilters(raw.split(REPEATED_VALUE_SEPARATOR));
+}
+
+/** Reads a query string into route params. Repeated keys such as `label`
+ *  keep every value; other keys keep the last value. */
+export function routeParamsFromSearch(search: URLSearchParams): Record<string, string> {
+  const params: Record<string, string> = {};
+  for (const [key, value] of search) {
+    if (REPEATED_QUERY_PARAMS.has(key) && params[key] !== undefined) {
+      params[key] = `${params[key]}${REPEATED_VALUE_SEPARATOR}${value}`;
+    } else {
+      params[key] = value;
+    }
+  }
+  return params;
+}
+
+/** Writes route params as a query string, expanding repeated keys. */
+export function searchFromRouteParams(params: Record<string, string>): URLSearchParams {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (REPEATED_QUERY_PARAMS.has(key)) {
+      for (const part of value.split(REPEATED_VALUE_SEPARATOR)) {
+        if (part) search.append(key, part);
+      }
+    } else {
+      search.append(key, value);
+    }
+  }
+  return search;
+}
 
 /** True when URL params contain session filter keys (deep-link). */
 export const SESSION_FILTER_KEYS: ReadonlySet<string> = new Set([
@@ -19,6 +81,8 @@ export const SESSION_FILTER_KEYS: ReadonlySet<string> = new Set([
   "min_user_messages",
   "include_one_shot",
   "include_automated",
+  SESSION_LABEL_PARAM,
+  SESSION_PR_PARAM,
   SESSION_ANALYTICS_WINDOW_PARAM,
 ]);
 

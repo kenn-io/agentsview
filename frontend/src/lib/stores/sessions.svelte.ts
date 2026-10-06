@@ -11,7 +11,15 @@ import { sync } from "./sync.svelte.js";
 import { events } from "./events.svelte.js";
 import { starred } from "./starred.svelte.js";
 import { yokedDates } from "./yokedDates.svelte.js";
-import { SESSION_ANALYTICS_WINDOW_PARAM, parseWindowDaysParam } from "./sessionRouteParams.js";
+import {
+  SESSION_ANALYTICS_WINDOW_PARAM,
+  SESSION_LABEL_PARAM,
+  SESSION_PR_PARAM,
+  joinLabelFilterParam,
+  normalizeLabelFilters,
+  parseWindowDaysParam,
+  splitLabelFilterParam,
+} from "./sessionRouteParams.js";
 import { rollingRange } from "../utils/dates.js";
 import { LatestRead } from "../utils/latest-read.js";
 
@@ -92,6 +100,10 @@ export interface Filters {
   minUserMessages: number;
   includeOneShot: boolean;
   includeAutomated: boolean;
+  /** Exact labels a session must carry; every label must match. */
+  labels: string[];
+  /** Pull request reference: owner/repo, owner/repo#123, or a URL. */
+  pr: string;
 }
 
 function defaultFilters(): Filters {
@@ -110,6 +122,8 @@ function defaultFilters(): Filters {
     minUserMessages: 0,
     includeOneShot: true,
     includeAutomated: false,
+    labels: [],
+    pr: "",
   };
 }
 
@@ -138,6 +152,8 @@ function loadSavedFilters(): SavedFilters {
         windowDays?: unknown;
       };
       const filters = { ...defaultFilters(), ...saved };
+      filters.labels = normalizeLabelFilters(filters.labels);
+      filters.pr = typeof filters.pr === "string" ? filters.pr.trim() : "";
       // Deliberately `!==`, not `<`: an entry written by a newer (or older)
       // format is not trusted either way — dropping date bounds is the
       // fail-safe direction in both.
@@ -204,6 +220,10 @@ export function filtersToParams(f: Filters): Record<string, string> {
   }
   if (!f.includeOneShot) p["include_one_shot"] = "false";
   if (f.includeAutomated) p["include_automated"] = "true";
+  const labels = joinLabelFilterParam(f.labels);
+  if (labels) p[SESSION_LABEL_PARAM] = labels;
+  const pr = f.pr.trim();
+  if (pr) p[SESSION_PR_PARAM] = pr;
   return p;
 }
 
@@ -266,6 +286,8 @@ export function parseFiltersFromParams(params: Record<string, string>): Filters 
     minUserMessages: Number.isFinite(minUserMsgs) ? minUserMsgs : 0,
     includeOneShot,
     includeAutomated: params["include_automated"] === "true",
+    labels: splitLabelFilterParam(params[SESSION_LABEL_PARAM]),
+    pr: (params[SESSION_PR_PARAM] ?? "").trim(),
   };
 }
 
@@ -368,6 +390,8 @@ class SessionsStore {
       include_one_shot: f.includeOneShot || undefined,
       include_automated: f.includeAutomated || undefined,
       starred: starred.filterOnly || undefined,
+      label: f.labels.length > 0 ? [...f.labels] : undefined,
+      pr: f.pr || undefined,
     };
   }
 
@@ -1228,7 +1252,48 @@ class SessionsStore {
     return this.filters.termination.split(",").includes(status);
   }
 
+  /** Adds an exact-match label filter. Sessions must carry every label. */
+  addLabelFilter(label: string) {
+    const next = normalizeLabelFilters([...this.filters.labels, label]);
+    if (next.length === this.filters.labels.length) return;
+    this.filters.labels = next;
+    this.setActiveSession(null);
+    void this.load();
+  }
+
+  removeLabelFilter(label: string) {
+    const next = this.filters.labels.filter((l) => l !== label);
+    if (next.length === this.filters.labels.length) return;
+    this.filters.labels = next;
+    this.setActiveSession(null);
+    void this.load();
+  }
+
+  isLabelSelected(label: string): boolean {
+    return this.filters.labels.includes(label.trim());
+  }
+
+  /** Sets the pull request filter; an empty value clears it. */
+  setPRFilter(pr: string) {
+    const next = pr.trim();
+    if (next === this.filters.pr) return;
+    this.filters.pr = next;
+    this.setActiveSession(null);
+    void this.load();
+  }
+
+  /** Label and pull request filters narrow only the session list; the
+   *  usage and analytics pages do not apply them. */
+  get hasSessionListOnlyFilters(): boolean {
+    return this.filters.labels.length > 0 || !!this.filters.pr;
+  }
+
   get hasActiveFilters(): boolean {
+    return this.hasSharedFilters || this.hasSessionListOnlyFilters;
+  }
+
+  /** Filters the session list shares with the usage and analytics pages. */
+  get hasSharedFilters(): boolean {
     const f = this.filters;
     return !!(
       f.machine ||

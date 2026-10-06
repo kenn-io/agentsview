@@ -1109,12 +1109,13 @@ func (s *Sync) upsertSession(
 			cwd, git_branch, source_session_id, source_version, transcript_fidelity,
 			parser_malformed_lines, is_truncated, deleted_at, deletion_cause, created_at,
 			termination_status, secret_leak_count, secrets_rules_version,
+			pr_links, labels,
 			agentsview_push_fingerprint, source_archive_id
 		) VALUES (
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 		)`
 	query += `
 		ON CONFLICT(id) DO UPDATE SET
@@ -1185,6 +1186,8 @@ func (s *Sync) upsertSession(
 			termination_status = excluded.termination_status,
 			secret_leak_count = excluded.secret_leak_count,
 			secrets_rules_version = excluded.secrets_rules_version,
+			pr_links = excluded.pr_links,
+			labels = excluded.labels,
 			agentsview_push_fingerprint = excluded.agentsview_push_fingerprint,
 			source_archive_id = excluded.source_archive_id`
 
@@ -1237,8 +1240,19 @@ func sessionInsertArgs(
 		sess.IsTruncated, nilTime(sess.DeletedAt), nilString(sess.DeletionCause),
 		timeValue(sess.CreatedAt), nilString(sess.TerminationStatus),
 		sess.SecretLeakCount, sess.SecretsRulesVersion,
+		db.EncodePRLinks(sess.PRLinks), mirroredLabels(sess.Labels),
 		nilEmpty(fingerprint), archiveID,
 	}
+}
+
+// mirroredLabels is the value written to the labels VARCHAR[] column. A
+// session without labels stores NULL, so list_contains never matches it
+// and reads decode it back to a nil slice.
+func mirroredLabels(labels []string) any {
+	if len(labels) == 0 {
+		return nil
+	}
+	return labels
 }
 
 func insertMessages(

@@ -72,7 +72,8 @@ const pgSessionBaseCols = `id, project, project_assigned, machine, agent,
 	cwd, git_branch, source_session_id, source_version,
 	transcript_fidelity, parser_malformed_lines, is_truncated,
 	secret_leak_count, secrets_rules_version,
-	deleted_at, deletion_cause, termination_status, transcript_revision`
+	deleted_at, deletion_cause, termination_status, transcript_revision,
+	pr_links, array_to_json(labels)::text AS labels`
 
 // pgSessionCols is the column list for full PG session queries.
 // PostgreSQL retains the source file path used by read-side session
@@ -127,6 +128,7 @@ func scanPGSessionWithSource(
 	var s db.Session
 	var createdAt *time.Time
 	var startedAt, endedAt, deletedAt *time.Time
+	var prLinks, labels string
 	targets := []any{
 		&s.ID, &s.Project, &s.ProjectAssigned, &s.Machine, &s.Agent,
 		&s.AgentLabel, &s.Entrypoint, &s.SessionKind,
@@ -157,12 +159,17 @@ func scanPGSessionWithSource(
 		&s.TranscriptFidelity, &s.ParserMalformedLines, &s.IsTruncated,
 		&s.SecretLeakCount, &s.SecretsRulesVersion,
 		&deletedAt, &s.DeletionCause, &s.TerminationStatus, &s.TranscriptRevision,
+		&prLinks, &labels,
 	}
 	if includeSource {
 		targets = append(targets, &s.FilePath)
 	}
 	err := rs.Scan(targets...)
 	if err != nil {
+		return s, err
+	}
+	s.PRLinks = db.DecodePRLinks(prLinks)
+	if s.Labels, err = decodePGSessionLabels(labels); err != nil {
 		return s, err
 	}
 	if createdAt != nil {
@@ -181,6 +188,20 @@ func scanPGSessionWithSource(
 		s.DeletedAt = &str
 	}
 	return s, nil
+}
+
+// decodePGSessionLabels decodes the JSON array that pgSessionBaseCols
+// selects for the TEXT[] labels column. An empty array decodes to nil, the
+// same value SQLite returns for an unlabeled session.
+func decodePGSessionLabels(text string) ([]string, error) {
+	var labels []string
+	if err := json.Unmarshal([]byte(text), &labels); err != nil {
+		return nil, fmt.Errorf("decoding session labels: %w", err)
+	}
+	if len(labels) == 0 {
+		return nil, nil
+	}
+	return labels, nil
 }
 
 func (s *Store) FindSessionIDsByPartial(
@@ -428,6 +449,7 @@ func (s *Store) GetSidebarSessionIndex(
 ) (db.SidebarSessionIndex, error) {
 	f.IncludeChildren = true
 	f.IncludeOrphans = true
+	f = f.WithAnnotationSelection()
 
 	if f.Limit > 0 || f.Cursor != "" || f.Starred {
 		return s.getSidebarSessionIndexPage(ctx, f)

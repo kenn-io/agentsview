@@ -70,6 +70,12 @@ client will see these tools:
 
 ### Focused memory profile
 
+`list_sessions` accepts `labels` (every listed label must match) and `pr`
+(`owner/repo`, `owner/repo#123`, or a pull request URL). Its rows include each
+session's labels, pull request links, and parent session. See
+[labels](/docs/session-api/#agentsview-session-label) and
+[pull request links](/docs/session-api/#pull-request-links).
+
 Clients that use AgentsView only for conversation memory can select the focused
 profile:
 

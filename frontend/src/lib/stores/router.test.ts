@@ -38,6 +38,14 @@ describe("parsePath", () => {
     });
   });
 
+  it("keeps every value of a repeated label param", () => {
+    setURL("/sessions?label=ticket%3DABC-123&label=role%3Dreviewer&project=a&project=b");
+    expect(parsePath().params).toEqual({
+      label: "ticket=ABC-123\nrole=reviewer",
+      project: "b",
+    });
+  });
+
   it("parses /sessions/{id}", () => {
     setURL("/sessions/abc-123");
     const result = parsePath();
@@ -432,6 +440,29 @@ describe("RouterStore", () => {
     store = new RouterStore();
     const result = store.navigate("sessions");
     expect(result).toBe(false);
+  });
+
+  it("writes label filters as repeated query keys and reads them back", () => {
+    setURL("/");
+    store = new RouterStore();
+    store.navigate("sessions", {
+      label: "ticket=ABC-123\nrole=reviewer, lead",
+      pr: "acme/widgets#42",
+    });
+
+    const search = new URLSearchParams(window.location.search);
+    expect(search.getAll("label")).toEqual(["ticket=ABC-123", "role=reviewer, lead"]);
+    expect(search.get("pr")).toBe("acme/widgets#42");
+    expect(parsePath().params).toEqual({
+      label: "ticket=ABC-123\nrole=reviewer, lead",
+      pr: "acme/widgets#42",
+    });
+    expect(
+      store.navigate("sessions", {
+        label: "ticket=ABC-123\nrole=reviewer, lead",
+        pr: "acme/widgets#42",
+      }),
+    ).toBe(false);
   });
 
   it("navigate with params builds query string", () => {

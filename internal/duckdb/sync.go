@@ -977,5 +977,6 @@ func duckSessionFingerprintFields(sess db.Session, machine string) []any {
 		sess.IsTruncated, nilTime(sess.DeletedAt), nilString(sess.DeletionCause),
 		timeValue(sess.CreatedAt), nilString(sess.TerminationStatus),
 		sess.SecretLeakCount, sess.SecretsRulesVersion,
+		db.EncodePRLinks(sess.PRLinks), mirroredLabels(sess.Labels),
 	}
 }

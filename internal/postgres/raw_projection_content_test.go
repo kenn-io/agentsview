@@ -70,6 +70,23 @@ func TestRawContentRevisionRetainsHiddenSemanticFields(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotEqual(t, digest, got)
 	})
+	t.Run("pull request links", func(t *testing.T) {
+		p := clone()
+		p.Session.PRLinks = []db.PRLink{{
+			URL:  "https://github.com/acme/widgets/pull/7",
+			Host: "github.com", Repository: "acme/widgets", Number: 7,
+		}}
+		got, err := rawContentRevision(p)
+		require.NoError(t, err)
+		assert.NotEqual(t, digest, got)
+	})
+	t.Run("labels", func(t *testing.T) {
+		p := clone()
+		p.Session.Labels = []string{"ticket=ABC-1"}
+		got, err := rawContentRevision(p)
+		require.NoError(t, err)
+		assert.Equal(t, digest, got)
+	})
 }
 
 func TestRawContentRevisionIgnoresOnlyRecencyDerivedState(t *testing.T) {

@@ -212,7 +212,8 @@ func PostgresQueryDialect() QueryDialect {
 		canonicalChildRelationships: []string{"subagent", "fork", "continuation"},
 		nullsLast:                   true,
 		labelPredicate: func(q func(string) string, ph string) string {
-			return ph + " = ANY(" + q("labels") + ")"
+			// Containment can use the partial GIN index on labels.
+			return q("labels") + " @> ARRAY[" + ph + "::text]"
 		},
 		prLinkPredicate: func(col, repoPh, numPh string) string {
 			pred := "EXISTS (SELECT 1 FROM jsonb_array_elements(NULLIF(" +
@@ -607,6 +608,7 @@ func BuildSessionFilterSQL(
 func BuildSessionBaseFilterSQL(
 	f SessionFilter, dialect QueryDialect,
 ) (string, []any) {
+	f = f.WithAnnotationSelection()
 	b := NewQueryBuilder(dialect, 0)
 	preds := []string{
 		"message_count > 0",
@@ -619,6 +621,11 @@ func BuildSessionBaseFilterSQL(
 	preds = append(preds, filterPreds...)
 	if oneShotPred != "" {
 		preds = append(preds, oneShotPred)
+	}
+	// Callers select roots themselves, so label and pull request filters
+	// keep a root whose tree holds a match.
+	if pred := annotationTreePredicate(f, b, "id"); pred != "" {
+		preds = append(preds, pred)
 	}
 	return strings.Join(preds, " AND "), b.Args()
 }
@@ -682,6 +689,7 @@ func buildSessionFilterWithBuilder(
 		}
 		return qualifier + "." + col
 	}
+	f = f.WithAnnotationSelection()
 
 	if f.IDs != nil {
 		// Explicit hydration selects the requested rows rather than sidebar
@@ -692,6 +700,7 @@ func buildSessionFilterWithBuilder(
 		if oneShot != "" {
 			preds = append(preds, oneShot)
 		}
+		preds = append(preds, annotationPredicates(f, b, q)...)
 		return strings.Join(append([]string{q("deleted_at") + " IS NULL"}, preds...), " AND ")
 	}
 
@@ -712,9 +721,12 @@ func buildSessionFilterWithBuilder(
 		if oneShotPred != "" {
 			allPreds = append(allPreds, oneShotPred)
 		}
+		allPreds = append(allPreds, annotationPredicates(f, b, q)...)
 		return strings.Join(allPreds, " AND ")
 	}
-	if !f.IncludeChildren {
+	// A flat list filtered by label or pull request matches each session
+	// directly, so a launched worker appears even though it is a child.
+	if !f.IncludeChildren && !f.HasAnnotationFilter() {
 		basePreds = append(basePreds,
 			q("relationship_type")+" NOT IN ("+b.dialect.SidebarChildRelationshipsSQL()+")")
 	}
@@ -725,6 +737,7 @@ func buildSessionFilterWithBuilder(
 		if oneShotPred != "" {
 			allPreds = append(allPreds, oneShotPred)
 		}
+		allPreds = append(allPreds, annotationPredicates(f, b, q)...)
 		return strings.Join(allPreds, " AND ")
 	}
 
@@ -735,6 +748,9 @@ func buildSessionFilterWithBuilder(
 	rootMatchParts := append([]string{}, rootFilter...)
 	if oneShotPred != "" {
 		rootMatchParts = append(rootMatchParts, oneShotPred)
+	}
+	if pred := annotationTreePredicate(f, b, "root_session.id"); pred != "" {
+		rootMatchParts = append(rootMatchParts, pred)
 	}
 	rootMatchParts = append(rootMatchParts,
 		BuildCanonicalRootWhere(b.dialect, "root_session", f.IncludeOrphans))
@@ -868,19 +884,72 @@ func sessionFilterPredicates(
 	if f.Starred {
 		preds = append(preds, b.dialect.starredPredicateSQL(q("id")))
 	}
+	return preds, oneShotPred
+}
+
+// HasAnnotationFilter reports whether the filter selects sessions by label
+// or pull request link.
+func (f SessionFilter) HasAnnotationFilter() bool {
+	return len(f.Labels) > 0 || !f.PR.IsZero()
+}
+
+// WithAnnotationSelection lifts the default one-shot and automated
+// exclusions when the filter selects by label or pull request link. Those
+// filters name the sessions the caller wants, the way explicit IDs do, and
+// sessions started by a launcher are usually headless single-prompt runs
+// that the defaults would hide. An explicit AutomatedScope still applies.
+func (f SessionFilter) WithAnnotationSelection() SessionFilter {
+	if f.HasAnnotationFilter() {
+		f.ExcludeOneShot = false
+		f.ExcludeAutomated = false
+	}
+	return f
+}
+
+// annotationPredicates renders the label and pull request filters against
+// one session row.
+func annotationPredicates(
+	f SessionFilter, b *QueryBuilder, q func(string) string,
+) []string {
+	var preds []string
 	for _, label := range f.Labels {
 		preds = append(preds, b.dialect.labelPredicateSQL(q, b.Add(label)))
 	}
 	if !f.PR.IsZero() {
-		numPh := ""
 		repoPh := b.Add(strings.ToLower(f.PR.Repository))
+		numPh := ""
 		if f.PR.Number > 0 {
 			numPh = b.Add(f.PR.Number)
 		}
 		preds = append(preds,
 			b.dialect.prLinkPredicateSQL(q("pr_links"), repoPh, numPh))
 	}
-	return preds, oneShotPred
+	return preds
+}
+
+// annotationTreePredicate keeps idExpr when it names a session that matches
+// the label and pull request filters or an ancestor of one. Tree views use
+// it on their roots, so a launcher's tree appears when only one of its
+// workers carries the label or pull request.
+func annotationTreePredicate(
+	f SessionFilter, b *QueryBuilder, idExpr string,
+) string {
+	preds := annotationPredicates(f, b, func(col string) string {
+		return "annotated_session." + col
+	})
+	if len(preds) == 0 {
+		return ""
+	}
+	return idExpr + " IN (WITH RECURSIVE annotated(id) AS (" +
+		"SELECT annotated_session.id FROM sessions annotated_session" +
+		" WHERE annotated_session.deleted_at IS NULL AND " +
+		strings.Join(preds, " AND ") +
+		" " + b.dialect.recursiveUnionSQL() + " " +
+		"SELECT annotated_parent.id FROM sessions annotated_parent" +
+		" JOIN sessions annotated_child ON " +
+		b.dialect.ParentRelation("annotated_child", "annotated_parent") +
+		" JOIN annotated ON annotated_child.id = annotated.id" +
+		") SELECT id FROM annotated)"
 }
 
 func appendSessionVisibilityPredicates(

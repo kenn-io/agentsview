@@ -96,6 +96,7 @@ func sessionFingerprintFields(sess db.Session, machine string) []any {
 		sess.ParserMalformedLines, sess.IsTruncated,
 		sess.DeletedAt, sess.DeletionCause, sess.CreatedAt, sess.TerminationStatus,
 		sess.SecretLeakCount, sess.SecretsRulesVersion,
+		db.EncodePRLinks(sess.PRLinks), labelsValue(sess.Labels),
 	}
 }
 
@@ -129,6 +130,7 @@ var sessionFingerprintColumns = []string{
 	"parser_malformed_lines", "is_truncated",
 	"deleted_at", "deletion_cause", "created_at", "termination_status",
 	"secret_leak_count", "secrets_rules_version",
+	"pr_links", "labels",
 }
 
 // derivedSessionColumns are the sessions columns no fingerprint field

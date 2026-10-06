@@ -1991,6 +1991,8 @@ func sessionPushFingerprint(
 		sess.AgentLabel,
 		sess.Entrypoint,
 		sess.SessionKind,
+		db.EncodePRLinks(sess.PRLinks),
+		sessionLabelsFingerprint(sess.Labels),
 		stringValue(sess.FirstMessage),
 		stringValue(sess.DisplayName),
 		stringValue(sess.SessionName),
@@ -2054,6 +2056,25 @@ func sessionPushFingerprint(
 		fmt.Fprintf(&b, "%d:%s", len(f), f)
 	}
 	return b.String()
+}
+
+// sessionLabelsFingerprint length-prefixes each label so that label sets
+// with different boundaries cannot collide.
+func sessionLabelsFingerprint(labels []string) string {
+	var b strings.Builder
+	for _, label := range labels {
+		fmt.Fprintf(&b, "%d:%s", len(label), label)
+	}
+	return b.String()
+}
+
+// pgSessionLabelsArg binds labels for the NOT NULL TEXT[] column. A nil
+// slice would bind SQL NULL, so an unlabeled session binds an empty array.
+func pgSessionLabelsArg(labels []string) []string {
+	if labels == nil {
+		return []string{}
+	}
+	return labels
 }
 
 func sameSessionOwner(
@@ -2229,7 +2250,8 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 			transcript_fidelity, transcript_revision,
 			agent_label, entrypoint, session_kind,
 			source_archive_id, source_database_generation, file_path,
-			project_assigned, prompt_evidence_discarded, updated_at
+			project_assigned, prompt_evidence_discarded,
+			pr_links, labels, updated_at
 			)
 			SELECT
 				$1, $2, $3, $4, $5, $6, $7, $8,
@@ -2247,7 +2269,7 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 				$50, $51,
 				$52, $53, $54, $55, $56, $57, $58, $59, $60, $61,
 				$62, $63, $64, $65, $66, $67, $68,
-				$70, NOW()
+				$70, $71, $72::text[], NOW()
 			WHERE NOT EXISTS (
 				SELECT 1 FROM excluded_sessions WHERE id = $1
 			)
@@ -2259,6 +2281,8 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 			agent_label = EXCLUDED.agent_label,
 			entrypoint = EXCLUDED.entrypoint,
 			session_kind = EXCLUDED.session_kind,
+			pr_links = EXCLUDED.pr_links,
+			labels = EXCLUDED.labels,
 			source_archive_id = EXCLUDED.source_archive_id,
 			source_database_generation = EXCLUDED.source_database_generation,
 			file_path = EXCLUDED.file_path,
@@ -2362,6 +2386,8 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 			OR sessions.agent_label IS DISTINCT FROM EXCLUDED.agent_label
 			OR sessions.entrypoint IS DISTINCT FROM EXCLUDED.entrypoint
 			OR sessions.session_kind IS DISTINCT FROM EXCLUDED.session_kind
+			OR sessions.pr_links IS DISTINCT FROM EXCLUDED.pr_links
+			OR sessions.labels IS DISTINCT FROM EXCLUDED.labels
 			OR sessions.source_archive_id IS DISTINCT FROM EXCLUDED.source_archive_id
 			OR sessions.source_database_generation IS DISTINCT FROM
 				EXCLUDED.source_database_generation
@@ -2477,6 +2503,8 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 		sess.ProjectAssigned,
 		string(legacyMarkerMachinesJSON),
 		options.UsageOnly,
+		db.EncodePRLinks(sess.PRLinks),
+		pgSessionLabelsArg(sess.Labels),
 	)
 	if err != nil {
 		return err
