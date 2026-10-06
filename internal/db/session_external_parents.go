@@ -187,12 +187,8 @@ func (db *DB) ClearSessionExternalParent(
 	return link, nil
 }
 
-type rowQueryer interface {
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-}
-
 func loadSessionExternalParent(
-	ctx context.Context, q rowQueryer, sessionID string,
+	ctx context.Context, q recallQueryRower, sessionID string,
 ) (SessionExternalParent, error) {
 	var (
 		link          SessionExternalParent
@@ -230,7 +226,7 @@ func loadSessionExternalParent(
 // both effective and pending external links, and rejects a link that would
 // make the session its own ancestor.
 func rejectExternalParentCycle(
-	ctx context.Context, q rowQueryer, sessionID, parentID string,
+	ctx context.Context, q recallQueryRower, sessionID, parentID string,
 ) error {
 	current := parentID
 	for range maxExternalParentDepth {

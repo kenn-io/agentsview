@@ -767,7 +767,7 @@ func TestPushSessionCarriesDeletionCauseInStableParameterOrder(t *testing.T) {
 	assert.Equal(t, "[]", state.upsertArgs[68].Value)
 	// pr_links and labels follow the archive-content flag. An unlabeled
 	// session binds an empty array because labels is NOT NULL.
-	assert.Equal(t, "", state.upsertArgs[70].Value)
+	assert.Empty(t, state.upsertArgs[70].Value)
 	assert.Equal(t, []string{}, state.upsertArgs[71].Value)
 
 	query := strings.ToLower(strings.Join(strings.Fields(state.upsertQuery), " "))

@@ -350,7 +350,8 @@ func scanSessionWithSource(
 		&s.ParserMalformedLines, &s.IsTruncated,
 		&s.SecretLeakCount, &s.SecretsRulesVersion,
 		&deletedAt, &s.DeletionCause, &s.TerminationStatus, &s.TranscriptRevision,
-		duckPRLinksColumn{&s.PRLinks}, duckLabelsColumn{&s.Labels},
+		duckPRLinksColumn{&s.PRLinks},
+		duckLabelsColumn{&s.Labels},
 	}
 	if includeSource {
 		targets = append(targets, &s.FilePath, &s.FileSize, &localModifiedAt)

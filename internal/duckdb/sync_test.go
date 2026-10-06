@@ -1370,8 +1370,8 @@ func perturbSessionField(base db.Session, i int) (db.Session, bool) {
 		case reflect.String:
 			elem.SetString(name)
 		case reflect.Struct:
-			for j := range elem.NumField() {
-				if f := elem.Field(j); f.Kind() == reflect.String && f.CanSet() {
+			for _, f := range elem.Fields() {
+				if f.Kind() == reflect.String && f.CanSet() {
 					f.SetString(name)
 				}
 			}
