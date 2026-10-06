@@ -536,8 +536,8 @@ func TestToolEffectivenessStructured_CitedCalls(t *testing.T) {
 	var saved ToolEffectivenessStructured
 	require.NoError(t, json.Unmarshal(raw, &saved))
 	assert.Equal(t, []ToolEffectivenessCitedCall{
-		{Ordinal: 1, CallIndex: 0, ToolName: "Grep", InputPreview: `{"pattern":"retryLimit"}`, Outcome: "empty", ResultBytes: new(16), MessageCalls: 1},
-		{Ordinal: 2, CallIndex: 0, ToolName: "Grep", InputPreview: `{"pattern":"retryLimit"}`, Outcome: "empty", ResultBytes: new(16), MessageCalls: 1},
+		{Ordinal: 1, CallIndex: 0, ToolUseID: "g1", ToolName: "Grep", InputPreview: `{"pattern":"retryLimit"}`, Outcome: "empty", ResultBytes: new(16), MessageCalls: 1},
+		{Ordinal: 2, CallIndex: 0, ToolUseID: "g2", ToolName: "Grep", InputPreview: `{"pattern":"retryLimit"}`, Outcome: "empty", ResultBytes: new(16), MessageCalls: 1},
 	}, saved.CitedCalls)
 
 	md := RenderToolEffectivenessMarkdown(r, ev)

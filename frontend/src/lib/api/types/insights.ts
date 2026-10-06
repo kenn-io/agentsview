@@ -46,6 +46,8 @@ export interface ToolEffectivenessOmission {
 export interface ToolEffectivenessCitedCall {
   ordinal: number;
   call_index: number;
+  /** Lets a jump check that the message still holds this call; without it the jump goes by ordinal alone. */
+  tool_use_id?: string;
   tool_name: string;
   input_preview: string;
   outcome: "errored" | "empty" | "content" | "unknown";
@@ -96,6 +98,7 @@ function isCitedCall(value: unknown): value is ToolEffectivenessCitedCall {
   const c = value as ToolEffectivenessCitedCall | null;
   return (
     isCallRef(c) &&
+    (c.tool_use_id === undefined || typeof c.tool_use_id === "string") &&
     typeof c.tool_name === "string" &&
     typeof c.input_preview === "string" &&
     OUTCOMES.has(c.outcome) &&

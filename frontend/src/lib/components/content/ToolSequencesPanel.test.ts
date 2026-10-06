@@ -461,8 +461,8 @@ describe("ToolSequencesPanel", () => {
     const link = document.querySelector<HTMLAnchorElement>(".jump")!;
     expect(link.getAttribute("href")).toContain("msg=4");
     link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
-    expect(scroll).toHaveBeenCalledWith(4, "session-a", "revision-1");
-    expect(navigate).toHaveBeenCalledWith("session-a", { msg: "4" });
+    expect(scroll).toHaveBeenCalledWith(4, "session-a", { index: 0, toolUseId: "tool-id" });
+    expect(navigate).toHaveBeenCalledWith("session-a", { msg: "4", call: "0", tool_use_id: "tool-id" });
 
     navigate.mockClear();
     router.sessionId = "session-a";

@@ -425,6 +425,7 @@
                       <ToolCallRow
                         {sessionId}
                         ordinal={citation.ordinal}
+                        call={citation.detail.tool_use_id ? { index: citation.callIndex, toolUseId: citation.detail.tool_use_id } : undefined}
                         tool={citation.detail.tool_name}
                         input={inputLabel(citation.detail.input_preview)}
                         inputTitle={citation.detail.input_preview}

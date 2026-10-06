@@ -114,8 +114,10 @@ type ToolEffectivenessReport struct {
 // ToolEffectivenessCitedCall describes one cited call so the report view can
 // label it without loading the transcript.
 type ToolEffectivenessCitedCall struct {
-	Ordinal      int    `json:"ordinal"`
-	CallIndex    int    `json:"call_index"`
+	Ordinal   int `json:"ordinal"`
+	CallIndex int `json:"call_index"`
+	// ToolUseID lets a jump check that the message still holds this call.
+	ToolUseID    string `json:"tool_use_id,omitempty"`
 	ToolName     string `json:"tool_name"`
 	InputPreview string `json:"input_preview"`
 	Outcome      string `json:"outcome"`
@@ -286,7 +288,7 @@ func buildToolEffectivenessPrompt(
 			ev.allResultsUnknown = false
 		}
 		detail := ToolEffectivenessCitedCall{
-			Ordinal: row.MessageOrdinal, CallIndex: row.CallIndex, ToolName: row.ToolName,
+			Ordinal: row.MessageOrdinal, CallIndex: row.CallIndex, ToolUseID: row.ToolUseID, ToolName: row.ToolName,
 			InputPreview: strings.Clone(stringutil.SafeTruncate(row.InputJSON, toolCitationPreviewBytes)),
 			Outcome:      string(outcome),
 		}

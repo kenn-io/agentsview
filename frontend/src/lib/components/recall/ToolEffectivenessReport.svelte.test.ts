@@ -123,6 +123,7 @@ function makeInsight(overrides: Partial<DbInsight> = {}): DbInsight {
         {
           ordinal: 3,
           call_index: 0,
+          tool_use_id: "r1",
           tool_name: "Read",
           input_preview: '{"file_path":"config.ts"}',
           outcome: "content",
@@ -292,11 +293,13 @@ describe("ToolEffectivenessReport", () => {
     const link = jumps.find((a) => a.textContent?.trim() === "Message 3 ↗")!;
     expect(link.getAttribute("aria-label")).toBe("Message 3: open the Read call in the transcript");
     expect(link.getAttribute("href")).toContain("msg=3");
+    // The cited call rides along, so a transcript that no longer holds it at that message drops the jump.
+    expect(link.getAttribute("href")).toContain("tool_use_id=r1");
     const event = new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 });
     link.dispatchEvent(event);
     expect(event.defaultPrevented).toBe(true);
-    expect(scroll).toHaveBeenCalledWith(3, "s1", undefined);
-    expect(navigate).toHaveBeenCalledWith("s1", { msg: "3" });
+    expect(scroll).toHaveBeenCalledWith(3, "s1", { index: 0, toolUseId: "r1" });
+    expect(navigate).toHaveBeenCalledWith("s1", { msg: "3", call: "0", tool_use_id: "r1" });
 
     scroll.mockRestore();
     navigate.mockRestore();
