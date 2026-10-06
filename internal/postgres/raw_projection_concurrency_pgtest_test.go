@@ -55,6 +55,48 @@ func TestRawProjectionCurationResolvesMembershipAfterConcurrentSplit(t *testing.
 	require.NoError(t, err)
 	assert.Equal(t, []string{ra.SessionID}, stars)
 }
+
+// Manifest acceptance and every other projection update the corpus revision
+// row, so a projection must not hold it while it writes one group's rows.
+func TestRawProjectionRowWritesDoNotHoldCorpusRevisionAgainstOtherSources(t *testing.T) {
+	f := newProjectionFixture(t)
+	slow, _ := f.accept(t, "device-a", "slow-a", "")
+	lease := f.lease(t, slow)
+	other, _ := f.accept(t, "device-b", "other-b", "")
+	_, err := f.admin.ExecContext(t.Context(), `CREATE FUNCTION hold_projection_message() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_advisory_xact_lock(hashtext(TG_TABLE_SCHEMA)); RETURN NEW; END $$; CREATE TRIGGER hold_projection_message BEFORE INSERT ON messages FOR EACH ROW EXECUTE FUNCTION hold_projection_message()`)
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	gate, err := f.admin.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer gate.Rollback()
+	_, err = gate.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, f.schema)
+	require.NoError(t, err)
+	projected := make(chan error, 1)
+	go func() { projected <- f.sink.Project(ctx, lease, slow, projectionOutcome("slow")) }()
+	require.Eventually(t, func() bool {
+		var writing int
+		err := f.admin.QueryRowContext(ctx, `SELECT count(*) FROM pg_stat_activity WHERE usename=$1 AND wait_event_type='Lock' AND wait_event='advisory'`, f.role).Scan(&writing)
+		return err == nil && writing == 1
+	}, 3*time.Second, 10*time.Millisecond)
+
+	selectCtx, cancelSelect := context.WithTimeout(ctx, 3*time.Second)
+	defer cancelSelect()
+	_, err = f.sink.SelectSourceGeneration(selectCtx, other, "parser-1")
+
+	require.NoError(t, err, "selecting another source waited for a projection that was still writing rows")
+	require.NoError(t, gate.Commit())
+	require.NoError(t, <-projected)
+	var selection, corpus int64
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT selection_revision,corpus_revision FROM raw_corpus_state WHERE singleton=1`).Scan(&selection, &corpus))
+	assert.Equal(t, int64(2), selection)
+	assert.Equal(t, int64(1), corpus)
+	var queuedSelection, queuedCorpus int64
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT selection_revision,corpus_revision FROM raw_embedding_outbox`).Scan(&queuedSelection, &queuedCorpus))
+	assert.Equal(t, selection, queuedSelection, "embedding work must carry the selection revision its projection committed with")
+	assert.Equal(t, corpus, queuedCorpus)
+}
+
 func TestRawProjectionCurationSQLFailureRollsBackOverlayAndMaterialization(t *testing.T) {
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "curation-failure", "")

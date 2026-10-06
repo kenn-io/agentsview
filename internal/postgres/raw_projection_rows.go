@@ -17,17 +17,35 @@ const (
 	rawGroupContentsSQL     = `SELECT id,raw_content_revision FROM sessions WHERE raw_group_id=$1 AND raw_group_id<>'' UNION SELECT session_id,content_revision FROM raw_session_branches WHERE group_id=$1 AND active ORDER BY 1`
 )
 
-func (s *RawProjectionStore) materializeGroup(ctx context.Context, tx *sql.Tx, group string, corpus int64) error {
+// rawEmbeddingChange is a physical session whose embeddings must follow a
+// materialization once that materialization has a corpus revision.
+type rawEmbeddingChange struct{ session, revision, action string }
+
+// queueRawEmbeddingChanges requires the caller to hold the corpus row lock that
+// issued corpus, so the recorded selection revision is the one it commits with.
+func queueRawEmbeddingChanges(ctx context.Context, tx *sql.Tx, changes []rawEmbeddingChange, corpus int64) error {
+	for _, c := range changes {
+		_, err := tx.ExecContext(ctx, `INSERT INTO raw_embedding_outbox(session_id,corpus_revision,content_revision,action,selection_revision) SELECT $1,$2,$3,$4,selection_revision FROM raw_corpus_state WHERE singleton=1 ON CONFLICT DO NOTHING`, c.session, corpus, c.revision, c.action)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// materializeGroup requires the caller to hold the group's row lock. It
+// returns the embedding changes for the caller to queue under a corpus revision.
+func (s *RawProjectionStore) materializeGroup(ctx context.Context, tx *sql.Tx, group string) ([]rawEmbeddingChange, error) {
 	if err := reconcileRawPrefixes(ctx, tx, group); err != nil {
-		return err
+		return nil, err
 	}
 	branches, err := loadRawBranches(ctx, tx, "group_id", group)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	overlays, err := loadRawOverlays(ctx, tx, group)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	cohorts := map[string][]rawBranch{}
 	for _, b := range branches {
@@ -37,28 +55,29 @@ func (s *RawProjectionStore) materializeGroup(ctx context.Context, tx *sql.Tx, g
 	}
 	rows, err := tx.QueryContext(ctx, rawGroupContentsSQL, group)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer rows.Close()
 	type content struct{ id, revision string }
 	var contents []content
+	var changes []rawEmbeddingChange
 	for rows.Next() {
 		var c content
 		if err = rows.Scan(&c.id, &c.revision); err != nil {
 			rows.Close()
-			return err
+			return nil, err
 		}
 		contents = append(contents, c)
 	}
 	err = rows.Err()
 	rows.Close()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, c := range contents {
 		exists, err := rawPhysicalExists(ctx, tx, c.id)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		members := cohorts[c.id]
 		action := "reconcile"
@@ -67,37 +86,34 @@ func (s *RawProjectionStore) materializeGroup(ctx context.Context, tx *sql.Tx, g
 				continue
 			}
 			if _, err = tx.ExecContext(ctx, rawSourceProofDetachSQL, c.id); err != nil {
-				return err
+				return nil, err
 			}
 			if _, err = tx.ExecContext(ctx, `DELETE FROM sessions WHERE id=$1`, c.id); err != nil {
-				return err
+				return nil, err
 			}
 			action = "remove"
 		} else {
 			if !exists {
 				payload, err := loadRawPayload(ctx, tx, c.id)
 				if err != nil {
-					return err
+					return nil, err
 				}
 				if err = s.writePayload(ctx, tx, c.id, group, c.revision, payload); err != nil {
-					return err
+					return nil, err
 				}
 			}
 			if _, err = tx.ExecContext(ctx, rawSourceProofAttachSQL, c.id); err != nil {
-				return err
+				return nil, err
 			}
 			if err = s.materializeCuration(ctx, tx, group, c.id, members); err != nil {
-				return err
+				return nil, err
 			}
 		}
 		if !exists || action == "remove" {
-			_, err = tx.ExecContext(ctx, `INSERT INTO raw_embedding_outbox(session_id,corpus_revision,content_revision,action,selection_revision) SELECT $1,$2,$3,$4,selection_revision FROM raw_corpus_state WHERE singleton=1 ON CONFLICT DO NOTHING`, c.id, corpus, c.revision, action)
-			if err != nil {
-				return err
-			}
+			changes = append(changes, rawEmbeddingChange{session: c.id, revision: c.revision, action: action})
 		}
 	}
-	return nil
+	return changes, nil
 }
 
 func (s *RawProjectionStore) writePayload(ctx context.Context, tx *sql.Tx, id, group, revision string, p ingest.PreparedSession) error {
