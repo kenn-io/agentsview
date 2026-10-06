@@ -449,7 +449,6 @@
   "sidebar_filters_pull_request": "Pull request",
   "sidebar_filters_pull_request_input": "Filtrer par pull request",
   "sidebar_filters_pull_request_placeholder": "owner/repo#123 ou URL",
-  "sidebar_filters_pull_request_invalid": "Utilisez owner/repo, owner/repo#123 ou l’URL d’une pull request.",
   "sidebar_row_expand": "Déplier",
   "sidebar_row_collapse": "Replier",
   "sidebar_row_select_session": "Sélectionner la session",

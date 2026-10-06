@@ -43,23 +43,3 @@ export function displayPRLinks(links: readonly DbPRLink[] | null | undefined): D
   }
   return out;
 }
-
-const PR_NUMBER_RE = /^\d+$/;
-
-/** Reports whether a pull request filter has a form the server accepts:
- *  `owner/repo`, `owner/repo#123`, or an http(s) URL. The server makes
- *  the final call on URLs; this check only catches values it would
- *  reject outright. An empty value is valid and clears the filter. */
-export function isValidPRFilter(value: string): boolean {
-  const trimmed = value.trim();
-  if (!trimmed) return true;
-  if (trimmed.includes("://")) return safeExternalHref(trimmed) !== null;
-  const hashIndex = trimmed.indexOf("#");
-  const repo = (hashIndex === -1 ? trimmed : trimmed.slice(0, hashIndex))
-    .trim()
-    .replace(/^\/+|\/+$/g, "");
-  if (!repo.includes("/") || /\s/.test(repo)) return false;
-  if (hashIndex === -1) return true;
-  const num = trimmed.slice(hashIndex + 1).trim();
-  return PR_NUMBER_RE.test(num) && Number(num) > 0;
-}

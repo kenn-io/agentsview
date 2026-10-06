@@ -194,7 +194,9 @@ agentsview session get host~freebuff:myproject:1704067200 --server http://remote
   "health_score_basis": ["..."],
   "health_penalties": {"tool_retries": 5},
   "parser_malformed_lines": 3,
-  "secret_leak_count": 0
+  "secret_leak_count": 0,
+  "labels": [],
+  "pr_links": []
 }
 ```
 
@@ -618,6 +620,9 @@ Claude Code is the only agent that records these today, as `pr-link` entries
 in its transcripts. AgentsView keeps one link per URL with the earliest time it
 appeared. The link says the session was associated with the pull request. It
 does not say whether the session opened it.
+Claude Code records these links for the whole transcript, so every session
+split from one transcript, such as a rewind's fork, carries them, like its name
+and git branch.
 
 Filter by pull request with `session list --pr` or the `pr` query parameter.
 The value is `owner/repo` for any pull request in that repository,
@@ -708,6 +713,8 @@ launching session: it nests under that session in the sidebar, and
 - The link applies only while the transcript names no parent of its own.
   Subagent, fork, and continuation links that AgentsView derives from the
   transcript win, and `applied` is `false` in that case.
+- AgentsView recomputes the link on every sync. When the transcript parent or
+  loop that blocked it goes away, the session goes back under the linked parent.
 - The session does not have to exist yet; the link applies when sync imports it.
 - The link is stored apart from the transcript and survives reparses and full
   resyncs. Mirrors receive the resulting parent on push.

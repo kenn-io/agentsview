@@ -68,13 +68,13 @@ client will see these tools:
 | `get_usage_summary`    | Aggregate token and cost usage                                           |
 | `query_recall`         | Search extracted Recall entries when the backend supports Recall queries |
 
-### Focused memory profile
-
 `list_sessions` accepts `labels` (every listed label must match) and `pr`
 (`owner/repo`, `owner/repo#123`, or a pull request URL). Its rows include each
 session's labels, pull request links, and parent session. See
 [labels](/docs/session-api/#agentsview-session-label) and
 [pull request links](/docs/session-api/#pull-request-links).
+
+### Focused memory profile
 
 Clients that use AgentsView only for conversation memory can select the focused
 profile:

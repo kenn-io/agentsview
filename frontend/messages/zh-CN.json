@@ -436,7 +436,6 @@
   "sidebar_filters_pull_request": "拉取请求",
   "sidebar_filters_pull_request_input": "按拉取请求筛选",
   "sidebar_filters_pull_request_placeholder": "owner/repo#123 或 URL",
-  "sidebar_filters_pull_request_invalid": "请使用 owner/repo、owner/repo#123 或拉取请求 URL。",
   "sidebar_row_expand": "展开",
   "sidebar_row_collapse": "折叠",
   "sidebar_row_select_session": "选择会话",

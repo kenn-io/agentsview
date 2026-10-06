@@ -449,7 +449,6 @@
   "sidebar_filters_pull_request": "プルリクエスト",
   "sidebar_filters_pull_request_input": "プルリクエストで絞り込む",
   "sidebar_filters_pull_request_placeholder": "owner/repo#123 または URL",
-  "sidebar_filters_pull_request_invalid": "owner/repo、owner/repo#123、またはプルリクエストの URL を入力してください。",
   "sidebar_row_expand": "展開する",
   "sidebar_row_collapse": "折りたたむ",
   "sidebar_row_select_session": "セッションの選択",

@@ -747,13 +747,10 @@ CREATE TABLE IF NOT EXISTS session_labels (
 CREATE INDEX IF NOT EXISTS idx_session_labels_label
     ON session_labels(label);
 
--- Launcher-supplied parent links. A row applies to sessions.parent_session_id
--- only while the parser found no parent, so parser-derived links win. The
--- triggers re-apply the link after every parser write clears the column;
--- subagent linking, which runs after parser writes, then restores a
--- tool-call spawn edge's parent over it. A link never applies where it
--- would make a session its own ancestor, and a later parent write that
--- closes such a loop drops the applied link instead.
+-- Launcher-supplied parent links. Linking recomputes them from current
+-- evidence after every write: a link is the session's parent only while the
+-- transcript gives none, no tool-call spawn edge claims the session, and the
+-- link's chain does not lead back to the session.
 CREATE TABLE IF NOT EXISTS session_external_parents (
     session_id        TEXT PRIMARY KEY,
     parent_session_id TEXT NOT NULL,
@@ -761,112 +758,6 @@ CREATE TABLE IF NOT EXISTS session_external_parents (
     created_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     updated_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
-
-CREATE TRIGGER IF NOT EXISTS trg_sessions_apply_external_parent_insert
-AFTER INSERT ON sessions
-WHEN COALESCE(NEW.parent_session_id, '') = '' AND EXISTS (
-    SELECT 1 FROM session_external_parents WHERE session_id = NEW.id
-)
-BEGIN
-    UPDATE sessions
-    SET parent_session_id = ep.parent_session_id,
-        relationship_type = ep.relationship_type
-    FROM session_external_parents ep
-    WHERE sessions.id = NEW.id AND ep.session_id = NEW.id
-    AND NOT EXISTS (
-        WITH RECURSIVE ancestors(id) AS (
-            SELECT ep.parent_session_id
-            UNION
-            SELECT a.parent_session_id FROM sessions a
-            JOIN ancestors ON a.id = ancestors.id
-            WHERE COALESCE(a.parent_session_id, '') <> ''
-        )
-        SELECT 1 FROM ancestors WHERE id = NEW.id
-    );
-END;
-
-CREATE TRIGGER IF NOT EXISTS trg_sessions_apply_external_parent_update
-AFTER UPDATE OF parent_session_id ON sessions
-WHEN COALESCE(NEW.parent_session_id, '') = '' AND EXISTS (
-    SELECT 1 FROM session_external_parents WHERE session_id = NEW.id
-)
-BEGIN
-    UPDATE sessions
-    SET parent_session_id = ep.parent_session_id,
-        relationship_type = ep.relationship_type
-    FROM session_external_parents ep
-    WHERE sessions.id = NEW.id AND ep.session_id = NEW.id
-    AND NOT EXISTS (
-        WITH RECURSIVE ancestors(id) AS (
-            SELECT ep.parent_session_id
-            UNION
-            SELECT a.parent_session_id FROM sessions a
-            JOIN ancestors ON a.id = ancestors.id
-            WHERE COALESCE(a.parent_session_id, '') <> ''
-        )
-        SELECT 1 FROM ancestors WHERE id = NEW.id
-    );
-END;
-
--- When a parent write closes a loop through applied launcher links, the
--- launcher links in the loop give way so every session keeps a root.
-CREATE TRIGGER IF NOT EXISTS trg_sessions_break_external_parent_cycle_insert
-AFTER INSERT ON sessions
-WHEN COALESCE(NEW.parent_session_id, '') <> ''
-AND EXISTS (SELECT 1 FROM session_external_parents)
-BEGIN
-    UPDATE sessions
-    SET parent_session_id = NULL,
-        relationship_type = '',
-        local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-    WHERE id IN (
-        WITH RECURSIVE ancestors(id) AS (
-            SELECT NEW.parent_session_id
-            UNION
-            SELECT a.parent_session_id FROM sessions a
-            JOIN ancestors ON a.id = ancestors.id
-            WHERE COALESCE(a.parent_session_id, '') <> ''
-        )
-        SELECT id FROM ancestors
-        WHERE EXISTS (SELECT 1 FROM ancestors WHERE id = NEW.id)
-    )
-    AND COALESCE(parser_parent_session_id, '') = ''
-    AND EXISTS (
-        SELECT 1 FROM session_external_parents ep
-        WHERE ep.session_id = sessions.id
-        AND ep.parent_session_id = sessions.parent_session_id
-        AND ep.relationship_type = sessions.relationship_type
-    );
-END;
-
-CREATE TRIGGER IF NOT EXISTS trg_sessions_break_external_parent_cycle_update
-AFTER UPDATE OF parent_session_id ON sessions
-WHEN COALESCE(NEW.parent_session_id, '') <> ''
-AND EXISTS (SELECT 1 FROM session_external_parents)
-BEGIN
-    UPDATE sessions
-    SET parent_session_id = NULL,
-        relationship_type = '',
-        local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-    WHERE id IN (
-        WITH RECURSIVE ancestors(id) AS (
-            SELECT NEW.parent_session_id
-            UNION
-            SELECT a.parent_session_id FROM sessions a
-            JOIN ancestors ON a.id = ancestors.id
-            WHERE COALESCE(a.parent_session_id, '') <> ''
-        )
-        SELECT id FROM ancestors
-        WHERE EXISTS (SELECT 1 FROM ancestors WHERE id = NEW.id)
-    )
-    AND COALESCE(parser_parent_session_id, '') = ''
-    AND EXISTS (
-        SELECT 1 FROM session_external_parents ep
-        WHERE ep.session_id = sessions.id
-        AND ep.parent_session_id = sessions.parent_session_id
-        AND ep.relationship_type = sessions.relationship_type
-    );
-END;
 
 -- Excluded sessions: tracks session IDs that were permanently
 -- deleted by the user so the sync engine does not re-import them.

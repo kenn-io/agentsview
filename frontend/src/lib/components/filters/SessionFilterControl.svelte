@@ -12,7 +12,6 @@
     agentLabel,
   } from "../../utils/agents.js";
   import type { GroupMode } from "../sidebar/session-list-utils.js";
-  import { isValidPRFilter } from "../../utils/prLinks.js";
   import { CheckIcon, FunnelIcon } from "../../icons.js";
 
   interface Props {
@@ -54,8 +53,6 @@
   let machineSearch = $state("");
   let labelDraft = $state("");
   let prDraft = $state("");
-  let prInvalid = $state(false);
-  const prErrorId = $props.id();
 
   const sortedAgents = $derived.by(() => {
     const agents = [...sessions.agents].sort(
@@ -87,7 +84,6 @@
       machineSearch = "";
       labelDraft = "";
       prDraft = "";
-      prInvalid = false;
     }
   });
 
@@ -103,13 +99,8 @@
     if (event.key !== "Enter" || event.isComposing) return;
     event.preventDefault();
     if (!prDraft.trim()) return;
-    if (!isValidPRFilter(prDraft)) {
-      prInvalid = true;
-      return;
-    }
     sessions.setPRFilter(prDraft);
     prDraft = "";
-    prInvalid = false;
   }
 
   let hasFilters = $derived(
@@ -454,18 +445,10 @@
           size="sm"
           block
           bind:value={prDraft}
-          invalid={prInvalid}
           placeholder={m.sidebar_filters_pull_request_placeholder()}
           ariaLabel={m.sidebar_filters_pull_request_input()}
-          ariaDescribedby={prInvalid ? prErrorId : undefined}
-          oninput={() => (prInvalid = false)}
           onkeydown={onPRKeydown}
         />
-        {#if prInvalid}
-          <div class="filter-input-error" id={prErrorId}>
-            {m.sidebar_filters_pull_request_invalid()}
-          </div>
-        {/if}
       </div>
     {/if}
     <div class="filter-section">
@@ -616,12 +599,6 @@
 
   .filter-section :global(.kit-text-input) {
     margin-top: 2px;
-  }
-
-  .filter-input-error {
-    margin-top: 4px;
-    font-size: 10px;
-    color: var(--accent-red);
   }
 
   .toggle-check {

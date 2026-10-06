@@ -451,7 +451,6 @@
   "sidebar_filters_pull_request": "Pull request",
   "sidebar_filters_pull_request_input": "Pull request-ə görə süz",
   "sidebar_filters_pull_request_placeholder": "owner/repo#123 və ya URL",
-  "sidebar_filters_pull_request_invalid": "owner/repo, owner/repo#123 və ya pull request URL-i istifadə edin.",
   "sidebar_row_expand": "Genişləndir",
   "sidebar_row_collapse": "Yığ",
   "sidebar_row_select_session": "Sessiyanı seç",

@@ -310,6 +310,8 @@ class SessionsStore {
   nextCursor: string | null = $state(null);
   total: number = $state(0);
   loading: boolean = $state(false);
+  /** Why the server rejected the current sidebar filters, or null. */
+  sidebarLoadError: string | null = $state(null);
   #savedFilters = loadSavedFilters();
   private filterPersistenceHeld = false;
   filters: Filters = $state(this.#savedFilters.filters);
@@ -575,14 +577,24 @@ class SessionsStore {
       }
       this.nextCursor = index.next_cursor ?? null;
       this.total = index.total;
-    } catch {
+      this.sidebarLoadError = null;
+    } catch (error) {
+      if (this.loadVersion !== version) return;
+      // A rejected filter has no matching rows; showing the previous
+      // filter's rows under it would mislabel them.
+      if (error instanceof ApiError && error.status >= 400 && error.status < 500) {
+        this.sessions = [];
+        this.sidebarIndexIds = new Set();
+        this.nextCursor = null;
+        this.total = 0;
+        this.sidebarLoadError = error.message;
+        return;
+      }
       // Restore previous state so a transient failure
       // doesn't wipe the visible session list.
-      if (this.loadVersion === version) {
-        this.sessions = prev.sessions;
-        this.nextCursor = prev.nextCursor;
-        this.total = prev.total;
-      }
+      this.sessions = prev.sessions;
+      this.nextCursor = prev.nextCursor;
+      this.total = prev.total;
     } finally {
       if (this.loadVersion === version) {
         this.loading = false;

@@ -107,25 +107,23 @@ type prLinkCollector struct {
 	index map[string]int
 }
 
-// add reports whether link was new and kept.
-func (c *prLinkCollector) add(link PRLink) bool {
+func (c *prLinkCollector) add(link PRLink) {
 	if i, ok := c.index[link.URL]; ok {
 		seen := c.links[i].FirstSeenAt
 		if !link.FirstSeenAt.IsZero() &&
 			(seen.IsZero() || link.FirstSeenAt.Before(seen)) {
 			c.links[i].FirstSeenAt = link.FirstSeenAt
 		}
-		return false
+		return
 	}
 	if len(c.links) >= maxPRLinksPerSession {
-		return false
+		return
 	}
 	if c.index == nil {
 		c.index = make(map[string]int)
 	}
 	c.index[link.URL] = len(c.links)
 	c.links = append(c.links, link)
-	return true
 }
 
 func (c *prLinkCollector) result() []PRLink {
