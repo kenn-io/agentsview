@@ -747,10 +747,11 @@ CREATE TABLE IF NOT EXISTS session_labels (
 CREATE INDEX IF NOT EXISTS idx_session_labels_label
     ON session_labels(label);
 
--- Launcher-supplied parent links. Every session write and linking pass
--- recomputes them from current evidence: a link is the session's parent only while the
--- transcript gives none, no tool-call spawn edge claims the session, and the
--- link's chain does not lead back to the session.
+-- Launcher-supplied parent links. Triggers on sessions (installed in db.go
+-- after column migrations) recompute them on every session write, and linking
+-- passes recompute them from current evidence: a link is the session's parent
+-- only while the transcript gives none, no tool-call spawn edge claims the
+-- session, and the link's chain does not lead back to the session.
 CREATE TABLE IF NOT EXISTS session_external_parents (
     session_id        TEXT PRIMARY KEY,
     parent_session_id TEXT NOT NULL,

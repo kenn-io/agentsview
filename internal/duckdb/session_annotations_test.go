@@ -82,11 +82,7 @@ func listSessionIDs(t *testing.T, store *Store, f db.SessionFilter) []string {
 	t.Helper()
 	page, err := store.ListSessions(t.Context(), f)
 	require.NoError(t, err)
-	ids := make([]string, 0, len(page.Sessions))
-	for _, sess := range page.Sessions {
-		ids = append(ids, sess.ID)
-	}
-	return ids
+	return duckSessionIDs(page.Sessions)
 }
 
 func TestPushMirrorsSessionLabelsAndPRLinks(t *testing.T) {

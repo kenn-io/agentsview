@@ -213,7 +213,18 @@ func resolveMCPService(
 				"--server and --pg are mutually exclusive",
 			)
 		}
-		return newExplicitServerService(cmd, remote)
+		token, err := explicitServerToken(cmd)
+		if err != nil {
+			return nil, nil, err
+		}
+		capabilities, err := servicehttp.ProbeHTTPServerCapabilities(
+			cmd.Context(), remote, token,
+		)
+		if err != nil {
+			return nil, nil, err
+		}
+		return servicehttp.NewHTTPBackendForServer(remote, token, capabilities),
+			func() {}, nil
 	}
 	cfg, err := config.LoadPFlags(cmd.Flags())
 	if err != nil {

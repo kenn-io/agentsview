@@ -800,7 +800,6 @@ func (db *DB) GetSidebarSessionIndex(
 ) (SidebarSessionIndex, error) {
 	f.IncludeChildren = true
 	f.IncludeOrphans = true
-	f = f.WithAnnotationSelection()
 
 	if f.Limit > 0 || f.Cursor != "" || f.Starred {
 		return db.getSidebarSessionIndexPage(ctx, f)
@@ -1682,11 +1681,6 @@ func upsertSessionExec(
 		return sessionUpsertResult{},
 			fmt.Errorf("upserting session %s: %w", s.ID, err)
 	}
-	// The upsert replaces the stored parent with the parsed one, so a
-	// launcher link has to be re-applied by every writer, not just linking.
-	if _, err := applySessionExternalParentsFor(ctx, exec, []string{s.ID}); err != nil {
-		return sessionUpsertResult{}, err
-	}
 	return result, nil
 }
 
@@ -2126,7 +2120,7 @@ func (db *DB) LinkSubagentSessionsForSessions(ctx context.Context, ids []string)
 	}
 	// Spawn edges may have re-parented children of the batch; those sit in
 	// its subtree, so the scoped recompute still reaches them.
-	launched, err := applySessionExternalParentsFor(ctx, tx.ExecContext, ids)
+	launched, err := applySessionExternalParentsFor(ctx, tx, ids)
 	if err != nil {
 		return 0, err
 	}

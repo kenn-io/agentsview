@@ -813,9 +813,11 @@ func TestMigration_ResultContentColumn(t *testing.T) {
 
 	// Remove result_content via raw SQL: recreate tool_calls
 	// without the column to simulate a legacy schema.
+	// A legacy archive predates the session parent triggers, whose bodies
+	// read tool_calls and would fail the rename below.
 	conn, err := sql.Open("sqlite3", path)
 	requireNoError(t, err, "raw open")
-	_, err = conn.ExecContext(t.Context(), `
+	_, err = conn.ExecContext(t.Context(), sessionExternalParentTriggerDropsSQL+`
 		CREATE TABLE tool_calls_old AS
 			SELECT id, message_id, session_id, tool_name,
 			       category, tool_use_id, input_json,

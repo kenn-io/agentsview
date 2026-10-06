@@ -1240,19 +1240,9 @@ func sessionInsertArgs(
 		sess.IsTruncated, nilTime(sess.DeletedAt), nilString(sess.DeletionCause),
 		timeValue(sess.CreatedAt), nilString(sess.TerminationStatus),
 		sess.SecretLeakCount, sess.SecretsRulesVersion,
-		db.EncodePRLinks(sess.PRLinks), mirroredLabels(sess.Labels),
+		db.EncodePRLinks(sess.PRLinks), db.LabelsArg(sess.Labels),
 		nilEmpty(fingerprint), archiveID,
 	}
-}
-
-// mirroredLabels is the value written to the labels VARCHAR[] column. A
-// session without labels stores NULL, so list_contains never matches it
-// and reads decode it back to a nil slice.
-func mirroredLabels(labels []string) any {
-	if len(labels) == 0 {
-		return nil
-	}
-	return labels
 }
 
 func insertMessages(

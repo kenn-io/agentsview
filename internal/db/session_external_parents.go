@@ -107,7 +107,7 @@ func (db *DB) SetSessionExternalParent(
 	); err != nil {
 		return SessionExternalParent{}, fmt.Errorf("saving session parent: %w", err)
 	}
-	moved, err := applySessionExternalParents(ctx, tx)
+	moved, err := applySessionExternalParentsFor(ctx, tx, []string{sessionID})
 	if err != nil {
 		return SessionExternalParent{}, err
 	}
@@ -162,7 +162,7 @@ func (db *DB) ClearSessionExternalParent(
 		}
 	}
 	// Dropping the link can release another link whose chain ran through it.
-	moved, err := applySessionExternalParents(ctx, tx)
+	moved, err := applySessionExternalParentsFor(ctx, tx, []string{sessionID})
 	if err != nil {
 		return SessionExternalParent{}, err
 	}
@@ -257,45 +257,48 @@ func externalParentChainSQL(start, target string) string {
 // relationship_type) from current evidence. A link is the effective parent
 // when the session has no transcript parent, no spawn edge, and the link's
 // chain does not lead back to the session; otherwise a session it once
-// applied to returns to no parent.
+// applied to returns to no parent. The session triggers run it, so it has
+// no statement-level WITH, which trigger bodies cannot carry, and no alias on
+// the updated table, which ALTER TABLE's trigger check rejects.
 func applySessionExternalParentsSQL(linksSQL string) string {
-	// Materializing the links and seeking sessions by them keeps the planner
-	// from driving the update with a scan of sessions.
+	// LIMIT -1 keeps the planner from flattening l into the update, which
+	// would walk each chain once per reference to cyclic, and the unary plus
+	// keeps it from indexing l and scanning sessions instead of seeking them.
 	return `
-	WITH l AS MATERIALIZED (
-		SELECT ep.session_id, ep.parent_session_id, ep.relationship_type,
-			` + externalParentChainSQL("ep.parent_session_id", "ep.session_id") + ` AS cyclic
-		FROM (` + linksSQL + `) AS ep
-	)
-	UPDATE sessions AS s
+	UPDATE sessions
 	SET parent_session_id = IIF(l.cyclic, NULL, l.parent_session_id),
 		relationship_type = IIF(l.cyclic, '', l.relationship_type),
 		local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-	FROM l
-	WHERE s.id = l.session_id
-	AND s.id IN (SELECT session_id FROM l)
-	AND COALESCE(s.parser_parent_session_id, '') = ''
-	AND NOT ` + spawnEdgeExistsSQL("s") + `
+	FROM (
+		SELECT ep.session_id, ep.parent_session_id, ep.relationship_type,
+			` + externalParentChainSQL("ep.parent_session_id", "ep.session_id") + ` AS cyclic
+		FROM (` + linksSQL + `) AS ep
+		LIMIT -1
+	) AS l
+	WHERE sessions.id = +l.session_id
+	AND COALESCE(sessions.parser_parent_session_id, '') = ''
+	AND NOT ` + spawnEdgeExistsSQL("sessions") + `
 	AND (
-		COALESCE(s.parent_session_id, '') <> IIF(l.cyclic, '', l.parent_session_id)
-		OR COALESCE(s.relationship_type, '') <> IIF(l.cyclic, '', l.relationship_type)
+		COALESCE(sessions.parent_session_id, '') <> IIF(l.cyclic, '', l.parent_session_id)
+		OR COALESCE(sessions.relationship_type, '') <> IIF(l.cyclic, '', l.relationship_type)
 	)`
 }
 
 var applyAllSessionExternalParentsSQL = applySessionExternalParentsSQL(
 	"SELECT * FROM session_external_parents")
 
-// applyScopedSessionExternalParentsSQL limits the recompute to links a write
-// of the JSON id list bound twice can move. A changed session x only alters
+// scopedSessionExternalParentsSQL limits the recompute to links that a write
+// of the sessions selected by start can move. A changed session x only alters
 // the links whose chain runs through it, which all sit in its subtree
 // (walked over stored parents and launcher links alike). Within that subtree
 // a link can start closing a loop only if its session is also above x, and
 // can stop closing one only if it is not applied now; the rest keep their
 // answer, so their chains are never walked.
-var applyScopedSessionExternalParentsSQL = applySessionExternalParentsSQL(`
+func scopedSessionExternalParentsSQL(start string) string {
+	return applySessionExternalParentsSQL(`
 		WITH RECURSIVE
 		down(id) AS (
-			SELECT value FROM json_each(?)
+			` + start + `
 			UNION
 			SELECT c.id FROM down JOIN sessions c ON c.parent_session_id = down.id
 			UNION
@@ -303,7 +306,7 @@ var applyScopedSessionExternalParentsSQL = applySessionExternalParentsSQL(`
 			JOIN session_external_parents c ON c.parent_session_id = down.id
 		),
 		up(id) AS (
-			SELECT value FROM json_each(?)
+			` + start + `
 			UNION
 			SELECT ` + externalParentStepSQL + `
 			FROM up
@@ -318,30 +321,68 @@ var applyScopedSessionExternalParentsSQL = applySessionExternalParentsSQL(`
 		WHERE ep.session_id IN (SELECT id FROM up)
 		OR cur.parent_session_id IS NOT ep.parent_session_id
 		OR cur.relationship_type IS NOT ep.relationship_type`)
+}
+
+// applyScopedSessionExternalParentsSQL binds the JSON id list twice.
+var applyScopedSessionExternalParentsSQL = scopedSessionExternalParentsSQL(
+	"SELECT value FROM json_each(?)")
+
+// sessionExternalParentTriggerDropsSQL and
+// sessionExternalParentTriggerCreatesSQL apply launcher links on every
+// session write. The triggers run the scoped recompute from the written row
+// inside the writer's statement, so no writer can skip it and a rolled-back
+// write takes its recompute with it. Like the artifact queue triggers they
+// reference migrated columns, so they are dropped before column migrations
+// and created after.
+const sessionExternalParentTriggerDropsSQL = `
+DROP TRIGGER IF EXISTS trg_sessions_external_parent_insert;
+DROP TRIGGER IF EXISTS trg_sessions_external_parent_update;
+`
+
+var sessionExternalParentTriggerCreatesSQL = `
+CREATE TRIGGER IF NOT EXISTS trg_sessions_external_parent_insert
+AFTER INSERT ON sessions
+WHEN EXISTS (SELECT 1 FROM session_external_parents)
+BEGIN` + scopedSessionExternalParentsSQL("SELECT NEW.id") + `;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_sessions_external_parent_update
+AFTER UPDATE OF parent_session_id, parser_parent_session_id ON sessions
+WHEN EXISTS (SELECT 1 FROM session_external_parents)
+BEGIN` + scopedSessionExternalParentsSQL("SELECT NEW.id") + `;
+END;
+`
 
 // applySessionExternalParents recomputes every launcher link and returns the
-// number of sessions whose effective parent changed. Link writes and full
-// linking passes use it; per-batch writes use applySessionExternalParentsFor.
+// number of sessions whose effective parent changed. Full linking passes use
+// it to catch removed spawn edges, which never write the worker's row.
 func applySessionExternalParents(ctx context.Context, tx *sql.Tx) (int, error) {
 	return execSessionExternalParents(ctx, tx.ExecContext, applyAllSessionExternalParentsSQL)
 }
 
-// applySessionExternalParentsFor recomputes the launcher links that a write
-// of the given sessions can move, so its cost tracks the batch rather than
+// applySessionExternalParentsFor recomputes the launcher links that a change
+// to the given sessions can move, so its cost tracks the batch rather than
 // the number of links.
 func applySessionExternalParentsFor(
-	ctx context.Context,
-	exec func(context.Context, string, ...any) (sql.Result, error),
-	ids []string,
+	ctx context.Context, tx *sql.Tx, ids []string,
 ) (int, error) {
 	if len(ids) == 0 {
+		return 0, nil
+	}
+	var linked bool
+	if err := tx.QueryRowContext(ctx,
+		"SELECT EXISTS (SELECT 1 FROM session_external_parents)",
+	).Scan(&linked); err != nil {
+		return 0, fmt.Errorf("checking session parents: %w", err)
+	}
+	if !linked {
 		return 0, nil
 	}
 	encoded, err := json.Marshal(ids)
 	if err != nil {
 		return 0, fmt.Errorf("encoding session ids: %w", err)
 	}
-	return execSessionExternalParents(ctx, exec,
+	return execSessionExternalParents(ctx, tx.ExecContext,
 		applyScopedSessionExternalParentsSQL, string(encoded), string(encoded))
 }
 

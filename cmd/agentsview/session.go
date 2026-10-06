@@ -70,7 +70,12 @@ func resolveService(
 				"--server and --pg are mutually exclusive",
 			)
 		}
-		return newExplicitServerService(cmd, remote)
+		token, err := explicitServerToken(cmd)
+		if err != nil {
+			return nil, nil, err
+		}
+		return servicehttp.NewHTTPBackend(remote, token, false, ""),
+			func() {}, nil
 	}
 	cfg, err := config.LoadPFlags(cmd.Flags())
 	if err != nil {
@@ -210,26 +215,6 @@ func pgReadRequested(cmd *cobra.Command) bool {
 	}
 	v, err := cmd.Flags().GetBool("pg")
 	return err == nil && v
-}
-
-// newExplicitServerService builds the read backend for --server from the
-// daemon's probed capabilities, so features an older daemon would ignore are
-// refused rather than silently dropped.
-func newExplicitServerService(
-	cmd *cobra.Command, remote string,
-) (service.SessionService, func(), error) {
-	token, err := explicitServerToken(cmd)
-	if err != nil {
-		return nil, nil, err
-	}
-	capabilities, err := servicehttp.ProbeHTTPServerCapabilities(
-		cmd.Context(), remote, token,
-	)
-	if err != nil {
-		return nil, nil, err
-	}
-	return servicehttp.NewHTTPBackendForServer(remote, token, capabilities),
-		func() {}, nil
 }
 
 func explicitServerToken(cmd *cobra.Command) (string, error) {

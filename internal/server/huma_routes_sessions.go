@@ -194,9 +194,6 @@ func (in *sessionFilterInput) listFilter() (service.ListFilter, error) {
 	if _, err := db.ParseSortSpec(in.OrderBy); err != nil {
 		return service.ListFilter{}, apiError(http.StatusBadRequest, "invalid order_by: "+err.Error())
 	}
-	if _, err := db.ParsePRFilter(in.PR); err != nil {
-		return service.ListFilter{}, apiError(http.StatusBadRequest, err.Error())
-	}
 	limit := clampLimit(in.Limit, db.DefaultSessionLimit, db.MaxSessionLimit)
 	filter := service.ListFilter{
 		Project:          in.Project,
@@ -300,6 +297,10 @@ func (s *Server) humaListSessions(
 	if err != nil {
 		if errors.Is(err, db.ErrInvalidCursor) {
 			return nil, apiError(http.StatusBadRequest, "invalid cursor")
+		}
+		// listFilter leaves the PR filter to the service, which parses it once.
+		if errors.Is(err, db.ErrInvalidPRFilter) {
+			return nil, apiError(http.StatusBadRequest, err.Error())
 		}
 		return nil, serverError(err)
 	}

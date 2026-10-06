@@ -78,15 +78,7 @@ func TestDoctorMemoryReportsRemoteTargetAndClientState(t *testing.T) {
 
 func TestDoctorMemoryOlderServerIsExplicitlyUnknown(t *testing.T) {
 	setDoctorMemoryTestEnvironment(t, t.TempDir())
-	// An older server answers the version probe but has no memory status.
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/version" {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"api_version":3}`))
-	}))
+	server := httptest.NewServer(http.NotFoundHandler())
 	t.Cleanup(server.Close)
 
 	out, err := executeCommand(newRootCommand(), "doctor", "memory",
@@ -213,12 +205,8 @@ func setDoctorMemoryTestEnvironment(t *testing.T, home string) {
 func memoryStatusServer(t *testing.T, status service.MemoryStatus) *httptest.Server {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Path == "/api/v1/version" {
-			_, _ = w.Write([]byte(`{"api_version":11}`))
-			return
-		}
 		assert.Equal(t, "/api/v1/memory/status", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
 		assert.NoError(t, json.NewEncoder(w).Encode(status))
 	}))
 	t.Cleanup(server.Close)
