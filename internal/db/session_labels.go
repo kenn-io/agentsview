@@ -2,7 +2,6 @@ package db
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"slices"
@@ -230,12 +229,8 @@ func (db *DB) writeSessionLabels(
 	return result, nil
 }
 
-type queryer interface {
-	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
-}
-
 func querySessionLabels(
-	ctx context.Context, q queryer, sessionID string,
+	ctx context.Context, q messageRowsQuerier, sessionID string,
 ) ([]string, error) {
 	rows, err := q.QueryContext(ctx,
 		"SELECT label FROM session_labels WHERE session_id = ? ORDER BY label",

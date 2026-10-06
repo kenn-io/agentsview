@@ -214,7 +214,8 @@ func scanSessionRowWithSource(rs rowScanner, includeSource bool) (Session, error
 		&s.ParserMalformedLines, &s.IsTruncated,
 		&s.DeletedAt, &s.TerminationStatus,
 		&s.TranscriptRevision, &s.CreatedAt, &s.ProjectAssigned,
-		prLinksColumn{&s.PRLinks}, labelsColumn{&s.Labels},
+		prLinksColumn{&s.PRLinks},
+		labelsColumn{&s.Labels},
 	}
 	if includeSource {
 		targets = append(targets, &s.FilePath, &s.FileSize, &s.LocalModifiedAt)
