@@ -35,11 +35,7 @@ var _ SessionAnnotator = (*directBackend)(nil)
 func (b *directBackend) SessionLabels(
 	ctx context.Context, id string,
 ) (*db.SessionLabels, error) {
-	if b.local == nil {
-		return nil, db.ErrReadOnly
-	}
-	labels, err := b.local.GetSessionLabels(ctx, id)
-	return labelsResult(labels, err)
+	return labelsResult(db.ReadSessionLabels(ctx, b.db, id))
 }
 
 func (b *directBackend) SetSessionLabels(

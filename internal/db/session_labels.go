@@ -28,6 +28,8 @@ type SessionLabels struct {
 	// for a session that has not synced yet are kept and appear once it
 	// does.
 	SessionFound bool `json:"session_found"`
+	// Changed reports whether a write altered the stored labels.
+	Changed bool `json:"-"`
 }
 
 // NormalizeSessionLabel trims a label and validates it. Labels are free
@@ -119,6 +121,31 @@ func (db *DB) GetSessionLabels(
 	}, nil
 }
 
+// ReadSessionLabels returns a session's labels from any store. The local
+// archive also reports labels stored for a session that has not synced;
+// mirrors carry labels on the session row.
+func ReadSessionLabels(
+	ctx context.Context, store Store, sessionID string,
+) (SessionLabels, error) {
+	if local, ok := store.(*DB); ok && local != nil {
+		return local.GetSessionLabels(ctx, sessionID)
+	}
+	sessionID, err := normalizeLabelSessionID(sessionID)
+	if err != nil {
+		return SessionLabels{}, err
+	}
+	sess, err := store.GetSession(ctx, sessionID)
+	if err != nil {
+		return SessionLabels{}, err
+	}
+	result := SessionLabels{SessionID: sessionID, Labels: []string{}}
+	if sess != nil {
+		result.SessionFound = true
+		result.Labels = append(result.Labels, sess.Labels...)
+	}
+	return result, nil
+}
+
 // SetSessionLabels replaces a session's labels.
 func (db *DB) SetSessionLabels(
 	ctx context.Context, sessionID string, labels []string,
@@ -200,6 +227,7 @@ func (db *DB) writeSessionLabels(
 	if slices.Equal(current, labels) {
 		return result, nil
 	}
+	result.Changed = true
 
 	if _, err := tx.ExecContext(ctx,
 		"DELETE FROM session_labels WHERE session_id = ?", sessionID,

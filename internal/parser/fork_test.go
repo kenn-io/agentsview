@@ -3,6 +3,7 @@
 package parser
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -90,6 +91,34 @@ func TestForkDetection_LargeGapFork(t *testing.T) {
 	assert.Equal(t, "fork", fork.Session.ParentSessionID, "fork ParentSessionID")
 	assert.Equal(t, RelFork, fork.Session.RelationshipType, "fork RelationshipType")
 	assert.Equal(t, "fork q1", fork.Session.FirstMessage, "fork FirstMessage")
+}
+
+func TestForkDetection_LargeGapForkKeepsItsOwnPRLinks(t *testing.T) {
+	prLink := func(number int, ts string) string {
+		return fmt.Sprintf(`{"type":"pr-link","prNumber":%d,`+
+			`"prUrl":"https://github.com/owner/repo/pull/%d",`+
+			`"prRepository":"owner/repo","timestamp":%q}`, number, number, ts) + "\n"
+	}
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUserWithUUID("2024-01-01T10:00:00Z", "hello", "a", "").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:01Z", "hi", "b", "a").
+		AddClaudeUserWithUUID("2024-01-01T10:00:02Z", "q1", "c", "b").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:03Z", "a1", "d", "c").
+		AddClaudeUserWithUUID("2024-01-01T10:00:04Z", "q2", "e", "d").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:05Z", "a2", "f", "e").
+		AddClaudeUserWithUUID("2024-01-01T10:00:06Z", "q3", "g", "f").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:07Z", "a3", "h", "g").
+		AddClaudeUserWithUUID("2024-01-01T10:00:08Z", "q4", "k", "h").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:09Z", "a4", "l", "k").
+		AddClaudeUserWithUUID("2024-01-01T10:01:00Z", "fork q1", "i", "b").
+		AddClaudeAssistantWithUUID("2024-01-01T10:01:01Z", "fork a1", "j", "i").
+		String() + prLink(7, "2024-01-01T10:01:02Z")
+
+	results := parseTestContent(t, "fork-pr.jsonl", content, 2)
+
+	assert.Empty(t, results[0].Session.PRLinks, "main must not inherit the fork's PR")
+	require.Len(t, results[1].Session.PRLinks, 1)
+	assert.Equal(t, 7, results[1].Session.PRLinks[0].Number)
 }
 
 func TestForkDetection_SmallGapRetry(t *testing.T) {
