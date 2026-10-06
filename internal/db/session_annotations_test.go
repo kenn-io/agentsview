@@ -228,6 +228,39 @@ func TestSessionExternalParentYieldsToParserParent(t *testing.T) {
 	assert.Equal(t, "continuation", child.RelationshipType)
 }
 
+func TestSessionExternalParentSkipsLinkThatClosesCycle(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	_, err := d.SetSessionExternalParent(ctx, "a", "b", "")
+	require.NoError(t, err)
+	insertSession(t, d, "a", "proj")
+	nativeParent := "a"
+	insertSession(t, d, "b", "proj", func(s *Session) {
+		s.ParentSessionID = &nativeParent
+		s.RelationshipType = "continuation"
+	})
+
+	assertParents := func(t *testing.T) {
+		t.Helper()
+		a, err := d.GetSession(ctx, "a")
+		require.NoError(t, err)
+		assert.Nil(t, a.ParentSessionID, "the launcher link must yield to the native parent")
+		b, err := d.GetSession(ctx, "b")
+		require.NoError(t, err)
+		require.NotNil(t, b.ParentSessionID)
+		assert.Equal(t, "a", *b.ParentSessionID)
+		link, err := d.GetSessionExternalParent(ctx, "a")
+		require.NoError(t, err)
+		assert.False(t, link.Applied)
+		assert.Contains(t, listSessionIDs(t, d, SessionFilter{}), "a")
+	}
+	assertParents(t)
+
+	// A reparse of a must not re-apply the link.
+	insertSession(t, d, "a", "proj")
+	assertParents(t)
+}
+
 func TestSessionExternalParentRejectsInvalidLinks(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
