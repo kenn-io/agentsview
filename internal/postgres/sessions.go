@@ -128,7 +128,7 @@ func scanPGSessionWithSource(
 	var s db.Session
 	var createdAt *time.Time
 	var startedAt, endedAt, deletedAt *time.Time
-	var prLinks, labels string
+	var prLinks string
 	targets := []any{
 		&s.ID, &s.Project, &s.ProjectAssigned, &s.Machine, &s.Agent,
 		&s.AgentLabel, &s.Entrypoint, &s.SessionKind,
@@ -159,7 +159,7 @@ func scanPGSessionWithSource(
 		&s.TranscriptFidelity, &s.ParserMalformedLines, &s.IsTruncated,
 		&s.SecretLeakCount, &s.SecretsRulesVersion,
 		&deletedAt, &s.DeletionCause, &s.TerminationStatus, &s.TranscriptRevision,
-		&prLinks, &labels,
+		&prLinks, db.LabelsScanner(&s.Labels),
 	}
 	if includeSource {
 		targets = append(targets, &s.FilePath)
@@ -169,9 +169,6 @@ func scanPGSessionWithSource(
 		return s, err
 	}
 	s.PRLinks = db.DecodePRLinks(prLinks)
-	if s.Labels, err = decodePGSessionLabels(labels); err != nil {
-		return s, err
-	}
 	if createdAt != nil {
 		s.CreatedAt = FormatISO8601(*createdAt)
 	}
@@ -188,20 +185,6 @@ func scanPGSessionWithSource(
 		s.DeletedAt = &str
 	}
 	return s, nil
-}
-
-// decodePGSessionLabels decodes the JSON array that pgSessionBaseCols
-// selects for the TEXT[] labels column. An empty array decodes to nil, the
-// same value SQLite returns for an unlabeled session.
-func decodePGSessionLabels(text string) ([]string, error) {
-	var labels []string
-	if err := json.Unmarshal([]byte(text), &labels); err != nil {
-		return nil, fmt.Errorf("decoding session labels: %w", err)
-	}
-	if len(labels) == 0 {
-		return nil, nil
-	}
-	return labels, nil
 }
 
 func (s *Store) FindSessionIDsByPartial(
@@ -531,14 +514,7 @@ func (s *Store) getSidebarSessionIndexPage(
 	rootFilter.Starred = false
 	rootWhere, rootArgs := db.BuildSessionBaseFilterSQL(rootFilter, s.sessionDialect())
 	canonicalRootWhere := db.BuildCanonicalRootWhere(s.sessionDialect(), "sessions", f.IncludeOrphans)
-	childAutomationPred := db.PostgresQueryDialect().AutomatedScopePredicate(
-		db.NormalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated),
-		"s.is_automated",
-	)
-	childAutomationWhere := ""
-	if childAutomationPred != "" {
-		childAutomationWhere = " AND " + childAutomationPred
-	}
+	treeMemberWhere := db.SessionTreeMemberPredicate(f, s.sessionDialect(), "s")
 
 	var total int
 	var cur db.SessionCursor
@@ -565,9 +541,7 @@ func (s *Store) getSidebarSessionIndexPage(
 					SELECT t.root_id, s.id
 					FROM sessions s
 					JOIN tree t ON ` + s.sessionDialect().ParentRelation("s", "t") + `
-					WHERE s.message_count > 0
-					  AND s.deleted_at IS NULL
-					  ` + childAutomationWhere + `
+					WHERE ` + treeMemberWhere + `
 				),
 				eligible_roots(id) AS (
 					SELECT DISTINCT t.root_id
@@ -615,9 +589,7 @@ func (s *Store) getSidebarSessionIndexPage(
 			SELECT t.root_id, s.id
 			FROM sessions s
 			JOIN tree t ON ` + s.sessionDialect().ParentRelation("s", "t") + `
-			WHERE s.message_count > 0
-			  AND s.deleted_at IS NULL
-			  ` + childAutomationWhere + `
+			WHERE ` + treeMemberWhere + `
 		)
 		` + pgSidebarStarredRootCTE(f.Starred) + `,
 		root_activity(id, activity) AS (
@@ -704,9 +676,7 @@ func (s *Store) getSidebarSessionIndexPage(
 			SELECT s.id, t.ord
 			FROM sessions s
 			JOIN tree t ON ` + s.sessionDialect().ParentRelation("s", "t") + `
-			WHERE s.message_count > 0
-			  AND s.deleted_at IS NULL
-			  ` + childAutomationWhere + `
+			WHERE ` + treeMemberWhere + `
 		),
 		ranked_tree(id, ord) AS (
 			SELECT id, MIN(ord) AS ord

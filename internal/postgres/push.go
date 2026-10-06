@@ -2068,15 +2068,6 @@ func sessionLabelsFingerprint(labels []string) string {
 	return b.String()
 }
 
-// pgSessionLabelsArg binds labels for the NOT NULL TEXT[] column. A nil
-// slice would bind SQL NULL, so an unlabeled session binds an empty array.
-func pgSessionLabelsArg(labels []string) []string {
-	if labels == nil {
-		return []string{}
-	}
-	return labels
-}
-
 func sameSessionOwner(
 	existingOwnerMarker, existingMachine, markerID, pushedMachine string,
 	legacyMarkerMachines []string,
@@ -2504,7 +2495,7 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 		string(legacyMarkerMachinesJSON),
 		options.UsageOnly,
 		db.EncodePRLinks(sess.PRLinks),
-		pgSessionLabelsArg(sess.Labels),
+		db.LabelsArg(sess.Labels),
 	)
 	if err != nil {
 		return err

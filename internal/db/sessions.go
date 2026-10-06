@@ -913,11 +913,7 @@ func (db *DB) getSidebarSessionIndexPage(
 	rootFilter.IncludeChildren = false
 	rootWhere, rootArgs := buildSessionBaseFilter(rootFilter)
 	canonicalRootWhere := buildCanonicalRootWhere(f.IncludeOrphans)
-	childAutomationPred := SQLiteQueryDialect().AutomatedScopePredicate(NormalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated), "s.is_automated")
-	childAutomationWhere := ""
-	if childAutomationPred != "" {
-		childAutomationWhere = " AND " + childAutomationPred
-	}
+	treeMemberWhere := SessionTreeMemberPredicate(f, SQLiteQueryDialect(), "s")
 
 	var total int
 	var cur SessionCursor
@@ -944,9 +940,7 @@ func (db *DB) getSidebarSessionIndexPage(
 					SELECT t.root_id, s.id
 					FROM sessions s
 					JOIN tree t ON s.parent_session_id = t.id
-					WHERE s.message_count > 0
-					  AND s.deleted_at IS NULL
-					  ` + childAutomationWhere + `
+					WHERE ` + treeMemberWhere + `
 				),
 				eligible_roots(id) AS (
 					SELECT DISTINCT t.root_id
@@ -992,9 +986,7 @@ func (db *DB) getSidebarSessionIndexPage(
 			SELECT t.root_id, s.id
 			FROM sessions s
 			JOIN tree t ON s.parent_session_id = t.id
-			WHERE s.message_count > 0
-			  AND s.deleted_at IS NULL
-			  ` + childAutomationWhere + `
+			WHERE ` + treeMemberWhere + `
 		)
 		` + sidebarStarredRootCTE(f.Starred) + `,
 		root_activity(id, activity) AS (
@@ -1074,9 +1066,7 @@ func (db *DB) getSidebarSessionIndexPage(
 			SELECT s.id, t.ord
 			FROM sessions s
 			JOIN tree t ON s.parent_session_id = t.id
-			WHERE s.message_count > 0
-			  AND s.deleted_at IS NULL
-			  ` + childAutomationWhere + `
+			WHERE ` + treeMemberWhere + `
 		),
 		ranked_tree(id, ord) AS (
 			SELECT id, MIN(ord) AS ord
@@ -1692,6 +1682,11 @@ func upsertSessionExec(
 		return sessionUpsertResult{},
 			fmt.Errorf("upserting session %s: %w", s.ID, err)
 	}
+	// The upsert replaces the stored parent with the parsed one, so a
+	// launcher link has to be re-applied by every writer, not just linking.
+	if _, err := applySessionExternalParentsFor(ctx, exec, []string{s.ID}); err != nil {
+		return sessionUpsertResult{}, err
+	}
 	return result, nil
 }
 
@@ -2129,7 +2124,9 @@ func (db *DB) LinkSubagentSessionsForSessions(ctx context.Context, ids []string)
 	if err != nil {
 		return 0, err
 	}
-	launched, err := applySessionExternalParents(ctx, tx)
+	// Spawn edges may have re-parented children of the batch; those sit in
+	// its subtree, so the scoped recompute still reaches them.
+	launched, err := applySessionExternalParentsFor(ctx, tx.ExecContext, ids)
 	if err != nil {
 		return 0, err
 	}

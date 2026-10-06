@@ -815,20 +815,10 @@ func (s *Sync) sessionRow(p sessionPayload, fingerprint string, version uint64) 
 		nullTime(sess.DeletedAt), nullString(sess.DeletionCause), timeValue(sess.CreatedAt),
 		nullString(sess.TerminationStatus),
 		int64(sess.SecretLeakCount), sess.SecretsRulesVersion,
-		db.EncodePRLinks(sess.PRLinks), labelsValue(sess.Labels),
+		db.EncodePRLinks(sess.PRLinks), db.LabelsArg(sess.Labels),
 		lastMessageAt(p.messages), fingerprint, s.archiveID,
 		int64(len(p.messages)), version,
 	}
-}
-
-// labelsValue returns labels as a non-nil slice so an unlabeled session
-// writes an empty Array(String) and fingerprints the same as one whose
-// labels were all removed.
-func labelsValue(labels []string) []string {
-	if labels == nil {
-		return []string{}
-	}
-	return labels
 }
 
 func lastMessageAt(msgs []db.Message) *time.Time {

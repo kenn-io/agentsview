@@ -310,14 +310,13 @@ func TestPGPushRepushesAnnotationOnlyChanges(t *testing.T) {
 
 	readPG := func(t *testing.T) (string, []string) {
 		t.Helper()
-		var prLinks, labels string
+		var prLinks string
+		var labels []string
 		require.NoError(t, pg.QueryRowContext(ctx,
 			`SELECT pr_links, array_to_json(labels)::text
 			 FROM sessions WHERE id = $1`, sess.ID,
-		).Scan(&prLinks, &labels))
-		decoded, err := decodePGSessionLabels(labels)
-		require.NoError(t, err)
-		return prLinks, decoded
+		).Scan(&prLinks, db.LabelsScanner(&labels)))
+		return prLinks, labels
 	}
 
 	unchanged, err := syncer.Push(ctx, false, nil)
@@ -386,4 +385,62 @@ func TestPGPushAddsAnnotationColumnsToOlderSchema(t *testing.T) {
 	assert.Equal(t, []string{"ticket=UP-1"}, got.Labels)
 	require.Len(t, got.PRLinks, 1)
 	assert.Equal(t, 4, got.PRLinks[0].Number)
+}
+
+func TestPGAnnotationTreeSkipsHiddenAncestors(t *testing.T) {
+	tests := []struct {
+		name, schema string
+		mid          func(*db.Session)
+		trash        bool
+		filter       db.SessionFilter
+	}{
+		{name: "trashed middle", schema: "agentsview_annotation_tree_trash_test", trash: true},
+		{
+			name: "empty middle", schema: "agentsview_annotation_tree_empty_test",
+			mid: func(s *db.Session) { s.MessageCount = 0 },
+		},
+		{
+			name: "middle outside the automation scope", schema: "agentsview_annotation_tree_scope_test",
+			mid:    func(s *db.Session) { s.IsAutomated = true },
+			filter: db.SessionFilter{AutomatedScope: "human"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, local, syncer, pgURL := newAnnotationsPushEnv(t, tt.schema)
+			ctx := t.Context()
+			seedAnnotatedSession(t, local, db.Session{ID: "root"})
+			seedAnnotatedSession(t, local, db.Session{
+				ID: "mid", ParentSessionID: strPtr("root"), RelationshipType: "subagent",
+			})
+			if tt.mid != nil {
+				mid, err := local.GetSession(ctx, "mid")
+				require.NoError(t, err)
+				require.NotNil(t, mid)
+				tt.mid(mid)
+				require.NoError(t, local.UpsertSession(ctx, *mid))
+			}
+			seedAnnotatedSession(t, local, db.Session{
+				ID: "leaf", ParentSessionID: strPtr("mid"), RelationshipType: "subagent",
+			}, "x")
+			if tt.trash {
+				require.NoError(t, local.SoftDeleteSession(ctx, "mid"))
+			}
+			_, err := syncer.Push(ctx, true, nil)
+			require.NoError(t, err, "Push")
+			store, err := NewStore(pgURL, syncer.schema, true)
+			require.NoError(t, err, "NewStore")
+			defer store.Close()
+
+			for _, limit := range []int{0, 10} {
+				f := tt.filter
+				f.Labels = []string{"x"}
+				f.Limit = limit
+				got, err := store.GetSidebarSessionIndex(ctx, f)
+				require.NoError(t, err)
+				assert.Empty(t, got.Sessions, "limit %d", limit)
+				assert.Zero(t, got.Total, "limit %d", limit)
+			}
+		})
+	}
 }

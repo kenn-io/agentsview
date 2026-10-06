@@ -17139,15 +17139,13 @@ func (s SessionToolSequenceCallRepeat) Validate() error {
 type SetSessionParentInputBodyRelationshipType string
 
 const (
-	Continuation SetSessionParentInputBodyRelationshipType = "continuation"
-	Fork         SetSessionParentInputBodyRelationshipType = "fork"
-	Subagent     SetSessionParentInputBodyRelationshipType = "subagent"
+	Subagent SetSessionParentInputBodyRelationshipType = "subagent"
 )
 
 // Validate checks if the SetSessionParentInputBodyRelationshipType value is valid
 func (s SetSessionParentInputBodyRelationshipType) Validate() error {
 	switch s {
-	case Continuation, Fork, Subagent:
+	case Subagent:
 		return nil
 	default:
 		return runtime.NewValidationErrorsFromString("Enum", fmt.Sprintf("must be a valid SetSessionParentInputBodyRelationshipType value, got: %v", s))

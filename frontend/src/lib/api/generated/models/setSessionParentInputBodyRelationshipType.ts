@@ -10,6 +10,4 @@ export type SetSessionParentInputBodyRelationshipType =
 
 export const SetSessionParentInputBodyRelationshipType = {
   subagent: "subagent",
-  fork: "fork",
-  continuation: "continuation",
 } as const;

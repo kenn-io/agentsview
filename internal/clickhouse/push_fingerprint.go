@@ -96,7 +96,7 @@ func sessionFingerprintFields(sess db.Session, machine string) []any {
 		sess.ParserMalformedLines, sess.IsTruncated,
 		sess.DeletedAt, sess.DeletionCause, sess.CreatedAt, sess.TerminationStatus,
 		sess.SecretLeakCount, sess.SecretsRulesVersion,
-		db.EncodePRLinks(sess.PRLinks), labelsValue(sess.Labels),
+		db.EncodePRLinks(sess.PRLinks), db.LabelsArg(sess.Labels),
 	}
 }
 

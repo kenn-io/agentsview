@@ -768,11 +768,6 @@ func buildSessionFilterWithBuilder(
 	rootMatchParts = append(rootMatchParts,
 		BuildCanonicalRootWhere(b.dialect, "root_session", f.IncludeOrphans))
 	rootMatch := strings.Join(rootMatchParts, " AND ")
-	childAutomationPred := b.dialect.AutomatedScopePredicate(NormalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated), "s.is_automated")
-	childAutomationWhere := ""
-	if childAutomationPred != "" {
-		childAutomationWhere = " AND " + childAutomationPred
-	}
 
 	cte := "WITH RECURSIVE tree(id) AS (" +
 		"SELECT root_session.id FROM sessions root_session" +
@@ -782,11 +777,24 @@ func buildSessionFilterWithBuilder(
 		" " + b.dialect.recursiveUnionSQL() + " " +
 		"SELECT s.id FROM sessions s" +
 		" JOIN tree t ON " + b.dialect.ParentRelation("s", "t") +
-		" WHERE s.message_count > 0 AND s.deleted_at IS NULL" +
-		childAutomationWhere +
+		" WHERE " + SessionTreeMemberPredicate(f, b.dialect, "s") +
 		") SELECT id FROM tree"
 
 	return baseWhere + " AND " + q("id") + " IN (" + cte + ")"
+}
+
+// SessionTreeMemberPredicate is the visibility every descendant in a session
+// tree view must pass: not trashed, not empty, and inside the automation
+// scope. The tree CTEs and the label and pull request ancestor walk share it
+// so both reach the same sessions.
+func SessionTreeMemberPredicate(
+	f SessionFilter, dialect QueryDialect, sessionAlias string,
+) string {
+	pred := sessionAlias + ".message_count > 0 AND " + sessionAlias + ".deleted_at IS NULL"
+	if scope := dialect.AutomatedScopePredicate(NormalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated), sessionAlias+".is_automated"); scope != "" {
+		pred += " AND " + scope
+	}
+	return pred
 }
 
 // AutomatedScopePredicate renders a normalized scope against a boolean column.
@@ -946,7 +954,9 @@ func annotationPredicates(
 // annotationTreePredicate keeps idExpr when it names a session that matches
 // the label and pull request filters or an ancestor of one. Tree views use
 // it on their roots, so a launcher's tree appears when only one of its
-// workers carries the label or pull request.
+// workers carries the label or pull request. The walk passes only sessions
+// the tree views would show, so a match hidden behind a trashed, empty, or
+// out-of-scope session keeps no root.
 func annotationTreePredicate(
 	f SessionFilter, b *QueryBuilder, idExpr string,
 ) string {
@@ -958,13 +968,14 @@ func annotationTreePredicate(
 	}
 	return idExpr + " IN (WITH RECURSIVE annotated(id) AS (" +
 		"SELECT annotated_session.id FROM sessions annotated_session" +
-		" WHERE annotated_session.deleted_at IS NULL AND " +
-		strings.Join(preds, " AND ") +
+		" WHERE " + SessionTreeMemberPredicate(f, b.dialect, "annotated_session") +
+		" AND " + strings.Join(preds, " AND ") +
 		" " + b.dialect.recursiveUnionSQL() + " " +
 		"SELECT annotated_parent.id FROM sessions annotated_parent" +
 		" JOIN sessions annotated_child ON " +
 		b.dialect.ParentRelation("annotated_child", "annotated_parent") +
 		" JOIN annotated ON annotated_child.id = annotated.id" +
+		" WHERE " + SessionTreeMemberPredicate(f, b.dialect, "annotated_parent") +
 		") SELECT id FROM annotated)"
 }
 

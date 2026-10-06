@@ -46,7 +46,7 @@ type setSessionParentInput struct {
 	ID   string `path:"id" required:"true" doc:"Session ID"`
 	Body struct {
 		ParentSessionID  string `json:"parent_session_id" required:"true" doc:"ID of the session that launched this one"`
-		RelationshipType string `json:"relationship_type,omitempty" enum:"subagent,fork,continuation" doc:"Relationship to the parent; defaults to subagent"`
+		RelationshipType string `json:"relationship_type,omitempty" enum:"subagent" doc:"Relationship to the parent; defaults to subagent"`
 	}
 }
 

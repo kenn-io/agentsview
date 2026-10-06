@@ -178,8 +178,12 @@ func TestSessionExternalParentApplication(t *testing.T) {
 	assert.False(t, link.Applied)
 	assert.Equal(t, DefaultExternalRelationshipType, link.RelationshipType)
 
-	insertSession(t, d, "worker", "proj")
-	require.NoError(t, d.LinkSubagentSessions())
+	// The write applies the link itself, as an HTTP upload with no linking
+	// pass would.
+	_, err = d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{{
+		Session: Session{ID: "worker", Project: "proj", Machine: defaultMachine, Agent: defaultAgent, MessageCount: 1},
+	}})
+	require.NoError(t, err)
 	worker, err := d.GetSession(ctx, "worker")
 	require.NoError(t, err)
 	require.NotNil(t, worker.ParentSessionID)
@@ -191,9 +195,8 @@ func TestSessionExternalParentApplication(t *testing.T) {
 	require.Len(t, children, 1)
 	assert.Equal(t, "worker", children[0].ID)
 
-	// Every parser rewrite clears the column; linking restores the link.
+	// Every parser rewrite replaces the column; the write restores the link.
 	insertSession(t, d, "worker", "proj")
-	require.NoError(t, d.LinkSubagentSessions())
 	worker, err = d.GetSession(ctx, "worker")
 	require.NoError(t, err)
 	require.NotNil(t, worker.ParentSessionID)
@@ -292,11 +295,12 @@ func TestSessionExternalParentReturnsWhenNativeCycleGoesAway(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, worker.ParentSessionID)
 
-	// A reparse of the manager without that parent puts the worker back.
+	// A reparse of the manager without that parent puts the worker back as
+	// part of the write, leaving the scoped linking pass nothing to move.
 	insertSession(t, d, "manager", "proj")
 	linked, err := d.LinkSubagentSessionsForSessions(ctx, []string{"manager"})
 	require.NoError(t, err)
-	assert.Equal(t, 1, linked)
+	assert.Zero(t, linked)
 	worker, err = d.GetSession(ctx, "worker")
 	require.NoError(t, err)
 	require.NotNil(t, worker.ParentSessionID)
@@ -477,4 +481,55 @@ func TestSessionExternalParentYieldsToSpawnEdge(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, child.ParentSessionID)
 	assert.Equal(t, "spawner", *child.ParentSessionID)
+}
+
+func TestAnnotationTreeSkipsHiddenAncestors(t *testing.T) {
+	tests := []struct {
+		name   string
+		mid    func(*Session)
+		trash  bool
+		filter SessionFilter
+	}{
+		{name: "trashed middle", trash: true},
+		{name: "empty middle", mid: func(s *Session) { s.MessageCount = 0 }},
+		{
+			name:   "middle outside the automation scope",
+			mid:    func(s *Session) { s.IsAutomated = true },
+			filter: SessionFilter{AutomatedScope: "human"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			insertSession(t, d, "root", "proj")
+			insertSession(t, d, "mid", "proj", func(s *Session) {
+				s.ParentSessionID = new("root")
+				s.RelationshipType = "subagent"
+				if tt.mid != nil {
+					tt.mid(s)
+				}
+			})
+			insertSession(t, d, "leaf", "proj", func(s *Session) {
+				s.ParentSessionID = new("mid")
+				s.RelationshipType = "subagent"
+			})
+			if tt.trash {
+				require.NoError(t, d.SoftDeleteSession(ctx, "mid"))
+			}
+			_, err := d.SetSessionLabels(ctx, "leaf", []string{"x"})
+			require.NoError(t, err)
+
+			// The tree views never reach leaf, so the label keeps no root.
+			for _, limit := range []int{0, 10} {
+				f := tt.filter
+				f.Labels = []string{"x"}
+				f.Limit = limit
+				index, err := d.GetSidebarSessionIndex(ctx, f)
+				require.NoError(t, err)
+				assert.Empty(t, index.Sessions, "limit %d", limit)
+				assert.Zero(t, index.Total, "limit %d", limit)
+			}
+		})
+	}
 }

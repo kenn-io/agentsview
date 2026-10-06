@@ -747,8 +747,8 @@ CREATE TABLE IF NOT EXISTS session_labels (
 CREATE INDEX IF NOT EXISTS idx_session_labels_label
     ON session_labels(label);
 
--- Launcher-supplied parent links. Linking recomputes them from current
--- evidence after every write: a link is the session's parent only while the
+-- Launcher-supplied parent links. Every session write and linking pass
+-- recomputes them from current evidence: a link is the session's parent only while the
 -- transcript gives none, no tool-call spawn edge claims the session, and the
 -- link's chain does not lead back to the session.
 CREATE TABLE IF NOT EXISTS session_external_parents (
@@ -758,6 +758,8 @@ CREATE TABLE IF NOT EXISTS session_external_parents (
     created_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     updated_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
+CREATE INDEX IF NOT EXISTS idx_session_external_parents_parent
+    ON session_external_parents(parent_session_id);
 
 -- Excluded sessions: tracks session IDs that were permanently
 -- deleted by the user so the sync engine does not re-import them.
