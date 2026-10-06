@@ -1193,7 +1193,7 @@ func (db *DB) queryRecallEntriesHybrid(
 	candidateQuery := q
 	candidateQuery.Limit = MaxRecallEntryLimit
 	// The vector leg waits on query encoding, so the lexical leg reads after
-	// it; otherwise an entry hidden during encoding keeps its lexical rank.
+	// it and sees entries written meanwhile.
 	candidateQuery.Mode = RecallQueryModeVector
 	vector, err := db.queryRecallEntriesVector(ctx, candidateQuery)
 	if err != nil {
@@ -1208,7 +1208,7 @@ func (db *DB) queryRecallEntriesHybrid(
 		recallResultRankedUnits(lexical.RecallEntries),
 		recallResultRankedUnits(vector.RecallEntries),
 	}
-	merged := RRFMerge(legs, limit)
+	merged := RRFMerge(legs, 0)
 	byID := make(map[string]RecallResult,
 		len(lexical.RecallEntries)+len(vector.RecallEntries))
 	for _, result := range lexical.RecallEntries {
@@ -1224,11 +1224,34 @@ func (db *DB) queryRecallEntriesHybrid(
 		}
 		byID[result.ID] = result
 	}
-	page := RecallPage{RecallEntries: make([]RecallResult, 0, len(merged))}
-	for _, fused := range merged {
-		result := byID[fused.Unit.Key]
-		result.Score = fused.Score
-		page.RecallEntries = append(page.RecallEntries, result)
+	// The two legs read entries at different moments. Only this reread drops
+	// an entry that left the query's filters in between; the leg order can't.
+	page := RecallPage{RecallEntries: make([]RecallResult, 0, min(limit, len(merged)))}
+	for len(merged) > 0 && len(page.RecallEntries) < limit {
+		batch := merged[:min(limit-len(page.RecallEntries), len(merged))]
+		merged = merged[len(batch):]
+		ids := make([]string, 0, len(batch))
+		for _, fused := range batch {
+			ids = append(ids, fused.Unit.Key)
+		}
+		current, err := db.listRecallEntriesByIDs(ctx, candidateQuery, ids)
+		if err != nil {
+			return RecallPage{}, err
+		}
+		visible := make(map[string]RecallEntry, len(current))
+		for _, entry := range current {
+			visible[entry.ID] = entry
+		}
+		for _, fused := range batch {
+			entry, ok := visible[fused.Unit.Key]
+			if !ok {
+				continue
+			}
+			result := byID[fused.Unit.Key]
+			result.RecallEntry = entry
+			result.Score = fused.Score
+			page.RecallEntries = append(page.RecallEntries, result)
+		}
 	}
 	return page, nil
 }
