@@ -148,3 +148,22 @@ func TestSessionAnnotationWritesUnavailableOnReadOnlyStore(t *testing.T) {
 	w = te.put(t, "/api/v1/sessions/any/parent", `{"parent_session_id":"p"}`)
 	assertStatus(t, w, http.StatusNotImplemented)
 }
+
+func TestSessionLabelsReadableOnReadOnlyStore(t *testing.T) {
+	te := setupPGMode(t)
+	seedAnnotatedSession(t, te, "worker", nil)
+	_, err := te.db.SetSessionLabels(t.Context(), "worker", []string{"ticket=ABC-123"})
+	require.NoError(t, err)
+
+	w := te.get(t, "/api/v1/sessions/worker/labels")
+	assertStatus(t, w, http.StatusOK)
+	labels := decode[db.SessionLabels](t, w)
+	assert.True(t, labels.SessionFound)
+	assert.Equal(t, []string{"ticket=ABC-123"}, labels.Labels)
+
+	w = te.get(t, "/api/v1/sessions/unknown/labels")
+	assertStatus(t, w, http.StatusOK)
+	labels = decode[db.SessionLabels](t, w)
+	assert.False(t, labels.SessionFound)
+	assert.Equal(t, []string{}, labels.Labels)
+}

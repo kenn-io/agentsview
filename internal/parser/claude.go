@@ -137,6 +137,7 @@ func claudeParseFile(
 		entrypoint       string
 		sessionKind      string
 		prLinks          prLinkCollector
+		prLinkAnchors    []int
 		foundParentSID   bool
 		uploadSessionID  string
 		uploadRoot       bool
@@ -289,8 +290,8 @@ func claudeParseFile(
 		}
 
 		if entryType == "pr-link" {
-			if link, ok := claudePRLink(lineBytes); ok {
-				prLinks.add(link)
+			if link, ok := claudePRLink(lineBytes); ok && prLinks.add(link) {
+				prLinkAnchors = append(prLinkAnchors, len(entries)-1)
 			}
 			continue
 		}
@@ -455,6 +456,7 @@ func claudeParseFile(
 		entrypoint:      entrypoint,
 		sessionKind:     sessionKind,
 		prLinks:         prLinks.result(),
+		prLinkAnchors:   prLinkAnchors,
 		malformedLines:  malformedLines,
 		isTruncated:     isTruncated,
 	}
@@ -1485,8 +1487,11 @@ type claudeSessionMeta struct {
 	entrypoint      string
 	sessionKind     string
 	prLinks         []PRLink
-	malformedLines  int
-	isTruncated     bool
+	// prLinkAnchors holds, per prLinks entry, the index of the entry just
+	// before its first occurrence, or -1 when none preceded it.
+	prLinkAnchors  []int
+	malformedLines int
+	isTruncated    bool
 }
 
 // applyTo sets source metadata fields on a ParsedSession.
@@ -1692,6 +1697,20 @@ func parseDAG(
 	)
 	branches = append(branches, forkBranches...)
 
+	// Each PR link belongs to the branch holding the entry just before its
+	// first occurrence; links with no such fork entry stay on main.
+	branchPRLinks := make([][]PRLink, len(branches))
+	entryBranch := make(map[int]int)
+	for i, b := range branches[1:] {
+		for _, idx := range b.indices {
+			entryBranch[idx] = i + 1
+		}
+	}
+	for j, link := range meta.prLinks {
+		owner := entryBranch[meta.prLinkAnchors[j]]
+		branchPRLinks[owner] = append(branchPRLinks[owner], link)
+	}
+
 	// Build results for each branch.
 	var results []ParseResult
 
@@ -1759,6 +1778,7 @@ func parseDAG(
 			ClaudeLinearParse: &linear,
 		}
 		meta.applyTo(&sess)
+		sess.PRLinks = branchPRLinks[i]
 		if err := accumulateMessageTokenUsageContext(
 			ctx, &sess, messages,
 		); err != nil {

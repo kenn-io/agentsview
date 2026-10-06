@@ -42,6 +42,8 @@ type SessionExternalParent struct {
 	// It is false while the session is not archived or when a parser-derived
 	// parent takes precedence.
 	Applied bool `json:"applied"`
+	// Changed reports whether a write moved the session's effective parent.
+	Changed bool `json:"-"`
 }
 
 // GetSessionExternalParent returns the stored external parent link, or
@@ -114,7 +116,7 @@ func (db *DB) SetSessionExternalParent(
 	// Replace the effective parent only when it is empty or is the link
 	// this call replaces; a parser-derived parent or a tool-call spawn edge
 	// always wins.
-	if _, err := tx.ExecContext(ctx, `
+	applied, err := tx.ExecContext(ctx, `
 		UPDATE sessions
 		SET parent_session_id = ?,
 			relationship_type = ?,
@@ -130,13 +132,19 @@ func (db *DB) SetSessionExternalParent(
 		parentID, relationshipType, sessionID,
 		previous.ParentSessionID, previous.RelationshipType,
 		parentID, relationshipType,
-	); err != nil {
+	)
+	if err != nil {
+		return SessionExternalParent{}, fmt.Errorf("applying session parent: %w", err)
+	}
+	moved, err := applied.RowsAffected()
+	if err != nil {
 		return SessionExternalParent{}, fmt.Errorf("applying session parent: %w", err)
 	}
 	link, err := loadSessionExternalParent(ctx, tx, sessionID)
 	if err != nil {
 		return SessionExternalParent{}, err
 	}
+	link.Changed = moved > 0
 	if err := tx.Commit(); err != nil {
 		return SessionExternalParent{}, fmt.Errorf("committing session parent: %w", err)
 	}
@@ -185,6 +193,7 @@ func (db *DB) ClearSessionExternalParent(
 	if err := tx.Commit(); err != nil {
 		return SessionExternalParent{}, fmt.Errorf("committing session parent clear: %w", err)
 	}
+	link.Changed = link.Applied
 	link.Applied = false
 	return link, nil
 }

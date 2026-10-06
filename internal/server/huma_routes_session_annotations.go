@@ -53,11 +53,7 @@ type setSessionParentInput struct {
 func (s *Server) humaGetSessionLabels(
 	ctx context.Context, in *idPathInput,
 ) (*jsonOutput[db.SessionLabels], error) {
-	localDB, _, err := s.localWorktreeMappingHumaDB()
-	if err != nil {
-		return nil, err
-	}
-	labels, err := localDB.GetSessionLabels(ctx, in.ID)
+	labels, err := db.ReadSessionLabels(ctx, s.db, in.ID)
 	if err != nil {
 		return nil, sessionAnnotationError("get session labels", err)
 	}

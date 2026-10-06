@@ -1193,28 +1193,18 @@ func (d *DB) CopySessionMetadataFrom(
 			return fmt.Errorf("copying session parents: %w", err)
 		}
 		// Sessions were written before their links existed in this
-		// database, so the insert trigger could not apply them.
+		// database, so the insert trigger could not apply them. Touching
+		// the empty parent column runs the update trigger, which applies
+		// each link with its cycle check.
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE main.sessions
-			SET parent_session_id = ep.parent_session_id,
-				relationship_type = ep.relationship_type
-			FROM main.session_external_parents ep
-			WHERE main.sessions.id = ep.session_id
-			AND COALESCE(main.sessions.parent_session_id, '') = ''
+			SET parent_session_id = NULL
+			WHERE COALESCE(parent_session_id, '') = ''
+			AND id IN (SELECT session_id FROM main.session_external_parents)
 			AND NOT EXISTS (
 				SELECT 1 FROM main.tool_calls tc
 				WHERE tc.subagent_session_id = main.sessions.id
 				AND tc.session_id IS NOT tc.subagent_session_id
-			)
-			AND NOT EXISTS (
-				WITH RECURSIVE ancestors(id) AS (
-					SELECT ep.parent_session_id
-					UNION
-					SELECT a.parent_session_id FROM main.sessions a
-					JOIN ancestors ON a.id = ancestors.id
-					WHERE COALESCE(a.parent_session_id, '') <> ''
-				)
-				SELECT 1 FROM ancestors WHERE id = main.sessions.id
 			)`); err != nil {
 			return fmt.Errorf("applying copied session parents: %w", err)
 		}

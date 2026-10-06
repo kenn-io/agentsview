@@ -210,8 +210,9 @@ session came from an unrecognized Antigravity schema fingerprint and was decoded
 heuristically.
 
 `labels` lists the session's [labels](#agentsview-session-label) and
-`pr_links` its [pull request links](#pull-request-links). Both are omitted when
-empty. Human output prints them, plus the parent session when there is one.
+`pr_links` its [pull request links](#pull-request-links). Both are always
+present and are `[]` when empty. Human output prints them, plus the parent
+session when there is one.
 
 `secret_leak_count` (added in 0.30.0) counts definite-tier findings from
 [secret scanning](#secret-scanning) and is stamped inline during sync.

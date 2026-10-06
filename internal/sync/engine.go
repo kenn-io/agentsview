@@ -3,7 +3,6 @@ package sync
 import (
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json/jsontext"
@@ -4892,11 +4891,9 @@ func (e *Engine) ClearSessionProjectAssignment(
 func (e *Engine) SetSessionLabels(
 	ctx context.Context, sessionID string, labels []string,
 ) (db.SessionLabels, error) {
-	return runSessionAnnotationWrite(e,
-		func() (db.SessionLabels, error) { return e.db.GetSessionLabels(ctx, sessionID) },
-		func() (db.SessionLabels, error) { return e.db.SetSessionLabels(ctx, sessionID, labels) },
-		sessionLabelsChanged,
-	)
+	return runSessionAnnotationWrite(e, func() (db.SessionLabels, error) {
+		return e.db.SetSessionLabels(ctx, sessionID, labels)
+	}, sessionLabelsChanged)
 }
 
 // UpdateSessionLabels adds and removes one session's labels, serialized
@@ -4905,13 +4902,9 @@ func (e *Engine) SetSessionLabels(
 func (e *Engine) UpdateSessionLabels(
 	ctx context.Context, sessionID string, add, remove []string,
 ) (db.SessionLabels, error) {
-	return runSessionAnnotationWrite(e,
-		func() (db.SessionLabels, error) { return e.db.GetSessionLabels(ctx, sessionID) },
-		func() (db.SessionLabels, error) {
-			return e.db.UpdateSessionLabels(ctx, sessionID, add, remove)
-		},
-		sessionLabelsChanged,
-	)
+	return runSessionAnnotationWrite(e, func() (db.SessionLabels, error) {
+		return e.db.UpdateSessionLabels(ctx, sessionID, add, remove)
+	}, sessionLabelsChanged)
 }
 
 // SetSessionExternalParent records a launcher-supplied parent link,
@@ -4920,78 +4913,43 @@ func (e *Engine) UpdateSessionLabels(
 func (e *Engine) SetSessionExternalParent(
 	ctx context.Context, sessionID, parentID, relationshipType string,
 ) (db.SessionExternalParent, error) {
-	return runSessionAnnotationWrite(e,
-		func() (db.SessionExternalParent, error) { return e.loadSessionExternalParent(ctx, sessionID) },
-		func() (db.SessionExternalParent, error) {
-			return e.db.SetSessionExternalParent(
-				ctx, sessionID, parentID, relationshipType,
-			)
-		},
-		sessionExternalParentChanged,
-	)
+	return runSessionAnnotationWrite(e, func() (db.SessionExternalParent, error) {
+		return e.db.SetSessionExternalParent(
+			ctx, sessionID, parentID, relationshipType,
+		)
+	}, sessionExternalParentChanged)
 }
 
 // ClearSessionExternalParent removes a launcher-supplied parent link.
 func (e *Engine) ClearSessionExternalParent(
 	ctx context.Context, sessionID string,
 ) (db.SessionExternalParent, error) {
-	return runSessionAnnotationWrite(e,
-		func() (db.SessionExternalParent, error) { return e.loadSessionExternalParent(ctx, sessionID) },
-		func() (db.SessionExternalParent, error) {
-			return e.db.ClearSessionExternalParent(ctx, sessionID)
-		},
-		sessionExternalParentChanged,
-	)
+	return runSessionAnnotationWrite(e, func() (db.SessionExternalParent, error) {
+		return e.db.ClearSessionExternalParent(ctx, sessionID)
+	}, sessionExternalParentChanged)
 }
 
-// loadSessionExternalParent reads the stored link, treating a missing one
-// as the zero value.
-func (e *Engine) loadSessionExternalParent(
-	ctx context.Context, sessionID string,
-) (db.SessionExternalParent, error) {
-	link, err := e.db.GetSessionExternalParent(ctx, sessionID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return db.SessionExternalParent{}, nil
-	}
-	return link, err
-}
+// sessionLabelsChanged skips labels stored ahead of sync, which change no
+// listed session.
+func sessionLabelsChanged(l db.SessionLabels) bool { return l.Changed && l.SessionFound }
 
-// sessionLabelsChanged reports a change only for an archived session, since
-// labels stored ahead of sync change no listed session.
-func sessionLabelsChanged(before, after db.SessionLabels) bool {
-	return after.SessionFound && !slices.Equal(before.Labels, after.Labels)
-}
-
-// sessionExternalParentChanged reports a change only when the link moved a
-// session's effective parent.
-func sessionExternalParentChanged(before, after db.SessionExternalParent) bool {
-	if !before.Applied && !after.Applied {
-		return false
-	}
-	return before.Applied != after.Applied ||
-		before.ParentSessionID != after.ParentSessionID ||
-		before.RelationshipType != after.RelationshipType
-}
+func sessionExternalParentChanged(l db.SessionExternalParent) bool { return l.Changed }
 
 // runSessionAnnotationWrite runs write under the engine's exclusive lock and
-// publishes the session inventory only when changed reports that the write
-// altered what read returned beforehand.
+// publishes the session inventory only when changed reports a visible change.
 func runSessionAnnotationWrite[T any](
-	e *Engine, read, write func() (T, error), changed func(before, after T) bool,
+	e *Engine, write func() (T, error), changed func(T) bool,
 ) (T, error) {
-	var before, after T
+	var result T
 	err := e.RunExclusive(func() error {
 		var err error
-		if before, err = read(); err != nil {
-			return err
-		}
-		after, err = write()
+		result, err = write()
 		return err
 	})
-	if err == nil && changed(before, after) {
+	if err == nil && changed(result) {
 		e.emit("sessions")
 	}
-	return after, err
+	return result, err
 }
 
 // SyncAll discovers and syncs all session files from all agents.
