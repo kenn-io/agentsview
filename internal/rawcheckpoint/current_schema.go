@@ -178,6 +178,9 @@ CREATE INDEX outbox_generations_due_idx
 		ON outbox_generations(blocked,
 		retry_at, state, captured_at, capture_id);
 
+CREATE INDEX raw_source_base_objects_object_idx
+		ON raw_source_base_objects(sha256, length);
+
 CREATE TABLE backfill_runs (
  run_id TEXT PRIMARY KEY, device_id TEXT NOT NULL, destination TEXT NOT NULL,
  selection TEXT NOT NULL, discovery TEXT NOT NULL DEFAULT 'open',

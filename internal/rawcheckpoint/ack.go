@@ -480,6 +480,15 @@ func validateReconciledSourceHead(head SourceHead) error {
 	})
 }
 
+// pruneUnreferencedRemoteObjectsSQL forgets uploaded objects that no
+// acknowledged base references any longer.
+const pruneUnreferencedRemoteObjectsSQL = `DELETE FROM outbox_objects
+	WHERE state = 'remote' AND ref_count = 0 AND NOT EXISTS (
+		SELECT 1 FROM raw_source_base_objects AS base
+		WHERE base.sha256 = outbox_objects.sha256
+		AND base.length = outbox_objects.length
+	)`
+
 // AcknowledgeGeneration atomically fences a durable server result to the
 // finalized local generation, advances its source head, and releases local
 // object references while retaining the acknowledged append base metadata.
@@ -558,12 +567,7 @@ func (s *Store) AcknowledgeGeneration(
 		if err := releaseGenerationObjectsConn(ctx, conn, captureID); err != nil {
 			return err
 		}
-		if _, err := conn.ExecContext(ctx, `DELETE FROM outbox_objects
-			WHERE state = 'remote' AND ref_count = 0 AND NOT EXISTS (
-				SELECT 1 FROM raw_source_base_objects AS base
-				WHERE base.sha256 = outbox_objects.sha256
-				AND base.length = outbox_objects.length
-			)`); err != nil {
+		if _, err := conn.ExecContext(ctx, pruneUnreferencedRemoteObjectsSQL); err != nil {
 			return fmt.Errorf("rawcheckpoint: acknowledge generation: prune remote objects: %w", err)
 		}
 		now := s.now().UTC().Format(time.RFC3339Nano)

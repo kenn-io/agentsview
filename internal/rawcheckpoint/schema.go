@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-const schemaVersion = 9
+const schemaVersion = 10
 
 func (s *Store) init(ctx context.Context) error {
 	var version int
@@ -90,6 +90,13 @@ func (s *Store) init(ctx context.Context) error {
 		for _, statement := range versionNineMigrationStatements {
 			if _, err := tx.ExecContext(ctx, statement); err != nil {
 				return fmt.Errorf("rawcheckpoint: migrate schema to version 9: %w", err)
+			}
+		}
+	}
+	if version < 10 {
+		for _, statement := range versionTenMigrationStatements {
+			if _, err := tx.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("rawcheckpoint: migrate schema to version 10: %w", err)
 			}
 		}
 	}
@@ -351,4 +358,12 @@ var versionEightMigrationStatements = []string{
 	`UPDATE outbox_generations SET manifest_id = ''
 		WHERE state = 'finalized' AND manifest_id != ''
 			AND ack_receipt = '' AND ack_generation = 0`,
+}
+
+// Acknowledgement and garbage collection ask whether any acknowledged base
+// still references an object. Without this index each lookup reads the whole
+// base, which grows with every source the device has ever uploaded.
+var versionTenMigrationStatements = []string{
+	`CREATE INDEX raw_source_base_objects_object_idx
+		ON raw_source_base_objects(sha256, length)`,
 }

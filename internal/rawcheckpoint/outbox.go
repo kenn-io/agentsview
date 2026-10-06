@@ -1315,6 +1315,13 @@ func loadGenerationEntries(
 	return entries, nil
 }
 
+// baseReferencesObjectSQL reports whether any acknowledged base still
+// references one object.
+const baseReferencesObjectSQL = `SELECT EXISTS(
+	SELECT 1 FROM raw_source_base_objects
+	WHERE sha256 = ? AND length = ?
+)`
+
 // CollectGarbage waits for active object publication, removes unreferenced
 // spool objects, and only then releases their charged rows. Missing files are
 // an idempotent success.
@@ -1353,10 +1360,8 @@ func (s *Store) CollectGarbage(ctx context.Context) (GarbageCollectionReport, er
 					checkpointFilesystemError(err))
 			}
 			var retained int
-			err := conn.QueryRowContext(ctx, `SELECT EXISTS(
-				SELECT 1 FROM raw_source_base_objects
-				WHERE sha256 = ? AND length = ?
-			)`, ref.SHA256, ref.Length).Scan(&retained)
+			err := conn.QueryRowContext(ctx, baseReferencesObjectSQL,
+				ref.SHA256, ref.Length).Scan(&retained)
 			if err != nil {
 				return fmt.Errorf("rawcheckpoint: inspect acknowledged object base: %w", err)
 			}
