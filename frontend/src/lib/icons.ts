@@ -29,6 +29,7 @@ export { default as FileTextIcon } from "@lucide/svelte/icons/file-text";
 export { default as FileXIcon } from "@lucide/svelte/icons/file-x";
 export { default as FolderIcon } from "@lucide/svelte/icons/folder";
 export { default as FunnelIcon } from "@lucide/svelte/icons/funnel";
+export { default as GitPullRequestIcon } from "@lucide/svelte/icons/git-pull-request";
 export { default as GlobeIcon } from "@lucide/svelte/icons/globe";
 export { default as Grid2x2Icon } from "@lucide/svelte/icons/grid-2x2";
 export { default as InfoIcon } from "@lucide/svelte/icons/info";

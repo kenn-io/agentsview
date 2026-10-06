@@ -442,12 +442,14 @@
         const match = g.sessions.find((s) => s.id === activeId);
         if (!match) continue;
         if (match.id === g.primarySessionId) break; // already primary
-        const next = new Set(expandedGroups);
-        if (!next.has(g.key)) next.add(g.key);
-        // Auto-expand the correct sub-group.
-        next.add(`subagent:${g.key}`);
-        next.add(`team:${g.key}`);
-        expandedGroups = next;
+        // Auto-expand the group and its sub-groups. Assign only when a
+        // key is new: while the sidebar still paints its pre-hydration
+        // snapshot the child row cannot appear yet, and replacing the
+        // set with an equal one would re-run this effect forever.
+        const keys = [g.key, `subagent:${g.key}`, `team:${g.key}`];
+        if (keys.some((key) => !expandedGroups.has(key))) {
+          expandedGroups = new Set([...expandedGroups, ...keys]);
+        }
         return;
       }
       return;

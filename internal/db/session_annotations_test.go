@@ -289,3 +289,70 @@ func TestCopySessionMetadataFromPreservesLabelsAndExternalParents(t *testing.T) 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"queued"}, pending.Labels)
 }
+
+func TestAnnotationFiltersFindLaunchedWorkers(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "manager", "proj", func(s *Session) {
+		s.UserMessageCount = 3
+	})
+	insertSession(t, d, "idle", "proj", func(s *Session) {
+		s.UserMessageCount = 3
+	})
+	// A launcher-run worker is a headless single-prompt child session,
+	// which the default list and sidebar exclusions would hide.
+	insertSession(t, d, "worker", "proj", func(s *Session) {
+		s.UserMessageCount = 1
+		s.IsAutomated = true
+		s.PRLinks = []PRLink{{
+			URL: "https://github.com/acme/widgets/pull/42", Host: "github.com",
+			Repository: "acme/widgets", Number: 42,
+		}}
+	})
+	_, err := d.SetSessionExternalParent(ctx, "worker", "manager", "")
+	require.NoError(t, err)
+	_, err = d.SetSessionLabels(ctx, "worker", []string{"ticket=ABC-123"})
+	require.NoError(t, err)
+
+	pr, err := ParsePRFilter("acme/widgets#42")
+	require.NoError(t, err)
+	defaults := SessionFilter{ExcludeOneShot: true, ExcludeAutomated: true}
+	tests := []struct {
+		name   string
+		filter func(SessionFilter) SessionFilter
+	}{
+		{name: "label", filter: func(f SessionFilter) SessionFilter {
+			f.Labels = []string{"ticket=ABC-123"}
+			return f
+		}},
+		{name: "pr", filter: func(f SessionFilter) SessionFilter {
+			f.PR = pr
+			return f
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// The flat list selects the matching worker itself.
+			assert.Equal(t, []string{"worker"},
+				listSessionIDs(t, d, tt.filter(defaults)))
+
+			// The sidebar keeps the launcher's tree and drops unrelated roots.
+			for _, limit := range []int{0, 10} {
+				f := tt.filter(defaults)
+				f.Limit = limit
+				index, err := d.GetSidebarSessionIndex(ctx, f)
+				require.NoError(t, err)
+				ids := []string{}
+				for _, row := range index.Sessions {
+					ids = append(ids, row.ID)
+				}
+				assert.ElementsMatch(t, []string{"manager", "worker"}, ids,
+					"limit %d", limit)
+				assert.Equal(t, 1, index.Total, "limit %d", limit)
+			}
+		})
+	}
+
+	// Without an annotation filter the defaults still hide the worker.
+	assert.ElementsMatch(t, []string{"manager", "idle"}, listSessionIDs(t, d, defaults))
+}

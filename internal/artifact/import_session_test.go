@@ -240,7 +240,7 @@ func TestLoadImportedSessionDefersMissingAndFutureDependencies(t *testing.T) {
 			prepare: func(t *testing.T, store ArtifactStore) string {
 				t.Helper()
 
-				body := []byte(fmt.Sprintf(`{"origin":"contract-a1b2c3","v":%d}`, manifestFormatVersion+1))
+				body := fmt.Appendf(nil, `{"origin":"contract-a1b2c3","v":%d}`, manifestFormatVersion+1)
 				return createHashedImportArtifact(
 					t, store, KindManifests, ".json", body,
 				)

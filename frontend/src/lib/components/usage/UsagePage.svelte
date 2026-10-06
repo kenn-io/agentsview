@@ -468,6 +468,7 @@
         <SessionFilterControl
           showDisplay={false}
           showStarred={false}
+          showLabelFilters={false}
           align="left"
           extraActive={usage.hasActiveFilters || !!sessions.filters.project}
           onClearExtra={() => {

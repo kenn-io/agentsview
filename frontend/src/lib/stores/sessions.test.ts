@@ -14,6 +14,7 @@ import type { Filters } from "./sessions.svelte.js";
 import type { Session } from "../api/types.js";
 import { ApiError } from "../api/runtime.js";
 import { rollingRange } from "../utils/dates.js";
+import { routeParamsFromSearch, searchFromRouteParams } from "./sessionRouteParams.js";
 
 const api = vi.hoisted(() => ({
   listSessions: vi.fn(),
@@ -1445,6 +1446,21 @@ describe("SessionsStore", () => {
       expect(f.hideUnknownProject).toBe(true);
     });
 
+    it("should trim, drop empty, and dedupe label params", () => {
+      const f = parseFiltersFromParams({
+        label: " ticket=ABC-123 \n\nrole=reviewer\nticket=ABC-123",
+        pr: "  acme/widgets#42 ",
+      });
+      expect(f.labels).toEqual(["ticket=ABC-123", "role=reviewer"]);
+      expect(f.pr).toBe("acme/widgets#42");
+    });
+
+    it("should default labels and pull request to empty", () => {
+      const f = parseFiltersFromParams({});
+      expect(f.labels).toEqual([]);
+      expect(f.pr).toBe("");
+    });
+
     it("should handle non-numeric min_messages", () => {
       const f = parseFiltersFromParams({ min_messages: "abc" });
       expect(f.minMessages).toBe(0);
@@ -1473,6 +1489,8 @@ describe("SessionsStore", () => {
         minUserMessages: 3,
         includeOneShot: false,
         includeAutomated: true,
+        labels: ["ticket=ABC-123", "role=reviewer, lead"],
+        pr: "acme/widgets#42",
       };
       expect(filtersToParams(f)).toEqual({
         project: "myproj",
@@ -1489,6 +1507,8 @@ describe("SessionsStore", () => {
         min_user_messages: "3",
         include_one_shot: "false",
         include_automated: "true",
+        label: "ticket=ABC-123\nrole=reviewer, lead",
+        pr: "acme/widgets#42",
       });
     });
 
@@ -1519,10 +1539,26 @@ describe("SessionsStore", () => {
         minUserMessages: 3,
         includeOneShot: false,
         includeAutomated: true,
+        labels: ["ticket=ABC-123", "role=reviewer, lead"],
+        pr: "acme/widgets#42",
       };
       const params = filtersToParams(original);
       const parsed = parseFiltersFromParams(params);
       expect(parsed).toEqual(original);
+    });
+
+    it("should round-trip label and pull request filters through a URL", () => {
+      const original: Filters = {
+        ...parseFiltersFromParams({}),
+        labels: ["ticket=ABC-123", "role=reviewer, lead", "a&b=c#d"],
+        pr: "https://github.com/acme/widgets/pull/42",
+      };
+      const query = searchFromRouteParams(filtersToParams(original)).toString();
+
+      const search = new URLSearchParams(query);
+      expect(search.getAll("label")).toEqual(original.labels);
+      expect(search.get("pr")).toBe(original.pr);
+      expect(parseFiltersFromParams(routeParamsFromSearch(search))).toEqual(original);
     });
 
     it("should round-trip default filters as empty", () => {
@@ -2194,6 +2230,112 @@ describe("SessionsStore", () => {
       expect(sessions.filters.machine).toBe("");
       expect(sessions.selectedMachines).toEqual([]);
       expectSidebarIndexCalledWith({ machine: undefined });
+    });
+  });
+
+  describe("label and pull request filters", () => {
+    it("sends every selected label to the sidebar index", async () => {
+      sessions.addLabelFilter(" ticket=ABC-123 ");
+      await vi.waitFor(() => {
+        expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
+      });
+      sessions.addLabelFilter("role=reviewer");
+      await vi.waitFor(() => {
+        expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(2);
+      });
+
+      expect(sessions.filters.labels).toEqual(["ticket=ABC-123", "role=reviewer"]);
+      expect(sessions.isLabelSelected("role=reviewer")).toBe(true);
+      expectSidebarIndexCalledWith({ label: ["ticket=ABC-123", "role=reviewer"] });
+    });
+
+    it("ignores a label that is already selected or blank", async () => {
+      sessions.filters.labels = ["ticket=ABC-123"];
+
+      sessions.addLabelFilter("ticket=ABC-123");
+      sessions.addLabelFilter("   ");
+
+      expect(sessions.filters.labels).toEqual(["ticket=ABC-123"]);
+      expect(api.getSidebarSessionIndex).not.toHaveBeenCalled();
+    });
+
+    it("omits the label param once the last label is removed", async () => {
+      sessions.filters.labels = ["ticket=ABC-123"];
+
+      sessions.removeLabelFilter("ticket=ABC-123");
+      await vi.waitFor(() => {
+        expect(api.getSidebarSessionIndex).toHaveBeenCalled();
+      });
+
+      expect(sessions.filters.labels).toEqual([]);
+      expectSidebarIndexCalledWith({ label: undefined });
+    });
+
+    it("sends and clears the pull request filter", async () => {
+      sessions.setPRFilter(" acme/widgets#42 ");
+      await vi.waitFor(() => {
+        expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
+      });
+      expectSidebarIndexCalledWith({ pr: "acme/widgets#42" });
+
+      sessions.setPRFilter("");
+      await vi.waitFor(() => {
+        expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(2);
+      });
+      expectSidebarIndexCalledWith({ pr: undefined });
+    });
+
+    it("passes label and pull request filters to later pages", async () => {
+      sessions.filters.labels = ["ticket=ABC-123"];
+      sessions.filters.pr = "acme/widgets";
+      sessions.nextCursor = "page-2";
+
+      await sessions.loadMore();
+
+      expectPaginatedSidebarIndexCalledWith({
+        cursor: "page-2",
+        label: ["ticket=ABC-123"],
+        pr: "acme/widgets",
+      });
+    });
+
+    it("counts as session-list filters but not shared filters", () => {
+      sessions.filters.labels = ["ticket=ABC-123"];
+      expect(sessions.hasActiveFilters).toBe(true);
+      expect(sessions.hasSharedFilters).toBe(false);
+
+      sessions.filters.labels = [];
+      sessions.filters.pr = "acme/widgets";
+      expect(sessions.hasActiveFilters).toBe(true);
+      expect(sessions.hasSharedFilters).toBe(false);
+    });
+
+    it("clears label and pull request filters with the other filters", async () => {
+      sessions.filters.labels = ["ticket=ABC-123"];
+      sessions.filters.pr = "acme/widgets";
+
+      sessions.clearSessionFilters();
+      await vi.waitFor(() => {
+        expect(api.getSidebarSessionIndex).toHaveBeenCalled();
+      });
+
+      expect(sessions.filters.labels).toEqual([]);
+      expect(sessions.filters.pr).toBe("");
+      expectSidebarIndexCalledWith({ label: undefined, pr: undefined });
+    });
+
+    it("restores saved label filters and drops malformed ones", () => {
+      storageData.set(
+        "session-filters",
+        JSON.stringify({ labels: ["ticket=ABC-123", 7, " "], pr: " acme/widgets ", version: 2 }),
+      );
+      expect(createSessionsStore().filters.labels).toEqual(["ticket=ABC-123"]);
+      expect(createSessionsStore().filters.pr).toBe("acme/widgets");
+
+      storageData.set("session-filters", JSON.stringify({ labels: "oops", pr: 3, version: 2 }));
+      const restored = createSessionsStore().filters;
+      expect(restored.labels).toEqual([]);
+      expect(restored.pr).toBe("");
     });
   });
 

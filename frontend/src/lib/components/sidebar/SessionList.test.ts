@@ -462,6 +462,48 @@ describe("SessionList visible hydration", () => {
     expect(name?.textContent).toBe(title);
   });
 
+  it("reveals a deep-linked child session without looping before hydration", async () => {
+    // Opening a child session's URL directly selects it while the sidebar
+    // still paints its pre-hydration snapshot, so the child row cannot be
+    // revealed yet.
+    sessions.sessions = [
+      makeSession({ id: "launcher", first_message: "Launcher", is_index_only: true }),
+      makeSession({
+        id: "worker",
+        first_message: "Worker",
+        parent_session_id: "launcher",
+        relationship_type: "subagent",
+        started_at: "2024-01-01T00:00:30Z",
+        is_index_only: true,
+      }),
+    ];
+    sessions.activeSessionId = "worker";
+    let resolveHydration!: () => void;
+    vi.spyOn(sessions, "hydrateVisibleSessions").mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolveHydration = resolve;
+      }),
+    );
+    const errors: unknown[] = [];
+    const onError = (event: ErrorEvent) => errors.push(event.error);
+    window.addEventListener("error", onError);
+
+    try {
+      component = mount(SessionList, { target: document.body });
+      await tick();
+      await tick();
+      expect(errors).toEqual([]);
+
+      resolveHydration();
+      await tick();
+      await tick();
+      expect(errors).toEqual([]);
+      expect(document.querySelector('[data-session-id="worker"]')).not.toBeNull();
+    } finally {
+      window.removeEventListener("error", onError);
+    }
+  });
+
   it("marks the active session row for assistive tech", async () => {
     sessions.sessions = [
       makeSession({

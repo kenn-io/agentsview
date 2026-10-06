@@ -801,6 +801,7 @@ func (db *DB) GetSidebarSessionIndex(
 ) (SidebarSessionIndex, error) {
 	f.IncludeChildren = true
 	f.IncludeOrphans = true
+	f = f.WithAnnotationSelection()
 
 	if f.Limit > 0 || f.Cursor != "" || f.Starred {
 		return db.getSidebarSessionIndexPage(ctx, f)

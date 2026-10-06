@@ -21,8 +21,9 @@ import (
 // stored Devin source identities; pre-111 mirrors would otherwise keep
 // serving bare ids that deduplicate across sessions.
 // v17 adds session groups to the rebuilt mirror. v18 adds per-call tool
-// observations for effectiveness rates.
-const SchemaVersion = 18
+// observations for effectiveness rates. v19 adds session pull request links
+// and labels.
+const SchemaVersion = 19
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 
@@ -182,6 +183,8 @@ var mirrorTables = []tableSpec{
 			termination_status TEXT,
 			secret_leak_count INTEGER NOT NULL DEFAULT 0,
 			secrets_rules_version TEXT NOT NULL DEFAULT '',
+			pr_links VARCHAR NOT NULL DEFAULT '',
+			labels VARCHAR[],
 			agentsview_push_fingerprint TEXT,
 			source_archive_id TEXT NOT NULL DEFAULT ''
 		)`,
@@ -255,6 +258,8 @@ var mirrorTables = []tableSpec{
 			{"termination_status", "termination_status TEXT"},
 			{"secret_leak_count", "secret_leak_count INTEGER NOT NULL DEFAULT 0"},
 			{"secrets_rules_version", "secrets_rules_version TEXT NOT NULL DEFAULT ''"},
+			{"pr_links", "pr_links VARCHAR NOT NULL DEFAULT ''"},
+			{"labels", "labels VARCHAR[]"},
 			{"agentsview_push_fingerprint", "agentsview_push_fingerprint TEXT"},
 			{"source_archive_id", "source_archive_id TEXT NOT NULL DEFAULT ''"},
 		},

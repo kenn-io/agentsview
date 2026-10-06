@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
   SESSION_FILTER_KEYS,
+  hasFilterParams,
   hasSessionRouteDateIntent,
+  joinLabelFilterParam,
+  routeParamsFromSearch,
+  searchFromRouteParams,
+  splitLabelFilterParam,
   sessionDateIntentCleared,
   sessionRouteParamsForDetailExit,
   sessionRouteParamsForFilters,
@@ -156,5 +161,32 @@ describe("session route params", () => {
   it("tracks rolling window and termination as session route params", () => {
     expect(SESSION_FILTER_KEYS.has("window_days")).toBe(true);
     expect(SESSION_FILTER_KEYS.has("termination")).toBe(true);
+  });
+
+  it("treats label and pull request params as session filter deep links", () => {
+    expect(hasFilterParams({ label: "ticket=ABC-123" })).toBe(true);
+    expect(hasFilterParams({ pr: "acme/widgets" })).toBe(true);
+  });
+});
+
+describe("label filter params", () => {
+  it("round-trips labels containing commas and query metacharacters", () => {
+    const labels = ["ticket=ABC-123", "role=reviewer, lead", "a&b=c#d"];
+    const query = searchFromRouteParams({ label: joinLabelFilterParam(labels) }).toString();
+
+    expect(new URLSearchParams(query).getAll("label")).toEqual(labels);
+    expect(splitLabelFilterParam(routeParamsFromSearch(new URLSearchParams(query)).label)).toEqual(
+      labels,
+    );
+  });
+
+  it("drops blank and duplicate labels", () => {
+    expect(joinLabelFilterParam([" a ", "", "a", "b"])).toBe("a\nb");
+    expect(splitLabelFilterParam(undefined)).toEqual([]);
+    expect(splitLabelFilterParam("")).toEqual([]);
+  });
+
+  it("writes no label key when there are no labels", () => {
+    expect(searchFromRouteParams({ label: "", project: "p" }).toString()).toBe("project=p");
   });
 });

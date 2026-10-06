@@ -78,7 +78,7 @@ func TestFutureArtifactVersionErrorsIdentifyDependencyKind(t *testing.T) {
 
 	t.Run("manifest", func(t *testing.T) {
 		_, err := decodeManifestWithLimits(
-			[]byte(fmt.Sprintf(`{"origin":"contract-a1b2c3","v":%d}`, manifestFormatVersion+1)),
+			fmt.Appendf(nil, `{"origin":"contract-a1b2c3","v":%d}`, manifestFormatVersion+1),
 			productionArtifactLimits(),
 		)
 		require.ErrorIs(t, err, errFutureArtifactVersion)

@@ -1,4 +1,8 @@
-import { SESSION_FILTER_KEYS } from "./sessionRouteParams.js";
+import {
+  SESSION_FILTER_KEYS,
+  routeParamsFromSearch,
+  searchFromRouteParams,
+} from "./sessionRouteParams.js";
 
 export type Route =
   | "sessions"
@@ -75,7 +79,7 @@ export function parsePath(): {
     sessionId = segments.slice(1, 3).map(decodePathSegment).join(":");
   }
 
-  const params = Object.fromEntries(new URLSearchParams(window.location.search));
+  const params = routeParamsFromSearch(new URLSearchParams(window.location.search));
 
   return { route, sessionId, params, isRootPath };
 }
@@ -143,7 +147,7 @@ export class RouterStore {
   #buildUrl(path: string, params: Record<string, string> = {}): string {
     const basePath = getBasePath();
     const merged = { ...this.#stickyParams, ...params };
-    const qs = new URLSearchParams(merged).toString();
+    const qs = searchFromRouteParams(merged).toString();
     const full = basePath + path;
     return qs ? `${full}?${qs}` : full;
   }
