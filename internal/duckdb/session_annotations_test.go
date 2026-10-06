@@ -191,6 +191,20 @@ func TestDuckDBFiltersSessionsByLabelAndPR(t *testing.T) {
 			want: []string{},
 		},
 		{
+			name: "url on another host",
+			filter: db.SessionFilter{
+				PR: db.PRFilter{Host: "forge.example.com", Repository: "example-org/widgets", Number: 13},
+			},
+			want: []string{},
+		},
+		{
+			name: "url on the stored host",
+			filter: db.SessionFilter{
+				PR: db.PRFilter{Host: "github.com", Repository: "example-org/widgets", Number: 13},
+			},
+			want: []string{"sess-2"},
+		},
+		{
 			name: "label and pr together",
 			filter: db.SessionFilter{
 				Labels: []string{"worker"},

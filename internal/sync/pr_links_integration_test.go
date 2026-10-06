@@ -2,12 +2,15 @@ package sync_test
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
@@ -68,4 +71,33 @@ func TestIncrementalSync_ClaudePRLinkAppends(t *testing.T) {
 		"https://github.com/owner/repo/pull/2",
 	}, storedPRURLs(t, env.db, "pr-link-append"))
 	assertSessionMessageCount(t, env.db, "pr-link-append", 2)
+}
+
+func TestParseDiffAnnotations(t *testing.T) {
+	env := setupFocusedTestEnv(t, parser.AgentClaude, parser.AgentGemini)
+	env.writeClaudeSession(t, "test-proj", "pd-prs.jsonl", testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("Open a PR", tsZero),
+		testjsonl.ClaudeAssistantJSON("Opened", tsZeroS1),
+		`{"type":"pr-link","prNumber":1,"prUrl":"https://github.com/owner/repo/pull/1","prRepository":"owner/repo","timestamp":"2024-01-01T00:00:02Z"}`,
+	))
+	env.writeGeminiSession(t,
+		filepath.Join("tmp", "annhash", "chats", "session-001.json"),
+		parseDiffGeminiContent("pd-worker", "annhash"))
+	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 2, Synced: 2})
+
+	// A launcher-supplied parent on a full-replace agent's session is not
+	// parser drift.
+	_, err := env.db.SetSessionExternalParent(
+		t.Context(), "gemini:pd-worker", "pd-prs", "")
+	require.NoError(t, err)
+	report := runParseDiff(t, env, sync.ParseDiffOptions{})
+	assert.Equal(t, sync.ParseDiffTotals{Examined: 2, Identical: 2}, report.Totals)
+
+	// Missing pull request links on a Claude session are real drift, not
+	// incremental-append history.
+	mutateDB(t, env, "UPDATE sessions SET pr_links = '' WHERE id = ?", "pd-prs")
+	report = runParseDiff(t, env, sync.ParseDiffOptions{})
+	assert.Equal(t, sync.ParseDiffTotals{Examined: 2, Identical: 1, Changed: 1},
+		report.Totals)
+	assert.True(t, report.HasFailures())
 }

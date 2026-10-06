@@ -1200,7 +1200,12 @@ func (d *DB) CopySessionMetadataFrom(
 				relationship_type = ep.relationship_type
 			FROM main.session_external_parents ep
 			WHERE main.sessions.id = ep.session_id
-			AND COALESCE(main.sessions.parent_session_id, '') = ''`); err != nil {
+			AND COALESCE(main.sessions.parent_session_id, '') = ''
+			AND NOT EXISTS (
+				SELECT 1 FROM main.tool_calls tc
+				WHERE tc.subagent_session_id = main.sessions.id
+				AND tc.session_id IS NOT tc.subagent_session_id
+			)`); err != nil {
 			return fmt.Errorf("applying copied session parents: %w", err)
 		}
 	}

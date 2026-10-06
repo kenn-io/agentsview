@@ -27,6 +27,8 @@ package sync
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -52,6 +54,10 @@ func (e *Engine) compareStoredSession(
 	msgs []db.Message,
 	events []db.UsageEvent,
 ) ([]FieldDiff, error) {
+	prepared, err := e.withExternalParent(ctx, prepared)
+	if err != nil {
+		return nil, err
+	}
 	diffs := compareSessionFields(stored, prepared)
 
 	// Tier 1: three exact ordered fingerprints over the stored
@@ -287,10 +293,16 @@ func appendSessionMetadataDiffs(
 	diffs = appendScalarSessionDiff(
 		diffs, FieldGitBranch, agent, stored.GitBranch, prepared.GitBranch,
 	)
-	diffs = appendScalarSessionDiff(
-		diffs, FieldPRLinks, agent,
-		db.EncodePRLinks(stored.PRLinks), db.EncodePRLinks(prepared.PRLinks),
-	)
+	// Pull request links are never incremental-append history: an appended
+	// record that would change them forces a full parse, so any difference
+	// is real drift.
+	if sv, pv := db.EncodePRLinks(stored.PRLinks), db.EncodePRLinks(prepared.PRLinks); sv != pv {
+		diffs = append(diffs, FieldDiff{
+			Field:  FieldPRLinks,
+			Stored: stringutil.TruncateRunes(renderNullableScalar(sv), maxRenderedValueRunes, "..."),
+			Parsed: stringutil.TruncateRunes(renderNullableScalar(pv), maxRenderedValueRunes, "..."),
+		})
+	}
 	diffs = appendScalarSessionDiff(
 		diffs, FieldRelationshipType, agent,
 		stored.RelationshipType, prepared.RelationshipType,
@@ -1353,4 +1365,30 @@ func parseDiffSourceRaced(
 		return true
 	}
 	return liveMtime > *storedMtime
+}
+
+// withExternalParent applies a launcher-supplied parent link to the parsed
+// session the way the archive does when it stores a parse with no parent,
+// so a linked session is not reported as parser drift.
+func (e *Engine) withExternalParent(
+	ctx context.Context, prepared db.Session,
+) (db.Session, error) {
+	if derefString(prepared.ParentSessionID) != "" {
+		return prepared, nil
+	}
+	link, err := e.db.GetSessionExternalParent(ctx, prepared.ID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return prepared, nil
+	}
+	if err != nil {
+		return db.Session{}, fmt.Errorf(
+			"parse-diff: session parent for %s: %w", prepared.ID, err,
+		)
+	}
+	if !link.Applied {
+		return prepared, nil
+	}
+	prepared.ParentSessionID = &link.ParentSessionID
+	prepared.RelationshipType = link.RelationshipType
+	return prepared, nil
 }

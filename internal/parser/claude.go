@@ -819,12 +819,12 @@ type claudeIncrementalScan struct {
 	// only when it differs from that name, so repeated title records stay on
 	// the incremental path. nil keeps the append incremental.
 	storedSessionName *string
-	// storedPRLinkURLs holds the normalized pull request URLs already
-	// persisted for this session, or nil when the call site cannot supply
-	// them. Claude Code repeats its pr-link record many times, so only an
-	// appended link the session does not already carry escalates to a full
-	// parse. nil keeps the append incremental.
-	storedPRLinkURLs map[string]struct{}
+	// storedPRLinks maps the normalized pull request URLs already persisted
+	// for this session to their stored first-seen time, or is nil when the
+	// call site cannot supply them. Claude Code repeats its pr-link record
+	// many times, so only an appended record that would change the stored
+	// links escalates to a full parse. nil keeps the append incremental.
+	storedPRLinks map[string]time.Time
 }
 
 func claudeParseSessionFrom(
@@ -887,13 +887,12 @@ func claudeParseSessionFrom(
 				return
 			}
 			if entryType == "pr-link" {
-				if scan.storedPRLinkURLs == nil {
+				if scan.storedPRLinks == nil {
 					return
 				}
-				if link, ok := claudePRLink([]byte(line)); ok {
-					if _, stored := scan.storedPRLinkURLs[link.URL]; !stored {
-						sawNewPRLink = true
-					}
+				if link, ok := claudePRLink([]byte(line)); ok &&
+					prLinkChangesStored(scan.storedPRLinks, link) {
+					sawNewPRLink = true
 				}
 				return
 			}

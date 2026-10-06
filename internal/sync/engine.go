@@ -15897,16 +15897,16 @@ func (e *Engine) tryProviderIncrementalAppend(
 		// command followed by a fresh response would force a full parse.
 		var storedLastClaudeMessageID *string
 		var storedSessionName *string
-		var storedPRLinkURLs map[string]struct{}
+		var storedPRLinks map[string]time.Time
 		if provider.Definition().Type == parser.AgentClaude {
 			id := e.db.LastClaudeMessageID(ctx, inc.ID)
 			storedLastClaudeMessageID = &id
-			urls, uerr := e.db.GetSessionPRLinkURLs(ctx, inc.ID)
-			if uerr != nil {
+			links, lerr := e.db.GetSessionPRLinkFirstSeen(ctx, inc.ID)
+			if lerr != nil {
 				return nil, nil, nil, nil, time.Time{}, 0, nil, nil,
-					fmt.Errorf("read stored Claude pr links: %w", uerr)
+					fmt.Errorf("read stored Claude pr links: %w", lerr)
 			}
-			storedPRLinkURLs = urls
+			storedPRLinks = links
 			if !e.db.ArchiveContent().UsageOnly() {
 				name, found, nerr := e.db.GetSessionName(ctx, inc.ID)
 				if nerr != nil {
@@ -15936,7 +15936,7 @@ func (e *Engine) tryProviderIncrementalAppend(
 				StoredClaudeLinearParse:   inc.ClaudeLinearParse,
 				StoredLastClaudeMessageID: storedLastClaudeMessageID,
 				StoredSessionName:         storedSessionName,
-				StoredPRLinkURLs:          storedPRLinkURLs,
+				StoredPRLinks:             storedPRLinks,
 				StoredPendingUsageOrdinal: inc.PendingUsageOrdinal,
 			},
 		)

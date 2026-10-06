@@ -749,7 +749,9 @@ CREATE INDEX IF NOT EXISTS idx_session_labels_label
 
 -- Launcher-supplied parent links. A row applies to sessions.parent_session_id
 -- only while the parser found no parent, so parser-derived links win. The
--- triggers re-apply the link after every parser write clears the column.
+-- triggers re-apply the link after every parser write clears the column;
+-- subagent linking, which runs after parser writes, then restores a
+-- tool-call spawn edge's parent over it.
 CREATE TABLE IF NOT EXISTS session_external_parents (
     session_id        TEXT PRIMARY KEY,
     parent_session_id TEXT NOT NULL,

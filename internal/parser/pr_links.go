@@ -142,3 +142,18 @@ func mergePRLinks(lists ...[]PRLink) []PRLink {
 	}
 	return c.result()
 }
+
+// prLinkChangesStored reports whether a full parse would store something
+// different after seeing link, given the stored URLs and first-seen
+// times: a new URL below the per-session cap, or an earlier (or first)
+// timestamp for a stored URL.
+func prLinkChangesStored(stored map[string]time.Time, link PRLink) bool {
+	seen, ok := stored[link.URL]
+	if !ok {
+		return len(stored) < maxPRLinksPerSession
+	}
+	if link.FirstSeenAt.IsZero() {
+		return false
+	}
+	return seen.IsZero() || link.FirstSeenAt.Before(seen)
+}

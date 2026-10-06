@@ -112,7 +112,8 @@ func (db *DB) SetSessionExternalParent(
 		return SessionExternalParent{}, fmt.Errorf("saving session parent: %w", err)
 	}
 	// Replace the effective parent only when it is empty or is the link
-	// this call replaces; a parser-derived parent always wins.
+	// this call replaces; a parser-derived parent or a tool-call spawn edge
+	// always wins.
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE sessions
 		SET parent_session_id = ?,
@@ -120,6 +121,7 @@ func (db *DB) SetSessionExternalParent(
 			local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		WHERE id = ?
 		AND COALESCE(parser_parent_session_id, '') = ''
+		AND NOT `+spawnEdgeExistsSQL("sessions")+`
 		AND (
 			COALESCE(parent_session_id, '') = ''
 			OR (parent_session_id = ? AND relationship_type = ?)
@@ -187,6 +189,17 @@ func (db *DB) ClearSessionExternalParent(
 	return link, nil
 }
 
+// spawnEdgeExistsSQL reports whether a tool call records the session row
+// named by alias as a spawned subagent. Linking derives that session's
+// parent from the edge, so a launcher-supplied link never owns it.
+func spawnEdgeExistsSQL(alias string) string {
+	return `EXISTS (
+			SELECT 1 FROM tool_calls tc
+			WHERE tc.subagent_session_id = ` + alias + `.id
+			AND tc.session_id IS NOT tc.subagent_session_id
+		)`
+}
+
 func loadSessionExternalParent(
 	ctx context.Context, q recallQueryRower, sessionID string,
 ) (SessionExternalParent, error) {
@@ -195,12 +208,14 @@ func loadSessionExternalParent(
 		currentParent sql.NullString
 		currentType   sql.NullString
 		parserParent  sql.NullString
+		spawned       bool
 	)
 	err := q.QueryRowContext(ctx, `
 		SELECT ep.session_id, ep.parent_session_id, ep.relationship_type,
 			ep.created_at, ep.updated_at,
 			s.id IS NOT NULL, s.parent_session_id, s.relationship_type,
-			s.parser_parent_session_id
+			s.parser_parent_session_id,
+			s.id IS NOT NULL AND `+spawnEdgeExistsSQL("s")+`
 		FROM session_external_parents ep
 		LEFT JOIN sessions s ON s.id = ep.session_id
 		WHERE ep.session_id = ?`, sessionID,
@@ -208,6 +223,7 @@ func loadSessionExternalParent(
 		&link.SessionID, &link.ParentSessionID, &link.RelationshipType,
 		&link.CreatedAt, &link.UpdatedAt,
 		&link.SessionFound, &currentParent, &currentType, &parserParent,
+		&spawned,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -216,7 +232,7 @@ func loadSessionExternalParent(
 		return SessionExternalParent{}, fmt.Errorf("loading session parent: %w", err)
 	}
 	link.Applied = link.SessionFound &&
-		parserParent.String == "" &&
+		parserParent.String == "" && !spawned &&
 		currentParent.String == link.ParentSessionID &&
 		currentType.String == link.RelationshipType
 	return link, nil

@@ -229,6 +229,20 @@ func TestPGSessionPRLinksAndLabelsReadAndFilter(t *testing.T) {
 			wantIDs: []string{"sid-b"},
 		},
 		{
+			name: "pr url on another host",
+			filter: db.SessionFilter{PR: db.PRFilter{
+				Host: "forge.example.com", Repository: "acme/widgets", Number: 8,
+			}},
+			wantIDs: []string{},
+		},
+		{
+			name: "pr url on the stored host",
+			filter: db.SessionFilter{PR: db.PRFilter{
+				Host: "github.com", Repository: "acme/widgets", Number: 8,
+			}},
+			wantIDs: []string{"sid-b"},
+		},
+		{
 			name: "pr number in another repository",
 			filter: db.SessionFilter{PR: db.PRFilter{
 				Repository: "other/repo", Number: 7,
