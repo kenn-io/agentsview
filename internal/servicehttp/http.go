@@ -83,10 +83,16 @@ type httpBackend struct {
 	longRunningClient *http.Client
 	readOnly          bool
 	recallQueries     bool
-	token             string
+	// apiVersion is the probed server API version, or 0 when unknown.
+	apiVersion int
+	token      string
 }
 
 const recallNonRecordingAPIVersion = 4
+
+// annotationFilterAPIVersion matches server.SessionAnnotationsAPIVersion,
+// the first server API that applies label and pull request filters.
+const annotationFilterAPIVersion = 11
 
 // HTTPServerCapabilities is the subset of version metadata needed to expose
 // client features safely for an explicitly selected daemon.
@@ -115,13 +121,15 @@ func NewHTTPBackend(baseURL, token string, readOnly bool, browserURL string) ser
 func NewHTTPBackendForServer(
 	baseURL, token string, capabilities HTTPServerCapabilities,
 ) service.SessionService {
-	return newHTTPBackend(
+	b := newHTTPBackend(
 		baseURL,
 		token,
 		capabilities.ReadOnly,
 		!capabilities.ReadOnly &&
 			capabilities.APIVersion >= recallNonRecordingAPIVersion,
 	)
+	b.apiVersion = capabilities.APIVersion
+	return b
 }
 
 func newHTTPBackend(
@@ -278,6 +286,14 @@ func (b *httpBackend) FindSessionIDsByRawSuffix(
 func (b *httpBackend) List(
 	ctx context.Context, f service.ListFilter,
 ) (*service.SessionList, error) {
+	if (len(f.Labels) > 0 || f.PR != "") &&
+		b.apiVersion > 0 && b.apiVersion < annotationFilterAPIVersion {
+		return nil, fmt.Errorf(
+			"server API version %d does not support label or pull request filters; "+
+				"restart or upgrade the server",
+			b.apiVersion,
+		)
+	}
 	q, err := filterToQuery(f)
 	if err != nil {
 		return nil, err

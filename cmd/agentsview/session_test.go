@@ -671,6 +671,28 @@ func TestSessionList_ServerFlagUsesHTTP(t *testing.T) {
 	assert.Equal(t, "remote-session", got.Sessions[0]["id"])
 }
 
+func TestSessionList_ServerFlagRefusesAnnotationFiltersOnOlderServer(t *testing.T) {
+	newAgentDataDir(t)
+	var paths []string
+	ts := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			paths = append(paths, r.URL.Path)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"api_version":%d}`,
+				server.SessionAnnotationsAPIVersion-1)
+		}))
+	defer ts.Close()
+
+	for _, flag := range [][]string{{"--label", "ticket=A"}, {"--pr", "owner/repo"}} {
+		paths = nil
+		args := append([]string{"session", "list", "--server", ts.URL, "--json"}, flag...)
+		_, err := executeCommand(newRootCommand(), args...)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "restart or upgrade the server")
+		assert.Equal(t, []string{"/api/v1/version"}, paths)
+	}
+}
+
 func TestSessionList_ServerFlagDoesNotSendConfigAuthToken(t *testing.T) {
 	dataDir := newAgentDataDir(t)
 	t.Setenv("AGENTSVIEW_SERVER_TOKEN", "")

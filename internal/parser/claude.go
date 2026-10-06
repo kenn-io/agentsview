@@ -137,7 +137,8 @@ func claudeParseFile(
 		entrypoint       string
 		sessionKind      string
 		prLinks          prLinkCollector
-		prLinkAnchors    []int
+		prLinkAnchors    []string
+		entryParents     = map[string]string{}
 		foundParentSID   bool
 		uploadSessionID  string
 		uploadRoot       bool
@@ -291,7 +292,11 @@ func claudeParseFile(
 
 		if entryType == "pr-link" {
 			if link, ok := claudePRLink(lineBytes); ok && prLinks.add(link) {
-				prLinkAnchors = append(prLinkAnchors, len(entries)-1)
+				anchor := ""
+				if len(entries) > 0 {
+					anchor = entries[len(entries)-1].uuid
+				}
+				prLinkAnchors = append(prLinkAnchors, anchor)
 			}
 			continue
 		}
@@ -387,6 +392,7 @@ func claudeParseFile(
 
 		if uuid != "" {
 			hasAnyUUID = true
+			entryParents[uuid] = parentUuid
 		} else {
 			allHaveUUID = false
 		}
@@ -457,6 +463,7 @@ func claudeParseFile(
 		sessionKind:     sessionKind,
 		prLinks:         prLinks.result(),
 		prLinkAnchors:   prLinkAnchors,
+		entryParents:    entryParents,
 		malformedLines:  malformedLines,
 		isTruncated:     isTruncated,
 	}
@@ -1487,9 +1494,12 @@ type claudeSessionMeta struct {
 	entrypoint      string
 	sessionKind     string
 	prLinks         []PRLink
-	// prLinkAnchors holds, per prLinks entry, the index of the entry just
-	// before its first occurrence, or -1 when none preceded it.
-	prLinkAnchors  []int
+	// prLinkAnchors holds, per prLinks entry, the uuid of the entry just
+	// before its first occurrence, or "" when none preceded it.
+	prLinkAnchors []string
+	// entryParents maps every scanned uuid to its parentUuid, including
+	// entries that chunk merging or retry selection later drop.
+	entryParents   map[string]string
 	malformedLines int
 	isTruncated    bool
 }
@@ -1698,16 +1708,28 @@ func parseDAG(
 	branches = append(branches, forkBranches...)
 
 	// Each PR link belongs to the branch holding the entry just before its
-	// first occurrence; links with no such fork entry stay on main.
+	// first occurrence. An entry no branch kept resolves through its nearest
+	// kept ancestor; links with none stay on main.
 	branchPRLinks := make([][]PRLink, len(branches))
-	entryBranch := make(map[int]int)
-	for i, b := range branches[1:] {
+	uuidBranch := make(map[string]int)
+	for i, b := range branches {
 		for _, idx := range b.indices {
-			entryBranch[idx] = i + 1
+			uuidBranch[entries[idx].uuid] = i
 		}
 	}
 	for j, link := range meta.prLinks {
-		owner := entryBranch[meta.prLinkAnchors[j]]
+		owner := 0
+		uuid := meta.prLinkAnchors[j]
+		for range len(meta.entryParents) + 1 {
+			if uuid == "" {
+				break
+			}
+			if b, ok := uuidBranch[uuid]; ok {
+				owner = b
+				break
+			}
+			uuid = meta.entryParents[uuid]
+		}
 		branchPRLinks[owner] = append(branchPRLinks[owner], link)
 	}
 
@@ -2996,10 +3018,6 @@ func truncate(s string, maxLen int) string {
 	return stringutil.TruncateRunes(strings.TrimSpace(s), maxLen, "...")
 }
 
-// extractRenameName returns the argument of a Claude Code /rename
-// command envelope. The bool is true when content is a /rename
-// invocation (including an empty argument, which clears the name) and
-// false for any other command or non-command content.
 // claudePRLink decodes a Claude Code pr-link record:
 //
 //	{"type":"pr-link","prNumber":123,
@@ -3015,6 +3033,10 @@ func claudePRLink(line []byte) (PRLink, bool) {
 	)
 }
 
+// extractRenameName returns the argument of a Claude Code /rename
+// command envelope. The bool is true when content is a /rename
+// invocation (including an empty argument, which clears the name) and
+// false for any other command or non-command content.
 func extractRenameName(content string) (string, bool) {
 	m := xmlCmdNameRe.FindStringSubmatch(content)
 	if m == nil {

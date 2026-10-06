@@ -15,7 +15,9 @@ import (
 
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/servicehttp"
 )
 
 type sessionListDocument struct {
@@ -56,6 +58,12 @@ func newSessionListCommand() *cobra.Command {
 			}
 			activeSince = resolvedActiveSince
 
+			if remote, _ := cmd.Flags().GetString("server"); remote != "" &&
+				(len(labels) > 0 || pr != "") {
+				if err := requireRemoteAnnotationFilterSupport(cmd, remote); err != nil {
+					return err
+				}
+			}
 			svc, cleanup, err := resolveService(cmd)
 			if err != nil {
 				return err
@@ -229,6 +237,29 @@ func newSessionListCommand() *cobra.Command {
 		"Alias for --resume")
 
 	return cmd
+}
+
+// requireRemoteAnnotationFilterSupport refuses label and pull request
+// filters against a server that would silently ignore them.
+func requireRemoteAnnotationFilterSupport(cmd *cobra.Command, remote string) error {
+	token, err := explicitServerToken(cmd)
+	if err != nil {
+		return err
+	}
+	capabilities, err := servicehttp.ProbeHTTPServerCapabilities(
+		cmd.Context(), remote, token,
+	)
+	if err != nil {
+		return err
+	}
+	if capabilities.APIVersion < server.SessionAnnotationsAPIVersion {
+		return fmt.Errorf(
+			"server API version %d does not support --label or --pr filters; "+
+				"restart or upgrade the server",
+			capabilities.APIVersion,
+		)
+	}
+	return nil
 }
 
 func sessionListDefaultExclusionNotice(
