@@ -109,6 +109,14 @@ export type GetApiV1SessionsParams = {
    */
   starred?: boolean;
   /**
+   * Keep sessions carrying this exact label; repeat to require several
+   */
+  label?: string[];
+  /**
+   * Keep sessions linked to a pull request: owner/repo, owner/repo#123, or a pull request URL
+   */
+  pr?: string;
+  /**
    * Sort order: a comma-separated list of keys, each optionally suffixed :asc or :desc (e.g. messages:desc,started:asc). A key with no suffix uses the descending param, then its natural direction. Valid keys: recent, started, messages, user-messages, output-tokens, peak-context, failures, retries, edit-churn, compactions, context-pressure, health, secrets, id.
    */
   order_by?: string;

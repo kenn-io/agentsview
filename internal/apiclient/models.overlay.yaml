@@ -45,6 +45,18 @@ actions:
       x-go-type-import:
         path: go.kenn.io/agentsview/internal/db
         name: db
+  - target: $.components.schemas.DbSessionExternalParent
+    update:
+      x-go-type: db.SessionExternalParent
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/db
+        name: db
+  - target: $.components.schemas.DbSessionLabels
+    update:
+      x-go-type: db.SessionLabels
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/db
+        name: db
   - target: $.components.schemas.DbSessionStats
     update:
       x-go-type: db.SessionStats

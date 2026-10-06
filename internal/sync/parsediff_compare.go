@@ -288,6 +288,10 @@ func appendSessionMetadataDiffs(
 		diffs, FieldGitBranch, agent, stored.GitBranch, prepared.GitBranch,
 	)
 	diffs = appendScalarSessionDiff(
+		diffs, FieldPRLinks, agent,
+		db.EncodePRLinks(stored.PRLinks), db.EncodePRLinks(prepared.PRLinks),
+	)
+	diffs = appendScalarSessionDiff(
 		diffs, FieldRelationshipType, agent,
 		stored.RelationshipType, prepared.RelationshipType,
 	)

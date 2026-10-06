@@ -35,6 +35,12 @@ filter:
       - post-api-v1-secrets-scan
       - get-api-v1-projects
       - get-api-v1-sessions-id-usage
+      - get-api-v1-sessions-id-labels
+      - put-api-v1-sessions-id-labels
+      - patch-api-v1-sessions-id-labels
+      - get-api-v1-sessions-id-parent
+      - put-api-v1-sessions-id-parent
+      - delete-api-v1-sessions-id-parent
       - post-api-v1-data-compact
       - post-api-v1-embeddings-build
       - get-api-v1-embeddings-status
