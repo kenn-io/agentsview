@@ -279,10 +279,8 @@ func (b *httpBackend) FindSessionIDsByRawSuffix(
 	return response.JSON200.Ids, nil
 }
 
-// requireAnnotationFilters refuses label and pull request filters against a
-// server that would silently ignore them. It probes the version only when the
-// backend was built without one, so unfiltered calls cost no extra request.
-func (b *httpBackend) requireAnnotationFilters(ctx context.Context) error {
+// Probe only when the backend has no version so unfiltered lists need no extra request.
+func (b *httpBackend) requireSessionAnnotations(ctx context.Context) error {
 	version := b.apiVersion
 	if version == 0 {
 		capabilities, err := ProbeHTTPServerCapabilities(ctx, b.baseURL, b.token)
@@ -293,7 +291,7 @@ func (b *httpBackend) requireAnnotationFilters(ctx context.Context) error {
 	}
 	if version < service.SessionAnnotationsAPIVersion {
 		return fmt.Errorf(
-			"server API version %d does not support label or pull request filters; "+
+			"server API version %d does not support session labels, parent links, or their filters; "+
 				"restart or upgrade the server",
 			version,
 		)
@@ -305,7 +303,7 @@ func (b *httpBackend) List(
 	ctx context.Context, f service.ListFilter,
 ) (*service.SessionList, error) {
 	if len(f.Labels) > 0 || f.PR != "" {
-		if err := b.requireAnnotationFilters(ctx); err != nil {
+		if err := b.requireSessionAnnotations(ctx); err != nil {
 			return nil, err
 		}
 	}

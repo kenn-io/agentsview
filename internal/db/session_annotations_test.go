@@ -180,23 +180,42 @@ func TestSessionExternalParentApplication(t *testing.T) {
 		Session: Session{ID: "worker", Project: "proj", Machine: defaultMachine, Agent: defaultAgent, MessageCount: 1},
 	}})
 	require.NoError(t, err)
-	worker, err := d.GetSession(ctx, "worker")
+	// A fixed timestamp makes a rewrite detectable even within one clock tick.
+	_, err = d.getWriter().ExecContext(ctx,
+		"UPDATE sessions SET local_modified_at = ? WHERE id = ?", "2000-01-01T00:00:00.000Z", "worker")
+	require.NoError(t, err)
+	worker, err := d.GetSessionFull(ctx, "worker")
 	require.NoError(t, err)
 	require.NotNil(t, worker.ParentSessionID)
 	assert.Equal(t, "manager", *worker.ParentSessionID)
 	assert.Equal(t, "subagent", worker.RelationshipType)
+	require.NotNil(t, worker.LocalModifiedAt)
+	modifiedAt := worker.LocalModifiedAt
 
 	children, err := d.GetChildSessions(ctx, "manager")
 	require.NoError(t, err)
 	require.Len(t, children, 1)
 	assert.Equal(t, "worker", children[0].ID)
 
-	// Every parser rewrite replaces the column; the write restores the link.
+	// A parentless parser rewrite keeps the applied launcher link unchanged.
 	insertSession(t, d, "worker", "proj")
-	worker, err = d.GetSession(ctx, "worker")
+	worker, err = d.GetSessionFull(ctx, "worker")
 	require.NoError(t, err)
 	require.NotNil(t, worker.ParentSessionID)
 	assert.Equal(t, "manager", *worker.ParentSessionID)
+	assert.Equal(t, "subagent", worker.RelationshipType)
+	assert.Equal(t, modifiedAt, worker.LocalModifiedAt)
+
+	// Batch writes also replace usage events, which stamp local_modified_at.
+	_, err = d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{{
+		Session: Session{ID: "worker", Project: "proj", Machine: defaultMachine, Agent: defaultAgent, MessageCount: 1},
+	}})
+	require.NoError(t, err)
+	worker, err = d.GetSessionFull(ctx, "worker")
+	require.NoError(t, err)
+	require.NotNil(t, worker.ParentSessionID)
+	assert.Equal(t, "manager", *worker.ParentSessionID)
+	assert.Equal(t, "subagent", worker.RelationshipType)
 
 	link, err = d.GetSessionExternalParent(ctx, "worker")
 	require.NoError(t, err)
@@ -205,7 +224,7 @@ func TestSessionExternalParentApplication(t *testing.T) {
 	cleared, err := d.ClearSessionExternalParent(ctx, "worker")
 	require.NoError(t, err)
 	assert.False(t, cleared.Applied)
-	worker, err = d.GetSession(ctx, "worker")
+	worker, err = d.GetSessionFull(ctx, "worker")
 	require.NoError(t, err)
 	assert.Nil(t, worker.ParentSessionID)
 	assert.Empty(t, worker.RelationshipType)
