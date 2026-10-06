@@ -693,7 +693,6 @@ session that started them.
 
 ```bash
 agentsview session parent <worker-id> <manager-id>
-agentsview session parent <worker-id> <manager-id> --relationship fork
 agentsview session parent <worker-id>                    # show the link
 agentsview session parent <worker-id> --clear
 ```
@@ -704,9 +703,8 @@ agentsview session parent <worker-id> --clear
 | `PUT`    | `/api/v1/sessions/{id}/parent` | `{"parent_session_id": "<id>", "relationship_type": "subagent"}` |
 | `DELETE` | `/api/v1/sessions/{id}/parent` | —                                                                |
 
-`relationship_type` is `subagent` (the default), `fork`, or `continuation`. A
-launched worker is delegated work, so the default makes it a subagent of the
-launching session: it nests under that session in the sidebar, and
+`relationship_type` is `subagent`, which is also the default. A launched worker
+is delegated work, so the link makes it a subagent of the launching session: it nests under that session in the sidebar, and
 `session usage` includes its cost in the launcher's total. The response reports
 `session_found` and `applied`.
 

@@ -155,6 +155,20 @@ func ParsePRFilter(value string) (PRFilter, error) {
 // labelsColumn scans a JSON array of labels into a slice.
 type labelsColumn struct{ dst *[]string }
 
+// LabelsScanner scans a JSON array of labels into dst. An empty array scans
+// to nil, the value an unlabeled session carries on every backend.
+func LabelsScanner(dst *[]string) sql.Scanner { return labelsColumn{dst} }
+
+// LabelsArg returns labels as a non-nil slice for mirrors whose labels
+// column is a non-null array, so an unlabeled session writes an empty array
+// and fingerprints the same as one whose labels were all removed.
+func LabelsArg(labels []string) []string {
+	if labels == nil {
+		return []string{}
+	}
+	return labels
+}
+
 func (c labelsColumn) Scan(src any) error {
 	var text string
 	switch v := src.(type) {

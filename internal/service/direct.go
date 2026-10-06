@@ -251,7 +251,8 @@ func (b *directBackend) List(
 			f.OrderBy, err, strings.Join(db.SortKeys(), ", "),
 		)
 	}
-	if _, err := db.ParsePRFilter(f.PR); err != nil {
+	pr, err := db.ParsePRFilter(f.PR)
+	if err != nil {
 		return nil, fmt.Errorf("list: %w", err)
 	}
 	// Match the HTTP handler's clampLimit semantics: values over
@@ -264,6 +265,7 @@ func (b *directBackend) List(
 	}
 
 	filter := listFilterToDB(f)
+	filter.PR = pr
 	page, err := b.db.ListSessions(ctx, filter)
 	if err != nil {
 		return nil, err
@@ -307,8 +309,6 @@ func listFilterToDB(f ListFilter) db.SessionFilter {
 		Labels:               db.LabelFilterValues(f.Labels),
 		SecretsRulesVersions: secrets.ActiveRulesVersions(),
 	}
-	// List validates the value first; an invalid one cannot reach here.
-	filter.PR, _ = db.ParsePRFilter(f.PR)
 	// Parse the public sort spec into the structured, per-key form. The spec is
 	// validated in List before this runs, so a parse error here is treated
 	// defensively as the default sort. The legacy Descending param fills the
