@@ -41,7 +41,11 @@ func (s *RawProjectionStore) ExcludeTrashedSession(ctx context.Context, alias st
 	if err != nil {
 		return false, err
 	}
-	if err = s.publishRawExclusion(ctx, tx, target.GroupID); err != nil {
+	changes, err := s.materializeGroup(ctx, tx, target.GroupID)
+	if err != nil {
+		return false, err
+	}
+	if err = publishRawExclusion(ctx, tx, changes); err != nil {
 		return false, err
 	}
 	return true, tx.Commit()
@@ -75,6 +79,7 @@ func (s *RawProjectionStore) EmptyTrash(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	count := 0
+	var excluded [][]rawEmbeddingChange
 	for _, group := range groups {
 		ids, err := func() ([]string, error) {
 			rows, err := tx.QueryContext(ctx, `SELECT id FROM sessions WHERE raw_group_id=$1 AND raw_group_id<>'' AND deleted_at IS NOT NULL ORDER BY id`, group)
@@ -102,9 +107,16 @@ func (s *RawProjectionStore) EmptyTrash(ctx context.Context) (int, error) {
 			count++
 		}
 		if len(ids) > 0 {
-			if err = s.publishRawExclusion(ctx, tx, group); err != nil {
+			changes, err := s.materializeGroup(ctx, tx, group)
+			if err != nil {
 				return 0, err
 			}
+			excluded = append(excluded, changes)
+		}
+	}
+	for _, changes := range excluded {
+		if err = publishRawExclusion(ctx, tx, changes); err != nil {
+			return 0, err
 		}
 	}
 	return count, tx.Commit()
@@ -115,9 +127,13 @@ func excludeRawCohort(ctx context.Context, tx *sql.Tx, group, id string) error {
 	return err
 }
 
-func (s *RawProjectionStore) publishRawExclusion(ctx context.Context, tx *sql.Tx, group string) error {
-	if _, err := tx.ExecContext(ctx, `UPDATE raw_corpus_state SET identity_revision=identity_revision+1 WHERE singleton=1`); err != nil {
+// publishRawExclusion issues one identity and corpus revision for a group the
+// caller has already materialized, so the corpus row is locked only to publish.
+func publishRawExclusion(ctx context.Context, tx *sql.Tx, changes []rawEmbeddingChange) error {
+	var revision int64
+	err := tx.QueryRowContext(ctx, `UPDATE raw_corpus_state SET identity_revision=identity_revision+1,corpus_revision=corpus_revision+1 WHERE singleton=1 RETURNING corpus_revision`).Scan(&revision)
+	if err != nil {
 		return err
 	}
-	return s.publishRawCuration(ctx, tx, group)
+	return queueRawEmbeddingChanges(ctx, tx, changes, revision)
 }
