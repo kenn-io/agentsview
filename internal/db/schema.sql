@@ -68,6 +68,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     data_version INTEGER NOT NULL DEFAULT 0,
     cwd TEXT NOT NULL DEFAULT '',
     git_branch TEXT NOT NULL DEFAULT '',
+    -- JSON array of parser-derived pull request links; '' when none.
+    pr_links TEXT NOT NULL DEFAULT '',
     source_session_id TEXT NOT NULL DEFAULT '',
     source_version TEXT NOT NULL DEFAULT '',
     transcript_fidelity TEXT NOT NULL DEFAULT '',
@@ -731,6 +733,56 @@ CREATE TABLE IF NOT EXISTS starred_sessions (
     session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
+
+-- Session labels: user- or tool-supplied tags. Like project assignments,
+-- rows are keyed by session id without a foreign key so a launcher can
+-- label a session before sync imports it, and parser writes never touch
+-- them.
+CREATE TABLE IF NOT EXISTS session_labels (
+    session_id TEXT NOT NULL,
+    label      TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    PRIMARY KEY (session_id, label)
+);
+CREATE INDEX IF NOT EXISTS idx_session_labels_label
+    ON session_labels(label);
+
+-- Launcher-supplied parent links. A row applies to sessions.parent_session_id
+-- only while the parser found no parent, so parser-derived links win. The
+-- triggers re-apply the link after every parser write clears the column.
+CREATE TABLE IF NOT EXISTS session_external_parents (
+    session_id        TEXT PRIMARY KEY,
+    parent_session_id TEXT NOT NULL,
+    relationship_type TEXT NOT NULL DEFAULT 'subagent',
+    created_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE TRIGGER IF NOT EXISTS trg_sessions_apply_external_parent_insert
+AFTER INSERT ON sessions
+WHEN COALESCE(NEW.parent_session_id, '') = '' AND EXISTS (
+    SELECT 1 FROM session_external_parents WHERE session_id = NEW.id
+)
+BEGIN
+    UPDATE sessions
+    SET parent_session_id = ep.parent_session_id,
+        relationship_type = ep.relationship_type
+    FROM session_external_parents ep
+    WHERE sessions.id = NEW.id AND ep.session_id = NEW.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_sessions_apply_external_parent_update
+AFTER UPDATE OF parent_session_id ON sessions
+WHEN COALESCE(NEW.parent_session_id, '') = '' AND EXISTS (
+    SELECT 1 FROM session_external_parents WHERE session_id = NEW.id
+)
+BEGIN
+    UPDATE sessions
+    SET parent_session_id = ep.parent_session_id,
+        relationship_type = ep.relationship_type
+    FROM session_external_parents ep
+    WHERE sessions.id = NEW.id AND ep.session_id = NEW.id;
+END;
 
 -- Excluded sessions: tracks session IDs that were permanently
 -- deleted by the user so the sync engine does not re-import them.

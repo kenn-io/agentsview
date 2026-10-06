@@ -76,7 +76,17 @@ const sessionBaseCols = `id, project, machine, agent,
 	EXISTS (
 		SELECT 1 FROM session_project_assignments spa
 		WHERE spa.session_id = sessions.id
-	) AS project_assigned`
+	) AS project_assigned,
+	pr_links, ` + sessionLabelsSelectSQL
+
+// sessionLabelsSelectSQL reads a session's labels as a sorted JSON array.
+// The correlated lookup seeks the session_labels primary key.
+const sessionLabelsSelectSQL = `(
+		SELECT json_group_array(label) FROM (
+			SELECT sl.label FROM session_labels sl
+			WHERE sl.session_id = sessions.id ORDER BY sl.label
+		)
+	) AS labels`
 
 // sessionPruneCols extends sessionBaseCols with file metadata
 // needed by FindPruneCandidates.
@@ -108,7 +118,8 @@ const sessionPruneCols = `id, project, machine, agent,
 	transcript_fidelity,
 	parser_malformed_lines, is_truncated,
 	deleted_at, termination_status, transcript_revision,
-	file_path, file_size, created_at`
+	file_path, file_size, created_at,
+	pr_links, ` + sessionLabelsSelectSQL
 
 // sessionFullCols includes all columns for a complete session record.
 const sessionFullCols = `id, project, machine, agent,
@@ -147,7 +158,8 @@ const sessionFullCols = `id, project, machine, agent,
 	EXISTS (
 		SELECT 1 FROM session_project_assignments spa
 		WHERE spa.session_id = sessions.id
-	) AS project_assigned`
+	) AS project_assigned,
+	pr_links, ` + sessionLabelsSelectSQL
 
 const (
 	// DefaultSessionLimit is the default number of sessions returned.
@@ -202,6 +214,7 @@ func scanSessionRowWithSource(rs rowScanner, includeSource bool) (Session, error
 		&s.ParserMalformedLines, &s.IsTruncated,
 		&s.DeletedAt, &s.TerminationStatus,
 		&s.TranscriptRevision, &s.CreatedAt, &s.ProjectAssigned,
+		prLinksColumn{&s.PRLinks}, labelsColumn{&s.Labels},
 	}
 	if includeSource {
 		targets = append(targets, &s.FilePath, &s.FileSize, &s.LocalModifiedAt)
@@ -367,11 +380,17 @@ type Session struct {
 	Cwd                         string          `json:"cwd,omitempty"`
 	GitBranch                   string          `json:"git_branch,omitempty"`
 	ProjectAssigned             bool            `json:"project_assigned,omitempty"`
-	SourceSessionID             string          `json:"source_session_id,omitempty"`
-	SourceVersion               string          `json:"source_version,omitempty"`
-	TranscriptFidelity          string          `json:"transcript_fidelity,omitempty"`
-	ParserMalformedLines        int             `json:"parser_malformed_lines,omitzero"`
-	IsTruncated                 bool            `json:"is_truncated,omitzero"`
+	// PRLinks lists the pull or merge requests the source transcript
+	// associated with the session. Parser-owned: a full reparse replaces it.
+	PRLinks []PRLink `json:"pr_links,omitempty"`
+	// Labels are user- or tool-supplied tags. They are stored apart from
+	// parsed transcript data, so a reparse or resync never changes them.
+	Labels               []string `json:"labels,omitempty"`
+	SourceSessionID      string   `json:"source_session_id,omitempty"`
+	SourceVersion        string   `json:"source_version,omitempty"`
+	TranscriptFidelity   string   `json:"transcript_fidelity,omitempty"`
+	ParserMalformedLines int      `json:"parser_malformed_lines,omitzero"`
+	IsTruncated          bool     `json:"is_truncated,omitzero"`
 
 	DeletedAt         *string `json:"deleted_at,omitempty"`
 	DeletionCause     *string `json:"-"`
@@ -577,6 +596,11 @@ type SessionFilter struct {
 	MinToolFailures    *int     // minimum tool_failure_signal_count
 	HasSecret          bool     // only sessions with current secret_leak_count > 0
 	Starred            bool     // only sessions starred by the user
+	// Labels keeps sessions carrying every listed label (exact match).
+	Labels []string
+	// PR keeps sessions linked to a repository, optionally narrowed to one
+	// pull request number.
+	PR PRFilter
 	// SecretsRulesVersions limits HasSecret to sessions scanned by one of these
 	// current scanner versions. Empty preserves raw DB semantics for tests and
 	// direct store callers that explicitly want unversioned counts.
@@ -1226,6 +1250,7 @@ func scanSessionFullRow(row interface{ Scan(...any) error }, id string) (*Sessio
 		&s.FileInode, &s.FileDevice,
 		&s.FileHash, &s.LocalModifiedAt,
 		&s.TranscriptRevision, &s.CreatedAt, &s.ProjectAssigned,
+		prLinksColumn{&s.PRLinks}, labelsColumn{&s.Labels},
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -1395,8 +1420,9 @@ const insertSessionSQL = `
 			last_write_incremental,
 			file_path, file_size, file_mtime,
 			next_ordinal, last_entry_uuid, claude_linear_parse,
-			file_inode, file_device, file_hash
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			file_inode, file_device, file_hash,
+			pr_links
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 // insertSessionIfAbsentSQL inserts a session only when its id does not already
 // exist, leaving an existing row untouched.
@@ -1457,7 +1483,8 @@ const upsertSessionBaseSQL = insertSessionSQL + `
 				excluded.claude_linear_parse, sessions.claude_linear_parse),
 			file_inode = excluded.file_inode,
 			file_device = excluded.file_device,
-			file_hash = excluded.file_hash`
+			file_hash = excluded.file_hash,
+			pr_links = excluded.pr_links`
 
 const upsertSessionSQL = upsertSessionBaseSQL + `,
 			source_missing_at = NULL`
@@ -1501,6 +1528,7 @@ func upsertSessionArgs(s Session) []any {
 		s.FilePath, s.FileSize, s.FileMtime,
 		s.NextOrdinal, s.LastEntryUUID, s.ClaudeLinearParse,
 		s.FileInode, s.FileDevice, s.FileHash,
+		EncodePRLinks(s.PRLinks),
 	}
 }
 
@@ -5967,6 +5995,7 @@ func (db *DB) FindPruneCandidates(ctx context.Context,
 			&s.ParserMalformedLines, &s.IsTruncated,
 			&s.DeletedAt, &s.TerminationStatus, &s.TranscriptRevision,
 			&s.FilePath, &s.FileSize, &s.CreatedAt,
+			prLinksColumn{&s.PRLinks}, labelsColumn{&s.Labels},
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning prune candidate: %w", err)
@@ -6418,6 +6447,7 @@ func (db *DB) ListSessionsModifiedBetween(
 			&s.FileInode, &s.FileDevice,
 			&s.FileHash, &s.LocalModifiedAt,
 			&s.TranscriptRevision, &s.CreatedAt, &s.ProjectAssigned,
+			prLinksColumn{&s.PRLinks}, labelsColumn{&s.Labels},
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning session: %w", err)
@@ -6527,6 +6557,7 @@ func (db *DB) ListSessionsForMirrorWindow(
 			&s.FileInode, &s.FileDevice,
 			&s.FileHash, &s.LocalModifiedAt,
 			&s.TranscriptRevision, &s.CreatedAt, &s.ProjectAssigned,
+			prLinksColumn{&s.PRLinks}, labelsColumn{&s.Labels},
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning session: %w", err)

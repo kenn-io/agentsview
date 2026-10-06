@@ -403,6 +403,12 @@ func filterToQuery(f service.ListFilter) (*apiclient.GetAPIV1SessionsQuery, erro
 	if f.Starred {
 		q.Starred = new(true)
 	}
+	if len(f.Labels) > 0 {
+		q.Label = f.Labels
+	}
+	if f.PR != "" {
+		q.Pr = new(f.PR)
+	}
 	if f.Cursor != "" {
 		q.Cursor = new(f.Cursor)
 	}

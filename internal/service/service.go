@@ -407,8 +407,13 @@ type ListFilter struct {
 	MinToolFailures  *int   `json:"min_tool_failures,omitempty"`
 	HasSecret        bool   `json:"has_secret,omitempty"`
 	Starred          bool   `json:"starred,omitempty"`
-	Cursor           string `json:"cursor,omitempty"`
-	Limit            int    `json:"limit,omitempty"`
+	// Labels keeps sessions carrying every listed label.
+	Labels []string `json:"label,omitempty"`
+	// PR keeps sessions linked to a pull request: owner/repo,
+	// owner/repo#123, or a pull request URL.
+	PR     string `json:"pr,omitempty"`
+	Cursor string `json:"cursor,omitempty"`
+	Limit  int    `json:"limit,omitempty"`
 	// OrderBy selects the sort column ("" = recent activity). Descending
 	// overrides the sort key's canonical direction when non-nil.
 	OrderBy    string `json:"order_by,omitempty"`

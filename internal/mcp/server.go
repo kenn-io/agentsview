@@ -128,7 +128,7 @@ func newServer(opts ServeOptions) *mcp.Server {
 
 		mcp.AddTool(s, &mcp.Tool{
 			Name: ToolListSessions,
-			Description: "List recorded agent sessions with filters (project, agent, machine, date range). " +
+			Description: "List recorded agent sessions with filters (project, agent, machine, date range, labels, pull request). " +
 				"Returns compact metadata rows, newest first. For prior-work questions, prefer search_content " +
 				"with mode hybrid or semantic when a vector search index is configured; use search_sessions " +
 				"for keyword search.",

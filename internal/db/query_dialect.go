@@ -67,6 +67,14 @@ type QueryDialect struct {
 	// expression. Nil renders the correlated EXISTS the row stores use;
 	// ClickHouse needs an uncorrelated IN subquery.
 	starredPredicate func(idExpr string) string
+	// labelPredicate renders "the session carries this label". Nil reads
+	// the SQLite session_labels table; mirrors store labels as an array
+	// column on the session row.
+	labelPredicate func(q func(string) string, ph string) string
+	// prLinkPredicate renders "a stored pull request link matches this
+	// repository (and number when numPh is non-empty)" over the JSON text
+	// column col. Nil renders the SQLite json_each form.
+	prLinkPredicate func(col, repoPh, numPh string) string
 	// orphanPredicate renders the "parent row is missing" test used by
 	// BuildCanonicalRootWhere. Nil uses the configured parent relation.
 	orphanPredicate func(sessionAlias, parentAlias string) string
@@ -85,6 +93,28 @@ func (d QueryDialect) starredPredicateSQL(idExpr string) string {
 	}
 	return "EXISTS (SELECT 1 FROM starred_sessions ss WHERE ss.session_id = " +
 		idExpr + ")"
+}
+
+func (d QueryDialect) labelPredicateSQL(
+	q func(string) string, ph string,
+) string {
+	if d.labelPredicate != nil {
+		return d.labelPredicate(q, ph)
+	}
+	return "EXISTS (SELECT 1 FROM session_labels sl WHERE sl.session_id = " +
+		q("id") + " AND sl.label = " + ph + ")"
+}
+
+func (d QueryDialect) prLinkPredicateSQL(col, repoPh, numPh string) string {
+	if d.prLinkPredicate != nil {
+		return d.prLinkPredicate(col, repoPh, numPh)
+	}
+	pred := "EXISTS (SELECT 1 FROM json_each(NULLIF(" + col + ", '')) pl" +
+		" WHERE lower(json_extract(pl.value, '$.repository')) = " + repoPh
+	if numPh != "" {
+		pred += " AND json_extract(pl.value, '$.number') = " + numPh
+	}
+	return pred + ")"
 }
 
 func (d QueryDialect) orphanPredicateSQL(sessionAlias, parentAlias string) string {
@@ -181,6 +211,18 @@ func PostgresQueryDialect() QueryDialect {
 		sidebarChildRelationships:   []string{"subagent", "fork"},
 		canonicalChildRelationships: []string{"subagent", "fork", "continuation"},
 		nullsLast:                   true,
+		labelPredicate: func(q func(string) string, ph string) string {
+			return ph + " = ANY(" + q("labels") + ")"
+		},
+		prLinkPredicate: func(col, repoPh, numPh string) string {
+			pred := "EXISTS (SELECT 1 FROM jsonb_array_elements(NULLIF(" +
+				col + ", '')::jsonb) pl WHERE lower(pl->>'repository') = " +
+				repoPh
+			if numPh != "" {
+				pred += " AND (pl->>'number')::bigint = " + numPh
+			}
+			return pred + ")"
+		},
 	}
 }
 
@@ -227,6 +269,17 @@ func ClickHouseQueryDialect() QueryDialect {
 		recursiveUnion:              "UNION ALL",
 		starredPredicate: func(idExpr string) string {
 			return idExpr + " IN (SELECT session_id FROM starred_sessions)"
+		},
+		labelPredicate: func(q func(string) string, ph string) string {
+			return "has(" + q("labels") + ", " + ph + ")"
+		},
+		prLinkPredicate: func(col, repoPh, numPh string) string {
+			cond := "lower(JSONExtractString(pl, 'repository')) = " + repoPh
+			if numPh != "" {
+				cond += " AND JSONExtractInt(pl, 'number') = " + numPh
+			}
+			return "arrayExists(pl -> " + cond +
+				", JSONExtractArrayRaw(" + col + "))"
 		},
 		orphanPredicate: func(sessionAlias, _ string) string {
 			// NULL NOT IN (...) is unknown in SQL, so a child whose parent
@@ -293,6 +346,17 @@ func DuckDBQueryDialect() QueryDialect {
 		sidebarChildRelationships:   []string{"subagent", "fork"},
 		canonicalChildRelationships: []string{"subagent", "fork", "continuation"},
 		nullsLast:                   true,
+		labelPredicate: func(q func(string) string, ph string) string {
+			return "list_contains(" + q("labels") + ", " + ph + ")"
+		},
+		prLinkPredicate: func(col, repoPh, numPh string) string {
+			cond := "lower(pl->>'repository') = " + repoPh
+			if numPh != "" {
+				cond += " AND CAST(pl->>'number' AS BIGINT) = " + numPh
+			}
+			return "len(list_filter(CAST(json_extract(NULLIF(" + col +
+				", ''), '$[*]') AS JSON[]), pl -> " + cond + ")) > 0"
+		},
 	}
 }
 
@@ -803,6 +867,18 @@ func sessionFilterPredicates(
 	}
 	if f.Starred {
 		preds = append(preds, b.dialect.starredPredicateSQL(q("id")))
+	}
+	for _, label := range f.Labels {
+		preds = append(preds, b.dialect.labelPredicateSQL(q, b.Add(label)))
+	}
+	if !f.PR.IsZero() {
+		numPh := ""
+		repoPh := b.Add(strings.ToLower(f.PR.Repository))
+		if f.PR.Number > 0 {
+			numPh = b.Add(f.PR.Number)
+		}
+		preds = append(preds,
+			b.dialect.prLinkPredicateSQL(q("pr_links"), repoPh, numPh))
 	}
 	return preds, oneShotPred
 }

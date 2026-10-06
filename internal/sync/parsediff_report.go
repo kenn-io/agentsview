@@ -132,6 +132,7 @@ const (
 	FieldSessionKind          = "session_kind"
 	FieldCwd                  = "cwd"
 	FieldGitBranch            = "git_branch"
+	FieldPRLinks              = "pr_links"
 	FieldParentSessionID      = "parent_session_id"
 	FieldRelationshipType     = "relationship_type"
 	FieldSourceSessionID      = "source_session_id"

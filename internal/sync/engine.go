@@ -4886,6 +4886,61 @@ func (e *Engine) ClearSessionProjectAssignment(
 	return cleared, err
 }
 
+// SetSessionLabels replaces one session's labels, serialized with parser
+// writes, then publishes the changed session inventory.
+func (e *Engine) SetSessionLabels(
+	ctx context.Context, sessionID string, labels []string,
+) (db.SessionLabels, error) {
+	return runSessionAnnotationWrite(e, func() (db.SessionLabels, error) {
+		return e.db.SetSessionLabels(ctx, sessionID, labels)
+	})
+}
+
+// UpdateSessionLabels adds and removes one session's labels, serialized
+// with parser writes, then publishes the changed session inventory.
+func (e *Engine) UpdateSessionLabels(
+	ctx context.Context, sessionID string, add, remove []string,
+) (db.SessionLabels, error) {
+	return runSessionAnnotationWrite(e, func() (db.SessionLabels, error) {
+		return e.db.UpdateSessionLabels(ctx, sessionID, add, remove)
+	})
+}
+
+// SetSessionExternalParent records a launcher-supplied parent link,
+// serialized with parser writes so a concurrent parse cannot interleave
+// with the parent application.
+func (e *Engine) SetSessionExternalParent(
+	ctx context.Context, sessionID, parentID, relationshipType string,
+) (db.SessionExternalParent, error) {
+	return runSessionAnnotationWrite(e, func() (db.SessionExternalParent, error) {
+		return e.db.SetSessionExternalParent(
+			ctx, sessionID, parentID, relationshipType,
+		)
+	})
+}
+
+// ClearSessionExternalParent removes a launcher-supplied parent link.
+func (e *Engine) ClearSessionExternalParent(
+	ctx context.Context, sessionID string,
+) (db.SessionExternalParent, error) {
+	return runSessionAnnotationWrite(e, func() (db.SessionExternalParent, error) {
+		return e.db.ClearSessionExternalParent(ctx, sessionID)
+	})
+}
+
+func runSessionAnnotationWrite[T any](e *Engine, write func() (T, error)) (T, error) {
+	var result T
+	err := e.RunExclusive(func() error {
+		var err error
+		result, err = write()
+		return err
+	})
+	if err == nil {
+		e.emit("sessions")
+	}
+	return result, err
+}
+
 // SyncAll discovers and syncs all session files from all agents.
 func (e *Engine) SyncAll(
 	ctx context.Context, onProgress ProgressFunc,
@@ -15842,9 +15897,16 @@ func (e *Engine) tryProviderIncrementalAppend(
 		// command followed by a fresh response would force a full parse.
 		var storedLastClaudeMessageID *string
 		var storedSessionName *string
+		var storedPRLinkURLs map[string]struct{}
 		if provider.Definition().Type == parser.AgentClaude {
 			id := e.db.LastClaudeMessageID(ctx, inc.ID)
 			storedLastClaudeMessageID = &id
+			urls, uerr := e.db.GetSessionPRLinkURLs(ctx, inc.ID)
+			if uerr != nil {
+				return nil, nil, nil, nil, time.Time{}, 0, nil, nil,
+					fmt.Errorf("read stored Claude pr links: %w", uerr)
+			}
+			storedPRLinkURLs = urls
 			if !e.db.ArchiveContent().UsageOnly() {
 				name, found, nerr := e.db.GetSessionName(ctx, inc.ID)
 				if nerr != nil {
@@ -15874,6 +15936,7 @@ func (e *Engine) tryProviderIncrementalAppend(
 				StoredClaudeLinearParse:   inc.ClaudeLinearParse,
 				StoredLastClaudeMessageID: storedLastClaudeMessageID,
 				StoredSessionName:         storedSessionName,
+				StoredPRLinkURLs:          storedPRLinkURLs,
 				StoredPendingUsageOrdinal: inc.PendingUsageOrdinal,
 			},
 		)

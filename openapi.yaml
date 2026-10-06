@@ -1671,6 +1671,28 @@ components:
         - cacheReadTokens
         - cost
       type: object
+    DbPRLink:
+      additionalProperties: false
+      properties:
+        first_seen_at:
+          type: string
+        host:
+          type: string
+        number:
+          format: int64
+          type: integer
+        repository:
+          type: string
+        source:
+          type: string
+        url:
+          type: string
+      required:
+        - url
+        - host
+        - repository
+        - number
+      type: object
     DbPeakContextDistribution:
       additionalProperties: false
       properties:
@@ -2502,6 +2524,10 @@ components:
           type: boolean
         is_truncated:
           type: boolean
+        labels:
+          items:
+            type: string
+          type: array
         local_modified_at:
           type: string
         machine:
@@ -2528,6 +2554,10 @@ components:
         peak_context_tokens:
           format: int64
           type: integer
+        pr_links:
+          items:
+            $ref: "#/components/schemas/DbPRLink"
+          type: array
         project:
           type: string
         project_assigned:
@@ -2641,6 +2671,48 @@ components:
         - buckets
         - interval_seconds
         - total_messages
+      type: object
+    DbSessionExternalParent:
+      additionalProperties: false
+      properties:
+        applied:
+          type: boolean
+        created_at:
+          type: string
+        parent_session_id:
+          type: string
+        relationship_type:
+          type: string
+        session_found:
+          type: boolean
+        session_id:
+          type: string
+        updated_at:
+          type: string
+      required:
+        - session_id
+        - parent_session_id
+        - relationship_type
+        - created_at
+        - updated_at
+        - session_found
+        - applied
+      type: object
+    DbSessionLabels:
+      additionalProperties: false
+      properties:
+        labels:
+          items:
+            type: string
+          type: array
+        session_found:
+          type: boolean
+        session_id:
+          type: string
+      required:
+        - session_id
+        - labels
+        - session_found
       type: object
     DbSessionPage:
       additionalProperties: false
@@ -6466,6 +6538,10 @@ components:
           type: boolean
         is_truncated:
           type: boolean
+        labels:
+          items:
+            type: string
+          type: array
         local_modified_at:
           type: string
         machine:
@@ -6492,6 +6568,10 @@ components:
         peak_context_tokens:
           format: int64
           type: integer
+        pr_links:
+          items:
+            $ref: "#/components/schemas/DbPRLink"
+          type: array
         project:
           type: string
         project_assigned:
@@ -7107,6 +7187,33 @@ components:
         - success
         - username
       type: object
+    SetSessionLabelsInputBody:
+      additionalProperties: false
+      properties:
+        labels:
+          description: The complete label set; an empty list removes every label. Labels are free text, often key=value.
+          items:
+            type: string
+          type: array
+      required:
+        - labels
+      type: object
+    SetSessionParentInputBody:
+      additionalProperties: false
+      properties:
+        parent_session_id:
+          description: ID of the session that launched this one
+          type: string
+        relationship_type:
+          description: Relationship to the parent; defaults to subagent
+          enum:
+            - subagent
+            - fork
+            - continuation
+          type: string
+      required:
+        - parent_session_id
+      type: object
     SettingsResponse:
       additionalProperties: false
       properties:
@@ -7550,6 +7657,20 @@ components:
       required:
         - update_available
         - current_version
+      type: object
+    UpdateSessionLabelsInputBody:
+      additionalProperties: false
+      properties:
+        add:
+          description: Labels to add
+          items:
+            type: string
+          type: array
+        remove:
+          description: Labels to remove; absent labels are ignored
+          items:
+            type: string
+          type: array
       type: object
     UploadSessionResponse:
       additionalProperties: false
@@ -17541,6 +17662,22 @@ paths:
           schema:
             description: Filter sessions by starred status
             type: boolean
+        - description: Keep sessions carrying this exact label; repeat to require several
+          explode: true
+          in: query
+          name: label
+          schema:
+            description: Keep sessions carrying this exact label; repeat to require several
+            items:
+              type: string
+            type: array
+        - description: "Keep sessions linked to a pull request: owner/repo, owner/repo#123, or a pull request URL"
+          explode: false
+          in: query
+          name: pr
+          schema:
+            description: "Keep sessions linked to a pull request: owner/repo, owner/repo#123, or a pull request URL"
+            type: string
         - description: "Sort order: a comma-separated list of keys, each optionally suffixed :asc or :desc (e.g. messages:desc,started:asc). A key with no suffix uses the descending param, then its natural direction. Valid keys: recent, started, messages, user-messages, output-tokens, peak-context, failures, retries, edit-churn, compactions, context-pressure, health, secrets, id."
           explode: false
           in: query
@@ -17913,6 +18050,22 @@ paths:
           schema:
             description: Filter sessions by starred status
             type: boolean
+        - description: Keep sessions carrying this exact label; repeat to require several
+          explode: true
+          in: query
+          name: label
+          schema:
+            description: Keep sessions carrying this exact label; repeat to require several
+            items:
+              type: string
+            type: array
+        - description: "Keep sessions linked to a pull request: owner/repo, owner/repo#123, or a pull request URL"
+          explode: false
+          in: query
+          name: pr
+          schema:
+            description: "Keep sessions linked to a pull request: owner/repo, owner/repo#123, or a pull request URL"
+            type: string
         - description: "Sort order: a comma-separated list of keys, each optionally suffixed :asc or :desc (e.g. messages:desc,started:asc). A key with no suffix uses the descending param, then its natural direction. Valid keys: recent, started, messages, user-messages, output-tokens, peak-context, failures, retries, edit-churn, compactions, context-pressure, health, secrets, id."
           explode: false
           in: query
@@ -18742,6 +18895,277 @@ paths:
       summary: Export session as HTML
       tags:
         - Sessions
+  /api/v1/sessions/{id}/labels:
+    get:
+      operationId: get-api-v1-sessions-id-labels
+      parameters:
+        - description: Session ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Session ID
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DbSessionLabels"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Get session labels
+      tags:
+        - Sessions
+    patch:
+      operationId: patch-api-v1-sessions-id-labels
+      parameters:
+        - description: Session ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Session ID
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSessionLabelsInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DbSessionLabels"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Add or remove session labels
+      tags:
+        - Sessions
+    put:
+      operationId: put-api-v1-sessions-id-labels
+      parameters:
+        - description: Session ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Session ID
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetSessionLabelsInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DbSessionLabels"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Replace session labels
+      tags:
+        - Sessions
   /api/v1/sessions/{id}/md:
     get:
       operationId: get-api-v1-sessions-id-md
@@ -19299,6 +19723,271 @@ paths:
                 $ref: "#/components/schemas/ApiErrorResponse"
           description: Gateway Timeout
       summary: Open session directory
+      tags:
+        - Sessions
+  /api/v1/sessions/{id}/parent:
+    delete:
+      operationId: delete-api-v1-sessions-id-parent
+      parameters:
+        - description: Session ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Session ID
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DbSessionExternalParent"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Remove session parent link
+      tags:
+        - Sessions
+    get:
+      operationId: get-api-v1-sessions-id-parent
+      parameters:
+        - description: Session ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Session ID
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DbSessionExternalParent"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Get session parent link
+      tags:
+        - Sessions
+    put:
+      operationId: put-api-v1-sessions-id-parent
+      parameters:
+        - description: Session ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Session ID
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetSessionParentInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DbSessionExternalParent"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Set session parent link
       tags:
         - Sessions
   /api/v1/sessions/{id}/permanent:

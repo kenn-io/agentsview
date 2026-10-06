@@ -36,6 +36,8 @@ func newSessionListCommand() *cobra.Command {
 		outcome, healthGrade                    string
 		minToolFailures                         int
 		hasSecret                               bool
+		labels                                  []string
+		pr                                      string
 		cursor                                  string
 		limit                                   int
 		sort                                    string
@@ -79,6 +81,8 @@ func newSessionListCommand() *cobra.Command {
 				Outcome:          outcome,
 				HealthGrade:      healthGrade,
 				HasSecret:        hasSecret,
+				Labels:           labels,
+				PR:               pr,
 				Cursor:           cursor,
 				Limit:            limit,
 			}
@@ -199,6 +203,10 @@ func newSessionListCommand() *cobra.Command {
 		"Minimum tool-failure signal count (0 is a valid filter)")
 	flags.BoolVar(&hasSecret, "has-secret", false,
 		"Only sessions with detected secret leaks")
+	flags.StringArrayVar(&labels, "label", nil,
+		"Only sessions carrying this exact label (repeat to require several)")
+	flags.StringVar(&pr, "pr", "",
+		"Only sessions linked to a pull request: owner/repo, owner/repo#123, or a URL")
 	flags.StringVar(&cursor, "cursor", "",
 		"Pagination cursor from a previous response")
 	flags.IntVar(&limit, "limit", 0,
