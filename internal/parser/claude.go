@@ -137,8 +137,6 @@ func claudeParseFile(
 		entrypoint       string
 		sessionKind      string
 		prLinks          prLinkCollector
-		prLinkAnchors    []string
-		entryParents     = map[string]string{}
 		foundParentSID   bool
 		uploadSessionID  string
 		uploadRoot       bool
@@ -291,12 +289,8 @@ func claudeParseFile(
 		}
 
 		if entryType == "pr-link" {
-			if link, ok := claudePRLink(lineBytes); ok && prLinks.add(link) {
-				anchor := ""
-				if len(entries) > 0 {
-					anchor = entries[len(entries)-1].uuid
-				}
-				prLinkAnchors = append(prLinkAnchors, anchor)
+			if link, ok := claudePRLink(lineBytes); ok {
+				prLinks.add(link)
 			}
 			continue
 		}
@@ -392,7 +386,6 @@ func claudeParseFile(
 
 		if uuid != "" {
 			hasAnyUUID = true
-			entryParents[uuid] = parentUuid
 		} else {
 			allHaveUUID = false
 		}
@@ -462,8 +455,6 @@ func claudeParseFile(
 		entrypoint:      entrypoint,
 		sessionKind:     sessionKind,
 		prLinks:         prLinks.result(),
-		prLinkAnchors:   prLinkAnchors,
-		entryParents:    entryParents,
 		malformedLines:  malformedLines,
 		isTruncated:     isTruncated,
 	}
@@ -1494,14 +1485,8 @@ type claudeSessionMeta struct {
 	entrypoint      string
 	sessionKind     string
 	prLinks         []PRLink
-	// prLinkAnchors holds, per prLinks entry, the uuid of the entry just
-	// before its first occurrence, or "" when none preceded it.
-	prLinkAnchors []string
-	// entryParents maps every scanned uuid to its parentUuid, including
-	// entries that chunk merging or retry selection later drop.
-	entryParents   map[string]string
-	malformedLines int
-	isTruncated    bool
+	malformedLines  int
+	isTruncated     bool
 }
 
 // applyTo sets source metadata fields on a ParsedSession.
@@ -1707,32 +1692,6 @@ func parseDAG(
 	)
 	branches = append(branches, forkBranches...)
 
-	// Each PR link belongs to the branch holding the entry just before its
-	// first occurrence. An entry no branch kept resolves through its nearest
-	// kept ancestor; links with none stay on main.
-	branchPRLinks := make([][]PRLink, len(branches))
-	uuidBranch := make(map[string]int)
-	for i, b := range branches {
-		for _, idx := range b.indices {
-			uuidBranch[entries[idx].uuid] = i
-		}
-	}
-	for j, link := range meta.prLinks {
-		owner := 0
-		uuid := meta.prLinkAnchors[j]
-		for range len(meta.entryParents) + 1 {
-			if uuid == "" {
-				break
-			}
-			if b, ok := uuidBranch[uuid]; ok {
-				owner = b
-				break
-			}
-			uuid = meta.entryParents[uuid]
-		}
-		branchPRLinks[owner] = append(branchPRLinks[owner], link)
-	}
-
 	// Build results for each branch.
 	var results []ParseResult
 
@@ -1800,7 +1759,6 @@ func parseDAG(
 			ClaudeLinearParse: &linear,
 		}
 		meta.applyTo(&sess)
-		sess.PRLinks = branchPRLinks[i]
 		if err := accumulateMessageTokenUsageContext(
 			ctx, &sess, messages,
 		); err != nil {

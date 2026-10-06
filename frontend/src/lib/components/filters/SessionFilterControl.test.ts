@@ -140,14 +140,9 @@ describe("SessionFilterControl label and pull request filters", () => {
     expect(sessions.filters.labels).toEqual(["role=reviewer"]);
   });
 
-  it("applies a valid pull request and rejects a malformed one", async () => {
+  it("applies a pull request filter and clears it from its row", async () => {
     await openControl();
     const input = screen.getByRole("textbox", { name: "Filter by pull request" });
-
-    await submit(input, "widgets#42");
-    expect(sessions.filters.pr).toBe("");
-    expect(input.getAttribute("aria-invalid")).toBe("true");
-    expect(screen.getByText("Use owner/repo, owner/repo#123, or a pull request URL.")).toBeTruthy();
 
     await submit(input, "acme/widgets#42");
     expect(sessions.filters.pr).toBe("acme/widgets#42");

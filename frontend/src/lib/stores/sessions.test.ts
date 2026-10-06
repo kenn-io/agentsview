@@ -2301,6 +2301,28 @@ describe("SessionsStore", () => {
       expectSidebarIndexCalledWith({ pr: undefined });
     });
 
+    it("shows a rejected pull request filter instead of the previous rows", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "before-filter" })]);
+      await sessions.load();
+      expect(sessions.sessions).toHaveLength(1);
+
+      const rejected = 'pr filter "https://github.com/acme/widgets": not a pull or merge request URL';
+      vi.mocked(api.getSidebarSessionIndex).mockRejectedValueOnce(new ApiError(400, rejected));
+      sessions.setPRFilter("https://github.com/acme/widgets");
+      await vi.waitFor(() => {
+        expect(sessions.sidebarLoadError).toBe(rejected);
+      });
+      expect(sessions.sessions).toEqual([]);
+      expect(sessions.total).toBe(0);
+
+      mockSidebarIndex([makeSkinnyRow({ id: "after-fix" })]);
+      sessions.setPRFilter("");
+      await vi.waitFor(() => {
+        expect(sessions.sidebarLoadError).toBeNull();
+      });
+      expect(sessions.sessions.map((s) => s.id)).toEqual(["after-fix"]);
+    });
+
     it("passes label and pull request filters to later pages", async () => {
       sessions.filters.labels = ["ticket=ABC-123"];
       sessions.filters.pr = "acme/widgets";

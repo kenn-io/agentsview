@@ -549,6 +549,10 @@
   </div>
 </div>
 
+{#if sessions.sidebarLoadError}
+  <div class="sidebar-load-error" role="alert">{sessions.sidebarLoadError}</div>
+{/if}
+
 {#if sessions.selectMode}
   <div class="batch-toolbar">
     <button
@@ -730,6 +734,12 @@
 
   .loading-indicator {
     color: var(--accent-green);
+  }
+
+  .sidebar-load-error {
+    padding: 4px 12px;
+    font-size: 11px;
+    color: var(--accent-red);
   }
 
   /* Snippet rendered inside SessionFilterControl carries this

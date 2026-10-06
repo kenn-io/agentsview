@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { displayPRLinks, isValidPRFilter, prLinkLabel, safeExternalHref } from "./prLinks.js";
+import { displayPRLinks, prLinkLabel, safeExternalHref } from "./prLinks.js";
 
 describe("safeExternalHref", () => {
   it.each([
@@ -79,30 +79,5 @@ describe("displayPRLinks", () => {
 
   it("returns nothing for a session without links", () => {
     expect(displayPRLinks(undefined)).toEqual([]);
-  });
-});
-
-describe("isValidPRFilter", () => {
-  it.each([
-    "",
-    "acme/widgets",
-    " acme/widgets#42 ",
-    "/acme/widgets/",
-    "group/sub/project#3",
-    "https://github.com/acme/widgets/pull/42",
-  ])("accepts %j", (value) => {
-    expect(isValidPRFilter(value)).toBe(true);
-  });
-
-  it.each([
-    "widgets",
-    "widgets#42",
-    "acme/widgets#",
-    "acme/widgets#0",
-    "acme/widgets#abc",
-    "acme/my widgets",
-    "javascript://acme/widgets",
-  ])("rejects %j", (value) => {
-    expect(isValidPRFilter(value)).toBe(false);
   });
 });

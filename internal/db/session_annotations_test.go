@@ -179,6 +179,7 @@ func TestSessionExternalParentApplication(t *testing.T) {
 	assert.Equal(t, DefaultExternalRelationshipType, link.RelationshipType)
 
 	insertSession(t, d, "worker", "proj")
+	require.NoError(t, d.LinkSubagentSessions())
 	worker, err := d.GetSession(ctx, "worker")
 	require.NoError(t, err)
 	require.NotNil(t, worker.ParentSessionID)
@@ -190,8 +191,9 @@ func TestSessionExternalParentApplication(t *testing.T) {
 	require.Len(t, children, 1)
 	assert.Equal(t, "worker", children[0].ID)
 
-	// Every parser rewrite clears the column; the link survives it.
+	// Every parser rewrite clears the column; linking restores the link.
 	insertSession(t, d, "worker", "proj")
+	require.NoError(t, d.LinkSubagentSessions())
 	worker, err = d.GetSession(ctx, "worker")
 	require.NoError(t, err)
 	require.NotNil(t, worker.ParentSessionID)
@@ -246,6 +248,7 @@ func TestSessionExternalParentSkipsLinkThatClosesCycle(t *testing.T) {
 		s.ParentSessionID = &nativeParent
 		s.RelationshipType = "continuation"
 	})
+	require.NoError(t, d.LinkSubagentSessions())
 
 	assertParents := func(t *testing.T) {
 		t.Helper()
@@ -265,7 +268,43 @@ func TestSessionExternalParentSkipsLinkThatClosesCycle(t *testing.T) {
 
 	// A reparse of a must not re-apply the link.
 	insertSession(t, d, "a", "proj")
+	require.NoError(t, d.LinkSubagentSessions())
 	assertParents(t)
+}
+
+func TestSessionExternalParentReturnsWhenNativeCycleGoesAway(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "manager", "proj")
+	insertSession(t, d, "worker", "proj")
+	_, err := d.SetSessionExternalParent(ctx, "worker", "manager", "")
+	require.NoError(t, err)
+
+	// An imported transcript puts the manager under the worker.
+	nativeParent := "worker"
+	insertSession(t, d, "manager", "proj", func(s *Session) {
+		s.ParentSessionID = &nativeParent
+		s.RelationshipType = "continuation"
+	})
+	_, err = d.LinkSubagentSessionsForSessions(ctx, []string{"manager"})
+	require.NoError(t, err)
+	worker, err := d.GetSession(ctx, "worker")
+	require.NoError(t, err)
+	assert.Nil(t, worker.ParentSessionID)
+
+	// A reparse of the manager without that parent puts the worker back.
+	insertSession(t, d, "manager", "proj")
+	linked, err := d.LinkSubagentSessionsForSessions(ctx, []string{"manager"})
+	require.NoError(t, err)
+	assert.Equal(t, 1, linked)
+	worker, err = d.GetSession(ctx, "worker")
+	require.NoError(t, err)
+	require.NotNil(t, worker.ParentSessionID)
+	assert.Equal(t, "manager", *worker.ParentSessionID)
+	children, err := d.GetChildSessions(ctx, "manager")
+	require.NoError(t, err)
+	require.Len(t, children, 1)
+	assert.Equal(t, "worker", children[0].ID)
 }
 
 func TestSessionExternalParentRejectsInvalidLinks(t *testing.T) {

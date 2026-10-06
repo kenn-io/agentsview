@@ -388,6 +388,7 @@ type Session struct {
 	PRLinks []PRLink `json:"pr_links" required:"false"`
 	// Labels are user- or tool-supplied tags. They are stored apart from
 	// parsed transcript data, so a reparse or resync never changes them.
+	// Always serialized, as [] when empty, like PRLinks.
 	Labels               []string `json:"labels" required:"false"`
 	SourceSessionID      string   `json:"source_session_id,omitempty"`
 	SourceVersion        string   `json:"source_version,omitempty"`
@@ -1985,10 +1986,14 @@ func (db *DB) LinkSubagentSessionsContext(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("counting linked subagent sessions: %w", err)
 	}
+	launched, err := applySessionExternalParents(ctx, tx)
+	if err != nil {
+		return 0, err
+	}
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("committing subagent linking: %w", err)
 	}
-	return repaired + int(updated), nil
+	return repaired + int(updated) + launched, nil
 }
 
 // selfParentRepairStateKey marks the archive as having cleared the
@@ -2168,6 +2173,11 @@ func (db *DB) LinkSubagentSessionsForSessions(ctx context.Context, ids []string)
 	if err != nil {
 		return 0, err
 	}
+	launched, err := applySessionExternalParents(ctx, tx)
+	if err != nil {
+		return 0, err
+	}
+	updated += launched
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("committing scoped subagent linking: %w", err)
 	}
@@ -2391,6 +2401,11 @@ func (db *DB) RepairQueuedSubagentParentsContext(
 			onProgress(done, total)
 		}
 	}
+	launched, err := applySessionExternalParents(ctx, tx)
+	if err != nil {
+		return 0, err
+	}
+	updated += launched
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("committing queued subagent parent repair: %w", err)
 	}
