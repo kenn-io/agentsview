@@ -9,8 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Ports jilog detectors.rs tests :670-820 (coding corrections), with
-// corrective wording added where jilog's text had none.
+// Adapted from jilog detectors.rs tests :670-820 (coding corrections). Fixtures
+// carry corrective wording because agentsview gates coding corrections on it.
 func TestDetectCorrections(t *testing.T) {
 	tests := []struct {
 		name string

@@ -42,8 +42,8 @@ func firstMatch(res []*regexp.Regexp, text string) (int, bool) {
 
 // DetectCorrections adapts detect_corrections (jilog detectors.rs:108-168):
 // an assistant→user→assistant window whose user text is at most 200 bytes
-// raw and at least 15 bytes trimmed. Unlike jilog, it also requires the
-// chat corrective-language gate, so plain instructions aren't corrections.
+// raw and at least 15 bytes trimmed. Unlike jilog, it also requires one of
+// the chat corrective markers, so a reply with no corrective wording isn't one.
 func DetectCorrections(msgs []Message, subjectID string) []Signal {
 	return detectCorrections(msgs, subjectID, false)
 }

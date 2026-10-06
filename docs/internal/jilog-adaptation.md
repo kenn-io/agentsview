@@ -90,7 +90,8 @@ approved mapping, not current behavior.
   heading is `# Friction Log — <date>`.
 - Coding corrections require the chat marker patterns too. jilog counts every
   15-200 byte user turn between two assistant turns, so instructions such as
-  "now run the tests" became corrections.
+  "now run the tests" became corrections. Instructions that contain "don't" or
+  "do not", or start with "no,", still match.
 - The adapter removes system, compact-boundary, and tool-result rows from every
   correction stream, extending jilog's NanoClaw rule to all sessions.
 - The adapter drops thinking blocks and tool renderings from stored assistant
