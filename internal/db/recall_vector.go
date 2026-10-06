@@ -19,24 +19,12 @@ const (
 // such as the timestamp watermarks of read-only legacy archives, so callers
 // can fall back to an exact comparison.
 func RecallCorpusRevisionLag(completed, current string) (lag int64, ok bool) {
-	c, okC := parseRecallCorpusCounter(completed)
-	w, okW := parseRecallCorpusCounter(current)
+	c, okC := parseRecallCorpusRevision(completed)
+	w, okW := parseRecallCorpusRevision(current)
 	if !okC || !okW {
 		return 0, false
 	}
 	return w - c, true
-}
-
-func parseRecallCorpusCounter(revision string) (int64, bool) {
-	digits, found := strings.CutPrefix(revision, recallCorpusRevisionPrefix)
-	if !found {
-		return 0, false
-	}
-	n, err := strconv.ParseInt(digits, 10, 64)
-	if err != nil || n < 0 {
-		return 0, false
-	}
-	return n, true
 }
 
 // RecallCorpusRevision returns a stable source revision for freshness checks.

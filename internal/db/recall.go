@@ -1110,20 +1110,11 @@ func (db *DB) queryRecallEntriesVector(
 		if err != nil {
 			return RecallPage{}, err
 		}
-		// The index may lag the corpus, so snapshot validation accepts a
-		// corpus that moved. Fence the page read through that validation, so
-		// an entry deleted, rejected or demoted before validation returns
-		// never stays in the page.
-		var page RecallPage
-		err = db.fenceRecallRead(ctx, func() error {
-			var readErr error
-			page, readErr = db.recallPageFromVectorHits(ctx, q, hits, limit)
-			if readErr != nil {
-				return readErr
-			}
-			return searcher.ValidateRecallSnapshot(ctx, snapshot)
-		})
+		page, err := db.recallPageFromVectorHits(ctx, q, hits, limit)
 		if err != nil {
+			return RecallPage{}, err
+		}
+		if err := searcher.ValidateRecallSnapshot(ctx, snapshot); err != nil {
 			return RecallPage{}, err
 		}
 		if len(page.RecallEntries) >= limit || exhausted {
@@ -1200,24 +1191,16 @@ func (db *DB) queryRecallEntriesHybrid(
 ) (RecallPage, error) {
 	limit := recallLimit(q.Limit)
 	candidateQuery := q
-	candidateQuery.Mode = RecallQueryModeLexical
 	candidateQuery.Limit = MaxRecallEntryLimit
-	lexical, err := db.queryRecallEntriesLexical(ctx, candidateQuery)
-	if err != nil {
-		return RecallPage{}, err
-	}
+	// The vector leg waits on query encoding, so the lexical leg reads after
+	// it; otherwise an entry hidden during encoding keeps its lexical rank.
 	candidateQuery.Mode = RecallQueryModeVector
 	vector, err := db.queryRecallEntriesVector(ctx, candidateQuery)
 	if err != nil {
 		return RecallPage{}, err
 	}
-	// The lexical leg read its entries before the query was encoded, and the
-	// Recall index may lag the corpus, so an entry deleted, rejected or
-	// demoted in between would otherwise survive fusion on its lexical rank.
-	// Reload both legs' candidates at one revision before fusing them.
-	lexical.RecallEntries, vector.RecallEntries, err = db.keepVisibleRecallResults(
-		ctx, candidateQuery, lexical.RecallEntries, vector.RecallEntries,
-	)
+	candidateQuery.Mode = RecallQueryModeLexical
+	lexical, err := db.queryRecallEntriesLexical(ctx, candidateQuery)
 	if err != nil {
 		return RecallPage{}, err
 	}
@@ -1248,79 +1231,6 @@ func (db *DB) queryRecallEntriesHybrid(
 		page.RecallEntries = append(page.RecallEntries, result)
 	}
 	return page, nil
-}
-
-// keepVisibleRecallResults drops every lexical and vector result whose entry
-// no longer matches q, and refreshes the rest, from one fenced read.
-func (db *DB) keepVisibleRecallResults(
-	ctx context.Context, q RecallQuery, lexical, vector []RecallResult,
-) ([]RecallResult, []RecallResult, error) {
-	ids := make([]string, 0, len(lexical)+len(vector))
-	seen := make(map[string]struct{}, len(lexical)+len(vector))
-	for _, result := range slices.Concat(lexical, vector) {
-		if _, ok := seen[result.ID]; ok {
-			continue
-		}
-		seen[result.ID] = struct{}{}
-		ids = append(ids, result.ID)
-	}
-	var entries []RecallEntry
-	err := db.fenceRecallRead(ctx, func() error {
-		var readErr error
-		entries, readErr = db.listRecallEntriesByIDs(ctx, q, ids)
-		return readErr
-	})
-	if err != nil {
-		return nil, nil, err
-	}
-	current := make(map[string]RecallEntry, len(entries))
-	for _, entry := range entries {
-		current[entry.ID] = entry
-	}
-	keep := func(results []RecallResult) []RecallResult {
-		kept := make([]RecallResult, 0, len(results))
-		for _, result := range results {
-			entry, ok := current[result.ID]
-			if !ok {
-				continue
-			}
-			result.RecallEntry = entry
-			kept = append(kept, result)
-		}
-		return kept
-	}
-	return keep(lexical), keep(vector), nil
-}
-
-// recallFencedReadAttempts bounds how often a fenced Recall read starts over
-// because the corpus moved underneath it.
-const recallFencedReadAttempts = 3
-
-// fenceRecallRead runs read between two reads of the Recall query revision,
-// which every entry or evidence write bumps, and starts it over when a write
-// landed in between. What read returns therefore matched the corpus at one
-// revision, taken after its last step. Archives that predate the query
-// revision cannot change, so their read runs once.
-func (db *DB) fenceRecallRead(ctx context.Context, read func() error) error {
-	for range recallFencedReadAttempts {
-		before, err := db.RecallQueryRevision(ctx)
-		if err != nil {
-			return err
-		}
-		if err := read(); err != nil {
-			return err
-		}
-		after, err := db.RecallQueryRevision(ctx)
-		if err != nil {
-			return err
-		}
-		if before == after {
-			return nil
-		}
-	}
-	return NewSemanticUnavailableError(
-		"recall corpus changed during search; retry the query",
-	)
 }
 
 func recallResultRankedUnits(results []RecallResult) []RankedUnit {

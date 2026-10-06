@@ -1305,72 +1305,32 @@ func TestRecallSchedulerStartupDoesNotDependOnRunAfterSync(t *testing.T) {
 }
 
 func TestRecallSearchRejectsCorpusMutationUntilRefresh(t *testing.T) {
-	dataDir := t.TempDir()
-	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
-	dbtest.SeedSession(t, database, "s1", "agentsview")
-	_, err := database.InsertRecallEntry(t.Context(), db.RecallEntry{
-		ID: "entry-1", Type: "fact", Scope: "project", Status: "accepted",
-		Title: "Database pool", Body: "Reuse idle connections.",
-		SourceSessionID: "s1", ExtractorMethod: "import-v1",
-	})
-	require.NoError(t, err)
-
-	stub := newEmbeddingsStubServer(t, 3)
-	t.Cleanup(stub.Close)
-	cfg := vectorTestConfig(dataDir)
-	embeddingsServer := cfg.Vector.Embeddings.Servers["local"]
-	embeddingsServer.Endpoint = stub.URL + "/v1"
-	cfg.Vector.Embeddings.Servers["local"] = embeddingsServer
-
-	ix, err := vector.OpenSpec(
-		t.Context(), cfg.Vector.ResolvedDBPath(dataDir),
-		vector.RecallIndexSpec(), false, cfg.Vector.Embeddings.MaxInputChars,
-	)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, ix.Close()) })
-	encoders, err := vectorDocumentEncoderSet(cfg.Vector.Embeddings)
-	require.NoError(t, err)
-	mgr := embeddingManager(ix, database, encoders, cfg, vector.RecallIndexSpec().Name)
-	started, err := mgr.TryBuild(t.Context(), vector.BuildRequest{})
-	require.NoError(t, err)
-	require.True(t, started)
-
-	queryEncoder, err := newVectorQueryEncoder(cfg.Vector.Embeddings, "")
-	require.NoError(t, err)
-	searcher := recallSearcherAdapter{
-		ix: ix, enc: queryEncoder, database: database, cfg: cfg,
-	}
-	_, _, _, err = searcher.SearchRecall(t.Context(), "connection reuse", 5)
+	l := newLaggedRecallSearch(t, 0, "")
+	searcher := l.searcher
+	_, _, _, err := searcher.SearchRecall(t.Context(), "connection reuse", 5)
 	require.NoError(t, err)
 
 	searcher.enc = func(
 		ctx context.Context, texts []string,
 	) ([][]float32, error) {
-		if updateErr := database.Update(ctx, func(tx *sql.Tx) error {
-			_, execErr := tx.ExecContext(ctx, `
-				UPDATE recall_entries
-				SET title = 'Connection policy',
-					updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-				WHERE id = 'entry-1'`)
-			return execErr
-		}); updateErr != nil {
-			return nil, updateErr
+		if err := l.mutate(ctx, `UPDATE recall_entries SET title = 'Connection policy' WHERE id = 'entry-1'`); err != nil {
+			return nil, err
 		}
-		return queryEncoder(ctx, texts)
+		return l.queryEncoder(ctx, texts)
 	}
 	_, _, _, err = searcher.SearchRecall(t.Context(), "connection reuse", 5)
 	require.Error(t, err)
 	require.ErrorIs(t, err, db.ErrSemanticUnavailable)
 	assert.Contains(t, err.Error(), "changed during search")
 
-	searcher.enc = queryEncoder
+	searcher.enc = l.queryEncoder
 
 	_, _, _, err = searcher.SearchRecall(t.Context(), "connection reuse", 5)
 	require.Error(t, err)
 	require.ErrorIs(t, err, db.ErrSemanticUnavailable)
 	assert.Contains(t, err.Error(), "embeddings build --store recall")
 
-	started, err = mgr.TryBuild(t.Context(), vector.BuildRequest{})
+	started, err := l.mgr.TryBuild(t.Context(), vector.BuildRequest{})
 	require.NoError(t, err)
 	require.True(t, started)
 	_, _, _, err = searcher.SearchRecall(t.Context(), "connection reuse", 5)
@@ -1481,28 +1441,6 @@ func TestRecallSearchServesIndexWithinRevisionLag(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// validateHook runs hook at the snapshot validation the db layer asks for
-// after reading a vector page: once when ran is set, otherwise every time.
-type validateHook struct {
-	recallSearcherAdapter
-	hook func(context.Context) error
-	ran  *bool
-}
-
-func (v validateHook) ValidateRecallSnapshot(
-	ctx context.Context, snapshot db.RecallVectorSnapshot,
-) error {
-	if v.ran == nil || !*v.ran {
-		if v.ran != nil {
-			*v.ran = true
-		}
-		if err := v.hook(ctx); err != nil {
-			return err
-		}
-	}
-	return v.recallSearcherAdapter.ValidateRecallSnapshot(ctx, snapshot)
-}
-
 func TestRecallDropsEntriesHiddenDuringSearch(t *testing.T) {
 	mutations := []struct {
 		name        string
@@ -1518,65 +1456,36 @@ func TestRecallDropsEntriesHiddenDuringSearch(t *testing.T) {
 				corerecall.ReviewStateUnreviewedAuto + `' WHERE id = 'entry-2'`,
 		},
 	}
-	// While the query is encoded, hybrid's lexical leg has already read
-	// entry-2. At the final snapshot validation, the vector page has.
-	stages := []string{"query encoding", "final validation"}
+	// Each mutation lands while the query is encoded, after the corpus
+	// snapshot and before either ranking reads its entries.
 	modes := []string{db.RecallQueryModeVector, db.RecallQueryModeHybrid}
-	for _, stage := range stages {
-		for _, mode := range modes {
-			for _, m := range mutations {
-				t.Run(stage+"/"+mode+"/"+m.name, func(t *testing.T) {
-					l := newLaggedRecallSearch(t, 2, m.reviewState)
-					mutate := func(ctx context.Context) error { return l.mutate(ctx, m.stmt) }
-					searcher := l.searcher
-					var installed db.RecallVectorSearcher = searcher
-					if stage == "query encoding" {
-						searcher.enc = func(ctx context.Context, texts []string) ([][]float32, error) {
-							if err := mutate(ctx); err != nil {
-								return nil, err
-							}
-							return l.queryEncoder(ctx, texts)
-						}
-						installed = searcher
-					} else {
-						installed = validateHook{recallSearcherAdapter: searcher, hook: mutate, ran: new(bool)}
+	for _, mode := range modes {
+		for _, m := range mutations {
+			t.Run(mode+"/"+m.name, func(t *testing.T) {
+				l := newLaggedRecallSearch(t, 2, m.reviewState)
+				searcher := l.searcher
+				searcher.enc = func(ctx context.Context, texts []string) ([][]float32, error) {
+					if err := l.mutate(ctx, m.stmt); err != nil {
+						return nil, err
 					}
-					l.database.SetRecallVectorSearcher(installed)
+					return l.queryEncoder(ctx, texts)
+				}
+				l.database.SetRecallVectorSearcher(searcher)
 
-					page, err := l.database.QueryRecallEntries(t.Context(), db.RecallQuery{
-						Text: "connection reuse", Mode: mode,
-						ReviewState: m.reviewState, Limit: 5,
-					})
-					require.NoError(t, err)
-					ids := make([]string, 0, len(page.RecallEntries))
-					for _, result := range page.RecallEntries {
-						ids = append(ids, result.ID)
-					}
-					assert.NotContains(t, ids, "entry-2")
-					assert.Contains(t, ids, "entry-1")
+				page, err := l.database.QueryRecallEntries(t.Context(), db.RecallQuery{
+					Text: "connection reuse", Mode: mode,
+					ReviewState: m.reviewState, Limit: 5,
 				})
-			}
+				require.NoError(t, err)
+				ids := make([]string, 0, len(page.RecallEntries))
+				for _, result := range page.RecallEntries {
+					ids = append(ids, result.ID)
+				}
+				assert.NotContains(t, ids, "entry-2")
+				assert.Contains(t, ids, "entry-1")
+			})
 		}
 	}
-}
-
-func TestRecallVectorFailsWhenCorpusNeverSettles(t *testing.T) {
-	l := newLaggedRecallSearch(t, 2, "")
-	// A review-state flip moves the query revision but not the corpus
-	// revision, so only the read fence notices it.
-	l.database.SetRecallVectorSearcher(validateHook{
-		recallSearcherAdapter: l.searcher,
-		hook: func(ctx context.Context) error {
-			return l.mutate(ctx, `UPDATE recall_entries SET review_state = CASE review_state
-				WHEN '`+corerecall.ReviewStateHumanReviewed+`' THEN '`+corerecall.ReviewStateUnreviewedAuto+`'
-				ELSE '`+corerecall.ReviewStateHumanReviewed+`' END WHERE id = 'entry-1'`)
-		},
-	})
-	_, err := l.database.QueryRecallEntries(t.Context(), db.RecallQuery{
-		Text: "connection reuse", Mode: db.RecallQueryModeVector, Limit: 5,
-	})
-	require.ErrorIs(t, err, db.ErrSemanticUnavailable)
-	assert.Contains(t, err.Error(), "retry the query")
 }
 
 func TestRecallRevisionFresh(t *testing.T) {
@@ -1591,7 +1500,7 @@ func TestRecallRevisionFresh(t *testing.T) {
 		{name: "any lag without a bound", maxLag: 0, completed: "counter-v1:5", want: "counter-v1:6"},
 		{name: "lag within the bound", maxLag: 3, completed: "counter-v1:5", want: "counter-v1:8", fresh: true},
 		{name: "lag past the bound", maxLag: 3, completed: "counter-v1:5", want: "counter-v1:9"},
-		{name: "index ahead of the snapshot", maxLag: 3, completed: "counter-v1:9", want: "counter-v1:5", fresh: true},
+		{name: "index ahead of the corpus", maxLag: 3, completed: "counter-v1:9", want: "counter-v1:5"},
 		{name: "legacy watermarks still need equality", maxLag: 3, completed: "2026-01-01T00:00:00Z", want: "2026-01-01T00:00:01Z"},
 	}
 	for _, tt := range tests {

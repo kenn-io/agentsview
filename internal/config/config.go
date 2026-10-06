@@ -428,7 +428,7 @@ type VectorEmbedConfig struct {
 
 // DefaultRecallMaxRevisionLag is the default [vector]
 // recall_max_revision_lag: room for well over an hour of extraction between
-// Recall index builds, which the daemon runs about 30 s after a mutation.
+// Recall index builds.
 const DefaultRecallMaxRevisionLag = 256
 
 // Validate checks the vector config for internal consistency. It is a
