@@ -693,6 +693,36 @@ func TestSessionList_ServerFlagRefusesAnnotationFiltersOnOlderServer(t *testing.
 	}
 }
 
+func TestSessionParentAndLabel_ServerFlagRefuseOlderServer(t *testing.T) {
+	newAgentDataDir(t)
+	var paths []string
+	ts := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			paths = append(paths, r.URL.Path)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"api_version":10}`))
+		}))
+	defer ts.Close()
+
+	for _, command := range [][]string{{"parent", "w"}, {"parent", "w", "m"}, {"label", "w", "x"}} {
+		paths = nil
+		args := append([]string{"session", "--server", ts.URL}, command...)
+		_, err := executeCommand(newRootCommand(), args...)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "does not support session labels, parent links, or their filters; restart or upgrade the server")
+		assert.Equal(t, []string{"/api/v1/version"}, paths)
+	}
+}
+
+func TestPrintSessionParentHumanUnapplied(t *testing.T) {
+	var out bytes.Buffer
+	printSessionParentHuman(&out, "worker", &db.SessionExternalParent{
+		ParentSessionID: "manager", RelationshipType: "subagent", SessionFound: true,
+	}, false)
+	assert.Contains(t, out.String(), "note: link stored but not applied; a transcript parent or spawning session outranks it, or it would form a loop")
+	assert.NotContains(t, out.String(), "transcript names")
+}
+
 func TestSessionList_ServerFlagDoesNotSendConfigAuthToken(t *testing.T) {
 	dataDir := newAgentDataDir(t)
 	t.Setenv("AGENTSVIEW_SERVER_TOKEN", "")

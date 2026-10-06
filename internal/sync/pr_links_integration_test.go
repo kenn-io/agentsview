@@ -1,7 +1,6 @@
 package sync_test
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -13,15 +12,6 @@ import (
 	"go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
-
-func appendToFile(t *testing.T, path, content string) {
-	t.Helper()
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-	require.NoError(t, err)
-	_, err = f.WriteString(content)
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
-}
 
 func storedPRURLs(t *testing.T, d *db.DB, id string) []string {
 	t.Helper()
@@ -56,7 +46,7 @@ func TestIncrementalSync_ClaudePRLinkAppends(t *testing.T) {
 	// Claude Code repeats the record after later turns. A repeat of a
 	// stored link must not force a full reparse: the malformed line is
 	// only counted by a full parse.
-	appendToFile(t, path, "not json\n"+prLink("1")+"\n")
+	appendClaudeSplitLines(t, path, "not json", prLink("1"))
 	env.engine.SyncPaths([]string{path})
 	stored, err := env.db.GetSessionFull(t.Context(), "pr-link-append")
 	require.NoError(t, err)
@@ -64,7 +54,7 @@ func TestIncrementalSync_ClaudePRLinkAppends(t *testing.T) {
 	assert.True(t, stored.LastWriteIncremental)
 
 	// A new link reaches the session through a full reparse.
-	appendToFile(t, path, prLink("2")+"\n")
+	appendClaudeSplitLines(t, path, prLink("2"))
 	env.engine.SyncPaths([]string{path})
 	assert.Equal(t, []string{
 		"https://github.com/owner/repo/pull/1",

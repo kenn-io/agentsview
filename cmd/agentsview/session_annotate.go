@@ -185,6 +185,6 @@ func printSessionParentHuman(
 	case !link.SessionFound:
 		fmt.Fprintln(w, "note: session not synced yet; the link applies once it is")
 	case !link.Applied:
-		fmt.Fprintln(w, "note: the transcript names its own parent, which takes precedence")
+		fmt.Fprintln(w, "note: link stored but not applied; a transcript parent or spawning session outranks it, or it would form a loop")
 	}
 }

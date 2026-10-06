@@ -18,6 +18,9 @@ var ErrSessionExternalParentInvalid = errors.New("invalid session parent link")
 // spells it as a literal.
 const ExternalRelationshipType = "subagent"
 
+// Keep the applied launcher parent when recomputing it would produce the same value.
+const keepLauncherParentSQL = `COALESCE(excluded.parser_parent_session_id,'') = '' AND EXISTS (SELECT 1 FROM session_external_parents ep WHERE ep.session_id = sessions.id AND ep.parent_session_id = sessions.parent_session_id)`
+
 // SessionExternalParent is a parent link supplied by whatever launched a
 // session. It is stored apart from parsed transcript data and applies only
 // while the parser found no parent of its own.

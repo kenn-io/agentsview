@@ -17,6 +17,9 @@ var _ service.SessionAnnotator = (*httpBackend)(nil)
 func (b *httpBackend) SessionLabels(
 	ctx context.Context, id string,
 ) (*db.SessionLabels, error) {
+	if err := b.requireSessionAnnotations(ctx); err != nil {
+		return nil, err
+	}
 	api, err := b.apiClient(b.client)
 	if err != nil {
 		return nil, err
@@ -35,6 +38,9 @@ func (b *httpBackend) SetSessionLabels(
 	ctx context.Context, id string, labels []string,
 ) (*db.SessionLabels, error) {
 	if err := b.requireWritable("label"); err != nil {
+		return nil, err
+	}
+	if err := b.requireSessionAnnotations(ctx); err != nil {
 		return nil, err
 	}
 	api, err := b.apiClient(b.client)
@@ -61,6 +67,9 @@ func (b *httpBackend) UpdateSessionLabels(
 	if err := b.requireWritable("label"); err != nil {
 		return nil, err
 	}
+	if err := b.requireSessionAnnotations(ctx); err != nil {
+		return nil, err
+	}
 	api, err := b.apiClient(b.client)
 	if err != nil {
 		return nil, err
@@ -79,6 +88,9 @@ func (b *httpBackend) UpdateSessionLabels(
 func (b *httpBackend) SessionParent(
 	ctx context.Context, id string,
 ) (*db.SessionExternalParent, error) {
+	if err := b.requireSessionAnnotations(ctx); err != nil {
+		return nil, err
+	}
 	api, err := b.apiClient(b.client)
 	if err != nil {
 		return nil, err
@@ -103,6 +115,9 @@ func (b *httpBackend) SetSessionParent(
 	if err := b.requireWritable("parent"); err != nil {
 		return nil, err
 	}
+	if err := b.requireSessionAnnotations(ctx); err != nil {
+		return nil, err
+	}
 	api, err := b.apiClient(b.client)
 	if err != nil {
 		return nil, err
@@ -123,6 +138,9 @@ func (b *httpBackend) ClearSessionParent(
 	ctx context.Context, id string,
 ) (*db.SessionExternalParent, error) {
 	if err := b.requireWritable("parent"); err != nil {
+		return nil, err
+	}
+	if err := b.requireSessionAnnotations(ctx); err != nil {
 		return nil, err
 	}
 	api, err := b.apiClient(b.client)
