@@ -1205,6 +1205,16 @@ func (d *DB) CopySessionMetadataFrom(
 				SELECT 1 FROM main.tool_calls tc
 				WHERE tc.subagent_session_id = main.sessions.id
 				AND tc.session_id IS NOT tc.subagent_session_id
+			)
+			AND NOT EXISTS (
+				WITH RECURSIVE ancestors(id) AS (
+					SELECT ep.parent_session_id
+					UNION
+					SELECT a.parent_session_id FROM main.sessions a
+					JOIN ancestors ON a.id = ancestors.id
+					WHERE COALESCE(a.parent_session_id, '') <> ''
+				)
+				SELECT 1 FROM ancestors WHERE id = main.sessions.id
 			)`); err != nil {
 			return fmt.Errorf("applying copied session parents: %w", err)
 		}

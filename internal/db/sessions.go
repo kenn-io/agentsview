@@ -383,10 +383,12 @@ type Session struct {
 	ProjectAssigned             bool            `json:"project_assigned,omitempty"`
 	// PRLinks lists the pull or merge requests the source transcript
 	// associated with the session. Parser-owned: a full reparse replaces it.
-	PRLinks []PRLink `json:"pr_links,omitempty"`
+	// Always serialized, as [] when empty, so a client merging a fresh
+	// response over a cached one drops cleared values.
+	PRLinks []PRLink `json:"pr_links" required:"false"`
 	// Labels are user- or tool-supplied tags. They are stored apart from
 	// parsed transcript data, so a reparse or resync never changes them.
-	Labels               []string `json:"labels,omitempty"`
+	Labels               []string `json:"labels" required:"false"`
 	SourceSessionID      string   `json:"source_session_id,omitempty"`
 	SourceVersion        string   `json:"source_version,omitempty"`
 	TranscriptFidelity   string   `json:"transcript_fidelity,omitempty"`

@@ -73,6 +73,13 @@ func TestSessionLabelsAPI(t *testing.T) {
 	w = te.put(t, "/api/v1/sessions/worker/labels", `{"labels":[]}`)
 	assertStatus(t, w, http.StatusOK)
 	assert.Equal(t, []string{}, decode[db.SessionLabels](t, w).Labels)
+
+	// Cleared values stay in the body so a client merging it over a cached
+	// session drops them.
+	w = te.get(t, "/api/v1/sessions/worker")
+	assertStatus(t, w, http.StatusOK)
+	assert.Contains(t, w.Body.String(), `"labels":[]`)
+	assert.Contains(t, w.Body.String(), `"pr_links":[]`)
 }
 
 func TestSessionPRFilterAPI(t *testing.T) {

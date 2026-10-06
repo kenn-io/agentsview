@@ -350,3 +350,40 @@ func TestHostedCrossSourceTargetLifecycleAndReadRevision(t *testing.T) {
 	assert.Equal(t, "codex:portable", *result.session.ParentSessionID)
 	check(true, 13)
 }
+
+// A hosted raw child links to its parent through raw_session_links, so the
+// PR filter must walk that relation to keep the parent's tree.
+func TestHostedSidebarPRFilterKeepsRawChildTree(t *testing.T) {
+	f := newProjectionFixture(t)
+	child, _ := f.acceptScoped(t, "device-a", "child", "", parser.AgentCodex, "root-a", "child.jsonl")
+	childOutcome := linkChildOutcome()
+	childOutcome.Outcome.Results[0].Result.Session.PRLinks = []parser.PRLink{{
+		URL: "https://github.com/acme/widgets/pull/42", Host: "github.com",
+		Repository: "acme/widgets", Number: 42,
+	}}
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, child), child, childOutcome))
+	parent, _ := f.acceptScoped(t, "device-a", "parent", "", parser.AgentCodex, "root-a", "parent.jsonl")
+	p := projectionOutcome("parent")
+	call := &p.Outcome.Results[0].Result.Messages[1].ToolCalls[0]
+	call.SubagentSessionID = "codex:child"
+	call.ResultEvents = []parser.ParsedToolResultEvent{{ToolUseID: "call-1", SubagentSessionID: "codex:child", Source: "tool_result", Status: "completed", Content: "child complete"}}
+	p.Outcome.Results[0].Result.Messages[1].HasToolUse = true
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, parent), parent, p))
+	h, err := newHostedAdapter(f.runtime, f.tenant)
+	require.NoError(t, err)
+
+	pr, err := db.ParsePRFilter("acme/widgets#42")
+	require.NoError(t, err)
+	for _, limit := range []int{0, 10} {
+		t.Run(fmt.Sprintf("limit %d", limit), func(t *testing.T) {
+			sidebar, err := h.GetSidebarSessionIndex(t.Context(), db.SessionFilter{PR: pr, Limit: limit})
+			require.NoError(t, err)
+			assert.Equal(t, 1, sidebar.Total)
+			ids := make([]string, 0, len(sidebar.Sessions))
+			for _, row := range sidebar.Sessions {
+				ids = append(ids, row.ID)
+			}
+			assert.Contains(t, ids, "codex:portable")
+		})
+	}
+}
