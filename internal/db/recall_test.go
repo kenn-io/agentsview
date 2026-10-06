@@ -1862,6 +1862,7 @@ func TestQueryRecallEntriesHybridSeesEntriesChangedBetweenRankings(t *testing.T)
 	}
 	exec := func(stmt string) func(*testing.T, *DB) {
 		return func(t *testing.T, d *DB) {
+			t.Helper()
 			_, err := d.getWriter().ExecContext(t.Context(), stmt)
 			require.NoError(t, err)
 		}
@@ -1879,6 +1880,7 @@ func TestQueryRecallEntriesHybridSeesEntriesChangedBetweenRankings(t *testing.T)
 		{
 			name: "added after the vector ranking reads it",
 			change: func(t *testing.T, d *DB) {
+				t.Helper()
 				_, err := d.InsertRecallEntry(t.Context(), newEntry("added"))
 				require.NoError(t, err)
 			},
