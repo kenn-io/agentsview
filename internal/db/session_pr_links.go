@@ -110,6 +110,9 @@ type PRFilter struct {
 // IsZero reports whether the filter selects nothing.
 func (f PRFilter) IsZero() bool { return f.Repository == "" }
 
+// ErrInvalidPRFilter identifies a pull request filter ParsePRFilter rejects.
+var ErrInvalidPRFilter = errors.New("invalid pr filter")
+
 // ParsePRFilter accepts "owner/repo", "owner/repo#123", or a pull or
 // merge request URL. An empty value returns the zero filter.
 func ParsePRFilter(value string) (PRFilter, error) {
@@ -121,7 +124,7 @@ func ParsePRFilter(value string) (PRFilter, error) {
 		link, ok := parser.NewPRLink(value, "", 0, "", time.Time{})
 		if !ok {
 			return PRFilter{}, fmt.Errorf(
-				"pr filter %q: not a pull or merge request URL", value,
+				"%w %q: not a pull or merge request URL", ErrInvalidPRFilter, value,
 			)
 		}
 		return PRFilter{
@@ -133,18 +136,18 @@ func ParsePRFilter(value string) (PRFilter, error) {
 	repo = strings.Trim(strings.TrimSpace(repo), "/")
 	if repo == "" || !strings.Contains(repo, "/") {
 		return PRFilter{}, fmt.Errorf(
-			"pr filter %q: want owner/repo, owner/repo#123, or a URL", value,
+			"%w %q: want owner/repo, owner/repo#123, or a URL", ErrInvalidPRFilter, value,
 		)
 	}
 	if _, err := url.Parse("https://host/" + repo); err != nil {
-		return PRFilter{}, fmt.Errorf("pr filter %q: %w", value, err)
+		return PRFilter{}, fmt.Errorf("%w %q: %w", ErrInvalidPRFilter, value, err)
 	}
 	f := PRFilter{Repository: strings.ToLower(repo)}
 	if hasNum {
 		n, err := strconv.Atoi(strings.TrimSpace(num))
 		if err != nil || n <= 0 {
 			return PRFilter{}, fmt.Errorf(
-				"pr filter %q: invalid pull request number", value,
+				"%w %q: invalid pull request number", ErrInvalidPRFilter, value,
 			)
 		}
 		f.Number = n

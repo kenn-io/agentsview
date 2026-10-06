@@ -194,7 +194,6 @@ func (s *Store) ListSessions(ctx context.Context, f db.SessionFilter) (db.Sessio
 func (s *Store) GetSidebarSessionIndex(ctx context.Context, f db.SessionFilter) (db.SidebarSessionIndex, error) {
 	f.IncludeChildren = true
 	f.IncludeOrphans = true
-	f = f.WithAnnotationSelection()
 	f.Cursor = ""
 	f.Limit = 0
 
