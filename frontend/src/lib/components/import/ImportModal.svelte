@@ -9,6 +9,7 @@
     syncClaudeAI,
   } from "../../api/client.js";
   import { getBrowserHost } from "../../api/browserHost.js";
+  import { sync as syncState } from "../../stores/sync.svelte.js";
   import { isRemoteConnection } from "../../api/runtime.js";
   import {
     FileCheckIcon,
@@ -52,7 +53,7 @@
   let progressStats = $state<ImportStats | null>(null);
   const host = getBrowserHost();
   let syncController = $state<AbortController>();
-  const canSync = $derived(open && provider === "claude-ai" && !!host && !isRemoteConnection());
+  const canSync = $derived(open && provider === "claude-ai" && !!host && !isRemoteConnection() && !syncState.readOnly);
 
   async function connect() {
     try { await host?.connect(); }

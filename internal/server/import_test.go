@@ -24,13 +24,8 @@ import (
 )
 
 func TestClaudeAISyncRelay(t *testing.T) {
-	t.Run("large result and session notification", func(t *testing.T) {
+	t.Run("large result stores session", func(t *testing.T) {
 		srv := testServer(t, 5*time.Second)
-		notifications := 0
-		srv.sessionMutationNotify = func() { notifications++ }
-		srv.broadcaster = NewBroadcaster(0)
-		events, unsubscribe := srv.broadcaster.Subscribe()
-		defer unsubscribe()
 		httpServer := httptest.NewServer(srv.mux)
 		defer httpServer.Close()
 		postResult := func(id, body string, want int) {
@@ -73,9 +68,9 @@ func TestClaudeAISyncRelay(t *testing.T) {
 				case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0&archived=true":
 					postResult(request.ID, `{"data":[],"has_more":false}`, http.StatusNoContent)
 				case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0&archived=false":
-					postResult(request.ID, `{"data":[{"uuid":"relay","name":"Relay","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z"}],"has_more":false}`, http.StatusNoContent)
+					postResult(request.ID, `{"data":[{"uuid":"relay","current_leaf_message_uuid":"m","name":"Relay","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z"}],"has_more":false}`, http.StatusNoContent)
 				case "/api/organizations/org/chat_conversations/relay?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true":
-					postResult(request.ID, `{"uuid":"relay","name":"Relay","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","padding":"`+strings.Repeat("x", 2<<20)+`","chat_messages":[{"uuid":"m","sender":"human","text":"Archived relay message","created_at":"2026-03-01T10:00:00Z"}]}`, http.StatusNoContent)
+					postResult(request.ID, `{"uuid":"relay","current_leaf_message_uuid":"m","name":"Relay","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","padding":"`+strings.Repeat("x", 2<<20)+`","chat_messages":[{"uuid":"m","sender":"human","text":"Archived relay message","created_at":"2026-03-01T10:00:00Z"}]}`, http.StatusNoContent)
 				default:
 					t.Fatalf("unexpected path %s", request.Path)
 				}
@@ -87,13 +82,6 @@ func TestClaudeAISyncRelay(t *testing.T) {
 		}
 		require.NoError(t, scanner.Err())
 		assert.Equal(t, 1, stats.Imported)
-		assert.Equal(t, 1, notifications)
-		select {
-		case event := <-events:
-			assert.Equal(t, "sessions", event.Scope)
-		default:
-			t.Fatal("missing session event")
-		}
 		messages, err := srv.db.GetAllMessages(t.Context(), "claude-ai:relay")
 		require.NoError(t, err)
 		require.Len(t, messages, 1)
@@ -627,13 +615,13 @@ func TestClaudeAISyncRelayOversizeContinues(t *testing.T) {
 			case "/api/organizations":
 				body = `[{"uuid":"org","capabilities":["chat"]}]`
 			case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0&archived=false":
-				body = `{"data":[{"uuid":"large","updated_at":"2026-03-01T10:05:00Z"},{"uuid":"later","updated_at":"2026-03-01T10:05:00Z"}],"has_more":false}`
+				body = `{"data":[{"uuid":"large","current_leaf_message_uuid":"m","updated_at":"2026-03-01T10:05:00Z"},{"uuid":"later","current_leaf_message_uuid":"m","updated_at":"2026-03-01T10:05:00Z"}],"has_more":false}`
 			case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0&archived=true":
 				body = `{"data":[],"has_more":false}`
 			case "/api/organizations/org/chat_conversations/large?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true":
 				body = strings.Repeat("x", (32<<20)+2)
 			case "/api/organizations/org/chat_conversations/later?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true":
-				body = `{"uuid":"later","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","chat_messages":[]}`
+				body = `{"uuid":"later","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","current_leaf_message_uuid":"m","chat_messages":[{"uuid":"m","sender":"assistant","text":"Later reply","created_at":"2026-03-01T10:05:00Z"}]}`
 			default:
 				t.Fatalf("unexpected path %s", request.Path)
 			}
@@ -655,5 +643,9 @@ func TestClaudeAISyncRelayOversizeContinues(t *testing.T) {
 	session, err := srv.db.GetSession(t.Context(), "claude-ai:later")
 	require.NoError(t, err)
 	require.NotNil(t, session)
-	assert.Zero(t, session.MessageCount)
+	assert.Equal(t, 1, session.MessageCount)
+	messages, err := srv.db.GetAllMessages(t.Context(), session.ID)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "Later reply", messages[0].Content)
 }

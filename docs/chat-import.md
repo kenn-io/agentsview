@@ -78,10 +78,14 @@ Sync skips trashed chats; file imports report them as refusals.
 
 Each sync includes archived chats, checks all conversation summaries, and
 downloads only new or changed chats. Search stays available during the import.
-Trashed or permanently deleted chats stay deleted. A chat whose visible history
-changed after an edit or a branch switch replaces the archived copy. The
-previous version stays in Trash. Closing the dialog cancels the sync; completed
-chats stay archived for the next sync.
+Trashed or permanently deleted chats stay deleted. Changed chats update in
+place, as re-imported exports do. When an edit or branch switch leaves a shorter
+history, the previous version stays in Trash. A chat first imported from a zip
+needs one detail fetch to verify its visible branch. Re-importing a zip clears
+that verification, so the next Sync fetches it once again. Each chat has a
+32 MiB response limit; larger chats count as failed while Sync continues.
+Closing the dialog cancels the sync; completed chats stay archived for the next
+sync.
 
 Sign-in persists in the browser's cookie store across app restarts. **Disconnect**
 deletes the Claude.ai cookies and closes the sign-in window. Credentials stay

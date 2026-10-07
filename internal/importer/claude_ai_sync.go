@@ -47,14 +47,6 @@ func SyncClaudeAI(ctx context.Context, store interface {
 		return stats, err
 	}
 
-	wrote := false
-	notify := func() {
-		if wrote && cb != nil && cb.OnPage != nil {
-			cb.OnPage()
-		}
-		wrote = false
-	}
-	defer notify()
 	for _, org := range organizations {
 		if !slices.Contains(org.Capabilities, "chat") {
 			continue
@@ -116,25 +108,15 @@ func SyncClaudeAI(ctx context.Context, store interface {
 						cb.progress(stats)
 						continue
 					}
-					existing, err := store.GetSession(ctx, id)
+					existing, err := store.GetSessionFull(ctx, id)
 					if err != nil {
 						return stats, err
 					}
 					updatedAt, parseErr := time.Parse(time.RFC3339Nano, marker.UpdatedAt)
-					if existing != nil && parseErr == nil && ptrEqual(existing.EndedAt, timeStr(updatedAt)) {
-						unchanged := storeArchiveContent(store).UsageOnly()
-						if !unchanged {
-							messages, err := store.GetMessages(ctx, id, existing.MessageCount-1, 1, false)
-							if err != nil {
-								return stats, err
-							}
-							unchanged = len(messages) > 0 && messages[0].SourceUUID == marker.CurrentLeaf
-						}
-						if unchanged {
-							stats.Skipped++
-							cb.progress(stats)
-							continue
-						}
+					if existing != nil && parseErr == nil && ptrEqual(existing.EndedAt, timeStr(updatedAt)) && existing.LastEntryUUID != nil && *existing.LastEntryUUID == marker.CurrentLeaf {
+						stats.Skipped++
+						cb.progress(stats)
+						continue
 					}
 					detail, err := fetchClaudeAI(ctx, fetch, base+"/chat_conversations/"+url.PathEscape(marker.UUID)+"?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true")
 					var detailError *claudeAIHTTPError
@@ -171,7 +153,7 @@ func SyncClaudeAI(ctx context.Context, store interface {
 								return nil
 							}
 						}
-						status, err := claudeAISyncImport.importConversation(ctx, store, result, nil, ImportOptions{Replace: []string{id}})
+						status, err := claudeAIImport.importConversation(ctx, store, result, nil, ImportOptions{Replace: []string{id}})
 						if errors.Is(err, db.ErrSessionTrashed) {
 							status, err = importSkipped, nil
 						}
@@ -188,7 +170,6 @@ func SyncClaudeAI(ctx context.Context, store interface {
 					stats.Skipped += imported.Skipped
 					stats.Errors += imported.Errors
 					stats.Refusals = append(stats.Refusals, imported.Refusals...)
-					wrote = wrote || imported.Imported+imported.Updated > 0
 					cb.progress(stats)
 					if ctx.Err() != nil {
 						return stats, ctx.Err()
@@ -197,7 +178,6 @@ func SyncClaudeAI(ctx context.Context, store interface {
 						return stats, err
 					}
 				}
-				notify()
 				offset += len(items)
 				if page.HasMore != nil && !*page.HasMore {
 					break
