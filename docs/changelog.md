@@ -24,6 +24,8 @@ The latest release is
   results. Subagent runs appear as child sessions. Usage reports include Muse
   token counts, priced at Meta's published Muse Spark and Muse Wonder rates.
   (#2241)
+- Include single-prompt sessions in MCP `list_sessions` results with
+  `include_one_shot`, matching `search_content`.
 - Browse and search the retained archive during full parser and archive-only
   preservation rebuilds with a stale warning; archive writes fail with a retryable
   503. Scoped upgrades and schema repairs finish before serving.
