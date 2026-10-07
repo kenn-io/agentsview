@@ -445,6 +445,12 @@ func TestParseClaudeAIDetail_SelectedPath(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
+			if tt.omitLeaf {
+				assert.Nil(t, result.Session.LastEntryUUID)
+			} else {
+				require.NotNil(t, result.Session.LastEntryUUID)
+				assert.Equal(t, tt.leaf, *result.Session.LastEntryUUID)
+			}
 			var contents []string
 			for i, m := range result.Messages {
 				contents = append(contents, m.Content)

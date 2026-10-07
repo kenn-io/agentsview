@@ -2742,10 +2742,11 @@ schemas keep their existing ordering behavior.
   Sync requests `archived=false` and `archived=true` separately. It omits the
   `starred` filter so starred chats remain eligible. Repeated summaries skip
   detail fetches when summary `updated_at` matches archived `ended_at` and
-  `current_leaf_message_uuid` matches the last archived row's `SourceUUID`.
-  Usage-only archives use the timestamp comparison alone. Branch switches
-  change the leaf without changing `updated_at`. Sync stores message UUIDs;
-  unchanged rows archived without UUIDs keep their existing identities.
+  `current_leaf_message_uuid` matches `sessions.last_entry_uuid` under every
+  archive policy. Sync stores the raw detail leaf in that column, including
+  when the stored messages are unchanged. Branch switches change the leaf
+  without changing `updated_at`. Zip imports clear the marker, so their next
+  Sync fetches the visible branch once. Unchanged rows keep their identities.
   The producer's `ET` detail builder defaults to `tree=True`,
   `rendering_mode=messages`, `render_all_tools=true`, and
   `include_inline_comparison=true`; the client enables `consistency=strong`.
@@ -2770,8 +2771,10 @@ schemas keep their existing ordering behavior.
   policy. Detail HTTP 404 counts as skipped. Other detail HTTP failures and
   responses over 32 MiB fail that chat. Authentication, transport, and
   cancellation errors stop Sync.
-  New turns append rows and preserve existing message IDs. Changed or shorter
-  visible history replaces the chat and keeps the previous version in Trash.
+  Sync uses the export importer's message reconciliation. New turns preserve
+  existing message IDs, and changed history updates in place. A shorter visible
+  history keeps the previous version in Trash. Usage-only writes reconcile
+  assistant activity rows to the selected path.
   An empty list page with `has_more: true` fails.
   The export parser reads message `sender`, `text`, `content`, timestamps,
   and attachments. Live checks confirmed the list and detail shapes in one Team
