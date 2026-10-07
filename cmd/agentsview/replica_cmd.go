@@ -88,7 +88,7 @@ func newReplicaPushCommand(backend storage.Replica) *cobra.Command {
 	cmd.Flags().BoolVar(&cfg.NoVectors, "no-vectors", false, "Skip pushing semantic-search vectors")
 	if name == "pg" {
 		cmd.Flags().BoolVar(&cfg.Embed, "embed", false,
-			"Build pending embeddings before each push (uses [vector] or a recipe published to PostgreSQL)")
+			"Push sessions, then build and push embeddings; with --watch, build after syncs in the background and push vectors on the next interval (uses [vector] or a published PostgreSQL recipe)")
 	}
 	return cmd
 }

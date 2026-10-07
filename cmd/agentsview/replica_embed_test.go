@@ -27,11 +27,13 @@ import (
 // vector source the push hands it, the way the real vector phase does.
 type embedPushReplica struct {
 	recipeProvider
-	mu      stdsync.Mutex
-	events  []string
-	opens   int
-	pushed  []storage.VectorGenerationInfo
-	skipped []bool
+	mu       stdsync.Mutex
+	events   []string
+	opens    int
+	pushed   []storage.VectorGenerationInfo
+	skipped  []bool
+	source   storage.VectorPushSource
+	sessions []db.Session
 }
 
 func (r *embedPushReplica) record(event string) {
@@ -62,10 +64,11 @@ func (r *embedPushReplica) OpenStore(storage.ReplicaTarget) (storage.ReplicaStor
 }
 
 func (r *embedPushReplica) NewPusher(
-	_ context.Context, _ storage.ReplicaTarget, _ *db.DB, opts storage.PusherOptions,
+	_ context.Context, _ storage.ReplicaTarget, archive *db.DB, opts storage.PusherOptions,
 ) (storage.Pusher, error) {
 	r.record("connect")
-	return &embedSourcePusher{replica: r, source: opts.VectorSource}, nil
+	r.source = opts.VectorSource
+	return &embedSourcePusher{replica: r, archive: archive, source: opts.VectorSource, hashes: make(map[string]string)}, nil
 }
 
 type embedRecipeStore struct{ storage.ReplicaStore }
@@ -75,6 +78,8 @@ func (embedRecipeStore) Close() error { return nil }
 type embedSourcePusher struct {
 	replica *embedPushReplica
 	source  storage.VectorPushSource
+	hashes  map[string]string
+	archive *db.DB
 }
 
 func (p *embedSourcePusher) EnsureSchema(context.Context) error { return nil }
@@ -82,10 +87,15 @@ func (p *embedSourcePusher) EnsureSchema(context.Context) error { return nil }
 // PushWithOptions mirrors the vector phase's contract: no exported
 // generation skips the phase while sessions still push.
 func (p *embedSourcePusher) PushWithOptions(
-	ctx context.Context, _ storage.PushOptions, _ func(storage.PushProgress),
+	ctx context.Context, opts storage.PushOptions, _ func(storage.PushProgress),
 ) (storage.PushResult, error) {
 	p.replica.record("push")
-	res := storage.PushResult{SessionsPushed: 1}
+	page, err := p.archive.ListSessions(ctx, db.SessionFilter{})
+	if err != nil {
+		return storage.PushResult{}, err
+	}
+	p.replica.sessions = page.Sessions
+	res := storage.PushResult{SessionsPushed: len(page.Sessions)}
 	if p.source == nil {
 		res.Vectors.Skipped = true
 		return res, nil
@@ -98,6 +108,28 @@ func (p *embedSourcePusher) PushWithOptions(
 		res.Vectors.Skipped, res.Vectors.SkippedReason = true, "no active local generation"
 	} else {
 		gen := export.Generation()
+		hashes, err := export.SessionDocHashes(ctx, nil)
+		if err != nil {
+			_ = export.Close()
+			return res, err
+		}
+		for id, hash := range hashes {
+			if !opts.Full && p.hashes[id] == hash {
+				res.Vectors.SessionsUnchanged++
+				continue
+			}
+			docs, _, err := export.SessionDocs(ctx, id)
+			if err != nil {
+				_ = export.Close()
+				return res, err
+			}
+			res.Vectors.SessionsPushed++
+			res.Vectors.DocsPushed += len(docs)
+			for _, doc := range docs {
+				res.Vectors.ChunksPushed += len(doc.Chunks)
+			}
+			p.hashes[id] = hash
+		}
 		if err := export.Close(); err != nil {
 			return res, err
 		}
@@ -151,7 +183,7 @@ func TestReplicaPushEmbedPushesSessionsThenVectors(t *testing.T) {
 				result, err = backend.ReplicaPush(t.Context(), replica, embedTarget(), ReplicaPushConfig{Embed: true}, nil, nil)
 			})
 			require.NoError(t, err)
-			assert.Equal(t, 2, result.SessionsPushed)
+			assert.Equal(t, 6, result.SessionsPushed)
 			assert.False(t, result.Vectors.Skipped)
 			assert.Equal(t, []string{"connect", "push", "push"}, replica.events)
 			assert.Equal(t, []bool{true, false}, replica.skipped)
@@ -163,6 +195,20 @@ func TestReplicaPushEmbedPushesSessionsThenVectors(t *testing.T) {
 				assert.Equal(t, published.Params, replica.pushed[0].Params)
 			}
 			assert.NoFileExists(t, filepath.Join(cfg.DataDir, "config.toml"))
+			if !adopted {
+				firstVectors := result.Vectors
+				replica.skipped = nil
+				captureStdout(t, func() {
+					result, err = backend.ReplicaPush(t.Context(), replica, embedTarget(), ReplicaPushConfig{Full: true, Embed: true}, nil, nil)
+				})
+				require.NoError(t, err)
+				assert.Equal(t, []bool{false, false}, replica.skipped)
+				require.Positive(t, result.Vectors.ChunksPushed)
+				assert.Equal(t, firstVectors.SessionsPushed, result.Vectors.SessionsPushed)
+				assert.Equal(t, firstVectors.DocsPushed, result.Vectors.DocsPushed)
+				assert.Equal(t, firstVectors.ChunksPushed, result.Vectors.ChunksPushed)
+				require.Positive(t, result.Vectors.SessionsUnchanged)
+			}
 		})
 	}
 	t.Run("build failure follows session push", func(t *testing.T) {
@@ -180,8 +226,68 @@ func TestReplicaPushEmbedPushesSessionsThenVectors(t *testing.T) {
 		})
 		require.ErrorContains(t, err, "building embeddings")
 		assert.Equal(t, []string{"connect", "push"}, replica.events)
-		assert.Equal(t, 1, result.SessionsPushed)
+		assert.Equal(t, 3, result.SessionsPushed)
 	})
+	for _, recipes := range []int{0, 2} {
+		t.Run(fmt.Sprintf("published recipes=%d", recipes), func(t *testing.T) {
+			cfg := testConfigWithClaudeFixture(t)
+			cfg.DeploymentEmbeddings = deploymentRecipeConfig().DeploymentEmbeddings
+			replica := &embedPushReplica{}
+			for range recipes {
+				replica.gens = append(replica.gens, publishedRecipe())
+			}
+			backend := &localArchiveWriteBackend{
+				appCfg: cfg, database: dbtest.OpenTestDBAt(t, cfg.DBPath),
+				ensurePricing: func(context.Context, *db.DB) error { return nil },
+			}
+			var result storage.PushResult
+			var err error
+			captureStdout(t, func() {
+				result, err = backend.ReplicaPush(t.Context(), replica, embedTarget(), ReplicaPushConfig{Embed: true}, nil, nil)
+			})
+			require.ErrorContains(t, err, "semantic recipe adoption requires exactly one")
+			assert.Contains(t, err.Error(), fmt.Sprintf("found %d", recipes))
+			assert.Equal(t, []string{"connect", "push"}, replica.events)
+			assert.Equal(t, 3, result.SessionsPushed)
+			var ids []string
+			for _, session := range replica.sessions {
+				ids = append(ids, session.ID)
+			}
+			assert.ElementsMatch(t, []string{"session0", "session1", "session2"}, ids)
+		})
+	}
+}
+
+func TestReplicaWatchEmbedRetriesAfterWriteLockClears(t *testing.T) {
+	cfg := vectorTestConfig(t.TempDir())
+	endpoint := newEmbeddingsStubServer(t, cfg.Vector.Embeddings.Dimension)
+	t.Cleanup(endpoint.Close)
+	server := cfg.Vector.Embeddings.Servers["local"]
+	server.Endpoint = endpoint.URL + "/v1"
+	cfg.Vector.Embeddings.Servers["local"] = server
+	cfg.Vector.Embed.BackstopInterval = "1s"
+	archive := dbtest.OpenTestDBAt(t, cfg.DBPath)
+	dbtest.SeedSessionWithMessages(t, archive, "s1", "project",
+		[]db.Message{dbtest.UserMsg("s1", 0, "content after the lock clears")},
+		func(s *db.Session) { s.EndedAt = new("2026-01-01T00:00:00Z") })
+	held, err := tryAcquireNamedLock(cfg.DataDir, vectorsWriteLockFile)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, held.Close()) })
+	embedder, err := newReplicaEmbedder(cfg, &embedPushReplica{}, embedTarget(), archive)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, embedder.Close()) })
+	require.NoError(t, embedder.startScheduler(t.Context(), true))
+	require.NoError(t, held.Close())
+	require.NoError(t, embedder.startScheduler(t.Context(), true))
+	require.Eventually(t, func() bool {
+		export, ok, err := embedder.BeginExport(t.Context(), nil)
+		if err != nil || !ok {
+			return false
+		}
+		defer func() { assert.NoError(t, export.Close()) }()
+		hashes, err := export.SessionDocHashes(t.Context(), nil)
+		return err == nil && len(hashes) == 1
+	}, 10*time.Second, 10*time.Millisecond)
 }
 
 func TestReplicaWatchEmbedAdoptsPublishedRecipe(t *testing.T) {
@@ -208,13 +314,13 @@ func TestReplicaWatchEmbedAdoptsPublishedRecipe(t *testing.T) {
 	}
 	t.Cleanup(pusher.reset)
 	require.NoError(t, pusher.push(t.Context(), reasonStartup, false))
-	require.Error(t, embedder.startScheduler(t.Context()))
+	require.Error(t, embedder.startScheduler(t.Context(), true))
 	assert.Equal(t, []bool{true}, replica.skipped)
 
 	published := publishedRecipe()
 	replica.setGenerations([]storage.VectorGenerationInfo{published})
 	require.NoError(t, pusher.push(t.Context(), reasonChange, false))
-	require.NoError(t, embedder.startScheduler(t.Context()))
+	require.NoError(t, embedder.startScheduler(t.Context(), true))
 	require.NotNil(t, embedder.serving.Scheduler)
 	assert.Equal(t, time.Second, embedder.serving.Scheduler.backstop)
 	require.Eventually(t, func() bool {
@@ -275,7 +381,12 @@ func TestReplicaWatchEmbedPushesSessionsWhileBuildWaits(t *testing.T) {
 						require.FailNow(t, "build never reached endpoint")
 					}
 					require.NoError(t, push(ctx, reasonChange, nil))
+					embedder := replica.source.(*replicaEmbedder)
+					require.Len(t, embedder.serving.Scheduler.dirty, 1)
+					release := <-embedder.serving.Scheduler.dirty
+					release()
 					require.NoError(t, push(ctx, reasonInterval, nil))
+					assert.Empty(t, embedder.serving.Scheduler.dirty, "interval pushes must leave the build debounce alone")
 					assert.Equal(t, []string{"connect", "push", "push", "push"}, replica.events)
 					shutdownStart = time.Now()
 					cancel()

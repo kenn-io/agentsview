@@ -22,13 +22,14 @@ var errEmbedNeedsLocalArchive = errors.New(
 
 // replicaEmbedder keeps the first resolved recipe for this process.
 type replicaEmbedder struct {
-	appCfg   config.Config
-	backend  storage.Replica
-	target   storage.ReplicaTarget
-	source   *vectorPushSource
-	database *db.DB
-	serving  vectorServing
-	cancel   context.CancelFunc
+	appCfg        config.Config
+	backend       storage.Replica
+	target        storage.ReplicaTarget
+	source        *vectorPushSource
+	initialSource *vectorPushSource
+	database      *db.DB
+	serving       vectorServing
+	cancel        context.CancelFunc
 }
 
 // newReplicaEmbedder validates a pg push --embed request before any local
@@ -50,9 +51,13 @@ func newReplicaEmbedder(
 				"AGENTSVIEW_EMBEDDINGS_ENDPOINT under AGENTSVIEW_MODE to adopt " +
 				"a recipe published to PostgreSQL")
 	}
-	return &replicaEmbedder{
+	e := &replicaEmbedder{
 		appCfg: appCfg, backend: backend, target: target.Target, database: database,
-	}, nil
+	}
+	if appCfg.Vector.Enabled {
+		e.initialSource = &vectorPushSource{cfg: appCfg}
+	}
+	return e, nil
 }
 
 func (e *replicaEmbedder) resolve(ctx context.Context) error {
@@ -66,7 +71,7 @@ func (e *replicaEmbedder) resolve(ctx context.Context) error {
 	return nil
 }
 
-func (e *replicaEmbedder) startScheduler(ctx context.Context) error {
+func (e *replicaEmbedder) startScheduler(ctx context.Context, notify bool) error {
 	if err := e.resolve(ctx); err != nil {
 		return err
 	}
@@ -75,15 +80,18 @@ func (e *replicaEmbedder) startScheduler(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		if serving.Scheduler == nil {
+			if serving.Close != nil {
+				return serving.Close()
+			}
+			return nil
+		}
 		e.serving = serving
 		buildCtx, cancel := context.WithCancel(ctx)
 		e.cancel = cancel
-		if serving.Scheduler == nil {
-			return nil
-		}
 		go serving.Scheduler.Run(buildCtx)
 	}
-	if e.serving.Scheduler != nil {
+	if notify {
 		e.serving.Scheduler.Notify()
 	}
 	return nil
@@ -111,12 +119,14 @@ func (e *replicaEmbedder) resolveRecipe(ctx context.Context) (config.Config, err
 	return adoptReplicaVectorConfig(ctx, e.appCfg, e.backend, store)
 }
 
-// BeginExport exports the pinned recipe's generation; before a recipe is
-// pinned there is nothing to push and the vector phase is skipped.
+// BeginExport uses the plain local source until a recipe resolves.
 func (e *replicaEmbedder) BeginExport(
 	ctx context.Context, sessionIDs []string,
 ) (storage.VectorExport, bool, error) {
 	if e.source == nil {
+		if e.initialSource != nil {
+			return e.initialSource.BeginExport(ctx, sessionIDs)
+		}
 		return nil, false, nil
 	}
 	return e.source.BeginExport(ctx, sessionIDs)
@@ -132,6 +142,9 @@ func (e *replicaEmbedder) Close() error {
 	var err error
 	if e.serving.Close != nil {
 		err = e.serving.Close()
+	}
+	if e.initialSource != nil {
+		err = errors.Join(err, e.initialSource.Close())
 	}
 	if e.source == nil {
 		return err

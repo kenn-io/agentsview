@@ -849,9 +849,6 @@ func (b *localArchiveWriteBackend) ReplicaPush(
 
 	var vectorSource storage.VectorPushSource
 	if embedder != nil {
-		if err := embedder.resolve(ctx); err != nil {
-			return storage.PushResult{}, err
-		}
 		vectorSource = embedder
 	} else {
 		vectorSource = replicaVectorPushSource(b.appCfg, target, cfg)
@@ -896,6 +893,9 @@ func (b *localArchiveWriteBackend) ReplicaPush(
 		return storage.PushResult{}, err
 	}
 	if embedder != nil {
+		if err := embedder.resolve(ctx); err != nil {
+			return result, err
+		}
 		fmt.Println("Building embeddings...")
 		if err := embedder.build(ctx); err != nil {
 			return result, err
@@ -909,7 +909,21 @@ func (b *localArchiveWriteBackend) ReplicaPush(
 		result.DeletedStale += vectorResult.DeletedStale
 		result.Errors += vectorResult.Errors
 		result.Duration += vectorResult.Duration
-		result.Vectors = vectorResult.Vectors
+		vectors := vectorResult.Vectors
+		vectors.SessionsPushed += result.Vectors.SessionsPushed
+		vectors.SessionsUnchanged += result.Vectors.SessionsUnchanged
+		vectors.SessionsDeferred += result.Vectors.SessionsDeferred
+		vectors.DocsPushed += result.Vectors.DocsPushed
+		vectors.ChunksPushed += result.Vectors.ChunksPushed
+		vectors.DocsDeleted += result.Vectors.DocsDeleted
+		vectors.SessionsEvicted += result.Vectors.SessionsEvicted
+		vectors.Conflicts += result.Vectors.Conflicts
+		if !result.Vectors.Skipped && vectors.Skipped {
+			vectors.Skipped = false
+			vectors.SkippedReason = ""
+			vectors.GenerationID = result.Vectors.GenerationID
+		}
+		result.Vectors = vectors
 		return result, err
 	}
 	return result, nil
@@ -1264,7 +1278,7 @@ func (b *localArchiveWriteBackend) ReplicaPushWatch(
 				c, r, false, batch, watchRecoveryForBatch(b.appCfg, batch),
 			)
 			if embedder != nil && r != reasonShutdown {
-				if err := embedder.startScheduler(ctx); err != nil {
+				if err := embedder.startScheduler(ctx, r == reasonStartup || r == reasonChange || batch != nil); err != nil {
 					log.Printf("pg watch: starting embeddings: %v", err)
 				}
 			}
@@ -1302,7 +1316,7 @@ func (b *localArchiveWriteBackend) ReplicaPushWatch(
 		initialErr = pusher.push(ctx, reasonStartup, didResync)
 	}
 	if embedder != nil {
-		if err := embedder.startScheduler(ctx); err != nil {
+		if err := embedder.startScheduler(ctx, true); err != nil {
 			log.Printf("pg watch: starting embeddings: %v", err)
 		}
 	}

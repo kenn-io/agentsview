@@ -121,7 +121,7 @@ agentsview pg push [target] [flags]
 | `--all`              | `false` | Push every configured PG target sequentially                              |
 | `--full`             | `false` | Force full local resync and re-push, bypassing change detection           |
 | `--no-vectors`       | `false` | Skip the semantic-search vector phase for this run                        |
-| `--embed`            | `false` | Build pending embeddings in this process before each push                 |
+| `--embed`            | `false` | Push sessions, then build and push vectors; watch builds after syncs in the background and pushes vectors on the next interval |
 | `--projects`         |         | Comma-separated projects to push (inclusive)                              |
 | `--exclude-projects` |         | Comma-separated projects to exclude                                       |
 | `--all-projects`     | `false` | Ignore configured project filters for this run                            |
@@ -307,7 +307,8 @@ daemon build. Watch mode builds in the background after sync with a 30-second
 debounce and honors `[vector.embed] backstop_interval` to reconcile older
 imports. Built vectors reach PostgreSQL on the next interval push. A one-shot
 `pg push --embed` pushes sessions and existing vectors first, then builds and
-pushes new vectors. It returns a build error after the session push completes.
+pushes new vectors. It returns a recipe or build error after the session push
+completes.
 After changing the recipe and dropping the old generation, restart the hub to
 adopt the new recipe. `--embed` cannot be combined with `--no-vectors`, `--all`,
 `push_vectors = false`, or a usage-only archive.
