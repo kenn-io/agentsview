@@ -14,9 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// newAnnotatedPushFixture seeds three local sessions: sess-1 and sess-2
-// carry pull request links and labels, sess-3 carries neither. It returns
-// the local db and an unpushed mirror path.
+// newAnnotatedPushFixture seeds labeled sessions, including a child, and PR links.
 func newAnnotatedPushFixture(t *testing.T) (*db.DB, string) {
 	t.Helper()
 	ctx := t.Context()
@@ -68,6 +66,10 @@ func newAnnotatedPushFixture(t *testing.T) (*db.DB, string) {
 	require.NoError(t, err)
 	_, err = local.SetSessionLabels(ctx, "sess-2", []string{"worker"})
 	require.NoError(t, err)
+	_, err = local.SetSessionExternalParent(ctx, "sess-3", "sess-1")
+	require.NoError(t, err)
+	_, err = local.SetSessionLabels(ctx, "sess-3", []string{"reviewer"})
+	require.NoError(t, err)
 	return local, filepath.Join(t.TempDir(), "mirror.duckdb")
 }
 
@@ -85,50 +87,6 @@ func listSessionIDs(t *testing.T, store *Store, f db.SessionFilter) []string {
 	return duckSessionIDs(page.Sessions)
 }
 
-func TestPushMirrorsSessionLabelsAndPRLinks(t *testing.T) {
-	ctx := t.Context()
-	local, path := newAnnotatedPushFixture(t)
-	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, true, nil)
-	require.NoError(t, err)
-
-	store := openPushedStore(t, path)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-
-	localSess, err := local.GetSession(ctx, "sess-1")
-	require.NoError(t, err)
-	require.NotNil(t, localSess)
-	require.Len(t, localSess.PRLinks, 2)
-
-	got, err := store.GetSession(ctx, "sess-1")
-	require.NoError(t, err)
-	require.NotNil(t, got)
-	assert.Equal(t, localSess.PRLinks, got.PRLinks)
-	assert.Equal(t, []string{"ticket-42", "worker"}, got.Labels)
-
-	full, err := store.GetSessionFull(ctx, "sess-2")
-	require.NoError(t, err)
-	require.NotNil(t, full)
-	assert.Equal(t, []string{"worker"}, full.Labels)
-	require.Len(t, full.PRLinks, 1)
-	assert.Equal(t, 13, full.PRLinks[0].Number)
-
-	bare, err := store.GetSession(ctx, "sess-3")
-	require.NoError(t, err)
-	require.NotNil(t, bare)
-	assert.Nil(t, bare.PRLinks)
-	assert.Nil(t, bare.Labels)
-
-	page, err := store.ListSessions(ctx, db.SessionFilter{})
-	require.NoError(t, err)
-	byID := make(map[string]db.Session, len(page.Sessions))
-	for _, sess := range page.Sessions {
-		byID[sess.ID] = sess
-	}
-	require.Contains(t, byID, "sess-1")
-	assert.Equal(t, localSess.PRLinks, byID["sess-1"].PRLinks)
-	assert.Equal(t, []string{"ticket-42", "worker"}, byID["sess-1"].Labels)
-}
-
 func TestDuckDBFiltersSessionsByLabelAndPR(t *testing.T) {
 	ctx := t.Context()
 	local, path := newAnnotatedPushFixture(t)
@@ -138,67 +96,118 @@ func TestDuckDBFiltersSessionsByLabelAndPR(t *testing.T) {
 	store := openPushedStore(t, path)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 
+	t.Run("get paths", func(t *testing.T) {
+		localSess, err := local.GetSession(ctx, "sess-1")
+		require.NoError(t, err)
+		require.NotNil(t, localSess)
+		require.Len(t, localSess.PRLinks, 2)
+
+		got, err := store.GetSession(ctx, "sess-1")
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.Equal(t, localSess.PRLinks, got.PRLinks)
+		assert.Equal(t, []string{"ticket-42", "worker"}, got.Labels)
+
+		full, err := store.GetSessionFull(ctx, "sess-2")
+		require.NoError(t, err)
+		require.NotNil(t, full)
+		assert.Equal(t, []string{"worker"}, full.Labels)
+		require.Len(t, full.PRLinks, 1)
+		assert.Equal(t, 13, full.PRLinks[0].Number)
+
+		bare, err := store.GetSession(ctx, "sess-3")
+		require.NoError(t, err)
+		require.NotNil(t, bare)
+		assert.Nil(t, bare.PRLinks)
+		assert.Equal(t, []string{"reviewer"}, bare.Labels)
+
+		page, err := store.ListSessions(ctx, db.SessionFilter{})
+		require.NoError(t, err)
+		byID := make(map[string]db.Session, len(page.Sessions))
+		for _, sess := range page.Sessions {
+			byID[sess.ID] = sess
+		}
+		require.Contains(t, byID, "sess-1")
+		assert.Equal(t, localSess.PRLinks, byID["sess-1"].PRLinks)
+		assert.Equal(t, []string{"ticket-42", "worker"}, byID["sess-1"].Labels)
+	})
+
 	tests := []struct {
-		name   string
-		filter db.SessionFilter
-		want   []string
+		name        string
+		filter      db.SessionFilter
+		want        []string
+		wantSidebar []string
+		wantTotal   int
 	}{
 		{
-			name:   "one label",
-			filter: db.SessionFilter{Labels: []string{"worker"}},
-			want:   []string{"sess-1", "sess-2"},
+			name:        "one label",
+			filter:      db.SessionFilter{Labels: []string{"worker"}},
+			want:        []string{"sess-1", "sess-2"},
+			wantSidebar: []string{"sess-1", "sess-2", "sess-3"},
+			wantTotal:   2,
 		},
 		{
-			name:   "every listed label",
-			filter: db.SessionFilter{Labels: []string{"worker", "ticket-42"}},
-			want:   []string{"sess-1"},
+			name:        "every listed label",
+			filter:      db.SessionFilter{Labels: []string{"worker", "ticket-42"}},
+			want:        []string{"sess-1"},
+			wantSidebar: []string{"sess-1", "sess-3"},
+			wantTotal:   1,
 		},
 		{
-			name:   "unknown label",
-			filter: db.SessionFilter{Labels: []string{"missing"}},
-			want:   []string{},
+			name:      "unknown label",
+			filter:    db.SessionFilter{Labels: []string{"missing"}},
+			want:      []string{},
+			wantTotal: 0,
 		},
 		{
 			name: "repository ignores case",
 			filter: db.SessionFilter{
 				PR: db.PRFilter{Repository: "EXAMPLE-ORG/widgets"},
 			},
-			want: []string{"sess-1", "sess-2"},
+			want:        []string{"sess-1", "sess-2"},
+			wantSidebar: []string{"sess-1", "sess-2", "sess-3"},
+			wantTotal:   2,
 		},
 		{
 			name: "repository and number",
 			filter: db.SessionFilter{
 				PR: db.PRFilter{Repository: "example-org/widgets", Number: 13},
 			},
-			want: []string{"sess-2"},
+			want:      []string{"sess-2"},
+			wantTotal: 1,
 		},
 		{
 			name: "second link on a session",
 			filter: db.SessionFilter{
 				PR: db.PRFilter{Repository: "example-org/gadgets", Number: 7},
 			},
-			want: []string{"sess-1"},
+			want:        []string{"sess-1"},
+			wantSidebar: []string{"sess-1", "sess-3"},
+			wantTotal:   1,
 		},
 		{
 			name: "number on another repository",
 			filter: db.SessionFilter{
 				PR: db.PRFilter{Repository: "example-org/gadgets", Number: 12},
 			},
-			want: []string{},
+			want:      []string{},
+			wantTotal: 0,
 		},
 		{
 			name: "url on another host",
 			filter: db.SessionFilter{
 				PR: db.PRFilter{Host: "forge.example.com", Repository: "example-org/widgets", Number: 13},
 			},
-			want: []string{},
+			want:      []string{},
+			wantTotal: 0,
 		},
 		{
 			name: "url on the stored host",
 			filter: db.SessionFilter{
 				PR: db.PRFilter{Host: "github.com", Repository: "example-org/widgets", Number: 13},
 			},
-			want: []string{"sess-2"},
+			want:      []string{"sess-2"},
+			wantTotal: 1,
 		},
 		{
 			name: "label and pr together",
@@ -206,7 +215,22 @@ func TestDuckDBFiltersSessionsByLabelAndPR(t *testing.T) {
 				Labels: []string{"worker"},
 				PR:     db.PRFilter{Repository: "example-org/widgets", Number: 12},
 			},
-			want: []string{"sess-1"},
+			want:        []string{"sess-1"},
+			wantSidebar: []string{"sess-1", "sess-3"},
+			wantTotal:   1,
+		},
+		{
+			name:        "child label selects the child",
+			filter:      db.SessionFilter{Labels: []string{"reviewer"}},
+			want:        []string{"sess-3"},
+			wantSidebar: []string{"sess-1", "sess-3"},
+			wantTotal:   1,
+		},
+		{
+			name:      "sidebar keeps the root's tree",
+			filter:    db.SessionFilter{Labels: []string{"reviewer"}, IncludeChildren: true},
+			want:      []string{"sess-1", "sess-3"},
+			wantTotal: 1,
 		},
 	}
 	for _, tt := range tests {
@@ -219,8 +243,12 @@ func TestDuckDBFiltersSessionsByLabelAndPR(t *testing.T) {
 			for _, row := range sidebar.Sessions {
 				sidebarIDs = append(sidebarIDs, row.ID)
 			}
-			assert.ElementsMatch(t, tt.want, sidebarIDs)
-			assert.Equal(t, len(tt.want), sidebar.Total)
+			wantSidebar := tt.wantSidebar
+			if wantSidebar == nil {
+				wantSidebar = tt.want
+			}
+			assert.ElementsMatch(t, wantSidebar, sidebarIDs)
+			assert.Equal(t, tt.wantTotal, sidebar.Total)
 
 			localPage, err := local.ListSessions(ctx, tt.filter)
 			require.NoError(t, err)
@@ -252,7 +280,7 @@ func TestPushIncrementalMirrorsLabelOnlyChange(t *testing.T) {
 	got, err := store.GetSession(ctx, "sess-3")
 	require.NoError(t, err)
 	require.NotNil(t, got)
-	assert.Equal(t, []string{"late"}, got.Labels)
+	assert.Equal(t, []string{"late", "reviewer"}, got.Labels)
 	assert.Equal(t, []string{"sess-3"},
 		listSessionIDs(t, store, db.SessionFilter{Labels: []string{"late"}}))
 	require.NoError(t, store.Close())
@@ -273,31 +301,4 @@ func TestPushIncrementalMirrorsLabelOnlyChange(t *testing.T) {
 		listSessionIDs(t, store, db.SessionFilter{Labels: []string{"ticket-42"}}))
 	assert.Len(t, cleared.PRLinks, 2,
 		"clearing labels must not drop the session's pull request links")
-}
-
-func TestDuckDBChildLabelSelectsChildAndKeepsTree(t *testing.T) {
-	ctx := t.Context()
-	local, path := newAnnotatedPushFixture(t)
-	// sess-3 becomes a launched worker of sess-1 and carries its own label.
-	_, err := local.SetSessionExternalParent(ctx, "sess-3", "sess-1")
-	require.NoError(t, err)
-	_, err = local.SetSessionLabels(ctx, "sess-3", []string{"reviewer"})
-	require.NoError(t, err)
-	_, err = Push(ctx, path, local, "m", storage.MirrorPushOptions{}, true, nil)
-	require.NoError(t, err)
-
-	store := openPushedStore(t, path)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-
-	f := db.SessionFilter{Labels: []string{"reviewer"}}
-	assert.Equal(t, []string{"sess-3"}, listSessionIDs(t, store, f))
-
-	sidebar, err := store.GetSidebarSessionIndex(ctx, f)
-	require.NoError(t, err)
-	ids := make([]string, 0, len(sidebar.Sessions))
-	for _, row := range sidebar.Sessions {
-		ids = append(ids, row.ID)
-	}
-	assert.ElementsMatch(t, []string{"sess-1", "sess-3"}, ids)
-	assert.Equal(t, 1, sidebar.Total)
 }

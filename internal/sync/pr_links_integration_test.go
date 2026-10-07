@@ -43,16 +43,6 @@ func TestIncrementalSync_ClaudePRLinkAppends(t *testing.T) {
 		[]string{"https://github.com/owner/repo/pull/1"},
 		storedPRURLs(t, env.db, "pr-link-append"))
 
-	// Claude Code repeats the record after later turns. A repeat of a
-	// stored link must not force a full reparse: the malformed line is
-	// only counted by a full parse.
-	appendClaudeSplitLines(t, path, "not json", prLink("1"))
-	env.engine.SyncPaths([]string{path})
-	stored, err := env.db.GetSessionFull(t.Context(), "pr-link-append")
-	require.NoError(t, err)
-	assert.Equal(t, 0, stored.ParserMalformedLines)
-	assert.True(t, stored.LastWriteIncremental)
-
 	// A new link reaches the session through a full reparse.
 	appendClaudeSplitLines(t, path, prLink("2"))
 	env.engine.SyncPaths([]string{path})

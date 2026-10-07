@@ -78,15 +78,18 @@ func NormalizeSessionLabels(labels []string) ([]string, error) {
 	return out, nil
 }
 
-// LabelFilterValues trims label filter values and drops empty ones.
-func LabelFilterValues(labels []string) []string {
+// LabelFilterValues trims, deduplicates, and bounds nonempty label filters.
+func LabelFilterValues(labels []string) ([]string, error) {
 	var out []string
 	for _, label := range labels {
-		if label = strings.TrimSpace(label); label != "" {
+		if label = strings.TrimSpace(label); label != "" && !slices.Contains(out, label) {
 			out = append(out, label)
+			if len(out) > MaxSessionLabels {
+				return nil, fmt.Errorf("%w: more than %d labels", ErrSessionLabelsInvalid, MaxSessionLabels)
+			}
 		}
 	}
-	return out
+	return out, nil
 }
 
 func normalizeLabelSessionID(sessionID string) (string, error) {

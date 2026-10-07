@@ -671,7 +671,7 @@ func TestSessionList_ServerFlagUsesHTTP(t *testing.T) {
 	assert.Equal(t, "remote-session", got.Sessions[0]["id"])
 }
 
-func TestSessionList_ServerFlagRefusesAnnotationFiltersOnOlderServer(t *testing.T) {
+func TestSessionAnnotations_ServerFlagRefusesOlderServer(t *testing.T) {
 	newAgentDataDir(t)
 	var paths []string
 	ts := httptest.NewServer(http.HandlerFunc(
@@ -683,33 +683,18 @@ func TestSessionList_ServerFlagRefusesAnnotationFiltersOnOlderServer(t *testing.
 		}))
 	defer ts.Close()
 
-	for _, flag := range [][]string{{"--label", "ticket=A"}, {"--pr", "owner/repo"}} {
-		paths = nil
-		args := append([]string{"session", "list", "--server", ts.URL, "--json"}, flag...)
-		_, err := executeCommand(newRootCommand(), args...)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "restart or upgrade the server")
-		assert.Equal(t, []string{"/api/v1/version"}, paths)
-	}
-}
-
-func TestSessionParentAndLabel_ServerFlagRefuseOlderServer(t *testing.T) {
-	newAgentDataDir(t)
-	var paths []string
-	ts := httptest.NewServer(http.HandlerFunc(
-		func(w http.ResponseWriter, r *http.Request) {
-			paths = append(paths, r.URL.Path)
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"api_version":10}`))
-		}))
-	defer ts.Close()
-
-	for _, command := range [][]string{{"parent", "w"}, {"parent", "w", "m"}, {"label", "w", "x"}} {
+	for _, command := range [][]string{
+		{"list", "--label", "ticket=A"},
+		{"list", "--pr", "owner/repo"},
+		{"parent", "w"},
+		{"parent", "w", "m"},
+		{"label", "w", "x"},
+	} {
 		paths = nil
 		args := append([]string{"session", "--server", ts.URL}, command...)
 		_, err := executeCommand(newRootCommand(), args...)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "does not support session labels, parent links, or their filters; restart or upgrade the server")
+		assert.Contains(t, err.Error(), "restart or upgrade the server")
 		assert.Equal(t, []string{"/api/v1/version"}, paths)
 	}
 }

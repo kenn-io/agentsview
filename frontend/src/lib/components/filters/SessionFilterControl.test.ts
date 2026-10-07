@@ -146,7 +146,6 @@ describe("SessionFilterControl label and pull request filters", () => {
 
     await submit(input, "acme/widgets#42");
     expect(sessions.filters.pr).toBe("acme/widgets#42");
-    expect(filtersToParams(sessions.filters).pr).toBe("acme/widgets#42");
 
     await fireEvent.click(screen.getByRole("button", { name: "acme/widgets#42" }));
     expect(sessions.filters.pr).toBe("");

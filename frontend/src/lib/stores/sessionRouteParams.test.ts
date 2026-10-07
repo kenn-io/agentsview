@@ -173,11 +173,12 @@ describe("label filter params", () => {
   it("round-trips labels containing commas and query metacharacters", () => {
     const labels = ["ticket=ABC-123", "role=reviewer, lead", "a&b=c#d"];
     const query = searchFromRouteParams({ label: joinLabelFilterParam(labels) }).toString();
+    const search = new URLSearchParams(`${query}&project=a&project=b`);
+    const params = routeParamsFromSearch(search);
 
-    expect(new URLSearchParams(query).getAll("label")).toEqual(labels);
-    expect(splitLabelFilterParam(routeParamsFromSearch(new URLSearchParams(query)).label)).toEqual(
-      labels,
-    );
+    expect(search.getAll("label")).toEqual(labels);
+    expect(splitLabelFilterParam(params.label)).toEqual(labels);
+    expect(params.project).toBe("b");
   });
 
   it("drops blank and duplicate labels", () => {

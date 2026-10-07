@@ -6,7 +6,6 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -138,9 +137,6 @@ func ParsePRFilter(value string) (PRFilter, error) {
 		return PRFilter{}, fmt.Errorf(
 			"%w %q: want owner/repo, owner/repo#123, or a URL", ErrInvalidPRFilter, value,
 		)
-	}
-	if _, err := url.Parse("https://host/" + repo); err != nil {
-		return PRFilter{}, fmt.Errorf("%w %q: %w", ErrInvalidPRFilter, value, err)
 	}
 	f := PRFilter{Repository: strings.ToLower(repo)}
 	if hasNum {

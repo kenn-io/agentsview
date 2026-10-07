@@ -40,6 +40,24 @@ func TestForkDetection_LinearSession(t *testing.T) {
 	assertMessageCount(t, len(results[0].Messages), 4)
 }
 
+func largeGapForkFixture() string {
+	return testjsonl.NewSessionBuilder().
+		AddClaudeUserWithUUID("2024-01-01T10:00:00Z", "hello", "a", "").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:01Z", "hi", "b", "a").
+		AddClaudeUserWithUUID("2024-01-01T10:00:02Z", "q1", "c", "b").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:03Z", "a1", "d", "c").
+		AddClaudeUserWithUUID("2024-01-01T10:00:04Z", "q2", "e", "d").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:05Z", "a2", "f", "e").
+		AddClaudeUserWithUUID("2024-01-01T10:00:06Z", "q3", "g", "f").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:07Z", "a3", "h", "g").
+		AddClaudeUserWithUUID("2024-01-01T10:00:08Z", "q4", "k", "h").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:09Z", "a4", "l", "k").
+		// Fork branch from b
+		AddClaudeUserWithUUID("2024-01-01T10:01:00Z", "fork q1", "i", "b").
+		AddClaudeAssistantWithUUID("2024-01-01T10:01:01Z", "fork a1", "j", "i").
+		String()
+}
+
 func TestForkDetection_LargeGapFork(t *testing.T) {
 	// Main branch: a->b->c->d->e->f->g->h (4+ user turns after fork)
 	// Fork from b: i->j
@@ -59,21 +77,7 @@ func TestForkDetection_LargeGapFork(t *testing.T) {
 	//                      -> i(user) -> j(asst)
 	//
 	// User turns on first branch from c onward: c, e, g, k = 4 > 3 = large gap.
-	content := testjsonl.NewSessionBuilder().
-		AddClaudeUserWithUUID("2024-01-01T10:00:00Z", "hello", "a", "").
-		AddClaudeAssistantWithUUID("2024-01-01T10:00:01Z", "hi", "b", "a").
-		AddClaudeUserWithUUID("2024-01-01T10:00:02Z", "q1", "c", "b").
-		AddClaudeAssistantWithUUID("2024-01-01T10:00:03Z", "a1", "d", "c").
-		AddClaudeUserWithUUID("2024-01-01T10:00:04Z", "q2", "e", "d").
-		AddClaudeAssistantWithUUID("2024-01-01T10:00:05Z", "a2", "f", "e").
-		AddClaudeUserWithUUID("2024-01-01T10:00:06Z", "q3", "g", "f").
-		AddClaudeAssistantWithUUID("2024-01-01T10:00:07Z", "a3", "h", "g").
-		AddClaudeUserWithUUID("2024-01-01T10:00:08Z", "q4", "k", "h").
-		AddClaudeAssistantWithUUID("2024-01-01T10:00:09Z", "a4", "l", "k").
-		// Fork branch from b
-		AddClaudeUserWithUUID("2024-01-01T10:01:00Z", "fork q1", "i", "b").
-		AddClaudeAssistantWithUUID("2024-01-01T10:01:01Z", "fork a1", "j", "i").
-		String()
+	content := largeGapForkFixture()
 
 	results := parseTestContent(t, "fork.jsonl", content, 2)
 
@@ -95,23 +99,10 @@ func TestForkDetection_LargeGapFork(t *testing.T) {
 // Claude records pr-link as session state with no uuid or parentUuid, so
 // every split of the file carries it, like the session name and branch.
 func TestForkDetection_LargeGapForkPRLinksOnEverySplit(t *testing.T) {
-	content := testjsonl.NewSessionBuilder().
-		AddClaudeUserWithUUID("2024-01-01T10:00:00Z", "hello", "a", "").
-		AddClaudeAssistantWithUUID("2024-01-01T10:00:01Z", "hi", "b", "a").
-		AddClaudeUserWithUUID("2024-01-01T10:00:02Z", "q1", "c", "b").
-		AddClaudeAssistantWithUUID("2024-01-01T10:00:03Z", "a1", "d", "c").
-		AddClaudeUserWithUUID("2024-01-01T10:00:04Z", "q2", "e", "d").
-		AddClaudeAssistantWithUUID("2024-01-01T10:00:05Z", "a2", "f", "e").
-		AddClaudeUserWithUUID("2024-01-01T10:00:06Z", "q3", "g", "f").
-		AddClaudeAssistantWithUUID("2024-01-01T10:00:07Z", "a3", "h", "g").
-		AddClaudeUserWithUUID("2024-01-01T10:00:08Z", "q4", "k", "h").
-		AddClaudeAssistantWithUUID("2024-01-01T10:00:09Z", "a4", "l", "k").
-		AddClaudeUserWithUUID("2024-01-01T10:01:00Z", "fork q1", "i", "b").
-		AddClaudeAssistantWithUUID("2024-01-01T10:01:01Z", "fork a1", "j", "i").
-		AddRaw(`{"type":"pr-link","prNumber":7,` +
-			`"prUrl":"https://github.com/owner/repo/pull/7",` +
-			`"prRepository":"owner/repo","timestamp":"2024-01-01T10:01:02Z"}`).
-		String()
+	content := testjsonl.JoinJSONL(largeGapForkFixture(),
+		`{"type":"pr-link","prNumber":7,`+
+			`"prUrl":"https://github.com/owner/repo/pull/7",`+
+			`"prRepository":"owner/repo","timestamp":"2024-01-01T10:01:02Z"}`)
 
 	results := parseTestContent(t, "fork-pr.jsonl", content, 2)
 
