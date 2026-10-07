@@ -37,6 +37,8 @@ func TestReplicaRecipeQueryWithoutConfig(t *testing.T) {
 	const schema = "agentsview_recipe_query_test"
 	admin, err := postgres.Open(pgURL, schema, true)
 	require.NoError(t, err)
+	_, err = admin.Exec("CREATE EXTENSION IF NOT EXISTS vector SCHEMA public")
+	require.NoError(t, err)
 	t.Cleanup(func() {
 		_, _ = admin.Exec("DROP SCHEMA IF EXISTS " + schema + " CASCADE")
 		_ = admin.Close()

@@ -120,9 +120,6 @@ func (e *replicaEmbedder) build(ctx context.Context) error {
 }
 
 func (e *replicaEmbedder) resolveRecipe(ctx context.Context) (config.Config, error) {
-	if e.appCfg.Vector.Enabled {
-		return e.appCfg, nil
-	}
 	applyClassifierConfig(e.appCfg)
 	store, err := e.backend.OpenStore(e.target)
 	if err != nil {

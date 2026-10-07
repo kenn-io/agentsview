@@ -9,6 +9,11 @@ The latest published release is
 
 ## Unreleased
 
+**Upgrade notes**
+
+- The container image now requires a bearer token. Read `auth_token` from
+  `/data/config.toml` or set `AGENTSVIEW_AUTH_TOKEN_FILE` to a mounted token file.
+
 **New features**
 
 - The container image now requires a bearer token and keeps its defaults when
